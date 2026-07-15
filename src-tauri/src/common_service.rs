@@ -1,4 +1,6 @@
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+#[cfg(target_os = "windows")]
+use tauri::Manager;
 
 /**
  * 授予麦克风和摄像头权限（启动时调用）

@@ -1,4 +1,6 @@
 ﻿use std::fs;
+#[cfg(target_os = "macos")]
+use tauri::Manager;
 
 mod common_service;
 mod file_ops;
