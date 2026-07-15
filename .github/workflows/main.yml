@@ -45,7 +45,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Setup Node.js + pnpm (with built-in caching) ────────────────
+      # ── 2. Setup Node.js + pnpm ──────────────────────────────────────
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -55,7 +55,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
 
       # ── 3. Setup Rust ───────────────────────────────────────────────────
       - name: Setup Rust toolchain
