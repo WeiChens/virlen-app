@@ -1,14 +1,14 @@
 # =============================================================================
-# Virlen macOS Build Workflow
+# Virlen CI — Main Workflow
 # =============================================================================
-# Builds Virlen desktop app for macOS (.dmg) on every push/tag.
+# Primary CI pipeline: builds Virlen for macOS on every push/tag.
 # Also runs on PRs to verify the build doesn't break.
 #
 # Tech stack: Tauri v2 + React 19 + Rust + pnpm
 # Dependencies include quasivision (ONNX Runtime + CoreML backend)
 # =============================================================================
 
-name: Build macOS
+name: CI
 
 on:
   push:
