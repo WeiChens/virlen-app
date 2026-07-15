@@ -1,0 +1,28 @@
+.RadioGroup {
+  display: flex;
+  width: fit-content;
+  border-radius: 4px;
+  overflow: hidden;
+  padding: 5px;
+  gap: 5px;
+  .RadioGroup__item {
+    padding: 0px 10px;
+    cursor: pointer;
+    transition: 0.3s;
+    font-size: 12px;
+    user-select: none;
+    border: 1px solid var(--radio-border-color, #424141a6);
+    border-radius: 4px;
+    &:hover {
+      opacity: 0.6;
+    }
+    &.active {
+      background-color: var(--accent-color);
+      color: #fff;
+      &:hover {
+        background-color: var(--accent-color);
+        opacity: 1;
+      }
+    }
+  }
+}

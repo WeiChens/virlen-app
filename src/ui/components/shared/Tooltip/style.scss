@@ -1,0 +1,105 @@
+.tooltip-wrapper {
+  display: inline-flex;
+  align-items: center;
+}
+
+.tooltip-bubble {
+  position: fixed;
+  z-index: 9999;
+  background: var(--tooltip-bg, #333);
+  color: var(--tooltip-color, #fff);
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 5px 10px;
+  border-radius: 6px;
+  // box-sizing: border-box;
+  width: max-content;
+  max-width: 260px;
+  white-space: normal;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  pointer-events: none;
+  animation: tooltipFadeIn 0.15s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+
+  // ─── 上方 ───
+  &.top {
+    transform: translate(-50%, -100%);
+
+    &::after {
+      content: '';
+      position: absolute;
+      bottom: -4px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 0;
+      height: 0;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-top: 5px solid var(--tooltip-bg, #333);
+    }
+  }
+
+  // ─── 下方 ───
+  &.bottom {
+    transform: translate(-50%, 0);
+
+    &::after {
+      content: '';
+      position: absolute;
+      top: -4px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 0;
+      height: 0;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-bottom: 5px solid var(--tooltip-bg, #333);
+    }
+  }
+
+  // ─── 左侧 ───
+  &.left {
+    transform: translate(-100%, -50%);
+
+    &::after {
+      content: '';
+      position: absolute;
+      right: -4px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 0;
+      height: 0;
+      border-top: 5px solid transparent;
+      border-bottom: 5px solid transparent;
+      border-left: 5px solid var(--tooltip-bg, #333);
+    }
+  }
+
+  // ─── 右侧 ───
+  &.right {
+    transform: translate(0, -50%);
+
+    &::after {
+      content: '';
+      position: absolute;
+      left: -4px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 0;
+      height: 0;
+      border-top: 5px solid transparent;
+      border-bottom: 5px solid transparent;
+      border-right: 5px solid var(--tooltip-bg, #333);
+    }
+  }
+}
+
+@keyframes tooltipFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

@@ -1,0 +1,193 @@
+:root,
+[data-theme='light'] {
+  --bg-primary: #fff;
+  --btn-bg-primary: #3062bd;
+  --bg-secondary: #f7f7f8;
+  --text-primary: #1a1a1a;
+  --text-secondary: #888;
+  --border-color: #e5e5e5;
+  --hover-bg: #f0f0f0;
+  --active-bg: #e8e8ed;
+  --accent-color: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-warn: #f59e0b;
+  --user-bubble-bg: #4f46e5;
+  --assistant-bubble-bg: #f1f1f3e5;
+  --tool-bubble-bg: #fef9c3;
+  --input-bg: #f1f1f3;
+  --tag-bg: #e8e8ed;
+  --scrollbar-thumb: #ccc;
+  --inline-code-bg: #e8e8ed;
+  --inline-code-color: #642dd1;
+  --blockquote-bg: #f8f9fa;
+  --table-header-bg: #efeff5;
+  --table-item-bg: #ffffff;
+  --color-success: #0fcd55;
+  --color-success-bg: #dafbe1;
+  --color-error: #cf222e;
+  --color-error-bg: #ffebe9;
+  --color-error-border: #fecaca;
+  --color-error-text: #991b1b;
+  --color-info: #0969da;
+  --color-info-bg: #dbeafe;
+  --color-warning: #f59e0b;
+  --color-warning-bg: #fffbeb;
+  --color-danger: #e53e3e;
+  --color-danger-bg: #fee2e2;
+  --code-header-bg: #323844;
+  --code-header-color: #abb2bf;
+  --code-body-bg: #282c34;
+  --code-body-color: #abb2bf;
+  --modal-overlay: rgba(0, 0, 0, 0.5);
+  --window-bg: #f0efef;
+  --window-color: #222;
+  --window-menu-bg: #323131;
+  --window-menu-item-hover: #444343;
+  --window-bar-color: #3062bd;
+  --slider-bg: #e4e4e4;
+  --toggle-off-bg: #ccc;
+  --xlsx-row-hover: #f0f6ff;
+  --xlsx-row-even: #fafbfc;
+  --sidebar-bg: #f9fafb;
+  --icon-color: #1f1f1f;
+  --terminal-bg: #333341;
+  --terminal-header-bg: #181824;
+  --terminal-text: #cfd6f1;
+  --selected-bg: #4381ec83;
+  --usermsg-selected-bg: #25447a;
+  --theme-color: #ffffff;
+
+  /* side-by-side diff — 亮色 */
+  --diff-old-header-bg: #fef2f2;
+  --diff-old-header-color: #991b1b;
+  --diff-old-line-bg: #fef2f2;
+  --diff-old-linenum-bg: #fee2e2;
+  --diff-old-linenum-color: #b91c1c;
+  --diff-new-header-bg: #f0fdf4;
+  --diff-new-header-color: #166534;
+  --diff-new-line-bg: #f0fdf4;
+  --diff-new-linenum-bg: #dcfce7;
+  --diff-new-linenum-color: #166534;
+  --diff-linenum-color: #6b7280;
+
+  --bg-primary-t: #ffffff37;
+  --inline-code-hover-bg: #dbdbdb;
+  --accent-bg: #eef2ff;
+}
+[data-theme='dark'] {
+  --bg-primary: #1e1e2e;
+
+  --btn-bg-primary: #1e417c;
+  --bg-secondary: #181825;
+  --text-primary: #cdd6f4;
+  --text-secondary: #a6adc8;
+  --border-color: #2c2c30;
+  --hover-bg: #313244;
+  --active-bg: #45475a;
+  --accent-color: #706af0;
+  --accent-hover: #74c7ec;
+  --accent-warn: #f9e2af;
+  --user-bubble-bg: #274078;
+  --assistant-bubble-bg: #31324495;
+  --tool-bubble-bg: #2a2a2a;
+  --input-bg: #313244;
+  --tag-bg: #45475a;
+  --scrollbar-thumb: #585b70;
+  --inline-code-bg: #45475a;
+  --inline-code-color: #cba6f7;
+  --blockquote-bg: #181825;
+  --table-header-bg: #181825;
+  --table-item-bg: #383948;
+  --color-success: #14b74f;
+  --color-success-bg: #1a3a1a;
+  --color-error: #f35b5e;
+  --color-error-bg: #3a1a1a;
+  --color-error-border: #5a2a2a;
+  --color-error-text: #f38ba8;
+  --color-info: #89b4fa;
+  --color-info-bg: #1a2a3a;
+  --color-warning: #f9e2af;
+  --color-warning-bg: #3a3a1a;
+  --color-danger: #f38ba8;
+  --color-danger-bg: #3a1a1a;
+  --code-header-bg: #181825;
+  --code-header-color: #a6adc8;
+  --code-body-bg: #11111b;
+  --code-body-color: #cdd6f4;
+  --modal-overlay: rgba(0, 0, 0, 0.7);
+  --window-bg: #11111b;
+  --window-color: #cdd6f4;
+  --window-menu-bg: #181825;
+  --window-menu-item-hover: #313244;
+  --window-bar-color: #0c3c75;
+  --slider-bg: #45475a;
+  --toggle-off-bg: #585b70;
+  --xlsx-row-hover: #1a2a3a;
+  --xlsx-row-even: #1a1a2a;
+  --sidebar-bg: #242432;
+  --icon-color: #fff;
+  --terminal-bg: #32323e;
+  --terminal-header-bg: #535392;
+  --terminal-text: #cfd6f1;
+  --usermsg-selected-bg: #7e9fd4;
+  --selected-bg: #4381ec83;
+  --theme-color: #000000;
+
+  /* side-by-side diff — 暗色 */
+  --diff-old-header-bg: #3a1a1a;
+  --diff-old-header-color: #f38ba8;
+  --diff-old-line-bg: #2a1515;
+  --diff-old-linenum-bg: #3a2020;
+  --diff-old-linenum-color: #f38ba8;
+  --diff-new-header-bg: #1a3a1a;
+  --diff-new-header-color: #a6e3a1;
+  --diff-new-line-bg: #152a15;
+  --diff-new-linenum-bg: #203a20;
+  --diff-new-linenum-color: #a6e3a1;
+  --diff-linenum-color: #6b7080;
+  --bg-primary-t: #00000037;
+  --inline-code-hover-bg: #313244;
+
+  --accent-bg: #1a2a3a;
+}
+:root {
+  /* ===== 字号等级（medium 默认） ===== */
+  --font-size-2xs: 10px;
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-md: 13px;
+  --font-size-base: 14px;
+  --font-size-lg: 15px;
+  --font-size-xl: 16px;
+  --font-size-2xl: 18px;
+  --font-size-3xl: 20px;
+  --font-size-4xl: 22px;
+}
+
+/* ===== 字号缩放（通过 CSS 变量覆盖实现，无需改 px → rem） ===== */
+
+[data-font-size='small'] {
+  --font-size-2xs: 9px;
+  --font-size-xs: 10px;
+  --font-size-sm: 11px;
+  --font-size-md: 12px;
+  --font-size-base: 13px;
+  --font-size-lg: 14px;
+  --font-size-xl: 15px;
+  --font-size-2xl: 16px;
+  --font-size-3xl: 18px;
+  --font-size-4xl: 20px;
+}
+
+[data-font-size='large'] {
+  --font-size-2xs: 11px;
+  --font-size-xs: 12px;
+  --font-size-sm: 13px;
+  --font-size-md: 14px;
+  --font-size-base: 15px;
+  --font-size-lg: 16px;
+  --font-size-xl: 18px;
+  --font-size-2xl: 20px;
+  --font-size-3xl: 22px;
+  --font-size-4xl: 24px;
+}

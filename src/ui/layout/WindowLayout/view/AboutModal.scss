@@ -1,0 +1,112 @@
+.AboutModal-component {
+  font-family: AlimamaAgileVF-Thin;
+  input {
+    font-family: AlimamaAgileVF-Thin;
+  }
+  .AboutModal {
+    width: 450px;
+    height: fit-content;
+
+    // background-color: #382847;
+    background-color: var(--active-bg);
+    border-radius: 5px;
+    border: 1px solid rgb(125, 125, 125);
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    opacity: 0;
+    transition: 0.3s;
+    pointer-events: none;
+    z-index: 6;
+    padding: 0 10px;
+    transform: translate(-50%, -50%) scale(0.9);
+    padding-bottom: 25px;
+
+    &.show {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translate(-50%, -50%) scale(1);
+    }
+    .top {
+      display: flex;
+      flex-direction: row;
+      justify-content: space-between;
+      align-items: center;
+      color: #565656;
+      height: 45px;
+      .title {
+        font-size: 15px;
+      }
+
+      .remove {
+        background-color: var(--primary-color);
+        width: auto;
+        margin: 0;
+        padding: 0;
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 4px;
+        cursor: pointer;
+        svg {
+          fill: #fff;
+        }
+      }
+    }
+    .center-box {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      .logo {
+        width: 150px;
+        height: 150px;
+        img {
+          animation: about-logo-show 0.5s ease-in-out forwards;
+        }
+      }
+      @keyframes about-logo-show {
+        0% {
+          opacity: 0;
+          transform: scale(0.8);
+        }
+        60% {
+          opacity: 1;
+          transform: scale(1.1);
+        }
+        100% {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+      .name {
+        font-weight: bold;
+        font-size: 22px;
+        margin-bottom: 10px;
+        text-align: center;
+      }
+      .span {
+        font-size: 13px;
+        // text-align: center;.
+      }
+    }
+  }
+  .mask {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    z-index: 5;
+    opacity: 0;
+    pointer-events: none;
+    &.show {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
+}

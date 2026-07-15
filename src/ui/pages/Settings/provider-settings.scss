@@ -1,0 +1,313 @@
+.provider-settings {
+  padding: 24px;
+
+  .section-header {
+    margin-bottom: 20px;
+
+    h2 {
+      font-size: 18px;
+      font-weight: 600;
+      margin: 0 0 4px;
+    }
+
+    .section-desc {
+      font-size: 13px;
+      color: var(--text-secondary, #888);
+    }
+  }
+
+  // ==================== Provider Card ====================
+
+  .provider-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 28px;
+  }
+
+  .provider-card {
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 10px;
+    overflow: hidden;
+    transition: border-color 0.15s;
+
+    &.expanded {
+      border-color: var(--accent-color, #4f46e5);
+    }
+
+    .provider-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      cursor: pointer;
+      transition: background 0.15s;
+
+      &:hover {
+        background: var(--hover-bg, #fafafa);
+      }
+
+      .provider-info {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+
+        .provider-icon {
+          font-size: 20px;
+          svg {
+            width: 20px;
+            height: 20px;
+          }
+          img {
+            width: 20px;
+            height: 20px;
+          }
+        }
+
+        .provider-meta {
+          display: flex;
+          flex-direction: column;
+          min-width: 0;
+
+          .provider-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-primary, #1a1a1a);
+          }
+
+          .provider-url {
+            font-size: 11px;
+            color: var(--text-secondary, #999);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 280px;
+          }
+        }
+      }
+
+      .provider-status-area {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-shrink: 0;
+
+        .status-badge {
+          font-size: 11px;
+          padding: 2px 8px;
+          border-radius: 10px;
+          font-weight: 500;
+
+          &.ok {
+            background: var(--color-success-bg);
+            color: var(--color-success);
+          }
+          &.fail {
+            background: var(--color-danger-bg);
+            color: var(--color-error-text);
+          }
+        }
+
+        .toggle {
+          position: relative;
+          display: inline-block;
+          width: 40px;
+          height: 22px;
+          cursor: pointer;
+
+          input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+
+            &:checked + .toggle-slider {
+              background: var(--accent-color, #4f46e5);
+            }
+
+            &:checked + .toggle-slider::before {
+              transform: translateX(18px);
+            }
+          }
+
+          .toggle-slider {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #ccc;
+            border-radius: 11px;
+            transition: background 0.2s;
+
+            &::before {
+              content: '';
+              position: absolute;
+              width: 18px;
+              height: 18px;
+              left: 2px;
+              bottom: 2px;
+              background: #fff;
+              border-radius: 50%;
+              transition: transform 0.2s;
+            }
+          }
+        }
+      }
+    }
+
+    .provider-card-body {
+      padding: 0 16px 16px;
+      border-top: 1px solid var(--border-color, #f0f0f0);
+      animation: expandIn 0.15s ease;
+
+      .provider-detail-row {
+        display: flex;
+        align-items: baseline;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--border-color, #f5f5f5);
+
+        &:last-of-type {
+          border-bottom: none;
+        }
+
+        .detail-label {
+          width: 70px;
+          font-size: 12px;
+          color: var(--text-secondary, #888);
+          flex-shrink: 0;
+        }
+
+        .detail-value {
+          font-size: 13px;
+          color: var(--text-primary, #1a1a1a);
+          word-break: break-all;
+          &.scroll {
+            overflow-y: auto;
+            max-height: 200px;
+          }
+
+          &.mask {
+            font-family: monospace;
+          }
+        }
+      }
+
+      .provider-card-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 12px;
+        flex-wrap: wrap;
+
+        button {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          padding: 6px 14px;
+          border-radius: 6px;
+          font-size: 12px;
+          cursor: pointer;
+          border: 1px solid var(--border-color, #e5e5e5);
+          transition: all 0.15s;
+
+          svg {
+            width: 14px;
+            height: 14px;
+          }
+
+          &.btn-secondary {
+            background: var(--bg-primary, #fff);
+            color: var(--text-primary, #1a1a1a);
+
+            &:hover:not(:disabled) {
+              background: var(--hover-bg, #f0f0f0);
+            }
+            &:disabled {
+              opacity: 0.5;
+              cursor: not-allowed;
+            }
+          }
+
+          &.btn-danger {
+            background: transparent;
+            color: var(--color-danger, #e53e3e);
+            border-color: transparent;
+
+            &:hover {
+              background: var(--color-danger-bg, #fee2e2);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // ==================== Add Provider ====================
+
+  .add-provider-section {
+    margin-bottom: 16px;
+    h3 {
+      font-size: 15px;
+      font-weight: 600;
+      margin: 0 0 4px;
+    }
+
+    .add-hint {
+      font-size: 12px;
+      color: var(--text-secondary, #999);
+      margin: 0 0 16px;
+    }
+
+    .template-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+
+      .template-card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+        padding: 16px 8px;
+        border: 1px solid var(--border-color, #e5e5e5);
+        border-radius: 10px;
+        background: var(--bg-primary, #fff);
+        cursor: pointer;
+        transition: all 0.15s;
+
+        &:hover {
+          border-color: var(--accent-color, #4f46e5);
+          background: var(--hover-bg, #fafafa);
+        }
+
+        .template-icon {
+          font-size: 24px;
+          svg {
+            width: 24px;
+            height: 24px;
+          }
+          img {
+            width: 24px;
+            height: 24px;
+          }
+        }
+        .template-label {
+          font-size: 12px;
+          color: var(--text-primary, #1a1a1a);
+          font-weight: 500;
+        }
+      }
+    }
+  }
+}
+
+@keyframes expandIn {
+  from {
+    opacity: 0;
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    max-height: 400px;
+  }
+}

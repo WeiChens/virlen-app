@@ -1,0 +1,483 @@
+/**
+ * setup-flow — 首次引导流程样式
+ */
+
+.setup-flow {
+  position: fixed;
+  inset: 0;
+  // z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-primary);
+  overflow-y: auto;
+
+  .setup-flow-inner {
+    width: 100%;
+    max-width: 560px;
+    padding: 48px 32px;
+  }
+
+  /* ====== 欢迎页 ====== */
+
+  .welcome-page {
+    text-align: center;
+  }
+
+  .welcome-logo {
+    margin-bottom: 24px;
+    color: var(--color-info);
+  }
+
+  .welcome-logo svg {
+    filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.08));
+  }
+
+  .welcome-title {
+    font-size: 36px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 12px;
+  }
+
+  .welcome-subtitle {
+    font-size: 16px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    margin-bottom: 40px;
+    max-width: 420px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  /* 开始按钮 */
+  .btn-start {
+    min-width: 200px;
+    height: 48px;
+    font-size: 16px;
+    margin-top: 20px;
+  }
+
+  /* ====== 步骤过渡动画 ====== */
+
+  .step-page {
+    &.welcome {
+      opacity: 0;
+      animation: stepSlideUp 0.8s ease-in forwards;
+    }
+  }
+
+  .step-enter {
+    animation: stepSlideUp 0.8s ease-in;
+  }
+
+  @keyframes stepSlideUp {
+    0% {
+      opacity: 0;
+      transform: translateY(12px) scale(1);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+  /* ====== 按钮通用 ====== */
+
+  .btn-primary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 0 24px;
+    height: 44px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #fff;
+    background: var(--color-info);
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: opacity 0.15s ease;
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    opacity: 0.85;
+  }
+
+  .btn-primary:active:not(:disabled) {
+    opacity: 0.75;
+  }
+
+  .btn-primary:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* ====== 模型配置页 ====== */
+
+  .setup-provider {
+    text-align: center;
+  }
+
+  .setup-provider h2 {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+  }
+
+  .setup-provider-icon {
+    text-align: center;
+    margin-bottom: 16px;
+    color: var(--color-info);
+  }
+
+  .setup-provider-icon svg {
+    width: 64px;
+    height: 64px;
+  }
+
+  .setup-desc {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 32px;
+  }
+
+  /* ====== 自定义下拉框 ====== */
+
+  .provider-select {
+    position: relative;
+    margin-bottom: 24px;
+    text-align: left;
+  }
+
+  .provider-select-trigger {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    height: 48px;
+    padding: 0 14px;
+    background: var(--bg-secondary);
+    border: 1.5px solid var(--border-color);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: border-color 0.15s ease;
+    font-size: 14px;
+    color: var(--text-primary);
+  }
+
+  .provider-select-trigger:hover {
+    border-color: var(--color-info);
+  }
+
+  .provider-select-placeholder {
+    color: var(--text-tertiary);
+    flex: 1;
+    text-align: left;
+  }
+
+  .provider-select-icon {
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .provider-select-icon svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  .provider-select-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .provider-select-label {
+    flex: 1;
+    text-align: left;
+    font-weight: 500;
+  }
+
+  .provider-select-arrow {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    transition: transform 0.2s ease;
+    flex-shrink: 0;
+  }
+
+  .provider-select-arrow.open {
+    transform: rotate(180deg);
+  }
+
+  .provider-select-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background: var(--bg-primary);
+    border: 1.5px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    z-index: 10;
+    overflow: hidden;
+  }
+
+  .provider-select-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 14px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    transition: background 0.1s ease;
+    font-size: 14px;
+    color: var(--text-primary);
+    text-align: left;
+  }
+
+  .provider-select-item:hover {
+    background: var(--bg-secondary);
+  }
+
+  .provider-select-item.active {
+    background: var(--color-info-bg);
+  }
+
+  .provider-select-url {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  /* API Key 输入 */
+  .api-key-section {
+    text-align: left;
+    margin-bottom: 32px;
+  }
+
+  .api-key-label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+  }
+
+  .api-key-input {
+    width: 100%;
+    height: 42px;
+    padding: 0 14px;
+    font-size: 14px;
+    font-family: monospace;
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    border: 1.5px solid var(--border-color);
+    border-radius: 8px;
+    outline: none;
+    transition: border-color 0.15s ease;
+  }
+
+  .api-key-input:focus {
+    border-color: var(--color-info);
+  }
+
+  .api-key-input::placeholder {
+    // color: var(--text-tertiary);
+    font-family: inherit;
+  }
+
+  .api-key-hint {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+  }
+
+  /* 模型输入行 */
+  .model-input-row {
+    display: flex;
+    gap: 8px;
+  }
+
+  .model-input-row input {
+    flex: 1;
+    height: 38px;
+    padding: 0 12px;
+    font-size: 13px;
+    font-family: monospace;
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    border: 1.5px solid var(--border-color);
+    border-radius: 6px;
+    outline: none;
+    transition: border-color 0.15s ease;
+  }
+
+  .model-input-row input:focus {
+    border-color: var(--color-info);
+  }
+
+  /* 自动获取模型按钮 */
+  .fetch-models-btn {
+    padding: 0 14px;
+    height: 38px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--color-info);
+    color: #fff;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: opacity 0.15s ease;
+  }
+
+  .fetch-models-btn:hover:not(:disabled) {
+    opacity: 0.85;
+  }
+
+  .fetch-models-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* ====== 工作目录设置页 ====== */
+
+  .setup-workdir {
+    text-align: center;
+  }
+
+  .setup-workdir h2 {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+  }
+
+  /* 目录路径显示 */
+  .workdir-display {
+    margin: 28px 0;
+    padding: 16px 20px;
+    background: var(--bg-secondary);
+    border: 1.5px solid var(--border-color);
+    border-radius: 10px;
+  }
+
+  .workdir-path {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+    color: var(--text-primary);
+    word-break: break-all;
+    text-align: left;
+  }
+
+  .workdir-path-icon {
+    font-size: 20px;
+    flex-shrink: 0;
+    svg {
+      height: 22px;
+      width: 22px;
+    }
+  }
+
+  .workdir-path-text {
+    line-height: 1.5;
+    color: var(--text-primary);
+  }
+
+  /* 选择文件夹按钮 */
+  .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 0 20px;
+    height: 42px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    border: 1.5px solid var(--border-color);
+    border-radius: 10px;
+    cursor: pointer;
+    transition:
+      border-color 0.15s ease,
+      background 0.15s ease;
+    margin-bottom: 12px;
+  }
+
+  .btn-secondary:hover {
+    border-color: var(--color-info);
+    background: var(--color-info-bg);
+  }
+
+  .btn-secondary:active {
+    opacity: 0.8;
+  }
+
+  .workdir-hint {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    margin-bottom: 28px;
+  }
+
+  /* 幽灵按钮（跳过/上一步） */
+  .btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 20px;
+    height: 44px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-tertiary);
+    background: transparent;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    transition:
+      color 0.15s ease,
+      background 0.15s ease;
+  }
+
+  .btn-ghost:hover {
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+  }
+
+  /* 操作按钮 */
+  .setup-actions {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+  }
+
+  .btn-loading {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .btn-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: btn-spin 0.6s linear infinite;
+  }
+
+  @keyframes btn-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+}

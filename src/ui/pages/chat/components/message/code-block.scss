@@ -1,0 +1,134 @@
+// ==================== 代码块 ====================
+.code-block-wrapper {
+  margin: 10px 0;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  display: flex;
+  flex-direction: column;
+  // overflow 由内联 style 控制：有 maxHeight → overflow-y: auto
+  background-color: #292c33;
+  .code-block-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    background: var(--code-header-bg, #323844);
+    color: var(--code-header-color, #abb2bf);
+    font-size: var(--font-size-sm);
+    position: sticky;
+    top: -5px;
+    z-index: 1;
+
+    .code-language {
+      font-weight: 500;
+      text-transform: uppercase;
+      font-size: var(--font-size-xs);
+      letter-spacing: 0.5px;
+      font-family:
+        'Segoe UI Mono', 'SF Mono', 'Consolas', 'Courier New', monospace;
+    }
+
+    .code-copy-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border: none;
+      border-radius: 4px;
+      background: var(--code-copy-btn-bg, rgba(255, 255, 255, 0.08));
+      color: var(--code-header-color, #abb2bf);
+      cursor: pointer;
+      transition: background 0.15s;
+
+      svg {
+        width: 14px;
+        height: 14px;
+      }
+
+      &:hover {
+        background: var(--code-copy-btn-hover-bg, rgba(255, 255, 255, 0.18));
+        color: var(--code-copy-btn-hover-color, #fff);
+      }
+    }
+  }
+
+  .code-fallback {
+    margin: 0;
+    padding: 14px 16px;
+    background: var(--code-body-bg, #282c34);
+    color: var(--code-body-color, #abb2bf);
+    font-size: var(--font-size-md);
+    line-height: 1.55;
+    overflow-x: auto;
+    font-family:
+      'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, 'DengXian',
+      monospace;
+
+    code {
+      font-family: inherit;
+    }
+  }
+
+  // ── Canvas 代码渲染 ──
+
+  .code-canvas-wrap {
+    display: grid;
+    > * {
+      grid-row: 1;
+      grid-column: 1;
+    }
+    min-height: 0;
+    // 代码超出容器宽度时横向滚动
+    overflow-x: auto;
+  }
+
+  .code-canvas {
+    display: block;
+    background: #282c34;
+    border-radius: 0 0 8px 8px;
+
+    // 禁止选中 canvas 本身
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  // ── 透明选中覆盖层 ──
+  // 用户看到的是 canvas 彩色代码，但选中时实际选中此层
+  // 通过 CSS Grid 与 canvas 层叠在同一位置
+  //
+  // 【字体渲染同步】—— 关键！
+  // 强制 CSS 使用与 Canvas 2D 相同的字体渲染配置（几何精度、无字距调整）
+  // 避免 Windows 上 GDI(DirectWrite) vs Canvas 的字符宽度差异
+  .code-select-overlay {
+    margin: 0;
+    overflow: hidden;
+    user-select: text;
+    -webkit-user-select: text;
+    color: transparent;
+    caret-color: transparent;
+    font-family:
+      'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', Consolas,
+      'DengXian', monospace;
+    white-space: pre;
+    word-break: normal;
+    word-wrap: normal;
+    tab-size: 2;
+    -moz-tab-size: 2;
+
+    // 字体渲染同步：禁用字距调整、几何精度
+    font-kerning: none;
+    font-feature-settings: 'kern' 0;
+    text-rendering: geometricPrecision;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+
+    // 选中高亮：半透明，让 canvas 颜色透出
+    &::selection {
+      background: rgba(18, 146, 226, 0.25);
+    }
+    &::-moz-selection {
+      background: rgba(18, 146, 226, 0.25);
+    }
+  }
+}

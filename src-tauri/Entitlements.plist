@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- 允许 ONNX Runtime / CoreML 使用 JIT 编译（OCR 加速必需） -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <!-- 允许加载动态库（ONNX Runtime 依赖） -->
+    <key>com.apple.security.cs.allow-dynamic-execution</key>
+    <true/>
+    <!-- 允许访问摄像头（语音输入功能） -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    <!-- 允许访问麦克风（语音输入功能） -->
+    <key>com.apple.security.device.microphone</key>
+    <true/>
+    <!-- 允许网络连接（API 调用） -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+</dict>
+</plist>

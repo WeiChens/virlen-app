@@ -1,0 +1,232 @@
+.search-engine-edit-form {
+  padding: 8px 0;
+
+  .form-group {
+    margin-bottom: 18px;
+
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-primary, #1a1a1a);
+      margin-bottom: 6px;
+    }
+
+    input[type='text'],
+    input[type='password'] {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid var(--border-color, #e5e5e5);
+      border-radius: 8px;
+      font-size: 13px;
+      background: var(--bg-primary, #fff);
+      color: var(--text-primary, #1a1a1a);
+      outline: none;
+      box-sizing: border-box;
+      transition: border-color 0.15s;
+
+      &:focus {
+        border-color: var(--accent-color, #4f46e5);
+      }
+    }
+
+    .input-with-action {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+
+      input {
+        flex: 1;
+      }
+
+      .toggle-vis {
+        width: 32px;
+        height: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        cursor: pointer;
+        color: var(--text-secondary, #999);
+        flex-shrink: 0;
+
+        &:hover {
+          background: var(--hover-bg, #f0f0f0);
+        }
+
+        svg {
+          width: 16px;
+          height: 16px;
+        }
+      }
+    }
+    .official-link {
+      font-size: 13px;
+      color: var(--accent-color, #4f46e5);
+      cursor: pointer;
+      word-break: break-all;
+      padding-left: 5px;
+
+      &:hover {
+        text-decoration: underline;
+      }
+    }
+
+    .no-key-hint {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      background: var(--color-info-bg, #e8f4fd);
+      border-radius: 8px;
+      font-size: 13px;
+      color: var(--text-secondary, #666);
+
+      .hint-icon {
+        font-size: 16px;
+      }
+    }
+  }
+
+  // ==================== 类型（只读展示 | 选择器）====================
+
+  .type-readonly {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 8px;
+    background: var(--sidebar-bg, #f9fafb);
+
+    .type-icon {
+      font-size: 20px;
+    }
+
+    .type-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+
+      .type-name {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-primary, #1a1a1a);
+      }
+
+      .type-desc {
+        font-size: 11px;
+        color: var(--text-secondary, #999);
+      }
+    }
+  }
+
+  // ==================== 类型选择器 ====================
+
+  .type-selector {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+
+    .type-option {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+      padding: 10px 14px;
+      border: 1px solid var(--border-color, #e5e5e5);
+      border-radius: 8px;
+      background: var(--bg-primary, #fff);
+      cursor: pointer;
+      text-align: left;
+      transition: all 0.15s;
+
+      &:hover {
+        border-color: var(--accent-color-light, #a5b4fc);
+      }
+
+      &.active {
+        border-color: var(--accent-color, #4f46e5);
+        background: var(--active-bg, #eef2ff);
+      }
+
+      .type-name {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-primary, #1a1a1a);
+      }
+
+      .type-desc {
+        font-size: 11px;
+        color: var(--text-secondary, #999);
+        line-height: 1.4;
+      }
+    }
+  }
+
+  // ==================== 验证提示 ====================
+
+  .validate-hint {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--color-info-bg, #e8f4fd);
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--text-secondary, #666);
+    line-height: 1.5;
+
+    .hint-icon {
+      font-size: 14px;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+  }
+
+  // ==================== 底部按钮 ====================
+
+  .form-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-color, #f0f0f0);
+
+    button {
+      padding: 8px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .btn-cancel {
+      border: 1px solid var(--border-color, #e5e5e5);
+      background: var(--bg-primary, #fff);
+      color: var(--text-primary, #1a1a1a);
+
+      &:hover {
+        background: var(--hover-bg, #f0f0f0);
+      }
+    }
+
+    .btn-save {
+      border: none;
+      background: var(--accent-color, #4f46e5);
+      color: #fff;
+
+      &:hover:not(:disabled) {
+        opacity: 0.9;
+      }
+
+      &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+    }
+  }
+}

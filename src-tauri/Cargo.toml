@@ -1,0 +1,52 @@
+[package]
+name = "virlen-app"
+version = "1.0.1"
+description = "全能型 AI 智能体桌面客户端 — 多模型、工具调用、视觉识别、skill"
+authors = ["wei"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "ai_agent_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-http = "2"
+tauri-plugin-shell = "2"
+walkdir = "2"
+ignore = "0.4"
+grep = "^0.4.1"
+grep-regex = "^0.1.14"
+grep-searcher = "^0.1.16"
+regex = "1"
+anyhow = "1"
+sha2 = "0.10"
+hex = "0.4"
+encoding_rs = "0.8"
+tokio = { version = "1", features = ["rt"] }
+trash = "5"
+image = "0.25"
+base64 = "0.22"
+
+# ── quasivision 全能视觉引擎 ──
+# UI 检测、OCR、物体检测(YOLOE-26n)、图标分类
+# 内置跨平台 GPU 加速：Windows → DirectML, macOS → CoreML, Linux → CPU
+quasivision = "0.2.1"
+
+# ── Windows 平台：WebView2 权限管理（麦克风/摄像头） ──
+[target.'cfg(target_os = "windows")'.dependencies]
+webview2-com = "0.38"
+windows-core = "0.61"

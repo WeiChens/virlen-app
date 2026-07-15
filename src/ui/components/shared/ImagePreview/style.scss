@@ -1,0 +1,215 @@
+.image-preview-thumbnail {
+  display: inline-block;
+  vertical-align: middle;
+  transition: all 0.3s ease;
+
+  &.clickable {
+    cursor: pointer;
+
+    &:hover {
+      opacity: 0.8;
+      transform: scale(1.05);
+    }
+  }
+}
+
+.image-preview-overlay {
+  position: fixed;
+  top: 30px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.9);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+// 工具栏
+.image-preview-toolbar {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 8px 16px;
+  border-radius: 24px;
+  z-index: 10000;
+
+  .toolbar-btn {
+    width: 36px;
+    height: 36px;
+    border: none;
+    background: transparent;
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    transition: all 0.3s ease;
+
+    svg {
+      width: 20px;
+      height: 20px;
+    }
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    &.close-btn {
+      margin-left: 8px;
+
+      &:hover {
+        background: rgba(255, 0, 0, 0.2);
+      }
+    }
+  }
+
+  .toolbar-scale {
+    color: white;
+    font-size: 14px;
+    min-width: 50px;
+    text-align: center;
+    user-select: none;
+  }
+}
+
+// 图片容器
+.image-preview-container {
+  max-width: 90vw;
+  max-height: 90vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+
+  .preview-image {
+    max-width: 100%;
+    max-height: 90vh;
+    object-fit: contain;
+    transition: transform 0.3s ease;
+    user-select: none;
+    cursor: grab;
+
+    &.dragging {
+      cursor: grabbing;
+      transition: none; // 拖动时移除过渡效果，更流畅
+    }
+  }
+}
+
+// 左右切换箭头
+.preview-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 44px;
+  border: none;
+  background: rgba(0, 0, 0, 0.5);
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: all 0.3s ease;
+  z-index: 10000;
+
+  svg {
+    width: 24px;
+    height: 24px;
+  }
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.8);
+    transform: translateY(-50%) scale(1.1);
+  }
+
+  &.prev {
+    left: 20px;
+  }
+
+  &.next {
+    right: 20px;
+  }
+}
+
+// 图片索引
+.image-preview-index {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: white;
+  font-size: 14px;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 8px 16px;
+  border-radius: 16px;
+  user-select: none;
+  z-index: 10000;
+}
+
+// 响应式设计
+@media screen and (max-width: 768px) {
+  .image-preview-toolbar {
+    top: 10px;
+    right: 10px;
+    padding: 6px 12px;
+    gap: 8px;
+
+    .toolbar-btn {
+      width: 32px;
+      height: 32px;
+
+      svg {
+        width: 18px;
+        height: 18px;
+      }
+    }
+
+    .toolbar-scale {
+      font-size: 12px;
+      min-width: 40px;
+    }
+  }
+
+  .preview-arrow {
+    width: 36px;
+    height: 36px;
+
+    svg {
+      width: 20px;
+      height: 20px;
+    }
+
+    &.prev {
+      left: 10px;
+    }
+
+    &.next {
+      right: 10px;
+    }
+  }
+
+  .image-preview-index {
+    bottom: 10px;
+    font-size: 12px;
+    padding: 6px 12px;
+  }
+}

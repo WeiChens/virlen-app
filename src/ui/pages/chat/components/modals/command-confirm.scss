@@ -1,0 +1,89 @@
+.command-confirm {
+  padding: 8px 0;
+
+  .risk-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 12px;
+
+    &.dangerous {
+      background: var(--color-error-bg);
+      color: var(--color-error);
+      border: 1px solid var(--color-error-border);
+    }
+
+    &.install {
+      background: var(--color-warning-bg);
+      color: var(--accent-warn);
+      border: 1px solid var(--color-warning);
+    }
+  }
+
+  .hint-text {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin: 0 0 16px 0;
+    line-height: 1.5;
+  }
+
+  .command-preview {
+    background: var(--bg-tertiary);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 20px;
+
+    code {
+      font-family:
+        'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+      font-size: 13px;
+      color: var(--text-primary);
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+  }
+
+  .actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+
+    button {
+      padding: 8px 16px;
+      border-radius: 6px;
+      border: 1px solid var(--border-color);
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .btn-shelve {
+      background: var(--bg-primary);
+      color: var(--text-secondary);
+      &:hover {
+        background: var(--hover-bg);
+      }
+    }
+
+    .btn-cancel {
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      &:hover {
+        background: var(--color-error-bg);
+        color: var(--color-error);
+        border-color: var(--color-error-border);
+      }
+    }
+
+    .btn-confirm {
+      background: var(--accent-color);
+      color: var(--bg-primary);
+      border-color: var(--accent-color);
+      &:hover {
+        background: var(--accent-hover);
+      }
+    }
+  }
+}

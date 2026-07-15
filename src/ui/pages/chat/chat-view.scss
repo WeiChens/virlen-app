@@ -1,0 +1,295 @@
+.chat-view {
+  display: flex;
+  height: 100%;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1a1a1a);
+
+  // ==================== 侧边栏拖拽手柄 ====================
+
+  .sidebar-resizer {
+    width: 2px;
+    cursor: col-resize;
+    background: transparent;
+    position: relative;
+    z-index: 10;
+    flex-shrink: 0;
+    transition: background 0.15s;
+
+    &:hover,
+    &:active {
+      background: var(--accent-color, #4f46e5);
+      opacity: 0.3;
+    }
+
+    &::after {
+      content: '';
+      position: absolute;
+      left: -3px;
+      right: -3px;
+      top: 0;
+      bottom: 0;
+    }
+  }
+
+  .chat-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .chat-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border-color, #e5e5e5);
+    background: var(--bg-primary, #fff);
+
+    .toggle-sidebar-btn {
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      cursor: pointer;
+      color: var(--text-secondary, #666);
+
+      &:hover {
+        background: var(--hover-bg, #f0f0f0);
+      }
+
+      svg {
+        width: 18px;
+        height: 18px;
+      }
+    }
+
+    .chat-title {
+      flex: 1;
+      font-size: var(--font-size-base);
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .chat-toolbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+
+      .workspace-btn {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        border: 1px solid var(--border-color, #e5e5e5);
+        border-radius: 6px;
+        background: var(--bg-primary, #fff);
+        cursor: pointer;
+        font-size: var(--font-size-sm);
+        color: var(--text-secondary, #888);
+        // transition: all 0.15s;
+        height: 28px;
+        &.has-dropdown {
+          border-radius: 6px 0 0 6px;
+          border-right: none;
+          box-sizing: border-box;
+        }
+
+        &:hover {
+          background: var(--hover-bg, #f0f0f0);
+          border-color: var(--accent-color, #4f46e5);
+          color: var(--text-primary, #1a1a1a);
+        }
+
+        &.has-path {
+          color: var(--text-primary, #1a1a1a);
+        }
+
+        svg {
+          width: 14px;
+          height: 14px;
+          flex-shrink: 0;
+        }
+
+        .workspace-label {
+          max-width: 80px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .workspace-placeholder {
+          color: var(--text-secondary, #888);
+        }
+      }
+
+      .workspace-display {
+        position: relative;
+        display: flex;
+        align-items: center;
+
+        .workspace-dropdown-toggle {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 22px;
+          height: 28px;
+          padding: 0;
+          border: 1px solid var(--border-color, #e5e5e5);
+          border-radius: 0 6px 6px 0;
+          background: var(--bg-primary, #fff);
+          cursor: pointer;
+          color: var(--text-secondary, #888);
+          transition: all 0.15s;
+          box-sizing: border-box;
+          margin-left: -1px;
+
+          svg {
+            width: 12px;
+            height: 12px;
+            transition: transform 0.15s;
+          }
+        }
+
+        /* 统一 hover：任一个按钮 hover，两个同时高亮 */
+        &:has(.workspace-btn:hover),
+        &:has(.workspace-dropdown-toggle:hover) {
+          .workspace-btn,
+          .workspace-dropdown-toggle {
+            background: var(--hover-bg, #f0f0f0);
+            border-color: var(--accent-color, #4f46e5);
+          }
+          .workspace-btn {
+            color: var(--text-primary, #1a1a1a);
+          }
+          .workspace-dropdown-toggle {
+            color: var(--text-primary, #1a1a1a);
+          }
+        }
+
+        &.menu-open .workspace-dropdown-toggle svg {
+          transform: rotate(180deg);
+        }
+
+        .workspace-dropdown-menu {
+          position: absolute;
+          top: calc(100% + 4px);
+          right: 0;
+          min-width: 200px;
+          max-width: 320px;
+          max-height: 240px;
+          overflow-y: auto;
+          background: var(--bg-primary, #fff);
+          border: 1px solid var(--border-color, #e5e5e5);
+          border-radius: 8px;
+          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+          z-index: 100;
+          padding: 4px;
+          padding-bottom: 0;
+
+          .workspace-dropdown-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            width: 100%;
+            padding: 6px 8px;
+            border: none;
+            border-radius: 4px;
+            background: transparent;
+            cursor: pointer;
+            font-size: var(--font-size-sm);
+            color: var(--text-primary, #1a1a1a);
+            text-align: left;
+            transition: background 0.1s;
+
+            &:hover {
+              background: var(--hover-bg, #f0f0f0);
+            }
+
+            &.active {
+              background: var(--accent-bg, #eef2ff);
+              color: var(--accent-color, #4f46e5);
+              margin: 2px 0;
+            }
+
+            &.browse {
+              color: var(--text-secondary, #888);
+              justify-content: center;
+              position: sticky;
+              bottom: 0;
+              background-color: var(--bg-primary, #fff);
+
+              &:hover {
+                color: var(--text-primary, #1a1a1a);
+              }
+            }
+
+            svg {
+              width: 14px;
+              height: 14px;
+              flex-shrink: 0;
+              color: var(--text-secondary, #888);
+            }
+
+            .workspace-dropdown-label {
+              flex-shrink: 0;
+              max-width: 100px;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              font-weight: 500;
+            }
+
+            .workspace-dropdown-path {
+              flex: 1;
+              min-width: 0;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              font-size: var(--font-size-xs, 11px);
+              color: var(--text-secondary, #888);
+              direction: rtl;
+              text-align: right;
+            }
+          }
+
+          .workspace-dropdown-divider {
+            height: 1px;
+            margin: 4px 8px;
+            background: var(--border-color, #e5e5e5);
+          }
+        }
+      }
+    }
+
+    .cancel-btn {
+      padding: 4px 12px;
+      border: 1px solid var(--border-color, #e5e5e5);
+      border-radius: 6px;
+      background: transparent;
+      font-size: var(--font-size-md);
+      cursor: pointer;
+
+      &:hover {
+        background: var(--hover-bg, #f0f0f0);
+      }
+    }
+  }
+
+  .welcome-layout {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    padding-bottom: 80px;
+  }
+}

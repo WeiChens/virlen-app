@@ -1,0 +1,178 @@
+.settings-trigger {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-secondary, #666);
+  margin-right: 4px;
+
+  &:hover {
+    background: var(--hover-bg, #f0f0f0);
+  }
+
+  svg {
+    width: 18px;
+    height: 18px;
+  }
+}
+
+/* 遮罩层 */
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99;
+  background: rgba(0, 0, 0, 0.3);
+  animation: fadeIn 0.15s ease;
+}
+
+.settings-overlay.closing {
+  animation: fadeOut 0.15s ease forwards;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.settings-panel {
+  position: absolute;
+  top: 30px;
+  right: 0;
+  bottom: 0;
+  width: 680px;
+  background: var(--bg-primary, #fff);
+  border-left: 1px solid var(--border-color, #e5e5e5);
+  display: flex;
+  z-index: 100;
+  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.08);
+  animation: slideIn 0.2s ease;
+  &.closing {
+    animation: slideOut 0.2s ease forwards;
+  }
+
+  .settings-sidebar {
+    width: 180px;
+    border-right: 1px solid var(--border-color, #e5e5e5);
+    background: var(--sidebar-bg, #f9fafb);
+    display: flex;
+    flex-direction: column;
+
+    .settings-sidebar-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px;
+      border-bottom: 1px solid var(--border-color, #e5e5e5);
+
+      h3 {
+        font-size: var(--font-size-lg);
+        font-weight: 600;
+        margin: 0;
+      }
+
+      .close-btn {
+        width: 28px;
+        height: 28px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        cursor: pointer;
+        color: var(--text-secondary, #666);
+
+        &:hover {
+          background: var(--hover-bg, #f0f0f0);
+        }
+        svg {
+          width: 16px;
+          height: 16px;
+        }
+      }
+    }
+
+    .settings-nav {
+      padding: 8px;
+
+      .nav-item {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border: none;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--text-primary, #1a1a1a);
+        font-size: var(--font-size-md);
+        cursor: pointer;
+        transition: background 0.15s;
+        margin-bottom: 5px;
+        --nav-item-color: var(--text-primary, #1a1a1a);
+
+        svg {
+          width: 18px;
+          height: 18px;
+        }
+
+        &:hover {
+          background: var(--hover-bg, #f0f0f0);
+        }
+
+        &.active {
+          background: var(--active-bg, #e8e8ed);
+          color: var(--accent-color, #4f46e5);
+          --nav-item-color: var(--accent-color, #4f46e5);
+          font-weight: 600;
+        }
+      }
+    }
+  }
+
+  .settings-content {
+    flex: 1;
+    overflow-y: auto;
+    min-width: 0;
+  }
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(120px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideOut {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(120px);
+    opacity: 0;
+  }
+}

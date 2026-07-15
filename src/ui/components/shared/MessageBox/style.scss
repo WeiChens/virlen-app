@@ -1,0 +1,31 @@
+.message-box-content {
+  padding-top: 10px;
+  overflow-x: hidden;
+  .text {
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  .bottom-view {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 5px;
+    .cancel,
+    .confirm {
+      font-size: 12px;
+      border-radius: 3px;
+      line-height: 26px;
+      height: 26px;
+      padding: 0px 18px;
+    }
+    .cancel {
+      background-color: rgba(205, 205, 205, 0.233);
+      color: var(--text-color);
+    }
+    .confirm {
+      background-color: var(--accent-color);
+      color: white;
+    }
+  }
+}

@@ -1,0 +1,273 @@
+.provider-edit-form {
+  padding: 4px 0;
+
+  .form-group {
+    margin-bottom: 16px;
+
+    .api-input-wrapper {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      input {
+        flex: 1;
+        overflow: hidden;
+      }
+      .link {
+        margin-left: 8px;
+        font-size: 12px;
+        color: var(--text-secondary, #1a1a1a);
+        cursor: pointer;
+        &:hover {
+          color: var(--accent-color, #4f46e5);
+          text-decoration: underline;
+        }
+      }
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      .clear {
+        font-size: 12px;
+        color: var(--text-secondary, #1a1a1a);
+        cursor: pointer;
+      }
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-primary, #1a1a1a);
+      margin-bottom: 6px;
+    }
+
+    select,
+    input[type='text'],
+    input[type='password'] {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid var(--border-color, #e5e5e5);
+      border-radius: 8px;
+      font-size: 13px;
+      color: var(--text-primary, #1a1a1a);
+      background: var(--bg-primary, #fff);
+      outline: none;
+      transition: border-color 0.15s;
+
+      &:focus {
+        border-color: var(--accent-color, #4f46e5);
+      }
+
+      &:disabled {
+        background: var(--input-bg, #f1f1f3);
+        color: var(--text-secondary, #888);
+        cursor: not-allowed;
+      }
+
+      &::placeholder {
+        color: var(--text-secondary, #bbb);
+      }
+    }
+
+    .input-with-action {
+      display: flex;
+      gap: 6px;
+
+      input {
+        flex: 1;
+      }
+
+      .toggle-vis {
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--border-color, #e5e5e5);
+        border-radius: 8px;
+        background: var(--bg-primary, #fff);
+        cursor: pointer;
+        font-size: 16px;
+        transition: all 0.15s;
+
+        &:hover {
+          background: var(--hover-bg, #f0f0f0);
+        }
+        &.active {
+          background: var(--active-bg, #e8e8ed);
+        }
+        svg {
+          width: 18px;
+          height: 18px;
+        }
+      }
+    }
+
+    select {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid var(--border-color, #e5e5e5);
+      border-radius: 8px;
+      font-size: 13px;
+      color: var(--text-primary, #1a1a1a);
+      background: var(--bg-primary, #fff);
+      outline: none;
+      cursor: pointer;
+      transition: border-color 0.15s;
+      appearance: auto;
+
+      &:focus {
+        border-color: var(--accent-color, #4f46e5);
+      }
+    }
+
+    .form-hint {
+      display: block;
+      font-size: 11px;
+      color: var(--text-secondary, #aaa);
+      margin-top: 4px;
+    }
+
+    .model-list-section {
+      border: 1px solid var(--border-color, #e5e5e5);
+      border-radius: 8px;
+      padding: 8px;
+      background: var(--bg-secondary, #fafafa);
+      max-height: 100px;
+      overflow-y: auto;
+
+      .model-list-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 8px;
+        min-height: 28px;
+      }
+
+      .model-empty {
+        font-size: 12px;
+        color: var(--text-secondary, #aaa);
+        padding: 4px 0;
+      }
+
+      .model-tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 8px;
+        font-size: 12px;
+        border-radius: 6px;
+        background: var(--accent-color, #4f46e5);
+        color: #fff;
+
+        .model-tag-remove {
+          background: none;
+          border: none;
+          color: rgba(255, 255, 255, 0.7);
+          cursor: pointer;
+          font-size: 14px;
+          line-height: 1;
+          padding: 0 2px;
+
+          &:hover {
+            color: #fff;
+          }
+        }
+      }
+
+      .model-input-row {
+        display: flex;
+        gap: 6px;
+
+        input {
+          flex: 1;
+          height: 32px;
+          font-size: 12px;
+          padding: 4px 8px;
+        }
+
+        .model-add-btn {
+          width: 32px;
+          height: 32px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border: 1px solid var(--accent-color, #4f46e5);
+          border-radius: 6px;
+          background: var(--accent-color, #4f46e5);
+          color: #fff;
+          font-size: 18px;
+          cursor: pointer;
+          transition: opacity 0.15s;
+
+          &:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+          }
+          &:hover:not(:disabled) {
+            opacity: 0.85;
+          }
+        }
+      }
+      .fetch-models-btn {
+        padding: 6px 14px;
+        border: 1px solid var(--border-color, #e5e5e5);
+        border-radius: 6px;
+        background: var(--accent-color, #4f46e5);
+        color: white;
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.15s;
+        &:hover:not(:disabled) {
+          opacity: 0.9;
+        }
+        &:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+      }
+    }
+  }
+
+  .form-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-color, #f0f0f0);
+
+    button {
+      padding: 8px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .btn-cancel {
+      border: 1px solid var(--border-color, #e5e5e5);
+      background: var(--bg-primary, #fff);
+      color: var(--text-primary, #1a1a1a);
+
+      &:hover {
+        background: var(--hover-bg, #f0f0f0);
+      }
+    }
+
+    .btn-save {
+      border: none;
+      background: var(--accent-color, #4f46e5);
+      color: #fff;
+      font-weight: 500;
+
+      &:hover:not(:disabled) {
+        opacity: 0.9;
+      }
+      &:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+    }
+  }
+}

@@ -1,0 +1,238 @@
+// ==================== 错误提示 ====================
+
+.error-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  margin: 8px 16px 0;
+  background: var(--color-error-bg);
+  border: 1px solid var(--color-error-border);
+  border-radius: 8px;
+  color: var(--color-error-text);
+  font-size: var(--font-size-md);
+
+  span {
+    flex: 1;
+  }
+
+  button {
+    border: none;
+    background: transparent;
+    color: var(--color-error-text);
+    cursor: pointer;
+    font-size: var(--font-size-base);
+    padding: 2px 6px;
+    border-radius: 4px;
+
+    &:hover {
+      background: rgba(153, 27, 27, 0.1);
+    }
+  }
+}
+
+// ==================== 加载更多提示 ====================
+
+.load-more-hint {
+  text-align: center;
+  padding: 12px 16px;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary, #999);
+  user-select: none;
+  cursor: pointer;
+}
+
+// ==================== 滚动到底部按钮 ====================
+
+.scroll-to-bottom-btn {
+  position: absolute;
+  bottom: 44%;
+  right: 32px;
+  z-index: 20;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--border-color, #e5e5e5);
+  background-color: transparent;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    opacity 0.2s,
+    transform 0.2s;
+
+  svg {
+    width: 18px;
+    height: 18px;
+    fill: var(--text-secondary, #666);
+  }
+
+  &:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+    transform: scale(1.05);
+
+    svg {
+      fill: var(--accent-color, #4f46e5);
+    }
+  }
+
+  &:active {
+    transform: scale(0.95);
+  }
+}
+
+// ==================== 消息锚点列表 ====================
+
+.msg-anchor-list {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 6px;
+  max-height: calc(12 * (12px) + 16px); /* 12 个点 × (点高+gap) + 上下内边距 */
+  overflow-y: auto;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-primary, #fff) 70%, transparent);
+  backdrop-filter: blur(4px);
+  border: 1px solid var(--border-color, #e5e5e5);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  pointer-events: auto;
+
+  &::-webkit-scrollbar {
+    width: 2px;
+    display: none;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb, #ccc);
+    border-radius: 1px;
+  }
+
+  .msg-anchor-dot {
+    display: block;
+    width: 6px;
+    height: 10px;
+    border-radius: 3px;
+    border: 1px solid var(--text-secondary, #bbb);
+    background: var(--bg-primary, #fff);
+    cursor: pointer;
+    padding: 0;
+    flex-shrink: 0;
+    transition: all 0.15s ease;
+
+    &:hover {
+      transform: scale(1.8);
+      border-color: var(--accent-color, #4f46e5);
+      background: var(--accent-color, #4f46e5);
+      box-shadow: 0 0 6px
+        color-mix(in srgb, var(--accent-color, #4f46e5) 40%, transparent);
+    }
+
+    &:active {
+      transform: scale(1.2);
+    }
+
+    // 当前视口中对应的用户消息 → 实心高亮
+    &.active {
+      height: 12px;
+      margin: 2px 0;
+      transform: scale(1.3);
+      border-color: var(--accent-color, #4f46e5);
+      background: var(--accent-color, #4f46e5);
+      box-shadow: 0 0 6px
+        color-mix(in srgb, var(--accent-color, #4f46e5) 50%, transparent);
+    }
+  }
+}
+
+// ==================== 消息列表 ====================
+
+.chat-messages-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb, #ccc);
+    border-radius: 3px;
+  }
+}
+
+// ==================== 暂停提示 ====================
+
+.paused-run-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 20px 4px;
+  padding: 8px 14px;
+  background: var(--hover-bg, #f0f0ff);
+  border: 1px solid var(--border-color, #c7d2fe);
+  border-radius: 10px;
+  font-size: var(--font-size-md);
+  margin-bottom: 18px;
+  .paused-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+
+    .paused-icon {
+      flex-shrink: 0;
+    }
+
+    .paused-text {
+      color: var(--text-primary, #1a1a1a);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  }
+
+  .paused-resume-btn {
+    flex-shrink: 0;
+    padding: 4px 14px;
+    border: none;
+    border-radius: 6px;
+    background: var(--accent-color, #4f46e5);
+    color: #fff;
+    font-size: var(--font-size-md);
+    font-weight: 500;
+    cursor: pointer;
+    transition: opacity 0.15s;
+
+    &:hover {
+      opacity: 0.9;
+    }
+  }
+
+  .paused-cancel-btn {
+    flex-shrink: 0;
+    padding: 4px 14px;
+    border: 1px solid var(--border-color, #d1d5db);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary, #666);
+    font-size: var(--font-size-md);
+    cursor: pointer;
+    transition: all 0.15s;
+
+    &:hover {
+      background: var(--hover-bg, #f3f4f6);
+      border-color: var(--text-secondary, #9ca3af);
+    }
+  }
+}
