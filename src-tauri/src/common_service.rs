@@ -1,4 +1,4 @@
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 /**
  * 授予麦克风和摄像头权限（启动时调用）
