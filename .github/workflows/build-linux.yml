@@ -1,0 +1,144 @@
+# =============================================================================
+# Virlen Linux Build Workflow
+# =============================================================================
+# Builds Virlen desktop app for Linux (x86_64) as .deb and .AppImage.
+# =============================================================================
+
+name: Build Linux
+
+on:
+  push:
+    branches: [main, master, develop]
+    tags:
+      - "v*"
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-linux:
+    name: Build Linux (x86_64)
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ─────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Setup Node.js + pnpm ──────────────────────────────────────
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # ── 3. Setup Rust ───────────────────────────────────────────────────
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache Rust cargo registry & build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+
+      # ── 4. Install Linux system dependencies ─────────────────────────
+      # Tauri v2 on Linux requires webkit2gtk, libappindicator, etc.
+      - name: Install system dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev
+
+      # ── 5. Install frontend dependencies ─────────────────────────────────
+      - name: Install frontend dependencies
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
+      # ── 6. Install Tauri CLI ────────────────────────────────────────────
+      - name: Install Tauri CLI
+        shell: bash
+        run: cargo install tauri-cli --version "^2.0"
+
+      # ── 7. Build the app ────────────────────────────────────────────────
+      - name: Build Virlen for Linux
+        shell: bash
+        env:
+          # Tauri config for CI
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          pnpm tauri build --target x86_64-unknown-linux-gnu
+
+      # ── 8. Upload build artifacts ───────────────────────────────────────
+      - name: Upload .deb package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Virlen-Linux-x64-${{ github.sha }}
+          path: src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload .AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: Virlen-Linux-AppImage-${{ github.sha }}
+          path: src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload .rpm package (if any)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Virlen-Linux-rpm-${{ github.sha }}
+          path: src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/rpm/*.rpm
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ── 9. (Optional) Create Release on tag push ───────────────────────────
+  release:
+    name: Create Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        shell: bash
+        run: |
+          find artifacts -type f \( -name "*.deb" -o -name "*.AppImage" -o -name "*.rpm" \) | sort
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Virlen ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.deb
+            artifacts/**/*.AppImage
+            artifacts/**/*.rpm
+          fail_on_unmatched_files: false
