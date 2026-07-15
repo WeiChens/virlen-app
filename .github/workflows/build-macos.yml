@@ -45,49 +45,29 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Setup Node.js ────────────────────────────────────────────────
-      - name: Setup Node.js 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      # ── 3. Setup pnpm ───────────────────────────────────────────────────
-      - name: Install pnpm
+      # ── 2. Setup Node.js + pnpm (with built-in caching) ────────────────
+      - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: latest
 
-      - name: Get pnpm store directory
-        id: pnpm-cache
-        shell: bash
-        run: |
-          echo "store=$(pnpm store path)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache pnpm store
-        uses: actions/cache@v4
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
         with:
-          path: ${{ steps.pnpm-cache.outputs.store }}
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
+          node-version: 22
+          cache: pnpm
 
-      # ── 4. Setup Rust ───────────────────────────────────────────────────
+      # ── 3. Setup Rust ───────────────────────────────────────────────────
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
       - name: Cache Rust cargo registry & build
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-${{ matrix.target }}-
-            ${{ runner.os }}-cargo-
+          workspaces: src-tauri
+          cache-on-failure: true
 
       # ── 5. Install macOS system dependencies (for Tauri) ────────────────
       # Most Tauri deps (webkit, gtk) are for Linux only.
