@@ -206,3 +206,45 @@ export function getLastSummaryMessageIndex(list: Message[]): number {
   }
   return index
 }
+
+// ===== 版本更新相关 =====
+
+/** 支持的操作系统平台 */
+export type UpdatePlatform = 'windows' | 'macos' | 'linux' | 'android' | 'ios'
+
+/** 更新策略 */
+export type UpdatePolicy = 'optional' | 'recommended' | 'force'
+
+/** 检查更新请求 */
+export interface ICheckUpdateRequest {
+  platform: UpdatePlatform
+  current_version: string
+  current_build_number?: number
+}
+
+/** 最新版本信息 */
+export interface ILatestVersion {
+  version: string
+  build_number?: number
+  changelog: string
+  update_policy: UpdatePolicy
+  download: {
+    url: string
+    file_size: number
+    file_md5: string
+    original_name: string
+  }
+}
+
+/** 检查更新响应 */
+export interface ICheckUpdateResponse {
+  has_update: boolean
+  latest_version?: ILatestVersion
+}
+
+/** 检查更新 API 包装响应 */
+export interface IApiResponse<T = unknown> {
+  code: number
+  message: string
+  data?: T
+}

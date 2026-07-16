@@ -12,8 +12,11 @@ import { useToast } from '@/ui/components/shared/Toast'
 import SplitScreenSvg from '@/ui/components/icons/SplitScreenSvg'
 import AboutSvg from '@/ui/components/icons/AboutSvg'
 import AboutModal from './view/AboutModal'
+import UpdateModal from '@/ui/components/shared/UpdateModal/UpdateModal'
 import menuEvent from '@/events/menuEvent'
+import updateEvent from '@/events/updateEvent'
 import { useMessageBox } from '@/ui/components/shared/MessageBox'
+import type { ICheckUpdateResponse } from '@/types'
 // import windowEvent from '@/events/windowEvent'
 
 interface Props {
@@ -71,6 +74,23 @@ const WindowLayout = ({ children, padding = 0, className }: Props) => {
       uninstall.forEach((e) => e())
     }
   }, [])
+
+  // ===== 更新管理 =====
+  const [updateShow, setUpdateShow] = useState(false)
+  const [updateInfo, setUpdateInfo] = useState<ICheckUpdateResponse | null>(null)
+
+  useEffect(() => {
+    const uninstall = updateEvent.on('showUpdateModal', (info) => {
+      setUpdateInfo(info)
+      setUpdateShow(true)
+    })
+    return uninstall
+  }, [])
+
+  function handleUpdateForceCancel() {
+    // 强制更新被取消 → 关闭应用
+    currentWindow.current?.close()
+  }
   return (
     <div
       className="WindowLayout"
@@ -117,6 +137,12 @@ const WindowLayout = ({ children, padding = 0, className }: Props) => {
         </div>
       </div>
       <AboutModal show={aboutShow} onHide={() => setAboutShow(false)} />
+      <UpdateModal
+        show={updateShow}
+        updateInfo={updateInfo}
+        onHide={() => setUpdateShow(false)}
+        onForceCancel={handleUpdateForceCancel}
+      />
       {/* <Loading /> */}
       <MessageBox />
       <Toast />

@@ -11,6 +11,8 @@ import { providerService } from './services/provider-service'
 import { searchProviderService } from './services/search-provider-service'
 import { toolsInit } from './infrastructure/tools'
 import { securityService } from './services/security-service'
+import { checkUpdate } from './services/update-service'
+import updateEvent from './events/updateEvent'
 
 async function main() {
   await init()
@@ -22,6 +24,21 @@ async function main() {
       getCurrentWindow().show()
     })
   })
+  // 窗口显示后检查更新（非阻塞）
+  requestAnimationFrame(() => {
+    checkForUpdates()
+  })
+}
+
+/**
+ * 检查更新
+ */
+async function checkForUpdates() {
+  const result = await checkUpdate()
+  if (result && result.has_update && result.latest_version) {
+    // 有可用更新 → 触发更新弹窗
+    updateEvent.emit('showUpdateModal', result)
+  }
 }
 
 /**

@@ -15,7 +15,7 @@ import AppLogoSvg from '@/ui/components/icons/AppLogoSvg'
 export { AppLogoSvg }
 
 /** API 基础地址 */
-export const domain = import.meta.env.VITE_API_BASE_URL || ''
+export const domain = import.meta.env.VITE_API_BASE_URL || 'https://virlen.cn'
 
 // ==================== 业务常量（原 const/index.ts）====================
 
