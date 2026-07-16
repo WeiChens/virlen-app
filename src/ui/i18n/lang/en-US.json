@@ -496,5 +496,10 @@
   "立即更新": "Update Now",
   "更新": "Update",
   "稍后再说": "Later",
-  "退出应用": "Quit App"
+  "退出应用": "Quit App",
+  "正在下载更新...": "Downloading update...",
+  "下载完成": "Download complete",
+  "下载失败": "Download failed",
+  "正在启动安装程序...": "Launching installer...",
+  "重试": "Retry"
 }
