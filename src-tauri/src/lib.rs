@@ -1,5 +1,5 @@
 ﻿use std::fs;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use tauri::Manager;
 
 mod common_service;
@@ -241,11 +241,10 @@ pub fn run() {
 
             // macOS: visible=false 会阻止 WKWebView 加载 JS，导致窗口永远无法通过 JS show()
             // 因此 macOS 上不做白屏优化，直接显示窗口
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
             }
-
             Ok(())
         })
         .plugin(tauri_plugin_shell::init())
