@@ -17,7 +17,11 @@
  */
 import { snapshotToRun } from './run-state'
 import type { Run, RunSnapshot, ToolCallContext } from './types'
-import type { Message, Session, AgentEventCallback } from '@/types'
+import type {
+  Message,
+  Session,
+  AgentEventCallback,
+} from '@/types'
 import { doLLMRound } from './llm-round'
 import { createRun, executeToolSteps } from './tool-executor'
 import {
@@ -90,6 +94,13 @@ export class AgentEngine implements AgentEnginePort {
         remainingRounds = resumed.remainingRounds
       }
 
+      // 4.5 纯 Tool 模式：不再自动注入 RAG 上下文
+      //     知识库的检索和写入完全由 AI 通过 Tool 自主决定。
+      //     AI 可调用以下工具：
+      //     - search_knowledge_base: 搜索知识库
+      //     - list_knowledge_bases: 列出知识库
+      //     - write_to_knowledge_base: 写入知识库
+
       // 5. tool call 主循环
       const completed = await this.#executeToolLoop({
         session,
@@ -143,7 +154,10 @@ export class AgentEngine implements AgentEnginePort {
     abortController: AbortController,
     onEvent: AgentEventCallback | undefined,
     onUserInteraction:
-      | ((type: string, data: Record<string, any>) => Promise<ToolExecutorResponse>)
+      | ((
+          type: string,
+          data: Record<string, any>,
+        ) => Promise<ToolExecutorResponse>)
       | undefined,
     skills: string[] | undefined,
     currentMessages: Message[],

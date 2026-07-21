@@ -9,6 +9,7 @@ export const toolsInit = async () => {
   await import('@/infrastructure/tools/builtin/execute-command')
   await import('@/infrastructure/tools/builtin/search-tools')
   await import('@/infrastructure/tools/builtin/web-search')
+  await import('@/infrastructure/tools/builtin/knowledge-base')
   await import('@/infrastructure/tools/skill-tools')
   await import('@/infrastructure/tools/vision/index')
 }

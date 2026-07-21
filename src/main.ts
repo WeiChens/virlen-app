@@ -13,6 +13,7 @@ import { toolsInit } from './infrastructure/tools'
 import { securityService } from './services/security-service'
 import { checkUpdate } from './services/update-service'
 import updateEvent from './events/updateEvent'
+import { ragService } from './services/rag-service'
 
 async function main() {
   await init()
@@ -69,6 +70,11 @@ async function init() {
 
   providerService.initProviders()
   searchProviderService.initSearchProviders()
+
+  // 初始化知识库（无知识库时自动创建默认知识库，非阻塞）
+  ragService.initKnowledgeBases().catch((err) => {
+    console.warn('[RAG] init knowledge bases failed:', err)
+  })
 }
 
 main()

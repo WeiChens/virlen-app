@@ -458,8 +458,7 @@ function ChatView() {
           (r, i) => `第${i + 1}张图片\n${r.combined_text}`,
         )
         imageAnalyzeResult =
-          `用户上传了${validResults.length}张图片\n\n` +
-          parts.join('\n\n')
+          `用户上传了${validResults.length}张图片\n\n` + parts.join('\n\n')
       }
       if (!imageAnalyzeResult) imageOptimize = false
     }
@@ -512,7 +511,15 @@ function ChatView() {
     return [
       ...(text
         ? [{ type: 'text' as const, text }]
-        : [{ type: 'text' as const, text: images.length > 1 ? tpl('分析这$__num__张图片', { num: images.length }) : t('分析这张图片') }]),
+        : [
+            {
+              type: 'text' as const,
+              text:
+                images.length > 1
+                  ? tpl('分析这$__num__张图片', { num: images.length })
+                  : t('分析这张图片'),
+            },
+          ]),
       ...images.map((img) => ({
         type: 'image_url' as const,
         image_url: { url: img.url, detail: 'auto' as const },
@@ -619,7 +626,6 @@ function ChatView() {
               }}
               workspaces={historyWorkspaces}
             />
-
             <SettingsView />
           </div>
         </div>

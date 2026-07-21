@@ -11,6 +11,7 @@ import AgentSettings from './agent-settings'
 import SkillSettings from './skill-settings'
 import QuickInputSettings from './quickinput-settings'
 import SearchEngineSettings from './search-engine-settings'
+import KnowledgeBaseSettings from './knowledge-base-settings'
 import CloseSvg from '@/ui/components/icons/CloseSvg'
 import SettingSvg from '@/ui/components/icons/SettingSvg'
 import SystemSvg from '@/ui/components/icons/SystemSvg'
@@ -31,6 +32,7 @@ export type SettingsPage =
   | 'skill'
   | 'quickinput'
   | 'search-engine'
+  | 'knowledge-base'
 
 export default function SettingsView() {
   const [open, setOpen] = useState(false)
@@ -131,6 +133,12 @@ export default function SettingsView() {
               <SearchSvg fill="var(--nav-item-color)" />
               <span>{t('搜索引擎')}</span>
             </button>
+            <button
+              className={`nav-item ${page === 'knowledge-base' ? 'active' : ''}`}
+              onClick={() => setPage('knowledge-base')}>
+              <FolderSvg fill="var(--nav-item-color)" />
+              <span>{t('知识库')}</span>
+            </button>
           </nav>
         </div>
         <div className="settings-content">
@@ -141,6 +149,7 @@ export default function SettingsView() {
           {page === 'skill' && <SkillSettings />}
           {page === 'quickinput' && <QuickInputSettings />}
           {page === 'search-engine' && <SearchEngineSettings />}
+          {page === 'knowledge-base' && <KnowledgeBaseSettings />}
         </div>
       </div>
     </div>

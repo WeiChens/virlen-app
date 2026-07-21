@@ -5,6 +5,7 @@ use tauri::Manager;
 mod common_service;
 mod file_ops;
 mod load_env;
+mod rag;
 mod vision_service;
 mod search;
 mod task_manager;
@@ -237,6 +238,13 @@ async fn edit_file_in_place(
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            // 初始化 RAG 知识库服务
+            if let Err(e) = rag::init_rag_service(app.handle()) {
+                eprintln!("[RAG] 初始化失败: {}", e);
+            } else {
+                println!("[RAG] 知识库服务初始化成功");
+            }
+
             vision_service::setup_vision(app)?;
 
             // macOS: visible=false 会阻止 WKWebView 加载 JS，导致窗口永远无法通过 JS show()
@@ -269,6 +277,19 @@ pub fn run() {
             common_service::grant_permissions,
             vision_service::vision_analyze,
             vision_service::vision_analyze_base64,
+            // RAG 知识库命令
+            rag::create_knowledge_base,
+            rag::list_knowledge_bases,
+            rag::delete_knowledge_base,
+            rag::add_document_to_knowledge_base,
+            rag::remove_document_from_knowledge_base,
+            rag::list_knowledge_base_documents,
+            rag::query_knowledge_base,
+            rag::write_text_to_knowledge_base,
+            rag::edit_document_in_knowledge_base,
+            rag::edit_text_in_knowledge_base,
+            rag::get_knowledge_base_document,
+            rag::init_knowledge_bases,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

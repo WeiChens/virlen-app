@@ -47,6 +47,12 @@ export interface SettingsStore {
   sessionGroupType: SessionGroupType
   /** 是否对上传的图片自动执行 vision_analyze 提取结构化数据 */
   imageVisionAnalyzeOptimize: boolean
+  /** RAG 知识库配置 */
+  ragEnabled: boolean
+  /** 默认知识库 ID */
+  ragDefaultKnowledgeBaseId: string
+  /** 默认检索数量 */
+  ragDefaultTopK: number
 }
 
 const defaultSettings: SettingsStore = {
@@ -71,6 +77,9 @@ const defaultSettings: SettingsStore = {
   quickInputTemplates: [],
   sessionGroupType: 'agent',
   imageVisionAnalyzeOptimize: true,
+  ragEnabled: false,
+  ragDefaultKnowledgeBaseId: '',
+  ragDefaultTopK: 5,
 }
 
 export const settingsState = new StorageState(

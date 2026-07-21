@@ -1,0 +1,434 @@
+.knowledge-base-settings {
+  padding: 20px;
+  max-width: 800px;
+
+  h3 {
+    margin: 0 0 16px;
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .kb-section {
+    margin-bottom: 28px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--border-color, #e5e5e5);
+
+    &:last-child {
+      border-bottom: none;
+    }
+  }
+
+  .kb-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+
+    .kb-header-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .kb-header-actions {
+      display: flex;
+      gap: 8px;
+    }
+  }
+
+  .kb-toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .kb-toggle {
+    position: relative;
+    width: 44px;
+    height: 24px;
+    border: none;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    background-color: var(--border-color, #ccc);
+
+    &.active {
+      background-color: var(--accent-color, #4f6ef7);
+    }
+
+    .kb-toggle-knob {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: white;
+      transition: transform 0.2s;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    }
+
+    &.active .kb-toggle-knob {
+      transform: translateX(20px);
+    }
+  }
+
+  .kb-default-kb-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .kb-label {
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  .kb-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border: 1px solid var(--border-color, #ccc);
+    border-radius: 6px;
+    background: var(--btn-bg, #f5f5f5);
+    color: var(--text-color, #333);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+
+    &:hover {
+      background: var(--btn-hover-bg, #e8e8e8);
+    }
+
+    &.kb-btn-primary {
+      background: var(--accent-color, #4f6ef7);
+      color: white;
+      border-color: var(--accent-color, #4f6ef7);
+
+      &:hover {
+        opacity: 0.85;
+      }
+    }
+
+    &.kb-btn-danger {
+      color: #e74c3c;
+      border-color: #e74c3c;
+
+      &:hover {
+        background: #fde8e8;
+      }
+    }
+
+    &.kb-btn-sm {
+      padding: 4px 10px;
+      font-size: 12px;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+
+  .kb-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+
+    .kb-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border: 1px solid var(--border-color, #e5e5e5);
+      border-radius: 8px;
+      background: var(--card-bg, #fafafa);
+      transition: border-color 0.15s;
+
+      &:hover {
+        border-color: var(--accent-color, #4f6ef7);
+      }
+
+      .kb-card-info {
+        flex: 1;
+        min-width: 0;
+
+        .kb-card-name {
+          font-weight: 600;
+          font-size: 14px;
+          margin-bottom: 4px;
+        }
+
+        .kb-card-desc {
+          font-size: 12px;
+          color: var(--text-secondary, #888);
+          margin-bottom: 4px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .kb-card-meta {
+          font-size: 11px;
+          color: var(--text-secondary, #aaa);
+        }
+      }
+
+      .kb-card-actions {
+        display: flex;
+        gap: 6px;
+        flex-shrink: 0;
+        margin-left: 12px;
+      }
+    }
+  }
+
+  /* 展开的内容区域 */
+  .kb-expanded-content {
+    padding: 8px 16px 12px;
+  }
+
+  /* 检索测试区域 */
+  .kb-search-section {
+    margin-top: 12px;
+
+    .kb-search-label {
+      font-size: 12px;
+      font-weight: 600;
+      display: block;
+      margin-bottom: 6px;
+    }
+  }
+
+  /* 创建知识库弹窗 */
+  .kb-create-modal-body {
+    padding: 8px 0;
+
+    .kb-create-field {
+      margin-bottom: 16px;
+
+      &:last-child {
+        margin-bottom: 0;
+      }
+    }
+
+    .kb-create-label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 6px;
+      color: var(--text-color, #333);
+    }
+
+    .kb-create-input {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid var(--border-color, #ccc);
+      border-radius: 6px;
+      background: var(--input-bg, #fff);
+      color: var(--text-color, #333);
+      font-size: 13px;
+      outline: none;
+      box-sizing: border-box;
+
+      &:focus {
+        border-color: var(--accent-color, #4f6ef7);
+      }
+    }
+
+    .kb-create-textarea {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid var(--border-color, #ccc);
+      border-radius: 6px;
+      background: var(--input-bg, #fff);
+      color: var(--text-color, #333);
+      font-size: 13px;
+      outline: none;
+      resize: vertical;
+      font-family: inherit;
+      box-sizing: border-box;
+
+      &:focus {
+        border-color: var(--accent-color, #4f6ef7);
+      }
+    }
+  }
+
+  /* 弹窗底部按钮 — 与页面 kb-btn 风格对齐 */
+  .modal-footer {
+    button.btn-cancel {
+      background: var(--btn-bg, #f5f5f5);
+      color: var(--text-color, #333);
+      border: 1px solid var(--border-color, #ccc);
+      border-radius: 6px;
+
+      &:hover:not(:disabled) {
+        background: var(--btn-hover-bg, #e8e8e8);
+      }
+    }
+
+    button.btn-confirm {
+      background: var(--accent-color, #4f6ef7);
+      color: white;
+      border: 1px solid var(--accent-color, #4f6ef7);
+      border-radius: 6px;
+
+      &:hover:not(:disabled) {
+        opacity: 0.85;
+        background: var(--accent-color, #4f6ef7);
+      }
+    }
+  }
+
+  /* 文档预览弹窗 */
+  .kb-preview-body {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+
+    .kb-preview-loading {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--text-secondary, #999);
+    }
+
+    .kb-preview-content {
+      flex: 1;
+      margin: 0;
+      padding: 12px;
+      background: var(--card-bg, #f5f5f5);
+      border-radius: 6px;
+      font-size: 13px;
+      line-height: 1.7;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-y: auto;
+      color: var(--text-color, #333);
+      max-height: 400px;
+    }
+  }
+
+  /* 文档列表 */
+  .doc-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+
+    .doc-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      border: 1px solid var(--border-color, #e5e5e5);
+      border-radius: 6px;
+      background: var(--card-bg, #fafafa);
+      font-size: 13px;
+
+      .doc-item-info {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        flex: 1;
+
+        .doc-item-name {
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .doc-item-status {
+          font-size: 11px;
+          padding: 1px 6px;
+          border-radius: 4px;
+
+          &.status-ready {
+            background: #e8f5e9;
+            color: #2e7d32;
+          }
+
+          &.status-processing {
+            background: #fff3e0;
+            color: #e65100;
+          }
+
+          &.status-error {
+            background: #fce4ec;
+            color: #c62828;
+          }
+        }
+
+        .doc-item-meta {
+          font-size: 11px;
+          color: var(--text-secondary, #999);
+        }
+      }
+
+      .doc-item-actions {
+        display: flex;
+        gap: 4px;
+        flex-shrink: 0;
+        margin-left: 8px;
+      }
+    }
+  }
+
+  /* 检索测试 */
+  .kb-search-test {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+
+    .kb-search-input {
+      flex: 1;
+      padding: 8px 12px;
+      border: 1px solid var(--border-color, #ccc);
+      border-radius: 6px;
+      background: var(--input-bg, #fff);
+      color: var(--text-color, #333);
+      font-size: 13px;
+      outline: none;
+
+      &:focus {
+        border-color: var(--accent-color, #4f6ef7);
+      }
+    }
+  }
+
+  .kb-search-results {
+    margin-top: 12px;
+    padding: 12px;
+    background: var(--card-bg, #f9f9f9);
+    border-radius: 8px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    max-height: 300px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    font-size: 12px;
+    line-height: 1.6;
+
+    .kb-search-empty {
+      color: var(--text-secondary, #999);
+      text-align: center;
+      padding: 20px;
+    }
+  }
+
+  .kb-empty {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-secondary, #999);
+    font-size: 14px;
+  }
+
+  .kb-loading {
+    text-align: center;
+    padding: 20px;
+    color: var(--text-secondary, #999);
+  }
+}
