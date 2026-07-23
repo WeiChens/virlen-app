@@ -70,11 +70,17 @@ class KnowledgeBaseMessage implements IToolCallMessage {
             | undefined
           const count = uiData?.length
           return (
-            <div className="kb-message-short" style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-              <span className="kb-query-text" style={{ color: 'var(--accent-color)', fontWeight: 500 }}>
+            <div
+              className="kb-message-short"
+              style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <span
+                className="kb-query-text"
+                style={{ color: 'var(--accent-color)', fontWeight: 500 }}>
                 {query}
               </span>
-              <span className="kb-meta-text" style={{ color: '#999', fontSize: 12 }}>
+              <span
+                className="kb-meta-text"
+                style={{ color: '#999', fontSize: 12 }}>
                 {count !== undefined
                   ? tpl('— $__count__ 条结果', { count })
                   : tpl('ID: $__id__', { id: kbId.slice(0, 8) + '...' })}
@@ -176,12 +182,22 @@ class KnowledgeBaseMessage implements IToolCallMessage {
               <div key={item.id} className="kb-search-result-item">
                 <div className="kb-search-result-header">
                   <span className="kb-search-result-index">#{index + 1}</span>
-                  <span className="kb-search-result-doc">{item.document_name}</span>
+                  <span className="kb-search-result-doc">
+                    {item.document_name}
+                  </span>
                   <span className="kb-search-result-score">
-                    {tpl('$__score__%', { score: (item.score * 100).toFixed(0) })}
+                    {tpl('$__score__%', {
+                      score: (item.score * 100).toFixed(0),
+                    })}
                   </span>
                 </div>
-                <div className="kb-search-result-id" style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                <div
+                  className="kb-search-result-id"
+                  style={{
+                    fontSize: 11,
+                    color: 'var(--text-secondary)',
+                    marginBottom: 4,
+                  }}>
                   {tpl('文档 ID: $__id__', { id: item.document_id })}
                 </div>
                 <div className="kb-search-result-snippet">{item.snippet}</div>
@@ -202,15 +218,29 @@ class KnowledgeBaseMessage implements IToolCallMessage {
                   <span className="kb-list-item-index">#{index + 1}</span>
                   <span className="kb-list-item-name">{kb.name}</span>
                 </div>
-                <div className="kb-list-item-id" style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                <div
+                  className="kb-list-item-id"
+                  style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
                   ID: {kb.id}
                 </div>
                 {kb.description && (
-                  <div className="kb-list-item-desc" style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
+                  <div
+                    className="kb-list-item-desc"
+                    style={{
+                      fontSize: 12,
+                      color: 'var(--text-secondary)',
+                      marginTop: 2,
+                    }}>
                     {kb.description}
                   </div>
                 )}
-                <div className="kb-list-item-meta" style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
+                <div
+                  className="kb-list-item-meta"
+                  style={{
+                    fontSize: 11,
+                    color: 'var(--text-secondary)',
+                    marginTop: 2,
+                  }}>
                   {tpl('$__count__ 个文档', { count: kb.documentCount })}
                 </div>
               </div>
@@ -228,7 +258,9 @@ class KnowledgeBaseMessage implements IToolCallMessage {
               <div key={doc.id} className="kb-doc-item">
                 <div className="kb-doc-item-header">
                   <span className="kb-doc-item-index">#{index + 1}</span>
-                  <span className="kb-doc-item-name">{doc.file_name}</span>
+                  <span className="kb-doc-item-name" title={doc.file_name}>
+                    {doc.file_name}
+                  </span>
                   <span className={`kb-doc-item-status status-${doc.status}`}>
                     {doc.status === 'ready'
                       ? t('就绪')
@@ -237,7 +269,9 @@ class KnowledgeBaseMessage implements IToolCallMessage {
                         : t('错误')}
                   </span>
                 </div>
-                <div className="kb-doc-item-id" style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                <div
+                  className="kb-doc-item-id"
+                  style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
                   {tpl('ID: $__id__ · $__type__ · $__count__ 个片段', {
                     id: doc.id,
                     type: doc.file_type,
@@ -252,7 +286,11 @@ class KnowledgeBaseMessage implements IToolCallMessage {
 
       // 兜底：使用 CodeBlock 展示原始内容
       return (
-        <CodeBlock fontSize={11} width={400} maxHeight={600} showLineNumbers={false}>
+        <CodeBlock
+          fontSize={11}
+          width={400}
+          maxHeight={600}
+          showLineNumbers={false}>
           {content}
         </CodeBlock>
       )

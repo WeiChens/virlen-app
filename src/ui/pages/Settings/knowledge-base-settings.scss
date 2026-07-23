@@ -140,7 +140,9 @@
 
     .kb-card {
       display: flex;
-      align-items: center;
+      flex-direction: column;
+      // align-items: center;
+      gap: 6px;
       justify-content: space-between;
       padding: 12px 16px;
       border: 1px solid var(--border-color, #e5e5e5);
@@ -181,7 +183,8 @@
         display: flex;
         gap: 6px;
         flex-shrink: 0;
-        margin-left: 12px;
+        margin-right: 12px;
+        margin-left: auto;
       }
     }
   }
@@ -320,26 +323,29 @@
     margin-top: 8px;
 
     .doc-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 8px 12px;
+      padding: 10px 12px;
       border: 1px solid var(--border-color, #e5e5e5);
       border-radius: 6px;
       background: var(--card-bg, #fafafa);
       font-size: 13px;
 
-      .doc-item-info {
+      .doc-item-name {
+        font-weight: 500;
+        word-break: break-word;
+        white-space: pre-wrap;
+        line-height: 1.5;
+        margin-bottom: 6px;
+      }
+
+      .doc-item-bottom-row {
         display: flex;
         align-items: center;
-        gap: 8px;
-        min-width: 0;
-        flex: 1;
+        justify-content: space-between;
 
-        .doc-item-name {
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
+        .doc-item-left {
+          display: flex;
+          align-items: center;
+          gap: 8px;
         }
 
         .doc-item-status {
@@ -367,13 +373,12 @@
           font-size: 11px;
           color: var(--text-secondary, #999);
         }
-      }
 
-      .doc-item-actions {
-        display: flex;
-        gap: 4px;
-        flex-shrink: 0;
-        margin-left: 8px;
+        .doc-item-actions {
+          display: flex;
+          gap: 4px;
+          flex-shrink: 0;
+        }
       }
     }
   }
@@ -430,5 +435,89 @@
     text-align: center;
     padding: 20px;
     color: var(--text-secondary, #999);
+  }
+
+  /* 文档编辑弹窗 */
+  .kb-edit-modal-body {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    padding: 8px 0;
+    gap: 16px;
+
+    .kb-edit-loading {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--text-secondary, #999);
+    }
+
+    .kb-edit-field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .kb-edit-label {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-color, #333);
+    }
+
+    .kb-edit-input {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid var(--border-color, #ccc);
+      border-radius: 6px;
+      background: var(--input-bg, #fff);
+      color: var(--text-color, #333);
+      font-size: 13px;
+      outline: none;
+      box-sizing: border-box;
+
+      &:focus {
+        border-color: var(--accent-color, #4f6ef7);
+      }
+    }
+
+    .kb-edit-textarea {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid var(--border-color, #ccc);
+      border-radius: 6px;
+      background: var(--input-bg, #fff);
+      color: var(--text-color, #333);
+      font-size: var(--font-size-xs, 13px);
+      outline: none;
+      resize: vertical;
+      font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+      line-height: 1.6;
+      box-sizing: border-box;
+
+      &:focus {
+        border-color: var(--accent-color, #4f6ef7);
+      }
+    }
+
+    .kb-edit-reupload-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border-color, #eee);
+
+      .kb-edit-reupload-hint {
+        font-size: 12px;
+        color: var(--text-secondary, #999);
+      }
+    }
+  }
+
+  /* 编辑弹窗 footer — 左:重新上传文件按钮，右:取消/保存 */
+  .kb-edit-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    width: 100%;
+    gap: 8px;
   }
 }

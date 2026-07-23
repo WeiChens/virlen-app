@@ -339,7 +339,6 @@
 
   .tool-item {
     display: flex;
-    // align-items: center;
     flex-direction: column !important;
     gap: 8px;
     padding: 8px 12px;
@@ -392,6 +391,71 @@
       margin-left: 5px;
       overflow: hidden;
     }
+  }
+
+  // ==================== Tool Category Grouping ====================
+
+  .tool-category-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-height: 440px;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+
+  .tool-category-group {
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 8px;
+  }
+
+  .tool-category-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--bg-secondary, #f7f7f8);
+    border-bottom: 1px solid var(--border-color, #e5e5e5);
+    cursor: pointer;
+    transition: background 0.1s;
+    user-select: none;
+
+    &:hover {
+      background: var(--hover-bg, #f0f0f0);
+    }
+
+    .tool-category-checkbox {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      margin-bottom: 0;
+
+      input[type='checkbox'] {
+        width: 16px;
+        height: 16px;
+        accent-color: var(--accent-color, #4f46e5);
+        cursor: pointer;
+        margin: 0;
+      }
+    }
+
+    .tool-category-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    .tool-category-count {
+      font-size: 11px;
+      color: var(--text-secondary, #999);
+    }
+  }
+
+  .tool-category-group .tool-grid {
+    border: none;
+    border-radius: 0;
+    max-height: none;
   }
 
   // ==================== No Skills Hint ====================

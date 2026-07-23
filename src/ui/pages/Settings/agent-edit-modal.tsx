@@ -6,10 +6,10 @@
  *   2. 身份设定 — Markdown
  *   3. 性格设定 — Markdown
  *   4. 模型与工作目录 — 默认模型、工作目录
- *   5. 工具选择 — 多选允许的工具列表
+ *   5. 工具选择 — 多选允许的工具列表（按分类分组）
  *   6. 技能选择 — 多选已注册的技能列表
  */
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import Modal, { ModalFooterButtons } from '@/ui/components/shared/Modal'
 import type { Agent } from '@/types'
 import { agentStore } from '@/ui/store'
@@ -21,12 +21,39 @@ import { t } from '@/ui/i18n'
 import './agent-edit-modal.scss'
 import { showToast } from '@/ui/components/shared/Toast'
 import { toolRegistry } from '@/domain/tools'
+import { TOOL_CATEGORIES } from '@/domain/tools/category'
 import { ToolDefinition } from '@/domain/tools/types'
 import { uuid } from '@/utils/uuid'
 
+/** 支持 indeterminate 状态的三态复选框组件 */
+function TriStateCheckbox({
+  checked,
+  indeterminate,
+  onChange,
+}: {
+  checked: boolean
+  indeterminate: boolean
+  onChange: () => void
+}) {
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.indeterminate = indeterminate
+    }
+  }, [indeterminate])
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={checked}
+      onChange={onChange}
+    />
+  )
+}
+
 interface Props {
   visible: boolean
-  agent: Agent | null // null 表示新建
+  agent: Agent | null
   onClose: () => void
   onSave: () => void
 }
@@ -172,6 +199,55 @@ export default function AgentEditModal({
       setAllowTools(allTools.map((t) => t.name))
     }
   }
+
+  // ===== 按分类全选/取消 =====
+  function toggleCategory(categoryToolNames: string[], currentlySelected: string[]) {
+    const categorySelected = categoryToolNames.filter((name) =>
+      currentlySelected.includes(name),
+    )
+    if (categorySelected.length === categoryToolNames.length) {
+      setAllowTools((prev) =>
+        prev.filter((t) => !categoryToolNames.includes(t)),
+      )
+    } else {
+      setAllowTools((prev) => {
+        const newSet = new Set(prev)
+        for (const name of categoryToolNames) {
+          newSet.add(name)
+        }
+        return Array.from(newSet)
+      })
+    }
+  }
+
+  /** 将工具按分类分组，未匹配到分类的工具归入"其他" */
+  const groupedTools = useMemo(() => {
+    const grouped: Array<{
+      category: (typeof TOOL_CATEGORIES)[0]
+      tools: ToolDefinition[]
+    }> = []
+
+    const usedNames = new Set<string>()
+
+    for (const cat of TOOL_CATEGORIES) {
+      const tools = allTools.filter((t) => cat.toolNames.includes(t.name))
+      if (tools.length > 0) {
+        grouped.push({ category: cat, tools })
+        for (const t of tools) usedNames.add(t.name)
+      }
+    }
+
+    // 未匹配分类的工具
+    const uncategorized = allTools.filter((t) => !usedNames.has(t.name))
+    if (uncategorized.length > 0) {
+      grouped.push({
+        category: { id: 'other', label: '其他', toolNames: uncategorized.map((t) => t.name) },
+        tools: uncategorized,
+      })
+    }
+
+    return grouped
+  }, [allTools])
 
   // ===== 已注册技能列表 =====
   const allSkills = useMemo(
@@ -480,7 +556,7 @@ export default function AgentEditModal({
           </div>
         )}
 
-        {/* ===== Tab 5: 工具选择 ===== */}
+        {/* ===== Tab 5: 工具选择（按分类分组） ===== */}
         {tab === 4 && (
           <div className="aem-form">
             <div className="form-group">
@@ -499,26 +575,66 @@ export default function AgentEditModal({
                 </button>
               </div>
 
-              <div className="tool-grid">
-                {allTools.map((t) => (
-                  <div className="tool-item" key={t.name}>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={allowTools.includes(t.name)}
-                        onChange={() => toggleTool(t.name)}
-                      />
-                      <div>
-                        <div className="tool-name">{t.label || t.name}</div>
-                        <div className="tool-id">{t.name}</div>
-                      </div>
-                      <div className="tool-desc">{t.description}</div>
-                    </label>
-                  </div>
-                ))}
-              </div>
-              {allTools.length === 0 && (
+              {allTools.length === 0 ? (
                 <span className="form-hint">{t('暂无可用的工具')}</span>
+              ) : (
+                <div className="tool-category-list">
+                  {groupedTools.map(({ category, tools }) => {
+                    const categorySelected = tools.filter((t) =>
+                      allowTools.includes(t.name),
+                    )
+                    const allInCategorySelected =
+                      categorySelected.length === tools.length
+
+                    return (
+                      <div key={category.id} className="tool-category-group">
+                        <div className="tool-category-header">
+                          <label className="tool-category-checkbox">
+                            <TriStateCheckbox
+                              checked={allInCategorySelected}
+                              indeterminate={
+                                !allInCategorySelected &&
+                                categorySelected.length > 0
+                              }
+                              onChange={() =>
+                                toggleCategory(
+                                  tools.map((t) => t.name),
+                                  allowTools,
+                                )
+                              }
+                            />
+                            <span className="tool-category-name">
+                              {category.label}
+                            </span>
+                          </label>
+                          <span className="tool-category-count">
+                            {categorySelected.length}/{tools.length}
+                          </span>
+                        </div>
+                        <div className="tool-grid">
+                          {tools.map((t) => (
+                            <div className="tool-item" key={t.name}>
+                              <label>
+                                <input
+                                  type="checkbox"
+                                  checked={allowTools.includes(t.name)}
+                                  onChange={() => toggleTool(t.name)}
+                                />
+                                <div>
+                                  <div className="tool-name">
+                                    {t.label || t.name}
+                                  </div>
+                                  <div className="tool-id">{t.name}</div>
+                                </div>
+                                <div className="tool-desc">{t.description}</div>
+                              </label>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
               )}
             </div>
           </div>

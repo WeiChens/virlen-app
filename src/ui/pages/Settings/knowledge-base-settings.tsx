@@ -20,7 +20,10 @@ import type { KnowledgeBase, KnowledgeBaseDocument } from '@/domain/ports'
 import './knowledge-base-settings.scss'
 
 /** 弹出 toast 消息（简单实现，避免引入 toast 组件的复杂依赖） */
-function showToastMsg(msg: string, type: 'success' | 'error' | 'info' = 'info') {
+function showToastMsg(
+  msg: string,
+  type: 'success' | 'error' | 'info' = 'info',
+) {
   const el = document.createElement('div')
   el.style.cssText = `
     position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
@@ -44,7 +47,9 @@ function KnowledgeBaseSettings() {
   const [kbs, setKbs] = useState<KnowledgeBase[]>([])
   const [loading, setLoading] = useState(true)
   const [expandedKbId, setExpandedKbId] = useState<string | null>(null)
-  const [documents, setDocuments] = useState<Record<string, KnowledgeBaseDocument[]>>({})
+  const [documents, setDocuments] = useState<
+    Record<string, KnowledgeBaseDocument[]>
+  >({})
   const [docsLoading, setDocsLoading] = useState<Record<string, boolean>>({})
 
   // 创建知识库弹窗
@@ -58,6 +63,15 @@ function KnowledgeBaseSettings() {
   const [previewDocContent, setPreviewDocContent] = useState('')
   const [previewLoading, setPreviewLoading] = useState(false)
   const [showPreviewModal, setShowPreviewModal] = useState(false)
+
+  // 文档编辑弹窗
+  const [showEditModal, setShowEditModal] = useState(false)
+  const [editDocKbId, setEditDocKbId] = useState('')
+  const [editDocId, setEditDocId] = useState('')
+  const [editDocName, setEditDocName] = useState('')
+  const [editDocContent, setEditDocContent] = useState('')
+  const [editLoading, setEditLoading] = useState(false)
+  const [editSaving, setEditSaving] = useState(false)
 
   // 检索测试
   const [searchQuery, setSearchQuery] = useState('')
@@ -149,35 +163,302 @@ function KnowledgeBaseSettings() {
     }
   }
 
-  /** 上传文档 */
+  /** 支持的文件扩展名列表 */
+  const SUPPORTED_EXTENSIONS = ['pdf', 'md', 'markdown', 'txt'] as const
+
+  /** 判断文件是否为受支持的文本文件（可根据扩展名判断是否可用 readTextFile 读取） */
+  function isTextExtension(filePath: string): boolean {
+    const ext = filePath.split('.').pop()?.toLowerCase()
+    return ext === 'md' || ext === 'markdown' || ext === 'txt'
+  }
+
+  /** 从文件路径中提取文件名 */
+  function extractFileName(filePath: string): string {
+    return filePath.replace(/\\/g, '/').split('/').pop() || filePath
+  }
+
+  /** 尝试用多种编码读取文件，返回解码后的 UTF-8 文本 */
+  async function tryDecodeTextFile(
+    filePath: string,
+  ): Promise<{ text: string; encoding: string } | null> {
+    // 1. 先试 UTF-8（最常用）
+    try {
+      const { readTextFile } = await import('@tauri-apps/plugin-fs')
+      const text = await readTextFile(filePath)
+      return { text, encoding: 'UTF-8' }
+    } catch {
+      // UTF-8 失败，继续尝试其他编码
+    }
+
+    // 2. 读取原始二进制数据，用 TextDecoder 尝试多种编码
+    try {
+      const { readFile } = await import('@tauri-apps/plugin-fs')
+      const data = await readFile(filePath) // returns Uint8Array
+
+      // 按优先级尝试的编码列表
+      const encodings = [
+        'gbk',
+        'gb2312',
+        'shift-jis',
+        'big5',
+        'euc-jp',
+        'euc-kr',
+        'iso-8859-1',
+        'windows-1252',
+      ] as const
+
+      for (const enc of encodings) {
+        try {
+          const decoder = new TextDecoder(enc, { fatal: true })
+          const text = decoder.decode(data)
+          // 解码成功，且内容不为空/无意义二进制
+          if (text && text.length > 0) {
+            return { text, encoding: enc.toUpperCase() }
+          }
+        } catch {
+          continue // 此编码失败，尝试下一个
+        }
+      }
+    } catch {
+      // 连二进制都无法读取，返回 null
+    }
+
+    return null
+  }
+
+  /** 将文本内容直接写入知识库（绕过 Rust 端文件读取，用于非 UTF-8 文件） */
+  async function uploadTextContent(
+    kbId: string,
+    fileName: string,
+    content: string,
+    encoding: string,
+  ) {
+    showToastMsg(`正在导入「${fileName}」(${encoding})...`, 'info')
+    await ragService.writeText(kbId, fileName, content)
+  }
+
+  /** 计算文件相对于 baseDir 的路径（用于文件夹导入时保留目录结构） */
+  function getRelativePath(filePath: string, baseDir: string): string {
+    const normalizedFile = filePath.replace(/\\/g, '/')
+    const normalizedBase = baseDir.replace(/\\/g, '/').replace(/\/+$/, '')
+    if (normalizedFile.startsWith(normalizedBase + '/')) {
+      return normalizedFile.slice(normalizedBase.length + 1)
+    }
+    return extractFileName(filePath)
+  }
+
+  /** 递归扫描目录，收集所有受支持的文本文件路径 */
+  async function scanDirForTextFiles(
+    dirPath: string,
+    maxDepth = 5,
+    currentDepth = 0,
+  ): Promise<string[]> {
+    if (currentDepth >= maxDepth) return []
+    const results: string[] = []
+    try {
+      const { readDir } = await import('@tauri-apps/plugin-fs')
+      const entries = await readDir(dirPath)
+      for (const entry of entries) {
+        if (!entry.name) continue
+        const fullPath = `${dirPath}/${entry.name}`
+        if (entry.isDirectory) {
+          const subFiles = await scanDirForTextFiles(
+            fullPath,
+            maxDepth,
+            currentDepth + 1,
+          )
+          results.push(...subFiles)
+        } else if (entry.isFile && isTextExtension(entry.name)) {
+          results.push(fullPath)
+        }
+      }
+    } catch {
+      // 跳过无法读取的目录
+    }
+    return results
+  }
+
+  /** 批量上传多个文件到知识库
+   *  @param baseDir - 可选，指定后使用相对路径作为文档名称（用于文件夹导入） */
+  async function uploadFiles(
+    kbId: string,
+    filePaths: string[],
+    baseDir?: string,
+  ) {
+    if (filePaths.length === 0) return
+
+    let successCount = 0
+    let failCount = 0
+    for (let i = 0; i < filePaths.length; i++) {
+      const fp = filePaths[i]
+      const name = extractFileName(fp)
+      // 文件夹导入时，用相对路径作为文档名（如 test/test.md）
+      const docName = baseDir ? getRelativePath(fp, baseDir) : name
+
+      // 文件夹导入时，所有文本文件统一走 writeText，以便控制文档名（保留目录结构）
+      if (isTextExtension(fp) && baseDir) {
+        const decoded = await tryDecodeTextFile(fp)
+        if (decoded) {
+          try {
+            await uploadTextContent(
+              kbId,
+              docName,
+              decoded.text,
+              decoded.encoding,
+            )
+            successCount++
+            continue
+          } catch (err: any) {
+            showToastMsg(
+              `「${docName}」导入失败: ${err?.message || err}`,
+              'error',
+            )
+            failCount++
+            continue
+          }
+        } else {
+          showToastMsg(`已跳过「${docName}」：无法识别的文件编码`, 'error')
+          failCount++
+          continue
+        }
+      }
+
+      // 非文件夹导入 或 PDF 文件：使用原有的 addDocument / 编码检测逻辑
+      if (isTextExtension(fp)) {
+        const decoded = await tryDecodeTextFile(fp)
+        if (decoded) {
+          if (decoded.encoding !== 'UTF-8') {
+            try {
+              await uploadTextContent(
+                kbId,
+                docName,
+                decoded.text,
+                decoded.encoding,
+              )
+              successCount++
+              continue
+            } catch (err: any) {
+              showToastMsg(
+                `「${docName}」导入失败: ${err?.message || err}`,
+                'error',
+              )
+              failCount++
+              continue
+            }
+          }
+        } else {
+          showToastMsg(
+            `已跳过「${docName}」：无法识别的文件编码（非 UTF-8/GBK 等常见编码）`,
+            'error',
+          )
+          failCount++
+          continue
+        }
+      }
+
+      try {
+        await ragService.addDocument(kbId, fp)
+        successCount++
+      } catch (err: any) {
+        const errMsg = err?.message || err?.toString() || '未知错误'
+        if (
+          errMsg.includes('UTF-8') ||
+          errMsg.includes('utf-8') ||
+          errMsg.includes('read_to_string') ||
+          errMsg.includes('读取文件失败')
+        ) {
+          const decoded = await tryDecodeTextFile(fp)
+          if (decoded) {
+            try {
+              await uploadTextContent(
+                kbId,
+                docName,
+                decoded.text,
+                decoded.encoding,
+              )
+              successCount++
+              continue
+            } catch {
+              // 兜底也失败
+            }
+          }
+          showToastMsg(`已跳过「${docName}」：无法识别的文件编码`, 'error')
+        } else {
+          showToastMsg(`「${docName}」导入失败: ${errMsg}`, 'error')
+        }
+        failCount++
+      }
+    }
+
+    // 刷新文档列表
+    await refreshDocList(kbId)
+    await loadKbs()
+
+    if (failCount === 0) {
+      showToastMsg(`成功导入 ${successCount} 个文档`, 'success')
+    } else {
+      showToastMsg(
+        `导入完成：${successCount} 成功，${failCount} 失败`,
+        failCount > 0 ? 'error' : 'success',
+      )
+    }
+  }
+
+  /** 上传文档 — 支持多文件选择 */
   const handleUpload = async (kbId: string) => {
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
       const selected = await open({
-        multiple: false,
+        multiple: true,
         filters: [
           {
             name: '文档',
-            extensions: ['pdf', 'md', 'markdown', 'txt'],
+            extensions: [...SUPPORTED_EXTENSIONS],
           },
         ],
       })
       if (!selected) return
 
-      showToastMsg('正在处理文档，请稍候...', 'info')
-      const doc = await ragService.addDocument(kbId, selected as string)
-      showToastMsg(`文档「${doc.file_name}」添加成功`, 'success')
-
-      // 刷新文档列表
-      const docs = await ragService.listDocuments(kbId)
-      setDocuments((prev) => ({ ...prev, [kbId]: docs }))
+      const paths = Array.isArray(selected) ? selected : [selected]
+      if (paths.length === 0) return
+      await uploadFiles(kbId, paths as string[])
     } catch (err: any) {
       showToastMsg(`上传失败: ${err.message}`, 'error')
     }
   }
 
+  /** 上传文件夹 — 扫描并导入所有文本文件 */
+  const handleUploadFolder = async (kbId: string) => {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const selected = await open({
+        directory: true,
+        multiple: false,
+      })
+      if (!selected) return
+
+      const dirPath = selected as string
+      showToastMsg('正在扫描文件夹中的文本文件...', 'info')
+      const textFiles = await scanDirForTextFiles(dirPath)
+
+      if (textFiles.length === 0) {
+        showToastMsg('文件夹中未找到支持的文本文件（.md / .txt）', 'info')
+        return
+      }
+
+      showToastMsg(`找到 ${textFiles.length} 个文本文件，正在导入...`, 'info')
+      await uploadFiles(kbId, textFiles, dirPath)
+    } catch (err: any) {
+      showToastMsg(`文件夹导入失败: ${err.message}`, 'error')
+    }
+  }
+
   /** 删除文档 */
-  const handleRemoveDoc = async (kbId: string, docId: string, docName: string) => {
+  const handleRemoveDoc = async (
+    kbId: string,
+    docId: string,
+    docName: string,
+  ) => {
     const confirmed = await MessageBox.propt(
       t('删除文档'),
       t(`确定要删除文档「${docName}」吗？`),
@@ -195,8 +476,60 @@ function KnowledgeBaseSettings() {
     }
   }
 
-  /** 编辑文档 — 用新文件替换 */
-  const handleEditDoc = async (kbId: string, docId: string, docName: string) => {
+  /** 刷新指定知识库的文档列表 */
+  const refreshDocList = async (kbId: string) => {
+    const docs = await ragService.listDocuments(kbId)
+    setDocuments((prev) => ({ ...prev, [kbId]: docs }))
+  }
+
+  /** 编辑文档 — 打开编辑弹窗 */
+  const handleEditDoc = async (
+    kbId: string,
+    docId: string,
+    docName: string,
+  ) => {
+    setEditDocKbId(kbId)
+    setEditDocId(docId)
+    setEditDocName(docName)
+    setEditDocContent('')
+    setShowEditModal(true)
+    setEditLoading(true)
+    try {
+      const content = await ragService.getDocumentContent(kbId, docId)
+      setEditDocContent(content)
+    } catch (err: any) {
+      showToastMsg(`加载文档内容失败: ${err.message}`, 'error')
+      setEditDocContent('')
+    }
+    setEditLoading(false)
+  }
+
+  /** 保存文档编辑（名称 + 内容文本） */
+  const handleEditSave = async () => {
+    if (!editDocName.trim()) {
+      showToastMsg('文档名称不能为空', 'error')
+      return
+    }
+    setEditSaving(true)
+    try {
+      await ragService.editTextDocument(
+        editDocKbId,
+        editDocId,
+        editDocName.trim(),
+        editDocContent,
+      )
+      showToastMsg(`文档已更新为「${editDocName.trim()}」`, 'success')
+      setShowEditModal(false)
+      await refreshDocList(editDocKbId)
+      await loadKbs()
+    } catch (err: any) {
+      showToastMsg(`编辑保存失败: ${err.message}`, 'error')
+    }
+    setEditSaving(false)
+  }
+
+  /** 编辑弹窗中 — 重新上传文件，读取内容后填充到输入框，不直接保存 */
+  const handleEditReupload = async () => {
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
       const selected = await open({
@@ -210,21 +543,39 @@ function KnowledgeBaseSettings() {
       })
       if (!selected) return
 
-      showToastMsg(`正在更新文档「${docName}」...`, 'info')
-      const doc = await ragService.editDocument(kbId, docId, selected as string)
-      showToastMsg(`文档已更新为「${doc.file_name}」`, 'success')
+      const filePath = selected as string
+      const fileName = filePath.replace(/\\/g, '/').split('/').pop() || filePath
 
-      // 刷新文档列表和知识库列表
-      const docs = await ragService.listDocuments(kbId)
-      setDocuments((prev) => ({ ...prev, [kbId]: docs }))
-      await loadKbs()
+      showToastMsg(`正在读取文件「${fileName}」...`, 'info')
+
+      // 使用编码检测读取文件内容
+      const decoded = await tryDecodeTextFile(filePath)
+      if (decoded) {
+        setEditDocName(fileName)
+        setEditDocContent(decoded.text)
+        showToastMsg(
+          `已加载「${fileName}」（${decoded.encoding}），点击保存以确认修改`,
+          'success',
+        )
+      } else {
+        // 所有编码都失败
+        setEditDocName(fileName)
+        showToastMsg(
+          '无法读取文本内容（文件编码不受支持），文件名称已更新。请手动输入内容。',
+          'info',
+        )
+      }
     } catch (err: any) {
-      showToastMsg(`编辑失败: ${err.message}`, 'error')
+      showToastMsg(`文件读取失败: ${err.message}`, 'error')
     }
   }
 
   /** 预览文档 */
-  const handlePreviewDoc = async (kbId: string, docId: string, docName: string) => {
+  const handlePreviewDoc = async (
+    kbId: string,
+    docId: string,
+    docName: string,
+  ) => {
     setPreviewDocName(docName)
     setPreviewDocContent('')
     setShowPreviewModal(true)
@@ -268,16 +619,16 @@ function KnowledgeBaseSettings() {
     <div className="knowledge-base-settings">
       {/* RAG 开关设置 */}
       <div className="kb-section">
-        <h3>{t('RAG 知识库')}</h3>
+        <h3>{t('知识库')}</h3>
         <div className="kb-toggle-row">
           <button
             className={`kb-toggle ${s.ragEnabled ? 'active' : ''}`}
             onClick={() => {
-              settingsState.setValue('ragEnabled', !s.ragEnabled)
-              ragService.setConfig({ enabled: !s.ragEnabled })
+              const next = !settingsState.value.ragEnabled
+              settingsState.setValue('ragEnabled', next)
+              ragService.setConfig({ enabled: next })
             }}
-            title={s.ragEnabled ? t('关闭 RAG') : t('开启 RAG')}
-          >
+            title={s.ragEnabled ? t('关闭 RAG') : t('开启 RAG')}>
             <span className="kb-toggle-knob" />
           </button>
           <span>{s.ragEnabled ? t('已启用') : t('已禁用')}</span>
@@ -302,7 +653,7 @@ function KnowledgeBaseSettings() {
       <div className="kb-section">
         <div className="kb-header-row">
           <div className="kb-header-title">
-            <h3>{t('知识库列表')}</h3>
+            <h3 style={{ marginBottom: 0 }}>{t('知识库列表')}</h3>
             <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
               ({kbs.length})
             </span>
@@ -310,11 +661,13 @@ function KnowledgeBaseSettings() {
           <div className="kb-header-actions">
             <button
               className="kb-btn kb-btn-primary kb-btn-sm"
-              onClick={openCreateModal}
-            >
+              onClick={openCreateModal}>
               {t('创建知识库')}
             </button>
-            <button className="kb-btn kb-btn-sm" onClick={loadKbs} disabled={loading}>
+            <button
+              className="kb-btn kb-btn-sm"
+              onClick={loadKbs}
+              disabled={loading}>
               {t('刷新')}
             </button>
           </div>
@@ -332,28 +685,32 @@ function KnowledgeBaseSettings() {
                   <div
                     className="kb-card-info"
                     onClick={() => toggleExpand(kb.id)}
-                    style={{ cursor: 'pointer' }}
-                  >
+                    style={{ cursor: 'pointer' }}>
                     <div className="kb-card-name">{kb.name}</div>
                     {kb.description && (
                       <div className="kb-card-desc">{kb.description}</div>
                     )}
                     <div className="kb-card-meta">
-                      {kb.document_count} {t('个文档')} · {kb.chunk_count} {t('个片段')}
+                      {kb.document_count} {t('个文档')} · {kb.chunk_count}{' '}
+                      {t('个片段')}
                     </div>
                   </div>
                   <div className="kb-card-actions">
-                      <button
-                        className="kb-btn kb-btn-sm kb-btn-primary"
-                        onClick={() => handleUpload(kb.id)}
-                        title={t('上传文档到该知识库')}
-                      >
-                        {t('上传文档')}
-                      </button>
+                    <button
+                      className="kb-btn kb-btn-sm kb-btn-primary"
+                      onClick={() => handleUpload(kb.id)}
+                      title={t('上传文档到该知识库（支持多选）')}>
+                      {t('上传文档')}
+                    </button>
+                    <button
+                      className="kb-btn kb-btn-sm"
+                      onClick={() => handleUploadFolder(kb.id)}
+                      title={t('上传文件夹，自动导入所有文本文件')}>
+                      {t('上传文件夹')}
+                    </button>
                     <button
                       className="kb-btn kb-btn-sm kb-btn-danger"
-                      onClick={() => handleDelete(kb.id, kb.name)}
-                    >
+                      onClick={() => handleDelete(kb.id, kb.name)}>
                       {t('删除')}
                     </button>
                   </div>
@@ -362,7 +719,6 @@ function KnowledgeBaseSettings() {
                 {/* 展开的文档列表 */}
                 {expandedKbId === kb.id && (
                   <div className="kb-expanded-content">
-
                     {docsLoading[kb.id] ? (
                       <div className="kb-loading">{t('加载文档列表...')}</div>
                     ) : !documents[kb.id] || documents[kb.id].length === 0 ? (
@@ -373,40 +729,54 @@ function KnowledgeBaseSettings() {
                       <div className="doc-list">
                         {documents[kb.id]!.map((doc) => (
                           <div key={doc.id} className="doc-item">
-                            <div className="doc-item-info">
-                              <span className="doc-item-name">{doc.file_name}</span>
-                              <span className={`doc-item-status status-${doc.status}`}>
-                                {doc.status === 'ready'
-                                  ? t('就绪')
-                                  : doc.status === 'processing'
-                                    ? t('处理中')
-                                    : t('错误')}
-                              </span>
-                              <span className="doc-item-meta">
-                                {doc.chunk_count} {t('个片段')}
-                              </span>
-                            </div>
-                            <div className="doc-item-actions">
-                              <button
-                                className="kb-btn kb-btn-sm"
-                                onClick={() => handlePreviewDoc(kb.id, doc.id, doc.file_name)}
-                                title={t('预览文档内容')}
-                              >
-                                {t('预览')}
-                              </button>
-                              <button
-                                className="kb-btn kb-btn-sm"
-                                onClick={() => handleEditDoc(kb.id, doc.id, doc.file_name)}
-                                title={t('用新文件替换此文档')}
-                              >
-                                {t('编辑')}
-                              </button>
-                              <button
-                                className="kb-btn kb-btn-sm kb-btn-danger"
-                                onClick={() => handleRemoveDoc(kb.id, doc.id, doc.file_name)}
-                              >
-                                {t('删除')}
-                              </button>
+                            <div className="doc-item-name">{doc.file_name}</div>
+                            <div className="doc-item-bottom-row">
+                              <div className="doc-item-left">
+                                {/* <span
+                                  className={`doc-item-status status-${doc.status}`}>
+                                  {doc.status === 'ready'
+                                    ? t('就绪')
+                                    : doc.status === 'processing'
+                                      ? t('处理中')
+                                      : t('错误')}
+                                </span> */}
+                                <span className="doc-item-meta">
+                                  {doc.chunk_count} {t('个片段')}
+                                </span>
+                              </div>
+                              <div className="doc-item-actions">
+                                <button
+                                  className="kb-btn kb-btn-sm"
+                                  onClick={() =>
+                                    handlePreviewDoc(
+                                      kb.id,
+                                      doc.id,
+                                      doc.file_name,
+                                    )
+                                  }
+                                  title={t('预览文档内容')}>
+                                  {t('预览')}
+                                </button>
+                                <button
+                                  className="kb-btn kb-btn-sm"
+                                  onClick={() =>
+                                    handleEditDoc(kb.id, doc.id, doc.file_name)
+                                  }
+                                  title={t('编辑文档名称和内容')}>
+                                  {t('编辑')}
+                                </button>
+                                <button
+                                  className="kb-btn kb-btn-sm kb-btn-danger"
+                                  onClick={() =>
+                                    handleRemoveDoc(
+                                      kb.id,
+                                      doc.id,
+                                      doc.file_name,
+                                    )
+                                  }>
+                                  {t('删除')}
+                                </button>
+                              </div>
                             </div>
                           </div>
                         ))}
@@ -427,15 +797,12 @@ function KnowledgeBaseSettings() {
                         <button
                           className="kb-btn kb-btn-primary kb-btn-sm"
                           onClick={handleSearch}
-                          disabled={searching || !searchQuery.trim()}
-                        >
+                          disabled={searching || !searchQuery.trim()}>
                           {searching ? t('搜索中...') : t('搜索')}
                         </button>
                       </div>
                       {searchResults && (
-                        <div className="kb-search-results">
-                          {searchResults}
-                        </div>
+                        <div className="kb-search-results">{searchResults}</div>
                       )}
                     </div>
                   </div>
@@ -452,7 +819,17 @@ function KnowledgeBaseSettings() {
         title={t('创建知识库')}
         onClose={() => setShowCreateModal(false)}
         width={460}
-      >
+        footer={
+          <ModalFooterButtons
+            cancelText={t('取消')}
+            confirmText={creating ? t('创建中...') : t('创建')}
+            onCancel={() => {
+              if (!creating) setShowCreateModal(false)
+            }}
+            onConfirm={handleCreate}
+            confirmLoading={creating}
+          />
+        }>
         <div className="kb-create-modal-body">
           <div className="kb-create-field">
             <label className="kb-create-label">{t('知识库名称')} *</label>
@@ -461,7 +838,12 @@ function KnowledgeBaseSettings() {
               placeholder={t('请输入知识库名称')}
               value={newKbName}
               onChange={(e) => setNewKbName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && !creating && newKbName.trim() && handleCreate()}
+              onKeyDown={(e) =>
+                e.key === 'Enter' &&
+                !creating &&
+                newKbName.trim() &&
+                handleCreate()
+              }
               autoFocus
             />
           </div>
@@ -476,15 +858,6 @@ function KnowledgeBaseSettings() {
             />
           </div>
         </div>
-        <ModalFooterButtons
-          cancelText={t('取消')}
-          confirmText={creating ? t('创建中...') : t('创建')}
-          onCancel={() => {
-            if (!creating) setShowCreateModal(false)
-          }}
-          onConfirm={handleCreate}
-          confirmLoading={creating}
-        />
       </Modal>
 
       {/* 文档预览弹窗 */}
@@ -493,13 +866,69 @@ function KnowledgeBaseSettings() {
         title={previewDocName || t('文档预览')}
         onClose={() => setShowPreviewModal(false)}
         width={700}
-        height={500}
-      >
+        height={500}>
         <div className="kb-preview-body">
           {previewLoading ? (
             <div className="kb-preview-loading">{t('加载中...')}</div>
           ) : (
             <pre className="kb-preview-content">{previewDocContent}</pre>
+          )}
+        </div>
+      </Modal>
+
+      {/* 文档编辑弹窗 */}
+      <Modal
+        visible={showEditModal}
+        title={t('编辑文档')}
+        onClose={() => {
+          if (!editSaving) setShowEditModal(false)
+        }}
+        width={700}
+        height={500}
+        footer={
+          <div className="kb-edit-footer">
+            <button
+              className="kb-btn kb-btn-sm"
+              onClick={handleEditReupload}
+              title={t('选择文件，读取内容后覆盖到输入框中')}>
+              {t('重新上传文件')}
+            </button>
+            <ModalFooterButtons
+              cancelText={t('取消')}
+              confirmText={editSaving ? t('保存中...') : t('保存')}
+              onCancel={() => {
+                if (!editSaving) setShowEditModal(false)
+              }}
+              onConfirm={handleEditSave}
+              confirmLoading={editSaving}
+            />
+          </div>
+        }>
+        <div className="kb-edit-modal-body">
+          {editLoading ? (
+            <div className="kb-edit-loading">{t('加载文档内容...')}</div>
+          ) : (
+            <>
+              <div className="kb-edit-field">
+                <label className="kb-edit-label">{t('文档名称')}</label>
+                <input
+                  className="kb-edit-input"
+                  placeholder={t('请输入文档名称')}
+                  value={editDocName}
+                  onChange={(e) => setEditDocName(e.target.value)}
+                />
+              </div>
+              <div className="kb-edit-field">
+                <label className="kb-edit-label">{t('文档内容')}</label>
+                <textarea
+                  className="kb-edit-textarea"
+                  placeholder={t('请输入文档内容')}
+                  value={editDocContent}
+                  onChange={(e) => setEditDocContent(e.target.value)}
+                  rows={12}
+                />
+              </div>
+            </>
           )}
         </div>
       </Modal>
