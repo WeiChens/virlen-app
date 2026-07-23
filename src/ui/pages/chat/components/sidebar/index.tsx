@@ -4,11 +4,12 @@
  * 支持按 Agent 分组展示
  * 支持导出会话为 Markdown
  * 支持会话置顶
+ * 支持导入会话到知识库
  * 操作统一收拢到「更多」菜单
  */
 import { useState, useMemo, useCallback, useEffect, useRef, JSX } from 'react'
 import { observer } from 'mobx-react-lite'
-import type { Session } from '@/types'
+import type { Session, Message } from '@/types'
 import {
   chatState,
   getSessionRuntime,
@@ -28,6 +29,7 @@ import ExportDialog from '@/ui/pages/chat/components/modals/ExportDialog'
 import { exportSessionToFile } from '@/services/export-service'
 import { showToast } from '@/ui/components/shared/Toast'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
+import Modal, { ModalFooterButtons } from '@/ui/components/shared/Modal'
 import { t, tpl } from '@/ui/i18n'
 import './style.scss'
 import { timeFormat } from '@/utils/time'
@@ -35,6 +37,8 @@ import useTime from '@/ui/hooks/useTime'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
 import settingsEvent from '@/events/settingsEvent'
 import { openPath } from '@tauri-apps/plugin-opener'
+import { ragService } from '@/services/rag-service'
+import type { KnowledgeBase } from '@/domain/ports'
 
 interface Props {
   onSelectSession: (sessionId: string) => void
@@ -129,6 +133,16 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
   /** 当前打开的「更多」菜单 sessionId */
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+
+  // ===== 导入知识库状态 =====
+  const [showImportModal, setShowImportModal] = useState(false)
+  const [importSessionId, setImportSessionId] = useState<string | null>(null)
+  const [kbList, setKbList] = useState<KnowledgeBase[]>([])
+  const [selectedKbId, setSelectedKbId] = useState<string>('')
+  const [importLoading, setImportLoading] = useState(false)
+  const [importKbLoading, setImportKbLoading] = useState(false)
+  /** 用户选择要导入的消息 ID 集合（默认全选） */
+  const [selectedMsgIds, setSelectedMsgIds] = useState<Set<string>>(new Set())
 
   const sessions = sessionStore.listSessions()
   const sessionGroupType = settingsState.value.sessionGroupType
@@ -281,9 +295,110 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
     [],
   )
 
+  // ===== 导入知识库 =====
+
+  const handleOpenImportKB = useCallback(
+    async (e: React.MouseEvent, sessionId: string) => {
+      e.stopPropagation()
+      setActiveMenuId(null)
+      setImportSessionId(sessionId)
+      setSelectedKbId('')
+      setShowImportModal(true)
+      setImportKbLoading(true)
+      // 默认全选所有消息
+      const session = sessionStore.getSession(sessionId)
+      if (session) {
+        setSelectedMsgIds(new Set(session.messages.map((m) => m.id)))
+      }
+      try {
+        const list = await ragService.listKnowledgeBases()
+        setKbList(list)
+        // 如果有默认知识库，自动选中
+        const cfg = ragService.getConfig()
+        if (cfg.defaultKnowledgeBaseId && list.some(kb => kb.id === cfg.defaultKnowledgeBaseId)) {
+          setSelectedKbId(cfg.defaultKnowledgeBaseId)
+        }
+      } catch (err: any) {
+        showToast(
+          tpl('获取知识库列表失败：$__error__', {
+            error: err.message || t('未知错误'),
+          }),
+          3000,
+        )
+      }
+      setImportKbLoading(false)
+    },
+    [],
+  )
+
+  const handleCloseImport = useCallback(() => {
+    setShowImportModal(false)
+    setImportSessionId(null)
+    setSelectedKbId('')
+    setKbList([])
+    setSelectedMsgIds(new Set())
+  }, [])
+
+  const handleConfirmImport = useCallback(async () => {
+    if (!importSessionId || !selectedKbId) return
+    const session = sessionStore.getSession(importSessionId)
+    if (!session) return
+
+    // 如果没有选中任何消息，提示用户
+    if (selectedMsgIds.size === 0) {
+      showToast(t('请至少选择一条消息'), 3000)
+      return
+    }
+
+    setImportLoading(true)
+    try {
+      // 只导出用户选中的消息
+      const selectedMsgs = session.messages.filter((m) => selectedMsgIds.has(m.id))
+      const content = formatSessionForKB(session, selectedMsgs)
+      const docName = `📝 ${session.title.replace(/[<>:"/\\|?*]/g, '_').slice(0, 80)}`
+      await ragService.writeText(selectedKbId, docName, content)
+      showToast(tpl('已导入「$__title__」到知识库', { title: session.title }), 3000)
+      handleCloseImport()
+    } catch (err: any) {
+      showToast(
+        tpl('导入知识库失败：$__error__', {
+          error: err.message || t('未知错误'),
+        }),
+        3000,
+      )
+    }
+    setImportLoading(false)
+  }, [importSessionId, selectedKbId, selectedMsgIds, handleCloseImport])
+
   const toggleMenu = useCallback((e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation()
     setActiveMenuId((prev) => (prev === sessionId ? null : sessionId))
+  }, [])
+
+  // ===== 消息选择 =====
+
+  const handleToggleMessage = useCallback((msgId: string) => {
+    setSelectedMsgIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(msgId)) {
+        next.delete(msgId)
+      } else {
+        next.add(msgId)
+      }
+      return next
+    })
+  }, [])
+
+  const handleSelectAllMessages = useCallback(() => {
+    if (!importSessionId) return
+    const session = sessionStore.getSession(importSessionId)
+    if (session) {
+      setSelectedMsgIds(new Set(session.messages.map((m) => m.id)))
+    }
+  }, [importSessionId])
+
+  const handleDeselectAllMessages = useCallback(() => {
+    setSelectedMsgIds(new Set())
   }, [])
 
   useTime(1000 * 60)
@@ -369,6 +484,14 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
                 </span>
                 <span className="menu-label">{t('导出')}</span>
               </button>
+              <button
+                className="menu-item"
+                onClick={(e) => handleOpenImportKB(e, session.id)}>
+                <span className="menu-icon">
+                  <FolderSvg />
+                </span>
+                <span className="menu-label">{t('导入知识库')}</span>
+              </button>
               <div className="menu-divider" />
               <button
                 className="menu-item danger"
@@ -428,11 +551,186 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
           onCancel={handleCloseExport}
         />
       )}
+
+      {/* 导入知识库对话框 */}
+      <Modal
+        visible={showImportModal}
+        title={t('导入会话到知识库')}
+        onClose={handleCloseImport}
+        width={560}
+        className="import-kb-modal"
+        footer={
+          <ModalFooterButtons
+            onCancel={handleCloseImport}
+            onConfirm={handleConfirmImport}
+            confirmText={t('导入')}
+            confirmLoading={importLoading}
+          />
+        }>
+        {importKbLoading ? (
+          <div className="import-kb-loading">{t('加载中...')}</div>
+        ) : kbList.length === 0 ? (
+          <div className="import-kb-empty">
+            <p>{t('暂无知识库，请先在设置中创建知识库。')}</p>
+          </div>
+        ) : (
+          <>
+            {/* 知识库选择 */}
+            <div className="import-kb-section">
+              <div className="import-kb-section-title">{t('选择目标知识库')}</div>
+              <div className="import-kb-list">
+                {kbList.map((kb) => (
+                  <div
+                    key={kb.id}
+                    className={`import-kb-item ${selectedKbId === kb.id ? 'selected' : ''}`}
+                    onClick={() => setSelectedKbId(kb.id)}>
+                    <span className="import-kb-item-name">{kb.name}</span>
+                    <span className="import-kb-item-count">
+                      {tpl('$__count__ 个文档', { count: kb.document_count })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* 消息选择 */}
+            {importSessionId && (() => {
+              const session = sessionStore.getSession(importSessionId)
+              if (!session) return null
+              const totalCount = session.messages.length
+              const selectedCount = selectedMsgIds.size
+              return (
+                <div className="import-kb-section">
+                  <div className="import-kb-section-title import-kb-msg-header">
+                    <span>{tpl('选择消息（$__selected__/$__total__）', { selected: selectedCount, total: totalCount })}</span>
+                    <div className="import-kb-msg-actions">
+                      <button
+                        className="import-kb-msg-action-btn"
+                        onClick={handleSelectAllMessages}
+                        disabled={selectedCount === totalCount}>
+                        {t('全选')}
+                      </button>
+                      <span className="import-kb-msg-action-sep">|</span>
+                      <button
+                        className="import-kb-msg-action-btn"
+                        onClick={handleDeselectAllMessages}
+                        disabled={selectedCount === 0}>
+                        {t('取消全选')}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="import-kb-msg-list">
+                    {session.messages.map((msg, idx) => {
+                      const preview = extractPlainText(msg.content).slice(0, 60)
+                      return (
+                        <div
+                          key={msg.id}
+                          className={`import-kb-msg-item ${selectedMsgIds.has(msg.id) ? 'checked' : ''}`}
+                          onClick={() => handleToggleMessage(msg.id)}>
+                          <input
+                            type="checkbox"
+                            className="import-kb-msg-checkbox"
+                            checked={selectedMsgIds.has(msg.id)}
+                            onChange={() => handleToggleMessage(msg.id)}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          <span className={`import-kb-msg-role role-${msg.role}`}>
+                            {msg.role === 'user' ? '👤' : msg.role === 'assistant' ? '🤖' : msg.role === 'tool' ? '🔧' : msg.role === 'summary' ? '📋' : '⚙️'}
+                          </span>
+                          <span className="import-kb-msg-preview">{preview || `[${msg.role}]`}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })()}
+          </>
+        )}
+      </Modal>
     </div>
   )
 }
 
 export default observer(ChatSidebar)
+
+/* ==================== 格式化会话内容用于导入知识库 ==================== */
+
+/**
+ * 将会话消息格式化为可读的纯文本，供导入知识库使用
+ * @param messages 可选，只格式化指定的消息列表（不传则使用 session 的全部消息）
+ */
+function formatSessionForKB(session: Session, messages?: Message[]): string {
+  const lines: string[] = []
+  const targetMsgs = messages ?? session.messages
+
+  lines.push(`# ${session.title}`)
+  lines.push('')
+  lines.push(`> 模型：${session.modelId || '未知'}`)
+  lines.push(`> 消息数：${targetMsgs.length}`)
+  lines.push('')
+  lines.push('---')
+  lines.push('')
+
+  for (const msg of targetMsgs) {
+    const roleLabel =
+      msg.role === 'user'
+        ? '## 👤 User'
+        : msg.role === 'assistant'
+          ? '## 🤖 Assistant'
+          : msg.role === 'tool'
+            ? '## 🔧 Tool'
+            : msg.role === 'summary'
+              ? '## 📋 Summary'
+              : '## System'
+
+    lines.push(roleLabel)
+    lines.push('')
+
+    // 思考过程
+    if (msg.reasoningContent) {
+      lines.push('> 💭 ' + msg.reasoningContent.split('\n').join('\n> '))
+      lines.push('')
+    }
+
+    // 文本内容
+    const text = extractPlainText(msg.content)
+    if (text) {
+      lines.push(text)
+      lines.push('')
+    }
+
+    // 工具调用
+    if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
+      for (const tc of msg.toolCalls) {
+        lines.push(`**工具调用：${tc.name}**`)
+        lines.push('')
+        lines.push('```json')
+        lines.push(JSON.stringify(tc.input, null, 2))
+        lines.push('```')
+        lines.push('')
+      }
+    }
+
+    lines.push('---')
+    lines.push('')
+  }
+
+  return lines.join('\n')
+}
+
+/** 从 MessageContent 中提取纯文本 */
+function extractPlainText(content: any): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter(
+      (c: any) =>
+        c.type === 'text' || (c.type === 'tool_result' && typeof c.content === 'string'),
+    )
+    .map((c: any) => (c.type === 'text' ? c.text : c.content))
+    .join('\n\n')
+}
 
 /* ==================== SessionGroupView — 分组卡片组件 ==================== */
 

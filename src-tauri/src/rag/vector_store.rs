@@ -169,7 +169,14 @@ impl VectorStoreManager {
     }
 
     /// 保存索引到磁盘（turbovec 二进制 + chunk_map JSON）
+    ///
+    /// ⚠️ 安全校验：确保 `index_path` 和 `chunk_map_path` 均在 `kb_dir` 下，
+    /// 防止因调用方传入了意外路径导致数据写到错误位置。
     fn save_index_to_disk(kb_dir: &PathBuf, index_path: &PathBuf, chunk_map_path: &PathBuf, state: &IndexState) -> Result<(), String> {
+        // 校验路径合法性 — 防止路径穿越
+        Self::validate_path_within(kb_dir, index_path, "索引文件")?;
+        Self::validate_path_within(kb_dir, chunk_map_path, "块映射文件")?;
+
         std::fs::create_dir_all(kb_dir)
             .map_err(|e| format!("创建知识库目录失败: {}", e))?;
 
@@ -192,10 +199,44 @@ impl VectorStoreManager {
         Ok(())
     }
 
+    /// 校验 `sub_path` 是否以 `base_dir` 为前缀（防止路径穿越）
+    ///
+    /// 使用父目录的 canonicalize 做校验，因为 sub_path 本身可能尚不存在（首次写入时）。
+    fn validate_path_within(base_dir: &PathBuf, sub_path: &PathBuf, label: &str) -> Result<(), String> {
+        let canonical_base = base_dir
+            .canonicalize()
+            .map_err(|_| format!("{} 路径校验失败: 基础目录不存在 ({})", label, base_dir.display()))?;
+
+        // sub_path 可能尚不存在，取其父目录做 canonicalize 校验
+        let sub_parent = sub_path
+            .parent()
+            .ok_or_else(|| format!("{} 路径校验失败: 无法获取父目录", label))?;
+
+        let canonical_parent = sub_parent
+            .canonicalize()
+            .map_err(|e| format!("{} 路径校验失败 (父目录): {}", label, e))?;
+
+        if !canonical_parent.starts_with(&canonical_base) {
+            return Err(format!(
+                "{} 路径安全校验失败: 目标路径不在知识库目录下 ({} not under {})",
+                label,
+                canonical_parent.display(),
+                canonical_base.display()
+            ));
+        }
+        Ok(())
+    }
+
     // ===== 路径辅助 =====
 
+    /// 获取知识库目录路径（自动过滤 `kb_id` 中的危险字符，防止路径穿越）
     fn get_kb_dir(&self, kb_id: &str) -> PathBuf {
-        self.data_dir.join(format!("kb_{}", kb_id))
+        // 只允许字母数字、短横线、下划线，移除所有可能路径穿越的字符（如 ../ 等）
+        let safe_id: String = kb_id
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        self.data_dir.join(format!("kb_{}", safe_id))
     }
 
     fn index_path(&self, kb_id: &str) -> PathBuf {
@@ -265,12 +306,22 @@ impl VectorStoreManager {
     }
 
     pub fn delete_knowledge_base(&mut self, kb_id: &str) -> Result<(), String> {
+        // 检查知识库（内存索引 或 磁盘目录）是否存在
+        let exists_in_memory = self.indices.contains_key(kb_id);
         let kb_dir = self.get_kb_dir(kb_id);
-        if kb_dir.exists() {
+        let exists_on_disk = kb_dir.exists();
+
+        if !exists_in_memory && !exists_on_disk {
+            return Err(format!("知识库不存在: {}", kb_id));
+        }
+
+        if exists_on_disk {
             std::fs::remove_dir_all(&kb_dir)
                 .map_err(|e| format!("删除知识库目录失败: {}", e))?;
         }
-        self.indices.remove(kb_id);
+        if exists_in_memory {
+            self.indices.remove(kb_id);
+        }
         Ok(())
     }
 

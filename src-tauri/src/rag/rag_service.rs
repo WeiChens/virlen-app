@@ -7,11 +7,14 @@ use crate::rag::embedding::EmbeddingProvider;
 use crate::rag::vector_store::{ChunkResult, DocumentInfo, KnowledgeBaseMeta, VectorStoreManager};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::RwLock;
+
+/// 最大单个文档大小（50MB），超过此大小则拒绝处理，防止嵌入过久导致超时
+const MAX_DOC_SIZE_BYTES: u64 = 50 * 1024 * 1024;
 
 /// RAG 服务
 pub struct RagService {
-    store_manager: Mutex<VectorStoreManager>,
+    store_manager: RwLock<VectorStoreManager>,
 }
 
 impl RagService {
@@ -21,37 +24,37 @@ impl RagService {
         manager.init()?;
 
         Ok(Self {
-            store_manager: Mutex::new(manager),
+            store_manager: RwLock::new(manager),
         })
     }
 
     // ===== 知识库管理 =====
 
-    /// 创建知识库
+    /// 创建知识库（写操作）
     pub fn create_knowledge_base(
         &self,
         name: &str,
         description: &str,
     ) -> Result<KnowledgeBaseMeta, String> {
-        let mgr = self.store_manager.lock().map_err(|e| format!("获取锁失败: {}", e))?;
+        let mgr = self.store_manager.write().map_err(|e| format!("获取写锁失败: {}", e))?;
         mgr.create_knowledge_base(name, description)
     }
 
-    /// 列出所有知识库
+    /// 列出所有知识库（读操作，可并发）
     pub fn list_knowledge_bases(&self) -> Result<Vec<KnowledgeBaseMeta>, String> {
-        let mgr = self.store_manager.lock().map_err(|e| format!("获取锁失败: {}", e))?;
+        let mgr = self.store_manager.read().map_err(|e| format!("获取读锁失败: {}", e))?;
         mgr.list_knowledge_bases()
     }
 
-    /// 获取单个知识库
+    /// 获取单个知识库（读操作，可并发）
     pub fn get_knowledge_base(&self, kb_id: &str) -> Result<KnowledgeBaseMeta, String> {
-        let mgr = self.store_manager.lock().map_err(|e| format!("获取锁失败: {}", e))?;
+        let mgr = self.store_manager.read().map_err(|e| format!("获取读锁失败: {}", e))?;
         mgr.get_knowledge_base(kb_id)
     }
 
-    /// 删除知识库
+    /// 删除知识库（写操作）
     pub fn delete_knowledge_base(&self, kb_id: &str) -> Result<(), String> {
-        let mut mgr = self.store_manager.lock().map_err(|e| format!("获取锁失败: {}", e))?;
+        let mut mgr = self.store_manager.write().map_err(|e| format!("获取写锁失败: {}", e))?;
         mgr.delete_knowledge_base(kb_id)
     }
 
@@ -60,20 +63,32 @@ impl RagService {
     /// 添加文档到知识库
     ///
     /// 流程：解析文件 → 分块 → 嵌入 → 存储
+    ///
+    /// ⚠️ 单个文档超过 50MB 时会拒绝处理，防止嵌入耗时过长导致超时。
     pub fn add_document(&self, kb_id: &str, file_path: &str) -> Result<DocumentInfo, String> {
-        // 1. 解析文档
+        // 1. 提前检查文件大小（避免解析大文件浪费资源）
+        let metadata = std::fs::metadata(file_path)
+            .map_err(|e| format!("读取文件元信息失败: {}", e))?;
+        if metadata.len() > MAX_DOC_SIZE_BYTES {
+            return Err(format!(
+                "文档过大（{:.2} MB），超过最大限制（50 MB）。请拆分后分别导入。",
+                metadata.len() as f64 / (1024.0 * 1024.0)
+            ));
+        }
+
+        // 2. 解析文档
         let parsed = document::parse_document(file_path)?;
         let doc_id = parsed.meta.id.clone();
 
-        // 2. 分块
+        // 3. 分块
         let chunks = document::chunk_document(&parsed, &doc_id, 512, 48);
 
         if chunks.is_empty() {
             return Err("文档解析后无有效文本内容".to_string());
         }
 
-        // 3. 嵌入并存储
-        let mut mgr = self.store_manager.lock().map_err(|e| format!("获取锁失败: {}", e))?;
+        // 4. 嵌入并存储
+        let mut mgr = self.store_manager.write().map_err(|e| format!("获取写锁失败: {}", e))?;
         let doc_info = mgr.add_document(kb_id, chunks)?;
 
         Ok(doc_info)
@@ -83,7 +98,16 @@ impl RagService {
     ///
     /// 用于 AI Tool 直接写入知识库的场景。
     /// 流程：分块 → 嵌入 → 存储
+    ///
+    /// ⚠️ 文本内容超过 50MB 时会拒绝处理，防止嵌入耗时过长导致超时。
     pub fn add_text_document(&self, kb_id: &str, doc_name: &str, content: &str) -> Result<DocumentInfo, String> {
+        // 检查内容大小
+        if content.len() as u64 > MAX_DOC_SIZE_BYTES {
+            return Err(format!(
+                "文本内容过大（{:.2} MB），超过最大限制（50 MB）。请拆分后分别导入。",
+                content.len() as f64 / (1024.0 * 1024.0)
+            ));
+        }
         // 1. 从文本创建文档对象
         let parsed = document::parse_text(content, doc_name);
         let doc_id = parsed.meta.id.clone();
@@ -96,7 +120,7 @@ impl RagService {
         }
 
         // 3. 嵌入并存储
-        let mut mgr = self.store_manager.lock().map_err(|e| format!("获取锁失败: {}", e))?;
+        let mut mgr = self.store_manager.write().map_err(|e| format!("获取写锁失败: {}", e))?;
         let doc_info = mgr.add_document(kb_id, chunks)?;
 
         Ok(doc_info)
@@ -104,7 +128,7 @@ impl RagService {
 
     /// 从知识库删除文档
     pub fn remove_document(&self, kb_id: &str, doc_id: &str) -> Result<(), String> {
-        let mut mgr = self.store_manager.lock().map_err(|e| format!("获取锁失败: {}", e))?;
+        let mut mgr = self.store_manager.write().map_err(|e| format!("获取写锁失败: {}", e))?;
         mgr.remove_document(kb_id, doc_id)
     }
 
@@ -123,7 +147,7 @@ impl RagService {
         }
 
         // 3. 在 store 中替换
-        let mut mgr = self.store_manager.lock().map_err(|e| format!("获取锁失败: {}", e))?;
+        let mut mgr = self.store_manager.write().map_err(|e| format!("获取写锁失败: {}", e))?;
         mgr.edit_document(kb_id, doc_id, chunks)
     }
 
@@ -142,7 +166,7 @@ impl RagService {
         }
 
         // 3. 在 store 中替换
-        let mut mgr = self.store_manager.lock().map_err(|e| format!("获取锁失败: {}", e))?;
+        let mut mgr = self.store_manager.write().map_err(|e| format!("获取写锁失败: {}", e))?;
         mgr.edit_document(kb_id, doc_id, chunks)
     }
 
@@ -159,47 +183,49 @@ impl RagService {
         }
     }
 
-    /// 列出知识库中的文档
+    /// 列出知识库中的文档（读操作，可并发）
     pub fn list_documents(&self, kb_id: &str) -> Result<Vec<DocumentInfo>, String> {
-        let mgr = self.store_manager.lock().map_err(|e| format!("获取锁失败: {}", e))?;
+        let mgr = self.store_manager.read().map_err(|e| format!("获取读锁失败: {}", e))?;
         mgr.list_documents(kb_id)
     }
 
-    /// 获取知识库中某个文档的完整内容
+    /// 获取知识库中某个文档的完整内容（读操作，可并发）
     pub fn get_document_content(&self, kb_id: &str, doc_id: &str) -> Result<String, String> {
-        let mgr = self.store_manager.lock().map_err(|e| format!("获取锁失败: {}", e))?;
+        let mgr = self.store_manager.read().map_err(|e| format!("获取读锁失败: {}", e))?;
         mgr.get_document_content(kb_id, doc_id)
     }
 
     // ===== 检索 =====
 
-    /// 模糊搜索文档内容 — 不依赖向量嵌入，直接做文本包含匹配，返回匹配的文档 ID 列表
+    /// 模糊搜索文档内容（读操作，可并发）
+    ///
+    /// 不依赖向量嵌入，直接做文本包含匹配，返回匹配的文档 ID 列表
     pub fn search_documents_content(
         &self,
         kb_id: &str,
         keyword: &str,
     ) -> Result<Vec<String>, String> {
-        let mgr = self.store_manager.lock().map_err(|e| format!("获取锁失败: {}", e))?;
+        let mgr = self.store_manager.read().map_err(|e| format!("获取读锁失败: {}", e))?;
         mgr.search_documents_content(kb_id, keyword)
     }
 
-    /// 将知识库中的所有文档导出为 ZIP 文件
+    /// 将知识库中的所有文档导出为 ZIP 文件（读操作，可并发）
     pub fn export_to_zip(&self, kb_id: &str, output_path: &str) -> Result<(), String> {
-        let mgr = self.store_manager.lock().map_err(|e| format!("获取锁失败: {}", e))?;
+        let mgr = self.store_manager.read().map_err(|e| format!("获取读锁失败: {}", e))?;
         mgr.export_to_zip(kb_id, output_path)
     }
 
-    /// 检索知识库
+    /// 检索知识库（读操作，可并发）
     ///
     /// 将用户查询转为嵌入向量，在指定知识库中进行相似度搜索，
     /// 返回最相关的 top_k 个文本块。
     pub fn query(&self, kb_id: &str, query_text: &str, top_k: usize) -> Result<Vec<ChunkResult>, String> {
         let top_k = top_k.clamp(1, 50);
-        let mgr = self.store_manager.lock().map_err(|e| format!("获取锁失败: {}", e))?;
+        let mgr = self.store_manager.read().map_err(|e| format!("获取读锁失败: {}", e))?;
         mgr.query(kb_id, query_text, top_k)
     }
 
-    /// 同时在多个知识库中检索
+    /// 同时在多个知识库中检索（读操作，可并发）
     pub fn query_multi(
         &self,
         kb_ids: &[String],
@@ -207,7 +233,7 @@ impl RagService {
         top_k_per_kb: usize,
     ) -> Result<Vec<ChunkResult>, String> {
         let mut all_results = Vec::new();
-        let mgr = self.store_manager.lock().map_err(|e| format!("获取锁失败: {}", e))?;
+        let mgr = self.store_manager.read().map_err(|e| format!("获取读锁失败: {}", e))?;
 
         for kb_id in kb_ids {
             if let Ok(results) = mgr.query(kb_id, query_text, top_k_per_kb) {
@@ -226,6 +252,9 @@ impl RagService {
     }
 
     /// 将检索结果格式化为上下文文本（供 LLM 使用）
+    ///
+    /// ⚠️ 此逻辑与前端 `rag-service.ts` 中的 `buildContextText()` 方法重复。
+    /// 修改时请同步更新两处。
     pub fn format_context(chunks: &[ChunkResult], max_chars: usize) -> String {
         let mut context = String::new();
         context.push_str("以下是从知识库中检索到的相关文档片段：\n\n");

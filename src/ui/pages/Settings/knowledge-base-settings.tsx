@@ -8,7 +8,7 @@
  * - 检索测试
  */
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { observer } from 'mobx-react-lite'
 import { settingsState } from '@/ui/store'
 import { t } from '@/ui/i18n'
@@ -117,6 +117,12 @@ function KnowledgeBaseSettings() {
 
   useEffect(() => {
     loadKbs()
+    // 组件卸载时清理防抖定时器
+    return () => {
+      if (docSearchTimerRef.current) {
+        clearTimeout(docSearchTimerRef.current)
+      }
+    }
   }, [loadKbs])
 
   /** 打开创建知识库弹窗 */
@@ -183,36 +189,41 @@ function KnowledgeBaseSettings() {
     setDocListLoading(false)
   }
 
-  /** 文档列表搜索 */
-  const handleDocSearch = async () => {
+  // 文档列表搜索
+  const docSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /** 文档列表搜索（带 300ms 防抖） */
+  const handleDocSearch = useCallback(async () => {
     if (!docSearchQuery.trim() || !docListKbId) return
 
     if (docSearchMode === 'title') {
-      // 标题搜索：前端过滤
+      // 标题搜索：前端过滤，不需要防抖
       setDocListPage(1)
-      // docSearchResultIds 保持 null 表示使用默认标题过滤
       return
     }
 
-    // 内容搜索：交给底层做模糊匹配 — 返回匹配的文档 ID 列表
-    setDocSearching(true)
-    setDocSearchResultIds(null)
-    try {
-      const result = await ragService.searchDocumentsContent(
-        docListKbId,
-        docSearchQuery.trim(),
-      )
-      const matchedIds = new Set(result)
-      setDocSearchResultIds(matchedIds)
-      setDocListPage(1)
-      // if (matchedIds.size === 0) {
-      //   showToastMsg('未找到内容匹配的文档', 'info')
-      // }
-    } catch (err: any) {
-      showToastMsg(`搜索失败: ${err.message}`, 'error')
+    // 内容搜索：防抖，避免快速打字时频繁请求
+    if (docSearchTimerRef.current) {
+      clearTimeout(docSearchTimerRef.current)
     }
-    setDocSearching(false)
-  }
+    docSearchTimerRef.current = setTimeout(async () => {
+      setDocSearching(true)
+      setDocSearchResultIds(null)
+      try {
+        const result = await ragService.searchDocumentsContent(
+          docListKbId,
+          docSearchQuery.trim(),
+        )
+        const matchedIds = new Set(result)
+        setDocSearchResultIds(matchedIds)
+        setDocListPage(1)
+      } catch (err: any) {
+        showToastMsg(`搜索失败: ${err.message}`, 'error')
+      }
+      setDocSearching(false)
+      docSearchTimerRef.current = null
+    }, 300)
+  }, [docSearchQuery, docListKbId, docSearchMode])
 
   /** 支持的文件扩展名列表 */
   const SUPPORTED_EXTENSIONS = ['pdf', 'md', 'markdown', 'txt'] as const

@@ -501,5 +501,18 @@
   "下载完成": "Download complete",
   "下载失败": "Download failed",
   "正在启动安装程序...": "Launching installer...",
-  "重试": "Retry"
+  "重试": "Retry",
+  "导入知识库": "Import to Knowledge Base",
+  "导入会话到知识库": "Import Session to Knowledge Base",
+  "暂无知识库，请先在设置中创建知识库。": "No knowledge bases yet. Please create one in Settings.",
+  "已导入「$__title__」到知识库": "Imported \"$__title__\" to knowledge base",
+  "导入知识库失败：$__error__": "Failed to import to knowledge base: $__error__",
+  "$__count__ 个文档": "$__count__ documents",
+  "获取知识库列表失败：$__error__": "Failed to fetch knowledge base list: $__error__",
+  "导入": "Import",
+  "选择目标知识库": "Select a knowledge base",
+  "选择消息（$__selected__/$__total__）": "Select messages ($__selected__/$__total__)",
+  "全选": "Select All",
+  "取消全选": "Deselect All",
+  "请至少选择一条消息": "Please select at least one message"
 }
