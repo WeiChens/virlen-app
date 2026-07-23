@@ -127,19 +127,24 @@ impl EmbeddingProvider for OpenAIEmbeddingProvider {
 #[derive(Debug, Deserialize)]
 struct EmbeddingResponse {
     data: Vec<EmbeddingData>,
+    #[allow(dead_code)]
     model: String,
+    #[allow(dead_code)]
     usage: Option<EmbeddingUsage>,
 }
 
 #[derive(Debug, Deserialize)]
 struct EmbeddingData {
     embedding: Vec<f32>,
+    #[allow(dead_code)]
     index: usize,
 }
 
 #[derive(Debug, Deserialize)]
 struct EmbeddingUsage {
+    #[allow(dead_code)]
     prompt_tokens: usize,
+    #[allow(dead_code)]
     total_tokens: usize,
 }
 
@@ -148,6 +153,7 @@ struct EmbeddingUsage {
 /// 调用本地 Ollama 服务的嵌入 API，实现真正的语义理解。
 /// Ollama 默认运行在 http://localhost:11434
 /// 支持模型如：nomic-embed-text, bge-m3, mxbai-embed-large 等
+#[allow(dead_code)]
 pub struct OllamaEmbeddingProvider {
     base_url: String,
     model: String,
@@ -155,6 +161,7 @@ pub struct OllamaEmbeddingProvider {
     client: reqwest::blocking::Client,
 }
 
+#[allow(dead_code)]
 impl OllamaEmbeddingProvider {
     /// 创建 Ollama 嵌入提供者
     ///
@@ -272,6 +279,7 @@ impl EmbeddingProvider for OllamaEmbeddingProvider {
 // ===== 辅助函数（供测试使用） =====
 
 /// 计算两个向量的余弦相似度
+#[allow(dead_code)]
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
@@ -464,6 +472,7 @@ mod tests {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OllamaEmbeddingResponse {
     embedding: Vec<f32>,
 }
@@ -603,10 +612,12 @@ impl EmbeddingProvider for NgramEmbeddingProvider {
 }
 
 /// 简单的内存嵌入提供者（仅用于回退）
+#[allow(dead_code)]
 pub struct SimpleEmbeddingProvider {
     dimensions: usize,
 }
 
+#[allow(dead_code)]
 impl SimpleEmbeddingProvider {
     pub fn new(dimensions: usize) -> Self {
         Self { dimensions }

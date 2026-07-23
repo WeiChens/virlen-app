@@ -47,6 +47,8 @@ impl RagService {
     }
 
     /// 获取单个知识库（读操作，可并发）
+    /// 当前未被前端直接调用，保留供后续功能扩展使用
+    #[allow(dead_code)]
     pub fn get_knowledge_base(&self, kb_id: &str) -> Result<KnowledgeBaseMeta, String> {
         let mgr = self.store_manager.read().map_err(|e| format!("获取读锁失败: {}", e))?;
         mgr.get_knowledge_base(kb_id)
@@ -226,6 +228,8 @@ impl RagService {
     }
 
     /// 同时在多个知识库中检索（读操作，可并发）
+    /// 当前未被前端直接调用，保留供后续功能扩展使用
+    #[allow(dead_code)]
     pub fn query_multi(
         &self,
         kb_ids: &[String],

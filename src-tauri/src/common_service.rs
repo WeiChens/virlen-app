@@ -77,7 +77,6 @@ fn grant_permissions_windows(app: &AppHandle) {
         "tauri://localhost\0".to_string(),
         "https://tauri.localhost\0".to_string(),
         "http://tauri.localhost\0".to_string(),
-        "*\0".to_string(), // 通配符，允许所有 origin（如果 WebView2 版本支持）
     ];
 
     webview

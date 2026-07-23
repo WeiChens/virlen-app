@@ -14,6 +14,8 @@ pub struct DocumentMeta {
     pub file_name: String,
     pub file_type: String,
     pub file_size: u64,
+    /// PDF 页数（仅 PDF 文件有此字段，当前未在前端展示，保留供后续使用）
+    #[allow(dead_code)]
     pub page_count: Option<u32>,
 }
 

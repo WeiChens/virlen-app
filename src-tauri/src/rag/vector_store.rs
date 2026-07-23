@@ -300,6 +300,9 @@ impl VectorStoreManager {
         Ok(result)
     }
 
+    /// 获取单个知识库元数据
+    /// 当前未被前端直接调用，保留供后续功能扩展使用
+    #[allow(dead_code)]
     pub fn get_knowledge_base(&self, kb_id: &str) -> Result<KnowledgeBaseMeta, String> {
         self.load_kb_metadata(kb_id)?
             .ok_or_else(|| format!("知识库不存在: {}", kb_id))
@@ -936,7 +939,8 @@ impl VectorStoreManager {
     }
 }
 
-/// 格式化知识库数据目录大小
+/// 格式化知识库数据目录大小（当前未被使用，保留供后续 UI 展示用）
+#[allow(dead_code)]
 pub fn format_data_size(size: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
