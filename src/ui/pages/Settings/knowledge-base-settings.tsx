@@ -77,6 +77,12 @@ function KnowledgeBaseSettings() {
   const [editLoading, setEditLoading] = useState(false)
   const [editSaving, setEditSaving] = useState(false)
 
+  // 新建文档弹窗
+  const [showNewDocModal, setShowNewDocModal] = useState(false)
+  const [newDocName, setNewDocName] = useState('')
+  const [newDocContent, setNewDocContent] = useState('')
+  const [newDocCreating, setNewDocCreating] = useState(false)
+
   // 检索测试
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<string | null>(null)
@@ -548,6 +554,40 @@ function KnowledgeBaseSettings() {
     await loadKbs()
   }
 
+  /** 导出知识库为 ZIP */
+  const handleExportKb = async () => {
+    if (!docListKbId || docListDocs.length === 0) return
+    await doExportKb(docListKbId, docListKbName)
+  }
+
+  /** 导出知识库为 ZIP（指定 kbId 和 kbName，供卡片直接调用） */
+  const handleExportKbById = async (kbId: string, kbName: string) => {
+    await doExportKb(kbId, kbName)
+  }
+
+  /** 实际导出逻辑 */
+  const doExportKb = async (kbId: string, kbName: string) => {
+    try {
+      const { save } = await import('@tauri-apps/plugin-dialog')
+      const savePath = await save({
+        defaultPath: `${kbName}.zip`,
+        filters: [
+          {
+            name: 'ZIP 文件',
+            extensions: ['zip'],
+          },
+        ],
+      })
+      if (!savePath) return
+
+      showToastMsg(`正在导出「${kbName}」...`, 'info')
+      await ragService.exportKnowledgeBase(kbId, savePath)
+      showToastMsg(`导出成功：${savePath}`, 'success')
+    } catch (err: any) {
+      showToastMsg(`导出失败: ${err.message}`, 'error')
+    }
+  }
+
   /** 刷新文档列表（如果弹窗打开则更新弹窗内容） */
   const refreshDocList = async () => {
     if (!docListKbId) return
@@ -647,6 +687,31 @@ function KnowledgeBaseSettings() {
     } catch (err: any) {
       showToastMsg(`文件读取失败: ${err.message}`, 'error')
     }
+  }
+
+  /** 新建文档 — 手动输入名称和内容 */
+  const handleNewDoc = async () => {
+    if (!newDocName.trim()) {
+      showToastMsg('请输入文档名称', 'error')
+      return
+    }
+    setNewDocCreating(true)
+    try {
+      await ragService.writeText(
+        docListKbId,
+        newDocName.trim(),
+        newDocContent,
+      )
+      showToastMsg(`文档「${newDocName.trim()}」创建成功`, 'success')
+      setShowNewDocModal(false)
+      setNewDocName('')
+      setNewDocContent('')
+      await refreshDocList()
+      await loadKbs()
+    } catch (err: any) {
+      showToastMsg(`创建失败: ${err.message}`, 'error')
+    }
+    setNewDocCreating(false)
   }
 
   /** 预览文档 */
@@ -788,6 +853,12 @@ function KnowledgeBaseSettings() {
                       {t('上传文件夹')}
                     </button>
                     <button
+                      className="kb-btn kb-btn-sm"
+                      onClick={() => handleExportKbById(kb.id, kb.name)}
+                      title={t('导出知识库所有文档为 ZIP')}>
+                      {t('导出')}
+                    </button>
+                    <button
                       className="kb-btn kb-btn-sm kb-btn-danger"
                       onClick={() => handleDelete(kb.id, kb.name)}>
                       {t('删除')}
@@ -912,7 +983,7 @@ function KnowledgeBaseSettings() {
             </div>
             <div className="kb-doclist-footer-right">
               <button
-                className="kb-btn kb-btn-sm kb-btn-primary"
+                className="kb-btn kb-btn-sm"
                 onClick={() => handleUpload(docListKbId)}
                 title={t('上传文档到该知识库（支持多选）')}>
                 {t('上传文档')}
@@ -922,6 +993,13 @@ function KnowledgeBaseSettings() {
                 onClick={() => handleUploadFolder(docListKbId)}
                 title={t('上传文件夹，自动导入所有文本文件')}>
                 {t('上传文件夹')}
+              </button>
+              <button
+                className="kb-btn kb-btn-sm"
+                onClick={handleExportKb}
+                disabled={docListDocs.length === 0}
+                title={t('导出知识库所有文档为 ZIP')}>
+                {t('导出')}
               </button>
               <button
                 className="kb-btn kb-btn-sm kb-btn-danger"
@@ -971,6 +1049,17 @@ function KnowledgeBaseSettings() {
                       }}
                       disabled={docSearching}>
                       {docSearching ? t('搜索中...') : t('搜索内容')}
+                    </button>
+                    <span className="kb-doc-search-sep" />
+                    <button
+                      className="kb-btn kb-btn-sm kb-btn-primary"
+                      onClick={() => {
+                        setNewDocName('')
+                        setNewDocContent('')
+                        setShowNewDocModal(true)
+                      }}
+                      title={t('手动输入名称和内容创建新文档')}>
+                      + {t('新建文档')}
                     </button>
                   </div>
                 )}
@@ -1133,6 +1222,64 @@ function KnowledgeBaseSettings() {
           ) : (
             <pre className="kb-preview-content">{previewDocContent}</pre>
           )}
+        </div>
+      </Modal>
+
+      {/* 新建文档弹窗 */}
+      <Modal
+        visible={showNewDocModal}
+        title={t('新建文档')}
+        onClose={() => {
+          if (!newDocCreating) {
+            setShowNewDocModal(false)
+          }
+        }}
+        width={700}
+        height={500}
+        footer={
+          <div className="kb-edit-footer">
+            <ModalFooterButtons
+              cancelText={t('取消')}
+              confirmText={
+                newDocCreating ? t('创建中...') : t('创建')
+              }
+              onCancel={() => {
+                if (!newDocCreating) setShowNewDocModal(false)
+              }}
+              onConfirm={handleNewDoc}
+              confirmLoading={newDocCreating}
+            />
+          </div>
+        }>
+        <div className="kb-edit-modal-body">
+          <div className="kb-edit-field">
+            <label className="kb-edit-label">
+              {t('文档名称')} *
+            </label>
+            <input
+              className="kb-edit-input"
+              placeholder={t('请输入文档名称（如 readme.md）')}
+              value={newDocName}
+              onChange={(e) => setNewDocName(e.target.value)}
+              onKeyDown={(e) =>
+                e.key === 'Enter' &&
+                !newDocCreating &&
+                newDocName.trim() &&
+                handleNewDoc()
+              }
+              autoFocus
+            />
+          </div>
+          <div className="kb-edit-field">
+            <label className="kb-edit-label">{t('文档内容')}</label>
+            <textarea
+              className="kb-edit-textarea"
+              placeholder={t('请输入文档内容')}
+              value={newDocContent}
+              onChange={(e) => setNewDocContent(e.target.value)}
+              rows={14}
+            />
+          </div>
         </div>
       </Modal>
 

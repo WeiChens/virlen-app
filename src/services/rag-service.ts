@@ -164,6 +164,14 @@ class RagService {
     return knowledgeBaseStore.searchDocumentsContent(kbId, keyword)
   }
 
+  /** 导出知识库为 ZIP 文件 */
+  async exportKnowledgeBase(
+    kbId: string,
+    outputPath: string,
+  ): Promise<void> {
+    await knowledgeBaseStore.exportKnowledgeBase(kbId, outputPath)
+  }
+
   /** 初始化知识库 — 无知识库时自动创建默认知识库 */
   async initKnowledgeBases(): Promise<string> {
     return knowledgeBaseStore.initKnowledgeBases()

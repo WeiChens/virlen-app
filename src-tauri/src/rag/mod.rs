@@ -302,6 +302,28 @@ pub async fn search_documents_content(
     .map_err(|e| format!("任务执行失败: {}", e))?
 }
 
+/// 导出知识库为 ZIP 文件
+#[tauri::command]
+pub async fn export_knowledge_base(
+    app: AppHandle,
+    kb_id: String,
+    output_path: String,
+) -> Result<(), String> {
+    if RAG_SERVICE.get().is_none() {
+        init_rag_service(&app)?;
+    }
+
+    let service = get_service()?;
+    let kb_id = kb_id.clone();
+    let output_path = output_path.clone();
+
+    tokio::task::spawn_blocking(move || {
+        service.export_to_zip(&kb_id, &output_path)
+    })
+    .await
+    .map_err(|e| format!("任务执行失败: {}", e))?
+}
+
 /// 将文本内容写入知识库（AI Tool 直接调用）
 ///
 /// 不需要文件路径，AI 可以直接将生成的文本内容保存到知识库。

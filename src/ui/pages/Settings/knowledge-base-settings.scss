@@ -491,6 +491,14 @@
         border-color: var(--accent-color, #4f6ef7);
       }
     }
+
+    .kb-doc-search-sep {
+      width: 1px;
+      height: 20px;
+      background: var(--border-color, #ddd);
+      margin: 0 2px;
+      flex-shrink: 0;
+    }
   }
 
   .kb-doc-search-info {

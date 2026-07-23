@@ -15,6 +15,7 @@
 use crate::rag::document::DocumentChunk;
 use crate::rag::embedding::EmbeddingProvider;
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use turbovec::IdMapIndex;
@@ -669,6 +670,130 @@ impl VectorStoreManager {
         matched_doc_ids.dedup();
 
         Ok(matched_doc_ids)
+    }
+
+    /// 将知识库中的所有文档导出为 ZIP 文件
+    ///
+    /// - 文档名中的 `/` 会转换为嵌套文件夹
+    /// - 特殊字符（非字母数字、非中文、非 `.` `-` `_` `空格`）被移除
+    /// - 同名文件自动重命名为 `name(n).ext`
+    pub fn export_to_zip(&self, kb_id: &str, output_path: &str) -> Result<(), String> {
+        let docs = self.list_documents(kb_id)?;
+        if docs.is_empty() {
+            return Err("知识库中没有文档".to_string());
+        }
+
+        let file = std::fs::File::create(output_path)
+            .map_err(|e| format!("创建 ZIP 文件失败: {}", e))?;
+        let mut zip_writer = zip::ZipWriter::new(file);
+
+        let mut used_names: HashMap<String, usize> = HashMap::new();
+
+        for doc in &docs {
+            let content = self.get_document_content(kb_id, &doc.id)?;
+
+            // 1. 清理文件名中的特殊字符
+            let raw_name = doc.file_name.replace('\\', "/");
+            let cleaned = Self::sanitize_zip_path(&raw_name);
+
+            if cleaned.is_empty() {
+                continue;
+            }
+
+            // 2. 处理重名
+            let final_name = Self::dedup_name(&cleaned, &mut used_names);
+
+            // 3. 写入 ZIP
+            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            zip_writer
+                .start_file(&final_name, options)
+                .map_err(|e| format!("添加 ZIP 条目失败: {}", e))?;
+            zip_writer
+                .write_all(content.as_bytes())
+                .map_err(|e| format!("写入 ZIP 条目失败: {}", e))?;
+        }
+
+        zip_writer
+            .finish()
+            .map_err(|e| format!("ZIP 写入完成失败: {}", e))?;
+
+        Ok(())
+    }
+
+    /// 清理路径中的特殊字符，保留字母数字中文 `.` `-` `_` `/` 和空格
+    fn sanitize_zip_path(path: &str) -> String {
+        let result: String = path
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric()
+                    || c == '/'
+                    || c == '.'
+                    || c == '-'
+                    || c == '_'
+                    || c == ' '
+                    || c > '\u{00FF}'
+                {
+                    c
+                } else {
+                    ' ' // 占位，后续压缩
+                }
+            })
+            .collect::<String>();
+
+        // 压缩连续空格、移除首尾空格
+        let mut cleaned = String::with_capacity(result.len());
+        let mut prev_space = false;
+        for c in result.chars() {
+            if c == ' ' {
+                if !prev_space {
+                    cleaned.push(c);
+                }
+                prev_space = true;
+            } else {
+                cleaned.push(c);
+                prev_space = false;
+            }
+        }
+
+        cleaned.trim().to_string()
+    }
+
+    /// 处理重名：如果 name 已存在，追加 `(n)` 后缀
+    fn dedup_name(
+        name: &str,
+        used: &mut HashMap<String, usize>,
+    ) -> String {
+        // 如果名称中有路径分隔符，只对文件名部分去重
+        if let Some((dir, file)) = name.rsplit_once('/') {
+            let deduped_file = Self::dedup_filename(file, used);
+            return format!("{}/{}", dir, deduped_file);
+        }
+
+        Self::dedup_filename(name, used)
+    }
+
+    /// 对单个文件名去重
+    fn dedup_filename(
+        name: &str,
+        used: &mut HashMap<String, usize>,
+    ) -> String {
+        if !used.contains_key(name) {
+            used.insert(name.to_string(), 0);
+            return name.to_string();
+        }
+
+        let count = used.get(name).unwrap() + 1;
+        used.insert(name.to_string(), count);
+
+        // 在扩展名前插入 `(n)`
+        if let Some(dot_pos) = name.rfind('.') {
+            let base = &name[..dot_pos];
+            let ext = &name[dot_pos..];
+            format!("{}({}){}", base, count, ext)
+        } else {
+            format!("{}({})", name, count)
+        }
     }
 
     pub fn query(&self, kb_id: &str, query_text: &str, top_k: usize) -> Result<Vec<ChunkResult>, String> {

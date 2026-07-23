@@ -134,6 +134,17 @@ class KnowledgeBaseStore implements KnowledgeBasePort {
     })
   }
 
+  /** 导出知识库为 ZIP 文件 */
+  async exportKnowledgeBase(
+    kbId: string,
+    outputPath: string,
+  ): Promise<void> {
+    await invoke('export_knowledge_base', {
+      kbId,
+      outputPath,
+    })
+  }
+
   /** 初始化知识库 — 无知识库时自动创建默认知识库 */
   async initKnowledgeBases(): Promise<string> {
     return invoke<string>('init_knowledge_bases')

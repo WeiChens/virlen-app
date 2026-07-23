@@ -183,6 +183,12 @@ impl RagService {
         mgr.search_documents_content(kb_id, keyword)
     }
 
+    /// 将知识库中的所有文档导出为 ZIP 文件
+    pub fn export_to_zip(&self, kb_id: &str, output_path: &str) -> Result<(), String> {
+        let mgr = self.store_manager.lock().map_err(|e| format!("获取锁失败: {}", e))?;
+        mgr.export_to_zip(kb_id, output_path)
+    }
+
     /// 检索知识库
     ///
     /// 将用户查询转为嵌入向量，在指定知识库中进行相似度搜索，

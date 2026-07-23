@@ -291,6 +291,7 @@ pub fn run() {
             rag::get_knowledge_base_document,
             rag::init_knowledge_bases,
             rag::search_documents_content,
+            rag::export_knowledge_base,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
