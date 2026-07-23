@@ -87,26 +87,20 @@ export async function compressContext(
         ? response.content
         : JSON.stringify(response.content)
 
-    // 优先使用 API 返回的真实 Token 用量（最准确）
-    if (response.usage) {
-      usage = { ...response.usage }
-    } else {
-      // 兜底估算：统计输入/输出文本的总字符数，按 ~4 字符 ≈ 1 token 估算
-      const inputText = request.messages
-        .map((m) =>
-          typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-        )
-        .join('')
-      const systemText = request.systemPrompt || ''
-      const estimatedInputTokens = Math.ceil(
-        (inputText.length + systemText.length) / 4,
+    const inputText = request.messages
+      .map((m) =>
+        typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
       )
-      const estimatedOutputTokens = Math.ceil(summaryContent.length / 4)
-      usage = {
-        promptTokens: estimatedInputTokens,
-        completionTokens: estimatedOutputTokens,
-        totalTokens: estimatedInputTokens + estimatedOutputTokens,
-      }
+      .join('')
+    const systemText = request.systemPrompt || ''
+    const estimatedInputTokens = Math.ceil(
+      (inputText.length + systemText.length) / 4,
+    )
+    const estimatedOutputTokens = Math.ceil(summaryContent.length / 4)
+    usage = {
+      promptTokens: estimatedInputTokens,
+      completionTokens: estimatedOutputTokens,
+      totalTokens: estimatedInputTokens + estimatedOutputTokens,
     }
   } catch (e: any) {
     console.error('上下文压缩失败:', e)
