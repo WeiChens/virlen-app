@@ -290,6 +290,7 @@ pub fn run() {
             rag::edit_text_in_knowledge_base,
             rag::get_knowledge_base_document,
             rag::init_knowledge_bases,
+            rag::search_documents_content,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

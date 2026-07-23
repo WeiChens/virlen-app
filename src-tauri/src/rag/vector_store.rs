@@ -639,6 +639,38 @@ impl VectorStoreManager {
 
     // ===== 检索 =====
 
+    /// 模糊搜索文档内容 — 在知识库所有 chunk 中匹配关键词，返回匹配的文档 ID 列表（去重）
+    ///
+    /// 用于前端"搜索内容"功能，不依赖向量嵌入，直接做文本包含匹配。
+    pub fn search_documents_content(
+        &self,
+        kb_id: &str,
+        keyword: &str,
+    ) -> Result<Vec<String>, String> {
+        let state = self
+            .indices
+            .get(kb_id)
+            .ok_or_else(|| format!("知识库不存在: {}", kb_id))?;
+
+        if state.chunks.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let lower_keyword = keyword.to_lowercase();
+        let mut matched_doc_ids: Vec<String> = state
+            .chunks
+            .values()
+            .filter(|info| info.content.to_lowercase().contains(&lower_keyword))
+            .map(|info| info.document_id.clone())
+            .collect();
+
+        // 去重并保持顺序
+        matched_doc_ids.sort();
+        matched_doc_ids.dedup();
+
+        Ok(matched_doc_ids)
+    }
+
     pub fn query(&self, kb_id: &str, query_text: &str, top_k: usize) -> Result<Vec<ChunkResult>, String> {
         let state = self
             .indices

@@ -46,11 +46,15 @@ function KnowledgeBaseSettings() {
   const s = settingsState.value
   const [kbs, setKbs] = useState<KnowledgeBase[]>([])
   const [loading, setLoading] = useState(true)
-  const [expandedKbId, setExpandedKbId] = useState<string | null>(null)
-  const [documents, setDocuments] = useState<
-    Record<string, KnowledgeBaseDocument[]>
-  >({})
-  const [docsLoading, setDocsLoading] = useState<Record<string, boolean>>({})
+
+  // 文档列表弹窗
+  const [showDocListModal, setShowDocListModal] = useState(false)
+  const [docListKbId, setDocListKbId] = useState('')
+  const [docListKbName, setDocListKbName] = useState('')
+  const [docListDocs, setDocListDocs] = useState<KnowledgeBaseDocument[]>([])
+  const [docListLoading, setDocListLoading] = useState(false)
+  const [docListPage, setDocListPage] = useState(1)
+  const PAGE_SIZE = 10
 
   // 创建知识库弹窗
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -77,6 +81,15 @@ function KnowledgeBaseSettings() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<string | null>(null)
   const [searching, setSearching] = useState(false)
+
+  // 文档列表搜索
+  const [docSearchQuery, setDocSearchQuery] = useState('')
+  const [docSearchMode, setDocSearchMode] = useState<'title' | 'content'>(
+    'title',
+  )
+  const [docSearching, setDocSearching] = useState(false)
+  const [docSearchResultIds, setDocSearchResultIds] =
+    useState<Set<string> | null>(null)
 
   /** 默认知识库选项（供 Select 组件使用） */
   const kbSelectOptions = [
@@ -137,30 +150,62 @@ function KnowledgeBaseSettings() {
     try {
       await ragService.deleteKnowledgeBase(kbId)
       showToastMsg('知识库已删除', 'success')
-      if (expandedKbId === kbId) setExpandedKbId(null)
+      if (showDocListModal && docListKbId === kbId) setShowDocListModal(false)
       await loadKbs()
     } catch (err: any) {
       showToastMsg(`删除失败: ${err.message}`, 'error')
     }
   }
 
-  /** 展开/收起知识库（加载文档列表） */
-  const toggleExpand = async (kbId: string) => {
-    if (expandedKbId === kbId) {
-      setExpandedKbId(null)
+  /** 打开文档列表弹窗 */
+  const openDocListModal = async (kbId: string, kbName: string) => {
+    setDocListKbId(kbId)
+    setDocListKbName(kbName)
+    setDocListPage(1)
+    setDocListDocs([])
+    setDocSearchQuery('')
+    setDocSearchMode('title')
+    setDocSearchResultIds(null)
+    setShowDocListModal(true)
+    setDocListLoading(true)
+    try {
+      const docs = await ragService.listDocuments(kbId)
+      setDocListDocs(docs)
+    } catch (err: any) {
+      showToastMsg(`加载文档列表失败: ${err.message}`, 'error')
+    }
+    setDocListLoading(false)
+  }
+
+  /** 文档列表搜索 */
+  const handleDocSearch = async () => {
+    if (!docSearchQuery.trim() || !docListKbId) return
+
+    if (docSearchMode === 'title') {
+      // 标题搜索：前端过滤
+      setDocListPage(1)
+      // docSearchResultIds 保持 null 表示使用默认标题过滤
       return
     }
-    setExpandedKbId(kbId)
-    if (!documents[kbId]) {
-      setDocsLoading((prev) => ({ ...prev, [kbId]: true }))
-      try {
-        const docs = await ragService.listDocuments(kbId)
-        setDocuments((prev) => ({ ...prev, [kbId]: docs }))
-      } catch (err: any) {
-        showToastMsg(`加载文档列表失败: ${err.message}`, 'error')
-      }
-      setDocsLoading((prev) => ({ ...prev, [kbId]: false }))
+
+    // 内容搜索：交给底层做模糊匹配 — 返回匹配的文档 ID 列表
+    setDocSearching(true)
+    setDocSearchResultIds(null)
+    try {
+      const result = await ragService.searchDocumentsContent(
+        docListKbId,
+        docSearchQuery.trim(),
+      )
+      const matchedIds = new Set(result)
+      setDocSearchResultIds(matchedIds)
+      setDocListPage(1)
+      // if (matchedIds.size === 0) {
+      //   showToastMsg('未找到内容匹配的文档', 'info')
+      // }
+    } catch (err: any) {
+      showToastMsg(`搜索失败: ${err.message}`, 'error')
     }
+    setDocSearching(false)
   }
 
   /** 支持的文件扩展名列表 */
@@ -390,8 +435,8 @@ function KnowledgeBaseSettings() {
       }
     }
 
-    // 刷新文档列表
-    await refreshDocList(kbId)
+    // 刷新文档列表和知识库列表
+    if (showDocListModal) await refreshDocList()
     await loadKbs()
 
     if (failCount === 0) {
@@ -467,19 +512,53 @@ function KnowledgeBaseSettings() {
     try {
       await ragService.removeDocument(kbId, docId)
       showToastMsg('文档已删除', 'success')
-      const docs = await ragService.listDocuments(kbId)
-      setDocuments((prev) => ({ ...prev, [kbId]: docs }))
-      // 刷新知识库列表（更新 document_count / chunk_count）
+      if (showDocListModal) await refreshDocList()
       await loadKbs()
     } catch (err: any) {
       showToastMsg(`删除失败: ${err.message}`, 'error')
     }
   }
 
-  /** 刷新指定知识库的文档列表 */
-  const refreshDocList = async (kbId: string) => {
-    const docs = await ragService.listDocuments(kbId)
-    setDocuments((prev) => ({ ...prev, [kbId]: docs }))
+  /** 清空知识库所有文档 */
+  const handleClearAllDocs = async () => {
+    if (!docListKbId || docListDocs.length === 0) return
+    const confirmed = await MessageBox.propt(
+      t('清空所有文档'),
+      t(
+        `确定要清空「${docListKbName}」中的所有文档吗？（共 ${docListDocs.length} 个）此操作不可撤销。`,
+      ),
+    )
+    if (!confirmed) return
+
+    let successCount = 0
+    let failCount = 0
+    for (const doc of docListDocs) {
+      try {
+        await ragService.removeDocument(docListKbId, doc.id)
+        successCount++
+      } catch {
+        failCount++
+      }
+    }
+    showToastMsg(
+      `清空完成：${successCount} 成功，${failCount} 失败`,
+      failCount > 0 ? 'error' : 'success',
+    )
+    if (showDocListModal) await refreshDocList()
+    await loadKbs()
+  }
+
+  /** 刷新文档列表（如果弹窗打开则更新弹窗内容） */
+  const refreshDocList = async () => {
+    if (!docListKbId) return
+    setDocListLoading(true)
+    try {
+      const docs = await ragService.listDocuments(docListKbId)
+      setDocListDocs(docs)
+    } catch {
+      // 静默失败
+    }
+    setDocListLoading(false)
   }
 
   /** 编辑文档 — 打开编辑弹窗 */
@@ -520,7 +599,7 @@ function KnowledgeBaseSettings() {
       )
       showToastMsg(`文档已更新为「${editDocName.trim()}」`, 'success')
       setShowEditModal(false)
-      await refreshDocList(editDocKbId)
+      if (showDocListModal) await refreshDocList()
       await loadKbs()
     } catch (err: any) {
       showToastMsg(`编辑保存失败: ${err.message}`, 'error')
@@ -591,7 +670,7 @@ function KnowledgeBaseSettings() {
 
   /** 检索测试 */
   const handleSearch = async () => {
-    const kbId = expandedKbId || s.ragDefaultKnowledgeBaseId
+    const kbId = docListKbId || s.ragDefaultKnowledgeBaseId
     if (!kbId) {
       showToastMsg('请先选择一个知识库', 'error')
       return
@@ -684,7 +763,7 @@ function KnowledgeBaseSettings() {
                 <div className="kb-card">
                   <div
                     className="kb-card-info"
-                    onClick={() => toggleExpand(kb.id)}
+                    onClick={() => openDocListModal(kb.id, kb.name)}
                     style={{ cursor: 'pointer' }}>
                     <div className="kb-card-name">{kb.name}</div>
                     {kb.description && (
@@ -715,98 +794,6 @@ function KnowledgeBaseSettings() {
                     </button>
                   </div>
                 </div>
-
-                {/* 展开的文档列表 */}
-                {expandedKbId === kb.id && (
-                  <div className="kb-expanded-content">
-                    {docsLoading[kb.id] ? (
-                      <div className="kb-loading">{t('加载文档列表...')}</div>
-                    ) : !documents[kb.id] || documents[kb.id].length === 0 ? (
-                      <div className="kb-empty" style={{ padding: '16px' }}>
-                        {t('暂无文档')}
-                      </div>
-                    ) : (
-                      <div className="doc-list">
-                        {documents[kb.id]!.map((doc) => (
-                          <div key={doc.id} className="doc-item">
-                            <div className="doc-item-name">{doc.file_name}</div>
-                            <div className="doc-item-bottom-row">
-                              <div className="doc-item-left">
-                                {/* <span
-                                  className={`doc-item-status status-${doc.status}`}>
-                                  {doc.status === 'ready'
-                                    ? t('就绪')
-                                    : doc.status === 'processing'
-                                      ? t('处理中')
-                                      : t('错误')}
-                                </span> */}
-                                <span className="doc-item-meta">
-                                  {doc.chunk_count} {t('个片段')}
-                                </span>
-                              </div>
-                              <div className="doc-item-actions">
-                                <button
-                                  className="kb-btn kb-btn-sm"
-                                  onClick={() =>
-                                    handlePreviewDoc(
-                                      kb.id,
-                                      doc.id,
-                                      doc.file_name,
-                                    )
-                                  }
-                                  title={t('预览文档内容')}>
-                                  {t('预览')}
-                                </button>
-                                <button
-                                  className="kb-btn kb-btn-sm"
-                                  onClick={() =>
-                                    handleEditDoc(kb.id, doc.id, doc.file_name)
-                                  }
-                                  title={t('编辑文档名称和内容')}>
-                                  {t('编辑')}
-                                </button>
-                                <button
-                                  className="kb-btn kb-btn-sm kb-btn-danger"
-                                  onClick={() =>
-                                    handleRemoveDoc(
-                                      kb.id,
-                                      doc.id,
-                                      doc.file_name,
-                                    )
-                                  }>
-                                  {t('删除')}
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* 检索测试 */}
-                    <div className="kb-search-section">
-                      <label className="kb-search-label">{t('检索测试')}</label>
-                      <div className="kb-search-test">
-                        <input
-                          className="kb-search-input"
-                          placeholder={t('输入搜索内容...')}
-                          value={searchQuery}
-                          onChange={(e) => setSearchQuery(e.target.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                        />
-                        <button
-                          className="kb-btn kb-btn-primary kb-btn-sm"
-                          onClick={handleSearch}
-                          disabled={searching || !searchQuery.trim()}>
-                          {searching ? t('搜索中...') : t('搜索')}
-                        </button>
-                      </div>
-                      {searchResults && (
-                        <div className="kb-search-results">{searchResults}</div>
-                      )}
-                    </div>
-                  </div>
-                )}
               </div>
             ))}
           </div>
@@ -857,6 +844,279 @@ function KnowledgeBaseSettings() {
               rows={3}
             />
           </div>
+        </div>
+      </Modal>
+
+      {/* 文档列表弹窗 */}
+      <Modal
+        visible={showDocListModal}
+        title={`${docListKbName} - ${t('文档列表')}`}
+        onClose={() => setShowDocListModal(false)}
+        width={880}
+        height={580}
+        footer={
+          <div className="kb-doclist-footer">
+            <div className="kb-doclist-footer-left">
+              {docListDocs.length > 0 &&
+                (() => {
+                  // 计算过滤后的文档数用于分页
+                  let totalFiltered = docListDocs.length
+                  if (docSearchQuery.trim() && docSearchMode === 'title') {
+                    const q = docSearchQuery.trim().toLowerCase()
+                    totalFiltered = docListDocs.filter((d) =>
+                      d.file_name.toLowerCase().includes(q),
+                    ).length
+                  } else if (docSearchResultIds) {
+                    totalFiltered = docListDocs.filter((d) =>
+                      docSearchResultIds.has(d.id),
+                    ).length
+                  }
+                  const totalPages = Math.ceil(totalFiltered / PAGE_SIZE)
+                  const safePage = Math.min(
+                    docListPage,
+                    Math.max(1, totalPages),
+                  )
+                  return (
+                    <div className="kb-doclist-pagination">
+                      {totalPages > 1 && (
+                        <div className="kb-pagination-inline">
+                          <button
+                            className="kb-btn kb-btn-sm"
+                            disabled={safePage <= 1}
+                            onClick={() =>
+                              setDocListPage((p) => Math.max(1, p - 1))
+                            }>
+                            {t('上一页')}
+                          </button>
+                          <span className="kb-pagination-info">
+                            {safePage} / {totalPages}
+                          </span>
+                          <button
+                            className="kb-btn kb-btn-sm"
+                            disabled={safePage >= totalPages}
+                            onClick={() =>
+                              setDocListPage((p) => Math.min(totalPages, p + 1))
+                            }>
+                            {t('下一页')}
+                          </button>
+                        </div>
+                      )}
+                      <span className="kb-pagination-total">
+                        {t('共')} {docListDocs.length} {t('个文档')}
+                        {docSearchQuery.trim() &&
+                          `，${t('筛选')} ${totalFiltered} ${t('个')}`}
+                      </span>
+                    </div>
+                  )
+                })()}
+            </div>
+            <div className="kb-doclist-footer-right">
+              <button
+                className="kb-btn kb-btn-sm kb-btn-primary"
+                onClick={() => handleUpload(docListKbId)}
+                title={t('上传文档到该知识库（支持多选）')}>
+                {t('上传文档')}
+              </button>
+              <button
+                className="kb-btn kb-btn-sm"
+                onClick={() => handleUploadFolder(docListKbId)}
+                title={t('上传文件夹，自动导入所有文本文件')}>
+                {t('上传文件夹')}
+              </button>
+              <button
+                className="kb-btn kb-btn-sm kb-btn-danger"
+                onClick={handleClearAllDocs}
+                disabled={docListDocs.length === 0}
+                title={t('清空该知识库中的所有文档')}>
+                {t('清空所有文档')}
+              </button>
+            </div>
+          </div>
+        }>
+        <div className="kb-doclist-modal-body">
+          {docListLoading ? (
+            <div className="kb-loading">{t('加载中...')}</div>
+          ) : (
+            <div className="kb-doclist-layout">
+              {/* 左侧：文档列表（2/3） */}
+              <div className="kb-doclist-left">
+                {/* 文档搜索栏 — 放在 scroll-view 外面，始终可见 */}
+                {docListDocs.length > 0 && (
+                  <div className="kb-doc-search-bar">
+                    <input
+                      className="kb-search-input"
+                      placeholder={t('搜索文档...')}
+                      value={docSearchQuery}
+                      onChange={(e) => setDocSearchQuery(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleDocSearch()}
+                    />
+                    <button
+                      className={`kb-btn kb-btn-sm ${docSearchMode === 'title' ? 'kb-btn-primary' : ''}`}
+                      onClick={() => {
+                        setDocSearchMode('title')
+                        setDocSearchResultIds(null)
+                        setDocListPage(1)
+                      }}>
+                      {t('搜索标题')}
+                    </button>
+                    <button
+                      className={`kb-btn kb-btn-sm ${docSearchMode === 'content' ? 'kb-btn-primary' : ''}`}
+                      onClick={() => {
+                        setDocSearchMode('content')
+                        if (docSearchQuery.trim()) {
+                          handleDocSearch()
+                        } else {
+                          setDocSearchResultIds(null)
+                        }
+                      }}
+                      disabled={docSearching}>
+                      {docSearching ? t('搜索中...') : t('搜索内容')}
+                    </button>
+                  </div>
+                )}
+
+                {/* scroll-view: 只有文档列表滚动，搜索栏保持固定 */}
+                <div className="kb-doclist-scroll">
+                  {docListDocs.length === 0 ? (
+                    <div className="kb-empty">{t('暂无文档')}</div>
+                  ) : (
+                    <>
+                      {(() => {
+                        // 计算过滤后的文档列表
+                        let filtered = docListDocs
+                        if (
+                          docSearchQuery.trim() &&
+                          docSearchMode === 'title'
+                        ) {
+                          const q = docSearchQuery.trim().toLowerCase()
+                          filtered = docListDocs.filter((d) =>
+                            d.file_name.toLowerCase().includes(q),
+                          )
+                        } else if (docSearchResultIds) {
+                          filtered = docListDocs.filter((d) =>
+                            docSearchResultIds.has(d.id),
+                          )
+                        }
+
+                        const totalFiltered = filtered.length
+                        const totalPages = Math.ceil(totalFiltered / PAGE_SIZE)
+                        const safePage = Math.min(
+                          docListPage,
+                          Math.max(1, totalPages),
+                        )
+                        const startIdx = (safePage - 1) * PAGE_SIZE
+                        const pageDocs = filtered.slice(
+                          startIdx,
+                          startIdx + PAGE_SIZE,
+                        )
+
+                        return (
+                          <>
+                            {pageDocs.length === 0 ? (
+                              <div className="kb-empty">
+                                {t('未找到匹配的文档')}
+                              </div>
+                            ) : (
+                              <div className="doc-list">
+                                {pageDocs.map((doc) => (
+                                  <div key={doc.id} className="doc-item">
+                                    <div className="doc-item-name">
+                                      {doc.file_name}
+                                    </div>
+                                    <div className="doc-item-bottom-row">
+                                      <div className="doc-item-left">
+                                        {/* <span
+                                          className={`doc-item-status status-${doc.status}`}>
+                                          {doc.status === 'ready'
+                                            ? t('就绪')
+                                            : doc.status === 'processing'
+                                              ? t('处理中')
+                                              : t('错误')}
+                                        </span> */}
+                                        <span className="doc-item-meta">
+                                          {doc.chunk_count} {t('个片段')}
+                                        </span>
+                                      </div>
+                                      <div className="doc-item-actions">
+                                        <button
+                                          className="kb-btn kb-btn-sm"
+                                          onClick={() =>
+                                            handlePreviewDoc(
+                                              docListKbId,
+                                              doc.id,
+                                              doc.file_name,
+                                            )
+                                          }
+                                          title={t('预览文档内容')}>
+                                          {t('预览')}
+                                        </button>
+                                        <button
+                                          className="kb-btn kb-btn-sm"
+                                          onClick={() =>
+                                            handleEditDoc(
+                                              docListKbId,
+                                              doc.id,
+                                              doc.file_name,
+                                            )
+                                          }
+                                          title={t('编辑文档名称和内容')}>
+                                          {t('编辑')}
+                                        </button>
+                                        <button
+                                          className="kb-btn kb-btn-sm kb-btn-danger"
+                                          onClick={() =>
+                                            handleRemoveDoc(
+                                              docListKbId,
+                                              doc.id,
+                                              doc.file_name,
+                                            )
+                                          }>
+                                          {t('删除')}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* 重复的搜索结果提示已在上方，这里删除 */}
+                          </>
+                        )
+                      })()}
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* 右侧：检索测试（1/3） */}
+              <div className="kb-doclist-right">
+                <div className="kb-search-section">
+                  <label className="kb-search-label">{t('检索测试')}</label>
+                  <div className="kb-search-test">
+                    <input
+                      className="kb-search-input"
+                      placeholder={t('输入搜索内容...')}
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      onKeyDown={(e) =>
+                        e.key === 'Enter' && !searching && handleSearch()
+                      }
+                    />
+                    <button
+                      className="kb-btn kb-btn-primary kb-btn-sm"
+                      onClick={handleSearch}
+                      disabled={searching || !searchQuery.trim()}>
+                      {searching ? t('搜索中...') : t('搜索')}
+                    </button>
+                  </div>
+                  {searchResults && (
+                    <div className="kb-search-results">{searchResults}</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
 

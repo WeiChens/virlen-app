@@ -66,6 +66,8 @@ export interface KnowledgeBasePort {
   editDocument(kbId: string, docId: string, filePath: string): Promise<KnowledgeBaseDocument>
   /** 获取知识库中某个文档的完整内容 */
   getDocumentContent(kbId: string, docId: string): Promise<string>
+  /** 模糊搜索文档内容 — 在知识库所有 chunk 中匹配关键词，返回匹配的文档 ID 列表 */
+  searchDocumentsContent(kbId: string, keyword: string): Promise<string[]>
   /** 初始化知识库 — 无知识库时自动创建默认知识库 */
   initKnowledgeBases(): Promise<string>
 }

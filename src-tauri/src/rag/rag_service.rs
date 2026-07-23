@@ -173,6 +173,16 @@ impl RagService {
 
     // ===== 检索 =====
 
+    /// 模糊搜索文档内容 — 不依赖向量嵌入，直接做文本包含匹配，返回匹配的文档 ID 列表
+    pub fn search_documents_content(
+        &self,
+        kb_id: &str,
+        keyword: &str,
+    ) -> Result<Vec<String>, String> {
+        let mgr = self.store_manager.lock().map_err(|e| format!("获取锁失败: {}", e))?;
+        mgr.search_documents_content(kb_id, keyword)
+    }
+
     /// 检索知识库
     ///
     /// 将用户查询转为嵌入向量，在指定知识库中进行相似度搜索，

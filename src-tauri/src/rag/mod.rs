@@ -280,6 +280,28 @@ pub async fn query_knowledge_base(
     Ok(response)
 }
 
+/// 模糊搜索文档内容 — 在知识库所有 chunk 中匹配关键词，返回匹配的文档 ID 列表
+#[tauri::command]
+pub async fn search_documents_content(
+    app: AppHandle,
+    kb_id: String,
+    keyword: String,
+) -> Result<Vec<String>, String> {
+    if RAG_SERVICE.get().is_none() {
+        init_rag_service(&app)?;
+    }
+
+    let service = get_service()?;
+    let kb_id = kb_id.clone();
+    let keyword = keyword.clone();
+
+    tokio::task::spawn_blocking(move || {
+        service.search_documents_content(&kb_id, &keyword)
+    })
+    .await
+    .map_err(|e| format!("任务执行失败: {}", e))?
+}
+
 /// 将文本内容写入知识库（AI Tool 直接调用）
 ///
 /// 不需要文件路径，AI 可以直接将生成的文本内容保存到知识库。

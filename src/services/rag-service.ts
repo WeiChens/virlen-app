@@ -156,6 +156,14 @@ class RagService {
     return knowledgeBaseStore.getDocumentContent(kbId, docId)
   }
 
+  /** 模糊搜索文档内容 — 在知识库所有 chunk 中匹配关键词，返回匹配的文档 ID 列表 */
+  async searchDocumentsContent(
+    kbId: string,
+    keyword: string,
+  ): Promise<string[]> {
+    return knowledgeBaseStore.searchDocumentsContent(kbId, keyword)
+  }
+
   /** 初始化知识库 — 无知识库时自动创建默认知识库 */
   async initKnowledgeBases(): Promise<string> {
     return knowledgeBaseStore.initKnowledgeBases()
