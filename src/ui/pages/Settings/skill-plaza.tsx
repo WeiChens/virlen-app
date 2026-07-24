@@ -19,7 +19,7 @@ import {
   importSkillFromPlaza,
   isSkillInstalled,
 } from '@/skill'
-import type { RemoteSkill, RemoteCategory } from '@/skill'
+import type { RemoteSkill, RemoteCategory, PlazaPaginatedData } from '@/skill'
 import SearchSvg from '@/ui/components/icons/SearchSvg'
 import AddSvg from '@/ui/components/icons/AddSvg'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
@@ -35,7 +35,7 @@ function SkillPlaza() {
   const [keyword, setKeyword] = useState('')
   const [searchKeyword, setSearchKeyword] = useState('')
   const [selectedCategoryId, setSelectedCategoryId] = useState<number | undefined>(undefined)
-  const [pagination, setPagination] = useState<Pick<PaginatedData<RemoteSkill>, 'total' | 'page' | 'page_size' | 'total_pages'>>({
+  const [pagination, setPagination] = useState<Pick<PlazaPaginatedData<RemoteSkill>, 'total' | 'page' | 'page_size' | 'total_pages'>>({
     total: 0, page: 1, page_size: 20, total_pages: 0,
   })
 

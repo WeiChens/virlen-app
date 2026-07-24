@@ -33,8 +33,7 @@
     "rootDir": "./src"
   },
   "include": [
-    "src",
-    "tests"
+    "src"
   ],
   "references": [
     {
