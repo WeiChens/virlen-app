@@ -241,9 +241,10 @@ pub fn run() {
             // 初始化 RAG 知识库服务
             if let Err(e) = rag::init_rag_service(app.handle()) {
                 eprintln!("[RAG] 初始化失败: {}", e);
-            } else {
-                println!("[RAG] 知识库服务初始化成功");
-            }
+            } 
+            // else {
+            //     println!("[RAG] 知识库服务初始化成功");
+            // }
 
             vision_service::setup_vision(app)?;
 

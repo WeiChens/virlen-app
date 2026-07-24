@@ -27,7 +27,10 @@
         "./src/*"
       ]
     },
-    "types": ["vitest/globals"],
+    "types": [
+      "vitest/globals"
+    ],
+    "rootDir": "./src"
   },
   "include": [
     "src",
