@@ -17,3 +17,18 @@ export {
   getSkillsDirPath,
 } from './skillStore'
 export { importSkillFromZipDialog, importSkillFromZip } from './importService'
+export {
+  fetchPlazaSkills,
+  fetchPlazaCategories,
+  fetchPlazaSkillDetail,
+  fetchPlazaSkillReadme,
+  reportPlazaDownload,
+  importSkillFromPlaza,
+  isSkillInstalled,
+} from './plazaService'
+export type {
+  RemoteSkill,
+  RemoteCategory,
+  PaginatedData as PlazaPaginatedData,
+  RemoteSkillDetail,
+} from './plazaService'

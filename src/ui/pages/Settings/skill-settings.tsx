@@ -2,11 +2,9 @@
  * skill-settings — 技能管理页面
  *
  * 功能：
- *  - 查看所有已注册技能
- *  - 导入技能 ZIP 包
- *  - 删除技能
- *  - 刷新技能元信息
- *  - 查看 SKILLs 目录路径
+ *  - Tab 切换：本地技能 / 技能广场
+ *  - 本地技能：查看、导入 ZIP、删除、刷新
+ *  - 技能广场：从远程 API 浏览、预览、导入
  */
 import { useState, useEffect, useMemo } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -14,6 +12,7 @@ import { showToast } from '@/ui/components/shared/Toast'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 import Modal from '@/ui/components/shared/Modal'
 import MarkdownRenderer from '@/ui/pages/chat/components/message/markdown-renderer'
+import SkillPlaza from './skill-plaza'
 import {
   listRegisteredSkills,
   deleteSkill,
@@ -27,10 +26,13 @@ import type { RegisteredSkill } from '@/skill/types'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
 import AddSvg from '@/ui/components/icons/AddSvg'
 import { t, tpl, getCurrentLanguage } from '@/ui/i18n'
-import './skill-settings.scss'
 import { openPath } from '@tauri-apps/plugin-opener'
+import './skill-settings.scss'
+
+type SkillTab = 'local' | 'plaza'
 
 function SkillSettings() {
+  const [tab, setTab] = useState<SkillTab>('local')
   const [skills, setSkills] = useState<RegisteredSkill[]>([])
   const [skillsDirPath, setSkillsDirPath] = useState(t('加载中...'))
   const [importing, setImporting] = useState(false)
@@ -181,140 +183,161 @@ function SkillSettings() {
 
   return (
     <div className="skill-settings">
-      <div className="skill-header">
-        <div className="left">
-          <h2 className="section-title">{t('技能管理')}</h2>
-          <p
-            className="skill-path"
-            onClick={openSkillsDir}
-            title={t('点击打开目录')}>
-            <FolderSvg fill="var(--text-secondary, #888)" />
-            <span>{skillsDirPath}</span>
-          </p>
-        </div>
-        <div className="skill-actions">
-          <button
-            className="skill-action-btn"
-            onClick={handleScan}
-            disabled={refreshing}>
-            {t('扫描')}
-          </button>
-          <button
-            className="skill-action-btn"
-            onClick={handleRefresh}
-            disabled={refreshing}>
-            {t('刷新元信息')}
-          </button>
-          <button
-            className="skill-import-btn"
-            onClick={handleImport}
-            disabled={importing}>
-            <AddSvg />
-            <span>{importing ? t('导入中...') : t('导入 ZIP')}</span>
-          </button>
-        </div>
+      {/* Tab 切换 */}
+      <div className="skill-tab-bar">
+        <button
+          className={`skill-tab ${tab === 'local' ? 'active' : ''}`}
+          onClick={() => setTab('local')}>
+          {t('本地技能')}
+        </button>
+        <button
+          className={`skill-tab ${tab === 'plaza' ? 'active' : ''}`}
+          onClick={() => setTab('plaza')}>
+          {t('技能广场')}
+        </button>
       </div>
 
-      {/* 搜索 & 计数 */}
-      <div className="skill-search-row">
-        <span className="skill-count">
-          {tpl('共 $__count__ 个技能', { count: skills.length })}
-          {searchQuery.trim() && filteredSkills.length !== skills.length
-            ? tpl('，匹配 $__count__ 个', { count: filteredSkills.length })
-            : ''}
-        </span>
-        <input
-          className="skill-search-input"
-          type="text"
-          placeholder={t('搜索技能名称或描述…')}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          autoComplete="off"
-        />
-      </div>
-
-      <div className="skill-list">
-        {filteredSkills.map((skill) => (
-          <div
-            key={skill.meta.name}
-            className="skill-item"
-            onClick={() => handlePreview(skill)}>
-            <div className="skill-item-main">
-              <div className="skill-item-name-row">
-                <span className="skill-item-name">{skill.meta.name}</span>
-                {skill.meta.version && (
-                  <span className="skill-item-version">
-                    v{skill.meta.version}
-                  </span>
-                )}
-              </div>
-              <span className="skill-item-desc">{skill.meta.description}</span>
-              <div className="skill-item-footer">
-                {skill.meta.tags && skill.meta.tags.length > 0 && (
-                  <div className="skill-tags">
-                    {skill.meta.tags.map((tag) => (
-                      <span key={tag} className="skill-tag">
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                <span className="skill-item-time">
-                  {tpl('注册于 $__date__', {
-                    date: new Date(skill.registeredAt).toLocaleString(
-                      getCurrentLanguage(),
-                    ),
-                  })}
-                </span>
-              </div>
+      {/* Tab 内容 */}
+      {tab === 'plaza' ? (
+        <SkillPlaza />
+      ) : (
+        <>
+          <div className="skill-header">
+            <div className="left">
+              <h2 className="section-title">{t('技能管理')}</h2>
+              <p
+                className="skill-path"
+                onClick={openSkillsDir}
+                title={t('点击打开目录')}>
+                <FolderSvg fill="var(--text-secondary, #888)" />
+                <span>{skillsDirPath}</span>
+              </p>
             </div>
-            <div
-              className="skill-item-actions"
-              onClick={(e) => e.stopPropagation()}>
+            <div className="skill-actions">
               <button
-                className="skill-action-btn danger"
-                onClick={() => handleDelete(skill)}>
-                {t('删除')}
+                className="skill-action-btn"
+                onClick={handleScan}
+                disabled={refreshing}>
+                {t('扫描')}
+              </button>
+              <button
+                className="skill-action-btn"
+                onClick={handleRefresh}
+                disabled={refreshing}>
+                {t('刷新元信息')}
+              </button>
+              <button
+                className="skill-import-btn"
+                onClick={handleImport}
+                disabled={importing}>
+                <AddSvg />
+                <span>{importing ? t('导入中...') : t('导入 ZIP')}</span>
               </button>
             </div>
           </div>
-        ))}
 
-        {filteredSkills.length === 0 && skills.length === 0 && (
-          <div className="skill-empty">
-            <FolderSvg fill="var(--text-secondary, #ccc)" />
-            <p>{t('暂无注册的技能')}</p>
-            <p className="skill-empty-hint">
-              {t(
-                '点击「导入 ZIP」导入技能包，或手动将技能文件夹放入上述目录后点击「扫描」',
-              )}
-            </p>
+          {/* 搜索 & 计数 */}
+          <div className="skill-search-row">
+            <span className="skill-count">
+              {tpl('共 $__count__ 个技能', { count: skills.length })}
+              {searchQuery.trim() && filteredSkills.length !== skills.length
+                ? tpl('，匹配 $__count__ 个', { count: filteredSkills.length })
+                : ''}
+            </span>
+            <input
+              className="skill-search-input"
+              type="text"
+              placeholder={t('搜索技能名称或描述…')}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              autoComplete="off"
+            />
           </div>
-        )}
-        {filteredSkills.length === 0 && skills.length > 0 && (
-          <div className="skill-empty">
-            <p>
-              {t('未找到匹配')}「{searchQuery}」{t('的技能')}
-            </p>
-          </div>
-        )}
-      </div>
 
-      {/* SKILL.md 预览弹窗 */}
-      <Modal
-        visible={!!previewSkill}
-        title={previewSkill ? `SKILL.md — ${previewSkill.meta.name}` : ''}
-        onClose={handleClosePreview}
-        width={720}
-        height="80vh"
-        showCloseButton
-        closeOnClickOutside>
-        {previewLoading ? (
-          <div className="loading-state">{t('加载中…')}</div>
-        ) : (
-          <MarkdownRenderer content={previewContent} />
-        )}
-      </Modal>
+          <div className="skill-list">
+            {filteredSkills.map((skill) => (
+              <div
+                key={skill.meta.name}
+                className="skill-item"
+                onClick={() => handlePreview(skill)}>
+                <div className="skill-item-main">
+                  <div className="skill-item-name-row">
+                    <span className="skill-item-name">{skill.meta.name}</span>
+                    {skill.meta.version && (
+                      <span className="skill-item-version">
+                        v{skill.meta.version}
+                      </span>
+                    )}
+                  </div>
+                  <span className="skill-item-desc">{skill.meta.description}</span>
+                  <div className="skill-item-footer">
+                    {skill.meta.tags && skill.meta.tags.length > 0 && (
+                      <div className="skill-tags">
+                        {skill.meta.tags.map((tag) => (
+                          <span key={tag} className="skill-tag">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <span className="skill-item-time">
+                      {tpl('注册于 $__date__', {
+                        date: new Date(skill.registeredAt).toLocaleString(
+                          getCurrentLanguage(),
+                        ),
+                      })}
+                    </span>
+                  </div>
+                </div>
+                <div
+                  className="skill-item-actions"
+                  onClick={(e) => e.stopPropagation()}>
+                  <button
+                    className="skill-action-btn danger"
+                    onClick={() => handleDelete(skill)}>
+                    {t('删除')}
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            {filteredSkills.length === 0 && skills.length === 0 && (
+              <div className="skill-empty">
+                <FolderSvg fill="var(--text-secondary, #ccc)" />
+                <p>{t('暂无注册的技能')}</p>
+                <p className="skill-empty-hint">
+                  {t(
+                    '点击「导入 ZIP」导入技能包，或手动将技能文件夹放入上述目录后点击「扫描」',
+                  )}
+                </p>
+              </div>
+            )}
+            {filteredSkills.length === 0 && skills.length > 0 && (
+              <div className="skill-empty">
+                <p>
+                  {t('未找到匹配')}「{searchQuery}」{t('的技能')}
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* SKILL.md 预览弹窗 */}
+          <Modal
+            visible={!!previewSkill}
+            title={previewSkill ? `SKILL.md — ${previewSkill.meta.name}` : ''}
+            onClose={handleClosePreview}
+            width={720}
+            height="80vh"
+            showCloseButton
+            closeOnClickOutside>
+            {previewLoading ? (
+              <div className="loading-state">{t('加载中…')}</div>
+            ) : (
+              <MarkdownRenderer content={previewContent} />
+            )}
+          </Modal>
+        </>
+      )}
     </div>
   )
 }

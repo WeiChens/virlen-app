@@ -115,3 +115,92 @@ export function parseFrontmatterTags(tagsRaw: string): string[] {
       .filter(Boolean)
   }
 }
+
+/**
+ * 统一的 SKILL.md 元信息解析
+ * 兼容两种格式：
+ *
+ * 格式一：标准 YAML Frontmatter
+ * ---
+ * name: seedance
+ * description: xxx
+ * version: 1.0.0
+ * tags: [a, b]
+ * ---
+ *
+ * 格式二：纯 Markdown（无 frontmatter）
+ * # 📝 Resume / CV Assistant
+ * > AI-powered clawbot skill for resume & CV polishing...
+ * **Version:** 1.0.0 · **License:** MIT
+ *
+ * @param mdContent - SKILL.md 全文
+ * @param fallbackName - 文件夹名兜底
+ * @returns 解析出的元信息
+ */
+export interface ParsedSkillMeta {
+  name: string
+  description: string
+  version?: string
+  tags: string[]
+}
+
+export function parseSkillMdMeta(
+  mdContent: string,
+  fallbackName: string = '',
+): ParsedSkillMeta {
+  // 先尝试 YAML frontmatter
+  const fmResult = parseMdFrontmatter(mdContent)
+
+  // 格式一：有 frontmatter 且有 name 字段
+  if (fmResult.success && fmResult.fields.name) {
+    return {
+      name: fmResult.fields.name,
+      description: fmResult.fields.description || '',
+      version: fmResult.fields.version || undefined,
+      tags: parseFrontmatterTags(fmResult.fields.tags),
+    }
+  }
+
+  // 格式二：纯 Markdown，从正文提取
+  const body = fmResult.success
+    ? mdContent.slice(mdContent.indexOf('---', 3) + 3).trim()
+    : mdContent.trim()
+
+  // 提取 name：第一个 # 标题，去掉 emoji 和特殊符号后归一化
+  const headingMatch = body.match(/^#+\s+(.+)/m)
+  let rawName = ''
+  if (headingMatch) {
+    // 去掉 emoji 和特殊符号，保留字母数字和基本符号
+    rawName = headingMatch[1]
+      .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{FE00}-\u{FE0F}]/gu, '')
+      .replace(/[^\w\s-]/g, '')
+      .trim()
+  }
+
+  const name = rawName ? rawName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') : fallbackName
+
+  // 提取 description：优先 > blockquote，其次第一段非空文本
+  let description = ''
+  const bqMatch = body.match(/^>\s*(.+)/m)
+  if (bqMatch) {
+    description = bqMatch[1].trim()
+  } else {
+    const lines = body.split('\n').filter(l => l.trim())
+    // 跳过标题行
+    for (const line of lines) {
+      if (line.startsWith('#')) continue
+      if (line.startsWith('>')) continue
+      description = line.replace(/^\*\*.*?\*\*\s*/g, '').trim()
+      if (description) break
+    }
+  }
+
+  // 提取 version：**Version:** X.X.X 或 Version: X.X.X
+  let version: string | undefined
+  const versionMatch = body.match(/(?:\*\*)?[Vv]ersion(?:\*\*)?:?\s*(\d+\.\d+\.\d+)/)
+  if (versionMatch) {
+    version = versionMatch[1]
+  }
+
+  return { name, description, version, tags: [] }
+}

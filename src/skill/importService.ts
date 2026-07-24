@@ -8,13 +8,18 @@
  * 4. 解压到 appDataDir/skills/{name}/
  * 5. 自动注册 skill
  */
-import { getSkillsDirPath, registerSkill, getRegisteredSkill } from './skillStore'
+import {
+  getSkillsDirPath,
+  registerSkill,
+  getRegisteredSkill,
+} from './skillStore'
 import { normalizeSkillName } from './types'
-import { parseMdFrontmatter } from '@/utils/mdYamlFrontmatter'
+import { parseSkillMdMeta } from '@/utils/mdYamlFrontmatter'
 
 // ==================== SKILL.md 格式校验 ====================
 
-interface ParsedSkillMeta {
+/** 解析后的技能元信息 */
+export interface ParsedSkillMeta {
   name: string
   description: string
   version?: string
@@ -22,16 +27,23 @@ interface ParsedSkillMeta {
 }
 
 /**
- * 解析 SKILL.md 内容，提取 frontmatter 元信息
- * 要求：必须有 frontmatter 且包含 name 字段
+ * 解析 SKILL.md 内容，提取元信息
  *
- * 合法格式：
+ * 兼容两种格式：
+ *   - 标准 YAML frontmatter（--- name: xxx ---）
+ *   - 纯 Markdown 无 frontmatter（# 标题 + > 描述 + **Version:**）
+ *
+ * 格式一：
  * ---
  * name: my-skill
  * description: My awesome skill
  * version: 1.0.0
  * ---
- * ...content...
+ *
+ * 格式二：
+ * # 📝 My Skill
+ * > My awesome skill description
+ * **Version:** 1.0.0
  *
  * ⚠️ name 经过 normalizeSkillName 归一化（转小写、去空格、校验格式）
  */
@@ -39,54 +51,27 @@ function parseSkillMetaFromContent(
   _folderName: string,
   mdContent: string,
 ): ParsedSkillMeta {
-  const result = parseMdFrontmatter(mdContent)
+  const result = parseSkillMdMeta(mdContent, _folderName)
 
-  if (!result.success) {
-    throw new Error(`SKILL.md 格式错误：${result.error}`)
-  }
-
-  const { fields } = result
-
-  if (!fields.name) {
+  // 校验 name 不能为空
+  if (!result.name) {
     throw new Error(
-      `SKILL.md 格式错误：frontmatter 中缺少 name 字段\n\n示例格式：\n---\nname: my-skill\ndescription: 技能描述\n---`,
+      `无法确定技能名称，请确保文件包含 name 字段或 # 标题\n\n` +
+      `示例格式一（YAML frontmatter）：\n` +
+      `---\nname: my-skill\ndescription: 技能描述\n---\n\n` +
+      `示例格式二（纯 Markdown）：\n` +
+      `# My Skill\n> 技能描述\n**Version:** 1.0.0`,
     )
   }
 
-  // 使用共享的 normalizeSkillName（统一校验 + 转小写 + 去空格）
-  const name = normalizeSkillName(fields.name)
+  const name = normalizeSkillName(result.name)
 
-  const meta: ParsedSkillMeta = {
+  return {
     name,
-    description: fields.description || '',
+    description: result.description || '',
+    version: result.version,
+    tags: result.tags,
   }
-
-  if (fields.version) meta.version = fields.version
-
-  if (fields.tags) {
-    try {
-      meta.tags = JSON.parse(fields.tags.replace(/'/g, '"'))
-    } catch {
-      meta.tags = fields.tags
-        .replace(/[\[\]]/g, '')
-        .split(',')
-        .map((t) => t.trim())
-        .filter(Boolean)
-    }
-  }
-
-  // fallback：从正文第一行取 description
-  if (!meta.description) {
-    const body = mdContent.slice(mdContent.indexOf('---', 3) + 3).trim()
-    const firstLine =
-      body
-        .split('\n')[0]
-        ?.replace(/^#+\s*/, '')
-        .trim() || ''
-    meta.description = firstLine
-  }
-
-  return meta
 }
 
 /**
@@ -161,7 +146,6 @@ export async function importSkillFromZip(zipPath: string): Promise<string[]> {
       string,
       { dir: boolean; name: string }
     >
-
     // 2. 查找 SKILL.md
     const skillMdPath = findSkillMdFile(fileEntries)
     if (!skillMdPath) {

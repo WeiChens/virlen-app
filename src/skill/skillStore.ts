@@ -13,7 +13,7 @@ import type {
   SkillFileEntry,
 } from './types'
 import { normalizeSkillName } from './types'
-import { parseMdFrontmatter } from '@/utils/mdYamlFrontmatter'
+import { parseSkillMdMeta } from '@/utils/mdYamlFrontmatter'
 import { readDir, readTextFile, stat } from '@tauri-apps/plugin-fs'
 
 // ==================== 常量 ====================
@@ -86,64 +86,30 @@ export async function readSkillMd(name: string): Promise<string> {
 /**
  * 解析 SKILL.md 提取元信息
  *
+ * 兼容两种格式：
+ *   - 标准 YAML frontmatter（--- name: xxx ---）
+ *   - 纯 Markdown 无 frontmatter（# 标题 + > 描述 + **Version:**）
+ *
  * 强制约束：技能唯一标识 = frontmatter 的 name 字段（归一化后）或文件夹名。
  * 确保同一 name 不会被注册两次（主键唯一）。
- *
- * 支持 YAML frontmatter 格式（含块标量 | 和 >-）：
- * ---
- * name: xxx
- * description: xxx
- * version: 1.0.0
- * tags: [a, b]
- * ---
  */
 function parseSkillMeta(folderName: string, mdContent: string): SkillMeta {
-  const result = parseMdFrontmatter(mdContent)
+  const result = parseSkillMdMeta(mdContent, folderName)
 
-  // name 优先级：frontmatter.name > 文件夹名，均需归一化
+  // name 优先级：解析结果 > 文件夹名，均需归一化
   let name: string
   try {
-    name = normalizeSkillName(result.fields.name || folderName)
+    name = normalizeSkillName(result.name || folderName)
   } catch {
     name = normalizeSkillName(folderName)
   }
 
-  const meta: SkillMeta = {
+  return {
     name,
-    description: '',
+    description: result.description || '',
+    version: result.version,
+    tags: result.tags?.length ? result.tags : undefined,
   }
-
-  if (result.success) {
-    const { fields } = result
-    if (fields.description) meta.description = fields.description
-    if (fields.version) meta.version = fields.version
-    if (fields.tags) {
-      try {
-        meta.tags = JSON.parse(fields.tags.replace(/'/g, '"'))
-      } catch {
-        meta.tags = fields.tags
-          .replace(/[\[\]]/g, '')
-          .split(',')
-          .map((t) => t.trim())
-          .filter(Boolean)
-      }
-    }
-  }
-
-  // 如果没有 description，从正文第一行取
-  if (!meta.description) {
-    const bodyStart = mdContent.indexOf('---', 3)
-    const body =
-      bodyStart >= 0 ? mdContent.slice(bodyStart + 3).trim() : mdContent.trim()
-    const firstLine =
-      body
-        .split('\n')[0]
-        ?.replace(/^#+\s*/, '')
-        .trim() || ''
-    meta.description = firstLine
-  }
-
-  return meta
 }
 
 // ==================== CRUD 操作 ====================
