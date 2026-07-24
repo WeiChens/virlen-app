@@ -11,6 +11,7 @@
     display: flex;
     gap: 8px;
     flex-shrink: 0;
+    margin-top: 10px;
   }
 
   .plaza-search-box {
@@ -205,7 +206,9 @@
   }
 
   @keyframes plaza-spin {
-    to { transform: rotate(360deg); }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   // ==================== 结果信息 ====================

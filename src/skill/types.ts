@@ -21,7 +21,7 @@ export interface SkillMeta {
  * - 禁止为空
  */
 export function normalizeSkillName(raw: string): string {
-  const name = raw.toLowerCase().trim()
+  const name = raw.replace(/"/g, '').toLowerCase().trim()
   if (!name) throw new Error('技能名称不能为空')
   if (!/^[a-z0-9-]+$/.test(name)) {
     throw new Error(
