@@ -11,7 +11,7 @@ import { providerService } from './services/provider-service'
 import { searchProviderService } from './services/search-provider-service'
 import { toolsInit } from './infrastructure/tools'
 import { securityService } from './services/security-service'
-import { checkUpdate } from './services/update-service'
+import { checkUpdate, shouldShowUpdate } from './services/update-service'
 import updateEvent from './events/updateEvent'
 import { ragService } from './services/rag-service'
 
@@ -33,10 +33,17 @@ async function main() {
 
 /**
  * 检查更新
+ *
+ * 检测到新版本后，先判断用户是否「忽略该版本」或「7日内不再提示」，
+ * 若未设置偏好则触发更新弹窗。
  */
 async function checkForUpdates() {
   const result = await checkUpdate()
   if (result && result.has_update && result.latest_version) {
+    // 先检查用户偏好（忽略版本 / 7日免打扰）
+    if (!shouldShowUpdate(result)) {
+      return
+    }
     // 有可用更新 → 触发更新弹窗
     updateEvent.emit('showUpdateModal', result)
   }

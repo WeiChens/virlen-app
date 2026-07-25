@@ -4,6 +4,7 @@ import RemoveSvg from '@/ui/components/icons/RemoveSvg'
 import { t } from '@/ui/i18n'
 import { getVersion } from '@tauri-apps/api/app'
 import { downloadAndInstall, launchInstaller } from '@/services/download-service'
+import { setIgnoredVersion, setSnooze } from '@/services/update-service'
 import type { DownloadProgress } from '@/services/download-service'
 import type { ICheckUpdateResponse } from '@/types'
 
@@ -111,6 +112,18 @@ const UpdateModal = ({ show, updateInfo, onHide, onForceCancel }: Props) => {
     }
   }
 
+  /** 忽略当前版本，关闭弹窗，后续不再提示该版本 */
+  function handleIgnoreVersion() {
+    setIgnoredVersion(latest_version.version)
+    onHide()
+  }
+
+  /** 7 日内不再提示，关闭弹窗 */
+  function handleSnooze() {
+    setSnooze()
+    onHide()
+  }
+
   return (
     <div className="UpdateModal-component">
       <div className={`UpdateModal ${visible ? 'show' : ''}`}>
@@ -204,14 +217,31 @@ const UpdateModal = ({ show, updateInfo, onHide, onForceCancel }: Props) => {
               <div className="changelog-content">{latest_version.changelog}</div>
             </div>
 
-            <div className="actions">
-              <button className={isForceUpdate ? 'btn-force-update' : 'btn-update'} onClick={handleUpdate}>
-                {isForceUpdate ? t('立即更新') : t('更新')}
-              </button>
-              <button className="btn-skip" onClick={handleCancel}>
-                {isForceUpdate ? t('退出应用') : t('稍后再说')}
-              </button>
-            </div>
+            {isForceUpdate ? (
+              <div className="actions">
+                <button className="btn-force-update" onClick={handleUpdate}>
+                  {t('立即更新')}
+                </button>
+                <button className="btn-skip" onClick={handleCancel}>
+                  {t('退出应用')}
+                </button>
+              </div>
+            ) : (
+              <div className="bottom-row">
+                <div className="bottom-row-left">
+                  <button className="btn-text" onClick={handleIgnoreVersion}>
+                    {t('忽略当前版本')}
+                  </button>
+                  <span className="btn-text-separator">|</span>
+                  <button className="btn-text" onClick={handleSnooze}>
+                    {t('7日内不再提示')}
+                  </button>
+                </div>
+                <button className="btn-update" onClick={handleUpdate}>
+                  {t('更新')}
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>

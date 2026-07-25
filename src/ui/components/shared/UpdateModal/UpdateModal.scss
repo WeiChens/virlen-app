@@ -107,22 +107,6 @@
       justify-content: center;
       gap: 12px;
 
-      .btn-update {
-        background: var(--primary-color, #4a90d9);
-        color: #fff;
-        border: none;
-        border-radius: 6px;
-        padding: 8px 32px;
-        font-size: 14px;
-        cursor: pointer;
-        transition: opacity 0.2s;
-        font-family: AlimamaAgileVF-Thin;
-
-        &:hover {
-          opacity: 0.85;
-        }
-      }
-
       .btn-skip {
         background: transparent;
         color: var(--text-secondary, #888);
@@ -153,6 +137,57 @@
         &:hover {
           opacity: 0.85;
         }
+      }
+    }
+
+    // ===== 通用「更新/重试」按钮样式 =====
+    .btn-update {
+      background: var(--primary-color, #4a90d9);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 32px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: opacity 0.2s;
+      font-family: AlimamaAgileVF-Thin;
+
+      &:hover {
+        opacity: 0.85;
+      }
+    }
+
+    // ===== 底部行（忽略版本 | 7日免打扰 + 更新按钮） =====
+    .bottom-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+
+      .bottom-row-left {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .btn-text {
+        background: none;
+        border: none;
+        color: var(--text-secondary, #888);
+        font-size: 12px;
+        cursor: pointer;
+        padding: 4px 6px;
+        font-family: AlimamaAgileVF-Thin;
+        transition: color 0.2s;
+
+        &:hover {
+          color: var(--accent-color, #4a90d9);
+        }
+      }
+
+      .btn-text-separator {
+        color: var(--border-color, #ddd);
+        font-size: 12px;
+        user-select: none;
       }
     }
 
