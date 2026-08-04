@@ -324,3 +324,34 @@
     opacity: 0;
   }
 }
+
+// ==================== 反馈消息（迭代验证） ====================
+
+.message-feedback {
+  display: flex;
+  padding: 8px 16px;
+  animation: fadeIn 0.2s ease;
+
+  .feedback-content {
+    max-width: 85%;
+    width: fit-content;
+    padding: 10px 16px;
+    background: var(--feedback-bg, rgba(99, 102, 241, 0.06));
+    border: 1px solid var(--feedback-border, rgba(99, 102, 241, 0.15));
+    border-radius: 10px;
+    font-size: var(--font-size-sm, 13px);
+    line-height: 1.6;
+    color: var(--text-secondary, #555);
+
+    p {
+      margin: 0 0 4px;
+      &:last-child {
+        margin-bottom: 0;
+      }
+    }
+
+    strong {
+      color: var(--text-primary, #1a1a1a);
+    }
+  }
+}

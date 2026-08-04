@@ -335,8 +335,8 @@ export class AnthropicProvider implements IProvider {
         ? request.messages
         : request.messages.slice(lastSummaryMessageIndex)
     for (const msg of requestMessages) {
-      // summary 角色：转为 user 消息，作为压缩后的历史上下文
-      if (msg.role === 'summary') {
+      // summary / feedback 角色：转为 user 消息
+      if (msg.role === 'summary' || msg.role === 'feedback') {
         messages.push({
           role: 'user',
           content: [

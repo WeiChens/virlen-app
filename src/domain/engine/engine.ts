@@ -33,6 +33,7 @@ import { providerPort } from '../provider'
 import { toolRegistry } from '../tools'
 import { AgentEnginePort } from '../ports'
 import { compressContext } from './compress-context'
+import { IterationController } from './iteration-controller'
 import type { IProvider } from '@/infrastructure/provider/types'
 import type { ToolDefinition, ToolExecutorResponse } from '../tools/types'
 
@@ -56,6 +57,8 @@ export class AgentEngine implements AgentEnginePort {
       resumeFromSnapshot,
       reasoningEffort,
       maxToolRounds = 30,
+      iterationGoal,
+      maxIterations = 5,
     } = options
 
     const sessionId = session.id
@@ -101,21 +104,59 @@ export class AgentEngine implements AgentEnginePort {
       //     - list_knowledge_bases: 列出知识库
       //     - write_to_knowledge_base: 写入知识库
 
-      // 5. tool call 主循环
-      const completed = await this.#executeToolLoop({
-        session,
-        provider,
-        toolDefs,
-        currentMessages,
-        remainingRounds,
-        sessionId,
-        abortController,
-        onEvent,
-        onUserInteraction,
-        skills,
-        effectiveMaxTokens,
-        reasoningEffort,
-      })
+      // 5. tool call 主循环（迭代模式或普通模式）
+      let completed: boolean
+
+      if (iterationGoal) {
+        // ===== 迭代模式：执行→验证→修复 =====
+        const iterationController = new IterationController({
+          maxIterations,
+          onIterationEvent: (iterEvent) => {
+            onEvent?.({
+              type: iterEvent.type as any,
+              data: iterEvent.data,
+            })
+          },
+        })
+
+        const result = await iterationController.run({
+          goal: { description: iterationGoal },
+          session,
+          provider,
+          toolDefs,
+          currentMessages,
+          sessionId,
+          abortController,
+          onEvent,
+          onUserInteraction,
+          skills,
+          effectiveMaxTokens,
+          reasoningEffort,
+          persistSnapshot: (sid, run) => this.persistRunSnapshot(sid, run),
+          clearSnapshot: (sid) => this.clearRunSnapshot(sid),
+        })
+
+        // 将迭代过程中新增的消息合并回 currentMessages
+        // result.messages 包含所有消息（原始的 + 迭代中新增的）
+        // 但 chat-service 已通过事件持久化了这些消息，这里不需要再做
+        completed = result.completed
+      } else {
+        // ===== 普通模式 =====
+        completed = await this.#executeToolLoop({
+          session,
+          provider,
+          toolDefs,
+          currentMessages,
+          remainingRounds,
+          sessionId,
+          abortController,
+          onEvent,
+          onUserInteraction,
+          skills,
+          effectiveMaxTokens,
+          reasoningEffort,
+        })
+      }
 
       if (completed) {
         onEvent?.({ type: 'stream_end', data: {} })

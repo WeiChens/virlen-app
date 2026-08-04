@@ -635,7 +635,7 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
                             onClick={(e) => e.stopPropagation()}
                           />
                           <span className={`import-kb-msg-role role-${msg.role}`}>
-                            {msg.role === 'user' ? '👤' : msg.role === 'assistant' ? '🤖' : msg.role === 'tool' ? '🔧' : msg.role === 'summary' ? '📋' : '⚙️'}
+                            {msg.role === 'user' ? '👤' : msg.role === 'assistant' ? '🤖' : msg.role === 'tool' ? '🔧' : msg.role === 'summary' ? '📋' : msg.role === 'feedback' ? '🔄' : '⚙️'}
                           </span>
                           <span className="import-kb-msg-preview">{preview || `[${msg.role}]`}</span>
                         </div>

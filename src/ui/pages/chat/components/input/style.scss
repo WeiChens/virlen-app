@@ -963,3 +963,211 @@
     }
   }
 }
+
+// ==================== 迭代目标输入 ====================
+
+.goal-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  cursor: pointer;
+  color: var(--text-secondary, #888);
+  transition: all 0.15s;
+  flex-shrink: 0;
+
+  svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  &:hover:not(:disabled) {
+    background: var(--hover-bg, #f0f0f0);
+    border-color: var(--accent-color, #4f46e5);
+    color: var(--accent-color, #4f46e5);
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  &.is-active {
+    border-color: var(--accent-color, #4f46e5);
+    color: var(--accent-color, #4f46e5);
+    background: var(--active-bg, #eef2ff);
+  }
+}
+
+.goal-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  margin: 4px 8px;
+  background: var(--hover-bg, rgba(0, 0, 0, 0.03));
+  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
+  border-radius: 10px;
+  animation: goal-slide-in 0.2s ease;
+
+  .goal-icon {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    color: var(--accent-color, #6366f1);
+  }
+
+  .goal-input {
+    flex: 1;
+    border: none;
+    background: transparent;
+    font-size: 13px;
+    color: var(--text-primary, #1a1a1a);
+    outline: none;
+    padding: 4px 0;
+
+    &::placeholder {
+      color: var(--text-tertiary, #999);
+      font-size: 12px;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+    }
+  }
+
+  .goal-close-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: none;
+    background: transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-secondary, #666);
+    opacity: 0.5;
+    flex-shrink: 0;
+
+    &:hover {
+      opacity: 1;
+      background: var(--hover-bg, rgba(0, 0, 0, 0.08));
+    }
+  }
+
+  // ==================== 验证目标快捷输入（goal-row 内） ====================
+
+  .goal-quick-input-wrapper {
+    position: relative;
+    flex-shrink: 0;
+
+    .goal-quick-input-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      border: none;
+      background: transparent;
+      border-radius: 6px;
+      cursor: pointer;
+      color: var(--accent-color, #6366f1);
+      opacity: 0.6;
+      transition: all 0.15s;
+
+      &:hover:not(:disabled) {
+        opacity: 1;
+        background: var(--active-bg, #eef2ff);
+      }
+
+      &:disabled {
+        opacity: 0.3;
+        cursor: not-allowed;
+      }
+
+      &.open {
+        opacity: 1;
+        background: var(--active-bg, #eef2ff);
+      }
+    }
+
+    .goal-quick-input-dropdown {
+      position: absolute;
+      bottom: calc(100% + 6px);
+      right: 0;
+      width: 260px;
+      max-height: 240px;
+      background: var(--bg-primary, #fff);
+      border: 1px solid var(--border-color, #e5e5e5);
+      border-radius: 10px;
+      box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.12);
+      z-index: 210;
+      overflow-y: auto;
+      animation: quickInputUp 0.15s ease;
+
+      &::-webkit-scrollbar {
+        width: 4px;
+      }
+      &::-webkit-scrollbar-thumb {
+        background: var(--scrollbar-thumb, #ccc);
+        border-radius: 2px;
+      }
+
+      .goal-quick-input-header {
+        padding: 8px 12px 6px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--accent-color, #6366f1);
+        border-bottom: 1px solid var(--border-color, #f0f0f0);
+        position: sticky;
+        top: 0;
+        background: var(--bg-primary, #fff);
+        border-radius: 10px 10px 0 0;
+      }
+
+      .goal-quick-input-item {
+        display: flex;
+        width: 100%;
+        padding: 7px 12px;
+        border: none;
+        background: transparent;
+        cursor: pointer;
+        text-align: left;
+        transition: background 0.1s;
+
+        &:hover {
+          background: var(--hover-bg, #f5f5f5);
+        }
+
+        .goal-quick-input-item-text {
+          font-size: 13px;
+          color: var(--text-primary, #1a1a1a);
+          line-height: 1.4;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          width: 100%;
+        }
+      }
+    }
+  }
+}
+
+@keyframes goal-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    max-height: 60px;
+  }
+}

@@ -38,6 +38,7 @@ import { showImagePreview } from '@/ui/components/shared/ImagePreview'
 import { t } from '@/ui/i18n'
 import AgentSelector from './agent-selector'
 import QuickInputMenu from './quick-input-menu'
+import GoalQuickInputMenu from './goal-quick-input-menu'
 import TokenRing from './token-ring'
 import { useImageAttachment, useVoiceInput } from './hooks'
 import { usePathAutocomplete, PathAutocomplete } from './path-autocomplete'
@@ -54,7 +55,7 @@ export type { ImageAttachment }
 
 interface Props {
   sessionId?: string
-  onSend: (content: string, images?: ImageAttachment[]) => void
+  onSend: (content: string, images?: ImageAttachment[], goal?: string) => void
   onCancel?: () => void
   onMessagesUpdate?: (sessionId: string) => void
   disabled?: boolean
@@ -158,6 +159,18 @@ function ChatInput(
   const imagesRef = useRef(images)
   imagesRef.current = images
 
+  // ===== 迭代目标（Goal） =====
+  const [goal, setGoal] = useState(
+    () => getSessionInput(sessionId)?.goal ?? '',
+  )
+  const [goalExpanded, setGoalExpanded] = useState(
+    () => getSessionInput(sessionId)?.goalExpanded ?? false,
+  )
+  const goalRef = useRef(goal)
+  goalRef.current = goal
+  const goalExpandedRef = useRef(goalExpanded)
+  goalExpandedRef.current = goalExpanded
+
   useEffect(() => {
     const prevId = prevSessionRef.current
     if (prevId === sessionId) return
@@ -168,6 +181,8 @@ function ChatInput(
         value: valueRef.current,
         cursorPos: cursorPosRef.current,
         images: imagesRef.current,
+        goal: goalRef.current,
+        goalExpanded: goalExpandedRef.current,
       })
     }
     prevSessionRef.current = sessionId
@@ -176,6 +191,8 @@ function ChatInput(
     const saved = getSessionInput(sessionId)
     setValue(saved?.value ?? '')
     setCursorPos(saved?.cursorPos ?? 0)
+    setGoal(saved?.goal ?? '')
+    setGoalExpanded(saved?.goalExpanded ?? false)
     if (saved?.images?.length) {
       setImages(saved.images)
     } else {
@@ -191,6 +208,8 @@ function ChatInput(
           value: valueRef.current,
           cursorPos: cursorPosRef.current,
           images: imagesRef.current,
+          goal: goalRef.current,
+          goalExpanded: goalExpandedRef.current,
         })
       }
     }
@@ -303,9 +322,12 @@ function ChatInput(
     const trimmed = value.trim()
     if ((!trimmed && images.length === 0) || disabled || loading || compacting)
       return
-    onSend(trimmed, images.length > 0 ? images : undefined)
+    const currentGoal = goal.trim() || undefined
+    onSend(trimmed, images.length > 0 ? images : undefined, currentGoal)
     setValue('')
     clearImages()
+    setGoal('')
+    setGoalExpanded(false)
     clearSessionInput(sessionId) // 发送后清除已保存状态
     if (textareaRef.current) {
       textareaRef.current.style.height = ''
@@ -541,6 +563,22 @@ function ChatInput(
     [loading],
   )
 
+  // ===== 验证目标快捷输入选择 =====
+  const handleGoalQuickInputSelect = useCallback(
+    (template: { text: string }) => {
+      if (loading) return
+      setGoal(template.text)
+      // 聚焦 goal 输入框
+      queueMicrotask(() => {
+        const goalInput = document.querySelector(
+          '.goal-input',
+        ) as HTMLInputElement
+        goalInput?.focus()
+      })
+    },
+    [loading],
+  )
+
   // ===== Agent 名称显示（有会话时） =====
   const agent = agentStore.getAgent(
     sessionStore.getSession(chatState.value.currentSessionId)?.agentId,
@@ -656,6 +694,45 @@ function ChatInput(
           />
         )}
 
+        {/* 迭代目标输入行 */}
+        {goalExpanded && (
+          <div className="goal-input-row">
+            <span className="goal-icon">
+              <svg viewBox="0 0 1024 1024" width="14" height="14" fill="currentColor">
+                <path d="M512 416a96 96 0 1 0 96 96 96 96 0 0 0-96-96z m0 160a64 64 0 1 1 64-64 64 64 0 0 1-64 64z" />
+                <path d="M512 64a448 448 0 1 0 448 448A448 448 0 0 0 512 64z m-60.32 794.72a351.04 351.04 0 0 1-286.4-286.4A64 64 0 0 0 205.92 528h50.88A256 256 0 0 0 496 768v50.88a64 64 0 0 0-44.32 39.84z m120.64-693.44a351.04 351.04 0 0 1 286.4 286.4A64 64 0 0 0 818.08 496H768a256 256 0 0 0-240-239.2v-50.88a64 64 0 0 0 44.32-40.64zM688 528h48a224 224 0 0 1-208 208v-48a16 16 0 0 0-32 0v48a224 224 0 0 1-207.2-208H336a16 16 0 0 0 0-32h-47.2A224 224 0 0 1 496 288.8V336a16 16 0 0 0 32 0v-47.2A224 224 0 0 1 736 496h-48a16 16 0 0 0 0 32zM451.68 165.28A64 64 0 0 0 496 205.92v50.88A256 256 0 0 0 256.8 496h-50.88a64 64 0 0 0-40.64-44.32 351.04 351.04 0 0 1 286.4-286.4z m120.64 693.44A64 64 0 0 0 528 818.08V768a256 256 0 0 0 240-240h50.88a64 64 0 0 0 40.64 44.32 351.04 351.04 0 0 1-287.2 286.4z" />
+              </svg>
+            </span>
+            <input
+              className="goal-input"
+              type="text"
+              value={goal}
+              onChange={(e) => setGoal(e.target.value)}
+              placeholder={t('输入可验证的目标，AI 会自动检查结果...')}
+              disabled={disabled || loading}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setGoalExpanded(false)
+                  textareaRef.current?.focus()
+                }
+              }}
+            />
+            {/* 验证目标快捷输入（goal-close-btn 左侧） */}
+            <GoalQuickInputMenu
+              onSelect={handleGoalQuickInputSelect}
+              disabled={disabled || loading}
+            />
+            <button
+              className="goal-close-btn"
+              onClick={() => setGoalExpanded(false)}
+              title={t('关闭迭代模式')}
+              type="button"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         <textarea
           ref={textareaRef}
           value={value}
@@ -736,6 +813,29 @@ function ChatInput(
                 </svg>
               </button>
             )}
+
+            {/* 迭代模式切换按钮 */}
+            <button
+              className={`goal-btn ${goalExpanded ? 'is-active' : ''}`}
+              onClick={() => {
+                setGoalExpanded(!goalExpanded)
+                if (!goalExpanded) {
+                  // 展开时聚焦 goal input
+                  queueMicrotask(() => {
+                    const goalInput = document.querySelector('.goal-input') as HTMLInputElement
+                    goalInput?.focus()
+                  })
+                }
+              }}
+              disabled={disabled || loading}
+              title={goalExpanded ? t('关闭迭代验证模式') : t('开启迭代验证模式：AI 自动检查并修正结果')}
+              type="button"
+            >
+              <svg viewBox="0 0 1024 1024" width="15" height="15" fill="currentColor">
+                <path d="M512 416a96 96 0 1 0 96 96 96 96 0 0 0-96-96z m0 160a64 64 0 1 1 64-64 64 64 0 0 1-64 64z" />
+                <path d="M512 64a448 448 0 1 0 448 448A448 448 0 0 0 512 64z m-60.32 794.72a351.04 351.04 0 0 1-286.4-286.4A64 64 0 0 0 205.92 528h50.88A256 256 0 0 0 496 768v50.88a64 64 0 0 0-44.32 39.84z m120.64-693.44a351.04 351.04 0 0 1 286.4 286.4A64 64 0 0 0 818.08 496H768a256 256 0 0 0-240-239.2v-50.88a64 64 0 0 0 44.32-40.64zM688 528h48a224 224 0 0 1-208 208v-48a16 16 0 0 0-32 0v48a224 224 0 0 1-207.2-208H336a16 16 0 0 0 0-32h-47.2A224 224 0 0 1 496 288.8V336a16 16 0 0 0 32 0v-47.2A224 224 0 0 1 736 496h-48a16 16 0 0 0 0 32zM451.68 165.28A64 64 0 0 0 496 205.92v50.88A256 256 0 0 0 256.8 496h-50.88a64 64 0 0 0-40.64-44.32 351.04 351.04 0 0 1 286.4-286.4z m120.64 693.44A64 64 0 0 0 528 818.08V768a256 256 0 0 0 240-240h50.88a64 64 0 0 0 40.64 44.32 351.04 351.04 0 0 1-287.2 286.4z" />
+              </svg>
+            </button>
 
             {/* 模型切换 */}
             <ModelSwitcher />

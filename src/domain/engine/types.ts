@@ -39,6 +39,13 @@ export interface SendMessageOptions {
   reasoningEffort?: string
   /** 读取最大工具调用轮数，默认 30  */
   maxToolRounds?: number
+  /**
+   * 迭代目标 — 设置后启用「执行→验证→修复」自主迭代模式。
+   * engine 会在每轮 tool 执行后自动验证结果，未达标则注入反馈并重试。
+   */
+  iterationGoal?: string
+  /** 迭代模式最大重试次数，默认 5（仅在 iterationGoal 设置时生效） */
+  maxIterations?: number
 }
 
 /**

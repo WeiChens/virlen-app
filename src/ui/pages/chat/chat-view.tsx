@@ -24,6 +24,7 @@ import {
 } from '@/ui/store'
 import {
   sendMessage,
+  sendMessageWithGoal,
   cancelMessage,
   createSession,
   addSessionMessage,
@@ -329,7 +330,7 @@ function ChatView() {
   const isCurrentWorking = currentRt?.working ?? false
 
   // 发送消息
-  function handleSend(content: string, images?: { url: string }[]) {
+  function handleSend(content: string, images?: { url: string }[], goal?: string) {
     if (!hasEnabledProvider) {
       setPendingContent(content || (images ? '(图片)' : ''))
       setShowProviderPrompt(true)
@@ -362,13 +363,14 @@ function ChatView() {
     }
 
     chatState.setValue('error', null)
-    doSend(sessionId, content, images)
+    doSend(sessionId, content, images, goal)
   }
 
   async function doSend(
     sessionId: string | null,
     content: string,
     images?: { url: string }[],
+    goal?: string,
   ) {
     // ── 立即显示 loading ──
     chatState.setValue('loading', true)
@@ -475,32 +477,54 @@ function ChatView() {
     // ── 清除分析中的状态文本，sendMessage 会通过 onWorkingChange 自动设置 ──
     chatState.setValue('loadingText', '')
 
-    // ── 调 sendMessage（跳过用户消息创建，直接从 AI 响应开始） ──
-    await sendMessage(
-      sid,
-      finalContent,
-      {
-        onWorkingChange: (sid, working) => {
-          chatState.setValue('loading', working)
-        },
-        onMessagesUpdate: (sid) => {
-          syncMessagesToUI(sid)
-        },
-        onError: (sid, error) => {
-          if (sid === chatState.value.currentSessionId) {
-            chatState.setValue('error', error)
-          }
-        },
-        onStreamEnd: () => {},
+    // ── 公共事件回调 ──
+    const events = {
+      onWorkingChange: (sid: string, working: boolean) => {
+        chatState.setValue('loading', working)
+        // 结束工作时清除 loadingText，避免「正在验证」残留到下次发送
+        if (!working) chatState.setValue('loadingText', '')
       },
-      imageOptimize
-        ? {
-            imageVisionAnalyzeOptimize: true,
-            imageVisionAnalyzeResult: imageAnalyzeResult,
-          }
-        : undefined,
-      { skipUserMessage: true },
-    )
+      onVerifyingChange: (sid: string, verifying: boolean) => {
+        // 验证步骤时 working-indicator 显示「正在验证」
+        chatState.setValue(
+          'loadingText',
+          verifying ? t('正在验证...') : '',
+        )
+      },
+      onMessagesUpdate: (sid: string) => {
+        syncMessagesToUI(sid)
+      },
+      onError: (sid: string, error: string) => {
+        if (sid === chatState.value.currentSessionId) {
+          chatState.setValue('error', error)
+        }
+      },
+      onStreamEnd: () => {},
+    }
+
+    if (goal) {
+      // ── 迭代模式：执行→验证→修复 ──
+      await sendMessageWithGoal(sid, finalContent, goal, events, {
+        imageVisionAnalyzeOptimize: imageOptimize || undefined,
+        imageVisionAnalyzeResult: imageAnalyzeResult,
+        maxIterations: settingsState.value.maxIterations,
+        skipUserMessage: true,
+      })
+    } else {
+      // ── 普通模式 ──
+      await sendMessage(
+        sid,
+        finalContent,
+        events,
+        imageOptimize
+          ? {
+              imageVisionAnalyzeOptimize: true,
+              imageVisionAnalyzeResult: imageAnalyzeResult,
+            }
+          : undefined,
+        { skipUserMessage: true },
+      )
+    }
   }
 
   /** 构建含图片的 MessageContent */

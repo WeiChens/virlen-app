@@ -59,6 +59,14 @@ function GeneralSettings() {
     { value: 99999999, label: t('无限') },
   ]
 
+  const MAX_ITERATIONS_OPTIONS: { value: number; label: string }[] = [
+    { value: 1, label: t('1 次') },
+    { value: 3, label: t('3 次') },
+    { value: 5, label: t('5 次') },
+    { value: 8, label: t('8 次') },
+    { value: 10, label: t('10 次') },
+  ]
+
   const SESSION_GROUP_OPTIONS: {
     value: 'agent' | 'workspace'
     label: string
@@ -298,6 +306,22 @@ function GeneralSettings() {
               value={s.maxToolRounds}
               onChange={(v) => update('maxToolRounds', v)}
               options={MAX_TOOL_ROUNDS_OPTIONS}
+              width={120}
+            />
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="label-text">{t('最大迭代次数')}</span>
+            <span className="label-desc">
+              {t('迭代验证模式（执行→验证→修复）中 AI 自动重试的最大次数')}
+            </span>
+          </div>
+          <div className="setting-control">
+            <Select
+              value={s.maxIterations}
+              onChange={(v) => update('maxIterations', v)}
+              options={MAX_ITERATIONS_OPTIONS}
               width={120}
             />
           </div>

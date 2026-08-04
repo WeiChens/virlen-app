@@ -119,6 +119,8 @@ function extractText(content: MessageContent): string {
 export interface ChatServiceEvents {
   /** 会话工作状态变更 */
   onWorkingChange?: (sessionId: string, working: boolean) => void
+  /** 迭代验证状态变更（开始/结束验证时触发） */
+  onVerifyingChange?: (sessionId: string, verifying: boolean) => void
   /** 会话消息更新 */
   onMessagesUpdate?: (sessionId: string) => void
   /** 错误 */
@@ -289,6 +291,98 @@ export async function resumePausedRun(
 }
 
 /**
+ * 发送带迭代目标的消息
+ *
+ * 启用「执行→验证→修复」自主迭代模式。
+ * engine 会在每轮 tool 执行后自动验证结果是否达到 goal，
+ * 未达标则注入反馈并重试，直到达标或超出 maxIterations。
+ *
+ * @param sessionId  会话 ID
+ * @param content    用户消息内容
+ * @param goal       迭代目标描述（明确、可验证的目标）
+ * @param events     回调事件
+ * @param options    可选配置
+ */
+export async function sendMessageWithGoal(
+  sessionId: string,
+  content: MessageContent,
+  goal: string,
+  events?: ChatServiceEvents,
+  options?: {
+    maxIterations?: number
+    imageVisionAnalyzeOptimize?: boolean
+    imageVisionAnalyzeResult?: string
+    /** 跳过用户消息创建（调用方已提前添加） */
+    skipUserMessage?: boolean
+  },
+): Promise<void> {
+  const session = sessionStore.getSession(sessionId)
+  if (!session) {
+    events?.onError?.(sessionId, '会话不存在')
+    return
+  }
+
+  if (!session.modelId || !session.providerConfigId) {
+    events?.onError?.(sessionId, '未选择模型')
+    return
+  }
+
+  // 创建用户消息（除非调用方已提前添加）
+  if (!options?.skipUserMessage) {
+    const userMessage: Message = {
+      id: v4(),
+      role: 'user',
+      content,
+      timestamp: Date.now(),
+      ...(options?.imageVisionAnalyzeOptimize !== undefined && {
+        imageVisionAnalyzeOptimize: options.imageVisionAnalyzeOptimize,
+      }),
+      ...(options?.imageVisionAnalyzeResult && {
+        imageVisionAnalyzeResult: options.imageVisionAnalyzeResult,
+      }),
+    }
+    addSessionMessage(sessionId, userMessage)
+    events?.onMessagesUpdate?.(sessionId)
+  }
+
+  const sessionRt = getSessionRuntime(sessionId)
+  updateSessionRuntime(sessionId, {
+    working: true,
+    pendingContent: '',
+    streamingMessageId: null,
+  })
+  events?.onWorkingChange?.(sessionId, true)
+
+  const toolInteract = await toolService.createToolHandles(sessionId)
+
+  const currentMessages = getSessionMessages(sessionId)
+  const providerCfg = settingsState.value.providers.find(
+    (p) => p.id === session.providerConfigId,
+  )
+  const reasoningEffort = providerCfg?.reasoningEffort
+
+  try {
+    await agentEngine.sendMessage({
+      maxTokens: settingsState.value.maxTokens,
+      session,
+      messages: currentMessages,
+      reasoningEffort,
+      iterationGoal: goal,
+      maxIterations: options?.maxIterations ?? 5,
+      onEvent: createEventHandler(sessionId, sessionRt, events),
+      onUserInteraction: toolInteract.handler,
+      maxToolRounds: settingsState.value.maxToolRounds,
+    })
+  } catch (e: any) {
+    events?.onError?.(sessionId, transformApiError(e.message || '错误'))
+  } finally {
+    toolInteract.cleanup()
+  }
+
+  finishWorking(sessionId, sessionRt, events, content)
+}
+
+/**
  * 取消当前正在处理的请求（非暂停状态）
  */
 export async function cancelMessage(sessionId: string): Promise<void> {
@@ -375,6 +469,14 @@ function createEventHandler(
 
       case 'tool_call':
         events?.onMessagesUpdate?.(sessionId)
+        break
+
+      case 'iteration_verify_start':
+        events?.onVerifyingChange?.(sessionId, true)
+        break
+
+      case 'iteration_verify_end':
+        events?.onVerifyingChange?.(sessionId, false)
         break
 
       case 'stream_end':

@@ -37,7 +37,7 @@ export interface ProviderConfigTemplate {
 
 export type ModelInfo = string
 
-export type MessageRole = 'user' | 'assistant' | 'tool' | 'summary'
+export type MessageRole = 'user' | 'assistant' | 'tool' | 'summary' | 'feedback'
 
 export interface TextContent {
   type: 'text'
@@ -180,6 +180,13 @@ export type AgentEventType =
   | 'assistant_message_created'
   | 'assistant_message_updated'
   | 'tool_result_created'
+  | 'iteration_start'
+  | 'iteration_verify_start'
+  | 'iteration_verify_end'
+  | 'iteration_verify_pass'
+  | 'iteration_verify_fail'
+  | 'iteration_max_exceeded'
+  | 'iteration_end'
 
 export interface AgentEvent {
   type: AgentEventType

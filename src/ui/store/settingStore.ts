@@ -39,10 +39,14 @@ export interface SettingsStore {
   defaultWorkspace: string
   /** 最大工具调用轮数，防止无限循环 */
   maxToolRounds: number
+  /** 迭代模式最大重试次数（执行→验证→修复） */
+  maxIterations: number
   /** 是否预加载技能元数据（启动时拉取技能描述、参数等信息） */
   skillMetaPreload: boolean
   /** 快捷输入模板列表 */
   quickInputTemplates: QuickInputTemplate[]
+  /** 验证目标快捷输入模板列表（迭代模式 Goal） */
+  goalQuickInputTemplates: QuickInputTemplate[]
   /** 会话侧边栏分组方式 */
   sessionGroupType: SessionGroupType
   /** 是否对上传的图片自动执行 vision_analyze 提取结构化数据 */
@@ -73,8 +77,10 @@ const defaultSettings: SettingsStore = {
   maxTokens: 32768,
   defaultWorkspace: '',
   maxToolRounds: 30,
+  maxIterations: 5,
   skillMetaPreload: false,
   quickInputTemplates: [],
+  goalQuickInputTemplates: [],
   sessionGroupType: 'agent',
   imageVisionAnalyzeOptimize: true,
   ragEnabled: false,

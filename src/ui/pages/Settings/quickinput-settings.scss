@@ -16,6 +16,40 @@
     background-color: var(--bg-primary, #fff);
   }
 
+  // ==================== Tab 切换 ====================
+
+  .quickinput-tabs {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 12px;
+    padding: 4px;
+    background: var(--input-bg, #f5f5f7);
+    border-radius: 10px;
+
+    .quickinput-tab {
+      flex: 1;
+      padding: 8px 12px;
+      border: none;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--text-secondary, #888);
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s;
+
+      &:hover {
+        color: var(--text-primary, #1a1a1a);
+      }
+
+      &.active {
+        background: var(--bg-primary, #fff);
+        color: var(--text-primary, #1a1a1a);
+        font-weight: 500;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+      }
+    }
+  }
+
   .section-desc {
     font-size: 13px;
     color: var(--text-secondary, #888);

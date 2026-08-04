@@ -235,8 +235,8 @@ export class OpenAiProvider implements IProvider {
 
     // 消息列表
     for (const msg of requestMessages) {
-      // summary 角色：转为 user 消息，作为压缩后的历史上下文
-      if (msg.role === 'summary') {
+      // summary / feedback 角色：转为 user 消息
+      if (msg.role === 'summary' || msg.role === 'feedback') {
         messages.push({
           role: 'user',
           content:

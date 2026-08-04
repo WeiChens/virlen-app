@@ -40,6 +40,7 @@ export default function MessageBubble({
   const isUser = message.role === 'user'
   const isTool = message.role === 'tool'
   const isAssistant = message.role === 'assistant'
+  const isFeedback = message.role === 'feedback'
   if (isTool) return null
 
   function getContent(renderer = true): string {
@@ -105,6 +106,22 @@ export default function MessageBubble({
     message.toolCalls.length > 0 &&
     !showContent &&
     hideToolCallThink
+
+  // 反馈消息：居中系统通知样式
+  if (isFeedback) {
+    return (
+      <div className="message-feedback">
+        <div className="feedback-content">
+          <MarkdownRenderer
+            content={getContent()}
+            isUser={false}
+            streaming={false}
+          />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <>
       {!hideMessageBubble && (
