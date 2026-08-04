@@ -26,7 +26,7 @@ const mockLocalStorage = {
 }
 
 // 在 import 前替换全局 localStorage
-Object.defineProperty(global, 'localStorage', {
+Object.defineProperty(globalThis, 'localStorage', {
   value: mockLocalStorage,
   writable: true,
 })
@@ -120,13 +120,12 @@ describe('StorageState', () => {
 
   it('mixins 应扩展实例方法', () => {
     const state = new StorageState('test-key', DEFAULT_STATE, 0).mixins({
-      getDescription() {
+      getDescription(this: StorageState<TestState>) {
         return `${this.value.name} (count: ${this.value.count})`
       },
     })
     state.setValue('name', 'test')
     state.setValue('count', 10)
-    // @ts-ignore
     expect(state.getDescription()).toBe('test (count: 10)')
   })
 
