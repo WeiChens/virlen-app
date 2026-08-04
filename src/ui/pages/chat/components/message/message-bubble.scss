@@ -118,6 +118,12 @@
           // color: var(--text-secondary, #666);
           fill: var(--accent-color, #6366f1);
         }
+        .reasoning-elapsed {
+          margin-left: 2px;
+          font-weight: 400;
+          font-size: 11px;
+          color: var(--text-tertiary, #999);
+        }
         .collapsed-icon {
           width: 14px;
           height: 14px;
@@ -143,6 +149,14 @@
         font-size: var(--font-size-sm);
         display: flex;
         flex-direction: row;
+        .reasoning-elapsed-only {
+          flex-shrink: 0;
+          align-self: flex-start;
+          margin: 6px 8px 0 0;
+          font-size: 11px;
+          color: var(--text-tertiary, #999);
+          white-space: nowrap;
+        }
         .line {
           width: 2px;
           background: var(--text-secondary, #5a5a6e);

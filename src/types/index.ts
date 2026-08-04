@@ -79,6 +79,8 @@ export interface Message {
   toolCallId?: string
   isError?: boolean
   elapsedMs?: number
+  /** 深度思考（reasoning）消耗的毫秒数，思考结束开始输出正文时确定 */
+  reasoningElapsedMs?: number
   uiData?: Record<string, any>
   timestamp: number
   streaming?: boolean

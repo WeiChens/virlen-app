@@ -326,6 +326,7 @@ export class AgentEngine implements AgentEnginePort {
           streaming: false,
           toolCalls: ctx.assistantMessage.toolCalls,
           reasoningContent: ctx.assistantMessage.reasoningContent,
+          reasoningElapsedMs: ctx.assistantMessage.reasoningElapsedMs,
           usage: ctx.assistantMessage.usage,
           model,
         },

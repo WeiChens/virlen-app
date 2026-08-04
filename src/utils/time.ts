@@ -1,5 +1,16 @@
 import { t, tpl } from '@/ui/i18n'
 
+/** 格式化耗时（如 850ms / 5.2s / 1m 05s），用于展示思考/工具执行耗时 */
+export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return ''
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  const seconds = ms / 1000
+  if (seconds < 60) return `${seconds.toFixed(1)}s`
+  const m = Math.floor(seconds / 60)
+  const s = Math.round(seconds % 60)
+  return `${m}m ${s}s`
+}
+
 export const timeFormat = (time: number) => {
   const nowDate = new Date()
   const now = nowDate.getTime()

@@ -81,6 +81,7 @@ export async function doLLMRound(
           streaming: true,
           toolCalls: assistantMessage.toolCalls,
           reasoningContent: assistantMessage.reasoningContent,
+          reasoningElapsedMs: assistantMessage.reasoningElapsedMs,
           usage: assistantMessage.usage,
           model,
         },
@@ -121,11 +122,29 @@ async function handleStreaming(
   onEvent?: AgentEventCallback,
   abortSignal?: AbortSignal,
 ): Promise<void> {
+  /** 思考开始时间（毫秒），用于计算深度思考耗时 */
+  let reasoningStartTime: number | null = null
+
+  /** 结算思考耗时：思考开始 → 开始输出正文（或流结束） */
+  const settleReasoningElapsed = () => {
+    if (
+      reasoningStartTime !== null &&
+      ctx.assistantMessage.reasoningElapsedMs === undefined
+    ) {
+      ctx.assistantMessage.reasoningElapsedMs =
+        Date.now() - reasoningStartTime
+      reasoningStartTime = null
+      syncAssistant()
+    }
+  }
+
   await provider.chatStream(
     request,
     (event: StreamEvent) => {
       switch (event.type) {
         case 'text_delta':
+          // 首次输出正式内容 = 思考结束
+          settleReasoningElapsed()
           ctx.roundContent += event.data || ''
           ctx.assistantMessage.content += event.data || ''
           syncAssistant()
@@ -147,6 +166,10 @@ async function handleStreaming(
           break
         case 'reasoning_content_change':
           if (event.data) {
+            // 首次收到思考内容 = 思考开始
+            if (reasoningStartTime === null) {
+              reasoningStartTime = Date.now()
+            }
             ctx.reasoningContent = event.data
             ctx.assistantMessage.reasoningContent = event.data
             syncAssistant()
@@ -157,6 +180,8 @@ async function handleStreaming(
           }
           break
         case 'message_stop':
+          // 流结束，若思考尚未结算则在此结算
+          settleReasoningElapsed()
           if (event.reasoningContent) {
             ctx.reasoningContent = event.reasoningContent
             ctx.assistantMessage.reasoningContent = event.reasoningContent
@@ -236,6 +261,7 @@ function finalizeAssistantMessage(
         streaming: false,
         toolCalls: assistantMessage.toolCalls,
         reasoningContent: assistantMessage.reasoningContent,
+        reasoningElapsedMs: assistantMessage.reasoningElapsedMs,
         usage: assistantMessage.usage,
         model,
       },

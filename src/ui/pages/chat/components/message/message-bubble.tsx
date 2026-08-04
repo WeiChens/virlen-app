@@ -10,7 +10,7 @@ import DeleteSvg from '@/ui/components/icons/DeleteSvg'
 import MarkdownRenderer from './markdown-renderer'
 import './message-bubble.scss'
 import { showToast } from '@/ui/components/shared/Toast'
-import { timeFormat } from '@/utils/time'
+import { timeFormat, formatDuration } from '@/utils/time'
 import { useRef, useState } from 'react'
 import CollapsedSvg from '@/ui/components/icons/CollapsedSvg'
 import ThinkSvg from '@/ui/components/icons/ThinkSvg'
@@ -147,6 +147,11 @@ export default function MessageBubble({
                               ? t('思考中...')
                               : t('思考过程')}
                         </span>
+                        {message.reasoningElapsedMs !== undefined && (
+                          <span className="reasoning-elapsed">
+                            {formatDuration(message.reasoningElapsedMs)}
+                          </span>
+                        )}
                         {!isReasoningTime && (
                           <CollapsedSvg
                             className={`collapsed-icon ${showReasoning ? 'collapsed' : ''}`}
@@ -160,6 +165,13 @@ export default function MessageBubble({
                         (!settingsState.value.hideToolCallThink ||
                           !message.toolCalls?.length))) && (
                       <div className={`reasoning-text`}>
+                        {!showContent &&
+                          message.reasoningElapsedMs !== undefined && (
+                            <span className="reasoning-elapsed-only">
+                              {t('思考耗时')}{' '}
+                              {formatDuration(message.reasoningElapsedMs)}
+                            </span>
+                          )}
                         <div
                           className={`line ${isReasoningTime ? 'reasoning' : ''}`}></div>
                         <MarkdownRenderer
