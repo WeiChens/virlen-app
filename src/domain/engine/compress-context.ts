@@ -9,6 +9,25 @@ import { ChatRequest } from '@/infrastructure/provider/types'
 import { providerPort } from '../provider'
 import { toolRegistry } from '../tools'
 import { AI_AGEMT_COMPRESS_CONTEXT_PROMPT } from '../agent'
+import { invoke } from '@tauri-apps/api/core'
+
+/**
+ * 估算 token 数 — 优先用 Rust 端 DeepSeek V3 tokenizer 精确计数，
+ * 不可用（非 Tauri 环境）时回退到字符数 / 4 的粗略估算。
+ */
+async function estimateTokens(...texts: string[]): Promise<number> {
+  const combined = texts.join('')
+  if (!combined) return 0
+  const fallback = () => Math.ceil(combined.length / 4)
+  try {
+    const n = await invoke<number>('cmd_count_tokens', { text: combined })
+    // 非 Tauri 环境（vitest）invoke 可能 resolve undefined，需校验
+    if (typeof n === 'number' && Number.isFinite(n) && n >= 0) return n
+    return fallback()
+  } catch {
+    return fallback()
+  }
+}
 
 /**
  * 压缩会话上下文 — 用 LLM 摘要替换早期对话历史
@@ -93,14 +112,15 @@ export async function compressContext(
       )
       .join('')
     const systemText = request.systemPrompt || ''
-    const estimatedInputTokens = Math.ceil(
-      (inputText.length + systemText.length) / 4,
-    )
-    const estimatedOutputTokens = Math.ceil(summaryContent.length / 4)
+    // DeepSeek tokenizer 精确计数（API 不返回 usage，需自行计算）
+    const [promptTokens, completionTokens] = await Promise.all([
+      estimateTokens(inputText, systemText),
+      estimateTokens(summaryContent),
+    ])
     usage = {
-      promptTokens: estimatedInputTokens,
-      completionTokens: estimatedOutputTokens,
-      totalTokens: estimatedInputTokens + estimatedOutputTokens,
+      promptTokens,
+      completionTokens,
+      totalTokens: promptTokens + completionTokens,
     }
   } catch (e: any) {
     console.error('上下文压缩失败:', e)

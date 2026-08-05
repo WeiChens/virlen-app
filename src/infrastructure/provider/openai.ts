@@ -312,8 +312,14 @@ export class OpenAiProvider implements IProvider {
       body.tool_choice = request.tool_choice
     }
 
-    // 推理努力程度（OpenAI o 系列模型：low / medium / high）
-    if (request.reasoningEffort) {
+    // thinking 模式控制（优先于 reasoningEffort）
+    // - DeepSeek reasoner：thinking: { type: 'disabled' }
+    // - OpenAI 兼容 / o 系列：reasoning_effort: 'none' 禁用思考
+    if (request.thinking === false) {
+      body.thinking = { type: 'disabled' }
+      body.reasoning_effort = 'none'
+    } else if (request.reasoningEffort) {
+      // 推理努力程度（OpenAI o 系列模型：low / medium / high）
       body.reasoning_effort = request.reasoningEffort
     }
 

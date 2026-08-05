@@ -49,6 +49,10 @@
     .tool-call-status {
       color: var(--error-color, #ef4444);
     }
+    & + .error {
+      margin: 0 20px;
+      font-size: var(--font-size-ms);
+    }
   }
 
   .tool-call-short-text {

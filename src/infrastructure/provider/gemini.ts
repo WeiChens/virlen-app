@@ -326,6 +326,12 @@ export class GeminiProvider implements IProvider {
       body.tool_choice = request.tool_choice
     }
 
+    // thinking 模式控制（Gemini thinkingConfig：thinkingBudget=0 禁用思考）
+    if (request.thinking === false) {
+      body.generationConfig = body.generationConfig || {}
+      body.generationConfig.thinkingConfig = { thinkingBudget: 0 }
+    }
+
     return body
   }
 

@@ -34,6 +34,7 @@ import { providerPort } from '../provider'
 import { toolRegistry } from '../tools'
 import { AgentEnginePort } from '../ports'
 import { compressContext } from './compress-context'
+import { generateTitle } from './generate-title'
 import { IterationController } from './iteration-controller'
 import type { IProvider } from '@/infrastructure/provider/types'
 import type { ToolDefinition, ToolExecutorResponse } from '../tools/types'
@@ -44,6 +45,9 @@ export class AgentEngine implements AgentEnginePort {
     allMessages: Message[],
   ): Promise<{ summary?: string; messages: Message[] }> {
     return compressContext(session, allMessages)
+  }
+  generateTitle(session: Session, messages: Message[]): Promise<string> {
+    return generateTitle(session, messages)
   }
   private abortControllers: Map<string, AbortController> = new Map()
   private runSnapshots: Map<string, RunSnapshot> = new Map()

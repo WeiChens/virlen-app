@@ -394,4 +394,12 @@ export const rustEngine: AgentEnginePort = {
     // 上下文压缩暂由 TS 引擎提供（非聊天循环核心）
     return agentEngine.compressContext(session, allMessages)
   },
+
+  async generateTitle(
+    session: Session,
+    messages: Message[],
+  ): Promise<string> {
+    // 标题生成暂由 TS 引擎提供（非聊天循环核心，走同一 provider 通道）
+    return agentEngine.generateTitle(session, messages)
+  },
 }

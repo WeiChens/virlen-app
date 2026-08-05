@@ -4,6 +4,7 @@ use tauri::Manager;
 
 mod agent;
 mod common_service;
+mod deepseek_tokenizer;
 mod file_ops;
 mod load_env;
 mod rag;
@@ -253,6 +254,9 @@ pub fn run() {
 
             vision_service::setup_vision(app)?;
 
+            // 预热 DeepSeek tokenizer（后台线程解析，不阻塞启动；失败静默）
+            deepseek_tokenizer::prewarm(app.handle());
+
             // macOS: visible=false 会阻止 WKWebView 加载 JS，导致窗口永远无法通过 JS show()
             // 因此 macOS 上不做白屏优化，直接显示窗口
             #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
@@ -316,6 +320,8 @@ pub fn run() {
             session_db::cmd_delete_session,
             session_db::cmd_replace_session_messages,
             session_db::cmd_append_messages,
+            // DeepSeek tokenizer（token 计数）
+            deepseek_tokenizer::cmd_count_tokens,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

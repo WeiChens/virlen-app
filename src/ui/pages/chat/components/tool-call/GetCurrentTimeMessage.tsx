@@ -26,7 +26,7 @@ class GetCurrentTimeMessage implements IToolCallMessage {
       }
       return <div>{body}</div>
     } catch {
-      return <div>{t('解析异常')}</div>
+      return <div className="error">{t('解析异常')}</div>
     }
   }
   diyWrapper(): boolean {

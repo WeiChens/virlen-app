@@ -68,6 +68,37 @@ fn text_of_content(content: &Value) -> String {
     }
 }
 
+/// 本地图片伪视觉分析 — 处理消息 content（对齐 TS `visionInject.ts processVisionContent`）
+///
+/// 当 user 消息标记了 `imageVisionAnalyzeOptimize=true` 且带 `imageVisionAnalyzeResult` 时：
+/// - 移除 image_url 块（不把原始 base64 图片发给纯文本 LLM）
+/// - 追加 `\n\n{分析结果}` 文本块
+/// 否则返回 None（content 原样发送）
+fn process_vision_content(msg: &Message) -> Option<Value> {
+    let result = msg.image_vision_analyze_result.as_deref().unwrap_or("");
+    if msg.role != "user"
+        || msg.image_vision_analyze_optimize != Some(true)
+        || result.is_empty()
+    {
+        return None;
+    }
+
+    // 确保 content 是数组格式
+    let mut blocks: Vec<Value> = match &msg.content {
+        Value::Array(arr) => arr.clone(),
+        Value::String(s) if !s.is_empty() => vec![json!({ "type": "text", "text": s })],
+        _ => Vec::new(),
+    };
+
+    // 过滤掉 image_url 块
+    blocks.retain(|b| b.get("type").and_then(Value::as_str) != Some("image_url"));
+
+    // 追加分析结果文本（已由前端按多图格式组装好）
+    blocks.push(json!({ "type": "text", "text": format!("\n\n{}", result) }));
+
+    Some(Value::Array(blocks))
+}
+
 // ==================== OpenAI 兼容 Provider ====================
 
 pub struct NativeOpenAiProvider {
@@ -120,9 +151,12 @@ impl NativeOpenAiProvider {
 
             let mut formatted = serde_json::Map::new();
             formatted.insert("role".into(), Value::String(msg.role.clone()));
-            formatted.insert("content".into(), content_to_value(msg));
-
-            // 视觉分析优化字段暂不处理（桥接 JS 时由 JS 侧处理）
+            // 本地图片伪视觉分析：将图片替换为分析文本（纯文本模型不支持 image 类型）
+            if let Some(processed) = process_vision_content(msg) {
+                formatted.insert("content".into(), processed);
+            } else {
+                formatted.insert("content".into(), content_to_value(msg));
+            }
 
             if let Some(tcs) = &msg.tool_calls {
                 if !tcs.is_empty() {
@@ -583,6 +617,10 @@ impl NativeAnthropicProvider {
                     }
                 }
                 _ => {}
+            }
+            // 本地图片伪视觉分析：将图片替换为分析文本（纯文本模型不支持 image 类型）
+            if let Some(processed) = process_vision_content(msg) {
+                blocks = processed.as_array().cloned().unwrap_or_default();
             }
             messages.push(json!({ "role": "user", "content": blocks }));
         }
@@ -1087,4 +1125,151 @@ async fn read_sse_lines(
         }
     }
     Ok(())
+}
+
+// ==================== 测试 ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn msg(
+        role: &str,
+        content: Value,
+        optimize: Option<bool>,
+        result: Option<&str>,
+    ) -> Message {
+        Message {
+            id: "1".into(),
+            role: role.into(),
+            content,
+            tool_calls: None,
+            reasoning_content: None,
+            tool_call_id: None,
+            is_error: None,
+            elapsed_ms: None,
+            reasoning_elapsed_ms: None,
+            ui_data: None,
+            timestamp: 0,
+            streaming: None,
+            model: None,
+            usage: None,
+            image_vision_analyze_optimize: optimize,
+            image_vision_analyze_result: result.map(String::from),
+        }
+    }
+
+    fn chat_request(messages: Vec<Message>) -> ChatRequest {
+        ChatRequest {
+            model: "m".into(),
+            messages,
+            system_prompt: None,
+            tools: vec![],
+            temperature: 0.7,
+            top_p: 1.0,
+            max_tokens: 100,
+            stream: false,
+            tool_choice: "none".into(),
+            reasoning_effort: None,
+        }
+    }
+
+    #[test]
+    fn vision_process_filters_image_and_appends_result() {
+        let m = msg(
+            "user",
+            json!([
+                { "type": "text", "text": "看下这张图" },
+                { "type": "image_url", "image_url": { "url": "data:image/png;base64,xxx" } }
+            ]),
+            Some(true),
+            Some("用户上传了1张图片\n\n第1张图片\n[分析结果]"),
+        );
+        let processed = process_vision_content(&m).expect("应返回处理结果");
+        let blocks = processed.as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[0]["text"], "看下这张图");
+        assert_eq!(blocks[1]["type"], "text");
+        assert!(blocks[1]["text"].as_str().unwrap().contains("分析结果"));
+        assert!(!processed.to_string().contains("image_url"));
+    }
+
+    #[test]
+    fn vision_process_string_content_becomes_blocks() {
+        let m = msg("user", json!("看图"), Some(true), Some("分析结果"));
+        let processed = process_vision_content(&m).unwrap();
+        let blocks = processed.as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["text"], "看图");
+        assert!(blocks[1]["text"].as_str().unwrap().contains("分析结果"));
+    }
+
+    #[test]
+    fn vision_process_skips_non_user_or_unmarked() {
+        // 非 user 消息
+        let m = msg("assistant", json!("hi"), Some(true), Some("结果"));
+        assert!(process_vision_content(&m).is_none());
+        // optimize=false
+        let m = msg("user", json!("hi"), Some(false), Some("结果"));
+        assert!(process_vision_content(&m).is_none());
+        // result 为空字符串
+        let m = msg("user", json!("hi"), Some(true), Some(""));
+        assert!(process_vision_content(&m).is_none());
+        // 未标记
+        let m = msg("user", json!("hi"), None, None);
+        assert!(process_vision_content(&m).is_none());
+    }
+
+    #[test]
+    fn openai_build_request_injects_vision_result() {
+        let p = NativeOpenAiProvider::new("test", "key", "https://api.test.com");
+        let request = chat_request(vec![msg(
+            "user",
+            json!([
+                { "type": "text", "text": "描述这张图" },
+                { "type": "image_url", "image_url": { "url": "data:image/png;base64,xxx" } }
+            ]),
+            Some(true),
+            Some("图中有一只猫"),
+        )]);
+        let body = p.build_request(&request);
+        let body_str = body.to_string();
+        assert!(!body_str.contains("image_url"));
+        assert!(body_str.contains("图中有一只猫"));
+    }
+
+    #[test]
+    fn openai_build_request_keeps_image_without_optimize() {
+        let p = NativeOpenAiProvider::new("test", "key", "https://api.test.com");
+        let request = chat_request(vec![msg(
+            "user",
+            json!([
+                { "type": "text", "text": "描述这张图" },
+                { "type": "image_url", "image_url": { "url": "data:image/png;base64,xxx" } }
+            ]),
+            None,
+            None,
+        )]);
+        let body = p.build_request(&request);
+        assert!(body.to_string().contains("image_url"));
+    }
+
+    #[test]
+    fn anthropic_build_request_injects_vision_result() {
+        let p = NativeAnthropicProvider::new("test", "key", "https://api.test.com");
+        let request = chat_request(vec![msg(
+            "user",
+            json!([
+                { "type": "text", "text": "描述这张图" },
+                { "type": "image_url", "image_url": { "url": "data:image/png;base64,xxx" } }
+            ]),
+            Some(true),
+            Some("图中有一只猫"),
+        )]);
+        let body = p.build_request(&request);
+        let body_str = body.to_string();
+        assert!(!body_str.contains("image_url"));
+        assert!(body_str.contains("图中有一只猫"));
+    }
 }

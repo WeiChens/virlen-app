@@ -118,14 +118,16 @@ agent:provider-request { requestId, providerType, providerId, apiKey, baseUrl, r
 
 ## 七、测试与验证
 
-- Rust：`cargo test` → 91 通过（agent + RAG + session_db）
+- Rust：`cargo test` → 101 通过（agent + RAG + session_db + deepseek_tokenizer + provider）
   - `engine::tests::normal_loop_tool_then_text`：完整循环（LLM→工具→结果→stream_end）
   - `engine::tests::tool_interaction_routes_session`：交互桥 sessionId 路由
   - `engine::tests::cancel_is_not_error_and_keeps_partial`：用户取消不当作错误、partial 保留
   - `native_tools::tests::test_native_dispatcher_write_read_search`：原生工具分发链路
   - `session_db::tests::*`：SQLite 会话/消息读写、幂等、替换、删除、排序
+  - `deepseek_tokenizer::tests::*`：字节级 BPE 与官方 transformers 输出对齐、字节表、切分
+  - `provider::tests::*`：本地图片伪视觉分析（imageVisionAnalyzeOptimize）注入、OpenAI/Anthropic 请求体
   - `storm_breaker / run_state / cancellation / verifier / iteration` 单元测试
-- TS：`npx tsc --noEmit` 零错误；`npx vitest run` 325 通过
+- TS：`npx tsc --noEmit` 零错误；`npx vitest run` 346 通过
 
 ## 八、P2：高价值工具原生 Rust 化
 
@@ -251,10 +253,12 @@ pub trait SessionRepo: Send + Sync {
 ## 十、已知限制
 
 1. **Gemini 桥接**：未原生 HTTP，仍走 JS provider（且 TS Gemini 存在 #1 多轮工具 bug，可顺带修复）
-2. **compressContext** 仍由 TS 引擎提供（非聊天循环核心）
-3. **`maxToolRounds` 迭代模式**：#5 旧问题在 Rust 版 iteration 中同样存在（暂未修）
-4. **图片视觉分析优化字段**（`imageVisionAnalyzeOptimize`）原生 OpenAI 请求未注入分析结果
-   （JS 桥路径不受影响）
+2. **compressContext** 仍由 TS 引擎提供（非聊天循环核心）；usage 的 token 估算已 Rust 化：
+   调用 `deepseek_tokenizer::cmd_count_tokens`（DeepSeek V3 字节级 BPE 精确计数，
+   资源 `resources/deepseek_tokenizer/tokenizer.json`，启动后台预热），非 Tauri 环境回退「字符数/4」
+3. **`generateTitle` 会话标题生成**：仍由 TS 引擎提供（非聊天循环核心；失败自动回退用户消息截取；
+   `thinking: false` 禁用思考，避免 maxTokens 被 reasoning 消耗导致标题为空）
+4. **`maxToolRounds` 迭代模式**：#5 旧问题在 Rust 版 iteration 中同样存在（暂未修）
 5. **原生 execute_command 无流式输出**：结果在命令结束后一次性返回（JS 桥路径可通过
    `toolOutputStore` 实时刷新终端）。后续可增加 `tool:output` 事件桥
 6. **Linux execute_command 未做 unshare 只读保护**（JS 版有 mount namespace 保护技能目录）
@@ -267,6 +271,49 @@ pub trait SessionRepo: Send + Sync {
    `clearSessionMessages` 只改内存态，DB 中旧消息可能残留（Rust 引擎路径与 TS 引擎路径的
    `addSessionMessage`/`stream_end` 落库不受影响）
 10. **非 Tauri / SQLite 初始化失败**：回退 `NoopSessionRepo`，会话不持久化（聊天功能不受影响）
+
+## 附：JS 端有但 Rust 暂不处理的功能清单
+
+> 以下功能目前由 JS 提供（Rust 引擎通过双向桥 / 直接委托回 JS），
+> 作为后续 Rust 化的候选清单。已 Rust 化的功能不在此列。
+
+### 1. Provider 层
+
+| 功能 | TS 实现 | Rust 现状 |
+|---|---|---|
+| Gemini 原生 HTTP | `infrastructure/provider/gemini.ts` | 无原生，走 JS 桥（`BridgedProvider`） |
+| provider `listModels` / `validateApiKey` | 各 TS provider | 无原生（配置 UI 用，非聊天核心） |
+
+### 2. 引擎层
+
+| 功能 | TS 实现 | Rust 现状 |
+|---|---|---|
+| `compressContext` 上下文压缩 | `domain/engine/compress-context.ts` | 无（TS 提供；usage token 计数已 Rust 化：`cmd_count_tokens`） |
+| `generateTitle` 标题生成 | `domain/engine/generate-title.ts` | 无（TS 提供；`thinking:false` 禁用思考） |
+
+### 3. 工具层（`is_native_tool` 未覆盖 → 走 JS 桥）
+
+| 工具 | TS 实现 | 说明 |
+|---|---|---|
+| `get_current_time` | `infrastructure/tools/builtin/index.ts` | 简单工具，适合首批原生化 |
+| `user_choice` | `infrastructure/tools/builtin/index.ts` | 需用户交互（`UserInteractionRequired` 信号）；`NativeToolOutcome` 已保留交互变体 |
+| `web_fetch` | `infrastructure/tools/builtin/web-fetch.ts` | 需处理重定向/超时/HTML→MD |
+| `web_search` | `builtin/web-search.ts` + `search-providers/`（tavily/searxng/bocha） | 多搜索提供商适配 |
+| `list_skills` | `infrastructure/tools/skill-tools/index.ts` | 技能扫描 |
+| `read_skill_source` | `infrastructure/tools/skill-tools/index.ts` | 读取技能源码目录 |
+| `vision_analyze`（工具分发） | `infrastructure/tools/vision/index.ts` | 分发走 JS 桥；底层 `vision_service` 已是 Rust Tauri 命令 |
+
+### 4. 系统提示词组装
+
+| 功能 | TS 实现 | Rust 现状 |
+|---|---|---|
+| `assembleAgentPrompt`（tool-call-spec + core-principles + 环境提示 + 角色/性格 + 技能注入） | `services/agent-service.ts` + `domain/agent/prompts/*.md` | 无；Rust 仅使用前端组装好的 `session.systemPrompt`，为空时回退 `"你是一个有用的 AI 助手。"` |
+
+### 5. 前端职责（天然 JS，无需 Rust 化）
+
+UI 渲染 / 设置管理 / i18n、`export-service` Markdown 导出、`download-service`、
+`update-service` 自动更新、`toolOutputStore` 终端输出流、`command-approval` 审批 UI、
+`search-provider-service` 搜索配置等。
 
 ## 十一、实施记录
 

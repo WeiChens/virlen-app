@@ -31,7 +31,8 @@
     "targets": "all",
     "resources": [
       "resources/default-skills",
-      "resources/quasivision_models"
+      "resources/quasivision_models",
+      "resources/deepseek_tokenizer"
     ],
     "icon": [
       "icons/32x32.png",

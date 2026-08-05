@@ -38,6 +38,12 @@ export interface ChatRequest {
   tool_choice: 'none' | 'auto'
   /** 推理努力程度（如 OpenAI o 系列模型的 reasoning_effort） */
   reasoningEffort?: string
+  /**
+   * 是否启用思考/推理模式（DeepSeek reasoner / OpenAI o 系列 / Anthropic extended thinking / Gemini thinking）。
+   * 默认 true（不传或 true 保持模型默认行为）；false 时在请求中显式禁用，
+   * 避免 maxTokens 被思考内容（reasoning_content）消耗殆尽、正文无输出。
+   */
+  thinking?: boolean
 }
 /** Chat 完成请求参数（原始格式） */
 export interface ChatCompletionRequest {

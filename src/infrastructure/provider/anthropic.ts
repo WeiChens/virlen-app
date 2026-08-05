@@ -484,6 +484,11 @@ export class AnthropicProvider implements IProvider {
       body.tool_choice = { type: 'none' }
     }
 
+    // thinking 模式控制（Anthropic extended thinking）
+    if (request.thinking === false) {
+      body.thinking = { type: 'disabled' }
+    }
+
     return body
   }
 

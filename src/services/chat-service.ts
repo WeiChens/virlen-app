@@ -560,12 +560,27 @@ async function finishWorking(
   }
 
   // 自动设置标题（仅 session 标题仍为默认值时触发一次）
+  // 优先让 AI 生成标题，失败则回退到用户消息截取
   if (!isPaused && content) {
     const updatedSession = sessionStore.getSession(sessionId)
     if (updatedSession && updatedSession.title === '新对话') {
       const text = extractText(content)
-      const title = text.slice(0, 30) + (text.length > 30 ? '...' : '')
-      sessionStore.updateSession(sessionId, { title })
+      const fallbackTitle = text.slice(0, 30) + (text.length > 30 ? '...' : '')
+      let title = fallbackTitle
+      try {
+        const aiTitle = await getEngine().generateTitle(
+          updatedSession,
+          getSessionMessages(sessionId),
+        )
+        if (aiTitle) title = aiTitle
+      } catch (e) {
+        console.warn('[chat-service] AI 生成标题失败，回退到用户消息截取:', e)
+      }
+      // 二次检查：标题可能已被用户手动修改或并发设置
+      const current = sessionStore.getSession(sessionId)
+      if (current && current.title === '新对话') {
+        sessionStore.updateSession(sessionId, { title })
+      }
     }
   }
 }
