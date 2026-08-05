@@ -27,6 +27,9 @@
 - **Pause/Resume**: Supports pausing and resuming during Tool Call execution (Run Snapshot model)
 - **Context Compression**: LLM-powered intelligent context compression for long conversations without token overflow
 - **Search Providers**: Pluggable search provider architecture supporting Tavily, Bocha, SearXNG, and more
+- **Rust Native Engine**: The agent loop, tool execution & SQLite session persistence run natively in Rust (enabled by default) — conversations survive even if the WebView UI stalls
+- **DeepSeek Tokenizer**: Accurate token counting in Rust (byte-level BPE) for usage estimation when the API doesn't return token counts
+- **AI-Generated Titles**: Auto-title conversations with the LLM (falls back to user-message truncation), with `thinking: false` to avoid reasoning consuming the token budget
 
 ---
 
@@ -182,6 +185,20 @@ User Message → AgentEngine.sendMessage()
                             then resume (Run Snapshot)
 ```
 
+### Rust Native Engine
+
+Since P1–P3, the core engine has been progressively ported to Rust (`src-tauri/src/agent/`) and is **enabled by default** (`useRustEngine`):
+
+- **Chat loop**: LLM round → tool execution → result merge, pause/resume via Run Snapshot, cancellation handling
+- **SQLite session persistence**: sessions & messages are written directly to `virlen.db` by Rust (WAL + single-writer + `spawn_blocking`) — no IndexedDB, no dependency on the JS thread
+- **Native tools**: 16 high-value tools (file ops, command execution, search, knowledge base) execute natively in Rust; the rest fall back to the JS bridge
+- **DeepSeek V3 tokenizer**: byte-level BPE token counting (`cmd_count_tokens`) powers accurate usage estimation in context compression
+- **Pseudo-vision analysis**: for text-only models, image blocks are replaced with local vision-analysis text natively in Rust
+
+Functions still provided by JS (bridged): **Gemini provider**, `compressContext`, `generateTitle`, and 7 low-frequency tools (`get_current_time`, `user_choice`, `web_fetch`, `web_search`, `list_skills`, `read_skill_source`, `vision_analyze` dispatch). See `docs/rust-engine.md` for the full matrix.
+
+Test status: `cargo test` **101 passed** · `npx vitest run` **346 passed** · `tsc --noEmit` zero errors.
+
 ---
 
 ## 🔌 Supported LLM Providers
@@ -328,6 +345,11 @@ Virlen features the built-in **Quasivision** vision engine (ONNX Runtime), with 
 | [Image](https://crates.io/crates/image)                  | Image encoding/decoding                     |
 | [Base64](https://crates.io/crates/base64)                | Base64 encoding/decoding                    |
 | [Encoding_rs](https://crates.io/crates/encoding_rs)      | Multi-encoding support                      |
+| [Rusqlite](https://crates.io/crates/rusqlite)            | SQLite session/message persistence (bundled, WAL) |
+| [Turbovec](https://crates.io/crates/turbovec)            | Vector index for local RAG (quantized + SIMD) |
+| [Reqwest](https://crates.io/crates/reqwest)              | Async HTTP client (native LLM providers)    |
+| [Once_cell](https://crates.io/crates/once_cell)          | Lazy static initialization (tokenizer singleton) |
+| [Async-trait](https://crates.io/crates/async-trait)      | Async trait objects (Provider / SessionRepo) |
 
 ---
 
@@ -347,15 +369,20 @@ virlen-app/
 ├── src-tauri/                # Rust backend
 │   ├── src/                  # Rust source code
 │   │   ├── lib.rs            # Main entry (Tauri command registration)
+│   │   ├── agent/            # Native agent engine (chat loop, native tools, provider)
+│   │   ├── session_db.rs     # SQLite session/message persistence (WAL + single-writer)
+│   │   ├── deepseek_tokenizer.rs # DeepSeek V3 byte-level BPE token counter
+│   │   ├── rag/              # Local RAG (knowledge base, vector index, embeddings)
 │   │   ├── file_ops.rs       # File operations
 │   │   ├── search.rs         # File search
 │   │   ├── vision_service.rs # Vision service
 │   │   ├── common_service.rs # Common service
 │   │   ├── load_env.rs       # Environment info
 │   │   └── task_manager.rs   # Task management (cancellation)
-│   ├── resources/            # Resource files (skills, vision models)
+│   ├── resources/            # Resource files (skills, vision models, tokenizer)
 │   │   ├── default-skills/   # Built-in skill definitions
-│   │   └── quasivision_models/ # Vision AI models
+│   │   ├── quasivision_models/ # Vision AI models
+│   │   └── deepseek_tokenizer/ # DeepSeek V3 tokenizer.json (token counting)
 │   ├── icons/                # App icons
 │   └── tauri.conf.json       # Tauri configuration
 ├── tests/                   # Unit tests

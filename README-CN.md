@@ -30,6 +30,9 @@
 - **暂停/恢复**：Tool Call 执行过程中支持暂停和断点续传（Run Snapshot 模型）
 - **上下文压缩**：基于 LLM 的智能上下文压缩，支持超长对话而无需担心 Token 溢出
 - **搜索供应商**：可插拔的搜索供应商架构，支持 Tavily、Bocha、SearXNG 等搜索引擎
+- **Rust 原生引擎**：Agent 循环、工具执行与 SQLite 会话持久化均在 Rust 端原生运行（默认开启）——即使 WebView UI 卡住，对话数据也不丢失
+- **DeepSeek Tokenizer**：Rust 端字节级 BPE 精确 token 计数，用于 API 不返回 usage 时的用量估算
+- **AI 生成标题**：自动为会话生成标题（失败回退用户消息截取），并支持 `thinking: false` 禁用思考，避免 maxTokens 被 reasoning 消耗
 
 ---
 
@@ -184,6 +187,20 @@ src/
             LLM 调用     确认后恢复(Run Snapshot)
 ```
 
+### Rust 原生引擎
+
+自 P1–P3 起，核心引擎已逐步移植到 Rust（`src-tauri/src/agent/`）并**默认开启**（`useRustEngine`）：
+
+- **聊天循环**：LLM 轮次 → 工具执行 → 结果合并，支持 Run Snapshot 暂停/恢复、取消处理
+- **SQLite 会话持久化**：会话与消息由 Rust 直接写入 `virlen.db`（WAL + 单写连接 + `spawn_blocking`）——不再使用 IndexedDB，不依赖 JS 线程
+- **原生工具**：16 个高价值工具（文件操作、命令执行、搜索、知识库）在 Rust 端原生执行，其余回退 JS 桥
+- **DeepSeek V3 tokenizer**：字节级 BPE token 计数（`cmd_count_tokens`），为上下文压缩提供精确 usage 估算
+- **图片伪视觉分析**：纯文本模型场景下，图片块在 Rust 端原生替换为本地视觉分析文本
+
+仍由 JS 提供（桥接）的功能：**Gemini Provider**、`compressContext`、`generateTitle`，以及 7 个低频工具（`get_current_time`、`user_choice`、`web_fetch`、`web_search`、`list_skills`、`read_skill_source`、`vision_analyze` 分发）。完整矩阵见 `docs/rust-engine.md`。
+
+测试状态：`cargo test` **101 通过** · `npx vitest run` **346 通过** · `tsc --noEmit` 零错误。
+
 ---
 
 ## 🔌 支持的 LLM Provider
@@ -330,6 +347,11 @@ Virlen 未霖 内置了 **Quasivision** 视觉引擎（ONNX Runtime），所有�
 | [Image](https://crates.io/crates/image)                 | 图片编解码                                    |
 | [Base64](https://crates.io/crates/base64)               | Base64 编解码                                 |
 | [Encoding_rs](https://crates.io/crates/encoding_rs)     | 多编码支持                                    |
+| [Rusqlite](https://crates.io/crates/rusqlite)           | SQLite 会话/消息持久化（内置编译、WAL）        |
+| [Turbovec](https://crates.io/crates/turbovec)           | 本地 RAG 向量索引（量化 + SIMD）              |
+| [Reqwest](https://crates.io/crates/reqwest)             | 异步 HTTP 客户端（原生 LLM Provider）         |
+| [Once_cell](https://crates.io/crates/once_cell)         | 惰性静态初始化（tokenizer 单例）              |
+| [Async-trait](https://crates.io/crates/async-trait)     | 异步 trait 对象（Provider / SessionRepo）     |
 
 ---
 
@@ -349,15 +371,20 @@ virlen-app/
 ├── src-tauri/                # Rust 后端
 │   ├── src/                  # Rust 源码
 │   │   ├── lib.rs            # 主入口（Tauri 命令注册）
+│   │   ├── agent/            # 原生 Agent 引擎（聊天循环、原生工具、Provider）
+│   │   ├── session_db.rs     # SQLite 会话/消息持久化（WAL + 单写连接）
+│   │   ├── deepseek_tokenizer.rs # DeepSeek V3 字节级 BPE token 计数
+│   │   ├── rag/              # 本地 RAG（知识库、向量索引、Embedding）
 │   │   ├── file_ops.rs       # 文件操作
 │   │   ├── search.rs         # 文件搜索
 │   │   ├── vision_service.rs # 视觉服务
 │   │   ├── common_service.rs # 通用服务
 │   │   ├── load_env.rs       # 环境信息
 │   │   └── task_manager.rs   # 任务管理（取消）
-│   ├── resources/            # 资源文件（技能、视觉模型）
+│   ├── resources/            # 资源文件（技能、视觉模型、tokenizer）
 │   │   ├── default-skills/   # 内置技能定义
-│   │   └── quasivision_models/ # 视觉 AI 模型
+│   │   ├── quasivision_models/ # 视觉 AI 模型
+│   │   └── deepseek_tokenizer/ # DeepSeek V3 tokenizer.json（token 计数）
 │   ├── icons/                # 应用图标
 │   └── tauri.conf.json       # Tauri 配置
 ├── tests/                   # 单元测试
