@@ -15,17 +15,15 @@
 import type { Message, Session, AgentEventCallback } from '@/types'
 import type { IProvider } from '@/infrastructure/provider/types'
 import type { ToolDefinition } from '../tools/types'
-import type { RunSnapshot, ToolCallContext } from './types'
 import type {
   Goal,
   IterationSession,
   IterationEventCallback,
+  VerificationResult,
 } from './iteration-types'
 import { buildFeedbackMessage } from './iteration-types'
 import { llmVerifier } from './verifier'
-import { doLLMRound } from './llm-round'
-import { createRun, executeToolSteps } from './tool-executor'
-import { clearToolCallHistory } from './storm-breaker'
+import { executeLLMRound } from './llm-loop'
 
 /** 迭代控制器配置 */
 export interface IterationControllerConfig {
@@ -96,8 +94,6 @@ export class IterationController {
       clearSnapshot,
     } = params
 
-    const model = session.modelId
-
     const iterSession: IterationSession = {
       goal,
       currentIteration: 0,
@@ -120,71 +116,32 @@ export class IterationController {
         return { completed: false, messages }
       }
 
-      // ===== 1. LLM Round =====
-      // 拦截事件以捕获 assistant 消息（ctx 为 null 时需要用到）
-      let capturedAssistant: Message | null = null
-
-      const interceptOnEvent: AgentEventCallback = (event) => {
-        if (
-          event.type === 'assistant_message_created' &&
-          event.data?.message
-        ) {
-          capturedAssistant = { ...event.data.message }
-        }
-        if (
-          event.type === 'assistant_message_updated' &&
-          event.data?.patch &&
-          capturedAssistant
-        ) {
-          Object.assign(capturedAssistant, event.data.patch)
-        }
-        onEvent?.(event)
-      }
-
-      const ctx = await doLLMRound(
+      // ===== 1. LLM Round + 工具执行（共享编排） =====
+      const result = await executeLLMRound({
         session,
         provider,
-        toolDefs ?? [],
+        toolDefs: toolDefs ?? [],
         messages,
-        abortController.signal,
-        interceptOnEvent,
+        sessionId,
+        abortSignal: abortController.signal,
+        onEvent,
+        onUserInteraction,
+        skills,
         effectiveMaxTokens,
         reasoningEffort,
-      )
+        persistSnapshot,
+        clearSnapshot,
+      })
 
-      if (ctx) {
-        // ===== 有 tool calls：执行工具 → 验证 =====
-        messages.push(ctx.assistantMessage)
-        this.#finalizeAssistantRound(ctx, model, onEvent)
+      // 将本轮 assistant 消息与 tool result 消息加入消息列表（供验证器使用）
+      messages.push(result.assistantMessage)
+      for (const msg of result.toolResultMessages) {
+        messages.push(msg)
+      }
 
-        const run = createRun(sessionId, ctx)
-        persistSnapshot(sessionId, run)
-
-        const { completed: toolsDone, toolResultMessages } =
-          await executeToolSteps(
-            run,
-            abortController.signal,
-            onEvent,
-            onUserInteraction,
-            skills,
-            (r) => persistSnapshot(sessionId, r),
-          )
-
-        for (const msg of toolResultMessages) {
-          messages.push(msg)
-        }
-
-        if (!toolsDone) {
-          return { completed: false, messages }
-        }
-
-        clearSnapshot(sessionId)
-      } else {
-        // ===== 没有 tool calls：LLM 直接给出了文字回答 =====
-        // 把捕获到的 assistant 消息加入消息列表，供验证器使用
-        if (capturedAssistant) {
-          messages.push(capturedAssistant)
-        }
+      // 被暂停（用户暂存）或取消：快照保留，供断点恢复
+      if (result.paused) {
+        return { completed: false, messages }
       }
 
       // ===== 2. 验证 =====
@@ -193,12 +150,39 @@ export class IterationController {
         data: { iteration: iterSession.currentIteration },
       })
 
-      const verifyResult = await llmVerifier.verify(
-        provider,
-        session,
-        goal,
-        messages,
-      )
+      let verifyResult: VerificationResult
+      try {
+        verifyResult = await llmVerifier.verify(
+          provider,
+          session,
+          goal,
+          messages,
+          abortController.signal,
+        )
+      } catch (e) {
+        // 验证被用户取消：立即结束，不再注入反馈
+        if (abortController.signal.aborted) {
+          return { completed: false, messages }
+        }
+        // 验证调用异常：按未通过处理，让下一轮继续
+        const errMsg = (e as any)?.message || String(e)
+        verifyResult = {
+          passed: false,
+          summary: `验证调用失败: ${errMsg}`,
+          issues: [
+            {
+              severity: 'error',
+              description: `验证 LLM 调用失败: ${errMsg}`,
+              suggestion: '请检查 provider 配置或网络连接后重试',
+            },
+          ],
+        }
+      }
+
+      // 验证期间用户取消：停止迭代
+      if (abortController.signal.aborted) {
+        return { completed: false, messages }
+      }
 
       this.config.onIterationEvent({
         type: 'iteration_verify_end',
@@ -271,30 +255,6 @@ export class IterationController {
     })
 
     return { completed: true, messages }
-  }
-
-  /** 完成一轮 assistant 消息的流式标记 */
-  #finalizeAssistantRound(
-    ctx: ToolCallContext,
-    model: string,
-    onEvent?: AgentEventCallback,
-  ): void {
-    ctx.assistantMessage.streaming = false
-    onEvent?.({
-      type: 'assistant_message_updated',
-      data: {
-        messageId: ctx.assistantMessage.id,
-        patch: {
-          content: ctx.assistantMessage.content,
-          streaming: false,
-          toolCalls: ctx.assistantMessage.toolCalls,
-          reasoningContent: ctx.assistantMessage.reasoningContent,
-          reasoningElapsedMs: ctx.assistantMessage.reasoningElapsedMs,
-          usage: ctx.assistantMessage.usage,
-          model,
-        },
-      },
-    })
   }
 
   /** 构建失败报告消息 */

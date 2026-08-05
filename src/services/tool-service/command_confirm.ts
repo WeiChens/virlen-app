@@ -35,24 +35,33 @@ export function createCommandConfirmHandles(
   let interactionReject: ((reason: any) => void) | null = null
   let pendingCommand = ''
   let pendingToolCallId = ''
+  let pendingApprovalId = ''
 
   const offResolve = toolInteractEvent.on(
     'commandResolve',
     async (_value: string) => {
       const resolve = interactionResolve
       const toolCallId = pendingToolCallId
+      const approvalId = pendingApprovalId
       interactionResolve = null
       interactionReject = null
       pendingCommand = ''
       pendingToolCallId = ''
+      pendingApprovalId = ''
 
       if (!resolve) return
 
       try {
         const result = {
-          result: null as Promise<ToolExecutorResponse>,
+          result: null as Promise<ToolExecutorResponse> | null,
         }
-        toolInteractEvent.emit('userAllowCmd', sessionId, toolCallId, result)
+        toolInteractEvent.emit(
+          'userAllowCmd',
+          approvalId,
+          sessionId,
+          toolCallId,
+          result,
+        )
         if (result.result == null) {
           resolve('[error] command not found')
           return
@@ -68,6 +77,8 @@ export function createCommandConfirmHandles(
   const offReject = toolInteractEvent.on('commandReject', (reason: string) => {
     const reject = interactionReject
     const cmd = pendingCommand
+    const toolCallId = pendingToolCallId
+    const approvalId = pendingApprovalId
     interactionResolve = null
     interactionReject = null
     // pendingCommand = ''
@@ -76,11 +87,20 @@ export function createCommandConfirmHandles(
     if (reason.startsWith('shelve:')) {
       reject(new InteractionShelved(reason.slice(7)))
     } else {
+      // 通知 execute_command 侧清理待审批注册表，避免内存泄漏
+      if (approvalId) {
+        toolInteractEvent.emit(
+          'userCmdRejected',
+          approvalId,
+          sessionId,
+          toolCallId,
+        )
+      }
       reject(reason || 'cancelled')
       // 拒绝的命令也写一条记录到 tool output
       if (cmd) {
         try {
-          toolOutputStore.append(pendingToolCallId, `[User rejected] ${cmd}\n`)
+          toolOutputStore.append(toolCallId, `[User rejected] ${cmd}\n`)
         } catch {}
       }
     }
@@ -90,6 +110,7 @@ export function createCommandConfirmHandles(
     handler: async (_type: string, data: Record<string, any>) => {
       pendingCommand = data.command || ''
       pendingToolCallId = data.toolCallId || ''
+      pendingApprovalId = data.approvalId || ''
       return new Promise<ToolExecutorResponse>((resolve, reject) => {
         interactionResolve = resolve
         interactionReject = reject

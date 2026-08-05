@@ -5,6 +5,7 @@
  * - types.ts:           接口/类型定义 (SendMessageOptions, ToolCallContext)
  * - engine.ts:          AgentEngine 核心类 (sendMessage, snapshot管理)
  * - llm-round.ts:       LLM 调用处理 (doLLMRound, handleStreaming/NonStreaming, collectToolUse)
+ * - llm-loop.ts:        「LLM 调用 → 工具执行」共享编排 (executeLLMRound)
  * - tool-executor.ts:   Tool 执行处理 (executeToolSteps, executeSingleStep, handleUserInteraction, handleToolResult)
  * - compress-context.ts: 上下文压缩 (compressContext 独立纯函数)
  * - iteration-types.ts:  迭代循环类型定义 (Goal, VerificationResult, IterationSession 等)
@@ -15,6 +16,8 @@
 import { AgentEnginePort } from '@/domain/ports'
 import { AgentEngine } from './engine'
 export type { SendMessageOptions, ToolCallContext } from './types'
+export { executeLLMRound } from './llm-loop'
+export type { ExecuteLLMRoundParams, ExecuteLLMRoundResult } from './llm-loop'
 export type {
   Goal,
   VerificationResult,

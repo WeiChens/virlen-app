@@ -246,7 +246,7 @@ function collectToolUse(
 /**
  * 收到 tool calls 后结束 assistant 消息的 streaming 状态（通过事件通知）
  */
-function finalizeAssistantMessage(
+export function finalizeAssistantMessage(
   assistantMessage: Message,
   model: string,
   onEvent?: AgentEventCallback,

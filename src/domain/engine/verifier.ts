@@ -147,6 +147,7 @@ export class LLMVerifier {
    * @param session   当前会话
    * @param goal      用户目标
    * @param messages  包含执行轨迹的消息列表
+   * @param abortSignal 取消信号 — 用户取消时验证应被中断（不再注入反馈）
    * @returns 验证结果
    */
   async verify(
@@ -154,6 +155,7 @@ export class LLMVerifier {
     session: Session,
     goal: Goal,
     messages: Message[],
+    abortSignal?: AbortSignal,
   ): Promise<VerificationResult> {
     const verifyPrompt = buildVerifyPrompt(goal, messages)
 
@@ -178,12 +180,16 @@ export class LLMVerifier {
           stream: false,
           tool_choice: 'none', // 验证时不需要工具
         },
-        // 不传 abortSignal，验证不应被用户取消中断
+        abortSignal, // 尊重取消：用户取消时中断验证，避免继续消耗 token
       )
 
       const rawText = extractTextContent(response.content)
       return parseVerificationResult(rawText)
     } catch (e: any) {
+      // 验证被用户取消：向上抛出，让迭代控制器感知并停止
+      if (abortSignal?.aborted || e?.name === 'AbortError') {
+        throw e
+      }
       // 验证调用失败时返回未通过，让迭代循环继续或结束
       return {
         passed: false,

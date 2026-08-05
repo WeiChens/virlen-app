@@ -11,19 +11,20 @@
  *
  * 方法按职责拆分到独立模块：
  * - llm-round.ts: LLM 调用相关（doLLMRound, handleStreaming 等）
+ * - llm-loop.ts: 「LLM 调用 → 工具执行」共享编排（executeLLMRound）
  * - tool-executor.ts: Tool 执行相关（executeToolSteps, createRun 等）
  * - compress-context.ts: 上下文压缩（独立纯函数）
  * - types.ts: 类型定义
  */
 import { snapshotToRun } from './run-state'
-import type { Run, RunSnapshot, ToolCallContext } from './types'
+import type { Run, RunSnapshot } from './types'
 import type {
   Message,
   Session,
   AgentEventCallback,
 } from '@/types'
-import { doLLMRound } from './llm-round'
-import { createRun, executeToolSteps } from './tool-executor'
+import { executeToolSteps } from './tool-executor'
+import { executeLLMRound } from './llm-loop'
 import {
   clearToolCallHistory,
   clearAllToolCallHistories,
@@ -259,79 +260,39 @@ export class AgentEngine implements AgentEnginePort {
       effectiveMaxTokens,
       reasoningEffort,
     } = params
-    const model = session.modelId
 
     let rounds = remainingRounds
 
     while (rounds > 0) {
       rounds--
-      const ctx = await doLLMRound(
+      const result = await executeLLMRound({
         session,
         provider,
         toolDefs,
-        currentMessages,
-        abortController.signal,
-        onEvent,
-        effectiveMaxTokens,
-        reasoningEffort,
-      )
-
-      if (!ctx) break // 没有 tool calls，结束循环
-
-      // 将 assistant 消息加入内存列表
-      currentMessages.push(ctx.assistantMessage)
-
-      // 发送 assistant_message_updated 结束标记（streaming=false）
-      this.#finalizeAssistantRound(ctx, model, onEvent)
-
-      // 创建 Run 并逐步执行工具
-      const run = createRun(sessionId, ctx)
-      this.persistRunSnapshot(sessionId, run)
-
-      const { completed, toolResultMessages } = await executeToolSteps(
-        run,
-        abortController.signal,
+        messages: currentMessages,
+        sessionId,
+        abortSignal: abortController.signal,
         onEvent,
         onUserInteraction,
         skills,
-        (r) => this.persistRunSnapshot(sessionId, r),
-      )
+        effectiveMaxTokens,
+        reasoningEffort,
+        persistSnapshot: (sid, run) => this.persistRunSnapshot(sid, run),
+        clearSnapshot: (sid) => this.clearRunSnapshot(sid),
+      })
 
-      // 合并 tool result 消息到内存列表
-      for (const msg of toolResultMessages) {
+      if (!result.ctx) break // 没有 tool calls，结束循环
+
+      // 将 assistant 消息与 tool result 消息加入内存列表
+      currentMessages.push(result.assistantMessage)
+      for (const msg of result.toolResultMessages) {
         currentMessages.push(msg)
       }
 
-      if (!completed) return false // 被暂停
-
-      this.clearRunSnapshot(sessionId)
+      if (result.paused) return false // 被暂停
     }
 
     return true
-  }
-
-  /** 完成一轮 assistant 消息的流式标记，通知 chat-service 结束 streaming */
-  #finalizeAssistantRound(
-    ctx: ToolCallContext,
-    model: string,
-    onEvent?: AgentEventCallback,
-  ): void {
-    ctx.assistantMessage.streaming = false
-    onEvent?.({
-      type: 'assistant_message_updated',
-      data: {
-        messageId: ctx.assistantMessage.id,
-        patch: {
-          content: ctx.assistantMessage.content,
-          streaming: false,
-          toolCalls: ctx.assistantMessage.toolCalls,
-          reasoningContent: ctx.assistantMessage.reasoningContent,
-          reasoningElapsedMs: ctx.assistantMessage.reasoningElapsedMs,
-          usage: ctx.assistantMessage.usage,
-          model,
-        },
-      },
-    })
   }
 
   // ==================== Snapshot 管理 ====================

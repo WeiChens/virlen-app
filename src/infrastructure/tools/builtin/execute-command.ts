@@ -17,9 +17,9 @@ import { Command, Child } from '@tauri-apps/plugin-shell'
 import { invoke } from '@tauri-apps/api/core'
 
 import { t, tpl } from '@/ui/i18n'
-import toolInteractEvent from '@/events/toolInteractEvent'
 import { getSkillsDirPath } from '@/skill/skillStore'
 import { securityService } from '@/services/security-service'
+import { registerPendingApproval } from './command-approval'
 import { toolOutputStore } from '../output-store'
 import { processTerminalOutput } from '../terminal-output'
 
@@ -262,22 +262,15 @@ toolRegistry.register(
     if (needsApproval) {
       const info = getRiskInfo(risk)
       const { sessionId, toolCallId } = ctx
-      // 监听同意后的回调
-      if (!cmdLocks.has(ctx.toolCallId)) {
-        cmdLocks.add(ctx.toolCallId)
-        toolInteractEvent.once('userAllowCmd', (sid, toolId, result) => {
-          if (!(sessionId === sid && toolCallId === toolId)) {
-            return
-          }
-          result.result = runCommand(cmdStr, cwd, timeoutMs, ctx).finally(
-            () => {
-              cmdLocks.delete(toolCallId)
-            },
-          )
-        })
-      }
+      // 注册本次审批（approvalId 唯一标识），用户确认后由常驻监听器精确执行
+      const approvalId = registerPendingApproval({
+        sessionId,
+        toolCallId,
+        run: () => runCommand(cmdStr, cwd, timeoutMs, ctx),
+      })
 
       return new UserInteractionRequired('confirm_command', {
+        approvalId,
         command: cmdStr,
         risk,
         label: info.label,
@@ -290,7 +283,6 @@ toolRegistry.register(
   }) as ToolExecutor,
 )
 
-const cmdLocks = new Set<string>()
 /**
  * Cross-platform process tree killer via Rust `kill_process_tree` command.
  * Uses OS-native kill semantics from the Rust side (no shell permission needed).

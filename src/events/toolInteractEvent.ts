@@ -42,14 +42,28 @@ type ToolInteractEvents = {
 
   /**
    * 用户同意执行命令
+   * @param approvalId  本次审批的唯一标识（由 execute_command 生成并随弹窗数据下发）
    * @param sessionId
    * @param toolCallId
-   * @returns
+   * @param callback
    */
   userAllowCmd: (
+    approvalId: string,
     sessionId: string,
     toolCallId: string,
-    callback: { result: Promise<ToolExecutorResponse> },
+    callback: { result: Promise<ToolExecutorResponse> | null },
+  ) => void
+
+  /**
+   * 用户拒绝执行命令 — 通知 execute_command 侧清理待审批注册表，避免内存泄漏
+   * @param approvalId
+   * @param sessionId
+   * @param toolCallId
+   */
+  userCmdRejected: (
+    approvalId: string,
+    sessionId: string,
+    toolCallId: string,
   ) => void
 }
 
