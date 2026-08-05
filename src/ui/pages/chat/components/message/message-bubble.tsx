@@ -165,13 +165,6 @@ export default function MessageBubble({
                         (!settingsState.value.hideToolCallThink ||
                           !message.toolCalls?.length))) && (
                       <div className={`reasoning-text`}>
-                        {!showContent &&
-                          message.reasoningElapsedMs !== undefined && (
-                            <span className="reasoning-elapsed-only">
-                              {t('思考耗时')}{' '}
-                              {formatDuration(message.reasoningElapsedMs)}
-                            </span>
-                          )}
                         <div
                           className={`line ${isReasoningTime ? 'reasoning' : ''}`}></div>
                         <MarkdownRenderer

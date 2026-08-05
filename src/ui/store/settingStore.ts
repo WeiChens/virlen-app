@@ -57,6 +57,8 @@ export interface SettingsStore {
   ragDefaultKnowledgeBaseId: string
   /** 默认检索数量 */
   ragDefaultTopK: number
+  /** 是否启用 Rust 原生引擎（实验性，需重新构建 Tauri） */
+  useRustEngine: boolean
 }
 
 const defaultSettings: SettingsStore = {
@@ -86,6 +88,7 @@ const defaultSettings: SettingsStore = {
   ragEnabled: false,
   ragDefaultKnowledgeBaseId: '',
   ragDefaultTopK: 5,
+  useRustEngine: false,
 }
 
 export const settingsState = new StorageState(

@@ -13,7 +13,10 @@
  */
 import { createUserChoiceHandles } from './user_choice'
 import type { UserChoiceHandles } from './user_choice'
-import { createCommandConfirmHandles } from './command_confirm'
+import {
+  createCommandConfirmHandles,
+  createNativeCommandConfirmHandles,
+} from './command_confirm'
 import type { CommandConfirmHandles } from './command_confirm'
 import type { ToolExecutorResponse } from '@/domain/tools/types'
 import { ToolService } from '../port/ToolService'
@@ -28,6 +31,7 @@ class ToolServiceImpl implements ToolService {
   }> {
     let userChoiceInner: UserChoiceHandles | null = null
     let commandConfirmInner: CommandConfirmHandles | null = null
+    let nativeCommandConfirmInner: CommandConfirmHandles | null = null
 
     return {
       handler: async (type: string, data: Record<string, any>) => {
@@ -43,11 +47,19 @@ class ToolServiceImpl implements ToolService {
           }
           return commandConfirmInner.handler(type, data)
         }
+        if (type === 'confirm_command_native') {
+          // Rust 原生 execute_command 的审批（命令由 Rust 执行）
+          if (!nativeCommandConfirmInner) {
+            nativeCommandConfirmInner = createNativeCommandConfirmHandles(sessionId)
+          }
+          return nativeCommandConfirmInner.handler(type, data)
+        }
         throw new Error(`未知的交互类型: ${type}`)
       },
       cleanup: () => {
         userChoiceInner?.cleanup()
         commandConfirmInner?.cleanup()
+        nativeCommandConfirmInner?.cleanup()
       },
     }
   }

@@ -119,7 +119,7 @@ pub struct DirEntry {
     pub size: Option<u64>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DirEntryType {
     File,

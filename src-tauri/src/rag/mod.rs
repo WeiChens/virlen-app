@@ -52,7 +52,7 @@ pub fn init_rag_service(app: &AppHandle) -> Result<(), String> {
 }
 
 /// 获取 RAG 服务引用
-fn get_service() -> Result<&'static RagService, String> {
+pub fn get_service() -> Result<&'static RagService, String> {
     RAG_SERVICE
         .get()
         .ok_or_else(|| "RAG 服务未初始化，请重启应用".to_string())

@@ -337,3 +337,48 @@ pub fn edit_file(
         new_string_context,
     })
 }
+
+/// 写入文件（完整覆盖），自动创建父目录。
+/// 返回归一化（LF）内容的 SHA256，与 read_file/edit_file 一致，
+/// 可直接用作后续 edit_file 的 expected_hash。
+#[derive(serde::Serialize)]
+pub struct FileWriteResult {
+    pub hash: String,
+    pub line_count: usize,
+    pub byte_size: usize,
+    pub existed: bool,
+}
+
+pub fn write_file(path: &str, content: &str) -> Result<FileWriteResult, String> {
+    // 1. 创建父目录（兼容 Windows 反斜杠路径）
+    let normalized_path = path.replace('\\', "/");
+    if let Some(parent) = normalized_path.rfind('/') {
+        let parent_dir = &normalized_path[..parent];
+        if !parent_dir.is_empty() {
+            std::fs::create_dir_all(parent_dir)
+                .map_err(|e| format!("Cannot create directory '{}': {}", parent_dir, e))?;
+        }
+    }
+
+    // 2. 记录文件是否已存在
+    let existed = std::path::Path::new(path).exists();
+
+    // 3. 写入内容（保留用户给定的换行符）
+    std::fs::write(path, content)
+        .map_err(|e| format!("Cannot write file '{}': {}", path, e))?;
+
+    // 4. 计算归一化 hash（与 read_file/edit_file 一致）
+    let normalized = normalize_content(content);
+    let hash = {
+        let mut hasher = Sha256::new();
+        hasher.update(normalized.as_bytes());
+        hex::encode(hasher.finalize())
+    };
+
+    Ok(FileWriteResult {
+        hash,
+        line_count: normalized.lines().count(),
+        byte_size: content.len(),
+        existed,
+    })
+}

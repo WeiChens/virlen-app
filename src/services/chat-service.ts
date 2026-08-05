@@ -11,6 +11,7 @@
  *
  * 注意：暂停/恢复机制基于 Run Snapshot 模型，旧版 shelvedChoiceState 已废弃。
  */
+import { runInAction } from 'mobx'
 import {
   getSessionRuntime,
   sessionStore,
@@ -26,6 +27,16 @@ import type { Agent, Session } from '@/types'
 import { DEFAULT_SESSION_PARAMS } from '@/types'
 import { getDefaultAgent, assembleAgentPrompt } from '@/services/agent-service'
 import { agentEngine } from '@/domain'
+import { rustEngine, isRustEngineEnabled } from '@/services/rust-engine'
+
+/**
+ * 获取当前激活的 Agent 引擎
+ * - useRustEngine=true 且 Tauri 可用 → Rust 原生引擎
+ * - 否则 → TS 引擎（回退）
+ */
+export function getEngine(): typeof agentEngine {
+  return isRustEngineEnabled() ? rustEngine : agentEngine
+}
 
 /**
  * 创建新会话
@@ -137,7 +148,7 @@ export interface ChatServiceEvents {
  * 会：
  * 1. 确保 session 存在
  * 2. **创建并持久化用户消息**（服务层职责，而非 engine 内部处理）
- * 3. 调用 agentEngine.sendMessage（已跳过用户消息创建）并处理事件
+ * 3. 调用引擎 sendMessage（已跳过用户消息创建）并处理事件
  * 4. 维护 sessionRuntimeState 中的 working / pendingContent
  * 5. 通过 events 回调通知 UI
  */
@@ -199,7 +210,7 @@ export async function sendMessage(
   const reasoningEffort = providerCfg?.reasoningEffort
 
   try {
-    await agentEngine.sendMessage({
+    await getEngine().sendMessage({
       maxTokens: settingsState.value.maxTokens,
       session,
       messages: currentMessages,
@@ -234,7 +245,7 @@ export async function resumePausedRun(
     return
   }
 
-  const snapshot = await agentEngine.getRunSnapshot(sessionId)
+  const snapshot = await getEngine().getRunSnapshot(sessionId)
   if (!snapshot) {
     events?.onError?.(sessionId, '没有可恢复的暂停任务')
     return
@@ -260,7 +271,7 @@ export async function resumePausedRun(
   const reasoningEffort = providerCfg?.reasoningEffort
 
   try {
-    await agentEngine.sendMessage({
+    await getEngine().sendMessage({
       maxTokens: settingsState.value.maxTokens,
       resumeFromSnapshot: snapshot,
 
@@ -279,12 +290,12 @@ export async function resumePausedRun(
 
   // 恢复完成后，检查是否仍有未清除的快照（engine 成功完成所有工具后可能未清理）
   // 若没有 pending 的工具步骤，则主动清除快照，避免 finishWorking 误判为暂停状态
-  const remainingSnapshot = await agentEngine.getRunSnapshot(sessionId)
+  const remainingSnapshot = await getEngine().getRunSnapshot(sessionId)
   if (
     remainingSnapshot &&
     remainingSnapshot.steps.every((s) => s && s.status === 'completed')
   ) {
-    await agentEngine.clearRunSnapshot(sessionId)
+    await getEngine().clearRunSnapshot(sessionId)
   }
 
   finishWorking(sessionId, sessionRt, events)
@@ -362,7 +373,7 @@ export async function sendMessageWithGoal(
   const reasoningEffort = providerCfg?.reasoningEffort
 
   try {
-    await agentEngine.sendMessage({
+    await getEngine().sendMessage({
       maxTokens: settingsState.value.maxTokens,
       session,
       messages: currentMessages,
@@ -387,7 +398,7 @@ export async function sendMessageWithGoal(
  */
 export async function cancelMessage(sessionId: string): Promise<void> {
   if (sessionId) {
-    await agentEngine.cancel(sessionId)
+    await getEngine().cancel(sessionId)
   }
 }
 
@@ -398,9 +409,9 @@ export async function cancelMessage(sessionId: string): Promise<void> {
  * UI 调完此方法后直接更新自己的 loading 状态即可。
  */
 export async function cancelPausedRun(sessionId: string): Promise<void> {
-  const snapshot = await agentEngine.getRunSnapshot(sessionId)
+  const snapshot = await getEngine().getRunSnapshot(sessionId)
   if (!snapshot) {
-    await agentEngine.cancel(sessionId)
+    await getEngine().cancel(sessionId)
     return
   }
 
@@ -416,8 +427,8 @@ export async function cancelPausedRun(sessionId: string): Promise<void> {
       addSessionMessage(sessionId, toolResultMessage)
     }
   }
-  await agentEngine.clearRunSnapshot(sessionId)
-  await agentEngine.cancel(sessionId)
+  await getEngine().clearRunSnapshot(sessionId)
+  await getEngine().cancel(sessionId)
 }
 
 // ==================== 内部工具函数 ====================
@@ -511,7 +522,7 @@ async function finishWorking(
   events?: ChatServiceEvents,
   content?: MessageContent,
 ): Promise<void> {
-  const snapshot = await agentEngine.getRunSnapshot(sessionId)
+  const snapshot = await getEngine().getRunSnapshot(sessionId)
 
   const isPaused = !!snapshot
   updateSessionRuntime(sessionId, {
@@ -540,7 +551,7 @@ async function finishWorking(
 }
 
 export async function getRunSnapshot(sessionId: string) {
-  return await agentEngine.getRunSnapshot(sessionId)
+  return await getEngine().getRunSnapshot(sessionId)
 }
 
 export async function compressContext(sessionId: string) {
@@ -549,7 +560,7 @@ export async function compressContext(sessionId: string) {
     const session = sessionStore.getSession(sessionId)
     if (!session) throw new Error('会话不存在')
     const allMessages = getSessionMessages(sessionId)
-    const result = await agentEngine.compressContext(session, allMessages)
+    const result = await getEngine().compressContext(session, allMessages)
     replaceSessionMessages(sessionId, result.messages)
   } catch (e: any) {
     const errorMsg = e?.message || String(e)
@@ -576,28 +587,30 @@ export function addSessionMessage(
   sessionId: string,
   message: Message,
 ): Message | null {
-  const idx = sessionStore.value.sessions.findIndex((s) => s.id === sessionId)
-  if (idx === -1) return null
-  const session = sessionStore.value.sessions[idx]
-  const existing = message.toolCallId
-    ? session.messages.find((m) => m.toolCallId === message.toolCallId)
-    : undefined
-  if (existing) {
-    if (existing.role === 'tool' && message.role === 'tool') {
-      const msgs = [...session.messages]
-      const msgIdx = msgs.findIndex((m) => m.id === existing.id)
-      msgs[msgIdx] = { ...message, id: existing.id }
-      session.messages = msgs
-      session.updatedAt = Date.now()
-      sessionStore.messagesChanged(sessionId)
-      return msgs[msgIdx]
+  return runInAction(() => {
+    const idx = sessionStore.value.sessions.findIndex((s) => s.id === sessionId)
+    if (idx === -1) return null
+    const session = sessionStore.value.sessions[idx]
+    const existing = message.toolCallId
+      ? session.messages.find((m) => m.toolCallId === message.toolCallId)
+      : undefined
+    if (existing) {
+      if (existing.role === 'tool' && message.role === 'tool') {
+        const msgs = [...session.messages]
+        const msgIdx = msgs.findIndex((m) => m.id === existing.id)
+        msgs[msgIdx] = { ...message, id: existing.id }
+        session.messages = msgs
+        session.updatedAt = Date.now()
+        sessionStore.messagesChanged(sessionId)
+        return msgs[msgIdx]
+      }
+      return null
     }
-    return null
-  }
-  session.messages = [...session.messages, message]
-  session.updatedAt = Date.now()
-  sessionStore.messagesChanged(sessionId)
-  return message
+    session.messages = [...session.messages, message]
+    session.updatedAt = Date.now()
+    sessionStore.messagesChanged(sessionId)
+    return message
+  })
 }
 
 export function updateSessionMessage(
@@ -605,16 +618,18 @@ export function updateSessionMessage(
   messageId: string,
   patch: Partial<Message>,
 ): Message | null {
-  const idx = sessionStore.value.sessions.findIndex((s) => s.id === sessionId)
-  if (idx === -1) return null
-  const session = sessionStore.value.sessions[idx]
-  const msgIdx = session.messages.findIndex((m) => m.id === messageId)
-  if (msgIdx === -1) return null
-  const msgs = [...session.messages]
-  msgs[msgIdx] = { ...msgs[msgIdx], ...patch }
-  session.messages = msgs
-  sessionStore.messagesChanged(sessionId)
-  return msgs[msgIdx]
+  return runInAction(() => {
+    const idx = sessionStore.value.sessions.findIndex((s) => s.id === sessionId)
+    if (idx === -1) return null
+    const session = sessionStore.value.sessions[idx]
+    const msgIdx = session.messages.findIndex((m) => m.id === messageId)
+    if (msgIdx === -1) return null
+    const msgs = [...session.messages]
+    msgs[msgIdx] = { ...msgs[msgIdx], ...patch }
+    session.messages = msgs
+    sessionStore.messagesChanged(sessionId)
+    return msgs[msgIdx]
+  })
 }
 
 export function getSessionMessages(sessionId: string): Message[] {
@@ -629,33 +644,38 @@ export function deleteSessionMessage(
   sessionId: string,
   messageId: string,
 ): boolean {
-  const session = sessionStore.value.sessions.find((s) => s.id === sessionId)
-  if (!session) return false
+  return runInAction(() => {
+    const session = sessionStore.value.sessions.find((s) => s.id === sessionId)
+    if (!session) return false
 
-  const msgIdx = session.messages.findIndex((m) => m.id === messageId)
-  if (msgIdx === -1) return false
+    const msgIdx = session.messages.findIndex((m) => m.id === messageId)
+    if (msgIdx === -1) return false
 
-  // 不允许手动删除 tool 消息
-  if (session.messages[msgIdx].role === 'tool') return false
+    // 不允许手动删除 tool 消息
+    if (session.messages[msgIdx].role === 'tool') return false
 
-  // 删除该消息及之后所有消息
-  session.messages = session.messages.slice(0, msgIdx)
-  session.updatedAt = Date.now()
-  sessionStore.messagesChanged(sessionId)
-  return true
+    // 删除该消息及之后所有消息
+    session.messages = session.messages.slice(0, msgIdx)
+    session.updatedAt = Date.now()
+    sessionStore.messagesChanged(sessionId)
+    return true
+  })
 }
 
 export function clearSessionMessages(sessionId: string): boolean {
-  const idx = sessionStore.value.sessions.findIndex((s) => s.id === sessionId)
-  if (idx === -1) return false
-  const sessions = [...sessionStore.value.sessions]
-  sessions[idx] = {
-    ...sessions[idx],
-    messages: [],
-    updatedAt: Date.now(),
-  }
-  sessionStore.messagesChanged(sessionId)
-  return true
+  return runInAction(() => {
+    const idx = sessionStore.value.sessions.findIndex((s) => s.id === sessionId)
+    if (idx === -1) return false
+    const sessions = [...sessionStore.value.sessions]
+    sessions[idx] = {
+      ...sessions[idx],
+      messages: [],
+      updatedAt: Date.now(),
+    }
+    sessionStore.value.sessions = sessions
+    sessionStore.messagesChanged(sessionId)
+    return true
+  })
 }
 
 /**
@@ -665,11 +685,13 @@ export function replaceSessionMessages(
   sessionId: string,
   messages: Message[],
 ): boolean {
-  const session = sessionStore.value.sessions.find((s) => s.id === sessionId)
-  if (!session) return false
-  session.messages = messages
-  sessionStore.messagesChanged(sessionId)
-  return true
+  return runInAction(() => {
+    const session = sessionStore.value.sessions.find((s) => s.id === sessionId)
+    if (!session) return false
+    session.messages = messages
+    sessionStore.messagesChanged(sessionId)
+    return true
+  })
 }
 
 export function checkAndRepairMessageList(
@@ -678,32 +700,34 @@ export function checkAndRepairMessageList(
 ): void {
   if (isWorking) return
 
-  const session = sessionStore.value.sessions.find((s) => s.id === sessionId)
-  if (!session) return
+  return runInAction(() => {
+    const session = sessionStore.value.sessions.find((s) => s.id === sessionId)
+    if (!session) return
 
-  for (let i = session.messages.length - 1; i >= 0; i--) {
-    const msg = session.messages[i]
-    if (msg.role === 'assistant') {
-      if (!msg.toolCalls || msg.toolCalls.length === 0) {
+    for (let i = session.messages.length - 1; i >= 0; i--) {
+      const msg = session.messages[i]
+      if (msg.role === 'assistant') {
+        if (!msg.toolCalls || msg.toolCalls.length === 0) {
+          break
+        }
+        const noRepMsg = msg.toolCalls.filter(
+          (tc) => !session.messages.some((m) => m.toolCallId === tc.id),
+        )
+        if (noRepMsg.length === 0) break
+
+        const repairMessages: Message[] = noRepMsg.map((tc) => ({
+          id: v4(),
+          role: 'tool' as const,
+          content: 'abnormal termination',
+          toolCallId: tc.id,
+          timestamp: Date.now(),
+          isError: true,
+        }))
+        session.messages = [...session.messages, ...repairMessages]
+        session.updatedAt = Date.now()
+        sessionStore.messagesChanged(sessionId)
         break
       }
-      const noRepMsg = msg.toolCalls.filter(
-        (tc) => !session.messages.some((m) => m.toolCallId === tc.id),
-      )
-      if (noRepMsg.length === 0) break
-
-      const repairMessages: Message[] = noRepMsg.map((tc) => ({
-        id: v4(),
-        role: 'tool' as const,
-        content: 'abnormal termination',
-        toolCallId: tc.id,
-        timestamp: Date.now(),
-        isError: true,
-      }))
-      session.messages = [...session.messages, ...repairMessages]
-      session.updatedAt = Date.now()
-      sessionStore.messagesChanged(sessionId)
-      break
     }
-  }
+  })
 }

@@ -381,6 +381,26 @@ function GeneralSettings() {
             </label>
           </div>
         </div>
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="label-text">{t('Rust 原生引擎')}</span>
+            <span className="label-desc">
+              {t(
+                '使用 Rust 实现聊天循环（实验性）。OpenAI/Anthropic 原生 HTTP，Gemini 与工具执行桥接 JS。需重新构建后生效',
+              )}
+            </span>
+          </div>
+          <div className="setting-control">
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={s.useRustEngine}
+                onChange={(e) => update('useRustEngine', e.target.checked)}
+              />
+              <span className="toggle-slider" />
+            </label>
+          </div>
+        </div>
       </div>
     </div>
   )

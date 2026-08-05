@@ -130,3 +130,81 @@ export function createCommandConfirmHandles(
     },
   }
 }
+
+/**
+ * 原生命令审批 handles — Rust 原生 execute_command 的审批交互
+ *
+ * 与 createCommandConfirmHandles 的差异：
+ * - 不注册 JS 侧审批（approvalId），命令由 Rust 原生执行
+ * - 用户「允许」→ resolve('approved')，Rust 收到后直接执行命令
+ * - 用户「拒绝/暂存」→ reject，Rust 收到 cancelled / shelved
+ */
+export function createNativeCommandConfirmHandles(
+  sessionId: string,
+): CommandConfirmHandles {
+  let interactionResolve: ((value: ToolExecutorResponse) => void) | null = null
+  let interactionReject: ((reason: any) => void) | null = null
+  let pendingCommand = ''
+  let pendingToolCallId = ''
+
+  const offResolve = toolInteractEvent.on(
+    'commandResolve',
+    async (_value: string) => {
+      const resolve = interactionResolve
+      const toolCallId = pendingToolCallId
+      interactionResolve = null
+      interactionReject = null
+      pendingCommand = ''
+      pendingToolCallId = ''
+      if (!resolve) return
+
+      // 原生命令：只回「允许」标记，实际执行由 Rust 完成
+      resolve('approved')
+      // 记录到 tool output
+      try {
+        toolOutputStore.append(toolCallId, '[User approved] command executed natively\n')
+      } catch {}
+    },
+  )
+  const offReject = toolInteractEvent.on('commandReject', (reason: string) => {
+    const reject = interactionReject
+    const cmd = pendingCommand
+    const toolCallId = pendingToolCallId
+    interactionResolve = null
+    interactionReject = null
+    if (!reject) return
+    if (reason.startsWith('shelve:')) {
+      reject(new InteractionShelved(reason.slice(7)))
+    } else {
+      reject(reason || 'cancelled')
+      if (cmd) {
+        try {
+          toolOutputStore.append(toolCallId, `[User rejected] ${cmd}\n`)
+        } catch {}
+      }
+    }
+  })
+
+  return {
+    handler: async (_type: string, data: Record<string, any>) => {
+      pendingCommand = data.command || ''
+      pendingToolCallId = data.toolCallId || ''
+      return new Promise<ToolExecutorResponse>((resolve, reject) => {
+        interactionResolve = resolve
+        interactionReject = reject
+        toolInteractEvent.emit(
+          'showCommandConfirm',
+          sessionId,
+          data.command,
+          data.risk,
+          data.label,
+          data.hint,
+        )
+      })
+    },
+    cleanup: () => {
+      offResolve()
+      offReject()
+    },
+  }
+}

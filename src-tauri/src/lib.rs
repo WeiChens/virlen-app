@@ -2,6 +2,7 @@
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use tauri::Manager;
 
+mod agent;
 mod common_service;
 mod file_ops;
 mod load_env;
@@ -238,6 +239,9 @@ async fn edit_file_in_place(
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            // 初始化 Agent 引擎（Rust 聊天循环）
+            agent::init_agent_engine(app.handle());
+
             // 初始化 RAG 知识库服务
             if let Err(e) = rag::init_rag_service(app.handle()) {
                 eprintln!("[RAG] 初始化失败: {}", e);
@@ -293,6 +297,16 @@ pub fn run() {
             rag::init_knowledge_bases,
             rag::search_documents_content,
             rag::export_knowledge_base,
+            // Agent 引擎（Rust 聊天循环）
+            agent::agent_send_message,
+            agent::agent_cancel,
+            agent::agent_get_run_snapshot,
+            agent::agent_clear_run_snapshot,
+            agent::agent_dispose,
+            agent::agent_tool_response,
+            agent::agent_user_interaction_response,
+            agent::agent_provider_stream_event,
+            agent::agent_provider_stream_done,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

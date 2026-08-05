@@ -72,7 +72,7 @@ function QuickInputSettings() {
           className={`quickinput-tab ${isGoal ? 'active' : ''}`}
           onClick={() => setActiveTab('goal')}
           type="button">
-          🎯 {t('验证目标快捷输入')}
+          {t('验证目标快捷输入')}
         </button>
       </div>
 

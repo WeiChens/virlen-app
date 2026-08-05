@@ -2,7 +2,8 @@ import { vision } from '@/infrastructure/vision'
 import * as dialog from '@tauri-apps/plugin-dialog'
 export const TestPage = () => {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 16 }}>
+    <div
+      style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 16 }}>
       <button
         onClick={async () => {
           const path = await dialog.open({
@@ -29,7 +30,7 @@ export const TestPage = () => {
             console.error('视觉分析失败:', err)
           }
         }}>
-        🎯 全能视觉分析（UI + OCR + 物体检测）
+        全能视觉分析（UI + OCR + 物体检测）
       </button>
     </div>
   )
