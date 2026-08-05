@@ -36,6 +36,9 @@ class VisionAnalyzeMessage implements IToolCallMessage {
     }
   }
   getExpandView(props: ToolMessageProps): React.ReactNode {
+    if (props.message?.isError) {
+      return <div className="error">{props.message.content as string}</div>
+    }
     if (props.message?.content) {
       return <pre>{props.message.content as string}</pre>
     }

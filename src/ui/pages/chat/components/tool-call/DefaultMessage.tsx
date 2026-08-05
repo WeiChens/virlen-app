@@ -31,6 +31,9 @@ class DefaultMessage implements IToolCallMessage {
     }
   }
   getExpandView(props: ToolMessageProps): React.ReactNode {
+    if (props.message?.isError) {
+      return <div className="error">{props.message.content as string}</div>
+    }
     return t('暂无详情')
   }
   diyWrapper(): boolean {

@@ -36,6 +36,9 @@ class FileInfoMessage implements IToolCallMessage {
     }
   }
   getExpandView(props: ToolMessageProps): React.ReactNode {
+    if (props.message?.isError) {
+      return <div className="error">{props.message.content as string}</div>
+    }
     if (props.message?.content) {
       // const content = props.message.content as any
       return <pre>{props.message.content as string}</pre>

@@ -55,6 +55,9 @@ class WebSearchMessage implements IToolCallMessage {
   }
 
   getExpandView(props: ToolMessageProps): React.ReactNode {
+    if (props.message?.isError) {
+      return <div className="error">{props.message.content as string}</div>
+    }
     try {
       const uiData = props.message?.uiData as
         | { items?: SearchResultItem[]; provider?: string; query?: string }
@@ -124,7 +127,7 @@ class WebSearchMessage implements IToolCallMessage {
 
       return <div>{t('无搜索结果')}</div>
     } catch {
-      return <div>{t('解析异常')}</div>
+      return <div className="error">{t('解析异常')}</div>
     }
   }
 

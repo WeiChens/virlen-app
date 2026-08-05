@@ -35,7 +35,10 @@ class DeleteFileMessage implements IToolCallMessage {
       return t('解析异常')
     }
   }
-  getExpandView(_props: ToolMessageProps): React.ReactNode {
+  getExpandView(props: ToolMessageProps): React.ReactNode {
+    if (props.message?.isError) {
+      return <div className="error">{props.message.content as string}</div>
+    }
     return null
   }
   diyWrapper(): boolean {

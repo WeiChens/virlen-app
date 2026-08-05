@@ -18,6 +18,9 @@ class WebFetchMessage implements IToolCallMessage {
     }
   }
   getExpandView(props: ToolMessageProps): React.ReactNode {
+    if (props.message?.isError) {
+      return <div className="error">{props.message.content as string}</div>
+    }
     try {
       const body = props.useContent.input.body
       if (!body)
@@ -58,7 +61,7 @@ class WebFetchMessage implements IToolCallMessage {
         </div>
       )
     } catch {
-      return <div>{t('解析异常')}</div>
+      return <div className="error">{t('解析异常')}</div>
     }
     // return (
     //   <div

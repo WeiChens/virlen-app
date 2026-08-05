@@ -19,6 +19,9 @@ class GetCurrentTimeMessage implements IToolCallMessage {
     }
   }
   getExpandView(props: ToolMessageProps): React.ReactNode {
+    if (props.message?.isError) {
+      return <div className="error">{props.message.content as string}</div>
+    }
     try {
       const body = props.message?.content as string
       if (body === null) {

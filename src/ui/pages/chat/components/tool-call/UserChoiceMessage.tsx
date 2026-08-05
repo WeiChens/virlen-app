@@ -25,6 +25,9 @@ class UserChoiceMessage implements IToolCallMessage {
     }
   }
   getExpandView(props: ToolMessageProps): React.ReactNode {
+    if (props.message?.isError) {
+      return <div className="error">{props.message.content as string}</div>
+    }
     try {
       const { multi, options, question } = props.useContent.input
       const answer = props.message?.content as string
@@ -55,7 +58,7 @@ class UserChoiceMessage implements IToolCallMessage {
         </div>
       )
     } catch {
-      return <div>{t('解析异常')}</div>
+      return <div className="error">{t('解析异常')}</div>
     }
   }
   diyWrapper(): boolean {

@@ -164,6 +164,9 @@ class KnowledgeBaseMessage implements IToolCallMessage {
   }
 
   getExpandView(props: ToolMessageProps): React.ReactNode {
+    if (props.message?.isError) {
+      return <div className="error">{props.message.content as string}</div>
+    }
     try {
       const type = props.useContent.name
       const content = props.message?.content as string | undefined
@@ -295,7 +298,7 @@ class KnowledgeBaseMessage implements IToolCallMessage {
         </CodeBlock>
       )
     } catch {
-      return <div>{t('解析异常')}</div>
+      return <div className="error">{t('解析异常')}</div>
     }
   }
 

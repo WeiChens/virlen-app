@@ -44,6 +44,9 @@ class SearchFileByNameMessage implements IToolCallMessage {
     }
   }
   getExpandView(props: ToolMessageProps): React.ReactNode {
+    if (props.message?.isError) {
+      return <div className="error">{props.message.content as string}</div>
+    }
     return (
       <CodeBlock fontSize={11} showLineNumbers={false}>
         {props.message?.content as string}

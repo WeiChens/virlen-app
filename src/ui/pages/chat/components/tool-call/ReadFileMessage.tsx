@@ -40,6 +40,9 @@ class ReadFileMessage implements IToolCallMessage {
     }
   }
   getExpandView(props: ToolMessageProps): React.ReactNode {
+    if (props.message?.isError) {
+      return <div className="error">{props.message.content as string}</div>
+    }
     if (!props.expand) return null
     const value = props.message.uiData?.content || props.message?.content
     const name = getUrlFileName(props.message.uiData?.fullPath, null)
