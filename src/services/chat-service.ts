@@ -28,6 +28,7 @@ import { DEFAULT_SESSION_PARAMS } from '@/types'
 import { getDefaultAgent, assembleAgentPrompt } from '@/services/agent-service'
 import { agentEngine } from '@/domain'
 import { rustEngine, isRustEngineEnabled } from '@/services/rust-engine'
+import { invoke } from '@tauri-apps/api/core'
 
 /**
  * 获取当前激活的 Agent 引擎
@@ -140,6 +141,23 @@ export interface ChatServiceEvents {
   onPendingContent?: (sessionId: string, delta: string) => void
   /** 流式结束 */
   onStreamEnd?: (sessionId: string) => void
+}
+
+/**
+ * TS 引擎路径消息落库（Rust 引擎路径由引擎内部直落 SQLite，跳过）。
+ * fire-and-forget：不 await，落库不阻塞 UI。
+ */
+function persistMessagesIfNeeded(
+  sessionId: string,
+  messages: Message[],
+): void {
+  if (isRustEngineEnabled()) return
+  if (!messages.length) return
+  try {
+    invoke('cmd_append_messages', { sessionId, messages })
+  } catch {
+    // 非 Tauri 环境忽略
+  }
 }
 
 /**
@@ -503,6 +521,8 @@ function createEventHandler(
           events?.onStreamEnd?.(sessionId)
           events?.onMessagesUpdate?.(sessionId)
         }
+        // TS 引擎路径兜底：整批落库当前消息（覆盖 assistant 流式最终内容）
+        persistMessagesIfNeeded(sessionId, getSessionMessages(sessionId))
         break
 
       case 'error':
@@ -562,6 +582,14 @@ export async function compressContext(sessionId: string) {
     const allMessages = getSessionMessages(sessionId)
     const result = await getEngine().compressContext(session, allMessages)
     replaceSessionMessages(sessionId, result.messages)
+    // 压缩会整体替换消息列表，需同步落库（Rust SQLite 直落）
+    // 非 Tauri 环境 invoke 抛错，忽略即可（引擎路径不受影响）
+    try {
+      await invoke('cmd_replace_session_messages', {
+        sessionId,
+        messages: result.messages,
+      })
+    } catch {}
   } catch (e: any) {
     const errorMsg = e?.message || String(e)
     showToast('压缩失败：' + errorMsg, 2000)
@@ -587,9 +615,10 @@ export function addSessionMessage(
   sessionId: string,
   message: Message,
 ): Message | null {
-  return runInAction(() => {
+  let added: Message | null = null
+  runInAction(() => {
     const idx = sessionStore.value.sessions.findIndex((s) => s.id === sessionId)
-    if (idx === -1) return null
+    if (idx === -1) return
     const session = sessionStore.value.sessions[idx]
     const existing = message.toolCallId
       ? session.messages.find((m) => m.toolCallId === message.toolCallId)
@@ -602,15 +631,18 @@ export function addSessionMessage(
         session.messages = msgs
         session.updatedAt = Date.now()
         sessionStore.messagesChanged(sessionId)
-        return msgs[msgIdx]
+        added = msgs[msgIdx]
       }
-      return null
+      return
     }
     session.messages = [...session.messages, message]
     session.updatedAt = Date.now()
     sessionStore.messagesChanged(sessionId)
-    return message
+    added = message
   })
+  // TS 引擎路径：新增/更新的消息立即落库（Rust 引擎路径由引擎内部直落）
+  if (added) persistMessagesIfNeeded(sessionId, [added])
+  return added
 }
 
 export function updateSessionMessage(

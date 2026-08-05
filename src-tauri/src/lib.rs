@@ -7,6 +7,7 @@ mod common_service;
 mod file_ops;
 mod load_env;
 mod rag;
+mod session_db;
 mod vision_service;
 mod search;
 mod task_manager;
@@ -307,6 +308,14 @@ pub fn run() {
             agent::agent_user_interaction_response,
             agent::agent_provider_stream_event,
             agent::agent_provider_stream_done,
+            // 会话持久化（SQLite 直落）
+            session_db::cmd_list_sessions,
+            session_db::cmd_get_session,
+            session_db::cmd_get_messages,
+            session_db::cmd_upsert_session,
+            session_db::cmd_delete_session,
+            session_db::cmd_replace_session_messages,
+            session_db::cmd_append_messages,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

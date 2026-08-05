@@ -16,6 +16,8 @@ import { sessionRepo } from '@/infrastructure/sessionRepo'
 
 class SessionStore {
   value: { sessions: Session[] } = { sessions: [] }
+  /** 已加载消息的会话 id 集合（避免重复拉取） */
+  private loadedMessageIds = new Set<string>()
 
   constructor(private repo: SessionRepo) {
     makeObservable(this, {
@@ -29,10 +31,12 @@ class SessionStore {
 
   // ========== 初始化 ==========
 
-  /** 从 IndexedDB 加载所有会话 */
+  /** 从 Rust SQLite 加载所有会话元数据（消息懒加载，激活时再拉取） */
   async loadFromDB(): Promise<void> {
     try {
       const sessions = await this.repo.loadAll()
+      // DB 会话消息未加载，切到该会话时懒加载
+      this.loadedMessageIds.clear()
       runInAction(() => {
         this.value.sessions = sessions
       })
@@ -45,6 +49,29 @@ class SessionStore {
         this.value.sessions = []
       })
       this._lastSaved = []
+    }
+  }
+
+  /**
+   * 懒加载会话消息（会话激活时调用）。
+   * 已加载过 / 新建会话（内存即真相）直接跳过。
+   */
+  async ensureMessagesLoaded(sessionId: string): Promise<void> {
+    if (this.loadedMessageIds.has(sessionId)) return
+    const idx = this.value.sessions.findIndex((s) => s.id === sessionId)
+    if (idx === -1) return
+    try {
+      const messages = await this.repo.getMessages(sessionId)
+      runInAction(() => {
+        const i = this.value.sessions.findIndex((s) => s.id === sessionId)
+        if (i === -1) return
+        const sessions = [...this.value.sessions]
+        sessions[i] = { ...sessions[i], messages }
+        this.value.sessions = sessions
+      })
+      this.loadedMessageIds.add(sessionId)
+    } catch {
+      // 拉取失败不标记，下次激活重试
     }
   }
 
@@ -95,6 +122,8 @@ class SessionStore {
       Object.assign(existing, session)
     } else {
       this.value.sessions = [...this.value.sessions, session]
+      // 新建会话：内存态即全部消息，标记已加载避免被 DB 空数据覆盖
+      this.loadedMessageIds.add(session.id)
     }
     this.persist()
   }

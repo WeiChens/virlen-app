@@ -57,7 +57,7 @@ export interface SettingsStore {
   ragDefaultKnowledgeBaseId: string
   /** 默认检索数量 */
   ragDefaultTopK: number
-  /** 是否启用 Rust 原生引擎（实验性，需重新构建 Tauri） */
+  /** 是否启用 Rust 原生引擎（默认开启；会话/消息由 Rust SQLite 直落） */
   useRustEngine: boolean
 }
 
@@ -88,7 +88,7 @@ const defaultSettings: SettingsStore = {
   ragEnabled: false,
   ragDefaultKnowledgeBaseId: '',
   ragDefaultTopK: 5,
-  useRustEngine: false,
+  useRustEngine: true,
 }
 
 export const settingsState = new StorageState(
@@ -129,6 +129,27 @@ export const settingsState = new StorageState(
     return null
   },
 })
+
+// ── Rust 引擎转正一次性迁移（P3 会话持久化） ──
+// 老版本 useRustEngine 默认 false 且已被持久化进 localStorage，
+// 新默认值 true 无法覆盖已存值。此处一次性强制切换并同步写回，
+// 避免老用户升级后仍走 TS 引擎导致消息不落库（数据丢失风险）。
+// 迁移完成后用户可自由开关，不再强制。
+try {
+  if (!localStorage.getItem('virlen-rust-engine-migrated')) {
+    if (settingsState.value.useRustEngine === false) {
+      settingsState.setValue('useRustEngine', true)
+      // 同步写回（setValue 内部是 debounce，立即落盘避免退出丢失）
+      localStorage.setItem(
+        '_storage_state_virlen-settings',
+        JSON.stringify(settingsState.value),
+      )
+    }
+    localStorage.setItem('virlen-rust-engine-migrated', '1')
+  }
+} catch {
+  // 非浏览器环境忽略
+}
 
 /**
  * 解析默认工作目录

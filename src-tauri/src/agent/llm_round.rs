@@ -84,7 +84,7 @@ pub async fn do_llm_round(
         reasoning_effort: reasoning_effort.map(String::from),
     };
 
-    if session.params.stream {
+    let stream_result = if session.params.stream {
         handle_streaming(
             provider,
             &request,
@@ -94,9 +94,22 @@ pub async fn do_llm_round(
             sink,
             session_id,
         )
-        .await?;
+        .await
     } else {
-        handle_non_streaming(provider, &request, &mut ctx, cancel).await?;
+        handle_non_streaming(provider, &request, &mut ctx, cancel).await
+    };
+
+    if let Err(e) = stream_result {
+        // 用户取消：保留已收集的部分内容，正常结束（不当作错误）
+        if cancel.is_cancelled() {
+            ctx.assistant_message.streaming = Some(false);
+            finalize_assistant_message(&ctx.assistant_message, &model, sink, session_id);
+            return Ok(LlmRoundOutput {
+                ctx: None,
+                assistant_message: ctx.assistant_message,
+            });
+        }
+        return Err(e);
     }
 
     // 没有 tool calls → 结束循环

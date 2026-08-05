@@ -24,6 +24,8 @@ pub mod verifier;
 use crate::agent::bridge::AgentBridgeState;
 use crate::agent::engine::AgentEngine;
 use crate::agent::event_sink::TauriEventSink;
+use crate::agent::provider::DefaultProviderFactory;
+use crate::session_db::{self, NoopSessionRepo, SessionRepo};
 use std::sync::Arc;
 use tauri::Manager;
 
@@ -31,9 +33,26 @@ use tauri::Manager;
 pub fn init_agent_engine(app: &tauri::AppHandle) {
     let bridge = Arc::new(AgentBridgeState::default());
     let sink: Arc<dyn event_sink::EventSink> = Arc::new(TauriEventSink::new(app.clone()));
-    let engine = Arc::new(AgentEngine::new(bridge.clone(), sink));
+    // 会话持久化：SQLite 直落；初始化失败时回退 Noop（不持久化），聊天功能不受影响
+    let repo: Arc<dyn SessionRepo> = match session_db::init_session_db(app) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[session_db] 初始化失败，回退到 Noop: {}", e);
+            Arc::new(NoopSessionRepo)
+        }
+    };
+    let engine = Arc::new(AgentEngine::with_deps(
+        bridge.clone(),
+        sink.clone(),
+        repo.clone(),
+        Arc::new(DefaultProviderFactory {
+            bridge: bridge.clone(),
+            sink: sink.clone(),
+        }),
+    ));
     app.manage(bridge);
     app.manage(engine);
+    app.manage(repo);
 }
 
 // ==================== Tauri 命令 ====================

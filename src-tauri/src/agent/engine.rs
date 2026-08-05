@@ -11,6 +11,7 @@ use super::cancellation::CancellationToken;
 use super::event_sink::EventSink;
 use super::iteration::{run_iteration, RunIterationParams};
 use super::llm_loop::{execute_llm_round, ExecuteLlmRoundParams};
+use super::llm_round::now_ms;
 use super::provider::{
     DefaultProviderFactory, Provider, ProviderFactory,
 };
@@ -21,6 +22,7 @@ use super::types::{
     AgentEvent, Message, NativeToolSecurity, Run, RunSnapshot, SendMessageOptions, Session,
     ToolDefinition,
 };
+use crate::session_db::{NoopSessionRepo, SessionRepo};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -28,16 +30,20 @@ use std::sync::{Arc, Mutex};
 pub struct AgentEngine {
     pub bridge: Arc<AgentBridgeState>,
     pub sink: Arc<dyn EventSink>,
+    pub repo: Arc<dyn SessionRepo>,
     provider_factory: Arc<dyn ProviderFactory>,
     run_snapshots: Mutex<HashMap<String, RunSnapshot>>,
     active_cancels: Mutex<HashMap<String, CancellationToken>>,
 }
 
 impl AgentEngine {
+    /// 仅测试使用（生产走 with_deps）
+    #[allow(dead_code)]
     pub fn new(bridge: Arc<AgentBridgeState>, sink: Arc<dyn EventSink>) -> Self {
-        Self::with_provider_factory(
+        Self::with_deps(
             bridge.clone(),
             sink.clone(),
+            Arc::new(NoopSessionRepo),
             Arc::new(DefaultProviderFactory {
                 bridge,
                 sink,
@@ -46,14 +52,31 @@ impl AgentEngine {
     }
 
     /// 注入自定义 Provider 工厂（测试 / 定制用）
+    #[allow(dead_code)]
     pub fn with_provider_factory(
         bridge: Arc<AgentBridgeState>,
         sink: Arc<dyn EventSink>,
         provider_factory: Arc<dyn ProviderFactory>,
     ) -> Self {
+        Self::with_deps(
+            bridge,
+            sink,
+            Arc::new(NoopSessionRepo),
+            provider_factory,
+        )
+    }
+
+    /// 注入完整依赖（生产：SQLite repo + 默认 Provider 工厂）
+    pub fn with_deps(
+        bridge: Arc<AgentBridgeState>,
+        sink: Arc<dyn EventSink>,
+        repo: Arc<dyn SessionRepo>,
+        provider_factory: Arc<dyn ProviderFactory>,
+    ) -> Self {
         Self {
             bridge,
             sink,
+            repo,
             provider_factory,
             run_snapshots: Mutex::new(HashMap::new()),
             active_cancels: Mutex::new(HashMap::new()),
@@ -83,6 +106,19 @@ impl AgentEngine {
     ) -> Result<(), String> {
         let session_id = options.session_id.clone();
         let session = options.session.clone();
+
+        // 0. 持久化（先落库再开始循环）：会话元数据 + 用户消息
+        //    JS 卡住/崩溃不影响落库；写入失败不中断聊天（尽力而为）
+        if let Err(e) = self.repo.upsert_session(&session).await {
+            eprintln!("[session_db] upsert session 失败: {}", e);
+        }
+        if let Err(e) = self
+            .repo
+            .append_messages(&session_id, &options.messages, now_ms())
+            .await
+        {
+            eprintln!("[session_db] 写入用户消息失败: {}", e);
+        }
 
         // 1. 获取 provider
         let provider: Box<dyn Provider> = match &options.provider {
@@ -214,6 +250,16 @@ impl AgentEngine {
         .await;
 
         let mut messages = current_messages.to_vec();
+
+        // 持久化：恢复执行产生的 tool 结果（先落库再返回）
+        if let Err(e) = self
+            .repo
+            .append_messages(&session_id, &tool_result_messages, now_ms())
+            .await
+        {
+            eprintln!("[session_db] 写入恢复结果失败: {}", e);
+        }
+
         messages.extend(tool_result_messages);
 
         if !completed {
@@ -246,7 +292,7 @@ impl AgentEngine {
 
         while rounds > 0 {
             rounds -= 1;
-            let result = execute_llm_round(ExecuteLlmRoundParams {
+            let result = match execute_llm_round(ExecuteLlmRoundParams {
                 session,
                 provider,
                 tool_defs,
@@ -262,14 +308,45 @@ impl AgentEngine {
                 persist_snapshot: Some(persist_closure),
                 clear_snapshot: Some(clear_closure),
             })
-            .await?;
+            .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    // 兜底：用户取消不应当作错误传播（do_llm_round 已处理大部分取消）
+                    if cancel.is_cancelled() {
+                        return Ok(false);
+                    }
+                    return Err(e);
+                }
+            };
 
             if result.ctx.is_none() {
+                // 最终纯文本回复 / 用户取消的部分回复：先落库再结束循环
+                if let Err(e) = self
+                    .repo
+                    .append_messages(&session_id, &[result.assistant_message], now_ms())
+                    .await
+                {
+                    eprintln!("[session_db] 写入最终回复失败: {}", e);
+                }
                 break; // 没有 tool calls，结束循环
             }
 
+            // 持久化本轮：assistant 消息 + tool 结果（先落库再继续）
+            let mut to_persist = Vec::with_capacity(1 + result.tool_result_messages.len());
+            to_persist.push(result.assistant_message.clone());
+            to_persist.extend(result.tool_result_messages.iter().cloned());
+
             current_messages.push(result.assistant_message);
             current_messages.extend(result.tool_result_messages);
+
+            if let Err(e) = self
+                .repo
+                .append_messages(&session_id, &to_persist, now_ms())
+                .await
+            {
+                eprintln!("[session_db] 写入助手消息失败: {}", e);
+            }
 
             if result.paused {
                 return Ok(false); // 被暂停
@@ -426,6 +503,38 @@ mod tests {
             Box::new(MockProvider {
                 calls: AtomicUsize::new(0),
             })
+        }
+    }
+
+    /// Mock Provider — 先输出部分文本，然后等待取消并返回 Err("cancelled")
+    struct MockCancelProvider;
+
+    #[async_trait]
+    impl Provider for MockCancelProvider {
+        async fn chat(
+            &self,
+            _request: &ChatRequest,
+            _cancel: &CancellationToken,
+        ) -> Result<Message, String> {
+            Ok(Message::default())
+        }
+        async fn chat_stream(
+            &self,
+            _request: &ChatRequest,
+            cancel: &CancellationToken,
+            on_event: &mut (dyn FnMut(StreamEvent) + Send),
+        ) -> Result<(), String> {
+            on_event(StreamEvent::TextDelta("partial answer".into()));
+            cancel.cancelled().await;
+            Err("cancelled".into())
+        }
+    }
+
+    struct MockCancelProviderFactory;
+
+    impl ProviderFactory for MockCancelProviderFactory {
+        fn create(&self, _conn: &crate::agent::types::ProviderConnection) -> Box<dyn Provider> {
+            Box::new(MockCancelProvider)
         }
     }
 
@@ -639,6 +748,66 @@ mod tests {
         let types = sink.types();
         assert!(types.contains(&"tool_result_created".to_string()));
         assert!(types.contains(&"stream_end".to_string()));
+    }
+
+    #[tokio::test]
+    async fn cancel_is_not_error_and_keeps_partial() {
+        let bridge = Arc::new(AgentBridgeState::default());
+        let sink = Arc::new(AutoRespondSink::new(
+            bridge.clone(),
+            json!({ "__kind": "value", "value": "mock result" }),
+        ));
+        let engine = Arc::new(AgentEngine::with_provider_factory(
+            bridge.clone(),
+            sink.clone(),
+            Arc::new(MockCancelProviderFactory),
+        ));
+
+        // 延迟取消：让 provider 先输出部分内容，再触发取消
+        let engine2 = engine.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            engine2.cancel("s1");
+        });
+
+        let session = make_session();
+        let result = engine
+            .send_message(SendMessageOptions {
+                session: session.clone(),
+                messages: vec![],
+                provider: Some(crate::agent::types::ProviderConnection {
+                    provider_type: "openai".into(),
+                    provider_id: "p1".into(),
+                    api_key: "k".into(),
+                    base_url: "http://localhost".into(),
+                }),
+                tool_defs: make_tool_defs(),
+                enable_tools: true,
+                max_tokens: None,
+                resume_from_snapshot: None,
+                reasoning_effort: None,
+                max_tool_rounds: 10,
+                iteration_goal: None,
+                max_iterations: 5,
+                session_id: "s1".into(),
+                security: None,
+            })
+            .await;
+
+        // 用户取消不应当作错误（前端不应弹 error-banner）
+        assert!(result.is_ok(), "取消不应当作错误: {:?}", result.err());
+        // partial 消息应走正常 finalize 路径（streaming:false 已通知前端）
+        let types = sink.types();
+        assert!(
+            types.contains(&"assistant_message_updated".to_string()),
+            "partial 消息应 finalize: {:?}",
+            types
+        );
+        assert!(
+            types.contains(&"stream_end".to_string()),
+            "取消后应正常结束: {:?}",
+            types
+        );
     }
 
     #[allow(dead_code)]

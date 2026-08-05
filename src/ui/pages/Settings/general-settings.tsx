@@ -386,7 +386,7 @@ function GeneralSettings() {
             <span className="label-text">{t('Rust 原生引擎')}</span>
             <span className="label-desc">
               {t(
-                '使用 Rust 实现聊天循环（实验性）。OpenAI/Anthropic 原生 HTTP，Gemini 与工具执行桥接 JS。需重新构建后生效',
+                '使用 Rust 实现聊天循环与持久化。OpenAI/Anthropic 原生 HTTP，Gemini 与部分工具桥接 JS；会话/消息由 SQLite 直落，不依赖前端。需重新构建后生效',
               )}
             </span>
           </div>

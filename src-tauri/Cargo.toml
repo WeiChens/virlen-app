@@ -53,6 +53,11 @@ once_cell = "1"              # 全局惰性初始化
 reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }
 async-trait = "0.1"          # 异步 trait（Provider / ToolExecutor）
 zip = "2"                    # ZIP 打包（知识库导出）
+
+# ── 会话持久化 ──
+# rusqlite（bundled 内置编译 SQLite，零系统依赖）
+# 会话/消息直接落 SQLite，不经过 JS/IndexedDB
+rusqlite = { version = "0.32", features = ["bundled"] }
 # 文档解析
 pdf-extract = "0.7"          # PDF 文本提取
 

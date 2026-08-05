@@ -313,12 +313,18 @@ function ChatView() {
     }
   }, [chatState.value.currentSessionId])
 
-  function handleSelectSession(sessionId: string) {
+  async function handleSelectSession(sessionId: string) {
     const session = sessionStore.getSession(sessionId)
     if (!session) return
     chatState.setValue('currentSessionId', sessionId)
     chatState.setValue('error', null)
     setMessages([...session.messages])
+    // 懒加载：会话激活时从 SQLite 拉取历史消息（仅首次）
+    await sessionStore.ensureMessagesLoaded(sessionId)
+    const updated = sessionStore.getSession(sessionId)
+    if (updated && chatState.value.currentSessionId === sessionId) {
+      setMessages([...updated.messages])
+    }
   }
 
   const hasEnabledProvider = settingsState.value.providers.some(

@@ -21,18 +21,18 @@ LLM 调用 → 工具执行 → 结果合并 →（迭代模式）验证反馈�
 └──────────────┬─────────────────────────────────────────────────┘
                │ Tauri invoke + event
 ┌──────────────▼─────────────────────────────────────────────────┐
-│                      Rust 侧 (src-tauri/src/agent/)            │
-│  AgentEngine (engine.rs)                                       │
-│    ├─ execute_llm_round (llm_loop.rs)                          │
-│    │    ├─ do_llm_round (llm_round.rs)                         │
-│    │    │    └─ Provider trait (provider.rs)                   │
+│                      Rust 侧 (src-tauri/src/)                  │
+│  AgentEngine (agent/engine.rs)                                  │
+│    ├─ execute_llm_round (agent/llm_loop.rs)                    │
+│    │    ├─ do_llm_round (agent/llm_round.rs)                   │
+│    │    │    └─ Provider trait (agent/provider.rs)             │
 │    │    │         ├─ NativeOpenAiProvider  (原生 HTTP + SSE)   │
 │    │    │         ├─ NativeAnthropicProvider (原生 HTTP + SSE) │
 │    │    │         └─ BridgedProvider       (gemini → JS)       │
-│    │    └─ execute_tool_steps (tool_executor.rs)               │
-│    │         └─ AgentBridgeState (bridge.rs) → JS 工具执行     │
-│    ├─ run_iteration (iteration.rs) + verify (verifier.rs)      │
-│    └─ 快照/取消管理 (run_state.rs / cancellation.rs)            │
+│    │    └─ execute_tool_steps (agent/tool_executor.rs)         │
+│    │         └─ AgentBridgeState (agent/bridge.rs) → JS 工具   │
+│    ├─ run_iteration (agent/iteration.rs) + verify (verifier.rs)│
+│    └─ SessionRepo (session_db.rs) ← SQLite 会话/消息直落       │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -52,8 +52,9 @@ LLM 调用 → 工具执行 → 结果合并 →（迭代模式）验证反馈�
 | `llm_loop.rs` | `llm-loop.ts` | 「LLM→工具」共享编排 |
 | `verifier.rs` | `verifier.ts` | 迭代验证器 |
 | `iteration.rs` | `iteration-controller.ts` | 执行→验证→修复循环 |
-| `engine.rs` | `engine.ts` | AgentEngine 主类 |
+| `engine.rs` | `engine.ts` | AgentEngine 主类（注入 SessionRepo 持久化） |
 | `mod.rs` | — | Tauri 命令注册 + 初始化 |
+| `session_db.rs` | `infrastructure/sessionRepo` | 会话/消息 SQLite 直落（SessionRepo trait + SQLite/Noop 实现） |
 
 ## 四、桥接协议
 
@@ -108,17 +109,21 @@ agent:provider-request { requestId, providerType, providerId, apiKey, baseUrl, r
 
 ## 六、平滑过渡开关
 
-- `settingsState.useRustEngine`（默认 `false`），设置页「通用 → Rust 原生引擎」
+- `settingsState.useRustEngine`（默认 `true`，设置页「通用 → Rust 原生引擎」）
+  - P3 起转正：agent 逻辑与持久化均已 Rust 化，新用户默认开启
+  - 老用户升级时做**一次性迁移**（`virlen-rust-engine-migrated`），强制切换一次避免消息不落库
 - `chat-service.getEngine()` 按 flag 选择 `rustEngine` 或 `agentEngine`
 - 非 Tauri 环境（浏览器 dev / vitest）自动回退 TS 引擎
 - 两个引擎实现**同一接口** `AgentEnginePort`，前端零侵入
 
 ## 七、测试与验证
 
-- Rust：`cargo test` → 83 通过（34 agent + 49 既有 RAG）
+- Rust：`cargo test` → 91 通过（agent + RAG + session_db）
   - `engine::tests::normal_loop_tool_then_text`：完整循环（LLM→工具→结果→stream_end）
   - `engine::tests::tool_interaction_routes_session`：交互桥 sessionId 路由
+  - `engine::tests::cancel_is_not_error_and_keeps_partial`：用户取消不当作错误、partial 保留
   - `native_tools::tests::test_native_dispatcher_write_read_search`：原生工具分发链路
+  - `session_db::tests::*`：SQLite 会话/消息读写、幂等、替换、删除、排序
   - `storm_breaker / run_state / cancellation / verifier / iteration` 单元测试
 - TS：`npx tsc --noEmit` 零错误；`npx vitest run` 325 通过
 
@@ -161,7 +166,89 @@ execute_command 需审批
 - 搜索/目录遍历：取消 → 设置 cancel_flag，阻塞任务快速退出
 - 知识库写入/查询：spawn_blocking 内检查
 
-## 九、已知限制
+**用户取消不当作错误**（P3 修复）：
+- `do_llm_round` 捕获 Provider 的 `Err("cancelled")`，保留已收集的部分内容
+  → finalize（`streaming:false` 通知前端）→ 正常返回（不向 JS 抛 error）
+- 引擎收到 `ctx: None`（取消的部分回复）→ **先落库 partial 消息** → emit `stream_end`
+- `execute_tool_loop` 兜底：`cancel.is_cancelled()` 时任何 Err 都正常返回
+- 前端 `rust-engine.ts` catch 双保险：`cancelled` 消息不 emit error 事件（不弹 error-banner）
+- 工具执行阶段取消：已完成的 tool 结果随本轮落库（execute_tool_steps 返回非 Err）
+
+## 九、会话持久化 SQLite 直落（P3）
+
+### 目标
+
+原持久化链路 `JS 事件 → chat-service → IndexedDB` 绕了 JS 一手：
+**即使 JS 卡住/崩溃，也要保证引擎产生的会话/消息由 Rust 侧直接落库。**
+
+### 数据流对比
+
+```
+改造前：Rust 引擎 → agent:event → JS 渲染 + sessionRepo → IndexedDB（依赖 JS 存活）
+改造后：Rust 引擎 → SessionRepo → SQLite（不依赖 JS）
+                        └→ agent:event → JS 仅渲染
+```
+
+### 写库点（引擎内部，先落库再 emit）
+
+| 时机 | 内容 |
+|---|---|
+| `sendMessage` 入口 | upsert 会话元数据 + 用户消息（发送即写） |
+| 每轮 `execute_llm_round` 完成 | assistant 消息 + tool 结果消息（消息完成时写一次） |
+| 无 tool calls 的最终纯文本回复 | 单独落库（先落库再结束循环） |
+| `resume_run`（断点恢复） | 恢复执行产生的 tool 结果 |
+
+流式中间态（`stream_event` / `assistant_message_updated`）仍只用于 UI 渲染，
+不在流式过程中落库；消息 finalized 后一次性写入。
+
+### 表结构（`app_data_dir/virlen.db`）
+
+- `sessions`：会话元数据（params / tags / allowed_tools 等 JSON 列）
+- `messages`：消息（content / tool_calls / ui_data / usage 等 JSON 列，rowid 排序）
+- WAL 模式 + `Mutex<Connection>` 单写连接 + `spawn_blocking`
+
+### SessionRepo 抽象
+
+```rust
+pub trait SessionRepo: Send + Sync {
+    async fn upsert_session(&self, session: &Session) -> Result<(), String>;
+    async fn append_messages(&self, session_id, messages, updated_at) -> ...;
+    async fn replace_messages(&self, session_id, messages, updated_at) -> ...; // 前端压缩等全量替换
+    async fn list_sessions(&self) -> ...;
+    async fn get_session(&self, session_id) -> ...;
+    async fn get_messages(&self, session_id) -> ...;
+    async fn delete_session(&self, session_id) -> ...;
+}
+```
+
+- 生产：`SqliteSessionRepo`（rusqlite bundled）
+- 测试/兜底：`NoopSessionRepo`（不持久化）
+- `AgentEngine::with_deps` 注入；`init_agent_engine` 启动时创建 SQLite repo 并 `app.manage`
+
+### Tauri 命令（JS → Rust）
+
+| 命令 | 用途 |
+|---|---|
+| `cmd_list_sessions` | 启动加载会话列表（不含 messages） |
+| `cmd_get_session` / `cmd_get_messages` | 单会话元数据 / 消息 |
+| `cmd_upsert_session` | 创建/改名/pin/参数变更 |
+| `cmd_delete_session` | 删除会话及其消息 |
+| `cmd_replace_session_messages` | 前端上下文压缩后整批替换消息 |
+
+### 前端改造
+
+- `src/infrastructure/sessionRepo/index.ts`：IndexedDB → Rust 命令；`loadAll` 只加载会话元数据（**消息懒加载**，启动不再 N+1 全量拉消息）
+- `src/ui/store/sessionStore.ts`：`ensureMessagesLoaded(sessionId)` 懒加载；`loadedMessageIds` 去重；新建会话标记已加载（内存即真相）
+- `src/ui/pages/chat/chat-view.tsx`：`handleSelectSession` 会话激活时懒加载消息并刷新 UI
+- `src/services/chat-service.ts`：
+  - Rust 引擎路径：引擎内部直落，JS 跳过
+  - **TS 引擎路径**：`persistMessagesIfNeeded()`（`!isRustEngineEnabled()` 守卫）在
+    `addSessionMessage`（用户/assistant/tool 消息）和 `stream_end`（兜底整批）落库
+  - `compressContext` 压缩后调 `cmd_replace_session_messages` 落库
+- `src/utils/db.ts`：IndexedDB 封装已废弃删除
+- 前端只负责渲染 + 会话元数据管理 + TS 引擎路径消息落库；Rust 引擎路径消息落库完全在引擎内部
+
+## 十、已知限制
 
 1. **Gemini 桥接**：未原生 HTTP，仍走 JS provider（且 TS Gemini 存在 #1 多轮工具 bug，可顺带修复）
 2. **compressContext** 仍由 TS 引擎提供（非聊天循环核心）
@@ -173,7 +260,15 @@ execute_command 需审批
 6. **Linux execute_command 未做 unshare 只读保护**（JS 版有 mount namespace 保护技能目录）
 7. **`copy_move_file` 跨设备移动**：文件支持 copy+remove 回退；目录跨设备直接报错
 
-## 十、实施记录
+### 会话持久化（P3）相关限制
+
+8. **历史 IndexedDB 数据已废弃**：升级后旧会话不迁移（Q2=C 决策），从空库开始
+9. **部分前端手动消息操作不落库**：`repairSessionIfNeeded` / `deleteSessionMessage` /
+   `clearSessionMessages` 只改内存态，DB 中旧消息可能残留（Rust 引擎路径与 TS 引擎路径的
+   `addSessionMessage`/`stream_end` 落库不受影响）
+10. **非 Tauri / SQLite 初始化失败**：回退 `NoopSessionRepo`，会话不持久化（聊天功能不受影响）
+
+## 十一、实施记录
 
 ### P1（引擎循环移植）
 
@@ -197,3 +292,14 @@ execute_command 需审批
 - `src-tauri/src/search.rs`：`DirEntryType` 派生 `Clone/Copy`
 - `src/services/rust-engine.ts`：`resolveSecurityConfig()` 解析安全配置
 - `src/services/tool-service/`：新增 `confirm_command_native` 原生审批 handles
+
+### P3（会话持久化 SQLite 直落）
+
+- `Cargo.toml`：新增 `rusqlite = { version = "0.32", features = ["bundled"] }`
+- `src-tauri/src/session_db.rs`：新增（SessionRepo trait + Sqlite/Noop 实现 + 7 个测试）
+- `src-tauri/src/agent/engine.rs`：注入 `SessionRepo`；3 个写库点（入口用户消息 / 每轮结果 / resume）
+- `src-tauri/src/agent/mod.rs`：`init_agent_engine` 创建 SQLite repo + `app.manage`
+- `src-tauri/src/lib.rs`：注册 `session_db` 模块 + 6 个命令
+- `src/infrastructure/sessionRepo/index.ts`：IndexedDB → Rust 命令
+- `src/services/chat-service.ts`：`compressContext` 压缩后落库
+- `src/utils/db.ts`：IndexedDB 封装已删除

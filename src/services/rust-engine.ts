@@ -352,7 +352,10 @@ export const rustEngine: AgentEnginePort = {
         },
       })
     } catch (e: any) {
-      onEvent?.({ type: 'error', error: e?.message || String(e) })
+      const msg = e?.message || String(e)
+      // 用户取消是预期操作（Rust 侧已正常返回，此处兜底），不应弹 error-banner
+      if (/cancelled/i.test(msg)) return
+      onEvent?.({ type: 'error', error: msg })
     } finally {
       unlisten?.()
       unregisterSessionToolHandler(sessionId)
