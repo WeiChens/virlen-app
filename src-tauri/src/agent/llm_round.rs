@@ -127,6 +127,76 @@ pub async fn do_llm_round(
     })
 }
 
+/// 流式事件发送节流间隔（毫秒）— 每 60ms 最多向 UI 发一次流式增量
+const STREAM_THROTTLE_MS: i64 = 60;
+
+/// 流式事件节流器 — 距上次发送不足 interval_ms 时丢弃中间事件，force_flush 强制补发
+struct StreamEventThrottle {
+    interval_ms: i64,
+    last_emit_ms: i64,
+}
+
+impl StreamEventThrottle {
+    fn new(interval_ms: i64) -> Self {
+        Self {
+            interval_ms,
+            last_emit_ms: 0,
+        }
+    }
+
+    /// 距上次发送已超过间隔 → 允许发送并更新时间戳
+    fn allow(&mut self) -> bool {
+        let now = now_ms();
+        if now - self.last_emit_ms >= self.interval_ms {
+            self.last_emit_ms = now;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 强制下一次 allow() 返回 true（流结束时补发剩余增量）
+    fn force_flush(&mut self) {
+        self.last_emit_ms = 0;
+    }
+}
+
+/// 批量发送累积的流式增量（assistant_message_updated + stream_event）
+/// 无 pending 内容时直接返回，避免空事件
+fn flush_stream_state(
+    ctx: &ToolCallContext,
+    model: &str,
+    sink: &dyn EventSink,
+    session_id: &str,
+    pending_delta: &str,
+    pending_reasoning: &Option<String>,
+) {
+    let has_delta = !pending_delta.is_empty();
+    let has_reasoning = pending_reasoning.is_some();
+    if !has_delta && !has_reasoning {
+        return;
+    }
+    sync_assistant(ctx, model, sink, session_id);
+    if has_delta {
+        sink.emit_agent_event(
+            session_id,
+            &AgentEvent::new(
+                "stream_event",
+                json!({
+                    "delta": pending_delta,
+                    "fullContent": ctx.assistant_message.text_content(),
+                }),
+            ),
+        );
+    }
+    if let Some(rc) = pending_reasoning {
+        sink.emit_agent_event(
+            session_id,
+            &AgentEvent::new("stream_event", json!({ "reasoningContent": rc })),
+        );
+    }
+}
+
 /// 流式 LLM 调用处理
 async fn handle_streaming(
     provider: &dyn Provider,
@@ -138,6 +208,9 @@ async fn handle_streaming(
     session_id: &str,
 ) -> Result<(), String> {
     let mut reasoning_start: Option<i64> = None;
+    let mut throttle = StreamEventThrottle::new(STREAM_THROTTLE_MS);
+    let mut pending_delta = String::new();
+    let mut pending_reasoning: Option<String> = None;
 
     let mut on_event = |event: StreamEvent| match event {
         StreamEvent::TextDelta(delta) => {
@@ -151,17 +224,20 @@ async fn handle_streaming(
             ctx.round_content.push_str(&delta);
             let current = ctx.assistant_message.text_content();
             ctx.assistant_message.content = Value::String(current + &delta);
-            sync_assistant(ctx, model, sink, session_id);
-            sink.emit_agent_event(
-                session_id,
-                &AgentEvent::new(
-                    "stream_event",
-                    json!({
-                        "delta": delta,
-                        "fullContent": ctx.assistant_message.text_content(),
-                    }),
-                ),
-            );
+            // 节流：累积 delta，满足 60ms 间隔才批量发送（末尾 MessageStop 强制补发）
+            pending_delta.push_str(&delta);
+            if throttle.allow() {
+                flush_stream_state(
+                    ctx,
+                    model,
+                    sink,
+                    session_id,
+                    &pending_delta,
+                    &pending_reasoning,
+                );
+                pending_delta.clear();
+                pending_reasoning = None;
+            }
         }
         StreamEvent::ToolUse(tool_use) => {
             if collect_tool_use(ctx, tool_use, sink, session_id) {
@@ -177,11 +253,20 @@ async fn handle_streaming(
             }
             ctx.reasoning_content = rc.clone();
             ctx.assistant_message.reasoning_content = Some(rc.clone());
-            sync_assistant(ctx, model, sink, session_id);
-            sink.emit_agent_event(
-                session_id,
-                &AgentEvent::new("stream_event", json!({ "reasoningContent": rc })),
-            );
+            // 节流：累积 reasoning，满足 60ms 间隔才批量发送
+            pending_reasoning = Some(rc);
+            if throttle.allow() {
+                flush_stream_state(
+                    ctx,
+                    model,
+                    sink,
+                    session_id,
+                    &pending_delta,
+                    &pending_reasoning,
+                );
+                pending_delta.clear();
+                pending_reasoning = None;
+            }
         }
         StreamEvent::MessageStop {
             reasoning_content,
@@ -196,13 +281,26 @@ async fn handle_streaming(
             }
             if let Some(rc) = reasoning_content {
                 ctx.reasoning_content = rc.clone();
+                pending_reasoning = Some(rc.clone());
                 ctx.assistant_message.reasoning_content = Some(rc);
-                sync_assistant(ctx, model, sink, session_id);
             }
             if let Some(u) = usage {
                 ctx.assistant_message.usage = Some(u);
-                sync_assistant(ctx, model, sink, session_id);
             }
+            // 流结束：强制补发所有剩余增量（含最终内容 / usage）
+            throttle.force_flush();
+            flush_stream_state(
+                ctx,
+                model,
+                sink,
+                session_id,
+                &pending_delta,
+                &pending_reasoning,
+            );
+            pending_delta.clear();
+            pending_reasoning = None;
+            // 确保最终状态一定同步（即使没有 pending 增量）
+            sync_assistant(ctx, model, sink, session_id);
         }
     };
 
@@ -312,4 +410,121 @@ pub fn finalize_assistant_message(
 
 pub fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::event_sink::TestEventSink;
+    use super::super::provider::Provider;
+    use super::super::types::SessionParams;
+    use super::*;
+    use async_trait::async_trait;
+
+    /// 快速连续吐出大量 TextDelta 的 mock Provider
+    struct ThrottleMockProvider {
+        deltas: Vec<String>,
+    }
+
+    #[async_trait]
+    impl Provider for ThrottleMockProvider {
+        async fn chat(
+            &self,
+            _request: &ChatRequest,
+            _cancel: &CancellationToken,
+        ) -> Result<Message, String> {
+            unreachable!("throttle 测试只走 chat_stream")
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: &ChatRequest,
+            _cancel: &CancellationToken,
+            on_event: &mut (dyn FnMut(StreamEvent) + Send),
+        ) -> Result<(), String> {
+            for d in &self.deltas {
+                on_event(StreamEvent::TextDelta(d.clone()));
+            }
+            on_event(StreamEvent::MessageStop {
+                reasoning_content: None,
+                usage: None,
+            });
+            Ok(())
+        }
+    }
+
+    fn session() -> Session {
+        Session {
+            id: "s1".into(),
+            title: "t".into(),
+            messages: vec![],
+            provider_config_id: "p1".into(),
+            model_id: "model-x".into(),
+            system_prompt: String::new(),
+            params: SessionParams {
+                temperature: 0.7,
+                top_p: 1.0,
+                max_tokens: 100,
+                stream: true,
+            },
+            created_at: 0,
+            updated_at: 0,
+            pinned: false,
+            tags: vec![],
+            workspace: None,
+            agent_id: None,
+            allowed_tools: None,
+            skills: None,
+            system_prompt_manually_edited: None,
+        }
+    }
+
+    fn count_events(sink: &TestEventSink, event_type: &str) -> usize {
+        let events = sink.events.lock().unwrap();
+        events
+            .iter()
+            .filter(|(_, v)| v["type"].as_str() == Some(event_type))
+            .count()
+    }
+
+    #[test]
+    fn stream_events_are_throttled_but_final_content_is_complete() {
+        // 快速连续发送 200 个 delta（远快于 60ms 间隔，节流后应只发少量事件）
+        let deltas: Vec<String> = (0..200).map(|i| format!("{}", i % 10)).collect();
+        let provider = ThrottleMockProvider {
+            deltas: deltas.clone(),
+        };
+        let sink = TestEventSink::new();
+        let cancel = CancellationToken::new();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let out = rt.block_on(do_llm_round(
+            &session(),
+            &provider,
+            &[],
+            &[],
+            &cancel,
+            &sink,
+            "s1",
+            None,
+            None,
+        ));
+
+        let output = out.expect("llm round 应成功");
+        // 无 tool calls → ctx 为 None，assistant 消息内容应为全量拼接（节流不丢内容）
+        assert!(output.ctx.is_none());
+        assert_eq!(output.assistant_message.text_content(), deltas.concat());
+
+        // 节流生效：stream_event 数量应远小于 delta 数量
+        let stream_events = count_events(&sink, "stream_event");
+        assert!(
+            stream_events < deltas.len() / 4,
+            "stream_event 应被节流：{} events for {} deltas",
+            stream_events,
+            deltas.len()
+        );
+
+        // 关键控制事件不应被节流
+        assert!(count_events(&sink, "assistant_message_created") >= 1);
+        assert!(count_events(&sink, "assistant_message_updated") >= 1);
+    }
 }
