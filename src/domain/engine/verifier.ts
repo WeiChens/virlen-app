@@ -24,10 +24,11 @@ const DEFAULT_VERIFY_MAX_TOKENS = 4096
 function buildVerifyPrompt(goal: Goal, messages: Message[]): string {
   const trace = buildExecutionTrace(messages)
 
-  return VERIFY_PROMPT_TEMPLATE.replace('{{goal}}', goal.description).replace(
-    '{{trace}}',
-    trace,
-  )
+  // 使用函数式 replacer：避免 goal/trace 中的 $&、$'、$` 等被 String.replace
+  // 当作特殊替换模式解析而损坏 Prompt（字符串参数会解析 $&/$'/$`/$n）。
+  return VERIFY_PROMPT_TEMPLATE.replace('{{goal}}', () =>
+    goal.description,
+  ).replace('{{trace}}', () => trace)
 }
 
 /** 从消息列表构建执行轨迹摘要 */

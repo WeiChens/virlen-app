@@ -250,12 +250,14 @@ export class OpenAiProvider implements IProvider {
       const formatted: any = { role: msg.role }
 
       if (typeof msg.content === 'string') {
-        // assistant 带 tool_calls 时，若 content 为空字符串则设为 null（OpenAI strict 模式要求）
-        // if (msg.role === 'assistant' && msg.toolCalls?.length && msg.content === '') {
-        //   formatted.content = null
-        // } else {
-        formatted.content = msg.content
-        // }
+        // OpenAI strict 模式要求：assistant 带 tool_calls 时 content 必须为 null 而非空串，
+        // 否则部分兼容 API 会校验失败。历史上曾被注释掉导致死代码，此处恢复该处理。
+        formatted.content =
+          msg.role === 'assistant' &&
+          msg.toolCalls?.length &&
+          msg.content === ''
+            ? null
+            : msg.content
       } else if (Array.isArray(msg.content)) {
         formatted.content = msg.content.map((block) => {
           if (block.type === 'text') return block

@@ -254,7 +254,10 @@ export class IterationController {
       data: { message: failureReport },
     })
 
-    return { completed: true, messages }
+    // 目标未达成（超出最大迭代次数）→ completed: false，与文档契约一致
+    // （true = 目标达成，false = 超出最大迭代次数；注意与「暂停」语义区分，
+    //   暂停在循环内提前 return，不会走到这里）
+    return { completed: false, messages }
   }
 
   /** 构建失败报告消息 */

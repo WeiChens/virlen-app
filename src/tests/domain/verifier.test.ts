@@ -104,4 +104,44 @@ describe('LLMVerifier 取消处理', () => {
     expect(result.passed).toBe(false)
     expect(result.summary).toContain('验证调用失败')
   })
+
+  it('goal/trace 中的 $&、$` 等特殊字符不应破坏 Prompt（String.replace 特殊模式回归）', async () => {
+    let captured: any = null
+    const chat = vi.fn(async (req: any): Promise<Message> => {
+      captured = req
+      return {
+        content: JSON.stringify({ passed: true, summary: 'ok', issues: [] }),
+      } as Message
+    })
+    const provider = {
+      name: 'mock',
+      chat,
+      chatStream: vi.fn(),
+      listModels: vi.fn(async () => []),
+      buildRequest: vi.fn(),
+      validateApiKey: vi.fn(async () => true),
+    } as unknown as IProvider
+
+    const verifier = new LLMVerifier()
+    // 若使用字符串 replacer，$& 会被替换为匹配到的 {{goal}} 原文，$` 会被替换为匹配位置之前的内容
+    const goalText = '目标是 $& 和 $` 和 $\' 特殊字符'
+    await verifier.verify(
+      provider,
+      session,
+      { description: goalText },
+      [
+        {
+          id: 'm1',
+          role: 'assistant',
+          content: '执行轨迹包含 $& 特殊字符',
+          timestamp: Date.now(),
+        } as Message,
+      ],
+      new AbortController().signal,
+    )
+
+    const prompt = captured.messages[0].content as string
+    expect(prompt).toContain(goalText)
+    expect(prompt).not.toContain('目标是 {{goal}} 和')
+  })
 })
