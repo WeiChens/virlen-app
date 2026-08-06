@@ -580,6 +580,13 @@ async fn run_command_native(
 
     let mut cmd = Command::new(shell);
     cmd.args(&args);
+    #[cfg(target_os = "windows")]
+    {
+        // 隐藏控制台窗口：Windows 上 spawn cmd/powershell 默认会弹出黑窗口，
+        // 与 kill_process_tree / load_env 的 CREATE_NO_WINDOW 保持一致
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
     if !ctx.security.workspace.is_empty() {

@@ -22,6 +22,7 @@ import { IterationController } from '@/domain/engine/iteration-controller'
 import { executeLLMRound } from '@/domain/engine/llm-loop'
 import { llmVerifier } from '@/domain/engine/verifier'
 import type { Message, Session } from '@/types'
+import type { ToolDefinition } from '@/domain/tools/types'
 
 function buildParams(overrides: Record<string, any> = {}) {
   const session: Session = {
@@ -41,15 +42,15 @@ function buildParams(overrides: Record<string, any> = {}) {
     goal: { description: '测试目标' },
     session,
     provider: {} as any,
-    toolDefs: [],
-    currentMessages: [],
+    toolDefs: [] as ToolDefinition[],
+    currentMessages: [] as Message[],
     sessionId: 's1',
     abortController: new AbortController(),
     onEvent: vi.fn(),
     onUserInteraction: vi.fn(),
-    skills: [],
+    skills: [] as string[],
     effectiveMaxTokens: 1000,
-    reasoningEffort: undefined,
+    reasoningEffort: undefined as string | undefined,
     persistSnapshot: vi.fn(),
     clearSnapshot: vi.fn(),
     ...overrides,
