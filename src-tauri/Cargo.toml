@@ -73,5 +73,7 @@ windows-core = "0.61"
 
 # ── macOS 平台：Apple Speech 框架（SFSpeechRecognizer 离线语音识别） ──
 # 仅在 macOS 构建时编译；Windows/Linux 不受影响
+# 锁定 0.5.0：0.8.x 的 Swift 桥接引用了 macOS 26 SDK 才有的 API，
+# 在旧版 Xcode/SDK 上会编译失败（extra argument 'weight'）
 [target.'cfg(target_os = "macos")'.dependencies]
-speech = { version = "0.8" }
+speech = { version = "=0.5.0" }

@@ -1075,15 +1075,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crossbeam-queue"
-version = "0.3.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "803d13fb3b09d88be9f4dbc29062c66b19bf7170867ceb746d2a8689bf6c7a26"
-dependencies = [
- "crossbeam-utils",
-]
-
-[[package]]
 name = "crossbeam-utils"
 version = "0.8.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1445,16 +1436,6 @@ dependencies = [
  "precomputed-hash",
  "selectors",
  "tendril",
-]
-
-[[package]]
-name = "doom-fish-utils"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c801f6c2a0db1a1909d89fc395b9dccc594de9ef599659fbde9bb3b55ef67f9f"
-dependencies = [
- "crossbeam-queue",
- "futures-util",
 ]
 
 [[package]]
@@ -6271,14 +6252,9 @@ dependencies = [
 
 [[package]]
 name = "speech"
-version = "0.8.7"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91c3e0a5b3f2f469e392dbfc8e0e07f315e48517e485e3c647f40476664b2f1a"
-dependencies = [
- "doom-fish-utils",
- "serde",
- "serde_json",
-]
+checksum = "8b6814078dc50ee1d35d94a4bcfe497556eeab04e83f2662f2a7874345e72d89"
 
 [[package]]
 name = "spm_precompiled"
