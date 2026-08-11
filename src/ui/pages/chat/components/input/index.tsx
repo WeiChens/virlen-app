@@ -224,7 +224,7 @@ function ChatInput(
       return base + text
     })
   }, [])
-  const { isRecording, voiceSupported, toggleVoiceInput } =
+  const { isRecording, isTranscribing, voiceSupported, toggleVoiceInput } =
     useVoiceInput(handleSpeechResult)
 
   // ===== 路径自动补全 =====
@@ -798,10 +798,18 @@ function ChatInput(
             {/* 语音输入按钮 */}
             {voiceSupported && (
               <button
-                className={`voice-btn ${isRecording ? 'is-recording' : ''}`}
+                className={`voice-btn ${isRecording ? 'is-recording' : ''} ${
+                  isTranscribing ? 'is-transcribing' : ''
+                }`}
                 onClick={toggleVoiceInput}
-                disabled={disabled || loading}
-                title={isRecording ? t('点击停止录音') : t('语音输入')}
+                disabled={disabled || loading || isTranscribing}
+                title={
+                  isTranscribing
+                    ? t('语音识别中...')
+                    : isRecording
+                      ? t('点击停止录音')
+                      : t('语音输入')
+                }
                 type="button">
                 <svg
                   viewBox="0 0 1024 1024"

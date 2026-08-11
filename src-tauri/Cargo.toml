@@ -70,3 +70,8 @@ quasivision = "0.2.1"
 [target.'cfg(target_os = "windows")'.dependencies]
 webview2-com = "0.38"
 windows-core = "0.61"
+
+# ── macOS 平台：Apple Speech 框架（SFSpeechRecognizer 离线语音识别） ──
+# 仅在 macOS 构建时编译；Windows/Linux 不受影响
+[target.'cfg(target_os = "macos")'.dependencies]
+speech = { version = "0.8" }

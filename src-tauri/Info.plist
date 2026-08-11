@@ -8,5 +8,8 @@
     <!-- 麦克风权限描述 -->
     <key>NSMicrophoneUsageDescription</key>
     <string>Virlen 需要使用麦克风进行语音输入</string>
+    <!-- 语音识别权限描述（Apple SFSpeechRecognizer） -->
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Virlen 需要使用语音识别功能，将您的语音转换为文字</string>
 </dict>
 </plist>

@@ -5,6 +5,7 @@
  * useVoiceInput      — 语音输入（Web Speech API）
  */
 import { useState, useRef, useCallback, useEffect } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { v4 } from '@/utils/uuid'
 import { showToast } from '@/ui/components/shared/Toast'
 import { t } from '@/ui/i18n'
@@ -116,36 +117,176 @@ export function useImageAttachment() {
 // 语音输入
 // ====================================================================
 
+/** 是否在 Tauri 环境 */
+function isTauriEnv(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
+
+/** 挑选 MediaRecorder 支持的音频格式（优先 m4a，便于 SFSpeechRecognizer 识别） */
+function pickSupportedMimeType(): string {
+  if (
+    typeof MediaRecorder === 'undefined' ||
+    typeof MediaRecorder.isTypeSupported !== 'function'
+  ) {
+    return ''
+  }
+  const candidates = [
+    'audio/mp4',
+    'audio/mp4;codecs=mp4a.40.2',
+    'audio/webm;codecs=opus',
+    'audio/webm',
+  ]
+  for (const c of candidates) {
+    if (MediaRecorder.isTypeSupported(c)) return c
+  }
+  return ''
+}
+
+/** 根据 mimeType 推导文件扩展名 */
+function mimeToExt(mimeType: string): string {
+  if (mimeType.includes('mp4')) return 'm4a'
+  if (mimeType.includes('webm')) return 'webm'
+  return 'm4a'
+}
+
 /**
  * 语音输入 hook
- * 使用 Web Speech API（SpeechRecognition）
- * 权限由 Tauri 原生层在启动时预设为 ALLOW，无需用户授权
  *
- * @param onSpeechResult 语音识别结果回调，接收完整文本（含最终+中间结果）
+ * ## 双引擎策略
+ * - **Tauri macOS**：WKWebView 无 SpeechRecognition，改用
+ *   `getUserMedia + MediaRecorder` 录音 → 落盘 → Rust 调 Apple
+ *   SFSpeechRecognizer（离线、免 Key）识别。
+ * - **其他环境（Chrome / Edge / Windows Tauri）**：使用 Web Speech API（SpeechRecognition）。
+ *
+ * @param onSpeechResult 语音识别结果回调，接收完整文本
  */
 export function useVoiceInput(onSpeechResult: (text: string) => void) {
   const [isRecording, setIsRecording] = useState(false)
+  const [isTranscribing, setIsTranscribing] = useState(false)
   const recognitionRef = useRef<any>(null)
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const mediaStreamRef = useRef<MediaStream | null>(null)
   const [voiceSupported, setVoiceSupported] = useState(true)
+  const isMacTauriRef = useRef(false)
 
-  /** 检测浏览器是否支持语音识别 */
+  /** 检测当前环境支持的语音方案 */
   useEffect(() => {
-    const SpeechRecognition =
-      (window as any).SpeechRecognition ||
-      (window as any).webkitSpeechRecognition
-    if (!SpeechRecognition) {
-      setVoiceSupported(false)
+    let mounted = true
+    ;(async () => {
+      let macTauri = false
+      if (isTauriEnv()) {
+        try {
+          const platform = await invoke<string>('os_platform')
+          macTauri = platform === 'macos'
+        } catch {
+          macTauri = false
+        }
+      }
+      if (!mounted) return
+      isMacTauriRef.current = macTauri
+      const SpeechRecognition =
+        (window as any).SpeechRecognition ||
+        (window as any).webkitSpeechRecognition
+      // macOS Tauri 走原生识别；其余环境要求浏览器支持 Web Speech API
+      setVoiceSupported(macTauri || !!SpeechRecognition)
+    })()
+    return () => {
+      mounted = false
     }
   }, [])
 
+  /** 清理录音资源（停止所有音轨） */
+  const cleanupRecorder = useCallback(() => {
+    mediaStreamRef.current?.getTracks().forEach((t) => t.stop())
+    mediaStreamRef.current = null
+    recorderRef.current = null
+  }, [])
+
+  /** macOS：录音 → 落盘 → Rust SFSpeechRecognizer 识别 */
+  const startMacRecording = useCallback(async () => {
+    let stream: MediaStream | null = null
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      mediaStreamRef.current = stream
+      const mimeType = pickSupportedMimeType()
+      const recorder = new MediaRecorder(
+        stream,
+        mimeType ? { mimeType } : undefined,
+      )
+      const chunks: Blob[] = []
+
+      recorder.ondataavailable = (e: BlobEvent) => {
+        if (e.data && e.data.size > 0) chunks.push(e.data)
+      }
+
+      recorder.onerror = (e: Event) => {
+        console.error('录音出错:', e)
+        cleanupRecorder()
+        setIsRecording(false)
+        showToast(t('启动语音识别失败，请检查麦克风权限'))
+      }
+
+      recorder.onstop = async () => {
+        cleanupRecorder()
+        setIsRecording(false)
+        setIsTranscribing(true)
+        try {
+          const blob = new Blob(chunks, { type: mimeType || 'audio/mp4' })
+          if (blob.size === 0) {
+            showToast(t('未检测到语音，请重试'))
+            return
+          }
+          const buffer = new Uint8Array(await blob.arrayBuffer())
+          const { tempDir } = await import('@tauri-apps/api/path')
+          const dir = (await tempDir()).replace(/\\/g, '/').replace(/\/+$/, '')
+          const path = `${dir}/virlen-voice-${Date.now()}.${mimeToExt(mimeType)}`
+          await invoke('save_file_to_path', { buffer, path })
+          const text = await invoke<string>('macos_transcribe_speech', { path })
+          const trimmed = (text || '').trim()
+          if (trimmed) {
+            onSpeechResult(trimmed)
+          } else {
+            showToast(t('未检测到语音，请重试'))
+          }
+        } catch (err: any) {
+          console.error('语音识别失败:', err)
+          showToast(`${t('语音识别出错')}: ${err?.message || err}`)
+        } finally {
+          setIsTranscribing(false)
+        }
+      }
+
+      recorder.start()
+      recorderRef.current = recorder
+      setIsRecording(true)
+    } catch (err: any) {
+      console.error('获取麦克风失败:', err)
+      cleanupRecorder()
+      showToast(t('启动语音识别失败，请检查麦克风权限'))
+    }
+  }, [cleanupRecorder, onSpeechResult])
+
   const toggleVoiceInput = useCallback(() => {
+    if (isTranscribing) return
+
     if (isRecording) {
       // 停止录音
-      recognitionRef.current?.stop()
+      if (isMacTauriRef.current) {
+        recorderRef.current?.stop()
+      } else {
+        recognitionRef.current?.stop()
+      }
       setIsRecording(false)
       return
     }
 
+    // macOS Tauri：录音 + 原生 SFSpeechRecognizer
+    if (isMacTauriRef.current) {
+      startMacRecording()
+      return
+    }
+
+    // 其他环境：Web Speech API
     const SpeechRecognition =
       (window as any).SpeechRecognition ||
       (window as any).webkitSpeechRecognition
@@ -188,8 +329,13 @@ export function useVoiceInput(onSpeechResult: (text: string) => void) {
         showToast(t('未检测到语音，请重试'))
       } else if (event.error === 'audio-capture') {
         showToast(t('未检测到麦克风设备'))
+      } else if (
+        event.error === 'service-not-allowed' ||
+        event.error === 'network'
+      ) {
+        showToast(t('无法连接语音识别服务，请检查网络连接'))
       } else {
-        showToast(`语音识别出错: ${event.error}`)
+        showToast(`${t('语音识别出错')}: ${event.error}`)
       }
     }
 
@@ -205,14 +351,16 @@ export function useVoiceInput(onSpeechResult: (text: string) => void) {
       showToast(t('启动语音识别失败，请检查麦克风权限'))
       setIsRecording(false)
     }
-  }, [isRecording, onSpeechResult])
+  }, [isRecording, isTranscribing, startMacRecording, onSpeechResult])
 
-  /** 组件卸载时停止录音 */
+  /** 组件卸载时停止录音/识别 */
   useEffect(() => {
     return () => {
       recognitionRef.current?.stop()
+      recorderRef.current?.stop()
+      mediaStreamRef.current?.getTracks().forEach((t) => t.stop())
     }
   }, [])
 
-  return { isRecording, voiceSupported, toggleVoiceInput }
+  return { isRecording, isTranscribing, voiceSupported, toggleVoiceInput }
 }

@@ -218,6 +218,8 @@
   "未检测到麦克风设备": "No microphone device detected",
   "启动语音识别失败，请检查麦克风权限": "Failed to start speech recognition. Please check microphone permissions.",
   "语音识别出错": "Speech recognition error",
+  "无法连接语音识别服务，请检查网络连接": "Speech recognition service unavailable. Please check your network connection.",
+  "语音识别中...": "Recognizing...",
   "已导出到：$__path__": "Exported to: $__path__",
   "导出失败：$__error__": "Export failed: $__error__",
   "已导出到：": "Exported to: ",

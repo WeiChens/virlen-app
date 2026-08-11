@@ -11,6 +11,7 @@ mod rag;
 mod session_db;
 mod vision_service;
 mod search;
+mod speech_service;
 mod task_manager;
 
 /// 将文件或目录移动到系统回收站（跨平台）
@@ -322,6 +323,9 @@ pub fn run() {
             session_db::cmd_append_messages,
             // DeepSeek tokenizer（token 计数）
             deepseek_tokenizer::cmd_count_tokens,
+            // macOS 离线语音识别（SFSpeechRecognizer）
+            speech_service::macos_request_speech_authorization,
+            speech_service::macos_transcribe_speech,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
