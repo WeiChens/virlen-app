@@ -39,7 +39,7 @@ async function estimateTokens(...texts: string[]): Promise<number> {
  */
 export async function compressContext(
   session: Session,
-  allMessages: Message[],
+  allMessages: Message[]
 ): Promise<{ summary?: string; messages: Message[] }> {
   // 找到最后一个 summary 消息的索引
   let idx = -1
@@ -73,8 +73,8 @@ export async function compressContext(
     session.allowedTools === undefined
       ? allToolDefs
       : session.allowedTools.length > 0
-        ? allToolDefs.filter((t) => session.allowedTools!.includes(t.name))
-        : undefined
+      ? allToolDefs.filter((t) => session.allowedTools!.includes(t.name))
+      : undefined
 
   const request: ChatRequest = {
     model,
@@ -106,13 +106,14 @@ export async function compressContext(
         ? response.content
         : JSON.stringify(response.content)
 
-    const inputText = request.messages
-      .map((m) =>
-        typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-      )
-      .join('')
+    let firstContent = request.messages?.[0]?.content
+    const inputText =
+      typeof firstContent === 'string'
+        ? firstContent
+        : JSON.stringify(firstContent)
     const systemText = request.systemPrompt || ''
     // DeepSeek tokenizer 精确计数（API 不返回 usage，需自行计算）
+    debugger
     const [promptTokens, completionTokens] = await Promise.all([
       estimateTokens(inputText, systemText),
       estimateTokens(summaryContent),
