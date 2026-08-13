@@ -242,15 +242,49 @@ fn has_cmd_syntax(cmd: &str) -> bool {
     false
 }
 
+/// 引号感知：取命令段第一个 token。
+/// 单引号/双引号内的空白和分隔符不参与切分（如 "C:\Program Files\app.exe" 视为一个整体）。
+fn extract_first_token(raw: &str) -> String {
+    let mut token = String::new();
+    let mut quote: Option<char> = None;
+    let chars: Vec<char> = raw.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        if let Some(q) = quote {
+            token.push(ch);
+            // 双引号内支持 \" 转义（单引号内无反斜杠转义）
+            if q == '"' && ch == '\\' && i + 1 < chars.len() {
+                token.push(chars[i + 1]);
+                i += 2;
+                continue;
+            }
+            if ch == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if ch == '"' || ch == '\'' {
+            quote = Some(ch);
+            token.push(ch);
+            i += 1;
+            continue;
+        }
+        if ch.is_whitespace() || matches!(ch, '|' | '&' | ';' | '<' | '>' | '(' | ')') {
+            break;
+        }
+        token.push(ch);
+        i += 1;
+    }
+    token
+}
+
 /// 提取命令名（第一个 token，去路径/扩展名/引号）
 fn extract_command_name(raw: &str) -> String {
     let trimmed = raw.trim_start();
-    let first_token = trimmed
-        .split(|c: char| matches!(c, ' ' | '|' | '&' | ';' | '<' | '>' | '(' | ')'))
-        .find(|t| !t.is_empty())
-        .unwrap_or("");
     // 同时剥掉首尾引号（JS 只剥开头，这里补上结尾，`'npm'` → `npm` 更准确）
-    let mut t = first_token
+    let mut t = extract_first_token(trimmed)
         .trim_start_matches(['"', '\''])
         .trim_end_matches(['"', '\''])
         .to_string();
@@ -287,17 +321,65 @@ fn unwrap_shell_wrapper(cmd_str: &str, depth: i32) -> String {
     cmd_str.to_string()
 }
 
+/// 引号感知：按分隔符切分 shell 命令段，引号内的分隔符不生效。
+/// 例如 `echo "a;b"` 不会被 `;` 切开，`echo 'a&&b'` 不会被 `&&` 切开。
+fn split_command_respecting_quotes(raw: &str, separators: &[&str]) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let chars: Vec<char> = raw.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        if let Some(q) = quote {
+            current.push(ch);
+            // 双引号内支持 \" 转义（单引号内无反斜杠转义）
+            if q == '"' && ch == '\\' && i + 1 < chars.len() {
+                current.push(chars[i + 1]);
+                i += 2;
+                continue;
+            }
+            if ch == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if ch == '"' || ch == '\'' {
+            quote = Some(ch);
+            current.push(ch);
+            i += 1;
+            continue;
+        }
+        let mut matched = false;
+        for sep in separators {
+            let sep_chars: Vec<char> = sep.chars().collect();
+            if chars[i..].starts_with(&sep_chars[..]) {
+                parts.push(std::mem::take(&mut current));
+                i += sep_chars.len();
+                matched = true;
+                break;
+            }
+        }
+        if matched {
+            continue;
+        }
+        current.push(ch);
+        i += 1;
+    }
+    parts.push(current);
+    parts
+}
+
 /// 提取命令中所有被 &&、||、; 分隔的命令名（去重）
+/// ⚠️ 引号内的分隔符不切分（如 `echo "a;b"` 不会把 `b` 当命令名）
 fn extract_all_command_names(raw: &str) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
-    for seg1 in raw.split("&&") {
-        for seg2 in seg1.split("||") {
-            for seg3 in seg2.split(';') {
-                let name = extract_command_name(seg3);
-                if !name.is_empty() && !names.contains(&name) {
-                    names.push(name);
-                }
-            }
+    let segments = split_command_respecting_quotes(raw, &["&&", "||", ";"]);
+    for seg in &segments {
+        let name = extract_command_name(seg);
+        if !name.is_empty() && !names.contains(&name) {
+            names.push(name);
         }
     }
     names
@@ -1696,6 +1778,40 @@ mod tests {
         assert_eq!(classify_command("npm install"), "install");
         assert_eq!(classify_command("cmd /c \"npm install\""), "install");
         assert_eq!(classify_command("echo hi && rm x"), "dangerous");
+    }
+
+    #[test]
+    fn test_classify_command_respects_quotes() {
+        // 引号内的 ; / && / || 不应被当作命令分隔符展开
+        assert_eq!(classify_command("echo \"a;b\""), "safe");
+        assert_eq!(classify_command("echo \"a&&b\""), "safe");
+        assert_eq!(classify_command("echo \"a||b\""), "safe");
+        assert_eq!(classify_command("echo 'rm -rf /'"), "safe");
+        assert_eq!(classify_command("echo \"rm -rf /; whoami\""), "safe");
+        assert_eq!(classify_command("git commit -m \"fix; bug\""), "safe");
+        // 引号外的分隔符仍然生效
+        assert_eq!(classify_command("echo safe; rm -rf /"), "dangerous");
+        assert_eq!(classify_command("echo safe && rm -rf /"), "dangerous");
+        assert_eq!(classify_command("echo safe || npm install"), "install");
+        // 带引号的命令名可正确提取（引号内空格不拆）
+        assert_eq!(extract_command_name("\"C:/Program Files/app.exe\" --flag"), "app");
+        assert_eq!(extract_command_name("'my app' --help"), "my app");
+
+        // ---- 双引号 / 单引号互相嵌套 ----
+        // 双引号内含单引号：单引号只是普通字符
+        assert_eq!(classify_command("echo \"it's a; test\""), "safe");
+        // 单引号内含双引号：双引号只是普通字符
+        assert_eq!(classify_command("echo 'say \"hi; there\"'"), "safe");
+        // 两种引号在同一命令中互相嵌套
+        assert_eq!(classify_command("echo \"a'b'c\" && echo 'x\"y\"z'"), "safe");
+        // 双引号内转义引号后，分隔符仍在引号内
+        assert_eq!(classify_command("echo \"a\\\"b;c\""), "safe");
+        // 单引号内反斜杠不转义：`'a\'` 在 \ 后的 ' 处闭合，; 是真正的分隔符
+        // （两个子命令都是 echo，仍判 safe）
+        assert_eq!(classify_command("echo 'a\\'; echo hi"), "safe");
+        assert_eq!(extract_all_command_names("echo 'a\\'; echo hi"), vec!["echo"]);
+        // 转义反斜杠后引号真正闭合，外部 rm 仍应被识别
+        assert_eq!(classify_command("echo \"a\\\\\"; rm -rf /"), "dangerous");
     }
 
     #[test]

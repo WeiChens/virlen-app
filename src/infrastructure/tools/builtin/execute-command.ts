@@ -44,18 +44,103 @@ function hasCmdSyntax(cmd: string): boolean {
 }
 
 /**
+ * 引号感知：提取命令段第一个 token。
+ * 单引号/双引号内的空白和分隔符不参与切分（如 "C:\Program Files\app.exe" 视为一个整体）。
+ */
+function extractFirstToken(raw: string): string {
+  let token = ''
+  let quote: '"' | "'" | null = null
+  let i = 0
+  while (i < raw.length) {
+    const ch = raw[i]
+    if (quote) {
+      token += ch
+      // 双引号内支持 \" 转义（单引号内无反斜杠转义）
+      if (quote === '"' && ch === '\\' && i + 1 < raw.length) {
+        token += raw[i + 1]
+        i += 2
+        continue
+      }
+      if (ch === quote) quote = null
+      i++
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      token += ch
+      i++
+      continue
+    }
+    if (/[\s|&;<>()]/.test(ch)) break
+    token += ch
+    i++
+  }
+  return token
+}
+
+/**
  * 提取命令名（第一个 token，去路径/扩展名/引号）
  */
-function extractCommandName(raw: string): string {
+export function extractCommandName(raw: string): string {
   const trimmed = raw.trimStart()
-  const firstToken =
-    trimmed.split(/[\s|&;<>()]/).find((t) => t.length > 0) || ''
+  const firstToken = extractFirstToken(trimmed)
   return firstToken
     .replace(/^['"]/, '')
+    .replace(/['"]$/, '') // 剥掉尾引号（与 Rust 侧对齐）
     .replace(/^\.\//, '')
     .replace(/^.*[/\\]/, '') // 去掉路径前缀
     .toLowerCase()
     .replace(/\.(exe|bat|cmd|ps1|sh)$/, '') // 去扩展名
+}
+
+/**
+ * 引号感知：按分隔符切分 shell 命令，引号内的分隔符不生效。
+ * 例如 `echo "a;b"` 不会被 `;` 切开，`echo 'a&&b'` 不会被 `&&` 切开。
+ */
+function splitCommandRespectingQuotes(
+  cmd: string,
+  separators: string[],
+): string[] {
+  const parts: string[] = []
+  let current = ''
+  let quote: '"' | "'" | null = null
+  let i = 0
+  while (i < cmd.length) {
+    const ch = cmd[i]
+    if (quote) {
+      current += ch
+      // 双引号内支持 \" 转义（单引号内无反斜杠转义）
+      if (quote === '"' && ch === '\\' && i + 1 < cmd.length) {
+        current += cmd[i + 1]
+        i += 2
+        continue
+      }
+      if (ch === quote) quote = null
+      i++
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      current += ch
+      i++
+      continue
+    }
+    let matched = false
+    for (const sep of separators) {
+      if (cmd.startsWith(sep, i)) {
+        parts.push(current)
+        current = ''
+        i += sep.length
+        matched = true
+        break
+      }
+    }
+    if (matched) continue
+    current += ch
+    i++
+  }
+  parts.push(current)
+  return parts
 }
 
 /**
@@ -78,11 +163,10 @@ function unwrapShellWrapper(cmdStr: string, depth: number = 5): string {
 
 /**
  * 提取命令中所有被 &&、||、; 分隔的命令名（去重）
+ * ⚠️ 引号内的分隔符不切分（如 `echo "a;b"` 不会把 `b` 当命令名）
  */
-function extractAllCommandNames(raw: string): string[] {
-  // 先按 &&、||、; 分割子命令
-  // 注意：& 和 | 不是单词字符，不能用 \b 匹配，直接用 &&、|| 字面量
-  const segments = raw.split(/(?:&&|\|\|)|;/)
+export function extractAllCommandNames(raw: string): string[] {
+  const segments = splitCommandRespectingQuotes(raw, ['&&', '||', ';'])
   const names = new Set<string>()
   for (const seg of segments) {
     const name = extractCommandName(seg)
@@ -94,7 +178,9 @@ function extractAllCommandNames(raw: string): string[] {
 /**
  * 命令风险分类
  */
-function classifyCommand(cmdStr: string): 'safe' | 'install' | 'dangerous' {
+export function classifyCommand(
+  cmdStr: string,
+): 'safe' | 'install' | 'dangerous' {
   const inner = unwrapShellWrapper(cmdStr)
   const cmds = extractAllCommandNames(inner)
 
