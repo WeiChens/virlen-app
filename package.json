@@ -50,5 +50,19 @@
     "typescript": "~7.0.2",
     "vite": "^7.0.4",
     "vitest": "^4.1.9"
-  }
+  },
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WeiChens/virlen-app.git"
+  },
+  "keywords": [],
+  "author": "",
+  "bugs": {
+    "url": "https://github.com/WeiChens/virlen-app/issues"
+  },
+  "homepage": "https://github.com/WeiChens/virlen-app#readme"
 }
