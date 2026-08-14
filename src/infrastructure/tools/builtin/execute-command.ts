@@ -422,10 +422,13 @@ async function runCommand(
   let shellArgs: string[]
 
   if (isWin && hasCmdSyntax(cmdStr)) {
-    // ⚠️ 必须用 /s /c 而非 /c，因为 Tauri Rust 底层 CreateProcess 会把含空格的
-    // cmdStr 包裹在 "..." 中，且将内部 " 转义为 \"。加上 /s 后 cmd.exe 会：
-    // 1. 剥离 Rust 添加的外层引号
-    // 2. 把 \" 还原为 "，使路径引号正确生效
+    // ⚠️ 已知限制：本路径（plugin-shell）底层是 StdCommand::new().args([...])，
+    // Rust 会把含空格/引号的 cmdStr 包裹在 "..." 中、内部 " 转义成 \"，
+    // 而 cmd.exe 把 \ 当普通字符，\" 不会还原成 "（cmd /s 只会剥首尾引号），
+    // 因此嵌套引号命令（如 findstr /i "a b"）在此路径下会被撕碎 → 退出码 1。
+    // 该问题在 Rust 原生 execute_command（native_tools.rs run_command_native）
+    // 已用 CommandExt::raw_arg 原样拼接命令行修复；本 JS 桥仅在原生安全配置
+    // 缺失时回退使用，属罕见路径。若无插件支持 raw command line，无法在此彻底修复。
     shellName = 'cmd'
     shellArgs = ['/s', '/c', cmdStr]
   } else if (isWin) {

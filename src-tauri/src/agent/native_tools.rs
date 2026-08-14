@@ -722,7 +722,26 @@ async fn run_command_native(
     };
 
     let mut cmd = Command::new(shell);
-    cmd.args(&args);
+    // ⚠️ Windows 的 cmd 路径不能用普通 .arg() 传命令串：
+    // std::process::Command 会把含空格/引号的参数包上 "..." 并把内部 " 转义成 \"，
+    // 而 cmd.exe 把 \ 当普通字符，\" 不会还原成 "（JS 侧“/s 会把 \" 还原成 \"”的说法是错的），
+    // 导致嵌套引号命令被撕碎（如 findstr /i "a b" 变成 findstr /i \"a b\" → 退出码 1）。
+    // 正确做法：cmd 路径用 raw_arg 把用户命令原样拼到命令行，与在 cmd 里直接输入行为一致。
+    // powershell 的 .NET 解析器认得 \" 能正确还原，保留普通 .arg()。
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        if shell == "cmd" {
+            cmd.arg("/s").arg("/c");
+            cmd.as_std_mut().raw_arg(cmd_str);
+        } else {
+            cmd.args(&args);
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        cmd.args(&args);
+    }
     #[cfg(target_os = "windows")]
     {
         // 隐藏控制台窗口：Windows 上 spawn cmd/powershell 默认会弹出黑窗口，
