@@ -56,7 +56,7 @@ fn resolve_models_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .join("ppocrv5_mobile_det.onnx")
         .exists()
     {
-        return Ok(dev_path);
+        return Ok(strip_verbatim_prefix(dev_path));
     }
 
     if let Ok(resource_dir) = app.path().resource_dir() {
@@ -68,7 +68,11 @@ fn resolve_models_dir(app: &AppHandle) -> Result<PathBuf, String> {
                 .join("ppocrv5_mobile_det.onnx")
                 .exists()
             {
-                return Ok(p);
+                // Tauri 的 resource_dir() 在 Windows 上可能返回带 \\?\ 前缀的
+                // verbatim 路径。quasivision 内部用字符串拼接 "subdir/file" 构造
+                // 模型路径，verbatim 路径下 "/" 不会被当作分隔符，导致模型文件
+                // "找不到"。这里统一去掉 \\?\ 前缀转成普通路径。
+                return Ok(strip_verbatim_prefix(p));
             }
         }
     }
@@ -77,6 +81,18 @@ fn resolve_models_dir(app: &AppHandle) -> Result<PathBuf, String> {
         "quasivision models directory not found.\nSearched:\n  - {:?}\n  - resource_dir/quasivision_models/",
         dev_path
     ))
+}
+
+/// 去掉 Windows verbatim 路径前缀（`\\?\`），转成普通路径。
+///
+/// 只处理以 `\\?\` 开头的绝对路径（如 `\\?\E:\...`），其余路径原样返回。
+fn strip_verbatim_prefix(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        p
+    }
 }
 
 fn load_models(app: &AppHandle) -> Result<(), String> {
