@@ -72,6 +72,12 @@ pub fn agent_cancel(state: tauri::State<'_, Arc<AgentEngine>>, session_id: Strin
     state.cancel(&session_id);
 }
 
+/// 终止指定 tool_call_id 正在运行的命令（前端 ToolOutput.kill 回调）
+#[tauri::command]
+pub fn agent_kill_command(tool_call_id: String) -> bool {
+    native_tools::kill_running_command(&tool_call_id)
+}
+
 /// 获取当前会话的运行快照
 #[tauri::command]
 pub fn agent_get_run_snapshot(

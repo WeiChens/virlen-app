@@ -16,8 +16,9 @@ use super::event_sink::EventSink;
 use super::types::NativeToolSecurity;
 use crate::file_ops;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 // ==================== 统一结果 ====================
@@ -452,6 +453,66 @@ fn kill_process_tree(pid: u32) {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// 运行中命令注册表 — 支持前端「终止」按钮（ToolOutput.kill）
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// 运行中命令条目：记录子进程 pid 和 kill 请求标志
+struct RunningCommand {
+    pid: u32,
+    /// 前端点击「终止」后置位，等待循环检测到后按用户取消处理
+    kill_requested: Arc<AtomicBool>,
+}
+
+/// 运行中命令注册表：tool_call_id → RunningCommand
+static RUNNING_COMMANDS: LazyLock<Mutex<HashMap<String, RunningCommand>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// 注册一个运行中的命令（run_command_native 内部调用）
+fn register_running_command(tool_call_id: &str, pid: u32) -> Arc<AtomicBool> {
+    let kill_requested = Arc::new(AtomicBool::new(false));
+    RUNNING_COMMANDS.lock().unwrap().insert(
+        tool_call_id.to_string(),
+        RunningCommand {
+            pid,
+            kill_requested: kill_requested.clone(),
+        },
+    );
+    kill_requested
+}
+
+/// 移除已结束的命令
+fn unregister_running_command(tool_call_id: &str) {
+    RUNNING_COMMANDS.lock().unwrap().remove(tool_call_id);
+}
+
+/// 按 tool_call_id 终止正在运行的命令（前端 ToolOutput.kill 回调调用）
+///
+/// 返回是否找到并发送了 kill 请求。
+pub fn kill_running_command(tool_call_id: &str) -> bool {
+    let entry = {
+        let map = RUNNING_COMMANDS.lock().unwrap();
+        map.get(tool_call_id).map(|c| (c.pid, c.kill_requested.clone()))
+    };
+    if let Some((pid, kill_requested)) = entry {
+        kill_requested.store(true, Ordering::SeqCst);
+        kill_process_tree(pid);
+        true
+    } else {
+        false
+    }
+}
+
+/// 等待前端「终止」请求（kill_requested 被置位）
+async fn wait_for_kill_request(kill_requested: &Arc<AtomicBool>) {
+    loop {
+        if kill_requested.load(Ordering::SeqCst) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 /// 确保缓冲区存在第 row 行（不足则补空行）
 fn ensure_row(buffer: &mut Vec<Vec<char>>, row: usize) {
     while buffer.len() <= row {
@@ -684,13 +745,35 @@ async fn run_command_native(
         .map_err(|e| format!("[{} error] {}", shell, e))?;
     let pid = child.id().unwrap_or(0);
 
+    // 注册到运行中命令表，支持前端「终止」按钮（ToolOutput.kill）
+    let kill_requested = register_running_command(ctx.tool_call_id, pid);
+
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
+
+    // 实时输出推送通道：读取任务把 stdout/stderr 数据块发回主任务，
+    // 主任务通过 sink 向 JS 推送 `agent:tool-output` 事件（对齐 JS ctx.write → toolOutputStore）
+    use tokio::sync::mpsc;
+    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<(String, String)>(); // (stream, chunk)
+
+    let stdout_tx = out_tx.clone();
+    let stderr_tx = out_tx.clone();
+    drop(out_tx); // 主任务不再持有发送端，stdout/stderr 任务结束后 out_rx 会自动关闭
 
     let stdout_handle = tokio::spawn(async move {
         if let Some(mut out) = stdout_pipe {
             let mut buf = Vec::new();
-            let _ = out.read_to_end(&mut buf).await;
+            let mut chunk = vec![0u8; 8192];
+            loop {
+                let n = match out.read(&mut chunk).await {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(_) => break,
+                };
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&chunk[..n]).to_string();
+                let _ = stdout_tx.send(("stdout".to_string(), text));
+            }
             String::from_utf8_lossy(&buf).to_string()
         } else {
             String::new()
@@ -699,31 +782,102 @@ async fn run_command_native(
     let stderr_handle = tokio::spawn(async move {
         if let Some(mut err) = stderr_pipe {
             let mut buf = Vec::new();
-            let _ = err.read_to_end(&mut buf).await;
+            let mut chunk = vec![0u8; 8192];
+            loop {
+                let n = match err.read(&mut chunk).await {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(_) => break,
+                };
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&chunk[..n]).to_string();
+                let _ = stderr_tx.send(("stderr".to_string(), text));
+            }
             String::from_utf8_lossy(&buf).to_string()
         } else {
             String::new()
         }
     });
 
-    let (exit_code, killed_by_timeout, killed_by_user) = tokio::select! {
-        status = child.wait() => {
-            (status.ok().and_then(|s| s.code()), false, false)
-        }
-        _ = sleep(Duration::from_secs((timeout_secs.max(1)) as u64)) => {
-            kill_process_tree(pid);
-            let _ = child.wait().await;
-            (None, true, false)
-        }
-        _ = ctx.cancel.cancelled() => {
-            kill_process_tree(pid);
-            let _ = child.wait().await;
-            (None, false, true)
-        }
-    };
+    // 等待子进程退出（与超时/取消并行），退出码通过 done 通道回传
+    let (done_tx, mut done_rx) = mpsc::unbounded_channel::<Option<i32>>();
+    let wait_handle = tokio::spawn(async move {
+        let code = child.wait().await.ok().and_then(|s| s.code());
+        let _ = done_tx.send(code);
+    });
 
-    let stdout = stdout_handle.await.unwrap_or_default();
-    let stderr = stderr_handle.await.unwrap_or_default();
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    let mut exit_code: Option<Option<i32>> = None;
+    let mut out_closed = false;
+    let mut got_exit = false;
+    let mut killed_by_timeout = false;
+    let mut killed_by_user = false;
+
+    loop {
+        tokio::select! {
+            maybe = out_rx.recv() => {
+                match maybe {
+                    Some((stream, chunk)) => {
+                        if stream == "stdout" {
+                            stdout.push_str(&chunk);
+                        } else {
+                            stderr.push_str(&chunk);
+                        }
+                        // 实时推送（与 JS `ctx.write(chunk)` 对齐）
+                        ctx.sink.emit_raw("agent:tool-output", json!({
+                            "sessionId": ctx.session_id,
+                            "toolCallId": ctx.tool_call_id,
+                            "stream": stream,
+                            "chunk": chunk,
+                        }));
+                    }
+                    None => out_closed = true,
+                }
+            }
+            code = done_rx.recv() => {
+                exit_code = code;
+                got_exit = true;
+            }
+            // 前端「终止」按钮：kill_running_command 已杀进程树，这里按用户取消处理
+            _ = wait_for_kill_request(&kill_requested), if !killed_by_timeout && !killed_by_user => {
+                killed_by_user = true;
+            }
+            _ = sleep(Duration::from_secs((timeout_secs.max(1)) as u64)), if !killed_by_timeout && !killed_by_user => {
+                kill_process_tree(pid);
+                killed_by_timeout = true;
+            }
+            _ = ctx.cancel.cancelled(), if !killed_by_timeout && !killed_by_user => {
+                kill_process_tree(pid);
+                killed_by_user = true;
+            }
+        }
+        if killed_by_timeout || killed_by_user {
+            break;
+        }
+        // 输出流已全部读取 且 已拿到退出码 → 结束
+        if out_closed && got_exit {
+            break;
+        }
+    }
+
+    // 收尾：等待读取任务和 wait 任务结束，拿到完整输出
+    let stdout_final = stdout_handle.await.unwrap_or_default();
+    let stderr_final = stderr_handle.await.unwrap_or_default();
+    let _ = wait_handle.await;
+    if !stdout_final.is_empty() {
+        stdout = stdout_final;
+    }
+    if !stderr_final.is_empty() {
+        stderr = stderr_final;
+    }
+    // 移除运行中命令注册
+    unregister_running_command(ctx.tool_call_id);
+    let exit_code = if killed_by_timeout || killed_by_user {
+        None
+    } else {
+        exit_code.flatten()
+    };
 
     let mut result = String::new();
     if killed_by_user {

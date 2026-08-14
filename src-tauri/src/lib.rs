@@ -306,6 +306,7 @@ pub fn run() {
             // Agent 引擎（Rust 聊天循环）
             agent::agent_send_message,
             agent::agent_cancel,
+            agent::agent_kill_command,
             agent::agent_get_run_snapshot,
             agent::agent_clear_run_snapshot,
             agent::agent_dispose,

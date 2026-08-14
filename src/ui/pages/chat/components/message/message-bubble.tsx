@@ -11,7 +11,7 @@ import MarkdownRenderer from './markdown-renderer'
 import './message-bubble.scss'
 import { showToast } from '@/ui/components/shared/Toast'
 import { timeFormat, formatDuration } from '@/utils/time'
-import { useRef, useState } from 'react'
+import { memo, useRef, useState } from 'react'
 import CollapsedSvg from '@/ui/components/icons/CollapsedSvg'
 import ThinkSvg from '@/ui/components/icons/ThinkSvg'
 import { ToolCallMessage, ToolCallGroup } from '../tool-call'
@@ -29,7 +29,7 @@ interface Props {
   allMessages: Message[]
 }
 
-export default function MessageBubble({
+function MessageBubble({
   message,
   onEdit,
   onDelete,
@@ -298,3 +298,5 @@ export default function MessageBubble({
     </>
   )
 }
+
+export default memo(MessageBubble)

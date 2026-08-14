@@ -26,6 +26,7 @@ import { securityRepo } from '@/infrastructure/securityRepo'
 import { securityService } from '@/services/security-service'
 import { getSkillsDirPath } from '@/skill/skillStore'
 import { settingsState } from '@/ui/store'
+import { toolOutputStore } from '@/infrastructure/tools/output-store'
 import type { Message, Session } from '@/types'
 
 /** 会话级用户交互处理器（chat-service 注册，桥接层使用） */
@@ -63,6 +64,32 @@ function ensureBridgeStarted(): Promise<void> {
     await listen('agent:provider-request', (e) => {
       handleProviderRequest(e.payload as any).catch(() => {})
     })
+    // Rust 原生 execute_command 的实时输出推送（对齐 JS ctx.write → toolOutputStore）
+    await listen('agent:tool-output', (e) => {
+      const payload = e.payload as {
+        sessionId: string
+        toolCallId: string
+        stream: 'stdout' | 'stderr'
+        chunk: string
+      }
+      if (!payload?.toolCallId) return
+      const chunk =
+        payload.stream === 'stderr' ? `[stderr] ${payload.chunk}` : payload.chunk
+
+      // Rust 引擎下前端没有走 JS executor，不会 register entry；
+      // 首次收到输出时注册带 kill 回调的 entry（对齐 JS 端 toolOutputStore.register）
+      if (!toolOutputStore.get(payload.toolCallId)) {
+        const toolCallId = payload.toolCallId
+        toolOutputStore.register(toolCallId, {
+          toolName: 'execute_command',
+          output: '',
+          kill: () => {
+            invoke('agent_kill_command', { toolCallId }).catch(() => {})
+          },
+        })
+      }
+      toolOutputStore.append(payload.toolCallId, chunk)
+    })
     bridgeStarted = true
   })()
   return bridgeStartPromise
@@ -96,7 +123,10 @@ async function handleToolRequest(payload: {
       toolCallId,
       // 取消由 Rust 层控制（Rust 在步骤间检查取消）
       abortSignal: new AbortController().signal,
-      write: () => {},
+      // 支持 execute_command 回退到 JS 桥执行时也能推送实时输出
+      write: (chunk: string) => {
+        toolOutputStore.append(toolCallId, chunk)
+      },
       skills,
     })
     await invoke('agent_tool_response', {
@@ -325,6 +355,13 @@ export const rustEngine: AgentEnginePort = {
       unlisten = await listen('agent:event', (e) => {
         const payload = e.payload as { sessionId: string; event: any }
         if (payload.sessionId === sessionId) {
+          // Rust 原生 execute_command 执行完毕（tool_call 事件携带 result）时
+          // 清理实时输出缓存，避免 RunningOutput 残留
+          if (payload.event?.type === 'tool_call' && payload.event?.data?.result != null) {
+            const id = payload.event.data.id
+            if (id) toolOutputStore.flush(id)
+            if (id) toolOutputStore.remove(id)
+          }
           onEvent?.(payload.event)
         }
       })

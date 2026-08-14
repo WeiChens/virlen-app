@@ -11,6 +11,7 @@ import {
   useCallback,
   useState,
   useLayoutEffect,
+  useMemo,
 } from 'react'
 import type { Message } from '@/types'
 import { chatState, sessionStore, getSessionRuntime } from '@/ui/store'
@@ -30,6 +31,12 @@ import { observer } from 'mobx-react-lite'
 const PAGE_SIZE = 35
 const LOAD_MORE_STEP = PAGE_SIZE
 const SCROLL_TOP_THRESHOLD = 200 // 距顶部多少 px 时触发加载更多
+/**
+ * 锚点列表最多渲染的圆点数。
+ * 长会话（数千消息）里 user 消息可能上千条，全部渲染会挂载海量 DOM。
+ * 只保留最近 N 条（视觉上 CSS 也仅显示约 12 个点），其余通过滚动主列表查看。
+ */
+const MAX_ANCHOR_DOTS = 120
 
 interface ChatMessageListProps {
   /** 当前所有消息 */
@@ -63,12 +70,44 @@ function ChatMessageList({
   // 加载更多时刻的快照：scrollTop 和 scrollHeight
   const loadMoreSnapshotRef = useRef({ scrollTop: 0, scrollHeight: 0 })
   const prevMessagesLenRef = useRef(messages.length)
+  const resetPagingRef = useRef(false)
   const displayStartRef = useRef(displayStart)
   displayStartRef.current = displayStart
 
-  // 计算当前展示的消息
-  const displayedMessages = messages.slice(displayStart)
+  // 首次打开/切会话：等待布局稳定后再滚到底部（见 settleToBottom）
+  const settleTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // ⚡ 关键性能修复：会话切换 / 消息数剧变时，在「本次渲染」就重置分页到末尾。
+  // 之前放在 useEffect（commit 之后）才重置，导致 2500 条数据到达时先整屏渲染
+  // 全部消息（displayStart 仍为 0），再由 effect 事后纠正 → 白白卡顿 ~1.7s。
+  // 这里用 React 官方的 derived-state 模式：渲染中 setState，React 会丢弃本次
+  // 中间结果并立即用新 state 重渲染，因此只会渲染末尾 PAGE_SIZE 条。
+  {
+    const prevLen = prevMessagesLenRef.current
+    const currLen = messages.length
+    if (Math.abs(currLen - prevLen) > 1 || prevLen === 0) {
+      const target = Math.max(0, currLen - PAGE_SIZE)
+      if (displayStartRef.current !== target) {
+        displayStartRef.current = target
+        setDisplayStart(target)
+      }
+      resetPagingRef.current = true
+    }
+    prevMessagesLenRef.current = currLen
+  }
+
+  // 计算当前展示的消息（useMemo 避免父级重渲染时重复 slice）
+  const displayedMessages = useMemo(
+    () => messages.slice(displayStart),
+    [messages, displayStart],
+  )
   const hasMore = displayStart > 0
+
+  // 用户消息（锚点列表用，一次性过滤，避免每次渲染过滤两次全量数组）
+  const userMessages = useMemo(
+    () => messages.filter((m) => m.role === 'user'),
+    [messages],
+  )
 
   // 当前会话运行时状态
   const sessionId = chatState.value.currentSessionId
@@ -77,20 +116,15 @@ function ChatMessageList({
   const isCurrentPaused = currentRt?.paused ?? false
   const bottomNear = useRef(false)
 
-  // ==================== 重置分页（会话切换时） ====================
+  // ==================== 重置分页副作用（会话切换时） ====================
+  // displayStart 的重置已在渲染阶段完成（见上方 derived-state 块），
+  // 这里只清理「加载更多」相关状态，避免与渲染阶段重复 setState。
   useEffect(() => {
-    const prevLen = prevMessagesLenRef.current
-    const currLen = messages.length
-    prevMessagesLenRef.current = currLen
-    if (Math.abs(currLen - prevLen) > 1 || prevLen === 0) {
-      displayStartRef.current = Math.max(0, currLen - PAGE_SIZE)
-      setDisplayStart(displayStartRef.current)
+    if (resetPagingRef.current) {
+      resetPagingRef.current = false
       loadingMoreRef.current = false
-
       setIsLoadingMore(false)
       loadMoreSnapshotRef.current = { scrollTop: 0, scrollHeight: 0 }
-      // 切换会话 → 清空滚动拦截，确保能滚动到底部
-      // userScrollBlockUntilRef.current = 0
     }
     if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
       userScrollBlockUntilRef.current = 0
@@ -155,7 +189,63 @@ function ChatMessageList({
   // 用户发消息 → 无视拦截强制滚动；AI 回复 → 尊重拦截状态
   useEffect(() => {
     userScrollBlockUntilRef.current = 0
+    // 切会话：取消上次的底部钉住轮询，等新消息渲染后重新 settle
+    if (settleTimerRef.current) {
+      clearInterval(settleTimerRef.current)
+      settleTimerRef.current = null
+    }
   }, [sessionId])
+
+  /**
+   * 首次打开 / 切会话：容器处于隐藏态（opacity:0），等待布局稳定后再滚到底部并显示。
+   * markdown / canvas / 图片在首帧后仍可能异步改变高度，若按当时 scrollHeight 一次性滚动
+   * 会停在中间（旧 bug）。这里每 50ms 轮询 scrollHeight：
+   *   - 高度还在变 → 继续钉住底部 + 重置稳定计数
+   *   - 连续 3 次（~150ms）无变化 → 视为稳定，滚到底部后 setHide(false) 显示
+   */
+  const settleToBottom = useCallback(() => {
+    const el = messagesContainerRef.current
+    if (!el) return
+
+    if (settleTimerRef.current) clearInterval(settleTimerRef.current)
+    let lastH = el.scrollHeight
+    let stableCount = 0
+    el.scrollTop = el.scrollHeight
+
+    settleTimerRef.current = setInterval(() => {
+      const cur = messagesContainerRef.current
+      if (!cur) {
+        if (settleTimerRef.current) clearInterval(settleTimerRef.current)
+        settleTimerRef.current = null
+        return
+      }
+      cur.scrollTop = cur.scrollHeight
+      if (Math.abs(cur.scrollHeight - lastH) > 1) {
+        lastH = cur.scrollHeight
+        stableCount = 0
+      } else {
+        stableCount++
+        if (stableCount >= 3) {
+          // 高度稳定 → 停止轮询，滚到底部并显示
+          if (settleTimerRef.current) clearInterval(settleTimerRef.current)
+          settleTimerRef.current = null
+          cur.scrollTop = cur.scrollHeight
+          setHide(false)
+        }
+      }
+    }, 50)
+  }, [])
+
+  // 卸载时清理轮询
+  useEffect(() => {
+    return () => {
+      if (settleTimerRef.current) {
+        clearInterval(settleTimerRef.current)
+        settleTimerRef.current = null
+      }
+    }
+  }, [])
+
   const [hide, setHide] = useState(false)
   useLayoutEffect(() => {
     if (!sessionId) return
@@ -164,10 +254,14 @@ function ChatMessageList({
   useEffect(() => {
     const displayedMessages = messages.slice(displayStartRef.current)
     if (displayedMessages.length == 0) {
+      // 保持隐藏（切会话后数据尚未到达），等待下一次 messages 更新再 settle
       return
     }
     const lastMsg = displayedMessages[displayedMessages.length - 1]
-    if (lastMsg.role === 'user') {
+    if (hide) {
+      // 切会话 / 首次打开：容器隐藏，等布局稳定后滚到底部再显示
+      settleToBottom()
+    } else if (lastMsg.role === 'user') {
       // 用户刚发送消息 → 清除拦截、恢复显示、立即滚动到底部
       userScrollBlockUntilRef.current = 0
       setHide(false)
@@ -368,6 +462,21 @@ function ChatMessageList({
     [setMessages],
   )
 
+  // MessageBubble 已 memo，这里用稳定的回调避免每次重渲染都改变 props 引用
+  const handleEditBubble = useCallback(
+    (msg: string) => setText(msg),
+    [setText],
+  )
+  const handleDeleteBubble = useCallback(
+    (messageId: string) => {
+      const sid = chatState.value.currentSessionId
+      if (!sid) return
+      deleteSessionMessage(sid, messageId)
+      syncMessagesToUI(sid)
+    },
+    [syncMessagesToUI],
+  )
+
   // 滚动到底部按钮点击
   const handleScrollToBottom = useCallback(() => {
     userScrollBlockUntilRef.current = 0
@@ -443,15 +552,8 @@ function ChatMessageList({
             className="message-item-wrap"
             data-msg-id={msg.role === 'user' ? msg.id : undefined}>
             <MessageBubble
-              onEdit={(msg) => {
-                setText(msg)
-              }}
-              onDelete={(messageId) => {
-                const sessionId = chatState.value.currentSessionId
-                if (!sessionId) return
-                deleteSessionMessage(sessionId, messageId)
-                syncMessagesToUI(sessionId)
-              }}
+              onEdit={handleEditBubble}
+              onDelete={handleDeleteBubble}
               message={msg}
               allMessages={messages}
             />
@@ -462,32 +564,30 @@ function ChatMessageList({
       </div>
 
       {/* 用户消息锚点列表 — 全部消息，最多展示 12 个，超出可滚动 */}
-      {messages.filter((m) => m.role === 'user').length > 1 && (
+      {userMessages.length > 1 && (
         <div className="msg-anchor-list">
-          {messages
-            .filter((m) => m.role === 'user')
-            .map((msg) => {
-              const msgText =
-                typeof msg.content === 'string'
-                  ? msg.content
-                  : msg.content
-                      .filter((b) => b.type === 'text')
-                      .map((b) => ('text' in b ? b.text : ''))
-                      .join('')
-              return (
-                <Tooltip
-                  key={msg.id}
-                  content={msgText.slice(0, 420) || ''}
-                  direction="left">
-                  <button
-                    className={`msg-anchor-dot${activeUserMsgId === msg.id ? ' active' : ''}`}
-                    onClick={() => scrollToMessage(msg.id)}
-                    type="button"
-                    aria-label="跳转到该消息"
-                  />
-                </Tooltip>
-              )
-            })}
+          {userMessages.slice(-MAX_ANCHOR_DOTS).map((msg) => {
+            const msgText =
+              typeof msg.content === 'string'
+                ? msg.content
+                : msg.content
+                    .filter((b) => b.type === 'text')
+                    .map((b) => ('text' in b ? b.text : ''))
+                    .join('')
+            return (
+              <Tooltip
+                key={msg.id}
+                content={msgText.slice(0, 420) || ''}
+                direction="left">
+                <button
+                  className={`msg-anchor-dot${activeUserMsgId === msg.id ? ' active' : ''}`}
+                  onClick={() => scrollToMessage(msg.id)}
+                  type="button"
+                  aria-label="跳转到该消息"
+                />
+              </Tooltip>
+            )
+          })}
         </div>
       )}
 

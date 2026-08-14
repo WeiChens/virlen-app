@@ -71,6 +71,8 @@ pub struct AgentBridgeState {
     pub pending_tools: Mutex<HashMap<String, oneshot::Sender<serde_json::Value>>>,
     pub pending_interactions: Mutex<HashMap<String, oneshot::Sender<serde_json::Value>>>,
     pub pending_providers: Mutex<HashMap<String, mpsc::Sender<ProviderBridgeMsg>>>,
+    /// 运行中的原生 execute_command（toolCallId → 取消令牌），支持前端 stop 按钮
+    pub running_commands: Mutex<HashMap<String, crate::agent::cancellation::CancellationToken>>,
 }
 
 impl AgentBridgeState {
