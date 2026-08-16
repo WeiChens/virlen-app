@@ -13,7 +13,8 @@
     "clean": "rimraf dist",
     "build": "tsc && npm run clean && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "build:msix": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-msix.ps1"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
