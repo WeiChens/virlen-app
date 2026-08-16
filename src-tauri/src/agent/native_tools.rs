@@ -243,6 +243,145 @@ fn has_cmd_syntax(cmd: &str) -> bool {
     false
 }
 
+/// 检测命令是否已经是 shell 包装调用（powershell / pwsh / cmd / sh / bash / zsh 等）。
+/// 用户/AI 直接给出 `powershell -NoProfile -Command "..."` 这类命令时，
+/// 工具若再套一层 powershell，外层解析脚本会展开内层双引号里的 `$` 变量（如 $_），
+/// 把命令改写掉（表现为 `$_.Length` 变成 `.Length`）。
+/// 此时应改用 cmd /s /c 原样透传 —— cmd 不做 `$` 插值，内层 shell 才能拿到原始命令。
+fn is_shell_wrapper_invocation(cmd: &str) -> bool {
+    let trimmed = cmd.trim_start();
+    // 可选路径前缀（如 C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe）+ 可执行名 + 扩展名
+    let re = regex::Regex::new(
+        r#"(?i)^(?:[a-z]:[\\/][^ \t"]*[\\/])?(?:powershell|pwsh|cmd|sh|bash|zsh|dash)(?:\.exe|\.cmd|\.bat)?\b"#,
+    )
+    .unwrap();
+    re.is_match(trimmed)
+}
+
+/// 将输出字节流解码为字符串：优先 UTF-8；失败时按 Windows ANSI 代码页兜底。
+/// 中文 Windows 上 Windows PowerShell 5.1 通过管道输出时默认使用 GBK/CP936，
+/// 若一律按 UTF-8 硬解会出现 `�` 乱码（如中文文件名显示为 ��������.wav）。
+fn decode_output(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return String::new();
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            #[cfg(target_os = "windows")]
+            {
+                // encoding_rs::GBK 即 CP936，覆盖中文系统最常见场景。
+                // 其他 ANSI 代码页（CP932/CP950 等）可后续按 GetACP/GetOEMCP 扩展。
+                let (cow, _, _) = encoding_rs::GBK.decode(bytes);
+                cow.into_owned()
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                String::from_utf8_lossy(bytes).into_owned()
+            }
+        }
+    }
+}
+
+/// 流式解码器：跨 8KB 分块保留多字节序列尾部，避免字符在块边界被切断成乱码。
+/// 内部区分三态：全部合法 UTF-8 / 尾部是跨块的不完整 UTF-8 序列 / 出现非 UTF-8 字节（GBK 等）。
+struct TerminalDecoder {
+    pending: Vec<u8>,
+}
+
+enum Utf8Status {
+    /// 全部字节可构成合法 UTF-8
+    Complete,
+    /// pos 之前是合法 UTF-8，pos 开始是跨块的不完整序列（等更多字节）
+    Incomplete { pos: usize },
+    /// pos 处出现无法按 UTF-8 解释的字节（可能是 GBK 等编码）
+    NotUtf8 { pos: usize },
+}
+
+impl TerminalDecoder {
+    fn new() -> Self {
+        Self { pending: Vec::new() }
+    }
+
+    /// 追加一段原始字节，返回本次可安全解码出的文本
+    fn push(&mut self, bytes: &[u8]) -> String {
+        self.pending.extend_from_slice(bytes);
+        match self.utf8_status() {
+            Utf8Status::Complete => {
+                match std::str::from_utf8(&self.pending) {
+                    Ok(_) => String::from_utf8(std::mem::take(&mut self.pending)).unwrap(),
+                    Err(_) => {
+                        // 结构看似 UTF-8 但实际非法（overlong/surrogate）→ 兜底解码
+                        let text = decode_output(&self.pending);
+                        self.pending.clear();
+                        text
+                    }
+                }
+            }
+            Utf8Status::Incomplete { pos } => {
+                if pos == 0 {
+                    // 全部是跨块的不完整序列，等更多字节
+                    String::new()
+                } else {
+                    let text = String::from_utf8(self.pending[..pos].to_vec()).unwrap();
+                    self.pending.drain(..pos);
+                    text
+                }
+            }
+            Utf8Status::NotUtf8 { pos } => {
+                if pos > 0 {
+                    // 先输出前面合法的 UTF-8 前缀，GBK 部分留到后续整体兜底
+                    let text = String::from_utf8(self.pending[..pos].to_vec()).unwrap();
+                    self.pending.drain(..pos);
+                    text
+                } else {
+                    // 整体按兜底编码解码（GBK 等），清空
+                    let text = decode_output(&self.pending);
+                    self.pending.clear();
+                    text
+                }
+            }
+        }
+    }
+
+    /// 流结束时解码剩余字节
+    fn finish(&mut self) -> String {
+        let text = decode_output(&self.pending);
+        self.pending.clear();
+        text
+    }
+
+    /// 判断当前 pending 的 UTF-8 状态（从前往后扫描）
+    fn utf8_status(&self) -> Utf8Status {
+        let bytes = &self.pending;
+        let n = bytes.len();
+        let mut i = 0;
+        while i < n {
+            let b = bytes[i];
+            if b < 0x80 {
+                i += 1;
+                continue;
+            }
+            if (0xC2..=0xF4).contains(&b) {
+                let seq = if b >= 0xF0 { 4 } else if b >= 0xE0 { 3 } else { 2 };
+                if i + seq > n {
+                    // 序列不完整：可能跨块，也可能真不是 UTF-8，先保守等待
+                    return Utf8Status::Incomplete { pos: i };
+                }
+                let all_cont = (1..seq).all(|k| (0x80..=0xBF).contains(&bytes[i + k]));
+                if !all_cont {
+                    return Utf8Status::NotUtf8 { pos: i };
+                }
+                i += seq;
+                continue;
+            }
+            // 0x80-0xBF 单独出现 / 0xC0、0xC1 等非法起始 → 不是 UTF-8
+            return Utf8Status::NotUtf8 { pos: i };
+        }
+        Utf8Status::Complete
+    }
+}
+
 /// 引号感知：取命令段第一个 token。
 /// 单引号/双引号内的空白和分隔符不参与切分（如 "C:\Program Files\app.exe" 视为一个整体）。
 fn extract_first_token(raw: &str) -> String {
@@ -710,10 +849,20 @@ async fn run_command_native(
     let is_win = platform == "windows";
 
     let (shell, args): (&str, Vec<String>) = if is_win {
-        if has_cmd_syntax(cmd_str) {
+        if has_cmd_syntax(cmd_str) || is_shell_wrapper_invocation(cmd_str) {
+            // 命令已包含 shell 包装（powershell -Command "..." / cmd /c 等）时不再套一层 powershell：
+            // 外层 powershell 解析脚本会展开内层双引号里的 $ 变量（如 $_），导致命令被改写。
+            // 改用 cmd /s /c 原样透传 —— cmd 不做 $ 插值，内层 shell 才能拿到原始命令。
             ("cmd", vec!["/s".into(), "/c".into(), cmd_str.into()])
         } else {
-            ("powershell", vec!["-Command".into(), cmd_str.into()])
+            // 直接执行的 powershell：先切到 UTF-8 输出，避免中文系统默认 GBK 使管道输出乱码。
+            // 注意：若用户命令里再套 powershell -Command "..."，内层进程会重新按系统代码页初始化，
+            // 此时靠 decode_output 的 GBK 兜底解码（见下方流读取）。
+            let prefixed = format!(
+                "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {}",
+                cmd_str
+            );
+            ("powershell", vec!["-Command".into(), prefixed.into()])
         }
     } else if platform == "macos" {
         ("zsh", vec!["-c".into(), cmd_str.into()])
@@ -783,6 +932,7 @@ async fn run_command_native(
         if let Some(mut out) = stdout_pipe {
             let mut buf = Vec::new();
             let mut chunk = vec![0u8; 8192];
+            let mut decoder = TerminalDecoder::new();
             loop {
                 let n = match out.read(&mut chunk).await {
                     Ok(0) => break,
@@ -790,10 +940,16 @@ async fn run_command_native(
                     Err(_) => break,
                 };
                 buf.extend_from_slice(&chunk[..n]);
-                let text = String::from_utf8_lossy(&chunk[..n]).to_string();
-                let _ = stdout_tx.send(("stdout".to_string(), text));
+                let text = decoder.push(&chunk[..n]);
+                if !text.is_empty() {
+                    let _ = stdout_tx.send(("stdout".to_string(), text));
+                }
             }
-            String::from_utf8_lossy(&buf).to_string()
+            let tail = decoder.finish();
+            if !tail.is_empty() {
+                let _ = stdout_tx.send(("stdout".to_string(), tail));
+            }
+            decode_output(&buf)
         } else {
             String::new()
         }
@@ -802,6 +958,7 @@ async fn run_command_native(
         if let Some(mut err) = stderr_pipe {
             let mut buf = Vec::new();
             let mut chunk = vec![0u8; 8192];
+            let mut decoder = TerminalDecoder::new();
             loop {
                 let n = match err.read(&mut chunk).await {
                     Ok(0) => break,
@@ -809,10 +966,16 @@ async fn run_command_native(
                     Err(_) => break,
                 };
                 buf.extend_from_slice(&chunk[..n]);
-                let text = String::from_utf8_lossy(&chunk[..n]).to_string();
-                let _ = stderr_tx.send(("stderr".to_string(), text));
+                let text = decoder.push(&chunk[..n]);
+                if !text.is_empty() {
+                    let _ = stderr_tx.send(("stderr".to_string(), text));
+                }
             }
-            String::from_utf8_lossy(&buf).to_string()
+            let tail = decoder.finish();
+            if !tail.is_empty() {
+                let _ = stderr_tx.send(("stderr".to_string(), tail));
+            }
+            decode_output(&buf)
         } else {
             String::new()
         }
@@ -1941,6 +2104,73 @@ mod tests {
         assert!(has_cmd_syntax("echo hi <nul"));
         assert!(!has_cmd_syntax("git status"));
         assert!(!has_cmd_syntax("dir /b"));
+    }
+
+    #[test]
+    fn test_is_shell_wrapper_invocation() {
+        // 已经是 shell 包装调用 → 不应再套一层 powershell
+        assert!(is_shell_wrapper_invocation(
+            "powershell -NoProfile -Command \"Get-Item x\""
+        ));
+        assert!(is_shell_wrapper_invocation("pwsh -Command \"Get-ChildItem\""));
+        assert!(is_shell_wrapper_invocation("powershell.exe -Command \"dir\""));
+        assert!(is_shell_wrapper_invocation(
+            "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -Command \"x\""
+        ));
+        assert!(is_shell_wrapper_invocation("cmd /c dir"));
+        assert!(is_shell_wrapper_invocation("cmd.exe /c dir"));
+        assert!(is_shell_wrapper_invocation("bash -c \"echo hi\""));
+        assert!(is_shell_wrapper_invocation("sh -c \"ls\""));
+        // 普通命令不应误判
+        assert!(!is_shell_wrapper_invocation("git status"));
+        assert!(!is_shell_wrapper_invocation("node --version"));
+        assert!(!is_shell_wrapper_invocation("npm run build"));
+        assert!(!is_shell_wrapper_invocation("echo \"powershell -Command x\""));
+        assert!(!is_shell_wrapper_invocation("C:\\scripts\\run.ps1"));
+    }
+
+    #[test]
+    fn test_decode_output() {
+        // UTF-8 原样
+        assert_eq!(decode_output("后面杂音.wav".as_bytes()), "后面杂音.wav");
+        // GBK 字节（CP936）→ 正确解码（中文 Windows PowerShell 管道输出的典型情况）
+        let gbk = "后面杂音.wav";
+        let (gbk_bytes, _, _) = encoding_rs::GBK.encode(gbk);
+        assert_eq!(decode_output(&gbk_bytes), gbk);
+        // ASCII 不变
+        assert_eq!(decode_output(b"Name : 979244"), "Name : 979244");
+        // 空
+        assert_eq!(decode_output(b""), "");
+    }
+
+    #[test]
+    fn test_terminal_decoder_utf8_split() {
+        // 模拟 UTF-8 多字节字符被 8KB 分块切断（最极端：逐字节喂入），应正确还原
+        let text = "a后面杂音b";
+        let bytes = text.as_bytes();
+        let mut d = TerminalDecoder::new();
+        let mut out = String::new();
+        for i in 0..bytes.len() {
+            out.push_str(&d.push(&bytes[i..i + 1]));
+        }
+        out.push_str(&d.finish());
+        assert_eq!(out, text);
+    }
+
+    #[test]
+    fn test_terminal_decoder_gbk_chunks() {
+        // GBK 输出按完整双字节块喂入（8KB 分块不会拆开字符的常见情况）
+        let gbk_text = "后面杂音.wav";
+        let (gbk_bytes, _, _) = encoding_rs::GBK.encode(gbk_text);
+        let gbk_bytes = gbk_bytes.into_owned();
+        let mut d = TerminalDecoder::new();
+        let mut out = String::new();
+        for i in (0..gbk_bytes.len()).step_by(2) {
+            let end = (i + 2).min(gbk_bytes.len());
+            out.push_str(&d.push(&gbk_bytes[i..end]));
+        }
+        out.push_str(&d.finish());
+        assert_eq!(out, gbk_text);
     }
 
     #[test]

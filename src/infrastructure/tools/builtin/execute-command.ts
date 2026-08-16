@@ -44,6 +44,18 @@ function hasCmdSyntax(cmd: string): boolean {
 }
 
 /**
+ * 检测命令是否已经是 shell 包装调用（powershell / pwsh / cmd / sh / bash / zsh 等）。
+ * 如果直接给 `powershell -NoProfile -Command "..."` 这类命令再套一层 powershell，
+ * 外层解析脚本会展开内层双引号里的 `$` 变量（如 $_）。此时改用 cmd /s /c 原样透传。
+ */
+function isShellWrapperInvocation(cmd: string): boolean {
+  const trimmed = cmd.trimStart()
+  return /^(?:[a-z]:[\\/][^ \t"]*[\\/])?(?:powershell|pwsh|cmd|sh|bash|zsh|dash)(?:\.exe|\.cmd|\.bat)?\b/i.test(
+    trimmed,
+  )
+}
+
+/**
  * 引号感知：提取命令段第一个 token。
  * 单引号/双引号内的空白和分隔符不参与切分（如 "C:\Program Files\app.exe" 视为一个整体）。
  */
@@ -421,7 +433,7 @@ async function runCommand(
   let shellName: string
   let shellArgs: string[]
 
-  if (isWin && hasCmdSyntax(cmdStr)) {
+  if (isWin && (hasCmdSyntax(cmdStr) || isShellWrapperInvocation(cmdStr))) {
     // ⚠️ 已知限制：本路径（plugin-shell）底层是 StdCommand::new().args([...])，
     // Rust 会把含空格/引号的 cmdStr 包裹在 "..." 中、内部 " 转义成 \"，
     // 而 cmd.exe 把 \ 当普通字符，\" 不会还原成 "（cmd /s 只会剥首尾引号），
@@ -429,11 +441,17 @@ async function runCommand(
     // 该问题在 Rust 原生 execute_command（native_tools.rs run_command_native）
     // 已用 CommandExt::raw_arg 原样拼接命令行修复；本 JS 桥仅在原生安全配置
     // 缺失时回退使用，属罕见路径。若无插件支持 raw command line，无法在此彻底修复。
+    // 另外，isShellWrapperInvocation 命中的 powershell -Command "..." 命令也走 cmd
+    // 透传，避免外层 powershell 展开内层双引号里的 $ 变量（如 $_）。
     shellName = 'cmd'
     shellArgs = ['/s', '/c', cmdStr]
   } else if (isWin) {
     shellName = 'powershell'
-    shellArgs = ['-Command', cmdStr]
+    // 先切到 UTF-8 输出，避免中文系统默认 GBK 使管道输出乱码（与 Rust 原生路径对齐）
+    shellArgs = [
+      '-Command',
+      `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ${cmdStr}`,
+    ]
   } else if (platform === 'macos') {
     // macOS Catalina+ 默认 shell 为 zsh（/bin/sh 是 bash POSIX 模式，行为有差异）
     shellName = 'zsh'
