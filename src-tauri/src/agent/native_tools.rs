@@ -1043,10 +1043,42 @@ async fn run_command_native(
         }
     }
 
-    // 收尾：等待读取任务和 wait 任务结束，拿到完整输出
-    let stdout_final = stdout_handle.await.unwrap_or_default();
-    let stderr_final = stderr_handle.await.unwrap_or_default();
-    let _ = wait_handle.await;
+    // 收尾：等待读取任务和 wait 任务结束，拿到完整输出。
+    // ⚠️ 被终止/超时/取消后，若进程树没杀干净（如 taskkill 权限不足、detached 子进程仍持有管道），
+    // 直接 .await 会无限挂起 → 工具永远不返回，前端「终止」按钮看似失效（命令一直显示运行中）。
+    // 因此 kill/超时路径限制等待窗口：3 秒内收不完就补刀强杀并 abort 任务，用已流式收到的输出返回。
+    let stdout_abort = stdout_handle.abort_handle();
+    let stderr_abort = stderr_handle.abort_handle();
+    let wait_abort = wait_handle.abort_handle();
+    let stdout_final;
+    let stderr_final;
+    if killed_by_user || killed_by_timeout {
+        let cleanup = async {
+            let so = stdout_handle.await;
+            let se = stderr_handle.await;
+            let _ = wait_handle.await;
+            (so, se)
+        };
+        match tokio::time::timeout(Duration::from_secs(3), cleanup).await {
+            Ok((so, se)) => {
+                stdout_final = so.unwrap_or_default();
+                stderr_final = se.unwrap_or_default();
+            }
+            Err(_) => {
+                // 进程还活着：再补一刀强杀，然后 abort 读取/等待任务，避免任务泄漏
+                kill_process_tree(pid);
+                stdout_abort.abort();
+                stderr_abort.abort();
+                wait_abort.abort();
+                stdout_final = String::new();
+                stderr_final = String::new();
+            }
+        }
+    } else {
+        stdout_final = stdout_handle.await.unwrap_or_default();
+        stderr_final = stderr_handle.await.unwrap_or_default();
+        let _ = wait_handle.await;
+    }
     if !stdout_final.is_empty() {
         stdout = stdout_final;
     }
@@ -2352,6 +2384,187 @@ mod tests {
                 matches!(outcome, Err(_)),
                 "write outside workspace should fail"
             );
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 集成测试：真实 spawn 一个长命令，中途触发「终止」，
+    /// 验证工具能及时返回、不会因进程树没杀干净而无限挂起（前端终止按钮失效的根因）。
+    #[tokio::test]
+    async fn test_execute_command_kill_returns_promptly() {
+        use crate::agent::bridge::AgentBridgeState;
+        use crate::agent::cancellation::CancellationToken;
+        use crate::agent::event_sink::TestEventSink;
+        use std::time::Duration;
+
+        let dir = std::env::temp_dir().join(format!("virlen_native_kill_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sec = test_security(&dir.to_string_lossy());
+        let sink = TestEventSink::new();
+        let bridge = AgentBridgeState::default();
+        let cancel = CancellationToken::new();
+        let tool_call_id = "tc_kill_test";
+        let ctx = NativeToolCtx {
+            session_id: "s_kill",
+            tool_call_id,
+            cancel: &cancel,
+            sink: &sink,
+            bridge: &bridge,
+            security: &sec,
+        };
+
+        // 长命令：确保 kill 发生在执行中途
+        let cmd = if cfg!(target_os = "windows") {
+            "ping -n 60 127.0.0.1"
+        } else {
+            "sleep 60"
+        };
+        let args = json!({ "command": cmd, "timeout": 300 });
+
+        // 独立任务：1.5s 后触发终止（kill 入口在命令 spawn 时注册）
+        let killer_tool_call_id = tool_call_id.to_string();
+        let killer = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            assert!(
+                kill_running_command(&killer_tool_call_id),
+                "kill entry should exist"
+            );
+        });
+
+        // 终止后应尽快返回（清理等待有 3s 上限），10s 上限防止测试本身挂起
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(10),
+            execute_native_tool(&ctx, "execute_command", &args),
+        )
+        .await
+        .expect("execute_command should return promptly after kill")
+        .expect("execute_command should not error");
+
+        killer.await.unwrap();
+
+        match outcome {
+            NativeToolOutcome::Value { content, .. } => {
+                assert!(
+                    content.contains("命令已被用户取消"),
+                    "unexpected content: {}",
+                    content
+                );
+            }
+            other => panic!("expected Value, got {:?}", other),
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 检查进程是否存活（Windows 用 Get-Process，其他平台用 kill -0）
+    fn is_process_alive(pid: u32) -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            let out = std::process::Command::new("powershell")
+                .args([
+                    "-NoProfile",
+                    "-Command",
+                    &format!(
+                        "if (Get-Process -Id {} -ErrorAction SilentlyContinue) {{ 'ALIVE' }} else {{ 'DEAD' }}",
+                        pid
+                    ),
+                ])
+                .output()
+                .unwrap();
+            let s = String::from_utf8_lossy(&out.stdout);
+            s.contains("ALIVE")
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let out = std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .output()
+                .unwrap();
+            out.status.success()
+        }
+    }
+
+    /// 集成测试：模拟用户场景 —— 命令里用 Start-Process 拉起子进程（输出重定向到文件）。
+    /// 验证：终止后工具及时返回，且 Start-Process 的子进程也被 taskkill /T 连带杀死（不留孤儿）。
+    #[tokio::test]
+    async fn test_execute_command_kill_kills_start_process_child() {
+        use crate::agent::bridge::AgentBridgeState;
+        use crate::agent::cancellation::CancellationToken;
+        use crate::agent::event_sink::TestEventSink;
+        use std::time::Duration;
+
+        let dir = std::env::temp_dir()
+            .join(format!("virlen_native_kill_sp_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pid_file = dir.join("child.pid");
+        let pid_file_str = pid_file.to_string_lossy().replace('\\', "/");
+        let out_file = dir.join("sc_out.txt").to_string_lossy().replace('\\', "/");
+        let err_file = dir.join("sc_err.txt").to_string_lossy().replace('\\', "/");
+
+        let sec = test_security(&dir.to_string_lossy());
+        let sink = TestEventSink::new();
+        let bridge = AgentBridgeState::default();
+        let cancel = CancellationToken::new();
+        let tool_call_id = "tc_kill_sp_test";
+        let ctx = NativeToolCtx {
+            session_id: "s_kill_sp",
+            tool_call_id,
+            cancel: &cancel,
+            sink: &sink,
+            bridge: &bridge,
+            security: &sec,
+        };
+
+        // 用户场景的结构：Start-Process 拉起一个长跑子进程（stdout/stderr 重定向到文件），
+        // 把子进程 PID 写到文件，然后脚本无限等待（等待期间管道无输出）。
+        let cmd = format!(
+            "$out = '{}'; $p = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c ping -n 60 127.0.0.1' -PassThru -NoNewWindow -RedirectStandardOutput '{}' -RedirectStandardError '{}'; Set-Content -Path $out -Value $p.Id; while ($true) {{ Start-Sleep -Milliseconds 500 }}",
+            pid_file_str, out_file, err_file
+        );
+        let args = json!({ "command": cmd, "timeout": 300 });
+
+        let killer_tool_call_id = tool_call_id.to_string();
+        let killer = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(2500)).await;
+            assert!(
+                kill_running_command(&killer_tool_call_id),
+                "kill entry should exist"
+            );
+        });
+
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(10),
+            execute_native_tool(&ctx, "execute_command", &args),
+        )
+        .await
+        .expect("should return promptly after kill")
+        .expect("should not error");
+
+        killer.await.unwrap();
+
+        match &outcome {
+            NativeToolOutcome::Value { content, .. } => {
+                assert!(
+                    content.contains("命令已被用户取消"),
+                    "unexpected content: {}",
+                    content
+                );
+            }
+            other => panic!("expected Value, got {:?}", other),
+        }
+
+        // 检查 Start-Process 的子进程是否被连带杀死（等 taskkill 生效）
+        if let Ok(pid_str) = std::fs::read_to_string(&pid_file) {
+            let child_pid: u32 = pid_str.trim().parse().unwrap_or(0);
+            if child_pid > 0 {
+                tokio::time::sleep(Duration::from_millis(1500)).await;
+                assert!(
+                    !is_process_alive(child_pid),
+                    "Start-Process child pid {} should be killed by taskkill /T (no orphan)",
+                    child_pid
+                );
+            }
         }
 
         std::fs::remove_dir_all(&dir).ok();

@@ -357,10 +357,29 @@ export const rustEngine: AgentEnginePort = {
         if (payload.sessionId === sessionId) {
           // Rust 原生 execute_command 执行完毕（tool_call 事件携带 result）时
           // 清理实时输出缓存，避免 RunningOutput 残留
-          if (payload.event?.type === 'tool_call' && payload.event?.data?.result != null) {
-            const id = payload.event.data.id
-            if (id) toolOutputStore.flush(id)
-            if (id) toolOutputStore.remove(id)
+          if (payload.event?.type === 'tool_call') {
+            const data = payload.event.data ?? {}
+            const id = data.id
+            if (data.result != null) {
+              if (id) toolOutputStore.flush(id)
+              if (id) toolOutputStore.remove(id)
+            } else if (
+              id &&
+              data.name === 'execute_command' &&
+              !toolOutputStore.get(id)
+            ) {
+              // 工具刚宣布/即将执行：立即注册 kill 入口。
+              // Rust 原生 execute_command 若长时间无输出（如 sleep、慢启动），
+              // 等第一条 agent:tool-output 才注册的话会一直没有「终止」按钮。
+              const toolCallId = id
+              toolOutputStore.register(toolCallId, {
+                toolName: 'execute_command',
+                output: '',
+                kill: () => {
+                  invoke('agent_kill_command', { toolCallId }).catch(() => {})
+                },
+              })
+            }
           }
           onEvent?.(payload.event)
         }
