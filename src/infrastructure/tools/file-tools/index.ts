@@ -70,8 +70,17 @@ toolRegistry.register(
         max_lines: {
           type: 'number',
           description:
-            'Max lines to read. Default is 1000. When start_line is used, this limits how many lines are returned.',
-          default: 1000,
+            'Max lines to read. Default is 2000. When start_line is used, this limits how many lines are returned.',
+          default: 2000,
+        },
+        max_line_chars: {
+          type: 'number',
+          description:
+            'Max characters per line. Default is 1600. ' +
+            'Prevents token explosion from single very long lines ' +
+            '(minified JS/CSS, long JSON/base64, etc.). Lines longer than this ' +
+            'are truncated with a marker so the AI knows content is incomplete.',
+          default: 1600,
         },
       },
       required: ['path'],
@@ -84,6 +93,9 @@ toolRegistry.register(
       ctx.sessionId,
     )
     const maxLines = +(args.max_lines as number) || 2000
+    // 行内字符上限：单行内容过长时截断该行，防止「文件只有一行但内容巨大」
+    // 整行返回导致 token 爆炸 / 超出上下文。
+    const maxLineChars = +(args.max_line_chars as number) || 2000
     const startLine = Math.max(0, +(args.start_line as number) || 1)
     try {
       const result: FileReadResult = await withCancelResult(
@@ -109,18 +121,31 @@ toolRegistry.register(
 
       // start_line 是 1-indexed，转成 0-indexed 做切片
       const startIdx = Math.max(0, startLine - 1)
-      const endIdx = Math.min(totalLines, startIdx + maxLines)
-      const slice = lines.slice(startIdx, endIdx)
 
-      // 计算返回的行号范围
+      // 双重限制：行数（max_lines）+ 行内字符数（max_line_chars）。
+      // 仅按行数裁剪无法应对单行超大内容（minified JS/CSS、超长 JSON/base64 等），
+      // 因此对每行单独做字符上限，超长行截断后加标记，避免 token 爆炸。
+      const slice: string[] = []
+      let truncatedLineCount = 0 // 因 max_line_chars 被截断的行数
+
+      for (let i = startIdx; i < totalLines && slice.length < maxLines; i++) {
+        const line = lines[i]
+        if (line.length > maxLineChars) {
+          // 单行内容过长 → 截断该行并加标记，避免 AI 误以为内容完整
+          const omitted = line.length - maxLineChars
+          slice.push(
+            `${line.slice(0, maxLineChars)} … [已截断，省略 ${omitted} 字符]`,
+          )
+          truncatedLineCount++
+        } else {
+          slice.push(line)
+        }
+      }
+
+      // 计算返回的行号范围（被截断的那行也计入显示行数）
       const displayStart = startIdx + 1
-      const displayEnd = endIdx
-
-      // 构建带行号的内容
-      const resultLines = slice.map((line, i) => {
-        const lineNum = displayStart + i
-        return line
-      })
+      const displayEnd = startIdx + slice.length
+      const remainingLines = Math.max(0, totalLines - displayEnd)
 
       const headerLines = [
         `📄 ${fullPath}`,
@@ -141,6 +166,14 @@ toolRegistry.register(
             }),
       ]
 
+      if (truncatedLineCount > 0) {
+        headerLines.push(
+          tpl(
+            '💡 提示: 有 $__count__ 行内容过长，已按每行 $__max__ 字符截断。可增大 max_line_chars 参数读取更多内容',
+            { count: truncatedLineCount, max: maxLineChars },
+          ),
+        )
+      }
       if (startIdx > 0) {
         headerLines.push(
           tpl('💡 提示: 使用 start_line=$__line__ 读取后续内容', {
@@ -148,16 +181,16 @@ toolRegistry.register(
           }),
         )
       }
-      if (displayEnd < totalLines) {
+      if (remainingLines > 0) {
         headerLines.push(
           tpl(
             '💡 提示: 文件内容未完整显示，剩余 $__remaining__ 行。使用 start_line=$__next__ 读取后续内容',
-            { remaining: totalLines - displayEnd, next: displayEnd + 1 },
+            { remaining: remainingLines, next: displayEnd + 1 },
           ),
         )
       }
 
-      const displayedContent = resultLines.join('\n')
+      const displayedContent = slice.join('\n')
       return {
         content: headerLines.join('\n') + '\n\n' + displayedContent,
         uiData: {
