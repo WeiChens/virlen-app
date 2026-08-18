@@ -391,6 +391,7 @@
   "🔢 显示: 第 1-$__end__ 行 (共 $__total__ 行)": "🔢 Showing: lines 1-$__end__ (total $__total__)",
   "💡 提示: 使用 start_line=$__line__ 读取后续内容": "💡 Tip: use start_line=$__line__ to read more",
   "💡 提示: 文件内容未完整显示，剩余 $__remaining__ 行。使用 start_line=$__next__ 读取后续内容": "💡 Tip: content truncated, $__remaining__ lines remaining. Use start_line=$__next__ to read more.",
+  "💡 提示: 有 $__count__ 行内容过长，已按每行 $__max__ 字符截断。可增大 max_line_chars 参数读取更多内容": "💡 Tip: $__count__ line(s) too long, truncated to $__max__ chars per line. Increase max_line_chars to read more.",
   "✅ 已编辑文件: $__path__": "✅ Edited: $__path__",
   "替换: $__count__ 处": "Replaced: $__count__",
   "共 $__count__ 行": "Total: $__count__ lines",

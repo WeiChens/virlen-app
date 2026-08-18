@@ -112,13 +112,9 @@ class ExecuteCommandMessage implements IToolCallMessage {
     }
   }
   getExpandView(props: ToolMessageProps): React.ReactNode {
-    // 如果工具还没返回结果（仍在运行中），展示实时输出
-    if (props.message?.isError) {
-      return <div className="error">{props.message.content as string}</div>
-    }
-
-    // 已有最终结果，展示结果
-
+    // if (props.message?.isError) {
+    //   return <div className="error">{props.message.content as string}</div>
+    // }
     try {
       const command = props.useContent.input.command
       const body = props.message?.content as string
