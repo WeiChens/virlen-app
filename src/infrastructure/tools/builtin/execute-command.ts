@@ -519,10 +519,33 @@ fi`,
     ctx.abortSignal.addEventListener('abort', onAbort, { once: true })
 
     const exitCode = await new Promise<number | null>((resolve) => {
-      const timer = setTimeout(() => {
+      let settled = false
+      const settle = (code: number | null) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(code)
+      }
+
+      const timer = setTimeout(async () => {
         killedByTimeout = true
-        killProcessTree(shellName, child).catch(() => {})
-        resolve(null)
+        // ⚠️ 必须先等 kill 真正执行完（Rust 侧递归枚举后代逐个 taskkill），
+        // 再等 close 事件（进程树确实退出）。不能发完信号立刻 resolve，
+        // 否则工具返回「已终止」但 node/npm/python 等子进程还活着。
+        try {
+          await killProcessTree(shellName, child)
+        } catch {
+          // ignore — settle 由 close/兜底定时器接管
+        }
+        // 若进程树没被杀干净（极端情况），最多再等 5s 兜底返回，避免工具卡死
+        const closeTimer = setTimeout(() => settle(null), 5000)
+        cmd.on(
+          'close',
+          (payload: { code: number | null; signal: number | null }) => {
+            clearTimeout(closeTimer)
+            settle(payload.code)
+          },
+        )
       }, timeoutMs)
 
       // 如果 abortSignal 已经 aborted，上面的监听已经杀了进程
@@ -530,8 +553,7 @@ fi`,
       cmd.on(
         'close',
         (payload: { code: number | null; signal: number | null }) => {
-          clearTimeout(timer)
-          resolve(payload.code)
+          settle(payload.code)
         },
       )
     })

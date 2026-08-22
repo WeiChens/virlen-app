@@ -570,37 +570,24 @@ fn risk_info(risk: &str) -> (String, String) {
     }
 }
 
-/// 跨平台杀进程树（与 lib.rs kill_process_tree 一致）
+/// 跨平台强杀进程树（进程 + 全部后代）。
+/// 委托给 `process_tree` 模块：Windows 递归 Toolhelp32 枚举后代逐个 taskkill，
+/// Unix 递归 `ps` 枚举后代逐个 kill，不依赖进程树关系 / 进程组。
 fn kill_process_tree(pid: u32) {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        let _ = std::process::Command::new("taskkill")
-            .args(["/F", "/T", "/PID", &pid.to_string()])
-            .creation_flags(CREATE_NO_WINDOW)
-            .status();
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = std::process::Command::new("kill")
-            .args(["--", &format!("-{}", pid)])
-            .status();
-        let _ = std::process::Command::new("pkill")
-            .args(["-P", &pid.to_string()])
-            .status();
-    }
+    super::process_tree::kill_process_tree(pid);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 运行中命令注册表 — 支持前端「终止」按钮（ToolOutput.kill）
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// 运行中命令条目：记录子进程 pid 和 kill 请求标志
+/// 运行中命令条目：记录子进程 pid、kill 请求标志和 Job Object 守护
 struct RunningCommand {
     pid: u32,
     /// 前端点击「终止」后置位，等待循环检测到后按用户取消处理
     kill_requested: Arc<AtomicBool>,
+    /// Windows Job Object 守护：终止时一键杀整棵进程树（无 Job 时为 None）
+    guard: Option<Arc<super::process_tree::ProcessTreeGuard>>,
 }
 
 /// 运行中命令注册表：tool_call_id → RunningCommand
@@ -608,13 +595,18 @@ static RUNNING_COMMANDS: LazyLock<Mutex<HashMap<String, RunningCommand>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// 注册一个运行中的命令（run_command_native 内部调用）
-fn register_running_command(tool_call_id: &str, pid: u32) -> Arc<AtomicBool> {
+fn register_running_command(
+    tool_call_id: &str,
+    pid: u32,
+    guard: Option<Arc<super::process_tree::ProcessTreeGuard>>,
+) -> Arc<AtomicBool> {
     let kill_requested = Arc::new(AtomicBool::new(false));
     RUNNING_COMMANDS.lock().unwrap().insert(
         tool_call_id.to_string(),
         RunningCommand {
             pid,
             kill_requested: kill_requested.clone(),
+            guard,
         },
     );
     kill_requested
@@ -631,10 +623,15 @@ fn unregister_running_command(tool_call_id: &str) {
 pub fn kill_running_command(tool_call_id: &str) -> bool {
     let entry = {
         let map = RUNNING_COMMANDS.lock().unwrap();
-        map.get(tool_call_id).map(|c| (c.pid, c.kill_requested.clone()))
+        map.get(tool_call_id)
+            .map(|c| (c.pid, c.kill_requested.clone(), c.guard.clone()))
     };
-    if let Some((pid, kill_requested)) = entry {
+    if let Some((pid, kill_requested, guard)) = entry {
         kill_requested.store(true, Ordering::SeqCst);
+        // 优先 Job Object 一键全杀；再递归 taskkill 兜底
+        if let Some(g) = &guard {
+            g.terminate();
+        }
         kill_process_tree(pid);
         true
     } else {
@@ -913,8 +910,18 @@ async fn run_command_native(
         .map_err(|e| format!("[{} error] {}", shell, e))?;
     let pid = child.id().unwrap_or(0);
 
+    // Windows：创建 Job Object 并把命令进程纳入，之后命令派生的所有后代自动入组。
+    // 超时/终止时 TerminateJobObject 一键全杀，不依赖 taskkill /T 的进程树关系
+    // （node/npm/python 被 reparent 或脱离树后 /T 会漏杀）。Job 创建/分配失败时
+    // 静默回退到 kill_process_tree 的递归枚举兜底。
+    let guard = super::process_tree::ProcessTreeGuard::create();
+    if let Some(g) = &guard {
+        let _ = g.assign_pid(pid);
+    }
+    let guard = guard.map(std::sync::Arc::new);
+
     // 注册到运行中命令表，支持前端「终止」按钮（ToolOutput.kill）
-    let kill_requested = register_running_command(ctx.tool_call_id, pid);
+    let kill_requested = register_running_command(ctx.tool_call_id, pid, guard.clone());
 
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
@@ -1026,10 +1033,16 @@ async fn run_command_native(
                 killed_by_user = true;
             }
             _ = sleep(Duration::from_secs((timeout_secs.max(1)) as u64)), if !killed_by_timeout && !killed_by_user => {
+                if let Some(g) = &guard {
+                    g.terminate();
+                }
                 kill_process_tree(pid);
                 killed_by_timeout = true;
             }
             _ = ctx.cancel.cancelled(), if !killed_by_timeout && !killed_by_user => {
+                if let Some(g) = &guard {
+                    g.terminate();
+                }
                 kill_process_tree(pid);
                 killed_by_user = true;
             }
@@ -1065,7 +1078,10 @@ async fn run_command_native(
                 stderr_final = se.unwrap_or_default();
             }
             Err(_) => {
-                // 进程还活着：再补一刀强杀，然后 abort 读取/等待任务，避免任务泄漏
+                // 进程还活着：Job Object 补刀 + 再强杀，然后 abort 读取/等待任务，避免任务泄漏
+                if let Some(g) = &guard {
+                    g.terminate();
+                }
                 kill_process_tree(pid);
                 stdout_abort.abort();
                 stderr_abort.abort();
@@ -2563,6 +2579,94 @@ mod tests {
                     !is_process_alive(child_pid),
                     "Start-Process child pid {} should be killed by taskkill /T (no orphan)",
                     child_pid
+                );
+            }
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 集成测试：命令超时（timeout 路径，非手动终止）后，命令派生的孙进程也必须被杀干净。
+    /// 这是用户报告的复现场景：`execute_command` 超时返回「已终止」，但 node/npm/python
+    /// 等后代进程仍存活。Job Object + 递归枚举兜底应保证整棵进程树（含两层孙进程）全灭。
+    #[tokio::test]
+    async fn test_execute_command_timeout_kills_grandchildren() {
+        use crate::agent::bridge::AgentBridgeState;
+        use crate::agent::cancellation::CancellationToken;
+        use crate::agent::event_sink::TestEventSink;
+        use std::time::Duration;
+
+        let dir = std::env::temp_dir()
+            .join(format!("virlen_native_timeout_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let child_pid_file = dir.join("t_child.pid").to_string_lossy().replace('\\', "/");
+        let gc_pid_file = dir.join("t_gc.pid").to_string_lossy().replace('\\', "/");
+        let out_file = dir.join("t_out.txt").to_string_lossy().replace('\\', "/");
+        let err_file = dir.join("t_err.txt").to_string_lossy().replace('\\', "/");
+
+        let sec = test_security(&dir.to_string_lossy());
+        let sink = TestEventSink::new();
+        let bridge = AgentBridgeState::default();
+        let cancel = CancellationToken::new();
+        let tool_call_id = "tc_timeout_test";
+        let ctx = NativeToolCtx {
+            session_id: "s_timeout",
+            tool_call_id,
+            cancel: &cancel,
+            sink: &sink,
+            bridge: &bridge,
+            security: &sec,
+        };
+
+        // powershell 拉起 cmd → ping（两层后代），把子/孙 PID 写到文件，然后无限 sleep。
+        // 超时 2s 触发 → 应整棵进程树全灭。
+        let cmd = format!(
+            "$child = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c ping -n 60 127.0.0.1' -PassThru -NoNewWindow -RedirectStandardOutput '{out}' -RedirectStandardError '{err}'; Set-Content -Path '{child}' -Value $child.Id; Start-Sleep -Seconds 2; $g = Get-CimInstance Win32_Process -Filter \"ParentProcessId = $($child.Id)\" | Select-Object -First 1; if ($g) {{ Set-Content -Path '{gc}' -Value $g.ProcessId }}; while ($true) {{ Start-Sleep -Milliseconds 500 }}",
+            out = out_file,
+            err = err_file,
+            child = child_pid_file,
+            gc = gc_pid_file,
+        );
+        let args = json!({ "command": cmd, "timeout": 2 });
+
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(15),
+            execute_native_tool(&ctx, "execute_command", &args),
+        )
+        .await
+        .expect("execute_command should return promptly after timeout")
+        .expect("should not error");
+
+        match &outcome {
+            NativeToolOutcome::Value { content, .. } => {
+                assert!(
+                    content.contains("超时"),
+                    "unexpected content: {}",
+                    content
+                );
+            }
+            other => panic!("expected Value, got {:?}", other),
+        }
+
+        // 等 taskkill / Job Object 生效后，子进程、孙进程都应已死亡
+        tokio::time::sleep(Duration::from_millis(2000)).await;
+        if let Ok(pid_str) = std::fs::read_to_string(&child_pid_file) {
+            let child_pid: u32 = pid_str.trim().parse().unwrap_or(0);
+            if child_pid > 0 {
+                assert!(
+                    !is_process_alive(child_pid),
+                    "child pid {} should be killed after timeout (no orphan)",
+                    child_pid
+                );
+            }
+        }
+        if let Ok(pid_str) = std::fs::read_to_string(&gc_pid_file) {
+            let gc_pid: u32 = pid_str.trim().parse().unwrap_or(0);
+            if gc_pid > 0 {
+                assert!(
+                    !is_process_alive(gc_pid),
+                    "grandchild pid {} should be killed after timeout (no orphan)",
+                    gc_pid
                 );
             }
         }

@@ -70,6 +70,14 @@ quasivision = "0.2.1"
 [target.'cfg(target_os = "windows")'.dependencies]
 webview2-com = "0.38"
 windows-core = "0.61"
+# 进程树管理：Job Object（命令超时/终止时连后代进程一键全杀）+ Toolhelp32 递归枚举
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp",
+] }
 
 # ── macOS 平台：Apple Speech 框架（SFSpeechRecognizer 离线语音识别） ──
 # 仅在 macOS 构建时编译；Windows/Linux 不受影响

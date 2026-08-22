@@ -127,34 +127,12 @@ fn stop_task(task_id: String) -> bool {
 }
 
 /// 跨平台强制杀进程树（进程 + 所有子进程）
-/// - Windows: taskkill /F /T (带 CREATE_NO_WINDOW，防止弹黑窗口)
-/// - Linux/macOS: kill 负 PGID
+/// - Windows: Job Object / 递归 Toolhelp32 枚举后代逐个 taskkill（不依赖树关系）
+/// - Linux/macOS: 递归 ps 枚举后代逐个 kill（不依赖进程组）
 #[tauri::command]
 async fn kill_process_tree(pid: u32) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        #[cfg(target_os = "windows")]
-        {
-            // 引入 CommandExt 以使用 creation_flags 隐藏控制台窗口
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-            let _ = std::process::Command::new("taskkill")
-                .args(["/F", "/T", "/PID", &pid.to_string()])
-                .creation_flags(CREATE_NO_WINDOW)
-                .status();
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            // 负 PID = 发送信号到整个进程组
-            let _ = std::process::Command::new("kill")
-                .args(["--", &format!("-{}", pid)])
-                .status();
-            // 也补一个 pkill 杀子进程（某些 shell 可能不在同一进程组）
-            let _ = std::process::Command::new("pkill")
-                .args(["-P", &pid.to_string()])
-                .status();
-        }
+        agent::process_tree::kill_process_tree(pid);
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?;
