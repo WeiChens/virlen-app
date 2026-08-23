@@ -43,18 +43,20 @@ export default function TokenRing({ sessionId, compacting, loading }: Props) {
           lastUsage?.totalTokens != null
             ? Math.min(lastUsage.totalTokens / MAX_TOKENS_FULL, 1)
             : null
-
         if (usageRatio == null) {
           return <></>
         }
         // 环形进度条 SVG
-        const ringSize = 28
-        const strokeWidth = 3
+        const ringSize = 30
+        const strokeWidth = 4
         const radius = (ringSize - strokeWidth) / 2
         const circumference = 2 * Math.PI * radius
+        let v = circumference * (1 - usageRatio)
+        if (v + strokeWidth <= circumference) {
+          v += strokeWidth
+        }
         const offset =
-          usageRatio != null ? circumference * (1 - usageRatio) : circumference
-
+          usageRatio != null ? v : circumference
         return (
           <Tooltip
             content={

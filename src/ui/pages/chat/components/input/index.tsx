@@ -109,13 +109,13 @@ function ChatInput(
     isResizing.current = true
     setIsResizingState(true)
     startYRef.current = e.clientY
-    startHRef.current = wrapperRef.current?.offsetHeight ?? 200
+    startHRef.current = wrapperRef.current?.offsetHeight ?? 160
 
     function onMouseMove(ev: MouseEvent) {
       if (!isResizing.current) return
       // drag up = delta positive = taller
       const delta = startYRef.current - ev.clientY
-      const newH = Math.max(200, Math.min(600, startHRef.current + delta))
+      const newH = Math.max(160, Math.min(600, startHRef.current + delta))
       setWrapperHeight(newH)
     }
 
@@ -313,7 +313,7 @@ function ChatInput(
     if (!el) return
     // 只有当内容实际高度超过当前高度时才自动增高，不主动缩矮
     if (el.scrollHeight > el.clientHeight) {
-      el.style.height = Math.min(el.scrollHeight, 400) + 'px'
+      el.style.height = Math.min(el.scrollHeight, 250) + 'px'
     }
   }, [value, wrapperHeight])
 
