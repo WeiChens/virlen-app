@@ -13,6 +13,7 @@
   --pending-color: var(--accent-warn, #f59e0b);
   --done-color: var(--color-success, #0fcd55);
   --error-color: var(--color-error, #ef4444);
+
   .tool-call-point {
     width: 8px;
     height: 8px;
@@ -23,15 +24,18 @@
     background: var(--done-color);
     transition: all 0.3s ease;
     transform: translateY(-2px);
+
     &.error {
       background: var(--error-color);
       border-radius: 20%;
     }
+
     &.pending {
       background: var(--pending-color);
       animation: pulse 1s infinite;
     }
   }
+
   .tool-call-label {
     white-space: nowrap;
     overflow: hidden;
@@ -49,7 +53,8 @@
     .tool-call-status {
       color: var(--error-color, #ef4444);
     }
-    & + .error {
+
+    &+.error {
       margin: 0 20px;
       font-size: var(--font-size-ms);
     }
@@ -73,18 +78,21 @@
 }
 
 @keyframes pulse {
+
   0%,
   100% {
     opacity: 1;
     transform: scale(1) rotate(90deg);
     border-radius: 50%;
   }
+
   50% {
     opacity: 0.6;
     transform: scale(1.2);
     border-radius: 20%;
   }
 }
+
 .tool-call-expand-view {
   padding: 7px 12px;
   margin: 4px 25px;
@@ -145,6 +153,7 @@
     background-color: var(--bg-primary, #fff);
   }
 }
+
 .execute-command-wrapper {
   margin: 4px 20px;
   margin-left: 28px;
@@ -155,6 +164,7 @@
   width: fit-content;
   max-width: 90%;
   min-width: min(360px, 90%);
+
   .header {
     color: var(--terminal-text, #fff);
     padding: 4px 7px;
@@ -164,15 +174,23 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    user-select: none;
   }
-  .code-pre {
+
+  .code-pre-warpper {
     margin: 5px 7px;
-    max-height: 200px;
+    max-height: 240px;
     overflow: auto;
     min-width: 200px;
+  }
+  .code-pre {
+    overflow: hidden;
+    white-space: pre-wrap;
     code {
+      max-width: 600px;
       font-family: 'AlimamaAgileVF-Thin';
       color: var(--terminal-text, white);
+      font-size: var(--font-size-xs);
     }
   }
 }
@@ -245,8 +263,10 @@
 
 .diff-panel {
   flex: 1;
-  min-width: 0; /* 允许收缩，长文本不撑开列宽 */
-  overflow: auto; /* 各自独立滚动（横向+纵向） */
+  min-width: 0;
+  /* 允许收缩，长文本不撑开列宽 */
+  overflow: auto;
+  /* 各自独立滚动（横向+纵向） */
   box-sizing: border-box;
 }
 
@@ -255,7 +275,8 @@
 }
 
 .diff-col {
-  min-width: fit-content; /* 行宽由最长内容决定 */
+  min-width: fit-content;
+  /* 行宽由最长内容决定 */
 }
 
 .diff-line {
@@ -300,7 +321,8 @@
 
 .diff-code {
   padding: 0 8px;
-  white-space: pre; /* 不换行，由父容器 .diff-panel 滚动 */
+  white-space: pre;
+  /* 不换行，由父容器 .diff-panel 滚动 */
   flex: 1;
   min-width: 0;
 }

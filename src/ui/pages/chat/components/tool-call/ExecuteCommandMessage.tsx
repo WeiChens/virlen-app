@@ -70,7 +70,7 @@ function RunningOutput({
     <div className="tool-cmd-running">
       <div className="execute-command-wrapper">
         <div className="header">
-          <span className="title">Bash</span>
+          <span className="title">Terminal</span>
           {entry.kill && (
             <button
               className="tool-cmd-kill-btn"
@@ -82,11 +82,13 @@ function RunningOutput({
             </button>
           )}
         </div>
-        <pre className="code-pre" ref={scrollRef}>
-          <code style={{ userSelect: 'none' }}>$ </code>
-          <code>{cmd + '\n'}</code>
-          <code>{output}</code>
-        </pre>
+        <div className="code-pre-warpper">
+          <pre className="code-pre" ref={scrollRef}>
+            <code style={{ userSelect: 'none' }}>$ </code>
+            <code>{cmd + '\n'}</code>
+            <code>{output}</code>
+          </pre>
+        </div>
       </div>
     </div>
   )
@@ -128,29 +130,30 @@ class ExecuteCommandMessage implements IToolCallMessage {
         stdout: props.message.uiData?.stdout || body,
         stderr: props.message.uiData?.stderr || '',
       }
-      const code = props.message.uiData?.exitCode || 0
-
+      // const code = props.message.uiData?.exitCode || 0
       return (
         <div className="execute-command-wrapper">
           <div className="header">
             <span className="title">Terminal</span>
           </div>
-          <pre className="code-pre">
-            <code style={{ userSelect: 'none' }}>$ </code>
-            <code>{command + '\n'}</code>
-            <code
-              style={{
-                color: '#22c122',
-              }}>
-              {processTerminalOutput(output.stdout?.trim()) + '\n'}
-            </code>
-            <code
-              style={{
-                color: '#d82222',
-              }}>
-              {processTerminalOutput(output.stderr?.trim())}
-            </code>
-          </pre>
+          <div className="code-pre-warpper">
+            <pre className="code-pre">
+              <code style={{ userSelect: 'none' }}>$ </code>
+              <code>{command + '\n'}</code>
+              <code
+                style={{
+                  color: '#22c122',
+                }}>
+                {processTerminalOutput(output.stdout?.trim()) + '\n'}
+              </code>
+              <code
+                style={{
+                  color: '#d82222',
+                }}>
+                {processTerminalOutput(output.stderr?.trim())}
+              </code>
+            </pre>
+          </div>
         </div>
       )
     } catch {
