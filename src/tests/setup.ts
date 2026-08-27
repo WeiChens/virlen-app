@@ -74,7 +74,10 @@ vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: vi.fn(() => ({
     show: vi.fn(),
     hide: vi.fn(),
+    isFocused: vi.fn(() => Promise.resolve(true)),
+    requestUserAttention: vi.fn(() => Promise.resolve()),
   })),
+  UserAttentionType: { Critical: 1, Informational: 2 },
 }))
 
 // Mock 全局 fetch（用于 AI provider HTTP 请求）

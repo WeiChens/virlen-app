@@ -21,6 +21,7 @@
     "core:window:allow-center",
     "core:window:allow-show",
     "core:window:allow-create",
+    "core:window:allow-request-user-attention",
     "core:webview:allow-create-webview-window",
     "core:webview:allow-webview-show",
     "fs:allow-read",

@@ -55,6 +55,7 @@ import { getDefaultAgent } from '@/services/agent-service'
 import { repairSessionIfNeeded } from '@/services/chat-service'
 import { vision } from '@/infrastructure/vision'
 import type { VisionAnalyzeResult } from '@/infrastructure/vision/types'
+import { requestAttentionIfUnfocused } from '@/utils/windowAttention'
 /** 侧边栏宽度 localStorage 键名 */
 const SIDEBAR_WIDTH_KEY = '_sidebar_width'
 
@@ -489,6 +490,14 @@ function ChatView() {
         chatState.setValue('loading', working)
         // 结束工作时清除 loadingText，避免「正在验证」残留到下次发送
         if (!working) chatState.setValue('loadingText', '')
+        // AI 回复结束（无错误）→ 窗口未激活时闪烁提醒
+        if (!working && !chatState.value.error) {
+          // 非当前会话完成回复 → 侧边栏标记红点，引导用户前往查看
+          if (sid !== chatState.value.currentSessionId) {
+            updateSessionRuntime(sid, { hasNewReply: true })
+          }
+          requestAttentionIfUnfocused()
+        }
       },
       onVerifyingChange: (sid: string, verifying: boolean) => {
         // 验证步骤时 working-indicator 显示「正在验证」

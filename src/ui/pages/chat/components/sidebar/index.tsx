@@ -13,6 +13,7 @@ import type { Session, Message } from '@/types'
 import {
   chatState,
   getSessionRuntime,
+  updateSessionRuntime,
   sessionStore,
   agentStore,
   settingsState,
@@ -208,6 +209,8 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
 
   const handleSelect = useCallback(
     (sessionId: string) => {
+      // 进入会话 → 清除新回复红点
+      updateSessionRuntime(sessionId, { hasNewReply: false })
       chatState.setValue('currentSessionId', sessionId)
       onSelectSession(sessionId)
     },
@@ -413,6 +416,10 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
         key={session.id}
         className={`session-item ${isCurrent ? 'active' : ''} ${rt.working ? 'working' : ''} ${session.pinned ? 'pinned' : ''}`}
         onClick={(isEdit) => handleSelect(session.id)}>
+        {/* 非当前会话有新回复 → 左侧红点提示 */}
+        {rt.hasNewReply && !isCurrent && (
+          <span className="new-reply-dot" title={t('有新的回复')} />
+        )}
         <div className="session-info">
           {editingId === session.id ? (
             <input
@@ -428,7 +435,7 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
               onClick={(e) => e.stopPropagation()}
             />
           ) : (
-            <span className="session-title">
+            <div className="session-title-wrapper">
               {session.pinned && (
                 <span className="pinned-indicator" title={t('已置顶')}>
                   <PinSvg />
@@ -436,12 +443,12 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
               )}
               {rt.paused && (
                 <span className="shelved-indicator" title={t('工具调用已暂停')}>
-                  ⏸️
+                  <svg className="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="200" height="200"><path d="M885.333333 85.333333H138.666667a53.393333 53.393333 0 0 0-53.333334 53.333334v746.666666a53.393333 53.393333 0 0 0 53.333334 53.333334h746.666666a53.393333 53.393333 0 0 0 53.333334-53.333334V138.666667a53.393333 53.393333 0 0 0-53.333334-53.333334z m-458.666666 618.666667a21.333333 21.333333 0 0 1-42.666667 0V320a21.333333 21.333333 0 0 1 42.666667 0z m213.333333 0a21.333333 21.333333 0 0 1-42.666667 0V320a21.333333 21.333333 0 0 1 42.666667 0z" fill="var(--accent-color)"></path></svg>
                 </span>
               )}
               {rt.working && <span className="working-indicator" />}
-              {session.title}
-            </span>
+              <span className="session-title">{session.title}</span>
+            </div>
           )}
           <span className="session-meta">{timeFormat(session.updatedAt)}</span>
         </div>
@@ -763,6 +770,12 @@ function SessionGroupView({
     [group.sessions],
   )
 
+  // 检查组内是否有会话有未查看的新回复（折叠时在分组头部显示红点）
+  const hasNewReplySession = useMemo(
+    () => group.sessions.some((s) => getSessionRuntime(s.id).hasNewReply),
+    [group.sessions],
+  )
+
   // 点击菜单外部关闭
   useEffect(() => {
     if (!isGroupMenuOpen) return
@@ -851,6 +864,10 @@ function SessionGroupView({
           <AgentSvg className="group-icon" />
         )}
         {isCollapsed && hasWorkingSession && <span className="working-indicator" />}
+        {/* 折叠分组内有未查看的新回复 → 分组头部红点 */}
+        {isCollapsed && hasNewReplySession && (
+          <span className="new-reply-dot" title={t('有新的回复')} />
+        )}
         <span className="group-name">{group.name}</span>
         <div
           className={`group-header-actions${isGroupMenuOpen ? ' menu-open' : ''}`}

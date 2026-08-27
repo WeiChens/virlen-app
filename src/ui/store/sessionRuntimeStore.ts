@@ -14,6 +14,8 @@ export interface SessionRuntime {
   paused: boolean
   /** 是否正在压缩中 */
   compacting: boolean
+  /** 非当前会话回复完成后是否还有未查看的新回复（侧边栏红点） */
+  hasNewReply: boolean
 }
 
 interface SessionRuntimeStore {
@@ -48,6 +50,7 @@ export function getSessionRuntime(sessionId: string): SessionRuntime {
         pendingContent: '',
         streamingMessageId: null,
         paused: false,
+        hasNewReply: false,
       }
     })
   }

@@ -53,6 +53,7 @@
       margin: 0;
       cursor: pointer;
       height: fit-content;
+
       svg {
         width: 18px;
         height: 18px;
@@ -108,6 +109,16 @@
         color: var(--text-secondary, #666);
       }
 
+      // 非当前会话有新回复 → 左侧红点
+      .new-reply-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #f5222d;
+        flex-shrink: 0;
+        box-shadow: 0 0 4px rgba(245, 34, 45, 0.5);
+      }
+
       .session-info {
         flex: 1;
         min-width: 0;
@@ -123,6 +134,12 @@
           display: flex;
           align-items: center;
           gap: 6px;
+        }
+
+        .session-title-wrapper {
+          display: flex;
+          align-items: center;
+          gap: 4px;
 
           .pinned-indicator {
             flex-shrink: 0;
@@ -140,6 +157,11 @@
             flex-shrink: 0;
             font-size: var(--font-size-xs);
             line-height: 1;
+
+            .icon {
+              width: 16px;
+              height: 16px;
+            }
           }
 
           .working-indicator {
@@ -177,11 +199,13 @@
         }
 
         @keyframes dotPulse {
+
           0%,
           100% {
             opacity: 1;
             transform: scale(1);
           }
+
           50% {
             opacity: 0.6;
             transform: scale(0.85);
@@ -193,14 +217,15 @@
             transform: scale(0.8);
             opacity: 0.6;
           }
+
           100% {
-            transform: scale(1.6);
+            transform: scale(1.3);
             opacity: 0;
           }
         }
 
         .session-meta {
-          font-size: var(--font-size-xs);
+          font-size: var(--font-size-2xs);
           color: var(--text-secondary, #999);
           margin-top: 2px;
         }
@@ -216,17 +241,20 @@
           background: var(--bg-primary, #fff);
         }
       }
+
       &:hover {
         .session-more {
           display: block;
         }
       }
+
       // ==================== 「更多」菜单按钮 ====================
 
       .session-more {
         display: none;
         position: relative;
         flex-shrink: 0;
+
         &.hidden {
           display: none !important;
         }
@@ -359,6 +387,7 @@
           background 0.12s,
           color 0.12s;
         border: none;
+
         &:hover {
           background: var(--hover-bg, #e8e8ed);
           color: var(--text-primary, #1a1a1a);
@@ -398,10 +427,10 @@
       }
 
       .group-icon {
-        width: 16px;
-        height: 16px;
+        width: 14px;
+        height: 14px;
         flex-shrink: 0;
-        fill: var(--text-secondary, #888);
+        fill: var(--text-primary);
 
         &.ungrouped {
           font-size: 14px;
@@ -418,6 +447,16 @@
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+      }
+
+      // 折叠分组内有未查看的新回复 → 分组头部红点
+      .new-reply-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #f5222d;
+        flex-shrink: 0;
+        box-shadow: 0 0 4px rgba(245, 34, 45, 0.5);
       }
 
       // 分组头部的工作指示器（组内有会话正在运行时显示）
@@ -507,6 +546,7 @@
           .group-count {
             display: none;
           }
+
           .group-more-btn {
             display: flex;
           }
@@ -581,6 +621,7 @@
         margin: 0 0 4px;
         font-size: var(--font-size-base);
       }
+
       .hint {
         font-size: var(--font-size-sm);
       }
