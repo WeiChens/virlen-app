@@ -12,6 +12,17 @@ export interface QuickInputTemplate {
   text: string
 }
 
+/** 打开编辑器配置 */
+export interface EditorOpenConfig {
+  id: string
+  /** 配置名称，如 VS Code / IntelliJ IDEA */
+  name: string
+  /** 打开命令模板，支持 ${filePath} ${line} 占位符，如 code -g "${filePath}:${line}" */
+  command: string
+  createdAt: number
+  updatedAt: number
+}
+
 export interface SettingsStore {
   language: 'zh-CN' | 'en-US'
   theme: 'light' | 'dark' | 'system'
@@ -59,6 +70,12 @@ export interface SettingsStore {
   ragDefaultTopK: number
   /** 是否启用 Rust 原生引擎（默认开启；会话/消息由 Rust SQLite 直落） */
   useRustEngine: boolean
+  /** 是否启用「打开编辑器」功能 */
+  editorOpenEnabled: boolean
+  /** 编辑器配置列表（可配置多个，如 vscode、idea 等） */
+  editorOpenConfigs: EditorOpenConfig[]
+  /** 默认使用的编辑器配置 id */
+  editorOpenDefaultId: string
 }
 
 const defaultSettings: SettingsStore = {
@@ -89,6 +106,9 @@ const defaultSettings: SettingsStore = {
   ragDefaultKnowledgeBaseId: '',
   ragDefaultTopK: 5,
   useRustEngine: true,
+  editorOpenEnabled: true,
+  editorOpenConfigs: [],
+  editorOpenDefaultId: '',
 }
 
 export const settingsState = new StorageState(
@@ -146,6 +166,44 @@ try {
       )
     }
     localStorage.setItem('virlen-rust-engine-migrated', '1')
+  }
+} catch {
+  // 非浏览器环境忽略
+}
+
+// ── 打开编辑器：旧版单命令 → 新版多配置 一次性迁移 ──
+// 早期版本 editorOpenCommand 为单个命令字符串，现改为 editorOpenConfigs 列表。
+// 若已有旧命令且列表为空，将其迁移为默认配置「VS Code」，并设为默认。
+try {
+  const old = (settingsState.value as any).editorOpenCommand
+  if (
+    typeof old === 'string' &&
+    old.trim() &&
+    settingsState.value.editorOpenConfigs.length === 0
+  ) {
+    const now = Date.now()
+    const migrated: EditorOpenConfig = {
+      id: `editor-${now}`,
+      name: 'VS Code',
+      command: old,
+      createdAt: now,
+      updatedAt: now,
+    }
+    settingsState.value.editorOpenConfigs = [migrated]
+    settingsState.value.editorOpenDefaultId = migrated.id
+    localStorage.setItem(
+      '_storage_state_virlen-settings',
+      JSON.stringify(settingsState.value),
+    )
+  }
+  // 清理旧字段（非枚举属类型定义字段，直接删除避免污染）
+  const raw = settingsState.value as any
+  if ('editorOpenCommand' in raw) {
+    delete raw.editorOpenCommand
+    localStorage.setItem(
+      '_storage_state_virlen-settings',
+      JSON.stringify(settingsState.value),
+    )
   }
 } catch {
   // 非浏览器环境忽略

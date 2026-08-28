@@ -1,0 +1,252 @@
+.editor-settings {
+  padding: 24px;
+
+  // ==================== 总开关 ====================
+
+  .master-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 10px;
+    margin-bottom: 24px;
+    background: var(--bg-primary, #fff);
+
+    .master-toggle-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+
+      .master-toggle-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text-primary, #1a1a1a);
+      }
+
+      .master-toggle-desc {
+        font-size: 12px;
+        color: var(--text-secondary, #999);
+        line-height: 1.5;
+      }
+    }
+  }
+
+  // ==================== Toggle ====================
+
+  .toggle {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+    cursor: pointer;
+
+    input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+
+      &:checked+.toggle-slider {
+        background: var(--accent-color, #4f46e5);
+      }
+
+      &:checked+.toggle-slider::before {
+        transform: translateX(20px);
+      }
+    }
+
+    .toggle-slider {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: var(--toggle-off-bg, #ccc);
+      border-radius: 12px;
+      transition: background 0.2s;
+
+      &::before {
+        content: '';
+        position: absolute;
+        width: 20px;
+        height: 20px;
+        left: 2px;
+        bottom: 2px;
+        background: #fff;
+        border-radius: 50%;
+        transition: transform 0.2s;
+      }
+    }
+  }
+
+  // ==================== 配置编辑器 ====================
+
+  .add-section {
+    margin-bottom: 24px;
+
+    h3 {
+      font-size: 15px;
+      font-weight: 600;
+      margin: 0 0 4px;
+    }
+
+    .add-hint {
+      font-size: 12px;
+      color: var(--text-secondary, #999);
+      margin: 0 0 16px;
+    }
+
+    .template-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+
+      .template-card {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        padding: 14px;
+        border: 1px solid var(--border-color, #e5e5e5);
+        border-radius: 10px;
+        background: var(--bg-primary, #fff);
+        transition: all 0.15s;
+
+        &:hover {
+          border-color: var(--accent-color, #4f46e5);
+          background: var(--hover-bg, #fafafa);
+        }
+
+        &.is-active {
+          border-color: var(--accent-color, #4f46e5);
+          background: var(--hover-bg, #fafafa);
+        }
+
+        // ---- 主体（点击 = 选中）----
+
+        .template-main {
+          all: unset;
+          display: flex;
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 4px;
+          width: 100%;
+          cursor: pointer;
+          text-align: left;
+        }
+
+        // 带操作图标的卡片（自定义：编辑 + 删除），主体右侧留位
+        &.has-actions .template-main {
+          padding-right: 68px;
+        }
+
+        .template-header {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          width: 100%;
+        }
+
+        .template-icon {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 28px;
+          height: 28px;
+          border-radius: 6px;
+          background: var(--active-bg, #eef2ff);
+          color: var(--accent-color, #4f46e5);
+          font-size: 11px;
+          font-weight: 700;
+          flex-shrink: 0;
+
+          img {
+            width: 20px;
+            height: 20px;
+            object-fit: contain;
+          }
+        }
+
+        .template-label {
+          font-size: 13px;
+          font-weight: 600;
+          color: var(--text-primary, #1a1a1a);
+        }
+
+        .template-desc {
+          font-size: 11px;
+          color: var(--text-secondary, #999);
+          line-height: 1.4;
+          word-break: break-all;
+          font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+        }
+
+        // ---- 默认标签 ----
+
+        .active-badge {
+          font-size: 10px;
+          font-weight: 600;
+          padding: 2px 8px;
+          border-radius: 10px;
+          background: var(--color-success-bg, #e6f7e6);
+          color: var(--color-success, #0fcd55);
+          flex-shrink: 0;
+          white-space: nowrap;
+        }
+
+        .actions-list {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-top: 12px;
+          justify-content: flex-end;
+        }
+
+        .template-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border: none;
+          background: transparent;
+          border-radius: 6px;
+          gap: 3px;
+          cursor: pointer;
+          color: var(--text-secondary, #999);
+          transition: all 0.12s;
+          font-size: var(--font-size-xs);
+
+          svg {
+            width: 12px; // 比默认 16px 放大一点
+            height: 12px;
+            fill: var(--text-secondary, #999);
+          }
+
+          &:hover {
+            background: var(--hover-bg, #e8e8e8);
+            color: var(--accent-color, #4f46e5);
+
+            svg {
+              fill: var(--accent-color, #4f46e5);
+            }
+          }
+
+        }
+
+        &.custom {
+          border-style: dashed;
+
+          .template-icon {
+            background: var(--hover-bg, #f0f0f0);
+            color: var(--text-secondary, #666);
+            font-size: 14px;
+          }
+        }
+      }
+
+    }
+
+    .custom-section {
+      margin-top: 12px;
+    }
+  }
+}

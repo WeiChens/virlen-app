@@ -12,6 +12,7 @@ import SkillSettings from './skill-settings'
 import QuickInputSettings from './quickinput-settings'
 import SearchEngineSettings from './search-engine-settings'
 import KnowledgeBaseSettings from './knowledge-base-settings'
+import EditorSettings from './editor-settings'
 import CloseSvg from '@/ui/components/icons/CloseSvg'
 import SettingSvg from '@/ui/components/icons/SettingSvg'
 import SystemSvg from '@/ui/components/icons/SystemSvg'
@@ -20,6 +21,7 @@ import AgentSvg from '@/ui/components/icons/AgentSvg'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
 import QuickInputSvg from '@/ui/components/icons/QuickInputSvg'
 import SearchSvg from '@/ui/components/icons/SearchSvg'
+import CodeSvg from '@/ui/components/icons/CodeSvg'
 import settingsEvent from '@/events/settingsEvent'
 import { t } from '@/ui/i18n'
 import './settings-view.scss'
@@ -33,6 +35,7 @@ export type SettingsPage =
   | 'quickinput'
   | 'search-engine'
   | 'knowledge-base'
+  | 'editor'
 
 export default function SettingsView() {
   const [open, setOpen] = useState(false)
@@ -139,6 +142,12 @@ export default function SettingsView() {
               <FolderSvg fill="var(--nav-item-color)" />
               <span>{t('知识库')}</span>
             </button>
+            <button
+              className={`nav-item ${page === 'editor' ? 'active' : ''}`}
+              onClick={() => setPage('editor')}>
+              <CodeSvg fill="var(--nav-item-color)" />
+              <span>{t('打开编辑器')}</span>
+            </button>
           </nav>
         </div>
         <div className="settings-content">
@@ -150,6 +159,7 @@ export default function SettingsView() {
           {page === 'quickinput' && <QuickInputSettings />}
           {page === 'search-engine' && <SearchEngineSettings />}
           {page === 'knowledge-base' && <KnowledgeBaseSettings />}
+          {page === 'editor' && <EditorSettings />}
         </div>
       </div>
     </div>
