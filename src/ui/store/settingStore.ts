@@ -1,6 +1,9 @@
 import type { ProviderConfig } from '@/types'
 import type { SearchProviderConfig } from '@/domain/search/config'
+import type { EditorOpenConfig } from '@/domain/editor'
 import StorageState from '@/utils/storageState'
+
+export type { EditorOpenConfig }
 
 export type CommandApprovalMode = 'all' | 'risky' | 'install' | 'none'
 export type SessionGroupType = 'agent' | 'workspace'
@@ -10,17 +13,6 @@ export interface QuickInputTemplate {
   id: string
   /** 模板内容文本 */
   text: string
-}
-
-/** 打开编辑器配置 */
-export interface EditorOpenConfig {
-  id: string
-  /** 配置名称，如 VS Code / IntelliJ IDEA */
-  name: string
-  /** 打开命令模板，支持 ${filePath} ${line} 占位符，如 code -g "${filePath}:${line}" */
-  command: string
-  createdAt: number
-  updatedAt: number
 }
 
 export interface SettingsStore {
@@ -95,12 +87,12 @@ const defaultSettings: SettingsStore = {
   },
   maxTokens: 32768,
   defaultWorkspace: '',
-  maxToolRounds: 30,
+  maxToolRounds: 100,
   maxIterations: 5,
   skillMetaPreload: false,
   quickInputTemplates: [],
   goalQuickInputTemplates: [],
-  sessionGroupType: 'agent',
+  sessionGroupType: 'workspace',
   imageVisionAnalyzeOptimize: true,
   ragEnabled: false,
   ragDefaultKnowledgeBaseId: '',

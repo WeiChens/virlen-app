@@ -53,7 +53,7 @@ class ListFilesMessage implements IToolCallMessage {
           width={400}
           maxHeight={600}
           showLineNumbers={false}>
-          {props?.message?.content}
+          {props?.message?.content as unknown as React.ReactNode}
         </CodeBlock>
       )
     } catch {

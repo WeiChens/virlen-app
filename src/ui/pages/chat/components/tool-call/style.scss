@@ -216,12 +216,56 @@
 }
 
 .diff-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 6px 12px;
   background: var(--bg-secondary, #f9fafb);
   border-bottom: 1px solid var(--border-color, #e5e7eb);
   font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--text-primary, #111827);
+
+  .diff-header-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .diff-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+
+    .diff-action-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border: none;
+      border-radius: 4px;
+      background: var(--code-copy-btn-bg, rgba(255, 255, 255, 0.08));
+      color: var(--code-header-color, #abb2bf);
+      cursor: pointer;
+      transition: background 0.15s;
+
+      svg {
+        width: 14px;
+        height: 14px;
+        fill: var(--code-header-color);
+      }
+
+      &:hover {
+        background: var(--code-copy-btn-hover-bg, rgba(255, 255, 255, 0.18));
+        color: var(--code-copy-btn-hover-color, #fff);
+      }
+    }
+  }
 }
 
 .diff-column-headers {

@@ -564,6 +564,15 @@ export function toShortPath(absolutePath: string, workspace?: string): string {
   }
   return absolutePath
 }
+
+/**
+ * 获取文件父级路径
+ * @param path 
+ */
+export function getFileParentDir(path: string) {
+  path = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  return path.substring(0, path.lastIndexOf('/'))
+}
 export const disableNotNumber = (e: React.KeyboardEvent<HTMLDivElement>) => {
   if (e.key.match(/[^0-9]/g)) {
     if (

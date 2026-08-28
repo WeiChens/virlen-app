@@ -9,7 +9,7 @@ import { useState, useEffect } from 'react'
 import Modal from '@/ui/components/shared/Modal'
 import type { EditorOpenConfig } from '@/ui/store'
 import { t } from '@/ui/i18n'
-import { buildEditorCommand } from '@/utils/editorCommand'
+import { buildEditorCommand } from '@/domain/editor'
 import './editor-edit-modal.scss'
 
 interface Props {

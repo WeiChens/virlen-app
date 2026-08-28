@@ -12,7 +12,14 @@
  * - 保持与 react-syntax-highlighter 相同的视觉风格（One Dark）
  * - 不引入额外运行时依赖
  */
-import { useState, useEffect, useRef } from 'react'
+import {
+  useState,
+  useEffect,
+  useRef,
+  type HTMLAttributes,
+  type ReactElement,
+  type ReactNode,
+} from 'react'
 import CopySvg from '@/ui/components/icons/CopySvg'
 import { renderCodeToCanvas } from './canvas-code-renderer'
 import './code-block.scss'
@@ -385,6 +392,41 @@ async function tryOpen(path: string) {
     openPath(absPath)
   }
 }
+/** 自定义操作按钮 */
+export interface Action {
+  title: string
+  onClick: () => void
+  iconRender?: () => ReactElement
+}
+
+/**
+ * CodeBlock 组件 Props。
+ * 继承 HTMLAttributes<HTMLElement>：其余原生属性（如 react-markdown 的 node、内联代码属性）
+ * 会通过 ...props 透传到内联 <code> 元素。
+ */
+export interface CodeBlockProps extends HTMLAttributes<HTMLElement> {
+  /** 代码语言 class（react-markdown 约定，如 `language-ts`） */
+  className?: string
+  /** 代码内容 */
+  children: ReactNode
+  /** 最大高度（px），超出自动滚动 */
+  maxHeight?: number | string
+  /** 代码块宽度 */
+  width?: number | string
+  /** 字体大小（px），默认跟随 --font-size-md */
+  fontSize?: number
+  /** 文件名，用于推断代码语言 */
+  fileName?: string
+  /** 是否显示行号（默认 true） */
+  showLineNumbers?: boolean
+  /** 起始行号（默认 1） */
+  startLineNumber?: number
+  /** 流式输出中 → 纯文本 fallback，避免 canvas 闪烁 */
+  streaming?: boolean
+  /** 自定义操作按钮 */
+  actions?: Action[]
+}
+
 /** 代码块组件 */
 export default function CodeBlock({
   className,
@@ -396,8 +438,9 @@ export default function CodeBlock({
   showLineNumbers = true,
   startLineNumber = 1,
   streaming,
+  actions = [] as Action[],
   ...props
-}: any) {
+}: CodeBlockProps) {
   let match = /language-(\w+)/.exec(className || '')
   let language = match ? match[1] : fileName?.split('.').pop()
   // 从 fence info string 解析参数，如 ```tsx showLineNumbers
@@ -456,18 +499,31 @@ export default function CodeBlock({
       }}>
       <div className="code-block-header">
         <span className="code-language">{displayLang}</span>
-        <button className="code-copy-btn" onClick={handleCopy} title="复制代码">
-          {copied ? (
-            <svg viewBox="0 0 1160 1024" width="14" height="14">
-              <path
-                d="M1098.5472 34.133333C766.498133 240.64 525.653333 501.486933 416.9728 632.149333L151.552 421.205333 34.133333 516.983467 492.3392 989.866667c78.6432-204.868267 328.772267-605.252267 634.0608-889.856L1098.5472 34.133333z"
-                fill="var(--color-success, #4ade80)"
-              />
-            </svg>
-          ) : (
-            <CopySvg fill="var(--text-tertiary, #aeaeae)" />
-          )}
-        </button>
+        <div className='actions-list'>
+          <button className="code-copy-btn" onClick={handleCopy} title="复制代码">
+            {copied ? (
+              <svg viewBox="0 0 1160 1024" width="14" height="14">
+                <path
+                  d="M1098.5472 34.133333C766.498133 240.64 525.653333 501.486933 416.9728 632.149333L151.552 421.205333 34.133333 516.983467 492.3392 989.866667c78.6432-204.868267 328.772267-605.252267 634.0608-889.856L1098.5472 34.133333z"
+                  fill="var(--color-success, #4ade80)"
+                />
+              </svg>
+            ) : (
+              <CopySvg fill="var(--text-tertiary, #aeaeae)" />
+            )}
+          </button>
+          {
+            actions.map((action, index) => {
+              if(!action.iconRender)
+                console.error(`action ${action.title} should have iconRender`)
+              return (
+                <button className="action-btn" key={action.title} onClick={action.onClick} title={action.title}>
+                  {action.iconRender ? action.iconRender() : <CopySvg />}
+                </button>
+              )
+            })
+          }
+        </div>
       </div>
       {/* 流式输出中 → 常规 pre/code 渲染（避免 canvas 闪烁） */}
       {streaming ? (

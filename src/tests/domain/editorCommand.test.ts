@@ -3,12 +3,12 @@
  *
  * 覆盖场景：
  * - buildEditorCommand 占位符替换（filePath / line / column）
- * - 未提供的占位符保持原样
+ * - 未提供的 line / column 默认补 0
  * - 含空格、中文等特殊路径
  * - 空模板边界
  */
 import { describe, it, expect } from 'vitest'
-import { buildEditorCommand } from '@/utils/editorCommand'
+import { buildEditorCommand } from '@/domain/editor'
 
 describe('buildEditorCommand', () => {
   it('应替换 filePath 与 line 占位符', () => {
@@ -19,11 +19,24 @@ describe('buildEditorCommand', () => {
     expect(cmd).toBe('code -g "C:/a/b.ts:42"')
   })
 
-  it('未提供的占位符应保持原样', () => {
+  it('未提供的 line 默认补 0', () => {
     const cmd = buildEditorCommand('code -g "${filePath}:${line}"', {
       filePath: 'C:/a/b.ts',
     })
-    expect(cmd).toBe('code -g "C:/a/b.ts:${line}"')
+    expect(cmd).toBe('code -g "C:/a/b.ts:0"')
+  })
+
+  it('未提供的 column 默认补 0', () => {
+    const cmd = buildEditorCommand('code -g "${filePath}:${line}:${column}"', {
+      filePath: 'C:/a/b.ts',
+    })
+    expect(cmd).toBe('code -g "C:/a/b.ts:0:0"')
+  })
+
+  it('line 为 0 时不被覆盖', () => {
+    const params = { filePath: 'C:/a/b.ts', line: 0 }
+    buildEditorCommand('code -g "${filePath}:${line}"', params)
+    expect(params.line).toBe(0)
   })
 
   it('支持仅 filePath 的模板（含空格/中文路径）', () => {

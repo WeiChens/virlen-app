@@ -44,9 +44,9 @@ export type {
   CommandApprovalMode,
   QuickInputTemplate,
   SessionGroupType,
-  EditorOpenConfig,
 } from './settingStore'
 export type { SearchProviderConfig } from '@/domain/search/config'
+export type { EditorOpenConfig } from '@/domain/editor'
 export { agentStore } from './agentStore'
 export type { AgentStoreData } from './agentStore'
 export { chatState } from './chatState'
