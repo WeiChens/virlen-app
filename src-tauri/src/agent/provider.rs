@@ -402,13 +402,14 @@ impl Provider for NativeOpenAiProvider {
                         let entry = tool_acc
                             .entry(idx)
                             .or_insert_with(|| (String::new(), String::new(), String::new()));
-                        if let Some(id) = tc.get("id").and_then(Value::as_str) {
+                        if let Some(id) = tc.get("id").and_then(Value::as_str).filter(|s| !s.is_empty()) {
                             entry.0 = id.to_string();
                         }
                         if let Some(name) = tc
                             .get("function")
                             .and_then(|f| f.get("name"))
                             .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
                         {
                             entry.1 = name.to_string();
                         }
