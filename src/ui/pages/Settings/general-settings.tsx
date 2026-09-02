@@ -278,6 +278,28 @@ function GeneralSettings() {
         </div>
         <div className="setting-row">
           <div className="setting-label">
+            <span className="label-text">{t('强制激活窗口')}</span>
+            <span className="label-desc">
+              {t(
+                'AI 回复完成或需要用户选择时，若窗口未激活则自动将窗口置为活动状态',
+              )}
+            </span>
+          </div>
+          <div className="setting-control">
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={s.forceWindowActive}
+                onChange={(e) =>
+                  update('forceWindowActive', e.target.checked)
+                }
+              />
+              <span className="toggle-slider" />
+            </label>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-label">
             <span className="label-text">{t('预加载技能元数据')}</span>
             <span className="label-desc">
               {t('启动时预先拉取 skill 的描述信息，但会提前消耗 TOKEN')}

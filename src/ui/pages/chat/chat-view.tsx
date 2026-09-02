@@ -496,7 +496,10 @@ function ChatView() {
           if (sid !== chatState.value.currentSessionId) {
             updateSessionRuntime(sid, { hasNewReply: true })
           }
-          requestAttentionIfUnfocused()
+          requestAttentionIfUnfocused(
+            undefined,
+            settingsState.value.forceWindowActive,
+          )
         }
       },
       onVerifyingChange: (sid: string, verifying: boolean) => {
