@@ -11,9 +11,11 @@ import { processTerminalOutput } from '@/infrastructure/tools/terminal-output'
 function RunningOutput({
   toolCallId,
   cmd,
+  tips,
 }: {
   toolCallId: string
   cmd: string
+  tips?: string
 }) {
   const [liveOutput, setLiveOutput] = useState<string>(null)
   const [entry, setEntry] = useState<ToolOutput | null>(
@@ -71,6 +73,7 @@ function RunningOutput({
       <div className="execute-command-wrapper">
         <div className="header">
           <span className="title">Terminal</span>
+          {tips && <span className="execute-command-header-tips">{tips}</span>}
           {entry.kill && (
             <button
               className="tool-cmd-kill-btn"
@@ -103,10 +106,15 @@ class ExecuteCommandMessage implements IToolCallMessage {
   }
   getShortText(props: ToolMessageProps): string | React.ReactNode {
     try {
-      const { command } = props.useContent.input
+      const { command, tips } = props.useContent.input
       return (
-        <span style={{ color: 'var(--accent-color)', fontWeight: 500 }}>
-          {command}
+        <span className="execute-command-short">
+          {tips && (
+            <span className="execute-command-tips">{tips}</span>
+          )}
+          <span style={{ color: 'var(--accent-color)', fontWeight: 500 }}>
+            {command}
+          </span>
         </span>
       )
     } catch {
@@ -119,9 +127,10 @@ class ExecuteCommandMessage implements IToolCallMessage {
     // }
     try {
       const command = props.useContent.input.command
+      const tips = props.useContent.input.tips as string | undefined
       const body = props.message?.content as string
       if (!props.message) {
-        return <RunningOutput toolCallId={props.useContent.id} cmd={command} />
+        return <RunningOutput toolCallId={props.useContent.id} cmd={command} tips={tips} />
       }
       if (!props.expand) {
         return null
@@ -135,6 +144,7 @@ class ExecuteCommandMessage implements IToolCallMessage {
         <div className="execute-command-wrapper">
           <div className="header">
             <span className="title">Terminal</span>
+            {tips && <span className="execute-command-header-tips">{tips}</span>}
           </div>
           <div className="code-pre-warpper">
             <pre className="code-pre">

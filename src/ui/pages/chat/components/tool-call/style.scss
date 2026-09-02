@@ -175,6 +175,17 @@
     align-items: center;
     justify-content: space-between;
     user-select: none;
+    gap: 8px;
+  }
+
+  .execute-command-header-tips {
+    flex: 1;
+    font-weight: normal;
+    font-size: var(--font-size-xs);
+    color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .code-pre-warpper {
@@ -191,6 +202,32 @@
       font-family: 'AlimamaAgileVF-Thin';
       color: var(--terminal-text, white);
       font-size: var(--font-size-xs);
+    }
+  }
+}
+
+// execute_command 短文本中的 tips 标签
+.execute-command-short {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+
+  .execute-command-tips {
+    font-size: var(--font-size-xs);
+    color: var(--text-tertiary, #9ca3af);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 1;
+    min-width: 0;
+
+    // 与命令之间加分隔符
+    &::after {
+      content: '—';
+      margin-left: 6px;
+      color: var(--text-tertiary, #9ca3af);
     }
   }
 }
