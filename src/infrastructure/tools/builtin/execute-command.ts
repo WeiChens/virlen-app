@@ -320,6 +320,11 @@ toolRegistry.register(
           description:
             'The command to execute (e.g. "dir", "git status", "node --version"). Standard shell syntax — &&/|| pipes, >nul redirects all work naturally.',
         },
+        tips: {
+          type: 'string',
+          description:
+            'A brief explanation of what this command does and why it is being executed (in the user\'s language). This will be displayed in the UI to help the user understand the command\'s purpose.',
+        },
         timeout: {
           type: 'number',
           description:

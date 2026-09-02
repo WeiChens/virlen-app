@@ -57,6 +57,7 @@ pub fn is_native_tool(name: &str) -> bool {
             | "delete_file"
             | "file_info"
             | "copy_move_file"
+            | "mkdir"
             | "search_files_by_name"
             | "search_text_in_files"
             | "search_knowledge_base"
@@ -83,6 +84,7 @@ pub async fn execute_native_tool(
         "delete_file" => delete_file_tool(ctx, args).await,
         "file_info" => file_info_tool(ctx, args).await,
         "copy_move_file" => copy_move_file_tool(ctx, args).await,
+        "mkdir" => mkdir_tool(ctx, args).await,
         "search_files_by_name" => search_files_by_name_tool(ctx, args).await,
         "search_text_in_files" => search_text_in_files_tool(ctx, args).await,
         "search_knowledge_base" => search_knowledge_base_tool(ctx, args).await,
@@ -105,6 +107,18 @@ fn arg_i64(args: &Value, key: &str) -> Option<i64> {
 }
 fn arg_bool(args: &Value, key: &str) -> Option<bool> {
     args.get(key).and_then(|v| v.as_bool())
+}
+
+fn arg_str_array(args: &Value, key: &str) -> Vec<String> {
+    match args.get(key) {
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|v| v.as_str())
+            .map(|s| s.to_string())
+            .filter(|s| !s.trim().is_empty())
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 fn format_size(bytes: usize) -> String {
@@ -1153,19 +1167,14 @@ async fn run_command_native(
 
 // ==================== 文件工具 ====================
 
-async fn read_file_tool(
+/// 读取单个文件并返回格式化内容 + uiData（供 read_file_tool 复用）
+async fn read_single_file(
     ctx: &NativeToolCtx<'_>,
-    args: &Value,
-) -> Result<NativeToolOutcome, String> {
-    let path = arg_str(args, "path").unwrap_or_default();
-    let full_path = resolve_safe_path(&path, "r", ctx.security)?;
-    // 与 JS `+(max_lines) || 2000` 一致：缺失或 <=0 时取 2000
-    let max_lines = match arg_i64(args, "max_lines") {
-        Some(n) if n > 0 => n as usize,
-        _ => 2000,
-    };
-    let start_line = arg_i64(args, "start_line").unwrap_or(1).max(1) as usize;
-
+    path: &str,
+    max_lines: usize,
+    start_line: usize,
+) -> Result<(String, Value), String> {
+    let full_path = resolve_safe_path(path, "r", ctx.security)?;
     let full_path_c = full_path.clone();
     let result = tokio::task::spawn_blocking(move || file_ops::read_file(&full_path_c))
         .await
@@ -1184,7 +1193,7 @@ async fn read_file_tool(
     let mut header = vec![
         format!("📄 {}", full_path),
         format!("📝 {} 行 / {}", total_lines, format_size(result.byte_size)),
-        format!("🔑 SHA256: {}", result.hash),
+        format!("🔑 hash10: {}", result.hash10),
         format!("🔢 显示: 第 {}-{} 行 (共 {} 行)", display_start, display_end, total_lines),
     ];
     if start_idx > 0 {
@@ -1199,17 +1208,93 @@ async fn read_file_tool(
     }
 
     let displayed = slice.join("\n");
+    let content = format!("{}\n\n{}", header.join("\n"), displayed);
+    let ui_data = json!({
+        "content": displayed,
+        "hash10": result.hash10,
+        "line_count": result.line_count,
+        "byte_size": result.byte_size,
+        "fullPath": full_path,
+        "startLine": display_start,
+        "endLine": display_end,
+    });
+    Ok((content, ui_data))
+}
+
+async fn read_file_tool(
+    ctx: &NativeToolCtx<'_>,
+    args: &Value,
+) -> Result<NativeToolOutcome, String> {
+    // 与 JS `+(max_lines) || 2000` 一致：缺失或 <=0 时取 2000
+    let max_lines = match arg_i64(args, "max_lines") {
+        Some(n) if n > 0 => n as usize,
+        _ => 2000,
+    };
+    let start_line = arg_i64(args, "start_line").unwrap_or(1).max(1) as usize;
+
+    // 支持 paths 数组（批量读取多个文件）
+    let paths = arg_str_array(args, "paths");
+    if !paths.is_empty() {
+        let mut contents: Vec<String> = Vec::new();
+        let mut ui_files: Vec<Value> = Vec::new();
+        let mut errors: Vec<String> = Vec::new();
+
+        for p in &paths {
+            match read_single_file(ctx, p, max_lines, start_line).await {
+                Ok((content, ui_data)) => {
+                    contents.push(content);
+                    ui_files.push(ui_data);
+                }
+                Err(e) => {
+                    errors.push(format!("{} — {}", p, e));
+                }
+            }
+        }
+
+        // 组装结果
+        let mut parts: Vec<String> = Vec::new();
+        if contents.is_empty() && !errors.is_empty() {
+            // 全部失败
+            return Ok(NativeToolOutcome::Error(errors.join("\n")));
+        }
+        // 文件之间用分隔线隔开
+        for (i, c) in contents.iter().enumerate() {
+            if i > 0 {
+                parts.push("\n---".to_string());
+            }
+            parts.push(c.clone());
+        }
+        if !errors.is_empty() {
+            parts.push(format!(
+                "\n\n⚠️ 有 {} 个文件读取失败:\n{}",
+                errors.len(),
+                errors.iter().map(|e| format!("  - {}", e)).collect::<Vec<_>>().join("\n")
+            ));
+        }
+
+        let ui_data = if ui_files.len() == 1 {
+            // 单文件 → 保持原有 uiData 结构（向后兼容）
+            ui_files.into_iter().next().unwrap()
+        } else {
+            // 多文件 → uiData.files 数组
+            json!({ "files": ui_files })
+        };
+
+        return Ok(NativeToolOutcome::Value {
+            content: parts.join("\n"),
+            ui_data: Some(ui_data),
+        });
+    }
+
+    // 单文件路径（向后兼容）
+    let path = arg_str(args, "path").unwrap_or_default();
+    if path.is_empty() {
+        return Err("Missing required parameter: \"path\" or \"paths\"".to_string());
+    }
+    let (content, ui_data) = read_single_file(ctx, &path, max_lines, start_line).await?;
     Ok(NativeToolOutcome::Value {
-        content: format!("{}\n\n{}", header.join("\n"), displayed),
-        ui_data: Some(json!({
-            "content": displayed,
-            "hash": result.hash,
-            "line_count": result.line_count,
-            "byte_size": result.byte_size,
-            "fullPath": full_path,
-            "startLine": display_start,
-            "endLine": display_end,
-        })),
+        content,
+        ui_data: Some(ui_data),
     })
 }
 
@@ -1219,42 +1304,78 @@ async fn edit_file_tool(
 ) -> Result<NativeToolOutcome, String> {
     let path = arg_str(args, "path").unwrap_or_default();
     let full_path = resolve_safe_path(&path, "w", ctx.security)?;
-    let old_string = arg_str(args, "old_string").unwrap_or_default();
-    let new_string = arg_str(args, "new_string").unwrap_or_default();
     let expected_hash = arg_str(args, "expected_hash").unwrap_or_default();
-    // 与 JS `replaceCount === 0 ? 999999 : replaceCount` 一致：0 表示全部替换
-    let mut replace_count = arg_i64(args, "replace_count").unwrap_or(1) as usize;
-    if replace_count == 0 {
-        replace_count = usize::MAX;
+
+    // edits 是唯一入口：必填且不能为空数组
+    let edits_arr = args
+        .get("edits")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "Missing required parameter: \"edits\" (array)".to_string())?;
+    if edits_arr.is_empty() {
+        return Err("\"edits\" must be a non-empty array".to_string());
     }
 
+    // 解析 edits 数组
+    let mut edits: Vec<file_ops::EditEntry> = Vec::with_capacity(edits_arr.len());
+    for (i, e) in edits_arr.iter().enumerate() {
+        let old_string = e.get("old_string")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let new_string = e.get("new_string")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let replace_count = e.get("replace_count")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize)
+            .unwrap_or(1);
+        if old_string.is_empty() {
+            return Err(format!("Edit #{}: old_string is required and cannot be empty", i + 1));
+        }
+        edits.push(file_ops::EditEntry {
+            old_string,
+            new_string,
+            replace_count,
+        });
+    }
+
+    let full_path_c = full_path.clone();
     let result = {
-        let full_path_c = full_path.clone();
         tokio::task::spawn_blocking(move || {
-            file_ops::edit_file(&full_path_c, &old_string, &new_string, &expected_hash, replace_count)
+            file_ops::edit_file_multi(&full_path_c, &edits, &expected_hash)
         })
         .await
         .map_err(|e| format!("Task join error: {}", e))?
         .map_err(|msg| format!("错误：编辑失败 — {}", msg))?
     };
 
-    let old_line_count = result.old_string_context.split('\n').count();
-    let new_line_count = result.new_string_context.split('\n').count();
+    // 构建 uiData：edits 数组，每个元素含上下文和行号（单/多编辑统一返回此结构）
+    let ui_edits: Vec<Value> = result.edits.iter().map(|e| {
+        let old_line_count = e.old_string_context.split('\n').count();
+        let new_line_count = e.new_string_context.split('\n').count();
+        json!({
+            "oldStartLine": e.old_start_line,
+            "oldEndLine": e.old_start_line + old_line_count - 1,
+            "newEndLine": e.old_start_line + new_line_count - 1,
+            "oldString": e.old_string_context,
+            "newString": e.new_string_context,
+            "replacedCount": e.replaced_count,
+        })
+    }).collect();
 
+    let total_replaced: usize = result.edits.iter().map(|e| e.replaced_count).sum();
     let content = format!(
-        "✅ 已编辑文件: {}\n  - 替换: {} 处\n  - 共 {} 行\n  - SHA256: {}",
-        full_path, result.replaced_count, result.line_count, result.hash
+        "✅ 已编辑文件: {}\n  - 编辑: {} 处（共替换 {} 次）\n  - 共 {} 行\n  - hash10: {}",
+        full_path, result.edits.len(), total_replaced, result.line_count, result.hash10
     );
 
     Ok(NativeToolOutcome::Value {
         content,
         ui_data: Some(json!({
             "fullPath": full_path,
-            "oldStartLine": result.old_start_line,
-            "oldEndLine": result.old_start_line + old_line_count - 1,
-            "newEndLine": result.old_start_line + new_line_count - 1,
-            "oldString": result.old_string_context,
-            "newString": result.new_string_context,
+            "hash10": result.hash10,
+            "edits": ui_edits,
         })),
     })
 }
@@ -1284,9 +1405,9 @@ async fn write_file_tool(
     };
 
     Ok(NativeToolOutcome::Value {
-        content: format!("{}\n🔑 SHA256: {}", return_content, result.hash),
+        content: format!("{}\n🔑 hash10: {}", return_content, result.hash10),
         ui_data: Some(json!({
-            "hash": result.hash,
+            "hash10": result.hash10,
             "fullPath": full_path,
             "lineCount": result.line_count,
             "byteSize": result.byte_size,
@@ -1476,25 +1597,71 @@ async fn delete_file_tool(
     ctx: &NativeToolCtx<'_>,
     args: &Value,
 ) -> Result<NativeToolOutcome, String> {
-    let path = arg_str(args, "path").unwrap_or_default();
-    let full_path = resolve_safe_path(&path, "w", ctx.security)?;
+    // 兼容单个 path 与多个 paths；过滤空字符串
+    let mut raw_paths = arg_str_array(args, "paths");
+    if raw_paths.is_empty() {
+        if let Some(p) = arg_str(args, "path") {
+            if !p.trim().is_empty() {
+                raw_paths.push(p);
+            }
+        }
+    }
 
-    if !std::path::Path::new(&full_path).exists() {
+    if raw_paths.is_empty() {
         return Ok(NativeToolOutcome::Value {
-            content: format!("错误：路径不存在 — {}", full_path),
+            content: "错误：未提供要删除的路径（请使用 \"paths\" 数组，或单个 \"path\" 字符串）".to_string(),
             ui_data: None,
         });
     }
 
-    let full_path_c = full_path.clone();
-    let result = tokio::task::spawn_blocking(move || trash::delete(&full_path_c))
-        .await
-        .map_err(|e| format!("Task join error: {}", e))?
-        .map_err(|e| format!("错误：删除失败 — {}", e))?;
-    let _ = result;
+    // 先解析安全路径，单个路径解析失败不影响其他路径
+    let mut full_paths: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    for p in &raw_paths {
+        match resolve_safe_path(p, "w", ctx.security) {
+            Ok(fp) => full_paths.push(fp),
+            Err(e) => errors.push(format!("{} — {}", p, e)),
+        }
+    }
+
+    let mut deleted: Vec<String> = Vec::new();
+
+    for full_path in &full_paths {
+        if !std::path::Path::new(full_path).exists() {
+            errors.push(format!("路径不存在 — {}", full_path));
+            continue;
+        }
+
+        let full_path_c = full_path.clone();
+        match tokio::task::spawn_blocking(move || trash::delete(&full_path_c)).await {
+            Ok(Ok(_)) => deleted.push(full_path.clone()),
+            Ok(Err(e)) => errors.push(format!("{} — {}", full_path, e)),
+            Err(e) => errors.push(format!("{} — Task join error: {}", full_path, e)),
+        }
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    if deleted.len() == 1 {
+        parts.push(format!("🗑️ 已移至回收站: {}", deleted[0]));
+    } else if deleted.len() > 1 {
+        let list = deleted
+            .iter()
+            .map(|p| format!("  - {}", p))
+            .collect::<Vec<_>>()
+            .join("\n");
+        parts.push(format!("🗑️ 已移至回收站 {} 项:\n{}", deleted.len(), list));
+    }
+    if !errors.is_empty() {
+        let list = errors
+            .iter()
+            .map(|e| format!("  - {}", e))
+            .collect::<Vec<_>>()
+            .join("\n");
+        parts.push(format!("⚠️ 有 {} 项删除失败:\n{}", errors.len(), list));
+    }
 
     Ok(NativeToolOutcome::Value {
-        content: format!("🗑️ 已移至回收站: {}", full_path),
+        content: parts.join("\n"),
         ui_data: None,
     })
 }
@@ -1647,6 +1814,109 @@ async fn copy_move_file_tool(
             })),
         })
     }
+}
+
+// ==================== mkdir ====================
+
+async fn mkdir_tool(
+    ctx: &NativeToolCtx<'_>,
+    args: &Value,
+) -> Result<NativeToolOutcome, String> {
+    let recursive = arg_bool(args, "recursive").unwrap_or(true);
+
+    // 兼容单个 path 与多个 paths
+    let mut raw_paths: Vec<String> = Vec::new();
+    if let Some(arr) = args.get("paths").and_then(|v| v.as_array()) {
+        for v in arr {
+            if let Some(s) = v.as_str() {
+                let s = s.trim();
+                if !s.is_empty() {
+                    raw_paths.push(s.to_string());
+                }
+            }
+        }
+    }
+    if raw_paths.is_empty() {
+        if let Some(p) = arg_str(args, "path") {
+            let p = p.trim();
+            if !p.is_empty() {
+                raw_paths.push(p.to_string());
+            }
+        }
+    }
+
+    if raw_paths.is_empty() {
+        return Err("错误：请提供 \"path\" 或 \"paths\" 参数".to_string());
+    }
+
+    let mut created: Vec<String> = Vec::new();
+    let mut existed: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    for raw in &raw_paths {
+        let full_path = resolve_safe_path(raw, "w", ctx.security)?;
+        let path = std::path::Path::new(&full_path);
+
+        if path.exists() {
+            existed.push(full_path);
+            continue;
+        }
+
+        let result = if recursive {
+            std::fs::create_dir_all(path)
+        } else {
+            std::fs::create_dir(path)
+        };
+
+        match result {
+            Ok(()) => created.push(full_path),
+            Err(e) => errors.push(format!("{} — {}", full_path, e)),
+        }
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    if !created.is_empty() {
+        if created.len() == 1 {
+            parts.push(format!("📁 已创建目录: {}", created[0]));
+        } else {
+            parts.push(format!(
+                "📁 已创建 {} 个目录:\n{}",
+                created.len(),
+                created.iter().map(|p| format!("  - {}", p)).collect::<Vec<_>>().join("\n")
+            ));
+        }
+    }
+    if !existed.is_empty() {
+        if existed.len() == 1 {
+            parts.push(format!("ℹ️ 目录已存在: {}", existed[0]));
+        } else {
+            parts.push(format!(
+                "ℹ️ 已存在 {} 个目录:\n{}",
+                existed.len(),
+                existed.iter().map(|p| format!("  - {}", p)).collect::<Vec<_>>().join("\n")
+            ));
+        }
+    }
+    if !errors.is_empty() {
+        parts.push(format!(
+            "⚠️ 有 {} 个目录创建失败:\n{}",
+            errors.len(),
+            errors.iter().map(|e| format!("  - {}", e)).collect::<Vec<_>>().join("\n")
+        ));
+    }
+
+    if created.is_empty() && existed.is_empty() && !errors.is_empty() {
+        return Err(errors.join("\n"));
+    }
+
+    Ok(NativeToolOutcome::Value {
+        content: parts.join("\n"),
+        ui_data: Some(json!({
+            "created": created,
+            "existed": existed,
+            "errors": errors,
+        })),
+    })
 }
 
 // ==================== 搜索工具 ====================
@@ -2329,14 +2599,14 @@ mod tests {
         assert!(w.existed == false);
         let r = file_ops::read_file(&path).unwrap();
         assert_eq!(r.content, "hello\nworld\n");
-        assert_eq!(r.hash, w.hash);
+        assert_eq!(r.hash10, w.hash10);
 
         // 再次写入（覆盖）
         let w2 = file_ops::write_file(&path, "new content").unwrap();
         assert!(w2.existed);
         let r2 = file_ops::read_file(&path).unwrap();
         assert_eq!(r2.content, "new content");
-        assert_ne!(r2.hash, w.hash);
+        assert_ne!(r2.hash10, w.hash10);
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -611,6 +611,7 @@ mod tests {
                 type_: "object".into(),
                 properties: json!({}),
                 required: vec![],
+                one_of: None,
             },
         }]
     }

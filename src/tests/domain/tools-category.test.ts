@@ -46,6 +46,7 @@ describe('TOOL_CATEGORIES', () => {
     expect(fileCat!.toolNames).toContain('copy_move_file')
     expect(fileCat!.toolNames).toContain('list_files')
     expect(fileCat!.toolNames).toContain('file_info')
+    expect(fileCat!.toolNames).toContain('mkdir')
   })
 
   it('搜索分类应包含预期工具', () => {
@@ -88,6 +89,7 @@ describe('getCategoryId', () => {
     expect(getCategoryId('list_skills')).toBe('skill')
     expect(getCategoryId('get_current_time')).toBe('system')
     expect(getCategoryId('search_knowledge_base')).toBe('knowledge_base')
+    expect(getCategoryId('mkdir')).toBe('file')
   })
 
   it('未知工具应返回 undefined', () => {

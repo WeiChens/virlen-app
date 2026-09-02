@@ -24,6 +24,7 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
       'copy_move_file',
       'list_files',
       'file_info',
+      'mkdir',
     ],
   },
   {

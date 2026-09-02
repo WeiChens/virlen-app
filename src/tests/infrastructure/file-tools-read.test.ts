@@ -50,7 +50,7 @@ describe('read_file 行内字符上限保护', () => {
     const hugeLine = 'x'.repeat(200_000)
     vi.mocked(invoke).mockResolvedValue({
       content: hugeLine,
-      hash: 'hash-huge',
+      hash10: 'hash-huge',
       line_count: 1,
       byte_size: hugeLine.length,
     })
@@ -67,14 +67,14 @@ describe('read_file 行内字符上限保护', () => {
     expect(text).toContain('已截断')
     expect(text).toContain('max_line_chars')
     // 表头仍应包含元信息
-    expect(text).toContain('SHA256: hash-huge')
+    expect(text).toContain('hash10: hash-huge')
   })
 
   it('普通多行文件不触发截断', async () => {
     const content = 'line1\nline2\nline3'
     vi.mocked(invoke).mockResolvedValue({
       content,
-      hash: 'hash-normal',
+      hash10: 'hash-normal',
       line_count: 3,
       byte_size: content.length,
     })
@@ -93,7 +93,7 @@ describe('read_file 行内字符上限保护', () => {
     const content = lines.join('\n')
     vi.mocked(invoke).mockResolvedValue({
       content,
-      hash: 'hash-longlines',
+      hash10: 'hash-longlines',
       line_count: 5,
       byte_size: content.length,
     })
@@ -117,7 +117,7 @@ describe('read_file 行内字符上限保护', () => {
     )
     vi.mocked(invoke).mockResolvedValue({
       content,
-      hash: 'hash-short',
+      hash10: 'hash-short',
       line_count: total,
       byte_size: content.length,
     })

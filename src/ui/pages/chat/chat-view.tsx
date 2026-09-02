@@ -318,7 +318,8 @@ function ChatView() {
     const session = sessionStore.getSession(sessionId)
     if (!session) return
     chatState.setValue('currentSessionId', sessionId)
-    chatState.setValue('error', null)
+    // 切换会话时，从该会话的运行时状态恢复错误信息（跨会话不丢失）
+    chatState.setValue('error', getSessionRuntime(sessionId).error)
     setMessages([...session.messages])
     // 懒加载：会话激活时从 SQLite 拉取历史消息（仅首次）
     await sessionStore.ensureMessagesLoaded(sessionId)
@@ -369,6 +370,9 @@ function ChatView() {
       })
     }
 
+    // 清除当前会话的错误状态（重新发送时）
+    const clearSid = chatState.value.currentSessionId
+    if (clearSid) updateSessionRuntime(clearSid, { error: null })
     chatState.setValue('error', null)
     doSend(sessionId, content, images, goal)
   }
@@ -496,7 +500,10 @@ function ChatView() {
           if (sid !== chatState.value.currentSessionId) {
             updateSessionRuntime(sid, { hasNewReply: true })
           }
-          requestAttentionIfUnfocused()
+          requestAttentionIfUnfocused(
+            undefined,
+            settingsState.value.forceWindowActive,
+          )
         }
       },
       onVerifyingChange: (sid: string, verifying: boolean) => {
@@ -510,6 +517,9 @@ function ChatView() {
         syncMessagesToUI(sid)
       },
       onError: (sid: string, error: string) => {
+        // 始终将错误存入会话运行时，跨会话切换不丢失
+        updateSessionRuntime(sid, { error })
+        // 仅当错误发生在当前会话时，同步到全局 chatState 以立即展示
         if (sid === chatState.value.currentSessionId) {
           chatState.setValue('error', error)
         }

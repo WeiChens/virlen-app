@@ -196,21 +196,13 @@ async fn check_is_directory(path: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-async fn edit_file_in_place(
+async fn edit_file_multi_in_place(
     path: String,
-    old_string: String,
-    new_string: String,
+    edits: Vec<file_ops::EditEntry>,
     expected_hash: String,
-    replace_count: usize,
-) -> Result<file_ops::FileEditResult, String> {
+) -> Result<file_ops::FileEditMultiResult, String> {
     tokio::task::spawn_blocking(move || {
-        file_ops::edit_file(
-            &path,
-            &old_string,
-            &new_string,
-            &expected_hash,
-            replace_count,
-        )
+        file_ops::edit_file_multi(&path, &edits, &expected_hash)
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
@@ -257,7 +249,7 @@ pub fn run() {
             list_directory,
             stop_task,
             read_file_with_hash,
-            edit_file_in_place,
+            edit_file_multi_in_place,
             kill_process_tree,
             canonicalize_path,
             check_is_directory,

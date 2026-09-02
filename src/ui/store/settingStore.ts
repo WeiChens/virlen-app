@@ -68,6 +68,8 @@ export interface SettingsStore {
   editorOpenConfigs: EditorOpenConfig[]
   /** 默认使用的编辑器配置 id */
   editorOpenDefaultId: string
+  /** 是否在 AI 回复完成或需要用户选择时，若窗口未激活则强制置为活动窗口 */
+  forceWindowActive: boolean
 }
 
 const defaultSettings: SettingsStore = {
@@ -101,6 +103,7 @@ const defaultSettings: SettingsStore = {
   editorOpenEnabled: true,
   editorOpenConfigs: [],
   editorOpenDefaultId: '',
+  forceWindowActive: false,
 }
 
 export const settingsState = new StorageState(

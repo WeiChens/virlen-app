@@ -8,6 +8,8 @@ import { useState, useEffect, useCallback } from 'react'
 import UserChoiceModal from './modals/user-choice'
 import CommandConfirmModal from './modals/command-confirm'
 import toolInteractEvent from '@/events/toolInteractEvent'
+import { requestAttentionIfUnfocused } from '@/utils/windowAttention'
+import { settingsState } from '@/ui/store/settingStore'
 
 // ====== UserChoice ======
 
@@ -65,6 +67,11 @@ export function useToolUI() {
           options,
           multi,
         })
+        // AI 调用 user_choice（用户选择）→ 窗口未激活时闪烁提醒
+        void requestAttentionIfUnfocused(
+          undefined,
+          settingsState.value.forceWindowActive,
+        )
       },
     )
     return off

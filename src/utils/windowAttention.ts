@@ -18,15 +18,29 @@ import {
  * - Informational：仅闪烁一次（更轻量）
  *
  * @param type 注意力请求类型
+ * @param forceActive 为 true 时，窗口未激活则直接强制激活（还原 + 显示 + 聚焦）
  * @returns 是否成功触发（false 表示窗口已聚焦、调用失败或非 Tauri 环境）
  */
 export async function requestAttentionIfUnfocused(
   type: UserAttentionType = UserAttentionType.Critical,
+  forceActive = false,
 ): Promise<boolean> {
   try {
     const appWindow = getCurrentWindow()
     const focused = await appWindow.isFocused()
     if (focused) return false
+
+    if (forceActive) {
+      if (await appWindow.isMinimized()) {
+        await appWindow.unminimize()
+      }
+      if (!(await appWindow.isVisible())) {
+        await appWindow.show()
+      }
+      await appWindow.setFocus()
+      return true
+    }
+
     await appWindow.requestUserAttention(type)
     return true
   } catch (e) {

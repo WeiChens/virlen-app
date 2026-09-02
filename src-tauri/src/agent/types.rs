@@ -140,6 +140,16 @@ pub struct ToolParameters {
     pub properties: Value,
     #[serde(default)]
     pub required: Vec<String>,
+    /// 可选 JSON Schema `oneOf`（如 read_file 的 path/paths 二选一）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub one_of: Option<Vec<RequiredSet>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequiredSet {
+    #[serde(default)]
+    pub required: Vec<String>,
 }
 
 // ==================== 引擎内部类型 ====================
