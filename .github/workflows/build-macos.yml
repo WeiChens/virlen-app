@@ -1,8 +1,7 @@
 # =============================================================================
 # Virlen macOS Build Workflow
 # =============================================================================
-# Builds Virlen desktop app for macOS (.dmg) on every push/tag.
-# Also runs on PRs to verify the build doesn't break.
+# Builds Virlen desktop app for macOS (.dmg) on version tags / manual trigger.
 #
 # Tech stack: Tauri v2 + React 19 + Rust + pnpm
 # Dependencies include quasivision (ONNX Runtime + CoreML backend)
@@ -12,11 +11,8 @@ name: Build macOS
 
 on:
   push:
-    branches: [main, master, develop]
     tags:
       - "v*" # Trigger on version tags like v0.1.0, v1.0.0
-  pull_request:
-    branches: [main, master]
   workflow_dispatch: # Allow manual trigger from GitHub UI
 
 # Ensure only one build per branch/tag runs at a time
