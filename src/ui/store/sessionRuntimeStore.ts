@@ -16,6 +16,8 @@ export interface SessionRuntime {
   compacting: boolean
   /** 非当前会话回复完成后是否还有未查看的新回复（侧边栏红点） */
   hasNewReply: boolean
+  /** 该会话最近一次 AI 回复的错误信息（跨会话切换保留，切回时仍展示） */
+  error: string | null
 }
 
 interface SessionRuntimeStore {
@@ -51,6 +53,7 @@ export function getSessionRuntime(sessionId: string): SessionRuntime {
         streamingMessageId: null,
         paused: false,
         hasNewReply: false,
+        error: null,
       }
     })
   }

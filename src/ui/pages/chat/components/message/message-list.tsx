@@ -14,7 +14,12 @@ import {
   useMemo,
 } from 'react'
 import type { Message } from '@/types'
-import { chatState, sessionStore, getSessionRuntime } from '@/ui/store'
+import {
+  chatState,
+  sessionStore,
+  getSessionRuntime,
+  updateSessionRuntime,
+} from '@/ui/store'
 import {
   cancelPausedRun,
   resumePausedRun,
@@ -494,6 +499,7 @@ function ChatMessageList({
         syncMessagesToUI(sid)
       },
       onError: (sid, error) => {
+        updateSessionRuntime(sid, { error })
         if (sid === chatState.value.currentSessionId) {
           chatState.setValue('error', error)
         }
@@ -518,7 +524,14 @@ function ChatMessageList({
       {chatState.value.error && (
         <div className="error-banner">
           <span>{chatState.value.error}</span>
-          <button onClick={() => chatState.setValue('error', null)}>✕</button>
+          <button
+            onClick={() => {
+              const sid = chatState.value.currentSessionId
+              if (sid) updateSessionRuntime(sid, { error: null })
+              chatState.setValue('error', null)
+            }}>
+            ✕
+          </button>
         </div>
       )}
 
