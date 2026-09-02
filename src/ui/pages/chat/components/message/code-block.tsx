@@ -442,7 +442,10 @@ export default function CodeBlock({
   ...props
 }: CodeBlockProps) {
   let match = /language-(\w+)/.exec(className || '')
-  let language = match ? match[1] : fileName?.split('.').pop()
+  // fileName 可能携带路径（如 "src/foo.ts"），语言推断仅取最后一段
+  let language = match
+    ? match[1]
+    : fileName?.split(/[\\/]/).pop()?.split('.').pop()
   // 从 fence info string 解析参数，如 ```tsx showLineNumbers
   if (language && language.includes(' ')) {
     const parts = language.split(/\s+/)
@@ -498,7 +501,14 @@ export default function CodeBlock({
         overflowY: maxHeight ? 'auto' : undefined,
       }}>
       <div className="code-block-header">
-        <span className="code-language">{displayLang}</span>
+        <div className="code-block-header-info">
+          <span className="code-language">{displayLang}</span>
+          {fileName && (
+            <span className="code-file-name" title={fileName}>
+              {fileName}
+            </span>
+          )}
+        </div>
         <div className='actions-list'>
           <button className="code-copy-btn" onClick={handleCopy} title="复制代码">
             {copied ? (

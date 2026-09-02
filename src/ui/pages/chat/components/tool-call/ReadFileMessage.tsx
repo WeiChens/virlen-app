@@ -69,6 +69,10 @@ class ReadFileMessage implements IToolCallMessage {
     }
     if (!props.expand) return null
 
+    const workspace =
+      sessionStore.getSession(chatState.value.currentSessionId)?.workspace ||
+      settingsState.value.defaultWorkspace
+
     // 多文件模式：uiData.files 数组
     const files = props.message?.uiData?.files
     if (Array.isArray(files) && files.length > 0) {
@@ -83,7 +87,8 @@ class ReadFileMessage implements IToolCallMessage {
             gap: 16,
           }}>
           {files.map((f: any, i: number) => {
-            const name = getUrlFileName(f.fullPath, null)
+            // 展示短路径（相对工作区），方便区分多个文件
+            const name = toShortPath(f.fullPath, workspace)
             const startLine = f.startLine || 1
             return (
               <CodeBlock
