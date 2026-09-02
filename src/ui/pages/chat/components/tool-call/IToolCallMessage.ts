@@ -17,6 +17,7 @@ import WebSearchMessage from './WebSearchMessage'
 import CopyMoveFileMessage from './CopyMoveFileMessage'
 import ListSkillsMessage from './ListSkillsMessage'
 import KnowledgeBaseMessage from './KnowledgeBaseMessage'
+import MkdirMessage from './MkdirMessage'
 
 export interface IToolCallMessage {
   getToolName(): string
@@ -58,6 +59,7 @@ register(new VisionAnalyzeMessage())
 register(new WebSearchMessage())
 register(new CopyMoveFileMessage())
 register(new ListSkillsMessage())
+register(new MkdirMessage())
 registerMulti(
   [
     'search_knowledge_base',

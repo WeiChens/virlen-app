@@ -378,6 +378,8 @@
   "编辑文件": "Edit File",
   "写入文件": "Write File",
   "复制/移动文件": "Copy/Move File",
+  "创建目录": "Create Directory",
+  "创建 $__count__ 个目录": "Create $__count__ Directories",
   "= Risk Labels =": "= Risk Labels =",
   "高危命令": "Risky Command",
   "安装命令": "Install Command",
