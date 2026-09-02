@@ -6,6 +6,7 @@ export interface ToolDefinition {
     type: 'object'
     properties: Record<string, ToolParameterProperty>
     required: string[]
+    oneOf?: Array<{ required: string[] }>
   }
 }
 export interface ToolParameterProperty {

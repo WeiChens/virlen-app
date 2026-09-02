@@ -33,32 +33,46 @@ function formatSize(bytes: number): string {
 /** Rust read_file 返回类型 */
 interface FileReadResult {
   content: string
-  hash: string
+  hash10: string
   line_count: number
   byte_size: number
 }
 
-/** Rust edit_file 返回类型 */
-interface FileEditResult {
-  hash: string
+/** Rust edit_file_multi 单次编辑结果 */
+interface SingleEditResult {
   replaced_count: number
-  line_count: number
   old_start_line: number
   old_string_context: string
   new_string_context: string
+}
+
+/** Rust edit_file_multi 返回类型 */
+interface FileEditMultiResult {
+  hash10: string
+  line_count: number
+  edits: SingleEditResult[]
 }
 
 toolRegistry.register(
   {
     name: 'read_file',
     label: t('读取文件'),
-    description: `Read a file's content. Returns content, line count, size, and SHA256 hash (for edit_file conflict detection).`,
+    description:
+      'Read a file\'s content. Returns content, line count, size, and hash10 (short fingerprint) (for edit_file conflict detection). ' +
+      'Pass "paths" (array) to read multiple files in one call — avoids N round-trips for N files.',
     parameters: {
       type: 'object',
       properties: {
         path: {
           type: 'string',
-          description: 'File path (relative to workspace or absolute).',
+          description:
+            'File path (relative to workspace or absolute). Use this for a single file.',
+        },
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Array of file paths to read in one call. Use this to batch-read multiple files efficiently.',
         },
         start_line: {
           type: 'number',
@@ -83,55 +97,50 @@ toolRegistry.register(
           default: 1600,
         },
       },
-      required: ['path'],
+      oneOf: [{ required: ['path'] }, { required: ['paths'] }],
+      required: [],
     },
   },
   (async (args: Record<string, any>, ctx: ToolContext): Promise<ToolResult> => {
-    const fullPath = await securityService.resolveSafePath(
-      args.path as string,
-      'r',
-      ctx.sessionId,
-    )
     const maxLines = +(args.max_lines as number) || 2000
-    // 行内字符上限：单行内容过长时截断该行，防止「文件只有一行但内容巨大」
-    // 整行返回导致 token 爆炸 / 超出上下文。
     const maxLineChars = +(args.max_line_chars as number) || 2000
     const startLine = Math.max(0, +(args.start_line as number) || 1)
-    try {
+
+    // 读取单个文件的核心逻辑（供 paths 批量复用）
+    async function readSingleFile(
+      rawPath: string,
+    ): Promise<{ content: string; uiData: any }> {
+      const fullPath = await securityService.resolveSafePath(
+        rawPath,
+        'r',
+        ctx.sessionId,
+      )
       const result: FileReadResult = await withCancelResult(
         ctx.abortSignal,
-        invoke('read_file_with_hash', {
-          path: fullPath,
-        }),
+        invoke('read_file_with_hash', { path: fullPath }),
         () =>
           ({
             content: '',
-            hash: '',
+            hash10: '',
             line_count: 0,
             byte_size: 0,
           }) as FileReadResult,
       )
 
-      if (!result.hash) {
+      if (!result.hash10) {
         throw '[Cancelled] File read was cancelled.'
       }
 
       const lines = result.content.split('\n')
       const totalLines = lines.length
-
-      // start_line 是 1-indexed，转成 0-indexed 做切片
       const startIdx = Math.max(0, startLine - 1)
 
-      // 双重限制：行数（max_lines）+ 行内字符数（max_line_chars）。
-      // 仅按行数裁剪无法应对单行超大内容（minified JS/CSS、超长 JSON/base64 等），
-      // 因此对每行单独做字符上限，超长行截断后加标记，避免 token 爆炸。
       const slice: string[] = []
-      let truncatedLineCount = 0 // 因 max_line_chars 被截断的行数
+      let truncatedLineCount = 0
 
       for (let i = startIdx; i < totalLines && slice.length < maxLines; i++) {
         const line = lines[i]
         if (line.length > maxLineChars) {
-          // 单行内容过长 → 截断该行并加标记，避免 AI 误以为内容完整
           const omitted = line.length - maxLineChars
           slice.push(
             `${line.slice(0, maxLineChars)} … [已截断，省略 ${omitted} 字符]`,
@@ -142,7 +151,6 @@ toolRegistry.register(
         }
       }
 
-      // 计算返回的行号范围（被截断的那行也计入显示行数）
       const displayStart = startIdx + 1
       const displayEnd = startIdx + slice.length
       const remainingLines = Math.max(0, totalLines - displayEnd)
@@ -153,7 +161,7 @@ toolRegistry.register(
           lines: totalLines,
           size: formatSize(result.byte_size),
         }),
-        `🔑 SHA256: ${result.hash}`,
+        `🔑 hash10: ${result.hash10}`,
         startLine > 1
           ? tpl('🔢 显示: 第 $__start__-$__end__ 行 (共 $__total__ 行)', {
               start: displayStart,
@@ -195,7 +203,7 @@ toolRegistry.register(
         content: headerLines.join('\n') + '\n\n' + displayedContent,
         uiData: {
           content: displayedContent,
-          hash: result.hash,
+          hash10: result.hash10,
           line_count: result.line_count,
           byte_size: result.byte_size,
           fullPath,
@@ -203,6 +211,62 @@ toolRegistry.register(
           endLine: displayEnd,
         },
       }
+    }
+
+    try {
+      // 支持 paths 数组（批量读取多个文件）
+      const paths: string[] = Array.isArray(args.paths)
+        ? (args.paths as any[]).filter(
+            (p): p is string => typeof p === 'string' && p.trim() !== '',
+          )
+        : []
+
+      if (paths.length > 0) {
+        const results: { content: string; uiData: any }[] = []
+        const errors: string[] = []
+
+        for (const p of paths) {
+          try {
+            const r = await readSingleFile(p)
+            results.push(r)
+          } catch (e: any) {
+            errors.push(`${p} — ${e.message || String(e)}`)
+          }
+        }
+
+        if (results.length === 0 && errors.length > 0) {
+          throw errors.join('\n')
+        }
+
+        // 文件之间用分隔线隔开
+        const parts = results.map((r, i) =>
+          i === 0 ? r.content : '\n---\n' + r.content,
+        )
+        if (errors.length > 0) {
+          parts.push(
+            `\n\n⚠️ 有 ${errors.length} 个文件读取失败:\n` +
+              errors.map((e) => `  - ${e}`).join('\n'),
+          )
+        }
+
+        const uiData =
+          results.length === 1
+            ? results[0].uiData // 单文件 → 保持原有 uiData 结构
+            : { files: results.map((r) => r.uiData) }
+
+        return {
+          content: parts.join('\n'),
+          uiData,
+        }
+      }
+
+      // 单文件路径（向后兼容）
+      const path = args.path as string
+      if (!path) {
+        throw t('错误：请提供 "path" 或 "paths" 参数')
+      }
+      const r = await readSingleFile(path)
+      return { content: r.content, uiData: r.uiData }
     } catch (e: any) {
       throw tpl('错误：读取文件失败 — $__error__', {
         error: e.message || String(e),
@@ -216,7 +280,8 @@ toolRegistry.register(
     name: 'edit_file',
     label: t('编辑文件'),
     description:
-      'Replace exact text in a file. Requires expected_hash from read_file (conflict detection). Prefer for partial edits over write_file.',
+      'Replace exact text in a file. Requires expected_hash10 from read_file (conflict detection). Prefer for partial edits over write_file. ' +
+      'Use the "edits" array to apply one or more edits in a single call — each edit is { old_string, new_string, replace_count }.',
     parameters: {
       type: 'object',
       properties: {
@@ -224,29 +289,42 @@ toolRegistry.register(
           type: 'string',
           description: 'File path (relative to workspace or absolute).',
         },
-        old_string: {
-          type: 'string',
+        edits: {
+          type: 'array',
           description:
-            'The exact existing text to replace. Include enough surrounding context for a unique match.',
-        },
-        new_string: {
-          type: 'string',
-          description: 'The new text to insert in place of old_string.',
+            'Array of edits to apply sequentially in one file. Each item: { old_string, new_string, replace_count }. ' +
+            'All edits share the same expected_hash10 and are applied in order on the same content. ' +
+            'Use this instead of multiple edit_file calls to avoid hash conflicts between edits.',
+          items: {
+            type: 'object',
+            properties: {
+              old_string: {
+                type: 'string',
+                description:
+                  'The exact existing text to replace. Include enough surrounding context for a unique match.',
+              },
+              new_string: {
+                type: 'string',
+                description: 'The new text to insert in place of old_string.',
+              },
+              replace_count: {
+                type: 'number',
+                description:
+                  'How many occurrences of old_string to replace. Default: 1. Set to 0 to replace all.',
+                default: 1,
+              },
+            },
+            required: ['old_string', 'new_string'],
+          },
         },
         expected_hash: {
           type: 'string',
           description:
-            'The SHA256 hash of the current file content, obtained from read_file output. ' +
+            'The hash10 value of the current file content, obtained from read_file output. ' +
             'Used for conflict detection to ensure no one modified the file since you read it.',
         },
-        replace_count: {
-          type: 'number',
-          description:
-            'How many occurrences of old_string to replace. Default: 1. ',
-          default: 1,
-        },
       },
-      required: ['path', 'old_string', 'new_string', 'expected_hash'],
+      required: ['path', 'edits', 'expected_hash'],
     },
   },
   (async (
@@ -258,59 +336,96 @@ toolRegistry.register(
       'w',
       ctx.sessionId,
     )
-    const oldString = args.old_string as string
-    const newString = args.new_string as string
     const expectedHash = args.expected_hash as string
-    const replaceCount = (args.replace_count as number) ?? 1
+
+    const edits = Array.isArray(args.edits) ? args.edits : []
+    if (edits.length === 0) {
+      throw t('错误：请提供 "edits" 参数（至少一项编辑）')
+    }
+
+    // 规范化 edits 参数：每个 edit 的 replace_count 默认 1，0 表示全部
+    // （Rust 端会把 0 当作 usize::MAX，与单编辑时代的 999999 哨兵等价）
+    const normalizedEdits = edits.map((e: any, i: number) => {
+      const oldString = (e.old_string ?? '').toString()
+      const newString = (e.new_string ?? '').toString()
+      const replaceCount = (e.replace_count as number) ?? 1
+      if (!oldString) {
+        throw tpl('错误：第 $__n__ 处编辑的 old_string 不能为空', {
+          n: i + 1,
+        })
+      }
+      return {
+        old_string: oldString,
+        new_string: newString,
+        replace_count: replaceCount,
+      }
+    })
 
     try {
-      const result: FileEditResult = await withCancelResult(
+      const result: FileEditMultiResult = await withCancelResult(
         ctx.abortSignal,
-        invoke('edit_file_in_place', {
+        invoke('edit_file_multi_in_place', {
           path: fullPath,
-          oldString,
-          newString,
+          edits: normalizedEdits,
           expectedHash,
-          replaceCount: replaceCount === 0 ? 999999 : replaceCount,
         }),
         () => {
           throw new Error('[Cancelled] File edit was cancelled.')
         },
       )
 
-      const oldLineCount = result.old_string_context.split('\n').length
-      const newLineCount = result.new_string_context.split('\n').length
+      // 为每个编辑计算 diff
+      const uiEdits = result.edits.map((e: SingleEditResult) => {
+        const oldLineCount = e.old_string_context.split('\n').length
+        const newLineCount = e.new_string_context.split('\n').length
+        const diffRows = computeDiff(
+          e.old_string_context.split('\n'),
+          e.new_string_context.split('\n'),
+          e.old_start_line,
+        )
+        const { delCount, insCount } = countDiffRows(diffRows)
+        return {
+          oldStartLine: e.old_start_line,
+          oldEndLine: e.old_start_line + oldLineCount - 1,
+          newEndLine: e.old_start_line + newLineCount - 1,
+          oldString: e.old_string_context,
+          newString: e.new_string_context,
+          replacedCount: e.replaced_count,
+          diffRows,
+          delCount,
+          insCount,
+        }
+      })
 
-      // 用 LCS diff 提前计算变更行数，避免前端每次渲染重新计算
-      const diffRows = computeDiff(
-        result.old_string_context.split('\n'),
-        result.new_string_context.split('\n'),
-        result.old_start_line,
+      const totalReplaced = result.edits.reduce(
+        (sum, e) => sum + e.replaced_count,
+        0,
       )
-      const { delCount, insCount } = countDiffRows(diffRows)
+      const totalDel = uiEdits.reduce((s, e) => s + e.delCount, 0)
+      const totalIns = uiEdits.reduce((s, e) => s + e.insCount, 0)
 
       return {
         content:
           tpl('✅ 已编辑文件: $__path__', { path: fullPath }) +
           '\n' +
-          `  - ${tpl('替换: $__count__ 处', { count: result.replaced_count })}\n` +
+          `  - ${tpl('编辑 $__count__ 处（共替换 $__replaced__ 次）', {
+            count: result.edits.length,
+            replaced: totalReplaced,
+          })}\n` +
+          `  - ${tpl('减少 $__del__行,新增 $__ins__行', {
+            del: totalDel,
+            ins: totalIns,
+          })}\n` +
           `  - ${tpl('共 $__count__ 行', { count: result.line_count })}\n` +
-          `  - SHA256: ${result.hash}`,
+          `  - hash10: ${result.hash10}`,
         uiData: {
           fullPath,
-          oldStartLine: result.old_start_line,
-          oldEndLine: result.old_start_line + oldLineCount - 1,
-          newEndLine: result.old_start_line + newLineCount - 1,
-          oldString: result.old_string_context,
-          newString: result.new_string_context,
-          diffRows,
-          delCount,
-          insCount,
+          hash10: result.hash10,
+          edits: uiEdits,
         },
       }
     } catch (e: any) {
       const msg = e.message || String(e)
-      // 将 Rust 端的错误消息直接传递给 AI，帮助它修复
       if (
         msg.includes('old_string not found') ||
         msg.includes('appears') ||
@@ -325,16 +440,18 @@ toolRegistry.register(
 )
 
 /**
- * 计算内容归一化（LF-only）后的 SHA256 哈希，与 Rust 端 read_file/edit_file 一致
+ * 计算内容归一化（LF-only）后的 hash10（SHA-256 前 10 位），与 Rust 端 compute_hash10 一致
  */
-async function computeContentHash(content: string): Promise<string> {
+async function computeContentHash10(content: string): Promise<string> {
   // 归一化：\r\n → \n，与 Rust 端 normalize_content 保持一致
   const normalized = content.replace(/\r\n/g, '\n')
   const encoder = new TextEncoder()
   const data = encoder.encode(normalized)
   const hashBuffer = await crypto.subtle.digest('SHA-256', data)
   const hashArray = Array.from(new Uint8Array(hashBuffer))
-  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('')
+  const full = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('')
+  // 截断为前 10 位 hex，与 Rust 端 compute_hash10 对齐
+  return full.slice(0, 10)
 }
 
 toolRegistry.register(
@@ -344,7 +461,7 @@ toolRegistry.register(
     description:
       'Write content to a file (full overwrite). Creates parent directories if they do not exist. ' +
       '⚠️ Use edit_file for partial modifications instead of reading and re-writing entire files. ' +
-      'Returns the SHA256 hash of the written content (normalized to LF), which can be used ' +
+      'Returns the hash10 (short fingerprint) of the written content (normalized to LF), which can be used ' +
       'as expected_hash for subsequent edit_file calls.',
     parameters: {
       type: 'object',
@@ -377,8 +494,8 @@ toolRegistry.register(
       const existed = await tauriFs.exists(fullPath).catch(() => false)
       await tauriFs.writeTextFile(fullPath, content)
 
-      // 计算归一化内容的 SHA256 hash，与 read_file/edit_file 一致
-      const hash = await computeContentHash(content)
+      // 计算归一化内容的 hash10，与 read_file/edit_file 一致
+      const hash10 = await computeContentHash10(content)
       const lineCount = content.replace(/\r\n/g, '\n').split('\n').length
       const size = formatSize(new TextEncoder().encode(content).length)
 
@@ -394,12 +511,12 @@ toolRegistry.register(
 
       return {
         uiData: {
-          hash,
+          hash10,
           fullPath,
           lineCount,
           byteSize: new TextEncoder().encode(content).length,
         },
-        content: returnContent + `\n🔑 SHA256: ${hash}`,
+        content: returnContent + `\n🔑 hash10: ${hash10}`,
       }
     } catch (e: any) {
       throw tpl('错误：写入文件失败 — $__error__', {

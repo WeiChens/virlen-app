@@ -112,11 +112,11 @@ fn read_file_text(path: &str) -> Result<String, String> {
     ))
 }
 
-/// 读取文件内容并返回其 SHA256 哈希（hex 编码）
+/// 读取文件内容并返回其 hash10（SHA-256 前 10 位 hex）
 #[derive(serde::Serialize)]
 pub struct FileReadResult {
     pub content: String,
-    pub hash: String,
+    pub hash10: String,
     pub line_count: usize,
     pub byte_size: usize,
 }
@@ -124,21 +124,17 @@ pub struct FileReadResult {
 pub fn read_file(path: &str) -> Result<FileReadResult, String> {
     let raw = read_file_text(path)?;
 
-    // 返回的内容保留原始换行符（CRLF/LF），但 hash 基于归一化后的 LF 内容计算
+    // 返回的内容保留原始换行符（CRLF/LF），但 hash10 基于归一化后的 LF 内容计算
     let normalized = normalize_content(&raw);
 
-    let hash = {
-        let mut hasher = Sha256::new();
-        hasher.update(normalized.as_bytes());
-        hex::encode(hasher.finalize())
-    };
+    let hash10 = compute_hash10(&normalized);
 
     let line_count = normalized.lines().count();
     let byte_size = raw.len();
 
     Ok(FileReadResult {
         content: raw,
-        hash,
+        hash10,
         line_count,
         byte_size,
     })
@@ -152,97 +148,78 @@ fn normalize_content(content: &str) -> String {
     content.replace("\r\n", "\n")
 }
 
-/// 编辑文件：在文件内容中精确查找并替换一段字符串。
-///
-/// 关键设计：
-///   - read_file 返回的是 **归一化（LF）** 内容的 hash
-///   - AI 在 old_string/new_string 中统一使用 `\n` (LF)
-///   - edit_file 内部对文件内容做同样的归一化后匹配
-///   - 写入时保留原始换行符风格（CRLF/LF 保持不变）
-///
-/// 这样 AI 无需关心文件是 Windows CRLF 还是 Unix LF，都统一用 `\n`。
-#[derive(serde::Serialize)]
-pub struct FileEditResult {
-    pub hash: String,
+/// 计算归一化内容的 hash10（SHA-256 前 10 位 hex）
+fn compute_hash10(normalized: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(normalized.as_bytes());
+    let full = hex::encode(hasher.finalize());
+    // hash10 = SHA-256 前 10 位 hex（40 bit），仅用于「文件是否被修改」的冲突检测，
+    // 可大幅减少 AI 上下文中的 token 消耗。
+    full[..10].to_string()
+}
+
+/// 单次编辑的结果（不含文件级 hash/line_count，用于多编辑场景）
+#[derive(serde::Serialize, Clone)]
+pub struct SingleEditResult {
     pub replaced_count: usize,
-    pub line_count: usize,
-    /// old_string 在文件中匹配的起始行号（1-indexed），减去 context 行数后
     pub old_start_line: usize,
-    /// old_string 前后各加 2 行 context（不足则取全部）
     pub old_string_context: String,
-    /// new_string 前后各加 2 行 context（不足则取全部）
     pub new_string_context: String,
 }
 
-pub fn edit_file(
-    path: &str,
+/// 多编辑入口项（从 JSON 反序列化）
+#[derive(serde::Deserialize)]
+pub struct EditEntry {
+    pub old_string: String,
+    pub new_string: String,
+    #[serde(default = "default_one")]
+    pub replace_count: usize,
+}
+
+fn default_one() -> usize {
+    1
+}
+
+/// 多编辑结果
+#[derive(serde::Serialize)]
+pub struct FileEditMultiResult {
+    pub hash10: String,
+    pub line_count: usize,
+    pub edits: Vec<SingleEditResult>,
+}
+
+/// 在归一化内容上执行一次查找替换，返回上下文和行号信息。
+/// 不读写文件，仅修改 `normalized` 字符串。
+fn apply_single_edit(
+    normalized: &mut String,
     old_string: &str,
     new_string: &str,
-    expected_hash: &str,
     replace_count: usize,
-) -> Result<FileEditResult, String> {
-    // 1. 读取文件内容（自动检测编码），并检测二进制
-    let raw = read_file_text(path)?;
-
-    let normalized = normalize_content(&raw);
-
-    // 2. 冲突检测：用归一化内容的 hash
-    let current_hash = {
-        let mut hasher = Sha256::new();
-        hasher.update(normalized.as_bytes());
-        hex::encode(hasher.finalize())
-    };
-
-    if current_hash != expected_hash {
-        return Err(format!(
-            "Conflict: file '{}' has changed since you last read it. \
-             Expected SHA256 '{}' but current file has '{}'. \
-             Please re-read the file and retry the edit.",
-            path, expected_hash, current_hash
-        ));
-    }
-
-    // 3. 在归一化内容上查找 old_string（AI 统一用 \n）
+) -> Result<SingleEditResult, String> {
     let actual_count = normalized.matches(old_string).count();
     if actual_count == 0 {
-        // 尝试给出有用的提示
-        if normalized.contains("\r\n") {
-            return Err(format!(
-                "old_string not found in file '{}'. \
-                 Note: newlines are being normalized to LF, so use `\\n` not `\\r\\n` in old_string. \
-                 The content you want to replace does not exist.",
-                path
-            ));
-        }
         return Err(format!(
-            "old_string not found in file '{}'. The content you want to replace does not exist in the file.",
-            path
+            "old_string not found. The content you want to replace does not exist in the file."
         ));
     }
 
-    if actual_count < replace_count {
+    let replace_all = replace_count == usize::MAX;
+    if !replace_all && actual_count < replace_count {
         return Err(format!(
-            "old_string appears {} time(s) in file '{}', but you requested {} replacement(s). Reduce replace_count or check your old_string.",
-            actual_count, path, replace_count
+            "old_string appears {} time(s), but you requested {} replacement(s). \
+             Reduce replace_count or check your old_string.",
+            actual_count, replace_count
         ));
     }
 
     // ---- 计算 old_string 的起始行号 ----
-    // 归一化内容中第一个匹配位置之前的行数 + 1
     let first_match_pos = normalized.find(old_string).unwrap();
-    let raw_old_start_line = normalized[..first_match_pos]
-        .lines()
-        .count()
-        + 1;
+    let raw_old_start_line = normalized[..first_match_pos].lines().count() + 1;
 
-    // ---- 提取前后各 2 行 context（基于字节位置，避免行边界对齐问题） ----
-    // 当 old_string 从行中间匹配时，用 all_lines 整行切片会导致
-    // ctx_before 的完整行与 old_string/new_string 的片段行重叠。
-    // 改为直接从 normalized 字符串按字节位置提取前后文。
+    // ---- 提取前后各 2 行 context（基于字节位置） ----
     const CONTEXT_LINES: usize = 2;
     let match_end = first_match_pos + old_string.len();
 
-    // context before：从匹配位置往前找 CONTEXT_LINES 个换行符
     let ctx_before_raw_start = {
         let mut pos = first_match_pos;
         for _ in 0..CONTEXT_LINES {
@@ -257,12 +234,9 @@ pub fn edit_file(
                 }
             }
         }
-        // pos 指向 '\n' 的位置（或 0），跳过 '\n' 得到内容起始
         if pos > 0 { pos + 1 } else { 0 }
     };
-    let ctx_before_text = &normalized[ctx_before_raw_start..first_match_pos];
 
-    // context after：从匹配结束位置往后找 CONTEXT_LINES 个换行符
     let ctx_after_raw_end = {
         let mut pos = match_end;
         for _ in 0..CONTEXT_LINES {
@@ -270,7 +244,7 @@ pub fn edit_file(
                 break;
             }
             match normalized[pos..].find('\n') {
-                Some(p) => pos = pos + p + 1, // 跳过 '\n'
+                Some(p) => pos = pos + p + 1,
                 None => {
                     pos = normalized.len();
                     break;
@@ -279,71 +253,109 @@ pub fn edit_file(
         }
         pos
     };
-    let ctx_after_text = &normalized[match_end..ctx_after_raw_end];
 
-    // 构造 context 字符串（直接拼接，不经过 all_lines 切片）
+    // 提前克隆上下文文本，避免后续修改 normalized 时借用冲突
+    let ctx_before_text = normalized[ctx_before_raw_start..first_match_pos].to_string();
+    let ctx_after_text = normalized[match_end..ctx_after_raw_end].to_string();
+
     let old_string_context = format!("{}{}{}", ctx_before_text, old_string, ctx_after_text);
     let new_string_context = format!("{}{}{}", ctx_before_text, new_string, ctx_after_text);
 
-    // 调整起始行号 = 原始起始行 - context 前置行数
     let ctx_before = CONTEXT_LINES.min(raw_old_start_line.saturating_sub(1));
     let old_start_line = raw_old_start_line - ctx_before;
 
-    // 4. 在归一化内容上执行替换
-    let mut edited_normalized = normalized.clone();
-    let mut replaced = 0;
-    if replace_count == usize::MAX {
-        edited_normalized = normalized.replace(old_string, new_string);
-        replaced = actual_count;
+    // ---- 执行替换 ----
+    let replaced = if replace_all {
+        *normalized = normalized.replace(old_string, new_string);
+        actual_count
     } else {
+        let mut replaced = 0;
         for _ in 0..replace_count {
-            if let Some(pos) = edited_normalized.find(old_string) {
-                let before = &edited_normalized[..pos];
-                let after = &edited_normalized[pos + old_string.len()..];
-                edited_normalized = format!("{}{}{}", before, new_string, after);
+            if let Some(pos) = normalized.find(old_string) {
+                let before = &normalized[..pos];
+                let after = &normalized[pos + old_string.len()..];
+                *normalized = format!("{}{}{}", before, new_string, after);
                 replaced += 1;
             } else {
                 break;
             }
         }
-    }
-
-    // 5. 写回时保留原始换行符风格
-    //    如果原始文件是 CRLF，写回也用 CRLF
-    let final_content = if raw.contains("\r\n") {
-        edited_normalized.replace("\n", "\r\n")
-    } else {
-        edited_normalized.clone()
+        replaced
     };
 
-    fs::write(path, &final_content)
-        .map_err(|e| format!("Cannot write file '{}': {}", path, e))?;
-
-    // 6. 返回归一化后的 hash（与 read_file 一致）
-    let new_hash = {
-        let mut hasher = Sha256::new();
-        hasher.update(edited_normalized.as_bytes());
-        hex::encode(hasher.finalize())
-    };
-
-    let line_count = edited_normalized.lines().count();
-
-    Ok(FileEditResult {
-        hash: new_hash,
+    Ok(SingleEditResult {
         replaced_count: replaced,
-        line_count,
         old_start_line,
         old_string_context,
         new_string_context,
     })
 }
 
+pub fn edit_file_multi(
+    path: &str,
+    edits: &[EditEntry],
+    expected_hash: &str,
+) -> Result<FileEditMultiResult, String> {
+    if edits.is_empty() {
+        return Err("edits must contain at least one edit".to_string());
+    }
+
+    let raw = read_file_text(path)?;
+    let mut normalized = normalize_content(&raw);
+
+    // 冲突检测
+    let current_hash10 = compute_hash10(&normalized);
+    if current_hash10 != expected_hash {
+        return Err(format!(
+            "Conflict: file '{}' has changed since you last read it. \
+             Expected hash10 '{}' but current file has '{}'. \
+             Please re-read the file and retry the edit.",
+            path, expected_hash, current_hash10
+        ));
+    }
+
+    // 逐个应用编辑
+    let mut results: Vec<SingleEditResult> = Vec::with_capacity(edits.len());
+    for (i, entry) in edits.iter().enumerate() {
+        let mut count = entry.replace_count;
+        if count == 0 {
+            count = usize::MAX;
+        }
+        let result = apply_single_edit(
+            &mut normalized,
+            &entry.old_string,
+            &entry.new_string,
+            count,
+        )
+        .map_err(|e| format!("Edit #{} (old_string starts with {:?}): {}", i + 1, entry.old_string.chars().take(40).collect::<String>(), e))?;
+        results.push(result);
+    }
+
+    // 写回
+    let new_hash10 = compute_hash10(&normalized);
+    let line_count = normalized.lines().count();
+    let final_content = if raw.contains("\r\n") {
+        normalized.replace("\n", "\r\n")
+    } else {
+        normalized
+    };
+
+    fs::write(path, &final_content)
+        .map_err(|e| format!("Cannot write file '{}': {}", path, e))?;
+
+    Ok(FileEditMultiResult {
+        hash10: new_hash10,
+        line_count,
+        edits: results,
+    })
+}
+
 /// 写入文件（完整覆盖），自动创建父目录。
-/// 返回归一化（LF）内容的 SHA256，与 read_file/edit_file 一致，
-/// 可直接用作后续 edit_file 的 expected_hash。
+/// 返回归一化（LF）内容的 hash10，与 read_file/edit_file_multi 一致，
+/// 可直接用作后续 edit_file_multi 的 expected_hash。
 #[derive(serde::Serialize)]
 pub struct FileWriteResult {
-    pub hash: String,
+    pub hash10: String,
     pub line_count: usize,
     pub byte_size: usize,
     pub existed: bool,
@@ -367,16 +379,12 @@ pub fn write_file(path: &str, content: &str) -> Result<FileWriteResult, String> 
     std::fs::write(path, content)
         .map_err(|e| format!("Cannot write file '{}': {}", path, e))?;
 
-    // 4. 计算归一化 hash（与 read_file/edit_file 一致）
+    // 4. 计算归一化 hash10（与 read_file/edit_file_multi 一致）
     let normalized = normalize_content(content);
-    let hash = {
-        let mut hasher = Sha256::new();
-        hasher.update(normalized.as_bytes());
-        hex::encode(hasher.finalize())
-    };
+    let hash10 = compute_hash10(&normalized);
 
     Ok(FileWriteResult {
-        hash,
+        hash10,
         line_count: normalized.lines().count(),
         byte_size: content.len(),
         existed,
