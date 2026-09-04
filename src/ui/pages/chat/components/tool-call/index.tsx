@@ -1,9 +1,63 @@
 import './style.scss'
-import { useState } from 'react'
-import { getToolCallMessage } from './IToolCallMessage'
+import { Component, ReactNode, useState } from 'react'
+import { t } from '@/ui/i18n'
+import {
+  getToolCallMessage,
+  IToolCallMessage,
+  ToolMessageProps,
+} from './IToolCallMessage'
 import { Message, ToolUseContent } from '@/types'
 import { ToolCallGroup } from './tool-call-group'
 export { ToolCallGroup }
+
+/**
+ * 展开视图渲染错误兜底。
+ * 单条工具消息渲染异常时只展示错误占位，避免异常冒泡导致整棵组件树崩溃白屏。
+ */
+class ExpandErrorBoundary extends Component<
+  { children: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false }
+
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error('[ToolCallMessage] expand view render failed:', error)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return <div className="error">{t('内容渲染失败')}</div>
+    }
+    return this.props.children
+  }
+}
+
+/**
+ * 把 getExpandView 放到子组件里执行，再套上 ExpandErrorBoundary：
+ * 若直接在 ToolCallMessage 自身的渲染流程中调用 getExpandView 并抛出异常，
+ * 异常会从 ToolCallMessage 的 render 中冒泡出去，无法被子级错误边界捕获。
+ */
+function ToolCallExpandView({
+  toolCallMessage,
+  props,
+}: {
+  toolCallMessage: IToolCallMessage
+  props: ToolMessageProps
+}) {
+  if (toolCallMessage.diyWrapper()) {
+    return toolCallMessage.getExpandView(props)
+  }
+  if (!props.expand) return null
+  return (
+    <div className="tool-call-expand-view">
+      {toolCallMessage.getExpandView(props)}
+    </div>
+  )
+}
 
 function formatElapsed(ms: number): string {
   if (ms < 1000) return `${ms}ms`
@@ -31,6 +85,14 @@ export function ToolCallMessage({ message, allMessages }: Props) {
     expand,
   }
   const isError = result?.isError
+  // getShortText 在 ToolCallMessage 自身渲染中执行，异常无法被子级错误边界捕获，故调用点兜底
+  let shortText: React.ReactNode
+  try {
+    shortText = toolCallMessage.getShortText(p)
+  } catch (err) {
+    console.error('[ToolCallMessage] getShortText failed:', err)
+    shortText = t('解析异常')
+  }
   return (
     <>
       <div
@@ -41,26 +103,16 @@ export function ToolCallMessage({ message, allMessages }: Props) {
         <span className="tool-call-label">
           {toolCallMessage.getToolLabel(type)}
         </span>
-        <span className="tool-call-short-text">
-          {toolCallMessage.getShortText(p)}
-        </span>
+        <span className="tool-call-short-text">{shortText}</span>
         {result?.elapsedMs != null && result.elapsedMs > 1000 && (
           <span className="tool-call-timing">
             {formatElapsed(result.elapsedMs)}
           </span>
         )}
       </div>
-      {toolCallMessage.diyWrapper() ? (
-        toolCallMessage.getExpandView(p)
-      ) : (
-        <>
-          {expand && (
-            <div className="tool-call-expand-view">
-              {toolCallMessage.getExpandView(p)}
-            </div>
-          )}
-        </>
-      )}
+      <ExpandErrorBoundary>
+        <ToolCallExpandView toolCallMessage={toolCallMessage} props={p} />
+      </ExpandErrorBoundary>
     </>
   )
 }
