@@ -512,6 +512,20 @@ body,
   font-family: AlimamaAgileVF-Thin;
   src: url(@/ui/assets/font/AlimamaAgileVF-Thin.woff2);
 }
+
+/* ===== Noto Color Emoji 彩色 Emoji 字体 =====
+   官方 noto-emoji 颜色字体（CBDT/CBLC 位图颜色字体），
+   本项目运行于 WebView2(Chromium)，可正常渲染。
+   通过 unicode-range 限定只作用于 emoji 码位，不影响普通文字；
+   在需要的地方把它追加到 font-family 末尾作为回退即可。 */
+@font-face {
+  font-family: 'Noto Color Emoji';
+  src: url(@/ui/assets/font/NotoColorEmoji.ttf) format('truetype');
+  font-display: swap;
+  /* emoji 相关码位：补充符号区 + 杂项符号/装饰符号 + 变体选择符/ZWJ */
+  unicode-range: U+200D, U+20E3, U+2122, U+2190-21FF, U+2300-23FF,
+    U+25A0-25FF, U+2600-27BF, U+2B00-2BFF, U+FE00-FE0F, U+1F000-1FAFF;
+}
 svg {
   fill: var(--icon-color);
 }

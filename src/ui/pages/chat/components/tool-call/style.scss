@@ -120,7 +120,7 @@
   border-radius: 4px;
 
   code {
-    font-family: 'AlimamaAgileVF-Thin', monospace;
+    font-family: 'AlimamaAgileVF-Thin', monospace, 'Noto Color Emoji';
     color: var(--text-primary, #e5e7eb);
     white-space: pre-wrap;
     word-break: break-all;
@@ -199,7 +199,7 @@
     white-space: pre-wrap;
     code {
       max-width: 600px;
-      font-family: 'AlimamaAgileVF-Thin';
+      font-family: 'AlimamaAgileVF-Thin', 'Noto Color Emoji';
       color: var(--terminal-text, white);
       font-size: var(--font-size-xs);
     }

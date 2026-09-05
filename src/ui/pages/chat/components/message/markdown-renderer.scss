@@ -52,7 +52,8 @@
     color: var(--inline-code-color, #642dd1);
     font-size: 0.9em;
     font-family:
-      'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, 'DengXian', monospace;
+      'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, 'DengXian',
+      monospace, 'Noto Color Emoji';
     display: inline;
     word-break: break-word;
     &.clickable {

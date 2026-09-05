@@ -5,12 +5,12 @@
   color: var(--window-color);
   display: flex;
   flex-direction: column;
-  font-family: AlimamaAgileVF-Thin;
+  font-family: AlimamaAgileVF-Thin, 'Noto Color Emoji';
   input {
-    font-family: AlimamaAgileVF-Thin;
+    font-family: AlimamaAgileVF-Thin, 'Noto Color Emoji';
   }
   pre {
-    font-family: AlimamaAgileVF-Thin;
+    font-family: AlimamaAgileVF-Thin, 'Noto Color Emoji';
   }
   .window-top-bar {
     height: 30px;
