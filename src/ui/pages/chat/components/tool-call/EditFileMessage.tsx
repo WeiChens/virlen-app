@@ -220,9 +220,18 @@ class EditFileMessage implements IToolCallMessage {
   }
 
   getExpandView(props: ToolMessageProps): React.ReactNode {
+    try {
+      return this.renderExpandView(props)
+    } catch (err) {
+      console.error('[EditFileMessage] getExpandView failed:', err)
+      return <div className="error">{t('内容渲染失败')}</div>
+    }
+  }
+
+  private renderExpandView(props: ToolMessageProps): React.ReactNode {
     if (!props.expand) return null
 
-    const { path, old_string, new_string } = props.useContent.input
+    const { path, old_string, new_string } = props.useContent?.input ?? {}
     const uiData = props.message?.uiData as
       | {
           fullPath?: string
@@ -265,8 +274,8 @@ class EditFileMessage implements IToolCallMessage {
                 diffRows={
                   edit.diffRows ??
                   computeDiff(
-                    edit.oldString.split('\n'),
-                    edit.newString.split('\n'),
+                    (edit.oldString ?? '').split('\n'),
+                    (edit.newString ?? '').split('\n'),
                     edit.oldStartLine,
                   )
                 }
@@ -324,8 +333,8 @@ class EditFileMessage implements IToolCallMessage {
             diffRows={
               uiData.diffRows ??
               computeDiff(
-                (uiData.oldString ?? old_string).split('\n'),
-                (uiData.newString ?? new_string).split('\n'),
+                (uiData.oldString ?? old_string ?? '').split('\n'),
+                (uiData.newString ?? new_string ?? '').split('\n'),
                 uiData.oldStartLine,
               )
             }
@@ -373,7 +382,7 @@ class EditFileMessage implements IToolCallMessage {
     }
 
     // 无 uiData（兼容旧版）→ 统一 diff
-    const diff = generateFallbackDiff(old_string, new_string)
+    const diff = generateFallbackDiff(old_string ?? '', new_string ?? '')
     return (
       <div
         style={{
