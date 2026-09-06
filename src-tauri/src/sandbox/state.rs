@@ -1,4 +1,8 @@
-//! 沙盒状态目录（对应 codex 的 $CODEX_HOME/.sandbox 与 cap_sid 文件）。
+//! 沙盒状态目录（跨平台）。
+//!
+//! Windows 用它存放能力 SID 映射（cap_sid.json）；Linux/macOS 用它存放
+//! 各自的状态文件（如 macOS 的 Seatbelt profile）。
+
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -9,9 +13,10 @@ pub struct SandboxState {
 }
 
 impl SandboxState {
-    /// 默认状态目录：%USERPROFILE%\.virlen-sandbox
+    /// 默认状态目录：`$HOME/.virlen-sandbox`（Windows 上 HOME 不存在时回退 `%USERPROFILE%`）。
     pub fn default_dir() -> PathBuf {
-        std::env::var_os("USERPROFILE")
+        std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir)
             .join(".virlen-sandbox")
@@ -26,9 +31,5 @@ impl SandboxState {
     pub fn from_default_or(override_dir: Option<PathBuf>) -> Result<Self> {
         let dir = override_dir.unwrap_or_else(Self::default_dir);
         Self::new(dir)
-    }
-
-    pub fn cap_sids(&self) -> Result<crate::sandbox::cap::CapSids> {
-        crate::sandbox::cap::load_or_create_cap_sids(&self.state_dir)
     }
 }

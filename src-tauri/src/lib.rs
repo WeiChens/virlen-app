@@ -13,7 +13,6 @@ mod vision_service;
 mod search;
 mod speech_service;
 mod task_manager;
-#[cfg(target_os = "windows")]
 mod sandbox;
 
 /// 将文件或目录移动到系统回收站（跨平台）
@@ -26,7 +25,7 @@ async fn move_to_trash(path: String) -> Result<(), String> {
     .map_err(|e| format!("Task join error: {}", e))?
 }
 
-/// 沙盒诊断：查看状态目录、能力 SID、环境变量覆盖（仅 Windows）。
+/// 沙盒诊断：Windows 返回状态目录/能力 SID/环境变量覆盖；其它平台返回接入说明。
 #[tauri::command]
 fn sandbox_diagnostics() -> serde_json::Value {
     #[cfg(target_os = "windows")]
@@ -36,7 +35,10 @@ fn sandbox_diagnostics() -> serde_json::Value {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        serde_json::json!({ "error": "sandbox only available on Windows" })
+        serde_json::json!({
+            "platform": std::env::consts::OS,
+            "note": "sandbox integrated (Landlock on Linux / sandbox-exec on macOS)"
+        })
     }
 }
 

@@ -13,26 +13,15 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 
-use crate::sandbox::acl::{add_deny_write_ace, allow_null_device, ensure_allow_write_aces};
-use crate::sandbox::cap;
 use crate::sandbox::paths::{canonicalize_path, root_contains_path};
-use crate::sandbox::spawn::{create_sandboxed_process, current_env, SandboxChild};
 use crate::sandbox::state::SandboxState;
-use crate::sandbox::token::{create_write_restricted_token_with_caps, LocalSid};
-use crate::sandbox::{DEFAULT_PROTECTED_SUBDIRS, INTERACTIVE_DESKTOP};
+use crate::sandbox::{SandboxRequest, DEFAULT_PROTECTED_SUBDIRS};
 
-/// 一次沙盒执行的请求描述。
-#[derive(Debug, Clone)]
-pub struct SandboxRequest {
-    /// 命令工作目录 = 主可写根。
-    pub cwd: PathBuf,
-    /// 附加可写根。
-    pub extra_roots: Vec<PathBuf>,
-    /// 附加 deny-write 绝对路径（不存在则创建，防止沙盒先写再被保护）。
-    pub protect: Vec<PathBuf>,
-    /// 只读模式：不授予任何写根能力 SID。
-    pub readonly: bool,
-}
+use super::acl::{add_deny_write_ace, allow_null_device, ensure_allow_write_aces};
+use super::cap;
+use super::spawn::{create_sandboxed_process, current_env, SandboxChild};
+use super::token::{create_write_restricted_token_with_caps, LocalSid};
+use super::INTERACTIVE_DESKTOP;
 
 struct Prepared {
     /// 规范化的命令 cwd（也是主可写根）
@@ -50,6 +39,7 @@ pub struct SandboxSession {
     /// 规范化的命令 cwd
     pub cwd: PathBuf,
     /// 是否只读模式
+    #[allow(dead_code)]
     pub readonly: bool,
     h_token: HANDLE,
 }

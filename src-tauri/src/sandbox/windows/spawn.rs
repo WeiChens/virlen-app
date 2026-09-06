@@ -265,6 +265,7 @@ impl ProcessHandle {
         }
     }
 
+    #[allow(dead_code)]
     pub fn raw(&self) -> HANDLE {
         self.0
     }
@@ -283,11 +284,11 @@ impl Drop for ProcessHandle {
 
 /// 沙盒化子进程句柄集合。stdout/stderr 为匿名管道读端，供上层流式读取。
 pub struct SandboxChild {
-    pub process: ProcessHandle,
-    pub job: Job,
+    pub pid: u32,
     pub stdout: Option<std::fs::File>,
     pub stderr: Option<std::fs::File>,
-    pub pid: u32,
+    process: ProcessHandle,
+    job: Job,
 }
 
 impl SandboxChild {
@@ -300,7 +301,13 @@ impl SandboxChild {
         self.job.terminate();
     }
 
+    /// 阻塞等待进程退出并读取退出码。
+    pub fn wait_and_read_exit_code(&self) -> Option<i32> {
+        self.process.wait_and_read_exit_code()
+    }
+
     /// 读取当前退出码（不等待）。
+    #[allow(dead_code)]
     pub fn read_exit_code(&self) -> Option<i32> {
         let mut code: u32 = 0;
         // SAFETY: process 有效。

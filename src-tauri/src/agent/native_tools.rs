@@ -864,11 +864,9 @@ async fn run_command_native(
     let platform = std::env::consts::OS;
     let is_win = platform == "windows";
 
-    // Windows：优先走沙盒（OS 级写隔离）。off 模式或 prepare/spawn 失败则降级到下方裸跑路径。
-    #[cfg(target_os = "windows")]
+    // 三平台：优先走沙盒（OS 级写隔离）。off 模式或 prepare/spawn 失败则降级到下方裸跑路径。
     let mut sandbox_degraded = false;
-    #[cfg(target_os = "windows")]
-    if is_win && sandbox_mode(ctx) != SandboxMode::Off {
+    if sandbox_mode(ctx) != SandboxMode::Off {
         match run_command_sandboxed(ctx, cmd_str, timeout_secs).await {
             Ok(outcome) => return Ok(outcome),
             Err(e) => {
@@ -1150,7 +1148,6 @@ async fn run_command_native(
         exit_code.flatten()
     };
 
-    #[cfg(target_os = "windows")]
     let env_note = {
         let mode = if sandbox_mode(ctx) == SandboxMode::Off {
             "无沙盒（已关闭，完整权限）"
@@ -1161,8 +1158,6 @@ async fn run_command_native(
         };
         format!("终端环境: {shell} · {mode}")
     };
-    #[cfg(not(target_os = "windows"))]
-    let env_note = format!("终端环境: {shell}");
 
     Ok(build_command_result(
         stdout,
@@ -1232,7 +1227,6 @@ fn build_command_result(
 }
 
 /// 终端沙盒运行模式。
-#[cfg(target_os = "windows")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SandboxMode {
     On,
@@ -1242,7 +1236,6 @@ enum SandboxMode {
 
 /// 解析当前沙盒模式：环境变量 VIRLEN_SANDBOX 优先（临时覆盖），
 /// 否则回退到 security.sandbox_mode（默认 on）。
-#[cfg(target_os = "windows")]
 fn sandbox_mode(ctx: &NativeToolCtx<'_>) -> SandboxMode {
     if let Ok(v) = std::env::var("VIRLEN_SANDBOX") {
         match v.to_ascii_lowercase().as_str() {
@@ -1259,10 +1252,17 @@ fn sandbox_mode(ctx: &NativeToolCtx<'_>) -> SandboxMode {
     }
 }
 
-/// 展开路径中的 %VAR% 环境变量占位符（Windows 白名单默认值含 %USERPROFILE%）。
-#[cfg(target_os = "windows")]
+/// 展开路径中的环境变量占位符：%VAR%（Windows）与 ~（Unix）。
 fn expand_env_vars(path: &str) -> PathBuf {
     let s = path.replace('\\', "/");
+    // Unix：展开 ~ 为用户主目录。
+    let s = if s == "~" || s.starts_with("~/") {
+        std::env::var("HOME")
+            .map(|h| format!("{}{}", h, &s[1..]))
+            .unwrap_or(s)
+    } else {
+        s
+    };
     let chars: Vec<char> = s.chars().collect();
     let mut out = String::with_capacity(s.len());
     let mut i = 0;
@@ -1285,13 +1285,12 @@ fn expand_env_vars(path: &str) -> PathBuf {
 /// 从 whitelist 收集终端可写根（M6 映射）。
 ///
 /// 规则：
-///   1. 展开 %VAR% 环境变量占位符；
+///   1. 展开 %VAR%/~ 环境变量占位符；
 ///   2. 跳过 skills_dir（只读，走 protect）；
 ///   3. 只保留「存在且是目录」的路径（不存在的跳过，避免 prepare 失败降级）；
 ///   4. 跳过「包含 workspace 的祖先目录」——workspace 本身已是写根，祖先目录会把
 ///      整个父目录变成终端可写，破坏写隔离（如 whitelist 默认含 Documents，
 ///      而 workspace 是 Documents/test/demo 时，绝不能让 demo2 也变得可写）。
-#[cfg(target_os = "windows")]
 fn collect_extra_roots(
     whitelist: &[String],
     workspace: &str,
@@ -1317,7 +1316,6 @@ fn collect_extra_roots(
     extra_roots
 }
 
-#[cfg(target_os = "windows")]
 async fn run_command_sandboxed(
     ctx: &NativeToolCtx<'_>,
     cmd_str: &str,
@@ -1327,12 +1325,11 @@ async fn run_command_sandboxed(
     use tokio::sync::mpsc;
     use tokio::time::sleep;
 
-    // 1) 选择 shell。
-    // 注意：沙盒进程运行在受限令牌下，PowerShell 会进入约束语言模式（CLM），
-    // `[Console]::OutputEncoding = ...` 这类属性设置会被拒绝
-    // （PropertySetterNotSupportedInConstrainedLanguage），导致脚本第一条语句就抛异常、
-    // 后续命令全部不执行。因此这里**不**加 UTF-8 前缀，中文输出靠 decode_output 的
-    // GBK 兜底解码（与裸跑路径的 UTF-8 前缀不同）。
+    // 1) 选择 shell（平台自适应）。
+    // 注意：Windows 沙盒进程运行在受限令牌下，PowerShell 会进入约束语言模式（CLM），
+    // `[Console]::OutputEncoding = ...` 这类属性设置会被拒绝，因此这里**不**加 UTF-8 前缀，
+    // 中文输出靠 decode_output 的 GBK 兜底解码（与裸跑路径的 UTF-8 前缀不同）。
+    #[cfg(target_os = "windows")]
     let (shell, args, raw_cmdline): (&str, Vec<String>, Option<String>) = {
         if has_cmd_syntax(cmd_str) || is_shell_wrapper_invocation(cmd_str) {
             (
@@ -1344,6 +1341,12 @@ async fn run_command_sandboxed(
             ("powershell", vec!["-Command".into(), cmd_str.to_string()], None)
         }
     };
+    #[cfg(target_os = "macos")]
+    let (shell, args, raw_cmdline): (&str, Vec<String>, Option<String>) =
+        ("zsh", vec!["-c".into(), cmd_str.to_string()], None);
+    #[cfg(target_os = "linux")]
+    let (shell, args, raw_cmdline): (&str, Vec<String>, Option<String>) =
+        ("sh", vec!["-c".into(), cmd_str.to_string()], None);
 
     // 2) 构建沙盒请求
     //    写根 = workspace + whitelist 中「存在且是目录」的可写目录（排除 skills_dir）；
@@ -1394,18 +1397,15 @@ async fn run_command_sandboxed(
     // token 已不再需要，尽早关闭（也避免 HANDLE 跨 await）。
     drop(session);
 
-    let crate::sandbox::SandboxChild {
-        process,
-        job,
-        stdout,
-        stderr,
-        pid,
-    } = child;
-    let job = Arc::new(job);
+    let mut child = child;
+    let pid = child.pid();
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let child = Arc::new(child);
 
     // 注册到运行中命令表，支持前端「终止」按钮
-    let job_for_kill = job.clone();
-    let terminator: Option<Terminator> = Some(Arc::new(move || job_for_kill.terminate()));
+    let child_for_kill = child.clone();
+    let terminator: Option<Terminator> = Some(Arc::new(move || child_for_kill.terminate()));
     let kill_requested = register_running_command(ctx.tool_call_id, pid, terminator);
 
     // 5) 实时输出：管道读端在 spawn_blocking 线程里阻塞 read，经 mpsc 回传
@@ -1469,8 +1469,9 @@ async fn run_command_sandboxed(
 
     // 6) 等待退出
     let (done_tx, mut done_rx) = mpsc::unbounded_channel::<Option<i32>>();
+    let wait_child = child.clone();
     let wait_handle = tokio::task::spawn_blocking(move || {
-        let code = process.wait_and_read_exit_code();
+        let code = wait_child.wait_and_read_exit_code();
         let _ = done_tx.send(code);
     });
 
@@ -1515,12 +1516,12 @@ async fn run_command_sandboxed(
                 killed_by_user = true;
             }
             _ = sleep(Duration::from_secs((timeout_secs.max(1)) as u64)), if !killed_by_timeout && !killed_by_user => {
-                job.terminate();
+                child.terminate();
                 kill_process_tree(pid);
                 killed_by_timeout = true;
             }
             _ = ctx.cancel.cancelled(), if !killed_by_timeout && !killed_by_user => {
-                job.terminate();
+                child.terminate();
                 kill_process_tree(pid);
                 killed_by_user = true;
             }
@@ -1551,7 +1552,7 @@ async fn run_command_sandboxed(
                 stderr_final = se.unwrap_or_default();
             }
             Err(_) => {
-                job.terminate();
+                child.terminate();
                 kill_process_tree(pid);
                 stdout_abort.abort();
                 stderr_abort.abort();

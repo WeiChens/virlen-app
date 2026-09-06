@@ -1,65 +1,53 @@
-//! Windows 终端执行安全沙盒（二改自 sandbox-win，对应 codex legacy 免提权后端）。
+//! 终端执行安全沙盒（OS 级写隔离）。
 //!
-//! 安全机制：
-//!   能力 SID(cap.rs) + WRITE_RESTRICTED 受限令牌(token.rs) + NTFS ACL(acl.rs)
-//!   + CreateProcessAsUserW 拉起子进程(spawn.rs)。
+//! 平台实现：
+//!   - Windows: 受限令牌（WRITE_RESTRICTED）+ NTFS ACL + Job Object（见 `windows/`）
+//!   - Linux:   Landlock LSM（见 `linux/`）
+//!   - macOS:   sandbox-exec + Seatbelt profile（见 `macos/`）
 //!
-//! 语义：
-//!   - 子进程令牌是当前用户令牌的受限派生，写入任何对象都必须命中
-//!     restricting SID 中某个 SID 的 Allow-Write ACE；
-//!   - 只有「可写根」目录的 ACL 被授予了随机的「工作区能力 SID」，
-//!     因此子进程只能写这些目录（及其继承的子路径）；
-//!   - 可写根内部的保护子路径(.git/.codex/.agents 等)额外添加 Deny-Write ACE；
-//!   - 令牌只保留 SeChangeNotifyPrivilege，其余特权全部禁用。
-//!
-//! 本模块仅在 Windows 编译（整个 crate 由 lib.rs 以 `#[cfg(target_os = "windows")]` 引入）。
+//! 各平台实现等价的安全目标：
+//!   - 子进程只能写「可写根」目录（cwd + extra_roots），区外写入被 OS 层拒绝；
+//!   - 可写根内部的保护子路径(.git/.codex/.agents 等)不可写；
+//!   - readonly 模式：不授予任何写根，连 cwd 都不可写。
 
-pub mod acl;
-pub mod cap;
+use std::path::PathBuf;
+
 pub mod paths;
-pub mod runner;
-pub mod spawn;
 pub mod state;
-pub mod token;
 
-pub use runner::{SandboxRequest, SandboxSession};
-pub use spawn::SandboxChild;
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
+
+#[cfg(target_os = "windows")]
+#[allow(unused_imports)]
+pub use windows::{SandboxSession, SandboxChild};
+#[cfg(target_os = "linux")]
+#[allow(unused_imports)]
+pub use linux::{SandboxSession, SandboxChild};
+#[cfg(target_os = "macos")]
+#[allow(unused_imports)]
+pub use macos::{SandboxSession, SandboxChild};
+
+#[cfg(target_os = "windows")]
+#[allow(unused_imports)]
+pub use windows::{diagnostics, SandboxDiagnostics};
+
+/// 一次沙盒执行的请求描述（跨平台）。
+#[derive(Debug, Clone)]
+pub struct SandboxRequest {
+    /// 命令工作目录 = 主可写根。
+    pub cwd: PathBuf,
+    /// 附加可写根。
+    pub extra_roots: Vec<PathBuf>,
+    /// 附加 deny-write 绝对路径（不存在则创建，防止沙盒先写再被保护）。
+    pub protect: Vec<PathBuf>,
+    /// 只读模式：不授予任何写根能力。
+    pub readonly: bool,
+}
 
 /// 免提权后端默认保护的可写根内部子路径名。
 pub const DEFAULT_PROTECTED_SUBDIRS: &[&str] = &[".git", ".hg", ".svn", ".codex", ".agents"];
-
-/// 私有桌面（与受限令牌无关，这里固定指向交互桌面；私有桌面属于阶段3）。
-pub const INTERACTIVE_DESKTOP: &str = "Winsta0\\Default";
-
-#[cfg(test)]
-mod tests;
-
-/// 沙盒诊断信息（供 sandbox_diagnostics 命令返回）。
-#[derive(serde::Serialize)]
-pub struct SandboxDiagnostics {
-    pub state_dir: String,
-    pub cap_sid_file_exists: bool,
-    pub readonly_cap_sid: String,
-    pub workspace_cap_sids: std::collections::BTreeMap<String, String>,
-    pub writable_root_cap_sids: std::collections::BTreeMap<String, String>,
-    pub env_override: Option<String>,
-}
-
-/// 收集沙盒诊断：状态目录、能力 SID、环境变量覆盖（只读，无副作用）。
-pub fn diagnostics() -> SandboxDiagnostics {
-    let state_dir = state::SandboxState::default_dir();
-    let cap_file = cap::cap_sid_file(&state_dir);
-    let cap_file_exists = cap_file.exists();
-    let caps = std::fs::read_to_string(&cap_file)
-        .ok()
-        .and_then(|txt| serde_json::from_str::<cap::CapSids>(&txt).ok())
-        .unwrap_or_default();
-    SandboxDiagnostics {
-        state_dir: state_dir.to_string_lossy().to_string(),
-        cap_sid_file_exists: cap_file_exists,
-        readonly_cap_sid: caps.readonly,
-        workspace_cap_sids: caps.workspace_by_cwd.into_iter().collect(),
-        writable_root_cap_sids: caps.writable_root_by_path.into_iter().collect(),
-        env_override: std::env::var("VIRLEN_SANDBOX").ok(),
-    }
-}

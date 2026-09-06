@@ -59,7 +59,7 @@ unsafe extern "system" {
 
 impl LocalSid {
     pub fn from_string(sid: &str) -> Result<Self> {
-        let wide = crate::sandbox::spawn::to_wide(sid);
+        let wide = super::spawn::to_wide(sid);
         let mut psid: *mut c_void = std::ptr::null_mut();
         // SAFETY: 传入以 0 结尾的宽字符串指针与合法输出指针。
         let ok = unsafe { ConvertStringSidToSidW(wide.as_ptr(), &mut psid) };
@@ -330,7 +330,7 @@ unsafe fn set_default_dacl(h_token: HANDLE, sids: &[*mut c_void]) -> Result<()> 
 
 // SAFETY: h_token 有效。
 unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
-    let wide = crate::sandbox::spawn::to_wide(name);
+    let wide = super::spawn::to_wide(name);
     let mut luid = windows_sys::Win32::Foundation::LUID {
         LowPart: 0,
         HighPart: 0,

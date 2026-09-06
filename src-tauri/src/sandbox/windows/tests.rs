@@ -18,8 +18,8 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::PathBuf;
 
-use super::state::SandboxState;
-use super::{SandboxRequest, SandboxSession};
+use crate::sandbox::state::SandboxState;
+use crate::sandbox::{SandboxRequest, SandboxSession};
 
 /// 每次测试独立的临时环境：写根(cwd) + 写根外(outside) + 独立 state_dir。
 struct TestEnv {
@@ -93,7 +93,7 @@ fn run(
     if let Some(mut f) = child.stderr.take() {
         let _ = f.read_to_end(&mut err);
     }
-    let code = child.process.wait_and_read_exit_code();
+    let code = child.wait_and_read_exit_code();
     (out, err, code)
 }
 
@@ -198,7 +198,7 @@ fn e2e_grandchild_reaped_on_terminate() {
         .expect("spawn powershell");
 
     // 只等父进程退出。注意不读 stdout：孙进程继承管道写端，读到 EOF 会阻塞。
-    let code = child.process.wait_and_read_exit_code();
+    let code = child.wait_and_read_exit_code();
     assert_eq!(code, Some(0), "父 powershell 应正常退出");
 
     let pid_path = env.cwd.join("grandchild.pid");

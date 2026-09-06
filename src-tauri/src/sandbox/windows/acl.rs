@@ -26,7 +26,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA, OPEN_EXISTING,
 };
 
-use crate::sandbox::spawn::to_wide;
+use super::spawn::to_wide;
 
 const INHERIT_ONLY_ACE: u8 = 0x08;
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
