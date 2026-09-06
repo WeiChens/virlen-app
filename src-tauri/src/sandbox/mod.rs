@@ -50,4 +50,5 @@ pub struct SandboxRequest {
 }
 
 /// 免提权后端默认保护的可写根内部子路径名。
-pub const DEFAULT_PROTECTED_SUBDIRS: &[&str] = &[".git", ".hg", ".svn", ".codex", ".agents"];
+pub const DEFAULT_PROTECTED_SUBDIRS: &[&str] =
+    &[".git", ".hg", ".svn", ".codex", ".agents", ".virlen-sandbox"];

@@ -239,41 +239,6 @@ pub fn resolve_safe_path(
 
 // ==================== execute_command ====================
 
-/// 检测命令是否包含 cmd 特有语法（与 JS hasCmdSyntax 对齐）
-fn has_cmd_syntax(cmd: &str) -> bool {
-    if cmd.contains("&&") || cmd.contains("||") {
-        return true;
-    }
-    let nul_re = regex::Regex::new(r"[12]?>nul\b").unwrap();
-    if nul_re.is_match(cmd) {
-        return true;
-    }
-    let nul_re2 = regex::Regex::new(r"<nul\b").unwrap();
-    if nul_re2.is_match(cmd) {
-        return true;
-    }
-    let echo_re = regex::Regex::new(r"(?i)\becho\b").unwrap();
-    if echo_re.is_match(cmd) && (cmd.contains('>') || cmd.contains('|')) {
-        return true;
-    }
-    false
-}
-
-/// 检测命令是否已经是 shell 包装调用（powershell / pwsh / cmd / sh / bash / zsh 等）。
-/// 用户/AI 直接给出 `powershell -NoProfile -Command "..."` 这类命令时，
-/// 工具若再套一层 powershell，外层解析脚本会展开内层双引号里的 `$` 变量（如 $_），
-/// 把命令改写掉（表现为 `$_.Length` 变成 `.Length`）。
-/// 此时应改用 cmd /s /c 原样透传 —— cmd 不做 `$` 插值，内层 shell 才能拿到原始命令。
-fn is_shell_wrapper_invocation(cmd: &str) -> bool {
-    let trimmed = cmd.trim_start();
-    // 可选路径前缀（如 C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe）+ 可执行名 + 扩展名
-    let re = regex::Regex::new(
-        r#"(?i)^(?:[a-z]:[\\/][^ \t"]*[\\/])?(?:powershell|pwsh|cmd|sh|bash|zsh|dash)(?:\.exe|\.cmd|\.bat)?\b"#,
-    )
-    .unwrap();
-    re.is_match(trimmed)
-}
-
 /// 将输出字节流解码为字符串：优先 UTF-8；失败时按 Windows ANSI 代码页兜底。
 /// 中文 Windows 上 Windows PowerShell 5.1 通过管道输出时默认使用 GBK/CP936，
 /// 若一律按 UTF-8 硬解会出现 `�` 乱码（如中文文件名显示为 ��������.wav）。
@@ -877,21 +842,17 @@ async fn run_command_native(
     }
 
     let (shell, args): (&str, Vec<String>) = if is_win {
-        if has_cmd_syntax(cmd_str) || is_shell_wrapper_invocation(cmd_str) {
-            // 命令已包含 shell 包装（powershell -Command "..." / cmd /c 等）时不再套一层 powershell：
-            // 外层 powershell 解析脚本会展开内层双引号里的 $ 变量（如 $_），导致命令被改写。
-            // 改用 cmd /s /c 原样透传 —— cmd 不做 $ 插值，内层 shell 才能拿到原始命令。
-            ("cmd", vec!["/s".into(), "/c".into(), cmd_str.into()])
-        } else {
-            // 直接执行的 powershell：先切到 UTF-8 输出，避免中文系统默认 GBK 使管道输出乱码。
-            // 注意：若用户命令里再套 powershell -Command "..."，内层进程会重新按系统代码页初始化，
-            // 此时靠 decode_output 的 GBK 兜底解码（见下方流读取）。
-            let prefixed = format!(
-                "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {}",
-                cmd_str
-            );
-            ("powershell", vec!["-Command".into(), prefixed.into()])
-        }
+        // Windows 统一走 Windows PowerShell 5.1（powershell.exe），不再混用 cmd：
+        // 命令按 PowerShell 语法书写（不支持 &&/||，改用 ; 或 if ($LASTEXITCODE)）。
+        // 先切到 UTF-8 输出，避免中文系统默认 GBK 使管道输出乱码。
+        let prefixed = format!(
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {}",
+            cmd_str
+        );
+        (
+            "powershell",
+            vec!["-NoProfile".into(), "-Command".into(), prefixed.into()],
+        )
     } else if platform == "macos" {
         ("zsh", vec!["-c".into(), cmd_str.into()])
     } else {
@@ -899,29 +860,12 @@ async fn run_command_native(
     };
 
     let mut cmd = Command::new(shell);
-    // ⚠️ Windows 的 cmd 路径不能用普通 .arg() 传命令串：
-    // std::process::Command 会把含空格/引号的参数包上 "..." 并把内部 " 转义成 \"，
-    // 而 cmd.exe 把 \ 当普通字符，\" 不会还原成 "（JS 侧“/s 会把 \" 还原成 \"”的说法是错的），
-    // 导致嵌套引号命令被撕碎（如 findstr /i "a b" 变成 findstr /i \"a b\" → 退出码 1）。
-    // 正确做法：cmd 路径用 raw_arg 把用户命令原样拼到命令行，与在 cmd 里直接输入行为一致。
-    // powershell 的 .NET 解析器认得 \" 能正确还原，保留普通 .arg()。
+    // Windows 统一为 PowerShell，其 .NET 解析器认得 \" 能正确还原引号，普通 .arg() 即可
+    // （不再使用 cmd，故无需 raw_arg 原样透传）。
+    cmd.args(&args);
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
-        if shell == "cmd" {
-            cmd.arg("/s").arg("/c");
-            cmd.as_std_mut().raw_arg(cmd_str);
-        } else {
-            cmd.args(&args);
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        cmd.args(&args);
-    }
-    #[cfg(target_os = "windows")]
-    {
-        // 隐藏控制台窗口：Windows 上 spawn cmd/powershell 默认会弹出黑窗口，
+        // 隐藏控制台窗口：Windows 上 spawn powershell 默认会弹出黑窗口，
         // 与 kill_process_tree / load_env 的 CREATE_NO_WINDOW 保持一致
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         cmd.creation_flags(CREATE_NO_WINDOW);
@@ -1330,17 +1274,11 @@ async fn run_command_sandboxed(
     // `[Console]::OutputEncoding = ...` 这类属性设置会被拒绝，因此这里**不**加 UTF-8 前缀，
     // 中文输出靠 decode_output 的 GBK 兜底解码（与裸跑路径的 UTF-8 前缀不同）。
     #[cfg(target_os = "windows")]
-    let (shell, args, raw_cmdline): (&str, Vec<String>, Option<String>) = {
-        if has_cmd_syntax(cmd_str) || is_shell_wrapper_invocation(cmd_str) {
-            (
-                "cmd",
-                vec!["/s".into(), "/c".into(), cmd_str.into()],
-                Some(format!("cmd.exe /s /c {}", cmd_str)),
-            )
-        } else {
-            ("powershell", vec!["-Command".into(), cmd_str.to_string()], None)
-        }
-    };
+    let (shell, args, raw_cmdline): (&str, Vec<String>, Option<String>) = (
+        "powershell",
+        vec!["-NoProfile".into(), "-Command".into(), cmd_str.to_string()],
+        None,
+    );
     #[cfg(target_os = "macos")]
     let (shell, args, raw_cmdline): (&str, Vec<String>, Option<String>) =
         ("zsh", vec!["-c".into(), cmd_str.to_string()], None);
@@ -2904,39 +2842,6 @@ mod tests {
         assert!(crate::sandbox::paths::same_path_key(&roots[0], &sibling));
 
         let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn test_has_cmd_syntax() {
-        assert!(has_cmd_syntax("dir && echo hi"));
-        assert!(has_cmd_syntax("echo hi > nul"));
-        assert!(has_cmd_syntax("echo hi 2>nul"));
-        assert!(has_cmd_syntax("echo hi <nul"));
-        assert!(!has_cmd_syntax("git status"));
-        assert!(!has_cmd_syntax("dir /b"));
-    }
-
-    #[test]
-    fn test_is_shell_wrapper_invocation() {
-        // 已经是 shell 包装调用 → 不应再套一层 powershell
-        assert!(is_shell_wrapper_invocation(
-            "powershell -NoProfile -Command \"Get-Item x\""
-        ));
-        assert!(is_shell_wrapper_invocation("pwsh -Command \"Get-ChildItem\""));
-        assert!(is_shell_wrapper_invocation("powershell.exe -Command \"dir\""));
-        assert!(is_shell_wrapper_invocation(
-            "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -Command \"x\""
-        ));
-        assert!(is_shell_wrapper_invocation("cmd /c dir"));
-        assert!(is_shell_wrapper_invocation("cmd.exe /c dir"));
-        assert!(is_shell_wrapper_invocation("bash -c \"echo hi\""));
-        assert!(is_shell_wrapper_invocation("sh -c \"ls\""));
-        // 普通命令不应误判
-        assert!(!is_shell_wrapper_invocation("git status"));
-        assert!(!is_shell_wrapper_invocation("node --version"));
-        assert!(!is_shell_wrapper_invocation("npm run build"));
-        assert!(!is_shell_wrapper_invocation("echo \"powershell -Command x\""));
-        assert!(!is_shell_wrapper_invocation("C:\\scripts\\run.ps1"));
     }
 
     #[test]

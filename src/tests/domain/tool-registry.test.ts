@@ -92,6 +92,75 @@ describe('ToolRegistryImpl', () => {
     expect(defs.map((d) => d.name).sort()).toEqual(['tool_a', 'tool_b'])
   })
 
+  it('listDefinitions 应把惰性描述（工具级+参数级）求值为字符串', async () => {
+    let platform = 'windows'
+    const def: ToolDefinition = {
+      name: 'lazy_tool',
+      description: () => `platform=${platform}`,
+      parameters: {
+        type: 'object',
+        properties: {
+          cmd: { type: 'string', description: () => `cmd on ${platform}` },
+        },
+        required: ['cmd'],
+      },
+    }
+    await registry.register(def, makeExecutor())
+
+    const [d] = registry.listDefinitions()
+    expect(typeof d.description).toBe('string')
+    expect(d.description).toBe('platform=windows')
+    expect(d.parameters.properties.cmd.description).toBe('cmd on windows')
+
+    // 权威信息晚于注册就绪 → 下次 listDefinitions 拿到最新值
+    platform = 'macos'
+    const [d2] = registry.listDefinitions()
+    expect(d2.description).toBe('platform=macos')
+    expect(d2.parameters.properties.cmd.description).toBe('cmd on macos')
+  })
+
+  it('get/listAll 返回的也是已求值的纯字符串定义', async () => {
+    const def: ToolDefinition = {
+      name: 'resolve_tool',
+      description: () => 'resolved desc',
+      parameters: {
+        type: 'object',
+        properties: {
+          p: { type: 'string', description: () => 'resolved param' },
+        },
+        required: [],
+      },
+    }
+    await registry.register(def, makeExecutor())
+
+    const got = await registry.get('resolve_tool')
+    expect(got!.definition.description).toBe('resolved desc')
+    expect(got!.definition.parameters.properties.p.description).toBe(
+      'resolved param',
+    )
+
+    const all = await registry.listAll()
+    const d = all.find((t) => t.definition.name === 'resolve_tool')!
+    expect(d.definition.description).toBe('resolved desc')
+  })
+
+  it('listDefinitions 不改动注册时保存的原始定义（惰性函数仍保留）', async () => {
+    const fn = () => 'lazy'
+    const def: ToolDefinition = {
+      name: 'keep_raw',
+      description: fn,
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    }
+    await registry.register(def, makeExecutor())
+
+    registry.listDefinitions()
+    expect(def.description).toBe(fn)
+  })
+
   it('空注册表 listDefinitions 应返回空数组', () => {
     const defs = registry.listDefinitions()
     expect(defs).toHaveLength(0)

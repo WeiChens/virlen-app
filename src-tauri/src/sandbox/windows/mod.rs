@@ -12,7 +12,11 @@
 //!   - 只有「可写根」目录的 ACL 被授予了随机的「工作区能力 SID」，
 //!     因此子进程只能写这些目录（及其继承的子路径）；
 //!   - 可写根内部的保护子路径(.git/.codex/.agents 等)额外添加 Deny-Write ACE；
-//!   - 令牌只保留 SeChangeNotifyPrivilege，其余特权全部禁用。
+//!   - 令牌只保留 SeChangeNotifyPrivilege，其余特权全部禁用；
+//!   - 子进程纳入带 KILL_ON_JOB_CLOSE 的 Job Object：命令正常结束后若仍残留后台
+//!     子进程（如 `cmd /c "start server.exe"`），会随 Job 句柄关闭被连带终止。
+//!     这是**故意为之**——沙盒不允许逃逸后台进程；与裸跑路径 ProcessTreeGuard 的
+//!     「保留后台进程」语义不同。
 
 pub mod acl;
 pub mod cap;

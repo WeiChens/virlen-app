@@ -10,8 +10,11 @@
 //!   - `(deny default)` 默认拒绝一切，再逐条 `(allow ...)` 放行；
 //!   - 全机可读，仅可写根（workspace + extra_roots）+ 临时目录可写；
 //!   - readonly 模式不授予任何可写根。
+//!
+//! 注意：readonly 模式下仍保留 `/private/tmp`、`/var/folders` 的写权限（编译器/包管理器
+//! 需要临时目录），因此不是严格意义上的「整个系统只读」，只是「不授予任何业务写根」。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -20,7 +23,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::sandbox::paths::canonicalize_path;
 use crate::sandbox::state::SandboxState;
-use crate::sandbox::SandboxRequest;
+use crate::sandbox::{SandboxRequest, DEFAULT_PROTECTED_SUBDIRS};
 
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 
@@ -37,12 +40,6 @@ pub struct SandboxChild {
     pub stdout: Option<std::fs::File>,
     pub stderr: Option<std::fs::File>,
     child: Arc<Mutex<Option<std::process::Child>>>,
-}
-
-impl Drop for SandboxSession {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.profile_path);
-    }
 }
 
 impl SandboxSession {
@@ -76,15 +73,29 @@ impl SandboxSession {
             push(canon);
         }
 
-        // 保护路径（deny-write），仅规范化已存在的路径。
-        let protect: Vec<PathBuf> = req
-            .protect
-            .iter()
-            .filter(|p| p.exists())
-            .map(|p| canonicalize_path(p))
-            .collect();
+        // 保护路径（deny-write）：显式 protect + 各可写根内的默认保护子目录
+        // （.git/.hg/.svn/.codex/.agents/.virlen-sandbox），仅规范化已存在的路径。
+        let mut protect: BTreeSet<PathBuf> = BTreeSet::new();
+        for p in &req.protect {
+            if p.exists() {
+                protect.insert(canonicalize_path(p));
+            }
+        }
+        for root in &write_roots {
+            for name in DEFAULT_PROTECTED_SUBDIRS {
+                let candidate = root.join(name);
+                if candidate.exists() {
+                    protect.insert(canonicalize_path(&candidate));
+                }
+            }
+        }
+        let protect: Vec<PathBuf> = protect.into_iter().collect();
 
-        // 生成 profile 文件（状态目录内，进程+纳秒保证唯一，session drop 时清理）。
+        // 惰性清理历史遗留 profile：spawn 后立即删文件会与 sandbox-exec 读文件竞态，
+        // 因此不随 session drop 删除，而是每次 prepare 时回收过期的旧文件。
+        gc_stale_profiles(&state.state_dir);
+
+        // 生成 profile 文件（状态目录内，进程+纳秒保证唯一）。
         let profile = build_profile(&write_roots, &protect, req.readonly);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -168,7 +179,11 @@ impl SandboxChild {
 /// 生成 Seatbelt profile 文本。
 ///
 /// 写隔离：`(deny default)` + 全机可读 + 仅可写根/临时目录可写。
-/// 注意：可写根路径直接拼进 `(subpath "...")`，workspace 路径通常不含双引号。
+/// 注意：
+///   - 可写根路径直接拼进 `(subpath "...")`，workspace 路径通常不含双引号；
+///   - Seatbelt 同一规则内多个 filter 默认按 AND 组合，因此临时目录的两条 subpath
+///     拆成两条独立 allow 规则（否则会退化为「既在 /private/tmp 又在 /var/folders」
+///     的空集，导致临时目录反而不可写）。
 fn build_profile(write_roots: &[PathBuf], protect: &[PathBuf], readonly: bool) -> String {
     let mut lines: Vec<String> = vec![
         "(version 1)".to_string(),
@@ -180,8 +195,8 @@ fn build_profile(write_roots: &[PathBuf], protect: &[PathBuf], readonly: bool) -
         // 全机可读（枚举路径会导致 SIGABRT，因此用整机可读兜底）。
         "(allow file-read* (subpath \"/\"))".to_string(),
         // 临时目录可写（编译器/包管理器需要）。
-        "(allow file-read* file-write* (subpath \"/private/tmp\") (subpath \"/var/folders\"))"
-            .to_string(),
+        "(allow file-read* file-write* (subpath \"/private/tmp\"))".to_string(),
+        "(allow file-read* file-write* (subpath \"/var/folders\"))".to_string(),
     ];
 
     if !readonly {
@@ -202,4 +217,34 @@ fn build_profile(write_roots: &[PathBuf], protect: &[PathBuf], readonly: bool) -
 
     lines.push("(allow network*)".to_string());
     lines.join("\n") + "\n"
+}
+
+/// 回收状态目录中过期的 Seatbelt profile 文件（`seatbelt-*.sb`）。
+///
+/// profile 不能随 session drop 立即删除：`spawn()` 返回时 `sandbox-exec` 可能尚未读完
+/// profile 文件，立即删除会产生竞态。因此改为惰性 GC——只删除超过 1 小时的旧文件，
+/// 正常运行中的沙盒完全不受影响。
+fn gc_stale_profiles(state_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(state_dir) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.starts_with("seatbelt-") || !name.ends_with(".sb") {
+            continue;
+        }
+        if let Ok(meta) = entry.metadata() {
+            if let Ok(modified) = meta.modified() {
+                if let Ok(age) = now.duration_since(modified) {
+                    if age > std::time::Duration::from_secs(3600) {
+                        let _ = std::fs::remove_file(entry.path());
+                    }
+                }
+            }
+        }
+    }
 }

@@ -112,6 +112,9 @@ pub fn current_env() -> BTreeMap<String, String> {
 /// PROC_THREAD_ATTRIBUTE_JOB_LIST：在进程创建时原子挂入 Job Object。
 const PROC_THREAD_ATTRIBUTE_JOB_LIST: usize = 0x0002_000D;
 
+/// 创建进程时不出控制台窗口（cmd/powershell 是控制台程序，缺此标志会弹黑窗口）。
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// 持有由 `InitializeProcThreadAttributeList` 分配/初始化的属性列表缓冲区。
 struct ProcThreadAttributeList {
     buffer: Vec<u8>,
@@ -394,7 +397,7 @@ pub fn create_sandboxed_process(
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             1, // bInheritHandles
-            CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+            CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
             env_block.as_mut_ptr() as *mut c_void,
             cwd_wide.as_mut_ptr(),
             &si.StartupInfo,

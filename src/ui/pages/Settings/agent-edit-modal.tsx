@@ -22,7 +22,7 @@ import './agent-edit-modal.scss'
 import { showToast } from '@/ui/components/shared/Toast'
 import { toolRegistry } from '@/domain/tools'
 import { TOOL_CATEGORIES } from '@/domain/tools/category'
-import { ToolDefinition } from '@/domain/tools/types'
+import { ResolvedToolDefinition } from '@/domain/tools/types'
 import { uuid } from '@/utils/uuid'
 
 /** 支持 indeterminate 状态的三态复选框组件 */
@@ -96,7 +96,7 @@ export default function AgentEditModal({
     const p = providers.find((p) => p.id === providerConfigId)
     return p ? p.models : []
   }, [providerConfigId, providers])
-  const [allTools, setAllTools] = useState([] as ToolDefinition[])
+  const [allTools, setAllTools] = useState([] as ResolvedToolDefinition[])
 
   useEffect(() => {
     ;(async () => {
@@ -224,7 +224,7 @@ export default function AgentEditModal({
   const groupedTools = useMemo(() => {
     const grouped: Array<{
       category: (typeof TOOL_CATEGORIES)[0]
-      tools: ToolDefinition[]
+      tools: ResolvedToolDefinition[]
     }> = []
 
     const usedNames = new Set<string>()

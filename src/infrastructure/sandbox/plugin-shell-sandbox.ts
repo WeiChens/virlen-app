@@ -30,17 +30,6 @@ function guessPlatformSync(): 'windows' | 'macos' | 'linux' {
 }
 
 /**
- * 检测命令是否包含 cmd 特有语法（&&、||、>nul 等）
- */
-function hasCmdSyntax(cmd: string): boolean {
-  if (/&&|\|\|/.test(cmd)) return true
-  if (/[12]?>nul\b/.test(cmd)) return true
-  if (/<nul\b/.test(cmd)) return true
-  if (/\becho\b/i.test(cmd) && /[>|]/.test(cmd)) return true
-  return false
-}
-
-/**
  * 跨平台杀进程树
  */
 async function killProcessTree(shellName: string, child: Child): Promise<void> {
@@ -77,14 +66,10 @@ export class PluginShellSandbox implements SandboxPort {
     let shell: string
     let args: string[]
 
-    if (isWin && hasCmdSyntax(command)) {
-      // cmd 内部命令（dir、mkdir、&&、>nul 等）
-      shell = 'cmd'
-      args = ['/c', command]
-    } else if (isWin) {
-      // PowerShell 处理更复杂的逻辑
+    if (isWin) {
+      // Windows 统一走 Windows PowerShell 5.1（powershell.exe），不再混用 cmd
       shell = 'powershell'
-      args = ['-Command', command]
+      args = ['-NoProfile', '-Command', command]
     } else if (isMac) {
       // macOS Catalina+ 默认 shell 为 zsh
       shell = 'zsh'

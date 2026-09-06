@@ -8,12 +8,18 @@ pub fn canonicalize_path(path: &Path) -> PathBuf {
     dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// 规范化路径键：统一分隔符、统一小写（Windows 路径大小写不敏感）。
+/// 规范化路径键：统一分隔符；Windows/macOS 再统一小写（两者默认大小写不敏感）。
+/// Linux 保留原大小写（大小写敏感），避免 `/Foo` 与 `/foo` 被误判为同一路径。
 pub fn canonical_path_key(path: &Path) -> String {
-    canonicalize_path(path)
-        .to_string_lossy()
-        .replace('\\', "/")
-        .to_ascii_lowercase()
+    let normalized = canonicalize_path(path).to_string_lossy().replace('\\', "/");
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    {
+        normalized.to_ascii_lowercase()
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        normalized
+    }
 }
 
 pub fn same_path_key(a: &Path, b: &Path) -> bool {
@@ -31,6 +37,7 @@ pub fn root_contains_path(root: &Path, path: &Path) -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     #[test]
     fn key_normalizes_case_and_separators() {
         assert_eq!(

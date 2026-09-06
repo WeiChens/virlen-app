@@ -2,8 +2,9 @@
  * execute_command — 执行一条 shell 命令，自动超时杀进程
  *
  * shell 选择策略：
- * - Windows: 命令含 cmd 特有语法（&& || >nul 2>nul <nul）时用 cmd，否则用 powershell
- * - macOS/Linux: sh
+ * - Windows: Windows PowerShell 5.1（powershell.exe，不再混用 cmd）
+ * - macOS: zsh
+ * - Linux: sh
  */
 
 import { toolRegistry } from '@/domain/tools'
@@ -22,38 +23,6 @@ import { securityService } from '@/services/security-service'
 import { registerPendingApproval } from './command-approval'
 import { toolOutputStore } from '../output-store'
 import { processTerminalOutput } from '../terminal-output'
-
-/**
- * 检测命令是否包含 cmd 特有语法。
- * 条件宽松——宁可误判也不要漏判，误判发到 cmd 也能正常工作。
- */
-function hasCmdSyntax(cmd: string): boolean {
-  // 运算符链：&&  ||  注意排除 powershell 的 -and / -or
-  // ⚠️ 不能用 \b 包裹 && / ||，因为 & 和 | 是非单词字符，
-  // 两边的空格也是非单词字符，\b 永远匹配不上（详见下方测试注释）
-  if (/&&|\|\|/.test(cmd)) return true
-
-  // 重定向：>nul  2>nul  <nul  （powershell 里是 $null）
-  if (/[12]?>nul\b/.test(cmd)) return true
-  if (/<nul\b/.test(cmd)) return true
-
-  // 管道中间有 echo（cmd 风格 > nul 后面加内容，powershell 风格不同）
-  if (/\becho\b/i.test(cmd) && /[>|]/.test(cmd)) return true
-
-  return false
-}
-
-/**
- * 检测命令是否已经是 shell 包装调用（powershell / pwsh / cmd / sh / bash / zsh 等）。
- * 如果直接给 `powershell -NoProfile -Command "..."` 这类命令再套一层 powershell，
- * 外层解析脚本会展开内层双引号里的 `$` 变量（如 $_）。此时改用 cmd /s /c 原样透传。
- */
-function isShellWrapperInvocation(cmd: string): boolean {
-  const trimmed = cmd.trimStart()
-  return /^(?:[a-z]:[\\/][^ \t"]*[\\/])?(?:powershell|pwsh|cmd|sh|bash|zsh|dash)(?:\.exe|\.cmd|\.bat)?\b/i.test(
-    trimmed,
-  )
-}
 
 /**
  * 引号感知：提取命令段第一个 token。
@@ -306,25 +275,92 @@ function getRiskInfo(risk: string): { label: string; hint: string } {
   }
 }
 
+/**
+ * ===== 平台探测（权威来源优先）=====
+ * 主来源：Rust os_platform（std::env::consts::OS）。
+ * UA 只是兜底：仅当 os_platform 尚未解析完成时才临时使用。
+ * 权威值缓存进 _platform 后，描述与执行路径统一读同一缓存，不再依赖两套探测。
+ */
+
+/** UA 启发式兜底（navigator.userAgent 可被 WebView 覆盖，仅作临时兜底）。 */
+function platformFromUA(): 'windows' | 'macos' | 'linux' {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+  if (/Windows/i.test(ua)) return 'windows'
+  if (/Mac/i.test(ua)) return 'macos'
+  return 'linux'
+}
+
+/** 缓存的平台字符串，来自 Rust os_platform（权威来源）。 */
+let _platform: string | undefined
+
+/** 权威平台探测（os_platform），失败时 UA 兜底；结果缓存，同一进程只解析一次。 */
+async function detectPlatform(): Promise<string> {
+  if (_platform) return _platform
+  try {
+    _platform = await invoke<string>('os_platform')
+  } catch {
+    _platform = platformFromUA()
+  }
+  return _platform
+}
+
+/** 描述惰性求值用的同步快照：优先权威缓存，os_platform 未就绪时用 UA 兜底。 */
+function platformSnapshot(): string {
+  return _platform || platformFromUA()
+}
+
+// 模块加载后立即预热权威平台，让首轮 listDefinitions() 生成描述时即可拿到 os_platform 结果
+void detectPlatform()
+
+/** 沙盒模式通用说明（三平台共用尾部）。 */
+const SANDBOX_NOTE =
+  '结果首行是「终端环境」提示，报告沙盒模式——' +
+  '「写隔离」（只能在 workspace/白名单可写根内写入，区外写入会被拒绝）、' +
+  '「只读」（不可写）、或「无沙盒」（完整权限）。退出码 >= 2 表示命令执行失败。'
+
+/** 平台特定的工具描述。 */
+function buildToolDescription(platform: string): string {
+  const prefix =
+    platform === 'windows'
+      ? '执行任意 shell 命令。当前终端是 Windows PowerShell 5.1（powershell.exe），请使用 PowerShell 语法（不是 cmd）。'
+      : platform === 'macos'
+        ? '执行任意 shell 命令。当前终端是 zsh（macOS）。'
+        : '执行任意 shell 命令。当前终端是 sh（Linux/POSIX）。'
+  return (
+    prefix +
+    '仅在无专用工具时使用（git、npm、构建等）。' +
+    '文件/文本操作优先用 read_file、edit_file、write_file、search_* 等专用工具。' +
+    SANDBOX_NOTE
+  )
+}
+
+/** 平台特定的 command 参数描述。 */
+function buildCommandDescription(platform: string): string {
+  if (platform === 'windows') {
+    return (
+      '要执行的命令（PowerShell 语法，如 "Get-ChildItem"、"git status"、"node --version"）。' +
+      '支持管道、重定向（>$null / 2>$null）、分号顺序执行；不支持 && / ||。'
+    )
+  }
+  if (platform === 'macos') {
+    return '要执行的命令（zsh 语法，如 "ls -la"、"git status"、"node --version"）。支持 &&/|| 串联、管道、重定向。'
+  }
+  return '要执行的命令（sh/POSIX 语法，如 "ls -la"、"git status"、"node --version"）。支持 &&/|| 串联、管道、重定向。'
+}
+
 toolRegistry.register(
   {
     name: 'execute_command',
     label: t('执行命令'),
-    description:
-      '执行任意 shell 命令。仅在无专用工具时使用（git、npm、构建等）。' +
-      '文件/文本操作优先用 read_file、edit_file、write_file、search_* 等专用工具。' +
-      '结果首行是「终端环境」提示：Windows 下会报告沙盒模式——' +
-      '「写隔离」（只能在 workspace/白名单可写根内写入，区外写入会被拒绝）、' +
-      '「只读」（不可写）、或「无沙盒」（完整权限）。退出码 >= 2 表示命令执行失败。',
+    // 惰性描述：listDefinitions() 真正序列化给 LLM 时才求值。
+    // 届时 platformSnapshot() 已大概率拿到 Rust os_platform 的权威平台（模块加载时已预热）。
+    description: () => buildToolDescription(platformSnapshot()),
     parameters: {
       type: 'object',
       properties: {
         command: {
           type: 'string',
-          description:
-            '要执行的命令（如 "dir"、"git status"、"node --version"）。' +
-            '支持标准 shell 语法：&&/|| 串联、管道、重定向（>nul、2>nul）。' +
-            'Windows 下 shell（cmd 或 PowerShell）会根据命令内容自动选择。',
+          description: () => buildCommandDescription(platformSnapshot()),
         },
         tips: {
           type: 'string',
@@ -408,24 +444,6 @@ async function killProcessTree(
   }
 }
 
-/** 缓存的平台字符串，来自 Rust os_platform */
-let _platform: string | undefined
-
-/** 获取当前平台标识（'windows' | 'linux' | 'macos'） */
-async function detectPlatform(): Promise<string> {
-  if (_platform) return _platform
-  try {
-    _platform = await invoke<string>('os_platform')
-  } catch {
-    // navigator.platform 已废弃，改用 userAgent
-    const ua = navigator.userAgent
-    if (/Windows/i.test(ua)) _platform = 'windows'
-    else if (/Mac/i.test(ua)) _platform = 'macos'
-    else _platform = 'linux'
-  }
-  return _platform
-}
-
 async function runCommand(
   cmdStr: string,
   cwd: string,
@@ -444,22 +462,12 @@ async function runCommand(
   let shellName: string
   let shellArgs: string[]
 
-  if (isWin && (hasCmdSyntax(cmdStr) || isShellWrapperInvocation(cmdStr))) {
-    // ⚠️ 已知限制：本路径（plugin-shell）底层是 StdCommand::new().args([...])，
-    // Rust 会把含空格/引号的 cmdStr 包裹在 "..." 中、内部 " 转义成 \"，
-    // 而 cmd.exe 把 \ 当普通字符，\" 不会还原成 "（cmd /s 只会剥首尾引号），
-    // 因此嵌套引号命令（如 findstr /i "a b"）在此路径下会被撕碎 → 退出码 1。
-    // 该问题在 Rust 原生 execute_command（native_tools.rs run_command_native）
-    // 已用 CommandExt::raw_arg 原样拼接命令行修复；本 JS 桥仅在原生安全配置
-    // 缺失时回退使用，属罕见路径。若无插件支持 raw command line，无法在此彻底修复。
-    // 另外，isShellWrapperInvocation 命中的 powershell -Command "..." 命令也走 cmd
-    // 透传，避免外层 powershell 展开内层双引号里的 $ 变量（如 $_）。
-    shellName = 'cmd'
-    shellArgs = ['/s', '/c', cmdStr]
-  } else if (isWin) {
+  if (isWin) {
+    // Windows 统一走 Windows PowerShell 5.1（powershell.exe），不再混用 cmd。
+    // 先切到 UTF-8 输出，避免中文系统默认 GBK 使管道输出乱码（与 Rust 原生路径对齐）。
     shellName = 'powershell'
-    // 先切到 UTF-8 输出，避免中文系统默认 GBK 使管道输出乱码（与 Rust 原生路径对齐）
     shellArgs = [
+      '-NoProfile',
       '-Command',
       `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ${cmdStr}`,
     ]
