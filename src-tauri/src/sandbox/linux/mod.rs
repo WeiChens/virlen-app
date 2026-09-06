@@ -113,8 +113,14 @@ impl SandboxSession {
         // 4) spawn。
         let mut child = cmd.spawn().context("spawn sandboxed process")?;
         let pid = child.id();
-        let stdout = child.stdout.take().map(std::fs::File::from);
-        let stderr = child.stderr.take().map(std::fs::File::from);
+        let stdout = child
+            .stdout
+            .take()
+            .map(|s| std::fs::File::from(std::os::fd::OwnedFd::from(s)));
+        let stderr = child
+            .stderr
+            .take()
+            .map(|s| std::fs::File::from(std::os::fd::OwnedFd::from(s)));
         Ok(SandboxChild {
             pid,
             stdout,
