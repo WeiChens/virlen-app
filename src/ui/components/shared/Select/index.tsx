@@ -16,6 +16,7 @@ import './style.scss'
 export interface SelectOption {
   value: any
   label: string
+  title?: string,
 }
 
 interface SelectProps {
@@ -181,7 +182,8 @@ function Select({
               role="option"
               aria-selected={opt.value === value}
               onClick={(e) => { e.stopPropagation(); handleSelect(opt) }}
-              onMouseEnter={() => setActiveIndex(i)}>
+              onMouseEnter={() => setActiveIndex(i)}
+              title={opt.title}>
               {opt.label}
             </div>
           ))}

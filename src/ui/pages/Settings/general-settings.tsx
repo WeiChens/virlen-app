@@ -24,9 +24,9 @@ function GeneralSettings() {
     value: SettingsStore['language']
     label: string
   }[] = [
-    { value: 'zh-CN', label: t('简体中文') },
-    { value: 'en-US', label: t('English') },
-  ]
+      { value: 'zh-CN', label: t('简体中文') },
+      { value: 'en-US', label: t('English') },
+    ]
 
   const THEME_OPTIONS: { value: SettingsStore['theme']; label: string }[] = [
     { value: 'system', label: t('跟随系统') },
@@ -38,10 +38,10 @@ function GeneralSettings() {
     value: SettingsStore['fontSize']
     label: string
   }[] = [
-    { value: 'small', label: t('小') },
-    { value: 'medium', label: t('中') },
-    { value: 'large', label: t('大') },
-  ]
+      { value: 'small', label: t('小') },
+      { value: 'medium', label: t('中') },
+      { value: 'large', label: t('大') },
+    ]
 
   const MAX_TOKENS_OPTIONS: { value: number; label: string }[] = [
     { value: 8192, label: '8K' },
@@ -71,9 +71,9 @@ function GeneralSettings() {
     value: 'agent' | 'workspace'
     label: string
   }[] = [
-    { value: 'agent', label: t('按 Agent') },
-    { value: 'workspace', label: t('按工作目录') },
-  ]
+      { value: 'agent', label: t('按 Agent') },
+      { value: 'workspace', label: t('按工作目录') },
+    ]
 
   const APPROVAL_MODE_OPTIONS: { value: CommandApprovalMode; label: string }[] =
     [
@@ -83,10 +83,10 @@ function GeneralSettings() {
       { value: 'none', label: t('关闭（不弹窗）') },
     ]
 
-  const SANDBOX_MODE_OPTIONS: { value: SandboxMode; label: string }[] = [
-    { value: 'on', label: t('开启（写隔离）') },
-    { value: 'readonly', label: t('只读') },
-    { value: 'off', label: t('关闭') },
+  const SANDBOX_MODE_OPTIONS: { value: SandboxMode; label: string, title: string }[] = [
+    { value: 'on', label: t('默认模式'), title: t('默认模式，有读文件的权限，只能在工作目录里有写的权限') },
+    { value: 'readonly', label: t('只读模式'), title: t('只读模式，只有读文件的权限，无法写入文件') },
+    { value: 'off', label: t('完全访问模式'), title: t('完全访问模式，可以访问系统文件，有风险，请谨慎使用') },
   ]
 
   useEffect(() => {
@@ -393,9 +393,9 @@ function GeneralSettings() {
         </div>
         <div className="setting-row">
           <div className="setting-label">
-            <span className="label-text">{t('终端沙盒')}</span>
+            <span className="label-text">{t('终端权限')}</span>
             <span className="label-desc">
-              {t('对终端命令做 OS 级写隔离：开启后命令只能写工作目录与白名单目录')}
+              {t('对终端命令权限的设定')}
             </span>
           </div>
           <div className="setting-control">
