@@ -26,3 +26,5 @@ src-tauri/target
 # MSIX 打包临时产物（脚本生成）
 src-tauri/target/msix-stage
 *.msix
+
+docs/
