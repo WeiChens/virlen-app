@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { settingsState, resolveDefaultWorkspace } from '@/ui/store'
-import type { SettingsStore, CommandApprovalMode } from '@/ui/store'
+import type { SettingsStore, CommandApprovalMode, SandboxMode } from '@/ui/store'
 import { showToast } from '@/ui/components/shared/Toast'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
 import Select from '@/ui/components/shared/Select'
@@ -82,6 +82,12 @@ function GeneralSettings() {
       { value: 'install', label: t('安装+高危弹窗') },
       { value: 'none', label: t('关闭（不弹窗）') },
     ]
+
+  const SANDBOX_MODE_OPTIONS: { value: SandboxMode; label: string }[] = [
+    { value: 'on', label: t('开启（写隔离）') },
+    { value: 'readonly', label: t('只读') },
+    { value: 'off', label: t('关闭') },
+  ]
 
   useEffect(() => {
     if (!s.defaultWorkspace) {
@@ -384,6 +390,22 @@ function GeneralSettings() {
             t('高危命令和安装类命令执行前弹窗确认，安全命令直接执行')}
           {s.commandApprovalMode === 'none' &&
             t('所有命令直接执行，不再弹窗确认')}
+        </div>
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="label-text">{t('终端沙盒')}</span>
+            <span className="label-desc">
+              {t('对终端命令做 OS 级写隔离：开启后命令只能写工作目录与白名单目录')}
+            </span>
+          </div>
+          <div className="setting-control">
+            <Select
+              value={s.sandboxMode}
+              onChange={(v) => update('sandboxMode', v as SandboxMode)}
+              options={SANDBOX_MODE_OPTIONS}
+              width={160}
+            />
+          </div>
         </div>
         <div className="setting-row">
           <div className="setting-label">

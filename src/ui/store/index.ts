@@ -42,6 +42,7 @@ export { settingsState, resolveDefaultWorkspace } from './settingStore'
 export type {
   SettingsStore,
   CommandApprovalMode,
+  SandboxMode,
   QuickInputTemplate,
   SessionGroupType,
 } from './settingStore'

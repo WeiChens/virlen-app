@@ -13,6 +13,8 @@ mod vision_service;
 mod search;
 mod speech_service;
 mod task_manager;
+#[cfg(target_os = "windows")]
+mod sandbox;
 
 /// 将文件或目录移动到系统回收站（跨平台）
 #[tauri::command]
@@ -22,6 +24,20 @@ async fn move_to_trash(path: String) -> Result<(), String> {
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// 沙盒诊断：查看状态目录、能力 SID、环境变量覆盖（仅 Windows）。
+#[tauri::command]
+fn sandbox_diagnostics() -> serde_json::Value {
+    #[cfg(target_os = "windows")]
+    {
+        serde_json::to_value(sandbox::diagnostics())
+            .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        serde_json::json!({ "error": "sandbox only available on Windows" })
+    }
 }
 
 #[tauri::command]
@@ -254,6 +270,7 @@ pub fn run() {
             canonicalize_path,
             check_is_directory,
             move_to_trash,
+            sandbox_diagnostics,
             load_env::get_env_info,
             common_service::grant_permissions,
             vision_service::vision_analyze,

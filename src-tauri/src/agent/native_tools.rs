@@ -16,7 +16,9 @@ use super::event_sink::EventSink;
 use super::types::NativeToolSecurity;
 use crate::file_ops;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
@@ -595,13 +597,16 @@ fn kill_process_tree(pid: u32) {
 // 运行中命令注册表 — 支持前端「终止」按钮（ToolOutput.kill）
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// 运行中命令条目：记录子进程 pid、kill 请求标志和 Job Object 守护
+/// 终止器：一键杀整棵进程树（闭包捕获 Job Object / 沙盒 Job 等）。
+type Terminator = Arc<dyn Fn() + Send + Sync>;
+
+/// 运行中命令条目：记录子进程 pid、kill 请求标志和终止器
 struct RunningCommand {
     pid: u32,
     /// 前端点击「终止」后置位，等待循环检测到后按用户取消处理
     kill_requested: Arc<AtomicBool>,
-    /// Windows Job Object 守护：终止时一键杀整棵进程树（无 Job 时为 None）
-    guard: Option<Arc<super::process_tree::ProcessTreeGuard>>,
+    /// 终止器：一键杀整棵进程树（无则为 None，仅递归 taskkill 兜底）
+    terminator: Option<Terminator>,
 }
 
 /// 运行中命令注册表：tool_call_id → RunningCommand
@@ -612,7 +617,7 @@ static RUNNING_COMMANDS: LazyLock<Mutex<HashMap<String, RunningCommand>>> =
 fn register_running_command(
     tool_call_id: &str,
     pid: u32,
-    guard: Option<Arc<super::process_tree::ProcessTreeGuard>>,
+    terminator: Option<Terminator>,
 ) -> Arc<AtomicBool> {
     let kill_requested = Arc::new(AtomicBool::new(false));
     RUNNING_COMMANDS.lock().unwrap().insert(
@@ -620,7 +625,7 @@ fn register_running_command(
         RunningCommand {
             pid,
             kill_requested: kill_requested.clone(),
-            guard,
+            terminator,
         },
     );
     kill_requested
@@ -638,13 +643,13 @@ pub fn kill_running_command(tool_call_id: &str) -> bool {
     let entry = {
         let map = RUNNING_COMMANDS.lock().unwrap();
         map.get(tool_call_id)
-            .map(|c| (c.pid, c.kill_requested.clone(), c.guard.clone()))
+            .map(|c| (c.pid, c.kill_requested.clone(), c.terminator.clone()))
     };
-    if let Some((pid, kill_requested, guard)) = entry {
+    if let Some((pid, kill_requested, terminator)) = entry {
         kill_requested.store(true, Ordering::SeqCst);
         // 优先 Job Object 一键全杀；再递归 taskkill 兜底
-        if let Some(g) = &guard {
-            g.terminate();
+        if let Some(t) = &terminator {
+            t();
         }
         kill_process_tree(pid);
         true
@@ -859,6 +864,20 @@ async fn run_command_native(
     let platform = std::env::consts::OS;
     let is_win = platform == "windows";
 
+    // Windows：优先走沙盒（OS 级写隔离）。off 模式或 prepare/spawn 失败则降级到下方裸跑路径。
+    #[cfg(target_os = "windows")]
+    let mut sandbox_degraded = false;
+    #[cfg(target_os = "windows")]
+    if is_win && sandbox_mode(ctx) != SandboxMode::Off {
+        match run_command_sandboxed(ctx, cmd_str, timeout_secs).await {
+            Ok(outcome) => return Ok(outcome),
+            Err(e) => {
+                eprintln!("[sandbox] degraded to bare run: {e}");
+                sandbox_degraded = true;
+            }
+        }
+    }
+
     let (shell, args): (&str, Vec<String>) = if is_win {
         if has_cmd_syntax(cmd_str) || is_shell_wrapper_invocation(cmd_str) {
             // 命令已包含 shell 包装（powershell -Command "..." / cmd /c 等）时不再套一层 powershell：
@@ -935,7 +954,10 @@ async fn run_command_native(
     let guard = guard.map(std::sync::Arc::new);
 
     // 注册到运行中命令表，支持前端「终止」按钮（ToolOutput.kill）
-    let kill_requested = register_running_command(ctx.tool_call_id, pid, guard.clone());
+    let terminator: Option<Terminator> = guard
+        .clone()
+        .map(|g| Arc::new(move || g.terminate()) as Terminator);
+    let kill_requested = register_running_command(ctx.tool_call_id, pid, terminator);
 
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
@@ -1041,6 +1063,11 @@ async fn run_command_native(
             code = done_rx.recv() => {
                 exit_code = code;
                 got_exit = true;
+                // kill 请求已置位：进程退出是 kill 的结果，按用户取消处理，
+                // 避免与 done_rx 竞态导致返回「退出码」而非「已取消」。
+                if kill_requested.load(Ordering::SeqCst) {
+                    killed_by_user = true;
+                }
             }
             // 前端「终止」按钮：kill_running_command 已杀进程树，这里按用户取消处理
             _ = wait_for_kill_request(&kill_requested), if !killed_by_timeout && !killed_by_user => {
@@ -1123,7 +1150,46 @@ async fn run_command_native(
         exit_code.flatten()
     };
 
+    #[cfg(target_os = "windows")]
+    let env_note = {
+        let mode = if sandbox_mode(ctx) == SandboxMode::Off {
+            "无沙盒（已关闭，完整权限）"
+        } else if sandbox_degraded {
+            "无沙盒（沙盒不可用，已降级，完整权限）"
+        } else {
+            "无沙盒（完整权限）"
+        };
+        format!("终端环境: {shell} · {mode}")
+    };
+    #[cfg(not(target_os = "windows"))]
+    let env_note = format!("终端环境: {shell}");
+
+    Ok(build_command_result(
+        stdout,
+        stderr,
+        exit_code,
+        killed_by_user,
+        killed_by_timeout,
+        timeout_secs,
+        &env_note,
+    ))
+}
+
+/// 组装命令执行结果（裸跑与沙盒两条路径共用）。`env_note` 为首行环境提示。
+fn build_command_result(
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+    killed_by_user: bool,
+    killed_by_timeout: bool,
+    timeout_secs: i64,
+    env_note: &str,
+) -> NativeToolOutcome {
     let mut result = String::new();
+    if !env_note.is_empty() {
+        result.push_str(env_note);
+        result.push('\n');
+    }
     if killed_by_user {
         result.push_str("命令已被用户取消\n");
     } else if killed_by_timeout {
@@ -1151,18 +1217,387 @@ async fn run_command_native(
 
     if let Some(code) = exit_code {
         if code >= 2 {
-            return Ok(NativeToolOutcome::Error(out));
+            return NativeToolOutcome::Error(out);
         }
     }
 
-    Ok(NativeToolOutcome::Value {
+    NativeToolOutcome::Value {
         content: out,
         ui_data: Some(json!({
             "stdout": stdout,
             "stderr": stderr,
             "exitCode": exit_code,
         })),
-    })
+    }
+}
+
+/// 终端沙盒运行模式。
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SandboxMode {
+    On,
+    Off,
+    Readonly,
+}
+
+/// 解析当前沙盒模式：环境变量 VIRLEN_SANDBOX 优先（临时覆盖），
+/// 否则回退到 security.sandbox_mode（默认 on）。
+#[cfg(target_os = "windows")]
+fn sandbox_mode(ctx: &NativeToolCtx<'_>) -> SandboxMode {
+    if let Ok(v) = std::env::var("VIRLEN_SANDBOX") {
+        match v.to_ascii_lowercase().as_str() {
+            "off" | "0" | "false" => return SandboxMode::Off,
+            "readonly" | "ro" => return SandboxMode::Readonly,
+            "on" | "1" | "true" => return SandboxMode::On,
+            _ => {}
+        }
+    }
+    match ctx.security.sandbox_mode.to_ascii_lowercase().as_str() {
+        "off" | "0" | "false" => SandboxMode::Off,
+        "readonly" | "ro" => SandboxMode::Readonly,
+        _ => SandboxMode::On,
+    }
+}
+
+/// 展开路径中的 %VAR% 环境变量占位符（Windows 白名单默认值含 %USERPROFILE%）。
+#[cfg(target_os = "windows")]
+fn expand_env_vars(path: &str) -> PathBuf {
+    let s = path.replace('\\', "/");
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '%' {
+            if let Some(j) = (i + 1..chars.len()).position(|k| chars[k] == '%') {
+                let name: String = chars[i + 1..i + 1 + j].iter().collect();
+                let val = std::env::var(&name).unwrap_or_else(|_| format!("%{name}%"));
+                out.push_str(&val.replace('\\', "/"));
+                i += j + 2;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    PathBuf::from(out)
+}
+
+/// 从 whitelist 收集终端可写根（M6 映射）。
+///
+/// 规则：
+///   1. 展开 %VAR% 环境变量占位符；
+///   2. 跳过 skills_dir（只读，走 protect）；
+///   3. 只保留「存在且是目录」的路径（不存在的跳过，避免 prepare 失败降级）；
+///   4. 跳过「包含 workspace 的祖先目录」——workspace 本身已是写根，祖先目录会把
+///      整个父目录变成终端可写，破坏写隔离（如 whitelist 默认含 Documents，
+///      而 workspace 是 Documents/test/demo 时，绝不能让 demo2 也变得可写）。
+#[cfg(target_os = "windows")]
+fn collect_extra_roots(
+    whitelist: &[String],
+    workspace: &str,
+    skills_dir: Option<&str>,
+) -> Vec<PathBuf> {
+    let workspace_path = PathBuf::from(workspace);
+    let mut extra_roots: Vec<PathBuf> = Vec::new();
+    for w in whitelist {
+        let p = expand_env_vars(w);
+        if let Some(sd) = skills_dir {
+            if crate::sandbox::paths::same_path_key(p.as_path(), std::path::Path::new(sd)) {
+                continue;
+            }
+        }
+        if !p.is_dir() {
+            continue;
+        }
+        if crate::sandbox::paths::root_contains_path(p.as_path(), workspace_path.as_path()) {
+            continue;
+        }
+        extra_roots.push(p);
+    }
+    extra_roots
+}
+
+#[cfg(target_os = "windows")]
+async fn run_command_sandboxed(
+    ctx: &NativeToolCtx<'_>,
+    cmd_str: &str,
+    timeout_secs: i64,
+) -> Result<NativeToolOutcome, String> {
+    use std::io::Read;
+    use tokio::sync::mpsc;
+    use tokio::time::sleep;
+
+    // 1) 选择 shell。
+    // 注意：沙盒进程运行在受限令牌下，PowerShell 会进入约束语言模式（CLM），
+    // `[Console]::OutputEncoding = ...` 这类属性设置会被拒绝
+    // （PropertySetterNotSupportedInConstrainedLanguage），导致脚本第一条语句就抛异常、
+    // 后续命令全部不执行。因此这里**不**加 UTF-8 前缀，中文输出靠 decode_output 的
+    // GBK 兜底解码（与裸跑路径的 UTF-8 前缀不同）。
+    let (shell, args, raw_cmdline): (&str, Vec<String>, Option<String>) = {
+        if has_cmd_syntax(cmd_str) || is_shell_wrapper_invocation(cmd_str) {
+            (
+                "cmd",
+                vec!["/s".into(), "/c".into(), cmd_str.into()],
+                Some(format!("cmd.exe /s /c {}", cmd_str)),
+            )
+        } else {
+            ("powershell", vec!["-Command".into(), cmd_str.to_string()], None)
+        }
+    };
+
+    // 2) 构建沙盒请求
+    //    写根 = workspace + whitelist 中「存在且是目录」的可写目录（排除 skills_dir）；
+    //    保护 = skills_dir（deny-write）；.git/.hg/.svn/.codex/.agents 由 prepare 默认保护。
+    //    whitelist 可能含 %VAR% 占位符或已失效路径，逐条展开并过滤，避免单条失败导致整体降级。
+    let readonly_mode = sandbox_mode(ctx) == SandboxMode::Readonly;
+    let skills_dir = ctx.security.skills_dir.clone();
+    let extra_roots = if readonly_mode {
+        // readonly 模式不授予任何写根（whitelist 也不映射为可写根），否则 prepare 会因
+        // 「readonly + extra_roots」冲突而失败 → 静默降级裸跑，丧失只读保护。
+        Vec::new()
+    } else {
+        collect_extra_roots(&ctx.security.whitelist, &ctx.security.workspace, skills_dir.as_deref())
+    };
+    let mut protect: Vec<PathBuf> = Vec::new();
+    if let Some(sd) = &skills_dir {
+        let sp = PathBuf::from(sd);
+        if sp.exists() {
+            protect.push(sp);
+        }
+    }
+
+    let req = crate::sandbox::SandboxRequest {
+        cwd: PathBuf::from(&ctx.security.workspace),
+        extra_roots,
+        protect,
+        readonly: readonly_mode,
+    };
+    let state = crate::sandbox::state::SandboxState::from_default_or(None)
+        .map_err(|e| format!("sandbox state init failed: {e}"))?;
+    let session = crate::sandbox::SandboxSession::prepare(&req, &state)
+        .map_err(|e| format!("sandbox prepare failed: {e}"))?;
+
+    // 3) 环境变量（与裸跑路径一致）
+    let mut env_extra = BTreeMap::new();
+    env_extra.insert("PYTHONIOENCODING".to_string(), "utf-8".to_string());
+    if let Some(skills_dir) = &ctx.security.skills_dir {
+        env_extra.insert("SKILL_ROOT".to_string(), skills_dir.clone());
+    }
+
+    // 4) spawn（受限令牌 + CreateProcessAsUserW）
+    let command_argv: Vec<String> = std::iter::once(shell.to_string())
+        .chain(args.iter().cloned())
+        .collect();
+    let child = session
+        .spawn(&command_argv, raw_cmdline.as_deref(), &env_extra)
+        .map_err(|e| format!("sandbox spawn failed: {e}"))?;
+    // token 已不再需要，尽早关闭（也避免 HANDLE 跨 await）。
+    drop(session);
+
+    let crate::sandbox::SandboxChild {
+        process,
+        job,
+        stdout,
+        stderr,
+        pid,
+    } = child;
+    let job = Arc::new(job);
+
+    // 注册到运行中命令表，支持前端「终止」按钮
+    let job_for_kill = job.clone();
+    let terminator: Option<Terminator> = Some(Arc::new(move || job_for_kill.terminate()));
+    let kill_requested = register_running_command(ctx.tool_call_id, pid, terminator);
+
+    // 5) 实时输出：管道读端在 spawn_blocking 线程里阻塞 read，经 mpsc 回传
+    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<(String, String)>();
+    let stdout_tx = out_tx.clone();
+    let stderr_tx = out_tx.clone();
+    drop(out_tx);
+
+    let stdout_handle = tokio::task::spawn_blocking(move || {
+        if let Some(mut out) = stdout {
+            let mut buf = Vec::new();
+            let mut chunk = vec![0u8; 8192];
+            let mut decoder = TerminalDecoder::new();
+            loop {
+                let n = match out.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(_) => break,
+                };
+                buf.extend_from_slice(&chunk[..n]);
+                let text = decoder.push(&chunk[..n]);
+                if !text.is_empty() {
+                    let _ = stdout_tx.send(("stdout".to_string(), text));
+                }
+            }
+            let tail = decoder.finish();
+            if !tail.is_empty() {
+                let _ = stdout_tx.send(("stdout".to_string(), tail));
+            }
+            decode_output(&buf)
+        } else {
+            String::new()
+        }
+    });
+    let stderr_handle = tokio::task::spawn_blocking(move || {
+        if let Some(mut err) = stderr {
+            let mut buf = Vec::new();
+            let mut chunk = vec![0u8; 8192];
+            let mut decoder = TerminalDecoder::new();
+            loop {
+                let n = match err.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(_) => break,
+                };
+                buf.extend_from_slice(&chunk[..n]);
+                let text = decoder.push(&chunk[..n]);
+                if !text.is_empty() {
+                    let _ = stderr_tx.send(("stderr".to_string(), text));
+                }
+            }
+            let tail = decoder.finish();
+            if !tail.is_empty() {
+                let _ = stderr_tx.send(("stderr".to_string(), tail));
+            }
+            decode_output(&buf)
+        } else {
+            String::new()
+        }
+    });
+
+    // 6) 等待退出
+    let (done_tx, mut done_rx) = mpsc::unbounded_channel::<Option<i32>>();
+    let wait_handle = tokio::task::spawn_blocking(move || {
+        let code = process.wait_and_read_exit_code();
+        let _ = done_tx.send(code);
+    });
+
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    let mut exit_code: Option<Option<i32>> = None;
+    let mut out_closed = false;
+    let mut got_exit = false;
+    let mut killed_by_timeout = false;
+    let mut killed_by_user = false;
+
+    loop {
+        tokio::select! {
+            maybe = out_rx.recv() => {
+                match maybe {
+                    Some((stream, chunk)) => {
+                        if stream == "stdout" {
+                            stdout.push_str(&chunk);
+                        } else {
+                            stderr.push_str(&chunk);
+                        }
+                        ctx.sink.emit_raw("agent:tool-output", json!({
+                            "sessionId": ctx.session_id,
+                            "toolCallId": ctx.tool_call_id,
+                            "stream": stream,
+                            "chunk": chunk,
+                        }));
+                    }
+                    None => out_closed = true,
+                }
+            }
+            code = done_rx.recv() => {
+                exit_code = code;
+                got_exit = true;
+                // kill 请求已置位：进程退出是 kill 的结果，按用户取消处理，
+                // 避免与 done_rx 竞态导致返回「退出码」而非「已取消」。
+                if kill_requested.load(Ordering::SeqCst) {
+                    killed_by_user = true;
+                }
+            }
+            _ = wait_for_kill_request(&kill_requested), if !killed_by_timeout && !killed_by_user => {
+                killed_by_user = true;
+            }
+            _ = sleep(Duration::from_secs((timeout_secs.max(1)) as u64)), if !killed_by_timeout && !killed_by_user => {
+                job.terminate();
+                kill_process_tree(pid);
+                killed_by_timeout = true;
+            }
+            _ = ctx.cancel.cancelled(), if !killed_by_timeout && !killed_by_user => {
+                job.terminate();
+                kill_process_tree(pid);
+                killed_by_user = true;
+            }
+        }
+        if killed_by_timeout || killed_by_user {
+            break;
+        }
+        if out_closed && got_exit {
+            break;
+        }
+    }
+
+    let stdout_abort = stdout_handle.abort_handle();
+    let stderr_abort = stderr_handle.abort_handle();
+    let wait_abort = wait_handle.abort_handle();
+    let stdout_final;
+    let stderr_final;
+    if killed_by_user || killed_by_timeout {
+        let cleanup = async {
+            let so = stdout_handle.await;
+            let se = stderr_handle.await;
+            let _ = wait_handle.await;
+            (so, se)
+        };
+        match tokio::time::timeout(Duration::from_secs(3), cleanup).await {
+            Ok((so, se)) => {
+                stdout_final = so.unwrap_or_default();
+                stderr_final = se.unwrap_or_default();
+            }
+            Err(_) => {
+                job.terminate();
+                kill_process_tree(pid);
+                stdout_abort.abort();
+                stderr_abort.abort();
+                wait_abort.abort();
+                stdout_final = String::new();
+                stderr_final = String::new();
+            }
+        }
+    } else {
+        stdout_final = stdout_handle.await.unwrap_or_default();
+        stderr_final = stderr_handle.await.unwrap_or_default();
+        let _ = wait_handle.await;
+    }
+    if !stdout_final.is_empty() {
+        stdout = stdout_final;
+    }
+    if !stderr_final.is_empty() {
+        stderr = stderr_final;
+    }
+    unregister_running_command(ctx.tool_call_id);
+    let exit_code = if killed_by_timeout || killed_by_user {
+        None
+    } else {
+        exit_code.flatten()
+    };
+
+    let env_note = if readonly_mode {
+        format!("终端环境: {shell} · 只读（不可写）")
+    } else if ctx.security.workspace.is_empty() {
+        format!("终端环境: {shell} · 写隔离")
+    } else {
+        format!(
+            "终端环境: {shell} · 写隔离（可写根: {}；区外写入会被拒绝）",
+            ctx.security.workspace
+        )
+    };
+
+    Ok(build_command_result(
+        stdout,
+        stderr,
+        exit_code,
+        killed_by_user,
+        killed_by_timeout,
+        timeout_secs,
+        &env_note,
+    ))
 }
 
 // ==================== 文件工具 ====================
@@ -2411,7 +2846,63 @@ mod tests {
             blacklist: vec![],
             whitelist: vec![],
             skills_dir: None,
+            sandbox_mode: "on".to_string(),
         }
+    }
+
+    /// 裸跑路径的 security（sandbox off）：用于测试 kill/timeout 的 taskkill /T 兜底逻辑，
+    /// 与沙盒路径的 Job Object 终止分开验证（沙盒 kill 见 sandbox::tests）。
+    fn test_security_bare(workspace: &str) -> NativeToolSecurity {
+        let mut sec = test_security(workspace);
+        sec.sandbox_mode = "off".to_string();
+        sec
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn test_expand_env_vars() {
+        std::env::set_var("VIRLEN_TEST_VAR", "C:/foo/bar");
+        assert_eq!(
+            expand_env_vars("%VIRLEN_TEST_VAR%/baz"),
+            PathBuf::from("C:/foo/bar/baz")
+        );
+        // 反斜杠统一为斜杠
+        assert_eq!(
+            expand_env_vars("%VIRLEN_TEST_VAR%\\baz"),
+            PathBuf::from("C:/foo/bar/baz")
+        );
+        // 无法解析的占位符保持原样
+        assert_eq!(
+            expand_env_vars("%NO_SUCH_VAR_XYZ%/x"),
+            PathBuf::from("%NO_SUCH_VAR_XYZ%/x")
+        );
+        // 无占位符：分隔符归一化
+        assert_eq!(expand_env_vars("C:\\work"), PathBuf::from("C:/work"));
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn test_collect_extra_roots_skips_workspace_ancestor() {
+        let base = std::env::temp_dir().join(format!(
+            "virlen-extra-root-test-{}",
+            std::process::id()
+        ));
+        let ws = base.join("Documents").join("test").join("demo");
+        let docs = base.join("Documents");
+        let sibling = base.join("sibling");
+        std::fs::create_dir_all(&ws).expect("create ws");
+        std::fs::create_dir_all(&sibling).expect("create sibling");
+
+        let whitelist = vec![
+            docs.to_string_lossy().to_string(), // workspace 祖先 → 跳过
+            base.join("does-not-exist").to_string_lossy().to_string(), // 不存在 → 跳过
+            sibling.to_string_lossy().to_string(), // 普通目录 → 保留
+        ];
+        let roots = collect_extra_roots(&whitelist, ws.to_string_lossy().as_ref(), None);
+        assert_eq!(roots.len(), 1, "应只保留 sibling");
+        assert!(crate::sandbox::paths::same_path_key(&roots[0], &sibling));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -2686,7 +3177,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join(format!("virlen_native_kill_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        let sec = test_security(&dir.to_string_lossy());
+        let sec = test_security_bare(&dir.to_string_lossy());
         let sink = TestEventSink::new();
         let bridge = AgentBridgeState::default();
         let cancel = CancellationToken::new();
@@ -2788,7 +3279,7 @@ mod tests {
         let out_file = dir.join("sc_out.txt").to_string_lossy().replace('\\', "/");
         let err_file = dir.join("sc_err.txt").to_string_lossy().replace('\\', "/");
 
-        let sec = test_security(&dir.to_string_lossy());
+        let sec = test_security_bare(&dir.to_string_lossy());
         let sink = TestEventSink::new();
         let bridge = AgentBridgeState::default();
         let cancel = CancellationToken::new();
@@ -2874,7 +3365,7 @@ mod tests {
         let out_file = dir.join("t_out.txt").to_string_lossy().replace('\\', "/");
         let err_file = dir.join("t_err.txt").to_string_lossy().replace('\\', "/");
 
-        let sec = test_security(&dir.to_string_lossy());
+        let sec = test_security_bare(&dir.to_string_lossy());
         let sink = TestEventSink::new();
         let bridge = AgentBridgeState::default();
         let cancel = CancellationToken::new();

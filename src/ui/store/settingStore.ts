@@ -6,6 +6,7 @@ import StorageState from '@/utils/storageState'
 export type { EditorOpenConfig }
 
 export type CommandApprovalMode = 'all' | 'risky' | 'install' | 'none'
+export type SandboxMode = 'on' | 'off' | 'readonly'
 export type SessionGroupType = 'agent' | 'workspace'
 
 /** 快捷输入模板 */
@@ -23,6 +24,8 @@ export interface SettingsStore {
   hideToolCallThink: boolean
   /** 命令执行弹窗授权模式 */
   commandApprovalMode: CommandApprovalMode
+  /** 终端命令执行沙盒模式：on 写隔离 / off 裸跑 / readonly 只读 */
+  sandboxMode: SandboxMode
   /** 是否在系统提示词中包含环境信息 */
   allowEnvPrompt: boolean
   providers: ProviderConfig[]
@@ -78,6 +81,7 @@ const defaultSettings: SettingsStore = {
   fontSize: 'medium',
   hideToolCallThink: true,
   commandApprovalMode: 'install',
+  sandboxMode: 'on',
   allowEnvPrompt: true,
   providers: [],
   searchProviders: [],

@@ -325,6 +325,13 @@ pub struct NativeToolSecurity {
     /// SKILL_ROOT 环境变量指向的技能目录（execute_command 注入）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills_dir: Option<String>,
+    /// 终端沙盒模式：on（写隔离，默认）| off（裸跑）| readonly（只读）
+    #[serde(default = "default_sandbox_mode")]
+    pub sandbox_mode: String,
+}
+
+fn default_sandbox_mode() -> String {
+    "on".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]

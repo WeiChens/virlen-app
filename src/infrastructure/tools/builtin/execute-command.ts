@@ -311,24 +311,30 @@ toolRegistry.register(
     name: 'execute_command',
     label: t('执行命令'),
     description:
-      'Run any shell command. Use only when no dedicated tool exists (git, npm, builds). Prefer read_file, edit_file, search_* for files/text.',
+      '执行任意 shell 命令。仅在无专用工具时使用（git、npm、构建等）。' +
+      '文件/文本操作优先用 read_file、edit_file、write_file、search_* 等专用工具。' +
+      '结果首行是「终端环境」提示：Windows 下会报告沙盒模式——' +
+      '「写隔离」（只能在 workspace/白名单可写根内写入，区外写入会被拒绝）、' +
+      '「只读」（不可写）、或「无沙盒」（完整权限）。退出码 >= 2 表示命令执行失败。',
     parameters: {
       type: 'object',
       properties: {
         command: {
           type: 'string',
           description:
-            'The command to execute (e.g. "dir", "git status", "node --version"). Standard shell syntax — &&/|| pipes, >nul redirects all work naturally.',
+            '要执行的命令（如 "dir"、"git status"、"node --version"）。' +
+            '支持标准 shell 语法：&&/|| 串联、管道、重定向（>nul、2>nul）。' +
+            'Windows 下 shell（cmd 或 PowerShell）会根据命令内容自动选择。',
         },
         tips: {
           type: 'string',
           description:
-            'A brief explanation of what this command does and why it is being executed (in the user\'s language). This will be displayed in the UI to help the user understand the command\'s purpose.',
+            '简要说明这条命令的作用和执行原因（用用户的语言）。会显示在 UI 上，帮助用户理解命令的目的。',
         },
         timeout: {
           type: 'number',
           description:
-            'Timeout in seconds. The process will be forcefully killed if it exceeds this. Default: 30.',
+            '超时时间（秒）。超过该时间进程会被强制终止。默认 30。',
           default: 30,
         },
       },

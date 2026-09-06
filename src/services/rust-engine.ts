@@ -320,6 +320,7 @@ export async function resolveSecurityConfig(
       blacklist: config.blacklist ?? [],
       whitelist: config.whitelist ?? [],
       skillsDir,
+      sandboxMode: settingsState.value.sandboxMode ?? 'on',
     }
   } catch {
     return null
