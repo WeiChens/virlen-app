@@ -774,11 +774,13 @@ async fn execute_command_tool(
         // 走用户交互桥（type=confirm_command_native），由 JS 复用同一个确认弹窗。
         // 审批在本地完成：用户「允许」后直接原生执行命令，避免命令参数跨桥丢失。
         let (label, hint) = risk_info(risk);
+        let tips = arg_str(args, "tips").unwrap_or_default();
         let mut data = json!({
             "command": cmd_str,
             "risk": risk,
             "label": label,
             "hint": hint,
+            "tips": tips,
         });
         if let Value::Object(map) = &mut data {
             map.insert(

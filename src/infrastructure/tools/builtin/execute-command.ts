@@ -420,6 +420,7 @@ toolRegistry.register(
         risk,
         label: info.label,
         hint: info.hint,
+        tips: args.tips,
       })
     }
 

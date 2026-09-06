@@ -121,6 +121,7 @@ export function createCommandConfirmHandles(
           data.risk,
           data.label,
           data.hint,
+          data.tips,
         )
       })
     },
@@ -199,6 +200,7 @@ export function createNativeCommandConfirmHandles(
           data.risk,
           data.label,
           data.hint,
+          data.tips,
         )
       })
     },

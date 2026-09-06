@@ -11,6 +11,8 @@ interface Props {
   risk: string
   label: string
   hint: string
+  /** AI 给出的命令作用说明（展示在弹窗中，帮助用户判断） */
+  tips?: string
   onConfirm: () => void
   onCancel: () => void
   onShelve: () => void
@@ -22,6 +24,7 @@ export default function CommandConfirmModal({
   risk,
   label,
   hint,
+  tips,
   onConfirm,
   onCancel,
   onShelve,
@@ -34,6 +37,7 @@ export default function CommandConfirmModal({
       width={520}>
       <div className="command-confirm">
         <div className={`risk-badge ${risk}`}>{label}</div>
+        {tips && <p className="tips-text">{tips}</p>}
         <p className="hint-text">{hint}</p>
         <div className="command-preview">
           <code>{command}</code>

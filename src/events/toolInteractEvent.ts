@@ -36,6 +36,7 @@ type ToolInteractEvents = {
     risk: string,
     label: string,
     hint: string,
+    tips?: string,
   ) => void
   commandResolve: (value: string) => void
   commandReject: (reason: string) => void

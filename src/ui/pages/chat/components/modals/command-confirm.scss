@@ -22,6 +22,19 @@
     }
   }
 
+  .tips-text {
+    font-size: 13px;
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    border-left: 3px solid var(--accent-color);
+    border-radius: 4px;
+    padding: 10px 12px;
+    margin: 0 0 12px 0;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
   .hint-text {
     font-size: 14px;
     color: var(--text-secondary);

@@ -408,6 +408,38 @@
   min-width: 0;
 }
 
+// 合并展示多处编辑时：头部新增/减少行数统计
+.diff-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+
+  .diff-stat--del {
+    color: var(--color-error, #ef4444);
+  }
+
+  .diff-stat--ins {
+    color: var(--color-success, #0fcd55);
+  }
+}
+
+// 多段变更之间的省略间隔行
+.diff-line--gap {
+  background: var(--hover-bg, #f3f4f6);
+
+  .diff-linenum {
+    background: var(--hover-bg, #f3f4f6);
+  }
+
+  .diff-code {
+    color: var(--text-tertiary, #9ca3af);
+    text-align: center;
+  }
+}
+
 // ==================== ToolCallGroup 折叠容器 ====================
 
 .tool-call-group {

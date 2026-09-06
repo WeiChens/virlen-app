@@ -38,6 +38,7 @@ type CommandConfirmState = {
   risk: string
   label: string
   hint: string
+  tips?: string
 }
 
 const defaultConfirm: CommandConfirmState = {
@@ -47,6 +48,7 @@ const defaultConfirm: CommandConfirmState = {
   risk: '',
   label: '',
   hint: '',
+  tips: '',
 }
 
 export function useToolUI() {
@@ -81,7 +83,7 @@ export function useToolUI() {
   useEffect(() => {
     const off = toolInteractEvent.on(
       'showCommandConfirm',
-      (sessionId, command, risk, label, hint) => {
+      (sessionId, command, risk, label, hint, tips) => {
         setConfirmModal({
           visible: true,
           sessionId,
@@ -89,6 +91,7 @@ export function useToolUI() {
           risk,
           label,
           hint,
+          tips,
         })
       },
     )
@@ -143,6 +146,7 @@ export function useToolUI() {
           risk={confirmModal.risk}
           label={confirmModal.label}
           hint={confirmModal.hint}
+          tips={confirmModal.tips}
           onConfirm={handleConfirmAllow}
           onCancel={handleConfirmCancel}
           onShelve={handleConfirmShelve}
