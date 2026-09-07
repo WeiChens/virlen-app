@@ -6,6 +6,8 @@ import { IToolCallMessage, ToolMessageProps } from './IToolCallMessage'
 import type { DiffRow } from '@/utils/diff'
 import { computeDiff } from '@/utils/diff'
 import type { Action } from '../message/code-block'
+import CodeBlock, { toMonacoLang } from '../message/code-block'
+import { monaco, virlenDarkTheme } from '@/monaco/setupMonaco'
 import { editorService } from '@/services/editor-service'
 import { openPath } from '@tauri-apps/plugin-opener'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
@@ -70,8 +72,12 @@ function resolveEditRows(edit: EditUiRecord): DiffRow[] {
 }
 
 /**
- * 把同一文件里的多处编辑合并成一行行的展示数据：
- * 每处只保留有变更的行（delete/insert），不同变更区之间插入省略行（gap）分隔。
+ * 把同一文件里的多处编辑合并成一行行的展示数据。
+ *
+ * 保留每处编辑里的未改动行（equal，即 old/new 共有的上下文/中间相同行），
+ * 让用户能看到“中间一样的部分”，而不是全部折叠成 ⋯。
+ * 仅在工具返回的数据里确实没有中间内容（行号跳跃、无法展示相同行）时，
+ * 才插入一行省略分隔，避免把互不相连的两段代码伪造成连续。
  */
 function mergeEditRows(edits: EditUiRecord[]): SideBySideRow[] {
   const sorted = [...edits].sort((a, b) => a.oldStartLine - b.oldStartLine)
@@ -79,42 +85,132 @@ function mergeEditRows(edits: EditUiRecord[]): SideBySideRow[] {
   let prevOldEnd: number | null = null
   let prevNewEnd: number | null = null
   for (const edit of sorted) {
-    const changed: DiffRow[] = []
+    const rows = resolveEditRows(edit)
+    if (rows.length === 0) continue
+
+    // 找出本段第一行带行号的 old/new 起始行，判断与上一段是否“没有数据可填”
     let firstOld: number | null = null
     let firstNew: number | null = null
-    let lastOld: number | null = null
-    let lastNew: number | null = null
-    for (const row of resolveEditRows(edit)) {
-      if (row.type === 'equal') continue
-      changed.push(row)
-      if (row.oldLineNum != null) {
-        if (firstOld == null) firstOld = row.oldLineNum
-        lastOld = row.oldLineNum
-      }
-      if (row.newLineNum != null) {
-        if (firstNew == null) firstNew = row.newLineNum
-        lastNew = row.newLineNum
-      }
+    for (const row of rows) {
+      if (firstOld == null && row.oldLineNum != null) firstOld = row.oldLineNum
+      if (firstNew == null && row.newLineNum != null) firstNew = row.newLineNum
+      if (firstOld != null && firstNew != null) break
     }
-    if (changed.length === 0) continue
+    const missingMiddle =
+      (prevOldEnd != null &&
+        firstOld != null &&
+        firstOld > prevOldEnd + 1) ||
+      (prevNewEnd != null &&
+        firstNew != null &&
+        firstNew > prevNewEnd + 1)
+    if (missingMiddle) result.push({ type: 'gap' })
 
-    // 与上一处变更不相邻（中间有未改动行被跳过）时，插入省略行分隔
-    if (prevOldEnd != null || prevNewEnd != null) {
-      const gap =
-        (prevOldEnd != null &&
-          firstOld != null &&
-          firstOld > prevOldEnd + 1) ||
-        (prevNewEnd != null &&
-          firstNew != null &&
-          firstNew > prevNewEnd + 1)
-      if (gap) result.push({ type: 'gap' })
+    for (const row of rows) {
+      result.push(row)
+      if (row.oldLineNum != null) prevOldEnd = row.oldLineNum
+      if (row.newLineNum != null) prevNewEnd = row.newLineNum
     }
-
-    result.push(...changed)
-    if (lastOld != null) prevOldEnd = lastOld
-    if (lastNew != null) prevNewEnd = lastNew
   }
   return result
+}
+
+// ==================== Monaco 行内词法着色（左右对比的代码行） ====================
+//
+// diff 是“左右栏 + 逐行红/绿底 + 行号”的自定义布局，无法整段塞进 Monaco 编辑器。
+// 因此这里用 Monaco 的 Monarch 词法器对每一行单独切词，再按 virlen-dark 主题规则
+// 上色，视觉上和 CodePreview（Monaco 代码块）保持一致。
+
+type DiffToken = { offset: number; type: string }
+
+const _lineTokenCache = new Map<string, DiffToken[]>()
+
+/** 用 Monaco Monarch 对单行做词法切分（每行独立起点，适配 diff 只显示变更行的场景） */
+function tokenizeDiffLine(line: string, language: string): DiffToken[] {
+  const key = `${language}\u0000${line}`
+  const hit = _lineTokenCache.get(key)
+  if (hit) return hit
+  let tokens: DiffToken[] = []
+  try {
+    const rows = monaco.editor.tokenize(
+      line,
+      language,
+    ) as unknown as DiffToken[][]
+    tokens = rows && rows[0] ? rows[0] : []
+  } catch {
+    tokens = []
+  }
+  if (_lineTokenCache.size > 3000) {
+    const oldest = _lineTokenCache.keys().next().value
+    if (oldest !== undefined) _lineTokenCache.delete(oldest)
+  }
+  _lineTokenCache.set(key, tokens)
+  return tokens
+}
+
+/** 按主题规则匹配 token 颜色（越具体的规则优先级越高） */
+function diffTokenStyle(
+  tokenType: string,
+): { color?: string; fontStyle?: string } {
+  let best: (typeof virlenDarkTheme.rules)[number] | undefined
+  let bestDepth = -1
+  for (const rule of virlenDarkTheme.rules) {
+    const t = rule.token
+    if (!t) continue
+    if (tokenType === t || tokenType.startsWith(t + '.')) {
+      const d = t.split('.').length
+      if (d > bestDepth) {
+        bestDepth = d
+        best = rule
+      }
+    }
+  }
+  return { color: best?.foreground, fontStyle: best?.fontStyle }
+}
+
+/** 单行代码用 virlen-dark 主题上色（无语言时按纯文本输出） */
+function DiffCode({
+  text,
+  language,
+}: {
+  text: string
+  language?: string
+}) {
+  if (!text) return null
+  if (!language) return <>{text}</>
+  const tokens = tokenizeDiffLine(text, language)
+  if (tokens.length === 0) return <>{text}</>
+  const nodes: React.ReactNode[] = []
+  let pos = 0
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i]
+    if (tok.offset < pos) continue
+    if (tok.offset > pos) {
+      nodes.push(text.slice(pos, tok.offset))
+    }
+    const end = i + 1 < tokens.length ? tokens[i + 1].offset : text.length
+    const seg = text.slice(tok.offset, end)
+    if (seg) {
+      const st = diffTokenStyle(tok.type)
+      const style: React.CSSProperties = { color: st.color ?? '#abb2bf' }
+      if (st.fontStyle === 'italic') style.fontStyle = 'italic'
+      nodes.push(
+        <span key={i} style={style}>
+          {seg}
+        </span>,
+      )
+    }
+    pos = end
+  }
+  if (pos < text.length) nodes.push(text.slice(pos))
+  return <>{nodes}</>
+}
+
+/** 根据文件名推断 Monaco language id（复用 code-block 的语言映射） */
+function diffLanguageFromName(fileName: string | null): string | undefined {
+  const base = (fileName || '').split(/[\\/]/).pop() || ''
+  const dot = base.lastIndexOf('.')
+  const ext = dot > 0 ? base.slice(dot + 1) : base
+  return toMonacoLang(ext)
 }
 
 // ==================== 左右对比面板 ====================
@@ -134,6 +230,9 @@ function SideBySideDiff({
 }) {
   // 有汇总统计时说明是多处编辑合并展示，行号区间不再连续，隐藏区间
   const showStat = stat != null
+
+  // diff 代码行用该语言做 Monaco 词法着色
+  const codeLang = diffLanguageFromName(fileName)
 
   // 从 diffRows 推导起始行号和行数（仅单段 diff 时展示区间）
   const startLine = (() => {
@@ -163,7 +262,7 @@ function SideBySideDiff({
     const oldCol = oldColRef.current
     const newCol = newColRef.current
     if (!oldCol || !newCol) return
-    const maxW = Math.max(oldCol.scrollWidth, newCol.scrollWidth)
+    const maxW = Math.max(oldCol.scrollWidth, newCol.scrollWidth, 400)
     if (maxW > 0) {
       oldCol.style.width = maxW + 'px'
       newCol.style.width = maxW + 'px'
@@ -269,7 +368,10 @@ function SideBySideDiff({
                   className={`diff-line${row.type === 'delete' ? ' diff-line--highlight-old' : ''}`}>
                   <span className="diff-linenum">{row.oldLineNum ?? ''}</span>
                   <span className="diff-code">
-                    {row.oldLine != null ? row.oldLine || ' ' : ''}
+                    <DiffCode
+                      text={row.oldLine != null ? row.oldLine || ' ' : ''}
+                      language={codeLang}
+                    />
                   </span>
                 </div>
               )
@@ -298,7 +400,10 @@ function SideBySideDiff({
                   className={`diff-line${row.type === 'insert' ? ' diff-line--highlight-new' : ''}`}>
                   <span className="diff-linenum">{row.newLineNum ?? ''}</span>
                   <span className="diff-code">
-                    {row.newLine != null ? row.newLine || ' ' : ''}
+                    <DiffCode
+                      text={row.newLine != null ? row.newLine || ' ' : ''}
+                      language={codeLang}
+                    />
                   </span>
                 </div>
               )
@@ -570,8 +675,6 @@ class EditFileMessage implements IToolCallMessage {
 }
 
 // ==================== 后备：unified diff（无行号数据时用） ====================
-
-import CodeBlock from '../message/code-block'
 
 function generateFallbackDiff(oldStr: string, newStr: string): string {
   const oldLines = oldStr.split('\n')

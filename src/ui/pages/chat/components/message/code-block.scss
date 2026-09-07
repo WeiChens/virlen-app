@@ -11,6 +11,18 @@
   // overflow 由内联 style 控制：有 maxHeight → overflow: auto
   background-color: #292c33;
 
+
+  &::-webkit-scrollbar{
+    width: 12px;
+  }
+  &::-webkit-scrollbar-thumb{
+    background-color: #383b46;
+    border-radius: 4px;
+    &:hover{
+      background-color: #4b505e;
+    }
+  }
+
   .code-block-header {
     display: flex;
     align-items: center;
@@ -151,7 +163,4 @@
     }
   }
 
-  // ── Monaco 只读预览 ──
-  // 视觉由 CodePreview.scss + setupMonaco 的 virlen-dark 主题提供。
-  // 作为普通块子元素保持内容高度即可（外层 .code-block-wrapper 负责滚动）。
 }

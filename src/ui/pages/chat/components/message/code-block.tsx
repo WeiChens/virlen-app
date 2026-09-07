@@ -222,8 +222,8 @@ function isValidPath(str: string): boolean {
  */
 const CODE_FONT_PX: Record<'small' | 'medium' | 'large', number> = {
   small: 13,
-  medium: 15,
-  large: 17,
+  medium: 14,
+  large: 15,
 }
 
 /** 读取 CSS 变量 --font-size-md 的像素值（正文/行内代码用，跟随用户字号设置） */
@@ -254,7 +254,7 @@ function getDefaultCodeFontSize(): number {
 function resolveCodeFontPx(explicit?: number): number {
   const base = getDefaultCodeFontSize()
   if (explicit == null || explicit <= 0) return base
-  return Math.max(10, Math.round((explicit / CODE_FONT_PX.medium) * base))
+  return base
 }
 
 /**
@@ -325,7 +325,7 @@ const MONACO_LANG: Record<string, string> = {
   diff: 'diff',
 }
 
-function toMonacoLang(lang: string | undefined): string | undefined {
+export function toMonacoLang(lang: string | undefined): string | undefined {
   if (!lang) return undefined
   return MONACO_LANG[lang.toLowerCase()]
 }
@@ -356,10 +356,10 @@ function MonacoCodeView({
   const fontPx = resolveCodeFontPx(fontSize)
   const lineH = Math.max(16, Math.round(fontPx * 1.5))
   const lineCount = code ? code.split('\n').length : 1
-  // Monaco 内容末尾始终会多渲染一行“光标空行”，因此按 (lineCount+1) 行计算高度；
-  // 同时加上 padding(12+12) 与少量余量，保证编辑器自身不出现“差几像素”的纵向滚动条
-  //（此前高度少算约一行会导致 Monaco 出现幽灵垂直滚动条：有滚动条但拖不到更多内容）。
-  const height = Math.max(lineH + 16, 28 + (lineCount + 1) * lineH)
+  // Monaco 内容末尾可能多渲染一行“光标空行”，因此按 (lineCount+1) 行计算高度；
+  // 底部多留一点余量覆盖横向滚动条占位：Monaco 垂直滚动条已隐藏，纵向靠外层容器滚动，
+  // 容器高度必须 >= 编辑器内容高度，否则末行会被裁掉且无处可滚。
+  const height = Math.max(lineH + 16, 36 + (lineCount + 1) * lineH)
 
   return (
     <CodePreview
@@ -524,7 +524,7 @@ function CodeBlock({
           </button>
           {
             actions.map((action, index) => {
-              if(!action.iconRender)
+              if (!action.iconRender)
                 console.error(`action ${action.title} should have iconRender`)
               return (
                 <button className="action-btn" key={action.title} onClick={action.onClick} title={action.title}>

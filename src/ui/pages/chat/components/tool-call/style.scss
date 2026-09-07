@@ -242,14 +242,17 @@
 }
 
 .diff-side-by-side {
-  border: 1px solid var(--border-color, #e5e7eb);
+  border: 1px solid #181a1f;
   border-radius: 8px;
   overflow: hidden;
   font-family:
     'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', Consolas,
     monospace;
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-md);
   line-height: 1.55;
+  /* 代码区固定深色（与 CodeBlock/Monaco virlen-dark 一致），不随主题变化 */
+  background: #282c34;
+  color: #abb2bf;
 }
 
 .diff-header {
@@ -258,11 +261,12 @@
   justify-content: space-between;
   gap: 8px;
   padding: 6px 12px;
-  background: var(--bg-secondary, #f9fafb);
-  border-bottom: 1px solid var(--border-color, #e5e7eb);
+  /* 与普通 code-block 头部底色一致 */
+  background: #333843;
+  border-bottom: 1px solid #282c34;
   font-size: var(--font-size-sm);
   font-weight: 600;
-  color: var(--text-primary, #111827);
+  color: #abb2bf;
 
   .diff-header-name {
     flex: 1;
@@ -270,6 +274,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    color: #d7dae0;
   }
 
   .diff-actions {
@@ -307,7 +312,7 @@
 
 .diff-column-headers {
   display: flex;
-  border-bottom: 1px solid var(--border-color, #e5e7eb);
+  border-bottom: 1px solid #181a1f;
 }
 
 .diff-col-header {
@@ -321,14 +326,14 @@
 }
 
 .diff-col-header--old {
-  background: var(--diff-old-header-bg);
-  color: var(--diff-old-header-color);
-  border-right: 1px solid var(--border-color, #e5e7eb);
+  background: #3a2020;
+  color: #f38ba8;
+  border-right: 1px solid #181a1f;
 }
 
 .diff-col-header--new {
-  background: var(--diff-new-header-bg);
-  color: var(--diff-new-header-color);
+  background: #1a3a1a;
+  color: #a6e3a1;
 }
 
 .diff-col-range {
@@ -340,6 +345,8 @@
 .diff-body {
   display: flex;
   max-height: 450px;
+  background: #282c34;
+  color: #abb2bf;
 }
 
 .diff-panel {
@@ -349,10 +356,20 @@
   overflow: auto;
   /* 各自独立滚动（横向+纵向） */
   box-sizing: border-box;
+    &::-webkit-scrollbar{
+    width: 12px;
+  }
+  &::-webkit-scrollbar-thumb{
+    background-color: #383b46;
+    border-radius: 4px;
+    &:hover{
+      background-color: #4b505e;
+    }
+  }
 }
 
 .diff-panel--old {
-  border-right: 1px solid var(--border-color, #e5e7eb);
+  border-right: 1px solid #181a1f;
 }
 
 .diff-col {
@@ -364,40 +381,41 @@
   display: flex;
   align-items: stretch;
   min-height: 18px;
+  color: #abb2bf;
 }
 
 .diff-line--highlight-old {
-  background: var(--diff-old-line-bg);
+  background: #2a1515;
 }
 
 .diff-line--highlight-new {
-  background: var(--diff-new-line-bg);
+  background: #152a15;
 }
 
 .diff-linenum {
   position: sticky;
   left: 0;
-  background-color: var(--bg-primary);
+  background-color: #21252b;
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
   min-width: 36px;
   padding: 0 8px 0 4px;
-  color: var(--diff-linenum-color, #6b7280);
+  color: #495162;
   font-size: var(--font-size-2xs);
   user-select: none;
-  border-right: 1px solid var(--border-color, #e5e7eb);
+  border-right: 1px solid #181a1f;
   flex-shrink: 0;
 }
 
 .diff-line--highlight-old .diff-linenum {
-  background: var(--diff-old-linenum-bg);
-  color: var(--diff-old-linenum-color);
+  background: #3a2020;
+  color: #f38ba8;
 }
 
 .diff-line--highlight-new .diff-linenum {
-  background: var(--diff-new-linenum-bg);
-  color: var(--diff-new-linenum-color);
+  background: #203a20;
+  color: #a6e3a1;
 }
 
 .diff-code {
@@ -428,14 +446,14 @@
 
 // 多段变更之间的省略间隔行
 .diff-line--gap {
-  background: var(--hover-bg, #f3f4f6);
+  background: #21252b;
 
   .diff-linenum {
-    background: var(--hover-bg, #f3f4f6);
+    background: #21252b;
   }
 
   .diff-code {
-    color: var(--text-tertiary, #9ca3af);
+    color: #6b7080;
     text-align: center;
   }
 }

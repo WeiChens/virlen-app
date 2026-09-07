@@ -12,6 +12,11 @@ export default defineConfig(async () => ({
       '@': '/src',
     },
   },
+  optimizeDeps: {
+    // monaco-editor 由 setupMonaco 按“子模块入口”引入，禁止依赖预打包，
+    // 否则各个子入口可能被打成多份、产生多个 monaco 实例（注册会互相隔离）。
+    exclude: ['monaco-editor'],
+  },
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

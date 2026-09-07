@@ -113,7 +113,10 @@ function buildPreviewOptions(
     overviewRulerBorder: false,
     roundedSelection: false,
     scrollbar: {
-      vertical: 'auto',
+      // 垂直滚动完全交给外层 .code-block-wrapper（maxHeight 场景）/ 消息列表：
+      // Monaco 内置垂直滚动条在“内容高度≈可视高度”时会变成拖不动的幽灵滚动条，
+      // 和外层滚动条重复，因此直接隐藏，避免出现两根垂直滚动条。
+      vertical: 'hidden',
       horizontal: 'auto',
       useShadows: false,
       // 关键：编辑器自身没有可滚动的方向时不要吞掉滚轮事件，

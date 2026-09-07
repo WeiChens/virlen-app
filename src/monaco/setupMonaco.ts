@@ -170,7 +170,7 @@ monaco.languages.setMonarchTokensProvider('diff', diffLanguage)
 monaco.languages.setLanguageConfiguration('diff', diffConf)
 
 // ── One Dark 主题（与旧 Canvas 渲染配色一致：背景 #282c34 / 行号 #495162）──
-const virlenDarkTheme: monaco.editor.IStandaloneThemeData = {
+export const virlenDarkTheme: monaco.editor.IStandaloneThemeData = {
   base: 'vs-dark',
   inherit: true,
   rules: [
