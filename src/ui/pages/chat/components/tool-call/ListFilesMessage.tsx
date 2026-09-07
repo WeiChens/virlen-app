@@ -49,7 +49,6 @@ class ListFilesMessage implements IToolCallMessage {
     try {
       return (
         <CodeBlock
-          fontSize={11}
           width={400}
           maxHeight={600}
           showLineNumbers={false}>

@@ -95,7 +95,6 @@ class ReadFileMessage implements IToolCallMessage {
                 key={i}
                 maxHeight={450}
                 width={600}
-                fontSize={11}
                 fileName={name}
                 showLineNumbers
                 startLineNumber={startLine}
@@ -158,7 +157,6 @@ class ReadFileMessage implements IToolCallMessage {
         <CodeBlock
           maxHeight={450}
           width={600}
-          fontSize={11}
           fileName={name}
           showLineNumbers
           startLineNumber={startLine}

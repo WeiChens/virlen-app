@@ -3,9 +3,12 @@
   margin: 10px 0;
   border-radius: 8px;
   border: 1px solid var(--border-color, #e5e5e5);
-  display: flex;
-  flex-direction: column;
-  // overflow 由内联 style 控制：有 maxHeight → overflow-y: auto
+  // 注意：必须是“普通块”而不是 flex 列容器。
+  // 若用 display:flex + max-height，Flex 会按 flex-shrink 把超高的 Monaco
+  // 内容压缩进 450px，而 .code-preview 自身 overflow:hidden 会把被压缩掉的
+  // 部分直接裁掉 → 滚动条存在但“拖到底也看不到全部内容”。
+  // 普通块布局下子元素保持内容高度，由本容器的 overflow:auto 负责滚动。
+  // overflow 由内联 style 控制：有 maxHeight → overflow: auto
   background-color: #292c33;
 
   .code-block-header {
@@ -17,7 +20,7 @@
     color: var(--code-header-color, #abb2bf);
     font-size: var(--font-size-sm);
     position: sticky;
-    top: -5px;
+    top: 0px;
     z-index: 1;
 
     .code-block-header-info {
@@ -135,68 +138,20 @@
     }
   }
 
-  // ── Canvas 代码渲染 ──
+  // ── 纯文本 fallback（流式输出 / 超大文件）──
 
-  .code-canvas-wrap {
-    display: grid;
-
-    >* {
-      grid-row: 1;
-      grid-column: 1;
-    }
-
-    min-height: 0;
-    // 代码超出容器宽度时横向滚动
-    overflow-x: auto;
-  }
-
-  .code-canvas {
-    display: block;
-    background: #282c34;
+  .code-streaming-fallback {
+    background: var(--code-body-bg, #282c34);
     border-radius: 0 0 8px 8px;
-
-    // 禁止选中 canvas 本身
-    user-select: none;
-    -webkit-user-select: none;
-  }
-
-  // ── 透明选中覆盖层 ──
-  // 用户看到的是 canvas 彩色代码，但选中时实际选中此层
-  // 通过 CSS Grid 与 canvas 层叠在同一位置
-  //
-  // 【字体渲染同步】—— 关键！
-  // 强制 CSS 使用与 Canvas 2D 相同的字体渲染配置（几何精度、无字距调整）
-  // 避免 Windows 上 GDI(DirectWrite) vs Canvas 的字符宽度差异
-  .code-select-overlay {
-    margin: 0;
     overflow: hidden;
-    user-select: text;
-    -webkit-user-select: text;
-    color: transparent;
-    caret-color: transparent;
-    font-family:
-      'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', Consolas,
-      'DengXian', monospace;
-    white-space: pre;
-    word-break: normal;
-    word-wrap: normal;
-    tab-size: 2;
-    -moz-tab-size: 2;
 
-    // 字体渲染同步：禁用字距调整、几何精度
-    font-kerning: none;
-    font-feature-settings: 'kern' 0;
-    text-rendering: geometricPrecision;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-
-    // 选中高亮：半透明，让 canvas 颜色透出
-    &::selection {
-      background: rgba(18, 146, 226, 0.25);
-    }
-
-    &::-moz-selection {
-      background: rgba(18, 146, 226, 0.25);
+    .code-fallback {
+      background: transparent;
+      border-radius: 0 0 8px 8px;
     }
   }
+
+  // ── Monaco 只读预览 ──
+  // 视觉由 CodePreview.scss + setupMonaco 的 virlen-dark 主题提供。
+  // 作为普通块子元素保持内容高度即可（外层 .code-block-wrapper 负责滚动）。
 }

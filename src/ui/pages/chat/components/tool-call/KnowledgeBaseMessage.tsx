@@ -290,7 +290,6 @@ class KnowledgeBaseMessage implements IToolCallMessage {
       // 兜底：使用 CodeBlock 展示原始内容
       return (
         <CodeBlock
-          fontSize={11}
           width={400}
           maxHeight={600}
           showLineNumbers={false}>

@@ -1,0 +1,42 @@
+/* 代码预览组件外壳 */
+
+.code-preview {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  border-radius: 0 0 8px 8px; // 与 .code-block-wrapper 圆角一致
+}
+
+/* 隐形“撑宽层”：给 fit-content 父容器提供最长代码行的固有宽度（同旧透明 pre），
+ * 不占可见高度、不参与选中。字号默认 15，实际运行时会被 CodePreview 内联样式
+ * 覆盖成与 Monaco 相同的值，保证撑宽估算准确。 */
+.code-preview-measure {
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  white-space: pre;
+  font-family: Consolas, 'JetBrains Mono', 'Fira Code', 'Cascadia Code',
+    'SF Mono', 'Courier New', monospace;
+  font-size: 15px;
+}
+
+/* 纯预览：隐藏光标（只读时点击仍会产生光标） */
+.code-preview .monaco-editor .cursor {
+  opacity: 0 !important;
+}
+
+/* 点击编辑区时不出现聚焦轮廓 */
+.code-preview:focus-within {
+  outline: none;
+}
+
+.code-preview .monaco-editor .margin-view-overlays .line-numbers {
+  user-select: none;
+}
+
+/* 聊天卡片内不允许垂直滚动条把高度撑破：内容等高时不应出现滚动条 */
+.code-preview .monaco-editor .scrollbar.vertical {
+  pointer-events: auto;
+}

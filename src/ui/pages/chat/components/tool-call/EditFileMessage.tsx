@@ -556,7 +556,6 @@ class EditFileMessage implements IToolCallMessage {
           className="language-diff"
           maxHeight={450}
           width={600}
-          fontSize={11}
           fileName={name}
           showLineNumbers={false}>
           {diff}

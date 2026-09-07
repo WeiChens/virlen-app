@@ -1,31 +1,28 @@
 // @ts-nocheck
 /**
- * CodeBlock — 代码块组件（Canvas 渲染 + 复制按钮 + IntersectionObserver 懒加载）
+ * CodeBlock — 代码块组件（Monaco 只读预览 + 复制按钮 + actions）
  *
  * ## 渲染策略
- * - 可视区域内 → Canvas 2D API 渲染（1 个 DOM 节点，无 reconciliation 开销）
- * - 不可见时 → <pre> 纯文本 fallback（不触发 canvas 初始化）
- * - 大文件 > 100K 字符 → 纯文本 fallback（避免阻塞）
+ * - 正常显示 → Monaco Editor 只读预览（VSCode 阅读模式；精简构建见 src/monaco/setupMonaco.ts）
+ * - streaming / 超大文件(>100K 字符) → <pre> 纯文本 fallback（避免流式闪烁与长任务阻塞）
  *
  * ## 设计原则
- * - 复用 MarkdownRenderer 传入的 props 结构（react-markdown code component）
- * - 保持与 react-syntax-highlighter 相同的视觉风格（One Dark）
- * - 不引入额外运行时依赖
+ * - 复用 MarkdownRenderer / 工具消息传入的 props 结构，外层 UI（header/复制/actions）保持不变
+ * - 仅替换“代码正文 view”：由 Prism→Canvas 渲染换成 Monaco；配色沿用 One Dark（virlen-dark 主题）
  */
 import {
   useState,
-  useEffect,
-  useRef,
   type HTMLAttributes,
   type ReactElement,
   type ReactNode,
 } from 'react'
+import { observer } from 'mobx-react-lite'
 import CopySvg from '@/ui/components/icons/CopySvg'
-import { renderCodeToCanvas } from './canvas-code-renderer'
+import CodePreview from '@/ui/components/code-preview/CodePreview'
 import './code-block.scss'
 import { openPath } from '@tauri-apps/plugin-opener'
 import { resolve } from '@tauri-apps/api/path'
-import { chatState, sessionStore } from '@/ui/store'
+import { chatState, sessionStore, settingsState } from '@/ui/store'
 
 // ==================== 工具函数 ====================
 
@@ -217,20 +214,20 @@ function isValidPath(str: string): boolean {
   return false
 }
 
-// ==================== Canvas 代码渲染 ====================
+// ==================== Monaco 代码预览 ====================
 
 /**
- * CanvasHighlightedCode — 纯 Canvas 语法高亮 + 选中
- *
- * 渲染策略：
- *  - [不可见] <pre> 纯文本 fallback，不初始化 canvas
- *  - [可见]   <canvas> 渲染，调用 renderCodeToCanvas
- *  - 大文件 > 100K 字符 → 纯文本 fallback（避免长任务阻塞）
- *
- * 选中方案：纯 Canvas 实现（mousedown/mousemove/mouseup），无 DOM overlay。
+ * 代码字号档位（默认 medium）。
+ * 比 UI 正文 --font-size-md 大 1~3px，保证代码块在聊天里更清晰可读。
  */
-/** 读取 CSS 变量 --font-size-md 的像素值，跟随用户字体大小设置 */
-function getDefaultCodeFontSize(): number {
+const CODE_FONT_PX: Record<'small' | 'medium' | 'large', number> = {
+  small: 13,
+  medium: 15,
+  large: 17,
+}
+
+/** 读取 CSS 变量 --font-size-md 的像素值（正文/行内代码用，跟随用户字号设置） */
+function getUiMdFontPx(): number {
   if (typeof document === 'undefined') return 13
   const val = getComputedStyle(document.documentElement)
     .getPropertyValue('--font-size-md')
@@ -239,12 +236,116 @@ function getDefaultCodeFontSize(): number {
   return isNaN(parsed) ? 13 : parsed
 }
 
-function CanvasHighlightedCode({
+/**
+ * 代码块默认字号：读取全局「字体大小」设置（small/medium/large）。
+ * 读取的是 observable（settingsState），组件用 observer 包裹后改动会即时生效。
+ */
+function getDefaultCodeFontSize(): number {
+  const level = settingsState.value.fontSize ?? 'medium'
+  return CODE_FONT_PX[level] ?? CODE_FONT_PX.medium
+}
+
+/**
+ * 解析代码块字号。
+ * - 未显式传入：取当前字号档位的代码字号（15 / 13 / 17）；
+ * - 显式传入 px：当作「medium 基线」设计值，等比缩放到当前档位，
+ *   保证紧凑视图（如工具消息）也随设置联动：如 11 → small 10 / medium 11 / large 12。
+ */
+function resolveCodeFontPx(explicit?: number): number {
+  const base = getDefaultCodeFontSize()
+  if (explicit == null || explicit <= 0) return base
+  return Math.max(10, Math.round((explicit / CODE_FONT_PX.medium) * base))
+}
+
+/**
+ * 语言别名 → Monaco 语言 id。
+ * monaco 0.56 精简构建只注册了 src/monaco/setupMonaco.ts 里的语言；
+ * 未覆盖的语言返回 undefined（按纯文本显示）。
+ * 注：monaco 没有独立 C/TOML tokenizer，C 复用 cpp，TOML 走 ini。
+ */
+const MONACO_LANG: Record<string, string> = {
+  ts: 'typescript',
+  tsx: 'typescript',
+  mts: 'typescript',
+  cts: 'typescript',
+  js: 'javascript',
+  jsx: 'javascript',
+  mjs: 'javascript',
+  cjs: 'javascript',
+  py: 'python',
+  pyw: 'python',
+  pyi: 'python',
+  rs: 'rust',
+  rb: 'ruby',
+  go: 'go',
+  java: 'java',
+  c: 'cpp',
+  h: 'cpp',
+  cpp: 'cpp',
+  cxx: 'cpp',
+  hpp: 'cpp',
+  'c++': 'cpp',
+  cs: 'csharp',
+  csharp: 'csharp',
+  kt: 'kotlin',
+  kts: 'kotlin',
+  scala: 'scala',
+  swift: 'swift',
+  php: 'php',
+  sh: 'shell',
+  bash: 'shell',
+  zsh: 'shell',
+  shell: 'shell',
+  powershell: 'powershell',
+  ps1: 'powershell',
+  psm1: 'powershell',
+  yaml: 'yaml',
+  yml: 'yaml',
+  json: 'json',
+  jsonc: 'json',
+  html: 'html',
+  htm: 'html',
+  xhtml: 'html',
+  xml: 'xml',
+  svg: 'xml',
+  css: 'css',
+  scss: 'scss',
+  less: 'less',
+  md: 'markdown',
+  markdown: 'markdown',
+  dockerfile: 'dockerfile',
+  docker: 'dockerfile',
+  graphql: 'graphql',
+  gql: 'graphql',
+  sql: 'sql',
+  ini: 'ini',
+  cfg: 'ini',
+  conf: 'ini',
+  toml: 'ini',
+  diff: 'diff',
+}
+
+function toMonacoLang(lang: string | undefined): string | undefined {
+  if (!lang) return undefined
+  return MONACO_LANG[lang.toLowerCase()]
+}
+
+/** 大文件保护：超过该字符数改为纯文本 fallback，避免 Monaco 长任务阻塞 */
+const LARGE_CODE_LIMIT = 100 * 1000
+
+/**
+ * MonacoCodeView — 用 CodePreview(Monaco) 渲染“代码正文”。
+ *
+ * 高度 = 内容行数 * lineHeight + padding（与编辑器 options 里的 lineHeight 一致）；
+ * 外层 .code-block-wrapper 负责纵向滚动（maxHeight 场景），因此 Monaco 自身无纵向溢出，
+ * 配合 scrollbar.alwaysConsumeMouseWheel=false，滚轮不会吞掉外层消息列表的滚动。
+ */
+function MonacoCodeView({
   language,
   code,
-  fontSize = getDefaultCodeFontSize(),
-  showLineNumbers = false,
-  startLineNumber = 1,
+  fontSize,
+  showLineNumbers,
+  startLineNumber,
 }: {
   language?: string
   code: string
@@ -252,127 +353,24 @@ function CanvasHighlightedCode({
   showLineNumbers?: boolean
   startLineNumber?: number
 }) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  /** 复用离屏 canvas，避免重复创建/GC */
-  const offscreenRef = useRef<HTMLCanvasElement | null>(null)
-  const [renderFailed, setRenderFailed] = useState(false)
-  const [containerWidth, setContainerWidth] = useState(0)
-
-  // ── ResizeObserver：监听容器宽度变化 → 触发 canvas 重绘 ──
-  useEffect(() => {
-    const el = containerRef.current
-    if (!el) return
-    const observer = new ResizeObserver(([entry]) => {
-      const w = entry.contentRect.width
-      if (w > 0) setContainerWidth(w)
-    })
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [])
-
-  // ── 行高 / 间距（与 canvas-code-renderer 完全一致） ──
-  const lineHeight = 1.55
-  const lineH = Math.round(fontSize * lineHeight)
-  const padY = 14
-  const padX = 16
-  const gutterCharWidth = fontSize * 0.6
+  const fontPx = resolveCodeFontPx(fontSize)
+  const lineH = Math.max(16, Math.round(fontPx * 1.5))
   const lineCount = code ? code.split('\n').length : 1
-  const lastLineNum = startLineNumber + lineCount - 1
-  const gutterW = showLineNumbers
-    ? Math.max(40, String(lastLineNum).length * gutterCharWidth + 24)
-    : 0
-
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-
-    let cancelled = false
-
-    const doRender = () => {
-      // 大文件保护
-      if (code.length > 1000 * 100) return
-
-      try {
-        setRenderFailed(false)
-
-        // 用离屏 canvas 完成渲染，避免中途清空可见 canvas
-        // 通过 ref 持有一个实例反复使用，避免重复创建/GC 开销
-        if (!offscreenRef.current) {
-          offscreenRef.current = document.createElement('canvas')
-        }
-        const offscreen = offscreenRef.current
-        renderCodeToCanvas(offscreen, {
-          code,
-          language,
-          fontSize,
-          showLineNumbers,
-          startLineNumber,
-          containerWidth: containerWidth > 0 ? containerWidth : undefined,
-        })
-
-        // 渲染完成后检查是否已被取消（更新的渲染已启动）
-        if (cancelled) return
-
-        // 原子化 swap：将离屏结果绘制到可见 canvas
-        const ctx = canvas.getContext('2d')
-        if (ctx) {
-          canvas.width = offscreen.width
-          canvas.height = offscreen.height
-          canvas.style.width = offscreen.style.width
-          canvas.style.height = offscreen.style.height
-          ctx.drawImage(offscreen, 0, 0)
-        }
-      } catch {
-        if (!cancelled) setRenderFailed(true)
-      }
-    }
-
-    doRender()
-
-    return () => {
-      cancelled = true // cleanup：标记当前渲染已取消
-    }
-  }, [
-    code,
-    language,
-    fontSize,
-    showLineNumbers,
-    startLineNumber,
-    containerWidth,
-  ])
+  // Monaco 内容末尾始终会多渲染一行“光标空行”，因此按 (lineCount+1) 行计算高度；
+  // 同时加上 padding(12+12) 与少量余量，保证编辑器自身不出现“差几像素”的纵向滚动条
+  //（此前高度少算约一行会导致 Monaco 出现幽灵垂直滚动条：有滚动条但拖不到更多内容）。
+  const height = Math.max(lineH + 16, 28 + (lineCount + 1) * lineH)
 
   return (
-    <div ref={containerRef} className="code-canvas-wrap">
-      <canvas ref={canvasRef} className="code-canvas" />
-      <pre
-        className="code-select-overlay"
-        aria-hidden="true"
-        style={{
-          fontSize: `${fontSize}px`,
-          lineHeight: `${lineH}px`,
-          paddingTop: `${padY}px`,
-          paddingRight: `${padX}px`,
-          paddingBottom: `${padY}px`,
-          paddingLeft: gutterW > 0 ? `${gutterW + padX}px` : `${padX}px`,
-        }}
-        onDoubleClick={() => {
-          // 浏览器双击默认选中「单词 + 末尾空格」，修正为仅选中单词
-          requestAnimationFrame(() => {
-            const sel = window.getSelection()
-            if (!sel || !sel.rangeCount) return
-            const range = sel.getRangeAt(0)
-            const text = range.toString()
-            if (text.length > 0 && text[text.length - 1] === ' ') {
-              range.setEnd(range.endContainer, range.endOffset - 1)
-              sel.removeAllRanges()
-              sel.addRange(range)
-            }
-          })
-        }}>
-        {code}
-      </pre>
-    </div>
+    <CodePreview
+      code={code}
+      language={toMonacoLang(language)}
+      theme="virlen-dark"
+      height={height}
+      showLineNumbers={showLineNumbers}
+      startLineNumber={startLineNumber}
+      fontSize={fontPx}
+    />
   )
 }
 
@@ -413,7 +411,7 @@ export interface CodeBlockProps extends HTMLAttributes<HTMLElement> {
   maxHeight?: number | string
   /** 代码块宽度 */
   width?: number | string
-  /** 字体大小（px），默认跟随 --font-size-md */
+  /** 字体大小（px，作为 medium 基线），默认按当前「字体大小」设置取档位值：small 13 / medium 15 / large 17 */
   fontSize?: number
   /** 文件名，用于推断代码语言 */
   fileName?: string
@@ -421,14 +419,14 @@ export interface CodeBlockProps extends HTMLAttributes<HTMLElement> {
   showLineNumbers?: boolean
   /** 起始行号（默认 1） */
   startLineNumber?: number
-  /** 流式输出中 → 纯文本 fallback，避免 canvas 闪烁 */
+  /** 流式输出中 → 纯文本 fallback（避免 Monaco 每次 chunk 重建） */
   streaming?: boolean
   /** 自定义操作按钮 */
   actions?: Action[]
 }
 
 /** 代码块组件 */
-export default function CodeBlock({
+function CodeBlock({
   className,
   children,
   maxHeight,
@@ -441,6 +439,9 @@ export default function CodeBlock({
   actions = [] as Action[],
   ...props
 }: CodeBlockProps) {
+  // 复制态放在最前面：行内/块状代码两条渲染路径共用同一组 hooks（规则一致性）
+  const [copied, setCopied] = useState(false)
+
   let match = /language-(\w+)/.exec(className || '')
   // fileName 可能携带路径（如 "src/foo.ts"），语言推断仅取最后一段
   let language = match
@@ -462,7 +463,7 @@ export default function CodeBlock({
     return (
       <code
         className={`inline-code${isPath ? ' clickable' : ''}`}
-        style={{ fontSize: `${fontSize || getDefaultCodeFontSize()}px` }}
+        style={{ fontSize: `${fontSize || getUiMdFontPx()}px` }}
         {...props}
         onClick={isPath ? () => tryOpen(code) : undefined}>
         {children}
@@ -471,7 +472,6 @@ export default function CodeBlock({
   }
 
   const displayLang = getLanguageDisplay(language)
-  const [copied, setCopied] = useState(false)
 
   function handleCopy() {
     navigator.clipboard
@@ -498,7 +498,7 @@ export default function CodeBlock({
       style={{
         maxHeight: maxHeight ? maxHeight : undefined,
         width: width ? width : undefined,
-        overflowY: maxHeight ? 'auto' : undefined,
+        overflow: maxHeight ? 'auto' : 'visible',
       }}>
       <div className="code-block-header">
         <div className="code-block-header-info">
@@ -535,17 +535,17 @@ export default function CodeBlock({
           }
         </div>
       </div>
-      {/* 流式输出中 → 常规 pre/code 渲染（避免 canvas 闪烁） */}
-      {streaming ? (
-        <div className="code-canvas-wrap code-streaming-fallback">
+      {/* 流式输出 / 超大文件 → 常规 pre/code 纯文本 fallback */}
+      {streaming || code.length > LARGE_CODE_LIMIT ? (
+        <div className="code-streaming-fallback">
           <pre
             className="code-fallback"
-            style={{ fontSize: `${fontSize || getDefaultCodeFontSize()}px` }}>
+            style={{ fontSize: `${resolveCodeFontPx(fontSize)}px` }}>
             <code>{code}</code>
           </pre>
         </div>
       ) : (
-        <CanvasHighlightedCode
+        <MonacoCodeView
           fontSize={fontSize}
           language={language}
           code={code}
@@ -556,3 +556,5 @@ export default function CodeBlock({
     </div>
   )
 }
+
+export default observer(CodeBlock)

@@ -48,7 +48,7 @@ class SearchFileByNameMessage implements IToolCallMessage {
       return <div className="error">{props.message.content as string}</div>
     }
     return (
-      <CodeBlock fontSize={11} showLineNumbers={false}>
+      <CodeBlock showLineNumbers={false}>
         {props.message?.content as string}
       </CodeBlock>
     )
