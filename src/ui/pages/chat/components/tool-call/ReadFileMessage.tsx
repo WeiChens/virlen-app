@@ -94,7 +94,7 @@ class ReadFileMessage implements IToolCallMessage {
               <CodeBlock
                 key={i}
                 maxHeight={450}
-                width={600}
+                width={1200}
                 fileName={name}
                 showLineNumbers
                 startLineNumber={startLine}
@@ -152,11 +152,10 @@ class ReadFileMessage implements IToolCallMessage {
         style={{
           padding: '0 10px',
           margin: '0px 20px',
-          width: 'fit-content',
         }}>
         <CodeBlock
-          maxHeight={450}
-          width={600}
+          maxHeight={"55vh"}
+          width={"80%"}
           fileName={name}
           showLineNumbers
           startLineNumber={startLine}
