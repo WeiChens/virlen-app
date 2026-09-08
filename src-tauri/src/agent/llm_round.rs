@@ -102,8 +102,7 @@ pub async fn do_llm_round(
     if let Err(e) = stream_result {
         // 用户取消：保留已收集的部分内容，正常结束（不当作错误）
         if cancel.is_cancelled() {
-            ctx.assistant_message.streaming = Some(false);
-            finalize_assistant_message(&ctx.assistant_message, &model, sink, session_id);
+            finalize_assistant_message(&mut ctx.assistant_message, &model, sink, session_id);
             return Ok(LlmRoundOutput {
                 ctx: None,
                 assistant_message: ctx.assistant_message,
@@ -114,7 +113,7 @@ pub async fn do_llm_round(
 
     // 没有 tool calls → 结束循环
     if ctx.tool_uses.is_empty() {
-        finalize_assistant_message(&ctx.assistant_message, &model, sink, session_id);
+        finalize_assistant_message(&mut ctx.assistant_message, &model, sink, session_id);
         return Ok(LlmRoundOutput {
             ctx: None,
             assistant_message: ctx.assistant_message,
@@ -382,12 +381,16 @@ fn sync_assistant(ctx: &ToolCallContext, model: &str, sink: &dyn EventSink, sess
 }
 
 /// 收到 tool calls 后结束 assistant 消息的 streaming 状态（通过事件通知）
+/// 同时把消息对象本身的 streaming/model 补齐（与 TS 引擎一致，保证持久化内容正确）
 pub fn finalize_assistant_message(
-    assistant_message: &Message,
+    assistant_message: &mut Message,
     model: &str,
     sink: &dyn EventSink,
     session_id: &str,
 ) {
+    assistant_message.streaming = Some(false);
+    // 记录模型名，供 SQLite 直落时保存（此前一直为 None，导致 assistant 行 model 列为空）
+    assistant_message.model = Some(model.to_string());
     sink.emit_agent_event(
         session_id,
         &AgentEvent::new(

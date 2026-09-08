@@ -6,11 +6,13 @@ use super::bridge::AgentBridgeState;
 use super::cancellation::CancellationToken;
 use super::event_sink::EventSink;
 use super::llm_loop::{execute_llm_round, ExecuteLlmRoundParams};
+use super::llm_round::now_ms;
 use super::provider::Provider;
 use super::types::{
     AgentEvent, Goal, Message, NativeToolSecurity, Run, Session, ToolDefinition, VerificationResult,
 };
 use super::verifier::verify;
+use crate::session_db::SessionRepo;
 use serde_json::json;
 
 pub struct RunIterationParams<'a> {
@@ -29,6 +31,8 @@ pub struct RunIterationParams<'a> {
     pub effective_max_tokens: i64,
     pub reasoning_effort: Option<String>,
     pub max_iterations: i64,
+    /// 消息持久化仓库（直接 SQLite 直落，用于执行过程中增量保存）
+    pub repo: &'a dyn SessionRepo,
     pub persist_snapshot: Option<&'a (dyn Fn(&str, &Run) + Sync + Send)>,
     pub clear_snapshot: Option<&'a (dyn Fn(&str) + Sync + Send)>,
 }
@@ -53,6 +57,7 @@ pub async fn run_iteration(
         effective_max_tokens,
         reasoning_effort,
         max_iterations,
+        repo,
         persist_snapshot,
         clear_snapshot,
     } = params;
@@ -91,8 +96,21 @@ pub async fn run_iteration(
             reasoning_effort: reasoning_effort.clone(),
             persist_snapshot,
             clear_snapshot,
+            repo,
         })
         .await?;
+
+        // 本轮落库：ctx=Some（有 tool calls）时 assistant/tool 已在执行途中增量直落
+        // （llm_loop 落 assistant、tool_executor 逐条落 tool 结果），无需重复写；
+        // 仅 ctx=None（纯文本回答 / 取消的部分回答）未落库，这里兜底补写一次。
+        if result.ctx.is_none() {
+            if let Err(e) = repo
+                .append_messages(session_id, &[result.assistant_message.clone()], now_ms())
+                .await
+            {
+                eprintln!("[session_db] 写入迭代纯文本回答失败: {}", e);
+            }
+        }
 
         messages.push(result.assistant_message);
         messages.extend(result.tool_result_messages);
@@ -189,6 +207,13 @@ pub async fn run_iteration(
 
         let feedback_msg = build_feedback_message(&verify_result);
         messages.push(feedback_msg.clone());
+        // 反馈消息也落库（与 TS 引擎路径通过事件持久化行为一致）
+        if let Err(e) = repo
+            .append_messages(session_id, &[feedback_msg.clone()], now_ms())
+            .await
+        {
+            eprintln!("[session_db] 写入验证反馈消息失败: {}", e);
+        }
         sink.emit_agent_event(
             session_id,
             &AgentEvent::new(
@@ -229,6 +254,13 @@ pub async fn run_iteration(
         &verification_history,
     );
     messages.push(failure_report.clone());
+    // 失败报告落库（正常结束也保证最终回答可恢复）
+    if let Err(e) = repo
+        .append_messages(session_id, &[failure_report.clone()], now_ms())
+        .await
+    {
+        eprintln!("[session_db] 写入迭代失败报告失败: {}", e);
+    }
     sink.emit_agent_event(
         session_id,
         &AgentEvent::new(
@@ -269,10 +301,10 @@ pub fn build_feedback_message(result: &VerificationResult) -> Message {
     }
 
     Message {
-        id: format!("feedback_{}", chrono::Utc::now().timestamp_millis()),
+        id: format!("feedback_{}", now_ms()),
         role: "feedback".to_string(),
         content: serde_json::Value::String(content),
-        timestamp: chrono::Utc::now().timestamp_millis(),
+        timestamp: now_ms(),
         ..Default::default()
     }
 }
@@ -306,10 +338,10 @@ fn build_failure_report(
     );
 
     Message {
-        id: format!("failure_report_{}", chrono::Utc::now().timestamp_millis()),
+        id: format!("failure_report_{}", now_ms()),
         role: "assistant".to_string(),
         content: serde_json::Value::String(content),
-        timestamp: chrono::Utc::now().timestamp_millis(),
+        timestamp: now_ms(),
         ..Default::default()
     }
 }

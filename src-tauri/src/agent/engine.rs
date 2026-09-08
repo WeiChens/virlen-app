@@ -184,6 +184,7 @@ impl AgentEngine {
                 effective_max_tokens: options.max_tokens.unwrap_or(session.params.max_tokens),
                 reasoning_effort: options.reasoning_effort.clone(),
                 max_iterations: options.max_iterations,
+                repo: self.repo.as_ref(),
                 persist_snapshot: Some(&persist_closure),
                 clear_snapshot: Some(&clear_closure),
             })
@@ -246,20 +247,12 @@ impl AgentEngine {
                     map.insert(session_id.to_string(), snap);
                 }
             }),
+            self.repo.as_ref(),
         )
         .await;
 
+        // 恢复执行产生的 tool 结果已由 execute_tool_steps 在执行途中增量直落，无需重复写
         let mut messages = current_messages.to_vec();
-
-        // 持久化：恢复执行产生的 tool 结果（先落库再返回）
-        if let Err(e) = self
-            .repo
-            .append_messages(&session_id, &tool_result_messages, now_ms())
-            .await
-        {
-            eprintln!("[session_db] 写入恢复结果失败: {}", e);
-        }
-
         messages.extend(tool_result_messages);
 
         if !completed {
@@ -305,6 +298,7 @@ impl AgentEngine {
                 security: security.clone(),
                 effective_max_tokens,
                 reasoning_effort: reasoning_effort.clone(),
+                repo: self.repo.as_ref(),
                 persist_snapshot: Some(persist_closure),
                 clear_snapshot: Some(clear_closure),
             })
@@ -332,21 +326,9 @@ impl AgentEngine {
                 break; // 没有 tool calls，结束循环
             }
 
-            // 持久化本轮：assistant 消息 + tool 结果（先落库再继续）
-            let mut to_persist = Vec::with_capacity(1 + result.tool_result_messages.len());
-            to_persist.push(result.assistant_message.clone());
-            to_persist.extend(result.tool_result_messages.iter().cloned());
-
+            // 本轮消息已由 execute_llm_round / tool_executor 在执行途中增量直落，无需重复写
             current_messages.push(result.assistant_message);
             current_messages.extend(result.tool_result_messages);
-
-            if let Err(e) = self
-                .repo
-                .append_messages(&session_id, &to_persist, now_ms())
-                .await
-            {
-                eprintln!("[session_db] 写入助手消息失败: {}", e);
-            }
 
             if result.paused {
                 return Ok(false); // 被暂停

@@ -5,8 +5,9 @@
 use super::bridge::AgentBridgeState;
 use super::cancellation::CancellationToken;
 use super::event_sink::EventSink;
-use super::llm_round::{do_llm_round, finalize_assistant_message};
+use super::llm_round::{do_llm_round, finalize_assistant_message, now_ms};
 use super::provider::Provider;
+use crate::session_db::SessionRepo;
 use super::tool_executor::{create_run, execute_tool_steps};
 use super::types::{Message, NativeToolSecurity, Run, Session, ToolCallContext, ToolDefinition};
 
@@ -24,6 +25,8 @@ pub struct ExecuteLlmRoundParams<'a> {
     pub security: Option<NativeToolSecurity>,
     pub effective_max_tokens: i64,
     pub reasoning_effort: Option<String>,
+    /// 消息持久化仓库（直接 SQLite 直落，用于执行过程中增量保存）
+    pub repo: &'a dyn SessionRepo,
     pub persist_snapshot: Option<&'a (dyn Fn(&str, &Run) + Sync + Send)>,
     pub clear_snapshot: Option<&'a (dyn Fn(&str) + Sync + Send)>,
 }
@@ -54,6 +57,7 @@ pub async fn execute_llm_round(
         security,
         effective_max_tokens,
         reasoning_effort,
+        repo,
         persist_snapshot,
         clear_snapshot,
     } = params;
@@ -74,7 +78,7 @@ pub async fn execute_llm_round(
     .await?;
 
     // 没有 tool calls：LLM 直接给出文字回答
-    let ctx = match output.ctx {
+    let mut ctx = match output.ctx {
         None => {
             return Ok(ExecuteLlmRoundResult {
                 ctx: None,
@@ -87,7 +91,16 @@ pub async fn execute_llm_round(
     };
 
     // 有 tool calls：结束 streaming 标记
-    finalize_assistant_message(&ctx.assistant_message, &model, sink, session_id);
+    finalize_assistant_message(&mut ctx.assistant_message, &model, sink, session_id);
+
+    // 关键：LLM 已产出 tool_calls → 在执行工具之前立即落库 assistant 消息，
+    // 即使后续工具执行中途崩溃/卡死，这条「agent 调用工具」的记录也不丢失。
+    if let Err(e) = repo
+        .append_messages(session_id, &[ctx.assistant_message.clone()], now_ms())
+        .await
+    {
+        eprintln!("[session_db] 写入助手(tool_call)消息失败: {}", e);
+    }
 
     let mut run = create_run(session_id, &ctx);
     if let Some(p) = persist_snapshot {
@@ -110,6 +123,7 @@ pub async fn execute_llm_round(
         skills,
         security,
         persist_ref,
+        repo,
     )
     .await;
 

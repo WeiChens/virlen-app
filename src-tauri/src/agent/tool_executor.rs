@@ -16,6 +16,7 @@ use super::storm_breaker::check_tool_call_storm;
 use super::types::{
     AgentEvent, Message, NativeToolSecurity, Run, ToolCallContext, ToolStep, ToolStepStatus,
 };
+use crate::session_db::SessionRepo;
 use serde_json::{json, Value};
 
 /// 从 tool call 上下文创建 Run
@@ -54,6 +55,7 @@ pub async fn execute_tool_steps(
     skills: Option<Vec<String>>,
     security: Option<NativeToolSecurity>,
     persist_snapshot: Option<&(dyn Fn(&Run) + Sync + Send)>,
+    repo: &dyn SessionRepo,
 ) -> (bool, Vec<Message>) {
     let session_id = run.session_id.clone();
     let start_index = find_next_step(run);
@@ -103,6 +105,14 @@ pub async fn execute_tool_steps(
         }
 
         let tool_result_msg = handle_tool_result(&mut run.steps[i], &tool_result, sink, &session_id);
+        // 关键：单个 tool 完成即落库（而非等整轮结束再批量写），
+        // 即使中途崩溃/卡死，已完成步骤的「工具响应」也已持久化。
+        if let Err(e) = repo
+            .append_messages(&session_id, &[tool_result_msg.clone()], now_ms())
+            .await
+        {
+            eprintln!("[session_db] 写入工具结果消息失败: {}", e);
+        }
         tool_result_messages.push(tool_result_msg);
 
         if cancel.is_cancelled() {

@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 pub trait SessionRepo: Send + Sync {
     /// 写入/更新会话元数据（幂等，按 id）
     async fn upsert_session(&self, session: &Session) -> Result<(), String>;
-    /// 追加消息并刷新会话 updated_at（事务，幂等，按消息 id）
+    /// 追加消息并刷新会话 updated_at（事务；按消息 id 幂等，重复写入保留原 rowid，不改变读取顺序）
     async fn append_messages(
         &self,
         session_id: &str,
@@ -345,11 +345,27 @@ ON CONFLICT(id) DO UPDATE SET
                 let mut stmt = tx
                     .prepare(
                         r#"
-INSERT OR REPLACE INTO messages (
+INSERT INTO messages (
   id, session_id, role, content, tool_calls, reasoning_content, tool_call_id,
   is_error, elapsed_ms, reasoning_elapsed_ms, ui_data, timestamp, streaming,
   model, usage, image_vision_analyze_optimize, image_vision_analyze_result
 ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
+ON CONFLICT(id) DO UPDATE SET
+  role=excluded.role,
+  content=excluded.content,
+  tool_calls=excluded.tool_calls,
+  reasoning_content=excluded.reasoning_content,
+  tool_call_id=excluded.tool_call_id,
+  is_error=excluded.is_error,
+  elapsed_ms=excluded.elapsed_ms,
+  reasoning_elapsed_ms=excluded.reasoning_elapsed_ms,
+  ui_data=excluded.ui_data,
+  timestamp=excluded.timestamp,
+  streaming=excluded.streaming,
+  model=excluded.model,
+  usage=excluded.usage,
+  image_vision_analyze_optimize=excluded.image_vision_analyze_optimize,
+  image_vision_analyze_result=excluded.image_vision_analyze_result
 "#,
                     )
                     .map_err(|e| format!("准备消息写入失败: {}", e))?;
@@ -707,6 +723,25 @@ mod tests {
         repo.append_messages("s1", &[test_message("m1", "user")], 300).await.unwrap();
         let msgs = repo.get_messages("s1").await.unwrap();
         assert_eq!(msgs.len(), 1, "重复写入同一 id 应幂等");
+    }
+
+    #[tokio::test]
+    async fn reappend_keeps_message_order() {
+        // 回归：重复写入已存在的“中间消息”不得改变读取顺序（保留原 rowid）
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+        repo.append_messages("s1", &[test_message("m1", "user")], 200).await.unwrap();
+        repo.append_messages(
+            "s1",
+            &[test_message("m2", "assistant"), test_message("m3", "tool")],
+            300,
+        )
+        .await
+        .unwrap();
+        repo.append_messages("s1", &[test_message("m1", "user")], 400).await.unwrap();
+        let msgs = repo.get_messages("s1").await.unwrap();
+        let ids: Vec<&str> = msgs.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["m1", "m2", "m3"], "重复写入同 id 不应把消息挪到末尾");
     }
 
     #[tokio::test]

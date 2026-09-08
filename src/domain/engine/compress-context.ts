@@ -113,7 +113,6 @@ export async function compressContext(
         : JSON.stringify(firstContent)
     const systemText = request.systemPrompt || ''
     // DeepSeek tokenizer 精确计数（API 不返回 usage，需自行计算）
-    debugger
     const [promptTokens, completionTokens] = await Promise.all([
       estimateTokens(inputText, systemText),
       estimateTokens(summaryContent),
