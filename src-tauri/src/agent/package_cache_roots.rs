@@ -29,6 +29,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 /// 探测结果缓存时长。
 const TTL: Duration = Duration::from_secs(600);
 
@@ -189,6 +192,13 @@ fn run_capture_script(script: &str) -> Option<String> {
 
     let mut builder = std::process::Command::new(cmd);
     builder.args(&args);
+    #[cfg(target_os = "windows")]
+    {
+        // Virlen 宿主是 GUI 进程（无控制台），直接 spawn 控制台子进程（cmd）
+        // 会新建并闪烁一个黑窗口。本探测由沙箱路径在每条命令前触发，
+        // 必须与 load_env / native_tools 保持一致，显式禁用新建控制台窗口。
+        builder.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
     // 探测进程 cwd 强制指向用户主目录：确保 npm/pnpm 只读用户级 ~/.npmrc（或全局），
     // 不读（可能被仓库控制/篡改的）项目级 .npmrc，防止项目配置把任意目录声明为缓存可写根。
     if let Some(home) = probe_home_dir() {
