@@ -982,6 +982,7 @@ async fn run_command_native(
     let mut got_exit = false;
     let mut killed_by_timeout = false;
     let mut killed_by_user = false;
+    let mut timeout_fut = Box::pin(sleep(Duration::from_secs((timeout_secs.max(1)) as u64)));
 
     loop {
         tokio::select! {
@@ -1017,7 +1018,7 @@ async fn run_command_native(
             _ = wait_for_kill_request(&kill_requested), if !killed_by_timeout && !killed_by_user => {
                 killed_by_user = true;
             }
-            _ = sleep(Duration::from_secs((timeout_secs.max(1)) as u64)), if !killed_by_timeout && !killed_by_user => {
+            _ = &mut timeout_fut, if !killed_by_timeout && !killed_by_user => {
                 if let Some(g) = &guard {
                     g.terminate();
                 }
@@ -1443,6 +1444,9 @@ async fn run_command_sandboxed(
     let mut got_exit = false;
     let mut killed_by_timeout = false;
     let mut killed_by_user = false;
+    // 超时计时器必须在循环外创建并固定，否则 select! 每轮都会新建 sleep，
+    // 输出一刷屏就把计时归零，导致超时永远不触发。
+    let mut timeout_fut = Box::pin(sleep(Duration::from_secs((timeout_secs.max(1)) as u64)));
 
     loop {
         tokio::select! {
@@ -1476,7 +1480,7 @@ async fn run_command_sandboxed(
             _ = wait_for_kill_request(&kill_requested), if !killed_by_timeout && !killed_by_user => {
                 killed_by_user = true;
             }
-            _ = sleep(Duration::from_secs((timeout_secs.max(1)) as u64)), if !killed_by_timeout && !killed_by_user => {
+            _ = &mut timeout_fut, if !killed_by_timeout && !killed_by_user => {
                 child.terminate();
                 kill_process_tree(pid);
                 killed_by_timeout = true;
