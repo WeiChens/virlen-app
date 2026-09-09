@@ -221,9 +221,9 @@ function isValidPath(str: string): boolean {
  * 比 UI 正文 --font-size-md 大 1~3px，保证代码块在聊天里更清晰可读。
  */
 const CODE_FONT_PX: Record<'small' | 'medium' | 'large', number> = {
-  small: 13,
-  medium: 14,
-  large: 15,
+  small: 12,
+  medium: 13,
+  large: 14,
 }
 
 /** 读取 CSS 变量 --font-size-md 的像素值（正文/行内代码用，跟随用户字号设置） */

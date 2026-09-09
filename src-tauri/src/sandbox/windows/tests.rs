@@ -383,3 +383,76 @@ fn e2e_extra_root_acl_failure_skips_gracefully() {
     );
     assert!(code != Some(0), "cwd 外写应失败");
 }
+
+/// 复现用户真机问题：npm 跑依赖 lifecycle script（如 fds 的 node-gyp rebuild）时，
+/// 受限令牌内的 node 再 spawn 孙进程（cmd.exe）返回 EPERM。
+/// 先用最小 JS 探针隔离：沙箱内 node 分别 spawn cmd 与 node，看各自状态/错误。
+#[test]
+#[ignore]
+#[cfg(target_os = "windows")]
+fn e2e_node_spawn_probe_under_sandbox() {
+    let env = TestEnv::new("node-spawn");
+    let session = prepare_session(&env, false, vec![]);
+    let probe_js = r#"
+const { spawnSync } = require('child_process');
+function t(label, cmd, args, opts) {
+  const o = Object.assign({ encoding: 'utf8', shell: false }, opts || {});
+  const r = spawnSync(cmd, args, o);
+  console.log(label + '|' + JSON.stringify({
+    status: r.status,
+    signal: r.signal,
+    error: r.error ? r.error.code + ':' + r.error.message : null,
+    out: (r.stdout || '').trim(),
+    err: (r.stderr || '').trim()
+  }));
+}
+t('cmd-spawn', process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'echo hi']);
+t('node-spawn', process.execPath, ['-e', 'console.log("hi-node")']);
+t('cmd-hide', process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'echo hi'], { windowsHide: true });
+t('node-hide', process.execPath, ['-e', 'console.log("hi-node")'], { windowsHide: true });
+t('shell-echo', 'echo hi', [], { shell: true });
+t('cmd-ignore', process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'echo hi'], { stdio: 'ignore' });
+t('cmd-inherit', process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'echo hi'], { stdio: 'inherit' });
+t('stdout-only', process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'echo hi'], { stdio: ['ignore', 'pipe', 'ignore'] });
+t('stderr-only', process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'echo hi'], { stdio: ['ignore', 'ignore', 'pipe'] });
+t('stdin-only', process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'echo hi'], { stdio: ['pipe', 'ignore', 'ignore'] });
+"#;
+    std::fs::write(env.cwd.join("probe.js"), probe_js).unwrap();
+    let script = "node probe.js";
+    let (out, err, code) = run(
+        &session,
+        &["cmd", "/d", "/s", "/c", script],
+        Some(script),
+    );
+    eprintln!("exit={code:?}\nSTDOUT:\n{}\nSTDERR:\n{}", String::from_utf8_lossy(&out), String::from_utf8_lossy(&err));
+    assert_eq!(code, Some(0));
+    let text = String::from_utf8_lossy(&out);
+    assert!(text.contains("cmd-spawn"), "缺少 cmd-spawn 结果");
+    assert!(text.contains("node-spawn"), "缺少 node-spawn 结果");
+
+    // 对照：受限 PowerShell 内部用三种方式建孙进程，区分 cmdlet(ShellExecute) 与原生 CreateProcess。
+    let ps_script = r#"
+$ErrorActionPreference = 'Continue'
+function W($m){ Write-Output $m }
+try { & cmd.exe /d /s /c 'echo hi > ps-call.txt' | Out-Null; W ('call-op=' + (Test-Path 'ps-call.txt')) } catch { W ('call-op=err:' + $_.Exception.Message) }
+try { $psi = New-Object System.Diagnostics.ProcessStartInfo -Property @{ FileName='powershell.exe'; Arguments='-NoProfile -Command exit 0'; UseShellExecute=$false }; $p = [System.Diagnostics.Process]::Start($psi); $p.WaitForExit(); W ('dotnet-start=' + $p.ExitCode) } catch { W ('dotnet-start=err:' + $_.Exception.Message) }
+try { $psi2 = New-Object System.Diagnostics.ProcessStartInfo -Property @{ FileName='powershell.exe'; Arguments='-NoProfile -Command exit 0'; UseShellExecute=$false; RedirectStandardOutput=$true; RedirectStandardError=$true }; $p2 = [System.Diagnostics.Process]::Start($psi2); $p2.WaitForExit(); W ('dotnet-redir=' + $p2.ExitCode) } catch { W ('dotnet-redir=err:' + $_.Exception.Message) }
+try { $q = Start-Process -WindowStyle Hidden -PassThru powershell.exe -ArgumentList '-NoProfile','-Command','exit 0'; $q.WaitForExit(); W ('cmdlet-start=' + $q.ExitCode) } catch { W ('cmdlet-start=err:' + $_.Exception.Message) }
+"#;
+    std::fs::write(env.cwd.join("ps_probe.ps1"), ps_script).unwrap();
+    let ps_cmd = "powershell -NoProfile -ExecutionPolicy Bypass -File ps_probe.ps1";
+    let (out2, _err2, code2) = run(
+        &session,
+        &["cmd", "/d", "/s", "/c", ps_cmd],
+        Some(ps_cmd),
+    );
+    eprintln!(
+        "ps exit={code2:?}\nSTDOUT:\n{}",
+        String::from_utf8_lossy(&out2)
+    );
+    let text2 = String::from_utf8_lossy(&out2);
+    assert!(
+        text2.contains("call-op=") && text2.contains("dotnet-start=") && text2.contains("cmdlet-start="),
+        "PS 探针结果不完整: {text2}"
+    );
+}

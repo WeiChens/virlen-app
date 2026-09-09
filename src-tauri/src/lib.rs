@@ -30,8 +30,22 @@ async fn move_to_trash(path: String) -> Result<(), String> {
 fn sandbox_diagnostics() -> serde_json::Value {
     #[cfg(target_os = "windows")]
     {
-        serde_json::to_value(sandbox::diagnostics())
-            .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
+        let mut value = serde_json::to_value(sandbox::diagnostics())
+            .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }));
+        // 附带当前探测到的包管理器缓存可写根（供排查 npm install 等缓存豁免是否生效）
+        if let Some(obj) = value.as_object_mut() {
+            let roots = crate::agent::package_cache_roots::refresh();
+            obj.insert(
+                "packageCacheRoots".into(),
+                serde_json::json!(
+                    roots
+                        .iter()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .collect::<Vec<_>>()
+                ),
+            );
+        }
+        value
     }
     #[cfg(not(target_os = "windows"))]
     {
