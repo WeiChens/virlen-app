@@ -70,7 +70,7 @@ function getStoredWidth(): number {
 function storeWidth(w: number) {
   try {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, String(w))
-  } catch {}
+  } catch { }
 }
 function WorkspaceDisplay({
   value,
@@ -216,7 +216,6 @@ function ChatView() {
   const [pendingContent, setPendingContent] = useState<string | null>(null)
   const { ToolUI } = useToolUI()
   const [sidebarWidth, setSidebarWidth] = useState(getStoredWidth())
-  const [dragging, setDragging] = useState(false)
   const resizingRef = useRef(false)
   const currentWidthRef = useRef(sidebarWidth)
 
@@ -226,18 +225,31 @@ function ChatView() {
   }, [sidebarWidth])
 
   // 鼠标拖拽调整侧边栏宽度
-  function handleResizerMouseDown(e: React.MouseEvent) {
+  function handleResizerMouseDown(e: React.MouseEvent<HTMLDivElement>) {
     e.preventDefault()
     resizingRef.current = true
-    setDragging(true)
+
     const startX = e.clientX
     const startW = currentWidthRef.current
+    // 侧边栏元素（.chat-view 的直接子元素），用于直接写 CSS 变量
+    const sidebarEl =
+      e.currentTarget
+        .closest('.chat-view')
+        ?.querySelector<HTMLElement>(':scope > .chat-sidebar') ??
+      (e.currentTarget.previousElementSibling as HTMLElement | null)
+
+    function applyWidth(w: number) {
+      currentWidthRef.current = w
+      sidebarEl?.style.setProperty('--width', `${w}px`)
+    }
+
+    // 拖拽期间禁用宽度过渡（inline 优先级最高，也不会被后续 render 的 className 覆盖）
+    if (sidebarEl) sidebarEl.style.transition = 'none'
 
     function onMouseMove(ev: MouseEvent) {
       if (!resizingRef.current) return
       const newW = Math.max(180, Math.min(500, startW + ev.clientX - startX))
-      currentWidthRef.current = newW
-      setSidebarWidth(newW)
+      applyWidth(newW)
 
       // 拖拽过程中实时切换折叠状态
       const shouldOpen = newW > 185
@@ -249,12 +261,15 @@ function ChatView() {
     function onMouseUp() {
       if (!resizingRef.current) return
       resizingRef.current = false
-      setDragging(false)
-      storeWidth(currentWidthRef.current)
       document.removeEventListener('mousemove', onMouseMove)
       document.removeEventListener('mouseup', onMouseUp)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
+      if (sidebarEl) sidebarEl.style.transition = ''
+      // 只在拖拽结束时同步一次 React state + 持久化
+      const finalW = currentWidthRef.current
+      setSidebarWidth(finalW)
+      storeWidth(finalW)
     }
 
     document.body.style.cursor = 'col-resize'
@@ -524,7 +539,7 @@ function ChatView() {
           chatState.setValue('error', error)
         }
       },
-      onStreamEnd: () => {},
+      onStreamEnd: () => { },
     }
 
     if (goal) {
@@ -543,9 +558,9 @@ function ChatView() {
         events,
         imageOptimize
           ? {
-              imageVisionAnalyzeOptimize: true,
-              imageVisionAnalyzeResult: imageAnalyzeResult,
-            }
+            imageVisionAnalyzeOptimize: true,
+            imageVisionAnalyzeResult: imageAnalyzeResult,
+          }
           : undefined,
         { skipUserMessage: true },
       )
@@ -561,14 +576,14 @@ function ChatView() {
       ...(text
         ? [{ type: 'text' as const, text }]
         : [
-            {
-              type: 'text' as const,
-              text:
-                images.length > 1
-                  ? tpl('分析这$__num__张图片', { num: images.length })
-                  : t('分析这张图片'),
-            },
-          ]),
+          {
+            type: 'text' as const,
+            text:
+              images.length > 1
+                ? tpl('分析这$__num__张图片', { num: images.length })
+                : t('分析这张图片'),
+          },
+        ]),
       ...images.map((img) => ({
         type: 'image_url' as const,
         image_url: { url: img.url, detail: 'auto' as const },
@@ -630,7 +645,7 @@ function ChatView() {
 
   const currentTitle = chatState.value.currentSessionId
     ? sessionStore.getSession(chatState.value.currentSessionId)?.title ||
-      t('对话')
+    t('对话')
     : appName
 
   return (
@@ -641,9 +656,6 @@ function ChatView() {
         onGoToSettings={handleGoToSettings}
       />
       <ChatSidebar
-        className={
-          dragging && chatState.value.sidebarOpen ? 'no-transition' : ''
-        }
         // @ts-ignore
         style={{ '--width': `${sidebarWidth}px` }}
         onSelectSession={handleSelectSession}
@@ -667,7 +679,7 @@ function ChatView() {
               value={
                 chatState.value.currentSessionId
                   ? sessionStore.getSession(chatState.value.currentSessionId)
-                      ?.workspace
+                    ?.workspace
                   : chatState.value.selectedWorkspace
               }
               setValue={(e) => {
