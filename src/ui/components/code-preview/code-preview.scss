@@ -36,6 +36,20 @@
   user-select: none;
 }
 
+/* 行号区右侧的留白必须画在“正文底色”上：
+ * .margin（行号 + 行装饰区）的宽度 = 行号列宽 + lineDecorationsWidth，
+ * 它的底色（editorGutter.background，#21252b）默认一路铺到正文第一列，
+ * 于是 CodePreview 摊开的那段留白看起来只是“行号区变宽了”——两边底色不同，一眼就能看出来。
+ * 这里把 .margin 的底色限制在内容盒内（background-clip: content-box），
+ * 再用 padding-right 让出 --code-preview-gutter-cutout（由组件内联注入，
+ * = lineDecorationsWidth - 6px），让出的部分就露出编辑器底色，成为正文侧的留白。
+ * .margin 内部的行号/装饰层都是绝对定位，不受父级 padding 影响，位置不会错乱。 */
+.code-preview .monaco-editor .margin {
+  box-sizing: border-box;
+  padding-right: var(--code-preview-gutter-cutout, 14px);
+  background-clip: content-box;
+}
+
 /* 聊天卡片内不允许垂直滚动条把高度撑破：内容等高时不应出现滚动条 */
 .code-preview .monaco-editor .scrollbar.vertical {
   pointer-events: auto;

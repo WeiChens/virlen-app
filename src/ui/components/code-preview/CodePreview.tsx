@@ -22,10 +22,28 @@
 import type { OnMount } from '@monaco-editor/react'
 import Editor from '@monaco-editor/react'
 import type * as MonacoNs from 'monaco-editor'
+import type { CSSProperties } from 'react'
 
 // 必须先引入：精简版 monaco + 语言高亮注册 + One Dark 主题
 import '@/monaco/setupMonaco'
 import './code-preview.scss'
+
+/**
+ * 行号列与代码正文之间的横向间距（px）—— 即 Monaco 的 lineDecorationsWidth。
+ *
+ * 注意：它属于「行号区」(.margin) 的宽度（layoutInfo: contentLeft = 行号列宽 + lineDecorationsWidth），
+ * 如果不做处理，行号区底色（editorGutter.background）会一直铺到正文第一列，
+ * 于是这段留白看上去只是“行号区变宽了”，正文依旧紧贴着行号区的色块边界。
+ * 因此把它拆成两段：
+ *   - 贴着行号的一小段（GUTTER_INNER_PAD）仍留在行号区底色内，避免数字贴着色块边界；
+ *   - 剩下的一段由 CSS 把行号区底色“挖掉”（见 code-preview.scss 的 .margin 规则），
+ *     露出编辑器底色 —— 视觉上就成了正文自己的左侧留白。
+ */
+const GUTTER_TO_CONTENT_GAP = 14
+/** 上述间距中仍然保留行号区底色的一小段（px） */
+const GUTTER_INNER_PAD = 5
+/** 需要挖掉行号区底色、改由编辑器底色绘制的宽度（px） */
+const GUTTER_BG_CUTOUT = GUTTER_TO_CONTENT_GAP - GUTTER_INNER_PAD
 
 export interface CodePreviewProps {
   /** 要展示的代码文本 */
@@ -97,6 +115,10 @@ function buildPreviewOptions(
     lineNumbers: showLineNumbers
       ? (line: number) => String(line + startLineNumber - 1)
       : 'off',
+    // 行号列与正文之间的横向留白：Monaco 默认只有 10px，正文几乎贴着行号列。
+    // 这是布局里唯一夹在“行号列”和“正文”之间的间距（padding 选项只支持 top/bottom），
+    // 所以只能靠它撑开；其中“露出编辑器底色”的那段由 CSS 处理，见 code-preview.scss。
+    lineDecorationsWidth: showLineNumbers ? GUTTER_TO_CONTENT_GAP : GUTTER_INNER_PAD,
     fontSize,
     fontFamily: `${fontFamily}, 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', Consolas, 'Courier New', monospace`,
     fontLigatures: false,
@@ -144,7 +166,15 @@ export default function CodePreview(props: CodePreviewProps) {
   }
 
   return (
-    <div className={`code-preview ${className}`}>
+    <div
+      className={`code-preview ${className}`}
+      style={
+        {
+          // 供 code-preview.scss 使用：把行号区底色从右侧挖掉这一段宽度，
+          // 让 lineDecorationsWidth 撑出的留白落在“正文底色”上，而不是把行号区画宽。
+          '--code-preview-gutter-cutout': `${GUTTER_BG_CUTOUT}px`,
+        } as CSSProperties
+      }>
       {/* 隐形“撑宽层”：
        * fit-content 父容器（如 .tool-call-expand-view）会按最长代码行的固有宽度决定自身宽度；
        * Monaco 是虚拟布局、无法贡献该固有宽度，因此放一个 height:0 的原始文本层来撑宽，
