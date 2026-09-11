@@ -144,6 +144,16 @@
 }
 
 .tool-call-expand-view {
+  .UserChoiceMessage-question {
+    margin-bottom: 8px;
+  }
+
+  .UserChoiceMessage-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+  }
+
   .UserChoiceMessageOption {
     display: inline-block;
     padding: 3px 8px;
@@ -151,6 +161,26 @@
     border-radius: 4px;
     cursor: pointer;
     background-color: var(--bg-primary, #fff);
+  }
+
+  .UserChoiceMessage-customReply {
+    margin-top: 8px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: var(--bg-secondary, #f9fafb);
+    border-left: 3px solid var(--accent-color, #6366f1);
+    font-size: 13px;
+    line-height: 1.5;
+
+    .customReply-label {
+      font-weight: 600;
+      color: var(--text-secondary, #888);
+      margin-right: 4px;
+    }
+
+    .customReply-text {
+      color: var(--text-primary, #1a1a1a);
+    }
   }
 }
 

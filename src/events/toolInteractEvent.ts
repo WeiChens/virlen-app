@@ -14,7 +14,7 @@
  *     commandResolve     → tool-ui 触发"允许执行"，chat-service 收到后 resolve
  *     commandReject      → tool-ui 触发拒绝/暂存，chat-service 收到后 reject
  */
-import { ToolExecutorResponse } from '@/domain/tools/types'
+import { ToolExecutorResponse, ToolResult } from '@/domain/tools/types'
 import EventEmitter from '@/utils/EventEmitter'
 
 type ToolInteractEvents = {
@@ -26,7 +26,7 @@ type ToolInteractEvents = {
     multi: boolean,
     toolCallId: string,
   ) => void
-  resolve: (value: string) => void
+  resolve: (value: ToolResult) => void
   reject: (reason: string) => void
 
   // command_confirm

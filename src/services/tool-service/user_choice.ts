@@ -5,6 +5,7 @@
  * 通过 toolInteractEvent 事件总线与 UI 层（tool-ui.tsx）通讯。
  */
 import toolInteractEvent from '@/events/toolInteractEvent'
+import type { ToolResult } from '@/domain/tools/types'
 
 /**
  * 用户暂存交互 — 不通知 AI，直接中断当前 tool 循环，
@@ -22,7 +23,7 @@ class InteractionShelved extends Error {
 
 export interface UserChoiceHandles {
   /** 给 agentEngine 的 onUserInteraction 回调 */
-  handler: (type: string, data: Record<string, any>) => Promise<string>
+  handler: (type: string, data: Record<string, any>) => Promise<ToolResult>
   cleanup: () => void
 }
 
@@ -32,11 +33,11 @@ export interface UserChoiceHandles {
 export function createUserChoiceHandles(
   sessionId: string,
 ): UserChoiceHandles {
-  let interactionResolve: ((value: string) => void) | null = null
+  let interactionResolve: ((value: ToolResult) => void) | null = null
   let interactionReject: ((reason: any) => void) | null = null
 
   // 监听 UI 层的确认 / 取消 / 暂存
-  const offResolve = toolInteractEvent.on('resolve', (value: string) => {
+  const offResolve = toolInteractEvent.on('resolve', (value: ToolResult) => {
     interactionResolve?.(value)
     interactionResolve = null
   })
@@ -51,7 +52,7 @@ export function createUserChoiceHandles(
 
   return {
     handler: async (type: string, data: Record<string, any>) => {
-      return new Promise<string>((resolve, reject) => {
+      return new Promise<ToolResult>((resolve, reject) => {
         interactionResolve = resolve
         interactionReject = reject
         toolInteractEvent.emit(

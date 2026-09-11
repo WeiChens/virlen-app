@@ -6,6 +6,7 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import UserChoiceModal from './modals/user-choice'
+import type { UserChoiceResult } from './modals/user-choice'
 import CommandConfirmModal from './modals/command-confirm'
 import toolInteractEvent from '@/events/toolInteractEvent'
 import { requestAttentionIfUnfocused } from '@/utils/windowAttention'
@@ -99,10 +100,19 @@ export function useToolUI() {
   }, [])
 
   // ====== UserChoice 回调 ======
-  const handleChoiceConfirm = useCallback((selected: string | string[]) => {
+  const handleChoiceConfirm = useCallback((result: UserChoiceResult) => {
     setChoiceModal(defaultChoice)
-    const result = Array.isArray(selected) ? selected.join(', ') : selected
-    toolInteractEvent.emit('resolve', result)
+    // 构建给 AI 的 content 字符串
+    const parts: string[] = []
+    if (result.selected.length > 0) {
+      parts.push(result.selected.join(', '))
+    }
+    if (result.customReply) {
+      parts.push(result.customReply)
+    }
+    const content = parts.join('；')
+    // uiData 携带结构化数据供 UserChoiceMessage 展示
+    toolInteractEvent.emit('resolve', { content, uiData: result })
   }, [])
   const handleChoiceShelve = useCallback(() => {
     setChoiceModal(defaultChoice)
