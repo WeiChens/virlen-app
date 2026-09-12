@@ -11,6 +11,7 @@ import WindowLayout from './layout/WindowLayout'
 import SetupFlow from './pages/setupFlow'
 import ChatView from './pages/chat/chat-view'
 import ImagePreview from './components/shared/ImagePreview'
+import ErrorBoundary from './components/shared/ErrorBoundary'
 function App() {
   useTheme()
   useFontSize()
@@ -23,17 +24,19 @@ function App() {
   // return <TestPage />
 
   return (
-    <WindowLayout>
-      {page === 'onboarding' ? (
-        <SetupFlow onComplete={() => setPage('chat')} />
-      ) : (
-        <Suspense fallback={null}>
-          <ChatView />
-          {/* <SetupFlow onComplete={() => setPage('chat')} /> */}
-        </Suspense>
-      )}
-      <ImagePreview />
-    </WindowLayout>
+    <ErrorBoundary>
+      <WindowLayout>
+        {page === 'onboarding' ? (
+          <SetupFlow onComplete={() => setPage('chat')} />
+        ) : (
+          <Suspense fallback={null}>
+            <ChatView />
+            {/* <SetupFlow onComplete={() => setPage('chat')} /> */}
+          </Suspense>
+        )}
+        <ImagePreview />
+      </WindowLayout>
+    </ErrorBoundary>
   )
 }
 

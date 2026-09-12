@@ -2,6 +2,7 @@ import type { ProviderConfig } from '@/types'
 import type { SearchProviderConfig } from '@/domain/search/config'
 import type { EditorOpenConfig } from '@/domain/editor'
 import StorageState from '@/utils/storageState'
+import { track, isSensitiveKey } from '@/utils/telemetry'
 
 export type { EditorOpenConfig }
 
@@ -73,6 +74,8 @@ export interface SettingsStore {
   editorOpenDefaultId: string
   /** 是否在 AI 回复完成或需要用户选择时，若窗口未激活则强制置为活动窗口 */
   forceWindowActive: boolean
+  /** 诊断埋点开关（默认关；开启后仅本地采集，需手动「上报官网」才外发） */
+  telemetryEnabled: boolean
 }
 
 const defaultSettings: SettingsStore = {
@@ -108,6 +111,7 @@ const defaultSettings: SettingsStore = {
   editorOpenConfigs: [],
   editorOpenDefaultId: '',
   forceWindowActive: false,
+  telemetryEnabled: false,
 }
 
 export const settingsState = new StorageState(
@@ -148,6 +152,27 @@ export const settingsState = new StorageState(
     return null
   },
 })
+
+// ── 埋点：任意设置项变更（§12.11 settings.change） ──
+// 敏感键整段打码；provider / searchProvider 列表只上报数量，避免 baseUrl/apiKey 泄漏。
+settingsState.onChange = (key, oldValue, newValue) => {
+  // telemetryEnabled 由 telemetry.toggle 事件记录，此处跳过，避免
+  // 「开启时记录 / 关闭时不记录」的不对称（track 在开关关闭时本就是 no-op）。
+  if ((key as string) === 'telemetryEnabled') return
+  track('settings.change', {
+    key,
+    old_value: settingChangeValue(key, oldValue),
+    new_value: settingChangeValue(key, newValue),
+  })
+}
+
+function settingChangeValue(key: string, value: unknown): unknown {
+  if (isSensitiveKey(key)) return '***'
+  if (key === 'providers' || key === 'searchProviders') {
+    return Array.isArray(value) ? { count: value.length } : value
+  }
+  return value
+}
 
 // ── Rust 引擎转正一次性迁移（P3 会话持久化） ──
 // 老版本 useRustEngine 默认 false 且已被持久化进 localStorage，

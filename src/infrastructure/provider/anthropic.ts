@@ -15,6 +15,7 @@ import type {
 } from '@/types'
 import type { ChatRequest, IProvider } from './types'
 import { apiFetch, getResponseReader, readStreamLines } from './http-utils'
+import { track } from '@/utils/telemetry'
 import { getLastSummaryMessageIndex } from '@/types'
 import { processVisionContent } from './visionInject'
 import { fetch } from '@tauri-apps/plugin-http'
@@ -124,6 +125,7 @@ export class AnthropicProvider implements IProvider {
       body: JSON.stringify(body),
       signal,
       providerName: 'Anthropic',
+      traceId: request.traceId,
     })
     const data: AnthropicResponse = await res.json()
     return this.parseResponse(data)
@@ -145,6 +147,7 @@ export class AnthropicProvider implements IProvider {
         body: JSON.stringify(body),
         signal,
         providerName: 'Anthropic',
+        traceId: request.traceId,
       })
     } catch (e: any) {
       callback({ type: 'error', error: e.message })
@@ -160,7 +163,13 @@ export class AnthropicProvider implements IProvider {
     }
 
     const decoder = new TextDecoder()
-    await this.parseAnthropicSSE(reader, decoder, callback, signal)
+    await this.parseAnthropicSSE(
+      reader,
+      decoder,
+      callback,
+      signal,
+      request.traceId,
+    )
   }
 
   private async parseAnthropicSSE(
@@ -168,6 +177,7 @@ export class AnthropicProvider implements IProvider {
     decoder: TextDecoder,
     callback: StreamCallback,
     signal: AbortSignal | undefined,
+    traceId?: string,
   ): Promise<void> {
     let currentEvent = ''
     const blockTexts: Map<number, string> = new Map()
@@ -300,8 +310,14 @@ export class AnthropicProvider implements IProvider {
                   break
                 }
               }
-            } catch {
-              // Parse error
+            } catch (e: any) {
+              // §5.7 provider.sse.interrupt：SSE 分片解析失败（Anthropic）
+              track('provider.sse.interrupt', {
+                trace_id: traceId,
+                error: e?.message || String(e),
+                last_event_type: currentEvent || null,
+                bytes_received: dataStr.length,
+              })
             }
             return
           }
@@ -312,6 +328,7 @@ export class AnthropicProvider implements IProvider {
           }
         },
         signal,
+        traceId,
       )
     } catch (e: any) {
       if (e?.name !== 'AbortError') {

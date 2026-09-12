@@ -27,4 +27,10 @@ src-tauri/target
 src-tauri/target/msix-stage
 *.msix
 
+# TypeScript 构建产物（tsc -b 副产物；vite.config.js 会优先于 .ts 被 Vite 加载，务必忽略）
+*.tsbuildinfo
+/vite.config.js
+/vite.config.d.ts
+/vite.config.js.map
+
 docs/

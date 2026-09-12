@@ -56,6 +56,7 @@ import { repairSessionIfNeeded } from '@/services/chat-service'
 import { vision } from '@/infrastructure/vision'
 import type { VisionAnalyzeResult } from '@/infrastructure/vision/types'
 import { requestAttentionIfUnfocused } from '@/utils/windowAttention'
+import { track, trackPerf, hashText } from '@/utils/telemetry'
 /** 侧边栏宽度 localStorage 键名 */
 const SIDEBAR_WIDTH_KEY = '_sidebar_width'
 
@@ -317,6 +318,9 @@ function ChatView() {
   async function handleSelectSession(sessionId: string) {
     const session = sessionStore.getSession(sessionId)
     if (!session) return
+    const fromSessionId = chatState.value.currentSessionId
+    const switchStart =
+      typeof performance !== 'undefined' ? performance.now() : Date.now()
     chatState.setValue('currentSessionId', sessionId)
     // 切换会话时，从该会话的运行时状态恢复错误信息（跨会话不丢失）
     chatState.setValue('error', getSessionRuntime(sessionId).error)
@@ -327,6 +331,22 @@ function ChatView() {
     if (updated && chatState.value.currentSessionId === sessionId) {
       setMessages([...updated.messages])
     }
+    const renderMs = Math.round(
+      (typeof performance !== 'undefined' ? performance.now() : Date.now()) -
+        switchStart,
+    )
+    const msgCount = updated?.messages.length ?? 0
+    track('session.switch', {
+      from_session_id: fromSessionId ? hashText(fromSessionId) : undefined,
+      to_session_id: hashText(sessionId),
+      msg_count: msgCount,
+      render_ms: renderMs,
+    })
+    trackPerf('perf.session.switch', {
+      session_id: hashText(sessionId),
+      render_ms: renderMs,
+      msg_count: msgCount,
+    })
   }
 
   const hasEnabledProvider = settingsState.value.providers.some(

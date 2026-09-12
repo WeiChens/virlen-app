@@ -30,6 +30,8 @@ export interface ExecuteLLMRoundParams {
   reasoningEffort?: string
   persistSnapshot?: (sessionId: string, run: Run) => void
   clearSnapshot?: (sessionId: string) => void
+  /** 当前 LLM 轮次序号（1 基），透传给 engine.round.* 埋点 */
+  round?: number
 }
 
 export interface ExecuteLLMRoundResult {
@@ -68,6 +70,7 @@ export async function executeLLMRound(
     reasoningEffort,
     persistSnapshot,
     clearSnapshot,
+    round,
   } = params
   const model = session.modelId
 
@@ -96,6 +99,7 @@ export async function executeLLMRound(
     interceptOnEvent,
     effectiveMaxTokens,
     reasoningEffort,
+    round,
   )
 
   // 没有 tool calls：LLM 直接给出文字回答（doLLMRound 已内部 finalize）
@@ -118,7 +122,7 @@ export async function executeLLMRound(
   // 有 tool calls：结束 streaming 标记
   finalizeAssistantMessage(ctx.assistantMessage, model, onEvent)
 
-  const run = createRun(sessionId, ctx)
+  const run = createRun(sessionId, ctx, round ?? 0)
   persistSnapshot?.(sessionId, run)
 
   const { completed, toolResultMessages } = await executeToolSteps(

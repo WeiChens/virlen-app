@@ -364,6 +364,9 @@ pub struct SendMessageOptions {
     /// 原生工具执行的安全配置（None 时工具全部走 JS 桥）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security: Option<NativeToolSecurity>,
+    /// 前端注入的链路追踪 ID（与前端 chat/engine 事件对齐，可空）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
 }
 
 fn default_true() -> bool {

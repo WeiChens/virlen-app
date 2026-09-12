@@ -17,6 +17,7 @@
  * - types.ts: 类型定义
  */
 import { snapshotToRun } from './run-state'
+import { track } from '@/utils/telemetry'
 import type { Run, RunSnapshot } from './types'
 import type {
   Message,
@@ -167,6 +168,12 @@ export class AgentEngine implements AgentEnginePort {
         onEvent?.({ type: 'stream_end', data: {} })
       }
     } catch (e: any) {
+      track('engine.error', {
+        error: e?.message || String(e),
+        stack: e?.stack,
+        phase: 'engine',
+        round: null,
+      })
       onEvent?.({ type: 'error', error: e.message || String(e) })
     } finally {
       this.abortControllers.delete(sessionId)
@@ -266,9 +273,11 @@ export class AgentEngine implements AgentEnginePort {
     } = params
 
     let rounds = remainingRounds
+    let roundIndex = 0
 
     while (rounds > 0) {
       rounds--
+      roundIndex++
       const result = await executeLLMRound({
         session,
         provider,
@@ -281,6 +290,7 @@ export class AgentEngine implements AgentEnginePort {
         skills,
         effectiveMaxTokens,
         reasoningEffort,
+        round: roundIndex,
         persistSnapshot: (sid, run) => this.persistRunSnapshot(sid, run),
         clearSnapshot: (sid) => this.clearRunSnapshot(sid),
       })

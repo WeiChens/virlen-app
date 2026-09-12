@@ -97,6 +97,7 @@ pub async fn run_iteration(
             persist_snapshot,
             clear_snapshot,
             repo,
+            round: current_iteration,
         })
         .await?;
 

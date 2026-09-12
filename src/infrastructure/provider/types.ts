@@ -44,6 +44,8 @@ export interface ChatRequest {
    * 避免 maxTokens 被思考内容（reasoning_content）消耗殆尽、正文无输出。
    */
   thinking?: boolean
+  /** 链路 ID（透传自会话 trace，用于 provider.* / provider.sse.interrupt 埋点关联） */
+  traceId?: string
 }
 /** Chat 完成请求参数（原始格式） */
 export interface ChatCompletionRequest {

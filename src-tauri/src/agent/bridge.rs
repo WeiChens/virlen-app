@@ -104,7 +104,22 @@ impl AgentBridgeState {
             serde_json::to_value(&payload).map_err(|e| e.to_string())?,
         );
 
-        rx.await.map_err(|_| format!("工具请求被丢弃: {}", tool_name))
+        let started = crate::telemetry::now_ms();
+        crate::telemetry::track(
+            "rust.bridge.request",
+            serde_json::json!({ "kind": "tool-request", "request_id": request_id.as_str() }),
+        );
+        let outcome = rx.await;
+        crate::telemetry::track(
+            "rust.bridge.response",
+            serde_json::json!({
+                "kind": "tool-request",
+                "request_id": request_id.as_str(),
+                "duration_ms": crate::telemetry::now_ms() - started,
+                "status": if outcome.is_ok() { "success" } else { "fail" },
+            }),
+        );
+        outcome.map_err(|_| format!("工具请求被丢弃: {}", tool_name))
     }
 
     /// 请求 JS 处理用户交互，等待回执
@@ -133,7 +148,22 @@ impl AgentBridgeState {
             serde_json::to_value(&payload).map_err(|e| e.to_string())?,
         );
 
-        rx.await.map_err(|_| format!("用户交互请求被丢弃: {}", type_))
+        let started = crate::telemetry::now_ms();
+        crate::telemetry::track(
+            "rust.bridge.request",
+            serde_json::json!({ "kind": "user-interaction", "request_id": request_id.as_str() }),
+        );
+        let outcome = rx.await;
+        crate::telemetry::track(
+            "rust.bridge.response",
+            serde_json::json!({
+                "kind": "user-interaction",
+                "request_id": request_id.as_str(),
+                "duration_ms": crate::telemetry::now_ms() - started,
+                "status": if outcome.is_ok() { "success" } else { "fail" },
+            }),
+        );
+        outcome.map_err(|_| format!("用户交互请求被丢弃: {}", type_))
     }
 
     /// 打开一个 Provider 流通道（BridgedProvider 使用）
@@ -166,6 +196,11 @@ impl AgentBridgeState {
         sink.emit_raw(
             "agent:provider-request",
             serde_json::to_value(&payload).map_err(|e| e.to_string())?,
+        );
+
+        crate::telemetry::track(
+            "rust.bridge.request",
+            serde_json::json!({ "kind": "provider", "request_id": request_id.as_str() }),
         );
 
         Ok(rx)

@@ -231,12 +231,36 @@ fn get_tokenizer(app: &tauri::AppHandle) -> Result<Arc<DeepSeekTokenizer>, Strin
 /// 计算文本 token 数（供前端 compressContext 估算 usage）
 #[tauri::command]
 pub async fn cmd_count_tokens(app: tauri::AppHandle, text: String) -> Result<u32, String> {
-    tokio::task::spawn_blocking(move || {
+    let started = crate::telemetry::now_ms();
+    let input_len = text.chars().count();
+    let result = tokio::task::spawn_blocking(move || {
         let tk = get_tokenizer(&app)?;
         Ok::<u32, String>(tk.count_tokens(&text) as u32)
     })
     .await
-    .map_err(|e| format!("count_tokens task join error: {}", e))?
+    .map_err(|e| format!("count_tokens task join error: {}", e))?;
+    let duration_ms = crate::telemetry::now_ms() - started;
+    match &result {
+        Ok(tokens) => crate::telemetry::track(
+            "rust.token.count",
+            serde_json::json!({
+                "input_len": input_len,
+                "tokens": tokens,
+                "duration_ms": duration_ms,
+            }),
+        ),
+        Err(e) => crate::telemetry::track(
+            "rust.token.count",
+            serde_json::json!({
+                "input_len": input_len,
+                "tokens": 0,
+                "duration_ms": duration_ms,
+                "status": "fail",
+                "error": e,
+            }),
+        ),
+    }
+    result
 }
 
 /// 预热：后台线程解析 tokenizer.json（不阻塞启动），失败静默（命令侧会再试）

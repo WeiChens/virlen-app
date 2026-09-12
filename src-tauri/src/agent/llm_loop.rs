@@ -29,6 +29,8 @@ pub struct ExecuteLlmRoundParams<'a> {
     pub repo: &'a dyn SessionRepo,
     pub persist_snapshot: Option<&'a (dyn Fn(&str, &Run) + Sync + Send)>,
     pub clear_snapshot: Option<&'a (dyn Fn(&str) + Sync + Send)>,
+    /// 当前 LLM 轮次序号（1 基），透传给 engine.round.* 埋点
+    pub round: i64,
 }
 
 pub struct ExecuteLlmRoundResult {
@@ -60,6 +62,7 @@ pub async fn execute_llm_round(
         repo,
         persist_snapshot,
         clear_snapshot,
+        round,
     } = params;
 
     let model = session.model_id.clone();
@@ -74,6 +77,7 @@ pub async fn execute_llm_round(
         session_id,
         Some(effective_max_tokens),
         reasoning_effort.as_deref(),
+        round,
     )
     .await?;
 
@@ -102,7 +106,7 @@ pub async fn execute_llm_round(
         eprintln!("[session_db] 写入助手(tool_call)消息失败: {}", e);
     }
 
-    let mut run = create_run(session_id, &ctx);
+    let mut run = create_run(session_id, &ctx, round);
     if let Some(p) = persist_snapshot {
         p(session_id, &run);
     }

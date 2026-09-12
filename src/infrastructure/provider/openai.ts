@@ -86,6 +86,7 @@ export class OpenAiProvider implements IProvider {
       body: JSON.stringify(body),
       signal,
       providerName: this.name,
+      traceId: request.traceId,
     })
 
     const data = await res.json()
@@ -108,6 +109,7 @@ export class OpenAiProvider implements IProvider {
         body: JSON.stringify(body),
         signal,
         providerName: this.name,
+        traceId: request.traceId,
       })
     } catch (e: any) {
       callback({ type: 'error', error: e.message })
@@ -138,7 +140,7 @@ export class OpenAiProvider implements IProvider {
         reader,
         decoder,
         (line) => {
-          const parsed = extractJsonData(line)
+          const parsed = extractJsonData(line, request.traceId)
           if (!parsed) return
           if (parsed.isDone) {
             callback({
@@ -212,6 +214,7 @@ export class OpenAiProvider implements IProvider {
           }
         },
         signal,
+        request.traceId,
       )
     } catch (e: any) {
       if (e?.name !== 'AbortError') {

@@ -6,6 +6,8 @@
 import { v4 } from '@/utils/uuid'
 import { CmdError } from '@/infrastructure/tools/builtin/execute-command'
 import { checkToolCallStorm } from './storm-breaker'
+import { track, getSessionTrace, truncateText, hashText } from '@/utils/telemetry'
+import { getCategoryId } from '../tools/category'
 import type { Message, AgentEventCallback } from '@/types'
 import type { Run, ToolStep } from './types'
 import { findNextStep, runToSnapshot } from './run-state'
@@ -16,6 +18,15 @@ import {
 } from '../tools/types'
 import { toolRegistry } from '../tools'
 import { toolOutputStore } from '@/infrastructure/tools/output-store'
+
+/** JSON 字符串长度（失败回退 0），用于埋点 input_size */
+function safeJsonLength(value: unknown): number {
+  try {
+    return JSON.stringify(value ?? {}).length
+  } catch {
+    return 0
+  }
+}
 
 // ==================== 导出函数 ====================
 
@@ -28,6 +39,8 @@ export function createRun(
     assistantMessage: Message
     toolUses: { id: string; name: string; input: Record<string, any> }[]
   },
+  /** 当前 LLM 轮次序号（1 基），供 tool.call.start.round 埋点使用 */
+  round = 0,
 ): Run {
   return {
     id: `run_${ctx.assistantMessage.id}`,
@@ -41,7 +54,7 @@ export function createRun(
     })),
     createdAt: Date.now(),
     paused: false,
-    round: 0,
+    round,
   }
 }
 
@@ -78,6 +91,22 @@ export async function executeToolSteps(
     step.startedAt = Date.now()
 
     notifyStepStart(step, onEvent)
+    const toolStartAt = Date.now()
+    const traceId = getSessionTrace(sessionId)
+    track('tool.call.start', {
+      trace_id: traceId,
+      session_id: hashText(sessionId),
+      span_id: step.toolCallId,
+      tool_name: step.toolName,
+      category: getCategoryId(step.toolName) || 'system',
+      round: run.round,
+      // exec_path：native=引擎进程内就地执行；bridge=跨 Rust↔JS 边界委托。
+      // JS 引擎由自带工具执行器就地执行，无桥，故记为 native。
+      exec_path: 'native',
+      input_keys: Object.keys(step.input || {}),
+      input_size: safeJsonLength(step.input),
+      input: step.input,
+    })
     const toolResult = await executeSingleStep(
       sessionId,
       step,
@@ -90,6 +119,16 @@ export async function executeToolSteps(
     // 检查是否被暂停
     if (toolResult === '__SHELVED__') {
       run.paused = true
+      // 暂停时补发 tool.call.end（status=pause），保证 start/end span 成对
+      track('tool.call.end', {
+        trace_id: traceId,
+        session_id: hashText(sessionId),
+        span_id: step.toolCallId,
+        tool_name: step.toolName,
+        status: 'pause',
+        duration_ms: Date.now() - toolStartAt,
+        is_error: false,
+      })
       persistSnapshot?.(run)
       onEvent?.({
         type: 'stream_end',
@@ -100,6 +139,20 @@ export async function executeToolSteps(
 
     const toolResultMsg = handleToolResult(step, toolResult, onEvent)
     toolResultMessages.push(toolResultMsg)
+
+    track('tool.call.end', {
+      trace_id: traceId,
+      session_id: hashText(sessionId),
+      span_id: step.toolCallId,
+      tool_name: step.toolName,
+      status: (step.status as string) === 'completed' ? 'success' : 'fail',
+      duration_ms: Date.now() - toolStartAt,
+      is_error: (step.status as string) === 'failed',
+      error: step.error,
+      result: step.result ? truncateText(step.result, 16384) : step.result,
+      result_size: step.result ? step.result.length : 0,
+      ui_data_type: step.uiData ? (step.uiData as any).type : undefined,
+    })
 
     if (abortSignal.aborted) return { completed: false, toolResultMessages }
     persistSnapshot?.(run)
@@ -160,6 +213,13 @@ async function executeSingleStep(
   if (checkToolCallStorm(sessionId, step.toolName, step.input)) {
     step.status = 'failed'
     step.error = '检测到工具调用循环，已自动拦截'
+    track('engine.storm_break', {
+      trace_id: getSessionTrace(sessionId),
+      session_id: hashText(sessionId),
+      repeated_tool: step.toolName,
+      repeat_count: 3,
+      window: 6,
+    })
     return `[StormBreaker] 工具 "${step.toolName}" 在最近几次调用中重复出现，已自动拦截。请重新思考策略，尝试不同的方法或直接给出最终回答。`
   }
 

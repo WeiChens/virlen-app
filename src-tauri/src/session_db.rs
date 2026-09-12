@@ -533,12 +533,54 @@ pub fn init_session_db(
 
 // ==================== Tauri 命令 ====================
 
+/// 记录一次 SQLite 操作（§12.13 rust.db.op / rust.db.error）
+fn track_db(
+    op: &str,
+    session_id: Option<&str>,
+    started: i64,
+    rows: Option<usize>,
+    error: Option<&str>,
+) {
+    let mut props = serde_json::json!({
+        "op": op,
+        "duration_ms": crate::telemetry::now_ms() - started,
+        "status": if error.is_some() { "fail" } else { "success" },
+    });
+    if let Some(map) = props.as_object_mut() {
+        if let Some(id) = session_id {
+            map.insert(
+                "session_id".into(),
+                serde_json::json!(crate::telemetry::hash_id(id)),
+            );
+        }
+        if let Some(r) = rows {
+            map.insert("rows".into(), serde_json::json!(r));
+        }
+    }
+    crate::telemetry::track("rust.db.op", props);
+    if let Some(e) = error {
+        crate::telemetry::track(
+            "rust.db.error",
+            serde_json::json!({ "op": op, "error": e }),
+        );
+    }
+}
+
 /// 列出所有会话（不含 messages）
 #[tauri::command]
 pub async fn cmd_list_sessions(
     state: tauri::State<'_, Arc<dyn SessionRepo>>,
 ) -> Result<Vec<Session>, String> {
-    state.list_sessions().await
+    let started = crate::telemetry::now_ms();
+    let result = state.list_sessions().await;
+    track_db(
+        "list",
+        None,
+        started,
+        result.as_ref().ok().map(|v| v.len()),
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
 }
 
 /// 获取单个会话元数据
@@ -547,7 +589,16 @@ pub async fn cmd_get_session(
     state: tauri::State<'_, Arc<dyn SessionRepo>>,
     session_id: String,
 ) -> Result<Option<Session>, String> {
-    state.get_session(&session_id).await
+    let started = crate::telemetry::now_ms();
+    let result = state.get_session(&session_id).await;
+    track_db(
+        "get_session",
+        Some(&session_id),
+        started,
+        result.as_ref().ok().map(|o| o.is_some() as usize),
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
 }
 
 /// 获取会话的全部消息
@@ -556,7 +607,16 @@ pub async fn cmd_get_messages(
     state: tauri::State<'_, Arc<dyn SessionRepo>>,
     session_id: String,
 ) -> Result<Vec<Message>, String> {
-    state.get_messages(&session_id).await
+    let started = crate::telemetry::now_ms();
+    let result = state.get_messages(&session_id).await;
+    track_db(
+        "get_messages",
+        Some(&session_id),
+        started,
+        result.as_ref().ok().map(|v| v.len()),
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
 }
 
 /// 写入/更新会话元数据（前端创建/改名/pin 时调用）
@@ -565,7 +625,16 @@ pub async fn cmd_upsert_session(
     state: tauri::State<'_, Arc<dyn SessionRepo>>,
     session: Session,
 ) -> Result<(), String> {
-    state.upsert_session(&session).await
+    let started = crate::telemetry::now_ms();
+    let result = state.upsert_session(&session).await;
+    track_db(
+        "upsert",
+        Some(&session.id),
+        started,
+        None,
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
 }
 
 /// 删除会话及其消息
@@ -574,7 +643,16 @@ pub async fn cmd_delete_session(
     state: tauri::State<'_, Arc<dyn SessionRepo>>,
     session_id: String,
 ) -> Result<(), String> {
-    state.delete_session(&session_id).await
+    let started = crate::telemetry::now_ms();
+    let result = state.delete_session(&session_id).await;
+    track_db(
+        "delete",
+        Some(&session_id),
+        started,
+        None,
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
 }
 
 /// 整批替换会话的全部消息（前端上下文压缩等全量替换场景）
@@ -584,13 +662,23 @@ pub async fn cmd_replace_session_messages(
     session_id: String,
     messages: Vec<Message>,
 ) -> Result<(), String> {
-    state
+    let started = crate::telemetry::now_ms();
+    let rows = messages.len();
+    let result = state
         .replace_messages(
             &session_id,
             &messages,
             chrono::Utc::now().timestamp_millis(),
         )
-        .await
+        .await;
+    track_db(
+        "replace",
+        Some(&session_id),
+        started,
+        Some(rows),
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
 }
 
 /// 追加消息（前端 TS 引擎路径落库用；Rust 引擎路径由引擎内部直落）
@@ -600,13 +688,23 @@ pub async fn cmd_append_messages(
     session_id: String,
     messages: Vec<Message>,
 ) -> Result<(), String> {
-    state
+    let started = crate::telemetry::now_ms();
+    let rows = messages.len();
+    let result = state
         .append_messages(
             &session_id,
             &messages,
             chrono::Utc::now().timestamp_millis(),
         )
-        .await
+        .await;
+    track_db(
+        "append",
+        Some(&session_id),
+        started,
+        Some(rows),
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
 }
 
 #[cfg(test)]

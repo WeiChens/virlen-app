@@ -10,6 +10,7 @@ import {
   getCurrentWindow,
   UserAttentionType,
 } from '@tauri-apps/api/window'
+import { track } from '@/utils/telemetry'
 
 /**
  * 当窗口未聚焦时请求用户注意力。
@@ -38,6 +39,7 @@ export async function requestAttentionIfUnfocused(
         await appWindow.show()
       }
       await appWindow.setFocus()
+      track('interaction.window.force_active', { status: 'success' })
       return true
     }
 
@@ -46,6 +48,9 @@ export async function requestAttentionIfUnfocused(
   } catch (e) {
     // 非 Tauri 环境 / 权限不足时静默失败，不影响主流程
     console.warn('[window-attention] requestUserAttention failed:', e)
+    if (forceActive) {
+      track('interaction.window.force_active', { status: 'fail' })
+    }
     return false
   }
 }

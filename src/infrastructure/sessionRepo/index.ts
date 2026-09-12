@@ -11,6 +11,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { Session, Message } from '@/types'
 import { debounce } from '@/utils/common'
+import { trackError, hashText } from '@/utils/telemetry'
 
 export interface SessionRepo {
   /** 从 Rust SQLite 加载所有会话元数据（不含 messages，按 updatedAt 降序） */
@@ -50,8 +51,11 @@ class SessionRepoImpl implements SessionRepo {
   async persistSession(session: Session): Promise<void> {
     try {
       await invoke('cmd_upsert_session', { session })
-    } catch {
-      // 非 Tauri 环境忽略
+    } catch (err) {
+      // 非 Tauri 环境忽略（埋点开关关闭时为 no-op）
+      trackError('session.save.error', err, {
+        props: { session_id: hashText(session.id) },
+      })
     }
   }
 
@@ -86,6 +90,7 @@ class SessionRepoImpl implements SessionRepo {
         ])
       } catch (err) {
         console.error('[SessionRepo] 持久化失败:', err)
+        trackError('session.save.error', err)
       }
     },
     800,
