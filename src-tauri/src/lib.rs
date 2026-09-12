@@ -14,6 +14,7 @@ mod search;
 mod speech_service;
 mod task_manager;
 mod sandbox;
+mod telemetry;
 
 /// 将文件或目录移动到系统回收站（跨平台）
 #[tauri::command]
@@ -169,6 +170,10 @@ async fn kill_process_tree(pid: u32) -> Result<(), String> {
     .await
     .map_err(|e| format!("Task join error: {}", e))?;
 
+    telemetry::track(
+        "rust.command.kill",
+        serde_json::json!({ "pid": pid, "reason": "user" }),
+    );
     Ok(())
 }
 
@@ -244,6 +249,9 @@ async fn edit_file_multi_in_place(
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            // 初始化 Rust 侧埋点（panic hook + 事件回传桥）
+            telemetry::init(app.handle());
+
             // 初始化 Agent 引擎（Rust 聊天循环）
             agent::init_agent_engine(app.handle());
 
@@ -327,10 +335,17 @@ pub fn run() {
             session_db::cmd_append_messages,
             // DeepSeek tokenizer（token 计数）
             deepseek_tokenizer::cmd_count_tokens,
+            // 埋点：前端就绪后拉取落盘的历史 panic
+            telemetry::telemetry_drain_panics,
             // macOS 离线语音识别（SFSpeechRecognizer）
             speech_service::macos_request_speech_authorization,
             speech_service::macos_transcribe_speech,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                telemetry::on_exit();
+            }
+        });
 }

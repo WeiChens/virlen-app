@@ -101,6 +101,7 @@ export class GeminiProvider implements IProvider {
       body: JSON.stringify(body),
       signal,
       providerName: 'Gemini',
+      traceId: request.traceId,
     })
 
     const data: GeminiResponse = await res.json()
@@ -122,6 +123,7 @@ export class GeminiProvider implements IProvider {
         body: JSON.stringify(body),
         signal,
         providerName: 'Gemini',
+        traceId: request.traceId,
       })
     } catch (e: any) {
       callback({ type: 'error', error: e.message })
@@ -148,7 +150,7 @@ export class GeminiProvider implements IProvider {
         reader,
         decoder,
         (line) => {
-          const parsed = extractJsonData(line)
+          const parsed = extractJsonData(line, request.traceId)
           if (!parsed || parsed.isDone) return
 
           const chunk = parsed.json
@@ -185,6 +187,7 @@ export class GeminiProvider implements IProvider {
           }
         },
         signal,
+        request.traceId,
       )
     } catch (e: any) {
       if (e?.name !== 'AbortError') {

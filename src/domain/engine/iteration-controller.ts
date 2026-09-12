@@ -129,6 +129,7 @@ export class IterationController {
         skills,
         effectiveMaxTokens,
         reasoningEffort,
+        round: iterSession.currentIteration,
         persistSnapshot,
         clearSnapshot,
       })

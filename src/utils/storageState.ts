@@ -33,8 +33,21 @@ class StorageState<T extends object> {
   private defaultValue: T
   private saveLocal: (data: T) => void
   private storage: Storage
+  /**
+   * 变更钩子（可选）：任意 key 变更时触发，用于埋点等旁路观察。
+   * 由外部赋值（如 settingsState.onChange = ...），不参与持久化。
+   */
+  onChange:
+    | ((key: string, oldValue: unknown, newValue: unknown) => void)
+    | null = null
   setValue<K extends keyof T>(key: K, value: T[K]) {
+    const oldValue = this.value[key]
     this.value[key] = value
+    try {
+      this.onChange?.(key as string, oldValue, value)
+    } catch {
+      // 观察者异常不影响主流程
+    }
     this.saveLocal(this.value)
   }
   set(data: Partial<T>) {

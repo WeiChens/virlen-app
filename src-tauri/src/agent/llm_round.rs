@@ -31,6 +31,7 @@ pub async fn do_llm_round(
     session_id: &str,
     override_max_tokens: Option<i64>,
     reasoning_effort: Option<&str>,
+    round: i64,
 ) -> Result<LlmRoundOutput, String> {
     let model = session.model_id.clone();
     let system_prompt = if session.system_prompt.trim().is_empty() {
@@ -84,6 +85,18 @@ pub async fn do_llm_round(
         reasoning_effort: reasoning_effort.map(String::from),
     };
 
+    let trace_id = crate::telemetry::get_session_trace(session_id).unwrap_or_default();
+    let round_started = now_ms();
+    crate::telemetry::track(
+        "engine.round.start",
+        json!({
+            "trace_id": trace_id,
+            "round": round,
+            "msg_count": request.messages.len(),
+            "req_tokens_est": estimate_req_tokens(&request.messages),
+        }),
+    );
+
     let stream_result = if session.params.stream {
         handle_streaming(
             provider,
@@ -98,6 +111,22 @@ pub async fn do_llm_round(
     } else {
         handle_non_streaming(provider, &request, &mut ctx, cancel).await
     };
+
+    crate::telemetry::track(
+        "engine.round.end",
+        json!({
+            "trace_id": trace_id,
+            "round": round,
+            "duration_ms": now_ms() - round_started,
+            "usage": ctx.assistant_message.usage.as_ref().map(|u| json!({
+                "prompt": u.prompt_tokens,
+                "completion": u.completion_tokens,
+                "total": u.total_tokens,
+            })),
+            "tool_uses_count": ctx.tool_uses.len(),
+            "status": if stream_result.is_err() { "fail" } else { "success" },
+        }),
+    );
 
     if let Err(e) = stream_result {
         // 用户取消：保留已收集的部分内容，正常结束（不当作错误）
@@ -411,6 +440,25 @@ pub fn finalize_assistant_message(
     );
 }
 
+/// 粗估请求 token（字符数/4），仅用于埋点趋势，非精确计费
+fn estimate_req_tokens(messages: &[Message]) -> usize {
+    let mut chars = 0usize;
+    for m in messages {
+        match &m.content {
+            Value::String(s) => chars += s.chars().count(),
+            Value::Array(blocks) => {
+                for b in blocks {
+                    if let Some(t) = b.get("text").and_then(Value::as_str) {
+                        chars += t.chars().count();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    chars / 4
+}
+
 pub fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
@@ -510,6 +558,7 @@ mod tests {
             "s1",
             None,
             None,
+            1,
         ));
 
         let output = out.expect("llm round 应成功");

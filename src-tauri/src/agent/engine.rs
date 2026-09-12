@@ -86,16 +86,44 @@ impl AgentEngine {
     /// 发送消息并获取回复
     pub async fn send_message(&self, options: SendMessageOptions) -> Result<(), String> {
         let session_id = options.session_id.clone();
+        let trace_id = options.trace_id.clone();
+        if let Some(t) = &trace_id {
+            crate::telemetry::set_session_trace(&session_id, t);
+        }
         let cancel = CancellationToken::new();
         self.active_cancels
             .lock()
             .unwrap()
             .insert(session_id.clone(), cancel.clone());
 
+        let started = crate::telemetry::now_ms();
+        crate::telemetry::track(
+            "rust.engine.start",
+            json!({
+                "session_id": crate::telemetry::hash_id(&session_id),
+                "trace_id": trace_id.clone().unwrap_or_default(),
+            }),
+        );
+
         let result = self.send_message_inner(options, &cancel).await;
 
         self.active_cancels.lock().unwrap().remove(&session_id);
         clear_tool_call_history(&session_id);
+
+        let mut finish = json!({
+            "session_id": crate::telemetry::hash_id(&session_id),
+            "trace_id": trace_id.clone().unwrap_or_default(),
+            "duration_ms": crate::telemetry::now_ms() - started,
+            "status": if result.is_ok() { "success" } else { "fail" },
+        });
+        if let Some(e) = result.as_ref().err() {
+            if let Some(map) = finish.as_object_mut() {
+                map.insert("error".into(), json!(e));
+            }
+        }
+        crate::telemetry::track("rust.engine.finish", finish);
+        crate::telemetry::clear_session_trace(&session_id);
+
         result
     }
 
@@ -282,9 +310,11 @@ impl AgentEngine {
         clear_closure: &(dyn Fn(&str) + Sync + Send),
     ) -> Result<bool, String> {
         let mut rounds = remaining_rounds;
+        let mut round_index: i64 = 0;
 
         while rounds > 0 {
             rounds -= 1;
+            round_index += 1;
             let result = match execute_llm_round(ExecuteLlmRoundParams {
                 session,
                 provider,
@@ -299,6 +329,7 @@ impl AgentEngine {
                 effective_max_tokens,
                 reasoning_effort: reasoning_effort.clone(),
                 repo: self.repo.as_ref(),
+                round: round_index,
                 persist_snapshot: Some(persist_closure),
                 clear_snapshot: Some(clear_closure),
             })
@@ -632,6 +663,7 @@ mod tests {
                 max_iterations: 5,
                 session_id: "s1".into(),
                 security: None,
+                trace_id: None,
             })
             .await;
 
@@ -720,6 +752,7 @@ mod tests {
                 max_iterations: 5,
                 session_id: "s1".into(),
                 security: None,
+                trace_id: None,
             })
             .await;
 
@@ -774,6 +807,7 @@ mod tests {
                 max_iterations: 5,
                 session_id: "s1".into(),
                 security: None,
+                trace_id: None,
             })
             .await;
 

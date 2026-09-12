@@ -13,6 +13,7 @@ import { action, makeObservable, observable, runInAction } from 'mobx'
 import type { Session } from '@/types'
 import type { SessionRepo } from '@/infrastructure/sessionRepo'
 import { sessionRepo } from '@/infrastructure/sessionRepo'
+import { track, trackError, hashText } from '@/utils/telemetry'
 
 class SessionStore {
   value: { sessions: Session[] } = { sessions: [] }
@@ -33,6 +34,7 @@ class SessionStore {
 
   /** 从 Rust SQLite 加载所有会话元数据（消息懒加载，激活时再拉取） */
   async loadFromDB(): Promise<void> {
+    const started = Date.now()
     try {
       const sessions = await this.repo.loadAll()
       // DB 会话消息未加载，切到该会话时懒加载
@@ -43,12 +45,23 @@ class SessionStore {
       // ⚠️ 必须同步更新 _lastSaved 基线，否则 persist() 的 debounced saveDiff
       // 传过去的 oldSessions=[]，导致任何删除操作都无法被识别（diff 认为没有要删的东西）
       this._lastSaved = sessions
+      track('session.load', {
+        session_count: sessions.length,
+        duration_ms: Date.now() - started,
+        status: 'success',
+      })
     } catch (err) {
       console.error('[SessionStore] 加载失败:', err)
       runInAction(() => {
         this.value.sessions = []
       })
       this._lastSaved = []
+      track('session.load', {
+        session_count: 0,
+        duration_ms: Date.now() - started,
+        status: 'fail',
+      })
+      trackError('session.load.error', err)
     }
   }
 
@@ -60,6 +73,7 @@ class SessionStore {
     if (this.loadedMessageIds.has(sessionId)) return
     const idx = this.value.sessions.findIndex((s) => s.id === sessionId)
     if (idx === -1) return
+    const started = Date.now()
     try {
       const messages = await this.repo.getMessages(sessionId)
       runInAction(() => {
@@ -70,8 +84,20 @@ class SessionStore {
         this.value.sessions = sessions
       })
       this.loadedMessageIds.add(sessionId)
+      track('session.messages.lazyload', {
+        session_id: hashText(sessionId),
+        message_count: messages.length,
+        duration_ms: Date.now() - started,
+        status: 'success',
+      })
     } catch {
       // 拉取失败不标记，下次激活重试
+      track('session.messages.lazyload', {
+        session_id: hashText(sessionId),
+        message_count: 0,
+        duration_ms: Date.now() - started,
+        status: 'fail',
+      })
     }
   }
 
@@ -187,6 +213,11 @@ class SessionStore {
     sessions.splice(idx, 1)
     this.value.sessions = sessions
     this.persist()
+    track('session.delete', {
+      session_id: hashText(id),
+      batch: false,
+      count: 1,
+    })
     return true
   }
 
@@ -202,6 +233,7 @@ class SessionStore {
     if (deletedCount === 0) return 0
     this.value.sessions = newSessions
     this.persist()
+    track('session.delete', { batch: true, count: deletedCount })
     return deletedCount
   }
 

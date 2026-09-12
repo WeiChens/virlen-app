@@ -7,9 +7,17 @@ import { observer } from 'mobx-react-lite'
 import { settingsState, resolveDefaultWorkspace } from '@/ui/store'
 import type { SettingsStore, CommandApprovalMode, SandboxMode } from '@/ui/store'
 import { showToast } from '@/ui/components/shared/Toast'
+import {
+  telemetryState,
+  recordTelemetryToggle,
+  exportTelemetryBundle,
+  uploadTelemetry,
+  clearTelemetry,
+  isTelemetryBuildDisabled,
+} from '@/utils/telemetry'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
 import Select from '@/ui/components/shared/Select'
-import { t } from '@/ui/i18n'
+import { t, tpl } from '@/ui/i18n'
 import './general-settings.scss'
 
 function formatMaxTokens(v: number): string {
@@ -19,6 +27,7 @@ function formatMaxTokens(v: number): string {
 function GeneralSettings() {
   const s = settingsState.value
   const [resolvedWorkspace, setResolvedWorkspace] = useState('')
+  const [telemetryBusy, setTelemetryBusy] = useState(false)
 
   const LANGUAGE_OPTIONS: {
     value: SettingsStore['language']
@@ -100,6 +109,70 @@ function GeneralSettings() {
     value: SettingsStore[K],
   ) {
     settingsState.setValue(key, value)
+  }
+
+  // ==================== 诊断埋点（§8） ====================
+  const telemetryBuildDisabled = isTelemetryBuildDisabled()
+
+  function toggleTelemetry(enabled: boolean) {
+    settingsState.setValue('telemetryEnabled', enabled)
+    // telemetry.toggle 无论开关状态都记录（§12.15）
+    recordTelemetryToggle(enabled)
+    if (!enabled) {
+      // §7.1.3 隐私红线：关闭即停止采集并清空本地已采集数据（禁用为破坏性操作）
+      const n = clearTelemetry()
+      if (n > 0) {
+        showToast(tpl('已清理 $__n__ 条埋点数据', { n }), 1800)
+      }
+    }
+  }
+
+  async function handleExportTelemetry() {
+    if (telemetryBusy) return
+    setTelemetryBusy(true)
+    try {
+      const r = await exportTelemetryBundle()
+      if (r) {
+        showToast(tpl('已导出 $__n__ 条到本地', { n: r.count }), 2000)
+      }
+    } catch (e: any) {
+      showToast(t('导出失败') + '：' + (e?.message || String(e)), 2500)
+    } finally {
+      setTelemetryBusy(false)
+    }
+  }
+
+  async function handleUploadTelemetry() {
+    if (telemetryBusy) return
+    if (telemetryState.bufferedCount === 0) {
+      showToast(t('暂无可上报数据'), 1500)
+      return
+    }
+    setTelemetryBusy(true)
+    try {
+      const r = await uploadTelemetry()
+      if (r.ok) {
+        showToast(t('上报成功，本地数据已清空'), 2000)
+      } else {
+        showToast(
+          t('上报失败') + (r.message ? '：' + r.message : ''),
+          2500,
+        )
+      }
+    } catch (e: any) {
+      showToast(t('上报失败') + '：' + (e?.message || String(e)), 2500)
+    } finally {
+      setTelemetryBusy(false)
+    }
+  }
+
+  function handleClearTelemetry() {
+    if (telemetryState.bufferedCount === 0) {
+      showToast(t('暂无埋点数据'), 1500)
+      return
+    }
+    const n = clearTelemetry()
+    showToast(tpl('已清理 $__n__ 条埋点数据', { n }), 1800)
   }
 
   async function pickFolder() {
@@ -444,6 +517,61 @@ function GeneralSettings() {
               <span className="toggle-slider" />
             </label>
           </div>
+        </div>
+      </div>
+      <h2 className="section-title">{t('诊断埋点')}</h2>
+
+      <div className="section">
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="label-text">{t('诊断埋点')}</span>
+            <span className="label-desc">
+              {t(
+                '开启后在本地记录运行数据，用于排查问题。\n关闭时停止采集；数据仅在你点击「上报官网」后发送',
+              )}
+              {telemetryBuildDisabled && (
+                <span className="telemetry-build-off">
+                  {t('（当前构建已禁用埋点）')}
+                </span>
+              )}
+            </span>
+          </div>
+          <div className="setting-control">
+            <div className="telemetry-toggle-wrap">
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={s.telemetryEnabled}
+                  disabled={telemetryBuildDisabled}
+                  onChange={(e) => toggleTelemetry(e.target.checked)}
+                />
+                <span className="toggle-slider" />
+              </label>
+              <span className="telemetry-count">
+                ● {telemetryState.bufferedCount} {t('条')}
+              </span>
+            </div>
+          </div>
+        </div>
+        <div className="telemetry-actions">
+          <button
+            className="tel-btn"
+            onClick={handleExportTelemetry}
+            disabled={telemetryBusy || telemetryState.bufferedCount === 0}>
+            {t('导出本地')}
+          </button>
+          <button
+            className="tel-btn primary"
+            onClick={handleUploadTelemetry}
+            disabled={telemetryBusy || telemetryState.bufferedCount === 0}>
+            {telemetryState.uploading ? t('上报中...') : t('上报官网')}
+          </button>
+          <button
+            className="tel-btn danger"
+            onClick={handleClearTelemetry}
+            disabled={telemetryBusy || telemetryState.bufferedCount === 0}>
+            {t('清理数据')}
+          </button>
         </div>
       </div>
     </div>

@@ -5,6 +5,7 @@
  * 通过 toolInteractEvent 事件总线与 UI 层（tool-ui.tsx）通讯。
  */
 import toolInteractEvent from '@/events/toolInteractEvent'
+import { track, getSessionTrace } from '@/utils/telemetry'
 import type { ToolResult } from '@/domain/tools/types'
 
 /**
@@ -35,14 +36,28 @@ export function createUserChoiceHandles(
 ): UserChoiceHandles {
   let interactionResolve: ((value: ToolResult) => void) | null = null
   let interactionReject: ((reason: any) => void) | null = null
+  let showTime = 0
+  let traceId: string | undefined
 
   // 监听 UI 层的确认 / 取消 / 暂存
-  const offResolve = toolInteractEvent.on('resolve', (value: ToolResult) => {
+  const offResolve = toolInteractEvent.on('resolve', (value: string) => {
+    track('interaction.choice.result', {
+      trace_id: traceId,
+      selected_count: value ? String(value).split(',').length : 0,
+      action: 'confirm',
+      latency_ms: showTime ? Date.now() - showTime : undefined,
+    })
     interactionResolve?.(value)
     interactionResolve = null
   })
   const offReject = toolInteractEvent.on('reject', (reason: string) => {
+    track('interaction.choice.result', {
+      trace_id: traceId,
+      action: 'cancel',
+      latency_ms: showTime ? Date.now() - showTime : undefined,
+    })
     if (reason.startsWith('shelve:')) {
+      track('interaction.cancel', { phase: 'user_choice' })
       interactionReject?.(new InteractionShelved(reason.slice(7)))
     } else {
       interactionReject?.(reason || 'cancelled')
@@ -52,22 +67,32 @@ export function createUserChoiceHandles(
 
   return {
     handler: async (type: string, data: Record<string, any>) => {
-      return new Promise<ToolResult>((resolve, reject) => {
-        interactionResolve = resolve
-        interactionReject = reject
-        toolInteractEvent.emit(
-          'showChoice',
-          sessionId,
-          data.question,
-          data.options,
-          data.multi,
-          data.toolCallId,
-        )
+      showTime = Date.now()
+      traceId = getSessionTrace(sessionId)
+      track('interaction.choice.show', {
+        trace_id: traceId,
+        question: data.question,
+        question_len: (data.question || '').length,
+        option_count: (data.options || []).length,
+        multi: !!data.multi,
       })
-    },
-    cleanup: () => {
-      offResolve()
-      offReject()
-    },
+      return new Promise<string>((resolve, reject) => {
+        return new Promise<ToolResult>((resolve, reject) => {
+          interactionResolve = resolve
+          interactionReject = reject
+          toolInteractEvent.emit(
+            'showChoice',
+            sessionId,
+            data.question,
+            data.options,
+            data.multi,
+            data.toolCallId,
+          )
+        })
+      },
+        cleanup: () => {
+          offResolve()
+          offReject()
+        },
   }
-}
+  }

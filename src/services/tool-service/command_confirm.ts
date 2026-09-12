@@ -10,6 +10,7 @@
 import { ToolExecutorResponse } from '@/domain/tools/types'
 import toolInteractEvent from '@/events/toolInteractEvent'
 import { toolOutputStore } from '@/infrastructure/tools/output-store'
+import { track } from '@/utils/telemetry'
 
 class InteractionShelved extends Error {
   shelveMessage: string
@@ -36,6 +37,7 @@ export function createCommandConfirmHandles(
   let pendingCommand = ''
   let pendingToolCallId = ''
   let pendingApprovalId = ''
+  let showTime = 0
 
   const offResolve = toolInteractEvent.on(
     'commandResolve',
@@ -50,6 +52,12 @@ export function createCommandConfirmHandles(
       pendingApprovalId = ''
 
       if (!resolve) return
+
+      track('interaction.command.confirm.result', {
+        approval_id: approvalId,
+        action: 'allow',
+        latency_ms: showTime ? Date.now() - showTime : undefined,
+      })
 
       try {
         const result = {
@@ -84,6 +92,14 @@ export function createCommandConfirmHandles(
     // pendingCommand = ''
     // pendingToolCallId = ''
     if (!reject) return
+    track('interaction.command.confirm.result', {
+      approval_id: approvalId,
+      action: reason.startsWith('shelve:') ? 'shelve' : 'reject',
+      latency_ms: showTime ? Date.now() - showTime : undefined,
+    })
+    if (!reason.startsWith('shelve:')) {
+      track('interaction.cancel', { phase: 'command_confirm' })
+    }
     if (reason.startsWith('shelve:')) {
       reject(new InteractionShelved(reason.slice(7)))
     } else {
@@ -111,6 +127,13 @@ export function createCommandConfirmHandles(
       pendingCommand = data.command || ''
       pendingToolCallId = data.toolCallId || ''
       pendingApprovalId = data.approvalId || ''
+      showTime = Date.now()
+      track('interaction.command.confirm.show', {
+        approval_id: pendingApprovalId,
+        command: pendingCommand,
+        command_len: pendingCommand.length,
+        risk: data.risk,
+      })
       return new Promise<ToolExecutorResponse>((resolve, reject) => {
         interactionResolve = resolve
         interactionReject = reject
@@ -147,17 +170,27 @@ export function createNativeCommandConfirmHandles(
   let interactionReject: ((reason: any) => void) | null = null
   let pendingCommand = ''
   let pendingToolCallId = ''
+  let pendingApprovalId = ''
+  let showTime = 0
 
   const offResolve = toolInteractEvent.on(
     'commandResolve',
     async (_value: string) => {
       const resolve = interactionResolve
       const toolCallId = pendingToolCallId
+      const approvalId = pendingApprovalId
       interactionResolve = null
       interactionReject = null
       pendingCommand = ''
       pendingToolCallId = ''
+      pendingApprovalId = ''
       if (!resolve) return
+
+      track('interaction.command.confirm.result', {
+        approval_id: approvalId,
+        action: 'allow',
+        latency_ms: showTime ? Date.now() - showTime : undefined,
+      })
 
       // 原生命令：只回「允许」标记，实际执行由 Rust 完成
       resolve('approved')
@@ -171,9 +204,19 @@ export function createNativeCommandConfirmHandles(
     const reject = interactionReject
     const cmd = pendingCommand
     const toolCallId = pendingToolCallId
+    const approvalId = pendingApprovalId
     interactionResolve = null
     interactionReject = null
+    pendingApprovalId = ''
     if (!reject) return
+    track('interaction.command.confirm.result', {
+      approval_id: approvalId,
+      action: reason.startsWith('shelve:') ? 'shelve' : 'reject',
+      latency_ms: showTime ? Date.now() - showTime : undefined,
+    })
+    if (!reason.startsWith('shelve:')) {
+      track('interaction.cancel', { phase: 'command_confirm' })
+    }
     if (reason.startsWith('shelve:')) {
       reject(new InteractionShelved(reason.slice(7)))
     } else {
@@ -190,6 +233,15 @@ export function createNativeCommandConfirmHandles(
     handler: async (_type: string, data: Record<string, any>) => {
       pendingCommand = data.command || ''
       pendingToolCallId = data.toolCallId || ''
+      // 原生路径 Rust 不下发 approvalId，回退用 toolCallId 作为审批关联 ID
+      pendingApprovalId = data.approvalId || data.toolCallId || ''
+      showTime = Date.now()
+      track('interaction.command.confirm.show', {
+        approval_id: pendingApprovalId,
+        command: pendingCommand,
+        command_len: pendingCommand.length,
+        risk: data.risk,
+      })
       return new Promise<ToolExecutorResponse>((resolve, reject) => {
         interactionResolve = resolve
         interactionReject = reject

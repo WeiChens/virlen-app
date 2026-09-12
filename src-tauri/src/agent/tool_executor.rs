@@ -20,7 +20,7 @@ use crate::session_db::SessionRepo;
 use serde_json::{json, Value};
 
 /// 从 tool call 上下文创建 Run
-pub fn create_run(session_id: &str, ctx: &ToolCallContext) -> Run {
+pub fn create_run(session_id: &str, ctx: &ToolCallContext, round: i64) -> Run {
     Run {
         id: format!("run_{}", ctx.assistant_message.id),
         session_id: session_id.to_string(),
@@ -41,7 +41,7 @@ pub fn create_run(session_id: &str, ctx: &ToolCallContext) -> Run {
             .collect(),
         created_at: now_ms(),
         paused: false,
-        round: 0,
+        round,
     }
 }
 
@@ -58,6 +58,8 @@ pub async fn execute_tool_steps(
     repo: &dyn SessionRepo,
 ) -> (bool, Vec<Message>) {
     let session_id = run.session_id.clone();
+    let trace_id = crate::telemetry::get_session_trace(&session_id);
+    let round = run.round;
     let start_index = find_next_step(run);
     let mut tool_result_messages: Vec<Message> = Vec::new();
 
@@ -73,6 +75,15 @@ pub async fn execute_tool_steps(
             step.started_at = Some(now_ms());
 
             notify_step_start(step, sink, &session_id);
+            // exec_path：native=Rust 原生工具；bridge=委托 JS 桥执行。
+            let exec_path = if security.is_some()
+                && native_tools::is_native_tool(&step.tool_name)
+            {
+                "native"
+            } else {
+                "bridge"
+            };
+            emit_tool_call_start(step, round, &session_id, &trace_id, exec_path);
             tool_result = execute_single_step(
                 &session_id,
                 step,
@@ -88,6 +99,8 @@ pub async fn execute_tool_steps(
         // 检查是否被暂停
         if tool_result == "__SHELVED__" {
             run.paused = true;
+            // 暂停时补发 tool.call.end（status=pause），保证 start/end span 成对
+            emit_tool_call_end(&run.steps[i], &session_id, &trace_id, Some("pause"));
             if let Some(p) = persist_snapshot {
                 p(run);
             }
@@ -105,6 +118,7 @@ pub async fn execute_tool_steps(
         }
 
         let tool_result_msg = handle_tool_result(&mut run.steps[i], &tool_result, sink, &session_id);
+        emit_tool_call_end(&run.steps[i], &session_id, &trace_id, None);
         // 关键：单个 tool 完成即落库（而非等整轮结束再批量写），
         // 即使中途崩溃/卡死，已完成步骤的「工具响应」也已持久化。
         if let Err(e) = repo
@@ -124,6 +138,134 @@ pub async fn execute_tool_steps(
     }
 
     (true, tool_result_messages)
+}
+
+/// 工具输出写入埋点前的截断上限（与前端 truncateText 默认值一致）
+const TOOL_RESULT_EMIT_MAX_CHARS: usize = 16384;
+
+/// 按字符截断过长文本（附截断标记）
+fn truncate_for_telemetry(input: &str, max: usize) -> String {
+    let total = input.chars().count();
+    if total <= max {
+        return input.to_string();
+    }
+    let head: String = input.chars().take(max).collect();
+    format!("{}\n…[truncated {} chars]", head, total - max)
+}
+
+/// 工具名 → 分类 ID（与 JS `src/domain/tools/category.ts` 保持一致，未知回退 `system`）
+fn tool_category(tool_name: &str) -> &'static str {
+    match tool_name {
+        "read_file" | "write_file" | "edit_file" | "delete_file" | "copy_move_file"
+        | "list_files" | "file_info" | "mkdir" => "file",
+        "search_files_by_name" | "search_text_in_files" => "search",
+        "execute_command" => "execute",
+        "search_knowledge_base" | "list_knowledge_bases" | "list_knowledge_base_documents"
+        | "get_knowledge_base_document" | "write_to_knowledge_base"
+        | "delete_knowledge_base_document" => "knowledge_base",
+        "web_search" | "web_fetch" => "web",
+        "vision_analyze" => "vision",
+        "list_skills" | "read_skill_source" => "skill",
+        "get_current_time" | "user_choice" => "system",
+        _ => "system",
+    }
+}
+
+/// 埋点：tool.call.start
+///
+/// 与 JS 引擎（`src/domain/engine/tool-executor.ts`）保持同一 schema，
+/// 使分析器无需区分 rust/js 引擎。
+fn emit_tool_call_start(
+    step: &ToolStep,
+    round: i64,
+    session_id: &str,
+    trace_id: &Option<String>,
+    exec_path: &str,
+) {
+    let input_keys: Vec<String> = match &step.input {
+        Value::Object(map) => map.keys().cloned().collect(),
+        _ => Vec::new(),
+    };
+    let mut props = serde_json::Map::new();
+    if let Some(t) = trace_id {
+        props.insert("trace_id".into(), json!(t));
+    }
+    props.insert(
+        "session_id".into(),
+        json!(crate::telemetry::hash_id(session_id)),
+    );
+    props.insert("span_id".into(), json!(step.tool_call_id));
+    props.insert("tool_name".into(), json!(step.tool_name));
+    props.insert("category".into(), json!(tool_category(&step.tool_name)));
+    props.insert("exec_path".into(), json!(exec_path));
+    props.insert("round".into(), json!(round));
+    props.insert("input_keys".into(), json!(input_keys));
+    props.insert(
+        "input_size".into(),
+        json!(serde_json::to_string(&step.input)
+            .map(|s| s.len())
+            .unwrap_or(0)),
+    );
+    props.insert("input".into(), step.input.clone());
+    crate::telemetry::track("tool.call.start", Value::Object(props));
+}
+
+/// 埋点：tool.call.end（schema 与 JS 引擎一致）
+fn emit_tool_call_end(
+    step: &ToolStep,
+    session_id: &str,
+    trace_id: &Option<String>,
+    status_override: Option<&str>,
+) {
+    let mut props = serde_json::Map::new();
+    if let Some(t) = trace_id {
+        props.insert("trace_id".into(), json!(t));
+    }
+    props.insert(
+        "session_id".into(),
+        json!(crate::telemetry::hash_id(session_id)),
+    );
+    props.insert("span_id".into(), json!(step.tool_call_id));
+    props.insert("tool_name".into(), json!(step.tool_name));
+    props.insert(
+        "status".into(),
+        json!(status_override.unwrap_or(if step.status == ToolStepStatus::Completed {
+            "success"
+        } else {
+            "fail"
+        })),
+    );
+    if let Some(started) = step.started_at {
+        props.insert("duration_ms".into(), json!(now_ms() - started));
+    }
+    props.insert(
+        "is_error".into(),
+        json!(step.status == ToolStepStatus::Failed),
+    );
+    match &step.result {
+        Some(r) => {
+            props.insert(
+                "result".into(),
+                json!(truncate_for_telemetry(r, TOOL_RESULT_EMIT_MAX_CHARS)),
+            );
+            props.insert("result_size".into(), json!(r.chars().count()));
+        }
+        None => {
+            props.insert("result_size".into(), json!(0));
+        }
+    }
+    if let Some(e) = &step.error {
+        props.insert("error".into(), json!(e));
+    }
+    if let Some(t) = step
+        .ui_data
+        .as_ref()
+        .and_then(|d| d.get("type"))
+        .and_then(Value::as_str)
+    {
+        props.insert("ui_data_type".into(), json!(t));
+    }
+    crate::telemetry::track("tool.call.end", Value::Object(props));
 }
 
 /// 通知 UI 当前步骤开始执行
@@ -157,6 +299,16 @@ async fn execute_single_step(
     if check_tool_call_storm(session_id, &step.tool_name, &step.input) {
         step.status = ToolStepStatus::Failed;
         step.error = Some("检测到工具调用循环，已自动拦截".to_string());
+        crate::telemetry::track(
+            "engine.storm_break",
+            json!({
+                "trace_id": crate::telemetry::get_session_trace(session_id).unwrap_or_default(),
+                "session_id": crate::telemetry::hash_id(session_id),
+                "repeated_tool": step.tool_name,
+                "repeat_count": 3,
+                "window": 6,
+            }),
+        );
         return "[StormBreaker] 工具 \"".to_string()
             + &step.tool_name
             + "\" 在最近几次调用中重复出现，已自动拦截。请重新思考策略，尝试不同的方法或直接给出最终回答。";
@@ -174,7 +326,30 @@ async fn execute_single_step(
                 security: sec,
             };
             let args = step.input.clone();
-            return match native_tools::execute_native_tool(&ctx, &step.tool_name, &args).await {
+            let tool_name = step.tool_name.clone();
+            let native_started = crate::telemetry::now_ms();
+            let outcome = native_tools::execute_native_tool(&ctx, &tool_name, &args).await;
+            {
+                let (status, error) = match &outcome {
+                    Ok(native_tools::NativeToolOutcome::Value { .. }) => ("success", None),
+                    Ok(native_tools::NativeToolOutcome::Interaction { .. }) => ("success", None),
+                    Ok(native_tools::NativeToolOutcome::Shelved) => ("shelved", None),
+                    Ok(native_tools::NativeToolOutcome::Error(msg)) => ("fail", Some(msg.clone())),
+                    Err(e) => ("fail", Some(e.clone())),
+                };
+                let mut props = json!({
+                    "tool_name": tool_name,
+                    "duration_ms": crate::telemetry::now_ms() - native_started,
+                    "status": status,
+                });
+                if let Some(err) = error {
+                    if let Some(map) = props.as_object_mut() {
+                        map.insert("error".into(), json!(err));
+                    }
+                }
+                crate::telemetry::track("rust.tool.native", props);
+            }
+            return match outcome {
                 Ok(native_tools::NativeToolOutcome::Value { content, ui_data }) => {
                     step.status = ToolStepStatus::Completed;
                     step.result = Some(content.clone());

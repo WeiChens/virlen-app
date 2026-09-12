@@ -30,7 +30,8 @@
     "types": [
       "vitest/globals"
     ],
-    "rootDir": "./src"
+    "rootDir": "./src",
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.tsbuildinfo"
   },
   "include": [
     "src"

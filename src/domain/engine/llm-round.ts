@@ -4,6 +4,7 @@
  * 从 engine/index.ts 拆分，所有函数为无状态纯函数，不依赖 class this。
  */
 import { v4 } from '@/utils/uuid'
+import { track, getSessionTrace } from '@/utils/telemetry'
 import type {
   Message,
   ToolUseContent,
@@ -14,6 +15,24 @@ import type {
 import type { ToolCallContext } from './types'
 import { ChatRequest, IProvider } from '@/infrastructure/provider/types'
 import { ToolDefinition } from '../tools/types'
+
+/** 粗估请求 token（字符数/4），仅用于埋点趋势，非精确计费 */
+function estimateReqTokens(messages: Message[]): number {
+  let chars = 0
+  for (const m of messages) {
+    if (typeof m.content === 'string') {
+      chars += m.content.length
+    } else if (Array.isArray(m.content)) {
+      for (const b of m.content) {
+        if (b && typeof b === 'object' && 'text' in b) {
+          const t = (b as { text?: unknown }).text
+          if (typeof t === 'string') chars += t.length
+        }
+      }
+    }
+  }
+  return Math.ceil(chars / 4)
+}
 
 // ==================== 导出函数 ====================
 
@@ -30,6 +49,7 @@ export async function doLLMRound(
   onEvent?: AgentEventCallback,
   overrideMaxTokens?: number,
   reasoningEffort?: string,
+  round?: number,
 ): Promise<ToolCallContext | null> {
   const model = session.modelId
   const systemPrompt = session.systemPrompt || '你是一个有用的 AI 助手。'
@@ -71,6 +91,10 @@ export async function doLLMRound(
     request.reasoningEffort = reasoningEffort
   }
 
+  // 将会话链路 ID 透传给 provider 层（provider.* / sse.interrupt 埋点关联）
+  const traceId = getSessionTrace(session.id)
+  request.traceId = traceId
+
   const syncAssistant = () => {
     onEvent?.({
       type: 'assistant_message_updated',
@@ -89,18 +113,57 @@ export async function doLLMRound(
     })
   }
 
-  if (session.params.stream) {
-    await handleStreaming(
-      provider,
-      request,
-      ctx,
-      syncAssistant,
-      onEvent,
-      abortSignal,
-    )
-  } else {
-    await handleNonStreaming(provider, request, ctx, abortSignal)
+  const roundStart = Date.now()
+  track('engine.round.start', {
+    trace_id: traceId,
+    round,
+    msg_count: messages.length,
+    req_tokens_est: estimateReqTokens(messages),
+  })
+
+  // 记录本轮是否出错：流式路径不抛错（仅回调 error），故需拦截 onEvent 捕获；
+  // 非流式路径 provider.chat 会抛错，由下方 catch 捕获。用于 engine.round.end.status。
+  let roundErrored = false
+  let roundThrown: unknown = null
+  const watchError: AgentEventCallback = (ev) => {
+    if (ev.type === 'error') roundErrored = true
+    onEvent?.(ev)
   }
+  try {
+    if (session.params.stream) {
+      await handleStreaming(
+        provider,
+        request,
+        ctx,
+        syncAssistant,
+        watchError,
+        abortSignal,
+      )
+    } else {
+      await handleNonStreaming(provider, request, ctx, abortSignal)
+    }
+  } catch (e) {
+    roundErrored = true
+    roundThrown = e
+  }
+
+  track('engine.round.end', {
+    trace_id: traceId,
+    round,
+    duration_ms: Date.now() - roundStart,
+    usage: ctx.assistantMessage.usage
+      ? {
+          prompt: ctx.assistantMessage.usage.promptTokens,
+          completion: ctx.assistantMessage.usage.completionTokens,
+          total: ctx.assistantMessage.usage.totalTokens,
+        }
+      : undefined,
+    tool_uses_count: ctx.toolUses.length,
+    status: abortSignal.aborted || roundErrored ? 'fail' : 'success',
+  })
+
+  // 非流式路径的异常在补发 round.end 后原样抛出，保持既有错误传播行为
+  if (roundThrown) throw roundThrown
 
   // 没有 tool calls → 结束循环
   if (ctx.toolUses.length === 0) {

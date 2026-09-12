@@ -1353,9 +1353,31 @@ async fn run_command_sandboxed(
     let command_argv: Vec<String> = std::iter::once(shell.to_string())
         .chain(args.iter().cloned())
         .collect();
-    let child = session
-        .spawn(&command_argv, raw_cmdline.as_deref(), &env_extra)
-        .map_err(|e| format!("sandbox spawn failed: {e}"))?;
+    let child = match session.spawn(&command_argv, raw_cmdline.as_deref(), &env_extra) {
+        Ok(c) => {
+            crate::telemetry::track(
+                "rust.sandbox.spawn",
+                json!({
+                    "tool_name": "execute_command",
+                    "sandbox_mode": if readonly_mode { "readonly" } else { "on" },
+                    "status": "success",
+                }),
+            );
+            c
+        }
+        Err(e) => {
+            crate::telemetry::track(
+                "rust.sandbox.spawn",
+                json!({
+                    "tool_name": "execute_command",
+                    "sandbox_mode": if readonly_mode { "readonly" } else { "on" },
+                    "status": "fail",
+                    "error": format!("sandbox spawn failed: {e}"),
+                }),
+            );
+            return Err(format!("sandbox spawn failed: {e}"));
+        }
+    };
     // token 已不再需要，尽早关闭（也避免 HANDLE 跨 await）。
     drop(session);
 

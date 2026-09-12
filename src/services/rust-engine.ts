@@ -27,6 +27,7 @@ import { securityService } from '@/services/security-service'
 import { getSkillsDirPath } from '@/skill/skillStore'
 import { settingsState } from '@/ui/store'
 import { toolOutputStore } from '@/infrastructure/tools/output-store'
+import { trackError, getSessionTrace } from '@/utils/telemetry'
 import type { Message, Session } from '@/types'
 
 /** 会话级用户交互处理器（chat-service 注册，桥接层使用） */
@@ -134,6 +135,14 @@ async function handleToolRequest(payload: {
       payload: serializeToolResult(result),
     })
   } catch (e: any) {
+    trackError('error.bridge', e, {
+      props: {
+        direction: 'js2rust',
+        kind: 'tool-request',
+        tool_name: toolName,
+        request_id: requestId,
+      },
+    })
     await invoke('agent_tool_response', {
       requestId,
       payload: {
@@ -406,12 +415,20 @@ export const rustEngine: AgentEnginePort = {
           maxIterations,
           sessionId,
           security: await resolveSecurityConfig(session),
+          traceId: getSessionTrace(sessionId) ?? null,
         },
       })
     } catch (e: any) {
       const msg = e?.message || String(e)
       // 用户取消是预期操作（Rust 侧已正常返回，此处兜底），不应弹 error-banner
       if (/cancelled/i.test(msg)) return
+      trackError('error.rust.command', msg, {
+        traceId: getSessionTrace(sessionId),
+        props: {
+          command_name: 'agent_send_message',
+          args_keys: ['options'],
+        },
+      })
       onEvent?.({ type: 'error', error: msg })
     } finally {
       unlisten?.()
