@@ -40,7 +40,7 @@ export function createUserChoiceHandles(
   let traceId: string | undefined
 
   // 监听 UI 层的确认 / 取消 / 暂存
-  const offResolve = toolInteractEvent.on('resolve', (value: string) => {
+  const offResolve = toolInteractEvent.on('resolve', (value: ToolResult) => {
     track('interaction.choice.result', {
       trace_id: traceId,
       selected_count: value ? String(value).split(',').length : 0,
@@ -76,23 +76,22 @@ export function createUserChoiceHandles(
         option_count: (data.options || []).length,
         multi: !!data.multi,
       })
-      return new Promise<string>((resolve, reject) => {
-        return new Promise<ToolResult>((resolve, reject) => {
-          interactionResolve = resolve
-          interactionReject = reject
-          toolInteractEvent.emit(
-            'showChoice',
-            sessionId,
-            data.question,
-            data.options,
-            data.multi,
-            data.toolCallId,
-          )
-        })
-      },
-        cleanup: () => {
-          offResolve()
-          offReject()
-        },
+      return new Promise<ToolResult>((resolve, reject) => {
+        interactionResolve = resolve
+        interactionReject = reject
+        toolInteractEvent.emit(
+          'showChoice',
+          sessionId,
+          data.question,
+          data.options,
+          data.multi,
+          data.toolCallId,
+        )
+      })
+    },
+    cleanup: () => {
+      offResolve()
+      offReject()
+    }
   }
-  }
+}
