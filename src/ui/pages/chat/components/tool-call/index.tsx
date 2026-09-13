@@ -69,13 +69,11 @@ function formatElapsed(ms: number): string {
 
 interface Props {
   message: ToolUseContent
-  allMessages: Message[]
+  /** 该工具调用的结果消息（未完成时为 undefined） */
+  result?: Message
 }
 
-export function ToolCallMessage({ message, allMessages }: Props) {
-  const result = allMessages.find(
-    (msg) => msg.role == 'tool' && msg.toolCallId === message.id,
-  )
+export function ToolCallMessage({ message, result }: Props) {
   const type = message.name
   const [expand, setExpand] = useState(false)
   const toolCallMessage = getToolCallMessage(type)

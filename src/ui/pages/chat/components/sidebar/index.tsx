@@ -308,6 +308,8 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
       setSelectedKbId('')
       setShowImportModal(true)
       setImportKbLoading(true)
+      // 分页加载下，先补齐完整历史，否则只能选到已加载的尾部消息
+      await sessionStore.ensureAllMessagesLoaded(sessionId)
       // 默认全选所有消息
       const session = sessionStore.getSession(sessionId)
       if (session) {
@@ -344,6 +346,8 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
 
   const handleConfirmImport = useCallback(async () => {
     if (!importSessionId || !selectedKbId) return
+    // 分页加载下，导入前补齐完整历史
+    await sessionStore.ensureAllMessagesLoaded(importSessionId)
     const session = sessionStore.getSession(importSessionId)
     if (!session) return
 
@@ -392,8 +396,9 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
     })
   }, [])
 
-  const handleSelectAllMessages = useCallback(() => {
+  const handleSelectAllMessages = useCallback(async () => {
     if (!importSessionId) return
+    await sessionStore.ensureAllMessagesLoaded(importSessionId)
     const session = sessionStore.getSession(importSessionId)
     if (session) {
       setSelectedMsgIds(new Set(session.messages.map((m) => m.id)))

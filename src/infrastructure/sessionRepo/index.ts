@@ -18,10 +18,33 @@ export interface SessionRepo {
   loadAll(): Promise<Session[]>
   /** 获取会话消息（懒加载：会话激活时调用） */
   getMessages(sessionId: string): Promise<Message[]>
+  /** 分页获取会话消息（尾部窗口，向上回补更早的历史） */
+  getMessagePage(
+    sessionId: string,
+    opts?: MessagePageOptions,
+  ): Promise<MessagePage>
   /** 批量写入变化的会话，删除不存在的会话 */
   saveDiff(oldSessions: Session[], newSessions: Session[]): void
   /** 直接持久化单个会话元数据 */
   persistSession(session: Session): Promise<void>
+}
+
+/** 消息分页结果（与 Rust 端 MessagePage 对应） */
+export interface MessagePage {
+  /** 本页消息（升序） */
+  messages: Message[]
+  /** 是否还有更早的消息 */
+  hasMore: boolean
+  /** 本页最旧消息的 rowid（下一页游标） */
+  oldestRowid: number | null
+}
+
+/** 消息分页参数 */
+export interface MessagePageOptions {
+  /** 每页条数 */
+  limit?: number
+  /** 取该 rowid 之前（更早）的消息；不传则取尾部窗口 */
+  beforeRowid?: number | null
 }
 
 class SessionRepoImpl implements SessionRepo {
@@ -44,6 +67,22 @@ class SessionRepoImpl implements SessionRepo {
       return await invoke<Message[]>('cmd_get_messages', { sessionId })
     } catch {
       return []
+    }
+  }
+
+  /** 分页获取会话消息（尾部窗口 / 向上回补） */
+  async getMessagePage(
+    sessionId: string,
+    opts?: MessagePageOptions,
+  ): Promise<MessagePage> {
+    try {
+      return await invoke<MessagePage>('cmd_get_message_page', {
+        sessionId,
+        limit: opts?.limit ?? null,
+        beforeRowid: opts?.beforeRowid ?? null,
+      })
+    } catch {
+      return { messages: [], hasMore: false, oldestRowid: null }
     }
   }
 

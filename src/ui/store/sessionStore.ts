@@ -15,9 +15,24 @@ import type { SessionRepo } from '@/infrastructure/sessionRepo'
 import { sessionRepo } from '@/infrastructure/sessionRepo'
 import { track, trackError, hashText } from '@/utils/telemetry'
 
+/** 每次加载的消息条数（尾部窗口大小 / 向上回补步长） */
+export const MESSAGE_PAGE_SIZE = 60
+
+/** 单会话的消息分页状态 */
+export interface MessagePaging {
+  /** 是否还有更早的消息未加载（仍在 SQLite 中） */
+  hasMoreOlder: boolean
+  /** 已加载消息中最旧一条的 rowid（下一页游标） */
+  oldestRowid: number | null
+}
+
 class SessionStore {
-  value: { sessions: Session[] } = { sessions: [] }
-  /** 已加载消息的会话 id 集合（避免重复拉取） */
+  value: {
+    sessions: Session[]
+    /** 各会话的消息分页状态（参与 observable，驱动 UI「查看更多」显隐） */
+    messagePaging: Record<string, MessagePaging>
+  } = { sessions: [], messagePaging: {} }
+  /** 已加载过消息的会话 id 集合（避免重复拉取） */
   private loadedMessageIds = new Set<string>()
 
   constructor(private repo: SessionRepo) {
@@ -41,6 +56,7 @@ class SessionStore {
       this.loadedMessageIds.clear()
       runInAction(() => {
         this.value.sessions = sessions
+        this.value.messagePaging = {}
       })
       // ⚠️ 必须同步更新 _lastSaved 基线，否则 persist() 的 debounced saveDiff
       // 传过去的 oldSessions=[]，导致任何删除操作都无法被识别（diff 认为没有要删的东西）
@@ -54,6 +70,7 @@ class SessionStore {
       console.error('[SessionStore] 加载失败:', err)
       runInAction(() => {
         this.value.sessions = []
+        this.value.messagePaging = {}
       })
       this._lastSaved = []
       track('session.load', {
@@ -75,20 +92,32 @@ class SessionStore {
     if (idx === -1) return
     const started = Date.now()
     try {
-      const messages = await this.repo.getMessages(sessionId)
+      // 只拉尾部窗口，避免一次性把数千条消息经 IPC 搬到前端
+      const page = await this.repo.getMessagePage(sessionId, {
+        limit: MESSAGE_PAGE_SIZE,
+      })
       runInAction(() => {
         const i = this.value.sessions.findIndex((s) => s.id === sessionId)
         if (i === -1) return
         const sessions = [...this.value.sessions]
-        sessions[i] = { ...sessions[i], messages }
+        sessions[i] = { ...sessions[i], messages: page.messages }
         this.value.sessions = sessions
+        this.value.messagePaging = {
+          ...this.value.messagePaging,
+          [sessionId]: {
+            hasMoreOlder: page.hasMore,
+            oldestRowid: page.oldestRowid,
+          },
+        }
       })
       this.loadedMessageIds.add(sessionId)
       track('session.messages.lazyload', {
         session_id: hashText(sessionId),
-        message_count: messages.length,
+        message_count: page.messages.length,
         duration_ms: Date.now() - started,
         status: 'success',
+        has_more: page.hasMore,
+        mode: 'tail',
       })
     } catch {
       // 拉取失败不标记，下次激活重试
@@ -97,8 +126,116 @@ class SessionStore {
         message_count: 0,
         duration_ms: Date.now() - started,
         status: 'fail',
+        mode: 'tail',
       })
     }
+  }
+
+  /** 该会话是否还有更早的消息未加载 */
+  hasMoreMessages(sessionId: string): boolean {
+    return this.value.messagePaging[sessionId]?.hasMoreOlder ?? false
+  }
+
+  /**
+   * 向上回补一页更早的消息（前插到消息列表头部）。
+   * @returns 是否实际加载到了更早的消息
+   */
+  async loadOlderMessages(sessionId: string): Promise<boolean> {
+    const paging = this.value.messagePaging[sessionId]
+    if (!paging || !paging.hasMoreOlder) return false
+    const started = Date.now()
+    try {
+      const page = await this.repo.getMessagePage(sessionId, {
+        limit: MESSAGE_PAGE_SIZE,
+        beforeRowid: paging.oldestRowid,
+      })
+      if (page.messages.length === 0) {
+        // 游标失效或数据被删：标记无更多，避免反复请求
+        runInAction(() => {
+          this.value.messagePaging = {
+            ...this.value.messagePaging,
+            [sessionId]: {
+              hasMoreOlder: false,
+              oldestRowid: paging.oldestRowid,
+            },
+          }
+        })
+        return false
+      }
+      runInAction(() => {
+        const i = this.value.sessions.findIndex((s) => s.id === sessionId)
+        if (i === -1) return
+        const sessions = [...this.value.sessions]
+        sessions[i] = {
+          ...sessions[i],
+          messages: [...page.messages, ...sessions[i].messages],
+        }
+        this.value.sessions = sessions
+        this.value.messagePaging = {
+          ...this.value.messagePaging,
+          [sessionId]: {
+            hasMoreOlder: page.hasMore,
+            oldestRowid: page.oldestRowid ?? paging.oldestRowid,
+          },
+        }
+      })
+      track('session.messages.lazyload', {
+        session_id: hashText(sessionId),
+        message_count: page.messages.length,
+        duration_ms: Date.now() - started,
+        status: 'success',
+        has_more: page.hasMore,
+        mode: 'older',
+      })
+      return true
+    } catch {
+      track('session.messages.lazyload', {
+        session_id: hashText(sessionId),
+        message_count: 0,
+        duration_ms: Date.now() - started,
+        status: 'fail',
+        mode: 'older',
+      })
+      return false
+    }
+  }
+
+  /**
+   * 确保会话「全部」历史消息已加载。
+   * 用于发送消息 / 上下文压缩 / 导出等需要完整上下文的场景。
+   * 失败时安全退出，不阻塞调用方。
+   */
+  async ensureAllMessagesLoaded(sessionId: string): Promise<void> {
+    await this.ensureMessagesLoaded(sessionId)
+    let guard = 0
+    // 上限兜底，避免 hasMore 异常导致死循环
+    while (this.hasMoreMessages(sessionId) && guard++ < 1000) {
+      const loaded = await this.loadOlderMessages(sessionId)
+      if (!loaded && this.hasMoreMessages(sessionId)) break
+    }
+  }
+
+  /** 标记会话消息已全部在内存（如上下文压缩整体替换后） */
+  markMessagesFullyLoaded(sessionId: string): void {
+    runInAction(() => {
+      this.value.messagePaging = {
+        ...this.value.messagePaging,
+        [sessionId]: { hasMoreOlder: false, oldestRowid: null },
+      }
+    })
+  }
+
+  /** 清理指定会话的分页状态（删除会话时调用） */
+  private dropMessagePaging(ids: string[]): void {
+    const drop = new Set(ids)
+    runInAction(() => {
+      const next: Record<string, MessagePaging> = {}
+      for (const [id, paging] of Object.entries(this.value.messagePaging)) {
+        if (!drop.has(id)) next[id] = paging
+      }
+      this.value.messagePaging = next
+    })
+    for (const id of ids) this.loadedMessageIds.delete(id)
   }
 
   // ========== 持久化 ==========
@@ -150,6 +287,10 @@ class SessionStore {
       this.value.sessions = [...this.value.sessions, session]
       // 新建会话：内存态即全部消息，标记已加载避免被 DB 空数据覆盖
       this.loadedMessageIds.add(session.id)
+      this.value.messagePaging = {
+        ...this.value.messagePaging,
+        [session.id]: { hasMoreOlder: false, oldestRowid: null },
+      }
     }
     this.persist()
   }
@@ -212,6 +353,7 @@ class SessionStore {
     const sessions = [...this.value.sessions]
     sessions.splice(idx, 1)
     this.value.sessions = sessions
+    this.dropMessagePaging([id])
     this.persist()
     track('session.delete', {
       session_id: hashText(id),
@@ -232,6 +374,7 @@ class SessionStore {
     const deletedCount = this.value.sessions.length - newSessions.length
     if (deletedCount === 0) return 0
     this.value.sessions = newSessions
+    this.dropMessagePaging(ids)
     this.persist()
     track('session.delete', { batch: true, count: deletedCount })
     return deletedCount
@@ -251,6 +394,8 @@ class SessionStore {
   clear(): void {
     const oldSessions = this.value.sessions
     this.value.sessions = []
+    this.value.messagePaging = {}
+    this.loadedMessageIds.clear()
     this.repo.saveDiff(oldSessions, [])
   }
 

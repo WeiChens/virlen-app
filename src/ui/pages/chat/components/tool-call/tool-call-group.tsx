@@ -5,7 +5,8 @@ import { t, tpl } from '@/ui/i18n'
 
 interface Props {
   toolCalls: ToolUseContent[]
-  allMessages: Message[]
+  /** 与 toolCalls 一一对应的工具结果消息（未完成处为 undefined） */
+  toolResults?: (Message | undefined)[]
   /** 该条 assistant 消息是否有正文内容 */
   showContent: boolean
   children: React.ReactNode
@@ -13,7 +14,7 @@ interface Props {
 
 export function ToolCallGroup({
   toolCalls,
-  allMessages,
+  toolResults,
   showContent,
   children,
 }: Props) {
@@ -30,17 +31,13 @@ export function ToolCallGroup({
   if (!canCollapse) {
     return children
   }
-  // 统计完成数
+  // 统计完成数（toolResults 与 toolCalls 按索引对齐）
   const total = toolCalls.length
-  const completed = toolCalls.filter((tc) =>
-    allMessages.find((m) => m.role === 'tool' && m.toolCallId === tc.id),
-  ).length
-  const hasError = toolCalls.some((tc) => {
-    const result = allMessages.find(
-      (m) => m.role === 'tool' && m.toolCallId === tc.id,
-    )
-    return result?.isError
-  })
+  const completed = toolCalls.reduce(
+    (n, _tc, i) => n + (toolResults?.[i] ? 1 : 0),
+    0,
+  )
+  const hasError = !!toolResults?.some((r) => r?.isError)
   const hasPending = completed < total
 
   // 摘要文本

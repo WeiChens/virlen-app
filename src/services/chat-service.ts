@@ -328,6 +328,8 @@ export async function sendMessage(
 
   const toolInteract = await toolService.createToolHandles(sessionId)
 
+  // 分页加载下，发送前需确保完整历史都在内存，否则会截断 LLM 上下文
+  await sessionStore.ensureAllMessagesLoaded(sessionId)
   // 收集 engine 需要的入参：当前消息列表 + reasoningEffort
   const currentMessages = getSessionMessages(sessionId)
   const providerCfg = settingsState.value.providers.find(
@@ -398,6 +400,8 @@ export async function resumePausedRun(
 
   const toolInteract = await toolService.createToolHandles(sessionId)
 
+  // 分页加载下，恢复暂停任务同样需要完整历史
+  await sessionStore.ensureAllMessagesLoaded(sessionId)
   // 收集 engine 需要的入参
   const currentMessages = getSessionMessages(sessionId)
   const providerCfg = settingsState.value.providers.find(
@@ -556,6 +560,8 @@ export async function sendMessageWithGoal(
 
   const toolInteract = await toolService.createToolHandles(sessionId)
 
+  // 分页加载下，发送前需确保完整历史都在内存
+  await sessionStore.ensureAllMessagesLoaded(sessionId)
   const currentMessages = getSessionMessages(sessionId)
   const providerCfg = settingsState.value.providers.find(
     (p) => p.id === session.providerConfigId,
@@ -942,6 +948,8 @@ export async function compressContext(sessionId: string) {
     sessionRuntimeState.setCompacting(sessionId, true)
     const session = sessionStore.getSession(sessionId)
     if (!session) throw new Error('会话不存在')
+    // 压缩需基于完整历史，先补齐分页未加载的部分
+    await sessionStore.ensureAllMessagesLoaded(sessionId)
     const allMessages = getSessionMessages(sessionId)
     const beforeCount = allMessages.length
     const beforeTokens = allMessages.reduce(
@@ -1075,7 +1083,7 @@ export function deleteSessionMessage(
 }
 
 export function clearSessionMessages(sessionId: string): boolean {
-  return runInAction(() => {
+  const ok = runInAction(() => {
     const idx = sessionStore.value.sessions.findIndex((s) => s.id === sessionId)
     if (idx === -1) return false
     const sessions = [...sessionStore.value.sessions]
@@ -1088,6 +1096,8 @@ export function clearSessionMessages(sessionId: string): boolean {
     sessionStore.messagesChanged(sessionId)
     return true
   })
+  if (ok) sessionStore.markMessagesFullyLoaded(sessionId)
+  return ok
 }
 
 /**
@@ -1097,13 +1107,16 @@ export function replaceSessionMessages(
   sessionId: string,
   messages: Message[],
 ): boolean {
-  return runInAction(() => {
+  const ok = runInAction(() => {
     const session = sessionStore.value.sessions.find((s) => s.id === sessionId)
     if (!session) return false
     session.messages = messages
     sessionStore.messagesChanged(sessionId)
     return true
   })
+  // 整体替换后内存即完整历史，同步分页状态（否则上滚会重复回补）
+  if (ok) sessionStore.markMessagesFullyLoaded(sessionId)
+  return ok
 }
 
 export function checkAndRepairMessageList(

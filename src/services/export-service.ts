@@ -177,6 +177,8 @@ export async function exportSessionToFile(
   sessionId: string,
   options: ExportOptions = DEFAULT_OPTIONS,
 ): Promise<string | null> {
+  // 分页加载下，导出前确保完整历史都在内存（否则只会导出已加载的尾部）
+  await sessionStore.ensureAllMessagesLoaded(sessionId)
   const session = sessionStore.getSession(sessionId)
   if (!session) return null
 

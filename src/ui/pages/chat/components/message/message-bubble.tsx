@@ -26,15 +26,11 @@ interface Props {
   message: Message
   onEdit?: (message: string) => void
   onDelete?: (messageId: string) => void
-  allMessages: Message[]
+  /** 与 message.toolCalls 一一对应的工具结果（未完成处为 undefined） */
+  toolResults?: (Message | undefined)[]
 }
 
-function MessageBubble({
-  message,
-  onEdit,
-  onDelete,
-  allMessages,
-}: Props) {
+function MessageBubble({ message, onEdit, onDelete, toolResults }: Props) {
   const mkdRef = useRef(null as HTMLDivElement)
 
   const isUser = message.role === 'user'
@@ -282,14 +278,14 @@ function MessageBubble({
       {message.toolCalls && message.toolCalls.length > 0 && (
         <ToolCallGroup
           toolCalls={message.toolCalls}
-          allMessages={allMessages}
+          toolResults={toolResults}
           showContent={!!showContent}>
           <div className="message-tool-calls">
-            {message.toolCalls.map((tc) => (
+            {message.toolCalls.map((tc, i) => (
               <ToolCallMessage
                 key={tc.id}
                 message={tc}
-                allMessages={allMessages}
+                result={toolResults?.[i]}
               />
             ))}
           </div>

@@ -44,6 +44,9 @@ const SCROLL_TOP_THRESHOLD = 200 // 距顶部多少 px 时触发加载更多
  */
 const MAX_ANCHOR_DOTS = 120
 
+/** 稳定的空 tool 结果数组（无 toolCalls 的消息共用，保证 memo 命中） */
+const EMPTY_TOOL_RESULTS: (Message | undefined)[] = []
+
 interface ChatMessageListProps {
   /** 当前所有消息 */
   messages: Message[]
@@ -79,6 +82,21 @@ function ChatMessageList({
   const resetPagingRef = useRef(false)
   const displayStartRef = useRef(displayStart)
   displayStartRef.current = displayStart
+  /**
+   * 「向上从 DB 回补历史」期间的滚动锚点快照。
+   * 回补的消息是前插到数组头部的，需在渲染后手动补上顶部新增的高度，
+   * 否则视口会跳到最上面。非空即表示本次 messages 变化来自前插。
+   */
+  const pendingPrependRef = useRef<{
+    scrollTop: number
+    scrollHeight: number
+  } | null>(null)
+  /**
+   * message.id → 该消息 toolCalls 对应的结果数组（按索引对齐）。
+   * 缓存引用：只要结果消息的对象引用不变，就复用同一数组，
+   * 使 MessageBubble 的 memo 命中，避免 messages 整体换新时全量重渲染。
+   */
+  const toolResultsCacheRef = useRef(new Map<string, (Message | undefined)[]>())
 
   // 首次打开/切会话：等待布局稳定后再滚到底部（见 settleToBottom）
   const settleTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -91,7 +109,14 @@ function ChatMessageList({
   {
     const prevLen = prevMessagesLenRef.current
     const currLen = messages.length
-    if (Math.abs(currLen - prevLen) > 1 || prevLen === 0) {
+    prevMessagesLenRef.current = currLen
+    if (pendingPrependRef.current) {
+      // 向上回补历史：消息「前插」，保持显示窗口从最旧处开始，不要平移到末尾
+      if (displayStartRef.current !== 0) {
+        displayStartRef.current = 0
+        setDisplayStart(0)
+      }
+    } else if (Math.abs(currLen - prevLen) > 1 || prevLen === 0) {
       const target = Math.max(0, currLen - PAGE_SIZE)
       if (displayStartRef.current !== target) {
         displayStartRef.current = target
@@ -99,7 +124,6 @@ function ChatMessageList({
       }
       resetPagingRef.current = true
     }
-    prevMessagesLenRef.current = currLen
   }
 
   // 计算当前展示的消息（useMemo 避免父级重渲染时重复 slice）
@@ -107,7 +131,12 @@ function ChatMessageList({
     () => messages.slice(displayStart),
     [messages, displayStart],
   )
-  const hasMore = displayStart > 0
+
+  // 当前会话运行时状态
+  const sessionId = chatState.value.currentSessionId
+  // 「查看更多」：内存里还有更早的（displayStart>0）或 SQLite 里还有更早的（hasMoreMessages）
+  const hasMoreInDb = sessionId ? sessionStore.hasMoreMessages(sessionId) : false
+  const hasMore = displayStart > 0 || hasMoreInDb
 
   // 用户消息（锚点列表用，一次性过滤，避免每次渲染过滤两次全量数组）
   const userMessages = useMemo(
@@ -115,8 +144,38 @@ function ChatMessageList({
     [messages],
   )
 
-  // 当前会话运行时状态
-  const sessionId = chatState.value.currentSessionId
+  // toolCallId → tool 结果消息（一次遍历）。
+  // 不再把整份 messages 传给每个气泡（那会导致 memo 失效、全量重渲染），
+  // 而是按需只传「这条消息自己的 tool 结果」。
+  const toolResultById = useMemo(() => {
+    const map = new Map<string, Message>()
+    for (const m of messages) {
+      if (m.role === 'tool' && m.toolCallId) map.set(m.toolCallId, m)
+    }
+    return map
+  }, [messages])
+
+  /**
+   * 取某条消息 toolCalls 对应的结果数组（按索引对齐）。
+   * 结果消息引用未变时返回缓存数组 → MessageBubble / ToolCallGroup 不会因
+   *「messages 数组整体换新」而重渲染。
+   */
+  function toolResultsFor(msg: Message): (Message | undefined)[] {
+    const tcs = msg.toolCalls
+    if (!tcs || tcs.length === 0) return EMPTY_TOOL_RESULTS
+    const next = tcs.map((tc) => toolResultById.get(tc.id))
+    const prev = toolResultsCacheRef.current.get(msg.id)
+    if (
+      prev &&
+      prev.length === next.length &&
+      prev.every((p, i) => p === next[i])
+    ) {
+      return prev
+    }
+    toolResultsCacheRef.current.set(msg.id, next)
+    return next
+  }
+
   const currentRt = sessionId ? getSessionRuntime(sessionId) : null
   // const isCurrentWorking = currentRt?.working ?? false
   const isCurrentPaused = currentRt?.paused ?? false
@@ -126,6 +185,8 @@ function ChatMessageList({
   // displayStart 的重置已在渲染阶段完成（见上方 derived-state 块），
   // 这里只清理「加载更多」相关状态，避免与渲染阶段重复 setState。
   useEffect(() => {
+    // 向上回补历史（前插）由专门的滚动锚定 effect 处理，这里不参与
+    if (pendingPrependRef.current) return
     if (resetPagingRef.current) {
       resetPagingRef.current = false
       loadingMoreRef.current = false
@@ -191,11 +252,30 @@ function ChatMessageList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displayStart])
 
+  // ==================== 向上回补历史后的滚动锚定 ====================
+  // 从 DB 前插更早的消息后，补上顶部新增的高度，让用户停在原位置（防跳动），
+  // 同时复位 loadingMore，允许继续上滚加载。
+  // 注意：这里不清理 pendingPrependRef —— 需留给后面的 useEffect([messages]) 消费，
+  // 否则会被误判为「新消息」而触发滚动到底部。
+  useLayoutEffect(() => {
+    const pending = pendingPrependRef.current
+    if (!pending) return
+    const el = messagesContainerRef.current
+    if (el) {
+      const delta = el.scrollHeight - pending.scrollHeight
+      if (delta > 0) el.scrollTop = pending.scrollTop + delta
+    }
+    loadingMoreRef.current = false
+    setIsLoadingMore(false)
+    loadMoreSnapshotRef.current = { scrollTop: 0, scrollHeight: 0 }
+  }, [messages])
+
   // ==================== 滚动到底部（消息变化时） ====================
   // 用户发消息 → 无视拦截强制滚动；AI 回复 → 尊重拦截状态
   useEffect(() => {
     userScrollBlockUntilRef.current = 0
-    // 切会话：取消上次的底部钉住轮询，等新消息渲染后重新 settle
+    // 切会话：清空 tool 结果缓存（消息已换），并取消上次的底部钉住轮询
+    toolResultsCacheRef.current.clear()
     if (settleTimerRef.current) {
       clearInterval(settleTimerRef.current)
       settleTimerRef.current = null
@@ -258,6 +338,11 @@ function ChatMessageList({
     setHide(true)
   }, [sessionId])
   useEffect(() => {
+    // 向上回补历史（前插旧消息）不应触发滚动逻辑：消费掉标记后直接返回
+    if (pendingPrependRef.current) {
+      pendingPrependRef.current = null
+      return
+    }
     const displayedMessages = messages.slice(displayStartRef.current)
     if (displayedMessages.length == 0) {
       // 保持隐藏（切会话后数据尚未到达），等待下一次 messages 更新再 settle
@@ -378,11 +463,13 @@ function ChatMessageList({
 
       lastScrollTopRef.current = scrollTop
 
-      // ---- 向上滚动加载更多 ----
+      // ---- 向上滚动加载更多（内存分页窗口 或 从 DB 回补）----
+      const sid = chatState.value.currentSessionId
       if (
         scrollTop < SCROLL_TOP_THRESHOLD &&
-        displayStartRef.current > 0 &&
-        !loadingMoreRef.current
+        !loadingMoreRef.current &&
+        (displayStartRef.current > 0 ||
+          (sid && sessionStore.hasMoreMessages(sid)))
       ) {
         loadMoreHandle()
       }
@@ -391,12 +478,38 @@ function ChatMessageList({
     container.addEventListener('scroll', onScroll, { passive: true })
     return () => container.removeEventListener('scroll', onScroll)
   }, [])
-  function loadMoreHandle() {
+  async function loadMoreHandle() {
+    // ① 内存中还有更早的消息（显示分页）→ 只移动窗口，无需访问 DB
+    if (displayStartRef.current > 0) {
+      loadingMoreRef.current = true
+      setIsLoadingMore(true)
+      const { scrollTop, scrollHeight } = messagesContainerRef.current
+      loadMoreSnapshotRef.current = { scrollTop, scrollHeight }
+      setDisplayStart((prev) => Math.max(0, prev - LOAD_MORE_STEP))
+      return
+    }
+    // ② 内存已到最旧 → 从 SQLite 回补更早的历史（前插）
+    const sid = chatState.value.currentSessionId
+    if (!sid || !sessionStore.hasMoreMessages(sid)) return
+    const el = messagesContainerRef.current
+    if (el) {
+      pendingPrependRef.current = {
+        scrollTop: el.scrollTop,
+        scrollHeight: el.scrollHeight,
+      }
+    }
     loadingMoreRef.current = true
     setIsLoadingMore(true)
-    const { scrollTop, scrollHeight } = messagesContainerRef.current
-    loadMoreSnapshotRef.current = { scrollTop, scrollHeight }
-    setDisplayStart((prev) => Math.max(0, prev - LOAD_MORE_STEP))
+    const ok = await sessionStore.loadOlderMessages(sid)
+    if (!ok || sid !== chatState.value.currentSessionId) {
+      // 加载失败或已切换会话：复位状态，丢弃锚点
+      pendingPrependRef.current = null
+      loadingMoreRef.current = false
+      setIsLoadingMore(false)
+      return
+    }
+    const s = sessionStore.getSession(sid)
+    if (s) setMessages([...s.messages])
   }
 
   // ==================== 锚点点击：自动加载未分页的消息并跳转 ====================
@@ -569,7 +682,7 @@ function ChatMessageList({
               onEdit={handleEditBubble}
               onDelete={handleDeleteBubble}
               message={msg}
-              allMessages={messages}
+              toolResults={toolResultsFor(msg)}
             />
           </div>
         ))}

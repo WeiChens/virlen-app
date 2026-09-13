@@ -12,8 +12,25 @@
 use crate::agent::types::{Message, Session};
 use async_trait::async_trait;
 use rusqlite::{params, Connection, Row};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+
+// ==================== 分页结果 ====================
+
+/// 会话消息分页结果（尾部窗口加载用）
+///
+/// 前端切换会话时只取「最近 limit 条」，向上滚动再用 `oldest_rowid` 回补更早的历史，
+/// 避免一次性把数千条消息经 IPC 全部搬到前端造成的加载卡顿。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessagePage {
+    /// 本页消息（按插入顺序升序）
+    pub messages: Vec<Message>,
+    /// 是否还有更早的消息可供回补
+    pub has_more: bool,
+    /// 本页最旧消息的 rowid（作为下一页的 before_rowid）
+    pub oldest_rowid: Option<i64>,
+}
 
 // ==================== Trait ====================
 
@@ -41,6 +58,13 @@ pub trait SessionRepo: Send + Sync {
     async fn get_session(&self, session_id: &str) -> Result<Option<Session>, String>;
     /// 获取会话的全部消息（按插入顺序）
     async fn get_messages(&self, session_id: &str) -> Result<Vec<Message>, String>;
+    /// 分页获取会话消息（默认取尾部窗口；`before_rowid` 用于向上回补更早的历史）
+    async fn get_message_page(
+        &self,
+        session_id: &str,
+        limit: usize,
+        before_rowid: Option<i64>,
+    ) -> Result<MessagePage, String>;
     /// 删除会话及其全部消息
     async fn delete_session(&self, session_id: &str) -> Result<(), String>;
 }
@@ -80,6 +104,18 @@ impl SessionRepo for NoopSessionRepo {
     }
     async fn get_messages(&self, _session_id: &str) -> Result<Vec<Message>, String> {
         Ok(Vec::new())
+    }
+    async fn get_message_page(
+        &self,
+        _session_id: &str,
+        _limit: usize,
+        _before_rowid: Option<i64>,
+    ) -> Result<MessagePage, String> {
+        Ok(MessagePage {
+            messages: Vec::new(),
+            has_more: false,
+            oldest_rowid: None,
+        })
     }
     async fn delete_session(&self, _session_id: &str) -> Result<(), String> {
         Ok(())
@@ -233,6 +269,12 @@ fn message_from_row(row: &Row) -> Result<Message, String> {
             .get("image_vision_analyze_result")
             .map_err(|e| e.to_string())?,
     })
+}
+
+/// 读取一行消息并附带其 rowid（分页游标）
+fn message_from_row_with_id(row: &Row) -> Result<(i64, Message), String> {
+    let rowid: i64 = row.get("message_rowid").map_err(|e| e.to_string())?;
+    Ok((rowid, message_from_row(row)?))
 }
 
 // ==================== 参数序列化 ====================
@@ -492,6 +534,71 @@ INSERT INTO messages (
         .map_err(|e| format!("DB task join error: {}", e))?
     }
 
+    async fn get_message_page(
+        &self,
+        session_id: &str,
+        limit: usize,
+        before_rowid: Option<i64>,
+    ) -> Result<MessagePage, String> {
+        let conn = self.conn.clone();
+        let session_id = session_id.to_string();
+        let limit = limit.max(1);
+        tokio::task::spawn_blocking(move || -> Result<MessagePage, String> {
+            let conn = conn.lock().unwrap();
+            // 多取 1 条用于判断「是否还有更早的消息」
+            let probe = (limit + 1) as i64;
+            let mut rows_buf: Vec<(i64, Message)> = Vec::new();
+            match before_rowid {
+                Some(before) => {
+                    let mut stmt = conn
+                        .prepare(
+                            "SELECT rowid AS message_rowid, * FROM messages \
+                             WHERE session_id=?1 AND rowid < ?2 ORDER BY rowid DESC LIMIT ?3",
+                        )
+                        .map_err(|e| format!("准备分页查询失败: {}", e))?;
+                    let rows = stmt
+                        .query_map(params![session_id, before, probe], |row| {
+                            message_from_row_with_id(row).map_err(row_err)
+                        })
+                        .map_err(|e| e.to_string())?;
+                    for r in rows {
+                        rows_buf.push(r.map_err(|e| e.to_string())?);
+                    }
+                }
+                None => {
+                    let mut stmt = conn
+                        .prepare(
+                            "SELECT rowid AS message_rowid, * FROM messages \
+                             WHERE session_id=?1 ORDER BY rowid DESC LIMIT ?2",
+                        )
+                        .map_err(|e| format!("准备分页查询失败: {}", e))?;
+                    let rows = stmt
+                        .query_map(params![session_id, probe], |row| {
+                            message_from_row_with_id(row).map_err(row_err)
+                        })
+                        .map_err(|e| e.to_string())?;
+                    for r in rows {
+                        rows_buf.push(r.map_err(|e| e.to_string())?);
+                    }
+                }
+            }
+            let has_more = rows_buf.len() > limit;
+            if has_more {
+                rows_buf.truncate(limit);
+            }
+            // 查询为 rowid DESC（新→旧），反转为升序（旧→新）
+            rows_buf.reverse();
+            let oldest_rowid = rows_buf.first().map(|(rid, _)| *rid);
+            Ok(MessagePage {
+                messages: rows_buf.into_iter().map(|(_, m)| m).collect(),
+                has_more,
+                oldest_rowid,
+            })
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
     async fn delete_session(&self, session_id: &str) -> Result<(), String> {
         let conn = self.conn.clone();
         let session_id = session_id.to_string();
@@ -614,6 +721,27 @@ pub async fn cmd_get_messages(
         Some(&session_id),
         started,
         result.as_ref().ok().map(|v| v.len()),
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
+}
+
+/// 分页获取会话消息（尾部窗口加载：只取最近 N 条，向上滚动时按 before_rowid 回补）
+#[tauri::command]
+pub async fn cmd_get_message_page(
+    state: tauri::State<'_, Arc<dyn SessionRepo>>,
+    session_id: String,
+    limit: Option<usize>,
+    before_rowid: Option<i64>,
+) -> Result<MessagePage, String> {
+    let started = crate::telemetry::now_ms();
+    let limit = limit.unwrap_or(60).clamp(1, 1000);
+    let result = state.get_message_page(&session_id, limit, before_rowid).await;
+    track_db(
+        "get_messages_page",
+        Some(&session_id),
+        started,
+        result.as_ref().ok().map(|p| p.messages.len()),
         result.as_ref().err().map(|s| s.as_str()),
     );
     result
@@ -888,5 +1016,60 @@ mod tests {
         let list = repo.list_sessions().await.unwrap();
         let ids: Vec<&str> = list.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, vec!["b", "c", "a"]);
+    }
+
+    #[tokio::test]
+    async fn page_returns_tail_window_in_order() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+        let msgs: Vec<Message> = (1..=10)
+            .map(|i| test_message(&format!("m{}", i), "user"))
+            .collect();
+        repo.append_messages("s1", &msgs, 200).await.unwrap();
+
+        // 尾部窗口：最后 4 条（且为升序）
+        let p1 = repo.get_message_page("s1", 4, None).await.unwrap();
+        let ids1: Vec<&str> = p1.messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids1, vec!["m7", "m8", "m9", "m10"]);
+        assert!(p1.has_more);
+        let cursor1 = p1.oldest_rowid.expect("尾部页应有 oldest_rowid");
+
+        // 向上回补：再取 4 条
+        let p2 = repo.get_message_page("s1", 4, Some(cursor1)).await.unwrap();
+        let ids2: Vec<&str> = p2.messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids2, vec!["m3", "m4", "m5", "m6"]);
+        assert!(p2.has_more);
+        let cursor2 = p2.oldest_rowid.unwrap();
+
+        // 最后一页：只剩 2 条，无更多
+        let p3 = repo.get_message_page("s1", 4, Some(cursor2)).await.unwrap();
+        let ids3: Vec<&str> = p3.messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids3, vec!["m1", "m2"]);
+        assert!(!p3.has_more);
+    }
+
+    #[tokio::test]
+    async fn page_marks_no_more_when_session_smaller_than_limit() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+        repo.append_messages(
+            "s1",
+            &[test_message("m1", "user"), test_message("m2", "assistant")],
+            200,
+        )
+        .await
+        .unwrap();
+        let p = repo.get_message_page("s1", 60, None).await.unwrap();
+        assert_eq!(p.messages.len(), 2);
+        assert!(!p.has_more, "消息数少于 limit 时不应标记 has_more");
+    }
+
+    #[tokio::test]
+    async fn page_is_empty_for_missing_session() {
+        let repo = open_tmp();
+        let p = repo.get_message_page("nope", 60, None).await.unwrap();
+        assert!(p.messages.is_empty());
+        assert!(!p.has_more);
+        assert!(p.oldest_rowid.is_none());
     }
 }
