@@ -4,9 +4,8 @@
  * 交互模型（§8，已定稿）：
  *   - 默认「关」；开关打开后 track() 写入本地缓冲，不自动外发
  *   - 「导出本地」生成 zip 不上传
- *   - 「上报官网」是唯一外发动作，成功后清空本地缓冲
  *   - 「清理数据」清空本地缓冲并归零计数
- *   - 采集与上传「均」经过 §7.1 密钥打码
+ *   - 采集与导出「均」经过 §7.1 密钥打码
  *
  * 业务层只调用：track / trackError / startSpan / newTraceId / newSpanId。
  * 用 MobX observable 暴露 bufferedCount，供设置页实时展示条数。
@@ -23,7 +22,6 @@ import {
 import {
   buildBundlePayload,
   defaultExportName,
-  postTelemetry,
   saveZip,
 } from './transport'
 import { buildBundleDoc, BUNDLE_DOC_NAME } from './export-doc'
@@ -75,15 +73,12 @@ let enabledProvider: (() => boolean) | null = null
 /**
  * 可观测状态（设置页绑定）：
  * - bufferedCount：已采集条数（开关旁实时显示）
- * - uploading：是否正在上报
  */
 class TelemetryStoreState {
   bufferedCount = 0
-  uploading = false
   constructor() {
     makeObservable(this, {
       bufferedCount: observable,
-      uploading: observable,
     })
   }
 }
@@ -449,66 +444,6 @@ export async function exportTelemetryBundle(opts?: {
       { force: true },
     )
     return null
-  }
-}
-
-export interface UploadResult {
-  ok: boolean
-  count: number
-  bytes: number
-  message?: string
-}
-
-/**
- * 上报官网（唯一外发动作）：POST 批量接口，成功后清空本地缓冲
- */
-export async function uploadTelemetry(): Promise<UploadResult> {
-  if (telemetryState.uploading) {
-    return { ok: false, count: 0, bytes: 0, message: 'uploading' }
-  }
-  const events = telemetryBuffer.getAll().slice()
-  const count = events.length
-  if (!count) return { ok: true, count: 0, bytes: 0 }
-
-  runInAction(() => {
-    telemetryState.uploading = true
-  })
-  const started = Date.now()
-  try {
-    const body = JSON.stringify(buildBundlePayload(events, { deviceId, appRunId }))
-    const res = await postTelemetry(body)
-    const duration = Math.round(Date.now() - started)
-    track(
-      'telemetry.upload',
-      {
-        event_count: count,
-        bytes: res.bytes,
-        duration_ms: duration,
-        status: res.ok ? 'success' : 'fail',
-        http_status: res.httpStatus,
-      },
-      { force: true },
-    )
-    if (res.ok) clearBufferInternal()
-    return { ok: res.ok, count, bytes: res.bytes, message: res.message }
-  } catch (e) {
-    const message = toErrorInfo(e).message
-    track(
-      'telemetry.upload',
-      {
-        event_count: count,
-        bytes: 0,
-        duration_ms: Math.round(Date.now() - started),
-        status: 'fail',
-        error: message,
-      },
-      { force: true },
-    )
-    return { ok: false, count, bytes: 0, message }
-  } finally {
-    runInAction(() => {
-      telemetryState.uploading = false
-    })
   }
 }
 

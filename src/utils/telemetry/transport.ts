@@ -1,19 +1,12 @@
 /**
- * telemetry/transport — 导出 / 上报的传输层（§8）
+ * telemetry/transport — 导出的传输层（§8）
  *
- * 只做「构建载荷 / 发 HTTP / 存 zip」三件事，不含埋点自身的事件记录，
+ * 只做「构建载荷 / 存 zip」两件事，不含埋点自身的事件记录，
  * 便于 index.ts 统一编排与记录 telemetry.* 事件。
  */
 import type { TelemetryEvent } from './types'
 import { SDK_VERSION } from './types'
 import { getBaseAppVersion, getBasePlatform } from './common'
-
-/** API 基础地址（与 constants.domain 保持一致，但不依赖 UI 层） */
-export const API_BASE: string =
-  (import.meta as any)?.env?.VITE_API_BASE_URL || 'https://virlen.cn'
-
-/** 批量上报接口路径 */
-export const UPLOAD_PATH = '/api/public/telemetry/batch'
 
 export interface TelemetryBundle {
   device_id: string
@@ -26,7 +19,7 @@ export interface TelemetryBundle {
   events: TelemetryEvent[]
 }
 
-/** 构建上传/导出载荷 */
+/** 构建导出载荷 */
 export function buildBundlePayload(
   events: TelemetryEvent[],
   ids: { deviceId: string; appRunId: string },
@@ -40,47 +33,6 @@ export function buildBundlePayload(
     exported_at: Date.now(),
     event_count: events.length,
     events,
-  }
-}
-
-export interface PostResult {
-  ok: boolean
-  httpStatus: number
-  message: string
-  bytes: number
-}
-
-/** 上报超时（毫秒）：避免网络挂起导致 uploading 永久为 true、按钮卡死 */
-export const UPLOAD_TIMEOUT_MS = 15000
-
-/** POST 批量事件到 virlen.cn */
-export async function postTelemetry(body: string): Promise<PostResult> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS)
-  try {
-    const res = await fetch(API_BASE + UPLOAD_PATH, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-      signal: controller.signal,
-    })
-    let ok = res.ok
-    let message = ''
-    try {
-      const json: any = await res.json()
-      if (typeof json?.code === 'number') ok = ok && json.code === 200
-      message = json?.message || ''
-    } catch {
-      // 非 JSON 响应
-    }
-    return {
-      ok,
-      httpStatus: res.status,
-      message,
-      bytes: body.length,
-    }
-  } finally {
-    clearTimeout(timer)
   }
 }
 

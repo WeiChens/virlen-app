@@ -11,10 +11,10 @@ import {
   telemetryState,
   recordTelemetryToggle,
   exportTelemetryBundle,
-  uploadTelemetry,
   clearTelemetry,
   isTelemetryBuildDisabled,
 } from '@/utils/telemetry'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
 import Select from '@/ui/components/shared/Select'
 import { t, tpl } from '@/ui/i18n'
@@ -142,27 +142,14 @@ function GeneralSettings() {
     }
   }
 
-  async function handleUploadTelemetry() {
-    if (telemetryBusy) return
-    if (telemetryState.bufferedCount === 0) {
-      showToast(t('暂无可上报数据'), 1500)
-      return
-    }
-    setTelemetryBusy(true)
+  async function handlePreviewTelemetry() {
     try {
-      const r = await uploadTelemetry()
-      if (r.ok) {
-        showToast(t('上报成功，本地数据已清空'), 2000)
-      } else {
-        showToast(
-          t('上报失败') + (r.message ? '：' + r.message : ''),
-          2500,
-        )
-      }
+      await openUrl('https://virlen.cn/trace/')
     } catch (e: any) {
-      showToast(t('上报失败') + '：' + (e?.message || String(e)), 2500)
-    } finally {
-      setTelemetryBusy(false)
+      showToast(
+        t('打开可视化预览失败') + '：' + (e?.message || String(e)),
+        2500,
+      )
     }
   }
 
@@ -527,7 +514,7 @@ function GeneralSettings() {
             <span className="label-text">{t('诊断埋点')}</span>
             <span className="label-desc">
               {t(
-                '开启后在本地记录运行数据，用于排查问题。\n关闭时停止采集；数据仅在你点击「上报官网」后发送',
+                '开启后在本地记录运行数据，用于排查问题。\n关闭时停止采集；数据仅保存在本地，不会自动外发',
               )}
               {telemetryBuildDisabled && (
                 <span className="telemetry-build-off">
@@ -562,9 +549,8 @@ function GeneralSettings() {
           </button>
           <button
             className="tel-btn primary"
-            onClick={handleUploadTelemetry}
-            disabled={telemetryBusy || telemetryState.bufferedCount === 0}>
-            {telemetryState.uploading ? t('上报中...') : t('上报官网')}
+            onClick={handlePreviewTelemetry}>
+            {t('可视化预览')}
           </button>
           <button
             className="tel-btn danger"

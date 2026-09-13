@@ -74,7 +74,7 @@ export interface SettingsStore {
   editorOpenDefaultId: string
   /** 是否在 AI 回复完成或需要用户选择时，若窗口未激活则强制置为活动窗口 */
   forceWindowActive: boolean
-  /** 诊断埋点开关（默认关；开启后仅本地采集，需手动「上报官网」才外发） */
+  /** 诊断埋点开关（默认关；开启后仅本地采集，不会自动外发） */
   telemetryEnabled: boolean
 }
 
