@@ -62,6 +62,7 @@ export class AgentEngine implements AgentEnginePort {
       onUserInteraction,
       resumeFromSnapshot,
       reasoningEffort,
+      thinking,
       maxToolRounds = 30,
       iterationGoal,
       maxIterations = 5,
@@ -138,6 +139,7 @@ export class AgentEngine implements AgentEnginePort {
           skills,
           effectiveMaxTokens,
           reasoningEffort,
+          thinking,
           persistSnapshot: (sid, run) => this.persistRunSnapshot(sid, run),
           clearSnapshot: (sid) => this.clearRunSnapshot(sid),
         })
@@ -161,6 +163,7 @@ export class AgentEngine implements AgentEnginePort {
           skills,
           effectiveMaxTokens,
           reasoningEffort,
+          thinking,
         })
       }
 
@@ -256,6 +259,7 @@ export class AgentEngine implements AgentEnginePort {
     skills?: string[]
     effectiveMaxTokens: number
     reasoningEffort?: string
+    thinking?: boolean
   }): Promise<boolean> {
     const {
       session,
@@ -270,6 +274,7 @@ export class AgentEngine implements AgentEnginePort {
       skills,
       effectiveMaxTokens,
       reasoningEffort,
+      thinking,
     } = params
 
     let rounds = remainingRounds
@@ -290,6 +295,7 @@ export class AgentEngine implements AgentEnginePort {
         skills,
         effectiveMaxTokens,
         reasoningEffort,
+        thinking,
         round: roundIndex,
         persistSnapshot: (sid, run) => this.persistRunSnapshot(sid, run),
         clearSnapshot: (sid) => this.clearRunSnapshot(sid),

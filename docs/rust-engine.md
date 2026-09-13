@@ -28,7 +28,9 @@ LLM 调用 → 工具执行 → 结果合并 →（迭代模式）验证反馈�
 │    │    │    └─ Provider trait (agent/provider.rs)             │
 │    │    │         ├─ NativeOpenAiProvider  (原生 HTTP + SSE)   │
 │    │    │         ├─ NativeAnthropicProvider (原生 HTTP + SSE) │
-│    │    │         └─ BridgedProvider       (gemini → JS)       │
+│    │    │         ├─ NativeResponsesProvider (Responses API)   │
+│    │    │         ├─ NativeGeminiProvider  (Gemini 原生)       │
+│    │    │         └─ BridgedProvider       (未识别 → JS)       │
 │    │    └─ execute_tool_steps (agent/tool_executor.rs)         │
 │    │         └─ AgentBridgeState (agent/bridge.rs) → JS 工具   │
 │    ├─ run_iteration (agent/iteration.rs) + verify (verifier.rs)│
@@ -44,7 +46,7 @@ LLM 调用 → 工具执行 → 结果合并 →（迭代模式）验证反馈�
 | `storm_breaker.rs` | `storm-breaker.ts` | 工具风暴防护（纯逻辑） |
 | `run_state.rs` | `run-state.ts` | Run 快照序列化/重建 |
 | `cancellation.rs` | — | `CancellationToken`（AtomicBool + Notify） |
-| `provider.rs` | `infrastructure/provider/*` | Provider trait + 原生 OpenAI/Anthropic + 桥接 |
+| `provider.rs` | `infrastructure/provider/*` | Provider trait + 原生 OpenAI/Anthropic/Responses/Gemini + 桥接 |
 | `event_sink.rs` | `onEvent` 回调 | 事件出口（Tauri `app.emit`） |
 | `bridge.rs` | — | 双向桥接状态（工具/交互/Provider 流） |
 | `llm_round.rs` | `llm-round.ts` | LLM 轮次（流式/非流式、tool_use 收集） |
@@ -55,6 +57,15 @@ LLM 调用 → 工具执行 → 结果合并 →（迭代模式）验证反馈�
 | `engine.rs` | `engine.ts` | AgentEngine 主类（注入 SessionRepo 持久化） |
 | `mod.rs` | — | Tauri 命令注册 + 初始化 |
 | `session_db.rs` | `infrastructure/sessionRepo` | 会话/消息 SQLite 直落（SessionRepo trait + SQLite/Noop 实现） |
+
+> **维护约定（TS ↔ Rust 双实现需成对修改）**
+>
+> `provider.rs` 中的原生 Provider（OpenAI / Anthropic / Responses / Gemini）是
+> `src/infrastructure/provider/*.ts` 的手工移植，二者**请求体形状必须保持一致**，
+> 包括 `thinking`（禁用思考）、`reasoningEffort`、`thoughtSignature`、视觉注入、
+> 消息切片（summary 之后）等。改动任一 TS provider 的请求构造后，务必同步更新
+> Rust 对应实现，并维护两侧测试（TS：`src/tests/infrastructure/provider-thinking.test.ts`；
+> Rust：`provider::tests::*_thinking_*`）。
 
 ## 四、桥接协议
 
@@ -91,7 +102,7 @@ agent:user-interaction-request { requestId, sessionId, type, data }
 payload.__kind: value | error | shelved | cancelled
 ```
 
-### Provider 桥（仅 gemini / 未原生化的类型）
+### Provider 桥（仅未原生化的类型）
 ```
 agent:provider-request { requestId, providerType, providerId, apiKey, baseUrl, request, stream }
   → JS 用 createProviderInstance + 现有 provider.chat/chatStream
@@ -105,7 +116,9 @@ agent:provider-request { requestId, providerType, providerId, apiKey, baseUrl, r
 |---|---|---|
 | `openai` | ✅ 原生 HTTP | 覆盖 OpenAI / DeepSeek / Moonshot / Ollama / 自定义 |
 | `anthropic` | ✅ 原生 HTTP | Messages API + SSE |
-| `gemini` | 🔄 JS 桥 | 复用现有 TS provider（原生化列入 P2） |
+| `responses` | ✅ 原生 HTTP | OpenAI Responses API（`/responses`，`input`/`instructions`、`function_call` item） |
+| `gemini` | ✅ 原生 HTTP | `generateContent` / `streamGenerateContent`（`functionCall`/`functionResponse`、`toolConfig`、thought） |
+| 其它未识别类型 | 🔄 JS 桥 | `BridgedProvider` → JS `createProviderInstance` |
 
 ## 六、平滑过渡开关
 
@@ -125,7 +138,7 @@ agent:provider-request { requestId, providerType, providerId, apiKey, baseUrl, r
   - `native_tools::tests::test_native_dispatcher_write_read_search`：原生工具分发链路
   - `session_db::tests::*`：SQLite 会话/消息读写、幂等、替换、删除、排序
   - `deepseek_tokenizer::tests::*`：字节级 BPE 与官方 transformers 输出对齐、字节表、切分
-  - `provider::tests::*`：本地图片伪视觉分析（imageVisionAnalyzeOptimize）注入、OpenAI/Anthropic 请求体
+  - `provider::tests::*`：本地图片伪视觉分析注入、OpenAI/Anthropic/Responses/Gemini 请求体、工厂路由
   - `storm_breaker / run_state / cancellation / verifier / iteration` 单元测试
 - TS：`npx tsc --noEmit` 零错误；`npx vitest run` 346 通过
 
@@ -252,7 +265,7 @@ pub trait SessionRepo: Send + Sync {
 
 ## 十、已知限制
 
-1. **Gemini 桥接**：未原生 HTTP，仍走 JS provider（且 TS Gemini 存在 #1 多轮工具 bug，可顺带修复）
+1. **provider `listModels` / `validateApiKey`**：仍由 TS provider 提供（配置 UI 用，非聊天循环核心）
 2. **compressContext** 仍由 TS 引擎提供（非聊天循环核心）；usage 的 token 估算已 Rust 化：
    调用 `deepseek_tokenizer::cmd_count_tokens`（DeepSeek V3 字节级 BPE 精确计数，
    资源 `resources/deepseek_tokenizer/tokenizer.json`，启动后台预热），非 Tauri 环境回退「字符数/4」
@@ -281,7 +294,6 @@ pub trait SessionRepo: Send + Sync {
 
 | 功能 | TS 实现 | Rust 现状 |
 |---|---|---|
-| Gemini 原生 HTTP | `infrastructure/provider/gemini.ts` | 无原生，走 JS 桥（`BridgedProvider`） |
 | provider `listModels` / `validateApiKey` | 各 TS provider | 无原生（配置 UI 用，非聊天核心） |
 
 ### 2. 引擎层

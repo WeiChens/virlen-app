@@ -449,3 +449,6 @@ const iconPaths: Record<string, React.ReactNode> = {
     </svg>
   ),
 }
+
+// Responses API 属于 OpenAI，复用其图标
+iconPaths['responses'] = iconPaths['openai']

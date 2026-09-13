@@ -3,7 +3,11 @@
  *
  * 从 agent/types.ts 迁移至此，供全项目共享。
  */
-export type ProviderType = 'openai' | 'anthropic' | 'gemini'
+export type ProviderType =
+  | 'openai'
+  | 'anthropic'
+  | 'gemini'
+  | 'responses'
 
 export interface ProviderConfig {
   id: string
@@ -57,6 +61,12 @@ export interface ToolUseContent {
   id: string
   name: string
   input: Record<string, any>
+  /**
+   * Gemini 2.5 思考模型：函数调用附带的 thoughtSignature。
+   * 多轮工具调用回传历史时需原样携带，否则 Gemini API 会报
+   * “function call ... is missing a thought_signature”。
+   */
+  thoughtSignature?: string
 }
 
 export interface ToolResultContent {

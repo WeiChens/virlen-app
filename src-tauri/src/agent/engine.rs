@@ -211,6 +211,7 @@ impl AgentEngine {
                 security: options.security.clone(),
                 effective_max_tokens: options.max_tokens.unwrap_or(session.params.max_tokens),
                 reasoning_effort: options.reasoning_effort.clone(),
+                thinking: options.thinking,
                 max_iterations: options.max_iterations,
                 repo: self.repo.as_ref(),
                 persist_snapshot: Some(&persist_closure),
@@ -234,6 +235,7 @@ impl AgentEngine {
                     options.security.clone(),
                     options.max_tokens.unwrap_or(session.params.max_tokens),
                     options.reasoning_effort.clone(),
+                    options.thinking,
                     &persist_closure,
                     &clear_closure,
                 )
@@ -306,6 +308,7 @@ impl AgentEngine {
         security: Option<NativeToolSecurity>,
         effective_max_tokens: i64,
         reasoning_effort: Option<String>,
+        thinking: Option<bool>,
         persist_closure: &(dyn Fn(&str, &Run) + Sync + Send),
         clear_closure: &(dyn Fn(&str) + Sync + Send),
     ) -> Result<bool, String> {
@@ -328,6 +331,7 @@ impl AgentEngine {
                 security: security.clone(),
                 effective_max_tokens,
                 reasoning_effort: reasoning_effort.clone(),
+                thinking,
                 repo: self.repo.as_ref(),
                 round: round_index,
                 persist_snapshot: Some(persist_closure),
@@ -573,6 +577,7 @@ mod tests {
                     id: "tc_1".into(),
                     name: "mock_tool".into(),
                     input: json!({}),
+                    thought_signature: None,
                 }));
                 on_event(StreamEvent::MessageStop {
                     reasoning_content: None,
@@ -658,6 +663,7 @@ mod tests {
                 max_tokens: None,
                 resume_from_snapshot: None,
                 reasoning_effort: None,
+                thinking: None,
                 max_tool_rounds: 10,
                 iteration_goal: None,
                 max_iterations: 5,
@@ -747,6 +753,7 @@ mod tests {
                 max_tokens: None,
                 resume_from_snapshot: None,
                 reasoning_effort: None,
+                thinking: None,
                 max_tool_rounds: 10,
                 iteration_goal: None,
                 max_iterations: 5,
@@ -802,6 +809,7 @@ mod tests {
                 max_tokens: None,
                 resume_from_snapshot: None,
                 reasoning_effort: None,
+                thinking: None,
                 max_tool_rounds: 10,
                 iteration_goal: None,
                 max_iterations: 5,

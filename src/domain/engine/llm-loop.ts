@@ -28,6 +28,7 @@ export interface ExecuteLLMRoundParams {
   skills?: string[]
   effectiveMaxTokens: number
   reasoningEffort?: string
+  thinking?: boolean
   persistSnapshot?: (sessionId: string, run: Run) => void
   clearSnapshot?: (sessionId: string) => void
   /** 当前 LLM 轮次序号（1 基），透传给 engine.round.* 埋点 */
@@ -68,6 +69,7 @@ export async function executeLLMRound(
     skills,
     effectiveMaxTokens,
     reasoningEffort,
+    thinking,
     persistSnapshot,
     clearSnapshot,
     round,
@@ -99,6 +101,7 @@ export async function executeLLMRound(
     interceptOnEvent,
     effectiveMaxTokens,
     reasoningEffort,
+    thinking,
     round,
   )
 

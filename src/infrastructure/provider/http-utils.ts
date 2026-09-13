@@ -13,6 +13,7 @@ function mapProviderType(name: string): string {
   const n = (name || '').toLowerCase()
   if (n.includes('anthropic') || n.includes('claude')) return 'anthropic'
   if (n.includes('gemini') || n.includes('google')) return 'gemini'
+  if (n.includes('responses')) return 'responses'
   if (n.includes('openai')) return 'openai'
   return n || 'unknown'
 }

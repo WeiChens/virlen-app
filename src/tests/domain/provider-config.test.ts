@@ -19,6 +19,7 @@ describe('PROVIDER_TEMPLATES', () => {
     expect(templateNames).toContain('zhipu')
     expect(templateNames).toContain('qwen')
     expect(templateNames).toContain('openai')
+    expect(templateNames).toContain('responses')
     expect(templateNames).toContain('anthropic')
     expect(templateNames).toContain('gemini')
     expect(templateNames).toContain('custom')
@@ -34,8 +35,8 @@ describe('PROVIDER_TEMPLATES', () => {
     }
   })
 
-  it('模板类型应为 openai、anthropic 或 gemini', () => {
-    const validTypes = ['openai', 'anthropic', 'gemini']
+  it('模板类型应为 openai、responses、anthropic 或 gemini', () => {
+    const validTypes = ['openai', 'anthropic', 'gemini', 'responses']
     for (const tmpl of PROVIDER_TEMPLATES) {
       expect(validTypes).toContain(tmpl.type)
     }
@@ -87,6 +88,28 @@ describe('PROVIDER_TEMPLATES', () => {
 
     it('应支持 reasoningEffort', () => {
       expect(openai!.allowReasoningEffortList).toEqual(['low', 'medium', 'high'])
+    })
+  })
+
+  describe('OpenAI Responses', () => {
+    const responses = PROVIDER_TEMPLATES.find(
+      (t) => t.templateName === 'responses',
+    )
+
+    it('应使用 OpenAI 端点', () => {
+      expect(responses!.baseUrl).toBe('https://api.openai.com/v1')
+    })
+
+    it('类型应为 responses', () => {
+      expect(responses!.type).toBe('responses')
+    })
+
+    it('应支持 reasoningEffort', () => {
+      expect(responses!.allowReasoningEffortList).toEqual([
+        'low',
+        'medium',
+        'high',
+      ])
     })
   })
 

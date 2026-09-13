@@ -37,6 +37,11 @@ export interface SendMessageOptions {
   resumeFromSnapshot?: RunSnapshot
   /** 来自 provider 配置的 reasoningEffort（如 o 系列模型的 low/medium/high） */
   reasoningEffort?: string
+  /**
+   * 是否启用思考/推理模式。默认 true（不传保持模型默认）；false 时在请求中显式禁用
+   * （对齐 `ChatRequest.thinking` / Rust `ChatRequest.thinking`）。
+   */
+  thinking?: boolean
   /** 读取最大工具调用轮数，默认 30  */
   maxToolRounds?: number
   /**

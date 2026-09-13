@@ -30,6 +30,8 @@ pub struct RunIterationParams<'a> {
     pub security: Option<NativeToolSecurity>,
     pub effective_max_tokens: i64,
     pub reasoning_effort: Option<String>,
+    /// 是否启用思考/推理模式（透传至 provider）
+    pub thinking: Option<bool>,
     pub max_iterations: i64,
     /// 消息持久化仓库（直接 SQLite 直落，用于执行过程中增量保存）
     pub repo: &'a dyn SessionRepo,
@@ -56,6 +58,7 @@ pub async fn run_iteration(
         security,
         effective_max_tokens,
         reasoning_effort,
+        thinking,
         max_iterations,
         repo,
         persist_snapshot,
@@ -94,6 +97,7 @@ pub async fn run_iteration(
             security: security.clone(),
             effective_max_tokens,
             reasoning_effort: reasoning_effort.clone(),
+            thinking,
             persist_snapshot,
             clear_snapshot,
             repo,

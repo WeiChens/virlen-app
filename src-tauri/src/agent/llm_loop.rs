@@ -25,6 +25,8 @@ pub struct ExecuteLlmRoundParams<'a> {
     pub security: Option<NativeToolSecurity>,
     pub effective_max_tokens: i64,
     pub reasoning_effort: Option<String>,
+    /// 是否启用思考/推理模式（透传至 provider）
+    pub thinking: Option<bool>,
     /// 消息持久化仓库（直接 SQLite 直落，用于执行过程中增量保存）
     pub repo: &'a dyn SessionRepo,
     pub persist_snapshot: Option<&'a (dyn Fn(&str, &Run) + Sync + Send)>,
@@ -59,6 +61,7 @@ pub async fn execute_llm_round(
         security,
         effective_max_tokens,
         reasoning_effort,
+        thinking,
         repo,
         persist_snapshot,
         clear_snapshot,
@@ -77,6 +80,7 @@ pub async fn execute_llm_round(
         session_id,
         Some(effective_max_tokens),
         reasoning_effort.as_deref(),
+        thinking,
         round,
     )
     .await?;

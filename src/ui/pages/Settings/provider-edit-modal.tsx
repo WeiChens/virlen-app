@@ -243,6 +243,7 @@ export default function ProviderEditModal({
               disabled={templateName !== 'custom'}
               options={[
                 { value: 'openai', label: 'OpenAI' },
+                { value: 'responses', label: 'Responses' },
                 { value: 'anthropic', label: 'Anthropic' },
                 { value: 'gemini', label: 'Gemini' },
               ]}

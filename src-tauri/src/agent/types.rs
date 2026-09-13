@@ -117,6 +117,9 @@ pub struct ToolUseContent {
     pub id: String,
     pub name: String,
     pub input: Value,
+    /// Gemini 2.5 思考模型：函数调用附带的 thoughtSignature，回传历史时必须原样携带
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought_signature: Option<String>,
 }
 
 // ==================== 工具定义 ====================
@@ -225,6 +228,9 @@ pub struct ChatRequest {
     pub stream: bool,
     pub tool_choice: String,
     pub reasoning_effort: Option<String>,
+    /// 是否启用思考/推理模式；`Some(false)` 时在各 provider 请求中显式禁用（对齐 TS `ChatRequest.thinking`）。
+    /// `None`/`Some(true)` 保持模型默认行为。
+    pub thinking: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -352,6 +358,10 @@ pub struct SendMessageOptions {
     pub resume_from_snapshot: Option<RunSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    /// 是否启用思考/推理模式（`Some(false)` 显式禁用）。透传至 provider 请求，
+    /// 对齐 TS `ChatRequest.thinking`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<bool>,
     #[serde(default = "default_max_tool_rounds")]
     pub max_tool_rounds: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -2,7 +2,9 @@
 //!
 //! - `NativeOpenAiProvider`：OpenAI 兼容协议（OpenAI / DeepSeek / Moonshot / Ollama / 自定义）
 //! - `NativeAnthropicProvider`：Anthropic Messages API
-//! - `BridgedProvider`：转发到 JS 侧已有 provider（如 Gemini），通过双向事件桥
+//! - `NativeResponsesProvider`：OpenAI Responses API（/responses）
+//! - `NativeGeminiProvider`：Google Gemini（generateContent / streamGenerateContent）
+//! - `BridgedProvider`：未原生化的类型转发到 JS 侧已有 provider，通过双向事件桥
 
 use super::bridge::{AgentBridgeState, ProviderBridgeMsg};
 use super::cancellation::CancellationToken;
@@ -219,7 +221,13 @@ impl NativeOpenAiProvider {
         if !request.tool_choice.is_empty() {
             body["tool_choice"] = Value::String(request.tool_choice.clone());
         }
-        if let Some(re) = &request.reasoning_effort {
+        // thinking 模式控制（优先于 reasoningEffort，对齐 openai.ts buildRequest）
+        // - DeepSeek reasoner：thinking: { type: 'disabled' }
+        // - OpenAI 兼容 / o 系列：reasoning_effort: 'none' 禁用思考
+        if request.thinking == Some(false) {
+            body["thinking"] = json!({ "type": "disabled" });
+            body["reasoning_effort"] = Value::String("none".into());
+        } else if let Some(re) = &request.reasoning_effort {
             body["reasoning_effort"] = Value::String(re.clone());
         }
 
@@ -278,6 +286,7 @@ impl NativeOpenAiProvider {
                             id,
                             name,
                             input,
+                            thought_signature: None,
                         })
                     })
                     .collect();
@@ -452,6 +461,7 @@ impl Provider for NativeOpenAiProvider {
                             id,
                             name,
                             input,
+                            thought_signature: None,
                         }));
                     }
                 }
@@ -652,6 +662,10 @@ impl NativeAnthropicProvider {
         if request.tool_choice == "none" {
             body["tool_choice"] = json!({ "type": "none" });
         }
+        // thinking 模式控制（Anthropic extended thinking，对齐 anthropic.ts buildRequest）
+        if request.thinking == Some(false) {
+            body["thinking"] = json!({ "type": "disabled" });
+        }
         body
     }
 
@@ -687,6 +701,7 @@ impl NativeAnthropicProvider {
                         id: block.get("id").and_then(Value::as_str).unwrap_or("").to_string(),
                         name: block.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
                         input: block.get("input").cloned().unwrap_or(Value::Null),
+                        thought_signature: None,
                     }),
                     _ => {}
                 }
@@ -804,6 +819,7 @@ impl Provider for NativeAnthropicProvider {
                                         id: cb.get("id").and_then(Value::as_str).unwrap_or("").to_string(),
                                         name: cb.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
                                         input: cb.get("input").cloned().unwrap_or(json!({})),
+                                        thought_signature: None,
                                     },
                                 );
                             }
@@ -906,6 +922,1066 @@ impl Provider for NativeAnthropicProvider {
     }
 }
 
+// ==================== OpenAI Responses Provider ====================
+
+pub struct NativeResponsesProvider {
+    api_key: String,
+    base_url: String,
+    http: reqwest::Client,
+}
+
+impl NativeResponsesProvider {
+    pub fn new(_name: &str, api_key: &str, base_url: &str) -> Self {
+        Self {
+            api_key: api_key.to_string(),
+            base_url: base_url.trim_end_matches('/').to_string(),
+            http: reqwest::Client::new(),
+        }
+    }
+
+    fn headers(&self) -> reqwest::header::HeaderMap {
+        let mut h = reqwest::header::HeaderMap::new();
+        h.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+        h.insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_str(&format!("Bearer {}", self.api_key))
+                .unwrap_or_else(|_| reqwest::header::HeaderValue::from_static("")),
+        );
+        h
+    }
+
+    /// 构建 Responses API 请求体（移植 responses.ts buildRequest）
+    fn build_request(&self, request: &ChatRequest) -> Value {
+        let mut input: Vec<Value> = Vec::new();
+
+        let request_messages = slice_messages(&request.messages);
+        for msg in request_messages {
+            // summary / feedback 角色：转为 user 消息
+            if msg.role == "summary" || msg.role == "feedback" {
+                input.push(json!({
+                    "type": "message",
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": text_of_content(&msg.content) }],
+                }));
+                continue;
+            }
+
+            if msg.role == "assistant" {
+                if let Value::String(s) = &msg.content {
+                    if !s.is_empty() {
+                        input.push(json!({
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{ "type": "output_text", "text": s }],
+                        }));
+                    }
+                }
+                if let Some(tcs) = &msg.tool_calls {
+                    for tc in tcs {
+                        input.push(json!({
+                            "type": "function_call",
+                            "call_id": tc.id,
+                            "name": tc.name,
+                            "arguments": serde_json::to_string(&tc.input)
+                                .unwrap_or_else(|_| "{}".to_string()),
+                        }));
+                    }
+                }
+                continue;
+            }
+
+            if msg.role == "tool" {
+                input.push(json!({
+                    "type": "function_call_output",
+                    "call_id": msg.tool_call_id.clone().unwrap_or_default(),
+                    "output": text_of_content(&msg.content),
+                }));
+                continue;
+            }
+
+            // user 消息
+            let mut parts: Vec<Value> = Vec::new();
+            match &msg.content {
+                Value::String(s) => {
+                    if !s.is_empty() {
+                        parts.push(json!({ "type": "input_text", "text": s }));
+                    }
+                }
+                Value::Array(arr) => {
+                    for block in arr {
+                        match block.get("type").and_then(Value::as_str) {
+                            Some("text") => parts.push(json!({
+                                "type": "input_text",
+                                "text": block.get("text").and_then(Value::as_str).unwrap_or(""),
+                            })),
+                            Some("image_url") => {
+                                let url = block
+                                    .get("image_url")
+                                    .and_then(|i| i.get("url"))
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("");
+                                parts.push(json!({ "type": "input_image", "image_url": url }));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if let Some(processed) = process_vision_content(msg) {
+                parts = processed
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|b| {
+                        json!({
+                            "type": "input_text",
+                            "text": b.get("text").and_then(Value::as_str).unwrap_or(""),
+                        })
+                    })
+                    .collect();
+            }
+            input.push(json!({ "type": "message", "role": "user", "content": parts }));
+        }
+
+        let mut body = json!({
+            "model": request.model,
+            "input": input,
+            "stream": request.stream,
+            "store": false,
+        });
+
+        if let Some(sp) = &request.system_prompt {
+            if !sp.is_empty() {
+                body["instructions"] = Value::String(sp.clone());
+            }
+        }
+        body["temperature"] = Value::from(request.temperature);
+        body["top_p"] = Value::from(request.top_p);
+        if request.max_tokens > 0 {
+            body["max_output_tokens"] = Value::from(request.max_tokens);
+        }
+
+        if !request.tools.is_empty() {
+            let tools: Vec<Value> = request
+                .tools
+                .iter()
+                .map(|t| {
+                    json!({
+                        "type": "function",
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters,
+                    })
+                })
+                .collect();
+            body["tools"] = Value::Array(tools);
+        }
+        if !request.tool_choice.is_empty() {
+            body["tool_choice"] = Value::String(request.tool_choice.clone());
+        }
+        // thinking 模式控制（Responses API 使用 reasoning.effort；官方合法取值含 'none'）
+        if request.thinking == Some(false) {
+            body["reasoning"] = json!({ "effort": "none" });
+        } else if let Some(re) = &request.reasoning_effort {
+            body["reasoning"] = json!({ "effort": re });
+        }
+
+        body
+    }
+
+    /// 解析非流式响应（移植 responses.ts parseResponse）
+    fn parse_response(&self, data: &Value) -> Message {
+        let mut message = Message {
+            id: data
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            role: "assistant".to_string(),
+            content: Value::String(String::new()),
+            tool_calls: None,
+            reasoning_content: None,
+            tool_call_id: None,
+            is_error: None,
+            elapsed_ms: None,
+            reasoning_elapsed_ms: None,
+            ui_data: None,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            streaming: None,
+            model: None,
+            usage: None,
+            image_vision_analyze_optimize: None,
+            image_vision_analyze_result: None,
+        };
+
+        let mut texts: Vec<String> = Vec::new();
+        let mut tool_calls: Vec<ToolUseContent> = Vec::new();
+        let mut reasoning = String::new();
+
+        if let Some(output) = data.get("output").and_then(Value::as_array) {
+            for item in output {
+                match item.get("type").and_then(Value::as_str) {
+                    Some("message") => {
+                        if let Some(content) = item.get("content").and_then(Value::as_array) {
+                            for c in content {
+                                if c.get("type").and_then(Value::as_str) == Some("output_text") {
+                                    if let Some(t) = c.get("text").and_then(Value::as_str) {
+                                        texts.push(t.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Some("function_call") => {
+                        let id = item
+                            .get("call_id")
+                            .and_then(Value::as_str)
+                            .or_else(|| item.get("id").and_then(Value::as_str))
+                            .unwrap_or("")
+                            .to_string();
+                        let args = item
+                            .get("arguments")
+                            .and_then(Value::as_str)
+                            .unwrap_or("{}");
+                        tool_calls.push(ToolUseContent {
+                            type_: "tool_use".into(),
+                            id,
+                            name: item
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string(),
+                            input: serde_json::from_str(args).unwrap_or(Value::Null),
+                            thought_signature: None,
+                        });
+                    }
+                    Some("reasoning") => {
+                        if let Some(summary) = item.get("summary").and_then(Value::as_array) {
+                            for s in summary {
+                                if let Some(t) = s.get("text").and_then(Value::as_str) {
+                                    reasoning.push_str(t);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        message.content = Value::String(texts.join(""));
+        if !tool_calls.is_empty() {
+            message.tool_calls = Some(tool_calls);
+        }
+        if !reasoning.is_empty() {
+            message.reasoning_content = Some(reasoning);
+        }
+
+        if let Some(usage) = data.get("usage") {
+            let input = usage.get("input_tokens").and_then(Value::as_i64).unwrap_or(0);
+            let output = usage
+                .get("output_tokens")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let total = usage
+                .get("total_tokens")
+                .and_then(Value::as_i64)
+                .unwrap_or(input + output);
+            message.usage = Some(TokenUsage {
+                prompt_tokens: input,
+                completion_tokens: output,
+                total_tokens: total,
+            });
+        }
+
+        message
+    }
+}
+
+#[async_trait]
+impl Provider for NativeResponsesProvider {
+    async fn chat(
+        &self,
+        request: &ChatRequest,
+        cancel: &CancellationToken,
+    ) -> Result<Message, String> {
+        let body = self.build_request(request);
+        let url = format!("{}/responses", self.base_url);
+
+        let resp = tokio::select! {
+            _ = cancel.cancelled() => return Err("cancelled".into()),
+            r = self.http.post(&url).headers(self.headers()).json(&body).send() => r.map_err(|e| format!("API Error: {}", e))?,
+        };
+
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| format!("读取响应失败: {}", e))?;
+        if !status.is_success() {
+            return Err(format!("API Error ({}): {}", status.as_u16(), text));
+        }
+        let data: Value =
+            serde_json::from_str(&text).map_err(|e| format!("响应解析失败: {}", e))?;
+        Ok(self.parse_response(&data))
+    }
+
+    async fn chat_stream(
+        &self,
+        request: &ChatRequest,
+        cancel: &CancellationToken,
+        on_event: &mut (dyn FnMut(StreamEvent) + Send),
+    ) -> Result<(), String> {
+        let mut body = self.build_request(request);
+        body["stream"] = Value::Bool(true);
+        let url = format!("{}/responses", self.base_url);
+
+        let resp = tokio::select! {
+            _ = cancel.cancelled() => return Err("cancelled".into()),
+            r = self.http.post(&url).headers(self.headers()).json(&body).send() => r.map_err(|e| format!("API Error: {}", e))?,
+        };
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| format!("读取错误响应失败: {}", e))?;
+            return Err(format!("API Error ({}): {}", status.as_u16(), text));
+        }
+
+        let mut reasoning_content = String::new();
+        let mut last_usage: Option<TokenUsage> = None;
+        // key → (id, name, args, fired)
+        let mut tool_items: std::collections::HashMap<String, (String, String, String, bool)> =
+            std::collections::HashMap::new();
+
+        let result = read_sse_lines(resp, cancel, &mut |line: String| {
+            let trimmed = line.trim();
+            if !trimmed.starts_with("data:") {
+                return true;
+            }
+            let data_str = trimmed[5..].trim().to_string();
+            if data_str == "[DONE]" {
+                return true;
+            }
+            let data: Value = match serde_json::from_str(&data_str) {
+                Ok(v) => v,
+                Err(_) => return true,
+            };
+            let t = data.get("type").and_then(Value::as_str).unwrap_or("");
+            match t {
+                "response.output_text.delta" => {
+                    if let Some(d) = data.get("delta").and_then(Value::as_str) {
+                        if !d.is_empty() {
+                            on_event(StreamEvent::TextDelta(d.to_string()));
+                        }
+                    }
+                }
+                "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
+                    if let Some(d) = data.get("delta").and_then(Value::as_str) {
+                        if !d.is_empty() {
+                            reasoning_content.push_str(d);
+                            on_event(StreamEvent::ReasoningContentChange(
+                                reasoning_content.clone(),
+                            ));
+                        }
+                    }
+                }
+                "response.output_item.added" => {
+                    if let Some(item) = data.get("item") {
+                        if item.get("type").and_then(Value::as_str) == Some("function_call") {
+                            let key = item
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .map(String::from)
+                                .or_else(|| {
+                                    data.get("output_index")
+                                        .and_then(Value::as_u64)
+                                        .map(|i| format!("idx_{}", i))
+                                });
+                            if let Some(key) = key {
+                                let id = item
+                                    .get("call_id")
+                                    .and_then(Value::as_str)
+                                    .or_else(|| item.get("id").and_then(Value::as_str))
+                                    .unwrap_or("")
+                                    .to_string();
+                                let name = item
+                                    .get("name")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    .to_string();
+                                let args = item
+                                    .get("arguments")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    .to_string();
+                                tool_items.insert(key, (id, name, args, false));
+                            }
+                        }
+                    }
+                }
+                "response.function_call_arguments.delta" => {
+                    if let Some(key) = data.get("item_id").and_then(Value::as_str) {
+                        if let Some(entry) = tool_items.get_mut(key) {
+                            if let Some(d) = data.get("delta").and_then(Value::as_str) {
+                                entry.2.push_str(d);
+                            }
+                        }
+                    }
+                }
+                "response.function_call_arguments.done" => {
+                    if let Some(key) = data.get("item_id").and_then(Value::as_str) {
+                        if let Some(entry) = tool_items.get_mut(key) {
+                            if let Some(a) = data.get("arguments").and_then(Value::as_str) {
+                                entry.2 = a.to_string();
+                            }
+                        }
+                    }
+                }
+                "response.output_item.done" => {
+                    if let Some(item) = data.get("item") {
+                        if item.get("type").and_then(Value::as_str) == Some("function_call") {
+                            let key = item
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .map(String::from)
+                                .or_else(|| {
+                                    data.get("output_index")
+                                        .and_then(Value::as_u64)
+                                        .map(|i| format!("idx_{}", i))
+                                })
+                                .unwrap_or_default();
+                            let entry = tool_items
+                                .entry(key)
+                                .or_insert((String::new(), String::new(), String::new(), false));
+                            if let Some(a) = item.get("arguments").and_then(Value::as_str) {
+                                if !a.is_empty() {
+                                    entry.2 = a.to_string();
+                                }
+                            }
+                            if let Some(n) = item.get("name").and_then(Value::as_str) {
+                                if !n.is_empty() {
+                                    entry.1 = n.to_string();
+                                }
+                            }
+                            if let Some(cid) = item.get("call_id").and_then(Value::as_str) {
+                                entry.0 = cid.to_string();
+                            }
+                            if !entry.3 {
+                                entry.3 = true;
+                                let input = serde_json::from_str(&entry.2).unwrap_or(json!({}));
+                                on_event(StreamEvent::ToolUse(ToolUseContent {
+                                    type_: "tool_use".into(),
+                                    id: entry.0.clone(),
+                                    name: entry.1.clone(),
+                                    input,
+                                    thought_signature: None,
+                                }));
+                            }
+                        }
+                    }
+                }
+                "response.completed" | "response.incomplete" => {
+                    if let Some(u) = data.get("response").and_then(|r| r.get("usage")) {
+                        let input = u.get("input_tokens").and_then(Value::as_i64).unwrap_or(0);
+                        let output = u
+                            .get("output_tokens")
+                            .and_then(Value::as_i64)
+                            .unwrap_or(0);
+                        let total = u
+                            .get("total_tokens")
+                            .and_then(Value::as_i64)
+                            .unwrap_or(input + output);
+                        last_usage = Some(TokenUsage {
+                            prompt_tokens: input,
+                            completion_tokens: output,
+                            total_tokens: total,
+                        });
+                    }
+                }
+                "response.failed" | "response.error" | "error" => {
+                    let msg = data
+                        .get("response")
+                        .and_then(|r| r.get("error"))
+                        .and_then(|e| e.get("message"))
+                        .and_then(Value::as_str)
+                        .or_else(|| {
+                            data.get("error")
+                                .and_then(|e| e.get("message"))
+                                .and_then(Value::as_str)
+                        })
+                        .or_else(|| data.get("message").and_then(Value::as_str))
+                        .unwrap_or("Responses API error")
+                        .to_string();
+                    on_event(StreamEvent::Error(msg));
+                }
+                _ => {}
+            }
+            true
+        })
+        .await;
+
+        result?;
+
+        // 兜底触发尚未发出的 function_call
+        let mut keys: Vec<String> = tool_items.keys().cloned().collect();
+        keys.sort();
+        for key in keys {
+            if let Some((id, name, args, fired)) = tool_items.remove(&key) {
+                if !fired {
+                    let input = serde_json::from_str(&args).unwrap_or(json!({}));
+                    on_event(StreamEvent::ToolUse(ToolUseContent {
+                        type_: "tool_use".into(),
+                        id,
+                        name,
+                        input,
+                        thought_signature: None,
+                    }));
+                }
+            }
+        }
+
+        on_event(StreamEvent::MessageStop {
+            reasoning_content: if reasoning_content.is_empty() {
+                None
+            } else {
+                Some(reasoning_content.clone())
+            },
+            usage: last_usage.clone(),
+        });
+
+        Ok(())
+    }
+}
+
+// ==================== Gemini Provider ====================
+
+/// Gemini 单次输出上限的保守上界；超过则不发送 maxOutputTokens
+const GEMINI_MAX_OUTPUT_TOKENS: i64 = 65536;
+
+pub struct NativeGeminiProvider {
+    api_key: String,
+    base_url: String,
+    http: reqwest::Client,
+}
+
+impl NativeGeminiProvider {
+    pub fn new(_name: &str, api_key: &str, base_url: &str) -> Self {
+        let base = if base_url.is_empty() {
+            "https://generativelanguage.googleapis.com/v1beta"
+        } else {
+            base_url
+        };
+        Self {
+            api_key: api_key.to_string(),
+            base_url: base.trim_end_matches('/').to_string(),
+            http: reqwest::Client::new(),
+        }
+    }
+
+    fn headers(&self) -> reqwest::header::HeaderMap {
+        let mut h = reqwest::header::HeaderMap::new();
+        h.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+        h
+    }
+
+    /// 构建 Gemini 请求体（移植 gemini.ts buildRequest）
+    fn build_request(&self, request: &ChatRequest) -> Value {
+        let mut contents: Vec<Value> = Vec::new();
+        let request_messages = slice_messages(&request.messages);
+
+        // toolCallId → 函数名 映射（functionResponse.name）
+        let mut call_id_to_name: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for m in request_messages {
+            if m.role == "assistant" {
+                if let Some(tcs) = &m.tool_calls {
+                    for tc in tcs {
+                        call_id_to_name.insert(tc.id.clone(), tc.name.clone());
+                    }
+                }
+            }
+        }
+
+        for msg in request_messages {
+            if msg.role == "summary" || msg.role == "feedback" {
+                contents.push(json!({
+                    "role": "user",
+                    "parts": [{ "text": text_of_content(&msg.content) }],
+                }));
+                continue;
+            }
+
+            if msg.role == "assistant" {
+                let mut parts: Vec<Value> = Vec::new();
+                if let Value::String(s) = &msg.content {
+                    if !s.is_empty() {
+                        parts.push(json!({ "text": s }));
+                    }
+                }
+                if let Some(tcs) = &msg.tool_calls {
+                    for tc in tcs {
+                        let mut fc = json!({ "name": tc.name, "args": tc.input });
+                        // 仅回传 Gemini 原生 functionCall.id（合成 fc_ id 不回收）
+                        if !tc.id.starts_with("fc_") {
+                            fc["id"] = Value::String(tc.id.clone());
+                        }
+                        let mut part = json!({ "functionCall": fc });
+                        // Gemini 2.5 思考模型：回传函数调用的 thoughtSignature
+                        if let Some(sig) = &tc.thought_signature {
+                            if !sig.is_empty() {
+                                part["thoughtSignature"] = Value::String(sig.clone());
+                            }
+                        }
+                        parts.push(part);
+                    }
+                }
+                if !parts.is_empty() {
+                    contents.push(json!({ "role": "model", "parts": parts }));
+                }
+                continue;
+            }
+
+            if msg.role == "tool" {
+                let tcid = msg.tool_call_id.clone().unwrap_or_default();
+                let name = call_id_to_name.get(&tcid).cloned().unwrap_or_else(|| {
+                    tcid.trim_start_matches("fc_")
+                        .split('_')
+                        .next()
+                        .unwrap_or("unknown")
+                        .to_string()
+                });
+                let output = text_of_content(&msg.content);
+                let mut fr = json!({
+                    "name": name,
+                    "response": { "name": name, "content": output },
+                });
+                if !tcid.starts_with("fc_") && !tcid.is_empty() {
+                    fr["id"] = Value::String(tcid.clone());
+                }
+                let fr_part = json!({ "functionResponse": fr });
+
+                // 连续工具结果合并到同一条 user content
+                let can_merge = contents
+                    .last()
+                    .map(|last| {
+                        last.get("role").and_then(Value::as_str) == Some("user")
+                            && last
+                                .get("parts")
+                                .and_then(Value::as_array)
+                                .and_then(|p| p.last())
+                                .map(|p| p.get("functionResponse").is_some())
+                                .unwrap_or(false)
+                    })
+                    .unwrap_or(false);
+                if can_merge {
+                    if let Some(arr) = contents
+                        .last_mut()
+                        .and_then(|l| l.get_mut("parts"))
+                        .and_then(Value::as_array_mut)
+                    {
+                        arr.push(fr_part);
+                    }
+                } else {
+                    contents.push(json!({ "role": "user", "parts": [fr_part] }));
+                }
+                continue;
+            }
+
+            // user 消息
+            let mut parts: Vec<Value> = Vec::new();
+            match &msg.content {
+                Value::String(s) => {
+                    if !s.is_empty() {
+                        parts.push(json!({ "text": s }));
+                    }
+                }
+                Value::Array(arr) => {
+                    for block in arr {
+                        match block.get("type").and_then(Value::as_str) {
+                            Some("text") => {
+                                if let Some(t) = block.get("text").and_then(Value::as_str) {
+                                    if !t.is_empty() {
+                                        parts.push(json!({ "text": t }));
+                                    }
+                                }
+                            }
+                            Some("image_url") => {
+                                let url = block
+                                    .get("image_url")
+                                    .and_then(|i| i.get("url"))
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("");
+                                if let Some(rest) = url.strip_prefix("data:") {
+                                    if let Some((meta, data)) = rest.split_once(',') {
+                                        let mime = meta.split(';').next().unwrap_or("image/jpeg");
+                                        parts.push(json!({
+                                            "inlineData": { "mimeType": mime, "data": data }
+                                        }));
+                                    }
+                                } else {
+                                    parts.push(json!({ "text": format!("[图片: {}]", url) }));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if let Some(processed) = process_vision_content(msg) {
+                parts = processed
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|b| json!({ "text": b.get("text").and_then(Value::as_str).unwrap_or("") }))
+                    .collect();
+            }
+            if !parts.is_empty() {
+                contents.push(json!({ "role": "user", "parts": parts }));
+            }
+        }
+
+        let mut body = json!({ "contents": contents });
+
+        if let Some(sp) = &request.system_prompt {
+            if !sp.is_empty() {
+                body["systemInstruction"] = json!({ "parts": [{ "text": sp }] });
+            }
+        }
+
+        let mut gen_config = serde_json::Map::new();
+        gen_config.insert("temperature".into(), Value::from(request.temperature));
+        gen_config.insert("topP".into(), Value::from(request.top_p));
+        if request.max_tokens > 0 && request.max_tokens <= GEMINI_MAX_OUTPUT_TOKENS {
+            gen_config.insert("maxOutputTokens".into(), Value::from(request.max_tokens));
+        }
+        // thinking 模式控制：thinkingBudget=0 禁用思考（对齐 gemini.ts buildRequest）
+        if request.thinking == Some(false) {
+            gen_config.insert("thinkingConfig".into(), json!({ "thinkingBudget": 0 }));
+        }
+
+        if !request.tools.is_empty() {
+            let decls: Vec<Value> = request
+                .tools
+                .iter()
+                .map(|t| {
+                    json!({
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters,
+                    })
+                })
+                .collect();
+            body["tools"] = json!([{ "functionDeclarations": decls }]);
+            body["toolConfig"] = json!({
+                "functionCallingConfig": {
+                    "mode": if request.tool_choice == "none" { "NONE" } else { "AUTO" },
+                }
+            });
+        }
+
+        if !gen_config.is_empty() {
+            body["generationConfig"] = Value::Object(gen_config);
+        }
+
+        body
+    }
+
+    fn parse_response(&self, data: &Value) -> Message {
+        let mut message = Message {
+            id: data
+                .get("responseId")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            role: "assistant".to_string(),
+            content: Value::String(String::new()),
+            tool_calls: None,
+            reasoning_content: None,
+            tool_call_id: None,
+            is_error: None,
+            elapsed_ms: None,
+            reasoning_elapsed_ms: None,
+            ui_data: None,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            streaming: None,
+            model: None,
+            usage: None,
+            image_vision_analyze_optimize: None,
+            image_vision_analyze_result: None,
+        };
+
+        let candidate = data
+            .get("candidates")
+            .and_then(Value::as_array)
+            .and_then(|a| a.first());
+        let Some(candidate) = candidate else {
+            if let Some(reason) = data
+                .get("promptFeedback")
+                .and_then(|p| p.get("blockReason"))
+                .and_then(Value::as_str)
+            {
+                message.content = Value::String(format!("[内容被拦截: {}]", reason));
+            }
+            return message;
+        };
+
+        let mut texts: Vec<String> = Vec::new();
+        let mut tool_calls: Vec<ToolUseContent> = Vec::new();
+        let mut reasoning = String::new();
+
+        if let Some(parts) = candidate
+            .get("content")
+            .and_then(|c| c.get("parts"))
+            .and_then(Value::as_array)
+        {
+            for part in parts {
+                if let Some(fc) = part.get("functionCall") {
+                    let name = fc
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let id = fc
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(String::from)
+                        .unwrap_or_else(|| format!("fc_{}_{}", name, uuid::Uuid::new_v4()));
+                    let thought_signature = part
+                        .get("thoughtSignature")
+                        .and_then(Value::as_str)
+                        .map(String::from);
+                    tool_calls.push(ToolUseContent {
+                        type_: "tool_use".into(),
+                        id,
+                        name,
+                        input: fc.get("args").cloned().unwrap_or(json!({})),
+                        thought_signature,
+                    });
+                } else if let Some(t) = part.get("text").and_then(Value::as_str) {
+                    if part.get("thought").and_then(Value::as_bool).unwrap_or(false) {
+                        reasoning.push_str(t);
+                    } else {
+                        texts.push(t.to_string());
+                    }
+                }
+            }
+        }
+
+        message.content = Value::String(texts.join(""));
+        if !tool_calls.is_empty() {
+            message.tool_calls = Some(tool_calls);
+        }
+        if !reasoning.is_empty() {
+            message.reasoning_content = Some(reasoning);
+        }
+
+        if let Some(u) = data.get("usageMetadata") {
+            let prompt = u
+                .get("promptTokenCount")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let comp = u
+                .get("candidatesTokenCount")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let total = u
+                .get("totalTokenCount")
+                .and_then(Value::as_i64)
+                .unwrap_or(prompt + comp);
+            message.usage = Some(TokenUsage {
+                prompt_tokens: prompt,
+                completion_tokens: comp,
+                total_tokens: total,
+            });
+        }
+
+        message
+    }
+}
+
+#[async_trait]
+impl Provider for NativeGeminiProvider {
+    async fn chat(
+        &self,
+        request: &ChatRequest,
+        cancel: &CancellationToken,
+    ) -> Result<Message, String> {
+        let body = self.build_request(request);
+        let url = format!(
+            "{}/models/{}:generateContent?key={}",
+            self.base_url, request.model, self.api_key
+        );
+
+        let resp = tokio::select! {
+            _ = cancel.cancelled() => return Err("cancelled".into()),
+            r = self.http.post(&url).headers(self.headers()).json(&body).send() => r.map_err(|e| format!("API Error: {}", e))?,
+        };
+
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| format!("读取响应失败: {}", e))?;
+        if !status.is_success() {
+            return Err(format!("API Error ({}): {}", status.as_u16(), text));
+        }
+        let data: Value =
+            serde_json::from_str(&text).map_err(|e| format!("响应解析失败: {}", e))?;
+        Ok(self.parse_response(&data))
+    }
+
+    async fn chat_stream(
+        &self,
+        request: &ChatRequest,
+        cancel: &CancellationToken,
+        on_event: &mut (dyn FnMut(StreamEvent) + Send),
+    ) -> Result<(), String> {
+        let body = self.build_request(request);
+        let url = format!(
+            "{}/models/{}:streamGenerateContent?alt=sse&key={}",
+            self.base_url, request.model, self.api_key
+        );
+
+        let resp = tokio::select! {
+            _ = cancel.cancelled() => return Err("cancelled".into()),
+            r = self.http.post(&url).headers(self.headers()).json(&body).send() => r.map_err(|e| format!("API Error: {}", e))?,
+        };
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| format!("读取错误响应失败: {}", e))?;
+            return Err(format!("API Error ({}): {}", status.as_u16(), text));
+        }
+
+        let mut reasoning_content = String::new();
+        let mut last_usage: Option<TokenUsage> = None;
+        let mut fired: std::collections::HashSet<String> = Default::default();
+
+        let result = read_sse_lines(resp, cancel, &mut |line: String| {
+            let trimmed = line.trim();
+            if !trimmed.starts_with("data:") {
+                return true;
+            }
+            let data_str = trimmed[5..].trim().to_string();
+            if data_str.is_empty() || data_str == "[DONE]" {
+                return true;
+            }
+            let chunk: Value = match serde_json::from_str(&data_str) {
+                Ok(v) => v,
+                Err(_) => return true,
+            };
+
+            if let Some(err) = chunk.get("error") {
+                let m = err
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Gemini API error")
+                    .to_string();
+                on_event(StreamEvent::Error(m));
+                return true;
+            }
+
+            if let Some(u) = chunk.get("usageMetadata") {
+                let prompt = u
+                    .get("promptTokenCount")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                let comp = u
+                    .get("candidatesTokenCount")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                let total = u
+                    .get("totalTokenCount")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(prompt + comp);
+                last_usage = Some(TokenUsage {
+                    prompt_tokens: prompt,
+                    completion_tokens: comp,
+                    total_tokens: total,
+                });
+            }
+
+            let parts = chunk
+                .get("candidates")
+                .and_then(Value::as_array)
+                .and_then(|a| a.first())
+                .and_then(|c| c.get("content"))
+                .and_then(|c| c.get("parts"))
+                .and_then(Value::as_array);
+            if let Some(parts) = parts {
+                for part in parts {
+                    if let Some(fc) = part.get("functionCall") {
+                        let name = fc
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
+                        let id = fc
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .map(String::from)
+                            .unwrap_or_else(|| format!("fc_{}_{}", name, uuid::Uuid::new_v4()));
+                        if fired.insert(id.clone()) {
+                            let thought_signature = part
+                                .get("thoughtSignature")
+                                .and_then(Value::as_str)
+                                .map(String::from);
+                            on_event(StreamEvent::ToolUse(ToolUseContent {
+                                type_: "tool_use".into(),
+                                id,
+                                name,
+                                input: fc.get("args").cloned().unwrap_or(json!({})),
+                                thought_signature,
+                            }));
+                        }
+                    } else if let Some(t) = part.get("text").and_then(Value::as_str) {
+                        if t.is_empty() {
+                            continue;
+                        }
+                        if part.get("thought").and_then(Value::as_bool).unwrap_or(false) {
+                            reasoning_content.push_str(t);
+                            on_event(StreamEvent::ReasoningContentChange(
+                                reasoning_content.clone(),
+                            ));
+                        } else {
+                            on_event(StreamEvent::TextDelta(t.to_string()));
+                        }
+                    }
+                }
+            }
+            true
+        })
+        .await;
+
+        result?;
+
+        on_event(StreamEvent::MessageStop {
+            reasoning_content: if reasoning_content.is_empty() {
+                None
+            } else {
+                Some(reasoning_content.clone())
+            },
+            usage: last_usage.clone(),
+        });
+
+        Ok(())
+    }
+}
+
 // ==================== 桥接 Provider（转发到 JS） ====================
 
 pub struct BridgedProvider {
@@ -949,6 +2025,7 @@ impl BridgedProvider {
             "stream": request.stream,
             "tool_choice": request.tool_choice,
             "reasoningEffort": request.reasoning_effort,
+            "thinking": request.thinking,
         })
     }
 }
@@ -1064,7 +2141,7 @@ pub trait ProviderFactory: Send + Sync {
     fn create(&self, conn: &ProviderConnection) -> Box<dyn Provider>;
 }
 
-/// 默认工厂：openai/anthropic 原生 HTTP，其余（gemini 等）桥接 JS
+/// 默认工厂：openai/anthropic/responses/gemini 原生 HTTP，其余未识别类型桥接 JS
 pub struct DefaultProviderFactory {
     pub bridge: Arc<AgentBridgeState>,
     pub sink: Arc<dyn EventSink>,
@@ -1079,6 +2156,16 @@ impl ProviderFactory for DefaultProviderFactory {
                 &conn.base_url,
             )),
             "openai" => Box::new(NativeOpenAiProvider::new(
+                &conn.provider_id,
+                &conn.api_key,
+                &conn.base_url,
+            )),
+            "responses" => Box::new(NativeResponsesProvider::new(
+                &conn.provider_id,
+                &conn.api_key,
+                &conn.base_url,
+            )),
+            "gemini" => Box::new(NativeGeminiProvider::new(
                 &conn.provider_id,
                 &conn.api_key,
                 &conn.base_url,
@@ -1133,6 +2220,7 @@ async fn read_sse_lines(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::types::{ToolDefinition, ToolParameters};
 
     fn msg(
         role: &str,
@@ -1172,6 +2260,7 @@ mod tests {
             stream: false,
             tool_choice: "none".into(),
             reasoning_effort: None,
+            thinking: None,
         }
     }
 
@@ -1272,5 +2361,197 @@ mod tests {
         let body_str = body.to_string();
         assert!(!body_str.contains("image_url"));
         assert!(body_str.contains("图中有一只猫"));
+    }
+
+    fn mk_tool(name: &str, description: &str) -> ToolDefinition {
+        ToolDefinition {
+            name: name.into(),
+            label: None,
+            description: description.into(),
+            parameters: ToolParameters {
+                type_: "object".into(),
+                properties: json!({}),
+                required: vec![],
+                one_of: None,
+            },
+        }
+    }
+
+    #[test]
+    fn responses_build_request_maps_system_and_input() {
+        let p = NativeResponsesProvider::new("test", "key", "https://api.test.com");
+        let mut req = chat_request(vec![msg("user", json!("hi"), None, None)]);
+        req.system_prompt = Some("你是助手".into());
+        let body = p.build_request(&req);
+        assert_eq!(body["instructions"], "你是助手");
+        assert_eq!(body["store"], false);
+        assert_eq!(body["input"][0]["type"], "message");
+        assert_eq!(body["input"][0]["role"], "user");
+        assert_eq!(body["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(body["input"][0]["content"][0]["text"], "hi");
+    }
+
+    #[test]
+    fn responses_build_request_tools_flat_and_function_call() {
+        let p = NativeResponsesProvider::new("test", "key", "https://api.test.com");
+        let mut req = chat_request(vec![]);
+        req.tools = vec![mk_tool("foo", "desc")];
+        let body = p.build_request(&req);
+        assert_eq!(body["tools"][0]["type"], "function");
+        assert_eq!(body["tools"][0]["name"], "foo");
+        assert!(body["tools"][0].get("function").is_none());
+
+        let mut assistant = msg("assistant", json!(""), None, None);
+        assistant.tool_calls = Some(vec![ToolUseContent {
+            type_: "tool_use".into(),
+            id: "call_1".into(),
+            name: "get_time".into(),
+            input: json!({ "tz": "UTC" }),
+            thought_signature: None,
+        }]);
+        let mut tool = msg("tool", json!("12:00"), None, None);
+        tool.tool_call_id = Some("call_1".into());
+        let req2 = chat_request(vec![assistant, tool]);
+        let body2 = p.build_request(&req2);
+        assert_eq!(body2["input"][0]["type"], "function_call");
+        assert_eq!(body2["input"][0]["call_id"], "call_1");
+        assert_eq!(body2["input"][1]["type"], "function_call_output");
+        assert_eq!(body2["input"][1]["call_id"], "call_1");
+    }
+
+    #[test]
+    fn gemini_build_request_function_response_name_with_underscore() {
+        let p = NativeGeminiProvider::new("test", "key", "https://api.test.com");
+        let mut assistant = msg("assistant", json!(""), None, None);
+        assistant.tool_calls = Some(vec![ToolUseContent {
+            type_: "tool_use".into(),
+            id: "fc_read_file_abc12345".into(),
+            name: "read_file".into(),
+            input: json!({ "path": "a.txt" }),
+            thought_signature: None,
+        }]);
+        let mut tool = msg("tool", json!("content"), None, None);
+        tool.tool_call_id = Some("fc_read_file_abc12345".into());
+        let req = chat_request(vec![assistant, tool]);
+        let body = p.build_request(&req);
+        assert_eq!(body["contents"][0]["role"], "model");
+        assert_eq!(body["contents"][0]["parts"][0]["functionCall"]["name"], "read_file");
+        // 合成的 fc_ id 不回传
+        assert!(body["contents"][0]["parts"][0]["functionCall"].get("id").is_none());
+        assert_eq!(body["contents"][1]["role"], "user");
+        assert_eq!(
+            body["contents"][1]["parts"][0]["functionResponse"]["name"],
+            "read_file"
+        );
+    }
+
+    #[test]
+    fn gemini_build_request_tool_config_mode() {
+        let p = NativeGeminiProvider::new("test", "key", "https://api.test.com");
+        let mut req = chat_request(vec![]);
+        req.tools = vec![mk_tool("call_any", "d")];
+        req.tool_choice = "none".into();
+        let body = p.build_request(&req);
+        assert_eq!(
+            body["tools"][0]["functionDeclarations"][0]["name"],
+            "call_any"
+        );
+        assert_eq!(body["toolConfig"]["functionCallingConfig"]["mode"], "NONE");
+    }
+
+    #[test]
+    fn gemini_build_request_returns_thought_signature() {
+        let p = NativeGeminiProvider::new("test", "key", "https://api.test.com");
+        let mut assistant = msg("assistant", json!(""), None, None);
+        assistant.tool_calls = Some(vec![ToolUseContent {
+            type_: "tool_use".into(),
+            id: "call_abc".into(),
+            name: "get_weather".into(),
+            input: json!({ "city": "BJ" }),
+            thought_signature: Some("SIG123".into()),
+        }]);
+        let req = chat_request(vec![assistant]);
+        let body = p.build_request(&req);
+        assert_eq!(body["contents"][0]["parts"][0]["functionCall"]["id"], "call_abc");
+        assert_eq!(body["contents"][0]["parts"][0]["thoughtSignature"], "SIG123");
+    }
+
+    #[test]
+    fn provider_factory_routes_types() {
+        // 仅验证工厂分支选择（不发起网络），确认 native 类型不再走桥接
+        let bridge = std::sync::Arc::new(crate::agent::bridge::AgentBridgeState::default());
+        let sink: std::sync::Arc<dyn EventSink> =
+            std::sync::Arc::new(crate::agent::event_sink::TestEventSink::new());
+        let factory = DefaultProviderFactory { bridge, sink };
+
+        let mk = |t: &str| ProviderConnection {
+            provider_type: t.into(),
+            provider_id: "p".into(),
+            api_key: "k".into(),
+            base_url: "https://api.test.com".into(),
+        };
+        // 仅确保 create 不 panic（四种原生 + 一种桥接）
+        let _ = factory.create(&mk("openai"));
+        let _ = factory.create(&mk("anthropic"));
+        let _ = factory.create(&mk("responses"));
+        let _ = factory.create(&mk("gemini"));
+        let _ = factory.create(&mk("unknown"));
+    }
+
+    #[test]
+    fn responses_thinking_false_maps_to_reasoning_none() {
+        let p = NativeResponsesProvider::new("test", "key", "https://api.test.com");
+        let mut req = chat_request(vec![]);
+        req.thinking = Some(false);
+        let body = p.build_request(&req);
+        assert_eq!(body["reasoning"]["effort"], "none");
+    }
+
+    #[test]
+    fn responses_reasoning_effort_maps_to_reasoning() {
+        let p = NativeResponsesProvider::new("test", "key", "https://api.test.com");
+        let mut req = chat_request(vec![]);
+        req.reasoning_effort = Some("low".into());
+        let body = p.build_request(&req);
+        assert_eq!(body["reasoning"]["effort"], "low");
+    }
+
+    #[test]
+    fn gemini_thinking_false_disables_thinking_budget() {
+        let p = NativeGeminiProvider::new("test", "key", "https://api.test.com");
+        let mut req = chat_request(vec![]);
+        req.thinking = Some(false);
+        let body = p.build_request(&req);
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            json!(0)
+        );
+    }
+
+    #[test]
+    fn gemini_thinking_none_omits_thinking_config() {
+        let p = NativeGeminiProvider::new("test", "key", "https://api.test.com");
+        let req = chat_request(vec![]);
+        let body = p.build_request(&req);
+        assert!(body["generationConfig"].get("thinkingConfig").is_none());
+    }
+
+    #[test]
+    fn openai_thinking_false_disables_reasoning() {
+        let p = NativeOpenAiProvider::new("test", "key", "https://api.test.com");
+        let mut req = chat_request(vec![]);
+        req.thinking = Some(false);
+        let body = p.build_request(&req);
+        assert_eq!(body["thinking"]["type"], "disabled");
+        assert_eq!(body["reasoning_effort"], "none");
+    }
+
+    #[test]
+    fn anthropic_thinking_false_disables_thinking() {
+        let p = NativeAnthropicProvider::new("test", "key", "https://api.test.com");
+        let mut req = chat_request(vec![]);
+        req.thinking = Some(false);
+        let body = p.build_request(&req);
+        assert_eq!(body["thinking"]["type"], "disabled");
     }
 }

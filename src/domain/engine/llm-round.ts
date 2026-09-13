@@ -49,6 +49,7 @@ export async function doLLMRound(
   onEvent?: AgentEventCallback,
   overrideMaxTokens?: number,
   reasoningEffort?: string,
+  thinking?: boolean,
   round?: number,
 ): Promise<ToolCallContext | null> {
   const model = session.modelId
@@ -89,6 +90,11 @@ export async function doLLMRound(
 
   if (reasoningEffort) {
     request.reasoningEffort = reasoningEffort
+  }
+
+  // thinking 禁用控制（与 Rust ChatRequest.thinking / 各 provider 对齐）
+  if (thinking !== undefined) {
+    request.thinking = thinking
   }
 
   // 将会话链路 ID 透传给 provider 层（provider.* / sse.interrupt 埋点关联）

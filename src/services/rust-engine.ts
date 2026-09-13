@@ -4,8 +4,9 @@
  * 平滑过渡的关键：
  * - chat-service 无感知切换（getEngine() 按 settings.useRustEngine 选择）
  * - 事件契约与 TS 引擎完全一致（agent:event → onEvent）
- * - 工具执行 / 用户交互 / Gemini Provider 通过双向桥回 JS
- * - 原生 OpenAI / Anthropic 由 Rust 直接 HTTP 调用
+ * - 工具执行 / 用户交互 通过双向桥回 JS
+ * - 原生 OpenAI / Anthropic / Responses / Gemini 由 Rust 直接 HTTP 调用
+ * - 未原生化的 provider 类型经 Provider 桥回 JS
  *
  * 桥协议（与 src-tauri/src/agent/bridge.rs 对应）：
  * - Rust → JS: agent:tool-request / agent:user-interaction-request / agent:provider-request
@@ -347,6 +348,7 @@ export const rustEngine: AgentEnginePort = {
       onUserInteraction,
       resumeFromSnapshot,
       reasoningEffort,
+      thinking,
       maxToolRounds = 30,
       iterationGoal,
       maxIterations = 5,
@@ -410,6 +412,7 @@ export const rustEngine: AgentEnginePort = {
           maxTokens,
           resumeFromSnapshot: resumeFromSnapshot ?? null,
           reasoningEffort: reasoningEffort ?? null,
+          thinking: thinking ?? null,
           maxToolRounds,
           iterationGoal: iterationGoal ?? null,
           maxIterations,

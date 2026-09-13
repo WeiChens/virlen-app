@@ -31,6 +31,7 @@ pub async fn do_llm_round(
     session_id: &str,
     override_max_tokens: Option<i64>,
     reasoning_effort: Option<&str>,
+    thinking: Option<bool>,
     round: i64,
 ) -> Result<LlmRoundOutput, String> {
     let model = session.model_id.clone();
@@ -83,6 +84,7 @@ pub async fn do_llm_round(
         stream: session.params.stream,
         tool_choice: "auto".to_string(),
         reasoning_effort: reasoning_effort.map(String::from),
+        thinking,
     };
 
     let trace_id = crate::telemetry::get_session_trace(session_id).unwrap_or_default();
@@ -556,6 +558,7 @@ mod tests {
             &cancel,
             &sink,
             "s1",
+            None,
             None,
             None,
             1,

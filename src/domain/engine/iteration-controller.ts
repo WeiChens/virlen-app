@@ -74,6 +74,7 @@ export class IterationController {
     skills?: string[]
     effectiveMaxTokens: number
     reasoningEffort?: string
+    thinking?: boolean
     persistSnapshot: (sessionId: string, run: any) => void
     clearSnapshot: (sessionId: string) => void
   }): Promise<{ completed: boolean; messages: Message[] }> {
@@ -90,6 +91,7 @@ export class IterationController {
       skills,
       effectiveMaxTokens,
       reasoningEffort,
+      thinking,
       persistSnapshot,
       clearSnapshot,
     } = params
@@ -129,6 +131,7 @@ export class IterationController {
         skills,
         effectiveMaxTokens,
         reasoningEffort,
+        thinking,
         round: iterSession.currentIteration,
         persistSnapshot,
         clearSnapshot,

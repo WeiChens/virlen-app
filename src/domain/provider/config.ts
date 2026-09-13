@@ -75,6 +75,14 @@ export const PROVIDER_TEMPLATES: {
     allowReasoningEffortList: ['low', 'medium', 'high'],
   },
   {
+    templateName: 'responses',
+    type: 'responses',
+    label: 'OpenAI Responses',
+    baseUrl: 'https://api.openai.com/v1',
+    officialLink: 'https://platform.openai.com',
+    allowReasoningEffortList: ['low', 'medium', 'high'],
+  },
+  {
     templateName: 'anthropic',
     type: 'anthropic',
     label: 'Anthropic',

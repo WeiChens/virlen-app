@@ -162,6 +162,7 @@ pub async fn verify(
         stream: false,
         tool_choice: "none".to_string(),
         reasoning_effort: None,
+        thinking: None,
         tools: Vec::new(),
     };
 

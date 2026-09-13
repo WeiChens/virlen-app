@@ -2,6 +2,7 @@ import { AnthropicProvider } from './anthropic'
 import { GeminiProvider } from './gemini'
 import { IProvider } from './types'
 import { OpenAiProvider } from './openai'
+import { ResponsesProvider } from './responses'
 
 /** 根据 provider 类型创建对应的 IProvider 实例 */
 export function createProviderInstance(config: {
@@ -20,6 +21,8 @@ export function createProviderInstance(config: {
         return new GeminiProvider(id, apiKey, baseUrl)
       case 'openai':
         return new OpenAiProvider(id, apiKey, baseUrl)
+      case 'responses':
+        return new ResponsesProvider(id, apiKey, baseUrl)
 
       default:
         return new OpenAiProvider(id, apiKey, baseUrl)
