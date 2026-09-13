@@ -21,7 +21,11 @@ import {
   REDACTED,
   resolveLinkage,
   toErrorInfo,
+  buildBundleDoc,
+  BUNDLE_DOC_NAME,
 } from '@/utils/telemetry'
+import type { TelemetryEvent } from '@/utils/telemetry'
+import type { TelemetryBundle } from '@/utils/telemetry/transport'
 
 describe('telemetry/redact — isSensitiveKey', () => {
   it('度量类键（以 token 结尾才敏感）不应误判', () => {
@@ -166,5 +170,147 @@ describe('telemetry/toErrorInfo', () => {
   it('字符串 / null 兜底', () => {
     expect(toErrorInfo('plain').message).toBe('plain')
     expect(toErrorInfo(null).message).toBe('unknown error')
+  })
+})
+
+// ==================== 导出文档（SCHEMA.md） ====================
+
+const COMMON = {
+  app_version: '0.1.2',
+  platform: 'windows',
+  os_version: '10.0.19045',
+  arch: 'x86_64',
+  locale: 'zh-CN',
+  theme: 'dark',
+  font_size: 'medium',
+  engine: 'ts' as const,
+  window_w: 1280,
+  window_h: 800,
+  dpr: 1,
+  is_dev: false,
+}
+
+function mkEvent(
+  event_name: string,
+  props: Record<string, any> = {},
+  over: Partial<TelemetryEvent> = {},
+): TelemetryEvent {
+  return {
+    event_name,
+    event_id: 'e-' + Math.random().toString(36).slice(2),
+    event_time: 1730000000000,
+    device_id: 'd-x',
+    app_run_id: 'r-x',
+    seq: 1,
+    sdk_version: '1.0.0',
+    common: COMMON,
+    props,
+    ...over,
+  }
+}
+
+function mkBundle(events: TelemetryEvent[]): TelemetryBundle {
+  return {
+    device_id: 'd-x',
+    app_run_id: 'r-x',
+    app_version: '0.1.2',
+    platform: 'windows',
+    sdk_version: '1.0.0',
+    exported_at: 1730000001000,
+    event_count: events.length,
+    events,
+  }
+}
+
+describe('telemetry/buildBundleDoc — 导出文档', () => {
+  it('文件名固定为 SCHEMA.md', () => {
+    expect(BUNDLE_DOC_NAME).toBe('SCHEMA.md')
+  })
+
+  it('空事件时给出明确提示，不抛错', () => {
+    const doc = buildBundleDoc(mkBundle([]))
+    expect(doc).toContain('# Virlen 埋点导出包')
+    expect(doc).toContain('共 **0** 条事件')
+    expect(doc).toContain('本包没有事件')
+  })
+
+  it('汇总计数 / 事件分布 / 各事件字段', () => {
+    const bundle = mkBundle([
+      mkEvent(
+        'tool.call.end',
+        { tool_name: 'execute_command', status: 'fail', duration_ms: 12 },
+        { trace_id: 't-1', event_time: 1730000000000 },
+      ),
+      mkEvent(
+        'tool.call.end',
+        { tool_name: 'search', status: 'success', duration_ms: 3 },
+        { trace_id: 't-1', event_time: 1730000000050 },
+      ),
+      mkEvent(
+        'error.api',
+        { http_status: 429, error: 'rate limited' },
+        { trace_id: 't-2', event_time: 1730000000100 },
+      ),
+    ])
+    const doc = buildBundleDoc(bundle)
+
+    // 总览
+    expect(doc).toContain('共 **3** 条事件')
+    expect(doc).toContain('覆盖 **2** 种事件名')
+    expect(doc).toContain('错误事件 **1** 条')
+    expect(doc).toContain('失败(status=fail) **1** 条')
+    // 分布表
+    expect(doc).toContain('`tool.call.end`')
+    expect(doc).toContain('`error.api`')
+    // 字段明细（含条数与覆盖率）
+    expect(doc).toContain('### `tool.call.end`  （2 条）')
+    expect(doc).toContain('`tool_name`')
+    expect(doc).toContain('2/2（100%）')
+    // trace 归组
+    expect(doc).toContain('`t-1`')
+    expect(doc).toContain('| `t-1` | 2 |')
+  })
+
+  it('推断 props 类型（int/float/bool/str/arr/obj）', () => {
+    const doc = buildBundleDoc(
+      mkBundle([
+        mkEvent('settings.change', {
+          key: 'theme',
+          flag: true,
+          n: 3,
+          f: 1.5,
+          list: [1, 2],
+          obj: { a: 1 },
+        }),
+      ]),
+    )
+    expect(doc).toContain('`flag` | bool')
+    expect(doc).toContain('`n` | int')
+    expect(doc).toContain('`f` | float')
+    expect(doc).toContain('`list` | arr')
+    expect(doc).toContain('`obj` | obj')
+    expect(doc).toContain('`key` | str')
+  })
+
+  it('统计打码 / 截断标记事件（§9 预期行为）', () => {
+    const doc = buildBundleDoc(
+      mkBundle([
+        mkEvent('tool.call.end', { apiKey: '***' }),
+        mkEvent('tool.call.end', { output: 'x…[truncated 5 chars]' }),
+        mkEvent('tool.call.end', { note: 'a[REDACTED]b' }),
+      ]),
+    )
+    expect(doc).toContain('redacted_events')
+    expect(doc).toContain('truncated_events')
+    // redacted: 第 1、3 条；truncated: 第 2 条
+    expect(doc).toMatch(/redacted_events \| 2 \|/)
+    expect(doc).toMatch(/truncated_events \| 1 \|/)
+  })
+
+  it('含 jq 读取示例与脱敏说明', () => {
+    const doc = buildBundleDoc(mkBundle([mkEvent('app.start', {})]))
+    expect(doc).toContain('建议的读取方式')
+    expect(doc).toContain('jq')
+    expect(doc).toContain('[REDACTED]')
   })
 })

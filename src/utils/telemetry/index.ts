@@ -26,6 +26,7 @@ import {
   postTelemetry,
   saveZip,
 } from './transport'
+import { buildBundleDoc, BUNDLE_DOC_NAME } from './export-doc'
 import type {
   TelemetryEngineKind,
   TelemetryEvent,
@@ -52,6 +53,7 @@ export {
   isSensitiveKey,
 } from './redact'
 export { SDK_VERSION as TELEMETRY_SDK_VERSION }
+export { buildBundleDoc, BUNDLE_DOC_NAME } from './export-doc'
 
 // ==================== 常量 ====================
 
@@ -386,6 +388,7 @@ const EXPORT_README = [
   '-----------------------',
   '本 zip 由 Virlen 客户端「诊断埋点」功能在本地生成，用于排查问题。',
   'telemetry.json 包含：device_id / app_run_id / common 公共字段 / events 事件列表。',
+  'SCHEMA.md 为面向 AI 的结构与统计说明（数据结构 + 数据统计），建议配合 telemetry.json 使用。',
   '所有正文与密钥已在采集与导出前经过密钥模式打码（[REDACTED]）。',
 ].join('\n')
 
@@ -419,6 +422,8 @@ export async function exportTelemetryBundle(opts?: {
     )
     const zip = new JSZip()
     zip.file('telemetry.json', JSON.stringify(payload, null, 2))
+    // 面向 AI 的结构 + 统计说明，便于按需解析 telemetry.json
+    zip.file(BUNDLE_DOC_NAME, buildBundleDoc(payload))
     zip.file('README.txt', EXPORT_README)
     const uint8 = await zip.generateAsync({ type: 'uint8array' })
     const path = await saveZip(uint8, defaultExportName())
