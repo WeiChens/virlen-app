@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { ToolUseContent, Message } from '@/types'
 import CollapsedSvg from '@/ui/components/icons/CollapsedSvg'
-import { t } from '@/ui/i18n'
+import { t, tpl } from '@/ui/i18n'
 
 interface Props {
   toolCalls: ToolUseContent[]
@@ -44,7 +44,7 @@ export function ToolCallGroup({
   const hasPending = completed < total
 
   // 摘要文本
-  let summary = `调用 ${total} 个工具`
+  let summary = tpl('调用 $__total__ 个工具', { total })
   if (!showContent && hasPending) {
     summary += ` (${completed}/${total})`
   }

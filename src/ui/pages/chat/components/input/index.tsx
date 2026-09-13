@@ -660,7 +660,7 @@ function ChatInput(
               <div key={img.id} className="image-preview-item">
                 <img
                   src={img.url}
-                  alt={img.name || '图片'}
+                  alt={img.name || t('图片')}
                   onClick={() =>
                     showImagePreview({
                       src: img.url,

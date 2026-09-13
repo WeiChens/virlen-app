@@ -7,6 +7,7 @@ import { observer } from 'mobx-react-lite'
 import { settingsState, sessionStore, chatState } from '@/ui/store'
 import type { ModelInfo } from '@/types'
 import DropDownSvg from '@/ui/components/icons/DropDownSvg'
+import { t } from '@/ui/i18n'
 import './model-switcher.scss'
 
 function ModelSwitcher() {
@@ -97,9 +98,9 @@ function ModelSwitcher() {
       }
     }
     if (enabledProviders.length === 0) {
-      return { provider: '未配置', model: '请先添加模型服务' }
+      return { provider: t('未配置'), model: t('请先添加模型服务') }
     }
-    return { provider: '选择模型', model: '点击选择' }
+    return { provider: t('选择模型'), model: t('点击选择') }
   }
 
   const label = getDisplayLabel()
@@ -109,7 +110,7 @@ function ModelSwitcher() {
       <button
         className={`model-switcher-trigger ${open ? 'open' : ''} ${!currentProviderId ? 'empty' : ''}`}
         onClick={() => setOpen(!open)}
-        title="切换模型">
+        title={t('切换模型')}>
         {/* <div className="trigger-icon-wrap">
           {currentProvider && getProviderIcon(currentProvider.type, 16)}
         </div> */}
@@ -124,8 +125,8 @@ function ModelSwitcher() {
         <div className="model-dropdown">
           {enabledProviders.length === 0 ? (
             <div className="dropdown-empty">
-              <p>暂无可用模型服务</p>
-              <p className="hint">请先在设置中添加并启用模型服务</p>
+              <p>{t('暂无可用模型服务')}</p>
+              <p className="hint">{t('请先在设置中添加并启用模型服务')}</p>
             </div>
           ) : (
             <div className="dropdown-list">
@@ -142,7 +143,7 @@ function ModelSwitcher() {
 
                     {provider.models.length === 0 ? (
                       <div className="dropdown-no-models">
-                        暂无模型 — 请先"获取模型"
+                        {t('暂无模型 — 请先"获取模型"')}
                       </div>
                     ) : (
                       provider.models.map((model: ModelInfo) => {

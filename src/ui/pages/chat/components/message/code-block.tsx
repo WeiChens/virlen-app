@@ -23,6 +23,7 @@ import './code-block.scss'
 import { openPath } from '@tauri-apps/plugin-opener'
 import { resolve } from '@tauri-apps/api/path'
 import { chatState, sessionStore, settingsState } from '@/ui/store'
+import { t } from '@/ui/i18n'
 
 // ==================== 工具函数 ====================
 
@@ -510,7 +511,7 @@ function CodeBlock({
           )}
         </div>
         <div className='actions-list'>
-          <button className="code-copy-btn" onClick={handleCopy} title="复制代码">
+          <button className="code-copy-btn" onClick={handleCopy} title={t('复制代码')}>
             {copied ? (
               <svg viewBox="0 0 1160 1024" width="14" height="14">
                 <path

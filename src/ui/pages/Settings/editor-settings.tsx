@@ -195,7 +195,7 @@ function EditorSettings() {
                       }}
                       title={t('编辑')}>
                       <EditSvg />
-                      编辑
+                      {t('编辑')}
                     </button>
                     {/* 右上角 Delete 图标：点击 = 删除 */}
                     <button
@@ -206,7 +206,7 @@ function EditorSettings() {
                       }}
                       title={t('删除')}>
                       <DeleteSvg />
-                      删除
+                      {t('删除')}
                     </button>
                   </div>
                 </button>

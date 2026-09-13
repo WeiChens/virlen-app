@@ -136,7 +136,7 @@ function GeneralSettings() {
         showToast(tpl('已导出 $__n__ 条到本地', { n: r.count }), 2000)
       }
     } catch (e: any) {
-      showToast(t('导出失败') + '：' + (e?.message || String(e)), 2500)
+      showToast(t('导出失败') + t('：') + (e?.message || String(e)), 2500)
     } finally {
       setTelemetryBusy(false)
     }
@@ -150,19 +150,12 @@ function GeneralSettings() {
     }
     setTelemetryBusy(true)
     try {
-      const r = await uploadTelemetry()
-      if (r.ok) {
-        showToast(t('上报成功，本地数据已清空'), 2000)
-      } else {
-        showToast(
-          t('上报失败') + (r.message ? '：' + r.message : ''),
-          2500,
-        )
-      }
+      await openUrl('https://virlen.cn/trace/')
     } catch (e: any) {
-      showToast(t('上报失败') + '：' + (e?.message || String(e)), 2500)
-    } finally {
-      setTelemetryBusy(false)
+      showToast(
+        t('打开可视化预览失败') + t('：') + (e?.message || String(e)),
+        2500,
+      )
     }
   }
 

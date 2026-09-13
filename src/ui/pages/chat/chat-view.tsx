@@ -375,7 +375,7 @@ function ChatView() {
   // 发送消息
   function handleSend(content: string, images?: { url: string }[], goal?: string) {
     if (!hasEnabledProvider) {
-      setPendingContent(content || (images ? '(图片)' : ''))
+      setPendingContent(content || (images ? t('(图片)') : ''))
       setShowProviderPrompt(true)
       return
     }
@@ -395,7 +395,7 @@ function ChatView() {
         (p) => p.enabled && p.models.length > 0,
       )
       if (!firstEnabled) {
-        setPendingContent(content || (images ? '(图片)' : ''))
+        setPendingContent(content || (images ? t('(图片)') : ''))
         setShowProviderPrompt(true)
         return
       }
@@ -441,7 +441,7 @@ function ChatView() {
         if (!settingsState.availableModel(model)) {
           model = settingsState.getAvailableModel()
           if (!model) {
-            throw new Error('没有可用的模型')
+            throw new Error(t('没有可用的模型'))
           }
         }
       }
@@ -503,10 +503,10 @@ function ChatView() {
         //   第2张图片
         //   [分析结果]
         const parts = validResults.map(
-          (r, i) => `第${i + 1}张图片\n${r.combined_text}`,
+          (r, i) => tpl('第$__n__张图片\n$__text__', { n: i + 1, text: r.combined_text }),
         )
         imageAnalyzeResult =
-          `用户上传了${validResults.length}张图片\n\n` + parts.join('\n\n')
+          tpl('用户上传了$__count__张图片\n\n', { count: validResults.length }) + parts.join('\n\n')
       }
       if (!imageAnalyzeResult) imageOptimize = false
     }

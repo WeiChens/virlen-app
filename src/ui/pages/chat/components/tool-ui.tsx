@@ -11,6 +11,7 @@ import CommandConfirmModal from './modals/command-confirm'
 import toolInteractEvent from '@/events/toolInteractEvent'
 import { requestAttentionIfUnfocused } from '@/utils/windowAttention'
 import { settingsState } from '@/ui/store/settingStore'
+import { t } from '@/ui/i18n'
 
 // ====== UserChoice ======
 
@@ -110,17 +111,17 @@ export function useToolUI() {
     if (result.customReply) {
       parts.push(result.customReply)
     }
-    const content = parts.join('；')
+    const content = parts.join(t('；'))
     // uiData 携带结构化数据供 UserChoiceMessage 展示
     toolInteractEvent.emit('resolve', { content, uiData: result })
   }, [])
   const handleChoiceShelve = useCallback(() => {
     setChoiceModal(defaultChoice)
-    toolInteractEvent.emit('reject', 'shelve:用户暂存了这个问题')
+    toolInteractEvent.emit('reject', 'shelve:' + t('用户暂存了这个问题'))
   }, [])
   const handleChoiceCancel = useCallback(() => {
     setChoiceModal(defaultChoice)
-    toolInteractEvent.emit('reject', '用户关闭了选择弹窗')
+    toolInteractEvent.emit('reject', t('用户关闭了选择弹窗'))
   }, [])
 
   const handleConfirmAllow = useCallback(() => {
@@ -129,11 +130,11 @@ export function useToolUI() {
   }, [])
   const handleConfirmShelve = useCallback(() => {
     setConfirmModal(defaultConfirm)
-    toolInteractEvent.emit('commandReject', 'shelve:用户暂存了该命令')
+    toolInteractEvent.emit('commandReject', 'shelve:' + t('用户暂存了该命令'))
   }, [])
   const handleConfirmCancel = useCallback(() => {
     setConfirmModal(defaultConfirm)
-    toolInteractEvent.emit('commandReject', '用户拒绝了该命令')
+    toolInteractEvent.emit('commandReject', t('用户拒绝了该命令'))
   }, [])
 
   const ToolUI = useCallback(

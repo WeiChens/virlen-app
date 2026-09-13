@@ -241,7 +241,7 @@ export default function AgentEditModal({
     const uncategorized = allTools.filter((t) => !usedNames.has(t.name))
     if (uncategorized.length > 0) {
       grouped.push({
-        category: { id: 'other', label: '其他', toolNames: uncategorized.map((t) => t.name) },
+        category: { id: 'other', label: t('其他'), toolNames: uncategorized.map((t) => t.name) },
         tools: uncategorized,
       })
     }
@@ -392,7 +392,7 @@ export default function AgentEditModal({
                   className="preset-btn"
                   onClick={() =>
                     setIdentity(
-                      `你是一名拥有 10 年经验的资深软件架构师，精通多种编程语言和设计模式，擅长分布式系统设计、性能优化与代码审查。曾在多家互联网大厂担任技术负责人，对高并发、微服务架构有深入理解。`,
+                      t('你是一名拥有 10 年经验的资深软件架构师，精通多种编程语言和设计模式，擅长分布式系统设计、性能优化与代码审查。曾在多家互联网大厂担任技术负责人，对高并发、微服务架构有深入理解。'),
                     )
                   }>
                   {t('编程专家')}
@@ -401,7 +401,7 @@ export default function AgentEditModal({
                   className="preset-btn"
                   onClick={() =>
                     setIdentity(
-                      `你是一位资深的创意写作导师，精通叙事结构、人物塑造和语言艺术。曾在知名文学平台担任主编，善于帮助写作者找到独特的声音，提升文字的表现力与感染力。`,
+                      t('你是一位资深的创意写作导师，精通叙事结构、人物塑造和语言艺术。曾在知名文学平台担任主编，善于帮助写作者找到独特的声音，提升文字的表现力与感染力。'),
                     )
                   }>
                   {t('写作顾问')}
@@ -410,7 +410,7 @@ export default function AgentEditModal({
                   className="preset-btn"
                   onClick={() =>
                     setIdentity(
-                      `你是一名专业的数据科学家，精通统计学、机器学习和数据可视化。拥有多年的数据分析实战经验，善于从海量数据中提取有价值的商业洞察，用数据驱动决策。`,
+                      t('你是一名专业的数据科学家，精通统计学、机器学习和数据可视化。拥有多年的数据分析实战经验，善于从海量数据中提取有价值的商业洞察，用数据驱动决策。'),
                     )
                   }>
                   {t('数据分析师')}
@@ -419,7 +419,7 @@ export default function AgentEditModal({
                   className="preset-btn"
                   onClick={() =>
                     setIdentity(
-                      `你是一位经验丰富的产品经理，擅长用户需求分析、产品规划和敏捷开发管理。曾主导多款百万级用户产品的从 0 到 1，注重用户体验与商业价值的平衡。`,
+                      t('你是一位经验丰富的产品经理，擅长用户需求分析、产品规划和敏捷开发管理。曾主导多款百万级用户产品的从 0 到 1，注重用户体验与商业价值的平衡。'),
                     )
                   }>
                   {t('产品经理')}
@@ -428,7 +428,7 @@ export default function AgentEditModal({
               <textarea
                 value={identity}
                 onChange={(e) => setIdentity(e.target.value)}
-                placeholder={`${t('例如：')}\n你是一名拥有 10 年经验的资深架构师，\n擅长分布式系统设计和代码审查。`}
+                placeholder={t('例如：\n你是一名拥有 10 年经验的资深架构师，\n擅长分布式系统设计和代码审查。')}
                 rows={10}
                 className="md-textarea"
               />
@@ -446,40 +446,40 @@ export default function AgentEditModal({
                 <button
                   className="preset-btn"
                   onClick={() =>
-                    setPersonality(`- 说话严谨、逻辑清晰，注重事实和数据
+                    setPersonality(t(`- 说话严谨、逻辑清晰，注重事实和数据
 - 对不确定的信息会明确标注风险
 - 回答问题结构化，层次分明
-- 保持客观中立，不轻易下结论`)
+- 保持客观中立，不轻易下结论`))
                   }>
                   {t('严谨专业')}
                 </button>
                 <button
                   className="preset-btn"
                   onClick={() =>
-                    setPersonality(`- 语气亲切温暖，善于鼓励用户
+                    setPersonality(t(`- 语气亲切温暖，善于鼓励用户
 - 用简单易懂的方式解释复杂概念
 - 保持积极乐观的态度
-- 善于倾听和共情，耐心解答每一个问题`)
+- 善于倾听和共情，耐心解答每一个问题`))
                   }>
                   {t('热情友好')}
                 </button>
                 <button
                   className="preset-btn"
                   onClick={() =>
-                    setPersonality(`- 直击要点，不说废话
+                    setPersonality(t(`- 直击要点，不说废话
 - 提供可立即执行的建议
 - 使用列表和摘要提高可读性
-- 优先给出结论，再补充细节`)
+- 优先给出结论，再补充细节`))
                   }>
                   {t('简洁高效')}
                 </button>
                 <button
                   className="preset-btn"
                   onClick={() =>
-                    setPersonality(`- 思维活跃，善于发散联想
+                    setPersonality(t(`- 思维活跃，善于发散联想
 - 不拘泥于常规，勇于提出新想法
 - 语言生动有趣，善用比喻和故事
-- 乐于探讨多种可能性`)
+- 乐于探讨多种可能性`))
                   }>
                   {t('创意发散')}
                 </button>
@@ -487,7 +487,7 @@ export default function AgentEditModal({
               <textarea
                 value={personality}
                 onChange={(e) => setPersonality(e.target.value)}
-                placeholder={`${t('例如：')}\n- 说话简洁直接，讨厌冗余\n- 注重代码质量和可维护性\n- 有幽默感，适当使用比喻`}
+                placeholder={t('例如：\n- 说话简洁直接，讨厌冗余\n- 注重代码质量和可维护性\n- 有幽默感，适当使用比喻')}
                 rows={10}
                 className="md-textarea"
               />

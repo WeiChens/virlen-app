@@ -1,4 +1,5 @@
 import { vision } from '@/infrastructure/vision'
+import { t } from '@/ui/i18n'
 import * as dialog from '@tauri-apps/plugin-dialog'
 export const TestPage = () => {
   return (
@@ -7,10 +8,10 @@ export const TestPage = () => {
       <button
         onClick={async () => {
           const path = await dialog.open({
-            title: '选择图片',
+            title: t('选择图片'),
             filters: [
               {
-                name: '图片',
+                name: t('图片'),
                 extensions: ['png', 'jpg', 'jpeg', 'bmp', 'gif', 'webp'],
               },
             ],
@@ -30,7 +31,7 @@ export const TestPage = () => {
             console.error('视觉分析失败:', err)
           }
         }}>
-        全能视觉分析（UI + OCR + 物体检测）
+        {t('全能视觉分析（UI + OCR + 物体检测）')}
       </button>
     </div>
   )

@@ -11,7 +11,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { observer } from 'mobx-react-lite'
 import { settingsState } from '@/ui/store'
-import { t } from '@/ui/i18n'
+import { t, tpl } from '@/ui/i18n'
 import { ragService } from '@/services/rag-service'
 import Select from '@/ui/components/shared/Select'
 import Modal, { ModalFooterButtons } from '@/ui/components/shared/Modal'
@@ -110,7 +110,7 @@ function KnowledgeBaseSettings() {
       const list = await ragService.listKnowledgeBases()
       setKbs(list)
     } catch (err: any) {
-      showToastMsg(`加载知识库失败: ${err.message}`, 'error')
+      showToastMsg(tpl('加载知识库失败: $__error__', { error: err.message }), 'error')
     }
     setLoading(false)
   }, [])
@@ -135,19 +135,19 @@ function KnowledgeBaseSettings() {
   /** 创建知识库 */
   const handleCreate = async () => {
     if (!newKbName.trim()) {
-      showToastMsg('请输入知识库名称', 'error')
+      showToastMsg(t('请输入知识库名称'), 'error')
       return
     }
     setCreating(true)
     try {
       await ragService.createKnowledgeBase(newKbName.trim(), newKbDesc.trim())
-      showToastMsg('知识库创建成功', 'success')
+      showToastMsg(t('知识库创建成功'), 'success')
       setShowCreateModal(false)
       setNewKbName('')
       setNewKbDesc('')
       await loadKbs()
     } catch (err: any) {
-      showToastMsg(`创建失败: ${err.message}`, 'error')
+      showToastMsg(tpl('创建失败: $__error__', { error: err.message }), 'error')
     }
     setCreating(false)
   }
@@ -156,16 +156,16 @@ function KnowledgeBaseSettings() {
   const handleDelete = async (kbId: string, name: string) => {
     const confirmed = await MessageBox.propt(
       t('删除知识库'),
-      t(`确定要删除知识库「${name}」吗？此操作不可撤销。`),
+      tpl('确定要删除知识库「$__name__」吗？此操作不可撤销。', { name }),
     )
     if (!confirmed) return
     try {
       await ragService.deleteKnowledgeBase(kbId)
-      showToastMsg('知识库已删除', 'success')
+      showToastMsg(t('知识库已删除'), 'success')
       if (showDocListModal && docListKbId === kbId) setShowDocListModal(false)
       await loadKbs()
     } catch (err: any) {
-      showToastMsg(`删除失败: ${err.message}`, 'error')
+      showToastMsg(tpl('删除失败: $__error__', { error: err.message }), 'error')
     }
   }
 
@@ -184,7 +184,7 @@ function KnowledgeBaseSettings() {
       const docs = await ragService.listDocuments(kbId)
       setDocListDocs(docs)
     } catch (err: any) {
-      showToastMsg(`加载文档列表失败: ${err.message}`, 'error')
+      showToastMsg(tpl('加载文档列表失败: $__error__', { error: err.message }), 'error')
     }
     setDocListLoading(false)
   }
@@ -218,7 +218,7 @@ function KnowledgeBaseSettings() {
         setDocSearchResultIds(matchedIds)
         setDocListPage(1)
       } catch (err: any) {
-        showToastMsg(`搜索失败: ${err.message}`, 'error')
+        showToastMsg(tpl('搜索失败: $__error__', { error: err.message }), 'error')
       }
       setDocSearching(false)
       docSearchTimerRef.current = null
@@ -295,7 +295,7 @@ function KnowledgeBaseSettings() {
     content: string,
     encoding: string,
   ) {
-    showToastMsg(`正在导入「${fileName}」(${encoding})...`, 'info')
+    showToastMsg(tpl('正在导入「$__fileName__」($__encoding__)...', { fileName, encoding }), 'info')
     await ragService.writeText(kbId, fileName, content)
   }
 
@@ -372,14 +372,14 @@ function KnowledgeBaseSettings() {
             continue
           } catch (err: any) {
             showToastMsg(
-              `「${docName}」导入失败: ${err?.message || err}`,
+              tpl('「$__name__」导入失败: $__error__', { name: docName, error: err?.message || err }),
               'error',
             )
             failCount++
             continue
           }
         } else {
-          showToastMsg(`已跳过「${docName}」：无法识别的文件编码`, 'error')
+          showToastMsg(tpl('已跳过「$__name__」：无法识别的文件编码', { name: docName }), 'error')
           failCount++
           continue
         }
@@ -401,7 +401,7 @@ function KnowledgeBaseSettings() {
               continue
             } catch (err: any) {
               showToastMsg(
-                `「${docName}」导入失败: ${err?.message || err}`,
+                tpl('「$__name__」导入失败: $__error__', { name: docName, error: err?.message || err }),
                 'error',
               )
               failCount++
@@ -410,7 +410,7 @@ function KnowledgeBaseSettings() {
           }
         } else {
           showToastMsg(
-            `已跳过「${docName}」：无法识别的文件编码（非 UTF-8/GBK 等常见编码）`,
+            tpl('已跳过「$__name__」：无法识别的文件编码（非 UTF-8/GBK 等常见编码）', { name: docName }),
             'error',
           )
           failCount++
@@ -422,7 +422,7 @@ function KnowledgeBaseSettings() {
         await ragService.addDocument(kbId, fp)
         successCount++
       } catch (err: any) {
-        const errMsg = err?.message || err?.toString() || '未知错误'
+        const errMsg = err?.message || err?.toString() || t('未知错误')
         if (
           errMsg.includes('UTF-8') ||
           errMsg.includes('utf-8') ||
@@ -444,9 +444,9 @@ function KnowledgeBaseSettings() {
               // 兜底也失败
             }
           }
-          showToastMsg(`已跳过「${docName}」：无法识别的文件编码`, 'error')
+          showToastMsg(tpl('已跳过「$__name__」：无法识别的文件编码', { name: docName }), 'error')
         } else {
-          showToastMsg(`「${docName}」导入失败: ${errMsg}`, 'error')
+          showToastMsg(tpl('「$__name__」导入失败: $__error__', { name: docName, error: errMsg }), 'error')
         }
         failCount++
       }
@@ -457,10 +457,10 @@ function KnowledgeBaseSettings() {
     await loadKbs()
 
     if (failCount === 0) {
-      showToastMsg(`成功导入 ${successCount} 个文档`, 'success')
+      showToastMsg(tpl('成功导入 $__count__ 个文档', { count: successCount }), 'success')
     } else {
       showToastMsg(
-        `导入完成：${successCount} 成功，${failCount} 失败`,
+        tpl('导入完成：$__success__ 成功，$__fail__ 失败', { success: successCount, fail: failCount }),
         failCount > 0 ? 'error' : 'success',
       )
     }
@@ -474,7 +474,7 @@ function KnowledgeBaseSettings() {
         multiple: true,
         filters: [
           {
-            name: '文档',
+            name: t('文档'),
             extensions: [...SUPPORTED_EXTENSIONS],
           },
         ],
@@ -485,7 +485,7 @@ function KnowledgeBaseSettings() {
       if (paths.length === 0) return
       await uploadFiles(kbId, paths as string[])
     } catch (err: any) {
-      showToastMsg(`上传失败: ${err.message}`, 'error')
+      showToastMsg(tpl('上传失败: $__error__', { error: err.message }), 'error')
     }
   }
 
@@ -500,18 +500,18 @@ function KnowledgeBaseSettings() {
       if (!selected) return
 
       const dirPath = selected as string
-      showToastMsg('正在扫描文件夹中的文本文件...', 'info')
+      showToastMsg(t('正在扫描文件夹中的文本文件...'), 'info')
       const textFiles = await scanDirForTextFiles(dirPath)
 
       if (textFiles.length === 0) {
-        showToastMsg('文件夹中未找到支持的文本文件（.md / .txt）', 'info')
+        showToastMsg(t('文件夹中未找到支持的文本文件（.md / .txt）'), 'info')
         return
       }
 
-      showToastMsg(`找到 ${textFiles.length} 个文本文件，正在导入...`, 'info')
+      showToastMsg(tpl('找到 $__count__ 个文本文件，正在导入...', { count: textFiles.length }), 'info')
       await uploadFiles(kbId, textFiles, dirPath)
     } catch (err: any) {
-      showToastMsg(`文件夹导入失败: ${err.message}`, 'error')
+      showToastMsg(tpl('文件夹导入失败: $__error__', { error: err.message }), 'error')
     }
   }
 
@@ -523,16 +523,16 @@ function KnowledgeBaseSettings() {
   ) => {
     const confirmed = await MessageBox.propt(
       t('删除文档'),
-      t(`确定要删除文档「${docName}」吗？`),
+      tpl('确定要删除文档「$__name__」吗？', { name: docName }),
     )
     if (!confirmed) return
     try {
       await ragService.removeDocument(kbId, docId)
-      showToastMsg('文档已删除', 'success')
+      showToastMsg(t('文档已删除'), 'success')
       if (showDocListModal) await refreshDocList()
       await loadKbs()
     } catch (err: any) {
-      showToastMsg(`删除失败: ${err.message}`, 'error')
+      showToastMsg(tpl('删除失败: $__error__', { error: err.message }), 'error')
     }
   }
 
@@ -542,7 +542,7 @@ function KnowledgeBaseSettings() {
     const confirmed = await MessageBox.propt(
       t('清空所有文档'),
       t(
-        `确定要清空「${docListKbName}」中的所有文档吗？（共 ${docListDocs.length} 个）此操作不可撤销。`,
+        tpl('确定要清空「$__name__」中的所有文档吗？（共 $__count__ 个）此操作不可撤销。', { name: docListKbName, count: docListDocs.length }),
       ),
     )
     if (!confirmed) return
@@ -558,7 +558,7 @@ function KnowledgeBaseSettings() {
       }
     }
     showToastMsg(
-      `清空完成：${successCount} 成功，${failCount} 失败`,
+      tpl('清空完成：$__success__ 成功，$__fail__ 失败', { success: successCount, fail: failCount }),
       failCount > 0 ? 'error' : 'success',
     )
     if (showDocListModal) await refreshDocList()
@@ -584,18 +584,18 @@ function KnowledgeBaseSettings() {
         defaultPath: `${kbName}.zip`,
         filters: [
           {
-            name: 'ZIP 文件',
+            name: t('ZIP 文件'),
             extensions: ['zip'],
           },
         ],
       })
       if (!savePath) return
 
-      showToastMsg(`正在导出「${kbName}」...`, 'info')
+      showToastMsg(tpl('正在导出「$__name__」...', { name: kbName }), 'info')
       await ragService.exportKnowledgeBase(kbId, savePath)
-      showToastMsg(`导出成功：${savePath}`, 'success')
+      showToastMsg(tpl('导出成功：$__path__', { path: savePath }), 'success')
     } catch (err: any) {
-      showToastMsg(`导出失败: ${err.message}`, 'error')
+      showToastMsg(tpl('导出失败: $__error__', { error: err.message }), 'error')
     }
   }
 
@@ -628,7 +628,7 @@ function KnowledgeBaseSettings() {
       const content = await ragService.getDocumentContent(kbId, docId)
       setEditDocContent(content)
     } catch (err: any) {
-      showToastMsg(`加载文档内容失败: ${err.message}`, 'error')
+      showToastMsg(tpl('加载文档内容失败: $__error__', { error: err.message }), 'error')
       setEditDocContent('')
     }
     setEditLoading(false)
@@ -637,7 +637,7 @@ function KnowledgeBaseSettings() {
   /** 保存文档编辑（名称 + 内容文本） */
   const handleEditSave = async () => {
     if (!editDocName.trim()) {
-      showToastMsg('文档名称不能为空', 'error')
+      showToastMsg(t('文档名称不能为空'), 'error')
       return
     }
     setEditSaving(true)
@@ -648,12 +648,12 @@ function KnowledgeBaseSettings() {
         editDocName.trim(),
         editDocContent,
       )
-      showToastMsg(`文档已更新为「${editDocName.trim()}」`, 'success')
+      showToastMsg(tpl('文档已更新为「$__name__」', { name: editDocName.trim() }), 'success')
       setShowEditModal(false)
       if (showDocListModal) await refreshDocList()
       await loadKbs()
     } catch (err: any) {
-      showToastMsg(`编辑保存失败: ${err.message}`, 'error')
+      showToastMsg(tpl('编辑保存失败: $__error__', { error: err.message }), 'error')
     }
     setEditSaving(false)
   }
@@ -666,7 +666,7 @@ function KnowledgeBaseSettings() {
         multiple: false,
         filters: [
           {
-            name: '文档',
+            name: t('文档'),
             extensions: ['pdf', 'md', 'markdown', 'txt'],
           },
         ],
@@ -676,7 +676,7 @@ function KnowledgeBaseSettings() {
       const filePath = selected as string
       const fileName = filePath.replace(/\\/g, '/').split('/').pop() || filePath
 
-      showToastMsg(`正在读取文件「${fileName}」...`, 'info')
+      showToastMsg(tpl('正在读取文件「$__name__」...', { name: fileName }), 'info')
 
       // 使用编码检测读取文件内容
       const decoded = await tryDecodeTextFile(filePath)
@@ -684,26 +684,26 @@ function KnowledgeBaseSettings() {
         setEditDocName(fileName)
         setEditDocContent(decoded.text)
         showToastMsg(
-          `已加载「${fileName}」（${decoded.encoding}），点击保存以确认修改`,
+          tpl('已加载「$__name__」（$__encoding__），点击保存以确认修改', { name: fileName, encoding: decoded.encoding }),
           'success',
         )
       } else {
         // 所有编码都失败
         setEditDocName(fileName)
         showToastMsg(
-          '无法读取文本内容（文件编码不受支持），文件名称已更新。请手动输入内容。',
+          t('无法读取文本内容（文件编码不受支持），文件名称已更新。请手动输入内容。'),
           'info',
         )
       }
     } catch (err: any) {
-      showToastMsg(`文件读取失败: ${err.message}`, 'error')
+      showToastMsg(tpl('文件读取失败: $__error__', { error: err.message }), 'error')
     }
   }
 
   /** 新建文档 — 手动输入名称和内容 */
   const handleNewDoc = async () => {
     if (!newDocName.trim()) {
-      showToastMsg('请输入文档名称', 'error')
+      showToastMsg(t('请输入文档名称'), 'error')
       return
     }
     setNewDocCreating(true)
@@ -713,14 +713,14 @@ function KnowledgeBaseSettings() {
         newDocName.trim(),
         newDocContent,
       )
-      showToastMsg(`文档「${newDocName.trim()}」创建成功`, 'success')
+      showToastMsg(tpl('文档「$__name__」创建成功', { name: newDocName.trim() }), 'success')
       setShowNewDocModal(false)
       setNewDocName('')
       setNewDocContent('')
       await refreshDocList()
       await loadKbs()
     } catch (err: any) {
-      showToastMsg(`创建失败: ${err.message}`, 'error')
+      showToastMsg(tpl('创建失败: $__error__', { error: err.message }), 'error')
     }
     setNewDocCreating(false)
   }
@@ -739,7 +739,7 @@ function KnowledgeBaseSettings() {
       const content = await ragService.getDocumentContent(kbId, docId)
       setPreviewDocContent(content)
     } catch (err: any) {
-      setPreviewDocContent(`加载文档内容失败: ${err.message}`)
+      setPreviewDocContent(tpl('加载文档内容失败: $__error__', { error: err.message }))
     }
     setPreviewLoading(false)
   }
@@ -748,11 +748,11 @@ function KnowledgeBaseSettings() {
   const handleSearch = async () => {
     const kbId = docListKbId || s.ragDefaultKnowledgeBaseId
     if (!kbId) {
-      showToastMsg('请先选择一个知识库', 'error')
+      showToastMsg(t('请先选择一个知识库'), 'error')
       return
     }
     if (!searchQuery.trim()) {
-      showToastMsg('请输入搜索内容', 'error')
+      showToastMsg(t('请输入搜索内容'), 'error')
       return
     }
     setSearching(true)
@@ -760,12 +760,12 @@ function KnowledgeBaseSettings() {
     try {
       const result = await ragService.query(kbId, searchQuery.trim(), 5)
       if (result.results.length === 0) {
-        setSearchResults('未找到相关结果')
+        setSearchResults(t('未找到相关结果'))
       } else {
         setSearchResults(result.context)
       }
     } catch (err: any) {
-      setSearchResults(`检索失败: ${err.message}`)
+      setSearchResults(tpl('检索失败: $__error__', { error: err.message }))
     }
     setSearching(false)
   }

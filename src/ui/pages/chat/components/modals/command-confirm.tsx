@@ -2,6 +2,7 @@
  * CommandConfirmModal — AI 执行高危/安装命令前，用户确认弹窗
  */
 import Modal from '@/ui/components/shared/Modal'
+import { t } from '@/ui/i18n'
 import './command-confirm.scss'
 
 interface Props {
@@ -33,7 +34,7 @@ export default function CommandConfirmModal({
     <Modal
       visible={visible}
       onClose={onCancel}
-      title="命令执行确认"
+      title={t('命令执行确认')}
       width={520}>
       <div className="command-confirm">
         <div className={`risk-badge ${risk}`}>{label}</div>
@@ -44,13 +45,13 @@ export default function CommandConfirmModal({
         </div>
         <div className="actions">
           <button className="btn-shelve" onClick={onShelve}>
-            暂存
+            {t('暂存')}
           </button>
           <button className="btn-cancel" onClick={onCancel}>
-            拒绝
+            {t('拒绝')}
           </button>
           <button className="btn-confirm" onClick={onConfirm}>
-            允许执行
+            {t('允许执行')}
           </button>
         </div>
       </div>

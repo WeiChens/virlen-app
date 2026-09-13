@@ -7,6 +7,7 @@ import React, {
 import ReactDOM from 'react-dom'
 import './style.scss'
 import EventEmitter from '@/utils/EventEmitter'
+import { t } from '@/ui/i18n'
 export interface ImagePreviewProps {
   src: string
   previewSrcList?: string[]
@@ -278,21 +279,21 @@ function ImagePreviewOverlay(props: ImagePreviewOverlayProps) {
       <div
         className="image-preview-toolbar"
         onClick={(e) => e.stopPropagation()}>
-        <button className="toolbar-btn" onClick={handleZoomOut} title="缩小">
+        <button className="toolbar-btn" onClick={handleZoomOut} title={t('缩小')}>
           <svg viewBox="0 0 1024 1024" width="20" height="20">
             <path
               d="M658.432 428.736a33.216 33.216 0 0 1-33.152 33.152H392.128a33.152 33.152 0 0 1 0-66.304H625.28c18.24 0 33.152 14.848 33.152 33.152z m299.776 521.792a43.328 43.328 0 0 1-60.864-6.912l-189.248-220.992a362.368 362.368 0 0 1-207.36 65.472C218.56 788.096 66.56 636.096 66.56 451.968S218.56 115.904 500.736 115.904s434.176 152 434.176 336.064a331.072 331.072 0 0 1-74.24 209.344l192.32 224.64a43.392 43.392 0 0 1-6.784 60.864z m-457.216-288.64c226.304 0 349.568-139.392 349.568-270.016 0-130.56-123.264-269.952-349.568-269.952S151.04 261.312 151.04 391.936c0 130.624 123.264 270.016 349.952 270.016z"
               fill="currentColor"></path>
           </svg>
         </button>
-        <button className="toolbar-btn" onClick={handleZoomIn} title="放大">
+        <button className="toolbar-btn" onClick={handleZoomIn} title={t('放大')}>
           <svg viewBox="0 0 1024 1024" width="20" height="20">
             <path
               d="M658.432 428.736a33.216 33.216 0 0 1-33.152 33.152h-100.032v100.032a33.152 33.152 0 0 1-66.304 0V461.888H358.912a33.152 33.152 0 0 1 0-66.304h100.032V295.552a33.152 33.152 0 0 1 66.304 0v100.032H625.28c18.24 0 33.152 14.848 33.152 33.152z m299.776 521.792a43.328 43.328 0 0 1-60.864-6.912l-189.248-220.992a362.368 362.368 0 0 1-207.36 65.472C218.56 788.096 66.56 636.096 66.56 451.968S218.56 115.904 500.736 115.904s434.176 152 434.176 336.064a331.072 331.072 0 0 1-74.24 209.344l192.32 224.64a43.392 43.392 0 0 1-6.784 60.864z m-457.216-288.64c226.304 0 349.568-139.392 349.568-270.016 0-130.56-123.264-269.952-349.568-269.952S151.04 261.312 151.04 391.936c0 130.624 123.264 270.016 349.952 270.016z"
               fill="currentColor"></path>
           </svg>
         </button>
-        <button className="toolbar-btn" onClick={handleRotate} title="旋转">
+        <button className="toolbar-btn" onClick={handleRotate} title={t('旋转')}>
           <svg viewBox="0 0 1024 1024" width="20" height="20">
             <path
               d="M784.512 230.272v-50.56a32 32 0 1 1 64 0v116.928c0 17.664-14.336 32-32 32H699.584a32 32 0 1 1 0-64h50.56A267.968 267.968 0 0 0 512 192C323.904 192 172 343.936 172 532.032a267.968 267.968 0 0 0 134.208 232.256 32 32 0 1 1-31.616 55.616A331.968 331.968 0 0 1 108 532.032C108 307.648 287.616 128 512 128c196.288 0 361.6 138.688 403.84 323.712z"
@@ -302,7 +303,7 @@ function ImagePreviewOverlay(props: ImagePreviewOverlayProps) {
               fill="currentColor"></path>
           </svg>
         </button>
-        <button className="toolbar-btn" onClick={handleReset} title="重置">
+        <button className="toolbar-btn" onClick={handleReset} title={t('重置')}>
           <svg viewBox="0 0 1024 1024" width="20" height="20">
             <path
               d="M512 128c35.328 0 64 28.672 64 64v192c0 35.328-28.672 64-64 64H320c-35.328 0-64-28.672-64-64s28.672-64 64-64h128V192c0-35.328 28.672-64 64-64z m0 768c-35.328 0-64-28.672-64-64v-192c0-35.328 28.672-64 64-64h192c35.328 0 64 28.672 64 64s-28.672 64-64 64H576v128c0 35.328-28.672 64-64 64z"
@@ -313,7 +314,7 @@ function ImagePreviewOverlay(props: ImagePreviewOverlayProps) {
         <button
           className="toolbar-btn close-btn"
           onClick={handleClose}
-          title="关闭">
+          title={t('关闭')}>
           <svg viewBox="0 0 1024 1024" width="20" height="20">
             <path
               d="M557.312 513.248l265.28-263.904c12.544-12.48 12.608-32.704 0.128-45.248-12.512-12.576-32.704-12.608-45.248-0.128L512 467.904 246.72 203.968c-12.544-12.48-32.704-12.448-45.248 0.128-12.48 12.544-12.416 32.768 0.128 45.248l265.216 263.904L201.6 776.8c-12.544 12.48-12.608 32.704-0.128 45.248 6.24 6.272 14.464 9.44 22.688 9.44 8.16 0 16.32-3.104 22.56-9.312l265.216-263.808 265.28 263.808c6.24 6.208 14.432 9.312 22.592 9.312 8.224 0 16.448-3.168 22.688-9.44 12.48-12.544 12.416-32.768-0.128-45.248L557.312 513.248z"

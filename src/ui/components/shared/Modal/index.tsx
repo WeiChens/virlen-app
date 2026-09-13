@@ -1,5 +1,6 @@
 import { useEffect, useRef, ReactNode, useState } from 'react'
 import './style.scss'
+import { t } from '@/ui/i18n'
 
 export interface ModalProps {
   visible: boolean
@@ -175,8 +176,8 @@ interface ModalFooterButtonsProps {
 export function ModalFooterButtons({
   onCancel,
   onConfirm,
-  cancelText = '取消',
-  confirmText = '确认',
+  cancelText = t('取消'),
+  confirmText = t('确认'),
   confirmLoading = false,
 }: ModalFooterButtonsProps) {
   return (
@@ -191,7 +192,7 @@ export function ModalFooterButtons({
         className="btn-confirm"
         onClick={onConfirm}
         disabled={confirmLoading}>
-        {confirmLoading ? '处理中...' : confirmText}
+        {confirmLoading ? t('处理中...') : confirmText}
       </button>
     </>
   )

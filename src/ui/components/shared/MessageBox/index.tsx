@@ -1,6 +1,7 @@
 import react, { JSX, useEffect } from 'react'
 import EventEmitter from '@/utils/EventEmitter'
 import Modal from '@/ui/components/shared/Modal'
+import { t } from '@/ui/i18n'
 import './style.scss'
 type MessageBoxEvent = {
   showMessageBox: (props: MessageBoxProps) => void
@@ -104,13 +105,13 @@ export function useMessageBox() {
                     <ripple-button
                       className={'cancel'}
                       onClick={() => onCancelHandler(index)}>
-                      {item.cancelText || '取 消'}
+                      {item.cancelText || t('取 消')}
                     </ripple-button>
                   )}
                   <ripple-button
                     className={'confirm'}
                     onClick={() => onConfirmHandler(index)}>
-                    {item.confirmText || '确 定'}
+                    {item.confirmText || t('确 定')}
                   </ripple-button>
                 </div>
               </div>

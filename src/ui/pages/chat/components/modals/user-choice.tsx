@@ -8,6 +8,7 @@ import { useState, useEffect, useRef } from 'react'
 import { sessionStore } from '@/ui/store'
 import './user-choice.scss'
 import MarkdownRenderer from '../message/markdown-renderer'
+import { t, tpl } from '@/ui/i18n'
 
 interface Props {
   visible: boolean
@@ -146,8 +147,8 @@ export default function UserChoiceModal({
                 className="custom-reply-input"
                 placeholder={
                   selected.size > 0
-                    ? '请输入补充内容'
-                    : '输入自定义回复内容'
+                    ? t('请输入补充内容')
+                    : t('输入自定义回复内容')
                 }
                 value={customReply}
                 onChange={(e) => setCustomReply(e.target.value)}
@@ -167,7 +168,7 @@ export default function UserChoiceModal({
           <div className="choice-footer-left">
             {onShelve && (
               <button className="btn-shelve" onClick={onShelve}>
-                暂存
+                {t('暂存')}
               </button>
             )}
             <button
@@ -177,18 +178,18 @@ export default function UserChoiceModal({
                 // 展开时自动聚焦输入框
                 setTimeout(() => customInputRef.current?.focus(), 0)
               }}>
-              {showCustom ? '收起自定义' : '自定义'}
+              {showCustom ? t('收起自定义') : t('自定义')}
             </button>
           </div>
           <div className="choice-footer-right">
             <button className="btn-cancel" onClick={onCancel}>
-              取消
+              {t('取消')}
             </button>
             <button
               className="btn-confirm"
               onClick={handleConfirm}
               disabled={!canConfirm}>
-              确认{multi ? ` (已选 ${selected.size})` : ''}
+              {t('确认')}{multi ? tpl(' (已选 $__count__)', { count: selected.size }) : ''}
             </button>
           </div>
         </div>

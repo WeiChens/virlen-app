@@ -11,12 +11,11 @@ import {
   useEffect,
   useRef,
   useCallback,
-  type KeyboardEvent,
 } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { securityService } from '@/services/security-service'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
 import FileTypeIcon from '@/ui/components/icons/FileTypeIcon'
+import { t } from '@/ui/i18n'
 
 // ==================== 工具类型 ====================
 
@@ -277,10 +276,12 @@ export function usePathAutocomplete(
 }
 
 /** 空目录虚拟条目，供 PathAutocomplete 展示 */
-const EMPTY_DIR_ITEM: DirEntry = {
-  name: '(空目录)',
-  type: 'dir',
-  size: null,
+function makeEmptyDirItem(): DirEntry {
+  return {
+    name: t('(空目录)'),
+    type: 'dir',
+    size: null,
+  }
 }
 
 // ==================== 组件 ====================
@@ -332,7 +333,7 @@ export function PathAutocomplete({
   }, [selectedIndex])
 
   // 空目录时，显示一个虚拟条目供用户确认路径
-  const displayItems = isEmptyDir ? [EMPTY_DIR_ITEM] : items
+  const displayItems = isEmptyDir ? [makeEmptyDirItem()] : items
 
   if (items.length === 0 && !isEmptyDir) return null
 

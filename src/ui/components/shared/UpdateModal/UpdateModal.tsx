@@ -89,7 +89,7 @@ const UpdateModal = ({ show, updateInfo, onHide, onForceCancel }: Props) => {
       setDownloadProgress((prev) => ({
         ...prev,
         status: 'error',
-        error: err.message || '下载失败',
+        error: err.message || t('下载失败'),
       }))
     } finally {
       downloadingRef.current = false

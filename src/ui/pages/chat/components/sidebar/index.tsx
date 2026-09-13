@@ -552,7 +552,7 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
         <ExportDialog
           visible={true}
           sessionTitle={
-            sessions.find((s) => s.id === exportSessionId)?.title || '对话'
+            sessions.find((s) => s.id === exportSessionId)?.title || t('对话')
           }
           onConfirm={(options) => handleConfirmExport(exportSessionId, options)}
           onCancel={handleCloseExport}
@@ -673,8 +673,8 @@ function formatSessionForKB(session: Session, messages?: Message[]): string {
 
   lines.push(`# ${session.title}`)
   lines.push('')
-  lines.push(`> 模型：${session.modelId || '未知'}`)
-  lines.push(`> 消息数：${targetMsgs.length}`)
+  lines.push(tpl('> 模型：$__model__', { model: session.modelId || t('未知') }))
+  lines.push(tpl('> 消息数：$__count__', { count: targetMsgs.length }))
   lines.push('')
   lines.push('---')
   lines.push('')
@@ -710,7 +710,7 @@ function formatSessionForKB(session: Session, messages?: Message[]): string {
     // 工具调用
     if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
       for (const tc of msg.toolCalls) {
-        lines.push(`**工具调用：${tc.name}**`)
+        lines.push(tpl('**工具调用：$__name__**', { name: tc.name }))
         lines.push('')
         lines.push('```json')
         lines.push(JSON.stringify(tc.input, null, 2))
@@ -878,7 +878,7 @@ function SessionGroupView({
           <button
             className="group-more-btn"
             onClick={toggleGroupMenu}
-            title="更多操作">
+            title={t('更多操作')}>
             <MoreSvg />
           </button>
           {isGroupMenuOpen && (

@@ -28,6 +28,7 @@ import {
 import MessageBubble from './message-bubble'
 import DropDownSvg from '@/ui/components/icons/DropDownSvg'
 import Tooltip from '@/ui/components/shared/Tooltip'
+import { t } from '@/ui/i18n'
 import './message-list.scss'
 import commentEvent from '@/events/commentEvent'
 import { observer } from 'mobx-react-lite'
@@ -555,7 +556,7 @@ function ChatMessageList({
                 loadMoreHandle()
               }
             }}>
-            {isLoadingMore ? '加载更多消息...' : '点击查看更多'}
+            {isLoadingMore ? t('加载更多消息...') : t('点击查看更多')}
           </div>
         )}
 
@@ -596,7 +597,7 @@ function ChatMessageList({
                   className={`msg-anchor-dot${activeUserMsgId === msg.id ? ' active' : ''}`}
                   onClick={() => scrollToMessage(msg.id)}
                   type="button"
-                  aria-label="跳转到该消息"
+                  aria-label={t('跳转到该消息')}
                 />
               </Tooltip>
             )
@@ -616,13 +617,13 @@ function ChatMessageList({
         <div className="paused-run-banner">
           <div className="paused-info">
             <span className="paused-icon">⏸️</span>
-            <span className="paused-text">会话已暂停，是否继续？</span>
+            <span className="paused-text">{t('会话已暂停，是否继续？')}</span>
           </div>
           <button className="paused-resume-btn" onClick={handleResume}>
-            继续
+            {t('继续')}
           </button>
           <button className="paused-cancel-btn" onClick={handleCancelPaused}>
-            取消
+            {t('取消')}
           </button>
         </div>
       )}

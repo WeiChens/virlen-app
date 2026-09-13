@@ -5,6 +5,7 @@ import Modal from '@/ui/components/shared/Modal'
 import SettingSvg from '@/ui/components/icons/SettingSvg'
 import './provider-prompt.scss'
 import { appName } from '@/ui/constants'
+import { t, tpl } from '@/ui/i18n'
 
 interface Props {
   visible: boolean
@@ -43,15 +44,15 @@ export default function ProviderPrompt({
               p-id="5737"></path>
           </svg>
         </div>
-        <h3>未配置模型服务</h3>
-        <p>使用 {appName} 前需要先配置模型服务商（如 DeepSeek、OpenAI 等）。</p>
+        <h3>{t('未配置模型服务')}</h3>
+        <p>{tpl('使用 $__app__ 前需要先配置模型服务商（如 DeepSeek、OpenAI 等）。', { app: appName })}</p>
         <div className="prompt-actions">
           <button className="btn-cancel" onClick={onClose}>
-            稍后再说
+            {t('稍后再说')}
           </button>
           <button className="btn-primary" onClick={onGoToSettings}>
             <SettingSvg fill="var(--bg-primary)" />
-            去配置
+            {t('去配置')}
           </button>
         </div>
       </div>

@@ -12,6 +12,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import './style.scss'
+import { t } from '@/ui/i18n'
 
 export interface SelectOption {
   value: any
@@ -35,7 +36,7 @@ function Select({
   options,
   className = '',
   disabled = false,
-  placeholder = '请选择',
+  placeholder = t('请选择'),
   width,
 }: SelectProps) {
   const [open, setOpen] = useState(false)

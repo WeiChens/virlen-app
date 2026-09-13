@@ -25,7 +25,7 @@ class UserChoiceMessage implements IToolCallMessage {
           if (uiData.customReply) {
             parts.push(t('补充') + ': ' + uiData.customReply)
           }
-          if (parts.length > 0) content += '  ' + parts.join('；')
+          if (parts.length > 0) content += '  ' + parts.join(t('；'))
         } else {
           // 兼容旧数据：content 即为回答
           const answer = props.message?.content

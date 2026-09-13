@@ -29,7 +29,7 @@ class CopyMoveFileMessage implements IToolCallMessage {
         settingsState.value.defaultWorkspace
       const shortSource = toShortPath(source, workspace)
       const shortDest = toShortPath(dest, workspace)
-      const modeText = mode === 'copy' ? '复制文件' : '移动文件'
+      const modeText = mode === 'copy' ? t('复制文件') : t('移动文件')
       return (
         <div
           style={{
