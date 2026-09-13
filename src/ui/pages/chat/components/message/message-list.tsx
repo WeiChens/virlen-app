@@ -1,8 +1,13 @@
 /**
- * chat-message-list — 聊天消息列表组件
+ * chat-message-list — 聊天消息列表组件（虚拟滚动版）
  *
  * 从 chat-view 分离，管理消息列表的渲染、滚动行为、暂停/错误提示。
- * 支持分页渲染（默认只显示最后 PAGE_SIZE 条），向上滚动自动加载更多。
+ *
+ * 使用 @tanstack/react-virtual 做「动态高度」虚拟滚动：
+ *  - DOM 恒定：仅渲染视口附近的若干条消息，向上翻阅上万条也不会累积 DOM。
+ *  - 滚动锚定：向上从 SQLite 回补更早历史（前插）时保持视口不跳动。
+ *  - 贴底跟随：位于底部时，新消息 / 流式增长自动跟随；用户上滑后不打扰。
+ *
  * 数据从 store 同步，通过回调与父组件通信。
  */
 import {
@@ -13,6 +18,7 @@ import {
   useLayoutEffect,
   useMemo,
 } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import type { Message } from '@/types'
 import {
   chatState,
@@ -33,24 +39,54 @@ import './message-list.scss'
 import commentEvent from '@/events/commentEvent'
 import { observer } from 'mobx-react-lite'
 
-// ==================== 分页常量 ====================
-const PAGE_SIZE = 35
-const LOAD_MORE_STEP = PAGE_SIZE
-const SCROLL_TOP_THRESHOLD = 200 // 距顶部多少 px 时触发加载更多
+// ==================== 虚拟滚动常量 ====================
+/** 单条消息「未被测量前」的估算高度（测量后以真实高度为准） */
+const ESTIMATED_ITEM_HEIGHT = 120
+/** 视口外前后额外渲染的条目数 */
+const OVERSCAN = 6
+/** 距底部 ≤ 该值视为「贴在底部」：新消息 / 流式增长时自动跟随 */
+const AT_BOTTOM_THRESHOLD = 120
+/** 距顶部 ≤ 该值触发回补更早消息 */
+const SCROLL_TOP_THRESHOLD = 400
+/** 列表上下内边距（由虚拟容器承担，保证滚动偏移计算与真实布局一致） */
+const LIST_PADDING = 8
+/** 「点击查看更多」提示条高度（预留占位，避免与首条消息重叠） */
+const LOAD_MORE_HINT_HEIGHT = 36
 /**
- * 锚点列表最多渲染的圆点数。
- * 长会话（数千消息）里 user 消息可能上千条，全部渲染会挂载海量 DOM。
- * 只保留最近 N 条（视觉上 CSS 也仅显示约 12 个点），其余通过滚动主列表查看。
+ * 锚点列表最多渲染的圆点数（安全上限，避免极端会话挂载过多 DOM）。
+ * 正常会话（数千消息）全部渲染，超出部分通过滚动条查看。
  */
-const MAX_ANCHOR_DOTS = 120
+const MAX_ANCHOR_DOTS = 2000
 
 /** 稳定的空 tool 结果数组（无 toolCalls 的消息共用，保证 memo 命中） */
 const EMPTY_TOOL_RESULTS: (Message | undefined)[] = []
 
+/** 稳定的空锚点数组（索引未加载时共用，保证 useMemo 依赖稳定） */
+const EMPTY_ANCHOR_USERS: AnchorUser[] = []
+
+/** 锚点列表项：全量用户消息索引（后端）与本地已加载消息合并后的结果 */
+interface AnchorUser {
+  id: string
+  /** 纯文本摘要（tooltip 用） */
+  preview: string
+}
+
+/** 从消息内容中提取纯文本摘要（截断长度与后端预览保持一致：420 字符） */
+function previewOfMessage(msg: Message): string {
+  const text =
+    typeof msg.content === 'string'
+      ? msg.content
+      : msg.content
+          .filter((b) => b.type === 'text')
+          .map((b) => ('text' in b ? b.text : ''))
+          .join('')
+  return text.slice(0, 420)
+}
+
 interface ChatMessageListProps {
-  /** 当前所有消息 */
+  /** 当前已加载的所有消息（可能只是 SQLite 中的尾部若干页） */
   messages: Message[]
-  /** 更新消息（触发组件重渲染） */
+  /** 更新消息（触发父组件重渲染 / 虚拟列表 count 变化） */
   setMessages: (msgs: Message[]) => void
   /** 输入框设置文本回调 */
   setText: (text: string) => void
@@ -61,36 +97,22 @@ function ChatMessageList({
   setMessages,
   setText,
 }: ChatMessageListProps) {
-  const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
-  // 用户主动滚动拦截标记
-  const userScrollBlockUntilRef = useRef(0)
   const lastScrollTopRef = useRef(0)
-  // 滚动到底部按钮的显隐
-  const [showScrollToBottomBtn, setShowScrollToBottomBtn] = useState(false)
   const showScrollBtnRef = useRef(false)
-
-  // ==================== 分页状态 ====================
-  const [displayStart, setDisplayStart] = useState(() =>
-    Math.max(0, messages.length - PAGE_SIZE),
-  )
-  const [isLoadingMore, setIsLoadingMore] = useState(false)
-  const loadingMoreRef = useRef(false)
-  // 加载更多时刻的快照：scrollTop 和 scrollHeight
-  const loadMoreSnapshotRef = useRef({ scrollTop: 0, scrollHeight: 0 })
-  const prevMessagesLenRef = useRef(messages.length)
-  const resetPagingRef = useRef(false)
-  const displayStartRef = useRef(displayStart)
-  displayStartRef.current = displayStart
+  /** 正在从 SQLite 回补更早消息（防重入） */
+  const loadingOlderRef = useRef(false)
   /**
-   * 「向上从 DB 回补历史」期间的滚动锚点快照。
-   * 回补的消息是前插到数组头部的，需在渲染后手动补上顶部新增的高度，
-   * 否则视口会跳到最上面。非空即表示本次 messages 变化来自前插。
+   * 待执行的「锚点跳转」目标消息 id。
+   * 回补历史后 messages 尚未提交时 count 仍是旧值，直接 scrollToIndex 会被
+   * 夹到旧 count-1（跳错位置）。改为先记录目标，等 messages 提交后的
+   * layout effect 里再用最新 count 跳转。
    */
-  const pendingPrependRef = useRef<{
-    scrollTop: number
-    scrollHeight: number
-  } | null>(null)
+  const pendingJumpIdRef = useRef<string | null>(null)
+  /** 切会话/首开时的「贴底稳定」轮询定时器 */
+  const settleTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  /** 切会话后需要「先滚到底部 + 布局稳定后再显示」 */
+  const needInitialBottomRef = useRef(false)
   /**
    * message.id → 该消息 toolCalls 对应的结果数组（按索引对齐）。
    * 缓存引用：只要结果消息的对象引用不变，就复用同一数组，
@@ -98,55 +120,32 @@ function ChatMessageList({
    */
   const toolResultsCacheRef = useRef(new Map<string, (Message | undefined)[]>())
 
-  // 首次打开/切会话：等待布局稳定后再滚到底部（见 settleToBottom）
-  const settleTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [showScrollToBottomBtn, setShowScrollToBottomBtn] = useState(false)
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false)
+  /**
+   * 锚点「定位中」的目标消息 id（点击锚点需回补历史时显示 loading）。
+   * 极短的加载不显示，避免 loading 一闪而过（延迟 150ms 再显示）。
+   */
+  const [jumpLoadingId, setJumpLoadingId] = useState<string | null>(null)
+  /** 「定位中」提示的延迟显示定时器 */
+  const jumpLoadingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** 切会话 / 首开时容器先隐藏（opacity:0），布局稳定后再显示，避免中间态闪动 */
+  const [hide, setHide] = useState(false)
 
-  // ⚡ 关键性能修复：会话切换 / 消息数剧变时，在「本次渲染」就重置分页到末尾。
-  // 之前放在 useEffect（commit 之后）才重置，导致 2500 条数据到达时先整屏渲染
-  // 全部消息（displayStart 仍为 0），再由 effect 事后纠正 → 白白卡顿 ~1.7s。
-  // 这里用 React 官方的 derived-state 模式：渲染中 setState，React 会丢弃本次
-  // 中间结果并立即用新 state 重渲染，因此只会渲染末尾 PAGE_SIZE 条。
-  {
-    const prevLen = prevMessagesLenRef.current
-    const currLen = messages.length
-    prevMessagesLenRef.current = currLen
-    if (pendingPrependRef.current) {
-      // 向上回补历史：消息「前插」，保持显示窗口从最旧处开始，不要平移到末尾
-      if (displayStartRef.current !== 0) {
-        displayStartRef.current = 0
-        setDisplayStart(0)
-      }
-    } else if (Math.abs(currLen - prevLen) > 1 || prevLen === 0) {
-      const target = Math.max(0, currLen - PAGE_SIZE)
-      if (displayStartRef.current !== target) {
-        displayStartRef.current = target
-        setDisplayStart(target)
-      }
-      resetPagingRef.current = true
-    }
-  }
+  // 供「只注册一次」的 scroll 回调 / 异步回调读取最新的 messages
+  const messagesRef = useRef(messages)
+  messagesRef.current = messages
 
-  // 计算当前展示的消息（useMemo 避免父级重渲染时重复 slice）
-  const displayedMessages = useMemo(
-    () => messages.slice(displayStart),
-    [messages, displayStart],
-  )
+  const sessionId = chatState.value.currentSessionId
+  const hasMoreInDb = sessionId
+    ? sessionStore.hasMoreMessages(sessionId)
+    : false
 
   // 当前会话运行时状态
-  const sessionId = chatState.value.currentSessionId
-  // 「查看更多」：内存里还有更早的（displayStart>0）或 SQLite 里还有更早的（hasMoreMessages）
-  const hasMoreInDb = sessionId ? sessionStore.hasMoreMessages(sessionId) : false
-  const hasMore = displayStart > 0 || hasMoreInDb
+  const currentRt = sessionId ? getSessionRuntime(sessionId) : null
+  const isCurrentPaused = currentRt?.paused ?? false
 
-  // 用户消息（锚点列表用，一次性过滤，避免每次渲染过滤两次全量数组）
-  const userMessages = useMemo(
-    () => messages.filter((m) => m.role === 'user'),
-    [messages],
-  )
-
-  // toolCallId → tool 结果消息（一次遍历）。
-  // 不再把整份 messages 传给每个气泡（那会导致 memo 失效、全量重渲染），
-  // 而是按需只传「这条消息自己的 tool 结果」。
+  // ==================== tool 结果索引（一次遍历 + 引用稳定） ====================
   const toolResultById = useMemo(() => {
     const map = new Map<string, Message>()
     for (const m of messages) {
@@ -176,105 +175,117 @@ function ChatMessageList({
     return next
   }
 
-  const currentRt = sessionId ? getSessionRuntime(sessionId) : null
-  // const isCurrentWorking = currentRt?.working ?? false
-  const isCurrentPaused = currentRt?.paused ?? false
-  const bottomNear = useRef(false)
+  // 用户消息（本地已加载的，用于「跟随最新用户消息」）
+  const userMessages = useMemo(
+    () => messages.filter((m) => m.role === 'user'),
+    [messages],
+  )
 
-  // ==================== 重置分页副作用（会话切换时） ====================
-  // displayStart 的重置已在渲染阶段完成（见上方 derived-state 块），
-  // 这里只清理「加载更多」相关状态，避免与渲染阶段重复 setState。
-  useEffect(() => {
-    // 向上回补历史（前插）由专门的滚动锚定 effect 处理，这里不参与
-    if (pendingPrependRef.current) return
-    if (resetPagingRef.current) {
-      resetPagingRef.current = false
-      loadingMoreRef.current = false
-      setIsLoadingMore(false)
-      loadMoreSnapshotRef.current = { scrollTop: 0, scrollHeight: 0 }
-    }
-    if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
-      userScrollBlockUntilRef.current = 0
-    }
-  }, [messages.length, sessionId])
+  // ==================== 锚点列表数据 ====================
+  // 后端「全量用户消息索引」（id + 摘要）覆盖整个会话历史，不依赖消息分页；
+  // 本会话中刚发送、尚未包含在索引里的消息由本地已加载消息补齐。
+  const userMsgIndex = sessionId
+    ? sessionStore.getUserMessageIndex(sessionId)
+    : EMPTY_ANCHOR_USERS
 
-  // ==================== ResizeObserver：加载更多后持续修正 scrollTop（防闪动） ====================
-  // 即使 markdown / 代码块懒渲染导致高度逐步变化，也能将视口稳定在用户原本看的位置。
-  // 注意：只负责滚动修正，不管理 loadingMoreRef 的复位（由下方 useEffect 单独处理）。
-  useEffect(() => {
-    const container = messagesContainerRef.current
-    if (!container) {
-      return
-    }
-
-    const observer = new ResizeObserver(() => {
-      if (!loadingMoreRef.current) return
-
-      const snapshot = loadMoreSnapshotRef.current
-      if (snapshot.scrollHeight === 0) return
-
-      const addedHeight = container.scrollHeight - snapshot.scrollHeight
-      // 目标 scrollTop = 加载时的 scrollTop + 顶部总增加高度
-      const targetScrollTop = snapshot.scrollTop + addedHeight
-      const currentScrollTop = container.scrollTop
-
-      // 如果用户主动滚走了（与目标值差距 > 200px），停止干预
-      if (Math.abs(currentScrollTop - targetScrollTop) > 200) {
-        loadingMoreRef.current = false
-        setIsLoadingMore(false)
-        return
-      }
-
-      if (Math.abs(currentScrollTop - targetScrollTop) > 1) {
-        container.scrollTop = targetScrollTop
-      }
-    })
-
-    observer.observe(container)
-    return () => {
-      observer.disconnect()
-    }
-  }, [])
-
-  // ==================== 加载更多超时复位 ====================
-  // displayStart 变化（加载更多触发）后，固定等待 1 秒，无论期间是否有懒渲染，
-  // 到期后复位 loadingMoreRef，让用户能再次触发加载更多。
-  useEffect(() => {
-    if (!loadingMoreRef.current) return
-
-    const timer = setTimeout(() => {
-      loadingMoreRef.current = false
-      setIsLoadingMore(false)
-      loadMoreSnapshotRef.current = { scrollTop: 0, scrollHeight: 0 }
-    }, 300)
-
-    return () => clearTimeout(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [displayStart])
-
-  // ==================== 向上回补历史后的滚动锚定 ====================
-  // 从 DB 前插更早的消息后，补上顶部新增的高度，让用户停在原位置（防跳动），
-  // 同时复位 loadingMore，允许继续上滚加载。
-  // 注意：这里不清理 pendingPrependRef —— 需留给后面的 useEffect([messages]) 消费，
-  // 否则会被误判为「新消息」而触发滚动到底部。
-  useLayoutEffect(() => {
-    const pending = pendingPrependRef.current
-    if (!pending) return
-    const el = messagesContainerRef.current
-    if (el) {
-      const delta = el.scrollHeight - pending.scrollHeight
-      if (delta > 0) el.scrollTop = pending.scrollTop + delta
-    }
-    loadingMoreRef.current = false
-    setIsLoadingMore(false)
-    loadMoreSnapshotRef.current = { scrollTop: 0, scrollHeight: 0 }
+  // 本地「user 消息集合」的签名：流式更新 assistant/tool 消息时保持不变，
+  // 用它做依赖可避免锚点列表在高频 token 更新中重建（下方 messages 通过 ref 读取）。
+  const localUserSig = useMemo(() => {
+    const ids: string[] = []
+    for (const m of messages) if (m.role === 'user') ids.push(m.id)
+    return ids.join('\u0001')
   }, [messages])
 
-  // ==================== 滚动到底部（消息变化时） ====================
-  // 用户发消息 → 无视拦截强制滚动；AI 回复 → 尊重拦截状态
-  useEffect(() => {
-    userScrollBlockUntilRef.current = 0
-    // 切会话：清空 tool 结果缓存（消息已换），并取消上次的底部钉住轮询
+  const anchorUsers = useMemo(() => {
+    const out: AnchorUser[] = []
+    const seen = new Set<string>()
+    for (const ref of userMsgIndex) {
+      out.push(ref)
+      seen.add(ref.id)
+    }
+    for (const m of messagesRef.current) {
+      if (m.role !== 'user' || seen.has(m.id)) continue
+      out.push({ id: m.id, preview: previewOfMessage(m) })
+    }
+    return out
+    // messages 通过 messagesRef 读取；其 user 消息集合的变化已由 localUserSig 跟踪
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userMsgIndex, localUserSig])
+
+  // ==================== 虚拟滚动核心 ====================
+  // getItemKey 用消息 id（稳定），前插历史时测量缓存可跟随同一条消息，
+  // 库据此把「视口锚点项」保持在原位置 → 上翻不跳动。
+  const getItemKey = useCallback(
+    (index: number) => messagesRef.current[index]?.id ?? `idx-${index}`,
+    [],
+  )
+  const estimateSize = useCallback(() => ESTIMATED_ITEM_HEIGHT, [])
+
+  const rowVirtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => messagesContainerRef.current,
+    estimateSize,
+    overscan: OVERSCAN,
+    getItemKey,
+    // 以「底部」为锚：
+    //  - 贴底时新消息 / 流式增长自动跟随（anchorTo=end + followOnAppend）
+    //  - 前插历史时按锚点项回推 scrollTop，视口不跳动
+    //  - 用户上滑离开底部后，不再自动拉扯
+    anchorTo: 'end',
+    followOnAppend: true,
+    scrollEndThreshold: AT_BOTTOM_THRESHOLD,
+    paddingStart: LIST_PADDING + (hasMoreInDb ? LOAD_MORE_HINT_HEIGHT : 0),
+    paddingEnd: LIST_PADDING,
+  })
+  const virtualItems = rowVirtualizer.getVirtualItems()
+
+  /**
+   * 跳转到指定索引。
+   *  - 目标在当前已渲染范围内 → 平滑滚动（体验好，且这些条目已测量）
+   *  - 目标在范围外（跨越大量未测量条目）→ 瞬间跳转。
+   *    平滑滚动时虚拟库会刻意跳过「途经」条目的测量（见 virtual-core 的
+   *    shouldMeasureDuringScroll），这些条目会按估算高度摆放，导致相邻气泡
+   *    相互重叠。瞬间跳转不途经，目标条目挂载即被测量，避免该问题。
+   */
+  const jumpTo = useCallback(
+    (idx: number) => {
+      const items = rowVirtualizer.getVirtualItems()
+      const near =
+        items.length > 0 &&
+        idx >= items[0].index &&
+        idx <= items[items.length - 1].index
+      rowVirtualizer.scrollToIndex(idx, {
+        align: 'start',
+        behavior: near ? 'smooth' : 'auto',
+      })
+    },
+    [rowVirtualizer],
+  )
+
+  // ==================== 回补更早历史（前插） ====================
+  const loadOlder = useCallback(async () => {
+    const sid = chatState.value.currentSessionId
+    if (!sid || loadingOlderRef.current) return
+    if (!sessionStore.hasMoreMessages(sid)) return
+    loadingOlderRef.current = true
+    setIsLoadingOlder(true)
+    try {
+      const ok = await sessionStore.loadOlderMessages(sid)
+      if (ok && sid === chatState.value.currentSessionId) {
+        const s = sessionStore.getSession(sid)
+        if (s) setMessages([...s.messages])
+      }
+    } finally {
+      loadingOlderRef.current = false
+      setIsLoadingOlder(false)
+    }
+  }, [setMessages])
+
+  // ==================== 切会话：清缓存 + 标记「需要贴底」 ====================
+  useLayoutEffect(() => {
+    if (!sessionId) return
+    setHide(true)
+    needInitialBottomRef.current = true
     toolResultsCacheRef.current.clear()
     if (settleTimerRef.current) {
       clearInterval(settleTimerRef.current)
@@ -283,10 +294,10 @@ function ChatMessageList({
   }, [sessionId])
 
   /**
-   * 首次打开 / 切会话：容器处于隐藏态（opacity:0），等待布局稳定后再滚到底部并显示。
-   * markdown / canvas / 图片在首帧后仍可能异步改变高度，若按当时 scrollHeight 一次性滚动
-   * 会停在中间（旧 bug）。这里每 50ms 轮询 scrollHeight：
-   *   - 高度还在变 → 继续钉住底部 + 重置稳定计数
+   * 滚到底部并等待布局稳定后显示。
+   * markdown / canvas / 图片在首帧后仍可能异步改变高度（虚拟列表还会经历
+   * 估算→实测），若立即显示会看到跳动。这里每 50ms 轮询 scrollHeight：
+   *   - 高度还在变 → 继续计数
    *   - 连续 3 次（~150ms）无变化 → 视为稳定，滚到底部后 setHide(false) 显示
    */
   const settleToBottom = useCallback(() => {
@@ -294,9 +305,13 @@ function ChatMessageList({
     if (!el) return
 
     if (settleTimerRef.current) clearInterval(settleTimerRef.current)
+    const scrollToEnd = () => {
+      const count = messagesRef.current.length
+      if (count > 0) rowVirtualizer.scrollToIndex(count - 1, { align: 'end' })
+    }
+    scrollToEnd()
     let lastH = el.scrollHeight
     let stableCount = 0
-    el.scrollTop = el.scrollHeight
 
     settleTimerRef.current = setInterval(() => {
       const cur = messagesContainerRef.current
@@ -305,120 +320,124 @@ function ChatMessageList({
         settleTimerRef.current = null
         return
       }
-      cur.scrollTop = cur.scrollHeight
       if (Math.abs(cur.scrollHeight - lastH) > 1) {
         lastH = cur.scrollHeight
         stableCount = 0
       } else {
         stableCount++
         if (stableCount >= 3) {
-          // 高度稳定 → 停止轮询，滚到底部并显示
           if (settleTimerRef.current) clearInterval(settleTimerRef.current)
           settleTimerRef.current = null
-          cur.scrollTop = cur.scrollHeight
+          scrollToEnd()
           setHide(false)
         }
       }
     }, 50)
-  }, [])
+  }, [rowVirtualizer])
 
-  // 卸载时清理轮询
+  // 卸载时清理定时器
   useEffect(() => {
     return () => {
       if (settleTimerRef.current) {
         clearInterval(settleTimerRef.current)
         settleTimerRef.current = null
       }
+      if (jumpLoadingTimerRef.current) {
+        clearTimeout(jumpLoadingTimerRef.current)
+        jumpLoadingTimerRef.current = null
+      }
     }
   }, [])
 
-  const [hide, setHide] = useState(false)
+  // ==================== 消息变化：贴底 / 稳定显示 ====================
   useLayoutEffect(() => {
-    if (!sessionId) return
-    setHide(true)
-  }, [sessionId])
-  useEffect(() => {
-    // 向上回补历史（前插旧消息）不应触发滚动逻辑：消费掉标记后直接返回
-    if (pendingPrependRef.current) {
-      pendingPrependRef.current = null
-      return
-    }
-    const displayedMessages = messages.slice(displayStartRef.current)
-    if (displayedMessages.length == 0) {
-      // 保持隐藏（切会话后数据尚未到达），等待下一次 messages 更新再 settle
-      return
-    }
-    const lastMsg = displayedMessages[displayedMessages.length - 1]
-    if (hide) {
-      // 切会话 / 首次打开：容器隐藏，等布局稳定后滚到底部再显示
-      settleToBottom()
-    } else if (lastMsg.role === 'user') {
-      // 用户刚发送消息 → 清除拦截、恢复显示、立即滚动到底部
-      userScrollBlockUntilRef.current = 0
-      setHide(false)
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-    } else if (
-      (Date.now() >= userScrollBlockUntilRef.current && bottomNear.current) ||
-      userScrollBlockUntilRef.current == 0
-    ) {
-      if (messagesContainerRef.current == null) {
-        console.warn('messagesContainerRef.current is null')
+    const count = messages.length
+    if (count === 0) return
+    // 优先消费「待跳转」目标：此时 messages 已提交，count 为最新值
+    const pendingJumpId = pendingJumpIdRef.current
+    if (pendingJumpId) {
+      pendingJumpIdRef.current = null
+      const idx = messagesRef.current.findIndex((m) => m.id === pendingJumpId)
+      if (idx >= 0) {
+        jumpTo(idx)
         return
       }
-      const { scrollHeight, clientHeight, scroll } =
-        messagesContainerRef.current
-      if (scrollHeight == clientHeight) {
-        requestAnimationFrame(() => {
-          messagesContainerRef.current.scroll({
-            top: 3000000,
-            behavior: 'instant',
-          })
-          requestAnimationFrame(() => setHide(false))
-        })
-      } else {
-        messagesContainerRef.current.scroll({
-          top: scrollHeight,
-          behavior: 'instant',
-        })
-        setHide(false)
-      }
     }
-    // 只依赖 messages 引用变化，加载更多时不触发
+    if (needInitialBottomRef.current) {
+      // 切会话 / 首次打开：容器隐藏，等布局稳定后滚到底部再显示
+      needInitialBottomRef.current = false
+      settleToBottom()
+      return
+    }
+    const last = messages[count - 1]
+    if (last?.role === 'user') {
+      // 用户刚发送消息 → 立即滚动到底部
+      setHide(false)
+      rowVirtualizer.scrollToIndex(count - 1, {
+        align: 'end',
+        behavior: 'smooth',
+      })
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages])
 
-  useEffect(() => {
-    const uninstall = commentEvent.on('requestScrollToBottom', () => {
-      if (bottomNear.current)
-        messagesContainerRef.current?.scroll({
-          top: messagesContainerRef.current?.scrollHeight,
-          behavior: 'instant',
-        })
-    })
-    return () => void uninstall()
-  }, [])
-  // ==================== 滚动事件：拦截 + 加载更多 + 活跃锚点 ====================
+  // ==================== 从 store 同步消息到 UI ====================
+  const syncMessagesToUI = useCallback(
+    (sid: string) => {
+      if (sid !== chatState.value.currentSessionId) return
+      const s = sessionStore.getSession(sid)
+      if (s) setMessages([...s.messages])
+    },
+    [setMessages],
+  )
+
+  // ==================== 滚动事件：加载更早 + 活跃锚点 + 到底部按钮 ====================
   const [activeUserMsgId, setActiveUserMsgId] = useState<string | null>(null)
   const activeMsgIdRef = useRef<string | null>(null)
   useEffect(() => {
     const container = messagesContainerRef.current
     if (!container) return
 
+    /** 滚动停止后强制重新测量已渲染条目（修正平滑滚动/流式增长期间的高度漂移） */
+    let remeasureTimer: ReturnType<typeof setTimeout> | null = null
+    function remeasureRenderedItems() {
+      const root = messagesContainerRef.current
+      if (!root) return
+      root
+        .querySelectorAll<HTMLElement>('.message-item-wrap')
+        .forEach((node) => rowVirtualizer.measureElement(node))
+    }
+
+    /**
+     * 计算当前活跃的用户消息锚点。
+     *
+     * 虚拟滚动下只有视口附近的条目被渲染：若仍遍历 DOM，视口内没有任何 user 消息时
+     * 会找不到元素，高亮就会消失。这里改用「滚动偏移 → 消息实测起始位置」的几何计算，
+     * 与 DOM 是否渲染无关。
+     */
     function updateActiveDot() {
-      const userMsgEls = container.querySelectorAll<HTMLElement>(
-        '.message-item-wrap[data-msg-id]',
-      )
-      const scrollTop = container.scrollTop
+      const el = messagesContainerRef.current
+      if (!el) return
+      const list = messagesRef.current
+      if (list.length === 0) return
+      // measurements[i].start 即第 i 条消息在内容坐标系中的顶部，与渲染无关
+      const measurements = rowVirtualizer.measurementsCache
+      const probe = el.scrollTop + 80 // 视口顶部偏下 80px
       let closestId: string | null = null
       let closestDist = Infinity
-      // 寻找最接近视口顶部（偏下 80px）的用户消息
-      userMsgEls.forEach((el) => {
-        const dist = Math.abs(el.offsetTop - scrollTop - 80)
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].role !== 'user') continue
+        const start = measurements[i]?.start
+        if (start === undefined) continue
+        const dist = Math.abs(start - probe)
         if (dist < closestDist) {
           closestDist = dist
-          closestId = el.dataset.msgId || null
+          closestId = list[i].id
+        } else if (start > probe) {
+          // 起始偏移随索引单调递增：已越过探针且不再更近，后续只会更远
+          break
         }
-      })
+      }
       if (closestId !== activeMsgIdRef.current) {
         activeMsgIdRef.current = closestId
         setActiveUserMsgId(closestId)
@@ -428,20 +447,8 @@ function ChatMessageList({
     function onScroll() {
       const { scrollTop, scrollHeight, clientHeight } = container
       const distFromBottom = scrollHeight - clientHeight - scrollTop
-      const isScrollingDown = scrollTop > lastScrollTopRef.current
 
-      // ---- 更新活跃锚点 ----
       updateActiveDot()
-
-      // ---- 自动滚动拦截 ----
-      // 用户往上滚动 → 屏蔽 3000ms
-      if (scrollTop < lastScrollTopRef.current) {
-        userScrollBlockUntilRef.current = Date.now() + 3000
-      }
-      // 距离底部超过一个视口高度 → 永久屏蔽
-      if (distFromBottom > clientHeight) {
-        userScrollBlockUntilRef.current = Infinity
-      }
 
       // ---- 滚动到底部按钮显隐（距底部 > 80% 视口高度时显示）----
       const btnShouldShow = distFromBottom > clientHeight * 0.8
@@ -449,94 +456,132 @@ function ChatMessageList({
         showScrollBtnRef.current = btnShouldShow
         setShowScrollToBottomBtn(btnShouldShow)
       }
-      bottomNear.current = distFromBottom <= clientHeight * 0.3
-      // ---- 向下滚动到底部附近 → 吸附到底部 ----
-      if (
-        isScrollingDown &&
-        bottomNear.current &&
-        userScrollBlockUntilRef.current !== 0 &&
-        currentRt.working
-      ) {
-        userScrollBlockUntilRef.current = 1
-        messagesEndRef.current?.scrollIntoView({ behavior: 'instant' })
-      }
-
       lastScrollTopRef.current = scrollTop
 
-      // ---- 向上滚动加载更多（内存分页窗口 或 从 DB 回补）----
+      // ---- 向上滚动 → 预取更早历史 ----
       const sid = chatState.value.currentSessionId
       if (
         scrollTop < SCROLL_TOP_THRESHOLD &&
-        !loadingMoreRef.current &&
-        (displayStartRef.current > 0 ||
-          (sid && sessionStore.hasMoreMessages(sid)))
+        sid &&
+        sessionStore.hasMoreMessages(sid)
       ) {
-        loadMoreHandle()
+        void loadOlder()
       }
+
+      // 滚动停止后重新测量：平滑跳转时虚拟库会跳过「途经」条目的测量，
+      // 它们会按估算高度摆放而与相邻条目重叠；静止后统一校正一次。
+      if (remeasureTimer) clearTimeout(remeasureTimer)
+      remeasureTimer = setTimeout(remeasureRenderedItems, 180)
     }
 
     container.addEventListener('scroll', onScroll, { passive: true })
-    return () => container.removeEventListener('scroll', onScroll)
+    return () => {
+      container.removeEventListener('scroll', onScroll)
+      if (remeasureTimer) clearTimeout(remeasureTimer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-  async function loadMoreHandle() {
-    // ① 内存中还有更早的消息（显示分页）→ 只移动窗口，无需访问 DB
-    if (displayStartRef.current > 0) {
-      loadingMoreRef.current = true
-      setIsLoadingMore(true)
-      const { scrollTop, scrollHeight } = messagesContainerRef.current
-      loadMoreSnapshotRef.current = { scrollTop, scrollHeight }
-      setDisplayStart((prev) => Math.max(0, prev - LOAD_MORE_STEP))
-      return
-    }
-    // ② 内存已到最旧 → 从 SQLite 回补更早的历史（前插）
-    const sid = chatState.value.currentSessionId
-    if (!sid || !sessionStore.hasMoreMessages(sid)) return
+
+  // ==================== 内容不足一屏时自动补足（避免无滚动条卡住） ====================
+  useLayoutEffect(() => {
+    if (!hasMoreInDb || loadingOlderRef.current) return
     const el = messagesContainerRef.current
-    if (el) {
-      pendingPrependRef.current = {
-        scrollTop: el.scrollTop,
-        scrollHeight: el.scrollHeight,
+    if (!el) return
+    if (rowVirtualizer.getTotalSize() <= el.clientHeight) {
+      void loadOlder()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, hasMoreInDb])
+
+  // ==================== 贴底状态变化：请求滚到底部事件 ====================
+  useEffect(() => {
+    const uninstall = commentEvent.on('requestScrollToBottom', () => {
+      if (rowVirtualizer.isAtEnd(AT_BOTTOM_THRESHOLD)) {
+        rowVirtualizer.scrollToEnd({ behavior: 'instant' })
       }
-    }
-    loadingMoreRef.current = true
-    setIsLoadingMore(true)
-    const ok = await sessionStore.loadOlderMessages(sid)
-    if (!ok || sid !== chatState.value.currentSessionId) {
-      // 加载失败或已切换会话：复位状态，丢弃锚点
-      pendingPrependRef.current = null
-      loadingMoreRef.current = false
-      setIsLoadingMore(false)
-      return
-    }
-    const s = sessionStore.getSession(sid)
-    if (s) setMessages([...s.messages])
-  }
+    })
+    return () => void uninstall()
+  }, [rowVirtualizer])
 
-  // ==================== 锚点点击：自动加载未分页的消息并跳转 ====================
-  const pendingScrollRef = useRef<string | null>(null)
+  // ==================== 锚点点击：跳转到指定消息（必要时按需回补历史） ====================
+  const scrollToMessage = useCallback(
+    async (msgId: string) => {
+      const sid = chatState.value.currentSessionId
+      if (!sid) return
 
-  const scrollToMessage = useCallback((msgId: string) => {
-    const tryScroll = () => {
-      const el = document.querySelector(`[data-msg-id="${msgId}"]`)
-      if (el) {
-        pendingScrollRef.current = null
-        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      // ① 已在内存 → 直接跳（count 已包含该消息，可立即跳转）
+      const inMemory = messagesRef.current.findIndex((m) => m.id === msgId)
+      if (inMemory >= 0) {
+        requestAnimationFrame(() => jumpTo(inMemory))
         return
       }
-      if (displayStartRef.current > 0) {
-        loadMoreHandle()
-        // 等待 React 渲染新加载的消息后重试
-        setTimeout(tryScroll, 70)
+
+      // ② 尚未回补到内存：逐页从 SQLite 拉取，直到找到该消息
+      setIsLoadingOlder(true)
+      // 显示「定位中」提示；延迟 150ms，避免极短加载时 loading 一闪而过
+      if (jumpLoadingTimerRef.current) clearTimeout(jumpLoadingTimerRef.current)
+      jumpLoadingTimerRef.current = setTimeout(() => {
+        jumpLoadingTimerRef.current = null
+        setJumpLoadingId(msgId)
+      }, 150)
+      try {
+        let idx = -1
+        let guard = 0
+        while (
+          idx < 0 &&
+          sessionStore.hasMoreMessages(sid) &&
+          guard++ < 1000
+        ) {
+          const ok = await sessionStore.loadOlderMessages(sid)
+          if (sid !== chatState.value.currentSessionId) return
+          const s = sessionStore.getSession(sid)
+          if (!s) return
+          idx = s.messages.findIndex((m) => m.id === msgId)
+          // 没有进展（失败 / 已到最旧）→ 停止，避免死循环
+          if (!ok && idx < 0) break
+        }
+        const s = sessionStore.getSession(sid)
+        if (!s) return
+        setMessages([...s.messages])
+        const finalIdx = s.messages.findIndex((m) => m.id === msgId)
+        // 等 messages 提交后（layout effect）再跳，确保 count 已更新
+        if (finalIdx >= 0) pendingJumpIdRef.current = msgId
+      } finally {
+        if (jumpLoadingTimerRef.current) {
+          clearTimeout(jumpLoadingTimerRef.current)
+          jumpLoadingTimerRef.current = null
+        }
+        setJumpLoadingId(null)
+        setIsLoadingOlder(false)
       }
-    }
-    pendingScrollRef.current = msgId
-    tryScroll()
-  }, [])
+    },
+    [jumpTo, setMessages],
+  )
+
+  /**
+   * 锚点圆点列表（memo）：仅在「用户消息集合」或活跃项/跳转回调变化时重建。
+   * 长会话下圆点可能上千个，必需避免流式 token 高频更新时反复创建。
+   */
+  const anchorDots = useMemo(
+    () =>
+      anchorUsers.slice(-MAX_ANCHOR_DOTS).map((u) => (
+        <Tooltip key={u.id} content={u.preview || ''} direction="left">
+          <button
+            className={`msg-anchor-dot${activeUserMsgId === u.id ? ' active' : ''}${
+              jumpLoadingId === u.id ? ' loading' : ''
+            }`}
+            onClick={() => void scrollToMessage(u.id)}
+            type="button"
+            aria-label={t('跳转到该消息')}
+          />
+        </Tooltip>
+      )),
+    [anchorUsers, activeUserMsgId, scrollToMessage, jumpLoadingId],
+  )
 
   // 锚点列表滚动到底部 + active 指向最后一条用户消息
   const prevSessionRef = useRef<string | null>(null)
   useEffect(() => {
-    const userMessages = messages.filter((m) => m.role === 'user')
     if (userMessages.length === 0) return
     const lastUserMsg = userMessages[userMessages.length - 1]
 
@@ -544,7 +589,7 @@ function ChatMessageList({
     prevSessionRef.current = sessionId
 
     // 切换会话 或 用户正在底部 → 跟随最新用户消息
-    if (isNewSession || bottomNear.current) {
+    if (isNewSession || rowVirtualizer.isAtEnd(AT_BOTTOM_THRESHOLD)) {
       activeMsgIdRef.current = lastUserMsg.id
       setActiveUserMsgId(lastUserMsg.id)
       requestAnimationFrame(() => {
@@ -552,6 +597,7 @@ function ChatMessageList({
         if (anchorList) anchorList.scrollTop = anchorList.scrollHeight
       })
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, sessionId])
 
   // activeUserMsgId 变化时，如果对应点不在锚点列表可视区，自动滚过去
@@ -571,16 +617,6 @@ function ChatMessageList({
     }
   }, [activeUserMsgId])
 
-  // ==================== 从 store 同步消息到 UI ====================
-  const syncMessagesToUI = useCallback(
-    (sessionId: string) => {
-      if (sessionId !== chatState.value.currentSessionId) return
-      const s = sessionStore.getSession(sessionId)
-      if (s) setMessages([...s.messages])
-    },
-    [setMessages],
-  )
-
   // MessageBubble 已 memo，这里用稳定的回调避免每次重渲染都改变 props 引用
   const handleEditBubble = useCallback(
     (msg: string) => setText(msg),
@@ -598,9 +634,13 @@ function ChatMessageList({
 
   // 滚动到底部按钮点击
   const handleScrollToBottom = useCallback(() => {
-    userScrollBlockUntilRef.current = 0
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [])
+    const count = messagesRef.current.length
+    if (count === 0) return
+    rowVirtualizer.scrollToIndex(count - 1, {
+      align: 'end',
+      behavior: 'smooth',
+    })
+  }, [rowVirtualizer])
 
   function handleResume() {
     const sid = chatState.value.currentSessionId
@@ -649,72 +689,76 @@ function ChatMessageList({
         </div>
       )}
 
-      {/* 消息列表 */}
+      {/* 消息列表（虚拟滚动：仅渲染视口附近的若干条） */}
       <div
         className="chat-messages-container"
         style={{
           opacity: hide ? 0 : 1,
         }}
         ref={messagesContainerRef}>
-        {displayedMessages.length === 0 && (
-          <div style={{ marginTop: 'auto' }} />
-        )}
+        <div
+          className="vm-list"
+          style={{
+            height: rowVirtualizer.getTotalSize(),
+            width: '100%',
+            position: 'relative',
+          }}>
+          {/* 加载更多提示（点击可手动回补更早历史） */}
+          {hasMoreInDb && (
+            <div
+              className="load-more-hint"
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                height: LOAD_MORE_HINT_HEIGHT,
+              }}
+              onClick={() => {
+                if (!isLoadingOlder) void loadOlder()
+              }}>
+              {isLoadingOlder ? t('加载更多消息...') : t('点击查看更多')}
+            </div>
+          )}
 
-        {/* 加载更多提示 */}
-        {hasMore && (
-          <div
-            className="load-more-hint"
-            onClick={() => {
-              if (!isLoadingMore) {
-                loadMoreHandle()
-              }
-            }}>
-            {isLoadingMore ? t('加载更多消息...') : t('点击查看更多')}
-          </div>
-        )}
-
-        {displayedMessages.map((msg) => (
-          <div
-            key={msg.id}
-            className="message-item-wrap"
-            data-msg-id={msg.role === 'user' ? msg.id : undefined}>
-            <MessageBubble
-              onEdit={handleEditBubble}
-              onDelete={handleDeleteBubble}
-              message={msg}
-              toolResults={toolResultsFor(msg)}
-            />
-          </div>
-        ))}
-        <div style={{ padding: '15px 0' }}></div>
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* 用户消息锚点列表 — 全部消息，最多展示 12 个，超出可滚动 */}
-      {userMessages.length > 1 && (
-        <div className="msg-anchor-list">
-          {userMessages.slice(-MAX_ANCHOR_DOTS).map((msg) => {
-            const msgText =
-              typeof msg.content === 'string'
-                ? msg.content
-                : msg.content
-                    .filter((b) => b.type === 'text')
-                    .map((b) => ('text' in b ? b.text : ''))
-                    .join('')
+          {virtualItems.map((vi) => {
+            const msg = messages[vi.index]
+            if (!msg) return null
             return (
-              <Tooltip
-                key={msg.id}
-                content={msgText.slice(0, 420) || ''}
-                direction="left">
-                <button
-                  className={`msg-anchor-dot${activeUserMsgId === msg.id ? ' active' : ''}`}
-                  onClick={() => scrollToMessage(msg.id)}
-                  type="button"
-                  aria-label={t('跳转到该消息')}
+              <div
+                key={vi.key}
+                data-index={vi.index}
+                ref={rowVirtualizer.measureElement}
+                className="message-item-wrap"
+                data-msg-id={msg.role === 'user' ? msg.id : undefined}
+                style={{
+                  position: 'absolute',
+                  top: vi.start,
+                  left: 0,
+                  width: '100%',
+                }}>
+                <MessageBubble
+                  onEdit={handleEditBubble}
+                  onDelete={handleDeleteBubble}
+                  message={msg}
+                  toolResults={toolResultsFor(msg)}
                 />
-              </Tooltip>
+              </div>
             )
           })}
+        </div>
+      </div>
+
+      {/* 用户消息锚点列表 — 覆盖整个会话的全量 user 消息，可视区内滚动查找 */}
+      {anchorUsers.length > 1 && (
+        <div className="msg-anchor-list">{anchorDots}</div>
+      )}
+
+      {/* 锚点定位中：点击的锚点在回补历史（需等待时显示） */}
+      {jumpLoadingId && (
+        <div className="msg-jump-loading" aria-live="polite">
+          <span className="msg-jump-spinner" />
+          <span>{t('定位中...')}</span>
         </div>
       )}
 

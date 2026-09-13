@@ -342,6 +342,8 @@ function ChatView() {
     setMessages([...session.messages])
     // 懒加载：会话激活时从 SQLite 拉取历史消息（仅首次）
     await sessionStore.ensureMessagesLoaded(sessionId)
+    // 锚点列表需要「全量用户消息」：只拉 id + 摘要（不含 AI/工具正文，体积小）
+    void sessionStore.ensureUserMessageIndex(sessionId)
     const updated = sessionStore.getSession(sessionId)
     if (updated && chatState.value.currentSessionId === sessionId) {
       setMessages([...updated.messages])

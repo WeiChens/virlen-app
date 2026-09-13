@@ -23,6 +23,8 @@ export interface SessionRepo {
     sessionId: string,
     opts?: MessagePageOptions,
   ): Promise<MessagePage>
+  /** 获取会话内全部用户消息的轻量索引（右侧锚点列表用，不含 AI/工具正文） */
+  getUserMessageRefs(sessionId: string): Promise<UserMessageRef[]>
   /** 批量写入变化的会话，删除不存在的会话 */
   saveDiff(oldSessions: Session[], newSessions: Session[]): void
   /** 直接持久化单个会话元数据 */
@@ -45,6 +47,18 @@ export interface MessagePageOptions {
   limit?: number
   /** 取该 rowid 之前（更早）的消息；不传则取尾部窗口 */
   beforeRowid?: number | null
+}
+
+/**
+ * 用户消息轻量索引项（与 Rust 端 `UserMessageRef` 对应）
+ *
+ * 只含 id + 纯文本摘要，不含 assistant / tool 消息的正文，
+ * 用于一次性拉回全量用户消息供右侧锚点列表渲染。
+ */
+export interface UserMessageRef {
+  id: string
+  /** 纯文本摘要（后端已截断） */
+  preview: string
 }
 
 class SessionRepoImpl implements SessionRepo {
@@ -83,6 +97,17 @@ class SessionRepoImpl implements SessionRepo {
       })
     } catch {
       return { messages: [], hasMore: false, oldestRowid: null }
+    }
+  }
+
+  /** 获取会话内全部用户消息的轻量索引（id + 摘要，不含 AI/工具正文） */
+  async getUserMessageRefs(sessionId: string): Promise<UserMessageRef[]> {
+    try {
+      return await invoke<UserMessageRef[]>('cmd_get_user_message_refs', {
+        sessionId,
+      })
+    } catch {
+      return []
     }
   }
 

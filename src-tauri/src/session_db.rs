@@ -32,6 +32,18 @@ pub struct MessagePage {
     pub oldest_rowid: Option<i64>,
 }
 
+/// 会话内「用户消息」的轻量索引项（右侧锚点列表用）
+///
+/// 只包含 id 与纯文本摘要，不含 assistant / tool 消息的大量正文，
+/// 因此即使会话有数千条消息，也能一次性取回而不重新引入加载卡顿。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserMessageRef {
+    pub id: String,
+    /// 纯文本摘要（已截断）
+    pub preview: String,
+}
+
 // ==================== Trait ====================
 
 #[async_trait]
@@ -65,6 +77,8 @@ pub trait SessionRepo: Send + Sync {
         limit: usize,
         before_rowid: Option<i64>,
     ) -> Result<MessagePage, String>;
+    /// 获取会话内全部「用户消息」的轻量索引（id + 纯文本摘要，按插入顺序升序）
+    async fn get_user_message_refs(&self, session_id: &str) -> Result<Vec<UserMessageRef>, String>;
     /// 删除会话及其全部消息
     async fn delete_session(&self, session_id: &str) -> Result<(), String>;
 }
@@ -117,6 +131,12 @@ impl SessionRepo for NoopSessionRepo {
             oldest_rowid: None,
         })
     }
+    async fn get_user_message_refs(
+        &self,
+        _session_id: &str,
+    ) -> Result<Vec<UserMessageRef>, String> {
+        Ok(Vec::new())
+    }
     async fn delete_session(&self, _session_id: &str) -> Result<(), String> {
         Ok(())
     }
@@ -168,6 +188,8 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+-- 锚点列表的「用户消息轻量索引」查询：先按 (session_id, role) 定位，避免读取全部正文行
+CREATE INDEX IF NOT EXISTS idx_messages_session_role ON messages(session_id, role);
 "#;
 
 impl SqliteSessionRepo {
@@ -275,6 +297,26 @@ fn message_from_row(row: &Row) -> Result<Message, String> {
 fn message_from_row_with_id(row: &Row) -> Result<(i64, Message), String> {
     let rowid: i64 = row.get("message_rowid").map_err(|e| e.to_string())?;
     Ok((rowid, message_from_row(row)?))
+}
+
+/// 从消息 content 中提取纯文本（content 为字符串或 `[{type:"text",text}]` 块数组），
+/// 并截断到 `max_chars` 个字符（供锚点列表摘要用，避免把图片 base64 等大字段带出去）。
+fn content_text_preview(content: &serde_json::Value, max_chars: usize) -> String {
+    let mut text = String::new();
+    match content {
+        serde_json::Value::String(s) => text.push_str(s),
+        serde_json::Value::Array(blocks) => {
+            for block in blocks {
+                if block.get("type").and_then(|v| v.as_str()) == Some("text") {
+                    if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
+                        text.push_str(t);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    text.chars().take(max_chars).collect()
 }
 
 // ==================== 参数序列化 ====================
@@ -599,6 +641,38 @@ INSERT INTO messages (
         .map_err(|e| format!("DB task join error: {}", e))?
     }
 
+    async fn get_user_message_refs(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<UserMessageRef>, String> {
+        let conn = self.conn.clone();
+        let session_id = session_id.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Vec<UserMessageRef>, String> {
+            let conn = conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, content FROM messages \
+                     WHERE session_id=?1 AND role='user' ORDER BY rowid ASC",
+                )
+                .map_err(|e| format!("准备用户消息索引查询失败: {}", e))?;
+            let rows = stmt
+                .query_map(params![session_id], |row| {
+                    let id: String = row.get("id")?;
+                    let content_json: String = row.get("content")?;
+                    let content: serde_json::Value = serde_json::from_str(&content_json)
+                        .map_err(|e| row_err(format!("反序列化消息内容失败: {}", e)))?;
+                    Ok(UserMessageRef {
+                        id,
+                        preview: content_text_preview(&content, 420),
+                    })
+                })
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
     async fn delete_session(&self, session_id: &str) -> Result<(), String> {
         let conn = self.conn.clone();
         let session_id = session_id.to_string();
@@ -742,6 +816,24 @@ pub async fn cmd_get_message_page(
         Some(&session_id),
         started,
         result.as_ref().ok().map(|p| p.messages.len()),
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
+}
+
+/// 获取会话内全部用户消息的轻量索引（右侧锚点列表用，不含 AI / 工具正文）
+#[tauri::command]
+pub async fn cmd_get_user_message_refs(
+    state: tauri::State<'_, Arc<dyn SessionRepo>>,
+    session_id: String,
+) -> Result<Vec<UserMessageRef>, String> {
+    let started = crate::telemetry::now_ms();
+    let result = state.get_user_message_refs(&session_id).await;
+    track_db(
+        "get_user_message_refs",
+        Some(&session_id),
+        started,
+        result.as_ref().ok().map(|v| v.len()),
         result.as_ref().err().map(|s| s.as_str()),
     );
     result
@@ -1071,5 +1163,50 @@ mod tests {
         assert!(p.messages.is_empty());
         assert!(!p.has_more);
         assert!(p.oldest_rowid.is_none());
+    }
+
+    #[tokio::test]
+    async fn user_message_refs_only_returns_user_messages_in_order() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+        let mut assistant = test_message("m2", "assistant");
+        assistant.content = json!("assistant reply");
+        // 带图片块 + 文本块的 user 消息：摘要应只取 text 块
+        let mut with_image = test_message("m3", "user");
+        with_image.content = json!([
+            { "type": "image_url", "image_url": { "url": "data:image/png;base64,AAAA" } },
+            { "type": "text", "text": "看看这张图" }
+        ]);
+        repo.append_messages(
+            "s1",
+            &[
+                test_message("m1", "user"),
+                assistant,
+                with_image,
+                test_message("m4", "tool"),
+            ],
+            200,
+        )
+        .await
+        .unwrap();
+
+        let refs = repo.get_user_message_refs("s1").await.unwrap();
+        let ids: Vec<&str> = refs.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["m1", "m3"], "只返回 user 消息且保持插入顺序");
+        assert_eq!(refs[0].preview, "hello");
+        assert_eq!(refs[1].preview, "看看这张图");
+    }
+
+    #[tokio::test]
+    async fn user_message_refs_truncates_preview_to_420_chars() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+        let mut long = test_message("m1", "user");
+        long.content = json!("字".repeat(600));
+        repo.append_messages("s1", &[long], 200).await.unwrap();
+
+        let refs = repo.get_user_message_refs("s1").await.unwrap();
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].preview.chars().count(), 420);
     }
 }

@@ -780,6 +780,7 @@
   "请选择": "Please select",
   "调用 $__total__ 个工具": "Called $__total__ tool(s)",
   "跳转到该消息": "Jump to this message",
+  "定位中...": "Locating...",
   "输入可验证的目标，AI 会自动检查结果...": "Enter a verifiable goal; the AI will check the result automatically...",
   "输入搜索内容...": "Enter search content...",
   "输入自定义回复内容": "Enter a custom reply",

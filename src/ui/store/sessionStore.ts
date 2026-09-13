@@ -11,7 +11,7 @@
  */
 import { action, makeObservable, observable, runInAction } from 'mobx'
 import type { Session } from '@/types'
-import type { SessionRepo } from '@/infrastructure/sessionRepo'
+import type { SessionRepo, UserMessageRef } from '@/infrastructure/sessionRepo'
 import { sessionRepo } from '@/infrastructure/sessionRepo'
 import { track, trackError, hashText } from '@/utils/telemetry'
 
@@ -26,14 +26,24 @@ export interface MessagePaging {
   oldestRowid: number | null
 }
 
+/** 稳定的空数组引用（未加载索引时共用，保证 useMemo 依赖稳定） */
+const EMPTY_USER_INDEX: UserMessageRef[] = []
+
 class SessionStore {
   value: {
     sessions: Session[]
     /** 各会话的消息分页状态（参与 observable，驱动 UI「查看更多」显隐） */
     messagePaging: Record<string, MessagePaging>
-  } = { sessions: [], messagePaging: {} }
+    /**
+     * 各会话的「全量用户消息索引」（右侧锚点列表用）。
+     * 只含 id + 摘要，不含 AI/工具正文，可一次性覆盖整个会话历史。
+     */
+    userMessageIndex: Record<string, UserMessageRef[]>
+  } = { sessions: [], messagePaging: {}, userMessageIndex: {} }
   /** 已加载过消息的会话 id 集合（避免重复拉取） */
   private loadedMessageIds = new Set<string>()
+  /** 已加载过用户消息索引的会话 id 集合 */
+  private loadedUserIndexIds = new Set<string>()
 
   constructor(private repo: SessionRepo) {
     makeObservable(this, {
@@ -54,9 +64,11 @@ class SessionStore {
       const sessions = await this.repo.loadAll()
       // DB 会话消息未加载，切到该会话时懒加载
       this.loadedMessageIds.clear()
+      this.loadedUserIndexIds.clear()
       runInAction(() => {
         this.value.sessions = sessions
         this.value.messagePaging = {}
+        this.value.userMessageIndex = {}
       })
       // ⚠️ 必须同步更新 _lastSaved 基线，否则 persist() 的 debounced saveDiff
       // 传过去的 oldSessions=[]，导致任何删除操作都无法被识别（diff 认为没有要删的东西）
@@ -71,6 +83,7 @@ class SessionStore {
       runInAction(() => {
         this.value.sessions = []
         this.value.messagePaging = {}
+        this.value.userMessageIndex = {}
       })
       this._lastSaved = []
       track('session.load', {
@@ -136,11 +149,57 @@ class SessionStore {
     return this.value.messagePaging[sessionId]?.hasMoreOlder ?? false
   }
 
+  // ========== 用户消息轻量索引（右侧锚点列表） ==========
+
+  /**
+   * 确保会话的「全量用户消息索引」已加载。
+   * 只拉 user 消息的 id + 摘要（不含 AI / 工具正文），因此可一次性覆盖整个会话历史，
+   * 不会重新引入「切换会话时搬运数千条消息」的卡顿。
+   */
+  async ensureUserMessageIndex(sessionId: string): Promise<void> {
+    if (this.loadedUserIndexIds.has(sessionId)) return
+    const idx = this.value.sessions.findIndex((s) => s.id === sessionId)
+    if (idx === -1) return
+    try {
+      const refs = await this.repo.getUserMessageRefs(sessionId)
+      runInAction(() => {
+        this.value.userMessageIndex = {
+          ...this.value.userMessageIndex,
+          [sessionId]: refs,
+        }
+      })
+      this.loadedUserIndexIds.add(sessionId)
+    } catch {
+      // 拉取失败不标记，下次激活重试
+    }
+  }
+
+  /** 获取会话的全量用户消息索引（未加载时返回稳定的空数组） */
+  getUserMessageIndex(sessionId: string): UserMessageRef[] {
+    return this.value.userMessageIndex[sessionId] ?? EMPTY_USER_INDEX
+  }
+
   /**
    * 向上回补一页更早的消息（前插到消息列表头部）。
+   * 同一会话的并发调用会复用同一个请求，避免把同一页重复前插两次。
    * @returns 是否实际加载到了更早的消息
    */
-  async loadOlderMessages(sessionId: string): Promise<boolean> {
+  loadOlderMessages(sessionId: string): Promise<boolean> {
+    const inflight = this.olderLoads.get(sessionId)
+    if (inflight) return inflight
+    const task = this.loadOlderMessagesInner(sessionId).finally(() => {
+      if (this.olderLoads.get(sessionId) === task) {
+        this.olderLoads.delete(sessionId)
+      }
+    })
+    this.olderLoads.set(sessionId, task)
+    return task
+  }
+
+  /** 正在回补更早消息的请求（按会话去重） */
+  private olderLoads = new Map<string, Promise<boolean>>()
+
+  private async loadOlderMessagesInner(sessionId: string): Promise<boolean> {
     const paging = this.value.messagePaging[sessionId]
     if (!paging || !paging.hasMoreOlder) return false
     const started = Date.now()
@@ -234,8 +293,17 @@ class SessionStore {
         if (!drop.has(id)) next[id] = paging
       }
       this.value.messagePaging = next
+      const nextIndex: Record<string, UserMessageRef[]> = {}
+      for (const [id, refs] of Object.entries(this.value.userMessageIndex)) {
+        if (!drop.has(id)) nextIndex[id] = refs
+      }
+      this.value.userMessageIndex = nextIndex
     })
-    for (const id of ids) this.loadedMessageIds.delete(id)
+    for (const id of ids) {
+      this.loadedMessageIds.delete(id)
+      this.loadedUserIndexIds.delete(id)
+      this.olderLoads.delete(id)
+    }
   }
 
   // ========== 持久化 ==========
@@ -287,9 +355,14 @@ class SessionStore {
       this.value.sessions = [...this.value.sessions, session]
       // 新建会话：内存态即全部消息，标记已加载避免被 DB 空数据覆盖
       this.loadedMessageIds.add(session.id)
+      this.loadedUserIndexIds.add(session.id)
       this.value.messagePaging = {
         ...this.value.messagePaging,
         [session.id]: { hasMoreOlder: false, oldestRowid: null },
+      }
+      this.value.userMessageIndex = {
+        ...this.value.userMessageIndex,
+        [session.id]: [],
       }
     }
     this.persist()
@@ -395,7 +468,10 @@ class SessionStore {
     const oldSessions = this.value.sessions
     this.value.sessions = []
     this.value.messagePaging = {}
+    this.value.userMessageIndex = {}
     this.loadedMessageIds.clear()
+    this.loadedUserIndexIds.clear()
+    this.olderLoads.clear()
     this.repo.saveDiff(oldSessions, [])
   }
 
