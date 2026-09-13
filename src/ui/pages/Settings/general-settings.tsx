@@ -19,6 +19,7 @@ import FolderSvg from '@/ui/components/icons/FolderSvg'
 import Select from '@/ui/components/shared/Select'
 import { t, tpl } from '@/ui/i18n'
 import './general-settings.scss'
+import { openUrl } from '@tauri-apps/plugin-opener'
 
 function formatMaxTokens(v: number): string {
   return v >= 1024 ? (v / 1024).toFixed(0) + 'K' : String(v)
