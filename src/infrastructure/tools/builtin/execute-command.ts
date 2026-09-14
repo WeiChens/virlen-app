@@ -266,7 +266,7 @@ const RISK_LABELS: Record<string, { label: string; hint: string }> = {
 }
 
 /** 获取翻译后的风险标签 */
-function getRiskInfo(risk: string): { label: string; hint: string } {
+export function getRiskInfo(risk: string): { label: string; hint: string } {
   const info = RISK_LABELS[risk]
   if (!info) return { label: t('执行命令'), hint: '' }
   return {
@@ -445,11 +445,12 @@ async function killProcessTree(
   }
 }
 
-async function runCommand(
+export async function runCommand(
   cmdStr: string,
   cwd: string,
   timeoutMs: number,
   ctx: ToolContext,
+  toolName: string = 'execute_command',
 ): Promise<ToolResult> {
   const platform = await detectPlatform()
   const isWin = platform === 'windows'
@@ -527,7 +528,7 @@ fi`,
     }
 
     toolOutputStore.register(ctx.toolCallId, {
-      toolName: 'execute_command',
+      toolName,
       output: '',
       kill: () => void doKill(),
     })

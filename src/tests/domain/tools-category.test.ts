@@ -85,6 +85,7 @@ describe('getCategoryId', () => {
     expect(getCategoryId('read_file')).toBe('file')
     expect(getCategoryId('web_search')).toBe('web')
     expect(getCategoryId('execute_command')).toBe('execute')
+    expect(getCategoryId('execute_script')).toBe('execute')
     expect(getCategoryId('vision_analyze')).toBe('vision')
     expect(getCategoryId('list_skills')).toBe('skill')
     expect(getCategoryId('get_current_time')).toBe('system')

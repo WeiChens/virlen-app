@@ -3,6 +3,7 @@ import DefaultMessage from './DefaultMessage'
 import WebFetchMessage from './WebFetchMessage'
 import GetCurrentTimeMessage from './GetCurrentTimeMessage'
 import ExecuteCommandMessage from './ExecuteCommandMessage'
+import ExecuteScriptMessage from './ExecuteScriptMessage'
 import EditFileMessage from './EditFileMessage'
 import ReadFileMessage from './ReadFileMessage'
 import SearchFileByNameMessage from './SearchFileByNameMessage'
@@ -47,6 +48,7 @@ register(new UserChoiceMessage())
 register(new WebFetchMessage())
 register(new GetCurrentTimeMessage())
 register(new ExecuteCommandMessage())
+register(new ExecuteScriptMessage())
 register(new EditFileMessage())
 register(new WriteFileMessage())
 register(new ReadFileMessage())

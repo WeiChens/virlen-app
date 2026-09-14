@@ -40,6 +40,7 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     label: '代码执行',
     toolNames: [
       'execute_command',
+      'execute_script',
     ],
   },
   {

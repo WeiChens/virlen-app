@@ -375,15 +375,16 @@ export const rustEngine: AgentEnginePort = {
               if (id) toolOutputStore.remove(id)
             } else if (
               id &&
-              data.name === 'execute_command' &&
+              (data.name === 'execute_command' ||
+                data.name === 'execute_script') &&
               !toolOutputStore.get(id)
             ) {
               // 工具刚宣布/即将执行：立即注册 kill 入口。
-              // Rust 原生 execute_command 若长时间无输出（如 sleep、慢启动），
+              // Rust 原生 execute_command / execute_script 若长时间无输出（如 sleep、慢启动），
               // 等第一条 agent:tool-output 才注册的话会一直没有「终止」按钮。
               const toolCallId = id
               toolOutputStore.register(toolCallId, {
-                toolName: 'execute_command',
+                toolName: data.name,
                 output: '',
                 kill: () => {
                   invoke('agent_kill_command', { toolCallId }).catch(() => {})

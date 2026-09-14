@@ -159,7 +159,7 @@ fn tool_category(tool_name: &str) -> &'static str {
         "read_file" | "write_file" | "edit_file" | "delete_file" | "copy_move_file"
         | "list_files" | "file_info" | "mkdir" => "file",
         "search_files_by_name" | "search_text_in_files" => "search",
-        "execute_command" => "execute",
+        "execute_command" | "execute_script" => "execute",
         "search_knowledge_base" | "list_knowledge_bases" | "list_knowledge_base_documents"
         | "get_knowledge_base_document" | "write_to_knowledge_base"
         | "delete_knowledge_base_document" => "knowledge_base",
