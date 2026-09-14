@@ -14,7 +14,6 @@ import {
   clearTelemetry,
   isTelemetryBuildDisabled,
 } from '@/utils/telemetry'
-import { openUrl } from '@tauri-apps/plugin-opener'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
 import Select from '@/ui/components/shared/Select'
 import { t, tpl } from '@/ui/i18n'
