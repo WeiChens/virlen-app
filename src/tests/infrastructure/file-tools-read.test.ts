@@ -23,7 +23,7 @@ vi.mock('@/services/security-service', () => ({
 }))
 
 // 引入文件工具模块（触发 read_file 等工具注册）
-import '@/infrastructure/tools/file-tools'
+import '@/infrastructure/tools/file'
 
 function makeCtx(): ToolContext {
   return {

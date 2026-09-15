@@ -49,7 +49,7 @@ vi.mock('@/ui/i18n', () => ({
 
 // 导入知识库工具模块（副作用：注册 3 个工具到 registry）
 // 需要在 mock 之后 import
-import '@/infrastructure/tools/builtin/knowledge-base'
+import '@/infrastructure/tools/knowledge-base'
 
 /** 获取已注册的 Tool 执行器 */
 async function getExecutor(name: string): Promise<ToolExecutor> {

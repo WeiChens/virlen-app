@@ -11,7 +11,7 @@ import {
   classifyCommand,
   extractCommandName,
   extractAllCommandNames,
-} from '@/infrastructure/tools/builtin/execute-command'
+} from '@/infrastructure/tools/execute/common'
 
 describe('extractAllCommandNames 引号感知分割', () => {
   it('引号内的 ; 不应被切开', () => {

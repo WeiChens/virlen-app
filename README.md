@@ -107,11 +107,16 @@ src/
 │   │   └── factory.ts     # Provider factory
 │   ├── securityRepo/ # Security configuration persistence
 │   ├── sessionRepo/  # Session persistence
-│   ├── tools/        # Tool implementations
-│   │   ├── builtin/      # Built-in tools (time, command execution, search, web fetch)
-│   │   ├── file-tools/   # File operation tools (read, write, edit, copy, move, list, search)
-│   │   ├── skill-tools/  # Skill management tools
-│   │   └── vision/       # Vision analysis tools
+│   ├── tools/        # Tool implementations — one file per tool, grouped by category
+│   │   ├── file/          # File ops (read, write, edit, delete, copy/move, list, info, mkdir)
+│   │   ├── search/        # Filename & content search
+│   │   ├── execute/       # Command / script execution (+ approval & risk classification)
+│   │   ├── knowledge-base/# Knowledge base tools
+│   │   ├── web/           # Web search & fetch
+│   │   ├── vision/        # Vision analysis tool
+│   │   ├── skill/         # Skill management tools
+│   │   ├── system/        # System tools (time, user choice)
+│   │   └── output-store.ts# Cross-layer tool output stream (UI / services)
 │   └── vision/       # Vision service implementation
 │
 ├── services/         # Application Service Layer — orchestrates business workflows

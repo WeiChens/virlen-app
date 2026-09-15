@@ -6,7 +6,7 @@ import {
   ToolOutput,
   toolOutputStore,
 } from '@/infrastructure/tools/output-store'
-import { processTerminalOutput } from '@/infrastructure/tools/terminal-output'
+import { processTerminalOutput } from '@/infrastructure/tools/execute/common'
 
 function RunningOutput({
   toolCallId,

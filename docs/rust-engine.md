@@ -48,7 +48,8 @@ LLM 调用 → 工具执行 → 结果合并 →（迭代模式）验证反馈�
 | `event_sink.rs` | `onEvent` 回调 | 事件出口（Tauri `app.emit`） |
 | `bridge.rs` | — | 双向桥接状态（工具/交互/Provider 流） |
 | `llm_round.rs` | `llm-round.ts` | LLM 轮次（流式/非流式、tool_use 收集） |
-| `tool_executor.rs` | `tool-executor.ts` | 工具步骤执行（桥接 JS）、用户交互 |
+| `tool_executor.rs` | `tool-executor.ts` | 工具步骤执行（桥接 JS + 原生优先分发）、用户交互 |
+| `native_tools/` | `infrastructure/tools/*`（toolRegistry） | 原生工具执行器（18 个，按分类拆子模块，见第八节） |
 | `llm_loop.rs` | `llm-loop.ts` | 「LLM→工具」共享编排 |
 | `verifier.rs` | `verifier.ts` | 迭代验证器 |
 | `iteration.rs` | `iteration-controller.ts` | 执行→验证→修复循环 |
@@ -122,7 +123,8 @@ agent:provider-request { requestId, providerType, providerId, apiKey, baseUrl, r
   - `engine::tests::normal_loop_tool_then_text`：完整循环（LLM→工具→结果→stream_end）
   - `engine::tests::tool_interaction_routes_session`：交互桥 sessionId 路由
   - `engine::tests::cancel_is_not_error_and_keeps_partial`：用户取消不当作错误、partial 保留
-  - `native_tools::tests::test_native_dispatcher_write_read_search`：原生工具分发链路
+  - `native_tools::tests::*` / `native_tools::execute::common::tests::*`：原生工具分发链路、命令风险分类、终端输出解码
+  - `native_tools::execute::execute_command::tests::*`：终止/超时杀进程树（真实 spawn 的集成测试）
   - `session_db::tests::*`：SQLite 会话/消息读写、幂等、替换、删除、排序
   - `deepseek_tokenizer::tests::*`：字节级 BPE 与官方 transformers 输出对齐、字节表、切分
   - `provider::tests::*`：本地图片伪视觉分析（imageVisionAnalyzeOptimize）注入、OpenAI/Anthropic 请求体
@@ -131,7 +133,7 @@ agent:provider-request { requestId, providerType, providerId, apiKey, baseUrl, r
 
 ## 八、P2：高价值工具原生 Rust 化
 
-### 已原生化的工具（`native_tools.rs`，无需 JS 桥往返）
+### 已原生化的工具（`src-tauri/src/agent/native_tools/`，无需 JS 桥往返）
 
 | 工具 | 说明 |
 |---|---|
@@ -142,11 +144,16 @@ agent:provider-request { requestId, providerType, providerId, apiKey, baseUrl, r
 | `search_knowledge_base` / `list_knowledge_bases` / `list_knowledge_base_documents` | 直接调 `rag::get_service()` |
 | `get_knowledge_base_document` / `delete_knowledge_base_document` / `write_to_knowledge_base` | 知识库读写 |
 
+目录与 JS `src/infrastructure/tools/` 一一对应：`file/`（8）、`search/`（2）、`execute/`（2）、
+`knowledge_base/`（6）；每个分类一个 `common.rs`（分类内公共）+ 一个工具一个 `.rs`。
+`mod.rs` 负责 `is_native_tool` / `execute_native_tool` 分发与 `NativeToolOutcome` / `NativeToolCtx` 定义，
+根 `common.rs` 放跨分类公共（`arg_*` 参数取值 + `resolve_safe_path` / `is_path_allowed`）。
+
 ### 安全配置传递（JS → Rust）
 
 `rust-engine.ts` 在 `agent_send_message` 时解析 `resolveSecurityConfig(session)`：
 workspace / approvalMode / skipDirs / blacklist / whitelist / skillsDir。
-Rust 侧 `NativeToolSecurity` 由 `native_tools::resolve_safe_path` / `is_path_allowed`
+Rust 侧 `NativeToolSecurity` 由 `native_tools/common.rs` 的 `resolve_safe_path` / `is_path_allowed`
 执行与前端 `securityService.resolveSafePath` 完全一致的路径校验。
 解析失败 → `security=None` → 工具自动回退 JS 桥。
 
@@ -295,13 +302,13 @@ pub trait SessionRepo: Send + Sync {
 
 | 工具 | TS 实现 | 说明 |
 |---|---|---|
-| `get_current_time` | `infrastructure/tools/builtin/index.ts` | 简单工具，适合首批原生化 |
-| `user_choice` | `infrastructure/tools/builtin/index.ts` | 需用户交互（`UserInteractionRequired` 信号）；`NativeToolOutcome` 已保留交互变体 |
-| `web_fetch` | `infrastructure/tools/builtin/web-fetch.ts` | 需处理重定向/超时/HTML→MD |
-| `web_search` | `builtin/web-search.ts` + `search-providers/`（tavily/searxng/bocha） | 多搜索提供商适配 |
-| `list_skills` | `infrastructure/tools/skill-tools/index.ts` | 技能扫描 |
-| `read_skill_source` | `infrastructure/tools/skill-tools/index.ts` | 读取技能源码目录 |
-| `vision_analyze`（工具分发） | `infrastructure/tools/vision/index.ts` | 分发走 JS 桥；底层 `vision_service` 已是 Rust Tauri 命令 |
+| `get_current_time` | `infrastructure/tools/system/get-current-time.ts` | 简单工具，适合首批原生化 |
+| `user_choice` | `infrastructure/tools/system/user-choice.ts` | 需用户交互（`UserInteractionRequired` 信号）；`NativeToolOutcome` 已保留交互变体 |
+| `web_fetch` | `infrastructure/tools/web/web-fetch.ts` | 需处理重定向/超时/HTML→MD |
+| `web_search` | `infrastructure/tools/web/web-search.ts` + `search-providers/`（tavily/searxng/bocha） | 多搜索提供商适配 |
+| `list_skills` | `infrastructure/tools/skill/list-skills.ts` | 技能扫描 |
+| `read_skill_source` | `infrastructure/tools/skill/read-skill-source.ts` | 读取技能源码目录 |
+| `vision_analyze`（工具分发） | `infrastructure/tools/vision/vision-analyze.ts` | 分发走 JS 桥；底层 `vision_service` 已是 Rust Tauri 命令 |
 
 ### 4. 系统提示词组装
 
@@ -312,7 +319,7 @@ pub trait SessionRepo: Send + Sync {
 ### 5. 前端职责（天然 JS，无需 Rust 化）
 
 UI 渲染 / 设置管理 / i18n、`export-service` Markdown 导出、`download-service`、
-`update-service` 自动更新、`toolOutputStore` 终端输出流、`command-approval` 审批 UI、
+`update-service` 自动更新、`toolOutputStore` 终端输出流、`tools/execute/common.ts` 的审批注册表与终端输出处理、
 `search-provider-service` 搜索配置等。
 
 ## 十一、实施记录
@@ -330,7 +337,7 @@ UI 渲染 / 设置管理 / i18n、`export-service` Markdown 导出、`download-s
 ### P2（高价值工具原生化）
 
 - `Cargo.toml`：tokio 增加 `process` / `io-util` / `time`
-- `src-tauri/src/agent/native_tools.rs`：新增（约 1500 行，16 个原生工具 + 测试）
+- `src-tauri/src/agent/native_tools/`：新增（按分类拆分的 18 个原生工具 + 分类 `common.rs` + 测试）
 - `src-tauri/src/agent/tool_executor.rs`：原生分发优先 + `NativeToolOutcome` 统一处理
 - `src-tauri/src/agent/types.rs`：`NativeToolSecurity` + `SendMessageOptions.security`
 - `src-tauri/src/agent/llm_loop.rs` / `iteration.rs` / `engine.rs`：安全配置透传

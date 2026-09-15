@@ -4,7 +4,7 @@
  * 从 engine/index.ts 拆分，所有函数为无状态纯函数。
  */
 import { v4 } from '@/utils/uuid'
-import { CmdError } from '@/infrastructure/tools/builtin/execute-command'
+import { CmdError } from '@/infrastructure/tools/execute/common'
 import { checkToolCallStorm } from './storm-breaker'
 import { track, getSessionTrace, truncateText, hashText } from '@/utils/telemetry'
 import { getCategoryId } from '../tools/category'

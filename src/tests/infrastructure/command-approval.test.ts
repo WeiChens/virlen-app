@@ -10,7 +10,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import toolInteractEvent from '@/events/toolInteractEvent'
-import { registerPendingApproval } from '@/infrastructure/tools/builtin/command-approval'
+import { registerPendingApproval } from '@/infrastructure/tools/execute/common'
 import type { ToolExecutorResponse } from '@/domain/tools/types'
 
 describe('command-approval 审批注册表', () => {
