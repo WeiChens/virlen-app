@@ -736,16 +736,16 @@ export async function getPlatform(): Promise<'windows' | 'macos' | 'linux'> {
   }
 }
 
-export function extractReactNodeText(node: ReactNode): string {
+export function extractReactNodeText(node: ReactNode, joinChar = ' '): string {
   if (node == null || typeof node === 'boolean') return '';
   if (typeof node === 'string' || typeof node === 'number') {
     return String(node);
   }
   if (Array.isArray(node)) {
-    return node.map(extractReactNodeText).join('');
+    return node.map(n => extractReactNodeText(n, joinChar)).join(joinChar);
   }
   if (isValidElement(node)) {
-    return extractReactNodeText((node.props as any)?.children);
+    return extractReactNodeText((node.props as any)?.children, joinChar);
   }
   return '';
 }

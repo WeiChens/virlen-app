@@ -426,3 +426,87 @@ describe('execute_script 展开视图：终端 / 文件 tabs', () => {
     toolOutputStore.remove('t-script')
   })
 })
+
+/**
+ * 终端块内置「全屏」动作。
+ * 与 CodeBlock 同构：靠 createPortal + position:fixed 铺满窗口内容区，
+ * 原位终端照常保留（否则消息条目变矮会触发虚拟列表重测量 / 滚动跳动）。
+ */
+describe('TerminalBlock 全屏', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  async function mountTerminalBlock() {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(
+        <TerminalBlock
+          title="Terminal"
+          cmd="ls"
+          segments={[{ kind: 'stdout', text: 'ok' }]}
+        />,
+      )
+    })
+    return { host, root }
+  }
+
+  const fullscreenBtn = (host: HTMLElement) =>
+    host.querySelector('.terminal-fullscreen-btn') as HTMLButtonElement
+  const layer = () =>
+    document.querySelector('.terminal-fullscreen-layer') as HTMLElement | null
+
+  it('header 带内置全屏按钮、不再显示 tips，默认不渲染浮层', async () => {
+    const { host, root } = await mountTerminalBlock()
+
+    expect(fullscreenBtn(host)).toBeTruthy()
+    // header 里的 tips 已移除
+    expect(host.querySelector('.execute-command-header-tips')).toBeNull()
+    expect(layer()).toBeNull()
+
+    await act(async () => root.unmount())
+  })
+
+  it('点击后把 .is-fullscreen 终端挂到 body，原位终端照常保留', async () => {
+    const { host, root } = await mountTerminalBlock()
+
+    await act(async () => fullscreenBtn(host).click())
+
+    const el = layer()
+    expect(el).toBeTruthy()
+    // 必须挂在 body 下（不受消息条目祖先的 transform/overflow 影响才能铺满）
+    expect(el!.parentElement).toBe(document.body)
+    // 浮层里是「铺满」形态，且输出照常渲染
+    expect(
+      el!.querySelector('.execute-command-wrapper.is-fullscreen'),
+    ).toBeTruthy()
+    expect(el!.querySelector('.code-pre-warpper')).toBeTruthy()
+    // 原位终端仍在（没有被搬走），且不是全屏形态
+    expect(host.querySelector('.execute-command-wrapper')).toBeTruthy()
+    expect(
+      host.querySelector('.execute-command-wrapper.is-fullscreen'),
+    ).toBeNull()
+
+    await act(async () => root.unmount())
+  })
+
+  it('再点一次退出，Esc 也能退出', async () => {
+    const { host, root } = await mountTerminalBlock()
+
+    await act(async () => fullscreenBtn(host).click())
+    expect(layer()).toBeTruthy()
+    await act(async () => fullscreenBtn(host).click())
+    expect(layer()).toBeNull()
+
+    await act(async () => fullscreenBtn(host).click())
+    expect(layer()).toBeTruthy()
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    })
+    expect(layer()).toBeNull()
+
+    await act(async () => root.unmount())
+  })
+})

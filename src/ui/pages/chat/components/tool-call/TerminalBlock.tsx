@@ -1,9 +1,12 @@
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { t, tpl } from '@/ui/i18n'
 import commentEvent from '@/events/commentEvent'
 import { Message } from '@/types'
 import { ToolOutput, toolOutputStore } from '@/infrastructure/tools/output-store'
 import { processTerminalOutput } from '@/infrastructure/tools/execute/common'
+import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
+import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
 
 /**
  * 终端输出块 —— execute_command / execute_script 的运行态与完成态共用。
@@ -101,7 +104,6 @@ export function TerminalStatus({
 
 interface TerminalBlockProps {
   title: string
-  tips?: string
   /** 命令原文（脚本可能只有 file_path，故可选） */
   cmd?: string
   /** 命令前的一行附加信息（如脚本文件短路径） */
@@ -120,7 +122,6 @@ interface TerminalBlockProps {
 
 export function TerminalBlock({
   title,
-  tips,
   cmd,
   fileLabel,
   note,
@@ -130,55 +131,109 @@ export function TerminalBlock({
   onKill,
   killing,
 }: TerminalBlockProps) {
+  // 全屏态：与代码块（CodeBlock）一致，由块自身管理，按钮放在 header 右侧。
+  const [fullscreen, setFullscreen] = useState(false)
   const scrollerRef = useRef<HTMLDivElement>(null)
+  // 全屏副本自己的滚动容器 —— 原位与全屏是两个 DOM，各自独立跟随
+  const fullScrollerRef = useRef<HTMLDivElement>(null)
 
-  // 自动跟随：ref 必须落在真正的滚动容器上（见 followBottomIfPinned 注释）
+  // 自动跟随：ref 必须落在真正的滚动容器上（见 followBottomIfPinned 注释）。
+  // 原位与全屏副本都跟随；未挂载的那份 ref 为 null，自然跳过。
   useEffect(() => {
-    const el = scrollerRef.current
-    if (!el || !followBottom) return
-    followBottomIfPinned(el)
+    if (!followBottom) return
+    for (const ref of [scrollerRef, fullScrollerRef]) {
+      const el = ref.current
+      if (el) followBottomIfPinned(el)
+    }
   }, [segments, followBottom])
 
+  // 进入全屏的瞬间，把新挂载的全屏容器直接贴到底（原位那份早已贴底，这里从 0 开始）
+  useEffect(() => {
+    if (!fullscreen) return
+    const el = fullScrollerRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [fullscreen])
+
+  // Esc 退出全屏（与 CodeBlock / ImagePreview 等浮层保持一致的操作习惯）
+  useEffect(() => {
+    if (!fullscreen) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setFullscreen(false)
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [fullscreen])
+
+  /**
+   * 渲染终端本体。原位与全屏走同一个函数（结构完全一致），
+   * `isFull` 只切换类名与滚动容器 ref，避免两处各写一套样式。
+   */
+  function renderBlock(isFull: boolean) {
+    return (
+      <div
+        className={`execute-command-wrapper${isFull ? ' is-fullscreen' : ''}`}>
+        <div className="header">
+          <span className="title">{title}</span>
+          {status}
+          <div className="terminal-header-actions">
+            <button
+              className="terminal-fullscreen-btn"
+              onClick={() => setFullscreen(!fullscreen)}
+              title={fullscreen ? t('退出全屏') : t('全屏')}>
+              {fullscreen ? <ExitFullScreenSvg /> : <FullScreenSvg />}
+            </button>
+            {onKill && (
+              <button
+                className="tool-cmd-kill-btn"
+                disabled={killing}
+                onClick={onKill}
+                title={t('终止执行')}>
+                ■ {killing ? t('终止中') : t('终止')}
+              </button>
+            )}
+          </div>
+        </div>
+        <div
+          className="code-pre-warpper"
+          ref={isFull ? fullScrollerRef : scrollerRef}>
+          <pre className="code-pre">
+            {fileLabel && (
+              <>
+                <code style={{ userSelect: 'none' }}>📄 </code>
+                <code>{fileLabel + '\n'}</code>
+              </>
+            )}
+            {cmd && (
+              <>
+                <code style={{ userSelect: 'none' }}>$ </code>
+                <code>{cmd + '\n'}</code>
+              </>
+            )}
+            {/* processTerminalOutput 会移除尾部的空行，所以片段之间需要显式补 \n */}
+            {segments.map((seg, i) => (
+              <code key={i} className={`terminal-${seg.kind}`}>
+                {(i > 0 ? '\n' : '') + seg.text}
+              </code>
+            ))}
+            {note && <code className="terminal-note">{'\n' + note}</code>}
+          </pre>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className="execute-command-wrapper">
-      <div className="header">
-        <span className="title">{title}</span>
-        {tips && <span className="execute-command-header-tips">{tips}</span>}
-        {status}
-        {onKill && (
-          <button
-            className="tool-cmd-kill-btn"
-            disabled={killing}
-            onClick={onKill}
-            title={t('终止执行')}>
-            ■ {killing ? t('终止中') : t('终止')}
-          </button>
+    <>
+      {/* 原位终端：全屏时照样渲染（搬走/卸载会让虚拟列表条目变矮 → 重测量 → 滚动跳动） */}
+      {renderBlock(false)}
+      {fullscreen &&
+        createPortal(
+          <div className="terminal-fullscreen-layer">
+            {renderBlock(true)}
+          </div>,
+          document.body,
         )}
-      </div>
-      <div className="code-pre-warpper" ref={scrollerRef}>
-        <pre className="code-pre">
-          {fileLabel && (
-            <>
-              <code style={{ userSelect: 'none' }}>📄 </code>
-              <code>{fileLabel + '\n'}</code>
-            </>
-          )}
-          {cmd && (
-            <>
-              <code style={{ userSelect: 'none' }}>$ </code>
-              <code>{cmd + '\n'}</code>
-            </>
-          )}
-          {/* processTerminalOutput 会移除尾部的空行，所以片段之间需要显式补 \n */}
-          {segments.map((seg, i) => (
-            <code key={i} className={`terminal-${seg.kind}`}>
-              {(i > 0 ? '\n' : '') + seg.text}
-            </code>
-          ))}
-          {note && <code className="terminal-note">{'\n' + note}</code>}
-        </pre>
-      </div>
-    </div>
+    </>
   )
 }
 
@@ -219,14 +274,12 @@ export function useToolLiveOutput(toolCallId: string) {
 export function TerminalView({
   toolCallId,
   title,
-  tips,
   cmd,
   fileLabel,
   message,
 }: {
   toolCallId: string
   title: string
-  tips?: string
   cmd?: string
   fileLabel?: string
   /** 结果消息；为空表示工具仍在运行中 */
@@ -262,7 +315,6 @@ export function TerminalView({
     <div className="tool-cmd-running">
       <TerminalBlock
         title={title}
-        tips={tips}
         cmd={cmd}
         fileLabel={fileLabel}
         note={running ? undefined : message?.uiData?.note}

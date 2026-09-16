@@ -406,6 +406,7 @@
   "✅ 已复制文件: $__source__\n   → $__dest__": "✅ Copied: $__source__\n   → $__dest__",
   "目录": "directory",
   "文件": "file",
+  "行": "line",
   "📝 $__lines__ 行 / $__size__": "📝 $__lines__ lines / $__size__",
   "🔢 显示: 第 $__start__-$__end__ 行 (共 $__total__ 行)": "🔢 Showing: lines $__start__-$__end__ (total $__total__)",
   "🔢 显示: 第 1-$__end__ 行 (共 $__total__ 行)": "🔢 Showing: lines 1-$__end__ (total $__total__)",

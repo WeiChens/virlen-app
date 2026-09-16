@@ -534,6 +534,17 @@ function CodeBlock({
             )}
           </div>
           <div className="actions-list">
+            {
+              actions.map((action, index) => {
+                if (!action.iconRender)
+                  console.error(`action ${action.title} should have iconRender`)
+                return (
+                  <button className="action-btn" key={action.title} onClick={action.onClick} title={action.title}>
+                    {action.iconRender ? action.iconRender() : <CopySvg />}
+                  </button>
+                )
+              })
+            }
             <button
               className="code-copy-btn"
               onClick={handleCopy}
@@ -549,24 +560,13 @@ function CodeBlock({
                 <CopySvg fill="var(--code-header-color)" />
               )}
             </button>
-            {/* 内置全屏按钮：与复制按钮同级，不占用调用方的 actions */}
             <button
               className="code-fullscreen-btn action-btn"
               onClick={() => setFullscreen(!fullscreen)}
               title={fullscreen ? t('退出全屏') : t('全屏')}>
               {fullscreen ? <ExitFullScreenSvg /> : <FullScreenSvg />}
             </button>
-            {
-              actions.map((action, index) => {
-                if (!action.iconRender)
-                  console.error(`action ${action.title} should have iconRender`)
-                return (
-                  <button className="action-btn" key={action.title} onClick={action.onClick} title={action.title}>
-                    {action.iconRender ? action.iconRender() : <CopySvg />}
-                  </button>
-                )
-              })
-            }
+
           </div>
         </div>
         {/* 流式输出 / 超大文件 → 常规 pre/code 纯文本 fallback */}

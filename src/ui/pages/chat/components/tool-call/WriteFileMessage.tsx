@@ -14,13 +14,29 @@ class WriteFileMessage implements IToolCallMessage {
   getToolLabel(): string {
     return t('写入文件')
   }
-  getShortText(props: ToolMessageProps): string {
+  getShortText(props: ToolMessageProps) {
     try {
-      const { path } = props.useContent.input
+      const { path, content = '' } = props.useContent.input
       const workspace =
         sessionStore.getSession(chatState.value.currentSessionId)?.workspace ||
         settingsState.value.defaultWorkspace
-      return toShortPath(path, workspace)
+      let shortPath = toShortPath(path, workspace)
+      const lineCount = content.split('\n').length
+
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          <span
+            style={{
+              color: 'var(--accent-color)',
+              fontWeight: 500,
+            }}>
+            {shortPath}
+          </span>
+          <span style={{ color: '#999', fontSize: 12 }}>
+            {`${lineCount}`} {t('行')}
+          </span>
+        </div>
+      )
     } catch {
       return t('解析异常')
     }
@@ -69,7 +85,6 @@ class WriteFileMessage implements IToolCallMessage {
               })
             },
           },]}>
-
           {value as any}
         </CodeBlock>
       </div>

@@ -29,7 +29,6 @@ class ExecuteCommandMessage implements IToolCallMessage {
   getExpandView(props: ToolMessageProps): React.ReactNode {
     try {
       const command = props.useContent.input.command as string | undefined
-      const tips = props.useContent.input.tips as string | undefined
       const message = props.message
       // 运行中：不展开也渲染实时终端；完成后折叠则不渲染
       if (message && !props.expand) return null
@@ -37,7 +36,6 @@ class ExecuteCommandMessage implements IToolCallMessage {
         <TerminalView
           toolCallId={props.useContent.id}
           title={t('终端')}
-          tips={tips}
           cmd={command}
           message={message}
         />

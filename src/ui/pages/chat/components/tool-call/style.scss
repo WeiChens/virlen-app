@@ -128,7 +128,7 @@
 }
 
 .tool-cmd-kill-btn {
-  align-self: flex-end;
+  flex-shrink: 0;
   padding: 4px 12px;
   font-size: var(--font-size-sm);
   background: var(--color-error, #ef4444);
@@ -136,7 +136,6 @@
   border: none;
   border-radius: 4px;
   cursor: pointer;
-  margin-left: auto;
 
   &:hover {
     background: var(--color-error-text, #dc2626);
@@ -211,16 +210,23 @@
     justify-content: space-between;
     user-select: none;
     gap: 8px;
+
+    /* 标题占满左侧剩余空间，把状态徽标与操作区挤到最右 */
+    .title {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
   }
 
-  .execute-command-header-tips {
-    flex: 1;
-    font-weight: normal;
-    font-size: var(--font-size-xs);
-    color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  /* header 右侧操作区：全屏（始终可用）+ 终止（运行中） */
+  .terminal-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
   }
 
   /* 完成态状态徽标：退出码 / 失败（颜色走终端主题令牌） */
@@ -233,6 +239,32 @@
 
     &.error {
       color: var(--terminal-stderr, #d82222);
+    }
+  }
+
+  /* 内置全屏按钮（与代码块头部的全屏按钮同款，见 message/code-block.scss） */
+  .terminal-fullscreen-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--terminal-text, #fff);
+    cursor: pointer;
+    transition: background 0.15s;
+
+    svg {
+      width: 13px;
+      height: 13px;
+      fill: var(--terminal-text, #fff);
+    }
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.18);
     }
   }
 
@@ -270,6 +302,46 @@
 
     .terminal-note {
       color: var(--terminal-note, #e5c07b);
+    }
+  }
+}
+
+// ==================== 终端全屏 ====================
+//
+// 与 code-block 的全屏浮层同构（见 message/code-block.scss）：
+// 终端块身处虚拟列表的消息条目里，只有挂到 body 上（createPortal）才能不受
+// 任何祖先（transform/filter/overflow）影响地铺满窗口内容区，
+// 仅让开顶部 30px 的窗口状态栏（高度令牌与 WindowLayout 共用一份）。
+.terminal-fullscreen-layer {
+  position: fixed;
+  top: var(--window-top-bar-height, 30px);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  /* 高于聊天区内部层级（100~210），低于 Modal(800)/Toast(3012) */
+  z-index: 500;
+  background-color: var(--terminal-bg, #191a1b);
+  display: flex;
+
+  /* 全屏态：去掉外边距/圆角直接铺满；header 固定高度，输出区占满剩余并自行滚动 */
+  .execute-command-wrapper.is-fullscreen {
+    margin: 0;
+    border-radius: 0;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+
+    .header {
+      flex-shrink: 0;
+    }
+
+    .code-pre-warpper {
+      flex: 1;
+      min-height: 0;
+      max-height: none;
     }
   }
 }
@@ -359,235 +431,6 @@
       margin-left: 6px;
       color: var(--text-tertiary, #9ca3af);
     }
-  }
-}
-
-// ==================== 左右对比 Diff 视图 ====================
-
-.diff-wrapper {
-  padding: 0 10px;
-  margin: 4px 20px;
-  width: fit-content;
-  max-width: 90%;
-}
-
-.diff-side-by-side {
-  border: 1px solid #181a1f;
-  border-radius: 8px;
-  overflow: hidden;
-  font-family:
-    'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', Consolas,
-    monospace;
-  font-size: var(--font-size-sm);
-  line-height: 1.55;
-  /* 代码区固定深色（与 CodeBlock/Monaco virlen-dark 一致），不随主题变化 */
-  background: #282c34;
-  color: #abb2bf;
-}
-
-.diff-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 12px;
-  /* 与普通 code-block 头部底色一致 */
-  background: #333843;
-  border-bottom: 1px solid #282c34;
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  color: #abb2bf;
-
-  .diff-header-name {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: #d7dae0;
-  }
-
-  .diff-actions {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
-
-    .diff-action-btn {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 26px;
-      height: 26px;
-      border: none;
-      border-radius: 4px;
-      background: rgba(255, 255, 255, 0.08);
-      color: var(--code-header-color, #abb2bf);
-      cursor: pointer;
-      transition: background 0.15s;
-
-      svg {
-        width: 14px;
-        height: 14px;
-        fill: var(--code-header-color);
-      }
-
-      &:hover {
-        background: rgba(255, 255, 255, 0.18);
-        color: #fff;
-      }
-    }
-  }
-}
-
-.diff-column-headers {
-  display: flex;
-  border-bottom: 1px solid #181a1f;
-}
-
-.diff-col-header {
-  flex: 1;
-  padding: 5px 10px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.diff-col-header--old {
-  background: #3a2020;
-  color: #f38ba8;
-  border-right: 1px solid #181a1f;
-}
-
-.diff-col-header--new {
-  background: #1a3a1a;
-  color: #a6e3a1;
-}
-
-.diff-col-range {
-  font-weight: 400;
-  font-size: var(--font-size-2xs);
-  opacity: 0.7;
-}
-
-.diff-body {
-  display: flex;
-  max-height: 450px;
-  background: #282c34;
-  color: #abb2bf;
-}
-
-.diff-panel {
-  flex: 1;
-  min-width: 0;
-  /* 允许收缩，长文本不撑开列宽 */
-  overflow: auto;
-  /* 各自独立滚动（横向+纵向） */
-  box-sizing: border-box;
-
-  &::-webkit-scrollbar {
-    width: 12px;
-  }
-
-  &::-webkit-scrollbar-thumb {
-    background-color: #383b46;
-    border-radius: 4px;
-
-    &:hover {
-      background-color: #4b505e;
-    }
-  }
-}
-
-.diff-panel--old {
-  border-right: 1px solid #181a1f;
-}
-
-.diff-col {
-  min-width: fit-content;
-  /* 行宽由最长内容决定 */
-}
-
-.diff-line {
-  display: flex;
-  align-items: stretch;
-  min-height: 18px;
-  color: #abb2bf;
-}
-
-.diff-line--highlight-old {
-  background: #2a1515;
-}
-
-.diff-line--highlight-new {
-  background: #152a15;
-}
-
-.diff-linenum {
-  position: sticky;
-  left: 0;
-  background-color: #21252b;
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  min-width: 36px;
-  padding: 0 8px 0 4px;
-  color: #495162;
-  font-size: var(--font-size-2xs);
-  user-select: none;
-  border-right: 1px solid #181a1f;
-  flex-shrink: 0;
-}
-
-.diff-line--highlight-old .diff-linenum {
-  background: #3a2020;
-  color: #f38ba8;
-}
-
-.diff-line--highlight-new .diff-linenum {
-  background: #203a20;
-  color: #a6e3a1;
-}
-
-.diff-code {
-  padding: 0 8px;
-  white-space: pre;
-  /* 不换行，由父容器 .diff-panel 滚动 */
-  flex: 1;
-  min-width: 0;
-}
-
-// 合并展示多处编辑时：头部新增/减少行数统计
-.diff-stat {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-
-  .diff-stat--del {
-    color: var(--color-error, #ef4444);
-  }
-
-  .diff-stat--ins {
-    color: var(--color-success, #0fcd55);
-  }
-}
-
-// 多段变更之间的省略间隔行
-.diff-line--gap {
-  background: #21252b;
-
-  .diff-linenum {
-    background: #21252b;
-  }
-
-  .diff-code {
-    color: #6b7080;
-    text-align: center;
   }
 }
 

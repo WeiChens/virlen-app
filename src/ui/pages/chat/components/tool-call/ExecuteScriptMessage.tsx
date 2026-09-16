@@ -25,14 +25,12 @@ function shortPath(path: string): string {
  */
 function ScriptExpandView({
   toolCallId,
-  tips,
   command,
   filePath,
   fileContent,
   message,
 }: {
   toolCallId: string
-  tips?: string
   command?: string
   filePath?: string
   fileContent: string
@@ -58,7 +56,6 @@ function ScriptExpandView({
         <TerminalView
           toolCallId={toolCallId}
           title={t('脚本')}
-          tips={tips}
           cmd={command}
           fileLabel={fileLabel}
           message={message}
@@ -102,7 +99,7 @@ class ExecuteScriptMessage implements IToolCallMessage {
   }
   getExpandView(props: ToolMessageProps): React.ReactNode {
     try {
-      const { command, tips, file_path, file_content } =
+      const { command, file_path, file_content } =
         props.useContent.input
       const message = props.message
       // 运行中：不展开也渲染实时终端；完成后折叠则不渲染
@@ -110,7 +107,6 @@ class ExecuteScriptMessage implements IToolCallMessage {
       return (
         <ScriptExpandView
           toolCallId={props.useContent.id}
-          tips={tips as string | undefined}
           command={command as string | undefined}
           filePath={file_path as string | undefined}
           fileContent={(file_content as string) ?? ''}
