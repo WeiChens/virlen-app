@@ -1,3 +1,31 @@
+// ==================== 全屏展开 ====================
+//
+// 内置全屏：`.code-block-wrapper.is-fullscreen` 铺满「窗口内容区」，
+// 只让开顶部 30px 的窗口状态栏（见 layout/WindowLayout/WindowLayout.scss）。
+// 为什么走 createPortal + position: fixed：代码块身处虚拟列表的消息条目里，
+// 挂到 body 才能不受任何祖先（transform/filter/overflow）影响地铺满视口。
+
+.code-block-fullscreen-layer {
+  position: fixed;
+  // 顶部让出窗口状态栏（高度令牌与 WindowLayout 共用一份）
+  top: var(--window-top-bar-height, 30px);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  // 高于聊天区内部层级（侧栏/输入区 100~210），低于 Modal(800)/Toast(3012)；
+  // 状态栏自身 z-index:100，但本层从它下方开始，不重叠
+  z-index: 500;
+  background-color: var(--code-body-bg, #282c34);
+
+  // 全屏态：去掉外边距/圆角/边框，直接铺满；滚动仍由 wrapper 自己承担
+  .code-block-wrapper.is-fullscreen {
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    height: 100%;
+  }
+}
+
 // ==================== 代码块 ====================
 .code-block-wrapper {
   margin: 10px 0;

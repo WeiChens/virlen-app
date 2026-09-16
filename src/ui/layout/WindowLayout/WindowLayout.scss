@@ -13,7 +13,7 @@
     font-family: AlimamaAgileVF-Thin, 'Noto Color Emoji';
   }
   .window-top-bar {
-    height: 30px;
+    height: var(--window-top-bar-height, 30px);
     display: flex;
     align-items: center;
     justify-content: space-between;

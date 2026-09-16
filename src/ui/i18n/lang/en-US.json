@@ -667,6 +667,8 @@
   "处理中": "Processing",
   "处理中...": "Processing...",
   "复制代码": "Copy code",
+  "全屏": "Fullscreen",
+  "退出全屏": "Exit fullscreen",
   "复制文件": "Copy file",
   "完全访问模式": "Full access mode",
   "完全访问模式，可以访问系统文件，有风险，请谨慎使用": "Full access mode: can access system files; risky, use with caution",

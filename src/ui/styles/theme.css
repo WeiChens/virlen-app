@@ -237,6 +237,11 @@
   --accent-bg: var(--primary-soft);
 }
 :root {
+  /* ===== 布局尺寸（与主题无关，亮/暗共用） ===== */
+  /* 自绘窗口状态栏高度：WindowLayout.scss 的 .window-top-bar 与全屏浮层
+     （code-block.scss 的 .code-block-fullscreen-layer）共用这一份，避免两边各写一个 30px */
+  --window-top-bar-height: 30px;
+
   /* ===== 字号等级（medium 默认） ===== */
   --font-size-2xs: 10px;
   --font-size-xs: 11px;

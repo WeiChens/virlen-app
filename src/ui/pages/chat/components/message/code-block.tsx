@@ -12,12 +12,16 @@
  */
 import {
   useState,
+  useEffect,
   type HTMLAttributes,
   type ReactElement,
   type ReactNode,
 } from 'react'
+import { createPortal } from 'react-dom'
 import { observer } from 'mobx-react-lite'
 import CopySvg from '@/ui/components/icons/CopySvg'
+import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
+import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
 import CodePreview from '@/ui/components/code-preview/CodePreview'
 import './code-block.scss'
 import { openPath } from '@tauri-apps/plugin-opener'
@@ -442,6 +446,18 @@ function CodeBlock({
 }: CodeBlockProps) {
   // 复制态放在最前面：行内/块状代码两条渲染路径共用同一组 hooks（规则一致性）
   const [copied, setCopied] = useState(false)
+  // 全屏态：同样必须在行内代码的提前 return 之前声明
+  const [fullscreen, setFullscreen] = useState(false)
+
+  // Esc 退出全屏（与 ImagePreview 等浮层保持一致的操作习惯）
+  useEffect(() => {
+    if (!fullscreen) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setFullscreen(false)
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [fullscreen])
 
   let match = /language-(\w+)/.exec(className || '')
   // fileName 可能携带路径（如 "src/foo.ts"），语言推断仅取最后一段
@@ -493,68 +509,98 @@ function CodeBlock({
       })
   }
 
-  return (
-    <div
-      className="code-block-wrapper"
-      style={{
-        maxHeight: maxHeight ? maxHeight : undefined,
-        width: width ? width : undefined,
-        overflow: maxHeight ? 'auto' : 'visible',
-      }}>
-      <div className="code-block-header">
-        <div className="code-block-header-info">
-          <span className="code-language">{displayLang}</span>
-          {fileName && (
-            <span className="code-file-name" title={fileName}>
-              {fileName}
-            </span>
-          )}
-        </div>
-        <div className='actions-list'>
-          <button className="code-copy-btn" onClick={handleCopy} title={t('复制代码')}>
-            {copied ? (
-              <svg viewBox="0 0 1160 1024" width="14" height="14">
-                <path
-                  d="M1098.5472 34.133333C766.498133 240.64 525.653333 501.486933 416.9728 632.149333L151.552 421.205333 34.133333 516.983467 492.3392 989.866667c78.6432-204.868267 328.772267-605.252267 634.0608-889.856L1098.5472 34.133333z"
-                  fill="var(--color-success, #4ade80)"
-                />
-              </svg>
-            ) : (
-              <CopySvg fill="var(--text-tertiary, #aeaeae)" />
+  /**
+   * 渲染代码块本体。
+   *
+   * `isFull` 时用于全屏浮层：不禁 maxHeight/width（改由 CSS 铺满可用区域），
+   * 其余结构完全一致 —— 两处走同一个函数，避免全屏里和原位长出两套样式。
+   */
+  function renderBlock(isFull: boolean) {
+    return (
+      <div
+        className={`code-block-wrapper${isFull ? ' is-fullscreen' : ''}`}
+        style={{
+          maxHeight: !isFull && maxHeight ? maxHeight : undefined,
+          width: !isFull && width ? width : undefined,
+          overflow: isFull || maxHeight ? 'auto' : 'visible',
+        }}>
+        <div className="code-block-header">
+          <div className="code-block-header-info">
+            <span className="code-language">{displayLang}</span>
+            {fileName && (
+              <span className="code-file-name" title={fileName}>
+                {fileName}
+              </span>
             )}
-          </button>
-          {
-            actions.map((action, index) => {
-              if (!action.iconRender)
-                console.error(`action ${action.title} should have iconRender`)
-              return (
-                <button className="action-btn" key={action.title} onClick={action.onClick} title={action.title}>
-                  {action.iconRender ? action.iconRender() : <CopySvg />}
-                </button>
-              )
-            })
-          }
+          </div>
+          <div className="actions-list">
+            <button
+              className="code-copy-btn"
+              onClick={handleCopy}
+              title={t('复制代码')}>
+              {copied ? (
+                <svg viewBox="0 0 1160 1024" width="14" height="14">
+                  <path
+                    d="M1098.5472 34.133333C766.498133 240.64 525.653333 501.486933 416.9728 632.149333L151.552 421.205333 34.133333 516.983467 492.3392 989.866667c78.6432-204.868267 328.772267-605.252267 634.0608-889.856L1098.5472 34.133333z"
+                    fill="var(--color-success, #4ade80)"
+                  />
+                </svg>
+              ) : (
+                <CopySvg fill="var(--code-header-color)" />
+              )}
+            </button>
+            {/* 内置全屏按钮：与复制按钮同级，不占用调用方的 actions */}
+            <button
+              className="code-fullscreen-btn action-btn"
+              onClick={() => setFullscreen(!fullscreen)}
+              title={fullscreen ? t('退出全屏') : t('全屏')}>
+              {fullscreen ? <ExitFullScreenSvg /> : <FullScreenSvg />}
+            </button>
+            {
+              actions.map((action, index) => {
+                if (!action.iconRender)
+                  console.error(`action ${action.title} should have iconRender`)
+                return (
+                  <button className="action-btn" key={action.title} onClick={action.onClick} title={action.title}>
+                    {action.iconRender ? action.iconRender() : <CopySvg />}
+                  </button>
+                )
+              })
+            }
+          </div>
         </div>
+        {/* 流式输出 / 超大文件 → 常规 pre/code 纯文本 fallback */}
+        {streaming || code.length > LARGE_CODE_LIMIT ? (
+          <div className="code-streaming-fallback">
+            <pre
+              className="code-fallback"
+              style={{ fontSize: `${resolveCodeFontPx(fontSize)}px` }}>
+              <code>{code}</code>
+            </pre>
+          </div>
+        ) : (
+          <MonacoCodeView
+            fontSize={fontSize}
+            language={language}
+            code={code}
+            showLineNumbers={showLineNumbers}
+            startLineNumber={startLineNumber}
+          />
+        )}
       </div>
-      {/* 流式输出 / 超大文件 → 常规 pre/code 纯文本 fallback */}
-      {streaming || code.length > LARGE_CODE_LIMIT ? (
-        <div className="code-streaming-fallback">
-          <pre
-            className="code-fallback"
-            style={{ fontSize: `${resolveCodeFontPx(fontSize)}px` }}>
-            <code>{code}</code>
-          </pre>
-        </div>
-      ) : (
-        <MonacoCodeView
-          fontSize={fontSize}
-          language={language}
-          code={code}
-          showLineNumbers={showLineNumbers}
-          startLineNumber={startLineNumber}
-        />
-      )}
-    </div>
+    )
+  }
+
+  return (
+    <>
+      {/* 原位代码块：全屏时也照常渲染（否则虚拟列表条目会变矮 → 重测量 → 锚点/滚动位置跳动） */}
+      {renderBlock(false)}
+      {fullscreen &&
+        createPortal(
+          <div className="code-block-fullscreen-layer">{renderBlock(true)}</div>,
+          document.body,
+        )}
+    </>
   )
 }
 
