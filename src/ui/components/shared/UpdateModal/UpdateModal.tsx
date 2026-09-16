@@ -133,7 +133,7 @@ const UpdateModal = ({ show, updateInfo, onHide, onForceCancel }: Props) => {
           </div>
           {!isForceUpdate && !isDownloading && (
             <div className="remove" onClick={handleClose}>
-              <RemoveSvg fill="var(--accent-color)" />
+              <RemoveSvg fill="currentColor" />
             </div>
           )}
         </div>

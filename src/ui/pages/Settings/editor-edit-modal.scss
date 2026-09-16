@@ -6,7 +6,7 @@
 
     label {
       display: block;
-      font-size: 13px;
+      font-size: var(--font-size-md);
       font-weight: 500;
       color: var(--text-primary, #1a1a1a);
       margin-bottom: 6px;
@@ -17,7 +17,7 @@
       padding: 8px 12px;
       border: 1px solid var(--border-color, #e5e5e5);
       border-radius: 8px;
-      font-size: 13px;
+      font-size: var(--font-size-md);
       background: var(--bg-primary, #fff);
       color: var(--text-primary, #1a1a1a);
       outline: none;
@@ -31,12 +31,12 @@
 
     .command-input {
       font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
-      font-size: 12px;
+      font-size: var(--font-size-sm);
     }
 
     .command-hint {
       margin: 6px 0 0;
-      font-size: 11px;
+      font-size: var(--font-size-xs);
       color: var(--text-secondary, #999);
       line-height: 1.5;
     }
@@ -54,13 +54,13 @@
     border-radius: 8px;
 
     .preview-label {
-      font-size: 11px;
+      font-size: var(--font-size-xs);
       color: var(--text-secondary, #999);
     }
 
     .preview-value {
       font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
-      font-size: 12px;
+      font-size: var(--font-size-sm);
       color: var(--accent-color, #4f46e5);
       word-break: break-all;
       line-height: 1.5;
@@ -80,7 +80,7 @@
     button {
       padding: 8px 20px;
       border-radius: 8px;
-      font-size: 13px;
+      font-size: var(--font-size-md);
       cursor: pointer;
       transition: all 0.15s;
     }

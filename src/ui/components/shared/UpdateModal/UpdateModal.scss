@@ -7,7 +7,8 @@
     width: 480px;
     height: fit-content;
     max-height: 80vh;
-    background-color: var(--active-bg);
+    /* 同 AboutModal：--active-bg 不是「面」，且亮色下更像灰底对话框 */
+    background-color: var(--bg-primary);
     border-radius: 5px;
     border: 1px solid rgb(125, 125, 125);
     position: fixed;
@@ -32,13 +33,17 @@
       flex-direction: row;
       justify-content: space-between;
       align-items: center;
-      color: #565656;
+      /* 同 AboutModal：原硬编码 #565656 在暗色底仅 1.24:1 */
+      color: var(--text-primary);
       height: 45px;
       .title {
         font-size: 15px;
       }
 
       .remove {
+        /* 同 AboutModal：图标用 currentColor（原 var(--accent-color) 与圆底
+           var(--primary-color) 同色，X 不可见） */
+        color: var(--primary-fg);
         background-color: var(--primary-color);
         width: auto;
         margin: 0;
@@ -51,9 +56,6 @@
         align-items: center;
         padding: 4px;
         cursor: pointer;
-        svg {
-          fill: #fff;
-        }
       }
     }
 
@@ -63,7 +65,7 @@
 
       .new-version-badge {
         display: inline-block;
-        background: var(--primary-color, #4a90d9);
+        background: var(--primary-color);
         color: #fff;
         font-size: 14px;
         padding: 4px 16px;
@@ -142,7 +144,7 @@
 
     // ===== 通用「更新/重试」按钮样式 =====
     .btn-update {
-      background: var(--primary-color, #4a90d9);
+      background: var(--primary-color);
       color: #fff;
       border: none;
       border-radius: 6px;
@@ -180,7 +182,7 @@
         transition: color 0.2s;
 
         &:hover {
-          color: var(--accent-color, #4a90d9);
+          color: var(--link-color);
         }
       }
 
@@ -227,7 +229,7 @@
 
         .progress-bar-fill {
           height: 100%;
-          background: linear-gradient(90deg, #4a90d9, #357abd);
+          background: linear-gradient(90deg, var(--primary), var(--primary-hover));
           border-radius: 5px;
           transition: width 0.3s ease;
 

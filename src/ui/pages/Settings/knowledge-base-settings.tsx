@@ -17,6 +17,7 @@ import Select from '@/ui/components/shared/Select'
 import Modal, { ModalFooterButtons } from '@/ui/components/shared/Modal'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 import type { KnowledgeBase, KnowledgeBaseDocument } from '@/domain/ports'
+import { rowKeyHandler } from '@/utils/a11y'
 import './knowledge-base-settings.scss'
 
 /** 弹出 toast 消息（简单实现，避免引入 toast 组件的复杂依赖） */
@@ -157,6 +158,7 @@ function KnowledgeBaseSettings() {
     const confirmed = await MessageBox.propt(
       t('删除知识库'),
       tpl('确定要删除知识库「$__name__」吗？此操作不可撤销。', { name }),
+      { danger: true },
     )
     if (!confirmed) return
     try {
@@ -524,6 +526,7 @@ function KnowledgeBaseSettings() {
     const confirmed = await MessageBox.propt(
       t('删除文档'),
       tpl('确定要删除文档「$__name__」吗？', { name: docName }),
+      { danger: true },
     )
     if (!confirmed) return
     try {
@@ -544,6 +547,7 @@ function KnowledgeBaseSettings() {
       t(
         tpl('确定要清空「$__name__」中的所有文档吗？（共 $__count__ 个）此操作不可撤销。', { name: docListKbName, count: docListDocs.length }),
       ),
+      { danger: true },
     )
     if (!confirmed) return
 
@@ -778,6 +782,9 @@ function KnowledgeBaseSettings() {
         <div className="kb-toggle-row">
           <button
             className={`kb-toggle ${s.ragEnabled ? 'active' : ''}`}
+            role="switch"
+            aria-checked={s.ragEnabled}
+            aria-label={t('知识库检索')}
             onClick={() => {
               const next = !settingsState.value.ragEnabled
               settingsState.setValue('ragEnabled', next)
@@ -839,7 +846,13 @@ function KnowledgeBaseSettings() {
                 <div className="kb-card">
                   <div
                     className="kb-card-info"
+                    role="button"
+                    tabIndex={0}
+                    aria-label={kb.name}
                     onClick={() => openDocListModal(kb.id, kb.name)}
+                    onKeyDown={rowKeyHandler(() =>
+                      openDocListModal(kb.id, kb.name),
+                    )}
                     style={{ cursor: 'pointer' }}>
                     <div className="kb-card-name">{kb.name}</div>
                     {kb.description && (

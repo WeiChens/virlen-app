@@ -161,6 +161,8 @@ function Select({
       role="combobox"
       aria-expanded={open}
       aria-haspopup="listbox"
+      /* 选中项的说明也挂到触发器上：不展开下拉也能看到（如终端权限的风险提示） */
+      title={selectedOption?.title}
       style={width ? { width: typeof width === 'number' ? `${width}px` : width } : undefined}
       onKeyDown={handleTriggerKeyDown}
       onClick={() => { if (!disabled) setOpen((v) => !v) }}>

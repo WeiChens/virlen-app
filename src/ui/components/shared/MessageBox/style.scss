@@ -14,18 +14,23 @@
     .cancel,
     .confirm {
       font-size: 12px;
-      border-radius: 3px;
+      border-radius: 6px;
       line-height: 26px;
       height: 26px;
       padding: 0px 18px;
     }
     .cancel {
       background-color: rgba(205, 205, 205, 0.233);
-      color: var(--text-color);
+      color: var(--text-primary);
     }
     .confirm {
       background-color: var(--accent-color);
       color: white;
+
+      /* 破坏性操作（删除/清空）的确认按钮：不再与普通「确定」同色 */
+      &.danger {
+        background-color: var(--color-danger-fill);
+      }
     }
   }
 }

@@ -78,7 +78,7 @@ function SecuritySettings() {
         overflow: 'hidden',
         height: '100%',
       }}>
-      <h2 className="section-title">{t('安全设置')}</h2>
+      <h2 className="section-title">{t('文件访问安全')}</h2>
 
       <div className="section">
         <div className="section-desc">
@@ -90,6 +90,9 @@ function SecuritySettings() {
           {t('可以读取和编辑文件')}，<b>{t('白名单目录')}</b>
           {t('可以读取和编辑文件')}，<b>{t('其他目录')}</b>
           {t('只能查看、不能动里面的文件')}
+        </div>
+        <div className="section-desc">
+          {t('命令执行授权与终端权限在「通用 → 命令与终端安全」中设置')}
         </div>
 
         <div className="setting-row">

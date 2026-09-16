@@ -26,7 +26,7 @@
 
   .welcome-logo {
     margin-bottom: 24px;
-    color: var(--color-info);
+    color: var(--primary);
   }
 
   .welcome-logo svg {
@@ -93,7 +93,7 @@
     font-size: 15px;
     font-weight: 600;
     color: #fff;
-    background: var(--color-info);
+    background: var(--primary);
     border: none;
     border-radius: 10px;
     cursor: pointer;
@@ -129,7 +129,7 @@
   .setup-provider-icon {
     text-align: center;
     margin-bottom: 16px;
-    color: var(--color-info);
+    color: var(--primary);
   }
 
   .setup-provider-icon svg {
@@ -168,7 +168,7 @@
   }
 
   .provider-select-trigger:hover {
-    border-color: var(--color-info);
+    border-color: var(--primary);
   }
 
   .provider-select-placeholder {
@@ -247,7 +247,7 @@
   }
 
   .provider-select-item.active {
-    background: var(--color-info-bg);
+    background: var(--primary-soft);
   }
 
   .provider-select-url {
@@ -286,7 +286,7 @@
   }
 
   .api-key-input:focus {
-    border-color: var(--color-info);
+    border-color: var(--primary);
   }
 
   .api-key-input::placeholder {
@@ -321,7 +321,7 @@
   }
 
   .model-input-row input:focus {
-    border-color: var(--color-info);
+    border-color: var(--primary);
   }
 
   /* 自动获取模型按钮 */
@@ -330,7 +330,7 @@
     height: 38px;
     border: 1px solid var(--border-color);
     border-radius: 6px;
-    background: var(--color-info);
+    background: var(--primary);
     color: #fff;
     font-size: 12px;
     cursor: pointer;
@@ -415,8 +415,8 @@
   }
 
   .btn-secondary:hover {
-    border-color: var(--color-info);
-    background: var(--color-info-bg);
+    border-color: var(--primary);
+    background: var(--primary-soft);
   }
 
   .btn-secondary:active {

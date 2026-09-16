@@ -464,7 +464,7 @@ body,
   font-size: var(--font-size-md);
   font-weight: 600;
   color: var(--btn-primary-color, #ffffff);
-  background: var(--color-info);
+  background: var(--primary);
   border: none;
   border-radius: 6px;
   cursor: pointer;
@@ -481,7 +481,7 @@ body,
 }
 
 .btn-generate.generating {
-  background: var(--color-info);
+  background: var(--primary);
   cursor: wait;
 }
 
@@ -528,4 +528,19 @@ body,
 }
 svg {
   fill: var(--icon-color);
+}
+
+/* ===== 无障碍：尊重系统「减弱动态效果」 =====
+   影响：工作指示器流光/涟漪、光标闪烁、logo 入场、弹窗淡入等全部降级为静态。
+   已核查：本项目中没有任何元素「靠动画才能可见」（无 opacity:0 + animation 且无 forwards），
+   因此降低动画时长不会导致元素消失。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

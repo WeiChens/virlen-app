@@ -46,50 +46,12 @@
     font-family: monospace, 'Noto Color Emoji';
   }
 
-  .message-avatar {
-    width: 32px;
-    height: 32px;
-    border-radius: 8px;
-    background: var(--avatar-bg, #e8e8ed);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-
-    svg {
-      width: 100%;
-      height: 100%;
-      color: var(--text-secondary, #666);
-    }
-  }
-
   .message-body {
     display: flex;
     flex-direction: column;
     max-width: 75%;
     min-width: 0;
     position: relative;
-
-    .message-header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 4px;
-
-      .role-label {
-        font-size: var(--font-size-sm);
-        font-weight: 600;
-        color: var(--text-secondary, #888);
-      }
-
-      .model-label {
-        font-size: var(--font-size-xs);
-        color: var(--text-secondary, #aaa);
-        background: var(--tag-bg, #e8e8ed);
-        padding: 1px 6px;
-        border-radius: 4px;
-      }
-    }
 
     .reasoning-block {
       margin: 0 0 4px;
@@ -149,14 +111,6 @@
         font-size: var(--font-size-sm);
         display: flex;
         flex-direction: row;
-        .reasoning-elapsed-only {
-          flex-shrink: 0;
-          align-self: flex-start;
-          margin: 6px 8px 0 0;
-          font-size: 11px;
-          color: var(--text-tertiary, #999);
-          white-space: nowrap;
-        }
         .line {
           width: 2px;
           background: var(--text-secondary, #5a5a6e);
@@ -243,14 +197,6 @@
       flex-wrap: wrap;
       gap: 6px;
       margin-top: 6px;
-
-      .tool-call-badge {
-        font-size: var(--font-size-sm);
-        padding: 3px 8px;
-        background: var(--tag-bg, #e8e8ed);
-        border-radius: 6px;
-        color: var(--text-secondary, #666);
-      }
     }
 
     .message-actions {

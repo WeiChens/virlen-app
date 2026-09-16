@@ -34,6 +34,7 @@ function Modal({
   move = false,
 }: ModalProps) {
   const modalRef = useRef<HTMLDivElement>(null)
+  const overlayRef = useRef<HTMLDivElement>(null)
   const headerRef = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState({ x: 0, y: 0 })
   const isDragging = useRef(false)
@@ -58,14 +59,19 @@ function Modal({
     }
   }, [visible, closeOnClickOutside, onClose])
 
-  // ESC键关闭
+  // ESC键关闭（多层弹窗叠加时只关闭最上层，避免一次 Esc 关两层）
   useEffect(() => {
     if (!visible) return
 
     const handleEsc = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onClose()
-      }
+      if (event.key !== 'Escape') return
+      const overlays = document.querySelectorAll('.modal-overlay')
+      if (
+        overlays.length > 0 &&
+        overlays[overlays.length - 1] !== overlayRef.current
+      )
+        return
+      onClose()
     }
 
     document.addEventListener('keydown', handleEsc)
@@ -125,13 +131,63 @@ function Modal({
     }
   }, [visible])
 
+  // 焦点管理：打开时把焦点移入弹窗、Tab 圈定在弹窗内，关闭时归还焦点。
+  // 此前完全没有焦点约束 —— 弹窗打开后 Tab 可跑到背后的输入框，
+  // 此时 MessageBox 的「回车=确认」就会被误触发。
+  useEffect(() => {
+    if (!visible) return
+    const overlay = overlayRef.current
+    const content = modalRef.current
+    if (!overlay || !content) return
+    const prev = document.activeElement as HTMLElement | null
+    // 弹窗内已有元素拿到焦点时（如 autoFocus 的输入框 / 重命名弹窗）不要抢走
+    if (!content.contains(document.activeElement)) content.focus()
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return
+      // 只让最上层弹窗负责圈定
+      const overlays = document.querySelectorAll('.modal-overlay')
+      if (
+        overlays.length > 0 &&
+        overlays[overlays.length - 1] !== overlay
+      )
+        return
+      const list = Array.from(
+        content.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((n) => n.offsetWidth > 0 || n.offsetHeight > 0)
+      if (list.length === 0) return
+      const first = list[0]
+      const last = list[list.length - 1]
+      const active = document.activeElement as HTMLElement | null
+      const outside =
+        !active || active === content || !content.contains(active)
+      if (e.shiftKey && (active === first || outside)) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true)
+      if (prev && prev.isConnected) prev.focus()
+    }
+  }, [visible])
+
   if (!visible) return null
 
   return (
-    <div className={`modal-overlay ${mask ? '' : 'no-mask'}`}>
+    <div
+      className={`modal-overlay ${mask ? '' : 'no-mask'}`}
+      ref={overlayRef}>
       <div
         className={`modal-content ${className}`}
         ref={modalRef}
+        tabIndex={-1}
         style={{
           width: typeof width === 'number' ? `${width}px` : width,
           height: typeof height === 'number' ? `${height}px` : height,

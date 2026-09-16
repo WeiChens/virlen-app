@@ -44,6 +44,7 @@ export default function SettingsView() {
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   )
+  const panelRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const unlisten = settingsEvent.on('openSettings', (targetPage) => {
@@ -68,12 +69,56 @@ export default function SettingsView() {
     return () => clearTimeout(closeTimerRef.current)
   }, [])
 
+  // Esc 关闭 + Tab 焦点圈定（面板是模态对话框，与 Modal 保持同一套习惯）
+  useEffect(() => {
+    if (!open) return
+    const panel = panelRef.current
+    if (!panel) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        // 面板内若有打开的 Modal，交出 Escape（Modal 自己会关）
+        if (panel.querySelector('.modal-overlay')) return
+        e.stopPropagation()
+        handleClose()
+        return
+      }
+      if (e.key !== 'Tab') return
+      // 面板内有打开的 Modal 时，焦点圈定交给 Modal 自己
+      if (panel.querySelector('.modal-overlay')) return
+      const list = Array.from(
+        panel.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((n) => n.offsetWidth > 0 || n.offsetHeight > 0)
+      if (list.length === 0) return
+      const first = list[0]
+      const last = list[list.length - 1]
+      const active = document.activeElement as HTMLElement | null
+      const outsideOrPanel = !active || active === panel || !panel.contains(active)
+      if (e.shiftKey && (active === first || outsideOrPanel)) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => document.removeEventListener('keydown', onKeyDown, true)
+  }, [open, handleClose])
+
+  // 打开时把焦点移入面板，键盘用户不必从窗口顶部逐个 Tab
+  useEffect(() => {
+    if (open) panelRef.current?.focus()
+  }, [open])
+
   if (!open && !closing) {
     return (
       <button
         className="settings-trigger"
         onClick={() => setOpen(true)}
-        title={t('设置')}>
+        title={t('设置')}
+        aria-label={t('设置')}>
         <SettingSvg />
       </button>
     )
@@ -85,11 +130,19 @@ export default function SettingsView() {
       onClick={handleClose}>
       <div
         className={`settings-panel${closing ? ' closing' : ''}`}
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('设置')}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}>
         <div className="settings-sidebar">
           <div className="settings-sidebar-header">
             <h3>{t('设置')}</h3>
-            <button className="close-btn" onClick={handleClose}>
+            <button
+              className="close-btn"
+              onClick={handleClose}
+              aria-label={t('关闭')}>
               <CloseSvg />
             </button>
           </div>

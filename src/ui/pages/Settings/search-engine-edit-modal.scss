@@ -6,7 +6,7 @@
 
     label {
       display: block;
-      font-size: 13px;
+      font-size: var(--font-size-md);
       font-weight: 500;
       color: var(--text-primary, #1a1a1a);
       margin-bottom: 6px;
@@ -18,7 +18,7 @@
       padding: 8px 12px;
       border: 1px solid var(--border-color, #e5e5e5);
       border-radius: 8px;
-      font-size: 13px;
+      font-size: var(--font-size-md);
       background: var(--bg-primary, #fff);
       color: var(--text-primary, #1a1a1a);
       outline: none;
@@ -63,7 +63,7 @@
       }
     }
     .official-link {
-      font-size: 13px;
+      font-size: var(--font-size-md);
       color: var(--accent-color, #4f46e5);
       cursor: pointer;
       word-break: break-all;
@@ -79,9 +79,9 @@
       align-items: center;
       gap: 8px;
       padding: 10px 12px;
-      background: var(--color-info-bg, #e8f4fd);
+      background: var(--color-info-bg);
       border-radius: 8px;
-      font-size: 13px;
+      font-size: var(--font-size-md);
       color: var(--text-secondary, #666);
 
       .hint-icon {
@@ -111,13 +111,13 @@
       gap: 2px;
 
       .type-name {
-        font-size: 13px;
+        font-size: var(--font-size-md);
         font-weight: 600;
         color: var(--text-primary, #1a1a1a);
       }
 
       .type-desc {
-        font-size: 11px;
+        font-size: var(--font-size-xs);
         color: var(--text-secondary, #999);
       }
     }
@@ -144,7 +144,7 @@
       transition: all 0.15s;
 
       &:hover {
-        border-color: var(--accent-color-light, #a5b4fc);
+        border-color: color-mix(in srgb, var(--primary) 55%, transparent);
       }
 
       &.active {
@@ -153,13 +153,13 @@
       }
 
       .type-name {
-        font-size: 13px;
+        font-size: var(--font-size-md);
         font-weight: 600;
         color: var(--text-primary, #1a1a1a);
       }
 
       .type-desc {
-        font-size: 11px;
+        font-size: var(--font-size-xs);
         color: var(--text-secondary, #999);
         line-height: 1.4;
       }
@@ -173,9 +173,9 @@
     align-items: flex-start;
     gap: 8px;
     padding: 10px 12px;
-    background: var(--color-info-bg, #e8f4fd);
+    background: var(--color-info-bg);
     border-radius: 8px;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     color: var(--text-secondary, #666);
     line-height: 1.5;
 
@@ -199,7 +199,7 @@
     button {
       padding: 8px 20px;
       border-radius: 8px;
-      font-size: 13px;
+      font-size: var(--font-size-md);
       cursor: pointer;
       transition: all 0.15s;
     }

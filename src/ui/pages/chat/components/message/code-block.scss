@@ -82,7 +82,7 @@
       height: 26px;
       border: none;
       border-radius: 4px;
-      background: var(--code-copy-btn-bg, rgba(255, 255, 255, 0.08));
+      background: rgba(255, 255, 255, 0.08);
       color: var(--code-header-color, #abb2bf);
       cursor: pointer;
       transition: background 0.15s;
@@ -93,8 +93,8 @@
       }
 
       &:hover {
-        background: var(--code-copy-btn-hover-bg, rgba(255, 255, 255, 0.18));
-        color: var(--code-copy-btn-hover-color, #fff);
+        background: rgba(255, 255, 255, 0.18);
+        color: #fff;
       }
     }
 
@@ -113,7 +113,7 @@
         height: 26px;
         border: none;
         border-radius: 4px;
-        background: var(--code-copy-btn-bg, rgba(255, 255, 255, 0.08));
+        background: rgba(255, 255, 255, 0.08);
         color: var(--code-header-color, #abb2bf);
         cursor: pointer;
         transition: background 0.15s;
@@ -125,8 +125,8 @@
         }
 
         &:hover {
-          background: var(--code-copy-btn-hover-bg, rgba(255, 255, 255, 0.18));
-          color: var(--code-copy-btn-hover-color, #fff);
+          background: rgba(255, 255, 255, 0.18);
+          color: #fff;
         }
       }
     }

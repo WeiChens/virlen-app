@@ -4,7 +4,7 @@
   flex-direction: column;
 
   .section-title {
-    font-size: 16px;
+    font-size: var(--font-size-xl);
     font-weight: 600;
     line-height: 40px;
     margin: 0 0 6px;
@@ -30,10 +30,10 @@
       flex: 1;
       padding: 8px 12px;
       border: none;
-      border-radius: 7px;
+      border-radius: 6px;
       background: transparent;
       color: var(--text-secondary, #888);
-      font-size: 13px;
+      font-size: var(--font-size-md);
       cursor: pointer;
       transition: all 0.15s;
 
@@ -42,7 +42,8 @@
       }
 
       &.active {
-        background: var(--bg-primary, #fff);
+        /* 原 var(--bg-primary) 在暗色档比轨道还深，选中项像被挖空 */
+        background: var(--control-active-bg);
         color: var(--text-primary, #1a1a1a);
         font-weight: 500;
         box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
@@ -51,7 +52,7 @@
   }
 
   .section-desc {
-    font-size: 13px;
+    font-size: var(--font-size-md);
     color: var(--text-secondary, #888);
     margin: 0 0 16px;
     line-height: 1.6;
@@ -84,7 +85,7 @@
           padding: 7px 10px;
           border: 1px solid var(--border-color, #d0d0d0);
           border-radius: 6px;
-          font-size: 13px;
+          font-size: var(--font-size-md);
           background: var(--bg-primary, #fff);
           color: var(--text-primary, #1a1a1a);
           outline: none;
@@ -99,7 +100,7 @@
       }
 
       .template-char-count {
-        font-size: 11px;
+        font-size: var(--font-size-xs);
         color: var(--text-secondary, #aaa);
         text-align: right;
         margin-top: -4px;
@@ -127,8 +128,8 @@
           font-size: 16px;
 
           &:hover {
-            background: rgba(239, 68, 68, 0.1);
-            color: #ef4444;
+            background: var(--color-danger-bg);
+            color: var(--color-danger);
           }
         }
       }
@@ -146,7 +147,7 @@
     border-radius: 8px;
     background: transparent;
     color: var(--text-secondary, #888);
-    font-size: 13px;
+    font-size: var(--font-size-md);
     cursor: pointer;
     transition: all 0.15s;
 
@@ -163,9 +164,9 @@
   }
 
   .empty-hint {
-    font-size: 13px;
-    color: var(--text-secondary, #aaa);
-    padding: 40px 0;
+    font-size: var(--font-size-md);
+    color: var(--text-secondary);
+    padding: 40px 20px;
     text-align: center;
     line-height: 1.8;
   }

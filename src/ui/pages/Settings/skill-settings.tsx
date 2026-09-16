@@ -26,6 +26,7 @@ import type { RegisteredSkill } from '@/skill/types'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
 import AddSvg from '@/ui/components/icons/AddSvg'
 import { t, tpl, getCurrentLanguage } from '@/ui/i18n'
+import { rowKeyHandler } from '@/utils/a11y'
 import { openPath } from '@tauri-apps/plugin-opener'
 import './skill-settings.scss'
 
@@ -142,7 +143,7 @@ function SkillSettings() {
       tpl('确定删除「$__name__」？技能文件将从磁盘永久删除。', {
         name: skill.meta.name,
       }),
-      { confirmText: t('删除'), cancelText: t('取消') },
+      { confirmText: t('删除'), cancelText: t('取消'), danger: true },
     )
     if (!confirmed) return
     const ok = await deleteSkill(skill.meta.name)
@@ -207,7 +208,10 @@ function SkillSettings() {
               <h2 className="section-title">{t('技能管理')}</h2>
               <p
                 className="skill-path"
+                role="button"
+                tabIndex={0}
                 onClick={openSkillsDir}
+                onKeyDown={rowKeyHandler(() => openSkillsDir())}
                 title={t('点击打开目录')}>
                 <FolderSvg fill="var(--text-secondary, #888)" />
                 <span>{skillsDirPath}</span>
@@ -256,11 +260,14 @@ function SkillSettings() {
 
           <div className="skill-list">
             {filteredSkills.map((skill) => (
-              <div
-                key={skill.meta.name}
-                className="skill-item"
-                onClick={() => handlePreview(skill)}>
-                <div className="skill-item-main">
+              <div key={skill.meta.name} className="skill-item">
+                <div
+                  className="skill-item-main"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={skill.meta.name}
+                  onClick={() => handlePreview(skill)}
+                  onKeyDown={rowKeyHandler(() => handlePreview(skill))}>
                   <div className="skill-item-name-row">
                     <span className="skill-item-name">{skill.meta.name}</span>
                     {skill.meta.version && (

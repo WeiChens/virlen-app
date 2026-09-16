@@ -220,7 +220,9 @@ function GeneralSettings() {
         <div className="setting-row">
           <div className="setting-label">
             <span className="label-text">{t('字体大小')}</span>
-            <span className="label-desc">{t('聊天消息字体大小')}</span>
+            {/* data-font-size 挂在 <html> 上，实际影响整个界面（侧栏/设置/快捷输入）与聊天消息，
+                原描述「聊天消息字体大小」与行为不符 */}
+            <span className="label-desc">{t('界面与聊天消息字体大小')}</span>
           </div>
           <div className="setting-control">
             <div className="segmented-control">
@@ -315,6 +317,7 @@ function GeneralSettings() {
             <label className="toggle">
               <input
                 type="checkbox"
+                aria-label={t('本地图片伪视觉分析')}
                 checked={s.imageVisionAnalyzeOptimize}
                 onChange={(e) =>
                   update('imageVisionAnalyzeOptimize', e.target.checked)
@@ -335,6 +338,7 @@ function GeneralSettings() {
             <label className="toggle">
               <input
                 type="checkbox"
+                aria-label={t('隐藏思考过程')}
                 checked={s.hideToolCallThink}
                 onChange={(e) => update('hideToolCallThink', e.target.checked)}
               />
@@ -355,6 +359,7 @@ function GeneralSettings() {
             <label className="toggle">
               <input
                 type="checkbox"
+                aria-label={t('强制激活窗口')}
                 checked={s.forceWindowActive}
                 onChange={(e) =>
                   update('forceWindowActive', e.target.checked)
@@ -375,6 +380,7 @@ function GeneralSettings() {
             <label className="toggle">
               <input
                 type="checkbox"
+                aria-label={t('预加载技能元数据')}
                 checked={s.skillMetaPreload}
                 onChange={(e) => update('skillMetaPreload', e.target.checked)}
               />
@@ -415,9 +421,12 @@ function GeneralSettings() {
           </div>
         </div>
       </div>
-      <h2 className="section-title">{t('安全设置')}</h2>
+      <h2 className="section-title">{t('命令与终端安全')}</h2>
 
       <div className="section">
+        <div className="section-desc">
+          {t('文件与目录的白名单/黑名单在侧栏「安全」中设置')}
+        </div>
         <div
           className="setting-row"
           style={{
@@ -467,6 +476,16 @@ function GeneralSettings() {
             />
           </div>
         </div>
+        {/* 风险说明不能只藏在 Select 选项的 title 里（不展开下拉就看不到） */}
+        <div
+          className={`approval-desc${s.sandboxMode === 'off' ? ' danger' : ''}`}>
+          {s.sandboxMode === 'on' &&
+            t('默认模式，有读文件的权限，只能在工作目录里有写的权限')}
+          {s.sandboxMode === 'readonly' &&
+            t('只读模式，只有读文件的权限，无法写入文件')}
+          {s.sandboxMode === 'off' &&
+            t('完全访问模式，可以访问系统文件，有风险，请谨慎使用')}
+        </div>
         <div className="setting-row">
           <div className="setting-label">
             <span className="label-text">{t('注入环境信息')}</span>
@@ -478,6 +497,7 @@ function GeneralSettings() {
             <label className="toggle">
               <input
                 type="checkbox"
+                aria-label={t('注入环境信息')}
                 checked={s.allowEnvPrompt}
                 onChange={(e) => update('allowEnvPrompt', e.target.checked)}
               />
@@ -498,6 +518,7 @@ function GeneralSettings() {
             <label className="toggle">
               <input
                 type="checkbox"
+                aria-label={t('Rust 原生引擎')}
                 checked={s.useRustEngine}
                 onChange={(e) => update('useRustEngine', e.target.checked)}
               />
@@ -528,6 +549,7 @@ function GeneralSettings() {
               <label className="toggle">
                 <input
                   type="checkbox"
+                  aria-label={t('诊断埋点')}
                   checked={s.telemetryEnabled}
                   disabled={telemetryBuildDisabled}
                   onChange={(e) => toggleTelemetry(e.target.checked)}

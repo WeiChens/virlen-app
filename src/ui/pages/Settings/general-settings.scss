@@ -81,8 +81,8 @@
 
   .empty-hint {
     font-size: var(--font-size-md);
-    color: var(--text-secondary, #aaa);
-    padding: 24px 0;
+    color: var(--text-secondary);
+    padding: 40px 20px;
     text-align: center;
   }
 
@@ -121,15 +121,22 @@
         color: var(--text-secondary, #999);
         cursor: pointer;
         flex-shrink: 0;
-        transition: 0.3s;
+        transition:
+          background 0.15s,
+          color 0.15s;
         &:hover {
-          background: rgba(0, 0, 0, 0.2);
-          color: var(--color-danger, #ef4444);
+          /* 原 rgba(0, 0, 0, 0.2)：暗色主题下会在深底上压出一块黑斑，
+             且与「危险删除」语义无关，改用语义化的危险底 */
+          background: var(--color-danger-bg, #fee2e2);
+          color: var(--color-danger);
         }
 
         svg {
           width: 14px;
           height: 14px;
+          /* 全局 svg { fill: var(--icon-color) } 会盖掉 color，
+             图标显式跟随 currentColor，hover 时才能真正变红 */
+          fill: currentColor;
         }
       }
     }
@@ -211,7 +218,8 @@
       }
 
       &.active {
-        background: var(--bg-primary, #fff);
+        /* 原 var(--bg-primary) 在暗色档(#1e1e2e)比轨道(#313244)还深，选中项像被挖空 */
+        background: var(--control-active-bg);
         color: var(--text-primary, #1a1a1a);
         font-weight: 500;
         box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
@@ -229,10 +237,15 @@
 
   .approval-desc {
     font-size: var(--font-size-sm);
-    color: var(--text-secondary, #999);
+    color: var(--text-secondary);
     line-height: 1.5;
     padding: 4px 0 8px;
     border-bottom: 1px solid var(--border-color, #e5e5e5);
+
+    /* 高风险档位（完全访问）用危险色强调 */
+    &.danger {
+      color: var(--color-danger);
+    }
   }
 
   // ==================== Input with Button ====================
@@ -350,7 +363,7 @@
 
   .telemetry-build-off {
     margin-left: 6px;
-    color: var(--color-danger, #ef4444);
+    color: var(--color-danger);
   }
 
   .telemetry-actions {
@@ -389,10 +402,10 @@
       }
 
       &.danger {
-        color: var(--color-danger, #ef4444);
+        color: var(--color-danger);
 
         &:hover:not(:disabled) {
-          border-color: var(--color-danger, #ef4444);
+          border-color: var(--color-danger);
         }
       }
     }

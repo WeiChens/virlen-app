@@ -814,7 +814,7 @@ function SessionGroupView({
         tpl('该操作将永久删除 $__count__ 个会话，无法恢复。', {
           count,
         }),
-        { confirmText: t('确认删除'), cancelText: t('取消') },
+        { confirmText: t('确认删除'), cancelText: t('取消'), danger: true },
       )
       if (!confirmed) return
 

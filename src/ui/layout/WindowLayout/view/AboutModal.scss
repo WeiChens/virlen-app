@@ -7,8 +7,9 @@
     width: 450px;
     height: fit-content;
 
-    // background-color: #382847;
-    background-color: var(--active-bg);
+    /* --active-bg 是 hover/激活态色，不是「面」；且它比 --bg-primary 亮，
+       导致标题/链接在暗色下对比度崩掉（旧值 1.24:1 / 2.18:1） */
+    background-color: var(--bg-primary);
     border-radius: 5px;
     border: 1px solid rgb(125, 125, 125);
     position: fixed;
@@ -32,13 +33,18 @@
       flex-direction: row;
       justify-content: space-between;
       align-items: center;
-      color: #565656;
+      /* 原为硬编码 #565656：在亮色底上 6.01:1 尚可（故一直没被发现），
+         但暗色底(--active-bg #45475a) 上只有 1.24:1 —— 标题等于看不见 */
+      color: var(--text-primary);
       height: 45px;
       .title {
         font-size: 15px;
       }
 
       .remove {
+        /* 关闭图标用 currentColor（原 jsx 传的 var(--accent-color) 与圆底
+           var(--primary-color) 是同一个色，1:1 看不见） */
+        color: var(--primary-fg);
         background-color: var(--primary-color);
         width: auto;
         margin: 0;
@@ -51,8 +57,9 @@
         align-items: center;
         padding: 4px;
         cursor: pointer;
-        svg {
-          fill: #fff;
+        &:focus-visible {
+          outline: var(--focus-ring);
+          outline-offset: 2px;
         }
       }
     }
@@ -100,16 +107,21 @@
       .check-update-link {
         background: none;
         border: none;
-        color: var(--accent-color, #4a90d9);
+        color: var(--link-color);
         font-size: 12px;
         cursor: pointer;
         font-family: AlimamaAgileVF-Thin;
-        transition: opacity 0.2s;
+        transition: color 0.2s;
         text-decoration: underline;
         text-underline-offset: 2px;
         transform: translateY(-2px);
         &:hover {
-          opacity: 0.75;
+          color: var(--link-color-hover);
+        }
+
+        &:focus-visible {
+          outline: var(--focus-ring);
+          outline-offset: 2px;
         }
 
         &:disabled {

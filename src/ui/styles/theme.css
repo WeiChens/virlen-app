@@ -1,17 +1,49 @@
 :root,
 [data-theme='light'] {
+  /* ===== 品牌主色（唯一色源：与 logo 同族的靛蓝）=====
+     换品牌色只需改这一个色值，下面所有 primary / accent 令牌都是它的别名 */
+  --primary: #4f46e5;
+  --primary-hover: #4338ca;
+  --primary-soft: #eef2ff;
+  --primary-bar: #4f46e5; /* 顶部标题栏底色 */
+  --primary-fill: var(--primary); /* 大色块填充：用户气泡 / 主按钮 */
+  --primary-fg: #ffffff; /* 主色之上的前景色 */
+
+  /* 历史令牌别名：不再各自定义颜色，统一指向 --primary */
+  --btn-primary-color: var(--primary-fg);
+  --primary-color: var(--primary);
+  --primary-color-depth: var(--primary-fg);
+  --primary-font-color: var(--text-primary);
+
+  /* ===== 补齐「曾被引用但从未定义」的令牌（原先只能靠各文件硬编码兜底）===== */
+  --text-tertiary: #767676; /* 提示文字：原 #999 在白底仅 2.85:1，现 4.54:1（WCAG AA） */
+  --border-color-light: rgba(108, 108, 108, 0.134); /* 比 border-color 更弱的分隔线 */
+  --bg-tertiary: var(--input-bg); /* 嵌套面：聊天输入框 / 命令预览 */
+  --card-bg: #fafafa; /* 设置页卡片面 */
+  --btn-bg: var(--hover-bg); /* 中性次级按钮 */
+  --btn-hover-bg: var(--active-bg);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.12); /* 弹窗投影：此前未定义 → 弹窗无投影 */
+  --radio-border-color: rgba(66, 65, 65, 0.65);
+  --tooltip-bg: #333;
+  --tooltip-color: #fff;
+  --slider-text-color: #ffffff;
+  --terminal-text-secondary: rgba(255, 255, 255, 0.6);
+  --feedback-bg: color-mix(in srgb, var(--primary) 6%, transparent);
+  --feedback-border: color-mix(in srgb, var(--primary) 15%, transparent);
+  --window-menu-inner-bg: rgba(0, 0, 0, 0.06);
+  --window-menu-item-bg: transparent;
+
   --bg-primary: #fff;
-  --btn-bg-primary: #3062bd;
+  --btn-bg-primary: var(--primary-fill);
   --bg-secondary: #f7f7f8;
   --text-primary: #1a1a1a;
-  --text-secondary: #888;
+  --text-secondary: #666; /* 原 #888 在白底仅 3.54:1（AA 未达标）；#666 → 白底 5.74:1 / #f0f0f0 底 5.04:1 */
   --border-color: #e5e5e5;
   --hover-bg: #f0f0f0;
   --active-bg: #e8e8ed;
-  --accent-color: #4f46e5;
-  --accent-hover: #4338ca;
+  --accent-color: var(--primary);
+  --accent-hover: var(--primary-hover);
   --accent-warn: #f59e0b;
-  --user-bubble-bg: #4f46e5;
   --assistant-bubble-bg: #f1f1f3e5;
   --tool-bubble-bg: #fef9c3;
   --input-bg: #f1f1f3;
@@ -34,6 +66,21 @@
   --color-warning-bg: #fffbeb;
   --color-danger: #e53e3e;
   --color-danger-bg: #fee2e2;
+  /* 实心危险按钮底色（白字需 ≥4.5:1）：
+     --color-danger 直接做底色时白字仅 4.12:1，故单独一档 */
+  --color-danger-fill: #c0392b; /* 白字 5.44:1 */
+  /* 状态色「文字」档：原先把 --color-success 直接当文字色用，
+     在白底 1.91:1 / 浅绿底 1.91:1，几乎不可读 */
+  --color-success-text: #2e7d32; /* on --color-success-bg → 4.61:1 */
+  --color-warning-text: #b45309; /* on --color-warning-bg → 4.87:1 */
+  /* 分段控件/标签页「选中态」底色：需比轨道更亮。
+     原先用 --bg-primary，暗色档(#1e1e2e)比轨道(#313244)更暗 → 选中项像被挖空 */
+  --control-active-bg: #ffffff;
+  /* 统一焦点环（引用 --primary，自动跟随主题） */
+  --focus-ring: 2px solid color-mix(in srgb, var(--primary) 65%, transparent);
+  /* 链接色：品牌色文本的唯一语义令牌（亮/暗分别取值，暗色档见下） */
+  --link-color: var(--primary); /* 亮：--bg-primary(#fff) 底 6.29:1 ✓AA */
+  --link-color-hover: var(--primary-hover); /* 亮：#fff 底 7.90:1 ✓AA */
   --code-header-bg: #323844;
   --code-header-color: #abb2bf;
   --code-body-bg: #282c34;
@@ -43,7 +90,8 @@
   --window-color: #222;
   --window-menu-bg: #323131;
   --window-menu-item-hover: #444343;
-  --window-bar-color: #3062bd;
+  --window-bar-color: var(--primary-bar);
+  --window-topbar-color: #fff;
   --slider-bg: #e4e4e4;
   --toggle-off-bg: #ccc;
   --xlsx-row-hover: #f0f6ff;
@@ -72,22 +120,42 @@
 
   --bg-primary-t: #ffffff37;
   --inline-code-hover-bg: #dbdbdb;
-  --accent-bg: #eef2ff;
+  --accent-bg: var(--primary-soft);
 }
 [data-theme='dark'] {
+  /* ===== 品牌主色（暗色档：同色系；修掉原 accent-hover 偏青的错配）===== */
+  --primary: #706af0;
+  --primary-hover: #8b86f7;
+  --primary-soft: #302f59;
+  --primary-bar: color-mix(in srgb, var(--primary) 45%, #000);
+  /* 暗色下大色块加深一档，保证白字对比度（约 8.5:1） */
+  --primary-fill: color-mix(in srgb, var(--primary) 62%, #000);
+  --primary-fg: #ffffff;
+
   --bg-primary: #1e1e2e;
 
-  --btn-bg-primary: #1e417c;
+  --btn-bg-primary: var(--primary-fill);
   --bg-secondary: #181825;
   --text-primary: #cdd6f4;
   --text-secondary: #a6adc8;
+  /* 补齐令牌（暗色档）；bg-tertiary / btn-bg / slider-text-color
+     等已在 :root 用别名方式声明，会自动跟随暗色变量 */
+  --text-tertiary: #858b9e;
+  --border-color-light: rgba(255, 255, 255, 0.08);
+  --card-bg: #262635;
+  --shadow-md: 0 12px 32px rgba(0, 0, 0, 0.5);
+  --radio-border-color: rgba(255, 255, 255, 0.22);
+  --tooltip-bg: #45475a;
+  --tooltip-color: #f5f5f7;
+  --feedback-bg: color-mix(in srgb, var(--primary) 12%, transparent);
+  --feedback-border: color-mix(in srgb, var(--primary) 26%, transparent);
+  --window-menu-inner-bg: rgba(255, 255, 255, 0.06);
   --border-color: #2c2c30;
   --hover-bg: #313244;
   --active-bg: #45475a;
-  --accent-color: #706af0;
-  --accent-hover: #74c7ec;
+  --accent-color: var(--primary);
+  --accent-hover: var(--primary-hover);
   --accent-warn: #f9e2af;
-  --user-bubble-bg: #274078;
   --assistant-bubble-bg: #31324495;
   --tool-bubble-bg: #2a2a2a;
   --input-bg: #313244;
@@ -110,6 +178,18 @@
   --color-warning-bg: #3a3a1a;
   --color-danger: #f38ba8;
   --color-danger-bg: #3a1a1a;
+  --color-danger-fill: color-mix(in srgb, var(--color-danger) 62%, #000); /* 白字 5.46:1 */
+  /* 状态色「文字」档（暗色）：沿用本主题已有的 Catppuccin 色，
+     在 --color-*-bg 深底上分别 8.49:1 / 9.18:1 */
+  --color-success-text: #a6e3a1;
+  --color-warning-text: #f9e2af;
+  /* 暗色下选中态必须比轨道(#313244)亮才读得出「被选中」 */
+  --control-active-bg: #45475a;
+  /* 链接色（暗色档）：--primary 在 --bg-primary(#1e1e2e) 上只有 3.91:1，
+     故底部用提亮一档的 --primary-hover；hover 再提亮（原「opacity:.75」
+     的做法会合成出 3.62:1，反而跌破 AA） */
+  --link-color: var(--primary-hover); /* 暗：#1e1e2e 底 5.35:1 ✓AA */
+  --link-color-hover: color-mix(in srgb, var(--primary-hover) 65%, #ffffff); /* 暗：8.23:1 ✓AA */
   --code-header-bg: #181825;
   --code-header-color: #a6adc8;
   --code-body-bg: #11111b;
@@ -119,7 +199,7 @@
   --window-color: #cdd6f4;
   --window-menu-bg: #181825;
   --window-menu-item-hover: #313244;
-  --window-bar-color: #0c3c75;
+  --window-bar-color: var(--primary-bar);
   --slider-bg: #45475a;
   --toggle-off-bg: #585b70;
   --xlsx-row-hover: #1a2a3a;
@@ -148,7 +228,7 @@
   --bg-primary-t: #00000037;
   --inline-code-hover-bg: #313244;
 
-  --accent-bg: #1a2a3a;
+  --accent-bg: var(--primary-soft);
 }
 :root {
   /* ===== 字号等级（medium 默认） ===== */

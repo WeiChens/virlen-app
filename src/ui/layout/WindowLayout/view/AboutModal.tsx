@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import './AboutModal.scss'
 import RemoveSvg from '@/ui/components/icons/RemoveSvg'
+import { rowKeyHandler } from '@/utils/a11y'
 
 import { appLogo, AppLogoSvg, appName } from '@/ui/constants'
 import { getName, getTauriVersion, getVersion } from '@tauri-apps/api/app'
@@ -31,6 +32,21 @@ const AboutModal = ({ show, onHide }: Props) => {
     })
   }, [])
 
+  // Esc 关闭。与设置面板同一约定：谁在最上层谁关 —— 共用 Modal(z 800) 与
+  // 设置面板(z 100) 都恒在本弹窗(z 6) 之上，故有它们在时交出 Escape，
+  // 避免一次 Esc 关掉两层。
+  useEffect(() => {
+    if (!show) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (document.querySelector('.modal-overlay')) return
+      if (document.querySelector('.settings-panel')) return
+      onHide()
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => document.removeEventListener('keydown', onKeyDown, true)
+  }, [show, onHide])
+
   async function handleCheckUpdate() {
     if (checking) return
     setChecking(true)
@@ -52,6 +68,11 @@ const AboutModal = ({ show, onHide }: Props) => {
     }
   }
 
+  // 关闭时直接不渲染：此前靠 opacity:0 常驻 DOM，pointer-events:none /
+  // opacity:0 都不影响键盘可达性 —— Tab 会落到不可见的「检查更新」按钮上，
+  // 按 Enter 会真的发起一次版本请求并弹 alert。
+  if (!show) return null
+
   return (
     <div className="AboutModal-component">
       <div className={`AboutModal ${show ? 'show' : ''}`}>
@@ -59,8 +80,14 @@ const AboutModal = ({ show, onHide }: Props) => {
           <div className="title">
             <span>{t('关于')}</span>
           </div>
-          <div className="remove" onClick={onHide}>
-            <RemoveSvg fill="var(--accent-color)" />
+          <div
+            className="remove"
+            role="button"
+            tabIndex={0}
+            aria-label={t('关闭')}
+            onClick={onHide}
+            onKeyDown={rowKeyHandler(onHide)}>
+            <RemoveSvg fill="currentColor" />
           </div>
         </div>
         <div className="center-box">
@@ -89,7 +116,7 @@ const AboutModal = ({ show, onHide }: Props) => {
           </div>
         </div>
       </div>
-      <div className={`mask ${show ? 'show' : ''}`}></div>
+      <div className={`mask ${show ? 'show' : ''}`} onClick={onHide}></div>
     </div>
   )
 }

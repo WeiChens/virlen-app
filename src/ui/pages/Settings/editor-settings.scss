@@ -1,38 +1,6 @@
 .editor-settings {
   padding: 24px;
 
-  // ==================== 总开关 ====================
-
-  .master-toggle {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 14px 16px;
-    border: 1px solid var(--border-color, #e5e5e5);
-    border-radius: 10px;
-    margin-bottom: 24px;
-    background: var(--bg-primary, #fff);
-
-    .master-toggle-info {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-
-      .master-toggle-title {
-        font-size: 14px;
-        font-weight: 600;
-        color: var(--text-primary, #1a1a1a);
-      }
-
-      .master-toggle-desc {
-        font-size: 12px;
-        color: var(--text-secondary, #999);
-        line-height: 1.5;
-      }
-    }
-  }
-
   // ==================== Toggle ====================
 
   .toggle {
@@ -86,13 +54,14 @@
     margin-bottom: 24px;
 
     h3 {
-      font-size: 15px;
+      font-size: var(--font-size-xl);
       font-weight: 600;
       margin: 0 0 4px;
+      color: var(--text-primary, #1a1a1a);
     }
 
     .add-hint {
-      font-size: 12px;
+      font-size: var(--font-size-sm);
       color: var(--text-secondary, #999);
       margin: 0 0 16px;
     }
@@ -168,13 +137,13 @@
         }
 
         .template-label {
-          font-size: 13px;
+          font-size: var(--font-size-md);
           font-weight: 600;
           color: var(--text-primary, #1a1a1a);
         }
 
         .template-desc {
-          font-size: 11px;
+          font-size: var(--font-size-xs);
           color: var(--text-secondary, #999);
           line-height: 1.4;
           word-break: break-all;
@@ -184,12 +153,12 @@
         // ---- 默认标签 ----
 
         .active-badge {
-          font-size: 10px;
+          font-size: var(--font-size-2xs);
           font-weight: 600;
           padding: 2px 8px;
           border-radius: 10px;
-          background: var(--color-success-bg, #e6f7e6);
-          color: var(--color-success, #0fcd55);
+          background: var(--color-success-bg);
+          color: var(--color-success-text);
           flex-shrink: 0;
           white-space: nowrap;
         }

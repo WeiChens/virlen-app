@@ -18,6 +18,8 @@ interface MessageBoxProps {
   text: ContentType
   confirmText?: string
   cancelText?: string
+  /** 破坏性操作：确认按钮染成实心危险色（与普通「确定」区分） */
+  danger?: boolean
   resolve?: (value: boolean) => void
 }
 
@@ -71,16 +73,23 @@ export function useMessageBox() {
       if (messageBoxList.length == 0) {
         return
       }
-      const onKeyUp = (e: KeyboardEvent) => {
-        if (e.key === 'Enter') {
-          onConfirmHandler(messageBoxList.length - 1)
-        } else if (e.key == 'Escape') {
-          onCancelHandler(messageBoxList.length - 1)
-        }
+      const onKeyDown = (e: KeyboardEvent) => {
+        if (e.key !== 'Enter') return
+        // 守卫：焦点在输入控件里时回车属于「输入」，不能当成「确认」
+        const el = e.target as HTMLElement | null
+        if (
+          el &&
+          (el.tagName === 'INPUT' ||
+            el.tagName === 'TEXTAREA' ||
+            el.isContentEditable)
+        )
+          return
+        onConfirmHandler(messageBoxList.length - 1)
       }
-      window.addEventListener('keyup', onKeyUp)
+      // Escape 交给 Modal 自己处理（两者都监听会导致一次 Esc 被处理两遍）
+      window.addEventListener('keydown', onKeyDown)
       return () => {
-        window.removeEventListener('keyup', onKeyUp)
+        window.removeEventListener('keydown', onKeyDown)
       }
     }, [messageBoxList])
 
@@ -101,7 +110,9 @@ export function useMessageBox() {
                   {item.text instanceof Function ? item.text() : item.text}
                 </div>
                 <div className={'bottom-view'}>
-                  {item.type === MessageBoxType.propt && (
+                  {/* info 是纯提示（只给「确定」）；warn / propt 都是「确认类」操作，
+                      必须给出可见的取消入口，否则不可逆操作只能靠 Esc 逃逸 */}
+                  {item.type !== MessageBoxType.info && (
                     <ripple-button
                       className={'cancel'}
                       onClick={() => onCancelHandler(index)}>
@@ -109,7 +120,7 @@ export function useMessageBox() {
                     </ripple-button>
                   )}
                   <ripple-button
-                    className={'confirm'}
+                    className={`confirm${item.danger ? ' danger' : ''}`}
                     onClick={() => onConfirmHandler(index)}>
                     {item.confirmText || t('确 定')}
                   </ripple-button>
@@ -139,6 +150,7 @@ function showMessageBox(props: MessageBoxProps) {
     text: props.text,
     cancelText: props.cancelText,
     confirmText: props.confirmText,
+    danger: props.danger,
     resolve: resolve!,
   })
   return promise
@@ -147,12 +159,15 @@ function showMessageBox(props: MessageBoxProps) {
 interface PropMoreOption {
   cancelText?: string
   confirmText?: string
+  /** 破坏性操作传 true，确认按钮会变成实心红色 */
+  danger?: boolean
 }
 export const MessageBox = {
   info: (title: string, text: ContentType) =>
     showMessageBox({ title, text, type: MessageBoxType.info }),
+  // warn 本身即「警告」，默认按破坏性渲染
   warn: (title: string, text: ContentType) =>
-    showMessageBox({ title, text, type: MessageBoxType.warn }),
+    showMessageBox({ title, text, type: MessageBoxType.warn, danger: true }),
   propt: (title: string, text: ContentType, option: PropMoreOption = {}) => {
     return showMessageBox({
       title,
@@ -160,6 +175,7 @@ export const MessageBox = {
       type: MessageBoxType.propt,
       cancelText: option.cancelText,
       confirmText: option.confirmText,
+      danger: option.danger,
     })
   },
 }

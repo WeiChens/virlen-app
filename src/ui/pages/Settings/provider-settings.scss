@@ -4,15 +4,18 @@
   .section-header {
     margin-bottom: 20px;
 
-    h2 {
-      font-size: 18px;
+    /* 原先写的是 h2，但 JSX 渲染的是 h3 → 规则永不命中，
+       「模型服务」标题实际吃浏览器默认 h3 样式（含默认 margin），与全页不一致 */
+    h3 {
+      font-size: var(--font-size-xl);
       font-weight: 600;
       margin: 0 0 4px;
+      color: var(--text-primary, #1a1a1a);
     }
 
     .section-desc {
-      font-size: 13px;
-      color: var(--text-secondary, #888);
+      font-size: var(--font-size-md);
+      color: var(--text-secondary);
     }
   }
 
@@ -71,13 +74,13 @@
           min-width: 0;
 
           .provider-name {
-            font-size: 14px;
+            font-size: var(--font-size-base);
             font-weight: 500;
             color: var(--text-primary, #1a1a1a);
           }
 
           .provider-url {
-            font-size: 11px;
+            font-size: var(--font-size-xs);
             color: var(--text-secondary, #999);
             white-space: nowrap;
             overflow: hidden;
@@ -94,14 +97,14 @@
         flex-shrink: 0;
 
         .status-badge {
-          font-size: 11px;
+          font-size: var(--font-size-xs);
           padding: 2px 8px;
           border-radius: 10px;
           font-weight: 500;
 
           &.ok {
             background: var(--color-success-bg);
-            color: var(--color-success);
+            color: var(--color-success-text);
           }
           &.fail {
             background: var(--color-danger-bg);
@@ -112,8 +115,9 @@
         .toggle {
           position: relative;
           display: inline-block;
-          width: 40px;
-          height: 22px;
+          /* 与通用/编辑器页的开关尺寸对齐（原 40×22 是第三种规格） */
+          width: 44px;
+          height: 24px;
           cursor: pointer;
 
           input {
@@ -126,7 +130,7 @@
             }
 
             &:checked + .toggle-slider::before {
-              transform: translateX(18px);
+              transform: translateX(20px);
             }
           }
 
@@ -136,15 +140,16 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: #ccc;
-            border-radius: 11px;
+            /* 原硬编码 #ccc：暗色主题下仍是浅灰，且不跟随 --toggle-off-bg */
+            background: var(--toggle-off-bg, #ccc);
+            border-radius: 12px;
             transition: background 0.2s;
 
             &::before {
               content: '';
               position: absolute;
-              width: 18px;
-              height: 18px;
+              width: 20px;
+              height: 20px;
               left: 2px;
               bottom: 2px;
               background: #fff;
@@ -173,13 +178,13 @@
 
         .detail-label {
           width: 70px;
-          font-size: 12px;
+          font-size: var(--font-size-sm);
           color: var(--text-secondary, #888);
           flex-shrink: 0;
         }
 
         .detail-value {
-          font-size: 13px;
+          font-size: var(--font-size-md);
           color: var(--text-primary, #1a1a1a);
           word-break: break-all;
           &.scroll {
@@ -205,7 +210,7 @@
           gap: 4px;
           padding: 6px 14px;
           border-radius: 6px;
-          font-size: 12px;
+          font-size: var(--font-size-sm);
           cursor: pointer;
           border: 1px solid var(--border-color, #e5e5e5);
           transition: all 0.15s;
@@ -213,6 +218,8 @@
           svg {
             width: 14px;
             height: 14px;
+            /* 跟随文字颜色，否则 .btn-danger 的红字旁边跟一个近黑图标 */
+            fill: currentColor;
           }
 
           &.btn-secondary {
@@ -247,13 +254,13 @@
   .add-provider-section {
     margin-bottom: 16px;
     h3 {
-      font-size: 15px;
+      font-size: var(--font-size-lg);
       font-weight: 600;
       margin: 0 0 4px;
     }
 
     .add-hint {
-      font-size: 12px;
+      font-size: var(--font-size-sm);
       color: var(--text-secondary, #999);
       margin: 0 0 16px;
     }
@@ -292,7 +299,7 @@
           }
         }
         .template-label {
-          font-size: 12px;
+          font-size: var(--font-size-sm);
           color: var(--text-primary, #1a1a1a);
           font-weight: 500;
         }

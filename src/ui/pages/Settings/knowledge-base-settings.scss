@@ -4,7 +4,7 @@
 
   h3 {
     margin: 0 0 16px;
-    font-size: 16px;
+    font-size: var(--font-size-xl);
     font-weight: 600;
   }
 
@@ -51,10 +51,11 @@
     border-radius: 12px;
     cursor: pointer;
     transition: background-color 0.2s;
-    background-color: var(--border-color, #ccc);
+    /* 原用 --border-color：把内容色当控件底色，且与另两种开关不一致 */
+    background-color: var(--toggle-off-bg, #ccc);
 
     &.active {
-      background-color: var(--accent-color, #4f6ef7);
+      background-color: var(--accent-color);
     }
 
     .kb-toggle-knob {
@@ -81,7 +82,7 @@
   }
 
   .kb-label {
-    font-size: 13px;
+    font-size: var(--font-size-md);
     white-space: nowrap;
   }
 
@@ -93,8 +94,8 @@
     border: 1px solid var(--border-color, #ccc);
     border-radius: 6px;
     background: var(--btn-bg, #f5f5f5);
-    color: var(--text-color, #333);
-    font-size: 13px;
+    color: var(--text-primary);
+    font-size: var(--font-size-md);
     cursor: pointer;
     transition: all 0.15s;
     white-space: nowrap;
@@ -104,9 +105,9 @@
     }
 
     &.kb-btn-primary {
-      background: var(--accent-color, #4f6ef7);
+      background: var(--accent-color);
       color: white;
-      border-color: var(--accent-color, #4f6ef7);
+      border-color: var(--accent-color);
 
       &:hover {
         opacity: 0.85;
@@ -114,17 +115,17 @@
     }
 
     &.kb-btn-danger {
-      color: #e74c3c;
-      border-color: #e74c3c;
+      color: var(--color-danger);
+      border-color: var(--color-danger);
 
       &:hover {
-        background: #fde8e8;
+        background: var(--color-danger-bg);
       }
     }
 
     &.kb-btn-sm {
       padding: 4px 10px;
-      font-size: 12px;
+      font-size: var(--font-size-sm);
     }
 
     &:disabled {
@@ -151,7 +152,7 @@
       transition: border-color 0.15s;
 
       &:hover {
-        border-color: var(--accent-color, #4f6ef7);
+        border-color: var(--accent-color);
       }
 
       .kb-card-info {
@@ -160,12 +161,12 @@
 
         .kb-card-name {
           font-weight: 600;
-          font-size: 14px;
+          font-size: var(--font-size-base);
           margin-bottom: 4px;
         }
 
         .kb-card-desc {
-          font-size: 12px;
+          font-size: var(--font-size-sm);
           color: var(--text-secondary, #888);
           margin-bottom: 4px;
           white-space: nowrap;
@@ -174,7 +175,7 @@
         }
 
         .kb-card-meta {
-          font-size: 11px;
+          font-size: var(--font-size-xs);
           color: var(--text-secondary, #aaa);
         }
       }
@@ -199,7 +200,7 @@
     margin-top: 12px;
 
     .kb-search-label {
-      font-size: 12px;
+      font-size: var(--font-size-sm);
       font-weight: 600;
       display: block;
       margin-bottom: 6px;
@@ -220,10 +221,10 @@
 
     .kb-create-label {
       display: block;
-      font-size: 13px;
+      font-size: var(--font-size-md);
       font-weight: 500;
       margin-bottom: 6px;
-      color: var(--text-color, #333);
+      color: var(--text-primary);
     }
 
     .kb-create-input {
@@ -232,13 +233,13 @@
       border: 1px solid var(--border-color, #ccc);
       border-radius: 6px;
       background: var(--input-bg, #fff);
-      color: var(--text-color, #333);
-      font-size: 13px;
+      color: var(--text-primary);
+      font-size: var(--font-size-md);
       outline: none;
       box-sizing: border-box;
 
       &:focus {
-        border-color: var(--accent-color, #4f6ef7);
+        border-color: var(--accent-color);
       }
     }
 
@@ -248,15 +249,15 @@
       border: 1px solid var(--border-color, #ccc);
       border-radius: 6px;
       background: var(--input-bg, #fff);
-      color: var(--text-color, #333);
-      font-size: 13px;
+      color: var(--text-primary);
+      font-size: var(--font-size-md);
       outline: none;
       resize: vertical;
       font-family: inherit;
       box-sizing: border-box;
 
       &:focus {
-        border-color: var(--accent-color, #4f6ef7);
+        border-color: var(--accent-color);
       }
     }
   }
@@ -265,7 +266,7 @@
   .modal-footer {
     button.btn-cancel {
       background: var(--btn-bg, #f5f5f5);
-      color: var(--text-color, #333);
+      color: var(--text-primary);
       border: 1px solid var(--border-color, #ccc);
       border-radius: 6px;
 
@@ -275,14 +276,14 @@
     }
 
     button.btn-confirm {
-      background: var(--accent-color, #4f6ef7);
+      background: var(--accent-color);
       color: white;
-      border: 1px solid var(--accent-color, #4f6ef7);
+      border: 1px solid var(--accent-color);
       border-radius: 6px;
 
       &:hover:not(:disabled) {
         opacity: 0.85;
-        background: var(--accent-color, #4f6ef7);
+        background: var(--accent-color);
       }
     }
   }
@@ -305,12 +306,12 @@
       padding: 12px;
       background: var(--card-bg, #f5f5f5);
       border-radius: 6px;
-      font-size: 13px;
+      font-size: var(--font-size-md);
       line-height: 1.7;
       white-space: pre-wrap;
       word-break: break-word;
       overflow-y: auto;
-      color: var(--text-color, #333);
+      color: var(--text-primary);
       max-height: 400px;
     }
   }
@@ -327,7 +328,7 @@
       border: 1px solid var(--border-color, #e5e5e5);
       border-radius: 6px;
       background: var(--card-bg, #fafafa);
-      font-size: 13px;
+      font-size: var(--font-size-md);
 
       .doc-item-name {
         font-weight: 500;
@@ -349,28 +350,28 @@
         }
 
         .doc-item-status {
-          font-size: 11px;
+          font-size: var(--font-size-xs);
           padding: 1px 6px;
           border-radius: 4px;
 
           &.status-ready {
-            background: #e8f5e9;
-            color: #2e7d32;
+            background: var(--color-success-bg);
+            color: var(--color-success-text);
           }
 
           &.status-processing {
-            background: #fff3e0;
-            color: #e65100;
+            background: var(--color-warning-bg);
+            color: var(--color-warning-text);
           }
 
           &.status-error {
-            background: #fce4ec;
-            color: #c62828;
+            background: var(--color-error-bg);
+            color: var(--color-error-text);
           }
         }
 
         .doc-item-meta {
-          font-size: 11px;
+          font-size: var(--font-size-xs);
           color: var(--text-secondary, #999);
         }
 
@@ -395,12 +396,12 @@
       border: 1px solid var(--border-color, #ccc);
       border-radius: 6px;
       background: var(--input-bg, #fff);
-      color: var(--text-color, #333);
-      font-size: 13px;
+      color: var(--text-primary);
+      font-size: var(--font-size-md);
       outline: none;
 
       &:focus {
-        border-color: var(--accent-color, #4f6ef7);
+        border-color: var(--accent-color);
       }
     }
   }
@@ -414,7 +415,7 @@
     max-height: 300px;
     overflow-y: auto;
     white-space: pre-wrap;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     line-height: 1.6;
 
     .kb-search-empty {
@@ -427,8 +428,8 @@
   .kb-empty {
     text-align: center;
     padding: 40px 20px;
-    color: var(--text-secondary, #999);
-    font-size: 14px;
+    color: var(--text-secondary);
+    font-size: var(--font-size-md);
   }
 
   .kb-loading {
@@ -483,12 +484,12 @@
       border: 1px solid var(--border-color, #ccc);
       border-radius: 6px;
       background: var(--input-bg, #fff);
-      color: var(--text-color, #333);
-      font-size: 12px;
+      color: var(--text-primary);
+      font-size: var(--font-size-sm);
       outline: none;
 
       &:focus {
-        border-color: var(--accent-color, #4f6ef7);
+        border-color: var(--accent-color);
       }
     }
 
@@ -502,7 +503,7 @@
   }
 
   .kb-doc-search-info {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     color: var(--text-secondary, #888);
     margin-bottom: 8px;
     padding: 4px 0;
@@ -516,7 +517,7 @@
     padding: 10px 0 2px;
     gap: 8px;
     .kb-pagination-total {
-      font-size: 12px;
+      font-size: var(--font-size-sm);
       color: var(--text-secondary, #888);
     }
 
@@ -526,7 +527,7 @@
       gap: 8px;
 
       .kb-pagination-info {
-        font-size: 13px;
+        font-size: var(--font-size-md);
         color: var(--text-secondary, #888);
         user-select: none;
       }
@@ -559,7 +560,7 @@
       gap: 8px;
 
       .kb-pagination-info {
-        font-size: 13px;
+        font-size: var(--font-size-md);
         color: var(--text-secondary, #888);
         user-select: none;
       }
@@ -587,9 +588,9 @@
     }
 
     .kb-edit-label {
-      font-size: 13px;
+      font-size: var(--font-size-md);
       font-weight: 500;
-      color: var(--text-color, #333);
+      color: var(--text-primary);
     }
 
     .kb-edit-input {
@@ -598,13 +599,13 @@
       border: 1px solid var(--border-color, #ccc);
       border-radius: 6px;
       background: var(--input-bg, #fff);
-      color: var(--text-color, #333);
-      font-size: 13px;
+      color: var(--text-primary);
+      font-size: var(--font-size-md);
       outline: none;
       box-sizing: border-box;
 
       &:focus {
-        border-color: var(--accent-color, #4f6ef7);
+        border-color: var(--accent-color);
       }
     }
 
@@ -614,7 +615,7 @@
       border: 1px solid var(--border-color, #ccc);
       border-radius: 6px;
       background: var(--input-bg, #fff);
-      color: var(--text-color, #333);
+      color: var(--text-primary);
       font-size: var(--font-size-xs, 13px);
       outline: none;
       resize: vertical;
@@ -623,7 +624,7 @@
       box-sizing: border-box;
 
       &:focus {
-        border-color: var(--accent-color, #4f6ef7);
+        border-color: var(--accent-color);
       }
     }
 
@@ -635,7 +636,7 @@
       border-top: 1px solid var(--border-color, #eee);
 
       .kb-edit-reupload-hint {
-        font-size: 12px;
+        font-size: var(--font-size-sm);
         color: var(--text-secondary, #999);
       }
     }

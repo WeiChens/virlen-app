@@ -12,6 +12,7 @@ import AddSvg from '@/ui/components/icons/AddSvg'
 import { showToast } from '@/ui/components/shared/Toast'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 import { t, tpl } from '@/ui/i18n'
+import { rowKeyHandler } from '@/utils/a11y'
 import './agent-settings.scss'
 import { DEFAULT_AGENT_ID } from '@/ui/constants'
 
@@ -42,7 +43,7 @@ function AgentSettings() {
         name: agent.name,
         reason: t('此操作不可撤销。'),
       }),
-      { confirmText: t('删除'), cancelText: t('取消') },
+      { confirmText: t('删除'), cancelText: t('取消'), danger: true },
     )
     if (!confirmed) return
     const ok = agentStore.deleteAgent(agent.id)
@@ -69,11 +70,14 @@ function AgentSettings() {
 
       <div className="agent-list">
         {agents.map((agent) => (
-          <div
-            key={agent.id}
-            className="agent-item"
-            onClick={() => handleEdit(agent)}>
-            <div className="agent-item-main">
+          <div key={agent.id} className="agent-item">
+            <div
+              className="agent-item-main"
+              role="button"
+              tabIndex={0}
+              aria-label={agent.name}
+              onClick={() => handleEdit(agent)}
+              onKeyDown={rowKeyHandler(() => handleEdit(agent))}>
               <div className="row">
                 <span className="agent-item-name">{agent.name}</span>
                 <div className="agent-item-meta">

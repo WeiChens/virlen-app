@@ -23,7 +23,7 @@
     padding: 10px 8px;
     border: none;
     background: transparent;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     font-weight: 500;
     color: var(--text-secondary, #888);
     cursor: pointer;
@@ -67,7 +67,7 @@
 
     label {
       display: block;
-      font-size: 13px;
+      font-size: var(--font-size-md);
       font-weight: 500;
       color: var(--text-primary, #1a1a1a);
       margin-bottom: 6px;
@@ -79,7 +79,7 @@
       padding: 8px 12px;
       border: 1px solid var(--border-color, #e5e5e5);
       border-radius: 8px;
-      font-size: 13px;
+      font-size: var(--font-size-md);
       color: var(--text-primary, #1a1a1a);
       background: var(--bg-primary, #fff);
       outline: none;
@@ -104,7 +104,7 @@
 
     .md-textarea {
       min-height: 200px;
-      font-size: 13px;
+      font-size: var(--font-size-md);
       line-height: 1.7;
     }
 
@@ -118,7 +118,7 @@
       margin-bottom: 10px;
 
       .presets-label {
-        font-size: 12px;
+        font-size: var(--font-size-sm);
         color: var(--text-secondary, #888);
         flex-shrink: 0;
         margin-bottom: 0;
@@ -129,7 +129,7 @@
         border: 1px solid var(--border-color, #e5e5e5);
         border-radius: 6px;
         background: var(--bg-primary, #fff);
-        font-size: 12px;
+        font-size: var(--font-size-sm);
         color: var(--text-primary, #1a1a1a);
         cursor: pointer;
         transition: all 0.15s;
@@ -147,7 +147,7 @@
 
     .form-hint {
       display: block;
-      font-size: 11px;
+      font-size: var(--font-size-xs);
       color: var(--text-secondary, #aaa);
       margin-top: 4px;
     }
@@ -167,14 +167,14 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        font-size: 13px;
+        font-size: var(--font-size-md);
         font-weight: 500;
         color: var(--text-primary, #1a1a1a);
         margin-bottom: 6px;
       }
 
       .param-value {
-        font-size: 12px;
+        font-size: var(--font-size-sm);
         color: var(--accent-color, #4f46e5);
         font-weight: 600;
         background: var(--bg-secondary, #f7f7f8);
@@ -223,7 +223,7 @@
       }
 
       .param-hint {
-        font-size: 11px;
+        font-size: var(--font-size-xs);
         color: var(--text-secondary, #aaa);
         line-height: 1.4;
       }
@@ -233,7 +233,7 @@
       padding: 8px 30px 8px 12px;
       border: 1px solid var(--border-color, #e5e5e5);
       border-radius: 8px;
-      font-size: 13px;
+      font-size: var(--font-size-md);
       color: var(--text-primary, #1a1a1a);
       background: var(--bg-primary, #fff)
         url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E")
@@ -313,13 +313,13 @@
     }
 
     .toggle-all-btn {
-      font-size: 12px;
+      font-size: var(--font-size-sm);
       color: var(--accent-color, #4f46e5);
       background: none;
       border: none;
       cursor: pointer;
       padding: 4px 8px;
-      border-radius: 4px;
+      border-radius: 6px;
 
       &:hover {
         background: var(--hover-bg, #f0f0f0);
@@ -368,7 +368,7 @@
     }
 
     .tool-name {
-      font-size: 13px;
+      font-size: var(--font-size-md);
       font-weight: 500;
       color: var(--text-primary, #1a1a1a);
       min-width: 100px;
@@ -376,7 +376,7 @@
     }
 
     .tool-id {
-      font-size: 11px;
+      font-size: var(--font-size-xs);
       color: var(--text-secondary, #999);
       font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
       min-width: 120px;
@@ -384,7 +384,7 @@
     }
 
     .tool-desc {
-      font-size: 11px;
+      font-size: var(--font-size-xs);
       color: var(--text-secondary, #888);
       white-space: pre-wrap;
       flex: 1;
@@ -441,13 +441,13 @@
     }
 
     .tool-category-name {
-      font-size: 13px;
+      font-size: var(--font-size-md);
       font-weight: 600;
       color: var(--text-primary, #1a1a1a);
     }
 
     .tool-category-count {
-      font-size: 11px;
+      font-size: var(--font-size-xs);
       color: var(--text-secondary, #999);
     }
   }
@@ -469,7 +469,7 @@
 
     .form-hint {
       margin-top: 0;
-      font-size: 12px;
+      font-size: var(--font-size-sm);
     }
   }
 
@@ -489,7 +489,7 @@
       border-radius: 8px;
       background: var(--bg-primary, #fff);
       color: var(--text-primary, #1a1a1a);
-      font-size: 13px;
+      font-size: var(--font-size-md);
       cursor: pointer;
       transition: background 0.15s;
 
@@ -509,7 +509,7 @@
       border-radius: 8px;
       background: var(--accent-color, #4f46e5);
       color: #fff;
-      font-size: 13px;
+      font-size: var(--font-size-md);
       font-weight: 500;
       cursor: pointer;
       transition: opacity 0.15s;

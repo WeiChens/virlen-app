@@ -15,6 +15,7 @@ import EditSvg from '@/ui/components/icons/EditSvg'
 import DeleteSvg from '@/ui/components/icons/DeleteSvg'
 import { getProviderIcon } from './provider-icons'
 import { t, tpl } from '@/ui/i18n'
+import { rowKeyHandler } from '@/utils/a11y'
 import './provider-settings.scss'
 import { showToast } from '@/ui/components/shared/Toast'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
@@ -167,8 +168,14 @@ function ProviderSettings() {
     }
     setShowAdd(false)
     setAddTemplate(null)
-    // 自动获取模型
-    handleFetchModels(newProvider.id)
+    // 自动获取模型（handleFetchModels 会 rethrow，这里必须接住，否则是未捕获的 Promise 拒绝）
+    handleFetchModels(newProvider.id).catch((e) => {
+      showToast(
+        tpl('获取模型失败: $__error__', {
+          error: e instanceof Error ? e.message : String(e),
+        }),
+      )
+    })
   }
 
   function handleSaveEdit(config: {
@@ -201,9 +208,15 @@ function ProviderSettings() {
       providerPort.register(updated[idx].id, p)
     }
     setEditingProvider(null)
-    // 自动获取模型
+    // 自动获取模型（同上：接住 rethrow）
     if (editingProvider.models.length === 0)
-      handleFetchModels(editingProvider.id)
+      handleFetchModels(editingProvider.id).catch((e) => {
+        showToast(
+          tpl('获取模型失败: $__error__', {
+            error: e instanceof Error ? e.message : String(e),
+          }),
+        )
+      })
   }
 
   return (
@@ -244,7 +257,17 @@ function ProviderSettings() {
                       expandedProvider === provider.id ? null : provider.id,
                     )
                   }>
-                  <div className="provider-info">
+                  <div
+                    className="provider-info"
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={expandedProvider === provider.id}
+                    aria-label={provider.name}
+                    onKeyDown={rowKeyHandler(() =>
+                      setExpandedProvider(
+                        expandedProvider === provider.id ? null : provider.id,
+                      ),
+                    )}>
                     <span className="provider-icon">
                       {getProviderIcon(provider.templateName)}
                     </span>
@@ -267,6 +290,9 @@ function ProviderSettings() {
                       onClick={(e) => e.stopPropagation()}>
                       <input
                         type="checkbox"
+                        aria-label={tpl('启用 $__name__', {
+                          name: provider.name,
+                        })}
                         checked={provider.enabled}
                         onChange={() => handleToggleEnabled(provider)}
                       />

@@ -25,6 +25,7 @@ import MoreSvg from '@/ui/components/icons/MoreSvg'
 import { t } from '@/ui/i18n'
 import { showToast } from '@/ui/components/shared/Toast'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
+import { rowKeyHandler } from '@/utils/a11y'
 import './search-engine-settings.scss'
 
 function SearchEngineSettings() {
@@ -261,8 +262,16 @@ function SearchEngineSettings() {
                       {isActive && <div className="radio-dot" />}
                     </div>
 
-                    {/* 信息 */}
-                    <div className="provider-item-info">
+                    {/* 信息（键盘可达的「选择」入口；鼠标点击冒泡到上面整行） */}
+                    <div
+                      className="provider-item-info"
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={isActive}
+                      aria-label={provider.name}
+                      onKeyDown={rowKeyHandler(() =>
+                        handleSelect(provider.id),
+                      )}>
                       <span className="provider-item-name">
                         {provider.name}
                       </span>

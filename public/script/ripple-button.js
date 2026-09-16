@@ -7,6 +7,11 @@
         constructor() {
             super()
             this.addEventListener('mousedown', async function (e) {
+                // 尊重系统「减弱动态效果」：不播放波纹
+                // （CSS 的 prefers-reduced-motion 媒体查询管不到 WAAPI 动画，必须在这里拦）
+                if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                    return
+                }
                 const rect = e.currentTarget.getBoundingClientRect()
                 const x = e.clientX - rect.left
                 const y = e.clientY - rect.top

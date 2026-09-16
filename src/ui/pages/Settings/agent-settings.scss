@@ -17,7 +17,7 @@
   }
 
   .section-title {
-    font-size: 16px;
+    font-size: var(--font-size-xl);
     font-weight: 600;
     margin: 0;
     color: var(--text-primary, #1a1a1a);
@@ -32,7 +32,7 @@
     border-radius: 6px;
     background: var(--accent-color, #4f46e5);
     color: #fff;
-    font-size: 13px;
+    font-size: var(--font-size-md);
     font-weight: 500;
     cursor: pointer;
     transition: opacity 0.15s;
@@ -85,13 +85,13 @@
       gap: 1px;
 
       .agent-item-name {
-        font-size: 14px;
+        font-size: var(--font-size-base);
         font-weight: 500;
         color: var(--text-primary, #1a1a1a);
       }
 
       .agent-item-desc {
-        font-size: 11px;
+        font-size: var(--font-size-xs);
         color: var(--text-secondary, #888);
         overflow: hidden;
         text-overflow: ellipsis;
@@ -114,7 +114,7 @@
     }
 
     .agent-item-tools {
-      font-size: 11px;
+      font-size: var(--font-size-xs);
       color: var(--text-secondary, #888);
       background: var(--tag-bg, #e8e8ed);
       padding: 2px 8px;
@@ -123,7 +123,7 @@
     }
 
     .agent-item-badge {
-      font-size: 10px;
+      font-size: var(--font-size-2xs);
       color: #fff;
       background: var(--accent-color, #4f46e5);
       padding: 2px 8px;
@@ -131,26 +131,19 @@
       font-weight: 500;
     }
 
+    /* 常显：原 opacity: 0 + :hover 展开，让键盘/触屏用户永远看不到、也点不到删除；
+       同时去掉 absolute 定位，改为普通 flex 子项，避免压住描述文字 */
     .agent-item-actions {
-      position: absolute;
-      right: 8px;
-      bottom: 8px;
       display: flex;
       gap: 2px;
       flex-shrink: 0;
-      opacity: 0;
-      transition: opacity 0.12s;
-    }
-
-    &:hover .agent-item-actions {
-      opacity: 1;
     }
   }
 
   // ==================== Action Buttons ====================
 
   .agent-action-btn {
-    height: 18px;
+    min-height: 24px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -160,8 +153,8 @@
     color: var(--text-secondary, #888);
     cursor: pointer;
     transition: all 0.12s;
-    font-size: 11px;
-    padding: 2px 6px;
+    font-size: var(--font-size-xs);
+    padding: 4px 10px;
     color: var(--color-danger, #e53e3e);
     &:hover {
       background: var(--hover-bg, #f0f0f0);
@@ -171,6 +164,11 @@
     &.danger:hover {
       background: var(--color-danger-bg, #fee2e2);
       color: var(--color-danger, #e53e3e);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 1px;
     }
 
     svg {
@@ -183,8 +181,8 @@
 
   .agent-empty {
     text-align: center;
-    padding: 40px 0;
-    color: var(--text-secondary, #888);
-    font-size: 14px;
+    padding: 40px 20px;
+    color: var(--text-secondary);
+    font-size: var(--font-size-md);
   }
 }
