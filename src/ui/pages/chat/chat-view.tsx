@@ -56,6 +56,7 @@ import { repairSessionIfNeeded } from '@/services/chat-service'
 import { vision } from '@/infrastructure/vision'
 import type { VisionAnalyzeResult } from '@/infrastructure/vision/types'
 import { requestAttentionIfUnfocused } from '@/utils/windowAttention'
+import { createFrameBatcher } from '@/utils/frameBatch'
 import { track, trackPerf, hashText } from '@/utils/telemetry'
 /** 侧边栏宽度 localStorage 键名 */
 const SIDEBAR_WIDTH_KEY = '_sidebar_width'
@@ -309,13 +310,49 @@ function ChatView() {
     }
   }, [sessions.length])
 
+  /**
+   * 稳定的 setText 回调。
+   * ⚠️ 不要写成内联箭头（`setText={(t) => ref.current?.setText(t)}`）：
+   * message-list 会把它包进 useCallback 作为 MessageBubble 的 onEdit props，
+   * 引用一变就绕过了 memo，流式期间所有可见气泡都会跟着重渲染。
+   */
+  const handleSetText = useCallback((text: string) => {
+    chatInputRef.current?.setText(text)
+  }, [])
+
   // 从 store 同步消息到 chatState（仅用于通知组件重渲染）
   const [messages, setMessages] = useState<Message[]>([])
-  const syncMessagesToUI = useCallback((sessionId: string) => {
+  const applyMessagesUpdate = useCallback((sessionId: string) => {
     if (sessionId !== chatState.value.currentSessionId) return
     const s = sessionStore.getSession(sessionId)
     if (s) setMessages([...s.messages])
   }, [])
+  /**
+   * 帧合批（流式性能关键）：
+   * 流式期间 onMessagesUpdate 按 chunk 触发（每秒上百次），每次都 setMessages 会把
+   * 「消息列表 + 气泡」的重渲染次数拉到与 chunk 同量级。合并到每帧一次后，渲染
+   * 次数上限被钉在帧率，视觉上无差别。
+   */
+  const messagesBatchRef = useRef<ReturnType<
+    typeof createFrameBatcher<[string]>
+  > | null>(null)
+  if (!messagesBatchRef.current) {
+    messagesBatchRef.current = createFrameBatcher(applyMessagesUpdate)
+  }
+  useEffect(() => () => messagesBatchRef.current?.cancel(), [])
+  /** 高频路径（流式 chunk / 引擎事件）：帧合批 */
+  const syncMessagesToUI = useCallback((sessionId: string) => {
+    if (sessionId !== chatState.value.currentSessionId) return
+    messagesBatchRef.current?.schedule(sessionId)
+  }, [])
+  /** 低频一次性路径（发送、图片分析结果回填）：立即生效，并丢弃排队中的旧更新 */
+  const syncMessagesToUINow = useCallback(
+    (sessionId: string) => {
+      messagesBatchRef.current?.cancel()
+      applyMessagesUpdate(sessionId)
+    },
+    [applyMessagesUpdate],
+  )
   // 当 currentSessionId 变为 null 时清空 messages
   useEffect(() => {
     if (!chatState.value.currentSessionId) {
@@ -469,7 +506,7 @@ function ChatView() {
       timestamp: Date.now(),
     }
     addSessionMessage(sid, userMessage)
-    syncMessagesToUI(sid)
+    syncMessagesToUINow(sid)
 
     // ── 视觉分析（此时用户已看到消息，后台分析不阻塞界面） ──
     let imageOptimize = false
@@ -519,7 +556,7 @@ function ChatView() {
         imageVisionAnalyzeOptimize: true,
         imageVisionAnalyzeResult: imageAnalyzeResult,
       })
-      syncMessagesToUI(sid)
+      syncMessagesToUINow(sid)
     }
 
     // ── 清除分析中的状态文本，sendMessage 会通过 onWorkingChange 自动设置 ──
@@ -718,7 +755,7 @@ function ChatView() {
             <ChatMessageList
               messages={messages}
               setMessages={setMessages}
-              setText={(text) => chatInputRef.current?.setText(text)}
+              setText={handleSetText}
             />
             <ChatInput
               ref={chatInputRef}
@@ -734,7 +771,7 @@ function ChatView() {
         ) : (
           <div className="welcome-layout">
             <WelcomeScreen
-              setText={(text) => chatInputRef.current?.setText(text)}
+              setText={handleSetText}
             />
             <ChatInput
               ref={chatInputRef}

@@ -1,101 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
 import { t } from '@/ui/i18n'
 import { IToolCallMessage, ToolMessageProps } from './IToolCallMessage'
-import commentEvent from '@/events/commentEvent'
-import {
-  ToolOutput,
-  toolOutputStore,
-} from '@/infrastructure/tools/output-store'
-import { processTerminalOutput } from '@/infrastructure/tools/execute/common'
-
-function RunningOutput({
-  toolCallId,
-  cmd,
-  tips,
-}: {
-  toolCallId: string
-  cmd: string
-  tips?: string
-}) {
-  const [liveOutput, setLiveOutput] = useState<string>(null)
-  const [entry, setEntry] = useState<ToolOutput | null>(
-    toolOutputStore.get(toolCallId),
-  )
-  const scrollRef = useRef<HTMLPreElement>(null)
-  useEffect(() => {
-    // 立即读取一次已有输出
-    const existing = toolOutputStore.get(toolCallId)
-    if (existing) {
-      setLiveOutput(existing.output)
-    }
-    const unsub = toolOutputStore.subscribe((id, out) => {
-      if (id === toolCallId) {
-        setLiveOutput(out.output)
-      }
-    })
-    return unsub
-  }, [toolCallId])
-
-  useEffect(() => {
-    if (entry) return
-    const timer = setInterval(() => {
-      const newEntry = toolOutputStore.get(toolCallId)
-      if (newEntry) {
-        setEntry(newEntry)
-      }
-    }, 500)
-    return () => {
-      clearInterval(timer)
-    }
-  }, [entry])
-
-  useEffect(() => {
-    if (entry) {
-      commentEvent.emit('requestScrollToBottom')
-      if (!scrollRef.current) return
-      const bottom =
-        scrollRef.current.scrollHeight -
-        (scrollRef.current.scrollTop + scrollRef.current.clientHeight)
-      if (bottom < 40) {
-        scrollRef.current.scroll({
-          top: scrollRef.current.scrollHeight,
-          behavior: 'instant',
-        })
-      }
-    }
-  }, [liveOutput, entry])
-
-  if (!entry) return null
-  const output = processTerminalOutput(liveOutput)
-
-  return (
-    <div className="tool-cmd-running">
-      <div className="execute-command-wrapper">
-        <div className="header">
-          <span className="title">Terminal</span>
-          {tips && <span className="execute-command-header-tips">{tips}</span>}
-          {entry.kill && (
-            <button
-              className="tool-cmd-kill-btn"
-              onClick={() => {
-                entry.kill?.()
-              }}
-              title={t('终止执行')}>
-              ■ {t('终止')}
-            </button>
-          )}
-        </div>
-        <div className="code-pre-warpper">
-          <pre className="code-pre" ref={scrollRef}>
-            <code style={{ userSelect: 'none' }}>$ </code>
-            <code>{cmd + '\n'}</code>
-            <code>{output}</code>
-          </pre>
-        </div>
-      </div>
-    </div>
-  )
-}
+import { TerminalView } from './TerminalBlock'
 
 class ExecuteCommandMessage implements IToolCallMessage {
   getToolName(): string {
@@ -122,49 +27,20 @@ class ExecuteCommandMessage implements IToolCallMessage {
     }
   }
   getExpandView(props: ToolMessageProps): React.ReactNode {
-    // if (props.message?.isError) {
-    //   return <div className="error">{props.message.content as string}</div>
-    // }
     try {
-      const command = props.useContent.input.command
+      const command = props.useContent.input.command as string | undefined
       const tips = props.useContent.input.tips as string | undefined
-      const body = props.message?.content as string
-      if (!props.message) {
-        return <RunningOutput toolCallId={props.useContent.id} cmd={command} tips={tips} />
-      }
-      if (!props.expand) {
-        return null
-      }
-      const output = {
-        stdout: props.message.uiData?.stdout || body,
-        stderr: props.message.uiData?.stderr || '',
-      }
-      // const code = props.message.uiData?.exitCode || 0
+      const message = props.message
+      // 运行中：不展开也渲染实时终端；完成后折叠则不渲染
+      if (message && !props.expand) return null
       return (
-        <div className="execute-command-wrapper">
-          <div className="header">
-            <span className="title">Terminal</span>
-            {tips && <span className="execute-command-header-tips">{tips}</span>}
-          </div>
-          <div className="code-pre-warpper">
-            <pre className="code-pre">
-              <code style={{ userSelect: 'none' }}>$ </code>
-              <code>{command + '\n'}</code>
-              <code
-                style={{
-                  color: '#22c122',
-                }}>
-                {processTerminalOutput(output.stdout?.trim()) + '\n'}
-              </code>
-              <code
-                style={{
-                  color: '#d82222',
-                }}>
-                {processTerminalOutput(output.stderr?.trim())}
-              </code>
-            </pre>
-          </div>
-        </div>
+        <TerminalView
+          toolCallId={props.useContent.id}
+          title={t('终端')}
+          tips={tips}
+          cmd={command}
+          message={message}
+        />
       )
     } catch {
       return <div className="error">{t('解析异常')}</div>

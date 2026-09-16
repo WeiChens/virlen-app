@@ -61,6 +61,47 @@ export interface UserMessageRef {
   preview: string
 }
 
+/** 键序无关的 JSON 序列化（仅用于签名比较，不用于落库） */
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value) ?? 'undefined'
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(',')}]`
+  }
+  const obj = value as Record<string, unknown>
+  return `{${Object.keys(obj)
+    .sort()
+    .map((k) => `${JSON.stringify(k)}:${stableJson(obj[k])}`)
+    .join(',')}}`
+}
+
+/**
+ * 会话「落库列」签名 —— 只覆盖 Rust 端 sessions 表实际写入的列
+ * （见 src-tauri/src/session_db.rs 的 `session_insert_params`）。
+ *
+ * messages 不参与：消息落库由 Rust 引擎负责（append_messages），
+ * 这里只判断会话元数据是否变化。
+ */
+function persistedSignature(session: Session): string {
+  return stableJson([
+    session.title,
+    session.providerConfigId,
+    session.modelId,
+    session.systemPrompt,
+    session.params,
+    session.createdAt,
+    session.updatedAt,
+    session.pinned,
+    session.tags ?? [],
+    session.workspace ?? null,
+    session.agentId ?? null,
+    session.allowedTools ?? null,
+    session.skills ?? null,
+    session.systemPromptManuallyEdited ?? false,
+  ])
+}
+
 class SessionRepoImpl implements SessionRepo {
   async loadAll(): Promise<Session[]> {
     try {
@@ -135,7 +176,12 @@ class SessionRepoImpl implements SessionRepo {
 
         for (const [id, session] of newMap) {
           const old = oldMap.get(id)
-          if (!old || old.updatedAt !== session.updatedAt || old !== session) {
+          // ⚠️ 只能比「值」：oldSessions 是 store 传入的浅拷贝快照（persist() 里
+          // `map(s => ({ ...s }))`），与 store 里的活对象永远不是同一引用。
+          // 早期版本用 `|| old !== session` 兜底 → 恒为 true → 每次 persist() 都把
+          // 全部会话回写一遍（实测 152 个会话：改 1 个标题写了 152 次 SQLite，
+          // 占 rust.db.op 的 85%、SQLite 耗时的 88.7%）。
+          if (!old || persistedSignature(old) !== persistedSignature(session)) {
             toPut.push(session)
           }
         }

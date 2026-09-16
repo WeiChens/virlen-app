@@ -250,6 +250,20 @@ function ChatMessageList({
     anchorTo: 'end',
     followOnAppend: true,
     scrollEndThreshold: AT_BOTTOM_THRESHOLD,
+    // ---- 消除 Chromium「ResizeObserver loop completed with undelivered notifications」----
+    // 默认（false）时，virtual-core 在 RO 回调里**同步**测量条目高度，贴底时还会同步回写
+    // scrollTop，再 notify(sync=true) → react-virtual 用 flushSync 同步重渲染（useFlushSync
+    // 默认 true）。这一串布局写入都发生在浏览器「投递 RO 通知」阶段内，同帧又制造出新的
+    // 通知 → 浏览器中断循环并把这条错误丢给 window.onerror（无栈、source 只有
+    // tauri.localhost，埋点里表现为 error.uncaught）。
+    // 打开后库把 RO 回调体推迟到 rAF（src: virtual-core observeElementRect /
+    // _measureElement 内的 `useAnimationFrameWithResizeObserver ? requestAnimationFrame(run)
+    // : run()`），布局写入落在本帧 RO 投递之后，新通知顺延到下一帧，报错消失。
+    // 代价：实测高度晚一帧生效（观感无差）。
+    useAnimationFrameWithResizeObserver: true,
+    // 不在 RO / scroll 回调里同步 flushSync 重渲染（改为 React 默认批处理调度）。
+    // 若发现滚动时条目定位有「一帧延迟 / 边缘露白」，删掉这一行即可回到原行为。
+    useFlushSync: false,
     paddingStart: LIST_PADDING + (hasMoreInDb ? LOAD_MORE_HINT_HEIGHT : 0),
     paddingEnd: LIST_PADDING,
   })
@@ -675,9 +689,14 @@ function ChatMessageList({
   const handleScrollToBottom = useCallback(() => {
     const count = messagesRef.current.length
     if (count === 0) return
+    // 流式回复中底部高度每个 token 都在增长：虚拟库会每帧重算目标偏移
+    // （reconcileScroll → getMaxScrollOffset），距离超过一屏时反复以 smooth 重发
+    // scrollTo 会不断重启浏览器的平滑动画，视觉上就是「抽搐」。
+    // 目标在移动时只能用瞬时滚动；落到底部后由贴底跟随（anchorTo: 'end'）接管。
+    const sid = chatState.value.currentSessionId
     rowVirtualizer.scrollToIndex(count - 1, {
       align: 'end',
-      behavior: 'smooth',
+      behavior: sid && isStreamingSession(sid) ? 'auto' : 'smooth',
     })
   }, [rowVirtualizer])
 

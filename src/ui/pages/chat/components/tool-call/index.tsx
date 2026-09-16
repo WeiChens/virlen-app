@@ -8,6 +8,7 @@ import {
 } from './IToolCallMessage'
 import { Message, ToolUseContent } from '@/types'
 import { ToolCallGroup } from './tool-call-group'
+import { extractReactNodeText } from '@/utils/common'
 export { ToolCallGroup }
 
 /**
@@ -91,6 +92,7 @@ export function ToolCallMessage({ message, result }: Props) {
     console.error('[ToolCallMessage] getShortText failed:', err)
     shortText = t('解析异常')
   }
+  
   return (
     <>
       <div
@@ -101,7 +103,7 @@ export function ToolCallMessage({ message, result }: Props) {
         <span className="tool-call-label">
           {toolCallMessage.getToolLabel(type)}
         </span>
-        <span className="tool-call-short-text">{shortText}</span>
+        <span className="tool-call-short-text" title={extractReactNodeText(shortText)}>{shortText}</span>
         {result?.elapsedMs != null && result.elapsedMs > 1000 && (
           <span className="tool-call-timing">
             {formatElapsed(result.elapsedMs)}

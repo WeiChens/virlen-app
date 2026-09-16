@@ -735,10 +735,11 @@
       opacity: 1;
     }
 
-    &:focus-within {
+    &:focus-within,&:hover {
       border-color: var(--accent-color, #4e46e5fe);
       background: var(--bg-primary, #fff);
     }
+    
 
     // ==================== 图片预览条 ====================
     .image-preview-strip {

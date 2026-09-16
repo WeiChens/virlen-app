@@ -141,6 +141,11 @@
   &:hover {
     background: var(--color-error-text, #dc2626);
   }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
 }
 
 .tool-call-expand-view {
@@ -218,6 +223,19 @@
     text-overflow: ellipsis;
   }
 
+  /* 完成态状态徽标：退出码 / 失败（颜色走终端主题令牌） */
+  .terminal-status {
+    flex-shrink: 0;
+    font-weight: 500;
+    font-size: var(--font-size-xs);
+    color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
+    white-space: nowrap;
+
+    &.error {
+      color: var(--terminal-stderr, #d82222);
+    }
+  }
+
   .code-pre-warpper {
     margin: 5px 7px;
     max-height: 240px;
@@ -234,6 +252,24 @@
       font-family: 'AlimamaAgileVF-Thin', 'Noto Color Emoji';
       color: var(--terminal-text, white);
       font-size: var(--font-size-xs);
+    }
+
+    /* 标准输出 / 标准错误 / 运行中的实时流：颜色走主题令牌，不再硬编码 */
+    .terminal-stdout {
+      color: var(--terminal-stdout, #22c122);
+    }
+
+    .terminal-stderr {
+      color: var(--terminal-stderr, #d82222);
+    }
+
+    /* 运行中的流：stderr 边界无法可靠还原，统一用终端默认前景色 */
+    .terminal-live {
+      color: var(--terminal-text, white);
+    }
+
+    .terminal-note {
+      color: var(--terminal-note, #e5c07b);
     }
   }
 }
@@ -649,6 +685,7 @@
       line-height: 1.5;
       display: -webkit-box;
       -webkit-line-clamp: 3;
+      line-clamp: 3;
       -webkit-box-orient: vertical;
       overflow: hidden;
       word-break: break-word;
@@ -724,6 +761,7 @@
     line-height: 1.5;
     display: -webkit-box;
     -webkit-line-clamp: 3;
+    line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
     word-break: break-word;

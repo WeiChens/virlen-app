@@ -72,7 +72,10 @@ class SessionStore {
       })
       // ⚠️ 必须同步更新 _lastSaved 基线，否则 persist() 的 debounced saveDiff
       // 传过去的 oldSessions=[]，导致任何删除操作都无法被识别（diff 认为没有要删的东西）
-      this._lastSaved = sessions
+      // ⚠️ 且必须是「快照」（浅拷贝），不能是 store 自己的活对象：否则对已有会话的
+      // 原地修改（如 chat-service 里 `session.updatedAt = Date.now()`）在 diff 时
+      // 会与基线指向同一对象，变化被吞掉。
+      this._lastSaved = sessions.map((s) => ({ ...s }))
       track('session.load', {
         session_count: sessions.length,
         duration_ms: Date.now() - started,

@@ -101,6 +101,9 @@
   --terminal-bg: #333341;
   --terminal-header-bg: #181824;
   --terminal-text: #cfd6f1;
+  --terminal-stdout: #22c122;
+  --terminal-stderr: #d82222;
+  --terminal-note: #e5c07b;
   --selected-bg: #4381ec83;
   --usermsg-selected-bg: #25447a;
   --theme-color: #ffffff;
@@ -209,6 +212,9 @@
   --terminal-bg: #32323e;
   --terminal-header-bg: #535392;
   --terminal-text: #cfd6f1;
+  --terminal-stdout: #22c122;
+  --terminal-stderr: #d82222;
+  --terminal-note: #e5c07b;
   --usermsg-selected-bg: #7e9fd4;
   --selected-bg: #4381ec83;
   --theme-color: #000000;

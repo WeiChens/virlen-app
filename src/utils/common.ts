@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { isValidElement, ReactNode } from 'react'
 
 /**
  * 判断是不是空字符串。null，undefined，""，" "都会返回true
@@ -733,4 +734,18 @@ export async function getPlatform(): Promise<'windows' | 'macos' | 'linux'> {
     else _platform = 'linux'
     return _platform
   }
+}
+
+export function extractReactNodeText(node: ReactNode): string {
+  if (node == null || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') {
+    return String(node);
+  }
+  if (Array.isArray(node)) {
+    return node.map(extractReactNodeText).join('');
+  }
+  if (isValidElement(node)) {
+    return extractReactNodeText((node.props as any)?.children);
+  }
+  return '';
 }
