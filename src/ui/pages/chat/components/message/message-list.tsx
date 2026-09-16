@@ -53,6 +53,11 @@ const LIST_PADDING = 8
 /** 「点击查看更多」提示条高度（预留占位，避免与首条消息重叠） */
 const LOAD_MORE_HINT_HEIGHT = 36
 /**
+ * 切会话「等布局稳定」的轮询上限（50ms/次 → 约 1s）。
+ * 兜底：无论高度是否还在变，到点都必须显示，避免任何异常情况下永久空白。
+ */
+const MAX_SETTLE_POLLS = 20
+/**
  * 锚点列表最多渲染的圆点数（安全上限，避免极端会话挂载过多 DOM）。
  * 正常会话（数千消息）全部渲染，超出部分通过滚动条查看。
  */
@@ -81,6 +86,17 @@ function previewOfMessage(msg: Message): string {
           .map((b) => ('text' in b ? b.text : ''))
           .join('')
   return text.slice(0, 420)
+}
+
+/**
+ * 会话是否正在「流式输出」中。
+ *
+ * 流式期间 assistant 气泡的高度随 token 持续增长，任何「等待布局稳定」的逻辑
+ * 都永远等不到稳定（等待用户交互而暂停的会话不算：此时没有新内容，高度静止）。
+ */
+function isStreamingSession(sessionId: string): boolean {
+  const rt = getSessionRuntime(sessionId)
+  return rt.working && !rt.paused
 }
 
 interface ChatMessageListProps {
@@ -284,7 +300,10 @@ function ChatMessageList({
   // ==================== 切会话：清缓存 + 标记「需要贴底」 ====================
   useLayoutEffect(() => {
     if (!sessionId) return
-    setHide(true)
+    // 只有「高度静止」的会话才需要先隐藏、等布局稳定后再显示（避免估算高度→实测
+    // 高度跳变）。正在流式回复的会话高度一直在变，永远达不到稳定条件，若照常隐藏
+    // 会整片空白直到流式暂停（工具调用/结束）——此时直接显示，靠贴底跟随。
+    setHide(!isStreamingSession(sessionId))
     needInitialBottomRef.current = true
     toolResultsCacheRef.current.clear()
     if (settleTimerRef.current) {
@@ -299,25 +318,45 @@ function ChatMessageList({
    * 估算→实测），若立即显示会看到跳动。这里每 50ms 轮询 scrollHeight：
    *   - 高度还在变 → 继续计数
    *   - 连续 3 次（~150ms）无变化 → 视为稳定，滚到底部后 setHide(false) 显示
+   *   - 目标会话正在流式回复 → 高度不可能稳定，直接显示（否则会一直空白）
+   *   - 轮询超过 MAX_SETTLE_POLLS → 兜底显示，绝不无限隐藏
    */
   const settleToBottom = useCallback(() => {
     const el = messagesContainerRef.current
     if (!el) return
 
     if (settleTimerRef.current) clearInterval(settleTimerRef.current)
+    settleTimerRef.current = null
     const scrollToEnd = () => {
       const count = messagesRef.current.length
       if (count > 0) rowVirtualizer.scrollToIndex(count - 1, { align: 'end' })
     }
     scrollToEnd()
+
+    // 流式回复中：高度随 token 持续变化，「稳定」条件永远不成立 → 直接显示
+    const sid = chatState.value.currentSessionId
+    if (sid && isStreamingSession(sid)) {
+      setHide(false)
+      return
+    }
+
     let lastH = el.scrollHeight
     let stableCount = 0
+    let polls = 0
 
     settleTimerRef.current = setInterval(() => {
       const cur = messagesContainerRef.current
       if (!cur) {
         if (settleTimerRef.current) clearInterval(settleTimerRef.current)
         settleTimerRef.current = null
+        return
+      }
+      // 兜底：异步高度变化（图片/markdown/字体）可能长期不收敛，到点强制显示
+      if (++polls >= MAX_SETTLE_POLLS) {
+        if (settleTimerRef.current) clearInterval(settleTimerRef.current)
+        settleTimerRef.current = null
+        scrollToEnd()
+        setHide(false)
         return
       }
       if (Math.abs(cur.scrollHeight - lastH) > 1) {

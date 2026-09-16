@@ -185,8 +185,7 @@
 }
 
 .execute-command-wrapper {
-  margin: 4px 20px;
-  margin-left: 28px;
+  margin: 4px 20px 20px 28px;
   border-radius: 6px;
   overflow: hidden;
   font-size: var(--font-size-sm);
@@ -194,6 +193,7 @@
   width: fit-content;
   max-width: 90%;
   min-width: min(360px, 90%);
+
 
   .header {
     color: var(--terminal-text, #fff);
@@ -224,9 +224,11 @@
     overflow: auto;
     min-width: 200px;
   }
+
   .code-pre {
     overflow: hidden;
     white-space: pre-wrap;
+
     code {
       max-width: 600px;
       font-family: 'AlimamaAgileVF-Thin', 'Noto Color Emoji';
@@ -386,13 +388,16 @@
   overflow: auto;
   /* 各自独立滚动（横向+纵向） */
   box-sizing: border-box;
-    &::-webkit-scrollbar{
+
+  &::-webkit-scrollbar {
     width: 12px;
   }
-  &::-webkit-scrollbar-thumb{
+
+  &::-webkit-scrollbar-thumb {
     background-color: #383b46;
     border-radius: 4px;
-    &:hover{
+
+    &:hover {
       background-color: #4b505e;
     }
   }
