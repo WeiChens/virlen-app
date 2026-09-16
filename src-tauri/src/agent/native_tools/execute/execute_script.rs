@@ -110,6 +110,30 @@ pub(crate) async fn execute_script_tool(
     }
 }
 
+/// 目标文件是否为 PowerShell 脚本（Windows PowerShell 5.1 会按系统 ANSI 代码页解析无 BOM 的这类文件）。
+fn is_powershell_script(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".ps1") || lower.ends_with(".psm1")
+}
+
+/// 给脚本内容补 UTF-8 BOM（幂等）—— 与 JS 侧 `applyScriptBom` 等价。
+///
+/// ⚠️ 为什么必须加：Windows PowerShell 5.1 读取**无 BOM** 的 .ps1 时不猜 UTF-8，
+/// 而是按系统 ANSI 代码页（中文系统 CP936/GBK）解析源文件，脚本里的中文字面量
+/// 在「解析阶段」就变成乱码（"脚本" → "鑴氭湰"）—— 之后无论怎么设置
+/// `[Console]::OutputEncoding` 都还原不回来（输出侧本来就对，问题在输入端）。
+/// 带 BOM 后 5.1 会按 UTF-8 解析。
+///
+/// 只对 Windows 上的 .ps1/.psm1 生效：其它脚本加 BOM 有害（.sh 的 shebang 会失效，
+/// .js/.py 虽能容忍但没必要）。
+fn with_script_bom(path: &str, content: &str, is_windows: bool) -> String {
+    if is_windows && is_powershell_script(path) && !content.starts_with('\u{FEFF}') {
+        format!("\u{FEFF}{}", content)
+    } else {
+        content.to_string()
+    }
+}
+
 /// 脚本执行收尾：写脚本 → 执行命令 → 按 end_del_file 删除脚本。
 async fn finalize_script_run(
     ctx: &NativeToolCtx<'_>,
@@ -121,7 +145,8 @@ async fn finalize_script_run(
 ) -> Result<NativeToolOutcome, String> {
     // 1. 写脚本文件（自动创建父目录）
     let full_path_c = full_path.to_string();
-    let content_c = content.to_string();
+    // ⚠️ 落盘内容可能与入参不同：Windows 上的 .ps1/.psm1 需补 UTF-8 BOM（见 with_script_bom）
+    let content_c = with_script_bom(full_path, content, cfg!(target_os = "windows"));
     let write_res =
         tokio::task::spawn_blocking(move || file_ops::write_file(&full_path_c, &content_c)).await;
     match write_res {
@@ -170,5 +195,40 @@ async fn delete_script_file(full_path: &str) -> String {
         Ok(Ok(_)) => format!("🗑️ 已删除脚本文件: {}", full_path),
         Ok(Err(e)) => format!("⚠️ 脚本文件删除失败: {} — {}", full_path, e),
         Err(e) => format!("⚠️ 脚本文件删除失败: {} — Task join error: {}", full_path, e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_powershell_script, with_script_bom};
+
+    #[test]
+    fn powershell_script_ext_detection() {
+        assert!(is_powershell_script("C:/ws/temp/run.ps1"));
+        assert!(is_powershell_script("C:\\ws\\temp\\run.PSM1"));
+        assert!(!is_powershell_script("C:/ws/temp/run.js"));
+        assert!(!is_powershell_script("C:/ws/temp/run.sh"));
+        assert!(!is_powershell_script("C:/ws/temp/ps1"));
+        assert!(!is_powershell_script("C:/ws/temp/run.ps1.bak"));
+    }
+
+    #[test]
+    fn bom_only_for_windows_powershell() {
+        // Windows + .ps1 → 补 BOM（PowerShell 5.1 据此按 UTF-8 解析，中文才不乱码）
+        let out = with_script_bom("C:/ws/run.ps1", "Write-Output \"脚本\"", true);
+        assert!(out.starts_with('\u{FEFF}'));
+        assert_eq!(&out[3..], "Write-Output \"脚本\"");
+        // 非 Windows → 不加（macOS/Linux 的 pwsh 默认按 UTF-8 解析）
+        assert_eq!(with_script_bom("C:/ws/run.ps1", "x", false), "x");
+        // Windows 上的非 PowerShell 脚本 → 不加（.sh 加 BOM 会让 shebang 失效）
+        assert_eq!(with_script_bom("C:/ws/run.sh", "x", true), "x");
+        assert_eq!(with_script_bom("C:/ws/run.js", "x", true), "x");
+    }
+
+    #[test]
+    fn bom_is_idempotent() {
+        let once = with_script_bom("C:/ws/run.ps1", "abc", true);
+        let twice = with_script_bom("C:/ws/run.ps1", &once, true);
+        assert_eq!(once, twice);
     }
 }

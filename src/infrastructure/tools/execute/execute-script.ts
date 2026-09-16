@@ -24,6 +24,7 @@ import { securityService } from '@/services/security-service'
 import { settingsState } from '@/ui/store'
 import {
   classifyCommand,
+  detectPlatform,
   getRiskInfo,
   platformSnapshot,
   registerPendingApproval,
@@ -189,6 +190,33 @@ toolRegistry.register(
   }) as ToolExecutor,
 )
 
+/** Windows 上会按「系统 ANSI 代码页」解析无 BOM 脚本的 shell 扩展名（PowerShell 脚本） */
+const PS_SCRIPT_EXT = /\.ps(m)?1$/i
+
+/**
+ * 给脚本内容加 UTF-8 BOM（幂等）—— 与 Rust 侧 `with_script_bom` 等价。
+ *
+ * ⚠️ 为什么必须加：Windows PowerShell 5.1 读取**无 BOM** 的 .ps1 时不猜 UTF-8，
+ * 而是按**系统 ANSI 代码页**（中文系统 CP936/GBK）解析源文件，脚本里的中文字面量
+ * 在「解析阶段」就已经变成乱码（"脚本" → "鑴氭湰"）—— 之后无论怎么设置
+ * `[Console]::OutputEncoding` 都还原不回来（输出侧本来就是对的，问题在输入端）。
+ * 带 BOM 后 5.1 会按 UTF-8 解析，中文正常。
+ *
+ * 只对 Windows 上的 .ps1/.psm1 生效：其它脚本加 BOM 有害（.sh 的 shebang 会失效，
+ * .js/.py 虽能容忍但没必要）。
+ *
+ * @param filePath 脚本完整路径（按扩展名判定是否需要 BOM）
+ * @param platform Rust `os_platform` 返回值（windows / macos / linux）
+ */
+export function applyScriptBom(
+  filePath: string,
+  content: string,
+  platform: string,
+): string {
+  if (platform !== 'windows' || !PS_SCRIPT_EXT.test(filePath)) return content
+  return content.startsWith('\uFEFF') ? content : '\uFEFF' + content
+}
+
 /** 写入脚本文件（自动创建父目录） */
 async function writeScriptFile(
   fullPath: string,
@@ -200,7 +228,11 @@ async function writeScriptFile(
     if (parent) {
       await tauriFs.mkdir(parent, { recursive: true }).catch(() => {})
     }
-    await tauriFs.writeTextFile(fullPath, content)
+    // PowerShell 脚本需要 UTF-8 BOM，否则 5.1 会按 GBK 解析导致中文乱码（见 applyScriptBom）
+    await tauriFs.writeTextFile(
+      fullPath,
+      applyScriptBom(fullPath, content, await detectPlatform()),
+    )
   } catch (e: any) {
     throw tpl('错误：写入脚本文件失败 — $__error__', {
       error: e?.message || String(e),

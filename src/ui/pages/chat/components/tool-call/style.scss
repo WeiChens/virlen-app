@@ -274,6 +274,68 @@
   }
 }
 
+// ==================== execute_script：终端 / 文件 切换 ====================
+
+.script-view {
+  display: flex;
+  flex-direction: column;
+}
+
+/* tabs 位于终端块上方（终端块自身结构不变，所以背景跟终端头部一致） */
+.script-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  width: fit-content;
+  margin: 4px 0 0 28px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--terminal-header-bg, #242f3a);
+  user-select: none;
+
+  button {
+    padding: 2px 12px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
+    font-family: inherit;
+    font-size: var(--font-size-xs);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--terminal-text, #fff);
+    }
+
+    &.active {
+      background: rgba(255, 255, 255, 0.16);
+      color: var(--terminal-text, #fff);
+    }
+  }
+}
+
+/* 脚本正文（CodeBlock / Monaco 只读预览）。
+   margin 与 .execute-command-wrapper 一致（4px 20px 20px 28px），
+   左边距对齐、切 tab 时视觉不跑位。 */
+.script-file {
+  margin: 4px 20px 20px 28px;
+  width: fit-content;
+  max-width: 90%;
+
+  /* CodeBlock 自带 margin: 10px 0，会把上边距顶成 10px（与终端块的 4px 不齐），这里抵消 */
+  .code-block-wrapper {
+    margin: 0;
+  }
+}
+
+.script-file-empty {
+  margin: 6px 28px;
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary, #9ca3af);
+}
+
 // execute_command 短文本中的 tips 标签
 .execute-command-short {
   display: inline-flex;

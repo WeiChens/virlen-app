@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -11,6 +11,20 @@ import {
   TerminalStatus,
   TerminalView,
 } from '@/ui/pages/chat/components/tool-call/TerminalBlock'
+import ExecuteScriptMessage from '@/ui/pages/chat/components/tool-call/ExecuteScriptMessage'
+
+/**
+ * CodeBlock 依赖 Monaco（jsdom 里无法渲染编辑器），这里换成结构等价的最小替身：
+ * 本用例只验证「脚本正文 + 文件名被正确传给 CodeBlock」，不测 Monaco 本身。
+ */
+vi.mock('@/ui/pages/chat/components/message/code-block', () => ({
+  default: ({ children, fileName }: any) => (
+    <div className="code-block-wrapper">
+      <span className="code-file-name">{fileName}</span>
+      <pre className="code-block-body">{children}</pre>
+    </div>
+  ),
+}))
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -291,5 +305,124 @@ describe('运行中自动跟随的落点', () => {
 
     await act(async () => root.unmount())
     toolOutputStore.remove('t-scroll2')
+  })
+})
+
+/**
+ * execute_script 展开视图：顶部「终端 / 文件」tabs，默认终端。
+ * 关键点：tabs 在 TerminalView 外面，终端块结构不变；脚本正文走 CodeBlock。
+ */
+describe('execute_script 展开视图：终端 / 文件 tabs', () => {
+  const SCRIPT = ['console.log(1)', 'console.log(2)'].join('\n')
+
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  async function mountScriptView() {
+    toolOutputStore.register('t-script', {
+      toolName: 'execute_script',
+      output: '',
+    })
+    const node = new ExecuteScriptMessage().getExpandView({
+      useContent: {
+        id: 't-script',
+        name: 'execute_script',
+        input: {
+          file_path: 'temp/run.js',
+          file_content: SCRIPT,
+          command: 'node temp/run.js',
+        },
+      },
+      // 结果消息未到（运行中）→ 不展开也会渲染实时终端
+      message: undefined,
+      expand: true,
+    } as any)
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(node as any)
+    })
+    return { host, root }
+  }
+
+  const tabTexts = (host: HTMLElement) =>
+    Array.from(host.querySelectorAll('.script-tabs button')).map(
+      (b) => b.textContent,
+    )
+
+  it('头部有「终端 / 文件」两个 tab，默认显示终端', async () => {
+    const { host, root } = await mountScriptView()
+
+    expect(tabTexts(host)).toEqual(['终端', '文件'])
+    expect(host.querySelector('.execute-command-wrapper')).toBeTruthy()
+    expect(host.querySelector('.script-file')).toBeNull()
+
+    await act(async () => root.unmount())
+    toolOutputStore.remove('t-script')
+  })
+
+  it('切到「文件」：用 CodeBlock 渲染脚本正文（带文件名），终端块卸载', async () => {
+    const { host, root } = await mountScriptView()
+
+    const buttons = host.querySelectorAll('.script-tabs button')
+    await act(async () => {
+      ;(buttons[1] as HTMLButtonElement).click()
+    })
+
+    expect(host.querySelector('.script-file')).toBeTruthy()
+    expect(host.querySelector('.code-block-wrapper')).toBeTruthy()
+    expect(host.querySelector('.code-file-name')?.textContent).toBe(
+      'temp/run.js',
+    )
+    expect(host.querySelector('.code-block-body')?.textContent).toBe(SCRIPT)
+    // 终端块不再挂载
+    expect(host.querySelector('.execute-command-wrapper')).toBeNull()
+
+    // 切回终端
+    await act(async () => {
+      ;(buttons[0] as HTMLButtonElement).click()
+    })
+    expect(host.querySelector('.execute-command-wrapper')).toBeTruthy()
+    expect(host.querySelector('.script-file')).toBeNull()
+
+    await act(async () => root.unmount())
+    toolOutputStore.remove('t-script')
+  })
+
+  it('无 file_content 时显示占位文案，不渲染 CodeBlock', async () => {
+    toolOutputStore.register('t-script', {
+      toolName: 'execute_script',
+      output: '',
+    })
+    const node = new ExecuteScriptMessage().getExpandView({
+      useContent: {
+        id: 't-script',
+        name: 'execute_script',
+        input: { file_path: 'temp/run.js', command: 'node temp/run.js' },
+      },
+      message: undefined,
+      expand: true,
+    } as any)
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(node as any)
+    })
+    await act(async () => {
+      ;(
+        host.querySelectorAll('.script-tabs button')[1] as HTMLButtonElement
+      ).click()
+    })
+
+    expect(host.querySelector('.script-file-empty')?.textContent).toBe(
+      '暂无文件内容',
+    )
+    expect(host.querySelector('.code-block-wrapper')).toBeNull()
+
+    await act(async () => root.unmount())
+    toolOutputStore.remove('t-script')
   })
 })
