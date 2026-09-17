@@ -8,9 +8,39 @@
  * - 千问模板的 reasoningEffort 配置
  * - OpenAI 模板的 reasoningEffort 配置
  * - 自定义模板的默认值
+ * - 推理强度档位并集 / 默认勾选值
  */
 import { describe, it, expect } from 'vitest'
-import { PROVIDER_TEMPLATES } from '@/domain/provider/config'
+import {
+  PROVIDER_TEMPLATES,
+  REASONING_EFFORT_UNION,
+  DEFAULT_REASONING_EFFORT_LIST,
+} from '@/domain/provider/config'
+
+describe('REASONING_EFFORT_UNION', () => {
+  it('应覆盖各厂商档位名称的并集（共 8 个）', () => {
+    expect([...REASONING_EFFORT_UNION]).toEqual([
+      'none',
+      'minimal',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+      'off',
+    ])
+  })
+
+  it('默认勾选应为 low / medium / high', () => {
+    expect(DEFAULT_REASONING_EFFORT_LIST).toEqual(['low', 'medium', 'high'])
+  })
+
+  it('默认勾选值必须都在并集内', () => {
+    for (const v of DEFAULT_REASONING_EFFORT_LIST) {
+      expect(REASONING_EFFORT_UNION).toContain(v as any)
+    }
+  })
+})
 
 describe('PROVIDER_TEMPLATES', () => {
   it('应包含所有预定义模板', () => {

@@ -143,6 +143,7 @@ function ProviderSettings() {
     baseUrl: string
     models: any[]
     templateName: ProviderConfig['templateName']
+    reasoningEffortList?: string[]
     reasoningEffort?: string
   }) {
     const id = `provider-${Date.now()}`
@@ -155,6 +156,7 @@ function ProviderSettings() {
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
       models: config.models,
+      reasoningEffortList: config.reasoningEffortList,
       reasoningEffort: config.reasoningEffort,
       enabled: true,
       createdAt: now,
@@ -184,6 +186,7 @@ function ProviderSettings() {
     baseUrl: string
     models: any[]
     type: ProviderType
+    reasoningEffortList?: string[]
     reasoningEffort?: string
   }) {
     if (!editingProvider) return
@@ -199,6 +202,7 @@ function ProviderSettings() {
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
       models: config.models,
+      reasoningEffortList: config.reasoningEffortList,
       reasoningEffort: config.reasoningEffort,
       updatedAt: Date.now(),
     }
@@ -323,10 +327,21 @@ function ProviderSettings() {
                           : t('（未获取）')}
                       </div>
                     </div>
+                    {provider.reasoningEffortList &&
+                      provider.reasoningEffortList.length > 0 && (
+                        <div className="provider-detail-row">
+                          <span className="detail-label">
+                            {t('推理强度可选值')}
+                          </span>
+                          <span className="detail-value scroll">
+                            {provider.reasoningEffortList.join(', ')}
+                          </span>
+                        </div>
+                      )}
                     {provider.reasoningEffort && (
                       <div className="provider-detail-row">
                         <span className="detail-label">
-                          {t('推理强度 (Reasoning Effort)')}
+                          {t('默认推理强度')}
                         </span>
                         <span className="detail-value">
                           {provider.reasoningEffort}

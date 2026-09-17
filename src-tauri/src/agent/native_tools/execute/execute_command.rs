@@ -7,7 +7,10 @@ use crate::agent::native_tools::common::{arg_i64, arg_str};
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
 use serde_json::{json, Value};
 
-use super::common::{classify_command, risk_info, run_command_native};
+use super::common::{
+    classify_command, needs_command_approval, risk_info, run_command_native, sandbox_mode,
+    with_bypass_hint, SandboxMode,
+};
 
 /// 执行 shell 命令（原生）
 pub(crate) async fn execute_command_tool(
@@ -26,19 +29,40 @@ pub(crate) async fn execute_command_tool(
         timeout = 300;
     }
 
+    // sandbox:"off" → 申请「不使用沙盒（受限令牌）」执行本命令。
+    // 用途：沙盒下必然失败的场景——命令的子进程需要用管道 stdio 拉起孙进程
+    // （vitest / vite / jest / ts-node / node-gyp…），受限令牌会让那次 spawn 直接 EPERM，
+    // 根因见 AGENTS §11.2。
+    // ⚠️ 安全：该请求一律强制用户审批（不受 commandApprovalMode 影响）；
+    // readonly 模式直接拒绝（否则只读保护会被绕过）。
+    let bypass_sandbox = matches!(
+        arg_str(args, "sandbox")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "off" | "none"
+    );
+    if bypass_sandbox && sandbox_mode(ctx) == SandboxMode::Readonly {
+        return Err(
+            "沙盒处于只读模式，不支持绕过沙盒执行命令；请先在设置中切换沙盒模式（或改用常规终端）"
+                .to_string(),
+        );
+    }
+
     let risk = classify_command(&cmd_str);
     let mode = ctx.security.approval_mode.as_str();
-    let needs_approval = match mode {
-        "all" => true,
-        "risky" => risk == "dangerous",
-        "install" => risk != "safe",
-        _ => false,
-    };
+    let needs_approval = needs_command_approval(mode, risk, bypass_sandbox);
 
     if needs_approval {
         // 走用户交互桥（type=confirm_command_native），由 JS 复用同一个确认弹窗。
         // 审批在本地完成：用户「允许」后直接原生执行命令，避免命令参数跨桥丢失。
         let (label, hint) = risk_info(risk);
+        // 申请绕过沙盒：在风险提示后追加强警告（沙盒不可用时的退路，必须让用户看到后果）
+        let hint = if bypass_sandbox {
+            with_bypass_hint(&hint)
+        } else {
+            hint
+        };
         let tips = arg_str(args, "tips").unwrap_or_default();
         let mut data = json!({
             "command": cmd_str,
@@ -52,6 +76,10 @@ pub(crate) async fn execute_command_tool(
                 "toolCallId".into(),
                 Value::String(ctx.tool_call_id.to_string()),
             );
+            if bypass_sandbox {
+                // 供弹窗高亮 / 埋点识别（文案已在 hint 里）
+                map.insert("sandboxBypass".into(), Value::Bool(true));
+            }
         }
 
         let payload = ctx
@@ -65,7 +93,14 @@ pub(crate) async fn execute_command_tool(
                 // 用户允许 → 执行命令；其他文本（如 `[error] xxx`）原样返回
                 let normalized = content.trim().to_lowercase();
                 if normalized == "approved" || normalized == "允许" || content == "ok" {
-                    return run_command_native(ctx, &cmd_str, timeout).await;
+                    if bypass_sandbox {
+                        // 审计：用户批准了「绕过沙盒」执行（不记录命令正文，遵循 §9 密钥/正文不采集）
+                        crate::telemetry::track(
+                            "tool.sandbox.bypass",
+                            json!({ "tool_name": "execute_command", "risk": risk, "status": "approved" }),
+                        );
+                    }
+                    return run_command_native(ctx, &cmd_str, timeout, bypass_sandbox).await;
                 }
                 return Ok(NativeToolOutcome::Value {
                     content,
@@ -80,7 +115,7 @@ pub(crate) async fn execute_command_tool(
             }),
         }
     } else {
-        run_command_native(ctx, &cmd_str, timeout).await
+        run_command_native(ctx, &cmd_str, timeout, bypass_sandbox).await
     }
 }
 
@@ -317,6 +352,72 @@ mod tests {
             }
         }
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // 本次新增：绕过沙盒（sandbox:"off"）的审批策略与文案。
+    // 显式导入，不依赖 `use super::*` 对父模块 use 绑定的传递。
+    use super::super::common::{needs_command_approval, with_bypass_hint, SANDBOX_BYPASS_HINT};
+
+    /// 审批策略：绕过沙盒必须强制审批，与 approvalMode / risk 无关（安全底线）。
+    #[test]
+    fn bypass_sandbox_always_requires_approval() {
+        for mode in ["all", "risky", "install", "none"] {
+            for risk in ["safe", "install", "dangerous"] {
+                assert!(
+                    needs_command_approval(mode, risk, true),
+                    "bypass must always require approval (mode={mode}, risk={risk})"
+                );
+            }
+        }
+    }
+
+    /// 审批策略：未申请绕过时与既有 commandApprovalMode 语义完全一致（回归保护）。
+    #[test]
+    fn approval_mode_semantics_unchanged() {
+        assert!(needs_command_approval("all", "safe", false));
+        assert!(!needs_command_approval("risky", "safe", false));
+        assert!(!needs_command_approval("risky", "install", false));
+        assert!(needs_command_approval("risky", "dangerous", false));
+        assert!(!needs_command_approval("install", "safe", false));
+        assert!(needs_command_approval("install", "install", false));
+        assert!(needs_command_approval("install", "dangerous", false));
+        assert!(!needs_command_approval("none", "dangerous", false));
+    }
+
+    /// 绕过沙盒的警告必须拼在基础提示后（基础提示为空时不得产生前导换行）。
+    #[test]
+    fn bypass_hint_is_appended() {
+        let with_base = with_bypass_hint("此命令可能对系统造成破坏，请确认是否执行");
+        assert!(with_base.starts_with("此命令可能对系统造成破坏"));
+        assert!(with_base.ends_with(SANDBOX_BYPASS_HINT));
+        assert!(with_base.contains('\n'));
+        assert_eq!(with_bypass_hint(""), SANDBOX_BYPASS_HINT);
+    }
+
+    /// readonly 模式必须拒绝绕过沙盒（否则只读保护可被绕过），且在审批之前失败。
+    #[tokio::test]
+    async fn readonly_mode_rejects_sandbox_bypass() {
+        let dir = std::env::temp_dir().join(format!("virlen_native_ro_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut sec = test_security_bare(&dir.to_string_lossy());
+        sec.sandbox_mode = "readonly".to_string();
+        let sink = TestEventSink::new();
+        let bridge = AgentBridgeState::default();
+        let cancel = CancellationToken::new();
+        let ctx = NativeToolCtx {
+            session_id: "s_ro",
+            tool_call_id: "tc_ro_test",
+            cancel: &cancel,
+            sink: &sink,
+            bridge: &bridge,
+            security: &sec,
+        };
+        let args = serde_json::json!({ "command": "echo hi", "sandbox": "off" });
+        let err = execute_command_tool(&ctx, &args)
+            .await
+            .expect_err("readonly + sandbox:off 必须被拒绝");
+        assert!(err.contains("只读模式"), "unexpected error: {err}");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

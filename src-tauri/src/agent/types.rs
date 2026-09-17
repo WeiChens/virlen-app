@@ -14,6 +14,10 @@ pub struct SessionParams {
     pub top_p: f64,
     pub max_tokens: i64,
     pub stream: bool,
+    /// 会话级推理强度（覆盖 Provider 默认值）。
+    /// 引擎只用前端传入的 options.reasoning_effort；此字段仅为「回写持久化时不丢字段」而存在。
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

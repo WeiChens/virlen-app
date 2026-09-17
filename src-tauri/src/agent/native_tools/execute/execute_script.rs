@@ -156,7 +156,8 @@ async fn finalize_script_run(
     }
 
     // 2. 执行命令
-    let outcome = run_command_native(ctx, cmd_str, timeout_secs).await;
+    // 2) 执行命令（脚本路径不提供"绕过沙盒"参数，审批见上方沙盒模式判定）
+    let outcome = run_command_native(ctx, cmd_str, timeout_secs, false).await;
 
     // 3. 按需删除脚本（含失败/超时）
     if !end_del_file {

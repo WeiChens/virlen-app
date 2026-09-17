@@ -19,6 +19,7 @@ import {
   useMemo,
 } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import type { Range, Virtualizer } from '@tanstack/react-virtual'
 import type { Message } from '@/types'
 import {
   chatState,
@@ -40,10 +41,33 @@ import commentEvent from '@/events/commentEvent'
 import { observer } from 'mobx-react-lite'
 
 // ==================== 虚拟滚动常量 ====================
-/** 单条消息「未被测量前」的估算高度（测量后以真实高度为准） */
+/**
+ * 单条消息「未被测量前」的初始估算高度。
+ * 首次测量后会用「已测量条目的平均高度」动态逼近（见 avgItemHeightRef）。
+ */
 const ESTIMATED_ITEM_HEIGHT = 120
-/** 视口外前后额外渲染的条目数 */
-const OVERSCAN = 6
+/**
+ * 视口外前后额外渲染的条目数。
+ * 注意：实际渲染范围已改由下方 rangeExtractor 按「像素」决定，
+ * 这里只影响虚拟库在「平滑滚动」时允许测量的条目窗口
+ *（virtual-core 的 shouldMeasureDuringScroll）。
+ */
+const OVERSCAN = 32
+/**
+ * 视口上下各自额外渲染的像素缓冲（视口更高时按「一屏」计）。
+ *
+ * 库默认的 overscan 是「条数」，而消息气泡矮的只有几十像素、高的上千像素，
+ * 按条数扩展时缓冲区的真实像素可能只有一两百 → 快速滚动 / 惯性滚动时
+ * 新条目还没来得及挂载就已经进入视口，表现为露白 + 抖动。
+ * 改成按像素扩展后，视口上下始终各有约一屏的已渲染内容作为缓冲。
+ */
+const OVERSCAN_PX = 800
+/**
+ * 单侧最多额外渲染的条数。
+ * 条目很矮（短句）时防止一次性挂载过多 DOM；默认下限 20，OVERSCAN 调大时跟随
+ *（否则「把 OVERSCAN 调大」对实际渲染范围完全没有作用，见下方 rangeExtractor）。
+ */
+const MAX_OVERSCAN_ITEMS = Math.max(20, OVERSCAN)
 /** 距底部 ≤ 该值视为「贴在底部」：新消息 / 流式增长时自动跟随 */
 const AT_BOTTOM_THRESHOLD = 120
 /** 距顶部 ≤ 该值触发回补更早消息 */
@@ -152,6 +176,9 @@ function ChatMessageList({
   const messagesRef = useRef(messages)
   messagesRef.current = messages
 
+  /** 上一次的条目数（用于判断「条目数变化」而非流式内容更新） */
+  const lastMsgCountRef = useRef(0)
+
   const sessionId = chatState.value.currentSessionId
   const hasMoreInDb = sessionId
     ? sessionStore.hasMoreMessages(sessionId)
@@ -235,7 +262,64 @@ function ChatMessageList({
     (index: number) => messagesRef.current[index]?.id ?? `idx-${index}`,
     [],
   )
-  const estimateSize = useCallback(() => ESTIMATED_ITEM_HEIGHT, [])
+  /**
+   * 未测量条目的估算高度（存 ref，避免重渲染；虚拟库重算测量值时读取）。
+   * 用「已测量条目的平均高度」动态逼近而不是固定常数：估算值与真实值越接近，
+   * 新条目挂载时虚拟库对 scrollTop 的高度补偿就越小，
+   * 快速滚动（尤其是向上滚）时的抖动主要就来自这些补偿。
+   */
+  const avgItemHeightRef = useRef(ESTIMATED_ITEM_HEIGHT)
+  const estimateSize = useCallback(() => avgItemHeightRef.current, [])
+
+  /** 虚拟器实例：rangeExtractor 在库的回调里需要读它的 measurementsCache */
+  const rowVirtualizerRef = useRef<Virtualizer<HTMLDivElement, Element> | null>(
+    null,
+  )
+
+  /**
+   * 按「像素」而不是「条数」计算渲染范围：视口上下各多渲染约一屏内容，
+   * 给滚动（含快速 / 惯性滚动）留出反应空间。
+   *
+   * measurementsCache[i].start / .end 是第 i 条消息在内容坐标系中的位置
+   *（未测量条目按估算值排布），与 DOM 是否渲染无关，因此可直接用来算缓冲区。
+   */
+  const rangeExtractor = useCallback((range: Range) => {
+    const { startIndex, endIndex, count } = range
+    let start = startIndex
+    let end = endIndex
+    const virt = rowVirtualizerRef.current
+    const m = virt?.measurementsCache
+    if (!virt || !m || m.length < count) {
+      // 兜底（实例 / 测量值尚未就绪）：退回按条数扩展
+      start = Math.max(startIndex - OVERSCAN, 0)
+      end = Math.min(endIndex + OVERSCAN, count - 1)
+    } else {
+      // 缓冲区取「一屏高度」与 OVERSCAN_PX 的较大值（scrollRect 是公开的视口尺寸）
+      const buffer = Math.max(OVERSCAN_PX, virt.scrollRect?.height ?? 0)
+      // 向上扩展，直到覆盖顶部缓冲区或达到条数上限
+      const topLimit = (m[startIndex]?.start ?? 0) - buffer
+      while (
+        start > 0 &&
+        startIndex - start < MAX_OVERSCAN_ITEMS &&
+        (m[start - 1]?.start ?? topLimit) >= topLimit
+      ) {
+        start--
+      }
+      // 向下扩展，直到覆盖底部缓冲区或达到条数上限
+      const bottomLimit = (m[endIndex]?.end ?? 0) + buffer
+      while (
+        end < count - 1 &&
+        end - endIndex < MAX_OVERSCAN_ITEMS &&
+        (m[end + 1]?.end ?? bottomLimit) <= bottomLimit
+      ) {
+        end++
+      }
+    }
+    const len = Math.max(end - start + 1, 1)
+    const indexes = new Array<number>(len)
+    for (let i = 0; i < len; i++) indexes[i] = start + i
+    return indexes
+  }, [])
 
   const rowVirtualizer = useVirtualizer({
     count: messages.length,
@@ -243,6 +327,7 @@ function ChatMessageList({
     estimateSize,
     overscan: OVERSCAN,
     getItemKey,
+    rangeExtractor,
     // 以「底部」为锚：
     //  - 贴底时新消息 / 流式增长自动跟随（anchorTo=end + followOnAppend）
     //  - 前插历史时按锚点项回推 scrollTop，视口不跳动
@@ -263,11 +348,28 @@ function ChatMessageList({
     useAnimationFrameWithResizeObserver: true,
     // 不在 RO / scroll 回调里同步 flushSync 重渲染（改为 React 默认批处理调度）。
     // 若发现滚动时条目定位有「一帧延迟 / 边缘露白」，删掉这一行即可回到原行为。
-    useFlushSync: false,
+    // useFlushSync: false,
     paddingStart: LIST_PADDING + (hasMoreInDb ? LOAD_MORE_HINT_HEIGHT : 0),
     paddingEnd: LIST_PADDING,
   })
+  rowVirtualizerRef.current = rowVirtualizer
   const virtualItems = rowVirtualizer.getVirtualItems()
+
+  /**
+   * 用「已测量条目的平均高度」刷新未测量条目的估算高度（estimateSize）。
+   * 估算越准，新条目挂载时虚拟库对 scrollTop 的补偿越小，快速滚动越不抖。
+   */
+  const refreshEstimatedItemHeight = useCallback(() => {
+    const sizes = rowVirtualizer.itemSizeCache
+    if (sizes.size === 0) return
+    let sum = 0
+    for (const size of sizes.values()) sum += size
+    const avg = sum / sizes.size
+    // 只在明显偏离时更新，避免估算值被反复微调
+    if (avg > 0 && Math.abs(avg - avgItemHeightRef.current) > 8) {
+      avgItemHeightRef.current = avg
+    }
+  }, [rowVirtualizer])
 
   /**
    * 跳转到指定索引。
@@ -406,6 +508,11 @@ function ChatMessageList({
   useLayoutEffect(() => {
     const count = messages.length
     if (count === 0) return
+    // 条目数变化（新消息 / 回补历史）→ 刷新估算高度，供新条目的测量使用
+    if (count !== lastMsgCountRef.current) {
+      lastMsgCountRef.current = count
+      refreshEstimatedItemHeight()
+    }
     // 优先消费「待跳转」目标：此时 messages 已提交，count 为最新值
     const pendingJumpId = pendingJumpIdRef.current
     if (pendingJumpId) {
@@ -459,6 +566,8 @@ function ChatMessageList({
       root
         .querySelectorAll<HTMLElement>('.message-item-wrap')
         .forEach((node) => rowVirtualizer.measureElement(node))
+      // 测量结果刚更新，顺便刷新「未测量条目」的估算高度，供后续挂载使用
+      refreshEstimatedItemHeight()
     }
 
     /**

@@ -493,6 +493,15 @@ function ChatView() {
         chatState.value.selectedWorkspace,
       )
       sid = session.id
+      // 无会话时在输入区选的推理强度，落到新建会话的会话参数上
+      if (chatState.value.selectReasoningEffort) {
+        sessionStore.updateSession(session.id, {
+          params: {
+            ...session.params,
+            reasoningEffort: chatState.value.selectReasoningEffort,
+          },
+        })
+      }
       chatState.setValue('currentSessionId', sid)
       setMessages([])
     }

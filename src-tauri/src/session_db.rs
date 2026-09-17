@@ -946,6 +946,7 @@ mod tests {
                 top_p: 1.0,
                 max_tokens: 1000,
                 stream: true,
+                reasoning_effort: None,
             },
             created_at: 1,
             updated_at,

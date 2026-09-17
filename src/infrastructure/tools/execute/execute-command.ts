@@ -31,6 +31,19 @@ const SANDBOX_NOTE =
   '「写隔离」（只能在 workspace/白名单可写根内写入，区外写入会被拒绝）、' +
   '「只读」（不可写）、或「无沙盒」（完整权限）。退出码 >= 2 表示命令执行失败。'
 
+/** 申请绕过沙盒时追加到审批弹窗的警告（中文即 i18n key，英文见 en-US.json）。 */
+const SANDBOX_BYPASS_HINT =
+  '⚠️ 该命令申请「不使用沙盒」执行：不受写隔离与受限令牌限制，可写入任意路径。' +
+  '仅当该命令确实需要管道 stdio（如 vitest / vite / jest / node-gyp）时允许。'
+
+/** sandbox 参数描述（LLM 面向）：什么时候该申请绕过沙盒。 */
+const SANDBOX_PARAM_NOTE =
+  '默认不传（继承设置里的沙盒模式）。传 "off" 表示**申请**不使用沙盒执行，' +
+  '仅用于沙盒下必然失败的场景：命令的子进程需要用管道 stdio 拉起孙进程' +
+  '（vitest / vite / jest / ts-node / node-gyp / child_process.exec* 等），' +
+  '沙盒的受限令牌会让那次 spawn 直接报 EPERM（日志形如 "spawn EPERM"）。' +
+  '该请求必须经用户弹窗批准（不受 commandApprovalMode 影响）；沙盒为只读模式时会被直接拒绝。'
+
 /** 平台特定的工具描述。 */
 function buildToolDescription(platform: string): string {
   const prefix =
@@ -80,6 +93,11 @@ toolRegistry.register(
           description:
             '简要说明这条命令的作用和执行原因（用用户的语言）。会显示在 UI 上，帮助用户理解命令的目的。',
         },
+        sandbox: {
+          type: 'string',
+          enum: ['off'],
+          description: SANDBOX_PARAM_NOTE,
+        },
         timeout: {
           type: 'number',
           description:
@@ -101,6 +119,12 @@ toolRegistry.register(
     if (timeout > 300) timeout = 300
     const timeoutMs = (timeout ?? 30) * 1000
 
+    // sandbox: 'off' → 申请「不使用沙盒」执行（与 Rust 原生路径同语义）。
+    // ⚠️ 安全：一律强制审批，不受 commandApprovalMode 影响（不允许静默绕过）。
+    const bypassSandbox = ['off', 'none'].includes(
+      String(args.sandbox ?? '').toLowerCase(),
+    )
+
     // 风险分类 & 弹窗确认
     const risk = classifyCommand(cmdStr)
     const mode = await securityService.getCommandApprovalMode()
@@ -117,8 +141,12 @@ toolRegistry.register(
         break
       // case 'none': needsApproval 保持 false
     }
+    if (bypassSandbox) needsApproval = true
     if (needsApproval) {
       const info = getRiskInfo(risk)
+      const hint = bypassSandbox
+        ? [info.hint, t(SANDBOX_BYPASS_HINT)].filter(Boolean).join('\n')
+        : info.hint
       const { sessionId, toolCallId } = ctx
       // 注册本次审批（approvalId 唯一标识），用户确认后由常驻监听器精确执行
       const approvalId = registerPendingApproval({
@@ -127,14 +155,18 @@ toolRegistry.register(
         run: () => runCommand(cmdStr, cwd, timeoutMs, ctx),
       })
 
-      return new UserInteractionRequired('confirm_command', {
+      const payload: Record<string, any> = {
         approvalId,
         command: cmdStr,
         risk,
         label: info.label,
-        hint: info.hint,
+        hint,
         tips: args.tips,
-      })
+      }
+      // 申请绕过沙盒时带上标记（与 Rust 原生路径一致，仅作留痕；警告文案已在 hint 里）
+      if (bypassSandbox) payload.sandboxBypass = true
+
+      return new UserInteractionRequired('confirm_command', payload)
     }
 
     ctx.write(`> ${cmdStr}\n`)

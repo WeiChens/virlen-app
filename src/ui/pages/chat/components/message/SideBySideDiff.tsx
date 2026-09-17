@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { t } from '@/ui/i18n'
 import type { DiffRow } from '@/utils/diff'
@@ -126,10 +126,57 @@ function diffLanguageFromName(fileName: string | null): string | undefined {
 // ==================== 左右对比面板 ====================
 
 /**
- * diff 正文（文件头 / 双栏表头 / 双栏内容）。
+ * 一行里的其中一半（左半=原文件 / 右半=新文件）。
  *
- * 抽成独立组件是为了让「原位」与「全屏」两份各持一套 DOM ref：
- * 左右面板的滚动同步、列宽对齐都挂在 ref 上，两份共用一个实例会互相抢元素。
+ * 两半是**同一个 grid 行的两个格子**（都由 .diff-body 承载），所以：
+ * - 两侧列宽天然各占一半（不需要再量宽、写 --diff-col-w）；
+ * - 行高由 grid 行决定 → 一侧折行时另一侧那一格跟着变高，左右不会逐行错位。
+ */
+function DiffHalf({
+  side,
+  row,
+  language,
+}: {
+  side: 'old' | 'new'
+  row: SideBySideRow
+  language?: string
+}) {
+  const isOld = side === 'old'
+
+  // 多处编辑之间的省略间隔行：两侧各画一个 ⋯（与整行底色一起连成一条横带）
+  if (row.type === 'gap') {
+    return (
+      <div className={`diff-line diff-line--${side} diff-line--gap`}>
+        <span className="diff-linenum"></span>
+        <span className="diff-code">⋯</span>
+      </div>
+    )
+  }
+
+  const lineNum = isOld ? row.oldLineNum : row.newLineNum
+  const line = isOld ? row.oldLine : row.newLine
+  const highlight = isOld ? row.type === 'delete' : row.type === 'insert'
+  const highlightClass = highlight
+    ? isOld
+      ? ' diff-line--highlight-old'
+      : ' diff-line--highlight-new'
+    : ''
+
+  return (
+    <div className={`diff-line diff-line--${side}${highlightClass}`}>
+      <span className="diff-linenum">{lineNum ?? ''}</span>
+      <span className="diff-code">
+        <DiffCode text={line != null ? line || ' ' : ''} language={language} />
+      </span>
+    </div>
+  )
+}
+
+/**
+ * diff 正文（文件头 / 双栏表头 / 每一行的左右两半）。
+ *
+ * 「原位」与「全屏」各渲染一份：两边可用宽度不同（全屏铺满窗口），所以列宽不能写死 ——
+ * 交给 CSS 的 grid 1fr 1fr 按各自容器算，这也是不再需要 JS 量宽的原因。
  * `isFull` 只切换类名，结构完全一致。
  */
 function DiffContent({
@@ -176,49 +223,9 @@ function DiffContent({
     ? 0
     : diffRows.filter((r) => r.type !== 'delete' && r.type !== 'gap').length
 
-  const oldPanelRef = useRef<HTMLDivElement>(null)
-  const newPanelRef = useRef<HTMLDivElement>(null)
-  const oldColRef = useRef<HTMLDivElement>(null)
-  const newColRef = useRef<HTMLDivElement>(null)
-  const syncing = useRef(false)
-
-  // 渲染后对齐 scrollWidth：让两列内容区等宽
-  useLayoutEffect(() => {
-    const oldCol = oldColRef.current
-    const newCol = newColRef.current
-    if (!oldCol || !newCol) return
-    const maxW = Math.max(oldCol.scrollWidth, newCol.scrollWidth, 400)
-    if (maxW > 0) {
-      oldCol.style.width = maxW + 'px'
-      newCol.style.width = maxW + 'px'
-    }
-  }, [diffRows])
-
-  // 双向同步 scrollTop + scrollLeft
-  const syncScroll = useCallback((source: 'old' | 'new') => {
-    if (syncing.current) return
-    syncing.current = true
-    const oldEl = oldPanelRef.current
-    const newEl = newPanelRef.current
-    if (!oldEl || !newEl) {
-      syncing.current = false
-      return
-    }
-    if (source === 'old') {
-      newEl.scrollTop = oldEl.scrollTop
-      newEl.scrollLeft = oldEl.scrollLeft
-    } else {
-      oldEl.scrollTop = newEl.scrollTop
-      oldEl.scrollLeft = newEl.scrollLeft
-    }
-    requestAnimationFrame(() => {
-      syncing.current = false
-    })
-  }, [])
-
   return (
     <div className={`diff-side-by-side${isFull ? ' is-fullscreen' : ''}`}>
-      {/* 文件头 */}
+      {/* 文件头（固定，不随内容滚动） */}
       <div className="diff-header">
         <span className="diff-header-name">{fileName}</span>
         {/* {stat && (stat.delCount > 0 || stat.insCount > 0) && (
@@ -255,91 +262,41 @@ function DiffContent({
         </div>
       </div>
 
-      {/* 双栏表头 */}
-      <div className="diff-column-headers">
-        <div className="diff-col-header diff-col-header--old">
-          {t('原文件')}
-          {!showStat && startLine != null && (
-            <span className="diff-col-range">
-              Ln {startLine}–{startLine + oldLineCount - 1}
-            </span>
-          )}
-        </div>
-        <div className="diff-col-header diff-col-header--new">
-          {t('新文件')}
-          {!showStat && startLine != null && (
-            <span className="diff-col-range">
-              Ln {startLine}–{startLine + newLineCount - 1}
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* 双栏内容（各自独立滚动，scroll 双向同步） */}
+      {/* 唯一的滚动容器（只纵向滚动）：双栏表头 + 每一行的左右两半都在里面。
+          横向不再需要滚动 —— 超长行会在各自那一半里折行。 */}
       <div className="diff-body">
-        {/* --- 旧列 --- */}
-        <div
-          className="diff-panel diff-panel--old"
-          ref={oldPanelRef}
-          onScroll={() => syncScroll('old')}>
-          <div className="diff-col" ref={oldColRef}>
-            {diffRows.map((row, i) => {
-              if (row.type === 'gap') {
-                return (
-                  <div key={i} className="diff-line diff-line--gap">
-                    <span className="diff-linenum"></span>
-                    <span className="diff-code">⋯</span>
-                  </div>
-                )
-              }
-              return (
-                <div
-                  key={i}
-                  className={`diff-line${row.type === 'delete' ? ' diff-line--highlight-old' : ''}`}>
-                  <span className="diff-linenum">{row.oldLineNum ?? ''}</span>
-                  <span className="diff-code">
-                    <DiffCode
-                      text={row.oldLine != null ? row.oldLine || ' ' : ''}
-                      language={codeLang}
-                    />
-                  </span>
-                </div>
-              )
-            })}
+        {/* 双栏表头（吸顶：纵向钉住、横向跟着两列走） */}
+        <div className="diff-column-headers">
+          <div className="diff-col-header diff-col-header--old">
+            {/* 标签自己粘左边缘：横向滚到这一列时不会被推出视野 */}
+            <span className="diff-col-header-label">
+              {t('原文件')}
+              {!showStat && startLine != null && (
+                <span className="diff-col-range">
+                  Ln {startLine}–{startLine + oldLineCount - 1}
+                </span>
+              )}
+            </span>
+          </div>
+          <div className="diff-col-header diff-col-header--new">
+            <span className="diff-col-header-label">
+              {t('新文件')}
+              {!showStat && startLine != null && (
+                <span className="diff-col-range">
+                  Ln {startLine}–{startLine + newLineCount - 1}
+                </span>
+              )}
+            </span>
           </div>
         </div>
 
-        {/* --- 新列 --- */}
-        <div
-          className="diff-panel diff-panel--new"
-          ref={newPanelRef}
-          onScroll={() => syncScroll('new')}>
-          <div className="diff-col" ref={newColRef}>
-            {diffRows.map((row, i) => {
-              if (row.type === 'gap') {
-                return (
-                  <div key={i} className="diff-line diff-line--gap">
-                    <span className="diff-linenum"></span>
-                    <span className="diff-code">⋯</span>
-                  </div>
-                )
-              }
-              return (
-                <div
-                  key={i}
-                  className={`diff-line${row.type === 'insert' ? ' diff-line--highlight-new' : ''}`}>
-                  <span className="diff-linenum">{row.newLineNum ?? ''}</span>
-                  <span className="diff-code">
-                    <DiffCode
-                      text={row.newLine != null ? row.newLine || ' ' : ''}
-                      language={codeLang}
-                    />
-                  </span>
-                </div>
-              )
-            })}
-          </div>
-        </div>
+        {/* 每一行：左半、右半成对落进同一个 grid 行 */}
+        {diffRows.map((row, i) => (
+          <Fragment key={i}>
+            <DiffHalf side="old" row={row} language={codeLang} />
+            <DiffHalf side="new" row={row} language={codeLang} />
+          </Fragment>
+        ))}
       </div>
     </div>
   )

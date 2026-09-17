@@ -13,6 +13,12 @@ export interface ProviderConfig {
   apiKey: string
   baseUrl: string
   models: ModelInfo[]
+  /**
+   * 该服务商可选的推理强度档位（用户在服务商配置里从 REASONING_EFFORT_UNION 多选而来）
+   * 聊天界面只能从这些值里切换实际使用的档位
+   */
+  reasoningEffortList?: string[]
+  /** 默认推理强度：会话未单独选择时使用（会话级选择优先） */
   reasoningEffort?: string
   enabled: boolean
   createdAt: number
@@ -27,7 +33,10 @@ export interface ProviderConfigTemplate {
     type: ProviderType
     baseUrl: string
   }[]
-  /** 允许的 reasoningEffort 值列表（如 ['low', 'medium', 'high']），不设置则表示不支持 */
+  /**
+   * 允许的 reasoningEffort 值列表（如 ['low', 'medium', 'high']），不设置则表示不支持
+   * @deprecated 已由用户多选（ProviderConfig.reasoningEffortList）取代，仅作参考数据保留
+   */
   allowReasoningEffortList?: string[]
   /**
    * 官网地址
@@ -140,6 +149,8 @@ export interface SessionParams {
   topP: number
   maxTokens: number
   stream: boolean
+  /** 会话级推理强度（覆盖 Provider 默认值），不设置则回退 Provider 默认值 */
+  reasoningEffort?: string
 }
 
 export type StreamEventType =

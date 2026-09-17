@@ -234,7 +234,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 | 机制 | 位置 | 要点 |
 |---|---|---|
 | 路径校验 | `domain/security/index.ts`（策略）、`services/security-service.ts`（服务）、`utils/pathCanonicealize.ts` | 优先级 **黑名单 > 白名单 > 工作目录**；写模式（`mode='w'`）仅允许白名单 + 工作目录；黑名单按平台给默认值 |
-| 沙盒模式 | `settings.sandboxMode` (`on`/`off`/`readonly`)；实现 `infrastructure/sandbox/plugin-shell-sandbox.ts` + `src-tauri/src/sandbox/` | Windows：Job Object + 受限令牌 + ACL（`windows/`）；Linux：Landlock（5.13+，默认拒写、白名单授予可写根，`readonly` 时全部拒写）；macOS：见 `sandbox/macos/mod.rs`。**禁止绕过沙盒直接 spawn** |
+| 沙盒模式 | `settings.sandboxMode` (`on`/`off`/`readonly`)；实现 `infrastructure/sandbox/plugin-shell-sandbox.ts` + `src-tauri/src/sandbox/` | Windows：Job Object + 受限令牌 + ACL（`windows/`）；Linux：Landlock（5.13+，默认拒写、白名单授予可写根，`readonly` 时全部拒写）；macOS：见 `sandbox/macos/mod.rs`。**禁止绕过沙盒直接 spawn**；唯一例外是 `execute_command` 的 `sandbox:"off"`（沙盒子进程无法创建管道 stdio 时的受控退路，根因见 §11.2）——它**强制弹窗审批**（不受 `commandApprovalMode` 影响）、`readonly` 模式直接拒绝，并埋点 `tool.sandbox.bypass` |
 | 命令审批 | `settings.commandApprovalMode` (`all`/`risky`/`install`/`none`) + `tools/execute/common.ts::classifyCommand`（`safe`/`install`/`dangerous`） | 危险命令集合与安装器集合在此维护；新增高危命令要补进集合 |
 | 工具风暴防护 | `declaration` → `domain/engine/storm-breaker.ts` / `agent/storm_breaker.rs` | 滑窗（window 6 / threshold 3）检测重复 `(toolName, args)`，命中即中断循环 |
 | 密钥打码 | `utils/telemetry/redact.ts`、`isSensitiveKey()` | 埋点/日志**不得**输出 apiKey、token、密钥文件内容；`providers`/`searchProviders` 只上报数量 |
@@ -271,6 +271,24 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 
 **11.2 本机沙盒的已知限制（非代码问题）**：
 - `vitest` 可能因 `esbuild` 子进程 `spawn EPERM` 启动失败 → 测试无法在本沙盒运行，需在常规终端执行。
+  **根因（2026-09 实测定位，链路上游是 node/libuv 的命名管道，不是测试代码）**：
+  - 报错 `errno: -4048, code: 'EPERM', syscall: 'spawn'`，`-4048` 是 libuv 的 `UV_EPERM`，其源头是
+    `CreateProcessW` 返回 Win32 错误 **5（ACCESS_DENIED）**（同环境对比：受限进程写可写根外的文件也报 `EPERM`）。
+  - 沙盒令牌为 `CreateRestrictedToken(WRITE_RESTRICTED | DISABLE_MAX_PRIVILEGE | LUA_TOKEN)`
+    （`sandbox/windows/token.rs`），restricting SIDs = 能力 SID + Logon SID + Everyone；语义是**写类访问要过两遍检查**
+    （普通 SID 一遍、restricting SID 一遍，都过才给权限）。
+  - 「读」不受影响（所以 spawn 报错前一切正常）；**只要子进程 stdio 里有一个 fd 是 pipe 就会挂**
+    （`stdio: 'ignore'` / `'inherit'` 正常，与可执行文件、`windowsHide`、cwd、进程层级无关；`fork` 的 IPC 同样挂）。
+  - 原因：libuv 给 spawn 的 stdio 建的是**命名/overlapped 管道**（`CreateNamedPipeW` + 客户端 `CreateFileW`），
+    而命名管道**不继承令牌默认 DACL**（`token.rs::set_default_dacl` 只修了默认 DACL 这条路径），拿到的是 NPFS 内置 SD：
+    `D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;<用户SID>)(A;;FR;;;WD)(A;;FR;;;AN)` —— Everyone/ANONYMOUS 只读，
+    且**没有任何 restricting SID（能力 SID）的写 ACE** → 打开管道另一端申请写权限时第二遍检查失败 → ACCESS_DENIED。
+  - 用**匿名管道**（`CreatePipe`，SD 取自令牌默认 DACL，已被授权）的程序不受影响：python `subprocess(capture_output=True)`、
+    `cargo`→`rustc`、.NET `Process.Start(RedirectStandardOutput)`、PowerShell 内部管道均实测正常。
+    同理受影响的是 `vite build` / `jest` / `node-gyp` / `child_process.exec*/fork` 这类；vitest/vite 的 TS 转译本身依赖 esbuild
+    二进制，**常规情况下沙盒内跑不了**（已提供受控退路：`execute_command` 传 `sandbox:"off"`，会强制弹窗审批后不使用沙盒执行，`readonly` 模式拒绝，见 §9）。
+  - 想临时关闭：`VIRLEN_SANDBOX=off|readonly|on`（由 **Virlen 进程**读取，见 `native_tools/execute/common.rs::sandbox_mode`，
+    在命令里 `set` 无效），或在设置里改沙盒模式。同类「需补 ACL 的内核对象」先例见 `sandbox/windows/acl.rs::allow_null_device`（`\.\NUL`）。
 - `node_modules` 可能不完整（例如缺 `@tanstack/react-virtual`），此时 `tsc --noEmit` 会报
   `message-list.tsx` 的「找不到模块 + 隐式 any」两个错。先 `pnpm install` 再判断是否为真错误。
 

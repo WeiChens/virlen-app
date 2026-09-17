@@ -5,7 +5,7 @@
 //!   2. 命令解析与风险分类（safe | install | dangerous）+ 风险文案
 //!   3. 运行中命令注册表（前端 ToolOutput.kill → 终止整棵进程树）
 //!   4. 终端输出处理（\r 覆盖 / ANSI 转义序列）
-//!   5. 统一运行器 run_command_native（沙盒优先，失败降级裸跑）
+//!   5. 统一运行器 run_command_native（沙盒优先，失败降级裸跑；`bypass_sandbox` 时直接裸跑）
 
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
 use serde_json::json;
@@ -332,6 +332,36 @@ pub(super) fn risk_info(risk: &str) -> (String, String) {
     }
 }
 
+/// 是否需要弹窗审批。
+///
+/// `bypass_sandbox`（execute_command 的 `sandbox:"off"`，申请不使用沙盒/受限令牌）
+/// **一律强制审批**，不受 `commandApprovalMode` 影响——写隔离是安全底线，不允许静默绕过。
+pub(super) fn needs_command_approval(approval_mode: &str, risk: &str, bypass_sandbox: bool) -> bool {
+    if bypass_sandbox {
+        return true;
+    }
+    match approval_mode {
+        "all" => true,
+        "risky" => risk == "dangerous",
+        "install" => risk != "safe",
+        _ => false,
+    }
+}
+
+/// 申请绕过沙盒时追加到风险提示后的警告文案。
+///
+/// 与 `risk_info` 一致：这里的弹窗文案由 Rust 侧直接下发给 JS（不进 i18n）。
+pub(super) const SANDBOX_BYPASS_HINT: &str = "⚠️ 该命令申请「不使用沙盒」执行：不受写隔离与受限令牌限制，可写入任意路径。仅当该命令确实需要管道 stdio（如 vitest / vite / jest / node-gyp）时允许。";
+
+/// 把绕过沙盒的警告拼到基础提示后（基础提示可能为空）。
+pub(super) fn with_bypass_hint(base_hint: &str) -> String {
+    if base_hint.is_empty() {
+        SANDBOX_BYPASS_HINT.to_string()
+    } else {
+        format!("{base_hint}\n{SANDBOX_BYPASS_HINT}")
+    }
+}
+
 // ==================== 3. 运行中命令注册表 ====================
 // 支持前端「终止」按钮（ToolOutput.kill）
 
@@ -528,10 +558,17 @@ fn process_terminal_output(raw: &str) -> String {
 
 // ==================== 5. 统一运行器 ====================
 
+/// 统一运行器（裸跑与沙盒两条路径共用入口）。
+///
+/// `bypass_sandbox`：调用方已完成用户审批的「不使用沙盒」请求（execute_command 的
+/// `sandbox:"off"`）。为 true 时跳过沙盒、直接走下方裸跑路径；典型用途是沙盒下必然
+/// 失败的场景：子进程需要用管道 stdio 拉起孙进程（vitest/vite/jest/node-gyp 等），
+/// 受限令牌会使那次 spawn 报 EPERM（根因见 AGENTS §11.2）。
 pub(super) async fn run_command_native(
     ctx: &NativeToolCtx<'_>,
     cmd_str: &str,
     timeout_secs: i64,
+    bypass_sandbox: bool,
 ) -> Result<NativeToolOutcome, String> {
     use tokio::io::AsyncReadExt;
     use tokio::process::Command;
@@ -540,9 +577,12 @@ pub(super) async fn run_command_native(
     let platform = std::env::consts::OS;
     let is_win = platform == "windows";
 
-    // 三平台：优先走沙盒（OS 级写隔离）。off 模式或 prepare/spawn 失败则降级到下方裸跑路径。
+    // 三平台：优先走沙盒（OS 级写隔离）。以下三种情况走下方裸跑路径：
+    //   1) bypass_sandbox = true（sandbox:"off"，已在 execute_command 侧强制审批）；
+    //   2) 沙盒模式为 off；
+    //   3) prepare/spawn 失败（降级，见下方 eprintln）。
     let mut sandbox_degraded = false;
-    if sandbox_mode(ctx) != SandboxMode::Off {
+    if !bypass_sandbox && sandbox_mode(ctx) != SandboxMode::Off {
         match run_command_sandboxed(ctx, cmd_str, timeout_secs).await {
             Ok(outcome) => return Ok(outcome),
             Err(e) => {
@@ -805,7 +845,9 @@ pub(super) async fn run_command_native(
     };
 
     let env_note = {
-        let mode = if sandbox_mode(ctx) == SandboxMode::Off {
+        let mode = if bypass_sandbox {
+            "无沙盒（用户已批准绕过沙盒，完整权限）"
+        } else if sandbox_mode(ctx) == SandboxMode::Off {
             "无沙盒（已关闭，完整权限）"
         } else if sandbox_degraded {
             "无沙盒（沙盒不可用，已降级，完整权限）"

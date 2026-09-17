@@ -128,6 +128,50 @@
       margin-top: 4px;
     }
 
+    // 推理强度候选项（多选）
+    .effort-checkbox-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+
+      .effort-checkbox {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin-bottom: 0;
+        padding: 4px 10px;
+        border: 1px solid var(--border-color, #e5e5e5);
+        border-radius: 6px;
+        background: var(--bg-primary, #fff);
+        font-size: var(--font-size-sm);
+        font-weight: 400;
+        color: var(--text-secondary, #666);
+        cursor: pointer;
+        user-select: none;
+        transition: all 0.15s;
+
+        input[type='checkbox'] {
+          width: auto;
+          margin: 0;
+          padding: 0;
+          border: none;
+          cursor: pointer;
+          accent-color: var(--accent-color, #4f46e5);
+        }
+
+        &:hover {
+          border-color: var(--accent-color, #4f46e5);
+        }
+
+        &.checked {
+          border-color: var(--accent-color, #4f46e5);
+          background: var(--active-bg, #eef2ff);
+          color: var(--accent-color, #4f46e5);
+          font-weight: 500;
+        }
+      }
+    }
+
     .model-list-section {
       border: 1px solid var(--border-color, #e5e5e5);
       border-radius: 8px;

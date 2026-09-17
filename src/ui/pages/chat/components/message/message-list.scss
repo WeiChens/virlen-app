@@ -56,7 +56,7 @@
   height: 36px;
   border-radius: 50%;
   border: 1px solid var(--border-color, #e5e5e5);
-  background-color: transparent;
+  background-color: var(--primary-fg-opacity);
   backdrop-filter: blur(4px);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
   cursor: pointer;

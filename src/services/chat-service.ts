@@ -23,7 +23,7 @@ import type { AgentEventCallback, Message, MessageContent } from '@/types'
 import { settingsState } from '@/ui/store'
 import { toolService } from './tool-service'
 import { showToast } from '@/ui/components/shared/Toast'
-import type { Agent, Session } from '@/types'
+import type { Agent, ProviderConfig, Session } from '@/types'
 import { DEFAULT_SESSION_PARAMS } from '@/types'
 import { getDefaultAgent, assembleAgentPrompt } from '@/services/agent-service'
 import { agentEngine } from '@/domain'
@@ -110,6 +110,21 @@ function describeContent(content: MessageContent): {
  */
 export function getEngine(): typeof agentEngine {
   return isRustEngineEnabled() ? rustEngine : agentEngine
+}
+
+/**
+ * 解析本次请求实际使用的推理强度
+ *
+ * 优先级：会话级选择（聊天界面切换）> 服务商配置的默认值；
+ * 两者都没有则不传该参数，交给服务端默认行为。
+ */
+function resolveReasoningEffort(
+  session: Session,
+  providerCfg?: ProviderConfig,
+): string | undefined {
+  return (
+    session.params?.reasoningEffort || providerCfg?.reasoningEffort || undefined
+  )
 }
 
 /**
@@ -335,7 +350,7 @@ export async function sendMessage(
   const providerCfg = settingsState.value.providers.find(
     (p) => p.id === session.providerConfigId,
   )
-  const reasoningEffort = providerCfg?.reasoningEffort
+  const reasoningEffort = resolveReasoningEffort(session, providerCfg)
 
   track('engine.send.start', {
     engine: engineKind(),
@@ -407,7 +422,7 @@ export async function resumePausedRun(
   const providerCfg = settingsState.value.providers.find(
     (p) => p.id === session.providerConfigId,
   )
-  const reasoningEffort = providerCfg?.reasoningEffort
+  const reasoningEffort = resolveReasoningEffort(session, providerCfg)
 
   // ===== 埋点：恢复暂停任务 =====
   const traceId = newTraceId()
@@ -566,7 +581,7 @@ export async function sendMessageWithGoal(
   const providerCfg = settingsState.value.providers.find(
     (p) => p.id === session.providerConfigId,
   )
-  const reasoningEffort = providerCfg?.reasoningEffort
+  const reasoningEffort = resolveReasoningEffort(session, providerCfg)
 
   track('engine.send.start', {
     engine: engineKind(),

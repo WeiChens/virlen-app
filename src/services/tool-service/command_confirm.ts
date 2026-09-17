@@ -133,6 +133,8 @@ export function createCommandConfirmHandles(
         command: pendingCommand,
         command_len: pendingCommand.length,
         risk: data.risk,
+        // 申请「不使用沙盒」执行时留痕（便于事后审计，见 AGENTS §9）
+        sandbox_bypass: data.sandboxBypass === true ? true : undefined,
       })
       return new Promise<ToolExecutorResponse>((resolve, reject) => {
         interactionResolve = resolve
@@ -241,6 +243,8 @@ export function createNativeCommandConfirmHandles(
         command: pendingCommand,
         command_len: pendingCommand.length,
         risk: data.risk,
+        // 原生路径同样留痕（sandbox:"off" 由 Rust 下发该标记）
+        sandbox_bypass: data.sandboxBypass === true ? true : undefined,
       })
       return new Promise<ToolExecutorResponse>((resolve, reject) => {
         interactionResolve = resolve

@@ -124,6 +124,7 @@
   --bg-primary-t: #ffffff37;
   --inline-code-hover-bg: #dbdbdb;
   --accent-bg: var(--primary-soft);
+  --primary-fg-opacity: #ffffff80;
 }
 [data-theme='dark'] {
   /* ===== 品牌主色（暗色档：同色系；修掉原 accent-hover 偏青的错配）===== */
@@ -235,6 +236,7 @@
   --inline-code-hover-bg: #313244;
 
   --accent-bg: var(--primary-soft);
+  --primary-fg-opacity: #00000080;
 }
 :root {
   /* ===== 布局尺寸（与主题无关，亮/暗共用） ===== */

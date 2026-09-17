@@ -15,6 +15,27 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { isURL } from '@/utils/common'
 import { createProviderInstance } from '@/infrastructure/provider'
 import { providerService } from '@/services/provider-service'
+import {
+  REASONING_EFFORT_UNION,
+  DEFAULT_REASONING_EFFORT_LIST,
+  sortReasoningEfforts,
+} from '@/domain/provider/config'
+
+/**
+ * 老数据迁移：只有单个 reasoningEffort 时，候选项用默认基础档位 + 该单值合成，
+ * 保证已配置的默认值在下拉里选得中。
+ */
+function migrateReasoningEffortList(
+  reasoningEffort?: string,
+  list?: string[],
+): string[] {
+  if (list && list.length > 0) return [...list]
+  const base = [...DEFAULT_REASONING_EFFORT_LIST]
+  if (reasoningEffort && !base.includes(reasoningEffort)) {
+    base.push(reasoningEffort)
+  }
+  return base
+}
 
 interface Props {
   visible: boolean
@@ -26,6 +47,7 @@ interface Props {
     baseUrl: string
     models: ModelInfo[]
     templateName: any
+    reasoningEffortList?: string[]
     reasoningEffort?: string
   }) => void
   template?: {
@@ -33,7 +55,6 @@ interface Props {
     type: ProviderType
     label: string
     baseUrl: string
-    allowReasoningEffortList?: string[]
   }
   initialConfig?: {
     name: string
@@ -42,6 +63,7 @@ interface Props {
     apiKey: string
     baseUrl: string
     models: ModelInfo[]
+    reasoningEffortList?: string[]
     reasoningEffort?: string
   }
 }
@@ -64,6 +86,7 @@ export default function ProviderEditModal({
   const [models, setModels] = useState<ModelInfo[]>([])
   const [newModelId, setNewModelId] = useState('')
   const [fetching, setFetching] = useState(false)
+  const [reasoningEffortList, setReasoningEffortList] = useState<string[]>([])
   const [reasoningEffort, setReasoningEffort] = useState('')
   useEffect(() => {
     if (visible) {
@@ -74,6 +97,12 @@ export default function ProviderEditModal({
         setBaseUrl(initialConfig.baseUrl)
         setTemplateName(initialConfig.templateName)
         setModels(initialConfig.models || [])
+        setReasoningEffortList(
+          migrateReasoningEffortList(
+            initialConfig.reasoningEffort,
+            initialConfig.reasoningEffortList,
+          ),
+        )
         setReasoningEffort(initialConfig.reasoningEffort || '')
       } else if (template) {
         setLabel(t(template.label))
@@ -82,6 +111,7 @@ export default function ProviderEditModal({
         setBaseUrl(template.baseUrl)
         setTemplateName(template.templateName)
         setModels([])
+        setReasoningEffortList([...DEFAULT_REASONING_EFFORT_LIST])
         setReasoningEffort('')
       } else {
         // 无模板时默认 openai 类型
@@ -90,6 +120,7 @@ export default function ProviderEditModal({
         setBaseUrl('')
         setTemplateName('custom')
         setModels([])
+        setReasoningEffortList([...DEFAULT_REASONING_EFFORT_LIST])
         setReasoningEffort('')
       }
       setShowKey(false)
@@ -109,6 +140,16 @@ export default function ProviderEditModal({
 
   function removeModel(modelId: string) {
     setModels(models.filter((m) => m !== modelId))
+  }
+
+  /** 切换推理强度候选项（多选）；取消勾选时同步清掉失效的默认值 */
+  function toggleReasoningEffort(val: string) {
+    if (reasoningEffortList.includes(val)) {
+      setReasoningEffortList(reasoningEffortList.filter((v) => v !== val))
+      if (reasoningEffort === val) setReasoningEffort('')
+    } else {
+      setReasoningEffortList([...reasoningEffortList, val])
+    }
   }
 
   // 编辑模式下：当外部 stores 更新了 models 时同步到弹窗内部 state
@@ -135,6 +176,10 @@ export default function ProviderEditModal({
       baseUrl: baseUrl.trim(),
       models,
       templateName: templateName,
+      reasoningEffortList:
+        reasoningEffortList.length > 0
+          ? sortReasoningEfforts(reasoningEffortList)
+          : undefined,
       reasoningEffort: reasoningEffort || undefined,
     })
   }
@@ -149,6 +194,8 @@ export default function ProviderEditModal({
       apiKey: apiKey.trim(),
       baseUrl: baseUrl.trim(),
       models,
+      reasoningEffortList:
+        reasoningEffortList.length > 0 ? reasoningEffortList : undefined,
       reasoningEffort: reasoningEffort || undefined,
       templateName: templateName as any,
       id: initialConfig ? initialConfig.name : `temp-${templateName}`,
@@ -179,9 +226,6 @@ export default function ProviderEditModal({
     .find((t) => t.templateName === templateName)
   const allowTypeList = currentTemplate?.allowTypeList || []
 
-  const allowReasoningEffortList =
-    currentTemplate?.allowReasoningEffortList || []
-
   // 当模板切换时自动更新 type 和 baseUrl
   useEffect(() => {
     if (currentTemplate && !initialConfig) {
@@ -195,6 +239,7 @@ export default function ProviderEditModal({
       } else {
         setBaseUrl(currentTemplate.baseUrl)
       }
+      setReasoningEffortList([...DEFAULT_REASONING_EFFORT_LIST])
       setReasoningEffort('')
     }
   }, [templateName])
@@ -348,24 +393,45 @@ export default function ProviderEditModal({
           </div>
         </div>
 
-        {allowReasoningEffortList.length > 0 && (
+        <div className="form-group">
+          <label>{t('推理强度候选项')}</label>
+          <div className="effort-checkbox-list">
+            {REASONING_EFFORT_UNION.map((val) => (
+              <label
+                key={val}
+                className={`effort-checkbox ${reasoningEffortList.includes(val) ? 'checked' : ''}`}>
+                <input
+                  type="checkbox"
+                  checked={reasoningEffortList.includes(val)}
+                  onChange={() => toggleReasoningEffort(val)}
+                />
+                {val}
+              </label>
+            ))}
+          </div>
+          <span className="form-hint">
+            {t('勾选该服务商实际支持的档位，聊天界面里只能从勾选值中切换')}
+          </span>
+        </div>
+
+        {reasoningEffortList.length > 0 && (
           <div className="form-group">
-            <label>{t('推理强度 (Reasoning Effort)')}</label>
+            <label>{t('默认推理强度')}</label>
             <Select
               value={reasoningEffort}
               onChange={(v) => setReasoningEffort(v)}
               options={[
                 { value: '', label: t('默认（不设置）') },
-                ...allowReasoningEffortList.map((val) => ({
+                ...reasoningEffortList.map((val) => ({
                   value: val,
                   label: val,
                 })),
               ]}
               width={200}
             />
-            {/* <span className="form-hint">
-              仅对支持 reasoning_effort 参数的模型生效（如 OpenAI o 系列）
-            </span> */}
+            <span className="form-hint">
+              {t('会话未单独切换时使用此默认值')}
+            </span>
           </div>
         )}
 

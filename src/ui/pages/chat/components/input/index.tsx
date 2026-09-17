@@ -23,6 +23,7 @@ import {
 import SendSvg from '@/ui/components/icons/SendSvg'
 import StopSvg from '@/ui/components/icons/StopSvg'
 import ModelSwitcher from '../modals/model-switcher'
+import ReasoningEffortSlider from '../modals/reasoning-effort-slider'
 import {
   chatState,
   sessionStore,
@@ -67,6 +68,11 @@ interface RefProps {
   setText: (text: string) => void
 }
 
+const MIN_HEIGHT = 170
+
+/** 波浪动画的字符上限：超长文案退化为静态文案（避免上百个 span + 视觉噪音） */
+const WAVE_MAX_CHARS = 20
+
 function ChatInput(
   {
     sessionId,
@@ -93,7 +99,7 @@ function ChatInput(
   const [wrapperHeight, setWrapperHeight] = useState<number | null>(() => {
     try {
       const saved = localStorage.getItem('_input_wrapper_height')
-      return saved ? Math.max(130, Math.min(600, parseInt(saved, 10))) : null
+      return saved ? Math.max(MIN_HEIGHT, Math.min(600, parseInt(saved, 10))) : null
     } catch {
       return null
     }
@@ -115,7 +121,7 @@ function ChatInput(
       if (!isResizing.current) return
       // drag up = delta positive = taller
       const delta = startYRef.current - ev.clientY
-      const newH = Math.max(160, Math.min(600, startHRef.current + delta))
+      const newH = Math.max(MIN_HEIGHT, Math.min(600, startHRef.current + delta))
       setWrapperHeight(newH)
     }
 
@@ -140,7 +146,7 @@ function ChatInput(
     if (wrapperHeight) {
       try {
         localStorage.setItem('_input_wrapper_height', String(wrapperHeight))
-      } catch {}
+      } catch { }
     }
   }, [wrapperHeight])
 
@@ -593,31 +599,48 @@ function ChatInput(
     return () => clearInterval(timer)
   }, [])
 
+  // ===== 工作中指示器文案 =====
+  // 压缩优先（它是一次明确的长任务），否则用业务侧写入的 loadingText
+  // 单一文案来源：loading 与 compacting 同时为真时只展示一个状态
+  const workingText = compacting
+    ? t('上下文压缩中')
+    : chatState.value.loadingText || t('正在工作中')
+
+  // 波浪文字：拆成单字（Array.from 能正确处理 emoji / 代理对，不像 split('') 会拆碎）
+  const waveChars = Array.from(workingText)
+
   return (
     <div className="chat-input">
-      {/* 工作中过渡动画指示器 — AI 处理 / 视觉分析时展示 */}
-      {loading && (
-        <div className="working-indicator">
-          {/* <span className="working-dot"></span> */}
-          <span className="working-text">
-            {chatState.value.loadingText || t('正在工作中')}
-          </span>
-          <span className="working-bouncing-dots">
-            <span></span>
-            <span></span>
-            <span></span>
-          </span>
-        </div>
-      )}
-      {compacting && (
-        <div className="working-indicator">
-          {/* <span className="working-dot"></span> */}
-          <span className="working-text">{t('上下文压缩中')}</span>
-          <span className="working-bouncing-dots">
-            <span></span>
-            <span></span>
-            <span></span>
-          </span>
+      {/* 工作中过渡动画指示器 — AI 处理 / 视觉分析 / 上下文压缩时展示
+          波浪文字：逐字上下呼吸、靠相位差形成波峰横向推进，无装饰点
+          逐字 span 对读屏隐藏，完整文案由 aria-label 承载，避免逐字被拆读
+          注：`|| true` 是临时预览开关，提交前删掉 */}
+      {(loading || compacting ) && (
+        <div
+          className={`working-indicator ${compacting ? 'is-compacting' : ''}`}
+          role="status"
+          aria-live="polite"
+          aria-label={workingText}>
+          {waveChars.length <= WAVE_MAX_CHARS ? (
+            <span className="working-wave" aria-hidden="true">
+              {waveChars.map((ch, i) => (
+                <span
+                  key={`${i}-${ch}`}
+                  className="working-wave-char"
+                  // 相位差 = 第几个字 × 波浪步长（负数：上屏即处在自己那一拍，避免开头「闪一下」）
+                  // 步长定义在 style.scss 的 --wave-step，调节奏只动一处
+                  style={{
+                    animationDelay: `calc(${i - waveChars.length} * var(--wave-step))`,
+                  }}>
+                  {ch === ' ' ? '\u00a0' : ch}
+                </span>
+              ))}
+            </span>
+          ) : (
+            <span className="working-text" aria-hidden="true">
+              {workingText}
+            </span>
+          )}
         </div>
       )}
 
@@ -798,9 +821,8 @@ function ChatInput(
             {/* 语音输入按钮 */}
             {voiceSupported && (
               <button
-                className={`voice-btn ${isRecording ? 'is-recording' : ''} ${
-                  isTranscribing ? 'is-transcribing' : ''
-                }`}
+                className={`voice-btn ${isRecording ? 'is-recording' : ''} ${isTranscribing ? 'is-transcribing' : ''
+                  }`}
                 onClick={toggleVoiceInput}
                 disabled={disabled || loading || isTranscribing}
                 title={
@@ -823,7 +845,7 @@ function ChatInput(
             )}
 
             {/* 迭代模式切换按钮 */}
-            <button
+            {/* <button
               className={`goal-btn ${goalExpanded ? 'is-active' : ''}`}
               onClick={() => {
                 setGoalExpanded(!goalExpanded)
@@ -843,18 +865,21 @@ function ChatInput(
                 <path d="M512 416a96 96 0 1 0 96 96 96 96 0 0 0-96-96z m0 160a64 64 0 1 1 64-64 64 64 0 0 1-64 64z" />
                 <path d="M512 64a448 448 0 1 0 448 448A448 448 0 0 0 512 64z m-60.32 794.72a351.04 351.04 0 0 1-286.4-286.4A64 64 0 0 0 205.92 528h50.88A256 256 0 0 0 496 768v50.88a64 64 0 0 0-44.32 39.84z m120.64-693.44a351.04 351.04 0 0 1 286.4 286.4A64 64 0 0 0 818.08 496H768a256 256 0 0 0-240-239.2v-50.88a64 64 0 0 0 44.32-40.64zM688 528h48a224 224 0 0 1-208 208v-48a16 16 0 0 0-32 0v48a224 224 0 0 1-207.2-208H336a16 16 0 0 0 0-32h-47.2A224 224 0 0 1 496 288.8V336a16 16 0 0 0 32 0v-47.2A224 224 0 0 1 736 496h-48a16 16 0 0 0 0 32zM451.68 165.28A64 64 0 0 0 496 205.92v50.88A256 256 0 0 0 256.8 496h-50.88a64 64 0 0 0-40.64-44.32 351.04 351.04 0 0 1 286.4-286.4z m120.64 693.44A64 64 0 0 0 528 818.08V768a256 256 0 0 0 240-240h50.88a64 64 0 0 0 40.64 44.32 351.04 351.04 0 0 1-287.2 286.4z" />
               </svg>
-            </button>
+            </button> */}
 
             {/* 模型切换 */}
             <ModelSwitcher />
 
+
             {/* Agent 选择器（仅无会话时） */}
             {!sessionId && <AgentSelector sessionId={sessionId} />}
-
+            {/* 推理强度拖动条（档位来自服务商配置） */}
+            <ReasoningEffortSlider />
             {/* 当前 Agent 名称（有会话时） */}
             {chatState.value.currentSessionId && agent && (
               <div className="agent-name">{agent.name}</div>
             )}
+
           </div>
 
           <div className="input-right">

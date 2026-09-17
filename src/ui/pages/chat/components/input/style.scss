@@ -1,36 +1,43 @@
 // ==================== 工作中过渡动画指示器 ====================
+// 波浪文字：每个字做一次上下「呼吸」，靠 animation-delay 的相位差形成波峰横向推进（无装饰点）
 
-@keyframes working-dot-pulse {
+// 单字一个周期：抬升 → 落回，同时 ±5° 左右摇摆
+// 关键：每个关键帧的 transform 函数表必须一致（translateY + rotateZ，同序同项），
+//       否则浏览器会退化成「矩阵分解」插值，摇摆会出现一顿一顿的不均匀感
+@keyframes workingWaveChar {
+
   0%,
   100% {
-    transform: scale(1);
-    opacity: 0.6;
+    transform: translateY(0) rotateZ(0deg);
+    opacity: 0.7;
   }
+
+  25% {
+    transform: translateY(-1px) rotateZ(5deg);
+    opacity: 0.8;
+  }
+
   50% {
-    transform: scale(1.3);
+    transform: translateY(-2px) rotateZ(0deg);
     opacity: 1;
+  }
+
+  75% {
+    transform: translateY(-1px) rotateZ(-5deg);
+    opacity: 0.8;
   }
 }
 
-@keyframes working-bounce-dot {
-  0%,
-  80%,
-  100% {
+// 出现：淡入 + 轻微上浮
+@keyframes workingIndicatorIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
     transform: translateY(0);
-    opacity: 0.3;
-  }
-  40% {
-    transform: translateY(-2px);
-    opacity: 1;
-  }
-}
-
-@keyframes shimmerFlow {
-  0% {
-    background-position: 0% 50%;
-  }
-  100% {
-    background-position: 300% 50%;
   }
 }
 
@@ -71,6 +78,7 @@
     &::-webkit-scrollbar {
       width: 4px;
     }
+
     &::-webkit-scrollbar-thumb {
       background: var(--scrollbar-thumb, #ccc);
       border-radius: 2px;
@@ -89,10 +97,12 @@
     &.selected {
       background: var(--active-bg, #eef2ff);
     }
+
     &:hover {
       background: var(--active-bg, #f5f5f5);
       opacity: 0.9;
     }
+
     .path-autocomplete-icon {
       flex-shrink: 0;
       display: flex;
@@ -148,6 +158,7 @@
         color: var(--text-secondary, #888);
         font-style: italic;
       }
+
       .path-autocomplete-suffix {
         color: var(--text-tertiary, #ccc);
         font-size: var(--font-size-xs);
@@ -161,6 +172,7 @@
     opacity: 0;
     transform: translateY(6px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -173,82 +185,73 @@
   padding: 0 10px 6px;
   // border-top: 1px solid var(--border-color, #e5e5e5);
   background: var(--bg-primary, #fff);
-  min-width: clamp(40%, 600px, 100%);
+  min-width: clamp(40%, 700px, 100%);
   position: relative;
+
   .working-indicator {
     display: flex;
     align-items: center;
-    gap: 5px;
-    padding: 4px 14px;
+    padding: 4px 12px 0px 14px;
     position: absolute;
     left: 12px;
-    top: -26px;
+    top: -18px;
     width: fit-content;
-    border-radius: 20px;
-    backdrop-filter: blur(4px);
-    border: 1px solid
-      color-mix(in srgb, var(--accent-color, #4f46e5) 15%, transparent);
-    box-shadow: 0 2px 8px
-      color-mix(in srgb, var(--accent-color, #4f46e5) 8%, transparent);
-    overflow: hidden;
+    max-width: min(60vw, 480px);
+    border-radius: 8px;
+    // 当前是「无壳」样式：文字直接浮在消息流上。
+    // 想要玻璃胶囊：把下面 4 行一起取消注释
+    // （只开 backdrop-filter 会得到一个没底色的模糊方块，反而更像脏点）
+    // background: color-mix(in srgb, var(--bg-primary, #fff) 80%, transparent);
+    // backdrop-filter: blur(6px);
+    // border: 1px solid color-mix(in srgb, var(--accent-color, #4f46e5) 15%, transparent);
+    // box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-color, #4f46e5) 8%, transparent);
+    // 不裁切：单字会 ±5° 摇摆、上抬 2px，而 padding-bottom 是 0，裁切会削掉字底
     user-select: none;
+    // 纯状态展示：不拦截下方消息区的点击 / 悬浮
+    pointer-events: none;
     z-index: 1;
+    animation: workingIndicatorIn 0.18s ease-out;
 
-    // 脉冲小圆点
-    .working-dot {
-      display: block;
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--accent-color, #4f46e5);
-      flex-shrink: 0;
-      animation: working-dot-pulse 1.2s ease-in-out infinite;
+    // 波浪文字：拆成单字，逐字相位错开（每字一个 span，相位见 index.tsx）
+    .working-wave {
+      // 波浪节奏：两个常量放一起，调「快慢」和「波峰疏密」只改这两行
+      // 0.7s 一个来回 + 每字错开 0.08s ≈ 一个波峰横跨 9 个字
+      --wave-duration: 0.7s;
+      --wave-step: 0.08s;
+      display: inline-block;
+      white-space: nowrap;
+      font-size: var(--font-size-sm);
+      font-weight: 600;
+      // 品牌主色：与发送按钮、选中态同一套色语汇
+      color: var(--accent-color, #4f46e5);
+
+      .working-wave-char {
+        display: inline-block;
+        margin: 0 0.5px;
+        animation: workingWaveChar var(--wave-duration) ease-in-out infinite;
+      }
     }
 
-    // 渐变色流光文字
+    // 超长文案的降级：静态纯文本 + 省略号（不拆成上百个逐字 span）
     .working-text {
       font-size: var(--font-size-sm);
       font-weight: 600;
       white-space: nowrap;
-      background: linear-gradient(
-        90deg,
-        var(--accent-color),
-        #ffb347,
-        #ff6b6b,
-        #a36eff,
-        var(--accent-color)
-      );
-      background-size: 300% auto;
-      background-clip: text;
-      -webkit-background-clip: text;
-      color: transparent;
-      animation: shimmerFlow 4s linear infinite;
+      // 与波浪文字同色，避免同一个指示器因文案长短而变色
+      color: var(--accent-color, #4f46e5);
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
-    // 三个弹跳点
-    .working-bouncing-dots {
-      display: flex;
-      align-items: center;
-      gap: 3px;
-      padding-bottom: 1px;
+    // 上下文压缩：切到警示色，与普通「工作中」在视觉上区分开
+    &.is-compacting {
+      border-color: color-mix(in srgb, var(--accent-warn, #f59e0b) 22%, transparent);
+      box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-warn, #f59e0b) 10%, transparent);
 
-      span {
-        display: block;
-        width: 4px;
-        height: 4px;
-        border-radius: 50%;
-        background: var(--accent-color, #4f46e5);
-        animation: working-bounce-dot 1.4s ease-in-out infinite;
-
-        &:nth-child(1) {
-          animation-delay: 0s;
-        }
-        &:nth-child(2) {
-          animation-delay: 0.2s;
-        }
-        &:nth-child(3) {
-          animation-delay: 0.4s;
-        }
+      .working-wave,
+      .working-text {
+        color: var(--accent-warn, #f59e0b);
       }
     }
   }
@@ -363,9 +366,11 @@
     0% {
       box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.4);
     }
+
     50% {
       box-shadow: 0 0 0 6px rgba(231, 76, 60, 0);
     }
+
     100% {
       box-shadow: 0 0 0 0 rgba(231, 76, 60, 0);
     }
@@ -433,6 +438,7 @@
       &::-webkit-scrollbar {
         width: 4px;
       }
+
       &::-webkit-scrollbar-thumb {
         background: var(--scrollbar-thumb, #ccc);
         border-radius: 2px;
@@ -513,6 +519,7 @@
       opacity: 0;
       transform: translateY(6px);
     }
+
     to {
       opacity: 1;
       transform: translateY(0);
@@ -623,6 +630,7 @@
       &::-webkit-scrollbar {
         width: 4px;
       }
+
       &::-webkit-scrollbar-thumb {
         background: var(--scrollbar-thumb, #ccc);
         border-radius: 2px;
@@ -676,6 +684,224 @@
       }
     }
   }
+
+  // ==================== 推理强度（收起只显示档位，点击弹出拖动条） ====================
+
+  .reasoning-effort-slider {
+    position: relative;
+    flex-shrink: 0;
+
+    .slider-trigger {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      // 图标按钮：圆球占主体，内边距尽量小
+      min-width: 26px;
+      padding: 3px 4px;
+      // border: 1px solid var(--border-color, #e5e5e5);
+      border: none;
+      background: none;
+      border-radius: 6px;
+      // background: var(--bg-primary, #fff);
+      cursor: pointer;
+      font-size: var(--font-size-sm);
+      color: var(--text-primary, #1a1a1a);
+      transition: all 0.15s;
+      line-height: 1.3;
+
+      &:hover {
+        background: var(--hover-bg, #f0f0f0);
+        border-color: var(--accent-color, #4f46e5);
+      }
+
+      // 悬停反馈：只改颜色/缩放，绝不碰 animation-* 属性
+      // （改 animation-duration 会让运行中的动画重新计算相位，表现就是「重新播放」）
+      &:hover .effort-ball {
+        transform: scale(1.08);
+      }
+
+      // ==================== 圆球液面图标（液面越高 = 档位越高） ====================
+      .effort-ball {
+        display: block;
+        flex-shrink: 0;
+        width: 20px;
+        height: 20px;
+        // 轮廓跟随 currentColor：is-set 时按钮已整体变成 accent 色
+        color: inherit;
+        transition:
+          color 0.15s,
+          transform 0.18s ease;
+
+        .ball-rim {
+          fill: none;
+          stroke: currentColor;
+          stroke-width: 1.5;
+          opacity: 0.55;
+        }
+
+        // 液面高度由 tsx 里的行内 transform 控制（单位是 viewBox 用户坐标）
+        .ball-liquid {
+          transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+
+        .ball-wave {
+          fill: var(--accent-color, #4f46e5);
+
+          &.front {
+            opacity: 0.9;
+            animation: effortWave 3.4s linear infinite;
+          }
+
+          &.back {
+            opacity: 0.45;
+            animation: effortWave 6.2s linear infinite reverse;
+          }
+        }
+
+        // 拖动中液面直接跟手，不要过渡带来的迟滞
+        &.is-dragging .ball-liquid {
+          transition: none;
+        }
+
+        // 空球（默认档）不需要荡漾
+        &:not(.is-filled) .ball-wave {
+          animation: none;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .ball-wave {
+            animation: none;
+          }
+        }
+      }
+    }
+
+    &.open .slider-trigger {
+      border-color: var(--accent-color, #4f46e5);
+      background: var(--active-bg, #e8e8ed);
+    }
+
+    // 已显式选定档位 → 高亮（与「默认」态区分）
+    &.is-set .slider-trigger {
+      color: var(--accent-color, #4f46e5);
+    }
+
+    .slider-popover {
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: -30%;
+      // transform: translateX(-20%);
+      width: 208px;
+      padding: 10px 12px;
+      background: var(--bg-primary, #fff);
+      border: 1px solid var(--border-color, #e5e5e5);
+      border-radius: 10px;
+      box-shadow: 0 -4px 30px rgba(0, 0, 0, 0.12);
+      z-index: 200;
+      animation: effortPopoverUp 0.15s ease;
+
+      .popover-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .slider-key {
+        font-size: var(--font-size-xs);
+        color: var(--text-secondary, #888);
+        white-space: nowrap;
+        user-select: none;
+      }
+
+      .slider-value {
+        flex: 1;
+        min-width: 0;
+        font-size: var(--font-size-xs);
+        font-weight: 500;
+        color: var(--accent-color, #4f46e5);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        user-select: none;
+        text-align: center;
+      }
+
+      .popover-hint {
+        display: block;
+        margin-top: 6px;
+        font-size: var(--font-size-xs);
+        color: var(--text-secondary, #aaa);
+      }
+
+      .slider-input {
+        width: 88px;
+        height: 3px;
+        flex-shrink: 0;
+        // 触摸设备上避免拖动滑块时被页面滚动/缩放手势抢走
+        touch-action: none;
+        -webkit-appearance: none;
+        appearance: none;
+        background: var(--slider-bg, #e4e4e4);
+        border-radius: 2px;
+        outline: none;
+        cursor: pointer;
+        padding: 0;
+        border: none;
+        margin: 0;
+
+        &::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 12px;
+          height: 12px;
+          border-radius: 50%;
+          background: var(--accent-color, #4f46e5);
+          cursor: grab;
+          border: 2px solid var(--bg-primary, #fff);
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+        }
+
+        &:active::-webkit-slider-thumb {
+          cursor: grabbing;
+        }
+
+        &::-moz-range-thumb {
+          width: 12px;
+          height: 12px;
+          border-radius: 50%;
+          background: var(--accent-color, #4f46e5);
+          cursor: grab;
+          border: 2px solid var(--bg-primary, #fff);
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+        }
+      }
+    }
+  }
+
+  @keyframes effortPopoverUp {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  // 波纹荡漾：translateX 正好走一个波长，首尾无缝衔接
+  // （注意：SVG 里的 CSS transform 用的是用户坐标，px 即 viewBox 单位）
+  @keyframes effortWave {
+    from {
+      transform: translateX(0);
+    }
+
+    to {
+      transform: translateX(-24px);
+    }
+  }
+
   .agent-name {
     font-size: var(--font-size-xs);
     color: #908989;
@@ -687,6 +913,7 @@
       opacity: 0;
       transform: translateY(6px);
     }
+
     to {
       opacity: 1;
       transform: translateY(0);
@@ -694,7 +921,8 @@
   }
 
   .input-wrapper {
-    position: relative; /* 为路径自动补全下拉提供定位锚点 */
+    position: relative;
+    /* 为路径自动补全下拉提供定位锚点 */
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -735,11 +963,12 @@
       opacity: 1;
     }
 
-    &:focus-within,&:hover {
+    &:focus-within,
+    &:hover {
       border-color: var(--accent-color, #4e46e5fe);
       background: var(--bg-primary, #fff);
     }
-    
+
 
     // ==================== 图片预览条 ====================
     .image-preview-strip {
@@ -879,6 +1108,7 @@
       }
     }
   }
+
   .send-btn {
     width: 48px;
     height: 36px;
@@ -894,9 +1124,11 @@
     transition: opacity 0.15s;
     margin-left: auto;
     padding: 2px;
+
     svg {
       width: 18px;
       height: 18px;
+
       &.stop {
         width: 26px;
         height: 26px;
@@ -906,6 +1138,7 @@
     &:hover:not(:disabled) {
       opacity: 0.85;
     }
+
     &.disabled {
       opacity: 0.5;
     }
@@ -920,6 +1153,7 @@
     align-items: center;
     margin-top: auto;
   }
+
   .input-hint {
     font-size: var(--font-size-xs);
     color: var(--text-secondary, #bbb);
@@ -932,34 +1166,69 @@
     align-items: center;
     gap: 12px;
     margin-left: auto;
+
     .token-ring {
       display: flex;
       align-items: center;
       opacity: 0.7;
-      transition: opacity 0.15s;
+      // 与液面球（.effort-ball）保持同一套手感：0.18s 的缩放过渡
+      transition:
+        opacity 0.15s,
+        transform 0.18s ease;
       margin-left: auto;
       cursor: pointer;
-      transition: 0.2s;
+
+      // 进度环：dashoffset 表达进度（stroke 现在是渐变，颜色过渡交给下面的 .ring-grad-stop）
+      .ring-progress {
+        transition: stroke-dashoffset 0.3s ease;
+      }
+
+      // 渐变描边的颜色源：--ring-color 由 tsx 按用量给出，
+      // 改的是 stop-color 的计算值，所以跨过告警/危险阈值时颜色会平滑过渡
+      .ring-grad-stop {
+        stop-color: var(--ring-color, #4f46e5);
+        transition: stop-color 0.3s ease;
+      }
+
+      // 进入危险区（>80%）：环上加一点外发光，急不紧急一眼能看出来
+      &.is-critical .ring-progress {
+        // 与 --color-error 的默认值 #ef4444 对应
+        filter: drop-shadow(0 0 3px rgba(239, 68, 68, 0.5));
+      }
+
+      // 现在可用键盘触发，得给一个看得见的焦点环
+      &:focus-visible {
+        outline: 2px solid var(--accent-color, #4f46e5);
+        outline-offset: 2px;
+        border-radius: 50%;
+        opacity: 1;
+      }
+
       &.compacting {
         animation: compacting-anim 3s infinite;
       }
+
       @keyframes compacting-anim {
         0% {
           transform: scale(1) rotate(0);
         }
+
         50% {
           transform: scale(1.1) rotate(520deg);
         }
+
         100% {
           transform: scale(1) rotate(1800deg);
         }
       }
+
       &:hover {
         opacity: 1;
-        transform: scale(1.1);
+        transform: scale(1.08);
       }
+
       &:active {
-        transform: scale(0.95);
+        transform: scale(0.96);
       }
     }
   }
@@ -1115,6 +1384,7 @@
       &::-webkit-scrollbar {
         width: 4px;
       }
+
       &::-webkit-scrollbar-thumb {
         background: var(--scrollbar-thumb, #ccc);
         border-radius: 2px;
@@ -1166,6 +1436,7 @@
     transform: translateY(-6px);
     max-height: 0;
   }
+
   to {
     opacity: 1;
     transform: translateY(0);

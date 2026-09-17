@@ -40,6 +40,8 @@
     color: var(--text-secondary);
     margin: 0 0 16px 0;
     line-height: 1.5;
+    /* 提示可能多段（风险提示 + 绕过沙盒警告），保留换行 */
+    white-space: pre-line;
   }
 
   .command-preview {
