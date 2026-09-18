@@ -4,7 +4,12 @@
 //!   1. stdout/stderr 改为匿名管道（读端回传上层做流式推送），不再继承父 stdio；
 //!   2. 支持 `raw_cmdline` 原样透传（cmd /s /c 嵌套引号不被 CRT 引号撕碎）；
 //!   3. 进程放入 Job Object（KILL_ON_JOB_CLOSE + 超时/取消整树终止），
-//!      并在创建时经 PROC_THREAD_ATTRIBUTE_JOB_LIST 原子挂入（无竞态）。
+//!      并在创建时经 PROC_THREAD_ATTRIBUTE_JOB_LIST 原子挂入（无竞态）；
+//!   4. Step 1（PTY 改造）新增**平行**的伪控制台路径 `create_sandboxed_process_pty` /
+//!      `create_bare_process_pty`：stdio 不再走匿名管道，而是经
+//!      `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` 接到伪控制台。
+//!      ⚠️ 两条路径的 STARTUPINFO 语义根本不同，故**不**在 `create_sandboxed_process`
+//!      里加 if 分支（见 docs/pty-research.md §5.3）。
 
 use std::collections::BTreeMap;
 use std::ffi::c_void;
@@ -25,13 +30,14 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    CreateProcessAsUserW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT,
-    GetExitCodeProcess, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
-    PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
-    UpdateProcThreadAttribute, WaitForSingleObject, INFINITE,
+    CreateProcessAsUserW, CreateProcessW, DeleteProcThreadAttributeList,
+    EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, InitializeProcThreadAttributeList,
+    LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+    STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW, UpdateProcThreadAttribute,
+    WaitForSingleObject, INFINITE,
 };
 use windows_sys::Win32::System::Console::GetStdHandle;
-use windows_sys::Win32::System::Console::{STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
+use windows_sys::Win32::System::Console::{HPCON, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
 use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
 
 /// 生成 UTF-16 以 0 结尾字符串。
@@ -172,6 +178,35 @@ impl ProcThreadAttributeList {
         if ok == 0 {
             return Err(anyhow!(
                 "UpdateProcThreadAttribute(PROC_THREAD_ATTRIBUTE_JOB_LIST) failed: {}",
+                unsafe { GetLastError() }
+            ));
+        }
+        Ok(())
+    }
+
+    /// `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`：把伪控制台挂进属性列表。
+    ///
+    /// ⚠️ 与 `set_job` 的**语义差异**（`docs/pty-research.md` §5.2）：
+    /// `JOB_LIST` 要的是「指向句柄数组的指针」，而 `PSEUDOCONSOLE` 要的是「**句柄值本身**」。
+    /// 照抄 `set_job` 的写法把 `&hpc` 传进来会失败（Spike 已实测两种写法的差异）。
+    fn set_pseudoconsole(&mut self, hpc: HPCON) -> Result<()> {
+        let value = hpc as *const c_void;
+        let size = std::mem::size_of::<HPCON>();
+        // SAFETY: value 是句柄值本身（不是指针），size 覆盖该值；属性列表在调用期间存活。
+        let ok = unsafe {
+            UpdateProcThreadAttribute(
+                self.as_mut_ptr(),
+                0,
+                PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
+                value,
+                size,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        };
+        if ok == 0 {
+            return Err(anyhow!(
+                "UpdateProcThreadAttribute(PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE) failed: {}",
                 unsafe { GetLastError() }
             ));
         }
@@ -454,4 +489,178 @@ unsafe fn setup_inherited_stdio(si: &mut STARTUPINFOW) -> Result<()> {
     si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
     si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
     Ok(())
+}
+
+// ==================== ConPTY 路径（Step 1） ====================
+
+/// ConPTY 路径的子进程句柄集合：stdio 走伪控制台，因此不持有任何管道读端。
+pub struct PtyChild {
+    pub pid: u32,
+    process: ProcessHandle,
+    /// 沙盒路径：带 `KILL_ON_JOB_CLOSE` 的 Job Object；
+    /// 裸跑路径为 `None`（保持改造前「裸跑不主动杀后台进程」的语义）。
+    job: Option<Job>,
+}
+
+impl PtyChild {
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// 终止整棵进程树。只有沙盒路径持有 Job；裸跑路径由上层 `kill_process_tree` 兜底。
+    pub fn terminate(&self) {
+        if let Some(job) = &self.job {
+            job.terminate();
+        }
+    }
+
+    /// 阻塞等待进程退出并读取退出码（调用方在 spawn_blocking 中调用）。
+    pub fn wait_and_read_exit_code(&self) -> Option<i32> {
+        self.process.wait_and_read_exit_code()
+    }
+}
+
+/// ConPTY 路径的 spawn 核心（沙盒 / 裸跑共用）。
+///
+/// 属性列表按需挂载：有 Job 时是 `JOB_LIST + PSEUDOCONSOLE`（一次原子完成，无中间态），
+/// 裸跑时只有 `PSEUDOCONSOLE`。`h_token` 为 `Some` 时走 `CreateProcessAsUserW`（受限令牌），
+/// 否则走 `CreateProcessW`。
+fn create_process_pty_core(
+    h_token: Option<HANDLE>,
+    cmdline_str: &str,
+    cwd: &Path,
+    env: &BTreeMap<String, String>,
+    desktop: &str,
+    hpc: HPCON,
+    job: Option<&Job>,
+) -> Result<(u32, ProcessHandle)> {
+    let mut cmdline: Vec<u16> = to_wide(cmdline_str);
+    let mut env_block = make_env_block(env);
+    let mut cwd_wide = to_wide(cwd.to_string_lossy().as_ref());
+    let mut desktop_wide = to_wide(desktop);
+
+    let attr_count: u32 = if job.is_some() { 2 } else { 1 };
+    let mut attr_list =
+        ProcThreadAttributeList::new(attr_count).context("alloc proc thread attribute list")?;
+    if let Some(job) = job {
+        attr_list
+            .set_job(job.raw_handle())
+            .context("set job attribute")?;
+    }
+    attr_list
+        .set_pseudoconsole(hpc)
+        .context("set pseudoconsole attribute")?;
+
+    // SAFETY: STARTUPINFOEXW 初始化后传给系统调用；attr_list / cmdline / env_block / cwd_wide
+    // 在整个调用期间保持存活。
+    unsafe {
+        let mut si: STARTUPINFOEXW = mem::zeroed();
+        si.StartupInfo.cb = mem::size_of::<STARTUPINFOEXW>() as u32;
+        si.StartupInfo.lpDesktop = desktop_wide.as_mut_ptr();
+        // ⚠️ 实测结论（docs/pty-research.md §5.3 / §8.0）：必须设 STARTF_USESTDHANDLES，
+        // 并把 stdin/stdout/stderr 三个句柄**全部置 NULL**。
+        // 不设该标志时，Windows 的「标准句柄总是被继承」行为会让子进程拿到**父进程的 std 句柄**
+        // —— bInheritHandles = 0 挡不住这条 —— 命令真实输出会漏到父进程 stdout 而非伪控制台。
+        // 置 NULL 后，CRT 会在「句柄无效 + 进程已附着控制台」时回退打开 CONOUT$ / CONIN$。
+        si.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+        si.StartupInfo.hStdInput = std::ptr::null_mut();
+        si.StartupInfo.hStdOutput = std::ptr::null_mut();
+        si.StartupInfo.hStdError = std::ptr::null_mut();
+        si.lpAttributeList = attr_list.as_mut_ptr();
+
+        let mut pi: PROCESS_INFORMATION = mem::zeroed();
+        // 不设 CREATE_NO_WINDOW：子进程附着在伪控制台上，本身不会弹黑窗口（实测无窗口）。
+        let flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
+        // bInheritHandles = 0：ConPTY 路径不需要继承任何句柄（控制台由伪控制台提供）。
+        let ok = match h_token {
+            Some(token) => CreateProcessAsUserW(
+                token,
+                std::ptr::null(),
+                cmdline.as_mut_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                0,
+                flags,
+                env_block.as_mut_ptr() as *mut c_void,
+                cwd_wide.as_mut_ptr(),
+                &si.StartupInfo,
+                &mut pi,
+            ),
+            None => CreateProcessW(
+                std::ptr::null(),
+                cmdline.as_mut_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                0,
+                flags,
+                env_block.as_mut_ptr() as *mut c_void,
+                cwd_wide.as_mut_ptr(),
+                &si.StartupInfo,
+                &mut pi,
+            ),
+        };
+        if ok == 0 {
+            return Err(anyhow!(
+                "CreateProcess(PTY) failed: {} | cwd={} | cmd={}",
+                GetLastError(),
+                cwd.display(),
+                cmdline_str
+            ));
+        }
+        // 线程句柄无需保留。
+        CloseHandle(pi.hThread);
+        Ok((pi.dwProcessId, ProcessHandle(pi.hProcess)))
+    }
+}
+
+/// 以受限令牌 + 伪控制台创建子进程（沙盒路径）。
+///
+/// 与 `create_sandboxed_process` 的唯一区别是 stdio：这里不建匿名管道，
+/// 而是把 `hpc` 挂进属性列表，并**同时**挂 `JOB_LIST`。
+#[allow(clippy::too_many_arguments)]
+pub fn create_sandboxed_process_pty(
+    h_token: HANDLE,
+    command: &[String],
+    raw_cmdline: Option<&str>,
+    cwd: &Path,
+    env: &BTreeMap<String, String>,
+    desktop: &str,
+    hpc: HPCON,
+) -> Result<PtyChild> {
+    let cmdline_str = match raw_cmdline {
+        Some(raw) => raw.to_string(),
+        None => argv_to_command_line(command),
+    };
+    let job = Job::create().context("create job object")?;
+    let (pid, process) =
+        create_process_pty_core(Some(h_token), &cmdline_str, cwd, env, desktop, hpc, Some(&job))?;
+    Ok(PtyChild {
+        pid,
+        process,
+        job: Some(job),
+    })
+}
+
+/// 以当前用户身份 + 伪控制台创建子进程（裸跑路径，无受限令牌、无 Job）。
+///
+/// 裸跑路径沿用改造前的语义：**不主动杀后台进程**，进程树终止交给上层
+/// `ProcessTreeGuard` / `kill_process_tree` 兜底。
+pub fn create_bare_process_pty(
+    command: &[String],
+    raw_cmdline: Option<&str>,
+    cwd: &Path,
+    env: &BTreeMap<String, String>,
+    desktop: &str,
+    hpc: HPCON,
+) -> Result<PtyChild> {
+    let cmdline_str = match raw_cmdline {
+        Some(raw) => raw.to_string(),
+        None => argv_to_command_line(command),
+    };
+    let (pid, process) = create_process_pty_core(None, &cmdline_str, cwd, env, desktop, hpc, None)?;
+    Ok(PtyChild {
+        pid,
+        process,
+        job: None,
+    })
 }

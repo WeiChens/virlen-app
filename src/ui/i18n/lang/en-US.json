@@ -439,6 +439,8 @@
   "终止执行": "Kill Process",
   "终止": "Kill",
   "终止中": "Stopping…",
+  "发送 Ctrl+C：仅对正在等待输入的程序有效；中断整个命令请用「终止」": "Send Ctrl+C: only affects programs waiting for input. Use Kill to interrupt the whole command.",
+  "可直接在终端中键击或粘贴输入（回车发送）": "Type or paste directly in the terminal (Enter to send)",
   "脚本": "Script",
   "获取失败": "Fetch Failed",
   "多选": "Multi-select",

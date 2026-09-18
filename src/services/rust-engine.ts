@@ -26,6 +26,7 @@ import { securityRepo } from '@/infrastructure/securityRepo'
 import { securityService } from '@/services/security-service'
 import { getSkillsDirPath } from '@/skill/skillStore'
 import { settingsState } from '@/ui/store'
+import { platformSnapshot } from '@/infrastructure/tools/execute/common'
 import { toolOutputStore } from '@/infrastructure/tools/output-store'
 import { trackError, getSessionTrace } from '@/utils/telemetry'
 import type { Message, Session } from '@/types'
@@ -50,6 +51,19 @@ export function unregisterSessionToolHandler(sessionId: string): void {
 
 let bridgeStarted = false
 let bridgeStartPromise: Promise<void> | null = null
+
+/**
+ * 当前命令的实时输出是否来自 PTY（伪控制台）。
+ *
+ * 后端在 Windows 上已把 `execute_command` 的 stdio 换成 ConPTY（docs/pty-research.md §8 Step 1），
+ * 输出是带光标控制的 VT 流，必须交给 xterm；其他平台仍是匿名管道，继续走 `<pre>`。
+ *
+ * 这里只能做到「运行中」的预判（平台），完成态以后端权威字段 `uiData.pty` 为准。
+ * 若伪控制台创建失败，后端会降级回管道并下发 `pty: false`，UI 会在结束瞬间切回 `<pre>`。
+ */
+function ptyLiveEnabled(): boolean {
+  return platformSnapshot() === 'windows'
+}
 
 /** 确保双向桥监听器已安装（只安装一次） */
 function ensureBridgeStarted(): Promise<void> {
@@ -84,6 +98,7 @@ function ensureBridgeStarted(): Promise<void> {
         toolOutputStore.register(toolCallId, {
           toolName: 'execute_command',
           output: '',
+          pty: ptyLiveEnabled(),
           kill: () => {
             invoke('agent_kill_command', { toolCallId }).catch(() => {})
           },
@@ -386,6 +401,7 @@ export const rustEngine: AgentEnginePort = {
               toolOutputStore.register(toolCallId, {
                 toolName: data.name,
                 output: '',
+                pty: ptyLiveEnabled(),
                 kill: () => {
                   invoke('agent_kill_command', { toolCallId }).catch(() => {})
                 },

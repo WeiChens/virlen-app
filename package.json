@@ -25,6 +25,8 @@
     "@tauri-apps/plugin-http": "~2.5.9",
     "@tauri-apps/plugin-opener": "~2",
     "@tauri-apps/plugin-shell": "~2",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
     "bing-cn-mcp": "^1.0.2",
     "cheerio": "^1.2.0",
     "jszip": "^3.10.1",

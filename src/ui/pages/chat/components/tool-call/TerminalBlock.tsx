@@ -7,6 +7,7 @@ import { ToolOutput, toolOutputStore } from '@/infrastructure/tools/output-store
 import { processTerminalOutput } from '@/infrastructure/tools/execute/common'
 import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
 import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
+import { XtermTerminalBlock } from './XtermTerminal'
 
 /**
  * 终端输出块 —— execute_command / execute_script 的运行态与完成态共用。
@@ -309,6 +310,48 @@ export function TerminalView({
     if (!entry?.kill || killing) return
     setKilling(true)
     entry.kill()
+  }
+
+  /**
+   * PTY 路径走 xterm（见 XtermTerminal.tsx）：输出是带光标控制的原始 VT 流，
+   * `<pre>` 无法表达（进度条花屏、TUI 错位），也无法让用户键击输入。
+   *
+   * 运行中用 `entry.pty` 预判（后端在 Windows 上总是走 ConPTY）；
+   * 完成态以后端**权威**字段 `uiData.pty` 为准 —— 伪控制台不可用时后端会降级回匿名管道
+   * 并下发 `pty: false`，此时自动回到 `<pre>` 渲染。
+   */
+  const isPty = running ? !!entry?.pty : !!(message?.uiData?.pty ?? entry?.pty)
+  if (isPty) {
+    // 完成态的流：优先用后端原样回传的 stdout（保留 ANSI，xterm 需要原始流）；
+    // 命令以 >= 2 退出码失败时后端只下发 content（已剥 ANSI 的报告文本），用它兜底。
+    const stream = running
+      ? output
+      : ((message?.uiData?.stdout as string | undefined) ??
+        (message?.content as string) ??
+        '')
+    return (
+      <div className="tool-cmd-running">
+        <XtermTerminalBlock
+          title={title}
+          cmd={cmd}
+          fileLabel={fileLabel}
+          note={running ? undefined : message?.uiData?.note}
+          stream={stream}
+          running={running}
+          toolCallId={toolCallId}
+          status={
+            running ? undefined : (
+              <TerminalStatus
+                exitCode={message?.uiData?.exitCode}
+                isError={!!message?.isError}
+              />
+            )
+          }
+          onKill={running && entry?.kill ? handleKill : undefined}
+          killing={killing}
+        />
+      </div>
+    )
   }
 
   return (

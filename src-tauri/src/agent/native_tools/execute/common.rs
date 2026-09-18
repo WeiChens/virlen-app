@@ -9,6 +9,8 @@
 
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
 use serde_json::json;
+
+use super::pty_session;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -40,6 +42,57 @@ fn decode_output(bytes: &[u8]) -> String {
                 String::from_utf8_lossy(bytes).into_owned()
             }
         }
+    }
+}
+
+/// 单条流的内存上限（1 MB）与截断后保留的末尾长度（256 KB）。
+///
+/// 目的：让 `yes` / `cat 大文件` 这类命令打不爆内存（`docs/pty-research.md` §6.2）。
+/// 「会话日志 append-only 落盘 + 内存只留有界 tail cache」的完整方案属于后续阶段，
+/// 这里先做「有界 + 提示」这一步。
+const STREAM_CAP: usize = 1024 * 1024;
+const STREAM_KEEP: usize = 256 * 1024;
+/// 发生截断时插在输出开头的提示。
+const STREAM_TRUNCATED_NOTE: &str = "（输出过长，早期内容已丢弃）\n";
+
+/// 有界追加**文本**：超过 `STREAM_CAP` 后丢弃最早的部分，只保留末尾 `STREAM_KEEP` 字节，
+/// 并在开头插入一次截断提示。按 UTF-8 边界对齐，避免把多字节字符切成两半。
+fn push_bounded(buf: &mut String, chunk: &str) {
+    buf.push_str(chunk);
+    if buf.len() <= STREAM_CAP {
+        return;
+    }
+    let mut cut = buf.len() - STREAM_KEEP;
+    while cut < buf.len() && !buf.is_char_boundary(cut) {
+        cut += 1;
+    }
+    let tail = buf[cut..].to_string();
+    buf.clear();
+    buf.push_str(STREAM_TRUNCATED_NOTE);
+    buf.push_str(&tail);
+}
+
+/// 有界追加**原始字节**（读线程用，末尾整体解码）。返回是否发生了截断。
+///
+/// 这里按字节切、不保证 UTF-8 边界 —— 被切碎的字符最坏会多出一个替换字符，
+/// 而被截断的输出本来就不是完整内容，可以接受。
+fn push_bytes_bounded(buf: &mut Vec<u8>, chunk: &[u8]) -> bool {
+    buf.extend_from_slice(chunk);
+    if buf.len() <= STREAM_CAP {
+        return false;
+    }
+    let cut = buf.len() - STREAM_KEEP;
+    buf.drain(..cut);
+    true
+}
+
+/// 解码读线程的原始字节缓冲；被截断过时在开头插入提示。
+fn decode_tail(buf: &[u8], truncated: bool) -> String {
+    let text = decode_output(buf);
+    if truncated {
+        format!("{STREAM_TRUNCATED_NOTE}{text}")
+    } else {
+        text
     }
 }
 
@@ -472,56 +525,101 @@ fn process_terminal_output(raw: &str) -> String {
             col = 0;
             ensure_row(&mut buffer, row);
             i += 1;
-        } else if ch == '\x1b' && i + 1 < chars.len() && chars[i + 1] == '[' {
-            let mut j = i + 2;
-            let mut num_str = String::new();
-            while j < chars.len() && (chars[j].is_ascii_digit() || chars[j] == ';') {
-                num_str.push(chars[j]);
-                j += 1;
-            }
-            let cmd = if j < chars.len() { chars[j] } else { ' ' };
-            let num: usize = num_str
-                .split(';')
-                .next()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(1);
-            i = j + 1;
-            match cmd {
-                'A' => row = row.saturating_sub(num),
-                'B' => row = (row + num).min(buffer.len().saturating_sub(1)),
-                'C' => col += num,
-                'D' => col = col.saturating_sub(num),
-                'K' => {
-                    ensure_row(&mut buffer, row);
-                    let cut = col.min(buffer[row].len());
-                    buffer[row].truncate(cut);
+        } else if ch == '\x1b' && i + 1 < chars.len() {
+            // ---- ANSI 转义序列：必须**完整吞掉**，否则参数会被当成正文写进输出 ----
+            // 改造前只认 `ESC [` 且只吃 0-9;，于是 `\x1b[?25l`（隐藏光标）这类私有模式的
+            // 参数会被漏成正文（"25l"）。ConPTY 输出的这类序列非常密集（§6.2 / §7 #9），
+            // 因此这里按 ECMA-48 完整解析：参数字节 + 中间字节 + 结束字节。
+            let kind = chars[i + 1];
+            if kind == '[' {
+                // CSI: ESC [ 0x30-0x3F(参数) 0x20-0x2F(中间) 0x40-0x7E(结束)
+                let mut j = i + 2;
+                let mut params = String::new();
+                while j < chars.len()
+                    && matches!(chars[j], '0'..='9' | ';' | ':' | '<' | '=' | '>' | '?')
+                {
+                    params.push(chars[j]);
+                    j += 1;
                 }
-                'J' => {
-                    let mode: usize = num_str.parse().unwrap_or(0);
-                    if mode == 2 || mode == 3 {
-                        buffer.clear();
-                        buffer.push(Vec::new());
-                        row = 0;
-                        col = 0;
+                // 中间字节（空格、!、"、#、$、%、&、'、*、+、-、.、/）不属于参数，跳过
+                while j < chars.len() && (' '..='/').contains(&chars[j]) {
+                    j += 1;
+                }
+                let cmd = if j < chars.len() { chars[j] } else { ' ' };
+                i = (j + 1).min(chars.len());
+                // 带 ? < = > 前缀的是私有模式（DECSET/DECRST 等）→ 忽略，但必须已整体吞掉
+                let private = params.starts_with(['?', '<', '=', '>']);
+                let num_str = params.trim_start_matches(['?', '<', '=', '>']);
+                let num: usize = num_str
+                    .split(';')
+                    .next()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(1);
+                if !private {
+                    match cmd {
+                        'A' => row = row.saturating_sub(num),
+                        'B' => row = (row + num).min(buffer.len().saturating_sub(1)),
+                        'C' => col += num,
+                        'D' => col = col.saturating_sub(num),
+                        'K' => {
+                            ensure_row(&mut buffer, row);
+                            let cut = col.min(buffer[row].len());
+                            buffer[row].truncate(cut);
+                        }
+                        'J' => {
+                            let mode: usize = num_str.parse().unwrap_or(0);
+                            if mode == 2 || mode == 3 {
+                                buffer.clear();
+                                buffer.push(Vec::new());
+                                row = 0;
+                                col = 0;
+                            }
+                        }
+                        'H' | 'f' => {
+                            let parts: Vec<&str> = num_str.split(';').collect();
+                            let r: usize = parts
+                                .first()
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(1)
+                                .max(1);
+                            let c: usize = parts
+                                .get(1)
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(1)
+                                .max(1);
+                            row = r.saturating_sub(1);
+                            col = c.saturating_sub(1);
+                        }
+                        // 'X'（擦除 n 个字符，光标不动）、'm'（颜色/样式）等对纯文本无影响
+                        _ => {}
                     }
                 }
-                'H' => {
-                    let parts: Vec<&str> = num_str.split(';').collect();
-                    let r: usize = parts
-                        .first()
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(1)
-                        .max(1);
-                    let c: usize = parts
-                        .get(1)
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(1)
-                        .max(1);
-                    row = r.saturating_sub(1);
-                    col = c.saturating_sub(1);
+            } else if kind == ']' {
+                // OSC: ESC ] ... 由 BEL 或 ST(ESC \) 结束 —— 典型是改窗口标题 `\x1b]0;…\x07`
+                let mut j = i + 2;
+                while j < chars.len() {
+                    if chars[j] == '\x07' {
+                        j += 1;
+                        break;
+                    }
+                    if chars[j] == '\x1b' && j + 1 < chars.len() && chars[j + 1] == '\\' {
+                        j += 2;
+                        break;
+                    }
+                    j += 1;
                 }
-                _ => {}
+                i = j.min(chars.len());
+            } else if (' '..='/').contains(&kind) {
+                // 带中间字节的**三字节**转义（ESC ( 0 切字符集 / ESC # 8 / ESC % G 等）
+                i = (i + 3).min(chars.len());
+            } else {
+                // 两字符转义（ESC 7 保存光标 / ESC = 等）
+                i = (i + 2).min(chars.len());
             }
+        } else if ch == '\u{8}' {
+            // 退格：光标左移一格（ConPTY 的擦除/重绘里会出现）
+            col = col.saturating_sub(1);
+            i += 1;
         } else if ch == '\t' {
             ensure_row(&mut buffer, row);
             let tab_stop = 8usize;
@@ -558,13 +656,37 @@ fn process_terminal_output(raw: &str) -> String {
 
 // ==================== 5. 统一运行器 ====================
 
-/// 统一运行器（裸跑与沙盒两条路径共用入口）。
+/// 统一运行器 —— 平台分发入口。
+///
+/// - **Windows**：走 ConPTY 路径（`run_command_native_pty`）。命令在伪控制台里跑，于是
+///   ANSI/中文输出正确、交互式提示可用、用户可经 `pty_write` 中途插键盘（Step 1 的全部收益）。
+///   伪控制台不可用时降级回匿名管道路径。
+/// - **其他平台**：仍走匿名管道路径（Unix PTY 留待后续，见 docs/pty-research.md §8）。
 ///
 /// `bypass_sandbox`：调用方已完成用户审批的「不使用沙盒」请求（execute_command 的
-/// `sandbox:"off"`）。为 true 时跳过沙盒、直接走下方裸跑路径；典型用途是沙盒下必然
+/// `sandbox:"off"`）。为 true 时跳过沙盒、直接走裸跑路径；典型用途是沙盒下必然
 /// 失败的场景：子进程需要用管道 stdio 拉起孙进程（vitest/vite/jest/node-gyp 等），
 /// 受限令牌会使那次 spawn 报 EPERM（根因见 AGENTS §11.2）。
 pub(super) async fn run_command_native(
+    ctx: &NativeToolCtx<'_>,
+    cmd_str: &str,
+    timeout_secs: i64,
+    bypass_sandbox: bool,
+) -> Result<NativeToolOutcome, String> {
+    #[cfg(target_os = "windows")]
+    {
+        return run_command_native_pty(ctx, cmd_str, timeout_secs, bypass_sandbox).await;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        run_command_native_pipes(ctx, cmd_str, timeout_secs, bypass_sandbox).await
+    }
+}
+
+/// 匿名管道运行器（改造前的实现）。
+///
+/// 保留为**两条用途**：非 Windows 平台的主路径、Windows 上伪控制台不可用时的降级兜底。
+async fn run_command_native_pipes(
     ctx: &NativeToolCtx<'_>,
     cmd_str: &str,
     timeout_secs: i64,
@@ -666,7 +788,8 @@ pub(super) async fn run_command_native(
 
     let stdout_handle = tokio::spawn(async move {
         if let Some(mut out) = stdout_pipe {
-            let mut buf = Vec::new();
+            let mut raw: Vec<u8> = Vec::new();
+            let mut truncated = false;
             let mut chunk = vec![0u8; 8192];
             let mut decoder = TerminalDecoder::new();
             loop {
@@ -675,7 +798,7 @@ pub(super) async fn run_command_native(
                     Ok(n) => n,
                     Err(_) => break,
                 };
-                buf.extend_from_slice(&chunk[..n]);
+                truncated |= push_bytes_bounded(&mut raw, &chunk[..n]);
                 let text = decoder.push(&chunk[..n]);
                 if !text.is_empty() {
                     let _ = stdout_tx.send(("stdout".to_string(), text));
@@ -685,14 +808,15 @@ pub(super) async fn run_command_native(
             if !tail.is_empty() {
                 let _ = stdout_tx.send(("stdout".to_string(), tail));
             }
-            decode_output(&buf)
+            decode_tail(&raw, truncated)
         } else {
             String::new()
         }
     });
     let stderr_handle = tokio::spawn(async move {
         if let Some(mut err) = stderr_pipe {
-            let mut buf = Vec::new();
+            let mut raw: Vec<u8> = Vec::new();
+            let mut truncated = false;
             let mut chunk = vec![0u8; 8192];
             let mut decoder = TerminalDecoder::new();
             loop {
@@ -701,7 +825,7 @@ pub(super) async fn run_command_native(
                     Ok(n) => n,
                     Err(_) => break,
                 };
-                buf.extend_from_slice(&chunk[..n]);
+                truncated |= push_bytes_bounded(&mut raw, &chunk[..n]);
                 let text = decoder.push(&chunk[..n]);
                 if !text.is_empty() {
                     let _ = stderr_tx.send(("stderr".to_string(), text));
@@ -711,7 +835,7 @@ pub(super) async fn run_command_native(
             if !tail.is_empty() {
                 let _ = stderr_tx.send(("stderr".to_string(), tail));
             }
-            decode_output(&buf)
+            decode_tail(&raw, truncated)
         } else {
             String::new()
         }
@@ -739,9 +863,9 @@ pub(super) async fn run_command_native(
                 match maybe {
                     Some((stream, chunk)) => {
                         if stream == "stdout" {
-                            stdout.push_str(&chunk);
+                            push_bounded(&mut stdout, &chunk);
                         } else {
-                            stderr.push_str(&chunk);
+                            push_bounded(&mut stderr, &chunk);
                         }
                         // 实时推送（与 JS `ctx.write(chunk)` 对齐）
                         ctx.sink.emit_raw("agent:tool-output", json!({
@@ -865,10 +989,360 @@ pub(super) async fn run_command_native(
         killed_by_timeout,
         timeout_secs,
         &env_note,
+        false, // 管道路径：stdout/stderr 分流，不是 PTY
     ))
 }
 
-/// 组装命令执行结果（裸跑与沙盒两条路径共用）。`env_note` 为首行环境提示。
+/// ConPTY 运行器（Windows）—— 命令在一个伪控制台里跑。
+///
+/// 与管道路径的关键差异（均已实测，见 `docs/pty-research.md` §5）：
+///   1. stdout/stderr **合并**为一条 VT 流（伪控制台只有一条输出通道）；
+///   2. 通信通道必须是**同步** I/O，所以读线程走 `spawn_blocking` + 阻塞 `Read`；
+///   3. **结束判定不能用「输出通道 EOF」**：输出管道要等 `ClosePseudoConsole` 之后才断开
+///      （Spike 实测），因此主循环以「进程退出」为结束条件，收尾时先关伪控制台再等读线程；
+///   4. 输出严格为 UTF-8（中文直接可读）→ §11.1 的 GBK 兜底在 PTY 路径上几乎不触发。
+///
+/// ⚠️ 已知语义变化：`ClosePseudoConsole` 会终止仍附着在伪控制台上的进程，因此
+/// **裸跑路径下 `start` 之类拉起的后台进程不再存活**（沙盒路径本来就会杀，见 windows/mod.rs）。
+#[cfg(target_os = "windows")]
+async fn run_command_native_pty(
+    ctx: &NativeToolCtx<'_>,
+    cmd_str: &str,
+    timeout_secs: i64,
+    bypass_sandbox: bool,
+) -> Result<NativeToolOutcome, String> {
+    use crate::sandbox::pty::{
+        create_bare_process_pty, current_env, PseudoConsole, DEFAULT_COLS, DEFAULT_ROWS,
+        INTERACTIVE_DESKTOP,
+    };
+    use std::io::Read;
+    use tokio::sync::mpsc;
+    use tokio::time::sleep;
+
+    // 1) 伪控制台。建不起来就降级回匿名管道（保留改造前的实现作兜底）。
+    let mut pty = match PseudoConsole::create(DEFAULT_COLS, DEFAULT_ROWS) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[pty] CreatePseudoConsole unavailable, degraded to pipes: {e}");
+            return run_command_native_pipes(ctx, cmd_str, timeout_secs, bypass_sandbox).await;
+        }
+    };
+
+    // 2) 沙盒优先（prepare 失败 → 降级裸跑，与管道路径的降级规则一致）
+    let sandbox_requested = !bypass_sandbox && sandbox_mode(ctx) != SandboxMode::Off;
+    let mut sandbox_degraded = false;
+    let mut session = if sandbox_requested {
+        match prepare_sandbox_session(ctx).await {
+            Ok(s) => Some(s),
+            Err(e) => {
+                eprintln!("[sandbox] degraded to bare run: {e}");
+                sandbox_degraded = true;
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let readonly_mode = sandbox_mode(ctx) == SandboxMode::Readonly;
+
+    // 与管道路径一致的额外环境变量。
+    let mut env_extra = BTreeMap::new();
+    env_extra.insert("PYTHONIOENCODING".to_string(), "utf-8".to_string());
+    if let Some(skills_dir) = &ctx.security.skills_dir {
+        env_extra.insert("SKILL_ROOT".to_string(), skills_dir.clone());
+    }
+
+    // 3) spawn（沙盒优先；沙盒 spawn 失败 → 释放会话，按裸跑重试）
+    let shell = "powershell".to_string();
+    let mut child = None;
+    if let Some(sess) = session.as_ref() {
+        // 沙盒内 PowerShell 会进入约束语言模式（CLM），`[Console]::OutputEncoding = ...`
+        // 这类属性设置会被拒绝，所以这里**不**加 UTF-8 前缀（中文由伪控制台自身保证 UTF-8）。
+        let argv = vec![
+            shell.clone(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            cmd_str.to_string(),
+        ];
+        let mode = if readonly_mode { "readonly" } else { "on" };
+        match sess.spawn_pty(&argv, None, &env_extra, pty.raw_hpc()) {
+            Ok(c) => {
+                crate::telemetry::track(
+                    "rust.sandbox.spawn",
+                    json!({
+                        "tool_name": "execute_command",
+                        "sandbox_mode": mode,
+                        "status": "success",
+                        "stdio": "pty",
+                    }),
+                );
+                child = Some(c);
+            }
+            Err(e) => {
+                crate::telemetry::track(
+                    "rust.sandbox.spawn",
+                    json!({
+                        "tool_name": "execute_command",
+                        "sandbox_mode": mode,
+                        "status": "fail",
+                        "error": format!("sandbox spawn failed: {e}"),
+                        "stdio": "pty",
+                    }),
+                );
+                eprintln!("[sandbox] spawn failed, degraded to bare run: {e}");
+                session = None;
+                sandbox_degraded = true;
+            }
+        }
+    }
+    let ran_sandboxed = session.is_some();
+    if child.is_none() {
+        // 裸跑：先切 UTF-8 输出（与改造前的裸跑路径一致），中文系统默认 GBK 会乱码。
+        let prefixed = format!(
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {}",
+            cmd_str
+        );
+        let argv = vec![
+            shell.clone(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            prefixed,
+        ];
+        // 裸跑没有沙盒 prepare 提供的 cwd，这里自己解析（workspace 为空则继承当前目录）。
+        let cwd = if ctx.security.workspace.is_empty() {
+            std::env::current_dir().map_err(|e| format!("[{shell} error] {e}"))?
+        } else {
+            PathBuf::from(&ctx.security.workspace)
+        };
+        let mut env = current_env();
+        for (k, v) in &env_extra {
+            env.insert(k.clone(), v.clone());
+        }
+        let c =
+            create_bare_process_pty(&argv, None, &cwd, &env, INTERACTIVE_DESKTOP, pty.raw_hpc())
+                .map_err(|e| format!("[{shell} error] {e}"))?;
+        child = Some(c);
+    }
+    let child = child.expect("child spawned above");
+    let pid = child.pid();
+    let child = Arc::new(child);
+    // 受限令牌只在 spawn 时用得上，尽早释放（与管道路径一致）。
+    drop(session.take());
+
+    // 4) 注册「运行中命令」（前端终止按钮）与「PTY 会话」（前端插键盘）
+    let child_for_kill = child.clone();
+    let terminator: Option<Terminator> = Some(Arc::new(move || child_for_kill.terminate()));
+    let kill_requested = register_running_command(ctx.tool_call_id, pid, terminator);
+    // 裸跑路径额外挂 ProcessTreeGuard，与管道路径的裸跑语义保持一致。
+    let guard = if ran_sandboxed {
+        None
+    } else {
+        crate::agent::process_tree::ProcessTreeGuard::create()
+    };
+    if let Some(g) = &guard {
+        let _ = g.assign_pid(pid);
+    }
+    let guard = guard.map(Arc::new);
+    if let Some(input) = pty.take_input() {
+        pty_session::register(
+            ctx.tool_call_id,
+            Arc::new(pty_session::PtySession::new(input, pty.raw_hpc())),
+        );
+    }
+
+    // 5) 输出：管道读端在 spawn_blocking 线程里阻塞 read，经 mpsc 回传
+    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<(String, String)>();
+    // 伪控制台的读端交给独立线程；官方要求每条通道用单独线程服务，避免缓冲区互等死锁。
+    let out = pty.take_output();
+    let stdout_handle = tokio::task::spawn_blocking(move || {
+        let Some(mut out) = out else {
+            return String::new();
+        };
+        let mut tail: Vec<u8> = Vec::new();
+        let mut truncated = false;
+        let mut chunk = vec![0u8; 8192];
+        let mut decoder = TerminalDecoder::new();
+        loop {
+            let n = match out.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(_) => break,
+            };
+            truncated |= push_bytes_bounded(&mut tail, &chunk[..n]);
+            let text = decoder.push(&chunk[..n]);
+            if !text.is_empty() {
+                // PTY 只有一条输出流：stderr 已合并进 stdout（stream 恒为 "stdout"）
+                let _ = out_tx.send(("stdout".to_string(), text));
+            }
+        }
+        let tail_text = decoder.finish();
+        if !tail_text.is_empty() {
+            let _ = out_tx.send(("stdout".to_string(), tail_text));
+        }
+        decode_tail(&tail, truncated)
+    });
+
+    // 等待子进程退出（与超时/取消并行），退出码通过 done 通道回传
+    let (done_tx, mut done_rx) = mpsc::unbounded_channel::<Option<i32>>();
+    let wait_child = child.clone();
+    let wait_handle = tokio::task::spawn_blocking(move || {
+        let code = wait_child.wait_and_read_exit_code();
+        let _ = done_tx.send(code);
+    });
+
+    let mut stdout = String::new();
+    let mut exit_code: Option<Option<i32>> = None;
+    let mut out_closed = false;
+    let mut got_exit = false;
+    let mut killed_by_timeout = false;
+    let mut killed_by_user = false;
+    // 超时计时器必须在循环外创建并固定，否则 select! 每轮新建 sleep，输出一刷屏就把计时归零。
+    let mut timeout_fut = Box::pin(sleep(Duration::from_secs((timeout_secs.max(1)) as u64)));
+
+    loop {
+        tokio::select! {
+            maybe = out_rx.recv(), if !out_closed => {
+                match maybe {
+                    Some((stream, chunk)) => {
+                        push_bounded(&mut stdout, &chunk);
+                        ctx.sink.emit_raw("agent:tool-output", json!({
+                            "sessionId": ctx.session_id,
+                            "toolCallId": ctx.tool_call_id,
+                            "stream": stream,
+                            "chunk": chunk,
+                        }));
+                    }
+                    None => out_closed = true,
+                }
+            }
+            code = done_rx.recv() => {
+                exit_code = code;
+                got_exit = true;
+                // kill 请求已置位：进程退出是 kill 的结果，按用户取消处理，
+                // 避免与 done_rx 竞态导致返回「退出码」而非「已取消」。
+                if kill_requested.load(Ordering::SeqCst) {
+                    killed_by_user = true;
+                }
+            }
+            _ = wait_for_kill_request(&kill_requested), if !killed_by_timeout && !killed_by_user => {
+                killed_by_user = true;
+            }
+            _ = &mut timeout_fut, if !killed_by_timeout && !killed_by_user => {
+                child.terminate();
+                if let Some(g) = &guard {
+                    g.terminate();
+                }
+                kill_process_tree(pid);
+                killed_by_timeout = true;
+            }
+            _ = ctx.cancel.cancelled(), if !killed_by_timeout && !killed_by_user => {
+                child.terminate();
+                if let Some(g) = &guard {
+                    g.terminate();
+                }
+                kill_process_tree(pid);
+                killed_by_user = true;
+            }
+        }
+        if killed_by_timeout || killed_by_user {
+            break;
+        }
+        // ⚠️ 不能用「输出通道 EOF」作为结束条件：输出管道要等 ClosePseudoConsole 之后
+        // 才断开（Spike 实测）。命令结束的判定是**进程退出**；收尾时再关伪控制台，
+        // 让读线程把剩余输出排空并自然收到 EOF。
+        if got_exit {
+            break;
+        }
+    }
+
+    // ---- 收尾：杀树（仅超时/取消）→ 关伪控制台 → 等读线程 EOF → 取退出码 ----
+    let stdout_abort = stdout_handle.abort_handle();
+    let wait_abort = wait_handle.abort_handle();
+    if killed_by_user || killed_by_timeout {
+        child.terminate();
+        if let Some(g) = &guard {
+            g.terminate();
+        }
+        kill_process_tree(pid);
+    }
+    // §5.5 关停顺序：关伪控制台时**读线程必须仍在排空**，所以先不要 abort 它。
+    let _ = tokio::task::spawn_blocking(move || {
+        pty.close();
+    })
+    .await;
+    // 等读线程把剩余输出收完；3 秒看门狗避免通道异常时工具永不返回。
+    let stdout_final = match tokio::time::timeout(Duration::from_secs(3), stdout_handle).await {
+        Ok(Ok(text)) => text,
+        _ => {
+            // 通道没在 3s 内断开：补刀杀树 + abort，用已流式收到的输出返回。
+            child.terminate();
+            if let Some(g) = &guard {
+                g.terminate();
+            }
+            kill_process_tree(pid);
+            stdout_abort.abort();
+            String::new()
+        }
+    };
+    // 等 wait 任务收尾（进程已退出时几乎立即返回）
+    if tokio::time::timeout(Duration::from_secs(3), wait_handle)
+        .await
+        .is_err()
+    {
+        wait_abort.abort();
+    }
+    if !stdout_final.is_empty() {
+        stdout = stdout_final;
+    }
+    // 注销：先移除表项再关输入通道，保证 `pty_write` 不会写到已关闭的句柄
+    if let Some(s) = pty_session::unregister(ctx.tool_call_id) {
+        s.close_input();
+    }
+    unregister_running_command(ctx.tool_call_id);
+    let exit_code = if killed_by_timeout || killed_by_user {
+        None
+    } else {
+        exit_code.flatten()
+    };
+
+    let env_note = if ran_sandboxed {
+        if readonly_mode {
+            format!("终端环境: {shell} · 只读（不可写）")
+        } else if ctx.security.workspace.is_empty() {
+            format!("终端环境: {shell} · 写隔离")
+        } else {
+            format!(
+                "终端环境: {shell} · 写隔离（可写根: {}；区外写入会被拒绝）",
+                ctx.security.workspace
+            )
+        }
+    } else if sandbox_degraded {
+        format!("终端环境: {shell} · 无沙盒（沙盒不可用，已降级，完整权限）")
+    } else if bypass_sandbox {
+        format!("终端环境: {shell} · 无沙盒（用户已批准绕过沙盒，完整权限）")
+    } else if sandbox_mode(ctx) == SandboxMode::Off {
+        format!("终端环境: {shell} · 无沙盒（已关闭，完整权限）")
+    } else {
+        format!("终端环境: {shell} · 无沙盒（完整权限）")
+    };
+
+    Ok(build_command_result(
+        stdout,
+        // PTY 只有一条输出流：stderr 已合并进 stdout，因此 stderr 恒为空。
+        String::new(),
+        exit_code,
+        killed_by_user,
+        killed_by_timeout,
+        timeout_secs,
+        &env_note,
+        true,
+    ))
+}
+
+/// 组装命令执行结果（三条路径共用）。`env_note` 为首行环境提示。
+///
+/// `pty`：是否来自伪控制台路径。uiData 里加这个标记后，UI 可据此走 xterm 单流渲染
+/// （PTY 下 stdout/stderr 已合并，`[标准错误]` 分段与 `stream` 字段失去意义，§6.2）。
 fn build_command_result(
     stdout: String,
     stderr: String,
@@ -877,6 +1351,7 @@ fn build_command_result(
     killed_by_timeout: bool,
     timeout_secs: i64,
     env_note: &str,
+    pty: bool,
 ) -> NativeToolOutcome {
     let mut result = String::new();
     if !env_note.is_empty() {
@@ -920,6 +1395,7 @@ fn build_command_result(
             "stdout": stdout,
             "stderr": stderr,
             "exitCode": exit_code,
+            "pty": pty,
         })),
     }
 }
@@ -1014,36 +1490,16 @@ fn collect_extra_roots(
     extra_roots
 }
 
-async fn run_command_sandboxed(
+/// 准备沙盒会话：算可写根（含包管理器缓存探测）→ 应用 ACL → 建受限令牌。
+///
+/// 与「怎么跑」解耦，便于 PTY 路径（`run_command_native_pty`）与管道路径
+/// （`run_command_sandboxed`）共用：两条路径的 spawn 方式不同，prepare 完全一致。
+async fn prepare_sandbox_session(
     ctx: &NativeToolCtx<'_>,
-    cmd_str: &str,
-    timeout_secs: i64,
-) -> Result<NativeToolOutcome, String> {
-    use std::io::Read;
-    use tokio::sync::mpsc;
-    use tokio::time::sleep;
-
-    // 1) 选择 shell（平台自适应）。
-    // 注意：Windows 沙盒进程运行在受限令牌下，PowerShell 会进入约束语言模式（CLM），
-    // `[Console]::OutputEncoding = ...` 这类属性设置会被拒绝，因此这里**不**加 UTF-8 前缀，
-    // 中文输出靠 decode_output 的 GBK 兜底解码（与裸跑路径的 UTF-8 前缀不同）。
-    #[cfg(target_os = "windows")]
-    let (shell, args, raw_cmdline): (&str, Vec<String>, Option<String>) = (
-        "powershell",
-        vec!["-NoProfile".into(), "-Command".into(), cmd_str.to_string()],
-        None,
-    );
-    #[cfg(target_os = "macos")]
-    let (shell, args, raw_cmdline): (&str, Vec<String>, Option<String>) =
-        ("zsh", vec!["-c".into(), cmd_str.to_string()], None);
-    #[cfg(target_os = "linux")]
-    let (shell, args, raw_cmdline): (&str, Vec<String>, Option<String>) =
-        ("sh", vec!["-c".into(), cmd_str.to_string()], None);
-
-    // 2) 构建沙盒请求
-    //    写根 = workspace + whitelist 中「存在且是目录」的可写目录（排除 skills_dir）；
-    //    保护 = skills_dir（deny-write）；.git/.hg/.svn/.codex/.agents 由 prepare 默认保护。
-    //    whitelist 可能含 %VAR% 占位符或已失效路径，逐条展开并过滤，避免单条失败导致整体降级。
+) -> Result<crate::sandbox::SandboxSession, String> {
+    // 写根 = workspace + whitelist 中「存在且是目录」的可写目录（排除 skills_dir）；
+    // 保护 = skills_dir（deny-write）；.git/.hg/.svn/.codex/.agents 由 prepare 默认保护。
+    // whitelist 可能含 %VAR% 占位符或已失效路径，逐条展开并过滤，避免单条失败导致整体降级。
     let readonly_mode = sandbox_mode(ctx) == SandboxMode::Readonly;
     let skills_dir = ctx.security.skills_dir.clone();
     let mut extra_roots = if readonly_mode {
@@ -1092,6 +1548,38 @@ async fn run_command_sandboxed(
         .map_err(|e| format!("sandbox state init failed: {e}"))?;
     let session = crate::sandbox::SandboxSession::prepare(&req, &state)
         .map_err(|e| format!("sandbox prepare failed: {e}"))?;
+    Ok(session)
+}
+
+async fn run_command_sandboxed(
+    ctx: &NativeToolCtx<'_>,
+    cmd_str: &str,
+    timeout_secs: i64,
+) -> Result<NativeToolOutcome, String> {
+    use std::io::Read;
+    use tokio::sync::mpsc;
+    use tokio::time::sleep;
+
+    // 1) 选择 shell（平台自适应）。
+    // 注意：Windows 沙盒进程运行在受限令牌下，PowerShell 会进入约束语言模式（CLM），
+    // `[Console]::OutputEncoding = ...` 这类属性设置会被拒绝，因此这里**不**加 UTF-8 前缀，
+    // 中文输出靠 decode_output 的 GBK 兜底解码（与裸跑路径的 UTF-8 前缀不同）。
+    #[cfg(target_os = "windows")]
+    let (shell, args, raw_cmdline): (&str, Vec<String>, Option<String>) = (
+        "powershell",
+        vec!["-NoProfile".into(), "-Command".into(), cmd_str.to_string()],
+        None,
+    );
+    #[cfg(target_os = "macos")]
+    let (shell, args, raw_cmdline): (&str, Vec<String>, Option<String>) =
+        ("zsh", vec!["-c".into(), cmd_str.to_string()], None);
+    #[cfg(target_os = "linux")]
+    let (shell, args, raw_cmdline): (&str, Vec<String>, Option<String>) =
+        ("sh", vec!["-c".into(), cmd_str.to_string()], None);
+
+    // 2) 沙盒会话：与 PTY 路径共用同一份 prepare（算可写根 → 应用 ACL → 建受限令牌）
+    let readonly_mode = sandbox_mode(ctx) == SandboxMode::Readonly;
+    let session = prepare_sandbox_session(ctx).await?;
 
     // 3) 环境变量（与裸跑路径一致）
     let mut env_extra = BTreeMap::new();
@@ -1151,7 +1639,8 @@ async fn run_command_sandboxed(
 
     let stdout_handle = tokio::task::spawn_blocking(move || {
         if let Some(mut out) = stdout {
-            let mut buf = Vec::new();
+            let mut raw: Vec<u8> = Vec::new();
+            let mut truncated = false;
             let mut chunk = vec![0u8; 8192];
             let mut decoder = TerminalDecoder::new();
             loop {
@@ -1160,7 +1649,7 @@ async fn run_command_sandboxed(
                     Ok(n) => n,
                     Err(_) => break,
                 };
-                buf.extend_from_slice(&chunk[..n]);
+                truncated |= push_bytes_bounded(&mut raw, &chunk[..n]);
                 let text = decoder.push(&chunk[..n]);
                 if !text.is_empty() {
                     let _ = stdout_tx.send(("stdout".to_string(), text));
@@ -1170,14 +1659,15 @@ async fn run_command_sandboxed(
             if !tail.is_empty() {
                 let _ = stdout_tx.send(("stdout".to_string(), tail));
             }
-            decode_output(&buf)
+            decode_tail(&raw, truncated)
         } else {
             String::new()
         }
     });
     let stderr_handle = tokio::task::spawn_blocking(move || {
         if let Some(mut err) = stderr {
-            let mut buf = Vec::new();
+            let mut raw: Vec<u8> = Vec::new();
+            let mut truncated = false;
             let mut chunk = vec![0u8; 8192];
             let mut decoder = TerminalDecoder::new();
             loop {
@@ -1186,7 +1676,7 @@ async fn run_command_sandboxed(
                     Ok(n) => n,
                     Err(_) => break,
                 };
-                buf.extend_from_slice(&chunk[..n]);
+                truncated |= push_bytes_bounded(&mut raw, &chunk[..n]);
                 let text = decoder.push(&chunk[..n]);
                 if !text.is_empty() {
                     let _ = stderr_tx.send(("stderr".to_string(), text));
@@ -1196,7 +1686,7 @@ async fn run_command_sandboxed(
             if !tail.is_empty() {
                 let _ = stderr_tx.send(("stderr".to_string(), tail));
             }
-            decode_output(&buf)
+            decode_tail(&raw, truncated)
         } else {
             String::new()
         }
@@ -1227,9 +1717,9 @@ async fn run_command_sandboxed(
                 match maybe {
                     Some((stream, chunk)) => {
                         if stream == "stdout" {
-                            stdout.push_str(&chunk);
+                            push_bounded(&mut stdout, &chunk);
                         } else {
-                            stderr.push_str(&chunk);
+                            push_bounded(&mut stderr, &chunk);
                         }
                         ctx.sink.emit_raw("agent:tool-output", json!({
                             "sessionId": ctx.session_id,
@@ -1336,6 +1826,7 @@ async fn run_command_sandboxed(
         killed_by_timeout,
         timeout_secs,
         &env_note,
+        false, // 管道路径：stdout/stderr 分流，不是 PTY
     ))
 }
 
@@ -1495,5 +1986,258 @@ mod tests {
         assert_eq!(process_terminal_output("\x1b[31mred\x1b[0m"), "red");
         // CRLF 归一化
         assert_eq!(process_terminal_output("a\r\nb"), "a\nb");
+    }
+
+    /// ConPTY 输出的转义序列不能漏成正文（Step 1 硬要求，§6.2 / §7 #9）。
+    ///
+    /// 改造前的解析器只认 `ESC [` 且只吃 0-9;，于是 `\x1b[?25l`（隐藏光标）会把 "25l"
+    /// 漏成正文 —— 而伪控制台输出的这类序列非常密集。
+    #[test]
+    fn test_process_terminal_output_ansi_sequences() {
+        // 私有模式（DECSET/DECRST）：整条吞掉，不留残渣
+        assert_eq!(process_terminal_output("\x1b[?25lhi\x1b[?25h"), "hi");
+        assert_eq!(process_terminal_output("\x1b[?25labc"), "abc");
+        // 擦除字符（ECH，光标不动）：不产生正文
+        assert_eq!(process_terminal_output("ab\x1b[10Xcd"), "abcd");
+        // OSC（改窗口标题）：直到 BEL 都吞掉
+        assert_eq!(process_terminal_output("\x1b]0;title\x07ok"), "ok");
+        // OSC 用 ST（ESC \）结束
+        assert_eq!(process_terminal_output("\x1b]0;title\x1b\\ok"), "ok");
+        // 带中间字节的 CSI（`\x1b[1 q` 设置光标形状）
+        assert_eq!(process_terminal_output("\x1b[1 qx"), "x");
+        // 两字符转义（ESC 7 保存光标 / ESC ( 0 切字符集）
+        assert_eq!(process_terminal_output("\x1b7A\x1b(0B"), "AB");
+        // 光标定位 + 擦行（PowerShell 重绘提示符的常见组合）
+        assert_eq!(process_terminal_output("\x1b[1;1H\x1b[Kab"), "ab");
+        // 颜色 + 私有模式混排（真实 PTY 流的典型形状）
+        assert_eq!(
+            process_terminal_output("\x1b[?25l\x1b[32mOK\x1b[0m\x1b[?25h"),
+            "OK"
+        );
+    }
+
+    /// 退格键要移动光标（ConPTY 重绘里会出现）。
+    #[test]
+    fn test_process_terminal_output_backspace() {
+        assert_eq!(process_terminal_output("ab\x08c"), "ac");
+    }
+
+    /// 内存有界：超过上限后丢弃早期内容并插入一次提示，尾部内容保留。
+    #[test]
+    fn test_push_bounded_drops_earliest() {
+        let mut buf = String::new();
+        push_bounded(&mut buf, &"x".repeat(STREAM_CAP + 1024));
+        assert!(buf.starts_with(STREAM_TRUNCATED_NOTE));
+        assert!(buf.len() <= STREAM_KEEP + STREAM_TRUNCATED_NOTE.len() + 8);
+        // 再次超限：提示仍然存在（不会被一起裁掉）
+        push_bounded(&mut buf, &"y".repeat(STREAM_CAP));
+        assert!(buf.starts_with(STREAM_TRUNCATED_NOTE));
+        assert!(buf.ends_with('y'));
+    }
+
+    /// 有界缓冲要按 UTF-8 边界裁剪，不能把中文切成半个字。
+    #[test]
+    fn test_push_bounded_keeps_utf8_boundary() {
+        let mut buf = String::new();
+        let n = STREAM_CAP / '中'.len_utf8() + 10;
+        push_bounded(&mut buf, &"中".repeat(n));
+        assert!(!buf.contains('\u{FFFD}'));
+        assert!(buf[STREAM_TRUNCATED_NOTE.len()..]
+            .chars()
+            .all(|c| c == '中'));
+    }
+
+    /// 内存有界（字节版）：读线程的原始缓冲同样有上限，`yes` 不能打爆内存。
+    #[test]
+    fn test_push_bytes_bounded() {
+        let mut buf: Vec<u8> = Vec::new();
+        assert!(!push_bytes_bounded(&mut buf, b"abc"));
+        assert_eq!(buf, b"abc");
+        let mut big: Vec<u8> = Vec::new();
+        assert!(push_bytes_bounded(&mut big, &vec![b'z'; STREAM_CAP + 1]));
+        assert!(big.len() <= STREAM_KEEP);
+    }
+
+    /// Step 1 端到端：**沙盒开启**时 PTY 路径能拿到正确输出、退出码与中文。
+    ///
+    /// 核心验收：受限令牌 + Job Object + ConPTY 三者共存（Spike 已验证），
+    /// 且命令真的能跑完、输出经伪控制台回传、中文直接可读（无需 GBK 兜底）。
+    ///
+    /// ⚠️ 这里故意用 **readonly** 模式：
+    ///   1. readonly 不触发包管理器缓存探测（`prepare_sandbox_session` 里已短路），
+    ///      避免与 `package_cache_roots` 的进程级全局状态并行相互污染；
+    ///   2. 也避免测试去改用户**真实**缓存目录（~/.npm、~/.cargo）的 ACL。
+    /// 「可写根 + 受限令牌 + ConPTY」的组合由 Spike（`conpty_with_restricted_token`）覆盖。
+    #[tokio::test]
+    async fn test_execute_command_pty_sandboxed_end_to_end() {
+        use crate::agent::bridge::AgentBridgeState;
+        use crate::agent::cancellation::CancellationToken;
+        use crate::agent::event_sink::TestEventSink;
+        use crate::agent::native_tools::execute_native_tool;
+        use crate::agent::native_tools::test_util::test_security;
+
+        let dir = std::env::temp_dir().join(format!("virlen_pty_e2e_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut sec = test_security(&dir.to_string_lossy());
+        sec.sandbox_mode = "readonly".to_string();
+        let sink = TestEventSink::new();
+        let bridge = AgentBridgeState::default();
+        let cancel = CancellationToken::new();
+        let ctx = NativeToolCtx {
+            session_id: "s_pty_e2e",
+            tool_call_id: "tc_pty_e2e",
+            cancel: &cancel,
+            sink: &sink,
+            bridge: &bridge,
+            security: &sec,
+        };
+
+        let args = json!({
+            "command": "Write-Output 'PTY_ROUTE_OK'; Write-Output '中文输出可读'",
+            "timeout": 60
+        });
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(60),
+            execute_native_tool(&ctx, "execute_command", &args),
+        )
+        .await
+        .expect("execute_command 不应挂死")
+        .expect("execute_command 不应报错");
+
+        match outcome {
+            NativeToolOutcome::Value { content, ui_data } => {
+                assert!(content.contains("PTY_ROUTE_OK"), "content: {content}");
+                assert!(
+                    content.contains("中文输出可读"),
+                    "中文应直接可读（PTY 输出为 UTF-8）: {content}"
+                );
+                let ui = ui_data.expect("ui_data");
+                assert_eq!(ui["pty"], serde_json::json!(true));
+                assert_eq!(ui["exitCode"], serde_json::json!(0));
+                assert!(
+                    content.contains("只读（不可写）"),
+                    "readonly 模式应真的跑在沙盒里（而不是降级裸跑）: {content}"
+                );
+            }
+            other => panic!("expected Value, got {other:?}"),
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Step 1 端到端：用户可在命令执行中「插键盘」——`pty_write` 把输入送进伪控制台。
+    ///
+    /// `Read-Host` 会真的去读控制台输入：改造前（stdin = NULL / 管道）它只能拿到 EOF，
+    /// 所以这条用例是「用户可干预」的直接证据。同时顺带验证 `pty_resize` 能命中会话。
+    #[tokio::test]
+    async fn test_execute_command_pty_write_interaction() {
+        use crate::agent::bridge::AgentBridgeState;
+        use crate::agent::cancellation::CancellationToken;
+        use crate::agent::event_sink::TestEventSink;
+        use crate::agent::native_tools::execute_native_tool;
+        use crate::agent::native_tools::test_util::test_security;
+
+        let dir = std::env::temp_dir().join(format!("virlen_pty_in_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // 同 `test_execute_command_pty_sandboxed_end_to_end`：readonly 避开缓存探测与真实目录 ACL
+        let mut sec = test_security(&dir.to_string_lossy());
+        sec.sandbox_mode = "readonly".to_string();
+        let sink = TestEventSink::new();
+        let bridge = AgentBridgeState::default();
+        let cancel = CancellationToken::new();
+        let tool_call_id = "tc_pty_write";
+        let ctx = NativeToolCtx {
+            session_id: "s_pty_write",
+            tool_call_id,
+            cancel: &cancel,
+            sink: &sink,
+            bridge: &bridge,
+            security: &sec,
+        };
+
+        // 会话在 spawn 后立刻注册，这里轮询等到它出现再写（避免时序竞态）。
+        let writer = tokio::spawn(async move {
+            for _ in 0..200 {
+                if pty_session::pty_write(tool_call_id, "hello\r\n") {
+                    // 顺带验证尺寸调整能命中同一个会话
+                    let resized = pty_session::pty_resize(tool_call_id, 120, 40);
+                    return (true, resized);
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            (false, false)
+        });
+
+        let args = json!({
+            "command": "$x = Read-Host; Write-Output \"GOT=$x\"",
+            "timeout": 60
+        });
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(60),
+            execute_native_tool(&ctx, "execute_command", &args),
+        )
+        .await
+        .expect("execute_command 不应挂死")
+        .expect("execute_command 不应报错");
+
+        let (wrote, resized) = writer.await.unwrap();
+        assert!(wrote, "命名 PTY 会话应已注册，pty_write 才能命中");
+        assert!(resized, "pty_resize 应命中已注册的会话");
+
+        match outcome {
+            NativeToolOutcome::Value { content, .. } => {
+                assert!(
+                    content.contains("GOT=hello"),
+                    "用户在执行中写入的输入应被命令读到: {content}"
+                );
+            }
+            other => panic!("expected Value, got {other:?}"),
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// PTY 路径的 uiData 必须带 `pty: true`（UI 据此走 xterm 单流渲染）。
+    #[test]
+    fn test_build_command_result_pty_flag() {
+        let pty = build_command_result(
+            "out\n".into(),
+            String::new(),
+            Some(0),
+            false,
+            false,
+            30,
+            "终端环境: powershell · 写隔离",
+            true,
+        );
+        match pty {
+            NativeToolOutcome::Value { content, ui_data } => {
+                let ui = ui_data.expect("ui_data");
+                assert_eq!(ui["pty"], serde_json::json!(true));
+                assert_eq!(ui["stderr"], serde_json::json!(""));
+                // PTY 下 stderr 已合并进 stdout，不应出现「[标准错误]」分段
+                assert!(!content.contains("[标准错误]"));
+            }
+            other => panic!("expected Value, got {other:?}"),
+        }
+
+        // 管道路径不带 pty 标记，并保留 [标准错误] 分段（向后兼容旧渲染分支）
+        let pipes = build_command_result(
+            "a\n".into(),
+            "w\n".into(),
+            Some(0),
+            false,
+            false,
+            30,
+            "",
+            false,
+        );
+        match pipes {
+            NativeToolOutcome::Value { content, ui_data } => {
+                assert_eq!(ui_data.expect("ui_data")["pty"], serde_json::json!(false));
+                assert!(content.contains("[标准错误]"));
+            }
+            other => panic!("expected Value, got {other:?}"),
+        }
     }
 }

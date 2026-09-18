@@ -20,6 +20,8 @@
 
 pub mod acl;
 pub mod cap;
+// Step 1（PTY 改造）：伪控制台（ConPTY）封装，供 execute_command 换 stdio 使用
+pub mod conpty;
 pub mod spawn;
 pub mod token;
 
@@ -63,3 +65,9 @@ pub fn diagnostics() -> SandboxDiagnostics {
 
 #[cfg(test)]
 mod tests;
+
+// ConPTY 可行性验证（Spike v2）。
+// 暂未删除：它是目前**唯一**能证明「ConPTY + 受限令牌沙盒」共存的测试，
+// 保留作回归用（见 docs/pty-research.md §8 Step 0）。
+#[cfg(test)]
+mod conpty_spike;

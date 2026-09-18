@@ -80,6 +80,25 @@ pub fn agent_kill_command(tool_call_id: String) -> bool {
     native_tools::kill_running_command(&tool_call_id)
 }
 
+/// 向正在运行的 PTY 会话写入数据（用户中途插键盘，Step 1）。
+///
+/// `data` 是原始文本：普通按键、粘贴内容，或控制字节（`\x03` = Ctrl+C）。
+/// ⚠️ `\x03` 只能影响「正在读 stdin 的进程」（shell 提示符 / REPL / `y/n` 提示）；
+/// 中断主通道仍是 `agent_kill_command`（Job Object 杀树），见 docs/pty-research.md §5.6。
+///
+/// 会话 key 直接用 `toolCallId`，前端 `TerminalView` 已持有 → 无需新增映射事件；
+/// 走 Tauri 命令而不经过引擎事件总线，因此不污染 `AgentEventType` 四方契约（铁律 2）。
+#[tauri::command]
+pub fn pty_write(tool_call_id: String, data: String) -> bool {
+    native_tools::pty_write(&tool_call_id, &data)
+}
+
+/// 调整正在运行的 PTY 会话尺寸（前端终端 fit 后调用）。返回是否找到会话并调整成功。
+#[tauri::command]
+pub fn pty_resize(tool_call_id: String, cols: u16, rows: u16) -> bool {
+    native_tools::pty_resize(&tool_call_id, cols, rows)
+}
+
 /// 获取当前会话的运行快照
 #[tauri::command]
 pub fn agent_get_run_snapshot(

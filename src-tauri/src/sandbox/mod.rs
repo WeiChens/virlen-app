@@ -36,6 +36,17 @@ pub use macos::{SandboxSession, SandboxChild};
 #[allow(unused_imports)]
 pub use windows::{diagnostics, SandboxDiagnostics};
 
+/// Step 1（PTY 改造）：伪控制台（ConPTY）对外入口。
+///
+/// `windows` 子模块本身是**平台实现细节**（私有），这里只导出「执行器」与
+/// 「PTY 会话注册表」需要的最小面，避免把整个 windows 模块提升为 crate 可见。
+#[cfg(target_os = "windows")]
+pub(crate) mod pty {
+    pub use super::windows::conpty::{resize_raw, PseudoConsole, DEFAULT_COLS, DEFAULT_ROWS};
+    pub use super::windows::spawn::{create_bare_process_pty, current_env};
+    pub use super::windows::INTERACTIVE_DESKTOP;
+}
+
 /// 一次沙盒执行的请求描述（跨平台）。
 #[derive(Debug, Clone)]
 pub struct SandboxRequest {

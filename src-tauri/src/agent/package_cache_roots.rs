@@ -412,9 +412,21 @@ mod tests {
         ))
     }
 
+    /// 本模块的用例都会改**进程级全局状态**（`set_roots_for_test` / `clear_cache` /
+    /// `npm_config_cache` 环境变量），而 cargo 默认**并行**跑测试 → 会互相踩：
+    /// 一个用例的 `refresh()` 会覆盖另一个用例刚塞进去的 `set_roots_for_test`。
+    /// 实测只跑本模块时约 7/10 次失败，因此用一把模块内互斥锁把它们串起来。
+    ///
+    /// 锁中毒（某用例 panic）时仍然继续，避免后续用例被连带跳过。
+    fn test_guard() -> std::sync::MutexGuard<'static, ()> {
+        static GUARD: Mutex<()> = Mutex::new(());
+        GUARD.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     #[cfg(target_os = "windows")]
     fn env_override_becomes_a_root() {
+        let _guard = test_guard();
         let base = unique_dir("env");
         let cache = base.join("fake-npm-cache");
         std::fs::create_dir_all(&cache).unwrap();
@@ -434,6 +446,7 @@ mod tests {
 
     #[test]
     fn workspace_ancestors_are_skipped_and_siblings_kept() {
+        let _guard = test_guard();
         let base = unique_dir("ws");
         let ws = base.join("proj");
         let inside = ws.join("sub"); // workspace 内部 → 已覆盖，跳过
@@ -464,6 +477,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn e2e_detected_cache_root_is_writable_in_sandbox() {
+        let _guard = test_guard();
         use std::collections::BTreeMap;
         use std::io::Read;
 

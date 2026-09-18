@@ -19,7 +19,9 @@ use crate::sandbox::{SandboxRequest, DEFAULT_PROTECTED_SUBDIRS};
 
 use super::acl::{add_deny_write_ace, allow_null_device, ensure_allow_write_aces};
 use super::cap;
-use super::spawn::{create_sandboxed_process, current_env, SandboxChild};
+use super::spawn::{
+    create_sandboxed_process, create_sandboxed_process_pty, current_env, PtyChild, SandboxChild,
+};
 use super::token::{create_write_restricted_token_with_caps, LocalSid};
 use super::INTERACTIVE_DESKTOP;
 
@@ -160,6 +162,31 @@ impl SandboxSession {
             &self.cwd,
             &env,
             INTERACTIVE_DESKTOP,
+        )
+    }
+
+    /// 以受限令牌 + **伪控制台**拉起子进程（Step 1：PTY 路径）。
+    ///
+    /// 与 `spawn` 的唯一区别是 stdio：不建匿名管道，控制台由 `hpc` 提供。
+    pub fn spawn_pty(
+        &self,
+        command: &[String],
+        raw_cmdline: Option<&str>,
+        env_extra: &BTreeMap<String, String>,
+        hpc: isize,
+    ) -> Result<PtyChild> {
+        let mut env = current_env();
+        for (k, v) in env_extra {
+            env.insert(k.clone(), v.clone());
+        }
+        create_sandboxed_process_pty(
+            self.h_token,
+            command,
+            raw_cmdline,
+            &self.cwd,
+            &env,
+            INTERACTIVE_DESKTOP,
+            hpc,
         )
     }
 }

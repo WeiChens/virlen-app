@@ -51,6 +51,8 @@ pub(crate) mod test_util;
 #[allow(unused_imports)]
 pub use common::{is_path_allowed, resolve_safe_path};
 pub(crate) use execute::kill_running_command;
+// PTY 会话交互：前端中途插键盘 / 改窗口尺寸（Step 1）
+pub(crate) use execute::{pty_resize, pty_write};
 
 use crate::agent::bridge::AgentBridgeState;
 use crate::agent::cancellation::CancellationToken;

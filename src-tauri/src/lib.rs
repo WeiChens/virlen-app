@@ -318,6 +318,9 @@ pub fn run() {
             agent::agent_send_message,
             agent::agent_cancel,
             agent::agent_kill_command,
+            // PTY 会话交互（Step 1：execute_command 换 ConPTY）
+            agent::pty_write,
+            agent::pty_resize,
             agent::agent_get_run_snapshot,
             agent::agent_clear_run_snapshot,
             agent::agent_dispose,

@@ -12,6 +12,14 @@ export interface ToolOutput {
   output: string
   /** 终止回调（kill 子进程、取消请求等） */
   kill?: () => void
+  /**
+   * 输出是否为 PTY（伪控制台）原始流。
+   *
+   * `true` 表示 `output` 是带 ANSI/VT 控制序列的终端流（含光标控制），
+   * 必须交给 xterm 渲染而不是 `<pre>`；同时意味着 stdout/stderr 已合并成单流。
+   * 后端权威标记是完成态 `uiData.pty`，这里用于「运行中」阶段提前定渲染方式。
+   */
+  pty?: boolean
 }
 
 class ToolOutputStore {
