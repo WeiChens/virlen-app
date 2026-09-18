@@ -1072,7 +1072,12 @@ async fn run_command_native_pty(
     use tokio::sync::mpsc;
 
     // 1) 伪控制台。建不起来就降级回匿名管道（保留改造前的实现作兜底）。
-    let mut pty = match PseudoConsole::create(DEFAULT_COLS, DEFAULT_ROWS) {
+    //
+    // 初始尺寸优先用「最近一次客户端上报的尺寸」：若与客户端实际尺寸一致，前端随后的
+    // `pty_resize` 就是 no-op，ConPTY 不会重绘、也就不会在内容下方补出多余空行
+    // （见 pty_session::SizeTracker 与 docs/pty-research.md §5.7）。
+    let (init_cols, init_rows) = pty_session::initial_size((DEFAULT_COLS, DEFAULT_ROWS));
+    let mut pty = match PseudoConsole::create(init_cols, init_rows) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("[pty] CreatePseudoConsole unavailable, degraded to pipes: {e}");
@@ -1197,7 +1202,12 @@ async fn run_command_native_pty(
     let guard = guard.map(Arc::new);
     let pty_session_handle: Option<Arc<pty_session::PtySession>> =
         if let Some(input) = pty.take_input() {
-            let session = Arc::new(pty_session::PtySession::new(input, pty.raw_hpc()));
+            let session = Arc::new(pty_session::PtySession::new(
+                input,
+                pty.raw_hpc(),
+                init_cols,
+                init_rows,
+            ));
             pty_session::register(ctx.tool_call_id, session.clone());
             Some(session)
         } else {

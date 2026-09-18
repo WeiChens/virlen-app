@@ -149,42 +149,140 @@
 
 /* ==================== PTY 终端块（xterm.js） ====================
    见 tool-call/XtermTerminal.tsx：ConPTY 的原始 VT 流（含光标控制）必须交给
-   终端模拟器渲染，`<pre>` 只会把 \x1b[87X / OSC 之类当成乱码或错位。 */
+   终端模拟器渲染，`<pre>` 只会把 \x1b[87X / OSC 之类当成乱码或错位。
+
+   外观对齐桌面上那份 xterm-demo：顶部红黄绿圆点 + 标签页、底部状态栏、等宽字体。 */
 .execute-command-wrapper.is-pty {
   /* xterm 需要确定尺寸的容器，不能沿用 fit-content（否则 fit() 量不出列宽） */
   width: min(880px, 92%);
+  display: flex;
+  flex-direction: column;
+  background-color: var(--terminal-bg, #191a1b);
+  border-radius: 10px;
+  /* 阻止祖先的 text-align: center 继承进来，否则终端每一行都会被居中 */
+  text-align: left;
 
-  .pty-cmd-line {
-    padding: 2px 8px;
+  /* 终端字体：必须是真等宽。
+     ⚠️ 不能用 AlimamaAgileVF-Thin——它是比例字体（'W'=0.672em、'i'=0.147em），
+     xterm 会把每个字符塞进同宽的格子，窄字符被撑成「宽字符」，列宽也算小。 */
+  $pty-mono: 'JetBrains Mono', 'Cascadia Code', Consolas, 'Courier New', monospace;
+
+  /* ---------- 顶部窗口栏（红黄绿点 + 标签 + 右侧操作） ---------- */
+  .xterm-titlebar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 10px;
+    flex-shrink: 0;
+    background: var(--terminal-header-bg, #242f3a);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    user-select: none;
+  }
+
+  .xterm-dot {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    flex: none;
+  }
+  .xterm-dot--red {
+    background: #ff5f57;
+  }
+  .xterm-dot--yellow {
+    background: #febc2e;
+  }
+  .xterm-dot--green {
+    background: #28c840;
+  }
+
+  .xterm-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 60%;
+    height: 24px;
+    padding: 0 10px;
+    border-radius: 7px;
+    background: var(--terminal-bg, #191a1b);
+    font-family: $pty-mono;
+    font-size: var(--font-size-xs);
     color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
-    font-family: 'AlimamaAgileVF-Thin', Consolas, monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  }
+  .xterm-tab__glyph {
+    color: #7ee787;
+    font-weight: 700;
+    flex: none;
+  }
+
+  /* 头部操作区（状态徽标 + 接管/按键/全屏/终止）自动靠右 */
+  .terminal-header-actions {
+    margin-left: auto;
+  }
+
+  /* ---------- 命令行 / 文件行 ---------- */
+  .pty-cmd-line {
+    flex-shrink: 0;
+    padding: 2px 10px;
+    color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
+    font-family: $pty-mono;
     white-space: pre-wrap;
     word-break: break-all;
   }
 
+  /* ---------- 终端挂载点 ---------- */
   .pty-terminal-body {
+    flex: 1 1 auto;
+    min-height: 0;
     height: 240px;
-    margin: 0 7px;
-    padding: 4px 0;
+    padding: 8px 10px;
     overflow: hidden;
 
+    .xterm {
+      height: 100%;
+    }
+    /* 文本默认居中会破坏终端对齐，这里显式兜底 */
+    .xterm-rows {
+      text-align: left;
+    }
     /* xterm 自带一层背景色，与容器主题对齐避免出现双色块 */
     .xterm-viewport {
       background-color: transparent !important;
     }
+    .xterm-viewport::-webkit-scrollbar {
+      width: 10px;
+    }
+    .xterm-viewport::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .xterm-viewport::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.18);
+      border-radius: 6px;
+      border: 2px solid var(--terminal-bg, #191a1b);
+    }
   }
 
+  /* ---------- 提示行 ---------- */
   .pty-hint {
-    padding: 3px 8px 5px;
+    flex-shrink: 0;
+    padding: 3px 10px 5px;
     font-size: var(--font-size-xs);
     color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
     user-select: none;
   }
 
+  /* ---------- 操作按钮 ---------- */
   .terminal-ctl-btn {
     flex-shrink: 0;
     padding: 2px 8px;
     font-size: var(--font-size-xs);
+    font-family: $pty-mono;
     background: rgba(255, 255, 255, 0.08);
     color: var(--terminal-text, #fff);
     border: none;
@@ -213,6 +311,38 @@
   /* 「疑似等待输入」提示（Step 2 ④）：与常规提示同排但用警示色 */
   .pty-idle-hint {
     color: var(--terminal-note, #e5c07b);
+  }
+
+  /* ---------- 底部状态栏（对齐 demo） ---------- */
+  .xterm-statusbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    height: 24px;
+    padding: 0 10px;
+    flex-shrink: 0;
+    background: var(--terminal-header-bg, #242f3a);
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+    font-family: $pty-mono;
+    font-size: 11px;
+    color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
+    user-select: none;
+  }
+  .xterm-status__group {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .xterm-badge {
+    padding: 2px 7px;
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.05);
+    white-space: nowrap;
+  }
+  .xterm-badge--running {
+    background: rgba(126, 231, 135, 0.14);
+    color: #7ee787;
   }
 }
 

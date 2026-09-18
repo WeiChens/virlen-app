@@ -514,6 +514,7 @@ describe('TerminalBlock 全屏', () => {
 
 /**
  * PTY 终端块（xterm 路径）的结构回归，Step 2 ③（命名按键条）/ ⑤（全屏）。
+ * 外观已对齐桌面上那份 xterm-demo：顶部窗口栏（红黄绿点 + 标签）+ 底部状态栏。
  *
  * 只做静态渲染断言（不触发 xterm 的 useLayoutEffect —— jsdom 没有真正的画布/量度），
  * 验证 DOM 结构齐备；xterm 的实际渲染与全屏滚动交给真机手动验收。
@@ -552,5 +553,21 @@ describe('XtermTerminalBlock（PTY）结构与操作区', () => {
     expect(html).not.toContain('pty-hold-btn')
     expect(html).toContain('terminal-fullscreen-btn')
     expect(html).toContain('pty-terminal-body')
+  })
+
+  it('demo 风格外框：顶部窗口栏（红黄绿点 + 标签）+ 底部状态栏', () => {
+    const html = render(true)
+    expect(html).toContain('xterm-titlebar')
+    expect(html).toContain('xterm-dot--red')
+    expect(html).toContain('xterm-dot--yellow')
+    expect(html).toContain('xterm-dot--green')
+    expect(html).toContain('xterm-tab__glyph')
+    expect(html).toContain('xterm-statusbar')
+  })
+
+  it('底部状态栏：运行中显示「运行中」徐标，完成态不显示', () => {
+    expect(render(true)).toContain('xterm-badge--running')
+    expect(render(true)).toContain('运行中')
+    expect(render(false)).not.toContain('xterm-badge--running')
   })
 })

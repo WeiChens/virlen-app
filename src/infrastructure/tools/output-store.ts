@@ -72,6 +72,14 @@ export function shouldHintIdle(
   return now - lastOutputAt >= IDLE_HINT_MS
 }
 
+/**
+ * 输出通知的节流窗口（ms）。
+ *
+ * 高频 stdout（进度条 / `npm install`）下最多每窗口通知一次 UI，避免过度 re-render；
+ * 窗口内的后续分片由**尾沿补发**兜底（见 `ToolOutputStore.trailing`），保证最后一片一定上屏。
+ */
+export const NOTIFY_INTERVAL_MS = 50
+
 class ToolOutputStore {
   private map = new Map<string, ToolOutput>()
   private listeners = new Set<
@@ -79,26 +87,41 @@ class ToolOutputStore {
   >()
   /** 节流用：每个 toolCallId 上次通知时间 */
   private lastNotify = new Map<string, number>()
+  /**
+   * 尾沿补发定时器。
+   *
+   * ⚠️ 只做「前沿节流」是**错的**：落在同一个 `NOTIFY_INTERVAL_MS` 窗口内的后续分片会
+   * 只入缓冲、不通知，而且**永远不会补发**。交互式命令（`npm init`）刷一波就停在等输入，
+   * 尾片（无换行的提示符 `package name: (wei) `）恰好落在窗口内 → 一直不上屏，
+   * **要等用户敲一个键、子进程产生新输出时才被顺带刷出来**（这就是「按了键提示符才出现」的根因）。
+   * 这里在命中间隔时挂一个定时器，窗口结束时补通知一次，保证「最后一片一定上屏」。
+   */
+  private trailing = new Map<string, ReturnType<typeof setTimeout>>()
 
   /** 注册一个 tool 输出状态 */
   register(toolCallId: string, output: ToolOutput) {
     // 注册即开始计空闲（覆盖「命令一直无输出」的等待输入场景）
     this.map.set(toolCallId, { ...output, lastOutputAt: Date.now() })
+    this.cancelTrailing(toolCallId)
     this.notify(toolCallId)
   }
 
-  /** 追加输出内容（节流：最多每 50ms 通知一次） */
+  /** 追加输出内容（前沿节流：最多每 NOTIFY_INTERVAL_MS 通知一次，命中间隔则尾沿补发） */
   append(toolCallId: string, chunk: string) {
     const existing = this.map.get(toolCallId)
     if (existing) {
       existing.output += chunk
       existing.lastOutputAt = Date.now()
-      // 节流：最多每 50ms 通知一次，高频 stdout 时避免过度 re-render
       const now = Date.now()
       const last = this.lastNotify.get(toolCallId) ?? 0
-      if (now - last >= 50) {
+      if (now - last >= NOTIFY_INTERVAL_MS) {
+        // 前沿：距上次通知已过窗口 → 立即通知，并取消挂起的尾沿
+        this.cancelTrailing(toolCallId)
         this.lastNotify.set(toolCallId, now)
         this.notify(toolCallId)
+      } else {
+        // 窗口内：先不通知，但挂尾沿保证「最后一片」在窗口结束补发（否则会丢帧）
+        this.scheduleNotify(toolCallId)
       }
     } else {
       this.map.set(toolCallId, {
@@ -110,8 +133,10 @@ class ToolOutputStore {
     }
   }
 
-  /** 强制通知（tool 结束时确保刷新 UI） */
+  /** 强制通知（tool 结束时确保刷新 UI）；取消未触发的尾沿 */
   flush(toolCallId: string) {
+    this.cancelTrailing(toolCallId)
+    this.lastNotify.set(toolCallId, Date.now())
     this.notify(toolCallId)
   }
 
@@ -142,8 +167,9 @@ class ToolOutputStore {
     return this.map.get(toolCallId)
   }
 
-  /** 移除（tool 执行完毕后清理） */
+  /** 移除（tool 执行完毕后清理）；取消未触发的尾沿，避免补发已删除的 id */
   remove(toolCallId: string) {
+    this.cancelTrailing(toolCallId)
     this.map.delete(toolCallId)
     this.lastNotify.delete(toolCallId)
   }
@@ -152,6 +178,29 @@ class ToolOutputStore {
   subscribe(cb: (toolCallId: string, output: ToolOutput) => void): () => void {
     this.listeners.add(cb)
     return () => this.listeners.delete(cb)
+  }
+
+  /** 挂尾沿补发（同一 id 只挂一个；窗口结束时补发一次最新全量） */
+  private scheduleNotify(toolCallId: string) {
+    if (this.trailing.has(toolCallId)) return
+    const last = this.lastNotify.get(toolCallId) ?? 0
+    const delay = Math.max(0, NOTIFY_INTERVAL_MS - (Date.now() - last))
+    const timer = setTimeout(() => {
+      this.trailing.delete(toolCallId)
+      if (!this.map.has(toolCallId)) return
+      this.lastNotify.set(toolCallId, Date.now())
+      this.notify(toolCallId)
+    }, delay)
+    this.trailing.set(toolCallId, timer)
+  }
+
+  /** 取消未触发的尾沿补发 */
+  private cancelTrailing(toolCallId: string) {
+    const timer = this.trailing.get(toolCallId)
+    if (timer !== undefined) {
+      clearTimeout(timer)
+      this.trailing.delete(toolCallId)
+    }
   }
 
   private notify(toolCallId: string) {

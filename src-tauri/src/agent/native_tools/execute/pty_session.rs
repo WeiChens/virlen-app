@@ -37,6 +37,28 @@ pub struct InterventionCounts {
     pub held_seconds: u64,
 }
 
+/// 伪控制台尺寸去重器。
+///
+/// ⚠️ 为什么必须去重：ConPTY 在「屏幕已有内容」之后收到 `ResizePseudoConsole`，会
+/// **整屏重绘**并按新行数在内容下方补空行（本机实测：补出的空行数 = 新行数 − 内容行数，
+/// 见 `docs/pty-research.md` §5.7）。前端 `ResizeObserver` 会重复上报同一尺寸，
+/// 若每次都真去 resize，终端里就会白刷出一堆空行。
+#[derive(Default)]
+pub struct SizeTracker {
+    current: Option<(i16, i16)>,
+}
+
+impl SizeTracker {
+    /// 记录尺寸；返回是否**发生变化**（`false` = 与上次一致 → 调用方应跳过 `ResizePseudoConsole`）。
+    pub fn changed(&mut self, cols: i16, rows: i16) -> bool {
+        if self.current == Some((cols, rows)) {
+            return false;
+        }
+        self.current = Some((cols, rows));
+        true
+    }
+}
+
 /// 一个运行中的 PTY 会话句柄。
 pub struct PtySession {
     /// 伪控制台输入写端。取值时加锁：`pty_write` 可能来自任意 Tauri 命令线程。
@@ -45,6 +67,8 @@ pub struct PtySession {
     /// Windows：`HPCON` 的副本，供 `pty_resize` 使用；非 Windows 平台暂为 0。
     #[allow(dead_code)]
     hpc: isize,
+    /// 伪控制台当前尺寸（列, 行）——用于跳过**没有变化**的 resize（见 `SizeTracker`）。
+    size: Mutex<SizeTracker>,
     /// ② 接管标志：`true` 时运行器冻结超时预算（人在慢慢输密码，不该被超时杀掉）。
     held: AtomicBool,
     /// ② 干预计数（只记计数，不记内容）
@@ -54,15 +78,29 @@ pub struct PtySession {
 }
 
 impl PtySession {
-    pub fn new(input: File, hpc: isize) -> Self {
+    /// `cols` / `rows`：伪控制台**创建时**的尺寸（写入去重器，使「与初始尺寸相同」的
+    /// 首次上报也成为 no-op）。
+    pub fn new(input: File, hpc: isize, cols: i16, rows: i16) -> Self {
+        let mut tracker = SizeTracker::default();
+        tracker.changed(cols, rows);
         Self {
             input: Mutex::new(Some(input)),
             hpc,
+            size: Mutex::new(tracker),
             held: AtomicBool::new(false),
             keys: AtomicUsize::new(0),
             enters: AtomicUsize::new(0),
             ctrl_c: AtomicUsize::new(0),
         }
+    }
+
+    /// 记录尺寸；返回是否**需要真正调用** `ResizePseudoConsole`（未变化 → false）。
+    pub fn set_size(&self, cols: i16, rows: i16) -> bool {
+        let mut guard = match self.size.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.changed(cols, rows)
     }
 
     /// 写入数据（用户键入内容或控制字节，如 `\x03`）。返回是否写入成功。
@@ -150,6 +188,22 @@ fn lookup(tool_call_id: &str) -> Option<Arc<PtySession>> {
     PTY_SESSIONS.lock().unwrap().get(tool_call_id).cloned()
 }
 
+/// 最近一次客户端上报的终端尺寸（列, 行）。
+///
+/// 新建伪控制台时用它作初始尺寸：若与客户端实际尺寸一致，随后的 `pty_resize` 就是
+/// no-op，ConPTY 不会重绘、也就不会补出多余空行（见 `SizeTracker`）。
+static LAST_CLIENT_SIZE: LazyLock<Mutex<Option<(i16, i16)>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+/// 新建伪控制台应使用的初始尺寸：优先最近一次客户端上报值，否则用 `fallback`。
+pub fn initial_size(fallback: (i16, i16)) -> (i16, i16) {
+    LAST_CLIENT_SIZE
+        .lock()
+        .ok()
+        .and_then(|g| *g)
+        .unwrap_or(fallback)
+}
+
 /// 向指定会话写入数据（`pty_write` 命令入口）。返回是否找到并写入成功。
 pub fn pty_write(tool_call_id: &str, data: &str) -> bool {
     match lookup(tool_call_id) {
@@ -159,10 +213,31 @@ pub fn pty_write(tool_call_id: &str, data: &str) -> bool {
 }
 
 /// 调整指定会话的伪控制台尺寸（`pty_resize` 命令入口）。
+///
+/// ⚠️ 与上报尺寸**相同**时直接返回 true，**不调用** `ResizePseudoConsole`：
+/// ConPTY 在「屏幕已有内容」后 resize 会整屏重绘并在内容下方补空行
+/// （空行数 = 新行数 − 内容行数），而前端 `ResizeObserver` 会重复上报同一尺寸。
 pub fn pty_resize(tool_call_id: &str, cols: u16, rows: u16) -> bool {
+    // ⚠️ 关键：**先**记下客户端尺寸（无论会话是否已注册）。
+    //
+    // 前端 fit() 往往早于后端 `create`（本机实测：resize 约早 0.9s 到达，此时会话
+    // 尚未注册 → lookup 未命中）。若只在命中会话时才写缓存，首次运行时缓存永远是空
+    // → `create` 只能退回默认 240×50 → 与真实尺寸（如 109×13）不符
+    // → ConPTY 每次重绘都按 50 行补空行（空行数 = 行数 − 内容行数）。
+    // 把写入提到 lookup 之前，就能让紧接其后的 `create` 用上正确尺寸（`initial_size`）；
+    // 前端另有重试兜底（见 XtermTerminal.sendResize）。
+    if let Ok(mut g) = LAST_CLIENT_SIZE.lock() {
+        *g = Some((cols as i16, rows as i16));
+    }
     let Some(session) = lookup(tool_call_id) else {
+        // 会话尚未注册 → 尺寸已写入缓存，紧接其后的 `create` 会用它作初始尺寸；
+        // 返回 false 让前端重试兜底。
         return false;
     };
+    if !session.set_size(cols as i16, rows as i16) {
+        // 尺寸未变 → 跳过（避免无谓的 ConPTY 重绘）
+        return true;
+    }
     #[cfg(target_os = "windows")]
     {
         return crate::sandbox::pty::resize_raw(session.hpc(), cols as i16, rows as i16);
@@ -260,7 +335,20 @@ pub fn pty_key(tool_call_id: &str, keys: &[String]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::key_sequence;
+    use super::{key_sequence, SizeTracker};
+
+    /// ConPTY 尺寸去重：只有**真正变化**时才允许调用 `ResizePseudoConsole`
+    /// （否则会白刷出一堆空行，见 SizeTracker 的说明）。
+    #[test]
+    fn test_size_tracker_dedup() {
+        let mut t = SizeTracker::default();
+        assert!(t.changed(80, 24)); // 首次 → 需要 resize
+        assert!(!t.changed(80, 24)); // 同尺寸重复上报 → 跳过
+        assert!(!t.changed(80, 24));
+        assert!(t.changed(80, 25)); // 行数变了 → 需要 resize
+        assert!(t.changed(81, 25)); // 列数变了 → 需要 resize
+        assert!(!t.changed(81, 25));
+    }
 
     /// Step 2 ③：命名控制键 → 字节逐条对齐（纯函数，零副作用）。
     #[test]

@@ -60,15 +60,24 @@ function terminalTheme() {
   }
 }
 
-/** 与 `<pre>` 版终端一致的字体栈 */
+/**
+ * 终端字体栈 —— **必须是真等宽**（取法对齐桌面上那份 xterm-demo）。
+ *
+ * ⚠️ 不能再用 `AlimamaAgileVF-Thin`（`<pre>` 版终端的字体）：它是**比例字体**
+ * （实测 'W'=0.672em、'i'=0.147em、'1'=0.300em、空格 0.240em），而 xterm 会把每个
+ * 字符塞进同一个固定宽的格子里（格子宽度按 'W' 这种最宽字形量出）→ 窄字符两侧被
+ * 撑出大量空白，整行看起来「又宽又散」，列数也被算小、硬折行提前发生。
+ * `<pre>` 用浏览器自然比例排版看不出问题，换成网格渲染（xterm）就暴露了。
+ */
 const PTY_FONT =
-  "'AlimamaAgileVF-Thin', Consolas, 'Cascadia Mono', 'Noto Color Emoji', monospace"
+  "'JetBrains Mono', 'Cascadia Code', Consolas, 'Courier New', monospace"
 
 export function XtermTerminal({
   stream,
   running,
   toolCallId,
   syncResize = true,
+  onResize,
 }: {
   /** 伪控制台原始输出（累积串，含 ANSI/VT 控制序列） */
   stream: string
@@ -84,6 +93,8 @@ export function XtermTerminal({
    * 全屏那份纯渲染（伪控制台输出按列宽硬换行，更宽的多余右侧留白无害）。
    */
   syncResize?: boolean
+  /** 尺寸变化回调（列×行），供外层状态栏展示；用 ref 持有避免 effect 依赖抖动 */
+  onResize?: (size: { cols: number; rows: number }) => void
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -95,6 +106,25 @@ export function XtermTerminal({
   // 同上：实例创建后角色（原位 / 全屏）不再变，捕获初始值即可
   const syncResizeRef = useRef(syncResize)
   syncResizeRef.current = syncResize
+  // 同上：尺寸回调每次渲染都是新引用，用 ref 持有，避免进 effect 依赖导致终端重建
+  const onResizeRef = useRef(onResize)
+  onResizeRef.current = onResize
+  /**
+   * 上次已上报的尺寸。
+   *
+   * 用于去重：ResizeObserver 会反复回调，即使尺寸没变也会调 `syncSize`；
+   * 每次真去 `pty_resize` 都会让 ConPTY 整屏重绘并补出空行（见 docs/pty-research.md §5.7）。
+   */
+  const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null)
+  /**
+   * `pty_resize` 重试令牌。
+   *
+   * 前端 `fit()` 与后端 `create` 是竞态的（实测 fit 常早 ~0.9s 到达，此时会话尚未注册
+   * → 后端返回 false）。每次上报生成一个新令牌，旧令牌的待重试任务自动作废，
+   * 避免发出过期尺寸。
+   */
+  const resizeGenRef = useRef(0)
+  const resizeRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // 创建终端：一个 toolCallId 一个实例
   useLayoutEffect(() => {
@@ -104,8 +134,11 @@ export function XtermTerminal({
     const term = new Terminal({
       // PTY 流里的 \n 直接换行（不依赖 \r\n）
       convertEol: true,
-      cursorBlink: false,
-      fontSize: 12,
+      // 外观对齐 demo：光标闪烁 + 竖条光标 + 略大字号与行高
+      cursorBlink: true,
+      cursorStyle: 'bar',
+      fontSize: 13,
+      lineHeight: 1.25,
       fontFamily: PTY_FONT,
       // 有界滚动缓冲：内存有界（§6.2，避免 cat 大文件把内存打爆）
       scrollback: 2000,
@@ -116,17 +149,59 @@ export function XtermTerminal({
     term.open(host)
     termRef.current = term
 
+    /**
+     * 把终端尺寸同步给后端伪控制台。
+     *
+     * ⚠️ 两条硬约束（否则会出现「第一次运行多出很多空行」）：
+     *   1. **容器还没布局（宽高为 0）时绝不 resize** —— 此时 `fit()` 量不出尺寸，
+     *      而 `term.cols/rows` 还是 xterm 默认的 80×24；把它推给后端就是用**错误的行数**
+     *      去 `ResizePseudoConsole`，而 ConPTY 在「屏幕已有内容」后 resize 会整屏重绘、
+     *      并按新行数在内容下方补空行（实测：空行数 = 新行数 − 内容行数）。
+     *      「程序启动后第一次运行终端」正是容器还处于「隐藏/未布局」的那次。
+     *   2. **尺寸没变就不重复上报** —— ResizeObserver 会反复回调，重复 resize 同样会白刷空行。
+     */
+    /**
+     * 把尺寸发给后端伪控制台；**未命中会话时短重试**。
+     *
+     * ⚠️ 为什么需要重试：前端 `fit()` 与后端 `create` 存在竞态。实测 fit 常早 ~0.9s 到达，
+     * 此时后端 PTY 会话还没注册、返回 false。若只发一次，尺寸就永远同步不过去，
+     * 伪控制台会停在 240×50 → 与真实尺寸不符 → ConPTY 每次重绘都补一堆空行。
+     * 后端同时把尺寸写进缓存（见 pty_session::pty_resize），双保险。
+     */
+    function sendResize(cols: number, rows: number) {
+      resizeGenRef.current += 1
+      const gen = resizeGenRef.current
+      const attempt = (n: number) => {
+        if (gen !== resizeGenRef.current || !termRef.current) return
+        invoke<boolean>('pty_resize', { toolCallId, cols, rows })
+          .then((ok) => {
+            // 未命中会话（后端 PTY 尚未注册，见上方说明）→ 稍后重试
+            if (!ok && n < 8) {
+              resizeRetryRef.current = setTimeout(() => attempt(n + 1), 120)
+            }
+          })
+          .catch(() => {})
+      }
+      attempt(0)
+    }
+
     const syncSize = () => {
+      const hostEl = hostRef.current
+      if (!hostEl || hostEl.clientWidth <= 0 || hostEl.clientHeight <= 0) return
       try {
         fit.fit()
       } catch {
-        // 容器尚未完成布局（宽高为 0）时 fit 会抛错，跳过即可
+        // 极少数情况下 fit 仍会抛错 → 本次跳过，等下一次 ResizeObserver 回调
+        return
       }
-      if (term.cols > 0 && term.rows > 0 && syncResizeRef.current) {
+      if (term.cols <= 0 || term.rows <= 0) return
+      const last = lastSizeRef.current
+      if (last && last.cols === term.cols && last.rows === term.rows) return
+      lastSizeRef.current = { cols: term.cols, rows: term.rows }
+      onResizeRef.current?.({ cols: term.cols, rows: term.rows })
+      if (syncResizeRef.current) {
         // 尺寸同步给后端伪控制台，否则折行位置与用户看到的终端不一致
-        invoke('pty_resize', { toolCallId, cols: term.cols, rows: term.rows }).catch(
-          () => {},
-        )
+        sendResize(term.cols, term.rows)
       }
     }
     syncSize()
@@ -149,11 +224,15 @@ export function XtermTerminal({
     }
 
     return () => {
+      // 作废进行中的 pty_resize 重试链（尺寸变更 / 卸载后不再上报）
+      resizeGenRef.current += 1
+      if (resizeRetryRef.current) clearTimeout(resizeRetryRef.current)
       observer?.disconnect()
       inputSub.dispose()
       term.dispose()
       termRef.current = null
       writtenRef.current = ''
+      lastSizeRef.current = null
     }
     // 只随 toolCallId 重建；stream 的变化由下方的增量 effect 处理
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -293,6 +372,8 @@ export function XtermTerminalBlock({
   const [fullscreen, setFullscreen] = useState(false)
   // ② 接管状态：本地镜像后端会话（命令已结束时后端返回 false → 复位）
   const [held, setHeld] = useState(false)
+  // 终端列×行（底部状态栏展示；由 XtermTerminal 的 fit() 回传）
+  const [size, setSize] = useState<{ cols: number; rows: number } | null>(null)
   const idleSeconds = useIdleSeconds(running, lastOutputAt)
 
   // Esc 退出全屏（与 CodeBlock / ImagePreview 等浮层保持一致的操作习惯）
@@ -310,10 +391,17 @@ export function XtermTerminalBlock({
     return (
       <div
         className={`execute-command-wrapper is-pty${isFull ? ' is-fullscreen' : ''}`}>
-        <div className="header">
-          <span className="title">{title}</span>
-          {status}
+        {/* 顶部窗口栏（对齐 xterm-demo：红黄绿圆点 + 标签页 + 右侧操作区） */}
+        <div className="xterm-titlebar">
+          <span className="xterm-dot xterm-dot--red" />
+          <span className="xterm-dot xterm-dot--yellow" />
+          <span className="xterm-dot xterm-dot--green" />
+          <span className="xterm-tab" title={cmd ?? title}>
+            <span className="xterm-tab__glyph">❯_</span>
+            {title}
+          </span>
           <div className="terminal-header-actions">
+            {status}
             {running && (
               <button
                 className={`terminal-ctl-btn pty-hold-btn${held ? ' is-held' : ''}`}
@@ -361,6 +449,7 @@ export function XtermTerminalBlock({
           running={running}
           toolCallId={toolCallId}
           syncResize={!isFull}
+          onResize={setSize}
         />
         {running ? (
           <>
@@ -380,6 +469,23 @@ export function XtermTerminalBlock({
         ) : (
           note && <div className="pty-hint pty-note">{note}</div>
         )}
+        {/* 底部状态栏（对齐 demo：左运行态 / 右终端尺寸） */}
+        <div className="xterm-statusbar">
+          <span className="xterm-status__group">
+            {running && (
+              <span className="xterm-badge xterm-badge--running">
+                {t('运行中')}
+              </span>
+            )}
+          </span>
+          <span className="xterm-status__group xterm-status__group--right">
+            {size && (
+              <span className="xterm-badge">
+                {size.cols}×{size.rows}
+              </span>
+            )}
+          </span>
+        </div>
       </div>
     )
   }
