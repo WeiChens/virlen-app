@@ -17,5 +17,5 @@ mod pty_session;
 pub(crate) use common::kill_running_command;
 pub(crate) use execute_command::execute_command_tool;
 pub(crate) use execute_script::execute_script_tool;
-// PTY 会话交互入口（供 `agent/mod.rs` 的 `pty_write` / `pty_resize` Tauri 命令转调）
-pub(crate) use pty_session::{pty_resize, pty_write};
+// PTY 会话交互入口（供 `agent/mod.rs` 的 `pty_write` / `pty_resize` / `pty_key` / `pty_set_held` Tauri 命令转调）
+pub(crate) use pty_session::{pty_key, pty_resize, pty_set_held, pty_write};

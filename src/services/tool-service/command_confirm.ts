@@ -231,6 +231,49 @@ export function createNativeCommandConfirmHandles(
     }
   })
 
+  // Step 2 ①：终端内确认（UI 组件 emit → 这里 resolve / reject）。
+  const offTermSubmit = toolInteractEvent.on(
+    'terminalConfirmSubmit',
+    (toolCallId, command) => {
+      const resolve = interactionResolve
+      // 只响应当前待确认的那个 toolCallId（多命令并发 / 跨 session 不互抄）
+      if (!resolve || toolCallId !== pendingToolCallId) return
+      const approvalId = pendingApprovalId
+      interactionResolve = null
+      interactionReject = null
+      pendingCommand = ''
+      pendingToolCallId = ''
+      pendingApprovalId = ''
+      track('interaction.command.confirm.result', {
+        approval_id: approvalId,
+        action: 'allow',
+        latency_ms: showTime ? Date.now() - showTime : undefined,
+      })
+      toolOutputStore.clearPendingConfirm(toolCallId)
+      // ⚠️ 必须回传命令正文：用户可能改过，只回「批准」会让 Rust 跑旧命令
+      resolve(JSON.stringify({ approved: true, command }))
+    },
+  )
+  const offTermCancel = toolInteractEvent.on(
+    'terminalConfirmCancel',
+    (toolCallId) => {
+      const reject = interactionReject
+      if (!reject || toolCallId !== pendingToolCallId) return
+      const approvalId = pendingApprovalId
+      interactionResolve = null
+      interactionReject = null
+      pendingApprovalId = ''
+      track('interaction.command.confirm.result', {
+        approval_id: approvalId,
+        action: 'reject',
+        latency_ms: showTime ? Date.now() - showTime : undefined,
+      })
+      track('interaction.cancel', { phase: 'command_confirm' })
+      toolOutputStore.clearPendingConfirm(toolCallId)
+      reject('cancelled')
+    },
+  )
+
   return {
     handler: async (_type: string, data: Record<string, any>) => {
       pendingCommand = data.command || ''
@@ -245,10 +288,24 @@ export function createNativeCommandConfirmHandles(
         risk: data.risk,
         // 原生路径同样留痕（sandbox:"off" 由 Rust 下发该标记）
         sandbox_bypass: data.sandboxBypass === true ? true : undefined,
+        // Step 2 ①：留痕呈现方式（terminal 由 Rust 判定并下发）
+        presentation: data.presentation,
       })
       return new Promise<ToolExecutorResponse>((resolve, reject) => {
         interactionResolve = resolve
         interactionReject = reject
+        // Step 2 ①：Rust 判定「走终端」时**不弹 modal**，改在该 toolCallId 的终端块里
+        // 渲染可编辑命令行。走哪条路只由 Rust 下发的 presentation 决定（前端不猜平台）。
+        if (data.presentation === 'terminal') {
+          toolOutputStore.setPendingConfirm(pendingToolCallId, {
+            command: pendingCommand,
+            risk: data.risk,
+            label: data.label,
+            hint: data.hint,
+            tips: data.tips,
+          })
+          return
+        }
         toolInteractEvent.emit(
           'showCommandConfirm',
           sessionId,
@@ -263,6 +320,8 @@ export function createNativeCommandConfirmHandles(
     cleanup: () => {
       offResolve()
       offReject()
+      offTermSubmit()
+      offTermCancel()
     },
   }
 }

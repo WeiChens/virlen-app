@@ -321,6 +321,10 @@ pub fn run() {
             // PTY 会话交互（Step 1：execute_command 换 ConPTY）
             agent::pty_write,
             agent::pty_resize,
+            // 命名控制键（Step 2 ③）
+            agent::pty_key,
+            // 接管 / 交还（Step 2 ②）
+            agent::pty_set_held,
             agent::agent_get_run_snapshot,
             agent::agent_clear_run_snapshot,
             agent::agent_dispose,

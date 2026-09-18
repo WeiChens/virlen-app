@@ -8,7 +8,7 @@
 //!   5. 统一运行器 run_command_native（沙盒优先，失败降级裸跑；`bypass_sandbox` 时直接裸跑）
 
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
-use serde_json::json;
+use serde_json::{json, Value};
 
 use super::pty_session;
 use std::collections::BTreeMap;
@@ -54,6 +54,39 @@ const STREAM_CAP: usize = 1024 * 1024;
 const STREAM_KEEP: usize = 256 * 1024;
 /// 发生截断时插在输出开头的提示。
 const STREAM_TRUNCATED_NOTE: &str = "（输出过长，早期内容已丢弃）\n";
+
+/// Step 2 ④：判定「超时前全程几乎无输出」的输出上限（trim 后字符数）。
+///
+/// 低于此值即认为命令卡在等待输入（密码 / `y/n` / REPL）——这是 PTY 交互场景里
+/// 最常见的超时原因，值得在结果里显式引导模型（与管道路径同样适用，见 D5）。
+const TIMEOUT_IDLE_HINT_MAX_OUTPUT: usize = 16;
+
+/// 超时且全程无输出时追加到结果末尾的引导文案（面向模型，非 i18n）。
+const TIMEOUT_IDLE_HINT: &str = "（该命令在超时前几乎没有产生输出，通常意味着它在等待输入：密码 / y/n 确认 / REPL。\
+可让用户直接在终端中键击输入，或适当放宽超时时间。）";
+
+/// ② 超时预算的心跳周期（接管冻结 / 预算扣减都按它推进，Step 2 ②）。
+const TICK: Duration = Duration::from_millis(250);
+
+/// ② 接管硬上限（对齐 WinkTerm 的 TTL，决策点 D3）：接管**不等于**无限期挂起。
+const PTY_HOLD_MAX: Duration = Duration::from_secs(30 * 60);
+
+/// ② 取接管上限。单测用 `HOLD_MAX_OVERRIDE_SECS` 缩短，避免真等 30 分钟。
+fn pty_hold_max() -> Duration {
+    #[cfg(test)]
+    {
+        let secs = HOLD_MAX_OVERRIDE_SECS.load(Ordering::SeqCst);
+        if secs > 0 {
+            return Duration::from_secs(secs);
+        }
+    }
+    PTY_HOLD_MAX
+}
+
+/// 仅测试用：可注入的接管上限（秒；0 = 用默认 `PTY_HOLD_MAX`）。
+#[cfg(test)]
+static HOLD_MAX_OVERRIDE_SECS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
 /// 有界追加**文本**：超过 `STREAM_CAP` 后丢弃最早的部分，只保留末尾 `STREAM_KEEP` 字节，
 /// 并在开头插入一次截断提示。按 UTF-8 边界对齐，避免把多字节字符切成两半。
@@ -656,6 +689,24 @@ fn process_terminal_output(raw: &str) -> String {
 
 // ==================== 5. 统一运行器 ====================
 
+/// 伪控制台当前是否可用（Step 2 ①：决定「终端内确认」是否走终端呈现）。
+///
+/// 试建一个伪控制台再立即丢弃 —— 判定与真正执行时一致（同一 API / 同一令牌与环境）。
+/// 不可用时 Rust **不下发** `presentation:"terminal"`，前端自动回落现有审批弹窗
+/// （语义不变，降级可见）。非 Windows 平台无 PTY → 恒 false。
+pub(super) fn pty_available() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use crate::sandbox::pty::{PseudoConsole, DEFAULT_COLS, DEFAULT_ROWS};
+        // 试建成功即可；PseudoConsole 的 Drop 会关掉它，不留句柄。
+        PseudoConsole::create(DEFAULT_COLS, DEFAULT_ROWS).is_ok()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
+}
+
 /// 统一运行器 —— 平台分发入口。
 ///
 /// - **Windows**：走 ConPTY 路径（`run_command_native_pty`）。命令在伪控制台里跑，于是
@@ -990,6 +1041,8 @@ async fn run_command_native_pipes(
         timeout_secs,
         &env_note,
         false, // 管道路径：stdout/stderr 分流，不是 PTY
+        None,  // 管道路径无 PTY 会话 → 无干预摘要
+        false,
     ))
 }
 
@@ -1017,7 +1070,6 @@ async fn run_command_native_pty(
     };
     use std::io::Read;
     use tokio::sync::mpsc;
-    use tokio::time::sleep;
 
     // 1) 伪控制台。建不起来就降级回匿名管道（保留改造前的实现作兜底）。
     let mut pty = match PseudoConsole::create(DEFAULT_COLS, DEFAULT_ROWS) {
@@ -1143,12 +1195,14 @@ async fn run_command_native_pty(
         let _ = g.assign_pid(pid);
     }
     let guard = guard.map(Arc::new);
-    if let Some(input) = pty.take_input() {
-        pty_session::register(
-            ctx.tool_call_id,
-            Arc::new(pty_session::PtySession::new(input, pty.raw_hpc())),
-        );
-    }
+    let pty_session_handle: Option<Arc<pty_session::PtySession>> =
+        if let Some(input) = pty.take_input() {
+            let session = Arc::new(pty_session::PtySession::new(input, pty.raw_hpc()));
+            pty_session::register(ctx.tool_call_id, session.clone());
+            Some(session)
+        } else {
+            None
+        };
 
     // 5) 输出：管道读端在 spawn_blocking 线程里阻塞 read，经 mpsc 回传
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<(String, String)>();
@@ -1196,8 +1250,12 @@ async fn run_command_native_pty(
     let mut got_exit = false;
     let mut killed_by_timeout = false;
     let mut killed_by_user = false;
-    // 超时计时器必须在循环外创建并固定，否则 select! 每轮新建 sleep，输出一刷屏就把计时归零。
-    let mut timeout_fut = Box::pin(sleep(Duration::from_secs((timeout_secs.max(1)) as u64)));
+    let mut hold_timed_out = false;
+    // ② 超时改为「预算 + 心跳」：Step 1 的单次 `sleep` 无法暂停，而接管时必须冻结预算。
+    //    预算剩多少是**显式状态**（好断言、好排查）；每 250ms 醒一次，对 CPU 无实质影响。
+    let mut remaining = Duration::from_secs(timeout_secs.max(1) as u64);
+    let mut held_elapsed = Duration::ZERO;
+    let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + TICK, TICK);
 
     loop {
         tokio::select! {
@@ -1227,13 +1285,34 @@ async fn run_command_native_pty(
             _ = wait_for_kill_request(&kill_requested), if !killed_by_timeout && !killed_by_user => {
                 killed_by_user = true;
             }
-            _ = &mut timeout_fut, if !killed_by_timeout && !killed_by_user => {
-                child.terminate();
-                if let Some(g) = &guard {
-                    g.terminate();
+            _ = tick.tick(), if !killed_by_timeout && !killed_by_user => {
+                // ② 接管期间冻结预算（人在慢慢输密码），只在非接管时扣减；
+                //    接管累计超过硬上限则强制终止（防止「忘了交还」无限期挂起）。
+                let held = pty_session_handle
+                    .as_ref()
+                    .map(|s| s.is_held())
+                    .unwrap_or(false);
+                if held {
+                    held_elapsed += TICK;
+                    if held_elapsed >= pty_hold_max() {
+                        child.terminate();
+                        if let Some(g) = &guard {
+                            g.terminate();
+                        }
+                        kill_process_tree(pid);
+                        killed_by_timeout = true;
+                        hold_timed_out = true;
+                    }
+                } else if remaining > TICK {
+                    remaining -= TICK;
+                } else {
+                    child.terminate();
+                    if let Some(g) = &guard {
+                        g.terminate();
+                    }
+                    kill_process_tree(pid);
+                    killed_by_timeout = true;
                 }
-                kill_process_tree(pid);
-                killed_by_timeout = true;
             }
             _ = ctx.cancel.cancelled(), if !killed_by_timeout && !killed_by_user => {
                 child.terminate();
@@ -1298,6 +1377,12 @@ async fn run_command_native_pty(
     if let Some(s) = pty_session::unregister(ctx.tool_call_id) {
         s.close_input();
     }
+    // ② 干预摘要（**只记计数**）：keys/enters/ctrlC 来自会话记账，heldSeconds 由预算心跳累计。
+    let mut interventions = pty_session_handle
+        .as_ref()
+        .map(|s| s.interventions())
+        .unwrap_or_default();
+    interventions.held_seconds = held_elapsed.as_secs();
     unregister_running_command(ctx.tool_call_id);
     let exit_code = if killed_by_timeout || killed_by_user {
         None
@@ -1336,6 +1421,8 @@ async fn run_command_native_pty(
         timeout_secs,
         &env_note,
         true,
+        Some(&interventions),
+        hold_timed_out,
     ))
 }
 
@@ -1343,6 +1430,13 @@ async fn run_command_native_pty(
 ///
 /// `pty`：是否来自伪控制台路径。uiData 里加这个标记后，UI 可据此走 xterm 单流渲染
 /// （PTY 下 stdout/stderr 已合并，`[标准错误]` 分段与 `stream` 字段失去意义，§6.2）。
+///
+/// `waitReason`（Step 2 ④）：`exit` | `timeout` | `cancelled`。由结束原因直接推导，
+/// **管道路径也下发**（D5：语义统一，UI 与模型侧都不必按路径分叉）。
+///
+/// `interventions`（Step 2 ②）：用户干预摘要（**只记计数，不记内容**，D4）。
+/// PTY 路径传 `Some`；管道路径 / 无会话时传 `None`（则 uiData 不含该字段）。
+/// `hold_timed_out`：是否因接管到达硬上限被终止（`waitReason=timeout` 的子情况）。
 fn build_command_result(
     stdout: String,
     stderr: String,
@@ -1352,7 +1446,17 @@ fn build_command_result(
     timeout_secs: i64,
     env_note: &str,
     pty: bool,
+    interventions: Option<&pty_session::InterventionCounts>,
+    hold_timed_out: bool,
 ) -> NativeToolOutcome {
+    // 结束原因：用户终止 / 预算耗尽（含接管到顶）/ 进程自行退出
+    let wait_reason = if killed_by_user {
+        "cancelled"
+    } else if killed_by_timeout {
+        "timeout"
+    } else {
+        "exit"
+    };
     let mut result = String::new();
     if !env_note.is_empty() {
         result.push_str(env_note);
@@ -1375,6 +1479,13 @@ fn build_command_result(
         result.push_str("[标准错误]\n");
         result.push_str(&process_terminal_output(&stderr));
     }
+    // ④：超时且全程几乎无输出 → 追加面向模型的引导（等待输入是最常见的原因）
+    if wait_reason == "timeout"
+        && stdout.trim().chars().count() <= TIMEOUT_IDLE_HINT_MAX_OUTPUT
+    {
+        result.push('\n');
+        result.push_str(TIMEOUT_IDLE_HINT);
+    }
 
     const MAX: usize = 32000;
     let out = if result.len() > MAX {
@@ -1391,12 +1502,34 @@ fn build_command_result(
 
     NativeToolOutcome::Value {
         content: out,
-        ui_data: Some(json!({
-            "stdout": stdout,
-            "stderr": stderr,
-            "exitCode": exit_code,
-            "pty": pty,
-        })),
+        ui_data: Some({
+            let mut ui = json!({
+                "stdout": stdout,
+                "stderr": stderr,
+                "exitCode": exit_code,
+                "pty": pty,
+                // Step 2 ④：结束原因（exit | timeout | cancelled）
+                "waitReason": wait_reason,
+            });
+            if let Value::Object(map) = &mut ui {
+                // ② 用户干预摘要（只记计数，不记内容，D4）
+                if let Some(iv) = interventions {
+                    map.insert(
+                        "userInterventions".into(),
+                        json!({
+                            "keys": iv.keys,
+                            "enters": iv.enters,
+                            "ctrlC": iv.ctrl_c,
+                            "heldSeconds": iv.held_seconds,
+                        }),
+                    );
+                }
+                if hold_timed_out {
+                    map.insert("holdTimedOut".into(), Value::Bool(true));
+                }
+            }
+            ui
+        }),
     }
 }
 
@@ -1827,6 +1960,8 @@ async fn run_command_sandboxed(
         timeout_secs,
         &env_note,
         false, // 管道路径：stdout/stderr 分流，不是 PTY
+        None,  // 管道路径无 PTY 会话 → 无干预摘要
+        false,
     ))
 }
 
@@ -2209,6 +2344,8 @@ mod tests {
             30,
             "终端环境: powershell · 写隔离",
             true,
+            None,
+            false,
         );
         match pty {
             NativeToolOutcome::Value { content, ui_data } => {
@@ -2231,6 +2368,8 @@ mod tests {
             30,
             "",
             false,
+            None,
+            false,
         );
         match pipes {
             NativeToolOutcome::Value { content, ui_data } => {
@@ -2239,5 +2378,334 @@ mod tests {
             }
             other => panic!("expected Value, got {other:?}"),
         }
+    }
+
+    /// Step 2 ④：`waitReason` 三个取值 + 管道路径同样下发 + 超时无输出的模型引导。
+    #[test]
+    fn test_build_command_result_wait_reason() {
+        // exit：进程自行退出
+        let exit = build_command_result(
+            "ok\n".into(),
+            String::new(),
+            Some(0),
+            false,
+            false,
+            30,
+            "",
+            false,
+            None,
+            false,
+        );
+        match exit {
+            NativeToolOutcome::Value { content, ui_data } => {
+                let ui = ui_data.expect("ui_data");
+                assert_eq!(ui["waitReason"], serde_json::json!("exit"));
+                // D5：管道路径也要下发同名 waitReason
+                assert_eq!(ui["pty"], serde_json::json!(false));
+                assert!(!content.contains("等待输入"));
+            }
+            other => panic!("expected Value, got {other:?}"),
+        }
+
+        // cancelled：用户主动终止
+        let cancelled = build_command_result(
+            "partial\n".into(),
+            String::new(),
+            None,
+            true,
+            false,
+            30,
+            "",
+            true,
+            None,
+            false,
+        );
+        match cancelled {
+            NativeToolOutcome::Value { ui_data, .. } => {
+                assert_eq!(
+                    ui_data.expect("ui_data")["waitReason"],
+                    serde_json::json!("cancelled")
+                );
+            }
+            other => panic!("expected Value, got {other:?}"),
+        }
+
+        // timeout + 全程无输出 → timeout，且追加「疑似等待输入」引导
+        let idle_timeout = build_command_result(
+            String::new(),
+            String::new(),
+            None,
+            false,
+            true,
+            5,
+            "",
+            true,
+            None,
+            false,
+        );
+        match idle_timeout {
+            NativeToolOutcome::Value { content, ui_data } => {
+                assert_eq!(
+                    ui_data.expect("ui_data")["waitReason"],
+                    serde_json::json!("timeout")
+                );
+                assert!(
+                    content.contains("等待输入"),
+                    "超时无输出应引导等待输入: {content}"
+                );
+            }
+            other => panic!("expected Value, got {other:?}"),
+        }
+
+        // timeout + 有持续输出（超过阈值）→ 不追加引导
+        let busy_timeout = build_command_result(
+            "下载中...正在解压...持续输出内容已超过引导阈值\n".into(),
+            String::new(),
+            None,
+            false,
+            true,
+            5,
+            "",
+            true,
+            None,
+            false,
+        );
+        match busy_timeout {
+            NativeToolOutcome::Value { content, .. } => {
+                assert!(!content.contains("等待输入"), "有输出时不应引导: {content}");
+            }
+            other => panic!("expected Value, got {other:?}"),
+        }
+    }
+
+    /// 仅测试用：串行化“接管”相关用例，避免 `HOLD_MAX_OVERRIDE_SECS` 全局态互踩。
+    /// 其余 PTY 用例不接管（held=false）→ 不读该 override，无需锁。
+    static HOLD_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+        LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+    /// Step 2 ②：接管期间冻结超时预算（人在慢慢输密码，不该被超时杀掉）。
+    #[tokio::test]
+    async fn test_pty_hold_freezes_timeout() {
+        use crate::agent::bridge::AgentBridgeState;
+        use crate::agent::cancellation::CancellationToken;
+        use crate::agent::event_sink::TestEventSink;
+        use crate::agent::native_tools::execute_native_tool;
+        use crate::agent::native_tools::test_util::test_security;
+
+        let _guard = HOLD_TEST_LOCK.lock().await;
+        let dir =
+            std::env::temp_dir().join(format!("virlen_pty_hold_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut sec = test_security(&dir.to_string_lossy());
+        sec.sandbox_mode = "readonly".to_string();
+        let sink = TestEventSink::new();
+        let bridge = AgentBridgeState::default();
+        let cancel = CancellationToken::new();
+        let tool_call_id = "tc_hold_freeze";
+        let ctx = NativeToolCtx {
+            session_id: "s_hold_freeze",
+            tool_call_id,
+            cancel: &cancel,
+            sink: &sink,
+            bridge: &bridge,
+            security: &sec,
+        };
+
+        // 会话一注册就接管（全程冻结）。timeout=1s 而命令跑 2.5s：
+        // 若不冻结，1s 就会被杀（waitReason=timeout）；冻结后命令自然退出（waitReason=exit）。
+        let holder = tokio::spawn(async move {
+            for _ in 0..200 {
+                if pty_session::pty_set_held(tool_call_id, true) {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            false
+        });
+
+        let started = std::time::Instant::now();
+        let args = json!({
+            "command": "Start-Sleep -Milliseconds 2500; Write-Output 'HOLD_OK'",
+            "timeout": 1
+        });
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(30),
+            execute_native_tool(&ctx, "execute_command", &args),
+        )
+        .await
+        .expect("execute_command 不应挂死")
+        .expect("execute_command 不应报错");
+        let elapsed = started.elapsed();
+        assert!(holder.await.unwrap(), "会话应已注册，pty_set_held 才能命中");
+
+        assert!(
+            elapsed >= Duration::from_millis(2200),
+            "冻结后总耗时应接近命令真实时长，实际 {elapsed:?}"
+        );
+        match outcome {
+            NativeToolOutcome::Value { content, ui_data } => {
+                let ui = ui_data.expect("ui_data");
+                assert_eq!(
+                    ui["waitReason"],
+                    serde_json::json!("exit"),
+                    "接管期间不应超时: {content}"
+                );
+                assert!(content.contains("HOLD_OK"), "content: {content}");
+                let held = ui["userInterventions"]["heldSeconds"]
+                    .as_u64()
+                    .unwrap_or(0);
+                assert!(held >= 2, "heldSeconds 应 >= 2，实际 {held}");
+            }
+            other => panic!("expected Value, got {other:?}"),
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Step 2 ②：接管到达硬上限 → 强制终止，`waitReason=timeout` 且 `holdTimedOut=true`。
+    #[tokio::test]
+    async fn test_pty_hold_hard_cap() {
+        use crate::agent::bridge::AgentBridgeState;
+        use crate::agent::cancellation::CancellationToken;
+        use crate::agent::event_sink::TestEventSink;
+        use crate::agent::native_tools::execute_native_tool;
+        use crate::agent::native_tools::test_util::test_security;
+
+        let _guard = HOLD_TEST_LOCK.lock().await;
+        // 把 30min 硬上限缩短到 1s（仅测试）
+        HOLD_MAX_OVERRIDE_SECS.store(1, Ordering::SeqCst);
+
+        let dir = std::env::temp_dir().join(format!("virlen_pty_cap_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut sec = test_security(&dir.to_string_lossy());
+        sec.sandbox_mode = "readonly".to_string();
+        let sink = TestEventSink::new();
+        let bridge = AgentBridgeState::default();
+        let cancel = CancellationToken::new();
+        let tool_call_id = "tc_hold_cap";
+        let ctx = NativeToolCtx {
+            session_id: "s_hold_cap",
+            tool_call_id,
+            cancel: &cancel,
+            sink: &sink,
+            bridge: &bridge,
+            security: &sec,
+        };
+
+        let holder = tokio::spawn(async move {
+            for _ in 0..200 {
+                if pty_session::pty_set_held(tool_call_id, true) {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            false
+        });
+
+        let started = std::time::Instant::now();
+        // timeout=300s，但接管到顶（1s）应远早于此
+        let args = json!({ "command": "Start-Sleep -Seconds 60", "timeout": 300 });
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(20),
+            execute_native_tool(&ctx, "execute_command", &args),
+        )
+        .await
+        .expect("execute_command 不应挂死")
+        .expect("execute_command 不应报错");
+        let elapsed = started.elapsed();
+        assert!(holder.await.unwrap(), "会话应已注册，pty_set_held 才能命中");
+        HOLD_MAX_OVERRIDE_SECS.store(0, Ordering::SeqCst);
+
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "到顶应尽快终止，实际 {elapsed:?}"
+        );
+        match outcome {
+            NativeToolOutcome::Value { content, ui_data } => {
+                let ui = ui_data.expect("ui_data");
+                assert_eq!(ui["waitReason"], serde_json::json!("timeout"));
+                assert_eq!(ui["holdTimedOut"], serde_json::json!(true));
+                assert!(content.contains("超时"), "content: {content}");
+            }
+            other => panic!("expected Value, got {other:?}"),
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Step 2 ②：干预计数正确，且**干预摘要不含用户输入正文**（D4 回归保护）。
+    ///
+    /// 命令不读 stdin（Start-Sleep）→ 控制台不会回显，因此 uiData 全串都应无正文；
+    /// 若将来有人把正文塞进干预摘要，本用例立即失败。
+    #[tokio::test]
+    async fn test_pty_interventions_counted() {
+        use crate::agent::bridge::AgentBridgeState;
+        use crate::agent::cancellation::CancellationToken;
+        use crate::agent::event_sink::TestEventSink;
+        use crate::agent::native_tools::execute_native_tool;
+        use crate::agent::native_tools::test_util::test_security;
+
+        let dir =
+            std::env::temp_dir().join(format!("virlen_pty_iv_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut sec = test_security(&dir.to_string_lossy());
+        sec.sandbox_mode = "readonly".to_string();
+        let sink = TestEventSink::new();
+        let bridge = AgentBridgeState::default();
+        let cancel = CancellationToken::new();
+        let tool_call_id = "tc_interv";
+        let ctx = NativeToolCtx {
+            session_id: "s_interv",
+            tool_call_id,
+            cancel: &cancel,
+            sink: &sink,
+            bridge: &bridge,
+            security: &sec,
+        };
+
+        const SECRET: &str = "SECRET_TOKEN_123";
+        let writer = tokio::spawn(async move {
+            for _ in 0..200 {
+                if pty_session::pty_write(tool_call_id, SECRET) {
+                    pty_session::pty_write(tool_call_id, "\r");
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            false
+        });
+
+        let args = json!({
+            "command": "Start-Sleep -Milliseconds 1500; Write-Output 'DONE'",
+            "timeout": 30
+        });
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(30),
+            execute_native_tool(&ctx, "execute_command", &args),
+        )
+        .await
+        .expect("execute_command 不应挂死")
+        .expect("execute_command 不应报错");
+        assert!(writer.await.unwrap(), "pty_write 应命中会话");
+
+        match outcome {
+            NativeToolOutcome::Value { content, ui_data } => {
+                assert!(content.contains("DONE"), "content: {content}");
+                let ui = ui_data.expect("ui_data");
+                let iv = &ui["userInterventions"];
+                assert_eq!(iv["keys"], serde_json::json!(2));
+                assert_eq!(iv["enters"], serde_json::json!(1));
+                assert_eq!(iv["ctrlC"], serde_json::json!(0));
+                // D4：只记计数，不记正文
+                let ui_json = serde_json::to_string(&ui).unwrap();
+                assert!(
+                    !ui_json.contains(SECRET),
+                    "uiData 不应包含用户输入正文（D4）: {ui_json}"
+                );
+            }
+            other => panic!("expected Value, got {other:?}"),
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

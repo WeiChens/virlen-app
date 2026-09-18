@@ -8,8 +8,8 @@ use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
 use serde_json::{json, Value};
 
 use super::common::{
-    classify_command, needs_command_approval, risk_info, run_command_native, sandbox_mode,
-    with_bypass_hint, SandboxMode,
+    classify_command, needs_command_approval, pty_available, risk_info, run_command_native,
+    sandbox_mode, with_bypass_hint, SandboxMode,
 };
 
 /// 执行 shell 命令（原生）
@@ -49,6 +49,14 @@ pub(crate) async fn execute_command_tool(
         );
     }
 
+    // confirm:"terminal" → 终端内确认（Step 2 ①，WinkTerm `write_command` 的 L2 等价物）。
+    // 仅当伪控制台可用时才真正走终端呈现；否则前端自动回落现有弹窗（降级可见）。
+    let confirm_terminal = arg_str(args, "confirm")
+        .map(|s| s.trim().eq_ignore_ascii_case("terminal"))
+        .unwrap_or(false);
+    // ⚠️ Rust 是「是否走终端」的唯一判定方（前端不猜平台，避免三平台 / 降级行为分叉）。
+    let terminal_presentation = confirm_terminal && pty_available();
+
     let risk = classify_command(&cmd_str);
     let mode = ctx.security.approval_mode.as_str();
     let needs_approval = needs_command_approval(mode, risk, bypass_sandbox);
@@ -80,6 +88,11 @@ pub(crate) async fn execute_command_tool(
                 // 供弹窗高亮 / 埋点识别（文案已在 hint 里）
                 map.insert("sandboxBypass".into(), Value::Bool(true));
             }
+            if terminal_presentation {
+                // Step 2 ①：让前端在该 toolCallId 的终端块里渲染「待确认命令行」，
+                // 而不是弹 modal。只加字段不加类型（桥载荷向后兼容）。
+                map.insert("presentation".into(), Value::String("terminal".into()));
+            }
         }
 
         let payload = ctx
@@ -90,9 +103,21 @@ pub(crate) async fn execute_command_tool(
 
         match BridgeInteractionResult::parse(&payload) {
             BridgeInteractionResult::Value { content, .. } => {
-                // 用户允许 → 执行命令；其他文本（如 `[error] xxx`）原样返回
-                let normalized = content.trim().to_lowercase();
-                if normalized == "approved" || normalized == "允许" || content == "ok" {
+                // 用户允许 → 执行命令；其他文本（如 `[error] xxx`）原样返回。
+                // 终端内确认会回传 JSON（可能带用户改后的命令），弹窗路径仍是旧白名单。
+                let (approved, exec_cmd) = parse_approval(&content, &cmd_str);
+                if approved {
+                    // 用户本人就是审批人 → 不二次审批；但改后的命令**必须重新分类**
+                    // （风险升高只埋点、不记正文，见 §9 / §7 #20），且仍走沙盒 + PTY 同一条路径。
+                    if exec_cmd != cmd_str {
+                        let new_risk = classify_command(&exec_cmd);
+                        if risk_rank(new_risk) > risk_rank(risk) {
+                            crate::telemetry::track(
+                                "interaction.command.confirm.escalated",
+                                json!({ "from": risk, "to": new_risk }),
+                            );
+                        }
+                    }
                     if bypass_sandbox {
                         // 审计：用户批准了「绕过沙盒」执行（不记录命令正文，遵循 §9 密钥/正文不采集）
                         crate::telemetry::track(
@@ -100,7 +125,7 @@ pub(crate) async fn execute_command_tool(
                             json!({ "tool_name": "execute_command", "risk": risk, "status": "approved" }),
                         );
                     }
-                    return run_command_native(ctx, &cmd_str, timeout, bypass_sandbox).await;
+                    return run_command_native(ctx, &exec_cmd, timeout, bypass_sandbox).await;
                 }
                 return Ok(NativeToolOutcome::Value {
                     content,
@@ -119,13 +144,64 @@ pub(crate) async fn execute_command_tool(
     }
 }
 
+/// 命令风险等级排序（仅用于「编辑后风险升高」的埋点判定，不参与审批策略）。
+fn risk_rank(risk: &str) -> u8 {
+    match risk {
+        "dangerous" => 2,
+        "install" => 1,
+        _ => 0,
+    }
+}
+
+/// 解析审批回传文本，返回 `(是否放行, 实际要执行的命令)`。
+///
+/// - `content` 以 `{` 开头 → 先按 JSON 解析（终端内确认会回
+///   `{"approved":true,"command":"<用户改后的命令>"}`）；
+/// - 否则走旧白名单（`approved` / `允许` / `ok`）—— **现有弹窗路径行为完全不受影响**。
+///
+/// 终端路径必须回传命令正文：用户可能已经改过，只回「批准」会让 Rust 跑**旧命令**，
+/// 直接违背「执行的是改后的版本」这条语义；命令正文本来就已经在桥里下发过。
+fn parse_approval(content: &str, original: &str) -> (bool, String) {
+    let trimmed = content.trim();
+    if trimmed.starts_with('{') {
+        if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+            let approved = v
+                .get("approved")
+                .and_then(|b| b.as_bool())
+                .unwrap_or(false);
+            if approved {
+                let cmd = v
+                    .get("command")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                return (
+                    true,
+                    if cmd.is_empty() {
+                        original.to_string()
+                    } else {
+                        cmd
+                    },
+                );
+            }
+            return (false, original.to_string());
+        }
+    }
+    let normalized = trimmed.to_lowercase();
+    if normalized == "approved" || normalized == "允许" || content == "ok" {
+        return (true, original.to_string());
+    }
+    (false, original.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::agent::bridge::AgentBridgeState;
     use crate::agent::cancellation::CancellationToken;
     use crate::agent::event_sink::TestEventSink;
-    use crate::agent::native_tools::test_util::{is_process_alive, test_security_bare};
+    use crate::agent::native_tools::test_util::{is_process_alive, test_security, test_security_bare};
     use crate::agent::native_tools::execute_native_tool;
     use std::time::Duration;
 
@@ -418,6 +494,224 @@ mod tests {
             .await
             .expect_err("readonly + sandbox:off 必须被拒绝");
         assert!(err.contains("只读模式"), "unexpected error: {err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Step 2 ①：解析审批回传（JSON 优先 → 旧白名单兼容）。
+    #[test]
+    fn test_parse_approval() {
+        // JSON：批准 + 改后命令
+        assert_eq!(
+            parse_approval("{\"approved\":true,\"command\":\"echo hi\"}", "orig"),
+            (true, "echo hi".to_string())
+        );
+        // JSON：批准但没带命令 → 用原命令
+        assert_eq!(
+            parse_approval("{\"approved\":true}", "orig"),
+            (true, "orig".to_string())
+        );
+        // JSON：未批准
+        assert_eq!(
+            parse_approval("{\"approved\":false,\"command\":\"x\"}", "orig"),
+            (false, "orig".to_string())
+        );
+        // JSON 解析失败 → 回退白名单（也不放行乱码）
+        assert_eq!(parse_approval("{not json}", "orig"), (false, "orig".to_string()));
+        // 旧白名单（弹窗路径，行为不变）
+        assert_eq!(parse_approval("approved", "orig"), (true, "orig".to_string()));
+        assert_eq!(parse_approval("  Approved ", "orig"), (true, "orig".to_string()));
+        assert_eq!(parse_approval("允许", "orig"), (true, "orig".to_string()));
+        assert_eq!(parse_approval("ok", "orig"), (true, "orig".to_string()));
+        // 其他文本原样返回（不放行）
+        assert_eq!(parse_approval("[error] x", "orig"), (false, "orig".to_string()));
+    }
+
+    /// Step 2 ①：编辑成危险 / 安装命令 → 风险等级升高（仅埋点，不二次审批）。
+    #[test]
+    fn test_terminal_confirm_reclassify_escalation() {
+        assert_eq!(risk_rank("safe"), 0);
+        assert_eq!(risk_rank("install"), 1);
+        assert_eq!(risk_rank("dangerous"), 2);
+        let safe = risk_rank(classify_command("Write-Output hi"));
+        assert!(risk_rank(classify_command("Remove-Item -Recurse -Force X")) > safe);
+        assert!(risk_rank(classify_command("npm install")) > safe);
+    }
+
+    /// 模拟「前端在终端块里确认」：等 `agent:user-interaction-request` 事件，
+    /// 捕获其 `data`，并回传给定 payload。返回 (任务句柄, 捕获到的 data)。
+    fn spawn_terminal_confirmer(
+        sink: std::sync::Arc<TestEventSink>,
+        bridge: std::sync::Arc<AgentBridgeState>,
+        response_payload: serde_json::Value,
+    ) -> (
+        tokio::task::JoinHandle<bool>,
+        std::sync::Arc<std::sync::Mutex<serde_json::Value>>,
+    ) {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(serde_json::Value::Null));
+        let captured_out = captured.clone();
+        let handle = tokio::spawn(async move {
+            for _ in 0..600 {
+                let found = {
+                    let evs = sink.events.lock().unwrap();
+                    evs.iter().find_map(|(name, payload)| {
+                        if name == "agent:user-interaction-request" {
+                            Some((
+                                payload
+                                    .get("requestId")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                payload
+                                    .get("data")
+                                    .cloned()
+                                    .unwrap_or(serde_json::Value::Null),
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                };
+                if let Some((rid, data)) = found {
+                    if rid.is_empty() {
+                        tokio::time::sleep(Duration::from_millis(25)).await;
+                        continue;
+                    }
+                    *captured.lock().unwrap() = data;
+                    crate::agent::bridge::handle_user_interaction_response(
+                        &bridge,
+                        &rid,
+                        response_payload.clone(),
+                    )
+                    .await;
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            false
+        });
+        (handle, captured_out)
+    }
+
+    /// Step 2 ①：终端内确认——回传的 JSON 带「改后的命令」，必须执行改后的版本。
+    #[tokio::test]
+    async fn test_execute_command_terminal_confirm_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("virlen_confirm_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // readonly 避开缓存探测；approval_mode=all 强制走审批，便于驱动交互。
+        let mut sec = test_security(&dir.to_string_lossy());
+        sec.sandbox_mode = "readonly".to_string();
+        sec.approval_mode = "all".to_string();
+        let sink = std::sync::Arc::new(TestEventSink::new());
+        let bridge = std::sync::Arc::new(AgentBridgeState::default());
+        let cancel = CancellationToken::new();
+        let ctx = NativeToolCtx {
+            session_id: "s_confirm",
+            tool_call_id: "tc_confirm",
+            cancel: &cancel,
+            sink: sink.as_ref(),
+            bridge: bridge.as_ref(),
+            security: &sec,
+        };
+
+        let (confirmer, captured) = spawn_terminal_confirmer(
+            sink.clone(),
+            bridge.clone(),
+            json!({
+                "__kind": "value",
+                "value": "{\"approved\":true,\"command\":\"Write-Output 'EDITED_OK'\"}"
+            }),
+        );
+
+        let args = json!({
+            "command": "Write-Output 'ORIGINAL'",
+            "confirm": "terminal",
+            "timeout": 30
+        });
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(30),
+            execute_native_tool(&ctx, "execute_command", &args),
+        )
+        .await
+        .expect("execute_command 不应挂死")
+        .expect("execute_command 不应报错");
+        assert!(confirmer.await.unwrap(), "应出现用户交互请求");
+
+        match outcome {
+            NativeToolOutcome::Value { content, .. } => {
+                assert!(content.contains("EDITED_OK"), "应执行用户改后的命令: {content}");
+                assert!(
+                    !content.contains("ORIGINAL"),
+                    "不应执行原始命令: {content}"
+                );
+            }
+            other => panic!("expected Value, got {other:?}"),
+        }
+
+        // PTY 可用（Windows）→ 交互 data 必须带 presentation:"terminal"；
+        // 否则（非 Windows / 伪控制台不可用）必须**不下发**，让前端回落弹窗。
+        let d = captured.lock().unwrap().clone();
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            d.get("presentation").and_then(|v| v.as_str()),
+            Some("terminal"),
+            "PTY 可用时应下发 presentation=terminal: {d}"
+        );
+        #[cfg(not(target_os = "windows"))]
+        assert!(
+            d.get("presentation").is_none(),
+            "无 PTY 时不得下发 presentation（降级回弹窗）: {d}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Step 2 ①：终端内确认取消（Esc / Ctrl+C）→ 工具返回 `[User cancelled]`。
+    #[tokio::test]
+    async fn test_execute_command_terminal_confirm_cancelled() {
+        let dir = std::env::temp_dir().join(format!("virlen_confirm_c_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut sec = test_security(&dir.to_string_lossy());
+        sec.sandbox_mode = "readonly".to_string();
+        sec.approval_mode = "all".to_string();
+        let sink = std::sync::Arc::new(TestEventSink::new());
+        let bridge = std::sync::Arc::new(AgentBridgeState::default());
+        let cancel = CancellationToken::new();
+        let ctx = NativeToolCtx {
+            session_id: "s_confirm_c",
+            tool_call_id: "tc_confirm_c",
+            cancel: &cancel,
+            sink: sink.as_ref(),
+            bridge: bridge.as_ref(),
+            security: &sec,
+        };
+
+        let (confirmer, _captured) = spawn_terminal_confirmer(
+            sink.clone(),
+            bridge.clone(),
+            json!({ "__kind": "cancelled" }),
+        );
+
+        let args = json!({
+            "command": "Write-Output 'SHOULD_NOT_RUN'",
+            "confirm": "terminal",
+            "timeout": 30
+        });
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(30),
+            execute_native_tool(&ctx, "execute_command", &args),
+        )
+        .await
+        .expect("execute_command 不应挂死")
+        .expect("execute_command 不应报错");
+        assert!(confirmer.await.unwrap(), "应出现用户交互请求");
+
+        match outcome {
+            NativeToolOutcome::Value { content, .. } => {
+                assert_eq!(content, "[User cancelled]");
+            }
+            other => panic!("expected Value, got {other:?}"),
+        }
+
         std::fs::remove_dir_all(&dir).ok();
     }
 }

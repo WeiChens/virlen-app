@@ -99,6 +99,27 @@ pub fn pty_resize(tool_call_id: String, cols: u16, rows: u16) -> bool {
     native_tools::pty_resize(&tool_call_id, cols, rows)
 }
 
+/// 向正在运行的 PTY 会话发送**命名控制键**（Step 2 ③）。
+///
+/// 前端只发键名（如 `["enter"]` / `["ctrl+c"]` / `["up"]`），映射表在 Rust 侧
+/// （`pty_session::key_sequence`）—— 命名→字节只有一份实现（铁律 1 的同类问题）。
+/// 未知键名逐个跳过；返回是否至少写入了一个有效键（会话不存在 / 全部无效 → false）。
+#[tauri::command]
+pub fn pty_key(tool_call_id: String, keys: Vec<String>) -> bool {
+    native_tools::pty_key(&tool_call_id, &keys)
+}
+
+/// 设置 PTY 会话的「接管」状态（Step 2 ②）。
+///
+/// `held=true` 时运行器**冻结超时预算**（用户慢慢输密码 / 走 OAuth 跳转，不该被超时杀掉）；
+/// `held=false`（交还）恢复按剩余预算继续。接管**不等于**取消：
+/// `agent_kill_command` / `agent_cancel` 在接管期间仍可用。
+/// 返回是否命中会话（命令已结束 → false，前端据此复位按钮）。
+#[tauri::command]
+pub fn pty_set_held(tool_call_id: String, held: bool) -> bool {
+    native_tools::pty_set_held(&tool_call_id, held)
+}
+
 /// 获取当前会话的运行快照
 #[tauri::command]
 pub fn agent_get_run_snapshot(

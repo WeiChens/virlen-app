@@ -8,6 +8,7 @@ import { processTerminalOutput } from '@/infrastructure/tools/execute/common'
 import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
 import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
 import { XtermTerminalBlock } from './XtermTerminal'
+import { TerminalConfirmBlock } from './TerminalConfirmBlock'
 
 /**
  * 终端输出块 —— execute_command / execute_script 的运行态与完成态共用。
@@ -320,6 +321,20 @@ export function TerminalView({
    * 完成态以后端**权威**字段 `uiData.pty` 为准 —— 伪控制台不可用时后端会降级回匿名管道
    * 并下发 `pty: false`，此时自动回到 `<pre>` 渲染。
    */
+  // Step 2 ①：终端内确认 —— 命令尚未执行，在终端块里渲染可编辑命令行（不渲染 xterm）。
+  // ⚠️ 必须放在所有 hook 之后：pendingConfirm 出现 / 消失不能改变 hook 调用数量。
+  if (running && entry?.pendingConfirm) {
+    return (
+      <div className="tool-cmd-running">
+        <TerminalConfirmBlock
+          toolCallId={toolCallId}
+          title={title}
+          info={entry.pendingConfirm}
+        />
+      </div>
+    )
+  }
+
   const isPty = running ? !!entry?.pty : !!(message?.uiData?.pty ?? entry?.pty)
   if (isPty) {
     // 完成态的流：优先用后端原样回传的 stdout（保留 ANSI，xterm 需要原始流）；
@@ -339,6 +354,7 @@ export function TerminalView({
           stream={stream}
           running={running}
           toolCallId={toolCallId}
+          lastOutputAt={entry?.lastOutputAt}
           status={
             running ? undefined : (
               <TerminalStatus

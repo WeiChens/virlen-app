@@ -195,6 +195,111 @@
       background: rgba(255, 255, 255, 0.18);
     }
   }
+
+  /* 按键条（Step 2 ③）：命名控制键，紧凑横排 */
+  .pty-key-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  /* 接管按钮（Step 2 ②）：接管态高亮（提示「超时已暂停」） */
+  .pty-hold-btn.is-held {
+    background: var(--terminal-note, #e5c07b);
+    color: #1a1a1a;
+  }
+
+  /* 「疑似等待输入」提示（Step 2 ④）：与常规提示同排但用警示色 */
+  .pty-idle-hint {
+    color: var(--terminal-note, #e5c07b);
+  }
+}
+
+/* ==================== 终端内确认块（Step 2 ①） ====================
+   与运行态**显著区分**（§7 #16）：独立底色 + 「尚未执行」徐标 + 无终端光标，
+   让用户不会误以为「这是 AI 已经跑过的结果」。 */
+.execute-command-wrapper.is-confirm {
+  /* 确认态用头部底色（比终端正文底色更浅），与黑色终端正文一眼可分 */
+  background-color: var(--terminal-header-bg, #242f3a);
+  width: min(880px, 92%);
+
+  .terminal-status.confirm {
+    color: var(--terminal-note, #e5c07b);
+  }
+
+  .pty-confirm-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+  }
+
+  .pty-confirm-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .pty-confirm-badge {
+    padding: 1px 8px;
+    border-radius: 4px;
+    font-size: var(--font-size-xs);
+    background: var(--terminal-note, #e5c07b);
+    color: #1a1a1a;
+    user-select: none;
+  }
+
+  .pty-confirm-risk {
+    font-size: var(--font-size-xs);
+    color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
+  }
+
+  .pty-confirm-input {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 6px 8px;
+    font-family: 'AlimamaAgileVF-Thin', Consolas, monospace;
+    font-size: var(--font-size-sm);
+    color: var(--terminal-text, #fff);
+    background: var(--terminal-bg, #191a1b);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 4px;
+
+    &:focus {
+      outline: none;
+      border-color: var(--terminal-note, #e5c07b);
+    }
+  }
+
+  .pty-confirm-hint {
+    font-size: var(--font-size-xs);
+    color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
+    white-space: pre-wrap;
+  }
+
+  .pty-confirm-actions {
+    display: flex;
+    gap: 6px;
+  }
+
+  .tool-cmd-confirm-btn {
+    padding: 4px 14px;
+    font-size: var(--font-size-sm);
+    background: var(--color-primary, #6366f1);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+
+    &:hover {
+      filter: brightness(1.1);
+    }
+  }
+
+  .pty-confirm-tip {
+    color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
+  }
 }
 
 .tool-call-expand-view {
@@ -392,6 +497,13 @@
       flex: 1;
       min-height: 0;
       max-height: none;
+    }
+
+    /* PTY 全屏：终端主体占满剩余高度（解除原位 240px 定高） */
+    .pty-terminal-body {
+      flex: 1;
+      min-height: 0;
+      height: auto;
     }
   }
 }

@@ -12,6 +12,7 @@ import {
   TerminalView,
 } from '@/ui/pages/chat/components/tool-call/TerminalBlock'
 import ExecuteScriptMessage from '@/ui/pages/chat/components/tool-call/ExecuteScriptMessage'
+import { XtermTerminalBlock } from '@/ui/pages/chat/components/tool-call/XtermTerminal'
 
 /**
  * CodeBlock 依赖 Monaco（jsdom 里无法渲染编辑器），这里换成结构等价的最小替身：
@@ -508,5 +509,48 @@ describe('TerminalBlock 全屏', () => {
     expect(layer()).toBeNull()
 
     await act(async () => root.unmount())
+  })
+})
+
+/**
+ * PTY 终端块（xterm 路径）的结构回归，Step 2 ③（命名按键条）/ ⑤（全屏）。
+ *
+ * 只做静态渲染断言（不触发 xterm 的 useLayoutEffect —— jsdom 没有真正的画布/量度），
+ * 验证 DOM 结构齐备；xterm 的实际渲染与全屏滚动交给真机手动验收。
+ */
+describe('XtermTerminalBlock（PTY）结构与操作区', () => {
+  const render = (running: boolean) =>
+    renderToStaticMarkup(
+      <XtermTerminalBlock
+        title="Terminal"
+        cmd="npm login"
+        stream=""
+        running={running}
+        toolCallId="t-pty"
+      />,
+    )
+
+  it('运行中：含命名按键条（Enter/Ctrl+C/Ctrl+D/Tab/↑/↓）、接管按钮、全屏按钮与终端容器', () => {
+    const html = render(true)
+    expect(html).toContain('is-pty')
+    expect(html).toContain('pty-key-bar')
+    expect(html).toContain('pty-hold-btn')
+    expect(html).toContain('接管')
+    expect(html).toContain('Enter')
+    expect(html).toContain('Ctrl+C')
+    expect(html).toContain('Ctrl+D')
+    expect(html).toContain('Tab')
+    expect(html).toContain('↑')
+    expect(html).toContain('↓')
+    expect(html).toContain('terminal-fullscreen-btn')
+    expect(html).toContain('pty-terminal-body')
+  })
+
+  it('完成态：不渲染按键条与接管按钮，但仍保留全屏按钮', () => {
+    const html = render(false)
+    expect(html).not.toContain('pty-key-bar')
+    expect(html).not.toContain('pty-hold-btn')
+    expect(html).toContain('terminal-fullscreen-btn')
+    expect(html).toContain('pty-terminal-body')
   })
 })

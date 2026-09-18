@@ -1,7 +1,7 @@
 # PTY 终端改造 — 调研报告与方案选型
 
 > **状态**：**Step 1（L2 PTY 改造）已落地并实测通过**（2026-09-18 本机，见 §8.1）；
-> **Step 2（交互语义）方案已细化、尚未实施**（见 §8「Step 2」，含待确认决策点 D1–D6）；
+> **Step 2（交互语义）已实施并实测通过**（见 §8 Step 2 与 §8.2；D1–D6 已按建议默认值定稿）；
 > Step 0 Spike 保留作回归测试（`conpty_spike.rs`）
 > **决策**：采用**方案 B — 自研 ConPTY**（见 §4.2），不使用 `portable-pty`
 > **关键结论**：**受限令牌 + Job Object + ConPTY 三者可以共存** —— 原 §7 风险 #1 已消除
@@ -569,7 +569,7 @@ npx vitest run
 lock 的 `importers.devDependencies` / `packages` / `snapshots` 三处均已登记 xterm（0.11.0 + 6.0.0）
 → CI 的 `pnpm install --frozen-lockfile` 不再阻塞。
 
-### Step 2 — 交互语义（**方案已细化，未实施**；待确认决策点 D1–D6）
+### Step 2 — 交互语义 ✅ **已完成**（D1–D6 按建议默认值定稿）
 
 > **目标**：把 Step 1 的「能交互」补成「**有控制权**」——AI 不偷偷替用户执行命令、
 > 用户可接管、交互质量（按键 / 结束原因 / 状态提示）到位。
@@ -594,11 +594,11 @@ lock 的 `importers.devDependencies` / `packages` / `snapshots` 三处均已登�
 
 | 编号 | 交付物 | 风险 | 备注 |
 |---|---|---|---|
-| ① | **终端内确认**（`write_command` 的 L2 等价物） | 高 | 动审批桥载荷 + 新增 UI 分支；必须保住「必须人工确认」语义 |
-| ② | **`held` 接管 / 交还** | 中 | 要改 Step 1 的超时实现（当前是单次 `sleep`） |
-| ③ | **命名控制键** `pty_key` | 低 | 纯新增命令 + 映射表纯函数单测 |
-| ④ | **`waitReason` + 空闲「疑似等待输入」提示** | 低 | `uiData` 加字段 + 前端本地计时（零后端成本） |
-| ⑤ | **xterm 块补全屏按钮** | 低 | 复用 `TerminalBlock` 既有「双渲染」做法 |
+| ✅① | **终端内确认**（`write_command` 的 L2 等价物） | 高 | 动审批桥载荷 + 新增 UI 分支；必须保住「必须人工确认」语义 |
+| ✅② | **`held` 接管 / 交还** | 中 | 已把 Step 1 的单次 `sleep` 换成「预算 + 心跳」 |
+| ✅③ | **命名控制键** `pty_key` | 低 | 纯新增命令 + 映射表纯函数单测 |
+| ✅④ | **`waitReason` + 空闲「疑似等待输入」提示** | 低 | `uiData` 加字段 + 前端本地计时（零后端成本） |
+| ✅⑤ | **xterm 块补全屏按钮** | 低 | 复用 `TerminalBlock` 既有「双渲染」做法 |
 
 **明确不做**：常驻交互 shell / 哨兵 / shell 跳转重挂 / `output_ref` / `terminal_explore`（Step 3）；
 TS 引擎 PTY 化（§7 #14）；模型侧写 PTY（L2 结构性限制）；新增 `AgentEventType`；
@@ -879,7 +879,7 @@ cargo check --all-targets               # 目标是 0 warning
 6. `waitReason`：正常结束 / 超时 / 终止三条路径的 `uiData` 与结果文本；
 7. 照旧验证「不改沙盒语义」：`readonly` 下 `sandbox:"off"` 仍被拒、区外写入仍被拒。
 
-#### 2.10 待用户确认的决策点
+#### 2.10 待用户确认的决策点（**已定稿，均按建议默认值**）
 
 | # | 决策点 | 我的建议 |
 |---|---|---|
@@ -897,6 +897,60 @@ cargo check --all-targets               # 目标是 0 warning
 - TS 引擎 PTY 化（§7 #14，已知延后）；
 - 记录 / 回灌用户输入正文（除非 D4 改）；
 - 新增 `AgentEventType`、新增设置项、新增持久化（会话表仍是内存态）。
+
+### 8.2 Step 2 实测结果
+
+**实现范围**：2a（④ `waitReason` + ⑤ xterm 全屏 + ③ `pty_key`）→ 2b（② `held` 接管/交还）
+→ 2c（① 终端内确认），即 §2.8 的三批顺序。
+
+**新增 Tauri 命令**（均已注册进 `lib.rs`，铁律 4）：
+`pty_key(toolCallId, keys: string[])`、`pty_set_held(toolCallId, held) -> bool`
+（`pty_write` / `pty_resize` 沿用 Step 1）。
+
+| 用例 | 覆盖 |
+|---|---|
+| `test_build_command_result_wait_reason` | ④ `waitReason` 三值 + 管道路径也下发（D5）+ 超时无输出的模型引导 |
+| `test_pty_key_named_sequences` | ③ 命名控制键逐条对齐（含 `ctrl+<a..z>` 通用规则、未知名字跳过） |
+| `test_pty_hold_freezes_timeout` | ② 接管期间冻结超时预算（`timeout=1s` 而命令跑 2.5s 未被杀） |
+| `test_pty_hold_hard_cap` | ② 接管到顶强制终止（`waitReason=timeout` + `holdTimedOut=true`） |
+| `test_pty_interventions_counted` | ② 干预计数正确，且 `uiData` **不含用户输入正文**（D4 回归保护） |
+| `test_parse_approval` | ① JSON 优先 → 旧白名单兼容（弹窗路径行为不变） |
+| `test_terminal_confirm_reclassify_escalation` | ① 编辑后风险升高（仅埋点，不二次审批） |
+| `test_execute_command_terminal_confirm_roundtrip` | ① 端到端：回传改后命令 → **跑的是改后的版本**；PTY 可用时下发 `presentation=terminal` |
+| `test_execute_command_terminal_confirm_cancelled` | ① 取消 → `[User cancelled]` |
+| 前端 `tool-output-idle.test.ts` | ④ `shouldHintIdle` 边界 + `pendingConfirm` 必须替换对象（触发重渲染） |
+| 前端 `tool-call-terminal.test.tsx` | ③⑤② 按键条 / 全屏按钮 / 接管按钮的结构回归 |
+| 前端 `execute-command-confirm.test.ts` | ① TS 路径 `confirm:"terminal"` → 强制审批（回落弹窗） |
+| 前端 `command-approval.test.ts` | ① 原生 handles：`presentation=terminal` 不弹 modal、提交回传改后命令、取消 reject |
+
+- `cargo test --lib`：**159 passed / 0 failed / 2 ignored**；
+- `npx vitest run`：**499 passed**；`npx tsc --noEmit` 零错误；`npx vite build` 通过；
+- `cargo check --all-targets`：0 warning。
+- ⚠️ 仍在**无沙盒**模式下跑（§11.2 基线未复现，不能据此判定「沙盒内可用」）。
+
+**实现中修正的一处认知**
+
+- 前端「待确认命令行」的显隐依赖 **store 对象引用变化**：`useToolLiveOutput` 的
+  `setEntry(out)` 收到同一引用不会触发重渲染 → `setPendingConfirm` / `clearPendingConfirm`
+  必须**替换为新对象**（已加单测钉住）；就地改字段会让确认块永远不出现。
+
+**决策点定稿（D1–D6，均按建议默认值）**
+
+| # | 结论 |
+|---|---|
+| D1 | 用 `execute_command` 的 `confirm:"terminal"` 参数，**不新增工具** |
+| D2 | 不把终端内确认升级成 `commandApprovalMode` 的档位（改动面太大） |
+| D3 | 接管硬上限 **30 min**（`PTY_HOLD_MAX`，写死常量） |
+| D4 | 用户输入**正文不回灌**：`uiData.userInterventions` 只记 `{keys,enters,ctrlC,heldSeconds}` |
+| D5 | `waitReason` **也下发给管道路径**（TS 引擎路径仍缺，见 §7 #14） |
+| D6 | 按 2a → 2b → 2c 三批落地 |
+
+**仍存在的缺口（刻意延后）**
+
+- xterm 全屏为「双实例同时渲染」（≈2× CPU，§7 #19）；全屏那份**不**同步 `pty_resize`
+  （两实例列宽不同，都调会互相覆盖后端尺寸）。
+- TS 引擎路径仍未 PTY 化：`confirm:"terminal"` 在 TS 路径**强制回落审批弹窗**（语义不丢）。
+- 硬换行（§7 #11）、`prepare` fail-open（§7 #15）与 §7 其余条目状态不变。
 
 ### Step 3 — L3（可选，需另行评估）
 

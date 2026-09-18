@@ -42,6 +42,14 @@ type ToolInteractEvents = {
   commandReject: (reason: string) => void
 
   /**
+   * Step 2 ① 终端内确认（纯 UI 事件，组件 → tool-service，不让组件直接摸 service）：
+   * 用户在某 toolCallId 的终端块里改完命令并按 Enter。
+   */
+  terminalConfirmSubmit: (toolCallId: string, command: string) => void
+  /** Step 2 ①：用户在终端块里取消（Esc / Ctrl+C）。 */
+  terminalConfirmCancel: (toolCallId: string) => void
+
+  /**
    * 用户同意执行命令
    * @param approvalId  本次审批的唯一标识（由 execute_command 生成并随弹窗数据下发）
    * @param sessionId

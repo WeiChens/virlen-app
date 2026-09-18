@@ -98,6 +98,16 @@ toolRegistry.register(
           enum: ['off'],
           description: SANDBOX_PARAM_NOTE,
         },
+        confirm: {
+          type: 'string',
+          enum: ['terminal'],
+          description:
+            '传 "terminal" 表示「先在终端里由用户确认再执行」：命令会显示成一行**可编辑**的命令，' +
+            '用户改完按 Enter 才真正执行，按 Esc 取消。适合需要用户拍板、可能被改写的命令' +
+            '（如 npm login / gh auth login 这类需要登录或输入的命令）。' +
+            '执行仍走同一条沙盒路径（用户写的命令 ≠ 免检命令）；仅 Windows 桌面端支持，' +
+            '不可用时自动回落为审批弹窗。',
+        },
         timeout: {
           type: 'number',
           description:
@@ -124,6 +134,10 @@ toolRegistry.register(
     const bypassSandbox = ['off', 'none'].includes(
       String(args.sandbox ?? '').toLowerCase(),
     )
+    // confirm: 'terminal' → 请求「终端内确认」（与 Rust 原生路径同语义）。
+    // TS 引擎路径无 PTY → 强制走审批弹窗（语义不丢；PTY 化见 docs/pty-research.md §7 #14）。
+    const confirmTerminal =
+      String(args.confirm ?? '').toLowerCase() === 'terminal'
 
     // 风险分类 & 弹窗确认
     const risk = classifyCommand(cmdStr)
@@ -142,6 +156,8 @@ toolRegistry.register(
       // case 'none': needsApproval 保持 false
     }
     if (bypassSandbox) needsApproval = true
+    // 终端内确认同样必须经过人工确认（不能因为指定了终端呈现就绕过审批）
+    if (confirmTerminal) needsApproval = true
     if (needsApproval) {
       const info = getRiskInfo(risk)
       const hint = bypassSandbox
@@ -165,6 +181,8 @@ toolRegistry.register(
       }
       // 申请绕过沙盒时带上标记（与 Rust 原生路径一致，仅作留痕；警告文案已在 hint 里）
       if (bypassSandbox) payload.sandboxBypass = true
+      // 终端内确认请求：Rust 原生路径会据此下发 presentation；TS 路径无 PTY → 这里仍是弹窗
+      if (confirmTerminal) payload.confirm = 'terminal'
 
       return new UserInteractionRequired('confirm_command', payload)
     }

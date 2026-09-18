@@ -11,6 +11,8 @@
 import { describe, it, expect } from 'vitest'
 import toolInteractEvent from '@/events/toolInteractEvent'
 import { registerPendingApproval } from '@/infrastructure/tools/execute/common'
+import { createNativeCommandConfirmHandles } from '@/services/tool-service/command_confirm'
+import { toolOutputStore } from '@/infrastructure/tools/output-store'
 import type { ToolExecutorResponse } from '@/domain/tools/types'
 
 describe('command-approval 审批注册表', () => {
@@ -85,5 +87,90 @@ describe('command-approval 审批注册表', () => {
     toolInteractEvent.emit('userAllowCmd', approvalId, 's1', 'tc-A', holder)
     expect(holder.result).not.toBeNull()
     await expect(holder.result).rejects.toThrow('boom')
+  })
+})
+
+/**
+ * 终端内确认（Step 2 ①）—— 原生审批 handles 的分支：
+ * `presentation:"terminal"` 时**不弹 modal**，改写入 toolOutputStore.pendingConfirm；
+ * 提交回传改后命令（JSON），取消则 reject `cancelled`；无 presentation 时行为不变。
+ */
+describe('createNativeCommandConfirmHandles 终端内确认（Step 2 ①）', () => {
+  it('presentation=terminal：不弹 modal、写入 pendingConfirm；提交回传改后命令', async () => {
+    const handles = createNativeCommandConfirmHandles('s1')
+    const shows: any[] = []
+    const off = toolInteractEvent.on('showCommandConfirm', (...args) => {
+      shows.push(args)
+    })
+
+    const p = handles.handler('confirm_command_native', {
+      presentation: 'terminal',
+      command: 'npm login',
+      risk: 'install',
+      label: '安装命令',
+      hint: 'h',
+      tips: 't',
+      toolCallId: 'tc-T',
+    })
+
+    // 不弹 modal；改在终端块里渲染可编辑命令行
+    expect(shows.length).toBe(0)
+    expect(toolOutputStore.get('tc-T')?.pendingConfirm?.command).toBe('npm login')
+
+    toolInteractEvent.emit(
+      'terminalConfirmSubmit',
+      'tc-T',
+      'npm login --registry https://x',
+    )
+    await expect(p).resolves.toBe(
+      JSON.stringify({ approved: true, command: 'npm login --registry https://x' }),
+    )
+    expect(toolOutputStore.get('tc-T')?.pendingConfirm).toBeUndefined()
+
+    off()
+    handles.cleanup()
+    toolOutputStore.remove('tc-T')
+  })
+
+  it('presentation=terminal：取消 → reject cancelled 并清空 pendingConfirm', async () => {
+    const handles = createNativeCommandConfirmHandles('s2')
+    const p = handles.handler('confirm_command_native', {
+      presentation: 'terminal',
+      command: 'gh auth login',
+      toolCallId: 'tc-C',
+    })
+    expect(toolOutputStore.get('tc-C')?.pendingConfirm).toBeTruthy()
+
+    toolInteractEvent.emit('terminalConfirmCancel', 'tc-C')
+    await expect(p).rejects.toBe('cancelled')
+    expect(toolOutputStore.get('tc-C')?.pendingConfirm).toBeUndefined()
+
+    handles.cleanup()
+    toolOutputStore.remove('tc-C')
+  })
+
+  it('无 presentation：仍走弹窗（showCommandConfirm），行为不变', async () => {
+    const handles = createNativeCommandConfirmHandles('s3')
+    const shows: any[] = []
+    const off = toolInteractEvent.on('showCommandConfirm', (...args) => {
+      shows.push(args)
+    })
+    const p = handles.handler('confirm_command_native', {
+      command: 'ls',
+      risk: 'safe',
+      label: 'L',
+      hint: 'h',
+      tips: 't',
+      toolCallId: 'tc-M',
+    })
+    expect(shows.length).toBe(1)
+    expect(toolOutputStore.get('tc-M')?.pendingConfirm).toBeUndefined()
+
+    // 收尾：模拟用户关闭弹窗，避免 promise 悬挂
+    toolInteractEvent.emit('commandReject', 'cancelled')
+    await expect(p).rejects.toBeTruthy()
+
+    off()
+    handles.cleanup()
   })
 })

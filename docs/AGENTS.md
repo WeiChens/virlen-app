@@ -328,11 +328,14 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 - 非 Windows 平台、以及伪控制台创建失败时，仍走 `run_command_native_pipes` 兜底。
 - 已知缺口：**TS 引擎路径未 PTY 化**；伪控制台按列宽硬换行；
   裸跑路径下 `start` 拉起的后台进程会随伪控制台关闭而终止（详见 §7 / §8.1）。
-- **Step 2（交互语义）方案已细化但尚未实施**：`held` 接管/交还、终端内确认（`write_command` 的
-  L2 等价物）、命名控制键、`waitReason`、xterm 全屏 —— 设计 / 文件级改动清单 / 测试与验收 /
-  待确认决策点 D1–D6 全部在 `docs/pty-research.md` §8「Step 2」。
-  动手前必读其中 **2.0**（L2 下这两个概念必须重新定义，照抄社区做法会落空）
-  与 **D4**（用户输入**正文**不回灌给模型 —— 密码/token 红线）。
+- **Step 2（交互语义）已实现并实测通过**（`docs/pty-research.md` §8 Step 2 / §8.2；D1–D6 已按建议默认值定稿）：
+  ④ `waitReason`（含管道路径 + 超时无输出的模型引导）、⑤ xterm 全屏、③ 命名控制键 `pty_key`、
+  ② `held` 接管/交还（`pty_set_held`，冻结超时预算，硬上限 30min）、
+  ① 终端内确认（`execute_command` 的 `confirm:"terminal"` → 在终端块里渲染**可编辑命令行**，
+  Enter 才执行 / Esc 取消；`TerminalConfirmBlock.tsx`）。
+  **两条红线仍在**：用户输入**正文不回灌**给模型（`uiData.userInterventions` 只记计数，D4）；
+  终端内确认的命令**仍走沙盒 + 同一条执行路径**（用户写的命令 ≠ 免检命令）。
+  仍未做：常驻交互 shell / 哨兵（Step 3）、TS 引擎路径 PTY 化（§7 #14）。
 
 ---
 
@@ -363,7 +366,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 | 改原生工具路径校验 / 参数取值 | `src-tauri/src/agent/native_tools/common.rs`（`resolve_safe_path` / `is_path_allowed` / `arg_*`） |
 | 改文件读写底层 | `src-tauri/src/file_ops.rs`（读/写/多段编辑）+ `src/utils/diff.ts` |
 | 改搜索 | `src-tauri/src/search.rs`（文件搜索）、`src/domain/search/*` + `src/infrastructure/search-providers/*`（网络搜索） |
-| 改命令执行 / 风险分类 / 审批 | `src/infrastructure/tools/execute/common.ts`（+ `execute-command.ts` / `execute-script.ts`）；Rust 原生侧 `src-tauri/src/agent/native_tools/execute/common.rs`（+ `execute_command.rs` / `execute_script.rs`）。PTY（伪控制台）相关另见：`src-tauri/src/sandbox/windows/conpty.rs`、`native_tools/execute/pty_session.rs`、`src/ui/pages/chat/components/tool-call/XtermTerminal.tsx`（见 §11.7） |
+| 改命令执行 / 风险分类 / 审批 | `src/infrastructure/tools/execute/common.ts`（+ `execute-command.ts` / `execute-script.ts`）；Rust 原生侧 `src-tauri/src/agent/native_tools/execute/common.rs`（+ `execute_command.rs` / `execute_script.rs`）。PTY（伪控制台）相关另见：`src-tauri/src/sandbox/windows/conpty.rs`、`native_tools/execute/pty_session.rs`、`src/ui/pages/chat/components/tool-call/XtermTerminal.tsx`、`tool-call/TerminalConfirmBlock.tsx`（见 §11.7） |
 | 改终端输出处理（`\r`、ANSI） | `src/infrastructure/tools/execute/common.ts::processTerminalOutput`（UI 侧 `tool-call/Execute*Message.tsx` 复用同一函数）；Rust 侧 `native_tools/execute/common.rs::process_terminal_output`。两份实现必须**逐条对齐**（含 ANSI 序列完整性，见 §11.7） |
 | 改沙盒/权限 | `src-tauri/src/sandbox/**`、`src/infrastructure/sandbox/*`、`src/domain/security/index.ts` |
 | 改视觉 | `src-tauri/src/vision_service.rs`、`src/infrastructure/vision/`、`src-tauri/resources/quasivision_models/` |
