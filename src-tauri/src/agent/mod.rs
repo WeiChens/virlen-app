@@ -120,6 +120,62 @@ pub fn pty_set_held(tool_call_id: String, held: bool) -> bool {
     native_tools::pty_set_held(&tool_call_id, held)
 }
 
+/// TS 引擎路径的「原生执行」入口（`docs/pty-research.md` §7 #14）。
+///
+/// 让 TS 引擎的 `execute_command` 也能享受 Rust 侧的原生能力：沙盒（受限令牌 + ACL）、
+/// ConPTY（ANSI / 交互 / 用户插键盘）、统一超时/取消/接管、`uiData.pty` 标记。
+///
+/// 输出经 **`ipc::Channel`** 流式回传（而非 `app.emit`）：一步送到发起它的调用方，
+/// **不经过引擎事件总线** → 不污染 `AgentEventType`（铁律 2），也无需前端安装/去重
+/// 全局 `agent:tool-output` 监听（避免与 Rust 引擎路径重复 append）。
+///
+/// ⚠️ **审批不在这里做**：TS 侧 `execute_command` 已完成风险分类与审批（含 `confirm` / 绕过
+/// 沙盒的强制审批）；本命令只负责「执行一条已获批准的命令」。
+#[tauri::command]
+pub async fn pty_run_command(
+    session_id: String,
+    tool_call_id: String,
+    command: String,
+    security: types::NativeToolSecurity,
+    timeout_secs: i64,
+    bypass_sandbox: bool,
+    on_output: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let sink = ChannelEventSink { channel: on_output };
+    let outcome = native_tools::run_command_for_ts_engine(
+        &sink,
+        &session_id,
+        &tool_call_id,
+        &command,
+        &security,
+        timeout_secs,
+        bypass_sandbox,
+    )
+    .await?;
+    match outcome {
+        native_tools::NativeToolOutcome::Value { content, ui_data } => {
+            Ok(serde_json::json!({ "content": content, "uiData": ui_data }))
+        }
+        // 退出码 >= 2 等失败情况：原生运行器已把报告文本封进 Error
+        native_tools::NativeToolOutcome::Error(msg) => Err(msg),
+        other => Err(format!("unexpected outcome: {other:?}")),
+    }
+}
+
+/// 把原生运行器的 `agent:tool-output` 事件转发到 `ipc::Channel`（其余事件忽略）。
+struct ChannelEventSink {
+    channel: tauri::ipc::Channel<serde_json::Value>,
+}
+
+impl event_sink::EventSink for ChannelEventSink {
+    fn emit_agent_event(&self, _session_id: &str, _event: &types::AgentEvent) {}
+    fn emit_raw(&self, event_name: &str, payload: serde_json::Value) {
+        if event_name == "agent:tool-output" {
+            let _ = self.channel.send(payload);
+        }
+    }
+}
+
 /// 获取当前会话的运行快照
 #[tauri::command]
 pub fn agent_get_run_snapshot(

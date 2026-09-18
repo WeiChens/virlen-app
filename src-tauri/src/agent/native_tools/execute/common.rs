@@ -718,7 +718,9 @@ pub(super) fn pty_available() -> bool {
 /// `sandbox:"off"`）。为 true 时跳过沙盒、直接走裸跑路径；典型用途是沙盒下必然
 /// 失败的场景：子进程需要用管道 stdio 拉起孙进程（vitest/vite/jest/node-gyp 等），
 /// 受限令牌会使那次 spawn 报 EPERM（根因见 AGENTS §11.2）。
-pub(super) async fn run_command_native(
+///
+/// `pub(crate)`：除工具层外，TS 引擎路径经 `pty_run_command` 也复用本运行器（§7 #14）。
+pub(crate) async fn run_command_native(
     ctx: &NativeToolCtx<'_>,
     cmd_str: &str,
     timeout_secs: i64,
@@ -1076,7 +1078,11 @@ async fn run_command_native_pty(
     // 初始尺寸优先用「最近一次客户端上报的尺寸」：若与客户端实际尺寸一致，前端随后的
     // `pty_resize` 就是 no-op，ConPTY 不会重绘、也就不会在内容下方补出多余空行
     // （见 pty_session::SizeTracker 与 docs/pty-research.md §5.7）。
-    let (init_cols, init_rows) = pty_session::initial_size((DEFAULT_COLS, DEFAULT_ROWS));
+    //
+    // ⚠️ `initial_size` 会在缓存为空时**短暂等待**客户端上报（最多 ~800ms）——
+    // 这是 TS 引擎路径的关键：`pty_run_command` 往往先于终端挂载，不等待就会用 240×50
+    // 建控制台，首帧按 50 行铺满 → 一大堆空行（见 §5.7.2）。
+    let (init_cols, init_rows) = pty_session::initial_size((DEFAULT_COLS, DEFAULT_ROWS)).await;
     let mut pty = match PseudoConsole::create(init_cols, init_rows) {
         Ok(p) => p,
         Err(e) => {
@@ -1226,12 +1232,27 @@ async fn run_command_native_pty(
         let mut truncated = false;
         let mut chunk = vec![0u8; 8192];
         let mut decoder = TerminalDecoder::new();
+        // ⚠️ 临时诊断：读取序号，便于看分块边界
+        let mut dbg_index = 0usize;
+        eprintln!(
+            "[pty-dbg] t={}ms == PTY read loop start ==",
+            pty_session::debug_ms()
+        );
         loop {
             let n = match out.read(&mut chunk) {
                 Ok(0) => break,
                 Ok(n) => n,
                 Err(_) => break,
             };
+            // ⚠️ 临时诊断：每次 read 的原始字节（看清 ConPTY 回显的分块边界）
+            dbg_index += 1;
+            eprintln!(
+                "[pty-dbg] t={}ms OUT #{} n={} {}",
+                pty_session::debug_ms(),
+                dbg_index,
+                n,
+                pty_session::debug_escape(&String::from_utf8_lossy(&chunk[..n]))
+            );
             truncated |= push_bytes_bounded(&mut tail, &chunk[..n]);
             let text = decoder.push(&chunk[..n]);
             if !text.is_empty() {

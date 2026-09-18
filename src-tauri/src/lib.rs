@@ -325,6 +325,8 @@ pub fn run() {
             agent::pty_key,
             // 接管 / 交还（Step 2 ②）
             agent::pty_set_held,
+            // TS 引擎路径的原生执行（沙盒 + ConPTY，§7 #14）
+            agent::pty_run_command,
             agent::agent_get_run_snapshot,
             agent::agent_clear_run_snapshot,
             agent::agent_dispose,

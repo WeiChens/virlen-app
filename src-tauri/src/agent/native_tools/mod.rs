@@ -144,6 +144,40 @@ pub async fn execute_native_tool(
     }
 }
 
+/// 供 **TS 引擎路径** 执行命令（`docs/pty-research.md` §7 #14）。
+///
+/// TS 引擎的 `execute_command` 原先走 `plugin-shell` 匿名管道（无沙盒 / 无 ANSI / 无交互）。
+/// 这里把「执行」下沉到 Rust 原生运行器（`run_command_native`：沙盒优先 + ConPTY +
+/// 超时/取消/接管），输出经调用方提供的 `EventSink` 流式回传。
+///
+/// 与 `execute_native_tool(ctx, "execute_command", args)` 的**唯一区别**：
+/// **不做风险分类与审批** —— 审批（`commandApprovalMode` / `sandbox:"off"` 强制审批）
+/// 由 TS 侧的 `execute_command` 工具负责，本入口只负责「执行一条已获批准的命令」。
+pub(crate) async fn run_command_for_ts_engine(
+    sink: &dyn EventSink,
+    session_id: &str,
+    tool_call_id: &str,
+    command: &str,
+    security: &NativeToolSecurity,
+    timeout_secs: i64,
+    bypass_sandbox: bool,
+) -> Result<NativeToolOutcome, String> {
+    // 取消：TS 引擎的「终止」按钮走 `agent_kill_command`（运行中命令注册表），
+    // 不依赖这个 token；这里用一个不会被触发的 token 即可
+    // （`run_command_native` 内部另有独立的 kill 通道）。
+    let cancel = CancellationToken::new();
+    let bridge = AgentBridgeState::default();
+    let ctx = NativeToolCtx {
+        session_id,
+        tool_call_id,
+        cancel: &cancel,
+        sink,
+        bridge: &bridge,
+        security,
+    };
+    execute::run_command_native(&ctx, command, timeout_secs, bypass_sandbox).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,6 +242,44 @@ mod tests {
                 matches!(outcome, Err(_)),
                 "write outside workspace should fail"
             );
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// §7 #14：TS 引擎路径的执行入口必须复用原生运行器（沙盒 + PTY + uiData 标记）。
+    /// 这里用「裸跑」security 避开沙盒 ACL 的前置开销，只验证「结果形状」。
+    #[tokio::test]
+    async fn test_ts_engine_runner_shares_native_runner() {
+        use super::test_util::test_security_bare;
+        use crate::agent::event_sink::TestEventSink;
+
+        let dir = std::env::temp_dir().join(format!("virlen_ts_engine_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sec = test_security_bare(&dir.to_string_lossy());
+        let sink = TestEventSink::new();
+
+        let outcome = run_command_for_ts_engine(
+            &sink,
+            "s_ts",
+            "tc_ts",
+            "echo hello_ts_engine",
+            &sec,
+            30,
+            false,
+        )
+        .await
+        .expect("TS 引擎执行入口不应报错");
+
+        match outcome {
+            NativeToolOutcome::Value { content, ui_data } => {
+                assert!(content.contains("hello_ts_engine"), "content: {content}");
+                let ui = ui_data.expect("原生运行器应下发 uiData");
+                assert_eq!(ui.get("exitCode").and_then(|v| v.as_i64()), Some(0), "uiData: {ui}");
+                // Windows → true（ConPTY）；其他平台 → false（管道）。两种情况都得有该标记。
+                assert!(ui.get("pty").is_some(), "uiData 应带 pty 标记: {ui}");
+            }
+            other => panic!("expected Value, got {other:?}"),
         }
 
         std::fs::remove_dir_all(&dir).ok();

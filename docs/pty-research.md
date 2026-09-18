@@ -402,6 +402,44 @@ if let Ok(mut g) = LAST_CLIENT_SIZE.lock() { *g = Some(..) };      // ← 才写
 > 但写入点摆在 `lookup` 之后，缓存**永远填不上**。教训：跨前后端共享的状态，
 > 其写入时机必须在「依赖它的下游」之前，否则就是一个静默失效的缓存。
 
+#### 5.7.2 ⚠️ 再勘误：TS 引擎路径下 `create` **抢在**首次上报之前（顺序相反）
+
+§5.7.1 的修复针对的是「前端 `fit()` **早于** 后端 `create`」这个顺序。但**两条引擎
+路径的时序恰好相反**：
+
+| | Rust 引擎路径 | TS 引擎路径（`pty_run_command`，§7 #14） |
+|---|---|---|
+| 谁先挂终端 | 引擎先发「步骤开始」事件 → UI 挂载终端并上报尺寸 → **才**执行工具 | 工具就地 `invoke('pty_run_command')`；终端要等 `toolOutputStore.register({pty:true})` 触发的**下一次 React 渲染**才挂载 |
+| `create` 时的缓存 | **已有值**（上报早 ~0.4s 到）→ 直接用正确尺寸 | **还是空的** → §5.7.1 的「缓存提前」无从生效 |
+
+因此 §5.7.1 的两处修复在 TS 路径**双双失灵**：
+
+1. **缓存写入提前**：没有可提前的东西——`create` 跑的时候**根本还没有任何上报**；
+2. **前端重试**：重试只在 `pty_resize` 返回 `false`（会话未注册）时触发；而 TS 路径下
+   上报**晚于** `create`，会话**已注册** → 返回 `true` → **不触发重试**。
+
+于是 `create` 已用兜底 **240×50** 建好伪控制台，首帧按 50 行铺满 → 内容下方补出
+`\x1b[K\r\n`（≈ `50 − 内容行数` 个空行，与 §5.7 表一致）。用户视角即「TS 引擎路径下
+`npm init` 第一次运行又是一大堆空行」——与 §5.7.1 修好前的 Rust 路径**同症不同因**。
+
+**修复：让 `create` 主动等一等首次上报。**
+
+`pty_session::initial_size` 由同步改为 **`async`**：缓存为空时按 20ms 轮询、最多等
+`CLIENT_SIZE_WAIT = 800ms`，**拿到客户端真实尺寸再建伪控制台**；超时（终端从不上报，
+如非 PTY 渲染）才退回 `fallback`。
+
+- **正常情况**：登记 `pty:true` → React 下一帧挂载 xterm → `fit()` → 上报，全程约一两帧
+  （几十 ms）≪ 800ms → `create` 用真实尺寸 → **不发生 resize → 无空行**；随后那次上报
+  因尺寸相同被 `SizeTracker` 判为 **no-op**。
+- **Rust 引擎路径**：缓存早已有值 → `initial_size` **立即返回**，无等待、行为不变。
+- **与 §5.7.1 的关系**：§5.7.1 的 ① 仍必要——它保证「等待期间**晚到的上报**」能进缓存
+  （`pty_resize` 先把尺寸写缓存、再查会话）；本节的「主动等待」+ ① 的「缓存提前」
+  共同构成 TS 路径的完整修复，② 的重试继续作为 `create` 极端抢跑时的兜底。
+
+> 落地：`pty_session::initial_size` 改为 `pub async fn`，`run_command_native_pty` 处
+> 改为 `pty_session::initial_size((DEFAULT_COLS, DEFAULT_ROWS)).await`。
+> **待真机复测**：TS 路径 `npm init` 首跑 `\x1b[K\r\n` 是否降到 ~0。
+
 ---
 
 ## 六、与 Virlen 现有代码的对接点
@@ -418,7 +456,8 @@ if let Ok(mut g) = LAST_CLIENT_SIZE.lock() { *g = Some(..) };      // ← 才写
 | `src-tauri/src/agent/native_tools/execute/common.rs` | **修改** | PTY 运行器 `run_command_native_pty`；原运行器改名 `run_command_native_pipes`（兜底）；抽出 `prepare_sandbox_session`；ANSI 解析器升级；有界缓冲；`build_command_result` 增 `pty` 标记 |
 | `src-tauri/src/agent/native_tools/execute/pty_session.rs` | **新建** | PTY 会话注册表：`tool_call_id` → 伪控制台输入通道（`pty_write` / `pty_resize` 底座，双引擎共用一份） |
 | `src-tauri/src/agent/native_tools/execute/execute_command.rs` | **未改** | 工具语义（风险分类 / 审批 / 超时）完全不变 |
-| `src-tauri/src/lib.rs` | **修改** | 注册 `pty_write` / `pty_resize`（铁律 4） |
+| `src-tauri/src/lib.rs` | **修改** | 注册 `pty_write` / `pty_resize` / `pty_key` / `pty_set_held` / `pty_run_command`（铁律 4） |
+| `src-tauri/src/sandbox/windows/tests.rs` | **修改** | ConPTY 回归用例并入（原独立 `conpty_spike.rs` 已删） |
 | `src/infrastructure/tools/output-store.ts` | **修改** | `ToolOutput` 增 `pty?: boolean` |
 | `src/services/rust-engine.ts` | **修改** | 运行中按平台预判 `pty`，注册带 kill 的 entry |
 | `src/ui/pages/chat/components/tool-call/XtermTerminal.tsx` | **新建** | xterm.js 终端块（增量写入 + 键击直送 + `pty_resize`） |
@@ -456,6 +495,7 @@ PTY 输出是带光标控制的原始流且刷新极快（进度条、`npm insta
 |---|---|
 | `agent:tool-output` | **不改结构**，但 PTY 路径下 `stream` 恒为 `stdout`（合并流）。避免动 `AgentEventType` 四方契约（铁律 2） |
 | `pty_write` | **新增 Tauri 命令**：`(toolCallId, data)`。前端直接 `invoke`，**不经过引擎事件总线** → 不污染 `AgentEventType` |
+| `pty_run_command` | **新增 Tauri 命令**（§7 #14）：TS 引擎路径的「原生执行」入口。入参含 `security`（workspace / sandboxMode / skillsDir）+ `timeoutSecs` + `bypassSandbox`，外加一个 **`ipc::Channel`** 用于流式输出 → 直达调用方，**不经过引擎事件总线**（铁律 2） |
 | 会话标识 | **直接用 `toolCallId` 当 PTY 会话 key** —— 前端 `TerminalView` 已持有它，`rust-engine.ts` 已按 `toolCallId` 注册 kill 入口 → **无需新增映射事件**，这是改动量最小的接法 |
 | 取消 | 现有 `agent_kill_command` 保留（Job Object 杀树）；用户 Ctrl+C 走 `pty_write("\x03")`（真信号，更轻） |
 
@@ -500,16 +540,16 @@ TS 引擎路径（回退）──────── invoke ────┘
 | 8 | 输出流合并导致 `[标准错误]` 分段与 `stream` 字段语义消失 | ✅**已实现** | PTY 路径 `stream` 恒为 `stdout`、`stderr` 恒为空串，`uiData.pty = true`（旧字段保留以兼容非 PTY） |
 | 9 | PTY 输出含 `\x1b[87X` / `\x1b]0;…\x07` 等序列，`<pre>` 无法表达 | ✅**已解决** | 前端用 xterm 渲染 + 增量写入；模型可见文本走升级后的 ANSI 解析器 |
 | 10 | **旧 ANSI 解析器把私有模式参数漏成正文**（`\x1b[?25l` → 输出里混进 `25l`） | ✅**已修（两侧同步）** | 旧实现只认 `ESC [` 且只吃 `0-9;`；ConPTY 输出里 `?25l/?25h` 极其密集 → 按 ECMA-48 完整吞掉（参数/中间/结束字节 + OSC + 三字节转义） |
-| 11 | **伪控制台按列宽硬换行**：折行产生的换行会进入模型可见文本 | 已缓解，未消除 | 初始尺寸改用客户端上报值（`initial_size`，见 §5.7.1）→ 折行列宽与用户所见一致；缓存未命中时兜底 240×50；彻底解决需按需 reflow，属后续阶段 |
+| 11 | **伪控制台按列宽硬换行**：折行产生的换行会进入模型可见文本 | 已缓解，未消除 | 初始尺寸改用客户端上报值（`initial_size`，见 §5.7.1 / §5.7.2）→ 折行列宽与用户所见一致；缓存未命中时短暂等待上报（§5.7.2），超时才兜底 240×50；彻底解决需按需 reflow，属后续阶段 |
 | 12 | **后台进程语义变化**：`ClosePseudoConsole` 会终止附着其上的进程 → **裸跑路径**下 `start` 拉起的后台进程不再存活（沙盒路径本来就会杀，见 windows/mod.rs） | 已识别，**接受** | 属 ConPTY 固有行为；仅影响 `sandbox:"off"` 的少数用法 |
 | 13 | 内存无界：`yes` / `cat 大文件` 打爆内存 | ✅**已缓解** | 单条流 1 MB 上限；超出后丢弃早期内容（保留末尾 256 KB）并在输出开头插入提示 |
-| 14 | **TS 引擎路径尚未 PTY 化** | 已知延后 | TS 分支仍用 `plugin-shell` 管道 + `<pre>`（工具语义一致，只是无交互）；非 Tauri 环境本就无 PTY |
+| 14 | **TS 引擎路径尚未 PTY 化** | ✅**已实现**（`pty_run_command`） | TS 分支经 `pty_run_command` 复用 Rust 原生运行器（沙盒 + ConPTY + `ipc::Channel` 流式回传），与 Rust 引擎路径**共用同一套执行语义**（铁律 1）；非 Tauri / 非 Windows 仍回落 `plugin-shell` 管道 + `<pre>` |
 | 15 | `prepare` 对「不存在的 extra root」是**硬失败** → 整条命令**静默降级裸跑（失写隔离）**；而 `package_cache_roots` 的 env 覆盖路径不校验目录是否存在 | 已发现，**本次未改** | 属改造前既有行为（fail-open 是既定产品决策）；若要收紧，应把 extra root 改成 best-effort 跳过 |
-| 16 | **「终端内确认」的观感风险**：命令出现在真终端外观的块里，用户可能误以为「已经跑过了 / 这是 AI 跑的结果」 | 待缓解（Step 2 ①） | 确认态必须与运行态**视觉显著区分**（独立配色 + 「尚未执行」文案 + 无终端光标），并在文案里明说「Enter 才执行」 |
-| 17 | **`held` 冻结超时**可能把命令无限期挂住（人在慢慢输入，也可能只是忘了） | 待缓解（Step 2 ②） | 硬上限 `PTY_HOLD_MAX = 30 min`（对齐 WinkTerm TTL）；到顶强制终止并记 `waitReason = timeout` + `holdTimedOut = true`。接管**不等于**取消：终止按钮 / `agent_cancel` 在接管期间仍可用 |
+| 16 | **「终端内确认」的观感风险**：命令出现在真终端外观的块里，用户可能误以为「已经跑过了 / 这是 AI 跑的结果」 | ✅**已实现**（Step 2 ①） | 专门的确认态组件 `TerminalConfirmBlock.tsx`（独立配色 + 「尚未执行」文案 + 无终端光标），与运行态**视觉显著区分**；文案里明说「Enter 才执行」 |
+| 17 | **`held` 冻结超时**可能把命令无限期挂住（人在慢慢输入，也可能只是忘了） | ✅**已实现**（Step 2 ②） | 硬上限 `PTY_HOLD_MAX = 30 min`（对齐 WinkTerm TTL，见 `execute/common.rs`）；到顶强制终止并记 `waitReason = timeout` + `holdTimedOut = true`（用例 `test_pty_hold_hard_cap`）。接管**不等于**取消：终止按钮 / `agent_cancel` 在接管期间仍可用 |
 | 18 | `pty_key` 的 `backspace` 该发 `\x08` 还是 `\x7f`（ConPTY 下两者的 VK 映射**未实测**） | 已知不确定项（Step 2 ③） | 只影响按键条里的退格键，不影响安全；先发 `\x08`，真机验证后再定 |
 | 19 | xterm 全屏采用「双实例同时渲染」→ 同一条流被解析两遍（≈2× CPU） | 已识别，**接受**（Step 2 ⑤） | 全屏是短时交互态；内存仍由 `scrollback: 2000` 封顶 |
-| 20 | **用户编辑命令后不再二次审批**（用户本人就是审批人），但编辑可能把命令改成远超原风险的东西 | 待缓解（Step 2 ①） | 编辑后**必须**重新 `classify_command`（埋点 `…escalated`，只记风险级别不记正文）、**必须**仍走沙盒 + PTY 同一路径、`readonly` 拒绝逻辑保持前置。将来若引入「不可绕过级」硬规则，必须挂在这个口子上再校验 |
+| 20 | **用户编辑命令后不再二次审批**（用户本人就是审批人），但编辑可能把命令改成远超原风险的东西 | ✅**已实现**（Step 2 ①） | 编辑后**重新 `classify_command`**（风险升高仅埋点 `interaction.command.confirm.escalated`，只记级别不记正文，用例 `test_terminal_confirm_reclassify_escalation`）、仍走沙盒 + PTY 同一路径、`readonly` 拒绝逻辑保持前置 |
 
 **关于原 #1 的推理链（已被 §8.0 实测证实）**：
 
@@ -551,8 +591,9 @@ cargo test conpty_with_restricted_token -- --nocapture
 2. 初版 Ctrl+C 测试是**假阳性**（等待窗口恰好覆盖了 `ping -n 20` 的完整生命周期），
    收紧到「`ping -n 60` + 6 s 判定窗口」后才露出真实结论。
 
-> 后期建议：这个 Spike 是目前**唯一**能证明「ConPTY + 受限令牌沙盒」成立的测试，
-> 建议在 Step 1 落地时把它整并进 `sandbox/windows/tests.rs` 当作回归测试，而非直接删掉。
+> ✅ **已整并（本轮）**：`conpty_spike.rs` 已并入 `sandbox/windows/tests.rs`
+> （用例名不变：`conpty_with_restricted_token`），不再作为独立 `cfg(test)` 模块。
+> 运行：`cargo test --lib conpty_with_restricted_token -- --nocapture`。
 
 ### Step 1 — L2：`execute_command` stdio 换成 ConPTY ✅ **已完成（2026-09-18 本机实测通过）**
 
@@ -617,8 +658,8 @@ npx vitest run
 `readonly` 模式避开缓存探测（同时也避免测试去改用户真实缓存目录的 ACL）。
 
 **已知缺口（刻意延后）**
-- **TS 引擎路径未 PTY 化**（见 §7 #14）：TS 分支仍 `plugin-shell` 管道 + `<pre>`；
-  工具**语义**保持一致（同 shell、同退出码规则、同输出文本），只是没有交互能力；
+- ~~**TS 引擎路径未 PTY 化**~~ → ✅ **本轮已实现**（见 §7 #14，经 `pty_run_command`）；
+  非 Tauri / 非 Windows 仍回落 `plugin-shell` 管道 + `<pre>`；
 - **xterm 的 `<pre>` 版全屏按钮未移植**到 PTY 块（属交互增强，放在 Step 2，见 §8 Step 2 / 2.6。
   实现上是**双实例渲染**，因为 xterm 的写入是自包含的 → **不需要** serialize、也不需要「搬迁实例保 scrollback」）；
 - **硬换行**（§7 #11）与 **prepare fail-open**（§7 #15）见风险表。
@@ -1012,7 +1053,10 @@ cargo check --all-targets               # 目标是 0 warning
 
 - xterm 全屏为「双实例同时渲染」（≈2× CPU，§7 #19）；全屏那份**不**同步 `pty_resize`
   （两实例列宽不同，都调会互相覆盖后端尺寸）。
-- TS 引擎路径仍未 PTY 化：`confirm:"terminal"` 在 TS 路径**强制回落审批弹窗**（语义不丢）。
+- ~~TS 引擎路径仍未 PTY 化~~ → ✅ **已实现**（§7 #14）：TS 的 `execute_command` 经
+  `pty_run_command` 复用原生运行器（沙盒 + ConPTY + Channel 流式输出）。
+  ⚠️ 但 `confirm:"terminal"`（终端内确认）在 TS 路径**仍回落审批弹窗** —— TS 侧审批
+  通道独立于 Rust 的交互桥，未纳入本轮。
 - 硬换行（§7 #11）、`prepare` fail-open（§7 #15）与 §7 其余条目状态不变。
 
 ### Step 3 — L3（可选，需另行评估）

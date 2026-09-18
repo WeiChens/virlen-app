@@ -9,10 +9,11 @@
  *   5. 终端输出处理     — \r 回车覆盖 / ANSI 光标移动 → 纯文本
  *   6. 命令执行核心     — runCommand（spawn + 超时/取消杀进程树 + 输出截断）
  */
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, Channel } from '@tauri-apps/api/core'
 import { Command, Child } from '@tauri-apps/plugin-shell'
 
 import { t, tpl } from '@/ui/i18n'
+import { settingsState } from '@/ui/store'
 import { v4 } from '@/utils/uuid'
 import toolInteractEvent from '@/events/toolInteractEvent'
 import type {
@@ -598,6 +599,89 @@ async function killProcessTree(
   }
 }
 
+/** 是否运行在 Tauri（桌面）环境 —— 浏览器 dev 里没有 Rust 侧，也就没有原生执行。 */
+function isTauriEnv(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
+
+/**
+ * TS 引擎路径的「原生执行」入口 —— 把执行下沉到 Rust（沙盒 + ConPTY）。
+ *
+ * 背景：TS 引擎路径的 `execute_command` 原先走 `plugin-shell` 匿名管道：无沙盒、
+ * 无 ANSI 解析、无交互（见 docs/pty-research.md §7 #14）。这里改走 Rust 的
+ * `pty_run_command`，与 Rust 引擎路径**共用同一套执行语义**（铁律 1）：
+ *   - 沙盒优先（受限令牌 + ACL），失败才降级裸跑；
+ *   - ConPTY → 输出是带光标控制的 VT 流，UI 走 xterm 渲染、用户可中途插键盘；
+ *   - 超时 / 终止 / `waitReason` / 「等待输入」引导 均由 Rust 侧统一生成。
+ *
+ * 输出经 `on_output` **ipc::Channel** 流式回传（不经过引擎事件总线）：
+ * 一步送到发起它的调用方，无需安装全局 `agent:tool-output` 监听。
+ *
+ * 不可用时（非 Tauri / 非 Windows）返回 `null`，由调用方回落到 plugin-shell 管道路径。
+ */
+async function tryRunCommandNativePty(
+  cmdStr: string,
+  cwd: string,
+  timeoutMs: number,
+  ctx: ToolContext,
+  toolName: string,
+  skillsDir: string,
+  bypassSandbox: boolean,
+): Promise<ToolResult | null> {
+  // 仅 Windows 桌面端有 ConPTY；其他平台 / 浏览器 dev 继续走 plugin-shell。
+  if (platformSnapshot() !== 'windows' || !isTauriEnv()) return null
+
+  const { toolCallId, sessionId, abortSignal } = ctx
+
+  // 流式输出 → toolOutputStore（与 Rust 引擎路径的 agent:tool-output 监听等价）
+  const channel = new Channel<{ chunk?: string }>()
+  channel.onmessage = (payload) => {
+    const chunk = payload?.chunk ?? ''
+    if (chunk) toolOutputStore.append(toolCallId, chunk)
+  }
+
+  const kill = () => {
+    invoke('agent_kill_command', { toolCallId }).catch(() => {})
+  }
+  // 注册带 kill 的 entry；pty=true → 运行中即用 xterm 渲染。
+  // ⚠️ register 会**替换**同 id 的 entry → 之前 `ctx.write` 写下的「> cmd」表头被清掉，
+  //    与 Rust 引擎路径观感一致（终端块本就单独渲染 `$ cmd` 那一行）。
+  toolOutputStore.register(toolCallId, {
+    toolName,
+    output: '',
+    pty: true,
+    kill,
+  })
+
+  const onAbort = () => kill()
+  abortSignal?.addEventListener('abort', onAbort)
+
+  try {
+    const res = await invoke<{ content: string; uiData?: Record<string, any> }>(
+      'pty_run_command',
+      {
+        sessionId,
+        toolCallId,
+        command: cmdStr,
+        security: {
+          workspace: cwd,
+          sandboxMode: settingsState.value.sandboxMode ?? 'on',
+          skillsDir,
+        },
+        timeoutSecs: Math.min(300, Math.max(1, Math.round(timeoutMs / 1000))),
+        bypassSandbox,
+        onOutput: channel,
+      },
+    )
+    return { content: res.content, uiData: res.uiData }
+  } catch (e: any) {
+    // Rust 侧把「退出码 >= 2」等失败封成 Err（已格式化报告文本）→ CmdError，语义同管道路径
+    throw new CmdError(typeof e === 'string' ? e : (e?.message ?? String(e)))
+  } finally {
+    abortSignal?.removeEventListener('abort', onAbort)
+  }
+}
+
 /**
  * 执行一条 shell 命令（execute_command / execute_script 共用）
  *
@@ -612,6 +696,7 @@ export async function runCommand(
   timeoutMs: number,
   ctx: ToolContext,
   toolName: string = 'execute_command',
+  opts?: { bypassSandbox?: boolean },
 ): Promise<ToolResult> {
   const platform = await detectPlatform()
   const isWin = platform === 'windows'
@@ -620,6 +705,19 @@ export async function runCommand(
   // ===== SKILL_ROOT 进程级只读保护 =====
   // 注入 SKILL_ROOT 环境变量
   const skillsDir = await getSkillsDirPath()
+
+  // ===== 首选：Rust 原生执行（沙盒 + ConPTY），见 docs/pty-research.md §7 #14 =====
+  // 不可用时返回 null → 继续下方 plugin-shell 管道路径（跨平台兜底）。
+  const native = await tryRunCommandNativePty(
+    cmdStr,
+    cwd,
+    timeoutMs,
+    ctx,
+    toolName,
+    skillsDir,
+    opts?.bypassSandbox ?? false,
+  )
+  if (native) return native
 
   // 选择 shell（平台自适应）
   let shellName: string

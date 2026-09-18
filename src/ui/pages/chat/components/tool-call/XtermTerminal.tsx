@@ -1,5 +1,6 @@
 import {
   ReactNode,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -11,7 +12,10 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { invoke } from '@tauri-apps/api/core'
 import { t, tpl } from '@/ui/i18n'
-import { shouldHintIdle } from '@/infrastructure/tools/output-store'
+import {
+  NOTIFY_INTERVAL_MS,
+  shouldHintIdle,
+} from '@/infrastructure/tools/output-store'
 import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
 import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
 
@@ -72,6 +76,93 @@ function terminalTheme() {
 const PTY_FONT =
   "'JetBrains Mono', 'Cascadia Code', Consolas, 'Courier New', monospace"
 
+/**
+ * 拆出文本**末尾连续的 `\r`**：`[可直接写入的部分, 需挂起并入下次写入的 `\r`]`。
+ *
+ * 为什么单独挂起尾部 `\r`：ConPTY 的「行重绘」会先把光标 `\r` 回行首、**下一帧**才发整行
+ * 内容（末尾再用 `\e[<row>;<col>H` 把光标放回原位）。若把那半截 `\r` 单独渲染一帧，光标块
+ * 会瞬移到行首再弹回。挂起它本身不产生任何可见像素，合入下一次写入即可消除中间帧。
+ * 纯函数，便于单测。
+ */
+export function splitTrailingCr(text: string): [string, string] {
+  let holdLen = 0
+  while (holdLen < text.length && text[text.length - 1 - holdLen] === '\r') {
+    holdLen++
+  }
+  return [
+    text.slice(0, text.length - holdLen),
+    text.slice(text.length - holdLen),
+  ]
+}
+
+/**
+ * 挂起尾部 `\r` 的**兜底写入延时**。
+ *
+ * ⚠️ 必须**大于**输出节流窗口（`NOTIFY_INTERVAL_MS`）：前端把 PTY 分片交给 xterm 是按
+ * **节流后的通知**来的，相邻两次通知的最大间隔约等于一个节流窗口。若兜底延时 ≤ 该窗口，
+ * 「先导 `\r`」可能在紧随其后的重绘到达**之前**就被写出去 → 又渲染出「光标闪到行首」的
+ * 中间帧，等于把问题带回来。这里取「节流窗口 + 70ms」留足余量。
+ */
+export const CR_HOLD_FLUSH_MS = NOTIFY_INTERVAL_MS + 70
+
+/**
+ * 写入缓冲：**合并 ConPTY 行重绘的先导 `\r`，绝不在一帧里以 `\r` 收尾**。
+ *
+ * ConPTY 的「行重绘」分两次写：先单独发一个 `\r`（光标回行首），约 10~25ms 后才发整行
+ * 内容（末尾用 `\e[<row>;<col>H` 把光标放回原位）。若把那个 `\r` 单独渲染一帧，就会看到
+ * **光标块瞬移到当前行最前面**再弹回 —— 即「删除时光标闪到行首」。
+ *
+ * 策略（`push`）：
+ *   1. 增量中**不含末尾 `\r`** 的部分 → **立即写入**（不引入额外延迟）；
+ *   2. 末尾连续的 `\r` → 挂起，等下一段增量合并后一起写；
+ *   3. **兜底防抖**（`flushDelayMs`）：若窗口内始终没有后续增量，就把挂起的 `\r` 补写掉，
+ *      避免极少数「只有一个孤立 `\r` 且再无输出」时，光标长期停在错误列。
+ *
+ * 抽成类是为了**可测**：`write` 回调可注入，定时器可用 fake timers 驱动。
+ */
+export class PendingCrWriter {
+  private hold = ''
+  private timer: ReturnType<typeof setTimeout> | null = null
+
+  constructor(
+    private readonly flushDelayMs: number,
+    private readonly write: (text: string) => void,
+  ) {}
+
+  /** 追加一段增量。 */
+  push(delta: string): void {
+    if (!delta) return
+    const [toWrite, hold] = splitTrailingCr(this.hold + delta)
+    if (toWrite) this.write(toWrite)
+    this.hold = hold
+    this.cancelTimer()
+    if (hold) {
+      this.timer = setTimeout(() => this.flush(), this.flushDelayMs)
+    }
+  }
+
+  /** 把挂起的 `\r` 立即写掉（兜底：窗口内没有后续增量）。 */
+  flush(): void {
+    this.cancelTimer()
+    const held = this.hold
+    this.hold = ''
+    if (held) this.write(held)
+  }
+
+  /** 丢弃挂起内容并取消定时器（reset / 卸载）。 */
+  reset(): void {
+    this.cancelTimer()
+    this.hold = ''
+  }
+
+  private cancelTimer(): void {
+    if (this.timer !== null) {
+      clearTimeout(this.timer)
+      this.timer = null
+    }
+  }
+}
+
 export function XtermTerminal({
   stream,
   running,
@@ -100,6 +191,11 @@ export function XtermTerminal({
   const termRef = useRef<Terminal | null>(null)
   /** 已写入终端的内容（用于增量写入；见下方注释） */
   const writtenRef = useRef('')
+  /**
+   * 「先导 `\r`」合并写入缓冲（见 `writeDelta` / `PendingCrWriter`）。
+   * 跨 effect 共享：创建时的整段写入与后续增量写入都走同一套「不以 `\r` 收尾」逻辑。
+   */
+  const crWriterRef = useRef<PendingCrWriter | null>(null)
   // 用 ref 持有 running，避免把 running 放进创建 effect 的依赖里频繁重建终端
   const runningRef = useRef(running)
   runningRef.current = running
@@ -126,6 +222,22 @@ export function XtermTerminal({
   const resizeGenRef = useRef(0)
   const resizeRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  /**
+   * 把一段增量交给 xterm —— 经 `PendingCrWriter` 合并「先导 `\r`」，
+   * 绝不在一帧里以 `\r` 收尾（否则光标会闪到行首，见 `PendingCrWriter` 注释）。
+   */
+  const writeDelta = useCallback((delta: string) => {
+    if (!delta) return
+    let writer = crWriterRef.current
+    if (!writer) {
+      writer = new PendingCrWriter(CR_HOLD_FLUSH_MS, (text) =>
+        termRef.current?.write(text),
+      )
+      crWriterRef.current = writer
+    }
+    writer.push(delta)
+  }, [])
+
   // 创建终端：一个 toolCallId 一个实例
   useLayoutEffect(() => {
     const host = hostRef.current
@@ -134,9 +246,9 @@ export function XtermTerminal({
     const term = new Terminal({
       // PTY 流里的 \n 直接换行（不依赖 \r\n）
       convertEol: true,
-      // 外观对齐 demo：光标闪烁 + 竖条光标 + 略大字号与行高
+      // 外观对齐 demo：光标闪烁 + 块状光标 + 略大字号与行高
       cursorBlink: true,
-      cursorStyle: 'bar',
+      cursorStyle: 'block',
       fontSize: 13,
       lineHeight: 1.25,
       fontFamily: PTY_FONT,
@@ -180,7 +292,7 @@ export function XtermTerminal({
               resizeRetryRef.current = setTimeout(() => attempt(n + 1), 120)
             }
           })
-          .catch(() => {})
+          .catch(() => { })
       }
       attempt(0)
     }
@@ -210,7 +322,7 @@ export function XtermTerminal({
     // 走 Tauri 命令而不是引擎事件总线，因此不污染 AgentEventType 四方契约（§6.3）。
     const inputSub = term.onData((data) => {
       if (!runningRef.current) return
-      invoke('pty_write', { toolCallId, data }).catch(() => {})
+      invoke('pty_write', { toolCallId, data }).catch(() => { })
     })
 
     const observer =
@@ -219,7 +331,7 @@ export function XtermTerminal({
 
     // 首帧：已有累积输出时整体写入（之后走增量）
     if (stream) {
-      term.write(stream)
+      writeDelta(stream)
       writtenRef.current = stream
     }
 
@@ -232,6 +344,7 @@ export function XtermTerminal({
       term.dispose()
       termRef.current = null
       writtenRef.current = ''
+      crWriterRef.current?.reset()
       lastSizeRef.current = null
     }
     // 只随 toolCallId 重建；stream 的变化由下方的增量 effect 处理
@@ -252,15 +365,21 @@ export function XtermTerminal({
     const written = writtenRef.current
     if (stream === written) return
     if (written && stream.startsWith(written)) {
-      term.write(stream.slice(written.length))
+      writeDelta(stream.slice(written.length))
     } else {
       term.reset()
-      term.write(stream)
+      // 整体重放：先清掉挂起的 `\r`，避免把上一轮的尾部错接到新流上
+      crWriterRef.current?.reset()
+      writeDelta(stream)
     }
     writtenRef.current = stream
-  }, [stream])
+  }, [stream, writeDelta])
 
-  return <div className="pty-terminal-body" ref={hostRef} />
+  return <div className="pty-terminal-body-wrapper">
+    <div className="pty-terminal-body" ref={hostRef} />
+  </div>
+
+
 }
 
 /**
@@ -269,16 +388,7 @@ export function XtermTerminal({
  * 只发键名，字节映射统一在 Rust 侧（`pty_session::key_sequence`）—— 命名→字节只有一份实现。
  */
 const PTY_KEY_BUTTONS: Array<{ key: string; label: string; title: string }> = [
-  { key: 'enter', label: 'Enter', title: '回车' },
-  {
-    key: 'ctrl+c',
-    label: 'Ctrl+C',
-    title: '发送 Ctrl+C：仅对正在等待输入的程序有效；中断整个命令请用「终止」',
-  },
   { key: 'ctrl+d', label: 'Ctrl+D', title: '发送 Ctrl+D（EOF）' },
-  { key: 'tab', label: 'Tab', title: 'Tab 补全' },
-  { key: 'up', label: '↑', title: '上方向键' },
-  { key: 'down', label: '↓', title: '下方向键' },
 ]
 
 /** PTY 按键条：触控板 / 触屏场景下快速发送控制键。 */
@@ -291,7 +401,7 @@ function PtyKeyBar({ toolCallId }: { toolCallId: string }) {
           className="terminal-ctl-btn"
           title={t(b.title)}
           onClick={() => {
-            invoke('pty_key', { toolCallId, keys: [b.key] }).catch(() => {})
+            invoke('pty_key', { toolCallId, keys: [b.key] }).catch(() => { })
           }}>
           {b.label}
         </button>
@@ -343,6 +453,7 @@ export function useIdleSeconds(
 export function XtermTerminalBlock({
   title,
   cmd,
+  cwd,
   fileLabel,
   note,
   status,
@@ -356,6 +467,8 @@ export function XtermTerminalBlock({
   title: string
   /** 命令原文 */
   cmd?: string
+  /** 当前工作目录（显示在 `$` 提示符前，即命令实际执行的 cwd） */
+  cwd?: string
   /** 命令前的附加信息（如脚本文件短路径） */
   fileLabel?: string
   /** 输出末尾的附加说明（如脚本执行的 note） */
@@ -390,17 +503,25 @@ export function XtermTerminalBlock({
   function renderBlock(isFull: boolean) {
     return (
       <div
-        className={`execute-command-wrapper is-pty${isFull ? ' is-fullscreen' : ''}`}>
-        {/* 顶部窗口栏（对齐 xterm-demo：红黄绿圆点 + 标签页 + 右侧操作区） */}
+        className={
+          'execute-command-wrapper is-pty' +
+          (isFull ? ' is-fullscreen' : '') +
+          (running ? '' : ' is-finished')
+        }>
+        {/* 顶部窗口栏（对齐 xterm-demo：红黄绿圆点 + 右侧操作区；终端尺寸也展示在这里） */}
         <div className="xterm-titlebar">
           <span className="xterm-dot xterm-dot--red" />
           <span className="xterm-dot xterm-dot--yellow" />
           <span className="xterm-dot xterm-dot--green" />
-          <span className="xterm-tab" title={cmd ?? title}>
-            <span className="xterm-tab__glyph">❯_</span>
-            {title}
-          </span>
+          {
+            held && <span className='xterm-hint'>{t('已接管：超时已暂停（上限 30 分钟）')}</span>
+          }
           <div className="terminal-header-actions">
+            {size && (
+              <span className="xterm-badge">
+                {size.cols}×{size.rows}
+              </span>
+            )}
             {status}
             {running && (
               <button
@@ -443,7 +564,12 @@ export function XtermTerminalBlock({
           </div>
         </div>
         {fileLabel && <div className="pty-cmd-line">📄 {fileLabel}</div>}
-        {cmd && <div className="pty-cmd-line">$ {cmd}</div>}
+        {cmd && (
+          <div className="pty-cmd-line">
+            {cwd && <span className="pty-cwd">{cwd}</span>}
+            $ {cmd}
+          </div>
+        )}
         <XtermTerminal
           stream={stream}
           running={running}
@@ -451,41 +577,6 @@ export function XtermTerminalBlock({
           syncResize={!isFull}
           onResize={setSize}
         />
-        {running ? (
-          <>
-            <div className="pty-hint">
-              {held
-                ? t('已接管：超时已暂停（上限 30 分钟）')
-                : t('可直接在终端中键击或粘贴输入（回车发送）')}
-            </div>
-            {idleSeconds != null && !held && (
-              <div className="pty-hint pty-idle-hint">
-                {tpl('$__secs__ 秒无输出，可能正在等待输入（可直接在终端中输入）', {
-                  secs: idleSeconds,
-                })}
-              </div>
-            )}
-          </>
-        ) : (
-          note && <div className="pty-hint pty-note">{note}</div>
-        )}
-        {/* 底部状态栏（对齐 demo：左运行态 / 右终端尺寸） */}
-        <div className="xterm-statusbar">
-          <span className="xterm-status__group">
-            {running && (
-              <span className="xterm-badge xterm-badge--running">
-                {t('运行中')}
-              </span>
-            )}
-          </span>
-          <span className="xterm-status__group xterm-status__group--right">
-            {size && (
-              <span className="xterm-badge">
-                {size.cols}×{size.rows}
-              </span>
-            )}
-          </span>
-        </div>
       </div>
     )
   }

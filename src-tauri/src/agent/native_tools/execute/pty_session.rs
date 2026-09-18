@@ -20,6 +20,44 @@ use std::fs::File;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant};
+
+// ==================== 临时诊断（排查「删除时光标瞬移行首」；定位后整段删除） ====================
+//
+// 目的：把「前端写入 PTY 的字节」与「ConPTY 回显的字节」按**时间戳**和**读取分块边界**
+// 打出来。若一次删除里「归位序列（`\r` / `\e[H` / `\e[<row>;1H`）与还原光标」
+// 分属不同 read 分块，就能解释「光标瞬移到行首又弹回」。
+static DEBUG_EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+/// 临时诊断：进程内毫秒时间戳（把前端写入与 PTY 输出按时间对齐）。
+pub fn debug_ms() -> u128 {
+    DEBUG_EPOCH.elapsed().as_millis()
+}
+
+/// 临时诊断：把控制字符转成可见形式（`\r` `\n` `\e` `\x7f`…），便于在日志里看清 VT 序列。
+/// 超长则截断，避免 `cat` 大文件刷屏。
+pub fn debug_escape(s: &str) -> String {
+    const MAX: usize = 600;
+    let total = s.chars().count();
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i >= MAX {
+            out.push_str(&format!("…(+{} more)", total - MAX));
+            break;
+        }
+        match ch {
+            '\r' => out.push_str("\\r"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\x1b' => out.push_str("\\e"),
+            c if (c as u32) < 0x20 || c == '\x7f' => {
+                out.push_str(&format!("\\x{:02x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
 
 /// ② 用户干预摘要（Step 2 ②）。
 ///
@@ -110,6 +148,8 @@ impl PtySession {
         if data.is_empty() {
             return true;
         }
+        // ⚠️ 临时诊断：打印前端写入的字节（关键：退格键到底是 `\x7f` 还是 `\x08`）
+        eprintln!("[pty-dbg] t={}ms IN  {}", debug_ms(), debug_escape(data));
         // ②：只记计数，不记内容（D4）
         self.keys.fetch_add(1, Ordering::Relaxed);
         if data.contains('\r') || data.contains('\n') {
@@ -195,13 +235,41 @@ fn lookup(tool_call_id: &str) -> Option<Arc<PtySession>> {
 static LAST_CLIENT_SIZE: LazyLock<Mutex<Option<(i16, i16)>>> =
     LazyLock::new(|| Mutex::new(None));
 
-/// 新建伪控制台应使用的初始尺寸：优先最近一次客户端上报值，否则用 `fallback`。
-pub fn initial_size(fallback: (i16, i16)) -> (i16, i16) {
-    LAST_CLIENT_SIZE
-        .lock()
-        .ok()
-        .and_then(|g| *g)
-        .unwrap_or(fallback)
+/// 新建伪控制台前，等待「客户端首次上报尺寸」的上限。
+///
+/// 为什么需要等：前端 `fit()` 与后端 `create` 是竞态的。
+///   - **Rust 引擎路径**：引擎先发「步骤开始」事件 → UI 挂载终端并上报尺寸 → 才执行工具 →
+///     `create` 时缓存**已有值**，不产生重绘（`docs/pty-research.md` §5.7.1）。
+///   - **TS 引擎路径**：`pty_run_command` 由工具直接 `invoke`，往往**先于**终端挂载，
+///     `create` 时缓存还是空的。若此时用默认 240×50 建控制台，ConPTY 的**首帧**就会按
+///     50 行铺满（内容下方补 ~39 个 `\r\n`）；随后前端上报真实尺寸虽然会触发 resize，
+///     但那些空行**已经进了终端缓冲**，撤不回来。
+/// 所以这里短暂等待客户端上报；拿到真实尺寸再建 → 首帧就是对的。
+/// 超时（前端从不挂载终端，如非 PTY 渲染）则退回 `fallback`，不额外拖慢。
+const CLIENT_SIZE_WAIT: Duration = Duration::from_millis(800);
+
+/// 新建伪控制台应使用的初始尺寸：优先最近一次客户端上报值；没有则**短暂等待**客户端上报，
+/// 超时仍没有才用 `fallback`（见 `CLIENT_SIZE_WAIT`）。
+///
+/// ⚠️ 必须配合 `pty_resize` 里的「**先写缓存再查会话**」：前端上报时若会话尚未注册，
+/// 尺寸仍会先进缓存，本函数的等待循环才能看到它。
+pub async fn initial_size(fallback: (i16, i16)) -> (i16, i16) {
+    fn read() -> Option<(i16, i16)> {
+        LAST_CLIENT_SIZE.lock().ok().and_then(|g| *g)
+    }
+    if let Some(s) = read() {
+        return s;
+    }
+    let deadline = Instant::now() + CLIENT_SIZE_WAIT;
+    loop {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        if let Some(s) = read() {
+            return s;
+        }
+        if Instant::now() >= deadline {
+            return fallback;
+        }
+    }
 }
 
 /// 向指定会话写入数据（`pty_write` 命令入口）。返回是否找到并写入成功。
@@ -232,12 +300,20 @@ pub fn pty_resize(tool_call_id: &str, cols: u16, rows: u16) -> bool {
     let Some(session) = lookup(tool_call_id) else {
         // 会话尚未注册 → 尺寸已写入缓存，紧接其后的 `create` 会用它作初始尺寸；
         // 返回 false 让前端重试兜底。
+        eprintln!("[pty-dbg] t={}ms RESIZE {}x{} -> no-session", debug_ms(), cols, rows);
         return false;
     };
     if !session.set_size(cols as i16, rows as i16) {
         // 尺寸未变 → 跳过（避免无谓的 ConPTY 重绘）
         return true;
     }
+    // ⚠️ 临时诊断：真正触发了 ResizePseudoConsole —— ConPTY 会整屏重绘（含 `\e[H` 归位）
+    eprintln!(
+        "[pty-dbg] t={}ms RESIZE {}x{} -> APPLIED (ConPTY 整屏重绘)",
+        debug_ms(),
+        cols,
+        rows
+    );
     #[cfg(target_os = "windows")]
     {
         return crate::sandbox::pty::resize_raw(session.hpc(), cols as i16, rows as i16);

@@ -2,6 +2,7 @@ import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { t, tpl } from '@/ui/i18n'
 import commentEvent from '@/events/commentEvent'
+import { chatState, sessionStore, settingsState } from '@/ui/store'
 import { Message } from '@/types'
 import { ToolOutput, toolOutputStore } from '@/infrastructure/tools/output-store'
 import { processTerminalOutput } from '@/infrastructure/tools/execute/common'
@@ -291,6 +292,14 @@ export function TerminalView({
   const { output, entry } = useToolLiveOutput(toolCallId)
   const [killing, setKilling] = useState(false)
 
+  // 当前工作目录（= 工具实际执行目录）：会话 workspace 优先，其次默认 workspace。
+  // 解析与 `securityService.getWorkspace` 一致（归一化反斜杠、去尾部斜杠），
+  // 让终端里显示的 `$` 提示符与命令真正跑的 cwd 对得上。
+  const workspace =
+    sessionStore.getSession(chatState.value.currentSessionId)?.workspace ||
+    settingsState.value.defaultWorkspace
+  const cwd = workspace ? workspace.replace(/\\/g, '/').replace(/\/+$/, '') : ''
+
   const segments = useMemo(() => {
     if (running) return buildLiveSegments(output)
     return buildFinishedSegments(
@@ -349,6 +358,7 @@ export function TerminalView({
         <XtermTerminalBlock
           title={title}
           cmd={cmd}
+          cwd={cwd}
           fileLabel={fileLabel}
           note={running ? undefined : message?.uiData?.note}
           stream={stream}

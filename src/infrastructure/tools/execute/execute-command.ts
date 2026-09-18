@@ -168,7 +168,10 @@ toolRegistry.register(
       const approvalId = registerPendingApproval({
         sessionId,
         toolCallId,
-        run: () => runCommand(cmdStr, cwd, timeoutMs, ctx),
+        run: () =>
+          runCommand(cmdStr, cwd, timeoutMs, ctx, 'execute_command', {
+            bypassSandbox,
+          }),
       })
 
       const payload: Record<string, any> = {
@@ -188,6 +191,8 @@ toolRegistry.register(
     }
 
     ctx.write(`> ${cmdStr}\n`)
-    return runCommand(cmdStr, cwd, timeoutMs, ctx)
+    return runCommand(cmdStr, cwd, timeoutMs, ctx, 'execute_command', {
+      bypassSandbox,
+    })
   }) as ToolExecutor,
 )

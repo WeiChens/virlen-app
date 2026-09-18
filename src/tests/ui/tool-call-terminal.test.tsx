@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -12,7 +12,11 @@ import {
   TerminalView,
 } from '@/ui/pages/chat/components/tool-call/TerminalBlock'
 import ExecuteScriptMessage from '@/ui/pages/chat/components/tool-call/ExecuteScriptMessage'
-import { XtermTerminalBlock } from '@/ui/pages/chat/components/tool-call/XtermTerminal'
+import {
+  PendingCrWriter,
+  splitTrailingCr,
+  XtermTerminalBlock,
+} from '@/ui/pages/chat/components/tool-call/XtermTerminal'
 
 /**
  * CodeBlock 依赖 Monaco（jsdom 里无法渲染编辑器），这里换成结构等价的最小替身：
@@ -555,19 +559,161 @@ describe('XtermTerminalBlock（PTY）结构与操作区', () => {
     expect(html).toContain('pty-terminal-body')
   })
 
-  it('demo 风格外框：顶部窗口栏（红黄绿点 + 标签）+ 底部状态栏', () => {
+  it('demo 风格外框：顶部窗口栏（红黄绿点）+ 右上操作区；底部状态栏已移除', () => {
     const html = render(true)
     expect(html).toContain('xterm-titlebar')
+    expect(html).toContain('terminal-header-actions')
     expect(html).toContain('xterm-dot--red')
     expect(html).toContain('xterm-dot--yellow')
     expect(html).toContain('xterm-dot--green')
-    expect(html).toContain('xterm-tab__glyph')
-    expect(html).toContain('xterm-statusbar')
+    // 标签页（.xterm-tab）已移除：标题改由 `$ cmd` 行 / 右上操作区承载，这里不再断言
+    // 底部状态栏已移除：终端尺寸徽标改到右上角（有尺寸时才渲染）
+    expect(html).not.toContain('xterm-statusbar')
   })
 
-  it('底部状态栏：运行中显示「运行中」徐标，完成态不显示', () => {
-    expect(render(true)).toContain('xterm-badge--running')
-    expect(render(true)).toContain('运行中')
-    expect(render(false)).not.toContain('xterm-badge--running')
+  it('命令行前显示当前工作目录（pty-cmd-line 内、`$ cmd` 之前）', () => {
+    const html = renderToStaticMarkup(
+      <XtermTerminalBlock
+        title="Terminal"
+        cwd="E:/code/virlen/virlen-app"
+        cmd="npm init"
+        stream=""
+        running
+        toolCallId="t-pty-cwd"
+      />,
+    )
+    expect(html).toContain('class="pty-cwd"')
+    expect(html).toContain('E:/code/virlen/virlen-app')
+    // cwd 必须排在 `$ cmd` 之前
+    expect(html.indexOf('E:/code/virlen/virlen-app')).toBeLessThan(
+      html.indexOf('$ npm init'),
+    )
+  })
+
+  it('无 cwd 时不渲染提示符目录（退回 `$ cmd`）', () => {
+    expect(render(true)).not.toContain('pty-cwd')
+  })
+
+  it('完成态加 is-finished 类（用于隐藏终端光标）；运行态不加', () => {
+    expect(render(true)).not.toContain('is-finished')
+    expect(render(false)).toContain('is-finished')
+  })
+})
+
+describe('splitTrailingCr（消除「删除时光标闪到行首」）', () => {
+  it('末尾单个 \\r 全部挂起（ConPTY 行重绘的先导 CR）', () => {
+    // 真实样本：ConPTY 先单独发一个 \r，约 10~25ms 后才发整行重绘
+    expect(splitTrailingCr('\r')).toEqual(['', '\r'])
+  })
+
+  it('末尾连续多个 \\r 一起挂起', () => {
+    expect(splitTrailingCr('abc\r\r')).toEqual(['abc', '\r\r'])
+  })
+
+  it('含可见内容的尾块：内容部分照旧立即写入，只挂起尾部 \\r', () => {
+    expect(splitTrailingCr('progress: 10%\r')).toEqual(['progress: 10%', '\r'])
+  })
+
+  it('不以 \\r 收尾 → 原样写入、不挂起', () => {
+    expect(splitTrailingCr('package name: (x) ')).toEqual([
+      'package name: (x) ',
+      '',
+    ])
+    expect(splitTrailingCr('\x1b[11;24H\x1b[?25h')).toEqual([
+      '\x1b[11;24H\x1b[?25h',
+      '',
+    ])
+  })
+
+  it('空串 → 空挂起', () => {
+    expect(splitTrailingCr('')).toEqual(['', ''])
+  })
+
+  it('先导 CR + 后续重绘合并成一次写入（不渲染中间帧）', () => {
+    // 模拟两次 writeDelta：第 1 次只有 \r（挂起、不写）；第 2 次整行重绘 → 合并
+    let pending = ''
+    const written: string[] = []
+    const delta = (d: string) => {
+      const [toWrite, hold] = splitTrailingCr(pending + d)
+      pending = hold
+      if (toWrite) written.push(toWrite)
+    }
+    delta('\r')
+    expect(written).toEqual([]) // 关键：没有渲染任何中间帧（否则就是闪到行首）
+    delta('\x1b[25lpackage name: (dsadsa) nam\x1b[K\r\n\x1b[K\x1b[11;27H\x1b[?25h')
+    expect(written).toEqual([
+      '\r\x1b[25lpackage name: (dsadsa) nam\x1b[K\r\n\x1b[K\x1b[11;27H\x1b[?25h',
+    ])
+    expect(pending).toBe('')
+  })
+})
+
+describe('PendingCrWriter（先导 CR 合并 + 兜底防抖）', () => {
+  const make = (delay = 120) => {
+    const out: string[] = []
+    const writer = new PendingCrWriter(delay, (text) => out.push(text))
+    return { writer, out }
+  }
+
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('先导 \\r 挂起：窗口内有后续增量 → 合并成一次写入，不渲染中间帧', () => {
+    const { writer, out } = make()
+    writer.push('\r')
+    expect(out).toEqual([]) // 关键：没有单独渲染那个 \r
+    writer.push('\x1b[25lpackage name: (x) nam\x1b[11;27H\x1b[?25h')
+    expect(out).toEqual([
+      '\r\x1b[25lpackage name: (x) nam\x1b[11;27H\x1b[?25h',
+    ])
+    vi.advanceTimersByTime(1000)
+    expect(out).toHaveLength(1) // 兜底已取消，不会重复写
+  })
+
+  it('兜底防抖：窗口内没有后续增量 → 到点补写挂起的 \\r', () => {
+    const { writer, out } = make(120)
+    writer.push('\r')
+    expect(out).toEqual([])
+    vi.advanceTimersByTime(119)
+    expect(out).toEqual([]) // 未到点，仍不写
+    vi.advanceTimersByTime(1)
+    expect(out).toEqual(['\r'])
+  })
+
+  it('含可见内容的尾块：内容立即写入，仅末尾 \\r 挂起', () => {
+    const { writer, out } = make()
+    writer.push('progress: 10%\r')
+    expect(out).toEqual(['progress: 10%']) // 内容不延迟
+    vi.advanceTimersByTime(1000)
+    expect(out).toEqual(['progress: 10%', '\r'])
+  })
+
+  it('不以 \\r 收尾 → 立即写入且不挂起（不引入延迟）', () => {
+    const { writer, out } = make()
+    writer.push('abc')
+    expect(out).toEqual(['abc'])
+    vi.advanceTimersByTime(1000)
+    expect(out).toEqual(['abc'])
+  })
+
+  it('后到的挂起会重置兜底定时器（合并窗口顺延）', () => {
+    const { writer, out } = make(120)
+    writer.push('abc\r')
+    expect(out).toEqual(['abc'])
+    vi.advanceTimersByTime(80)
+    writer.push('def\r') // 距上次挂起 80ms → 重置定时器
+    expect(out).toEqual(['abc', '\rdef'])
+    vi.advanceTimersByTime(80)
+    expect(out).toEqual(['abc', '\rdef']) // 还没到点
+    vi.advanceTimersByTime(40)
+    expect(out).toEqual(['abc', '\rdef', '\r'])
+  })
+
+  it('reset 丢弃挂起并取消定时器', () => {
+    const { writer, out } = make()
+    writer.push('\r')
+    writer.reset()
+    vi.advanceTimersByTime(1000)
+    expect(out).toEqual([])
   })
 })
