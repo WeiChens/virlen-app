@@ -244,6 +244,46 @@
   width: 100%;
 }
 
+// ==================== 检索命中高亮 ====================
+// Ctrl+F 检索结果跳转时叠加：用背景 + 描边强调目标消息行。
+// 只动 background / box-shadow（不影响布局高度，不会干扰虚拟滚动测量），
+.message-item-wrap.highlighted {
+  border-radius: 12px;
+  animation: msg-search-highlight 1s ease-out;
+}
+
+@keyframes msg-search-highlight {
+  0% {
+    background-color: color-mix(
+      in srgb,
+      var(--accent-color, #4f46e5) 20%,
+      transparent
+    );
+  }
+  55% {
+    background-color: color-mix(
+      in srgb,
+      var(--accent-color, #4f46e5) 12%,
+      transparent
+    );
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+// 尊重「减少动态效果」：不做淡出动画，改为静态高亮（仍由 JS 定时清除）
+@media (prefers-reduced-motion: reduce) {
+  .message-item-wrap.highlighted {
+    animation: none;
+    background-color: color-mix(
+      in srgb,
+      var(--accent-color, #4f46e5) 14%,
+      transparent
+    );
+  }
+}
+
 // 虚拟滚动下条目会随滚动频繁挂载/卸载：若保留入场动画（fadeIn），
 // 每次重新挂载 / animation 属性被重新赋值都会重播，视觉上就是
 //「滚完最后一下、消息闪一下」。因此虚拟列表内统一关闭入场动画。

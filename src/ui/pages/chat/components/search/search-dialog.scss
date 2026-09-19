@@ -1,0 +1,446 @@
+/**
+ * search-dialog — 会话内消息检索弹窗样式
+ *
+ * 工具型浮层（命令面板风格）：顶部对齐、半透明遮罩、低装饰、高信息密度。
+ * 颜色与圆角全部走主题令牌，亮/暗色自动跟随。
+ * 与全局 Modal 对齐：遮罩从自绘标题栏（--window-top-bar-height）下方开始。
+ */
+.search-overlay {
+  position: fixed;
+  top: var(--window-top-bar-height, 30px);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 900;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 9vh 16px 0;
+  background: var(--modal-overlay, rgba(0, 0, 0, 0.5));
+  animation: searchOverlayIn 0.16s ease;
+}
+
+.search-panel {
+  width: min(1400px, 92%);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-primary, #fff);
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 14px;
+  box-shadow: var(--shadow-md, 0 12px 32px rgba(0, 0, 0, 0.18));
+  animation: searchPanelIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ==================== 检索输入 ==================== */
+.search-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 14px 14px 16px;
+  border-bottom: 1px solid var(--border-color, #e5e5e5);
+  transition: border-color 0.15s;
+
+  /* 键盘焦点定位：输入框聚焦时整行给出主色反馈 */
+  &:focus-within {
+    border-bottom-color: color-mix(in srgb,
+        var(--primary, #4f46e5) 55%,
+        transparent);
+
+    .search-input-icon {
+      color: var(--accent-color, #4f46e5);
+    }
+  }
+
+  .search-input-icon {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    color: var(--text-secondary, #666);
+    fill: currentColor;
+  }
+
+  .search-input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text-primary, #1a1a1a);
+    font-size: var(--font-size-base, 13px);
+    font-weight: 500;
+    line-height: 1.6;
+
+    &::placeholder {
+      color: var(--text-tertiary, #999);
+    }
+  }
+
+  .search-input-clear {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    color: var(--text-secondary, #666);
+    cursor: pointer;
+    transition: background 0.12s;
+    background: transparent;
+
+    &:hover {
+      background: var(--active-bg, #e0e0e6);
+    }
+
+    svg {
+      width: 11px;
+      height: 11px;
+      fill: currentColor;
+    }
+  }
+
+  .search-input-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    flex-shrink: 0;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary, #666);
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+
+    &:hover {
+      background: var(--hover-bg, #f0f0f0);
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    svg {
+      width: 13px;
+      height: 13px;
+      fill: currentColor;
+    }
+  }
+}
+
+/* ==================== 筛选 + 计数 ==================== */
+.search-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border-color-light, rgba(108, 108, 108, 0.13));
+
+  .search-filters {
+    display: flex;
+    gap: 20px;
+  }
+
+  // 下划线标签（非胶囊）：默认次级文字，选中态加粗 + 主色下划线压在分隔线上
+  .search-filter-tab {
+    position: relative;
+    padding: 10px 0;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary, #666);
+    font-size: var(--font-size-sm, 12px);
+    cursor: pointer;
+    transition: color 0.12s;
+
+    &:hover {
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    &.active {
+      color: var(--text-primary, #1a1a1a);
+      font-weight: 600;
+
+      &::after {
+        content: '';
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: -1px;
+        height: 2px;
+        border-radius: 2px 2px 0 0;
+        background: var(--accent-color, #4f46e5);
+      }
+    }
+  }
+
+  .search-count {
+    margin-left: auto;
+    font-size: var(--font-size-xs, 11px);
+    color: var(--text-tertiary, #999);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* ==================== 结果列表 ==================== */
+.search-results {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px;
+  scrollbar-width: thin;
+
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb, #ccc);
+    border-radius: 3px;
+  }
+}
+
+.search-result-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  transition: background 0.1s, box-shadow 0.1s;
+
+  &:hover {
+    background: var(--hover-bg, #f0f0f0);
+  }
+
+  /* 键盘选中态：整行高亮 + 主色描边（与 hover 明确区分） */
+  &.active {
+    background: var(--accent-bg, #eef2ff);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary, #4f46e5) 45%, transparent);
+  }
+
+  /* 左侧角色图标：我 = 主色，AI = 次级 */
+  .result-role {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: var(--text-secondary, #666);
+
+    svg {
+      width: 15px;
+      height: 15px;
+      fill: currentColor;
+    }
+  }
+
+  &[data-role='user'] .result-role {
+    color: var(--primary, #4f46e5);
+  }
+
+  /* 主信息：单行命中片段，占满剩余宽度，超出省略 */
+  .result-text {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text-primary, #1a1a1a);
+    font-size: var(--font-size-sm, 14px);
+    line-height: 1.5;
+
+    mark {
+      padding: 0 2px;
+      border-radius: 3px;
+      background: color-mix(in srgb, var(--primary, #4f46e5) 24%, transparent);
+      color: inherit;
+      font-weight: 600;
+    }
+  }
+
+  /* 次信息：会话名 · Agent · 目录 · 时间（右侧单行） */
+  .result-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+    min-width: 0;
+    font-size: var(--font-size-xs, 11px);
+    color: var(--text-tertiary, #999);
+  }
+
+  .result-meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+
+    svg {
+      width: 12px;
+      height: 12px;
+      flex-shrink: 0;
+      fill: currentColor;
+    }
+  }
+
+  /* 会话名：来源信息中稍强，跨会话时用于辨识归属 */
+  .result-session {
+    color: var(--text-secondary, #666);
+    max-width: 200px;
+  }
+
+  /* 工作目录：限制宽度，超长省略 */
+  .result-meta-path {
+    max-width: 240px;
+  }
+
+  .result-time {
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* ==================== 空状态 ==================== */
+.search-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 56px 24px;
+  text-align: center;
+
+  .search-empty-icon {
+    width: 30px;
+    height: 30px;
+    margin-bottom: 6px;
+    fill: var(--text-tertiary, #999);
+    opacity: 0.5;
+  }
+
+  .search-empty-title {
+    margin: 0;
+    color: var(--text-primary, #1a1a1a);
+    font-size: var(--font-size-base, 14px);
+  }
+
+  .search-empty-hint {
+    margin: 0;
+    color: var(--text-tertiary, #999);
+    font-size: var(--font-size-sm, 12px);
+  }
+}
+
+/* ==================== 分页加载指示 ==================== */
+.search-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 0;
+  color: var(--text-tertiary, #999);
+  font-size: var(--font-size-xs, 11px);
+
+  /* 小旋螺：纯 CSS，不引动画库 */
+  &::before {
+    content: '';
+    width: 12px;
+    height: 12px;
+    margin-right: 6px;
+    border: 2px solid var(--border-color, #e5e5e5);
+    border-top-color: var(--accent-color, #4f46e5);
+    border-radius: 50%;
+    animation: searchSpin 0.7s linear infinite;
+  }
+}
+
+.search-more-hint {
+  padding: 10px 0;
+  text-align: center;
+  color: var(--text-tertiary, #999);
+  font-size: var(--font-size-xs, 11px);
+}
+
+@keyframes searchSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ==================== 键盘提示 ==================== */
+.search-footer {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border-color-light, rgba(108, 108, 108, 0.13));
+  color: var(--text-tertiary, #999);
+  font-size: var(--font-size-xs, 11px);
+
+  .search-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    background: var(--bg-secondary, #f7f7f8);
+    color: var(--text-secondary, #666);
+    font-family: inherit;
+    font-size: 10px;
+    line-height: 1;
+  }
+}
+
+/* ==================== 动画（尊重 reduced-motion） ==================== */
+@keyframes searchOverlayIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes searchPanelIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.99);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+  .search-overlay,
+  .search-panel {
+    animation: none;
+  }
+
+  .search-loading::before {
+    animation: none;
+  }
+}

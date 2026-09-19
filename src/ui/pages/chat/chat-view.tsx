@@ -36,6 +36,7 @@ import ChatInput, {
   type ImageAttachment,
 } from './components/input'
 import ProviderPrompt from './components/modals/provider-prompt'
+import SearchDialog from './components/search'
 
 import { useToolUI } from './components/tool-ui'
 import HideSideBarSvg from '@/ui/components/icons/HideSideBarSvg'
@@ -45,9 +46,12 @@ import { t, tpl } from '@/ui/i18n'
 import settingsEvent from '@/events/settingsEvent'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
 import DropDownSvg from '@/ui/components/icons/DropDownSvg'
+import SearchSvg from '@/ui/components/icons/SearchSvg'
 import './chat-view.scss'
 import { settingsState } from '@/ui/store/settingStore'
-import ChatMessageList from './components/message/message-list'
+import ChatMessageList, {
+  type MessageJumpTarget,
+} from './components/message/message-list'
 import WelcomeScreen from './components/welcome'
 import { appName } from '@/ui/constants'
 import { sessionStore } from '@/ui/store'
@@ -59,6 +63,7 @@ import { repairSessionIfNeeded } from '@/services/chat-service'
 import { vision } from '@/infrastructure/vision'
 import type { VisionAnalyzeResult } from '@/infrastructure/vision/types'
 import { buildUserContent } from '@/utils/messageContent'
+import type { MessageSearchItem } from '@/infrastructure/sessionRepo'
 import { requestAttentionIfUnfocused } from '@/utils/windowAttention'
 import { createFrameBatcher } from '@/utils/frameBatch'
 import { track, trackPerf, hashText } from '@/utils/telemetry'
@@ -219,6 +224,10 @@ function WorkspaceDisplay({
 function ChatView() {
   const chatInputRef = useRef<{ setText: (text: string) => void }>(null)
   const [showProviderPrompt, setShowProviderPrompt] = useState(false)
+  const [showSearch, setShowSearch] = useState(false)
+  /** 检索结果跳转目标（滚动定位 + 临时高亮），下发给消息列表 */
+  const [searchJump, setSearchJump] = useState<MessageJumpTarget | null>(null)
+  const searchJumpNonceRef = useRef(0)
   const [pendingContent, setPendingContent] = useState<string | null>(null)
   const { ToolUI } = useToolUI()
   const [sidebarWidth, setSidebarWidth] = useState(getStoredWidth())
@@ -229,6 +238,18 @@ function ChatView() {
   useEffect(() => {
     currentWidthRef.current = sidebarWidth
   }, [sidebarWidth])
+
+  // Ctrl / Cmd + F 唤起消息检索弹窗（再次按下可关闭）
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault() // 拦截 WebView 自带的页面查找
+        setShowSearch((v) => !v)
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   // 鼠标拖拽调整侧边栏宽度
   function handleResizerMouseDown(e: React.MouseEvent<HTMLDivElement>) {
@@ -357,10 +378,11 @@ function ChatView() {
     },
     [applyMessagesUpdate],
   )
-  // 当 currentSessionId 变为 null 时清空 messages
+  // 当 currentSessionId 变为 null 时清空 messages（并丢弃未消费的检索跳转目标）
   useEffect(() => {
     if (!chatState.value.currentSessionId) {
       setMessages([])
+      setSearchJump(null)
     }
   }, [chatState.value.currentSessionId])
   useEffect(() => {
@@ -670,6 +692,29 @@ function ChatView() {
     cancelMessage(sid)
   }
 
+  /**
+   * 检索结果点击：关闭弹窗，切到目标会话，并滚动定位 + 临时高亮该消息。
+   * 必须等会话消息分页加载完成后再下发跳转目标，否则目标消息所在分页尚未就绪
+   * （消息列表的 scrollToMessage 依赖 messagePaging 才能逐页回补历史）。
+   */
+  async function handleSearchSelect(item: MessageSearchItem) {
+    setShowSearch(false)
+    if (item.sessionId) {
+      if (item.sessionId !== chatState.value.currentSessionId) {
+        await handleSelectSession(item.sessionId)
+      } else {
+        // 同一会话：确保消息分页已在内存（通常已加载）
+        await sessionStore.ensureMessagesLoaded(item.sessionId)
+      }
+    }
+    searchJumpNonceRef.current += 1
+    setSearchJump({
+      id: item.id,
+      sessionId: item.sessionId,
+      nonce: searchJumpNonceRef.current,
+    })
+  }
+
   function toggleSidebar() {
     chatState.setValue('sidebarOpen', !chatState.value.sidebarOpen)
   }
@@ -737,6 +782,13 @@ function ChatView() {
           </button>
           <span className="chat-title">{currentTitle}</span>
           <div className="chat-toolbar-actions">
+            <button
+              className="toolbar-icon-btn"
+              onClick={() => setShowSearch(true)}
+              title={t('搜索消息')}
+              type="button">
+              <SearchSvg />
+            </button>
             <WorkspaceDisplay
               value={
                 chatState.value.currentSessionId
@@ -759,6 +811,7 @@ function ChatView() {
               messages={messages}
               setMessages={setMessages}
               setText={handleSetText}
+              jumpTarget={searchJump}
             />
             <ChatInput
               ref={chatInputRef}
@@ -790,6 +843,17 @@ function ChatView() {
       </div>
 
       <ToolUI />
+
+      {/* 消息检索弹窗（Ctrl / Cmd + F 唤起）
+          - 有会话：只搜当前会话；
+          - 无会话：搜所有会话（条目展示工作目录 + Agent 名称） */}
+      <SearchDialog
+        visible={showSearch}
+        scope={chatState.value.currentSessionId ? 'session' : 'global'}
+        sessionId={chatState.value.currentSessionId}
+        onClose={() => setShowSearch(false)}
+        onSelect={handleSearchSelect}
+      />
     </div>
   )
 }

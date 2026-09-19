@@ -106,9 +106,9 @@ function previewOfMessage(msg: Message): string {
     typeof msg.content === 'string'
       ? msg.content
       : msg.content
-          .filter((b) => b.type === 'text')
-          .map((b) => ('text' in b ? b.text : ''))
-          .join('')
+        .filter((b) => b.type === 'text')
+        .map((b) => ('text' in b ? b.text : ''))
+        .join('')
   return text.slice(0, 420)
 }
 
@@ -123,6 +123,19 @@ function isStreamingSession(sessionId: string): boolean {
   return rt.working && !rt.paused
 }
 
+/**
+ * 「跳转并高亮」目标（消息检索弹窗选中结果时下发）。
+ * 通过 nonce 区分「同一消息被反复选中」，确保每次都能重新触发定位。
+ */
+export interface MessageJumpTarget {
+  /** 目标消息 id */
+  id: string
+  /** 目标消息所属会话（与当前会话不一致时先等待会话切换完成） */
+  sessionId: string
+  /** 递增序号（每次选中自增） */
+  nonce: number
+}
+
 interface ChatMessageListProps {
   /** 当前已加载的所有消息（可能只是 SQLite 中的尾部若干页） */
   messages: Message[]
@@ -130,12 +143,15 @@ interface ChatMessageListProps {
   setMessages: (msgs: Message[]) => void
   /** 输入框设置文本回调 */
   setText: (text: string) => void
+  /** 外部请求滚动定位并临时高亮的目标消息（Ctrl+F 检索结果跳转） */
+  jumpTarget?: MessageJumpTarget | null
 }
 
 function ChatMessageList({
   messages,
   setMessages,
   setText,
+  jumpTarget,
 }: ChatMessageListProps) {
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const lastScrollTopRef = useRef(0)
@@ -171,6 +187,12 @@ function ChatMessageList({
   const jumpLoadingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** 切会话 / 首开时容器先隐藏（opacity:0），布局稳定后再显示，避免中间态闪动 */
   const [hide, setHide] = useState(false)
+  /** 检索跳转后临时高亮的目标消息 id（到时自动清除） */
+  const [highlightMsgId, setHighlightMsgId] = useState<string | null>(null)
+  /** 高亮自动清除定时器 */
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** 已消费的跳转 nonce（避免同一目标被重复定位） */
+  const lastJumpNonceRef = useRef(0)
 
   // 供「只注册一次」的 scroll 回调 / 异步回调读取最新的 messages
   const messagesRef = useRef(messages)
@@ -426,6 +448,12 @@ function ChatMessageList({
       clearInterval(settleTimerRef.current)
       settleTimerRef.current = null
     }
+    // 切会话：清掉上一次检索跳转残留的命中高亮
+    if (highlightTimerRef.current) {
+      clearTimeout(highlightTimerRef.current)
+      highlightTimerRef.current = null
+    }
+    setHighlightMsgId(null)
   }, [sessionId])
 
   /**
@@ -500,6 +528,10 @@ function ChatMessageList({
       if (jumpLoadingTimerRef.current) {
         clearTimeout(jumpLoadingTimerRef.current)
         jumpLoadingTimerRef.current = null
+      }
+      if (highlightTimerRef.current) {
+        clearTimeout(highlightTimerRef.current)
+        highlightTimerRef.current = null
       }
     }
   }, [])
@@ -665,15 +697,26 @@ function ChatMessageList({
     return () => void uninstall()
   }, [rowVirtualizer])
 
+  /** 临时高亮某条消息（2.6s 后自动淡出清除；重复调用重置计时） */
+  const flashHighlight = useCallback((msgId: string) => {
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current)
+    setHighlightMsgId(msgId)
+    highlightTimerRef.current = setTimeout(() => {
+      highlightTimerRef.current = null
+      setHighlightMsgId(null)
+    }, 1000)
+  }, [])
+
   // ==================== 锚点点击：跳转到指定消息（必要时按需回补历史） ====================
   const scrollToMessage = useCallback(
-    async (msgId: string) => {
+    async (msgId: string, highlight = false) => {
       const sid = chatState.value.currentSessionId
       if (!sid) return
 
       // ① 已在内存 → 直接跳（count 已包含该消息，可立即跳转）
       const inMemory = messagesRef.current.findIndex((m) => m.id === msgId)
       if (inMemory >= 0) {
+        if (highlight) flashHighlight(msgId)
         requestAnimationFrame(() => jumpTo(inMemory))
         return
       }
@@ -707,7 +750,10 @@ function ChatMessageList({
         setMessages([...s.messages])
         const finalIdx = s.messages.findIndex((m) => m.id === msgId)
         // 等 messages 提交后（layout effect）再跳，确保 count 已更新
-        if (finalIdx >= 0) pendingJumpIdRef.current = msgId
+        if (finalIdx >= 0) {
+          pendingJumpIdRef.current = msgId
+          if (highlight) flashHighlight(msgId)
+        }
       } finally {
         if (jumpLoadingTimerRef.current) {
           clearTimeout(jumpLoadingTimerRef.current)
@@ -717,8 +763,26 @@ function ChatMessageList({
         setIsLoadingOlder(false)
       }
     },
-    [jumpTo, setMessages],
+    [jumpTo, setMessages, flashHighlight],
   )
+
+  // ==================== 检索跳转：滚动定位 + 高亮 ====================
+  // 由 Ctrl+F 检索弹窗选中结果时下发 jumpTarget。等目标会话激活后再跳，并取消
+  // 「切会话贴底稳定」流程 —— 否则 settle 轮询会在跳转后把视口重新拉回底部。
+  useEffect(() => {
+    if (!jumpTarget || !sessionId) return
+    if (jumpTarget.sessionId !== sessionId) return
+    if (jumpTarget.nonce === lastJumpNonceRef.current) return
+    lastJumpNonceRef.current = jumpTarget.nonce
+
+    needInitialBottomRef.current = false
+    if (settleTimerRef.current) {
+      clearInterval(settleTimerRef.current)
+      settleTimerRef.current = null
+    }
+    setHide(false)
+    void scrollToMessage(jumpTarget.id, true)
+  }, [jumpTarget, sessionId, scrollToMessage])
 
   /**
    * 锚点圆点列表（memo）：仅在「用户消息集合」或活跃项/跳转回调变化时重建。
@@ -729,9 +793,8 @@ function ChatMessageList({
       anchorUsers.slice(-MAX_ANCHOR_DOTS).map((u) => (
         <Tooltip key={u.id} content={u.preview || ''} direction="left">
           <button
-            className={`msg-anchor-dot${activeUserMsgId === u.id ? ' active' : ''}${
-              jumpLoadingId === u.id ? ' loading' : ''
-            }`}
+            className={`msg-anchor-dot${activeUserMsgId === u.id ? ' active' : ''}${jumpLoadingId === u.id ? ' loading' : ''
+              }`}
             onClick={() => void scrollToMessage(u.id)}
             type="button"
             aria-label={t('跳转到该消息')}
@@ -896,7 +959,7 @@ function ChatMessageList({
                 key={vi.key}
                 data-index={vi.index}
                 ref={rowVirtualizer.measureElement}
-                className="message-item-wrap"
+                className={`message-item-wrap${msg.id === highlightMsgId ? ' highlighted' : ''}`}
                 data-msg-id={msg.role === 'user' ? msg.id : undefined}
                 style={{
                   position: 'absolute',

@@ -25,6 +25,8 @@ export interface SessionRepo {
   ): Promise<MessagePage>
   /** 获取会话内全部用户消息的轻量索引（右侧锚点列表用，不含 AI/工具正文） */
   getUserMessageRefs(sessionId: string): Promise<UserMessageRef[]>
+  /** 检索消息（会话内 / 跨会话，分页；按时间倒序） */
+  searchMessages(opts: MessageSearchOptions): Promise<MessageSearchPage>
   /** 批量写入变化的会话，删除不存在的会话 */
   saveDiff(oldSessions: Session[], newSessions: Session[]): void
   /** 直接持久化单个会话元数据 */
@@ -59,6 +61,45 @@ export interface UserMessageRef {
   id: string
   /** 纯文本摘要（后端已截断） */
   preview: string
+}
+
+/** 消息检索结果项（与 Rust 端 `MessageSearchItem` 对应） */
+export interface MessageSearchItem {
+  id: string
+  sessionId: string
+  role: string
+  /** 命中片段（后端已围绕命中位置截取，超长带省略号） */
+  text: string
+  timestamp: number
+  sessionTitle: string
+  workspace?: string | null
+  agentId?: string | null
+}
+
+/** 消息检索的 keyset 分页游标（与 Rust 端 `SearchCursor` 对应） */
+export interface SearchCursor {
+  timestamp: number
+  rowid: number
+}
+
+/** 消息检索分页结果 */
+export interface MessageSearchPage {
+  items: MessageSearchItem[]
+  hasMore: boolean
+  /** 下一页游标（hasMore 为 true 时给出，用于 keyset 分页） */
+  nextCursor: SearchCursor | null
+}
+
+/** 消息检索参数 */
+export interface MessageSearchOptions {
+  query: string
+  /** 限定会话；不传 = 跨会话检索 */
+  sessionId?: string | null
+  /** 限定角色；不传 = user + assistant */
+  role?: string | null
+  limit?: number
+  /** keyset 分页游标（上一页返回的 nextCursor）；首页不传 */
+  cursor?: SearchCursor | null
 }
 
 /** 键序无关的 JSON 序列化（仅用于签名比较，不用于落库） */
@@ -149,6 +190,21 @@ class SessionRepoImpl implements SessionRepo {
       })
     } catch {
       return []
+    }
+  }
+
+  /** 检索消息（会话内 / 跨会话，keyset 游标分页） */
+  async searchMessages(opts: MessageSearchOptions): Promise<MessageSearchPage> {
+    try {
+      return await invoke<MessageSearchPage>('cmd_search_messages', {
+        query: opts.query,
+        sessionId: opts.sessionId ?? null,
+        role: opts.role ?? null,
+        limit: opts.limit ?? null,
+        cursor: opts.cursor ?? null,
+      })
+    } catch {
+      return { items: [], hasMore: false, nextCursor: null }
     }
   }
 

@@ -68,6 +68,31 @@
       }
     }
 
+    // 工具栏图标按钮（搜索消息等）
+    .toolbar-icon-btn {
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      cursor: pointer;
+      color: var(--text-secondary, #666);
+
+      &:hover {
+        background: var(--hover-bg, #f0f0f0);
+        color: var(--text-primary, #1a1a1a);
+      }
+
+      svg {
+        width: 16px;
+        height: 16px;
+        fill: currentColor;
+      }
+    }
+
     .chat-title {
       flex: 1;
       font-size: var(--font-size-base);
