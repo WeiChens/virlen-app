@@ -8,7 +8,12 @@
 //! ├── mod.rs                 统一结果 NativeToolOutcome / 上下文 NativeToolCtx / 分发 execute_native_tool
 //! ├── common.rs              跨分类公共：参数取值辅助 arg_*、安全路径解析 resolve_safe_path / is_path_allowed
 //! ├── execute/               代码执行（2）
-//! │   ├── common.rs          终端输出解码 / 命令解析与风险分类 / 运行中命令注册表 / run_command_native
+//! │   ├── common/           终端输出解码 / 命令解析与风险分类 / 运行中命令注册表 / run_command_native
+//! │   │   ├── decode.rs     终端输出解码（UTF-8 优先 / GBK 兜底 / 有界缓冲）
+//! │   │   ├── classify.rs   命令解析与风险分类
+//! │   │   ├── registry.rs   运行中命令注册表（前端「终止」）
+//! │   │   ├── terminal.rs   终端输出处理（ANSI / \r 覆盖）
+//! │   │   └── runner/       统一运行器（pipes / pty / sandbox）
 //! │   ├── execute_command.rs
 //! │   └── execute_script.rs
 //! ├── file/                  文件操作（8）

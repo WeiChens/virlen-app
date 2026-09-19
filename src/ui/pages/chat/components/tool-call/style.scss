@@ -606,11 +606,21 @@
       max-height: none;
     }
 
-    /* PTY 全屏：终端主体占满剩余高度（解除原位 240px 定高） */
-    .pty-terminal-body {
-      flex: 1;
+    /* PTY 全屏：终端主体占满剩余高度（解除原位 240px 定高）。
+       ⚠️ DOM 结构是 .execute-command-wrapper > .pty-terminal-body-wrapper > .pty-terminal-body，
+       中间那层 wrapper 才是这里 flex 列的子项 —— 「占满剩余高度」必须落在 wrapper 上；
+       内层 .pty-terminal-body 保持基类的 height:100% 去填满 wrapper。
+       之前把 flex:1 / height:auto 加在 .pty-terminal-body 上是错的：它不是 flex 子项，
+       flex:1 无效，height:auto 会让它**收缩到 xterm 默认的 24 行**，于是 fit() 量出来恒为
+       24 行、wrapper 撑开后下方留一片空白（“全屏没占满”）。 */
+    .pty-terminal-body-wrapper {
+      flex: 1 1 0;
       min-height: 0;
       height: auto;
+    }
+
+    .pty-terminal-body {
+      height: 100%;
     }
   }
 }

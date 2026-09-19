@@ -179,9 +179,10 @@ export function XtermTerminal({
   /**
    * 是否把尺寸同步给后端伪控制台。
    *
-   * 全屏态是「双实例同时渲染」（见 `XtermTerminalBlock`），两份的列宽不同；
-   * 若两份都调 `pty_resize` 会互相覆盖后端尺寸 → 只让**原位那份**同步尺寸，
-   * 全屏那份纯渲染（伪控制台输出按列宽硬换行，更宽的多余右侧留白无害）。
+   * 全屏态是「双实例同时渲染」（见 `XtermTerminalBlock`），两份的列宽/行数不同；
+   * 若两份都调 `pty_resize` 会互相覆盖后端尺寸 → 同一时刻**只让一份独占同步**：
+   * 全屏期间由全屏实例同步、原位实例暂停；退出全屏同步权交回原位实例
+   * （见下方「尺寸同步权交接」effect，会强制重发一次）。
    */
   syncResize?: boolean
   /** 尺寸变化回调（列×行），供外层状态栏展示；用 ref 持有避免 effect 依赖抖动 */
@@ -221,6 +222,13 @@ export function XtermTerminal({
    */
   const resizeGenRef = useRef(0)
   const resizeRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /**
+   * 当前实例的 `syncSize`（在创建终端的 layout effect 内定义）。
+   *
+   * 供「尺寸同步权交接」effect 在**重新拿回同步权**时强制重发一次尺寸 ——
+   * 退出全屏后原位实例尺寸未变，`lastSizeRef` 的去重会让它跳过上报。
+   */
+  const syncSizeRef = useRef<(() => void) | null>(null)
 
   /**
    * 把一段增量交给 xterm —— 经 `PendingCrWriter` 合并「先导 `\r`」，
@@ -316,6 +324,7 @@ export function XtermTerminal({
         sendResize(term.cols, term.rows)
       }
     }
+    syncSizeRef.current = syncSize
     syncSize()
 
     // 键击/粘贴直送伪控制台 —— 用户「插键盘」的核心通道。
@@ -346,10 +355,39 @@ export function XtermTerminal({
       writtenRef.current = ''
       crWriterRef.current?.reset()
       lastSizeRef.current = null
+      syncSizeRef.current = null
     }
     // 只随 toolCallId 重建；stream 的变化由下方的增量 effect 处理
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toolCallId])
+
+  /**
+   * 尺寸同步权交接（全屏独占同步 / 退出还原）。
+   *
+   * 全屏是「双实例同时渲染」：同一时刻只允许一份调 `pty_resize`（否则互相覆盖后端尺寸）。
+   * `XtermTerminalBlock` 通过 `syncResize` 在切换全屏时把同步权在两份实例间移交：
+   *   - **拿回同步权**（退出全屏，`syncResize` false → true）：此时原位尺寸**没变**，
+   *     `lastSizeRef` 的去重会让它跳过上报 → 后端就永远停在「全屏那次」的大尺寸上。
+   *     故这里清空去重缓存并强制重发一次（也顺带重跑 `fit()`，保证行数正确）。
+   *   - **交出同步权**（进入全屏，true → false）：作废挂在**本实例**上的 `pty_resize`
+   *     重试链，避免它在全屏实例已经上报后又用旧尺寸覆盖回去。
+   */
+  const prevSyncResizeRef = useRef(syncResize)
+  useEffect(() => {
+    const prev = prevSyncResizeRef.current
+    prevSyncResizeRef.current = syncResize
+    if (prev === syncResize) return
+    if (syncResize) {
+      lastSizeRef.current = null
+      syncSizeRef.current?.()
+    } else {
+      resizeGenRef.current += 1
+      if (resizeRetryRef.current !== null) {
+        clearTimeout(resizeRetryRef.current)
+        resizeRetryRef.current = null
+      }
+    }
+  }, [syncResize])
 
   /**
    * 增量写入。
@@ -456,6 +494,10 @@ export function useIdleSeconds(
  * 在首帧就拿到完整 scrollback，**不需要** serialize/restore，原位那份也保持挂载
  * （避免虚拟列表条目变矮触发重测量 / 滚动跳动）。代价是全屏期间同一条流被解析两遍
  * （≈2× CPU），属短时交互态，可接受（docs/pty-research.md §7 #19）。
+ *
+ * 尺寸同步（`pty_resize`）：「双实例」不能同时上报（会互相覆盖后端尺寸），故同一时刻
+ * 只让一份**独占** —— **全屏期间由全屏实例同步，退出后同步权交回原位实例并强制重发一次**
+ * （原位尺寸未变，否则会被去重逻辑跳过）。见 `XtermTerminal` 的 `syncResize` 与交接 effect。
  */
 export function XtermTerminalBlock({
   title,
@@ -577,11 +619,13 @@ export function XtermTerminalBlock({
             $ {cmd}
           </div>
         )}
+        {/* 尺寸同步权：全屏期间只由全屏实例上报（原位实例暂停）；退出全屏后原位实例夺回，
+            并由 XtermTerminal 内的交接 effect 强制重发一次（原尺寸未变会跳过）。 */}
         <XtermTerminal
           stream={stream}
           running={running}
           toolCallId={toolCallId}
-          syncResize={!isFull}
+          syncResize={isFull || !fullscreen}
           onResize={setSize}
         />
         {/* 输出末尾的附加说明（如脚本执行的 note）—— 与 `<pre>` 版 TerminalBlock 行为对齐 */}
