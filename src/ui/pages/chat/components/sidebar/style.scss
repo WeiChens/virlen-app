@@ -40,14 +40,16 @@
 
     .new-chat-btn {
       width: 100%;
-      height: 36px; /* 与发送 / 生成按钮的高度基准对齐 */
+      height: 36px;
+      /* 与发送 / 生成按钮的高度基准对齐 */
       padding: 0 12px;
       margin: 0;
       display: flex;
       align-items: center;
       justify-content: center;
       gap: 6px;
-      border: none; /* 实心按钮不需要描边 */
+      border: none;
+      /* 实心按钮不需要描边 */
       border-radius: 10px;
       background: var(--primary-fill);
       color: var(--primary-fg);
@@ -74,17 +76,16 @@
       }
 
       &:hover:not(:disabled) {
-        filter: none; /* 抵消 def_ripple-button 的 brightness(1.1) */
+        filter: none;
+        /* 抵消 def_ripple-button 的 brightness(1.1) */
         /* 比填充色深一档：亮/暗主题下白字都保持可读 */
         background: color-mix(in srgb, var(--primary-fill) 88%, #000);
-        box-shadow: 0 3px 10px
-          color-mix(in srgb, var(--primary) 34%, transparent);
+        box-shadow: 0 3px 10px color-mix(in srgb, var(--primary) 34%, transparent);
       }
 
       &:active:not(:disabled) {
         background: color-mix(in srgb, var(--primary-fill) 82%, #000);
-        box-shadow: 0 1px 3px
-          color-mix(in srgb, var(--primary) 30%, transparent);
+        box-shadow: 0 1px 3px color-mix(in srgb, var(--primary) 30%, transparent);
         transform: scale(0.985);
       }
 
@@ -117,10 +118,6 @@
         .more-btn {
           opacity: 1;
         }
-      }
-
-      &.active {
-        background: var(--active-bg, #e8e8ed);
       }
 
       svg {
@@ -263,6 +260,14 @@
         }
       }
 
+      &.active {
+        background: var(--active-bg, #e8e8ed);
+
+        .session-info .session-title {
+          color: var(--accent-color, #4f46e5);
+        }
+      }
+
       &:hover {
         .session-more {
           display: block;
@@ -270,7 +275,6 @@
       }
 
       // ==================== 「更多」菜单按钮 ====================
-
       .session-more {
         display: none;
         position: relative;
@@ -313,7 +317,6 @@
       }
 
       // ==================== 下拉菜单 ====================
-
       .more-menu {
         position: absolute;
         right: 0;
@@ -382,7 +385,6 @@
     }
 
     // ==================== Agent 分组容器 ====================
-
     .session-group {
       margin-bottom: 4px;
 
@@ -393,7 +395,6 @@
       }
 
       // ==================== 展示全部按钮 ====================
-
       .show-all-btn {
         width: calc(100%);
         padding: 5px 10px;
@@ -417,7 +418,6 @@
     }
 
     // ==================== 分组头部 ====================
-
     .session-group-header {
       display: flex;
       align-items: center;
@@ -433,6 +433,24 @@
 
       &:hover {
         background: var(--hover-bg, #f0f0f0);
+      }
+
+      // 组内包含当前选中的会话 → 分组头部高亮（折叠时也能定位到会话所在分组）
+      &.has-active {
+        background: var(--active-bg, #e8e8ed);
+
+        // 左侧强调条
+        &::before {
+          content: '';
+          position: absolute;
+          left: 0;
+          top: 50%;
+          transform: translateY(-50%);
+          width: 3px;
+          height: 14px;
+          border-radius: 0 2px 2px 0;
+          background: var(--accent-color, #4f46e5);
+        }
       }
 
       .group-toggle {
@@ -651,7 +669,6 @@
 }
 
 // ==================== 导入知识库弹窗 ====================
-
 .import-kb-modal {
   .import-kb-loading {
     text-align: center;
@@ -714,7 +731,6 @@
   }
 
   // ===== 知识库区域分组 =====
-
   .import-kb-section {
     margin-bottom: 12px;
 
@@ -732,7 +748,6 @@
   }
 
   // ===== 消息选择区域 =====
-
   .import-kb-msg-header {
     display: flex;
     align-items: center;

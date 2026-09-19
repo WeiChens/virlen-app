@@ -147,6 +147,8 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
 
   const sessions = sessionStore.listSessions()
   const sessionGroupType = settingsState.value.sessionGroupType
+  // 在 observer 渲染中读取，确保切换会话时分组高亮能同步刷新
+  const currentSessionId = chatState.value.currentSessionId
   const groups = useMemo(
     () =>
       sessionGroupType === 'workspace'
@@ -539,6 +541,10 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
               sessionGroupType={sessionGroupType}
               isCollapsed={!expandGroups[group.key]}
               isUngrouped={group.key === UNGROUPED_KEY}
+              hasActiveSession={
+                !!currentSessionId &&
+                group.sessions.some((s) => s.id === currentSessionId)
+              }
               renderSession={renderSession}
               onToggleGroup={() => toggleGroup(group.key)}
               onNewSession={() => handleNewSessionInGroup(group)}
@@ -751,6 +757,8 @@ interface SessionGroupViewProps {
   sessionGroupType: 'agent' | 'workspace'
   isCollapsed: boolean
   isUngrouped: boolean
+  /** 组内是否包含当前选中的会话（用于分组高亮） */
+  hasActiveSession: boolean
   renderSession: (session: Session) => JSX.Element
   onToggleGroup: () => void
   onNewSession: () => void
@@ -761,6 +769,7 @@ function SessionGroupView({
   sessionGroupType,
   isCollapsed,
   isUngrouped,
+  hasActiveSession,
   renderSession,
   onToggleGroup,
   onNewSession,
@@ -855,7 +864,7 @@ function SessionGroupView({
   return (
     <div className="session-group">
       <div
-        className="session-group-header"
+        className={`session-group-header${hasActiveSession && isCollapsed ? ' has-active' : ''}`}
         onClick={onToggleGroup}
         title={group.title}>
         <DropDownSvg
