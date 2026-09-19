@@ -550,6 +550,7 @@ TS 引擎路径（回退）──────── invoke ────┘
 | 18 | `pty_key` 的 `backspace` 该发 `\x08` 还是 `\x7f`（ConPTY 下两者的 VK 映射**未实测**） | 已知不确定项（Step 2 ③） | 只影响按键条里的退格键，不影响安全；先发 `\x08`，真机验证后再定 |
 | 19 | xterm 全屏采用「双实例同时渲染」→ 同一条流被解析两遍（≈2× CPU） | 已识别，**接受**（Step 2 ⑤） | 全屏是短时交互态；内存仍由 `scrollback: 2000` 封顶 |
 | 20 | **用户编辑命令后不再二次审批**（用户本人就是审批人），但编辑可能把命令改成远超原风险的东西 | ✅**已实现**（Step 2 ①） | 编辑后**重新 `classify_command`**（风险升高仅埋点 `interaction.command.confirm.escalated`，只记级别不记正文，用例 `test_terminal_confirm_reclassify_escalation`）、仍走沙盒 + PTY 同一路径、`readonly` 拒绝逻辑保持前置 |
+| 21 | **PTY 下 stdout 是 TTY → 触发分页器**：`git diff` / `git log` / `git show`、`gh`、`bat` 等检测到 stdout 是 TTY 便启动 `less`/`more`，命令跑完却停在分页界面等按键（表现为「最后提示需要交互式操作才能看完」），AI 无法按 `q` → 等价于卡死 | ✅**已修复** | PTY 路径注入三个专用开关：`GIT_PAGER=cat`（`git_pager()` 对 `cat`/空串**硬编码特判** = 不分页）、`GH_PAGER=cat`（`IOStreams.StartPager()` 见 `cat` 直接 return）、`BAT_PAGING=never`（等价 `--paging=never`）——三者均**不会真调 `cat`**，Windows 无 `cat` 也安全（用例 `test_execute_command_pty_disables_pager`）；**刻意不设通用 `PAGER`**（`aws` 等会真 exec，反而报错）；管道路径 stdout 非 TTY → 本就不分页，无需改动 |
 
 **关于原 #1 的推理链（已被 §8.0 实测证实）**：
 

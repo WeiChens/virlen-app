@@ -65,6 +65,22 @@ const TIMEOUT_IDLE_HINT_MAX_OUTPUT: usize = 16;
 const TIMEOUT_IDLE_HINT: &str = "（该命令在超时前几乎没有产生输出，通常意味着它在等待输入：密码 / y/n 确认 / REPL。\
 可让用户直接在终端中键击输入，或适当放宽超时时间。）";
 
+/// PTY 路径「禁用分页器」用的通用取值 —— 对 git / gh 都表示「不分页」。
+///
+/// 背景：ConPTY 让子进程的 stdout 变成 **TTY**，于是会分页的工具（git / gh / bat…）启动
+/// 分页器（`less` / `more`）停在界面等按键，命令明明跑完却卡在最后一行（AI 无法按 `q`）。
+/// 改造前走匿名管道时 stdout 不是 TTY，自动不分页，所以看不到这个问题。
+///
+/// 各处取值见 `run_command_native_pty` 的 `env_extra`，逐条均有工具源码佐证：
+///   - git `GIT_PAGER=cat`：`git_pager()` 对 `cat`/空串**硬编码特判** = 不分页；
+///   - gh  `GH_PAGER=cat` ：`IOStreams.StartPager()` 见 `cat` 直接 return = 不分页；
+///   - bat `BAT_PAGING=never`：等价 `--paging=never`（零外部依赖）。
+/// 因此本值**不会真的去执行 `cat` 二进制**，Windows 没有 `cat` 也安全。
+///
+/// ⚠️ 刻意**不**设通用 `PAGER`：`gh`/`bat` 之外的工具（如 `aws`）会**真的 exec** `PAGER`，
+/// Windows 上 `cat` 常不在 PATH → 反而报「找不到 cat」。要覆盖它们需另立方案（打包 cat 直通）。
+const PAGER_DISABLED: &str = "cat";
+
 /// ② 超时预算的心跳周期（接管冻结 / 预算扣减都按它推进，Step 2 ②）。
 const TICK: Duration = Duration::from_millis(250);
 
@@ -1114,6 +1130,12 @@ async fn run_command_native_pty(
     if let Some(skills_dir) = &ctx.security.skills_dir {
         env_extra.insert("SKILL_ROOT".to_string(), skills_dir.clone());
     }
+    // 禁用分页器（PTY 下 stdout 是 TTY，否则 git/gh/bat 会起 `less`/`more` 停在界面等按键，
+    // AI 无法按 q 退出 → 表现为「命令跑完却卡在最后」。三者取值均有工具源码佐证，
+    // 且都**不会真调 `cat`**；详见上方 `PAGER_DISABLED`）：
+    env_extra.insert("GIT_PAGER".to_string(), PAGER_DISABLED.to_string()); // git
+    env_extra.insert("GH_PAGER".to_string(), PAGER_DISABLED.to_string()); // gh
+    env_extra.insert("BAT_PAGING".to_string(), "never".to_string()); // bat
 
     // 3) spawn（沙盒优先；沙盒 spawn 失败 → 释放会话，按裸跑重试）
     let shell = "powershell".to_string();
@@ -2340,6 +2362,65 @@ mod tests {
                 assert!(
                     content.contains("GOT=hello"),
                     "用户在执行中写入的输入应被命令读到: {content}"
+                );
+            }
+            other => panic!("expected Value, got {other:?}"),
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// PTY 路径必须禁用分页器：TTY 下 git/gh/bat 会起 `less`/`more` 停在分页界面，命令跑完却等按键
+    /// → 对 AI 等价于卡死。运行器注入 `GIT_PAGER=cat` / `GH_PAGER=cat` / `BAT_PAGING=never` 关闭它。
+    ///
+    /// 这里让命令「读回环境变量」来钉住「`env_extra` 真的随 spawn 传进了子进程」这条链路。
+    #[tokio::test]
+    #[cfg(target_os = "windows")]
+    async fn test_execute_command_pty_disables_pager() {
+        use crate::agent::bridge::AgentBridgeState;
+        use crate::agent::cancellation::CancellationToken;
+        use crate::agent::event_sink::TestEventSink;
+        use crate::agent::native_tools::execute_native_tool;
+        use crate::agent::native_tools::test_util::test_security;
+
+        let dir = std::env::temp_dir().join(format!("virlen_pty_pager_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // readonly 避开缓存探测与真实目录 ACL（同其它 PTY 用例）。
+        let mut sec = test_security(&dir.to_string_lossy());
+        sec.sandbox_mode = "readonly".to_string();
+        let sink = TestEventSink::new();
+        let bridge = AgentBridgeState::default();
+        let cancel = CancellationToken::new();
+        let ctx = NativeToolCtx {
+            session_id: "s_pty_pager",
+            tool_call_id: "tc_pty_pager",
+            cancel: &cancel,
+            sink: &sink,
+            bridge: &bridge,
+            security: &sec,
+        };
+
+        let args = json!({
+            "command": "Write-Output \"GIT_PAGER=$env:GIT_PAGER;GH_PAGER=$env:GH_PAGER;BAT_PAGING=$env:BAT_PAGING\"",
+            "timeout": 60
+        });
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(60),
+            execute_native_tool(&ctx, "execute_command", &args),
+        )
+        .await
+        .expect("execute_command 不应挂死")
+        .expect("execute_command 不应报错");
+
+        match outcome {
+            NativeToolOutcome::Value { content, .. } => {
+                assert!(
+                    content.contains("GIT_PAGER=cat") && content.contains("GH_PAGER=cat"),
+                    "PTY 子进程应拿到 GIT_PAGER=cat 与 GH_PAGER=cat: {content}"
+                );
+                assert!(
+                    content.contains("BAT_PAGING=never"),
+                    "PTY 子进程应拿到 BAT_PAGING=never: {content}"
                 );
             }
             other => panic!("expected Value, got {other:?}"),
