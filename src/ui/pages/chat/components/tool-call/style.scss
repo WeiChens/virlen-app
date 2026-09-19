@@ -158,13 +158,8 @@
   display: flex;
   flex-direction: column;
   background-color: var(--terminal-bg, #191a1b);
-  border-radius: 10px;
-  /* 阻止祖先的 text-align: center 继承进来，否则终端每一行都会被居中 */
+  border-radius: 2px;
   text-align: left;
-
-  /* 终端字体：必须是真等宽。
-     ⚠️ 不能用 AlimamaAgileVF-Thin——它是比例字体（'W'=0.672em、'i'=0.147em），
-     xterm 会把每个字符塞进同宽的格子，窄字符被撑成「宽字符」，列宽也算小。 */
   $pty-mono: 'JetBrains Mono', 'Cascadia Code', Consolas, 'Courier New', monospace;
 
   /* ---------- 顶部窗口栏（红黄绿点 + 标签 + 右侧操作） ---------- */

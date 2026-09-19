@@ -6,6 +6,7 @@ import { IToolCallMessage, ToolMessageProps } from './IToolCallMessage'
 import { editorService } from '@/services/editor-service'
 import { openPath } from '@tauri-apps/plugin-opener'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
+import { useAutoCenter } from '@/ui/hooks/useAutoCenter'
 
 class ReadFileMessage implements IToolCallMessage {
   getToolName(): string {
@@ -81,7 +82,6 @@ class ReadFileMessage implements IToolCallMessage {
           style={{
             padding: '0 10px',
             margin: '0px 20px',
-            width: 'fit-content',
             display: 'flex',
             flexDirection: 'column',
             gap: 16,
@@ -93,8 +93,8 @@ class ReadFileMessage implements IToolCallMessage {
             return (
               <CodeBlock
                 key={i}
-                maxHeight={450}
-                width={1200}
+                maxHeight={'55vh'}
+                width={"80%"}
                 fileName={name}
                 showLineNumbers
                 startLineNumber={startLine}
@@ -154,6 +154,7 @@ class ReadFileMessage implements IToolCallMessage {
           margin: '0px 20px',
         }}>
         <CodeBlock
+          autoCenter
           maxHeight={"55vh"}
           width={"80%"}
           fileName={name}

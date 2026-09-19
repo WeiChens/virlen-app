@@ -10,6 +10,7 @@ import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
 import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
 import { XtermTerminalBlock } from './XtermTerminal'
 import { TerminalConfirmBlock } from './TerminalConfirmBlock'
+import { useAutoCenter } from '@/ui/hooks/useAutoCenter'
 
 /**
  * 终端输出块 —— execute_command / execute_script 的运行态与完成态共用。
@@ -291,7 +292,7 @@ export function TerminalView({
   const running = !message
   const { output, entry } = useToolLiveOutput(toolCallId)
   const [killing, setKilling] = useState(false)
-
+  const rootRef = useAutoCenter(!running);
   // 当前工作目录（= 工具实际执行目录）：会话 workspace 优先，其次默认 workspace。
   // 解析与 `securityService.getWorkspace` 一致（归一化反斜杠、去尾部斜杠），
   // 让终端里显示的 `$` 提示符与命令真正跑的 cwd 对得上。
@@ -353,8 +354,9 @@ export function TerminalView({
       : ((message?.uiData?.stdout as string | undefined) ??
         (message?.content as string) ??
         '')
+   
     return (
-      <div className="tool-cmd-running">
+      <div className="tool-cmd-running" ref={rootRef}>
         <XtermTerminalBlock
           title={title}
           cmd={cmd}

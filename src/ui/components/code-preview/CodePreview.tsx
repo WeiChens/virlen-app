@@ -170,16 +170,10 @@ export default function CodePreview(props: CodePreviewProps) {
       className={`code-preview ${className}`}
       style={
         {
-          // 供 code-preview.scss 使用：把行号区底色从右侧挖掉这一段宽度，
           // 让 lineDecorationsWidth 撑出的留白落在“正文底色”上，而不是把行号区画宽。
           '--code-preview-gutter-cutout': `${GUTTER_BG_CUTOUT}px`,
         } as CSSProperties
       }>
-      {/* 隐形“撑宽层”：
-       * fit-content 父容器（如 .tool-call-expand-view）会按最长代码行的固有宽度决定自身宽度；
-       * Monaco 是虚拟布局、无法贡献该固有宽度，因此放一个 height:0 的原始文本层来撑宽，
-       * 等价于旧 Canvas 渲染里透明的 .code-select-overlay <pre>。不参与选中/可见。
-       * font-size 与 Monaco 一致，保证估算的“最长行宽”准确。 */}
       <div
         className="code-preview-measure"
         aria-hidden="true"

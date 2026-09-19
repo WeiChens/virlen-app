@@ -127,7 +127,7 @@ export class PendingCrWriter {
   constructor(
     private readonly flushDelayMs: number,
     private readonly write: (text: string) => void,
-  ) {}
+  ) { }
 
   /** 追加一段增量。 */
   push(delta: string): void {
@@ -374,8 +374,20 @@ export function XtermTerminal({
     }
     writtenRef.current = stream
   }, [stream, writeDelta])
+  const wrapperRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const onWhell = (e: WheelEvent) => {
+        e.preventDefault()
+    }
+    wrapperRef.current?.addEventListener('wheel', onWhell, {
+      passive: false
+    })
+    return () => {
+      wrapperRef.current?.removeEventListener('wheel', onWhell)
+    }
+  }, [])
 
-  return <div className="pty-terminal-body-wrapper">
+  return <div className="pty-terminal-body-wrapper" ref={wrapperRef} >
     <div className="pty-terminal-body" ref={hostRef} />
   </div>
 

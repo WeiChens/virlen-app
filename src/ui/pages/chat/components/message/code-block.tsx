@@ -16,6 +16,7 @@ import {
   type HTMLAttributes,
   type ReactElement,
   type ReactNode,
+  useRef,
 } from 'react'
 import { createPortal } from 'react-dom'
 import { observer } from 'mobx-react-lite'
@@ -28,6 +29,7 @@ import { openPath } from '@tauri-apps/plugin-opener'
 import { resolve } from '@tauri-apps/api/path'
 import { chatState, sessionStore, settingsState } from '@/ui/store'
 import { t } from '@/ui/i18n'
+import { useAutoCenter } from '@/ui/hooks/useAutoCenter'
 
 // ==================== 工具函数 ====================
 
@@ -361,10 +363,7 @@ function MonacoCodeView({
   const fontPx = resolveCodeFontPx(fontSize)
   const lineH = Math.max(16, Math.round(fontPx * 1.5))
   const lineCount = code ? code.split('\n').length : 1
-  // Monaco 内容末尾可能多渲染一行“光标空行”，因此按 (lineCount+1) 行计算高度；
-  // 底部多留一点余量覆盖横向滚动条占位：Monaco 垂直滚动条已隐藏，纵向靠外层容器滚动，
-  // 容器高度必须 >= 编辑器内容高度，否则末行会被裁掉且无处可滚。
-  const height = Math.max(lineH + 16, 36 + (lineCount + 1) * lineH)
+  const height = Math.max(lineH + 16, 5+ (lineCount + 1) * lineH)
 
   return (
     <CodePreview
@@ -428,6 +427,10 @@ export interface CodeBlockProps extends HTMLAttributes<HTMLElement> {
   streaming?: boolean
   /** 自定义操作按钮 */
   actions?: Action[]
+  /**
+   * 是否自动居中
+   */
+  autoCenter?: boolean
 }
 
 /** 代码块组件 */
@@ -442,6 +445,7 @@ function CodeBlock({
   startLineNumber = 1,
   streaming,
   actions = [] as Action[],
+  autoCenter = false,
   ...props
 }: CodeBlockProps) {
   // 复制态放在最前面：行内/块状代码两条渲染路径共用同一组 hooks（规则一致性）
@@ -509,6 +513,8 @@ function CodeBlock({
       })
   }
 
+  const rootRef = useAutoCenter(autoCenter)
+
   /**
    * 渲染代码块本体。
    *
@@ -518,6 +524,7 @@ function CodeBlock({
   function renderBlock(isFull: boolean) {
     return (
       <div
+        ref={rootRef}
         className={`code-block-wrapper${isFull ? ' is-fullscreen' : ''}`}
         style={{
           maxHeight: !isFull && maxHeight ? maxHeight : undefined,

@@ -10,6 +10,7 @@ import type { SideBySideRow } from '../message/SideBySideDiff'
 import { editorService } from '@/services/editor-service'
 import { openPath } from '@tauri-apps/plugin-opener'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
+import { useAutoCenter } from '@/ui/hooks/useAutoCenter'
 
 // ==================== 类型与工具函数 ====================
 
@@ -216,7 +217,6 @@ class EditFileMessage implements IToolCallMessage {
 
   private renderExpandView(props: ToolMessageProps): React.ReactNode {
     if (!props.expand) return null
-
     const { path, old_string, new_string } = props.useContent?.input ?? {}
     const uiData = props.message?.uiData as
       | {
@@ -239,6 +239,7 @@ class EditFileMessage implements IToolCallMessage {
 
     // ===== 编辑模式：uiData.edits 数组（单/多编辑统一结构） =====
     if (Array.isArray(uiData?.edits) && uiData.edits.length > 0) {
+      const rootRef = useAutoCenter()
       const filePath = uiData?.fullPath || path
       const edits = uiData.edits
       const multi = edits.length > 1
@@ -249,8 +250,9 @@ class EditFileMessage implements IToolCallMessage {
         : resolveEditRows(edits[0])
       const stat = multi ? sumEditStats(edits) : null
 
+      
       return (
-        <div className="diff-wrapper">
+        <div className="diff-wrapper" ref={rootRef}>
           <SideBySideDiff
             diffRows={diffRows}
             fileName={name}
@@ -298,8 +300,9 @@ class EditFileMessage implements IToolCallMessage {
     // ===== 旧版单编辑模式 uiData（无 edits 数组） =====
     if (uiData?.oldStartLine) {
       const filePath = uiData?.fullPath || path
+      const rootRef = useAutoCenter()
       return (
-        <div className="diff-wrapper">
+        <div className="diff-wrapper" ref={rootRef}>
           <SideBySideDiff
             diffRows={
               uiData.diffRows ??
@@ -415,7 +418,7 @@ function generateFallbackDiff(oldStr: string, newStr: string): string {
   for (let i = prefixLen; i < newLines.length - suffixLen; i++) {
     result.push('+' + newLines[i])
   }
-  const ctxAfter = Math.min(suffixLen, 3)
+  // const ctxAfter = Math.min(suffixLen, 3)
   for (let i = oldLines.length - suffixLen; i < oldLines.length; i++) {
     result.push(' ' + oldLines[i])
   }
