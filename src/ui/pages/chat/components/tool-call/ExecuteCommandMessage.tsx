@@ -38,6 +38,7 @@ class ExecuteCommandMessage implements IToolCallMessage {
           title={t('终端')}
           cmd={command}
           message={message}
+          expand={props.expand}
         />
       )
     } catch {

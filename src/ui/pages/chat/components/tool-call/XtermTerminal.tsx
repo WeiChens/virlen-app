@@ -127,7 +127,7 @@ export class PendingCrWriter {
   constructor(
     private readonly flushDelayMs: number,
     private readonly write: (text: string) => void,
-  ) { }
+  ) {}
 
   /** 追加一段增量。 */
   push(delta: string): void {
@@ -374,24 +374,19 @@ export function XtermTerminal({
     }
     writtenRef.current = stream
   }, [stream, writeDelta])
-  const wrapperRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    const onWhell = (e: WheelEvent) => {
-        e.preventDefault()
-    }
-    wrapperRef.current?.addEventListener('wheel', onWhell, {
-      passive: false
-    })
-    return () => {
-      wrapperRef.current?.removeEventListener('wheel', onWhell)
-    }
-  }, [])
 
-  return <div className="pty-terminal-body-wrapper" ref={wrapperRef} >
-    <div className="pty-terminal-body" ref={hostRef} />
-  </div>
-
-
+  // ⚠️ 这里曾经挂过 `wheel + preventDefault`，想「拦住在终端上滚轮别带动外层列表」，但那是错的：
+  // 浏览器对 wheel 的默认动作是**整条滚动链一起**取消，而 xterm 的普通回滚缓冲（scrollback）
+  // 没有 JS 滚动实现 —— 完全依赖 `.xterm-viewport` 的**原生滚动**（xterm 只在备用缓冲 /
+  // 鼠标上报模式下才自己接管 wheel）。所以无条件 preventDefault 会让鼠标滚轮在整个终端上失效。
+  // 而嵌套滚动容器本来就自带滚动链：终端滚到顶/底之后才带动外层列表 —— 那正是期望行为。
+  // 因此这里不再拦截 wheel；若确需「终端区域内的滚轮彻底不带动列表」，只能 preventDefault
+  // 之后再手动写 `.xterm-viewport.scrollTop`（等于重写原生滚动，不划算）。
+  return (
+    <div className="pty-terminal-body-wrapper">
+      <div className="pty-terminal-body" ref={hostRef} />
+    </div>
+  )
 }
 
 /**
@@ -589,6 +584,16 @@ export function XtermTerminalBlock({
           syncResize={!isFull}
           onResize={setSize}
         />
+        {/* 输出末尾的附加说明（如脚本执行的 note）—— 与 `<pre>` 版 TerminalBlock 行为对齐 */}
+        {note && <div className="pty-hint">{note}</div>}
+        {/* ④「疑似等待输入」提示：仍在运行 + 15s 无输出（见 useIdleSeconds / shouldHintIdle） */}
+        {idleSeconds != null && (
+          <div className="pty-hint pty-idle-hint">
+            {tpl('$__secs__ 秒无输出，可能正在等待输入（可直接在终端中输入）', {
+              secs: idleSeconds,
+            })}
+          </div>
+        )}
       </div>
     )
   }

@@ -22,6 +22,11 @@ import { v4 } from '@/utils/uuid'
 import type { AgentEventCallback, Message, MessageContent } from '@/types'
 import { settingsState } from '@/ui/store'
 import { toolService } from './tool-service'
+import {
+  REPAIR_SCAN_WINDOW,
+  isRepaired,
+  repairToolCallMessages,
+} from './message-repair'
 import { showToast } from '@/ui/components/shared/Toast'
 import type { Agent, ProviderConfig, Session } from '@/types'
 import { DEFAULT_SESSION_PARAMS } from '@/types'
@@ -250,10 +255,83 @@ function persistMessagesIfNeeded(
   if (isRustEngineEnabled()) return
   if (!messages.length) return
   try {
-    invoke('cmd_append_messages', { sessionId, messages })
+    void invoke('cmd_append_messages', { sessionId, messages }).catch(() => {})
   } catch {
     // 非 Tauri 环境忽略
   }
+}
+
+// ==================== 消息格式修复（悬空 tool_calls） ====================
+
+/**
+ * 已检测出格式异常、补入了占位 tool 消息，但当时历史尚未全量加载、还没能整体回写落库的会话。
+ *
+ * 分页加载下「切换会话」时内存里只有尾部窗口，此时整体回写 SQLite 会把没拉取的旧消息抹掉，
+ * 故先记账，等发送前 ensureAllMessagesLoaded 之后再补落库。
+ */
+const pendingRepairFlush = new Set<string>()
+
+/** 直接改写会话内存消息（不触碰分页状态，区别于 replaceSessionMessages） */
+function setSessionMessagesInPlace(
+  sessionId: string,
+  messages: Message[],
+): void {
+  runInAction(() => {
+    const session = sessionStore.value.sessions.find((s) => s.id === sessionId)
+    if (!session) return
+    session.messages = messages
+    session.updatedAt = Date.now()
+    sessionStore.messagesChanged(sessionId)
+  })
+}
+
+/**
+ * 把修复后的完整消息列表整体回写 SQLite（全量写保证行序与内存一致）。
+ *
+ * - 仅当历史已全量在内存时执行，否则记为待落库（见 pendingRepairFlush）
+ * - 内存修复本身已经生效，落库失败/非 Tauri 环境静默处理，不影响本次请求
+ */
+function flushRepairedMessages(sessionId: string): void {
+  if (!sessionStore.isMessagesFullyLoaded(sessionId)) {
+    pendingRepairFlush.add(sessionId)
+    return
+  }
+  pendingRepairFlush.delete(sessionId)
+  const messages = getSessionMessages(sessionId)
+  if (!messages.length) return
+  try {
+    void invoke('cmd_replace_session_messages', { sessionId, messages }).catch(
+      () => {},
+    )
+  } catch {
+    // 非 Tauri 环境忽略
+  }
+}
+
+/**
+ * 发送前准备历史消息：全量加载 → 补落库（如有待落库修复）→ 检测并修复格式异常。
+ *
+ * 修复必须发生在请求构造之前，否则服务端会以 400 拒绝：
+ *   An assistant message with 'tool_calls' must be followed by tool messages ...
+ *
+ * @param sessionId 会话 ID
+ * @param options.repair=false 时只做全量加载（暂停恢复场景：悬空 tool_calls 是待执行的，
+ *        不能补占位，否则会和恢复后写入的真实工具结果重复）
+ */
+async function prepareMessagesForSend(
+  sessionId: string,
+  options?: { repair?: boolean },
+): Promise<Message[]> {
+  // 分页加载下，发送前需确保完整历史都在内存，否则会截断 LLM 上下文
+  await sessionStore.ensureAllMessagesLoaded(sessionId)
+  // 历史已全量加载：补落库此前只能内存修复的结果
+  if (pendingRepairFlush.has(sessionId)) flushRepairedMessages(sessionId)
+
+  const rt = sessionRuntimeState.value.sessions[sessionId]
+  if (options?.repair !== false && !rt?.paused) {
+    checkAndRepairMessageList(sessionId, false, 'send')
+  }
+  return getSessionMessages(sessionId)
 }
 
 /**
@@ -343,10 +421,9 @@ export async function sendMessage(
 
   const toolInteract = await toolService.createToolHandles(sessionId)
 
-  // 分页加载下，发送前需确保完整历史都在内存，否则会截断 LLM 上下文
-  await sessionStore.ensureAllMessagesLoaded(sessionId)
+  // 发送前：全量加载历史 + 检测并修复格式异常（悬空 tool_calls）
+  const currentMessages = await prepareMessagesForSend(sessionId)
   // 收集 engine 需要的入参：当前消息列表 + reasoningEffort
-  const currentMessages = getSessionMessages(sessionId)
   const providerCfg = settingsState.value.providers.find(
     (p) => p.id === session.providerConfigId,
   )
@@ -415,10 +492,11 @@ export async function resumePausedRun(
 
   const toolInteract = await toolService.createToolHandles(sessionId)
 
-  // 分页加载下，恢复暂停任务同样需要完整历史
-  await sessionStore.ensureAllMessagesLoaded(sessionId)
-  // 收集 engine 需要的入参
-  const currentMessages = getSessionMessages(sessionId)
+  // 分页加载下，恢复暂停任务同样需要完整历史；
+  // 注意：此处**不能**补占位 tool 结果（悬空 tool_calls 正是本次要恢复执行的步骤）
+  const currentMessages = await prepareMessagesForSend(sessionId, {
+    repair: false,
+  })
   const providerCfg = settingsState.value.providers.find(
     (p) => p.id === session.providerConfigId,
   )
@@ -575,9 +653,8 @@ export async function sendMessageWithGoal(
 
   const toolInteract = await toolService.createToolHandles(sessionId)
 
-  // 分页加载下，发送前需确保完整历史都在内存
-  await sessionStore.ensureAllMessagesLoaded(sessionId)
-  const currentMessages = getSessionMessages(sessionId)
+  // 发送前：全量加载历史 + 检测并修复格式异常（悬空 tool_calls）
+  const currentMessages = await prepareMessagesForSend(sessionId)
   const providerCfg = settingsState.value.providers.find(
     (p) => p.id === session.providerConfigId,
   )
@@ -1009,7 +1086,7 @@ export function repairSessionIfNeeded(
   sessionId: string,
   isWorking?: boolean,
 ): void {
-  checkAndRepairMessageList(sessionId, isWorking)
+  checkAndRepairMessageList(sessionId, isWorking, 'switch')
 }
 
 // ==================== 消息 CRUD（原 messages.ts，合并至 Service 层） ====================
@@ -1134,48 +1211,49 @@ export function replaceSessionMessages(
   return ok
 }
 
+/**
+ * 检测并修复会话消息格式异常（assistant tool_calls 缺少对应 tool 返回）
+ *
+ * 场景：应用在「LLM 已产出 tool_calls、工具还没返回」时被中断（崩溃/强杀），
+ * assistant(tool_calls) 已落库但 tool 结果没写入，下次请求会被服务端以 400 拒绝：
+ *   An assistant message with 'tool_calls' must be followed by tool messages ...
+ *
+ * 修复：为悬空的 tool_call_id 补一条占位 tool 消息（内容「程序中断」），
+ * 让历史重新满足协议约束；错位的返回消息则归位。
+ *
+ * 只扫描首/尾窗口（默认各 REPAIR_SCAN_WINDOW 条），不扫全量历史（见 message-repair.ts）。
+ * 修正结果先落内存（UI 立即可见），历史已全量加载时同步整体回写 SQLite，
+ * 否则记账，等发送前全量加载后再落库（见 prepareMessagesForSend）。
+ *
+ * @param sessionId 会话 ID
+ * @param isWorking 该会话正在回复中则跳过（不能打断进行中的 tool 循环）
+ * @param phase     埋点用：switch=切换会话触发，send=发送前触发
+ * @returns 本次补入 + 归位的消息条数
+ */
 export function checkAndRepairMessageList(
   sessionId: string,
   isWorking?: boolean,
-): void {
-  if (isWorking) return
+  phase: 'switch' | 'send' = 'switch',
+): number {
+  if (isWorking) return 0
 
-  let repairedCount = 0
-  runInAction(() => {
-    const session = sessionStore.value.sessions.find((s) => s.id === sessionId)
-    if (!session) return
+  const session = sessionStore.getSession(sessionId)
+  if (!session || session.messages.length === 0) return 0
 
-    for (let i = session.messages.length - 1; i >= 0; i--) {
-      const msg = session.messages[i]
-      if (msg.role === 'assistant') {
-        if (!msg.toolCalls || msg.toolCalls.length === 0) {
-          break
-        }
-        const noRepMsg = msg.toolCalls.filter(
-          (tc) => !session.messages.some((m) => m.toolCallId === tc.id),
-        )
-        if (noRepMsg.length === 0) break
+  const result = repairToolCallMessages(session.messages)
+  if (!isRepaired(result)) return 0
 
-        const repairMessages: Message[] = noRepMsg.map((tc) => ({
-          id: v4(),
-          role: 'tool' as const,
-          content: 'abnormal termination',
-          toolCallId: tc.id,
-          timestamp: Date.now(),
-          isError: true,
-        }))
-        repairedCount = noRepMsg.length
-        session.messages = [...session.messages, ...repairMessages]
-        session.updatedAt = Date.now()
-        sessionStore.messagesChanged(sessionId)
-        break
-      }
-    }
+  setSessionMessagesInPlace(sessionId, result.messages)
+  flushRepairedMessages(sessionId)
+
+  const repairedCount = result.inserted + result.moved
+  track('session.repair', {
+    session_id: hashText(sessionId),
+    repaired_count: repairedCount,
+    inserted_count: result.inserted,
+    moved_count: result.moved,
+    scan_window: REPAIR_SCAN_WINDOW,
+    phase,
   })
-  if (repairedCount > 0) {
-    track('session.repair', {
-      session_id: hashText(sessionId),
-      repaired_count: repairedCount,
-    })
-  }
+  return repairedCount
 }

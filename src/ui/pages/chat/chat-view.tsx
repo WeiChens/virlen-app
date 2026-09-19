@@ -379,6 +379,10 @@ function ChatView() {
     setMessages([...session.messages])
     // 懒加载：会话激活时从 SQLite 拉取历史消息（仅首次）
     await sessionStore.ensureMessagesLoaded(sessionId)
+    // 消息到位后再检测中断残留（悬空 tool_calls）——上面的 effect 在消息加载完成前
+    // 就已触发，可能拿到空列表，这里再兜一次，修复结果会一并渲染出来
+    const switchRt = getSessionRuntime(sessionId)
+    repairSessionIfNeeded(sessionId, switchRt.working || switchRt.paused)
     // 锚点列表需要「全量用户消息」：只拉 id + 摘要（不含 AI/工具正文，体积小）
     void sessionStore.ensureUserMessageIndex(sessionId)
     const updated = sessionStore.getSession(sessionId)

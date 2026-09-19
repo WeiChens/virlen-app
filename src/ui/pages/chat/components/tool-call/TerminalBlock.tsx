@@ -281,6 +281,7 @@ export function TerminalView({
   cmd,
   fileLabel,
   message,
+  expand,
 }: {
   toolCallId: string
   title: string
@@ -288,11 +289,15 @@ export function TerminalView({
   fileLabel?: string
   /** 结果消息；为空表示工具仍在运行中 */
   message?: Message
+  /** 用户是否展开了本条工具消息（驱动「打开即居中」，见 useAutoCenter） */
+  expand?: boolean
 }) {
   const running = !message
   const { output, entry } = useToolLiveOutput(toolCallId)
   const [killing, setKilling] = useState(false)
-  const rootRef = useAutoCenter(!running);
+  // 「打开即居中」只在**用户点开**时触发（`expand` 的 false→true）。
+  // ⚠️ 不能用 `!running`：运行中的终端即使没展开也会挂载，命令结束时会让列表被拽走。
+  const rootRef = useAutoCenter(!!expand)
   // 当前工作目录（= 工具实际执行目录）：会话 workspace 优先，其次默认 workspace。
   // 解析与 `securityService.getWorkspace` 一致（归一化反斜杠、去尾部斜杠），
   // 让终端里显示的 `$` 提示符与命令真正跑的 cwd 对得上。
@@ -335,7 +340,7 @@ export function TerminalView({
   // ⚠️ 必须放在所有 hook 之后：pendingConfirm 出现 / 消失不能改变 hook 调用数量。
   if (running && entry?.pendingConfirm) {
     return (
-      <div className="tool-cmd-running">
+      <div className="tool-cmd-running" ref={rootRef}>
         <TerminalConfirmBlock
           toolCallId={toolCallId}
           title={title}
@@ -383,7 +388,7 @@ export function TerminalView({
   }
 
   return (
-    <div className="tool-cmd-running">
+    <div className="tool-cmd-running" ref={rootRef}>
       <TerminalBlock
         title={title}
         cmd={cmd}

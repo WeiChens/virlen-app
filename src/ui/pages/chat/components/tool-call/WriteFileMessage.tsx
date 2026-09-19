@@ -6,6 +6,7 @@ import { IToolCallMessage, ToolMessageProps } from './IToolCallMessage'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
 import { openPath } from '@tauri-apps/plugin-opener'
 import { editorService } from '@/services/editor-service'
+import { useAutoCenter } from '@/ui/hooks/useAutoCenter'
 
 class WriteFileMessage implements IToolCallMessage {
   getToolName(): string {
@@ -48,6 +49,7 @@ class WriteFileMessage implements IToolCallMessage {
     if (!props.expand) return null
     const value = props.useContent.input.content
     const name = getUrlFileName(props.useContent.input.path, null)
+
     return (
       <div
         style={{
@@ -56,6 +58,7 @@ class WriteFileMessage implements IToolCallMessage {
           width: 'fit-content',
         }}>
         <CodeBlock
+        autoCenter
           maxHeight={450}
           width={600}
           fileName={name}

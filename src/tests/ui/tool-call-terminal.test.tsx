@@ -31,6 +31,31 @@ vi.mock('@/ui/pages/chat/components/message/code-block', () => ({
   ),
 }))
 
+/**
+ * xterm 在 jsdom 里没有量度/画布，`term.open()` 没有意义；
+ * 需要「真实挂载」（跑 effect）的用例（如 ④ 空闲提示）用最小替身。
+ * 静态渲染用例（renderToStaticMarkup）本就不会跑 effect，不受影响。
+ */
+vi.mock('@xterm/xterm', () => ({
+  Terminal: class {
+    cols = 80
+    rows = 24
+    loadAddon() {}
+    open() {}
+    write() {}
+    reset() {}
+    dispose() {}
+    onData() {
+      return { dispose() {} }
+    }
+  },
+}))
+vi.mock('@xterm/addon-fit', () => ({
+  FitAddon: class {
+    fit() {}
+  },
+}))
+
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
 /**
@@ -535,18 +560,18 @@ describe('XtermTerminalBlock（PTY）结构与操作区', () => {
       />,
     )
 
-  it('运行中：含命名按键条（Enter/Ctrl+C/Ctrl+D/Tab/↑/↓）、接管按钮、全屏按钮与终端容器', () => {
+  // ⚠️ 按键条目前**只保留 Ctrl+D（EOF）**：桌面端可直接在终端里键击/粘贴输入
+  //    （xterm 的 onData 直送伪控制台），按键条只是给触屏 / 无键盘场景补一个「结束输入」入口。
+  //    Enter 归回车键 / Ctrl+C 归「终止」按钮，其余（Tab/↑/↓）已移除 —— 若日后恢复那批按钮，
+  //    请同步补回断言。
+  it('运行中：含按键条（Ctrl+D）、接管按钮、全屏按钮与终端容器', () => {
     const html = render(true)
     expect(html).toContain('is-pty')
     expect(html).toContain('pty-key-bar')
     expect(html).toContain('pty-hold-btn')
     expect(html).toContain('接管')
-    expect(html).toContain('Enter')
-    expect(html).toContain('Ctrl+C')
     expect(html).toContain('Ctrl+D')
-    expect(html).toContain('Tab')
-    expect(html).toContain('↑')
-    expect(html).toContain('↓')
+    expect(html).toContain('发送 Ctrl+D（EOF）')
     expect(html).toContain('terminal-fullscreen-btn')
     expect(html).toContain('pty-terminal-body')
   })
@@ -557,6 +582,60 @@ describe('XtermTerminalBlock（PTY）结构与操作区', () => {
     expect(html).not.toContain('pty-hold-btn')
     expect(html).toContain('terminal-fullscreen-btn')
     expect(html).toContain('pty-terminal-body')
+  })
+
+  // 曾经 `note` 只在 `<pre>` 版 TerminalBlock 里渲染，PTY 路径把它静默丢了（终端里看不到脚本执行的说明）。
+  it('完成态：输出末尾的附加说明（note）会被渲染', () => {
+    const html = renderToStaticMarkup(
+      <XtermTerminalBlock
+        title="Terminal"
+        cmd="npm run build"
+        stream=""
+        running={false}
+        toolCallId="t-pty-note"
+        note="脚本已删除"
+      />,
+    )
+    expect(html).toContain('pty-hint')
+    expect(html).toContain('脚本已删除')
+  })
+
+  /**
+   * ④「疑似等待输入」提示（Step 2 ④）：纯本地计时（`useIdleSeconds` → `shouldHintIdle`）。
+   * 需真实挂载才会跑 effect，故单独一段 + xterm 替身（见上方 vi.mock）。
+   */
+  describe('④ 空闲提示', () => {
+    async function mountIdle(lastOutputAt: number) {
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+      const root = createRoot(container)
+      await act(async () => {
+        root.render(
+          <XtermTerminalBlock
+            title="Terminal"
+            cmd="npm login"
+            stream=""
+            running
+            toolCallId="t-pty-idle"
+            lastOutputAt={lastOutputAt}
+          />,
+        )
+      })
+      return { container, root }
+    }
+
+    it('运行中且 15s 无输出 → 提示「疑似等待输入」（带秒数）', async () => {
+      const { container, root } = await mountIdle(Date.now() - 20_000)
+      expect(container.innerHTML).toContain('pty-idle-hint')
+      expect(container.innerHTML).toContain('秒无输出')
+      await act(async () => root.unmount())
+    })
+
+    it('刚有输出 → 不提示', async () => {
+      const { container, root } = await mountIdle(Date.now())
+      expect(container.innerHTML).not.toContain('pty-idle-hint')
+      await act(async () => root.unmount())
+    })
   })
 
   it('demo 风格外框：顶部窗口栏（红黄绿点）+ 右上操作区；底部状态栏已移除', () => {

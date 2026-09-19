@@ -195,31 +195,6 @@
     background: #28c840;
   }
 
-  .xterm-tab {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    flex: 0 1 auto;
-    min-width: 0;
-    max-width: 60%;
-    height: 24px;
-    padding: 0 10px;
-    border-radius: 7px;
-    background: var(--terminal-bg, #191a1b);
-    font-family: $pty-mono;
-    font-size: var(--font-size-xs);
-    color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
-  }
-  .xterm-tab__glyph {
-    color: #7ee787;
-    font-weight: 700;
-    flex: none;
-  }
-
   /* 头部操作区（状态徽标 + 接管/按键/全屏/终止）自动靠右 */
   .terminal-header-actions {
     margin-left: auto;

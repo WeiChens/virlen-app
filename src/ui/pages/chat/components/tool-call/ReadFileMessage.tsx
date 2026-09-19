@@ -6,7 +6,6 @@ import { IToolCallMessage, ToolMessageProps } from './IToolCallMessage'
 import { editorService } from '@/services/editor-service'
 import { openPath } from '@tauri-apps/plugin-opener'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
-import { useAutoCenter } from '@/ui/hooks/useAutoCenter'
 
 class ReadFileMessage implements IToolCallMessage {
   getToolName(): string {

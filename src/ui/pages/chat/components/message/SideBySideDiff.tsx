@@ -7,6 +7,7 @@ import { toMonacoLang } from './code-block'
 import { monaco, virlenDarkTheme } from '@/monaco/setupMonaco'
 import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
 import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
+import { useAutoCenter } from '@/ui/hooks/useAutoCenter'
 import './SideBySideDiff.scss'
 
 /**
@@ -187,6 +188,7 @@ function DiffContent({
   fullscreen,
   onToggleFullscreen,
   isFull,
+  blockRef,
 }: {
   diffRows: SideBySideRow[]
   fileName: string | null
@@ -199,6 +201,8 @@ function DiffContent({
   onToggleFullscreen: () => void
   /** 是否渲染为全屏形态 */
   isFull: boolean
+  /** 原位那份的根节点 ref（居中用；全屏副本不接，避免 ref 被覆盖） */
+  blockRef?: React.Ref<HTMLDivElement>
 }) {
   // 有汇总统计时说明是多处编辑合并展示，行号区间不再连续，隐藏区间
   const showStat = stat != null
@@ -224,7 +228,9 @@ function DiffContent({
     : diffRows.filter((r) => r.type !== 'delete' && r.type !== 'gap').length
 
   return (
-    <div className={`diff-side-by-side${isFull ? ' is-fullscreen' : ''}`}>
+    <div
+      className={`diff-side-by-side${isFull ? ' is-fullscreen' : ''}`}
+      ref={isFull ? undefined : blockRef}>
       {/* 文件头（固定，不随内容滚动） */}
       <div className="diff-header">
         <span className="diff-header-name">{fileName}</span>
@@ -316,6 +322,7 @@ export function SideBySideDiff({
   fileName,
   stat,
   actions = [] as Action[],
+  autoCenter = false,
 }: {
   diffRows: SideBySideRow[]
   fileName: string | null
@@ -323,9 +330,13 @@ export function SideBySideDiff({
   stat?: { delCount: number; insCount: number }
   /** 自定义操作按钮 */
   actions?: Action[]
+  /** 用户展开该 diff 时是否滚动到视口中间（见 useAutoCenter） */
+  autoCenter?: boolean
 }) {
   // 全屏态：与 CodeBlock 一致，由组件自身管理，按钮放在文件头右侧
   const [fullscreen, setFullscreen] = useState(false)
+  // 「打开即居中」：hook 只能在组件顶层无条件调用（不能放进 EditFileMessage 的类方法里，见 §11）
+  const rootRef = useAutoCenter(autoCenter)
 
   // Esc 退出全屏（与 CodeBlock / TerminalBlock 保持一致的操作习惯）
   useEffect(() => {
@@ -346,6 +357,7 @@ export function SideBySideDiff({
       fullscreen={fullscreen}
       onToggleFullscreen={() => setFullscreen(!fullscreen)}
       isFull={isFull}
+      blockRef={rootRef}
     />
   )
 

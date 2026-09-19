@@ -152,6 +152,18 @@ class SessionStore {
     return this.value.messagePaging[sessionId]?.hasMoreOlder ?? false
   }
 
+  /**
+   * 该会话的历史消息是否「已全量在内存」（已加载过且没有更早的分页）。
+   *
+   * 用于判断能否把内存态消息整体回写 SQLite（
+   * 未全量加载时整体回写会把还没拉取的旧消息抹掉）。
+   */
+  isMessagesFullyLoaded(sessionId: string): boolean {
+    return (
+      this.loadedMessageIds.has(sessionId) && !this.hasMoreMessages(sessionId)
+    )
+  }
+
   // ========== 用户消息轻量索引（右侧锚点列表） ==========
 
   /**

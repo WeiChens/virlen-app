@@ -29,12 +29,15 @@ function ScriptExpandView({
   filePath,
   fileContent,
   message,
+  expand,
 }: {
   toolCallId: string
   command?: string
   filePath?: string
   fileContent: string
   message?: Message
+  /** 用户是否展开了本条工具消息（驱动终端块的「打开即居中」） */
+  expand?: boolean
 }) {
   const [tab, setTab] = useState<'terminal' | 'file'>('terminal')
   const fileLabel = filePath ? shortPath(filePath) : ''
@@ -59,6 +62,7 @@ function ScriptExpandView({
           cmd={command}
           fileLabel={fileLabel}
           message={message}
+          expand={expand}
         />
       ) : fileContent ? (
         // 脚本正文直接取工具入参 file_content —— 即真正写入磁盘并执行的那份内容
@@ -111,6 +115,7 @@ class ExecuteScriptMessage implements IToolCallMessage {
           filePath={file_path as string | undefined}
           fileContent={(file_content as string) ?? ''}
           message={message}
+          expand={props.expand}
         />
       )
     } catch {
