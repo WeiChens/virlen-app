@@ -196,6 +196,27 @@ class SessionStore {
   }
 
   /**
+   * 从会话的「全量用户消息索引」中剔除指定用户消息（删除 / 清空消息时调用）。
+   *
+   * 索引是一次性从 SQLite 拉取后缓存的（loadedUserIndexIds 保证只加载一次），
+   * 删除消息不会让它自动失效；若不同步剔除，右侧锚点列表会残留已删除消息的圆点。
+   */
+  dropUserMessagesFromIndex(sessionId: string, ids: Iterable<string>): void {
+    const refs = this.value.userMessageIndex[sessionId]
+    if (!refs || refs.length === 0) return
+    const drop = new Set(ids)
+    if (drop.size === 0) return
+    const next = refs.filter((r) => !drop.has(r.id))
+    if (next.length === refs.length) return
+    runInAction(() => {
+      this.value.userMessageIndex = {
+        ...this.value.userMessageIndex,
+        [sessionId]: next,
+      }
+    })
+  }
+
+  /**
    * 向上回补一页更早的消息（前插到消息列表头部）。
    * 同一会话的并发调用会复用同一个请求，避免把同一页重复前插两次。
    * @returns 是否实际加载到了更早的消息

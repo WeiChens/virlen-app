@@ -347,6 +347,7 @@ pub fn run() {
             session_db::cmd_delete_session,
             session_db::cmd_replace_session_messages,
             session_db::cmd_append_messages,
+            session_db::cmd_truncate_session_messages,
             // DeepSeek tokenizer（token 计数）
             deepseek_tokenizer::cmd_count_tokens,
             // 埋点：前端就绪后拉取落盘的历史 panic

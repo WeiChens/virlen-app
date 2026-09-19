@@ -1181,13 +1181,35 @@ export function deleteSessionMessage(
     if (session.messages[msgIdx].role === 'tool') return false
 
     // 删除该消息及之后所有消息
+    const removed = session.messages.slice(msgIdx)
     session.messages = session.messages.slice(0, msgIdx)
+    // 同步「全量用户消息索引」：剔除本次被删掉的用户消息，
+    // 否则右侧锚点列表会残留已删除用户消息的圆点
+    // （索引为一次性拉取的缓存，不会随 messages 变化自动更新）。
+    sessionStore.dropUserMessagesFromIndex(
+      sessionId,
+      removed.filter((m) => m.role === 'user').map((m) => m.id),
+    )
+    // 落库：从 SQLite 删除该消息及其之后的所有消息，使内存与 DB 保持一致。
+    // 注意 messagesChanged 只触发会话元数据落库（cmd_upsert_session 不写 messages 表），
+    // 必须显式调用截断命令，否则重启后已删除消息会从 DB「复活」。
+    // fire-and-forget：失败不阻塞 UI，非 Tauri 环境静默忽略。
+    try {
+      void invoke('cmd_truncate_session_messages', {
+        sessionId,
+        messageId,
+      }).catch(() => {})
+    } catch {
+      // 非 Tauri 环境忽略
+    }
     sessionStore.messagesChanged(sessionId)
     return true
   })
 }
 
 export function clearSessionMessages(sessionId: string): boolean {
+  // 清空消息后用户消息索引也应整体清空，否则右侧锚点列表会残留全部圆点
+  const prevRefs = sessionStore.getUserMessageIndex(sessionId)
   const ok = runInAction(() => {
     const idx = sessionStore.value.sessions.findIndex((s) => s.id === sessionId)
     if (idx === -1) return false
@@ -1197,6 +1219,20 @@ export function clearSessionMessages(sessionId: string): boolean {
       messages: [],
     }
     sessionStore.value.sessions = sessions
+    sessionStore.dropUserMessagesFromIndex(
+      sessionId,
+      prevRefs.map((r) => r.id),
+    )
+    // 落库：清空 SQLite 中该会话的全部消息（复用整批替换命令，传空列表）。
+    // 同样不能只靠 messagesChanged（只写会话元数据）。
+    try {
+      void invoke('cmd_replace_session_messages', {
+        sessionId,
+        messages: [],
+      }).catch(() => {})
+    } catch {
+      // 非 Tauri 环境忽略
+    }
     sessionStore.messagesChanged(sessionId)
     return true
   })
@@ -1211,10 +1247,21 @@ export function replaceSessionMessages(
   sessionId: string,
   messages: Message[],
 ): boolean {
+  // 压缩会丢弃部分历史（含用户消息）：同步剔除索引中已不存在的用户消息，
+  // 否则右侧锚点列表会残留已被压缩掉的圆点。
+  // messages 为完整历史（调用方已 ensureAllMessagesLoaded），故「不在新列表中的
+  // 索引项」即为被压缩掉的消息。
+  const keepIds = new Set(messages.map((m) => m.id))
+  const staleIds = sessionStore
+    .getUserMessageIndex(sessionId)
+    .filter((r) => !keepIds.has(r.id))
+    .map((r) => r.id)
+
   const ok = runInAction(() => {
     const session = sessionStore.value.sessions.find((s) => s.id === sessionId)
     if (!session) return false
     session.messages = messages
+    sessionStore.dropUserMessagesFromIndex(sessionId, staleIds)
     sessionStore.messagesChanged(sessionId)
     return true
   })

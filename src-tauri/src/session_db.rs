@@ -67,6 +67,17 @@ pub trait SessionRepo: Send + Sync {
         session_id: &str,
         messages: &[Message],
     ) -> Result<(), String>;
+    /// 删除会话中「指定消息及其之后」的全部消息（按 rowid 顺序截断）
+    ///
+    /// 用于前端删除用户消息（及其连带删除的后续消息）时同步落库，
+    /// 保证内存消息列表与 SQLite 一致（否则重启后已删除消息会「复活」）。
+    /// 目标消息不存在时不删除任何行（子查询为 NULL → 条件不成立）。
+    /// ⚠️ 不刷新 `updated_at`（删除消息不是用户发言）。
+    async fn truncate_messages_from(
+        &self,
+        session_id: &str,
+        message_id: &str,
+    ) -> Result<(), String>;
     /// 列出所有会话（不含 messages，按 updated_at 降序）
     async fn list_sessions(&self) -> Result<Vec<Session>, String>;
     /// 获取单个会话元数据（不含 messages）
@@ -108,6 +119,13 @@ impl SessionRepo for NoopSessionRepo {
         &self,
         _session_id: &str,
         _messages: &[Message],
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    async fn truncate_messages_from(
+        &self,
+        _session_id: &str,
+        _message_id: &str,
     ) -> Result<(), String> {
         Ok(())
     }
@@ -503,6 +521,31 @@ INSERT INTO messages (
                 }
             }
             tx.commit().map_err(|e| format!("提交事务失败: {}", e))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
+    async fn truncate_messages_from(
+        &self,
+        session_id: &str,
+        message_id: &str,
+    ) -> Result<(), String> {
+        let conn = self.conn.clone();
+        let session_id = session_id.to_string();
+        let message_id = message_id.to_string();
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let conn = conn.lock().unwrap();
+            // 删除目标消息及其之后（rowid >= 目标）的全部消息。
+            // 目标不存在时子查询为 NULL → 条件不成立 → 不删除任何行（安全幂等）。
+            conn.execute(
+                "DELETE FROM messages \
+                 WHERE session_id=?1 \
+                   AND rowid >= (SELECT rowid FROM messages WHERE id=?2 AND session_id=?1)",
+                params![session_id, message_id],
+            )
+            .map_err(|e| format!("删除消息失败: {}", e))?;
             Ok(())
         })
         .await
@@ -906,6 +949,26 @@ pub async fn cmd_append_messages(
     result
 }
 
+/// 删除会话中「指定消息及其之后」的全部消息（前端删除消息时同步落库）
+/// ⚠️ 不刷新会话时间（删除消息不是用户发言）
+#[tauri::command]
+pub async fn cmd_truncate_session_messages(
+    state: tauri::State<'_, Arc<dyn SessionRepo>>,
+    session_id: String,
+    message_id: String,
+) -> Result<(), String> {
+    let started = crate::telemetry::now_ms();
+    let result = state.truncate_messages_from(&session_id, &message_id).await;
+    track_db(
+        "truncate",
+        Some(&session_id),
+        started,
+        None,
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1106,6 +1169,83 @@ mod tests {
         repo.delete_session("s1").await.unwrap();
         assert!(repo.get_session("s1").await.unwrap().is_none());
         assert!(repo.get_messages("s1").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn truncate_removes_target_and_after() {
+        // 回归：前端删除用户消息时，DB 必须同步删除该消息及其之后的全部消息，
+        // 否则重启后已删除消息会从 SQLite「复活」。
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+        let msgs: Vec<Message> = (1..=5)
+            .map(|i| test_message(&format!("m{}", i), "user"))
+            .collect();
+        repo.append_messages("s1", &msgs).await.unwrap();
+
+        repo.truncate_messages_from("s1", "m3").await.unwrap();
+
+        let ids: Vec<String> = repo
+            .get_messages("s1")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        assert_eq!(ids, vec!["m1", "m2"], "应删除目标及其之后的消息");
+        // 删除消息不是用户发言 → 会话时间不变
+        assert_eq!(
+            repo.get_session("s1").await.unwrap().unwrap().updated_at,
+            100,
+            "删除消息不应刷新会话时间"
+        );
+    }
+
+    #[tokio::test]
+    async fn truncate_missing_message_is_noop() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+        repo.append_messages(
+            "s1",
+            &[test_message("m1", "user"), test_message("m2", "assistant")],
+        )
+        .await
+        .unwrap();
+
+        // 目标不存在：子查询为 NULL → 不应误删任何行
+        repo.truncate_messages_from("s1", "nope").await.unwrap();
+
+        assert_eq!(repo.get_messages("s1").await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn truncate_does_not_touch_other_sessions() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+        repo.upsert_session(&test_session("s2", "t", 100)).await.unwrap();
+        repo.append_messages(
+            "s1",
+            &[test_message("a1", "user"), test_message("a2", "assistant")],
+        )
+        .await
+        .unwrap();
+        repo.append_messages(
+            "s2",
+            &[test_message("b1", "user"), test_message("b2", "assistant")],
+        )
+        .await
+        .unwrap();
+
+        repo.truncate_messages_from("s1", "a1").await.unwrap();
+
+        assert!(repo.get_messages("s1").await.unwrap().is_empty());
+        let other: Vec<String> = repo
+            .get_messages("s2")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        assert_eq!(other, vec!["b1", "b2"], "不应影响其它会话");
     }
 
     #[tokio::test]
