@@ -50,6 +50,7 @@ class SessionStore {
       value: observable,
       saveSession: action,
       updateSession: action,
+      touchSession: action,
       deleteSession: action,
       clear: action,
     })
@@ -73,7 +74,7 @@ class SessionStore {
       // ⚠️ 必须同步更新 _lastSaved 基线，否则 persist() 的 debounced saveDiff
       // 传过去的 oldSessions=[]，导致任何删除操作都无法被识别（diff 认为没有要删的东西）
       // ⚠️ 且必须是「快照」（浅拷贝），不能是 store 自己的活对象：否则对已有会话的
-      // 原地修改（如 chat-service 里 `session.updatedAt = Date.now()`）在 diff 时
+      // 原地修改（如直接改 `session.title`）在 diff 时
       // 会与基线指向同一对象，变化被吞掉。
       this._lastSaved = sessions.map((s) => ({ ...s }))
       track('session.load', {
@@ -396,7 +397,12 @@ class SessionStore {
     })
   }
 
-  /** 更新会话部分字段 */
+  /**
+   * 更新会话部分字段
+   *
+   * ⚠️ 不刷新 `updatedAt`：会话时间只由「用户发送消息」刷新（见 touchSession）。
+   * 改标题 / 切模型 / 调推理强度 / 置顶都属于元数据编辑，不是用户发言。
+   */
   updateSession(
     id: string,
     patch: Partial<
@@ -415,10 +421,29 @@ class SessionStore {
     const idx = this.value.sessions.findIndex((s) => s.id === id)
     if (idx === -1) return null
     const sessions = [...this.value.sessions]
-    sessions[idx] = { ...sessions[idx], ...patch, updatedAt: Date.now() }
+    sessions[idx] = { ...sessions[idx], ...patch }
     this.value.sessions = sessions
     this.persist()
     return sessions[idx]
+  }
+
+  /**
+   * 刷新「会话时间」（`updatedAt`）—— **只有用户发送消息的那一刻可以调用**。
+   *
+   * 产品语义：会话时间 = 用户最后一次发言的时间。会话列表按它倒序、侧边栏显示它，
+   * 因此 AI 回复 / 工具结果 / 迭代反馈 / AI 起标题 / 手动改标题 / 切模型 / 置顶
+   * 都**不能**刷新它，否则列表时间会被 AI 的活动顶掉、顺序随回复乱跳。
+   *
+   * 唯一调用点：`chat-service.sendMessage` / `sendMessageWithGoal` 的发送入口
+   * （含迭代模式与 skipUserMessage 分支，两条路径都经过那里）。
+   */
+  touchSession(id: string): void {
+    const idx = this.value.sessions.findIndex((s) => s.id === id)
+    if (idx === -1) return
+    const sessions = [...this.value.sessions]
+    sessions[idx] = { ...sessions[idx], updatedAt: Date.now() }
+    this.value.sessions = sessions
+    this.persist()
   }
 
   /** 更新会话标题 */

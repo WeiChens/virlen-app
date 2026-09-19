@@ -11,7 +11,6 @@ use super::cancellation::CancellationToken;
 use super::event_sink::EventSink;
 use super::iteration::{run_iteration, RunIterationParams};
 use super::llm_loop::{execute_llm_round, ExecuteLlmRoundParams};
-use super::llm_round::now_ms;
 use super::provider::{
     DefaultProviderFactory, Provider, ProviderFactory,
 };
@@ -137,12 +136,14 @@ impl AgentEngine {
 
         // 0. 持久化（先落库再开始循环）：会话元数据 + 用户消息
         //    JS 卡住/崩溃不影响落库；写入失败不中断聊天（尽力而为）
+        //    ⚠️ 会话时间（updated_at）由 JS 在用户点发送时写好、随 session 一起 upsert；
+        //    这里的消息写入刻意不刷新它（AI 回复 / 工具结果同理，见 SessionRepo::append_messages）
         if let Err(e) = self.repo.upsert_session(&session).await {
             eprintln!("[session_db] upsert session 失败: {}", e);
         }
         if let Err(e) = self
             .repo
-            .append_messages(&session_id, &options.messages, now_ms())
+            .append_messages(&session_id, &options.messages)
             .await
         {
             eprintln!("[session_db] 写入用户消息失败: {}", e);
@@ -349,7 +350,7 @@ impl AgentEngine {
                 // 最终纯文本回复 / 用户取消的部分回复：先落库再结束循环
                 if let Err(e) = self
                     .repo
-                    .append_messages(&session_id, &[result.assistant_message], now_ms())
+                    .append_messages(&session_id, &[result.assistant_message])
                     .await
                 {
                     eprintln!("[session_db] 写入最终回复失败: {}", e);

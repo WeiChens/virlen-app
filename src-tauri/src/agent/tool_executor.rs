@@ -122,7 +122,7 @@ pub async fn execute_tool_steps(
         // 关键：单个 tool 完成即落库（而非等整轮结束再批量写），
         // 即使中途崩溃/卡死，已完成步骤的「工具响应」也已持久化。
         if let Err(e) = repo
-            .append_messages(&session_id, &[tool_result_msg.clone()], now_ms())
+            .append_messages(&session_id, &[tool_result_msg.clone()])
             .await
         {
             eprintln!("[session_db] 写入工具结果消息失败: {}", e);

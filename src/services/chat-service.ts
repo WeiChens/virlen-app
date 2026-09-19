@@ -280,7 +280,7 @@ function setSessionMessagesInPlace(
     const session = sessionStore.value.sessions.find((s) => s.id === sessionId)
     if (!session) return
     session.messages = messages
-    session.updatedAt = Date.now()
+    // 消息修复（悬空 tool_calls 补占位）不是用户发言，不刷新会话时间
     sessionStore.messagesChanged(sessionId)
   })
 }
@@ -354,7 +354,7 @@ export async function sendMessage(
   },
   options?: { skipUserMessage?: boolean },
 ): Promise<void> {
-  const session = sessionStore.getSession(sessionId)
+  let session = sessionStore.getSession(sessionId)
   if (!session) {
     events?.onError?.(sessionId, '会话不存在')
     return
@@ -364,6 +364,14 @@ export async function sendMessage(
     events?.onError?.(sessionId, '未选择模型')
     return
   }
+
+  // ===== 0. 会话时间刷新（唯一入口）=====
+  // 会话时间 = 用户最后一次发言的时间：只在这里（用户发出消息的瞬间）刷新，
+  // AI 回复 / 工具消息 / 改标题都不刷新（见 sessionStore.touchSession）。
+  // 刷新后重新取一次会话对象：touchSession 是整对象替换，旧引用会拿不到新时间
+  // （取新引用还保证传给引擎 / 落库的 session.updatedAt 是刷新后的值）。
+  sessionStore.touchSession(sessionId)
+  session = sessionStore.getSession(sessionId) ?? session
 
   // ===== 埋点：开启本轮链路（§5.4 / §5.5）=====
   const traceId = newTraceId()
@@ -586,7 +594,7 @@ export async function sendMessageWithGoal(
     skipUserMessage?: boolean
   },
 ): Promise<void> {
-  const session = sessionStore.getSession(sessionId)
+  let session = sessionStore.getSession(sessionId)
   if (!session) {
     events?.onError?.(sessionId, '会话不存在')
     return
@@ -596,6 +604,12 @@ export async function sendMessageWithGoal(
     events?.onError?.(sessionId, '未选择模型')
     return
   }
+
+  // ===== 0. 会话时间刷新（唯一入口，与 sendMessage 同一语义）=====
+  // 迭代模式也是「用户发出一条消息」，务必在这里刷一次；后续执行→验证→修复
+  // 产生的反馈 / 失败报告落库都不刷新时间。
+  sessionStore.touchSession(sessionId)
+  session = sessionStore.getSession(sessionId) ?? session
 
   // ===== 埋点：开启本轮链路（迭代模式）=====
   const traceId = newTraceId()
@@ -1109,14 +1123,14 @@ export function addSessionMessage(
         const msgIdx = msgs.findIndex((m) => m.id === existing.id)
         msgs[msgIdx] = { ...message, id: existing.id }
         session.messages = msgs
-        session.updatedAt = Date.now()
         sessionStore.messagesChanged(sessionId)
         added = msgs[msgIdx]
       }
       return
     }
     session.messages = [...session.messages, message]
-    session.updatedAt = Date.now()
+    // ⚠️ 不刷新 session.updatedAt：这里是所有消息（含 AI 回复、工具结果）的通用入口，
+    // 会话时间只由「用户发送消息」刷新（见 sessionStore.touchSession）。
     sessionStore.messagesChanged(sessionId)
     added = message
   })
@@ -1168,7 +1182,6 @@ export function deleteSessionMessage(
 
     // 删除该消息及之后所有消息
     session.messages = session.messages.slice(0, msgIdx)
-    session.updatedAt = Date.now()
     sessionStore.messagesChanged(sessionId)
     return true
   })
@@ -1182,7 +1195,6 @@ export function clearSessionMessages(sessionId: string): boolean {
     sessions[idx] = {
       ...sessions[idx],
       messages: [],
-      updatedAt: Date.now(),
     }
     sessionStore.value.sessions = sessions
     sessionStore.messagesChanged(sessionId)

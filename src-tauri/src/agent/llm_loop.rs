@@ -5,7 +5,7 @@
 use super::bridge::AgentBridgeState;
 use super::cancellation::CancellationToken;
 use super::event_sink::EventSink;
-use super::llm_round::{do_llm_round, finalize_assistant_message, now_ms};
+use super::llm_round::{do_llm_round, finalize_assistant_message};
 use super::provider::Provider;
 use crate::session_db::SessionRepo;
 use super::tool_executor::{create_run, execute_tool_steps};
@@ -99,8 +99,9 @@ pub async fn execute_llm_round(
 
     // 关键：LLM 已产出 tool_calls → 在执行工具之前立即落库 assistant 消息，
     // 即使后续工具执行中途崩溃/卡死，这条「agent 调用工具」的记录也不丢失。
+    // （不刷新会话时间，见 SessionRepo::append_messages）
     if let Err(e) = repo
-        .append_messages(session_id, &[ctx.assistant_message.clone()], now_ms())
+        .append_messages(session_id, &[ctx.assistant_message.clone()])
         .await
     {
         eprintln!("[session_db] 写入助手(tool_call)消息失败: {}", e);

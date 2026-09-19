@@ -50,19 +50,22 @@ pub struct UserMessageRef {
 pub trait SessionRepo: Send + Sync {
     /// 写入/更新会话元数据（幂等，按 id）
     async fn upsert_session(&self, session: &Session) -> Result<(), String>;
-    /// 追加消息并刷新会话 updated_at（事务；按消息 id 幂等，重复写入保留原 rowid，不改变读取顺序）
+    /// 追加消息（事务；按消息 id 幂等，重复写入保留原 rowid，不改变读取顺序）
+    ///
+    /// ⚠️ **不刷新 `sessions.updated_at`**：会话时间 = 用户最后一次发言的时间，
+    /// 只由前端 `sessionStore.touchSession()`（用户点发送的那一瞬间）经 `upsert_session` 写入。
+    /// 引擎侧 assistant / tool / 迭代反馈的落库都是 AI 活动，不得改写会话时间。
     async fn append_messages(
         &self,
         session_id: &str,
         messages: &[Message],
-        updated_at: i64,
     ) -> Result<(), String>;
     /// 整批替换会话的全部消息（事务；用于前端上下文压缩等全量替换场景）
+    /// ⚠️ 同样不刷新 `updated_at`（压缩不是用户发言，见 `append_messages`）
     async fn replace_messages(
         &self,
         session_id: &str,
         messages: &[Message],
-        updated_at: i64,
     ) -> Result<(), String>;
     /// 列出所有会话（不含 messages，按 updated_at 降序）
     async fn list_sessions(&self) -> Result<Vec<Session>, String>;
@@ -98,7 +101,6 @@ impl SessionRepo for NoopSessionRepo {
         &self,
         _session_id: &str,
         _messages: &[Message],
-        _updated_at: i64,
     ) -> Result<(), String> {
         Ok(())
     }
@@ -106,7 +108,6 @@ impl SessionRepo for NoopSessionRepo {
         &self,
         _session_id: &str,
         _messages: &[Message],
-        _updated_at: i64,
     ) -> Result<(), String> {
         Ok(())
     }
@@ -415,7 +416,6 @@ ON CONFLICT(id) DO UPDATE SET
         &self,
         session_id: &str,
         messages: &[Message],
-        updated_at: i64,
     ) -> Result<(), String> {
         let conn = self.conn.clone();
         let session_id = session_id.to_string();
@@ -459,11 +459,6 @@ ON CONFLICT(id) DO UPDATE SET
                         .map_err(|e| format!("写入消息失败: {}", e))?;
                 }
             }
-            tx.execute(
-                "UPDATE sessions SET updated_at=?1 WHERE id=?2",
-                params![updated_at, session_id],
-            )
-            .map_err(|e| format!("刷新会话时间失败: {}", e))?;
             tx.commit().map_err(|e| format!("提交事务失败: {}", e))?;
             Ok(())
         })
@@ -475,7 +470,6 @@ ON CONFLICT(id) DO UPDATE SET
         &self,
         session_id: &str,
         messages: &[Message],
-        updated_at: i64,
     ) -> Result<(), String> {
         let conn = self.conn.clone();
         let session_id = session_id.to_string();
@@ -508,11 +502,6 @@ INSERT INTO messages (
                         .map_err(|e| format!("写入消息失败: {}", e))?;
                 }
             }
-            tx.execute(
-                "UPDATE sessions SET updated_at=?1 WHERE id=?2",
-                params![updated_at, session_id],
-            )
-            .map_err(|e| format!("刷新会话时间失败: {}", e))?;
             tx.commit().map_err(|e| format!("提交事务失败: {}", e))?;
             Ok(())
         })
@@ -876,6 +865,7 @@ pub async fn cmd_delete_session(
 }
 
 /// 整批替换会话的全部消息（前端上下文压缩等全量替换场景）
+/// ⚠️ 不刷新会话时间（压缩不是用户发言）
 #[tauri::command]
 pub async fn cmd_replace_session_messages(
     state: tauri::State<'_, Arc<dyn SessionRepo>>,
@@ -884,13 +874,7 @@ pub async fn cmd_replace_session_messages(
 ) -> Result<(), String> {
     let started = crate::telemetry::now_ms();
     let rows = messages.len();
-    let result = state
-        .replace_messages(
-            &session_id,
-            &messages,
-            chrono::Utc::now().timestamp_millis(),
-        )
-        .await;
+    let result = state.replace_messages(&session_id, &messages).await;
     track_db(
         "replace",
         Some(&session_id),
@@ -902,6 +886,7 @@ pub async fn cmd_replace_session_messages(
 }
 
 /// 追加消息（前端 TS 引擎路径落库用；Rust 引擎路径由引擎内部直落）
+/// ⚠️ 不刷新会话时间（AI 回复 / 工具结果 / 用户消息都由会话元数据的那次 upsert 定时间）
 #[tauri::command]
 pub async fn cmd_append_messages(
     state: tauri::State<'_, Arc<dyn SessionRepo>>,
@@ -910,13 +895,7 @@ pub async fn cmd_append_messages(
 ) -> Result<(), String> {
     let started = crate::telemetry::now_ms();
     let rows = messages.len();
-    let result = state
-        .append_messages(
-            &session_id,
-            &messages,
-            chrono::Utc::now().timestamp_millis(),
-        )
-        .await;
+    let result = state.append_messages(&session_id, &messages).await;
     track_db(
         "append",
         Some(&session_id),
@@ -1020,7 +999,6 @@ mod tests {
         repo.append_messages(
             "s1",
             &[test_message("m1", "user"), test_message("m2", "assistant")],
-            200,
         )
         .await
         .unwrap();
@@ -1029,17 +1007,49 @@ mod tests {
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].id, "m1");
         assert_eq!(msgs[1].id, "m2");
-        // updated_at 被刷新
+        // 会话时间不变：落库消息（AI 回复 / 工具结果）不得刷新 updated_at，
+        // 它只由前端「用户发送消息」那一次 upsert_session 写入。
         let s = repo.get_session("s1").await.unwrap().unwrap();
-        assert_eq!(s.updated_at, 200);
+        assert_eq!(s.updated_at, 100, "写消息不应刷新会话时间");
+    }
+
+    #[tokio::test]
+    async fn message_writes_never_refresh_session_time() {
+        // 回归（产品语义）：会话时间 = 用户最后一次发言的时间。
+        // AI 回复 / 工具结果 / 迭代反馈的落库都不得改写 updated_at，
+        // 只有前端「用户发送消息」那一瞬间的 upsert_session 会写它。
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+        repo.append_messages(
+            "s1",
+            &[
+                test_message("m1", "user"),
+                test_message("m2", "assistant"),
+                test_message("m3", "tool"),
+            ],
+        )
+        .await
+        .unwrap();
+        repo.append_messages("s1", &[test_message("m4", "assistant")])
+            .await
+            .unwrap();
+        let s = repo.get_session("s1").await.unwrap().unwrap();
+        assert_eq!(s.updated_at, 100, "写消息不应刷新会话时间");
+
+        // 只有 upsert_session（用户发言时前端调用）才刷新
+        repo.upsert_session(&test_session("s1", "t", 500))
+            .await
+            .unwrap();
+        let s2 = repo.get_session("s1").await.unwrap().unwrap();
+        assert_eq!(s2.updated_at, 500);
     }
 
     #[tokio::test]
     async fn append_messages_idempotent() {
         let repo = open_tmp();
         repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
-        repo.append_messages("s1", &[test_message("m1", "user")], 200).await.unwrap();
-        repo.append_messages("s1", &[test_message("m1", "user")], 300).await.unwrap();
+        repo.append_messages("s1", &[test_message("m1", "user")]).await.unwrap();
+        repo.append_messages("s1", &[test_message("m1", "user")]).await.unwrap();
         let msgs = repo.get_messages("s1").await.unwrap();
         assert_eq!(msgs.len(), 1, "重复写入同一 id 应幂等");
     }
@@ -1049,15 +1059,14 @@ mod tests {
         // 回归：重复写入已存在的“中间消息”不得改变读取顺序（保留原 rowid）
         let repo = open_tmp();
         repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
-        repo.append_messages("s1", &[test_message("m1", "user")], 200).await.unwrap();
+        repo.append_messages("s1", &[test_message("m1", "user")]).await.unwrap();
         repo.append_messages(
             "s1",
             &[test_message("m2", "assistant"), test_message("m3", "tool")],
-            300,
         )
         .await
         .unwrap();
-        repo.append_messages("s1", &[test_message("m1", "user")], 400).await.unwrap();
+        repo.append_messages("s1", &[test_message("m1", "user")]).await.unwrap();
         let msgs = repo.get_messages("s1").await.unwrap();
         let ids: Vec<&str> = msgs.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, vec!["m1", "m2", "m3"], "重复写入同 id 不应把消息挪到末尾");
@@ -1070,7 +1079,6 @@ mod tests {
         repo.append_messages(
             "s1",
             &[test_message("m1", "user"), test_message("m2", "assistant")],
-            200,
         )
         .await
         .unwrap();
@@ -1078,7 +1086,6 @@ mod tests {
         repo.replace_messages(
             "s1",
             &[test_message("m9", "user"), test_message("m10", "assistant")],
-            300,
         )
         .await
         .unwrap();
@@ -1086,15 +1093,16 @@ mod tests {
         assert_eq!(msgs.len(), 2, "替换后不应残留旧消息");
         assert_eq!(msgs[0].id, "m9");
         assert_eq!(msgs[1].id, "m10");
+        // 压缩（整批替换）也不是用户发言 → 会话时间保持原值
         let s = repo.get_session("s1").await.unwrap().unwrap();
-        assert_eq!(s.updated_at, 300);
+        assert_eq!(s.updated_at, 100, "整批替换消息不应刷新会话时间");
     }
 
     #[tokio::test]
     async fn delete_removes_session_and_messages() {
         let repo = open_tmp();
         repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
-        repo.append_messages("s1", &[test_message("m1", "user")], 200).await.unwrap();
+        repo.append_messages("s1", &[test_message("m1", "user")]).await.unwrap();
         repo.delete_session("s1").await.unwrap();
         assert!(repo.get_session("s1").await.unwrap().is_none());
         assert!(repo.get_messages("s1").await.unwrap().is_empty());
@@ -1118,7 +1126,7 @@ mod tests {
         let msgs: Vec<Message> = (1..=10)
             .map(|i| test_message(&format!("m{}", i), "user"))
             .collect();
-        repo.append_messages("s1", &msgs, 200).await.unwrap();
+        repo.append_messages("s1", &msgs).await.unwrap();
 
         // 尾部窗口：最后 4 条（且为升序）
         let p1 = repo.get_message_page("s1", 4, None).await.unwrap();
@@ -1148,7 +1156,6 @@ mod tests {
         repo.append_messages(
             "s1",
             &[test_message("m1", "user"), test_message("m2", "assistant")],
-            200,
         )
         .await
         .unwrap();
@@ -1186,7 +1193,6 @@ mod tests {
                 with_image,
                 test_message("m4", "tool"),
             ],
-            200,
         )
         .await
         .unwrap();
@@ -1204,7 +1210,7 @@ mod tests {
         repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
         let mut long = test_message("m1", "user");
         long.content = json!("字".repeat(600));
-        repo.append_messages("s1", &[long], 200).await.unwrap();
+        repo.append_messages("s1", &[long]).await.unwrap();
 
         let refs = repo.get_user_message_refs("s1").await.unwrap();
         assert_eq!(refs.len(), 1);

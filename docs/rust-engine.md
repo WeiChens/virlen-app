@@ -221,14 +221,19 @@ execute_command 需审批
 ```rust
 pub trait SessionRepo: Send + Sync {
     async fn upsert_session(&self, session: &Session) -> Result<(), String>;
-    async fn append_messages(&self, session_id, messages, updated_at) -> ...;
-    async fn replace_messages(&self, session_id, messages, updated_at) -> ...; // 前端压缩等全量替换
+    async fn append_messages(&self, session_id, messages) -> ...;
+    async fn replace_messages(&self, session_id, messages) -> ...; // 前端压缩等全量替换
     async fn list_sessions(&self) -> ...;
     async fn get_session(&self, session_id) -> ...;
     async fn get_messages(&self, session_id) -> ...;
     async fn delete_session(&self, session_id) -> ...;
 }
 ```
+
+- ⚠️ **会话时间（`sessions.updated_at`）只由 `upsert_session` 写入**：前端在「用户点击发送」
+  的那一瞬间调 `sessionStore.touchSession()` 刷新内存值，随后随会话元数据 upsert 落库。
+  `append_messages` / `replace_messages` 刻意**不**刷新它 —— AI 回复、工具结果、迭代反馈、
+  上下文压缩都不是用户发言（否则侧边栏显示的时间与列表排序会被 AI 的活动顶掉）。
 
 - 生产：`SqliteSessionRepo`（rusqlite bundled）
 - 测试/兜底：`NoopSessionRepo`（不持久化）
