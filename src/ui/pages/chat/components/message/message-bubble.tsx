@@ -19,8 +19,11 @@ import { MessageBox } from '@/ui/components/shared/MessageBox'
 import { settingsState } from '@/ui/store'
 import { v4 } from '@/utils/uuid'
 import { showImagePreview } from '@/ui/components/shared/ImagePreview'
+import FileChip from '@/ui/components/shared/FileChip'
 import QuickInputSvg from '@/ui/components/icons/QuickInputSvg'
 import { Observer } from 'mobx-react-lite'
+import { openPath } from '@tauri-apps/plugin-opener'
+import { getFileBlocks } from '@/utils/messageContent'
 
 interface Props {
   message: Message
@@ -64,6 +67,9 @@ function MessageBubble({ message, onEdit, onDelete, toolResults }: Props) {
       .filter((block) => block.type === 'image_url')
       .map((block) => ('image_url' in block ? block.image_url.url : ''))
   }
+
+  /** 文件附件（只存路径，点击用系统默认程序打开） */
+  const files = getFileBlocks(message.content)
 
   function handleCopy() {
     const content = getContent(false)
@@ -196,6 +202,22 @@ function MessageBubble({ message, onEdit, onDelete, toolResults }: Props) {
                               previewSrcList: getImages(),
                             })
                           }
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {files.length > 0 && (
+                    <div className="message-files">
+                      {files.map((f) => (
+                        <FileChip
+                          key={f.path}
+                          path={f.path}
+                          name={f.name}
+                          isDir={f.isDir}
+                          size={f.size}
+                          onClick={() => {
+                            openPath(f.path).catch(() => {})
+                          }}
                         />
                       ))}
                     </div>

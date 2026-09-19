@@ -192,6 +192,15 @@
       }
     }
 
+    // 文件附件（chip 本体样式在 shared/FileChip/style.scss）
+    .message-files {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
     .message-tool-calls {
       display: flex;
       flex-wrap: wrap;

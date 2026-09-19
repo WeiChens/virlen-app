@@ -1,0 +1,130 @@
+/* ==================== FileChip — 文件附件标签 ====================
+   两种用法共用一套骨架：
+   - 输入框：可移除（右侧 ✕ 默认隐藏，hover 出现，减少视觉噪音）
+   - 消息气泡：可点击打开（hover 整块变亮，给出可点的反馈） */
+
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 220px;
+  height: 24px;
+  padding: 0 4px 0 6px;
+  gap: 6px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 8px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-secondary, #666);
+  font-size: var(--font-size-xs, 12px);
+  line-height: 1;
+  user-select: none;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+
+  &:hover {
+    border-color: var(--accent-color, #4f46e5);
+    background: var(--hover-bg, #f0f0f0);
+  }
+
+  /* 主体：图标 + 文件名 + 体积（可点时为 button，样式归零） */
+  .file-chip-body {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    max-width: 100%;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+
+    &:is(button) {
+      cursor: pointer;
+    }
+  }
+
+  .file-chip-icon {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    color: var(--accent-color, #4f46e5);
+
+    svg {
+      width: 14px;
+      height: 14px;
+      display: block;
+    }
+  }
+
+  /* 文件名：主干可省略，扩展名不吃省略号（保留了「这是什么文件」这一关键信息） */
+  .file-chip-name {
+    display: inline-flex;
+    align-items: baseline;
+    min-width: 0;
+    color: var(--text-primary, #1a1a1a);
+    font-weight: 500;
+
+    .file-chip-name-base {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
+
+    .file-chip-name-ext {
+      flex-shrink: 0;
+      color: var(--text-secondary, #666);
+    }
+  }
+
+  .file-chip-meta {
+    flex-shrink: 0;
+    color: var(--text-tertiary, #999);
+  }
+
+  /* 移除按钮：默认隐形，hover 整块时才出现 */
+  .file-chip-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-tertiary, #999);
+    font-size: 10px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    transition:
+      opacity 0.15s,
+      background 0.15s,
+      color 0.15s;
+
+    &:hover,
+    &:focus-visible {
+      opacity: 1;
+      background: var(--active-bg, #e8e8ed);
+      color: var(--color-danger, #e53e3e);
+    }
+
+    &:focus-visible {
+      outline: var(--focus-ring, 2px solid var(--accent-color, #4f46e5));
+    }
+  }
+
+  &:hover .file-chip-remove,
+  &:focus-within .file-chip-remove {
+    opacity: 1;
+  }
+
+  /* 触摸/键盘用户拿不到 hover：聚焦时也可见 */
+  &:focus-within {
+    border-color: var(--accent-color, #4f46e5);
+  }
+}

@@ -11,7 +11,7 @@ import {
   extractJsonData,
 } from './http-utils'
 import { v4 } from '@/utils/uuid'
-import { getLastSummaryMessageIndex } from '@/types'
+import { fileBlockToText, getLastSummaryMessageIndex } from '@/types'
 import { processVisionContent } from './visionInject'
 
 export class OpenAiProvider implements IProvider {
@@ -265,6 +265,10 @@ export class OpenAiProvider implements IProvider {
         formatted.content = msg.content.map((block) => {
           if (block.type === 'text') return block
           if (block.type === 'image_url') return block
+          // 文件附件：本协议没有对应的内容块，降级为文本（只带路径）
+          if (block.type === 'file') {
+            return { type: 'text', text: fileBlockToText(block) }
+          }
           return block
         })
       }

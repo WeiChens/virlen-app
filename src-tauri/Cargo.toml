@@ -75,6 +75,10 @@ windows-core = "0.61"
 # 进程树管理：Job Object（命令超时/终止时连后代进程一键全杀）+ Toolhelp32 递归枚举
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    # 剪贴板（粘贴文件）：OpenClipboard / GetClipboardData（CF_HDROP）
+    "Win32_System_DataExchange",
+    # DragQueryFileW / HDROP：把 CF_HDROP 解成真实路径
+    "Win32_UI_Shell",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_System_JobObjects",

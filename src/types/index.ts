@@ -61,6 +61,18 @@ export interface ImageContent {
   }
 }
 
+export interface FileContent {
+  type: 'file'
+  /** 文件绝对路径（只存路径，不拷贝文件内容） */
+  path: string
+  /** 展示用文件名（不含目录） */
+  name?: string
+  /** 是否为目录 */
+  isDir?: boolean
+  /** 文件字节数（目录无此值） */
+  size?: number
+}
+
 export interface ToolUseContent {
   type: 'tool_use'
   id: string
@@ -77,7 +89,36 @@ export interface ToolResultContent {
 
 export type MessageContent =
   | string
-  | (TextContent | ImageContent | ToolUseContent | ToolResultContent)[]
+  | (
+      | TextContent
+      | ImageContent
+      | FileContent
+      | ToolUseContent
+      | ToolResultContent
+    )[]
+
+/**
+ * 附件标签：文件附件块降级成文本时、打在路径前面的标记（模型可读，不是 UI 文案）
+ *
+ * 与 Rust 侧 `src-tauri/src/agent/provider.rs` 的同名常量必须逐字一致
+ * （铁律 1：TS / Rust 双引擎同语义），改文案要两边一起改。
+ */
+export const ATTACHED_FILE_LABEL = '[User attached file]'
+export const ATTACHED_DIR_LABEL = '[User attached folder]'
+
+/**
+ * 文件附件块 → 发给 LLM 的文本形式
+ *
+ * 各 Provider（openai / anthropic / gemini / Rust 原生引擎）共用此函数，
+ * 保证同一条消息在所有协议下对模型呈现完全一致。
+ * 语义：告诉模型「用户附带了这个文件」，具体内容由模型自行用工具按路径读取。
+ */
+export function fileBlockToText(block: FileContent): string {
+  const path = block.path || ''
+  return block.isDir
+    ? `${ATTACHED_DIR_LABEL} ${path}`
+    : `${ATTACHED_FILE_LABEL} ${path}`
+}
 
 export interface Message {
   id: string

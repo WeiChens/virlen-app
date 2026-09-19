@@ -21,6 +21,7 @@
 
 - **Multi-Model Providers**: Compatible with OpenAI, Anthropic, Gemini and other mainstream LLM APIs
 - **Function Calling**: AI can autonomously perform file operations, command execution, web scraping, search, visual analysis, and more
+- **File Attachments**: Drag & drop (or paste) files into the input box — they are referenced by absolute path only (never copied into the workspace), rendered as chips in the message bubble, and read on demand by the agent's own file tools
 - **On-Device Vision Engine**: Powered by [Quasivision](https://crates.io/crates/quasivision) — UI detection, OCR, object detection, and icon classification, all running locally without internet
 - **Skill System**: Pluggable Skill mechanism that gives the AI domain-specific expertise
 - **Security Mechanisms**: Path allowlist/blocklist, file access control, Shell sandbox execution, and StormBreaker tool-call storm protection for comprehensive system safety

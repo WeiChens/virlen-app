@@ -3,6 +3,7 @@
 use tauri::Manager;
 
 mod agent;
+mod clipboard_files;
 mod common_service;
 mod deepseek_tokenizer;
 mod file_ops;
@@ -283,6 +284,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             os_platform,
+            // 剪贴板里的文件路径（粘贴文件用，Windows: CF_HDROP）
+            clipboard_files::read_clipboard_file_paths,
             save_file_to_path,
             search_files_by_name,
             search_text_in_files,

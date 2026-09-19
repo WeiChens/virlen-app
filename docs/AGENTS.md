@@ -337,6 +337,58 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
   终端内确认的命令**仍走沙盒 + 同一条执行路径**（用户写的命令 ≠ 免检命令）。
   仍未做：常驻交互 shell / 哨兵（Step 3）、TS 引擎路径 PTY 化（§7 #14）。
 
+**11.8 拖拽取文件路径：`dragDropEnabled` 只能为 `true`（与 HTML5 拖拽互斥）**
+
+- `app.windows[].dragDropEnabled` 现为 `true`：Tauri 原生拖放会接管系统拖放，**页面收不到 HTML5 的
+  `dragenter/dragover/drop`**，但能通过 `getCurrentWebview().onDragDropEvent()` 拿到真实文件路径（`payload.paths`）。
+- 反面：HTML5 `dataTransfer.files` 里的 `File` **永远没有磁盘路径**（浏览器安全模型，Tauri 也没注入 `path`）。
+  所以「拖文件进来只记路径」只能走原生事件，Windows 上两者不可兼得。
+- 已知代价：**跨应用拖「文本」到 textarea 不再自动插入**（被原生拖放吞掉）；
+  监听是 webview 级的，需按落点（`position / devicePixelRatio` → CSS 像素）自行判断是否命中输入框。
+- 实现：`ui/pages/chat/components/input/index.tsx`（监听 + 命中判断）、`input/hooks.ts`
+  （`isImagePath` 分流；`readImageFileAsDataUrl` 读字节 → 回图片链路）。浏览器 dev 模式保留 HTML5 拖拽兜底
+  （只能拖图片，拖文件给提示）。
+- 附件数据模型：`MessageContent` 的 `file` 块**只存路径**（`src/types/index.ts`）。
+  各 Provider 没有对应内容块，统一降级为文本（TS: `fileBlockToText`，Rust: `provider.rs` 的 `Some("file")` 分支，
+  **两侧文案必须一致** —— 铁律 1）。标签本身拎成常量、且用英文（模型可读文本，不进 i18n）：
+  TS `ATTACHED_FILE_LABEL` / `ATTACHED_DIR_LABEL`（`src/types/index.ts`）
+  ↔ Rust 同名常量（`src-tauri/src/agent/provider.rs`）；两侧测试都故意断言字面量，改文案会被测试拦住。
+
+**11.9 粘贴文件：路径只能问原生剪贴板（页面的 DataTransfer 里没有）**
+
+- 实测（Windows 10 + WebView2，用 `Set-Clipboard -Path` 复刻资源管理器行为）：复制文件后剪贴板里**只有
+  `FileDrop / FileNameW / FileName`，一个文本格式都没有** → 「从 `text/plain` / `text/uri-list` 里解析路径」
+  在 Windows 上**永远解不出东西**（`text/uri-list` 解析只留给 macOS/Linux 做兜底）。
+- 原生读：`read_clipboard_file_paths`（`src-tauri/src/clipboard_files.rs`）= `IsClipboardFormatAvailable(CF_HDROP)`
+  → `OpenClipboard`（被占用是常态，重试 8×20ms）→ `GetClipboardData` → `DragQueryFileW` 逐条取名。
+  读不到 / 平台不支持一律返回 `[]`：**不报错、不打断粘贴**，由前端决定提示还是静默。
+- 前端两条入口（`input/index.tsx`，都汇到 `acceptPaths`）：
+  1. `paste` 事件里 `dt.items` 出现**非图片文件** → 整批走原生剪贴板（避免和图片链路把同一张图挂两遍）；
+     剪贴板里是图片内容（截图 / 网页里复制图片）仍走原 `addImages` 链路。
+  2. **Ctrl+V 原生兜底**：WebView2 对「复制的文件」可能连 `paste` 事件都不触发（页面看剪贴板是空的，
+     默认粘贴也没东西可插）。所以 keydown 里**不拦默认粘贴**，只在下一轮事件循环确认 `paste` 没来
+     （或来了但 `dt.types` 为空）、且剪贴板里真有文件时补挂一次。
+     `handlePaste` 开头按 `dt.types.length` 标记 `pasteSeenRef` → 两条路不会重复挂，正常粘文字/图片不受影响。
+- 平台：macOS/Linux 该命令返回 `[]`，前端退回 uri-list 文本解析（Finder 复制一般带 `public.file-url`）；
+  要原生支持再补 `NSPasteboard` / x11 剪贴板。
+- 提示文案复用既有 key「无法从剪贴板获取文件路径，请直接把文件拖进输入框」（`en-US.json` 已有）。
+
+**11.10 输入框高度模型：固定高度只落在 textarea 上（否则附件会把工具条顶出盒子）**
+
+- 症状：输入框在最小高度时加图片 / 文件，底部工具条铉 “挤下去”（在窗口底部就是被挤到可视区外）。
+- 根因：固定高度原来落在 `.input-wrapper` 上（内联 `height`，或欢迎页的 `maxHeight: 180`），
+  而附件条 / 迭代目标行都是它的 flex 子项——盒子不能长高，只能从 textarea 和工具条身上扣；
+  扣不动了就溢出到盒子外（实测：170 高 + 12 图 + 3 文件 → textarea 只剩 24px，工具条溢出盒子 6px）。
+- 现在：`.input-wrapper` 高度完全由内容决定（`min-height: 0`），
+  用户拖拽的高度通过内联 `height` 落在 **textarea** 上，附件区只把盒子往下撑。
+  实测：静止 125 / 拖拽 170 与改动前一致；加 12 图 + 3 文件后 textarea 高度不变、工具条始终贴盒内底边。
+- 两个必须对齐的常量（改一个就要改另一个）：
+  `index.tsx` 的 `INPUT_CHROME_HEIGHT = 58`（工具条 36 + 间距 8 + padding 12 + 边框 2）
+  ↔ `style.scss` 的 `.input-wrapper` 静止高度 125 / `textarea { min-height: 67px }`（125 - 58 = 67）。
+- `MIN_HEIGHT` 从 170 改为 125：拖拽下限与静止高度一致，否则第一次拖拽会突然跳高。
+- 附件条统一「限高 72 + 内部滚动」（文件 chip / 图片缩略图各一屏一行），附件区高度有上限。
+- 坑：`.has-fixed-height textarea` 必须 `flex: 0 0 auto` —— 容器是自适应高度时 `flex-basis: 0%` 会让内联 `height` 失效。
+
 ---
 
 ## 12. 提交与协作约定

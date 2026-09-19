@@ -24,6 +24,7 @@
 
 - **多模型提供商**：兼容 OpenAI、Anthropic、Gemini 等主流 LLM API
 - **工具调用（Function Calling）**：AI 可自主执行文件操作、命令执行、网页抓取、搜索、视觉分析等操作
+- **文件附件**：拖拽（或粘贴）文件到输入框即可携带，只记绝对路径、不拷贝文件内容，消息气泡里以 chip 展示，AI 按需用自己的文件工具去读
 - **内置视觉引擎**：基于 [Quasivision](https://crates.io/crates/quasivision) 的端侧 AI 视觉能力（UI 检测、OCR、物体检测、图标分类），无需联网
 - **技能系统**：可插拔的 Skill 机制，让 AI 具备专业领域知识
 - **安全机制**：路径黑白名单、文件访问权限控制、Shell 沙盒执行、工具调用风暴防护（StormBreaker），全面保护系统安全

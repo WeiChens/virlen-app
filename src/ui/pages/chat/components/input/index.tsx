@@ -3,11 +3,21 @@
  * 自动高度 textarea，Enter 发送，Shift+Enter 换行
  * loading 时发送按钮变成停止按钮
  * 支持多模态输入：图片上传 / 粘贴 / 拖拽
+ * 支持文件附件：拖拽 / 粘贴文件，只记录路径（不拷贝文件内容）
  * 支持语音输入：使用 Web Speech API（SpeechRecognition）
  *               权限由 Tauri 原生层在启动时预设为 ALLOW，无需用户授权
  *
+ * 取路径说明（拖拽 / 粘贴都必须落到真实路径）：
+ *   拖拽：tauri.conf.json 里 dragDropEnabled=true，页面收不到 HTML5 的 drop 事件，
+ *         改由 Tauri 的 onDragDropEvent 上报真实路径。
+ *   粘贴：paste 事件只能给 File（有文件名、无磁盘路径），资源管理器里复制的文件
+ *         在 WebView2 里往往连文本都拿不到，所以路径统一问原生剪贴板
+ *         （read_clipboard_file_paths，Windows 走 CF_HDROP）；
+ *         “从 uri-list 文本里解析”只作非 Windows 的兜底。
+ *   两者最终都汇到 acceptPaths：图片读字节回到图片链路，其余进文件附件（只有路径）。
+ *
  * 子组件：AgentSelector / QuickInputMenu / TokenRing
- * hooks：useImageAttachment / useVoiceInput
+ * hooks：useImageAttachment / useFileAttachment / useVoiceInput
  */
 import {
   useState,
@@ -20,6 +30,7 @@ import {
   forwardRef,
   useImperativeHandle,
 } from 'react'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import SendSvg from '@/ui/components/icons/SendSvg'
 import StopSvg from '@/ui/components/icons/StopSvg'
 import ModelSwitcher from '../modals/model-switcher'
@@ -36,27 +47,84 @@ import {
 import { observable } from 'mobx'
 import { cancelPausedRun } from '@/services/chat-service'
 import { showImagePreview } from '@/ui/components/shared/ImagePreview'
+import FileChip from '@/ui/components/shared/FileChip'
+import { showToast } from '@/ui/components/shared/Toast'
 import { t } from '@/ui/i18n'
 import AgentSelector from './agent-selector'
 import QuickInputMenu from './quick-input-menu'
 import GoalQuickInputMenu from './goal-quick-input-menu'
 import TokenRing from './token-ring'
-import { useImageAttachment, useVoiceInput } from './hooks'
+import {
+  useImageAttachment,
+  useVoiceInput,
+  useFileAttachment,
+  isImagePath,
+  normalizeFsPath,
+  readClipboardFilePaths,
+} from './hooks'
 import { usePathAutocomplete, PathAutocomplete } from './path-autocomplete'
 import {
   saveSessionInput,
   getSessionInput,
   clearSessionInput,
 } from './session-input-store'
-import type { ImageAttachment } from './hooks'
+import type { FileAttachment, ImageAttachment } from './hooks'
 import './style.scss'
 
 /** 图片附件（re-export 供外部使用） */
 export type { ImageAttachment }
+/** 文件附件（re-export 供外部使用） */
+export type { FileAttachment }
+
+/** 是否在 Tauri 环境（浏览器调试模式下没有原生拖拽事件） */
+function isTauriEnv(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
+
+/** 像不像一个绝对路径（用于从剪贴板文本里辨认文件路径） */
+function looksLikeAbsolutePath(p: string): boolean {
+  return (
+    /^[A-Za-z]:[\\/]/.test(p) || // Windows 盘符
+    p.startsWith('\\\\') || // Windows UNC
+    p.startsWith('/') // POSIX / file:// 已归一
+  )
+}
+
+/**
+ * 从剪贴板里捞出文件路径
+ *
+ * 在资源管理器 / Finder 里「复制文件」后，剪贴板除了文件本体（拿不到路径），
+ * 通常还带一份路径文本（text/plain 或 text/uri-list），这里把它解析成路径。
+ * 拿不到时返回空数组，由调用方给出提示。
+ */
+function extractPathsFromClipboard(dt: DataTransfer): string[] {
+  const raw = [dt.getData('text/plain'), dt.getData('text/uri-list')]
+    .filter(Boolean)
+    .join('\n')
+
+  const out: string[] = []
+  for (const line of raw.split(/\r?\n/)) {
+    let text = line.trim()
+    if (!text || text.startsWith('#')) continue
+    if (/^file:\/\//i.test(text)) {
+      text = decodeURIComponent(text.replace(/^file:\/\//i, ''))
+      // /C:/xxx → C:/xxx（Windows 的 file:/// 形式会多一个前导斜杠）
+      if (/^\/[A-Za-z]:/.test(text)) text = text.slice(1)
+    }
+    if (!looksLikeAbsolutePath(text)) continue
+    out.push(text)
+  }
+  return out
+}
 
 interface Props {
   sessionId?: string
-  onSend: (content: string, images?: ImageAttachment[], goal?: string) => void
+  onSend: (
+    content: string,
+    images?: ImageAttachment[],
+    goal?: string,
+    files?: FileAttachment[],
+  ) => void
   onCancel?: () => void
   onMessagesUpdate?: (sessionId: string) => void
   disabled?: boolean
@@ -68,7 +136,22 @@ interface RefProps {
   setText: (text: string) => void
 }
 
-const MIN_HEIGHT = 170
+/**
+ * 输入区（textarea + 工具条）的最小高度 —— 拖拽手柄的下限。
+ * 与 style.scss 的静止高度一致（125 = 固定占用 58 + textarea 67），
+ * 否则第一次拖拽会突然跳高（旧值 170 > 静止高度 125）。
+ */
+const MIN_HEIGHT = 125
+
+/**
+ * 输入区里除 textarea 之外的固定占用：
+ *   工具条 36 + 与 textarea 的间距 8 + 上下 padding 12 + 上下边框 2 = 58
+ *
+ * 拖拽手柄给的是「输入区整体高度」（也是 localStorage 里的历史语义），
+ * 但真正被撑开的是 textarea，所以套用到 textarea 上时要扣掉这部分。
+ * 对齐 style.scss：.input-wrapper 的静止高度 125 ↔ textarea 的 min-height 67。
+ */
+const INPUT_CHROME_HEIGHT = 58
 
 /** 波浪动画的字符上限：超长文案退化为静态文案（避免上百个 span + 视觉噪音） */
 const WAVE_MAX_CHARS = 20
@@ -115,7 +198,10 @@ function ChatInput(
     isResizing.current = true
     setIsResizingState(true)
     startYRef.current = e.clientY
-    startHRef.current = wrapperRef.current?.offsetHeight ?? 160
+    // 量的是 textarea（真正被拉伸的元素），但按「输入区整体高度」记账，与 wrapperHeight 语义一致
+    const textareaHeight = textareaRef.current?.offsetHeight ?? 0
+    startHRef.current =
+      (textareaHeight || MIN_HEIGHT - INPUT_CHROME_HEIGHT) + INPUT_CHROME_HEIGHT
 
     function onMouseMove(ev: MouseEvent) {
       if (!isResizing.current) return
@@ -151,10 +237,95 @@ function ChatInput(
   }, [wrapperHeight])
 
   // ===== 图片附件 =====
-  const { images, addImages, removeImage, clearImages, setImages } =
-    useImageAttachment()
+  const {
+    images,
+    addImages,
+    addImagePaths,
+    removeImage,
+    clearImages,
+    setImages,
+  } = useImageAttachment()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [isDragOver, setIsDragOver] = useState(false)
+
+  // ===== 文件附件（只存路径） =====
+  const { files, setFiles, addPaths, removeFile, clearFiles } =
+    useFileAttachment()
+
+  /**
+   * 统一入口：一批真实路径 → 按类型分发
+   * 图片走原有上传链路（读字节→压缩→预览），其余走文件链路（只留路径）
+   */
+  const acceptPaths = useCallback(
+    async (rawPaths: string[]) => {
+      if (rawPaths.length === 0) return
+      const paths = rawPaths.map(normalizeFsPath)
+      const imagePaths = paths.filter(isImagePath)
+      const filePaths = paths.filter((p) => !isImagePath(p))
+      if (imagePaths.length > 0) await addImagePaths(imagePaths)
+      if (filePaths.length > 0) await addPaths(filePaths)
+    },
+    [addImagePaths, addPaths],
+  )
+
+  /**
+   * 把剪贴板里的文件挂成附件
+   *
+   * 路径优先问原生要：Windows 上「复制文件」的真身是剪贴板里的 CF_HDROP，
+   * 页面的 DataTransfer 只剩一个没有路径的 File。原生拿不到时（macOS / Linux /
+   * 浏览器调试模式）退回页面给的路径文本。
+   *
+   * @returns 是否真的挂上了附件（调用方据此决定要不要提示用户）
+   */
+  const acceptClipboardFiles = useCallback(
+    async (dt: DataTransfer | null) => {
+      const nativePaths = await readClipboardFilePaths()
+      const paths =
+        nativePaths.length > 0
+          ? nativePaths
+          : dt
+            ? extractPathsFromClipboard(dt)
+            : []
+      if (paths.length === 0) return false
+      await acceptPaths(paths)
+      return true
+    },
+    [acceptPaths],
+  )
+
+  // 本轮 Ctrl+V 是否已经由 paste 事件处理（原生兜底用，见 scheduleClipboardFileFallback）
+  const pasteSeenRef = useRef(false)
+  const pasteFallbackTimerRef = useRef<number | null>(null)
+
+  /**
+   * Ctrl+V 的原生兜底
+   *
+   * 资源管理器里复制的文件，在 WebView2 里可能连 paste 事件都不触发
+   * （对页面而言剪贴板是“空的”，默认粘贴也没东西可插），只在 paste 事件里做就漏一半。
+   * 策略：这里不拦默认粘贴，只在下一轮事件循环里确认 paste 事件确实没来、
+   * 而剪贴板里真有文件时才补挂一次附件——正常粘贴文字 / 图片完全不受影响。
+   */
+  const scheduleClipboardFileFallback = useCallback(() => {
+    pasteSeenRef.current = false
+    if (pasteFallbackTimerRef.current !== null) {
+      window.clearTimeout(pasteFallbackTimerRef.current)
+    }
+    pasteFallbackTimerRef.current = window.setTimeout(() => {
+      pasteFallbackTimerRef.current = null
+      if (pasteSeenRef.current) return
+      void acceptClipboardFiles(null)
+    }, 0)
+  }, [acceptClipboardFiles])
+
+  // 卸载时清掉待触发的兜底定时器
+  useEffect(
+    () => () => {
+      if (pasteFallbackTimerRef.current !== null) {
+        window.clearTimeout(pasteFallbackTimerRef.current)
+      }
+    },
+    [],
+  )
 
   // ===== session 输入状态保存/恢复（放在 useImageAttachment 之后，确保 images/setImages 可用） =====
   const prevSessionRef = useRef(sessionId)
@@ -164,6 +335,8 @@ function ChatInput(
   cursorPosRef.current = cursorPos
   const imagesRef = useRef(images)
   imagesRef.current = images
+  const filesRef = useRef(files)
+  filesRef.current = files
 
   // ===== 迭代目标（Goal） =====
   const [goal, setGoal] = useState(
@@ -187,6 +360,7 @@ function ChatInput(
         value: valueRef.current,
         cursorPos: cursorPosRef.current,
         images: imagesRef.current,
+        files: filesRef.current,
         goal: goalRef.current,
         goalExpanded: goalExpandedRef.current,
       })
@@ -204,6 +378,11 @@ function ChatInput(
     } else {
       clearImages()
     }
+    if (saved?.files?.length) {
+      setFiles(saved.files)
+    } else {
+      clearFiles()
+    }
   }, [sessionId])
 
   // 组件卸载时保存（例如关闭标签页）
@@ -214,6 +393,7 @@ function ChatInput(
           value: valueRef.current,
           cursorPos: cursorPosRef.current,
           images: imagesRef.current,
+          files: filesRef.current,
           goal: goalRef.current,
           goalExpanded: goalExpandedRef.current,
         })
@@ -326,12 +506,19 @@ function ChatInput(
   // ===== 发送 =====
   function handleSend() {
     const trimmed = value.trim()
-    if ((!trimmed && images.length === 0) || disabled || loading || compacting)
+    const hasAttachment = images.length > 0 || files.length > 0
+    if ((!trimmed && !hasAttachment) || disabled || loading || compacting)
       return
     const currentGoal = goal.trim() || undefined
-    onSend(trimmed, images.length > 0 ? images : undefined, currentGoal)
+    onSend(
+      trimmed,
+      images.length > 0 ? images : undefined,
+      currentGoal,
+      files.length > 0 ? files : undefined,
+    )
     setValue('')
     clearImages()
+    clearFiles()
     setGoal('')
     setGoalExpanded(false)
     clearSessionInput(sessionId) // 发送后清除已保存状态
@@ -444,6 +631,16 @@ function ChatInput(
       }
     }
 
+    // Ctrl+V / Cmd+V：只登记「这一轮要做原生兜底」，不拦默认粘贴（见 scheduleClipboardFileFallback）
+    if (
+      (e.ctrlKey || e.metaKey) &&
+      !e.shiftKey &&
+      !e.altKey &&
+      e.key.toLowerCase() === 'v'
+    ) {
+      scheduleClipboardFileFallback()
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       if (loading) {
@@ -454,10 +651,17 @@ function ChatInput(
       return
     }
 
-    // 输入框为空时，Backspace 删除最后一张图片
-    if (e.key === 'Backspace' && !value && images.length > 0) {
-      e.preventDefault()
-      removeImage(images[images.length - 1].id)
+    // 输入框为空时，Backspace 依次撤销最后添加的附件（文件优先，其次图片）
+    if (e.key === 'Backspace' && !value) {
+      if (files.length > 0) {
+        e.preventDefault()
+        removeFile(files[files.length - 1].id)
+        return
+      }
+      if (images.length > 0) {
+        e.preventDefault()
+        removeImage(images[images.length - 1].id)
+      }
     }
 
     // Ctrl+X / Cmd+X: 无选区时裁剪当前行
@@ -511,27 +715,48 @@ function ChatInput(
   )
 
   // ===== 剪贴板粘贴 =====
+  // 图片：剪贴板直接给了内容，沿用原有链路
+  // 文件：剪贴板只给 File 拿不到路径，整批交给原生剪贴板读（acceptClipboardFiles）
   const handlePaste = useCallback(
     async (e: ClipboardEvent<HTMLTextAreaElement>) => {
-      const items = e.clipboardData?.items
-      if (!items) return
+      const dt = e.clipboardData
+      // 页面上看得见内容（文本 / 文件）就说明默认粘贴能落地，原生兜底不用再补一刀；
+      // 一个格式都没有时（WebView2 对“复制的文件”可能什么都不给页面）留 false，
+      // 让 Ctrl+V 的兜底去问原生剪贴板要路径。
+      pasteSeenRef.current = !!dt?.types?.length
+      if (!dt?.items) return
+
       const imageFiles: File[] = []
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i]
-        if (item.type.startsWith('image/')) {
-          const file = item.getAsFile()
-          if (file) imageFiles.push(file)
-        }
+      let hasOtherFiles = false
+      for (let i = 0; i < dt.items.length; i++) {
+        const item = dt.items[i]
+        if (item.kind !== 'file') continue
+        const file = item.getAsFile()
+        if (!file) continue
+        if (file.type.startsWith('image/')) imageFiles.push(file)
+        else hasOtherFiles = true
       }
+
+      // 剪贴板里是「文件」（资源管理器里复制的一批文件）：
+      // 页面拿不到磁盘路径，整批走原生链路，免得和下面的图片链路把同一张图挂两遍
+      if (hasOtherFiles) {
+        e.preventDefault()
+        const ok = await acceptClipboardFiles(dt)
+        if (!ok) showToast(t('无法从剪贴板获取文件路径，请直接把文件拖进输入框'))
+        return
+      }
+
+      // 剪贴板里是图片内容（截图 / 网页里复制图片）→ 沿用原有上传链路
       if (imageFiles.length > 0) {
         e.preventDefault()
         await addImages(imageFiles)
       }
     },
-    [addImages],
+    [addImages, acceptClipboardFiles],
   )
 
-  // ===== 拖拽上传 =====
+  // ===== 拖拽（浏览器调试模式的兼底）=====
+  // Tauri 桌面端 dragDropEnabled=true，页面收不到 HTML5 的 drop，走下面的原生通道
   const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
     e.preventDefault()
     e.stopPropagation()
@@ -547,13 +772,72 @@ function ChatInput(
       e.preventDefault()
       e.stopPropagation()
       setIsDragOver(false)
-      const files = e.dataTransfer?.files
-      if (files && files.length > 0) {
-        await addImages(files)
+      const dropped = e.dataTransfer?.files
+      if (!dropped || dropped.length === 0) return
+      const list = Array.from(dropped)
+      const imageFiles = list.filter((f) => f.type.startsWith('image/'))
+      const otherFiles = list.filter((f) => !f.type.startsWith('image/'))
+      if (imageFiles.length > 0) await addImages(imageFiles)
+      if (otherFiles.length > 0) {
+        // HTML5 的 File 对象拿不到磁盘路径，文件附件只能用原生拖拽事件
+        showToast(t('浏览器调试模式拿不到文件路径，请在桌面端拖拽文件'))
       }
     },
     [addImages],
   )
+
+  // ===== 拖拽（Tauri 原生通道，能拿到真实路径）=====
+  // 事件是 webview 级的，所以按落点是否在输入框内决定接不接。
+  useEffect(() => {
+    if (!isTauriEnv()) return
+    let unlisten: (() => void) | null = null
+    let cancelled = false
+
+    /** 落点是否在输入框内（事件给的是物理像素，需换算成 CSS 像素） */
+    const isInsideInput = (position: { x: number; y: number }) => {
+      const el = wrapperRef.current
+      if (!el) return false
+      const rect = el.getBoundingClientRect()
+      const ratio = window.devicePixelRatio || 1
+      const x = position.x / ratio
+      const y = position.y / ratio
+      return (
+        x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+      )
+    }
+
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        const payload = event.payload
+        if (payload.type === 'enter' || payload.type === 'over') {
+          setIsDragOver(isInsideInput(payload.position))
+        } else if (payload.type === 'leave') {
+          setIsDragOver(false)
+        } else if (payload.type === 'drop') {
+          setIsDragOver(false)
+          // 拖进来的不是文件（如拖选中的文本）：paths 为空，交给系统/页面原有行为，不插手
+          if (!payload.paths || payload.paths.length === 0) return
+          // 落在输入框外：不静默丢弃，给个提示，否则用户会以为功能没生效
+          if (!isInsideInput(payload.position)) {
+            showToast(t('请把文件拖到输入框内'))
+            return
+          }
+          void acceptPaths(payload.paths)
+        }
+      })
+      .then((fn) => {
+        if (cancelled) fn()
+        else unlisten = fn
+      })
+      .catch(() => {
+        // 非 Tauri 环境 / 事件不可用
+      })
+
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [acceptPaths])
 
   // ===== 快捷输入选择 =====
   const handleQuickInputSelect = useCallback(
@@ -644,13 +928,13 @@ function ChatInput(
         </div>
       )}
 
+      {/* 输入框：内容自上而下 = 附件条 / 迭代目标行 / textarea / 工具条。
+          盒子本身不写死高度（高度 = 内容高度），「用户拖拽的高度」只作用在输入区
+          （textarea + 工具条，见下面 textarea 的 style），
+          所以附件再多也只会把盒子往上撑，不会从工具条那里抢空间。 */}
       <div
         ref={wrapperRef}
         className={`input-wrapper ${isDragOver ? 'drag-over' : ''} ${wrapperHeight ? 'has-fixed-height' : ''} ${isResizingState ? 'resizing' : ''}`}
-        style={{
-          height: wrapperHeight ? wrapperHeight + 'px' : undefined,
-          maxHeight: !sessionId ? 180 + 'px' : undefined,
-        }}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}>
@@ -675,6 +959,22 @@ function ChatInput(
           style={{ display: 'none' }}
           onChange={handleFileChange}
         />
+
+        {/* 文件附件条（只存路径，不拷贝文件） */}
+        {files.length > 0 && (
+          <div className="file-preview-strip">
+            {files.map((f) => (
+              <FileChip
+                key={f.id}
+                path={f.path}
+                name={f.name}
+                isDir={f.isDir}
+                size={f.size}
+                onRemove={() => removeFile(f.id)}
+              />
+            ))}
+          </div>
+        )}
 
         {/* 图片预览条 */}
         {images.length > 0 && (
@@ -759,6 +1059,14 @@ function ChatInput(
         <textarea
           ref={textareaRef}
           value={value}
+          style={{
+            // 拖拽给的是「输入区」整体高度，textarea 拿走扣掉固定占用的部分
+            height: wrapperHeight
+              ? wrapperHeight - INPUT_CHROME_HEIGHT + 'px'
+              : undefined,
+            // 欢迎页（还没有会话）不给太高的输入区：整块 180 → textarea 上限 122
+            maxHeight: !sessionId ? 180 - INPUT_CHROME_HEIGHT + 'px' : undefined,
+          }}
           onChange={(e) => {
             setValue(e.target.value)
             setCursorPos(e.target.selectionStart)
@@ -785,7 +1093,9 @@ function ChatInput(
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           placeholder={
-            images.length > 0 ? t('添加描述或直接发送...') : placeholder
+            images.length > 0 || files.length > 0
+              ? t('添加描述或直接发送...')
+              : placeholder
           }
           disabled={disabled || compacting}
         />
@@ -919,7 +1229,7 @@ function ChatInput(
 
             {/* 发送 / 停止按钮 */}
             <ripple-button
-              className={`send-btn ${loading ? 'is-loading' : (!value.trim() && images.length === 0) || compacting || disabled ? 'disabled' : ''} `}
+              className={`send-btn ${loading ? 'is-loading' : (!value.trim() && images.length === 0 && files.length === 0) || compacting || disabled ? 'disabled' : ''} `}
               onClick={loading ? handleCancel : handleSend}
               title={loading ? t('停止') : t('发送 (Enter)')}>
               {loading ? (

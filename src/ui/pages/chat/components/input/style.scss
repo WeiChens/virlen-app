@@ -931,7 +931,11 @@
     padding: 6px 6px 6px 12px;
     border: 1px solid var(--border-color, #e5e5e5);
     margin-top: 10px;
-    min-height: 125px;
+    /* 高度完全由内容决定：附件条 / 迭代目标行 / textarea / 工具条自上而下排。
+       固定高度只作用在 textarea 上（.has-fixed-height，数值见 index.tsx 的 INPUT_CHROME_HEIGHT），
+       于是「附件一多就把工具条顶出盒子」不会发生。
+       静止高度仍然是 125（= padding 12 + 边框 2 + textarea 67 + 间距 8 + 工具条 36）。 */
+    min-height: 0;
     transition:
       border-color 0.2s,
       background 0.2s,
@@ -970,12 +974,30 @@
     }
 
 
+    // ==================== 附件条 ====================
+    // chip 本体样式在 shared/FileChip/style.scss，这里只管排布。
+    // 两条统一「限高 + 内部滚动」：附件区高度有上限，一次拖 10 个文件 / 20 张图
+    // 也不会把盒子无限拉长（旧写法在固定高度下还会反过来挤掉工具条）。
+    .file-preview-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 2px 0 4px;
+      min-width: 0;
+      max-height: 72px;
+      overflow-y: auto;
+    }
+
     // ==================== 图片预览条 ====================
     .image-preview-strip {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
       padding: 4px 0;
+      min-width: 0;
+      /* 一屏就放一行缩略图（64 + 上下 padding 8），更长的排布交给滚动 */
+      max-height: 72px;
+      overflow-y: auto;
 
       .image-preview-item {
         position: relative;
@@ -1017,6 +1039,20 @@
         &:hover .image-preview-remove {
           opacity: 1;
         }
+      }
+    }
+
+    // 附件条自身可滚，滚动条不该抢视觉焦点
+    .file-preview-strip,
+    .image-preview-strip {
+      &::-webkit-scrollbar {
+        width: 4px;
+        height: 4px;
+      }
+
+      &::-webkit-scrollbar-thumb {
+        background: var(--scrollbar-thumb, #ccc);
+        border-radius: 2px;
       }
     }
 
@@ -1075,10 +1111,11 @@
       }
     }
 
-    // 固定高度时，textarea 填充剩余空间
+    // 输入区有固定高度（用户拖过手柄）时：用内联 height 撑高 textarea。
+    // flex 必须是 `0 0 auto` —— 容器现在是自适应高度，`flex-basis: 0%` 会让内联 height 失效
     &.has-fixed-height {
       textarea {
-        flex: 1;
+        flex: 0 0 auto;
         overflow-y: auto;
         max-height: none;
         resize: none;
@@ -1093,7 +1130,8 @@
       resize: vertical;
       font-size: var(--font-size-base);
       line-height: 1.5;
-      min-height: 24px;
+      /* 静止高度：对齐旧的 .input-wrapper min-height 125（125 - 固定占用 58） */
+      min-height: 67px;
       max-height: 400px;
       padding: 6px 0;
       color: var(--text-primary, #1a1a1a);

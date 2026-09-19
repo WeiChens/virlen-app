@@ -1,14 +1,16 @@
 /**
  * hooks — 聊天输入框的自定义 hooks
  *
- * useImageAttachment — 图片附件管理（选取 / 粘贴 / 拖拽）
+ * useImageAttachment — 图片附件管理（选取 / 粘贴 / 拖拽 / 磁盘路径）
+ * useFileAttachment  — 文件附件管理（只存路径，不拷贝文件内容）
  * useVoiceInput      — 语音输入（Web Speech API）
  */
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import * as tauriFs from '@tauri-apps/plugin-fs'
 import { v4 } from '@/utils/uuid'
 import { showToast } from '@/ui/components/shared/Toast'
-import { t } from '@/ui/i18n'
+import { t, tpl } from '@/ui/i18n'
 
 // ====================================================================
 // 图片附件
@@ -100,6 +102,27 @@ export function useImageAttachment() {
     setImages((prev) => [...prev, ...newImages])
   }, [])
 
+  /**
+   * 从磁盘路径添加图片（拖拽 / 剪贴板只给路径时使用）
+   * 读字节 → 还原成 File → 走与选图完全相同的压缩链路
+   */
+  const addImagePaths = useCallback(async (paths: string[]) => {
+    const newImages: ImageAttachment[] = []
+    for (const raw of paths) {
+      const path = normalizeFsPath(raw)
+      try {
+        const url = await readImageFileAsDataUrl(path)
+        newImages.push({ id: v4(), url, name: fsBaseName(path) })
+      } catch (err) {
+        console.error('读取图片失败:', path, err)
+        showToast(tpl('读取图片失败：$__path__', { path }))
+      }
+    }
+    if (newImages.length > 0) {
+      setImages((prev) => [...prev, ...newImages])
+    }
+  }, [])
+
   /** 移除指定图片 */
   const removeImage = useCallback((id: string) => {
     setImages((prev) => prev.filter((img) => img.id !== id))
@@ -110,7 +133,161 @@ export function useImageAttachment() {
     setImages([])
   }, [])
 
-  return { images, setImages, addImages, removeImage, clearImages }
+  return { images, setImages, addImages, addImagePaths, removeImage, clearImages }
+}
+
+// ====================================================================
+// 文件附件（只存路径，不拷贝文件内容）
+// ====================================================================
+
+/** 文件附件 */
+export interface FileAttachment {
+  id: string
+  /** 文件绝对路径（分隔符统一为 /） */
+  path: string
+  /** 文件名（含扩展名） */
+  name: string
+  /** 是否为目录 */
+  isDir?: boolean
+  /** 字节数（目录无此值） */
+  size?: number
+}
+
+/** 走「图片分支」的扩展名（与 <input accept> 白名单保持一致） */
+const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp']
+
+/**
+ * 路径分隔符统一成 /（与全项目其他路径保持一致，便于展示与拼接）
+ */
+export function normalizeFsPath(p: string): string {
+  return p.replace(/\\/g, '/')
+}
+
+/** 取路径末段作为文件名 */
+function fsBaseName(p: string): string {
+  const parts = normalizeFsPath(p).split('/')
+  return parts[parts.length - 1] || p
+}
+
+/** 扩展名（小写，不含点） */
+function extOf(p: string): string {
+  const name = fsBaseName(p)
+  const dot = name.lastIndexOf('.')
+  return dot < 0 ? '' : name.slice(dot + 1).toLowerCase()
+}
+
+/** 是否按图片处理：扩展名在白名单内才算（其余图片格式走文件分支，保持与选图一致） */
+export function isImagePath(p: string): boolean {
+  return IMAGE_EXTS.includes(extOf(p))
+}
+
+/** 扩展名 → MIME */
+function mimeOf(p: string): string {
+  switch (extOf(p)) {
+    case 'png':
+      return 'image/png'
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg'
+    case 'webp':
+      return 'image/webp'
+    case 'gif':
+      return 'image/gif'
+    case 'bmp':
+      return 'image/bmp'
+    default:
+      return 'application/octet-stream'
+  }
+}
+
+/**
+ * 读取磁盘上的图片 → dataURL（超尺寸自动压缩）
+ *
+ * 拖拽进来的是「路径」而不是 File，这里读字节还原成 File，
+ * 复用 fileToDataUrl 的压缩逻辑，行为与 <input type="file"> 选图完全一致。
+ */
+export async function readImageFileAsDataUrl(path: string): Promise<string> {
+  const bytes = await tauriFs.readFile(path)
+  const name = fsBaseName(path)
+  const file = new File([bytes as unknown as BlobPart], name, {
+    type: mimeOf(path),
+  })
+  return fileToDataUrl(file)
+}
+
+/**
+ * 文件附件管理 hook
+ *
+ * 只保存路径与展示元数据（stat 得到的体积 / 是否目录），
+ * 不复制、不读取文件内容——真正的读取交给 AI 用 read_file 工具按需完成。
+ */
+export function useFileAttachment() {
+  const [files, setFiles] = useState<FileAttachment[]>([])
+
+  /** 添加文件路径（stat 校验存在性 + 去重） */
+  const addPaths = useCallback(async (paths: string[]) => {
+    const added: FileAttachment[] = []
+    let firstInvalid = ''
+
+    for (const raw of paths) {
+      const path = normalizeFsPath(raw)
+      try {
+        const info = await tauriFs.stat(path)
+        added.push({
+          id: v4(),
+          path,
+          name: fsBaseName(path),
+          isDir: info.isDirectory,
+          size: info.isDirectory ? undefined : info.size,
+        })
+      } catch {
+        firstInvalid = firstInvalid || path
+      }
+    }
+
+    if (firstInvalid) {
+      showToast(tpl('无法访问该路径：$__path__', { path: firstInvalid }))
+    }
+    if (added.length === 0) return
+
+    setFiles((prev) => {
+      const seen = new Set(prev.map((f) => f.path))
+      return [...prev, ...added.filter((f) => !seen.has(f.path))]
+    })
+  }, [])
+
+  /** 移除指定文件 */
+  const removeFile = useCallback((id: string) => {
+    setFiles((prev) => prev.filter((f) => f.id !== id))
+  }, [])
+
+  /** 清空所有文件 */
+  const clearFiles = useCallback(() => {
+    setFiles([])
+  }, [])
+
+  return { files, setFiles, addPaths, removeFile, clearFiles }
+}
+
+// ====================================================================
+// 剪贴板里的文件路径（原生）
+// ====================================================================
+
+/**
+ * 读系统剪贴板里的文件路径
+ *
+ * 页面 paste 事件只能拿到 File（有文件名、没有磁盘路径），资源管理器里「复制」的文件
+ * 在 WebView2 里往往连文本形式都拿不到，所以路径统一问原生要。
+ * 非 Tauri 环境 / 平台不支持（macOS、Linux）/ 剪贴板里没有文件，一律返回空数组，
+ * 由调用方退回「从剪贴板文本里解析路径」的兜底逻辑。
+ */
+export async function readClipboardFilePaths(): Promise<string[]> {
+  try {
+    const paths = await invoke<string[]>('read_clipboard_file_paths')
+    return Array.isArray(paths) ? paths : []
+  } catch {
+    return []
+  }
 }
 
 // ====================================================================

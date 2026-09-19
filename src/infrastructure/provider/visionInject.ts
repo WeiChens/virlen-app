@@ -6,6 +6,8 @@
  *   - 追加 vision_analyze 分析结果文本块
  * 否则：不做任何处理，content 原样发送
  *
+ * 注：file 块（文件附件，只有路径）不属于「图片内容」，这里原样保留。
+ *
  * imageVisionAnalyzeResult 格式（由 doSend 构建）：
  *   用户上传了{N}张图片
  *
@@ -16,9 +18,9 @@
  *   [分析结果]
  *   ...
  */
-import type { Message, TextContent, ImageContent } from '@/types'
+import type { Message, TextContent, ImageContent, FileContent } from '@/types'
 
-type ContentBlock = TextContent | ImageContent
+type ContentBlock = TextContent | ImageContent | FileContent
 
 /**
  * 处理消息的 content，返回适合发送给 LLM 的 blocks

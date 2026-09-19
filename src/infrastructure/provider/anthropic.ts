@@ -16,7 +16,7 @@ import type {
 import type { ChatRequest, IProvider } from './types'
 import { apiFetch, getResponseReader, readStreamLines } from './http-utils'
 import { track } from '@/utils/telemetry'
-import { getLastSummaryMessageIndex } from '@/types'
+import { fileBlockToText, getLastSummaryMessageIndex } from '@/types'
 import { processVisionContent } from './visionInject'
 import { fetch } from '@tauri-apps/plugin-http'
 
@@ -443,6 +443,9 @@ export class AnthropicProvider implements IProvider {
         for (const block of msg.content) {
           if (block.type === 'text') {
             contentBlocks.push({ type: 'text', text: block.text })
+          } else if (block.type === 'file') {
+            // 文件附件：降级为文本（只带路径）
+            contentBlocks.push({ type: 'text', text: fileBlockToText(block) })
           } else if (block.type === 'image_url') {
             const url = block.image_url.url
             if (url.startsWith('data:')) {

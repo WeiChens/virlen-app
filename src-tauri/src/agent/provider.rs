@@ -12,6 +12,15 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
+// ==================== 附件块标签（模型可读文本） ====================
+
+/// 文件 / 文件夹附件块降级成文本时、打在路径前面的标记。
+///
+/// 与 TS 侧 `src/types/index.ts` 的同名常量必须逐字一致（铁律 1：双引擎同语义），
+/// 改文案要两边一起改。这是给模型看的提示文本、不是 UI 文案，所以不进 i18n。
+const ATTACHED_FILE_LABEL: &str = "[User attached file]";
+const ATTACHED_DIR_LABEL: &str = "[User attached folder]";
+
 // ==================== Provider trait ====================
 
 #[async_trait]
@@ -590,6 +599,27 @@ impl NativeAnthropicProvider {
                                 "type": "text",
                                 "text": block.get("text").and_then(Value::as_str).unwrap_or(""),
                             })),
+                            // 文件附件（只有路径）：Anthropic 协议无对应块，降级为文本
+                            // 文案需与 TS 侧 fileBlockToText 保持一致
+                            Some("file") => {
+                                let path = block
+                                    .get("path")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("");
+                                let is_dir = block
+                                    .get("isDir")
+                                    .and_then(Value::as_bool)
+                                    .unwrap_or(false);
+                                let label = if is_dir {
+                                    ATTACHED_DIR_LABEL
+                                } else {
+                                    ATTACHED_FILE_LABEL
+                                };
+                                blocks.push(json!({
+                                    "type": "text",
+                                    "text": format!("{} {}", label, path),
+                                }));
+                            }
                             Some("image_url") => {
                                 let url = block
                                     .get("image_url")
@@ -1254,6 +1284,30 @@ mod tests {
         )]);
         let body = p.build_request(&request);
         assert!(body.to_string().contains("image_url"));
+    }
+
+    #[test]
+    fn anthropic_build_request_converts_file_block_to_path_text() {
+        let p = NativeAnthropicProvider::new("test", "key", "https://api.test.com");
+        let request = chat_request(vec![msg(
+            "user",
+            json!([
+                { "type": "text", "text": "读一下" },
+                { "type": "file", "path": "C:/a/b.ts", "name": "b.ts" },
+                { "type": "file", "path": "C:/dir", "isDir": true }
+            ]),
+            None,
+            None,
+        )]);
+        let body = p.build_request(&request);
+        let text = body.to_string();
+
+        // 文件附件降级为文本块，路径必须原样透传给模型（对齐 TS 侧 fileBlockToText）
+        // 故意断言字面量：常量被改时会红，提醒同步 TS / Rust 两侧（铁律 1）
+        assert!(text.contains("[User attached file] C:/a/b.ts"));
+        assert!(text.contains("[User attached folder] C:/dir"));
+        // 不能把 file 这种自定义块丢给 Anthropic
+        assert!(!text.contains("\"type\":\"file\""));
     }
 
     #[test]

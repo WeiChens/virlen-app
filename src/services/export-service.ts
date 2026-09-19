@@ -10,6 +10,7 @@ import type {
   MessageContent,
   TextContent,
   ImageContent,
+  FileContent,
   ToolResultContent,
 } from '@/types'
 import { sessionStore } from '@/ui/store'
@@ -42,6 +43,14 @@ function extractText(content: MessageContent): string {
     )
     .map((c) => (c.type === 'text' ? c.text : c.content))
     .join('\n\n')
+}
+
+/**
+ * 从 MessageContent 中提取文件附件（只有路径）
+ */
+function extractFiles(content: MessageContent): FileContent[] {
+  if (typeof content === 'string') return []
+  return content.filter((c): c is FileContent => c.type === 'file')
 }
 
 /** 从 MessageContent 中提取图片 */
@@ -115,6 +124,13 @@ export function sessionToMarkdown(
     const images = extractImages(msg.content)
     for (const img of images) {
       lines.push(`![图片](${img.image_url.url})`)
+      lines.push('')
+    }
+
+    // 3.5) 文件附件（只记路径，导出时保留引用）
+    const files = extractFiles(msg.content)
+    for (const f of files) {
+      lines.push(`📎 ${f.isDir ? t('文件夹') : t('文件')}：\`${f.path}\``)
       lines.push('')
     }
 

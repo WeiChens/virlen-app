@@ -452,6 +452,12 @@ function CodeBlock({
   const [copied, setCopied] = useState(false)
   // 全屏态：同样必须在行内代码的提前 return 之前声明
   const [fullscreen, setFullscreen] = useState(false)
+  // 「打开即居中」：同理，**必须**在下面行内代码的提前 return 之前调用。
+  // 行内/块状共用一个 fiber（react-markdown 的 `code` 覆盖组件会把它俩渲染在同一位置，
+  // 而流式「前缀冻结」会让尾部首块在两种形态间切换），一旦某次渲染少调一个 hook，
+  // React 就会抛 #300「Rendered fewer hooks than expected. This may be caused by an
+  // accidental early return statement.」（行内路径 autoCenter=false，effect 自身不做任何事）
+  const rootRef = useAutoCenter(autoCenter)
 
   // Esc 退出全屏（与 ImagePreview 等浮层保持一致的操作习惯）
   useEffect(() => {
@@ -512,8 +518,6 @@ function CodeBlock({
         setTimeout(() => setCopied(false), 1000)
       })
   }
-
-  const rootRef = useAutoCenter(autoCenter)
 
   /**
    * 渲染代码块本体。

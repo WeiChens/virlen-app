@@ -31,7 +31,10 @@ import {
   updateSessionMessage,
 } from '@/services/chat-service'
 import ChatSidebar from './components/sidebar'
-import ChatInput from './components/input'
+import ChatInput, {
+  type FileAttachment,
+  type ImageAttachment,
+} from './components/input'
 import ProviderPrompt from './components/modals/provider-prompt'
 
 import { useToolUI } from './components/tool-ui'
@@ -55,6 +58,7 @@ import { getDefaultAgent } from '@/services/agent-service'
 import { repairSessionIfNeeded } from '@/services/chat-service'
 import { vision } from '@/infrastructure/vision'
 import type { VisionAnalyzeResult } from '@/infrastructure/vision/types'
+import { buildUserContent } from '@/utils/messageContent'
 import { requestAttentionIfUnfocused } from '@/utils/windowAttention'
 import { createFrameBatcher } from '@/utils/frameBatch'
 import { track, trackPerf, hashText } from '@/utils/telemetry'
@@ -416,9 +420,16 @@ function ChatView() {
   const isCurrentWorking = currentRt?.working ?? false
 
   // 发送消息
-  function handleSend(content: string, images?: { url: string }[], goal?: string) {
+  function handleSend(
+    content: string,
+    images?: ImageAttachment[],
+    goal?: string,
+    files?: FileAttachment[],
+  ) {
+    const hasAttachment = (images?.length ?? 0) > 0 || (files?.length ?? 0) > 0
+
     if (!hasEnabledProvider) {
-      setPendingContent(content || (images ? t('(图片)') : ''))
+      setPendingContent(content || (hasAttachment ? t('(附件)') : ''))
       setShowProviderPrompt(true)
       return
     }
@@ -438,7 +449,7 @@ function ChatView() {
         (p) => p.enabled && p.models.length > 0,
       )
       if (!firstEnabled) {
-        setPendingContent(content || (images ? t('(图片)') : ''))
+        setPendingContent(content || (hasAttachment ? t('(附件)') : ''))
         setShowProviderPrompt(true)
         return
       }
@@ -452,22 +463,25 @@ function ChatView() {
     const clearSid = chatState.value.currentSessionId
     if (clearSid) updateSessionRuntime(clearSid, { error: null })
     chatState.setValue('error', null)
-    doSend(sessionId, content, images, goal)
+    doSend(sessionId, content, images, goal, files)
   }
 
   async function doSend(
     sessionId: string | null,
     content: string,
-    images?: { url: string }[],
+    images?: ImageAttachment[],
     goal?: string,
+    files?: FileAttachment[],
   ) {
     // ── 立即显示 loading ──
     chatState.setValue('loading', true)
 
-    // ── 始终存原始数据：content = [{text}, {image_url}, ...] ──
-    const finalContent: MessageContent = buildImageContent(
+    // ── 始终存原始数据：content = [{text}, {image_url}, {file}, ...] ──
+    // 图片带 base64 内容，文件只有路径（不拷贝文件，交给 AI 按需读）
+    const finalContent: MessageContent = buildUserContent(
       content,
       images ?? [],
+      files ?? [],
     )
 
     // ── 先保证有 session（无 session → 立即创建），让 UI 切换到聊天视图 ──
@@ -637,30 +651,6 @@ function ChatView() {
         { skipUserMessage: true },
       )
     }
-  }
-
-  /** 构建含图片的 MessageContent */
-  function buildImageContent(
-    text: string,
-    images: { url: string }[],
-  ): MessageContent {
-    return [
-      ...(text
-        ? [{ type: 'text' as const, text }]
-        : [
-          {
-            type: 'text' as const,
-            text:
-              images.length > 1
-                ? tpl('分析这$__num__张图片', { num: images.length })
-                : t('分析这张图片'),
-          },
-        ]),
-      ...images.map((img) => ({
-        type: 'image_url' as const,
-        image_url: { url: img.url, detail: 'auto' as const },
-      })),
-    ]
   }
 
   function handleGoToSettings() {
