@@ -331,23 +331,13 @@ function ProviderSettings() {
                       provider.reasoningEffortList.length > 0 && (
                         <div className="provider-detail-row">
                           <span className="detail-label">
-                            {t('推理强度可选值')}
+                            {t('推理强度')}
                           </span>
                           <span className="detail-value scroll">
                             {provider.reasoningEffortList.join(', ')}
                           </span>
                         </div>
                       )}
-                    {provider.reasoningEffort && (
-                      <div className="provider-detail-row">
-                        <span className="detail-label">
-                          {t('默认推理强度')}
-                        </span>
-                        <span className="detail-value">
-                          {provider.reasoningEffort}
-                        </span>
-                      </div>
-                    )}
                     <div className="provider-card-actions">
                       <button
                         className="btn-secondary"
@@ -413,14 +403,15 @@ function ProviderSettings() {
         initialConfig={
           editingProvider
             ? {
-                name: editingProvider.name,
-                type: editingProvider.type,
-                apiKey: editingProvider.apiKey,
-                baseUrl: editingProvider.baseUrl,
-                models: editingProvider.models,
-                templateName: editingProvider.templateName,
-                reasoningEffort: editingProvider.reasoningEffort,
-              }
+              name: editingProvider.name,
+              type: editingProvider.type,
+              apiKey: editingProvider.apiKey,
+              baseUrl: editingProvider.baseUrl,
+              models: editingProvider.models,
+              templateName: editingProvider.templateName,
+              reasoningEffortList: editingProvider.reasoningEffortList,
+              reasoningEffort: editingProvider.reasoningEffort,
+            }
             : undefined
         }
       />

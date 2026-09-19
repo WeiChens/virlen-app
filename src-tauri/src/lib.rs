@@ -4,6 +4,8 @@ use tauri::Manager;
 
 mod agent;
 mod clipboard_files;
+#[cfg(target_os = "windows")]
+mod drag_drop;
 mod common_service;
 mod deepseek_tokenizer;
 mod file_ops;
@@ -265,6 +267,10 @@ pub fn run() {
             // }
 
             vision_service::setup_vision(app)?;
+
+            // Windows：把拖放换成自定义 OLE 目标（比 wry 多认 VS Code 的拖拽格式）
+            #[cfg(target_os = "windows")]
+            drag_drop::init(app.handle());
 
             // 预热 DeepSeek tokenizer（后台线程解析，不阻塞启动；失败静默）
             deepseek_tokenizer::prewarm(app.handle());

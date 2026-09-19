@@ -34,3 +34,4 @@ src-tauri/target/msix-stage
 /vite.config.js.map
 
 docs/
+temp/

@@ -9,13 +9,13 @@ import { ProviderType } from '@/types'
  */
 export const REASONING_EFFORT_UNION = [
   'none',
+  'off',
   'minimal',
   'low',
   'medium',
   'high',
   'xhigh',
   'max',
-  'off',
 ] as const
 
 /** 新建服务商时默认勾选的推理强度档位（行业通用基础档位） */

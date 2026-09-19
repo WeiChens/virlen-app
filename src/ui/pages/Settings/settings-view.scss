@@ -44,6 +44,7 @@
   from {
     opacity: 0;
   }
+
   to {
     opacity: 1;
   }
@@ -53,6 +54,7 @@
   from {
     opacity: 1;
   }
+
   to {
     opacity: 0;
   }
@@ -70,6 +72,7 @@
   z-index: 100;
   box-shadow: -4px 0 20px rgba(0, 0, 0, 0.08);
   animation: slideIn 0.2s ease;
+
   &.closing {
     animation: slideOut 0.2s ease forwards;
   }
@@ -111,6 +114,7 @@
         &:hover {
           background: var(--hover-bg, #f0f0f0);
         }
+
         svg {
           width: 16px;
           height: 16px;
@@ -173,6 +177,7 @@
     transform: translateX(120px);
     opacity: 0;
   }
+
   to {
     transform: translateX(0);
     opacity: 1;
@@ -184,25 +189,15 @@
     transform: translateX(0);
     opacity: 1;
   }
+
   to {
     transform: translateX(120px);
     opacity: 0;
   }
 }
 
-/* ===== 无障碍：键盘焦点可见 =====
-   统一一条作用域规则覆盖整个设置面板（含其中打开的 Modal，
-   因为 Modal 是就地渲染在 .settings-content 内的），
-   避免在每个子页样式里重复写 13 遍 :focus-visible */
-.settings-panel
-  :is(button, [tabindex]:not([tabindex='-1']), input, select, textarea, a):focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
-  border-radius: 6px;
-}
-
 /* 开关的 checkbox 本体是零尺寸隐藏元素，焦点环必须画在滑块上 */
-.settings-panel .toggle input:focus-visible + .toggle-slider {
+.settings-panel .toggle input:focus-visible+.toggle-slider {
   outline: var(--focus-ring);
   outline-offset: 2px;
 }

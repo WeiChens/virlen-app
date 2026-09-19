@@ -1,6 +1,5 @@
 // ==================== 工作中过渡动画指示器 ====================
 // 波浪文字：每个字做一次上下「呼吸」，靠 animation-delay 的相位差形成波峰横向推进（无装饰点）
-
 // 单字一个周期：抬升 → 落回，同时 ±5° 左右摇摆
 // 关键：每个关键帧的 transform 函数表必须一致（translateY + rotateZ，同序同项），
 //       否则浏览器会退化成「矩阵分解」插值，摇摆会出现一顿一顿的不均匀感
@@ -42,7 +41,6 @@
 }
 
 // ==================== 路径自动补全 ====================
-
 .path-autocomplete {
   position: absolute;
   left: 12px;
@@ -180,7 +178,6 @@
 }
 
 // ==================== Chat Input ====================
-
 .chat-input {
   padding: 0 10px 6px;
   // border-top: 1px solid var(--border-color, #e5e5e5);
@@ -264,7 +261,6 @@
   }
 
   // ==================== 图片上传按钮 ====================
-
   .image-btn {
     display: flex;
     align-items: center;
@@ -321,7 +317,6 @@
   }
 
   // ==================== 语音输入按钮 ====================
-
   .voice-btn {
     display: flex;
     align-items: center;
@@ -377,7 +372,6 @@
   }
 
   // ==================== 快捷输入按钮 ====================
-
   .quick-input-wrapper {
     position: relative;
     flex-shrink: 0;
@@ -420,7 +414,6 @@
     }
 
     // ==================== 快捷输入弹窗 ====================
-
     .quick-input-dropdown {
       position: absolute;
       bottom: calc(100% + 8px);
@@ -527,7 +520,6 @@
   }
 
   // ==================== 清空输入按钮 ====================
-
   .clear-input-btn {
     display: flex;
     align-items: center;
@@ -557,7 +549,6 @@
   }
 
   // ==================== Agent Switcher ====================
-
   .agent-switcher {
     position: relative;
     flex-shrink: 0;
@@ -686,7 +677,6 @@
   }
 
   // ==================== 推理强度（收起只显示档位，点击弹出拖动条） ====================
-
   .reasoning-effort-slider {
     position: relative;
     flex-shrink: 0;
@@ -709,11 +699,10 @@
       transition: all 0.15s;
       line-height: 1.3;
 
-      &:hover {
-        background: var(--hover-bg, #f0f0f0);
-        border-color: var(--accent-color, #4f46e5);
-      }
-
+      // &:hover {
+      //   background: var(--hover-bg, #f0f0f0);
+      //   border-color: var(--accent-color, #4f46e5);
+      // }
       // 悬停反馈：只改颜色/缩放，绝不碰 animation-* 属性
       // （改 animation-duration 会让运行中的动画重新计算相位，表现就是「重新播放」）
       &:hover .effort-ball {
@@ -724,8 +713,8 @@
       .effort-ball {
         display: block;
         flex-shrink: 0;
-        width: 20px;
-        height: 20px;
+        width: 24px;
+        height: 24px;
         // 轮廓跟随 currentColor：is-set 时按钮已整体变成 accent 色
         color: inherit;
         transition:
@@ -749,12 +738,12 @@
 
           &.front {
             opacity: 0.9;
-            animation: effortWave 3.4s linear infinite;
+            animation: effortWave 1.5s linear infinite;
           }
 
           &.back {
             opacity: 0.45;
-            animation: effortWave 6.2s linear infinite reverse;
+            animation: effortWave 3.2s linear infinite reverse;
           }
         }
 
@@ -972,7 +961,6 @@
       border-color: var(--accent-color, #4e46e5fe);
       background: var(--bg-primary, #fff);
     }
-
 
     // ==================== 附件条 ====================
     // chip 本体样式在 shared/FileChip/style.scss，这里只管排布。
@@ -1273,7 +1261,6 @@
 }
 
 // ==================== 迭代目标输入 ====================
-
 .goal-btn {
   display: flex;
   align-items: center;
@@ -1370,7 +1357,6 @@
   }
 
   // ==================== 验证目标快捷输入（goal-row 内） ====================
-
   .goal-quick-input-wrapper {
     position: relative;
     flex-shrink: 0;

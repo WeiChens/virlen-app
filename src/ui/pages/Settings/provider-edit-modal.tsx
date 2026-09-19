@@ -249,7 +249,7 @@ export default function ProviderEditModal({
       visible={visible}
       title={isEdit ? t('编辑模型服务') : t('添加模型服务')}
       onClose={onClose}
-      width={480}
+      width={`min(90vw, 800px)`}
       closeOnClickOutside={false}
       move>
       <div className="provider-edit-form">

@@ -99,7 +99,7 @@ export default function AgentEditModal({
   const [allTools, setAllTools] = useState([] as ResolvedToolDefinition[])
 
   useEffect(() => {
-    ;(async () => {
+    ; (async () => {
       const res = await toolRegistry.listDefinitions()
       setAllTools(res)
     })()
@@ -297,7 +297,7 @@ export default function AgentEditModal({
       visible={visible}
       title={isEdit ? t('编辑 Agent') : t('新建 Agent')}
       onClose={onClose}
-      width={580}
+      width={`min(90vw, 1200px)`}
       className="agent-edit-modal"
       closeOnClickOutside={false}>
       {/* Tab 导航 */}

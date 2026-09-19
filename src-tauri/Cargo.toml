@@ -72,10 +72,25 @@ quasivision = "0.2.1"
 [target.'cfg(target_os = "windows")'.dependencies]
 webview2-com = "0.38"
 windows-core = "0.61"
+# 自定义 OLE 拖放目标（drag_drop.rs）：比 wry 更能听懂别的程序的拖拽数据
+# （IDropTarget + IDataObject 读 CF_HDROP / CF_UNICODETEXT / 自定义格式）
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_SystemServices",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 # 进程树管理：Job Object（命令超时/终止时连后代进程一键全杀）+ Toolhelp32 递归枚举
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
-    # 剪贴板（粘贴文件）：OpenClipboard / GetClipboardData（CF_HDROP）
+    # 剪贴板（粘贴文件）：OpenClipboard / GetClipboardData / RegisterClipboardFormatW
+    #   - CF_HDROP（资源管理器复制文件）
+    #   - code/file-list（VS Code 复制文件，自定义格式）
     "Win32_System_DataExchange",
     # DragQueryFileW / HDROP：把 CF_HDROP 解成真实路径
     "Win32_UI_Shell",
@@ -88,6 +103,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
     "Win32_System_Environment",
     "Win32_System_Pipes",
+    # GlobalLock / GlobalSize / GlobalUnlock：读自定义剪贴板格式（code/file-list）的原始字节
     "Win32_System_Memory",
     "Win32_System_Kernel",
     "Win32_System_LibraryLoader",

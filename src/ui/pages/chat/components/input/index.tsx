@@ -9,10 +9,11 @@
  *
  * 取路径说明（拖拽 / 粘贴都必须落到真实路径）：
  *   拖拽：tauri.conf.json 里 dragDropEnabled=true，页面收不到 HTML5 的 drop 事件，
- *         改由 Tauri 的 onDragDropEvent 上报真实路径。
- *   粘贴：paste 事件只能给 File（有文件名、无磁盘路径），资源管理器里复制的文件
+ *         改由原生拖放上报真实路径（Rust drag_drop 模块的自定义 OLE 目标，
+ *         经事件 virlen:drag-drop 下发；比 Tauri 自带的更认 VS Code 等来源）。
+ *   粘贴：paste 事件只能给 File（有文件名、无磁盘路径），资源管理器 / VS Code 里复制的文件
  *         在 WebView2 里往往连文本都拿不到，所以路径统一问原生剪贴板
- *         （read_clipboard_file_paths，Windows 走 CF_HDROP）；
+ *         （read_clipboard_file_paths，Windows 走 CF_HDROP 或 VS Code 的 code/file-list）；
  *         “从 uri-list 文本里解析”只作非 Windows 的兜底。
  *   两者最终都汇到 acceptPaths：图片读字节回到图片链路，其余进文件附件（只有路径）。
  *
@@ -30,7 +31,7 @@ import {
   forwardRef,
   useImperativeHandle,
 } from 'react'
-import { getCurrentWebview } from '@tauri-apps/api/webview'
+import { listen } from '@tauri-apps/api/event'
 import SendSvg from '@/ui/components/icons/SendSvg'
 import StopSvg from '@/ui/components/icons/StopSvg'
 import ModelSwitcher from '../modals/model-switcher'
@@ -80,6 +81,16 @@ export type { FileAttachment }
 function isTauriEnv(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
+
+/**
+ * 原生拖放事件负载（来自 Rust 的 drag_drop 模块）
+ * 形状与 Tauri 内置的 DragDropEvent 一致；落点是相对窗口左上角的物理像素。
+ */
+type DragDropPayload =
+  | { type: 'enter'; paths: string[]; position: { x: number; y: number } }
+  | { type: 'over'; position: { x: number; y: number } }
+  | { type: 'leave' }
+  | { type: 'drop'; paths: string[]; position: { x: number; y: number } }
 
 /** 像不像一个绝对路径（用于从剪贴板文本里辨认文件路径） */
 function looksLikeAbsolutePath(p: string): boolean {
@@ -271,9 +282,9 @@ function ChatInput(
   /**
    * 把剪贴板里的文件挂成附件
    *
-   * 路径优先问原生要：Windows 上「复制文件」的真身是剪贴板里的 CF_HDROP，
-   * 页面的 DataTransfer 只剩一个没有路径的 File。原生拿不到时（macOS / Linux /
-   * 浏览器调试模式）退回页面给的路径文本。
+   * 路径优先问原生要：Windows 上「复制文件」的真身是剪贴板里的 CF_HDROP（资源管理器）
+   * 或 code/file-list（VS Code），页面的 DataTransfer 只剩一个没有路径的 File。
+   * 原生拿不到时（macOS / Linux / 浏览器调试模式）退回页面给的路径文本。
    *
    * @returns 是否真的挂上了附件（调用方据此决定要不要提示用户）
    */
@@ -720,24 +731,29 @@ function ChatInput(
   const handlePaste = useCallback(
     async (e: ClipboardEvent<HTMLTextAreaElement>) => {
       const dt = e.clipboardData
-      // 页面上看得见内容（文本 / 文件）就说明默认粘贴能落地，原生兜底不用再补一刀；
-      // 一个格式都没有时（WebView2 对“复制的文件”可能什么都不给页面）留 false，
-      // 让 Ctrl+V 的兜底去问原生剪贴板要路径。
-      pasteSeenRef.current = !!dt?.types?.length
-      if (!dt?.items) return
-
-      const imageFiles: File[] = []
-      let hasOtherFiles = false
-      for (let i = 0; i < dt.items.length; i++) {
-        const item = dt.items[i]
-        if (item.kind !== 'file') continue
-        const file = item.getAsFile()
-        if (!file) continue
-        if (file.type.startsWith('image/')) imageFiles.push(file)
-        else hasOtherFiles = true
+      if (!dt) {
+        pasteSeenRef.current = false
+        return
       }
 
-      // 剪贴板里是「文件」（资源管理器里复制的一批文件）：
+      // 把剪贴板里能给到页面、且我们能消费的东西挑出来
+      const imageFiles: File[] = []
+      let hasOtherFiles = false
+      const items = dt.items
+      if (items) {
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i]
+          if (item.kind !== 'file') continue
+          const file = item.getAsFile()
+          if (!file) continue
+          if (file.type.startsWith('image/')) imageFiles.push(file)
+          else hasOtherFiles = true
+        }
+      }
+      const hasText = dt.getData('text/plain').length > 0
+
+      pasteSeenRef.current = hasText || imageFiles.length > 0 || hasOtherFiles
+
       // 页面拿不到磁盘路径，整批走原生链路，免得和下面的图片链路把同一张图挂两遍
       if (hasOtherFiles) {
         e.preventDefault()
@@ -786,8 +802,8 @@ function ChatInput(
     [addImages],
   )
 
-  // ===== 拖拽（Tauri 原生通道，能拿到真实路径）=====
-  // 事件是 webview 级的，所以按落点是否在输入框内决定接不接。
+  // ===== 拖拽（原生通道，能拿到真实路径）=====
+  // 事件来自 Rust 的 drag_drop 模块（自定义 OLE 拖放目标），按落点是否在输入框内决定接不接。
   useEffect(() => {
     if (!isTauriEnv()) return
     let unlisten: (() => void) | null = null
@@ -806,25 +822,24 @@ function ChatInput(
       )
     }
 
-    getCurrentWebview()
-      .onDragDropEvent((event) => {
-        const payload = event.payload
-        if (payload.type === 'enter' || payload.type === 'over') {
-          setIsDragOver(isInsideInput(payload.position))
-        } else if (payload.type === 'leave') {
-          setIsDragOver(false)
-        } else if (payload.type === 'drop') {
-          setIsDragOver(false)
-          // 拖进来的不是文件（如拖选中的文本）：paths 为空，交给系统/页面原有行为，不插手
-          if (!payload.paths || payload.paths.length === 0) return
-          // 落在输入框外：不静默丢弃，给个提示，否则用户会以为功能没生效
-          if (!isInsideInput(payload.position)) {
-            showToast(t('请把文件拖到输入框内'))
-            return
-          }
-          void acceptPaths(payload.paths)
+    listen<DragDropPayload>('virlen:drag-drop', (event) => {
+      const payload = event.payload
+      if (payload.type === 'enter' || payload.type === 'over') {
+        setIsDragOver(isInsideInput(payload.position))
+      } else if (payload.type === 'leave') {
+        setIsDragOver(false)
+      } else if (payload.type === 'drop') {
+        setIsDragOver(false)
+        // 拖进来的不是文件（如拖选中的文本）：paths 为空，交给系统/页面原有行为，不插手
+        if (!payload.paths || payload.paths.length === 0) return
+        // 落在输入框外：不静默丢弃，给个提示，否则用户会以为功能没生效
+        if (!isInsideInput(payload.position)) {
+          showToast(t('请把文件拖到输入框内'))
+          return
         }
-      })
+        void acceptPaths(payload.paths)
+      }
+    })
       .then((fn) => {
         if (cancelled) fn()
         else unlisten = fn
@@ -899,7 +914,7 @@ function ChatInput(
           波浪文字：逐字上下呼吸、靠相位差形成波峰横向推进，无装饰点
           逐字 span 对读屏隐藏，完整文案由 aria-label 承载，避免逐字被拆读
           注：`|| true` 是临时预览开关，提交前删掉 */}
-      {(loading || compacting ) && (
+      {(loading || compacting) && (
         <div
           className={`working-indicator ${compacting ? 'is-compacting' : ''}`}
           role="status"

@@ -276,8 +276,9 @@ export function useFileAttachment() {
 /**
  * 读系统剪贴板里的文件路径
  *
- * 页面 paste 事件只能拿到 File（有文件名、没有磁盘路径），资源管理器里「复制」的文件
- * 在 WebView2 里往往连文本形式都拿不到，所以路径统一问原生要。
+ * 页面 paste 事件只能拿到 File（有文件名、没有磁盘路径），资源管理器 / VS Code 里
+ * 「复制」的文件在 WebView2 里往往连文本形式都拿不到，所以路径统一问原生要。
+ * 原生侧识别 Windows 上两种格式：资源管理器的 CF_HDROP、VS Code 的 code/file-list。
  * 非 Tauri 环境 / 平台不支持（macOS、Linux）/ 剪贴板里没有文件，一律返回空数组，
  * 由调用方退回「从剪贴板文本里解析路径」的兜底逻辑。
  */

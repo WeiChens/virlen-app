@@ -20,6 +20,7 @@ import {
   sortReasoningEfforts,
 } from '@/domain/provider/config'
 import { t, tpl } from '@/ui/i18n'
+import Tooltip from '@/ui/components/shared/Tooltip'
 
 /**
  * 圆球液面图标
@@ -118,7 +119,7 @@ function ReasoningEffortSlider() {
   // 液面进度：0 = 默认（空球）→ 1 = 最高档（满球）；拖动中实时跟手
   const level = maxStep > 0 ? thumbValue / maxStep : 0
   // 图标按钮没有文字了 → 把当前档位挂在 tooltip / aria-label 上
-  const effortTitle = tpl('推理强度：$__level__', {
+  const effortTitle = tpl('强度：$__level__', {
     level: shownValue || t('默认'),
   })
 
@@ -207,15 +208,26 @@ function ReasoningEffortSlider() {
     <div
       className={`reasoning-effort-slider ${open ? 'open' : ''} ${value ? 'is-set' : ''}`}
       ref={containerRef}>
-      <button
-        className="slider-trigger"
-        onClick={() => setOpen(!open)}
-        title={effortTitle}
-        aria-label={effortTitle}
-        aria-expanded={open}
-        type="button">
-        <EffortBall level={level} dragging={dragging} />
-      </button>
+      <Tooltip content={effortTitle} direction="top">
+        <button
+          className="slider-trigger"
+          onClick={() => {
+            let index = previewIndex + 1
+            if (index > maxStep) {
+              index = 0
+            }
+            const v = steps[index] ?? ''
+            handleChange(v)
+            // setOpen(!open)
+          }}
+          // title={effortTitle}
+          aria-label={effortTitle}
+          aria-expanded={open}
+          type="button">
+          <EffortBall level={level} dragging={dragging} />
+        </button>
+      </Tooltip>
+
 
       {open && (
         <div className="slider-popover">
