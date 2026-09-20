@@ -26,14 +26,24 @@
  * 语义约定：读不到 / 平台不支持 / 剪贴板被占用，一律返回空（不报错），
  *           由前端决定是提示还是静默——粘贴这件事不该因为读剪贴板失败而中断。
  *
- * 除文件路径外，还提供「读纯文本」：终端右键「粘贴」用（见 read_clipboard_text）。
- * 为什么不走 `navigator.clipboard.readText()`：WebView2 的剪贴板读权限默认
- * 不放行（NotAllowedError），而这里已有现成的 Windows 剪贴板原语。
+ * 除文件路径外，还提供：
+ *   - 「读纯文本」：终端右键「粘贴」用（见 read_clipboard_text）。
+ *     为什么不走 `navigator.clipboard.readText()`：WebView2 的剪贴板读权限默认
+ *     不放行（NotAllowedError），而这里已有现成的 Windows 剪贴板原语。
+ *   - 「写图片」：消息 / 预览里右键「复制图片」用（见 write_clipboard_image）。
+ *     为什么不走 `navigator.clipboard.write(ClipboardItem)`：WebView2 下是否放行
+ *     取决于运行时权限，不可靠；原生写 CF_DIB 是确定的（DIB 组装见 dib.rs）。
+ *     前端仍保留浏览器 API 作兼容层（macOS / Linux 暂未实现原生写入）。
  */
 
 // 解析逻辑与平台无关，drag_drop 也复用它；非 Windows 构建下暂无使用者
 #[allow(dead_code)]
 pub(crate) mod vscode;
+
+// 图片 → DIB 的字节组装与平台无关（供 Windows 写剪贴板用），可跨平台单测；
+// 非 Windows 构建下暂无使用者
+#[allow(dead_code)]
+pub(crate) mod dib;
 
 #[cfg(target_os = "windows")]
 mod windows;
@@ -77,9 +87,22 @@ pub async fn read_clipboard_text() -> String {
         .unwrap_or_default()
 }
 
+/// 把图片写进系统剪贴板（右键「复制图片」用；Windows: CF_DIB）。
+///
+/// 前端传 base64（不强求 dataURL 前缀，已在外层剥掉）；具体格式由
+/// `image` crate 从字节头部自行判定，因此不需要额外的 mime 参数。
+/// 失败时返回 Err，前端会退到 `navigator.clipboard.write(ClipboardItem)`。
+#[tauri::command]
+pub async fn write_clipboard_image(base64: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || platform::write_image(&base64))
+        .await
+        .map_err(|e| format!("剪贴板写入任务异常：{e}"))?
+}
+
 #[cfg(target_os = "windows")]
 mod platform {
-    use super::{text_formats, windows, TextFormat};
+    use super::{dib, text_formats, windows, TextFormat};
+    use base64::Engine as _;
 
     pub fn read_file_paths() -> Vec<String> {
         // 先探测剪贴板里有哪些我们认识的格式，避免无谓地打开剪贴板
@@ -137,6 +160,28 @@ mod platform {
         windows::close();
         text
     }
+
+    /// 图片（base64）→ CF_DIB 写进剪贴板。
+    ///
+    /// 步骤：解 base64 → 解码图片 → 组装 DIB（见 dib.rs）→ 写 CF_DIB。
+    /// 任一步失败都返回 Err（前端退浏览器剪贴板 API，不是致命错误）。
+    pub fn write_image(base64: &str) -> Result<(), String> {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(base64)
+            .map_err(|e| format!("base64 解码失败：{e}"))?;
+        let dib_bytes = dib::image_to_dib(&bytes)?;
+        // 剪贴板同一时刻只能被一个进程打开，重试几次而不是一次失败就放弃
+        if !windows::open_with_retry() {
+            return Err("剪贴板被占用，无法写入".into());
+        }
+        let ok = windows::write_dib(&dib_bytes);
+        windows::close();
+        if ok {
+            Ok(())
+        } else {
+            Err("写入系统剪贴板失败".into())
+        }
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -149,5 +194,10 @@ mod platform {
     /// 同上：返回空串，前端退回 navigator.clipboard 兜底
     pub fn read_text() -> String {
         String::new()
+    }
+
+    /// 同上：返回错误，前端退回 navigator.clipboard.write(ClipboardItem) 兜底
+    pub fn write_image(_base64: &str) -> Result<(), String> {
+        Err("当前平台暂未实现原生图片剪贴板写入".into())
     }
 }

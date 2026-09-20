@@ -237,7 +237,7 @@
 }
 
 // ==================== 检索命中高亮 ====================
-// Ctrl+F 检索结果跳转时叠加：用背景 + 描边强调目标消息行。
+// Ctrl+P 检索结果跳转时叠加：用背景 + 描边强调目标消息行。
 // 只动 background / box-shadow（不影响布局高度，不会干扰虚拟滚动测量），
 .message-item-wrap.highlighted {
   border-radius: 12px;

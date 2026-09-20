@@ -649,9 +649,11 @@ describe('XtermTerminalBlock（PTY）结构与操作区', () => {
     )
     expect(html).toContain('class="pty-cwd"')
     expect(html).toContain('E:/code/virlen/virlen-app')
+    // `$` 提示符单独成 span（CSS 置 user-select:none，复制命令时不带上它）
+    expect(html).toContain('class="pty-prompt"')
     // cwd 必须排在 `$ cmd` 之前
     expect(html.indexOf('E:/code/virlen/virlen-app')).toBeLessThan(
-      html.indexOf('$ npm init'),
+      html.indexOf('npm init'),
     )
   })
 
@@ -735,18 +737,20 @@ describe('XtermTerminal 右键菜单与 Ctrl+C 智能复制', () => {
         }),
       )
     })
-    return document.querySelector('.pty-context-menu') as HTMLElement | null
+    return document.querySelector('.context-menu') as HTMLElement | null
   }
 
   const menuButtons = (menu: HTMLElement) =>
     Array.from(menu.querySelectorAll('button')) as HTMLButtonElement[]
 
-  it('右键弹出菜单（挂 body），含复制/粘贴/全选三项', async () => {
+  it('右键弹出菜单（挂 body、深色皮肤），含复制/粘贴/全选三项', async () => {
     const { host, root } = await mountPty(true)
     const menu = await openMenu(host)
     expect(menu).toBeTruthy()
     // 必须挂在 body 下（消息列表祖先带 transform/overflow，fixed 需脱离它们）
     expect(menu!.parentElement).toBe(document.body)
+    // 共享 ContextMenu 的终端皮肤（黑底终端上不能用浅色菜单）
+    expect(menu!.classList.contains('context-menu--dark')).toBe(true)
     expect(menuButtons(menu!).map((b) => b.textContent)).toEqual([
       '复制',
       '粘贴',
@@ -781,7 +785,7 @@ describe('XtermTerminal 右键菜单与 Ctrl+C 智能复制', () => {
     })
     expect(clipboardWriteText).toHaveBeenCalledWith('copied-text')
     expect(term.clearSelection).toHaveBeenCalled()
-    expect(document.querySelector('.pty-context-menu')).toBeNull()
+    expect(document.querySelector('.context-menu')).toBeNull()
     await act(async () => root.unmount())
   })
 
@@ -794,7 +798,7 @@ describe('XtermTerminal 右键菜单与 Ctrl+C 智能复制', () => {
     })
     expect(invoke).toHaveBeenCalledWith('read_clipboard_text')
     expect(lastXtermInstance().paste).toHaveBeenCalledWith('pasted-text')
-    expect(document.querySelector('.pty-context-menu')).toBeNull()
+    expect(document.querySelector('.context-menu')).toBeNull()
     await act(async () => root.unmount())
   })
 
@@ -817,7 +821,37 @@ describe('XtermTerminal 右键菜单与 Ctrl+C 智能复制', () => {
       menuButtons(menu!)[2].click()
     })
     expect(lastXtermInstance().selectAll).toHaveBeenCalled()
-    expect(document.querySelector('.pty-context-menu')).toBeTruthy()
+    expect(document.querySelector('.context-menu')).toBeTruthy()
+    await act(async () => root.unmount())
+  })
+
+  it('右键顶部命令行（`$ cmd`）→ 复制菜单；复制内容不含 `$` 提示符', async () => {
+    const { host, root } = await mountPty(true)
+    const cmdLine = host.querySelector('.pty-cmd-line') as HTMLElement
+    expect(cmdLine).toBeTruthy()
+    // `$` 提示符单独成 span（不可选中）
+    expect(cmdLine.querySelector('.pty-prompt')?.textContent).toBe('$')
+
+    await act(async () => {
+      cmdLine.dispatchEvent(
+        new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: 100,
+          clientY: 100,
+        }),
+      )
+    })
+    const menu = document.querySelector('.context-menu') as HTMLElement
+    expect(menu).toBeTruthy()
+    expect(menuButtons(menu).map((b) => b.textContent)).toEqual(['复制'])
+
+    // 无选区 → 复制整条命令（不含 `$`）
+    await act(async () => {
+      menuButtons(menu)[0].click()
+    })
+    expect(clipboardWriteText).toHaveBeenCalledWith('echo hi')
+
     await act(async () => root.unmount())
   })
 
@@ -827,13 +861,13 @@ describe('XtermTerminal 右键菜单与 Ctrl+C 智能复制', () => {
     await act(async () => {
       document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
     })
-    expect(document.querySelector('.pty-context-menu')).toBeNull()
+    expect(document.querySelector('.context-menu')).toBeNull()
 
     await openMenu(host)
     await act(async () => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     })
-    expect(document.querySelector('.pty-context-menu')).toBeNull()
+    expect(document.querySelector('.context-menu')).toBeNull()
     await act(async () => root.unmount())
   })
 

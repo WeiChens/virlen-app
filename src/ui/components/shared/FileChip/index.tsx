@@ -11,6 +11,7 @@
 import FileTypeIcon from '@/ui/components/icons/FileTypeIcon'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
 import { t, tpl } from '@/ui/i18n'
+import type { MouseEvent } from 'react'
 import './style.scss'
 
 interface Props {
@@ -23,6 +24,8 @@ interface Props {
   size?: number
   /** 点击主体（打开文件） */
   onClick?: () => void
+  /** 右键（消息气泡里用于弹「打开 / 在文件管理器中显示 / 复制路径」菜单） */
+  onContextMenu?: (ev: MouseEvent<HTMLSpanElement>) => void
   /** 移除该附件 */
   onRemove?: () => void
   className?: string
@@ -55,7 +58,16 @@ function splitName(name: string): { base: string; ext: string } {
   return { base: name.slice(0, dot), ext: name.slice(dot) }
 }
 
-function FileChip({ path, name, isDir, size, onClick, onRemove, className }: Props) {
+function FileChip({
+  path,
+  name,
+  isDir,
+  size,
+  onClick,
+  onContextMenu,
+  onRemove,
+  className,
+}: Props) {
   const displayName = name || fileNameOf(path)
   const { base, ext } = splitName(displayName)
   const metaText = isDir ? t('文件夹') : formatFileSize(size)
@@ -76,7 +88,8 @@ function FileChip({ path, name, isDir, size, onClick, onRemove, className }: Pro
   return (
     <span
       className={`file-chip${isDir ? ' is-dir' : ''}${className ? ` ${className}` : ''}`}
-      title={path}>
+      title={path}
+      onContextMenu={onContextMenu}>
       {onClick ? (
         <button
           type="button"

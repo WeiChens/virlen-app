@@ -567,6 +567,34 @@ export function toShortPath(absolutePath: string, workspace?: string): string {
 }
 
 /**
+ * 把（可能是相对工作目录的）路径补成绝对路径 —— `toShortPath` 的逆操作。
+ *
+ * 为什么需要：工具卡片上显示的路径是相对工作目录的短路径，而工具**入参**里 LLM 也常
+ * 写相对路径（系统提示词已告知当前工作目录）。但交给系统的能力（`openPath` /
+ * `revealItemInDir`）只认绝对路径：把 `src/a.ts` 直接交给「在文件管理器中显示」，
+ * 资源管理器会定位到错误目录 / 直接失败。
+ *
+ * 判定「已是绝对路径」（与 `securityService.resolveSafePath` 同款）：以 `/`、`\`
+ * （POSIX 根 / UNC / Windows 根）开头，或形如 `C:` 的盘符。`workspace` 为空时原样返回
+ * （宁可不改，也不要拼出一个错误的路径）。
+ *
+ * @param path 原始路径（可能是绝对的，也可能是相对工作目录的）
+ * @param workspace 工作目录；缺省则原样返回
+ */
+export function toAbsolutePath(path: string, workspace?: string): string {
+  if (!path) return path
+  if (path.startsWith('/') || path.startsWith('\\') || /^[A-Za-z]:/.test(path)) {
+    return path
+  }
+  if (!workspace) return path
+  const base = workspace.replace(/\\/g, '/').replace(/\/+$/, '')
+  if (!base) return path
+  // 去掉可能的前导 `./`，避免拼出 `E:/ws/./a.ts` 这种冗余段
+  const rel = path.replace(/\\/g, '/').replace(/^\.\//, '')
+  return `${base}/${rel}`
+}
+
+/**
  * 获取文件父级路径
  * @param path 
  */

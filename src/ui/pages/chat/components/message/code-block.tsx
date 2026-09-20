@@ -363,7 +363,7 @@ function MonacoCodeView({
   const fontPx = resolveCodeFontPx(fontSize)
   const lineH = Math.max(16, Math.round(fontPx * 1.5))
   const lineCount = code ? code.split('\n').length : 1
-  const height = Math.max(lineH + 16, 5+ (lineCount + 1) * lineH)
+  const height = Math.max(lineH + 16, 5 + (lineCount + 1) * lineH)
 
   return (
     <CodePreview
@@ -431,6 +431,10 @@ export interface CodeBlockProps extends HTMLAttributes<HTMLElement> {
    * 是否自动居中
    */
   autoCenter?: boolean
+  /**
+   * 是否有行内代码
+   */
+  inlineCode?: boolean
 }
 
 /** 代码块组件 */
@@ -446,6 +450,7 @@ function CodeBlock({
   streaming,
   actions = [] as Action[],
   autoCenter = false,
+  inlineCode = false,
   ...props
 }: CodeBlockProps) {
   // 复制态放在最前面：行内/块状代码两条渲染路径共用同一组 hooks（规则一致性）
@@ -485,7 +490,7 @@ function CodeBlock({
   const code = String(children).replace(/\n$/, '')
 
   // 行内代码
-  if (!match && !code.includes('\n')) {
+  if (inlineCode && !match && !code.includes('\n')) {
     const isPath = isValidPath(code)
     return (
       <code

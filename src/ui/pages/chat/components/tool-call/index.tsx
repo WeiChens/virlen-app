@@ -9,6 +9,12 @@ import {
 import { Message, ToolUseContent } from '@/types'
 import { ToolCallGroup } from './tool-call-group'
 import { extractReactNodeText } from '@/utils/common'
+import { chatState, sessionStore, settingsState } from '@/ui/store'
+import ContextMenu, {
+  useContextMenu,
+} from '@/ui/components/shared/ContextMenu'
+import { fileMenuItems } from '@/ui/components/shared/ContextMenu/menus'
+import { primaryPathOf } from './primary-path'
 export { ToolCallGroup }
 
 /**
@@ -77,6 +83,19 @@ interface Props {
 export function ToolCallMessage({ message, result }: Props) {
   const type = message.name
   const [expand, setExpand] = useState(false)
+  /** 卡片右键菜单：只针对「本工具操作的那个路径」 */
+  const menu = useContextMenu<string>()
+  /** 主路径（取不到就不开菜单 —— 宁可不响应，也不要打开一个打不开的路径） */
+  const primaryPath = primaryPathOf(message.input)
+  /**
+   * 当前会话工作目录。工具入参里的路径可能是**相对**的（LLM 常写 `src/a.ts`），
+   * 而 openPath / revealItemInDir 只认绝对路径，故将 workspace 交给 fileMenuItems 补齐。
+   * 取值与 TerminalBlock / securityService.getWorkspace 一致。
+   */
+  const workspace =
+    sessionStore.getSession(chatState.value.currentSessionId)?.workspace ||
+    settingsState.value.defaultWorkspace ||
+    ''
   const toolCallMessage = getToolCallMessage(type)
   const p = {
     message: result,
@@ -97,6 +116,9 @@ export function ToolCallMessage({ message, result }: Props) {
     <>
       <div
         onClick={() => setExpand(!expand)}
+        onContextMenu={
+          primaryPath ? (e) => menu.openAt(e, primaryPath) : undefined
+        }
         className={`tool-call-message ${isError ? 'tool-call-error' : ''} ${!result ? 'tool-call-pending' : ''}`}>
         <span
           className={`tool-call-point ${isError ? 'error' : ''} ${!result ? 'pending' : ''}`}></span>
@@ -113,6 +135,18 @@ export function ToolCallMessage({ message, result }: Props) {
       <ExpandErrorBoundary>
         <ToolCallExpandView toolCallMessage={toolCallMessage} props={p} />
       </ExpandErrorBoundary>
+      {/* 右键菜单：打开 / 编辑器打开 / 在文件管理器中显示 / 复制路径 */}
+      {menu.state && (
+        <ContextMenu
+          position={menu.state.position}
+          items={fileMenuItems(menu.state.target, {
+            workspace,
+            // read_file 会下发起止行 → 编辑器打开时直接定位（与文件卡片里的动作一致）
+            line: result?.uiData?.startLine,
+          })}
+          onClose={menu.close}
+        />
+      )}
     </>
   )
 }

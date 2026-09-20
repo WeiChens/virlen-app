@@ -243,11 +243,11 @@ function ChatView() {
     currentWidthRef.current = sidebarWidth
   }, [sidebarWidth])
 
-  // Ctrl / Cmd + F 唤起消息检索弹窗（再次按下可关闭）
+  // Ctrl / Cmd + P 唤起消息检索弹窗（再次按下可关闭）
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
-        e.preventDefault() // 拦截 WebView 自带的页面查找
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault() // 拦截 WebView 自带的打印
         setShowSearch((v) => !v)
       }
     }
@@ -360,7 +360,7 @@ function ChatView() {
   /**
    * 点击引用 chip：跳转定位到被引用的原消息。
    *
-   * 直接复用 Ctrl+F 检索的跳转通道（同一 session 内滚动定位 + 临时高亮，
+   * 直接复用 Ctrl+P 检索的跳转通道（同一 session 内滚动定位 + 临时高亮，
    * 目标消息尚未加载时会逐页回补）。原消息已被删除时找不到目标，静默不动。
    */
   const handleQuoteJump = useCallback((messageId: string) => {
@@ -883,7 +883,7 @@ function ChatView() {
 
       <ToolUI />
 
-      {/* 消息检索弹窗（Ctrl / Cmd + F 唤起）
+      {/* 消息检索弹窗（Ctrl / Cmd + P 唤起）
           - 有会话：只搜当前会话；
           - 无会话：搜所有会话（条目展示工作目录 + Agent 名称） */}
       <SearchDialog

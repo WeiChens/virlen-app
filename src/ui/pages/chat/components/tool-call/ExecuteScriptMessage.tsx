@@ -28,8 +28,7 @@ function ScriptExpandView({
   command,
   filePath,
   fileContent,
-  message,
-  expand,
+  message
 }: {
   toolCallId: string
   command?: string
@@ -62,13 +61,13 @@ function ScriptExpandView({
           cmd={command}
           fileLabel={fileLabel}
           message={message}
-          expand={expand}
+          expand={false}
         />
       ) : fileContent ? (
         // 脚本正文直接取工具入参 file_content —— 即真正写入磁盘并执行的那份内容
         // （脚本默认执行完即删，重新读盘会拿不到）。
         <div className="script-file">
-          <CodeBlock fileName={fileLabel} maxHeight={400} showLineNumbers>
+          <CodeBlock fileName={fileLabel} maxHeight={"55vh"} autoCenter width={`min(880px, 92%)`} showLineNumbers>
             {fileContent}
           </CodeBlock>
         </div>

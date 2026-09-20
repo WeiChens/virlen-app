@@ -151,7 +151,7 @@ interface ChatMessageListProps {
   }) => void
   /** 点击引用 chip：跳转定位到被引用的原消息 */
   onQuoteJump?: (messageId: string) => void
-  /** 外部请求滚动定位并临时高亮的目标消息（Ctrl+F 检索结果跳转） */
+  /** 外部请求滚动定位并临时高亮的目标消息（Ctrl+P 检索结果跳转） */
   jumpTarget?: MessageJumpTarget | null
 }
 
@@ -377,7 +377,7 @@ function ChatMessageList({
     // _measureElement 内的 `useAnimationFrameWithResizeObserver ? requestAnimationFrame(run)
     // : run()`），布局写入落在本帧 RO 投递之后，新通知顺延到下一帧，报错消失。
     // 代价：实测高度晚一帧生效（观感无差）。
-    useAnimationFrameWithResizeObserver: false,
+    useAnimationFrameWithResizeObserver: true,
     // 不在 RO / scroll 回调里同步 flushSync 重渲染（改为 React 默认批处理调度）。
     // 若发现滚动时条目定位有「一帧延迟 / 边缘露白」，删掉这一行即可回到原行为。
     // useFlushSync: false,
@@ -777,7 +777,7 @@ function ChatMessageList({
   )
 
   // ==================== 检索跳转：滚动定位 + 高亮 ====================
-  // 由 Ctrl+F 检索弹窗选中结果时下发 jumpTarget。等目标会话激活后再跳，并取消
+  // 由 Ctrl+P 检索弹窗选中结果时下发 jumpTarget。等目标会话激活后再跳，并取消
   // 「切会话贴底稳定」流程 —— 否则 settle 轮询会在跳转后把视口重新拉回底部。
   useEffect(() => {
     if (!jumpTarget || !sessionId) return

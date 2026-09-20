@@ -12,6 +12,11 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { invoke } from '@tauri-apps/api/core'
 import { t } from '@/ui/i18n'
+import ContextMenu, {
+  useContextMenu,
+  type ContextMenuItem,
+} from '@/ui/components/shared/ContextMenu'
+import { textMenuItems } from '@/ui/components/shared/ContextMenu/menus'
 import { NOTIFY_INTERVAL_MS } from '@/infrastructure/tools/output-store'
 import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
 import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
@@ -272,9 +277,16 @@ export function XtermTerminal({
    */
   const syncSizeRef = useRef<(() => void) | null>(null)
 
-  /** 右键菜单（null = 关闭）；坐标为视口坐标，菜单经 createPortal 挂到 body。 */
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
-  const menuRef = useRef<HTMLDivElement>(null)
+  /**
+   * 右键菜单（共享组件；浅色皮肤不适用于终端，故传 dark）。
+   * 关闭行为（点外部 / Esc）、贴边钳制、层级都由 ContextMenu 统一处理。
+   */
+  const menu = useContextMenu<void>()
+  /**
+   * 强制重渲染用（「全选」后要重新读 `hasSelection()` 才解除「复制」的禁用）。
+   * xterm 的选区不是 React 状态，只能手动推一下。
+   */
+  const [, forceMenuRender] = useState(0)
 
   /**
    * 把一段增量交给 xterm —— 经 `PendingCrWriter` 合并「先导 `\r`」，
@@ -514,56 +526,11 @@ export function XtermTerminal({
     writtenRef.current = stream
   }, [stream, writeDelta])
 
-  /**
-   * 右键菜单的关闭行为：点菜单外任意处 / Esc。
-   *
-   * ⚠️ 两个监听都挂**捕获阶段**：
-   *   - mousedown 捕获：抢在菜单项 click 之前判定「是否点在外面」，不会误伤菜单项自身；
-   *   - Esc 捕获：抢在外层（全屏退出等）的冒泡监听器之前消费按键 ——
-   *     否则「关菜单」会连带「退出全屏」（两处监听都在 document 上）。
-   */
-  useEffect(() => {
-    if (!menu) return
-    const onDocMouseDown = (e: MouseEvent) => {
-      if (menuRef.current?.contains(e.target as Node)) return
-      setMenu(null)
-    }
-    const onDocKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation()
-        setMenu(null)
-      }
-    }
-    document.addEventListener('mousedown', onDocMouseDown, true)
-    document.addEventListener('keydown', onDocKeyDown, true)
-    return () => {
-      document.removeEventListener('mousedown', onDocMouseDown, true)
-      document.removeEventListener('keydown', onDocKeyDown, true)
-    }
-  }, [menu])
-
-  /** 菜单定位：先按右键坐标放，再按实际尺寸钳进视口（贴边时往回缩）。 */
-  useLayoutEffect(() => {
-    const el = menuRef.current
-    if (!menu || !el) return
-    const x = Math.max(
-      8,
-      Math.min(menu.x, window.innerWidth - el.offsetWidth - 8),
-    )
-    const y = Math.max(
-      8,
-      Math.min(menu.y, window.innerHeight - el.offsetHeight - 8),
-    )
-    el.style.left = `${x}px`
-    el.style.top = `${y}px`
-  }, [menu])
-
   /** 菜单动作：复制当前选区（复制完清选区，对齐 Windows Terminal 的习惯）。 */
   async function copySelection() {
     const term = termRef.current
     if (!term) return
     const text = term.getSelection()
-    setMenu(null)
     if (!text) return
     await writeClipboardText(text)
     term.clearSelection()
@@ -581,7 +548,6 @@ export function XtermTerminal({
   async function pasteFromClipboard() {
     const term = termRef.current
     if (!term || !runningRef.current) return
-    setMenu(null)
     const text = await readClipboardText()
     if (!text) return
     term.paste(text)
@@ -594,9 +560,36 @@ export function XtermTerminal({
     if (!term) return
     term.selectAll()
     // 触发一次重渲染，让「复制」按钮按新的选区状态解除禁用
-    setMenu((m) => (m ? { ...m } : m))
+    forceMenuRender((n) => n + 1)
     term.focus()
   }
+
+  /**
+   * 菜单项：复制 / 粘贴 / 全选。
+   *
+   * 渲染时现算（不过「打开那一刻定死」）：「复制」要跟着选区状态、
+   * 「粘贴」要跟着命令是否还在运行（已结束则伪控制台会话没了，无处可贴）。
+   */
+  const menuItems: ContextMenuItem[] = [
+    {
+      key: 'copy',
+      label: t('复制'),
+      disabled: !termRef.current?.hasSelection(),
+      onClick: copySelection,
+    },
+    {
+      key: 'paste',
+      label: t('粘贴'),
+      disabled: !runningRef.current,
+      onClick: pasteFromClipboard,
+    },
+    {
+      key: 'select-all',
+      label: t('全选'),
+      keepOpen: true,
+      onClick: selectAllForCopy,
+    },
+  ]
 
   // 滚轮的拦截落在终端创建 effect 里（`onWheel`）：xterm 6 的回滚是 VS Code
   // `SmoothScrollableElement` 的 JS 实现，既不能在捕获阶段抢跑（它看到 defaultPrevented
@@ -604,43 +597,18 @@ export function XtermTerminal({
   return (
     <div
       className="pty-terminal-body-wrapper"
-      onContextMenu={(e) => {
-        // 右键 → 自定义菜单（复制/粘贴/全选）。xterm 自身挂在 .xterm 元素上的
-        // contextmenu 监听（把隐藏 textarea 挪到鼠标下、暂存选区文本）先于本回调
-        // 执行且不清选区、不 preventDefault；这里接管默认菜单。
-        e.preventDefault()
-        e.stopPropagation()
-        setMenu({ x: e.clientX, y: e.clientY })
-      }}>
+      onContextMenu={(e) => menu.openAt(e, undefined)}>
       <div className="pty-terminal-body" ref={hostRef} />
-      {/* 经 createPortal 挂 body：消息列表祖先带 transform/overflow（同全屏浮层的理由），
-          fixed 定位会被牵连；层级高于终端全屏层(500)、低于 Modal(800)。 */}
-      {menu &&
-        createPortal(
-          <div className="pty-context-menu" ref={menuRef} role="menu">
-            <button
-              className="pty-menu-item"
-              role="menuitem"
-              disabled={!termRef.current?.hasSelection()}
-              onClick={() => void copySelection()}>
-              {t('复制')}
-            </button>
-            <button
-              className="pty-menu-item"
-              role="menuitem"
-              disabled={!runningRef.current}
-              onClick={() => void pasteFromClipboard()}>
-              {t('粘贴')}
-            </button>
-            <button
-              className="pty-menu-item"
-              role="menuitem"
-              onClick={selectAllForCopy}>
-              {t('全选')}
-            </button>
-          </div>,
-          document.body,
-        )}
+      {/* 菜单由 ContextMenu 统一经 createPortal 挂 body（消息列表祖先带 transform/
+          overflow，fixed 定位会被牵连），dark 皮肤对齐终端配色。 */}
+      {menu.state && (
+        <ContextMenu
+          position={menu.state.position}
+          items={menuItems}
+          onClose={menu.close}
+          dark
+        />
+      )}
     </div>
   )
 }
@@ -723,6 +691,8 @@ export function XtermTerminalBlock({
   const [held, setHeld] = useState(false)
   // 终端列×行（底部状态栏展示；由 XtermTerminal 的 fit() 回传）
   const [size, setSize] = useState<{ cols: number; rows: number } | null>(null)
+  // 顶部 `$ cmd` 行的右键菜单（复制命令）。与终端体自身的选区菜单是两套，互不影响。
+  const cmdMenu = useContextMenu<void>()
 
   // Esc 退出全屏（与 CodeBlock / ImagePreview 等浮层保持一致的操作习惯）
   useEffect(() => {
@@ -800,9 +770,12 @@ export function XtermTerminalBlock({
         </div>
         {fileLabel && <div className="pty-cmd-line">📄 {fileLabel}</div>}
         {cmd && (
-          <div className="pty-cmd-line">
+          <div
+            className="pty-cmd-line"
+            onContextMenu={(e) => cmdMenu.openAt(e, undefined)}>
             {cwd && <span className="pty-cwd">{cwd}</span>}
-            $ {cmd}
+            {/* `$` 提示符单独成 span：CSS 置 user-select:none，复制命令时不带上它 */}
+            <span className="pty-prompt">$</span> {cmd}
           </div>
         )}
         {/* 尺寸同步权：全屏期间只由全屏实例上报（原位实例暂停）；退出全屏后原位实例夺回，
@@ -830,6 +803,16 @@ export function XtermTerminalBlock({
           </div>,
           document.body,
         )}
+      {/* 顶部命令行的右键菜单：dark 皮肤对齐终端配色。渲染在 renderBlock 之外，
+          避免全屏时原位/全屏两份各弹一个菜单（menu 状态由本组件独占）。 */}
+      {cmdMenu.state && cmd && (
+        <ContextMenu
+          position={cmdMenu.state.position}
+          items={textMenuItems(() => cmd)}
+          onClose={cmdMenu.close}
+          dark
+        />
+      )}
     </>
   )
 }

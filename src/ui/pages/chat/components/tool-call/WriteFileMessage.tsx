@@ -55,12 +55,11 @@ class WriteFileMessage implements IToolCallMessage {
         style={{
           padding: '0 10px',
           margin: '0px 20px',
-          width: 'fit-content',
         }}>
         <CodeBlock
-        autoCenter
+          autoCenter
           maxHeight={450}
-          width={600}
+          width={"80%"}
           fileName={name}
           showLineNumbers
           actions={[{

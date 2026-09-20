@@ -173,7 +173,8 @@
     background: var(--terminal-header-bg, #242f3a);
     border-bottom: 1px solid rgba(255, 255, 255, 0.07);
     user-select: none;
-    .xterm-hint{
+
+    .xterm-hint {
       color: var(--text-secondary, #6b7280);
       transform: translateY(2px);
     }
@@ -185,12 +186,15 @@
     border-radius: 50%;
     flex: none;
   }
+
   .xterm-dot--red {
     background: #ff5f57;
   }
+
   .xterm-dot--yellow {
     background: #febc2e;
   }
+
   .xterm-dot--green {
     background: #28c840;
   }
@@ -215,37 +219,50 @@
       opacity: 0.7;
       user-select: none;
     }
+
+    /* `$` 提示符：同样不可选中 —— 拖选复制命令时不该把提示符一起带走。
+       （与 TerminalBlock 的 `<pre>` 版终端行内 userSelect:none 保持一致） */
+    .pty-prompt {
+      margin-right: 2px;
+      user-select: none;
+    }
   }
 
-  .pty-terminal-body-wrapper{
+  .pty-terminal-body-wrapper {
     padding: 8px 10px;
     flex: 1 1 auto;
     height: 240px;
-    
   }
+
   /* ---------- 终端挂载点 ---------- */
   .pty-terminal-body {
     min-height: 0;
     overflow: hidden;
     width: 100%;
     height: 100%;
+
     .xterm {
       height: 100%;
     }
+
     /* 文本默认居中会破坏终端对齐，这里显式兜底 */
     .xterm-rows {
       text-align: left;
     }
+
     /* xterm 自带一层背景色，与容器主题对齐避免出现双色块 */
     .xterm-viewport {
       background-color: transparent !important;
     }
+
     .xterm-viewport::-webkit-scrollbar {
       width: 10px;
     }
+
     .xterm-viewport::-webkit-scrollbar-track {
       background: transparent;
     }
+
     .xterm-viewport::-webkit-scrollbar-thumb {
       background: rgba(255, 255, 255, 0.18);
       border-radius: 6px;
@@ -318,45 +335,8 @@
   }
 }
 
-/* ==================== PTY 终端右键菜单 ====================
-   挂在 body（createPortal，同全屏浮层的理由：消息列表祖先带 transform/overflow，
-   fixed 定位会被牵连）；z-index 高于终端全屏层(500)、低于 Modal(800)。
-   配色沿用终端头部令牌，与终端块一体。 */
-.pty-context-menu {
-  position: fixed;
-  z-index: 600;
-  min-width: 132px;
-  padding: 4px;
-  display: flex;
-  flex-direction: column;
-  background: var(--terminal-header-bg, #242f3a);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 6px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
-
-  .pty-menu-item {
-    padding: 5px 10px;
-    border: none;
-    border-radius: 4px;
-    background: transparent;
-    color: var(--terminal-text, #fff);
-    font-size: var(--font-size-sm);
-    text-align: left;
-    white-space: nowrap;
-    cursor: pointer;
-
-    &:hover:not(:disabled) {
-      background: rgba(255, 255, 255, 0.12);
-    }
-
-    /* 置灰但不透明度衰减（无选区时的「复制」/已结束时的「粘贴」） */
-    &:disabled {
-      color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.4));
-      cursor: default;
-    }
-  }
-}
-
+/* 终端右键菜单的样式已收归共享组件：
+   ui/components/shared/ContextMenu/style.scss（终端传 dark 皮肤）。 */
 /* ==================== 终端内确认块（Step 2 ①） ====================
    与运行态**显著区分**（§7 #16）：独立底色 + 「尚未执行」徐标 + 无终端光标，
    让用户不会误以为「这是 AI 已经跑过的结果」。 */
@@ -493,7 +473,6 @@
   width: fit-content;
   max-width: 90%;
   min-width: min(360px, 90%);
-
 
   .header {
     color: var(--terminal-text, #fff);
@@ -660,7 +639,6 @@
 }
 
 // ==================== execute_script：终端 / 文件 切换 ====================
-
 .script-view {
   display: flex;
   flex-direction: column;
@@ -706,7 +684,7 @@
    左边距对齐、切 tab 时视觉不跑位。 */
 .script-file {
   margin: 4px 20px 20px 28px;
-  width: fit-content;
+  // width: fit-content;
   max-width: 90%;
 
   /* CodeBlock 自带 margin: 10px 0，会把上边距顶成 10px（与终端块的 4px 不齐），这里抵消 */
@@ -748,7 +726,6 @@
 }
 
 // ==================== ToolCallGroup 折叠容器 ====================
-
 .tool-call-group {
   margin: 4px 0px;
   margin-bottom: 10px;
@@ -830,7 +807,6 @@
 }
 
 // ==================== Web Search Results ====================
-
 .web-search-results {
   display: flex;
   flex-direction: column;
@@ -921,7 +897,6 @@
 }
 
 // ==================== Knowledge Base Tool Results ====================
-
 .kb-search-results-list {
   display: flex;
   flex-direction: column;

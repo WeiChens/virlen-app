@@ -26,6 +26,15 @@ import { openPath } from '@tauri-apps/plugin-opener'
 import { getFileBlocks, getQuoteBlocks } from '@/utils/messageContent'
 import QuoteSvg from '@/ui/components/icons/QuoteSvg'
 import QuoteChip from '@/ui/components/shared/QuoteChip'
+import ContextMenu, {
+  useContextMenu,
+  type ContextMenuItem,
+} from '@/ui/components/shared/ContextMenu'
+import {
+  fileMenuItems,
+  imageMenuItems,
+  textMenuItems,
+} from '@/ui/components/shared/ContextMenu/menus'
 
 interface Props {
   message: Message
@@ -47,6 +56,19 @@ interface Props {
   toolResults?: (Message | undefined)[]
 }
 
+/**
+ * 右键菜单指向的对象。
+ *
+ * 同一个气泡里有多类可右键对象（正文 / 图片 / 文件 chip / 深度思考），
+ * 同一时刻只允许开一个菜单，所以用 target 区分「这次点的是什么」，
+ * 菜单项在渲染时按 target 现算（见 useContextMenu 的说明）。
+ */
+type MenuTarget =
+  | { kind: 'text' }
+  | { kind: 'reasoning' }
+  | { kind: 'image'; src: string }
+  | { kind: 'file'; path: string; isDir?: boolean }
+
 function MessageBubble({
   message,
   onEdit,
@@ -56,6 +78,10 @@ function MessageBubble({
   toolResults,
 }: Props) {
   const mkdRef = useRef(null as HTMLDivElement)
+  /** 深度思考文本容器（右键「全选」要选在这上面） */
+  const reasoningRef = useRef<HTMLDivElement | null>(null)
+  /** 右键菜单（正文 / 图片 / 文件 / 深度思考共用一套） */
+  const menu = useContextMenu<MenuTarget>()
 
   const isUser = message.role === 'user'
   const isTool = message.role === 'tool'
@@ -111,6 +137,80 @@ function MessageBubble({
       })
   }
 
+  /**
+   * 「删除」的实际动作（底部操作栏按钮与右键菜单共用：二次确认 → 删本条及后续）。
+   */
+  async function confirmDeleteMessage() {
+    const confirmed = await MessageBox.warn(
+      t('删除消息'),
+      t('确认删除该消息及后续所有消息？'),
+    )
+    if (confirmed) {
+      onDelete?.(message.id)
+    }
+  }
+
+  /** 深度思考正文「全选」：把选区铺满整个思考内容（随后即可「复制」） */
+  function selectAllReasoning() {
+    const el = reasoningRef.current
+    if (!el) return
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+  }
+
+  /**
+   * 按右键对象组装菜单项。
+   *
+   * 正文菜单与气泡底部操作栏**同源**：引用 / 编辑 / 删除的可见条件、
+   * 删除的二次确认都复用同一批逻辑，避免两个入口行为分叉。
+   */
+  function buildMenuItems(target: MenuTarget): ContextMenuItem[] {
+    switch (target.kind) {
+      case 'image':
+        return imageMenuItems(target.src)
+      case 'file':
+        return fileMenuItems(target.path, { isDir: target.isDir })
+      case 'reasoning':
+        // 选区优先，无选区则复制整段思考内容；「全选」便于两步拿到全部
+        return textMenuItems(() => message.reasoningContent || '', {
+          selectAll: selectAllReasoning,
+        })
+      default: {
+        const items = textMenuItems(() => getContent(false))
+        if (onQuote && showContent) {
+          items.push({
+            key: 'quote',
+            label: t('引用'),
+            onClick: () =>
+              onQuote({
+                messageId: message.id,
+                role: isUser ? 'user' : 'assistant',
+                text: getContent(false),
+              }),
+          })
+        }
+        items.push({
+          key: 'edit',
+          label: t('编辑'),
+          onClick: () => {
+            onEdit(getContent(false))
+          },
+        })
+        items.push({
+          key: 'delete',
+          label: t('删除'),
+          divider: true,
+          danger: true,
+          onClick: confirmDeleteMessage,
+        })
+        return items
+      }
+    }
+  }
+
   // assistant 只有 tool_calls 没有文本内容时，显示为紧凑的 tool-call 卡片
   const showAsToolCall =
     isAssistant && message.toolCalls?.length && !getContent()
@@ -152,7 +252,9 @@ function MessageBubble({
       {!hideMessageBubble && (
         <div
           className={`message-bubble ${isUser ? 'user' : isTool ? 'tool' : 'assistant'} ${showAsToolCall ? 'toolcall-only' : ''}`}>
-          <div className="message-body">
+          <div
+            className="message-body"
+            onContextMenu={(e) => menu.openAt(e, { kind: 'text' })}>
             {(isAssistant || isUser) && (
               <>
                 {message.reasoningContent && (
@@ -189,7 +291,10 @@ function MessageBubble({
                       (!showContent &&
                         (!settingsState.value.hideToolCallThink ||
                           !message.toolCalls?.length))) && (
-                        <div className={`reasoning-text`}>
+                        <div className={`reasoning-text`} ref={reasoningRef}
+                          onContextMenu={(e) =>
+                            menu.openAt(e, { kind: 'reasoning' })
+                          }>
                           <div
                             className={`line ${isReasoningTime ? 'reasoning' : ''}`}></div>
                           <MarkdownRenderer
@@ -236,6 +341,9 @@ function MessageBubble({
                           src={url}
                           alt={`image-${i}`}
                           className="message-image"
+                          onContextMenu={(e) =>
+                            menu.openAt(e, { kind: 'image', src: url })
+                          }
                           onClick={() =>
                             showImagePreview({
                               src: url,
@@ -255,6 +363,13 @@ function MessageBubble({
                           name={f.name}
                           isDir={f.isDir}
                           size={f.size}
+                          onContextMenu={(e) =>
+                            menu.openAt(e, {
+                              kind: 'file',
+                              path: f.path,
+                              isDir: f.isDir,
+                            })
+                          }
                           onClick={() => {
                             openPath(f.path).catch(() => { })
                           }}
@@ -332,15 +447,7 @@ function MessageBubble({
                         <button
                           className="action-btn action-delete"
                           title={t('删除')}
-                          onClick={async () => {
-                            const confirmed = await MessageBox.warn(
-                              t('删除消息'),
-                              t('确认删除该消息及后续所有消息？'),
-                            )
-                            if (confirmed) {
-                              onDelete?.(message.id)
-                            }
-                          }}>
+                          onClick={confirmDeleteMessage}>
                           <DeleteSvg />
                         </button>
                       )}
@@ -367,6 +474,14 @@ function MessageBubble({
             ))}
           </div>
         </ToolCallGroup>
+      )}
+      {/* 右键菜单：正文 / 图片 / 文件 / 深度思考共用一套（同一时刻只开一个） */}
+      {menu.state && (
+        <ContextMenu
+          position={menu.state.position}
+          items={buildMenuItems(menu.state.target)}
+          onClose={menu.close}
+        />
       )}
     </>
   )

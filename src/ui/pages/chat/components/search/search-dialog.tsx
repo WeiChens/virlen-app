@@ -1,7 +1,7 @@
 /**
  * search-dialog — 消息检索弹窗（会话内 / 跨会话）
  *
- * 由 Ctrl / Cmd + F 唤起（见 chat-view.tsx 的全局快捷键）。两种检索范围：
+ * 由 Ctrl / Cmd + P 唤起（见 chat-view.tsx 的全局快捷键）。两种检索范围：
  *   - scope='session'：已选中会话 → 只搜当前会话，条目为单行「角色图标 + 命中片段 + 时间」；
  *   - scope='global' ：未选中会话 → 搜所有会话，条目 meta 额外展示「工作目录 + Agent 名称 + 会话标题」。
  *

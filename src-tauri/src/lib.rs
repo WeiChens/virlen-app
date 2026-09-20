@@ -294,6 +294,8 @@ pub fn run() {
             clipboard_files::read_clipboard_file_paths,
             // 剪贴板纯文本（PTY 终端右键粘贴用，Windows: CF_UNICODETEXT）
             clipboard_files::read_clipboard_text,
+            // 写图片进剪贴板（右键「复制图片」用，Windows: CF_DIB）
+            clipboard_files::write_clipboard_image,
             save_file_to_path,
             search_files_by_name,
             search_text_in_files,

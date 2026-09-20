@@ -8,6 +8,10 @@ import ReactDOM from 'react-dom'
 import './style.scss'
 import EventEmitter from '@/utils/EventEmitter'
 import { t } from '@/ui/i18n'
+import ContextMenu, {
+  useContextMenu,
+} from '@/ui/components/shared/ContextMenu'
+import { imageMenuItems } from '@/ui/components/shared/ContextMenu/menus'
 export interface ImagePreviewProps {
   src: string
   previewSrcList?: string[]
@@ -32,14 +36,30 @@ function ImagePreview() {
   const [isDragging, setIsDragging] = useState(false)
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
   const imageRef = useRef<HTMLImageElement>(null)
+  /**
+   * 大图右键菜单（复制图片 / 另存为）。
+   *
+   * ⚠️ 菜单必须渲染在 **overlay 的兄弟位置**（而不是 overlay 内部）：
+   * `image-preview-overlay` 根节点上挂了「点击任意处关闭预览」，而 React 的事件
+   * 是按 **React 树**（而非 DOM 树）冒泡的 —— 菜单虽然经 portal 挂到了 body，
+   * 但只要它在 React 树里是 overlay 的子节点，点菜单项就会连着把预览一起关掉。
+   */
+  const menu = useContextMenu<string>()
 
   // 图片列表（如果没有提供previewSrcList，则使用src）
   const imageList = previewSrcList.length > 0 ? previewSrcList : [src]
 
   // 关闭预览
   const handleClose = () => {
+    menu.close()
     setShowPreview(false)
   }
+
+  // 切图 / 开关预览时关掉右键菜单（否则菜单里图的是上一张）
+  useEffect(() => {
+    menu.close()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentIndex, showPreview])
 
   // 上一张
   const handlePrev = (e?: any) => {
@@ -228,6 +248,15 @@ function ImagePreview() {
           handleNext={handleNext}
           handleClose={handleClose}
           referrerPolicy={referrerPolicy}
+          onImageContextMenu={(ev, src) => menu.openAt(ev, src)}
+        />
+      )}
+      {/* 右键菜单：与 overlay 平级（见 menu 的注释，不能被 overlay 的「点击关闭」吃掉） */}
+      {showPreview && menu.state && (
+        <ContextMenu
+          position={menu.state.position}
+          items={imageMenuItems(menu.state.target)}
+          onClose={menu.close}
         />
       )}
     </>
@@ -252,6 +281,8 @@ interface ImagePreviewOverlayProps {
   handlePrev: () => void
   handleNext: () => void
   referrerPolicy?: HTMLAttributeReferrerPolicy
+  /** 图片上右键（回调里携带当前图的 src） */
+  onImageContextMenu: (ev: React.MouseEvent, src: string) => void
 }
 function ImagePreviewOverlay(props: ImagePreviewOverlayProps) {
   const {
@@ -272,6 +303,7 @@ function ImagePreviewOverlay(props: ImagePreviewOverlayProps) {
     handlePrev,
     handleNext,
     referrerPolicy,
+    onImageContextMenu,
   } = props
   return ReactDOM.createPortal(
     <div className="image-preview-overlay" onClick={handleClose}>
@@ -338,6 +370,9 @@ function ImagePreviewOverlay(props: ImagePreviewOverlayProps) {
             cursor: isDragging ? 'grabbing' : 'grab',
           }}
           onMouseDown={handleMouseDown}
+          onContextMenu={(e) =>
+            onImageContextMenu(e, imageList[currentIndex])
+          }
         />
       </div>
 

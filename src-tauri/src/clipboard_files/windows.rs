@@ -5,23 +5,28 @@
  *   - 打开 / 关闭剪贴板（被占用时重试）
  *   - CF_HDROP：资源管理器里「复制文件」写入的二进制路径列表
  *   - CF_UNICODETEXT：标准「复制文本」写入的 UTF-16 文本（终端右键粘贴用）
+ *   - CF_DIB：写入图片（右键「复制图片」用，DIB 字节由 dib.rs 组装）
  *   - 注册型自定义格式：探测是否存在、读取原始字节（GlobalLock / GlobalSize）
  *
  * 上层只负责决定「读哪些格式、怎么解析」，具体怎么跟系统打交道都在这里。
  */
 
-use windows_sys::Win32::Foundation::HGLOBAL;
+use windows_sys::Win32::Foundation::{GlobalFree, HGLOBAL};
 use windows_sys::Win32::System::DataExchange::{
-    CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
-    RegisterClipboardFormatW,
+    CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
+    RegisterClipboardFormatW, SetClipboardData,
 };
-use windows_sys::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+use windows_sys::Win32::System::Memory::{
+    GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
+};
 use windows_sys::Win32::UI::Shell::{DragQueryFileW, HDROP};
 
 /// CF_HDROP：剪贴板里的文件列表（资源管理器复制 / 剪切文件时写入）
 const CF_HDROP: u32 = 15;
 /// CF_UNICODETEXT：剪贴板里的 UTF-16 文本（应用里「复制文本」的标准格式）
 const CF_UNICODETEXT: u32 = 13;
+/// CF_DIB：设备无关位图（BITMAPINFOHEADER + 像素；「复制图片」写入这个格式）
+const CF_DIB: u32 = 8;
 /// DragQueryFileW 传 -1 表示「只问文件个数，不要名字」
 const QUERY_FILE_COUNT: u32 = u32::MAX;
 /// 剪贴板被占用时的重试次数 × 间隔
@@ -122,6 +127,43 @@ pub fn read_unicode_text() -> String {
     let text = String::from_utf16_lossy(slice);
     unsafe { GlobalUnlock(hglobal) };
     text
+}
+
+/// 把一段 DIB（BITMAPINFOHEADER + 像素，见 dib.rs）写进剪贴板（CF_DIB）。
+///
+/// 调用前必须已 open_with_retry；成功返回 true。
+///
+/// 三类易错点：
+///   1. 必须先 EmptyClipboard —— SetClipboardData 要求剪贴板已归我们所有，
+///      否则直接失败（这是写剪贴板与读剪贴板最大的区别）；
+///   2. GMEM_MOVEABLE —— 剪贴板要求可移动内存块，不能用固定块；
+///   3. **成功后句柄所有权归系统**，不能再 GlobalFree（只有失败分支才释放，
+///      否则就是释放了系统手上的那块内存）。
+pub fn write_dib(dib: &[u8]) -> bool {
+    if dib.is_empty() {
+        return false;
+    }
+    unsafe {
+        if EmptyClipboard() == 0 {
+            return false;
+        }
+        let handle = GlobalAlloc(GMEM_MOVEABLE, dib.len());
+        if handle.is_null() {
+            return false;
+        }
+        let ptr = GlobalLock(handle) as *mut u8;
+        if ptr.is_null() {
+            GlobalFree(handle);
+            return false;
+        }
+        std::ptr::copy_nonoverlapping(dib.as_ptr(), ptr, dib.len());
+        GlobalUnlock(handle);
+        if SetClipboardData(CF_DIB, handle).is_null() {
+            GlobalFree(handle);
+            return false;
+        }
+        true
+    }
 }
 
 /// 从 CF_HDROP 句柄里取出所有路径（调用前必须已 open_with_retry）

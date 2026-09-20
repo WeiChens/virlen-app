@@ -21,6 +21,7 @@ import {
   fomatFloat,
   ifUnExists,
   toShortPath,
+  toAbsolutePath,
   listGroup,
   getUrlFileName,
 } from '@/utils/common'
@@ -177,6 +178,35 @@ describe('toShortPath', () => {
 
   it('无工作目录应返回原路径', () => {
     expect(toShortPath('/some/path')).toBe('/some/path')
+  })
+})
+
+describe('toAbsolutePath', () => {
+  it('相对路径应拼上工作目录', () => {
+    expect(toAbsolutePath('src/file.ts', '/project')).toBe(
+      '/project/src/file.ts',
+    )
+  })
+
+  it('Windows 工作目录 + 反斜杠相对路径归一化为正斜杠', () => {
+    expect(toAbsolutePath('src\\file.ts', 'E:\\ws')).toBe('E:/ws/src/file.ts')
+  })
+
+  it('去掉前导 ./', () => {
+    expect(toAbsolutePath('./a.ts', '/ws')).toBe('/ws/a.ts')
+  })
+
+  it('已是绝对路径应原样返回（POSIX / 盘符 / UNC）', () => {
+    expect(toAbsolutePath('/abs/a.ts', '/project')).toBe('/abs/a.ts')
+    expect(toAbsolutePath('C:/abs/a.ts', 'E:/ws')).toBe('C:/abs/a.ts')
+    expect(toAbsolutePath('\\\\server\\share\\a', 'E:/ws')).toBe(
+      '\\\\server\\share\\a',
+    )
+  })
+
+  it('无工作目录 / 空路径应原样返回', () => {
+    expect(toAbsolutePath('a.ts')).toBe('a.ts')
+    expect(toAbsolutePath('', '/ws')).toBe('')
   })
 })
 

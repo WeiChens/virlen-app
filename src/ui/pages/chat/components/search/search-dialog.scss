@@ -190,8 +190,9 @@
   min-height: 0;
   overflow-y: auto;
   padding: 6px;
-  scrollbar-width: thin;
 
+  // 注意：不要加 scrollbar-width（会切到标准滚动条路径，使 ::-webkit-scrollbar-thumb
+  // 失效、颜色回退到浏览器默认浅色，暗色主题下也会显示白滚动条）。
   &::-webkit-scrollbar {
     width: 6px;
   }

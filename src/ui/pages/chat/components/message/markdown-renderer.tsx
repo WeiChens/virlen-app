@@ -109,7 +109,7 @@ const MarkdownBody = memo(function MarkdownBody({
 }) {
   const components = useMemo(
     () => ({
-      code: (props: any) => <CodeBlock {...props} streaming={streaming} />,
+      code: (props: any) => <CodeBlock inlineCode {...props} streaming={streaming} />,
       a: LinkRenderer as any,
       table: ({ children, ...props }: any) => (
         <div className="table-wrapper">

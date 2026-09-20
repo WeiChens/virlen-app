@@ -1,0 +1,84 @@
+/* ==================== 通用右键菜单 ====================
+   见 ContextMenu/index.tsx：自绘窗口下原生右键菜单被全局禁用，
+   各处（正文 / 图片 / 文件 / 终端 …）共用这一份样式。
+
+   层级 600：高于全屏浮层(500)，低于 Modal(800)。
+   配色只用主题令牌，亮/暗主题自动跟随；终端块等深色底场景用 --dark 皮肤。 */
+
+.context-menu {
+  position: fixed;
+  z-index: 600;
+  min-width: 132px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary, #fff);
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 6px;
+  box-shadow: var(--shadow-md, 0 8px 24px rgba(0, 0, 0, 0.12));
+  /* 菜单本身不该被选中（误拖会连带选中背后的文本） */
+  user-select: none;
+
+  .context-menu-item {
+    display: block;
+    width: 100%;
+    padding: 5px 10px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-primary, #1a1a1a);
+    font-size: var(--font-size-sm);
+    font-family: inherit;
+    text-align: left;
+    white-space: nowrap;
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      background: var(--hover-bg, #f0f0f0);
+    }
+
+    /* 危险动作（删除）：平时也用危险色，让它一眼可辨 */
+    &.is-danger:not(:disabled) {
+      color: var(--color-danger, #e53e3e);
+    }
+
+    /* 置灰但不做透明度衰减（半透明文字在浅底上会跌破对比度） */
+    &:disabled {
+      color: var(--text-tertiary, #767676);
+      cursor: default;
+    }
+  }
+
+  .context-menu-divider {
+    height: 1px;
+    margin: 4px 6px;
+    background: var(--border-color, #e5e5e5);
+  }
+
+  /* ---------- 深色皮肤（终端块等黑底场景） ---------- */
+  &.context-menu--dark {
+    background: var(--terminal-header-bg, #242f3a);
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+
+    .context-menu-item {
+      color: var(--terminal-text, #fff);
+
+      &:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.12);
+      }
+
+      &.is-danger:not(:disabled) {
+        color: #ff8f8f;
+      }
+
+      &:disabled {
+        color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.4));
+      }
+    }
+
+    .context-menu-divider {
+      background: rgba(255, 255, 255, 0.12);
+    }
+  }
+}
