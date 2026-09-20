@@ -504,6 +504,7 @@
   "运行中": "Running",
   "发送 Ctrl+C：仅对正在等待输入的程序有效；中断整个命令请用「终止」": "Send Ctrl+C: only affects programs waiting for input. Use Kill to interrupt the whole command.",
   "可直接在终端中键击或粘贴输入（回车发送）": "Type or paste directly in the terminal (Enter to send)",
+  "粘贴": "Paste",
   "回车": "Enter",
   "发送 Ctrl+D（EOF）": "Send Ctrl+D (EOF)",
   "Tab 补全": "Tab completion",

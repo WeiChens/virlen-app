@@ -24,6 +24,8 @@ import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
  * （`\x1b[87X` 擦除字符、`\x1b]0;…\x07` 改窗口标题、`\x1b[?25l` 光标可见性…）。
  * `<pre>` 表达不了这些语义：进度条会花屏、TUI 会错位。xterm.js 是真正的终端模拟器，
  * 同时天然实现「用户可干预」——键击经 `onData` 直接写入后端伪控制台。
+ * 复制/粘贴：Ctrl+C 在有选区时智能复制（无选区仍发 SIGINT），右键弹自定义菜单
+ * （复制/粘贴/全选）；粘贴读剪贴板走 Tauri 原生命令 `read_clipboard_text`。
  *
  * 与管道（非 PTY）路径的分工：非 PTY 仍走 `TerminalBlock` 的 `<pre>` 渲染，
  * 两条路径互不影响（见 `TerminalView` 的路由）。
@@ -160,6 +162,49 @@ export class PendingCrWriter {
   }
 }
 
+/**
+ * 把文本写进系统剪贴板（右键「复制」/ Ctrl+C 智能复制共用）。
+ *
+ * 正常走 `navigator.clipboard`（WebView2 里可用，与 code-block.tsx 的复制同款路径）；
+ * 异常（无 API / 无用户激活）退回 `execCommand('copy')` 兜底。
+ */
+async function writeClipboardText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard?.writeText(text)
+    return
+  } catch {
+    // 走 execCommand 兜底
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  document.body.appendChild(textarea)
+  textarea.select()
+  document.execCommand('copy')
+  document.body.removeChild(textarea)
+}
+
+/**
+ * 读系统剪贴板文本（右键「粘贴」用）。
+ *
+ * 优先 Tauri 原生命令：WebView2 的 `navigator.clipboard.readText()` 受「剪贴板读」
+ * 权限约束（默认 NotAllowedError），而 Rust 侧已有现成的 Windows 剪贴板原语
+ * （CF_UNICODETEXT，与读 CF_HDROP 同一套路），不依赖 WebView 权限。
+ * 命令不可用（浏览器 dev）/ 返回空（非 Windows 暂未实现）→ 退浏览器剪贴板 API。
+ */
+async function readClipboardText(): Promise<string> {
+  try {
+    const text = await invoke<string>('read_clipboard_text')
+    if (text) return text
+  } catch {
+    // 非 Tauri 环境 / 命令失败 → 走浏览器剪贴板兜底
+  }
+  try {
+    return (await navigator.clipboard?.readText()) ?? ''
+  } catch {
+    return ''
+  }
+}
+
 export function XtermTerminal({
   stream,
   running,
@@ -226,6 +271,10 @@ export function XtermTerminal({
    * 退出全屏后原位实例尺寸未变，`lastSizeRef` 的去重会让它跳过上报。
    */
   const syncSizeRef = useRef<(() => void) | null>(null)
+
+  /** 右键菜单（null = 关闭）；坐标为视口坐标，菜单经 createPortal 挂到 body。 */
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
 
   /**
    * 把一段增量交给 xterm —— 经 `PendingCrWriter` 合并「先导 `\r`」，
@@ -331,6 +380,60 @@ export function XtermTerminal({
       invoke('pty_write', { toolCallId, data }).catch(() => { })
     })
 
+    // Ctrl+C / Cmd+C 智能复制：有选区 → 复制并拦下（\x03 不再发给伪控制台）；
+    // 无选区 → 放行，维持「Ctrl+C 发送 SIGINT 中断程序」的原语义。
+    // 这是 Windows Terminal / VS Code 终端的通用约定：复制与中断共用 Ctrl+C，
+    // 按「有无选区」区分，否则终端里永远无法用键盘复制（xterm 默认把 Ctrl+C
+    // 直接转成 \x03 发给 PTY，浏览器的 copy 事件被 preventDefault 吞掉）。
+    // ⚠️ 该 handler 对 keydown / keypress / keyup 都会被调用，只拦 keydown。
+    // 用 ev.code（物理键位）兼容非拉丁键盘布局（俄语等布局下 e.key 不是 'c'）。
+    term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type !== 'keydown') return true
+      const isCopyCombo =
+        (ev.key?.toLowerCase() === 'c' || ev.code === 'KeyC') &&
+        (ev.ctrlKey || ev.metaKey) &&
+        !ev.shiftKey &&
+        !ev.altKey
+      if (!isCopyCombo || !term.hasSelection()) return true
+      ev.preventDefault()
+      const text = term.getSelection()
+      term.clearSelection()
+      void writeClipboardText(text)
+      // false = xterm 不再处理该键，\x03 不会经 onData → pty_write 发出去
+      return false
+    })
+
+    /**
+     * 滚轮：终端滚到顶/底后**截断滚动链**，别把外层消息列表一起滚走。
+     *
+     * 现象：终端里长输出（npm install…）往上翻到头、或往下翻到底之后再多滚一下，
+     * 外面整页消息列表就跟着滚 —— 想细看输出时非常容易「跑偏」。
+     *
+     * 根因（xterm 6 的实现细节）：终端回滚**已不是** `.xterm-viewport` 的原生滚动，
+     * 而是 VS Code `SmoothScrollableElement` 的 JS 实现。它的 wheel 处理器只在
+     * **真的滚动成功**时才 `preventDefault() + stopPropagation()`
+     * （见其 `AbstractScrollableElement._onMouseWheel`：`consumeMouseWheel = didScroll`）；
+     * 「已经到边界、滚不动」的那一下既不取消默认动作、也不阻止冒泡 → 浏览器把这颗滚轮
+     * 顺着滚动链交给了外层 `.chat-messages-container`。
+     *
+     * 对策：在**外层、冒泡阶段**补一颗监听 —— 能收到事件本身就说明「xterm 没有消费这次
+     * 滚轮」（消费时它会 stopPropagation），即终端已到边界；此时只 `preventDefault()`
+     * 取消「浏览器滚动链传导」，不碰 xterm 自己的 JS 滚动。
+     *
+     * ⚠️ 两条红线：
+     *   1. **绝不能用捕获阶段**：xterm 的处理器一看到 `defaultPrevented === true` 就整体
+     *      退出（`_onMouseWheel` 首行），抢先拦会把终端滚轮彻底打死；
+     *   2. 输出一屏就装得下时（`baseY === 0`，没有回滚缓冲）**不拦** —— 终端本来就没东西
+     *      可滚，再拦就成了「滚轮死区」，交给消息列表更符合直觉。
+     */
+    const onWheel = (ev: WheelEvent) => {
+      if (ev.defaultPrevented) return
+      // baseY = 「完全滚到底时视口顶行在缓冲里的行号」：> 0 说明有回滚缓冲
+      if (term.buffer.active.baseY <= 0) return
+      ev.preventDefault()
+    }
+    host.addEventListener('wheel', onWheel, { passive: false })
+
     const observer =
       typeof ResizeObserver === 'function' ? new ResizeObserver(syncSize) : null
     observer?.observe(host)
@@ -347,6 +450,7 @@ export function XtermTerminal({
       if (resizeRetryRef.current) clearTimeout(resizeRetryRef.current)
       observer?.disconnect()
       inputSub.dispose()
+      host.removeEventListener('wheel', onWheel)
       term.dispose()
       termRef.current = null
       writtenRef.current = ''
@@ -410,16 +514,133 @@ export function XtermTerminal({
     writtenRef.current = stream
   }, [stream, writeDelta])
 
-  // ⚠️ 这里曾经挂过 `wheel + preventDefault`，想「拦住在终端上滚轮别带动外层列表」，但那是错的：
-  // 浏览器对 wheel 的默认动作是**整条滚动链一起**取消，而 xterm 的普通回滚缓冲（scrollback）
-  // 没有 JS 滚动实现 —— 完全依赖 `.xterm-viewport` 的**原生滚动**（xterm 只在备用缓冲 /
-  // 鼠标上报模式下才自己接管 wheel）。所以无条件 preventDefault 会让鼠标滚轮在整个终端上失效。
-  // 而嵌套滚动容器本来就自带滚动链：终端滚到顶/底之后才带动外层列表 —— 那正是期望行为。
-  // 因此这里不再拦截 wheel；若确需「终端区域内的滚轮彻底不带动列表」，只能 preventDefault
-  // 之后再手动写 `.xterm-viewport.scrollTop`（等于重写原生滚动，不划算）。
+  /**
+   * 右键菜单的关闭行为：点菜单外任意处 / Esc。
+   *
+   * ⚠️ 两个监听都挂**捕获阶段**：
+   *   - mousedown 捕获：抢在菜单项 click 之前判定「是否点在外面」，不会误伤菜单项自身；
+   *   - Esc 捕获：抢在外层（全屏退出等）的冒泡监听器之前消费按键 ——
+   *     否则「关菜单」会连带「退出全屏」（两处监听都在 document 上）。
+   */
+  useEffect(() => {
+    if (!menu) return
+    const onDocMouseDown = (e: MouseEvent) => {
+      if (menuRef.current?.contains(e.target as Node)) return
+      setMenu(null)
+    }
+    const onDocKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        setMenu(null)
+      }
+    }
+    document.addEventListener('mousedown', onDocMouseDown, true)
+    document.addEventListener('keydown', onDocKeyDown, true)
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown, true)
+      document.removeEventListener('keydown', onDocKeyDown, true)
+    }
+  }, [menu])
+
+  /** 菜单定位：先按右键坐标放，再按实际尺寸钳进视口（贴边时往回缩）。 */
+  useLayoutEffect(() => {
+    const el = menuRef.current
+    if (!menu || !el) return
+    const x = Math.max(
+      8,
+      Math.min(menu.x, window.innerWidth - el.offsetWidth - 8),
+    )
+    const y = Math.max(
+      8,
+      Math.min(menu.y, window.innerHeight - el.offsetHeight - 8),
+    )
+    el.style.left = `${x}px`
+    el.style.top = `${y}px`
+  }, [menu])
+
+  /** 菜单动作：复制当前选区（复制完清选区，对齐 Windows Terminal 的习惯）。 */
+  async function copySelection() {
+    const term = termRef.current
+    if (!term) return
+    const text = term.getSelection()
+    setMenu(null)
+    if (!text) return
+    await writeClipboardText(text)
+    term.clearSelection()
+    term.focus()
+  }
+
+  /**
+   * 菜单动作：读剪贴板 → 送进伪控制台。
+   *
+   * 走 `term.paste` 而不是直接 `pty_write`：xterm 会做 CRLF→CR 规整，且在
+   * bracketed paste 模式（PowerShell/PSReadLine 默认开启）下把整段文本包成
+   * `\x1b[200~…\x1b[201~` —— 多行粘贴不会被当成「逐行回车」执行。
+   * 随后经 onData → pty_write（running=false 时会被那里拦下，这里也先禁用按钮）。
+   */
+  async function pasteFromClipboard() {
+    const term = termRef.current
+    if (!term || !runningRef.current) return
+    setMenu(null)
+    const text = await readClipboardText()
+    if (!text) return
+    term.paste(text)
+    term.focus()
+  }
+
+  /** 菜单动作：全选（选完菜单保持打开，「复制」随即可用：右键 → 全选 → 复制）。 */
+  function selectAllForCopy() {
+    const term = termRef.current
+    if (!term) return
+    term.selectAll()
+    // 触发一次重渲染，让「复制」按钮按新的选区状态解除禁用
+    setMenu((m) => (m ? { ...m } : m))
+    term.focus()
+  }
+
+  // 滚轮的拦截落在终端创建 effect 里（`onWheel`）：xterm 6 的回滚是 VS Code
+  // `SmoothScrollableElement` 的 JS 实现，既不能在捕获阶段抢跑（它看到 defaultPrevented
+  // 就整体退出 → 滚轮彻底失效），也不必手动改 `scrollTop`。
   return (
-    <div className="pty-terminal-body-wrapper">
+    <div
+      className="pty-terminal-body-wrapper"
+      onContextMenu={(e) => {
+        // 右键 → 自定义菜单（复制/粘贴/全选）。xterm 自身挂在 .xterm 元素上的
+        // contextmenu 监听（把隐藏 textarea 挪到鼠标下、暂存选区文本）先于本回调
+        // 执行且不清选区、不 preventDefault；这里接管默认菜单。
+        e.preventDefault()
+        e.stopPropagation()
+        setMenu({ x: e.clientX, y: e.clientY })
+      }}>
       <div className="pty-terminal-body" ref={hostRef} />
+      {/* 经 createPortal 挂 body：消息列表祖先带 transform/overflow（同全屏浮层的理由），
+          fixed 定位会被牵连；层级高于终端全屏层(500)、低于 Modal(800)。 */}
+      {menu &&
+        createPortal(
+          <div className="pty-context-menu" ref={menuRef} role="menu">
+            <button
+              className="pty-menu-item"
+              role="menuitem"
+              disabled={!termRef.current?.hasSelection()}
+              onClick={() => void copySelection()}>
+              {t('复制')}
+            </button>
+            <button
+              className="pty-menu-item"
+              role="menuitem"
+              disabled={!runningRef.current}
+              onClick={() => void pasteFromClipboard()}>
+              {t('粘贴')}
+            </button>
+            <button
+              className="pty-menu-item"
+              role="menuitem"
+              onClick={selectAllForCopy}>
+              {t('全选')}
+            </button>
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }

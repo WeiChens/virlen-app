@@ -23,8 +23,12 @@
  *   - macOS / Linux：暂未实现，返回空数组；前端会退回「从剪贴板文本里解析路径」的兜底
  *     （macOS 的 Finder 复制一般带 text/uri-list）
  *
- * 语义约定：读不到 / 平台不支持 / 剪贴板被占用，一律返回空数组（不报错），
+ * 语义约定：读不到 / 平台不支持 / 剪贴板被占用，一律返回空（不报错），
  *           由前端决定是提示还是静默——粘贴这件事不该因为读剪贴板失败而中断。
+ *
+ * 除文件路径外，还提供「读纯文本」：终端右键「粘贴」用（见 read_clipboard_text）。
+ * 为什么不走 `navigator.clipboard.readText()`：WebView2 的剪贴板读权限默认
+ * 不放行（NotAllowedError），而这里已有现成的 Windows 剪贴板原语。
  */
 
 // 解析逻辑与平台无关，drag_drop 也复用它；非 Windows 构建下暂无使用者
@@ -60,6 +64,15 @@ fn text_formats() -> &'static [TextFormat] {
 pub async fn read_clipboard_file_paths() -> Vec<String> {
     // 剪贴板是被系统全局持有的资源，读它可能短暂失败（重试在平台实现里）
     tokio::task::spawn_blocking(platform::read_file_paths)
+        .await
+        .unwrap_or_default()
+}
+
+/// 读剪贴板里的纯文本（终端右键「粘贴」用；读不到返回空串，前端退浏览器剪贴板 API）
+#[tauri::command]
+pub async fn read_clipboard_text() -> String {
+    // 同 read_clipboard_file_paths：剪贴板是全局资源，读它可能短暂被占用
+    tokio::task::spawn_blocking(platform::read_text)
         .await
         .unwrap_or_default()
 }
@@ -112,6 +125,18 @@ mod platform {
         windows::close();
         paths
     }
+
+    pub fn read_text() -> String {
+        if !windows::is_unicode_text_available() {
+            return String::new();
+        }
+        if !windows::open_with_retry() {
+            return String::new();
+        }
+        let text = windows::read_unicode_text();
+        windows::close();
+        text
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -119,5 +144,10 @@ mod platform {
     /// 非 Windows 平台暂未实现（见文件头说明），返回空数组让前端走文本兜底
     pub fn read_file_paths() -> Vec<String> {
         Vec::new()
+    }
+
+    /// 同上：返回空串，前端退回 navigator.clipboard 兜底
+    pub fn read_text() -> String {
+        String::new()
     }
 }

@@ -4,7 +4,9 @@
  * VS Code 在资源管理器面板里「复制文件」时，会把文件列表写进一个自定义剪贴板格式
  * `code/file-list`，负载是一段 UTF-8 文本：
  *
- *     resources.map(r => r.toString()).join('\n')
+ * ```text
+ * resources.map(r => r.toString()).join('\n')
+ * ```
  *
  * 即「换行分隔的 URI 列表」。出处（VS Code 源码）：
  *   src/vs/workbench/services/clipboard/electron-browser/clipboardService.ts

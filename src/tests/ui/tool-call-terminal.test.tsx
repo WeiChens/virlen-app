@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { invoke } from '@tauri-apps/api/core'
+import * as xtermModule from '@xterm/xterm'
 import { toolOutputStore } from '@/infrastructure/tools/output-store'
 import {
   buildFinishedSegments,
@@ -35,21 +37,43 @@ vi.mock('@/ui/pages/chat/components/message/code-block', () => ({
  * xterm 在 jsdom 里没有量度/画布，`term.open()` 没有意义；
  * 需要「真实挂载」（跑 effect）的用例用最小替身。
  * 静态渲染用例（renderToStaticMarkup）本就不会跑 effect，不受影响。
+ *
+ * 替身实例会登记进 __instances：右键菜单 / Ctrl+C 智能复制的用例靠它
+ * 驱动选区（hasSelection/getSelection）与断言 paste / selectAll 等调用。
  */
-vi.mock('@xterm/xterm', () => ({
-  Terminal: class {
-    cols = 80
-    rows = 24
-    loadAddon() {}
-    open() {}
-    write() {}
-    reset() {}
-    dispose() {}
-    onData() {
-      return { dispose() {} }
-    }
-  },
-}))
+vi.mock('@xterm/xterm', () => {
+  const instances: any[] = []
+  return {
+    Terminal: class {
+      cols = 80
+      rows = 24
+      /**
+       * 缓冲状态替身：滚轮链断用例靠 `baseY` 区分「有回滚缓冲」（终端自己吃掉滚轮）
+       * 与「一屏装得下」（放行给消息列表）。
+       */
+      buffer = { active: { baseY: 0, viewportY: 0 } }
+      hasSelection = vi.fn(() => false)
+      getSelection = vi.fn(() => '')
+      clearSelection = vi.fn()
+      selectAll = vi.fn()
+      paste = vi.fn()
+      focus = vi.fn()
+      attachCustomKeyEventHandler = vi.fn()
+      constructor() {
+        instances.push(this)
+      }
+      loadAddon() {}
+      open() {}
+      write() {}
+      reset() {}
+      dispose() {}
+      onData() {
+        return { dispose() {} }
+      }
+    },
+    __instances: instances,
+  }
+})
 vi.mock('@xterm/addon-fit', () => ({
   FitAddon: class {
     fit() {}
@@ -638,6 +662,294 @@ describe('XtermTerminalBlock（PTY）结构与操作区', () => {
   it('完成态加 is-finished 类（用于隐藏终端光标）；运行态不加', () => {
     expect(render(true)).not.toContain('is-finished')
     expect(render(false)).toContain('is-finished')
+  })
+})
+
+/** 拿到最新挂载的 Terminal 替身（右键菜单用例驱动选区 / 断言 paste 调用） */
+function lastXtermInstance(): any {
+  const list = (xtermModule as any).__instances as any[]
+  return list[list.length - 1]
+}
+
+/**
+ * PTY 终端的右键菜单（复制/粘贴/全选）与 Ctrl+C 智能复制。
+ *
+ * 背景：键盘输入会经 xterm onData 直送伪控制台 —— Ctrl+C 被转成 \x03 中断命令，
+ * 浏览器原生复制又被 xterm 的 preventDefault 吞掉，终端里根本没法复制。
+ * 补丁语义：有选区时 Ctrl+C 复制（不再发 \x03）；右键弹自定义菜单。
+ */
+describe('XtermTerminal 右键菜单与 Ctrl+C 智能复制', () => {
+  let clipboardWriteText: ReturnType<typeof vi.fn>
+  let clipboardReadText: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    document.body.innerHTML = ''
+    // jsdom 没有 navigator.clipboard，注入可断言的替身
+    clipboardWriteText = vi.fn().mockResolvedValue(undefined)
+    clipboardReadText = vi.fn().mockResolvedValue('')
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: clipboardWriteText, readText: clipboardReadText },
+      configurable: true,
+    })
+    vi.mocked(invoke).mockReset()
+  })
+
+  afterEach(() => {
+    // 还原：jsdom 本无 navigator.clipboard
+    Object.defineProperty(navigator, 'clipboard', {
+      value: undefined,
+      configurable: true,
+    })
+  })
+
+  async function mountPty(running: boolean) {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(
+        <XtermTerminalBlock
+          title="Terminal"
+          cmd="echo hi"
+          stream=""
+          running={running}
+          toolCallId="t-ctx-menu"
+        />,
+      )
+    })
+    return { host, root }
+  }
+
+  /** 在终端主体上模拟右键，返回弹出的菜单（挂 body 的 portal） */
+  async function openMenu(host: HTMLElement) {
+    const wrapper = host.querySelector(
+      '.pty-terminal-body-wrapper',
+    ) as HTMLElement
+    await act(async () => {
+      wrapper.dispatchEvent(
+        new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: 100,
+          clientY: 100,
+        }),
+      )
+    })
+    return document.querySelector('.pty-context-menu') as HTMLElement | null
+  }
+
+  const menuButtons = (menu: HTMLElement) =>
+    Array.from(menu.querySelectorAll('button')) as HTMLButtonElement[]
+
+  it('右键弹出菜单（挂 body），含复制/粘贴/全选三项', async () => {
+    const { host, root } = await mountPty(true)
+    const menu = await openMenu(host)
+    expect(menu).toBeTruthy()
+    // 必须挂在 body 下（消息列表祖先带 transform/overflow，fixed 需脱离它们）
+    expect(menu!.parentElement).toBe(document.body)
+    expect(menuButtons(menu!).map((b) => b.textContent)).toEqual([
+      '复制',
+      '粘贴',
+      '全选',
+    ])
+    await act(async () => root.unmount())
+  })
+
+  it('无选区时「复制」禁用；命令结束后「粘贴」禁用', async () => {
+    const { host, root } = await mountPty(true)
+    const menu = await openMenu(host)
+    const [copyBtn, pasteBtn] = menuButtons(menu!)
+    expect(copyBtn.disabled).toBe(true) // 无选区可复制
+    expect(pasteBtn.disabled).toBe(false) // 运行中：伪控制台还在
+    await act(async () => root.unmount())
+
+    const finished = await mountPty(false)
+    const menu2 = await openMenu(finished.host)
+    const [, pasteBtn2] = menuButtons(menu2!)
+    expect(pasteBtn2.disabled).toBe(true) // 已结束：会话不在，粘贴无处可去
+    await act(async () => finished.root.unmount())
+  })
+
+  it('「复制」：写入选区文本并清选区，菜单关闭', async () => {
+    const { host, root } = await mountPty(true)
+    const term = lastXtermInstance()
+    term.hasSelection.mockReturnValue(true)
+    term.getSelection.mockReturnValue('copied-text')
+    const menu = await openMenu(host)
+    await act(async () => {
+      menuButtons(menu!)[0].click()
+    })
+    expect(clipboardWriteText).toHaveBeenCalledWith('copied-text')
+    expect(term.clearSelection).toHaveBeenCalled()
+    expect(document.querySelector('.pty-context-menu')).toBeNull()
+    await act(async () => root.unmount())
+  })
+
+  it('「粘贴」：优先走原生命令读剪贴板，再经 term.paste 送入（保留 bracketed paste 通道）', async () => {
+    const { host, root } = await mountPty(true)
+    vi.mocked(invoke).mockResolvedValue('pasted-text')
+    const menu = await openMenu(host)
+    await act(async () => {
+      menuButtons(menu!)[1].click()
+    })
+    expect(invoke).toHaveBeenCalledWith('read_clipboard_text')
+    expect(lastXtermInstance().paste).toHaveBeenCalledWith('pasted-text')
+    expect(document.querySelector('.pty-context-menu')).toBeNull()
+    await act(async () => root.unmount())
+  })
+
+  it('「粘贴」：原生命令读不到时退回浏览器剪贴板 API', async () => {
+    const { host, root } = await mountPty(true)
+    clipboardReadText.mockResolvedValue('from-browser')
+    const menu = await openMenu(host)
+    await act(async () => {
+      menuButtons(menu!)[1].click()
+    })
+    expect(clipboardReadText).toHaveBeenCalled()
+    expect(lastXtermInstance().paste).toHaveBeenCalledWith('from-browser')
+    await act(async () => root.unmount())
+  })
+
+  it('「全选」：调用 selectAll 且菜单保持打开（随后「复制」随即可用）', async () => {
+    const { host, root } = await mountPty(true)
+    const menu = await openMenu(host)
+    await act(async () => {
+      menuButtons(menu!)[2].click()
+    })
+    expect(lastXtermInstance().selectAll).toHaveBeenCalled()
+    expect(document.querySelector('.pty-context-menu')).toBeTruthy()
+    await act(async () => root.unmount())
+  })
+
+  it('点菜单外 / Esc 关闭菜单', async () => {
+    const { host, root } = await mountPty(true)
+    await openMenu(host)
+    await act(async () => {
+      document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    })
+    expect(document.querySelector('.pty-context-menu')).toBeNull()
+
+    await openMenu(host)
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    })
+    expect(document.querySelector('.pty-context-menu')).toBeNull()
+    await act(async () => root.unmount())
+  })
+
+  it('Ctrl+C：有选区 → 拦截并复制（\x03 不再发给 PTY）；无选区 → 放行（维持中断语义）', async () => {
+    const { host, root } = await mountPty(true)
+    const term = lastXtermInstance()
+    // 组件创建终端时注册的按键拦截器
+    expect(term.attachCustomKeyEventHandler).toHaveBeenCalled()
+    const handler = term.attachCustomKeyEventHandler.mock.calls[0][0] as (
+      ev: KeyboardEvent
+    ) => boolean
+
+    // 有选区：拦下 + preventDefault + 复制 + 清选区
+    term.hasSelection.mockReturnValue(true)
+    term.getSelection.mockReturnValue('selected')
+    const ev = new KeyboardEvent('keydown', {
+      key: 'c',
+      code: 'KeyC',
+      ctrlKey: true,
+      cancelable: true,
+    })
+    expect(handler(ev)).toBe(false)
+    expect(ev.defaultPrevented).toBe(true)
+    expect(clipboardWriteText).toHaveBeenCalledWith('selected')
+    expect(term.clearSelection).toHaveBeenCalled()
+
+    // 无选区：放行（xterm 会把 \x03 经 onData → pty_write 发出去中断命令）
+    term.hasSelection.mockReturnValue(false)
+    expect(
+      handler(
+        new KeyboardEvent('keydown', { key: 'c', code: 'KeyC', ctrlKey: true }),
+      ),
+    ).toBe(true)
+
+    // 非 keydown（keyup/keypress）不拦截；其他组合键也不拦
+    expect(handler(new KeyboardEvent('keyup', { key: 'c', ctrlKey: true }))).toBe(
+      true,
+    )
+    expect(
+      handler(
+        new KeyboardEvent('keydown', { key: 'a', code: 'KeyA', ctrlKey: true }),
+      ),
+    ).toBe(true)
+    await act(async () => root.unmount())
+  })
+})
+
+/**
+ * 终端内的滚轮：滚到顶/底之后不能再把消息列表一起滚走。
+ *
+ * 根因（xterm 6）：终端回滚是 VS Code `SmoothScrollableElement` 的 JS 实现，它的 wheel
+ * 处理器只在**真的滚动成功**时才 `preventDefault + stopPropagation`
+ * （`consumeMouseWheel = didScroll`）——到边界那一下什么都不做，事件继续冒泡，
+ * 浏览器顺手把外层 `.chat-messages-container` 也滚了。
+ *
+ * 组件在外层补了一颗**冒泡阶段**监听：能收到事件本身 = xterm 没消费 = 终端已到边界 →
+ * `preventDefault()`（只取消滚动链传导，不影响 xterm 的 JS 滚动）。
+ * 替身用 `buffer.active.baseY` 表达「有回滚缓冲 / 一屏装得下」两种状态。
+ */
+describe('终端滚轮：截断滚动链（不连带滚消息列表）', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  /** jsdom 各版本对 WheelEvent 支持不一；本用例只关心 preventDefault 与冒泡 */
+  const wheelEvent = () => {
+    const Ctor = (globalThis as any).WheelEvent as typeof WheelEvent | undefined
+    return Ctor
+      ? new Ctor('wheel', { bubbles: true, cancelable: true, deltaY: 100 })
+      : new MouseEvent('wheel', { bubbles: true, cancelable: true })
+  }
+
+  async function mountPty() {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(
+        <XtermTerminalBlock
+          title="Terminal"
+          cmd="npm install"
+          stream=""
+          running={false}
+          toolCallId="t-scroll-chain"
+        />,
+      )
+    })
+    return { host, root }
+  }
+
+  it('有回滚缓冲（baseY > 0）：到边界的那一下滚轮被拦下（不再带动消息列表）', async () => {
+    const { host, root } = await mountPty()
+    lastXtermInstance().buffer.active.baseY = 200
+
+    const body = host.querySelector('.pty-terminal-body') as HTMLElement
+    const ev = wheelEvent()
+    body.dispatchEvent(ev)
+    expect(ev.defaultPrevented).toBe(true)
+
+    // 监听器随终端一起销毁（卸载后同一个节点上不再拦截）
+    await act(async () => root.unmount())
+    const ev2 = wheelEvent()
+    body.dispatchEvent(ev2)
+    expect(ev2.defaultPrevented).toBe(false)
+  })
+
+  it('无回滚缓冲（baseY === 0，输出一屏装得下）：不拦，交给消息列表（避免滚轮死区）', async () => {
+    const { host, root } = await mountPty()
+    lastXtermInstance().buffer.active.baseY = 0
+
+    const body = host.querySelector('.pty-terminal-body') as HTMLElement
+    const ev = wheelEvent()
+    body.dispatchEvent(ev)
+    expect(ev.defaultPrevented).toBe(false)
+
+    await act(async () => root.unmount())
   })
 })
 

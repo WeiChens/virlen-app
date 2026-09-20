@@ -318,6 +318,45 @@
   }
 }
 
+/* ==================== PTY 终端右键菜单 ====================
+   挂在 body（createPortal，同全屏浮层的理由：消息列表祖先带 transform/overflow，
+   fixed 定位会被牵连）；z-index 高于终端全屏层(500)、低于 Modal(800)。
+   配色沿用终端头部令牌，与终端块一体。 */
+.pty-context-menu {
+  position: fixed;
+  z-index: 600;
+  min-width: 132px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  background: var(--terminal-header-bg, #242f3a);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+
+  .pty-menu-item {
+    padding: 5px 10px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--terminal-text, #fff);
+    font-size: var(--font-size-sm);
+    text-align: left;
+    white-space: nowrap;
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.12);
+    }
+
+    /* 置灰但不透明度衰减（无选区时的「复制」/已结束时的「粘贴」） */
+    &:disabled {
+      color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.4));
+      cursor: default;
+    }
+  }
+}
+
 /* ==================== 终端内确认块（Step 2 ①） ====================
    与运行态**显著区分**（§7 #16）：独立底色 + 「尚未执行」徐标 + 无终端光标，
    让用户不会误以为「这是 AI 已经跑过的结果」。 */

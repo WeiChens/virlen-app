@@ -292,6 +292,8 @@ pub fn run() {
             os_platform,
             // 剪贴板里的文件路径（粘贴文件用，Windows: CF_HDROP）
             clipboard_files::read_clipboard_file_paths,
+            // 剪贴板纯文本（PTY 终端右键粘贴用，Windows: CF_UNICODETEXT）
+            clipboard_files::read_clipboard_text,
             save_file_to_path,
             search_files_by_name,
             search_text_in_files,

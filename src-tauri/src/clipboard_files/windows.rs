@@ -4,6 +4,7 @@
  * 只做「系统调用」，不掺杂业务解析，供上层（clipboard_files.rs）组合：
  *   - 打开 / 关闭剪贴板（被占用时重试）
  *   - CF_HDROP：资源管理器里「复制文件」写入的二进制路径列表
+ *   - CF_UNICODETEXT：标准「复制文本」写入的 UTF-16 文本（终端右键粘贴用）
  *   - 注册型自定义格式：探测是否存在、读取原始字节（GlobalLock / GlobalSize）
  *
  * 上层只负责决定「读哪些格式、怎么解析」，具体怎么跟系统打交道都在这里。
@@ -19,6 +20,8 @@ use windows_sys::Win32::UI::Shell::{DragQueryFileW, HDROP};
 
 /// CF_HDROP：剪贴板里的文件列表（资源管理器复制 / 剪切文件时写入）
 const CF_HDROP: u32 = 15;
+/// CF_UNICODETEXT：剪贴板里的 UTF-16 文本（应用里「复制文本」的标准格式）
+const CF_UNICODETEXT: u32 = 13;
 /// DragQueryFileW 传 -1 表示「只问文件个数，不要名字」
 const QUERY_FILE_COUNT: u32 = u32::MAX;
 /// 剪贴板被占用时的重试次数 × 间隔
@@ -41,6 +44,11 @@ pub fn is_format_available(id: u32) -> bool {
 /// 剪贴板里是否有 CF_HDROP（资源管理器里复制的文件）
 pub fn is_hdrop_available() -> bool {
     (unsafe { IsClipboardFormatAvailable(CF_HDROP) }) != 0
+}
+
+/// 剪贴板里是否有 CF_UNICODETEXT（普通「复制文本」）
+pub fn is_unicode_text_available() -> bool {
+    (unsafe { IsClipboardFormatAvailable(CF_UNICODETEXT) }) != 0
 }
 
 /// 打开剪贴板；被占用（粘贴这一刻 WebView / 输入法可能正占着它）时重试几次
@@ -83,6 +91,37 @@ pub fn read_format_bytes(id: u32) -> Option<Vec<u8>> {
     let bytes = slice[..end].to_vec();
     unsafe { GlobalUnlock(hglobal) };
     Some(bytes)
+}
+
+/// 读取剪贴板文本（CF_UNICODETEXT；调用前必须已 open_with_retry）。
+///
+/// ⚠️ 不能复用 `read_format_bytes`：它按「第一个 0 字节」截断，而 UTF-16 里
+/// ASCII 字符的第二个字节就是 0（'A' = 0x0041），会把文本砍成一个字符。
+/// 这里按 u16 逐个读到 NUL 或块尾，再 `from_utf16_lossy`（剪贴板里偶见坏
+/// 代理对，丢字符比整个粘贴失败好）。
+pub fn read_unicode_text() -> String {
+    let handle = unsafe { GetClipboardData(CF_UNICODETEXT) };
+    if handle.is_null() {
+        return String::new();
+    }
+    let hglobal: HGLOBAL = handle;
+    let ptr = unsafe { GlobalLock(hglobal) } as *const u16;
+    if ptr.is_null() {
+        return String::new();
+    }
+    // GlobalSize 给的是字节（含对齐填充），除以 2 才是字符容量；再套防异常来源的上限
+    let max_chars = (unsafe { GlobalSize(hglobal) } / 2).min(MAX_CUSTOM_FORMAT_BYTES / 2);
+    let mut end = 0usize;
+    while end < max_chars {
+        if unsafe { *ptr.add(end) } == 0 {
+            break;
+        }
+        end += 1;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(ptr, end) };
+    let text = String::from_utf16_lossy(slice);
+    unsafe { GlobalUnlock(hglobal) };
+    text
 }
 
 /// 从 CF_HDROP 句柄里取出所有路径（调用前必须已 open_with_retry）
