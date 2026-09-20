@@ -420,21 +420,6 @@ function MessageBubble({
                         title={t('复制')}>
                         <CopySvg />
                       </button>
-                      {/* 引用：仅“有正文”的消息可引用（深思考 / 纯工具调用不算） */}
-                      {onQuote && showContent && (
-                        <button
-                          className="action-btn action-quote"
-                          onClick={() =>
-                            onQuote({
-                              messageId: message.id,
-                              role: isUser ? 'user' : 'assistant',
-                              text: getContent(false),
-                            })
-                          }
-                          title={t('引用')}>
-                          <QuoteSvg />
-                        </button>
-                      )}
                       <button
                         className="action-btn"
                         title={t('编辑')}
