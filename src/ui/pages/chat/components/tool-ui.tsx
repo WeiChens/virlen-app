@@ -7,8 +7,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import UserChoiceModal from './modals/user-choice'
 import type { UserChoiceResult } from './modals/user-choice'
-import CommandConfirmModal from './modals/command-confirm'
+import AuthorizationModal from './modals/authorization'
 import toolInteractEvent from '@/events/toolInteractEvent'
+import type { AuthorizationRequest } from '@/events/toolInteractEvent'
 import { requestAttentionIfUnfocused } from '@/utils/windowAttention'
 import { settingsState } from '@/ui/store/settingStore'
 import { t } from '@/ui/i18n'
@@ -31,33 +32,26 @@ const defaultChoice: ChoiceModalState = {
   multi: false,
 }
 
-// ====== CommandConfirm ======
+// ====== Authorization（通用授权确认，弹窗见 modals/authorization）======
 
-type CommandConfirmState = {
-  visible: boolean
-  sessionId: string
-  command: string
-  risk: string
-  label: string
-  hint: string
-  tips?: string
-}
+type AuthorizationState = { visible: boolean } & AuthorizationRequest
 
-const defaultConfirm: CommandConfirmState = {
+const defaultAuthorization: AuthorizationState = {
   visible: false,
-  sessionId: '',
+  permName: '',
+  title: '',
+  subTitle: '',
+  desc: '',
   command: '',
-  risk: '',
-  label: '',
   hint: '',
-  tips: '',
+  risk: '',
 }
 
 export function useToolUI() {
   const [choiceModal, setChoiceModal] =
     useState<ChoiceModalState>(defaultChoice)
-  const [confirmModal, setConfirmModal] =
-    useState<CommandConfirmState>(defaultConfirm)
+  const [authModal, setAuthModal] =
+    useState<AuthorizationState>(defaultAuthorization)
 
   // 监听 user_choice
   useEffect(() => {
@@ -81,22 +75,11 @@ export function useToolUI() {
     return off
   }, [])
 
-  // 监听 command_confirm
+  // 监听 authorization（通用授权确认）
   useEffect(() => {
-    const off = toolInteractEvent.on(
-      'showCommandConfirm',
-      (sessionId, command, risk, label, hint, tips) => {
-        setConfirmModal({
-          visible: true,
-          sessionId,
-          command,
-          risk,
-          label,
-          hint,
-          tips,
-        })
-      },
-    )
+    const off = toolInteractEvent.on('showAuthorization', (payload) => {
+      setAuthModal({ visible: true, ...payload })
+    })
     return off
   }, [])
 
@@ -124,16 +107,16 @@ export function useToolUI() {
     toolInteractEvent.emit('reject', t('用户关闭了选择弹窗'))
   }, [])
 
-  const handleConfirmAllow = useCallback(() => {
-    setConfirmModal(defaultConfirm)
+  const handleAuthAllow = useCallback(() => {
+    setAuthModal(defaultAuthorization)
     toolInteractEvent.emit('commandResolve', '')
   }, [])
-  const handleConfirmShelve = useCallback(() => {
-    setConfirmModal(defaultConfirm)
+  const handleAuthShelve = useCallback(() => {
+    setAuthModal(defaultAuthorization)
     toolInteractEvent.emit('commandReject', 'shelve:' + t('用户暂存了该命令'))
   }, [])
-  const handleConfirmCancel = useCallback(() => {
-    setConfirmModal(defaultConfirm)
+  const handleAuthCancel = useCallback(() => {
+    setAuthModal(defaultAuthorization)
     toolInteractEvent.emit('commandReject', t('用户拒绝了该命令'))
   }, [])
 
@@ -150,29 +133,30 @@ export function useToolUI() {
           onCancel={handleChoiceCancel}
           onShelve={handleChoiceShelve}
         />
-        <CommandConfirmModal
-          visible={confirmModal.visible}
-          sessionId={confirmModal.sessionId}
-          command={confirmModal.command}
-          risk={confirmModal.risk}
-          label={confirmModal.label}
-          hint={confirmModal.hint}
-          tips={confirmModal.tips}
-          onConfirm={handleConfirmAllow}
-          onCancel={handleConfirmCancel}
-          onShelve={handleConfirmShelve}
+        <AuthorizationModal
+          visible={authModal.visible}
+          permName={authModal.permName}
+          title={authModal.title}
+          subTitle={authModal.subTitle}
+          desc={authModal.desc}
+          command={authModal.command}
+          hint={authModal.hint}
+          risk={authModal.risk}
+          onConfirm={handleAuthAllow}
+          onCancel={handleAuthCancel}
+          onShelve={handleAuthShelve}
         />
       </>
     ),
     [
       choiceModal,
-      confirmModal,
+      authModal,
       handleChoiceConfirm,
       handleChoiceShelve,
       handleChoiceCancel,
-      handleConfirmAllow,
-      handleConfirmShelve,
-      handleConfirmCancel,
+      handleAuthAllow,
+      handleAuthShelve,
+      handleAuthCancel,
     ],
   )
 

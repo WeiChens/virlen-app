@@ -11,11 +11,8 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { invoke } from '@tauri-apps/api/core'
-import { t, tpl } from '@/ui/i18n'
-import {
-  NOTIFY_INTERVAL_MS,
-  shouldHintIdle,
-} from '@/infrastructure/tools/output-store'
+import { t } from '@/ui/i18n'
+import { NOTIFY_INTERVAL_MS } from '@/infrastructure/tools/output-store'
 import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
 import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
 
@@ -127,7 +124,7 @@ export class PendingCrWriter {
   constructor(
     private readonly flushDelayMs: number,
     private readonly write: (text: string) => void,
-  ) {}
+  ) { }
 
   /** 追加一段增量。 */
   push(delta: string): void {
@@ -456,34 +453,6 @@ function PtyKeyBar({ toolCallId }: { toolCallId: string }) {
 }
 
 /**
- * 「疑似等待输入」的空闲秒数（Step 2 ④）。
- *
- * 纯本地计时（零后端成本）：未运行 / 无输出记录 / 未满阈值 → null。
- * 定时器**只在运行中挂**（命令结束即卸下，无开销）。
- */
-export function useIdleSeconds(
-  running: boolean,
-  lastOutputAt?: number,
-): number | null {
-  const [secs, setSecs] = useState<number | null>(null)
-  useEffect(() => {
-    if (!running) {
-      setSecs(null)
-      return
-    }
-    const compute = () => {
-      const now = Date.now()
-      if (!shouldHintIdle(now, lastOutputAt, running)) return null
-      return Math.floor((now - (lastOutputAt as number)) / 1000)
-    }
-    setSecs(compute())
-    const id = setInterval(() => setSecs(compute()), 1000)
-    return () => clearInterval(id)
-  }, [running, lastOutputAt])
-  return secs
-}
-
-/**
  * PTY 终端块（完整形态：header + 终端 + 提示）。
  *
  * `status` 由调用方传入：既复用 `TerminalStatus`（退出码徽标），
@@ -509,7 +478,6 @@ export function XtermTerminalBlock({
   stream,
   running,
   toolCallId,
-  lastOutputAt,
   onKill,
   killing,
 }: {
@@ -526,8 +494,6 @@ export function XtermTerminalBlock({
   stream: string
   running: boolean
   toolCallId: string
-  /** 最近一次输出时间戳（④ 空闲提示用） */
-  lastOutputAt?: number
   onKill?: () => void
   killing?: boolean
 }) {
@@ -536,7 +502,6 @@ export function XtermTerminalBlock({
   const [held, setHeld] = useState(false)
   // 终端列×行（底部状态栏展示；由 XtermTerminal 的 fit() 回传）
   const [size, setSize] = useState<{ cols: number; rows: number } | null>(null)
-  const idleSeconds = useIdleSeconds(running, lastOutputAt)
 
   // Esc 退出全屏（与 CodeBlock / ImagePreview 等浮层保持一致的操作习惯）
   useEffect(() => {
@@ -630,14 +595,6 @@ export function XtermTerminalBlock({
         />
         {/* 输出末尾的附加说明（如脚本执行的 note）—— 与 `<pre>` 版 TerminalBlock 行为对齐 */}
         {note && <div className="pty-hint">{note}</div>}
-        {/* ④「疑似等待输入」提示：仍在运行 + 15s 无输出（见 useIdleSeconds / shouldHintIdle） */}
-        {idleSeconds != null && (
-          <div className="pty-hint pty-idle-hint">
-            {tpl('$__secs__ 秒无输出，可能正在等待输入（可直接在终端中输入）', {
-              secs: idleSeconds,
-            })}
-          </div>
-        )}
       </div>
     )
   }

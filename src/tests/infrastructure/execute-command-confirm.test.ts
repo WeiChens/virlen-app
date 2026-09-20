@@ -7,11 +7,12 @@
  */
 import { describe, it, expect, vi } from 'vitest'
 
-// 执行器会读工作目录与审批模式；这里 mock 掉安全服务（不接触 Tauri / 真实文件系统）
+// 执行器会读工作目录与权限决策；这里 mock 掉安全服务（不接触 Tauri / 真实文件系统）
 vi.mock('@/services/security-service', () => ({
   securityService: {
     getWorkspace: async () => 'C:/ws',
-    getCommandApprovalMode: async () => 'none',
+    // 返回 'allow'：等价于「无需弹窗」（旧 commandApprovalMode='none' 的语义）
+    getPermissionDecision: async () => 'allow',
   },
 }))
 
@@ -44,7 +45,9 @@ describe('execute_command confirm:terminal（TS 引擎路径）', () => {
     expect(res).toBeInstanceOf(UserInteractionRequired)
     const payload = (res as any).interactionData
     expect(payload.confirm).toBe('terminal')
-    expect(payload.command).toBe('npm login')
+    expect(payload.desc).toBe('npm login')
+    // 'npm login' 归类为安装命令 → 展示对应权限唯一 key
+    expect(payload.permName).toBe('terminal.install.execute')
   })
 
   it('未指定 confirm 且无需审批 → 不产生交互（回归）', async () => {

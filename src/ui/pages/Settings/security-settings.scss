@@ -1,0 +1,193 @@
+/* security-settings — 安全页 Tab 容器 + 权限管理列表 + 三态滑块 */
+
+.security-settings {
+  /* ---------- Tab 头 ---------- */
+  .security-tabs {
+    display: flex;
+    gap: 4px;
+    flex: 0 0 auto;
+    padding: 3px;
+    margin: 2px 0 12px;
+    background: var(--input-bg, #f1f1f3);
+    border-radius: 8px;
+
+    .security-tab {
+      flex: 1;
+      padding: 8px 14px;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      font-size: var(--font-size-md);
+      color: var(--text-secondary, #888);
+      cursor: pointer;
+      transition: all 0.15s;
+
+      &:hover {
+        color: var(--text-primary, #1a1a1a);
+      }
+
+      &.active {
+        /* 与分段控件一致：选中态比轨道更亮（--control-active-bg 跟随主题） */
+        background: var(--control-active-bg, #fff);
+        color: var(--text-primary, #1a1a1a);
+        font-weight: 500;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+      }
+    }
+  }
+
+  .security-tab-body {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+}
+
+/* ==================== 权限管理 Tab ==================== */
+
+.permissions-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+
+  .section-desc {
+    flex: 0 0 auto;
+  }
+
+  .permission-list {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 2px 12px;
+  }
+
+  /* 每条权限：左侧「标题 + 机器名徽标 + 说明」，右侧紧凑三态滑块。
+     设置面板内容区仅约 450px，滑块放行右侧、只占固定窄宽 */
+  .permission-item {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 2px;
+    border-bottom: 1px solid var(--border-color, #ececf0);
+
+    &:last-child {
+      border-bottom: none;
+    }
+
+    .permission-info {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    /* 标题行：中文名 + 机器名徽标（过长时省略而不是撑破整行） */
+    .permission-head {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .permission-title {
+      flex-shrink: 0;
+      font-size: var(--font-size-base);
+      font-weight: 600;
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    /* 权限 name 徽标（terminal.normal.execute 等）：紧跟名称，过长时省略 */
+    .perm-name {
+      min-width: 0;
+      overflow: hidden;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+      font-size: var(--font-size-xs);
+      color: var(--text-tertiary, #767676);
+      background: var(--input-bg, #f1f1f3);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .permission-desc {
+      margin: 3px 0 0;
+      font-size: var(--font-size-sm);
+      color: var(--text-secondary, #666);
+      line-height: 1.5;
+    }
+  }
+}
+
+/* ==================== 三态滑块 ==================== */
+
+.tri-switch {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  width: 128px;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--input-bg, #f1f1f3);
+  user-select: none;
+
+  /* 状态色（选中段文字）：用 --*-text 档保证亮 / 暗主题下都可读 */
+  &.tri-allow {
+    --tri-state-color: var(--color-success-text);
+  }
+
+  &.tri-ask {
+    --tri-state-color: var(--color-warning-text);
+  }
+
+  &.tri-deny {
+    --tri-state-color: var(--color-danger);
+  }
+
+  /* 滑动指示块：宽度为 1/3，translateX(0/100/200%) 对应三态 */
+  .tri-thumb {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: calc((100% - 6px) / 3);
+    height: calc(100% - 6px);
+    border-radius: 6px;
+    /* 选中态用比轨道更亮的「浮起药丸」，与 .segment.active / .security-tab.active 一致；
+       状态语义由选中段文字色承担 */
+    background: var(--control-active-bg, #fff);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    transition: transform 0.18s ease;
+  }
+
+  .tri-seg {
+    position: relative;
+    z-index: 1;
+    flex: 1;
+    padding: 7px 6px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary, #888);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.15s;
+
+    &:hover:not(.active) {
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 1px;
+    }
+
+    &.active {
+      color: var(--tri-state-color, var(--text-primary, #1a1a1a));
+      font-weight: 600;
+    }
+  }
+}

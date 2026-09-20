@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { settingsState, resolveDefaultWorkspace } from '@/ui/store'
-import type { SettingsStore, CommandApprovalMode, SandboxMode } from '@/ui/store'
+import type { SettingsStore, SandboxMode } from '@/ui/store'
 import { showToast } from '@/ui/components/shared/Toast'
 import {
   telemetryState,
@@ -82,14 +82,6 @@ function GeneralSettings() {
   }[] = [
       { value: 'agent', label: t('按 Agent') },
       { value: 'workspace', label: t('按工作目录') },
-    ]
-
-  const APPROVAL_MODE_OPTIONS: { value: CommandApprovalMode; label: string }[] =
-    [
-      { value: 'all', label: t('全部弹窗') },
-      { value: 'risky', label: t('仅高危弹窗') },
-      { value: 'install', label: t('安装+高危弹窗') },
-      { value: 'none', label: t('关闭（不弹窗）') },
     ]
 
   const SANDBOX_MODE_OPTIONS: { value: SandboxMode; label: string, title: string }[] = [
@@ -426,39 +418,6 @@ function GeneralSettings() {
       <div className="section">
         <div className="section-desc">
           {t('文件与目录的白名单/黑名单在侧栏「安全」中设置')}
-        </div>
-        <div
-          className="setting-row"
-          style={{
-            borderBottom: 'none',
-          }}>
-          <div className="setting-label">
-            <span className="label-text">{t('命令执行授权')}</span>
-            <span className="label-desc">
-              {t('设定终端命令执行前是否需要弹窗确认')}
-            </span>
-          </div>
-          <div className="setting-control">
-            <Select
-              value={s.commandApprovalMode}
-              onChange={(v) =>
-                update('commandApprovalMode', v as CommandApprovalMode)
-              }
-              options={APPROVAL_MODE_OPTIONS}
-              width={160}
-            />
-          </div>
-        </div>
-        <div className="approval-desc">
-          {s.commandApprovalMode === 'all' && t('所有命令执行前都会弹窗确认')}
-          {s.commandApprovalMode === 'risky' &&
-            t(
-              '仅高危命令（删除/修改系统等）执行前弹窗确认，安装类命令直接执行',
-            )}
-          {s.commandApprovalMode === 'install' &&
-            t('高危命令和安装类命令执行前弹窗确认，安全命令直接执行')}
-          {s.commandApprovalMode === 'none' &&
-            t('所有命令直接执行，不再弹窗确认')}
         </div>
         <div className="setting-row">
           <div className="setting-label">

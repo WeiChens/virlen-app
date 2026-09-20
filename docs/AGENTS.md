@@ -15,7 +15,7 @@
 - Function Calling：文件读写、命令执行、网页抓取、搜索、视觉分析、知识库
 - 端侧视觉引擎（`quasivision` ONNX）：UI 元素检测 / PP-OCR v5 / YOLOE-26n 物体检测 / 图标分类，纯本地推理
 - Skill 机制：`SKILL.md` 描述的领域知识包，注入系统提示词 + 源码目录只读可查
-- 多层安全：路径黑白名单、命令审批、跨平台 Shell 沙盒（Windows Job Object+ACL / macOS / Linux Landlock）、工具风暴防护 StormBreaker
+- 多层安全：路径黑白名单、权限三态（命令 / 脚本 / 沙盒脱壳：允许 / 每次弹窗 / 禁止）、跨平台 Shell 沙盒（Windows Job Object+ACL / macOS / Linux Landlock）、工具风暴防护 StormBreaker
 - 暂停/恢复（Run Snapshot 模型）、LLM 上下文压缩、本地 RAG（turbovec 向量索引）、诊断埋点
 - **Agent 引擎双实现**：Rust 原生引擎（默认开启，`src-tauri/src/agent/`）+ TS 引擎（回退，`src/domain/engine/`）
 
@@ -234,8 +234,8 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 | 机制 | 位置 | 要点 |
 |---|---|---|
 | 路径校验 | `domain/security/index.ts`（策略）、`services/security-service.ts`（服务）、`utils/pathCanonicealize.ts` | 优先级 **黑名单 > 白名单 > 工作目录**；写模式（`mode='w'`）仅允许白名单 + 工作目录；黑名单按平台给默认值 |
-| 沙盒模式 | `settings.sandboxMode` (`on`/`off`/`readonly`)；实现 `infrastructure/sandbox/plugin-shell-sandbox.ts` + `src-tauri/src/sandbox/` | Windows：Job Object + 受限令牌 + ACL（`windows/`）；Linux：Landlock（5.13+，默认拒写、白名单授予可写根，`readonly` 时全部拒写）；macOS：见 `sandbox/macos/mod.rs`。**禁止绕过沙盒直接 spawn**；唯一例外是 `execute_command` 的 `sandbox:"off"`（沙盒子进程无法创建管道 stdio 时的受控退路，根因见 §11.2）——它**强制弹窗审批**（不受 `commandApprovalMode` 影响）、`readonly` 模式直接拒绝，并埋点 `tool.sandbox.bypass` |
-| 命令审批 | `settings.commandApprovalMode` (`all`/`risky`/`install`/`none`) + `tools/execute/common.ts::classifyCommand`（`safe`/`install`/`dangerous`） | 危险命令集合与安装器集合在此维护；新增高危命令要补进集合 |
+| 沙盒模式 | `settings.sandboxMode` (`on`/`off`/`readonly`)；实现 `infrastructure/sandbox/plugin-shell-sandbox.ts` + `src-tauri/src/sandbox/` | Windows：Job Object + 受限令牌 + ACL（`windows/`）；Linux：Landlock（5.13+，默认拒写、白名单授予可写根，`readonly` 时全部拒写）；macOS：见 `sandbox/macos/mod.rs`。**禁止绕过沙盒直接 spawn**；唯一例外是 `execute_command` / `execute_script` 的 `sandbox:"off"`（沙盒子进程无法创建管道 stdio 时的受控退路，根因见 §11.2）——它按「沙盒脱壳」权限（`sandbox.command.execute` / `sandbox.script.execute`，默认 `ask`）与命令/脚本权限**取更严格者**决策、`readonly` 模式直接拒绝，并埋点 `tool.sandbox.bypass` |
+| 权限三态（命令 / 脚本 / 沙盒脱壳） | `domain/permission/index.ts`（注册表 + 决策）+ `settings.permissions`（`allow`/`ask`/`deny`，取代旧 `commandApprovalMode`）；终端命令按 `tools/execute/common.ts::classifyCommand`（`safe`/`install`/`dangerous`）映射到 `terminal.normal/install/dangerous.execute`，脚本走 `script.execute`，申请绕过沙盒走 `sandbox.command.execute` / `sandbox.script.execute`；Rust 镜像 `native_tools/execute/common/classify.rs`（`command_decision` / `resolve_decision`）；UI 在「设置 → 安全 → 权限管理」（`Settings/security-permissions.tsx`） | `deny` 永远优先；「沙盒脱壳」权限与命令/脚本权限**取更严格者**（默认 `ask`，可设 `allow` 静默脱壳 / `deny` 直接禁止），`confirm:"terminal"` 强制至少 `ask`。危险命令集合与安装器集合仍在 `classifyCommand` 维护，新增高危命令要补集合。旧 `commandApprovalMode` 已在 `settingStore` 一次性迁移 |
 | 工具风暴防护 | `declaration` → `domain/engine/storm-breaker.ts` / `agent/storm_breaker.rs` | 滑窗（window 6 / threshold 3）检测重复 `(toolName, args)`，命中即中断循环 |
 | 密钥打码 | `utils/telemetry/redact.ts`、`isSensitiveKey()` | 埋点/日志**不得**输出 apiKey、token、密钥文件内容；`providers`/`searchProviders` 只上报数量 |
 | 端侧视觉 | `vision_service.rs` + `resources/quasivision_models/` | 图片不出本机，不要在实现里改成上传 |
@@ -286,7 +286,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
   - 用**匿名管道**（`CreatePipe`，SD 取自令牌默认 DACL，已被授权）的程序不受影响：python `subprocess(capture_output=True)`、
     `cargo`→`rustc`、.NET `Process.Start(RedirectStandardOutput)`、PowerShell 内部管道均实测正常。
     同理受影响的是 `vite build` / `jest` / `node-gyp` / `child_process.exec*/fork` 这类；vitest/vite 的 TS 转译本身依赖 esbuild
-    二进制，**常规情况下沙盒内跑不了**（已提供受控退路：`execute_command` 传 `sandbox:"off"`，会强制弹窗审批后不使用沙盒执行，`readonly` 模式拒绝，见 §9）。
+    二进制，**常规情况下沙盒内跑不了**（已提供受控退路：`execute_command` / `execute_script` 传 `sandbox:"off"`，按「沙盒脱壳」权限（默认弹窗）授权后不使用沙盒执行，`readonly` 模式拒绝，见 §9）。
   - 想临时关闭：`VIRLEN_SANDBOX=off|readonly|on`（由 **Virlen 进程**读取，见 `native_tools/execute/common.rs::sandbox_mode`，
     在命令里 `set` 无效），或在设置里改沙盒模式。同类「需补 ACL 的内核对象」先例见 `sandbox/windows/acl.rs::allow_null_device`（`\.\NUL`）。
 - `node_modules` 可能不完整（例如缺 `@tanstack/react-virtual`），此时 `tsc --noEmit` 会报
@@ -418,8 +418,9 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 | 改原生工具路径校验 / 参数取值 | `src-tauri/src/agent/native_tools/common.rs`（`resolve_safe_path` / `is_path_allowed` / `arg_*`） |
 | 改文件读写底层 | `src-tauri/src/file_ops.rs`（读/写/多段编辑）+ `src/utils/diff.ts` |
 | 改搜索 | `src-tauri/src/search.rs`（文件搜索）、`src/domain/search/*` + `src/infrastructure/search-providers/*`（网络搜索） |
-| 改命令执行 / 风险分类 / 审批 | `src/infrastructure/tools/execute/common.ts`（+ `execute-command.ts` / `execute-script.ts`）；Rust 原生侧 `src-tauri/src/agent/native_tools/execute/common.rs`（+ `execute_command.rs` / `execute_script.rs`）。PTY（伪控制台）相关另见：`src-tauri/src/sandbox/windows/conpty.rs`、`native_tools/execute/pty_session.rs`、`src/ui/pages/chat/components/tool-call/XtermTerminal.tsx`、`tool-call/TerminalConfirmBlock.tsx`（见 §11.7） |
+| 改命令执行 / 风险分类 / 权限审批 | 权限注册表与三态 `src/domain/permission/index.ts`（+ Rust 镜像 `src-tauri/src/agent/native_tools/execute/common/classify.rs`）；工具 `src/infrastructure/tools/execute/common.ts`（+ `execute-command.ts` / `execute-script.ts`），Rust 原生侧 `src-tauri/src/agent/native_tools/execute/`（+ `execute_command.rs` / `execute_script.rs`）。PTY（伪控制台）相关另见：`src-tauri/src/sandbox/windows/conpty.rs`、`native_tools/execute/pty_session.rs`、`src/ui/pages/chat/components/tool-call/XtermTerminal.tsx`、`tool-call/TerminalConfirmBlock.tsx`（见 §11.7） |
 | 改终端输出处理（`\r`、ANSI） | `src/infrastructure/tools/execute/common.ts::processTerminalOutput`（UI 侧 `tool-call/Execute*Message.tsx` 复用同一函数）；Rust 侧 `native_tools/execute/common.rs::process_terminal_output`。两份实现必须**逐条对齐**（含 ANSI 序列完整性，见 §11.7） |
+| 改工具授权确认弹窗 / 交互 | 通用弹窗 `src/ui/pages/chat/components/modals/authorization.tsx`（+ `.scss`）；事件 `src/events/toolInteractEvent.ts::showAuthorization`（载荷 `AuthorizationRequest`：permName/title/subTitle/desc/hint/risk）；交互调度 `src/services/tool-service/command_confirm.ts`（`confirm_command` / `confirm_command_native`）；Rust 侧下发同样字段 `native_tools/execute/{execute_command,execute_script}.rs`。新增授权类型直接复用同一弹窗 |
 | 改沙盒/权限 | `src-tauri/src/sandbox/**`、`src/infrastructure/sandbox/*`、`src/domain/security/index.ts` |
 | 改视觉 | `src-tauri/src/vision_service.rs`、`src/infrastructure/vision/`、`src-tauri/resources/quasivision_models/` |
 | 改设置项 | `src/ui/store/settingStore.ts` + `src/ui/pages/Settings/*` + `src/ui/i18n/lang/en-US.json` |

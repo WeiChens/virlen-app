@@ -820,7 +820,7 @@ function ChatView() {
               onCancel={handleCancel}
               onMessagesUpdate={syncMessagesToUI}
               loading={isCurrentWorking}
-              disabled={isCurrentWorking}
+              disabled={false}
               placeholder={t('输入消息...')}
             />
           </>

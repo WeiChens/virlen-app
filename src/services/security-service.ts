@@ -15,11 +15,15 @@ import {
 import { securityRepo } from '@/infrastructure/securityRepo'
 import { SecurityService } from './port'
 import { securityPort } from '@/domain/security'
+import {
+  getPermissionDecision as getPermDecision,
+  type PermissionDecision,
+} from '@/domain/permission'
 import { getPlatform } from '@/utils/common'
 
 class SecurityServiceImpl implements SecurityService {
-  async getCommandApprovalMode(): Promise<string> {
-    return settingsState.value.commandApprovalMode ?? 'risky'
+  async getPermissionDecision(name: string): Promise<PermissionDecision> {
+    return getPermDecision(settingsState.value.permissions, name)
   }
   async getSkipEachDirs(): Promise<string[]> {
     return [...securityRepo.load().skipEachDirs]

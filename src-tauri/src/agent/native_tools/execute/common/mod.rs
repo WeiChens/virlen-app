@@ -17,12 +17,17 @@ mod terminal;
 // 保持既有调用路径不变：`super::common::{...}`（供 execute_command / execute_script 使用）
 
 pub(crate) use classify::{
-    classify_command, needs_command_approval, risk_info, with_bypass_hint,
+    classify_command, command_decision, permission_for_risk, permission_label, resolve_decision,
+    risk_info, with_bypass_hint, PermissionDecision, PERM_SANDBOX_COMMAND, PERM_SANDBOX_SCRIPT,
+    PERM_SCRIPT,
 };
 // `SANDBOX_BYPASS_HINT` 仅在 execute_command 的测试里经 `super::common::…` 直接断言，
 // 非测试构建下本重导出“未被使用”，故显式 allow。
 #[allow(unused_imports)]
 pub(crate) use classify::SANDBOX_BYPASS_HINT;
+// `PERM_TERMINAL_*` 仅在测试里使用，非测试构建“未被使用”，显式 allow。
+#[allow(unused_imports)]
+pub(crate) use classify::{PERM_TERMINAL_DANGEROUS, PERM_TERMINAL_INSTALL, PERM_TERMINAL_NORMAL};
 pub(crate) use runner::{pty_available, sandbox_mode, SandboxMode};
 
 // `kill_running_command` / `run_command_native`：供 `execute::mod` 再导出，

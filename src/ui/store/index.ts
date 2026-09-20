@@ -41,7 +41,6 @@ export type { SessionRuntime } from './sessionRuntimeStore'
 export { settingsState, resolveDefaultWorkspace } from './settingStore'
 export type {
   SettingsStore,
-  CommandApprovalMode,
   SandboxMode,
   QuickInputTemplate,
   SessionGroupType,

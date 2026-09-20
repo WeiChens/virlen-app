@@ -9,13 +9,38 @@
  *     resolve     → tool-ui 触发确认结果，chat-service 收到后 resolve Promise
  *     reject      → tool-ui 触发取消/暂存，chat-service 收到后 reject Promise
  *
- *   command_confirm 系列：
- *     showCommandConfirm → chat-service 触发，tool-ui 监听打开命令确认弹窗
- *     commandResolve     → tool-ui 触发"允许执行"，chat-service 收到后 resolve
- *     commandReject      → tool-ui 触发拒绝/暂存，chat-service 收到后 reject
+ *   授权（authorization）系列 —— 通用的「授权确认」弹窗（不限于命令/脚本）：
+ *     showAuthorization → tool 层触发，tool-ui 监听打开授权确认弹窗
+ *     commandResolve    → tool-ui 触发“允许”，tool 层收到后 resolve
+ *     commandReject     → tool-ui 触发拒绝/暂存，tool 层收到后 reject
  */
 import { ToolExecutorResponse, ToolResult } from '@/domain/tools/types'
 import EventEmitter from '@/utils/EventEmitter'
+
+/**
+ * 一次授权确认请求（通用，不限于命令/脚本）。
+ *
+ * 未来的授权类型（如自定义权限）只需构造同样的结构即可复用同一个弹窗。
+ */
+export interface AuthorizationRequest {
+  /** 权限唯一 key（跨 TS / Rust 稳定契约），如 `terminal.normal.execute` */
+  permName: string
+  /** 权限名称（展示，即 permissionLabel） */
+  title: string
+  /** 副标题：AI 给出的操作说明（命令的 `tips`） */
+  subTitle?: string
+  /** 正文：具体内容（命令文本 / 脚本正文等） */
+  desc?: string
+  /**
+   * 实际执行的 shell 命令（仅当 `desc` 不是命令本身时提供，如脚本正文）。
+   * 命令工具不设置此字段（`desc` 本身就是命令）。
+   */
+  command?: string
+  /** 风险 / 警告提示（风险提示 + 绕过沙盒警告，可空） */
+  hint?: string
+  /** 风险等级（仅用于配色，可空） */
+  risk?: string
+}
 
 type ToolInteractEvents = {
   // user_choice
@@ -29,15 +54,8 @@ type ToolInteractEvents = {
   resolve: (value: ToolResult) => void
   reject: (reason: string) => void
 
-  // command_confirm
-  showCommandConfirm: (
-    sessionId: string,
-    command: string,
-    risk: string,
-    label: string,
-    hint: string,
-    tips?: string,
-  ) => void
+  // authorization（授权确认）
+  showAuthorization: (payload: AuthorizationRequest) => void
   commandResolve: (value: string) => void
   commandReject: (reason: string) => void
 

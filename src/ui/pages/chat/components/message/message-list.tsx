@@ -1003,7 +1003,9 @@ function ChatMessageList({
       {isCurrentPaused && (
         <div className="paused-run-banner">
           <div className="paused-info">
-            <span className="paused-icon">⏸️</span>
+            <span className="paused-icon">
+              <svg className="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="200" height="200"><path d="M885.333333 85.333333H138.666667a53.393333 53.393333 0 0 0-53.333334 53.333334v746.666666a53.393333 53.393333 0 0 0 53.333334 53.333334h746.666666a53.393333 53.393333 0 0 0 53.333334-53.333334V138.666667a53.393333 53.393333 0 0 0-53.333334-53.333334z m-458.666666 618.666667a21.333333 21.333333 0 0 1-42.666667 0V320a21.333333 21.333333 0 0 1 42.666667 0z m213.333333 0a21.333333 21.333333 0 0 1-42.666667 0V320a21.333333 21.333333 0 0 1 42.666667 0z" fill="var(--accent-color)"></path></svg>
+            </span>
             <span className="paused-text">{t('会话已暂停，是否继续？')}</span>
           </div>
           <button className="paused-resume-btn" onClick={handleResume}>

@@ -1,7 +1,7 @@
 //! 命令解析与风险分类（safe | install | dangerous）+ 风险/审批文案。
 //!
 //! - 命令名提取、shell 包装剥离、引号感知的分段（`extract_*` / `split_*`）。
-//! - 风险分类 `classify_command`，审批文案 `risk_info` / `needs_command_approval`。
+//! - 风险分类 `classify_command`，文案 `risk_info`，权限三态决策 `command_decision` / `resolve_decision`。
 //! - 绕过沙盒的警告文案 `SANDBOX_BYPASS_HINT` / `with_bypass_hint`。
 
 /// 引号感知：取命令段第一个 token。
@@ -70,9 +70,8 @@ fn unwrap_shell_wrapper(cmd_str: &str, depth: i32) -> String {
     if let Some(caps) = re1.captures(cmd_str) {
         return unwrap_shell_wrapper(&caps[1], depth - 1);
     }
-    let re2 =
-        regex::Regex::new(r#"(?i)^(?:powershell|pwsh)(?:\.exe)?\s+-Command\s+"?([^"]+)"?$"#)
-            .unwrap();
+    let re2 = regex::Regex::new(r#"(?i)^(?:powershell|pwsh)(?:\.exe)?\s+-Command\s+"?([^"]+)"?$"#)
+        .unwrap();
     if let Some(caps) = re2.captures(cmd_str) {
         return unwrap_shell_wrapper(&caps[1], depth - 1);
     }
@@ -148,17 +147,80 @@ fn extract_all_command_names(raw: &str) -> Vec<String> {
 }
 
 const DANGEROUS: &[&str] = &[
-    "rm", "del", "erase", "rd", "rmdir", "format", "diskpart", "fdisk", "mkfs", "shutdown",
-    "reboot", "restart", "halt", "poweroff", "sudo", "su", "runas", "chmod", "chown", "attrib",
-    "cacls", "icacls", "reg", "regedit", "taskkill", "kill", "pkill", "tskill", "mount", "umount",
-    "msiexec", "mshta", "sc", "net", "bcdedit", "bootrec", "vssadmin", "wevtutil", "cipher",
-    "takeown", "remove-item",
+    "rm",
+    "del",
+    "erase",
+    "rd",
+    "rmdir",
+    "format",
+    "diskpart",
+    "fdisk",
+    "mkfs",
+    "shutdown",
+    "reboot",
+    "restart",
+    "halt",
+    "poweroff",
+    "sudo",
+    "su",
+    "runas",
+    "chmod",
+    "chown",
+    "attrib",
+    "cacls",
+    "icacls",
+    "reg",
+    "regedit",
+    "taskkill",
+    "kill",
+    "pkill",
+    "tskill",
+    "mount",
+    "umount",
+    "msiexec",
+    "mshta",
+    "sc",
+    "net",
+    "bcdedit",
+    "bootrec",
+    "vssadmin",
+    "wevtutil",
+    "cipher",
+    "takeown",
+    "remove-item",
 ];
 
 const INSTALLERS: &[&str] = &[
-    "npm", "pnpm", "yarn", "bun", "pip", "pip3", "poetry", "conda", "cargo", "go", "gem",
-    "nuget", "dotnet", "brew", "port", "apt", "apt-get", "dpkg", "yum", "dnf", "rpm", "pacman",
-    "choco", "scoop", "winget", "composer", "docker", "docker-compose", "podman", "npx",
+    "npm",
+    "pnpm",
+    "yarn",
+    "bun",
+    "pip",
+    "pip3",
+    "poetry",
+    "conda",
+    "cargo",
+    "go",
+    "gem",
+    "nuget",
+    "dotnet",
+    "brew",
+    "port",
+    "apt",
+    "apt-get",
+    "dpkg",
+    "yum",
+    "dnf",
+    "rpm",
+    "pacman",
+    "choco",
+    "scoop",
+    "winget",
+    "composer",
+    "docker",
+    "docker-compose",
+    "podman",
+    "npx",
 ];
 
 /// 命令风险分类：safe | install | dangerous
@@ -192,19 +254,142 @@ pub(crate) fn risk_info(risk: &str) -> (String, String) {
     }
 }
 
-/// 是否需要弹窗审批。
-///
-/// `bypass_sandbox`（execute_command 的 `sandbox:"off"`，申请不使用沙盒/受限令牌）
-/// **一律强制审批**，不受 `commandApprovalMode` 影响——写隔离是安全底线，不允许静默绕过。
-pub(crate) fn needs_command_approval(approval_mode: &str, risk: &str, bypass_sandbox: bool) -> bool {
-    if bypass_sandbox {
-        return true;
+// ==================== 权限三态（与 TS `src/domain/permission` 逐字对齐） ====================
+
+/// 终端命令权限 name（与 TS `src/domain/permission/index.ts` 逐字对齐）
+pub(crate) const PERM_TERMINAL_NORMAL: &str = "terminal.normal.execute";
+pub(crate) const PERM_TERMINAL_INSTALL: &str = "terminal.install.execute";
+pub(crate) const PERM_TERMINAL_DANGEROUS: &str = "terminal.dangerous.execute";
+/// 脚本执行权限 name
+pub(crate) const PERM_SCRIPT: &str = "script.execute";
+/// 沙盒脱壳（申请不使用沙盒执行）权限 name —— 命令执行
+pub(crate) const PERM_SANDBOX_COMMAND: &str = "sandbox.command.execute";
+/// 沙盒脱壳（申请不使用沙盒执行）权限 name —— 脚本执行
+pub(crate) const PERM_SANDBOX_SCRIPT: &str = "sandbox.script.execute";
+
+/// 权限三态
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PermissionDecision {
+    Allow,
+    Ask,
+    Deny,
+}
+
+impl PermissionDecision {
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "allow" => Some(Self::Allow),
+            "ask" => Some(Self::Ask),
+            "deny" => Some(Self::Deny),
+            _ => None,
+        }
     }
-    match approval_mode {
-        "all" => true,
-        "risky" => risk == "dangerous",
-        "install" => risk != "safe",
-        _ => false,
+
+    /// 严格度：allow(0) < ask(1) < deny(2) —— 用于「取更严格者」合并两项权限
+    fn strictness(&self) -> u8 {
+        match self {
+            Self::Allow => 0,
+            Self::Ask => 1,
+            Self::Deny => 2,
+        }
+    }
+}
+
+/// 风险分类 → 权限 name
+pub(crate) fn permission_for_risk(risk: &str) -> &'static str {
+    match risk {
+        "install" => PERM_TERMINAL_INSTALL,
+        "dangerous" => PERM_TERMINAL_DANGEROUS,
+        _ => PERM_TERMINAL_NORMAL,
+    }
+}
+
+/// 权限默认决策（与 TS 注册表默认值对齐）：正常命令 allow，其余 ask
+fn default_decision(name: &str) -> PermissionDecision {
+    match name {
+        PERM_TERMINAL_NORMAL => PermissionDecision::Allow,
+        _ => PermissionDecision::Ask,
+    }
+}
+
+/// 旧 `commandApprovalMode` → 决策（仅在 permissions 表缺失时兜底，兼容老客户端 / 测试）
+fn legacy_decision(mode: &str, risk: &str) -> PermissionDecision {
+    match mode {
+        "all" => PermissionDecision::Ask,
+        "risky" => {
+            if risk == "dangerous" {
+                PermissionDecision::Ask
+            } else {
+                PermissionDecision::Allow
+            }
+        }
+        "install" => {
+            if risk == "safe" {
+                PermissionDecision::Allow
+            } else {
+                PermissionDecision::Ask
+            }
+        }
+        "none" => PermissionDecision::Allow,
+        _ => PermissionDecision::Ask,
+    }
+}
+
+/// 取权限决策：`permissions` 表优先 → 回退 legacy `approval_mode` → 回退注册表默认。
+pub(crate) fn command_decision(
+    permissions: &std::collections::BTreeMap<String, String>,
+    approval_mode: &str,
+    name: &str,
+    risk: &str,
+) -> PermissionDecision {
+    if let Some(v) = permissions.get(name) {
+        if let Some(d) = PermissionDecision::parse(v) {
+            return d;
+        }
+    }
+    if !approval_mode.is_empty() {
+        return legacy_decision(approval_mode, risk);
+    }
+    default_decision(name)
+}
+
+/// 最终决策（严格度递进）：
+/// - `deny` 永远优先；
+/// - 申请绕过沙盒（`escape_decision` 为「沙盒脱壳」权限决策）→ 与基础决策**取更严格者**
+///   （脱壳权限默认 `ask`；用户可设为 `allow` 静默脱壳、`deny` 直接禁止）；
+/// - 终端内确认 → 强制至少 `ask`。
+///
+/// `escape_decision` 为 `None` 表示本次未申请绕过沙盒（不参与合并）。
+pub(crate) fn resolve_decision(
+    base: PermissionDecision,
+    escape_decision: Option<PermissionDecision>,
+    confirm_terminal: bool,
+) -> PermissionDecision {
+    let mut d = base;
+    if let Some(e) = escape_decision {
+        if e.strictness() > d.strictness() {
+            d = e;
+        }
+    }
+    if d == PermissionDecision::Deny {
+        return PermissionDecision::Deny;
+    }
+    if confirm_terminal {
+        return PermissionDecision::Ask;
+    }
+    d
+}
+
+/// 权限中文名（拒绝提示用；与 TS `permissionLabel` 对齐）
+pub(crate) fn permission_label(name: &str) -> &'static str {
+    match name {
+        PERM_TERMINAL_NORMAL => "终端正常命令执行",
+        PERM_TERMINAL_INSTALL => "终端安装命令执行",
+        PERM_TERMINAL_DANGEROUS => "终端危险命令执行",
+        PERM_SCRIPT => "脚本命令执行",
+        PERM_SANDBOX_COMMAND => "沙盒脱壳·命令执行",
+        PERM_SANDBOX_SCRIPT => "沙盒脱壳·脚本执行",
+        _ => "该操作",
     }
 }
 
@@ -250,7 +435,10 @@ mod tests {
         assert_eq!(classify_command("echo safe && rm -rf /"), "dangerous");
         assert_eq!(classify_command("echo safe || npm install"), "install");
         // 带引号的命令名可正确提取（引号内空格不拆）
-        assert_eq!(extract_command_name("\"C:/Program Files/app.exe\" --flag"), "app");
+        assert_eq!(
+            extract_command_name("\"C:/Program Files/app.exe\" --flag"),
+            "app"
+        );
         assert_eq!(extract_command_name("'my app' --help"), "my app");
 
         // ---- 双引号 / 单引号互相嵌套 ----
@@ -265,7 +453,10 @@ mod tests {
         // 单引号内反斜杠不转义：`'a\'` 在 \ 后的 ' 处闭合，; 是真正的分隔符
         // （两个子命令都是 echo，仍判 safe）
         assert_eq!(classify_command("echo 'a\\'; echo hi"), "safe");
-        assert_eq!(extract_all_command_names("echo 'a\\'; echo hi"), vec!["echo"]);
+        assert_eq!(
+            extract_all_command_names("echo 'a\\'; echo hi"),
+            vec!["echo"]
+        );
         // 转义反斜杠后引号真正闭合，外部 rm 仍应被识别
         assert_eq!(classify_command("echo \"a\\\\\"; rm -rf /"), "dangerous");
     }

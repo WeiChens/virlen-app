@@ -332,6 +332,10 @@ pub struct NativeToolSecurity {
     /// 终端沙盒模式：on（写隔离，默认）| off（裸跑）| readonly（只读）
     #[serde(default = "default_sandbox_mode")]
     pub sandbox_mode: String,
+    /// 权限三态表：权限 name → allow | ask | deny
+    /// （与 TS `src/domain/permission/index.ts` 对齐；取代旧的单一 `approval_mode`）
+    #[serde(default)]
+    pub permissions: std::collections::BTreeMap<String, String>,
 }
 
 fn default_sandbox_mode() -> String {

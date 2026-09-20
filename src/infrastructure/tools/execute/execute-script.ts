@@ -6,7 +6,8 @@
  * - `execute_script`：适合「需要一段较长的脚本」的场景——先落盘成文件，再用命令执行，
  *   执行完默认删除，避免污染工作目录。
  *
- * 审批：复用 `execute_command` 的审批机制（跟随 commandApprovalMode + 命令名风险分类）。
+ * 审批：独立门禁 script.execute（允许 / 每次弹窗 / 禁止），与终端命令风险分类无关。
+ * 申请不使用沙盒（sandbox:"off"）时另过「沙盒脱壳·脚本执行」门禁（与脚本权限取更严格者）。
  * 沙盒：写文件走 securityService.resolveSafePath(mode='w')，超范围直接报错。
  */
 import * as tauriFs from '@tauri-apps/plugin-fs'
@@ -21,8 +22,15 @@ import {
 } from '@/domain/tools/types'
 import { t, tpl } from '@/ui/i18n'
 import { securityService } from '@/services/security-service'
+import {
+  PERM_SANDBOX_SCRIPT,
+  PERM_SCRIPT,
+  permissionLabel,
+  resolveCommandDecision,
+} from '@/domain/permission'
 import { settingsState } from '@/ui/store'
 import {
+  SANDBOX_BYPASS_HINT,
   classifyCommand,
   detectPlatform,
   getRiskInfo,
@@ -87,6 +95,14 @@ toolRegistry.register(
           description: '超时时间（秒）。超过该时间进程会被强制终止。默认 30。',
           default: 30,
         },
+        sandbox: {
+          type: 'string',
+          enum: ['off'],
+          description:
+            '默认不传（继承设置里的沙盒模式）。传 "off" 表示**申请**不使用沙盒执行脚本，' +
+            '仅用于沙盒下必然失败的场景（脚本内的子进程需要用管道 stdio 拉起孙进程等）。' +
+            '该请求按「沙盒脱壳·脚本执行」权限决策（默认弹窗确认）；沙盒为只读模式时会被直接拒绝。',
+        },
         end_del_file: {
           type: 'boolean',
           description:
@@ -124,6 +140,20 @@ toolRegistry.register(
     )
     const cwd = await securityService.getWorkspace(ctx.sessionId)
 
+    // sandbox: 'off' → 申请「不使用沙盒」执行脚本（与 execute_command 同语义）。
+    const bypassSandbox = ['off', 'none'].includes(
+      String(args.sandbox ?? '').toLowerCase(),
+    )
+    const sandboxMode = settingsState.value.sandboxMode ?? 'on'
+    // 只读模式禁止绕过沙盒（与 Rust 原生路径一致）
+    if (bypassSandbox && sandboxMode === 'readonly') {
+      throw new Error(
+        t(
+          '沙盒处于只读模式，不支持绕过沙盒执行脚本；请先在设置中切换沙盒模式（或改用常规终端）',
+        ),
+      )
+    }
+
     // 目标文件已存在则驳回，避免覆盖既有文件
     if (await tauriFs.exists(fullPath).catch(() => false)) {
       throw tpl('错误：脚本文件已存在，已驳回以免覆盖 — $__path__', {
@@ -144,6 +174,7 @@ toolRegistry.register(
           timeoutMs,
           ctx,
           'execute_script',
+          { bypassSandbox },
         )
         if (endDelFile) {
           const note = await deleteScriptFile(fullPath)
@@ -156,37 +187,67 @@ toolRegistry.register(
       } catch (e) {
         // 执行失败/超时/取消：也照常清理脚本，避免残留
         if (endDelFile) {
-          await deleteScriptFile(fullPath).catch(() => {})
+          await deleteScriptFile(fullPath).catch(() => { })
         }
         throw e
       }
     }
 
-    // 沙盒模式判定：沙盒开启（默认 on）或只读（readonly）时已有 OS 级隔离，
-    // 无需再弹窗；仅「完全访问模式」（off）才强制确认。
-    const sandboxMode = settingsState.value.sandboxMode ?? 'on'
-    if (sandboxMode !== 'off') {
+    // 权限：脚本执行独立门禁（script.execute，默认每次弹窗；与命令风险分类无关）
+    const base = await securityService.getPermissionDecision(PERM_SCRIPT)
+    // 申请绕过沙盒且沙盒启用 → 额外过「沙盒脱壳·脚本执行」权限（与脚本权限取更严格者）
+    const escapeDecision =
+      bypassSandbox && sandboxMode !== 'off'
+        ? await securityService.getPermissionDecision(PERM_SANDBOX_SCRIPT)
+        : undefined
+    const decision = resolveCommandDecision(base, { escapeDecision })
+    if (decision === 'deny') {
+      // 禁止：不执行、不弹窗，返回拒绝文本给模型（标明是哪个权限拦下的）
+      const deniedPerm =
+        escapeDecision === 'deny' ? PERM_SANDBOX_SCRIPT : PERM_SCRIPT
+      throw new Error(
+        tpl('操作已被权限设置禁止：$__perm__', {
+          perm: t(permissionLabel(deniedPerm)),
+        }),
+      )
+    }
+    if (decision === 'allow') {
       return writeRunDelete()
     }
 
-    // 无沙盒保护 → 强制弹窗审批：脚本内容无法静态分析，一律交由用户确认。
+    // ask → 弹窗审批：脚本内容无法静态分析，一律交由用户确认。
     const risk = classifyCommand(command)
     const info = getRiskInfo(risk)
-    const label = risk === 'safe' ? t('执行脚本') : info.label
-    const hint = info.hint || t('此操作会创建并执行脚本文件，请确认是否允许')
+    const baseHint =
+      info.hint || t('此操作会创建并执行脚本文件，请确认是否允许')
+    // 申请绕过沙盒：追加警告，让用户看到后果
+    const hint = bypassSandbox
+      ? [baseHint, t(SANDBOX_BYPASS_HINT)].filter(Boolean).join('\n')
+      : baseHint
+    // 触发本次确认的权限（同上：仅因沙盒脱壳时展示脱壳权限）
+    const shownPerm =
+      bypassSandbox && base === 'allow' && escapeDecision === 'ask'
+        ? PERM_SANDBOX_SCRIPT
+        : PERM_SCRIPT
     const approvalId = registerPendingApproval({
       sessionId: ctx.sessionId,
       toolCallId: ctx.toolCallId,
       run: writeRunDelete,
     })
-    return new UserInteractionRequired('confirm_command', {
+    const payload: Record<string, any> = {
       approvalId,
+      // 通用授权字段（弹窗展示）
+      permName: shownPerm,
+      title: t(permissionLabel(shownPerm)),
+      subTitle: tips,
+      // ⚠️ 正文展示**脚本内容**（用户据此判断是否放行），运行命令放在 command 作说明
+      desc: content,
       command,
-      risk,
-      label,
       hint,
-      tips,
-    })
+      risk,
+    }
+    if (bypassSandbox) payload.sandboxBypass = true
+    return new UserInteractionRequired('confirm_command', payload)
   }) as ToolExecutor,
 )
 
@@ -226,7 +287,7 @@ async function writeScriptFile(
     const normalizedPath = fullPath.replace(/\\/g, '/')
     const parent = normalizedPath.substring(0, normalizedPath.lastIndexOf('/'))
     if (parent) {
-      await tauriFs.mkdir(parent, { recursive: true }).catch(() => {})
+      await tauriFs.mkdir(parent, { recursive: true }).catch(() => { })
     }
     // PowerShell 脚本需要 UTF-8 BOM，否则 5.1 会按 GBK 解析导致中文乱码（见 applyScriptBom）
     await tauriFs.writeTextFile(

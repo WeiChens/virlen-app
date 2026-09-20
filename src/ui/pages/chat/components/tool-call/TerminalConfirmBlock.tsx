@@ -25,7 +25,7 @@ export function TerminalConfirmBlock({
   title: string
   info: PendingConfirmInfo
 }) {
-  const [command, setCommand] = useState(info.command)
+  const [command, setCommand] = useState(info.desc ?? '')
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -47,8 +47,11 @@ export function TerminalConfirmBlock({
       <div className="pty-confirm-body">
         <div className="pty-confirm-row">
           <span className="pty-confirm-badge">{t('尚未执行')}</span>
-          {info.label && (
-            <span className="pty-confirm-risk">{info.label}</span>
+          {info.title && (
+            <span className="pty-confirm-risk">{info.title}</span>
+          )}
+          {info.permName && (
+            <code className="pty-confirm-perm">{info.permName}</code>
           )}
         </div>
         <input

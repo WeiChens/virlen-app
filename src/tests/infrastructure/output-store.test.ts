@@ -109,3 +109,48 @@ describe('toolOutputStore 输出节流（前沿 + 尾沿补发）', () => {
     unsub()
   })
 })
+
+/**
+ * Step 2 ①：`pendingConfirm` 必须**替换为新对象**（而非就地改字段）。
+ *
+ * UI 侧 `useToolLiveOutput` 靠对象引用变化触发重渲染；若就地改字段，同一引用 →
+ * React 不重渲染 →「待确认命令行」永远不出现。这里把这条契约钉住。
+ * （原随 `tool-output-idle.test.ts` 一并删除，此处在 output-store 专项测试里补回。）
+ */
+describe('toolOutputStore.pendingConfirm（终端内确认）', () => {
+  const ID = 'tc-pc'
+
+  beforeEach(() => toolOutputStore.remove(ID))
+  afterEach(() => toolOutputStore.remove(ID))
+
+  it('setPendingConfirm / clearPendingConfirm 都替换为新对象并保留其余字段', () => {
+    toolOutputStore.register(ID, {
+      toolName: 'execute_command',
+      output: '',
+      pty: true,
+    })
+    const before = toolOutputStore.get(ID)
+
+    toolOutputStore.setPendingConfirm(ID, {
+      permName: 'terminal.install.execute',
+      title: '终端安装命令执行',
+      desc: 'npm login',
+      risk: 'install',
+    })
+    const after = toolOutputStore.get(ID)
+    expect(after).not.toBe(before) // 引用变化 → 触发重渲染
+    expect(after!.pendingConfirm?.desc).toBe('npm login')
+    expect(after!.pendingConfirm?.permName).toBe('terminal.install.execute')
+    expect(after!.pty).toBe(true) // 其余字段保留
+
+    toolOutputStore.clearPendingConfirm(ID)
+    const cleared = toolOutputStore.get(ID)
+    expect(cleared).not.toBe(after)
+    expect(cleared!.pendingConfirm).toBeUndefined()
+  })
+
+  it('未注册的 toolCallId 也能写入（自行建档）', () => {
+    toolOutputStore.setPendingConfirm(ID, { desc: 'ls' })
+    expect(toolOutputStore.get(ID)?.pendingConfirm?.desc).toBe('ls')
+  })
+})

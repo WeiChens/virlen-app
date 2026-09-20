@@ -324,6 +324,15 @@ export function getRiskInfo(risk: string): { label: string; hint: string } {
   }
 }
 
+/**
+ * 申请绕过沙盒（`sandbox:"off"`）时追加到审批弹窗的警告（命令 / 脚本共用；中文即 i18n key）。
+ *
+ * ⚠️ 文案与 Rust 侧 `classify.rs::SANDBOX_BYPASS_HINT` 逐字一致（铁律 1）。
+ */
+export const SANDBOX_BYPASS_HINT =
+  '⚠️ 该命令申请「不使用沙盒」执行：不受写隔离与受限令牌限制，可写入任意路径。' +
+  '仅当该命令确实需要管道 stdio（如 vitest / vite / jest / node-gyp）时允许。'
+
 // ══════════════════════════════════════════════════════════════════
 // 4. 命令审批注册表
 // ══════════════════════════════════════════════════════════════════

@@ -33,7 +33,7 @@ vi.mock('@/ui/pages/chat/components/message/code-block', () => ({
 
 /**
  * xterm 在 jsdom 里没有量度/画布，`term.open()` 没有意义；
- * 需要「真实挂载」（跑 effect）的用例（如 ④ 空闲提示）用最小替身。
+ * 需要「真实挂载」（跑 effect）的用例用最小替身。
  * 静态渲染用例（renderToStaticMarkup）本就不会跑 effect，不受影响。
  */
 vi.mock('@xterm/xterm', () => ({
@@ -598,44 +598,6 @@ describe('XtermTerminalBlock（PTY）结构与操作区', () => {
     )
     expect(html).toContain('pty-hint')
     expect(html).toContain('脚本已删除')
-  })
-
-  /**
-   * ④「疑似等待输入」提示（Step 2 ④）：纯本地计时（`useIdleSeconds` → `shouldHintIdle`）。
-   * 需真实挂载才会跑 effect，故单独一段 + xterm 替身（见上方 vi.mock）。
-   */
-  describe('④ 空闲提示', () => {
-    async function mountIdle(lastOutputAt: number) {
-      const container = document.createElement('div')
-      document.body.appendChild(container)
-      const root = createRoot(container)
-      await act(async () => {
-        root.render(
-          <XtermTerminalBlock
-            title="Terminal"
-            cmd="npm login"
-            stream=""
-            running
-            toolCallId="t-pty-idle"
-            lastOutputAt={lastOutputAt}
-          />,
-        )
-      })
-      return { container, root }
-    }
-
-    it('运行中且 15s 无输出 → 提示「疑似等待输入」（带秒数）', async () => {
-      const { container, root } = await mountIdle(Date.now() - 20_000)
-      expect(container.innerHTML).toContain('pty-idle-hint')
-      expect(container.innerHTML).toContain('秒无输出')
-      await act(async () => root.unmount())
-    })
-
-    it('刚有输出 → 不提示', async () => {
-      const { container, root } = await mountIdle(Date.now())
-      expect(container.innerHTML).not.toContain('pty-idle-hint')
-      await act(async () => root.unmount())
-    })
   })
 
   it('demo 风格外框：顶部窗口栏（红黄绿点）+ 右上操作区；底部状态栏已移除', () => {

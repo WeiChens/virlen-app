@@ -371,7 +371,6 @@ export function TerminalView({
           stream={stream}
           running={running}
           toolCallId={toolCallId}
-          lastOutputAt={entry?.lastOutputAt}
           status={
             running ? undefined : (
               <TerminalStatus

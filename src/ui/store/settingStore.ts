@@ -1,12 +1,16 @@
 import type { ProviderConfig } from '@/types'
 import type { SearchProviderConfig } from '@/domain/search/config'
 import type { EditorOpenConfig } from '@/domain/editor'
+import {
+  withDefaultPermissions,
+  migrateApprovalMode,
+  type PermissionMap,
+} from '@/domain/permission'
 import StorageState from '@/utils/storageState'
 import { track, isSensitiveKey } from '@/utils/telemetry'
 
 export type { EditorOpenConfig }
 
-export type CommandApprovalMode = 'all' | 'risky' | 'install' | 'none'
 export type SandboxMode = 'on' | 'off' | 'readonly'
 export type SessionGroupType = 'agent' | 'workspace'
 
@@ -23,8 +27,8 @@ export interface SettingsStore {
   fontSize: 'small' | 'medium' | 'large'
   /** 隐藏 toolCall 思考过程消息 */
   hideToolCallThink: boolean
-  /** 命令执行弹窗授权模式 */
-  commandApprovalMode: CommandApprovalMode
+  /** 权限三态表：权限 name → allow | ask | deny（终端命令 / 脚本执行） */
+  permissions: PermissionMap
   /** 终端命令执行沙盒模式：on 写隔离 / off 裸跑 / readonly 只读 */
   sandboxMode: SandboxMode
   /** 是否在系统提示词中包含环境信息 */
@@ -83,7 +87,7 @@ const defaultSettings: SettingsStore = {
   theme: 'system',
   fontSize: 'medium',
   hideToolCallThink: true,
-  commandApprovalMode: 'install',
+  permissions: withDefaultPermissions(undefined),
   sandboxMode: 'on',
   allowEnvPrompt: true,
   providers: [],
@@ -224,6 +228,37 @@ try {
   const raw = settingsState.value as any
   if ('editorOpenCommand' in raw) {
     delete raw.editorOpenCommand
+    localStorage.setItem(
+      '_storage_state_virlen-settings',
+      JSON.stringify(settingsState.value),
+    )
+  }
+} catch {
+  // 非浏览器环境忽略
+}
+
+// ── 权限模块迁移：旧 commandApprovalMode（全局枚举）→ 新 permissions（按权限三态） ──
+// 旧值过粗（一个开关管所有命令），现拆成 terminal.normal / install / dangerous +
+// script.execute 四类，每类 允许 / 每次弹窗 / 禁止 三态。
+// 迁移后删除旧字段，避免与新模型并存造成困惑（新用户无旧值 → 用注册表默认）。
+try {
+  const raw = settingsState.value as any
+  const legacy = raw.commandApprovalMode as string | undefined
+  const migrated = migrateApprovalMode(legacy)
+  if (migrated && !localStorage.getItem('virlen-permissions-migrated')) {
+    // 以旧枚举为准，其余项按注册表默认值补齐
+    settingsState.value.permissions = {
+      ...withDefaultPermissions(settingsState.value.permissions),
+      ...migrated,
+    }
+    localStorage.setItem(
+      '_storage_state_virlen-settings',
+      JSON.stringify(settingsState.value),
+    )
+    localStorage.setItem('virlen-permissions-migrated', '1')
+  }
+  if ('commandApprovalMode' in raw) {
+    delete raw.commandApprovalMode
     localStorage.setItem(
       '_storage_state_virlen-settings',
       JSON.stringify(settingsState.value),

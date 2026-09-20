@@ -1,8 +1,8 @@
 /**
- * command_confirm — 命令执行确认弹窗的交互逻辑
+ * command_confirm — 授权确认弹窗的交互逻辑（命令 / 脚本 / 沙盒脱壳等，通用）
  *
  * handler 收到 confirm_command 后：
- * 1. 弹窗让用户确认
+ * 1. 弹「授权确认」弹窗（展示权限唯一 key + title / sub-title / desc）
  * 2. 用户点「允许」→ handler 自己调 runCommand 执行，把结果 resolve 回去
  * 3. 用户点「拒绝」→ reject 'cancelled'
  * 4. 用户点「暂存」→ throw InteractionShelved
@@ -124,12 +124,13 @@ export function createCommandConfirmHandles(
 
   return {
     handler: async (_type: string, data: Record<string, any>) => {
-      pendingCommand = data.command || ''
+      pendingCommand = data.command || data.desc || ''
       pendingToolCallId = data.toolCallId || ''
       pendingApprovalId = data.approvalId || ''
       showTime = Date.now()
       track('interaction.command.confirm.show', {
         approval_id: pendingApprovalId,
+        perm_name: data.permName,
         command: pendingCommand,
         command_len: pendingCommand.length,
         risk: data.risk,
@@ -139,15 +140,15 @@ export function createCommandConfirmHandles(
       return new Promise<ToolExecutorResponse>((resolve, reject) => {
         interactionResolve = resolve
         interactionReject = reject
-        toolInteractEvent.emit(
-          'showCommandConfirm',
-          sessionId,
-          data.command,
-          data.risk,
-          data.label,
-          data.hint,
-          data.tips,
-        )
+        toolInteractEvent.emit('showAuthorization', {
+          permName: data.permName || '',
+          title: data.title || '',
+          subTitle: data.subTitle,
+          desc: data.desc,
+          command: data.command,
+          hint: data.hint,
+          risk: data.risk,
+        })
       })
     },
     cleanup: () => {
@@ -276,13 +277,14 @@ export function createNativeCommandConfirmHandles(
 
   return {
     handler: async (_type: string, data: Record<string, any>) => {
-      pendingCommand = data.command || ''
+      pendingCommand = data.command || data.desc || ''
       pendingToolCallId = data.toolCallId || ''
       // 原生路径 Rust 不下发 approvalId，回退用 toolCallId 作为审批关联 ID
       pendingApprovalId = data.approvalId || data.toolCallId || ''
       showTime = Date.now()
       track('interaction.command.confirm.show', {
         approval_id: pendingApprovalId,
+        perm_name: data.permName,
         command: pendingCommand,
         command_len: pendingCommand.length,
         risk: data.risk,
@@ -298,23 +300,24 @@ export function createNativeCommandConfirmHandles(
         // 渲染可编辑命令行。走哪条路只由 Rust 下发的 presentation 决定（前端不猜平台）。
         if (data.presentation === 'terminal') {
           toolOutputStore.setPendingConfirm(pendingToolCallId, {
-            command: pendingCommand,
-            risk: data.risk,
-            label: data.label,
+            permName: data.permName,
+            title: data.title,
+            subTitle: data.subTitle,
+            desc: data.desc,
             hint: data.hint,
-            tips: data.tips,
+            risk: data.risk,
           })
           return
         }
-        toolInteractEvent.emit(
-          'showCommandConfirm',
-          sessionId,
-          data.command,
-          data.risk,
-          data.label,
-          data.hint,
-          data.tips,
-        )
+        toolInteractEvent.emit('showAuthorization', {
+          permName: data.permName || '',
+          title: data.title || '',
+          subTitle: data.subTitle,
+          desc: data.desc,
+          command: data.command,
+          hint: data.hint,
+          risk: data.risk,
+        })
       })
     },
     cleanup: () => {

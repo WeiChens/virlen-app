@@ -9,13 +9,21 @@
  * Step 2 ①：「终端内确认」的待确认命令信息。
  *
  * 命令此时**尚未执行**：UI 在终端块里渲染成一行可编辑命令，用户按 Enter 才执行。
+ * 字段与通用授权弹窗（`AuthorizationRequest`）对齐：permName/title/subTitle/desc/hint/risk。
  */
 export interface PendingConfirmInfo {
-  command: string
-  risk?: string
-  label?: string
+  /** 权限唯一 key（展示） */
+  permName?: string
+  /** 权限名称（展示） */
+  title?: string
+  /** 副标题：AI 操作说明 */
+  subTitle?: string
+  /** 正文：待确认的命令内容（用户可编辑） */
+  desc?: string
+  /** 风险 / 警告提示 */
   hint?: string
-  tips?: string
+  /** 风险等级（配色） */
+  risk?: string
 }
 
 export interface ToolOutput {
@@ -38,38 +46,6 @@ export interface ToolOutput {
    * 用户提交 / 取消后由 `clearPendingConfirm` 清空。
    */
   pendingConfirm?: PendingConfirmInfo
-  /**
-   * 最近一次输出活动的时间戳（ms）。
-   *
-   * Step 2 ④：前端据此做「疑似等待输入」提示（本地计时，**零后端成本**）。
-   * 注册与每次 append 都会刷新；命令结束（`running=false`）即不再参与判定。
-   */
-  lastOutputAt?: number
-}
-
-/**
- * 「疑似等待输入」判定的空闲阈值（ms）。
- *
- * 15s 无任何输出（且命令仍在运行）→ 提示用户可能卡在等待输入
- * （密码 / `y/n` / REPL），见 docs/pty-research.md §8 Step 2 ④。
- */
-export const IDLE_HINT_MS = 15_000
-
-/**
- * 是否应显示「疑似等待输入」提示（Step 2 ④，抽成纯函数便于单测）。
- *
- * - 未运行 → false（命令结束即无开销）；
- * - 无输出记录（`lastOutputAt` 缺失）→ false；
- * - 空闲时长 ≥ `IDLE_HINT_MS` → true。
- */
-export function shouldHintIdle(
-  now: number,
-  lastOutputAt: number | undefined,
-  running: boolean,
-): boolean {
-  if (!running) return false
-  if (!lastOutputAt) return false
-  return now - lastOutputAt >= IDLE_HINT_MS
 }
 
 /**
@@ -100,8 +76,7 @@ class ToolOutputStore {
 
   /** 注册一个 tool 输出状态 */
   register(toolCallId: string, output: ToolOutput) {
-    // 注册即开始计空闲（覆盖「命令一直无输出」的等待输入场景）
-    this.map.set(toolCallId, { ...output, lastOutputAt: Date.now() })
+    this.map.set(toolCallId, { ...output })
     this.cancelTrailing(toolCallId)
     this.notify(toolCallId)
   }
@@ -111,7 +86,6 @@ class ToolOutputStore {
     const existing = this.map.get(toolCallId)
     if (existing) {
       existing.output += chunk
-      existing.lastOutputAt = Date.now()
       const now = Date.now()
       const last = this.lastNotify.get(toolCallId) ?? 0
       if (now - last >= NOTIFY_INTERVAL_MS) {
@@ -127,7 +101,6 @@ class ToolOutputStore {
       this.map.set(toolCallId, {
         toolName: '',
         output: chunk,
-        lastOutputAt: Date.now(),
       })
       this.notify(toolCallId)
     }

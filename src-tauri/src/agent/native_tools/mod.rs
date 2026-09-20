@@ -156,7 +156,7 @@ pub async fn execute_native_tool(
 /// 超时/取消/接管），输出经调用方提供的 `EventSink` 流式回传。
 ///
 /// 与 `execute_native_tool(ctx, "execute_command", args)` 的**唯一区别**：
-/// **不做风险分类与审批** —— 审批（`commandApprovalMode` / `sandbox:"off"` 强制审批）
+/// **不做风险分类与审批** —— 审批（权限三态 / `sandbox:"off"` 强制审批）
 /// 由 TS 侧的 `execute_command` 工具负责，本入口只负责「执行一条已获批准的命令」。
 pub(crate) async fn run_command_for_ts_engine(
     sink: &dyn EventSink,

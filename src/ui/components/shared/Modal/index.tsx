@@ -4,7 +4,8 @@ import { t } from '@/ui/i18n'
 
 export interface ModalProps {
   visible: boolean
-  title?: string
+  /** 标题（可为 ReactNode，以便渲染权限 key 等富内容） */
+  title?: ReactNode
   onClose: () => void
   children?: ReactNode
   footer?: ReactNode

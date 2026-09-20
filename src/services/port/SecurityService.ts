@@ -1,3 +1,5 @@
+import type { PermissionDecision } from '@/domain/permission'
+
 export interface SecurityService {
   getWorkspace(sessionId?: string): Promise<string>
 
@@ -19,7 +21,7 @@ export interface SecurityService {
     sessionId?: string,
   ): Promise<string>
 
-  getCommandApprovalMode(): Promise<string>
+  getPermissionDecision(name: string): Promise<PermissionDecision>
 
   getSkipEachDirs(): Promise<string[]>
   initDefaultSecurity(): Promise<void>

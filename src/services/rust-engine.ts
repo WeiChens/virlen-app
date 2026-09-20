@@ -328,7 +328,6 @@ export async function resolveSecurityConfig(
 ): Promise<Record<string, any> | null> {
   try {
     const workspace = await securityService.getWorkspace(session.id)
-    const approvalMode = await securityService.getCommandApprovalMode()
     const skipDirs = await securityService.getSkipEachDirs()
     const config = securityRepo.load()
     let skillsDir: string | null = null
@@ -339,7 +338,8 @@ export async function resolveSecurityConfig(
     }
     return {
       workspace,
-      approvalMode,
+      // 权限三态表（终端命令 / 脚本执行）——取代旧的单一 approvalMode
+      permissions: settingsState.value.permissions,
       skipDirs,
       blacklist: config.blacklist ?? [],
       whitelist: config.whitelist ?? [],

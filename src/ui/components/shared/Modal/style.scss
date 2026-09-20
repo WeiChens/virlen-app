@@ -34,6 +34,10 @@
     box-shadow: var(--shadow-md);
     animation: slideUp 0.3s ease;
 
+    &:focus {
+      outline: none;
+    }
+
     .modal-header {
       /* 原 5px 10px + 多余的 padding-bottom，与 body/footer 的 14/24 完全不同一套节奏 */
       padding: 8px 12px;
@@ -150,6 +154,7 @@
   from {
     opacity: 0;
   }
+
   to {
     opacity: 1;
   }
@@ -160,6 +165,7 @@
     transform: translateY(30px);
     opacity: 0;
   }
+
   to {
     transform: translateY(0);
     opacity: 1;

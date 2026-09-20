@@ -99,23 +99,24 @@ describe('createNativeCommandConfirmHandles 终端内确认（Step 2 ①）', ()
   it('presentation=terminal：不弹 modal、写入 pendingConfirm；提交回传改后命令', async () => {
     const handles = createNativeCommandConfirmHandles('s1')
     const shows: any[] = []
-    const off = toolInteractEvent.on('showCommandConfirm', (...args) => {
+    const off = toolInteractEvent.on('showAuthorization', (...args) => {
       shows.push(args)
     })
 
     const p = handles.handler('confirm_command_native', {
       presentation: 'terminal',
-      command: 'npm login',
+      desc: 'npm login',
       risk: 'install',
-      label: '安装命令',
+      permName: 'terminal.install.execute',
+      title: '终端安装命令执行',
+      subTitle: 't',
       hint: 'h',
-      tips: 't',
       toolCallId: 'tc-T',
     })
 
     // 不弹 modal；改在终端块里渲染可编辑命令行
     expect(shows.length).toBe(0)
-    expect(toolOutputStore.get('tc-T')?.pendingConfirm?.command).toBe('npm login')
+    expect(toolOutputStore.get('tc-T')?.pendingConfirm?.desc).toBe('npm login')
 
     toolInteractEvent.emit(
       'terminalConfirmSubmit',
@@ -136,7 +137,7 @@ describe('createNativeCommandConfirmHandles 终端内确认（Step 2 ①）', ()
     const handles = createNativeCommandConfirmHandles('s2')
     const p = handles.handler('confirm_command_native', {
       presentation: 'terminal',
-      command: 'gh auth login',
+      desc: 'gh auth login',
       toolCallId: 'tc-C',
     })
     expect(toolOutputStore.get('tc-C')?.pendingConfirm).toBeTruthy()
@@ -149,18 +150,19 @@ describe('createNativeCommandConfirmHandles 终端内确认（Step 2 ①）', ()
     toolOutputStore.remove('tc-C')
   })
 
-  it('无 presentation：仍走弹窗（showCommandConfirm），行为不变', async () => {
+  it('无 presentation：仍走弹窗（showAuthorization），行为不变', async () => {
     const handles = createNativeCommandConfirmHandles('s3')
     const shows: any[] = []
-    const off = toolInteractEvent.on('showCommandConfirm', (...args) => {
+    const off = toolInteractEvent.on('showAuthorization', (...args) => {
       shows.push(args)
     })
     const p = handles.handler('confirm_command_native', {
-      command: 'ls',
+      desc: 'ls',
       risk: 'safe',
-      label: 'L',
+      permName: 'terminal.normal.execute',
+      title: '终端正常命令执行',
+      subTitle: 't',
       hint: 'h',
-      tips: 't',
       toolCallId: 'tc-M',
     })
     expect(shows.length).toBe(1)

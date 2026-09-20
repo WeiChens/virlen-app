@@ -13,6 +13,8 @@ pub(crate) fn test_security(workspace: &str) -> NativeToolSecurity {
         whitelist: vec![],
         skills_dir: None,
         sandbox_mode: "on".to_string(),
+        // 测试默认给空表 → 决策回退 legacy approval_mode（保持既有测试语义）
+        permissions: std::collections::BTreeMap::new(),
     }
 }
 

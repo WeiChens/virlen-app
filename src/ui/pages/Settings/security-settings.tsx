@@ -1,21 +1,63 @@
 /**
- * security-settings — 安全设置页面
- * 管理白名单/黑名单/忽略遍历文件夹
+ * security-settings — 安全设置页面（Tab 容器）
+ *
+ * 两个子 Tab：
+ *  - 权限管理（默认）：命令 / 脚本执行的三态权限（见 `@/domain/permission`）
+ *  - 文件访问安全：文件系统白名单 / 黑名单 / 忽略遍历文件夹
  */
 import { useState } from 'react'
 import { observer } from 'mobx-react-lite'
-import {
-  securityStore,
-} from '@/ui/store/securityStore'
+import { securityStore } from '@/ui/store/securityStore'
 import DeleteSvg from '@/ui/components/icons/DeleteSvg'
 import AddSvg from '@/ui/components/icons/AddSvg'
+import SecurityPermissions from './security-permissions'
 import './general-settings.scss'
+import './security-settings.scss'
 import { showToast } from '@/ui/components/shared/Toast'
 import { t } from '@/ui/i18n'
 
+type SecurityTab = 'permissions' | 'file-access'
 type ListType = 'whitelist' | 'blacklist' | 'skipEachDirs'
 
 function SecuritySettings() {
+  const [tab, setTab] = useState<SecurityTab>('permissions')
+
+  return (
+    <div
+      className="general-settings security-settings"
+      style={{
+        overflow: 'hidden',
+        height: '100%',
+      }}>
+      <div className="security-tabs" role="tablist">
+        <button
+          role="tab"
+          aria-selected={tab === 'permissions'}
+          className={`security-tab ${tab === 'permissions' ? 'active' : ''}`}
+          onClick={() => setTab('permissions')}>
+          {t('权限管理')}
+        </button>
+        <button
+          role="tab"
+          aria-selected={tab === 'file-access'}
+          className={`security-tab ${tab === 'file-access' ? 'active' : ''}`}
+          onClick={() => setTab('file-access')}>
+          {t('文件访问安全')}
+        </button>
+      </div>
+
+      <div className="security-tab-body">
+        {tab === 'permissions' && <SecurityPermissions />}
+        {tab === 'file-access' && <FileAccessSecurity />}
+      </div>
+    </div>
+  )
+}
+
+/** 文件访问安全：白名单 / 黑名单 / 忽略遍历文件夹（原安全页主体） */
+// ⚠️ 子组件必须自己 observer：父组件不再直接读取 securityStore，
+// 否则名单增删后不会重渲染。
+const FileAccessSecurity = observer(function FileAccessSecurity() {
   const [inputDir, setInputDir] = useState('')
   const [activeList, setActiveList] = useState<ListType>('whitelist')
 
@@ -72,12 +114,7 @@ function SecuritySettings() {
         : skipEachDirs
 
   return (
-    <div
-      className="general-settings"
-      style={{
-        overflow: 'hidden',
-        height: '100%',
-      }}>
+    <>
       <h2 className="section-title">{t('文件访问安全')}</h2>
 
       <div className="section">
@@ -92,7 +129,9 @@ function SecuritySettings() {
           {t('只能查看、不能动里面的文件')}
         </div>
         <div className="section-desc">
-          {t('命令执行授权与终端权限在「通用 → 命令与终端安全」中设置')}
+          {t(
+            '命令 / 脚本执行权限见本页「权限管理」标签；终端沙盒模式与注入环境信息在「通用 → 命令与终端安全」中设置',
+          )}
         </div>
 
         <div className="setting-row">
@@ -202,8 +241,8 @@ function SecuritySettings() {
           </div>
         )}
       </div>
-    </div>
+    </>
   )
-}
+})
 
 export default observer(SecuritySettings)

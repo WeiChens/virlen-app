@@ -1,7 +1,8 @@
 /**
  * chat-input — 聊天输入框
  * 自动高度 textarea，Enter 发送，Shift+Enter 换行
- * loading 时发送按钮变成停止按钮
+ * loading（AI 工作中）仍可输入文字 / 上传图片 / 语音 / 拖拽粘贴附件，
+ *   但 Enter 不发送（改为换行）；只有「发送」被禁止，发送按钮变成停止按钮
  * 支持多模态输入：图片上传 / 粘贴 / 拖拽
  * 支持文件附件：拖拽 / 粘贴文件，只记录路径（不拷贝文件内容）
  * 支持语音输入：使用 Web Speech API（SpeechRecognition）
@@ -653,12 +654,10 @@ function ChatInput(
     }
 
     if (e.key === 'Enter' && !e.shiftKey) {
+      // AI 工作中 / 上下文压缩中：不拦截回车，交给默认行为插入换行（此时也禁止发送）
+      if (loading || compacting) return
       e.preventDefault()
-      if (loading) {
-        // handleCancel()
-      } else {
-        handleSend()
-      }
+      handleSend()
       return
     }
 
@@ -1047,7 +1046,7 @@ function ChatInput(
               value={goal}
               onChange={(e) => setGoal(e.target.value)}
               placeholder={t('输入可验证的目标，AI 会自动检查结果...')}
-              disabled={disabled || loading}
+              disabled={disabled}
               onKeyDown={(e) => {
                 if (e.key === 'Escape') {
                   setGoalExpanded(false)
@@ -1058,7 +1057,7 @@ function ChatInput(
             {/* 验证目标快捷输入（goal-close-btn 左侧） */}
             <GoalQuickInputMenu
               onSelect={handleGoalQuickInputSelect}
-              disabled={disabled || loading}
+              disabled={disabled}
             />
             <button
               className="goal-close-btn"
@@ -1112,7 +1111,10 @@ function ChatInput(
               ? t('添加描述或直接发送...')
               : placeholder
           }
-          disabled={disabled || compacting}
+          disabled={
+            // 仅“硬禁用”时才禁用输入框；AI 工作中（loading）仍可继续输入，只是不能发送
+            disabled
+          }
         />
 
         <div className="botton-wapper">
@@ -1121,7 +1123,7 @@ function ChatInput(
             <button
               className={`image-btn ${images.length > 0 ? 'has-images' : ''}`}
               onClick={handleImageButtonClick}
-              disabled={disabled || loading}
+              disabled={disabled}
               title={t('上传图片（支持粘贴 / 拖拽）')}
               type="button">
               <svg
@@ -1149,7 +1151,7 @@ function ChatInput(
                 className={`voice-btn ${isRecording ? 'is-recording' : ''} ${isTranscribing ? 'is-transcribing' : ''
                   }`}
                 onClick={toggleVoiceInput}
-                disabled={disabled || loading || isTranscribing}
+                disabled={disabled || isTranscribing}
                 title={
                   isTranscribing
                     ? t('语音识别中...')

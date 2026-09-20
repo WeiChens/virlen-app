@@ -152,7 +152,8 @@ agent:provider-request { requestId, providerType, providerId, apiKey, baseUrl, r
 ### 安全配置传递（JS → Rust）
 
 `rust-engine.ts` 在 `agent_send_message` 时解析 `resolveSecurityConfig(session)`：
-workspace / approvalMode / skipDirs / blacklist / whitelist / skillsDir。
+workspace / permissions / skipDirs / blacklist / whitelist / skillsDir。
+（`permissions` 为权限三态表，取代旧的单一 `approvalMode`；`approvalMode` 字段仍保留用于兼容回退）
 Rust 侧 `NativeToolSecurity` 由 `native_tools/common.rs` 的 `resolve_safe_path` / `is_path_allowed`
 执行与前端 `securityService.resolveSafePath` 完全一致的路径校验。
 解析失败 → `security=None` → 工具自动回退 JS 桥。
@@ -167,6 +168,11 @@ execute_command 需审批
   → 用户「拒绝」→ cancelled → "[User cancelled]"
   → 用户「暂存」→ shelved → __SHELVED__（暂停，快照保留）
 ```
+
+「需审批」由**权限三态**决定（`classify.rs::command_decision` + `resolve_decision`）：
+`permissions[name]`（`allow`/`ask`/`deny`）优先，缺失回退 legacy `approval_mode`；
+`deny` 永远优先；`sandbox:"off"` / `confirm:"terminal"` 强制至少 `ask`。
+`deny` 直接返回 `Err("操作已被权限设置禁止：<权限名>")`，不弹窗；`execute_script` 走独立的 `script.execute`。
 
 ### 取消语义改进
 

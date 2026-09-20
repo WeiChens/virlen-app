@@ -107,6 +107,14 @@ pub(crate) async fn run_command_native(
     timeout_secs: i64,
     bypass_sandbox: bool,
 ) -> Result<NativeToolOutcome, String> {
+    // 只读模式的最后一道闸：禁止绕过沙盒（覆盖所有调用路径，含 TS 引擎入口 pty_run_command）。
+    // 工具层在审批之前已做同样判定（避免「弹窗批准后又被拒」），这里兜底。
+    if bypass_sandbox && sandbox_mode(ctx) == SandboxMode::Readonly {
+        return Err(
+            "沙盒处于只读模式，不支持绕过沙盒执行；请先在设置中切换沙盒模式（或改用常规终端）"
+                .to_string(),
+        );
+    }
     #[cfg(target_os = "windows")]
     {
         return pty::run_command_native_pty(ctx, cmd_str, timeout_secs, bypass_sandbox).await;

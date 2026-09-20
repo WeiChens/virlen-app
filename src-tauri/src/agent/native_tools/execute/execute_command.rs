@@ -1,6 +1,6 @@
 //! `execute_command` 工具（原生）— shell 命令执行
 //!
-//! 流程：风险分类 → （按 approvalMode 弹窗审批）→ 原生 spawn（沙盒优先）→ 超时/取消/终止。
+//! 流程：风险分类 → （按权限三态/legacy approvalMode 弹窗审批）→ 原生 spawn（沙盒优先）→ 超时/取消/终止。
 
 use crate::agent::bridge::BridgeInteractionResult;
 use crate::agent::native_tools::common::{arg_i64, arg_str};
@@ -8,8 +8,9 @@ use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
 use serde_json::{json, Value};
 
 use super::common::{
-    classify_command, needs_command_approval, pty_available, risk_info, run_command_native,
-    sandbox_mode, with_bypass_hint, SandboxMode,
+    classify_command, command_decision, permission_for_risk, permission_label, pty_available,
+    resolve_decision, risk_info, run_command_native, sandbox_mode, with_bypass_hint,
+    PermissionDecision, SandboxMode, PERM_SANDBOX_COMMAND,
 };
 
 /// 执行 shell 命令（原生）
@@ -33,7 +34,7 @@ pub(crate) async fn execute_command_tool(
     // 用途：沙盒下必然失败的场景——命令的子进程需要用管道 stdio 拉起孙进程
     // （vitest / vite / jest / ts-node / node-gyp…），受限令牌会让那次 spawn 直接 EPERM，
     // 根因见 AGENTS §11.2。
-    // ⚠️ 安全：该请求一律强制用户审批（不受 commandApprovalMode 影响）；
+    // ⚠️ 安全：该请求过「沙盒脱壳」权限门禁（与命令风险权限取更严格者；默认弹窗）；
     // readonly 模式直接拒绝（否则只读保护会被绕过）。
     let bypass_sandbox = matches!(
         arg_str(args, "sandbox")
@@ -58,26 +59,69 @@ pub(crate) async fn execute_command_tool(
     let terminal_presentation = confirm_terminal && pty_available();
 
     let risk = classify_command(&cmd_str);
-    let mode = ctx.security.approval_mode.as_str();
-    let needs_approval = needs_command_approval(mode, risk, bypass_sandbox);
+    let perm = permission_for_risk(risk);
+    // 权限三态：permissions 表优先，回退 legacy approval_mode（兼容老客户端 / 测试）
+    let base = command_decision(
+        &ctx.security.permissions,
+        &ctx.security.approval_mode,
+        perm,
+        risk,
+    );
+    // 申请绕过沙盒且沙盒启用（readonly 已在上方直接拒绝）→ 额外过「沙盒脱壳」权限门禁
+    // （与风险权限**取更严格者**，默认 ask；用户可设为 allow 静默脱壳 / deny 直接禁止）。
+    // ⚠️ 沙盒模式 off 时无沙盒可脱，不参与门禁（否则会对无关命令弹窗）。
+    // 脱壳权限无 legacy 对应项 → approval_mode 传空串，只用权限表 / 注册表默认（ask）。
+    let escape_decision = if bypass_sandbox && sandbox_mode(ctx) != SandboxMode::Off {
+        Some(command_decision(
+            &ctx.security.permissions,
+            "",
+            PERM_SANDBOX_COMMAND,
+            risk,
+        ))
+    } else {
+        None
+    };
+    // deny 优先；终端内确认强制至少 ask（安全底线）
+    let decision = resolve_decision(base, escape_decision, confirm_terminal);
 
-    if needs_approval {
-        // 走用户交互桥（type=confirm_command_native），由 JS 复用同一个确认弹窗。
+    if decision == PermissionDecision::Deny {
+        let denied = if escape_decision == Some(PermissionDecision::Deny) {
+            PERM_SANDBOX_COMMAND
+        } else {
+            perm
+        };
+        return Err(format!("操作已被权限设置禁止：{}", permission_label(denied)));
+    }
+
+    if decision == PermissionDecision::Ask {
+        // 走用户交互桥（type=confirm_command_native），由 JS 复用同一个「授权确认」弹窗。
         // 审批在本地完成：用户「允许」后直接原生执行命令，避免命令参数跨桥丢失。
-        let (label, hint) = risk_info(risk);
+        let (_label, hint) = risk_info(risk);
         // 申请绕过沙盒：在风险提示后追加强警告（沙盒不可用时的退路，必须让用户看到后果）
         let hint = if bypass_sandbox {
             with_bypass_hint(&hint)
         } else {
             hint
         };
+        // 触发本次确认的权限：仅因沙盒脱壳（基础 allow、脱壳 ask）时展示脱壳权限，
+        // 让用户知道要放行的是哪条权限；否则展示命令风险权限。
+        let shown_perm = if bypass_sandbox
+            && base == PermissionDecision::Allow
+            && escape_decision == Some(PermissionDecision::Ask)
+        {
+            PERM_SANDBOX_COMMAND
+        } else {
+            perm
+        };
         let tips = arg_str(args, "tips").unwrap_or_default();
         let mut data = json!({
-            "command": cmd_str,
-            "risk": risk,
-            "label": label,
+            // 通用授权字段（弹窗展示）：权限唯一 key + 权限名 + 说明 + 内容
+            "permName": shown_perm,
+            "title": permission_label(shown_perm),
+            "subTitle": tips,
+            "desc": cmd_str,
             "hint": hint,
-            "tips": tips,
+            "risk": risk,
         });
         if let Value::Object(map) = &mut data {
             map.insert(
@@ -433,32 +477,139 @@ mod tests {
 
     // 本次新增：绕过沙盒（sandbox:"off"）的审批策略与文案。
     // 显式导入，不依赖 `use super::*` 对父模块 use 绑定的传递。
-    use super::super::common::{needs_command_approval, with_bypass_hint, SANDBOX_BYPASS_HINT};
+    use super::super::common::{
+        command_decision, resolve_decision, with_bypass_hint, PermissionDecision,
+        PERM_SANDBOX_COMMAND, PERM_TERMINAL_DANGEROUS, PERM_TERMINAL_INSTALL, PERM_TERMINAL_NORMAL,
+        SANDBOX_BYPASS_HINT,
+    };
 
-    /// 审批策略：绕过沙盒必须强制审批，与 approvalMode / risk 无关（安全底线）。
+    /// 决策阶梯：申请脱壳 → 与「沙盒脱壳」权限**取更严格者**（默认 ask）；
+    /// deny 永远优先（不被放宽）；终端内确认强制至少 ask。
     #[test]
-    fn bypass_sandbox_always_requires_approval() {
-        for mode in ["all", "risky", "install", "none"] {
-            for risk in ["safe", "install", "dangerous"] {
-                assert!(
-                    needs_command_approval(mode, risk, true),
-                    "bypass must always require approval (mode={mode}, risk={risk})"
-                );
-            }
+    fn escape_decision_takes_strictest() {
+        // 脱壳权限 ask + 基础 allow/ask → ask（默认弹窗，行为与旧版一致）
+        for base in [PermissionDecision::Allow, PermissionDecision::Ask] {
+            assert_eq!(
+                resolve_decision(base, Some(PermissionDecision::Ask), false),
+                PermissionDecision::Ask,
+                "脱壳权限 ask → 至少 ask"
+            );
         }
+        // 脱壳权限 allow + 基础 allow → allow（用户已授权，静默脱壳）
+        assert_eq!(
+            resolve_decision(
+                PermissionDecision::Allow,
+                Some(PermissionDecision::Allow),
+                false
+            ),
+            PermissionDecision::Allow
+        );
+        // 脱壳权限 allow 不能放宽更严格的基础（危险命令仍需确认）
+        assert_eq!(
+            resolve_decision(
+                PermissionDecision::Ask,
+                Some(PermissionDecision::Allow),
+                false
+            ),
+            PermissionDecision::Ask
+        );
+        // 脱壳权限 deny → 直接拒绝
+        assert_eq!(
+            resolve_decision(
+                PermissionDecision::Allow,
+                Some(PermissionDecision::Deny),
+                false
+            ),
+            PermissionDecision::Deny
+        );
+        // 终端内确认 → 强制至少 ask
+        assert_eq!(
+            resolve_decision(PermissionDecision::Allow, None, true),
+            PermissionDecision::Ask
+        );
+        // deny 永远优先（不被终端内确认 / 脱壳 allow 放宽）
+        assert_eq!(
+            resolve_decision(
+                PermissionDecision::Deny,
+                Some(PermissionDecision::Allow),
+                true
+            ),
+            PermissionDecision::Deny,
+            "deny 必须优先"
+        );
+        // 未申请脱壳（None）→ 基础决策不变
+        assert_eq!(
+            resolve_decision(PermissionDecision::Allow, None, false),
+            PermissionDecision::Allow
+        );
+
+        // 脱壳权限默认 ask；权限表命中可覆盖；legacy approval_mode 不参与（传空串）
+        use std::collections::BTreeMap;
+        let empty = BTreeMap::new();
+        assert_eq!(
+            command_decision(&empty, "", PERM_SANDBOX_COMMAND, "safe"),
+            PermissionDecision::Ask
+        );
+        let mut perms = BTreeMap::new();
+        perms.insert(PERM_SANDBOX_COMMAND.to_string(), "allow".to_string());
+        assert_eq!(
+            command_decision(&perms, "", PERM_SANDBOX_COMMAND, "safe"),
+            PermissionDecision::Allow
+        );
     }
 
-    /// 审批策略：未申请绕过时与既有 commandApprovalMode 语义完全一致（回归保护）。
+    /// 权限表优先；缺失时回退 legacy approval_mode（回归保护，语义与旧 commandApprovalMode 一致）。
     #[test]
-    fn approval_mode_semantics_unchanged() {
-        assert!(needs_command_approval("all", "safe", false));
-        assert!(!needs_command_approval("risky", "safe", false));
-        assert!(!needs_command_approval("risky", "install", false));
-        assert!(needs_command_approval("risky", "dangerous", false));
-        assert!(!needs_command_approval("install", "safe", false));
-        assert!(needs_command_approval("install", "install", false));
-        assert!(needs_command_approval("install", "dangerous", false));
-        assert!(!needs_command_approval("none", "dangerous", false));
+    fn permission_priority_and_legacy_fallback() {
+        use std::collections::BTreeMap;
+
+        // 权限表命中 → 按表决策（表内值覆盖 legacy mode）
+        let mut perms = BTreeMap::new();
+        perms.insert(PERM_TERMINAL_NORMAL.to_string(), "allow".to_string());
+        assert_eq!(
+            command_decision(&perms, "all", PERM_TERMINAL_NORMAL, "safe"),
+            PermissionDecision::Allow
+        );
+        perms.insert(PERM_TERMINAL_NORMAL.to_string(), "deny".to_string());
+        assert_eq!(
+            command_decision(&perms, "none", PERM_TERMINAL_NORMAL, "safe"),
+            PermissionDecision::Deny
+        );
+
+        // 表缺失 → 回退 legacy approval_mode（与既有语义完全一致）
+        let empty = BTreeMap::new();
+        assert_eq!(
+            command_decision(&empty, "all", PERM_TERMINAL_NORMAL, "safe"),
+            PermissionDecision::Ask
+        );
+        assert_eq!(
+            command_decision(&empty, "risky", PERM_TERMINAL_NORMAL, "safe"),
+            PermissionDecision::Allow
+        );
+        assert_eq!(
+            command_decision(&empty, "risky", PERM_TERMINAL_INSTALL, "install"),
+            PermissionDecision::Allow
+        );
+        assert_eq!(
+            command_decision(&empty, "risky", PERM_TERMINAL_DANGEROUS, "dangerous"),
+            PermissionDecision::Ask
+        );
+        assert_eq!(
+            command_decision(&empty, "install", PERM_TERMINAL_NORMAL, "safe"),
+            PermissionDecision::Allow
+        );
+        assert_eq!(
+            command_decision(&empty, "install", PERM_TERMINAL_INSTALL, "install"),
+            PermissionDecision::Ask
+        );
+        assert_eq!(
+            command_decision(&empty, "install", PERM_TERMINAL_DANGEROUS, "dangerous"),
+            PermissionDecision::Ask
+        );
+        assert_eq!(
+            command_decision(&empty, "none", PERM_TERMINAL_DANGEROUS, "dangerous"),
+            PermissionDecision::Allow
+        );
     }
 
     /// 绕过沙盒的警告必须拼在基础提示后（基础提示为空时不得产生前导换行）。

@@ -6,7 +6,9 @@
  * - macOS: zsh
  * - Linux: sh
  *
- * 审批：跟随 settings.commandApprovalMode，命中时返回 UserInteractionRequired('confirm_command')。
+ * 审批：按权限三态（settings.permissions[terminal.*]：允许 / 每次弹窗 / 禁止）决策；
+ * 申请绕过沙盒（sandbox:"off"）时另过「沙盒脱壳·命令执行」权限（与风险权限取更严格者）；
+ * 命中弹窗时返回 UserInteractionRequired('confirm_command')，禁止时直接抛错。
  */
 import { toolRegistry } from '@/domain/tools'
 import {
@@ -15,9 +17,17 @@ import {
   type ToolExecutor,
   type ToolResult,
 } from '@/domain/tools/types'
-import { t } from '@/ui/i18n'
+import { t, tpl } from '@/ui/i18n'
 import { securityService } from '@/services/security-service'
 import {
+  PERM_SANDBOX_COMMAND,
+  permissionForRisk,
+  permissionLabel,
+  resolveCommandDecision,
+} from '@/domain/permission'
+import { settingsState } from '@/ui/store'
+import {
+  SANDBOX_BYPASS_HINT,
   classifyCommand,
   getRiskInfo,
   platformSnapshot,
@@ -31,18 +41,13 @@ const SANDBOX_NOTE =
   '「写隔离」（只能在 workspace/白名单可写根内写入，区外写入会被拒绝）、' +
   '「只读」（不可写）、或「无沙盒」（完整权限）。退出码 >= 2 表示命令执行失败。'
 
-/** 申请绕过沙盒时追加到审批弹窗的警告（中文即 i18n key，英文见 en-US.json）。 */
-const SANDBOX_BYPASS_HINT =
-  '⚠️ 该命令申请「不使用沙盒」执行：不受写隔离与受限令牌限制，可写入任意路径。' +
-  '仅当该命令确实需要管道 stdio（如 vitest / vite / jest / node-gyp）时允许。'
-
 /** sandbox 参数描述（LLM 面向）：什么时候该申请绕过沙盒。 */
 const SANDBOX_PARAM_NOTE =
   '默认不传（继承设置里的沙盒模式）。传 "off" 表示**申请**不使用沙盒执行，' +
   '仅用于沙盒下必然失败的场景：命令的子进程需要用管道 stdio 拉起孙进程' +
   '（vitest / vite / jest / ts-node / node-gyp / child_process.exec* 等），' +
   '沙盒的受限令牌会让那次 spawn 直接报 EPERM（日志形如 "spawn EPERM"）。' +
-  '该请求必须经用户弹窗批准（不受 commandApprovalMode 影响）；沙盒为只读模式时会被直接拒绝。'
+  '该请求须经「沙盒脱壳」权限授权（默认弹窗确认，可设为允许/禁止）；沙盒为只读模式时会被直接拒绝。'
 
 /** 平台特定的工具描述。 */
 function buildToolDescription(platform: string): string {
@@ -130,7 +135,8 @@ toolRegistry.register(
     const timeoutMs = (timeout ?? 30) * 1000
 
     // sandbox: 'off' → 申请「不使用沙盒」执行（与 Rust 原生路径同语义）。
-    // ⚠️ 安全：一律强制审批，不受 commandApprovalMode 影响（不允许静默绕过）。
+    // ⚠️ 安全：该请求过「沙盒脱壳」权限门禁（与命令风险权限取更严格者；默认弹窗，
+    //   用户可设为 allow 静默脱壳 / deny 直接禁止）；readonly 模式直接拒绝。
     const bypassSandbox = ['off', 'none'].includes(
       String(args.sandbox ?? '').toLowerCase(),
     )
@@ -139,30 +145,53 @@ toolRegistry.register(
     const confirmTerminal =
       String(args.confirm ?? '').toLowerCase() === 'terminal'
 
-    // 风险分类 & 弹窗确认
+    // 风险分类 → 权限 name → 权限三态决策（allow / ask / deny）
     const risk = classifyCommand(cmdStr)
-    const mode = await securityService.getCommandApprovalMode()
-    let needsApproval = false
-    switch (mode) {
-      case 'all':
-        needsApproval = true
-        break
-      case 'risky':
-        needsApproval = risk === 'dangerous'
-        break
-      case 'install':
-        needsApproval = risk !== 'safe'
-        break
-      // case 'none': needsApproval 保持 false
+    const permName = permissionForRisk(risk)
+    const base = await securityService.getPermissionDecision(permName)
+    // 沙盒实际启用与否：off 时「申请绕过」没有意义（本来就不进沙盒），不参与脱壳门禁
+    const sandboxMode = settingsState.value.sandboxMode ?? 'on'
+    // 只读模式禁止绕过沙盒（否则只读保护会被绕过；与 Rust 原生路径一致）
+    if (bypassSandbox && sandboxMode === 'readonly') {
+      throw new Error(
+        t(
+          '沙盒处于只读模式，不支持绕过沙盒执行命令；请先在设置中切换沙盒模式（或改用常规终端）',
+        ),
+      )
     }
-    if (bypassSandbox) needsApproval = true
-    // 终端内确认同样必须经过人工确认（不能因为指定了终端呈现就绕过审批）
-    if (confirmTerminal) needsApproval = true
-    if (needsApproval) {
+    // 申请绕过沙盒且沙盒启用 → 额外过「沙盒脱壳」权限（与风险权限取更严格者）
+    const escapeDecision =
+      bypassSandbox && sandboxMode !== 'off'
+        ? await securityService.getPermissionDecision(PERM_SANDBOX_COMMAND)
+        : undefined
+    // deny 优先；终端内确认强制至少 ask（安全底线）
+    const decision = resolveCommandDecision(base, {
+      escapeDecision,
+      confirmTerminal,
+    })
+
+    if (decision === 'deny') {
+      // 禁止：不执行、不弹窗，返回拒绝文本给模型（标明是哪个权限拦下的）
+      const deniedPerm =
+        escapeDecision === 'deny' ? PERM_SANDBOX_COMMAND : permName
+      throw new Error(
+        tpl('操作已被权限设置禁止：$__perm__', {
+          perm: t(permissionLabel(deniedPerm)),
+        }),
+      )
+    }
+
+    if (decision === 'ask') {
       const info = getRiskInfo(risk)
       const hint = bypassSandbox
         ? [info.hint, t(SANDBOX_BYPASS_HINT)].filter(Boolean).join('\n')
         : info.hint
+      // 触发本次确认的权限：若仅因「沙盒脱壳」（基础允许、脱壳询问）→ 展示脱壳权限，
+      // 让用户知道要放行的是哪条权限；否则展示命令风险权限（与 Rust 原生路径一致）。
+      const shownPerm =
+        bypassSandbox && base === 'allow' && escapeDecision === 'ask'
+          ? PERM_SANDBOX_COMMAND
+          : permName
       const { sessionId, toolCallId } = ctx
       // 注册本次审批（approvalId 唯一标识），用户确认后由常驻监听器精确执行
       const approvalId = registerPendingApproval({
@@ -176,11 +205,13 @@ toolRegistry.register(
 
       const payload: Record<string, any> = {
         approvalId,
-        command: cmdStr,
-        risk,
-        label: info.label,
+        // 通用授权字段（弹窗展示）：权限唯一 key + 权限名 + 说明 + 内容
+        permName: shownPerm,
+        title: t(permissionLabel(shownPerm)),
+        subTitle: args.tips,
+        desc: cmdStr,
         hint,
-        tips: args.tips,
+        risk,
       }
       // 申请绕过沙盒时带上标记（与 Rust 原生路径一致，仅作留痕；警告文案已在 hint 里）
       if (bypassSandbox) payload.sandboxBypass = true

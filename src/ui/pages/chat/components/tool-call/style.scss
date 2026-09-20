@@ -303,11 +303,6 @@
     color: #1a1a1a;
   }
 
-  /* 「疑似等待输入」提示（Step 2 ④）：与常规提示同排但用警示色 */
-  .pty-idle-hint {
-    color: var(--terminal-note, #e5c07b);
-  }
-
   /* 终端尺寸徽标（右上角 .terminal-header-actions 内；原底部状态栏已移除）。
      字体/配色沿用原状态栏，避免换位置后观感跳变。 */
   .xterm-badge {
