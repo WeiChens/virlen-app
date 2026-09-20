@@ -19,7 +19,6 @@ import { observer } from 'mobx-react-lite'
 import SearchSvg from '@/ui/components/icons/SearchSvg'
 import CloseSvg from '@/ui/components/icons/CloseSvg'
 import UserSvg from '@/ui/components/icons/UserSvg'
-import AiChatSvg from '@/ui/components/icons/AiChatSvg'
 import AgentSvg from '@/ui/components/icons/AgentSvg'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
 import { t, tpl } from '@/ui/i18n'
@@ -271,7 +270,7 @@ function SearchDialog({
                   onClick={() => onSelect?.(item)}
                   title={item.text}>
                   <span className="result-role">
-                    {item.role === 'user' ? <UserSvg /> : <AiChatSvg />}
+                    {item.role === 'user' ? <UserSvg /> : <AgentSvg />}
                   </span>
                   <span className="result-text">
                     {renderHighlight(item.text, q)}

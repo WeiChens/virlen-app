@@ -966,6 +966,17 @@
     // chip 本体样式在 shared/FileChip/style.scss，这里只管排布。
     // 两条统一「限高 + 内部滚动」：附件区高度有上限，一次拖 10 个文件 / 20 张图
     // 也不会把盒子无限拉长（旧写法在固定高度下还会反过来挤掉工具条）。
+    .quote-preview-strip {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 4px;
+      padding: 2px 0 4px;
+      min-width: 0;
+      max-height: 72px;
+      overflow-y: auto;
+    }
+
     .file-preview-strip {
       display: flex;
       flex-wrap: wrap;

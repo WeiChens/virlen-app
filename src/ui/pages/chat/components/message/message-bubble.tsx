@@ -23,17 +23,38 @@ import FileChip from '@/ui/components/shared/FileChip'
 import QuickInputSvg from '@/ui/components/icons/QuickInputSvg'
 import { Observer } from 'mobx-react-lite'
 import { openPath } from '@tauri-apps/plugin-opener'
-import { getFileBlocks } from '@/utils/messageContent'
+import { getFileBlocks, getQuoteBlocks } from '@/utils/messageContent'
+import QuoteSvg from '@/ui/components/icons/QuoteSvg'
+import QuoteChip from '@/ui/components/shared/QuoteChip'
 
 interface Props {
   message: Message
   onEdit?: (message: string) => void
   onDelete?: (messageId: string) => void
+  /**
+   * 引用该消息（仅“有正文”的消息可引用）：把消息 id / 发送方 / 正文快照交给输入框
+   *
+   * 深思考 / 纯工具调用消息没有正文，不提供引用入口（气泡容器已隐藏操作栏）
+   */
+  onQuote?: (quote: {
+    messageId: string
+    role: 'user' | 'assistant'
+    text: string
+  }) => void
+  /** 点击引用 chip：跳转定位到被引用的原消息 */
+  onQuoteJump?: (messageId: string) => void
   /** 与 message.toolCalls 一一对应的工具结果（未完成处为 undefined） */
   toolResults?: (Message | undefined)[]
 }
 
-function MessageBubble({ message, onEdit, onDelete, toolResults }: Props) {
+function MessageBubble({
+  message,
+  onEdit,
+  onDelete,
+  onQuote,
+  onQuoteJump,
+  toolResults,
+}: Props) {
   const mkdRef = useRef(null as HTMLDivElement)
 
   const isUser = message.role === 'user'
@@ -70,6 +91,8 @@ function MessageBubble({ message, onEdit, onDelete, toolResults }: Props) {
 
   /** 文件附件（只存路径，点击用系统默认程序打开） */
   const files = getFileBlocks(message.content)
+  /** 引用消息（本条消息引用了哪些历史消息的正文） */
+  const quotes = getQuoteBlocks(message.content)
 
   function handleCopy() {
     const content = getContent(false)
@@ -166,19 +189,36 @@ function MessageBubble({ message, onEdit, onDelete, toolResults }: Props) {
                       (!showContent &&
                         (!settingsState.value.hideToolCallThink ||
                           !message.toolCalls?.length))) && (
-                      <div className={`reasoning-text`}>
-                        <div
-                          className={`line ${isReasoningTime ? 'reasoning' : ''}`}></div>
-                        <MarkdownRenderer
-                          content={message.reasoningContent}
-                          isUser={false}
-                          streaming={message.streaming}
-                        />
-                      </div>
-                    )}
+                        <div className={`reasoning-text`}>
+                          <div
+                            className={`line ${isReasoningTime ? 'reasoning' : ''}`}></div>
+                          <MarkdownRenderer
+                            content={message.reasoningContent}
+                            isUser={false}
+                            streaming={message.streaming}
+                          />
+                        </div>
+                      )}
                   </div>
                 )}
                 <div className="message-content-wrapper">
+                  {quotes.length > 0 && (
+                    <div className="message-quotes">
+                      {quotes.map((q) => (
+                        <QuoteChip
+                          key={q.messageId}
+                          role={q.role}
+                          text={q.text}
+                          messageId={q.messageId}
+                          onClick={
+                            onQuoteJump
+                              ? () => onQuoteJump(q.messageId)
+                              : undefined
+                          }
+                        />
+                      ))}
+                    </div>
+                  )}
                   {showContent && (
                     <div className="message-content" ref={mkdRef}>
                       <MarkdownRenderer
@@ -216,7 +256,7 @@ function MessageBubble({ message, onEdit, onDelete, toolResults }: Props) {
                           isDir={f.isDir}
                           size={f.size}
                           onClick={() => {
-                            openPath(f.path).catch(() => {})
+                            openPath(f.path).catch(() => { })
                           }}
                         />
                       ))}
@@ -265,6 +305,21 @@ function MessageBubble({ message, onEdit, onDelete, toolResults }: Props) {
                         title={t('复制')}>
                         <CopySvg />
                       </button>
+                      {/* 引用：仅“有正文”的消息可引用（深思考 / 纯工具调用不算） */}
+                      {onQuote && showContent && (
+                        <button
+                          className="action-btn action-quote"
+                          onClick={() =>
+                            onQuote({
+                              messageId: message.id,
+                              role: isUser ? 'user' : 'assistant',
+                              text: getContent(false),
+                            })
+                          }
+                          title={t('引用')}>
+                          <QuoteSvg />
+                        </button>
+                      )}
                       <button
                         className="action-btn"
                         title={t('编辑')}

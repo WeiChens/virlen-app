@@ -11,8 +11,32 @@ import {
   extractJsonData,
 } from './http-utils'
 import { v4 } from '@/utils/uuid'
-import { fileBlockToText, getLastSummaryMessageIndex } from '@/types'
+import { fileBlockToText, quoteBlockToText, getLastSummaryMessageIndex } from '@/types'
+import type { MessageContent } from '@/types'
 import { processVisionContent } from './visionInject'
+
+/**
+ * content 块 → OpenAI 兼容块
+ *
+ * OpenAI 协议只有 text / image_url 两种块：file（附件）与 quote（引用）
+ * 没有对应结构，统一降级为文本（文件只带路径、引用带发送方 + id + 正文）。
+ * 与 Rust 侧 `provider.rs::openai_blocks` 行为必须一致（铁律 1）。
+ */
+function toOpenAiBlocks(
+  blocks: Exclude<MessageContent, string>,
+): MessageContent {
+  return blocks.map((block) => {
+    if (block.type === 'text') return block
+    if (block.type === 'image_url') return block
+    if (block.type === 'file') {
+      return { type: 'text', text: fileBlockToText(block) }
+    }
+    if (block.type === 'quote') {
+      return { type: 'text', text: quoteBlockToText(block) }
+    }
+    return block
+  })
+}
 
 export class OpenAiProvider implements IProvider {
   readonly name: string
@@ -262,21 +286,15 @@ export class OpenAiProvider implements IProvider {
             ? null
             : msg.content
       } else if (Array.isArray(msg.content)) {
-        formatted.content = msg.content.map((block) => {
-          if (block.type === 'text') return block
-          if (block.type === 'image_url') return block
-          // 文件附件：本协议没有对应的内容块，降级为文本（只带路径）
-          if (block.type === 'file') {
-            return { type: 'text', text: fileBlockToText(block) }
-          }
-          return block
-        })
+        formatted.content = toOpenAiBlocks(msg.content)
       }
 
       // 视觉分析优化：替换 image_url 为分析文本
       const visionBlocks = processVisionContent(msg)
       if (visionBlocks) {
-        formatted.content = visionBlocks
+        // 重建后的块仍要过一遍降级：否则图片 + 附件 / 引用混排时，
+        // file / quote 块会直接漏给 API 而报错
+        formatted.content = toOpenAiBlocks(visionBlocks)
       }
 
       if (msg.toolCalls?.length) {

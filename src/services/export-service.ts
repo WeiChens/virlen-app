@@ -11,6 +11,7 @@ import type {
   TextContent,
   ImageContent,
   FileContent,
+  QuoteContent,
   ToolResultContent,
 } from '@/types'
 import { sessionStore } from '@/ui/store'
@@ -57,6 +58,12 @@ function extractFiles(content: MessageContent): FileContent[] {
 function extractImages(content: MessageContent): ImageContent[] {
   if (typeof content === 'string') return []
   return content.filter((c): c is ImageContent => c.type === 'image_url')
+}
+
+/** 从 MessageContent 中提取引用消息块 */
+function extractQuotes(content: MessageContent): QuoteContent[] {
+  if (typeof content === 'string') return []
+  return content.filter((c): c is QuoteContent => c.type === 'quote')
 }
 
 // ==================== Markdown 转换 ====================
@@ -108,6 +115,17 @@ export function sessionToMarkdown(
       lines.push('> 💭 思考过程')
       lines.push('>')
       for (const line of msg.reasoningContent.split('\n')) {
+        lines.push(`> ${line}`)
+      }
+      lines.push('')
+    }
+
+    // 1.5) 引用消息（作为 Markdown 引用块，否则导出后引用上下文全丢）
+    const quotes = extractQuotes(msg.content)
+    for (const q of quotes) {
+      lines.push(`> ${t('引用')} ${q.role === 'user' ? t('你') : 'AI'}：`)
+      lines.push('>')
+      for (const line of q.text.split('\n')) {
         lines.push(`> ${line}`)
       }
       lines.push('')

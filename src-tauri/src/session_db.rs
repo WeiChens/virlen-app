@@ -606,7 +606,8 @@ fn message_from_row_with_id(row: &Row) -> Result<(i64, Message), String> {
 }
 
 /// 从消息 content 中提取纯文本（content 为字符串或 `[{type:"text",text}]` 块数组）。
-/// 图片 / 文件块直接忽略（不含可检索文本），不截断。
+/// 图片 / 文件 / 引用块直接忽略：图片不含可检索文本，文件只有路径，
+/// 引用正文来自另一条消息（重复进索引会让同一段落命中两次）。不截断。
 fn content_plain_text(content: &serde_json::Value) -> String {
     match content {
         serde_json::Value::String(s) => s.clone(),

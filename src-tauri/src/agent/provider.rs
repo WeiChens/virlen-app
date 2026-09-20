@@ -21,6 +21,23 @@ use std::sync::Arc;
 const ATTACHED_FILE_LABEL: &str = "[User attached file]";
 const ATTACHED_DIR_LABEL: &str = "[User attached folder]";
 
+/// 引用消息块降级成文本时使用的标签。
+///
+/// 与 TS 侧 `src/types/index.ts` 的同名常量必须逐字一致（铁律 1），
+/// 同时与 TS `quoteBlockToText` 的拼接格式保持一致：
+///
+/// ```text
+/// [Quoted message]
+/// Sender: user
+/// Message ID: <id>
+/// Content:
+/// <正文>
+/// ```
+const QUOTED_MESSAGE_LABEL: &str = "[Quoted message]";
+const QUOTE_SENDER_LABEL: &str = "Sender";
+const QUOTE_MESSAGE_ID_LABEL: &str = "Message ID";
+const QUOTE_CONTENT_LABEL: &str = "Content";
+
 // ==================== Provider trait ====================
 
 #[async_trait]
@@ -65,9 +82,120 @@ fn slice_messages<'a>(messages: &'a [Message]) -> &'a [Message] {
     }
 }
 
-/// 将消息 content 序列化为 JSON（兼容 string / blocks）
-fn content_to_value(m: &Message) -> Value {
-    m.content.clone()
+/// 文件 / 文件夹附件块 → 文本（对齐 TS `fileBlockToText`）
+fn file_block_to_text(block: &Value) -> String {
+    let path = block.get("path").and_then(Value::as_str).unwrap_or("");
+    let is_dir = block.get("isDir").and_then(Value::as_bool).unwrap_or(false);
+    let label = if is_dir {
+        ATTACHED_DIR_LABEL
+    } else {
+        ATTACHED_FILE_LABEL
+    };
+    format!("{} {}", label, path)
+}
+
+/// 引用消息块 → 文本（对齐 TS `quoteBlockToText`）
+fn quote_block_to_text(block: &Value) -> String {
+    let role = block.get("role").and_then(Value::as_str).unwrap_or("");
+    let message_id = block.get("messageId").and_then(Value::as_str).unwrap_or("");
+    let text = block.get("text").and_then(Value::as_str).unwrap_or("");
+    format!(
+        "{}\n{}: {}\n{}: {}\n{}:\n{}",
+        QUOTED_MESSAGE_LABEL,
+        QUOTE_SENDER_LABEL,
+        role,
+        QUOTE_MESSAGE_ID_LABEL,
+        message_id,
+        QUOTE_CONTENT_LABEL,
+        text
+    )
+}
+
+/// content 块数组 → OpenAI 兼容块
+///
+/// OpenAI 协议只有 text / image_url：file（附件）与 quote（引用）没有对应结构，
+/// 统一降级为文本（只带路径 / 带发送方 + id + 正文）。其余块原样透传。
+/// 行为需与 TS 侧 `openai.ts::toOpenAiBlocks` 一致（铁律 1）。
+fn openai_blocks(blocks: &[Value]) -> Vec<Value> {
+    blocks
+        .iter()
+        .map(|block| match block.get("type").and_then(Value::as_str) {
+            Some("file") => json!({ "type": "text", "text": file_block_to_text(block) }),
+            Some("quote") => json!({ "type": "text", "text": quote_block_to_text(block) }),
+            _ => block.clone(),
+        })
+        .collect()
+}
+
+/// 消息 content → OpenAI 兼容的 content 字段（对齐 TS `openai.ts::buildRequest`）
+///
+/// - string：assistant 带 tool_calls 且正文为空串时必须给 null，
+///   否则部分 OpenAI 兼容 API 会校验失败
+/// - 数组：逐块降级（file / quote → 文本）
+fn openai_content(msg: &Message, content: &Value) -> Value {
+    match content {
+        Value::String(s) => {
+            let has_tool_calls = msg
+                .tool_calls
+                .as_ref()
+                .map(|tcs| !tcs.is_empty())
+                .unwrap_or(false);
+            if msg.role == "assistant" && has_tool_calls && s.is_empty() {
+                Value::Null
+            } else {
+                Value::String(s.clone())
+            }
+        }
+        Value::Array(arr) => Value::Array(openai_blocks(arr)),
+        other => other.clone(),
+    }
+}
+
+/// content 块数组 → Anthropic 内容块
+///
+/// file（附件）与 quote（引用）在 Anthropic 协议里没有对应结构，统一降级为文本。
+/// 行为需与 TS 侧 `anthropic.ts::toAnthropicBlocks` 一致（铁律 1）。
+fn anthropic_blocks(blocks: &[Value]) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    for block in blocks {
+        match block.get("type").and_then(Value::as_str) {
+            Some("text") => out.push(json!({
+                "type": "text",
+                "text": block.get("text").and_then(Value::as_str).unwrap_or(""),
+            })),
+            Some("file") => {
+                out.push(json!({ "type": "text", "text": file_block_to_text(block) }))
+            }
+            Some("quote") => {
+                out.push(json!({ "type": "text", "text": quote_block_to_text(block) }))
+            }
+            Some("image_url") => {
+                let url = block
+                    .get("image_url")
+                    .and_then(|i| i.get("url"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if let Some(rest) = url.strip_prefix("data:") {
+                    let data = rest.split(',').nth(1).unwrap_or(rest);
+                    out.push(json!({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": data,
+                        }
+                    }));
+                } else {
+                    out.push(json!({
+                        "type": "image",
+                        "source": { "type": "url", "url": url },
+                    }));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 fn text_of_content(content: &Value) -> String {
@@ -161,11 +289,12 @@ impl NativeOpenAiProvider {
             let mut formatted = serde_json::Map::new();
             formatted.insert("role".into(), Value::String(msg.role.clone()));
             // 本地图片伪视觉分析：将图片替换为分析文本（纯文本模型不支持 image 类型）
-            if let Some(processed) = process_vision_content(msg) {
-                formatted.insert("content".into(), processed);
-            } else {
-                formatted.insert("content".into(), content_to_value(msg));
-            }
+            // 两条路径都要过块降级（file / quote → 文本），否则自定义块会直接漏给 API
+            let content = match process_vision_content(msg) {
+                Some(processed) => openai_content(msg, &processed),
+                None => openai_content(msg, &msg.content),
+            };
+            formatted.insert("content".into(), content);
 
             if let Some(tcs) = &msg.tool_calls {
                 if !tcs.is_empty() {
@@ -589,70 +718,19 @@ impl NativeAnthropicProvider {
             }
 
             // user message
-            let mut blocks: Vec<Value> = Vec::new();
-            match &msg.content {
-                Value::String(s) => blocks.push(json!({ "type": "text", "text": s })),
-                Value::Array(arr) => {
-                    for block in arr {
-                        match block.get("type").and_then(Value::as_str) {
-                            Some("text") => blocks.push(json!({
-                                "type": "text",
-                                "text": block.get("text").and_then(Value::as_str).unwrap_or(""),
-                            })),
-                            // 文件附件（只有路径）：Anthropic 协议无对应块，降级为文本
-                            // 文案需与 TS 侧 fileBlockToText 保持一致
-                            Some("file") => {
-                                let path = block
-                                    .get("path")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("");
-                                let is_dir = block
-                                    .get("isDir")
-                                    .and_then(Value::as_bool)
-                                    .unwrap_or(false);
-                                let label = if is_dir {
-                                    ATTACHED_DIR_LABEL
-                                } else {
-                                    ATTACHED_FILE_LABEL
-                                };
-                                blocks.push(json!({
-                                    "type": "text",
-                                    "text": format!("{} {}", label, path),
-                                }));
-                            }
-                            Some("image_url") => {
-                                let url = block
-                                    .get("image_url")
-                                    .and_then(|i| i.get("url"))
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("");
-                                if let Some(rest) = url.strip_prefix("data:") {
-                                    let data = rest.split(',').nth(1).unwrap_or(rest);
-                                    blocks.push(json!({
-                                        "type": "image",
-                                        "source": {
-                                            "type": "base64",
-                                            "media_type": "image/jpeg",
-                                            "data": data,
-                                        }
-                                    }));
-                                } else {
-                                    blocks.push(json!({
-                                        "type": "image",
-                                        "source": { "type": "url", "url": url },
-                                    }));
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                _ => {}
-            }
+            let blocks: Vec<Value> = match &msg.content {
+                Value::String(s) => vec![json!({ "type": "text", "text": s })],
+                Value::Array(arr) => anthropic_blocks(arr),
+                _ => Vec::new(),
+            };
             // 本地图片伪视觉分析：将图片替换为分析文本（纯文本模型不支持 image 类型）
-            if let Some(processed) = process_vision_content(msg) {
-                blocks = processed.as_array().cloned().unwrap_or_default();
-            }
+            // vision 重建后的块同样要过降级，否则 file / quote 块会漏给 Anthropic
+            let blocks = match process_vision_content(msg) {
+                Some(processed) => anthropic_blocks(
+                    processed.as_array().map(Vec::as_slice).unwrap_or(&[]),
+                ),
+                None => blocks,
+            };
             messages.push(json!({ "role": "user", "content": blocks }));
         }
 
@@ -1308,6 +1386,93 @@ mod tests {
         assert!(text.contains("[User attached folder] C:/dir"));
         // 不能把 file 这种自定义块丢给 Anthropic
         assert!(!text.contains("\"type\":\"file\""));
+    }
+
+    #[test]
+    fn anthropic_build_request_converts_quote_block_to_text() {
+        let p = NativeAnthropicProvider::new("test", "key", "https://api.test.com");
+        let request = chat_request(vec![msg(
+            "user",
+            json!([
+                { "type": "quote", "messageId": "m-1", "role": "assistant", "text": "上一轮的结论" },
+                { "type": "text", "text": "继续" }
+            ]),
+            None,
+            None,
+        )]);
+        let body = p.build_request(&request);
+        let text = body.to_string();
+
+        // 引用块降级为文本（发送方 + id + 正文），对齐 TS 侧 quoteBlockToText
+        assert!(!text.contains("\"type\":\"quote\""));
+        assert!(text.contains("[Quoted message]"));
+        assert!(text.contains("Sender: assistant"));
+        assert!(text.contains("Message ID: m-1"));
+        assert!(text.contains("Content:"));
+        assert!(text.contains("上一轮的结论"));
+    }
+
+    #[test]
+    fn openai_build_request_converts_file_and_quote_blocks() {
+        let p = NativeOpenAiProvider::new("test", "key", "https://api.test.com");
+        let request = chat_request(vec![msg(
+            "user",
+            json!([
+                { "type": "quote", "messageId": "m-1", "role": "user", "text": "给我写个函数" },
+                { "type": "text", "text": "继续" },
+                { "type": "file", "path": "C:/a/b.ts", "name": "b.ts" },
+                { "type": "file", "path": "C:/dir", "isDir": true }
+            ]),
+            None,
+            None,
+        )]);
+        let body = p.build_request(&request);
+        let text = body.to_string();
+
+        // OpenAI 兼容协议只有 text / image_url，自定义块必须降级而不能原样透传
+        assert!(!text.contains("\"type\":\"file\""));
+        assert!(!text.contains("\"type\":\"quote\""));
+        assert!(text.contains("[User attached file] C:/a/b.ts"));
+        assert!(text.contains("[User attached folder] C:/dir"));
+        assert!(text.contains("[Quoted message]"));
+        assert!(text.contains("Sender: user"));
+        assert!(text.contains("Message ID: m-1"));
+    }
+
+    #[test]
+    fn openai_build_request_converts_blocks_after_vision() {
+        // 图片 + 文件混排且开启视觉优化：vision 重建后的块同样必须降级
+        let p = NativeOpenAiProvider::new("test", "key", "https://api.test.com");
+        let request = chat_request(vec![msg(
+            "user",
+            json!([
+                { "type": "file", "path": "C:/a/b.ts" },
+                { "type": "image_url", "image_url": { "url": "data:image/png;base64,xxx" } }
+            ]),
+            Some(true),
+            Some("图中有一只猫"),
+        )]);
+        let body = p.build_request(&request);
+        let text = body.to_string();
+        assert!(!text.contains("image_url"));
+        assert!(!text.contains("\"type\":\"file\""));
+        assert!(text.contains("[User attached file] C:/a/b.ts"));
+    }
+
+    #[test]
+    fn openai_assistant_empty_content_with_tool_calls_is_null() {
+        // assistant 带 tool_calls 且正文为空串 → content 必须为 null
+        // （OpenAI strict 模式 / 部分兼容 API 会校验失败）
+        let mut m = msg("assistant", json!(""), None, None);
+        m.tool_calls = Some(vec![ToolUseContent {
+            type_: "tool_use".into(),
+            id: "c1".into(),
+            name: "read_file".into(),
+            input: json!({}),
+        }]);
+        let p = NativeOpenAiProvider::new("test", "key", "https://api.test.com");
+        let body = p.build_request(&chat_request(vec![m]));
+        assert!(body["messages"][0]["content"].is_null());
     }
 
     #[test]

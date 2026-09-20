@@ -19,7 +19,7 @@
  *   两者最终都汇到 acceptPaths：图片读字节回到图片链路，其余进文件附件（只有路径）。
  *
  * 子组件：AgentSelector / QuickInputMenu / TokenRing
- * hooks：useImageAttachment / useFileAttachment / useVoiceInput
+ * hooks：useImageAttachment / useFileAttachment / useQuoteAttachment / useVoiceInput
  */
 import {
   useState,
@@ -50,6 +50,7 @@ import { observable } from 'mobx'
 import { cancelPausedRun } from '@/services/chat-service'
 import { showImagePreview } from '@/ui/components/shared/ImagePreview'
 import FileChip from '@/ui/components/shared/FileChip'
+import QuoteChip from '@/ui/components/shared/QuoteChip'
 import { showToast } from '@/ui/components/shared/Toast'
 import { t } from '@/ui/i18n'
 import AgentSelector from './agent-selector'
@@ -60,6 +61,7 @@ import {
   useImageAttachment,
   useVoiceInput,
   useFileAttachment,
+  useQuoteAttachment,
   isImagePath,
   normalizeFsPath,
   readClipboardFilePaths,
@@ -70,13 +72,15 @@ import {
   getSessionInput,
   clearSessionInput,
 } from './session-input-store'
-import type { FileAttachment, ImageAttachment } from './hooks'
+import type { FileAttachment, ImageAttachment, QuoteAttachment } from './hooks'
 import './style.scss'
 
 /** 图片附件（re-export 供外部使用） */
 export type { ImageAttachment }
 /** 文件附件（re-export 供外部使用） */
 export type { FileAttachment }
+/** 引用消息（re-export 供外部使用） */
+export type { QuoteAttachment }
 
 /** 是否在 Tauri 环境（浏览器调试模式下没有原生拖拽事件） */
 function isTauriEnv(): boolean {
@@ -136,9 +140,12 @@ interface Props {
     images?: ImageAttachment[],
     goal?: string,
     files?: FileAttachment[],
+    quotes?: QuoteAttachment[],
   ) => void
   onCancel?: () => void
   onMessagesUpdate?: (sessionId: string) => void
+  /** 点击引用 chip：跳转定位到被引用的原消息 */
+  onQuoteJump?: (messageId: string) => void
   disabled?: boolean
   loading?: boolean
   placeholder?: string
@@ -146,6 +153,8 @@ interface Props {
 
 interface RefProps {
   setText: (text: string) => void
+  /** 添加一条引用（消息气泡的「引用」按钮调用），重复引用同一消息会被忽略 */
+  addQuote: (quote: QuoteAttachment) => void
 }
 
 /**
@@ -174,6 +183,7 @@ function ChatInput(
     onSend,
     onCancel,
     onMessagesUpdate,
+    onQuoteJump,
     disabled,
     loading,
     placeholder = t('输入消息...'),
@@ -264,6 +274,10 @@ function ChatInput(
   const { files, setFiles, addPaths, removeFile, clearFiles } =
     useFileAttachment()
 
+  // ===== 引用消息（只存 id + 发送方 + 正文快照） =====
+  const { quotes, setQuotes, addQuote, removeQuote, clearQuotes } =
+    useQuoteAttachment()
+
   /**
    * 统一入口：一批真实路径 → 按类型分发
    * 图片走原有上传链路（读字节→压缩→预览），其余走文件链路（只留路径）
@@ -349,6 +363,8 @@ function ChatInput(
   imagesRef.current = images
   const filesRef = useRef(files)
   filesRef.current = files
+  const quotesRef = useRef(quotes)
+  quotesRef.current = quotes
 
   // ===== 迭代目标（Goal） =====
   const [goal, setGoal] = useState(
@@ -373,6 +389,7 @@ function ChatInput(
         cursorPos: cursorPosRef.current,
         images: imagesRef.current,
         files: filesRef.current,
+        quotes: quotesRef.current,
         goal: goalRef.current,
         goalExpanded: goalExpandedRef.current,
       })
@@ -395,6 +412,11 @@ function ChatInput(
     } else {
       clearFiles()
     }
+    if (saved?.quotes?.length) {
+      setQuotes(saved.quotes)
+    } else {
+      clearQuotes()
+    }
   }, [sessionId])
 
   // 组件卸载时保存（例如关闭标签页）
@@ -406,6 +428,7 @@ function ChatInput(
           cursorPos: cursorPosRef.current,
           images: imagesRef.current,
           files: filesRef.current,
+          quotes: quotesRef.current,
           goal: goalRef.current,
           goalExpanded: goalExpandedRef.current,
         })
@@ -496,6 +519,21 @@ function ChatInput(
         })
       }
     },
+    /**
+     * 添加一条引用（消息气泡的「引用」按钮调用）
+     *
+     * 与 setText 不同，这里**不**因 loading 而忽略：引用不修改已有草稿文本，
+     * AI 工作中照样可以先摆好引用条；真正的发送拦截在发送按钮 / handleSend。
+     */
+    addQuote: (quote: QuoteAttachment) => {
+      if (disabled) return
+      addQuote(quote)
+      if (textareaRef.current) {
+        queueMicrotask(() => {
+          textareaRef.current!.focus()
+        })
+      }
+    },
   }))
 
   // ===== 自动聚焦 =====
@@ -518,7 +556,8 @@ function ChatInput(
   // ===== 发送 =====
   function handleSend() {
     const trimmed = value.trim()
-    const hasAttachment = images.length > 0 || files.length > 0
+    const hasAttachment =
+      images.length > 0 || files.length > 0 || quotes.length > 0
     if ((!trimmed && !hasAttachment) || disabled || loading || compacting)
       return
     const currentGoal = goal.trim() || undefined
@@ -527,10 +566,12 @@ function ChatInput(
       images.length > 0 ? images : undefined,
       currentGoal,
       files.length > 0 ? files : undefined,
+      quotes.length > 0 ? quotes : undefined,
     )
     setValue('')
     clearImages()
     clearFiles()
+    clearQuotes()
     setGoal('')
     setGoalExpanded(false)
     clearSessionInput(sessionId) // 发送后清除已保存状态
@@ -661,8 +702,14 @@ function ChatInput(
       return
     }
 
-    // 输入框为空时，Backspace 依次撤销最后添加的附件（文件优先，其次图片）
+    // 输入框为空时，Backspace 依次撤销最后添加的附件（引用优先，其次文件、图片，
+    // 顺序与附件条的视觉排列一致：上面的先被撤销）
     if (e.key === 'Backspace' && !value) {
+      if (quotes.length > 0) {
+        e.preventDefault()
+        removeQuote(quotes[quotes.length - 1].messageId)
+        return
+      }
       if (files.length > 0) {
         e.preventDefault()
         removeFile(files[files.length - 1].id)
@@ -974,6 +1021,24 @@ function ChatInput(
           onChange={handleFileChange}
         />
 
+        {/* 引用条（只存被引用消息的元数据 + 正文快照） */}
+        {quotes.length > 0 && (
+          <div className="quote-preview-strip">
+            {quotes.map((q) => (
+              <QuoteChip
+                key={q.messageId}
+                role={q.role}
+                text={q.text}
+                messageId={q.messageId}
+                onClick={
+                  onQuoteJump ? () => onQuoteJump(q.messageId) : undefined
+                }
+                onRemove={() => removeQuote(q.messageId)}
+              />
+            ))}
+          </div>
+        )}
+
         {/* 文件附件条（只存路径，不拷贝文件） */}
         {files.length > 0 && (
           <div className="file-preview-strip">
@@ -1107,7 +1172,7 @@ function ChatInput(
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           placeholder={
-            images.length > 0 || files.length > 0
+            images.length > 0 || files.length > 0 || quotes.length > 0
               ? t('添加描述或直接发送...')
               : placeholder
           }
@@ -1246,7 +1311,7 @@ function ChatInput(
 
             {/* 发送 / 停止按钮 */}
             <ripple-button
-              className={`send-btn ${loading ? 'is-loading' : (!value.trim() && images.length === 0 && files.length === 0) || compacting || disabled ? 'disabled' : ''} `}
+              className={`send-btn ${loading ? 'is-loading' : (!value.trim() && images.length === 0 && files.length === 0 && quotes.length === 0) || compacting || disabled ? 'disabled' : ''} `}
               onClick={loading ? handleCancel : handleSend}
               title={loading ? t('停止') : t('发送 (Enter)')}>
               {loading ? (

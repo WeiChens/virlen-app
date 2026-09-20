@@ -34,6 +34,7 @@ import ChatSidebar from './components/sidebar'
 import ChatInput, {
   type FileAttachment,
   type ImageAttachment,
+  type QuoteAttachment,
 } from './components/input'
 import ProviderPrompt from './components/modals/provider-prompt'
 import SearchDialog from './components/search'
@@ -222,7 +223,10 @@ function WorkspaceDisplay({
 }
 
 function ChatView() {
-  const chatInputRef = useRef<{ setText: (text: string) => void }>(null)
+  const chatInputRef = useRef<{
+    setText: (text: string) => void
+    addQuote: (quote: QuoteAttachment) => void
+  }>(null)
   const [showProviderPrompt, setShowProviderPrompt] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
   /** 检索结果跳转目标（滚动定位 + 临时高亮），下发给消息列表 */
@@ -345,6 +349,31 @@ function ChatView() {
     chatInputRef.current?.setText(text)
   }, [])
 
+  /**
+   * 引用消息：把消息 id / 发送方 / 正文快照交给输入框挂成引用 chip。
+   * 同「编辑」一样必须是稳定引用，否则会绕过 MessageBubble 的 memo。
+   */
+  const handleQuote = useCallback((quote: QuoteAttachment) => {
+    chatInputRef.current?.addQuote(quote)
+  }, [])
+
+  /**
+   * 点击引用 chip：跳转定位到被引用的原消息。
+   *
+   * 直接复用 Ctrl+F 检索的跳转通道（同一 session 内滚动定位 + 临时高亮，
+   * 目标消息尚未加载时会逐页回补）。原消息已被删除时找不到目标，静默不动。
+   */
+  const handleQuoteJump = useCallback((messageId: string) => {
+    const sid = chatState.value.currentSessionId
+    if (!sid) return
+    searchJumpNonceRef.current += 1
+    setSearchJump({
+      id: messageId,
+      sessionId: sid,
+      nonce: searchJumpNonceRef.current,
+    })
+  }, [])
+
   // 从 store 同步消息到 chatState（仅用于通知组件重渲染）
   const [messages, setMessages] = useState<Message[]>([])
   const applyMessagesUpdate = useCallback((sessionId: string) => {
@@ -447,8 +476,12 @@ function ChatView() {
     images?: ImageAttachment[],
     goal?: string,
     files?: FileAttachment[],
+    quotes?: QuoteAttachment[],
   ) {
-    const hasAttachment = (images?.length ?? 0) > 0 || (files?.length ?? 0) > 0
+    const hasAttachment =
+      (images?.length ?? 0) > 0 ||
+      (files?.length ?? 0) > 0 ||
+      (quotes?.length ?? 0) > 0
 
     if (!hasEnabledProvider) {
       setPendingContent(content || (hasAttachment ? t('(附件)') : ''))
@@ -485,7 +518,7 @@ function ChatView() {
     const clearSid = chatState.value.currentSessionId
     if (clearSid) updateSessionRuntime(clearSid, { error: null })
     chatState.setValue('error', null)
-    doSend(sessionId, content, images, goal, files)
+    doSend(sessionId, content, images, goal, files, quotes)
   }
 
   async function doSend(
@@ -494,16 +527,19 @@ function ChatView() {
     images?: ImageAttachment[],
     goal?: string,
     files?: FileAttachment[],
+    quotes?: QuoteAttachment[],
   ) {
     // ── 立即显示 loading ──
     chatState.setValue('loading', true)
 
-    // ── 始终存原始数据：content = [{text}, {image_url}, {file}, ...] ──
-    // 图片带 base64 内容，文件只有路径（不拷贝文件，交给 AI 按需读）
+    // ── 始终存原始数据：content = [{quote}, {text}, {image_url}, {file}, ...] ──
+    // 图片带 base64 内容，文件只有路径（不拷贝文件，交给 AI 按需读），
+    // 引用带发送方 + 消息 id + 正文快照（原消息可能被删除 / 压缩）
     const finalContent: MessageContent = buildUserContent(
       content,
       images ?? [],
       files ?? [],
+      quotes ?? [],
     )
 
     // ── 先保证有 session（无 session → 立即创建），让 UI 切换到聊天视图 ──
@@ -811,6 +847,8 @@ function ChatView() {
               messages={messages}
               setMessages={setMessages}
               setText={handleSetText}
+              onQuote={handleQuote}
+              onQuoteJump={handleQuoteJump}
               jumpTarget={searchJump}
             />
             <ChatInput
@@ -819,6 +857,7 @@ function ChatView() {
               onSend={handleSend}
               onCancel={handleCancel}
               onMessagesUpdate={syncMessagesToUI}
+              onQuoteJump={handleQuoteJump}
               loading={isCurrentWorking}
               disabled={false}
               placeholder={t('输入消息...')}

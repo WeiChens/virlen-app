@@ -143,6 +143,14 @@ interface ChatMessageListProps {
   setMessages: (msgs: Message[]) => void
   /** 输入框设置文本回调 */
   setText: (text: string) => void
+  /** 引用某条消息（交给输入框挂成引用 chip） */
+  onQuote?: (quote: {
+    messageId: string
+    role: 'user' | 'assistant'
+    text: string
+  }) => void
+  /** 点击引用 chip：跳转定位到被引用的原消息 */
+  onQuoteJump?: (messageId: string) => void
   /** 外部请求滚动定位并临时高亮的目标消息（Ctrl+F 检索结果跳转） */
   jumpTarget?: MessageJumpTarget | null
 }
@@ -151,6 +159,8 @@ function ChatMessageList({
   messages,
   setMessages,
   setText,
+  onQuote,
+  onQuoteJump,
   jumpTarget,
 }: ChatMessageListProps) {
   const messagesContainerRef = useRef<HTMLDivElement>(null)
@@ -847,6 +857,11 @@ function ChatMessageList({
     (msg: string) => setText(msg),
     [setText],
   )
+  const handleQuoteBubble = useCallback(
+    (quote: { messageId: string; role: 'user' | 'assistant'; text: string }) =>
+      onQuote?.(quote),
+    [onQuote],
+  )
   const handleDeleteBubble = useCallback(
     (messageId: string) => {
       const sid = chatState.value.currentSessionId
@@ -970,6 +985,8 @@ function ChatMessageList({
                 <MessageBubble
                   onEdit={handleEditBubble}
                   onDelete={handleDeleteBubble}
+                  onQuote={handleQuoteBubble}
+                  onQuoteJump={onQuoteJump}
                   message={msg}
                   toolResults={toolResultsFor(msg)}
                 />

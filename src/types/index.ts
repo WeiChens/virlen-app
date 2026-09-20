@@ -73,6 +73,25 @@ export interface FileContent {
   size?: number
 }
 
+/**
+ * 引用消息块：把某条历史消息（用户 / AI 正文）作为本条消息的上下文
+ *
+ * 与 FileContent 同构——只存「引用来源 + 正文快照」，不做任何拷贝之外的加工：
+ *   - messageId：被引用消息的 id（发给模型，供后续能力定位原消息）
+ *   - text：正文快照。原消息可能被删除、被上下文压缩（summary）替换，或被
+ *     分页懒加载移出内存，所以引用必须自包含，不能只存 id 让模型自己去查。
+ * 各协议（openai / anthropic / gemini / Rust 原生引擎）统一降级为文本。
+ */
+export interface QuoteContent {
+  type: 'quote'
+  /** 被引用消息的 id */
+  messageId: string
+  /** 被引用消息的发送方 */
+  role: 'user' | 'assistant'
+  /** 被引用消息的正文快照 */
+  text: string
+}
+
 export interface ToolUseContent {
   type: 'tool_use'
   id: string
@@ -93,6 +112,7 @@ export type MessageContent =
       | TextContent
       | ImageContent
       | FileContent
+      | QuoteContent
       | ToolUseContent
       | ToolResultContent
     )[]
@@ -118,6 +138,41 @@ export function fileBlockToText(block: FileContent): string {
   return block.isDir
     ? `${ATTACHED_DIR_LABEL} ${path}`
     : `${ATTACHED_FILE_LABEL} ${path}`
+}
+
+/**
+ * 引用块标签：降级成文本时给模型看的字段名（模型可读，不是 UI 文案）
+ *
+ * 与 Rust 侧 `src-tauri/src/agent/provider.rs` 的同名常量必须逐字一致
+ * （铁律 1：TS / Rust 双引擎同语义），改文案要两边一起改。
+ */
+export const QUOTED_MESSAGE_LABEL = '[Quoted message]'
+export const QUOTE_SENDER_LABEL = 'Sender'
+export const QUOTE_MESSAGE_ID_LABEL = 'Message ID'
+export const QUOTE_CONTENT_LABEL = 'Content'
+
+/**
+ * 引用块 → 发给 LLM 的文本形式
+ *
+ * 与 fileBlockToText 一样由所有 Provider 共用，保证同一条消息在所有协议下
+ * 对模型呈现完全一致。格式固定为四行字段 + 正文，便于模型稳定解析：
+ *
+ * ```
+ * [Quoted message]
+ * Sender: user
+ * Message ID: <id>
+ * Content:
+ * <正文>
+ * ```
+ */
+export function quoteBlockToText(block: QuoteContent): string {
+  return [
+    QUOTED_MESSAGE_LABEL,
+    `${QUOTE_SENDER_LABEL}: ${block.role}`,
+    `${QUOTE_MESSAGE_ID_LABEL}: ${block.messageId}`,
+    `${QUOTE_CONTENT_LABEL}:`,
+    block.text,
+  ].join('\n')
 }
 
 export interface Message {

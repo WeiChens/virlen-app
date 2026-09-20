@@ -14,9 +14,10 @@ import type {
   ToolUseContent,
 } from '@/types'
 import type { ChatRequest, IProvider } from './types'
+import type { MessageContent } from '@/types'
 import { apiFetch, getResponseReader, readStreamLines } from './http-utils'
 import { track } from '@/utils/telemetry'
-import { fileBlockToText, getLastSummaryMessageIndex } from '@/types'
+import { fileBlockToText, quoteBlockToText, getLastSummaryMessageIndex } from '@/types'
 import { processVisionContent } from './visionInject'
 import { fetch } from '@tauri-apps/plugin-http'
 
@@ -48,6 +49,46 @@ interface AnthropicResponse {
     cache_creation_input_tokens?: number
   }
 }
+
+/**
+ * content 块 → Anthropic 内容块
+ *
+ * file（附件）与 quote（引用）在 Anthropic 协议里没有对应结构，统一降级为文本。
+ * 与 Rust 侧 `provider.rs::anthropic_blocks` 行为必须一致（铁律 1）。
+ */
+function toAnthropicBlocks(
+  blocks: Exclude<MessageContent, string>,
+): AnthropicContentBlock[] {
+  const out: AnthropicContentBlock[] = []
+  for (const block of blocks) {
+    if (block.type === 'text') {
+      out.push({ type: 'text', text: block.text })
+    } else if (block.type === 'file') {
+      // 文件附件：降级为文本（只带路径）
+      out.push({ type: 'text', text: fileBlockToText(block) })
+    } else if (block.type === 'quote') {
+      // 引用消息：降级为文本（发送方 + id + 正文）
+      out.push({ type: 'text', text: quoteBlockToText(block) })
+    } else if (block.type === 'image_url') {
+      const url = block.image_url.url
+      if (url.startsWith('data:')) {
+        const parts = url.split(',')
+        out.push({
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: 'image/jpeg',
+            data: parts[1],
+          },
+        })
+      } else {
+        out.push({ type: 'image', source: { type: 'url', url } })
+      }
+    }
+  }
+  return out
+}
+
 export class AnthropicProvider implements IProvider {
   readonly name: string
   private apiKey: string
@@ -436,47 +477,16 @@ export class AnthropicProvider implements IProvider {
       }
 
       // user message
-      const contentBlocks: AnthropicContentBlock[] = []
-      if (typeof msg.content === 'string') {
-        contentBlocks.push({ type: 'text', text: msg.content })
-      } else if (Array.isArray(msg.content)) {
-        for (const block of msg.content) {
-          if (block.type === 'text') {
-            contentBlocks.push({ type: 'text', text: block.text })
-          } else if (block.type === 'file') {
-            // 文件附件：降级为文本（只带路径）
-            contentBlocks.push({ type: 'text', text: fileBlockToText(block) })
-          } else if (block.type === 'image_url') {
-            const url = block.image_url.url
-            if (url.startsWith('data:')) {
-              const parts = url.split(',')
-              contentBlocks.push({
-                type: 'image',
-                source: {
-                  type: 'base64',
-                  media_type: 'image/jpeg',
-                  data: parts[1],
-                },
-              })
-            } else {
-              contentBlocks.push({
-                type: 'image',
-                source: { type: 'url', url },
-              })
-            }
-          }
-        }
-      }
-
-      // 注入视觉分析结果
-      // 视觉分析优化：替换 image_url 为分析文本
+      // 视觉分析优化会重建 content（去掉 image_url、追加分析文本），
+      // 两条路径都过同一套块降级，否则 file / quote 块会漏给 Anthropic
       const visionBlocks = processVisionContent(msg)
-      if (visionBlocks) {
-        // 整个 content 由 vision 接管（去掉 image_url，追加分析文本）
-        messages.push({ role: 'user', content: visionBlocks as any })
-      } else {
-        messages.push({ role: 'user', content: contentBlocks })
-      }
+      const sourceBlocks = (visionBlocks ??
+        (Array.isArray(msg.content)
+          ? msg.content
+          : typeof msg.content === 'string'
+            ? [{ type: 'text' as const, text: msg.content }]
+            : [])) as Exclude<MessageContent, string>
+      messages.push({ role: 'user', content: toAnthropicBlocks(sourceBlocks) })
     }
 
     const body: any = {

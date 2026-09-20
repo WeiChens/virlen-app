@@ -3,16 +3,20 @@
   gap: 12px;
   padding: 16px 20px;
   animation: fadeIn 0.2s ease;
+
   .message-content-wrapper {
     width: fit-content;
     max-width: 100%;
     margin-left: 8px;
   }
+
   &.user {
     flex-direction: row-reverse;
     margin-right: 18px;
+
     .message-body {
       align-items: flex-end;
+
       .message-content {
         padding: 8px 12px;
         width: fit-content;
@@ -21,6 +25,7 @@
         color: #fff;
         border-radius: 16px 4px 16px 16px;
         word-break: break-word;
+
         &::selection {
           background-color: var(--usermsg-selected-bg);
         }
@@ -69,23 +74,27 @@
         font-size: var(--font-size-sm);
         cursor: pointer;
         user-select: none;
+
         &:hover {
           .collapsed-icon {
             opacity: 1;
           }
         }
+
         .reasoning-icon {
           width: 14px;
           height: 14px;
           // color: var(--text-secondary, #666);
           fill: var(--accent-color, #6366f1);
         }
+
         .reasoning-elapsed {
           margin-left: 2px;
           font-weight: 400;
           font-size: 11px;
           color: var(--text-tertiary, #999);
         }
+
         .collapsed-icon {
           width: 14px;
           height: 14px;
@@ -107,10 +116,10 @@
         line-height: 1.5;
         white-space: pre-wrap;
         word-break: break-word;
-
         font-size: var(--font-size-sm);
         display: flex;
         flex-direction: row;
+
         .line {
           width: 2px;
           background: var(--text-secondary, #5a5a6e);
@@ -118,24 +127,30 @@
           margin-right: 8px;
           border-radius: 2px;
           opacity: 0.4;
+
           .reasoning {
             animation: reasoningAnim 1.5s infinite;
           }
+
           @keyframes reasoningAnim {
+
             0%,
             100% {
               opacity: 1;
               background: var(--accent-color, #6366f1);
             }
+
             50% {
               opacity: 0.4;
               background: var(--text-secondary, #5a5a6e);
             }
           }
         }
+
         .markdown-renderer {
           flex: 1;
           overflow: hidden;
+
           p,
           h1,
           h2,
@@ -146,20 +161,25 @@
           li {
             opacity: 0.4;
           }
+
           .code-block-wrapper {
             opacity: 0.9;
           }
+
           .md-li {
             * {
               opacity: 1;
             }
           }
         }
+
         p {
           margin: 4px 0;
+
           &:first-child {
             margin-top: 0;
           }
+
           &:last-child {
             margin-bottom: 0;
           }
@@ -190,6 +210,19 @@
         object-fit: contain;
         border: 1px solid var(--border-color, #e8e8ed);
       }
+    }
+
+    // 引用消息（chip 本体样式在 shared/QuoteChip/style.scss）
+    // 多条引用纵向排列，整体靠左：引用是「针对谁说的」，不参与用户气泡的右对齐
+    .message-quotes {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 4px;
+      margin-bottom: 6px;
+      margin-left: auto;
+      width: fit-content;
+      max-width: 100%;
     }
 
     // 文件附件（chip 本体样式在 shared/FileChip/style.scss）
@@ -277,6 +310,7 @@
     opacity: 0;
     transform: translateY(8px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -284,10 +318,12 @@
 }
 
 @keyframes blink {
+
   0%,
   100% {
     opacity: 1;
   }
+
   40%,
   60% {
     opacity: 0;
@@ -295,7 +331,6 @@
 }
 
 // ==================== 反馈消息（迭代验证） ====================
-
 .message-feedback {
   display: flex;
   padding: 8px 16px;
@@ -314,6 +349,7 @@
 
     p {
       margin: 0 0 4px;
+
       &:last-child {
         margin-bottom: 0;
       }

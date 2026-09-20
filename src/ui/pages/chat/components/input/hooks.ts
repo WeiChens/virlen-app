@@ -3,6 +3,7 @@
  *
  * useImageAttachment — 图片附件管理（选取 / 粘贴 / 拖拽 / 磁盘路径）
  * useFileAttachment  — 文件附件管理（只存路径，不拷贝文件内容）
+ * useQuoteAttachment — 引用消息管理（只存被引用消息的 id / 发送方 / 正文快照）
  * useVoiceInput      — 语音输入（Web Speech API）
  */
 import { useState, useRef, useCallback, useEffect } from 'react'
@@ -267,6 +268,52 @@ export function useFileAttachment() {
   }, [])
 
   return { files, setFiles, addPaths, removeFile, clearFiles }
+}
+
+// ====================================================================
+// 引用消息（只存被引用消息的元数据 + 正文快照）
+// ====================================================================
+
+/** 引用附件 */
+export interface QuoteAttachment {
+  /** 被引用消息的 id（同时用作列表 key / 去重键） */
+  messageId: string
+  /** 被引用消息的发送方 */
+  role: 'user' | 'assistant'
+  /** 被引用消息的正文快照 */
+  text: string
+}
+
+/**
+ * 引用消息管理 hook
+ *
+ * 与文件 / 图片附件不同，引用不做任何 IO：只把「哪条消息」记下来，
+ * 正文以快照形式一并保存——原消息可能被删除、被上下文压缩（summary）替换，
+ * 或被分页懒加载移出内存，只存 id 的话发给模型的引用内容会缺。
+ */
+export function useQuoteAttachment() {
+  const [quotes, setQuotes] = useState<QuoteAttachment[]>([])
+
+  /** 添加引用（同一条消息只保留一次） */
+  const addQuote = useCallback((quote: QuoteAttachment) => {
+    setQuotes((prev) =>
+      prev.some((q) => q.messageId === quote.messageId)
+        ? prev
+        : [...prev, quote],
+    )
+  }, [])
+
+  /** 移除指定引用 */
+  const removeQuote = useCallback((messageId: string) => {
+    setQuotes((prev) => prev.filter((q) => q.messageId !== messageId))
+  }, [])
+
+  /** 清空所有引用 */
+  const clearQuotes = useCallback(() => {
+    setQuotes([])
+  }, [])
+
+  return { quotes, setQuotes, addQuote, removeQuote, clearQuotes }
 }
 
 // ====================================================================
