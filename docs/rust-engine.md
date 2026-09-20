@@ -320,6 +320,7 @@ pub trait SessionRepo: Send + Sync {
 | `list_skills` | `infrastructure/tools/skill/list-skills.ts` | 技能扫描 |
 | `read_skill_source` | `infrastructure/tools/skill/read-skill-source.ts` | 读取技能源码目录 |
 | `vision_analyze`（工具分发） | `infrastructure/tools/vision/vision-analyze.ts` | 分发走 JS 桥；底层 `vision_service` 已是 Rust Tauri 命令 |
+| `list_messages` / `read_messages`（消息查询） | `infrastructure/tools/chat/*.ts` | 分发走 JS 桥（两引擎共用一份实现）；**底层查询已是 Rust 命令** `cmd_get_message_window` / `cmd_get_message_timeline` |
 
 ### 4. 系统提示词组装
 

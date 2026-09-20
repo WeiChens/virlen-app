@@ -17,8 +17,8 @@ import {
 } from '@/domain/tools/category'
 
 describe('TOOL_CATEGORIES', () => {
-  it('应该包含 8 个分类', () => {
-    expect(TOOL_CATEGORIES).toHaveLength(8)
+  it('应该包含 9 个分类', () => {
+    expect(TOOL_CATEGORIES).toHaveLength(9)
   })
 
   it('每个分类都应该有 id、label 和 toolNames', () => {
@@ -78,6 +78,14 @@ describe('TOOL_CATEGORIES', () => {
     expect(sysCat!.toolNames).toContain('user_choice')
     expect(sysCat!.toolNames).toContain('get_current_time')
   })
+
+  it('会话消息分类应包含 list_messages 和 read_messages', () => {
+    const chatCat = TOOL_CATEGORIES.find((c) => c.id === 'chat')
+    expect(chatCat).toBeDefined()
+    expect(chatCat!.label).toBe('会话消息')
+    expect(chatCat!.toolNames).toContain('list_messages')
+    expect(chatCat!.toolNames).toContain('read_messages')
+  })
 })
 
 describe('getCategoryId', () => {
@@ -91,6 +99,8 @@ describe('getCategoryId', () => {
     expect(getCategoryId('get_current_time')).toBe('system')
     expect(getCategoryId('search_knowledge_base')).toBe('knowledge_base')
     expect(getCategoryId('mkdir')).toBe('file')
+    expect(getCategoryId('list_messages')).toBe('chat')
+    expect(getCategoryId('read_messages')).toBe('chat')
   })
 
   it('未知工具应返回 undefined', () => {

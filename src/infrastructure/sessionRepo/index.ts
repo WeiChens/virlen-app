@@ -27,6 +27,26 @@ export interface SessionRepo {
   getUserMessageRefs(sessionId: string): Promise<UserMessageRef[]>
   /** 检索消息（会话内 / 跨会话，分页；按时间倒序） */
   searchMessages(opts: MessageSearchOptions): Promise<MessageSearchPage>
+  /**
+   * 「消息查询」工具：按锚点（id / seq）取前后 N 条的时序窗口。
+   *
+   * ⚠️ **只覆盖「已压缩区间」**（时序 < 最后一个 summary）：该区间之后的对话
+   * 已在模型当前上下文中，重复下发只会浪费 token。
+   *
+   * 失败（非 Tauri 环境 / DB 异常）返回 `null`，由调用方转成提示。
+   */
+  getMessageWindow(
+    sessionId: string,
+    opts: MessageWindowOptions,
+  ): Promise<MessageWindow | null>
+  /**
+   * 「消息查询」工具：列出「已压缩区间」的消息时序（升序）。
+   * 失败（非 Tauri 环境 / DB 异常）返回 `null`。
+   */
+  getMessageTimeline(
+    sessionId: string,
+    opts?: MessageTimelineOptions,
+  ): Promise<MessageTimelinePage | null>
   /** 批量写入变化的会话，删除不存在的会话 */
   saveDiff(oldSessions: Session[], newSessions: Session[]): void
   /** 直接持久化单个会话元数据 */
@@ -100,6 +120,99 @@ export interface MessageSearchOptions {
   limit?: number
   /** keyset 分页游标（上一页返回的 nextCursor）；首页不传 */
   cursor?: SearchCursor | null
+}
+
+// ==================== 消息查询（query messages 工具）====================
+
+/** 工具调用的精简描述（只告诉模型「调用了什么工具 + 关键参数」） */
+export interface ToolCallBrief {
+  name: string
+  /** 参数 JSON 的截断形式（≤ 100 字符） */
+  inputBrief: string
+  inputTruncated: boolean
+}
+
+/** 单条消息的骨架（已剔除深度思考，工具参数已截断） */
+export interface MessageBrief {
+  /** 1 基时序（会话内消息的插入顺序） */
+  seq: number
+  id: string
+  role: string
+  timestamp: number
+  /** 正文（仅 text 块拼接；≤ 4000 字符） */
+  text: string
+  textTruncated: boolean
+  /** 是否含图片 / 文件 / 引用块（仅提示，不展开内容） */
+  hasAttachments: boolean
+  /** assistant 消息调用的工具（参数 ≤ 100 字符） */
+  toolCalls: ToolCallBrief[]
+  /** tool 消息才有 */
+  toolCallId: string | null
+  isError: boolean | null
+  /** 是否含深度思考 —— 内容**永不返回**，只给这个标记 */
+  hasReasoning: boolean
+}
+
+/** `getMessageWindow` 的返回（时序升序） */
+export interface MessageWindow {
+  /** 锚点消息是否存在（false = id / seq 无效或已删除） */
+  anchorFound: boolean
+  anchorSeq: number
+  startSeq: number
+  endSeq: number
+  /** 会话消息总数 */
+  total: number
+  /**
+   * 「已压缩区间」上界 = 最后一个 summary 的时序；
+   * `null` = 会话从未压缩（此时没有可查询的历史）
+   */
+  boundarySeq: number | null
+  /** 窗口后沿因触及上界而被裁剪 */
+  clampedByBoundary: boolean
+  messages: MessageBrief[]
+}
+
+/** 时序概览项 */
+export interface MessageTimelineItem {
+  seq: number
+  id: string
+  role: string
+  timestamp: number
+  /** 纯文本摘要（≤ 100 字符） */
+  preview: string
+  /** 该消息调用的工具名（assistant 才有） */
+  toolNames: string[]
+}
+
+/** `getMessageTimeline` 的返回（时序升序） */
+export interface MessageTimelinePage {
+  items: MessageTimelineItem[]
+  hasMore: boolean
+  /** 更早一页的游标（`hasMore` 时给出） */
+  nextCursor: number | null
+  total: number
+  boundarySeq: number | null
+}
+
+/** `getMessageWindow` 参数 */
+export interface MessageWindowOptions {
+  /** 锚点消息 id（优先） */
+  anchorId?: string
+  /** 锚点时序（备选；锚点都不传时取区间最新一条） */
+  anchorSeq?: number
+  /** 锚点之前取多少条 */
+  before?: number
+  /** 锚点之后取多少条 */
+  after?: number
+}
+
+/** `getMessageTimeline` 参数 */
+export interface MessageTimelineOptions {
+  /** 关键词过滤（在纯文本正文字段上匹配） */
+  keyword?: string
+  /** 向前翻页游标（只返回更早的） */
+  beforeSeq?: number
+  limit?: number
 }
 
 /** 键序无关的 JSON 序列化（仅用于签名比较，不用于落库） */
@@ -205,6 +318,41 @@ class SessionRepoImpl implements SessionRepo {
       })
     } catch {
       return { items: [], hasMore: false, nextCursor: null }
+    }
+  }
+
+  /** 「消息查询」工具：按锚点取时序窗口（只覆盖「已压缩区间」） */
+  async getMessageWindow(
+    sessionId: string,
+    opts: MessageWindowOptions,
+  ): Promise<MessageWindow | null> {
+    try {
+      return await invoke<MessageWindow>('cmd_get_message_window', {
+        sessionId,
+        anchorId: opts.anchorId ?? null,
+        anchorSeq: opts.anchorSeq ?? null,
+        before: opts.before ?? 5,
+        after: opts.after ?? 5,
+      })
+    } catch {
+      return null
+    }
+  }
+
+  /** 「消息查询」工具：列出「已压缩区间」的消息时序 */
+  async getMessageTimeline(
+    sessionId: string,
+    opts: MessageTimelineOptions = {},
+  ): Promise<MessageTimelinePage | null> {
+    try {
+      return await invoke<MessageTimelinePage>('cmd_get_message_timeline', {
+        sessionId,
+        keyword: opts.keyword ?? null,
+        beforeSeq: opts.beforeSeq ?? null,
+        limit: opts.limit ?? 30,
+      })
+    } catch {
+      return null
     }
   }
 

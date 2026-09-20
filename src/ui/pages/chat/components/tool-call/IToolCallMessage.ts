@@ -19,6 +19,7 @@ import CopyMoveFileMessage from './CopyMoveFileMessage'
 import ListSkillsMessage from './ListSkillsMessage'
 import KnowledgeBaseMessage from './KnowledgeBaseMessage'
 import MkdirMessage from './MkdirMessage'
+import QueryMessagesMessage from './QueryMessagesMessage'
 
 export interface IToolCallMessage {
   getToolName(): string
@@ -72,6 +73,10 @@ registerMulti(
     'delete_knowledge_base_document',
   ],
   () => new KnowledgeBaseMessage(),
+)
+registerMulti(
+  ['list_messages', 'read_messages'],
+  () => new QueryMessagesMessage(),
 )
 
 export const getToolCallMessage = (type: string) => {

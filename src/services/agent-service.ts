@@ -98,17 +98,36 @@ function _buildDefaultAgent(): Agent {
 }
 
 /**
- * 应用启动时调用：确保默认 Agent 存在
+ * 应用启动时调用：确保默认 Agent 存在，并把新增的内置工具补入其白名单
  * 必须在 toolsInit() 之后调用（依赖 toolRegistry.listDefinitions()）
+ *
+ * ⚠️ 默认 Agent 的 allowTools 是「首次创建时的快照」，新版本上线的工具不会自动出现。
+ * 这里只「补入缺失的工具」（不删除、不覆盖用户已有的选择）：默认 Agent 的定位就是
+ * 「全能助手」，与 _buildDefaultAgent() 的语义一致；自定义 Agent 不在此处理。
  */
 export function initDefaultAgent(): void {
   const data = agentRepo.load()
-  const exists = data.agents.some((a) => a.id === DEFAULT_AGENT_ID)
-  if (!exists) {
-    const agent = _buildDefaultAgent()
-    data.agents = [...data.agents, agent]
+  const allToolNames = toolRegistry.listDefinitions().map((t) => t.name)
+  const idx = data.agents.findIndex((a) => a.id === DEFAULT_AGENT_ID)
+
+  if (idx === -1) {
+    data.agents = [...data.agents, _buildDefaultAgent()]
     agentRepo.save(data)
+    return
   }
+
+  const agent = data.agents[idx]
+  const missing = allToolNames.filter((n) => !agent.allowTools.includes(n))
+  if (missing.length === 0) return
+
+  const agents = [...data.agents]
+  agents[idx] = {
+    ...agent,
+    allowTools: [...agent.allowTools, ...missing],
+    updatedAt: Date.now(),
+  }
+  data.agents = agents
+  agentRepo.save(data)
 }
 
 /**

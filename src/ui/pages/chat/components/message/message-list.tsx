@@ -377,7 +377,7 @@ function ChatMessageList({
     // _measureElement 内的 `useAnimationFrameWithResizeObserver ? requestAnimationFrame(run)
     // : run()`），布局写入落在本帧 RO 投递之后，新通知顺延到下一帧，报错消失。
     // 代价：实测高度晚一帧生效（观感无差）。
-    useAnimationFrameWithResizeObserver: true,
+    useAnimationFrameWithResizeObserver: false,
     // 不在 RO / scroll 回调里同步 flushSync 重渲染（改为 React 默认批处理调度）。
     // 若发现滚动时条目定位有「一帧延迟 / 边缘露白」，删掉这一行即可回到原行为。
     // useFlushSync: false,

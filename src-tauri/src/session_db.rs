@@ -11,7 +11,7 @@
 
 use crate::agent::types::{Message, Session};
 use async_trait::async_trait;
-use rusqlite::{params, Connection, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -85,6 +85,104 @@ pub struct MessageSearchPage {
     pub next_cursor: Option<SearchCursor>,
 }
 
+// ==================== 消息查询（query messages 工具）====================
+
+/// 「消息查询」工具的硬上限（服务端权威 clamp，防止 JS 侧绕过）
+pub const MSG_QUERY_MAX_BACK: usize = 20;
+pub const MSG_QUERY_MAX_FWD: usize = 20;
+/// 单次窗口最多返回的消息数 - 1（即最多 `MSG_QUERY_MAX_SPAN + 1` 条）
+pub const MSG_QUERY_MAX_SPAN: usize = 20;
+pub const MSG_QUERY_MAX_LIMIT: usize = 50;
+/// 普通消息正文最多返回的字符数
+pub const MSG_QUERY_TEXT_MAX_CHARS: usize = 4000;
+/// 工具调用参数 / 工具结果最多返回的字符数（需求：详情 ≈100 字符以内）
+pub const MSG_QUERY_TOOL_DETAIL_MAX_CHARS: usize = 100;
+/// 概览摘要最多返回的字符数
+pub const MSG_QUERY_PREVIEW_MAX_CHARS: usize = 100;
+
+/// 工具调用的精简描述（只告诉模型「调用了什么工具 + 关键参数」）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallBrief {
+    pub name: String,
+    /// 参数 JSON 的截断形式（≤ `MSG_QUERY_TOOL_DETAIL_MAX_CHARS`）
+    pub input_brief: String,
+    pub input_truncated: bool,
+}
+
+/// 「消息查询」工具：单条消息的骨架（已剔除深度思考，工具参数已截断）
+///
+/// ⚠️ 只有「已压缩区间」（时序 < 最后一个 summary）的消息才会被返回：
+/// 该区间之后的对话已在模型当前上下文中，重复下发只会浪费 token。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageBrief {
+    /// 1 基时序（会话内消息的插入顺序）
+    pub seq: i64,
+    pub id: String,
+    pub role: String,
+    pub timestamp: i64,
+    /// 正文（仅 text 块拼接；≤ `MSG_QUERY_TEXT_MAX_CHARS`）
+    pub text: String,
+    pub text_truncated: bool,
+    /// 是否含图片 / 文件 / 引用块（仅提示，不展开内容）
+    pub has_attachments: bool,
+    /// assistant 消息调用的工具（参数按 `MSG_QUERY_TOOL_DETAIL_MAX_CHARS` 截断）
+    pub tool_calls: Vec<ToolCallBrief>,
+    /// tool 消息才有（对应 assistant 的 tool_call id）
+    pub tool_call_id: Option<String>,
+    pub is_error: Option<bool>,
+    /// 是否含深度思考 —— 内容**永不返回**，只给这个标记
+    pub has_reasoning: bool,
+}
+
+/// `get_message_window` 的返回：锚点前后 N 条（时序升序）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageWindow {
+    /// 锚点消息是否存在（false = id / seq 无效或已删除）
+    pub anchor_found: bool,
+    /// 解析出的锚点时序（未找到时为 0）
+    pub anchor_seq: i64,
+    pub start_seq: i64,
+    pub end_seq: i64,
+    /// 会话消息总数
+    pub total: i64,
+    /// 「已压缩区间」上界 = 最后一个 summary 的时序；
+    /// `None` = 会话从未压缩（此时没有可查询的历史，全部消息都在上下文中）
+    pub boundary_seq: Option<i64>,
+    /// 窗口后沿因触及上界而被裁剪
+    pub clamped_by_boundary: bool,
+    pub messages: Vec<MessageBrief>,
+}
+
+/// 时序概览项（list 模式）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageTimelineItem {
+    pub seq: i64,
+    pub id: String,
+    pub role: String,
+    pub timestamp: i64,
+    /// 纯文本摘要（≤ `MSG_QUERY_PREVIEW_MAX_CHARS`）
+    pub preview: String,
+    /// 该消息调用的工具名（assistant 才有）
+    pub tool_names: Vec<String>,
+}
+
+/// `get_message_timeline` 的返回（时序升序）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageTimelinePage {
+    pub items: Vec<MessageTimelineItem>,
+    pub has_more: bool,
+    /// 更早一页的游标（`has_more` 时给出）
+    pub next_cursor: Option<i64>,
+    pub total: i64,
+    /// 同 `MessageWindow::boundary_seq`
+    pub boundary_seq: Option<i64>,
+}
+
 // ==================== Trait ====================
 
 #[async_trait]
@@ -151,6 +249,36 @@ pub trait SessionRepo: Send + Sync {
         limit: usize,
         cursor: Option<SearchCursor>,
     ) -> Result<MessageSearchPage, String>;
+    /// 消息查询工具：按锚点（id / seq）取「时序窗口」内各条消息的骨架（时序升序）。
+    ///
+    /// - **只返回「已压缩区间」**（时序 < 最后一个 summary 的时序）内的消息：该区间
+    ///   之后的对话已在模型当前上下文中，重复下发只会浪费 token（需求硬约束）；
+    /// - 锚点不存在 / 落在已压缩区间外时返回 `anchor_found=false`（不当作错误）；
+    /// - 深度思考（`reasoning_content`）**永不返回**，只给 `has_reasoning` 标记；
+    /// - `before` / `after` 由实现按 `MSG_QUERY_MAX_*` clamp；正文与工具详情按字符截断。
+    async fn get_message_window(
+        &self,
+        session_id: &str,
+        anchor_id: Option<&str>,
+        anchor_seq: Option<i64>,
+        before: usize,
+        after: usize,
+    ) -> Result<MessageWindow, String>;
+
+    /// 消息查询工具：列出「已压缩区间」内的消息时序（时序升序）。
+    ///
+    /// - 只返回时序 < 最后一个 summary 时序 的消息（同 `get_message_window`）；
+    /// - `before_seq` 为游标（只返回更早的）；不传则取该区间**最新**的一页；
+    /// - `keyword` 非空时按 `text_plain`（LIKE，已转义）过滤；
+    /// - `limit` 由实现按 `MSG_QUERY_MAX_LIMIT` clamp。
+    async fn get_message_timeline(
+        &self,
+        session_id: &str,
+        keyword: Option<&str>,
+        before_seq: Option<i64>,
+        limit: usize,
+    ) -> Result<MessageTimelinePage, String>;
+
     /// 删除会话及其全部消息
     async fn delete_session(&self, session_id: &str) -> Result<(), String>;
 }
@@ -226,6 +354,40 @@ impl SessionRepo for NoopSessionRepo {
             items: Vec::new(),
             has_more: false,
             next_cursor: None,
+        })
+    }
+    async fn get_message_window(
+        &self,
+        _session_id: &str,
+        _anchor_id: Option<&str>,
+        _anchor_seq: Option<i64>,
+        _before: usize,
+        _after: usize,
+    ) -> Result<MessageWindow, String> {
+        Ok(MessageWindow {
+            anchor_found: false,
+            anchor_seq: 0,
+            start_seq: 0,
+            end_seq: 0,
+            total: 0,
+            boundary_seq: None,
+            clamped_by_boundary: false,
+            messages: Vec::new(),
+        })
+    }
+    async fn get_message_timeline(
+        &self,
+        _session_id: &str,
+        _keyword: Option<&str>,
+        _before_seq: Option<i64>,
+        _limit: usize,
+    ) -> Result<MessageTimelinePage, String> {
+        Ok(MessageTimelinePage {
+            items: Vec::new(),
+            has_more: false,
+            next_cursor: None,
+            total: 0,
+            boundary_seq: None,
         })
     }
     async fn delete_session(&self, _session_id: &str) -> Result<(), String> {
@@ -645,6 +807,173 @@ fn truncate_chars(chars: &[char], max: usize) -> String {
     }
 }
 
+// ==================== 消息查询辅助 ====================
+
+/// 按字符截断，返回 (文本, 是否被截断)
+fn truncate_with_flag(text: &str, max: usize) -> (String, bool) {
+    let count = text.chars().count();
+    if count <= max {
+        return (text.to_string(), false);
+    }
+    let head: String = text.chars().take(max).collect();
+    (format!("{}…", head), true)
+}
+
+/// content 是否含图片 / 文件 / 引用块（仅用于提示「有附件」，不展开内容）
+fn content_has_attachments(content: &serde_json::Value) -> bool {
+    match content {
+        serde_json::Value::Array(blocks) => blocks.iter().any(|b| {
+            matches!(
+                b.get("type").and_then(|v| v.as_str()),
+                Some("image_url") | Some("file") | Some("quote")
+            )
+        }),
+        _ => false,
+    }
+}
+
+/// 把 (before, after) 收敛到工具上限内（按比例缩放，保证锚点前后都保留）
+fn clamp_window(before: usize, after: usize) -> (usize, usize) {
+    let b = before.min(MSG_QUERY_MAX_BACK);
+    let a = after.min(MSG_QUERY_MAX_FWD);
+    if b + a <= MSG_QUERY_MAX_SPAN {
+        return (b, a);
+    }
+    let total = b + a;
+    let nb = (b * MSG_QUERY_MAX_SPAN) / total;
+    (nb, MSG_QUERY_MAX_SPAN - nb)
+}
+
+/// 会话消息总数
+fn session_message_count(conn: &Connection, session_id: &str) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM messages WHERE session_id=?1",
+        params![session_id],
+        |row| row.get(0),
+    )
+    .map_err(|e| format!("统计会话消息数失败: {}", e))
+}
+
+/// 某个 rowid 对应的 1 基时序
+fn seq_of_rowid(conn: &Connection, session_id: &str, rowid: i64) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM messages WHERE session_id=?1 AND rowid <= ?2",
+        params![session_id, rowid],
+        |row| row.get(0),
+    )
+    .map_err(|e| format!("计算消息时序失败: {}", e))
+}
+
+/// 「已压缩区间」上界 = 最后一个 summary 消息的 1 基时序；无 summary 时返回 None。
+///
+/// 与 Provider 的切片语义严格一致（`provider.rs::last_summary_index` / TS
+/// `getLastSummaryMessageIndex`）：最后一个 summary 及其之后的消息都已进入模型
+/// 当前上下文，因此**不可查询**。
+fn boundary_seq(conn: &Connection, session_id: &str) -> Result<Option<i64>, String> {
+    let rowid: Option<i64> = conn
+        .query_row(
+            "SELECT rowid FROM messages WHERE session_id=?1 AND role='summary' \
+             ORDER BY rowid DESC LIMIT 1",
+            params![session_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("查询压缩边界失败: {}", e))?;
+    match rowid {
+        None => Ok(None),
+        Some(rid) => seq_of_rowid(conn, session_id, rid).map(Some),
+    }
+}
+
+/// 从查询行构造 `MessageBrief`（正文 / 工具详情按上限截断；剔除深度思考）
+fn message_brief_from_row(row: &Row) -> Result<MessageBrief, String> {
+    let role: String = row.get("role").map_err(|e| e.to_string())?;
+    let content_json: String = row.get("content").map_err(|e| e.to_string())?;
+    let content: serde_json::Value =
+        serde_json::from_str(&content_json).unwrap_or(serde_json::Value::Null);
+
+    let raw_text = content_plain_text(&content);
+    // tool 消息的正文就是「工具结果详情」——与工具调用参数同口径截断；
+    // 其它角色（user / assistant）保留较长正文（仍设上限，防止单条撑爆上下文）
+    let text_limit = if role == "tool" {
+        MSG_QUERY_TOOL_DETAIL_MAX_CHARS
+    } else {
+        MSG_QUERY_TEXT_MAX_CHARS
+    };
+    let (text, text_truncated) = truncate_with_flag(&raw_text, text_limit);
+
+    let mut tool_calls: Vec<ToolCallBrief> = Vec::new();
+    if let Some(json) = row
+        .get::<_, Option<String>>("tool_calls")
+        .map_err(|e| e.to_string())?
+    {
+        if let Ok(list) = serde_json::from_str::<Vec<crate::agent::types::ToolUseContent>>(&json) {
+            for tc in list {
+                let raw = serde_json::to_string(&tc.input).unwrap_or_default();
+                let (input_brief, input_truncated) =
+                    truncate_with_flag(&raw, MSG_QUERY_TOOL_DETAIL_MAX_CHARS);
+                tool_calls.push(ToolCallBrief {
+                    name: tc.name,
+                    input_brief,
+                    input_truncated,
+                });
+            }
+        }
+    }
+
+    Ok(MessageBrief {
+        seq: row.get("idx").map_err(|e| e.to_string())?,
+        id: row.get("id").map_err(|e| e.to_string())?,
+        role,
+        timestamp: row.get("timestamp").map_err(|e| e.to_string())?,
+        text,
+        text_truncated,
+        has_attachments: content_has_attachments(&content),
+        tool_calls,
+        tool_call_id: row.get("tool_call_id").map_err(|e| e.to_string())?,
+        is_error: row
+            .get::<_, Option<i64>>("is_error")
+            .map_err(|e| e.to_string())?
+            .map(|v| v != 0),
+        has_reasoning: row
+            .get::<_, i64>("has_reasoning")
+            .map_err(|e| e.to_string())?
+            != 0,
+    })
+}
+
+/// 取 [start_seq, end_seq]（含端点，1 基时序）的消息骨架（时序升序）
+///
+/// ⚠️ 不 select `reasoning_content`：深度思考量最大且绝不允许下发给模型。
+fn fetch_message_briefs(
+    conn: &Connection,
+    session_id: &str,
+    start_seq: i64,
+    end_seq: i64,
+) -> Result<Vec<MessageBrief>, String> {
+    let mut stmt = conn
+        .prepare(
+            "WITH ordered AS ( \
+               SELECT rowid AS rid, ROW_NUMBER() OVER (ORDER BY rowid) AS idx \
+               FROM messages WHERE session_id = ?1 \
+             ) \
+             SELECT m.id AS id, m.role AS role, m.content AS content, \
+                    m.tool_calls AS tool_calls, m.tool_call_id AS tool_call_id, \
+                    m.is_error AS is_error, m.timestamp AS timestamp, o.idx AS idx, \
+                    (m.reasoning_content IS NOT NULL AND length(m.reasoning_content) > 0) AS has_reasoning \
+             FROM ordered o JOIN messages m ON m.rowid = o.rid \
+             WHERE o.idx BETWEEN ?2 AND ?3 \
+             ORDER BY o.idx ASC",
+        )
+        .map_err(|e| format!("准备消息窗口查询失败: {}", e))?;
+    let rows = stmt
+        .query_map(params![session_id, start_seq, end_seq], |row| {
+            message_brief_from_row(row).map_err(row_err)
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
 /// 生成检索命中片段：围绕首个命中位置向两侧取窗口，命中落在很靠后的位置时
 /// 也能看到关键词（否则前 200 字截断会让人以为「没搜到」）。
 /// 大小写不敏感；`to_lowercase` 可能改变个别字符长度，长度不一致时退化为从头截断。
@@ -1051,6 +1380,208 @@ INSERT INTO messages (
         .map_err(|e| format!("DB task join error: {}", e))?
     }
 
+    async fn get_message_window(
+        &self,
+        session_id: &str,
+        anchor_id: Option<&str>,
+        anchor_seq: Option<i64>,
+        before: usize,
+        after: usize,
+    ) -> Result<MessageWindow, String> {
+        let conn = self.conn.clone();
+        let session_id = session_id.to_string();
+        let anchor_id = anchor_id.map(|s| s.to_string());
+        let (before, after) = clamp_window(before, after);
+        tokio::task::spawn_blocking(move || -> Result<MessageWindow, String> {
+            let conn = conn.lock().unwrap();
+            let total = session_message_count(&conn, &session_id)?;
+            let boundary = boundary_seq(&conn, &session_id)?;
+            // 可查询区间的最后一条时序（无 summary → 该区间为空）
+            let last_queryable = boundary.map(|b| b - 1).unwrap_or(0);
+
+            // 解析锚点时序（优先 id，其次 seq；都不传则取区间最新一条）
+            let mut anchor_found = true;
+            let anchor: i64 = if let Some(id) = anchor_id.as_deref() {
+                let rid: Option<i64> = conn
+                    .query_row(
+                        "SELECT rowid FROM messages WHERE session_id=?1 AND id=?2",
+                        params![session_id, id],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|e| format!("查询锚点消息失败: {}", e))?;
+                match rid {
+                    None => {
+                        anchor_found = false;
+                        0
+                    }
+                    Some(r) => seq_of_rowid(&conn, &session_id, r)?,
+                }
+            } else if let Some(s) = anchor_seq {
+                if s >= 1 && s <= total {
+                    s
+                } else {
+                    anchor_found = false;
+                    0
+                }
+            } else {
+                last_queryable
+            };
+
+            // 锚点未找到 / 区间为空 / 锚点落在「已在上下文」的区间 → 返回空窗口
+            // （由调用方转成提示，不当成错误）
+            if !anchor_found || last_queryable < 1 || anchor < 1 || anchor > last_queryable {
+                return Ok(MessageWindow {
+                    anchor_found,
+                    anchor_seq: anchor.max(0),
+                    start_seq: 0,
+                    end_seq: 0,
+                    total,
+                    boundary_seq: boundary,
+                    clamped_by_boundary: true,
+                    messages: Vec::new(),
+                });
+            }
+
+            let start = (anchor - before as i64).max(1);
+            let mut end = anchor + after as i64;
+            let mut clamped = false;
+            if end > last_queryable {
+                end = last_queryable;
+                clamped = true;
+            }
+
+            let messages = fetch_message_briefs(&conn, &session_id, start, end)?;
+            Ok(MessageWindow {
+                anchor_found: true,
+                anchor_seq: anchor,
+                start_seq: start,
+                end_seq: end,
+                total,
+                boundary_seq: boundary,
+                clamped_by_boundary: clamped,
+                messages,
+            })
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
+    async fn get_message_timeline(
+        &self,
+        session_id: &str,
+        keyword: Option<&str>,
+        before_seq: Option<i64>,
+        limit: usize,
+    ) -> Result<MessageTimelinePage, String> {
+        let conn = self.conn.clone();
+        let session_id = session_id.to_string();
+        let keyword = keyword
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let limit = limit.clamp(1, MSG_QUERY_MAX_LIMIT);
+        tokio::task::spawn_blocking(move || -> Result<MessageTimelinePage, String> {
+            let conn = conn.lock().unwrap();
+            let total = session_message_count(&conn, &session_id)?;
+            let boundary = boundary_seq(&conn, &session_id)?;
+            let last_queryable = boundary.map(|b| b - 1).unwrap_or(0);
+            if last_queryable < 1 {
+                return Ok(MessageTimelinePage {
+                    items: Vec::new(),
+                    has_more: false,
+                    next_cursor: None,
+                    total,
+                    boundary_seq: boundary,
+                });
+            }
+
+            // 全部匿名 `?`：与 args 压入顺序严格一致
+            let mut sql = String::from(
+                "WITH ordered AS ( \
+                   SELECT rowid AS rid, ROW_NUMBER() OVER (ORDER BY rowid) AS idx \
+                   FROM messages WHERE session_id = ? \
+                 ) \
+                 SELECT m.id AS id, m.role AS role, m.tool_calls AS tool_calls, \
+                        m.timestamp AS timestamp, o.idx AS idx, \
+                        COALESCE(m.text_plain, '') AS text_plain \
+                 FROM ordered o JOIN messages m ON m.rowid = o.rid \
+                 WHERE o.idx <= ?",
+            );
+            let mut args: Vec<Box<dyn rusqlite::ToSql>> =
+                vec![Box::new(session_id.clone()), Box::new(last_queryable)];
+            if let Some(cursor) = before_seq {
+                sql.push_str(" AND o.idx < ?");
+                args.push(Box::new(cursor));
+            }
+            if let Some(kw) = &keyword {
+                // 转义 LIKE 通配符，避免关键词里的 % _ \ 改变语义
+                let escaped = kw
+                    .replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_");
+                sql.push_str(" AND COALESCE(m.text_plain, '') LIKE ? ESCAPE '\\'");
+                args.push(Box::new(format!("%{}%", escaped)));
+            }
+            sql.push_str(" ORDER BY o.idx DESC LIMIT ?");
+            args.push(Box::new((limit + 1) as i64));
+
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|e| format!("准备消息时序查询失败: {}", e))?;
+            let rows = stmt
+                .query_map(
+                    rusqlite::params_from_iter(args.iter().map(|p| p.as_ref())),
+                    |row| {
+                        let text_plain: String = row.get("text_plain")?;
+                        let (preview, _) =
+                            truncate_with_flag(&text_plain, MSG_QUERY_PREVIEW_MAX_CHARS);
+                        let mut tool_names: Vec<String> = Vec::new();
+                        if let Some(json) = row.get::<_, Option<String>>("tool_calls")? {
+                            if let Ok(list) = serde_json::from_str::<
+                                Vec<crate::agent::types::ToolUseContent>,
+                            >(&json)
+                            {
+                                tool_names = list.into_iter().map(|t| t.name).collect();
+                            }
+                        }
+                        Ok(MessageTimelineItem {
+                            seq: row.get("idx")?,
+                            id: row.get("id")?,
+                            role: row.get("role")?,
+                            timestamp: row.get("timestamp")?,
+                            preview,
+                            tool_names,
+                        })
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+            let mut items: Vec<MessageTimelineItem> = Vec::new();
+            for r in rows {
+                items.push(r.map_err(|e| e.to_string())?);
+            }
+            let has_more = items.len() > limit;
+            if has_more {
+                items.truncate(limit);
+            }
+            // 查询为时序倒序 → 反转为升序（与 read 工具一致，便于模型阅读）
+            items.reverse();
+            let next_cursor = if has_more {
+                items.first().map(|i| i.seq)
+            } else {
+                None
+            };
+            Ok(MessageTimelinePage {
+                items,
+                has_more,
+                next_cursor,
+                total,
+                boundary_seq: boundary,
+            })
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
     async fn search_messages(
         &self,
         query: &str,
@@ -1403,6 +1934,56 @@ pub async fn cmd_get_message_page(
         Some(&session_id),
         started,
         result.as_ref().ok().map(|p| p.messages.len()),
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
+}
+
+/// 消息查询工具：按锚点（id / seq）取时序窗口（只覆盖「已压缩区间」）
+#[tauri::command]
+pub async fn cmd_get_message_window(
+    state: tauri::State<'_, Arc<dyn SessionRepo>>,
+    session_id: String,
+    anchor_id: Option<String>,
+    anchor_seq: Option<i64>,
+    before: Option<usize>,
+    after: Option<usize>,
+) -> Result<MessageWindow, String> {
+    let started = crate::telemetry::now_ms();
+    let before = before.unwrap_or(5);
+    let after = after.unwrap_or(5);
+    let result = state
+        .get_message_window(&session_id, anchor_id.as_deref(), anchor_seq, before, after)
+        .await;
+    track_db(
+        "get_message_window",
+        Some(&session_id),
+        started,
+        result.as_ref().ok().map(|w| w.messages.len()),
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
+}
+
+/// 消息查询工具：列出「已压缩区间」的消息时序（可按关键词过滤 / 向前翻页）
+#[tauri::command]
+pub async fn cmd_get_message_timeline(
+    state: tauri::State<'_, Arc<dyn SessionRepo>>,
+    session_id: String,
+    keyword: Option<String>,
+    before_seq: Option<i64>,
+    limit: Option<usize>,
+) -> Result<MessageTimelinePage, String> {
+    let started = crate::telemetry::now_ms();
+    let limit = limit.unwrap_or(30).clamp(1, MSG_QUERY_MAX_LIMIT);
+    let result = state
+        .get_message_timeline(&session_id, keyword.as_deref(), before_seq, limit)
+        .await;
+    track_db(
+        "get_message_timeline",
+        Some(&session_id),
+        started,
+        result.as_ref().ok().map(|p| p.items.len()),
         result.as_ref().err().map(|s| s.as_str()),
     );
     result
@@ -2404,5 +2985,269 @@ CREATE TABLE messages (
 
         repo.migrate().await.unwrap();
         assert!(has_index(&repo, "idx_messages_ts"), "迁移后应建好检索索引");
+    }
+
+    // ==================== 消息查询（query messages）====================
+
+    /// 造一条带 tool_calls + 深度思考的 assistant 消息
+    fn assistant_with_tool(id: &str, text: &str, tool: &str, args: serde_json::Value) -> Message {
+        let mut m = test_message(id, "assistant");
+        m.content = json!(text);
+        m.reasoning_content = Some("SECRET_REASONING_绝不外泄".into());
+        m.tool_calls = Some(vec![crate::agent::types::ToolUseContent {
+            type_: "function".into(),
+            id: format!("tc_{}", id),
+            name: tool.into(),
+            input: args,
+        }]);
+        m
+    }
+
+    /// 追加一条 summary，作为「压缩边界」
+    fn summary_message(id: &str) -> Message {
+        let mut m = test_message(id, "summary");
+        m.content = json!("[summary] 之前的对话已压缩");
+        m
+    }
+
+    fn user_msg(id: &str, text: &str) -> Message {
+        let mut m = test_message(id, "user");
+        m.content = json!(text);
+        m
+    }
+
+    #[tokio::test]
+    async fn message_window_returns_before_and_after_ascending() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+        let msgs: Vec<Message> = (1..=10)
+            .map(|i| user_msg(&format!("m{}", i), &format!("消息 {}", i)))
+            .collect();
+        repo.append_messages("s1", &msgs).await.unwrap();
+        repo.append_messages("s1", &[summary_message("s")]).await.unwrap();
+
+        let w = repo
+            .get_message_window("s1", Some("m5"), None, 2, 2)
+            .await
+            .unwrap();
+        assert!(w.anchor_found);
+        assert_eq!(w.anchor_seq, 5);
+        assert_eq!(w.boundary_seq, Some(11));
+        assert_eq!(w.total, 11);
+        let ids: Vec<&str> = w.messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["m3", "m4", "m5", "m6", "m7"]);
+        assert_eq!(w.messages[0].seq, 3);
+        assert!(!w.clamped_by_boundary);
+    }
+
+    #[tokio::test]
+    async fn message_window_clamps_at_boundary_and_never_returns_known_tail() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+        let msgs: Vec<Message> = (1..=10)
+            .map(|i| user_msg(&format!("m{}", i), &format!("消息 {}", i)))
+            .collect();
+        repo.append_messages("s1", &msgs).await.unwrap();
+        repo.append_messages("s1", &[summary_message("s")]).await.unwrap();
+        // 边界之后还有「已知」消息：绝不能被查询返回
+        let mut known = test_message("m11", "assistant");
+        known.content = json!("已知回复");
+        repo.append_messages("s1", &[known]).await.unwrap();
+
+        let w = repo
+            .get_message_window("s1", Some("m9"), None, 0, 10)
+            .await
+            .unwrap();
+        let ids: Vec<&str> = w.messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["m9", "m10"], "只返回压缩区间内的消息");
+        assert!(w.clamped_by_boundary);
+        assert!(!ids.contains(&"m11"));
+        assert!(!ids.contains(&"s"));
+    }
+
+    #[tokio::test]
+    async fn message_window_anchor_in_visible_region_returns_empty() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+        let msgs: Vec<Message> = (1..=5)
+            .map(|i| test_message(&format!("m{}", i), "user"))
+            .collect();
+        repo.append_messages("s1", &msgs).await.unwrap();
+        repo.append_messages("s1", &[summary_message("s")]).await.unwrap();
+
+        // 锚点 = summary（在「已知区间」）→ 空窗口
+        let w = repo
+            .get_message_window("s1", Some("s"), None, 5, 5)
+            .await
+            .unwrap();
+        assert!(w.anchor_found);
+        assert!(w.messages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn message_window_without_summary_has_nothing_queryable() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+        let msgs: Vec<Message> = (1..=5)
+            .map(|i| test_message(&format!("m{}", i), "user"))
+            .collect();
+        repo.append_messages("s1", &msgs).await.unwrap();
+
+        let w = repo
+            .get_message_window("s1", Some("m3"), None, 5, 5)
+            .await
+            .unwrap();
+        assert_eq!(w.boundary_seq, None);
+        assert!(w.messages.is_empty(), "未压缩 → 无可查询历史");
+    }
+
+    #[tokio::test]
+    async fn message_window_anchor_not_found() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+        repo.append_messages("s1", &[test_message("m1", "user"), summary_message("s")])
+            .await
+            .unwrap();
+        let w = repo
+            .get_message_window("s1", Some("nope"), None, 5, 5)
+            .await
+            .unwrap();
+        assert!(!w.anchor_found);
+        assert!(w.messages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn message_window_never_exposes_reasoning() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+        repo.append_messages(
+            "s1",
+            &[
+                assistant_with_tool("m1", "正文", "read_file", json!({ "path": "a.txt" })),
+                summary_message("s"),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let w = repo
+            .get_message_window("s1", Some("m1"), None, 0, 0)
+            .await
+            .unwrap();
+        assert_eq!(w.messages.len(), 1);
+        assert!(w.messages[0].has_reasoning, "应标记「含思考」");
+        let serialized = serde_json::to_string(&w).unwrap();
+        assert!(
+            !serialized.contains("SECRET_REASONING"),
+            "深度思考内容绝不能出现在返回里"
+        );
+        assert!(!serialized.contains("reasoning_content"));
+    }
+
+    #[tokio::test]
+    async fn message_window_truncates_tool_details_and_tool_result() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+        let long_arg = "x".repeat(500);
+        let mut tool_result = test_message("m2", "tool");
+        tool_result.content = json!("y".repeat(500));
+        tool_result.tool_call_id = Some("tc_m1".into());
+        repo.append_messages(
+            "s1",
+            &[
+                assistant_with_tool("m1", "正文", "read_file", json!({ "path": long_arg })),
+                tool_result,
+                summary_message("s"),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let w = repo
+            .get_message_window("s1", Some("m1"), None, 5, 5)
+            .await
+            .unwrap();
+        let a = &w.messages[0];
+        assert_eq!(a.tool_calls.len(), 1);
+        assert_eq!(a.tool_calls[0].name, "read_file");
+        assert!(a.tool_calls[0].input_truncated);
+        assert!(
+            a.tool_calls[0].input_brief.chars().count()
+                <= MSG_QUERY_TOOL_DETAIL_MAX_CHARS + 1
+        );
+        let tr = &w.messages[1];
+        assert_eq!(tr.role, "tool");
+        assert!(tr.text_truncated);
+        assert!(tr.text.chars().count() <= MSG_QUERY_TOOL_DETAIL_MAX_CHARS + 1);
+    }
+
+    #[tokio::test]
+    async fn message_window_clamps_span() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+        let msgs: Vec<Message> = (1..=100)
+            .map(|i| test_message(&format!("m{}", i), "user"))
+            .collect();
+        repo.append_messages("s1", &msgs).await.unwrap();
+        repo.append_messages("s1", &[summary_message("s")]).await.unwrap();
+
+        let w = repo
+            .get_message_window("s1", Some("m50"), None, 999, 999)
+            .await
+            .unwrap();
+        assert!(w.messages.len() <= MSG_QUERY_MAX_SPAN + 1);
+        assert!(w.messages.len() > 1, "应按比例保留锚点前后");
+    }
+
+    #[tokio::test]
+    async fn message_timeline_lists_queryable_only_and_pages_backwards() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+        let msgs: Vec<Message> = (1..=10)
+            .map(|i| user_msg(&format!("m{}", i), &format!("消息 {}", i)))
+            .collect();
+        repo.append_messages("s1", &msgs).await.unwrap();
+        repo.append_messages("s1", &[summary_message("s")]).await.unwrap();
+        let mut known = test_message("m11", "assistant");
+        known.content = json!("已知回复");
+        repo.append_messages("s1", &[known]).await.unwrap();
+
+        // 首页：可查询区间最新 4 条（#7..#10），不含 summary / m11
+        let p1 = repo.get_message_timeline("s1", None, None, 4).await.unwrap();
+        let ids: Vec<&str> = p1.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(ids, vec!["m7", "m8", "m9", "m10"]);
+        assert_eq!(p1.boundary_seq, Some(11));
+        assert!(p1.has_more);
+
+        // 翻更早
+        let p2 = repo
+            .get_message_timeline("s1", None, p1.next_cursor, 4)
+            .await
+            .unwrap();
+        let ids2: Vec<&str> = p2.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(ids2, vec!["m3", "m4", "m5", "m6"]);
+    }
+
+    #[tokio::test]
+    async fn message_timeline_keyword_filter_and_empty_when_uncompressed() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+        repo.append_messages("s1", &[user_msg("m1", "关于沙盒的讨论"), user_msg("m2", "关于网络的讨论")])
+            .await
+            .unwrap();
+
+        // 未压缩 → 无可查询
+        let p = repo.get_message_timeline("s1", None, None, 10).await.unwrap();
+        assert!(p.items.is_empty());
+        assert_eq!(p.boundary_seq, None);
+
+        repo.append_messages("s1", &[summary_message("s")]).await.unwrap();
+        let p = repo
+            .get_message_timeline("s1", Some("沙盒"), None, 10)
+            .await
+            .unwrap();
+        let ids: Vec<&str> = p.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(ids, vec!["m1"]);
+        assert!(p.items[0].preview.contains("沙盒"));
     }
 }

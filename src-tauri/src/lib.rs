@@ -350,6 +350,8 @@ pub fn run() {
             session_db::cmd_get_session,
             session_db::cmd_get_messages,
             session_db::cmd_get_message_page,
+            session_db::cmd_get_message_window,
+            session_db::cmd_get_message_timeline,
             session_db::cmd_get_user_message_refs,
             session_db::cmd_search_messages,
             session_db::cmd_upsert_session,
