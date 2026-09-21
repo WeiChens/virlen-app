@@ -4,7 +4,9 @@
 
 use super::cancellation::CancellationToken;
 use super::provider::Provider;
-use super::types::{ChatRequest, Goal, Message, Session, VerificationIssue, VerificationResult};
+use super::types::{
+    ChatRequest, Goal, Message, Session, TokenUsage, VerificationIssue, VerificationResult,
+};
 use serde_json::Value;
 
 const DEFAULT_VERIFY_MAX_TOKENS: i64 = 4096;
@@ -134,6 +136,15 @@ fn normalize_result(raw: &Value) -> VerificationResult {
     }
 }
 
+/// 验证结果 + 本次验证调用的用量
+///
+/// 用量需回传给调用方记账（`usage_ledger` 的 `verify` 类流水）：验证是真实的 LLM 调用，
+/// 会产生 token 消费，但它不产生消息，因此必须显式向上传递，否则这笔消费就漏账了。
+pub struct VerifyOutcome {
+    pub result: VerificationResult,
+    pub usage: Option<TokenUsage>,
+}
+
 /// 验证执行结果是否达到目标
 pub async fn verify(
     provider: &dyn Provider,
@@ -141,7 +152,7 @@ pub async fn verify(
     goal: &Goal,
     messages: &[Message],
     cancel: &CancellationToken,
-) -> Result<VerificationResult, String> {
+) -> Result<VerifyOutcome, String> {
     let verify_prompt = build_verify_prompt(goal, messages);
 
     let verify_messages = vec![Message {
@@ -167,7 +178,10 @@ pub async fn verify(
 
     let response = provider.chat(&request, cancel).await?;
     let raw_text = response.text_content();
-    Ok(parse_verification_result(&raw_text))
+    Ok(VerifyOutcome {
+        result: parse_verification_result(&raw_text),
+        usage: response.usage,
+    })
 }
 
 #[cfg(test)]

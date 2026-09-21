@@ -10,6 +10,7 @@ import { providerPort } from '../provider'
 import { toolRegistry } from '../tools'
 import { AI_AGEMT_COMPRESS_CONTEXT_PROMPT } from '../agent'
 import { invoke } from '@tauri-apps/api/core'
+import { ledgerTokensOf, recordUsage } from '../usage'
 
 /**
  * 估算 token 数 — 优先用 Rust 端 DeepSeek V3 tokenizer 精确计数，
@@ -122,6 +123,20 @@ export async function compressContext(
       completionTokens,
       totalTokens: promptTokens + completionTokens,
     }
+
+    // 压缩上下文是真实 LLM 调用（会消耗 token）但不产生对话消息 → 单独记账。
+    // ⚠️ 这里的 token 数是本地 tokenizer 估算值，故 estimated=true，UI 需与真实用量区分。
+    // （本地估算没有缓存概念，cached 自然为 0）
+    recordUsage({
+      ts: Date.now(),
+      sessionId: session.id,
+      model,
+      providerType: provider.providerType,
+      providerConfigId: providerId,
+      kind: 'compress',
+      ...ledgerTokensOf(usage, provider.providerType),
+      estimated: true,
+    })
   } catch (e: any) {
     console.error('上下文压缩失败:', e)
     throw e

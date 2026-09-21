@@ -29,6 +29,7 @@
     "@xterm/xterm": "6.0.0",
     "bing-cn-mcp": "^1.0.2",
     "cheerio": "^1.2.0",
+    "echarts": "^6.1.0",
     "jszip": "^3.10.1",
     "mobx": "^6.15.3",
     "mobx-react": "^9.2.1",

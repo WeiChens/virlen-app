@@ -33,6 +33,10 @@ pub struct RunIterationParams<'a> {
     pub max_iterations: i64,
     /// 消息持久化仓库（直接 SQLite 直落，用于执行过程中增量保存）
     pub repo: &'a dyn SessionRepo,
+    /// Provider 类型（openai / anthropic / gemini），仅用于用量记账
+    pub provider_type: &'a str,
+    /// Provider 配置 id，仅用于用量记账
+    pub provider_config_id: &'a str,
     pub persist_snapshot: Option<&'a (dyn Fn(&str, &Run) + Sync + Send)>,
     pub clear_snapshot: Option<&'a (dyn Fn(&str) + Sync + Send)>,
 }
@@ -58,6 +62,8 @@ pub async fn run_iteration(
         reasoning_effort,
         max_iterations,
         repo,
+        provider_type,
+        provider_config_id,
         persist_snapshot,
         clear_snapshot,
     } = params;
@@ -97,6 +103,8 @@ pub async fn run_iteration(
             persist_snapshot,
             clear_snapshot,
             repo,
+            provider_type,
+            provider_config_id,
             round: current_iteration,
         })
         .await?;
@@ -139,7 +147,22 @@ pub async fn run_iteration(
         )
         .await
         {
-            Ok(v) => v,
+            Ok(outcome) => {
+                // 验证是真实 LLM 调用，但不产生消息 → 必须显式记账，否则这笔消费就漏了
+                crate::agent::usage::record_usage(
+                    repo,
+                    session_id,
+                    session,
+                    provider_type,
+                    provider_config_id,
+                    "verify",
+                    Some(current_iteration),
+                    None,
+                    outcome.usage,
+                )
+                .await;
+                outcome.result
+            }
             Err(e) => {
                 if cancel.is_cancelled() {
                     return Ok((false, messages));

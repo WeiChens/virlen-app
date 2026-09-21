@@ -21,6 +21,7 @@ pub mod run_state;
 pub mod storm_breaker;
 pub mod tool_executor;
 pub mod types;
+pub mod usage;
 pub mod verifier;
 
 use crate::agent::bridge::AgentBridgeState;

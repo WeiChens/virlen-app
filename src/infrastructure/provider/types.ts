@@ -1,10 +1,19 @@
 import { ToolDefinition } from '@/domain/tools/types'
-import { Message, ProviderConfig, StreamCallback } from '@/types'
+import { Message, ProviderConfig, StreamCallback, ProviderType } from '@/types'
 
 /** Provider 接口 — 所有 LLM Provider 需要实现此接口 */
 export interface IProvider {
-  /** Provider 名称 */
+  /** Provider 名称（当前实现传入的是 provider 配置 id） */
   readonly name: string
+
+  /**
+   * Provider 协议类型（openai / anthropic / gemini）。
+   *
+   * 仅用于用量统计（`usage_ledger.provider_type`）—— `name` 存的是配置 id，
+   * 而协议类型是「这笔钱花在哪种计费口径上」的必要信息（如 Anthropic 的 cache 计价）。
+   * 可选：测试里的 mock provider 不需实现。
+   */
+  readonly providerType?: ProviderType
 
   /** 获取可用模型列表 */
   listModels(): Promise<string[]>

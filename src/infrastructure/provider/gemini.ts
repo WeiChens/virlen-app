@@ -11,7 +11,7 @@
  * API 端点：https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
  * 流式：https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent
  */
-import type { Message, StreamCallback, ToolUseContent } from '@/types'
+import type { Message, StreamCallback, TokenUsage, ToolUseContent } from '@/types'
 import { fileBlockToText, quoteBlockToText } from '@/types'
 import type { ChatRequest, IProvider } from './types'
 import {
@@ -45,11 +45,15 @@ interface GeminiResponse {
     promptTokenCount: number
     candidatesTokenCount: number
     totalTokenCount: number
+    /** 命中隐式/显式缓存的那部分 prompt（是 promptTokenCount 的子集） */
+    cachedContentTokenCount?: number
   }
 }
 
 export class GeminiProvider implements IProvider {
   readonly name: string
+  /** 协议类型（供用量统计记账，见 IProvider.providerType） */
+  readonly providerType = 'gemini'
   private apiKey: string
   private baseUrl: string
 
@@ -142,9 +146,7 @@ export class GeminiProvider implements IProvider {
     const decoder = new TextDecoder()
     const toolCallsAccumulator: ToolUseContent[] = []
     let toolCallFinished = false
-    let lastUsage:
-      | { promptTokens: number; completionTokens: number; totalTokens: number }
-      | undefined
+    let lastUsage: TokenUsage | undefined
 
     try {
       await readStreamLines(
@@ -162,6 +164,7 @@ export class GeminiProvider implements IProvider {
               promptTokens: chunk.usageMetadata.promptTokenCount ?? 0,
               completionTokens: chunk.usageMetadata.candidatesTokenCount ?? 0,
               totalTokens: chunk.usageMetadata.totalTokenCount ?? 0,
+              cachedTokens: chunk.usageMetadata.cachedContentTokenCount ?? 0,
             }
           }
 
@@ -388,6 +391,7 @@ export class GeminiProvider implements IProvider {
         promptTokens: data.usageMetadata.promptTokenCount,
         completionTokens: data.usageMetadata.candidatesTokenCount,
         totalTokens: data.usageMetadata.totalTokenCount,
+        cachedTokens: data.usageMetadata.cachedContentTokenCount ?? 0,
       }
     }
 

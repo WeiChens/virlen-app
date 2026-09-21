@@ -111,6 +111,13 @@ pub struct TokenUsage {
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
     pub total_tokens: i64,
+    /// 缓存命中的输入 token（provider 明确回报时才有）。
+    ///
+    /// ⚠️ 各家口径不同：OpenAI 兼容（含 DeepSeek）与 Gemini 把它算在 `prompt_tokens` 里，
+    /// Anthropic 的 `input_tokens` 本来就不含缓存。
+    /// 账本写入时由 `usage::ledger_tokens` 按 provider 拉平口径，此处保持 API 原样。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_tokens: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

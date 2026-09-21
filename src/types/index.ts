@@ -201,6 +201,16 @@ export interface TokenUsage {
   promptTokens: number
   completionTokens: number
   totalTokens: number
+  /**
+   * 缓存命中的输入 token（API 明确回报时才有）。
+   *
+   * ⚠️ 各家口径不同：OpenAI 兼容（含 DeepSeek）把它算在 `promptTokens` 里，
+   * Gemini 的 `cachedContentTokenCount` 也是 `promptTokenCount` 的子集，
+   * 而 Anthropic 的 `input_tokens` 本来就不含缓存。
+   * **账本写入时会按 provider 拉平口径**（见 `domain/usage::ledgerTokensOf`），
+   * 这里的字段保持 API 原样，供展示使用。
+   */
+  cachedTokens?: number
 }
 
 export interface Agent {

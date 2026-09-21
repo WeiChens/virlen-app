@@ -1,8 +1,11 @@
 /**
  * OpenAI 兼容 Provider — 支持所有 OpenAI 协议兼容的 API
  * (OpenAI, DeepSeek, Moonshot, Zhipu, Ollama, 自定义等)
+ *
+ * 与 Rust 侧 `provider.rs::NativeOpenAiProvider` 行为必须一致（铁律 1），
+ * 包括用量字段的解析（见 `cachedTokensFromUsage`）。
  */
-import type { Message, ProviderConfig, StreamCallback } from '@/types'
+import type { Message, ProviderConfig, StreamCallback, TokenUsage } from '@/types'
 import type { ChatRequest, IProvider } from './types'
 import {
   apiFetch,
@@ -38,8 +41,30 @@ function toOpenAiBlocks(
   })
 }
 
+/**
+ * 从 OpenAI 兼容的 usage 里取出**缓存命中**的输入量。
+ *
+ * 不取的话，账本里的缓存 token 会永远是 0：OpenAI 把缓存命中算在 `prompt_tokens` 里，
+ * `total - prompt - completion` 恒等于 0，缓存价格永远用不上。
+ *
+ * - OpenAI：`prompt_tokens_details.cached_tokens`（自动 prompt caching）
+ * - DeepSeek：顶层 `prompt_cache_hit_tokens`（其 `prompt_tokens` 已含命中部分）
+ * - 其他兼容实现多为两者之一（Moonshot / Zhipu / Ollama 通常都不返回）
+ *
+ * 注意：这里只回报「prompt 里含多少缓存」，口径拉平在 `domain/usage::ledgerTokensOf`。
+ */
+function cachedTokensFromUsage(usage: any): number {
+  const n =
+    usage?.prompt_tokens_details?.cached_tokens ??
+    usage?.prompt_cache_hit_tokens ??
+    0
+  return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : 0
+}
+
 export class OpenAiProvider implements IProvider {
   readonly name: string
+  /** 协议类型（供用量统计记账，见 IProvider.providerType） */
+  readonly providerType = 'openai'
   private apiKey: string
   private baseUrl: string
   private get headers() {
@@ -150,9 +175,7 @@ export class OpenAiProvider implements IProvider {
 
     const decoder = new TextDecoder()
     let reasoningContent = ''
-    let lastUsage:
-      | { promptTokens: number; completionTokens: number; totalTokens: number }
-      | undefined
+    let lastUsage: TokenUsage | undefined
     const toolCallsAccumulator: Map<
       number,
       { id: string; name: string; arguments: string }
@@ -215,6 +238,7 @@ export class OpenAiProvider implements IProvider {
               promptTokens: chunk.usage.prompt_tokens ?? 0,
               completionTokens: chunk.usage.completion_tokens ?? 0,
               totalTokens: chunk.usage.total_tokens ?? 0,
+              cachedTokens: cachedTokensFromUsage(chunk.usage),
             }
           }
 
@@ -378,6 +402,7 @@ export class OpenAiProvider implements IProvider {
         promptTokens: data.usage.prompt_tokens,
         completionTokens: data.usage.completion_tokens,
         totalTokens: data.usage.total_tokens,
+        cachedTokens: cachedTokensFromUsage(data.usage),
       }
     }
 

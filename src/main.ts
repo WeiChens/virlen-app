@@ -16,6 +16,8 @@ import updateEvent from './events/updateEvent'
 import { ragService } from './services/rag-service'
 import { installTelemetry, track, trackPerf, flushTelemetry } from '@/utils/telemetry'
 import { installGlobalErrorHandlers } from '@/utils/telemetry/errorHandler'
+import { bindUsageLedger } from '@/domain/usage'
+import { tauriUsageLedger } from '@/infrastructure/usage-ledger'
 
 /** 性能计时（优先高精度） */
 const perfNow = () =>
@@ -120,6 +122,9 @@ async function checkForUpdates() {
  * 应用初始化
  */
 async function init() {
+  // 用量统计（token 账本）：把领域侧记账端口绑到 Tauri/SQLite 实现；
+  // 未绑定时 recordUsage 是空操作，因此业务代码可以无条件调用。
+  bindUsageLedger(tauriUsageLedger)
   await step('toolsInit', () => toolsInit())
   initDefaultAgent()
   agentStore.reload()

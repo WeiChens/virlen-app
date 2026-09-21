@@ -186,6 +186,114 @@ pub struct MessageTimelinePage {
     pub boundary_seq: Option<i64>,
 }
 
+// ==================== 用量账本（token 统计） ====================
+//
+// 设计见 `docs/token-usage-stats.md`。一句话：每次 LLM 调用记一条流水，
+// 不走 messages 聚合（会话删除不丢历史、能覆盖不产生消息的调用）。
+
+/// 一次 LLM 调用的用量流水（写入单位）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
+pub struct UsageEntry {
+    /// 调用完成时间（Unix ms）；不传则取当前时间
+    pub ts: Option<i64>,
+    pub session_id: Option<String>,
+    /// `chat_round` 的幂等键（assistant 消息 id）
+    pub message_id: Option<String>,
+    pub model: String,
+    pub provider_type: Option<String>,
+    pub provider_config_id: Option<String>,
+    /// chat_round | compress | title | verify | embedding | legacy
+    pub kind: String,
+    pub round: Option<i64>,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    /// 缓存读/写（= total - prompt - completion）
+    pub cached_tokens: i64,
+    pub total_tokens: i64,
+    /// 是否为本地估算值（非 API 返回）
+    pub estimated: bool,
+    pub trace_id: Option<String>,
+}
+
+/// 用量查询参数（聚合与明细共用同一套过滤条件）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
+pub struct UsageQuery {
+    pub from_ts: Option<i64>,
+    pub to_ts: Option<i64>,
+    pub session_id: Option<String>,
+    pub model: Option<String>,
+    pub kind: Option<String>,
+    /// 分桶维度：day | week | month | model | session | kind | provider
+    pub group_by: Option<String>,
+    /// 明细分页（`usage_records`）
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+/// 一个聚合桶（`totals` 也复用此结构）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageBucket {
+    pub key: String,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub cached_tokens: i64,
+    pub total_tokens: i64,
+    /// 调用次数
+    pub calls: i64,
+    /// 其中估算值条数（非 API 返回）
+    pub estimated_calls: i64,
+}
+
+/// 聚合结果
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageStats {
+    pub buckets: Vec<UsageBucket>,
+    /// 全部匹配流水的合计（不受 `limit` 影响）
+    pub totals: UsageBucket,
+    /// 账本内最早 / 最晚流水时间（供 UI 展示数据覆盖范围）
+    pub first_ts: Option<i64>,
+    pub last_ts: Option<i64>,
+}
+
+/// 一条用量明细（表格视图 / 导出用）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageRecord {
+    pub id: i64,
+    pub ts: i64,
+    pub session_id: Option<String>,
+    /// 会话标题（JOIN sessions；会话已删除时为 None）
+    pub session_title: Option<String>,
+    pub message_id: Option<String>,
+    pub model: String,
+    pub provider_type: Option<String>,
+    pub provider_config_id: Option<String>,
+    pub kind: String,
+    pub round: Option<i64>,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub cached_tokens: i64,
+    pub total_tokens: i64,
+    pub estimated: bool,
+    pub trace_id: Option<String>,
+}
+
+/// 明细分页结果
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageRecordPage {
+    /// 按时间倒序（新 → 旧）
+    pub records: Vec<UsageRecord>,
+    /// 匹配总条数（用于分页）
+    pub total: i64,
+}
+
 // ==================== Trait ====================
 
 #[async_trait]
@@ -284,6 +392,17 @@ pub trait SessionRepo: Send + Sync {
 
     /// 删除会话及其全部消息
     async fn delete_session(&self, session_id: &str) -> Result<(), String>;
+
+    // ===== 用量账本（token 统计，见 `docs/token-usage-stats.md`） =====
+
+    /// 追加用量流水（幂等：`message_id` 非空时同 id 只记一条）
+    async fn append_usage(&self, entries: &[UsageEntry]) -> Result<(), String>;
+    /// 聚合用量（按 `group_by` 分桶 + 合计）
+    async fn usage_stats(&self, query: &UsageQuery) -> Result<UsageStats, String>;
+    /// 用量明细（时间倒序，分页）
+    async fn usage_records(&self, query: &UsageQuery) -> Result<UsageRecordPage, String>;
+    /// 清空用量账本，返回删除条数
+    async fn clear_usage(&self) -> Result<i64, String>;
 }
 
 // ==================== Noop 实现（测试 / 兜底） ====================
@@ -396,6 +515,18 @@ impl SessionRepo for NoopSessionRepo {
     async fn delete_session(&self, _session_id: &str) -> Result<(), String> {
         Ok(())
     }
+    async fn append_usage(&self, _entries: &[UsageEntry]) -> Result<(), String> {
+        Ok(())
+    }
+    async fn usage_stats(&self, _query: &UsageQuery) -> Result<UsageStats, String> {
+        Ok(UsageStats::default())
+    }
+    async fn usage_records(&self, _query: &UsageQuery) -> Result<UsageRecordPage, String> {
+        Ok(UsageRecordPage::default())
+    }
+    async fn clear_usage(&self) -> Result<i64, String> {
+        Ok(0)
+    }
 }
 
 // ==================== SQLite 实现 ====================
@@ -492,9 +623,47 @@ const SEARCH_INDEX_DDL: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(timestamp);
 "#;
 
+/// 用量账本（token 统计）DDL
+///
+/// 与 `messages.usage` 的关系：`messages.usage` 是「消息自带的用量」，只覆盖
+/// 产生消息的 LLM 调用；账本是**每次 LLM 调用一条流水**，因此
+/// （1）能覆盖标题生成 / 迭代校验等不产生消息的调用；
+/// （2）独立于会话生命周期 —— 删除会话不清账，历史总量不会缩水。
+/// 详见 `docs/token-usage-stats.md`。
+const USAGE_LEDGER_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS usage_ledger (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts                 INTEGER NOT NULL,
+  session_id         TEXT,
+  message_id         TEXT,
+  model              TEXT NOT NULL DEFAULT '',
+  provider_type      TEXT,
+  provider_config_id TEXT,
+  kind               TEXT NOT NULL,
+  round              INTEGER,
+  prompt_tokens      INTEGER NOT NULL DEFAULT 0,
+  completion_tokens  INTEGER NOT NULL DEFAULT 0,
+  -- 缓存读/写：= total - prompt - completion（Anthropic 把 cache 计入 total；OpenAI 口径恒为 0）
+  cached_tokens      INTEGER NOT NULL DEFAULT 0,
+  total_tokens       INTEGER NOT NULL DEFAULT 0,
+  -- 1 = 本地估算值（非 API 返回），如上下文压缩的 DeepSeek BPE 估算
+  estimated          INTEGER NOT NULL DEFAULT 0,
+  trace_id           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_ledger(ts);
+CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_ledger(session_id, ts);
+-- chat_round 以 assistant 消息 id 作幂等键：流式重试 / 重放不会重复记账
+-- （compress/title/verify 无 message_id，每次都是新调用，不受影响）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_message ON usage_ledger(message_id)
+  WHERE message_id IS NOT NULL;
+"#;
+
 /// 当前 schema 版本（存于 `PRAGMA user_version`）。递增后由 `migrate()` 执行迁移
 /// （`open()` 只做快速初始化，耗时迁移在后台完成）。
-const SCHEMA_VERSION: i64 = 1;
+///
+/// v2：新增 `usage_ledger` 表，并从 `messages.usage` 一次性回填历史用量。
+/// v3：修补历史流水的 `model`（回填时 `messages.model` 其实是空的，导致历史用量费用恒为 0）。
+const SCHEMA_VERSION: i64 = 3;
 
 impl SqliteSessionRepo {
     /// 打开（或创建）数据库并初始化表结构（**不做耗时迁移**）
@@ -534,6 +703,10 @@ impl SqliteSessionRepo {
         let done = self.migration_done.clone();
         tokio::task::spawn_blocking(move || -> Result<(), String> {
             backfill_text_plain(&conn)?;
+            // v1 → v2：从 messages.usage 回填历史用量（幂等；否则老用户升级后统计从 0 开始）
+            backfill_usage_ledger(&conn)?;
+            // v2 → v3：修补历史流水的 model（回填早于本修补的用户，历史用量费用会是 0）
+            repair_usage_ledger_model(&conn)?;
             {
                 let c = conn.lock().unwrap();
                 c.execute_batch(SEARCH_INDEX_DDL)
@@ -567,6 +740,9 @@ fn init_schema(conn: &Connection) -> Result<bool, String> {
     ensure_text_plain_column(conn)?;
     conn.execute_batch(FTS_DDL)
         .map_err(|e| format!("初始化 FTS 索引失败: {}", e))?;
+    // 用量账本：纯建表 + 建索引，元数据级开销，可放在快速路径
+    conn.execute_batch(USAGE_LEDGER_DDL)
+        .map_err(|e| format!("初始化用量账本失败: {}", e))?;
 
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -680,6 +856,81 @@ fn backfill_text_plain(conn: &Arc<Mutex<Connection>>) -> Result<(), String> {
     Ok(())
 }
 
+/// 从 `messages.usage` 回填历史用量到 `usage_ledger`（v1 → v2 迁移，幂等）。
+///
+/// - 幂等键是 `message_id`（唯一索引 + `INSERT OR IGNORE`）：重复执行不会产生重复流水；
+/// - 历史数据无法区分调用类型，统一记为 `legacy`，避免污染新口径
+///   （`summary` 消息是上下文压缩产物，记为 `compress` 并标 `estimated=1`，因为它是本地估算值）；
+/// - 模型名优先取 `messages.model`，为空时回退到会话的 `model_id`
+///   （保存消息时从未写过 `messages.model`，不回退的话历史流水全是空模型 → 无处取价 → 费用恒为 0）；
+/// - 单条 SQL 完成（`INSERT ... SELECT`），不逐行循环，避免大库首次升级时拖慢启动。
+fn backfill_usage_ledger(conn: &Arc<Mutex<Connection>>) -> Result<(), String> {
+    // 账本已有内容（用户已用过新版）→ 不重复回填
+    let guard = conn.lock().unwrap();
+    let already: bool = guard
+        .query_row("SELECT EXISTS(SELECT 1 FROM usage_ledger)", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap_or(0)
+        != 0;
+    if already {
+        return Ok(());
+    }
+    guard
+        .execute(
+            r#"
+INSERT OR IGNORE INTO usage_ledger (
+  ts, session_id, message_id, model, kind,
+  prompt_tokens, completion_tokens, total_tokens, estimated
+)
+SELECT m.timestamp,
+       m.session_id,
+       m.id,
+       COALESCE(NULLIF(m.model, ''), s.model_id, ''),
+       CASE m.role WHEN 'summary' THEN 'compress' ELSE 'legacy' END,
+       COALESCE(json_extract(m.usage, '$.promptTokens'), 0),
+       COALESCE(json_extract(m.usage, '$.completionTokens'), 0),
+       COALESCE(json_extract(m.usage, '$.totalTokens'), 0),
+       CASE m.role WHEN 'summary' THEN 1 ELSE 0 END
+FROM messages m
+LEFT JOIN sessions s ON s.id = m.session_id
+WHERE m.usage IS NOT NULL AND m.usage != 'null'
+"#,
+            [],
+        )
+        .map_err(|e| format!("回填用量账本失败: {}", e))?;
+    Ok(())
+}
+
+/// v2 → v3：修补 `usage_ledger.model` 为空的流水。
+///
+/// 背景：保存消息时从未写过 `messages.model`，所以 v2 回填出来的历史流水 `model` 全是空串
+/// —— 明细里模型显 '-'、预算取不到单价 → **历史用量的费用恒为 0**
+/// （用户看到的现象：“恢复内置价之后全是 0”）。会话的 `model_id` 就是当时用的模型，用它兜底。
+///
+/// 幂等：只动 `model = ''` 的行；会话已删除的流水永远补不上（`model` 保持空，详见已知局限）。
+fn repair_usage_ledger_model(conn: &Arc<Mutex<Connection>>) -> Result<(), String> {
+    let guard = conn.lock().unwrap();
+    guard
+        .execute(
+            r#"
+UPDATE usage_ledger
+   SET model = (
+         SELECT s.model_id FROM sessions s WHERE s.id = usage_ledger.session_id
+       )
+ WHERE model = ''
+   AND session_id IS NOT NULL
+   AND EXISTS (
+         SELECT 1 FROM sessions s
+          WHERE s.id = usage_ledger.session_id AND COALESCE(s.model_id, '') != ''
+       )
+"#,
+            [],
+        )
+        .map_err(|e| format!("修补用量流水的模型名失败: {}", e))?;
+    Ok(())
+}
+
 // ==================== JSON 序列化辅助 ====================
 
 fn to_json<T: Serialize>(v: &T) -> Result<String, String> {
@@ -696,6 +947,62 @@ fn from_json<T: DeserializeOwned>(s: &str) -> Result<T, String> {
 
 fn opt_from_json<T: DeserializeOwned>(s: Option<String>) -> Result<Option<T>, String> {
     s.map(|v| from_json(&v)).transpose()
+}
+
+// ==================== 用量账本查询辅助 ====================
+
+/// 构造用量查询的 WHERE 子句（含前导空格）与绑定参数。
+///
+/// `alias` 为表别名（聚合查询传 `usage_ledger`，明细 JOIN 查询传 `u`），
+/// 显式加前缀避免 JOIN 后的列名歧义；所有值均走绑定参数，不拼接字面量。
+fn usage_where(
+    query: &UsageQuery,
+    alias: &str,
+) -> (String, Vec<Box<dyn rusqlite::ToSql + Send>>) {
+    let mut clauses: Vec<String> = Vec::new();
+    let mut params: Vec<Box<dyn rusqlite::ToSql + Send>> = Vec::new();
+
+    if let Some(from) = query.from_ts {
+        params.push(Box::new(from));
+        clauses.push(format!("{}.ts >= ?{}", alias, params.len()));
+    }
+    if let Some(to) = query.to_ts {
+        params.push(Box::new(to));
+        clauses.push(format!("{}.ts <= ?{}", alias, params.len()));
+    }
+    if let Some(sid) = query.session_id.as_deref().filter(|s| !s.is_empty()) {
+        params.push(Box::new(sid.to_string()));
+        clauses.push(format!("{}.session_id = ?{}", alias, params.len()));
+    }
+    if let Some(model) = query.model.as_deref().filter(|s| !s.is_empty()) {
+        params.push(Box::new(model.to_string()));
+        clauses.push(format!("{}.model = ?{}", alias, params.len()));
+    }
+    if let Some(kind) = query.kind.as_deref().filter(|s| !s.is_empty()) {
+        params.push(Box::new(kind.to_string()));
+        clauses.push(format!("{}.kind = ?{}", alias, params.len()));
+    }
+
+    if clauses.is_empty() {
+        (String::new(), params)
+    } else {
+        (format!(" WHERE {}", clauses.join(" AND ")), params)
+    }
+}
+
+/// 用量分桶表达式（白名单匹配，绝不把用户输入拼进 SQL）。
+///
+/// 时间桶用 `'localtime'`：`ts` 是 Unix ms，不转本地时区的话「今日」会按 UTC 切分。
+fn usage_group_expr(group_by: Option<&str>) -> &'static str {
+    match group_by.unwrap_or("day") {
+        "week" => "strftime('%Y-%W', ts / 1000, 'unixepoch', 'localtime')",
+        "month" => "strftime('%Y-%m', ts / 1000, 'unixepoch', 'localtime')",
+        "model" => "model",
+        "session" => "COALESCE(session_id, '')",
+        "kind" => "kind",
+        "provider" => "COALESCE(provider_type, provider_config_id, '')",
+        _ => "strftime('%Y-%m-%d', ts / 1000, 'unixepoch', 'localtime')",
+    }
 }
 
 // ==================== Row → 领域对象 ====================
@@ -1857,8 +2164,252 @@ INSERT INTO messages (
             .map_err(|e| format!("删除消息失败: {}", e))?;
             tx.execute("DELETE FROM sessions WHERE id=?1", params![session_id])
                 .map_err(|e| format!("删除会话失败: {}", e))?;
+            // ⚠️ 刻意**不**删除 usage_ledger 中该会话的流水：
+            // 用量是「已发生过的消费」的事实记录，删会话只删对话内容。
+            // 标题在明细里 JOIN 不到时显示为「已删除会话」，总量不会缩水（见 docs/token-usage-stats.md）。
             tx.commit().map_err(|e| format!("提交事务失败: {}", e))?;
             Ok(())
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
+    // ===== 用量账本（token 统计） =====
+
+    async fn append_usage(&self, entries: &[UsageEntry]) -> Result<(), String> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.clone();
+        let entries = entries.to_vec();
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let conn = conn.lock().unwrap();
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| format!("开启事务失败: {}", e))?;
+            {
+                let mut stmt = tx
+                    .prepare(
+                        r#"
+INSERT OR IGNORE INTO usage_ledger (
+  ts, session_id, message_id, model, provider_type, provider_config_id,
+  kind, round, prompt_tokens, completion_tokens, cached_tokens, total_tokens,
+  estimated, trace_id
+) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+"#,
+                    )
+                    .map_err(|e| format!("准备用量写入失败: {}", e))?;
+                for e in &entries {
+                    stmt.execute(params![
+                        e.ts.unwrap_or_else(crate::telemetry::now_ms),
+                        e.session_id,
+                        e.message_id,
+                        e.model,
+                        e.provider_type,
+                        e.provider_config_id,
+                        e.kind,
+                        e.round,
+                        e.prompt_tokens,
+                        e.completion_tokens,
+                        e.cached_tokens,
+                        e.total_tokens,
+                        e.estimated as i64,
+                        e.trace_id,
+                    ])
+                    .map_err(|err| format!("写入用量流水失败: {}", err))?;
+                }
+            }
+            tx.commit().map_err(|e| format!("提交事务失败: {}", e))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
+    async fn usage_stats(&self, query: &UsageQuery) -> Result<UsageStats, String> {
+        let conn = self.conn.clone();
+        let query = query.clone();
+        tokio::task::spawn_blocking(move || -> Result<UsageStats, String> {
+            let conn = conn.lock().unwrap();
+            let (where_sql, filter_params) = usage_where(&query, "usage_ledger");
+            let key_expr = usage_group_expr(query.group_by.as_deref());
+
+            // 分桶聚合
+            let sql = format!(
+                r#"
+SELECT {key_expr} AS bucket_key,
+       COALESCE(SUM(prompt_tokens), 0),
+       COALESCE(SUM(completion_tokens), 0),
+       COALESCE(SUM(cached_tokens), 0),
+       COALESCE(SUM(total_tokens), 0),
+       COUNT(*),
+       COALESCE(SUM(estimated), 0)
+FROM usage_ledger{where_sql}
+GROUP BY bucket_key
+ORDER BY bucket_key ASC
+"#
+            );
+            let mut buckets: Vec<UsageBucket> = Vec::new();
+            {
+                let mut stmt = conn
+                    .prepare(&sql)
+                    .map_err(|e| format!("准备用量聚合失败: {}", e))?;
+                let rows = stmt
+                    .query_map(
+                        rusqlite::params_from_iter(filter_params.iter().map(|p| p.as_ref())),
+                        |row| {
+                            Ok(UsageBucket {
+                                key: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                                prompt_tokens: row.get(1)?,
+                                completion_tokens: row.get(2)?,
+                                cached_tokens: row.get(3)?,
+                                total_tokens: row.get(4)?,
+                                calls: row.get(5)?,
+                                estimated_calls: row.get(6)?,
+                            })
+                        })
+                    .map_err(|e| e.to_string())?;
+                for b in rows {
+                    buckets.push(b.map_err(|e| e.to_string())?);
+                }
+            }
+
+            // 合计（不受分组 / 分页影响）
+            let totals_sql = format!(
+                r#"
+SELECT COALESCE(SUM(prompt_tokens), 0),
+       COALESCE(SUM(completion_tokens), 0),
+       COALESCE(SUM(cached_tokens), 0),
+       COALESCE(SUM(total_tokens), 0),
+       COUNT(*),
+       COALESCE(SUM(estimated), 0)
+FROM usage_ledger{where_sql}
+"#
+            );
+            let totals = conn
+                .query_row(
+                    &totals_sql,
+                    rusqlite::params_from_iter(filter_params.iter().map(|p| p.as_ref())),
+                    |row| {
+                        Ok(UsageBucket {
+                            key: String::new(),
+                            prompt_tokens: row.get(0)?,
+                            completion_tokens: row.get(1)?,
+                            cached_tokens: row.get(2)?,
+                            total_tokens: row.get(3)?,
+                            calls: row.get(4)?,
+                            estimated_calls: row.get(5)?,
+                        })
+                    },
+                )
+                .map_err(|e| format!("读取用量合计失败: {}", e))?;
+
+            // 账本数据覆盖范围（不看过滤条件，供 UI 提示「数据自 X 起」）
+            let (first_ts, last_ts): (Option<i64>, Option<i64>) = conn
+                .query_row("SELECT MIN(ts), MAX(ts) FROM usage_ledger", [], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
+                .unwrap_or((None, None));
+
+            Ok(UsageStats {
+                buckets,
+                totals,
+                first_ts,
+                last_ts,
+            })
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
+    async fn usage_records(&self, query: &UsageQuery) -> Result<UsageRecordPage, String> {
+        let conn = self.conn.clone();
+        let query = query.clone();
+        tokio::task::spawn_blocking(move || -> Result<UsageRecordPage, String> {
+            let conn = conn.lock().unwrap();
+            let (where_sql, filter_params) = usage_where(&query, "u");
+            let limit = query.limit.unwrap_or(200).clamp(1, 5000) as i64;
+            let offset = query.offset.unwrap_or(0) as i64;
+
+            // ⚠️ COUNT 的表**必须与 `usage_where` 用的别名一致**：过滤条件里的列都写成
+            // `u.ts` / `u.session_id`（明细查询有 JOIN，必须带前缀）。若这里写
+            // `FROM usage_ledger`（无别名），只要带了任何过滤条件，SQLite 就会报
+            // `no such column: u.ts` → 明细与 CSV 导出在「今日 / 近 7 天 / 近 30 天」下
+            // 全部空白（只有「全部」不过滤才正常）。
+            let total: i64 = conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM usage_ledger u{where_sql}"),
+                    rusqlite::params_from_iter(filter_params.iter().map(|p| p.as_ref())),
+                    |row| row.get(0),
+                )
+                .map_err(|e| format!("读取用量条数失败: {}", e))?;
+
+            // 会话标题在会话已删除时为 NULL（流水保留，标题置空）
+            let sql = format!(
+                r#"
+SELECT u.id, u.ts, u.session_id, s.title, u.message_id, u.model,
+       u.provider_type, u.provider_config_id, u.kind, u.round,
+       u.prompt_tokens, u.completion_tokens, u.cached_tokens, u.total_tokens,
+       u.estimated, u.trace_id
+FROM usage_ledger u
+LEFT JOIN sessions s ON s.id = u.session_id{where_sql}
+ORDER BY u.ts DESC, u.id DESC
+LIMIT ?{limit_idx} OFFSET ?{offset_idx}
+"#,
+                limit_idx = filter_params.len() + 1,
+                offset_idx = filter_params.len() + 2,
+            );
+            let mut all_params = filter_params;
+            all_params.push(Box::new(limit));
+            all_params.push(Box::new(offset));
+
+            let mut records: Vec<UsageRecord> = Vec::new();
+            {
+                let mut stmt = conn
+                    .prepare(&sql)
+                    .map_err(|e| format!("准备用量明细查询失败: {}", e))?;
+                let rows = stmt
+                    .query_map(
+                        rusqlite::params_from_iter(all_params.iter().map(|p| p.as_ref())),
+                        |row| {
+                            Ok(UsageRecord {
+                                id: row.get(0)?,
+                                ts: row.get(1)?,
+                                session_id: row.get(2)?,
+                                session_title: row.get(3)?,
+                                message_id: row.get(4)?,
+                                model: row.get(5)?,
+                                provider_type: row.get(6)?,
+                                provider_config_id: row.get(7)?,
+                                kind: row.get(8)?,
+                                round: row.get(9)?,
+                                prompt_tokens: row.get(10)?,
+                                completion_tokens: row.get(11)?,
+                                cached_tokens: row.get(12)?,
+                                total_tokens: row.get(13)?,
+                                estimated: row.get::<_, i64>(14)? != 0,
+                                trace_id: row.get(15)?,
+                            })
+                        })
+                    .map_err(|e| e.to_string())?;
+                for r in rows {
+                    records.push(r.map_err(|e| e.to_string())?);
+                }
+            }
+            Ok(UsageRecordPage { records, total })
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
+    async fn clear_usage(&self) -> Result<i64, String> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || -> Result<i64, String> {
+            let conn = conn.lock().unwrap();
+            let n = conn
+                .execute("DELETE FROM usage_ledger", [])
+                .map_err(|e| format!("清空用量账本失败: {}", e))?;
+            Ok(n as i64)
         })
         .await
         .map_err(|e| format!("DB task join error: {}", e))?
@@ -2186,6 +2737,85 @@ pub async fn cmd_truncate_session_messages(
         Some(&session_id),
         started,
         None,
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
+}
+
+// ==================== 用量账本命令（token 统计） ====================
+
+/// 追加用量流水（TS 引擎 / 前端非消息型调用走此命令；Rust 引擎内部直落不经 IPC）
+#[tauri::command]
+pub async fn cmd_append_usage(
+    state: tauri::State<'_, Arc<dyn SessionRepo>>,
+    entries: Vec<UsageEntry>,
+) -> Result<(), String> {
+    let started = crate::telemetry::now_ms();
+    let rows = entries.len();
+    let result = state.append_usage(&entries).await;
+    track_db(
+        "usage_append",
+        None,
+        started,
+        Some(rows),
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
+}
+
+/// 聚合用量统计（按时间 / 模型 / 会话 / 调用类型分桶 + 合计）
+///
+/// 只返回 token 数，**不返回费用**：单价是用户可编辑的设置项，
+/// 算在 SQL 里会导致「改一次单价就要回填整张表」，因此费用一律由前端计算。
+#[tauri::command]
+pub async fn cmd_usage_stats(
+    state: tauri::State<'_, Arc<dyn SessionRepo>>,
+    query: Option<UsageQuery>,
+) -> Result<UsageStats, String> {
+    let started = crate::telemetry::now_ms();
+    let query = query.unwrap_or_default();
+    let result = state.usage_stats(&query).await;
+    track_db(
+        "usage_stats",
+        query.session_id.as_deref(),
+        started,
+        result.as_ref().ok().map(|s| s.buckets.len()),
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
+}
+
+/// 用量明细（时间倒序，分页；表格视图与 CSV 导出用）
+#[tauri::command]
+pub async fn cmd_usage_query(
+    state: tauri::State<'_, Arc<dyn SessionRepo>>,
+    query: Option<UsageQuery>,
+) -> Result<UsageRecordPage, String> {
+    let started = crate::telemetry::now_ms();
+    let query = query.unwrap_or_default();
+    let result = state.usage_records(&query).await;
+    track_db(
+        "usage_query",
+        query.session_id.as_deref(),
+        started,
+        result.as_ref().ok().map(|p| p.records.len()),
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
+}
+
+/// 清空用量账本（返回删除条数）
+#[tauri::command]
+pub async fn cmd_usage_clear(
+    state: tauri::State<'_, Arc<dyn SessionRepo>>,
+) -> Result<i64, String> {
+    let started = crate::telemetry::now_ms();
+    let result = state.clear_usage().await;
+    track_db(
+        "usage_clear",
+        None,
+        started,
+        result.as_ref().ok().map(|n| *n as usize),
         result.as_ref().err().map(|s| s.as_str()),
     );
     result
@@ -3380,5 +4010,243 @@ CREATE TABLE messages (
         let ids: Vec<&str> = p.items.iter().map(|i| i.id.as_str()).collect();
         assert_eq!(ids, vec!["m1"]);
         assert!(p.items[0].preview.contains("沙盒"));
+    }
+
+    // ===== 用量账本（token 统计） =====
+
+    fn usage_entry(id: Option<&str>, ts: i64, kind: &str, total: i64) -> UsageEntry {
+        UsageEntry {
+            ts: Some(ts),
+            session_id: Some("s1".into()),
+            message_id: id.map(String::from),
+            model: "gpt-4o".into(),
+            provider_type: Some("openai".into()),
+            provider_config_id: Some("p1".into()),
+            kind: kind.into(),
+            round: Some(1),
+            prompt_tokens: total - 20,
+            completion_tokens: 20,
+            cached_tokens: 0,
+            total_tokens: total,
+            estimated: false,
+            trace_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn usage_append_is_idempotent_by_message_id() {
+        let repo = open_tmp();
+        repo.append_usage(&[usage_entry(Some("m1"), 1000, "chat_round", 100)])
+            .await
+            .unwrap();
+        // 同一 message_id 重复写入（流式重试 / 重放）→ 不产生新流水
+        repo.append_usage(&[usage_entry(Some("m1"), 1000, "chat_round", 100)])
+            .await
+            .unwrap();
+        // 无 message_id 的调用（title / verify）每次都单独记账
+        repo.append_usage(&[
+            usage_entry(None, 1000, "title", 10),
+            usage_entry(None, 1000, "title", 10),
+        ])
+        .await
+        .unwrap();
+
+        let stats = repo.usage_stats(&UsageQuery::default()).await.unwrap();
+        assert_eq!(stats.totals.calls, 3);
+        assert_eq!(stats.totals.total_tokens, 120);
+        assert_eq!(stats.totals.estimated_calls, 0);
+    }
+
+    #[tokio::test]
+    async fn usage_stats_groups_and_filters() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "会话一", 100)).await.unwrap();
+        repo.append_usage(&[
+            usage_entry(Some("m1"), 1_700_000_000_000, "chat_round", 100),
+            usage_entry(Some("m2"), 1_700_000_000_000, "chat_round", 200),
+            usage_entry(None, 1_700_100_000_000, "verify", 50),
+        ])
+        .await
+        .unwrap();
+
+        // 按类型分桶
+        let by_kind = repo
+            .usage_stats(&UsageQuery {
+                group_by: Some("kind".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(by_kind.buckets.len(), 2);
+        assert_eq!(by_kind.totals.total_tokens, 350);
+        assert_eq!(by_kind.first_ts, Some(1_700_000_000_000));
+
+        // 按时间过滤 + 按会话分桶（只命中前两条）
+        let by_session = repo
+            .usage_stats(&UsageQuery {
+                to_ts: Some(1_700_000_000_001),
+                group_by: Some("session".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(by_session.totals.total_tokens, 300);
+        assert_eq!(by_session.buckets.len(), 1);
+        assert_eq!(by_session.buckets[0].key, "s1");
+        assert_eq!(by_session.buckets[0].calls, 2);
+
+        // 按天分桶（tz-dependent：只断言桶数与合计，不写死日期）
+        let by_day = repo
+            .usage_stats(&UsageQuery {
+                group_by: Some("day".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(!by_day.buckets.is_empty());
+        assert_eq!(by_day.buckets.iter().map(|b| b.calls).sum::<i64>(), 3);
+    }
+
+    #[tokio::test]
+    async fn usage_records_join_session_title_and_survive_session_delete() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "会话一", 100)).await.unwrap();
+        repo.append_usage(&[usage_entry(Some("m1"), 2000, "chat_round", 100)])
+            .await
+            .unwrap();
+
+        let page = repo.usage_records(&UsageQuery::default()).await.unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.records[0].session_title.as_deref(), Some("会话一"));
+
+        // 删会话只删对话内容，用量流水保留（口径见 docs/token-usage-stats.md）
+        repo.delete_session("s1").await.unwrap();
+        let page = repo.usage_records(&UsageQuery::default()).await.unwrap();
+        assert_eq!(page.total, 1, "删会话后用量记录仍保留");
+        assert_eq!(page.records[0].session_title, None);
+    }
+
+    /// 回归：带过滤条件时，COUNT 与明细查询必须用**同一张表别名**。
+    ///
+    /// 曾经 COUNT 写成 `FROM usage_ledger`（无别名）却复用了 `u.ts >= ?` 的 WHERE，
+    /// SQLite 直接报 `no such column: u.ts` → 明细/导出在有时间过滤时全空。
+    #[tokio::test]
+    async fn usage_records_with_filters_matches_count() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "会话一", 100)).await.unwrap();
+        repo.append_usage(&[
+            usage_entry(Some("m1"), 1_000, "chat_round", 100),
+            usage_entry(Some("m2"), 5_000, "chat_round", 200),
+        ])
+        .await
+        .unwrap();
+
+        // 时间下界过滤
+        let page = repo
+            .usage_records(&UsageQuery {
+                from_ts: Some(2_000),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.records.len(), 1);
+        assert_eq!(page.records[0].total_tokens, 200);
+
+        // 会话过滤（同样走 WHERE，同样会踩到别名问题）
+        let page = repo
+            .usage_records(&UsageQuery {
+                session_id: Some("s1".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(page.total, 2);
+        assert_eq!(page.records.len(), 2);
+
+        // 分页参数编号必须在过滤参数之后（否则 LIMIT 会吃掉过滤值）
+        let page = repo
+            .usage_records(&UsageQuery {
+                from_ts: Some(0),
+                limit: Some(1),
+                offset: Some(1),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(page.total, 2);
+        assert_eq!(page.records.len(), 1);
+        assert_eq!(page.records[0].total_tokens, 100, "按 ts DESC 取第二页 = 更早的一条");
+    }
+
+    #[tokio::test]
+    async fn usage_estimated_flag_and_clear() {
+        let repo = open_tmp();
+        let mut entry = usage_entry(Some("m1"), 3000, "compress", 80);
+        entry.estimated = true;
+        repo.append_usage(&[entry]).await.unwrap();
+
+        let stats = repo.usage_stats(&UsageQuery::default()).await.unwrap();
+        assert_eq!(stats.totals.estimated_calls, 1);
+
+        let n = repo.clear_usage().await.unwrap();
+        assert_eq!(n, 1);
+        let stats = repo.usage_stats(&UsageQuery::default()).await.unwrap();
+        assert_eq!(stats.totals.calls, 0);
+        assert_eq!(stats.first_ts, None);
+    }
+
+    #[tokio::test]
+    async fn usage_backfill_from_messages_is_idempotent() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+        let mut with_usage = test_message("m1", "assistant");
+        with_usage.usage = Some(serde_json::from_value(json!({
+            "promptTokens": 10,
+            "completionTokens": 5,
+            "totalTokens": 15
+        }))
+        .unwrap());
+        repo.append_messages("s1", &[with_usage]).await.unwrap();
+
+        // 模拟升级迁移：从 messages.usage 回填（幂等，跑两次不翻倍）
+        backfill_usage_ledger(&repo.conn).unwrap();
+        backfill_usage_ledger(&repo.conn).unwrap();
+
+        let stats = repo.usage_stats(&UsageQuery::default()).await.unwrap();
+        assert_eq!(stats.totals.calls, 1);
+        assert_eq!(stats.totals.total_tokens, 15);
+        let page = repo.usage_records(&UsageQuery::default()).await.unwrap();
+        assert_eq!(page.records[0].kind, "legacy");
+        // 消息本身没存过 model（生产环境同此）→ 回退到会话的 model_id，
+        // 否则历史流水取不到单价、费用恒为 0
+        assert_eq!(page.records[0].model, "gpt-4o");
+    }
+
+    /// v2 → v3 修补：早于本修补的用户，历史流水的 model 是空串 → 费用恒为 0。
+    #[tokio::test]
+    async fn repair_usage_ledger_model_fills_from_session() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "会话一", 100)).await.unwrap();
+
+        let mut legacy = usage_entry(Some("m1"), 1_000, "legacy", 100);
+        legacy.model = String::new(); // 模拟 v2 回填出来的空模型
+        let mut orphan = usage_entry(Some("m2"), 2_000, "legacy", 100);
+        orphan.model = String::new();
+        orphan.session_id = Some("gone".into()); // 会话已删 → 无法补齐
+        repo.append_usage(&[legacy, orphan]).await.unwrap();
+
+        // 跑两次（迁移可重入）：结果必须一致，不得把已补好的值写坏
+        repair_usage_ledger_model(&repo.conn).unwrap();
+        repair_usage_ledger_model(&repo.conn).unwrap();
+
+        let page = repo.usage_records(&UsageQuery::default()).await.unwrap();
+        let by_id: std::collections::HashMap<String, String> = page
+            .records
+            .iter()
+            .map(|r| (r.message_id.clone().unwrap_or_default(), r.model.clone()))
+            .collect();
+        assert_eq!(by_id["m1"], "gpt-4o");
+        assert_eq!(by_id["m2"], "", "会话已删的流水补不上，保持空串");
     }
 }

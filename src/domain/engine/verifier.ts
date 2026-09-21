@@ -10,6 +10,7 @@ import VERIFY_PROMPT_TEMPLATE from './prompts/verify-prompt.md?raw'
 import type { IProvider } from '@/infrastructure/provider/types'
 import type { Message, Session } from '@/types'
 import type { Goal, VerificationResult } from './iteration-types'
+import { ledgerTokensOf, recordUsage } from '../usage'
 
 /** 验证器配置 */
 export interface VerifierConfig {
@@ -185,6 +186,22 @@ export class LLMVerifier {
       )
 
       const rawText = extractTextContent(response.content)
+
+      // 验证是真实 LLM 调用但不产生消息 → 必须显式记账（与 Rust `agent/verifier.rs` 对称）
+      if (response.usage) {
+        recordUsage({
+          ts: Date.now(),
+          sessionId: session.id,
+          model: session.modelId,
+          providerType: provider.providerType,
+          providerConfigId: session.providerConfigId,
+          kind: 'verify',
+          // 口径拉平（prompt = 非缓存输入 / cached 单列）：见 domain/usage::ledgerTokensOf
+          ...ledgerTokensOf(response.usage, provider.providerType),
+          estimated: false,
+        })
+      }
+
       return parseVerificationResult(rawText)
     } catch (e: any) {
       // 验证被用户取消：向上抛出，让迭代控制器感知并停止

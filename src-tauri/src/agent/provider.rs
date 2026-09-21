@@ -40,6 +40,27 @@ const QUOTE_CONTENT_LABEL: &str = "Content";
 
 // ==================== Provider trait ====================
 
+/// 从 OpenAI 兼容的 usage 里取出**缓存命中**的输入量（与 TS `openai.ts::cachedTokensFromUsage` 对齐）。
+///
+/// 不取的话账本里的缓存 token 永远是 0：OpenAI 把缓存命中算在 `prompt_tokens` 里，
+/// `total - prompt - completion` 恒等于 0，缓存价永远用不上。
+///
+/// - OpenAI：`prompt_tokens_details.cached_tokens`
+/// - DeepSeek：顶层 `prompt_cache_hit_tokens`
+/// - 其它兼容实现多数不返回 → `None`（账本退回推导值）
+fn openai_cached_tokens(usage: &Value) -> Option<i64> {
+    let n = usage
+        .get("prompt_tokens_details")
+        .and_then(|d| d.get("cached_tokens"))
+        .and_then(Value::as_i64)
+        .or_else(|| usage.get("prompt_cache_hit_tokens").and_then(Value::as_i64))?;
+    if n > 0 {
+        Some(n)
+    } else {
+        None
+    }
+}
+
 #[async_trait]
 pub trait Provider: Send + Sync {
     async fn chat(
@@ -428,6 +449,7 @@ impl NativeOpenAiProvider {
                 prompt_tokens: usage.get("prompt_tokens").and_then(Value::as_i64).unwrap_or(0),
                 completion_tokens: usage.get("completion_tokens").and_then(Value::as_i64).unwrap_or(0),
                 total_tokens: usage.get("total_tokens").and_then(Value::as_i64).unwrap_or(0),
+                cached_tokens: openai_cached_tokens(usage),
             });
         }
 
@@ -567,6 +589,7 @@ impl Provider for NativeOpenAiProvider {
                     prompt_tokens: usage.get("prompt_tokens").and_then(Value::as_i64).unwrap_or(0),
                     completion_tokens: usage.get("completion_tokens").and_then(Value::as_i64).unwrap_or(0),
                     total_tokens: usage.get("total_tokens").and_then(Value::as_i64).unwrap_or(0),
+                    cached_tokens: openai_cached_tokens(usage),
                 });
             }
 
@@ -816,6 +839,7 @@ impl NativeAnthropicProvider {
                 prompt_tokens: input,
                 completion_tokens: output,
                 total_tokens: input + output + cache_read + cache_create,
+                cached_tokens: Some(cache_read + cache_create),
             });
         }
 
@@ -962,6 +986,7 @@ impl Provider for NativeAnthropicProvider {
                                 prompt_tokens: input,
                                 completion_tokens: output,
                                 total_tokens: input + output + cache_read + cache_create,
+                                cached_tokens: Some(cache_read + cache_create),
                             });
                         }
                         if !tool_fired {

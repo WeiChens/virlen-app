@@ -36,6 +36,8 @@ import './style.scss'
 import { timeFormat } from '@/utils/time'
 import useTime from '@/ui/hooks/useTime'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
+import StatsSvg from '@/ui/components/icons/StatsSvg'
+import TokenStatsPanel from '@/ui/pages/chat/components/token-stats'
 import settingsEvent from '@/events/settingsEvent'
 import { openPath } from '@tauri-apps/plugin-opener'
 import { ragService } from '@/services/rag-service'
@@ -133,6 +135,8 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
   const [exportSessionId, setExportSessionId] = useState<string | null>(null)
   /** 当前打开的「更多」菜单 sessionId */
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null)
+  /** 用量统计面板开关 */
+  const [statsOpen, setStatsOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
   // ===== 导入知识库状态 =====
@@ -531,6 +535,16 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
           <AddSvg />
           <span>{t('新对话')}</span>
         </ripple-button>
+        {/* 用量统计入口：紧贴「新对话」下方，与主操作同一视觉层级 */}
+        <button
+          type="button"
+          className="token-stats-entry"
+          onClick={() => setStatsOpen(true)}
+          title={t('查看 token 用量统计')}
+          aria-label={t('用量统计')}>
+          <StatsSvg />
+          <span>{t('用量统计')}</span>
+        </button>
       </div>
       <div className="session-list">
         {groups.length > 0 ? (
@@ -557,6 +571,13 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
           </div>
         )}
       </div>
+
+      {/* 用量统计面板（portal 挂到 body，见组件内部注释） */}
+      <TokenStatsPanel
+        open={statsOpen}
+        onClose={() => setStatsOpen(false)}
+        sessionId={currentSessionId || undefined}
+      />
 
       {/* 导出对话框 */}
       {exportSessionId && (

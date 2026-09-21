@@ -14,7 +14,7 @@ import type {
   ToolUseContent,
 } from '@/types'
 import type { ChatRequest, IProvider } from './types'
-import type { MessageContent } from '@/types'
+import type { MessageContent, TokenUsage } from '@/types'
 import { apiFetch, getResponseReader, readStreamLines } from './http-utils'
 import { track } from '@/utils/telemetry'
 import { fileBlockToText, quoteBlockToText, getLastSummaryMessageIndex } from '@/types'
@@ -48,6 +48,19 @@ interface AnthropicResponse {
     cache_read_input_tokens?: number
     cache_creation_input_tokens?: number
   }
+}
+
+/**
+ * Anthropic 的**缓存命中**输入量 = cache_read + cache_creation。
+ *
+ * Anthropic 的 `input_tokens` 不含缓存（与 OpenAI 口径相反），
+ * 因此这里报的值是「额外的缓存部分」，账本口径拉平见 `domain/usage::ledgerTokensOf`。
+ */
+function anthropicCachedTokens(usage: {
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
+}): number {
+  return (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
 }
 
 /**
@@ -91,6 +104,8 @@ function toAnthropicBlocks(
 
 export class AnthropicProvider implements IProvider {
   readonly name: string
+  /** 协议类型（供用量统计记账，见 IProvider.providerType） */
+  readonly providerType = 'anthropic'
   private apiKey: string
   private baseUrl: string
 
@@ -226,9 +241,7 @@ export class AnthropicProvider implements IProvider {
     const inputPartials: Map<number, string> = new Map()
     let toolUseEventFired = false
     let thinkingContentBuffer = ''
-    let lastUsage:
-      | { promptTokens: number; completionTokens: number; totalTokens: number }
-      | undefined
+    let lastUsage: TokenUsage | undefined
 
     try {
       await readStreamLines(
@@ -320,6 +333,7 @@ export class AnthropicProvider implements IProvider {
                         (data.usage.output_tokens ?? 0) +
                         (data.usage.cache_read_input_tokens ?? 0) +
                         (data.usage.cache_creation_input_tokens ?? 0),
+                      cachedTokens: anthropicCachedTokens(data.usage),
                     }
                   }
                   if (
@@ -561,6 +575,7 @@ export class AnthropicProvider implements IProvider {
           data.usage.output_tokens +
           (data.usage.cache_read_input_tokens ?? 0) +
           (data.usage.cache_creation_input_tokens ?? 0),
+        cachedTokens: anthropicCachedTokens(data.usage),
       }
     }
 

@@ -154,6 +154,11 @@ impl AgentEngine {
             Some(conn) => self.provider_factory.create(conn),
             None => return Err("Provider 未配置".to_string()),
         };
+        // 用量记账需要知道「钱花在哪个 provider 上」（连接信息已随 options 传入，见 ProviderConnection）
+        let (provider_type, provider_config_id) = match &options.provider {
+            Some(conn) => (conn.provider_type.clone(), conn.provider_id.clone()),
+            None => (String::new(), String::new()),
+        };
 
         // 2. 解析可用工具列表
         let tool_defs: Vec<ToolDefinition> = if options.enable_tools {
@@ -214,6 +219,8 @@ impl AgentEngine {
                 reasoning_effort: options.reasoning_effort.clone(),
                 max_iterations: options.max_iterations,
                 repo: self.repo.as_ref(),
+                provider_type: &provider_type,
+                provider_config_id: &provider_config_id,
                 persist_snapshot: Some(&persist_closure),
                 clear_snapshot: Some(&clear_closure),
             })
@@ -235,6 +242,8 @@ impl AgentEngine {
                     options.security.clone(),
                     options.max_tokens.unwrap_or(session.params.max_tokens),
                     options.reasoning_effort.clone(),
+                    &provider_type,
+                    &provider_config_id,
                     &persist_closure,
                     &clear_closure,
                 )
@@ -307,6 +316,8 @@ impl AgentEngine {
         security: Option<NativeToolSecurity>,
         effective_max_tokens: i64,
         reasoning_effort: Option<String>,
+        provider_type: &str,
+        provider_config_id: &str,
         persist_closure: &(dyn Fn(&str, &Run) + Sync + Send),
         clear_closure: &(dyn Fn(&str) + Sync + Send),
     ) -> Result<bool, String> {
@@ -330,6 +341,8 @@ impl AgentEngine {
                 effective_max_tokens,
                 reasoning_effort: reasoning_effort.clone(),
                 repo: self.repo.as_ref(),
+                provider_type,
+                provider_config_id,
                 round: round_index,
                 persist_snapshot: Some(persist_closure),
                 clear_snapshot: Some(clear_closure),

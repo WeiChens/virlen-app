@@ -8,6 +8,7 @@ import type { Message, Session } from '@/types'
 import { ChatRequest } from '@/infrastructure/provider/types'
 import { providerPort } from '../provider'
 import { AI_AGENT_GENERATE_TITLE_PROMPT } from '../agent'
+import { ledgerTokensOf, recordUsage } from '../usage'
 
 /** 标题最大长度（超过则截断并追加省略号） */
 export const MAX_TITLE_LENGTH = 30
@@ -106,6 +107,21 @@ export async function generateTitle(
   }
 
   const response = await provider.chat(request)
+
+  // 标题生成是真实 LLM 调用但不产生消息 → 必须显式记账，否则这笔消费就漏了
+  if (response.usage) {
+    recordUsage({
+      ts: Date.now(),
+      sessionId: session.id,
+      model,
+      providerType: provider.providerType,
+      providerConfigId: providerId,
+      kind: 'title',
+      ...ledgerTokensOf(response.usage, provider.providerType),
+      estimated: false,
+    })
+  }
+
   const raw =
     typeof response.content === 'string'
       ? response.content

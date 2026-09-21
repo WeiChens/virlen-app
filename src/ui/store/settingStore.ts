@@ -8,6 +8,7 @@ import {
 } from '@/domain/permission'
 import StorageState from '@/utils/storageState'
 import { track, isSensitiveKey } from '@/utils/telemetry'
+import type { ModelPrice } from '@/domain/pricing'
 
 export type { EditorOpenConfig }
 
@@ -80,6 +81,14 @@ export interface SettingsStore {
   forceWindowActive: boolean
   /** 诊断埋点开关（默认关；开启后仅本地采集，不会自动外发） */
   telemetryEnabled: boolean
+  /**
+   * 模型单价表（用于用量统计的费用估算），键为 `priceKey(providerConfigId, modelId)`，
+   * 即 `${providerConfigId}::${modelId}`；未配置的模型回退到内置价目表（`domain/pricing`）。
+   * 单位：每 1,000,000 tokens 的金额（币种见 currency）。
+   */
+  modelPricing: Record<string, ModelPrice>
+  /** 费用币种（仅影响展示与服务商无关） */
+  usageCurrency: 'USD' | 'CNY'
 }
 
 const defaultSettings: SettingsStore = {
@@ -116,6 +125,8 @@ const defaultSettings: SettingsStore = {
   editorOpenDefaultId: '',
   forceWindowActive: false,
   telemetryEnabled: false,
+  modelPricing: {},
+  usageCurrency: 'USD',
 }
 
 export const settingsState = new StorageState(
@@ -172,8 +183,15 @@ settingsState.onChange = (key, oldValue, newValue) => {
 
 function settingChangeValue(key: string, value: unknown): unknown {
   if (isSensitiveKey(key)) return '***'
-  if (key === 'providers' || key === 'searchProviders') {
-    return Array.isArray(value) ? { count: value.length } : value
+  if (
+    key === 'providers' ||
+    key === 'searchProviders' ||
+    // 单价表只需要条数：整表上报会把埋点体积顶爆，且无诊断价值
+    key === 'modelPricing'
+  ) {
+    return value && typeof value === 'object'
+      ? { count: Object.keys(value as object).length }
+      : value
   }
   return value
 }

@@ -15,6 +15,7 @@ import type {
 import type { ToolCallContext } from './types'
 import { ChatRequest, IProvider } from '@/infrastructure/provider/types'
 import { ToolDefinition } from '../tools/types'
+import { ledgerTokensOf, recordUsage } from '../usage'
 
 /** 粗估请求 token（字符数/4），仅用于埋点趋势，非精确计费 */
 function estimateReqTokens(messages: Message[]): number {
@@ -162,6 +163,25 @@ export async function doLLMRound(
     status: abortSignal.aborted || roundErrored ? 'fail' : 'success',
   })
 
+  // 用量记账（kind=chat_round）——与 Rust 引擎 `agent/llm_loop.rs` 对称（铁律 1）。
+  // 幂等键用 assistant 消息 id：流式重试 / 重放不会重复计费。
+  const roundUsage = ctx.assistantMessage.usage
+  if (roundUsage) {
+    recordUsage({
+      ts: Date.now(),
+      sessionId: session.id,
+      messageId: ctx.assistantMessage.id,
+      model,
+      providerType: provider.providerType,
+      providerConfigId: session.providerConfigId,
+      kind: 'chat_round',
+      round,
+      // 口径拉平（prompt = 非缓存输入 / cached 单列）：见 domain/usage::ledgerTokensOf
+      ...ledgerTokensOf(roundUsage, provider.providerType),
+      estimated: false,
+    })
+  }
+
   // 非流式路径的异常在补发 round.end 后原样抛出，保持既有错误传播行为
   if (roundThrown) throw roundThrown
 
@@ -277,6 +297,10 @@ async function handleNonStreaming(
   }
   if (response.toolCalls?.length) {
     ctx.toolUses.push(...response.toolCalls)
+  }
+  // 非流式路径的用量挂在响应消息上，此前被丢掉了：补上后 token 环 / 统计才有数
+  if (response.usage) {
+    ctx.assistantMessage.usage = response.usage
   }
 }
 

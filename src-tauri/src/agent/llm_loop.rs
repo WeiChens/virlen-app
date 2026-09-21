@@ -27,6 +27,10 @@ pub struct ExecuteLlmRoundParams<'a> {
     pub reasoning_effort: Option<String>,
     /// 消息持久化仓库（直接 SQLite 直落，用于执行过程中增量保存）
     pub repo: &'a dyn SessionRepo,
+    /// Provider 类型（openai / anthropic / gemini），仅用于用量记账
+    pub provider_type: &'a str,
+    /// Provider 配置 id，仅用于用量记账
+    pub provider_config_id: &'a str,
     pub persist_snapshot: Option<&'a (dyn Fn(&str, &Run) + Sync + Send)>,
     pub clear_snapshot: Option<&'a (dyn Fn(&str) + Sync + Send)>,
     /// 当前 LLM 轮次序号（1 基），透传给 engine.round.* 埋点
@@ -60,6 +64,8 @@ pub async fn execute_llm_round(
         effective_max_tokens,
         reasoning_effort,
         repo,
+        provider_type,
+        provider_config_id,
         persist_snapshot,
         clear_snapshot,
         round,
@@ -80,6 +86,32 @@ pub async fn execute_llm_round(
         round,
     )
     .await?;
+
+    // 用量记账（kind=chat_round）——与 TS 引擎 `engine.round.end` 处对齐（铁律 1）。
+    // 有 tool calls 时用量在 `ctx.assistant_message` 上（ctx 里的消息才是被流式更新过的那条），
+    // 无 tool calls 时在返回的 `assistant_message` 上。
+    let (ledger_message_id, ledger_usage) = match output.ctx.as_ref() {
+        Some(ctx) => (
+            ctx.assistant_message.id.clone(),
+            ctx.assistant_message.usage.clone(),
+        ),
+        None => (
+            output.assistant_message.id.clone(),
+            output.assistant_message.usage.clone(),
+        ),
+    };
+    crate::agent::usage::record_usage(
+        repo,
+        session_id,
+        session,
+        provider_type,
+        provider_config_id,
+        "chat_round",
+        Some(round),
+        Some(&ledger_message_id),
+        ledger_usage,
+    )
+    .await;
 
     // 没有 tool calls：LLM 直接给出文字回答
     let mut ctx = match output.ctx {
