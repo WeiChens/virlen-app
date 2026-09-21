@@ -32,7 +32,7 @@ LLM 调用 → 工具执行 → 结果合并 →（迭代模式）验证反馈�
 │    │    └─ execute_tool_steps (agent/tool_executor.rs)         │
 │    │         └─ AgentBridgeState (agent/bridge.rs) → JS 工具   │
 │    ├─ run_iteration (agent/iteration.rs) + verify (verifier.rs)│
-│    └─ SessionRepo (session_db.rs) ← SQLite 会话/消息直落       │
+│    └─ SessionRepo (session_db/) ← SQLite 会话/消息直落         │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -55,7 +55,7 @@ LLM 调用 → 工具执行 → 结果合并 →（迭代模式）验证反馈�
 | `iteration.rs` | `iteration-controller.ts` | 执行→验证→修复循环 |
 | `engine.rs` | `engine.ts` | AgentEngine 主类（注入 SessionRepo 持久化） |
 | `mod.rs` | — | Tauri 命令注册 + 初始化 |
-| `session_db.rs` | `infrastructure/sessionRepo` | 会话/消息 SQLite 直落（SessionRepo trait + SQLite/Noop 实现） |
+| `session_db/` | `infrastructure/sessionRepo` | 会话/消息 SQLite 直落（`SessionRepo` trait + SQLite/Noop 实现；按职责拆为 types / repo / schema / row / message_query / usage / sqlite / commands / tests） |
 
 ## 四、桥接协议
 
@@ -125,7 +125,7 @@ agent:provider-request { requestId, providerType, providerId, apiKey, baseUrl, r
   - `engine::tests::cancel_is_not_error_and_keeps_partial`：用户取消不当作错误、partial 保留
   - `native_tools::tests::*` / `native_tools::execute::common::tests::*`：原生工具分发链路、命令风险分类、终端输出解码
   - `native_tools::execute::execute_command::tests::*`：终止/超时杀进程树（真实 spawn 的集成测试）
-  - `session_db::tests::*`：SQLite 会话/消息读写、幂等、替换、删除、排序
+  - `session_db::tests::*`：SQLite 会话/消息读写、幂等、替换、删除、排序（按 sessions / search / migration / message_query / usage 分文件）
   - `deepseek_tokenizer::tests::*`：字节级 BPE 与官方 transformers 输出对齐、字节表、切分
   - `provider::tests::*`：本地图片伪视觉分析（imageVisionAnalyzeOptimize）注入、OpenAI/Anthropic 请求体
   - `storm_breaker / run_state / cancellation / verifier / iteration` 单元测试

@@ -8,7 +8,7 @@
  */
 import { observer } from 'mobx-react-lite'
 import { settingsState } from '@/ui/store'
-import { findDefaultPriceEntry, priceKey, type ModelPrice } from '@/domain/pricing'
+import { findDefaultPriceEntryInCurrency, priceKey, type ModelPrice } from '@/domain/pricing'
 import { t } from '@/ui/i18n'
 import Select from '@/ui/components/shared/Select'
 import { showToast } from '@/ui/components/shared/Toast'
@@ -16,10 +16,10 @@ import { showToast } from '@/ui/components/shared/Toast'
 /** 未配置、且内置价目表也没收录时的占位单价 */
 const ZERO_PRICE: ModelPrice = { input: 0, output: 0, cachedInput: 0 }
 
-/** 币种选项（只影响展示符号，不做汇率换算） */
+/** 币种选项（默认人民币；内置 USD 预估价会按 USD_TO_CNY 折算；用户自填价按其币种原样使用） */
 const CURRENCIES = [
-  { value: 'USD', label: 'USD ($)' },
   { value: 'CNY', label: 'CNY (¥)' },
+  { value: 'USD', label: 'USD ($)' },
 ]
 
 const PriceEditor = observer(function PriceEditor() {
@@ -56,8 +56,8 @@ const PriceEditor = observer(function PriceEditor() {
       providerName: p.name,
       model,
       key: priceKey(p.id, model),
-      /** 内置预估价条目（未收录 → null，此时单价只能靠用户自己填） */
-      builtin: findDefaultPriceEntry(model),
+      /** 内置预估价条目（未收录 → null）；价已折算到当前币种，label 原样 */
+      builtin: findDefaultPriceEntryInCurrency(model, currency),
     })),
   )
 
@@ -71,6 +71,11 @@ const PriceEditor = observer(function PriceEditor() {
       <p className="pricing-hint">
         {t(
           '表格里显示的就是当前生效的单价：内置预估价可直接编辑，改动任一栏即保存为自定义价，点「恢复内置价」可还原；标着「未收录」的模型必须手动填写，否则费用按 0 计。',
+        )}
+      </p>
+      <p className="pricing-hint">
+        {t(
+          '内置预估价以美元存储，切换币种时按固定汇率（1 USD = 7.2 CNY）折算；你手填的单价按当前币种原样使用。',
         )}
       </p>
 

@@ -1,12 +1,18 @@
 /**
  * usage-table — 用量明细表（每条 LLM 调用一行）
  *
- * 时间倒序（与 Rust 查询一致）；分页在服务端做（`cmd_usage_query` 的 limit/offset），
- * 因此这里只负责渲染当前页 + 翻页回调。
+ * 数据由面板一次拉取（有上限）后在客户端筛选 / 排序 / 分页；这里只负责渲染当前页、
+ * 表头排序交互与翻页回调。可排序列：时间 / Prompt / Completion / Cached / 合计。
  */
+import type { ReactNode } from 'react'
 import { formatCost, formatTokens } from '@/domain/pricing'
 import { t, tpl } from '@/ui/i18n'
-import { kindLabel, type CostedRecord } from '@/services/token-stats-service'
+import {
+  kindLabel,
+  type CostedRecord,
+  type RecordSortKey,
+  type SortDir,
+} from '@/services/token-stats-service'
 
 interface Props {
   records: CostedRecord[]
@@ -15,7 +21,44 @@ interface Props {
   pageSize: number
   currency: string
   loading?: boolean
+  sortKey: RecordSortKey
+  sortDir: SortDir
+  onSort: (key: RecordSortKey) => void
   onPageChange: (page: number) => void
+  /** 服务端匹配行超过拉取上限（当前数据只是最近一批） */
+  truncated?: boolean
+}
+
+/** 可排序表头：同列切换升/降；未激活时显示淡色 ↕ 提示 */
+function SortTh({
+  keyName,
+  activeKey,
+  dir,
+  onSort,
+  num,
+  children,
+}: {
+  keyName: RecordSortKey
+  activeKey: RecordSortKey
+  dir: SortDir
+  onSort: (key: RecordSortKey) => void
+  num?: boolean
+  children: ReactNode
+}) {
+  const active = keyName === activeKey
+  return (
+    <th className={num ? 'num' : ''}>
+      <button
+        type="button"
+        className={`sort-th${active ? ' active' : ''}`}
+        onClick={() => onSort(keyName)}>
+        {children}
+        <span className="sort-ind" aria-hidden="true">
+          {active ? (dir === 'asc' ? '▲' : '▼') : '↕'}
+        </span>
+      </button>
+    </th>
+  )
 }
 
 /** 时间戳 → 本地「月-日 时:分:秒」 */
@@ -38,22 +81,65 @@ export default function UsageTable({
   pageSize,
   currency,
   loading,
+  sortKey,
+  sortDir,
+  onSort,
   onPageChange,
+  truncated,
 }: Props) {
   const maxPage = Math.max(Math.ceil(total / pageSize), 1)
   return (
     <div className="token-stats-table-wrap">
+      {truncated && (
+        <p className="table-hint">
+          {t('匹配记录过多，仅对最近加载的一批做筛选与排序，请缩小时间范围。')}
+        </p>
+      )}
       <table className="token-stats-table">
         <thead>
           <tr>
-            <th>{t('时间')}</th>
+            <SortTh
+              keyName="ts"
+              activeKey={sortKey}
+              dir={sortDir}
+              onSort={onSort}>
+              {t('时间')}
+            </SortTh>
             <th>{t('会话')}</th>
             <th>{t('模型')}</th>
             <th>{t('类型')}</th>
-            <th className="num">Prompt</th>
-            <th className="num">Completion</th>
-            <th className="num">Cached</th>
-            <th className="num">{t('合计')}</th>
+            <SortTh
+              keyName="promptTokens"
+              activeKey={sortKey}
+              dir={sortDir}
+              onSort={onSort}
+              num>
+              Prompt
+            </SortTh>
+            <SortTh
+              keyName="completionTokens"
+              activeKey={sortKey}
+              dir={sortDir}
+              onSort={onSort}
+              num>
+              Completion
+            </SortTh>
+            <SortTh
+              keyName="cachedTokens"
+              activeKey={sortKey}
+              dir={sortDir}
+              onSort={onSort}
+              num>
+              Cached
+            </SortTh>
+            <SortTh
+              keyName="totalTokens"
+              activeKey={sortKey}
+              dir={sortDir}
+              onSort={onSort}
+              num>
+              {t('合计')}
+            </SortTh>
             <th className="num">{t('费用')}</th>
           </tr>
         </thead>
@@ -97,10 +183,10 @@ export default function UsageTable({
         <span>
           {total > 0
             ? tpl('共 $__total__ 条，第 $__page__ / $__max__ 页', {
-                total,
-                page,
-                max: maxPage,
-              })
+              total,
+              page,
+              max: maxPage,
+            })
             : t('共 0 条')}
         </span>
         <div className="pager-buttons">

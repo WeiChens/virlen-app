@@ -3,10 +3,14 @@
  *
  * 面板从右侧滑入（与 Settings 面板同一套观感），图表与表格都跟随主题 CSS 变量。
  */
-
 .token-stats-overlay {
   position: fixed;
-  inset: 0;
+  /* 从自绘标题栏（navbar）下方开始：原来 inset: 0 会把窗口的最小化/最大化/关闭
+     按钮一起盖住。高度变量与 search-dialog / code-block 等面板保持一致。 */
+  top: var(--window-top-bar-height, 30px);
+  left: 0;
+  right: 0;
+  bottom: 0;
   z-index: 1200;
 }
 
@@ -258,6 +262,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
     gap: 10px;
     margin-bottom: 8px;
 
@@ -304,17 +309,16 @@
 }
 
 /* ===== 明细表 ===== */
-
 .token-stats-table-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  height: 100%;
+  overflow-y: auto;
 }
 
 .token-stats-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 12px;
+  margin-bottom: 20px;
 
   th,
   td {
@@ -326,7 +330,7 @@
 
   th {
     position: sticky;
-    top: 0;
+    top: 0px;
     z-index: 1;
     background: var(--bg-primary, #fff);
     color: var(--text-secondary, #666);
@@ -386,6 +390,10 @@
   justify-content: space-between;
   font-size: 12px;
   color: var(--text-secondary, #666);
+  position: sticky;
+  bottom: 0;
+  background: var(--bg-primary, #fff);
+  padding-top: 6px;
 
   .pager-buttons {
     display: flex;
@@ -409,7 +417,6 @@
 }
 
 /* ===== 单价编辑 ===== */
-
 .token-stats-pricing {
   display: flex;
   flex-direction: column;
@@ -509,6 +516,75 @@
     font-size: 11px;
     color: var(--text-secondary, #666);
   }
+}
+
+/* ===== 明细：筛选输入 + 可排序表头 ===== */
+.token-stats-toolbar {
+  .filter-input {
+    height: 26px;
+    width: 150px;
+    padding: 0 8px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 6px;
+    background: var(--bg-primary, #fff);
+    color: var(--text-primary, #1a1a1a);
+    font-size: 12px;
+
+    &::placeholder {
+      color: var(--text-secondary, #666);
+    }
+
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 1px;
+    }
+  }
+}
+
+.token-stats-table {
+
+  /* 表头排序按钮：默认弱化，激活的列突出并显示方向箭头 */
+  .sort-th {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+
+    .sort-ind {
+      font-size: 9px;
+      opacity: 0.4;
+    }
+
+    &:hover {
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    &.active {
+      color: var(--text-primary, #1a1a1a);
+      font-weight: 600;
+
+      .sort-ind {
+        opacity: 1;
+      }
+    }
+
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 2px;
+    }
+  }
+}
+
+/* 截断提示（匹配行超过拉取上限） */
+.table-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--accent-warn, #f59e0b);
 }
 
 /* 侧边栏入口按钮（新对话下方） */

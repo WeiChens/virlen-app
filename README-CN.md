@@ -378,7 +378,7 @@ virlen-app/
 │   ├── src/                  # Rust 源码
 │   │   ├── lib.rs            # 主入口（Tauri 命令注册）
 │   │   ├── agent/            # 原生 Agent 引擎（聊天循环、原生工具、Provider）
-│   │   ├── session_db.rs     # SQLite 会话/消息持久化（WAL + 单写连接）
+│   │   ├── session_db/       # SQLite 会话/消息持久化（WAL + 单写连接）
 │   │   ├── deepseek_tokenizer.rs # DeepSeek V3 字节级 BPE token 计数
 │   │   ├── rag/              # 本地 RAG（知识库、向量索引、Embedding）
 │   │   ├── file_ops.rs       # 文件操作

@@ -7,6 +7,7 @@
  * - 聚合结果带费用（费用在前端算，Rust 只回 token）
  * - 明细逐行算费用（按行自带的 provider/model 取价）
  * - 按会话分桶时，通过 resolveSessionModel 把 sessionId 映射回模型取价
+ * - 明细客户端筛选 / 排序（会话、模型关键字；Prompt/输出/缓存/合计排序）
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
@@ -30,12 +31,15 @@ vi.mock('@/ui/store', () => ({ settingsState: settings }))
 
 import {
   currentCurrency,
+  filterAndSortRecords,
   loadRecords,
   loadStats,
   rangeToFromTs,
   resolvePrice,
   startOfToday,
+  type CostedRecord,
 } from '@/services/token-stats-service'
+import { USD_TO_CNY } from '@/domain/pricing'
 
 const DAY = 24 * 3600 * 1000
 
@@ -87,6 +91,15 @@ describe('单价解析', () => {
 
   it('未收录模型返回 null（费用按 0 计，不影响页面）', () => {
     expect(resolvePrice('p1', 'unknown-model-xyz')).toBeNull()
+  })
+
+  it('切到 CNY 时内置价按固定汇率折算，用户自填价原样（不二次折算）', () => {
+    settings.value.usageCurrency = 'CNY'
+    // 内置 claude-3-5-sonnet 输入 $3 → ¥21.6
+    expect(resolvePrice('p1', 'claude-3-5-sonnet')?.input).toBeCloseTo(3 * USD_TO_CNY)
+    // 用户自填价按当前币种存/算，不乘汇率
+    settings.value.modelPricing = { 'p1::gpt-4o': { input: 1, output: 2 } }
+    expect(resolvePrice('p1', 'gpt-4o')).toEqual({ input: 1, output: 2 })
   })
 })
 
@@ -231,10 +244,107 @@ describe('loadRecords', () => {
 })
 
 describe('币种', () => {
-  it('默认 USD，可切 CNY', () => {
+  it('默认人民币，可切 USD', () => {
+    ;(settings.value as any).usageCurrency = undefined
+    expect(currentCurrency()).toBe('CNY')
     settings.value.usageCurrency = 'USD'
     expect(currentCurrency()).toBe('USD')
     settings.value.usageCurrency = 'CNY'
     expect(currentCurrency()).toBe('CNY')
+  })
+})
+
+describe('filterAndSortRecords（明细客户端筛选 / 排序）', () => {
+  const rec = (p: Partial<CostedRecord>): CostedRecord => ({
+    id: 0,
+    ts: 0,
+    sessionId: 's1',
+    sessionTitle: '会话',
+    messageId: null,
+    model: 'gpt-4o',
+    providerType: null,
+    providerConfigId: null,
+    kind: 'chat_round',
+    round: null,
+    promptTokens: 0,
+    completionTokens: 0,
+    cachedTokens: 0,
+    totalTokens: 0,
+    estimated: false,
+    traceId: null,
+    cost: { input: 0, output: 0, cached: 0, total: 0 },
+    ...p,
+  })
+
+  const zero = { input: 0, output: 0, cached: 0, total: 0 }
+  const data: CostedRecord[] = [
+    rec({
+      id: 1,
+      ts: 100,
+      sessionTitle: '重构 Agent 引擎',
+      model: 'gpt-4o',
+      promptTokens: 10,
+      completionTokens: 5,
+      cost: { ...zero, total: 0.3 },
+    }),
+    rec({
+      id: 2,
+      ts: 200,
+      sessionTitle: '修 bug',
+      model: 'claude-sonnet-5',
+      promptTokens: 30,
+      completionTokens: 1,
+      cost: { ...zero, total: 0.1 },
+    }),
+    rec({
+      id: 3,
+      ts: 300,
+      sessionTitle: '写文档',
+      model: 'deepseek-chat',
+      kind: 'compress',
+      promptTokens: 20,
+      completionTokens: 9,
+      cost: { ...zero, total: 0.5 },
+    }),
+  ]
+
+  it('会话关键字子串匹配（忽略大小写）', () => {
+    const out = filterAndSortRecords(data, { sessionKeyword: 'agent' }, 'ts', 'desc')
+    expect(out.map((r) => r.id)).toEqual([1])
+  })
+
+  it('模型关键字子串匹配', () => {
+    const out = filterAndSortRecords(data, { modelKeyword: 'SONNET' }, 'ts', 'desc')
+    expect(out.map((r) => r.id)).toEqual([2])
+  })
+
+  it('类型精确过滤', () => {
+    const out = filterAndSortRecords(data, { kind: 'compress' }, 'ts', 'desc')
+    expect(out.map((r) => r.id)).toEqual([3])
+  })
+
+  it('按 Prompt token 升序排序', () => {
+    const out = filterAndSortRecords(data, {}, 'promptTokens', 'asc')
+    expect(out.map((r) => r.id)).toEqual([1, 3, 2])
+  })
+
+  it('数值相等时按时间倒序兜底（排序稳定）', () => {
+    const tie = [
+      rec({ id: 1, ts: 100, totalTokens: 5 }),
+      rec({ id: 2, ts: 300, totalTokens: 5 }),
+      rec({ id: 3, ts: 200, totalTokens: 5 }),
+    ]
+    const out = filterAndSortRecords(tie, {}, 'totalTokens', 'asc')
+    expect(out.map((r) => r.id)).toEqual([2, 3, 1])
+  })
+
+  it('多个条件同时生效（AND）', () => {
+    const out = filterAndSortRecords(
+      data,
+      { sessionKeyword: '修', modelKeyword: 'claude', kind: 'chat_round' },
+      'ts',
+      'desc',
+    )
+    expect(out.map((r) => r.id)).toEqual([2])
   })
 })

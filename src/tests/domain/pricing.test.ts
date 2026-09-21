@@ -11,11 +11,14 @@
 import { describe, it, expect } from 'vitest'
 import {
   computeCost,
+  convertFromUsd,
   findDefaultPrice,
   findDefaultPriceEntry,
+  findDefaultPriceInCurrency,
   formatCost,
   formatTokens,
   priceKey,
+  USD_TO_CNY,
 } from '@/domain/pricing'
 
 describe('computeCost', () => {
@@ -113,5 +116,42 @@ describe('格式化', () => {
 describe('priceKey', () => {
   it('键为 provider::model', () => {
     expect(priceKey('p1', 'gpt-4o')).toBe('p1::gpt-4o')
+  })
+})
+
+describe('内置价币种折算', () => {
+  it('USD 原样返回（不改变数字）', () => {
+    const p = { input: 2, output: 10, cachedInput: 0.2 }
+    expect(convertFromUsd(p, 'USD')).toEqual(p)
+  })
+
+  it('CNY 按固定汇率折算（含缓存价）', () => {
+    const p = convertFromUsd({ input: 2, output: 10, cachedInput: 0.2 }, 'CNY')
+    expect(p.input).toBeCloseTo(2 * USD_TO_CNY)
+    expect(p.output).toBeCloseTo(10 * USD_TO_CNY)
+    expect(p.cachedInput).toBeCloseTo(0.2 * USD_TO_CNY)
+  })
+
+  it('折算后清除浮点尾巴（0.66 × 7.2 不再出现 4.752000000000001）', () => {
+    const p = convertFromUsd(
+      { input: 0.66, output: 1.98, cachedInput: 0.022 },
+      'CNY',
+    )
+    expect(p.input).toBe(4.752)
+    expect(p.output).toBe(14.256)
+    expect(p.cachedInput).toBe(0.1584)
+  })
+
+  it('无缓存价时保持 undefined（不臆造，让 computeCost 回退输入价）', () => {
+    expect(convertFromUsd({ input: 1, output: 2 }, 'CNY').cachedInput).toBeUndefined()
+  })
+
+  it('findDefaultPriceInCurrency 折算内置价；未收录 → null', () => {
+    expect(findDefaultPriceInCurrency('claude-3-5-sonnet', 'CNY')?.input).toBeCloseTo(
+      3 * USD_TO_CNY,
+    )
+    // USD 下与原始 USD 价一致
+    expect(findDefaultPriceInCurrency('claude-3-5-sonnet', 'USD')?.input).toBe(3)
+    expect(findDefaultPriceInCurrency('unknown-xyz', 'CNY')).toBeNull()
   })
 })

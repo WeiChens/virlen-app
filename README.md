@@ -376,7 +376,7 @@ virlen-app/
 │   ├── src/                  # Rust source code
 │   │   ├── lib.rs            # Main entry (Tauri command registration)
 │   │   ├── agent/            # Native agent engine (chat loop, native tools, provider)
-│   │   ├── session_db.rs     # SQLite session/message persistence (WAL + single-writer)
+│   │   ├── session_db/       # SQLite session/message persistence (WAL + single-writer)
 │   │   ├── deepseek_tokenizer.rs # DeepSeek V3 byte-level BPE token counter
 │   │   ├── rag/              # Local RAG (knowledge base, vector index, embeddings)
 │   │   ├── file_ops.rs       # File operations

@@ -4,14 +4,19 @@
  * 职责：
  * 1. 把「时间范围 / 分桶维度」翻译成 Rust 查询参数（本地时区算边界）；
  * 2. 把 token 聚合结果 × 单价表 → 带费用的视图模型（**费用在前端算**，见 `domain/pricing`）；
- * 3. 导出 CSV、清空账本。
+ * 3. 明细的筛选 / 排序（**客户端执行**：会话 / 模型是子串搜索，而账本表的
+ *    `session_id` / `model` 过滤是精确匹配，用不上）；
+ * 4. 导出 CSV、清空账本。
  *
  * 单价优先级：用户在设置里配的（`settingsState.modelPricing`）> 内置价目表
  * （`DEFAULT_MODEL_PRICES`，仅作默认填充，UI 必须提示用户核对）。
+ *
+ * 币种：内置价目表固定存 USD，切到人民币时按 `USD_TO_CNY` 折算出费用；
+ * 用户自填的单价按其币种原样使用（不二次折算）。**默认币种为人民币（CNY）**。
  */
 import {
   computeCost,
-  findDefaultPrice,
+  findDefaultPriceInCurrency,
   priceKey,
   type BillableTokens,
   type ModelPrice,
@@ -41,6 +46,7 @@ export type UsageRange = 'today' | '7d' | '30d' | 'all'
 
 /** 分桶维度（与 Rust `usage_group_expr` 白名单一致） */
 export type UsageGroupBy =
+  | 'hour'
   | 'day'
   | 'week'
   | 'month'
@@ -77,6 +83,80 @@ export interface UsageStatsView {
 /** 带费用的明细行 */
 export interface CostedRecord extends UsageRecord {
   cost: TokenCost
+}
+
+/** 明细排序键（`ts` 为时间，其余为 token 数） */
+export type RecordSortKey =
+  | 'ts'
+  | 'promptTokens'
+  | 'completionTokens'
+  | 'cachedTokens'
+  | 'totalTokens'
+
+/** 排序方向 */
+export type SortDir = 'asc' | 'desc'
+
+/** 明细筛选条件（均为客户端过滤，空串 = 不过滤，大小写不敏感） */
+export interface RecordFilter {
+  /** 会话标题关键字 */
+  sessionKeyword?: string
+  /** 模型 id 关键字 */
+  modelKeyword?: string
+  /** 调用类型（空串 = 全部） */
+  kind?: string
+}
+
+/**
+ * 明细一次拉取的条数上限。
+ *
+ * 明细页不再服务端分页，而是「一次拉一批 + 内存里筛选/排序/分页」—— 因为会话 / 模型的
+ * 关键字搜索是子串匹配，而账本表的 `session_id` / `model` 过滤是精确匹配，下沉不到 SQL；
+ * 若只拉当前页，搜索与排序就只会作用于单页（错误）。超过上限时 UI 提示缩小时间范围。
+ */
+export const RECORDS_LOAD_CAP = 5000
+
+/**
+ * 明细的筛选 + 排序（纯函数）。
+ *
+ * 排序稳定：数值相等时按时间倒序兜底，否则翻页时同值行顺序会抖动。
+ */
+export function filterAndSortRecords(
+  records: CostedRecord[],
+  filter: RecordFilter,
+  sortKey: RecordSortKey,
+  sortDir: SortDir,
+): CostedRecord[] {
+  const sk = (filter.sessionKeyword || '').trim().toLowerCase()
+  const mk = (filter.modelKeyword || '').trim().toLowerCase()
+  const kind = filter.kind || ''
+  const out = records.filter((r) => {
+    if (sk && !(r.sessionTitle || '').toLowerCase().includes(sk)) return false
+    if (mk && !(r.model || '').toLowerCase().includes(mk)) return false
+    if (kind && r.kind !== kind) return false
+    return true
+  })
+  const pick = (r: CostedRecord): number => {
+    switch (sortKey) {
+      case 'promptTokens':
+        return r.promptTokens
+      case 'completionTokens':
+        return r.completionTokens
+      case 'cachedTokens':
+        return r.cachedTokens
+      case 'totalTokens':
+        return r.totalTokens
+      default:
+        return r.ts
+    }
+  }
+  const dir = sortDir === 'asc' ? 1 : -1
+  out.sort((a, b) => {
+    const av = pick(a)
+    const bv = pick(b)
+    if (av !== bv) return av > bv ? dir : -dir
+    return b.ts - a.ts
+  })
+  return out
 }
 
 const HOUR_MS = 3600 * 1000
@@ -122,12 +202,13 @@ export function resolvePrice(providerConfigId?: string | null, modelId?: string 
       if (k.endsWith(suffix)) return v
     }
   }
-  return findDefaultPrice(model)
+  // 内置价固定按 USD 存储 → 按当前币种折算（用户自填价不走这里，见 convertFromUsd）
+  return findDefaultPriceInCurrency(model, currentCurrency())
 }
 
-/** 取当前币种（仅影响展示） */
+/** 取当前币种（仅影响展示；默认人民币） */
 export function currentCurrency(): string {
-  return settingsState.value.usageCurrency || 'USD'
+  return settingsState.value.usageCurrency || 'CNY'
 }
 
 /** 为聚合桶算费用 */

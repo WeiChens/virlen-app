@@ -87,7 +87,7 @@ export interface SettingsStore {
    * 单位：每 1,000,000 tokens 的金额（币种见 currency）。
    */
   modelPricing: Record<string, ModelPrice>
-  /** 费用币种（仅影响展示与服务商无关） */
+  /** 费用币种（仅影响展示，与服务商无关；**默认人民币**，可在单价页切换） */
   usageCurrency: 'USD' | 'CNY'
 }
 
@@ -126,7 +126,7 @@ const defaultSettings: SettingsStore = {
   forceWindowActive: false,
   telemetryEnabled: false,
   modelPricing: {},
-  usageCurrency: 'USD',
+  usageCurrency: 'CNY',
 }
 
 export const settingsState = new StorageState(

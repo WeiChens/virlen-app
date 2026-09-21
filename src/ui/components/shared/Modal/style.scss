@@ -8,7 +8,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 800;
+  /* 模态框是最顶层交互层：必须高于滑动面板（如用量统计抽屉 z-index:1200），
+     否则在面板里触发的确认弹窗会被面板盖住（清空数据就踩过这个坑）。
+     仍低于 Toast(3012) / Select 下拉(9000) / Tooltip(9999)。 */
+  z-index: 1300;
   animation: fadeIn 0.2s ease;
 
   // 无遮罩模式：透明背景，不阻止点击
