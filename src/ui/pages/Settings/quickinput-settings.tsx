@@ -61,7 +61,7 @@ function QuickInputSettings() {
       <h2 className="section-title">{t('快捷输入')}</h2>
 
       {/* Tab 切换 */}
-      <div className="quickinput-tabs">
+      {/* <div className="quickinput-tabs">
         <button
           className={`quickinput-tab ${!isGoal ? 'active' : ''}`}
           onClick={() => setActiveTab('normal')}
@@ -74,7 +74,7 @@ function QuickInputSettings() {
           type="button">
           {t('验证目标快捷输入')}
         </button>
-      </div>
+      </div> */}
 
       <p className="section-desc">
         {isGoal

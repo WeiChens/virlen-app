@@ -147,7 +147,6 @@
   "权限管理": "Permissions",
   "授权确认": "Authorization",
   "命令 / 脚本执行权限见本页「权限管理」标签；终端沙盒模式与注入环境信息在「通用 → 命令与终端安全」中设置": "Command / script execution permissions are on the Permissions tab of this page; terminal sandbox mode and environment info are configured under General → Command & Terminal Security",
-  "为每种操作单独设置权限：允许直接执行 / 每次弹窗授权 / 禁止执行": "Set a permission for each operation type: Allow / Ask every time / Deny",
   "允许": "Allow",
   "每次弹窗授权": "Ask every time",
   "询问": "Ask",

@@ -19,10 +19,10 @@ function SecurityPermissions() {
     label: string
     title?: string
   }[] = [
-    { value: 'allow', label: t('允许') },
-    { value: 'ask', label: t('询问'), title: t('每次弹窗授权') },
-    { value: 'deny', label: t('禁止') },
-  ]
+      { value: 'allow', label: t('允许') },
+      { value: 'ask', label: t('询问'), title: t('每次弹窗授权') },
+      { value: 'deny', label: t('禁止') },
+    ]
 
   function setDecision(name: string, decision: PermissionDecision) {
     // permissions 是深层 observable：写新对象引用触发持久化 + settings.change 埋点
@@ -31,9 +31,6 @@ function SecurityPermissions() {
 
   return (
     <div className="permissions-panel">
-      <div className="section-desc">
-        {t('为每种操作单独设置权限：允许直接执行 / 每次弹窗授权 / 禁止执行')}
-      </div>
       <div className="permission-list">
         {PERMISSIONS.map((perm) => {
           const value = permissions[perm.name] ?? perm.default

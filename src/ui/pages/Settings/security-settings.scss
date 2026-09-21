@@ -70,8 +70,8 @@
      设置面板内容区仅约 450px，滑块放行右侧、只占固定窄宽 */
   .permission-item {
     display: flex;
-    align-items: center;
-    gap: 16px;
+    flex-direction: column;
+    gap: 4px;
     padding: 12px 2px;
     border-bottom: 1px solid var(--border-color, #ececf0);
 
@@ -128,11 +128,12 @@
   position: relative;
   display: flex;
   flex: 0 0 auto;
-  width: 128px;
-  padding: 3px;
+  width: 280px;
+  padding: 1px;
   border-radius: 8px;
   background: var(--input-bg, #f1f1f3);
   user-select: none;
+  // margin-left: auto;
 
   /* 状态色（选中段文字）：用 --*-text 档保证亮 / 暗主题下都可读 */
   &.tri-allow {
