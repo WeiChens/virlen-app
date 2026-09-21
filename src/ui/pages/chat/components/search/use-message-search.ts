@@ -24,8 +24,8 @@ import type {
 /** 检索范围：会话内 / 跨会话 */
 export type SearchScope = 'session' | 'global'
 
-/** 角色筛选：全部 / 我的消息 / AI 回复 */
-export type SearchRoleFilter = 'all' | 'user' | 'assistant'
+/** 角色筛选：全部 / 我的消息 / AI 回复 / 工具调用 */
+export type SearchRoleFilter = 'all' | 'user' | 'assistant' | 'tool'
 
 /** 每页条数 */
 const PAGE_SIZE = 60

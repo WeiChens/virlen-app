@@ -62,6 +62,9 @@ pub struct MessageSearchItem {
     pub session_title: String,
     pub workspace: Option<String>,
     pub agent_id: Option<String>,
+    /// 该消息所属的工具名（仅 `role='tool'` 的消息会解析；前端据此展示「查看文件」等标签）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
 }
 
 /// 消息检索的 keyset（游标）分页游标：按 `(timestamp, rowid)` 倒序定位「上一页最后一条」。
@@ -1010,6 +1013,52 @@ fn search_snippet_text(text: &str, query: &str, max_chars: usize) -> String {
     }
 }
 
+/// 反查工具名时，往前最多扫描的「带 tool_calls 的 assistant 消息」条数。
+/// 并行工具调用会把宿主 assistant 隔开若干条结果消息，正常远小于这个上限。
+const TOOL_HOST_SCAN: usize = 20;
+
+/// 从「工具结果消息」反查发起该调用的工具名（如 `read_file` / `edit_file`）。
+///
+/// tool 消息只存结果与 `tool_call_id`，工具名在同会话、rowid 更小的 assistant
+/// 消息的 `tool_calls` JSON 里（[`crate::agent::types::ToolUseContent`]）。
+/// 单页最多 `limit` 次调用（每次 2 条走索引的查询），开销与检索本身同量级。
+/// 任何一步失败都退化为 `None`（前端只是不展示工具标签，不影响检索结果）。
+fn tool_name_of_tool_message(
+    conn: &Connection,
+    session_id: &str,
+    tool_rowid: i64,
+) -> Option<String> {
+    let tool_call_id: String = conn
+        .query_row(
+            "SELECT tool_call_id FROM messages WHERE rowid=?1 AND tool_call_id IS NOT NULL",
+            params![tool_rowid],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()??;
+    let mut stmt = conn
+        .prepare(
+            "SELECT tool_calls FROM messages \
+             WHERE session_id=?1 AND role='assistant' AND tool_calls IS NOT NULL AND rowid<?2 \
+             ORDER BY rowid DESC LIMIT ?3",
+        )
+        .ok()?;
+    let rows = stmt
+        .query_map(
+            params![session_id, tool_rowid, TOOL_HOST_SCAN as i64],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()?;
+    for json in rows.flatten() {
+        if let Ok(list) = serde_json::from_str::<Vec<crate::agent::types::ToolUseContent>>(&json) {
+            if let Some(tc) = list.into_iter().find(|t| t.id == tool_call_id) {
+                return Some(tc.name);
+            }
+        }
+    }
+    None
+}
+
 // ==================== 参数序列化 ====================
 
 fn session_insert_params(session: &Session) -> Result<Vec<Box<dyn rusqlite::ToSql + Send>>, String> {
@@ -1727,6 +1776,8 @@ INSERT INTO messages (
                                 session_title: row.get("session_title")?,
                                 workspace: row.get("workspace")?,
                                 agent_id: row.get("agent_id")?,
+                                // 工具名在下方按 rowid 反查后才回填
+                                tool_name: None,
                             };
                             Ok((item, rowid, blank))
                         },
@@ -1770,7 +1821,17 @@ INSERT INTO messages (
             } else {
                 None
             };
-            let items = collected.into_iter().map(|(it, _)| it).collect();
+            // tool 结果行反查工具名：前端据此在命中条目前展示「查看文件 / 编辑文件」等标签
+            let items = collected
+                .into_iter()
+                .map(|(mut it, rid)| {
+                    if it.role == "tool" {
+                        let name = tool_name_of_tool_message(&conn, &it.session_id, rid);
+                        it.tool_name = name;
+                    }
+                    it
+                })
+                .collect();
             Ok(MessageSearchPage {
                 items,
                 has_more,
@@ -2563,6 +2624,76 @@ mod tests {
         let page = repo.search_messages("   ", None, None, 10, None).await.unwrap();
         let ids: Vec<&str> = page.items.iter().map(|i| i.id.as_str()).collect();
         assert_eq!(ids, vec!["m4", "m2", "m1"]);
+    }
+
+    // 「工具调用」分类：`role='tool'` 只返回工具结果，并从宿主 assistant 的
+    // `tool_calls` 里反查出工具名（供前端展示「查看文件」等标签）。
+    #[tokio::test]
+    async fn search_tool_role_resolves_tool_name() {
+        let repo = open_tmp();
+        repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+
+        // m1：assistant 一次发起两个并行工具调用
+        let mut m1 = test_message("m1", "assistant");
+        m1.timestamp = 10;
+        m1.content = json!("");
+        m1.tool_calls = Some(vec![
+            crate::agent::types::ToolUseContent {
+                type_: "tool_use".into(),
+                id: "call_read".into(),
+                name: "read_file".into(),
+                input: json!({ "path": "a.ts" }),
+            },
+            crate::agent::types::ToolUseContent {
+                type_: "tool_use".into(),
+                id: "call_edit".into(),
+                name: "edit_file".into(),
+                input: json!({ "path": "a.ts" }),
+            },
+        ]);
+        // m2 / m3：两个工具结果（正文含关键词「沙盒」）
+        let mut m2 = test_message("m2", "tool");
+        m2.timestamp = 11;
+        m2.content = json!("沙盒结果一");
+        m2.tool_call_id = Some("call_read".into());
+        let mut m3 = test_message("m3", "tool");
+        m3.timestamp = 12;
+        m3.content = json!("沙盒结果二");
+        m3.tool_call_id = Some("call_edit".into());
+        repo.append_messages("s1", &[m1, m2, m3]).await.unwrap();
+
+        // 默认（不限定角色）不含 tool
+        let page = repo.search_messages("沙盒", None, None, 10, None).await.unwrap();
+        assert!(page.items.is_empty(), "tool 结果不在默认检索范围内");
+
+        // role='tool' → 只返回工具结果，且各自带上宿主工具名
+        let page = repo
+            .search_messages("沙盒", None, Some("tool"), 10, None)
+            .await
+            .unwrap();
+        let got: Vec<(&str, Option<&str>)> = page
+            .items
+            .iter()
+            .map(|i| (i.id.as_str(), i.tool_name.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![("m3", Some("edit_file")), ("m2", Some("read_file"))],
+            "时间倒序，且能跨过工具结果行反查到宿主"
+        );
+
+        // 宿主缺失（tool_call_id 对不上）→ 工具名为 None，但结果照常返回
+        let mut orphan = test_message("m4", "tool");
+        orphan.timestamp = 20;
+        orphan.content = json!("沙盒孤立结果");
+        orphan.tool_call_id = Some("call_missing".into());
+        repo.append_messages("s1", &[orphan]).await.unwrap();
+        let page = repo
+            .search_messages("沙盒", None, Some("tool"), 10, None)
+            .await
+            .unwrap();
+        assert_eq!(page.items[0].id, "m4");
+        assert_eq!(page.items[0].tool_name, None);
     }
 
     // 空查询（检索弹窗默认态）：不过滤关键词、返回最新消息，role / session / 游标仍生效。

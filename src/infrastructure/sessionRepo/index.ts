@@ -94,6 +94,12 @@ export interface MessageSearchItem {
   sessionTitle: string
   workspace?: string | null
   agentId?: string | null
+  /**
+   * 工具名（仅 role='tool' 的消息有；如 `read_file` / `edit_file`）。
+   * 后端从「发起该调用的 assistant 消息」的 tool_calls 里反查得出，
+   * 前端用 `getToolCallMessage(name).getToolLabel(name)` 译成「查看文件」等标签。
+   */
+  toolName?: string | null
 }
 
 /** 消息检索的 keyset 分页游标（与 Rust 端 `SearchCursor` 对应） */
@@ -115,7 +121,10 @@ export interface MessageSearchOptions {
   query: string
   /** 限定会话；不传 = 跨会话检索 */
   sessionId?: string | null
-  /** 限定角色；不传 = user + assistant */
+  /**
+   * 限定角色；不传 = user + assistant（聊天列表展示的两类）。
+   * `'tool'` = 工具调用结果消息（role='tool'）。
+   */
   role?: string | null
   limit?: number
   /** keyset 分页游标（上一页返回的 nextCursor）；首页不传 */

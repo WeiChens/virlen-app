@@ -5,6 +5,10 @@
  *   - scope='session'：已选中会话 → 只搜当前会话，条目为单行「角色图标 + 命中片段 + 时间」；
  *   - scope='global' ：未选中会话 → 搜所有会话，条目 meta 额外展示「工作目录 + Agent 名称 + 会话标题」。
  *
+ * 筛选分类：全部（user + assistant）/ 我的消息 / AI 回复 / 工具调用（role='tool' 的工具结果）。
+ * 「工具调用」命中 tool 消息本身，而 tool 消息在消息列表里不渲染气泡（结果挂在发起调用的
+ * assistant 气泡下方），因此点击后的定位由消息列表把 tool 消息解析到其宿主 assistant 消息（见 message-list）。
+ *
  * 数据来自 SQLite（`sessionRepo.searchMessages` → Rust `cmd_search_messages`），
  * 分页加载：列表滚到接近底部时自动取下一页（见 useMessageSearch）。
  *
@@ -20,10 +24,12 @@ import SearchSvg from '@/ui/components/icons/SearchSvg'
 import CloseSvg from '@/ui/components/icons/CloseSvg'
 import UserSvg from '@/ui/components/icons/UserSvg'
 import AgentSvg from '@/ui/components/icons/AgentSvg'
+import ToolSvg from '@/ui/components/icons/ToolSvg'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
 import { t, tpl } from '@/ui/i18n'
 import { timeFormat } from '@/utils/time'
 import { agentStore } from '@/ui/store'
+import { getToolCallMessage } from '../tool-call/IToolCallMessage'
 import type { MessageSearchItem } from '@/infrastructure/sessionRepo'
 import {
   useMessageSearch,
@@ -65,6 +71,15 @@ function renderHighlight(text: string, query: string) {
   return nodes
 }
 
+/** 工具名 → 与聊天区工具卡片一致的中文标签（查看文件 / 编辑文件 / 获取当前时间 …） */
+function toolLabel(name: string): string {
+  try {
+    return getToolCallMessage(name).getToolLabel(name)
+  } catch {
+    return name
+  }
+}
+
 /** 路径末级目录名（工作目录只显示这一段，完整路径走 tooltip） */
 function folderName(path: string): string {
   return path.split('/').pop()?.split('\\').pop() || path
@@ -74,6 +89,7 @@ const FILTERS: { key: SearchRoleFilter; label: string }[] = [
   { key: 'all', label: '全部' },
   { key: 'user', label: '我的消息' },
   { key: 'assistant', label: 'AI 回复' },
+  { key: 'tool', label: '工具调用' },
 ]
 
 /** 滚动到距底部多少像素时触发下一页 */
@@ -258,6 +274,11 @@ function SearchDialog({
               const agentName = item.agentId
                 ? (agentStore.getAgent(item.agentId)?.name ?? t('默认 Agent'))
                 : ''
+              // 工具结果条目：标出发起该调用的工具（如「查看文件」）
+              const itemToolLabel =
+                item.role === 'tool' && item.toolName
+                  ? toolLabel(item.toolName)
+                  : ''
               return (
                 <button
                   key={item.id}
@@ -270,8 +291,17 @@ function SearchDialog({
                   onClick={() => onSelect?.(item)}
                   title={item.text}>
                   <span className="result-role">
-                    {item.role === 'user' ? <UserSvg /> : <AgentSvg />}
+                    {item.role === 'user' ? (
+                      <UserSvg />
+                    ) : item.role === 'tool' ? (
+                      <ToolSvg />
+                    ) : (
+                      <AgentSvg />
+                    )}
                   </span>
+                  {itemToolLabel && (
+                    <span className="result-tool-label">{itemToolLabel}</span>
+                  )}
                   <span className="result-text">
                     {renderHighlight(item.text, q)}
                   </span>

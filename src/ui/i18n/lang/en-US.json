@@ -269,6 +269,7 @@
   "支持搜索全部会话中的对话内容": "Searches messages across all conversations",
   "我的消息": "My messages",
   "AI 回复": "AI replies",
+  "工具调用": "Tool calls",
   "我": "Me",
   "共 $__count__ 条结果": "$__count__ results",
   "已加载 $__count__ 条结果": "$__count__ loaded",

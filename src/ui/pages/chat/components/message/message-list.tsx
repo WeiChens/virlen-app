@@ -124,6 +124,36 @@ function isStreamingSession(sessionId: string): boolean {
 }
 
 /**
+ * 把「检索命中点」解析成一个**可定位的消息 id**。
+ *
+ * tool 消息（role='tool'）在列表中不渲染气泡 —— 工具结果挂在发起该调用的
+ * assistant 气泡下方的工具卡片里（见 message-bubble 的 ToolCallGroup），
+ * 它自己那一行高度为 0。若直接跳 tool 消息，会落在一条看不见的空行上。
+ * 因此命中 tool 消息时，改为定位到「发起该 tool_call 的 assistant 消息」
+ * （工具结果排在调用之后，所以往前找宿主，取最近的一个）。
+ *
+ * 返回 null 表示：命中了 tool 消息，但宿主 assistant 还没回补到内存
+ *（在更早的分页里）—— 调用方应继续 loadOlder，而不是停在那条零高度行上。
+ */
+function resolveJumpAnchorId(list: Message[], msgId: string): string | null {
+  const index = list.findIndex((m) => m.id === msgId)
+  // 本次尚未加载到该消息：无法判断角色，原样返回交给调用方继续回补
+  if (index < 0) return msgId
+  const target = list[index]
+  if (target.role !== 'tool' || !target.toolCallId) return msgId
+  for (let i = index - 1; i >= 0; i--) {
+    const m = list[i]
+    if (
+      m.role === 'assistant' &&
+      m.toolCalls?.some((tc) => tc.id === target.toolCallId)
+    ) {
+      return m.id
+    }
+  }
+  return null
+}
+
+/**
  * 「跳转并高亮」目标（消息检索弹窗选中结果时下发）。
  * 通过 nonce 区分「同一消息被反复选中」，确保每次都能重新触发定位。
  */
@@ -724,9 +754,11 @@ function ChatMessageList({
       if (!sid) return
 
       // ① 已在内存 → 直接跳（count 已包含该消息，可立即跳转）
-      const inMemory = messagesRef.current.findIndex((m) => m.id === msgId)
+      // tool 命中先解析到宿主 assistant（见 resolveJumpAnchorId）
+      const inMemoryId = resolveJumpAnchorId(messagesRef.current, msgId) ?? msgId
+      const inMemory = messagesRef.current.findIndex((m) => m.id === inMemoryId)
       if (inMemory >= 0) {
-        if (highlight) flashHighlight(msgId)
+        if (highlight) flashHighlight(inMemoryId)
         requestAnimationFrame(() => jumpTo(inMemory))
         return
       }
@@ -742,6 +774,8 @@ function ChatMessageList({
       try {
         let idx = -1
         let guard = 0
+        /** 实际定位的消息 id（tool 命中会解析到宿主 assistant） */
+        let anchorId = msgId
         while (
           idx < 0 &&
           sessionStore.hasMoreMessages(sid) &&
@@ -751,18 +785,23 @@ function ChatMessageList({
           if (sid !== chatState.value.currentSessionId) return
           const s = sessionStore.getSession(sid)
           if (!s) return
-          idx = s.messages.findIndex((m) => m.id === msgId)
+          // tool 消息自身零高度：改为定位宿主 assistant；宿主还没回来时继续回补
+          const resolved = resolveJumpAnchorId(s.messages, msgId)
+          anchorId = resolved ?? msgId
+          idx = resolved
+            ? s.messages.findIndex((m) => m.id === resolved)
+            : -1
           // 没有进展（失败 / 已到最旧）→ 停止，避免死循环
           if (!ok && idx < 0) break
         }
         const s = sessionStore.getSession(sid)
         if (!s) return
         setMessages([...s.messages])
-        const finalIdx = s.messages.findIndex((m) => m.id === msgId)
+        const finalIdx = s.messages.findIndex((m) => m.id === anchorId)
         // 等 messages 提交后（layout effect）再跳，确保 count 已更新
         if (finalIdx >= 0) {
-          pendingJumpIdRef.current = msgId
-          if (highlight) flashHighlight(msgId)
+          pendingJumpIdRef.current = anchorId
+          if (highlight) flashHighlight(anchorId)
         }
       } finally {
         if (jumpLoadingTimerRef.current) {

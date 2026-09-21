@@ -246,6 +246,21 @@
     color: var(--primary, #4f46e5);
   }
 
+
+  /* 工具调用：额外标出发起该调用的工具（查看文件 / 编辑文件 …）
+     底色用主色的淡色块（与关键词高亮的 mark 同族），文字用链接色令牌
+     ——亮/暗主题各自取值，暗色下自动提亮保证对比度 */
+  .result-tool-label {
+    flex-shrink: 0;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--primary, #4f46e5) 14%, transparent);
+    color: var(--text-primary, #4f46e5);
+    font-size: var(--font-size-xs, 11px);
+    line-height: 1.5;
+    white-space: nowrap;
+  }
+
   /* 主信息：单行命中片段，占满剩余宽度，超出省略 */
   .result-text {
     flex: 1;
