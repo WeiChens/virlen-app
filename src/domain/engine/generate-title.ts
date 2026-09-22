@@ -106,7 +106,10 @@ export async function generateTitle(
     thinking: false,
   }
 
+  const startedAt = Date.now()
   const response = await provider.chat(request)
+  // 标题生成耗时（含首字延迟）：UI 用它算 tok/s
+  const durationMs = Date.now() - startedAt
 
   // 标题生成是真实 LLM 调用但不产生消息 → 必须显式记账，否则这笔消费就漏了
   if (response.usage) {
@@ -119,6 +122,7 @@ export async function generateTitle(
       kind: 'title',
       ...ledgerTokensOf(response.usage, provider.providerType),
       estimated: false,
+      durationMs,
     })
   }
 

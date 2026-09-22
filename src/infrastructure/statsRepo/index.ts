@@ -62,6 +62,8 @@ export interface UsageRecord {
   cachedTokens: number
   totalTokens: number
   estimated: boolean
+  /** LLM 请求耗时（ms，含首字延迟）；0 = 未测量（旧流水）→ 算不出 tok/s */
+  durationMs: number
   traceId: string | null
 }
 

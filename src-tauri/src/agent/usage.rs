@@ -83,6 +83,8 @@ pub fn ledger_tokens(u: &TokenUsage, provider_type: &str) -> LedgerTokens {
 ///
 /// - `kind`：`chat_round` | `verify` | `title` | `compress` | `embedding`
 /// - `message_id`：`chat_round` 传 assistant 消息 id 作幂等键；其余传 `None`（每次调用独立记账）
+/// - `duration_ms`：本次 LLM 请求的墙钟耗时（含首字延迟）—— UI 用它算 tok/s；
+///   拿不到就传 `None`（落库为 0，UI 显示 `-`）。与 TS 侧 `UsageLedgerRecord.durationMs` 对称（铁律 1）
 /// - `usage` 为 `None`（provider 未返回用量，如流式中断）时不记账
 #[allow(clippy::too_many_arguments)]
 pub async fn record_usage(
@@ -95,6 +97,7 @@ pub async fn record_usage(
     round: Option<i64>,
     message_id: Option<&str>,
     usage: Option<TokenUsage>,
+    duration_ms: Option<i64>,
 ) {
     let Some(u) = usage else {
         return;
@@ -115,6 +118,8 @@ pub async fn record_usage(
         cached_tokens: tokens.cached_tokens,
         total_tokens: tokens.total_tokens,
         estimated: false,
+        // 非正耗时不记（如注入假时长 / 时钟回拨）→ UI 显示 '-' 而不是除零或无穷大
+        duration_ms: duration_ms.filter(|d| *d > 0),
         trace_id: crate::telemetry::get_session_trace(session_id),
     };
     if let Err(e) = repo.append_usage(&[entry]).await {

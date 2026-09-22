@@ -9,6 +9,10 @@ use serde_json::json;
 
 // ===== 用量账本（token 统计） =====
 
+/// 测试用流水。`duration_ms` 固定一个可识别的值；需要验边界（None / 负数）的用例
+/// 自行覆盖该字段。
+const TEST_DURATION_MS: i64 = 1234;
+
 fn usage_entry(id: Option<&str>, ts: i64, kind: &str, total: i64) -> UsageEntry {
     UsageEntry {
         ts: Some(ts),
@@ -24,6 +28,7 @@ fn usage_entry(id: Option<&str>, ts: i64, kind: &str, total: i64) -> UsageEntry 
         cached_tokens: 0,
         total_tokens: total,
         estimated: false,
+        duration_ms: Some(TEST_DURATION_MS),
         trace_id: None,
     }
 }
@@ -199,6 +204,37 @@ async fn usage_estimated_flag_and_clear() {
     let stats = repo.usage_stats(&UsageQuery::default()).await.unwrap();
     assert_eq!(stats.totals.calls, 0);
     assert_eq!(stats.first_ts, None);
+}
+
+#[tokio::test]
+async fn usage_duration_round_trip_and_legacy_zero() {
+    let repo = open_tmp();
+    // 1. 新流水带耗时；2. 未测量（None）→ 落 0，UI 据此显示 '-' 而不是 0 tok/s；
+    //    3. 非正耗时（时钟回拨 / 注入假值）一律不记
+    let mut no_duration = usage_entry(Some("m2"), 2_000, "title", 50);
+    no_duration.duration_ms = None;
+    let mut negative = usage_entry(Some("m3"), 3_000, "title", 50);
+    negative.duration_ms = Some(-5);
+    repo.append_usage(&[
+        usage_entry(Some("m1"), 1_000, "chat_round", 100),
+        no_duration,
+        negative,
+    ])
+    .await
+    .unwrap();
+
+    let page = repo.usage_records(&UsageQuery::default()).await.unwrap();
+    let by_id: std::collections::HashMap<String, i64> = page
+        .records
+        .iter()
+        .map(|r| (r.message_id.clone().unwrap_or_default(), r.duration_ms))
+        .collect();
+    assert_eq!(
+        by_id["m1"], TEST_DURATION_MS,
+        "耗时必须原样回读（tok/s 由前端用 completion ÷ 耗时算）"
+    );
+    assert_eq!(by_id["m2"], 0, "未测量的流水落 0");
+    assert_eq!(by_id["m3"], 0, "负耗时不记（避免负 tok/s）");
 }
 
 #[tokio::test]

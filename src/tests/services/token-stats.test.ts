@@ -31,12 +31,16 @@ vi.mock('@/ui/store', () => ({ settingsState: settings }))
 
 import {
   currentCurrency,
+  densifyTimeBuckets,
   filterAndSortRecords,
   loadRecords,
   loadStats,
+  outputTokPerSec,
+  parseTimeKey,
   rangeToFromTs,
   resolvePrice,
   startOfToday,
+  timeKeyOf,
   type CostedRecord,
 } from '@/services/token-stats-service'
 import { USD_TO_CNY } from '@/domain/pricing'
@@ -232,6 +236,7 @@ describe('loadRecords', () => {
           cachedTokens: 0,
           totalTokens: 1_000_000,
           estimated: false,
+          durationMs: 2_000,
           traceId: null,
         },
       ],
@@ -240,6 +245,8 @@ describe('loadRecords', () => {
     expect(total).toBe(1)
     // 内置价：gpt-4o-mini 输入 $0.15 / 1M
     expect(records[0].cost.input).toBeCloseTo(0.15)
+    // 输出速度：0 completion ÷ 2s = 不可计算（没有输出 token）
+    expect(outputTokPerSec(records[0])).toBeNull()
   })
 })
 
@@ -251,6 +258,53 @@ describe('币种', () => {
     expect(currentCurrency()).toBe('USD')
     settings.value.usageCurrency = 'CNY'
     expect(currentCurrency()).toBe('CNY')
+  })
+})
+
+describe('输出速度（tok/s）', () => {
+  it('completion ÷ 请求耗时（秒）', () => {
+    expect(outputTokPerSec({ completionTokens: 500, durationMs: 10_000 })).toBe(50)
+    expect(outputTokPerSec({ completionTokens: 1, durationMs: 3_000 })).toBeCloseTo(0.333, 3)
+  })
+
+  it('拿不到耗时就返回 null（旧流水 / 时钟异常），不是 0', () => {
+    // 回归：展示 0 tok/s 会把「没数据」读成「很慢」
+    expect(outputTokPerSec({ completionTokens: 500, durationMs: 0 })).toBeNull()
+    expect(outputTokPerSec({ completionTokens: 500 })).toBeNull()
+    expect(outputTokPerSec({ completionTokens: 500, durationMs: -1 })).toBeNull()
+    // 没有输出 token（如纯 tool_call / 估算失败）也无可比速度
+    expect(outputTokPerSec({ completionTokens: 0, durationMs: 1_000 })).toBeNull()
+  })
+
+  it('可按 tok/s 排序，算不出的行沉底', () => {
+    const rec = (id: number, completionTokens: number, durationMs: number): CostedRecord =>
+      ({
+        id,
+        ts: 0,
+        sessionId: 's1',
+        sessionTitle: '会话',
+        messageId: null,
+        model: 'gpt-4o',
+        providerType: null,
+        providerConfigId: null,
+        kind: 'chat_round',
+        round: null,
+        promptTokens: 0,
+        completionTokens,
+        cachedTokens: 0,
+        totalTokens: completionTokens,
+        estimated: false,
+        durationMs,
+        traceId: null,
+        cost: { input: 0, output: 0, cached: 0, total: 0 },
+      })
+    const data = [
+      rec(1, 100, 10_000), // 10 tok/s
+      rec(2, 100, 1_000), // 100 tok/s
+      rec(3, 100, 0), // 旧流水：算不出
+    ]
+    const out = filterAndSortRecords(data, {}, 'tokPerSec', 'desc')
+    expect(out.map((r) => r.id)).toEqual([2, 1, 3])
   })
 })
 
@@ -271,11 +325,11 @@ describe('filterAndSortRecords（明细客户端筛选 / 排序）', () => {
     cachedTokens: 0,
     totalTokens: 0,
     estimated: false,
+    durationMs: 0,
     traceId: null,
     cost: { input: 0, output: 0, cached: 0, total: 0 },
     ...p,
   })
-
   const zero = { input: 0, output: 0, cached: 0, total: 0 }
   const data: CostedRecord[] = [
     rec({
@@ -346,5 +400,189 @@ describe('filterAndSortRecords（明细客户端筛选 / 排序）', () => {
       'desc',
     )
     expect(out.map((r) => r.id)).toEqual([2])
+  })
+})
+
+/**
+ * 时间轴补零（回归：只在有流水的时段才有列，看起来像「数据错了」）。
+ *
+ * Rust 的聚合只回有数据的桶，补零必须由服务层在前端做。
+ */
+describe('时间桶补零（时间轴连续）', () => {
+  beforeEach(() => {
+    settings.value.modelPricing = {}
+    settings.value.usageCurrency = 'USD'
+    mockStats.mockReset()
+  })
+
+  /** 所有查询都回同一套数据（模型维度另给一份） */
+  const respond = (byGroup: Record<string, any>, fallback: any) =>
+    mockStats.mockImplementation((q: any) =>
+      Promise.resolve(byGroup[q.groupBy] ?? fallback),
+    )
+
+  it('今日 + 按小时：只在 7、8 点用过，也要从 0 点铺到当前小时', async () => {
+    const now = new Date(2026, 8, 21, 15, 30).getTime()
+    const totals = bucket('', 300, 30)
+    respond(
+      {
+        hour: {
+          buckets: [
+            bucket('2026-09-21 07', 100, 10),
+            bucket('2026-09-21 08', 200, 20),
+          ],
+          totals,
+          firstTs: 1,
+          lastTs: 2,
+        },
+      },
+      { buckets: [bucket('gpt-4o', 300, 30)], totals, firstTs: 1, lastTs: 2 },
+    )
+
+    const view = await loadStats('today', 'hour', { now })
+    expect(view.degraded).toBe(false)
+    expect(view.groupBy).toBe('hour')
+    expect(view.buckets.map((b) => b.key)).toEqual(
+      Array.from(
+        { length: 16 },
+        (_, h) => `2026-09-21 ${String(h).padStart(2, '0')}`,
+      ),
+    )
+    expect(view.buckets[7].promptTokens).toBe(100)
+    expect(view.buckets[8].promptTokens).toBe(200)
+    // 空档是「值为 0 的桶」，不是「没有这一列」
+    expect(view.buckets[0].totalTokens).toBe(0)
+    expect(view.buckets[0].calls).toBe(0)
+    // 补零不改变总量（合计仍来自 SQL）
+    expect(view.totals.totalTokens).toBe(330)
+  })
+
+  it('近 7 天 + 按天：只有一天有数据也出满 7 列', async () => {
+    const now = new Date(2026, 8, 21, 15, 30).getTime()
+    const totals = bucket('', 50, 5)
+    respond(
+      {
+        day: {
+          buckets: [bucket('2026-09-18', 50, 5)],
+          totals,
+          firstTs: 1,
+          lastTs: 2,
+        },
+      },
+      { buckets: [bucket('gpt-4o', 50, 5)], totals, firstTs: 1, lastTs: 2 },
+    )
+
+    const view = await loadStats('7d', 'day', { now })
+    expect(view.buckets.map((b) => b.key)).toEqual([
+      '2026-09-15',
+      '2026-09-16',
+      '2026-09-17',
+      '2026-09-18',
+      '2026-09-19',
+      '2026-09-20',
+      '2026-09-21',
+    ])
+    expect(view.buckets[3].totalTokens).toBe(55)
+    expect(view.buckets.filter((b) => b.totalTokens === 0)).toHaveLength(6)
+  })
+
+  it('全部：轴从最早一条流水那天铺到今天', async () => {
+    const now = new Date(2026, 8, 21, 10, 0).getTime()
+    const totals = bucket('', 50, 5)
+    respond(
+      {
+        day: {
+          buckets: [bucket('2026-08-01', 50, 5)],
+          totals,
+          firstTs: 1,
+          lastTs: 2,
+        },
+      },
+      { buckets: [bucket('gpt-4o', 50, 5)], totals, firstTs: 1, lastTs: 2 },
+    )
+
+    const view = await loadStats('all', 'day', { now })
+    // 8/1 ~ 9/21 = 31 + 21 天
+    expect(view.buckets).toHaveLength(52)
+    expect(view.buckets[0].key).toBe('2026-08-01')
+    expect(view.buckets[51].key).toBe('2026-09-21')
+  })
+
+  it('跨度过大时自动放粗粒度（全部 + 按小时 → 按周）并回传 degraded', async () => {
+    const now = new Date(2026, 8, 21, 10, 0).getTime()
+    const totals = bucket('', 50, 5)
+    respond(
+      {
+        hour: {
+          buckets: [bucket('2020-01-01 00', 50, 5)],
+          totals,
+          firstTs: 1,
+          lastTs: 2,
+        },
+        week: {
+          buckets: [bucket('2020-01', 50, 5)],
+          totals,
+          firstTs: 1,
+          lastTs: 2,
+        },
+      },
+      { buckets: [bucket('gpt-4o', 50, 5)], totals, firstTs: 1, lastTs: 2 },
+    )
+
+    const view = await loadStats('all', 'hour', { now })
+    expect(view.degraded).toBe(true)
+    expect(view.groupBy).toBe('week')
+    // 主查询确实以更粗的粒度重查了一次（小时跨度 6 年多 → 降级）
+    expect(mockStats).toHaveBeenCalledWith(
+      expect.objectContaining({ groupBy: 'week' }),
+    )
+    // 轴覆盖全部数据，不截断（2020-01 起到今天 ≈ 351 周）
+    expect(view.buckets.length).toBeGreaterThan(300)
+    expect(view.buckets[0].key).toBe('2020-00')
+    // 末尾是「本周」（还没数据 → 0）；数据周的桶仍在，没被补零吞掉
+    expect(view.buckets.find((b) => b.key === '2020-01')?.totalTokens).toBe(55)
+    expect(view.buckets[view.buckets.length - 1].totalTokens).toBe(0)
+  })
+})
+
+describe('时间桶工具函数', () => {
+  it('时段 key 与 Rust strftime 口径一致（周：1/1 之前算第 00 周）', () => {
+    // 2026-01-01 是周四 → 第一个周一为 01-05，1/1~1/4 属第 00 周
+    expect(timeKeyOf('week', new Date(2026, 0, 1))).toBe('2026-00')
+    expect(timeKeyOf('week', new Date(2026, 0, 5))).toBe('2026-01')
+    expect(timeKeyOf('week', new Date(2026, 0, 12))).toBe('2026-02')
+    expect(timeKeyOf('day', new Date(2026, 8, 21))).toBe('2026-09-21')
+    expect(timeKeyOf('hour', new Date(2026, 8, 21, 7))).toBe('2026-09-21 07')
+    expect(timeKeyOf('month', new Date(2026, 8, 21))).toBe('2026-09')
+  })
+
+  it('parseTimeKey 与 timeKeyOf 互逆（周按周一解析）', () => {
+    for (const unit of ['hour', 'day', 'week', 'month'] as const) {
+      const d = new Date(2026, 8, 21, 7)
+      const key = timeKeyOf(unit, d)
+      const back = parseTimeKey(unit, key)
+      expect(back).not.toBeNull()
+      expect(timeKeyOf(unit, back!)).toBe(key)
+    }
+    // 认不出来的 key 返回 null（调用方据此放弃补零）
+    expect(parseTimeKey('day', 'gpt-4o')).toBeNull()
+  })
+
+  it('densifyTimeBuckets：缺的补 0，口径不一致的 key 兜底保留', () => {
+    const out = densifyTimeBuckets(
+      'day',
+      ['2026-09-01', '2026-09-02', '2026-09-03'],
+      [bucket('2026-09-02', 10, 1), bucket('2026-99-01', 20, 2)],
+    )
+    expect(out.map((b) => b.key)).toEqual([
+      '2026-09-01',
+      '2026-09-02',
+      '2026-09-03',
+      '2026-99-01',
+    ])
+    expect(out[0].totalTokens).toBe(0)
+    expect(out[1].totalTokens).toBe(11)
+    // 数据不能因为补零被吞掉
+    expect(out[3].totalTokens).toBe(22)
   })
 })

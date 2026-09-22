@@ -2,13 +2,14 @@
  * usage-table — 用量明细表（每条 LLM 调用一行）
  *
  * 数据由面板一次拉取（有上限）后在客户端筛选 / 排序 / 分页；这里只负责渲染当前页、
- * 表头排序交互与翻页回调。可排序列：时间 / Prompt / Completion / Cached / 合计。
+ * 表头排序交互与翻页回调。可排序列：时间 / Prompt / Completion / Cached / 合计 / tok/s。
  */
 import type { ReactNode } from 'react'
 import { formatCost, formatTokens } from '@/domain/pricing'
 import { t, tpl } from '@/ui/i18n'
 import {
   kindLabel,
+  outputTokPerSec,
   type CostedRecord,
   type RecordSortKey,
   type SortDir,
@@ -72,6 +73,15 @@ function formatTime(ts: number): string {
 function sessionLabel(r: CostedRecord): string {
   if (r.sessionTitle) return r.sessionTitle
   return r.sessionId ? t('已删除会话') : t('无会话上下文')
+}
+
+/**
+ * 输出速度展示。不可计算（旧流水未记耗时 / 无输出 token）一律 `-`，
+ * 不能显示 0（会把“没数据”读成“很慢”）；≥ 100 时不再留小数位。
+ */
+function formatRate(v: number | null): string {
+  if (v === null) return '-'
+  return v >= 100 ? v.toFixed(0) : v.toFixed(1)
 }
 
 export default function UsageTable({
@@ -140,13 +150,27 @@ export default function UsageTable({
               num>
               {t('合计')}
             </SortTh>
+            {/* 输出速度：Completion ÷ 请求耗时（含首字延迟） */}
+            <SortTh
+              keyName="tokPerSec"
+              activeKey={sortKey}
+              dir={sortDir}
+              onSort={onSort}
+              num>
+              <span
+                title={t(
+                  '输出速度：Completion token ÷ 请求耗时（含首字延迟）；未记录耗时的旧流水显示 -',
+                )}>
+                tok/s
+              </span>
+            </SortTh>
             <th className="num">{t('费用')}</th>
           </tr>
         </thead>
         <tbody>
           {records.length === 0 && (
             <tr>
-              <td className="empty" colSpan={9}>
+              <td className="empty" colSpan={10}>
                 {loading ? t('加载中...') : t('暂无用量记录')}
               </td>
             </tr>
@@ -173,6 +197,7 @@ export default function UsageTable({
               <td className="num">{formatTokens(r.completionTokens)}</td>
               <td className="num">{formatTokens(r.cachedTokens)}</td>
               <td className="num strong">{formatTokens(r.totalTokens)}</td>
+              <td className="num">{formatRate(outputTokPerSec(r))}</td>
               <td className="num">{formatCost(r.cost.total, currency)}</td>
             </tr>
           ))}

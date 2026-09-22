@@ -83,6 +83,11 @@ const GROUPS: { key: UsageGroupBy; label: string }[] = [
 /** 时间维度：这些维度看「趋势」，用平滑折线；其余维度看「构成」，用堆叠柱 */
 const TIME_GROUPS: UsageGroupBy[] = ['hour', 'day', 'week', 'month']
 
+/** 粒度 → 按钮文案（降级提示复用同一批文案，避免两套叫法） */
+function groupLabel(g: UsageGroupBy): string {
+  return t(GROUPS.find((x) => x.key === g)?.label ?? g)
+}
+
 /** 饼图维度切换按钮 */
 const PIE_DIMS: { key: PieDim; label: string }[] = [
   { key: 'kind', label: '按类型' },
@@ -101,6 +106,8 @@ const PIE_DIM_TITLES: Record<PieDim, string> = {
 
 const EMPTY_VIEW: UsageStatsView = {
   buckets: [],
+  groupBy: 'day',
+  degraded: false,
   modelBuckets: [],
   totals: {
     key: '',
@@ -221,10 +228,15 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
     [sortKey],
   )
 
-  /** 分桶 key → 展示文案 */
+  // ⚠️ 一律用 `stats.groupBy`（**实际生效**的粒度），而不是用户点的 `groupBy`：
+  // 跨度太大时服务层会自动降级（如「全部 + 按小时」→ 按天/周），
+  // 若这里仍按用户所选切标签，降级后坐标轴文字会整排错位。
+  const activeGroup = stats.groupBy
+
+  /** 分桶 key → 展示文案（按**实际生效**的粒度切，见 activeGroup 注释） */
   const labelOf = useCallback(
     (key: string): string => {
-      switch (groupBy) {
+      switch (activeGroup) {
         case 'hour':
           // '2026-09-21 14'：看「今日」时只显示 '14:00'；跨天则显示 '09-21 14'
           if (key.length < 13) return key
@@ -242,14 +254,14 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
           return key || '-'
       }
     },
-    [groupBy, range],
+    [activeGroup, range],
   )
 
   const currency = currentCurrency()
   const totals = stats.totals
 
   /** 时间维度（小时 / 天 / 周 / 月）用平滑折线看趋势，其余维度用堆叠柱看构成 */
-  const isTimeDim = TIME_GROUPS.includes(groupBy)
+  const isTimeDim = TIME_GROUPS.includes(activeGroup)
   const distributionOption = useMemo(
     () =>
       isTimeDim
@@ -542,6 +554,14 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
               <section className="chart-block">
                 <h4>{isTimeDim ? t('用量趋势') : t('用量分布')}</h4>
                 <UsageChart option={distributionOption} height={280} />
+                {stats.degraded && (
+                  <p className="foot-note">
+                    {tpl(
+                      '数据跨度较大，已自动按「$__unit__」聚合（图表仍覆盖全部数据）',
+                      { unit: groupLabel(activeGroup) },
+                    )}
+                  </p>
+                )}
               </section>
 
               <section className="chart-block">

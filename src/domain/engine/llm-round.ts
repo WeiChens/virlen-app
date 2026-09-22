@@ -179,6 +179,8 @@ export async function doLLMRound(
       // 口径拉平（prompt = 非缓存输入 / cached 单列）：见 domain/usage::ledgerTokensOf
       ...ledgerTokensOf(roundUsage, provider.providerType),
       estimated: false,
+      // 与 Rust 引擎 `agent/llm_loop.rs` 的计时区间对齐：只包 LLM 请求，不含工具执行（铁律 1）
+      durationMs: Date.now() - roundStart,
     })
   }
 

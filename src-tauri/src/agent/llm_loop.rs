@@ -73,6 +73,9 @@ pub async fn execute_llm_round(
 
     let model = session.model_id.clone();
 
+    // 计时起点：只包住 LLM 请求（不含工具执行），与 TS 引擎 `llm-round.ts` 的
+    // `roundStart → recordUsage` 区间对齐（铁律 1），UI 据此算 tok/s。
+    let round_started_ms = crate::telemetry::now_ms();
     let output = do_llm_round(
         session,
         provider,
@@ -86,6 +89,7 @@ pub async fn execute_llm_round(
         round,
     )
     .await?;
+    let round_duration_ms = crate::telemetry::now_ms() - round_started_ms;
 
     // 用量记账（kind=chat_round）——与 TS 引擎 `engine.round.end` 处对齐（铁律 1）。
     // 有 tool calls 时用量在 `ctx.assistant_message` 上（ctx 里的消息才是被流式更新过的那条），
@@ -110,6 +114,7 @@ pub async fn execute_llm_round(
         Some(round),
         Some(&ledger_message_id),
         ledger_usage,
+        Some(round_duration_ms),
     )
     .await;
 

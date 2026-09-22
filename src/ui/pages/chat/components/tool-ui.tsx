@@ -79,6 +79,12 @@ export function useToolUI() {
   useEffect(() => {
     const off = toolInteractEvent.on('showAuthorization', (payload) => {
       setAuthModal({ visible: true, ...payload })
+      // 授权确认弹窗出现 → 窗口未激活时闪烁提醒
+      // （与 user_choice / AI 回复结束保持一致：都要用户立刻注意）
+      void requestAttentionIfUnfocused(
+        undefined,
+        settingsState.value.forceWindowActive,
+      )
     })
     return off
   }, [])

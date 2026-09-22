@@ -138,6 +138,7 @@ pub async fn run_iteration(
             ),
         );
 
+        let verify_started_ms = crate::telemetry::now_ms();
         let verify_result: VerificationResult = match verify(
             provider,
             session,
@@ -159,6 +160,7 @@ pub async fn run_iteration(
                     Some(current_iteration),
                     None,
                     outcome.usage,
+                    Some(crate::telemetry::now_ms() - verify_started_ms),
                 )
                 .await;
                 outcome.result

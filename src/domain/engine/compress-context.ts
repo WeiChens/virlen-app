@@ -101,7 +101,11 @@ export async function compressContext(
   let usage: TokenUsage
 
   try {
+    const startedAt = Date.now()
     const response = await provider.chat(request)
+    // 压缩调用耗时（含首字延迟）：UI 用它算 tok/s。
+    // ⚠️ 下面的 tokenizer 估算耗时**不计入**（那不是模型生成时间）
+    const durationMs = Date.now() - startedAt
     summaryContent =
       typeof response.content === 'string'
         ? response.content
@@ -136,6 +140,7 @@ export async function compressContext(
       kind: 'compress',
       ...ledgerTokensOf(usage, provider.providerType),
       estimated: true,
+      durationMs,
     })
   } catch (e: any) {
     console.error('上下文压缩失败:', e)

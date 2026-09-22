@@ -117,6 +117,9 @@ CREATE TABLE IF NOT EXISTS usage_ledger (
   total_tokens       INTEGER NOT NULL DEFAULT 0,
   -- 1 = 本地估算值（非 API 返回），如上下文压缩的 DeepSeek BPE 估算
   estimated          INTEGER NOT NULL DEFAULT 0,
+  -- LLM 请求耗时（ms）：0 = 未测量（历史流水 / 旧版本写的），UI 显示 '-'。
+  -- 存原始耗时而不存 tok/s：单位换算与口径（是否含首字延迟）改一次不用回填历史数据
+  duration_ms        INTEGER NOT NULL DEFAULT 0,
   trace_id           TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_ledger(ts);
@@ -151,6 +154,7 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<bool, String> {
     // 用量账本：纯建表 + 建索引，元数据级开销，可放在快速路径
     conn.execute_batch(USAGE_LEDGER_DDL)
         .map_err(|e| format!("初始化用量账本失败: {}", e))?;
+    ensure_usage_duration_column(conn)?;
 
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -187,6 +191,42 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<bool, String> {
         return Ok(true);
     }
     Ok(false)
+}
+
+/**
+ * 老库给 `usage_ledger` 补 `duration_ms` 列（新库由 DDL 直接建出，这里检测后跳过）。
+ *
+ * 与 `ensure_text_plain_column` 同策略：**只是元数据级 ALTER**（带默认值，不重写表），
+ * 因此放在 `init_schema` 的快速路径里，不占 `SCHEMA_VERSION` 的迁移版本。
+ * 旧流水补出来是 0（= 未测量），UI 必须显示 '-' 而不是 0 tok/s。
+ */
+fn ensure_usage_duration_column(conn: &Connection) -> Result<(), String> {
+    let exists = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(usage_ledger)")
+            .map_err(|e| format!("读取 usage_ledger 表结构失败: {}", e))?;
+        let mut has = false;
+        {
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(|e| e.to_string())?;
+            for name in rows.flatten() {
+                if name == "duration_ms" {
+                    has = true;
+                    break;
+                }
+            }
+        }
+        has
+    };
+    if !exists {
+        conn.execute(
+            "ALTER TABLE usage_ledger ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0",
+            [],
+        )
+        .map_err(|e| format!("添加 usage_ledger.duration_ms 列失败: {}", e))?;
+    }
+    Ok(())
 }
 
 /// 老库补 `text_plain` 列（新库由 DDL 直接建出，这里检测后跳过）

@@ -171,6 +171,7 @@ export class LLMVerifier {
     ]
 
     try {
+      const startedAt = Date.now()
       const response = await provider.chat(
         {
           model: session.modelId,
@@ -186,6 +187,8 @@ export class LLMVerifier {
       )
 
       const rawText = extractTextContent(response.content)
+      // 验证耗时（含首字延迟）：UI 用它算 tok/s，与 Rust `agent/iteration.rs` 计时区间一致
+      const durationMs = Date.now() - startedAt
 
       // 验证是真实 LLM 调用但不产生消息 → 必须显式记账（与 Rust `agent/verifier.rs` 对称）
       if (response.usage) {
@@ -199,6 +202,7 @@ export class LLMVerifier {
           // 口径拉平（prompt = 非缓存输入 / cached 单列）：见 domain/usage::ledgerTokensOf
           ...ledgerTokensOf(response.usage, provider.providerType),
           estimated: false,
+          durationMs,
         })
       }
 

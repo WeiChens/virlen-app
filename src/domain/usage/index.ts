@@ -38,6 +38,14 @@ export interface UsageLedgerRecord {
   totalTokens: number
   /** 是否为本地估算值（非 API 返回），如上下文压缩用 tokenizer 估算 */
   estimated?: boolean
+  /**
+   * 本次 LLM 请求的墙钟耗时（ms，**含首字延迟 / 思考时间**）。
+   *
+   * UI 用它算输出速度 `completionTokens ÷ (durationMs / 1000)`。
+   * 与 Rust `UsageEntry.duration_ms` 对称（铁律 1）；未测量就不传（落库 0，UI 显示 `-`）。
+   * 只存耗时而不存 tok/s：换算与口径（是否含首字延迟）变一次不用回填历史数据。
+   */
+  durationMs?: number
 }
 
 export type UsageKind =

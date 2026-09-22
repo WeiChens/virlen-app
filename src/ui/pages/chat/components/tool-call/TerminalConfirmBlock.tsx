@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { t } from '@/ui/i18n'
 import toolInteractEvent from '@/events/toolInteractEvent'
 import type { PendingConfirmInfo } from '@/infrastructure/tools/output-store'
+import { requestAttentionIfUnfocused } from '@/utils/windowAttention'
+import { settingsState } from '@/ui/store/settingStore'
 
 /**
  * 终端内确认块（Step 2 ①）—— WinkTerm `write_command` 的 **L2 等价物**。
@@ -31,6 +33,11 @@ export function TerminalConfirmBlock({
   useEffect(() => {
     inputRef.current?.focus()
     inputRef.current?.select()
+    // 终端内确认同样属于「等待用户授权」→ 窗口未激活时闪烁提醒
+    void requestAttentionIfUnfocused(
+      undefined,
+      settingsState.value.forceWindowActive,
+    )
   }, [])
 
   const submit = () =>
