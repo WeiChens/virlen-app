@@ -15,6 +15,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   generateTitle,
   sanitizeTitle,
+  sanitizeTitleContext,
+  extractTitleText,
   MAX_TITLE_LENGTH,
 } from '@/domain/engine/generate-title'
 import type { Session, Message } from '@/types'
@@ -203,5 +205,84 @@ describe('generateTitle', () => {
     await expect(
       generateTitle(session, [makeMessage()]),
     ).rejects.toThrow('API 调用失败')
+  })
+
+  it('首条 assistant 为纯工具调用轮次时不应把 toolCalls 透传给 Provider', async () => {
+    // 回归：曾因透传孤立 tool_calls 被 OpenAI 兼容 API 拒绝
+    // "An assistant message with 'tool_calls' must be followed by tool messages"
+    mockChat.mockResolvedValue({ content: '标题' })
+    mockGet.mockResolvedValue({ chat: mockChat })
+
+    const session = makeSession()
+    await generateTitle(session, [
+      makeMessage({ role: 'user', content: '1' }),
+      makeMessage({
+        role: 'assistant',
+        content: null as any,
+        toolCalls: [{ id: 'call_1', name: 'list_messages', input: {} }] as any,
+        reasoningContent: '先看看工作区',
+      }),
+      makeMessage({ role: 'tool', content: '[]', toolCallId: 'call_1' }),
+      makeMessage({ role: 'assistant', content: '这是一个空工作区' }),
+    ])
+
+    const req = mockChat.mock.calls[0][0]
+    // 任何消息都不得残留 toolCalls / toolCallId
+    expect(req.messages.every((m: any) => !m.toolCalls && !m.toolCallId)).toBe(true)
+    // 纯工具调用的 assistant 被丢弃，tool 结果消息也一并丢弃
+    expect(req.messages.some((m: any) => m.role === 'tool')).toBe(false)
+    // 首条用户消息仍作为上下文保留
+    expect(req.messages.some((m: any) => m.content === '1')).toBe(true)
+  })
+
+  it('带 toolCalls 又有正文的 assistant 应保留正文、只剥掉 toolCalls', async () => {
+    mockChat.mockResolvedValue({ content: '标题' })
+    mockGet.mockResolvedValue({ chat: mockChat })
+
+    const session = makeSession()
+    await generateTitle(session, [
+      makeMessage({ role: 'user', content: '帮我看看项目' }),
+      makeMessage({
+        role: 'assistant',
+        content: '我先列一下文件',
+        toolCalls: [{ id: 'call_1', name: 'list_files', input: {} }] as any,
+        reasoningContent: '思考中',
+      }),
+    ])
+
+    const req = mockChat.mock.calls[0][0]
+    const assistant = req.messages.find(
+      (m: any) => m.content === '我先列一下文件',
+    )
+    expect(assistant).toBeTruthy()
+    expect(assistant.toolCalls).toBeUndefined()
+    expect(assistant.reasoningContent).toBeUndefined()
+  })
+})
+
+describe('sanitizeTitleContext / extractTitleText', () => {
+  it('只保留有正文的 user / assistant', () => {
+    const result = sanitizeTitleContext([
+      makeMessage({
+        role: 'assistant',
+        content: null as any,
+        toolCalls: [{ id: 'c1', name: 'x', input: {} }] as any,
+      }),
+      makeMessage({ role: 'tool', content: '结果', toolCallId: 'c1' }),
+      makeMessage({ role: 'summary', content: '摘要' as any }),
+      makeMessage({ role: 'user', content: '正文' }),
+    ])
+    expect(result.map((m) => m.role)).toEqual(['user'])
+  })
+
+  it('extractTitleText 对 null / 空数组 / 非文本块容错', () => {
+    expect(extractTitleText(null as any)).toBe('')
+    expect(extractTitleText([] as any)).toBe('')
+    expect(
+      extractTitleText([
+        { type: 'text', text: '甲' },
+        { type: 'image', data: 'x' },
+      ] as any),
+    ).toBe('甲')
   })
 })

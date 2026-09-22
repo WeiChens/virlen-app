@@ -13,11 +13,13 @@ import { ledgerTokensOf, recordUsage } from '../usage'
 /** 标题最大长度（超过则截断并追加省略号） */
 export const MAX_TITLE_LENGTH = 30
 
-/** 从 MessageContent 中提取纯文本 */
+/** 从 MessageContent 中提取纯文本（容错：null / 空 / 非文本块一律返回空串） */
 export function extractTitleText(content: Message['content']): string {
   if (typeof content === 'string') return content
+  // 纯工具调用轮次的 assistant 消息 content 为 null，此处不做容错会直接抛 TypeError
+  if (!Array.isArray(content)) return ''
   return content
-    .filter((b) => b.type === 'text')
+    .filter((b) => b && b.type === 'text')
     .map((b) => ('text' in b ? b.text : ''))
     .join(' ')
 }
@@ -44,6 +46,36 @@ export function sanitizeTitle(raw: string): string {
     t = t.slice(0, MAX_TITLE_LENGTH) + '...'
   }
   return t
+}
+
+/**
+ * 标题生成上下文清洗 —— 只保留「有正文的 user / assistant」纯文本轮次。
+ *
+ * 为什么必须清洗：标题请求只截取对话开头的几轮、**不携带工具结果消息**。
+ * 若上下文里带进 "assistant(content=null, toolCalls=[...])" 这种轮次，
+ * Provider 转成 API 报文后会渲染出孤立 tool_calls（没有后续 role='tool' 应答），
+ * OpenAI 兼容 API（如 DeepSeek）会直接拒绝：
+ * "An assistant message with 'tool_calls' must be followed by tool messages"。
+ *
+ * 因此这里：
+ * - 丢弃 tool / summary / feedback 等非对话角色（标题场景无用，且 tool 无配对同样会报错）
+ * - 剥离 assistant 的 toolCalls / toolCallId / reasoningContent（纯工具调用轮次正文为空 → 整条丢弃）
+ * - 顺带剥掉 usage / uiData 等与请求无关的重字段，避免无谓的序列化开销
+ */
+export function sanitizeTitleContext(messages: Message[]): Message[] {
+  const result: Message[] = []
+  for (const m of messages) {
+    if (m.role !== 'user' && m.role !== 'assistant') continue
+    // assistant 只带工具调用、没有正文时（content 为 null / 空串）整条丢弃
+    if (!extractTitleText(m.content).trim()) continue
+    result.push({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      timestamp: m.timestamp,
+    })
+  }
+  return result
 }
 
 /**
@@ -82,8 +114,10 @@ export async function generateTitle(
     throw new Error(`Provider "${providerId}" 未注册`)
   }
 
-  const contextMessages: Message[] = [firstUser]
-  if (firstAssistant) contextMessages.push(firstAssistant)
+  // ⚠️ 必须清洗：首条 assistant 常常是「纯工具调用轮次」，直接透传会被 API 判为非法报文
+  const contextMessages = sanitizeTitleContext(
+    firstAssistant ? [firstUser, firstAssistant] : [firstUser],
+  )
 
   const request: ChatRequest = {
     model,
