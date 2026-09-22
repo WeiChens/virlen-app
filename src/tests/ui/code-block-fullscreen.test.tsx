@@ -95,7 +95,7 @@ describe('CodeBlock 全屏', () => {
     document.body.appendChild(host)
     const root = createRoot(host)
     await act(async () => {
-      root.render(<CodeBlock>{'npm run dev'}</CodeBlock>)
+      root.render(<CodeBlock inlineCode>{'npm run dev'}</CodeBlock>)
     })
 
     expect(host.querySelector('.code-fullscreen-btn')).toBeNull()

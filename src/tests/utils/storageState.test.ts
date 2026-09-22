@@ -130,7 +130,7 @@ describe('StorageState', () => {
   })
 
   it('key 太短时应输出警告', () => {
-    const warnSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     new StorageState('ab', DEFAULT_STATE, 0)
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('key too short'),

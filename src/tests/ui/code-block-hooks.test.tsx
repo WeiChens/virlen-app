@@ -91,7 +91,7 @@ describe('CodeBlock：行内 / 块状切换不改变 hook 数量', () => {
   it('同一位置 块状 → 行内 → 块状 往返，hook 数量始终一致', async () => {
     const view = (children: string) => (
       <div className="host">
-        <CodeBlock>{children}</CodeBlock>
+        <CodeBlock inlineCode>{children}</CodeBlock>
       </div>
     )
 

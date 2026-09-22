@@ -19,15 +19,18 @@ import {
 
 describe('REASONING_EFFORT_UNION', () => {
   it('应覆盖各厂商档位名称的并集（共 8 个）', () => {
+    // 'off' 与 'none' 同义（关闭推理），必须紧跟在 'none' 之后——
+    // sortReasoningEfforts 依赖该顺序做归一化，档位需单调：
+    // none/off < minimal < low < medium < high < xhigh < max
     expect([...REASONING_EFFORT_UNION]).toEqual([
       'none',
+      'off',
       'minimal',
       'low',
       'medium',
       'high',
       'xhigh',
       'max',
-      'off',
     ])
   })
 

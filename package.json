@@ -2,7 +2,7 @@
   "name": "virlen-app",
   "description": "全能型 AI 智能体桌面客户端 — 多模型、工具调用、视觉识别、skill",
   "private": true,
-  "version": "0.1.2",
+  "version": "1.1.37",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -14,7 +14,8 @@
     "build": "tsc && npm run clean && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "build:msix": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-msix.ps1"
+    "build:msix": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-msix.ps1",
+    "update": "node scripts/update-version.mjs"
   },
   "dependencies": {
     "@monaco-editor/react": "4.7.0",
