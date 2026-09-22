@@ -1069,3 +1069,169 @@
     }
   }
 }
+
+/* ==================== read_skill_source（技能源码） ====================
+   视觉语言对齐 message/code-block 与 terminal 卡：**标题条（sticky）+ 分区主体**，
+   全部走主题令牌；整卡只留**一个**滚动区（max-height + overflow），
+   不在卡内再套第二层纵向滚动 —— 嵌套滚动会让滚轮在子区“卡住”（参见 XtermTerminal 的滚轮链处理）。 */
+.skill-source-short {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+
+  .skill-source-short-name {
+    color: var(--accent-color, #4f46e5);
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+
+  .skill-source-short-path {
+    color: var(--text-tertiary, #999);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.skill-source-view {
+  /* 与 execute-command-wrapper / code-block 同一条卡片边距语系 */
+  margin: 4px 20px 20px 28px;
+  width: min(880px, 92%);
+  max-height: 70vh;
+  overflow-y: auto;
+  text-align: left;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 8px;
+  background: var(--bg-primary, #fff);
+  font-size: var(--font-size-sm);
+
+  .skill-source-header {
+    /* 卡内滚动时标题条不跟着跑（与 code-block-header 同策略） */
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--bg-secondary, #f9fafb);
+    border-bottom: 1px solid var(--border-color, #e5e5e5);
+
+    /* 技能名是这张卡的视觉焦点：加粗 + 占满左侧剩余空间 */
+    .skill-source-name {
+      flex: 1;
+      min-width: 0;
+      font-weight: 600;
+      color: var(--text-primary, #1a1a1a);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* 图标按钮：比长文案按钮省宽，且与 CodeBlock / 终端块的操作位一致 */
+    .skill-source-icon-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--text-secondary, #888);
+      cursor: pointer;
+
+      svg {
+        width: 13px;
+        height: 13px;
+      }
+
+      &:hover {
+        background: rgba(0, 0, 0, 0.06);
+        color: var(--accent-color, #4f46e5);
+      }
+    }
+  }
+
+  /* 路径属元信息：弱化颜色 + 等宽，但保持可选中/可 hover 看全路径 */
+  .skill-source-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding: 6px 10px;
+
+    .skill-source-meta-label {
+      flex-shrink: 0;
+      font-size: 11px;
+      color: var(--text-tertiary, #999);
+    }
+
+    .skill-source-meta-path {
+      flex: 1;
+      min-width: 0;
+      font-family: 'JetBrains Mono', Consolas, monospace;
+      font-size: 11px;
+      color: var(--text-secondary, #888);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  .skill-source-section {
+    padding: 0 10px 12px;
+
+    /* 分区标题：accent 竖条 + 小号字距 → 不靠字号也能拉开层级 */
+    .skill-source-section-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+      color: var(--text-secondary, #888);
+
+      &::before {
+        content: '';
+        width: 3px;
+        height: 12px;
+        border-radius: 2px;
+        background: var(--accent-color, #4f46e5);
+      }
+    }
+  }
+
+  .skill-source-tree {
+    margin: 0;
+    padding: 8px 10px;
+    border-radius: 6px;
+    /* 与下方的 Markdown 正文底区分：让两层信息有各自的“容器” */
+    background: var(--bg-secondary, #f9fafb);
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre;
+    /* 只做横向滚动：纵向交给整张卡，避免嵌套滚动 */
+    overflow-x: auto;
+  }
+
+  .skill-source-md {
+    padding: 0 2px;
+    /* 正文高度不限死：整张卡 max-height 70vh + 自身滚动，滚轮只有一个归属 */
+  }
+
+  .skill-source-raw {
+    margin: 0;
+    padding: 10px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    font-size: var(--font-size-sm);
+    line-height: 1.6;
+  }
+}

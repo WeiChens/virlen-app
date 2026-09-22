@@ -17,6 +17,7 @@ import VisionAnalyzeMessage from './VisionAnalyzeMessage'
 import WebSearchMessage from './WebSearchMessage'
 import CopyMoveFileMessage from './CopyMoveFileMessage'
 import ListSkillsMessage from './ListSkillsMessage'
+import ReadSkillSourceMessage from './ReadSkillSourceMessage'
 import KnowledgeBaseMessage from './KnowledgeBaseMessage'
 import MkdirMessage from './MkdirMessage'
 import QueryMessagesMessage from './QueryMessagesMessage'
@@ -62,6 +63,7 @@ register(new VisionAnalyzeMessage())
 register(new WebSearchMessage())
 register(new CopyMoveFileMessage())
 register(new ListSkillsMessage())
+register(new ReadSkillSourceMessage())
 register(new MkdirMessage())
 registerMulti(
   [
