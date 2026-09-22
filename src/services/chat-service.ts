@@ -1007,7 +1007,8 @@ async function finishWorking(
   }
 
   // 自动设置标题（仅 session 标题仍为默认值时触发一次）
-  // 优先让 AI 生成标题，失败则回退到用户消息截取
+  // 优先让 AI 生成标题（可在「设置 → 聊天设置 → AI 生成标题」关闭），
+  // 关闭或失败则回退到用户消息截取
   if (!isPaused && content) {
     const updatedSession = sessionStore.getSession(sessionId)
     if (updatedSession && updatedSession.title === '新对话') {
@@ -1015,16 +1016,21 @@ async function finishWorking(
       const fallbackTitle = text.slice(0, 30) + (text.length > 30 ? '...' : '')
       let title = fallbackTitle
       const titleStart = Date.now()
-      let titleStatus: 'ai' | 'fallback' | 'fail' = 'fallback'
+      let titleStatus: 'ai' | 'fallback' | 'fail' | 'disabled' = 'fallback'
       let titleError: string | undefined
       try {
-        const aiTitle = await getEngine().generateTitle(
-          updatedSession,
-          getSessionMessages(sessionId),
-        )
-        if (aiTitle) {
-          title = aiTitle
-          titleStatus = 'ai'
+        // 设置项关闭时不发起标题生成的 LLM 调用，直接用回退标题
+        if (!settingsState.value.aiGenerateTitle) {
+          titleStatus = 'disabled'
+        } else {
+          const aiTitle = await getEngine().generateTitle(
+            updatedSession,
+            getSessionMessages(sessionId),
+          )
+          if (aiTitle) {
+            title = aiTitle
+            titleStatus = 'ai'
+          }
         }
       } catch (e: any) {
         titleStatus = 'fail'

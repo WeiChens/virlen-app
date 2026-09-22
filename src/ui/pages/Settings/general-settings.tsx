@@ -340,6 +340,27 @@ function GeneralSettings() {
         </div>
         <div className="setting-row">
           <div className="setting-label">
+            <span className="label-text">{t('AI 生成标题')}</span>
+            <span className="label-desc">
+              {t(
+                '用 AI 根据对话内容生成会话标题\n关闭后不再发起标题生成的 LLM 调用，直接截取首条用户消息',
+              )}
+            </span>
+          </div>
+          <div className="setting-control">
+            <label className="toggle">
+              <input
+                type="checkbox"
+                aria-label={t('AI 生成标题')}
+                checked={s.aiGenerateTitle}
+                onChange={(e) => update('aiGenerateTitle', e.target.checked)}
+              />
+              <span className="toggle-slider" />
+            </label>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-label">
             <span className="label-text">{t('强制激活窗口')}</span>
             <span className="label-desc">
               {t(
@@ -396,7 +417,7 @@ function GeneralSettings() {
             />
           </div>
         </div>
-        <div className="setting-row">
+        {/* <div className="setting-row">
           <div className="setting-label">
             <span className="label-text">{t('最大迭代次数')}</span>
             <span className="label-desc">
@@ -411,14 +432,11 @@ function GeneralSettings() {
               width={120}
             />
           </div>
-        </div>
+        </div> */}
       </div>
       <h2 className="section-title">{t('命令与终端安全')}</h2>
 
       <div className="section">
-        <div className="section-desc">
-          {t('文件与目录的白名单/黑名单在侧栏「安全」中设置')}
-        </div>
         <div className="setting-row">
           <div className="setting-label">
             <span className="label-text">{t('终端权限')}</span>
@@ -434,16 +452,6 @@ function GeneralSettings() {
               width={160}
             />
           </div>
-        </div>
-        {/* 风险说明不能只藏在 Select 选项的 title 里（不展开下拉就看不到） */}
-        <div
-          className={`approval-desc${s.sandboxMode === 'off' ? ' danger' : ''}`}>
-          {s.sandboxMode === 'on' &&
-            t('默认模式，有读文件的权限，只能在工作目录里有写的权限')}
-          {s.sandboxMode === 'readonly' &&
-            t('只读模式，只有读文件的权限，无法写入文件')}
-          {s.sandboxMode === 'off' &&
-            t('完全访问模式，可以访问系统文件，有风险，请谨慎使用')}
         </div>
         <div className="setting-row">
           <div className="setting-label">
@@ -469,8 +477,8 @@ function GeneralSettings() {
             <span className="label-text">{t('Rust 原生引擎')}</span>
             <span className="label-desc">
               {t(
-                '使用 Rust 实现聊天循环与持久化。OpenAI/Anthropic 原生 HTTP，Gemini 与部分工具桥接 JS；会话/消息由 SQLite 直落，不依赖前端。需重新构建后生效',
-              )}
+                '使用 Rust 实现底层agent循环',
+              )}  
             </span>
           </div>
           <div className="setting-control">

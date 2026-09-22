@@ -71,6 +71,11 @@ export interface SettingsStore {
   ragDefaultTopK: number
   /** 是否启用 Rust 原生引擎（默认开启；会话/消息由 Rust SQLite 直落） */
   useRustEngine: boolean
+  /**
+   * 是否用 AI 生成会话标题（默认开启）。
+   * 关闭后不再发起标题生成的 LLM 调用，直接截取首条用户消息作为标题。
+   */
+  aiGenerateTitle: boolean
   /** 是否启用「打开编辑器」功能 */
   editorOpenEnabled: boolean
   /** 编辑器配置列表（可配置多个，如 vscode、idea 等） */
@@ -120,6 +125,7 @@ const defaultSettings: SettingsStore = {
   ragDefaultKnowledgeBaseId: '',
   ragDefaultTopK: 5,
   useRustEngine: true,
+  aiGenerateTitle: true,
   editorOpenEnabled: true,
   editorOpenConfigs: [],
   editorOpenDefaultId: '',

@@ -120,18 +120,13 @@ const FileAccessSecurity = observer(function FileAccessSecurity() {
       <div className="section">
         <div className="section-desc">
           <span className="t">
-            {t('AI 对文件系统的访问规则如下(终端执行不在管控范围内)：')}
+            {t('AI 对文件系统工具实现的访问规则如下(终端执行不在管控范围内)：')}
           </span>
           <b>{t('黑名单目录')}</b>
           {t('完全不能访问')}，<b>{t('工作目录')}</b>
           {t('可以读取和编辑文件')}，<b>{t('白名单目录')}</b>
           {t('可以读取和编辑文件')}，<b>{t('其他目录')}</b>
           {t('只能查看、不能动里面的文件')}
-        </div>
-        <div className="section-desc">
-          {t(
-            '命令 / 脚本执行权限见本页「权限管理」标签；终端沙盒模式与注入环境信息在「通用 → 命令与终端安全」中设置',
-          )}
         </div>
 
         <div className="setting-row">
