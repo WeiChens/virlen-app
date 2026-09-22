@@ -51,14 +51,7 @@ class SearchProviderServiceImpl implements SearchProviderService {
     }
 
     // 打印初始化摘要
-    searchProviderRegistry.list().then((providers) => {
-      if (providers.length > 0) {
-        console.log(
-          `[SearchProvider] Initialized ${providers.length} provider(s):`,
-          providers.map((p) => `${p.name}(${p.id})`).join(', '),
-        )
-      }
-    })
+    searchProviderRegistry.list()
   }
 
   /**

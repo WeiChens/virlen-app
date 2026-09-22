@@ -92,15 +92,15 @@ export function shouldShowUpdate(updateInfo: ICheckUpdateResponse): boolean {
   // 检查是否被用户忽略
   const ignoredVersion = getIgnoredVersion()
   if (ignoredVersion === latestVersion) {
-    console.log(`[UpdateService] 版本 ${latestVersion} 已被用户忽略，跳过弹窗`)
+    // console.log(`[UpdateService] 版本 ${latestVersion} 已被用户忽略，跳过弹窗`)
     return false
   }
 
   // 检查 7 日免打扰
   const snoozeUntil = getSnoozeUntil()
   if (snoozeUntil !== null) {
-    const remainingDays = Math.ceil((snoozeUntil - Date.now()) / (1000 * 60 * 60 * 24))
-    console.log(`[UpdateService] 免打扰还剩 ${remainingDays} 天，跳过弹窗`)
+    // const remainingDays = Math.ceil((snoozeUntil - Date.now()) / (1000 * 60 * 60 * 24))
+    // [UpdateService] 免打扰还剩 ${remainingDays} 天，跳过弹窗
     return false
   }
 

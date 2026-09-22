@@ -19,10 +19,6 @@
  *   }
  */
 import { searchProviderRegistry } from '@/domain'
-import {
-  TavilySearchProvider,
-  SearXNGProvider,
-} from '@/infrastructure/search-providers'
 
 /**
  * 初始化并注册所有搜索供应商
@@ -36,8 +32,4 @@ import {
  */
 export async function searchProviderInit(): Promise<void> {
   const providers = await searchProviderRegistry.list()
-  console.log(
-    `[SearchProvider] Initialized ${providers.length} provider(s):`,
-    providers.map((p) => p.name).join(', '),
-  )
 }

@@ -66,7 +66,6 @@ export async function assembleAgentPrompt(
     }
   }
 
-  // console.log(parts.join('\n\n'))
   return parts.join('\n\n')
 }
 

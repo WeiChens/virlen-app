@@ -48,7 +48,6 @@ export function useMessageBox() {
       }
     }, [])
     function onConfirmHandler(index: number) {
-      // console.log(messageBoxList)
       messageBoxList[index].resolve(true)
       setMessageBoxList((list) => {
         list.splice(index, 1)

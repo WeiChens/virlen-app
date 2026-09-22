@@ -77,7 +77,7 @@ class StorageState<T extends object> {
     }
     this.key = '_storage_state_' + key
     if (key.length < 5) {
-      console.log('key too short, please use a longer key')
+      console.warn('key too short, please use a longer key')
     }
     this.value = getLocal<T>(defaultValue, this.key, this.storage)
     this.defaultValue = defaultValue
