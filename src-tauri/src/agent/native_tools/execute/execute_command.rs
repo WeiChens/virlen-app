@@ -171,17 +171,18 @@ pub(crate) async fn execute_command_tool(
                     }
                     return run_command_native(ctx, &exec_cmd, timeout, bypass_sandbox).await;
                 }
-                return Ok(NativeToolOutcome::Value {
-                    content,
-                    ui_data: None,
-                });
+                // 用户没有放行（既非「批准」也不是「允许」）→ 命令一行都没跑，
+                // ⚠️ 必须按**失败**回报：否则 tool 消息 is_error=false，工具卡片显示成绿色「成功」。
+                return Ok(NativeToolOutcome::Error(content));
             }
             BridgeInteractionResult::Error(msg) => Ok(NativeToolOutcome::Error(msg)),
             BridgeInteractionResult::Shelved => Ok(NativeToolOutcome::Shelved),
-            BridgeInteractionResult::Cancelled => Ok(NativeToolOutcome::Value {
-                content: "[User cancelled]".to_string(),
-                ui_data: None,
-            }),
+            // 用户拒绝授权 / Esc 取消 → 未执行任何命令。
+            // ⚠️ 同样走 Error 通道（status=failed），与 JS 桥路径（tool_executor.rs::handle_user_interaction）
+            // 和 TS 引擎保持一致，避免「拒绝授权」被渲染成绿色成功。
+            BridgeInteractionResult::Cancelled => {
+                Ok(NativeToolOutcome::Error("[User cancelled]".to_string()))
+            }
         }
     } else {
         run_command_native(ctx, &cmd_str, timeout, bypass_sandbox).await
@@ -816,7 +817,8 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// Step 2 ①：终端内确认取消（Esc / Ctrl+C）→ 工具返回 `[User cancelled]`。
+    /// Step 2 ①：终端内确认取消（Esc / Ctrl+C）→ 工具返回 `[User cancelled]`，
+    /// 且必须走 **Error**（失败）通道 —— UI 依据 `is_error` 标红（工具卡片圆点 / 终端状态徽标）。
     #[tokio::test]
     async fn test_execute_command_terminal_confirm_cancelled() {
         let dir = std::env::temp_dir().join(format!("virlen_confirm_c_{}", uuid::Uuid::new_v4()));
@@ -857,10 +859,10 @@ mod tests {
         assert!(confirmer.await.unwrap(), "应出现用户交互请求");
 
         match outcome {
-            NativeToolOutcome::Value { content, .. } => {
+            NativeToolOutcome::Error(content) => {
                 assert_eq!(content, "[User cancelled]");
             }
-            other => panic!("expected Value, got {other:?}"),
+            other => panic!("拒绝授权必须走 Error（UI 标红），got {other:?}"),
         }
 
         std::fs::remove_dir_all(&dir).ok();

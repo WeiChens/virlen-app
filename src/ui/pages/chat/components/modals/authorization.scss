@@ -83,6 +83,12 @@
       font-size: 13px;
       cursor: pointer;
       transition: all 0.15s;
+
+      /* 键盘操作：焦点落在哪一项必须有可见提示（打开时默认在「允许执行」） */
+      &:focus-visible {
+        outline: var(--focus-ring);
+        outline-offset: 2px;
+      }
     }
 
     .btn-shelve {

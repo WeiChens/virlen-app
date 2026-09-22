@@ -15,6 +15,7 @@ import { memo, useRef, useState } from 'react'
 import CollapsedSvg from '@/ui/components/icons/CollapsedSvg'
 import ThinkSvg from '@/ui/components/icons/ThinkSvg'
 import { ToolCallMessage, ToolCallGroup } from '../tool-call'
+import SummaryMessage from './summary-message'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 import { settingsState } from '@/ui/store'
 import { v4 } from '@/utils/uuid'
@@ -89,6 +90,7 @@ function MessageBubble({
   const isTool = message.role === 'tool'
   const isAssistant = message.role === 'assistant'
   const isFeedback = message.role === 'feedback'
+  const isSummary = message.role === 'summary'
   if (isTool) return null
 
   function getContent(renderer = true): string {
@@ -249,6 +251,12 @@ function MessageBubble({
     message.toolCalls.length > 0 &&
     !showContent &&
     hideToolCallThink
+
+  // 上下文压缩产物（role='summary'）：正文可能极长，不在消息流里铺开，
+  // 只渲染可点击的提示条，摘要全文放弹窗（详见 summary-message.tsx）
+  if (isSummary) {
+    return <SummaryMessage message={message} />
+  }
 
   // 反馈消息：居中系统通知样式
   if (isFeedback) {

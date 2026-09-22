@@ -4,6 +4,7 @@ import {
   normalizeTreePath,
   parentDirOf,
   pasteDirFor,
+  rankFilePaths,
   selectRangePaths,
   treeBaseName,
 } from '@/ui/pages/chat/components/sidebar/tree-rows'
@@ -206,5 +207,64 @@ describe('selectRangePaths', () => {
     expect(selectRangePaths(rows, `${ROOT}/a.ts`, `${ROOT}/a.ts`)).toEqual([
       `${ROOT}/a.ts`,
     ])
+  })
+})
+
+/**
+ * 磁盘搜索结果的排序 —— Rust 侧按目录遍历顺序返回，不重排的话最相关的那条
+ * 会散落在列表中间（侧边栏只有 260px 宽，前几行看不到就等于是没找到）。
+ */
+describe('rankFilePaths', () => {
+  const paths = [
+    'C:/ws/src/session-utils/helper.ts',
+    'C:/ws/src/ui/store/sessionStore.ts',
+  ]
+
+  it('末级名称命中 优先于 仅父路径命中（名字命中的那条路径更长也一样靠前）', () => {
+    expect(rankFilePaths(paths, 'session')).toEqual([
+      'C:/ws/src/ui/store/sessionStore.ts',
+      'C:/ws/src/session-utils/helper.ts',
+    ])
+  })
+
+  it('同为名称命中时路径短者优先（层级更浅）', () => {
+    const ranked = rankFilePaths(
+      [
+        'C:/ws/a/b/deep/store.ts',
+        'C:/ws/store.ts',
+        'C:/ws/a/mid/store.ts',
+      ],
+      'store',
+    )
+    expect(ranked).toEqual([
+      'C:/ws/store.ts',
+      'C:/ws/a/mid/store.ts',
+      'C:/ws/a/b/deep/store.ts',
+    ])
+  })
+
+  it('大小写不敏感；查询串前后空白不影响判定', () => {
+    expect(rankFilePaths(['C:/ws/Store.ts'], '  store  ')[0]).toBe(
+      'C:/ws/Store.ts',
+    )
+  })
+
+  it('空关键词原样返回（不白做一次拷贝）', () => {
+    const input = ['C:/ws/a.ts']
+    expect(rankFilePaths(input, '   ')).toBe(input)
+  })
+
+  it('Windows 反斜杠路径也能按末级名判定优先级', () => {
+    const ranked = rankFilePaths(
+      ['C:/ws/store-utils/a.ts', 'C:\\ws\\Store.ts'],
+      'store',
+    )
+    expect(ranked[0]).toBe('C:\\ws\\Store.ts')
+  })
+
+  it('不修改入参（排序在副本上做）', () => {
+    const input = [...paths]
+    rankFilePaths(input, 'session')
+    expect(input).toEqual(paths)
   })
 })

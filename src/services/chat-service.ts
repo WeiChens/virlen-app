@@ -1073,9 +1073,12 @@ export async function compressContext(sessionId: string) {
       0,
     )
     const compressStart = Date.now()
-    const result = await getEngine().compressContext(session, allMessages)
+    // 压缩方式由设置决定：ai = LLM 摘要 / raw = 正文压缩（本地渲染，不发请求）
+    const mode = settingsState.value.contextCompressMode ?? 'ai'
+    const result = await getEngine().compressContext(session, allMessages, mode)
     replaceSessionMessages(sessionId, result.messages)
     track('chat.context.compress', {
+      mode,
       before_msg_count: beforeCount,
       after_msg_count: result.messages.length,
       before_tokens_est: beforeTokens,

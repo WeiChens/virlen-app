@@ -2,6 +2,9 @@
  * sidebar — 侧边栏
  *
  * 三个页签：会话 / 工作目录 / 技能
+ *  - 每个页签的顶部都有一个搜索框（search-box.tsx），只搜当前页签的条目：
+ *    会话 = 标题 / 分组名，工作目录 = 磁盘递归搜文件名，技能 = 名称 / 描述 / 标签；
+ *    关键词挂在**此处**（侧边栏常驻），所以切页签回来仍在
  *  - 会话：每个会话显示 working 状态指示（流式回复中）、按 Agent 或工作目录分组、
  *    支持导出为 Markdown、置顶、导入知识库；
  *    **会话项与分组头的操作统一收拢到右键菜单**（共享组件 ContextMenu，
@@ -46,6 +49,8 @@ import { ragService } from '@/services/rag-service'
 import type { KnowledgeBase } from '@/domain/ports'
 import WorkspaceTree from './workspace-tree'
 import SkillList from './skill-list'
+import SidebarSearch from './search-box'
+import { filterSessionGroups } from './session-filter'
 
 interface Props {
   onSelectSession: (sessionId: string) => void
@@ -168,6 +173,13 @@ function ChatSidebar({
   /** 当前页签：会话 / 工作目录 / 技能 */
   const [activeTab, setActiveTab] = useState<SidebarTab>('sessions')
   /**
+   * 三个页签各自的搜索关键词。放侧边栏一级（而不是各页签组件里）：
+   * 会话页签常驻 DOM、另两个页签切走会卸载，关键词提到这里才能「切回来还在」。
+   */
+  const [sessionQuery, setSessionQuery] = useState('')
+  const [workspaceQuery, setWorkspaceQuery] = useState('')
+  const [skillsQuery, setSkillsQuery] = useState('')
+  /**
    * 会话项右键菜单。全应用唯一的 ContextMenu 实现（与「工作目录」「技能」
    * 页签、消息气泡同源），点外部关闭 / Esc 关闭 / 视口钳制都由它负责，
    * 这里不再需要上一版的 activeMenuId + menuRef + mousedown 监听那套手工逻辑。
@@ -188,13 +200,15 @@ function ChatSidebar({
   const sessionGroupType = settingsState.value.sessionGroupType
   // 在 observer 渲染中读取，确保切换会话时分组高亮能同步刷新
   const currentSessionId = chatState.value.currentSessionId
-  const groups = useMemo(
-    () =>
+  /** 会话搜索关键词（trim + 小写后交给 filterSessionGroups） */
+  const sessionKeyword = sessionQuery.trim().toLowerCase()
+  const groups = useMemo(() => {
+    const all =
       sessionGroupType === 'workspace'
         ? groupSessionsByWorkspace(sessions)
-        : groupSessionsByAgent(sessions),
-    [sessions, sessionGroupType],
-  )
+        : groupSessionsByAgent(sessions)
+    return filterSessionGroups(all, sessionKeyword)
+  }, [sessions, sessionGroupType, sessionKeyword])
 
   const handleNewSession = useCallback(() => {
     chatState.set({ currentSessionId: null, error: null })
@@ -555,32 +569,46 @@ function ChatSidebar({
 
       {/* 会话页签常驻 DOM（只切换显隐），避免切换页签时丢掉滚动位置与分组的展开态 */}
       <div
-        className={
-          activeTab === 'sessions' ? 'session-list' : 'session-list tab-hidden'
-        }>
-        {groups.length > 0 ? (
-          groups.map((group) => (
-            <SessionGroupView
-              key={group.key}
-              group={group}
-              sessionGroupType={sessionGroupType}
-              isCollapsed={!expandGroups[group.key]}
-              isUngrouped={group.key === UNGROUPED_KEY}
-              hasActiveSession={
-                !!currentSessionId &&
-                group.sessions.some((s) => s.id === currentSessionId)
-              }
-              renderSession={renderSession}
-              onToggleGroup={() => toggleGroup(group.key)}
-              onNewSession={() => handleNewSessionInGroup(group)}
-            />
-          ))
-        ) : (
-          <div className="empty-sessions">
-            <p>{t('暂无对话')}</p>
-            <p className="hint">{t('点击上方按钮开始新对话')}</p>
-          </div>
+        className={`session-pane${activeTab === 'sessions' ? '' : ' tab-hidden'}`}>
+        {/* 空列表不配搜索框：一个永远搜不到东西的输入框只会让人以为坏了 */}
+        {sessions.length > 0 && (
+          <SidebarSearch
+            value={sessionQuery}
+            onChange={setSessionQuery}
+            placeholder={t('搜索会话标题…')}
+          />
         )}
+        <div className="session-list">
+          {groups.length > 0 ? (
+            groups.map((group) => (
+              <SessionGroupView
+                key={group.key}
+                group={group}
+                sessionGroupType={sessionGroupType}
+                // 搜索时强制展开：命中项藏在折叠的分组里等于没搜到
+                isCollapsed={sessionKeyword ? false : !expandGroups[group.key]}
+                isUngrouped={group.key === UNGROUPED_KEY}
+                hasActiveSession={
+                  !!currentSessionId &&
+                  group.sessions.some((s) => s.id === currentSessionId)
+                }
+                renderSession={renderSession}
+                onToggleGroup={() => toggleGroup(group.key)}
+                onNewSession={() => handleNewSessionInGroup(group)}
+              />
+            ))
+          ) : sessionKeyword ? (
+            <div className="empty-sessions">
+              <p>{t('未找到匹配的会话')}</p>
+              <p className="hint">{t('试试其他关键词')}</p>
+            </div>
+          ) : (
+            <div className="empty-sessions">
+              <p>{t('暂无对话')}</p>
+              <p className="hint">{t('点击上方按钮开始新对话')}</p>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* 会话项右键菜单（portal 挂到 body，位置由 ContextMenu 钳进视口） */}
@@ -592,12 +620,20 @@ function ChatSidebar({
         />
       )}
 
-      {activeTab === 'workspace' && <WorkspaceTree onAttachPaths={onAttachPaths} />}
+      {activeTab === 'workspace' && (
+        <WorkspaceTree
+          onAttachPaths={onAttachPaths}
+          searchQuery={workspaceQuery}
+          onSearchQueryChange={setWorkspaceQuery}
+        />
+      )}
       {activeTab === 'skills' && (
         <SkillList
           onAttachSkills={onAttachSkills}
           referencedSkills={referencedSkills}
           onToggleSkill={onToggleSkill}
+          searchQuery={skillsQuery}
+          onSearchQueryChange={setSkillsQuery}
         />
       )}
 

@@ -13,6 +13,12 @@
  *      · 双击 = 引用到输入框；右键菜单 = 打开 / 编辑器打开 / 复制 / 粘贴 /
  *        重命名 / 删除 / 在文件管理器中显示…
  *      · 拖到输入框 = 引用成附件；拖到目录行 = 移动到该目录（整份选择集一起）
+ *  - 搜索（页签顶部搜索框，见 search-box.tsx）：关键词非空 → invoke('search_files_by_name')
+ *    递归搜**整个工作目录**（懒加载的树里未展开的目录也能搜到），以扁平结果列表替换树视图；
+ *    遍历时跳过点项与依赖 / 构建目录（node_modules / dist / target …，见 SEARCH_SKIP_DIR_NAMES），
+ *    **除非用户已在树里展开过它**（展开了就是要看里面）；结果只含**文件**（不含目录），上限 60 条。
+ *    点结果 → 逐级加载祖先目录并展开、选中、滚动定位，随后自动清空关键词回到树视图。
+ *    防抖 250ms，新关键词会 stop_task 掉上一次遍历（大目录不做防抖会拖住整个线程）。
  *
  * 与输入框的 `@` 路径补全同源，都是**不经安全校验的只读目录浏览**
  * （树根本身就是用户自己选定/配置的工作目录），仅隐藏点文件；不落盘、不缓存。
@@ -28,6 +34,7 @@ import {
   fileTransferService,
 } from '@/services/file-transfer-service'
 import { formatSize } from '@/infrastructure/tools/file/common'
+import { getPlatform } from '@/utils/common'
 import { showToast } from '@/ui/components/shared/Toast'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 import ContextMenu, { useContextMenu } from '@/ui/components/shared/ContextMenu'
@@ -42,6 +49,7 @@ import {
   normalizeTreePath,
   parentDirOf,
   pasteDirFor,
+  rankFilePaths,
   selectRangePaths,
   treeBaseName,
 } from './tree-rows'
@@ -50,10 +58,17 @@ import { useTreeDrag } from './use-tree-drag'
 import type { TreeDragItem } from './use-tree-drag'
 import { workspaceTreeMenuItems } from './tree-menu'
 import type { TreeMenuTarget } from './tree-menu'
+import SidebarSearch from './search-box'
 
 interface Props {
   /** 把路径作为附件挂到聊天输入框（右键「引用」/ 拖拽到输入框都走它） */
   onAttachPaths: (paths: string[]) => void
+  /**
+   * 搜索关键词与写回。**值由父组件持有**：本组件在切页签时会卸载
+   * （`{activeTab === 'workspace' && ...}`），关键词放本地就丢了。
+   */
+  searchQuery: string
+  onSearchQueryChange: (value: string) => void
 }
 
 /** 行高（与 style.scss 的 .tree-row 保持一致，虚拟滚动按固定行高估算） */
@@ -72,6 +87,39 @@ const BASE_INDENT = 6
  */
 const SIZE_MIN_CONTAINER_WIDTH = 220
 
+/**
+ * 磁盘搜索的命中上限（Rust 侧截断）。
+ * 结果是一次全盘遍历的产物，条数不设上限会把侧边栏变成结果列表页。
+ */
+const SEARCH_MAX_RESULTS = 60
+
+/** 搜索防抖：每敲一个字都全盘遍历一次磁盘代价太大 */
+const SEARCH_DEBOUNCE_MS = 250
+
+/**
+ * 磁盘搜索默认**整棵剪掉**的目录名（依赖 / 缓存 / 构建产物）。
+ *
+ * 为何要剪：这些目录动辄几万文件，搜进去又慢又全是噪音（node_modules 里同名文件一堆），
+ * 用户要的一般是自己的代码。剪枝在 Rust 侧做（`filter_entry`，**不下钻**），不是拿回结果再过滤
+ * —— 否则遍历成本照样付了，且上限 60 条可能被依赖目录先占满。
+ *
+ * 例外：用户**在目录树里展开过**的那一份不剪（见 searchKeepDirs）、——展开了就是确实要看里面；
+ * 点目录（`.git` / `.idea` …）则靠 `includeHidden: false` 整棵跳过，它们在树里本来就不可见。
+ *
+ * ⚠️ 只作用于侧边栏搜索框，不改变模型工具 `search_files_by_name` 的行为（见 Rust 侧注释）。
+ */
+const SEARCH_SKIP_DIR_NAMES = [
+  'node_modules',
+  'bower_components',
+  'dist',
+  'build',
+  'out',
+  'target',
+  'coverage',
+  '__pycache__',
+  'venv',
+]
+
 /** 是否 Tauri 环境（浏览器调试模式下没有 list_directory 命令） */
 function isTauriEnv(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -83,7 +131,26 @@ function compareEntry(a: TreeEntry, b: TreeEntry): number {
   return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
 }
 
-function WorkspaceTree({ onAttachPaths }: Props) {
+/** 搜索结果里的命中片段高亮（只标第一处 —— 文件名很短，全量标注反而是噪音） */
+function highlightMatch(text: string, query: string): React.ReactNode {
+  const q = query.trim()
+  if (!q) return text
+  const at = text.toLowerCase().indexOf(q.toLowerCase())
+  if (at < 0) return text
+  return (
+    <>
+      {text.slice(0, at)}
+      <mark>{text.slice(at, at + q.length)}</mark>
+      {text.slice(at + q.length)}
+    </>
+  )
+}
+
+function WorkspaceTree({
+  onAttachPaths,
+  searchQuery: query,
+  onSearchQueryChange: setQuery,
+}: Props) {
   /** 已加载目录的缓存，key 为目录绝对路径 */
   const [dirs, setDirs] = useState<Record<string, DirState>>({})
   /** 展开状态，key 为目录绝对路径 */
@@ -104,6 +171,14 @@ function WorkspaceTree({ onAttachPaths }: Props) {
   const [selected, setSelected] = useState<Map<string, TreeMenuTarget>>(
     new Map(),
   )
+  /** 搜索结果（已归一化为 / 分隔，并排过序） */
+  const [searchResults, setSearchResults] = useState<string[]>([])
+  /** Rust 侧是否已把结果截断（≥ 上限即视为「可能还有更多」） */
+  const [searchTruncated, setSearchTruncated] = useState(false)
+  const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState('')
+  /** 点击结果定位后要滚到的行：等 rows 更新完（祖先目录已展开）再滚 */
+  const [scrollToPath, setScrollToPath] = useState<string | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   /** Shift 连选的锚点（最近一次单击的行） */
@@ -203,6 +278,86 @@ function WorkspaceTree({ onAttachPaths }: Props) {
     return () => observer.disconnect()
   }, [rootPath])
 
+  /**
+   * 「默认剪掉、但用户已展开」的目录路径：不再剪枝（展开了就是要看里面）。
+   * 搜索期间树不可见 → 这个列表在搜索过程中是稳定的。
+   */
+  const searchKeepDirs = useMemo(
+    () =>
+      Object.keys(expanded).filter(
+        (path) =>
+          expanded[path] && SEARCH_SKIP_DIR_NAMES.includes(treeBaseName(path)),
+      ),
+    [expanded],
+  )
+
+  /**
+   * 关键词 → 磁盘递归搜索（防抖 + 可取消）。
+   *
+   * 两条容易踩的坑：
+   *   1. 新关键词到达时要 `stop_task` 上一次遍历，否则旧结果可能后到并覆盖新结果；
+   *   2. Windows 下 `ignore` 遍历出的路径是 `C:/root\sub\file`（根保留 /，子级用 \），
+   *      而用户习惯按 `/` 输入路径片段 → 查询串在 Windows 上先换成 \，否则「src/ui」永远搜不到。
+   */
+  useEffect(() => {
+    const q = query.trim()
+    if (!q || !rootPath || !isTauriEnv()) {
+      setSearchResults([])
+      setSearchTruncated(false)
+      setSearchError('')
+      setSearching(false)
+      return
+    }
+
+    const taskId = `sidebar_tree_search_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    let cancelled = false
+    setSearching(true)
+    setSearchError('')
+
+    const timer = setTimeout(async () => {
+      try {
+        // os_platform 有进程内缓存，这里不会真的每次都问 Rust
+        const platform = await getPlatform()
+        const matcher = platform === 'windows' ? q.replace(/\//g, '\\') : q
+        const raw: any[] = await invoke('search_files_by_name', {
+          root: rootPath,
+          query: matcher,
+          useRegex: false,
+          maxResults: SEARCH_MAX_RESULTS,
+          taskId,
+          // 点项（.git / .idea …）整棵跳过：树里本来就不可见，遍历它们纯属浪费
+          includeHidden: false,
+          // 依赖 / 构建目录整棵剪掉（Rust 侧 filter_entry 不下钻）
+          skipDirNames: SEARCH_SKIP_DIR_NAMES,
+          // 例外：已在树里展开过的那份忽略目录
+          keepDirs: searchKeepDirs,
+        })
+        if (cancelled) return
+        const rawList: any[] = raw ?? []
+        // 结果里的路径统一归一化成 / 分隔（Windows 下 walk 出来的是 C:/root\sub\file）：
+        // 展示、排序、以及点结果后的祖先目录定位都按归一化后的路径走
+        const paths = rawList
+          .map((item) => normalizeTreePath(String(item?.path ?? '')))
+          .filter(Boolean)
+        setSearchResults(rankFilePaths(paths, q))
+        setSearchTruncated(rawList.length >= SEARCH_MAX_RESULTS)
+      } catch (e: any) {
+        if (cancelled) return
+        setSearchResults([])
+        setSearchError(typeof e === 'string' ? e : e?.message || String(e))
+      } finally {
+        if (!cancelled) setSearching(false)
+      }
+    }, SEARCH_DEBOUNCE_MS)
+
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+      // 任务可能还没注册（防抖期内就换了关键词）→ stop_task 返回 false，无副作用
+      void invoke('stop_task', { taskId }).catch(() => {})
+    }
+  }, [query, rootPath, searchKeepDirs])
+
   /** 可见行（虚拟列表的输入）+ 「路径 → 行信息」索引（Shift 连选要用） */
   const rows = useMemo(
     () => buildTreeRows({ rootPath, dirs, expanded }),
@@ -248,6 +403,42 @@ function WorkspaceTree({ onAttachPaths }: Props) {
   const setSelection = useCallback((targets: TreeMenuTarget[]) => {
     setSelected(new Map(targets.map((target) => [target.path, target])))
   }, [])
+
+  /**
+   * 点搜索结果 → 在树里定位到它：
+   * 逐级加载祖先目录（懒加载的树里它们可能从没被展开过）→ 展开 → 选中 → 滚动到该行，
+   * 最后清空关键词回到树视图（否则结果列表一直盖着树，定位等于没看见）。
+   */
+  const locateSearchResult = useCallback(
+    async (filePath: string) => {
+      const full = normalizeTreePath(filePath)
+      // 搜索结果必然在工作目录下（搜索根就是它）；越界说明状态错乱，直接放弃
+      if (!rootPath || !full.startsWith(rootPath + '/')) return
+
+      const segments = full.slice(rootPath.length + 1).split('/')
+      const chain: string[] = []
+      let current = rootPath
+      for (let i = 0; i < segments.length - 1; i++) {
+        current = `${current}/${segments[i]}`
+        chain.push(current)
+      }
+      // 必须自顶向下加载：父目录没加载时，扁平化只产出它的「加载中」占位行
+      for (const dir of chain) {
+        if (!dirs[dir]?.entries) await loadDir(dir)
+      }
+
+      setExpanded((prev) => {
+        const next: Record<string, boolean> = { ...prev, [rootPath]: true }
+        for (const dir of chain) next[dir] = true
+        return next
+      })
+      setSelection([{ path: full, name: treeBaseName(full), isDir: false }])
+      anchorRef.current = full
+      setScrollToPath(full)
+      setQuery('')
+    },
+    [rootPath, dirs, loadDir, setSelection],
+  )
 
   /**
    * 单击 = 选中：
@@ -599,6 +790,17 @@ function WorkspaceTree({ onAttachPaths }: Props) {
     getItemKey: (index) => rows[index]?.key ?? index,
   })
 
+  // 定位到某行：必须等 rows 里真的出现它（祖先目录已加载 + 已展开）才能滚
+  useEffect(() => {
+    if (!scrollToPath) return
+    const index = rows.findIndex(
+      (row) => row.kind === 'node' && row.path === scrollToPath,
+    )
+    if (index < 0) return
+    virtualizer.scrollToIndex(index, { align: 'center' })
+    setScrollToPath(null)
+  }, [scrollToPath, rows, virtualizer])
+
   const renderRow = (row: TreeRow) => {
     const indent = { paddingLeft: BASE_INDENT + row.depth * INDENT_STEP }
 
@@ -725,6 +927,70 @@ function WorkspaceTree({ onAttachPaths }: Props) {
     )
   }
 
+  /** 关键词非空 = 搜索模式（树视图让位给扁平结果列表） */
+  const isSearching = query.trim().length > 0
+
+  /** 搜索结果列表：树是懒加载的，未展开的目录只有磁盘搜索才能覆盖到 */
+  const renderSearchResults = () => {
+    if (searchError) {
+      return (
+        <div className="tree-message error">
+          {tpl('搜索失败: $__error__', { error: searchError })}
+        </div>
+      )
+    }
+    if (searchResults.length === 0) {
+      return searching ? (
+        <div className="tree-message">{t('搜索中...')}</div>
+      ) : (
+        <div className="sidebar-empty">
+          <p>{t('未找到匹配的文件或文件夹')}</p>
+          <p className="hint">
+            {t('已跳过 node_modules 等依赖 / 构建目录，展开后即可搜到')}
+          </p>
+        </div>
+      )
+    }
+    return (
+      <>
+        {searchResults.map((path) => {
+          const name = treeBaseName(path)
+          // 结果均在 rootPath 下 → 展示「相对工作目录的父路径」，完整路径走 tooltip
+          const rel = path.slice(rootPath.length + 1)
+          const dir = rel.slice(0, rel.length - name.length - 1)
+          return (
+            <div
+              key={path}
+              className="tree-search-item"
+              role="button"
+              tabIndex={0}
+              title={path}
+              onClick={() => void locateSearchResult(path)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  void locateSearchResult(path)
+                }
+              }}>
+              <FileTypeIcon filename={name} className="tree-icon" />
+              <span className="tree-search-name">
+                {highlightMatch(name, query)}
+              </span>
+              {dir && <span className="tree-search-dir">{dir}</span>}
+            </div>
+          )
+        })}
+        {searchTruncated && (
+          <div className="tree-search-more">
+            {tpl('仅显示前 $__count__ 项，可输入更精确的关键词', {
+              count: SEARCH_MAX_RESULTS,
+            })}
+          </div>
+        )}
+      </>
+    )
+  }
+
   if (!rootPath) {
     return (
       <div className="workspace-tree">
@@ -777,23 +1043,35 @@ function WorkspaceTree({ onAttachPaths }: Props) {
     : null
 
   return (
-    <div
-      className={`workspace-tree${isWide ? ' is-wide' : ''}`}
-      ref={scrollRef}>
-      <div
-        className="tree-virtual"
-        style={{ height: virtualizer.getTotalSize() }}>
-        {virtualizer.getVirtualItems().map((item) => (
+    <div className={`workspace-tree${isWide ? ' is-wide' : ''}`}>
+      {/* 搜索框固定在树上方（不随树滚动），与另两个页签同一个组件 */}
+      <SidebarSearch
+        value={query}
+        onChange={setQuery}
+        placeholder={t('搜索文件或文件夹…')}
+      />
+      {/* ⚠️ 滚动容器（virtualizer 的 getScrollElement）必须常驻：
+          搜索时只换里面的子节点，不能把 .tree-scroll 一起卸载掉 */}
+      <div className="tree-scroll" ref={scrollRef}>
+        {isSearching ? (
+          renderSearchResults()
+        ) : (
           <div
-            key={item.key}
-            className="tree-virtual-row"
-            style={{
-              height: item.size,
-              transform: `translateY(${item.start}px)`,
-            }}>
-            {renderRow(rows[item.index])}
+            className="tree-virtual"
+            style={{ height: virtualizer.getTotalSize() }}>
+            {virtualizer.getVirtualItems().map((item) => (
+              <div
+                key={item.key}
+                className="tree-virtual-row"
+                style={{
+                  height: item.size,
+                  transform: `translateY(${item.start}px)`,
+                }}>
+                {renderRow(rows[item.index])}
+              </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
 
       {/* 右键菜单（portal 挂到 body，位置由 ContextMenu 钳进视口） */}

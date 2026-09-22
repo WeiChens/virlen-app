@@ -16,6 +16,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { AgentEnginePort } from '@/domain/ports'
 import type { SendMessageOptions } from '@/domain/engine'
+import type { CompressMode } from '@/domain/engine'
 import type { RunSnapshot } from '@/domain/engine/types'
 import { agentEngine } from '@/domain'
 import { toolRegistry } from '@/domain/tools'
@@ -481,9 +482,10 @@ export const rustEngine: AgentEnginePort = {
   async compressContext(
     session: Session,
     allMessages: Message[],
+    mode?: CompressMode,
   ): Promise<{ summary?: string; messages: Message[] }> {
     // 上下文压缩暂由 TS 引擎提供（非聊天循环核心）
-    return agentEngine.compressContext(session, allMessages)
+    return agentEngine.compressContext(session, allMessages, mode)
   },
 
   async generateTitle(

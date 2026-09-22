@@ -27,8 +27,8 @@ export interface ImageAttachment {
 }
 
 /** 图片最大像素阈值：长 × 宽 > MAX_PIXELS 时进行压缩 */
-const MAX_PIXELS = 960 * 960
-const MAX_DIMENSION = 960
+const MAX_PIXELS = 1920 * 1920
+const MAX_DIMENSION = 1920
 const COMPRESS_QUALITY = 0.85
 
 /** 将 File 转为 base64 data URL（超尺寸自动压缩） */

@@ -122,6 +122,12 @@
       background: var(--selected-bg, #eef2ff);
       border-color: var(--accent-color, #6366f1);
     }
+
+    /* 键盘操作：焦点（⇥ / ↓↑←→ 切到的那一项）必须有可见提示 */
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 2px;
+    }
   }
 
   .choice-checkbox {
@@ -172,6 +178,12 @@
     gap: 8px;
     padding: 12px 24px 20px;
     border-top: 1px solid var(--border-color, #e5e5e5);
+
+    /* 键盘操作：焦点落在哪一项必须有可见提示 */
+    button:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 2px;
+    }
 
     .choice-footer-left {
       display: flex;

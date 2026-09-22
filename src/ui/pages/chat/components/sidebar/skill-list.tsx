@@ -5,6 +5,7 @@
  * 「设置 → 技能」同源：导入 / 删除后此处自动同步（skillStore 是 observable）。
  *
  * 交互（与目录树同一套指针拖拽，见 use-tree-drag.ts）：
+ *   - 顶部搜索框：按 名称 / 描述 / 标签 筛卡片（关键词由父组件持有，切页签回来还在）
  *   - 单击卡片 / 拖到输入框 → **开关式**引用：未引用则引用，已引用则取消
  *   - 已引用的卡片高亮（+「已引用」角标），与输入框里的技能 chip 一一对应
  *   - 右键菜单              → 引用 / 取消引用 / 打开技能目录 / 在文件管理器中显示 / 复制路径
@@ -27,6 +28,7 @@ import ContextMenu, {
 } from '@/ui/components/shared/ContextMenu'
 import { fileMenuItems } from '@/ui/components/shared/ContextMenu/menus'
 import { useTreeDrag } from './use-tree-drag'
+import SidebarSearch from './search-box'
 
 interface Props {
   /** 把技能引用挂到输入框（按技能名读 SKILL.md 全文） */
@@ -35,6 +37,12 @@ interface Props {
   referencedSkills: string[]
   /** 单击卡片：未引用则引用，已引用则取消 */
   onToggleSkill: (name: string) => void
+  /**
+   * 搜索关键词与写回。**值由父组件持有**：本组件在切页签时会卸载
+   * （`{activeTab === 'skills' && ...}`），关键词放本地就丢了。
+   */
+  searchQuery: string
+  onSearchQueryChange: (value: string) => void
 }
 
 /** 右键菜单指向的技能 */
@@ -47,12 +55,27 @@ function SkillList({
   onAttachSkills,
   referencedSkills,
   onToggleSkill,
+  searchQuery: query,
+  onSearchQueryChange: setQuery,
 }: Props) {
   // 读 skillStore → observer 追踪，设置页增删技能后无需手动刷新
   const skills = listRegisteredSkills()
   const menu = useContextMenu<SkillMenuTarget>()
   /** 已引用的技能名集合（数组很小，直接建 Set 判定） */
   const referenced = new Set(referencedSkills)
+
+  /** 关键词：名称 / 描述 / 标签 任一命中即保留（标签用户自己填，搜起来最顺手） */
+  const keyword = query.trim().toLowerCase()
+  const filteredSkills = keyword
+    ? skills.filter(
+        (skill) =>
+          skill.meta.name.toLowerCase().includes(keyword) ||
+          (skill.meta.description || '').toLowerCase().includes(keyword) ||
+          (skill.meta.tags || []).some((tag) =>
+            tag.toLowerCase().includes(keyword),
+          ),
+      )
+    : skills
 
   const { startDrag, draggedRef } = useTreeDrag({
     onDropToInput: (items) => onAttachSkills(items.map((item) => item.name)),
@@ -119,15 +142,30 @@ function SkillList({
   return (
     <>
       <div className="skill-list-panel">
+        <SidebarSearch
+          value={query}
+          onChange={setQuery}
+          placeholder={t('搜索技能…')}
+        />
         <div className="skill-list-count">
-          <span>{tpl('共 $__count__ 个技能', { count: skills.length })}</span>
+          <span>
+            {keyword
+              ? tpl('匹配 $__count__ 个技能', { count: filteredSkills.length })
+              : tpl('共 $__count__ 个技能', { count: skills.length })}
+          </span>
           {/* 单击是「开关」，on / off 都要写明，否则看不出还能再点一下 */}
           <span className="skill-list-hint">
             {t('单击引用 / 取消引用')}
           </span>
         </div>
         <div className="skill-items">
-          {skills.map((skill) => {
+          {filteredSkills.length === 0 && (
+            <div className="sidebar-empty">
+              <p>{t('未找到匹配的技能')}</p>
+              <p className="hint">{t('试试其他关键词')}</p>
+            </div>
+          )}
+          {filteredSkills.map((skill) => {
             const isReferenced = referenced.has(skill.meta.name)
             return (
               <div

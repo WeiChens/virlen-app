@@ -1,0 +1,99 @@
+// ==================== 上下文压缩产物（summary 消息） ====================
+// 样式与 .message-feedback 同族：居中偏左的卡片，用虚线边框表达「这是被压缩掉的历史」
+.message-compress-summary {
+  display: flex;
+  padding: 8px 16px;
+  animation: fadeIn 0.2s ease;
+
+  .compress-summary-card {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    max-width: 85%;
+    padding: 8px 14px;
+    background: var(--summary-bg, rgba(99, 102, 241, 0.06));
+    border: 1px dashed var(--summary-border, rgba(99, 102, 241, 0.35));
+    border-radius: 10px;
+    color: var(--text-secondary, #555);
+    font-family: inherit;
+    font-size: var(--font-size-sm, 13px);
+    text-align: left;
+    cursor: pointer;
+    transition:
+      background 0.15s ease,
+      border-color 0.15s ease;
+
+    &:hover {
+      background: var(--summary-hover-bg, rgba(99, 102, 241, 0.12));
+      border-color: var(--accent-color, #6366f1);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--accent-color, #6366f1);
+      outline-offset: 2px;
+    }
+
+    // 图标靠全局 `svg { fill: var(--icon-color) }` 着色时会被 svg 规则覆盖，
+    // 这里显式给 fill，保证「压缩」卡片在任何主题下都能被认出来
+    .compress-summary-icon {
+      width: 16px;
+      height: 16px;
+      flex: 0 0 auto;
+      fill: var(--accent-color, #6366f1);
+    }
+
+    .compress-summary-main {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .compress-summary-title {
+      color: var(--text-primary, #1a1a1a);
+      font-weight: 500;
+    }
+
+    .compress-summary-meta {
+      color: var(--text-tertiary, #999);
+      font-size: var(--font-size-xs, 12px);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    // 折叠箭头：默认朝右（点开看详情），hover 时轻微右移做提示
+    .compress-summary-expand {
+      width: 12px;
+      height: 12px;
+      flex: 0 0 auto;
+      fill: var(--text-tertiary, #999);
+      transform: rotate(-90deg);
+      transition: transform 0.15s ease;
+    }
+
+    &:hover .compress-summary-expand {
+      fill: var(--accent-color, #6366f1);
+    }
+  }
+}
+
+// ==================== 摘要全文弹窗 ====================
+.compress-summary-modal-meta {
+  margin-bottom: 8px;
+  color: var(--text-tertiary, #999);
+  font-size: var(--font-size-xs, 12px);
+}
+
+// 摘要可能极长（正文压缩可达数万字符）：限制高度并内部滚动，
+// 否则弹窗会被撑到超出屏幕、底部按钮永远看不到
+.compress-summary-modal-body {
+  max-height: 60vh;
+  overflow: auto;
+  padding: 10px 12px;
+  background: var(--assistant-bubble-bg, #f1f1f3);
+  border-radius: 8px;
+  font-size: var(--font-size-sm, 13px);
+  line-height: 1.6;
+  word-break: break-word;
+}

@@ -2,12 +2,13 @@
  * compress-context 测试 — 上下文压缩
  *
  * 覆盖场景：
- * - 没有可压缩的消息时抛异常
+ * - 没有可压缩的消息时抛异常（两种模式）
  * - 未配置 Provider 时抛异常
  * - Provider 未注册时抛异常
  * - API 返回 usage 时优先使用真实 Token 用量
  * - API 未返回 usage 时使用兜底估算
  * - 多次 summary 消息时从最后一条开始压缩
+ * - raw（正文压缩）模式完全本地：不发请求、不记账、不校验 Provider
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { compressContext } from '@/domain/engine/compress-context'
@@ -124,14 +125,12 @@ describe('compressContext', () => {
 
     const summaryMsg = result.messages[2]
     expect(summaryMsg.role).toBe('summary')
-    // 注意：compressContext 目前总是使用估算的 token 用量，
-    // 因为它没有从 response.usage 中读取（response 是 Message 类型，不直接包含 usage）
-    // 估算公式：inputText+systemText 长度 / 4
-    expect(summaryMsg.usage).toBeDefined()
-    expect(summaryMsg.usage!.promptTokens).toBeGreaterThan(0)
-    expect(summaryMsg.usage!.completionTokens).toBeGreaterThan(0)
-    // 确保不是直接用 mock 的 usage（说明使用了真实值）
-    expect(summaryMsg.usage!.promptTokens).not.toBe(150)
+    // API 返回 usage 时必须直接采用真实值（不再本地估算）
+    expect(summaryMsg.usage).toEqual({
+      promptTokens: 150,
+      completionTokens: 30,
+      totalTokens: 180,
+    })
   })
 
   it('API 未返回 usage 时应使用兜底估算', async () => {
@@ -191,5 +190,44 @@ describe('compressContext', () => {
     await expect(
       compressContext(session, [makeMessage(), makeMessage()]),
     ).rejects.toThrow('API 调用失败')
+  })
+
+  it('raw 模式：完全本地，不发请求、不记账、不校验 Provider', async () => {
+    // 会话故意不配模型 / Provider：正文压缩纯本地，不应因此报错
+    const session = makeSession({ modelId: '', providerConfigId: '' })
+    const result = await compressContext(
+      session,
+      [
+        makeMessage({ role: 'user', content: '用户正文' }),
+        makeMessage({
+          role: 'assistant',
+          content: '助手正文',
+          reasoningContent: '思考内容应被丢弃',
+        }),
+      ],
+      'raw',
+    )
+
+    expect(mockGet).not.toHaveBeenCalled()
+    expect(mockChat).not.toHaveBeenCalled()
+    expect(result.messages).toHaveLength(3)
+
+    const summaryMsg = result.messages[2]
+    expect(summaryMsg.role).toBe('summary')
+    // 没有 LLM 调用 → 不入用量账本；但 usage 里带上压缩后的上下文占用（供 token 环展示）
+    expect(summaryMsg.usage).toBeDefined()
+    expect(summaryMsg.usage!.completionTokens).toBe(0)
+    expect(summaryMsg.usage!.totalTokens).toBe(summaryMsg.usage!.promptTokens)
+    expect(summaryMsg.usage!.promptTokens).toBeGreaterThan(0)
+    expect(String(summaryMsg.content)).toContain('用户正文')
+    expect(String(summaryMsg.content)).toContain('助手正文')
+    expect(String(summaryMsg.content)).not.toContain('思考内容应被丢弃')
+  })
+
+  it('raw 模式同样要求至少两条可压缩消息', async () => {
+    const session = makeSession()
+    await expect(
+      compressContext(session, [makeMessage()], 'raw'),
+    ).rejects.toThrow('没有可压缩的消息')
   })
 })

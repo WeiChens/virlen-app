@@ -35,6 +35,7 @@ import { providerPort } from '../provider'
 import { toolRegistry } from '../tools'
 import { AgentEnginePort } from '../ports'
 import { compressContext } from './compress-context'
+import type { CompressMode } from './compress-context'
 import { generateTitle } from './generate-title'
 import { IterationController } from './iteration-controller'
 import type { IProvider } from '@/infrastructure/provider/types'
@@ -44,8 +45,9 @@ export class AgentEngine implements AgentEnginePort {
   compressContext(
     session: Session,
     allMessages: Message[],
+    mode?: CompressMode,
   ): Promise<{ summary?: string; messages: Message[] }> {
-    return compressContext(session, allMessages)
+    return compressContext(session, allMessages, mode)
   }
   generateTitle(session: Session, messages: Message[]): Promise<string> {
     return generateTitle(session, messages)

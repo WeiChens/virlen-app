@@ -24,7 +24,7 @@
 
     .sidebar-header,
     .sidebar-tabs,
-    .session-list,
+    .session-pane,
     .workspace-tree,
     .skill-list-panel {
       opacity: 0;
@@ -34,7 +34,7 @@
 
   &.collapsed .sidebar-header,
   &.collapsed .sidebar-tabs,
-  &.collapsed .session-list,
+  &.collapsed .session-pane,
   &.collapsed .workspace-tree,
   &.collapsed .skill-list-panel {
     transition: opacity 0.15s ease 0.05s;
@@ -503,6 +503,89 @@
     }
   }
 
+  /* ==================== 页签下的搜索框（三个页签共用，见 search-box.tsx） ==================== */
+  /* 位置：页签与内容区之间（.sidebar-tabs 的 8px 下外边距就是它的上间距），
+     不参与滚动；底色 / 圆角跟页签分段控件同一套语言 */
+  .sidebar-search {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    margin: 0 10px 8px;
+    padding: 0 8px;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: var(--input-bg, #f1f1f3);
+    transition:
+      border-color 0.12s ease,
+      background 0.12s ease;
+
+    /* 聚焦时才给强调描边 + 白底：侧边栏这一条很窄，常驻描边会显得脏 */
+    &:focus-within {
+      border-color: var(--accent-color, #4f46e5);
+      background: var(--bg-primary, #fff);
+    }
+
+    .sidebar-search-icon {
+      width: 13px;
+      height: 13px;
+      flex-shrink: 0;
+      fill: var(--text-secondary, #666);
+    }
+
+    .sidebar-search-input {
+      flex: 1;
+      min-width: 0;
+      padding: 0;
+      border: none;
+      outline: none;
+      background: transparent;
+      font-family: inherit;
+      font-size: var(--font-size-sm);
+      color: var(--text-primary, #1a1a1a);
+
+      &::placeholder {
+        color: var(--text-secondary, #999);
+      }
+    }
+
+    /* 清空按钮：与输入框同高，hover 才有底色（否则一行里两个焦点块） */
+    .sidebar-search-clear {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 15px;
+      height: 15px;
+      flex-shrink: 0;
+      padding: 0;
+      border: none;
+      border-radius: 50%;
+      background: transparent;
+      color: var(--text-secondary, #666);
+      cursor: pointer;
+
+      &:hover {
+        background: var(--active-bg, #e8e8ed);
+        color: var(--text-primary, #1a1a1a);
+      }
+
+      svg {
+        width: 10px;
+        height: 10px;
+        fill: currentColor;
+      }
+    }
+  }
+
+  /* 会话页签的外层：搜索框 + 列表（列表自己滚动，搜索框不动） */
+  .session-pane {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
   /* 非当前页签的内容：保留 DOM，仅隐藏 */
   .tab-hidden {
     display: none;
@@ -526,12 +609,23 @@
   }
 
   /* ==================== 工作目录树（虚拟列表） ==================== */
+  /* 外层只负责「搜索框 + 滚动区」的竖向排列；滚动落在 .tree-scroll 上，
+     这样搜索框不随树滚动，虚拟列表的 getScrollElement 也始终指向同一个元素 */
   .workspace-tree {
     flex: 1;
     min-height: 0;
-    overflow: auto;
-    padding: 4px 4px 12px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
     user-select: none;
+
+    .tree-scroll {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      padding: 4px 4px 12px;
+    }
+
     /* 虚拟列表内层：高度 = 总行高，行按 transform 绝对定位 */
     .tree-virtual {
       position: relative;
@@ -716,6 +810,78 @@
       &.error {
         color: var(--color-error, #cf222e);
       }
+    }
+
+    /* ==================== 搜索结果（扁平列表） ====================
+       关键词非空时整个滚动区换成它：目录树是懒加载的，没有展开过的目录里有什么
+       只能靠磁盘搜索才知道，所以这一层不是「过滤现有行」而是独立的结果列表。 */
+    .tree-search-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      height: 24px;
+      padding: 0 6px;
+      border-radius: 3px;
+      cursor: pointer;
+
+      &:hover {
+        background: var(--hover-bg, #f0f0f0);
+      }
+
+      /* 键盘用户拿不到 hover：聚焦时给一圈内描边 */
+      &:focus-visible {
+        outline: var(--focus-ring, 2px solid var(--accent-color, #4f46e5));
+        outline-offset: -2px;
+      }
+
+      .tree-icon {
+        width: 16px;
+        height: 16px;
+        flex-shrink: 0;
+        fill: var(--text-secondary, #666);
+        color: var(--text-secondary, #666);
+      }
+
+      /* 文件名：跟着关键词高亮，不够宽时优先保留它 */
+      .tree-search-name {
+        flex-shrink: 0;
+        max-width: 100%;
+        font-size: var(--font-size-sm);
+        color: var(--text-primary, #1a1a1a);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+
+        mark {
+          padding: 0 2px;
+          border-radius: 3px;
+          background: color-mix(
+            in srgb,
+            var(--primary, #4f46e5) 24%,
+            transparent
+          );
+          color: inherit;
+          font-weight: 600;
+        }
+      }
+
+      /* 父路径（相对工作目录）：次级信息，被挤压时优先省略（完整路径在 title 里） */
+      .tree-search-dir {
+        flex: 1;
+        min-width: 0;
+        font-size: var(--font-size-xs);
+        color: var(--text-tertiary, #767676);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+    }
+
+    /* 命中数到上限时的提示（Rust 侧已截断，不是全部结果） */
+    .tree-search-more {
+      padding: 4px 8px;
+      font-size: var(--font-size-xs);
+      color: var(--text-secondary, #666);
     }
 
     /* 窄侧边栏下不显示体积（文件名本身就不够显示），够宽时 hover 才露出 */

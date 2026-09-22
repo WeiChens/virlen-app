@@ -3,6 +3,7 @@ use grep_searcher::{Searcher, SearcherBuilder, Sink, SinkMatch};
 use ignore::Walk;
 use ignore::WalkBuilder;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Serialize)]
@@ -18,12 +19,26 @@ pub struct TextSearchResult {
 }
 
 /// 按文件名搜索（支持纯文本模糊匹配或正则匹配）
+///
+/// 三个参数控制「遍历范围」（侧边栏搜索框靠它们避免把 `node_modules` 扫一遍）：
+/// - `include_hidden=false`：跳过点文件 / 点目录（与目录树的 `list_directory` 一致）；
+/// - `skip_dir_names`：这些**目录名**整棵剪掉（`node_modules` / `dist` / `target` …），
+///   它们动辄几万文件，搜进去又慢又全是噪音；
+/// - `keep_dirs`：剪枝的**例外**，已归一化（`\` → `/`）的绝对路径 —— 用户已在目录树里
+///   展开过的那份忽略目录（展开了就是确实要看里面，不该再剪）。
+///
+/// ⚠️ 模型工具（`native_tools::search`）调用时传 `true` + 两个空数组，**保持原行为**：
+/// 它可以用显式路径 / glob 表达「就要搜 node_modules」的意图，UI 搜索框没有这种表达手段，
+/// 所以默认剪枝的取舍只落在 UI 侧。
 pub fn search_files_by_name(
     root: &str,
     query: &str,
     use_regex: bool,
     max_results: usize,
     cancel_flag: &AtomicBool,
+    include_hidden: bool,
+    skip_dir_names: &[String],
+    keep_dirs: &[String],
 ) -> Vec<FileSearchResult> {
     let re = if use_regex {
         regex::Regex::new(query).ok()
@@ -32,12 +47,27 @@ pub fn search_files_by_name(
     };
     let lower_query = query.to_lowercase();
 
+    // filter_entry 要求闭包 'static，所以这里拿所有权
+    let skip_names: HashSet<String> = skip_dir_names.iter().cloned().collect();
+    let keep: HashSet<String> = keep_dirs.iter().map(|p| normalize_sep(p)).collect();
+
+    let mut builder = WalkBuilder::new(root);
+    builder.hidden(!include_hidden);
+    if !skip_names.is_empty() {
+        builder.filter_entry(move |entry| {
+            // 根目录本身不参与剪枝：工作目录恰好叫 node_modules 也得能搜
+            if entry.depth() == 0 {
+                return true;
+            }
+            if !skip_names.contains(&*entry.file_name().to_string_lossy()) {
+                return true;
+            }
+            keep.contains(&normalize_sep(&entry.path().to_string_lossy()))
+        });
+    }
+
     let mut results = Vec::new();
-    for entry in WalkBuilder::new(root)
-        .hidden(false)
-        .build()
-        .filter_map(|e| e.ok())
-    {
+    for entry in builder.build().filter_map(|e| e.ok()) {
         if cancel_flag.load(Ordering::SeqCst) {
             break;
         }
@@ -61,6 +91,13 @@ pub fn search_files_by_name(
         }
     }
     results
+}
+
+/// 路径分隔符统一成 `/`。
+/// Windows 下 `ignore` 遍历出的子路径是 `C:/root\sub\file`（根保留 /，子级用 \），
+/// 而前端 `expanded` 的 key 全经 `normalizeTreePath` 归一化 → 比较前必须对齐。
+fn normalize_sep(path: &str) -> String {
+    path.replace('\\', "/")
 }
 
 /// 在文件中搜索文本内容（正则匹配），自动跳过二进制文件
@@ -287,5 +324,111 @@ impl<'a> Sink for TextSearchSink<'a> {
             line: String::from_utf8_lossy(mat.bytes()).to_string(),
         });
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// 造一棵临时工作目录：
+    /// ```text
+    /// <root>/src/needle.ts          ← 正常文件
+    /// <root>/node_modules/pkg/needle.js  ← 被剪掉的依赖目录
+    /// <root>/.git/needle.txt         ← 点目录（include_hidden=false 时跳过）
+    /// ```
+    fn fixture(tag: &str) -> std::path::PathBuf {
+        let mut root = std::env::temp_dir();
+        root.push(format!("virlen_search_{}_{}", tag, std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("node_modules").join("pkg")).unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join("src").join("needle.ts"), "").unwrap();
+        fs::write(root.join("node_modules").join("pkg").join("needle.js"), "").unwrap();
+        fs::write(root.join(".git").join("needle.txt"), "").unwrap();
+        root
+    }
+
+    fn run(
+        root: &std::path::Path,
+        include_hidden: bool,
+        skip: &[String],
+        keep: &[String],
+    ) -> Vec<String> {
+        let flag = AtomicBool::new(false);
+        search_files_by_name(
+            root.to_str().unwrap(),
+            "needle",
+            false,
+            100,
+            &flag,
+            include_hidden,
+            skip,
+            keep,
+        )
+        .into_iter()
+        .map(|r| normalize_sep(&r.path))
+        .collect()
+    }
+
+    #[test]
+    fn skip_dir_names_prunes_the_whole_subtree() {
+        let root = fixture("skip");
+        let skip = ["node_modules".to_string()];
+
+        // 不剪：src + node_modules（.git 被 include_hidden=false 挡掉）
+        assert_eq!(run(&root, false, &[], &[]).len(), 2);
+        // 剪 node_modules：只剩 src
+        let hits = run(&root, false, &skip, &[]);
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].ends_with("src/needle.ts"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn keep_dirs_exempts_the_expanded_copy_only() {
+        let root = fixture("keep");
+        let skip = ["node_modules".to_string()];
+        let root_norm = normalize_sep(&root.to_string_lossy());
+
+        // 默认剪掉
+        assert_eq!(run(&root, false, &skip, &[]).len(), 1);
+
+        // 用户展开了 <root>/node_modules → 这一份不再剪（src + node_modules/pkg）
+        let hits = run(
+            &root,
+            false,
+            &skip,
+            &[format!("{}/node_modules", root_norm)],
+        );
+        assert_eq!(hits.len(), 2);
+        assert!(hits.iter().any(|p| p.ends_with("src/needle.ts")));
+        assert!(hits.iter().any(|p| p.ends_with("node_modules/pkg/needle.js")));
+
+        // 展开的是别的路径（"" 路径不匹配）→ 仍按剪枝处理
+        assert_eq!(
+            run(&root, false, &skip, &[format!("{}/dist", root_norm)]).len(),
+            1
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn include_hidden_false_prunes_dot_dirs() {
+        let root = fixture("hidden");
+        let skip = ["node_modules".to_string()];
+
+        // 跳隐藏：只剩 src
+        let hits = run(&root, false, &skip, &[]);
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].ends_with("src/needle.ts"));
+
+        // 含隐藏（模型工具走的档）：多出 .git 里的同名文件
+        let all = run(&root, true, &skip, &[]);
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().any(|p| p.ends_with(".git/needle.txt")));
+        let _ = fs::remove_dir_all(&root);
     }
 }

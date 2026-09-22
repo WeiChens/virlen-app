@@ -1,4 +1,5 @@
 import { SendMessageOptions } from '@/domain/engine'
+import type { CompressMode } from '@/domain/engine'
 import { RunSnapshot } from '../engine/types'
 import { Message, Session } from '@/types'
 
@@ -17,6 +18,7 @@ export interface AgentEnginePort {
   compressContext(
     session: Session,
     allMessages: Message[],
+    mode?: CompressMode,
   ): Promise<{ summary?: string; messages: Message[] }>
   /**
    * 生成会话标题（基于对话内容，供 AI 自动命名）

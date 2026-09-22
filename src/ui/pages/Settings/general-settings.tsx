@@ -90,6 +90,23 @@ function GeneralSettings() {
     { value: 'off', label: t('完全访问模式'), title: t('完全访问模式，可以访问系统文件，有风险，请谨慎使用') },
   ]
 
+  const COMPRESS_MODE_OPTIONS: {
+    value: SettingsStore['contextCompressMode']
+    label: string
+    title: string
+  }[] = [
+    {
+      value: 'ai',
+      label: t('AI 摘要'),
+      title: t('调用 AI 把历史总结成一段，最省 token，但需要一次模型调用（慢、要花钱）'),
+    },
+    {
+      value: 'raw',
+      label: t('正文压缩'),
+      title: t('本地压缩，毫秒级完成且不花钱；正文一字不删，只去掉思考过程并省略超长工具输出'),
+    },
+  ]
+
   useEffect(() => {
     if (!s.defaultWorkspace) {
       resolveDefaultWorkspace().then(setResolvedWorkspace)
@@ -357,6 +374,29 @@ function GeneralSettings() {
               />
               <span className="toggle-slider" />
             </label>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="label-text">{t('上下文压缩方式')}</span>
+            <span className="label-desc">
+              {t(
+                '点击 token 环压缩上下文时使用的方式\nAI 摘要更省 token，但需要一次模型调用；正文压缩本地完成、毫秒级，正文不删，只去掉思考过程并省略超长工具输出',
+              )}
+            </span>
+          </div>
+          <div className="setting-control">
+            <Select
+              value={s.contextCompressMode}
+              onChange={(v) =>
+                update(
+                  'contextCompressMode',
+                  v as SettingsStore['contextCompressMode'],
+                )
+              }
+              options={COMPRESS_MODE_OPTIONS}
+              width={160}
+            />
           </div>
         </div>
         <div className="setting-row">

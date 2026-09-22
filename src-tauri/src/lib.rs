@@ -82,13 +82,27 @@ async fn search_files_by_name(
     use_regex: bool,
     max_results: usize,
     task_id: String,
+    // 遍历范围（侧边栏搜索框用）：跳过点项 / 依赖·构建目录，
+    // keep_dirs 是已展开的那份忽略目录（例外）。详见 search::search_files_by_name 注释。
+    include_hidden: bool,
+    skip_dir_names: Vec<String>,
+    keep_dirs: Vec<String>,
 ) -> Result<Vec<search::FileSearchResult>, String> {
     let cancel_flag = task_manager::register(&task_id);
     let root_c = root.clone();
     let query_c = query.clone();
 
     let task = tokio::task::spawn_blocking(move || {
-        search::search_files_by_name(&root_c, &query_c, use_regex, max_results, &cancel_flag)
+        search::search_files_by_name(
+            &root_c,
+            &query_c,
+            use_regex,
+            max_results,
+            &cancel_flag,
+            include_hidden,
+            &skip_dir_names,
+            &keep_dirs,
+        )
     });
 
     let result = tokio::time::timeout(std::time::Duration::from_secs(30), task)

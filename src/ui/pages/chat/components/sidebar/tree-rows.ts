@@ -75,6 +75,30 @@ export function pasteDirFor(row: { path: string; isDir: boolean }): string {
 }
 
 /**
+ * 文件名搜索的结果排序（工作目录页签的搜索框用）。
+ *
+ * Rust 侧（search_files_by_name → search.rs）是「按目录遍历顺序、拿整条路径做子串匹配」，
+ * 结果直接展示会让最相关的那条散落在中间，所以这里按三条规则重排：
+ *   1. **末级名称**命中 优先于 仅父路径命中（搜 `session` 时 `sessionStore.ts`
+ *      应排在 `src/session-utils/helper.ts` 前面）；
+ *   2. 路径短者优先（层级更浅，通常就是用户要找的那个）；
+ *   3. 路径字典序（保证同分结果顺序稳定，不会每次搜索都跳）。
+ */
+export function rankFilePaths(paths: string[], query: string): string[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return paths
+  const rank = (p: string): number =>
+    treeBaseName(p).toLowerCase().includes(q) ? 0 : 1
+  return [...paths].sort((a, b) => {
+    const ra = rank(a)
+    const rb = rank(b)
+    if (ra !== rb) return ra - rb
+    if (a.length !== b.length) return a.length - b.length
+    return a.localeCompare(b)
+  })
+}
+
+/**
  * Shift 连选：取可见行里 anchor → focus 之间的**节点行**路径（含两端，按可见顺序）。
  *
  * 为什么以「可见行」为序：树是一维展开视图，折叠起来的节点不在 rows 里，

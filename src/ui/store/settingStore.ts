@@ -9,6 +9,7 @@ import {
 import StorageState from '@/utils/storageState'
 import { track, isSensitiveKey } from '@/utils/telemetry'
 import type { ModelPrice } from '@/domain/pricing'
+import type { CompressMode } from '@/domain/engine'
 
 export type { EditorOpenConfig }
 
@@ -76,6 +77,13 @@ export interface SettingsStore {
    * 关闭后不再发起标题生成的 LLM 调用，直接截取首条用户消息作为标题。
    */
   aiGenerateTitle: boolean
+  /**
+   * 上下文压缩方式（点击 token 环时使用）
+   *
+   * - `ai`：AI 摘要，一次 LLM 调用把历史总结成一段（最省 token，但慢、要花钱）；
+   * - `raw`：正文压缩，本地渲染（毫秒级、零消耗，但保留全部正文、只去掉思考过程并省略超长工具输出）
+   */
+  contextCompressMode: CompressMode
   /** 是否启用「打开编辑器」功能 */
   editorOpenEnabled: boolean
   /** 编辑器配置列表（可配置多个，如 vscode、idea 等） */
@@ -126,6 +134,7 @@ const defaultSettings: SettingsStore = {
   ragDefaultTopK: 5,
   useRustEngine: true,
   aiGenerateTitle: true,
+  contextCompressMode: 'ai',
   editorOpenEnabled: true,
   editorOpenConfigs: [],
   editorOpenDefaultId: '',

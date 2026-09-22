@@ -95,6 +95,12 @@ toolRegistry.register(
         useRegex: effectiveUseRegex,
         maxResults: args.max_results ?? 30,
         taskId,
+        // 遍历范围三个参数固定为「不剪枝」——保持工具原有行为（含隐藏项、不跳依赖目录），
+        // 与 Rust 原生实现（native_tools/search/search_files_by_name.rs）逐字对齐。
+        // 「默认跳过 node_modules 等目录」只是侧边栏搜索框的取舍，不作用于模型工具。
+        includeHidden: true,
+        skipDirNames: [],
+        keepDirs: [],
       }),
       () => {
         cancelled = true

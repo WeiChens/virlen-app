@@ -186,18 +186,17 @@ pub(crate) async fn execute_script_tool(
                 )
                 .await;
             }
-            // 未实际执行（拒绝/其他）→ 未落盘，无需清理
-            Ok(NativeToolOutcome::Value {
-                content: interaction_msg,
-                ui_data: None,
-            })
+            // 未实际执行（拒绝/其他）→ 未落盘，无需清理。
+            // ⚠️ 必须走 Error（失败）通道：脚本一行都没跑，UI 不能显示成绿色「成功」。
+            Ok(NativeToolOutcome::Error(interaction_msg))
         }
         BridgeInteractionResult::Error(msg) => Ok(NativeToolOutcome::Error(msg)),
         BridgeInteractionResult::Shelved => Ok(NativeToolOutcome::Shelved),
-        BridgeInteractionResult::Cancelled => Ok(NativeToolOutcome::Value {
-            content: "[User cancelled]".to_string(),
-            ui_data: None,
-        }),
+        // 用户拒绝授权 / Esc 取消 → 脚本未落盘、未执行 → 同样按失败回报
+        // （与 execute_command 原生路径、JS 桥路径、TS 引擎保持一致）
+        BridgeInteractionResult::Cancelled => {
+            Ok(NativeToolOutcome::Error("[User cancelled]".to_string()))
+        }
     }
 }
 

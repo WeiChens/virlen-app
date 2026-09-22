@@ -417,7 +417,7 @@ pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 |---|---|
 | 改聊天循环 / 工具循环 / 暂停恢复 | `src/domain/engine/*` **和** `src-tauri/src/agent/{engine,llm_round,tool_executor,llm_loop}.rs` |
 | 改系统提示词 | `src/domain/agent/prompts/*.md` + `src/services/agent-service.ts`（组装顺序在此） |
-| 改上下文压缩 / 标题生成 | `src/domain/engine/compress-context.ts` / `generate-title.ts`（Rust 侧委托 TS） |
+| 改上下文压缩 / 标题生成 | `src/domain/engine/compress-context.ts`（模式分派：`ai` LLM 摘要 / `raw` 正文压缩）+ `compress-raw.ts`（正文压缩的本地渲染）/ `generate-title.ts`（Rust 侧委托 TS）；产物在消息列表里的呈现：`ui/pages/chat/components/message/summary-message.tsx`（提示条 + 摘要弹窗） |
 | 改会话持久化 | `src-tauri/src/session_db/`（`sqlite.rs` / `schema.rs` / `commands.rs`）+ `src/infrastructure/sessionRepo/` + `src/ui/store/sessionStore.ts` |
 | 加 / 改工具 | `src/infrastructure/tools/<分类>/<工具>.ts`（+ 分类 `common.ts`、分类 `index.ts`）、`src/domain/tools/category.ts`、`src-tauri/src/agent/native_tools/<分类>/<工具>.rs`（+ `mod.rs` 分发）、`src/ui/pages/chat/components/tool-call/` |
 | 改原生工具路径校验 / 参数取值 | `src-tauri/src/agent/native_tools/common.rs`（`resolve_safe_path` / `is_path_allowed` / `arg_*`） |

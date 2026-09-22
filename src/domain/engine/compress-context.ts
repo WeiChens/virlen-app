@@ -1,5 +1,10 @@
 /**
- * 上下文压缩 — 用 LLM 摘要替换早期对话历史
+ * 上下文压缩 — 把早期对话历史替换成一条 summary 消息
+ *
+ * 两种模式（`CompressMode`）：
+ * - `ai`（默认）：调 LLM 生成摘要，最省 token，但慢、且本身要花钱；
+ * - `raw`：**正文压缩**，本地渲染（见 compress-raw.ts），毫秒级、零消耗，
+ *   正文一字不删、只去掉思考过程并省略超长工具输出。
  *
  * 从 AgentEngine.compressContext() 提取为独立纯函数，不依赖 class this。
  */
@@ -11,6 +16,16 @@ import { toolRegistry } from '../tools'
 import { AI_AGEMT_COMPRESS_CONTEXT_PROMPT } from '../agent'
 import { invoke } from '@tauri-apps/api/core'
 import { ledgerTokensOf, recordUsage } from '../usage'
+import { buildRawSummary } from './compress-raw'
+
+/**
+ * 压缩模式：
+ * - `ai`  — LLM 摘要（默认，省 token 但需一次模型调用）
+ * - `raw` — 正文压缩（本地渲染，毫秒级完成）
+ *
+ * 与 `settings.contextCompressMode` 取值一致。
+ */
+export type CompressMode = 'ai' | 'raw'
 
 /**
  * 估算 token 数 — 优先用 Rust 端 DeepSeek V3 tokenizer 精确计数，
@@ -67,9 +82,10 @@ async function estimateRequestTokens(request: ChatRequest): Promise<number> {
  */
 export async function compressContext(
   session: Session,
-  allMessages: Message[]
+  allMessages: Message[],
+  mode: CompressMode = 'ai',
 ): Promise<{ summary?: string; messages: Message[] }> {
-  // 找到最后一个 summary 消息的索引
+  // 找到最后一个 summary 消息的索引（含该 summary 本身，供下一次压缩叠加）
   let idx = -1
   for (let i = allMessages.length - 1; i >= 0; i--) {
     if (allMessages[i].role === 'summary') {
@@ -81,6 +97,48 @@ export async function compressContext(
 
   if (compressMessages.length <= 1) {
     throw new Error('没有可压缩的消息')
+  }
+
+  // ===== 正文压缩：纯本地渲染，不校验 Provider / 不发请求 / 不记账 =====
+  if (mode === 'raw') {
+    const { summary } = buildRawSummary(compressMessages)
+    // 压缩后的上下文占用（systemPrompt + 工具 schema + 摘要），本地 tokenizer 估算。
+    // 写进 summary 消息的 usage：token 环 / UI 读最后一条带 usage 的消息，
+    // 不写的话压缩后仍显示压缩前的占用，用户看不到压缩效果。
+    // ⚠️ 必须带上工具 schema：真实 prompt 含它，不算的话压缩后的数字会突然偏低，
+    //    看着像「压缩得更好」，与压缩前的真实 usage 不可比。
+    // ⚠️ 不入用量账本（没有 LLM 调用，不 recordUsage）。
+    const allToolDefs = await toolRegistry.listDefinitions()
+    const toolDefs =
+      session.allowedTools === undefined
+        ? allToolDefs
+        : session.allowedTools.length > 0
+        ? allToolDefs.filter((t) => session.allowedTools!.includes(t.name))
+        : []
+    const contextTokens = await estimateTokens(
+      session.systemPrompt || '',
+      toolDefs.length ? JSON.stringify(toolDefs) : '',
+      summary,
+    )
+    return {
+      summary,
+      messages: [
+        ...allMessages,
+        {
+          id: v4(),
+          role: 'summary',
+          content: summary,
+          timestamp: Date.now(),
+          usage: {
+            promptTokens: contextTokens,
+            completionTokens: 0,
+            totalTokens: contextTokens,
+          },
+          // 供 UI 区分压缩方式与展示「压缩后占用」（见 summary-message.tsx）
+          uiData: { compressMode: 'raw', contextTokens },
+        },
+      ],
+    }
   }
 
   const providerId = session.providerConfigId
@@ -181,6 +239,9 @@ export async function compressContext(
     content: summaryContent,
     timestamp: Date.now(),
     usage,
+    // 供 UI 区分压缩方式（AI 摘要的 usage 是这次调用的消耗，不是压缩后的上下文大小，
+    // 所以这里**不**写 contextTokens）
+    uiData: { compressMode: 'ai' },
   }
 
   return {
