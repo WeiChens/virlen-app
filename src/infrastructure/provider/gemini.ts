@@ -12,7 +12,7 @@
  * 流式：https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent
  */
 import type { Message, StreamCallback, TokenUsage, ToolUseContent } from '@/types'
-import { fileBlockToText, quoteBlockToText } from '@/types'
+import { fileBlockToText, quoteBlockToText, skillBlockToText } from '@/types'
 import type { ChatRequest, IProvider } from './types'
 import {
   apiFetch,
@@ -237,6 +237,9 @@ export class GeminiProvider implements IProvider {
           } else if (block.type === 'quote') {
             // 引用消息：Gemini 协议无对应块，降级为文本
             parts.push({ text: quoteBlockToText(block) })
+          } else if (block.type === 'skill') {
+            // 技能引用：Gemini 协议无对应块，降级为文本（含 SKILL.md 全文）
+            parts.push({ text: skillBlockToText(block) })
           } else if (block.type === 'image_url') {
             const url = block.image_url.url
             if (url.startsWith('data:')) {
@@ -266,6 +269,8 @@ export class GeminiProvider implements IProvider {
             parts.push({ text: fileBlockToText(block) })
           } else if (block.type === 'quote') {
             parts.push({ text: quoteBlockToText(block) })
+          } else if (block.type === 'skill') {
+            parts.push({ text: skillBlockToText(block) })
           }
         }
       }

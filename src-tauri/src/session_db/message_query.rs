@@ -25,13 +25,13 @@ fn truncate_with_flag(text: &str, max: usize) -> (String, bool) {
     (format!("{}…", head), true)
 }
 
-/// content 是否含图片 / 文件 / 引用块（仅用于提示「有附件」，不展开内容）
+/// content 是否含图片 / 文件 / 引用 / 技能块（仅用于提示「有附件」，不展开内容）
 fn content_has_attachments(content: &serde_json::Value) -> bool {
     match content {
         serde_json::Value::Array(blocks) => blocks.iter().any(|b| {
             matches!(
                 b.get("type").and_then(|v| v.as_str()),
-                Some("image_url") | Some("file") | Some("quote")
+                Some("image_url") | Some("file") | Some("quote") | Some("skill")
             )
         }),
         _ => false,

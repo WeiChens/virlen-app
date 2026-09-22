@@ -64,7 +64,14 @@ export function fileMenuItems(
           filePath: target,
           line: opts.line,
         })
-        if (!result.ok) showToast(t('打开失败'))
+        if (!result.ok) {
+          // 未启用时给出可执行的指引（与目录树等其他入口同一句话）
+          showToast(
+            editorService.isEnabled()
+              ? t('打开失败')
+              : t('请先在「设置 → 编辑器」中启用「打开编辑器」'),
+          )
+        }
       },
     })
   }

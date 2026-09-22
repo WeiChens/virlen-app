@@ -12,6 +12,7 @@ import type {
   ImageContent,
   FileContent,
   QuoteContent,
+  SkillContent,
   ToolResultContent,
 } from '@/types'
 import { sessionStore } from '@/ui/store'
@@ -64,6 +65,12 @@ function extractImages(content: MessageContent): ImageContent[] {
 function extractQuotes(content: MessageContent): QuoteContent[] {
   if (typeof content === 'string') return []
   return content.filter((c): c is QuoteContent => c.type === 'quote')
+}
+
+/** 从 MessageContent 中提取技能引用块 */
+function extractSkills(content: MessageContent): SkillContent[] {
+  if (typeof content === 'string') return []
+  return content.filter((c): c is SkillContent => c.type === 'skill')
 }
 
 // ==================== Markdown 转换 ====================
@@ -149,6 +156,16 @@ export function sessionToMarkdown(
     const files = extractFiles(msg.content)
     for (const f of files) {
       lines.push(`📎 ${f.isDir ? t('文件夹') : t('文件')}：\`${f.path}\``)
+      lines.push('')
+    }
+
+    // 3.6) 技能引用（只记「引用了哪个技能」；SKILL.md 全文不进导出，
+    //      否则一份导出里会重复铺开几万字技能说明，体积爆炸）
+    const skills = extractSkills(msg.content)
+    for (const s of skills) {
+      lines.push(
+        `🧩 ${t('技能')}：\`${s.name}\`${s.path ? `（\`${s.path}\`）` : ''}`,
+      )
       lines.push('')
     }
 

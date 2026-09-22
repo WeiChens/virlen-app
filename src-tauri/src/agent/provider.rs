@@ -38,6 +38,26 @@ const QUOTE_SENDER_LABEL: &str = "Sender";
 const QUOTE_MESSAGE_ID_LABEL: &str = "Message ID";
 const QUOTE_CONTENT_LABEL: &str = "Content";
 
+/// 技能引用块降级成文本时使用的标签。
+///
+/// 与 TS 侧 `src/types/index.ts` 的同名常量必须逐字一致（铁律 1），
+/// 同时与 TS `skillBlockToText` 的拼接格式保持一致：
+///
+/// ```text
+/// [Skill]
+/// Name: my-skill
+/// Directory: <技能目录绝对路径>
+/// SKILL.md:
+/// <SKILL.md 全文>
+/// ```
+///
+/// ⚠️ 四个字段恒定输出（缺失时为空值），不做条件拼接 —— 条件分支最容易
+/// 让 TS / Rust 两侧的输出产生一个换行的差异。
+const SKILL_BLOCK_LABEL: &str = "[Skill]";
+const SKILL_NAME_LABEL: &str = "Name";
+const SKILL_DIR_LABEL: &str = "Directory";
+const SKILL_CONTENT_LABEL: &str = "SKILL.md";
+
 // ==================== Provider trait ====================
 
 /// 从 OpenAI 兼容的 usage 里取出**缓存命中**的输入量（与 TS `openai.ts::cachedTokensFromUsage` 对齐）。
@@ -132,17 +152,38 @@ fn quote_block_to_text(block: &Value) -> String {
     )
 }
 
+/// 技能引用块 → 文本（对齐 TS `skillBlockToText`）
+///
+/// SKILL.md 全文原样带出（这就是「引用技能」的语义），目录行让模型能
+/// 顺着 `Directory` 用文件工具读取脚本等其它资源。
+fn skill_block_to_text(block: &Value) -> String {
+    let name = block.get("name").and_then(Value::as_str).unwrap_or("");
+    let path = block.get("path").and_then(Value::as_str).unwrap_or("");
+    let content = block.get("content").and_then(Value::as_str).unwrap_or("");
+    format!(
+        "{}\n{}: {}\n{}: {}\n{}:\n{}",
+        SKILL_BLOCK_LABEL,
+        SKILL_NAME_LABEL,
+        name,
+        SKILL_DIR_LABEL,
+        path,
+        SKILL_CONTENT_LABEL,
+        content
+    )
+}
+
 /// content 块数组 → OpenAI 兼容块
 ///
-/// OpenAI 协议只有 text / image_url：file（附件）与 quote（引用）没有对应结构，
-/// 统一降级为文本（只带路径 / 带发送方 + id + 正文）。其余块原样透传。
-/// 行为需与 TS 侧 `openai.ts::toOpenAiBlocks` 一致（铁律 1）。
+/// OpenAI 协议只有 text / image_url：file（附件）/ quote（引用）/ skill（技能引用）
+/// 没有对应结构，统一降级为文本（只带路径 / 带发送方 + id + 正文 / 带 SKILL.md 全文）。
+/// 其余块原样透传。行为需与 TS 侧 `openai.ts::toOpenAiBlocks` 一致（铁律 1）。
 fn openai_blocks(blocks: &[Value]) -> Vec<Value> {
     blocks
         .iter()
         .map(|block| match block.get("type").and_then(Value::as_str) {
             Some("file") => json!({ "type": "text", "text": file_block_to_text(block) }),
             Some("quote") => json!({ "type": "text", "text": quote_block_to_text(block) }),
+            Some("skill") => json!({ "type": "text", "text": skill_block_to_text(block) }),
             _ => block.clone(),
         })
         .collect()
@@ -174,8 +215,8 @@ fn openai_content(msg: &Message, content: &Value) -> Value {
 
 /// content 块数组 → Anthropic 内容块
 ///
-/// file（附件）与 quote（引用）在 Anthropic 协议里没有对应结构，统一降级为文本。
-/// 行为需与 TS 侧 `anthropic.ts::toAnthropicBlocks` 一致（铁律 1）。
+/// file（附件）/ quote（引用）/ skill（技能引用）在 Anthropic 协议里没有对应结构，
+/// 统一降级为文本。行为需与 TS 侧 `anthropic.ts::toAnthropicBlocks` 一致（铁律 1）。
 fn anthropic_blocks(blocks: &[Value]) -> Vec<Value> {
     let mut out: Vec<Value> = Vec::new();
     for block in blocks {
@@ -189,6 +230,9 @@ fn anthropic_blocks(blocks: &[Value]) -> Vec<Value> {
             }
             Some("quote") => {
                 out.push(json!({ "type": "text", "text": quote_block_to_text(block) }))
+            }
+            Some("skill") => {
+                out.push(json!({ "type": "text", "text": skill_block_to_text(block) }))
             }
             Some("image_url") => {
                 let url = block
@@ -1435,6 +1479,38 @@ mod tests {
         assert!(text.contains("Message ID: m-1"));
         assert!(text.contains("Content:"));
         assert!(text.contains("上一轮的结论"));
+    }
+
+    #[test]
+    fn build_request_converts_skill_block_to_full_text() {
+        // 技能引用：SKILL.md 全文必须原样带出（OpenAI / Anthropic 两个协议都要降级）
+        let blocks = json!([
+            {
+                "type": "skill",
+                "name": "code-reviewer",
+                "path": "C:/skills/code-reviewer",
+                "content": "# 审查规则\n先看边界。"
+            },
+            { "type": "text", "text": "用它审查" }
+        ]);
+
+        // 故意断言字面量：常量被改时会红，提醒同步 TS / Rust 两侧（铁律 1）
+        let openai = NativeOpenAiProvider::new("test", "key", "https://api.test.com");
+        let body = openai.build_request(&chat_request(vec![msg("user", blocks.clone(), None, None)]));
+        let text = body.to_string();
+        assert!(!text.contains("\"type\":\"skill\""));
+        assert!(text.contains("[Skill]"));
+        assert!(text.contains("Name: code-reviewer"));
+        assert!(text.contains("Directory: C:/skills/code-reviewer"));
+        assert!(text.contains("SKILL.md:"));
+        assert!(text.contains("先看边界。"));
+
+        let anthropic = NativeAnthropicProvider::new("test", "key", "https://api.test.com");
+        let body = anthropic.build_request(&chat_request(vec![msg("user", blocks, None, None)]));
+        let text = body.to_string();
+        assert!(!text.contains("\"type\":\"skill\""));
+        assert!(text.contains("[Skill]"));
+        assert!(text.contains("先看边界。"));
     }
 
     #[test]

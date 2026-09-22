@@ -5,6 +5,7 @@
  *   但 Enter 不发送（改为换行）；只有「发送」被禁止，发送按钮变成停止按钮
  * 支持多模态输入：图片上传 / 粘贴 / 拖拽
  * 支持文件附件：拖拽 / 粘贴文件，只记录路径（不拷贝文件内容）
+ * 支持技能引用：侧边栏「技能」页签单击 / 拖拽，把 SKILL.md **全文快照**挂进消息
  * 支持语音输入：使用 Web Speech API（SpeechRecognition）
  *               权限由 Tauri 原生层在启动时预设为 ALLOW，无需用户授权
  *
@@ -19,7 +20,7 @@
  *   两者最终都汇到 acceptPaths：图片读字节回到图片链路，其余进文件附件（只有路径）。
  *
  * 子组件：AgentSelector / QuickInputMenu / TokenRing
- * hooks：useImageAttachment / useFileAttachment / useQuoteAttachment / useVoiceInput
+ * hooks：useImageAttachment / useFileAttachment / useQuoteAttachment / useSkillAttachment / useVoiceInput
  */
 import {
   useState,
@@ -51,6 +52,7 @@ import { cancelPausedRun } from '@/services/chat-service'
 import { showImagePreview } from '@/ui/components/shared/ImagePreview'
 import FileChip from '@/ui/components/shared/FileChip'
 import QuoteChip from '@/ui/components/shared/QuoteChip'
+import SkillChip from '@/ui/components/shared/SkillChip'
 import { showToast } from '@/ui/components/shared/Toast'
 import { t } from '@/ui/i18n'
 import AgentSelector from './agent-selector'
@@ -62,6 +64,7 @@ import {
   useVoiceInput,
   useFileAttachment,
   useQuoteAttachment,
+  useSkillAttachment,
   isImagePath,
   normalizeFsPath,
   readClipboardFilePaths,
@@ -72,7 +75,12 @@ import {
   getSessionInput,
   clearSessionInput,
 } from './session-input-store'
-import type { FileAttachment, ImageAttachment, QuoteAttachment } from './hooks'
+import type {
+  FileAttachment,
+  ImageAttachment,
+  QuoteAttachment,
+  SkillAttachment,
+} from './hooks'
 import './style.scss'
 
 /** 图片附件（re-export 供外部使用） */
@@ -81,6 +89,8 @@ export type { ImageAttachment }
 export type { FileAttachment }
 /** 引用消息（re-export 供外部使用） */
 export type { QuoteAttachment }
+/** 技能引用（re-export 供外部使用） */
+export type { SkillAttachment }
 
 /** 是否在 Tauri 环境（浏览器调试模式下没有原生拖拽事件） */
 function isTauriEnv(): boolean {
@@ -141,7 +151,14 @@ interface Props {
     goal?: string,
     files?: FileAttachment[],
     quotes?: QuoteAttachment[],
+    skills?: SkillAttachment[],
   ) => void
+  /**
+   * 当前引用的技能名发生变化时回调（侧边栏技能卡片据此高亮 / 再点取消）
+   *
+   * 单项职责：引用状态的唯一真相在输入框，外面只拿一份“名字镜像”。
+   */
+  onSkillsChange?: (names: string[]) => void
   onCancel?: () => void
   onMessagesUpdate?: (sessionId: string) => void
   /** 点击引用 chip：跳转定位到被引用的原消息 */
@@ -155,6 +172,18 @@ interface RefProps {
   setText: (text: string) => void
   /** 添加一条引用（消息气泡的「引用」按钮调用），重复引用同一消息会被忽略 */
   addQuote: (quote: QuoteAttachment) => void
+  /**
+   * 按路径挂附件（侧边栏目录树「引用」/ 拖拽到输入框调用）。
+   * 与系统拖文件进来同源：图片走图片链路，其余只记路径。
+   */
+  attachPaths: (paths: string[]) => void
+  /**
+   * 按技能名挂技能引用（侧边栏「技能」页签单击 / 拖拽到输入框调用）。
+   * 与文件附件相反：这里会把 SKILL.md 全文读进内存随消息发出。
+   */
+  attachSkills: (names: string[]) => void
+  /** 按技能名取消引用（侧边栏卡片「再点一下」调用，与 attachSkills 互为开关） */
+  detachSkills: (names: string[]) => void
 }
 
 /**
@@ -184,6 +213,7 @@ function ChatInput(
     onCancel,
     onMessagesUpdate,
     onQuoteJump,
+    onSkillsChange,
     disabled,
     loading,
     placeholder = t('输入消息...'),
@@ -278,6 +308,10 @@ function ChatInput(
   const { quotes, setQuotes, addQuote, removeQuote, clearQuotes } =
     useQuoteAttachment()
 
+  // ===== 技能引用（存 SKILL.md 全文快照） =====
+  const { skills, setSkills, addSkills, removeSkill, removeSkillsByName, clearSkills } =
+    useSkillAttachment()
+
   /**
    * 统一入口：一批真实路径 → 按类型分发
    * 图片走原有上传链路（读字节→压缩→预览），其余走文件链路（只留路径）
@@ -365,6 +399,8 @@ function ChatInput(
   filesRef.current = files
   const quotesRef = useRef(quotes)
   quotesRef.current = quotes
+  const skillsRef = useRef(skills)
+  skillsRef.current = skills
 
   // ===== 迭代目标（Goal） =====
   const [goal, setGoal] = useState(
@@ -390,6 +426,7 @@ function ChatInput(
         images: imagesRef.current,
         files: filesRef.current,
         quotes: quotesRef.current,
+        skills: skillsRef.current,
         goal: goalRef.current,
         goalExpanded: goalExpandedRef.current,
       })
@@ -417,6 +454,11 @@ function ChatInput(
     } else {
       clearQuotes()
     }
+    if (saved?.skills?.length) {
+      setSkills(saved.skills)
+    } else {
+      clearSkills()
+    }
   }, [sessionId])
 
   // 组件卸载时保存（例如关闭标签页）
@@ -429,12 +471,25 @@ function ChatInput(
           images: imagesRef.current,
           files: filesRef.current,
           quotes: quotesRef.current,
+          skills: skillsRef.current,
           goal: goalRef.current,
           goalExpanded: goalExpandedRef.current,
         })
       }
     }
   }, [sessionId])
+
+  /**
+   * 把「当前引用了哪些技能」发布给上层（侧边栏技能卡片据此高亮 / 再点取消）
+   *
+   * 回调存 ref：父组件每次渲染都会传新函数（持有新闭包），用 ref 后这个 effect
+   * 只在 skills 真正变化时跑，不会被父组件的无关重渲带回声。
+   */
+  const onSkillsChangeRef = useRef(onSkillsChange)
+  onSkillsChangeRef.current = onSkillsChange
+  useEffect(() => {
+    onSkillsChangeRef.current?.(skills.map((s) => s.name))
+  }, [skills])
 
   // ===== 语音输入 =====
   // 语音识别结果 → 追加到文本输入框
@@ -534,6 +589,35 @@ function ChatInput(
         })
       }
     },
+    /**
+     * 按路径挂附件（侧边栏目录树 → 输入框）
+     *
+     * 复用 acceptPaths：与「从系统拖文件进来」完全同一条路 ——
+     * 图片进图片链路（预览 / 压缩），其余进文件附件（只留路径）。
+     */
+    attachPaths: (paths: string[]) => {
+      if (disabled) return
+      void acceptPaths(paths)
+    },
+    /**
+     * 按技能名挂技能引用（侧边栏「技能」页签）
+     *
+     * 与 attachPaths 同理不受 loading 限制：引用不改草稿文本，AI 工作中也能先摆好。
+     * 读全文是异步的，失败（技能被删 / 文件不可读）由 hook 内部提示。
+     */
+    attachSkills: (names: string[]) => {
+      if (disabled) return
+      void addSkills(names)
+      if (textareaRef.current) {
+        queueMicrotask(() => {
+          textareaRef.current!.focus()
+        })
+      }
+    },
+    /** 取消引用（同步操作，不需要聚焦也不受 disabled 限制） */
+    detachSkills: (names: string[]) => {
+      removeSkillsByName(names)
+    },
   }))
 
   // ===== 自动聚焦 =====
@@ -557,7 +641,10 @@ function ChatInput(
   function handleSend() {
     const trimmed = value.trim()
     const hasAttachment =
-      images.length > 0 || files.length > 0 || quotes.length > 0
+      images.length > 0 ||
+      files.length > 0 ||
+      quotes.length > 0 ||
+      skills.length > 0
     if ((!trimmed && !hasAttachment) || disabled || loading || compacting)
       return
     const currentGoal = goal.trim() || undefined
@@ -567,11 +654,13 @@ function ChatInput(
       currentGoal,
       files.length > 0 ? files : undefined,
       quotes.length > 0 ? quotes : undefined,
+      skills.length > 0 ? skills : undefined,
     )
     setValue('')
     clearImages()
     clearFiles()
     clearQuotes()
+    clearSkills()
     setGoal('')
     setGoalExpanded(false)
     clearSessionInput(sessionId) // 发送后清除已保存状态
@@ -996,6 +1085,9 @@ function ChatInput(
       <div
         ref={wrapperRef}
         className={`input-wrapper ${isDragOver ? 'drag-over' : ''} ${wrapperHeight ? 'has-fixed-height' : ''} ${isResizingState ? 'resizing' : ''}`}
+        // 侧边栏目录树用指针拖拽找落点（见 sidebar/use-tree-drag.ts）：
+        // 带这个标记的元素才会接收「拖进来的文件」
+        data-file-drop-zone="true"
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}>
@@ -1034,6 +1126,21 @@ function ChatInput(
                   onQuoteJump ? () => onQuoteJump(q.messageId) : undefined
                 }
                 onRemove={() => removeQuote(q.messageId)}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* 技能引用条（存 SKILL.md 全文快照） */}
+        {skills.length > 0 && (
+          <div className="skill-preview-strip">
+            {skills.map((s) => (
+              <SkillChip
+                key={s.id}
+                name={s.name}
+                path={s.path}
+                chars={s.content.length}
+                onRemove={() => removeSkill(s.id)}
               />
             ))}
           </div>
@@ -1172,7 +1279,10 @@ function ChatInput(
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           placeholder={
-            images.length > 0 || files.length > 0 || quotes.length > 0
+            images.length > 0 ||
+            files.length > 0 ||
+            quotes.length > 0 ||
+            skills.length > 0
               ? t('添加描述或直接发送...')
               : placeholder
           }
@@ -1311,7 +1421,7 @@ function ChatInput(
 
             {/* 发送 / 停止按钮 */}
             <ripple-button
-              className={`send-btn ${loading ? 'is-loading' : (!value.trim() && images.length === 0 && files.length === 0 && quotes.length === 0) || compacting || disabled ? 'disabled' : ''} `}
+              className={`send-btn ${loading ? 'is-loading' : (!value.trim() && images.length === 0 && files.length === 0 && quotes.length === 0 && skills.length === 0) || compacting || disabled ? 'disabled' : ''} `}
               onClick={loading ? handleCancel : handleSend}
               title={loading ? t('停止') : t('发送 (Enter)')}>
               {loading ? (

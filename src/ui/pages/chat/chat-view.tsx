@@ -35,6 +35,7 @@ import ChatInput, {
   type FileAttachment,
   type ImageAttachment,
   type QuoteAttachment,
+  type SkillAttachment,
 } from './components/input'
 import ProviderPrompt from './components/modals/provider-prompt'
 import SearchDialog from './components/search'
@@ -226,6 +227,9 @@ function ChatView() {
   const chatInputRef = useRef<{
     setText: (text: string) => void
     addQuote: (quote: QuoteAttachment) => void
+    attachPaths: (paths: string[]) => void
+    attachSkills: (names: string[]) => void
+    detachSkills: (names: string[]) => void
   }>(null)
   const [showProviderPrompt, setShowProviderPrompt] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
@@ -233,6 +237,13 @@ function ChatView() {
   const [searchJump, setSearchJump] = useState<MessageJumpTarget | null>(null)
   const searchJumpNonceRef = useRef(0)
   const [pendingContent, setPendingContent] = useState<string | null>(null)
+  /**
+   * 输入框当前引用的技能名（侧边栏技能卡片据此高亮）
+   *
+   * 真相在 ChatInput 里（它持有 SKILL.md 全文），这里只存一份名字镜像：
+   * 输入框每次变化都回传，发完消息自动清空 → 高亮也跟着消失。
+   */
+  const [referencedSkills, setReferencedSkills] = useState<string[]>([])
   const { ToolUI } = useToolUI()
   const [sidebarWidth, setSidebarWidth] = useState(getStoredWidth())
   const resizingRef = useRef(false)
@@ -348,6 +359,27 @@ function ChatView() {
   const handleSetText = useCallback((text: string) => {
     chatInputRef.current?.setText(text)
   }, [])
+
+  /** 输入框技能引用变化：内容一致时保留原数组引用，避免侧边栏无谓重渲 */
+  const handleSkillsChange = useCallback((names: string[]) => {
+    setReferencedSkills((prev) =>
+      prev.length === names.length && prev.every((n, i) => n === names[i])
+        ? prev
+        : names,
+    )
+  }, [])
+
+  /** 侧边栏技能卡片单击：未引用则引用，已引用则取消（开关语义） */
+  const handleToggleSkill = useCallback(
+    (name: string) => {
+      if (referencedSkills.includes(name)) {
+        chatInputRef.current?.detachSkills([name])
+      } else {
+        chatInputRef.current?.attachSkills([name])
+      }
+    },
+    [referencedSkills],
+  )
 
   /**
    * 引用消息：把消息 id / 发送方 / 正文快照交给输入框挂成引用 chip。
@@ -477,11 +509,13 @@ function ChatView() {
     goal?: string,
     files?: FileAttachment[],
     quotes?: QuoteAttachment[],
+    skills?: SkillAttachment[],
   ) {
     const hasAttachment =
       (images?.length ?? 0) > 0 ||
       (files?.length ?? 0) > 0 ||
-      (quotes?.length ?? 0) > 0
+      (quotes?.length ?? 0) > 0 ||
+      (skills?.length ?? 0) > 0
 
     if (!hasEnabledProvider) {
       setPendingContent(content || (hasAttachment ? t('(附件)') : ''))
@@ -518,7 +552,7 @@ function ChatView() {
     const clearSid = chatState.value.currentSessionId
     if (clearSid) updateSessionRuntime(clearSid, { error: null })
     chatState.setValue('error', null)
-    doSend(sessionId, content, images, goal, files, quotes)
+    doSend(sessionId, content, images, goal, files, quotes, skills)
   }
 
   async function doSend(
@@ -528,6 +562,7 @@ function ChatView() {
     goal?: string,
     files?: FileAttachment[],
     quotes?: QuoteAttachment[],
+    skills?: SkillAttachment[],
   ) {
     // ── 立即显示 loading ──
     chatState.setValue('loading', true)
@@ -540,6 +575,7 @@ function ChatView() {
       images ?? [],
       files ?? [],
       quotes ?? [],
+      skills ?? [],
     )
 
     // ── 先保证有 session（无 session → 立即创建），让 UI 切换到聊天视图 ──
@@ -802,6 +838,13 @@ function ChatView() {
         // @ts-ignore
         style={{ '--width': `${sidebarWidth}px` }}
         onSelectSession={handleSelectSession}
+        // 目录树「引用 / 拖拽到输入框」→ 输入框附件（复用系统的文件链路）
+        onAttachPaths={(paths) => chatInputRef.current?.attachPaths(paths)}
+        // 技能卡片「引用 / 拖拽到输入框」→ 输入框技能附件（读 SKILL.md 全文）
+        onAttachSkills={(names) => chatInputRef.current?.attachSkills(names)}
+        // 已引用的技能卡片高亮 + 再点取消（引用状态由输入框回传）
+        referencedSkills={referencedSkills}
+        onToggleSkill={handleToggleSkill}
       />
       {chatState.value.sidebarOpen && (
         <div className="sidebar-resizer" onMouseDown={handleResizerMouseDown} />
@@ -861,6 +904,7 @@ function ChatView() {
               loading={isCurrentWorking}
               disabled={false}
               placeholder={t('输入消息...')}
+              onSkillsChange={handleSkillsChange}
             />
           </>
         ) : (
@@ -876,6 +920,7 @@ function ChatView() {
               loading={false}
               disabled={false}
               placeholder={t('开始新的对话...')}
+              onSkillsChange={handleSkillsChange}
             />
           </div>
         )}

@@ -14,15 +14,15 @@ import {
   extractJsonData,
 } from './http-utils'
 import { v4 } from '@/utils/uuid'
-import { fileBlockToText, quoteBlockToText, getLastSummaryMessageIndex } from '@/types'
+import { fileBlockToText, quoteBlockToText, skillBlockToText, getLastSummaryMessageIndex } from '@/types'
 import type { MessageContent } from '@/types'
 import { processVisionContent } from './visionInject'
 
 /**
  * content 块 → OpenAI 兼容块
  *
- * OpenAI 协议只有 text / image_url 两种块：file（附件）与 quote（引用）
- * 没有对应结构，统一降级为文本（文件只带路径、引用带发送方 + id + 正文）。
+ * OpenAI 协议只有 text / image_url 两种块：file（附件）/ quote（引用）/ skill（技能引用）
+ * 没有对应结构，统一降级为文本（文件只带路径、引用带发送方 + id + 正文、技能带 SKILL.md 全文）。
  * 与 Rust 侧 `provider.rs::openai_blocks` 行为必须一致（铁律 1）。
  */
 function toOpenAiBlocks(
@@ -36,6 +36,9 @@ function toOpenAiBlocks(
     }
     if (block.type === 'quote') {
       return { type: 'text', text: quoteBlockToText(block) }
+    }
+    if (block.type === 'skill') {
+      return { type: 'text', text: skillBlockToText(block) }
     }
     return block
   })

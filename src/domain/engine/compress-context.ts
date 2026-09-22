@@ -31,6 +31,33 @@ async function estimateTokens(...texts: string[]): Promise<number> {
 }
 
 /**
+ * 兜底估算「本次请求」的 prompt token — 仅在 API 不返回 usage 时使用。
+ *
+ * ⚠️ 必须把**发出去的全部内容**计入：历史消息 + 压缩指令 + systemPrompt + 工具 schema。
+ * 早期版本只算了首条消息 + systemPrompt，漏掉中间消息与 27 个工具的 schema → 系统性低估。
+ */
+async function estimateRequestTokens(request: ChatRequest): Promise<number> {
+  const texts: string[] = [request.systemPrompt || '']
+  for (const msg of request.messages || []) {
+    if (typeof msg.content === 'string') {
+      texts.push(msg.content)
+    } else if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if (block && typeof block === 'object' && 'text' in block) {
+          const t = (block as { text?: unknown }).text
+          if (typeof t === 'string') texts.push(t)
+        }
+      }
+    }
+  }
+  // 工具 schema 是随请求一起发给模型的内容，实打实占 prompt token
+  if (request.tools?.length) {
+    texts.push(JSON.stringify(request.tools))
+  }
+  return estimateTokens(...texts)
+}
+
+/**
  * 压缩会话上下文 — 用 LLM 摘要替换早期对话历史
  *
  * 流程：
@@ -111,26 +138,27 @@ export async function compressContext(
         ? response.content
         : JSON.stringify(response.content)
 
-    let firstContent = request.messages?.[0]?.content
-    const inputText =
-      typeof firstContent === 'string'
-        ? firstContent
-        : JSON.stringify(firstContent)
-    const systemText = request.systemPrompt || ''
-    // DeepSeek tokenizer 精确计数（API 不返回 usage，需自行计算）
-    const [promptTokens, completionTokens] = await Promise.all([
-      estimateTokens(inputText, systemText),
-      estimateTokens(summaryContent),
-    ])
-    usage = {
-      promptTokens,
-      completionTokens,
-      totalTokens: promptTokens + completionTokens,
+    // 用量优先取 API 返回的**真实值**：压缩请求走非流式（stream:false），
+    // 三种协议的响应都带 usage（openai / anthropic 见各自 parseResponse，gemini 见 usageMetadata）。
+    // 只有极少数兼容实现不返回 usage 时才退到本地 tokenizer —— 那时才标 estimated。
+    let estimated = false
+    if (response.usage) {
+      usage = response.usage
+    } else {
+      estimated = true
+      const [promptTokens, completionTokens] = await Promise.all([
+        estimateRequestTokens(request),
+        estimateTokens(summaryContent),
+      ])
+      usage = {
+        promptTokens,
+        completionTokens,
+        totalTokens: promptTokens + completionTokens,
+      }
     }
 
     // 压缩上下文是真实 LLM 调用（会消耗 token）但不产生对话消息 → 单独记账。
-    // ⚠️ 这里的 token 数是本地 tokenizer 估算值，故 estimated=true，UI 需与真实用量区分。
-    // （本地估算没有缓存概念，cached 自然为 0）
+    // ⚠️ estimated=true 仅出现在本地 tokenizer 兜底路径（无缓存概念，cached 恒为 0），UI 需与真实用量区分。
     recordUsage({
       ts: Date.now(),
       sessionId: session.id,
@@ -139,7 +167,7 @@ export async function compressContext(
       providerConfigId: providerId,
       kind: 'compress',
       ...ledgerTokensOf(usage, provider.providerType),
-      estimated: true,
+      estimated,
       durationMs,
     })
   } catch (e: any) {

@@ -17,7 +17,7 @@ import type { ChatRequest, IProvider } from './types'
 import type { MessageContent, TokenUsage } from '@/types'
 import { apiFetch, getResponseReader, readStreamLines } from './http-utils'
 import { track } from '@/utils/telemetry'
-import { fileBlockToText, quoteBlockToText, getLastSummaryMessageIndex } from '@/types'
+import { fileBlockToText, quoteBlockToText, skillBlockToText, getLastSummaryMessageIndex } from '@/types'
 import { processVisionContent } from './visionInject'
 import { fetch } from '@tauri-apps/plugin-http'
 
@@ -66,7 +66,7 @@ function anthropicCachedTokens(usage: {
 /**
  * content 块 → Anthropic 内容块
  *
- * file（附件）与 quote（引用）在 Anthropic 协议里没有对应结构，统一降级为文本。
+ * file（附件）/ quote（引用）/ skill（技能引用）在 Anthropic 协议里没有对应结构，统一降级为文本。
  * 与 Rust 侧 `provider.rs::anthropic_blocks` 行为必须一致（铁律 1）。
  */
 function toAnthropicBlocks(
@@ -82,6 +82,9 @@ function toAnthropicBlocks(
     } else if (block.type === 'quote') {
       // 引用消息：降级为文本（发送方 + id + 正文）
       out.push({ type: 'text', text: quoteBlockToText(block) })
+    } else if (block.type === 'skill') {
+      // 技能引用：降级为文本（技能名 + 目录 + SKILL.md 全文）
+      out.push({ type: 'text', text: skillBlockToText(block) })
     } else if (block.type === 'image_url') {
       const url = block.image_url.url
       if (url.startsWith('data:')) {

@@ -151,7 +151,7 @@ export interface MessageBrief {
   /** 正文（仅 text 块拼接；≤ 4000 字符） */
   text: string
   textTruncated: boolean
-  /** 是否含图片 / 文件 / 引用块（仅提示，不展开内容） */
+  /** 是否含图片 / 文件 / 引用 / 技能块（仅提示，不展开内容） */
   hasAttachments: boolean
   /** assistant 消息调用的工具（参数 ≤ 100 字符） */
   toolCalls: ToolCallBrief[]

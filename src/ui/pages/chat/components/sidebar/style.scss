@@ -23,14 +23,20 @@
     padding: 0;
 
     .sidebar-header,
-    .session-list {
+    .sidebar-tabs,
+    .session-list,
+    .workspace-tree,
+    .skill-list-panel {
       opacity: 0;
       pointer-events: none;
     }
   }
 
   &.collapsed .sidebar-header,
-  &.collapsed .session-list {
+  &.collapsed .sidebar-tabs,
+  &.collapsed .session-list,
+  &.collapsed .workspace-tree,
+  &.collapsed .skill-list-panel {
     transition: opacity 0.15s ease 0.05s;
   }
 
@@ -114,10 +120,6 @@
 
       &:hover {
         background: var(--hover-bg, #f0f0f0);
-
-        .more-btn {
-          opacity: 1;
-        }
       }
 
       svg {
@@ -268,120 +270,9 @@
         }
       }
 
-      &:hover {
-        .session-more {
-          display: block;
-        }
-      }
-
-      // ==================== 「更多」菜单按钮 ====================
-      .session-more {
-        display: none;
-        position: relative;
-        flex-shrink: 0;
-
-        &.hidden {
-          display: none !important;
-        }
-      }
-
-      .more-btn {
-        width: 22px;
-        height: 22px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border: none;
-        background: transparent;
-        border-radius: 4px;
-        cursor: pointer;
-        color: var(--text-secondary, #999);
-        opacity: 0;
-        transition:
-          opacity 0.15s,
-          background 0.15s,
-          color 0.15s;
-
-        &:hover,
-        &.active {
-          opacity: 1;
-          background: var(--hover-bg, #e0e0e0);
-          color: var(--text-primary, #333);
-        }
-
-        svg {
-          width: 16px;
-          height: 16px;
-          fill: currentColor;
-        }
-      }
-
-      // ==================== 下拉菜单 ====================
-      .more-menu {
-        position: absolute;
-        right: 0;
-        top: 100%;
-        z-index: 100;
-        min-width: 130px;
-        background: var(--bg-primary, #fff);
-        border: 1px solid var(--border-color, #e5e5e5);
-        border-radius: 8px;
-        box-shadow:
-          0 4px 12px rgba(0, 0, 0, 0.1),
-          0 1px 3px rgba(0, 0, 0, 0.05);
-        padding: 4px;
-        margin-top: 2px;
-
-        .menu-item {
-          width: 100%;
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          padding: 7px 10px;
-          border: none;
-          background: transparent;
-          border-radius: 6px;
-          cursor: pointer;
-          font-size: var(--font-size-sm);
-          color: var(--text-primary, #1a1a1a);
-          white-space: nowrap;
-          transition: background 0.12s;
-
-          &:hover {
-            background: var(--hover-bg, #f0f0f0);
-          }
-
-          .menu-icon {
-            flex-shrink: 0;
-            width: 18px;
-            height: 16px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-
-            svg {
-              width: 14px;
-              height: 14px;
-              fill: currentColor;
-            }
-          }
-
-          .menu-label {
-            flex: 1;
-            text-align: left;
-          }
-
-          &.danger:hover {
-            color: var(--color-danger, #e53e3e);
-          }
-        }
-
-        .menu-divider {
-          height: 1px;
-          background: var(--border-color, #e5e5e5);
-          margin: 4px 8px;
-        }
-      }
+      /* 会话操作已全部收进**右键菜单**（共享组件 ContextMenu，与「工作目录 / 技能」
+         页签同一套样式）：此处的 .session-more / .more-btn / .more-menu 已删除。
+         菜单自身的样式不在本文件 —— 由 ContextMenu/style.scss 统一提供。 */
     }
 
     // ==================== Agent 分组容器 ====================
@@ -530,6 +421,7 @@
         }
       }
 
+      /* 会话数徽标：纯展示（单击落在整行上 = 折叠/展开），操作走分组头右键菜单 */
       .group-count {
         flex-shrink: 0;
         font-size: var(--font-size-xs);
@@ -540,115 +432,11 @@
         line-height: 1.5;
         min-width: 20px;
         text-align: center;
-        cursor: pointer;
-        transition: opacity 0.15s;
       }
 
-      .group-more-btn {
-        display: none;
-        align-items: center;
-        justify-content: center;
-        width: 20px;
-        height: 20px;
-        border: none;
-        background: transparent;
-        border-radius: 4px;
-        cursor: pointer;
-        padding: 0;
-        flex-shrink: 0;
-
-        svg {
-          width: 14px;
-          height: 14px;
-          fill: var(--text-secondary, #999);
-        }
-
-        &:hover {
-          background: var(--hover-bg, #e0e0e0);
-        }
-      }
-
-      .group-header-actions {
-        position: relative;
-        display: flex;
-        align-items: center;
-
-        &:hover .group-count {
-          display: none;
-        }
-
-        &:hover .group-more-btn {
-          display: flex;
-        }
-
-        &.menu-open {
-          .group-count {
-            display: none;
-          }
-
-          .group-more-btn {
-            display: flex;
-          }
-        }
-      }
-
-      .group-more-menu {
-        position: absolute;
-        top: 100%;
-        right: 0;
-        z-index: 100;
-        min-width: 150px;
-        background: var(--bg-primary, #fff);
-        border: 1px solid var(--border-color, #e0e0e0);
-        border-radius: 8px;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-        padding: 4px;
-        margin-top: 2px;
-
-        .menu-item {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          width: 100%;
-          padding: 7px 10px;
-          border: none;
-          background: transparent;
-          border-radius: 6px;
-          cursor: pointer;
-          font-size: var(--font-size-sm);
-          color: var(--text-primary, #1a1a1a);
-          white-space: nowrap;
-
-          &:hover {
-            background: var(--hover-bg, #f0f0f0);
-          }
-
-          &.danger {
-            color: var(--color-danger);
-          }
-
-          .menu-icon {
-            flex-shrink: 0;
-            display: flex;
-            align-items: center;
-
-            svg {
-              width: 14px;
-              height: 14px;
-            }
-          }
-
-          .menu-label {
-            flex: 1;
-          }
-        }
-
-        .menu-divider {
-          height: 1px;
-          background: var(--border-color, #e8e8e8);
-          margin: 4px 8px;
-        }
-      }
+      /* 分组头的 .group-more-btn / .group-header-actions / .group-more-menu
+         已删除（右键菜单改走共享 ContextMenu，hover 换按钮 + absolute 下拉
+         那套连同它自己的点外部关闭逻辑一起下线）。 */
     }
 
     .empty-sessions {
@@ -663,6 +451,406 @@
 
       .hint {
         font-size: var(--font-size-sm);
+      }
+    }
+  }
+
+  /* ==================== 页签：会话 / 工作目录 / 技能 ==================== */
+  /* 分段控件：整体一块浅底，当前项浮起为白卡片（比「三块独立按钮」更轻、层级更清楚） */
+  .sidebar-tabs {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+    margin: 8px 10px;
+    padding: 2px;
+    border-radius: 9px;
+    background: var(--input-bg, #f1f1f3);
+
+    .sidebar-tab {
+      flex: 1;
+      min-width: 0;
+      height: 24px;
+      padding: 0 4px;
+      border: none;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--text-secondary, #666);
+      font-family: inherit;
+      font-size: var(--font-size-sm);
+      line-height: 1;
+      cursor: pointer;
+      transition:
+        background 0.15s ease,
+        color 0.15s ease,
+        box-shadow 0.15s ease;
+
+      &:hover {
+        color: var(--text-primary, #1a1a1a);
+      }
+
+      &:focus-visible {
+        outline: 2px solid var(--primary);
+        outline-offset: 1px;
+      }
+
+      &.active {
+        background: var(--bg-primary, #fff);
+        color: var(--primary);
+        font-weight: 600;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+      }
+    }
+  }
+
+  /* 非当前页签的内容：保留 DOM，仅隐藏 */
+  .tab-hidden {
+    display: none;
+  }
+
+  /* ==================== 空态（工作目录 / 技能页签共用） ==================== */
+  .sidebar-empty {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-secondary, #999);
+
+    p {
+      margin: 0 0 4px;
+      font-size: var(--font-size-base);
+    }
+
+    .hint {
+      font-size: var(--font-size-sm);
+      white-space: normal;
+    }
+  }
+
+  /* ==================== 工作目录树（虚拟列表） ==================== */
+  .workspace-tree {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 4px 4px 12px;
+    user-select: none;
+    /* 虚拟列表内层：高度 = 总行高，行按 transform 绝对定位 */
+    .tree-virtual {
+      position: relative;
+      width: 100%;
+    }
+
+    .tree-virtual-row {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+    }
+
+    .tree-row {
+      display: flex;
+      align-items: center;
+      /* 行高由虚拟行容器给定（TREE_ROW_HEIGHT = 24） */
+      height: 100%;
+      padding-right: 4px;
+      border-radius: 3px;
+
+      &:hover {
+        background: var(--hover-bg, #f0f0f0);
+
+        .tree-action {
+          opacity: 1;
+        }
+      }
+
+      /* 选中态：铺底 + 左侧强调条（与 hover 同优先级，靠源码顺序取胜） */
+      &.selected {
+        background: var(--active-bg, #e8e8ed);
+        // box-shadow: inset 2px 0 0 0 var(--accent-color, #4f46e5);
+
+        .tree-name {
+          color: var(--accent-color, #4f46e5);
+        }
+      }
+
+      /* 拖拽的「移动落点」（由 use-tree-drag 直接加类，不走 React state） */
+      &.is-drop-target {
+        background: color-mix(in srgb, var(--primary) 16%, transparent);
+        outline: 1px solid var(--primary);
+        outline-offset: -1px;
+      }
+
+      .tree-main {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        flex: 1;
+        min-width: 0;
+        height: 100%;
+        cursor: pointer;
+      }
+
+      /* 展开箭头：独立命中区（点它只切展开，不改选择）——宽度仍取 12px，
+         与文件行的 .tree-arrow-placeholder 对齐，否则两类行的图标会错开 2px */
+      .tree-arrow-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 12px;
+        height: 14px;
+        flex-shrink: 0;
+        border-radius: 3px;
+        cursor: pointer;
+
+        &:hover {
+          background: var(--active-bg, #dedee3);
+        }
+      }
+
+      .tree-arrow-icon {
+        width: 12px;
+        height: 12px;
+        flex-shrink: 0;
+        fill: var(--text-secondary, #666);
+        transition: transform 0.15s ease;
+
+        &.collapsed {
+          transform: rotate(-90deg);
+        }
+      }
+
+      /* 文件行没有展开箭头 → 占位，保证图标列对齐 */
+      .tree-arrow-placeholder {
+        width: 12px;
+        height: 12px;
+        flex-shrink: 0;
+      }
+
+      .tree-icon {
+        width: 16px;
+        height: 16px;
+        flex-shrink: 0;
+        fill: var(--text-secondary, #666);
+        color: var(--text-secondary, #666);
+      }
+
+      .tree-name {
+        flex: 1;
+        min-width: 0;
+        font-size: var(--font-size-sm);
+        color: var(--text-primary, #1a1a1a);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      &.tree-root .tree-name {
+        font-weight: 600;
+      }
+
+      /* 文件体积：默认隐藏，容器够宽（.is-wide）+ hover 时才显示 */
+      .tree-size {
+        display: none;
+        flex-shrink: 0;
+        margin-left: 6px;
+        font-size: var(--font-size-xs);
+        color: var(--text-tertiary, #767676);
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* 行内重命名输入框：跟着行高走，宽度占满名称区 */
+      .tree-rename-input {
+        flex: 1;
+        min-width: 0;
+        height: 18px;
+        padding: 0 4px;
+        border: 1px solid var(--accent-color, #4f46e5);
+        border-radius: 4px;
+        background: var(--bg-primary, #fff);
+        color: var(--text-primary, #1a1a1a);
+        font-size: var(--font-size-sm);
+        font-family: inherit;
+        outline: none;
+      }
+
+      .tree-action {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        height: 20px;
+        flex-shrink: 0;
+        border: none;
+        border-radius: 5px;
+        background: transparent;
+        color: var(--text-secondary, #666);
+        cursor: pointer;
+        opacity: 0;
+        transition:
+          opacity 0.15s ease,
+          background 0.15s ease;
+
+        &:hover {
+          background: var(--active-bg, #e8e8ed);
+          color: var(--text-primary, #1a1a1a);
+        }
+
+        &:focus-visible {
+          opacity: 1;
+        }
+
+        svg {
+          width: 13px;
+          height: 13px;
+          fill: currentColor;
+        }
+      }
+    }
+
+    .tree-message {
+      padding: 3px 8px;
+      font-size: var(--font-size-xs);
+      color: var(--text-secondary, #666);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+
+      &.error {
+        color: var(--color-error, #cf222e);
+      }
+    }
+
+    /* 窄侧边栏下不显示体积（文件名本身就不够显示），够宽时 hover 才露出 */
+    &.is-wide .tree-row:hover .tree-size {
+      display: block;
+    }
+  }
+
+  /* ==================== 技能列表 ==================== */
+  .skill-list-panel {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+
+    .skill-list-count {
+      flex-shrink: 0;
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 6px 10px 4px;
+      font-size: var(--font-size-xs);
+      color: var(--text-secondary, #666);
+
+      /* 交互提示：单击已是「引用」，不写明的话会以为「打开目录」消失了 */
+      .skill-list-hint {
+        flex-shrink: 0;
+        color: var(--text-tertiary, #999);
+      }
+    }
+
+    .skill-items {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 0 4px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .skill-card {
+      border-radius: 8px;
+      background: var(--card-bg, #fafafa);
+      transition: background 0.15s ease;
+
+      &:hover {
+        background: var(--hover-bg, #f0f0f0);
+      }
+
+      /* 已引用态：铺底 + 技能名转强调色（与目录树 .tree-row.selected 同一套语言）；
+         靠源码顺序在 hover 之上取胜，hover 时也不丢引用反馈 */
+      &.is-referenced {
+        background: var(--active-bg, #e8e8ed);
+
+        .skill-card-name {
+          color: var(--accent-color, #4f46e5);
+        }
+      }
+
+      .skill-card-main {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        padding: 8px 10px;
+        cursor: pointer;
+
+        /* 键盘用户拿不到 hover：聚焦时给一圈内描边，明确「当前是哪张卡」 */
+        &:focus-visible {
+          outline: var(--focus-ring, 2px solid var(--accent-color, #4f46e5));
+          outline-offset: -2px;
+          border-radius: 8px;
+        }
+      }
+
+      .skill-card-name-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .skill-card-name {
+        font-size: var(--font-size-sm);
+        font-weight: 500;
+        color: var(--text-primary, #1a1a1a);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      /* 「已引用」角标：只靠背景色容易被当成 hover，给一个明确的状态词 */
+      .skill-card-ref {
+        flex-shrink: 0;
+        padding: 0 5px;
+        border-radius: 999px;
+        background: var(--accent-color, #4f46e5);
+        color: #fff;
+        font-size: 10px;
+        line-height: 15px;
+      }
+
+      .skill-card-version {
+        flex-shrink: 0;
+        font-size: var(--font-size-xs);
+        color: var(--text-secondary, #666);
+      }
+
+      .skill-card-desc {
+        font-size: var(--font-size-xs);
+        color: var(--text-secondary, #666);
+        line-height: 1.4;
+        /* 侧边栏的 .chat-sidebar 是 nowrap，这里必须显式还原，否则描述挤成一行 */
+        white-space: normal;
+        /* 描述可能很长 → 最多 3 行，避免单张卡片撑满侧边栏 */
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+
+      .skill-card-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+
+      .skill-card-tag {
+        padding: 1px 6px;
+        border-radius: 999px;
+        background: var(--tag-bg, #e8e8ed);
+        font-size: var(--font-size-xs);
+        color: var(--text-secondary, #666);
       }
     }
   }
@@ -834,5 +1022,107 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+  }
+}
+
+/* ==================== 目录树拖拽（ghost 挂到 body） ====================
+   拖拽实现了 use-tree-drag.ts：不用 HTML5 dnd（本项目 dragDropEnabled=true，
+   页面收不到 drag/drop），而是自绘一个跟随光标的 ghost。
+   ghost 必须是 pointer-events: none，否则会挡住 elementFromPoint 的落点判定。
+   落点高亮有两类，都是 hook 直接加 / 删类：
+     · 目录行 .is-drop-target（移动到该目录，样式在 .tree-row 里）
+     · 输入框 .drag-over（引用成附件，样式在输入框自己的 scss） */
+body.is-tree-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.tree-drag-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  /* 浮层层级：Modal 800 < ghost 3000 < Toast 3012 */
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 280px;
+  padding: 5px 10px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 8px;
+  background: var(--bg-primary, #fff);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary, #1a1a1a);
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: none;
+
+  .tree-drag-ghost-icon {
+    flex-shrink: 0;
+    font-size: 13px;
+    line-height: 1;
+  }
+
+  .tree-drag-ghost-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+/* ==================== 移动确认弹窗正文 ====================
+   MessageBox 经 portal 渲染，这里的类名是全局的（与 .tree-drag-ghost 同）。
+   弹窗只有 300px 宽，长路径必须 break-all 折行，否则会把弹窗撑破。 */
+.tree-move-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+
+  .tree-move-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .tree-move-label {
+    font-size: var(--font-size-xs);
+    color: var(--text-secondary, #666);
+  }
+
+  .tree-move-path {
+    padding: 4px 6px;
+    border-radius: 4px;
+    background: var(--hover-bg, #f0f0f0);
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: var(--font-size-xs);
+    word-break: break-all;
+  }
+
+  /* 多项时列出条目名（最多 5 条，行高固定便于超长时滚动） */
+  .tree-move-list {
+    margin: 0;
+    padding-left: 18px;
+    max-height: 110px;
+    overflow-y: auto;
+    font-size: var(--font-size-xs);
+    color: var(--text-secondary, #666);
+
+    li {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  }
+
+  .tree-move-more,
+  .tree-move-hint {
+    font-size: var(--font-size-xs);
+    line-height: 1.5;
+    color: var(--text-secondary, #666);
+  }
+
+  .tree-move-hint {
+    margin: 0;
   }
 }

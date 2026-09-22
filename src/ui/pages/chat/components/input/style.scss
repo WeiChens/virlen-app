@@ -963,8 +963,8 @@
     }
 
     // ==================== 附件条 ====================
-    // chip 本体样式在 shared/FileChip/style.scss，这里只管排布。
-    // 两条统一「限高 + 内部滚动」：附件区高度有上限，一次拖 10 个文件 / 20 张图
+    // chip 本体样式在 shared/FileChip/style.scss、shared/SkillChip/style.scss，这里只管排布。
+    // 三条统一「限高 + 内部滚动」：附件区高度有上限，一次拖 10 个文件 / 20 张图
     // 也不会把盒子无限拉长（旧写法在固定高度下还会反过来挤掉工具条）。
     .quote-preview-strip {
       display: flex;
@@ -978,6 +978,17 @@
     }
 
     .file-preview-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 2px 0 4px;
+      min-width: 0;
+      max-height: 72px;
+      overflow-y: auto;
+    }
+
+    // 技能引用条：与文件条同排布（chip 本体在 shared/SkillChip/style.scss）
+    .skill-preview-strip {
       display: flex;
       flex-wrap: wrap;
       gap: 6px;
@@ -1042,6 +1053,7 @@
     }
 
     // 附件条自身可滚，滚动条不该抢视觉焦点
+    .skill-preview-strip,
     .file-preview-strip,
     .image-preview-strip {
       &::-webkit-scrollbar {

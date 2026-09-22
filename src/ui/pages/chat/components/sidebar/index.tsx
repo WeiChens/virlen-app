@@ -1,13 +1,15 @@
 /**
- * sidebar — 会话侧边栏
- * 每个会话显示 working 状态指示（流式回复中）
- * 支持按 Agent 分组展示
- * 支持导出会话为 Markdown
- * 支持会话置顶
- * 支持导入会话到知识库
- * 操作统一收拢到「更多」菜单
+ * sidebar — 侧边栏
+ *
+ * 三个页签：会话 / 工作目录 / 技能
+ *  - 会话：每个会话显示 working 状态指示（流式回复中）、按 Agent 或工作目录分组、
+ *    支持导出为 Markdown、置顶、导入知识库；
+ *    **会话项与分组头的操作统一收拢到右键菜单**（共享组件 ContextMenu，
+ *    与「工作目录 / 技能」页签同一套样式）—— 旧的两颗「更多」按钮已移除
+ *  - 工作目录：当前工作目录的文件树（只读，见 workspace-tree.tsx）
+ *  - 技能：已安装技能列表（见 skill-list.tsx）：单击 = 开关式引用 SKILL.md，已引用的卡片高亮
  */
-import { useState, useMemo, useCallback, useEffect, useRef, JSX } from 'react'
+import { useState, useMemo, useCallback, JSX } from 'react'
 import { observer } from 'mobx-react-lite'
 import type { Session, Message } from '@/types'
 import {
@@ -19,18 +21,18 @@ import {
   settingsState,
 } from '@/ui/store'
 import AddSvg from '@/ui/components/icons/AddSvg'
-import MoreSvg from '@/ui/components/icons/MoreSvg'
 import DropDownSvg from '@/ui/components/icons/DropDownSvg'
 import AgentSvg from '@/ui/components/icons/AgentSvg'
 import PinSvg from '@/ui/components/icons/PinSvg'
-import EditSvg from '@/ui/components/icons/EditSvg'
-import ExportSvg from '@/ui/components/icons/ExportSvg'
-import DeleteSvg from '@/ui/components/icons/DeleteSvg'
 import ExportDialog from '@/ui/pages/chat/components/modals/ExportDialog'
 import { exportSessionToFile } from '@/services/export-service'
 import { showToast } from '@/ui/components/shared/Toast'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 import Modal, { ModalFooterButtons } from '@/ui/components/shared/Modal'
+import ContextMenu, {
+  useContextMenu,
+  type ContextMenuItem,
+} from '@/ui/components/shared/ContextMenu'
 import { t, tpl } from '@/ui/i18n'
 import './style.scss'
 import { timeFormat } from '@/utils/time'
@@ -42,15 +44,35 @@ import settingsEvent from '@/events/settingsEvent'
 import { openPath } from '@tauri-apps/plugin-opener'
 import { ragService } from '@/services/rag-service'
 import type { KnowledgeBase } from '@/domain/ports'
+import WorkspaceTree from './workspace-tree'
+import SkillList from './skill-list'
 
 interface Props {
   onSelectSession: (sessionId: string) => void
+  /** 把路径作为附件挂到聊天输入框（目录树右键「引用」/ 拖拽到输入框） */
+  onAttachPaths: (paths: string[]) => void
+  /** 把技能引用挂到聊天输入框（技能卡片单击 / 拖拽到输入框） */
+  onAttachSkills: (names: string[]) => void
+  /** 输入框当前已引用的技能名（技能卡片据此高亮） */
+  referencedSkills: string[]
+  /** 技能卡片单击：未引用则引用，已引用则取消 */
+  onToggleSkill: (name: string) => void
   style?: React.CSSProperties
   className?: string
 }
 
 /** 未分组会话的虚拟 key */
 const UNGROUPED_KEY = '__ungrouped__'
+
+/** 侧边栏页签 */
+type SidebarTab = 'sessions' | 'workspace' | 'skills'
+
+/** 页签定义（label 以中文为 i18n key，渲染时再 t()） */
+const SIDEBAR_TABS: { key: SidebarTab; label: string }[] = [
+  { key: 'sessions', label: '会话' },
+  { key: 'workspace', label: '工作目录' },
+  { key: 'skills', label: '技能' },
+]
 
 type SessionGroup = {
   key: string
@@ -128,16 +150,29 @@ function groupSessionsByWorkspace(sessions: Session[]): SessionGroup[] {
   })
 }
 
-function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
+function ChatSidebar({
+  onSelectSession,
+  onAttachPaths,
+  onAttachSkills,
+  referencedSkills,
+  onToggleSkill,
+  style,
+  className = '',
+}: Props) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
   const [expandGroups, setExpandGroups] = useState<Record<string, boolean>>({})
   const [exportSessionId, setExportSessionId] = useState<string | null>(null)
-  /** 当前打开的「更多」菜单 sessionId */
-  const [activeMenuId, setActiveMenuId] = useState<string | null>(null)
   /** 用量统计面板开关 */
   const [statsOpen, setStatsOpen] = useState(false)
-  const menuRef = useRef<HTMLDivElement>(null)
+  /** 当前页签：会话 / 工作目录 / 技能 */
+  const [activeTab, setActiveTab] = useState<SidebarTab>('sessions')
+  /**
+   * 会话项右键菜单。全应用唯一的 ContextMenu 实现（与「工作目录」「技能」
+   * 页签、消息气泡同源），点外部关闭 / Esc 关闭 / 视口钳制都由它负责，
+   * 这里不再需要上一版的 activeMenuId + menuRef + mousedown 监听那套手工逻辑。
+   */
+  const sessionMenu = useContextMenu<Session>()
 
   // ===== 导入知识库状态 =====
   const [showImportModal, setShowImportModal] = useState(false)
@@ -160,18 +195,6 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
         : groupSessionsByAgent(sessions),
     [sessions, sessionGroupType],
   )
-
-  // 点击菜单外部关闭
-  useEffect(() => {
-    if (!activeMenuId) return
-    function handleClickOutside(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setActiveMenuId(null)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [activeMenuId])
 
   const handleNewSession = useCallback(() => {
     chatState.set({ currentSessionId: null, error: null })
@@ -223,33 +246,24 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
     [onSelectSession],
   )
 
-  const handleDelete = useCallback((e: React.MouseEvent, sessionId: string) => {
-    e.stopPropagation()
-    setActiveMenuId(null)
+  // ⚠️ 菜单项回调不再接收 MouseEvent：菜单由共享组件 ContextMenu 渲染，
+  // 它在调用 onClick 之前已先 onClose（见 ContextMenu/index.tsx::handleItemClick），
+  // 所以旧版的 e.stopPropagation() / setActiveMenuId(null) 一并去掉。
+  const handleDelete = useCallback((sessionId: string) => {
     sessionStore.deleteSession(sessionId)
     if (chatState.value.currentSessionId === sessionId) {
       chatState.set({ currentSessionId: null })
     }
   }, [])
 
-  const handleTogglePin = useCallback(
-    (e: React.MouseEvent, sessionId: string) => {
-      e.stopPropagation()
-      setActiveMenuId(null)
-      sessionStore.toggleSessionPin(sessionId)
-    },
-    [],
-  )
+  const handleTogglePin = useCallback((sessionId: string) => {
+    sessionStore.toggleSessionPin(sessionId)
+  }, [])
 
-  const handleStartEdit = useCallback(
-    (e: React.MouseEvent, session: Session) => {
-      e.stopPropagation()
-      setActiveMenuId(null)
-      setEditingId(session.id)
-      setEditTitle(session.title)
-    },
-    [],
-  )
+  const handleStartEdit = useCallback((session: Session) => {
+    setEditingId(session.id)
+    setEditTitle(session.title)
+  }, [])
 
   const handleSaveEdit = useCallback(
     (sessionId: string) => {
@@ -268,14 +282,9 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
     }))
   }, [])
 
-  const handleOpenExport = useCallback(
-    (e: React.MouseEvent, sessionId: string) => {
-      e.stopPropagation()
-      setActiveMenuId(null)
-      setExportSessionId(sessionId)
-    },
-    [],
-  )
+  const handleOpenExport = useCallback((sessionId: string) => {
+    setExportSessionId(sessionId)
+  }, [])
 
   const handleCloseExport = useCallback(() => {
     setExportSessionId(null)
@@ -307,9 +316,7 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
   // ===== 导入知识库 =====
 
   const handleOpenImportKB = useCallback(
-    async (e: React.MouseEvent, sessionId: string) => {
-      e.stopPropagation()
-      setActiveMenuId(null)
+    async (sessionId: string) => {
       setImportSessionId(sessionId)
       setSelectedKbId('')
       setShowImportModal(true)
@@ -383,10 +390,51 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
     setImportLoading(false)
   }, [importSessionId, selectedKbId, selectedMsgIds, handleCloseImport])
 
-  const toggleMenu = useCallback((e: React.MouseEvent, sessionId: string) => {
-    e.stopPropagation()
-    setActiveMenuId((prev) => (prev === sessionId ? null : sessionId))
-  }, [])
+  /**
+   * 会话项右键菜单项。
+   *
+   * 与分组头那套旧的内联菜单（.group-more-menu）不同，这里走全应用统一的
+   * ContextMenu；**菜单项在渲染时按 target 现算**，所以「置顶 / 取消置顶」
+   * 这类随状态变的文案不会是打开那一刻的过期值。
+   */
+  const buildSessionMenuItems = useCallback(
+    (session: Session): ContextMenuItem[] => [
+      {
+        key: 'pin',
+        label: session.pinned ? t('取消置顶') : t('置顶'),
+        onClick: () => handleTogglePin(session.id),
+      },
+      {
+        key: 'rename',
+        label: t('重命名'),
+        onClick: () => handleStartEdit(session),
+      },
+      {
+        key: 'export',
+        label: t('导出'),
+        onClick: () => handleOpenExport(session.id),
+      },
+      {
+        key: 'import-kb',
+        label: t('导入知识库'),
+        onClick: () => handleOpenImportKB(session.id),
+      },
+      {
+        key: 'delete',
+        label: t('删除'),
+        divider: true,
+        danger: true,
+        onClick: () => handleDelete(session.id),
+      },
+    ],
+    [
+      handleTogglePin,
+      handleStartEdit,
+      handleOpenExport,
+      handleOpenImportKB,
+      handleDelete,
+    ],
+  )
 
   // ===== 消息选择 =====
 
@@ -420,13 +468,15 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
   const renderSession = (session: Session) => {
     const rt = getSessionRuntime(session.id)
     const isCurrent = session.id === chatState.value.currentSessionId
-    const isMenuOpen = activeMenuId === session.id
     const isEdit = editingId === session.id
     return (
       <div
         key={session.id}
         className={`session-item ${isCurrent ? 'active' : ''} ${rt.working ? 'working' : ''} ${session.pinned ? 'pinned' : ''}`}
-        onClick={(isEdit) => handleSelect(session.id)}>
+        onClick={() => handleSelect(session.id)}
+        // 右键即菜单（原来的「更多」按钮已移除）：openAt 会 preventDefault +
+        // stopPropagation，顺带拦掉浏览器默认菜单与外层的右键处理
+        onContextMenu={(e) => sessionMenu.openAt(e, session)}>
         {/* 非当前会话有新回复 → 左侧红点提示 */}
         {rt.hasNewReply && !isCurrent && (
           <span className="new-reply-dot" title={t('有新的回复')} />
@@ -463,65 +513,6 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
           )}
           <span className="session-meta">{timeFormat(session.updatedAt)}</span>
         </div>
-
-        {/* 「更多」菜单按钮 */}
-        <div
-          className={`session-more ${isEdit ? 'hidden' : ''}`}
-          ref={isMenuOpen ? menuRef : undefined}>
-          <button
-            className={`more-btn ${isMenuOpen ? 'active' : ''}`}
-            onClick={(e) => toggleMenu(e, session.id)}
-            title={t('更多操作')}>
-            <MoreSvg />
-          </button>
-          {isMenuOpen && (
-            <div className="more-menu" onClick={(e) => e.stopPropagation()}>
-              <button
-                className="menu-item"
-                onClick={(e) => handleTogglePin(e, session.id)}>
-                <span className="menu-icon">
-                  <PinSvg />
-                </span>
-                <span className="menu-label">
-                  {session.pinned ? t('取消置顶') : t('置顶')}
-                </span>
-              </button>
-              <button
-                className="menu-item"
-                onClick={(e) => handleStartEdit(e, session)}>
-                <span className="menu-icon">
-                  <EditSvg />
-                </span>
-                <span className="menu-label">{t('重命名')}</span>
-              </button>
-              <button
-                className="menu-item"
-                onClick={(e) => handleOpenExport(e, session.id)}>
-                <span className="menu-icon">
-                  <ExportSvg />
-                </span>
-                <span className="menu-label">{t('导出')}</span>
-              </button>
-              <button
-                className="menu-item"
-                onClick={(e) => handleOpenImportKB(e, session.id)}>
-                <span className="menu-icon">
-                  <FolderSvg />
-                </span>
-                <span className="menu-label">{t('导入知识库')}</span>
-              </button>
-              <div className="menu-divider" />
-              <button
-                className="menu-item danger"
-                onClick={(e) => handleDelete(e, session.id)}>
-                <span className="menu-icon">
-                  <DeleteSvg />
-                </span>
-                <span className="menu-label">{t('删除')}</span>
-              </button>
-            </div>
-          )}
-        </div>
       </div>
     )
   }
@@ -546,7 +537,27 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
           <span>{t('用量统计')}</span>
         </button>
       </div>
-      <div className="session-list">
+
+      {/* 页签：会话 / 工作目录 / 技能 */}
+      <div className="sidebar-tabs" role="tablist">
+        {SIDEBAR_TABS.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === tab.key}
+            className={`sidebar-tab ${activeTab === tab.key ? 'active' : ''}`}
+            onClick={() => setActiveTab(tab.key)}>
+            {t(tab.label)}
+          </button>
+        ))}
+      </div>
+
+      {/* 会话页签常驻 DOM（只切换显隐），避免切换页签时丢掉滚动位置与分组的展开态 */}
+      <div
+        className={
+          activeTab === 'sessions' ? 'session-list' : 'session-list tab-hidden'
+        }>
         {groups.length > 0 ? (
           groups.map((group) => (
             <SessionGroupView
@@ -571,6 +582,24 @@ function ChatSidebar({ onSelectSession, style, className = '' }: Props) {
           </div>
         )}
       </div>
+
+      {/* 会话项右键菜单（portal 挂到 body，位置由 ContextMenu 钳进视口） */}
+      {sessionMenu.state && (
+        <ContextMenu
+          position={sessionMenu.state.position}
+          items={buildSessionMenuItems(sessionMenu.state.target)}
+          onClose={sessionMenu.close}
+        />
+      )}
+
+      {activeTab === 'workspace' && <WorkspaceTree onAttachPaths={onAttachPaths} />}
+      {activeTab === 'skills' && (
+        <SkillList
+          onAttachSkills={onAttachSkills}
+          referencedSkills={referencedSkills}
+          onToggleSkill={onToggleSkill}
+        />
+      )}
 
       {/* 用量统计面板（portal 挂到 body，见组件内部注释） */}
       <TokenStatsPanel
@@ -795,9 +824,13 @@ function SessionGroupView({
   onToggleGroup,
   onNewSession,
 }: SessionGroupViewProps) {
-  const [isGroupMenuOpen, setGroupMenuOpen] = useState(false)
   const [showAll, setShowAll] = useState(false)
-  const groupMenuRef = useRef<HTMLDivElement>(null)
+  /**
+   * 分组头右键菜单。与「会话项」共用同一个 ContextMenu：
+   * 原来那套「hover 换出更多按钮 + 内联 absolute 下拉」已整体删除
+   * （它自带一套点外部关闭的实现，且样式与目录树 / 技能页签分叉）。
+   */
+  const menu = useContextMenu<SessionGroup>()
 
   // 检查组内是否有会话正在工作中
   const hasWorkingSession = useMemo(
@@ -811,82 +844,88 @@ function SessionGroupView({
     [group.sessions],
   )
 
-  // 点击菜单外部关闭
-  useEffect(() => {
-    if (!isGroupMenuOpen) return
-    function handleClickOutside(e: MouseEvent) {
-      if (
-        groupMenuRef.current &&
-        !groupMenuRef.current.contains(e.target as Node)
-      ) {
-        setGroupMenuOpen(false)
-      }
+  const handleDeleteAllSessions = useCallback(async () => {
+    const count = group.sessions.length
+    const confirmed = await MessageBox.propt(
+      tpl('删除 $__name__ 分组下的所有会话？', {
+        name: group.name,
+      }),
+      tpl('该操作将永久删除 $__count__ 个会话，无法恢复。', {
+        count,
+      }),
+      { confirmText: t('确认删除'), cancelText: t('取消'), danger: true },
+    )
+    if (!confirmed) return
+
+    const ids = group.sessions.map((s) => s.id)
+    sessionStore.deleteSessions(ids)
+    const currentId = chatState.value.currentSessionId
+    if (currentId && ids.includes(currentId)) {
+      chatState.set({ currentSessionId: null })
     }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [isGroupMenuOpen])
+    showToast(tpl('已删除 $__count__ 个会话', { count: ids.length }), 2000)
+  }, [group.sessions, group.name])
 
-  const toggleGroupMenu = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation()
-    setGroupMenuOpen((prev) => !prev)
-  }, [])
+  const handleOpenWorkspace = useCallback(async () => {
+    if (group.key === UNGROUPED_KEY) return
+    await openPath(group.key).catch(() => {
+      showToast(t('无法在系统文件管理器中打开该路径'), 2000)
+    })
+  }, [group.key])
 
-  const handleDeleteAllSessions = useCallback(
-    async (e: React.MouseEvent) => {
-      e.stopPropagation()
-      setGroupMenuOpen(false)
+  const handleEditAgent = useCallback(() => {
+    if (group.key === UNGROUPED_KEY) return
+    chatState.setValue('selectedAgentId', group.key)
+    settingsEvent.emit('openSettings', 'agent')
+  }, [group.key])
 
-      const count = group.sessions.length
-      const confirmed = await MessageBox.propt(
-        tpl('删除 $__name__ 分组下的所有会话？', {
-          name: group.name,
-        }),
-        tpl('该操作将永久删除 $__count__ 个会话，无法恢复。', {
-          count,
-        }),
-        { confirmText: t('确认删除'), cancelText: t('取消'), danger: true },
+  /** 分组头右键菜单项（与「会话项」同一套共享 ContextMenu 样式） */
+  const groupMenuItems = useMemo((): ContextMenuItem[] => {
+    const items: ContextMenuItem[] = [
+      { key: 'new-session', label: t('新对话'), onClick: onNewSession },
+    ]
+    // 「打开文件路径 / 编辑智能体」按分组维度二选一，未分组时两个都不适用
+    if (group.key !== UNGROUPED_KEY) {
+      items.push(
+        sessionGroupType === 'workspace'
+          ? {
+              key: 'open-workspace',
+              label: t('打开文件路径'),
+              divider: true,
+              onClick: handleOpenWorkspace,
+            }
+          : {
+              key: 'edit-agent',
+              label: t('编辑智能体'),
+              divider: true,
+              onClick: handleEditAgent,
+            },
       )
-      if (!confirmed) return
-
-      const ids = group.sessions.map((s) => s.id)
-      sessionStore.deleteSessions(ids)
-      const currentId = chatState.value.currentSessionId
-      if (currentId && ids.includes(currentId)) {
-        chatState.set({ currentSessionId: null })
-      }
-      showToast(tpl('已删除 $__count__ 个会话', { count: ids.length }), 2000)
-    },
-    [group.sessions, group.name],
-  )
-
-  const handleOpenWorkspace = useCallback(
-    async (e: React.MouseEvent) => {
-      e.stopPropagation()
-      setGroupMenuOpen(false)
-      if (group.key === UNGROUPED_KEY) return
-      await openPath(group.key).catch(() => {
-        showToast(t('无法在系统文件管理器中打开该路径'), 2000)
-      })
-    },
-    [group.key],
-  )
-
-  const handleEditAgent = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation()
-      setGroupMenuOpen(false)
-      if (group.key === UNGROUPED_KEY) return
-      chatState.setValue('selectedAgentId', group.key)
-      settingsEvent.emit('openSettings', 'agent')
-    },
-    [group.key],
-  )
+    }
+    items.push({
+      key: 'delete-all',
+      label: t('删除所有会话'),
+      divider: true,
+      danger: true,
+      onClick: handleDeleteAllSessions,
+    })
+    return items
+  }, [
+    sessionGroupType,
+    group.key,
+    onNewSession,
+    handleOpenWorkspace,
+    handleEditAgent,
+    handleDeleteAllSessions,
+  ])
 
   return (
     <div className="session-group">
       <div
         className={`session-group-header${hasActiveSession && isCollapsed ? ' has-active' : ''}`}
         onClick={onToggleGroup}
+        // 右键即菜单（原来的「更多」按钮已移除，与「会话项」保持一致）
+        onContextMenu={(e) => menu.openAt(e, group)}
         title={group.title}>
         <DropDownSvg
           className={`group-toggle ${isCollapsed ? 'collapsed' : ''}`}
@@ -904,47 +943,18 @@ function SessionGroupView({
           <span className="new-reply-dot" title={t('有新的回复')} />
         )}
         <span className="group-name">{group.name}</span>
-        <div
-          className={`group-header-actions${isGroupMenuOpen ? ' menu-open' : ''}`}
-          ref={isGroupMenuOpen ? groupMenuRef : undefined}>
-          <span className="group-count" onClick={toggleGroupMenu}>
-            {group.sessions.length}
-          </span>
-          <button
-            className="group-more-btn"
-            onClick={toggleGroupMenu}
-            title={t('更多操作')}>
-            <MoreSvg />
-          </button>
-          {isGroupMenuOpen && (
-            <div
-              className="group-more-menu"
-              onClick={(e) => e.stopPropagation()}>
-              <button className="menu-item" onClick={onNewSession}>
-                <span className="menu-label">{t('新对话')}</span>
-              </button>
-              <div className="menu-divider" />
-              {sessionGroupType === 'workspace' &&
-                group.key !== UNGROUPED_KEY && (
-                  <button className="menu-item" onClick={handleOpenWorkspace}>
-                    <span className="menu-label">{t('打开文件路径')}</span>
-                  </button>
-                )}
-              {sessionGroupType === 'agent' && group.key !== UNGROUPED_KEY && (
-                <button className="menu-item" onClick={handleEditAgent}>
-                  <span className="menu-label">{t('编辑智能体')}</span>
-                </button>
-              )}
-              <div className="menu-divider" />
-              <button
-                className="menu-item danger"
-                onClick={handleDeleteAllSessions}>
-                <span className="menu-label">{t('删除所有会话')}</span>
-              </button>
-            </div>
-          )}
-        </div>
+        {/* 会话数只是计数（点击行为交给整行 = 折叠/展开），操作全在右键菜单里 */}
+        <span className="group-count">{group.sessions.length}</span>
       </div>
+
+      {/* 分组头右键菜单（portal 挂到 body，位置由 ContextMenu 钳进视口） */}
+      {menu.state && (
+        <ContextMenu
+          position={menu.state.position}
+          items={groupMenuItems}
+          onClose={menu.close}
+        />
+      )}
       {!isCollapsed && (
         <div className="session-group-items">
           {group.sessions.length > 11 && !showAll

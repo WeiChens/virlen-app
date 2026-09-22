@@ -4,6 +4,8 @@
  * 重点守住两条不变量：
  *   1. 文件附件只带路径，绝不带文件内容（"不拷贝文件"是产品约定）
  *   2. 文本/图片的既有行为不被文件附件改变（回归保护）
+ * 再补一条与之相反的不变量：
+ *   3. 技能引用**必须**带 SKILL.md 全文（"引用技能"的语义就是把说明交给模型）
  */
 import { describe, it, expect } from 'vitest'
 import {
@@ -11,9 +13,10 @@ import {
   getFileBlocks,
   getImageUrls,
   getQuoteBlocks,
+  getSkillBlocks,
   fileBlocksToText,
 } from '@/utils/messageContent'
-import { fileBlockToText, quoteBlockToText } from '@/types'
+import { fileBlockToText, quoteBlockToText, skillBlockToText } from '@/types'
 
 const img = (n: number) => ({ url: `data:image/png;base64,IMG${n}` })
 
@@ -239,6 +242,153 @@ describe('quoteBlockToText', () => {
       }),
     ).toBe(
       '[Quoted message]\nSender: user\nMessage ID: m-2\nContent:\n第一行\n第二行',
+    )
+  })
+})
+
+// ==================== 技能引用 ====================
+
+const skill = (name: string, path: string, content: string) => ({
+  name,
+  path,
+  content,
+})
+
+describe('buildUserContent + 技能引用', () => {
+  it('技能块在引用之后、正文之前（都是给模型的上下文，先上下文后指令）', () => {
+    const content = buildUserContent(
+      '用它审查',
+      [],
+      [],
+      [quote('m-1', 'assistant', '上一轮结论')],
+      [skill('code-reviewer', 'C:/skills/code-reviewer', '# 规则')],
+    ) as any[]
+
+    expect(content.map((b) => b.type)).toEqual(['quote', 'skill', 'text'])
+    expect(content[1]).toEqual({
+      type: 'skill',
+      name: 'code-reviewer',
+      path: 'C:/skills/code-reviewer',
+      content: '# 规则',
+    })
+  })
+
+  it('技能块字段白名单：技能名 + 目录 + 全文快照，不带其他字段', () => {
+    const content = buildUserContent('x', [], [], [], [
+      skill('code-reviewer', 'C:/skills/code-reviewer', '# 规则'),
+    ]) as any[]
+    expect(Object.keys(content[0]).sort()).toEqual([
+      'content',
+      'name',
+      'path',
+      'type',
+    ])
+  })
+
+  it('带 description 时原样落到技能块（气泡卡片正文用）', () => {
+    const content = buildUserContent('x', [], [], [], [
+      {
+        ...skill('code-reviewer', 'C:/skills/code-reviewer', '# 规则'),
+        description: '审查代码',
+      },
+    ]) as any[]
+    expect(content[0].description).toBe('审查代码')
+  })
+
+  it('description 为空时不落字段（不在库里 / 请求体里堆空字段）', () => {
+    const content = buildUserContent('x', [], [], [], [
+      { ...skill('code-reviewer', 'C:/skills', '# 规则'), description: '' },
+    ]) as any[]
+    expect('description' in content[0]).toBe(false)
+  })
+
+  it('全文原样带上（SKILL.md 较长时不被截断 / 不转义）', () => {
+    const md = '# 审查规则\n\n1. 先看边界\n2. 再看好坏\n\n```ts\nconst a = 1\n```\n'
+    const content = buildUserContent('x', [], [], [], [
+      skill('reviewer', 'C:/skills/reviewer', md),
+    ]) as any[]
+    expect(content[0].content).toBe(md)
+  })
+
+  it('仅技能无正文：补一句「请参考我引用的技能」', () => {
+    const content = buildUserContent('', [], [], [], [
+      skill('code-reviewer', 'C:/skills/code-reviewer', '# 规则'),
+    ]) as any[]
+    expect(content.map((b) => b.type)).toEqual(['skill', 'text'])
+    expect(content[1].text).toBe('请参考我引用的技能')
+  })
+
+  it('五个参数全给：quote → skill → text → image → file', () => {
+    const content = buildUserContent(
+      '干活',
+      [img(1)],
+      [{ path: 'C:/a.ts' }],
+      [quote('m-1', 'assistant', 'B')],
+      [skill('reviewer', 'C:/skills/reviewer', '# 规则')],
+    ) as any[]
+    expect(content.map((b) => b.type)).toEqual([
+      'quote',
+      'skill',
+      'text',
+      'image_url',
+      'file',
+    ])
+  })
+
+  it('不传 skills 时行为与旧版一致（向后兼容）', () => {
+    expect(buildUserContent('你好')).toEqual([{ type: 'text', text: '你好' }])
+  })
+})
+
+describe('getSkillBlocks', () => {
+  it('字符串 content 不报错并返回空', () => {
+    expect(getSkillBlocks('plain')).toEqual([])
+  })
+
+  it('筛出技能块，忽略其他块', () => {
+    const content = buildUserContent('x', [], [{ path: 'C:/a.ts' }], [], [
+      skill('reviewer', 'C:/skills/reviewer', '# 规则'),
+    ])
+    const blocks = getSkillBlocks(content)
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].name).toBe('reviewer')
+    expect(blocks[0].content).toBe('# 规则')
+  })
+})
+
+describe('skillBlockToText', () => {
+  // 这里故意断言字面量（而不是引用常量）：常量被改时要红，
+  // 提醒同步 Rust 侧 provider.rs 的同名常量（铁律 1：双引擎文案一致）
+  it('四个字段恒定输出，SKILL.md 全文在最后', () => {
+    expect(
+      skillBlockToText({
+        type: 'skill',
+        name: 'code-reviewer',
+        path: 'C:/skills/code-reviewer',
+        content: '# 审查规则\n先看边界。',
+      }),
+    ).toBe(
+      '[Skill]\nName: code-reviewer\nDirectory: C:/skills/code-reviewer\nSKILL.md:\n# 审查规则\n先看边界。',
+    )
+  })
+
+  it('缺失字段退化为空值，不产生 undefined 字面量', () => {
+    expect(
+      skillBlockToText({ type: 'skill', name: '', content: '' }),
+    ).toBe('[Skill]\nName: \nDirectory: \nSKILL.md:\n')
+  })
+
+  it('description 不进降级文本（它只给 UI 看，Rust 侧同样不读）', () => {
+    expect(
+      skillBlockToText({
+        type: 'skill',
+        name: 'code-reviewer',
+        path: 'C:/skills/code-reviewer',
+        description: '审查代码',
+        content: '# 规则',
+      }),
+    ).toBe(
+      '[Skill]\nName: code-reviewer\nDirectory: C:/skills/code-reviewer\nSKILL.md:\n# 规则',
     )
   })
 })

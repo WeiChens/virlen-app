@@ -4,6 +4,7 @@
  * useImageAttachment — 图片附件管理（选取 / 粘贴 / 拖拽 / 磁盘路径）
  * useFileAttachment  — 文件附件管理（只存路径，不拷贝文件内容）
  * useQuoteAttachment — 引用消息管理（只存被引用消息的 id / 发送方 / 正文快照）
+ * useSkillAttachment — 技能引用管理（读 SKILL.md **全文**快照，与文件附件相反）
  * useVoiceInput      — 语音输入（Web Speech API）
  */
 import { useState, useRef, useCallback, useEffect } from 'react'
@@ -12,6 +13,7 @@ import * as tauriFs from '@tauri-apps/plugin-fs'
 import { v4 } from '@/utils/uuid'
 import { showToast } from '@/ui/components/shared/Toast'
 import { t, tpl } from '@/ui/i18n'
+import { getRegisteredSkill } from '@/skill'
 
 // ====================================================================
 // 图片附件
@@ -314,6 +316,115 @@ export function useQuoteAttachment() {
   }, [])
 
   return { quotes, setQuotes, addQuote, removeQuote, clearQuotes }
+}
+
+// ====================================================================
+// 技能引用（存 SKILL.md 全文快照）
+// ====================================================================
+
+/** 技能引用附件 */
+export interface SkillAttachment {
+  id: string
+  /** 技能唯一标识（skillStore 的 meta.name） */
+  name: string
+  /** 技能源码目录绝对路径（chip 展示 / 打开目录用） */
+  path: string
+  /** 技能描述（SKILL.md frontmatter）：消息气泡的卡片正文用 */
+  description?: string
+  /** SKILL.md 全文快照（挂载时读一次，发送后技能被改 / 删都不影响本条消息） */
+  content: string
+}
+
+/**
+ * SKILL.md 最大收录字符数
+ *
+ * 技能说明通常几 KB，但用户完全可以塞一本手册进去——那会把单次请求体撑爆。
+ * 超限则截断（并明确提示），而不是静默失败或原样发出去。
+ */
+const SKILL_MD_MAX_CHARS = 100_000
+
+/**
+ * 技能引用管理 hook
+ *
+ * 与文件附件（只记路径，内容交给模型用工具读）的关键区别：这里**读全文并快照**。
+ * 读的是 `skill.path/SKILL.md` 而不是按技能名拼路径——技能目录名允许与
+ * frontmatter 的 name 不一致（见 skillStore 的注册逻辑），path 才是权威。
+ */
+export function useSkillAttachment() {
+  const [skills, setSkills] = useState<SkillAttachment[]>([])
+
+  /** 按技能名添加引用（读 SKILL.md 全文 + 去重；同名技能只保留一份） */
+  const addSkills = useCallback(async (names: string[]) => {
+    const added: SkillAttachment[] = []
+    let failedName = ''
+    let truncated = false
+
+    for (const raw of names) {
+      const name = (raw || '').trim()
+      if (!name) continue
+      const skill = getRegisteredSkill(name)
+      if (!skill) {
+        failedName = failedName || name
+        continue
+      }
+      try {
+        let content = await tauriFs.readTextFile(`${skill.path}/SKILL.md`)
+        if (content.length > SKILL_MD_MAX_CHARS) {
+          content = `${content.slice(0, SKILL_MD_MAX_CHARS)}\n\n…[SKILL.md truncated]`
+          truncated = true
+        }
+        added.push({
+          id: v4(),
+          name: skill.meta.name,
+          path: skill.path,
+          // 描述取注册元信息（与 SKILL.md 同源于 frontmatter），随消息快照下去
+          description: skill.meta.description,
+          content,
+        })
+      } catch {
+        failedName = failedName || name
+      }
+    }
+
+    if (failedName) {
+      showToast(tpl('读取技能失败：$__name__', { name: failedName }))
+    }
+    if (truncated) {
+      showToast(
+        tpl('SKILL.md 过大，已截断到 $__count__ 字符', {
+          count: SKILL_MD_MAX_CHARS,
+        }),
+      )
+    }
+    if (added.length === 0) return
+
+    setSkills((prev) => {
+      const seen = new Set(prev.map((s) => s.name))
+      return [...prev, ...added.filter((s) => !seen.has(s.name))]
+    })
+  }, [])
+
+  /** 移除指定技能引用 */
+  const removeSkill = useCallback((id: string) => {
+    setSkills((prev) => prev.filter((s) => s.id !== id))
+  }, [])
+
+  /**
+   * 按技能名移除引用
+   *
+   * 侧边栏卡片「再点一下取消」和输入框 chip 的 ✕ 走两条路：chip 持有 id，卡片只知道名字。
+   */
+  const removeSkillsByName = useCallback((names: string[]) => {
+    const targets = new Set(names)
+    setSkills((prev) => prev.filter((s) => !targets.has(s.name)))
+  }, [])
+
+  /** 清空所有技能引用 */
+  const clearSkills = useCallback(() => {
+    setSkills([])
+  }, [])
+
+  return { skills, setSkills, addSkills, removeSkill, removeSkillsByName, clearSkills }
 }
 
 // ====================================================================

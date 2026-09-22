@@ -92,6 +92,33 @@ export interface QuoteContent {
   text: string
 }
 
+/**
+ * 技能引用块：把某个 Skill 的 SKILL.md **全文**作为本条消息的上下文
+ *
+ * 与 FileContent（只存路径，让模型自己读）刻意不同：技能是「领域知识包」，
+ * 用户引用它的意图就是让模型**立刻拿到**其中的规则/流程，所以内容随消息一起发送。
+ * 与 QuoteContent 同构——引用即快照，发送后技能被改 / 被删都不影响本条消息的自包含性。
+ * 各协议（openai / anthropic / gemini / Rust 原生引擎）统一降级为文本。
+ */
+export interface SkillContent {
+  type: 'skill'
+  /** 技能唯一标识（skillStore 的 meta.name） */
+  name: string
+  /** 技能源码目录绝对路径（供模型定位 SKILL.md 之外的脚本 / 资源） */
+  path?: string
+  /**
+   * 技能描述（来自 SKILL.md frontmatter）
+   *
+   * ⚠️ 只服务于 UI（消息气泡的技能卡片正文）。**不参与降级文本**：
+   * `skillBlockToText` 只带 name / path / content，Rust 侧 `skill_block_to_text`
+   * 同样按字段名取 name / path / content（块以 `Value` 解析，多余字段自动忽略）。
+   * 所以加这个字段不会改变发给模型的内容，也就不涉及双引擎同步。
+   */
+  description?: string
+  /** SKILL.md 全文快照 */
+  content: string
+}
+
 export interface ToolUseContent {
   type: 'tool_use'
   id: string
@@ -113,6 +140,7 @@ export type MessageContent =
       | ImageContent
       | FileContent
       | QuoteContent
+      | SkillContent
       | ToolUseContent
       | ToolResultContent
     )[]
@@ -172,6 +200,45 @@ export function quoteBlockToText(block: QuoteContent): string {
     `${QUOTE_MESSAGE_ID_LABEL}: ${block.messageId}`,
     `${QUOTE_CONTENT_LABEL}:`,
     block.text,
+  ].join('\n')
+}
+
+/**
+ * 技能引用块标签：降级成文本时给模型看的字段名（模型可读，不是 UI 文案）
+ *
+ * 与 Rust 侧 `src-tauri/src/agent/provider.rs` 的同名常量必须逐字一致
+ * （铁律 1：TS / Rust 双引擎同语义），改文案要两边一起改。
+ */
+export const SKILL_BLOCK_LABEL = '[Skill]'
+export const SKILL_NAME_LABEL = 'Name'
+export const SKILL_DIR_LABEL = 'Directory'
+export const SKILL_CONTENT_LABEL = 'SKILL.md'
+
+/**
+ * 技能引用块 → 发给 LLM 的文本形式
+ *
+ * 与 quoteBlockToText 一样由所有 Provider 共用，保证同一条消息在所有协议下
+ * 对模型呈现完全一致。**SKILL.md 全文原样带出**（这正是「引用技能」的语义），
+ * 目录行让模型能顺着 `Directory` 用文件工具读取脚本等其它资源。
+ *
+ * ```
+ * [Skill]
+ * Name: my-skill
+ * Directory: <技能目录绝对路径>
+ * SKILL.md:
+ * <SKILL.md 全文>
+ * ```
+ *
+ * ⚠️ 四个字段**恒定输出**（缺失时为空值），不做条件拼接 —— 条件分支最容易
+ * 让 TS / Rust 两侧的输出产生一个换行的差异。
+ */
+export function skillBlockToText(block: SkillContent): string {
+  return [
+    SKILL_BLOCK_LABEL,
+    `${SKILL_NAME_LABEL}: ${block.name || ''}`,
+    `${SKILL_DIR_LABEL}: ${block.path || ''}`,
+    `${SKILL_CONTENT_LABEL}:`,
+    block.content || '',
   ].join('\n')
 }
 

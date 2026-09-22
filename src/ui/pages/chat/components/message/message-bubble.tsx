@@ -20,10 +20,11 @@ import { settingsState } from '@/ui/store'
 import { v4 } from '@/utils/uuid'
 import { showImagePreview } from '@/ui/components/shared/ImagePreview'
 import FileChip from '@/ui/components/shared/FileChip'
+import SkillChip from '@/ui/components/shared/SkillChip'
 import QuickInputSvg from '@/ui/components/icons/QuickInputSvg'
 import { Observer } from 'mobx-react-lite'
 import { openPath } from '@tauri-apps/plugin-opener'
-import { getFileBlocks, getQuoteBlocks } from '@/utils/messageContent'
+import { getFileBlocks, getQuoteBlocks, getSkillBlocks } from '@/utils/messageContent'
 import QuoteSvg from '@/ui/components/icons/QuoteSvg'
 import QuoteChip from '@/ui/components/shared/QuoteChip'
 import ContextMenu, {
@@ -68,6 +69,7 @@ type MenuTarget =
   | { kind: 'reasoning' }
   | { kind: 'image'; src: string }
   | { kind: 'file'; path: string; isDir?: boolean }
+  | { kind: 'skill'; path: string }
 
 function MessageBubble({
   message,
@@ -119,6 +121,8 @@ function MessageBubble({
   const files = getFileBlocks(message.content)
   /** 引用消息（本条消息引用了哪些历史消息的正文） */
   const quotes = getQuoteBlocks(message.content)
+  /** 技能引用（本条消息携带了哪些技能的 SKILL.md 全文） */
+  const skills = getSkillBlocks(message.content)
 
   function handleCopy() {
     const content = getContent(false)
@@ -173,6 +177,20 @@ function MessageBubble({
         return imageMenuItems(target.src)
       case 'file':
         return fileMenuItems(target.path, { isDir: target.isDir })
+      case 'skill':
+        // 技能引用：打开 / 编辑器打开直接指向 SKILL.md（引用的就是这份说明），
+        // 再补一个目录入口（isDir 菜单会自动隐掉「编辑器打开」）
+        return [
+          ...fileMenuItems(`${target.path}/SKILL.md`),
+          {
+            key: 'open-skill-dir',
+            label: t('打开技能目录'),
+            divider: true,
+            onClick: () => {
+              openPath(target.path).catch(() => showToast(t('打开失败')))
+            },
+          },
+        ]
       case 'reasoning':
         // 选区优先，无选区则复制整段思考内容；「全选」便于两步拿到全部
         return textMenuItems(() => message.reasoningContent || '', {
@@ -318,6 +336,35 @@ function MessageBubble({
                           onClick={
                             onQuoteJump
                               ? () => onQuoteJump(q.messageId)
+                              : undefined
+                          }
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {skills.length > 0 && (
+                    <div className="message-skills">
+                      {skills.map((s, i) => (
+                        <SkillChip
+                          key={`${i}-${s.name}`}
+                          // 气泡里用卡片形态：header 之外还能看到技能描述（最多三行）
+                          variant="card"
+                          name={s.name}
+                          path={s.path}
+                          description={s.description}
+                          chars={s.content.length}
+                          onContextMenu={
+                            // 没有目录就不给菜单（fileMenuItems 需要一个能用的绝对路径）
+                            s.path
+                              ? (e) =>
+                                  menu.openAt(e, { kind: 'skill', path: s.path! })
+                              : undefined
+                          }
+                          onClick={
+                            s.path
+                              ? () => {
+                                  openPath(s.path!).catch(() => { })
+                                }
                               : undefined
                           }
                         />

@@ -1,0 +1,199 @@
+/* ==================== SkillChip — 技能引用标签 / 卡片 ====================
+   两种形态共用一套骨架：
+   - chip（输入框）：单行窄标签，可移除（右侧 ✕ 默认隐藏，hover 出现）
+   - card（消息气泡）：header 同 chip，下面接技能描述（最多三行），可点击打开技能目录 */
+
+.skill-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 300px;
+  height: 24px;
+  padding: 0 4px 0 6px;
+  gap: 6px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 8px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-secondary, #666);
+  font-size: var(--font-size-sm, 12px);
+  line-height: 1;
+  user-select: none;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+
+  &:hover {
+    border-color: var(--accent-color, #4f46e5);
+    background: var(--hover-bg, #f0f0f0);
+  }
+
+  /* 主体：图标 + 技能名 + 字符数（可点时为 button，样式归零） */
+  .skill-chip-body {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    max-width: 100%;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+
+    &:is(button) {
+      cursor: pointer;
+    }
+  }
+
+  .skill-chip-icon {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    color: var(--accent-color, #4f46e5);
+
+    svg {
+      width: 14px;
+      height: 14px;
+      display: block;
+    }
+  }
+
+  /* 技能名可省略（技能名可能很长，其余信息不能被它挤掉） */
+  .skill-chip-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-primary, #1a1a1a);
+    font-weight: 500;
+  }
+
+  .skill-chip-meta {
+    flex-shrink: 0;
+    color: var(--text-tertiary, #999);
+  }
+
+  /* 移除按钮：默认隐形，hover 整块时才出现 */
+  .skill-chip-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-tertiary, #999);
+    font-size: 10px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    transition:
+      opacity 0.15s,
+      background 0.15s,
+      color 0.15s;
+
+    &:hover,
+    &:focus-visible {
+      opacity: 1;
+      background: var(--active-bg, #e8e8ed);
+      color: var(--color-danger, #e53e3e);
+    }
+
+    &:focus-visible {
+      outline: var(--focus-ring, 2px solid var(--accent-color, #4f46e5));
+    }
+  }
+
+  &:hover .skill-chip-remove,
+  &:focus-within .skill-chip-remove {
+    opacity: 1;
+  }
+
+  /* 触摸/键盘用户拿不到 hover：聚焦时也可见 */
+  &:focus-within {
+    border-color: var(--accent-color, #4f46e5);
+  }
+
+  /* ==================== card 形态（消息气泡） ====================
+     header 仍是 chip 那套（图标 + 技能名 + 字符数），下面接技能描述（最多三行）。
+     宽度固定而不是跟着正文伸缩：多条技能卡片才排得齐。 */
+  &.is-card {
+    position: relative;
+    display: block;
+    width: 400px;
+    max-width: 100%;
+    /* chip 的单行高度在这里不适用，交给内容撑开 */
+    height: auto;
+    padding: 0;
+    border-radius: 10px;
+
+    /* 正文与卡底之间的呼吸放在卡片上，而不是描述的 padding 上：
+       描述的 max-height 是「三行」的精确值（border-box 会把 padding 算进去），
+       给描述加 padding 会把第三行裁一半 */
+    &.has-desc {
+      padding-bottom: 7px;
+    }
+
+    .skill-chip-body {
+      display: block;
+      width: 100%;
+      min-width: 0;
+    }
+
+    .skill-chip-head {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      padding: 6px 8px;
+    }
+
+    /* 有描述时给 header 一条弱分隔线：技能名 / 描述分两级，
+       视线不会把两段文字糊在一起（用最弱的分隔线，不能抢过卡片边框） */
+    &.has-desc .skill-chip-head {
+      border-bottom: 1px solid var(--border-color-light, #ececec);
+    }
+
+    /* 技能名长时先省略名字，字符数 / 移除按钮的位置不能被挤走 */
+    .skill-chip-head .skill-chip-name {
+      flex: 1;
+    }
+
+    /* 移除按钮贴右上角（卡片里 onRemove 很少用，位置也要先留好） */
+    .skill-chip-remove {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      z-index: 1;
+    }
+
+    /* 整卡可点、可 Tab：焦点环压在卡片内部，不把气泡排版顶开 */
+    .skill-chip-body:is(button):focus-visible {
+      outline: var(--focus-ring, 2px solid var(--accent-color, #4f46e5));
+      outline-offset: -2px;
+      border-radius: 10px;
+    }
+
+    $desc-lines: 3;
+    $desc-line-height: 1.5;
+
+    .skill-chip-desc {
+      margin-top: 3px;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: $desc-lines;
+      overflow: hidden;
+      max-height: calc(#{$desc-lines} * #{$desc-line-height} * 1em);
+      padding: 0 8px;
+      color: var(--text-secondary, #666);
+      font-size: var(--font-size-xs, 12px);
+      line-height: $desc-line-height;
+      /* 描述是普通段落：允许换行，但不允许长链接 / 长单词撑破卡片 */
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+  }
+}

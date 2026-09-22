@@ -54,7 +54,7 @@
   .message-body {
     display: flex;
     flex-direction: column;
-    max-width: 75%;
+    max-width: 90%;
     min-width: 0;
     position: relative;
 
@@ -219,6 +219,22 @@
       flex-direction: column;
       align-items: flex-start;
       gap: 4px;
+      margin-bottom: 6px;
+      margin-left: auto;
+      width: fit-content;
+      max-width: 100%;
+    }
+
+    // 技能引用（chip 本体样式在 shared/SkillChip/style.scss）
+    // 与引用条同层级、同对齐，多条纵向排列，跟在引用条后面。
+    // 气泡里是 card 形态（header + 技能描述），所以间距比引用条宽一点。
+    .message-skills {
+      display: flex;
+      // flex-direction: column;
+      flex-wrap: wrap;
+      // align-items: flex-end;
+      justify-content: flex-end;
+      gap: 6px;
       margin-bottom: 6px;
       margin-left: auto;
       width: fit-content;
