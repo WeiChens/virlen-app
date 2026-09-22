@@ -11,7 +11,9 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { invoke } from '@tauri-apps/api/core'
+import { reaction } from 'mobx'
 import { t } from '@/ui/i18n'
+import { settingsState } from '@/ui/store'
 import ContextMenu, {
   useContextMenu,
   type ContextMenuItem,
@@ -79,6 +81,25 @@ function terminalTheme() {
  */
 const PTY_FONT =
   "'JetBrains Mono', 'Cascadia Code', Consolas, 'Courier New', monospace"
+
+/**
+ * 终端字号档位 → px（对应「设置 → 通用 → 字体大小」的 small / medium / large）。
+ *
+ * 取法对齐聊天区代码块（`message/code-block.tsx` 的 `CODE_FONT_PX`）：medium 保持
+ * xterm 原有基线 13px，small / large 各 ±1px。同档同值，避免同一屏里终端与代码块
+ * 字号不一致（用户调大字号后，两者一起变大才自然）。
+ */
+export const PTY_FONT_PX: Record<'small' | 'medium' | 'large', number> = {
+  small: 12,
+  medium: 13,
+  large: 14,
+}
+
+/** 读取当前字号档位对应的终端字号（px）；设置缺失时回落 medium 基线。 */
+export function getPtyFontPx(): number {
+  const level = settingsState.value.fontSize ?? 'medium'
+  return PTY_FONT_PX[level] ?? PTY_FONT_PX.medium
+}
 
 /**
  * 拆出文本**末尾连续的 `\r`**：`[可直接写入的部分, 需挂起并入下次写入的 `\r`]`。
@@ -312,10 +333,11 @@ export function XtermTerminal({
     const term = new Terminal({
       // PTY 流里的 \n 直接换行（不依赖 \r\n）
       convertEol: true,
-      // 外观对齐 demo：光标闪烁 + 块状光标 + 略大字号与行高
+      // 外观对齐 demo：光标闪烁 + 块状光标 + 行高 1.25
       cursorBlink: true,
       cursorStyle: 'block',
-      fontSize: 13,
+      // 字号跟随「设置 → 字体大小」（不是写死的 13 —— 见下方「字号跟随」effect）
+      fontSize: getPtyFontPx(),
       lineHeight: 1.25,
       fontFamily: PTY_FONT,
       // 有界滚动缓冲：内存有界（§6.2，避免 cat 大文件把内存打爆）
@@ -473,6 +495,35 @@ export function XtermTerminal({
     // 只随 toolCallId 重建；stream 的变化由下方的增量 effect 处理
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toolCallId])
+
+  /**
+   * 字号跟随「设置 → 通用 → 字体大小」。
+   *
+   * ⚠️ 为什么用 `reaction` 而不是把字号加进创建 effect 的依赖：
+   *   终端实例**只随 `toolCallId` 重建**（重建会丢 scrollback / 滚动位置 / 已输入内容），
+   *   而字号是**命令式**写在实例上的（`term.options.fontSize`），因此监听 observable、
+   *   原地改实例选项即可 —— 即改即生效，不重建终端。
+   *
+   * ⚠️ 字号变 → 字符格宽高变 → 必须重算列×行并同步给后端伪控制台，否则折行位置与
+   *   用户看到的终端不一致（容器高度固定时行数也会变）。直接复用 `syncSize()`：
+   *   它自带「容器未布局不上报」「尺寸未变不上报」两道保护，并按 `syncResize` 决定
+   *   是否真的 `pty_resize`（全屏双实例时只允许一份上报）。
+   */
+  useEffect(() => {
+    const applyFontPx = () => {
+      const term = termRef.current
+      if (!term) return
+      const px = getPtyFontPx()
+      if (term.options.fontSize === px) return
+      term.options.fontSize = px
+      syncSizeRef.current?.()
+    }
+    // 首帧字号已由创建 effect 初始化，这里只负责后续变更
+    return reaction(
+      () => settingsState.value.fontSize,
+      () => applyFontPx(),
+    )
+  }, [])
 
   /**
    * 尺寸同步权交接（全屏独占同步 / 退出还原）。

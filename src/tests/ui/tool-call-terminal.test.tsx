@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { invoke } from '@tauri-apps/api/core'
 import * as xtermModule from '@xterm/xterm'
 import { toolOutputStore } from '@/infrastructure/tools/output-store'
+import { settingsState } from '@/ui/store'
 import {
   buildFinishedSegments,
   buildLiveSegments,
@@ -59,7 +60,14 @@ vi.mock('@xterm/xterm', () => {
       paste = vi.fn()
       focus = vi.fn()
       attachCustomKeyEventHandler = vi.fn()
-      constructor() {
+      /**
+       * 选项替身：xterm 的字号是**实例级**的（`term.options.fontSize`），
+       * 组件在「设置 → 字体大小」变更时会命令式改写它（见 XtermTerminal 的字号跟随 effect），
+       * 这里保留创建参数里的字号，供用例断言「初始档位 + 切换后同步」。
+       */
+      options: any
+      constructor(options?: any) {
+        this.options = { fontSize: 13, ...(options ?? {}) }
         instances.push(this)
       }
       loadAddon() {}
@@ -672,6 +680,74 @@ function lastXtermInstance(): any {
   const list = (xtermModule as any).__instances as any[]
   return list[list.length - 1]
 }
+
+/**
+ * 终端字号必须跟随「设置 → 通用 → 字体大小」。
+ *
+ * 背景：xterm 的字号是**实例级**配置（`term.options.fontSize`），写死在创建参数里就再也不会变
+ * —— 之前终端恒为 13px，用户在设置里把字号调大/调小，只有终端不跟着动。
+ * 现在：创建时按当前档位初始化，之后监听设置变更就地改写实例选项（不重建终端）。
+ */
+describe('XtermTerminal 字号跟随设置', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+    settingsState.setValue('fontSize', 'medium')
+  })
+
+  // 全局设置是共享 observable，用完必须复原，避免污染后续用例
+  afterEach(() => {
+    settingsState.setValue('fontSize', 'medium')
+  })
+
+  async function mountTerminal() {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(
+        <XtermTerminalBlock
+          title="Terminal"
+          stream=""
+          running
+          toolCallId="t-font"
+        />,
+      )
+    })
+    return { host, root }
+  }
+
+  it('创建时按当前档位初始化（medium → 13px，与原写死值一致）', async () => {
+    const { root } = await mountTerminal()
+    expect(lastXtermInstance().options.fontSize).toBe(13)
+    await act(async () => root.unmount())
+  })
+
+  it('切档位即时生效：large → 14px、small → 12px（同一实例，不重建）', async () => {
+    const { root } = await mountTerminal()
+    const term = lastXtermInstance()
+
+    await act(async () => {
+      settingsState.setValue('fontSize', 'large')
+    })
+    expect(term.options.fontSize).toBe(14)
+    // 仍是同一个实例（字号变更只改选项，不重建终端）
+    expect(lastXtermInstance()).toBe(term)
+
+    await act(async () => {
+      settingsState.setValue('fontSize', 'small')
+    })
+    expect(term.options.fontSize).toBe(12)
+
+    await act(async () => root.unmount())
+  })
+
+  it('挂载后即按已保存的档位创建（large 设置 → 新建终端就是 14px）', async () => {
+    settingsState.setValue('fontSize', 'large')
+    const { root } = await mountTerminal()
+    expect(lastXtermInstance().options.fontSize).toBe(14)
+    await act(async () => root.unmount())
+  })
+})
 
 /**
  * PTY 终端的右键菜单（复制/粘贴/全选）与 Ctrl+C 智能复制。
