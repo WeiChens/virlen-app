@@ -13,6 +13,7 @@ import QuickInputSettings from './quickinput-settings'
 import SearchEngineSettings from './search-engine-settings'
 import KnowledgeBaseSettings from './knowledge-base-settings'
 import EditorSettings from './editor-settings'
+import StorageSettings from './storage-settings'
 import CloseSvg from '@/ui/components/icons/CloseSvg'
 import SettingSvg from '@/ui/components/icons/SettingSvg'
 import SystemSvg from '@/ui/components/icons/SystemSvg'
@@ -22,6 +23,7 @@ import FolderSvg from '@/ui/components/icons/FolderSvg'
 import QuickInputSvg from '@/ui/components/icons/QuickInputSvg'
 import SearchSvg from '@/ui/components/icons/SearchSvg'
 import CodeSvg from '@/ui/components/icons/CodeSvg'
+import StorageSvg from '@/ui/components/icons/StorageSvg'
 import settingsEvent from '@/events/settingsEvent'
 import { t } from '@/ui/i18n'
 import './settings-view.scss'
@@ -36,6 +38,7 @@ export type SettingsPage =
   | 'search-engine'
   | 'knowledge-base'
   | 'editor'
+  | 'storage'
 
 export default function SettingsView() {
   const [open, setOpen] = useState(false)
@@ -154,6 +157,12 @@ export default function SettingsView() {
               <span>{t('通用')}</span>
             </button>
             <button
+              className={`nav-item ${page === 'storage' ? 'active' : ''}`}
+              onClick={() => setPage('storage')}>
+              <StorageSvg fill="var(--nav-item-color)" />
+              <span>{t('存储')}</span>
+            </button>
+            <button
               className={`nav-item ${page === 'agent' ? 'active' : ''}`}
               onClick={() => setPage('agent')}>
               <AgentSvg fill="var(--nav-item-color)" />
@@ -205,6 +214,7 @@ export default function SettingsView() {
         </div>
         <div className="settings-content">
           {page === 'general' && <GeneralSettings />}
+          {page === 'storage' && <StorageSettings />}
           {page === 'agent' && <AgentSettings />}
           {page === 'provider' && <ProviderSettings />}
           {page === 'security' && <SecuritySettings />}

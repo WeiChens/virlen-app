@@ -490,6 +490,10 @@ class SessionStore {
     this.value.sessions = sessions
     this.dropMessagePaging([id])
     this.persist()
+    // ⚠️ 删除不能只靠 persist() 的 800ms 合并：删除是立即生效且不可撤销的动作，
+    // 合并窗口内任何一次其它变更都可能把它吞掉（会话+消息重启后复活）。
+    // 这里再直接落库一次（SQLite 删除是幂等的）。
+    void this.repo.deleteSessions([id])
     track('session.delete', {
       session_id: hashText(id),
       batch: false,
@@ -511,6 +515,8 @@ class SessionStore {
     this.value.sessions = newSessions
     this.dropMessagePaging(ids)
     this.persist()
+    // 同 deleteSession：立即落库，不让删除被防抖合并吞掉
+    void this.repo.deleteSessions(ids)
     track('session.delete', { batch: true, count: deletedCount })
     return deletedCount
   }

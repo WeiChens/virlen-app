@@ -3,6 +3,9 @@
 //! 命令只做「参数兜底 + 调用 repo + 埋点」，业务语义都在 `SessionRepo` 实现里。
 
 use crate::agent::types::{Message, Session};
+use crate::session_db::maintenance::{
+    total_bytes, CheckpointResult, DbMaintenance, DbStats, MaintainResult,
+};
 use crate::session_db::repo::SessionRepo;
 use crate::session_db::sqlite::SqliteSessionRepo;
 use crate::session_db::types::{
@@ -25,6 +28,9 @@ pub fn init_session_db(
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
     let db_path = data_dir.join("virlen.db");
     let repo = Arc::new(SqliteSessionRepo::open(&db_path)?);
+    // 库维护句柄（设置 → 存储「立即整理」）：与 repo **共用同一把连接锁**，
+    // 因此维护动作与聊天写入天然互斥；退出路径也用它做一次廉价的 WAL 截断。
+    app.manage(Arc::new(DbMaintenance::new(db_path.clone(), repo.conn.clone())));
     // 历史数据迁移（回填 text_plain + 重建 FTS 索引）放后台执行，避免超大库首次启动卡顿。
     // 迁移完成前，检索自动回退到旧的 LIKE content 路径，结果依然正确。
     if !repo.migration_done() {
@@ -32,6 +38,20 @@ pub fn init_session_db(
         tauri::async_runtime::spawn(async move {
             if let Err(e) = r.migrate().await {
                 eprintln!("[session_db] 后台迁移失败（检索将暂时回退旧路径）: {}", e);
+            }
+        });
+    }
+    // 兜底回收孤儿消息（`session_id` 指向不存在会话的行）：早期版本删除会话时若有 run
+    // 在跑，会经由 append_messages 写入孤儿消息 —— 它们查不到也清不掉，只会让库文件
+    // 只增不减。幂等；无孤儿时开销仅一次反连接扫描，故放后台、与迁移互不阻塞
+    // （两者共用同一把连接锁，谁先谁后结果一致）。
+    {
+        let r_purge = repo.clone();
+        tauri::async_runtime::spawn(async move {
+            match r_purge.purge_orphan_messages().await {
+                Ok(0) => {}
+                Ok(n) => eprintln!("[session_db] 已清理 {} 条孤儿消息", n),
+                Err(e) => eprintln!("[session_db] 孤儿消息清理失败: {}", e),
             }
         });
     }
@@ -413,6 +433,59 @@ pub async fn cmd_usage_clear(
         started,
         result.as_ref().ok().map(|n| *n as usize),
         result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
+}
+
+// ==================== 库维护命令（设置 → 存储） ====================
+
+/// 数据库体积快照（纯读，设置 → 存储 展示用）
+///
+/// 走 spawn_blocking：与引擎写入共用一把连接锁，锁被占用时不能卡住 runtime 线程。
+#[tauri::command]
+pub async fn cmd_db_stats(m: tauri::State<'_, Arc<DbMaintenance>>) -> Result<DbStats, String> {
+    let m = m.inner().clone();
+    tokio::task::spawn_blocking(move || m.stats())
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+}
+
+/// 只截断 WAL 日志（`wal_checkpoint(TRUNCATE)`）—— 廉价的「第一步整理」
+///
+/// 只把 `-wal` 里已提交的页搬回主库并截断文件（毫秒~秒级），不动主库结构，
+/// 因此不需要用户确认；重建主库（`VACUUM`）另见 `cmd_db_maintain`。
+#[tauri::command]
+pub async fn cmd_db_checkpoint(
+    m: tauri::State<'_, Arc<DbMaintenance>>,
+) -> Result<CheckpointResult, String> {
+    let m = m.inner().clone();
+    m.checkpoint_truncate().await
+}
+
+/// 立即整理数据库：`wal_checkpoint(TRUNCATE)` 回收 `-wal`，再 `VACUUM` 归还空闲页
+///
+/// ⚠️ **只在用户显式点击时调用**：`VACUUM` 期间独占连接（数百 MB 库约 10–60 s），
+/// 且需要约 2 倍库大小的临时磁盘空间（SQLite 放在系统临时目录）。
+#[tauri::command]
+pub async fn cmd_db_maintain(
+    m: tauri::State<'_, Arc<DbMaintenance>>,
+) -> Result<MaintainResult, String> {
+    let m = m.inner().clone();
+    let started = crate::telemetry::now_ms();
+    let result = m.vacuum().await;
+    let (before, after) = match result.as_ref() {
+        Ok(r) => (total_bytes(&r.before), total_bytes(&r.after)),
+        Err(_) => (0, 0),
+    };
+    crate::telemetry::track(
+        "rust.db.maintain",
+        serde_json::json!({
+            "duration_ms": crate::telemetry::now_ms() - started,
+            "status": if result.is_err() { "fail" } else { "success" },
+            "before_bytes": before,
+            "after_bytes": after,
+            "reclaimed_bytes": before.saturating_sub(after),
+        }),
     );
     result
 }

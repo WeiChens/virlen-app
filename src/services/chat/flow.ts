@@ -9,6 +9,7 @@ import {
   sessionRuntimeState,
   sessionStore,
   updateSessionRuntime,
+  dropSessionRuntime,
 } from '@/ui/store'
 import { v4 } from '@/utils/uuid'
 import type { Agent, Message, MessageContent, Session } from '@/types'
@@ -104,6 +105,37 @@ export async function createSession(
     skills_count: session.skills?.length ?? 0,
   })
   return session
+}
+
+/**
+ * 删除会话（**唯一入口**）—— 先断流，再删库
+ *
+ * ⚠️ 必须先在引擎侧取消运行、再清掉运行快照，最后才删会话：
+ * Rust 引擎在聊天循环内**直落 SQLite**（engine.rs / llm_loop.rs / tool_executor.rs），
+ * 若会话行已删而 run 仍在跑，后续 append 会把消息写进「没有会话」的数据行里 ——
+ * 这类孤儿消息查询查不到（检索是 JOIN sessions）、也没有任何清理逻辑，
+ * 只会让数据库文件只增不减。
+ *
+ * （Rust 侧还有一道 `append_messages_if_alive` 守卫作为兼底，两边都不能省。）
+ *
+ * @returns 实际删除的会话数
+ */
+export async function deleteSessions(ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0
+  for (const id of ids) {
+    // 对已结束的会话 cancel 是 no-op；此处不按 working 判断，宁可多调一次也不能漏
+    try {
+      await getEngine().cancel(id)
+      await getEngine().clearRunSnapshot(id)
+    } catch {
+      // 非 Tauri 环境 / 引擎无该 run：忽略，删除照常执行
+    }
+  }
+  const count = sessionStore.deleteSessions(ids)
+  // 删会话同时丢弃它的运行时状态（working / 红点 / pendingContent），
+  // 否则这些条目会永久挂在已经不存在会话 id 上
+  dropSessionRuntime(ids)
+  return count
 }
 
 /**

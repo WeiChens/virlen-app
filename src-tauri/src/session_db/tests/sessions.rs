@@ -148,6 +148,39 @@ async fn delete_removes_session_and_messages() {
 }
 
 #[tokio::test]
+async fn append_after_delete_is_skipped_and_purge_reclaims_orphans() {
+    // 回归：删除会话与进行中的 run 是天然竞态 —— 会话行（连同消息）已删、引擎仍在落库，
+    // 不拦就会写入 session_id 指向不存在会话的孤儿消息：查询查不到（检索是 JOIN sessions）、
+    // 清理逻辑也不碰，只会让数据库文件只增不减。
+    let repo = open_tmp();
+    repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+
+    // 会话存活 → 引擎落库照常写入
+    assert!(repo
+        .append_messages_if_alive("s1", &[test_message("m1", "user")])
+        .await
+        .unwrap());
+
+    // 用户删除会话 → 后续引擎落库必须整体跳过（不写任何行）
+    repo.delete_session("s1").await.unwrap();
+    assert!(!repo
+        .append_messages_if_alive("s1", &[test_message("m2", "assistant")])
+        .await
+        .unwrap());
+    assert!(repo.get_messages("s1").await.unwrap().is_empty());
+
+    // 历史遗留的孤儿行（旧版本：删会话时引擎还在跑）由启动兜底清理回收。
+    // 直接用不校验存活的 append_messages 造出孤儿，模拟旧数据。
+    repo.append_messages("ghost", &[test_message("m3", "assistant")])
+        .await
+        .unwrap();
+    assert_eq!(repo.purge_orphan_messages().await.unwrap(), 1);
+    assert!(repo.get_messages("ghost").await.unwrap().is_empty());
+    // 幂等：再跑一次无行可删
+    assert_eq!(repo.purge_orphan_messages().await.unwrap(), 0);
+}
+
+#[tokio::test]
 async fn truncate_removes_target_and_after() {
     // 回归：前端删除用户消息时，DB 必须同步删除该消息及其之后的全部消息，
     // 否则重启后已删除消息会从 SQLite「复活」。

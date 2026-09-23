@@ -36,6 +36,7 @@ export {
   sessionRuntimeState,
   getSessionRuntime,
   updateSessionRuntime,
+  dropSessionRuntime,
 } from './sessionRuntimeStore'
 export type { SessionRuntime } from './sessionRuntimeStore'
 export { settingsState, resolveDefaultWorkspace } from './settingStore'

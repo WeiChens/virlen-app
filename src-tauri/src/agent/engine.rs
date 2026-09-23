@@ -143,7 +143,7 @@ impl AgentEngine {
         }
         if let Err(e) = self
             .repo
-            .append_messages(&session_id, &options.messages)
+            .append_messages_if_alive(&session_id, &options.messages)
             .await
         {
             eprintln!("[session_db] 写入用户消息失败: {}", e);
@@ -363,7 +363,7 @@ impl AgentEngine {
                 // 最终纯文本回复 / 用户取消的部分回复：先落库再结束循环
                 if let Err(e) = self
                     .repo
-                    .append_messages(&session_id, &[result.assistant_message])
+                    .append_messages_if_alive(&session_id, &[result.assistant_message])
                     .await
                 {
                     eprintln!("[session_db] 写入最终回复失败: {}", e);

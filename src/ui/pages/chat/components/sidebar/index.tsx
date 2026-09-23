@@ -29,6 +29,7 @@ import AgentSvg from '@/ui/components/icons/AgentSvg'
 import PinSvg from '@/ui/components/icons/PinSvg'
 import ExportDialog from '@/ui/pages/chat/components/modals/ExportDialog'
 import { exportSessionToFile } from '@/services/export-service'
+import { deleteSessions } from '@/services/chat-service'
 import { showToast } from '@/ui/components/shared/Toast'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 import Modal, { ModalFooterButtons } from '@/ui/components/shared/Modal'
@@ -264,7 +265,9 @@ function ChatSidebar({
   // 它在调用 onClick 之前已先 onClose（见 ContextMenu/index.tsx::handleItemClick），
   // 所以旧版的 e.stopPropagation() / setActiveMenuId(null) 一并去掉。
   const handleDelete = useCallback((sessionId: string) => {
-    sessionStore.deleteSession(sessionId)
+    // ⚠️ 走 chat-service 的 deleteSessions（先在引擎侧断流再删）：
+    // 直接 sessionStore.deleteSession 会在会话仍在生成时留下孤儿消息
+    void deleteSessions([sessionId])
     if (chatState.value.currentSessionId === sessionId) {
       chatState.set({ currentSessionId: null })
     }
@@ -894,12 +897,13 @@ function SessionGroupView({
     if (!confirmed) return
 
     const ids = group.sessions.map((s) => s.id)
-    sessionStore.deleteSessions(ids)
+    // 同单项删除：先断流再删库（见 deleteSessions）
+    const deleted = await deleteSessions(ids)
     const currentId = chatState.value.currentSessionId
     if (currentId && ids.includes(currentId)) {
       chatState.set({ currentSessionId: null })
     }
-    showToast(tpl('已删除 $__count__ 个会话', { count: ids.length }), 2000)
+    showToast(tpl('已删除 $__count__ 个会话', { count: deleted }), 2000)
   }, [group.sessions, group.name])
 
   const handleOpenWorkspace = useCallback(async () => {

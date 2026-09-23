@@ -5,6 +5,7 @@
 //! `message_query.rs` 与 `usage.rs`，本文件只做转发。
 
 use crate::agent::types::{Message, Session};
+use crate::session_db::maintenance::WAL_SIZE_LIMIT;
 use crate::session_db::message_query;
 use crate::session_db::repo::SessionRepo;
 use crate::session_db::row::{
@@ -47,6 +48,9 @@ impl SqliteSessionRepo {
         let conn = Connection::open(db_path).map_err(|e| format!("打开 SQLite 失败: {}", e))?;
         // WAL：读不阻塞写，适合「JS 只读 + Rust 写」并发场景
         let _ = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
+        // WAL 文件封顶（见 `maintenance::WAL_SIZE_LIMIT`）：不设上限时 `-wal` 会一直保持
+        // 历史高水位（实测 99 MB），而它只是「还没并进主库的页」，本不该长期占盘。
+        let _ = conn.pragma_update(None, "journal_size_limit", WAL_SIZE_LIMIT);
         let migration_done = init_schema(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -141,54 +145,17 @@ ON CONFLICT(id) DO UPDATE SET
         session_id: &str,
         messages: &[Message],
     ) -> Result<(), String> {
-        let conn = self.conn.clone();
-        let session_id = session_id.to_string();
-        let messages = messages.to_vec();
-        tokio::task::spawn_blocking(move || -> Result<(), String> {
-            let conn = conn.lock().unwrap();
-            let tx = conn
-                .unchecked_transaction()
-                .map_err(|e| format!("开启事务失败: {}", e))?;
-            {
-                let mut stmt = tx
-                    .prepare(
-                        r#"
-INSERT INTO messages (
-  id, session_id, role, content, tool_calls, reasoning_content, tool_call_id,
-  is_error, elapsed_ms, reasoning_elapsed_ms, ui_data, timestamp, streaming,
-  model, usage, image_vision_analyze_optimize, image_vision_analyze_result, text_plain
-) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
-ON CONFLICT(id) DO UPDATE SET
-  role=excluded.role,
-  content=excluded.content,
-  tool_calls=excluded.tool_calls,
-  reasoning_content=excluded.reasoning_content,
-  tool_call_id=excluded.tool_call_id,
-  is_error=excluded.is_error,
-  elapsed_ms=excluded.elapsed_ms,
-  reasoning_elapsed_ms=excluded.reasoning_elapsed_ms,
-  ui_data=excluded.ui_data,
-  timestamp=excluded.timestamp,
-  streaming=excluded.streaming,
-  model=excluded.model,
-  usage=excluded.usage,
-  image_vision_analyze_optimize=excluded.image_vision_analyze_optimize,
-  image_vision_analyze_result=excluded.image_vision_analyze_result,
-  text_plain=excluded.text_plain
-"#,
-                    )
-                    .map_err(|e| format!("准备消息写入失败: {}", e))?;
-                for m in &messages {
-                    let params = message_insert_params(&session_id, m)?;
-                    stmt.execute(rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())))
-                        .map_err(|e| format!("写入消息失败: {}", e))?;
-                }
-            }
-            tx.commit().map_err(|e| format!("提交事务失败: {}", e))?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| format!("DB task join error: {}", e))?
+        self.append_messages_inner(session_id, messages, false)
+            .await
+            .map(|_| ())
+    }
+
+    async fn append_messages_if_alive(
+        &self,
+        session_id: &str,
+        messages: &[Message],
+    ) -> Result<bool, String> {
+        self.append_messages_inner(session_id, messages, true).await
     }
 
     async fn replace_messages(
@@ -497,6 +464,26 @@ INSERT INTO messages (
         .map_err(|e| format!("DB task join error: {}", e))?
     }
 
+    async fn purge_orphan_messages(&self) -> Result<usize, String> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || -> Result<usize, String> {
+            let conn = conn.lock().unwrap();
+            // 反连接删除：sessions.id 是 NOT NULL 主键、messages.session_id 也是 NOT NULL，
+            // 不存在 NULL 使 `NOT IN` 整体为 NULL 的陷阱。
+            // 删除会触发 FTS 外部内容表的 AD 触发器，索引不会残留。
+            let removed = conn
+                .execute(
+                    "DELETE FROM messages \
+                     WHERE session_id NOT IN (SELECT id FROM sessions)",
+                    [],
+                )
+                .map_err(|e| format!("清理孤儿消息失败: {}", e))?;
+            Ok(removed)
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
     // ===== 用量账本（token 统计）：实现见 usage.rs =====
 
     async fn append_usage(&self, entries: &[UsageEntry]) -> Result<(), String> {
@@ -513,5 +500,83 @@ INSERT INTO messages (
 
     async fn clear_usage(&self) -> Result<i64, String> {
         usage::clear(self.conn.clone()).await
+    }
+}
+
+impl SqliteSessionRepo {
+    /// `append_messages` / `append_messages_if_alive` 的共用实现
+    ///
+    /// 唯一差别是 `require_alive`：为 `true` 时会话不存在则不写任何行、返回 `Ok(false)`
+    /// （引擎落库专用，见 `SessionRepo::append_messages_if_alive`）。
+    async fn append_messages_inner(
+        &self,
+        session_id: &str,
+        messages: &[Message],
+        require_alive: bool,
+    ) -> Result<bool, String> {
+        let conn = self.conn.clone();
+        let session_id = session_id.to_string();
+        let messages = messages.to_vec();
+        tokio::task::spawn_blocking(move || -> Result<bool, String> {
+            let conn = conn.lock().unwrap();
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| format!("开启事务失败: {}", e))?;
+            // 会话存活校验必须与写入落在**同一把连接锁 + 同一事务内**：
+            // 否则「校验通过 → 会话被删 → 写入」这个小窗口仍会漏出孤儿消息。
+            if require_alive {
+                let alive: i64 = tx
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)",
+                        params![session_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| format!("校验会话是否存在失败: {}", e))?;
+                if alive == 0 {
+                    // 会话已被删除：不写任何行（事务未提交，drop 即回滚），
+                    // 否则会留下永远查不到也清不掉的孤儿消息（库文件只增不减）
+                    return Ok(false);
+                }
+            }
+            {
+                let mut stmt = tx
+                    .prepare(
+                        r#"
+INSERT INTO messages (
+  id, session_id, role, content, tool_calls, reasoning_content, tool_call_id,
+  is_error, elapsed_ms, reasoning_elapsed_ms, ui_data, timestamp, streaming,
+  model, usage, image_vision_analyze_optimize, image_vision_analyze_result, text_plain
+) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
+ON CONFLICT(id) DO UPDATE SET
+  role=excluded.role,
+  content=excluded.content,
+  tool_calls=excluded.tool_calls,
+  reasoning_content=excluded.reasoning_content,
+  tool_call_id=excluded.tool_call_id,
+  is_error=excluded.is_error,
+  elapsed_ms=excluded.elapsed_ms,
+  reasoning_elapsed_ms=excluded.reasoning_elapsed_ms,
+  ui_data=excluded.ui_data,
+  timestamp=excluded.timestamp,
+  streaming=excluded.streaming,
+  model=excluded.model,
+  usage=excluded.usage,
+  image_vision_analyze_optimize=excluded.image_vision_analyze_optimize,
+  image_vision_analyze_result=excluded.image_vision_analyze_result,
+  text_plain=excluded.text_plain
+"#,
+                    )
+                    .map_err(|e| format!("准备消息写入失败: {}", e))?;
+                for m in &messages {
+                    let params = message_insert_params(&session_id, m)?;
+                    stmt.execute(rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())))
+                        .map_err(|e| format!("写入消息失败: {}", e))?;
+                }
+            }
+            tx.commit().map_err(|e| format!("提交事务失败: {}", e))?;
+            Ok(true)
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
     }
 }

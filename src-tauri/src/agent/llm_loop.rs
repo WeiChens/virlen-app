@@ -138,7 +138,7 @@ pub async fn execute_llm_round(
     // 即使后续工具执行中途崩溃/卡死，这条「agent 调用工具」的记录也不丢失。
     // （不刷新会话时间，见 SessionRepo::append_messages）
     if let Err(e) = repo
-        .append_messages(session_id, &[ctx.assistant_message.clone()])
+        .append_messages_if_alive(session_id, &[ctx.assistant_message.clone()])
         .await
     {
         eprintln!("[session_db] 写入助手(tool_call)消息失败: {}", e);

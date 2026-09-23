@@ -13,7 +13,7 @@ mod search;
 mod sessions;
 mod usage;
 
-fn test_session(id: &str, title: &str, updated_at: i64) -> Session {
+pub(crate) fn test_session(id: &str, title: &str, updated_at: i64) -> Session {
     Session {
         id: id.to_string(),
         title: title.to_string(),
@@ -40,7 +40,7 @@ fn test_session(id: &str, title: &str, updated_at: i64) -> Session {
     }
 }
 
-fn test_message(id: &str, role: &str) -> Message {
+pub(crate) fn test_message(id: &str, role: &str) -> Message {
     Message {
         id: id.to_string(),
         role: role.to_string(),
@@ -61,8 +61,14 @@ fn test_message(id: &str, role: &str) -> Message {
     }
 }
 
-fn open_tmp() -> SqliteSessionRepo {
+pub(crate) fn open_tmp_with_path() -> (SqliteSessionRepo, std::path::PathBuf) {
     let dir = std::env::temp_dir().join(format!("virlen_test_{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
-    SqliteSessionRepo::open(&dir.join("test.db")).unwrap()
+    let db = dir.join("test.db");
+    let repo = SqliteSessionRepo::open(&db).unwrap();
+    (repo, db)
+}
+
+fn open_tmp() -> SqliteSessionRepo {
+    open_tmp_with_path().0
 }

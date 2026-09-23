@@ -27,6 +27,29 @@ pub trait SessionRepo: Send + Sync {
         session_id: &str,
         messages: &[Message],
     ) -> Result<(), String>;
+
+    /// 追加消息，但**会话不存在时跳过**（返回 `Ok(false)`）—— 专供 Agent 引擎落库。
+    ///
+    /// 为什么需要这道守卫：删除会话与进行中的 run 是天然竞态。会话行（连同消息）被删掉后，
+    /// 引擎仍会继续 append（assistant 回复 / 工具结果 / 迭代反馈），而 `messages` 表
+    /// 既没有外键约束、也没有级联删除 —— 这些行会变成 `session_id` 指向不存在会话的
+    /// **孤儿消息**：任何查询都查不到（跨会话检索是 `JOIN sessions`），也没有清理逻辑，
+    /// 只会让数据库文件持续变大。
+    ///
+    /// `append_messages` 本身的语义不变（写了就是写了，不静默丢弃）；
+    /// 默认实现基于 `get_session`，`SqliteSessionRepo` 覆写为「同一把锁 + 同一事务内校验」。
+    async fn append_messages_if_alive(
+        &self,
+        session_id: &str,
+        messages: &[Message],
+    ) -> Result<bool, String> {
+        if self.get_session(session_id).await?.is_none() {
+            return Ok(false);
+        }
+        self.append_messages(session_id, messages).await?;
+        Ok(true)
+    }
+
     /// 整批替换会话的全部消息（事务；用于前端上下文压缩等全量替换场景）
     /// ⚠️ 同样不刷新 `updated_at`（压缩不是用户发言，见 `append_messages`）
     async fn replace_messages(
@@ -108,6 +131,14 @@ pub trait SessionRepo: Send + Sync {
 
     /// 删除会话及其全部消息
     async fn delete_session(&self, session_id: &str) -> Result<(), String>;
+
+    /// 兜底回收**孤儿消息**（`session_id` 指向不存在会话的行），返回删除条数。
+    ///
+    /// 用于清理历史遗留数据（早期版本删除会话时若有 run 在跑，会经由
+    /// `append_messages` 写入孤儿消息）。幂等；无孤儿时开销只是一次反连接扫描。
+    /// ⚠️ **不动 `usage_ledger`**：用量是已发生消费的事实记录，删会话不清账
+    /// （见 `delete_session` 与 docs/token-usage-stats.md）。
+    async fn purge_orphan_messages(&self) -> Result<usize, String>;
 
     // ===== 用量账本（token 统计，见 `docs/token-usage-stats.md`） =====
 
@@ -230,6 +261,9 @@ impl SessionRepo for NoopSessionRepo {
     }
     async fn delete_session(&self, _session_id: &str) -> Result<(), String> {
         Ok(())
+    }
+    async fn purge_orphan_messages(&self) -> Result<usize, String> {
+        Ok(0)
     }
     async fn append_usage(&self, _entries: &[UsageEntry]) -> Result<(), String> {
         Ok(())

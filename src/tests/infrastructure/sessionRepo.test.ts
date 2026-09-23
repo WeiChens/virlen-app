@@ -141,4 +141,96 @@ describe('sessionRepo.saveDiff', () => {
       'cmd_delete_session',
     ])
   })
+
+  it('删除后防抖窗口内又有变更 → 删除不被吞掉（回归）', async () => {
+    // 回归：旧实现把差集计算放在 debounce 回调里，而 debounce 只保留最后一次调用的
+    // 实参 —— 删除后 800ms 内再来一次 persist（发消息 / 改标题 / AI 起标题完成…），
+    // 这次删除就永久丢失（sessionStore 已同步前移基线，不会补发），
+    // 会话连同消息在下次启动「复活」。
+    const a = makeSession('a')
+    const b = makeSession('b')
+    const c = makeSession('c')
+
+    sessionRepo.saveDiff(snapshot([a, b]), [a]) // 删除 b
+    sessionRepo.saveDiff(snapshot([a]), [a, c]) // 窗口内新增 c
+    await flushDebounce()
+
+    const calls = invokeMock.mock.calls.map((call) => call[0])
+    expect(calls).toContain('cmd_delete_session')
+    expect(calls).toContain('cmd_upsert_session')
+    const deleted = invokeMock.mock.calls
+      .filter((call) => call[0] === 'cmd_delete_session')
+      .map((call) => call[1].sessionId)
+    expect(deleted).toEqual(['b'])
+  })
+
+  it('deleteSessions → 立即发送删除，不等防抖', async () => {
+    await sessionRepo.deleteSessions(['x', 'y'])
+
+    // 未推进定时器（800ms 未到）就已发出
+    expect(invokeMock).toHaveBeenCalledTimes(2)
+    expect(invokeMock.mock.calls.map((call) => call[0])).toEqual([
+      'cmd_delete_session',
+      'cmd_delete_session',
+    ])
+    expect(invokeMock.mock.calls.map((call) => call[1].sessionId)).toEqual([
+      'x',
+      'y',
+    ])
+  })
+})
+
+describe('sessionRepo 库维护（设置 → 存储）', () => {
+  beforeEach(() => {
+    invokeMock.mockReset()
+  })
+
+  function makeStats(dbBytes: number, walBytes: number) {
+    return {
+      dbBytes,
+      walBytes,
+      shmBytes: 32768,
+      pageBytes: 4096,
+      pageSize: 4096,
+      pageCount: 1,
+      freelistPages: 0,
+      autoVacuum: 2,
+      journalSizeLimit: 16777216,
+      sessionCount: 3,
+      messageCount: 9,
+    }
+  }
+
+  it('dbStats 透传 Rust 侧体积快照', async () => {
+    const stats = makeStats(1024, 2048)
+    invokeMock.mockResolvedValueOnce(stats)
+
+    await expect(sessionRepo.dbStats()).resolves.toEqual(stats)
+    expect(invokeMock.mock.calls[0][0]).toBe('cmd_db_stats')
+  })
+
+  it('dbMaintain 返回 before/after（UI 靠二者之差算回收量）', async () => {
+    invokeMock.mockResolvedValueOnce({
+      checkpoint: { busy: false, beforeBytes: 4096, afterBytes: 0 },
+      vacuumMs: 12,
+      before: makeStats(4000, 4096),
+      after: makeStats(600, 0),
+    })
+
+    const result = await sessionRepo.dbMaintain()
+
+    expect(invokeMock.mock.calls[0][0]).toBe('cmd_db_maintain')
+    expect(result?.vacuumMs).toBe(12)
+    // 回收量 = 前后总占用之差（主库 + WAL）
+    expect(result!.before.dbBytes + result!.before.walBytes).toBe(8096)
+    expect(result!.after.dbBytes + result!.after.walBytes).toBe(600)
+  })
+
+  it('非 Tauri 环境 / 命令失败 → 返回 null，绝不把异常抛给 UI', async () => {
+    invokeMock.mockRejectedValue(new Error('no tauri'))
+
+    await expect(sessionRepo.dbStats()).resolves.toBeNull()
+    await expect(sessionRepo.dbCheckpoint()).resolves.toBeNull()
+    await expect(sessionRepo.dbMaintain()).resolves.toBeNull()
+  })
 })

@@ -72,3 +72,19 @@ export function updateSessionRuntime(
     Object.assign(rt, patch)
   })
 }
+
+/**
+ * 丢弃已删除会话的运行时状态。
+ *
+ * 删除会话时若不清，`sessions` 里的条目会永久残留（内存泄漏），
+ * 且 `working` / `hasNewReply` 等状态会挂在已不存在的会话 id 上。
+ */
+export function dropSessionRuntime(ids: Iterable<string>): void {
+  const drop = new Set(ids)
+  if (drop.size === 0) return
+  runInAction(() => {
+    const sessions = { ...sessionRuntimeState.value.sessions }
+    for (const id of drop) delete sessions[id]
+    sessionRuntimeState.value.sessions = sessions
+  })
+}

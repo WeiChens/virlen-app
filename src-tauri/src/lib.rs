@@ -1,5 +1,5 @@
 ﻿use std::fs;
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+// `Manager` 现在在所有平台都被用到（退出钩子里的 `try_state`），因此不再按 target 条件编译
 use tauri::Manager;
 
 mod agent;
@@ -389,6 +389,10 @@ pub fn run() {
             session_db::commands::cmd_usage_stats,
             session_db::commands::cmd_usage_query,
             session_db::commands::cmd_usage_clear,
+            // 库维护（设置 → 存储：体积快照 / 截断 WAL / 重建数据库）
+            session_db::commands::cmd_db_stats,
+            session_db::commands::cmd_db_checkpoint,
+            session_db::commands::cmd_db_maintain,
             // DeepSeek tokenizer（token 计数）
             deepseek_tokenizer::cmd_count_tokens,
             // 埋点：前端就绪后拉取落盘的历史 panic
@@ -434,6 +438,11 @@ pub fn run() {
                 // 兜底：任何走到 Exit 的退出路径都确保托盘已清理（幂等）
                 #[cfg(desktop)]
                 tray::destroy(app);
+                // 退出前把 WAL 截断回零（实测 `-wal` 长期停在 99 MB 以上，比库碎片大得多）。
+                // 幂等；拿不到连接锁就跳过，**绝不等待、绝不拖住退出**。
+                if let Some(m) = app.try_state::<std::sync::Arc<session_db::DbMaintenance>>() {
+                    let _ = m.try_checkpoint_truncate();
+                }
                 telemetry::on_exit();
             }
             // macOS 专属：点 Dock 图标 / 重新打开 app 时把窗口捞回来

@@ -11,6 +11,7 @@
  * - sendMessage(): 正常发送消息，支持 tool call 暂停/恢复
  * - resumePausedRun(): 从暂停的 run 快照恢复执行（统一恢复入口）
  * - cancelMessage(): 取消正在处理的请求
+ * - deleteSessions(): 删除会话（唯一入口：先断流再删库，防止孤儿消息）
  *
  * 注意：暂停/恢复机制基于 Run Snapshot 模型，旧版 shelvedChoiceState 已废弃。
  *
@@ -29,6 +30,7 @@ export { getEngine } from './chat/common'
 
 export {
   createSession,
+  deleteSessions,
   sendMessage,
   resumePausedRun,
   sendMessageWithGoal,

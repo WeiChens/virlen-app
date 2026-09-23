@@ -10,7 +10,6 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import type { Session, Message } from '@/types'
-import { debounce } from '@/utils/common'
 import { trackError, hashText } from '@/utils/telemetry'
 
 export interface SessionRepo {
@@ -49,8 +48,26 @@ export interface SessionRepo {
   ): Promise<MessageTimelinePage | null>
   /** 批量写入变化的会话，删除不存在的会话 */
   saveDiff(oldSessions: Session[], newSessions: Session[]): void
+  /**
+   * 删除会话及其消息（**立即落库**，不经 800ms 防抖）。
+   *
+   * 删除是用户明确且不可撤销的动作，必须可靠：不能因为其后 800ms 内的任意一次
+   * 元数据变更（发消息 / 改标题 / AI 起标题完成 / 置顶…）而被合并丢批。
+   */
+  deleteSessions(ids: string[]): Promise<void>
   /** 直接持久化单个会话元数据 */
   persistSession(session: Session): Promise<void>
+  /** 数据库体积快照（设置 → 存储；非 Tauri 环境返回 null） */
+  dbStats(): Promise<DbStats | null>
+  /** 截断 WAL 日志（`wal_checkpoint(TRUNCATE)`；廉价，不动主库结构） */
+  dbCheckpoint(): Promise<DbCheckpointResult | null>
+  /**
+   * 重建数据库（`VACUUM`：归还空闲页 + 切 `auto_vacuum=INCREMENTAL`）。
+   *
+   * ⚠️ **独占连接**（数百 MB 库约 10–60 s）且需约 2 倍库大小的临时磁盘空间，
+   * 只在用户显式点击时调用；失败返回 `null`。
+   */
+  dbMaintain(): Promise<DbMaintainResult | null>
 }
 
 /** 消息分页结果（与 Rust 端 MessagePage 对应） */
@@ -266,6 +283,13 @@ function persistedSignature(session: Session): string {
 }
 
 class SessionRepoImpl implements SessionRepo {
+  /** 待写入的会话元数据（按 id 去重，后写覆盖先写） */
+  private pendingPuts = new Map<string, Session>()
+  /** 待删除的会话 id */
+  private pendingDeletes = new Set<string>()
+  /** 合并发送的定时器 */
+  private flushTimer: ReturnType<typeof setTimeout> | null = null
+
   async loadAll(): Promise<Session[]> {
     try {
       const sessions = await invoke<Session[]>('cmd_list_sessions')
@@ -377,47 +401,161 @@ class SessionRepoImpl implements SessionRepo {
     }
   }
 
-  /** 防抖持久化（800ms 合并）：元数据变更写 Rust，删除走 Rust */
-  saveDiff = debounce(
-    async (oldSessions: Session[], newSessions: Session[]) => {
-      try {
-        const oldMap = new Map(oldSessions.map((s) => [s.id, s]))
-        const newMap = new Map(newSessions.map((s) => [s.id, s]))
+  /**
+   * 批量写入变化的会话，删除不存在的会话。
+   *
+   * ⚠️ **差集在调用时立即算完**，只有「发送」被 800ms 合并。
+   * 不能把差集计算放在 debounce 回调里（早期实现）：`debounce` 只保留最后一次调用的
+   * 实参，中间那次的差集会被整体丢弃 —— 而 `sessionStore.persist()` 会同步前移
+   * `_lastSaved` 基线，丢弃的删除再也不会被补发。
+   * 实测后果：删除会话后 800ms 内只要再来一次 persist（发消息 touchSession / 改标题 /
+   * **AI 起标题完成** / 置顶…），该会话就不会从 SQLite 删除，重启后连同其消息一起复活，
+   * 数据库文件只增不减。
+   */
+  saveDiff(oldSessions: Session[], newSessions: Session[]): void {
+    const oldMap = new Map(oldSessions.map((s) => [s.id, s]))
+    const newMap = new Map(newSessions.map((s) => [s.id, s]))
 
-        const toPut: Session[] = []
-        const toDelete: string[] = []
-
-        for (const [id, session] of newMap) {
-          const old = oldMap.get(id)
-          // ⚠️ 只能比「值」：oldSessions 是 store 传入的浅拷贝快照（persist() 里
-          // `map(s => ({ ...s }))`），与 store 里的活对象永远不是同一引用。
-          // 早期版本用 `|| old !== session` 兜底 → 恒为 true → 每次 persist() 都把
-          // 全部会话回写一遍（实测 152 个会话：改 1 个标题写了 152 次 SQLite，
-          // 占 rust.db.op 的 85%、SQLite 耗时的 88.7%）。
-          if (!old || persistedSignature(old) !== persistedSignature(session)) {
-            toPut.push(session)
-          }
-        }
-
-        for (const id of oldMap.keys()) {
-          if (!newMap.has(id)) {
-            toDelete.push(id)
-          }
-        }
-
-        await Promise.all([
-          ...toPut.map((s) => invoke('cmd_upsert_session', { session: s })),
-          ...toDelete.map((id) =>
-            invoke('cmd_delete_session', { sessionId: id }),
-          ),
-        ])
-      } catch (err) {
-        console.error('[SessionRepo] 持久化失败:', err)
-        trackError('session.save.error', err)
+    for (const [id, session] of newMap) {
+      const old = oldMap.get(id)
+      // ⚠️ 只能比「值」：oldSessions 是 store 传入的浅拷贝快照（persist() 里
+      // `map(s => ({ ...s }))`），与 store 里的活对象永远不是同一引用。
+      // 早期版本用 `|| old !== session` 兜底 → 恒为 true → 每次 persist() 都把
+      // 全部会话回写一遍（实测 152 个会话：改 1 个标题写了 152 次 SQLite，
+      // 占 rust.db.op 的 85%、SQLite 耗时的 88.7%）。
+      if (!old || persistedSignature(old) !== persistedSignature(session)) {
+        this.pendingPuts.set(id, session)
+        // 同一 id 又被写回来（如删除后撤销）→ 不要再删
+        this.pendingDeletes.delete(id)
       }
-    },
-    800,
-  )
+    }
+
+    for (const id of oldMap.keys()) {
+      if (!newMap.has(id)) {
+        this.pendingDeletes.add(id)
+        // 已排队等写入的会话被删掉 → 不要再写，否则会和删除互相抢先后
+        this.pendingPuts.delete(id)
+      }
+    }
+
+    this.scheduleFlush()
+  }
+
+  /** 立即删除会话及其消息（不等防抖，见 `SessionRepo.deleteSessions`） */
+  async deleteSessions(ids: string[]): Promise<void> {
+    if (ids.length === 0) return
+    for (const id of ids) {
+      this.pendingPuts.delete(id)
+      this.pendingDeletes.add(id)
+    }
+    await this.flushNow()
+  }
+
+  /** 数据库体积快照（设置 → 存储；纯读，毫秒级） */
+  async dbStats(): Promise<DbStats | null> {
+    try {
+      return await invoke<DbStats>('cmd_db_stats')
+    } catch {
+      // 非 Tauri 环境（vitest / 浏览器 dev）没有库，静默返回 null
+      return null
+    }
+  }
+
+  /** 截断 WAL 日志（把 `-wal` 里已提交的页搬回主库后截断文件） */
+  async dbCheckpoint(): Promise<DbCheckpointResult | null> {
+    try {
+      return await invoke<DbCheckpointResult>('cmd_db_checkpoint')
+    } catch (err) {
+      trackError('session.db.checkpoint.error', err)
+      return null
+    }
+  }
+
+  /** 重建数据库（`VACUUM`；独占连接，见 `SessionRepo.dbMaintain`） */
+  async dbMaintain(): Promise<DbMaintainResult | null> {
+    try {
+      return await invoke<DbMaintainResult>('cmd_db_maintain')
+    } catch (err) {
+      trackError('session.db.maintain.error', err)
+      return null
+    }
+  }
+
+  /** 800ms 合并窗口：期间的新变更会合并进同一个批次 */
+  private scheduleFlush(): void {
+    if (this.flushTimer) clearTimeout(this.flushTimer)
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null
+      void this.flushNow()
+    }, 800)
+  }
+
+  /**
+   * 立即发送全部待处理变更并清空队列。
+   *
+   * 失败不回滚队列（与旧行为一致：只记错误，等下一次变更重新带上）。
+   */
+  private async flushNow(): Promise<void> {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer)
+      this.flushTimer = null
+    }
+    const puts = [...this.pendingPuts.values()]
+    const deletes = [...this.pendingDeletes]
+    this.pendingPuts.clear()
+    this.pendingDeletes.clear()
+    if (puts.length === 0 && deletes.length === 0) return
+    try {
+      await Promise.all([
+        ...puts.map((s) => invoke('cmd_upsert_session', { session: s })),
+        ...deletes.map((id) => invoke('cmd_delete_session', { sessionId: id })),
+      ])
+    } catch (err) {
+      console.error('[SessionRepo] 持久化失败:', err)
+      trackError('session.save.error', err)
+    }
+  }
 }
 
 export const sessionRepo: SessionRepo = new SessionRepoImpl()
+
+// ==================== 库维护 DTO（与 Rust `session_db::maintenance` 一一对应） ====================
+
+/** 数据库体积快照（字节；字段名对应 Rust 侧的 camelCase 序列化） */
+export interface DbStats {
+  /** 主库文件 `virlen.db` 的物理大小（`VACUUM` 后要等一次 checkpoint 才变小） */
+  dbBytes: number
+  /** `-wal` 的物理大小 */
+  walBytes: number
+  /** `-shm` 的物理大小（固定 32 KB） */
+  shmBytes: number
+  /** `pageCount * pageSize`：SQLite 视角的逻辑大小 */
+  pageBytes: number
+  pageSize: number
+  pageCount: number
+  /** 空闲页数（可被 `VACUUM` 回收） */
+  freelistPages: number
+  /** auto_vacuum 模式：0=off 1=full 2=incremental */
+  autoVacuum: number
+  /** WAL checkpoint 后的封顶大小（-1 = 不限制） */
+  journalSizeLimit: number
+  sessionCount: number
+  messageCount: number
+}
+
+/** 一次 WAL 截断的结果 */
+export interface DbCheckpointResult {
+  /** 有其它连接占用 WAL 时无法完成截断（此时文件不会变小） */
+  busy: boolean
+  beforeBytes: number
+  afterBytes: number
+}
+
+/** 「重建数据库」的结果（before / after 用于展示回收量） */
+export interface DbMaintainResult {
+  checkpoint: DbCheckpointResult
+  /** `VACUUM` 本身的耗时（不含前后的 checkpoint） */
+  vacuumMs: number
+  before: DbStats
+  after: DbStats
+}
