@@ -72,10 +72,8 @@ fn test_collect_extra_roots_skips_workspace_ancestor() {
 /// 核心验收：受限令牌 + Job Object + ConPTY 三者共存（Spike 已验证），
 /// 且命令真的能跑完、输出经伪控制台回传、中文直接可读（无需 GBK 兜底）。
 ///
-/// ⚠️ 这里故意用 **readonly** 模式：
-///   1. readonly 不触发包管理器缓存探测（`prepare_sandbox_session` 里已短路），
-///      避免与 `package_cache_roots` 的进程级全局状态并行相互污染；
-///   2. 也避免测试去改用户**真实**缓存目录（~/.npm、~/.cargo）的 ACL。
+/// ⚠️ 这里故意用 **readonly** 模式：不授予任何额外写根，
+/// 避免测试去改用户**真实**目录（whitelist 里的路径）的 ACL。
 /// 「可写根 + 受限令牌 + ConPTY」的组合由 Spike（`conpty_with_restricted_token`）覆盖。
 #[tokio::test]
 async fn test_execute_command_pty_sandboxed_end_to_end() {
@@ -136,7 +134,7 @@ async fn test_execute_command_pty_sandboxed_end_to_end() {
 async fn test_execute_command_pty_write_interaction() {
     let dir = std::env::temp_dir().join(format!("virlen_pty_in_{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
-    // 同 `test_execute_command_pty_sandboxed_end_to_end`：readonly 避开缓存探测与真实目录 ACL
+    // 同 `test_execute_command_pty_sandboxed_end_to_end`：readonly 不授予额外写根，避免改真实目录 ACL
     let mut sec = test_security(&dir.to_string_lossy());
     sec.sandbox_mode = "readonly".to_string();
     let sink = TestEventSink::new();
@@ -203,7 +201,7 @@ async fn test_execute_command_pty_write_interaction() {
 async fn test_execute_command_pty_disables_pager() {
     let dir = std::env::temp_dir().join(format!("virlen_pty_pager_{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
-    // readonly 避开缓存探测与真实目录 ACL（同其它 PTY 用例）。
+    // readonly 不授予额外写根（同其它 PTY 用例）。
     let mut sec = test_security(&dir.to_string_lossy());
     sec.sandbox_mode = "readonly".to_string();
     let sink = TestEventSink::new();

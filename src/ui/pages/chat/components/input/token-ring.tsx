@@ -11,7 +11,6 @@ import { compressContext } from '@/services/chat-service'
 import Tooltip from '@/ui/components/shared/Tooltip'
 import { showToast } from '@/ui/components/shared/Toast'
 import { t } from '@/ui/i18n'
-import type { TokenUsage } from '@/types'
 
 // ==================== 口径与几何常量（提到模块级，不在渲染里重算） ====================
 
@@ -46,13 +45,24 @@ function formatTokens(tokens: number) {
   return `${Number.isInteger(k) ? k.toFixed(0) : k.toFixed(1)}k`
 }
 
-/** 取最后一条带 usage 的消息（从后往前，命中即止） */
-function findLastUsage(sessionId: string): TokenUsage | null {
+/**
+ * 取「当前上下文占用」——从后往前，命中即止。
+ *
+ * 两个口径必须区分（见 compress-context.ts）：
+ * - `uiData.contextTokens`：压缩产物的「压缩后上下文大小」（本地估算）；
+ * - `usage.totalTokens`：该消息所属那轮调用的真实 token（供应商回报）。
+ *
+ * AI 摘要消息的 `usage` 是**那次摘要调用**的消耗（prompt 含压缩前的全部历史），
+ * 拿它当占用会显示成「压缩后反而更大」，所以带 contextTokens 的消息一律优先。
+ */
+function findContextTokens(sessionId: string): number | null {
   const msgs = sessionStore.getSession(sessionId)?.messages
   if (!msgs) return null
   for (let i = msgs.length - 1; i >= 0; i--) {
+    const ctx = msgs[i].uiData?.contextTokens
+    if (typeof ctx === 'number' && ctx > 0) return ctx
     const usage = msgs[i].usage
-    if (usage) return usage
+    if (usage) return usage.totalTokens
   }
   return null
 }
@@ -61,15 +71,24 @@ interface Props {
   sessionId?: string
   compacting: boolean
   loading?: boolean
+  /**
+   * 压缩会整体替换消息列表，而列表数据源是 chat-view 的本地 state，
+   * 压缩完成后必须回调通知它重新同步（否则要切会话才看到压缩结果）
+   */
+  onMessagesUpdate?: (sessionId: string) => void
 }
 
-export default function TokenRing({ sessionId, compacting, loading }: Props) {
+export default function TokenRing({
+  sessionId,
+  compacting,
+  loading,
+  onMessagesUpdate,
+}: Props) {
   return (
     <Observer>
       {() => {
         if (!sessionId) return null
-        const usage = findLastUsage(sessionId)
-        const totalTokens = usage?.totalTokens
+        const totalTokens = findContextTokens(sessionId)
         if (totalTokens == null) return null
 
         const ratio = Math.min(totalTokens / MAX_TOKENS_FULL, 1)
@@ -100,7 +119,7 @@ export default function TokenRing({ sessionId, compacting, loading }: Props) {
             showToast(t('正在发送消息，请稍候...'))
             return
           }
-          await compressContext(sessionId!)
+          await compressContext(sessionId!, { onMessagesUpdate })
         }
 
         return (

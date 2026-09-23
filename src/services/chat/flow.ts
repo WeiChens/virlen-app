@@ -37,11 +37,13 @@ import { createEventHandler, finishWorking } from './event-handler'
 import type { ChatServiceEvents } from './types'
 import {
   track,
+  trackError,
   newTraceId,
   hashText,
   setSessionTrace,
   truncateText,
 } from '@/utils/telemetry'
+import { sanitizeLoneSurrogates } from '@/utils/text'
 
 /**
  * 创建新会话
@@ -521,7 +523,17 @@ export async function getRunSnapshot(sessionId: string) {
   return await getEngine().getRunSnapshot(sessionId)
 }
 
-export async function compressContext(sessionId: string) {
+/**
+ * 压缩会话上下文
+ *
+ * @param events 事件回调。压缩会**整体替换**消息列表，而消息列表的数据源是
+ *   `chat-view` 的本地 state（不是 store），因此必须通过 `onMessagesUpdate`
+ *   通知它重新同步 —— 否则列表仍显示压缩前的消息，要切会话才刷新。
+ */
+export async function compressContext(
+  sessionId: string,
+  events?: ChatServiceEvents,
+) {
   try {
     sessionRuntimeState.setCompacting(sessionId, true)
     const session = sessionStore.getSession(sessionId)
@@ -542,7 +554,13 @@ export async function compressContext(sessionId: string) {
     // 压缩方式由设置决定：ai = LLM 摘要 / raw = 正文压缩（本地渲染，不发请求）
     const mode = settingsState.value.contextCompressMode ?? 'ai'
     const result = await getEngine().compressContext(session, allMessages, mode)
-    replaceSessionMessages(sessionId, result.messages)
+    // 兜底：summary / 历史里若含孤立代理（半个 emoji），先清洗再写内存 + 落库。
+    // 孤立代理经 JSON.stringify → Rust serde_json 会直接报
+    // "unexpected end of hex escape"（源头已用 utils/text 安全截断，这里再防第三方网关产出）
+    const safeMessages = sanitizeLoneSurrogates(result.messages)
+    replaceSessionMessages(sessionId, safeMessages)
+    // 通知 UI 重新同步消息列表（含分页补齐的历史 + 新的 summary 消息）
+    events?.onMessagesUpdate?.(sessionId)
     track('chat.context.compress', {
       mode,
       before_msg_count: beforeCount,
@@ -556,9 +574,21 @@ export async function compressContext(sessionId: string) {
     try {
       await invoke('cmd_replace_session_messages', {
         sessionId,
-        messages: result.messages,
+        messages: safeMessages,
       })
-    } catch {}
+    } catch (err) {
+      // ⚠️ 绝不能空 catch：这边内存已是压缩后的消息、DB 还是旧的，两边不一致
+      //    （曾出现问题：summary 里含孤立代理 → serde_json 报错 → 静默失败，
+      //     用户看到「压缩成功」，下次发消息才炸在 agent_send_message 上）。
+      console.error('[chat] 压缩结果落库失败:', err)
+      trackError('session.save.error', err, {
+        props: { session_id: hashText(sessionId), op: 'compress.persist' },
+      })
+      showToast(
+        '压缩结果保存失败：' + ((err as any)?.message || String(err)),
+        3000,
+      )
+    }
   } catch (e: any) {
     const errorMsg = e?.message || String(e)
     showToast('压缩失败：' + errorMsg, 2000)

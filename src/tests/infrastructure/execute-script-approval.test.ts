@@ -13,6 +13,9 @@ vi.mock('@/services/security-service', () => ({
     getWorkspace: async () => 'C:/ws',
     resolveSafePath: async (p: string) => `C:/ws/${p}`,
     getPermissionDecision: async () => 'ask',
+    // 「忽略沙盒命令」规则：本用例不命中（规则语义见 execute-command-sandbox-rule.test.ts）
+    // 注：返回类型需显式标注 —— strictNullChecks=false 下 `null` 会退化成 any（TS7011）
+    matchSandboxIgnoreRule: async (): Promise<null> => null,
   },
 }))
 

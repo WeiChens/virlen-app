@@ -624,6 +624,7 @@ function ChatInput(
           }}
           onCancel={handlers.handleCancel}
           onSend={handlers.handleSend}
+          onMessagesUpdate={onMessagesUpdate}
         />
       </div>
     </div>

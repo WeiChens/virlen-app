@@ -1,0 +1,86 @@
+/* Toggle — 通用开关（三档尺寸，几何量全部由 CSS 变量推导） */
+
+.virlen-toggle {
+  /* 尺寸变量：宽 / 高 / 滑块直径 / 内边距（滑块到轨道的间距）
+     —— 改尺寸只需覆盖这一组，位移量会自动跟随 */
+  --toggle-w: 44px;
+  --toggle-h: 24px;
+  --toggle-knob: 20px;
+  --toggle-inset: 2px;
+  --toggle-on: var(--accent-color, #4f46e5);
+  --toggle-off: var(--toggle-off-bg, #ccc);
+
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  width: var(--toggle-w);
+  height: var(--toggle-h);
+  cursor: pointer;
+  vertical-align: middle;
+
+  &.size-sm {
+    --toggle-w: 32px;
+    --toggle-h: 18px;
+    --toggle-knob: 14px;
+  }
+
+  &.size-lg {
+    --toggle-w: 56px;
+    --toggle-h: 30px;
+    --toggle-knob: 26px;
+  }
+
+  &.is-disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+
+  input {
+    /* checkbox 本体只是无障碍载体：不占位、不可见，交互靠滑块 */
+    position: absolute;
+    width: 0;
+    height: 0;
+    margin: 0;
+    opacity: 0;
+
+    &:checked + .virlen-toggle__slider {
+      background: var(--toggle-on);
+    }
+
+    &:checked + .virlen-toggle__slider::before {
+      /* 位移 = 轨道宽 - 滑块直径 - 两侧内边距（三档尺寸共用同一条公式） */
+      transform: translateX(
+        calc(var(--toggle-w) - var(--toggle-knob) - var(--toggle-inset) * 2)
+      );
+    }
+
+    &:focus-visible + .virlen-toggle__slider {
+      outline: var(--focus-ring);
+      outline-offset: 2px;
+    }
+
+    &:disabled {
+      cursor: default;
+    }
+  }
+
+  .virlen-toggle__slider {
+    position: absolute;
+    inset: 0;
+    border-radius: calc(var(--toggle-h) / 2);
+    background: var(--toggle-off);
+    transition: background 0.2s;
+
+    &::before {
+      content: '';
+      position: absolute;
+      top: calc((var(--toggle-h) - var(--toggle-knob)) / 2);
+      left: var(--toggle-inset);
+      width: var(--toggle-knob);
+      height: var(--toggle-knob);
+      border-radius: 50%;
+      background: #fff;
+      transition: transform 0.2s;
+    }
+  }
+}

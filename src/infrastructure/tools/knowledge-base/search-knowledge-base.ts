@@ -9,6 +9,7 @@ import type { ToolExecutor, ToolResult } from '@/domain/tools/types'
 import { t } from '@/ui/i18n'
 import { ragService } from '@/services/rag-service'
 import { buildSearchContext } from './common'
+import { sliceHead } from '@/utils/text'
 
 toolRegistry.register(
   {
@@ -88,7 +89,7 @@ toolRegistry.register(
             document_name: r.document_name,
             document_id: r.document_id,
             score: r.score,
-            snippet: r.content.slice(0, 200),
+            snippet: sliceHead(r.content, 200),
           })),
           query,
           knowledge_base_id: kbId,

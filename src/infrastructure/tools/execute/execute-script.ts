@@ -7,8 +7,12 @@
  *   执行完默认删除，避免污染工作目录。
  *
  * 审批：独立门禁 script.execute（允许 / 每次弹窗 / 禁止），与终端命令风险分类无关。
- * 申请不使用沙盒（sandbox:"off"）时另过「沙盒脱壳·脚本执行」门禁（与脚本权限取更严格者）。
+ * 申请不使用沙盒（sandbox:"off"）时另过「沙盒脱壳·脚本执行」门禁（与脚本权限取更严格者）；
+ * 命中「忽略沙盒命令」规则（设置 → 安全）时**免脱壳审批并强制无沙盒执行**（不必 AI 申请）。
  * 沙盒：写文件走 securityService.resolveSafePath(mode='w')，超范围直接报错。
+ *
+ * ⚠️ 规则语义与 Rust 原生路径（`native_tools/execute/execute_script.rs`）对齐，
+ *    匹配对象是**运行命令**（不是脚本正文）。
  */
 import * as tauriFs from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
@@ -29,8 +33,10 @@ import {
   resolveCommandDecision,
 } from '@/domain/permission'
 import { settingsState } from '@/ui/store'
+import { track } from '@/utils/telemetry'
 import {
   SANDBOX_BYPASS_HINT,
+  SANDBOX_RULE_BYPASS_HINT,
   classifyCommand,
   detectPlatform,
   getRiskInfo,
@@ -141,17 +147,33 @@ toolRegistry.register(
     const cwd = await securityService.getWorkspace(ctx.sessionId)
 
     // sandbox: 'off' → 申请「不使用沙盒」执行脚本（与 execute_command 同语义）。
-    const bypassSandbox = ['off', 'none'].includes(
+    const aiRequestedBypass = ['off', 'none'].includes(
       String(args.sandbox ?? '').toLowerCase(),
     )
     const sandboxMode = settingsState.value.sandboxMode ?? 'on'
     // 只读模式禁止绕过沙盒（与 Rust 原生路径一致）
-    if (bypassSandbox && sandboxMode === 'readonly') {
+    // ⚠️ 只针对 AI 的**显式申请**：命中「忽略沙盒命令」规则时只读模式**静默忽略规则**
+    //   （脚本继续走沙盒），不把一条本来能跑的调用变成报错。
+    if (aiRequestedBypass && sandboxMode === 'readonly') {
       throw new Error(
         t(
           '沙盒处于只读模式，不支持绕过沙盒执行脚本；请先在设置中切换沙盒模式（或改用常规终端）',
         ),
       )
+    }
+    // 「忽略沙盒命令」规则（设置 → 安全）：命中即**免脱壳审批 + 强制无沙盒执行**。
+    // 匹配对象是**运行命令**（如 node temp/run.js），不是脚本正文（与 Rust 侧一致）。
+    const ruleHit =
+      sandboxMode === 'on'
+        ? await securityService.matchSandboxIgnoreRule(command)
+        : null
+    const bypassSandbox = aiRequestedBypass || !!ruleHit
+    if (ruleHit) {
+      // 留痕（只记工具名 / 原因，不记命令正文与规则名，遵循 §9）
+      track('tool.sandbox.bypass', {
+        tool_name: 'execute_script',
+        status: 'auto_rule',
+      })
     }
 
     // 目标文件已存在则驳回，避免覆盖既有文件
@@ -196,10 +218,13 @@ toolRegistry.register(
     // 权限：脚本执行独立门禁（script.execute，默认每次弹窗；与命令风险分类无关）
     const base = await securityService.getPermissionDecision(PERM_SCRIPT)
     // 申请绕过沙盒且沙盒启用 → 额外过「沙盒脱壳·脚本执行」权限（与脚本权限取更严格者）
-    const escapeDecision =
+    const configuredEscape =
       bypassSandbox && sandboxMode !== 'off'
         ? await securityService.getPermissionDecision(PERM_SANDBOX_SCRIPT)
         : undefined
+    // 命中规则 → 用户已用规则预先授权脱壳（ask 视作 allow）；⚠️ deny 仍然优先
+    const escapeDecision =
+      ruleHit && configuredEscape === 'ask' ? 'allow' : configuredEscape
     const decision = resolveCommandDecision(base, { escapeDecision })
     if (decision === 'deny') {
       // 禁止：不执行、不弹窗，返回拒绝文本给模型（标明是哪个权限拦下的）
@@ -220,10 +245,14 @@ toolRegistry.register(
     const info = getRiskInfo(risk)
     const baseHint =
       info.hint || t('此操作会创建并执行脚本文件，请确认是否允许')
-    // 申请绕过沙盒：追加警告，让用户看到后果
-    const hint = bypassSandbox
-      ? [baseHint, t(SANDBOX_BYPASS_HINT)].filter(Boolean).join('\n')
-      : baseHint
+    // 追加沙盒脱壳警告（让用户看到后果）：命中规则时说明「为什么没申请也脱壳了」
+    const hint = ruleHit
+      ? [baseHint, tpl(SANDBOX_RULE_BYPASS_HINT, { rule: ruleHit.name })]
+          .filter(Boolean)
+          .join('\n')
+      : bypassSandbox
+        ? [baseHint, t(SANDBOX_BYPASS_HINT)].filter(Boolean).join('\n')
+        : baseHint
     // 触发本次确认的权限（同上：仅因沙盒脱壳时展示脱壳权限）
     const shownPerm =
       bypassSandbox && base === 'allow' && escapeDecision === 'ask'

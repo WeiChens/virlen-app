@@ -67,6 +67,7 @@ interface Props {
  */
 type MenuTarget =
   | { kind: 'text' }
+  | { kind: 'summary' }
   | { kind: 'reasoning' }
   | { kind: 'image'; src: string }
   | { kind: 'file'; path: string; isDir?: boolean }
@@ -198,6 +199,22 @@ function MessageBubble({
         return textMenuItems(() => message.reasoningContent || '', {
           selectAll: selectAllReasoning,
         })
+      case 'summary': {
+        // 压缩摘要：只有「复制摘要」与「删除」两项。
+        // 它不是模型产出的一条对话，没有引用 / 编辑的语义；
+        // 但删除同样是「本条及之后全部删除」（删掉 summary = 放弃这次压缩，
+        // 其后的对话也一并清掉），与其它气泡的删除语义保持一致。
+        return [
+          ...textMenuItems(() => getContent(false)),
+          {
+            key: 'delete',
+            label: t('删除'),
+            divider: true,
+            danger: true,
+            onClick: confirmDeleteMessage,
+          },
+        ]
+      }
       default: {
         const items = textMenuItems(() => getContent(false))
         if (onQuote && showContent) {
@@ -253,9 +270,25 @@ function MessageBubble({
     hideToolCallThink
 
   // 上下文压缩产物（role='summary'）：正文可能极长，不在消息流里铺开，
-  // 只渲染可点击的提示条，摘要全文放弹窗（详见 summary-message.tsx）
+  // 只渲染可点击的提示条，摘要全文放弹窗（详见 summary-message.tsx）。
+  // ⚠️ 摘要也必须能右键：否则用户压缩错了就没办法回退——删除 summary 即「放弃压缩」，
+  //   本条及之后的消息一并删除（与其它气泡同一条删除路径）。
   if (isSummary) {
-    return <SummaryMessage message={message} />
+    return (
+      <>
+        <SummaryMessage
+          message={message}
+          onContextMenu={(e) => menu.openAt(e, { kind: 'summary' })}
+        />
+        {menu.state && (
+          <ContextMenu
+            position={menu.state.position}
+            items={buildMenuItems(menu.state.target)}
+            onClose={menu.close}
+          />
+        )}
+      </>
+    )
   }
 
   // 反馈消息：居中系统通知样式
@@ -515,7 +548,7 @@ function MessageBubble({
           </div>
         </ToolCallGroup>
       )}
-      {/* 右键菜单：正文 / 图片 / 文件 / 深度思考共用一套（同一时刻只开一个） */}
+      {/* 右键菜单：正文 / 摘要 / 图片 / 文件 / 深度思考共用一套（同一时刻只开一个） */}
       {menu.state && (
         <ContextMenu
           position={menu.state.position}

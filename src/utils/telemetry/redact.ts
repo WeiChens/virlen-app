@@ -7,6 +7,7 @@
  * - 系统用户名路径前缀替换为 ~
  * - 稳定短哈希（用于 path_hash 等去重，非加密用途）
  */
+import { sliceHead } from '../text'
 
 /** 需要整段替换为 [REDACTED] 的密钥模式 */
 const SECRET_PATTERNS: RegExp[] = [
@@ -119,7 +120,7 @@ export function urlHost(url: string): string {
 export function truncateText(input: string, max = 16384): string {
   if (typeof input !== 'string') return input
   if (input.length <= max) return input
-  return input.slice(0, max) + `\n…[truncated ${input.length - max} chars]`
+  return sliceHead(input, max) + `\n…[truncated ${input.length - max} chars]`
 }
 
 /**

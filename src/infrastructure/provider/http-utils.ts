@@ -5,6 +5,7 @@
  * 大量重复的 fetch → 错误处理 → SSE 解析逻辑，统一封装至此。
  */
 import { track, urlHost } from '@/utils/telemetry'
+import { sliceHead } from '@/utils/text'
 
 // ==================== 埋点辅助（§5.7 provider.*） ====================
 
@@ -116,7 +117,7 @@ export async function apiFetch(options: ApiFetchOptions): Promise<Response> {
         trace_id: traceId,
         provider_type: providerType,
         http_status: res.status,
-        error: message.slice(0, 500),
+        error: sliceHead(message, 500),
         error_type: classifyHttpError(res.status),
         duration_ms: Date.now() - start,
       })
@@ -125,7 +126,7 @@ export async function apiFetch(options: ApiFetchOptions): Promise<Response> {
         trace_id: traceId,
         provider_type: providerType,
         http_status: res.status,
-        message: message.slice(0, 500),
+        message: sliceHead(message, 500),
       })
       throw new Error(message)
     }

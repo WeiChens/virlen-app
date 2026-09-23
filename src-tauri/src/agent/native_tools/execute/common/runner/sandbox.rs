@@ -1,7 +1,7 @@
 //! 沙盒会话准备与沙盒内（管道）运行。
 //!
 //! - `expand_env_vars` / `collect_extra_roots`：算终端可写根（M6 映射）。
-//! - `prepare_sandbox_session`：算可写根（含包管理器缓存探测）→ 应用 ACL → 建受限令牌，
+//! - `prepare_sandbox_session`：算可写根 → 应用 ACL → 建受限令牌，
 //!   与「怎么跑」解耦，PTY 路径与管道路径共用。
 //! - `run_command_sandboxed`：受限令牌 + 匿名管道的沙盒运行。
 
@@ -84,7 +84,7 @@ pub(super) fn collect_extra_roots(
     extra_roots
 }
 
-/// 准备沙盒会话：算可写根（含包管理器缓存探测）→ 应用 ACL → 建受限令牌。
+/// 准备沙盒会话：算可写根 → 应用 ACL → 建受限令牌。
 ///
 /// 与「怎么跑」解耦，便于 PTY 路径（`run_command_native_pty`）与管道路径
 /// （`run_command_sandboxed`）共用：两条路径的 spawn 方式不同，prepare 完全一致。
@@ -96,34 +96,15 @@ pub(super) async fn prepare_sandbox_session(
     // whitelist 可能含 %VAR% 占位符或已失效路径，逐条展开并过滤，避免单条失败导致整体降级。
     let readonly_mode = sandbox_mode(ctx) == SandboxMode::Readonly;
     let skills_dir = ctx.security.skills_dir.clone();
-    let mut extra_roots = if readonly_mode {
+    let extra_roots = if readonly_mode {
         // readonly 模式不授予任何写根（whitelist 也不映射为可写根），否则 prepare 会因
         // 「readonly + extra_roots」冲突而失败 → 静默降级裸跑，丧失只读保护。
         Vec::new()
     } else {
         collect_extra_roots(&ctx.security.whitelist, &ctx.security.workspace, skills_dir.as_deref())
     };
-    // 包管理器缓存目录自动豁免：npm/pnpm/cargo 等安装命令会先写用户级缓存目录
-    // （~/.npm、pnpm store、~/.cargo…）再复制到 workspace 的 node_modules，默认写隔离
-    // 会拦截（表现为 `npm install` EACCES/EPERM mkdir cache）。动态探测真实缓存目录并
-    // 加入可写根，对齐 Claude Code sandbox.filesystem.allowWrite / Codex writable_roots
-    // 的做法。readonly 模式不授予任何额外写根；workspace 祖先/已覆盖目录在模块内过滤。
-    // 探测可能含子进程等待（npm/pnpm config），放 spawn_blocking 避免阻塞 async runtime。
-    if !readonly_mode && !ctx.security.workspace.is_empty() {
-        let ws_path = PathBuf::from(&ctx.security.workspace);
-        let existing = extra_roots.clone();
-        let cache_roots = tokio::task::spawn_blocking(move || {
-            crate::agent::package_cache_roots::cache_roots_for_workspace(&ws_path, &existing)
-        })
-        .await
-        .unwrap_or_else(|e| {
-            // 缓存探测是 best-effort 增强：失败（含闭包内 panic / 锁中毒）不应让整条命令失败，
-            // 静默降级为「不追加缓存根」，沙盒仍按 workspace + whitelist 正常启动。
-            eprintln!("[sandbox] package cache roots probe failed, skipping: {e}");
-            Vec::new()
-        });
-        extra_roots.extend(cache_roots);
-    }
+    // 注：沙盒可写根只来自 workspace + whitelist。需要让区外目录（如包管理器缓存）
+    // 可写时，由用户在白名单里显式配置，或用「忽略沙盒命令」规则让该命令不走沙盒。
     let mut protect: Vec<PathBuf> = Vec::new();
     if let Some(sd) = &skills_dir {
         let sp = PathBuf::from(sd);

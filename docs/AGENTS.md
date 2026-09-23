@@ -182,7 +182,7 @@ iteration_verify_pass / iteration_verify_fail / iteration_max_exceeded / iterati
 |---|---|---|
 | Rust → JS | `agent:event` | 载荷 `{ sessionId, event }`，`event` 与 TS `AgentEvent` 完全一致，前端直接转发 `onEvent` |
 | Rust → JS | `agent:tool-request` | 未原生化工具交 JS 执行，JS 用 `toolRegistry` 跑完回 `agent_tool_response`（`payload.__kind: value \| error \| interaction`） |
-| Rust → JS | `agent:user-interaction-request` | 用户交互（`user_choice` / 终端内确认），走 `chat-service` 注册的 session handler → 弹窗 → `agent_user_interaction_response` |
+| Rust → JS | `agent:user-interaction-request` | 用户交互（`user_choice` / 终端内确认）与**内部查询**（`sandbox_rule_check`，无 UI：命令是否命中「忽略沙盒命令」规则，见 §5.4），走 `chat-service` 注册的 session handler → `agent_user_interaction_response` |
 | Rust → JS | `agent:provider-request` | 未原生化的 Provider（目前 Gemini）交 JS，流式用 `agent_provider_stream_event` 逐条回传，结束 `agent_provider_stream_done` |
 | JS → Rust | `agent_send_message` / `agent_cancel` / `agent_get_run_snapshot` / `agent_clear_run_snapshot` / `agent_dispose` / `agent_kill_command` / `pty_*` | 生命周期、取消、终端交互 |
 
@@ -229,10 +229,27 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 |---|---|---|
 | **路径校验** | `domain/security/index.ts` + `services/security-service.ts` + `utils/pathCanonicealize.ts`；Rust 镜像 `native_tools/common.rs` | 优先级 **黑名单 > 白名单 > 工作目录**；写模式（`mode='w'`）仅允许白名单 + 工作目录，**两侧规则必须等价** |
 | **权限三态** | `domain/permission/index.ts` + `settings.permissions`；Rust 镜像 `native_tools/execute/common/classify.rs` | 命令按 `safe/install/dangerous` 映射，脚本走 `script.execute`，沙盒脱壳走 `sandbox.*.execute`；`deny` 永远优先；脱壳与命令权限**取更严格者**（默认 `ask`） |
-| **跨平台沙盒** | `infrastructure/sandbox/*` + `src-tauri/src/sandbox/` | Windows：Job Object + 受限令牌 + ACL；Linux：Landlock（默认拒写）；macOS：`sandbox/macos/mod.rs`。**禁止绕过沙盒直接 spawn** |
+| **跨平台沙盒** | `infrastructure/sandbox/*` + `src-tauri/src/sandbox/` | Windows：Job Object + 受限令牌 + ACL；Linux：Landlock（默认拒写）；macOS：`sandbox/macos/mod.rs`。**禁止绕过沙盒直接 spawn**。可写根**只来自** workspace + 白名单：**不自动豁免**包管理器缓存（`~/.npm` / pnpm store / `~/.cargo`…）等区外目录——该「环境探测 + ACL 授予」机制已**整体移除**（实测不好用），要放行区外写入请让命令命中下方「忽略沙盒命令」规则 |
 | **工具风暴防护** | `domain/engine/storm-breaker.ts` / `agent/storm_breaker.rs` | 滑窗（window 6 / threshold 3）检测重复 `(toolName, args)`，命中即中断循环 |
 
 > 唯一「绕过沙盒」的例外：`execute_command` / `execute_script` 传 `sandbox:"off"`（见 §8、§11.2），按脱壳权限决策、`readonly` 直接拒绝，并埋点 `tool.sandbox.bypass`。
+
+> 「忽略沙盒命令」规则（**设置 → 安全 → 忽略沙盒命令**）：命中规则的命令**免除「沙盒脱壳」审批，并以「不使用沙盒」方式执行**
+> （AI 不必显式传 `sandbox:"off"`；沙盒已关闭 `off` / 只读 `readonly` 时规则不生效）。
+> 该规则也是「区外写入」（如 `npm install` 写 `~/.npm`、pnpm store）的**唯一推荐放行方式**（不要再做沙盒侧自动探测/豁免）。
+> 匹配器只有一份：`domain/security/sandbox-ignore-rules.ts`（`text`（完全/前缀/后缀）/ `regex` / `js` 三种），经 `securityService.matchSandboxIgnoreRule` 使用；
+> **TS 引擎路径**在 `infrastructure/tools/execute/{execute-command,execute-script}.ts` 里定 `bypassSandbox`；
+> **Rust 引擎路径**（默认）在 `native_tools/execute/{execute_command,execute_script}.rs` 里经**内部交互** `sandbox_rule_check`（无 UI）问 JS 同一个匹配器
+> —— Rust 不重实现匹配（规则含用户自写的 `js` 函数），`security.hasSandboxIgnoreRules` 只是性能开关（false 时零 IPC）。
+> `js` 规则的输入是代码编辑器 `ui/components/code-editor/CodeEditor`（可编辑的精简版 Monaco，见 `monaco/setupMonaco.ts`：只有词法高亮，**无语言服务/无诊断**）；
+> 默认模板 `SANDBOX_JS_DEFAULT_PATTERN` 是带注释的 `function matchCommand(command){...return false}`（**默认不命中**），
+> **切换匹配方式会重置「匹配内容」**（`defaultSandboxRulePattern`）。
+> **列表顺序即匹配优先级**（`findMatchingSandboxRule` 取第一条命中的启用规则），设置页里**拖拽左侧把手**排序（`reorderSandboxIgnoreRule` ↔ `securityStore.reorderSandboxRule`，几何计算在 `ui/pages/Settings/sandbox-rules-dnd.ts`；同一把手支持 ↑/↓ 方向键 = `moveSandboxIgnoreRule`）；
+> ⚠️ 拖拽用 **pointer 事件**自实现，不能用 HTML5 drag & drop（`dragDropEnabled: true` 与 HTML5 拖拽互斥，见 `chat/.../use-tree-drag.ts` 与 §11.8）；
+> 空列表里的「常用规则」来自 `SANDBOX_RULE_PRESETS`（`createSandboxIgnoreRuleFromPreset`）；
+> 保存前的校验走 `compileSandboxRule`（**只验证能否编译，不执行规则体** —— 运行期抛错在生产按未命中处理，不该拦住保存）。
+> ⚠️ 规则**只**免「沙盒脱壳」：`terminal.*` / `script.execute` 的风险审批照旧（命中规则时弹窗追加 `SANDBOX_RULE_BYPASS_HINT` 说明原因）；
+> 「沙盒脱壳」权限设为 `deny` 时 **deny 仍然优先**（`apply_rule_clearance` 只把 `ask` 降为 `allow`）。
 
 ### 5.5 Provider 与搜索源
 
@@ -255,6 +272,8 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 - **性能**：消息列表 `@tanstack/react-virtual` 动态高度虚拟滚动 + 分页（改 `message-list.tsx` 注意 `measureElement`）。
 - **组件事件**：跨层通信用 `src/events/*` 的 EventEmitter（**禁止 `window.*` 全局挂载**）。
 - **样式**：组件目录内 `style.scss`（或 `style.module.scss`），跟随 BEM 类名；主题变量在 `ui/styles/theme.css`。
+- **通用控件**：开关用 `ui/components/shared/Toggle`（`size: sm/md/lg` 三档，`virlen-toggle` 命名空间；`md` 与老 `.toggle` 视觉一致）。
+  ⚠️ 老页面那套 `<label class="toggle"> + .toggle-slider` 是**全局约定类**，在 general / editor / provider / security 的 scss 里各拄了一份，尚未迁移；新代码请用组件，**别再用 `.toggle` 命名新样式**（会被 `.settings-panel .toggle ...` 这类跨层选择器意外命中）。
 
 ### 5.8 埋点与诊断
 
@@ -308,6 +327,7 @@ pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 
 - **路径**：优先级 **黑名单 > 白名单 > 工作目录**；写模式仅允许白名单 + 工作目录；黑名单按平台给默认值。
 - **沙盒**：`settings.sandboxMode`（`on`/`off`/`readonly`）。**禁止绕过沙盒直接 spawn**；唯一例外是 `execute_command` / `execute_script` 的 `sandbox:"off"`（须按「沙盒脱壳」权限决策、`readonly` 直接拒绝、埋点 `tool.sandbox.bypass`）。
+  另：命中「忽略沙盒命令」规则（§5.4）的命令**免脱壳审批并强制无沙盒执行**（AI 未申请也生效，埋点 `status: auto_rule`）；`off` / `readonly` 下规则不生效，`deny` 优先。
 - **权限三态**：命令 / 脚本 / 沙盒脱壳（`allow`/`ask`/`deny`）；`deny` 永远优先；脱壳与命令/脚本权限**取更严格者**。UI 在「设置 → 安全 → 权限管理」。
 - **工具风暴**：滑窗检测重复 `(toolName, args)`，命中即中断。
 - **密钥**：埋点/日志**不得**输出 apiKey、token、密钥文件内容；`providers` / `searchProviders` 只上报数量。
@@ -377,7 +397,7 @@ pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 **11.2 本机沙盒的已知限制（非代码问题）** —— `vitest` / `vite build` / `jest` / `node-gyp` / `child_process.exec*` 等因 `esbuild` 子进程 `spawn EPERM` 在沙盒内跑不了。
 **根因**（2026-09 实测定位，非测试代码问题）：libuv 给 spawn 的 stdio 建的是**命名管道**（NPFS 内置 SD 里没有 restricting SID 的写 ACE），沙盒受限令牌的写类访问要过两遍检查 → 第二遍 `ACCESS_DENIED`。
 **匿名管道不受影响**（python `subprocess(capture_output=True)`、`cargo`→`rustc`、.NET `Process.Start` 均正常）。
-**受控退路**：`execute_command` / `execute_script` 传 `sandbox:"off"`（按「沙盒脱壳」权限授权，`readonly` 拒绝）。
+**受控退路**：`execute_command` / `execute_script` 传 `sandbox:"off"`（按「沙盒脱壳」权限授权，`readonly` 拒绝）；不想每次都授权时用「设置 → 安全 → 忽略沙盒命令」配一条规则（命中的命令自动无沙盒执行，见 §5.4）。
 **临时关闭**：`VIRLEN_SANDBOX=off|readonly|on`（由 **Virlen 进程**读取，在命令里 `set` 无效）。
 另：`node_modules` 可能不完整（如缺 `@tanstack/react-virtual`），先 `pnpm install` 再判断是否为真错误。
 
@@ -428,6 +448,7 @@ pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 | 改终端输出处理（`\r`、ANSI） | `tools/execute/common.ts::processTerminalOutput`（UI 侧 `tool-call/Execute*Message.tsx` 复用）；Rust 侧 `native_tools/execute/common.rs::process_terminal_output`。两份**逐条对齐** |
 | 改工具授权确认弹窗 / 交互 | `ui/pages/chat/components/modals/authorization.tsx`；事件 `events/toolInteractEvent.ts::showAuthorization`；调度 `services/tool-service/command_confirm.ts`；Rust 侧下发同样字段 `native_tools/execute/{execute_command,execute_script}.rs` |
 | 改沙盒 / 权限 | `src-tauri/src/sandbox/**`、`src/infrastructure/sandbox/*`、`src/domain/security/index.ts` |
+| 改「忽略沙盒命令」规则（命中即免脱壳审批 + 强制无沙盒执行） | 匹配器 `src/domain/security/sandbox-ignore-rules.ts`（含 `js` 默认模板 `SANDBOX_JS_DEFAULT_PATTERN` / `defaultSandboxRulePattern` / 排序 `moveSandboxIgnoreRule`+`reorderSandboxIgnoreRule` / 预设 `SANDBOX_RULE_PRESETS` / 编译校验 `compileSandboxRule`）；服务入口 `src/services/security-service.ts::matchSandboxIgnoreRule`；存储 `src/infrastructure/securityRepo/`（`sandboxIgnoreRules`）+ `src/ui/store/securityStore.ts`（`upsert/remove/setEnabled/move/reorder`）；UI `src/ui/pages/Settings/security-sandbox-rules.tsx`（拖拽几何 `./sandbox-rules-dnd.ts`；JS 输入用 `src/ui/components/code-editor/CodeEditor.tsx`；行内开关 `src/ui/components/shared/Toggle`）；**TS 路径决策** `src/infrastructure/tools/execute/{execute-command,execute-script}.ts`；**Rust 路径决策** `src-tauri/src/agent/native_tools/execute/{execute_command,execute_script}.rs` + `.../execute/common/rules.rs`（经内部交互 `sandbox_rule_check` 问 JS）+ `src/services/tool-service/index.ts`（回答该交互）+ `src/services/rust-engine.ts::resolveSecurityConfig`（`hasSandboxIgnoreRules`） |
 | 改视觉 | `src-tauri/src/vision_service.rs`、`src/infrastructure/vision/`、`src-tauri/resources/quasivision_models/` |
 | 改设置项 | `src/ui/store/settingStore.ts` + `src/ui/pages/Settings/*` + `src/ui/i18n/lang/en-US.json` |
 | 改埋点 | `src/utils/telemetry/**`（+ `src-tauri/src/telemetry.rs` 的 panic 桥） |

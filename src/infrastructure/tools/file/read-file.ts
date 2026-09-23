@@ -10,6 +10,8 @@ import { toolRegistry } from '@/domain/tools'
 import type { ToolContext, ToolExecutor, ToolResult } from '@/domain/tools/types'
 import { securityService } from '@/services/security-service'
 import { formatSize } from './common'
+// 截断必须代理对安全，否则 emoji 会被切成孤立代理（IPC 落库/桥接直接报错）
+import { sliceHead } from '@/utils/text'
 
 /** Rust read_file 返回类型 */
 interface FileReadResult {
@@ -109,7 +111,7 @@ toolRegistry.register(
         if (line.length > maxLineChars) {
           const omitted = line.length - maxLineChars
           slice.push(
-            `${line.slice(0, maxLineChars)} … [已截断，省略 ${omitted} 字符]`,
+            `${sliceHead(line, maxLineChars)} … [已截断，省略 ${omitted} 字符]`,
           )
           truncatedLineCount++
         } else {

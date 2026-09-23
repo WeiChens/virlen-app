@@ -17,6 +17,9 @@ import {
   quoteBlockToText,
   skillBlockToText,
 } from '@/types'
+// ⚠️ 截断必须代理对安全：裸 slice 会把 emoji 切成孤立代理，
+// 经 JSON.stringify + Rust serde_json 报 "unexpected end of hex escape"
+import { sliceHead, sliceTail } from '@/utils/text'
 
 /** 工具调用参数超过该长度即省略尾部（参数是结构化的，头部保留可读性最好） */
 const TOOL_ARGS_MAX_CHARS = 300
@@ -52,17 +55,17 @@ export interface RawCompressResult {
   omittedChars: number
 }
 
-/** 截断尾部：保留前 max 个字符 */
+/** 截断尾部：保留前 max 个字符（代理对安全，见 utils/text） */
 function truncateTail(
   text: string,
   max: number,
 ): { text: string; omitted: number } {
   if (text.length <= max) return { text, omitted: 0 }
   const omitted = text.length - max
-  return { text: `${text.slice(0, max)}\n${omitMark(omitted)}`, omitted }
+  return { text: `${sliceHead(text, max)}\n${omitMark(omitted)}`, omitted }
 }
 
-/** 截断中间：保留头 head + 尾 tail 个字符 */
+/** 截断中间：保留头 head + 尾 tail 个字符（代理对安全） */
 function truncateMiddle(
   text: string,
   max: number,
@@ -72,7 +75,7 @@ function truncateMiddle(
   if (text.length <= max) return { text, omitted: 0 }
   const omitted = text.length - head - tail
   return {
-    text: `${text.slice(0, head)}\n${omitMark(omitted)}\n${text.slice(-tail)}`,
+    text: `${sliceHead(text, head)}\n${omitMark(omitted)}\n${sliceTail(text, tail)}`,
     omitted,
   }
 }

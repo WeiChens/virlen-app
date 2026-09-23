@@ -11,6 +11,7 @@ import type {
   MessageTimelinePage,
   MessageWindow,
 } from '@/infrastructure/sessionRepo'
+import { sliceHead } from '@/utils/text'
 
 /** 概览单页条数：默认 / 上限（Rust 侧亦按 MSG_QUERY_MAX_LIMIT clamp） */
 export const LIST_DEFAULT_LIMIT = 30
@@ -76,7 +77,7 @@ export function capOutput(text: string): { text: string; truncated: boolean } {
   if (text.length <= CALL_OUTPUT_MAX_CHARS) return { text, truncated: false }
   return {
     text:
-      text.slice(0, CALL_OUTPUT_MAX_CHARS) +
+      sliceHead(text, CALL_OUTPUT_MAX_CHARS) +
       '\n…[output truncated — narrow the window or reduce limit]',
     truncated: true,
   }

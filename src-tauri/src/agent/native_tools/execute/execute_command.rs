@@ -8,9 +8,10 @@ use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
 use serde_json::{json, Value};
 
 use super::common::{
-    classify_command, command_decision, permission_for_risk, permission_label, pty_available,
-    resolve_decision, risk_info, run_command_native, sandbox_mode, with_bypass_hint,
-    PermissionDecision, SandboxMode, PERM_SANDBOX_COMMAND,
+    apply_rule_clearance, check_sandbox_ignore_rule, classify_command, command_decision,
+    permission_for_risk, permission_label, pty_available, resolve_decision, risk_info,
+    run_command_native, sandbox_mode, with_bypass_hint, with_rule_hint, PermissionDecision,
+    SandboxMode, PERM_SANDBOX_COMMAND,
 };
 
 /// 执行 shell 命令（原生）
@@ -36,14 +37,14 @@ pub(crate) async fn execute_command_tool(
     // 根因见 AGENTS §11.2。
     // ⚠️ 安全：该请求过「沙盒脱壳」权限门禁（与命令风险权限取更严格者；默认弹窗）；
     // readonly 模式直接拒绝（否则只读保护会被绕过）。
-    let bypass_sandbox = matches!(
+    let ai_requested_bypass = matches!(
         arg_str(args, "sandbox")
             .unwrap_or_default()
             .to_ascii_lowercase()
             .as_str(),
         "off" | "none"
     );
-    if bypass_sandbox && sandbox_mode(ctx) == SandboxMode::Readonly {
+    if ai_requested_bypass && sandbox_mode(ctx) == SandboxMode::Readonly {
         return Err(
             "沙盒处于只读模式，不支持绕过沙盒执行命令；请先在设置中切换沙盒模式（或改用常规终端）"
                 .to_string(),
@@ -57,6 +58,26 @@ pub(crate) async fn execute_command_tool(
         .unwrap_or(false);
     // ⚠️ Rust 是「是否走终端」的唯一判定方（前端不猜平台，避免三平台 / 降级行为分叉）。
     let terminal_presentation = confirm_terminal && pty_available();
+
+    // 「忽略沙盒命令」规则（设置 → 安全）：命中即**免脱壳审批 + 强制无沙盒执行**，
+    // 所以即使 AI 没传 sandbox:"off" 也要问一次（见 common::rules 模块头注释）。
+    // ⚠️ 只在沙盒**启用**时查询：off 时无沙盒可脱；readonly 时脱壳被禁止（规则静默忽略，
+    // 命令继续走沙盒，绝不因命中规则而拒绝执行）。
+    let rule_hit =
+        if ctx.security.has_sandbox_ignore_rules && sandbox_mode(ctx) == SandboxMode::On {
+            check_sandbox_ignore_rule(ctx, "execute_command", &cmd_str).await
+        } else {
+            None
+        };
+    if rule_hit.is_some() {
+        // 留痕（只记工具名 / 原因，不记命令正文与规则名，遵循 §9）
+        crate::telemetry::track(
+            "tool.sandbox.bypass",
+            json!({ "tool_name": "execute_command", "status": "auto_rule" }),
+        );
+    }
+    // 实际是否以「不使用沙盒」方式执行：AI 显式申请 ∪ 命中规则
+    let bypass_sandbox = ai_requested_bypass || rule_hit.is_some();
 
     let risk = classify_command(&cmd_str);
     let perm = permission_for_risk(risk);
@@ -72,12 +93,19 @@ pub(crate) async fn execute_command_tool(
     // ⚠️ 沙盒模式 off 时无沙盒可脱，不参与门禁（否则会对无关命令弹窗）。
     // 脱壳权限无 legacy 对应项 → approval_mode 传空串，只用权限表 / 注册表默认（ask）。
     let escape_decision = if bypass_sandbox && sandbox_mode(ctx) != SandboxMode::Off {
-        Some(command_decision(
+        let configured = command_decision(
             &ctx.security.permissions,
             "",
             PERM_SANDBOX_COMMAND,
             risk,
-        ))
+        );
+        // 命中「忽略沙盒命令」规则 → 用户已用规则预先授权脱壳（ask 视作 allow）；
+        // ⚠️ deny 仍然优先：规则不能推翻显式禁止
+        Some(if rule_hit.is_some() {
+            apply_rule_clearance(configured)
+        } else {
+            configured
+        })
     } else {
         None
     };
@@ -97,11 +125,12 @@ pub(crate) async fn execute_command_tool(
         // 走用户交互桥（type=confirm_command_native），由 JS 复用同一个「授权确认」弹窗。
         // 审批在本地完成：用户「允许」后直接原生执行命令，避免命令参数跨桥丢失。
         let (_label, hint) = risk_info(risk);
-        // 申请绕过沙盒：在风险提示后追加强警告（沙盒不可用时的退路，必须让用户看到后果）
-        let hint = if bypass_sandbox {
-            with_bypass_hint(&hint)
-        } else {
-            hint
+        // 追加沙盒脱壳警告（让用户看到后果）：
+        // 命中规则时说明「为什么没申请也脱壳了」；AI 显式申请时用原警告。
+        let hint = match &rule_hit {
+            Some(rule_name) => with_rule_hint(&hint, rule_name),
+            None if bypass_sandbox => with_bypass_hint(&hint),
+            None => hint,
         };
         // 触发本次确认的权限：仅因沙盒脱壳（基础 allow、脱壳 ask）时展示脱壳权限，
         // 让用户知道要放行的是哪条权限；否则展示命令风险权限。
@@ -749,7 +778,7 @@ mod tests {
     async fn test_execute_command_terminal_confirm_roundtrip() {
         let dir = std::env::temp_dir().join(format!("virlen_confirm_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        // readonly 避开缓存探测；approval_mode=all 强制走审批，便于驱动交互。
+        // readonly 不授予额外写根；approval_mode=all 强制走审批，便于驱动交互。
         let mut sec = test_security(&dir.to_string_lossy());
         sec.sandbox_mode = "readonly".to_string();
         sec.approval_mode = "all".to_string();
@@ -866,5 +895,170 @@ mod tests {
         }
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ==================== 「忽略沙盒命令」规则（免脱壳审批 + 强制裸跑） ====================
+
+    /// 本轮出现过的用户交互类型（按发生顺序）
+    fn interaction_types(sink: &TestEventSink) -> Vec<String> {
+        sink.events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(name, _)| name == "agent:user-interaction-request")
+            .map(|(_, payload)| {
+                payload
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect()
+    }
+
+    /// 命中「忽略沙盒命令」规则 → **即使 AI 没传 `sandbox:"off"`** 也免审批、以「不使用沙盒」方式执行。
+    ///
+    /// 证据链（与前端 `tool-service` 的 `sandbox_rule_check` 处理器对应）：
+    /// 1. 只出现**一次**交互请求，且类型是内部查询 `sandbox_rule_check`（不弹授权窗）；
+    /// 2. 查询载荷带命令原文（匹配对象是实际要执行的命令）；
+    /// 3. 结果正文首行「终端环境」提示为「无沙盒」→ 确实裸跑。
+    #[tokio::test]
+    async fn test_execute_command_rule_hit_forces_bypass() {
+        let dir = std::env::temp_dir().join(format!("virlen_rule_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // 沙盒启用 + 前端快照标记「存在已启用规则」
+        let mut sec = test_security(&dir.to_string_lossy());
+        sec.has_sandbox_ignore_rules = true;
+        let sink = std::sync::Arc::new(TestEventSink::new());
+        let bridge = std::sync::Arc::new(AgentBridgeState::default());
+        let cancel = CancellationToken::new();
+        let ctx = NativeToolCtx {
+            session_id: "s_rule_bypass",
+            tool_call_id: "tc_rule_bypass",
+            cancel: &cancel,
+            sink: sink.as_ref(),
+            bridge: bridge.as_ref(),
+            security: &sec,
+        };
+
+        // JS 侧应答：命中规则「装依赖」（内部查询，无 UI）
+        let (responder, captured) = spawn_terminal_confirmer(
+            sink.clone(),
+            bridge.clone(),
+            json!({ "__kind": "value", "value": "{\"matched\":true,\"ruleName\":\"装依赖\"}" }),
+        );
+
+        let args = json!({ "command": "Write-Output RULE_BYPASS_OK", "timeout": 30 });
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(30),
+            execute_native_tool(&ctx, "execute_command", &args),
+        )
+        .await
+        .expect("execute_command 不应挂死")
+        .expect("execute_command 不应报错");
+        assert!(responder.await.unwrap(), "应出现 sandbox_rule_check 查询");
+
+        // 查询载荷：命令原文 + 工具名（Rust → JS 的匹配对象）
+        let data = captured.lock().unwrap().clone();
+        assert_eq!(
+            data.get("command").and_then(|v| v.as_str()),
+            Some("Write-Output RULE_BYPASS_OK")
+        );
+        assert_eq!(
+            data.get("tool").and_then(|v| v.as_str()),
+            Some("execute_command")
+        );
+
+        assert_eq!(
+            interaction_types(&sink),
+            vec!["sandbox_rule_check".to_string()],
+            "命中规则只应有内部查询（免授权弹窗）"
+        );
+
+        match outcome {
+            NativeToolOutcome::Value { content, .. } => {
+                assert!(content.contains("RULE_BYPASS_OK"), "content: {content}");
+                assert!(
+                    content.contains("无沙盒"),
+                    "命中规则必须以「不使用沙盒」方式执行: {content}"
+                );
+            }
+            other => panic!("expected Value, got {other:?}"),
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 规则查询的**触发条件**：不该多走一次 IPC 往返，也不该误触发脱壳。
+    /// 用「命令权限禁止」把执行停在运行之前 → 测试无需真正 spawn 命令（跨平台稳定）。
+    #[tokio::test]
+    async fn test_execute_command_rule_check_gating() {
+        for (has_rules, mode, expect_query) in [
+            // 用户没配规则 → 不查（零开销，原有行为）
+            (false, "on", false),
+            // 沙盒启用 + 有规则 → 查一次
+            (true, "on", true),
+            // 只读沙盒：脱壳被禁止 → 不查（规则静默忽略，命中也不报错）
+            (true, "readonly", false),
+            // 沙盒已关闭：无沙盒可脱 → 不查
+            (true, "off", false),
+        ] {
+            let dir =
+                std::env::temp_dir().join(format!("virlen_rule_gate_{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut sec = test_security(&dir.to_string_lossy());
+            sec.has_sandbox_ignore_rules = has_rules;
+            sec.sandbox_mode = mode.to_string();
+            // 命令权限「禁止」→ 决策在运行之前就终止；规则查询在它之前发生，两者互不干扰
+            sec.permissions
+                .insert(PERM_TERMINAL_NORMAL.to_string(), "deny".to_string());
+            let sink = std::sync::Arc::new(TestEventSink::new());
+            let bridge = std::sync::Arc::new(AgentBridgeState::default());
+            let cancel = CancellationToken::new();
+            let ctx = NativeToolCtx {
+                session_id: "s_rule_gate",
+                tool_call_id: "tc_rule_gate",
+                cancel: &cancel,
+                sink: sink.as_ref(),
+                bridge: bridge.as_ref(),
+                security: &sec,
+            };
+            let (responder, _) = spawn_terminal_confirmer(
+                sink.clone(),
+                bridge.clone(),
+                json!({ "__kind": "value", "value": "{\"matched\":false}" }),
+            );
+
+            let args = json!({ "command": "Write-Output NOPE", "timeout": 30 });
+            let outcome = tokio::time::timeout(
+                Duration::from_secs(30),
+                execute_native_tool(&ctx, "execute_command", &args),
+            )
+            .await
+            .expect("execute_command 不应挂死");
+
+            if expect_query {
+                assert!(
+                    responder.await.unwrap(),
+                    "has_rules={has_rules} mode={mode} 应查询规则"
+                );
+                assert_eq!(
+                    interaction_types(&sink),
+                    vec!["sandbox_rule_check".to_string()]
+                );
+            } else {
+                let types = interaction_types(&sink);
+                assert!(
+                    types.is_empty(),
+                    "has_rules={has_rules} mode={mode} 不应查询规则: {types:?}"
+                );
+            }
+
+            // 命令权限禁止 → 一律以 Err 回报（未命中规则，不得因规则而放行）
+            let err = outcome.expect_err("命令权限禁止应报错");
+            assert!(err.contains("禁止"), "err: {err}");
+
+            std::fs::remove_dir_all(&dir).ok();
+        }
     }
 }

@@ -15,6 +15,7 @@ import {
 } from '@/services/message-repair'
 import { getSessionMessages, setSessionMessagesInPlace } from './messages'
 import { hashText, track } from '@/utils/telemetry'
+import { sanitizeLoneSurrogates } from '@/utils/text'
 
 /**
  * 已检测出格式异常、补入了占位 tool 消息，但当时历史尚未全量加载、还没能整体回写落库的会话。
@@ -39,9 +40,11 @@ function flushRepairedMessages(sessionId: string): void {
   const messages = getSessionMessages(sessionId)
   if (!messages.length) return
   try {
-    void invoke('cmd_replace_session_messages', { sessionId, messages }).catch(
-      () => {},
-    )
+    void invoke('cmd_replace_session_messages', {
+      sessionId,
+      // 兜底：修复后的历史同样不能带孤立代理（否则这条 IPC 静默失败）
+      messages: sanitizeLoneSurrogates(messages),
+    }).catch(() => {})
   } catch {
     // 非 Tauri 环境忽略
   }

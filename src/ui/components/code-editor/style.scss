@@ -1,0 +1,25 @@
+/* CodeEditor —— 可编辑的精简版 Monaco 编辑器外壳。
+ *
+ * 仅负责“框住”编辑器：圆角 / 边框 / 底色与 virlen-dark 主题背景（#282c34）一致，
+ * 使它在浅色页面（设置 → 安全）里是一个明确的“代码块”，而不是一块可疑的黑洞。
+ * 编辑器内部外观全部由 Monaco 选项控制（见 CodeEditor.tsx）。 */
+
+.code-editor {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-color, #d0d0d0);
+  border-radius: 6px;
+  /* 兜底底色：Monaco 尚未挂载时也不出现白色闪屏 */
+  background: #282c34;
+  transition: border-color 0.15s;
+
+  /* 聚焦时与同页其它表单控件（.form-input:focus）保持同一套强调色 */
+  &:focus-within {
+    border-color: var(--accent-color, #4f46e5);
+    box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.15);
+  }
+
+  /* 编辑器自己会绘制 virlen-dark 的底色 / 行号区底色（与聊天里的代码预览同一套配色），
+     这里不要再覆盖，否则会与外层兜底底色叠出两段不同深浅的色块 */
+}

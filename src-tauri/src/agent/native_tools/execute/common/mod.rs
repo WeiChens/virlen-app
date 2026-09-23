@@ -6,10 +6,12 @@
 //!   3. [`registry`] 运行中命令注册表（前端 ToolOutput.kill → 终止整棵进程树）
 //!   4. [`terminal`] 终端输出处理（\r 覆盖 / ANSI 转义序列）
 //!   5. [`runner`]   统一运行器 run_command_native（沙盒优先，失败降级裸跑；`bypass_sandbox` 时直接裸跑）
+//!   6. [`rules`]    「忽略沙盒命令」规则：命中的命令免脱壳审批 + 强制无沙盒执行（经桥问 JS 判定）
 
 mod classify;
 mod decode;
 mod registry;
+mod rules;
 mod runner;
 mod terminal;
 
@@ -29,6 +31,12 @@ pub(crate) use classify::SANDBOX_BYPASS_HINT;
 #[allow(unused_imports)]
 pub(crate) use classify::{PERM_TERMINAL_DANGEROUS, PERM_TERMINAL_INSTALL, PERM_TERMINAL_NORMAL};
 pub(crate) use runner::{pty_available, sandbox_mode, SandboxMode};
+
+// 「忽略沙盒命令」规则（execute_command / execute_script 共用）
+pub(crate) use rules::{apply_rule_clearance, check_sandbox_ignore_rule, with_rule_hint};
+// `parse_rule_check` 仅在 rules 模块内联单测里直接断言，非测试构建“未被使用”，显式 allow。
+#[allow(unused_imports)]
+pub(crate) use rules::parse_rule_check;
 
 // `kill_running_command` / `run_command_native`：供 `execute::mod` 再导出，
 // `run_command_native` 另供 TS 引擎路径经 `pty_run_command` 复用。

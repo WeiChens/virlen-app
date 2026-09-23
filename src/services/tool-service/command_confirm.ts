@@ -6,6 +6,12 @@
  * 2. 用户点「允许」→ handler 自己调 runCommand 执行，把结果 resolve 回去
  * 3. 用户点「拒绝」→ reject 'cancelled'
  * 4. 用户点「暂存」→ throw InteractionShelved
+ *
+ * ⚠️ handler 只负责「问用户」与「放行 / 拒绝」，**不做任何脱壳决策**：
+ *    「忽略沙盒命令」规则（设置 → 安全）在审批**之前**就定了这条命令是否强制无沙盒执行
+ *    ——TS 引擎在 `tools/execute/*.ts`、Rust 引擎在 `native_tools/execute/*.rs`
+ *    （Rust 侧经内部交互 `sandbox_rule_check` 问 JS 判定）。命中规则时**根本走不到这里**，
+ *    不要在本文里再加规则匹配（两处匹配会分叉）。
  */
 import { ToolExecutorResponse } from '@/domain/tools/types'
 import toolInteractEvent from '@/events/toolInteractEvent'
@@ -39,47 +45,56 @@ export function createCommandConfirmHandles(
   let pendingApprovalId = ''
   let showTime = 0
 
+  /**
+   * 放行：执行待审批命令并把结果 resolve 回去。
+   * 用户点「允许」（commandResolve 事件）与规则自动放行共用同一条路径，
+   * 保证两种入口的执行语义完全一致。
+   */
+  async function doAllow() {
+    const resolve = interactionResolve
+    const toolCallId = pendingToolCallId
+    const approvalId = pendingApprovalId
+    interactionResolve = null
+    interactionReject = null
+    pendingCommand = ''
+    pendingToolCallId = ''
+    pendingApprovalId = ''
+
+    if (!resolve) return
+
+    try {
+      const result = {
+        result: null as Promise<ToolExecutorResponse> | null,
+      }
+      toolInteractEvent.emit(
+        'userAllowCmd',
+        approvalId,
+        sessionId,
+        toolCallId,
+        result,
+      )
+      if (result.result == null) {
+        resolve('[error] command not found')
+        return
+      }
+      result.result
+        .then((r: ToolExecutorResponse) => resolve(r))
+        .catch((e: any) => resolve(`[error] ${e.message || String(e)}`))
+    } catch (e: any) {
+      resolve(`[error] ${e.message || String(e)}`)
+    }
+  }
+
   const offResolve = toolInteractEvent.on(
     'commandResolve',
     async (_value: string) => {
-      const resolve = interactionResolve
-      const toolCallId = pendingToolCallId
       const approvalId = pendingApprovalId
-      interactionResolve = null
-      interactionReject = null
-      pendingCommand = ''
-      pendingToolCallId = ''
-      pendingApprovalId = ''
-
-      if (!resolve) return
-
       track('interaction.command.confirm.result', {
         approval_id: approvalId,
         action: 'allow',
         latency_ms: showTime ? Date.now() - showTime : undefined,
       })
-
-      try {
-        const result = {
-          result: null as Promise<ToolExecutorResponse> | null,
-        }
-        toolInteractEvent.emit(
-          'userAllowCmd',
-          approvalId,
-          sessionId,
-          toolCallId,
-          result,
-        )
-        if (result.result == null) {
-          resolve('[error] command not found')
-          return
-        }
-        result.result
-          .then((r: ToolExecutorResponse) => resolve(r))
-          .catch((e: any) => resolve(`[error] ${e.message || String(e)}`))
-      } catch (e: any) {
-        resolve(`[error] ${e.message || String(e)}`)
-      }
+      await doAllow()
     },
   )
   const offReject = toolInteractEvent.on('commandReject', (reason: string) => {

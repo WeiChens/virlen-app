@@ -131,6 +131,9 @@ describe('compressContext', () => {
       completionTokens: 30,
       totalTokens: 180,
     })
+    // 「压缩后上下文占用」走独立口径（uiData.contextTokens），与 usage（本次摘要调用消耗）区分：
+    // token 环优先读它，否则压缩后仍会显示压缩前的占用
+    expect(summaryMsg.uiData?.contextTokens).toBeGreaterThan(0)
   })
 
   it('API 未返回 usage 时应使用兜底估算', async () => {

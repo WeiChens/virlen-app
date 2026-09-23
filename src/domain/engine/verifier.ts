@@ -11,6 +11,8 @@ import type { IProvider } from '@/infrastructure/provider/types'
 import type { Message, Session } from '@/types'
 import type { Goal, VerificationResult } from './iteration-types'
 import { ledgerTokensOf, recordUsage } from '../usage'
+// 轨迹截断同样要代理对安全（内容来自模型输出，emoji 很常见）
+import { sliceHead } from '@/utils/text'
 
 /** 验证器配置 */
 export interface VerifierConfig {
@@ -42,13 +44,13 @@ function buildExecutionTrace(messages: Message[]): string {
         // 提取文本内容
         const text = extractTextContent(msg.content)
         if (text) {
-          parts.push(`[Assistant] ${text.slice(0, 500)}`)
+          parts.push(`[Assistant] ${sliceHead(text, 500)}`)
         }
         // 提取 tool calls
         if (msg.toolCalls && msg.toolCalls.length > 0) {
           for (const tc of msg.toolCalls) {
             parts.push(
-              `[Tool Call] ${tc.name}(${JSON.stringify(tc.input).slice(0, 300)})`,
+              `[Tool Call] ${tc.name}(${sliceHead(JSON.stringify(tc.input), 300)})`,
             )
           }
         }
@@ -57,7 +59,7 @@ function buildExecutionTrace(messages: Message[]): string {
       case 'tool': {
         const text = extractTextContent(msg.content)
         const status = msg.isError ? ' (失败)' : ''
-        parts.push(`[Tool Result${status}] ${text.slice(0, 500)}`)
+        parts.push(`[Tool Result${status}] ${sliceHead(text, 500)}`)
         break
       }
       // 跳过 user 和 summary 消息

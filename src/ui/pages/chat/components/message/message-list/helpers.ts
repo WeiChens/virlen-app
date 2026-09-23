@@ -3,6 +3,7 @@
  */
 import type { Message } from '@/types'
 import { getSessionRuntime } from '@/ui/store'
+import { sliceHead } from '@/utils/text'
 
 /** 从消息内容中提取纯文本摘要（截断长度与后端预览保持一致：420 字符） */
 export function previewOfMessage(msg: Message): string {
@@ -13,7 +14,7 @@ export function previewOfMessage(msg: Message): string {
           .filter((b) => b.type === 'text')
           .map((b) => ('text' in b ? b.text : ''))
           .join('')
-  return text.slice(0, 420)
+  return sliceHead(text, 420)
 }
 
 /**

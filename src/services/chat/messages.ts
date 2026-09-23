@@ -11,6 +11,7 @@ import { v4 } from '@/utils/uuid'
 import type { Message } from '@/types'
 import { invoke } from '@tauri-apps/api/core'
 import { isRustEngineEnabled } from '@/services/rust-engine'
+import { sanitizeLoneSurrogates } from '@/utils/text'
 
 /**
  * TS 引擎路径消息落库（Rust 引擎路径由引擎内部直落 SQLite，跳过）。
@@ -23,7 +24,12 @@ export function persistMessagesIfNeeded(
   if (isRustEngineEnabled()) return
   if (!messages.length) return
   try {
-    void invoke('cmd_append_messages', { sessionId, messages }).catch(() => {})
+    // 兜底：孤立代理（半个 emoji）经 JSON.stringify → Rust serde_json 会报
+    // "unexpected end of hex escape"；命中时才复制，未命中零开销
+    void invoke('cmd_append_messages', {
+      sessionId,
+      messages: sanitizeLoneSurrogates(messages),
+    }).catch(() => {})
   } catch {
     // 非 Tauri 环境忽略
   }

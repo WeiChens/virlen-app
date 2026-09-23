@@ -15,6 +15,7 @@ import type {
   SearchResult,
   SearchResultItem,
 } from '@/domain/search/types'
+import { sliceHead } from '@/utils/text'
 
 /** Tavily API 响应结构 */
 interface TavilyResponse {
@@ -87,7 +88,7 @@ export class TavilySearchProvider implements ISearchProvider {
         (item): SearchResultItem => ({
           title: item.title,
           url: item.url,
-          snippet: item.content.slice(0, 300),
+          snippet: sliceHead(item.content, 300),
           content: item.content,
           score: item.score,
         }),

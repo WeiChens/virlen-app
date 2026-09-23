@@ -39,6 +39,7 @@ export function InputToolbar({
   onClear,
   onCancel,
   onSend,
+  onMessagesUpdate,
 }: {
   sessionId?: string
   /** 有会话且有 Agent 时展示的 Agent 名称；undefined 表示不展示 */
@@ -60,6 +61,8 @@ export function InputToolbar({
   onClear: () => void
   onCancel: () => void
   onSend: () => void
+  /** 压缩后通知上层重新同步消息列表（TokenRing 透传） */
+  onMessagesUpdate?: (sessionId: string) => void
 }) {
   return (
     <div className="botton-wapper">
@@ -181,6 +184,7 @@ export function InputToolbar({
           sessionId={sessionId}
           compacting={compacting}
           loading={loading}
+          onMessagesUpdate={onMessagesUpdate}
         />
 
         {/* 发送 / 停止按钮 */}

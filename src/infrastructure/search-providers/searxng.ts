@@ -13,6 +13,7 @@ import type {
   SearchResult,
   SearchResultItem,
 } from '@/domain/search/types'
+import { sliceHead } from '@/utils/text'
 
 /** SearXNG JSON API 响应结构 */
 interface SearXNGResponse {
@@ -112,7 +113,7 @@ export class SearXNGProvider implements ISearchProvider {
       .map((item) => ({
         title: item.title,
         url: item.url,
-        snippet: item.content?.slice(0, 500) ?? '',
+        snippet: sliceHead(item.content ?? '', 500),
         content: item.content,
         publishedDate: item.publishedDate,
         source: item.engine,

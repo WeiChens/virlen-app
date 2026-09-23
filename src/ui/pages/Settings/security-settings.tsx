@@ -1,8 +1,9 @@
 /**
  * security-settings — 安全设置页面（Tab 容器）
  *
- * 两个子 Tab：
+ * 三个子 Tab：
  *  - 权限管理（默认）：命令 / 脚本执行的三态权限（见 `@/domain/permission`）
+ *  - 忽略沙盒命令：命中规则的命令免除「沙盒脱壳」审批（见 `@/domain/security/sandbox-ignore-rules`）
  *  - 文件访问安全：文件系统白名单 / 黑名单 / 忽略遍历文件夹
  */
 import { useState } from 'react'
@@ -11,12 +12,13 @@ import { securityStore } from '@/ui/store/securityStore'
 import DeleteSvg from '@/ui/components/icons/DeleteSvg'
 import AddSvg from '@/ui/components/icons/AddSvg'
 import SecurityPermissions from './security-permissions'
+import SandboxIgnoreRules from './security-sandbox-rules'
 import './general-settings.scss'
 import './security-settings.scss'
 import { showToast } from '@/ui/components/shared/Toast'
 import { t } from '@/ui/i18n'
 
-type SecurityTab = 'permissions' | 'file-access'
+type SecurityTab = 'permissions' | 'sandbox-rules' | 'file-access'
 type ListType = 'whitelist' | 'blacklist' | 'skipEachDirs'
 
 function SecuritySettings() {
@@ -39,6 +41,13 @@ function SecuritySettings() {
         </button>
         <button
           role="tab"
+          aria-selected={tab === 'sandbox-rules'}
+          className={`security-tab ${tab === 'sandbox-rules' ? 'active' : ''}`}
+          onClick={() => setTab('sandbox-rules')}>
+          {t('忽略沙盒命令')}
+        </button>
+        <button
+          role="tab"
           aria-selected={tab === 'file-access'}
           className={`security-tab ${tab === 'file-access' ? 'active' : ''}`}
           onClick={() => setTab('file-access')}>
@@ -48,6 +57,7 @@ function SecuritySettings() {
 
       <div className="security-tab-body">
         {tab === 'permissions' && <SecurityPermissions />}
+        {tab === 'sandbox-rules' && <SandboxIgnoreRules />}
         {tab === 'file-access' && <FileAccessSecurity />}
       </div>
     </div>

@@ -9,6 +9,7 @@ import { toolRegistry } from '@/domain/tools'
 import { ToolContext, ToolExecutor } from '@/domain/tools/types'
 import { t } from '@/ui/i18n'
 import { MAX_LENGTH, isHtml } from './common'
+import { sliceHead } from '@/utils/text'
 
 /** 懒加载 cheerio + turndown，避免 F5 刷新时解析 240KB+ JS 阻塞主线程 */
 let _turndownService: any = null
@@ -169,7 +170,7 @@ toolRegistry.register(
     checkAborted()
     if (result.length > MAX_LENGTH) {
       result =
-        result.slice(0, MAX_LENGTH) +
+        sliceHead(result, MAX_LENGTH) +
         `\n\n... [truncated: response body was ${result.length} chars, showing first ${MAX_LENGTH}]`
     }
 

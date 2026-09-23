@@ -4,6 +4,7 @@
  * 供 web_fetch / web_search 复用的纯函数与常量。
  */
 import type { SearchResultItem } from '@/domain/search/types'
+import { sliceHead } from '@/utils/text'
 
 /** web_fetch 返回内容的最大字符数 */
 export const MAX_LENGTH = 20_000
@@ -53,7 +54,7 @@ export function formatSearchResults(
       const maxContentLen = 2000
       const content =
         item.content.length > maxContentLen
-          ? item.content.slice(0, maxContentLen) + '... [truncated]'
+          ? sliceHead(item.content, maxContentLen) + '... [truncated]'
           : item.content
       lines.push(`    Content: ${content}`)
     }

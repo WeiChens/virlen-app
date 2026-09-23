@@ -660,7 +660,7 @@ export function useVoiceInput(onSpeechResult: (text: string) => void) {
       console.error('语音识别错误:', event.error)
       setIsRecording(false)
       if (event.error === 'not-allowed') {
-        showToast(t('麦克风权限被拒绝，请重启应用后重试'))
+        showToast(t('启用麦克风失败'))
       } else if (event.error === 'no-speech') {
         showToast(t('未检测到语音，请重试'))
       } else if (event.error === 'audio-capture') {

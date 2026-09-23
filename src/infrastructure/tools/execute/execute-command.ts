@@ -8,7 +8,12 @@
  *
  * 审批：按权限三态（settings.permissions[terminal.*]：允许 / 每次弹窗 / 禁止）决策；
  * 申请绕过沙盒（sandbox:"off"）时另过「沙盒脱壳·命令执行」权限（与风险权限取更严格者）；
+ * 命中「忽略沙盒命令」规则（设置 → 安全）时**免脱壳审批并强制无沙盒执行**（不必 AI 申请）；
  * 命中弹窗时返回 UserInteractionRequired('confirm_command')，禁止时直接抛错。
+ *
+ * ⚠️ 规则语义与 Rust 原生路径（`native_tools/execute/execute_command.rs`）对齐：
+ *    匹配用同一个 `securityService.matchSandboxIgnoreRule`（Rust 侧经内部交互
+ *    `sandbox_rule_check` 问到同一函数），改一边必须同步另一边（铁律 1）。
  */
 import { toolRegistry } from '@/domain/tools'
 import {
@@ -26,8 +31,10 @@ import {
   resolveCommandDecision,
 } from '@/domain/permission'
 import { settingsState } from '@/ui/store'
+import { track } from '@/utils/telemetry'
 import {
   SANDBOX_BYPASS_HINT,
+  SANDBOX_RULE_BYPASS_HINT,
   classifyCommand,
   getRiskInfo,
   platformSnapshot,
@@ -137,7 +144,7 @@ toolRegistry.register(
     // sandbox: 'off' → 申请「不使用沙盒」执行（与 Rust 原生路径同语义）。
     // ⚠️ 安全：该请求过「沙盒脱壳」权限门禁（与命令风险权限取更严格者；默认弹窗，
     //   用户可设为 allow 静默脱壳 / deny 直接禁止）；readonly 模式直接拒绝。
-    const bypassSandbox = ['off', 'none'].includes(
+    const aiRequestedBypass = ['off', 'none'].includes(
       String(args.sandbox ?? '').toLowerCase(),
     )
     // confirm: 'terminal' → 请求「终端内确认」（与 Rust 原生路径同语义）。
@@ -152,18 +159,40 @@ toolRegistry.register(
     // 沙盒实际启用与否：off 时「申请绕过」没有意义（本来就不进沙盒），不参与脱壳门禁
     const sandboxMode = settingsState.value.sandboxMode ?? 'on'
     // 只读模式禁止绕过沙盒（否则只读保护会被绕过；与 Rust 原生路径一致）
-    if (bypassSandbox && sandboxMode === 'readonly') {
+    // ⚠️ 只针对 AI 的**显式申请**：命中「忽略沙盒命令」规则时只读模式**静默忽略规则**
+    //   （命令继续走沙盒），不把一条本来能跑的命令变成报错。
+    if (aiRequestedBypass && sandboxMode === 'readonly') {
       throw new Error(
         t(
           '沙盒处于只读模式，不支持绕过沙盒执行命令；请先在设置中切换沙盒模式（或改用常规终端）',
         ),
       )
     }
+    // 「忽略沙盒命令」规则（设置 → 安全）：命中即**免脱壳审批 + 强制无沙盒执行** ——
+    // 即使 AI 没传 sandbox:"off" 也生效（这正是该功能的目的：npm/pnpm 安装、vitest 等
+    // 高频命令不必每次点授权）。
+    // ⚠️ 只在沙盒**启用**时匹配：off 时无沙盒可脱；readonly 时脱壳被禁止。
+    const ruleHit =
+      sandboxMode === 'on'
+        ? await securityService.matchSandboxIgnoreRule(cmdStr)
+        : null
+    const bypassSandbox = aiRequestedBypass || !!ruleHit
+    if (ruleHit) {
+      // 留痕（只记工具名 / 原因，不记命令正文与规则名，遵循 §9）
+      track('tool.sandbox.bypass', {
+        tool_name: 'execute_command',
+        status: 'auto_rule',
+      })
+    }
     // 申请绕过沙盒且沙盒启用 → 额外过「沙盒脱壳」权限（与风险权限取更严格者）
-    const escapeDecision =
+    const configuredEscape =
       bypassSandbox && sandboxMode !== 'off'
         ? await securityService.getPermissionDecision(PERM_SANDBOX_COMMAND)
         : undefined
+    // 命中规则 → 用户已用规则预先授权脱壳（ask 视作 allow）；⚠️ deny 仍然优先：
+    // 规则不能推翻「沙盒脱壳」权限的显式禁止（与 Rust 侧 apply_rule_clearance 对齐）
+    const escapeDecision =
+      ruleHit && configuredEscape === 'ask' ? 'allow' : configuredEscape
     // deny 优先；终端内确认强制至少 ask（安全底线）
     const decision = resolveCommandDecision(base, {
       escapeDecision,
@@ -183,9 +212,14 @@ toolRegistry.register(
 
     if (decision === 'ask') {
       const info = getRiskInfo(risk)
-      const hint = bypassSandbox
-        ? [info.hint, t(SANDBOX_BYPASS_HINT)].filter(Boolean).join('\n')
-        : info.hint
+      // 追加沙盒脱壳警告：命中规则时说明「为什么没申请也脱壳了」，AI 申请时用原警告
+      const hint = ruleHit
+        ? [info.hint, tpl(SANDBOX_RULE_BYPASS_HINT, { rule: ruleHit.name })]
+            .filter(Boolean)
+            .join('\n')
+        : bypassSandbox
+          ? [info.hint, t(SANDBOX_BYPASS_HINT)].filter(Boolean).join('\n')
+          : info.hint
       // 触发本次确认的权限：若仅因「沙盒脱壳」（基础允许、脱壳询问）→ 展示脱壳权限，
       // 让用户知道要放行的是哪条权限；否则展示命令风险权限（与 Rust 原生路径一致）。
       const shownPerm =

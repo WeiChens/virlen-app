@@ -575,6 +575,51 @@ describe('消息气泡右键', () => {
     await act(async () => root.unmount())
   })
 
+  it('压缩摘要：复制摘要 / 删除（删除即放弃压缩，删本条及之后）', async () => {
+    const onDelete = vi.fn()
+    const { root } = await render(
+      <MessageBubble
+        message={
+          {
+            id: 'sum1',
+            role: 'summary',
+            content: 'SUMMARY_BODY',
+            timestamp: 0,
+          } as any
+        }
+        onDelete={onDelete}
+      />,
+    )
+
+    window.getSelection()!.removeAllRanges()
+    await rightClick(document.querySelector('.message-compress-summary')!)
+    expect(menuLabels()).toEqual(['复制', '删除'])
+
+    // 复制的是摘要正文（不是提示条上的文案）
+    await act(async () => {
+      menuButtons()[0].click()
+    })
+    expect(copyText).toHaveBeenCalledWith('SUMMARY_BODY')
+
+    // 删除：先二次确认；取消 → 不删
+    await rightClick(document.querySelector('.message-compress-summary')!)
+    await act(async () => {
+      menuButtons()[1].click()
+    })
+    expect(MessageBox.warn).toHaveBeenCalled()
+    expect(onDelete).not.toHaveBeenCalled()
+
+    // 确认后才真正删除（调用方按「本条及之后」整体截断）
+    vi.mocked(MessageBox.warn).mockResolvedValueOnce(true)
+    await rightClick(document.querySelector('.message-compress-summary')!)
+    await act(async () => {
+      menuButtons()[1].click()
+    })
+    expect(onDelete).toHaveBeenCalledWith('sum1')
+
+    await act(async () => root.unmount())
+  })
+
   it('深度思考：展开后右键文本 → 复制 / 全选', async () => {
     const { root } = await render(
       <MessageBubble

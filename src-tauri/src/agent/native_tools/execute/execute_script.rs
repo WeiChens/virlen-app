@@ -9,9 +9,10 @@ use crate::file_ops;
 use serde_json::{json, Value};
 
 use super::common::{
-    classify_command, command_decision, permission_label, resolve_decision, risk_info,
-    run_command_native, sandbox_mode, with_bypass_hint, PermissionDecision, SandboxMode,
-    PERM_SANDBOX_SCRIPT, PERM_SCRIPT,
+    apply_rule_clearance, check_sandbox_ignore_rule, classify_command, command_decision,
+    permission_label, resolve_decision, risk_info, run_command_native, sandbox_mode,
+    with_bypass_hint, with_rule_hint, PermissionDecision, SandboxMode, PERM_SANDBOX_SCRIPT,
+    PERM_SCRIPT,
 };
 
 /// 执行脚本工具（原生）— 创建脚本文件并执行，可选执行后立即删除。
@@ -41,14 +42,14 @@ pub(crate) async fn execute_script_tool(
 
     // sandbox:"off" → 申请「不使用沙盒」执行脚本（与 execute_command 同语义）。
     // ⚠️ 只读模式直接拒绝（否则只读保护会被绕过）。
-    let bypass_sandbox = matches!(
+    let ai_requested_bypass = matches!(
         arg_str(args, "sandbox")
             .unwrap_or_default()
             .to_ascii_lowercase()
             .as_str(),
         "off" | "none"
     );
-    if bypass_sandbox && sandbox_mode(ctx) == SandboxMode::Readonly {
+    if ai_requested_bypass && sandbox_mode(ctx) == SandboxMode::Readonly {
         return Err(
             "沙盒处于只读模式，不支持绕过沙盒执行脚本；请先在设置中切换沙盒模式（或改用常规终端）"
                 .to_string(),
@@ -66,6 +67,27 @@ pub(crate) async fn execute_script_tool(
         ));
     }
 
+    // 「忽略沙盒命令」规则（设置 → 安全）：与 execute_command 同语义 —— 命中即免脱壳审批
+    // **并强制无沙盒执行**（AI 没传 sandbox:"off" 也生效），匹配对象是**运行命令**
+    // （不是脚本正文，见 common::rules 模块头注释）。
+    // 位置：放在「脚本已存在」快速失败之后，不值得为一条必然报错的调用多走一次 IPC 往返。
+    // ⚠️ 只在沙盒**启用**时查询：off 时无沙盒可脱；readonly 时脱壳被禁止（规则静默忽略）。
+    let rule_hit =
+        if ctx.security.has_sandbox_ignore_rules && sandbox_mode(ctx) == SandboxMode::On {
+            check_sandbox_ignore_rule(ctx, "execute_script", &cmd_str).await
+        } else {
+            None
+        };
+    if rule_hit.is_some() {
+        // 留痕（只记工具名 / 原因，不记命令正文与规则名，遵循 §9）
+        crate::telemetry::track(
+            "tool.sandbox.bypass",
+            json!({ "tool_name": "execute_script", "status": "auto_rule" }),
+        );
+    }
+    // 实际是否以「不使用沙盒」方式执行：AI 显式申请 ∪ 命中规则
+    let bypass_sandbox = ai_requested_bypass || rule_hit.is_some();
+
     // 权限：脚本执行独立门禁（script.execute，默认每次弹窗；与命令风险分类无关）。
     // permissions 表优先，回退 legacy approval_mode（兼容老客户端 / 测试）。
     let base = command_decision(
@@ -78,12 +100,19 @@ pub(crate) async fn execute_script_tool(
     // （与脚本权限**取更严格者**，默认 ask）。沙盒模式 off 时无沙盒可脱，不参与门禁。
     // 脱壳权限无 legacy 对应项 → approval_mode 传空串，只用权限表 / 注册表默认（ask）。
     let escape_decision = if bypass_sandbox && sandbox_mode(ctx) != SandboxMode::Off {
-        Some(command_decision(
+        let configured = command_decision(
             &ctx.security.permissions,
             "",
             PERM_SANDBOX_SCRIPT,
             "safe",
-        ))
+        );
+        // 命中「忽略沙盒命令」规则 → 用户已用规则预先授权脱壳（ask 视作 allow）；
+        // ⚠️ deny 仍然优先：规则不能推翻显式禁止
+        Some(if rule_hit.is_some() {
+            apply_rule_clearance(configured)
+        } else {
+            configured
+        })
     } else {
         None
     };
@@ -123,11 +152,11 @@ pub(crate) async fn execute_script_tool(
     } else {
         base_hint
     };
-    // 申请绕过沙盒：在提示后追加强警告（让用户看到后果）
-    let hint = if bypass_sandbox {
-        with_bypass_hint(&hint)
-    } else {
-        hint
+    // 追加沙盒脱壳警告（让用户看到后果）：命中规则时说明「为什么没申请也脱壳了」
+    let hint = match &rule_hit {
+        Some(rule_name) => with_rule_hint(&hint, rule_name),
+        None if bypass_sandbox => with_bypass_hint(&hint),
+        None => hint,
     };
     // 触发本次确认的权限（同上：仅因沙盒脱壳时展示脱壳权限）
     let shown_perm = if bypass_sandbox

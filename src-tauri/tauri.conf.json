@@ -13,13 +13,14 @@
     "windows": [
       {
         "title": "Virlen 未霖",
-        "width": 1000,
-        "height": 700,
-        "minWidth": 720,
-        "minHeight": 500,
+        "width": 1200,
+        "height": 800,
+        "minWidth": 1000,
+        "minHeight": 600,
         "decorations": false,
         "dragDropEnabled": true,
-        "visible": false
+        "visible": false,
+        "center":true
       }
     ],
     "security": {
@@ -31,7 +32,6 @@
     "targets": "all",
     "publisher": "JianWeichen",
     "resources": [
-      "resources/default-skills",
       "resources/quasivision_models",
       "resources/deepseek_tokenizer"
     ],

@@ -233,15 +233,26 @@ export async function compressContext(
     throw e
   }
 
+  // 压缩后的上下文占用（systemPrompt + 工具 schema + 摘要），本地 tokenizer 估算。
+  // ⚠️ 与上面 summaryMessage.usage 是**两个口径**，不可混用：
+  //    - `usage` = 这次摘要调用的真实消耗（含压缩前的全部历史），已记入用量账本；
+  //    - `contextTokens` = 压缩后下一轮请求的上下文大小，供 token 环 / 摘要卡片展示。
+  //    早期只写 usage → 压缩后 token 环仍显示压缩前的占用（甚至更大），用户看不到压缩效果。
+  //    与 raw 模式保持同一口径（见下面的 summary 消息）。
+  const contextTokens = await estimateTokens(
+    session.systemPrompt || '',
+    toolDefs?.length ? JSON.stringify(toolDefs) : '',
+    summaryContent,
+  )
+
   const summaryMessage: Message = {
     id: v4(),
     role: 'summary',
     content: summaryContent,
     timestamp: Date.now(),
     usage,
-    // 供 UI 区分压缩方式（AI 摘要的 usage 是这次调用的消耗，不是压缩后的上下文大小，
-    // 所以这里**不**写 contextTokens）
-    uiData: { compressMode: 'ai' },
+    // 供 UI 区分压缩方式（compressMode）与展示「压缩后占用」（contextTokens）
+    uiData: { compressMode: 'ai', contextTokens },
   }
 
   return {

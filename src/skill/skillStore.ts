@@ -436,31 +436,32 @@ async function copyDefaultSkills(skillsDir: string): Promise<void> {
 /** 应用启动时调用：扫描注册技能 */
 export async function initSkillStore(): Promise<void> {
   try {
-    const skillsDir = await getSkillsDir()
-    let markerExists = false
+    // default skill 不再需要
+    // const skillsDir = await getSkillsDir()
+    // let markerExists = false
 
-    try {
-      const { stat } = await import('@tauri-apps/plugin-fs')
-      await stat(`${skillsDir}/${INIT_MARKER_FILENAME}`)
-      markerExists = true
-    } catch {
-      // 标记文件不存在，需要初始化
-    }
+    // try {
+    //   const { stat } = await import('@tauri-apps/plugin-fs')
+    //   await stat(`${skillsDir}/${INIT_MARKER_FILENAME}`)
+    //   markerExists = true
+    // } catch {
+    //   // 标记文件不存在，需要初始化
+    // }
 
-    if (!markerExists) {
-      await copyDefaultSkills(skillsDir)
+    // if (!markerExists) {
+    //   await copyDefaultSkills(skillsDir)
 
-      // 写入标记文件
-      try {
-        const { writeTextFile } = await import('@tauri-apps/plugin-fs')
-        await writeTextFile(
-          `${skillsDir}/${INIT_MARKER_FILENAME}`,
-          `Initialized at ${new Date().toISOString()}`,
-        )
-      } catch (e) {
-        console.warn('[skillStore] 写入初始化标记文件失败:', e)
-      }
-    }
+    //   // 写入标记文件
+    //   try {
+    //     const { writeTextFile } = await import('@tauri-apps/plugin-fs')
+    //     await writeTextFile(
+    //       `${skillsDir}/${INIT_MARKER_FILENAME}`,
+    //       `Initialized at ${new Date().toISOString()}`,
+    //     )
+    //   } catch (e) {
+    //     console.warn('[skillStore] 写入初始化标记文件失败:', e)
+    //   }
+    // }
 
     await scanAndRegisterSkills()
   } catch (e) {

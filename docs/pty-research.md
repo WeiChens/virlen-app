@@ -544,7 +544,7 @@ TS 引擎路径（回退）──────── invoke ────┘
 | 12 | **后台进程语义变化**：`ClosePseudoConsole` 会终止附着其上的进程 → **裸跑路径**下 `start` 拉起的后台进程不再存活（沙盒路径本来就会杀，见 windows/mod.rs） | 已识别，**接受** | 属 ConPTY 固有行为；仅影响 `sandbox:"off"` 的少数用法 |
 | 13 | 内存无界：`yes` / `cat 大文件` 打爆内存 | ✅**已缓解** | 单条流 1 MB 上限；超出后丢弃早期内容（保留末尾 256 KB）并在输出开头插入提示 |
 | 14 | **TS 引擎路径尚未 PTY 化** | ✅**已实现**（`pty_run_command`） | TS 分支经 `pty_run_command` 复用 Rust 原生运行器（沙盒 + ConPTY + `ipc::Channel` 流式回传），与 Rust 引擎路径**共用同一套执行语义**（铁律 1）；非 Tauri / 非 Windows 仍回落 `plugin-shell` 管道 + `<pre>` |
-| 15 | `prepare` 对「不存在的 extra root」是**硬失败** → 整条命令**静默降级裸跑（失写隔离）**；而 `package_cache_roots` 的 env 覆盖路径不校验目录是否存在 | 已发现，**本次未改** | 属改造前既有行为（fail-open 是既定产品决策）；若要收紧，应把 extra root 改成 best-effort 跳过 |
+| 15 | `prepare` 对「不存在的 extra root」是**硬失败** → 整条命令**静默降级裸跑（失写隔离）** | 已发现，**本次未改** | 属改造前既有行为（fail-open 是既定产品决策）；若要收紧，应把 extra root 改成 best-effort 跳过 |
 | 16 | **「终端内确认」的观感风险**：命令出现在真终端外观的块里，用户可能误以为「已经跑过了 / 这是 AI 跑的结果」 | ✅**已实现**（Step 2 ①） | 专门的确认态组件 `TerminalConfirmBlock.tsx`（独立配色 + 「尚未执行」文案 + 无终端光标），与运行态**视觉显著区分**；文案里明说「Enter 才执行」 |
 | 17 | **`held` 冻结超时**可能把命令无限期挂住（人在慢慢输入，也可能只是忘了） | ✅**已实现**（Step 2 ②） | 硬上限 `PTY_HOLD_MAX = 30 min`（对齐 WinkTerm TTL，见 `execute/common.rs`）；到顶强制终止并记 `waitReason = timeout` + `holdTimedOut = true`（用例 `test_pty_hold_hard_cap`）。接管**不等于**取消：终止按钮 / `agent_cancel` 在接管期间仍可用 |
 | 18 | `pty_key` 的 `backspace` 该发 `\x08` 还是 `\x7f`（ConPTY 下两者的 VK 映射**未实测**） | 已知不确定项（Step 2 ③） | 只影响按键条里的退格键，不影响安全；先发 `\x08`，真机验证后再定 |
@@ -649,14 +649,17 @@ npx vitest run
 
 **顺带修复（与 PTY 无关，但已两次污染验证结果）**
 
-`agent/package_cache_roots.rs` 的 3 个用例都改**进程级全局状态**
+`agent/package_cache_roots.rs`（包管理器缓存目录自动豁免）的 3 个用例都改**进程级全局状态**
 （`set_roots_for_test` / `clear_cache` / `npm_config_cache`），而 cargo 默认并行跑测试 →
-互相踩（**只跑该模块时实测 7/10 失败**，与本次改动无关）。已加模块内互斥锁串行化，
-10/10 稳定；完整套件 6/6 稳定。
+互相踩（**只跑该模块时实测 7/10 失败**，与本次改动无关）。当时在模块内加了互斥锁串行化。
 
-⚠️ 该锁只串行化本模块内部。**任何并发调用 `cache_roots_for_workspace` 的测试**仍可能与
-它打架（会触发真实 `refresh()` 并覆盖它注入的根）—— 新加的 PTY 端到端用例因此刻意用
-`readonly` 模式避开缓存探测（同时也避免测试去改用户真实缓存目录的 ACL）。
+> ⚠️ **后续状态（模块已移除）**：`package_cache_roots`（含 `cache_roots_for_workspace` 及
+> npm/pnpm 缓存位置探针）**已整体删除**——实测不好用（环境探测 + ACL 授予链路复杂，
+> 还要求探测子进程，收益却不稳定），改由「设置 → 安全 → 忽略沙盒命令」规则承担同类场景
+> （想让 `npm install` 这类命令跑通，直接给命令加一条忽略规则即可）。
+> 沙盒可写根现在**只来自** workspace + 白名单（`prepare_sandbox_session`），不再自动探测/豁免。
+> 上述锁与全局状态污染问题随之消失；PTY 端到端用例仍保留 `readonly`，
+> 理由简化为「不授予额外写根，避免测试改用户真实目录的 ACL」。
 
 **已知缺口（刻意延后）**
 - ~~**TS 引擎路径未 PTY 化**~~ → ✅ **本轮已实现**（见 §7 #14，经 `pty_run_command`）；

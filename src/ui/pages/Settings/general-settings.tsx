@@ -318,7 +318,7 @@ function GeneralSettings() {
             <span className="label-text">{t('本地图片伪视觉分析')}</span>
             <span className="label-desc">
               {t(
-                '发送的图片会进行 UI 检测 + OCR + 物体检测\n提取结构化文本发给 AI，而非发送原始图片\n让VLM拥有视觉能力\n让VLM更节省token，但是伪视觉分析，没有真实VLM分析的智能',
+                '发送的图片会进行 UI 检测 + OCR + 物体检测\n提取结构化文本发给 AI，而非发送原始图片\n让LLM拥有视觉能力\n让VLM更节省token，但是伪视觉分析，没有真实VLM分析的智能',
               )}
             </span>
           </div>

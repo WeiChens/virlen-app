@@ -9,6 +9,7 @@ import { ChatRequest } from '@/infrastructure/provider/types'
 import { providerPort } from '../provider'
 import { AI_AGENT_GENERATE_TITLE_PROMPT } from '../agent'
 import { ledgerTokensOf, recordUsage } from '../usage'
+import { sliceHead } from '@/utils/text'
 
 /** 标题最大长度（超过则截断并追加省略号） */
 export const MAX_TITLE_LENGTH = 30
@@ -43,7 +44,7 @@ export function sanitizeTitle(raw: string): string {
   // 压缩换行/多余空白为单个空格
   t = t.replace(/\s+/g, ' ').trim()
   if (t.length > MAX_TITLE_LENGTH) {
-    t = t.slice(0, MAX_TITLE_LENGTH) + '...'
+    t = sliceHead(t, MAX_TITLE_LENGTH) + '...'
   }
   return t
 }

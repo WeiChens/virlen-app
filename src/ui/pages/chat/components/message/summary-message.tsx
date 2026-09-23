@@ -9,7 +9,7 @@
  * ⚠️ 摘要内容只在弹窗里渲染 —— 提示条本身**不得**出现摘要正文
  * （有回归测试钉住这条契约：src/tests/ui/summary-message.test.tsx）。
  */
-import { useState } from 'react'
+import { useState, type MouseEvent as ReactMouseEvent } from 'react'
 import type { Message } from '@/types'
 import Modal from '@/ui/components/shared/Modal'
 import StatsSvg from '@/ui/components/icons/StatsSvg'
@@ -86,14 +86,22 @@ export function SummaryModal({ visible, message, onClose }: SummaryModalProps) {
 
 interface Props {
   message: Message
+  /**
+   * 右键菜单（由 message-bubble 统一接管）：摘要条目同样支持「复制 / 删除」。
+   *
+   * 删除 summary = 放弃这次压缩，本条及之后的消息一并删除
+   *（二次确认与其它气泡同源，见 message-bubble.confirmDeleteMessage）。
+   * 不传则不挂监听。
+   */
+  onContextMenu?: (e: ReactMouseEvent) => void
 }
 
-function SummaryMessage({ message }: Props) {
+function SummaryMessage({ message, onContextMenu }: Props) {
   const [open, setOpen] = useState(false)
 
   return (
     <>
-      <div className="message-compress-summary">
+      <div className="message-compress-summary" onContextMenu={onContextMenu}>
         <button
           type="button"
           className="compress-summary-card"

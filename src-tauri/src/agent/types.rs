@@ -343,6 +343,15 @@ pub struct NativeToolSecurity {
     /// （与 TS `src/domain/permission/index.ts` 对齐；取代旧的单一 `approval_mode`）
     #[serde(default)]
     pub permissions: std::collections::BTreeMap<String, String>,
+    /// 「忽略沙盒命令」规则（设置 → 安全）里是否存在**已启用**项（前端计算后传入）。
+    ///
+    /// 仅作性能开关：为 true 时原生 execute_command / execute_script 才会经桥向 JS
+    /// 询问「这条命令是否命中规则」（内部交互 `sandbox_rule_check`，无 UI）；
+    /// 为 false 时零开销，不多一次 IPC 往返。
+    /// ⚠️ 真正的匹配在 JS 侧做（规则含用户自写的 `js` 函数，Rust 无法求值）——
+    /// 这里不预编译、不缓存规则内容，避免两侧语义分叉（铁律 1）。
+    #[serde(default)]
+    pub has_sandbox_ignore_rules: bool,
 }
 
 fn default_sandbox_mode() -> String {
