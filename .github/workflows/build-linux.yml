@@ -17,8 +17,80 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ── 0. 测试门禁 ────────────────────────────────────────────────────────
+  # 打 tag 时先跑「tsc + vitest + cargo test」；任一失败则 build 不启动，
+  # 从而阻断 release（release 依赖 build）。
+  test:
+    name: Test (tsc + vitest + cargo)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache Rust cargo registry & build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+
+      # cargo test 需要与打包相同的系统依赖（webkit2gtk / openblas 等）
+      - name: Install Linux system dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            libopenblas-dev
+
+      - name: Install frontend dependencies
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
+      # 1) 类型检查 —— 静态门禁
+      - name: TypeScript typecheck (tsc --noEmit)
+        shell: bash
+        run: npx tsc --noEmit
+
+      # 2) 前端单元测试（vitest run）
+      - name: Frontend tests (vitest)
+        shell: bash
+        run: pnpm test
+
+      # 3) 构建前端产物：tauri-build 在编译 crate 时要求 frontendDist（../dist）存在
+      - name: Build frontend (prerequisite for cargo)
+        shell: bash
+        run: pnpm build
+
+      # 4) Rust 测试
+      - name: Rust tests (cargo test)
+        working-directory: src-tauri
+        shell: bash
+        run: cargo test
+
   build-linux:
     name: Build Linux (x86_64)
+    needs: [test]
     runs-on: ubuntu-latest
 
     steps:

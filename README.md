@@ -8,7 +8,7 @@
     <img src="https://img.shields.io/badge/version-1.1.39-blue" alt="version">
     <img src="https://img.shields.io/badge/Tauri-2.0-purple" alt="tauri">
     <img src="https://img.shields.io/badge/React-19-61DAFB" alt="react">
-    <img src="https://img.shields.io/badge/TypeScript-5.8-3178C6" alt="typescript">
+    <img src="https://img.shields.io/badge/TypeScript-7.0.2-3178C6" alt="typescript">
     <img src="https://img.shields.io/badge/Rust-1.91-000000" alt="rust">
   </p>
 </div>
@@ -197,13 +197,13 @@ Since P1–P3, the core engine has been progressively ported to Rust (`src-tauri
 
 - **Chat loop**: LLM round → tool execution → result merge, pause/resume via Run Snapshot, cancellation handling
 - **SQLite session persistence**: sessions & messages are written directly to `virlen.db` by Rust (WAL + single-writer + `spawn_blocking`) — no IndexedDB, no dependency on the JS thread
-- **Native tools**: 16 high-value tools (file ops, command execution, search, knowledge base) execute natively in Rust; the rest fall back to the JS bridge
+- **Native tools**: 18 high-value tools (file ops, command execution, search, knowledge base) execute natively in Rust; the rest fall back to the JS bridge
 - **DeepSeek V3 tokenizer**: byte-level BPE token counting (`cmd_count_tokens`) powers accurate usage estimation in context compression
 - **Pseudo-vision analysis**: for text-only models, image blocks are replaced with local vision-analysis text natively in Rust
 
-Functions still provided by JS (bridged): **Gemini provider**, `compressContext`, `generateTitle`, and 7 low-frequency tools (`get_current_time`, `user_choice`, `web_fetch`, `web_search`, `list_skills`, `read_skill_source`, `vision_analyze` dispatch). See `docs/rust-engine.md` for the full matrix.
+Functions still provided by JS (bridged): **Gemini provider**, `compressContext`, `generateTitle`, and 9 low-frequency tools (`get_current_time`, `user_choice`, `web_fetch`, `web_search`, `list_skills`, `read_skill_source`, `vision_analyze` dispatch, `list_messages`, `read_messages`). See `docs/rust-engine.md` for the full matrix.
 
-Test status: `cargo test` **101 passed** · `npx vitest run` **346 passed** · `tsc --noEmit` zero errors.
+These three checks — `npx tsc --noEmit`, `pnpm test` (Vitest), and `cargo test` — are enforced by CI on every version tag (`v*`); a failing check blocks the release. See `.github/workflows/`.
 
 ---
 
@@ -232,9 +232,11 @@ Virlen comes with a rich set of tools for the AI Agent:
 |                 | `file_info`            | Get file/directory metadata                                       |
 |                 | `copy_move_file`       | Copy or move files/directories                                    |
 |                 | `list_files`           | List directory contents (recursive, max depth, hidden files)      |
+|                 | `mkdir`                | Create directory (single or batch, recursive, idempotent)         |
 |                 | `search_files_by_name` | Search by filename (plain text, regex, glob patterns)             |
 |                 | `search_text_in_files` | Search file contents (Rust ripgrep-based, auto-skip binary files) |
 | **Command Exec**| `execute_command`      | Execute shell commands (timeout, sandbox-safe execution)          |
+|                 | `execute_script`       | Create a script file and execute it (Python/Node/Shell); deleted after run by default |
 | **Web Search**  | `web_search`           | Internet search (Tavily, Bocha, SearXNG multi-provider)          |
 |                 | `web_fetch`            | Fetch web pages (HTML→Markdown conversion)                        |
 | **Vision**      | `vision_analyze`       | On-device visual analysis (UI detection, OCR, 254 objects, 81 icons) |
@@ -242,6 +244,14 @@ Virlen comes with a rich set of tools for the AI Agent:
 | **Interaction** | `user_choice`          | Show choice dialog to user (single/multi-select)                  |
 | **Skills**      | `list_skills`          | List all available skills                                         |
 |                 | `read_skill_source`    | View skill source code directory and SKILL.md                     |
+| **Knowledge Base**| `list_knowledge_bases` | List all available knowledge bases (name, ID, document count)   |
+|                 | `search_knowledge_base`| Semantic search within a knowledge base                           |
+|                 | `write_to_knowledge_base` | Write text to a knowledge base (auto chunk + embed)            |
+|                 | `list_knowledge_base_documents` | List documents in a knowledge base                     |
+|                 | `get_knowledge_base_document` | Get the full content of a document                       |
+|                 | `delete_knowledge_base_document` | Delete a document from a knowledge base             |
+| **Chat History**| `list_messages`        | List compressed-away messages (paged timeline, keyword filter)    |
+|                 | `read_messages`        | Read compressed-away messages by id + window                      |
 
 ---
 
@@ -322,7 +332,7 @@ Virlen features the built-in **Quasivision** vision engine (ONNX Runtime), with 
 | Technology                                                     | Usage                           |
 | -------------------------------------------------------------- | ------------------------------- |
 | [React 19](https://react.dev/)                                | UI framework                    |
-| [TypeScript 5.8](https://www.typescriptlang.org/)             | Type safety                     |
+| [TypeScript 7.0.2](https://www.typescriptlang.org/)             | Type safety                     |
 | [Vite 7](https://vite.dev/)                                   | Build tool                      |
 | [MobX 6](https://mobx.js.org/)                                | State management                |
 | [Sass](https://sass-lang.com/)                                | CSS preprocessor                |
@@ -371,7 +381,8 @@ virlen-app/
 │   ├── ui/                   # User interface
 │   ├── skill/                # Skill system
 │   ├── types/                # Type definitions
-│   └── utils/                # Utility functions
+│   ├── utils/                # Utility functions
+│   └── tests/                # Vitest unit tests (domain / infrastructure / services / rag / ui / utils)
 ├── src-tauri/                # Rust backend
 │   ├── src/                  # Rust source code
 │   │   ├── lib.rs            # Main entry (Tauri command registration)
@@ -391,10 +402,6 @@ virlen-app/
 │   │   └── deepseek_tokenizer/ # DeepSeek V3 tokenizer.json (token counting)
 │   ├── icons/                # App icons
 │   └── tauri.conf.json       # Tauri configuration
-├── tests/                   # Unit tests
-│   ├── domain/               # Domain layer tests (compress-context, run-state, storm-breaker)
-│   ├── services/             # Service layer tests
-│   └── utils/                # Utility function tests
 ├── package.json              # Frontend dependencies & scripts
 ├── pnpm-lock.yaml            # Dependency lock
 ├── pnpm-workspace.yaml       # pnpm workspace config

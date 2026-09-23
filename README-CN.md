@@ -11,7 +11,7 @@
     <img src="https://img.shields.io/badge/version-1.1.39-blue" alt="version">
     <img src="https://img.shields.io/badge/Tauri-2.0-purple" alt="tauri">
     <img src="https://img.shields.io/badge/React-19-61DAFB" alt="react">
-    <img src="https://img.shields.io/badge/TypeScript-5.8-3178C6" alt="typescript">
+    <img src="https://img.shields.io/badge/TypeScript-7.0.2-3178C6" alt="typescript">
     <img src="https://img.shields.io/badge/Rust-1.91-000000" alt="rust">
   </p>
 </div>
@@ -199,13 +199,13 @@ src/
 
 - **聊天循环**：LLM 轮次 → 工具执行 → 结果合并，支持 Run Snapshot 暂停/恢复、取消处理
 - **SQLite 会话持久化**：会话与消息由 Rust 直接写入 `virlen.db`（WAL + 单写连接 + `spawn_blocking`）——不再使用 IndexedDB，不依赖 JS 线程
-- **原生工具**：16 个高价值工具（文件操作、命令执行、搜索、知识库）在 Rust 端原生执行，其余回退 JS 桥
+- **原生工具**：18 个高价值工具（文件操作、命令执行、搜索、知识库）在 Rust 端原生执行，其余回退 JS 桥
 - **DeepSeek V3 tokenizer**：字节级 BPE token 计数（`cmd_count_tokens`），为上下文压缩提供精确 usage 估算
 - **图片伪视觉分析**：纯文本模型场景下，图片块在 Rust 端原生替换为本地视觉分析文本
 
-仍由 JS 提供（桥接）的功能：**Gemini Provider**、`compressContext`、`generateTitle`，以及 7 个低频工具（`get_current_time`、`user_choice`、`web_fetch`、`web_search`、`list_skills`、`read_skill_source`、`vision_analyze` 分发）。完整矩阵见 `docs/rust-engine.md`。
+仍由 JS 提供（桥接）的功能：**Gemini Provider**、`compressContext`、`generateTitle`，以及 9 个低频工具（`get_current_time`、`user_choice`、`web_fetch`、`web_search`、`list_skills`、`read_skill_source`、`vision_analyze` 分发、`list_messages`、`read_messages`）。完整矩阵见 `docs/rust-engine.md`。
 
-测试状态：`cargo test` **101 通过** · `npx vitest run` **346 通过** · `tsc --noEmit` 零错误。
+这三项检查——`npx tsc --noEmit`、`pnpm test`（Vitest）、`cargo test`——已由 CI 在每次打 tag（`v*`）时强制执行，任一失败即阻断发布。详见 `.github/workflows/`。
 
 ---
 
@@ -234,9 +234,11 @@ Virlen 未霖 内置了丰富的工具供 AI Agent 调用：
 |              | `file_info`            | 获取文件/目录元数据                                             |
 |              | `copy_move_file`       | 复制或移动文件/目录                                             |
 |              | `list_files`           | 列出目录内容（支持递归、最大深度、隐藏文件）                    |
+|              | `mkdir`                | 创建目录（支持单个/批量、递归、幂等）                           |
 |              | `search_files_by_name` | 按文件名搜索（支持纯文本、正则、Glob 三种模式）                 |
 |              | `search_text_in_files` | 按文本内容搜索（基于 Rust ripgrep，自动跳过二进制文件）         |
 | **命令执行** | `execute_command`      | 执行 Shell 命令（支持超时、沙盒安全执行）                       |
+|              | `execute_script`       | 创建脚本文件并执行（Python/Node/Shell），默认执行后删除         |
 | **网络搜索** | `web_search`           | 互联网搜索（支持 Tavily、Bocha、SearXNG 等多供应商）            |
 |              | `web_fetch`            | 抓取网页（HTML→Markdown 转换）                                  |
 | **视觉**     | `vision_analyze`       | 端侧视觉分析（UI 元素检测、OCR、254 类物体检测、81 种图标分类） |
@@ -244,6 +246,14 @@ Virlen 未霖 内置了丰富的工具供 AI Agent 调用：
 | **交互**     | `user_choice`          | 向用户弹出选择框（支持单选/多选）                               |
 | **技能**     | `list_skills`          | 查看所有可用技能                                                |
 |              | `read_skill_source`    | 查看技能源代码目录和 SKILL.md                                   |
+| **知识库**   | `list_knowledge_bases` | 列出所有知识库（名称、ID、文档数）                              |
+|              | `search_knowledge_base`| 在知识库内语义检索                                              |
+|              | `write_to_knowledge_base` | 写入文本到知识库（自动分块 + 向量化）                        |
+|              | `list_knowledge_base_documents` | 列出知识库中的文档                                     |
+|              | `get_knowledge_base_document` | 获取文档完整内容                                          |
+|              | `delete_knowledge_base_document` | 删除知识库中的文档                                     |
+| **聊天历史** | `list_messages`        | 列出已被上下文压缩掉的历史消息（分页时序、关键词过滤）          |
+|              | `read_messages`        | 按 id + 窗口读取被压缩掉的历史消息正文                          |
 
 ---
 
@@ -324,7 +334,7 @@ Virlen 未霖 内置了 **Quasivision** 视觉引擎（ONNX Runtime），所有�
 | 技术                                                         | 用途                         |
 | ------------------------------------------------------------ | ---------------------------- |
 | [React 19](https://react.dev/)                               | UI 框架                      |
-| [TypeScript 5.8](https://www.typescriptlang.org/)            | 类型安全                     |
+| [TypeScript 7.0.2](https://www.typescriptlang.org/)            | 类型安全                     |
 | [Vite 7](https://vite.dev/)                                  | 构建工具                     |
 | [MobX 6](https://mobx.js.org/)                               | 状态管理                     |
 | [Sass](https://sass-lang.com/)                               | CSS 预处理器                 |
@@ -373,7 +383,8 @@ virlen-app/
 │   ├── ui/                   # 用户界面
 │   ├── skill/                # 技能系统
 │   ├── types/                # 类型定义
-│   └── utils/                # 工具函数
+│   ├── utils/                # 工具函数
+│   └── tests/                # Vitest 单元测试（domain / infrastructure / services / rag / ui / utils）
 ├── src-tauri/                # Rust 后端
 │   ├── src/                  # Rust 源码
 │   │   ├── lib.rs            # 主入口（Tauri 命令注册）
@@ -393,10 +404,6 @@ virlen-app/
 │   │   └── deepseek_tokenizer/ # DeepSeek V3 tokenizer.json（token 计数）
 │   ├── icons/                # 应用图标
 │   └── tauri.conf.json       # Tauri 配置
-├── tests/                   # 单元测试
-│   ├── domain/               # 领域层测试（compress-context、run-state、storm-breaker）
-│   ├── services/             # 服务层测试
-│   └── utils/                # 工具函数测试
 ├── package.json              # 前端依赖 & 脚本
 ├── pnpm-lock.yaml            # 依赖锁定
 ├── pnpm-workspace.yaml       # pnpm workspace 配置

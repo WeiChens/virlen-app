@@ -401,9 +401,9 @@ pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 **临时关闭**：`VIRLEN_SANDBOX=off|readonly|on`（由 **Virlen 进程**读取，在命令里 `set` 无效）。
 另：`node_modules` 可能不完整（如缺 `@tanstack/react-virtual`），先 `pnpm install` 再判断是否为真错误。
 
-**11.3 版本号分散在 3 处且当前不一致**：`package.json`（0.1.2）、`src-tauri/Cargo.toml`（1.0.1）、`src-tauri/tauri.conf.json`（1.1.34，**打包与 MSIX 实际读这个**）。改版本至少同步 `package.json` + `tauri.conf.json`。
+**11.3 版本号分散在 3 处（需手动保持同步，无自动校验）**：`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`（**打包与 MSIX 实际读这个**）。截至 2026-09 校对三者均为 `1.1.39`（已一致）。改版本至少同步 `package.json` + `tauri.conf.json`，可直接用 `pnpm update`（`scripts/update-version.mjs`）。
 
-**11.4 README 已过期处**（改到相关部分时顺手校正，别照抄）：测试目录写作 `tests/` 实际 `src/tests/`；技术栈写 TS 5.8 实际 `typescript ~7.0.2`；工具表未含 `mkdir` / 知识库系列 / `chat` 分类。`README-CN.md` 需与 `README.md` 一起维护。
+**11.4 README 维护**：`README.md` 与 `README-CN.md` 需**同步维护**。2026-09 已校正漂移：测试目录 `tests/` → `src/tests/`；技术栈 TS 5.8 → 7.0.2；工具表补齐 `mkdir` / `execute_script` / 知识库系列（6）/ `chat` 分类（2）；原生工具数 16 → 18，桥接工具 7 → 9。改代码（尤其是新增/删除工具）时留意 README 对应段落是否需同步。
 
 - `vite.config.ts` 中 `optimizeDeps.exclude: ['monaco-editor']` **不可去掉**（否则 monaco 打成多份实例、注册表互相隔离）。
 - Vite 端口固定 1420（`strictPort`），`tauri dev` 会因端口占用失败。
