@@ -153,7 +153,7 @@ export const settingsState = new StorageState(
    * @param model
    * @returns
    */
-  availableModel(model: { providerConfigId: string; modelId: string }) {
+  availableModel(model: { providerConfigId: string; modelId: string } | null) {
     if (!model) return false
     if (!model.providerConfigId || !model.modelId) return false
     return settingsState.value.providers.some((p) => {

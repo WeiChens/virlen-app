@@ -8,7 +8,7 @@ const getDomLayout = (ref: React.RefObject<HTMLElement>) => {
 }
 
 export const useDomRect = (ref: React.RefObject<HTMLElement>) => {
-    const [domRect, setDomRect] = useState<DOMRect>(null);
+    const [domRect, setDomRect] = useState<DOMRect | null>(null)
     const handleResize = () => {
         const rect = getDomLayout(ref);
         setDomRect(rect);

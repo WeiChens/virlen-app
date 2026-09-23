@@ -92,7 +92,7 @@ class ExecuteScriptMessage implements IToolCallMessage {
         <span className="execute-command-short">
           {tips && <span className="execute-command-tips">{tips}</span>}
           <span style={{ color: 'var(--accent-color)', fontWeight: 500 }}>
-            {command || file_path || getUrlFileName(file_path || '', null)}
+            {command || file_path || getUrlFileName(file_path || '', '')}
           </span>
         </span>
       )

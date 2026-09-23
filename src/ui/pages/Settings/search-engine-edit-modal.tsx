@@ -134,6 +134,7 @@ export default function SearchEngineEditModal({
           <label>{t('官网链接')}</label>
           <div
             onClick={() => {
+              if (!officialLink) return
               openUrl(officialLink)
             }}
             className="official-link">

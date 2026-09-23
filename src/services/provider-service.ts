@@ -20,7 +20,7 @@ class ProviderServiceImpl implements ProviderService {
       if (p.enabled) {
         try {
           const provider = createProviderInstance(p)
-          providerPort.register(p.id, provider)
+          if (provider) providerPort.register(p.id, provider)
         } catch (e) {
           console.error('Failed to register provider:', p.id, e)
         }
@@ -32,7 +32,7 @@ class ProviderServiceImpl implements ProviderService {
   }
   register(config: ProviderConfig): boolean {
     const provider = createProviderInstance(config)
-    if (config) {
+    if (config && provider) {
       providerPort.register(config.id, provider)
       return true
     }

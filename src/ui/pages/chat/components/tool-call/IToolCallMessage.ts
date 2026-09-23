@@ -31,7 +31,8 @@ export interface IToolCallMessage {
 }
 export interface ToolMessageProps {
   useContent: ToolUseContent
-  message: Message
+  /** 该工具调用的结果消息；工具尚在执行中时为 undefined（实现内统一用 props.message?. 访问） */
+  message?: Message
   expand?: boolean
 }
 

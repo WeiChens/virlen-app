@@ -230,7 +230,7 @@ class EditFileMessage implements IToolCallMessage {
       }
       | undefined
 
-    const name = getUrlFileName(path, null)
+    const name = getUrlFileName(path, '')
 
     if (props.message?.isError) {
       return <div className="error">{props.message?.content as string}</div>

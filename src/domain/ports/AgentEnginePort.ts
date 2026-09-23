@@ -11,8 +11,9 @@ export interface AgentEnginePort {
   /**
    * 获取当前会话的运行快照
    * @param sessionId
+   * @returns 无快照时为 null（快照只存引擎内存，完成/取消/刷新后即失效）
    */
-  getRunSnapshot(sessionId: string): Promise<RunSnapshot>
+  getRunSnapshot(sessionId: string): Promise<RunSnapshot | null>
   clearRunSnapshot(sessionId: string): Promise<void>
   cancel(sessionId: string): Promise<void>
   compressContext(

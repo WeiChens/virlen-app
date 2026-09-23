@@ -48,7 +48,7 @@ class WriteFileMessage implements IToolCallMessage {
     }
     if (!props.expand) return null
     const value = props.useContent.input.content
-    const name = getUrlFileName(props.useContent.input.path, null)
+    const name = getUrlFileName(props.useContent.input.path)
 
     return (
       <div
@@ -68,7 +68,7 @@ class WriteFileMessage implements IToolCallMessage {
               return <FolderSvg />
             },
             onClick() {
-              const filePath = props.message.uiData?.fullPath;
+              const filePath = props.message?.uiData?.fullPath;
               const parentDir = getFileParentDir(filePath)
               openPath(parentDir)
             },
@@ -83,7 +83,7 @@ class WriteFileMessage implements IToolCallMessage {
             onClick() {
               // TODO: 打开编辑器
               editorService.openFile({
-                filePath: props.message.uiData?.fullPath
+                filePath: props.message?.uiData?.fullPath
               })
             },
           },]}>

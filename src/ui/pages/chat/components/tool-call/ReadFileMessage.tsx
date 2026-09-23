@@ -143,9 +143,9 @@ class ReadFileMessage implements IToolCallMessage {
     }
 
     // 单文件模式（原有逻辑）
-    const value = props.message.uiData?.content || props.message?.content
-    const name = getUrlFileName(props.message.uiData?.fullPath, null)
-    const startLine = props.message.uiData?.startLine || 1
+    const value = props.message?.uiData?.content || props.message?.content
+    const name = getUrlFileName(props.message?.uiData?.fullPath)
+    const startLine = props.message?.uiData?.startLine || 1
     return (
       <div
         style={{
@@ -165,7 +165,7 @@ class ReadFileMessage implements IToolCallMessage {
               return <FolderSvg />
             },
             onClick() {
-              const filePath = props.message.uiData?.fullPath;
+              const filePath = props.message?.uiData?.fullPath;
               const parentDir = getFileParentDir(filePath)
               openPath(parentDir)
             },
@@ -180,8 +180,8 @@ class ReadFileMessage implements IToolCallMessage {
             onClick() {
               // TODO: 打开编辑器
               editorService.openFile({
-                filePath: props.message.uiData?.fullPath,
-                line: props.message.uiData?.startLine
+                filePath: props.message?.uiData?.fullPath,
+                line: props.message?.uiData?.startLine
               })
             },
           },]}

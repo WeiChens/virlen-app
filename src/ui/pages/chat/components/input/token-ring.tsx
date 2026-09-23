@@ -51,7 +51,8 @@ function findLastUsage(sessionId: string): TokenUsage | null {
   const msgs = sessionStore.getSession(sessionId)?.messages
   if (!msgs) return null
   for (let i = msgs.length - 1; i >= 0; i--) {
-    if (msgs[i].usage) return msgs[i].usage
+    const usage = msgs[i].usage
+    if (usage) return usage
   }
   return null
 }
@@ -99,7 +100,7 @@ export default function TokenRing({ sessionId, compacting, loading }: Props) {
             showToast(t('正在发送消息，请稍候...'))
             return
           }
-          await compressContext(sessionId)
+          await compressContext(sessionId!)
         }
 
         return (

@@ -376,6 +376,10 @@ export function compressImage(file: File, size = 200) {
     await img.decode()
     const canvas = document.createElement('canvas')
     const ctx = canvas.getContext('2d')
+    if (ctx == null) {
+      reject('ctx is null')
+      return
+    }
     let width = img.naturalWidth
     let height = img.naturalHeight
     let drawX = 0,
@@ -412,9 +416,13 @@ export function compressImage(file: File, size = 200) {
     const canvas2 = document.createElement('canvas')
     canvas2.width = size
     canvas2.height = size
-    canvas2.getContext('2d').putImageData(imageData, 0, 0)
+    canvas2.getContext('2d')?.putImageData(imageData, 0, 0)
     canvas2.toBlob(
       (blob) => {
+        if (!blob) {
+          reject('blob is null')
+          return
+        }
         const file = new File([blob], 'compressed.jpeg', { type: 'image/jpeg' })
         resolve(file)
       },
@@ -540,9 +548,9 @@ export function getUrlFileName(url: string, defaultName = 'download') {
   if (!url) return defaultName
   const fileName = url
     .split(/(\\)|[/]/)
-    .pop()
-    .split('?')[0]
-    .trim()
+    ?.pop()
+    ?.split('?')?.[0]
+    ?.trim()
   return fileName || defaultName
 }
 
@@ -742,7 +750,7 @@ export function getMatch<T = any>(
   }
   return null
 }
-let _platform: 'windows' | 'macos' | 'linux' = null
+let _platform: 'windows' | 'macos' | 'linux' | null = null
 
 /**
  * 检测当前操作系统平台。

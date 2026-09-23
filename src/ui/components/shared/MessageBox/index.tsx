@@ -20,7 +20,8 @@ interface MessageBoxProps {
   cancelText?: string
   /** 破坏性操作：确认按钮染成实心危险色（与普通「确定」区分） */
   danger?: boolean
-  resolve?: (value: boolean) => void
+  /** 关闭弹窗（右上角 X / Esc）时以 null 结算：调用方按「未确认」处理 */
+  resolve?: (value: boolean | null) => void
 }
 
 const emit = new EventEmitter<MessageBoxEvent>()
@@ -48,21 +49,21 @@ export function useMessageBox() {
       }
     }, [])
     function onConfirmHandler(index: number) {
-      messageBoxList[index].resolve(true)
+      messageBoxList[index].resolve?.(true)
       setMessageBoxList((list) => {
         list.splice(index, 1)
         return [...list]
       })
     }
     function onCancelHandler(index: number) {
-      messageBoxList[index].resolve(false)
+      messageBoxList[index].resolve?.(false)
       setMessageBoxList((list) => {
         list.splice(index, 1)
         return [...list]
       })
     }
     function onCloseHandler(index: number) {
-      messageBoxList[index].resolve(null)
+      messageBoxList[index].resolve?.(null)
       setMessageBoxList((list) => {
         list.splice(index, 1)
         return [...list]
@@ -138,8 +139,8 @@ function showMessageBox(props: MessageBoxProps) {
     console.error('请先使用useMessageBox挂载')
     return
   }
-  let resolve = null as ((value: boolean) => void) | null
-  const promise = new Promise<boolean>((r) => (resolve = r))
+  let resolve = null as ((value: boolean | null) => void) | null
+  const promise = new Promise<boolean | null>((r) => (resolve = r))
   if (typeof props.text == 'object') {
     props.text = JSON.stringify(props.text)
   }

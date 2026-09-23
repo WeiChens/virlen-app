@@ -31,8 +31,8 @@ class AgentStore {
     this.repo.save(this.value)
   }
 
-  /** 根据 ID 获取 Agent */
-  getAgent(id: string): Agent | undefined {
+  /** 根据 ID 获取 Agent（id 为 undefined 时找不到，直接返回 undefined） */
+  getAgent(id: string | undefined): Agent | undefined {
     return this.value.agents.find((a) => a.id === id)
   }
 

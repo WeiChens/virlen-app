@@ -25,7 +25,7 @@ function Tooltip({ content, children, direction = 'top' }: TooltipProps) {
   const timerRef = useRef<number>(null)
 
   const show = () => {
-    clearTimeout(timerRef.current)
+    clearTimeout(timerRef.current ?? undefined)
     if (!wrapRef.current) return
     const rect = wrapRef.current.getBoundingClientRect()
     const gap = 8

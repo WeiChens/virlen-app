@@ -67,6 +67,11 @@ function ProviderSettings() {
     setTesting((prev) => ({ ...prev, [providerId]: true }))
     try {
       const registeredProvider = await providerPort.get(providerId)
+      if (!registeredProvider) {
+        // 未注册（如该服务商处于停用状态）→ 直接判定连接失败，不发起请求
+        setConnectionStatus((prev) => ({ ...prev, [providerId]: false }))
+        return
+      }
       const flag = await registeredProvider.validateApiKey(provider)
       setConnectionStatus((prev) => ({ ...prev, [providerId]: flag }))
     } catch (e) {
@@ -85,6 +90,11 @@ function ProviderSettings() {
     setFetchingModels((prev) => ({ ...prev, [providerId]: true }))
     try {
       const registeredProvider = await providerPort.get(providerId)
+      if (!registeredProvider) {
+        // 未注册（如该服务商处于停用状态）→ 按失败提示，不发起请求
+        showToast(t('获取模型失败'))
+        return
+      }
       const models = await registeredProvider.listModels()
       provider.models = models
       settingsState.setValue('providers', [...settingsState.value.providers])

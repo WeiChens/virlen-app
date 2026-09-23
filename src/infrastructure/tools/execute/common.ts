@@ -774,7 +774,15 @@ fi`,
       cwd,
       env: extraEnv,
     })
-    const output = { stdout: '', stderr: '', exitCode: 0 }
+    /**
+     * exitCode 为 null 表示进程被信号终止，UI 侧按「失败」渲染
+     * （与 Rust 侧 uiData 的 exitCode 结构保持一致）
+     */
+    const output: {
+      stdout: string
+      stderr: string
+      exitCode: number | null
+    } = { stdout: '', stderr: '', exitCode: 0 }
 
     cmd.stdout.on('data', (data: string) => {
       output.stdout += data
@@ -857,7 +865,8 @@ fi`,
           time: (timeoutMs / 1000).toFixed(3),
         }) + '\n'
     } else {
-      result += tpl('退出码: $__code__', { code: exitCode }) + '\n'
+      // 被信号终止时没有退出码，输出 null（与 Rust 侧 runner 的文案保持一致）
+      result += tpl('退出码: $__code__', { code: exitCode ?? 'null' }) + '\n'
     }
     if (output.stdout) result += processTerminalOutput(output.stdout)
     if (output.stdout && output.stderr) result += '\n'

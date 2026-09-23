@@ -200,10 +200,15 @@ export default function ProviderEditModal({
       templateName: templateName as any,
       id: initialConfig ? initialConfig.name : `temp-${templateName}`,
       enabled: true,
-      createdAt: null,
-      updatedAt: null,
+      // 仅用于拉取模型列表的临时配置：时间戳无实际语义，但类型上必须是 number
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
     }
     const provider = createProviderInstance(config)
+    if (!provider) {
+      showToast(t('获取模型失败'))
+      return
+    }
     setFetching(true)
     provider
       .listModels()
@@ -311,7 +316,7 @@ export default function ProviderEditModal({
               <a
                 className="link"
                 onClick={() => {
-                  openUrl(currentTemplate.officialLink)
+                  openUrl(currentTemplate.officialLink!)
                 }}>
                 {t('服务商网址')}
               </a>

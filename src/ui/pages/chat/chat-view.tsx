@@ -90,7 +90,7 @@ function WorkspaceDisplay({
   setValue,
   workspaces,
 }: {
-  value: string
+  value?: string
   setValue: (v: string) => void
   /** 可用的历史工作目录列表（无会话时下拉切换用） */
   workspaces?: string[]
@@ -591,10 +591,10 @@ function ChatView() {
         model = defaultAgent.defaultModel
         if (!settingsState.availableModel(model)) {
           model = settingsState.getAvailableModel()
-          if (!model) {
-            throw new Error(t('没有可用的模型'))
-          }
         }
+      }
+      if (!model) {
+        throw new Error(t('没有可用的模型'))
       }
       const { providerConfigId, modelId } = model
       const session = await createSession(
@@ -914,7 +914,6 @@ function ChatView() {
             />
             <ChatInput
               ref={chatInputRef}
-              sessionId={null}
               onSend={handleSend}
               onCancel={handleCancel}
               loading={false}

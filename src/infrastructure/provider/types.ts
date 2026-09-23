@@ -42,7 +42,7 @@ export interface ChatRequest {
   tools?: ToolDefinition[]
   temperature: number
   topP: number
-  maxTokens: number
+  maxTokens?: number
   stream: boolean
   tool_choice: 'none' | 'auto'
   /** 推理努力程度（如 OpenAI o 系列模型的 reasoning_effort） */

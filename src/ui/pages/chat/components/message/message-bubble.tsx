@@ -80,7 +80,7 @@ function MessageBubble({
   onQuoteJump,
   toolResults,
 }: Props) {
-  const mkdRef = useRef(null as HTMLDivElement)
+  const mkdRef = useRef<HTMLDivElement | null>(null)
   /** 深度思考文本容器（右键「全选」要选在这上面） */
   const reasoningRef = useRef<HTMLDivElement | null>(null)
   /** 右键菜单（正文 / 图片 / 文件 / 深度思考共用一套） */
@@ -216,7 +216,7 @@ function MessageBubble({
           key: 'edit',
           label: t('编辑'),
           onClick: () => {
-            onEdit(getContent(false))
+            onEdit?.(getContent(false))
           },
         })
         items.push({
@@ -479,7 +479,7 @@ function MessageBubble({
                         className="action-btn"
                         title={t('编辑')}
                         onClick={() => {
-                          onEdit(getContent(false))
+                          onEdit?.(getContent(false))
                         }}>
                         <EditSvg />
                       </button>

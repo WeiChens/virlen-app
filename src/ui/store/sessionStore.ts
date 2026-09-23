@@ -406,7 +406,8 @@ class SessionStore {
   }
 
   /** 根据 ID 获取会话 */
-  getSession(id: string): Session | undefined {
+  getSession(id: string | null): Session | undefined {
+    if (!id) return undefined
     return this.value.sessions.find((s) => s.id === id)
   }
 

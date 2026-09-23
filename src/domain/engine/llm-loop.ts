@@ -16,7 +16,8 @@ import { createRun, executeToolSteps } from './tool-executor'
 export interface ExecuteLLMRoundParams {
   session: Session
   provider: IProvider
-  toolDefs: ToolDefinition[]
+  /** undefined = 本轮不提供工具（见 engine.ts #resolveToolDefs） */
+  toolDefs: ToolDefinition[] | undefined
   messages: Message[]
   sessionId: string
   abortSignal: AbortSignal

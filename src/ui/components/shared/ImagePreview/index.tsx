@@ -24,10 +24,10 @@ type ImagePreviewEventParams = {
 const imagePreviewEvent = new EventEmitter<ImagePreviewEventParams>()
 function ImagePreview() {
   const [showPreview, setShowPreview] = useState(false)
-  const [src, setSrc] = useState(null)
-  const [previewSrcList, setPreviewSrcList] = useState([])
+  const [src, setSrc] = useState('')
+  const [previewSrcList, setPreviewSrcList] = useState<string[]>([])
   const [referrerPolicy, setReferrerPolicy] =
-    useState<ReferrerPolicy>('no-referrer')
+    useState<HTMLAttributeReferrerPolicy>('no-referrer')
 
   const [currentIndex, setCurrentIndex] = useState(0)
   const [scale, setScale] = useState(1)
@@ -213,8 +213,8 @@ function ImagePreview() {
   useEffect(() => {
     const uninstall = imagePreviewEvent.on('show', (e, consumption) => {
       if (consumption.value) return
-      setPreviewSrcList(e.previewSrcList)
-      setReferrerPolicy(e.referrerPolicy)
+      setPreviewSrcList(e.previewSrcList ?? [])
+      setReferrerPolicy(e.referrerPolicy ?? 'no-referrer')
       setSrc(e.src)
       // 根据点击的图片定位到对应索引
       const idx = e.previewSrcList?.indexOf(e.src) ?? 0
@@ -273,7 +273,7 @@ interface ImagePreviewOverlayProps {
   handleRotate: () => void
   handleReset: () => void
   scale: number
-  imageRef: React.RefObject<HTMLImageElement>
+  imageRef: React.RefObject<HTMLImageElement | null>
   isDragging: boolean
   position: { x: number; y: number }
   rotate: number

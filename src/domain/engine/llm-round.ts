@@ -44,7 +44,7 @@ function estimateReqTokens(messages: Message[]): number {
 export async function doLLMRound(
   session: Session,
   provider: IProvider,
-  toolDefs: ToolDefinition[],
+  toolDefs: ToolDefinition[] | undefined,
   currentMessages: Message[],
   abortSignal: AbortSignal,
   onEvent?: AgentEventCallback,

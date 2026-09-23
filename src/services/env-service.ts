@@ -27,9 +27,9 @@ let _envInfo: EnvInfo | undefined = undefined
  */
 export async function getEnvPrompt(workingDirectory?: string): Promise<string> {
   try {
-    let info: EnvInfo = _envInfo
+    let info: EnvInfo | undefined = _envInfo
     if (!info) {
-      info = await invoke('get_env_info')
+      info = await invoke<EnvInfo>('get_env_info')
       _envInfo = info
     }
     return formatEnvInfo(info, workingDirectory)

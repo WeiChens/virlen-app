@@ -10,7 +10,7 @@ export interface ChatStore {
   loadingText: string
   error: string | null
   sidebarOpen: boolean
-  selectModel: ModelInfo
+  selectModel: ModelInfo | null
   /** 无会话时选中的推理强度（创建会话时写入会话参数） */
   selectReasoningEffort: string
   /** 无会话时选中的 Agent ID */

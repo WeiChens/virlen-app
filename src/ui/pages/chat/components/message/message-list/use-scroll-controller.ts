@@ -240,7 +240,8 @@ export function useScrollController({
     }
 
     function onScroll() {
-      const { scrollTop, scrollHeight, clientHeight } = container
+      // container 是上层 const 的窄化结果；函数声明会被提升，TS 不再保留窄化，故显式断言
+      const { scrollTop, scrollHeight, clientHeight } = container!
       const distFromBottom = scrollHeight - clientHeight - scrollTop
 
       updateActiveDot()

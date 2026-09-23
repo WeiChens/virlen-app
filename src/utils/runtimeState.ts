@@ -8,7 +8,9 @@ class RuntimeState<T extends object> {
   }
   set(data: Partial<T>) {
     for (const key in data) {
-      this.setValue(key as keyof T, data[key])
+      const value = data[key]
+      // Partial 的字段可能显式为 undefined（等价于「未提供」），跳过避免写成空值
+      if (value !== undefined) this.setValue(key, value)
     }
   }
   clear() {
