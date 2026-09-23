@@ -18,6 +18,8 @@ mod speech_service;
 mod task_manager;
 mod sandbox;
 mod telemetry;
+#[cfg(desktop)]
+mod tray;
 
 /// 将文件或目录移动到系统回收站（跨平台）
 #[tauri::command]
@@ -255,6 +257,17 @@ pub fn run() {
 
             vision_service::setup_vision(app)?;
 
+            // 系统托盘：关闭窗口改为隐藏（AI 继续在后台跑），托盘菜单提供真正的退出入口
+            #[cfg(desktop)]
+            {
+                app.manage(tray::TrayState::default());
+                if let Err(e) = tray::init(app.handle()) {
+                    // 托盘不可用 → decide_close 会回退成「关闭即退出」，
+                    // 不会出现「窗口被隐藏、又没有托盘」的死局
+                    eprintln!("[tray] 托盘初始化失败，关闭窗口将直接退出: {}", e);
+                }
+            }
+
             // Windows：把拖放换成自定义 OLE 目标（比 wry 多认 VS Code 的拖拽格式）
             #[cfg(target_os = "windows")]
             drag_drop::init(app.handle());
@@ -267,14 +280,37 @@ pub fn run() {
             #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
+                // 窗口已显示 → 刷新一次托盘（否则 tooltip 会停留在
+                // 「已隐藏到托盘，右键可退出」，要等下一次工作/完成事件才纠正）
+                #[cfg(desktop)]
+                tray::refresh_tray(app.handle());
             }
             Ok(())
         })
+        // ⚠️ 必须**第一个**注册（插件的 setup 按注册顺序执行，且在 `App::build()` 内、
+        // 早于下方 `.setup()` 与窗口创建）：这样第二个实例才能在「建窗口 / 建托盘 / 连数据库」
+        // 之前就退出，不会多出一个托盘图标或半初始化的进程。
+        // 回调里拿到的是另一个进程的 argv/cwd——本应用不做文件关联，用不上，直接聚焦窗口。
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            #[cfg(desktop)]
+            tray::activate_main_window(app, "second_instance");
+            #[cfg(not(desktop))]
+            let _ = app;
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // 系统通知（Phase 2）：完成提醒的优先通道，降级链见 `tray::notify`
+        .plugin(tauri_plugin_notification::init())
+        // 托盘的「关闭 ≠ 退出」在此收口：前端标题栏关闭按钮因此一行都不用改
+        .on_window_event(|window, event| {
+            #[cfg(desktop)]
+            tray::handle_window_event(window, event);
+            #[cfg(not(desktop))]
+            let _ = (window, event);
+        })
         .invoke_handler(tauri::generate_handler![
             os_platform,
             // 剪贴板里的文件路径（粘贴文件用，Windows: CF_HDROP）
@@ -357,15 +393,53 @@ pub fn run() {
             deepseek_tokenizer::cmd_count_tokens,
             // 埋点：前端就绪后拉取落盘的历史 panic
             telemetry::telemetry_drain_panics,
+            // 托盘命令（铁律 4：新增命令必须在此注册，否则前端 invoke 静默 404）
+            #[cfg(desktop)]
+            tray::commands::tray_set_working,
+            #[cfg(desktop)]
+            tray::commands::tray_sync_settings,
+            #[cfg(desktop)]
+            tray::commands::tray_notify_completed,
+            #[cfg(desktop)]
+            tray::commands::tray_clear_attention,
+            #[cfg(desktop)]
+            tray::commands::tray_show_window,
+            #[cfg(desktop)]
+            tray::commands::tray_quit,
             // macOS 离线语音识别（SFSpeechRecognizer）
             speech_service::macos_request_speech_authorization,
             speech_service::macos_transcribe_speech,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app_handle, event| {
-            if let tauri::RunEvent::Exit = event {
+        .run(|app, event| match event {
+            tauri::RunEvent::ExitRequested { api, code, .. } => {
+                // 只有「所有窗口已关闭」触发的默认退出（code = None）才拦；
+                // code = Some（托盘退出 / 系统关机注销）一律放行，绝不拦住关机。
+                #[cfg(desktop)]
+                {
+                    if tray::should_prevent_exit(app, code) {
+                        api.prevent_exit();
+                    } else {
+                        // ⚠️ 退出前必须显式销毁托盘图标，否则通知区域会留下「幽灵图标」
+                        // （鼠标划过才消失）—— 托管状态与托盘句柄构成引用环，
+                        // 底层 NIM_DELETE 在 `cleanup_before_exit` 里发不出去。详见 `tray::destroy`。
+                        tray::destroy(app);
+                    }
+                }
+                #[cfg(not(desktop))]
+                let _ = (api, code);
+            }
+            tauri::RunEvent::Exit => {
+                // 兜底：任何走到 Exit 的退出路径都确保托盘已清理（幂等）
+                #[cfg(desktop)]
+                tray::destroy(app);
                 telemetry::on_exit();
             }
+            // macOS 专属：点 Dock 图标 / 重新打开 app 时把窗口捞回来
+            // （关到托盘后窗口是隐藏的，不处理这个事件用户会觉得「点了没反应」）
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => tray::activate_main_window(app, "reopen"),
+            _ => {}
         });
 }

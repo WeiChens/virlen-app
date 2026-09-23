@@ -104,8 +104,6 @@ pub struct ToolCallBrief {
 
 /// 「消息查询」工具：单条消息的骨架（已剔除深度思考，工具参数已截断）
 ///
-/// ⚠️ 只有「已压缩区间」（时序 < 最后一个 summary）的消息才会被返回：
-/// 该区间之后的对话已在模型当前上下文中，重复下发只会浪费 token。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageBrief {

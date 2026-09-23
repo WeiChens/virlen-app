@@ -47,9 +47,6 @@ async function estimateTokens(...texts: string[]): Promise<number> {
 
 /**
  * 兜底估算「本次请求」的 prompt token — 仅在 API 不返回 usage 时使用。
- *
- * ⚠️ 必须把**发出去的全部内容**计入：历史消息 + 压缩指令 + systemPrompt + 工具 schema。
- * 早期版本只算了首条消息 + systemPrompt，漏掉中间消息与 27 个工具的 schema → 系统性低估。
  */
 async function estimateRequestTokens(request: ChatRequest): Promise<number> {
   const texts: string[] = [request.systemPrompt || '']
@@ -104,10 +101,6 @@ export async function compressContext(
     const { summary } = buildRawSummary(compressMessages)
     // 压缩后的上下文占用（systemPrompt + 工具 schema + 摘要），本地 tokenizer 估算。
     // 写进 summary 消息的 usage：token 环 / UI 读最后一条带 usage 的消息，
-    // 不写的话压缩后仍显示压缩前的占用，用户看不到压缩效果。
-    // ⚠️ 必须带上工具 schema：真实 prompt 含它，不算的话压缩后的数字会突然偏低，
-    //    看着像「压缩得更好」，与压缩前的真实 usage 不可比。
-    // ⚠️ 不入用量账本（没有 LLM 调用，不 recordUsage）。
     const allToolDefs = await toolRegistry.listDefinitions()
     const toolDefs =
       session.allowedTools === undefined

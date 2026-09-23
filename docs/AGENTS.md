@@ -430,6 +430,25 @@ pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 两个必须对齐的常量（改一个就要改另一个）：`index.tsx` 的 `INPUT_CHROME_HEIGHT = 58` ↔ `style.scss` 的 `.input-wrapper` 静止高度 125 / `textarea { min-height: 67px }`。
 坑：`.has-fixed-height textarea` 必须 `flex: 0 0 auto`。
 
+**11.11 Windows：`cargo test` 二进制可能连启动都启动不了（comctl32 v6 清单）**。
+现象：`cargo test` 报 `0xc0000139 (STATUS_ENTRYPOINT_NOT_FOUND)`，连一个字符的 Rust 输出都没有；但 `cargo build` / `cargo check` 正常。
+根因：用到托盘**菜单**（muda）会链进 comctl32 **v6 专属**导出 `TaskDialogIndirect`；而进程只有带了「Common-Controls v6」SideBySide 清单才会加载 v6，否则去加载 system32 的 v5.82 → **加载阶段**就失败。
+而 `tauri-build` 生成的 `resource.lib`（含 RT_MANIFEST）只通过 `rustc-link-arg-bins` 给了 **bin**，测试二进制没有。
+修法在 `src-tauri/build.rs`：全局 `/MANIFEST:EMBED` + `/MANIFESTINPUT:windows/common-controls.manifest`，同时给 bin 加 `/MANIFEST:NO`（否则两个清单撞成 `CVT1100 duplicate resource`）。
+定位手法（可复用）：用脚本解析两个 exe 的 PE 导入表做差分 → 一眼看出多出来的导出。
+
+**11.12 单实例：`tauri-plugin-single-instance` 必须第一个注册，且它自己会 `process::exit`**。
+目的：第二次启动不开新进程，而是唤起 + 聚焦已有窗口（窗口可能正藏在托盘里）。
+坑 1（顺序）：插件的 `setup` 按**注册顺序**执行，且都在 `App::build()` 内（`initialize_plugins`），**早于** `.setup()` 回调与窗口创建。
+所以 `.plugin(tauri_plugin_single_instance::init(...))` 必须是链上**第一个** —— 否则第二实例会先把窗口 / 托盘 / SQLite 建起来，再被插件杀掉。
+坑 2（清理）：第二实例的退出是插件内部的 `app.cleanup_before_exit()` + `std::process::exit(0)`，**绕过**我们的 `tray::destroy()`
+→ 不会发 `NIM_DELETE`（见 §11.7 幽灵图标）。当前无事（那时它还没建托盘），但**别**在 `tauri.conf.json` 加 `app.trayIcon`：
+那个默认托盘在 `App::build()` 里、`initialize_plugins` **之前**就建好了，一旦有它，第二实例会先注册托盘再 `exit` → 留下幽灵图标。
+回调线程：Windows 是主线程（`WM_COPYDATA` 在其隐藏窗口的 WndProc 里），macOS/Linux 是 tokio 线程；两边都能直接调窗口 API。
+窗口唤起统一走 `tray::activate_main_window(app, reason)`（`show_main_window` + `refresh_tray`，**不清未读**）。
+
+**踩坑前必读：`docs/tray-implementation-plan.md`**（托盘/关闭不退出/后台工作的完整方案与实现记录）。
+
 ---
 
 ## 12. 快速定位表
@@ -454,6 +473,7 @@ pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 | 改埋点 | `src/utils/telemetry/**`（+ `src-tauri/src/telemetry.rs` 的 panic 桥） |
 | 改 RAG / 知识库 | `src-tauri/src/rag/**`、`src/services/rag-service.ts`、`src/infrastructure/rag/` |
 | 改用量统计 / 费用 | `src-tauri/src/session_db/usage.rs`、`src/domain/pricing/index.ts`、`src/services/token-stats-service.ts`、`src/ui/pages/chat/components/token-stats/` |
+| 不让重复启动两个进程（第二实例 → 聚焦已有窗口） | `src-tauri/src/lib.rs` 的 `.plugin(tauri_plugin_single_instance::init(...))`（**必须第一个注册**）+ `src-tauri/src/tray/mod.rs::activate_main_window`；macOS「重新打开」=`RunEvent::Reopen` |
 | 发版 / 打包 | `src-tauri/tauri.conf.json` + `package.json` + `scripts/build-msix.ps1`、`scripts/msix/AppxManifest.xml.template` |
 
 ---

@@ -28,7 +28,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub struct SqliteSessionRepo {
-    /// ⚠️ `pub(crate)`：`tests` 子模块需要直接查库（检查索引 / 触发迁移），生产代码只经方法访问。
     pub(crate) conn: Arc<Mutex<Connection>>,
     /// 历史数据迁移（回填 `text_plain` + 重建 FTS）是否已完成。
     /// 未完成时 `search_messages` 回退到旧的 `LIKE content` 路径，保证检索依然正确（略慢）。

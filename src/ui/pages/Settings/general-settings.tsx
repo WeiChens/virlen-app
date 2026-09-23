@@ -424,6 +424,44 @@ function GeneralSettings() {
         </div>
         <div className="setting-row">
           <div className="setting-label">
+            <span className="label-text">{t('关闭窗口时隐藏到托盘')}</span>
+            <span className="label-desc">
+              {t('点关闭按钮只隐藏窗口，AI 继续在后台工作；从托盘菜单可真正退出')}
+            </span>
+          </div>
+          <div className="setting-control">
+            <label className="toggle">
+              <input
+                type="checkbox"
+                aria-label={t('关闭窗口时隐藏到托盘')}
+                checked={s.closeToTray}
+                onChange={(e) => update('closeToTray', e.target.checked)}
+              />
+              <span className="toggle-slider" />
+            </label>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="label-text">{t('回复完成时提醒我')}</span>
+            <span className="label-desc">
+              {t('窗口未显示或未激活时，用任务栏闪烁 + 托盘提示提醒（含未读计数）')}
+            </span>
+          </div>
+          <div className="setting-control">
+            <label className="toggle">
+              <input
+                type="checkbox"
+                aria-label={t('回复完成时提醒我')}
+                checked={s.notifyOnComplete}
+                onChange={(e) => update('notifyOnComplete', e.target.checked)}
+              />
+              <span className="toggle-slider" />
+            </label>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-label">
             <span className="label-text">{t('预加载技能元数据')}</span>
             <span className="label-desc">
               {t('启动时预先拉取 skill 的描述信息，但会提前消耗 TOKEN')}

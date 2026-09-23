@@ -1,0 +1,101 @@
+//! 提醒通道 — 系统通知 + 零依赖兜底
+//!
+//! 「AI 跑完了」的提醒有三层，它们是**叠加**关系，不是互斥的降级链：
+//! ① 系统通知（`tauri-plugin-notification`）—— Phase 2 接入，R1 三态实测（dev / 免安装 exe / MSIX）均已通过；
+//! ② 任务栏闪烁（`request_user_attention`）—— 仅窗口可见时有意义（隐藏窗口上 FlashWindow 不生效）；
+//! ③ 托盘 tooltip + 图标红点 —— 永不失败，最终兜底。
+//!
+//! ⚠️ **为什么不做「通知失败就降级」**：插件在桌面端把真正的发送丢进
+//! `tauri::async_runtime::spawn` 并**丢弃错误**（见 `tauri-plugin-notification` 的
+//! `desktop.rs::show`），所以「系统是否真的弹出了卡片」在 Rust 侧拿不到任何反馈。
+//! 既然无法判定，就只能叠加：通知照发，②③ 照做（tooltip/红点零成本，闪烁只在可见未聚焦时）。
+//!
+//! 调用方只依赖 `notify_completed()`，将来增删通道只需改本文件。
+
+use std::sync::atomic::Ordering;
+
+use serde_json::json;
+use tauri::AppHandle;
+use tauri::Manager;
+use tauri_plugin_notification::NotificationExt;
+
+use super::{push_attention, refresh_tray, window_focus, TrayState, MAIN_WINDOW};
+use crate::telemetry;
+
+/// 会话标题为空时的通知标题（品牌名，与语言无关，不走 i18n）
+const FALLBACK_NOTIFY_TITLE: &str = "Virlen";
+
+/// 一次运行结束的提醒（由前端 `finishWorking()` 触发 —— 两种引擎共用的唯一收口）
+///
+/// `title` = 会话标题、`preview` = AI 回复正文截断：两者都是**前端**给的
+/// （前端在拿不到正文时用 i18n 文案兜底），Rust 这边只声明一个品牌名兜底标题，
+/// 避免在原生侧再养一套语言逻辑（铁律 7）。
+pub fn notify_completed(
+    app: &AppHandle,
+    session_id: &str,
+    title: Option<&str>,
+    preview: Option<&str>,
+    status: Option<&str>,
+) {
+    let state = app.state::<TrayState>();
+    let is_error = status == Some("error");
+    let enabled = state.notify_on_complete.load(Ordering::SeqCst);
+
+    // 用户正看着窗口 → 不打扰（也不进未读队列）
+    let (visible, focused) = window_focus(app);
+    let should_remind = enabled && !(visible && focused);
+
+    let mut notification_ok = false;
+    let mut attention_ok = false;
+
+    if should_remind {
+        push_attention(state.inner(), session_id);
+
+        // ① 系统通知
+        notification_ok = show_notification(app, title, preview);
+
+        // ② 任务栏闪烁：窗口已隐藏时 FlashWindow 无意义，直接跳过（此时只剩通知 + tooltip）
+        if visible {
+            if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+                attention_ok = window
+                    .request_user_attention(Some(tauri::UserAttentionType::Informational))
+                    .is_ok();
+            }
+        }
+
+        // ③ tooltip / 未读红点（永不失败）
+        refresh_tray(app);
+    }
+
+    telemetry::track(
+        "tray.notify",
+        json!({
+            "session_id": telemetry::hash_id(session_id),
+            "status": if is_error { "error" } else { "success" },
+            "shown": should_remind,
+            // ⚠️ notification 只代表「插件调用成功」，**不代表系统真的弹了卡片**（见模块头注释）
+            "notification": notification_ok,
+            "attention": attention_ok,
+            "has_title": title.map(|t| !t.is_empty()).unwrap_or(false),
+            "preview_len": preview.map(|p| p.chars().count()).unwrap_or(0),
+        }),
+    );
+}
+
+/// 投递系统通知：标题优先用会话标题，正文优先用 AI 回复预览
+fn show_notification(app: &AppHandle, title: Option<&str>, preview: Option<&str>) -> bool {
+    let mut builder = app
+        .notification()
+        .builder()
+        .title(
+            title
+                .filter(|t| !t.is_empty())
+                .unwrap_or(FALLBACK_NOTIFY_TITLE),
+        );
+    // 正文为空（模型只调了工具、没输出文本）时不设 body，通知退化成「只有标题」
+    if let Some(body) = preview.filter(|p| !p.is_empty()) {
+        builder = builder.body(body);
+    }
+    // ⚠️ `is_ok()` 不代表用户看见了通知：插件内部把发送丢进 spawn 并丢弃错误
+    builder.show().is_ok()
+}

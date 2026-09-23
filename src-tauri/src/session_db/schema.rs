@@ -85,9 +85,6 @@ END;
 /// 检索的 keyset 排序 / 游标定位索引：(timestamp ASC, rowid ASC) 反向扫描即
 /// (timestamp DESC, rowid DESC)，与检索的 ORDER BY 完全一致，避免大库全表排序。
 ///
-/// ⚠️ 不放进静态 `DDL`：老库首次升级时建索引需扫描全表，若在 `open()` 同步执行会阻塞启动。
-/// 因此它随「迁移」在后台完成；新建空库 / 已迁移库走 `init_schema` 快速路径
-/// （表为空或已有索引，`IF NOT EXISTS` 立即返回，开销可忽略）。
 pub(crate) const SEARCH_INDEX_DDL: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(timestamp);
 "#;

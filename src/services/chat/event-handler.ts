@@ -20,6 +20,8 @@ import {
   updateSessionMessage,
 } from './messages'
 import type { ChatServiceEvents } from './types'
+import { trayNotifyCompleted } from '@/services/tray-service'
+import { t } from '@/ui/i18n'
 import {
   track,
   trackError,
@@ -247,6 +249,22 @@ export function createEventHandler(
   }
 }
 
+/**
+ * 取该会话最后一条有正文的助手消息，作为完成提醒的预览。
+ *
+ * 拿不到（空回复）时返回空串，交给 Rust 用会话标题兜底。
+ */
+function lastAssistantPreview(sessionId: string): string {
+  const messages = getSessionMessages(sessionId)
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message.role !== 'assistant') continue
+    const text = extractText(message.content).trim()
+    if (text) return text.slice(0, 120)
+  }
+  return ''
+}
+
 /** 完成工作（清理 runtime state on non-pause） */
 export async function finishWorking(
   sessionId: string,
@@ -285,6 +303,17 @@ export async function finishWorking(
     })
     events?.onWorkingChange?.(sessionId, false)
     events?.onMessagesUpdate?.(sessionId)
+    // 托盘提醒：真的跑完（含出错）才提醒；是否打扰、走哪条通道由 Rust 判断（窗口聚焦时不打扰）
+    const errored = !!tr?.errored
+    trayNotifyCompleted(sessionId, {
+      title: sessionStore.getSession(sessionId)?.title ?? '',
+      // 空正文（模型只调了工具、没输出文本）用 i18n 文案兜底 —— 系统通知的正文不能是空的；
+      // 文案由前端给（原生侧不养第二套语言逻辑，铁律 7）
+      preview:
+        lastAssistantPreview(sessionId) ||
+        t(errored ? 'AI 回复出错' : 'AI 回复完成'),
+      status: errored ? 'error' : 'success',
+    })
   }
 
   // 自动设置标题（仅 session 标题仍为默认值时触发一次）

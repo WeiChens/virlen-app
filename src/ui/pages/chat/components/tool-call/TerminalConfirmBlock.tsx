@@ -33,10 +33,12 @@ export function TerminalConfirmBlock({
   useEffect(() => {
     inputRef.current?.focus()
     inputRef.current?.select()
-    // 终端内确认同样属于「等待用户授权」→ 窗口未激活时闪烁提醒
+    // 终端内确认同样属于「等待用户授权」→ 窗口未激活时闪烁提醒；
+    // 隐藏到托盘时必须先显示窗口（否则确认框无人应答 → 引擎挂死）
     void requestAttentionIfUnfocused(
       undefined,
       settingsState.value.forceWindowActive,
+      true,
     )
   }, [])
 

@@ -65,10 +65,12 @@ export function useToolUI() {
           options,
           multi,
         })
-        // AI 调用 user_choice（用户选择）→ 窗口未激活时闪烁提醒
+        // AI 调用 user_choice（用户选择）→ 窗口未激活时闪烁提醒；
+        // 窗口被隐藏到托盘时必须先显示出来（否则弹窗没人看见，引擎会因等回执而挂死）
         void requestAttentionIfUnfocused(
           undefined,
           settingsState.value.forceWindowActive,
+          true,
         )
       },
     )
@@ -81,9 +83,11 @@ export function useToolUI() {
       setAuthModal({ visible: true, ...payload })
       // 授权确认弹窗出现 → 窗口未激活时闪烁提醒
       // （与 user_choice / AI 回复结束保持一致：都要用户立刻注意）
+      // ensureVisible：隐藏到托盘时先显示窗口，否则确认弹窗无人应答 → 引擎挂死
       void requestAttentionIfUnfocused(
         undefined,
         settingsState.value.forceWindowActive,
+        true,
       )
     })
     return off

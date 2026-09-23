@@ -92,6 +92,14 @@ export interface SettingsStore {
   editorOpenDefaultId: string
   /** 是否在 AI 回复完成或需要用户选择时，若窗口未激活则强制置为活动窗口 */
   forceWindowActive: boolean
+  /**
+   * 关闭窗口时是否隐藏到托盘（默认开）。
+   * 开启：点关闭只隐藏，AI 继续在后台跑，从托盘菜单可真正退出；
+   * 关闭：点关闭 = 直接退出进程（托盘不可用时也会自动回退成这个行为）。
+   */
+  closeToTray: boolean
+  /** AI 回复完成且窗口未显示/未激活时是否提醒（默认开；任务栏闪烁 + 托盘提示 + 未读计数） */
+  notifyOnComplete: boolean
   /** 诊断埋点开关（默认关；开启后仅本地采集，不会自动外发） */
   telemetryEnabled: boolean
   /**
@@ -139,6 +147,8 @@ const defaultSettings: SettingsStore = {
   editorOpenConfigs: [],
   editorOpenDefaultId: '',
   forceWindowActive: false,
+  closeToTray: true,
+  notifyOnComplete: true,
   telemetryEnabled: false,
   modelPricing: {},
   usageCurrency: 'CNY',

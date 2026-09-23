@@ -39,7 +39,6 @@ pub trait SessionRepo: Send + Sync {
     /// 用于前端删除用户消息（及其连带删除的后续消息）时同步落库，
     /// 保证内存消息列表与 SQLite 一致（否则重启后已删除消息会「复活」）。
     /// 目标消息不存在时不删除任何行（子查询为 NULL → 条件不成立）。
-    /// ⚠️ 不刷新 `updated_at`（删除消息不是用户发言）。
     async fn truncate_messages_from(
         &self,
         session_id: &str,

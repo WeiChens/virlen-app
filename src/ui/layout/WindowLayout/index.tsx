@@ -5,6 +5,7 @@ import WinMinSvg from '@/ui/components/icons/WinMinSvg'
 import WinMaxSvg from '@/ui/components/icons/WinMaxSvg'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Window } from '@tauri-apps/api/window'
+import { invoke } from '@tauri-apps/api/core'
 import { appLogo, appName } from '@/ui/constants'
 // import { useMessageBox } from '@/ui/components/shared/MessageBox'
 // import useLoading from '@/utils/loading'
@@ -87,9 +88,16 @@ const WindowLayout = ({ children, padding = 0, className }: Props) => {
     return uninstall
   }, [])
 
-  function handleUpdateForceCancel() {
-    // 强制更新被取消 → 关闭应用
-    currentWindow.current?.close()
+  async function handleUpdateForceCancel() {
+    // 强制更新被取消 → 真正退出应用。
+    // ⚠️ 不能再用 close()：托盘开启后关闭窗口只是隐藏（AI 继续在后台跑），
+    // 那样更新包永远装不上 —— 所以走托盘模块的退出入口。
+    try {
+      await invoke('tray_quit')
+    } catch {
+      // 托盘不可用（非 Tauri 环境 / 旧版本）→ 退回直接关窗
+      currentWindow.current?.close()
+    }
   }
   return (
     <div

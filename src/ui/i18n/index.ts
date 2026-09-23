@@ -50,7 +50,19 @@ let currentMessages: Record<string, string> = {}
  * 中文环境直接返回 key，无需加载 JSON。
  */
 export async function initI18n(): Promise<void> {
-  const lang = settingsState.value.language as Language
+  await ensureLanguageReady(settingsState.value.language as Language)
+}
+
+/**
+ * 确保语言包已加载，并把 `currentLang` / `currentMessages` 切到该语言（幂等）。
+ *
+ * 为什么需要它：语言切换的“生效”发生在 `useLanguage()` 的 reaction 里，而它要
+ * `await import(...)` 才拿到新语言包 —— 切换瞬间**同步**调 `t()` 的代码（例如
+ * 要推给原生侧的托盘文案）会拿到旧语言。需要“立即用新语言”的调用方先 await 本函数。
+ */
+export async function ensureLanguageReady(
+  lang: Language = settingsState.value.language as Language,
+): Promise<void> {
   currentLang = lang
   if (lang === 'zh-CN') {
     currentMessages = {}

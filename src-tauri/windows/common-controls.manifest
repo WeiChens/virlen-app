@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Windows SideBySide 清单（仅供**非 bin 目标**使用，见 build.rs）。
+
+  为什么需要：muda / tray-icon 会引用 comctl32 v6 专属导出（TaskDialogIndirect），
+  若进程没有「Common-Controls v6」的 SideBySide 依赖，Windows 会去 system32 加载
+  comctl32 v5.82 → 进程在**加载阶段**直接 STATUS_ENTRYPOINT_NOT_FOUND（0xc0000139），
+  `cargo test` 的测试二进制根本起不来。
+
+  正式的应用 exe 已经带上同一份依赖（tauri-build 生成的 resource.rc 里有 RT_MANIFEST=24），
+  所以这里只需要给测试目标补一份。
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+</assembly>

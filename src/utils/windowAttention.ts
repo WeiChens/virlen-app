@@ -10,7 +10,26 @@ import {
   getCurrentWindow,
   UserAttentionType,
 } from '@tauri-apps/api/window'
+import { invoke } from '@tauri-apps/api/core'
 import { track } from '@/utils/telemetry'
+
+/**
+ * 窗口是否被隐藏到托盘时，先把它放出来。
+ *
+ * ⚠️ 必须传 `ensureVisible = true` 的场景：**等用户交互**（user_choice / 授权确认 /
+ * 终端内确认）—— 隐藏窗口里的弹窗用户根本看不到，而 Rust 侧的桥接回执
+ * （`agent/bridge.rs` 的 oneshot）**没有超时**，引擎会永久挂起。
+ */
+async function ensureWindowVisible(): Promise<void> {
+  const appWindow = getCurrentWindow()
+  try {
+    // 交给 Rust：unminimize + show（+ 刷新托盘 tooltip），前端不重复窗口逻辑
+    await invoke('tray_show_window', { focus: false })
+  } catch {
+    // 命令不可用（旧版本 / 非 Tauri）→ 退化为前端直接 show
+    await appWindow.show()
+  }
+}
 
 /**
  * 当窗口未聚焦时请求用户注意力。
@@ -20,16 +39,22 @@ import { track } from '@/utils/telemetry'
  *
  * @param type 注意力请求类型
  * @param forceActive 为 true 时，窗口未激活则直接强制激活（还原 + 显示 + 聚焦）
+ * @param ensureVisible 为 true 时，窗口被隐藏到托盘则先显示出来（等用户交互时必须开启）
  * @returns 是否成功触发（false 表示窗口已聚焦、调用失败或非 Tauri 环境）
  */
 export async function requestAttentionIfUnfocused(
   type: UserAttentionType = UserAttentionType.Critical,
   forceActive = false,
+  ensureVisible = false,
 ): Promise<boolean> {
   try {
     const appWindow = getCurrentWindow()
     const focused = await appWindow.isFocused()
     if (focused) return false
+
+    if (ensureVisible && !(await appWindow.isVisible())) {
+      await ensureWindowVisible()
+    }
 
     if (forceActive) {
       if (await appWindow.isMinimized()) {

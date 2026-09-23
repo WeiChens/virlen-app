@@ -18,6 +18,7 @@ import { installTelemetry, track, trackPerf, flushTelemetry } from '@/utils/tele
 import { installGlobalErrorHandlers } from '@/utils/telemetry/errorHandler'
 import { bindUsageLedger } from '@/domain/usage'
 import { tauriUsageLedger } from '@/infrastructure/usage-ledger'
+import { initTrayService } from '@/services/tray-service'
 
 /** 性能计时（优先高精度） */
 const perfNow = () =>
@@ -146,6 +147,9 @@ async function init() {
       }
     }),
   ])
+
+  // 托盘/后台化集成：把「谁在工作」推给 Rust、接管托盘点击（非 Tauri 环境自动跳过）
+  await step('tray', () => initTrayService())
 
   providerService.initProviders()
   searchProviderService.initSearchProviders()
