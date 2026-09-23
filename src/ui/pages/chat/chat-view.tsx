@@ -236,7 +236,7 @@ function ChatView() {
   /** 检索结果跳转目标（滚动定位 + 临时高亮），下发给消息列表 */
   const [searchJump, setSearchJump] = useState<MessageJumpTarget | null>(null)
   const searchJumpNonceRef = useRef(0)
-  const [pendingContent, setPendingContent] = useState<string | null>(null)
+  // const [pendingContent, setPendingContent] = useState<string | null>(null)
   /**
    * 输入框当前引用的技能名（侧边栏技能卡片据此高亮）
    *
@@ -518,7 +518,7 @@ function ChatView() {
       (skills?.length ?? 0) > 0
 
     if (!hasEnabledProvider) {
-      setPendingContent(content || (hasAttachment ? t('(附件)') : ''))
+      // setPendingContent(content || (hasAttachment ? t('(附件)') : ''))
       setShowProviderPrompt(true)
       return
     }
@@ -538,7 +538,7 @@ function ChatView() {
         (p) => p.enabled && p.models.length > 0,
       )
       if (!firstEnabled) {
-        setPendingContent(content || (hasAttachment ? t('(附件)') : ''))
+        // setPendingContent(content || (hasAttachment ? t('(附件)') : ''))
         setShowProviderPrompt(true)
         return
       }
@@ -749,13 +749,13 @@ function ChatView() {
 
   function handleGoToSettings() {
     setShowProviderPrompt(false)
-    setPendingContent(null)
+    // setPendingContent(null)
     settingsEvent.emit('openSettings', 'provider')
   }
 
   function handleClosePrompt() {
     setShowProviderPrompt(false)
-    setPendingContent(null)
+    // setPendingContent(null)
   }
 
   function handleCancel() {

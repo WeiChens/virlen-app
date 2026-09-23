@@ -180,7 +180,7 @@ export function useScrollController({
       setHide(false)
       rowVirtualizer.scrollToIndex(count - 1, {
         align: 'end',
-        behavior: 'smooth',
+        behavior: 'auto',
       })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

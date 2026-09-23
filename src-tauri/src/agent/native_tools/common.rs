@@ -35,12 +35,21 @@ pub(super) fn arg_str_array(args: &Value, key: &str) -> Vec<String> {
 
 // ==================== 安全路径解析（对齐 securityService.resolveSafePath） ====================
 
+fn canonicalize_existing(path: &str) -> Option<String> {
+    let expanded = crate::sandbox::paths::expand_user_path(path);
+    std::path::Path::new(&expanded)
+        .canonicalize()
+        .ok()
+        .map(|c| c.to_string_lossy().replace('\\', "/"))
+}
+
+/// 逐层回退规范化：路径不存在时向上取存在的父目录（对齐前端 `tryCanonicalizePartial`）。
 fn canonicalize_partial(path: &str) -> Option<String> {
-    let p = std::path::Path::new(path);
-    if let Ok(c) = p.canonicalize() {
-        return Some(c.to_string_lossy().replace('\\', "/"));
+    if let Some(c) = canonicalize_existing(path) {
+        return Some(c);
     }
-    let normalized = path.replace('\\', "/");
+    let expanded = crate::sandbox::paths::expand_user_path(path);
+    let normalized = expanded.replace('\\', "/");
     let normalized = normalized.trim_end_matches('/');
     let parts: Vec<&str> = normalized.split('/').collect();
     for i in (1..parts.len()).rev() {
@@ -60,7 +69,7 @@ pub fn is_path_allowed(target: &str, mode: &str, security: &NativeToolSecurity) 
 
     // 1. 黑名单 > 一切
     for b in &security.blacklist {
-        if let Some(canon) = canonicalize_partial(b) {
+        if let Some(canon) = canonicalize_existing(b) {
             if canonical_target == canon || canonical_target.starts_with(&format!("{}/", canon)) {
                 return Err(format!("路径已被黑名单拦截: {}", target));
             }
@@ -69,7 +78,7 @@ pub fn is_path_allowed(target: &str, mode: &str, security: &NativeToolSecurity) 
 
     // 2. 白名单 > 工作目录
     for w in &security.whitelist {
-        if let Some(canon) = canonicalize_partial(w) {
+        if let Some(canon) = canonicalize_existing(w) {
             if canonical_target == canon || canonical_target.starts_with(&format!("{}/", canon)) {
                 return Ok(());
             }
@@ -80,7 +89,7 @@ pub fn is_path_allowed(target: &str, mode: &str, security: &NativeToolSecurity) 
     let raw_workspace = security.workspace.replace('\\', "/");
     let raw_workspace = raw_workspace.trim_end_matches('/');
     if !raw_workspace.is_empty() {
-        if let Some(canon_ws) = canonicalize_partial(raw_workspace) {
+        if let Some(canon_ws) = canonicalize_existing(raw_workspace) {
             if canonical_target == canon_ws
                 || canonical_target.starts_with(&format!("{}/", canon_ws))
             {
@@ -161,6 +170,50 @@ mod tests {
             // workspace 是临时目录，outside 在 /tmp 下且 /tmp 不在 workspace 内 → 应拒绝
             assert!(r.is_err());
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 回归：`~` 占位符必须像前端一样被展开（修复前 canonicalize_partial 返回 None，
+    /// 导致 `~/.ssh` 类黑名单条目在默认引擎下被静默丢弃）。
+    #[test]
+    fn canonicalize_partial_expands_home_placeholder() {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_default();
+        if home.is_empty() {
+            return; // 无家目录环境跳过
+        }
+        // `~/<不存在>` 应逐层回退到 canonicalize 后的 home（而不是 None）
+        assert_eq!(
+            canonicalize_partial("~/virlen_definitely_missing_dir"),
+            canonicalize_existing(&home)
+        );
+    }
+
+    /// 回归：黑名单里的 `~` 条目必须生效；但不存在的条目不得回退成整个 home
+    /// （否则 workspace 在 home 下时会把所有路径误拦）。
+    #[test]
+    fn home_placeholder_blacklist_blocks_without_over_blocking() {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_default();
+        if home.is_empty() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("virlen_native_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let workspace = dir.to_string_lossy().replace('\\', "/");
+
+        // 1) `~` 条目 → home 本身及其子路径应被拦截
+        let mut sec = test_security(&workspace);
+        sec.blacklist = vec!["~".to_string()];
+        assert!(is_path_allowed(&home.replace('\\', "/"), "r", &sec).is_err());
+
+        // 2) 不存在的 `~/<missing>` 条目 → 不应拦截 workspace 内路径
+        let mut sec2 = test_security(&workspace);
+        sec2.blacklist = vec!["~/virlen_definitely_missing_dir".to_string()];
+        assert!(is_path_allowed(&workspace, "r", &sec2).is_ok());
+
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -208,20 +208,7 @@ async fn read_file_with_hash(path: String) -> Result<file_ops::FileReadResult, S
 async fn canonicalize_path(path: String) -> Option<String> {
     // 路径展开操作很快，但 canonicalize 可能涉及 I/O
     tokio::task::spawn_blocking(move || {
-        let expanded = if path.starts_with('~') {
-            let home = std::env::var("HOME")
-                .or_else(|_| std::env::var("USERPROFILE"))
-                .unwrap_or_default()
-                .replace('\\', "/");
-            path.replacen('~', &home, 1)
-        } else if path.contains("%USERPROFILE%") {
-            let home = std::env::var("USERPROFILE")
-                .unwrap_or_default()
-                .replace('\\', "/");
-            path.replace("%USERPROFILE%", &home)
-        } else {
-            path.clone()
-        };
+        let expanded = crate::sandbox::paths::expand_user_path(&path);
         let p = std::path::Path::new(&expanded);
         p.canonicalize()
             .ok()

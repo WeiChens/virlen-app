@@ -178,7 +178,6 @@ class ReadFileMessage implements IToolCallMessage {
               </svg>
             },
             onClick() {
-              // TODO: 打开编辑器
               editorService.openFile({
                 filePath: props.message?.uiData?.fullPath,
                 line: props.message?.uiData?.startLine

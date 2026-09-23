@@ -274,6 +274,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 4. **新增 Tauri 命令必须注册**：`src-tauri/src/lib.rs` 的 `tauri::generate_handler![...]`，否则前端 `invoke` 静默 404；涉及权限还要看 `src-tauri/capabilities/default.json`。
 5. **工具是「定义 + 执行器」分离注册制**：一律 `toolRegistry.register(definition, executor)`；`description` 可为惰性函数。
 6. **写操作必须先过安全校验**：JS 侧 `securityService.resolveSafePath/isPathAllowed`，Rust 侧 `native_tools::resolve_safe_path / is_path_allowed`，两侧规则必须等价。禁止绕过。
+   路径展开（`~` / `%USERPROFILE%`）与 canonicalize 规则**必须共用同一实现**：`src-tauri/src/sandbox/paths.rs::expand_user_path`（前端经 `canonicalize_path` 命令走同一函数）。禁止在任一侧另写一份展开/规范化逻辑，否则黑名单条目会在默认引擎下静默失效。
 7. **业务文案走 i18n**：`t('中文')`（中文即 key），变量模板用 `tpl('已删除 $__count__ 个会话', {count})`；新增 UI 文案必须同步 `src/ui/i18n/lang/en-US.json`。
 8. **最小改动**：不改动与任务无关的代码；顺手重构要单独说明。
 9. **中文注释是本项目风格**：文件头写职责，关键分支写「为什么」而非「做了什么」；保留 `??` / `⚠️` 等既有强调标记。
@@ -420,7 +421,7 @@ pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 | 改上下文压缩 / 标题生成 | `src/domain/engine/compress-context.ts`（模式分派：`ai` LLM 摘要 / `raw` 正文压缩）+ `compress-raw.ts`（正文压缩的本地渲染）/ `generate-title.ts`（Rust 侧委托 TS）；产物在消息列表里的呈现：`ui/pages/chat/components/message/summary-message.tsx`（提示条 + 摘要弹窗） |
 | 改会话持久化 | `src-tauri/src/session_db/`（`sqlite.rs` / `schema.rs` / `commands.rs`）+ `src/infrastructure/sessionRepo/` + `src/ui/store/sessionStore.ts` |
 | 加 / 改工具 | `src/infrastructure/tools/<分类>/<工具>.ts`（+ 分类 `common.ts`、分类 `index.ts`）、`src/domain/tools/category.ts`、`src-tauri/src/agent/native_tools/<分类>/<工具>.rs`（+ `mod.rs` 分发）、`src/ui/pages/chat/components/tool-call/` |
-| 改原生工具路径校验 / 参数取值 | `src-tauri/src/agent/native_tools/common.rs`（`resolve_safe_path` / `is_path_allowed` / `arg_*`） |
+| 改原生工具路径校验 / 参数取值 | `src-tauri/src/agent/native_tools/common.rs`（`resolve_safe_path` / `is_path_allowed` / `arg_*`）；路径展开共用 `src-tauri/src/sandbox/paths.rs::expand_user_path` |
 | 改文件读写底层 | `src-tauri/src/file_ops.rs` + `src/utils/diff.ts` |
 | 改搜索 | `src-tauri/src/search.rs`（文件搜索）、`src/domain/search/*` + `src/infrastructure/search-providers/*`（网络搜索） |
 | 改命令执行 / 风险分类 / 权限审批 | `src/domain/permission/index.ts`（+ Rust 镜像 `native_tools/execute/common/classify.rs`）；工具 `tools/execute/common.ts` + `execute-command.ts`/`execute-script.ts`；Rust 原生 `native_tools/execute/`。PTY 相关另见 `sandbox/windows/conpty.rs`、`native_tools/execute/pty_session.rs`、`tool-call/XtermTerminal.tsx`、`tool-call/TerminalConfirmBlock.tsx` |
