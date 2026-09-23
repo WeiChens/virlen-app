@@ -446,6 +446,10 @@ pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 那个默认托盘在 `App::build()` 里、`initialize_plugins` **之前**就建好了，一旦有它，第二实例会先注册托盘再 `exit` → 留下幽灵图标。
 回调线程：Windows 是主线程（`WM_COPYDATA` 在其隐藏窗口的 WndProc 里），macOS/Linux 是 tokio 线程；两边都能直接调窗口 API。
 窗口唤起统一走 `tray::activate_main_window(app, reason)`（`show_main_window` + `refresh_tray`，**不清未读**）。
+⚠️ **dev 下不注册**：`lib.rs::run()` 里用 `if !tauri::is_dev()` 包住 `.plugin(...)` —— 开发时允许并存多实例，
+否则没关干净的上一个 dev 实例（关窗只隐藏到托盘）会把新起的 `pnpm tauri dev` 顶掉，表现为「跑完什么都没出现」。
+判定信 `tauri::is_dev()`（= tauri build script 的 `DEP_TAURI_DEV`，生产构建启用 `tauri/custom-protocol` 时为 false）；
+**别**自己写 `cfg!(feature = "custom-protocol")` —— 本包没声明这个 feature，会恒为 true（等于永远算 dev）。
 
 **11.13 切会话有唯一入口 `chat-view.tsx::handleSelectSession()`：外部只改 `chatState.currentSessionId` 会「跳过去但消息列表是空的」**。
 `handleSelectSession` 除改 store 外还负责：SQLite 懒加载（`sessionStore.ensureMessagesLoaded`）、React 镜像 `setMessages`、

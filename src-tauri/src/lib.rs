@@ -239,7 +239,28 @@ async fn edit_file_multi_in_place(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    // ⚠️ 单实例必须**第一个**注册（插件的 setup 按注册顺序执行，且在 `App::build()` 内、
+    // 早于下方 `.setup()` 与窗口创建）：这样第二个实例才能在「建窗口 / 建托盘 / 连数据库」
+    // 之前就退出，不会多出一个托盘图标或半初始化的进程。
+    //
+    // **dev 下不启用**（`tauri dev` 跑 devUrl 的开发模式）：开发时允许并存多个实例 ——
+    // 否则上一次没关干净的 dev 实例（关窗口只是隐藏到托盘，进程还在）会把新起的那次顶掉，
+    // 表现为「`pnpm tauri dev` 跑完什么都没出现」（参数交给旧进程后自己退了）。
+    // 判定用 `tauri::is_dev()`：它由 tauri 的 build script 写成 `DEP_TAURI_DEV`
+    // （生产构建会启用 `tauri/custom-protocol`），与「是不是开发模式」严格一致；
+    // 注意**不要**自己写 `cfg!(feature = "custom-protocol")` —— 本包没声明这个 feature。
+    let mut builder = tauri::Builder::default();
+    if !tauri::is_dev() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // 回调里拿到的是另一个进程的 argv/cwd——本应用不做文件关联，用不上，直接聚焦窗口。
+            #[cfg(desktop)]
+            tray::activate_main_window(app, "second_instance");
+            #[cfg(not(desktop))]
+            let _ = app;
+        }));
+    }
+
+    builder
         .setup(|app| {
             // 初始化 Rust 侧埋点（panic hook + 事件回传桥）
             telemetry::init(app.handle());
@@ -287,16 +308,6 @@ pub fn run() {
             }
             Ok(())
         })
-        // ⚠️ 必须**第一个**注册（插件的 setup 按注册顺序执行，且在 `App::build()` 内、
-        // 早于下方 `.setup()` 与窗口创建）：这样第二个实例才能在「建窗口 / 建托盘 / 连数据库」
-        // 之前就退出，不会多出一个托盘图标或半初始化的进程。
-        // 回调里拿到的是另一个进程的 argv/cwd——本应用不做文件关联，用不上，直接聚焦窗口。
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            #[cfg(desktop)]
-            tray::activate_main_window(app, "second_instance");
-            #[cfg(not(desktop))]
-            let _ = app;
-        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init())
