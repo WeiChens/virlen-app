@@ -30,20 +30,26 @@ const FALLBACK_NOTIFY_TITLE: &str = "Virlen";
 /// `title` = 会话标题、`preview` = AI 回复正文截断：两者都是**前端**给的
 /// （前端在拿不到正文时用 i18n 文案兜底），Rust 这边只声明一个品牌名兜底标题，
 /// 避免在原生侧再养一套语言逻辑（铁律 7）。
+///
+/// `viewing` = **前端**上报的「用户此刻正看着这条回复」（当前会话就是它 + webview 有焦点）。
+/// Rust 自己只看得到窗口可见/聚焦，**不知道用户当前停在哪个会话** —— 少这一位，
+/// 「窗口激活 + 正好在这个会话里看它回复完」也会被判成需要提醒，
+/// 屏幕上就冒出一个**清不掉**的未读红点（用户已在看，不会再触发任何清除动作）。
 pub fn notify_completed(
     app: &AppHandle,
     session_id: &str,
     title: Option<&str>,
     preview: Option<&str>,
     status: Option<&str>,
+    viewing: bool,
 ) {
     let state = app.state::<TrayState>();
     let is_error = status == Some("error");
     let enabled = state.notify_on_complete.load(Ordering::SeqCst);
 
-    // 用户正看着窗口 → 不打扰（也不进未读队列）
+    // 用户已经看到了（前端上报 / 窗口可见且聚焦）→ 不打扰，也不进未读队列
     let (visible, focused) = window_focus(app);
-    let should_remind = enabled && !(visible && focused);
+    let should_remind = decide_remind(enabled, viewing, visible, focused);
 
     let mut notification_ok = false;
     let mut attention_ok = false;
@@ -82,6 +88,23 @@ pub fn notify_completed(
     );
 }
 
+/// 是否需要提醒（纯函数，便于单测）
+///
+/// - 用户关掉了「完成提醒」→ 不提醒；
+/// - 用户已经看到了这条回复（`viewing`，或窗口可见且聚焦）→ 不打扰，也不进未读队列。
+///
+/// ⚠️ `viewing` 是**前端**才能给出的信号（只有它知道 `currentSessionId`），
+/// 与 `visible && focused` 是**两回事**：后者只能说「用户在看这个应用」，
+/// 前者才能说「用户在看**这条回复所在的会话**」。
+pub(crate) fn decide_remind(
+    enabled: bool,
+    viewing: bool,
+    visible: bool,
+    focused: bool,
+) -> bool {
+    enabled && !viewing && !(visible && focused)
+}
+
 /// 投递系统通知：标题优先用会话标题，正文优先用 AI 回复预览
 fn show_notification(app: &AppHandle, title: Option<&str>, preview: Option<&str>) -> bool {
     let mut builder = app
@@ -98,4 +121,26 @@ fn show_notification(app: &AppHandle, title: Option<&str>, preview: Option<&str>
     }
     // ⚠️ `is_ok()` 不代表用户看见了通知：插件内部把发送丢进 spawn 并丢弃错误
     builder.show().is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decide_remind;
+
+    #[test]
+    fn remind_matrix() {
+        // 窗口隐藏（关到托盘后台跑完）→ 必须提醒：这是托盘功能的主场景
+        assert!(decide_remind(true, false, false, false));
+        // 可见但失焦（用户在别的应用里）→ 提醒
+        assert!(decide_remind(true, false, true, false));
+        // 可见且聚焦 → 不打扰
+        assert!(!decide_remind(true, false, true, true));
+        // 前端上报「正在看这条回复」→ 不打扰（否则红点清不掉）
+        assert!(!decide_remind(true, true, true, true));
+        // 即使窗口状态读成隐藏/失焦，只要前端说在看，也不打扰
+        assert!(!decide_remind(true, true, false, false));
+        // 用户关掉「完成提醒」开关 → 一律不提醒
+        assert!(!decide_remind(false, false, false, false));
+        assert!(!decide_remind(false, false, true, false));
+    }
 }

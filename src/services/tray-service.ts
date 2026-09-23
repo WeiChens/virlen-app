@@ -43,6 +43,26 @@ function inv(cmd: string, args?: Record<string, unknown>): void {
   }
 }
 
+/** webview 此刻是否真的被激活（隐藏窗口 / 切到别的应用都是 false） */
+function hasWebviewFocus(): boolean {
+  return typeof document !== 'undefined' && document.hasFocus?.() === true
+}
+
+/**
+ * 「用户此刻正看着这个会话」—— 只有前端能算出来。
+ *
+ * 两个条件缺一不可：窗口在前台（`document.hasFocus()`）+ 当前会话就是它。
+ * 少了它会怎样：用户盯着屏幕看它回复完，Rust 只知道「窗口可见」（而它还会因
+ * 焦点缓存读不准而判成未聚焦），于是照常推未读 ⇒ 屏幕上多出一个**清不掉**的红点
+ * （用户已在看，不会再触发任何清除动作）。
+ *
+ * 用 DOM 焦点而不是 `getCurrentWindow().isFocused()`：后者走原生侧缓存的窗口事件，
+ * 与 Rust 端 `window_focus()` 是同一份数据；这里要的是「webview 真的被激活」这个独立信号。
+ */
+function isViewingSession(sessionId?: string | null): boolean {
+  return !!sessionId && chatState.value.currentSessionId === sessionId && hasWebviewFocus()
+}
+
 /**
  * 托盘**原生菜单 / tooltip**的文案。
  *
@@ -139,6 +159,11 @@ export function initTrayService(): void {
   )
 
   // ④ 托盘左键单击 → 切到「最早那条未读」的会话（Rust 侧已完成 show + focus）
+  //
+  // ⚠️ 这里**只改 store**，不在这里做懒加载 / 组件状态同步：那两件事必须落在
+  // `chat-view` 的会话切换逻辑里（React 镜像 state 只有组件能改）。
+  // 组件侧靠「外部入口兜底 effect」接住（见 `chat-view.tsx` 中 `handledSessionRef` 一段）——
+  // 否则会出现「跳到该会话但消息列表是空的」。
   void listen<{ sessionId: string }>(EVENT_ACTIVATE, (event) => {
     const sessionId = event.payload?.sessionId
     if (!sessionId || !sessionStore.getSession(sessionId)) return
@@ -146,6 +171,14 @@ export function initTrayService(): void {
     inv('tray_clear_attention', { sessionId })
   }).catch(() => {
     // 非 Tauri 环境 / 事件系统不可用时忽略
+  })
+
+  // ⑤ 窗口重新回到前台（点任务栏 / 直接点窗口）→ 当前会话刚看完，清它的未读。
+  //    没有这一步：「窗口失焦时跑完 → 推未读 → 用户点回来但没切会话」的红点会一直挂着。
+  //    用 DOM `focus` 而不是 tauri 的窗口焦点事件：要的是 webview 真被激活。
+  window.addEventListener('focus', () => {
+    const sessionId = chatState.value.currentSessionId
+    if (sessionId) inv('tray_clear_attention', { sessionId })
   })
 }
 
@@ -164,5 +197,8 @@ export function trayNotifyCompleted(
     title: opts.title,
     preview: opts.preview,
     status: opts.status,
+    // 「用户正看着这条回复」由前端判定（Rust 拿不到 currentSessionId）——
+    // 缺失就会「盯着屏幕看它回复完，托盘却冒出一个清不掉的红点」
+    viewing: isViewingSession(sessionId),
   })
 }

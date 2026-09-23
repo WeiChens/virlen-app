@@ -152,7 +152,13 @@ export function useScrollController({
   // ==================== 消息变化：贴底 / 稳定显示 ====================
   useLayoutEffect(() => {
     const count = messages.length
-    if (count === 0) return
+    if (count === 0) {
+      // 空会话（还没消息 / 懒加载未完成或失败 / 刚被清空）：没有高度要等稳定，
+      // 直接取消隐藏 —— 否则 `hide` 会停在切会话时置的 true（容器 opacity:0），
+      // 看起来就是「消息列表空的」，与「加载失败」无法区分。
+      setHide(false)
+      return
+    }
     // 条目数变化（新消息 / 回补历史）→ 刷新估算高度，供新条目的测量使用
     if (count !== lastMsgCountRef.current) {
       lastMsgCountRef.current = count

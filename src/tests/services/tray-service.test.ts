@@ -5,8 +5,9 @@
  * - 非 Tauri 环境：不注册任何监听、不发任何命令（浏览器 dev / vitest 下必须零副作用）
  * - 设置同步：启动推一次 + 变更后立即推送（含 i18n 托盘文案，Rust 侧据此决定关闭/退出语义）
  * - 工作状态派生：0→1、1→2、2→0 时 `tray_set_working` 的调用序列（同会话只推一次，去重）
- * - 完成提醒：`tray_notify_completed` 的参数透传
+ * - 完成提醒：`tray_notify_completed` 的参数透传，含 `viewing`（「用户正看着这条回复」）
  * - 托盘左键单击：切到对应会话并清未读
+ * - 窗口回到前台：清当前会话未读
  *
  * ⚠️ `tray-service` 的 `inited` 是模块级一次性标志，所以每个用例都要
  * `vi.resetModules()` 后重新动态 import，才能拿到干净的模块实例。
@@ -31,6 +32,19 @@ function setTauriEnv(on: boolean): void {
   } else {
     delete (globalThis as unknown as Record<string, unknown>).__TAURI_INTERNALS__
   }
+}
+
+/**
+ * 模拟 webview 焦点。
+ * `document.hasFocus()` 在 jsdom 下不可控，直接替换成一个可控实现（`afterEach` 里删掉恢复）。
+ * tray-service 靠它算「用户是否正在看这个会话」（`viewing`）。
+ */
+function mockHasFocus(value: boolean): void {
+  Object.defineProperty(document, 'hasFocus', {
+    value: () => value,
+    configurable: true,
+    writable: true,
+  })
 }
 
 /**
@@ -81,6 +95,8 @@ describe('tray-service', () => {
 
   afterEach(() => {
     setTauriEnv(false)
+    // 删掉测试里替换的 hasFocus，恢复 jsdom 原生实现
+    delete (document as unknown as Record<string, unknown>).hasFocus
   })
 
   // 该用例要动态加载整个模块图（tray-service → i18n → react），全量并发跑时容易超过默认 5s
@@ -207,24 +223,46 @@ describe('tray-service', () => {
     })
   })
 
-  it('完成提醒：title / preview / status 原样透传', async () => {
+  it('完成提醒：title / preview / status / viewing 原样透传', async () => {
     setTauriEnv(true)
-    const { inv, initTrayService, trayNotifyCompleted } = await freshModules()
+    mockHasFocus(false)
+    const { inv, initTrayService, chatState, trayNotifyCompleted } =
+      await freshModules()
     initTrayService()
     inv.mockClear()
 
+    // 窗口不在前台（用户没在看）→ viewing=false，交由 Rust 决定是否提醒
+    chatState.setValue('currentSessionId', 's9')
     trayNotifyCompleted('s9', {
       title: '会话九',
       preview: '总结：已完成',
       status: 'error',
     })
-
     expect(inv).toHaveBeenCalledWith('tray_notify_completed', {
       sessionId: 's9',
       title: '会话九',
       preview: '总结：已完成',
       status: 'error',
+      viewing: false,
     })
+
+    // 正在看这个会话 + 窗口在前台 → viewing=true（Rust 据此不推未读红点）
+    inv.mockClear()
+    mockHasFocus(true)
+    trayNotifyCompleted('s9', { status: 'success' })
+    expect(inv).toHaveBeenCalledWith(
+      'tray_notify_completed',
+      expect.objectContaining({ sessionId: 's9', viewing: true }),
+    )
+
+    // 前台但看的是别的会话 → viewing=false（这条回复用户确实还没看到）
+    inv.mockClear()
+    chatState.setValue('currentSessionId', 'other')
+    trayNotifyCompleted('s9', { status: 'success' })
+    expect(inv).toHaveBeenCalledWith(
+      'tray_notify_completed',
+      expect.objectContaining({ sessionId: 's9', viewing: false }),
+    )
   })
 
   it('托盘左键单击：切到该会话并清未读', async () => {
@@ -261,6 +299,20 @@ describe('tray-service', () => {
     chatState.setValue('currentSessionId', 's7')
     expect(inv).toHaveBeenCalledWith('tray_clear_attention', {
       sessionId: 's7',
+    })
+  })
+
+  it('窗口回到前台 → 清当前会话未读', async () => {
+    setTauriEnv(true)
+    const { inv, initTrayService, chatState } = await freshModules()
+    initTrayService()
+    chatState.setValue('currentSessionId', 's8')
+    inv.mockClear()
+
+    // 窗口失焦时跑完 → 推了未读；用户点回窗口但不切会话，也要清掉当前会话的未读
+    window.dispatchEvent(new Event('focus'))
+    expect(inv).toHaveBeenCalledWith('tray_clear_attention', {
+      sessionId: 's8',
     })
   })
 })

@@ -37,6 +37,9 @@ pub fn tray_sync_settings(
 }
 
 /// 一次运行结束的提醒（由 `chat/event-handler.ts::finishWorking` 触发）
+///
+/// `viewing`：前端上报的「用户此刻正看着这条回复」（当前会话 == 该会话 + webview 有焦点）。
+/// 不传 = false（按「没看到」处理，宁肯多提醒）。
 #[tauri::command]
 pub fn tray_notify_completed(
     app: AppHandle,
@@ -44,6 +47,7 @@ pub fn tray_notify_completed(
     title: Option<String>,
     preview: Option<String>,
     status: Option<String>,
+    viewing: Option<bool>,
 ) {
     notify::notify_completed(
         &app,
@@ -51,6 +55,7 @@ pub fn tray_notify_completed(
         title.as_deref(),
         preview.as_deref(),
         status.as_deref(),
+        viewing.unwrap_or(false),
     );
 }
 

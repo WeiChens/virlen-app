@@ -18,7 +18,6 @@ import type { Session, Message } from '@/types'
 import {
   chatState,
   getSessionRuntime,
-  updateSessionRuntime,
   sessionStore,
   agentStore,
   settingsState,
@@ -253,8 +252,8 @@ function ChatSidebar({
 
   const handleSelect = useCallback(
     (sessionId: string) => {
-      // 进入会话 → 清除新回复红点
-      updateSessionRuntime(sessionId, { hasNewReply: false })
+      // 进入会话 → 清除新回复红点由 `onSelectSession`（chat-view）统一负责，
+      // 这样托盘唤起 / 检索跳转等其它入口也走同一套（避免只在这里清、别处漏清）
       chatState.setValue('currentSessionId', sessionId)
       onSelectSession(sessionId)
     },

@@ -447,6 +447,14 @@ pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 回调线程：Windows 是主线程（`WM_COPYDATA` 在其隐藏窗口的 WndProc 里），macOS/Linux 是 tokio 线程；两边都能直接调窗口 API。
 窗口唤起统一走 `tray::activate_main_window(app, reason)`（`show_main_window` + `refresh_tray`，**不清未读**）。
 
+**11.13 切会话有唯一入口 `chat-view.tsx::handleSelectSession()`：外部只改 `chatState.currentSessionId` 会「跳过去但消息列表是空的」**。
+`handleSelectSession` 除改 store 外还负责：SQLite 懒加载（`sessionStore.ensureMessagesLoaded`）、React 镜像 `setMessages`、
+中断残留修复、用户消息索引、切换埋点、清新回复红点 —— 少做一步就会出现空列表。
+外部入口（托盘唤起 `tray-service` 等）拿不到组件函数，所以 `chat-view` 有一个「外部入口兜底 effect」（`handledSessionRef`）接住：
+只要当前会话不是本组件切的，就走同一条切换逻辑。**新增「外部切会话」入口只需要改 store**，别自己去碰 `setMessages`；
+反之组件内自己切（如 `doSend` 新建会话）必须登记 `handledSessionRef`，否则兜底 effect 会去数据库重拉、把刚加的消息按旧内容覆盖。
+另：`message-list` 的 `hide`（容器 `opacity: 0`）在 `messages` 为空时也必须解除（见 `use-scroll-controller.ts`），否则空会话会一直「看起来是空的」。
+
 **踩坑前必读：`docs/tray-implementation-plan.md`**（托盘/关闭不退出/后台工作的完整方案与实现记录）。
 
 ---

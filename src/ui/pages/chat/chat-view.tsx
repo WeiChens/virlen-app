@@ -454,9 +454,36 @@ function ChatView() {
     }
   }, [chatState.value.currentSessionId])
 
+  /**
+   * 最近一次「已由本组件处理」的会话切换目标。
+   * 用于让下面的兜底 effect 区分「自己人切的」与「外面直接改 store 切的」。
+   */
+  const handledSessionRef = useRef<string | null>(null)
+
+  /**
+   * 会话切换的「外部入口」兜底。
+   *
+   * 托盘唤起（`tray-service`）这类外部路径只会改 `chatState.currentSessionId`，
+   * 拿不到本组件里的 `handleSelectSession` —— 只切 store 不补齐后续动作，就会出现
+   * 「窗口打开了、也确实跳到了那个会话，但消息列表是空的」：
+   * 既没触发 SQLite 懒加载（store 里 sessions[i].messages 仍是空数组），
+   * 也没同步组件的 React 镜像（`messages` 仍是上一个会话的内容）。
+   * 所以这里统一收口：只要发现「当前会话不是本组件切的」，就走同一条切换逻辑。
+   */
+  useEffect(() => {
+    const sid = chatState.value.currentSessionId
+    if (!sid || sid === handledSessionRef.current) return
+    void handleSelectSession(sid)
+  }, [chatState.value.currentSessionId])
+
   async function handleSelectSession(sessionId: string) {
     const session = sessionStore.getSession(sessionId)
     if (!session) return
+    // 先登记再干活：本函数内部会再次写同值 currentSessionId，
+    // 早登记可避免兜底 effect 与自身重入（重入会把刚装载的消息又刷一遍）
+    handledSessionRef.current = sessionId
+    // 进入会话 → 清除新回复标记（托盘唤起 / 检索跳转等入口也一并覆盖）
+    updateSessionRuntime(sessionId, { hasNewReply: false })
     const fromSessionId = chatState.value.currentSessionId
     const switchStart =
       typeof performance !== 'undefined' ? performance.now() : Date.now()
@@ -615,6 +642,10 @@ function ChatView() {
         })
       }
       chatState.setValue('currentSessionId', sid)
+      // 新建会话由本函数自己接管（消息随后由 addSessionMessage 逐个加入，
+      // 内存即真相）；登记一下，避免兜底 effect 去数据库重新加载，
+      // 把刚加进去的消息按数据库旧内容覆盖回去
+      handledSessionRef.current = sid
       setMessages([])
     }
 
