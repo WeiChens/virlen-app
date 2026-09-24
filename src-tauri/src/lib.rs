@@ -283,12 +283,22 @@ pub fn run() {
     // 注意**不要**自己写 `cfg!(feature = "custom-protocol")` —— 本包没声明这个 feature。
     let mut builder = tauri::Builder::default();
     if !tauri::is_dev() {
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            // 回调里拿到的是另一个进程的 argv/cwd——本应用不做文件关联，用不上，直接聚焦窗口。
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // 回调里拿到的是另一个进程的 argv/cwd。本应用不做文件关联，但有一条 argv
+            // 语义必须接住：MSIX 清单 `com:ExeServer@Arguments` 的 `-ToastActivated`
+            // —— 点击通知时系统按 CLSID 拉起**新**进程，而那个进程在把自己的 COM
+            // 类对象注册上之前就被本插件拦下，于是「点通知」退化成「只是聚焦窗口」。
             #[cfg(desktop)]
-            tray::activate_main_window(app, "second_instance");
+            {
+                let reason = if tray::toast_activator::is_toast_activated(&argv) {
+                    "toast_activated"
+                } else {
+                    "second_instance"
+                };
+                tray::activate_main_window(app, reason);
+            }
             #[cfg(not(desktop))]
-            let _ = app;
+            let _ = (app, argv);
         }));
     }
 
@@ -317,6 +327,9 @@ pub fn run() {
                 // Windows：把**进程**声明成与开始菜单快捷方式相同的 AUMID
                 // （通知的归属/图标，以及点击激活都按它来，见 tray::notify）
                 tray::notify::init_app_identity(app.handle());
+                // 注册 toast 点击的 COM 激活器（CLSID 与 MSIX 清单一致，见 tray::toast_activator）：
+                // 放在托盘创建之前 —— 「被点击通知拉起」的进程要让类对象尽快挂上（系统有超时）
+                tray::toast_activator::init(app.handle());
                 if let Err(e) = tray::init(app.handle()) {
                     // 托盘不可用 → decide_close 会回退成「关闭即退出」，
                     // 不会出现「窗口被隐藏、又没有托盘」的死局
@@ -485,7 +498,11 @@ pub fn run() {
             tauri::RunEvent::Exit => {
                 // 兜底：任何走到 Exit 的退出路径都确保托盘已清理（幂等）
                 #[cfg(desktop)]
-                tray::destroy(app);
+                {
+                    tray::destroy(app);
+                    // COM 类对象显式撤销（进程退出本来也会清，这里让「注册/撤销」对称）
+                    tray::toast_activator::shutdown();
+                }
                 // 退出前把 WAL 截断回零（实测 `-wal` 长期停在 99 MB 以上，比库碎片大得多）。
                 // 幂等；拿不到连接锁就跳过，**绝不等待、绝不拖住退出**。
                 if let Some(m) = app.try_state::<std::sync::Arc<session_db::DbMaintenance>>() {

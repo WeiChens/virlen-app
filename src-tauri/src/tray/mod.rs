@@ -14,6 +14,8 @@
 
 pub mod commands;
 pub mod notify;
+/// Toast 点击的 COM 激活器（Windows；与 MSIX 清单的 ToastActivatorCLSID 配套）
+pub mod toast_activator;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
