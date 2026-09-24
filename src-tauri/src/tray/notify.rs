@@ -15,6 +15,8 @@
 //! 调用方只依赖 `notify_completed()`，将来增删通道只需改本文件。
 
 use std::sync::atomic::Ordering;
+#[cfg(target_os = "windows")]
+use std::sync::atomic::AtomicI64;
 
 use serde_json::json;
 use tauri::AppHandle;
@@ -26,6 +28,27 @@ use crate::telemetry;
 
 /// 会话标题为空时的通知标题（品牌名，与语言无关，不走 i18n）
 const FALLBACK_NOTIFY_TITLE: &str = "Virlen";
+
+/// 最近一次「进程内收到点击」的时间戳（ms；0 = 从未）
+///
+/// 一次点击可能**同时**走进程内事件与 COM 激活（打包版有清单，见 `toast_activator`）：
+/// 进程内这条能精确切到会话，COM 那条只能切「最早未读」。用这个时间戳让
+/// COM 激活器在窗口内退让，避免「先精确切到 A，又被切到 B」。
+#[cfg(target_os = "windows")]
+static LAST_CLICK_MS: AtomicI64 = AtomicI64::new(0);
+
+/// 记一笔「进程内刚处理了这次点击」（`show_owned` 判定为用户点击后立即调用）
+#[cfg(target_os = "windows")]
+pub(crate) fn mark_click_handled() {
+    LAST_CLICK_MS.store(crate::telemetry::now_ms(), Ordering::SeqCst);
+}
+
+/// `window_ms` 内是否刚在进程内处理过点击（`toast_activator` 去重用）
+#[cfg(target_os = "windows")]
+pub(crate) fn click_handled_within(window_ms: i64) -> bool {
+    let last = LAST_CLICK_MS.load(Ordering::SeqCst);
+    last != 0 && crate::telemetry::now_ms() - last < window_ms
+}
 
 /// 一次运行结束的提醒（由前端 `finishWorking()` 触发 —— 两种引擎共用的唯一收口）
 ///
@@ -162,18 +185,91 @@ fn show_via_plugin(app: &AppHandle, title: Option<&str>, preview: Option<&str>) 
     builder.show().is_ok()
 }
 
-/// 声明**进程**的 AppUserModelID（Windows，启动时调一次）
+/// MSIX 清单里 `<Application Id="...">` 的值
 ///
-/// 通知的归属（名称 / 图标，以及点击后的激活路由）都按 AUMID 找应用：**安装版**由安装器
-/// 把同一个 AUMID 写进开始菜单快捷方式（`System.AppUserModel.ID`），这里再把进程也声明成同一个，
-/// 让 Windows 认得「这条通知属于 Virlen」。AUMID 的唯一真源是 `tauri.conf.json` 的 `identifier`
-/// —— Rust 侧不再养第二份身份字符串。
+/// 打包进程里，`CreateToastNotifierWithId` 收到的字符串会被平台当成「包内的 AppId」，
+/// 最终 AUMID = `<PackageFamilyName>!<AppId>` —— 所以必须与
+/// `scripts/msix/AppxManifest.xml.template` 的 `Application Id` 逐字一致
+/// （单测 `package_app_id_matches_manifest` 直接读清单核对）。
+#[cfg(any(target_os = "windows", test))]
+const PACKAGE_APP_ID: &str = "App";
+
+/// 传给 `CreateToastNotifierWithId` 的应用标识（**通知归属的唯一真源**）
 ///
-/// 失败不影响通知：安装版里快捷方式已带 AUMID；dev / 免安装 exe 本来就没有，
-/// `show_owned` 会回退插件通道（与既有行为一致）。
+/// - **打包（MSIX）安装版**：传清单里的 `Application Id`（`"App"`）—— 平台会补全成
+///   `<PackageFamilyName>!App`，正是系统注册的那个入口（WNP 日志：
+///   `已使用以下参数注册应用程序: ... [AppUserModelId] JianWeichen.virlen_xxx!App`）。
+/// - **未打包（dev / NSIS·MSI 安装）**：传 `identifier`，安装器把同一字符串写进
+///   快捷方式的 `System.AppUserModel.ID`。
+///
+/// ⚠️ **踩过的坑（有实机证据）**：打包版传 `identifier` 时，平台把它补成
+/// `<PFN>!JianWeichen.virlen`，而系统里**只注册了** `<PFN>!App` —— 通知于是
+/// 「投递成功」（WNP 日志 `Id=3052 已将具有通知跟踪 ID ... 的 Toast 传送到 ...`）
+/// 却**永远不显示**，且 `CreateToastNotifierWithId` **不报错**、也不会回退插件通道。
+/// 现象就是「托盘红点正常、系统通知永远没有」。
+///
+/// ⚠️ 这里传**裸 AppId**而不是拼好的 `<PFN>!App`：平台对打包进程会自己补前缀，
+/// 裸值在「无条件补」与「仅未限定才补」两种规则下得到同一个结果（更稳）。
+pub fn toast_app_id(app: &AppHandle) -> String {
+    #[cfg(target_os = "windows")]
+    if is_packaged() {
+        return PACKAGE_APP_ID.to_string();
+    }
+    app.config().identifier.clone()
+}
+
+/// 当前进程是否运行在 MSIX 包上下文里
+#[cfg(target_os = "windows")]
+pub fn is_packaged() -> bool {
+    package_family_name().is_some()
+}
+
+/// 当前进程所属包的 PackageFamilyName；未打包返回 `None`
+///
+/// 用 `GetCurrentPackageFamilyName` 而不是 `GetCurrentApplicationUserModelId`：
+/// 后者读的是**进程** AUMID，可能被 `SetCurrentProcessExplicitAppUserModelID` 改过。
+#[cfg(target_os = "windows")]
+fn package_family_name() -> Option<String> {
+    use windows::core::PWSTR;
+    use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS};
+    use windows::Win32::Storage::Packaging::Appx::GetCurrentPackageFamilyName;
+
+    unsafe {
+        // 两次调用套路：第一次只要长度（必然 ERROR_INSUFFICIENT_BUFFER）；
+        // 未打包时返回 APPMODEL_ERROR_NO_PACKAGE(15700)，据此判定「不是打包版」
+        let mut len = 0u32;
+        if GetCurrentPackageFamilyName(&mut len, None) != ERROR_INSUFFICIENT_BUFFER || len == 0 {
+            return None;
+        }
+        let mut buffer = vec![0u16; len as usize];
+        if GetCurrentPackageFamilyName(&mut len, Some(PWSTR(buffer.as_mut_ptr()))) != ERROR_SUCCESS {
+            return None;
+        }
+        // `len` 含结尾 NUL
+        buffer.truncate((len as usize).saturating_sub(1));
+        String::from_utf16(&buffer).ok()
+    }
+}
+
+/// 声明**进程**的 AppUserModelID（Windows，启动时调一次；仅限未打包场景）
+///
+/// 通知的归属（名称 / 图标，以及点击后的激活路由）都按 AUMID 找应用：**未打包安装版**由
+/// 安装器把 AUMID 写进开始菜单快捷方式（`System.AppUserModel.ID`），这里再把进程声明成
+/// 同一个，让 Windows 认得「这条通知属于 Virlen」。
+///
+/// ⚠️ **打包版直接跳过**：包清单已经决定了进程身份（入口 `App`），再覆盖成 `identifier`
+/// 只会让「进程 AUMID」与「通知 AUMID」分叉（本次排查正是踩在这个分叉上）。
+/// 包上下文里这个 API 本来也多半只会失败，跳过而不是报错。
 pub fn init_app_identity(app: &AppHandle) {
     #[cfg(target_os = "windows")]
     {
+        if is_packaged() {
+            crate::telemetry::track(
+                "tray.aumid",
+                json!({ "skipped": "packaged", "toast_app_id": toast_app_id(app) }),
+            );
+            return;
+        }
         use std::os::windows::ffi::OsStrExt;
 
         let identifier = app.config().identifier.clone();
@@ -184,7 +280,10 @@ pub fn init_app_identity(app: &AppHandle) {
         let hr = unsafe {
             windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(wide.as_ptr())
         };
-        crate::telemetry::track("tray.aumid", json!({ "ok": hr >= 0, "hr": hr }));
+        crate::telemetry::track(
+            "tray.aumid",
+            json!({ "ok": hr >= 0, "hr": hr, "aumid": identifier }),
+        );
     }
     #[cfg(not(target_os = "windows"))]
     let _ = app;
@@ -196,8 +295,8 @@ pub fn init_app_identity(app: &AppHandle) {
 /// **丢掉**（`spawn` + `let _ =`），而 Windows 的点击是**进程内**投递
 /// （`tauri-winrt-notification` 在 `show()` 里 `toast_template.Activated(handler)`）——
 /// handle 一丢，事件到达 channel 后没人接收，用户看到的现象就是「点通知完全没反应」。
-/// 另外：非打包场景不会因为没有 COM 激活器而启动新进程（实测：点完连窗口都不出现），
-/// 所以「靠新进程 + 单实例回调」那条路兜不住。
+/// 另外：**非打包**场景没有清单也就没有 COM 激活器（`toast_activator` 只在打包安装版
+/// 被系统调用），点完连窗口都不出现 —— 所以「靠新进程 + 单实例回调」那条路兜不住。
 ///
 /// 自持 handle 的额外收益：**知道这条通知对应哪个会话** ⇒ 点击后精确切过去，
 /// 不用像托盘左键那样只能猜「最早那条未读」。
@@ -209,9 +308,9 @@ fn show_owned(
     preview: Option<&str>,
 ) -> Option<bool> {
     let mut notification = notify_rust::Notification::new();
-    // AUMID 必须与开始菜单快捷方式里的一致，否则 `CreateToastNotifierWithId`
-    // 找不到归属应用，`show()` 直接报错（dev / 免安装 exe 就是这种情况）
-    notification.app_id(&app.config().identifier);
+    // ⚠️ 必须走 `toast_app_id`（打包版 = 清单的 Application Id，平台会补成 `<PFN>!App`）：
+    // 传 identifier 会被补成 `<PFN>!identifier`，系统没这个入口 → 通知投递成功但永不显示
+    notification.app_id(&toast_app_id(app));
     notification.summary(
         title
             .filter(|t| !t.is_empty())
@@ -241,6 +340,9 @@ fn show_owned(
                 if !clicked {
                     return;
                 }
+                // 记一笔「进程内已处理」：同一次点击若同时触发 COM 激活
+                // （打包版有清单），让 `toast_activator` 不要再切「最早未读」
+                mark_click_handled();
                 super::show_main_window(&app, true);
                 super::activate_session(&app, &session_id, "notification_click");
             });
@@ -289,6 +391,35 @@ mod tests {
         assert!(!is_user_click(&NotificationResponse::Closed(
             CloseReason::Dismissed
         )));
+    }
+
+    /// 「进程内刚处理过点击」的去重窗口（`toast_activator` 依此退让）
+    ///
+    /// 没点过（时间戳 0）或窗口为 0 都不算「刚点过」—— 否则「通知超时消失」
+    /// 这类不该算点击的路径也会污染标记。
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn click_dedup_window_marks_only_after_click() {
+        use super::{click_handled_within, mark_click_handled};
+
+        assert!(!click_handled_within(0));
+        mark_click_handled();
+        assert!(click_handled_within(60_000));
+        assert!(!click_handled_within(0));
+    }
+
+    /// AUMID 的第二半（`<PackageFamilyName>!<Application Id>`）必须与 MSIX 清单一致
+    ///
+    /// ⚠️ 对不上就等于「通知发送成功但被 shell 静默丢弃」，不看这个单测根本发现不了。
+    #[test]
+    fn package_app_id_matches_manifest() {
+        use super::PACKAGE_APP_ID;
+
+        let manifest = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../scripts/msix/AppxManifest.xml.template"
+        ));
+        assert!(manifest.contains(&format!("Application Id=\"{PACKAGE_APP_ID}\"")));
     }
 
     #[test]
