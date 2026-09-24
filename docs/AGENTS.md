@@ -33,7 +33,7 @@
 | 能力域 | 说明 |
 |---|---|
 | **多 Provider** | OpenAI 兼容 / Anthropic / Gemini；支持自定义 Base URL、自定义 Header、`reasoningEffort` |
-| **Function Calling** | 文件读写、命令执行、网页抓取、搜索、视觉分析、知识库、会话消息检索共 9 大类 27 个工具 |
+| **Function Calling** | 文件读写、命令执行、网页抓取、搜索、视觉分析、知识库、会话消息检索、任务规划共 10 大类 28 个工具 |
 | **端侧视觉引擎** | `quasivision` ONNX 纯本地推理：UI 元素检测 / PP-OCR v5 / YOLOE-26n 物体检测 / 图标分类（图片不出本机） |
 | **Skill 机制** | `SKILL.md` 领域知识包，注入系统提示词 + 源码目录只读可查 |
 | **多层安全** | 路径黑白名单、权限三态、跨平台 Shell 沙盒、工具风暴防护（StormBreaker） |
@@ -184,6 +184,7 @@ iteration_verify_pass / iteration_verify_fail / iteration_max_exceeded / iterati
 | Rust → JS | `agent:tool-request` | 未原生化工具交 JS 执行，JS 用 `toolRegistry` 跑完回 `agent_tool_response`（`payload.__kind: value \| error \| interaction`） |
 | Rust → JS | `agent:user-interaction-request` | 用户交互（`user_choice` / 终端内确认）与**内部查询**（`sandbox_rule_check`，无 UI：命令是否命中「忽略沙盒命令」规则，见 §5.4），走 `chat-service` 注册的 session handler → `agent_user_interaction_response` |
 | Rust → JS | `agent:provider-request` | 未原生化的 Provider（目前 Gemini）交 JS，流式用 `agent_provider_stream_event` 逐条回传，结束 `agent_provider_stream_done` |
+| Rust → JS | `agent:round-boundary` | **轮次边界注入**：上一批工具已回复、下一次 LLM 请求尚未发出时回问 JS「有没有要注入的消息」（AI 回复期间用户**已应用**的任务清单变更），JS 用 `agent_round_boundary_response` 回 `{ messages }`；Rust 落库后追加进本轮消息列表，模型**这一轮**就能看到（超时 5s 兼底，失败降级为不注入）。TS 引擎同一时机走 `SendMessageOptions.onRoundBoundary`（铁律 1） |
 | JS → Rust | `agent_send_message` / `agent_cancel` / `agent_get_run_snapshot` / `agent_clear_run_snapshot` / `agent_dispose` / `agent_kill_command` / `pty_*` | 生命周期、取消、终端交互 |
 
 **未原生化的部分**（委托 TS）：`compressContext`、`generateTitle`、Gemini Provider，以及 web/vision/skill/system/chat 类工具。
@@ -195,7 +196,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 
 - **注册制**：一律 `toolRegistry.register(definition, executor)`；不写全局函数表。
 - **定义与执行器分离**；`definition.description` 可为**惰性函数**（序列化给 LLM 时才求值，用于平台相关的动态描述，如 `execute_command` 的平台缓存）。
-- **9 大分类 / 27 个工具**（`src/domain/tools/category.ts` ↔ `src/infrastructure/tools/<分类>/`）：
+- **10 大分类 / 28 个工具**（`src/domain/tools/category.ts` ↔ `src/infrastructure/tools/<分类>/`）：
 
   | 分类 id | 目录 | 工具数 | 代表工具 |
   |---|---|:--:|---|
@@ -207,6 +208,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
   | `vision` | `tools/vision/` | 1 | vision_analyze |
   | `skill` | `tools/skill/` | 2 | list_skills / read_skill_source |
   | `system` | `tools/system/` | 2 | get_current_time / user_choice |
+  | `plan` | `tools/plan/` | 1 | todo_write（任务清单；用户可在标题栏浮层里直接编辑） |
   | `chat` | `tools/chat/` | 2 | list_messages / read_messages |
 
 - **原生化（18 个）**：`file`(8) + `search`(2) + `execute`(2) + `knowledge_base`(6)，分发在 `src-tauri/src/agent/native_tools/mod.rs::is_native_tool / execute_native_tool`。其余自动走 JS 桥。
@@ -472,6 +474,7 @@ pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 | 改上下文压缩 / 标题生成 | `src/domain/engine/compress-context.ts`（模式分派：`ai` LLM 摘要 / `raw` 正文压缩）+ `compress-raw.ts`（正文压缩的本地渲染）/ `generate-title.ts`（Rust 侧委托 TS）；产物在消息列表里的呈现：`ui/pages/chat/components/message/summary-message.tsx`（提示条 + 摘要弹窗） |
 | 改会话持久化 | `src-tauri/src/session_db/`（`sqlite.rs` / `schema.rs` / `commands.rs`）+ `src/infrastructure/sessionRepo/` + `src/ui/store/sessionStore.ts` |
 | 加 / 改工具 | `src/infrastructure/tools/<分类>/<工具>.ts`（+ 分类 `common.ts`、分类 `index.ts`）、`src/domain/tools/category.ts`、`src-tauri/src/agent/native_tools/<分类>/<工具>.rs`（+ `mod.rs` 分发）、`src/ui/pages/chat/components/tool-call/` |
+| 改任务清单 / todo_write | `src/domain/todo/*`（纯函数）、`src/infrastructure/tools/plan/todo-write.ts`、`src/services/todo-service.ts`（落地，用户清单逐字生效）、`src/ui/store/todoDraftStore.ts`（回复期间的本地草稿；**关浮层丢弃未应用的草稿**）、`src/ui/pages/chat/components/todo/*`（标题栏入口 + 浮层；编辑期间 AI 又写清单 → 「放弃编辑并同步 / 覆盖更新」二选一） |
 | 改原生工具路径校验 / 参数取值 | `src-tauri/src/agent/native_tools/common.rs`（`resolve_safe_path` / `is_path_allowed` / `arg_*`）；路径展开共用 `src-tauri/src/sandbox/paths.rs::expand_user_path` |
 | 改文件读写底层 | `src-tauri/src/file_ops.rs` + `src/utils/diff.ts` |
 | 改搜索 | `src-tauri/src/search.rs`（文件搜索）、`src/domain/search/*` + `src/infrastructure/search-providers/*`（网络搜索） |

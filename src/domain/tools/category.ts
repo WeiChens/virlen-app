@@ -12,6 +12,7 @@
  *   vision       → tools/vision/
  *   skill        → tools/skill/
  *   system       → tools/system/
+ *   plan         → tools/plan/
  *   chat         → tools/chat/
  * 新增工具时请同时更新此处分类与对应的实现目录。
  */
@@ -96,6 +97,13 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     toolNames: [
       'get_current_time',
       'user_choice',
+    ],
+  },
+  {
+    id: 'plan',
+    label: '任务规划',
+    toolNames: [
+      'todo_write',
     ],
   },
   {

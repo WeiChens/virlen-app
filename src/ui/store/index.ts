@@ -6,6 +6,7 @@
  *  - sessionStore.ts           → 会话 CRUD
  *  - messages.ts               → 已合并至 services/chat-service.ts
  *  - sessionRuntimeStore.ts    → 会话运行时 RuntimeState
+ *  - todoDraftStore.ts         → 任务清单「本地草稿」（AI 回复期间的用户编辑）
  *  - settingStore.ts           → 全局设置
  *  - securityStore.ts          → 安全配置
  *  - agentStore.ts             → Agent CRUD
@@ -39,6 +40,18 @@ export {
   dropSessionRuntime,
 } from './sessionRuntimeStore'
 export type { SessionRuntime } from './sessionRuntimeStore'
+export {
+  todoDraftState,
+  getTodoDraft,
+  hasTodoDraft,
+  isTodoDraftCommitted,
+  markTodoDraftCommitted,
+  ensureTodoDraft,
+  updateTodoDraftItems,
+  clearTodoDraft,
+  dropTodoDrafts,
+} from './todoDraftStore'
+export type { TodoDraft } from './todoDraftStore'
 export { settingsState, resolveDefaultWorkspace } from './settingStore'
 export type {
   SettingsStore,

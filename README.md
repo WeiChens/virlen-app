@@ -250,6 +250,7 @@ Virlen comes with a rich set of tools for the AI Agent:
 |                 | `list_knowledge_base_documents` | List documents in a knowledge base                     |
 |                 | `get_knowledge_base_document` | Get the full content of a document                       |
 |                 | `delete_knowledge_base_document` | Delete a document from a knowledge base             |
+| **Task List**   | `todo_write`           | Create/update the task list (full replace, up to 50 items; editable from the title bar) |
 | **Chat History**| `list_messages`        | List compressed-away messages (paged timeline, keyword filter)    |
 |                 | `read_messages`        | Read compressed-away messages by id + window                      |
 

@@ -10,6 +10,7 @@
  *   vision/        → vision（视觉，1 个）
  *   skill/         → skill（技能，2 个）
  *   system/        → system（系统，2 个）
+ *   plan/          → plan（任务规划，1 个）
  *   chat/          → chat（会话消息，2 个）
  *
  * 每个分类目录内：一个工具一个文件 + common.ts（分类内公共函数）；
@@ -24,5 +25,6 @@ export const toolsInit = async () => {
   await import('@/infrastructure/tools/vision')
   await import('@/infrastructure/tools/skill')
   await import('@/infrastructure/tools/system')
+  await import('@/infrastructure/tools/plan')
   await import('@/infrastructure/tools/chat')
 }

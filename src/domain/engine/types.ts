@@ -46,6 +46,18 @@ export interface SendMessageOptions {
   iterationGoal?: string
   /** 迭代模式最大重试次数，默认 5（仅在 iterationGoal 设置时生效） */
   maxIterations?: number
+  /**
+   * **轮次边界钩子**：上一批工具的 tool_result 已合并、下一次 LLM 请求尚未发出时调用。
+   *
+   * 用途：用户在 AI 回复期间「应用」的任务清单变更，必须在这次请求之前进入
+   * 消息列表，模型才能在这一轮里看到；返回值会被追加进本轮消息列表。
+   * 抛错 / 返回空数组都视为「无可注入」。
+   *
+   * ⚠️ Rust 引擎不用这个回调（消息列表在 Rust 内存里，前端改不了），
+   * 它走桥接 `agent:round-boundary` → `agent_round_boundary_response`，
+   * 语义对齐但通道不同（铁律 1，见 docs/AGENTS.md §5.1）。
+   */
+  onRoundBoundary?: (sessionId: string) => Message[] | Promise<Message[]>
 }
 
 /**

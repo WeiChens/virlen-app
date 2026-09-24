@@ -45,6 +45,22 @@ import {
   truncateText,
 } from '@/utils/telemetry'
 import { sanitizeLoneSurrogates } from '@/utils/text'
+import { flushTodoDraft, flushTodoDraftMessages } from '@/services/todo-service'
+import { dropTodoDrafts } from '@/ui/store/todoDraftStore'
+import { setRoundBoundaryHandler } from '@/services/rust-engine'
+
+/**
+ * 轮次边界处理器（工具回复后、下一次 LLM 请求前）。
+ *
+ * 落地「AI 回复期间用户已应用」的清单变更并返回消息：
+ * - TS 引擎直接经 `SendMessageOptions.onRoundBoundary` 调用；
+ * - Rust 引擎经桥接 `agent:round-boundary` 向这里回问（见 rust-engine.ts）。
+ *
+ * 注册在此（而不是 rust-engine → todo-service 直接 import）避免循环依赖。
+ */
+setRoundBoundaryHandler((sessionId) =>
+  flushTodoDraftMessages(sessionId, 'round_boundary'),
+)
 
 /**
  * 创建新会话
@@ -135,6 +151,8 @@ export async function deleteSessions(ids: string[]): Promise<number> {
   // 删会话同时丢弃它的运行时状态（working / 红点 / pendingContent），
   // 否则这些条目会永久挂在已经不存在会话 id 上
   dropSessionRuntime(ids)
+  // 任务清单草稿也挂在会话 id 上，一并丢弃（否则这些条目会永久残留）
+  dropTodoDrafts(ids)
   return count
 }
 
@@ -258,6 +276,8 @@ export async function sendMessage(
       onEvent: createEventHandler(sessionId, sessionRt, events, traceId),
       onUserInteraction: toolInteract.handler,
       maxToolRounds: settingsState.value.maxToolRounds,
+      // 轮次边界：工具回复后、下一次 LLM 请求前，把用户已应用的清单变更注入消息列表
+      onRoundBoundary: (sid) => flushTodoDraftMessages(sid, 'round_boundary'),
     })
   } catch (e: any) {
     markErrored(sessionId)
@@ -350,6 +370,8 @@ export async function resumePausedRun(
       onEvent: createEventHandler(sessionId, sessionRt, events, traceId),
       onUserInteraction: toolInteract.handler,
       maxToolRounds: settingsState.value.maxToolRounds,
+      // 恢复后同样从轮次边界注入（草稿可能是暂停期间用户应用的）
+      onRoundBoundary: (sid) => flushTodoDraftMessages(sid, 'round_boundary'),
     })
   } catch (e: any) {
     markErrored(sessionId)
@@ -498,6 +520,8 @@ export async function sendMessageWithGoal(
       onEvent: createEventHandler(sessionId, sessionRt, events, traceId),
       onUserInteraction: toolInteract.handler,
       maxToolRounds: settingsState.value.maxToolRounds,
+      // 迭代模式：Verifier 反馈与工具轮次同样存在边界，同一时机注入
+      onRoundBoundary: (sid) => flushTodoDraftMessages(sid, 'round_boundary'),
     })
   } catch (e: any) {
     markErrored(sessionId)
@@ -519,6 +543,8 @@ export async function cancelMessage(sessionId: string): Promise<void> {
       phase: 'streaming',
     })
     await getEngine().cancel(sessionId)
+    // 用户点「停止」= 本轮结束：落地 AI 回复期间用户「已应用」的清单草稿
+    flushTodoDraft(sessionId, 'cancel')
   }
 }
 
@@ -549,6 +575,8 @@ export async function cancelPausedRun(sessionId: string): Promise<void> {
   }
   await getEngine().clearRunSnapshot(sessionId)
   await getEngine().cancel(sessionId)
+  // 暂停态下用户主动取消：同样视为「本轮结束」，落地「已应用」的清单草稿
+  flushTodoDraft(sessionId, 'cancel')
 }
 
 export async function getRunSnapshot(sessionId: string) {

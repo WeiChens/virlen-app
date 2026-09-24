@@ -21,6 +21,7 @@ import {
 } from './messages'
 import type { ChatServiceEvents } from './types'
 import { trayNotifyCompleted } from '@/services/tray-service'
+import { flushTodoDraft } from '@/services/todo-service'
 import { t } from '@/ui/i18n'
 import {
   track,
@@ -217,6 +218,12 @@ export function createEventHandler(
             pendingContent: '',
             streamingMessageId: null,
           })
+          // 本轮真正结束（非 paused）→ 落地用户在回复期间「已应用」的任务清单草稿。
+          // ⚠️ 只落地已应用的草稿：用户还在编辑（没点「应用变更」）的改动不算修改。
+          // ⚠️ paused 分支刻意不落地：本轮并未结束（等用户交互），草稿留到恢复后再合并。
+          // 放在下面整批落库之前：追加的 feedback 消息会一并被 TS 引擎路径落库。
+          // （落地结果不用单独广播：紧随其后的 onMessagesUpdate 已经带上这条新消息）
+          flushTodoDraft(sessionId, 'stream_end')
           events?.onStreamEnd?.(sessionId)
           events?.onMessagesUpdate?.(sessionId)
         }

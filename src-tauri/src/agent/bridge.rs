@@ -17,12 +17,24 @@
 //! - JS 流式回调中调用 `agent_provider_stream_event(requestId, event)`，结束后调用
 //!   `agent_provider_stream_done(requestId, result?, error?)`
 //! - 非流式：result = Message JSON；流式：result = null（事件已逐条送达）
+//!
+//! ## 轮次边界注入（Rust → JS）
+//! - Rust 在「上一批工具已回复、下一次 LLM 请求尚未发出」时发出
+//!   `agent:round-boundary` { requestId, sessionId }
+//! - JS 回 `agent_round_boundary_response(requestId, payload)`，
+//!   payload: { messages: Message[] }（无注入时为空数组）
+//! - 用途：用户在 AI 回复期间「应用」的任务清单变更，必须在**下一次请求之前**
+//!   进入消息列表，模型才能在这一轮里看到；否则要等整个循环结束、用户再说一句话才生效。
 
 use crate::agent::event_sink::EventSink;
 use crate::agent::types::Message;
+use crate::session_db::SessionRepo;
 use serde::Serialize;
 use std::collections::HashMap;
 use tokio::sync::{mpsc, oneshot, Mutex};
+
+/// 轮次边界回执超时 —— JS 侧没装监听器（前端版本不匹配）时不能拖死整个 agent 循环
+const ROUND_BOUNDARY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(5000);
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -58,6 +70,14 @@ pub struct ProviderRequestPayload {
     pub stream: bool,
 }
 
+/// 轮次边界注入请求（Rust → JS）
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoundBoundaryRequestPayload {
+    pub request_id: String,
+    pub session_id: String,
+}
+
 /// Provider 桥接流消息（JS → Rust）
 #[derive(Debug)]
 pub enum ProviderBridgeMsg {
@@ -71,6 +91,8 @@ pub struct AgentBridgeState {
     pub pending_tools: Mutex<HashMap<String, oneshot::Sender<serde_json::Value>>>,
     pub pending_interactions: Mutex<HashMap<String, oneshot::Sender<serde_json::Value>>>,
     pub pending_providers: Mutex<HashMap<String, mpsc::Sender<ProviderBridgeMsg>>>,
+    /// 轮次边界请求（Rust → JS，等待回执）
+    pub pending_round_boundaries: Mutex<HashMap<String, oneshot::Sender<serde_json::Value>>>,
     /// 运行中的原生 execute_command（toolCallId → 取消令牌），支持前端 stop 按钮
     #[allow(dead_code)]
     pub running_commands: Mutex<HashMap<String, crate::agent::cancellation::CancellationToken>>,
@@ -205,6 +227,43 @@ impl AgentBridgeState {
 
         Ok(rx)
     }
+
+    /// 请求 JS 在轮次边界注入消息（工具回复后、下一次 LLM 请求前），等待回执
+    ///
+    /// ⚠️ 带超时：JS 侧若没装监听器（前端版本不匹配）就永远不会回执，
+    /// 这里必须自己兜底 —— 否则整个 agent 循环会卡在这一步。
+    pub async fn request_round_boundary(
+        &self,
+        sink: &dyn EventSink,
+        session_id: &str,
+    ) -> Result<serde_json::Value, String> {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let (tx, rx) = oneshot::channel();
+        self.pending_round_boundaries
+            .lock()
+            .await
+            .insert(request_id.clone(), tx);
+
+        let payload = RoundBoundaryRequestPayload {
+            request_id: request_id.clone(),
+            session_id: session_id.to_string(),
+        };
+        sink.emit_raw(
+            "agent:round-boundary",
+            serde_json::to_value(&payload).map_err(|e| e.to_string())?,
+        );
+
+        let outcome = tokio::time::timeout(ROUND_BOUNDARY_TIMEOUT, rx).await;
+        match outcome {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(_)) => Err("轮次边界请求被丢弃".to_string()),
+            Err(_) => {
+                // 超时：主动摘下挂起槽位，避免 JS 迟到的回执写进已无用的通道
+                self.pending_round_boundaries.lock().await.remove(&request_id);
+                Err("轮次边界请求超时".to_string())
+            }
+        }
+    }
 }
 
 // ==================== 回执处理（Tauri 命令调用） ====================
@@ -250,6 +309,61 @@ pub async fn handle_provider_stream_done(
             .send(ProviderBridgeMsg::Done { result, error })
             .await;
     }
+}
+
+/// JS 轮次边界回执（要注入本轮消息列表的消息，无则空数组）
+pub async fn handle_round_boundary_response(
+    state: &AgentBridgeState,
+    request_id: &str,
+    payload: serde_json::Value,
+) {
+    if let Some(tx) = state.pending_round_boundaries.lock().await.remove(request_id) {
+        let _ = tx.send(payload);
+    }
+}
+
+// ==================== 轮次边界注入 ====================
+
+/// 轮次边界注入（工具回复后、下一次 LLM 请求发出前调用）
+///
+/// 向 JS 索取「AI 回复期间用户已应用的任务清单变更」等消息，追加进 `messages`，
+/// 让紧接着的那次请求就能看到 —— 而不是等整个 agent 循环结束、用户再说一句话才生效。
+///
+/// ⚠️ 任何失败（超时 / 解析失败 / 写库失败）都降级为「不注入」：
+/// 只丢失一次提前生效的机会，绝不影响本轮执行。
+/// 与 TS 引擎 `SendMessageOptions.onRoundBoundary` 是同一语义（铁律 1），
+/// 只是 Rust 侧多一次 IPC 往返（消息列表在 Rust 内存里，前端无法直接改）。
+pub async fn inject_round_boundary_messages(
+    state: &AgentBridgeState,
+    sink: &dyn EventSink,
+    repo: &dyn SessionRepo,
+    session_id: &str,
+    messages: &mut Vec<Message>,
+) {
+    let payload = match state.request_round_boundary(sink, session_id).await {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let injected = parse_round_boundary_messages(&payload);
+    if injected.is_empty() {
+        return;
+    }
+    // JS 侧已落库一次（messages.id 主键 + `ON CONFLICT DO UPDATE`，幂等），
+    // 这里再落一次是兜底：保证「进入本轮上下文」与「在库里」两件事同时成立。
+    if let Err(e) = repo.append_messages_if_alive(session_id, &injected).await {
+        eprintln!("[session_db] 写入轮次边界注入消息失败: {}", e);
+    }
+    messages.extend(injected);
+}
+
+/// 解析 JS 回执 → 要注入的消息列表（非法项直接跳过）
+pub fn parse_round_boundary_messages(payload: &serde_json::Value) -> Vec<Message> {
+    let Some(arr) = payload.get("messages").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|v| serde_json::from_value::<Message>(v.clone()).ok())
+        .collect()
 }
 
 /// 将 JS 工具回执转换为统一的 Rust 侧结果
@@ -323,5 +437,33 @@ impl BridgeInteractionResult {
                 ui_data: payload.get("uiData").cloned().filter(|v| !v.is_null()),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_round_boundary_messages_skips_invalid_items() {
+        let payload = json!({
+            "messages": [
+                { "id": "m1", "role": "feedback", "content": "【用户更新了任务清单】", "timestamp": 1 },
+                { "bogus": true },
+                "not-an-object"
+            ]
+        });
+        let msgs = parse_round_boundary_messages(&payload);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].id, "m1");
+        assert_eq!(msgs[0].role, "feedback");
+    }
+
+    #[test]
+    fn parse_round_boundary_messages_tolerates_missing_field() {
+        assert!(parse_round_boundary_messages(&json!({})).is_empty());
+        assert!(parse_round_boundary_messages(&json!({ "messages": null })).is_empty());
+        assert!(parse_round_boundary_messages(&json!({ "messages": [] })).is_empty());
     }
 }

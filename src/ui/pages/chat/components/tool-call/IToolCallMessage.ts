@@ -21,6 +21,7 @@ import ReadSkillSourceMessage from './ReadSkillSourceMessage'
 import KnowledgeBaseMessage from './KnowledgeBaseMessage'
 import MkdirMessage from './MkdirMessage'
 import QueryMessagesMessage from './QueryMessagesMessage'
+import TodoWriteMessage from './TodoWriteMessage'
 
 export interface IToolCallMessage {
   getToolName(): string
@@ -66,6 +67,7 @@ register(new CopyMoveFileMessage())
 register(new ListSkillsMessage())
 register(new ReadSkillSourceMessage())
 register(new MkdirMessage())
+register(new TodoWriteMessage())
 registerMulti(
   [
     'search_knowledge_base',

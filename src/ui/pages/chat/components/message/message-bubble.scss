@@ -376,3 +376,29 @@
     }
   }
 }
+
+// ==================== 任务清单变更（feedback，消息流只留一行） ====================
+// 清单内容不在消息流里展示：用户层面任务只有一份，统一在标题栏「任务清单」浮层里看
+// （见 components/todo/）。正文仍是全量清单文本，供模型读取与右键复制/删除。
+// 注意：这条链路没有 `.message-bubble` 外壳（默认 16px 20px 内边距），
+// 左右边距必须自己给，否则胶囊会贴死消息区左边缘。
+.message-todo-notice {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  max-width: calc(100% - 40px);
+  margin: 4px 20px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--warning-color, #d97706);
+  background: rgba(217, 119, 6, 0.08);
+  color: var(--warning-color, #d97706);
+  font-size: var(--font-size-sm, 12.5px);
+  animation: fadeIn 0.2s ease;
+
+  .ico {
+    font-size: 12px;
+    line-height: 1;
+  }
+}

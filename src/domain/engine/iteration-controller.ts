@@ -76,6 +76,8 @@ export class IterationController {
     reasoningEffort?: string
     persistSnapshot: (sessionId: string, run: any) => void
     clearSnapshot: (sessionId: string) => void
+    /** 轮次边界钩子（见 SendMessageOptions.onRoundBoundary） */
+    onRoundBoundary?: (sessionId: string) => Message[] | Promise<Message[]>
   }): Promise<{ completed: boolean; messages: Message[] }> {
     const {
       goal,
@@ -92,6 +94,7 @@ export class IterationController {
       reasoningEffort,
       persistSnapshot,
       clearSnapshot,
+      onRoundBoundary,
     } = params
 
     const iterSession: IterationSession = {
@@ -114,6 +117,18 @@ export class IterationController {
       // 检查是否被取消
       if (abortController.signal.aborted) {
         return { completed: false, messages }
+      }
+
+      // 轮次边界：上一批工具的 tool_result 已合并、下一次 LLM 请求尚未发出。
+      // 注入「AI 回复期间用户已应用的任务清单变更」，让紧接着的这次请求就能看到
+      // （与普通模式 #executeToolLoop 同一时机，也与 Rust iteration.rs 同步 —— 铁律 1）。
+      if (onRoundBoundary) {
+        try {
+          const injected = await onRoundBoundary(sessionId)
+          for (const msg of injected) messages.push(msg)
+        } catch {
+          // 注入失败不影响本轮执行
+        }
       }
 
       // ===== 1. LLM Round + 工具执行（共享编排） =====

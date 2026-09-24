@@ -224,6 +224,17 @@ pub async fn agent_user_interaction_response(
     Ok(())
 }
 
+/// JS 轮次边界回执（工具回复后、下一次 LLM 请求前要注入的消息，无则空数组）
+#[tauri::command]
+pub async fn agent_round_boundary_response(
+    state: tauri::State<'_, Arc<AgentBridgeState>>,
+    request_id: String,
+    payload: serde_json::Value,
+) -> Result<(), String> {
+    bridge::handle_round_boundary_response(state.inner().as_ref(), &request_id, payload).await;
+    Ok(())
+}
+
 /// JS Provider 流事件（流式桥）
 #[tauri::command]
 pub async fn agent_provider_stream_event(

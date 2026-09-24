@@ -17,8 +17,8 @@ import {
 } from '@/domain/tools/category'
 
 describe('TOOL_CATEGORIES', () => {
-  it('应该包含 9 个分类', () => {
-    expect(TOOL_CATEGORIES).toHaveLength(9)
+  it('应该包含 10 个分类', () => {
+    expect(TOOL_CATEGORIES).toHaveLength(10)
   })
 
   it('每个分类都应该有 id、label 和 toolNames', () => {
@@ -79,6 +79,13 @@ describe('TOOL_CATEGORIES', () => {
     expect(sysCat!.toolNames).toContain('get_current_time')
   })
 
+  it('任务规划分类应包含 todo_write', () => {
+    const planCat = TOOL_CATEGORIES.find((c) => c.id === 'plan')
+    expect(planCat).toBeDefined()
+    expect(planCat!.label).toBe('任务规划')
+    expect(planCat!.toolNames).toEqual(['todo_write'])
+  })
+
   it('会话消息分类应包含 list_messages 和 read_messages', () => {
     const chatCat = TOOL_CATEGORIES.find((c) => c.id === 'chat')
     expect(chatCat).toBeDefined()
@@ -101,6 +108,7 @@ describe('getCategoryId', () => {
     expect(getCategoryId('mkdir')).toBe('file')
     expect(getCategoryId('list_messages')).toBe('chat')
     expect(getCategoryId('read_messages')).toBe('chat')
+    expect(getCategoryId('todo_write')).toBe('plan')
   })
 
   it('未知工具应返回 undefined', () => {

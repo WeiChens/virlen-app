@@ -67,6 +67,7 @@ export class AgentEngine implements AgentEnginePort {
       maxToolRounds = 30,
       iterationGoal,
       maxIterations = 5,
+      onRoundBoundary,
     } = options
 
     const sessionId = session.id
@@ -142,6 +143,7 @@ export class AgentEngine implements AgentEnginePort {
           reasoningEffort,
           persistSnapshot: (sid, run) => this.persistRunSnapshot(sid, run),
           clearSnapshot: (sid) => this.clearRunSnapshot(sid),
+          onRoundBoundary,
         })
 
         // 将迭代过程中新增的消息合并回 currentMessages
@@ -163,6 +165,7 @@ export class AgentEngine implements AgentEnginePort {
           skills,
           effectiveMaxTokens,
           reasoningEffort,
+          onRoundBoundary,
         })
       }
 
@@ -258,6 +261,8 @@ export class AgentEngine implements AgentEnginePort {
     skills?: string[]
     effectiveMaxTokens: number
     reasoningEffort?: string
+    /** 轮次边界钩子（见 SendMessageOptions.onRoundBoundary） */
+    onRoundBoundary?: (sessionId: string) => Message[] | Promise<Message[]>
   }): Promise<boolean> {
     const {
       session,
@@ -272,6 +277,7 @@ export class AgentEngine implements AgentEnginePort {
       skills,
       effectiveMaxTokens,
       reasoningEffort,
+      onRoundBoundary,
     } = params
 
     let rounds = remainingRounds
@@ -280,6 +286,18 @@ export class AgentEngine implements AgentEnginePort {
     while (rounds > 0) {
       rounds--
       roundIndex++
+
+      // 轮次边界：上一批工具的 tool_result 已合并、下一次 LLM 请求尚未发出。
+      // 这里把「AI 回复期间用户已应用的任务清单变更」注入消息列表，让紧接着的
+      // 这次请求就能看到 —— 否则要等整个循环结束，用户得再说一句话才生效。
+      if (onRoundBoundary) {
+        try {
+          const injected = await onRoundBoundary(sessionId)
+          for (const msg of injected) currentMessages.push(msg)
+        } catch {
+          // 注入失败只是丢失一次提前生效的机会，不影响本轮执行
+        }
+      }
       const result = await executeLLMRound({
         session,
         provider,

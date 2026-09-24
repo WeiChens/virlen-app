@@ -2,7 +2,7 @@
  * message-bubble — 消息气泡
  * 区分 user/assistant/tool 角色，渲染 Markdown、图片、tool calls、底部操作栏（复制/时间/编辑）
  */
-import { t } from '@/ui/i18n'
+import { t, tpl } from '@/ui/i18n'
 import { type Message } from '@/types'
 import CopySvg from '@/ui/components/icons/CopySvg'
 import EditSvg from '@/ui/components/icons/EditSvg'
@@ -15,6 +15,7 @@ import { memo, useRef, useState } from 'react'
 import CollapsedSvg from '@/ui/components/icons/CollapsedSvg'
 import ThinkSvg from '@/ui/components/icons/ThinkSvg'
 import { ToolCallMessage, ToolCallGroup } from '../tool-call'
+import { changeBrief } from '../todo/brief'
 import SummaryMessage from './summary-message'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 import { settingsState } from '@/ui/store'
@@ -288,6 +289,22 @@ function MessageBubble({
           />
         )}
       </>
+    )
+  }
+
+  // 任务清单变更（feedback 消息）：消息流只留一行 ——
+  // 清单内容统一在标题栏的「任务清单」浮层里看（用户层面任务只有一份，见 components/todo/）。
+  // 注意：正文（content）里仍是全量清单文本，给模型读，右键复制/删除照旧可用。
+  if (isFeedback && message.uiData?.type === 'todo') {
+    return (
+      <div className="message-todo-notice">
+        <span className="ico">✎</span>
+        <span>
+          {tpl('你更新了任务清单 · $__brief__', {
+            brief: changeBrief(message.uiData.changes),
+          })}
+        </span>
+      </div>
     )
   }
 

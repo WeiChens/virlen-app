@@ -86,6 +86,12 @@ pub async fn run_iteration(
             return Ok((false, messages));
         }
 
+        // 轮次边界：上一批工具的 tool_result 已合并、下一次 LLM 请求尚未发出。
+        // 注入「AI 回复期间用户已应用的任务清单变更」（与 execute_tool_loop 同一时机，
+        // 也与 TS 引擎 iteration-controller 同一时机 —— 铁律 1）。
+        super::bridge::inject_round_boundary_messages(bridge, sink, repo, session_id, &mut messages)
+            .await;
+
         // ===== 1. LLM Round + 工具执行 =====
         let result = execute_llm_round(ExecuteLlmRoundParams {
             session,

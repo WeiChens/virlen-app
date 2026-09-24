@@ -1,0 +1,501 @@
+/**
+ * 任务清单 UI 样式 — 标题栏入口 + 浮层编辑器 + 消息流一行胶囊
+ *
+ * 类名统一 `todo-*`；颜色优先用主题变量（`ui/styles/theme.css`），
+ * 未定义的语义色（警告/危险）带 fallback 色值。
+ */
+.todo-entry {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+
+  .todo-entry-btn {
+    position: relative;
+
+    &.active {
+      color: var(--primary-color, #3b6ef6);
+      background: var(--hover-bg, #f0f0f0);
+    }
+
+    // 已应用（等本轮结束生效）：橙色内描边
+    &.drafting {
+      color: var(--warning-color, #d97706);
+      box-shadow: inset 0 0 0 1.5px var(--warning-color, #d97706);
+    }
+
+    // 编辑中（未应用）：更弱的提示 —— 清单权威还没变
+    &.has-draft {
+      color: var(--text-secondary, #888);
+      box-shadow: inset 0 0 0 1.5px var(--border-color, #e5e5e5);
+    }
+  }
+}
+
+.todo-badge {
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--error-color, #dc2626);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  border: 1.5px solid var(--bg-primary, #fff);
+  pointer-events: none;
+
+  &.draft {
+    background: var(--warning-color, #d97706);
+  }
+}
+
+.todo-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60;
+  width: 680px;
+  max-width: calc(100vw - 32px);
+  padding: 12px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 10px;
+  background: var(--bg-primary, #fff);
+  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.14);
+  text-align: left;
+}
+
+.todo-popover-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+
+  .todo-popover-title {
+    font-size: var(--font-size-md, 14px);
+    font-weight: 600;
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  .todo-close {
+    border: none;
+    background: transparent;
+    color: var(--text-secondary, #888);
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+
+    &:hover {
+      background: var(--hover-bg, #f0f0f0);
+      color: var(--text-primary, #1a1a1a);
+    }
+  }
+}
+
+.todo-source {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  font-size: var(--font-size-xs, 11px);
+  font-weight: 600;
+  color: var(--text-secondary, #888);
+  white-space: nowrap;
+
+  &.user {
+    color: var(--warning-color, #d97706);
+    border-color: var(--warning-color, #d97706);
+  }
+
+  &.draft {
+    color: var(--error-color, #dc2626);
+    border-color: var(--error-color, #dc2626);
+  }
+}
+
+.todo-flex-1 {
+  flex: 1;
+}
+
+.todo-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+
+  .todo-progress-track {
+    flex: 1;
+    height: 5px;
+    border-radius: 3px;
+    background: var(--border-color-light, #eceff3);
+    overflow: hidden;
+  }
+
+  .todo-progress-fill {
+    height: 100%;
+    background: var(--success-color, #16a34a);
+    transition: width 0.2s;
+  }
+
+  .todo-progress-text {
+    font-size: var(--font-size-xs, 11px);
+    color: var(--text-secondary, #888);
+    white-space: nowrap;
+  }
+}
+
+.todo-rows {
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.todo-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 5px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+
+  &:hover {
+    border-color: var(--border-color, #e5e5e5);
+    background: var(--hover-bg, #fafbfc);
+  }
+
+  // 正在拖拽的那一行：抬起来一点，给「跟着鼠标走」的反馈
+  &.is-dragging {
+    position: relative;
+    z-index: 1;
+    border-color: var(--primary-color, #3b6ef6);
+    background: var(--bg-primary, #fff);
+    box-shadow: 0 4px 14px rgba(16, 24, 40, 0.16);
+  }
+
+  // 拖拽排序手柄（2 列 × 3 行圆点用背景画，不依赖字体里的 ⠿ / ⋮ 字形）
+  .todo-handle {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-tertiary, #999);
+    cursor: grab;
+    opacity: 0.3;
+    transition: opacity 0.15s;
+
+    &::before {
+      content: '';
+      display: block;
+      width: 8px;
+      height: 12px;
+      margin: 0 auto;
+      background-image: radial-gradient(currentColor 1.1px, transparent 1.2px);
+      background-size: 4px 4px;
+    }
+
+    &:hover {
+      opacity: 0.85;
+    }
+
+    &:active {
+      cursor: grabbing;
+    }
+  }
+
+  &:hover .todo-handle {
+    opacity: 0.55;
+  }
+
+  &.is-done .todo-input,
+  &.is-done .todo-title {
+    text-decoration: line-through;
+    color: var(--text-secondary, #888);
+  }
+
+  // 任务名两态（展示态 .todo-title / 编辑态 .todo-input）共用同一套盒子度量：
+  // 高度、内边距、边框、字号必须一致，否则点一下切换就跳版。
+  .todo-input,
+  .todo-title {
+    // 任务名固定 420px 起步（空间不够时才允许收缩），剩余宽度给备注列
+    flex: 0 1 420px;
+    min-width: 0;
+    height: 26px;
+    padding: 3px 6px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    font: inherit;
+    font-size: var(--font-size-sm, 13px);
+    color: var(--text-primary, #1a1a1a);
+    box-sizing: border-box;
+  }
+
+  .todo-input {
+    &:hover {
+      border-color: var(--border-color, #e5e5e5);
+      background: var(--bg-primary, #fff);
+    }
+
+    &:focus {
+      outline: none;
+      border-color: var(--primary-color, #3b6ef6);
+      background: var(--bg-primary, #fff);
+    }
+  }
+
+  // 展示态：唯读形态占据任务名列，**鼠标移入**时超长才横向来回滚动（跑马灯）——
+  // 不悬停就不动，长清单不会满屏都在滚；滚多长 / 滚多久由 TodoEditor 按溢出像素
+  // 算好，通过 --todo-marquee-* 传入。
+  .todo-title {
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    cursor: text;
+
+    &:hover {
+      border-color: var(--border-color, #e5e5e5);
+      background: var(--bg-primary, #fff);
+    }
+
+    &.is-empty .todo-title-text {
+      color: var(--text-tertiary, #999);
+    }
+
+    // flex: 0 0 auto —— 文本项不收缩，才能超出容器、被量到溢出
+    .todo-title-text {
+      flex: 0 0 auto;
+      white-space: nowrap;
+    }
+  }
+
+  // 鼠标移入**这一行**（不一定非要停在文字上）就滚，移出即回到开头。
+  // 长清单里每行都自己在滚会很吵，所以不做常驻动画。
+  &:hover .todo-title.is-overflowing .todo-title-text {
+    animation: todo-title-marquee var(--todo-marquee-dur, 6s) ease-in-out
+      infinite alternate;
+  }
+
+  .todo-status {
+    width: 23px;
+    height: 23px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    border: 1.5px solid var(--border-color, #e5e5e5);
+    background: var(--bg-primary, #fff);
+    color: var(--text-secondary, #888);
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+
+    &.progress {
+      border-color: var(--warning-color, #d97706);
+      color: var(--warning-color, #d97706);
+    }
+
+    &.done {
+      border-color: var(--success-color, #16a34a);
+      background: var(--success-color, #16a34a);
+      color: #fff;
+    }
+  }
+
+  .todo-note {
+    // 备注列吃掉剩余宽度（任务名固定后由它自适应），太窄时给个下限
+    flex: 1 1 auto;
+    min-width: 96px;
+    padding: 3px 6px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    font: inherit;
+    font-size: var(--font-size-xs, 11px);
+    color: var(--text-secondary, #888);
+
+    &:hover {
+      border-color: var(--border-color, #e5e5e5);
+      background: var(--bg-primary, #fff);
+    }
+
+    &:focus {
+      outline: none;
+      border-color: var(--primary-color, #3b6ef6);
+      background: var(--bg-primary, #fff);
+    }
+  }
+
+  .todo-row-actions {
+    display: flex;
+    gap: 1px;
+    flex: 0 0 auto;
+
+    button {
+      width: 21px;
+      height: 21px;
+      border: none;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--text-secondary, #888);
+      font-size: 11px;
+      line-height: 1;
+      cursor: pointer;
+
+      &:hover {
+        background: var(--hover-bg, #eef0f3);
+        color: var(--text-primary, #1a1a1a);
+      }
+
+      &.danger:hover {
+        color: var(--error-color, #dc2626);
+      }
+    }
+  }
+}
+
+/* 「AI 已更新任务清单」提示 —— 用户编辑期间清单权威被换过。
+   用主色而非警告色：这不是错误，只是「该你选一下了」。 */
+.todo-ai-updated {
+  margin-bottom: 8px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--primary-color, #3b6ef6);
+  background: color-mix(in srgb,
+      var(--primary-color, #3b6ef6) 8%,
+      transparent);
+  font-size: var(--font-size-xs, 11.5px);
+  line-height: 1.5;
+
+  .todo-ai-updated-head {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .todo-ai-updated-title {
+    font-weight: 600;
+    white-space: nowrap;
+    color: var(--primary-color, #3b6ef6);
+  }
+
+  .todo-ai-updated-brief {
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  .todo-ai-updated-tip {
+    margin-top: 3px;
+    color: var(--text-secondary, #888);
+  }
+}
+
+.todo-empty {
+  padding: 10px 4px;
+  font-size: var(--font-size-sm, 13px);
+  color: var(--text-secondary, #888);
+}
+
+.todo-warn {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--warning-color, #d97706);
+  background: rgba(217, 119, 6, 0.08);
+  color: var(--warning-color, #d97706);
+  font-size: var(--font-size-xs, 11.5px);
+  line-height: 1.5;
+}
+
+.todo-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-color, #e5e5e5);
+  flex-wrap: wrap;
+}
+
+.todo-dirty {
+  font-size: var(--font-size-xs, 11.5px);
+  color: var(--text-secondary, #888);
+
+  // 已应用（等本轮结束生效）比「未应用」更醒目
+  &.committed {
+    color: var(--warning-color, #d97706);
+  }
+}
+
+.todo-btn {
+  padding: 5px 11px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 7px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1a1a1a);
+  font: inherit;
+  font-size: var(--font-size-sm, 12.5px);
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--hover-bg, #f2f4f7);
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  &.primary {
+    background: var(--primary-color, #3b6ef6);
+    border-color: var(--primary-color, #3b6ef6);
+    color: #fff;
+  }
+
+  &.ghost {
+    border-style: dashed;
+    color: var(--text-secondary, #888);
+  }
+}
+
+// ==================== 任务名跑马灯 ====================
+// 幅度（--todo-marquee-shift）与时长（--todo-marquee-dur）由 TodoEditor 按真实溢出像素
+// 写在元素 style 上；这里只负责动画本身。
+@keyframes todo-title-marquee {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(var(--todo-marquee-shift, 0));
+  }
+}
+
+// 尊重「减少动态效果」：不滚动，任务名靠 420px 宽度兜底
+@media (prefers-reduced-motion: reduce) {
+  .todo-row:hover .todo-title.is-overflowing .todo-title-text {
+    animation: none;
+  }
+}
+
+// ==================== 拖拽排序进行中 ====================
+// 手指 / 指针离开手柄后仍然要「抓着」的反馈，并禁止拖拽期间选中文本。
+.todo-editor.is-dragging {
+  user-select: none;
+
+  .todo-row .todo-handle {
+    cursor: grabbing;
+    opacity: 0.85;
+  }
+}
+
+/* 消息流里「你更新了任务清单」一行胶囊的样式在 message 目录的 message-bubble.scss ——
+   它属于消息渲染，不属于本浮层组件。 */

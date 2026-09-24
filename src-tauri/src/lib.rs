@@ -379,6 +379,7 @@ pub fn run() {
             agent::agent_dispose,
             agent::agent_tool_response,
             agent::agent_user_interaction_response,
+            agent::agent_round_boundary_response,
             agent::agent_provider_stream_event,
             agent::agent_provider_stream_done,
             // 会话持久化（SQLite 直落）

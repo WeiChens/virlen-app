@@ -39,7 +39,23 @@ type InteractionHandler = (
   data: Record<string, any>,
 ) => Promise<any>
 
+/** 轮次边界处理器（chat-service 注册）—— 返回要注入下一次 LLM 请求的消息 */
+type RoundBoundaryHandler = (sessionId: string) => Message[]
+
 const sessionHandlers = new Map<string, InteractionHandler>()
+let roundBoundaryHandler: RoundBoundaryHandler | null = null
+
+/**
+ * 注册轮次边界处理器。
+ *
+ * ⚠️ 用注册而不是直接 import `services/todo-service`：本模块已被 todo-service 引用
+ * （`isRustEngineEnabled`），直接反向 import 会形成循环依赖。
+ */
+export function setRoundBoundaryHandler(
+  handler: RoundBoundaryHandler | null,
+): void {
+  roundBoundaryHandler = handler
+}
 
 export function registerSessionToolHandler(
   sessionId: string,
@@ -77,6 +93,11 @@ function ensureBridgeStarted(): Promise<void> {
     })
     await listen('agent:user-interaction-request', (e) => {
       handleUserInteractionRequest(e.payload as any).catch(() => {})
+    })
+    // Rust 在「工具回复后、下一次 LLM 请求前」回问：有没有要注入本次请求的消息
+    // （AI 回复期间用户已应用的任务清单变更）
+    await listen('agent:round-boundary', (e) => {
+      handleRoundBoundary(e.payload as any).catch(() => {})
     })
     await listen('agent:provider-request', (e) => {
       handleProviderRequest(e.payload as any).catch(() => {})
@@ -185,6 +206,37 @@ function serializeToolResult(result: any): Record<string, any> {
     return { __kind: 'value', value: result.content, uiData: result.uiData }
   }
   return { __kind: 'value', value: String(result) }
+}
+
+/**
+ * 轮次边界回执：Rust 在「工具回复后、下一次 LLM 请求前」回问有没有要注入的消息。
+ *
+ * 无论成败都立即回执（失败回空数组），让 Rust 不再等待 —— 超时兜底在 Rust 侧。
+ */
+async function handleRoundBoundary(payload: {
+  requestId: string
+  sessionId: string
+}): Promise<void> {
+  const { requestId, sessionId } = payload
+  let messages: Message[] = []
+  try {
+    messages = roundBoundaryHandler ? roundBoundaryHandler(sessionId) : []
+  } catch (e: any) {
+    trackError('error.bridge', e, {
+      props: {
+        direction: 'js2rust',
+        kind: 'round-boundary',
+        request_id: requestId,
+      },
+    })
+  }
+  await invoke('agent_round_boundary_response', {
+    requestId,
+    // 孤立代理（被截断的半个 emoji）经 JSON.stringify 会变成 `\ud83d`，
+    // 而 Rust 侧 serde_json 要求代理对成对 → 整个 invoke 直接失败（然后走 5s 超时）。
+    // 注入内容含用户手写的任务正文，必须与发送消息同一条防线。
+    payload: { messages: sanitizeLoneSurrogates(messages) },
+  }).catch(() => {})
 }
 
 async function handleUserInteractionRequest(payload: {

@@ -327,6 +327,19 @@ impl AgentEngine {
         while rounds > 0 {
             rounds -= 1;
             round_index += 1;
+
+            // 轮次边界：上一批工具的 tool_result 已合并、下一次 LLM 请求尚未发出。
+            // 把「AI 回复期间用户已应用的任务清单变更」注入消息列表，让紧接着的这次
+            // 请求就能看到（与 TS 引擎 `onRoundBoundary` 同一时机，铁律 1）。
+            super::bridge::inject_round_boundary_messages(
+                self.bridge.as_ref(),
+                self.sink.as_ref(),
+                self.repo.as_ref(),
+                session_id,
+                current_messages,
+            )
+            .await;
+
             let result = match execute_llm_round(ExecuteLlmRoundParams {
                 session,
                 provider,

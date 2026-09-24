@@ -38,6 +38,7 @@ import ChatInput, {
   type SkillAttachment,
 } from './components/input'
 import ProviderPrompt from './components/modals/provider-prompt'
+import TodoEntry from './components/todo/TodoEntry'
 import SearchDialog from './components/search'
 
 import { useToolUI } from './components/tool-ui'
@@ -899,6 +900,10 @@ function ChatView() {
               type="button">
               <SearchSvg />
             </button>
+            {/* 任务清单：唯一一份清单的入口（未完成数红点徽章 + 浮层编辑） */}
+            {chatState.value.currentSessionId && (
+              <TodoEntry sessionId={chatState.value.currentSessionId} />
+            )}
             <WorkspaceDisplay
               value={
                 chatState.value.currentSessionId

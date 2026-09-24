@@ -252,6 +252,7 @@ Virlen 未霖 内置了丰富的工具供 AI Agent 调用：
 |              | `list_knowledge_base_documents` | 列出知识库中的文档                                     |
 |              | `get_knowledge_base_document` | 获取文档完整内容                                          |
 |              | `delete_knowledge_base_document` | 删除知识库中的文档                                     |
+| **任务规划** | `todo_write`           | 创建/更新任务清单（全量替换、最多 50 项；用户可在标题栏浮层里直接编辑） |
 | **聊天历史** | `list_messages`        | 列出已被上下文压缩掉的历史消息（分页时序、关键词过滤）          |
 |              | `read_messages`        | 按 id + 窗口读取被压缩掉的历史消息正文                          |
 

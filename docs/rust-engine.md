@@ -319,6 +319,7 @@ pub trait SessionRepo: Send + Sync {
 | `web_search` | `infrastructure/tools/web/web-search.ts` + `search-providers/`（tavily/searxng/bocha） | 多搜索提供商适配 |
 | `list_skills` | `infrastructure/tools/skill/list-skills.ts` | 技能扫描 |
 | `read_skill_source` | `infrastructure/tools/skill/read-skill-source.ts` | 读取技能源码目录 |
+| `todo_write` | `infrastructure/tools/plan/todo-write.ts` | 任务清单：无 IO / 无副作用，状态随 `tool_result` 消息的 `content`（给模型）+ `uiData`（给 UI）落库；两侧共用同一份语义（用户可在标题栏浮层里编辑，见 `services/todo-service.ts`） |
 | `vision_analyze`（工具分发） | `infrastructure/tools/vision/vision-analyze.ts` | 分发走 JS 桥；底层 `vision_service` 已是 Rust Tauri 命令 |
 | `list_messages` / `read_messages`（消息查询） | `infrastructure/tools/chat/*.ts` | 分发走 JS 桥（两引擎共用一份实现）；**底层查询已是 Rust 命令** `cmd_get_message_window` / `cmd_get_message_timeline` |
 
