@@ -14,6 +14,7 @@ import {
 import { v4 } from '@/utils/uuid'
 import type { Agent, Message, MessageContent, Session } from '@/types'
 import { DEFAULT_SESSION_PARAMS } from '@/types'
+import type { CompressMode } from '@/domain/engine'
 import { settingsState } from '@/ui/store'
 import { toolService } from '@/services/tool-service'
 import { showToast } from '@/ui/components/shared/Toast'
@@ -589,10 +590,13 @@ export async function getRunSnapshot(sessionId: string) {
  * @param events 事件回调。压缩会**整体替换**消息列表，而消息列表的数据源是
  *   `chat-view` 的本地 state（不是 store），因此必须通过 `onMessagesUpdate`
  *   通知它重新同步 —— 否则列表仍显示压缩前的消息，要切会话才刷新。
+ * @param modeOverride 本次压缩指定方式（token 环右键菜单用）；不传则用设置里的
+ *   `contextCompressMode`（左键点击走这条）。
  */
 export async function compressContext(
   sessionId: string,
   events?: ChatServiceEvents,
+  modeOverride?: CompressMode,
 ) {
   try {
     sessionRuntimeState.setCompacting(sessionId, true)
@@ -611,8 +615,10 @@ export async function compressContext(
       0,
     )
     const compressStart = Date.now()
-    // 压缩方式由设置决定：ai = LLM 摘要 / raw = 正文压缩（本地渲染，不发请求）
-    const mode = settingsState.value.contextCompressMode ?? 'ai'
+    // 压缩方式：调用方指定优先（右键菜单），否则用设置：ai = LLM 摘要 /
+    // raw = 正文压缩（本地渲染，不发请求）
+    const mode =
+      modeOverride ?? settingsState.value.contextCompressMode ?? 'ai'
     const result = await getEngine().compressContext(session, allMessages, mode)
     // 兜底：summary / 历史里若含孤立代理（半个 emoji），先清洗再写内存 + 落库。
     // 孤立代理经 JSON.stringify → Rust serde_json 会直接报

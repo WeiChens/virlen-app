@@ -248,6 +248,39 @@ describe('ContextMenu 组件', () => {
 
     await act(async () => root.unmount())
   })
+
+  it('placement="top-left"：菜单以右下角贴锚点（用于「贴在按钮左上方」）', async () => {
+    const items = [{ key: 'a', label: 'A', onClick: vi.fn() }]
+    const { root } = await render(
+      <ContextMenu
+        position={{ x: 400, y: 300 }}
+        placement="top-left"
+        onClose={vi.fn()}
+        items={items}
+      />,
+    )
+
+    const el = document.querySelector('.context-menu') as HTMLElement
+    // jsdom 不做布局（offsetWidth/Height 恒为 0）→ 先手工给个尺寸，再让定位 effect 重跑一次
+    Object.defineProperty(el, 'offsetWidth', { value: 120, configurable: true })
+    Object.defineProperty(el, 'offsetHeight', { value: 80, configurable: true })
+    await act(async () => {
+      root.render(
+        <ContextMenu
+          position={{ x: 401, y: 301 }}
+          placement="top-left"
+          onClose={vi.fn()}
+          items={items}
+        />,
+      )
+    })
+
+    // 锚点 = 菜单右下角 ⇒ 菜单整体落在锚点左上方（仍受视口钳制）
+    expect(el.style.left).toBe(`${401 - 120}px`)
+    expect(el.style.top).toBe(`${301 - 80}px`)
+
+    await act(async () => root.unmount())
+  })
 })
 
 describe('菜单项工厂', () => {

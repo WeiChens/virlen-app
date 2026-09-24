@@ -46,10 +46,12 @@ pub fn notify_completed(
     let state = app.state::<TrayState>();
     let is_error = status == Some("error");
     let enabled = state.notify_on_complete.load(Ordering::SeqCst);
+    let force_active = state.force_window_active.load(Ordering::SeqCst);
 
-    // 用户已经看到了（前端上报 / 窗口可见且聚焦）→ 不打扰，也不进未读队列
+    // 用户已经看到了（前端上报 / 窗口可见且聚焦）→ 不打扰，也不进未读队列；
+    // 「强制激活窗口」开着且窗口还在时，由前端把窗口拎到前台，这里不再重复推通知
     let (visible, focused) = window_focus(app);
-    let should_remind = decide_remind(enabled, viewing, visible, focused);
+    let should_remind = decide_remind(enabled, viewing, visible, focused, force_active);
 
     let mut notification_ok = false;
     let mut attention_ok = false;
@@ -79,6 +81,7 @@ pub fn notify_completed(
             "session_id": telemetry::hash_id(session_id),
             "status": if is_error { "error" } else { "success" },
             "shown": should_remind,
+            "force_active": force_active,
             // ⚠️ notification 只代表「插件调用成功」，**不代表系统真的弹了卡片**（见模块头注释）
             "notification": notification_ok,
             "attention": attention_ok,
@@ -90,19 +93,32 @@ pub fn notify_completed(
 
 /// 是否需要提醒（纯函数，便于单测）
 ///
-/// - 用户关掉了「完成提醒」→ 不提醒；
-/// - 用户已经看到了这条回复（`viewing`，或窗口可见且聚焦）→ 不打扰，也不进未读队列。
+/// 推送条件：`!active && (force_active == false || 窗口已关闭)`，其中
+/// `active = 窗口可见且聚焦`、`窗口已关闭 = !visible`（隐藏到托盘；托盘还在，见模块头注释）。
+///
+/// - 用户关掉了「完成提醒」（`enabled = false`）→ 一律不提醒；
+/// - 用户已经看到了这条回复（`viewing`，或窗口可见且聚焦）→ 不打扰，也不进未读队列；
+/// - `force_active`（设置里的「强制激活窗口」）开着且窗口还在（仅失焦）→ 由**前端**
+///   把窗口拎到前台，这里不再重复推系统通知；只有窗口已关到托盘时才推。
 ///
 /// ⚠️ `viewing` 是**前端**才能给出的信号（只有它知道 `currentSessionId`），
 /// 与 `visible && focused` 是**两回事**：后者只能说「用户在看这个应用」，
 /// 前者才能说「用户在看**这条回复所在的会话**」。
+///
+/// ⚠️ `force_active` 与窗口状态是**两个独立来源**：开关在前端设置里（`tray_sync_settings` 同步来），
+/// 窗口可见性由 Rust 自己看 —— 两者必须在这里合流，否则会出现
+/// 「强制激活已把窗口拉到前台，却又弹一条系统通知」的重复打扰。
 pub(crate) fn decide_remind(
     enabled: bool,
     viewing: bool,
     visible: bool,
     focused: bool,
+    force_active: bool,
 ) -> bool {
-    enabled && !viewing && !(visible && focused)
+    if !enabled || viewing || (visible && focused) {
+        return false;
+    }
+    !(force_active && visible)
 }
 
 /// 投递系统通知：标题优先用会话标题，正文优先用 AI 回复预览
@@ -130,17 +146,32 @@ mod tests {
     #[test]
     fn remind_matrix() {
         // 窗口隐藏（关到托盘后台跑完）→ 必须提醒：这是托盘功能的主场景
-        assert!(decide_remind(true, false, false, false));
+        assert!(decide_remind(true, false, false, false, false));
         // 可见但失焦（用户在别的应用里）→ 提醒
-        assert!(decide_remind(true, false, true, false));
+        assert!(decide_remind(true, false, true, false, false));
         // 可见且聚焦 → 不打扰
-        assert!(!decide_remind(true, false, true, true));
+        assert!(!decide_remind(true, false, true, true, false));
         // 前端上报「正在看这条回复」→ 不打扰（否则红点清不掉）
-        assert!(!decide_remind(true, true, true, true));
+        assert!(!decide_remind(true, true, true, true, false));
         // 即使窗口状态读成隐藏/失焦，只要前端说在看，也不打扰
-        assert!(!decide_remind(true, true, false, false));
+        assert!(!decide_remind(true, true, false, false, false));
         // 用户关掉「完成提醒」开关 → 一律不提醒
-        assert!(!decide_remind(false, false, false, false));
-        assert!(!decide_remind(false, false, true, false));
+        assert!(!decide_remind(false, false, false, false, false));
+        assert!(!decide_remind(false, false, true, false, false));
+    }
+
+    /// 「强制激活窗口」开着时：窗口还在（只是失焦）→ 交给前端强制激活，不推通知；
+    /// 窗口已关到托盘 → 仍要推（这也是托盘后台工作的主场景）
+    #[test]
+    fn force_active_skips_remind_only_when_window_still_open() {
+        // 窗口可见但失焦 → 前端会强制激活，不再重复推
+        assert!(!decide_remind(true, false, true, false, true));
+        // 可见且聚焦（用户就在前台）→ 不推
+        assert!(!decide_remind(true, false, true, true, true));
+        // 窗口已关闭（隐藏到托盘，托盘还在）→ 推
+        assert!(decide_remind(true, false, false, false, true));
+        // 前置闸门仍然优先：用户正看着 / 关掉了提醒开关
+        assert!(!decide_remind(true, true, false, false, true));
+        assert!(!decide_remind(false, false, false, false, true));
     }
 }

@@ -95,6 +95,9 @@ async function pushSettings(): Promise<void> {
   inv('tray_sync_settings', {
     closeToTray: settingsState.value.closeToTray,
     notifyOnComplete: settingsState.value.notifyOnComplete,
+    // 「强制激活窗口」：开着时窗口只是失焦就不另推系统通知（由 chat-view 强制激活），
+    // 只有窗口已关到托盘才推 —— 判定在 Rust 侧 `notify::decide_remind`
+    forceWindowActive: settingsState.value.forceWindowActive,
     labels: trayLabels(),
   })
 }
@@ -112,6 +115,8 @@ export function initTrayService(): void {
       [
         settingsState.value.closeToTray,
         settingsState.value.notifyOnComplete,
+        // 完成提醒的推送条件依赖它（见 pushSettings），必须在依赖里才能跟着重推
+        settingsState.value.forceWindowActive,
         // 语言也在依赖里：切语言要重推文案（`t()` 读的是 i18n 模块内的 currentLang）
         settingsState.value.language,
       ] as const,

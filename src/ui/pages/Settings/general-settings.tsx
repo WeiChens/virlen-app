@@ -404,7 +404,7 @@ function GeneralSettings() {
             <span className="label-text">{t('强制激活窗口')}</span>
             <span className="label-desc">
               {t(
-                'AI 回复完成或需要用户选择时，若窗口未激活则自动将窗口置为活动状态',
+                'AI 回复完成或需要用户选择时，若窗口未激活则自动将窗口置为活动状态\n窗口还在时不再额外推送系统通知；窗口已关闭（托盘还在）时仍会推送',
               )}
             </span>
           </div>

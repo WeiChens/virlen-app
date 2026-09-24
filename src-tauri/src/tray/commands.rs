@@ -24,6 +24,9 @@ pub fn tray_set_working(
 
 /// 设置同步（启动 + 变更时由前端推送；全部项都不传 = 无操作）
 ///
+/// `force_window_active`：前端「强制激活窗口」开关。开着时窗口只要还在（只是失焦），
+/// 前端会自己把窗口拎到前台，Rust 侧就不再多推一条系统通知（见 `notify::decide_remind`）。
+///
 /// `labels` 是 i18n 后的托盘菜单/提示文案补丁 —— 托盘菜单是原生菜单，
 /// 语言资源在前端，Rust 侧只负责替换文案里的 `$__count__` 占位符。
 #[tauri::command]
@@ -31,9 +34,16 @@ pub fn tray_sync_settings(
     app: AppHandle,
     close_to_tray: Option<bool>,
     notify_on_complete: Option<bool>,
+    force_window_active: Option<bool>,
     labels: Option<super::TrayLabelsPatch>,
 ) {
-    super::sync_settings(&app, close_to_tray, notify_on_complete, labels);
+    super::sync_settings(
+        &app,
+        close_to_tray,
+        notify_on_complete,
+        force_window_active,
+        labels,
+    );
 }
 
 /// 一次运行结束的提醒（由 `chat/event-handler.ts::finishWorking` 触发）

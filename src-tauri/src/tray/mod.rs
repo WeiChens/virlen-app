@@ -67,6 +67,9 @@ pub struct TrayState {
     pub(crate) close_to_tray: AtomicBool,
     /// 完成时是否提醒（Phase 2 由前端设置项推送）
     pub(crate) notify_on_complete: AtomicBool,
+    /// 「强制激活窗口」开关（前端设置项推送）—— 打开时窗口只要还在（只是失焦），
+    /// 就交给「强制激活」通道，不再推系统通知（见 `notify::decide_remind`）
+    pub(crate) force_window_active: AtomicBool,
     /// 托盘是否创建成功 —— 失败时「关闭窗口」必须回退成真退出
     pub(crate) available: AtomicBool,
     /// 正在真正退出 —— 唯一豁免 `prevent_exit` 的开关
@@ -96,6 +99,7 @@ impl Default for TrayState {
             attention: Mutex::new(Vec::new()),
             close_to_tray: AtomicBool::new(true),
             notify_on_complete: AtomicBool::new(true),
+            force_window_active: AtomicBool::new(false),
             available: AtomicBool::new(false),
             quitting: AtomicBool::new(false),
             icon_dot: AtomicBool::new(false),
@@ -328,15 +332,21 @@ pub fn show_main_window(app: &AppHandle, focus: bool) {
 /// `show_main_window` 三种情况都覆盖；顺带 `refresh_tray` 把 tooltip 从
 /// 「已隐藏到托盘，右键可退出」纠正回来。
 ///
+/// ⚠️ **「点击系统通知」也走这里**：Windows 桌面端 toast 无法把点击回传给已运行的进程
+/// （`tauri-plugin-notification` 把 `show()` 丢进 spawn 并丢弃 handle，根本拿不到 Activated 事件，
+/// 且非打包场景 notify-rust 不设 AUMID），系统只能**按 AUMID 启动一个新进程**——
+/// 新进程被单实例插件拦下后回调到这里。所以「点通知 → 回到对应会话」必须在这里补：
+/// 显完窗口若有未读就切过去（`activate_next_unread`），否则用户还得自己找是哪个会话。
 pub fn activate_main_window(app: &AppHandle, reason: &str) {
     if app.try_state::<TrayState>().is_none() {
         return;
     }
     let (visible, _) = window_focus(app);
     show_main_window(app, true);
+    let switched = activate_next_unread(app, reason);
     crate::telemetry::track(
         "app.activate_window",
-        json!({ "reason": reason, "was_visible": visible }),
+        json!({ "reason": reason, "was_visible": visible, "switched_session": switched }),
     );
 }
 
@@ -346,11 +356,12 @@ pub fn set_working(app: &AppHandle, session_id: &str, working: bool, title: Opti
     refresh_tray(app);
 }
 
-/// 前端推送设置（启动 + 变更；三项都不传 = 无操作）
+/// 前端推送设置（启动 + 变更；全部项都不传 = 无操作）
 pub fn sync_settings(
     app: &AppHandle,
     close_to_tray: Option<bool>,
     notify_on_complete: Option<bool>,
+    force_window_active: Option<bool>,
     labels: Option<TrayLabelsPatch>,
 ) {
     let state = app.state::<TrayState>();
@@ -359,6 +370,9 @@ pub fn sync_settings(
     }
     if let Some(v) = notify_on_complete {
         state.notify_on_complete.store(v, Ordering::SeqCst);
+    }
+    if let Some(v) = force_window_active {
+        state.force_window_active.store(v, Ordering::SeqCst);
     }
     if let Some(patch) = labels {
         apply_labels(state.inner(), patch);
@@ -545,6 +559,44 @@ fn clear_attention_in(state: &TrayState, session_id: Option<&str>) {
     }
 }
 
+/// 取出「最早那条未读」并从队列清掉（含合并窗口记录）
+///
+/// ⚠️ 先把 `attention` 的锁放掉再动 `notify_log` —— Rust 的 `Mutex` 不可重入，
+/// 直接复用 `clear_attention_in` 会自己锁自己（死锁）。
+fn take_earliest_unread(state: &TrayState) -> Option<String> {
+    let id = {
+        let mut list = state.attention.lock().unwrap();
+        if list.is_empty() {
+            return None;
+        }
+        list.remove(0)
+    };
+    // 用户马上就会看到它了，清掉去重记录 ⇒ 下次完成能重新提醒
+    state.notify_log.lock().unwrap().remove(&id);
+    Some(id)
+}
+
+/// 有未读就通知前端切到最早那条（返回是否切了）
+///
+/// 三个调用方语义相同，都是「用户此刻想看新回复」：
+/// - **点击系统通知**（Windows 走「新进程 → 单实例回调 → `activate_main_window`」）；
+/// - 托盘左键单击；
+/// - macOS 点 Dock / 双击 app（`RunEvent::Reopen`）、第二个实例启动。
+///
+/// 事件本身是 raw 事件（与 `pty_*` 同类），**不进 `AgentEventType`**（铁律 2）；
+/// 前端在 `tray-service` 里只改 `chatState.currentSessionId`，
+/// 消息懒加载由 `chat-view` 的外部入口兜底 effect 接住。
+fn activate_next_unread(app: &AppHandle, reason: &str) -> bool {
+    let state = app.state::<TrayState>();
+    let Some(session_id) = take_earliest_unread(state.inner()) else {
+        return false;
+    };
+    refresh_tray(app);
+    let _ = app.emit(EVENT_ACTIVATE, json!({ "sessionId": session_id }));
+    crate::telemetry::track("tray.activate_session", json!({ "reason": reason }));
+    true
+}
+
 /// 窗口可见 / 聚焦状态（窗口不存在时都算 false）
 pub(crate) fn window_focus(app: &AppHandle) -> (bool, bool) {
     match app.get_webview_window(MAIN_WINDOW) {
@@ -559,14 +611,6 @@ pub(crate) fn window_focus(app: &AppHandle) -> (bool, bool) {
 /// 左侧托盘图标被单击
 fn on_tray_left_click(app: &AppHandle) {
     let (visible, focused) = window_focus(app);
-    let next_unread = app
-        .state::<TrayState>()
-        .attention
-        .lock()
-        .unwrap()
-        .first()
-        .cloned();
-    let had_unread = next_unread.is_some();
 
     if visible && focused {
         // 已经在前台 → 最小化（托盘图标的常见 toggle 行为）
@@ -577,11 +621,7 @@ fn on_tray_left_click(app: &AppHandle) {
         show_main_window(app, true);
     }
 
-    if let Some(session_id) = next_unread {
-        clear_attention(app, Some(&session_id));
-        // 让前端切到该会话（raw 事件，不污染 AgentEventType —— 铁律 2）
-        let _ = app.emit(EVENT_ACTIVATE, json!({ "sessionId": session_id }));
-    }
+    let had_unread = activate_next_unread(app, "tray_click");
     crate::telemetry::track(
         "tray.show",
         json!({ "reason": "tray_click", "unread": had_unread, "focus": true }),
@@ -774,6 +814,26 @@ mod tests {
         clear_attention_in(&s, None);
         assert!(s.attention.lock().unwrap().is_empty());
         assert!(s.notify_log.lock().unwrap().is_empty());
+    }
+
+    /// 「切到最早那条未读」（托盘左键 / 点击系统通知）的取值语义
+    #[test]
+    fn take_earliest_unread_pops_fifo_and_resets_dedupe_log() {
+        let s = TrayState::default();
+        push_attention(&s, "s1");
+        push_attention(&s, "s2");
+
+        // FIFO：先完成的先切
+        assert_eq!(take_earliest_unread(&s).as_deref(), Some("s1"));
+        assert_eq!(s.attention.lock().unwrap().len(), 1);
+        // 去重记录一并清掉 ⇒ 同一会话立刻再完成仍能重新提醒
+        assert!(!s.notify_log.lock().unwrap().contains_key("s1"));
+        assert!(push_attention(&s, "s1"));
+
+        assert_eq!(take_earliest_unread(&s).as_deref(), Some("s2"));
+        assert_eq!(take_earliest_unread(&s).as_deref(), Some("s1"));
+        // 空队列 → None（调用方据此不切会话）
+        assert_eq!(take_earliest_unread(&s), None);
     }
 
     #[test]

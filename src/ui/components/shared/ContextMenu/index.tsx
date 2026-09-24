@@ -14,6 +14,8 @@
  *     不会误伤菜单项；也避免被兄弟节点的 stopPropagation 吃掉；
  *   - keydown 捕获 + stopPropagation：Esc 只关菜单，不再连带触发外层的 Esc
  *     （终端全屏、图片预览等都在 document 上听了 Esc，两处监听同时消费会「一按两动作」）。
+ *
+ * 展开方向由 `placement` 决定（默认右下）；需要「贴在按钮左上方」时传 `placement="top-left"`。
  */
 import {
   ReactNode,
@@ -53,6 +55,14 @@ export interface ContextMenuPosition {
   y: number
 }
 
+/**
+ * 菜单相对锚点的展开方向：
+ * - `bottom-right`（默认）：锚点就是鼠标位置，菜单向右下展开 —— 右键菜单的通用手感；
+ * - `top-left`：**锚点 = 菜单的右下角**，菜单向左上展开 —— 用于「贴在按钮左上方」
+ *   这类贴边场景（按钮本身就在视口边上，向右下展开会被钳回来、盖住按钮）。
+ */
+export type ContextMenuPlacement = 'bottom-right' | 'top-left'
+
 interface Props {
   position: ContextMenuPosition
   items: ContextMenuItem[]
@@ -60,6 +70,8 @@ interface Props {
   onClose: () => void
   /** 深色底场景（终端块）用深色皮肤，避免亮色菜单压在黑色终端上 */
   dark?: boolean
+  /** 展开方向（默认 `bottom-right`，即鼠标点向右下） */
+  placement?: ContextMenuPlacement
 }
 
 /**
@@ -72,6 +84,7 @@ export default function ContextMenu({
   items,
   onClose,
   dark,
+  placement = 'bottom-right',
 }: Props) {
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -94,21 +107,20 @@ export default function ContextMenu({
     }
   }, [onClose])
 
-  // 定位：先按右键坐标放，再按**实际尺寸**钳进视口（贴右边/下边时往回缩）
+  // 定位：先按展开方向放（`top-left` 时锚点是菜单右下角），
+  // 再按**实际尺寸**钳进视口（贴右/下边时往回缩）
   useLayoutEffect(() => {
     const el = menuRef.current
     if (!el) return
-    const x = Math.max(
-      8,
-      Math.min(position.x, window.innerWidth - el.offsetWidth - 8),
-    )
-    const y = Math.max(
-      8,
-      Math.min(position.y, window.innerHeight - el.offsetHeight - 8),
-    )
+    const w = el.offsetWidth
+    const h = el.offsetHeight
+    const rawX = placement === 'top-left' ? position.x - w : position.x
+    const rawY = placement === 'top-left' ? position.y - h : position.y
+    const x = Math.max(8, Math.min(rawX, window.innerWidth - w - 8))
+    const y = Math.max(8, Math.min(rawY, window.innerHeight - h - 8))
     el.style.left = `${x}px`
     el.style.top = `${y}px`
-  }, [position])
+  }, [position, placement])
 
   function handleItemClick(item: ContextMenuItem): void {
     if (item.disabled) return
@@ -165,6 +177,9 @@ export default function ContextMenu({
  * ```
  * `openAt` 会顺手 preventDefault + stopPropagation：拦下浏览器默认菜单，
  * 并阻止外层容器的右键处理（例如图片缩略图在消息气泡内部，两者菜单不该同时开）。
+ *
+ * 需要**指定锚点**而不是鼠标位置时（如「贴在按钮左上方」）用 `openAtPoint` +
+ * `ContextMenu` 的 `placement="top-left"`：锚点会被当成菜单的右下角。
  */
 export function useContextMenu<T = void>() {
   const [state, setState] = useState<{
@@ -173,6 +188,14 @@ export function useContextMenu<T = void>() {
   } | null>(null)
 
   const close = useCallback(() => setState(null), [])
+
+  /** 直接给视口坐标开菜单（锚点语义由 `ContextMenu` 的 `placement` 决定） */
+  const openAtPoint = useCallback(
+    (position: ContextMenuPosition, target: T) => {
+      setState({ position, target })
+    },
+    [],
+  )
 
   const openAt = useCallback(
     (
@@ -186,5 +209,5 @@ export function useContextMenu<T = void>() {
     [],
   )
 
-  return { state, openAt, close }
+  return { state, openAt, openAtPoint, close }
 }
