@@ -7809,6 +7809,7 @@ dependencies = [
  "image",
  "landlock",
  "libc",
+ "notify-rust",
  "once_cell",
  "pdf-extract",
  "quasivision",

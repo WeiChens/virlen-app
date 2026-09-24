@@ -74,6 +74,11 @@ quasivision = "0.2.1"
 [target.'cfg(target_os = "windows")'.dependencies]
 webview2-com = "0.38"
 windows-core = "0.61"
+# notify-rust：**自持 NotificationHandle** 才能收到「点击系统通知」
+# （tauri-plugin-notification 把 handle 丢了 → 点击事件没人收，表现为「点了完全没反应」，
+#  见 src/tray/notify.rs::show_owned）。它本来就是通知插件的传递依赖（同一份 4.18，
+#  仅 Windows 编译、特性不变），不会新增额外编译产物。
+notify-rust = "4"
 # 自定义 OLE 拖放目标（drag_drop.rs）：比 wry 更能听懂别的程序的拖拽数据
 # （IDropTarget + IDataObject 读 CF_HDROP / CF_UNICODETEXT / 自定义格式）
 windows = { version = "0.61", features = [

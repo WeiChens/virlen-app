@@ -1,7 +1,9 @@
 //! 提醒通道 — 系统通知 + 零依赖兜底
 //!
 //! 「AI 跑完了」的提醒有三层，它们是**叠加**关系，不是互斥的降级链：
-//! ① 系统通知（`tauri-plugin-notification`）—— Phase 2 接入，R1 三态实测（dev / 免安装 exe / MSIX）均已通过；
+//! ① 系统通知 —— Phase 2 接入（`tauri-plugin-notification`，R1 三态实测已通过）；
+//!    **Windows 上改由本模块自持 handle 发**（`show_owned`）：插件把 handle 丢了，
+//!    收不到点击事件；而点击正是「回到那条回复」的唯一入口。
 //! ② 任务栏闪烁（`request_user_attention`）—— 仅窗口可见时有意义（隐藏窗口上 FlashWindow 不生效）；
 //! ③ 托盘 tooltip + 图标红点 —— 永不失败，最终兜底。
 //!
@@ -59,8 +61,8 @@ pub fn notify_completed(
     if should_remind {
         push_attention(state.inner(), session_id);
 
-        // ① 系统通知
-        notification_ok = show_notification(app, title, preview);
+        // ① 系统通知（Windows 走自持 handle 的通道，点击能精确回到这条会话）
+        notification_ok = show_notification(app, session_id, title, preview);
 
         // ② 任务栏闪烁：窗口已隐藏时 FlashWindow 无意义，直接跳过（此时只剩通知 + tooltip）
         if visible {
@@ -122,7 +124,28 @@ pub(crate) fn decide_remind(
 }
 
 /// 投递系统通知：标题优先用会话标题，正文优先用 AI 回复预览
-fn show_notification(app: &AppHandle, title: Option<&str>, preview: Option<&str>) -> bool {
+///
+/// Windows 上优先走 `show_owned`（自持 handle，能收到点击）；该通道不可用（返回 `None`）
+/// 或非 Windows 时，回退 `tauri-plugin-notification`。
+fn show_notification(
+    app: &AppHandle,
+    session_id: &str,
+    title: Option<&str>,
+    preview: Option<&str>,
+) -> bool {
+    #[cfg(target_os = "windows")]
+    if let Some(ok) = show_owned(app, session_id, title, preview) {
+        return ok;
+    }
+    show_via_plugin(app, title, preview)
+}
+
+/// 插件通道 — `tauri-plugin-notification`
+///
+/// ⚠️ 这条通道**收不到点击**（插件把 `show()` 丢进 spawn 并把 `NotificationHandle` 丢掉），
+/// 只用于「自持 handle 那条通道不可用」时兜底：非 Windows，以及 Windows 上没注册 AUMID
+/// 的 dev / 免安装 exe。
+fn show_via_plugin(app: &AppHandle, title: Option<&str>, preview: Option<&str>) -> bool {
     let mut builder = app
         .notification()
         .builder()
@@ -139,9 +162,134 @@ fn show_notification(app: &AppHandle, title: Option<&str>, preview: Option<&str>
     builder.show().is_ok()
 }
 
+/// 声明**进程**的 AppUserModelID（Windows，启动时调一次）
+///
+/// 通知的归属（名称 / 图标，以及点击后的激活路由）都按 AUMID 找应用：**安装版**由安装器
+/// 把同一个 AUMID 写进开始菜单快捷方式（`System.AppUserModel.ID`），这里再把进程也声明成同一个，
+/// 让 Windows 认得「这条通知属于 Virlen」。AUMID 的唯一真源是 `tauri.conf.json` 的 `identifier`
+/// —— Rust 侧不再养第二份身份字符串。
+///
+/// 失败不影响通知：安装版里快捷方式已带 AUMID；dev / 免安装 exe 本来就没有，
+/// `show_owned` 会回退插件通道（与既有行为一致）。
+pub fn init_app_identity(app: &AppHandle) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::ffi::OsStrExt;
+
+        let identifier = app.config().identifier.clone();
+        let wide: Vec<u16> = std::ffi::OsStr::new(&identifier)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let hr = unsafe {
+            windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(wide.as_ptr())
+        };
+        crate::telemetry::track("tray.aumid", json!({ "ok": hr >= 0, "hr": hr }));
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = app;
+}
+
+/// Windows：自己发通知 + 自己收点击（返回 `None` = 本通道不可用，请回退插件）
+///
+/// ⚠️ **为什么不用插件发**：`tauri-plugin-notification` 的 `show()` 把 `NotificationHandle`
+/// **丢掉**（`spawn` + `let _ =`），而 Windows 的点击是**进程内**投递
+/// （`tauri-winrt-notification` 在 `show()` 里 `toast_template.Activated(handler)`）——
+/// handle 一丢，事件到达 channel 后没人接收，用户看到的现象就是「点通知完全没反应」。
+/// 另外：非打包场景不会因为没有 COM 激活器而启动新进程（实测：点完连窗口都不出现），
+/// 所以「靠新进程 + 单实例回调」那条路兜不住。
+///
+/// 自持 handle 的额外收益：**知道这条通知对应哪个会话** ⇒ 点击后精确切过去，
+/// 不用像托盘左键那样只能猜「最早那条未读」。
+#[cfg(target_os = "windows")]
+fn show_owned(
+    app: &AppHandle,
+    session_id: &str,
+    title: Option<&str>,
+    preview: Option<&str>,
+) -> Option<bool> {
+    let mut notification = notify_rust::Notification::new();
+    // AUMID 必须与开始菜单快捷方式里的一致，否则 `CreateToastNotifierWithId`
+    // 找不到归属应用，`show()` 直接报错（dev / 免安装 exe 就是这种情况）
+    notification.app_id(&app.config().identifier);
+    notification.summary(
+        title
+            .filter(|t| !t.is_empty())
+            .unwrap_or(FALLBACK_NOTIFY_TITLE),
+    );
+    if let Some(body) = preview.filter(|p| !p.is_empty()) {
+        notification.body(body);
+    }
+    notification.auto_icon();
+
+    match notification.show() {
+        Ok(handle) => {
+            let app = app.clone();
+            let session_id = session_id.to_string();
+            // 单起线程等这一次交互：toast 活着期间一直阻塞，用户「点击 / 关闭 / 等它超时」
+            // 后线程自行结束，不会泄漏。
+            std::thread::spawn(move || {
+                // ⚠️ 必须用 `wait_for_response`（而不是 `wait_for_action`）：后者把
+                // 「点击正文」（`Default`）与「通知被关闭 / 超时」（`Closed`）都归一成
+                // `"__closed"`，两者分不开 —— 那会让「Toast 自己超时消失」也被当成点击，
+                // 凭空把窗口抢到前台。
+                let mut clicked = false;
+                let _ = handle
+                    .wait_for_response(|response: &notify_rust::NotificationResponse| {
+                        clicked = is_user_click(response);
+                    });
+                if !clicked {
+                    return;
+                }
+                super::show_main_window(&app, true);
+                super::activate_session(&app, &session_id, "notification_click");
+            });
+            Some(true)
+        }
+        Err(error) => {
+            // 没有注册 AUMID（dev / 免安装 exe）走这里 → 交给插件通道兜底
+            crate::telemetry::track(
+                "tray.notify.error",
+                json!({ "channel": "owned", "error": error.to_string() }),
+            );
+            None
+        }
+    }
+}
+
+/// 这次响应算不算「用户点了通知」
+///
+/// `Default` = 点了通知正文；`Action` = 点了按钮（当前不发按钮，留着不影响语义）。
+/// `Closed` 一律不算：通知超时消失、被系统清理都不该抢走用户焦点。
+#[cfg(target_os = "windows")]
+fn is_user_click(response: &notify_rust::NotificationResponse) -> bool {
+    use notify_rust::NotificationResponse as R;
+    matches!(response, R::Default | R::Action(_))
+}
+
 #[cfg(test)]
 mod tests {
     use super::decide_remind;
+
+    /// Windows 上「算不算用户点了通知」：只有**激活**算，关闭/超时都不算
+    ///
+    /// ⚠️ 这条判定直接决定「通知自己超时消失」会不会把窗口抢到前台，
+    /// 所以必须用 `wait_for_response`（能区分）而不是 `wait_for_action`（分不出）。
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn only_activation_counts_as_click() {
+        use super::is_user_click;
+        use notify_rust::{CloseReason, NotificationResponse};
+
+        assert!(is_user_click(&NotificationResponse::Default));
+        assert!(is_user_click(&NotificationResponse::Action("a".into())));
+        assert!(!is_user_click(&NotificationResponse::Closed(
+            CloseReason::Expired
+        )));
+        assert!(!is_user_click(&NotificationResponse::Closed(
+            CloseReason::Dismissed
+        )));
+    }
 
     #[test]
     fn remind_matrix() {

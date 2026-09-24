@@ -183,18 +183,26 @@ impl TerminalDecoder {
 mod tests {
     use super::*;
 
+    /// 跨平台部分：UTF-8 原样透传 / ASCII / 空输入。
     #[test]
     fn test_decode_output() {
         // UTF-8 原样
         assert_eq!(decode_output("后面杂音.wav".as_bytes()), "后面杂音.wav");
-        // GBK 字节（CP936）→ 正确解码（中文 Windows PowerShell 管道输出的典型情况）
-        let gbk = "后面杂音.wav";
-        let (gbk_bytes, _, _) = encoding_rs::GBK.encode(gbk);
-        assert_eq!(decode_output(&gbk_bytes), gbk);
         // ASCII 不变
         assert_eq!(decode_output(b"Name : 979244"), "Name : 979244");
         // 空
         assert_eq!(decode_output(b""), "");
+    }
+
+    /// GBK/CP936 兜底**只在 Windows 生效**（非 Windows 终端输出恒为 UTF-8，
+    /// `decode_output` 走 `from_utf8_lossy`），故按平台门禁，避免 Linux CI 误报。
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn test_decode_output_gbk_fallback() {
+        // GBK 字节（CP936）→ 正确解码（中文 Windows PowerShell 管道输出的典型情况）
+        let gbk = "后面杂音.wav";
+        let (gbk_bytes, _, _) = encoding_rs::GBK.encode(gbk);
+        assert_eq!(decode_output(&gbk_bytes), gbk);
     }
 
     #[test]
@@ -211,7 +219,9 @@ mod tests {
         assert_eq!(out, text);
     }
 
+    /// 同上：GBK 兜底仅 Windows 生效 → 该用例按平台门禁。
     #[test]
+    #[cfg(target_os = "windows")]
     fn test_terminal_decoder_gbk_chunks() {
         // GBK 输出按完整双字节块喂入（8KB 分块不会拆开字符的常见情况）
         let gbk_text = "后面杂音.wav";

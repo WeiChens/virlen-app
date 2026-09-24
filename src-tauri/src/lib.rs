@@ -282,6 +282,9 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 app.manage(tray::TrayState::default());
+                // Windows：把**进程**声明成与开始菜单快捷方式相同的 AUMID
+                // （通知的归属/图标，以及点击激活都按它来，见 tray::notify）
+                tray::notify::init_app_identity(app.handle());
                 if let Err(e) = tray::init(app.handle()) {
                     // 托盘不可用 → decide_close 会回退成「关闭即退出」，
                     // 不会出现「窗口被隐藏、又没有托盘」的死局

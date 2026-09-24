@@ -275,9 +275,13 @@ mod tests {
     use crate::agent::bridge::AgentBridgeState;
     use crate::agent::cancellation::CancellationToken;
     use crate::agent::event_sink::TestEventSink;
-    use crate::agent::native_tools::test_util::{is_process_alive, test_security, test_security_bare};
+    use crate::agent::native_tools::test_util::{test_security, test_security_bare};
     use crate::agent::native_tools::execute_native_tool;
     use std::time::Duration;
+
+    // 仅 Windows 用例（进程树 kill 验证）使用，避免 Linux 下成为未使用导入。
+    #[cfg(target_os = "windows")]
+    use crate::agent::native_tools::test_util::is_process_alive;
 
     /// 集成测试：真实 spawn 一个长命令，中途触发「终止」，
     /// 验证工具能及时返回、不会因进程树没杀干净而无限挂起（前端终止按钮失效的根因）。
@@ -345,6 +349,7 @@ mod tests {
     /// 集成测试：模拟用户场景 —— 命令里用 Start-Process 拉起子进程（输出重定向到文件）。
     /// 验证：终止后工具及时返回，且 Start-Process 的子进程也被 taskkill /T 连带杀死（不留孤儿）。
     #[tokio::test]
+    #[cfg(target_os = "windows")]
     async fn test_execute_command_kill_kills_start_process_child() {
         let dir = std::env::temp_dir()
             .join(format!("virlen_native_kill_sp_{}", uuid::Uuid::new_v4()));
@@ -426,6 +431,7 @@ mod tests {
     /// 这是用户报告的复现场景：`execute_command` 超时返回「已终止」，但 node/npm/python
     /// 等后代进程仍存活。Job Object + 递归枚举兜底应保证整棵进程树（含两层孙进程）全灭。
     #[tokio::test]
+    #[cfg(target_os = "windows")]
     async fn test_execute_command_timeout_kills_grandchildren() {
         let dir = std::env::temp_dir()
             .join(format!("virlen_native_timeout_{}", uuid::Uuid::new_v4()));
@@ -799,12 +805,15 @@ mod tests {
             bridge.clone(),
             json!({
                 "__kind": "value",
-                "value": "{\"approved\":true,\"command\":\"Write-Output 'EDITED_OK'\"}"
+                "value": "{\"approved\":true,\"command\":\"echo 'EDITED_OK'\"}"
             }),
         );
 
+        // 用跨平台的 `echo`（sh / PowerShell 同名内建）而非 `Write-Output`，
+        // 让本用例在两个平台都跑：它验证的是「确认回传的命令被执行」这一跨平台语义，
+        // 下方 presentation 断言本身也已按平台分叉。
         let args = json!({
-            "command": "Write-Output 'ORIGINAL'",
+            "command": "echo 'ORIGINAL'",
             "confirm": "terminal",
             "timeout": 30
         });
@@ -948,7 +957,8 @@ mod tests {
             json!({ "__kind": "value", "value": "{\"matched\":true,\"ruleName\":\"装依赖\"}" }),
         );
 
-        let args = json!({ "command": "Write-Output RULE_BYPASS_OK", "timeout": 30 });
+        // 同上：用跨平台 `echo`，本用例验证的是「命中规则 → 免审批 + 裸跑」这一跨平台语义。
+        let args = json!({ "command": "echo RULE_BYPASS_OK", "timeout": 30 });
         let outcome = tokio::time::timeout(
             Duration::from_secs(30),
             execute_native_tool(&ctx, "execute_command", &args),
@@ -962,7 +972,7 @@ mod tests {
         let data = captured.lock().unwrap().clone();
         assert_eq!(
             data.get("command").and_then(|v| v.as_str()),
-            Some("Write-Output RULE_BYPASS_OK")
+            Some("echo RULE_BYPASS_OK")
         );
         assert_eq!(
             data.get("tool").and_then(|v| v.as_str()),

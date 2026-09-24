@@ -1,21 +1,30 @@
 //! runner 相关测试：运行器端到端（沙盒 + PTY）、接管预算、结果组装，以及沙盒路径辅助函数。
 
-use crate::agent::bridge::AgentBridgeState;
-use crate::agent::cancellation::CancellationToken;
-use crate::agent::event_sink::TestEventSink;
-use crate::agent::native_tools::execute_native_tool;
-use crate::agent::native_tools::test_util::test_security;
+// 跨平台用例（结果组装）只用下面这两个；其余用例均依赖 ConPTY / PowerShell / 沙盒 ACL，
+// 属 Windows 专属（下方逐个 `#[cfg(target_os = "windows")]` 门禁），避免 Linux CI 误报。
 use crate::agent::native_tools::NativeToolOutcome;
-use serde_json::json;
-use std::sync::atomic::Ordering;
-use std::sync::LazyLock;
-use std::time::Duration;
 
-use super::super::super::pty_session;
-use super::{build_command_result, HOLD_MAX_OVERRIDE_SECS};
+use super::build_command_result;
 
 #[cfg(target_os = "windows")]
-use std::path::PathBuf;
+use {
+    crate::agent::bridge::AgentBridgeState,
+    crate::agent::cancellation::CancellationToken,
+    crate::agent::event_sink::TestEventSink,
+    crate::agent::native_tools::execute_native_tool,
+    crate::agent::native_tools::test_util::test_security,
+    serde_json::json,
+    std::path::PathBuf,
+    std::sync::atomic::Ordering,
+    std::sync::LazyLock,
+    std::time::Duration,
+};
+
+#[cfg(target_os = "windows")]
+use super::super::super::pty_session;
+
+#[cfg(target_os = "windows")]
+use super::HOLD_MAX_OVERRIDE_SECS;
 
 #[cfg(target_os = "windows")]
 use super::sandbox::{collect_extra_roots, expand_env_vars};
@@ -76,6 +85,7 @@ fn test_collect_extra_roots_skips_workspace_ancestor() {
 /// 避免测试去改用户**真实**目录（whitelist 里的路径）的 ACL。
 /// 「可写根 + 受限令牌 + ConPTY」的组合由 Spike（`conpty_with_restricted_token`）覆盖。
 #[tokio::test]
+#[cfg(target_os = "windows")]
 async fn test_execute_command_pty_sandboxed_end_to_end() {
     let dir = std::env::temp_dir().join(format!("virlen_pty_e2e_{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -131,6 +141,7 @@ async fn test_execute_command_pty_sandboxed_end_to_end() {
 /// `Read-Host` 会真的去读控制台输入：改造前（stdin = NULL / 管道）它只能拿到 EOF，
 /// 所以这条用例是「用户可干预」的直接证据。同时顺带验证 `pty_resize` 能命中会话。
 #[tokio::test]
+#[cfg(target_os = "windows")]
 async fn test_execute_command_pty_write_interaction() {
     let dir = std::env::temp_dir().join(format!("virlen_pty_in_{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -393,11 +404,13 @@ fn test_build_command_result_wait_reason() {
 
 /// 仅测试用：串行化“接管”相关用例，避免 `HOLD_MAX_OVERRIDE_SECS` 全局态互踩。
 /// 其余 PTY 用例不接管（held=false）→ 不读该 override，无需锁。
+#[cfg(target_os = "windows")]
 static HOLD_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 /// Step 2 ②：接管期间冻结超时预算（人在慢慢输密码，不该被超时杀掉）。
 #[tokio::test]
+#[cfg(target_os = "windows")]
 async fn test_pty_hold_freezes_timeout() {
     let _guard = HOLD_TEST_LOCK.lock().await;
     let dir =
@@ -471,6 +484,7 @@ async fn test_pty_hold_freezes_timeout() {
 
 /// Step 2 ②：接管到达硬上限 → 强制终止，`waitReason=timeout` 且 `holdTimedOut=true`。
 #[tokio::test]
+#[cfg(target_os = "windows")]
 async fn test_pty_hold_hard_cap() {
     let _guard = HOLD_TEST_LOCK.lock().await;
     // 把 30min 硬上限缩短到 1s（仅测试）
@@ -539,6 +553,7 @@ async fn test_pty_hold_hard_cap() {
 /// 命令不读 stdin（Start-Sleep）→ 控制台不会回显，因此 uiData 全串都应无正文；
 /// 若将来有人把正文塞进干预摘要，本用例立即失败。
 #[tokio::test]
+#[cfg(target_os = "windows")]
 async fn test_pty_interventions_counted() {
     let dir =
         std::env::temp_dir().join(format!("virlen_pty_iv_{}", uuid::Uuid::new_v4()));

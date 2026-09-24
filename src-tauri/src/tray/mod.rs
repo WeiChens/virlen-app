@@ -332,11 +332,11 @@ pub fn show_main_window(app: &AppHandle, focus: bool) {
 /// `show_main_window` 三种情况都覆盖；顺带 `refresh_tray` 把 tooltip 从
 /// 「已隐藏到托盘，右键可退出」纠正回来。
 ///
-/// ⚠️ **「点击系统通知」也走这里**：Windows 桌面端 toast 无法把点击回传给已运行的进程
-/// （`tauri-plugin-notification` 把 `show()` 丢进 spawn 并丢弃 handle，根本拿不到 Activated 事件，
-/// 且非打包场景 notify-rust 不设 AUMID），系统只能**按 AUMID 启动一个新进程**——
-/// 新进程被单实例插件拦下后回调到这里。所以「点通知 → 回到对应会话」必须在这里补：
-/// 显完窗口若有未读就切过去（`activate_next_unread`），否则用户还得自己找是哪个会话。
+/// ⚠️ **「点击系统通知」不靠这里**：Windows 的 toast 点击是**进程内**投递
+/// （`tauri-plugin-notification` 却把 handle 丢了 → 点了没有任何反应，见 `notify.rs`），
+/// 现在由 `notify::show_owned` 自持 handle **精确**切到那条回复。这里保留
+/// `activate_next_unread` 只作兜底：万一某些配置下系统**按 AUMID 启动了新进程**
+/// （被单实例插件拦下后回调到这里），也至少能把窗口拎出来并切到最早那条未读。
 pub fn activate_main_window(app: &AppHandle, reason: &str) {
     if app.try_state::<TrayState>().is_none() {
         return;
@@ -576,24 +576,33 @@ fn take_earliest_unread(state: &TrayState) -> Option<String> {
     Some(id)
 }
 
-/// 有未读就通知前端切到最早那条（返回是否切了）
-///
-/// 三个调用方语义相同，都是「用户此刻想看新回复」：
-/// - **点击系统通知**（Windows 走「新进程 → 单实例回调 → `activate_main_window`」）；
-/// - 托盘左键单击；
-/// - macOS 点 Dock / 双击 app（`RunEvent::Reopen`）、第二个实例启动。
+/// 切到指定会话：清掉它的未读 → 刷新托盘 → 通知前端
 ///
 /// 事件本身是 raw 事件（与 `pty_*` 同类），**不进 `AgentEventType`**（铁律 2）；
 /// 前端在 `tray-service` 里只改 `chatState.currentSessionId`，
 /// 消息懒加载由 `chat-view` 的外部入口兜底 effect 接住。
+///
+/// 两个调用方：
+/// - **点击系统通知**（`notify::show_owned`）—— 它知道自己对应哪个 `sessionId`，
+///   所以能**精确**回到那条回复；
+/// - 托盘左键 / 第二个实例 / macOS Reopen —— 拿不到会话 id，只能取「最早那条未读」。
+pub(crate) fn activate_session(app: &AppHandle, session_id: &str, reason: &str) {
+    clear_attention_in(app.state::<TrayState>().inner(), Some(session_id));
+    refresh_tray(app);
+    let _ = app.emit(EVENT_ACTIVATE, json!({ "sessionId": session_id }));
+    crate::telemetry::track("tray.activate_session", json!({ "reason": reason }));
+}
+
+/// 有未读就切到最早那条（返回是否切了）
+///
+/// 用于**拿不到会话 id** 的唤起入口：托盘左键单击、第二个实例被拦下、macOS 点 Dock。
+/// 「点击系统通知」不走这里（它精确知道是哪个会话）。
 fn activate_next_unread(app: &AppHandle, reason: &str) -> bool {
     let state = app.state::<TrayState>();
     let Some(session_id) = take_earliest_unread(state.inner()) else {
         return false;
     };
-    refresh_tray(app);
-    let _ = app.emit(EVENT_ACTIVATE, json!({ "sessionId": session_id }));
-    crate::telemetry::track("tray.activate_session", json!({ "reason": reason }));
+    activate_session(app, &session_id, reason);
     true
 }
 
