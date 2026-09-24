@@ -287,6 +287,14 @@ export interface Agent {
   personality: string
   identity: string
   defaultWorkspace: string
+  /**
+   * 项目规则 / 记忆文件（相对工作目录的路径，默认 `AGENTS.md`）。
+   *
+   * 会话创建时若该文件存在，其内容会被注入系统提示词（快照进 `session.systemPrompt`）。
+   * 空串 = 不注入；文件不存在 / 超过 64 KB / 二进制或编码无法识别时静默跳过。
+   * 老数据没有该字段时按默认值 `AGENTS.md` 处理（见 `domain/agent/project-rules`）。
+   */
+  projectRulesFile?: string
   defaultModel: {
     providerConfigId: string
     modelId: string

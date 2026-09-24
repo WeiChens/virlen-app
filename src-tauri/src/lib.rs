@@ -191,6 +191,38 @@ async fn read_file_with_hash(path: String) -> Result<file_ops::FileReadResult, S
     .map_err(|e| format!("Task join error: {}", e))?
 }
 
+/// 路径元信息（不存在时 `stat_path` 返回 None，不报错）
+#[derive(serde::Serialize)]
+pub struct PathStat {
+    pub exists: bool,
+    pub is_file: bool,
+    pub size: u64,
+}
+
+/// 探测路径是否存在、是否文件、多大。
+///
+/// 给「先探测再读取」的场景用：会话创建时读取项目规则文件（`AGENTS.md` 等），
+/// 需要先判断体积是否超限 —— 有了它就不必把超大文件整个读进内存才发现该拒绝。
+#[tauri::command]
+async fn stat_path(path: String) -> Result<Option<PathStat>, String> {
+    let expanded = crate::sandbox::paths::expand_user_path(&path);
+    tokio::task::spawn_blocking(move || {
+        let p = std::path::Path::new(&expanded);
+        match std::fs::metadata(p) {
+            Ok(m) => Ok(Some(PathStat {
+                exists: true,
+                is_file: m.is_file(),
+                size: m.len(),
+            })),
+            // 不存在（含父目录不存在）是「正常结果」，不是错误
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("Cannot stat '{}': {}", expanded, e)),
+        }
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
 /// 规范化路径：展开 ~/%USERPROFILE% → canonicalize → 返回绝对路径
 #[tauri::command]
 async fn canonicalize_path(path: String) -> Option<String> {
@@ -339,6 +371,7 @@ pub fn run() {
             list_directory,
             stop_task,
             read_file_with_hash,
+            stat_path,
             edit_file_multi_in_place,
             kill_process_tree,
             canonicalize_path,

@@ -8,6 +8,11 @@ import { settingsState } from '@/ui/store'
 import { agentRepo } from '@/infrastructure/agentRepo'
 import type { Agent } from '@/types'
 import { getEnvPrompt } from '@/services/env-service'
+import { loadProjectRulesPrompt } from '@/services/project-rules-service'
+import {
+  DEFAULT_PROJECT_RULES_FILE,
+  resolveProjectRulesFile,
+} from '@/domain/agent/project-rules'
 import { listRegisteredSkills } from '@/skill'
 import { DEFAULT_AGENT_ID } from '@/ui/constants'
 import { appName } from '@/ui/constants'
@@ -28,10 +33,19 @@ export async function assembleAgentPrompt(
   workingDir?: string,
 ): Promise<string> {
   const parts: string[] = [baseSystemPrompt]
+  // 生效工作目录：会话指定 > Agent 默认（与 session.workspace 的取值口径一致）
+  const effectiveWorkspace = workingDir || agent.defaultWorkspace
   if (settingsState.value.allowEnvPrompt) {
-    const envInfo = await getEnvPrompt(workingDir || agent.defaultWorkspace)
+    const envInfo = await getEnvPrompt(effectiveWorkspace)
     parts.push(envInfo)
   }
+  // 项目规则 / 记忆文件（默认 AGENTS.md）：与工作目录强相关，紧跟环境信息之后。
+  // 无工作目录时回退到默认工作目录（与文件工具的 cwd 口径一致），读不到就不注入。
+  const rulesPrompt = await loadProjectRulesPrompt(
+    effectiveWorkspace || settingsState.value.defaultWorkspace,
+    resolveProjectRulesFile(agent),
+  )
+  if (rulesPrompt) parts.push(rulesPrompt)
   if (agent.name || agent.description) {
     parts.push(
       `# 角色\n你是 ${agent.name}${agent.description ? '，' + agent.description : ''}`,
@@ -84,6 +98,7 @@ function _buildDefaultAgent(): Agent {
     personality: '',
     identity: '',
     defaultWorkspace: '',
+    projectRulesFile: DEFAULT_PROJECT_RULES_FILE,
     defaultModel: {
       providerConfigId: '',
       modelId: '',
