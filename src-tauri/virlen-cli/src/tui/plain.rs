@@ -18,6 +18,7 @@ use virlen_core::agent::host::HostEnv;
 use virlen_core::agent::provider::DefaultProviderFactory;
 
 use super::commands;
+use super::history::{history_preview, resume_hint, HISTORY_PREVIEW};
 use super::Input;
 
 // ==================== 顺序输出模式 ====================
@@ -42,6 +43,9 @@ pub(crate) async fn run_plain(
         "[chat] session={} model={} workspace={}（/help 看命令，/exit 退出）",
         rt.session.id, rt.resources.model_id, rt.resources.workspace
     );
+    // 续连（`--session`）时先把历史显示出来 —— 与 TUI 同一份格式化（`history_preview`），
+    // 差别只在「这里直接打印，TUI 送去按角色上色」。
+    print_history_preview(&rt, &mut *out);
 
     let interactive = std::io::stdin().is_terminal();
     let (tx, mut rx) = mpsc::unbounded_channel::<run::Rendered>();
@@ -142,7 +146,21 @@ pub(crate) async fn run_plain(
             }
         }
     }
+    let _ = writeln!(err, "[chat] 已退出（会话已保存在库里，可随时续跑）");
+    // 会话 id 必须**完整**打出来（状态行里那个只显示前 8 位，不足以续连）
+    let _ = writeln!(err, "{}", resume_hint(&rt.session.id));
     EXIT_OK
+}
+
+/// 续连时把历史预览打到 stdout。
+///
+/// 为什么走 stdout 而不是 stderr：顺序输出模式的 stdout 就是「对话记录」
+/// （`> ` 提示符、`/status`、`/help` 都在它上面），历史预览是同一类东西。
+fn print_history_preview(rt: &SessionRuntime, out: &mut dyn Write) {
+    for l in history_preview(&rt.messages, HISTORY_PREVIEW) {
+        let _ = writeln!(out, "{}", l.text);
+    }
+    let _ = out.flush();
 }
 
 /// `/status` 的文本（两种模式共用；**必须**写明与桌面端的已知差异，红线 #6）

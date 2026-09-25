@@ -167,7 +167,6 @@ impl UiState {
             }
             None => {
                 // 用户提问：先回显（引擎不会为「用户消息」发事件），并进入「运行中」
-                self.assistant_at = None;
                 self.inflight
                     .push(OutLine::new(LineKind::User, format!("> {}", text)));
                 self.running = true;

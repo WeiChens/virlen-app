@@ -584,6 +584,78 @@ pnpm cli list-agent              # 列出 Agent（读 app_settings.agents，含�
 - **实测（P1 验收）**：`cargo test --workspace` 504 passed（app 29 / cli 121 / core 354，1+1 ignored）；真终端压测 **30 次 SetWindowPos 改尺寸（含 `48x5`、`39x8` 这种比 10 行视口还矮的极端尺寸）+ 极小窗口 + 还原，进程全程存活、日志 0 次绘制/取尺寸/固化失败、0 panic**；真终端 e2e（向独立控制台注入按键）提交一轮 + `/exit` → 内容固化进滚动区、退出后已 restore、会话以首条消息为标题落库。
 - **⚠️ 验证手法的两个坑**（本次踩到）：① 往**独立控制台**注入按键时 `WScript.Shell.AppActivate` 返回 False（不可靠），要 `FindWindow` 拿 hwnd → `ShowWindow(SW_RESTORE)` → **`SetForegroundWindow`** → 再 `SendKeys`；② `TestBackend` 断言里**必须跳过宽字符后面的填充格**（逐格取 `symbol()` 会得到「你 好」，任何中文断言都会假失败）。
 - **⚠️ 未实测**：降级第②条（连续失败 5s）无法自然触发（要人为造终端故障）；macOS/Linux 未冒烟；「在 Virlen 桌面端自带终端里跑 `chat`」的双层 PTY 行为未测。
+- **⚠️ 又一条 Windows 硬坑（2026-09-26 用户实测报回）**：`>` 后面输入的文字会**覆盖状态行**（光标落在状态行上）——根因、实验与修法见 **§11.19**。
+
+**11.19 conhost 屏底行：为何「光标压在状态行上、输入覆盖状态行」（已修，含实测）** —— 现象：`virlen-cli chat` 底部显示
+
+```text
+>
+· deepseek-v4-flash · 4ac751de · virlen-app · 9580 tok · /help · /exit
+```
+
+光标却不落在 `>` 后面，而在状态行开头；敲字时文字直接盖在状态行上。
+
+- **取证手法（可复用）**：仓库外探针 `%TEMP%\ratatui-inline-spike`（`cargo run --bin console_probe`）——它能 ① 在**隐藏的新控制台**里跑同一套 ratatui 序列并逐步用 WinAPI 读回**真实**屏幕（缓冲区/窗口原点/光标/每一行文本）；② `watch/watchloop/type` 模式**附加到另一个进程的控制台**，对**真 app** 取屏并按 `WinAPI WriteConsoleInput` 注入按键（无需窗口焦点）。真 app 的实测都用它完成。
+- **根因（逐帧实测）**：**写到某一行的最后一格会让 conhost 留下「待换行」，一旦这个待换行在屏底兑现，整屏就上滚一行**；ratatui/crossterm 不知道这件事。于是：视口里的**正文比 ratatui 模型偏上一行**，而**光标仍按模型落位** → 光标落在状态行上、输入覆盖状态行。
+- **关键实验（120x30 控制台、视口贴底；「上滚」= 窗口 top +1）**：
+
+  | 帧里画了什么 | 画出的终端宽度 | 结果 |
+  |---|---|---|
+  | 只画文字（`> ` + 状态文本本身） | ≤ 119 | **不上滚** |
+  | 状态行用 `Paragraph` 级样式（`.style(...)`）→ 文本之后的空格也全被涂色 → 一直画到行尾 | 120 | **上滚** |
+  | 同上但渲染区裁到 118 格（文本含 4 个 `·`，CJK 字体下算 2 列 → 实际 122 > 120） | 122 | **上滚** |
+  | 118 个 ASCII 字符（有样式 / 无样式） | 118 | **不上滚** |
+  | 输入行画满 120 格 | 120 | **上滚** |
+
+  ⇒ 结论：**任何一行都不能碰到屏的最后一格**；而状态行**又必须把自己的尾巴涂满**（否则状态行变短时上一帧的残字会留在屏上）。两者靠「**帧整体右侧留白 + 状态行用 `width_cjk` 算宽度**」同时满足。
+- **关键实测（同机量「终端对每个字符推进几列」）**：`A`=1、**`·`(U+00B7)=2**、`—`(U+2014)=2、`取`=2、`⠧`(U+2827)=1、`─`(U+2500)=1 ⇒ **`·` 这类「歧义宽度」字符在 CJK 字体下由终端按 2 列推进，而 ratatui 按 1 列排版**；文本实际比模型宽「这类字符的个数」列。这就是表中「4 个 `·` 把 118 顶成 122」的来源，也是**原代码**（`Paragraph` 级样式把整行空格涂色 → 逐格画到行尾）为什么必然上滚。`unicode-width` 的 `width_cjk` 与实测一致（`·` 算 2 列），所以用它算上限是对的。
+- **修法**（`virlen-cli/src/tui/view.rs`，改动很小但每处都必要）：
+  1. **整帧往右收 `RIGHT_MARGIN = 2` 列**（所有部件的渲染区一起窄，`rows[i]` 自动跟着窄）；
+  2. **状态行的颜色只落在 `Span` 上**，不再用 `Paragraph` 级样式（否则整行空格被涂色 → 被逐格重画到行尾）；
+  3. 状态行文本按 **`width_cjk`**（歧义宽度算 2 列 = 最坏情况）截断后再**用空格补满到 `区宽 - RIGHT_MARGIN`**：
+     · 补白是为了清掉上一帧的残字（`/exi t` 的 `t`）；
+     · 用 `width_cjk` 是因为 `·`/`—` 这类「歧义宽度」字符在 CJK 字体下由**终端**按 2 列推进，而 ratatui 按 1 列算（这就是表中第 3 行的 122 > 120）；
+     · 文本与补白用**同一个上限** → 所有帧都只画 `[0, 上限)` → 残字无处藏身；
+  4. 依赖 `unicode-width` 的 **`cjk` feature**（只新增 `*_cjk` 方法，不改 `width()` 语义 → 对 ratatui 无影响）。
+- **实测验收（真 cmd.exe 窗口，60 行前置输出把窗口顶到底）**：修复后 `watch` 显示 `>` 在倒数第二行、状态行在最后一行、**`cursor_buf` 的窗口相对行 = 输入行**；`type abc` 后 `> abc` 出现在 `>` 后面、状态行完好；`/help`（提交 + 重绘 + `insert_before`）后视口仍与模型同步。**修前**同一手法能稳定复现「光标在状态行」。
+- **测试固化**：`tui::view::tests::{status_row_is_fully_painted_but_never_touches_the_screen_edge, status_text_is_clipped_away_from_the_last_cells}`（cli 用例 121 → **123**，全仓 506 passed）。前一条直接断言「状态行涂满到 `宽 - 2*RIGHT_MARGIN`」+「最后两列零样式」。
+- **⚠️ 如实标注的剩余风险**：
+  - **歧义宽度字符（`·`、`—`、`×`…）在 CJK 字体下会被终端当 2 列**，而 ratatui 按 1 列排版 → **行内会出现轻微错位**（横向上每个这样的字符让后面的内容偏右 1 列；跨 run 重新定位时又会拉回）。本轮只把**状态行**（屏底行、最容易触发上滚）用 `width_cjk` 算死；**正文（在飞文本 / 固化文本）里出现这类字符时仍可能轻微错位**，且若某行被排满并溢出到最后一格，仍有触发上滚的可能（`RIGHT_MARGIN=2` 只缓了一部分）。彻底解法要等 ratatui 支持按 CJK 口径排版，或 TUI 自带宽度测量后自行折行。
+  - 本次只**取屏/注入按键**验证，没做人眼渲染观感确认；窄终端（60 列）下状态行会按最坏情况截断（`Esc 取消` 的 `消` 可能被裁掉）——已有用例据此改为在 120 列下断言。
+
+**11.20 固化正文的中文出现「每字一个空格」：ratatui `insert_before` 的 continuation bug（2026-09-26 用户报回 → 已修）** —— 现象：`virlen-cli chat` 退出后回看（或固化进滚动区的正文）里，**中文/emoji 每个字后面多一个空格**（`我 是 你 的`），但**输入框里的中文**（视口内）正常。根因与 §11.19 的「歧义宽度错位」**不是一回事**。
+
+- **根因（源码确证）**：ratatui 的 buffer 里，宽字符（中文/emoji，`cell_width ≥ 2`）后面会跟一个 **continuation cell**（`CellDiffOption::Skip`，symbol 是空格）。视口内渲染走 `Terminal::draw → diff_iter`，**会跳过** continuation；但固化走 `Terminal::insert_before` —— 而 Windows 上 `scrolling-regions` feature **不可用**（`ScrollUpInRegion` 的 winapi 直接返回 `Unsupported`），于是落到 `insert_before_no_scrolling_regions → draw_lines`，它**直接遍历 buffer 的每个 cell**、不跳过 continuation → 每个宽字符后面多输出一个空格。
+- **修法**（`virlen-cli/src/tui/term.rs`）：在 `insert_before` 的 `draw_fn` 里、`Widget::render` 之后调 `strip_wide_continuations`：遍历 buffer，把宽字符后面紧跟的 `(w-1)` 个 continuation cell 的 symbol 清成**空串**。⚠️ 必须 `set_symbol("")` 而不是 `reset()`：`reset` 回到 `symbol=None`，而 `Cell::symbol()` 对 `None` 返回 `" "`（空格），等于没清。
+- **验证**：真机注入中文提问 → 固化后滚动区中文紧凑（`> 你好，请用一句话介绍你自己` / `你好！我是你的 AI 助手…`），修前每字后一个空格。单测 `strip_wide_continuations_{removes_only_the_filler, leaves_ascii_untouched}`（cli 123 → **125**）。
+- **如实标注**：这是**绕过** ratatui 的 bug，不是上游修复；ratatui 后续若修了 `draw_lines` 或让 `scrolling-regions` 支持 Windows，此 workaround 可删。
+
+**11.21 中文「残影」：一行变短后多出来的汉字不消失（已修，含实测）** —— 现象：长中文回答在在飞区滚动、或状态行变短时，**行尾残留孤立的汉字**（实测：`…现实可能性。␣␣␣洛`、`…图灵机的提出␣␣␣洛`），即“某一行比上一帧短，多出来的字符留在原地”。
+
+- **根因（ratatui 源码级）**：`ratatui-core/src/buffer/diff.rs` 的 diff 在「**宽字符被窄字符替换**」时**不会重发宽字符的 trailing（第 2 列）** —— 它只在「previous 宽字符带可见样式」时才强制重发；否则走 `else` 分支什么都不做（注释写着 *"standard wide characters (e.g., CJK), which terminals handle well"*）。**这个假设在 conhost 上不成立**：conhost 不会在「写窄字符到宽字符起始列」时自动清掉第 2 列 → 那半个/整个汉字就残留在原地。我们的正文是 `Style::default()`（无 bg）→ 正好落进那个“什么都不做”的分支。
+- **修法**（`virlen-cli/src/tui/view.rs`）：整帧渲染完后，把视口**所有 cell** 标为 `CellDiffOption::AlwaysUpdate`（diff 时**绕过相等判断** → 每帧完整重画）→ 残影无处藏身。**⚠️ 只画 `[0, 宽 - RIGHT_MARGIN)` 列**：右侧保留列绝不能画（否则触发 §11.19 的整屏上滚）。视口只有 10×118，重画量可忽略。
+- **副作用 & 连带修**：`AlwaysUpdate` 会让**状态行也整行连续重写**（diff 时是绝对定位、不连续），于是暴露了状态行里 `·`（歧义宽度）的宽度错位 —— 运行中状态行会变成 `… Documents1.1s · Es消`。因此**状态行分隔符由 ` · ` 改为 ASCII ` | `**（右侧 hint 同步）：ASCII 两边宽度一致，不再错位。修后运行中状态行 `⠸ deepseek-v4-flash | 400bdb56 | Documents | 1.1s | Esc 取消` 完整无残影。
+- **验证**：真机注入长中文问题 + `watchloop` 连拍 60 帧 → 无行尾孤立汉字、状态行干净；单测 `tui::view::tests::status_line_has_no_ambiguous_width_chars`（cli 125 → **126**）。
+- **⚠️ 如实标注**：`AlwaysUpdate` 是**绕过** ratatui 的 diff bug（上游若修 `diff.rs` 的 `else` 分支可撤）；代价是**视口每帧全量重画**（10×118，交互式 TUI 可忽略）。
+
+**11.22 工具调用处的「正文重复 / 时序错乱」：助手正文块必须按 `messageId` 认（2026-09-26 用户报回 → 已修）** —— 现象（用户原话）：“工具输出的时序为什么在下一轮 ai 回复的后面？”：`⏺ user_choice(...)` 之后**又出现一段助手正文**，而 `→ 答案`（答题回显，`state/key.rs` 推的 Notice）与 `⎿ ok · N 字符 · …`（工具结果）反而被顶到**下一轮正文之后**。
+
+- **引擎的事件顺序（源码确证，非推测）**：① 正文增量 `assistant_message_updated{streaming:true, contentDelta}`（`llm_round.rs::flush_stream_state`）→ ② `tool_call`（工具行，`collect_tool_use`）→ ③ **收尾帧** `assistant_message_updated{streaming:false, content=<全量>}`（`finalize_assistant_message`，在**工具执行之前**）→ ④ 交互请求 → 用户应答 → ⑤ `tool_result_created`（`execute_tool_steps` 是**顺序** `for`）→ ⑥ 下一轮 LLM（**新的** `messageId`）。所以“工具结果先于下一轮正文”是引擎侧保证的。
+- **根因（UI 侧）**：状态机原来只记“当前正在追加的那一块”（`assistant_at`），而 `ToolStart` 会把它置 `None` → ③ 的收尾帧找不到原块，被当成**新消息**再插一块 → **正文整段重复**；随后 ⑥ 的增量**继续写进那一块**（它成了“当前块”），于是下一轮正文长在 ④⑤ **之前** → 屏幕上看着就是“工具输出跑到下一轮回复后面”。**一个 bug，两个症状。**
+- **修法**：正文块改为**按 `messageId` 认块**（`state/mod.rs` 的 `assistant_blocks: HashMap<String, usize>` + `state/event.rs` 的 `assistant_idx / append_assistant / set_assistant`）。增量与收尾帧都带 id，认块与“中间插了工具行”无关 → 收尾帧就地改正、下一轮必然新起一块（排在工具行之后）。顺带把增量来源从 `stream_event` 换成 `assistant_message_updated.patch.contentDelta`（同一份 delta，但**多带 `messageId`**；两者都取会双份正文）。
+- **验证**：真机 `user_choice` 场景（`typecn` 注入「中国历史」→ `type1` 答 1）修前：`⏺ user_choice(...)` 后紧接**重复**正文，`→ 答案` + `⎿ ok` 被顶到下一轮正文之后（同屏可见）；修后：不再重复，行序为 `⏺ → ⎿ → 下一轮正文`。单测 `finalize_frame_after_tool_call_reuses_the_same_block` / `next_message_text_starts_a_new_block_after_the_tool_line`（cli 126 → **128**，全仓 508 → **512**）。
+- **取证手法（仓库外探针，`%TEMP%\ratatui-inline-spike`）**：`console_probe typecn <pid>`（注入中文提问）/ `type1`（答 1）/ `typehelp`（空闲时触发一次固化）/ `typeexit`（退出）；**`scrollback <pid> [n]`** 读「窗口底往上 n 行」的**缓冲区**内容 —— `dump` 只读窗口内 30 行，而固化进的是**原生滚动区**，核验行序只能这样读。
+
+**11.23 续连体验：退出打印会话 id + 续连命令，重连先预览最近 5 条历史（2026-09-26 用户要求 → 已落地）** —— 起因：`virlen-cli chat` 退出后只留一句「已退出（会话已保存在库里，可随时续跑）」，用户**拿不到 id** —— 状态行里那个是**截断到前 8 位**的 `short_id`，不足以续连；而续连回来又是一块空白，不知道上次说到哪。
+
+- **需求（用户原话）**：① 结束会话时显示 session id，「方便用户续连」；② `[chat] 已退出` 出现时给出 `virlen-cli chat --session <session id>`；③ 重连成功后先加载 **top 5 条**消息显示出来，「方便用户预览历史」。
+- **口径定案**：③ 的「top 5」按**最近 5 条**（会话末尾）实现 —— 续连时有用的是「上次说到哪」，不是开头的寒暄。⚠️ `SessionRepo::get_messages` 是 `ORDER BY rowid ASC`（**从旧到新**），所以取的是**尾部** `messages[len-5..]`。
+- **落点（一份格式化、两条路径共用）**：新增 `virlen-cli/src/tui/history.rs` —— `HISTORY_PREVIEW = 5`、`history_preview(&[Message], max) -> Vec<OutLine>`（1 行表头 `—— 历史预览：最近 5 条 / 共 N 条 ——` + 每条一行 `[你] / [AI] / [工具] <单行摘要>`）、`resume_hint(&str) -> String`。`app.rs`（TUI）与 `plain.rs`（顺序输出）**各调一次同一份** —— 与 `session_rt` 同一个理由：不让两条路径对同一件事给两种说法。
+- **展示通道**：新增 `UiEvent::History(Vec<OutLine>)`（`state/mod.rs`）→ `state/event.rs` 整批进 `inflight` 并置 `commit_pending`，于是**立刻固化进终端原生滚动区**（预览不属于任何回合，留在动态区会被第一个回合的输出挤掉）。与 `Notice` 的差别是**按角色着色**（`LineKind::User / Assistant / ToolOutput`）。顺序上预览在「已续连会话」提示**之前**：先看见历史，再看见就绪；顺序输出模式则直接把它打到 **stdout**（那里本来就是「对话记录」：`> ` 提示符 / `/status` / `/help` 都在它上面）。
+- **顺带**：续连命中的会话，`Chat::announce` 的前缀由「已就绪」改为「**已续连会话**」，让用户确认确实接上了；新会话没有历史 → `history_preview` 返回空 `Vec`，界面上**一个多余字符都不出现**（连表头都不打）。
+- **空正文兜底**：纯工具调用的助手消息（只有 `tool_calls`、没有 text）也会落库，直接取 `text_content()` 是空串 —— 预览里只显 `[AI]` 看不出发生过什么，故退化为 `[AI] （调用工具 user_choice）`。
+- **验证**：新增单测 7 条 —— `state/tests.rs`（`history_preview_commits_immediately_with_roles` / `empty_history_is_ignored`）、`tui/tests.rs`（`history_preview_keeps_only_the_last_five` / `history_preview_is_empty_without_messages` / `history_preview_falls_back_to_tool_calls` / `resume_hint_carries_the_full_id_and_a_copyable_command` / `plain_mode_resume_prints_history_preview_and_exit_hint`）。`cargo test --workspace` cli 128 → **135**、全仓 512 → **518**（app 29 / cli 135 / core 354）；`cargo check --workspace --all-targets` **0 error / 0 warning**。
+- **真机演练（顺序输出模式，临时 `VIRLEN_DATA_DIR`）**：RUN 1 退出时 stderr 打出 `[chat] 会话 id: 850c0537-…` + `[chat] 续连本会话: virlen-cli chat --session 850c0537-…`；把该命令原样贴回去 RUN 2，stdout 先打 `—— 历史预览：最近 2 条 / 共 2 条 ——` / `[你] hello there` / `[你] second question`。⚠️ **TUI 路径（`Viewport::Inline`）需要真终端，未在本次无头演练中覆盖** —— 单测只覆盖到 `UiEvent::History` 这一层。
 
 **11.18 大文件怎么拆（2026-09-26 CLI/core 瘦身的口径与代价）** —— 起因：`run.rs` 1474 行、`tui/mod.rs` 1506 行这类「什么都往里塞」的文件已难以审阅（`execute_command.rs` 更极端：1075 行里 794 行是测试）。
 

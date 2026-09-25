@@ -8,6 +8,10 @@
 //!
 //! 与桌面端共用同一份会话库（`virlen.db`）：在 CLI 里接着桌面端没说完的话继续，反之亦然。
 //!
+//! 退出时会打印**会话 id** 与续连命令（`virlen-cli chat --session <id>`）；用 `--session <id>`
+//! 重连时，开头会先把**最近 5 条**历史显示出来（见 `history.rs`）—— 免得用户回来面对一块
+//! 空白，不知道上次说到哪。
+//!
 //! ## 两条路径，一条语义
 //!
 //! | 模式 | 何时使用 | 呈现 |
@@ -40,6 +44,7 @@
 
 
 pub(crate) mod commands;
+pub(crate) mod history;
 pub(crate) mod input;
 pub(crate) mod state;
 pub(crate) mod term;
@@ -62,8 +67,8 @@ const POLL: Duration = Duration::from_millis(60);
 const REDRAW_EVERY: Duration = Duration::from_millis(100);
 
 // glob 再导出：入口留在本文件、实现分散到子模块 —— `lib.rs` 与本文件 `mod tests` 的调用点
-// **一行都不用改**。（`sink` 不在这里再导出：`UiEventSink` 只有使用方直接 `use super::sink::…`，
-// 无脑 glob 会带来「lib 目标下没人用」的警告。）
+// **一行都不用改**。（`sink` / `history` 不在这里再导出：它们只有使用方直接 `use super::sink::…`
+// / `use super::history::…`，无脑 glob 会带来「lib 目标下没人用」的警告。）
 pub(crate) use self::app::*;
 pub(crate) use self::plain::*;
 
@@ -114,7 +119,9 @@ virlen-cli chat —— 交互式会话（与桌面端共用同一份配置与会
 ⚠️ 已知限制:
   - Provider 需与 `run` 一致：CLI 只支持 openai 兼容 / anthropic（Gemini 等需前端 JS 桥）。
   - 白名单 / 黑名单 / 跳过目录在桌面端 localStorage，CLI 读不到（按空处理）。
-  - 退出即结束：当前回合会被取消（会话与消息已落库，可随时续跑）。
+  - 退出即结束：当前回合会被取消（会话与消息已落库，可随时续跑）。退出时会打印
+    会话 id 与续连命令（`virlen-cli chat --session <id>`）；用 `--session <id>` 重连时
+    会先显示最近 5 条历史，方便预览上次说到哪。
 ";
 
 /// 解析 `chat` 之后的参数。纯函数 —— 单测直接断言。

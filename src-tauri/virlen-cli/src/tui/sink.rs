@@ -48,26 +48,42 @@ impl EventSink for UiEventSink {
     fn emit_agent_event(&self, _session_id: &str, event: &AgentEvent) {
         let data = event.data.as_ref();
         match event.type_.as_str() {
-            // 正文增量：唯一被打印的正文来源
-            //（`assistant_message_updated` 里带同一份 contentDelta，两者都取会出现双份正文）
-            "stream_event" => {
-                if let Some(d) = data.and_then(|d| d.get("delta")).and_then(Value::as_str) {
-                    if !d.is_empty() {
-                        self.send(UiEvent::TextDelta(d.to_string()));
-                    }
-                }
-            }
-            // 收尾帧（streaming=false）才用全量内容纠正；流式帧的 content 是「已累积内容」，
-            // 与随后的 delta 会重复（实测语义：先发 patch，再发 delta）
+            // 正文增量：**只认** `assistant_message_updated.patch.contentDelta`（下面那个分支）。
+            // `stream_event` 里带着同一份 delta —— 两者都取会出现双份正文；而
+            // `assistant_message_updated` 多带一个 `messageId`，UI 靠它把「工具行插在正文
+            // 中间」这种情况认对（见 `state/mod.rs` 的 `assistant_blocks`）。故此处只记不送。
+            "stream_event" => {}
+            // 流式帧：增量走 `contentDelta`（带 messageId）；收尾帧（streaming=false）
+            // 才用全量 `content` 纠正 —— 流式帧的 `content` 是「已累积内容」，
+            // 与随后的 delta 会重复（引擎侧实测语义：先发 patch，再发 delta）
             "assistant_message_updated" => {
                 let Some(patch) = data.and_then(|d| d.get("patch")) else {
                     return;
                 };
-                if patch.get("streaming").and_then(Value::as_bool) == Some(false) {
-                    if let Some(c) = patch.get("content").and_then(Value::as_str) {
-                        if !c.is_empty() {
-                            self.send(UiEvent::AssistantContent(c.to_string()));
+                let msg_id = data
+                    .and_then(|d| d.get("messageId"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let streaming = patch
+                    .get("streaming")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if streaming {
+                    if let Some(d) = patch.get("contentDelta").and_then(Value::as_str) {
+                        if !d.is_empty() {
+                            self.send(UiEvent::TextDelta {
+                                message_id: msg_id,
+                                delta: d.to_string(),
+                            });
                         }
+                    }
+                } else if let Some(c) = patch.get("content").and_then(Value::as_str) {
+                    if !c.is_empty() {
+                        self.send(UiEvent::AssistantContent {
+                            message_id: msg_id,
+                            content: c.to_string(),
+                        });
                     }
                 }
                 self.collect_usage(data, patch);

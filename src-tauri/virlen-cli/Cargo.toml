@@ -46,4 +46,7 @@ dunce = "1"
 ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"] }
 # 输入框光标按**显示列宽**定位（中文占 2 列）。已在依赖树内（ratatui 自身也依赖它），
 # 因此显式声明不增加任何新 crate，只是把「用到一个已在树内的版本」写清楚。
-unicode-width = "0.2"
+# ⚠️ 必须开 **cjk** feature：状态行用 `width_cjk` 做「最坏情况」宽度估算
+#    （歧义宽度如 `·` 按 2 列）。理由与实测见 `src/tui/view.rs` 的 `RIGHT_MARGIN`。
+#    该 feature 只新增 `*_cjk` 方法，不改 `width()` 语义 → 对 ratatui 无影响。
+unicode-width = { version = "0.2", features = ["cjk"] }

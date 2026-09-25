@@ -15,17 +15,54 @@
 //! （因此终端自带的滚动与鼠标选中复制都还在，见 `docs/cli-tui-plan.md` §4）。
 
 use crate::tui::state::{expand, Interaction, LineKind, UiState};
-use ratatui::layout::{Constraint, Layout, Position};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::buffer::CellDiffOption;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::Frame;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// 交互面板最多占几行（其余空间留给在飞内容）
 const INTERACTION_MAX_ROWS: u16 = 6;
 /// 工具实时输出在动态区里最多显示几行尾部
 const TOOL_TAIL_ROWS: usize = 3;
+
+/// 动态区**右侧保留**的列数。
+///
+/// ⚠️ 这不是审美选择，是**真机实测得出的硬约束**（探针 + 真终端逐帧取屏，见
+/// `docs/cli-tui-plan.md` §3.5、`docs/AGENTS.md` §11.19）：
+///
+/// > 在 conhost（cmd.exe）上，只要某一行的**最后一格**被写过，控制台就会留下一个
+/// > **待换行**状态；这个待换行会在随后的光标移动/写入时被兑现，而一旦兑现时行号已在
+/// > 屏底，控制台就**把整屏上滚一行**。ratatui 与 crossterm 都不知道这件事。
+///
+/// 后果（用户实测到的现象）：视口里的正文整体比 ratatui 的模型偏上一行，但光标仍按模型
+/// 落位 → **光标压在状态行上、输入的文字直接覆盖状态行**。
+///
+/// 实测对照（120x30 控制台，视口贴底；「上滚」= 窗口 top +1）：
+///
+/// | 帧内容 | 画的终端宽度 | 结果 |
+/// |---|---|---|
+/// | 只画文本（`> ` / 状态文本本身） | ≤ 120 | 不上滚 |
+/// | 状态行 + `Paragraph` 级样式把整行空格也涂上色 → 画到行尾 | 120 | **上滚** |
+/// | 同上但裁到 118 格（文本里 4 个 `·` 在 CJK 字体下算 2 列 → 实际 122 > 120） | 122 | **上滚** |
+/// | 118 个 ASCII 字符（无样式 / 有样式） | 118 | 不上滚 |
+/// | 输入行画满 120 格 | 120 | **上滚** |
+///
+/// ⚠️ 「文本里 4 个 `·` → 实际 122 > 120」不是推测：同一台机器上直接量过**终端对每个字符
+/// 推进几列**（写一个字符后读光标列）：`A`=1、**`·`(U+00B7)=2**、`—`(U+2014)=2、`取`=2、
+/// `⠧`(U+2827)=1、`─`(U+2500)=1。即 **`·` 这类「歧义宽度」字符在 CJK 字体下由终端按 2 列
+/// 推进，而 ratatui 按 1 列排版**——文本实际比模型宽「这类字符的个数」列，就是这个差额把屏底行
+/// 顶出了行尾。（`unicode-width` 的 `width_cjk` 口径与实际一致：`·` 算 2 列。）
+///
+/// ⇒ 结论：**帧里任何一行都不能碰到屏的最后一格**，而且状态行还得把尾部涂满（否则状态行
+/// 变短时会留下上一个状态的残字，比如 `/exi**t**`）。因此：
+///
+/// 1. 整帧往右收 `RIGHT_MARGIN` 列（所有部件的渲染区都窄这么多）；
+/// 2. 状态行文本按 `width_cjk`（歧义宽度算 2 列 = 最坏情况）裁好后再用空格补满，
+///    这样「格子数」与「终端实际推进的列数」都 ≤ `宽 - RIGHT_MARGIN`。
+const RIGHT_MARGIN: u16 = 2;
 
 /// 一个逻辑行的颜色（视口与固化区**共用同一份** → 两处颜色不会分叉）
 pub(crate) fn style_of(kind: LineKind) -> Style {
@@ -41,6 +78,13 @@ pub(crate) fn style_of(kind: LineKind) -> Style {
 
 /// 画一帧
 pub(crate) fn render(f: &mut Frame, st: &UiState) {
+    // ⚠️ 整帧往右收 RIGHT_MARGIN 列：任何一行都不去碰屏的最后一格（否则 conhost 会整屏上滚，
+    //    见 `RIGHT_MARGIN`）。收窄后各部件拿到的 `rows[i]` 已同步变窄，无需逐个改。
+    let outer = f.area();
+    let area = Rect {
+        width: outer.width.saturating_sub(RIGHT_MARGIN),
+        ..outer
+    };
     let it_rows = st
         .interaction()
         .map(|_| interaction_rows(st.interaction().expect("已判空")))
@@ -51,7 +95,7 @@ pub(crate) fn render(f: &mut Frame, st: &UiState) {
         Constraint::Length(1),
         Constraint::Length(1),
     ])
-    .split(f.area());
+    .split(area);
 
     render_inflight(f, st, rows[0]);
     if let Some(it) = st.interaction() {
@@ -59,6 +103,24 @@ pub(crate) fn render(f: &mut Frame, st: &UiState) {
     }
     let cursor = render_input(f, st, rows[2]);
     render_status(f, st, rows[3]);
+    // ⚠️ Windows conhost 的**中文残影**修复（实测；见 `docs/AGENTS.md` §11.21、`cli-tui-plan.md` §3.7）：
+    //
+    // ratatui 的 diff 在「宽字符被窄字符替换」时**不会**重发宽字符的 trailing（第 2 列）——
+    // 它只在 previous 宽字符带「可见样式」时才强制重发（`ratatui-core/src/buffer/diff.rs` 的
+    // `else` 分支注释写着 “standard wide characters (e.g., CJK), which terminals handle well”）。
+    // 但这个假设在 conhost 上不成立：conhost 不会在「写窄字符到宽字符起始列」时自动清掉第 2 列，
+    // 于是残留半个/整个汉字（长中文回答滚动、或状态行变短时都能复现：`…可能性。␣␣␣洛`）。
+    //
+    // 把视口内（**除右侧 RIGHT_MARGIN 两列**，那两列绝不能写，否则触发 §11.19 的整屏上滚）
+    // 所有 cell 标为 `AlwaysUpdate`（diff 时绕过相等判断）→ 每帧完整重画这些列，残影无处藏身。
+    // 视口只有 10×118，这点重画量可忽略。
+    let row_w = usize::from(outer.width);
+    let keep = usize::from(area.width);
+    for (i, cell) in f.buffer_mut().content.iter_mut().enumerate() {
+        if keep == 0 || i % row_w < keep {
+            cell.set_diff_option(CellDiffOption::AlwaysUpdate);
+        }
+    }
     f.set_cursor_position(cursor);
 }
 
@@ -215,13 +277,56 @@ fn render_status(f: &mut Frame, st: &UiState, area: ratatui::layout::Rect) {
     let hint = if st.running() {
         "Esc 取消"
     } else {
-        "/help · /exit"
+        "/help | /exit"
     };
     parts.push(hint.to_string());
+    // ⚠️ 状态行有两处「看着多余、删了就出 bug」的处理（实测见 `RIGHT_MARGIN`）：
+    //
+    //   1. 颜色只落在 **Span** 上：`Paragraph::new(x).style(s)` 会把文本之后的空格格也
+    //      涂上样式 → 这些格在 diff 里「变了」→ 被逐格重画到行尾；而画到屏底行的最后一格
+    //      会触发控制台**整屏上滚一行**（ratatui 不知道）→ 正文比模型偏上一行、光标压在
+    //      状态行上、输入的文字覆盖状态行（就是用户实测到的那个现象）。
+    //   2. 文本裁到 `width_cjk ≤ 区宽 - RIGHT_MARGIN` 后再**用空格补满**：
+    //      · 补满是必需的 —— 不补，状态行变短时上一个状态的残字会留在屏上（如 `/exi t`）；
+    //      · 用 `width_cjk` 是因为 `·`、`—` 这类「歧义宽度」字符在 CJK 字体/区域下由终端
+    //        按 2 列推进，按 1 列算会低估（实测：低估 4 列就把画出的宽度顶到了 122 > 120）；
+    //      · 再退 RIGHT_MARGIN 列：实测「空格尾」比「文字尾」敏感 —— 同样画到 118 格，
+    //        文字尾不上滚（`long_spanstyle`），空格尾上滚（`t2`）。文本与补白用同一个上限，
+    //        所有帧就都只画 `[0, 上限)`，残字无处藏身。
+    //   3. **分隔符用 ASCII `|`，不用 `·`**：`·`(U+00B7) 是「歧义宽度」字符 —— ratatui 按
+    //      1 列排版、而 conhost 在 CJK 字体下按 2 列推进，两边不一致；一旦整帧重绘（§11.21 的
+    //      `AlwaysUpdate`）就会累积错位、把尾部顶乱（实测：运行中状态行会变成 `… Documents1.1s · Es消`）。
+    //      ASCII 字符两边宽度一致，不会错位。
+    let text = status_line(&parts.join(" | "), area.width.saturating_sub(RIGHT_MARGIN));
     f.render_widget(
-        Paragraph::new(parts.join(" · ")).style(Style::default().fg(Color::Cyan)),
+        Paragraph::new(Line::from(Span::styled(
+            text,
+            Style::default().fg(Color::Cyan),
+        ))),
         area,
     );
+}
+
+/// 状态行的最终文本：按**最坏情况显示宽度**（`width_cjk`：歧义宽度算 2 列）截断，再用空格补满
+/// 到 `max_cols`。
+///
+/// 两个保证（状态行落在屏底行上，必须成立；见 `RIGHT_MARGIN`）：
+/// * 终端实际推进的列数 ≤ `max_cols`（含 CJK 字体把 `·` 当宽字符的情况）；
+/// * 行的整段都被涂过 —— 状态行变短不会留下上一帧的残字。
+fn status_line(s: &str, max_cols: u16) -> String {
+    let max = usize::from(max_cols);
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in s.chars() {
+        let w = UnicodeWidthChar::width_cjk(ch).unwrap_or(0);
+        if used + w > max {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
+    out.extend(std::iter::repeat(' ').take(max - used));
+    out
 }
 
 #[cfg(test)]
@@ -293,7 +398,10 @@ mod tests {
     #[test]
     fn renders_transcript_input_and_status() {
         let mut st = state();
-        st.apply(UiEvent::TextDelta("你好，世界".into()));
+        st.apply(UiEvent::TextDelta {
+            message_id: "m1".into(),
+            delta: "你好，世界".into(),
+        });
         let text = draw(&st);
         assert!(text.contains("你好，世界"), "{text}");
         assert!(text.contains("> "), "输入框提示: {text}");
@@ -321,7 +429,10 @@ mod tests {
     fn in_flight_tail_keeps_the_last_rows_only() {
         let mut st = state();
         for i in 0..40 {
-            st.apply(UiEvent::TextDelta(format!("第 {} 行\n", i + 1)));
+            st.apply(UiEvent::TextDelta {
+                message_id: "m1".into(),
+                delta: format!("第 {} 行\n", i + 1),
+            });
         }
         let text = draw(&st);
         assert!(text.contains("第 40 行"), "{text}");
@@ -345,7 +456,31 @@ mod tests {
         assert!(text.contains("execute_command(npm test)"), "{text}");
         assert!(text.contains("PASS src/a.test.ts"), "实时输出尾部: {text}");
         assert!(text.contains("> hi"), "用户输入应回显: {text}");
+        // 用宽一点的终端断言「运行中提示」：窄终端（60 列）下状态行会按最坏情况（CJK）宽度
+        // 截断，`取消` 会被裁掉——那是设计行为（见 `RIGHT_MARGIN`），不是要在这里断言的。
+        let mut t = term(120, 20);
+        t.draw(|f| render(f, &st)).unwrap();
+        let text = text_of(&t);
         assert!(text.contains("Esc 取消"), "运行中状态行: {text}");
+    }
+
+    /// 回归（conhost 实测，见 `docs/AGENTS.md` §11.21）：状态行**不能**用「歧义宽度」字符
+    /// （如 `·` U+00B7）当分隔符 —— ratatui 按 1 列排版、终端按 2 列推进，两边不一致，在
+    /// 「整帧重绘」时会累积错位、把尾部顶乱。这里断言状态行里没有这类字符。
+    #[test]
+    fn status_line_has_no_ambiguous_width_chars() {
+        let mut st = state();
+        submit(&mut st, "hi");
+        let mut t = term(120, 20);
+        t.draw(|f| render(f, &st)).unwrap();
+        let text = text_of(&t);
+        let status = text
+            .lines()
+            .find(|l| l.contains("deepseek-chat"))
+            .expect("应有状态行");
+        for ch in ['\u{00B7}', '\u{2014}', '\u{00D7}'] {
+            assert!(!status.contains(ch), "状态行含歧义宽度字符 {ch:?}: {status:?}");
+        }
     }
 
     #[test]
@@ -418,5 +553,80 @@ mod tests {
     fn expand_and_styles_are_wired() {
         let l = OutLine::new(LineKind::Error, "boom");
         assert_eq!(style_of(l.kind).fg, Some(Color::Red));
+    }
+
+    /// 找状态行在 TestBackend 里的 y（按内容找，不假设视口原点）
+    fn status_row(t: &Terminal<TestBackend>, needle: &str) -> u16 {
+        let buf = t.backend().buffer();
+        for y in 0..buf.area.height {
+            let row: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+            if row.contains(needle) {
+                return y;
+            }
+        }
+        panic!("找不到状态行（找不到 {needle}）");
+    }
+
+    /// 回归（真机实测：cmd.exe 里“输入的文字覆盖状态行”）：
+    ///
+    /// 状态行有两条必须同时成立的性质 —— 左边不够会留残字，过了头就会把 conhost 整屏顶上去：
+    ///
+    /// 1. **涂满动态区**（文本 + 空格补白）：否则状态行变短时（如 `Esc 取消` → `/help · /exit`）
+    ///    上一帧的残字会留在屏上；
+    /// 2. **绝不碰屏的最后两列**：写到行尾会让 conhost 留下「待换行」，一旦兑现时已在屏底就
+    ///    **整屏上滚一行**（ratatui 不知道）→ 正文比模型偏上一行、光标压到状态行上。
+    #[test]
+    fn status_row_is_fully_painted_but_never_touches_the_screen_edge() {
+        let st = state();
+        let mut t = term(60, 20);
+        t.draw(|f| render(f, &st)).unwrap();
+        let buf = t.backend().buffer();
+        let w = buf.area.width;
+        let y = status_row(&t, "/exit");
+        let row: String = (0..w).map(|x| buf[(x, y)].symbol()).collect();
+        // 歧义宽度字符（`·` 等）在 CJK 字体/区域下由终端按 2 列推进，而 ratatui 只画 1 格
+        // → 补白的格子数会少这么多（补白是按 width_cjk 算的）。
+        let amb = row
+            .chars()
+            .filter(|c| UnicodeWidthChar::width_cjk(*c) != UnicodeWidthChar::width(*c))
+            .count();
+        let styled = (0..w).filter(|&x| buf[(x, y)].fg != Color::Reset).count();
+        assert_eq!(
+            styled + amb,
+            usize::from(w - RIGHT_MARGIN - RIGHT_MARGIN),
+            "状态行没涂满（残字风险）或越过了右侧保留列：styled={styled} amb={amb} w={w}"
+        );
+        assert_eq!(buf[(w - 1, y)].fg, Color::Reset, "最后一列绝不能写");
+        assert_eq!(buf[(w - 2, y)].fg, Color::Reset, "倒数第二列绝不能写");
+    }
+
+    /// 窄终端 + 超长状态文本：按 `width_cjk` 截断，绝不越界；且仍保持上面那两条性质
+    #[test]
+    fn status_text_is_clipped_away_from_the_last_cells() {
+        let mut st = state();
+        st.apply(UiEvent::SessionChanged {
+            session_id: "0123456789abcdef".into(),
+            title: "t".into(),
+            model: "a-very-long-model-name-aaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            workspace: "E:/code/virlen/virlen-app".into(),
+            messages: 2,
+        });
+        let _ = st.take_commit();
+        let mut t = term(40, 12);
+        t.draw(|f| render(f, &st)).unwrap();
+        let buf = t.backend().buffer();
+        let w = buf.area.width;
+        let y = status_row(&t, "a-very-long");
+        for x in (w - 2)..w {
+            assert_eq!(buf[(x, y)].fg, Color::Reset, "窄终端下第 {x} 格也不该被写");
+        }
+        let styled = (0..w).filter(|&x| buf[(x, y)].fg != Color::Reset).count();
+        assert!(
+            styled > 0 && styled + usize::from(RIGHT_MARGIN) * 2 <= usize::from(w),
+            "{styled}/{w}"
+        );
+        // 文本被截断：超长模型名不会完整出现
+        let row: String = (0..w).map(|x| buf[(x, y)].symbol()).collect();
+        assert!(!row.contains("aaaaaaaaaaaaaaaaaaaa"), "{row}");
     }
 }

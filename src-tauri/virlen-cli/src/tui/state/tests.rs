@@ -119,14 +119,88 @@ fn history_walks_back_and_forth() {
 #[test]
 fn assistant_deltas_accumulate_then_final_content_replaces() {
     let mut st = UiState::new();
-    st.apply(UiEvent::TextDelta("你".into()));
-    st.apply(UiEvent::TextDelta("好".into()));
+    st.apply(UiEvent::TextDelta {
+        message_id: "m1".into(),
+        delta: "你".into(),
+    });
+    st.apply(UiEvent::TextDelta {
+        message_id: "m1".into(),
+        delta: "好".into(),
+    });
     let inflight = st.inflight().to_vec();
     assert_eq!(inflight.len(), 1, "连续增量合成一块");
     assert_eq!(inflight[0].text, "你好");
 
-    st.apply(UiEvent::AssistantContent("你好，世界".into()));
+    st.apply(UiEvent::AssistantContent {
+        message_id: "m1".into(),
+        content: "你好，世界".into(),
+    });
     assert_eq!(st.inflight()[0].text, "你好，世界", "全量内容整块替换");
+}
+
+/// 回归（真机实测：`user_choice` 之后正文整段重复）：
+///
+/// 引擎的事件顺序是「正文增量 → `tool_call`（工具行）→ 收尾帧（`streaming:false` + 全量正文）」。
+/// 收尾帧到达时「正在追加的块」已被工具行清掉；**必须按 `messageId` 找回原块**，
+/// 否则会再插一块 → 正文整段重复。
+#[test]
+fn finalize_frame_after_tool_call_reuses_the_same_block() {
+    let mut st = UiState::new();
+    st.apply(UiEvent::TextDelta {
+        message_id: "m1".into(),
+        delta: "你好！我想先确认一下：".into(),
+    });
+    st.apply(UiEvent::ToolStart {
+        id: "tc1".into(),
+        name: "user_choice".into(),
+        detail: "问题".into(),
+    });
+    st.apply(UiEvent::AssistantContent {
+        message_id: "m1".into(),
+        content: "你好！我想先确认一下：".into(),
+    });
+    let texts: Vec<String> = st.inflight().iter().map(|l| l.text.clone()).collect();
+    assert_eq!(
+        texts,
+        vec![
+            "你好！我想先确认一下：".to_string(),
+            "⏺ user_choice(问题)".to_string()
+        ],
+        "收尾帧不得再插一块：{texts:?}"
+    );
+}
+
+/// 回归（真机实测：工具结果跑到了下一轮正文后面）：
+///
+/// 工具行之后的**下一轮**正文必须新起一块（落在工具行 / 答案回显之后），
+/// 不得接着上一条消息的块继续长 —— 否则它在屏幕上会跑到工具结果**前面**。
+#[test]
+fn next_message_text_starts_a_new_block_after_the_tool_line() {
+    let mut st = UiState::new();
+    st.apply(UiEvent::TextDelta {
+        message_id: "m1".into(),
+        delta: "第一轮".into(),
+    });
+    st.apply(UiEvent::ToolStart {
+        id: "tc1".into(),
+        name: "user_choice".into(),
+        detail: "q".into(),
+    });
+    st.apply(UiEvent::ToolDone {
+        ok: true,
+        chars: 2,
+        preview: "答案".into(),
+    });
+    st.apply(UiEvent::TextDelta {
+        message_id: "m2".into(),
+        delta: "第二轮".into(),
+    });
+    let texts: Vec<String> = st.inflight().iter().map(|l| l.text.clone()).collect();
+    assert_eq!(texts.len(), 4, "{texts:?}");
+    assert_eq!(texts[0], "第一轮");
+    assert!(texts[1].starts_with('⏺'), "{}", texts[1]);
+    assert!(texts[2].contains("ok"), "{}", texts[2]);
+    assert_eq!(texts[3], "第二轮", "下一轮正文必须新起一块（排在工具结果之后）");
 }
 
 #[test]
@@ -212,6 +286,33 @@ fn notice_commits_immediately_when_idle() {
     let committed = st.take_commit();
     assert_eq!(committed.len(), 1);
     assert_eq!(committed[0].text, "帮助");
+}
+
+/// 续连的历史预览：**整批**进动态区并立刻固化，且**保留每行的角色**（上色靠它）。
+///
+/// 为什么必须立刻固化：预览不属于任何回合，留在动态区会被随后第一个回合的输出挤掉。
+#[test]
+fn history_preview_commits_immediately_with_roles() {
+    let mut st = UiState::new();
+    st.apply(UiEvent::History(vec![
+        OutLine::new(LineKind::Notice, "—— 历史预览 ——"),
+        OutLine::new(LineKind::User, "[你] 你好"),
+        OutLine::new(LineKind::Assistant, "[AI] 你好，有什么可以帮你？"),
+    ]));
+    let committed = st.take_commit();
+    assert_eq!(committed.len(), 3);
+    assert_eq!(committed[1].kind, LineKind::User);
+    assert_eq!(committed[2].kind, LineKind::Assistant);
+    assert_eq!(committed[2].text, "[AI] 你好，有什么可以帮你？");
+    assert!(st.inflight().is_empty(), "固化后动态区应清空");
+}
+
+/// 空的历史（新会话）：连表头都不该出现
+#[test]
+fn empty_history_is_ignored() {
+    let mut st = UiState::new();
+    st.apply(UiEvent::History(Vec::new()));
+    assert!(st.take_commit().is_empty());
 }
 
 #[test]

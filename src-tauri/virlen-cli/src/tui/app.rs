@@ -22,6 +22,7 @@ use virlen_core::agent::event_sink::EventSink;
 use virlen_core::agent::host::HostEnv;
 use virlen_core::agent::provider::DefaultProviderFactory;
 
+use super::history::{history_preview, resume_hint, HISTORY_PREVIEW};
 use super::plain::{run_plain, status_text};
 use super::sink::UiEventSink;
 use super::{commands, input, term, Input, POLL, REDRAW_EVERY};
@@ -124,7 +125,11 @@ pub(crate) async fn run_tui(
         turns: turn_tx.clone(),
         running: false,
     };
-    chat.announce("已就绪");
+    // 续连（`chat --session <id>`）时先把最近几条消息显示出来，方便用户预览历史。
+    // 顺序在「已就绪」**之前**：先看见历史，再看见就绪；新会话没有历史 → 什么也不显示。
+    let resumed = chat.rt.opts.session_id.is_some();
+    chat.preview_history();
+    chat.announce(if resumed { "已续连会话" } else { "已就绪" });
     let _ = chat.evt.send(UiEvent::Notice(
         "Ctrl+C（空闲时）= 退出 · Esc = 取消当前回合 · /help 看命令".to_string(),
     ));
@@ -168,6 +173,8 @@ pub(crate) async fn run_tui(
     match degraded {
         None => {
             let _ = writeln!(err, "[chat] 已退出（会话已保存在库里，可随时续跑）");
+            // 会话 id 必须**完整**打出来（状态行里那个只显示前 8 位，不足以续连）
+            let _ = writeln!(err, "{}", resume_hint(&rt.session.id));
             EXIT_OK
         }
         Some(why) => {
@@ -300,6 +307,16 @@ impl Chat {
             self.rt.resources.model_id,
             self.rt.resources.workspace
         ));
+    }
+
+    /// 续连时先展示历史预览（`chat --session <id>` 命中已有会话）。
+    ///
+    /// 消息为空（新会话）时 `history_preview` 返回空 → 什么都不发，界面上不会多出空表头。
+    fn preview_history(&self) {
+        let lines = history_preview(&self.rt.messages, HISTORY_PREVIEW);
+        if !lines.is_empty() {
+            let _ = self.evt.send(UiEvent::History(lines));
+        }
     }
 
     fn finish_turn(&mut self, o: TurnOutcome) {

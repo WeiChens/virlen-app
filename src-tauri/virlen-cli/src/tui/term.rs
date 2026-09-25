@@ -19,6 +19,7 @@
 use crate::tui::state::{expand, OutLine, UiState};
 use crate::tui::view;
 use ratatui::backend::CrosstermBackend;
+use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::crossterm::cursor;
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{disable_raw_mode, enable_raw_mode};
@@ -223,6 +224,7 @@ impl Tui {
             let para = Paragraph::new(text.clone()).wrap(Wrap { trim: false });
             let r = self.terminal.insert_before(h, |buf| {
                 Widget::render(para.clone(), buf.area, buf);
+                strip_wide_continuations(buf);
             });
             match r {
                 Ok(()) => return Ok(()),
@@ -274,6 +276,37 @@ fn chunk(lines: &[OutLine], width: u16, max_h: usize) -> Vec<Vec<OutLine>> {
     out
 }
 
+/// 修复 ratatui `insert_before`（无 `scrolling-regions` 时）的 continuation 空格 bug。
+///
+/// 背景（实测，见 `docs/AGENTS.md` §11.19）：
+///
+/// - 视口内渲染走 `diff_iter`，会跳过宽字符（中文/emoji）后面的 continuation cell；
+/// - 但 `insert_before` 在 Windows 上走 `insert_before_no_scrolling_regions`（`scrolling-regions`
+///   feature 的 `ScrollUpInRegion` 在 winapi 下直接返回 `Unsupported`，不可用），其 `draw_lines`
+///   **直接遍历 buffer 的每个 cell**，不跳过 continuation —— 而 continuation cell 的 symbol 是
+///   空格，于是固化的正文**每个宽字符后面多出一个空格**（`我 是 你 的`）。
+///
+/// 这里在交给 `insert_before` 前，把 continuation cell 的 symbol 清成空串：`draw_lines` 输出
+/// `Print("")` 就不再有空格。判断口径与 ratatui 内部 diff 的 skip 一致：宽字符（`cell_width ≥ 2`）
+/// 后面紧跟的 `(w-1)` 个 cell 就是 continuation。
+///
+/// ⚠️ 必须 `set_symbol("")` 而不是 `reset()`：`reset` 回到 `symbol = None`，而 `Cell::symbol()`
+/// 对 `None` 返回 `" "`（空格），等于没清。
+fn strip_wide_continuations(buf: &mut Buffer) {
+    let width = buf.area.width as usize;
+    for row in buf.content.chunks_mut(width) {
+        let mut skip = 0usize;
+        for cell in row.iter_mut() {
+            if skip > 0 {
+                cell.set_symbol("");
+                skip -= 1;
+            } else {
+                skip = (cell.cell_width() as usize).saturating_sub(1);
+            }
+        }
+    }
+}
+
 /// `OutLine` → 带样式的 `Text`（颜色与视口里**同一份** `view::style_of`）
 fn to_text(lines: &[OutLine]) -> Text<'static> {
     let rows: Vec<Line<'static>> = expand(lines)
@@ -287,6 +320,8 @@ fn to_text(lines: &[OutLine]) -> Text<'static> {
 mod tests {
     use super::*;
     use crate::tui::state::LineKind;
+    use ratatui::layout::Rect;
+    use ratatui::style::Style;
 
     fn ol(kind: LineKind, s: &str) -> OutLine {
         OutLine::new(kind, s)
@@ -344,5 +379,39 @@ mod tests {
         log("单元测试写日志（应当成功且不 panic）");
         let content = std::fs::read_to_string(log_path()).unwrap_or_default();
         assert!(content.contains("单元测试写日志"));
+    }
+
+    /// 回归（真机实测：固化进滚动区的中文正文每个字后多一个空格）：
+    /// `strip_wide_continuations` 必须只清宽字符的 continuation，真实空格与 ASCII 不受影响。
+    #[test]
+    fn strip_wide_continuations_removes_only_the_filler() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 12, 1));
+        buf.set_string(0, 0, "你好 世界", Style::default());
+        strip_wide_continuations(&mut buf);
+
+        // 宽字符后面的 continuation cell 被清空（不再是空格）
+        assert_eq!(buf[(1, 0)].symbol(), "", "「你」的 continuation");
+        assert_eq!(buf[(3, 0)].symbol(), "", "「好」的 continuation");
+        assert_eq!(buf[(6, 0)].symbol(), "", "「世」的 continuation");
+        assert_eq!(buf[(8, 0)].symbol(), "", "「界」的 continuation");
+
+        // 真实空格保留
+        assert_eq!(buf[(4, 0)].symbol(), " ");
+
+        // 宽字符本身不受影响
+        assert_eq!(buf[(0, 0)].symbol(), "你");
+        assert_eq!(buf[(2, 0)].symbol(), "好");
+        assert_eq!(buf[(5, 0)].symbol(), "世");
+        assert_eq!(buf[(7, 0)].symbol(), "界");
+    }
+
+    #[test]
+    fn strip_wide_continuations_leaves_ascii_untouched() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 1));
+        buf.set_string(0, 0, "AB CD", Style::default());
+        strip_wide_continuations(&mut buf);
+
+        let flat: String = (0..5).map(|x| buf[(x, 0)].symbol()).collect();
+        assert_eq!(flat, "AB CD");
     }
 }

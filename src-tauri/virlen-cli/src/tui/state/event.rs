@@ -11,13 +11,17 @@ impl UiState {
     pub(crate) fn apply(&mut self, ev: UiEvent) {
         self.dirty = true;
         match ev {
-            UiEvent::TextDelta(d) => self.append_assistant(&d),
-            UiEvent::AssistantContent(c) => self.set_assistant(&c),
+            UiEvent::TextDelta { message_id, delta } => {
+                self.append_assistant(&message_id, &delta)
+            }
+            UiEvent::AssistantContent {
+                message_id,
+                content,
+            } => self.set_assistant(&message_id, &content),
             UiEvent::ToolStart { id, name, detail } => {
                 if !id.is_empty() && !self.started_tools.insert(id) {
                     return; // 同一次调用的第二帧
                 }
-                self.assistant_at = None;
                 self.tool_tail.clear();
                 let line = if detail.is_empty() {
                     format!("⏺ {}", name)
@@ -81,12 +85,19 @@ impl UiState {
                 }
             }
             UiEvent::Notice(t) => {
-                self.assistant_at = None;
                 self.inflight.push(OutLine::new(LineKind::Notice, t));
                 self.commit_pending = true;
             }
+            // 历史预览：整批进动态区并**立刻固化**（它不属于任何回合，留在动态区会被
+            // 随后开始的回合挤掉；见 `take_commit` 的「运行中不固化」约定）
+            UiEvent::History(lines) => {
+                if lines.is_empty() {
+                    return; // 新会话没有历史：连表头都不打
+                }
+                self.inflight.extend(lines);
+                self.commit_pending = true;
+            }
             UiEvent::Error(t) => {
-                self.assistant_at = None;
                 self.inflight.push(OutLine::new(LineKind::Error, t));
                 self.commit_pending = true;
             }
@@ -97,7 +108,6 @@ impl UiState {
             } => {
                 self.running = false;
                 self.turn_started_ms = None;
-                self.assistant_at = None;
                 self.tool_tail.clear();
                 if let Some(e) = error {
                     self.inflight
@@ -132,19 +142,13 @@ impl UiState {
         }
     }
 
-    /// 正文增量：接着当前助手块写；没有就新起一块
-    fn append_assistant(&mut self, delta: &str) {
+    /// 正文增量：接着**这条消息**的块写；该消息还没有块就新起一块
+    fn append_assistant(&mut self, msg_id: &str, delta: &str) {
         if delta.is_empty() {
             return;
         }
-        let idx = match self.assistant_at {
-            Some(i) if i < self.inflight.len() => i,
-            _ => {
-                self.inflight
-                    .push(OutLine::new(LineKind::Assistant, String::new()));
-                self.assistant_at = Some(self.inflight.len() - 1);
-                self.inflight.len() - 1
-            }
+        let Some(idx) = self.assistant_idx(msg_id, true) else {
+            return;
         };
         // 用 take/放回避免每次增量都 clone 一整块正文（长回复下是 O(n²)）
         let mut text = std::mem::take(&mut self.inflight[idx].text);
@@ -152,18 +156,57 @@ impl UiState {
         self.inflight[idx].text = sanitize(&text);
     }
 
-    /// 全量内容：**整块替换**当前助手块（收尾帧用它纠正增量偏差）
-    fn set_assistant(&mut self, content: &str) {
-        let idx = match self.assistant_at {
-            Some(i) if i < self.inflight.len() => i,
-            _ if !content.is_empty() => {
-                self.inflight
-                    .push(OutLine::new(LineKind::Assistant, String::new()));
-                self.assistant_at = Some(self.inflight.len() - 1);
-                self.inflight.len() - 1
+    /// 全量内容：**整块替换这条消息的块**（收尾帧用它纠正增量偏差）
+    fn set_assistant(&mut self, msg_id: &str, content: &str) {
+        let clean = sanitize(content);
+        if let Some(idx) = self.assistant_idx(msg_id, false) {
+            self.inflight[idx].text = clean;
+            return;
+        }
+        if clean.is_empty() {
+            return;
+        }
+        // 该消息还没有块（只有收尾帧、没收到过增量）→ 新起一块并记账
+        self.inflight
+            .push(OutLine::new(LineKind::Assistant, clean));
+        if !msg_id.is_empty() {
+            self.assistant_blocks
+                .insert(msg_id.to_string(), self.inflight.len() - 1);
+        }
+    }
+
+    /// 让「这条消息的块」在 `inflight` 里就位：有就返回下标，没有就（可选）新起一块。
+    ///
+    /// 事件里没带 `messageId` 时（异常/老路径）退化成「追加到最后一个助手块」——
+    /// 这正是旧行为，保留它只是为了不把正文弄丢。
+    fn assistant_idx(&mut self, msg_id: &str, create: bool) -> Option<usize> {
+        if !msg_id.is_empty() {
+            if let Some(&i) = self.assistant_blocks.get(msg_id) {
+                if i < self.inflight.len() {
+                    return Some(i);
+                }
             }
-            _ => return,
-        };
-        self.inflight[idx].text = sanitize(content);
+            if !create {
+                return None;
+            }
+            self.inflight
+                .push(OutLine::new(LineKind::Assistant, String::new()));
+            let i = self.inflight.len() - 1;
+            self.assistant_blocks.insert(msg_id.to_string(), i);
+            return Some(i);
+        }
+        if let Some(i) = self
+            .inflight
+            .iter()
+            .rposition(|l| l.kind == LineKind::Assistant)
+        {
+            return Some(i);
+        }
+        if !create {
+            return None;
+        }
+        self.inflight
+            .push(OutLine::new(LineKind::Assistant, String::new()));
+        Some(self.inflight.len() - 1)
     }
 }

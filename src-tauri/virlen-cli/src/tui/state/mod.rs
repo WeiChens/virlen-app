@@ -21,7 +21,7 @@ pub(crate) use self::line::*;
 
 use crate::tui::commands::Slash;
 use serde_json::{json, Value};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// 归一化按键（`input.rs` 把 crossterm 的 `KeyEvent` 映射到这里 → 本模块可在无终端下单测）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,11 +44,21 @@ pub(crate) enum Key {
 /// 引擎 / 宿主 → UI 的事件（`mod.rs` 的事件出口把引擎事件映射成它）
 #[derive(Debug, Clone)]
 pub(crate) enum UiEvent {
-    /// 正文增量（`stream_event.delta`，唯一被打印的正文来源）
-    TextDelta(String),
+    /// 正文增量（`assistant_message_updated.patch.contentDelta`，唯一被打印的正文来源）
+    ///
+    /// ⚠️ `stream_event` 里也有同一份 delta —— 两者都取会出现双份正文；这里取**带
+    /// `messageId` 的那一条**（多一个 id 才能把「工具行插在同一条消息的正文之后」认对，
+    /// 见 `assistant_blocks`）。
+    TextDelta {
+        message_id: String,
+        delta: String,
+    },
     /// 助手消息全量内容（`assistant_message_updated.patch.content`）——
     /// 用来**纠正**增量可能出现的偏差（收尾帧一定带它）
-    AssistantContent(String),
+    AssistantContent {
+        message_id: String,
+        content: String,
+    },
     /// 工具开始
     ToolStart {
         id: String,
@@ -73,6 +83,11 @@ pub(crate) enum UiEvent {
     },
     /// 提示文本（斜杠命令输出、迭代进度等）
     Notice(String),
+    /// 续连时的历史预览（`chat --session <id>` 命中已有会话 → 先把最近几条消息显示出来）
+    ///
+    /// 与 `Notice` 的差别：这些行**按角色着色**（用户 / 助手 / 工具），像一段真的历史记录，
+    /// 而不是一条灰色提示。行文本由 `tui::history::history_preview` 生成（两种模式共用）。
+    History(Vec<OutLine>),
     /// 错误提示（不一定是致命错误）
     Error(String),
     /// 一次回合结束
@@ -221,8 +236,15 @@ impl Interaction {
 pub(crate) struct UiState {
     /// 本轮**尚未固化**的输出（回合结束时整块交给 `term` 写进终端原生滚动区）
     inflight: Vec<OutLine>,
-    /// 当前助手正文块在 `inflight` 里的下标（`AssistantContent` 用它整体替换）
-    assistant_at: Option<usize>,
+    /// 各条助手消息的正文块在 `inflight` 里的下标（key = `messageId`）
+    ///
+    /// ⚠️ 必须**按 id 认块**，不能用「当前正在追加的那一块」（旧写法就是后者，已踩坑）：
+    /// 一次工具调用的两个事件是**交错**到达的 —— `tool_call`（工具行）先到，
+    /// `assistant_message_updated{streaming:false}`（收尾帧，带全量正文）后到。
+    /// 只记「当前块」的话，收尾帧会被当成**新消息**再插一块 → 正文整段重复，
+    /// 而且下一轮的增量会接着写进那一块，于是**下一轮正文长在工具结果之前**，
+    /// 看着就像「工具输出来到了下一轮回复后面」（真机实测，见 `docs/AGENTS.md` §11.22）。
+    assistant_blocks: HashMap<String, usize>,
     /// 已经打过「工具开始行」的 tool_call id（同一次调用会来两帧，必须去重）
     started_tools: HashSet<String>,
     /// 工具实时输出尾部（只留尾部：长命令的输出可以无限长，不能全留在内存里）
@@ -264,7 +286,7 @@ impl UiState {
     pub(crate) fn new() -> Self {
         Self {
             inflight: Vec::new(),
-            assistant_at: None,
+            assistant_blocks: HashMap::new(),
             started_tools: HashSet::new(),
             tool_tail: String::new(),
             input: String::new(),
@@ -328,7 +350,7 @@ impl UiState {
             return Vec::new();
         }
         self.commit_pending = false;
-        self.assistant_at = None;
+        self.assistant_blocks.clear();
         self.tool_tail.clear();
         std::mem::take(&mut self.inflight)
     }
