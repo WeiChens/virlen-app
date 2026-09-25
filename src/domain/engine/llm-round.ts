@@ -114,6 +114,35 @@ export async function doLLMRound(
     })
   }
 
+  /**
+   * 只发正文增量（流式期间每个 delta 调用）
+   *
+   * ⚠️ 流式补丁只带 `contentDelta`：若每次都回传累积全量正文，载荷随内容线性增长、
+   * 整轮通信量即 O(n²)。全量正文由流结束帧（finalizeAssistantMessage / message_stop）
+   * 兜底，个别增量丢失也能被纠正。与 Rust 引擎
+   * `agent/llm_round.rs::flush_stream_state` 对称（铁律 1）。
+   */
+  const syncContentDelta = (delta: string) => {
+    onEvent?.({
+      type: 'assistant_message_updated',
+      data: {
+        messageId: assistantMessage.id,
+        patch: { contentDelta: delta, streaming: true, model },
+      },
+    })
+  }
+
+  /** 只发思考内容快照：思考期间正文未变化，无需回传全量正文 */
+  const syncReasoning = (reasoningContent: string) => {
+    onEvent?.({
+      type: 'assistant_message_updated',
+      data: {
+        messageId: assistantMessage.id,
+        patch: { reasoningContent, streaming: true, model },
+      },
+    })
+  }
+
   const roundStart = Date.now()
   track('engine.round.start', {
     trace_id: traceId,
@@ -136,7 +165,11 @@ export async function doLLMRound(
         provider,
         request,
         ctx,
-        syncAssistant,
+        {
+          full: syncAssistant,
+          contentDelta: syncContentDelta,
+          reasoning: syncReasoning,
+        },
         watchError,
         abortSignal,
       )
@@ -203,7 +236,14 @@ async function handleStreaming(
   provider: IProvider,
   request: ChatRequest,
   ctx: ToolCallContext,
-  syncAssistant: () => void,
+  sync: {
+    /** 全量同步（正文 + 工具调用等，仅在内容/状态真的变化时调用） */
+    full: () => void
+    /** 只发正文增量 */
+    contentDelta: (delta: string) => void
+    /** 只发思考内容快照 */
+    reasoning: (reasoningContent: string) => void
+  },
   onEvent?: AgentEventCallback,
   abortSignal?: AbortSignal,
 ): Promise<void> {
@@ -219,7 +259,7 @@ async function handleStreaming(
       ctx.assistantMessage.reasoningElapsedMs =
         Date.now() - reasoningStartTime
       reasoningStartTime = null
-      syncAssistant()
+      sync.full()
     }
   }
 
@@ -232,18 +272,16 @@ async function handleStreaming(
           settleReasoningElapsed()
           ctx.roundContent += event.data || ''
           ctx.assistantMessage.content += event.data || ''
-          syncAssistant()
+          // 流式期间只发增量（全量正文由 message_stop / finalize 兜底）
+          sync.contentDelta(event.data || '')
           onEvent?.({
             type: 'stream_event',
-            data: {
-              delta: event.data,
-              fullContent: ctx.assistantMessage.content,
-            },
+            data: { delta: event.data },
           })
           break
         case 'tool_use':
           if (event.toolUse) {
-            collectToolUse(ctx, event.toolUse, syncAssistant, onEvent)
+            collectToolUse(ctx, event.toolUse, sync.full, onEvent)
           }
           break
         case 'error':
@@ -257,11 +295,8 @@ async function handleStreaming(
             }
             ctx.reasoningContent = event.data
             ctx.assistantMessage.reasoningContent = event.data
-            syncAssistant()
-            onEvent?.({
-              type: 'stream_event',
-              data: { reasoningContent: event.data },
-            })
+            // 只发思考快照：思考期间正文未变化，无需回传全量正文
+            sync.reasoning(event.data)
           }
           break
         case 'message_stop':
@@ -270,11 +305,11 @@ async function handleStreaming(
           if (event.reasoningContent) {
             ctx.reasoningContent = event.reasoningContent
             ctx.assistantMessage.reasoningContent = event.reasoningContent
-            syncAssistant()
+            sync.full()
           }
           if (event.usage) {
             ctx.assistantMessage.usage = event.usage
-            syncAssistant()
+            sync.full()
           }
           break
       }

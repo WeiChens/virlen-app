@@ -108,6 +108,20 @@ export function getSessionMessages(sessionId: string): Message[] {
 }
 
 /**
+ * 按 id 取单条消息（不复制整表）
+ *
+ * 用于流式增量拼接：每个增量补丁都要读一次「当前正文」，
+ * 走 getSessionMessages 会把整个消息列表复制一遍（高频路径上无必要）。
+ */
+export function getSessionMessage(
+  sessionId: string,
+  messageId: string,
+): Message | undefined {
+  const session = sessionStore.value.sessions.find((s) => s.id === sessionId)
+  return session?.messages.find((m) => m.id === messageId)
+}
+
+/**
  * 删除指定消息及其之后的所有消息（不支持删除 tool 消息）
  */
 export function deleteSessionMessage(

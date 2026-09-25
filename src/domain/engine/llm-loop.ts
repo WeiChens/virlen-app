@@ -86,7 +86,16 @@ export async function executeLLMRound(
       event.data?.patch &&
       capturedAssistant
     ) {
-      Object.assign(capturedAssistant, event.data.patch)
+      // 流式期间补丁只带增量（见 llm-round.ts::syncContentDelta），
+      // 需在此拼回全量正文，否则捕获到的消息会停在空内容
+      const { contentDelta, ...patch } = event.data.patch
+      Object.assign(capturedAssistant, patch)
+      if (
+        typeof contentDelta === 'string' &&
+        typeof capturedAssistant.content === 'string'
+      ) {
+        capturedAssistant.content += contentDelta
+      }
     }
     onEvent?.(event)
   }

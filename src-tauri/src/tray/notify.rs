@@ -188,9 +188,11 @@ fn show_via_plugin(app: &AppHandle, title: Option<&str>, preview: Option<&str>) 
 /// MSIX 清单里 `<Application Id="...">` 的值
 ///
 /// 打包进程里，`CreateToastNotifierWithId` 收到的字符串会被平台当成「包内的 AppId」，
-/// 最终 AUMID = `<PackageFamilyName>!<AppId>` —— 所以必须与
-/// `scripts/msix/AppxManifest.xml.template` 的 `Application Id` 逐字一致
-/// （单测 `package_app_id_matches_manifest` 直接读清单核对）。
+/// 最终 AUMID = `<PackageFamilyName>!<AppId>` —— 所以必须与 MSIX 清单的
+/// `Application Id` 逐字一致。
+///
+/// ⚠️ 清单模板 `scripts/msix/AppxManifest.xml.template` 只存在于打包分支
+/// `store-version`，本分支不参与打包，因此这里没有「直接读清单核对」的单测。
 #[cfg(any(target_os = "windows", test))]
 const PACKAGE_APP_ID: &str = "App";
 
@@ -406,20 +408,6 @@ mod tests {
         mark_click_handled();
         assert!(click_handled_within(60_000));
         assert!(!click_handled_within(0));
-    }
-
-    /// AUMID 的第二半（`<PackageFamilyName>!<Application Id>`）必须与 MSIX 清单一致
-    ///
-    /// ⚠️ 对不上就等于「通知发送成功但被 shell 静默丢弃」，不看这个单测根本发现不了。
-    #[test]
-    fn package_app_id_matches_manifest() {
-        use super::PACKAGE_APP_ID;
-
-        let manifest = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../scripts/msix/AppxManifest.xml.template"
-        ));
-        assert!(manifest.contains(&format!("Application Id=\"{PACKAGE_APP_ID}\"")));
     }
 
     #[test]

@@ -12,7 +12,8 @@
 //! 唤醒窗口 + 切到最早那条未读。
 //!
 //! ⚠️ **三处必须一起改**（CLSID / 启动参数名）：
-//! - `scripts/msix/AppxManifest.xml.template`：`ToastActivatorCLSID` + `com:ExeServer@Arguments`
+//! - MSIX 清单：`ToastActivatorCLSID` + `com:ExeServer@Arguments`
+//!   （清单模板只存在于打包分支 `store-version`，故本分支没有读清单的单测）
 //! - 本文件：`TOAST_ACTIVATOR_CLSID` / `TOAST_ACTIVATED_ARG`
 //! - `lib.rs` 的单实例回调：argv 带 `-ToastActivated` ⇒ 按「点击通知」处理
 //!
@@ -303,22 +304,5 @@ mod tests {
     #[test]
     fn activation_arg_matches_manifest() {
         assert_eq!(TOAST_ACTIVATED_ARG, "-ToastActivated");
-    }
-
-    /// 与 MSIX 清单的三处契约（CLSID / CLSID 属性名 / 启动参数）必须逐字一致
-    ///
-    /// ⚠️ 任何一处错位都表现为「点击通知毫无反应」，而且不报错、不进 UI ——
-    /// 只能靠这个单测兜住（直接读清单，不走文档）。
-    #[test]
-    fn manifest_contract_matches() {
-        let manifest = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../scripts/msix/AppxManifest.xml.template"
-        ));
-        assert!(manifest.contains(&format!("ToastActivatorCLSID=\"{TOAST_ACTIVATOR_CLSID}\"")));
-        assert!(manifest.contains(&format!("com:Class Id=\"{TOAST_ACTIVATOR_CLSID}\"")));
-        assert!(manifest.contains(&format!("Arguments=\"{TOAST_ACTIVATED_ARG}\"")));
-        // 花括号会让 MakeAppx 直接报 C00CE169（曾经踩过）
-        assert!(!manifest.contains(&format!("ToastActivatorCLSID=\"{{{TOAST_ACTIVATOR_CLSID}}}\"")));
     }
 }

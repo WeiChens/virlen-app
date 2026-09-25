@@ -155,8 +155,21 @@ pub async fn do_llm_round(
     })
 }
 
-/// 流式事件发送节流间隔（毫秒）— 每 60ms 最多向 UI 发一次流式增量
-const STREAM_THROTTLE_MS: i64 = 60;
+/// 流式事件发送节流间隔（毫秒）— 最多合并约一帧的增量
+///
+/// ⚠️ 这个值就是**正文尾部可见延迟的上限**：增量在窗口内被积压，只有窗口到点
+/// （或流结束的 force_flush）才发出。而「正文结束 → 工具调用出现」之间存在一段
+/// **零事件空窗** —— provider 在累积 tool 参数 JSON 期间不发任何事件
+///（见 `provider/openai.rs`：tool_calls 分片只进 `tool_acc`，直到 `finish_reason`
+/// 才发一条 `ToolUse`）。空窗里积压的尾部正文就一直不显示，表现为
+/// 「回复正文没显示全 / 像是停在半句话」（参数越长，这只停得越久）。
+///
+/// 取一帧（16ms）可把这段延迟压到不可见；不能取消节流——同一帧内到达的多个
+/// token 合并成一次 UI 更新，避免前端为每个 token 都重建一次消息对象。
+///
+/// 注意：本值只影响「事件密度」，不再影响载荷大小（正文走增量补丁，单次 O(1)，
+/// 见 `flush_stream_state`）。
+const STREAM_THROTTLE_MS: i64 = 16;
 
 /// 流式事件节流器 — 距上次发送不足 interval_ms 时丢弃中间事件，force_flush 强制补发
 struct StreamEventThrottle {
@@ -191,6 +204,11 @@ impl StreamEventThrottle {
 
 /// 批量发送累积的流式增量（assistant_message_updated + stream_event）
 /// 无 pending 内容时直接返回，避免空事件
+///
+/// ⚠️ 正文只回传增量（`patch.contentDelta`）：本函数每 60ms 触发一次，若每次都回传
+/// 累积全量正文，单次载荷随内容线性增长、整轮通信量即 O(n²)。全量正文由流结束帧兜底
+/// ——`MessageStop` 的 `sync_assistant` 与 `finalize_assistant_message`，
+/// 因此个别增量事件丢失也会被最终帧纠正。
 fn flush_stream_state(
     ctx: &ToolCallContext,
     model: &str,
@@ -204,23 +222,28 @@ fn flush_stream_state(
     if !has_delta && !has_reasoning {
         return;
     }
-    sync_assistant(ctx, model, sink, session_id);
+    // 一个 flush 只发一条 assistant_message_updated：正文走增量，思考走全量快照
+    // （思考内容是累积快照、且只在变化时才下发，故保持全量）
+    let mut patch = json!({ "streaming": true, "model": model });
     if has_delta {
-        sink.emit_agent_event(
-            session_id,
-            &AgentEvent::new(
-                "stream_event",
-                json!({
-                    "delta": pending_delta,
-                    "fullContent": ctx.assistant_message.text_content(),
-                }),
-            ),
-        );
+        patch["contentDelta"] = json!(pending_delta);
     }
     if let Some(rc) = pending_reasoning {
+        patch["reasoningContent"] = json!(rc);
+    }
+    sink.emit_agent_event(
+        session_id,
+        &AgentEvent::new(
+            "assistant_message_updated",
+            json!({ "messageId": ctx.assistant_message.id, "patch": patch }),
+        ),
+    );
+    if has_delta {
+        // stream_event 只承载增量本身（首 token 埋点 / pendingContent 计量）；
+        // `fullContent` 无任何消费方，已移除（否则同一份全量正文一轮传两遍）
         sink.emit_agent_event(
             session_id,
-            &AgentEvent::new("stream_event", json!({ "reasoningContent": rc })),
+            &AgentEvent::new("stream_event", json!({ "delta": pending_delta })),
         );
     }
 }
@@ -579,5 +602,104 @@ mod tests {
         // 关键控制事件不应被节流
         assert!(count_events(&sink, "assistant_message_created") >= 1);
         assert!(count_events(&sink, "assistant_message_updated") >= 1);
+    }
+
+    /// 节流窗口 = 正文尾部可见延迟的上限，必须在一帧内
+    ///
+    /// 回归背景：provider 在累积 tool 参数 JSON 期间**零事件**（见 tool_acc 的注释），
+    /// 若窗口过大，这段空窗里积压的尾部正文就一直不显示
+    ///（「回复正文没显示全 / 停在半句话」）。
+    #[test]
+    fn stream_throttle_tail_is_within_one_frame() {
+        assert!(
+            STREAM_THROTTLE_MS <= 20,
+            "节流窗口决定正文尾部延迟，须在一帧内（16ms 左右），当前 {}ms",
+            STREAM_THROTTLE_MS
+        );
+
+        // 窗口内多次到达 → 只放行第一次（合并）；跨过窗口 → 放行
+        let mut throttle = StreamEventThrottle::new(STREAM_THROTTLE_MS);
+        assert!(throttle.allow(), "首次应放行");
+        assert!(!throttle.allow(), "窗口内应合并，不重复发");
+        throttle.last_emit_ms = now_ms() - STREAM_THROTTLE_MS;
+        assert!(throttle.allow(), "跨过窗口应放行");
+
+        // 流结束时 force_flush 必须让下一次 allow() 放行（补发积压增量）
+        throttle.last_emit_ms = now_ms();
+        throttle.force_flush();
+        assert!(throttle.allow(), "force_flush 后必须放行");
+    }
+
+    /// 流式补丁只带增量：单次 IPC 载荷与内容长度无关，全量正文只在流结束帧出现
+    #[test]
+    fn streaming_patches_carry_delta_and_full_content_only_at_stream_end() {
+        use serde_json::json;
+
+        let deltas: Vec<String> = (0..50).map(|i| format!("{}", i % 10)).collect();
+        let provider = ThrottleMockProvider {
+            deltas: deltas.clone(),
+        };
+        let sink = TestEventSink::new();
+        let cancel = CancellationToken::new();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(do_llm_round(
+            &session(),
+            &provider,
+            &[],
+            &[],
+            &cancel,
+            &sink,
+            "s1",
+            None,
+            None,
+            1,
+        ))
+        .expect("llm round 应成功");
+
+        let events = sink.events.lock().unwrap();
+        let patches: Vec<&serde_json::Value> = events
+            .iter()
+            .filter(|(_, v)| v["type"].as_str() == Some("assistant_message_updated"))
+            .map(|(_, v)| &v["data"]["patch"])
+            .collect();
+
+        for patch in &patches {
+            // 增量与全量不得同帧下发（否则同一份正文一轮传两遍）
+            assert!(
+                !(patch["contentDelta"].is_string() && patch["content"].is_string()),
+                "同一条补丁不应既传增量又传全量正文：{}",
+                patch
+            );
+            if patch["contentDelta"].is_string() {
+                assert!(
+                    patch["content"].is_null(),
+                    "流式补丁不应回传全量正文：{}",
+                    patch
+                );
+            }
+        }
+
+        // 全量正文帧数恒定（本场景：MessageStop 收尾 + finalize，共 2 帧），
+        // 不随 delta 数量增长 —— 这是「载荷与内容长度无关」的关键
+        let full_frames = patches
+            .iter()
+            .filter(|p| p["content"].is_string())
+            .count();
+        assert_eq!(
+            full_frames, 2,
+            "全量正文应只在流结束帧出现（收尾 + finalize）：{:?}",
+            patches
+        );
+
+        // 末帧为 finalize：全量正文 + streaming=false
+        let last = patches.last().expect("至少应有一条补丁");
+        assert_eq!(last["content"], json!(deltas.concat()));
+        assert_eq!(last["streaming"], json!(false));
+
+        // stream_event 不再携带无人消费的 fullContent
+        assert!(events
+            .iter()
+            .all(|(_, v)| v["data"]["fullContent"].is_null()));
     }
 }

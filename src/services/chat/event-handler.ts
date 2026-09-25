@@ -10,11 +10,12 @@ import {
   updateSessionRuntime,
 } from '@/ui/store'
 import { settingsState } from '@/ui/store'
-import type { AgentEventCallback, MessageContent } from '@/types'
+import type { AgentEventCallback, Message, MessageContent } from '@/types'
 import { extractText, getEngine, providerTypeOf, transformApiError } from './common'
 import { activeTraces, markErrored } from './trace'
 import {
   addSessionMessage,
+  getSessionMessage,
   getSessionMessages,
   persistMessagesIfNeeded,
   updateSessionMessage,
@@ -88,7 +89,11 @@ export function createEventHandler(
           updateSessionMessage(
             sessionId,
             event.data.messageId,
-            event.data.patch,
+            resolveAssistantPatch(
+              sessionId,
+              event.data.messageId,
+              event.data.patch,
+            ),
           )
           events?.onMessagesUpdate?.(sessionId)
         }
@@ -254,6 +259,28 @@ export function createEventHandler(
       }
     }
   }
+}
+
+/**
+ * 还原 assistant 消息补丁：把流式增量补丁（`patch.contentDelta`）拼成完整正文。
+ *
+ * 引擎流式期间只回传增量（全量正文会让 IPC 载荷变成 O(n²)，见
+ * `agent/llm_round.rs::flush_stream_state` / `domain/engine/llm-round.ts::syncContentDelta`），
+ * 结束帧仍回传全量 `patch.content`。
+ *
+ * 拼不上（消息未加载 / 正文非字符串）时退化为「只应用其余字段」，
+ * 内容交给结束帧的全量补丁纠正 —— 不做猜测式兜底。
+ */
+function resolveAssistantPatch(
+  sessionId: string,
+  messageId: string,
+  patch: Record<string, any>,
+): Partial<Message> {
+  if (typeof patch?.contentDelta !== 'string') return patch
+  const { contentDelta, ...rest } = patch
+  const current = getSessionMessage(sessionId, messageId)?.content
+  if (typeof current !== 'string') return rest
+  return { ...rest, content: current + contentDelta }
 }
 
 /**
