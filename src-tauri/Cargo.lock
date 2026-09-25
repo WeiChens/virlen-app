@@ -8179,7 +8179,12 @@ dependencies = [
 name = "virlen-cli"
 version = "1.1.43"
 dependencies = [
+ "chrono",
+ "dunce",
+ "serde",
+ "serde_json",
  "tokio",
+ "uuid",
  "virlen-core",
 ]
 

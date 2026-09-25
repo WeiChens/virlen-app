@@ -1,27 +1,46 @@
-//! headless CLI（`virlen-cli`）—— 与 GUI 共用同一个 lib 的入口
+//! `virlen-cli` —— Virlen 的 headless 入口（**命令实现本体**，不是空壳）
 //!
-//! 形态：`virlen-cli <命令> [参数]`。本期（S6 + ③）只落地**配置读写**：
+//! 形态：`virlen-cli <命令> [参数]`。已落地：
 //!
 //! ```text
 //! virlen-cli config get [key ...]          读全部 / 指定键（JSON 输出）
 //! virlen-cli config set [--string] k v     写入（值优先按 JSON 解析）
 //! virlen-cli config path                   打印实际使用的库文件路径
+//! virlen-cli run [选项] <prompt>           无界面跑一次 agent（headless 对话）
+//! virlen-cli list-session [-g agent|workdir]  列出会话（可分组）
+//! virlen-cli list-agent                    列出 Agent
 //! ```
 //!
-//! 为什么是这个形态：
+//! 为什么命令实现住在本 crate 的 lib（而不是 core / bin）：
+//!
+//! 三 crate 的分工是「**core / cli / tauri**」三个模块，各自只依赖内层：
+//!
+//! | crate | 角色 | 边界 |
+//! |---|---|---|
+//! | `virlen-core` | 引擎 / 持久化 / 沙盒 / 安全 / RAG / 视觉 | **零 `tauri::`**，也**不含命令入口** |
+//! | `virlen-cli`（本 crate） | headless 命令实现 + （规划的）TUI | 只依赖 core；**零 `tauri::`** |
+//! | `virlen-app` | GUI 壳（Tauri 命令 / 托盘 / 平台集成） | 唯一 Tauri 侧 |
+//!
+//! ⚠️ bin 目标（`src/main.rs`）**无法被单测引用**，因此逻辑都在本 lib 里，`main.rs` 保持
+//! 三行转发 —— 测得到才算落地。（这些代码原住在 `virlen-core/src/cli/`，迁出的目的就是
+//! 让 core 只管引擎与持久化，把「有哪些入口 / 长什么样」留给本 crate。）
+//!
 //! - **与 GUI 同一份数据**：库路径完全由 `HostEnv::data_dir()` 决定（`CliHost` 的默认值
 //!   与 Tauri `app_data_dir()` 同形 → 同一个 `virlen.db`），所以 `config set` 改的就是
 //!   桌面端读的那份配置（`app_settings` 表，见 `docs/config-sink-plan.md`）。
-//! - **逻辑放 lib、bin 只转发**：bin 目标不被单测引用，因此参数解析与命令实现放本模块，
-//!   `src/cli_main.rs` 保持三行 —— 测得到才算落地。
 //!
 //! ⚠️ 输出文案用**中文**：与 crate 内其它用户可见消息一致（Tauri 命令的错误文案、
 //! `eprintln!` 提示）。JSON 输出保持原样，脚本可直接解析。
 
 mod config;
+mod list;
+mod run;
+mod tui;
 
-use crate::host::CliHost;
 use std::io::Write;
+use std::sync::Arc;
+use virlen_core::agent::host::HostEnv;
+use virlen_core::host::CliHost;
 
 /// 成功
 pub const EXIT_OK: i32 = 0;
@@ -36,6 +55,9 @@ pub(crate) enum Command {
     Help,
     Version,
     Config(config::ConfigCmd),
+    Run(run::RunCmd),
+    ListSessions(list::SessionsCmd),
+    ListAgents(list::AgentsCmd),
 }
 
 /// 帮助文本（`help` / `--help` / 用法错误时一并打印）
@@ -50,6 +72,10 @@ Virlen CLI（headless）—— 与桌面端读写同一份配置（app_settings 
                                          --string 强制按字符串写入
   virlen-cli config path                 打印实际使用的库文件路径（应与 GUI 相同）
                                          库尚未创建时也返回 0，仅在 stderr 给出提示
+  virlen-cli run [选项] <prompt>         无界面跑一次 agent（headless；`run --help` 看选项）
+  virlen-cli list-session [-g agent|workdir] [--limit N] [--json]
+                                         列出会话（与桌面端同一份库；`--help` 看说明）
+  virlen-cli list-agent [--json]         列出 Agent（app_settings.agents）
   virlen-cli help | --help | -h          显示本帮助
   virlen-cli version | --version | -V    显示版本
 
@@ -72,6 +98,11 @@ pub(crate) fn parse_args(args: &[String]) -> Result<Command, String> {
         "help" | "--help" | "-h" => Ok(Command::Help),
         "version" | "--version" | "-V" => Ok(Command::Version),
         "config" => config::parse(it.collect()).map(Command::Config),
+        "run" => run::parse(it.collect()).map(Command::Run),
+        "list-session" | "list-sessions" => {
+            list::parse_sessions(it.collect()).map(Command::ListSessions)
+        }
+        "list-agent" | "list-agents" => list::parse_agents(it.collect()).map(Command::ListAgents),
         other => Err(format!("未知命令: {}", other)),
     }
 }
@@ -98,8 +129,22 @@ pub async fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i
         // 只有真正要读写的子命令才去推导宿主 / 打开库：
         // `help` / `version` 因此不会因为「数据目录不可用」而失败。
         Ok(Command::Config(cmd)) => {
-            let host = CliHost::from_env();
-            config::run(&host, cmd, out, err).await
+            let host: Arc<dyn HostEnv> = Arc::new(CliHost::from_env());
+            config::run(host.as_ref(), cmd, out, err).await
+        }
+        // `run` 需要把宿主**交给引擎**（`Arc<dyn HostEnv>`），故在此构造后按引用传入
+        Ok(Command::Run(cmd)) => {
+            let host: Arc<dyn HostEnv> = Arc::new(CliHost::from_env());
+            run::run(&host, cmd, out, err).await
+        }
+        // 列表类命令同样需要 `Arc<dyn HostEnv>`（打开会话库）
+        Ok(Command::ListSessions(cmd)) => {
+            let host: Arc<dyn HostEnv> = Arc::new(CliHost::from_env());
+            list::run_sessions(&host, cmd, out, err).await
+        }
+        Ok(Command::ListAgents(cmd)) => {
+            let host: Arc<dyn HostEnv> = Arc::new(CliHost::from_env());
+            list::run_agents(&host, cmd, out, err).await
         }
     }
 }

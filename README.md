@@ -416,10 +416,9 @@ virlen-app/
 │   │       ├── vision/       # On-device vision core (quasivision)
 │   │       ├── host/         # `HostEnv` trait + `CliHost`
 │   │       ├── file_ops.rs   # File operations
-│   │       ├── search.rs     # File search
-│   │       └── cli/          # Headless CLI implementation (arg parsing + config get/set)
+│   │       └── search.rs     # File search
 │   ├── virlen-cli/           # Headless CLI package — depends on `virlen-core` only
-│   │   └── src/main.rs       # Three-line shim → `virlen_core::cli::run`
+│   │   └── src/              # Command implementations (lib: lib.rs / config.rs / run.rs / list.rs / tui) + three-line entry main.rs
 │   ├── resources/            # Resource files (skills, vision models, tokenizer)
 │   │   ├── default-skills/   # Built-in skill definitions
 │   │   ├── quasivision_models/ # Vision AI models
@@ -450,7 +449,7 @@ virlen-app/
 | `pnpm test`         | Run unit tests (Vitest)               |
 | `pnpm test:watch`   | Run tests in watch mode               |
 | `pnpm test:ui`      | Launch Vitest UI test panel           |
-| `pnpm cli`          | Headless CLI (`config get` / `set`)    |
+| `pnpm cli`          | Headless CLI (`config get/set`, `run`) |
 
 ### Headless CLI
 
@@ -464,8 +463,40 @@ pnpm cli config set defaultSelectModel gpt-4o      # bare values default to JSON
 pnpm cli config set --string maxTokens 4096        # --string forces a JSON string
 ```
 
+`run` — execute one agent turn headless (same session database as the desktop app):
+
+```bash
+pnpm cli run "explain the README"               # stdout = assistant text; stderr = tool progress/errors
+pnpm cli run --session <id> "keep going"        # continue an existing session (reads its history)
+pnpm cli run --no-tools --json "hi"             # disable tools / emit events as JSON Lines
+pnpm cli run --provider <id> --model <id> "…"   # override provider/model (defaults to defaultSelectModel)
+pnpm cli run --workspace D:/proj "refactor x"   # working directory (defaults to the cwd)
+```
+
+List commands (same database: sessions come from the `sessions` table, agents from `app_settings.agents`):
+
+```bash
+pnpm cli list-session                  # sessions (latest 50 by default; --limit 0 = all)
+pnpm cli list-session -g agent         # group by agent (-g workdir = group by working directory)
+pnpm cli list-session -g workdir --json
+pnpm cli list-agent                    # agents (with session counts / default model / default workspace)
+pnpm cli list-agent --json
+```
+
+⚠️ Agent config used to live only in the desktop app's localStorage (invisible to the CLI). It is now sourced
+from the `agents` key in the database — **launching the new desktop build once** performs the one-time migration
+(after that `list-agent` has data).
+
+Boundaries (also documented in `pnpm cli run --help`):
+
+- messages are persisted to SQLite by the Rust engine itself (the same `virlen.db` as the desktop app);
+- all 28 tools run natively, no frontend needed; **providers without a native implementation (Gemini) are not supported** (they need the JS bridge — rejected at setup time);
+- pending approvals (`ask` permissions) and `user_choice` prompt on the terminal and read stdin (`y`/`yes` = allow); when stdin is **not** a TTY (pipe / CI) they are **always denied** (fail-closed). ⚠️ Redirecting only stdout/stderr leaves stdin attached to the terminal, so the CLI will wait for input (looks stuck) — redirect stdin too (`< NUL` / `< /dev/null`) or switch the permission to allow/deny;
+- allow/deny path lists and skipped dirs live in the desktop app's localStorage and are invisible to the CLI (treated as empty); path safety still relies on workspace + sandbox + the three-state permission table;
+- when resuming with `--session`, the **working directory comes from the session record** (immutable after creation): a conflicting `--workspace` is rejected; only when the record is empty does it fall back to the default workspace → cwd, without writing back to the session.
+
 `VIRLEN_DATA_DIR` overrides the data directory (handy for portable installs / tests).
-The CLI entry lives in `src-tauri/virlen-cli/src/main.rs` (a three-line shim over `virlen_core::cli::run`); the implementation is in `src-tauri/virlen-core/src/cli/`. The CLI package depends on `virlen-core` only, so it pulls in no Tauri code and never needs `dist/`. Workspace notes are in `docs/AGENTS.md` §11.14.
+The CLI entry lives in `src-tauri/virlen-cli/src/main.rs` (a three-line shim over `virlen_cli::run`); **all command implementations live in that package's lib** (`src/lib.rs` for arg parsing/dispatch plus `config.rs` / `run.rs` / `list.rs` / `tui/`) — `virlen-core` contains no command entry points. The CLI package depends on `virlen-core` only, so it pulls in no Tauri code and never needs `dist/`. Workspace notes are in `docs/AGENTS.md` §11.14.
 
 ---
 

@@ -28,10 +28,12 @@
 //! - [`host`]：宿主抽象（资源目录 + 数据目录）
 //! - [`telemetry`]：埋点出口（可插拔 sink）
 //! - [`file_ops`] / [`search`]：文件读写与文件搜索的底层实现
-//! - [`cli`]：headless 入口的命令实现（bin 只三行转发，逻辑留在这里才测得到）
+//!
+//! ⚠️ headless CLI 入口**不在本 crate**：命令实现（`config` / `run` / `list-session` /
+//! `list-agent`）与（规划的）TUI 都在 `virlen-cli`（它**只依赖本 crate**）—— 这样 core
+//! 只管「引擎 + 持久化」，入口形态可以独立演进。
 
 pub mod agent;
-pub mod cli;
 pub mod file_ops;
 pub mod host;
 pub mod rag;

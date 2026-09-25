@@ -415,10 +415,9 @@ virlen-app/
 │   │       ├── vision/       # 端侧视觉核心（quasivision）
 │   │       ├── host/         # `HostEnv` trait + `CliHost`
 │   │       ├── file_ops.rs   # 文件操作
-│   │       ├── search.rs     # 文件搜索
-│   │       └── cli/          # headless CLI 实现（参数解析 + config get/set）
+│   │       └── search.rs     # 文件搜索
 │   ├── virlen-cli/           # headless CLI package —— 只依赖 `virlen-core`
-│   │   └── src/main.rs       # 三行转发 → `virlen_core::cli::run`
+│   │   └── src/              # 命令实现本体（lib：lib.rs / config.rs / run.rs / list.rs / tui）+ 三行转发入口 main.rs
 │   ├── resources/            # 资源文件（技能、视觉模型、tokenizer）
 │   │   ├── default-skills/   # 内置技能定义
 │   │   ├── quasivision_models/ # 视觉 AI 模型
@@ -449,7 +448,7 @@ virlen-app/
 | `pnpm test`        | 运行单元测试（Vitest）          |
 | `pnpm test:watch`  | 监听模式运行测试                |
 | `pnpm test:ui`     | 启动 Vitest UI 测试面板         |
-| `pnpm cli`         | 运行 headless CLI（`config get/set`） |
+| `pnpm cli`         | 运行 headless CLI（`config get/set`、`run`） |
 
 ### Headless CLI（`virlen-cli`）
 
@@ -463,8 +462,39 @@ pnpm cli config set defaultSelectModel gpt-4o      # 值优先按 JSON 解析，
 pnpm cli config set --string maxTokens 4096        # --string 强制写成字符串
 ```
 
+`run` —— 无界面跑一次 agent（与桌面端同一份会话库）：
+
+```bash
+pnpm cli run "解释一下 README"                  # stdout = 助手正文；stderr = 工具进度/错误
+pnpm cli run --session <id> "接着上面的继续"     # 续用已有会话（读库里的历史消息）
+pnpm cli run --no-tools --json "你好"            # 禁用工具 / 事件按 JSON Lines 输出
+pnpm cli run --provider <id> --model <id> "…"    # 覆盖 Provider / 模型（默认取 defaultSelectModel）
+pnpm cli run --workspace D:/proj "改一下这个项目" # 工作目录（默认当前目录）
+```
+
+列表类命令（同一份库：会话来自 `sessions` 表，Agent 来自 `app_settings.agents`）：
+
+```bash
+pnpm cli list-session                  # 会话列表（默认最近 50 条；--limit 0 = 全部）
+pnpm cli list-session -g agent         # 按 Agent 分组（-g workdir = 按工作目录）
+pnpm cli list-session -g workdir --json
+pnpm cli list-agent                    # Agent 列表（含各自会话数 / 默认模型 / 默认工作目录）
+pnpm cli list-agent --json
+```
+
+⚠️ Agent 配置原先只存在桌面端 localStorage（CLI 读不到）。下沉后以数据库里的 `agents` 键为唯一源：
+**首次用新版桌面端启动一次**才会完成迁移（之后 `list-agent` 就有数据）。
+
+行为边界（`pnpm cli run --help` 也写了）：
+
+- 消息由 Rust 引擎**直落 SQLite**（与桌面端同一个 `virlen.db`）；
+- 28 个工具全部原生执行，不需要前端；**Gemini 等未原生化的 Provider 不支持**（需前端 JS 桥，装配阶段直接报错）；
+- 权限为 `ask` 的命令授权与 `user_choice` 在终端提示并读 stdin（`y`/`yes` = 放行）；**stdin 不是 TTY（管道 / CI）时一律拒绝**（fail-closed）。⚠️ 只重定向 stdout/stderr 时 stdin 仍是终端 → 会等待输入（看起来像卡住），不需要交互请同时重定向 stdin（`< NUL` / `< /dev/null`）或把权限改为 allow/deny；
+- 桌面端存 localStorage 的白/黑名单与跳过目录 CLI 读不到（按空处理），路径安全仍由工作目录 + 沙盒 + 权限三态兜底；
+- 续用 `--session` 时**工作目录只认会话记录**（创建后不可变更）：`--workspace` 与之冲突会直接报错；记录为空时才回退「设置里的默认工作目录 → 当前目录」，且**不写回会话**。
+
 `VIRLEN_DATA_DIR` 可覆盖数据目录（便携安装 / 测试用）。
-CLI 入口在 `src-tauri/virlen-cli/src/main.rs`（三行转发 → `virlen_core::cli::run`），实现在 `src-tauri/virlen-core/src/cli/`。该 package **只依赖 `virlen-core`**，因此不链接任何 Tauri 代码，也**不需要 `dist/`**。workspace 相关注意事项见 `docs/AGENTS.md` §11.14。
+CLI 入口在 `src-tauri/virlen-cli/src/main.rs`（三行转发 → `virlen_cli::run`），**命令实现全在该 package 的 lib**（`src/lib.rs` 参数解析/分派 + `config.rs` / `run.rs` / `list.rs` / `tui/`）—— core 不包含命令入口。该 package **只依赖 `virlen-core`**，因此不链接任何 Tauri 代码，也**不需要 `dist/`**。workspace 相关注意事项见 `docs/AGENTS.md` §11.14。
 
 ---
 

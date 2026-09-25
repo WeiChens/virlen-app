@@ -8,12 +8,12 @@
 //! 因此本命令**不校验**键名（Rust 侧没有权威 schema）：写错键名会新增一行垃圾配置，
 //! 而不是报错。这是有意的取舍（否则就得在 Rust 侧维护一份字段清单，反而引入漂移源）。
 
-use crate::agent::host::HostEnv;
-use crate::session_db::{open_session_db, SettingsRepo};
+use virlen_core::agent::host::HostEnv;
+use virlen_core::session_db::{open_session_db, SettingsRepo};
 use serde_json::{Map, Value};
 use std::io::Write;
 
-use super::{EXIT_ERROR, EXIT_OK, EXIT_USAGE};
+use crate::{EXIT_ERROR, EXIT_OK, EXIT_USAGE};
 
 /// `config` 的子命令
 #[derive(Debug, PartialEq)]
@@ -189,7 +189,7 @@ fn to_pretty(v: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host::CliHost;
+    use virlen_core::host::CliHost;
     use serde_json::json;
     use std::path::PathBuf;
 

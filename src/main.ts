@@ -30,6 +30,9 @@ import { initTrayService } from '@/services/tray-service'
 // 启动同步由 store 的 hydrate 负责（它同时刷新 observable，设置页立即展示表里的值）。
 import { flushSecurityPersist } from '@/infrastructure/securityRepo'
 import { securityStore } from '@/ui/store/securityStore'
+// Agent 配置（D3 延伸）：以 `app_settings` 的 `agents` 键为唯一源，
+// 启动水合 + 退出前补写（与 securityRepo 同款）；CLI `list-agent` 读的就是同一份。
+import { flushAgentsPersist, hydrateAgents } from '@/infrastructure/agentRepo'
 
 /** 性能计时（优先高精度） */
 const perfNow = () =>
@@ -141,6 +144,10 @@ async function init() {
   // ⚠️ 走 store 的 hydrate（而非直接调 infra 的 hydrateSecurity）——它还会刷新 observable，
   //    否则设置页读到的仍是模块加载瞬间的快照（看起来「还是 localStorage」）。
   await step('securityConfig', () => securityStore.hydrate())
+  // Agent 配置下沉（D3 延伸）：`agents` 以 `app_settings` 为唯一源（localStorage 只作迁移来源）。
+  // ⚠️ 必须在 `initDefaultAgent()` / `agentStore.reload()` **之前**——否则默认 Agent 的补全
+  //    会读到空列表、在本地重建并**覆盖**表里已有的 Agent。
+  await step('agents', () => hydrateAgents())
   // 用量统计（token 账本）：把领域侧记账端口绑到 Tauri/SQLite 实现；
   // 未绑定时 recordUsage 是空操作，因此业务代码可以无条件调用。
   bindUsageLedger(tauriUsageLedger)
@@ -195,6 +202,8 @@ if (typeof window !== 'undefined') {
     flushSettingsPersist()
     // 「忽略沙盒命令」规则同样是 debounce 落库的，一并补一次
     flushSecurityPersist()
+    // Agent 列表（debounce 落库）同上
+    flushAgentsPersist()
   })
 }
 

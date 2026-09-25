@@ -14,7 +14,7 @@
 mod js_rule;
 mod rules;
 
-pub(crate) use rules::{find_matching_rule, parse_rules, SandboxIgnoreRule};
+pub use rules::{find_matching_rule, parse_rules, SandboxIgnoreRule};
 
 /// 「忽略沙盒命令」规则在 `app_settings` 里的键名。
 ///
@@ -32,10 +32,10 @@ pub(crate) const SANDBOX_RULES_SETTINGS_KEY: &str = "sandboxIgnoreRules";
 ///
 /// 读取失败按「无规则」处理（fail-closed：不脱壳，只留一条 stderr 说明）。
 ///
-/// ⚠️ 当前**没有调用方**（CLI 入口尚未落地）。保留它的是为了让「CLI 读同一份规则」有唯一
-/// 入口，而不是让未来的 CLI 自己再写一遍键名、解析与错误处理。
-#[allow(dead_code)]
-pub(crate) async fn load_sandbox_ignore_rules(
+/// ⚠️ 消费方是 CLI（`virlen-cli/src/run.rs`）：它没有前端下发 `NativeToolSecurity`，必须自己读这一份。
+/// 这条入口存在的意义就是让「CLI 读同一份规则」只有一处键名 / 解析 / 错误处理，
+/// 而不是让 CLI 自己再写一遍。
+pub async fn load_sandbox_ignore_rules(
     settings: &dyn crate::session_db::SettingsRepo,
 ) -> Vec<SandboxIgnoreRule> {
     match settings.get_all().await {

@@ -99,8 +99,8 @@
 | `src/utils/` | 无业务依赖工具：telemetry、storageState、EventEmitter、diff、mdYamlFrontmatter、pathCanonicealize… | 无 |
 | `src/tests/` | Vitest 测试，按 `domain / infrastructure / services / rag / utils / ui` 分目录 | — |
 | `src-tauri/src/` | **GUI 壳**（`virlen-app`，**唯一**的 Tauri 侧）：`lib.rs`（窗口 / 托盘 / 插件 / 命令注册）、`commands/{agent,session_db,rag}.rs`（全部 `#[tauri::command]`）、`host/tauri_host.rs`（`TauriHost`）、`telemetry.rs`（Tauri 埋点出口 + panic 拉取命令）、`tray/`、`drag_drop.rs`、`clipboard_files*`、`vision_service.rs`（视觉命令壳）、`common_service.rs`、`deepseek_tokenizer.rs`、`load_env.rs`、`speech_service.rs`、`task_manager.rs` | `virlen-core` + Tauri |
-| `src-tauri/virlen-core/` | **核心库**（`virlen-core`，**零 `tauri::`**，GUI 与 CLI 共用）：`agent/`（镜像 TS 引擎）、`session_db/`（含 `open.rs`）、`sandbox/`、`security/`、`rag/`、`vision/`、`host/{mod,cli_host}.rs`、`file_ops.rs`、`search.rs`、`telemetry.rs`（sink 可插拔）、`cli/`（headless 实现） | 第三方 crate（**不得**依赖 tauri / virlen-app） |
-| `src-tauri/virlen-cli/` | **headless CLI**（`virlen-cli` package）：`src/main.rs` 三行转发 → `virlen_core::cli::run`；**只依赖 core** → 二进制里没有 GUI 栈 | `virlen-core` + `tokio(rt)` |
+| `src-tauri/virlen-core/` | **核心库**（`virlen-core`，**零 `tauri::`**，GUI 与 CLI 共用）：`agent/`（镜像 TS 引擎）、`session_db/`（含 `open.rs`）、`sandbox/`、`security/`、`rag/`、`vision/`、`host/{mod,cli_host}.rs`、`file_ops.rs`、`search.rs`、`telemetry.rs`（sink 可插拔）—— **不含任何命令入口** | 第三方 crate（**不得**依赖 tauri / virlen-app） |
+| `src-tauri/virlen-cli/` | **headless CLI**（`virlen-cli` package，**命令实现本体**）：lib = `lib.rs`（参数解析 / 分派 / `USAGE` / `EXIT_*`）+ `config.rs` / `list.rs` / `run.rs` / `tui/`（TUI **规划中**），`src/main.rs` 仅三行转发；**只依赖 core** → 二进制里没有 GUI 栈 | `virlen-core` + `tokio` / `serde` / `serde_json` / `chrono` / `uuid` / `dunce` |
 | `src-tauri/resources/` | 打包资源：`default-skills/`、`quasivision_models/`、`deepseek_tokenizer/`、`sandbox/`（`tauri.conf.json > bundle.resources` 必须同步） | — |
 
 > 端口清单（`src/domain/ports/`）：`AgentEnginePort`、`ProviderPort`、`SearchProviderPort`、`KnowledgeBasePort`、`SandboxPort`、`SecurityPort`、`ToolRegistry`。
@@ -348,6 +348,9 @@ npx tsc --noEmit             # 类型检查（唯一「静态门禁」）
 cd src-tauri; cargo test --workspace   # Rust 侧测试（⚠️ 必须 --workspace，见 §7 下注）
 pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 pnpm cli config get          # headless CLI（= cargo run -p virlen-cli -- …；与 GUI 同一份 app_settings）
+pnpm cli run "解释 README"   # 无界面跑一次 agent（stdout=正文 / stderr=工具进度；同一份会话库）
+pnpm cli list-session -g agent   # 列出会话（-g agent|workdir 分组；--limit / --json）
+pnpm cli list-agent              # 列出 Agent（读 app_settings.agents，含各自会话数）
 ```
 
 - 测试文件实际位于 **`src/tests/**`（不是 `tests/`）**，`vitest.config.ts` include 已固定，setup 文件 `src/tests/setup.ts`（模拟 Tauri API）。
@@ -358,9 +361,9 @@ pnpm cli config get          # headless CLI（= cargo run -p virlen-cli -- …�
   - `clang-sys` 只探测 `LIBCLANG_PATH` 与 `llvm-config.exe`，**不扫 `PATH`**：LLVM 装在非默认位置、或该发行版不带 `llvm-config.exe`（本机 `C:\config\LLVM` 即是）时**必须**显式设。
   - 必须**持久化**（用户级环境变量）并**重开终端 / IDE**：临时 `$env:LIBCLANG_PATH` 只对当前 shell 生效，而 `pnpm tauri dev` 由 CLI 新起 shell 跑 `cargo run` → 表现为「手动 `cargo build` 能过、`tauri dev` 报 `Unable to find libclang`」。
   - 该 bindgen 调用在 `hirofa-quickjs-sys/build.rs` 里**无条件**执行（无特性开关），**不能**用 feature 绕开。
-- ⚠️ `src-tauri/` 是 **cargo workspace 根**，含 **3 个 package**：`virlen-app`（GUI，workspace 根 package）、`virlen-core`（零 `tauri::` 的核心库）、`virlen-cli`（headless，只依赖 core）。`target/` 与 `Cargo.lock` 位置**不变**（仍在 `src-tauri/`）。
+- ⚠️ `src-tauri/` 是 **cargo workspace 根**，含 **3 个 package** —— 即「**core / cli / tauri**」三个模块：`virlen-app`（GUI 壳，workspace 根 package）、`virlen-core`（零 `tauri::` 的核心库，**不含命令入口**）、`virlen-cli`（headless，只依赖 core，命令实现与规划的 TUI 都在它的 **lib** 里）。`target/` 与 `Cargo.lock` 位置**不变**（仍在 `src-tauri/`）。
   - **GUI 与 CLI 的差异只允许来自「宿主注入」**（`HostEnv` / `EventSink` / `TelemetrySink`），不允许来自「两份实现」—— 这条以前靠注释约定，现在**由编译器强制**（core 连 tauri 依赖都没有）。
-  - ⚠️ **`cargo test` 必须带 `--workspace`**：manifest 指向 workspace 根 package 时，裸 `cargo test` **只跑 `virlen-app`**（实测：30 个用例），会**静默漏掉 core 的 ~370 个用例**。CI 三个 workflow 已同步。
+  - ⚠️ **`cargo test` 必须带 `--workspace`**：manifest 指向 workspace 根 package 时，裸 `cargo test` **只跑 `virlen-app`**（实测：30 个用例），会**静默漏掉 `virlen-core` 的 354 个与 `virlen-cli` 的 57 个用例**（共 411）。CI 三个 workflow 已同步。
   - 纯 Rust 目标（`cargo build/check/test`，dev profile）**不读** `frontendDist` → **无需**先 `pnpm build`（实测：把 `frontendDist` 指向不存在的目录仍通过）。`tauri build` 自己会跑 `beforeBuildCommand = pnpm build`，也不用手动。
   - `[package] default-run = "virlen-app"` 保留为防御性声明，见 §11.14。
 
@@ -503,12 +506,13 @@ pnpm cli config get          # headless CLI（= cargo run -p virlen-cli -- …�
 反之组件内自己切（如 `doSend` 新建会话）必须登记 `handledSessionRef`，否则兜底 effect 会去数据库重拉、把刚加的消息按旧内容覆盖。
 另：`message-list` 的 `hide`（容器 `opacity: 0`）在 `messages` 为空时也必须解除（见 `use-scroll-controller.ts`），否则空会话会一直「看起来是空的」。
 
-**11.14 workspace 拆包（`virlen-app` / `virlen-core` / `virlen-cli`）后的三条硬约束**
+**11.14 workspace 拆包（`virlen-app` / `virlen-core` / `virlen-cli`）后的四条硬约束**
 
-1. **`cargo test` 必须 `--workspace`**。manifest 是 workspace 根 package（`virlen-app`）时，裸 `cargo test` **只跑该 package** → `virlen-core` 的 ~370 个用例**静默不跑**（实测：只跑 30 个）。
+1. **`cargo test` 必须 `--workspace`**。manifest 是 workspace 根 package（`virlen-app`）时，裸 `cargo test` **只跑该 package** → `virlen-core`（354）+ `virlen-cli`（57）的用例**静默不跑**（实测：只跑 30 个）。
    同一坑同样适用于 `cargo check` / `cargo build`（默认只建当前 package）—— 不过那里是「想要的」（Tauri CLI 就靠默认目标）。
 2. **`virlen-core` 不得出现 `tauri::`**：`#[tauri::command]` 一律放 `virlen-app/src/commands/`；宿主差异走 `HostEnv` / `EventSink` / `TelemetrySink` 注入；**测试 fixture 与资源根改用 `CARGO_MANIFEST_DIR` + 多一级 `..`**（core 在 `src-tauri/virlen-core` 下，拆包时 5 个 golden 用例因此失败过一次）。
-3. **CLI 的 bin 目标不能加 `windows_subsystem = "windows"`**（它需要 stdout / stderr，与 `src/main.rs` 相反）；CLI 逻辑放 core 的 `cli` 模块（**bin 目标不被单测引用**，写在 bin 里就测不到）。
+3. **CLI 的 bin 目标不能加 `windows_subsystem = "windows"`**（它需要 stdout / stderr，与 `src/main.rs` 相反）；**CLI 逻辑一律放 `virlen-cli` 的 lib**（`src/lib.rs` + `config` / `list` / `run` / `tui`）—— **bin 目标不被单测引用**，写在 bin 里就测不到。
+4. **命令入口不得回到 core**：core 只管「引擎 + 持久化」，CLI 命令与 TUI 都在 `virlen-cli`。core 为 CLI 新开的 `pub` 出口只有 `security::{parse_rules, SandboxIgnoreRule, load_sandbox_ignore_rules}`（其余仍是 `pub(crate)`）；搬动入口时若把 `pub(crate)` 项目直接搬出 crate，会立刻编译不过 —— 这是有意的护栏。
 
 历史（仍适用）：`[package] default-run = "virlen-app"` 保留为防御性声明 —— 当初 `virlen-cli` 还是同 package 的第二个 bin 时，缺它会直接报
 `failed to find main binary, make sure you have a `package > default-run` in the Cargo.toml file`（实测）。现 CLI 已迁为独立 package，同一坑将来可能在 GUI package 再出现。
@@ -516,6 +520,46 @@ pnpm cli config get          # headless CLI（= cargo run -p virlen-cli -- …�
 验证手法：`npx tauri build --no-bundle --debug --config <覆盖 beforeBuildCommand 的 json>` → 末行应打印 `Built application at: …\virlen-app.exe`；`cargo tree -p virlen-cli` 不应含 tauri / wry / tao。
 
 **收益实测（不夸大）**：`cargo tree` 显示 `virlen-cli` 比 `virlen-app` **少 94 个依赖 crate**（452 vs 546，含 wry / tao / muda / tray-icon / webview2-com 等）；但**二进制体积收益很小**（debug 下 CLI 30.6MB → 29.1MB，约 −5%）—— 因为 linker 本来就会把未引用代码死代码消除（同一时刻 CLI 就已是 30.6MB vs GUI 113MB）。
+
+**11.15 headless CLI 的 `run`（无界面跑一次 agent）四条边界** —— 全部是**有意设计**，不是缺陷：
+
+1. **无前端 = 无 JS 桥**：28 个工具全部原生（`is_native_tool` 是全集），但 ⚠️ `security` **必须**下发 `Some(..)`——
+   `tool_executor` 靠它决定「原生 or 走 JS 桥」，缺了它 CLI 会去等一个不存在的 JS 宿主而**永久挂起**。
+   未原生化的 `BridgedProvider`（Gemini）在**装配阶段**直接报错，不给挂起的机会。
+2. **交互一律 fail-closed**：权限 `ask` 的 `confirm_command_native` 与 `user_choice` 在 `virlen-cli/src/run.rs::ask_user` 处理——
+   stdin 是 TTY 才提示并读一行（`y`/`yes` 放行），否则直接回 `{__kind:"cancelled"}`（命令一行都不跑）。
+   ⚠️ **只重定向 stdout/stderr 时 stdin 仍是终端** → CLI 按交互模式等输入（实测：看起来像卡住，300s 后被外部超时杀掉）。
+   要么同时重定向 stdin（Windows `< NUL` / POSIX `< /dev/null`），要么把权限改成 allow/deny。
+3. **桌面端存 localStorage 的白/黑名单、跳过目录 CLI 读不到**（按空处理）—— 路径安全只由「工作目录 + 沙盒 + 权限三态」兜底。
+   反过来说：`permissions` / `sandboxMode` / `sandboxIgnoreRules` 都在 `app_settings`，CLI 与桌面端天然一致
+   （规则走 `security::load_sandbox_ignore_rules`，不重写键名 / 解析）。
+4. **会话的工作目录创建后不可变更**（与桌面端 `securityService.getWorkspace(session.id)` 同语义）：
+   续跑 `--session` 时工作目录**只认会话记录**；`--workspace` 与之不同直接报错（要换目录请新建会话）；
+   记录为空时按 `--workspace` → 设置里的 `defaultWorkspace`（桌面端 `getWorkspace` 的兜底）→ cwd 回退，
+   且**不写回会话**。判定在 `virlen-cli/src/run.rs::resolve_workspace`（纯函数，有单测）。
+   ⚠️ 它同时决定工具的 cwd / 沙箱可写根 / 系统提示词里的工作目录 / `AGENTS.md` 从哪注入 ——
+   曾经这里取 cwd 并**写回会话**，于是换个目录续跑 = 模型在另一个项目里读写，桌面端看到的工作目录也被改掉（真实 bug，已修）。
+
+验证手法（**不花钱**、可复现）：本地 mock Provider（OpenAI 兼容 SSE，`http://127.0.0.1:8765/v1`）+ 临时 `VIRLEN_DATA_DIR`，
+能一次跑通「两轮 LLM + 原生工具调用 + SQLite 落库」，以及「非交互下 `ask` 被拒且命令**确实未执行**」（用命令写标记文件判定）。
+会话工作目录的回归验证另有一个脚本（在**另一个目录下**续跑 `--session`，断言库里 workspace 未被改写、请求里的工作目录指向会话记录、
+冲突 `--workspace` 被拒且不发请求）—— 断言由 Python 驱动，因为 PowerShell 5.1 会把 native stderr 重定向写成 **UTF-16LE**（中文还会经 GBK 二次损坏）。
+
+**11.16 配置下沉进度一览：localStorage 里还剩哪些「业务数据」** —— CLI / headless 的能力天花板就在这张表。
+
+已在 `app_settings`（`virlen.db`，GUI 与 CLI 共用）：`settings` 全量（S3）、`sandboxIgnoreRules`（S7）、`searchProviders` / `defaultSearchProviderId`、**`agents`（本轮下沉）**。
+
+仍在 localStorage 的（CLI 读不到 → 对应能力缺失或降级）：
+
+| 键 | 内容 | 对 CLI / headless 的影响 |
+|---|---|---|
+| `virlen-security`（只剩路径部分） | `whitelist` / `blacklist` / `skipEachDirs` | 路径安全少一半（只剩工作目录 + 沙盒 + 权限三态）；见 §11.15 第 3 条 |
+| `virlen-skills`（`skillStore`） | 技能**启用状态** / 元数据缓存 | 只缺「启用状态」：技能**目录**是固定规则 `<data_dir>/skills`，CLI 自行推导（`virlen-cli/src/run.rs::existing_skills_dir`）后 `list_skills` 可用，但不知道桌面端勾了哪些技能 |
+| `virlen-quick-actions` / `_input_wrapper_height` / `SIDEBAR_WIDTH` | UI 偏好 | 无需下沉 |
+| `virlen-telemetry-*`（buffer / device id / seq） | 埋点缓冲与设备号 | 无需下沉（默认关闭） |
+| 更新服务的「忽略该版本 / 7 日免打扰」 | 更新偏好 | 桌面端专有 |
+
+> 判断标准就一句：**headless 侧的某个功能要不要它**。要 → 下沉（照 `securityRepo` / `agentRepo` 的模板：表为权威 + 内存快照供同步读 + 首启迁移历史副本 + debounce 落库 + 退出前 `flush`）；不要 → 留在 localStorage。
 
 **踩坑前必读：`docs/tray-implementation-plan.md`**（托盘/关闭不退出/后台工作的完整方案与实现记录）。
 
@@ -544,7 +588,8 @@ pnpm cli config get          # headless CLI（= cargo run -p virlen-cli -- …�
 | 改「忽略沙盒命令」规则（命中即免脱壳审批 + 强制无沙盒执行） | **Rust 判定（权威：默认引擎 + CLI）** `src-tauri/virlen-core/src/security/{rules,js_rule}.rs`（text/regex 原生 + js 内嵌 QuickJS）+ `agent/native_tools/execute/common/rules.rs`（判定入口与提示文案）+ `.../execute/{execute_command,execute_script}.rs`；**规则来源** `app_settings` 的 `sandboxIgnoreRules` 键（Rust 侧 `session_db/settings.rs` + `security::load_sandbox_ignore_rules`；前端 `infrastructure/securityRepo/`（`hydrateSecurity` / `flushSecurityPersist`）+ `ui/store/securityStore.ts` + `main.ts` 的 `step('securityConfig')`）；**TS 侧实现（浏览器 dev / TS 引擎 / 设置页测试）** `domain/security/sandbox-ignore-rules.ts`（`SANDBOX_JS_DEFAULT_PATTERN` / `defaultSandboxRulePattern` / 排序 / 预设 / `compileSandboxRule`）+ `services/security-service.ts::matchSandboxIgnoreRule` + `infrastructure/tools/execute/{execute-command,execute-script}.ts`；**两侧契约** `src/tests/fixtures/sandbox-rules.golden.json`（TS `tests/domain/sandbox-rules-golden.test.ts` ↔ Rust `security/rules.rs` 的 golden 用例）；UI `ui/pages/Settings/security-sandbox-rules.tsx`（拖拽几何 `./sandbox-rules-dnd.ts`；JS 输入用 `ui/components/code-editor/CodeEditor.tsx`；行内开关 `ui/components/shared/Toggle`）；下发字段 `services/rust-engine.ts::resolveSecurityConfig`（`sandboxIgnoreRules`） |
 | 改视觉 | 核心 `src-tauri/virlen-core/src/vision/`（模型定位 / 懒加载 / 推理，零 `tauri::`）、命令壳 `src-tauri/src/vision_service.rs`、原生工具 `src-tauri/virlen-core/src/agent/native_tools/vision/`、前端 `src/infrastructure/vision/`、模型 `src-tauri/resources/quasivision_models/` |
 | 改宿主抽象 / CLI 资源与数据目录 | trait `src-tauri/virlen-core/src/agent/host.rs`（`resource_candidates` / `data_dir`）＋ CLI 实现 `src-tauri/virlen-core/src/host/cli_host.rs` ＋ GUI 实现 `src-tauri/src/host/tauri_host.rs`；注入链 `AgentEngine.host` → `ExecuteLlmRoundParams.host` / `RunIterationParams.host` → `execute_tool_steps` → `NativeToolCtx.host` |
-| 跑 / 扩展 headless CLI（`virlen-cli`） | 实现 `src-tauri/virlen-core/src/cli/{mod,config}.rs`（解析写成纯函数、输出走注入的 `Write` → 可单测）+ 三行转发 `src-tauri/virlen-cli/src/main.rs`（**独立 package，只依赖 core**）；数据 / 资源目录 `src-tauri/virlen-core/src/host/cli_host.rs`（`$VIRLEN_DATA_DIR` 覆盖）；库入口 `virlen_core::session_db::open_session_db`（与 GUI **同一条**路径链 → 同一份 `virlen.db`）；便捷脚本 `pnpm cli …`；连带要求见 §11.14 |
+| 跑 / 扩展 headless CLI（`virlen-cli`） | 实现全在 **`src-tauri/virlen-cli/src/`**（本 crate 的 **lib**；core **不含命令入口**）：`lib.rs`（参数解析 / 分派 / `USAGE` / `EXIT_*`）+ `config.rs`（配置读写）+ `run.rs`（无界面跑一次 agent：`parse` 参数解析 / `build_resources` 装配 / **`resolve_workspace`（会话工作目录权威性）** / `render_event` 事件渲染 / `ask_user` 交互应答 / `run()` 驱动）+ `list.rs`（`list-session [-g agent\|workdir]` / `list-agent`，分组纯函数 `group_sessions`、表格按**显示列宽**对齐 `pad`/`pad_left`）+ `tui/`（**TUI 规划中**，只有设计说明）；`src/main.rs` 仅三行转发（**bin 目标不被单测引用**）；数据 / 资源目录 `src-tauri/virlen-core/src/host/cli_host.rs`（`$VIRLEN_DATA_DIR` 覆盖）；库入口 `virlen_core::session_db::open_session_db`（与 GUI **同一条**路径链 → 同一份 `virlen.db`）；「忽略沙盒命令」规则走 `security::load_sandbox_ignore_rules`（同一份 `app_settings`）；技能目录推导 `run.rs::existing_skills_dir`（= `<data_dir>/skills`，与前端 `skillStore` 规则一致）；便捷脚本 `pnpm cli …`；连带要求见 §11.14、三条边界见 §11.15、剩余 localStorage 数据见 §11.16 |
+| 改 Agent 配置（agents）的持久化 / 与 CLI 共享 | 权威源 = `app_settings` 的 `agents` 键；前端 `src/infrastructure/agentRepo/index.ts`（**内存快照 + debounce 落库 + 首启迁移**，与 `securityRepo` 同款）+ `src/ui/store/agentStore.ts` + `src/main.ts` 的 `agents` 水合步骤（⚠️ **必须在 `initDefaultAgent()` / `agentStore.reload()` 之前**，否则默认 Agent 的补全会读到空列表并**覆盖**表里已有的 Agent）；CLI 侧 `src-tauri/virlen-cli/src/list.rs`（`list-agent` / `list-session -g agent`）；契约测试 `src/tests/infrastructure/agent-repo-settings.test.ts` |
 | 改设置项 | `src/ui/store/settingStore.ts` + `src/ui/pages/Settings/*` + `src/ui/i18n/lang/en-US.json` |
 | 改配置下沉 / 设置落库 | Rust `src-tauri/virlen-core/src/session_db/settings.rs`（`app_settings` 表 + `SettingsRepo`）+ 命令壳 `src-tauri/src/commands/session_db.rs::cmd_settings_*`；前端 `src/infrastructure/settingsRepo/` + `settingStore.hydrateSettings()/flushSettingsPersist()` + `src/main.ts` 的 `step('settings')`；计划见 `docs/config-sink-plan.md` |
 | 改埋点 | `src/utils/telemetry/**`（前端）；Rust 侧分两半：**出口** `src-tauri/src/telemetry.rs`（`TauriTelemetrySink` → `agent:telemetry` 事件 + `telemetry_drain_panics` 命令）、**其余**（`track` / `hash_id` / `now_ms` / 会话 trace / panic 钩子与落盘）在 `src-tauri/virlen-core/src/telemetry.rs`（sink 可插拔） |

@@ -10,9 +10,23 @@ edition = "2021"
 #    这是「把 CLI 拆成独立 package」的全部理由 —— 如果加回对 `virlen-app` 的依赖，
 #    这个收益立刻消失。
 #
+# ⚠️ 命令实现（`config` / `run` / `list-session` / `list-agent`）与（规划的）TUI 都在本
+#    package 的 **lib**（`src/lib.rs` + `src/config.rs` 等）：bin（`src/main.rs`）只转发。
+#    因为 **bin 目标无法被单测引用**，逻辑放 lib 才测得到。
+#
 # ⚠️ 版本号与 virlen-app / virlen-core / package.json / tauri.conf.json 同源（发版一并改）。
 
 [dependencies]
 virlen-core = { path = "../virlen-core" }
-# `flavor = "current_thread"`：CLI 是「读一次写一次就退出」的短生命周期，单线程运行时足够
-tokio = { version = "1", features = ["rt", "macros"] }
+# `rt` + `macros`：`#[tokio::main(flavor = "current_thread")]` / `#[tokio::test]`；
+# `sync`：`run` 用 `mpsc` 把事件交给输出循环（`EventSink` 是同步 trait，不能直接借用 `Write`）。
+# 不启用 `rt-multi-thread`：CLI 是「读一次写一次就退出」的短生命周期，单线程运行时足够。
+tokio = { version = "1", features = ["rt", "macros", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# `list-session` 的时间列：按本地时区格式化（与 GUI 同一套展示口径）
+chrono = "0.4"
+# 会话 / 消息 id，以及单测用的临时目录名
+uuid = { version = "1", features = ["v4"] }
+# 路径 canonicalize（Windows UNC / 长路径）——`run` 把工作目录规范化后再做路径安全判定
+dunce = "1"

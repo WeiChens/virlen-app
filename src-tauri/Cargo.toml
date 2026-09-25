@@ -4,17 +4,18 @@ version = "1.1.43"
 description = "全能型 AI 智能体桌面客户端 — 多模型、工具调用、视觉识别、skill"
 authors = ["wei"]
 edition = "2021"
-# ⚠️ 必须显式指定：本 package 有**两个 bin**（GUI `virlen-app` + headless `virlen-cli`）后，
+# ⚠️ 保留为**防御性显式声明**（曾经本 package 有两个 bin：GUI `virlen-app` + headless `virlen-cli`）：
 #    `cargo run` 与 Tauri CLI 靠 `default-run` 认「主二进制」—— 不加就直接失败：
 #    `tauri build` 报 "failed to find main binary, make sure you have a package > default-run"（实测）。
-#    这也说明「把 CLI 做成第二个 bin」不改变 GUI 的默认目标。
+#    现 CLI 已迁出为**独立 package**（见下方 workspace），本 package 只剩 GUI 一个 bin。
 default-run = "virlen-app"
 
 # ── workspace ──
 # 本 package 同时是 workspace 根；`src-tauri/` 仍是 workspace 根目录，因此 `target/` 与
 # `Cargo.lock` 的位置**不变**（CI 里的 bundle 路径无需改）。成员：
 # - `virlen-core`：零 `tauri::` 的核心库（引擎 / 持久化 / 沙盒 / 安全 / RAG / 视觉 / 宿主抽象）
-# - `virlen-cli`：headless CLI，**只依赖 core** → 其二进制里没有 GUI 栈
+# - `virlen-cli`：headless CLI（**命令实现全在其 lib**：`lib.rs` + `config` / `list` / `run` / `tui`），
+#   **只依赖 core** → 其二进制里没有 GUI 栈；core 不含任何命令入口
 [workspace]
 members = ["virlen-core", "virlen-cli"]
 resolver = "2"
