@@ -36,8 +36,11 @@ class SecurityServiceImpl implements SecurityService {
   /**
    * 「忽略沙盒命令」规则匹配（设置 → 安全 → 忽略沙盒命令）。
    *
-   * 命中 → 该命令**免除「沙盒脱壳」审批**且**强制以「不使用沙盒」方式执行**
-   * （与 Rust 原生路径经桥问到的是同一个实现，见 `domain/security/sandbox-ignore-rules`）。
+   * 命中 → 该命令**免除「沙盒脱壳」审批**且**强制以「不使用沙盒」方式执行**。
+   *
+   * ⚠️ 消费方只剩**没有 Rust 可用**的路径：TS 引擎（用户关闭 Rust 引擎 / 浏览器 dev）的
+   * `tools/execute/*.ts`、设置页「测试」按钮、保存期 `compileSandboxRule`。
+   * 默认引擎（Rust）与 CLI 的判定在 `src-tauri/src/security/`（由同一份 golden 契约收敛）。
    * 匹配异常一律返回 null（不脱壳），由匹配器内部保证。
    */
   async matchSandboxIgnoreRule(command: string): Promise<SandboxIgnoreRule | null> {

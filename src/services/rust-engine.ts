@@ -415,13 +415,10 @@ export async function resolveSecurityConfig(
       whitelist: config.whitelist ?? [],
       skillsDir,
       sandboxMode: settingsState.value.sandboxMode ?? 'on',
-      // 「忽略沙盒命令」规则是否存在**已启用**项。
-      // 仅作性能开关：为 true 时原生 execute_command / execute_script 会经内部交互
-      // `sandbox_rule_check` 问 JS「这条命令命中了吗」（命中 → 免审批 + 强制无沙盒执行）；
-      // 为 false 时零开销（不多一次 IPC 往返）。规则内容不下传 —— 匹配只有 JS 一份。
-      hasSandboxIgnoreRules: (config.sandboxIgnoreRules ?? []).some(
-        (r) => r.enabled,
-      ),
+      // 「忽略沙盒命令」规则**全量**下发（与 permissions / blacklist 同一套做法）。
+      // 判定完全在 Rust 侧：text / regex 原生求值，js 交内嵌 QuickJS（S7）——
+      // 不再有 `sandbox_rule_check` 内部交互，也没有 IPC 往返。
+      sandboxIgnoreRules: config.sandboxIgnoreRules ?? [],
     }
   } catch {
     return null

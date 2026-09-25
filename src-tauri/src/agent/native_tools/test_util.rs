@@ -15,8 +15,8 @@ pub(crate) fn test_security(workspace: &str) -> NativeToolSecurity {
         sandbox_mode: "on".to_string(),
         // 测试默认给空表 → 决策回退 legacy approval_mode（保持既有测试语义）
         permissions: std::collections::BTreeMap::new(),
-        // 默认无规则 → 原生工具不会多做一次「规则查询」的桥往返（保持既有测试语义）
-        has_sandbox_ignore_rules: false,
+        // 默认无规则 → 决策与旧版一致（不脱壳），且判定不需要任何 IO
+        sandbox_ignore_rules: vec![],
     }
 }
 

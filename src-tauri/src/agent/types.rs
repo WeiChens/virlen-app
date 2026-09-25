@@ -343,15 +343,19 @@ pub struct NativeToolSecurity {
     /// （与 TS `src/domain/permission/index.ts` 对齐；取代旧的单一 `approval_mode`）
     #[serde(default)]
     pub permissions: std::collections::BTreeMap<String, String>,
-    /// 「忽略沙盒命令」规则（设置 → 安全）里是否存在**已启用**项（前端计算后传入）。
+    /// 「忽略沙盒命令」规则**全量**（设置 → 安全 → 忽略沙盒命令）。
     ///
-    /// 仅作性能开关：为 true 时原生 execute_command / execute_script 才会经桥向 JS
-    /// 询问「这条命令是否命中规则」（内部交互 `sandbox_rule_check`，无 UI）；
-    /// 为 false 时零开销，不多一次 IPC 往返。
-    /// ⚠️ 真正的匹配在 JS 侧做（规则含用户自写的 `js` 函数，Rust 无法求值）——
-    /// 这里不预编译、不缓存规则内容，避免两侧语义分叉（铁律 1）。
+    /// 与 `permissions` / `blacklist` 同一套做法：由**配置来源**解析后整体下发，
+    /// 引擎侧不再回问 JS（原内部交互 `sandbox_rule_check` 已连同桥一起删除）。
+    /// - GUI（Rust 引擎）：`resolveSecurityConfig` 下发 `app_settings.sandboxIgnoreRules` 的当前快照；
+    /// - CLI：入口从同一个 `app_settings` 键读同一份；
+    /// - 判定在 Rust 侧完成（`crate::security::find_matching_rule`：text / regex 原生，
+    ///   `js` 交内嵌 QuickJS，见 `crate::security::js_rule`）。
+    ///
+    /// ⚠️ 逐条**不做**预编译：规则量级是「几条到几十条」，遍历一次的开销远小于一次 IPC；
+    /// regex 另有进程级编译缓存（`security::rules::regex_matches`）。
     #[serde(default)]
-    pub has_sandbox_ignore_rules: bool,
+    pub sandbox_ignore_rules: Vec<crate::security::SandboxIgnoreRule>,
 }
 
 fn default_sandbox_mode() -> String {

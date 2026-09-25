@@ -9,8 +9,8 @@
  *
  * ⚠️ handler 只负责「问用户」与「放行 / 拒绝」，**不做任何脱壳决策**：
  *    「忽略沙盒命令」规则（设置 → 安全）在审批**之前**就定了这条命令是否强制无沙盒执行
- *    ——TS 引擎在 `tools/execute/*.ts`、Rust 引擎在 `native_tools/execute/*.rs`
- *    （Rust 侧经内部交互 `sandbox_rule_check` 问 JS 判定）。命中规则时**根本走不到这里**，
+ *    ——TS 引擎在 `tools/execute/*.ts`、Rust 引擎 / CLI 在 `src-tauri/src/security/`
+ *    （S7 起匹配完全在 Rust 侧，不再经桥问 JS）。命中规则时**根本走不到这里**，
  *    不要在本文里再加规则匹配（两处匹配会分叉）。
  */
 import { ToolExecutorResponse } from '@/domain/tools/types'

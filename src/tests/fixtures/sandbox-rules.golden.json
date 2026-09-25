@@ -1,0 +1,152 @@
+{
+  "_comment": [
+    "「忽略沙盒命令」规则的 golden 契约 —— TS 与 Rust 两侧**共读**同一份。",
+    "TS : src/tests/domain/sandbox-rules-golden.test.ts（用 findMatchingSandboxRule）",
+    "Rust: src-tauri/src/security/rules.rs（用 find_matching_rule）",
+    "先例：src/tests/fixtures/system-prompt.golden.txt（提示词组装的两侧契约）。",
+    "任何一侧的实现漂移（新增分支 / 默认值改动 / 大小写处理不一致）都会让两侧之一失败。",
+    "⚠️ 只放「两侧都能求值」的用例：死循环 / 超内存 / host 能力探测只在 Rust 单测里（TS 侧没有超时保护，会卡死渲染进程）。"
+  ],
+  "rules": [
+    {
+      "id": "install",
+      "name": "安装依赖",
+      "enabled": true,
+      "kind": "regex",
+      "textMode": "exact",
+      "pattern": "^(npm|pnpm|yarn|bun) (i|install|ci|add)\\b",
+      "caseSensitive": false
+    },
+    {
+      "id": "test",
+      "name": "运行测试",
+      "enabled": true,
+      "kind": "regex",
+      "textMode": "exact",
+      "pattern": "^(npm|pnpm|yarn|bun) (run )?(test|vitest)\\b",
+      "caseSensitive": false
+    },
+    {
+      "id": "disabled-noise",
+      "name": "已禁用（不得参与匹配）",
+      "enabled": false,
+      "kind": "text",
+      "textMode": "prefix",
+      "pattern": "pnpm",
+      "caseSensitive": false
+    },
+    {
+      "id": "literal-prefix",
+      "name": "前缀",
+      "enabled": true,
+      "kind": "text",
+      "textMode": "prefix",
+      "pattern": "git commit",
+      "caseSensitive": false
+    },
+    {
+      "id": "literal-suffix",
+      "name": "后缀",
+      "enabled": true,
+      "kind": "text",
+      "textMode": "suffix",
+      "pattern": "--dry-run",
+      "caseSensitive": false
+    },
+    {
+      "id": "exact-case-sensitive",
+      "name": "完全匹配 + 区分大小写",
+      "enabled": true,
+      "kind": "text",
+      "textMode": "exact",
+      "pattern": "MAKE",
+      "caseSensitive": true
+    },
+    {
+      "id": "js-function-decl",
+      "name": "js：函数声明",
+      "enabled": true,
+      "kind": "js",
+      "textMode": "exact",
+      "pattern": "function matchCommand(command) {\n  return command.startsWith('cargo ')\n}",
+      "caseSensitive": false
+    },
+    {
+      "id": "js-arrow-assigned",
+      "name": "js：赋值式箭头函数",
+      "enabled": true,
+      "kind": "js",
+      "textMode": "exact",
+      "pattern": "const m = (command) => command === 'pnpm tauri dev'",
+      "caseSensitive": false
+    },
+    {
+      "id": "js-expression",
+      "name": "js：单表达式",
+      "enabled": true,
+      "kind": "js",
+      "textMode": "exact",
+      "pattern": "command.startsWith('docker ') && !command.includes('rm')",
+      "caseSensitive": false
+    },
+    {
+      "id": "js-body-with-return",
+      "name": "js：含 return 的语句体",
+      "enabled": true,
+      "kind": "js",
+      "textMode": "exact",
+      "pattern": "if (command === 'rsync -a') { return true }\nreturn false",
+      "caseSensitive": false
+    },
+    {
+      "id": "js-throws",
+      "name": "js：运行期抛错（一律未命中）",
+      "enabled": true,
+      "kind": "js",
+      "textMode": "exact",
+      "pattern": "throw new Error('always fails')",
+      "caseSensitive": false
+    },
+    {
+      "id": "js-default-template",
+      "name": "js：默认模板（带注释 + return false）",
+      "enabled": true,
+      "kind": "js",
+      "textMode": "exact",
+      "pattern": "function matchCommand(command) {\n  // 注释：默认不命中\n  return false\n}",
+      "caseSensitive": false
+    },
+    {
+      "id": "missing-enabled",
+      "name": "缺 enabled 字段 → 两侧都必须跳过",
+      "kind": "text",
+      "textMode": "prefix",
+      "pattern": "SENTINEL",
+      "caseSensitive": false
+    }
+  ],
+  "cases": [
+    { "command": "pnpm install", "expectRuleId": "install" },
+    { "command": "  npm ci  ", "expectRuleId": "install" },
+    { "command": "BUN ADD lodash", "expectRuleId": "install" },
+    { "command": "echo npm install", "expectRuleId": null },
+    { "command": "pnpm test", "expectRuleId": "test" },
+    { "command": "yarn run vitest --run", "expectRuleId": "test" },
+    { "command": "git commit -m 'x'", "expectRuleId": "literal-prefix" },
+    { "command": "GIT COMMIT -m x", "expectRuleId": "literal-prefix" },
+    { "command": "pnpm publish --dry-run", "expectRuleId": "literal-suffix" },
+    { "command": "MAKE", "expectRuleId": "exact-case-sensitive" },
+    { "command": "make", "expectRuleId": null },
+    { "command": "cargo build", "expectRuleId": "js-function-decl" },
+    { "command": "cargo", "expectRuleId": null },
+    { "command": "pnpm tauri dev", "expectRuleId": "js-arrow-assigned" },
+    { "command": "docker run alpine", "expectRuleId": "js-expression" },
+    { "command": "docker rm alpine", "expectRuleId": null },
+    { "command": "rsync -a", "expectRuleId": "js-body-with-return" },
+    { "command": "rsync -a src/", "expectRuleId": null },
+    { "command": "SENTINEL xyz", "expectRuleId": null },
+    { "command": "anything at all", "expectRuleId": null },
+    { "command": "", "expectRuleId": null },
+    { "command": "   ", "expectRuleId": null }
+  ]
+}

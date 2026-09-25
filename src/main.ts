@@ -26,6 +26,10 @@ import { installGlobalErrorHandlers } from '@/utils/telemetry/errorHandler'
 import { bindUsageLedger } from '@/domain/usage'
 import { tauriUsageLedger } from '@/infrastructure/usage-ledger'
 import { initTrayService } from '@/services/tray-service'
+// 安全配置：规则以 Rust 侧 `app_settings` 为唯一源（localStorage 不保存），
+// 启动同步由 store 的 hydrate 负责（它同时刷新 observable，设置页立即展示表里的值）。
+import { flushSecurityPersist } from '@/infrastructure/securityRepo'
+import { securityStore } from '@/ui/store/securityStore'
 
 /** 性能计时（优先高精度） */
 const perfNow = () =>
@@ -133,6 +137,10 @@ async function init() {
   // 配置下沉（D3）：先把 Rust 侧 `app_settings` 水合进设置（幂等；非 Tauri 环境自动跳过）——
   // 必须在最前面：i18n / 工作目录 / 会话加载 / 权限都直接依赖设置值。
   await step('settings', () => hydrateSettings())
+  // 「忽略沙盒命令」规则下沉（S7）：规则以 `app_settings` 为**唯一源**（localStorage 不保存）。
+  // ⚠️ 走 store 的 hydrate（而非直接调 infra 的 hydrateSecurity）——它还会刷新 observable，
+  //    否则设置页读到的仍是模块加载瞬间的快照（看起来「还是 localStorage」）。
+  await step('securityConfig', () => securityStore.hydrate())
   // 用量统计（token 账本）：把领域侧记账端口绑到 Tauri/SQLite 实现；
   // 未绑定时 recordUsage 是空操作，因此业务代码可以无条件调用。
   bindUsageLedger(tauriUsageLedger)
@@ -185,6 +193,8 @@ if (typeof window !== 'undefined') {
     flushTelemetry()
     // 设置落库是 debounce 的，退出前补一次（否则刚改的开关可能丢）
     flushSettingsPersist()
+    // 「忽略沙盒命令」规则同样是 debounce 落库的，一并补一次
+    flushSecurityPersist()
   })
 }
 

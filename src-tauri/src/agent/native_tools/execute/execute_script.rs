@@ -9,7 +9,7 @@ use crate::file_ops;
 use serde_json::{json, Value};
 
 use super::common::{
-    apply_rule_clearance, check_sandbox_ignore_rule, classify_command, command_decision,
+    apply_rule_clearance, match_sandbox_ignore_rule, classify_command, command_decision,
     permission_label, resolve_decision, risk_info, run_command_native, sandbox_mode,
     with_bypass_hint, with_rule_hint, PermissionDecision, SandboxMode, PERM_SANDBOX_SCRIPT,
     PERM_SCRIPT,
@@ -70,14 +70,14 @@ pub(crate) async fn execute_script_tool(
     // 「忽略沙盒命令」规则（设置 → 安全）：与 execute_command 同语义 —— 命中即免脱壳审批
     // **并强制无沙盒执行**（AI 没传 sandbox:"off" 也生效），匹配对象是**运行命令**
     // （不是脚本正文，见 common::rules 模块头注释）。
-    // 位置：放在「脚本已存在」快速失败之后，不值得为一条必然报错的调用多走一次 IPC 往返。
-    // ⚠️ 只在沙盒**启用**时查询：off 时无沙盒可脱；readonly 时脱壳被禁止（规则静默忽略）。
-    let rule_hit =
-        if ctx.security.has_sandbox_ignore_rules && sandbox_mode(ctx) == SandboxMode::On {
-            check_sandbox_ignore_rule(ctx, "execute_script", &cmd_str).await
-        } else {
-            None
-        };
+    // 位置：放在「脚本已存在」快速失败之后，不值得为一条必然报错的调用多判一次规则。
+    // ⚠️ 判定完全在 Rust 侧本地完成（规则随 security 快照下发）：无桥往返、无 IO。
+    // ⚠️ 只在沙盒**启用**时判定：off 时无沙盒可脱；readonly 时脱壳被禁止（规则静默忽略）。
+    let rule_hit = if sandbox_mode(ctx) == SandboxMode::On {
+        match_sandbox_ignore_rule(ctx, &cmd_str).await
+    } else {
+        None
+    };
     if rule_hit.is_some() {
         // 留痕（只记工具名 / 原因，不记命令正文与规则名，遵循 §9）
         crate::telemetry::track(

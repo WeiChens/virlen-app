@@ -19,6 +19,7 @@ mod search;
 mod speech_service;
 mod task_manager;
 mod sandbox;
+mod security;
 mod telemetry;
 #[cfg(desktop)]
 mod tray;

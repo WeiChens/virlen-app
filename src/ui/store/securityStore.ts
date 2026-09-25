@@ -15,6 +15,7 @@ import {
   securityRepo,
   SecurityConfig,
   defaultSecurityConfig,
+  hydrateSecurity,
 } from '@/infrastructure/securityRepo'
 import type { SandboxIgnoreRule } from '@/domain/security/sandbox-ignore-rules'
 import {
@@ -29,6 +30,7 @@ class SecurityStore {
     this.value = { ...repo.load() }
     makeObservable(this, {
       value: observable,
+      hydrate: action,
       addToList: action,
       removeFromList: action,
       upsertSandboxRule: action,
@@ -42,6 +44,17 @@ class SecurityStore {
   /** 持久化到 Repo */
   private persist(): void {
     this.repo.save(this.value)
+  }
+
+  /**
+   * 配置下沉（S7）：从 Rust 侧 `app_settings` 水合「忽略沙盒命令」规则，并刷新本地镜像。
+   *
+   * 幂等；非 Tauri 环境（浏览器 dev / vitest）直接返回，仍用 localStorage 的值。
+   * ⚠️ 必须在任何执行路径之前完成 —— Rust 引擎 / CLI 判定读的就是表里那一份。
+   */
+  async hydrate(): Promise<void> {
+    await hydrateSecurity()
+    this.value = { ...this.repo.load() }
   }
 
   /** 添加目录到列表（去重） */
