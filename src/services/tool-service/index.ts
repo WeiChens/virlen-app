@@ -12,7 +12,7 @@
  *   （如先 confirm_command 再 user_choice），因此不能只缓存一种 handler。
  *
  * 注：曾经的 `sandbox_rule_check`（Rust 问 JS「这条命令命中「忽略沙盒命令」规则了吗」）
- * 已随 S7 删除 —— 规则匹配下沉到 Rust（`src-tauri/src/security/`），不再需要 JS 宿主。
+ * 已随 S7 删除 —— 规则匹配下沉到 Rust（`src-tauri/virlen-core/src/security/`），不再需要 JS 宿主。
  * 剩下两种类型都**是真的在问用户**（弹窗），不存在「无 UI 的内部查询」。
  */
 import { createUserChoiceHandles } from './user_choice'

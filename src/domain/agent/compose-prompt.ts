@@ -6,7 +6,7 @@
  * 因此可以被固定输入驱动、逐字节断言。
  *
  * 为什么单独抽成文件：
- * Rust 引擎侧要组装**同一份**提示词（`src-tauri/src/agent/prompts/assemble.rs`，
+ * Rust 引擎侧要组装**同一份**提示词（`src-tauri/virlen-core/src/agent/prompts/assemble.rs`，
  * 为 headless / CLI 做前置）。两侧用同一组输入必须得到逐字节相同的结果 ——
  * 这个函数就是 TS 侧的被比对对象，见 `src/tests/domain/compose-prompt-golden.test.ts`
  * 与 Rust 侧 `prompts::assemble::tests::golden_system_prompt_matches_fixture`。

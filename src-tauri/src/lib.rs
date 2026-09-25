@@ -2,26 +2,20 @@
 // `Manager` 现在在所有平台都被用到（退出钩子里的 `try_state`），因此不再按 target 条件编译
 use tauri::Manager;
 
-mod agent;
-/// headless CLI 入口（`virlen-cli` bin 只有三行转发，实现全在这里）
-pub mod cli;
 mod clipboard_files;
+/// 全部 `#[tauri::command]`（GUI 壳）—— 业务语义在 `virlen-core`
+mod commands;
 #[cfg(target_os = "windows")]
 mod drag_drop;
 mod common_service;
 mod deepseek_tokenizer;
-mod file_ops;
+/// GUI 宿主实现（`TauriHost`）；`HostEnv` trait 与 `CliHost` 在 `virlen-core::host`
 mod host;
 mod load_env;
-mod rag;
-mod session_db;
-mod vision;
 mod vision_service;
-mod search;
 mod speech_service;
 mod task_manager;
-mod sandbox;
-mod security;
+/// GUI 侧埋点出口（Tauri emit + panic 拉取命令）；其余在 `virlen-core::telemetry`
 mod telemetry;
 #[cfg(desktop)]
 mod tray;
@@ -41,7 +35,7 @@ async fn move_to_trash(path: String) -> Result<(), String> {
 fn sandbox_diagnostics() -> serde_json::Value {
     #[cfg(target_os = "windows")]
     {
-        serde_json::to_value(sandbox::diagnostics())
+        serde_json::to_value(virlen_core::sandbox::diagnostics())
             .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
     }
     #[cfg(not(target_os = "windows"))]
@@ -76,17 +70,17 @@ async fn search_files_by_name(
     max_results: usize,
     task_id: String,
     // 遍历范围（侧边栏搜索框用）：跳过点项 / 依赖·构建目录，
-    // keep_dirs 是已展开的那份忽略目录（例外）。详见 search::search_files_by_name 注释。
+    // keep_dirs 是已展开的那份忽略目录（例外）。详见 virlen_core::search::search_files_by_name 注释。
     include_hidden: bool,
     skip_dir_names: Vec<String>,
     keep_dirs: Vec<String>,
-) -> Result<Vec<search::FileSearchResult>, String> {
+) -> Result<Vec<virlen_core::search::FileSearchResult>, String> {
     let cancel_flag = task_manager::register(&task_id);
     let root_c = root.clone();
     let query_c = query.clone();
 
     let task = tokio::task::spawn_blocking(move || {
-        search::search_files_by_name(
+        virlen_core::search::search_files_by_name(
             &root_c,
             &query_c,
             use_regex,
@@ -113,13 +107,13 @@ async fn search_text_in_files(
     query: String,
     max_results: usize,
     task_id: String,
-) -> Result<Vec<search::TextSearchResult>, String> {
+) -> Result<Vec<virlen_core::search::TextSearchResult>, String> {
     let cancel_flag = task_manager::register(&task_id);
     let root_c = root.clone();
     let query_c = query.clone();
 
     let task = tokio::task::spawn_blocking(move || {
-        search::search_text_in_files(&root_c, &query_c, max_results, &cancel_flag)
+        virlen_core::search::search_text_in_files(&root_c, &query_c, max_results, &cancel_flag)
     });
 
     let result = tokio::time::timeout(std::time::Duration::from_secs(30), task)
@@ -139,11 +133,11 @@ async fn list_directory(
     max_depth: usize,
     skip_each_dirs: Vec<String>,
     task_id: String,
-) -> Result<Vec<search::DirEntry>, String> {
+) -> Result<Vec<virlen_core::search::DirEntry>, String> {
     let cancel_flag = task_manager::register(&task_id);
 
     let task = tokio::task::spawn_blocking(move || {
-        search::list_directory(
+        virlen_core::search::list_directory(
             &root,
             recursive,
             include_hidden,
@@ -175,7 +169,7 @@ fn stop_task(task_id: String) -> bool {
 #[tauri::command]
 async fn kill_process_tree(pid: u32) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        agent::process_tree::kill_process_tree(pid);
+        virlen_core::agent::process_tree::kill_process_tree(pid);
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?;
@@ -188,9 +182,9 @@ async fn kill_process_tree(pid: u32) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn read_file_with_hash(path: String) -> Result<file_ops::FileReadResult, String> {
+async fn read_file_with_hash(path: String) -> Result<virlen_core::file_ops::FileReadResult, String> {
     tokio::task::spawn_blocking(move || {
-        file_ops::read_file(&path)
+        virlen_core::file_ops::read_file(&path)
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
@@ -210,7 +204,7 @@ pub struct PathStat {
 /// 需要先判断体积是否超限 —— 有了它就不必把超大文件整个读进内存才发现该拒绝。
 #[tauri::command]
 async fn stat_path(path: String) -> Result<Option<PathStat>, String> {
-    let expanded = crate::sandbox::paths::expand_user_path(&path);
+    let expanded = virlen_core::sandbox::paths::expand_user_path(&path);
     tokio::task::spawn_blocking(move || {
         let p = std::path::Path::new(&expanded);
         match std::fs::metadata(p) {
@@ -233,7 +227,7 @@ async fn stat_path(path: String) -> Result<Option<PathStat>, String> {
 async fn canonicalize_path(path: String) -> Option<String> {
     // 路径展开操作很快，但 canonicalize 可能涉及 I/O
     tokio::task::spawn_blocking(move || {
-        let expanded = crate::sandbox::paths::expand_user_path(&path);
+        let expanded = virlen_core::sandbox::paths::expand_user_path(&path);
         let p = std::path::Path::new(&expanded);
         p.canonicalize()
             .ok()
@@ -264,11 +258,11 @@ async fn check_is_directory(path: String) -> Result<bool, String> {
 #[tauri::command]
 async fn edit_file_multi_in_place(
     path: String,
-    edits: Vec<file_ops::EditEntry>,
+    edits: Vec<virlen_core::file_ops::EditEntry>,
     expected_hash: String,
-) -> Result<file_ops::FileEditMultiResult, String> {
+) -> Result<virlen_core::file_ops::FileEditMultiResult, String> {
     tokio::task::spawn_blocking(move || {
-        file_ops::edit_file_multi(&path, &edits, &expected_hash)
+        virlen_core::file_ops::edit_file_multi(&path, &edits, &expected_hash)
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
@@ -313,10 +307,10 @@ pub fn run() {
             telemetry::init(app.handle());
 
             // 初始化 Agent 引擎（Rust 聊天循环）
-            agent::init_agent_engine(app.handle());
+            commands::agent::init_agent_engine(app.handle());
 
             // 初始化 RAG 知识库服务
-            if let Err(e) = rag::init_rag_service(app.handle()) {
+            if let Err(e) = commands::rag::init_rag_service(app.handle()) {
                 eprintln!("[RAG] 初始化失败: {}", e);
             } 
             // else {
@@ -401,70 +395,70 @@ pub fn run() {
             vision_service::vision_analyze,
             vision_service::vision_analyze_base64,
             // RAG 知识库命令
-            rag::create_knowledge_base,
-            rag::list_knowledge_bases,
-            rag::delete_knowledge_base,
-            rag::add_document_to_knowledge_base,
-            rag::remove_document_from_knowledge_base,
-            rag::list_knowledge_base_documents,
-            rag::query_knowledge_base,
-            rag::write_text_to_knowledge_base,
-            rag::edit_document_in_knowledge_base,
-            rag::edit_text_in_knowledge_base,
-            rag::get_knowledge_base_document,
-            rag::init_knowledge_bases,
-            rag::search_documents_content,
-            rag::export_knowledge_base,
+            commands::rag::create_knowledge_base,
+            commands::rag::list_knowledge_bases,
+            commands::rag::delete_knowledge_base,
+            commands::rag::add_document_to_knowledge_base,
+            commands::rag::remove_document_from_knowledge_base,
+            commands::rag::list_knowledge_base_documents,
+            commands::rag::query_knowledge_base,
+            commands::rag::write_text_to_knowledge_base,
+            commands::rag::edit_document_in_knowledge_base,
+            commands::rag::edit_text_in_knowledge_base,
+            commands::rag::get_knowledge_base_document,
+            commands::rag::init_knowledge_bases,
+            commands::rag::search_documents_content,
+            commands::rag::export_knowledge_base,
             // Agent 引擎（Rust 聊天循环）
-            agent::agent_send_message,
-            agent::agent_cancel,
-            agent::agent_kill_command,
+            commands::agent::agent_send_message,
+            commands::agent::agent_cancel,
+            commands::agent::agent_kill_command,
             // PTY 会话交互（Step 1：execute_command 换 ConPTY）
-            agent::pty_write,
-            agent::pty_resize,
+            commands::agent::pty_write,
+            commands::agent::pty_resize,
             // 命名控制键（Step 2 ③）
-            agent::pty_key,
+            commands::agent::pty_key,
             // 接管 / 交还（Step 2 ②）
-            agent::pty_set_held,
+            commands::agent::pty_set_held,
             // TS 引擎路径的原生执行（沙盒 + ConPTY，§7 #14）
-            agent::pty_run_command,
-            agent::agent_get_run_snapshot,
-            agent::agent_clear_run_snapshot,
-            agent::agent_dispose,
+            commands::agent::pty_run_command,
+            commands::agent::agent_get_run_snapshot,
+            commands::agent::agent_clear_run_snapshot,
+            commands::agent::agent_dispose,
             // 工具定义权威源（机制 C：前端 toolRegistry 经此取值）
-            agent::cmd_list_tool_definitions,
-            agent::agent_tool_response,
-            agent::agent_user_interaction_response,
-            agent::agent_round_boundary_response,
-            agent::agent_provider_stream_event,
-            agent::agent_provider_stream_done,
+            commands::agent::cmd_list_tool_definitions,
+            commands::agent::agent_tool_response,
+            commands::agent::agent_user_interaction_response,
+            commands::agent::agent_round_boundary_response,
+            commands::agent::agent_provider_stream_event,
+            commands::agent::agent_provider_stream_done,
             // 会话持久化（SQLite 直落）
-            session_db::commands::cmd_list_sessions,
-            session_db::commands::cmd_get_session,
-            session_db::commands::cmd_get_messages,
-            session_db::commands::cmd_get_message_page,
-            session_db::commands::cmd_get_message_window,
-            session_db::commands::cmd_get_message_timeline,
-            session_db::commands::cmd_get_user_message_refs,
-            session_db::commands::cmd_search_messages,
-            session_db::commands::cmd_upsert_session,
-            session_db::commands::cmd_delete_session,
-            session_db::commands::cmd_replace_session_messages,
-            session_db::commands::cmd_append_messages,
-            session_db::commands::cmd_truncate_session_messages,
+            commands::session_db::cmd_list_sessions,
+            commands::session_db::cmd_get_session,
+            commands::session_db::cmd_get_messages,
+            commands::session_db::cmd_get_message_page,
+            commands::session_db::cmd_get_message_window,
+            commands::session_db::cmd_get_message_timeline,
+            commands::session_db::cmd_get_user_message_refs,
+            commands::session_db::cmd_search_messages,
+            commands::session_db::cmd_upsert_session,
+            commands::session_db::cmd_delete_session,
+            commands::session_db::cmd_replace_session_messages,
+            commands::session_db::cmd_append_messages,
+            commands::session_db::cmd_truncate_session_messages,
             // 应用设置（配置下沉 D3）
-            session_db::commands::cmd_settings_get_all,
-            session_db::commands::cmd_settings_upsert,
-            session_db::commands::cmd_settings_import,
+            commands::session_db::cmd_settings_get_all,
+            commands::session_db::cmd_settings_upsert,
+            commands::session_db::cmd_settings_import,
             // 用量账本（token 统计）
-            session_db::commands::cmd_append_usage,
-            session_db::commands::cmd_usage_stats,
-            session_db::commands::cmd_usage_query,
-            session_db::commands::cmd_usage_clear,
+            commands::session_db::cmd_append_usage,
+            commands::session_db::cmd_usage_stats,
+            commands::session_db::cmd_usage_query,
+            commands::session_db::cmd_usage_clear,
             // 库维护（设置 → 存储：体积快照 / 截断 WAL / 重建数据库）
-            session_db::commands::cmd_db_stats,
-            session_db::commands::cmd_db_checkpoint,
-            session_db::commands::cmd_db_maintain,
+            commands::session_db::cmd_db_stats,
+            commands::session_db::cmd_db_checkpoint,
+            commands::session_db::cmd_db_maintain,
             // DeepSeek tokenizer（token 计数）
             deepseek_tokenizer::cmd_count_tokens,
             // 埋点：前端就绪后拉取落盘的历史 panic
@@ -516,7 +510,7 @@ pub fn run() {
                 }
                 // 退出前把 WAL 截断回零（实测 `-wal` 长期停在 99 MB 以上，比库碎片大得多）。
                 // 幂等；拿不到连接锁就跳过，**绝不等待、绝不拖住退出**。
-                if let Some(m) = app.try_state::<std::sync::Arc<session_db::DbMaintenance>>() {
+                if let Some(m) = app.try_state::<std::sync::Arc<virlen_core::session_db::DbMaintenance>>() {
                     let _ = m.try_checkpoint_truncate();
                 }
                 telemetry::on_exit();

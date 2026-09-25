@@ -137,7 +137,7 @@ agent:provider-request { requestId, providerType, providerId, apiKey, baseUrl, r
 
 ## 八、P2：高价值工具原生 Rust 化
 
-### 已原生化的工具（`src-tauri/src/agent/native_tools/`，无需 JS 桥往返）
+### 已原生化的工具（`src-tauri/virlen-core/src/agent/native_tools/`，无需 JS 桥往返）
 
 | 工具 | 说明 |
 |---|---|
@@ -174,7 +174,7 @@ Rust 侧 `NativeToolSecurity` 由 `native_tools/common.rs` 的 `resolve_safe_pat
 
 需要「资源目录 / 数据目录在哪」的工具（`vision_analyze` 的模型文件）从 `ctx.host: &dyn HostEnv` 取。
 
-- trait 在 `src-tauri/src/agent/host.rs`（引擎核心内，**零 `tauri::`**），只有两个方法：
+- trait 在 `src-tauri/virlen-core/src/agent/host.rs`（引擎核心内，**零 `tauri::`**），只有两个方法：
   `resource_candidates()`（只读资源的候选根，按优先级）与 `data_dir()`（可写数据根）；
 - 实现只有两份：GUI `host::TauriHost`（`resource_dir()` / `app_data_dir()`）、
   CLI `host::CliHost`（`$VIRLEN_RESOURCE_DIR` / `$VIRLEN_DATA_DIR` + exe 位置，
@@ -385,7 +385,7 @@ UI 渲染 / 设置管理 / i18n、`export-service` Markdown 导出、`download-s
 ### P1（引擎循环移植）
 
 - `Cargo.toml`：新增 `reqwest stream` feature、`async-trait`
-- `src-tauri/src/agent/`：14 个新模块（约 2000 行 Rust + 测试）
+- `src-tauri/virlen-core/src/agent/`：14 个新模块（约 2000 行 Rust + 测试）
 - `src-tauri/src/lib.rs`：注册 agent 模块 + 9 个 Tauri 命令
 - `src/services/rust-engine.ts`：适配器 + 双向桥（约 350 行）
 - `src/services/chat-service.ts`：`getEngine()` 选择器
@@ -395,22 +395,22 @@ UI 渲染 / 设置管理 / i18n、`export-service` Markdown 导出、`download-s
 ### P2（高价值工具原生化）
 
 - `Cargo.toml`：tokio 增加 `process` / `io-util` / `time`
-- `src-tauri/src/agent/native_tools/`：新增（按分类拆分的 18 个原生工具 + 分类 `common.rs` + 测试）
-- `src-tauri/src/agent/tool_executor.rs`：原生分发优先 + `NativeToolOutcome` 统一处理
-- `src-tauri/src/agent/types.rs`：`NativeToolSecurity` + `SendMessageOptions.security`
-- `src-tauri/src/agent/llm_loop.rs` / `iteration.rs` / `engine.rs`：安全配置透传
-- `src-tauri/src/file_ops.rs`：新增 `write_file`
-- `src-tauri/src/rag/mod.rs`：暴露 `pub fn get_service()`
-- `src-tauri/src/search.rs`：`DirEntryType` 派生 `Clone/Copy`
+- `src-tauri/virlen-core/src/agent/native_tools/`：新增（按分类拆分的 18 个原生工具 + 分类 `common.rs` + 测试）
+- `src-tauri/virlen-core/src/agent/tool_executor.rs`：原生分发优先 + `NativeToolOutcome` 统一处理
+- `src-tauri/virlen-core/src/agent/types.rs`：`NativeToolSecurity` + `SendMessageOptions.security`
+- `src-tauri/virlen-core/src/agent/llm_loop.rs` / `iteration.rs` / `engine.rs`：安全配置透传
+- `src-tauri/virlen-core/src/file_ops.rs`：新增 `write_file`
+- `src-tauri/virlen-core/src/rag/mod.rs`：暴露 `pub fn get_service()`
+- `src-tauri/virlen-core/src/search.rs`：`DirEntryType` 派生 `Clone/Copy`
 - `src/services/rust-engine.ts`：`resolveSecurityConfig()` 解析安全配置
 - `src/services/tool-service/`：新增 `confirm_command_native` 原生审批 handles
 
 ### P3（会话持久化 SQLite 直落）
 
 - `Cargo.toml`：新增 `rusqlite = { version = "0.32", features = ["bundled"] }`
-- `src-tauri/src/session_db.rs`：新增（SessionRepo trait + Sqlite/Noop 实现 + 7 个测试）
-- `src-tauri/src/agent/engine.rs`：注入 `SessionRepo`；3 个写库点（入口用户消息 / 每轮结果 / resume）
-- `src-tauri/src/agent/mod.rs`：`init_agent_engine` 创建 SQLite repo + `app.manage`
+- `src-tauri/virlen-core/src/session_db.rs`：新增（SessionRepo trait + Sqlite/Noop 实现 + 7 个测试）
+- `src-tauri/virlen-core/src/agent/engine.rs`：注入 `SessionRepo`；3 个写库点（入口用户消息 / 每轮结果 / resume）
+- `src-tauri/virlen-core/src/agent/mod.rs`：`init_agent_engine` 创建 SQLite repo + `app.manage`
 - `src-tauri/src/lib.rs`：注册 `session_db` 模块 + 6 个命令
 - `src/infrastructure/sessionRepo/index.ts`：IndexedDB → Rust 命令
 - `src/services/chat-service.ts`：`compressContext` 压缩后落库
@@ -427,7 +427,7 @@ UI 渲染 / 设置管理 / i18n、`export-service` Markdown 导出、`download-s
 
 | 项 | 位置 | 说明 |
 |---|---|---|
-| **权威源** | `src-tauri/src/agent/tool_defs/definitions.json` | 28 个工具 × 三平台变体；平台键 `windows`/`macos`/`linux` 与 `std::env::consts::OS`、TS `platformSnapshot()` **同词表**（无需映射表）|
+| **权威源** | `src-tauri/virlen-core/src/agent/tool_defs/definitions.json` | 28 个工具 × 三平台变体；平台键 `windows`/`macos`/`linux` 与 `std::env::consts::OS`、TS `platformSnapshot()` **同词表**（无需映射表）|
 | Rust 读取 | `agent::tool_defs`（`include_str!` + `once_cell` 懒解析）| `list_tool_definitions()` / `list_tool_definitions_for(platform)` / `tool_names()` |
 | 前端读取 | Tauri：`cmd_list_tool_definitions`；浏览器 dev / vitest：**直读同一份 JSON** | ✅ 同一份文件 → 不存在「快照漂移」，无需差异检查 |
 | 过渡期护栏 | `src/tests/contracts/tool-defs-contract.test.ts` | ④ 之前：TS 定义与权威源逐字比对（`EXPORT_TOOL_DEFS=1` 写回）；④ 之后：换成「**契约 ↔ 执行器一一对应**」|
@@ -447,7 +447,7 @@ UI 渲染 / 设置管理 / i18n、`export-service` Markdown 导出、`download-s
 
 | 要改什么 | 改哪里 |
 |---|---|
-| 工具的 `description` / 参数 schema | `src-tauri/src/agent/tool_defs/definitions.json`（**三个平台变体都要改**）|
+| 工具的 `description` / 参数 schema | `src-tauri/virlen-core/src/agent/tool_defs/definitions.json`（**三个平台变体都要改**）|
 | 执行逻辑 | `src/infrastructure/tools/<分类>/<工具>.ts`（**不写定义**，只 `register(name, executor, label?)`）|
 
 > ⚠️ `toolRegistry.listDefinitions()` 已是**异步**：调用方必须 `await`（引擎、`rust-engine.ts::resolveToolDefs`、`agent-service` 均已改）。
@@ -458,7 +458,7 @@ UI 渲染 / 设置管理 / i18n、`export-service` Markdown 导出、`download-s
 |---|---|---|
 | 静态文本 | `src/domain/agent/prompts/*.md` | **单份**；Rust 用 `include_str!` 直接引用同一路径，**不复制副本** |
 | TS 组装 | `src/domain/agent/compose-prompt.ts`（纯函数，无 I/O）| 由 `services/agent-service.ts` 取数后调用 |
-| Rust 组装 | `src-tauri/src/agent/prompts/assemble.rs` | `compose_system_prompt()` / `build_project_rules_prompt()` |
+| Rust 组装 | `src-tauri/virlen-core/src/agent/prompts/assemble.rs` | `compose_system_prompt()` / `build_project_rules_prompt()` |
 | 契约文件 | `src/tests/fixtures/system-prompt.golden.txt` | 两侧共读；TS 用 Vite `?raw`、Rust 运行时按相对路径读 |
 | 护栏 | `src/tests/domain/compose-prompt-golden.test.ts` ↔ `prompts::assemble::tests::golden_system_prompt_matches_fixture` | 同一组固定输入下**逐字节相等**；改任一侧都会让另一边失败 |
 

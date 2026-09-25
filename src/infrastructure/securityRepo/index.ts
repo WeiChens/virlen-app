@@ -4,7 +4,7 @@
  * 存储分工（配置下沉 D3，详见 `docs/config-sink-plan.md`）：
  * - **「忽略沙盒命令」规则**（`sandboxIgnoreRules`）：
  *   **唯一权威源是 Rust 侧 `app_settings` 表**（同一个 `virlen.db`）——
- *   GUI（默认 Rust 引擎）与 CLI 读写同一份，判定在 `src-tauri/src/security/`，
+ *   GUI（默认 Rust 引擎）与 CLI 读写同一份，判定在 `src-tauri/virlen-core/src/security/`，
  *   因此不需要「问 JS」（原内部交互 `sandbox_rule_check` 已删除）。
  *   ⚠️ localStorage **不保存**该字段：它在浏览器 dev / 非 Tauri 环境才降级使用（见下）。
  * - **路径配置**（whitelist / blacklist / skipEachDirs）：仍存 localStorage
@@ -18,7 +18,7 @@
  *
  * ⚠️ 规则的匹配有两份实现，由 golden 契约收敛
  * （`src/tests/fixtures/sandbox-rules.golden.json`）：
- * - 默认引擎（Rust）+ CLI：`src-tauri/src/security/rules.rs`（text / regex 原生 + js 内嵌 QuickJS）；
+ * - 默认引擎（Rust）+ CLI：`src-tauri/virlen-core/src/security/rules.rs`（text / regex 原生 + js 内嵌 QuickJS）；
  * - 浏览器 dev / TS 引擎路径 / 设置页「测试」：`@/domain/security/sandbox-ignore-rules`。
  *
  * 非 Tauri 环境（浏览器 dev / vitest）：没有表可写 → 整体降级为 localStorage 持久化，

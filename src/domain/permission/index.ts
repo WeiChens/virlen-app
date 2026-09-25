@@ -9,7 +9,7 @@
  * 取代了旧的全局枚举 `commandApprovalMode`（过粗，无法单独控制某类操作）。
  *
  * ⚠️ 本文件的常量与决策语义与 Rust 侧
- * `src-tauri/src/agent/native_tools/execute/common/classify.rs` **逐字对齐**（铁律 1），
+ * `src-tauri/virlen-core/src/agent/native_tools/execute/common/classify.rs` **逐字对齐**（铁律 1），
  * 改一边必须同步改另一边。
  */
 

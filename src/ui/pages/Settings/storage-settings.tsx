@@ -7,7 +7,7 @@
  * - 重建数据库：`VACUUM`，归还已删除数据留下的空闲页，并把 `auto_vacuum` 切为 INCREMENTAL。
  *
  * ⚠️ **都不自动执行**：`VACUUM` 期间独占数据库连接（数百 MB 库约 10–60 秒），
- * 还需要约 2 倍库大小的临时磁盘空间（详见 src-tauri/src/session_db/maintenance.rs）。
+ * 还需要约 2 倍库大小的临时磁盘空间（详见 src-tauri/virlen-core/src/session_db/maintenance.rs）。
  * 唯一自动发生的是「退出应用时截断一次 WAL」，它拿不到连接锁会直接跳过。
  */
 import { useCallback, useEffect, useState } from 'react'

@@ -7,13 +7,15 @@
  *   npm run update -- 2.0.0     # 指定版本号（须为 x.y.z）
  *   npm run update -- --dry-run # 只预览，不写文件（-n 亦可）
  *
- * 同步目标（6 处）：
- *   - package.json               → 顶层 "version"
- *   - src-tauri/Cargo.toml       → [package] 段内的 version
- *                                  （其余 11 处 version = 是依赖版本，绝不改动）
- *   - src-tauri/Cargo.lock       → virlen-app 包自身的 version（本包条目）
- *   - src-tauri/tauri.conf.json  → 顶层 "version"（打包 / MSIX 实际读这里）
- *   - README.md / README-CN.md   → shields 版本徽章
+ * 同步目标（10 处）：
+ *   - package.json                    → 顶层 "version"
+ *   - src-tauri/Cargo.toml            → [package] 段内的 version
+ *                                        （其余 version = 是依赖版本，绝不改动）
+ *   - src-tauri/virlen-core/Cargo.toml → 核心库（零 tauri）的包版本
+ *   - src-tauri/virlen-cli/Cargo.toml  → headless CLI package 的包版本
+ *   - src-tauri/Cargo.lock            → 三个本包条目（virlen-app / virlen-core / virlen-cli）
+ *   - src-tauri/tauri.conf.json       → 顶层 "version"（打包 / MSIX 实际读这里）
+ *   - README.md / README-CN.md        → shields 版本徽章
  *
  * 基准：无参数时以 tauri.conf.json 的版本为准 —— 它是打包与 MSIX 的真实来源
  *       （见 scripts/build-msix.ps1：$Version 默认取 $confVersion），其余处长期漂移。
@@ -46,10 +48,31 @@ const TARGETS = [
     pattern: /(\[package\][\s\S]*?\nversion\s*=\s*")([^"]*)(")/,
   },
   {
+    file: 'src-tauri/virlen-core/Cargo.toml',
+    label: 'src-tauri/virlen-core/Cargo.toml [package]',
+    // 与 app 同理：从 [package] 起取第一个 version = "..."
+    pattern: /(\[package\][\s\S]*?\nversion\s*=\s*")([^"]*)(")/,
+  },
+  {
+    file: 'src-tauri/virlen-cli/Cargo.toml',
+    label: 'src-tauri/virlen-cli/Cargo.toml [package]',
+    pattern: /(\[package\][\s\S]*?\nversion\s*=\s*")([^"]*)(")/,
+  },
+  {
     file: 'src-tauri/Cargo.lock',
     label: 'src-tauri/Cargo.lock (virlen-app)',
     // Cargo.lock 由 cargo 生成，其中本包条目（name = "virlen-app"）也带 version，需一并同步
     pattern: /(name = "virlen-app"\r?\nversion = ")([^"]*)(")/,
+  },
+  {
+    file: 'src-tauri/Cargo.lock',
+    label: 'src-tauri/Cargo.lock (virlen-core)',
+    pattern: /(name = "virlen-core"\r?\nversion = ")([^"]*)(")/,
+  },
+  {
+    file: 'src-tauri/Cargo.lock',
+    label: 'src-tauri/Cargo.lock (virlen-cli)',
+    pattern: /(name = "virlen-cli"\r?\nversion = ")([^"]*)(")/,
   },
   {
     file: 'src-tauri/tauri.conf.json',

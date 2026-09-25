@@ -142,7 +142,7 @@ CLI 显式参数  >  环境变量（VIRLEN_*）  >  app_settings 表  >  内置�
 - **Rust 路径（默认引擎）不重实现**：经**内部交互** `sandbox_rule_check`（无 UI）问 JS 同一个 `matchSandboxIgnoreRule`；
   `security.hasSandboxIgnoreRules` 只是性能开关（false 时零 IPC）。
 
-> **S7 之后的现状（本文件下文以“现状”描述）**：匹配下沉到 Rust（`src-tauri/src/security/`），
+> **S7 之后的现状（本文件下文以“现状”描述）**：匹配下沉到 Rust（`src-tauri/virlen-core/src/security/`），
 > 规则整体随 `NativeToolSecurity.sandbox_ignore_rules` 下发，`sandbox_rule_check` 桥交互**已删除**；
 > TS 实现仍保留给浏览器 dev / TS 引擎 / 设置页「测试」，两侧由 golden 契约收敛。
 - 唯一的保存期校验是 `compileSandboxRule`（**只验证能否编译**，不执行规则体）。
@@ -171,7 +171,7 @@ CLI 显式参数  >  环境变量（VIRLEN_*）  >  app_settings 表  >  内置�
 | 每次求值结束销毁 context（仅缓存编译产物） | 防跨命令状态污染 |
 | 规则 id → 编译句柄缓存 | 避免每条命令重编译 |
 
-**位置**：`src-tauri/src/security/js_rule.rs`（**不进 `agent/`**），由 `native_tools/execute/common/rules.rs` 调用 ——
+**位置**：`src-tauri/virlen-core/src/security/js_rule.rs`（**不进 `agent/`**），由 `native_tools/execute/common/rules.rs` 调用 ——
 即「TS 引擎问 JS」与「Rust CLI 自己求值」两条路径**收敛到同一个判定函数**（铁律 1）。
 
 **校验同步**：`compileSandboxRule` 的语义（能否编译）在两侧都要成立（GUI 用 `new Function`，CLI 用 QuickJS 编译阶段）；
@@ -248,9 +248,9 @@ CLI 显式参数  >  环境变量（VIRLEN_*）  >  app_settings 表  >  内置�
 | **S2** | 前端 `settingsRepo` + `settingStore.hydrate()` + `main.ts` 引导步骤（首启从 localStorage 导入） | ✅ **已完成**：`infrastructure/settingsRepo/` + `settingStore.hydrateSettings()/flushSettingsPersist()` + `main.ts` 的 `step('settings')`（排最前）+ 退出前 flush；7 个前端契约测试；`vitest` 83 文件 / 1023 用例 |
 | **S3** | 读源正式切换：以表为准（localStorage 仅初值/回滚信道） | ✅ **已完成**（含收尾）：读源随 S2 已是表；本轮清掉回滚信道 —— `settingStore` 的 `StorageState` 换只读适配器（Tauri 下 `setItem` 丢弃、表就绪后 `removeItem` 历史副本，非 Tauri 仍照写），3 处模块级迁移不再整份写回 localStorage；回归项 `src/tests/infrastructure/settings-local-snapshot.test.ts`（4 用例，模拟 Tauri） |
 | **S4** | 引擎侧不再依赖前端下发：`init_session_db` / 引擎改为吃 `&dyn HostEnv`，CLI 可直读配置 | ✅ **已完成**：拆出 **零 `tauri::`** 的 `session_db::commands::open_session_db(host, spawn)` + `SessionDb{repo, settings, maintenance}`；`init_session_db` 降为 GUI 薄壳（README 的 `tauri::` 只留在这里与 `manage_noop_settings`）；新增 2 个 Rust 用例（库路径由 `host.data_dir()` 决定、GUI/CLI 同目录→同一份配置） |
-| **S5** | `#17` web_* 原生化（依赖 S1–S4 提供 apiKey / 搜索源） | ✅ **已完成**：`src-tauri/src/agent/native_tools/web/{web_fetch,web_search,common}.rs`（新增依赖 `htmd`；搜索源配置经新增的 `NativeToolCtx::settings` **直读 `app_settings`** —— 不需要前端下发）；`is_native_tool` 由此成为**全集**（28/28，无桥接工具）；结果文本两侧共读 golden `src/tests/fixtures/web-search-format.golden.json`。门禁：`cargo test` 381 / `vitest` 1032 / `tsc` 0。⚠️ 已知差异：HTML→Markdown 细节（TS `cheerio+turndown` ↔ Rust 正则 + `htmd`）不保证逐字一致 |
+| **S5** | `#17` web_* 原生化（依赖 S1–S4 提供 apiKey / 搜索源） | ✅ **已完成**：`src-tauri/virlen-core/src/agent/native_tools/web/{web_fetch,web_search,common}.rs`（新增依赖 `htmd`；搜索源配置经新增的 `NativeToolCtx::settings` **直读 `app_settings`** —— 不需要前端下发）；`is_native_tool` 由此成为**全集**（28/28，无桥接工具）；结果文本两侧共读 golden `src/tests/fixtures/web-search-format.golden.json`。门禁：`cargo test` 381 / `vitest` 1032 / `tsc` 0。⚠️ 已知差异：HTML→Markdown 细节（TS `cheerio+turndown` ↔ Rust 正则 + `htmd`）不保证逐字一致 |
 | **S6** | CLI 子命令：`config get/set`（替代「手改 JSON」的易用性损失） | ✅ **已完成**（与 CLI 二进制落地同批）：`src-tauri/src/cli/{mod,config}.rs`；`config get [key …]` / `config set [--string] <key> <value>` / `config path`，值优先按 JSON 解析、失败按字符串；缺失键警告 + 退出码 1；12 个 Rust 单测（含真 SQLite 往返）。见 §5.1 |
-| **S7** | `js` 规则内嵌求值 + **规则判定整体下沉 Rust**（§4） | ✅ **已完成**：`src-tauri/src/security/{rules,js_rule}.rs`（text / regex 原生 + js 受限 QuickJS 求值）+ `native_tools/execute/common/rules.rs` 本地判定 + `security::load_sandbox_ignore_rules`（CLI 读取入口）；规则来源下沉为 `app_settings.sandboxIgnoreRules`（**单一源**：localStorage 不再保存该字段；前端 `securityStore.hydrate()` 水合 + debounce 回写）；`sandbox_rule_check` 桥交互删除；两侧共读 golden `src/tests/fixtures/sandbox-rules.golden.json`。门禁：`cargo test` 372 / `vitest` 1025 / `tsc` 0 |
+| **S7** | `js` 规则内嵌求值 + **规则判定整体下沉 Rust**（§4） | ✅ **已完成**：`src-tauri/virlen-core/src/security/{rules,js_rule}.rs`（text / regex 原生 + js 受限 QuickJS 求值）+ `native_tools/execute/common/rules.rs` 本地判定 + `security::load_sandbox_ignore_rules`（CLI 读取入口）；规则来源下沉为 `app_settings.sandboxIgnoreRules`（**单一源**：localStorage 不再保存该字段；前端 `securityStore.hydrate()` 水合 + debounce 回写）；`sandbox_rule_check` 桥交互删除；两侧共读 golden `src/tests/fixtures/sandbox-rules.golden.json`。门禁：`cargo test` 372 / `vitest` 1025 / `tsc` 0 |
 
 > S1/S2 是必须先做的；S7 可以晚于 S5（过渡期行为见 §6 待定项 1）。
 >
@@ -266,12 +266,12 @@ CLI 显式参数  >  环境变量（VIRLEN_*）  >  app_settings 表  >  内置�
 
 | 项 | 现状 |
 |---|---|
-| 二进制 | `virlen-cli`（`src-tauri/src/cli_main.rs`，三行转发）—— 与 GUI **同一个 package 的第二个 bin**，共用同一个 lib；配置读写落在同一个 `virlen.db` 的 `app_settings` 表 |
-| 实现 | `src-tauri/src/cli/mod.rs`（参数解析 / 帮助 / 版本 / 分派）+ `src-tauri/src/cli/config.rs`（`get` / `set` / `path`）；解析写成纯函数、输出走**注入的** `Write` → 12 个单测（含真 SQLite 往返、「path 不建库」、「另一个进程读同一目录」） |
-| 库路径 | 复用 `session_db::open_session_db(&CliHost::from_env(), …)` —— 与 GUI **同一条**推导链（`host.data_dir()/virlen.db`），因此不存在「CLI 改的配置桌面端读不到」 |
+| 二进制 | `virlen-cli`（`src-tauri/virlen-cli/src/main.rs`，三行转发）—— **独立 package，只依赖 `virlen-core`**（依赖树中无 tauri / wry / tao / tray-icon）；配置读写落在同一个 `virlen.db` 的 `app_settings` 表 |
+| 实现 | `src-tauri/virlen-core/src/cli/mod.rs`（参数解析 / 帮助 / 版本 / 分派）+ `src-tauri/virlen-core/src/cli/config.rs`（`get` / `set` / `path`）；解析写成纯函数、输出走**注入的** `Write` → 12 个单测（含真 SQLite 往返、「path 不建库」、「另一个进程读同一目录」） |
+| 库路径 | 复用 `virlen_core::session_db::open_session_db(&CliHost::from_env(), …)` —— 与 GUI **同一条**推导链（`host.data_dir()/virlen.db`），因此不存在「CLI 改的配置桌面端读不到」 |
 | 目录覆盖 | `VIRLEN_DATA_DIR`（环境变量）> 默认 `<平台数据根>/JianWeichen.virlen`；`config path` 可直接核对与 GUI 是否同一份 |
-| ⚠️ 连带要求 | `[package] default-run = "virlen-app"` **必须保留**：package 里有两个 bin 后，`tauri build` / `tauri dev` 靠它认主二进制，否则报 `failed to find main binary`（实测） |
-| 验证 | `cargo test` 394 passed；`npx tauri build --no-bundle --debug --config <覆盖 beforeBuildCommand 的 json>` → 末行 `Built application at: …/virlen-app.exe`（不碰 `dist/`）；CLI 端到端冒烟用临时 `VIRLEN_DATA_DIR`（不碰真实库） |
+| ⚠️ 连带要求 | `cargo test` 必须带 `--workspace`（拆包后裸 `cargo test` 只跑 `virlen-app`，会静默漏掉 core 的用例）；`[package] default-run = "virlen-app"` 保留为防御性声明 |
+| 验证 | `cargo test --workspace` 395 passed / 2 ignored；`npx tauri build --no-bundle --debug --config <覆盖 beforeBuildCommand 的 json>` → 末行 `Built application at: …/virlen-app.exe`；`cargo tree -p virlen-cli` 无 tauri 系（比 GUI 少 94 个 crate）；CLI 端到端冒烟用临时 `VIRLEN_DATA_DIR`（不碰真实库） |
 | 尚未做 | `set` **不校验键名**（Rust 侧没有权威 schema，与 §6 R6 的「同名字段直接映射」一致）；没有 `unset` / `run`（真正跑 agent）等子命令 |
 
 ---

@@ -476,7 +476,9 @@ export function flushTelemetry(): void {
  *
  * Rust 侧事件（rust.panic / rust.db.op / rust.token.count / rust.tool.native /
  * rust.sandbox.spawn / rust.bridge.* / rust.engine.* / rust.command.kill）由
- * `src-tauri/src/telemetry.rs` 经该事件回传，此处路由进统一的 track()。
+ * `src-tauri/src/telemetry.rs`（Tauri 出口：`TauriTelemetrySink` → `agent:telemetry`）与
+ * `src-tauri/virlen-core/src/telemetry.rs`（`track` / `hash_id` / panic 钩子与落盘）
+ * 两侧协同经该事件回传，此处路由进统一的 track()。
  * 仅 Tauri 环境生效；失败静默。
  */
 export function installRustTelemetryBridge(): void {

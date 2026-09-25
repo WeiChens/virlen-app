@@ -2,7 +2,7 @@
  * 一次性迁移脚本（机制 C / 步骤 ④）：摘除 TS 侧工具定义体，只留执行器 + i18n 文案
  *
  * 背景：工具定义已收敛到权威源
- *   `src-tauri/src/agent/tool_defs/definitions.json`
+ *   `src-tauri/virlen-core/src/agent/tool_defs/definitions.json`
  * 前端不再编写定义，注册时只提供执行器与 UI 文案：
  *
  *   // 迁移前

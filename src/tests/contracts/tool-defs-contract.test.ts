@@ -1,7 +1,7 @@
 /**
  * 工具契约一致性测试（机制 C）
  *
- * **权威源**：`src-tauri/src/agent/tool_defs/definitions.json`
+ * **权威源**：`src-tauri/virlen-core/src/agent/tool_defs/definitions.json`
  *   - Rust 侧 `agent::tool_defs` 用 `include_str!` 引用**同一份文件**
  *   - 前端：Tauri 走 `cmd_list_tool_definitions`；浏览器 dev / vitest 直读本文件
  *
@@ -14,7 +14,7 @@
  * 唯一还可能出错的形态就是「两边名单不一致」。
  */
 import { describe, expect, it, vi } from 'vitest'
-import DEFINITIONS_RAW from '../../../src-tauri/src/agent/tool_defs/definitions.json?raw'
+import DEFINITIONS_RAW from '../../../src-tauri/virlen-core/src/agent/tool_defs/definitions.json?raw'
 import {
   PLATFORM_KEYS,
   definitionsForPlatform,

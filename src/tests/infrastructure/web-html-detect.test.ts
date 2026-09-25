@@ -4,7 +4,7 @@
  * 目的：把「TS 判定」与「Rust 原生判定」钉死在同一份输入/输出上 —— 它决定
  * `htmlToMd` 是否生效，直接影响**模型读到的是 Markdown 还是原始 HTML**。
  *
- * 背景：`web_fetch` 已原生化（`src-tauri/src/agent/native_tools/web/web_fetch.rs`），
+ * 背景：`web_fetch` 已原生化（`src-tauri/virlen-core/src/agent/native_tools/web/web_fetch.rs`），
  * 判定逻辑两侧各写一份（`isHtml` ↔ `is_html`），必须逐字等价（铁律 1）。
  * 契约文件（唯一事实源，两侧共读）：
  *   src/tests/fixtures/web-html-detect.golden.json

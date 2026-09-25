@@ -7,7 +7,7 @@
 > **关键结论**：**受限令牌 + Job Object + ConPTY 三者可以共存** —— 原 §7 风险 #1 已消除
 > **日期**：2026-09-18（Spike 实测同日记入）
 > **调研范围**：社区对标实现 2 个、Rust PTY 生态、ConPTY 官方 API 指南、**本机 Spike 实测**
-> **Spike 代码**：`src-tauri/src/sandbox/windows/conpty_spike.rs`（`#[cfg(test)]`）
+> **Spike 代码**：`src-tauri/virlen-core/src/sandbox/windows/conpty_spike.rs`（`#[cfg(test)]`）
 > **相关**：`docs/rust-engine.md`（引擎架构）、`AGENTS.md` §5 铁律 / §9 安全红线 / §11.2
 
 ---
@@ -167,7 +167,7 @@ writeln!(pair.master.take_writer()?, "ls -l\r\n")?;
 
 1. **保住沙盒**：受限令牌（`CreateRestrictedToken`）+ Job Object + 伪控制台可以挂在
    **同一个 `PROC_THREAD_ATTRIBUTE_LIST`** 上，一次性原子完成，无中间态。
-2. **现有基建已完成大半**：`src-tauri/src/sandbox/windows/spawn.rs` 已经在用属性列表
+2. **现有基建已完成大半**：`src-tauri/virlen-core/src/sandbox/windows/spawn.rs` 已经在用属性列表
    （`ProcThreadAttributeList` + `PROC_THREAD_ATTRIBUTE_JOB_LIST`），
    结构就是 `InitializeProcThreadAttributeList(count)`，改造只需 `count: 1 → 2` 再加一条属性。
 3. **依赖零增量**：`windows-sys = "0.61"` 已在 `Cargo.toml`，且已启用
@@ -448,16 +448,16 @@ if let Ok(mut g) = LAST_CLIENT_SIZE.lock() { *g = Some(..) };      // ← 才写
 
 | 文件 | 操作 | 说明 |
 |---|---|---|
-| `src-tauri/src/sandbox/windows/conpty.rs` | **新建** | ConPTY 封装：`PseudoConsole`（`create` / `resize` / `close` / `take_input` / `take_output`）+ 自由函数 `resize_raw`（供会话注册表用） |
-| `src-tauri/src/sandbox/windows/spawn.rs` | **修改** | 新增 `create_sandboxed_process_pty()` / `create_bare_process_pty()` / `PtyChild`（**不动**现有 `create_sandboxed_process`）；`ProcThreadAttributeList` 加 `set_pseudoconsole()` |
-| `src-tauri/src/sandbox/windows/mod.rs` | **修改** | 导出 ConPTY 模块 |
-| `src-tauri/src/sandbox/mod.rs` | **修改** | 新增 `pub(crate) mod pty` 门面（`windows` 保持私有，只导出执行器需要的最小面） |
-| `src-tauri/src/sandbox/windows/runner.rs` | **修改** | `SandboxSession::spawn_pty()`（受限令牌 + 伪控制台） |
-| `src-tauri/src/agent/native_tools/execute/common.rs` | **修改** | PTY 运行器 `run_command_native_pty`；原运行器改名 `run_command_native_pipes`（兜底）；抽出 `prepare_sandbox_session`；ANSI 解析器升级；有界缓冲；`build_command_result` 增 `pty` 标记 |
-| `src-tauri/src/agent/native_tools/execute/pty_session.rs` | **新建** | PTY 会话注册表：`tool_call_id` → 伪控制台输入通道（`pty_write` / `pty_resize` 底座，双引擎共用一份） |
-| `src-tauri/src/agent/native_tools/execute/execute_command.rs` | **未改** | 工具语义（风险分类 / 审批 / 超时）完全不变 |
+| `src-tauri/virlen-core/src/sandbox/windows/conpty.rs` | **新建** | ConPTY 封装：`PseudoConsole`（`create` / `resize` / `close` / `take_input` / `take_output`）+ 自由函数 `resize_raw`（供会话注册表用） |
+| `src-tauri/virlen-core/src/sandbox/windows/spawn.rs` | **修改** | 新增 `create_sandboxed_process_pty()` / `create_bare_process_pty()` / `PtyChild`（**不动**现有 `create_sandboxed_process`）；`ProcThreadAttributeList` 加 `set_pseudoconsole()` |
+| `src-tauri/virlen-core/src/sandbox/windows/mod.rs` | **修改** | 导出 ConPTY 模块 |
+| `src-tauri/virlen-core/src/sandbox/mod.rs` | **修改** | 新增 `pub(crate) mod pty` 门面（`windows` 保持私有，只导出执行器需要的最小面） |
+| `src-tauri/virlen-core/src/sandbox/windows/runner.rs` | **修改** | `SandboxSession::spawn_pty()`（受限令牌 + 伪控制台） |
+| `src-tauri/virlen-core/src/agent/native_tools/execute/common.rs` | **修改** | PTY 运行器 `run_command_native_pty`；原运行器改名 `run_command_native_pipes`（兜底）；抽出 `prepare_sandbox_session`；ANSI 解析器升级；有界缓冲；`build_command_result` 增 `pty` 标记 |
+| `src-tauri/virlen-core/src/agent/native_tools/execute/pty_session.rs` | **新建** | PTY 会话注册表：`tool_call_id` → 伪控制台输入通道（`pty_write` / `pty_resize` 底座，双引擎共用一份） |
+| `src-tauri/virlen-core/src/agent/native_tools/execute/execute_command.rs` | **未改** | 工具语义（风险分类 / 审批 / 超时）完全不变 |
 | `src-tauri/src/lib.rs` | **修改** | 注册 `pty_write` / `pty_resize` / `pty_key` / `pty_set_held` / `pty_run_command`（铁律 4） |
-| `src-tauri/src/sandbox/windows/tests.rs` | **修改** | ConPTY 回归用例并入（原独立 `conpty_spike.rs` 已删） |
+| `src-tauri/virlen-core/src/sandbox/windows/tests.rs` | **修改** | ConPTY 回归用例并入（原独立 `conpty_spike.rs` 已删） |
 | `src/infrastructure/tools/output-store.ts` | **修改** | `ToolOutput` 增 `pty?: boolean` |
 | `src/services/rust-engine.ts` | **修改** | 运行中按平台预判 `pty`，注册带 kill 的 entry |
 | `src/ui/pages/chat/components/tool-call/XtermTerminal.tsx` | **新建** | xterm.js 终端块（增量写入 + 键击直送 + `pty_resize`） |
@@ -567,7 +567,7 @@ TS 引擎路径（回退）──────── invoke ────┘
 
 ### Step 0 — Spike ✅ **已完成（2026-09-18 本机实测通过）**
 
-代码：`src-tauri/src/sandbox/windows/conpty_spike.rs`（`#[cfg(test)]`，生产代码零改动，
+代码：`src-tauri/virlen-core/src/sandbox/windows/conpty_spike.rs`（`#[cfg(test)]`，生产代码零改动，
 仅 `windows/mod.rs` 加一行 `#[cfg(test)] mod conpty_spike;`）
 
 ```bash
@@ -783,8 +783,8 @@ JS → Rust（`agent_user_interaction_response` 的 `content`，字符串，JSON
 
 | 文件 | 改动 |
 |---|---|
-| `src-tauri/src/agent/native_tools/execute/execute_command.rs` | 解析新参数 `confirm`；伪控制台可用时在交互 `data` 里加 `presentation:"terminal"`；解析回传 content（JSON → 命令）→ 用改后命令执行；重新分类 + 埋点 |
-| `src-tauri/src/agent/native_tools/execute/common.rs` | 暴露「伪控制台是否可用」判定（上一行要用；`cfg(target_os="windows")` 且 `PseudoConsole::create` 试建成功） |
+| `src-tauri/virlen-core/src/agent/native_tools/execute/execute_command.rs` | 解析新参数 `confirm`；伪控制台可用时在交互 `data` 里加 `presentation:"terminal"`；解析回传 content（JSON → 命令）→ 用改后命令执行；重新分类 + 埋点 |
+| `src-tauri/virlen-core/src/agent/native_tools/execute/common.rs` | 暴露「伪控制台是否可用」判定（上一行要用；`cfg(target_os="windows")` 且 `PseudoConsole::create` 试建成功） |
 | `src/infrastructure/tools/execute/execute-command.ts` | 参数定义加 `confirm`（含 LLM 面向描述）；执行器：`confirm === 'terminal'` → 强制 `needsApproval = true`，payload 带 `confirm:'terminal'` |
 | `src/infrastructure/tools/output-store.ts` | `ToolOutput` 加 `pendingConfirm?: { command, risk, label, hint, tips }` 与 `lastOutputAt?: number`（④ 用） |
 | `src/services/tool-service/command_confirm.ts` | `createNativeCommandConfirmHandles`：`data.presentation === 'terminal'` 时**不 emit** `showCommandConfirm`，改为 `toolOutputStore` 写入 `pendingConfirm`；`commandResolve` 的值**透传**（JSON 原样 resolve），非 JSON 退回 `'approved'`；提交后清空 `pendingConfirm` |
@@ -851,9 +851,9 @@ loop {
 
 | 文件 | 改动 |
 |---|---|
-| `src-tauri/src/agent/native_tools/execute/pty_session.rs` | `PtySession` 加 `held: AtomicBool` + `InterventionLog`（计数）；新增 `pty_set_held` / `interventions()`；`write()` 记账 |
-| `src-tauri/src/agent/native_tools/execute/common.rs` | 超时改「预算 + 心跳」（见上）；结束时取 `heldSeconds` / 计数塞 `uiData`；`build_command_result` 增 `wait_reason` / `interventions` 参数（管道路径传 `pty:false` + 同名字段） |
-| `src-tauri/src/agent/mod.rs` + `src-tauri/src/lib.rs` | 新增 Tauri 命令 `pty_set_held(toolCallId, held) -> bool`，并在 `generate_handler!` 注册（铁律 4） |
+| `src-tauri/virlen-core/src/agent/native_tools/execute/pty_session.rs` | `PtySession` 加 `held: AtomicBool` + `InterventionLog`（计数）；新增 `pty_set_held` / `interventions()`；`write()` 记账 |
+| `src-tauri/virlen-core/src/agent/native_tools/execute/common.rs` | 超时改「预算 + 心跳」（见上）；结束时取 `heldSeconds` / 计数塞 `uiData`；`build_command_result` 增 `wait_reason` / `interventions` 参数（管道路径传 `pty:false` + 同名字段） |
+| `src-tauri/virlen-core/src/agent/mod.rs` + `src-tauri/src/lib.rs` | 新增 Tauri 命令 `pty_set_held(toolCallId, held) -> bool`，并在 `generate_handler!` 注册（铁律 4） |
 | `src/ui/pages/chat/components/tool-call/XtermTerminal.tsx` | header 增「接管 / 交还」按钮（`running` 且有会话时）；接管态显示暂停标记；`invoke` 返回 `false` → 复位按钮（命令已结束） |
 | `src/ui/i18n/lang/en-US.json` | 见 2.7 |
 

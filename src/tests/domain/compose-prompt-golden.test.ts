@@ -2,7 +2,7 @@
  * 系统提示词 golden 一致性测试（TS 侧）
  *
  * 目的：把「TS 组装」与「Rust 组装」钉死在同一份输出上。
- * 两侧（`src/domain/agent/compose-prompt.ts` ↔ `src-tauri/src/agent/prompts/assemble.rs`）
+ * 两侧（`src/domain/agent/compose-prompt.ts` ↔ `src-tauri/virlen-core/src/agent/prompts/assemble.rs`）
  * 用**同一组固定输入**各拼一次，任一侧改了顺序/分隔符/文案，这个测试就会失败。
  *
  * 契约文件（唯一事实源，两侧共读）：

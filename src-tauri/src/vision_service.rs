@@ -13,7 +13,7 @@
 //!   - `vision_analyze_base64` → 从 base64 data URL 分析（粘贴/拖拽截图无需落盘）
 
 use crate::host::TauriHost;
-use crate::vision::{self, VisionAnalyzeResult};
+use virlen_core::vision::{self, VisionAnalyzeResult};
 use tauri::AppHandle;
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -1,7 +1,7 @@
 /**
  * 用量账本（token 统计）— 领域侧写入端口
  *
- * 与 Rust 侧 `src-tauri/src/agent/usage.rs::record_usage` 语义一致（铁律 1）：
+ * 与 Rust 侧 `src-tauri/virlen-core/src/agent/usage.rs::record_usage` 语义一致（铁律 1）：
  * **一次 LLM 调用记一条流水**，`kind` 区分调用类型。
  *
  * 为什么要单独记账而不复用 `messages.usage`：

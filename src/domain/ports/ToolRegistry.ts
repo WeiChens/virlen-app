@@ -8,7 +8,7 @@ import {
  * 工具注册中心端口
  *
  * **机制 C**：工具定义不在前端编写，而是来自权威源
- * （Rust 侧 `src-tauri/src/agent/tool_defs/definitions.json`），
+ * （Rust 侧 `src-tauri/virlen-core/src/agent/tool_defs/definitions.json`），
  * 由 `ToolDefinitionsLoader` 注入（Tauri 走命令、其它环境读同一份 JSON）。
  * 因此 `register` 只接收执行器与 UI 文案，且**所有读取接口都是异步的**。
  */

@@ -4,7 +4,7 @@
  * 为什么要有这组用例：执行路径改成 PTY（ConPTY）后，输出里会出现大量
  * 光标 / 擦除 / OSC 序列（`\x1b[87X`、`\x1b]0;…\x07`、`\x1b[?25l`）。
  * 旧解析器只认 `ESC [` 且只吃 0-9;，会把 `\x1b[?25l` 的 "25l" 漏成正文。
- * Rust 侧对应的用例在 `src-tauri/src/agent/native_tools/execute/common.rs`
+ * Rust 侧对应的用例在 `src-tauri/virlen-core/src/agent/native_tools/execute/common.rs`
  * （`test_process_terminal_output_ansi_sequences`），两边必须保持一致（铁律 1）。
  */
 import { describe, it, expect } from 'vitest'

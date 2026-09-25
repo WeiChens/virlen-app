@@ -40,7 +40,7 @@
 | **Skill 机制** | `SKILL.md` 领域知识包，注入系统提示词 + 源码目录只读可查 |
 | **多层安全** | 路径黑白名单、权限三态、跨平台 Shell 沙盒、工具风暴防护（StormBreaker） |
 | **会话与记忆** | 暂停/恢复（Run Snapshot）、LLM 上下文压缩、本地 RAG（turbovec 向量索引）、用量账本 |
-| **双 Agent 引擎** | Rust 原生引擎（默认，`src-tauri/src/agent/`）+ TS 引擎（回退，`src/domain/engine/`） |
+| **双 Agent 引擎** | Rust 原生引擎（默认，`src-tauri/virlen-core/src/agent/`）+ TS 引擎（回退，`src/domain/engine/`） |
 
 ---
 
@@ -98,7 +98,9 @@
 | `src/events/` | EventEmitter 事件总线（menu / settings / comment / toolInteract / update） | utils |
 | `src/utils/` | 无业务依赖工具：telemetry、storageState、EventEmitter、diff、mdYamlFrontmatter、pathCanonicealize… | 无 |
 | `src/tests/` | Vitest 测试，按 `domain / infrastructure / services / rag / utils / ui` 分目录 | — |
-| `src-tauri/src/` | Rust：`agent/`（镜像 TS 引擎）、`rag/`、`sandbox/`、`session_db/`、`host/`（宿主抽象：GUI/CLI 各一份实现）、`vision/`（端侧视觉核心，零 `tauri::`）、`file_ops.rs`、`search.rs`、`vision_service.rs`（视觉命令壳）、`telemetry.rs`、`lib.rs` | — |
+| `src-tauri/src/` | **GUI 壳**（`virlen-app`，**唯一**的 Tauri 侧）：`lib.rs`（窗口 / 托盘 / 插件 / 命令注册）、`commands/{agent,session_db,rag}.rs`（全部 `#[tauri::command]`）、`host/tauri_host.rs`（`TauriHost`）、`telemetry.rs`（Tauri 埋点出口 + panic 拉取命令）、`tray/`、`drag_drop.rs`、`clipboard_files*`、`vision_service.rs`（视觉命令壳）、`common_service.rs`、`deepseek_tokenizer.rs`、`load_env.rs`、`speech_service.rs`、`task_manager.rs` | `virlen-core` + Tauri |
+| `src-tauri/virlen-core/` | **核心库**（`virlen-core`，**零 `tauri::`**，GUI 与 CLI 共用）：`agent/`（镜像 TS 引擎）、`session_db/`（含 `open.rs`）、`sandbox/`、`security/`、`rag/`、`vision/`、`host/{mod,cli_host}.rs`、`file_ops.rs`、`search.rs`、`telemetry.rs`（sink 可插拔）、`cli/`（headless 实现） | 第三方 crate（**不得**依赖 tauri / virlen-app） |
+| `src-tauri/virlen-cli/` | **headless CLI**（`virlen-cli` package）：`src/main.rs` 三行转发 → `virlen_core::cli::run`；**只依赖 core** → 二进制里没有 GUI 栈 | `virlen-core` + `tokio(rt)` |
 | `src-tauri/resources/` | 打包资源：`default-skills/`、`quasivision_models/`、`deepseek_tokenizer/`、`sandbox/`（`tauri.conf.json > bundle.resources` 必须同步） | — |
 
 > 端口清单（`src/domain/ports/`）：`AgentEnginePort`、`ProviderPort`、`SearchProviderPort`、`KnowledgeBasePort`、`SandboxPort`、`SecurityPort`、`ToolRegistry`。
@@ -172,13 +174,13 @@ iteration_verify_pass / iteration_verify_fail / iteration_max_exceeded / iterati
 
 | | TS 引擎 | Rust 引擎 |
 |---|---|---|
-| 入口 | `src/domain/engine/engine.ts` | `src-tauri/src/agent/engine.rs` |
+| 入口 | `src/domain/engine/engine.ts` | `src-tauri/virlen-core/src/agent/engine.rs` |
 | 触发 | 浏览器 dev / vitest / 用户关闭 Rust 引擎 | **默认开启**（`settings.useRustEngine` + Tauri 可用） |
 | 共同接口 | `AgentEnginePort`：`sendMessage / getRunSnapshot / clearRunSnapshot / cancel / compressContext / generateTitle` | 同 |
 | 循环编排 | `llm-loop.ts` / `llm-round.ts` / `tool-executor.ts` / `iteration-controller.ts` / `verifier.ts` / `storm-breaker.ts` | `llm_loop.rs` / `llm_round.rs` / `tool_executor.rs` / `iteration.rs` / `verifier.rs` / `storm_breaker.rs` |
 | 持久化 | **不碰**：消息经 `onEvent` 抛给 `chat-service` | 引擎内直落 SQLite（`session_db/`，先落库再 emit） |
 
-**Rust 桥协议**（与 `src-tauri/src/agent/bridge.rs` 严格对应）：
+**Rust 桥协议**（与 `src-tauri/virlen-core/src/agent/bridge.rs` 严格对应）：
 
 | 方向 | 通道 | 说明 |
 |---|---|---|
@@ -198,7 +200,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 ### 5.2 工具系统——能力扩展的唯一入口
 
 - **注册制**：`toolRegistry.register(name, executor, label?)`；不写全局函数表。
-- **定义与执行器分离，且定义只有一份（机制 C）**：工具定义在 **Rust 侧权威源** `src-tauri/src/agent/tool_defs/definitions.json`（28 工具 × 三平台变体 `windows`/`macos`/`linux`，键名与 `std::env::consts::OS` 同词表）；前端只注册执行器 + UI 文案（`label` 走 i18n，**不进契约**）。读取一律 `await toolRegistry.listDefinitions()`（**异步**接口），返回「契约 ∩ 已注册执行器」。详见 `docs/rust-engine.md` §12。
+- **定义与执行器分离，且定义只有一份（机制 C）**：工具定义在 **Rust 侧权威源** `src-tauri/virlen-core/src/agent/tool_defs/definitions.json`（28 工具 × 三平台变体 `windows`/`macos`/`linux`，键名与 `std::env::consts::OS` 同词表）；前端只注册执行器 + UI 文案（`label` 走 i18n，**不进契约**）。读取一律 `await toolRegistry.listDefinitions()`（**异步**接口），返回「契约 ∩ 已注册执行器」。详见 `docs/rust-engine.md` §12。
 - **10 大分类 / 28 个工具**（`src/domain/tools/category.ts` ↔ `src/infrastructure/tools/<分类>/`）：
 
   | 分类 id | 目录 | 工具数 | 代表工具 |
@@ -214,7 +216,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
   | `plan` | `tools/plan/` | 1 | todo_write（任务清单；用户可在标题栏浮层里直接编辑） |
   | `chat` | `tools/chat/` | 2 | list_messages / read_messages |
 
-- **原生化（28 个 = 全部）**：`file`(8) + `search`(2) + `execute`(2) + `knowledge_base`(6) + `plan`(1：`todo_write`) + `system`(2：`user_choice` / `get_current_time`) + `chat`(2：`list_messages` / `read_messages`) + `skill`(2：`list_skills` / `read_skill_source`) + `vision`(1：`vision_analyze`) + `web`(2：`web_fetch` / `web_search`)，分发在 `src-tauri/src/agent/native_tools/mod.rs::is_native_tool / execute_native_tool`。**无任何工具走 JS 桥**。
+- **原生化（28 个 = 全部）**：`file`(8) + `search`(2) + `execute`(2) + `knowledge_base`(6) + `plan`(1：`todo_write`) + `system`(2：`user_choice` / `get_current_time`) + `chat`(2：`list_messages` / `read_messages`) + `skill`(2：`list_skills` / `read_skill_source`) + `vision`(1：`vision_analyze`) + `web`(2：`web_fetch` / `web_search`)，分发在 `src-tauri/virlen-core/src/agent/native_tools/mod.rs::is_native_tool / execute_native_tool`。**无任何工具走 JS 桥**。
   - `web_search` 的搜索源配置由引擎经 `NativeToolCtx::settings` **直读 `app_settings`**（与「忽略沙盒命令」规则同一份来源）→ CLI 同样可用；
   - `web_fetch` 的 HTML→Markdown 用 `htmd`（TS 侧是 `turndown`）——**Markdown 细节两侧不完全一致**（已知差异，见 `docs/rust-engine.md` §3）。
 - **原生工具的会话库依赖**：需要读写会话库的工具（消息查询）从 `ctx.repo: &dyn SessionRepo` 取（由引擎注入；`repo.is_available()` 为 false 时如实回「本地存储不可用」）—— 与 `ctx.security` 同一种显式注入。
@@ -226,7 +228,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 
 ### 5.3 持久化与数据
 
-- **会话消息**：Rust 侧 `src-tauri/src/session_db/`（已从单文件拆分为 15 文件目录）。
+- **会话消息**：Rust 侧 `src-tauri/virlen-core/src/session_db/`（已从单文件拆分为 15 文件目录）。
   分层：`types.rs`（IPC DTO）/ `repo.rs`（trait + Noop）/ `schema.rs`（DDL + 迁移）/ `row.rs`（行映射）/ `message_query.rs`（检索）/ `usage.rs`（用量账本）/ `settings.rs`（应用设置）/ `sqlite.rs`（实现）/ `commands.rs`（20 个 `cmd_*`）/ `tests/`。
   SQLite + WAL + 单写连接 + `spawn_blocking`；**先落库再 emit**。
   ⚠️ 打开库的入口分两层（配置下沉 D3 的前置）：**零 `tauri::`** 的 `commands::open_session_db(host, spawn)`（库路径 = `host.data_dir()/virlen.db`，返回 `SessionDb { repo, settings, maintenance }`，后台任务由宿主传入的 `spawn` 派发）+ GUI 薄壳 `init_session_db(app)`（构造 `TauriHost` + `app.manage(...)`）。
@@ -249,7 +251,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 |---|---|---|
 | **路径校验** | `domain/security/index.ts` + `services/security-service.ts` + `utils/pathCanonicealize.ts`；Rust 镜像 `native_tools/common.rs` | 优先级 **黑名单 > 白名单 > 工作目录**；写模式（`mode='w'`）仅允许白名单 + 工作目录，**两侧规则必须等价** |
 | **权限三态** | `domain/permission/index.ts` + `settings.permissions`；Rust 镜像 `native_tools/execute/common/classify.rs` | 命令按 `safe/install/dangerous` 映射，脚本走 `script.execute`，沙盒脱壳走 `sandbox.*.execute`；`deny` 永远优先；脱壳与命令权限**取更严格者**（默认 `ask`） |
-| **跨平台沙盒** | `infrastructure/sandbox/*` + `src-tauri/src/sandbox/` | Windows：Job Object + 受限令牌 + ACL；Linux：Landlock（默认拒写）；macOS：`sandbox/macos/mod.rs`。**禁止绕过沙盒直接 spawn**。可写根**只来自** workspace + 白名单：**不自动豁免**包管理器缓存（`~/.npm` / pnpm store / `~/.cargo`…）等区外目录——该「环境探测 + ACL 授予」机制已**整体移除**（实测不好用），要放行区外写入请让命令命中下方「忽略沙盒命令」规则 |
+| **跨平台沙盒** | `infrastructure/sandbox/*` + `src-tauri/virlen-core/src/sandbox/` | Windows：Job Object + 受限令牌 + ACL；Linux：Landlock（默认拒写）；macOS：`sandbox/macos/mod.rs`。**禁止绕过沙盒直接 spawn**。可写根**只来自** workspace + 白名单：**不自动豁免**包管理器缓存（`~/.npm` / pnpm store / `~/.cargo`…）等区外目录——该「环境探测 + ACL 授予」机制已**整体移除**（实测不好用），要放行区外写入请让命令命中下方「忽略沙盒命令」规则 |
 | **工具风暴防护** | `domain/engine/storm-breaker.ts` / `agent/storm_breaker.rs` | 滑窗（window 6 / threshold 3）检测重复 `(toolName, args)`，命中即中断循环 |
 
 > 唯一「绕过沙盒」的例外：`execute_command` / `execute_script` 传 `sandbox:"off"`（见 §8、§11.2），按脱壳权限决策、`readonly` 直接拒绝，并埋点 `tool.sandbox.bypass`。
@@ -258,7 +260,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 > （AI 不必显式传 `sandbox:"off"`；沙盒已关闭 `off` / 只读 `readonly` 时规则不生效）。
 > 该规则也是「区外写入」（如 `npm install` 写 `~/.npm`、pnpm store）的**唯一推荐放行方式**（不要再做沙盒侧自动探测/豁免）。
 > **匹配有两份实现（S7 起），由两侧共读的 golden 收敛**（`src/tests/fixtures/sandbox-rules.golden.json`）：
-> - **Rust 侧（权威：默认引擎 + CLI）**：`src-tauri/src/security/`（`rules.rs`：`text` / `regex` 原生 + `js` 交内嵌 QuickJS `js_rule.rs`）；
+> - **Rust 侧（权威：默认引擎 + CLI）**：`src-tauri/virlen-core/src/security/`（`rules.rs`：`text` / `regex` 原生 + `js` 交内嵌 QuickJS `js_rule.rs`）；
 > - **TS 侧（浏览器 dev / TS 引擎路径 / 设置页「测试」）**：`domain/security/sandbox-ignore-rules.ts`，经 `securityService.matchSandboxIgnoreRule` 使用。
 > **规则来源是 `app_settings` 的 `sandboxIgnoreRules` 键**（配置下沉 D3；`infrastructure/securityRepo` 启动水合 + debounce 回写，退出前 flush）：
 > ⚠️ **单一源：localStorage 不保存该字段**（`securityRepo.save()` 只写三个路径配置；Tauri 下 `load()` 只认内存快照）。
@@ -278,7 +280,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 > ⚠️ 规则**只**免「沙盒脱壳」：`terminal.*` / `script.execute` 的风险审批照旧（命中规则时弹窗追加 `SANDBOX_RULE_BYPASS_HINT` 说明原因）；
 > 「沙盒脱壳」权限设为 `deny` 时 **deny 仍然优先**（`apply_rule_clearance` 只把 `ask` 降为 `allow`）。
 >
-> ⚠️ **`js` 类规则在无 JS 宿主的 CLI 下**由**内嵌 QuickJS**（`quickjs_runtime`，**必须用 `quickjs-ng` 特性**，默认的 `bellard` 在 Windows MSVC 编译不过）求值 —— 已落地（S7：`src-tauri/src/security/js_rule.rs`）。
+> ⚠️ **`js` 类规则在无 JS 宿主的 CLI 下**由**内嵌 QuickJS**（`quickjs_runtime`，**必须用 `quickjs-ng` 特性**，默认的 `bellard` 在 Windows MSVC 编译不过）求值 —— 已落地（S7：`src-tauri/virlen-core/src/security/js_rule.rs`）。
 > 受限 runtime：**不注入任何 host 函数**、内存 16 MB / 栈 512 KB 上限、单次求值 200 ms 中断超时、每次求值新建 runtime（无跨命令状态）；编译失败 / 抛错 / 超时 / 超内存**一律按未命中**（fail-closed）。
 > ⚠️ 它带一个**构建期**硬依赖 `libclang`（bindgen），见 §7。已知差异（均在安全侧）：Rust `regex` 不支持 lookaround → 这类规则在 Rust 侧按未命中。详见 `docs/config-sink-plan.md` §4。
 
@@ -290,8 +292,8 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 
 ### 5.6 视觉 / RAG / Skill
 
-- **视觉**：核心（模型定位 + 懒加载 + 推理）在 `src-tauri/src/vision/`（**零 `tauri::`**，GUI 与原生工具共用）；`src-tauri/src/vision_service.rs` 只是 Tauri 命令壳；前端 `infrastructure/vision/`；模型在 `resources/quasivision_models/`。**图片不出本机**，不要改成上传。
-- **RAG 知识库**：`src-tauri/src/rag/`（`document.rs` / `embedding.rs` / `vector_store.rs` / `rag_service.rs`）+ `services/rag-service.ts` + `infrastructure/rag/`。向量索引用 turbovec。
+- **视觉**：核心（模型定位 + 懒加载 + 推理）在 `src-tauri/virlen-core/src/vision/`（**零 `tauri::`**，GUI 与原生工具共用）；`src-tauri/src/vision_service.rs` 只是 Tauri 命令壳；前端 `infrastructure/vision/`；模型在 `resources/quasivision_models/`。**图片不出本机**，不要改成上传。
+- **RAG 知识库**：`src-tauri/virlen-core/src/rag/`（`document.rs` / `embedding.rs` / `vector_store.rs` / `rag_service.rs`）+ `services/rag-service.ts` + `infrastructure/rag/`。向量索引用 turbovec。
 - **Skill**：`src/skill/`（加载 / 注册 / 导入 / 广场）+ 内置包在 `src-tauri/resources/default-skills/<name>/SKILL.md`。
 
 ### 5.7 前端 UI 与状态
@@ -317,14 +319,14 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 
 ## 6. 铁律（改代码前必读，违反将导致行为分叉 / 静默失效）
 
-1. **双引擎同步**：`src/domain/engine/*`（TS）与 `src-tauri/src/agent/*`（Rust）是同一套语义的两份实现。
+1. **双引擎同步**：`src/domain/engine/*`（TS）与 `src-tauri/virlen-core/src/agent/*`（Rust）是同一套语义的两份实现。
    改「LLM 轮次 / 工具执行 / 暂停恢复 / 迭代验证 / 撤销语义」时**两边都要改**。
 2. **事件契约不可擅自改名**：`AgentEventType` 是四方共享契约（TS 类型 → TS emit → Rust emit → chat-service 处理），新增必须四处一致。
 3. **引擎不碰持久化、不 import store**：TS 引擎经 `onEvent` 交 `chat-service` 落库；Rust 引擎由 `SessionRepo` 内部直落。
 4. **新增 Tauri 命令必须注册**：`src-tauri/src/lib.rs` 的 `tauri::generate_handler![...]`，否则前端 `invoke` 静默 404；涉及权限还要看 `src-tauri/capabilities/default.json`。
-5. **工具是「定义 + 执行器」分离注册制，且定义只有一份**：定义在 Rust 侧权威源 `src-tauri/src/agent/tool_defs/definitions.json`；前端 `toolRegistry.register(name, executor, label?)` 只注册执行器与 i18n 文案，读取走异步 `listDefinitions()`。**不要在任何一侧另写定义体**（`src/tests/contracts/tool-defs-contract.test.ts` 守这条线）。
+5. **工具是「定义 + 执行器」分离注册制，且定义只有一份**：定义在 Rust 侧权威源 `src-tauri/virlen-core/src/agent/tool_defs/definitions.json`；前端 `toolRegistry.register(name, executor, label?)` 只注册执行器与 i18n 文案，读取走异步 `listDefinitions()`。**不要在任何一侧另写定义体**（`src/tests/contracts/tool-defs-contract.test.ts` 守这条线）。
 6. **写操作必须先过安全校验**：JS 侧 `securityService.resolveSafePath/isPathAllowed`，Rust 侧 `native_tools::resolve_safe_path / is_path_allowed`，两侧规则必须等价。禁止绕过。
-   路径展开（`~` / `%USERPROFILE%`）与 canonicalize 规则**必须共用同一实现**：`src-tauri/src/sandbox/paths.rs::expand_user_path`（前端经 `canonicalize_path` 命令走同一函数）。禁止在任一侧另写一份展开/规范化逻辑，否则黑名单条目会在默认引擎下静默失效。
+   路径展开（`~` / `%USERPROFILE%`）与 canonicalize 规则**必须共用同一实现**：`src-tauri/virlen-core/src/sandbox/paths.rs::expand_user_path`（前端经 `canonicalize_path` 命令走同一函数）。禁止在任一侧另写一份展开/规范化逻辑，否则黑名单条目会在默认引擎下静默失效。
 7. **业务文案走 i18n**：`t('中文')`（中文即 key），变量模板用 `tpl('已删除 $__count__ 个会话', {count})`；新增 UI 文案必须同步 `src/ui/i18n/lang/en-US.json`。
 8. **最小改动**：不改动与任务无关的代码；顺手重构要单独说明。
 9. **中文注释是本项目风格**：文件头写职责，关键分支写「为什么」而非「做了什么」；保留 `??` / `⚠️` 等既有强调标记。
@@ -343,21 +345,24 @@ pnpm tauri build             # 桌面端安装包
 pnpm test                    # vitest run（配置见 vitest.config.ts）
 pnpm test:watch / test:ui
 npx tsc --noEmit             # 类型检查（唯一「静态门禁」）
-cd src-tauri; cargo test     # Rust 侧测试（各模块内联 #[cfg(test)] mod tests）
+cd src-tauri; cargo test --workspace   # Rust 侧测试（⚠️ 必须 --workspace，见 §7 下注）
 pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
-pnpm cli config get          # headless CLI（= cargo run --bin virlen-cli -- …；与 GUI 同一份 app_settings）
+pnpm cli config get          # headless CLI（= cargo run -p virlen-cli -- …；与 GUI 同一份 app_settings）
 ```
 
 - 测试文件实际位于 **`src/tests/**`（不是 `tests/`）**，`vitest.config.ts` include 已固定，setup 文件 `src/tests/setup.ts`（模拟 Tauri API）。
-- 基线（README 记录，**本机沙盒未复现**，见 §11.2）：`cargo test` / `vitest run` 全绿、`tsc --noEmit` 零错误。
+- 基线（README 记录，**本机沙盒未复现**，见 §11.2）：`cargo test --workspace` / `vitest run` 全绿、`tsc --noEmit` 零错误。
 - 提交前**至少**自查：`npx tsc --noEmit`（无新增错误）+ 受影响模块的测试。
 - ⚠️ 本机沙盒内 `vitest` / `vite build` 会因 `esbuild` 子进程 `spawn EPERM` 失败，须走**沙盒脱壳**（`sandbox:"off"`，见 §11.2）。
 - ⚠️ **Rust 构建需要 `libclang`**（`quickjs_runtime` → `hirofa-quickjs-sys` → `bindgen` 的**构建期**依赖）：Windows 装 LLVM 并设 `LIBCLANG_PATH=<LLVM>\bin`，否则 `cargo build` / `cargo check` / `tauri dev` 会在 `hirofa-quickjs-sys` 直接失败（报 `Unable to find libclang`）。
   - `clang-sys` 只探测 `LIBCLANG_PATH` 与 `llvm-config.exe`，**不扫 `PATH`**：LLVM 装在非默认位置、或该发行版不带 `llvm-config.exe`（本机 `C:\config\LLVM` 即是）时**必须**显式设。
   - 必须**持久化**（用户级环境变量）并**重开终端 / IDE**：临时 `$env:LIBCLANG_PATH` 只对当前 shell 生效，而 `pnpm tauri dev` 由 CLI 新起 shell 跑 `cargo run` → 表现为「手动 `cargo build` 能过、`tauri dev` 报 `Unable to find libclang`」。
   - 该 bindgen 调用在 `hirofa-quickjs-sys/build.rs` 里**无条件**执行（无特性开关），**不能**用 feature 绕开。
-- ⚠️ `src-tauri` 有**两个 bin**：`virlen-app`（GUI）/ `virlen-cli`（headless）。`[package] default-run = "virlen-app"` **必须保留** —— 有第二个 bin 后 `tauri build` / `tauri dev` 靠它认主二进制，删掉会直接报 `failed to find main binary`（实测，见 §11.14）。
-  另：两个 bin 都会跑 `build.rs`（tauri-build 要求 `frontendDist` 存在）→ 只编 Rust（`cargo build` / `cargo test`）前也必须先 `pnpm build` 出 `dist/`。
+- ⚠️ `src-tauri/` 是 **cargo workspace 根**，含 **3 个 package**：`virlen-app`（GUI，workspace 根 package）、`virlen-core`（零 `tauri::` 的核心库）、`virlen-cli`（headless，只依赖 core）。`target/` 与 `Cargo.lock` 位置**不变**（仍在 `src-tauri/`）。
+  - **GUI 与 CLI 的差异只允许来自「宿主注入」**（`HostEnv` / `EventSink` / `TelemetrySink`），不允许来自「两份实现」—— 这条以前靠注释约定，现在**由编译器强制**（core 连 tauri 依赖都没有）。
+  - ⚠️ **`cargo test` 必须带 `--workspace`**：manifest 指向 workspace 根 package 时，裸 `cargo test` **只跑 `virlen-app`**（实测：30 个用例），会**静默漏掉 core 的 ~370 个用例**。CI 三个 workflow 已同步。
+  - 纯 Rust 目标（`cargo build/check/test`，dev profile）**不读** `frontendDist` → **无需**先 `pnpm build`（实测：把 `frontendDist` 指向不存在的目录仍通过）。`tauri build` 自己会跑 `beforeBuildCommand = pnpm build`，也不用手动。
+  - `[package] default-run = "virlen-app"` 保留为防御性声明，见 §11.14。
 
 ---
 
@@ -384,7 +389,7 @@ pnpm cli config get          # headless CLI（= cargo run --bin virlen-cli -- �
 
 ### 9.1 新增一个工具
 
-1. **先写定义（Rust 侧权威源）**：在 `src-tauri/src/agent/tool_defs/definitions.json` 的**三个平台变体**里都补上该工具（`name` / `description` / `parameters`）；平台无关的工具三份内容相同，平台相关描述参考 `execute_command`。Rust 侧不用改代码（`include_str!` 自动带上），见 `docs/rust-engine.md` §12。
+1. **先写定义（Rust 侧权威源）**：在 `src-tauri/virlen-core/src/agent/tool_defs/definitions.json` 的**三个平台变体**里都补上该工具（`name` / `description` / `parameters`）；平台无关的工具三份内容相同，平台相关描述参考 `execute_command`。Rust 侧不用改代码（`include_str!` 自动带上），见 `docs/rust-engine.md` §12。
 
 2. **再写执行器**（在所属分类目录新建文件；**不写定义**）：
 
@@ -409,7 +414,7 @@ pnpm cli config get          # headless CLI（= cargo run --bin virlen-cli -- �
 ### 9.2 新增 / 修改 Provider、搜索源、Skill
 
 - **LLM Provider**：实现 `IProvider` → `provider/index.ts::createProviderInstance` 注册 → 模板放 `domain/provider/config.ts`。要 Rust 原生支持需在 `agent/provider.rs` 加实现，否则自动走 `BridgedProvider`。
-- **搜索源**：实现 `ISearchProvider` → 放 `infrastructure/search-providers/` → `factory.ts` 注册 → 配置存 `SettingsStore.searchProviders`（已下沉 `app_settings`）。⚠️ **若要被默认引擎（Rust）+ CLI 使用，还要在 `src-tauri/src/agent/native_tools/web/web_search.rs` 里加同名分支**（当前只有 `tavily` / `bocha`）——否则该搜索源只在浏览器 dev / TS 引擎路径生效。
+- **搜索源**：实现 `ISearchProvider` → 放 `infrastructure/search-providers/` → `factory.ts` 注册 → 配置存 `SettingsStore.searchProviders`（已下沉 `app_settings`）。⚠️ **若要被默认引擎（Rust）+ CLI 使用，还要在 `src-tauri/virlen-core/src/agent/native_tools/web/web_search.rs` 里加同名分支**（当前只有 `tavily` / `bocha`）——否则该搜索源只在浏览器 dev / TS 引擎路径生效。
 - **内置 Skill**：`src-tauri/resources/default-skills/<name>/SKILL.md`，frontmatter 至少 `name` / `description`（也兼容纯 Markdown：`# 标题` + `> 描述` + `**Version:** x.y.z`，解析器 `utils/mdYamlFrontmatter.ts`）；目录名应与 `name` 一致；脚本放 `scripts/`。
 
 ---
@@ -440,7 +445,7 @@ pnpm cli config get          # headless CLI（= cargo run --bin virlen-cli -- �
 **临时关闭**：`VIRLEN_SANDBOX=off|readonly|on`（由 **Virlen 进程**读取，在命令里 `set` 无效）。
 另：`node_modules` 可能不完整（如缺 `@tanstack/react-virtual`），先 `pnpm install` 再判断是否为真错误。
 
-**11.3 版本号分散在 3 处（需手动保持同步，无自动校验）**：`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`（**打包与 MSIX 实际读这个**）。截至 2026-09 校对三者均为 `1.1.39`（已一致）。改版本至少同步 `package.json` + `tauri.conf.json`，可直接用 `pnpm update`（`scripts/update-version.mjs`）。
+**11.3 版本号分散在 5 个文件 / 10 处（需手动保持同步，无自动校验）**：`package.json`、`src-tauri/Cargo.toml`、`src-tauri/virlen-core/Cargo.toml`、`src-tauri/virlen-cli/Cargo.toml`、`src-tauri/tauri.conf.json`（**打包与 MSIX 实际读这个**），外加 `Cargo.lock` 里**三个本包条目**（`virlen-app` / `virlen-core` / `virlen-cli`）与 README ×2 的徽章。截至 2026-09 校对均为 `1.1.43`（已一致）。**直接用 `pnpm update`**（`scripts/update-version.mjs` 已覆盖上述 10 处，`--dry-run` 可预览）。
 
 **11.4 README 维护**：`README.md` 与 `README-CN.md` 需**同步维护**。2026-09 已校正漂移：测试目录 `tests/` → `src/tests/`；技术栈 TS 5.8 → 7.0.2；工具表补齐 `mkdir` / `execute_script` / 知识库系列（6）/ `chat` 分类（2）；原生工具数 16 → 18，桥接工具 7 → 9。改代码（尤其是新增/删除工具）时留意 README 对应段落是否需同步。
 
@@ -498,11 +503,19 @@ pnpm cli config get          # headless CLI（= cargo run --bin virlen-cli -- �
 反之组件内自己切（如 `doSend` 新建会话）必须登记 `handledSessionRef`，否则兜底 effect 会去数据库重拉、把刚加的消息按旧内容覆盖。
 另：`message-list` 的 `hide`（容器 `opacity: 0`）在 `messages` 为空时也必须解除（见 `use-scroll-controller.ts`），否则空会话会一直「看起来是空的」。
 
-**11.14 新增第二个 bin 后必须补 `[package] default-run`** —— Tauri CLI 用 cargo 的**默认 bin** 当主二进制；package 里出现两个 bin（`virlen-app` GUI / `virlen-cli` headless）后它无法判断，`tauri build` 直接失败：
-`failed to find main binary, make sure you have a `package > default-run` in the Cargo.toml file`（实测）。
-修法：`src-tauri/Cargo.toml` 的 `[package]` 加 `default-run = "virlen-app"`（**删掉就会再次失败**）。
-另两条：CLI 的 bin 目标**不能**加 `windows_subsystem = "windows"`（它需要 stdout / stderr，与 `src/main.rs` 相反）；CLI 逻辑一律放 lib 的 `cli` 模块 —— **bin 目标不被单测引用**，写在 bin 里就测不到。
-验证手法：`npx tauri build --no-bundle --debug --config <覆盖 beforeBuildCommand 的 json>` → 末行应打印 `Built application at: …\virlen-app.exe`（不碰 `dist/`）。
+**11.14 workspace 拆包（`virlen-app` / `virlen-core` / `virlen-cli`）后的三条硬约束**
+
+1. **`cargo test` 必须 `--workspace`**。manifest 是 workspace 根 package（`virlen-app`）时，裸 `cargo test` **只跑该 package** → `virlen-core` 的 ~370 个用例**静默不跑**（实测：只跑 30 个）。
+   同一坑同样适用于 `cargo check` / `cargo build`（默认只建当前 package）—— 不过那里是「想要的」（Tauri CLI 就靠默认目标）。
+2. **`virlen-core` 不得出现 `tauri::`**：`#[tauri::command]` 一律放 `virlen-app/src/commands/`；宿主差异走 `HostEnv` / `EventSink` / `TelemetrySink` 注入；**测试 fixture 与资源根改用 `CARGO_MANIFEST_DIR` + 多一级 `..`**（core 在 `src-tauri/virlen-core` 下，拆包时 5 个 golden 用例因此失败过一次）。
+3. **CLI 的 bin 目标不能加 `windows_subsystem = "windows"`**（它需要 stdout / stderr，与 `src/main.rs` 相反）；CLI 逻辑放 core 的 `cli` 模块（**bin 目标不被单测引用**，写在 bin 里就测不到）。
+
+历史（仍适用）：`[package] default-run = "virlen-app"` 保留为防御性声明 —— 当初 `virlen-cli` 还是同 package 的第二个 bin 时，缺它会直接报
+`failed to find main binary, make sure you have a `package > default-run` in the Cargo.toml file`（实测）。现 CLI 已迁为独立 package，同一坑将来可能在 GUI package 再出现。
+
+验证手法：`npx tauri build --no-bundle --debug --config <覆盖 beforeBuildCommand 的 json>` → 末行应打印 `Built application at: …\virlen-app.exe`；`cargo tree -p virlen-cli` 不应含 tauri / wry / tao。
+
+**收益实测（不夸大）**：`cargo tree` 显示 `virlen-cli` 比 `virlen-app` **少 94 个依赖 crate**（452 vs 546，含 wry / tao / muda / tray-icon / webview2-com 等）；但**二进制体积收益很小**（debug 下 CLI 30.6MB → 29.1MB，约 −5%）—— 因为 linker 本来就会把未引用代码死代码消除（同一时刻 CLI 就已是 30.6MB vs GUI 113MB）。
 
 **踩坑前必读：`docs/tray-implementation-plan.md`**（托盘/关闭不退出/后台工作的完整方案与实现记录）。
 
@@ -512,31 +525,31 @@ pnpm cli config get          # headless CLI（= cargo run --bin virlen-cli -- �
 
 | 我要做的事 | 去哪里 |
 |---|---|
-| 改聊天循环 / 工具循环 / 暂停恢复 | `src/domain/engine/*` **和** `src-tauri/src/agent/{engine,llm_round,tool_executor,llm_loop}.rs` |
+| 改聊天循环 / 工具循环 / 暂停恢复 | `src/domain/engine/*` **和** `src-tauri/virlen-core/src/agent/{engine,llm_round,tool_executor,llm_loop}.rs` |
 | 改系统提示词 | `src/domain/agent/prompts/*.md` + `src/services/agent-service.ts`（组装顺序在此） |
 | 改上下文压缩 / 标题生成 | `src/domain/engine/compress-context.ts`（模式分派：`ai` LLM 摘要 / `raw` 正文压缩）+ `compress-raw.ts`（正文压缩的本地渲染）/ `generate-title.ts`（Rust 侧委托 TS）；产物在消息列表里的呈现：`ui/pages/chat/components/message/summary-message.tsx`（提示条 + 摘要弹窗） |
-| 改会话持久化 | `src-tauri/src/session_db/`（`sqlite.rs` / `schema.rs` / `commands.rs`）+ `src/infrastructure/sessionRepo/` + `src/ui/store/sessionStore.ts` |
-| 加 / 改工具 | **定义**：`src-tauri/src/agent/tool_defs/definitions.json`（权威源，三平台变体）；**执行器**：`src/infrastructure/tools/<分类>/<工具>.ts`（+ 分类 `common.ts`、分类 `index.ts`）；契约/注册中心：`src/domain/tools/{definitions,index,types}.ts` + `src/domain/ports/ToolRegistry.ts`；`src/domain/tools/category.ts`、`src-tauri/src/agent/native_tools/<分类>/<工具>.rs`（+ `mod.rs` 分发）、`src/ui/pages/chat/components/tool-call/` |
-| 改工具返回给模型的文案 / 增删 `uiData` | TS 执行器 `src/infrastructure/tools/<分类>/<工具>.ts` ↔ Rust 原生 `src-tauri/src/agent/native_tools/<分类>/<工具>.rs`（**逐字对齐**，模型侧固定英文）；界面侧只读 `uiData`，在 `src/ui/pages/chat/components/tool-call/<Tool>Message.tsx` / `TerminalBlock.tsx` 按界面语言重建 |
+| 改会话持久化 | `src-tauri/virlen-core/src/session_db/`（`sqlite.rs` / `schema.rs` / `open.rs`）+ 命令壳 `src-tauri/src/commands/session_db.rs` + `src/infrastructure/sessionRepo/` + `src/ui/store/sessionStore.ts` |
+| 加 / 改工具 | **定义**：`src-tauri/virlen-core/src/agent/tool_defs/definitions.json`（权威源，三平台变体）；**执行器**：`src/infrastructure/tools/<分类>/<工具>.ts`（+ 分类 `common.ts`、分类 `index.ts`）；契约/注册中心：`src/domain/tools/{definitions,index,types}.ts` + `src/domain/ports/ToolRegistry.ts`；`src/domain/tools/category.ts`、`src-tauri/virlen-core/src/agent/native_tools/<分类>/<工具>.rs`（+ `mod.rs` 分发）、`src/ui/pages/chat/components/tool-call/` |
+| 改工具返回给模型的文案 / 增删 `uiData` | TS 执行器 `src/infrastructure/tools/<分类>/<工具>.ts` ↔ Rust 原生 `src-tauri/virlen-core/src/agent/native_tools/<分类>/<工具>.rs`（**逐字对齐**，模型侧固定英文）；界面侧只读 `uiData`，在 `src/ui/pages/chat/components/tool-call/<Tool>Message.tsx` / `TerminalBlock.tsx` 按界面语言重建 |
 | 改任务清单 / todo_write | `src/domain/todo/*`（纯函数）、`src/infrastructure/tools/plan/todo-write.ts`、`src/services/todo-service.ts`（落地，用户清单逐字生效）、`src/ui/store/todoDraftStore.ts`（回复期间的本地草稿；**关浮层丢弃未应用的草稿**）、`src/ui/pages/chat/components/todo/*`（标题栏入口 + 浮层；编辑期间 AI 又写清单 → 「放弃编辑并同步 / 覆盖更新」二选一） |
-| 改原生工具路径校验 / 参数取值 | `src-tauri/src/agent/native_tools/common.rs`（`resolve_safe_path` / `is_path_allowed` / `arg_*`）；路径展开共用 `src-tauri/src/sandbox/paths.rs::expand_user_path` |
-| 改文件读写底层 | `src-tauri/src/file_ops.rs` + `src/utils/diff.ts` |
-| 改文件搜索 | `src-tauri/src/search.rs`（`search_files_by_name` / `search_text_in_files` 原生） |
-| 改网络搜索 / 网页抓取（`web_search` / `web_fetch`） | **Rust 原生（权威）** `src-tauri/src/agent/native_tools/web/{web_search,web_fetch,common}.rs`（`web_search` 经 `ctx.settings` 直读 `app_settings` 的 `searchProviders` / `defaultSearchProviderId`）；**TS 侧（浏览器 dev / TS 引擎路径）** `src/infrastructure/tools/web/*.ts` + `src/infrastructure/search-providers/{factory,tavily,bocha}.ts`；**两侧结果文本契约** `src/tests/fixtures/web-search-format.golden.json`；搜索源配置 `src/services/search-provider-service.ts` + `src/domain/search/*`；已知差异（HTML→Markdown 细节）见 `docs/rust-engine.md` §3 |
+| 改原生工具路径校验 / 参数取值 | `src-tauri/virlen-core/src/agent/native_tools/common.rs`（`resolve_safe_path` / `is_path_allowed` / `arg_*`）；路径展开共用 `src-tauri/virlen-core/src/sandbox/paths.rs::expand_user_path` |
+| 改文件读写底层 | `src-tauri/virlen-core/src/file_ops.rs` + `src/utils/diff.ts` |
+| 改文件搜索 | `src-tauri/virlen-core/src/search.rs`（`search_files_by_name` / `search_text_in_files` 原生） |
+| 改网络搜索 / 网页抓取（`web_search` / `web_fetch`） | **Rust 原生（权威）** `src-tauri/virlen-core/src/agent/native_tools/web/{web_search,web_fetch,common}.rs`（`web_search` 经 `ctx.settings` 直读 `app_settings` 的 `searchProviders` / `defaultSearchProviderId`）；**TS 侧（浏览器 dev / TS 引擎路径）** `src/infrastructure/tools/web/*.ts` + `src/infrastructure/search-providers/{factory,tavily,bocha}.ts`；**两侧结果文本契约** `src/tests/fixtures/web-search-format.golden.json`；搜索源配置 `src/services/search-provider-service.ts` + `src/domain/search/*`；已知差异（HTML→Markdown 细节）见 `docs/rust-engine.md` §3 |
 | 改命令执行 / 风险分类 / 权限审批 | `src/domain/permission/index.ts`（+ Rust 镜像 `native_tools/execute/common/classify.rs`）；工具 `tools/execute/common.ts` + `execute-command.ts`/`execute-script.ts`；Rust 原生 `native_tools/execute/`。PTY 相关另见 `sandbox/windows/conpty.rs`、`native_tools/execute/pty_session.rs`、`tool-call/XtermTerminal.tsx`、`tool-call/TerminalConfirmBlock.tsx` |
 | 改终端输出处理（`\r`、ANSI） | `tools/execute/common.ts::processTerminalOutput`（UI 侧 `tool-call/Execute*Message.tsx` 复用）；Rust 侧 `native_tools/execute/common.rs::process_terminal_output`。两份**逐条对齐** |
 | 改工具授权确认弹窗 / 交互 | `ui/pages/chat/components/modals/authorization.tsx`；事件 `events/toolInteractEvent.ts::showAuthorization`；调度 `services/tool-service/command_confirm.ts`；Rust 侧下发同样字段 `native_tools/execute/{execute_command,execute_script}.rs` |
-| 改沙盒 / 权限 | `src-tauri/src/sandbox/**`、`src/infrastructure/sandbox/*`、`src/domain/security/index.ts` |
-| 改 `js` 类沙盒规则的求值 | ✅ **已落地**（S7）：`src-tauri/src/security/js_rule.rs`（受限 QuickJS：**无 host 函数**、16MB 内存 / 512KB 栈 / 200ms 中断，异常与超时一律按未命中），由 `native_tools/execute/common/rules.rs` 调用；设计与依赖代价见 `docs/config-sink-plan.md` §4 |
-| 改「忽略沙盒命令」规则（命中即免脱壳审批 + 强制无沙盒执行） | **Rust 判定（权威：默认引擎 + CLI）** `src-tauri/src/security/{rules,js_rule}.rs`（text/regex 原生 + js 内嵌 QuickJS）+ `agent/native_tools/execute/common/rules.rs`（判定入口与提示文案）+ `.../execute/{execute_command,execute_script}.rs`；**规则来源** `app_settings` 的 `sandboxIgnoreRules` 键（Rust 侧 `session_db/settings.rs` + `security::load_sandbox_ignore_rules`；前端 `infrastructure/securityRepo/`（`hydrateSecurity` / `flushSecurityPersist`）+ `ui/store/securityStore.ts` + `main.ts` 的 `step('securityConfig')`）；**TS 侧实现（浏览器 dev / TS 引擎 / 设置页测试）** `domain/security/sandbox-ignore-rules.ts`（`SANDBOX_JS_DEFAULT_PATTERN` / `defaultSandboxRulePattern` / 排序 / 预设 / `compileSandboxRule`）+ `services/security-service.ts::matchSandboxIgnoreRule` + `infrastructure/tools/execute/{execute-command,execute-script}.ts`；**两侧契约** `src/tests/fixtures/sandbox-rules.golden.json`（TS `tests/domain/sandbox-rules-golden.test.ts` ↔ Rust `security/rules.rs` 的 golden 用例）；UI `ui/pages/Settings/security-sandbox-rules.tsx`（拖拽几何 `./sandbox-rules-dnd.ts`；JS 输入用 `ui/components/code-editor/CodeEditor.tsx`；行内开关 `ui/components/shared/Toggle`）；下发字段 `services/rust-engine.ts::resolveSecurityConfig`（`sandboxIgnoreRules`） |
-| 改视觉 | 核心 `src-tauri/src/vision/`（模型定位 / 懒加载 / 推理，零 `tauri::`）、命令壳 `src-tauri/src/vision_service.rs`、原生工具 `src-tauri/src/agent/native_tools/vision/`、前端 `src/infrastructure/vision/`、模型 `src-tauri/resources/quasivision_models/` |
-| 改宿主抽象 / CLI 资源与数据目录 | trait `src-tauri/src/agent/host.rs`（`resource_candidates` / `data_dir`）＋两份实现 `src-tauri/src/host/{tauri_host,cli_host}.rs`；注入链 `AgentEngine.host` → `ExecuteLlmRoundParams.host` / `RunIterationParams.host` → `execute_tool_steps` → `NativeToolCtx.host` |
-| 跑 / 扩展 headless CLI（`virlen-cli`） | 实现 `src-tauri/src/cli/{mod,config}.rs`（解析写成纯函数、输出走注入的 `Write` → 可单测）+ 三行转发 `src-tauri/src/cli_main.rs`；数据 / 资源目录 `src-tauri/src/host/cli_host.rs`（`$VIRLEN_DATA_DIR` 覆盖）；库入口 `session_db::open_session_db`（与 GUI **同一条**路径链 → 同一份 `virlen.db`）；便捷脚本 `pnpm cli …`；新增 bin 的连带要求见 §11.14 |
+| 改沙盒 / 权限 | `src-tauri/virlen-core/src/sandbox/**`、`src/infrastructure/sandbox/*`、`src/domain/security/index.ts` |
+| 改 `js` 类沙盒规则的求值 | ✅ **已落地**（S7）：`src-tauri/virlen-core/src/security/js_rule.rs`（受限 QuickJS：**无 host 函数**、16MB 内存 / 512KB 栈 / 200ms 中断，异常与超时一律按未命中），由 `native_tools/execute/common/rules.rs` 调用；设计与依赖代价见 `docs/config-sink-plan.md` §4 |
+| 改「忽略沙盒命令」规则（命中即免脱壳审批 + 强制无沙盒执行） | **Rust 判定（权威：默认引擎 + CLI）** `src-tauri/virlen-core/src/security/{rules,js_rule}.rs`（text/regex 原生 + js 内嵌 QuickJS）+ `agent/native_tools/execute/common/rules.rs`（判定入口与提示文案）+ `.../execute/{execute_command,execute_script}.rs`；**规则来源** `app_settings` 的 `sandboxIgnoreRules` 键（Rust 侧 `session_db/settings.rs` + `security::load_sandbox_ignore_rules`；前端 `infrastructure/securityRepo/`（`hydrateSecurity` / `flushSecurityPersist`）+ `ui/store/securityStore.ts` + `main.ts` 的 `step('securityConfig')`）；**TS 侧实现（浏览器 dev / TS 引擎 / 设置页测试）** `domain/security/sandbox-ignore-rules.ts`（`SANDBOX_JS_DEFAULT_PATTERN` / `defaultSandboxRulePattern` / 排序 / 预设 / `compileSandboxRule`）+ `services/security-service.ts::matchSandboxIgnoreRule` + `infrastructure/tools/execute/{execute-command,execute-script}.ts`；**两侧契约** `src/tests/fixtures/sandbox-rules.golden.json`（TS `tests/domain/sandbox-rules-golden.test.ts` ↔ Rust `security/rules.rs` 的 golden 用例）；UI `ui/pages/Settings/security-sandbox-rules.tsx`（拖拽几何 `./sandbox-rules-dnd.ts`；JS 输入用 `ui/components/code-editor/CodeEditor.tsx`；行内开关 `ui/components/shared/Toggle`）；下发字段 `services/rust-engine.ts::resolveSecurityConfig`（`sandboxIgnoreRules`） |
+| 改视觉 | 核心 `src-tauri/virlen-core/src/vision/`（模型定位 / 懒加载 / 推理，零 `tauri::`）、命令壳 `src-tauri/src/vision_service.rs`、原生工具 `src-tauri/virlen-core/src/agent/native_tools/vision/`、前端 `src/infrastructure/vision/`、模型 `src-tauri/resources/quasivision_models/` |
+| 改宿主抽象 / CLI 资源与数据目录 | trait `src-tauri/virlen-core/src/agent/host.rs`（`resource_candidates` / `data_dir`）＋ CLI 实现 `src-tauri/virlen-core/src/host/cli_host.rs` ＋ GUI 实现 `src-tauri/src/host/tauri_host.rs`；注入链 `AgentEngine.host` → `ExecuteLlmRoundParams.host` / `RunIterationParams.host` → `execute_tool_steps` → `NativeToolCtx.host` |
+| 跑 / 扩展 headless CLI（`virlen-cli`） | 实现 `src-tauri/virlen-core/src/cli/{mod,config}.rs`（解析写成纯函数、输出走注入的 `Write` → 可单测）+ 三行转发 `src-tauri/virlen-cli/src/main.rs`（**独立 package，只依赖 core**）；数据 / 资源目录 `src-tauri/virlen-core/src/host/cli_host.rs`（`$VIRLEN_DATA_DIR` 覆盖）；库入口 `virlen_core::session_db::open_session_db`（与 GUI **同一条**路径链 → 同一份 `virlen.db`）；便捷脚本 `pnpm cli …`；连带要求见 §11.14 |
 | 改设置项 | `src/ui/store/settingStore.ts` + `src/ui/pages/Settings/*` + `src/ui/i18n/lang/en-US.json` |
-| 改配置下沉 / 设置落库 | Rust `src-tauri/src/session_db/settings.rs`（`app_settings` 表 + `SettingsRepo`）+ `session_db/commands.rs::cmd_settings_*`；前端 `src/infrastructure/settingsRepo/` + `settingStore.hydrateSettings()/flushSettingsPersist()` + `src/main.ts` 的 `step('settings')`；计划见 `docs/config-sink-plan.md` |
-| 改埋点 | `src/utils/telemetry/**`（+ `src-tauri/src/telemetry.rs` 的 panic 桥） |
-| 改 RAG / 知识库 | `src-tauri/src/rag/**`、`src/services/rag-service.ts`、`src/infrastructure/rag/` |
-| 改用量统计 / 费用 | `src-tauri/src/session_db/usage.rs`、`src/domain/pricing/index.ts`、`src/services/token-stats-service.ts`、`src/ui/pages/chat/components/token-stats/` |
+| 改配置下沉 / 设置落库 | Rust `src-tauri/virlen-core/src/session_db/settings.rs`（`app_settings` 表 + `SettingsRepo`）+ 命令壳 `src-tauri/src/commands/session_db.rs::cmd_settings_*`；前端 `src/infrastructure/settingsRepo/` + `settingStore.hydrateSettings()/flushSettingsPersist()` + `src/main.ts` 的 `step('settings')`；计划见 `docs/config-sink-plan.md` |
+| 改埋点 | `src/utils/telemetry/**`（前端）；Rust 侧分两半：**出口** `src-tauri/src/telemetry.rs`（`TauriTelemetrySink` → `agent:telemetry` 事件 + `telemetry_drain_panics` 命令）、**其余**（`track` / `hash_id` / `now_ms` / 会话 trace / panic 钩子与落盘）在 `src-tauri/virlen-core/src/telemetry.rs`（sink 可插拔） |
+| 改 RAG / 知识库 | `src-tauri/virlen-core/src/rag/**`、`src/services/rag-service.ts`、`src/infrastructure/rag/` |
+| 改用量统计 / 费用 | `src-tauri/virlen-core/src/session_db/usage.rs`、`src/domain/pricing/index.ts`、`src/services/token-stats-service.ts`、`src/ui/pages/chat/components/token-stats/` |
 | 不让重复启动两个进程（第二实例 → 聚焦已有窗口） | `src-tauri/src/lib.rs` 的 `.plugin(tauri_plugin_single_instance::init(...))`（**必须第一个注册**）+ `src-tauri/src/tray/mod.rs::activate_main_window`；macOS「重新打开」=`RunEvent::Reopen` |
 | 发版 / 打包 | `src-tauri/tauri.conf.json` + `package.json` + `scripts/build-msix.ps1`、`scripts/msix/AppxManifest.xml.template` |
 
@@ -549,7 +562,7 @@ pnpm cli config get          # headless CLI（= cargo run --bin virlen-cli -- �
 - 一次提交只做一件事；格式化 / 重命名等噪音改动不要混进功能提交。
 - **提交前自查清单**：
   1. `npx tsc --noEmit` 无新增错误；
-  2. 受影响模块的 `vitest` 通过；动了 `src-tauri/` 则 `cargo test` 通过；
+  2. 受影响模块的 `vitest` 通过；动了 `src-tauri/` 则 `cargo test --workspace` 通过（**拆包后必须带 `--workspace`**，见 §7/§11.14）；
   3. 若改了引擎语义 → TS 与 Rust 两侧是否都已同步？事件契约是否四方一致？
   4. 若新增工具 → 注册链、UI 组件、Rust 白名单、i18n 文案是否齐备？
   5. 若新增 Tauri 命令 → `lib.rs` 是否已注册？`capabilities/default.json` 是否需补权限？

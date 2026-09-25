@@ -8166,10 +8166,61 @@ dependencies = [
  "trash",
  "turbovec",
  "uuid",
+ "virlen-core",
  "walkdir",
  "webview2-com",
  "windows 0.61.3",
  "windows-core 0.61.2",
+ "windows-sys 0.61.2",
+ "zip",
+]
+
+[[package]]
+name = "virlen-cli"
+version = "1.1.43"
+dependencies = [
+ "tokio",
+ "virlen-core",
+]
+
+[[package]]
+name = "virlen-core"
+version = "1.1.43"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "chrono-tz",
+ "dunce",
+ "encoding_rs",
+ "grep",
+ "grep-regex",
+ "grep-searcher",
+ "hex",
+ "htmd",
+ "ignore",
+ "image",
+ "landlock",
+ "libc",
+ "once_cell",
+ "pdf-extract",
+ "quasivision",
+ "quickjs_runtime",
+ "rand 0.8.6",
+ "regex",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "text-splitter",
+ "tokio",
+ "trash",
+ "turbovec",
+ "uuid",
+ "walkdir",
+ "windows 0.61.3",
  "windows-sys 0.61.2",
  "zip",
 ]

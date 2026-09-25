@@ -148,7 +148,7 @@ export type MessageContent =
 /**
  * 附件标签：文件附件块降级成文本时、打在路径前面的标记（模型可读，不是 UI 文案）
  *
- * 与 Rust 侧 `src-tauri/src/agent/provider.rs` 的同名常量必须逐字一致
+ * 与 Rust 侧 `src-tauri/virlen-core/src/agent/provider.rs` 的同名常量必须逐字一致
  * （铁律 1：TS / Rust 双引擎同语义），改文案要两边一起改。
  */
 export const ATTACHED_FILE_LABEL = '[User attached file]'
@@ -171,7 +171,7 @@ export function fileBlockToText(block: FileContent): string {
 /**
  * 引用块标签：降级成文本时给模型看的字段名（模型可读，不是 UI 文案）
  *
- * 与 Rust 侧 `src-tauri/src/agent/provider.rs` 的同名常量必须逐字一致
+ * 与 Rust 侧 `src-tauri/virlen-core/src/agent/provider.rs` 的同名常量必须逐字一致
  * （铁律 1：TS / Rust 双引擎同语义），改文案要两边一起改。
  */
 export const QUOTED_MESSAGE_LABEL = '[Quoted message]'
@@ -206,7 +206,7 @@ export function quoteBlockToText(block: QuoteContent): string {
 /**
  * 技能引用块标签：降级成文本时给模型看的字段名（模型可读，不是 UI 文案）
  *
- * 与 Rust 侧 `src-tauri/src/agent/provider.rs` 的同名常量必须逐字一致
+ * 与 Rust 侧 `src-tauri/virlen-core/src/agent/provider.rs` 的同名常量必须逐字一致
  * （铁律 1：TS / Rust 双引擎同语义），改文案要两边一起改。
  */
 export const SKILL_BLOCK_LABEL = '[Skill]'

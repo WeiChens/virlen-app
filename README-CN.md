@@ -203,7 +203,7 @@ src/
 
 ### Rust 原生引擎
 
-自 P1–P3 起，核心引擎已逐步移植到 Rust（`src-tauri/src/agent/`）并**默认开启**（`useRustEngine`）：
+自 P1–P3 起，核心引擎已逐步移植到 Rust（`src-tauri/virlen-core/src/agent/`）并**默认开启**（`useRustEngine`）：
 
 - **聊天循环**：LLM 轮次 → 工具执行 → 结果合并，支持 Run Snapshot 暂停/恢复、取消处理
 - **SQLite 会话持久化**：会话与消息由 Rust 直接写入 `virlen.db`（WAL + 单写连接 + `spawn_blocking`）——不再使用 IndexedDB，不依赖 JS 线程
@@ -213,7 +213,7 @@ src/
 
 仍由 JS 提供（桥接）的功能：**Gemini Provider**、`compressContext`、`generateTitle`。完整矩阵见 `docs/rust-engine.md`。
 
-这三项检查——`npx tsc --noEmit`、`pnpm test`（Vitest）、`cargo test`——已由 CI 在每次打 tag（`v*`）时强制执行，任一失败即阻断发布。详见 `.github/workflows/`。
+这三项检查——`npx tsc --noEmit`、`pnpm test`（Vitest）、`cargo test --workspace`——已由 CI 在每次打 tag（`v*`）时强制执行，任一失败即阻断发布。详见 `.github/workflows/`。
 
 ---
 
@@ -395,19 +395,30 @@ virlen-app/
 │   ├── types/                # 类型定义
 │   ├── utils/                # 工具函数
 │   └── tests/                # Vitest 单元测试（domain / infrastructure / services / rag / ui / utils）
-├── src-tauri/                # Rust 后端
-│   ├── src/                  # Rust 源码
-│   │   ├── lib.rs            # 主入口（Tauri 命令注册）
-│   │   ├── agent/            # 原生 Agent 引擎（聊天循环、原生工具、Provider）
-│   │   ├── session_db/       # SQLite 会话/消息持久化（WAL + 单写连接）
+├── src-tauri/                # Cargo workspace 根（Rust）
+│   ├── src/                  # GUI 壳（`virlen-app`）：窗口/托盘/插件 + 全部 #[tauri::command]
+│   │   ├── lib.rs            # Tauri 入口（窗口、托盘、插件与命令注册）
+│   │   ├── commands/         # 全部 #[tauri::command]（agent / session_db / rag）
+│   │   ├── host/tauri_host.rs # GUI 的 `HostEnv` 实现（resource_dir / app_data_dir）
+│   │   ├── telemetry.rs      # Tauri 埋点出口 + panic 拉取命令
 │   │   ├── deepseek_tokenizer.rs # DeepSeek V3 字节级 BPE token 计数
-│   │   ├── rag/              # 本地 RAG（知识库、向量索引、Embedding）
-│   │   ├── file_ops.rs       # 文件操作
-│   │   ├── search.rs         # 文件搜索
-│   │   ├── vision_service.rs # 视觉服务
+│   │   ├── vision_service.rs # 视觉命令壳
 │   │   ├── common_service.rs # 通用服务
 │   │   ├── load_env.rs       # 环境信息
 │   │   └── task_manager.rs   # 任务管理（取消）
+│   ├── virlen-core/          # 核心库 —— **零 `tauri::`**，GUI 与 CLI 共用
+│   │   └── src/agent/        # 原生 Agent 引擎（聊天循环、原生工具、Provider）
+│   │       ├── session_db/   # SQLite 会话/配置持久化（WAL + 单写连接）
+│   │       ├── sandbox/      # 跨平台沙盒（Job Object / Landlock）
+│   │       ├── security/     # 「忽略沙盒命令」规则引擎（text/regex + 内嵌 QuickJS）
+│   │       ├── rag/          # 本地 RAG（知识库、向量索引、Embedding）
+│   │       ├── vision/       # 端侧视觉核心（quasivision）
+│   │       ├── host/         # `HostEnv` trait + `CliHost`
+│   │       ├── file_ops.rs   # 文件操作
+│   │       ├── search.rs     # 文件搜索
+│   │       └── cli/          # headless CLI 实现（参数解析 + config get/set）
+│   ├── virlen-cli/           # headless CLI package —— 只依赖 `virlen-core`
+│   │   └── src/main.rs       # 三行转发 → `virlen_core::cli::run`
 │   ├── resources/            # 资源文件（技能、视觉模型、tokenizer）
 │   │   ├── default-skills/   # 内置技能定义
 │   │   ├── quasivision_models/ # 视觉 AI 模型
@@ -445,7 +456,6 @@ virlen-app/
 桌面端与 CLI 共用同一个 `virlen.db` 里的 `app_settings` 表 —— 两者读到的永远是同一份配置：
 
 ```bash
-pnpm build                            # 必须先有 dist/（tauri-build 要求 frontendDist）
 pnpm cli config path                  # -> <数据目录>/virlen.db（与桌面端同一个文件）
 pnpm cli config get                   # 输出全部设置（JSON）
 pnpm cli config get providers         # 只看指定键（有键不存在时退出码 1）
@@ -454,7 +464,7 @@ pnpm cli config set --string maxTokens 4096        # --string 强制写成字符
 ```
 
 `VIRLEN_DATA_DIR` 可覆盖数据目录（便携安装 / 测试用）。
-CLI 实现在 `src-tauri/src/cli/`（`cli_main.rs` 只是三行转发）；新增第二个 bin 的注意事项见 `docs/AGENTS.md` §11.14。
+CLI 入口在 `src-tauri/virlen-cli/src/main.rs`（三行转发 → `virlen_core::cli::run`），实现在 `src-tauri/virlen-core/src/cli/`。该 package **只依赖 `virlen-core`**，因此不链接任何 Tauri 代码，也**不需要 `dist/`**。workspace 相关注意事项见 `docs/AGENTS.md` §11.14。
 
 ---
 

@@ -1,0 +1,33 @@
+//! Agent 引擎模块 — Rust 原生聊天循环（**零 `tauri::` 依赖**）
+//!
+//! 移植自 `src/domain/engine/`（TS），两者是同一套语义的两份实现（铁律 1：改语义要两侧同步）。
+//!
+//! ## 与宿主的接口（本模块不出现 `tauri::`）
+//!
+//! - 事件出口：[`event_sink::EventSink`]（GUI 注入 `TauriEventSink`；CLI / 单测注入自己的实现）
+//! - 宿主环境：[`host::HostEnv`]（资源目录 + 数据目录）
+//! - 配置：`session_db::SettingsRepo`（`app_settings` 表）
+//! - 持久化：`session_db::SessionRepo`（引擎内直落 SQLite，先落库再 emit）
+//!
+//! Tauri 侧的一切（`#[tauri::command]`、`init_agent_engine`、`TauriEventSink`）都在
+//! `virlen-app`（GUI 壳）里，见其 `src/commands/agent.rs`。
+
+pub mod bridge;
+pub mod cancellation;
+pub mod engine;
+pub mod event_sink;
+pub mod host;
+pub mod iteration;
+pub mod llm_loop;
+pub mod llm_round;
+pub mod native_tools;
+pub mod process_tree;
+pub mod prompts;
+pub mod provider;
+pub mod run_state;
+pub mod storm_breaker;
+pub mod tool_defs;
+pub mod tool_executor;
+pub mod types;
+pub mod usage;
+pub mod verifier;

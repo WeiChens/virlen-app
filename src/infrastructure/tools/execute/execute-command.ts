@@ -42,7 +42,7 @@ import {
 } from './common'
 
 // 工具描述（含三平台变体）已收敛到权威源（机制 C）：
-// src-tauri/src/agent/tool_defs/definitions.json —— 见 docs/rust-engine.md §12。
+// src-tauri/virlen-core/src/agent/tool_defs/definitions.json —— 见 docs/rust-engine.md §12。
 // 此处不再保留描述文本，避免与契约静默分叉。
 
 toolRegistry.register(

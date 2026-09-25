@@ -1,7 +1,7 @@
 /**
  * 工具定义来源适配器（infrastructure）—— 实现 domain 的 `ToolDefinitionsLoader`
  *
- * 两条路径读的是**同一份物理文件** `src-tauri/src/agent/tool_defs/definitions.json`：
+ * 两条路径读的是**同一份物理文件** `src-tauri/virlen-core/src/agent/tool_defs/definitions.json`：
  *
  * | 环境 | 取值方式 | 说明 |
  * |---|---|---|
@@ -34,7 +34,7 @@ function isTauriEnv(): boolean {
 export async function loadDefinitionsFile(): Promise<ToolDefinitionsFile> {
   // ⚠️ 动态 import 必须让 Vite 处理 `?raw`（不能加 @vite-ignore，否则运行时会拿不到内容）
   const raw = (
-    await import('../../../src-tauri/src/agent/tool_defs/definitions.json?raw')
+    await import('../../../src-tauri/virlen-core/src/agent/tool_defs/definitions.json?raw')
   ).default
   return JSON.parse(raw) as ToolDefinitionsFile
 }

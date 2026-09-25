@@ -3,7 +3,7 @@
  *
  * 目的：把「TS 格式化」与「Rust 原生格式化」钉死在同一份输出上。
  *
- * 背景（S5）：`web_search` 已原生化（`src-tauri/src/agent/native_tools/web/web_search.rs`），
+ * 背景（S5）：`web_search` 已原生化（`src-tauri/virlen-core/src/agent/native_tools/web/web_search.rs`），
  * 但结果文本是**直接进模型上下文**的内容，两侧各写一份实现就必然漂移。
  * 契约文件（唯一事实源，两侧共读）：
  *   src/tests/fixtures/web-search-format.golden.json

@@ -204,7 +204,7 @@ User Message → AgentEngine.sendMessage()
 
 ### Rust Native Engine
 
-Since P1–P3, the core engine has been progressively ported to Rust (`src-tauri/src/agent/`) and is **enabled by default** (`useRustEngine`):
+Since P1–P3, the core engine has been progressively ported to Rust (`src-tauri/virlen-core/src/agent/`) and is **enabled by default** (`useRustEngine`):
 
 - **Chat loop**: LLM round → tool execution → result merge, pause/resume via Run Snapshot, cancellation handling
 - **SQLite session persistence**: sessions & messages are written directly to `virlen.db` by Rust (WAL + single-writer + `spawn_blocking`) — no IndexedDB, no dependency on the JS thread
@@ -214,7 +214,7 @@ Since P1–P3, the core engine has been progressively ported to Rust (`src-tauri
 
 Functions still provided by JS (bridged): **Gemini provider**, `compressContext`, `generateTitle`. See `docs/rust-engine.md` for the full matrix.
 
-These three checks — `npx tsc --noEmit`, `pnpm test` (Vitest), and `cargo test` — are enforced by CI on every version tag (`v*`); a failing check blocks the release. See `.github/workflows/`.
+These three checks — `npx tsc --noEmit`, `pnpm test` (Vitest), and `cargo test --workspace` — are enforced by CI on every version tag (`v*`); a failing check blocks the release. See `.github/workflows/`.
 
 ---
 
@@ -396,19 +396,30 @@ virlen-app/
 │   ├── types/                # Type definitions
 │   ├── utils/                # Utility functions
 │   └── tests/                # Vitest unit tests (domain / infrastructure / services / rag / ui / utils)
-├── src-tauri/                # Rust backend
-│   ├── src/                  # Rust source code
-│   │   ├── lib.rs            # Main entry (Tauri command registration)
-│   │   ├── agent/            # Native agent engine (chat loop, native tools, provider)
-│   │   ├── session_db/       # SQLite session/message persistence (WAL + single-writer)
+├── src-tauri/                # Cargo workspace root (Rust)
+│   ├── src/                  # GUI shell (`virlen-app`): window/tray/plugins + every #[tauri::command]
+│   │   ├── lib.rs            # Tauri entry (window, tray, plugin & command registration)
+│   │   ├── commands/         # All #[tauri::command] (agent / session_db / rag)
+│   │   ├── host/tauri_host.rs # GUI `HostEnv` impl (resource_dir / app_data_dir)
+│   │   ├── telemetry.rs      # Tauri telemetry sink + panic-drain command
 │   │   ├── deepseek_tokenizer.rs # DeepSeek V3 byte-level BPE token counter
-│   │   ├── rag/              # Local RAG (knowledge base, vector index, embeddings)
-│   │   ├── file_ops.rs       # File operations
-│   │   ├── search.rs         # File search
-│   │   ├── vision_service.rs # Vision service
+│   │   ├── vision_service.rs # Vision command shell
 │   │   ├── common_service.rs # Common service
 │   │   ├── load_env.rs       # Environment info
 │   │   └── task_manager.rs   # Task management (cancellation)
+│   ├── virlen-core/          # Core library — zero `tauri::`, shared by GUI & CLI
+│   │   └── src/agent/        # Native agent engine (chat loop, native tools, provider)
+│   │       ├── session_db/   # SQLite session/config persistence (WAL + single-writer)
+│   │       ├── sandbox/      # Cross-platform sandbox (Job Object / Landlock)
+│   │       ├── security/     # Sandbox-ignore rule engine (text/regex + embedded QuickJS)
+│   │       ├── rag/          # Local RAG (knowledge base, vector index, embeddings)
+│   │       ├── vision/       # On-device vision core (quasivision)
+│   │       ├── host/         # `HostEnv` trait + `CliHost`
+│   │       ├── file_ops.rs   # File operations
+│   │       ├── search.rs     # File search
+│   │       └── cli/          # Headless CLI implementation (arg parsing + config get/set)
+│   ├── virlen-cli/           # Headless CLI package — depends on `virlen-core` only
+│   │   └── src/main.rs       # Three-line shim → `virlen_core::cli::run`
 │   ├── resources/            # Resource files (skills, vision models, tokenizer)
 │   │   ├── default-skills/   # Built-in skill definitions
 │   │   ├── quasivision_models/ # Vision AI models
@@ -446,7 +457,6 @@ virlen-app/
 The desktop app and the CLI share the same `app_settings` table inside one `virlen.db`, so both always read the same configuration:
 
 ```bash
-pnpm build                            # dist/ must exist (tauri-build requires frontendDist)
 pnpm cli config path                  # -> <data dir>/virlen.db (same file as the desktop app)
 pnpm cli config get                   # print every setting as JSON
 pnpm cli config get providers         # print selected keys (exit 1 if a key is missing)
@@ -455,7 +465,7 @@ pnpm cli config set --string maxTokens 4096        # --string forces a JSON stri
 ```
 
 `VIRLEN_DATA_DIR` overrides the data directory (handy for portable installs / tests).
-The CLI entry lives in `src-tauri/src/cli/` (`cli_main.rs` is just a three-line shim); notes for adding a second bin are in `docs/AGENTS.md` §11.14.
+The CLI entry lives in `src-tauri/virlen-cli/src/main.rs` (a three-line shim over `virlen_core::cli::run`); the implementation is in `src-tauri/virlen-core/src/cli/`. The CLI package depends on `virlen-core` only, so it pulls in no Tauri code and never needs `dist/`. Workspace notes are in `docs/AGENTS.md` §11.14.
 
 ---
 

@@ -1,0 +1,115 @@
+[package]
+name = "virlen-core"
+version = "1.1.43"
+description = "Virlen 核心库（零 tauri:: 依赖）：Agent 引擎 / 会话与配置持久化 / 沙盒 / 安全判定 / RAG / 视觉 / 宿主抽象"
+authors = ["wei"]
+edition = "2021"
+
+# ⚠️ 本 crate **不得**引入任何 `tauri` / `tauri-plugin-*` / `wry` / `tao` / `tray-icon` /
+#    `webview2-com` / `notify-rust` 依赖 —— 这是「headless / CLI 不链 GUI 栈」的全部依据。
+#    宿主差异一律走 `host::HostEnv` 注入；Tauri 侧实现（`TauriHost`、`TauriEventSink`、
+#    全部 `#[tauri::command]`）留在 `virlen-app` 里。
+#    新增依赖前先问一句：CLI 真的需要它吗？
+#
+# ⚠️ 版本号与 `virlen-app` / `package.json` / `tauri.conf.json` 同源（发版时一并改）。
+#    这里只是 path 依赖，不发布到 crates.io，版本号仅作标识。
+#    见 scripts/update-version.mjs（发版脚本需同步覆盖本文件与 virlen-cli/Cargo.toml）。
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"
+ignore = "0.4"
+grep = "^0.4.1"
+grep-regex = "^0.1.14"
+grep-searcher = "^0.1.16"
+regex = "1"
+anyhow = "1"
+sha2 = "0.10"
+hex = "0.4"
+encoding_rs = "0.8"
+tokio = { version = "1", features = [
+    "rt",
+    "macros",
+    "sync",
+    "fs",
+    "process",
+    "io-util",
+    "time",
+] }
+trash = "5"
+image = "0.25"
+base64 = "0.22"
+
+# ── RAG 知识库 ──
+turbovec = "0.9"                                                          # 向量量化索引（2-4 bit, SIMD 搜索）
+text-splitter = "0.25"                                                    # 智能文本分块
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+chrono-tz = "0.10"                                                        # IANA 时区库（get_current_time 原生实现；无 JS 的 CLI 没有 Intl）
+once_cell = "1"                                                           # 全局惰性初始化
+rand = { version = "0.8", features = ["small_rng"] }                      # 沙盒能力 SID 随机生成
+dunce = "1"                                                               # 路径 canonicalize（Windows UNC/长路径）
+reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }
+async-trait = "0.1"                                                       # 异步 trait（Provider / ToolExecutor）
+zip = "2"                                                                 # ZIP 打包（知识库导出）
+
+# ── 网页抓取（web_fetch 原生：HTML → Markdown）──
+htmd = "0.5"
+
+# ── 会话持久化 ──
+rusqlite = { version = "0.32", features = ["bundled"] }
+pdf-extract = "0.7" # PDF 文本提取
+
+# ── quasivision 全能视觉引擎 ──
+quasivision = "0.2.1"
+
+# ── js 类沙盒规则求值（D4 / 配置下沉） ──
+# ⚠️ 必须关掉默认特性（default 含 typescript → 拖进整套 SWC）；引擎必须选 `quickjs-ng`
+#    （`bellard` 分支在 Windows MSVC 下编译失败）。详见 docs/config-sink-plan.md §4.3。
+quickjs_runtime = { version = "0.18", default-features = false, features = ["quickjs-ng"] }
+
+# ── Windows 平台：沙盒（Job Object / 受限令牌 / ACL）与进程树 ──
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_SystemServices",
+    # 打包（MSIX）身份：GetCurrentPackageFamilyName
+    "Win32_Storage_Packaging_Appx",
+    # toast 点击的 COM 激活器（virlen-app 侧 tray/toast_activator.rs）；
+    #   注意这两个类型在 Win32::UI::Notifications，不在 Win32::UI::Shell
+    "Win32_UI_Notifications",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    # 剪贴板（粘贴文件）：OpenClipboard / GetClipboardData / RegisterClipboardFormatW
+    "Win32_System_DataExchange",
+    # DragQueryFileW / HDROP：把 CF_HDROP 解成真实路径
+    "Win32_UI_Shell",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Environment",
+    "Win32_System_Pipes",
+    "Win32_System_Memory",
+    "Win32_System_Kernel",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_SystemServices",
+] }
+
+# ── Linux 平台：Landlock 沙盒（无特权文件系统写隔离）──
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4"
+libc = "0.2"

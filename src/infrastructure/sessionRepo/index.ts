@@ -1,7 +1,7 @@
 /**
  * sessionRepo — 会话持久化 Repository（Rust SQLite 直落）
  *
- * 数据源从 IndexedDB 迁移到 Rust 侧 SQLite（src-tauri/src/session_db/）：
+ * 数据源从 IndexedDB 迁移到 Rust 侧 SQLite（src-tauri/virlen-core/src/session_db/）：
  * - 消息落库由 Rust 引擎在聊天循环内完成（用户消息发送即写、assistant/tool 完成时写）
  * - 前端只负责：启动时从 Rust 读全部会话、会话元数据变更（标题/pin/参数）写 Rust
  * - 即使 JS 卡住/崩溃，Rust 引擎照常落库，数据不丢
@@ -258,7 +258,7 @@ function stableJson(value: unknown): string {
 
 /**
  * 会话「落库列」签名 —— 只覆盖 Rust 端 sessions 表实际写入的列
- * （见 src-tauri/src/session_db/row.rs 的 `session_insert_params`）。
+ * （见 src-tauri/virlen-core/src/session_db/row.rs 的 `session_insert_params`）。
  *
  * messages 不参与：消息落库由 Rust 引擎负责（append_messages），
  * 这里只判断会话元数据是否变化。

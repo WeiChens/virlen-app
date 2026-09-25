@@ -2,7 +2,7 @@
  * securityRepo · 「忽略沙盒命令」规则的**单一源**（Rust `app_settings` 表）契约
  *
  * S7 起规则只存 Rust 侧 `app_settings`（键 `sandboxIgnoreRules`），localStorage 不再保存
- * —— 默认引擎（Rust）与 CLI 读的是同一份，判定在 `src-tauri/src/security/`。
+ * —— 默认引擎（Rust）与 CLI 读的是同一份，判定在 `src-tauri/virlen-core/src/security/`。
  *
  * 这里钉住 4 件容易被改坏的事（**模拟 Tauri** 环境，与产品默认路径一致）：
  *  1. 表里有规则 → `load()` 返回表值，且 localStorage 里的规则字段被清掉；

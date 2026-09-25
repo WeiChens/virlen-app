@@ -1,7 +1,7 @@
 /**
  * settingsRepo — 应用设置的持久化 Repository（**配置下沉 D3**）
  *
- * 存储在 **Rust 侧 `app_settings` 表**（`src-tauri/src/session_db/settings.rs`），
+ * 存储在 **Rust 侧 `app_settings` 表**（`src-tauri/virlen-core/src/session_db/settings.rs`），
  * 与会话库共用同一个 `virlen.db` —— 因此 GUI 与未来的 CLI 读写的是**同一份配置**。
  *
  * 分工（详见 `docs/config-sink-plan.md`）：

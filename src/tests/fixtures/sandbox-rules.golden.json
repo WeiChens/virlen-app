@@ -2,7 +2,7 @@
   "_comment": [
     "「忽略沙盒命令」规则的 golden 契约 —— TS 与 Rust 两侧**共读**同一份。",
     "TS : src/tests/domain/sandbox-rules-golden.test.ts（用 findMatchingSandboxRule）",
-    "Rust: src-tauri/src/security/rules.rs（用 find_matching_rule）",
+    "Rust: src-tauri/virlen-core/src/security/rules.rs（用 find_matching_rule）",
     "先例：src/tests/fixtures/system-prompt.golden.txt（提示词组装的两侧契约）。",
     "任何一侧的实现漂移（新增分支 / 默认值改动 / 大小写处理不一致）都会让两侧之一失败。",
     "⚠️ 只放「两侧都能求值」的用例：死循环 / 超内存 / host 能力探测只在 Rust 单测里（TS 侧没有超时保护，会卡死渲染进程）。"

@@ -40,7 +40,7 @@ class SecurityServiceImpl implements SecurityService {
    *
    * ⚠️ 消费方只剩**没有 Rust 可用**的路径：TS 引擎（用户关闭 Rust 引擎 / 浏览器 dev）的
    * `tools/execute/*.ts`、设置页「测试」按钮、保存期 `compileSandboxRule`。
-   * 默认引擎（Rust）与 CLI 的判定在 `src-tauri/src/security/`（由同一份 golden 契约收敛）。
+   * 默认引擎（Rust）与 CLI 的判定在 `src-tauri/virlen-core/src/security/`（由同一份 golden 契约收敛）。
    * 匹配异常一律返回 null（不脱壳），由匹配器内部保证。
    */
   async matchSandboxIgnoreRule(command: string): Promise<SandboxIgnoreRule | null> {

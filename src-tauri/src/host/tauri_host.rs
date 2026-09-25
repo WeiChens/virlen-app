@@ -1,9 +1,9 @@
 //! GUI 宿主实现（Tauri）—— `agent::host::HostEnv` 的图形界面版本
 //!
 //! 只做两件事：把 Tauri 的 `resource_dir()` / `app_data_dir()` 翻译成 [`HostEnv`]
-//! 需要的形状。**不含任何业务逻辑**（模型探测的存在性判断在 `crate::vision`）。
+//! 需要的形状。**不含任何业务逻辑**（模型探测的存在性判断在 `virlen_core::vision`）。
 
-use crate::agent::host::{compile_time_resource_root, HostEnv};
+use virlen_core::agent::host::{compile_time_resource_root, HostEnv};
 use std::path::PathBuf;
 use tauri::Manager;
 

@@ -45,7 +45,7 @@ import {
 } from './common'
 
 // 工具描述（含三平台变体）已收敛到权威源（机制 C）：
-// src-tauri/src/agent/tool_defs/definitions.json —— 见 docs/rust-engine.md §12。
+// src-tauri/virlen-core/src/agent/tool_defs/definitions.json —— 见 docs/rust-engine.md §12。
 
 toolRegistry.register(
     'execute_script',

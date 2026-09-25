@@ -4,8 +4,8 @@
  * 目的：把「TS 匹配」与「Rust 匹配」钉死在同一份判定上。
  *
  * 背景（D4 / 配置下沉）：纯 Rust CLI 没有 JS 进程，所以 `js` 类规则改由 Rust 侧内嵌
- * QuickJS 求值（`src-tauri/src/security/js_rule.rs`），`text` / `regex` 也由 Rust 原生实现
- * （`src-tauri/src/security/rules.rs`）—— 即**默认引擎（Rust）+ CLI 的权威实现**。
+ * QuickJS 求值（`src-tauri/virlen-core/src/security/js_rule.rs`），`text` / `regex` 也由 Rust 原生实现
+ * （`src-tauri/virlen-core/src/security/rules.rs`）—— 即**默认引擎（Rust）+ CLI 的权威实现**。
  * TS 实现（`domain/security/sandbox-ignore-rules`）仍然保留：浏览器 dev、用户关闭 Rust 引擎
  * 的降级路径、设置页「测试」按钮、保存期 `compileSandboxRule` 都要用它。
  * 两份实现必须行为一致 —— 由本测试 + Rust 侧 `rules.rs::tests::golden_matches_ts_implementation` 保证。

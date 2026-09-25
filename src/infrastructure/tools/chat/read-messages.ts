@@ -29,7 +29,7 @@ import {
   formatWindow,
 } from './common'
 
-// 工具描述已收敛到权威源（机制 C）：src-tauri/src/agent/tool_defs/definitions.json
+// 工具描述已收敛到权威源（机制 C）：src-tauri/virlen-core/src/agent/tool_defs/definitions.json
 
 toolRegistry.register(
     'read_messages',

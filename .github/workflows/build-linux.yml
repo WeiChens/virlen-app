@@ -86,7 +86,7 @@ jobs:
       - name: Rust tests (cargo test)
         working-directory: src-tauri
         shell: bash
-        run: cargo test
+        run: cargo test --workspace
 
   build-linux:
     name: Build Linux (x86_64)

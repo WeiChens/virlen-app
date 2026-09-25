@@ -1,0 +1,18 @@
+[package]
+name = "virlen-cli"
+version = "1.1.43"
+description = "Virlen headless CLI（与桌面端共用同一份配置与会话库）"
+authors = ["wei"]
+edition = "2021"
+
+# ⚠️ 本 package **只依赖 `virlen-core`**，因此二进制里不含 tauri / wry / tao / tray-icon /
+#    webview2-com 等 GUI 栈（`cargo build -p virlen-cli` 不会编译它们）。
+#    这是「把 CLI 拆成独立 package」的全部理由 —— 如果加回对 `virlen-app` 的依赖，
+#    这个收益立刻消失。
+#
+# ⚠️ 版本号与 virlen-app / virlen-core / package.json / tauri.conf.json 同源（发版一并改）。
+
+[dependencies]
+virlen-core = { path = "../virlen-core" }
+# `flavor = "current_thread"`：CLI 是「读一次写一次就退出」的短生命周期，单线程运行时足够
+tokio = { version = "1", features = ["rt", "macros"] }

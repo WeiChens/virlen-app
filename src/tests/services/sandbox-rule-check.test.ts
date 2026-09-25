@@ -2,7 +2,7 @@
  * 「忽略沙盒命令」规则的判定（**TS 侧实现**）
  *
  * ⚠️ S7 之后，**默认引擎（Rust）与 CLI 的判定不再走这里**：规则随 `NativeToolSecurity`
- * 下发、在 Rust 侧本地求值（`src-tauri/src/security/`），跨桥的 `sandbox_rule_check`
+ * 下发、在 Rust 侧本地求值（`src-tauri/virlen-core/src/security/`），跨桥的 `sandbox_rule_check`
  * 内部交互已删除。本文件现在钉的是**仍保留 TS 实现**的那条路径
  * （`securityService.matchSandboxIgnoreRule` —— TS 引擎 / 浏览器 dev / 设置页「测试」）：
  *  1. 命中 / 未命中 / 空命令的语义；

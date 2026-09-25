@@ -72,7 +72,7 @@ jobs:
       - name: Rust tests (cargo test)
         working-directory: src-tauri
         shell: bash
-        run: cargo test
+        run: cargo test --workspace
 
   build-windows:
     name: Build Windows (x86_64)

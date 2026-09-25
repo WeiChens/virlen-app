@@ -2,7 +2,7 @@
 
 > **状态：方案 A（资源定位 trait）已实施（2026-09）。**
 > 目的：为 `vision_analyze`（以及后续任何需要「宿主能力」的工具）在 **headless CLI** 下可用，
-> 同时**不破坏**「引擎核心（`src-tauri/src/agent/**`）零 `tauri::` 依赖」这条 CLI 前提。
+> 同时**不破坏**「引擎核心（`src-tauri/virlen-core/src/agent/**`）零 `tauri::` 依赖」这条 CLI 前提。
 > 关联：待办 #22-②、`docs/rust-engine.md` §8「宿主注入」、`docs/AGENTS.md` §5.1 / §5.2 / §5.6。
 
 ---
@@ -11,8 +11,8 @@
 
 | 项 | 草案 | 实际落地 |
 |---|---|---|
-| trait | `HostEnv { resource_candidates, data_dir }` | ✅ 一致（`src-tauri/src/agent/host.rs`） |
-| 实现 | `TauriHost` / `CliHost` | ✅ 一致（`src-tauri/src/host/{tauri_host,cli_host}.rs`）；实测 `src/host` 的 `tauri::` 命中 = 3（尽在 `tauri_host.rs`），`src/vision` = **0**，`agent/**` 未新增 |
+| trait | `HostEnv { resource_candidates, data_dir }` | ✅ 一致（`src-tauri/virlen-core/src/agent/host.rs`） |
+| 实现 | `TauriHost` / `CliHost` | ✅ 一致；**已拆包**（2026-09）：GUI 实现 `virlen-app/src/host/tauri_host.rs`、CLI 实现 `virlen-core/src/host/cli_host.rs`；实测 `tauri::` 命中只在 `tauri_host.rs`（3 处），`vision/` 与 `agent/**` 均为 **0** |
 | 注入位置 | `AgentEngine::new` 构造期 | ✅ `AgentEngine.host` 字段 + `with_deps(..., host)`；`new` / `with_provider_factory` 默认用 `host::default_host()`（既有单测无需改） |
 | 视觉分层 | `vision/mod.rs` 无 `tauri::` + `vision_service.rs` 薄壳 | ✅ 一致；`VisionState` / `setup_vision` **已删除**（引用计数改为 `vision::REFCOUNT` 进程级静态，CLI 同样可用） |
 | 无注入点的路径 | （草案未提） | 新增 `host::default_host()`：只给 TS 引擎的 `pty_run_command` 这类拿不到 `AgentEngine` 的入口用（均为 CLI 语义） |
@@ -20,6 +20,8 @@
 | 顺带修掉 | （草案未提） | 模型**加载失败未回滚引用计数**的既存泄漏（失败后 refcount 永久 > 0 → 后续永不再尝试加载） |
 
 验收：`cargo test` 334 passed / 0 failed（本轮 +15 用例）；`npx tsc --noEmit` exit 0；`npx vitest run` 82 文件 / 1016 用例。
+
+> 2026-09 复校（core 拆包后）：`cargo test --workspace` **395 passed / 2 ignored**；`npx vitest run` 88 文件 / 1038 用例；`npx tsc --noEmit` 0 错误。
 
 
 ---
@@ -67,7 +69,8 @@
 |---|---|---|---|---|
 | **A. 资源定位 trait（推荐）** | `trait HostEnv { fn resource_candidates(&self) -> Vec<PathBuf>; fn data_dir(&self) -> PathBuf; }` | 切口最小；GUI/CLI 各一份实现；引擎只认 `PathBuf` | 需把 `resolve_models_dir` 改为「多候选 + 由调用方探测」 | ✅ 采纳 |
 | **B. 推理后端 trait** | `trait VisionBackend { fn analyze(&self, img) -> Result<TreeText> }` | 理论上可换推理实现 | 把「模型加载 / 设备（DirectML/CoreML/CPU）/ 缓存」一并抬进引擎，抽象面积大十倍；CLI 也得自己实现一遍 | ❌ 过度设计 |
-| **C. 编译期 feature 分离** | `#[cfg(feature = "gui")]` 才链接 tauri；`cargo build --no-default-features` 得 CLI | 结构性保证「CLI 二进制不含 GUI 依赖」 | 需要把 `lib.rs` 拆成 `main.rs`(GUI) + `cli.rs`，侵入面大；本包 `crate-type` 含 `staticlib/cdylib`，改动需回归打包 | 🟡 后续可选，不作为第一步 |
+| **C. 编译期 feature 分离** | `#[cfg(feature = "gui")]` 才链接 tauri；`cargo build --no-default-features` 得 CLI | 结构性保证「CLI 二进制不含 GUI 依赖」 | 需要把 `lib.rs` 拆成 `main.rs`(GUI) + `cli.rs`；且同一 package 的多个 bin **共享同一套 feature**，只有显式 `--no-default-features` 才生效（默认构建仍链 tauri） | ✅ **已用「独立 crate」达成同一目标**（2026-09）：`virlen-core`（零 tauri）+ `virlen-cli`（独立 package，只依赖 core）；实测 `cargo tree -p virlen-cli` 比 GUI **少 94 个 crate**（452 vs 546）|
+| **D. 独立 crate 拆分（实际采用）** | `virlen-core`（引擎/持久化/沙盒/安全/RAG/视觉/宿主抽象）+ GUI 壳 + CLI package | 编译器强制边界；CLI 的依赖树里根本没有 tauri | 搬 132 个文件 + 拆命令层 + telemetry/事件出口抽象；⚠️ 二进制体积收益很小（linker 本来就 DCE：实测 CLI 30.6MB → 29.1MB，约 −5%）| ✅ 采纳 |
 
 > A 与 C **不互斥**：先做 A（把耦合点收敛到一处 trait），未来做 C 时只需替换实现与 `main` 入口。
 
@@ -75,7 +78,7 @@
 
 ## 4. 推荐方案：接口形状草案
 
-### 4.1 trait（放 `src-tauri/src/agent/host.rs`，引擎核心内，**零 `tauri::`**）
+### 4.1 trait（放 `src-tauri/virlen-core/src/agent/host.rs`，引擎核心内，**零 `tauri::`**）
 
 ```rust
 /// 宿主提供的最小环境能力。
@@ -105,11 +108,11 @@ pub trait HostEnv: Send + Sync {
 ### 4.2 两个实现（都在 `agent/` 之外）
 
 ```rust
-// src-tauri/src/host/tauri_host.rs —— GUI 实现（唯一允许出现 tauri:: 的新家）
+// virlen-app/src/host/tauri_host.rs —— GUI 实现（唯一允许出现 tauri:: 的地方）
 pub struct TauriHost(tauri::AppHandle);
 impl HostEnv for TauriHost { /* resource_dir() / app_data_dir() */ }
 
-// src-tauri/src/host/noop_host.rs —— 引擎单测 / CLI
+// virlen-core/src/host/cli_host.rs —— 引擎单测 / CLI
 pub struct CliHost { /* 由环境变量与 exe 位置推导 */ }
 impl HostEnv for CliHost { ... }
 ```
@@ -128,7 +131,7 @@ impl HostEnv for CliHost { ... }
 ### 4.4 视觉推理模块的归属
 
 - 保留 `vision_service.rs` 作为**GUI 命令壳**（`#[tauri::command]` + `AppHandle` 注入 `TauriHost`）。
-- 把「模型定位 + 懒加载 + 推理调用」抽到 `src-tauri/src/vision/mod.rs`（**无 `tauri::`**）：
+- 把「模型定位 + 懒加载 + 推理调用」抽到 `src-tauri/virlen-core/src/vision/mod.rs`（**无 `tauri::`**）：
   `pub fn models_dir(host: &dyn HostEnv) -> Result<PathBuf, String>` / `pub fn analyze(host, path) -> Result<String, String>`。
 - 这样 `native_tools/vision/vision_analyze.rs` 与 `vision_service.rs` **共用同一段实现**，不会出现两份模型探测逻辑（铁律 1 的同精神）。
 

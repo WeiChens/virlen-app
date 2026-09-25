@@ -1,7 +1,7 @@
 /**
  * 工具定义契约 — 权威源的形状与选取规则（纯逻辑，无任何 I/O）
  *
- * **权威源只有一份**：`src-tauri/src/agent/tool_defs/definitions.json`
+ * **权威源只有一份**：`src-tauri/virlen-core/src/agent/tool_defs/definitions.json`
  *   - Rust 侧：`agent::tool_defs`（`include_str!` + 懒解析）
  *   - 前端：Tauri 运行时走命令 `cmd_list_tool_definitions`；
  *     浏览器 dev / vitest 直读**同一份 JSON**（见 `infrastructure/tools/definitions-source.ts`）
