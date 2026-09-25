@@ -13,7 +13,7 @@ import { BochaSearchProvider } from './bocha'
 /**
  * 根据配置创建搜索供应商实例
  *
- * @param config 从 localStorage 读取的持久化配置
+ * @param config 持久化配置（来自 Rust 侧 `app_settings` 表）
  * @returns ISearchProvider 实例
  * @throws 当配置类型不支持时抛出错误
  */

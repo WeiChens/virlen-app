@@ -44,7 +44,7 @@ export interface SettingsStore {
   /** 是否在系统提示词中包含环境信息 */
   allowEnvPrompt: boolean
   providers: ProviderConfig[]
-  /** 搜索供应商配置列表（持久化到 localStorage） */
+  /** 搜索供应商配置列表（持久化到 `app_settings` 表；localStorage 不再保存） */
   searchProviders: SearchProviderConfig[]
   /** 默认搜索供应商 id */
   defaultSearchProviderId: string
@@ -162,9 +162,35 @@ const defaultSettings: SettingsStore = {
   usageCurrency: 'CNY',
 }
 
+/**
+ * 写给 `StorageState` 的**只读** localStorage 适配器（S3 收尾）。
+ *
+ * 配置下沉（D3）后权威源是 Rust 侧 `app_settings` 表，localStorage **不再保存设置副本**：
+ * - `getItem` 仍读真 localStorage → 兼容老版本遗留的副本（同步初值，水合前不空窗）；
+ * - `setItem`：**Tauri 下丢弃**（设置只落 `app_settings` 表）/ 非 Tauri 下照写
+ *   （浏览器 dev / vitest 没有表可写，仍靠 localStorage 持久化，保证 `pnpm dev` 可用）；
+ * - `removeItem` 透传 → 供水合后清理历史副本（见 `dropLegacyLocalSnapshot`）。
+ */
+const settingsLocalStorage: Storage = {
+  get length() {
+    return localStorage.length
+  },
+  clear: () => localStorage.clear(),
+  getItem: (key: string) => localStorage.getItem(key),
+  key: (index: number) => localStorage.key(index),
+  removeItem: (key: string) => localStorage.removeItem(key),
+  setItem: (key: string, value: string) => {
+    // Tauri（有表）：有意丢弃 —— 不再产生第二份权威源，也不再把 apiKey 写进 localStorage
+    if (settingsRepo.isAvailable()) return
+    localStorage.setItem(key, value)
+  },
+}
+
 export const settingsState = new StorageState(
   'virlen-settings',
   defaultSettings,
+  1000,
+  settingsLocalStorage,
 ).mixins({
   /**
    * 是否可使用的模型
@@ -238,11 +264,8 @@ try {
   if (!localStorage.getItem('virlen-rust-engine-migrated')) {
     if (settingsState.value.useRustEngine === false) {
       settingsState.setValue('useRustEngine', true)
-      // 同步写回（setValue 内部是 debounce，立即落盘避免退出丢失）
-      localStorage.setItem(
-        '_storage_state_virlen-settings',
-        JSON.stringify(settingsState.value),
-      )
+      // ⚠️ S3 收尾后**不再写回 localStorage**：值随本模块顶部的设置（`snapshotSettings`）
+      //    在首启时导入表；表已非空时以表为准（见 `hydrateSettings`）。这里只改内存。
     }
     localStorage.setItem('virlen-rust-engine-migrated', '1')
   }
@@ -270,19 +293,12 @@ try {
     }
     settingsState.value.editorOpenConfigs = [migrated]
     settingsState.value.editorOpenDefaultId = migrated.id
-    localStorage.setItem(
-      '_storage_state_virlen-settings',
-      JSON.stringify(settingsState.value),
-    )
+    // ⚠️ S3 收尾后不再写回 localStorage（迁移结果随首启 import 进表）
   }
   // 清理旧字段（非枚举属类型定义字段，直接删除避免污染）
   const raw = settingsState.value as any
   if ('editorOpenCommand' in raw) {
     delete raw.editorOpenCommand
-    localStorage.setItem(
-      '_storage_state_virlen-settings',
-      JSON.stringify(settingsState.value),
-    )
   }
 } catch {
   // 非浏览器环境忽略
@@ -302,18 +318,11 @@ try {
       ...withDefaultPermissions(settingsState.value.permissions),
       ...migrated,
     }
-    localStorage.setItem(
-      '_storage_state_virlen-settings',
-      JSON.stringify(settingsState.value),
-    )
+    // ⚠️ S3 收尾后不再写回 localStorage（迁移结果随首启 import 进表）
     localStorage.setItem('virlen-permissions-migrated', '1')
   }
   if ('commandApprovalMode' in raw) {
     delete raw.commandApprovalMode
-    localStorage.setItem(
-      '_storage_state_virlen-settings',
-      JSON.stringify(settingsState.value),
-    )
   }
 } catch {
   // 非浏览器环境忽略
@@ -416,11 +425,13 @@ function installSettingsPersist(): void {
  */
 export async function hydrateSettings(): Promise<void> {
   if (!settingsRepo.isAvailable()) return
+  /** 表已就绪（读到内容 / 首次导入成功）→ 才允许清理本地副本 */
+  let authorityReady = false
   try {
     const stored = await settingsRepo.loadAll()
     if (Object.keys(stored).length === 0) {
       // 首启（或本功能上线后的第一次启动）：把现有设置导入表
-      await settingsRepo.importIfEmpty({
+      authorityReady = await settingsRepo.importIfEmpty({
         ...snapshotSettings(),
         [SETTINGS_SCHEMA_VERSION_KEY]: SETTINGS_SCHEMA_VERSION,
         [SETTINGS_MIGRATED_FROM_KEY]: 'localStorage',
@@ -433,10 +444,31 @@ export async function hydrateSettings(): Promise<void> {
       } finally {
         hydrating = false
       }
+      authorityReady = true
     }
   } catch (e) {
     console.warn('[settings] 读取 Rust 侧 app_settings 失败，继续使用本地设置:', e)
     return
   }
+  // 表已就绪 → 清掉老版本遗留的设置副本（S3 收尾；表不可用时保留兜底）
+  if (authorityReady) dropLegacyLocalSnapshot()
   installSettingsPersist()
+}
+
+/**
+ * 删掉老版本遗留在 localStorage 的设置副本（S3 收尾 —— “清理回滚信道”）。
+ *
+ * ⚠️ 只在「表已就绪」时调用：表读不到 / 首次导入失败时**保留**副本，作为后端故障的兜底。
+ *
+ * 影响面（已实测代码路径）：`main()` 是 `await init()`（首步就是本函数）**之后**才 `render()`，
+ * 且窗口在 `requestAnimationFrame` 里才 `show()` —— 所以**用户看不到未水合的首帧**。
+ * 唯一退化情形：上次启动已删掉副本 + 本次后端不可用 → 设置回默认值（此时无权威源，已属异常）。
+ * 幂等：副本不存在时 `removeItem` 是空操作。
+ */
+function dropLegacyLocalSnapshot(): void {
+  try {
+    localStorage.removeItem(SETTINGS_STORAGE_KEY)
+  } catch {
+    // 非浏览器环境忽略
+  }
 }

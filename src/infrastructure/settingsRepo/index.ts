@@ -5,8 +5,11 @@
  * 与会话库共用同一个 `virlen.db` —— 因此 GUI 与未来的 CLI 读写的是**同一份配置**。
  *
  * 分工（详见 `docs/config-sink-plan.md`）：
- * - localStorage（`_storage_state_virlen-settings`）：**同步初值**（首帧不闪空）+ 回滚信道；
- * - `app_settings` 表：**权威源** —— 启动水合、改动回写。
+ * - `app_settings` 表：**权威源** —— 启动水合、改动回写；
+ * - localStorage：**已退出**（S3 收尾）—— 不再写（Tauri 下写入被丢弃，见
+ *   `ui/store/settingStore.ts` 的 `settingsLocalStorage`），仅保留「读兼容」（历史副本）
+ *   供同步初值；表就绪后历史副本即被删除（`dropLegacyLocalSnapshot`）。
+ *   非 Tauri（浏览器 dev / vitest）没有表可写 → 仍用 localStorage 持久化。
  *
  * ⚠️ 键名与 `SettingsStore` 字段**同名同层**，两侧不建映射表（避免字段漂移）。
  * 保留键以 `__` 开头（`__schemaVersion` / `__migratedFrom`），业务键不得使用该前缀。

@@ -20,7 +20,7 @@ export interface SpawnResult {
   message?: string
 }
 
-/** 打开编辑器配置（可持久化到 localStorage） */
+/** 打开编辑器配置（持久化到 Rust 侧 `app_settings` 表，见 docs/config-sink-plan.md） */
 export interface EditorOpenConfig {
   /** 配置唯一 ID */
   id: string
