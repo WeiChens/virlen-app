@@ -184,12 +184,13 @@ iteration_verify_pass / iteration_verify_fail / iteration_max_exceeded / iterati
 |---|---|---|
 | Rust → JS | `agent:event` | 载荷 `{ sessionId, event }`，`event` 与 TS `AgentEvent` 完全一致，前端直接转发 `onEvent` |
 | Rust → JS | `agent:tool-request` | 未原生化工具交 JS 执行，JS 用 `toolRegistry` 跑完回 `agent_tool_response`（`payload.__kind: value \| error \| interaction`；**`error` 也可带 `uiData`** → 失败文案同样是「模型侧英文 + UI 侧结构化」） |
-| Rust → JS | `agent:user-interaction-request` | 用户交互（`user_choice` / 终端内确认）与**内部查询**（`sandbox_rule_check`，无 UI：命令是否命中「忽略沙盒命令」规则，见 §5.4），走 `chat-service` 注册的 session handler → `agent_user_interaction_response` |
+| Rust → JS | `agent:user-interaction-request` | 用户交互（`user_choice` / 终端内确认），走 `chat-service` 注册的 session handler → `agent_user_interaction_response` |
 | Rust → JS | `agent:provider-request` | 未原生化的 Provider（目前 Gemini）交 JS，流式用 `agent_provider_stream_event` 逐条回传，结束 `agent_provider_stream_done` |
 | Rust → JS | `agent:round-boundary` | **轮次边界注入**：上一批工具已回复、下一次 LLM 请求尚未发出时回问 JS「有没有要注入的消息」（AI 回复期间用户**已应用**的任务清单变更），JS 用 `agent_round_boundary_response` 回 `{ messages }`；Rust 落库后追加进本轮消息列表，模型**这一轮**就能看到（超时 5s 兼底，失败降级为不注入）。TS 引擎同一时机走 `SendMessageOptions.onRoundBoundary`（铁律 1） |
 | JS → Rust | `agent_send_message` / `agent_cancel` / `agent_get_run_snapshot` / `agent_clear_run_snapshot` / `agent_dispose` / `agent_kill_command` / `pty_*` | 生命周期、取消、终端交互 |
 
-**未原生化的部分**（委托 TS）：`compressContext`、`generateTitle`、Gemini Provider，以及 web 类工具（`web_search` / `web_fetch`）。
+**未原生化的部分**（委托 TS）：`compressContext`、`generateTitle`、Gemini Provider。
+> **28 个工具已全部原生化**（S5 补齐 `web_fetch` / `web_search`）——`is_native_tool` 就是全集，**没有工具再走 JS 桥**。
 Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你是一个有用的 AI 助手。"`）。完整清单见 `docs/rust-engine.md`。
 
 > ⚠️ **改引擎语义（LLM 轮次 / 工具执行 / 暂停恢复 / 迭代验证 / 撤销）时，TS 与 Rust 两侧都要改**，否则默认路径与回退路径行为分叉（铁律 1）。
@@ -213,7 +214,9 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
   | `plan` | `tools/plan/` | 1 | todo_write（任务清单；用户可在标题栏浮层里直接编辑） |
   | `chat` | `tools/chat/` | 2 | list_messages / read_messages |
 
-- **原生化（26 个）**：`file`(8) + `search`(2) + `execute`(2) + `knowledge_base`(6) + `plan`(1：`todo_write`) + `system`(2：`user_choice` / `get_current_time`) + `chat`(2：`list_messages` / `read_messages`) + `skill`(2：`list_skills` / `read_skill_source`) + `vision`(1：`vision_analyze`)，分发在 `src-tauri/src/agent/native_tools/mod.rs::is_native_tool / execute_native_tool`。其余自动走 JS 桥（`web_search` / `web_fetch`）。
+- **原生化（28 个 = 全部）**：`file`(8) + `search`(2) + `execute`(2) + `knowledge_base`(6) + `plan`(1：`todo_write`) + `system`(2：`user_choice` / `get_current_time`) + `chat`(2：`list_messages` / `read_messages`) + `skill`(2：`list_skills` / `read_skill_source`) + `vision`(1：`vision_analyze`) + `web`(2：`web_fetch` / `web_search`)，分发在 `src-tauri/src/agent/native_tools/mod.rs::is_native_tool / execute_native_tool`。**无任何工具走 JS 桥**。
+  - `web_search` 的搜索源配置由引擎经 `NativeToolCtx::settings` **直读 `app_settings`**（与「忽略沙盒命令」规则同一份来源）→ CLI 同样可用；
+  - `web_fetch` 的 HTML→Markdown 用 `htmd`（TS 侧是 `turndown`）——**Markdown 细节两侧不完全一致**（已知差异，见 `docs/rust-engine.md` §3）。
 - **原生工具的会话库依赖**：需要读写会话库的工具（消息查询）从 `ctx.repo: &dyn SessionRepo` 取（由引擎注入；`repo.is_available()` 为 false 时如实回「本地存储不可用」）—— 与 `ctx.security` 同一种显式注入。
 - **原生工具的技能依赖**：技能工具从 `ctx.skills`（本 agent 启用的技能名）+ `ctx.security.skills_dir` 取数，**自行扫盘解析 SKILL.md**（不依赖前端 localStorage 注册表，CLI 同样可用）。
 - **原生工具的宿主依赖**：需要「资源目录 / 数据目录在哪」的工具（`vision_analyze` 的模型文件）从 `ctx.host: &dyn HostEnv` 取。宿主差异只有两份实现 —— GUI `host::TauriHost`（`resource_dir()` / `app_data_dir()`）、CLI `host::CliHost`（环境变量 + exe 位置）；**引擎核心（含 `native_tools/**`）不得出现 `tauri::`**，这是 headless 的前提。详见 `docs/host-abstraction-draft.md`。
@@ -234,7 +237,11 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
   ⚠️ **Rust 只回 token 数，费用一律前端算**；内置价目表固定存 USD（`src/domain/pricing/index.ts`），切币种时按固定汇率折算。
 - **应用配置（配置下沉 D3，见 `docs/config-sink-plan.md`）**：`session_db/settings.rs` 的 `app_settings` 表（一 key 一行，`value` 为 JSON 文本），与会话库**同文件 + 同一把单写连接**（不引入第二个写连接 → 无 `SQLITE_BUSY`；迁移/维护天然覆盖它）。命令 `cmd_settings_get_all` / `cmd_settings_upsert` / `cmd_settings_import`（后者**仅表空时**导入，供首启从 localStorage 迁移）。
   ⚠️ **键名与前端 `SettingsStore` 字段同名同层**（如 `providers` / `permissions` / `sandboxMode`），**不建映射表**；保留键以 `__` 开头（`__schemaVersion` / `__migratedFrom`）。新增设置项时必须两侧一起看（字段漂移风险）。
-  前端接入：`infrastructure/settingsRepo/`（Tauri 命令 / 非 Tauri 自动降级空实现）+ `settingStore.hydrateSettings()`（启动水合，`main.ts` 里排最前）+ 变更 debounce 回写（退出前 `flushSettingsPersist()`）。localStorage 降为**同步初值 + 回滚信道**。
+  前端接入：`infrastructure/settingsRepo/`（Tauri 命令 / 非 Tauri 自动降级空实现）+ `settingStore.hydrateSettings()`（启动水合，`main.ts` 里排最前）+ 变更 debounce 回写（退出前 `flushSettingsPersist()`）。
+  ⚠️ **localStorage 已退出（S3 收尾）**：`settingsState` 的 `StorageState` 用只读适配器 —— Tauri 下 `setItem` 丢弃（设置只落表，密钥不再在 localStorage 重复存一份明文）、表就绪后 `removeItem` 历史副本；非 Tauri（浏览器 dev）仍照写。回归项 `src/tests/infrastructure/settings-local-snapshot.test.ts`。
+  ⚠️ **下沉范围（S7 后）**：`SettingsStore` 全部字段 + 「忽略沙盒命令」规则的 `sandboxIgnoreRules` 键（前端 `infrastructure/securityRepo/`，启动入口是 **`securityStore.hydrate()`**（`main.ts` 的 `step('securityConfig')`）+ 退出前 `flushSecurityPersist()`）。
+  ⚠️ **规则是单一源：localStorage 不保存它**（`securityRepo.save()` 只写 `whitelist`/`blacklist`/`skipEachDirs`）——「读 localStorage 优先」会让 CLI 改过的规则在 GUI 里失效，所以 `load()` 在 Tauri 下只认内存快照（来自表）。
+  `whitelist` / `blacklist` / `skipEachDirs` **仍只存 localStorage**（本期未下沉）。
 
 ### 5.4 安全体系（四道闸）
 
@@ -250,10 +257,17 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 > 「忽略沙盒命令」规则（**设置 → 安全 → 忽略沙盒命令**）：命中规则的命令**免除「沙盒脱壳」审批，并以「不使用沙盒」方式执行**
 > （AI 不必显式传 `sandbox:"off"`；沙盒已关闭 `off` / 只读 `readonly` 时规则不生效）。
 > 该规则也是「区外写入」（如 `npm install` 写 `~/.npm`、pnpm store）的**唯一推荐放行方式**（不要再做沙盒侧自动探测/豁免）。
-> 匹配器只有一份：`domain/security/sandbox-ignore-rules.ts`（`text`（完全/前缀/后缀）/ `regex` / `js` 三种），经 `securityService.matchSandboxIgnoreRule` 使用；
-> **TS 引擎路径**在 `infrastructure/tools/execute/{execute-command,execute-script}.ts` 里定 `bypassSandbox`；
-> **Rust 引擎路径**（默认）在 `native_tools/execute/{execute_command,execute_script}.rs` 里经**内部交互** `sandbox_rule_check`（无 UI）问 JS 同一个匹配器
-> —— Rust 不重实现匹配（规则含用户自写的 `js` 函数），`security.hasSandboxIgnoreRules` 只是性能开关（false 时零 IPC）。
+> **匹配有两份实现（S7 起），由两侧共读的 golden 收敛**（`src/tests/fixtures/sandbox-rules.golden.json`）：
+> - **Rust 侧（权威：默认引擎 + CLI）**：`src-tauri/src/security/`（`rules.rs`：`text` / `regex` 原生 + `js` 交内嵌 QuickJS `js_rule.rs`）；
+> - **TS 侧（浏览器 dev / TS 引擎路径 / 设置页「测试」）**：`domain/security/sandbox-ignore-rules.ts`，经 `securityService.matchSandboxIgnoreRule` 使用。
+> **规则来源是 `app_settings` 的 `sandboxIgnoreRules` 键**（配置下沉 D3；`infrastructure/securityRepo` 启动水合 + debounce 回写，退出前 flush）：
+> ⚠️ **单一源：localStorage 不保存该字段**（`securityRepo.save()` 只写三个路径配置；Tauri 下 `load()` 只认内存快照）。
+> 启动入口是 `securityStore.hydrate()`：表里**有**该键 → 读进内存快照；表里**没有** → 一次性迁移 localStorage 的历史副本进表。
+> 两条分支随后都**清掉** localStorage 的规则字段 —— 因此「删掉表里的行」= 真正清空规则（不会被迁回）。
+> - **Rust 引擎路径**（默认）在 `native_tools/execute/{execute_command,execute_script}.rs` 里**本地判定**（规则随 `NativeToolSecurity.sandbox_ignore_rules` 下发，零 IPC、零 IO）；
+> - **TS 引擎路径**在 `infrastructure/tools/execute/{execute-command,execute-script}.ts` 里定 `bypassSandbox`；
+> - **CLI** 没有前端，用 `security::load_sandbox_ignore_rules(&db.settings)` 读**同一个键**。
+> ⚠️ 原「内部交互 `sandbox_rule_check` 问 JS」已**删除**（它要求存在 JS 宿主，纯 Rust CLI 问不到，只能白等超时后按未命中）。
 > `js` 规则的输入是代码编辑器 `ui/components/code-editor/CodeEditor`（可编辑的精简版 Monaco，见 `monaco/setupMonaco.ts`：只有词法高亮，**无语言服务/无诊断**）；
 > 默认模板 `SANDBOX_JS_DEFAULT_PATTERN` 是带注释的 `function matchCommand(command){...return false}`（**默认不命中**），
 > **切换匹配方式会重置「匹配内容」**（`defaultSandboxRulePattern`）。
@@ -264,14 +278,15 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 > ⚠️ 规则**只**免「沙盒脱壳」：`terminal.*` / `script.execute` 的风险审批照旧（命中规则时弹窗追加 `SANDBOX_RULE_BYPASS_HINT` 说明原因）；
 > 「沙盒脱壳」权限设为 `deny` 时 **deny 仍然优先**（`apply_rule_clearance` 只把 `ask` 降为 `allow`）。
 >
-> ⚠️ **纯 Rust CLI 下 `js` 类规则原理上不可求值**（没有 JS 进程，而匹配器只有 TS 一份实现）→ 已定案 D4：内嵌 `quickjs_runtime`（**必须用 `quickjs-ng` 特性**，默认的 `bellard` 在 Windows MSVC 编译不过）自行求值。
-> 依赖已引入但**尚未接线**（待办 S7）。⚠️ 它带一个**构建期**硬依赖 `libclang`（bindgen），见 §7。详见 `docs/config-sink-plan.md` §4。
+> ⚠️ **`js` 类规则在无 JS 宿主的 CLI 下**由**内嵌 QuickJS**（`quickjs_runtime`，**必须用 `quickjs-ng` 特性**，默认的 `bellard` 在 Windows MSVC 编译不过）求值 —— 已落地（S7：`src-tauri/src/security/js_rule.rs`）。
+> 受限 runtime：**不注入任何 host 函数**、内存 16 MB / 栈 512 KB 上限、单次求值 200 ms 中断超时、每次求值新建 runtime（无跨命令状态）；编译失败 / 抛错 / 超时 / 超内存**一律按未命中**（fail-closed）。
+> ⚠️ 它带一个**构建期**硬依赖 `libclang`（bindgen），见 §7。已知差异（均在安全侧）：Rust `regex` 不支持 lookaround → 这类规则在 Rust 侧按未命中。详见 `docs/config-sink-plan.md` §4。
 
 ### 5.5 Provider 与搜索源
 
 - **LLM Provider**：实现 `IProvider`（`infrastructure/provider/types.ts`：`listModels / chat / chatStream / buildRequest / validateApiKey`），模板放 `domain/provider/config.ts`。
   TS 侧 3 种全支持；Rust 侧原生 OpenAI / Anthropic，**Gemini 走 `BridgedProvider`**（委托 TS）。
-- **搜索源**：实现 `ISearchProvider`（`domain/search/types.ts`），放 `infrastructure/search-providers/`，`factory.ts` 注册，配置由 `search-provider-service.ts` 管理（localStorage）。
+- **搜索源**：实现 `ISearchProvider`（`domain/search/types.ts`），放 `infrastructure/search-providers/`（**实际接入 `tavily` / `bocha`**，`searxng.ts` 存在但未接入），`factory.ts` 注册。配置存 `SettingsStore.searchProviders` + `defaultSearchProviderId` → **已随配置下沉落到 `app_settings`**：原生 `web_search`（`native_tools/web/web_search.rs`）与 CLI 经 `ctx.settings` 读**同一份**，不再依赖前端下发。
 
 ### 5.6 视觉 / RAG / Skill
 
@@ -391,14 +406,14 @@ pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 ### 9.2 新增 / 修改 Provider、搜索源、Skill
 
 - **LLM Provider**：实现 `IProvider` → `provider/index.ts::createProviderInstance` 注册 → 模板放 `domain/provider/config.ts`。要 Rust 原生支持需在 `agent/provider.rs` 加实现，否则自动走 `BridgedProvider`。
-- **搜索源**：实现 `ISearchProvider` → 放 `infrastructure/search-providers/` → `factory.ts` 注册 → 配置由 `search-provider-service.ts` 管理。
+- **搜索源**：实现 `ISearchProvider` → 放 `infrastructure/search-providers/` → `factory.ts` 注册 → 配置存 `SettingsStore.searchProviders`（已下沉 `app_settings`）。⚠️ **若要被默认引擎（Rust）+ CLI 使用，还要在 `src-tauri/src/agent/native_tools/web/web_search.rs` 里加同名分支**（当前只有 `tavily` / `bocha`）——否则该搜索源只在浏览器 dev / TS 引擎路径生效。
 - **内置 Skill**：`src-tauri/resources/default-skills/<name>/SKILL.md`，frontmatter 至少 `name` / `description`（也兼容纯 Markdown：`# 标题` + `> 描述` + `**Version:** x.y.z`，解析器 `utils/mdYamlFrontmatter.ts`）；目录名应与 `name` 一致；脚本放 `scripts/`。
 
 ---
 
 ## 10. 前端约定
 
-- **状态**：MobX 单一 store + `StorageState`（localStorage）。新增设置项记得加进 `SettingsStore` 接口 + `defaultSettings` + 设置页 UI（`ui/pages/Settings/`）。
+- **状态**：MobX 单一 store + `StorageState`（`utils/storageState.ts`）。⚠️ **设置类**（`settingsState`，key `_storage_state_virlen-settings`）自 S3 起 **Tauri 下不再写 localStorage**（权威源是 `app_settings` 表，见 §5.3）。新增设置项记得加进 `SettingsStore` 接口 + `defaultSettings` + 设置页 UI（`ui/pages/Settings/`）。
 - **会话持久化**：见 §5.3。启动只加载元数据，消息懒加载；`utils/db.ts` 已废弃，不要复活。
 - **组件事件**：`src/events/*` 的 EventEmitter；禁止 `window.*` 全局挂载。
 - **样式**：组件目录内 `style.scss`，BEM 类名；主题变量在 `ui/styles/theme.css`。
@@ -497,13 +512,14 @@ pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 | 改任务清单 / todo_write | `src/domain/todo/*`（纯函数）、`src/infrastructure/tools/plan/todo-write.ts`、`src/services/todo-service.ts`（落地，用户清单逐字生效）、`src/ui/store/todoDraftStore.ts`（回复期间的本地草稿；**关浮层丢弃未应用的草稿**）、`src/ui/pages/chat/components/todo/*`（标题栏入口 + 浮层；编辑期间 AI 又写清单 → 「放弃编辑并同步 / 覆盖更新」二选一） |
 | 改原生工具路径校验 / 参数取值 | `src-tauri/src/agent/native_tools/common.rs`（`resolve_safe_path` / `is_path_allowed` / `arg_*`）；路径展开共用 `src-tauri/src/sandbox/paths.rs::expand_user_path` |
 | 改文件读写底层 | `src-tauri/src/file_ops.rs` + `src/utils/diff.ts` |
-| 改搜索 | `src-tauri/src/search.rs`（文件搜索）、`src/domain/search/*` + `src/infrastructure/search-providers/*`（网络搜索） |
+| 改文件搜索 | `src-tauri/src/search.rs`（`search_files_by_name` / `search_text_in_files` 原生） |
+| 改网络搜索 / 网页抓取（`web_search` / `web_fetch`） | **Rust 原生（权威）** `src-tauri/src/agent/native_tools/web/{web_search,web_fetch,common}.rs`（`web_search` 经 `ctx.settings` 直读 `app_settings` 的 `searchProviders` / `defaultSearchProviderId`）；**TS 侧（浏览器 dev / TS 引擎路径）** `src/infrastructure/tools/web/*.ts` + `src/infrastructure/search-providers/{factory,tavily,bocha}.ts`；**两侧结果文本契约** `src/tests/fixtures/web-search-format.golden.json`；搜索源配置 `src/services/search-provider-service.ts` + `src/domain/search/*`；已知差异（HTML→Markdown 细节）见 `docs/rust-engine.md` §3 |
 | 改命令执行 / 风险分类 / 权限审批 | `src/domain/permission/index.ts`（+ Rust 镜像 `native_tools/execute/common/classify.rs`）；工具 `tools/execute/common.ts` + `execute-command.ts`/`execute-script.ts`；Rust 原生 `native_tools/execute/`。PTY 相关另见 `sandbox/windows/conpty.rs`、`native_tools/execute/pty_session.rs`、`tool-call/XtermTerminal.tsx`、`tool-call/TerminalConfirmBlock.tsx` |
 | 改终端输出处理（`\r`、ANSI） | `tools/execute/common.ts::processTerminalOutput`（UI 侧 `tool-call/Execute*Message.tsx` 复用）；Rust 侧 `native_tools/execute/common.rs::process_terminal_output`。两份**逐条对齐** |
 | 改工具授权确认弹窗 / 交互 | `ui/pages/chat/components/modals/authorization.tsx`；事件 `events/toolInteractEvent.ts::showAuthorization`；调度 `services/tool-service/command_confirm.ts`；Rust 侧下发同样字段 `native_tools/execute/{execute_command,execute_script}.rs` |
 | 改沙盒 / 权限 | `src-tauri/src/sandbox/**`、`src/infrastructure/sandbox/*`、`src/domain/security/index.ts` |
 | 改 `js` 类沙盒规则的求值（纯 Rust CLI 侧） | `docs/config-sink-plan.md` §4（设计已定案）+ `Cargo.toml` 的 `quickjs_runtime`（已引入、未接线）；实现位置预定 `src-tauri/src/security/js_rule.rs`，由 `native_tools/execute/common/rules.rs` 调用 |
-| 改「忽略沙盒命令」规则（命中即免脱壳审批 + 强制无沙盒执行） | 匹配器 `src/domain/security/sandbox-ignore-rules.ts`（含 `js` 默认模板 `SANDBOX_JS_DEFAULT_PATTERN` / `defaultSandboxRulePattern` / 排序 `moveSandboxIgnoreRule`+`reorderSandboxIgnoreRule` / 预设 `SANDBOX_RULE_PRESETS` / 编译校验 `compileSandboxRule`）；服务入口 `src/services/security-service.ts::matchSandboxIgnoreRule`；存储 `src/infrastructure/securityRepo/`（`sandboxIgnoreRules`）+ `src/ui/store/securityStore.ts`（`upsert/remove/setEnabled/move/reorder`）；UI `src/ui/pages/Settings/security-sandbox-rules.tsx`（拖拽几何 `./sandbox-rules-dnd.ts`；JS 输入用 `src/ui/components/code-editor/CodeEditor.tsx`；行内开关 `src/ui/components/shared/Toggle`）；**TS 路径决策** `src/infrastructure/tools/execute/{execute-command,execute-script}.ts`；**Rust 路径决策** `src-tauri/src/agent/native_tools/execute/{execute_command,execute_script}.rs` + `.../execute/common/rules.rs`（经内部交互 `sandbox_rule_check` 问 JS）+ `src/services/tool-service/index.ts`（回答该交互）+ `src/services/rust-engine.ts::resolveSecurityConfig`（`hasSandboxIgnoreRules`） |
+| 改「忽略沙盒命令」规则（命中即免脱壳审批 + 强制无沙盒执行） | **Rust 判定（权威：默认引擎 + CLI）** `src-tauri/src/security/{rules,js_rule}.rs`（text/regex 原生 + js 内嵌 QuickJS）+ `agent/native_tools/execute/common/rules.rs`（判定入口与提示文案）+ `.../execute/{execute_command,execute_script}.rs`；**规则来源** `app_settings` 的 `sandboxIgnoreRules` 键（Rust 侧 `session_db/settings.rs` + `security::load_sandbox_ignore_rules`；前端 `infrastructure/securityRepo/`（`hydrateSecurity` / `flushSecurityPersist`）+ `ui/store/securityStore.ts` + `main.ts` 的 `step('securityConfig')`）；**TS 侧实现（浏览器 dev / TS 引擎 / 设置页测试）** `domain/security/sandbox-ignore-rules.ts`（`SANDBOX_JS_DEFAULT_PATTERN` / `defaultSandboxRulePattern` / 排序 / 预设 / `compileSandboxRule`）+ `services/security-service.ts::matchSandboxIgnoreRule` + `infrastructure/tools/execute/{execute-command,execute-script}.ts`；**两侧契约** `src/tests/fixtures/sandbox-rules.golden.json`（TS `tests/domain/sandbox-rules-golden.test.ts` ↔ Rust `security/rules.rs` 的 golden 用例）；UI `ui/pages/Settings/security-sandbox-rules.tsx`（拖拽几何 `./sandbox-rules-dnd.ts`；JS 输入用 `ui/components/code-editor/CodeEditor.tsx`；行内开关 `ui/components/shared/Toggle`）；下发字段 `services/rust-engine.ts::resolveSecurityConfig`（`sandboxIgnoreRules`） |
 | 改视觉 | 核心 `src-tauri/src/vision/`（模型定位 / 懒加载 / 推理，零 `tauri::`）、命令壳 `src-tauri/src/vision_service.rs`、原生工具 `src-tauri/src/agent/native_tools/vision/`、前端 `src/infrastructure/vision/`、模型 `src-tauri/resources/quasivision_models/` |
 | 改宿主抽象 / CLI 资源与数据目录 | trait `src-tauri/src/agent/host.rs`（`resource_candidates` / `data_dir`）＋两份实现 `src-tauri/src/host/{tauri_host,cli_host}.rs`；注入链 `AgentEngine.host` → `ExecuteLlmRoundParams.host` / `RunIterationParams.host` → `execute_tool_steps` → `NativeToolCtx.host` |
 | 改设置项 | `src/ui/store/settingStore.ts` + `src/ui/pages/Settings/*` + `src/ui/i18n/lang/en-US.json` |

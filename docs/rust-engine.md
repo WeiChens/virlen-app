@@ -354,14 +354,14 @@ pub trait SessionRepo: Send + Sync {
 | `compressContext` 上下文压缩 | `domain/engine/compress-context.ts` | 无（TS 提供；usage token 计数已 Rust 化：`cmd_count_tokens`） |
 | `generateTitle` 标题生成 | `domain/engine/generate-title.ts` | 无（TS 提供；`thinking:false` 禁用思考） |
 
-### 3. 工具层（`is_native_tool` 未覆盖 → 走 JS 桥）
+### 3. 工具层（**已全部原生化**，无 JS 桥；本表保留「实现位置 + 对齐要点」）
 
 | 工具 | TS 实现 | 说明 |
 |---|---|---|
 | `get_current_time` | `infrastructure/tools/system/get-current-time.ts` | ✅ **已原生化**（`native_tools/system/get_current_time.rs`，依赖 `chrono-tz`）：模型侧格式与 `Intl` `en-US` 实测输出逐字对齐；非法时区两侧同一文案 + 结构化 `uiData`（`errorKind`） |
 | `user_choice` | `infrastructure/tools/system/user-choice.ts` | ✅ **已原生化**（`native_tools/system/user_choice.rs`）：返回 `NativeToolOutcome::Interaction`，复用同一条用户交互通道 |
-| `web_fetch` | `infrastructure/tools/web/web-fetch.ts` | 需处理重定向/超时/HTML→MD |
-| `web_search` | `infrastructure/tools/web/web-search.ts` + `search-providers/`（tavily/searxng/bocha） | 多搜索提供商适配 |
+| `web_fetch` | `infrastructure/tools/web/web-fetch.ts` | ✅ **已原生化**（`native_tools/web/web_fetch.rs`，新增依赖 `htmd`）：二进制 Content-Type 清单 / `htmlToMd` 默认值 / `MAX_LENGTH=20000` 截断文案 / cancelled·timed out 文案与 TS 逐字一致。⚠️ **HTML→Markdown 的细节不保证一致**（TS `cheerio + turndown` ↔ Rust「正则剥离不可见块 + `htmd`」；且 `class="hidden"` 无法按类名移除）——`isHtml` 判定本身两侧一致（**Content-Type 优先**：`text/html` / `application/xhtml+xml`；否则回退形状判定且**大小写不敏感**、剥 BOM；两侧共读 golden `src/tests/fixtures/web-html-detect.golden.json`） |
+| `web_search` | `infrastructure/tools/web/web-search.ts` + `search-providers/`（tavily/bocha） | ✅ **已原生化**（`native_tools/web/web_search.rs`）：支持 `tavily` / `bocha`（与 TS `factory.ts` 相同 —— `searxng` 两侧都未接入）；结果文本由 `format_search_results` 生成，**两侧共读 golden**（`src/tests/fixtures/web-search-format.golden.json`）；**搜索源配置经 `ctx.settings` 直读 `app_settings`**（`searchProviders` / `defaultSearchProviderId`），因此 CLI 同样可用 |
 | `list_skills` | `infrastructure/tools/skill/list-skills.ts` | ✅ **已原生化**（`native_tools/skill/`）：Rust 直接扫 `security.skills_dir` + 解析 SKILL.md（CLI 无 localStorage）；与 `src/skill/*` + `utils/mdYamlFrontmatter.ts` 逐字镜像（铁律 1） |
 | `read_skill_source` | `infrastructure/tools/skill/read-skill-source.ts` | ✅ **已原生化**（`native_tools/skill/`）：目录树 + SKILL.md 全文；路径来自扫盘结果（`skills_dir/<folder>`），不经用户输入拼路径 |
 | `todo_write` | `infrastructure/tools/plan/todo-write.ts` | ✅ **已原生化**（`native_tools/plan/`）：无 IO / 无副作用，状态随 `tool_result` 消息的 `content`（给模型）+ `uiData`（给 UI）落库；`common.rs` 与 TS `domain/todo/state.ts` 逐字镜像（铁律 1） |

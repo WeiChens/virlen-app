@@ -207,11 +207,11 @@ src/
 
 - **聊天循环**：LLM 轮次 → 工具执行 → 结果合并，支持 Run Snapshot 暂停/恢复、取消处理
 - **SQLite 会话持久化**：会话与消息由 Rust 直接写入 `virlen.db`（WAL + 单写连接 + `spawn_blocking`）——不再使用 IndexedDB，不依赖 JS 线程
-- **原生工具**：26 个高价值工具（文件操作、命令执行、搜索、知识库、任务清单、用户选择、消息查询、技能、当前时间、端侧视觉）在 Rust 端原生执行，其余回退 JS 桥
+- **原生工具**：全部 28 个工具（文件操作、命令执行、搜索、知识库、任务清单、用户选择、消息查询、技能、当前时间、端侧视觉、网页抓取/搜索）在 Rust 端原生执行——工具层已无 JS 桥
 - **DeepSeek V3 tokenizer**：字节级 BPE token 计数（`cmd_count_tokens`），为上下文压缩提供精确 usage 估算
 - **图片伪视觉分析**：纯文本模型场景下，图片块在 Rust 端原生替换为本地视觉分析文本
 
-仍由 JS 提供（桥接）的功能：**Gemini Provider**、`compressContext`、`generateTitle`，以及 2 个低频工具（`web_fetch`、`web_search`）。完整矩阵见 `docs/rust-engine.md`。
+仍由 JS 提供（桥接）的功能：**Gemini Provider**、`compressContext`、`generateTitle`。完整矩阵见 `docs/rust-engine.md`。
 
 这三项检查——`npx tsc --noEmit`、`pnpm test`（Vitest）、`cargo test`——已由 CI 在每次打 tag（`v*`）时强制执行，任一失败即阻断发布。详见 `.github/workflows/`。
 
@@ -374,7 +374,8 @@ Virlen 未霖 内置了 **Quasivision** 视觉引擎（ONNX Runtime），所有�
 | [Encoding_rs](https://crates.io/crates/encoding_rs)     | 多编码支持                                    |
 | [Rusqlite](https://crates.io/crates/rusqlite)           | SQLite 会话/消息持久化（内置编译、WAL）        |
 | [Turbovec](https://crates.io/crates/turbovec)           | 本地 RAG 向量索引（量化 + SIMD）              |
-| [Reqwest](https://crates.io/crates/reqwest)             | 异步 HTTP 客户端（原生 LLM Provider）         |
+| [Reqwest](https://crates.io/crates/reqwest)             | 异步 HTTP 客户端（原生 LLM Provider、web_fetch/web_search） |
+| [htmd](https://crates.io/crates/htmd)                   | HTML → Markdown（原生 `web_fetch`；纯 Rust） |
 | [Once_cell](https://crates.io/crates/once_cell)         | 惰性静态初始化（tokenizer 单例）              |
 | [Async-trait](https://crates.io/crates/async-trait)     | 异步 trait 对象（Provider / SessionRepo）     |
 

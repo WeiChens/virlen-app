@@ -208,11 +208,11 @@ Since P1–P3, the core engine has been progressively ported to Rust (`src-tauri
 
 - **Chat loop**: LLM round → tool execution → result merge, pause/resume via Run Snapshot, cancellation handling
 - **SQLite session persistence**: sessions & messages are written directly to `virlen.db` by Rust (WAL + single-writer + `spawn_blocking`) — no IndexedDB, no dependency on the JS thread
-- **Native tools**: 26 high-value tools (file ops, command execution, search, knowledge base, task list, user choice, message history, skills, current time, on-device vision) execute natively in Rust; the rest fall back to the JS bridge
+- **Native tools**: all 28 tools (file ops, command execution, search, knowledge base, task list, user choice, message history, skills, current time, on-device vision, web fetch/search) execute natively in Rust — there is no JS bridge for tools anymore
 - **DeepSeek V3 tokenizer**: byte-level BPE token counting (`cmd_count_tokens`) powers accurate usage estimation in context compression
 - **Pseudo-vision analysis**: for text-only models, image blocks are replaced with local vision-analysis text natively in Rust
 
-Functions still provided by JS (bridged): **Gemini provider**, `compressContext`, `generateTitle`, and 2 low-frequency tools (`web_fetch`, `web_search`). See `docs/rust-engine.md` for the full matrix.
+Functions still provided by JS (bridged): **Gemini provider**, `compressContext`, `generateTitle`. See `docs/rust-engine.md` for the full matrix.
 
 These three checks — `npx tsc --noEmit`, `pnpm test` (Vitest), and `cargo test` — are enforced by CI on every version tag (`v*`); a failing check blocks the release. See `.github/workflows/`.
 
@@ -375,7 +375,8 @@ Virlen features the built-in **Quasivision** vision engine (ONNX Runtime), with 
 | [Encoding_rs](https://crates.io/crates/encoding_rs)      | Multi-encoding support                      |
 | [Rusqlite](https://crates.io/crates/rusqlite)            | SQLite session/message persistence (bundled, WAL) |
 | [Turbovec](https://crates.io/crates/turbovec)            | Vector index for local RAG (quantized + SIMD) |
-| [Reqwest](https://crates.io/crates/reqwest)              | Async HTTP client (native LLM providers)    |
+| [Reqwest](https://crates.io/crates/reqwest)              | Async HTTP client (native LLM providers, web_fetch/web_search) |
+| [htmd](https://crates.io/crates/htmd)                    | HTML → Markdown for the native `web_fetch` (pure Rust) |
 | [Once_cell](https://crates.io/crates/once_cell)          | Lazy static initialization (tokenizer singleton) |
 | [Async-trait](https://crates.io/crates/async-trait)      | Async trait objects (Provider / SessionRepo) |
 
