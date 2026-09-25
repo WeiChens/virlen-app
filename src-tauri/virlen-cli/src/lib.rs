@@ -3,12 +3,13 @@
 //! 形态：`virlen-cli <命令> [参数]`。已落地：
 //!
 //! ```text
-//! virlen-cli config get [key ...]          读全部 / 指定键（JSON 输出）
-//! virlen-cli config set [--string] k v     写入（值优先按 JSON 解析）
-//! virlen-cli config path                   打印实际使用的库文件路径
-//! virlen-cli run [选项] <prompt>           无界面跑一次 agent（headless 对话）
+//! virlen-cli config get [key ...]             读全部 / 指定键（JSON 输出）
+//! virlen-cli config set [--string] k v        写入（值优先按 JSON 解析）
+//! virlen-cli config path                      打印实际使用的库文件路径
+//! virlen-cli run [选项] <prompt>              无界面跑一次 agent（headless 对话）
+//! virlen-cli chat [选项]                      交互式会话（内联视口 TUI；非终端自动降级）
 //! virlen-cli list-session [-g agent|workdir]  列出会话（可分组）
-//! virlen-cli list-agent                    列出 Agent
+//! virlen-cli list-agent                       列出 Agent
 //! ```
 //!
 //! 为什么命令实现住在本 crate 的 lib（而不是 core / bin）：
@@ -18,7 +19,7 @@
 //! | crate | 角色 | 边界 |
 //! |---|---|---|
 //! | `virlen-core` | 引擎 / 持久化 / 沙盒 / 安全 / RAG / 视觉 | **零 `tauri::`**，也**不含命令入口** |
-//! | `virlen-cli`（本 crate） | headless 命令实现 + （规划的）TUI | 只依赖 core；**零 `tauri::`** |
+//! | `virlen-cli`（本 crate） | headless 命令实现 + 交互式 TUI（`chat`） | 只依赖 core；**零 `tauri::`** |
 //! | `virlen-app` | GUI 壳（Tauri 命令 / 托盘 / 平台集成） | 唯一 Tauri 侧 |
 //!
 //! ⚠️ bin 目标（`src/main.rs`）**无法被单测引用**，因此逻辑都在本 lib 里，`main.rs` 保持
@@ -35,6 +36,7 @@
 mod config;
 mod list;
 mod run;
+mod session_rt;
 mod tui;
 
 use std::io::Write;
@@ -56,6 +58,7 @@ pub(crate) enum Command {
     Version,
     Config(config::ConfigCmd),
     Run(run::RunCmd),
+    Chat(tui::ChatCmd),
     ListSessions(list::SessionsCmd),
     ListAgents(list::AgentsCmd),
 }
@@ -73,6 +76,10 @@ Virlen CLI（headless）—— 与桌面端读写同一份配置（app_settings 
   virlen-cli config path                 打印实际使用的库文件路径（应与 GUI 相同）
                                          库尚未创建时也返回 0，仅在 stderr 给出提示
   virlen-cli run [选项] <prompt>         无界面跑一次 agent（headless；`run --help` 看选项）
+  virlen-cli chat [选项]                   交互式会话（与桌面端共用同一份会话库；
+                                         内联视口 TUI，输入框钉在底部；`chat --help` 看选项）
+                                         非终端（管道 / 重定向 / CI）或 `--no-tui` 时
+                                         自动改用顺序输出模式；终端连续失败超 5s 也会降级
   virlen-cli list-session [-g agent|workdir] [--limit N] [--json]
                                          列出会话（与桌面端同一份库；`--help` 看说明）
   virlen-cli list-agent [--json]         列出 Agent（app_settings.agents）
@@ -99,6 +106,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<Command, String> {
         "version" | "--version" | "-V" => Ok(Command::Version),
         "config" => config::parse(it.collect()).map(Command::Config),
         "run" => run::parse(it.collect()).map(Command::Run),
+        "chat" => tui::parse(it.collect()).map(Command::Chat),
         "list-session" | "list-sessions" => {
             list::parse_sessions(it.collect()).map(Command::ListSessions)
         }
@@ -136,6 +144,11 @@ pub async fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i
         Ok(Command::Run(cmd)) => {
             let host: Arc<dyn HostEnv> = Arc::new(CliHost::from_env());
             run::run(&host, cmd, out, err).await
+        }
+        // `chat`（交互式）：同样把宿主交给引擎与（TUI / 顺序输出）两条实现
+        Ok(Command::Chat(cmd)) => {
+            let host: Arc<dyn HostEnv> = Arc::new(CliHost::from_env());
+            tui::run(&host, cmd, out, err).await
         }
         // 列表类命令同样需要 `Arc<dyn HostEnv>`（打开会话库）
         Ok(Command::ListSessions(cmd)) => {

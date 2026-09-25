@@ -10,7 +10,7 @@ edition = "2021"
 #    这是「把 CLI 拆成独立 package」的全部理由 —— 如果加回对 `virlen-app` 的依赖，
 #    这个收益立刻消失。
 #
-# ⚠️ 命令实现（`config` / `run` / `list-session` / `list-agent`）与（规划的）TUI 都在本
+# ⚠️ 命令实现（`config` / `run` / `list-session` / `list-agent` / `chat`）都在本
 #    package 的 **lib**（`src/lib.rs` + `src/config.rs` 等）：bin（`src/main.rs`）只转发。
 #    因为 **bin 目标无法被单测引用**，逻辑放 lib 才测得到。
 #
@@ -30,3 +30,20 @@ chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
 # 路径 canonicalize（Windows UNC / 长路径）——`run` 把工作目录规范化后再做路径安全判定
 dunce = "1"
+
+# ── 交互式 TUI（`virlen-cli chat`）──
+# 内联视口（`Viewport::Inline`，正文固化进终端原生滚动区、输入框钉在底部）——形态与实测见
+# `docs/cli-tui-plan.md`。**只进本 package**：GUI 二进制的依赖与体积完全不受影响。
+#
+# ⚠️ 不单独声明 `crossterm`：用 ratatui 的重导出 `ratatui::crossterm`，否则同一个 crate
+#    会出现两个版本（ratatui 0.30 → ratatui-crossterm → crossterm 0.29）。
+#
+# ⚠️ `unstable-rendered-line-info`：提供 `Paragraph::line_count(width)` —— `insert_before`
+#    的高度必须是**换行后的视觉行数**（算小了会丢内容，见 §1 D9）。
+#
+# ⚠️ ratatui 0.30.2 的 `rust-version = 1.88` → 本工作区 MSRV 抬到 1.88（ratatui 只被本
+#    package 依赖，因此这是「本 package 的 MSRV」，不是全仓库的运行期要求）。
+ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"] }
+# 输入框光标按**显示列宽**定位（中文占 2 列）。已在依赖树内（ratatui 自身也依赖它），
+# 因此显式声明不增加任何新 crate，只是把「用到一个已在树内的版本」写清楚。
+unicode-width = "0.2"

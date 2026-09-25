@@ -1,0 +1,348 @@
+//! `chat` 的**纯状态机** —— 按键与引擎事件进，UI 状态与待执行动作出
+//!
+//! 为什么单独一个纯模块：可测路径上不能出现真终端，也不能依赖 `bin`（bin 目标不被单测引用）。
+//! 本模块**没有任何 I/O**：`view` 读它画帧、`mod` 取它的动作去驱动引擎、`term` 才去碰终端。
+//!
+//! 收进来的一条约定：**引擎事件的语义解释只在这里做一次**（比如「同一 tool_call 的两帧开始
+//! 事件要去重」），`view` / `mod` 都不再各自解释一遍。
+
+
+pub(crate) mod event;
+pub(crate) mod key;
+pub(crate) mod line;
+
+// 行模型（`LineKind` / `OutLine` / `expand` / `sanitize`）搬去 `line.rs`，但**路径不变**：
+// `crate::tui::state::{OutLine, expand, LineKind}`（`term` / `view` 在用）仍照旧可用。
+//
+// `impl UiState` 被拆成三段（本文件=构造与访问器 / `event.rs`=引擎事件 / `key.rs`=按键）。
+// 同一个类型的多个 `impl` 块分散在不同文件是合法的 —— 而且它们都是 `state` 的**子模块**，
+// 因此能直接读写 `UiState` 的私有字段（无需把字段放宽到 `pub(crate)`）。
+pub(crate) use self::line::*;
+
+use crate::tui::commands::Slash;
+use serde_json::{json, Value};
+use std::collections::{HashSet, VecDeque};
+
+/// 归一化按键（`input.rs` 把 crossterm 的 `KeyEvent` 映射到这里 → 本模块可在无终端下单测）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Key {
+    Char(char),
+    Enter,
+    Backspace,
+    Delete,
+    Left,
+    Right,
+    Home,
+    End,
+    Up,
+    Down,
+    Esc,
+    CtrlC,
+    CtrlD,
+}
+
+/// 引擎 / 宿主 → UI 的事件（`mod.rs` 的事件出口把引擎事件映射成它）
+#[derive(Debug, Clone)]
+pub(crate) enum UiEvent {
+    /// 正文增量（`stream_event.delta`，唯一被打印的正文来源）
+    TextDelta(String),
+    /// 助手消息全量内容（`assistant_message_updated.patch.content`）——
+    /// 用来**纠正**增量可能出现的偏差（收尾帧一定带它）
+    AssistantContent(String),
+    /// 工具开始
+    ToolStart {
+        id: String,
+        name: String,
+        detail: String,
+    },
+    /// 工具实时输出（`agent:tool-output`）
+    ToolOutput { chunk: String },
+    /// 工具结束
+    ToolDone {
+        ok: bool,
+        chars: usize,
+        preview: String,
+    },
+    /// token 用量累计
+    Usage { total: i64 },
+    /// 需要用户应答的交互（命令授权 / 选择）
+    Interaction {
+        request_id: String,
+        kind: String,
+        data: Value,
+    },
+    /// 提示文本（斜杠命令输出、迭代进度等）
+    Notice(String),
+    /// 错误提示（不一定是致命错误）
+    Error(String),
+    /// 一次回合结束
+    RunFinished {
+        ok: bool,
+        error: Option<String>,
+        elapsed_ms: i64,
+    },
+    /// 切了会话（新建 / 跳转）
+    SessionChanged {
+        session_id: String,
+        title: String,
+        model: String,
+        workspace: String,
+        messages: usize,
+    },
+    /// 退出（主循环要求 UI 线程收摊）
+    Shutdown,
+}
+
+/// UI → 异步侧（引擎 / 库）
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Action {
+    /// 普通提问
+    Submit(String),
+    /// 斜杠命令
+    Slash(Slash),
+    /// 交互应答（`bridge::handle_user_interaction_response` 的原样载荷）
+    Reply { request_id: String, payload: Value },
+    /// 取消当前回合（`AgentEngine::cancel`）
+    Cancel,
+    /// 退出
+    Quit,
+    /// TUI 线程自己坏了（连续绘制失败）→ 主循环切「顺序输出模式」
+    ///
+    /// ⚠️ 它不是「UI 动作」，借这条通道只是省一个 select 分支；语义上属于 TUI 线程的**退出报告**。
+    Degrade(String),
+}
+
+/// 状态行内容（`/status` 与底部状态行共用同一份数据）
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Status {
+    pub session_id: String,
+    pub title: String,
+    pub model: String,
+    pub workspace: String,
+    pub messages: usize,
+    /// 本进程累计 token（引擎只给单轮 `usage`；这里做加法，拿不到就保持 None）
+    pub tokens: Option<i64>,
+}
+
+/// 一次待应答的交互
+#[derive(Debug, Clone)]
+pub(crate) struct Interaction {
+    pub request_id: String,
+    pub kind: String,
+    pub data: Value,
+    /// 用户正在输入的回答
+    pub input: String,
+}
+
+impl Interaction {
+    fn str_field(&self, k: &str) -> String {
+        self.data
+            .get(k)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    }
+
+    /// 命令授权类交互（`title/desc/hint/risk` 全部由 Rust 侧下发，这里只展示）
+    pub(crate) fn is_confirm(&self) -> bool {
+        self.kind == "confirm_command_native"
+    }
+
+    pub(crate) fn question(&self) -> String {
+        if self.is_confirm() {
+            self.str_field("title")
+        } else {
+            self.str_field("question")
+        }
+    }
+
+    pub(crate) fn desc(&self) -> String {
+        self.str_field("desc")
+    }
+
+    pub(crate) fn hint(&self) -> String {
+        self.str_field("hint")
+    }
+
+    pub(crate) fn risk(&self) -> String {
+        self.str_field("risk")
+    }
+
+    pub(crate) fn multi(&self) -> bool {
+        self.data
+            .get("multi")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn options(&self) -> Vec<String> {
+        self.data
+            .get("options")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .map(|v| match v {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// 由当前输入生成桥协议载荷（**每种交互类型都必须给出应答**，否则引擎会一直等回执）
+    ///
+    /// 选择解析复用 `run.rs::resolve_choice` —— 与 `virlen-cli run` 同一份语义
+    /// （序号 / 选项文本 / 大小写 / 多选逗号 / 非选项文本按自定义回复）。
+    pub(crate) fn answer(&self) -> Value {
+        if self.is_confirm() {
+            let raw = self.input.trim().to_ascii_lowercase();
+            // 回车 = 允许（提示里写的是 [y/N]，但回车放行更顺手：危险操作仍由权限表拦）
+            return if raw.is_empty() || raw == "y" || raw == "yes" {
+                json!({ "__kind": "value", "value": "approved" })
+            } else {
+                json!({ "__kind": "cancelled" })
+            };
+        }
+        if self.kind == "user_choice" {
+            return match crate::run::resolve_choice(self.input.trim(), &self.options(), self.multi())
+            {
+                Some(v) => json!({ "__kind": "value", "value": v }),
+                None => json!({ "__kind": "cancelled" }),
+            };
+        }
+        // 未知类型也要答（见 `run.rs` 文件头：不回就等于把引擎挂死）
+        json!({ "__kind": "cancelled" })
+    }
+}
+
+/// UI 状态
+#[derive(Debug)]
+pub(crate) struct UiState {
+    /// 本轮**尚未固化**的输出（回合结束时整块交给 `term` 写进终端原生滚动区）
+    inflight: Vec<OutLine>,
+    /// 当前助手正文块在 `inflight` 里的下标（`AssistantContent` 用它整体替换）
+    assistant_at: Option<usize>,
+    /// 已经打过「工具开始行」的 tool_call id（同一次调用会来两帧，必须去重）
+    started_tools: HashSet<String>,
+    /// 工具实时输出尾部（只留尾部：长命令的输出可以无限长，不能全留在内存里）
+    tool_tail: String,
+
+    input: String,
+    /// 光标在 `input` 里的**字符**下标（不是字节）
+    cursor: usize,
+    history: Vec<String>,
+    /// 正在浏览历史时的下标；`None` = 不在浏览
+    history_pos: Option<usize>,
+    /// 进入历史浏览前的草稿（↓ 回到末尾时恢复）
+    draft: String,
+
+    running: bool,
+    /// 本回合开始时间（状态行显示已用时；回合结束后清空）
+    turn_started_ms: Option<i64>,
+    frame: u64,
+    dirty: bool,
+    /// 有内容等待固化（回合结束 / 提示产生）
+    commit_pending: bool,
+    pub should_quit: bool,
+    /// 当前交互 + 排队等着的（同一时刻可能来多个）
+    interaction: Option<Interaction>,
+    queue: VecDeque<Interaction>,
+    pub status: Status,
+}
+
+/// 工具实时输出在内存里保留的最大字符数（超出丢头部）
+const TOOL_TAIL_MAX: usize = 4000;
+
+impl Default for UiState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl UiState {
+    pub(crate) fn new() -> Self {
+        Self {
+            inflight: Vec::new(),
+            assistant_at: None,
+            started_tools: HashSet::new(),
+            tool_tail: String::new(),
+            input: String::new(),
+            cursor: 0,
+            history: Vec::new(),
+            history_pos: None,
+            draft: String::new(),
+            running: false,
+            turn_started_ms: None,
+            frame: 0,
+            dirty: true,
+            commit_pending: false,
+            should_quit: false,
+            interaction: None,
+            queue: VecDeque::new(),
+            status: Status::default(),
+        }
+    }
+
+    // ==================== 只读视图（给 view / mod 用） ====================
+
+    pub(crate) fn inflight(&self) -> &[OutLine] {
+        &self.inflight
+    }
+    pub(crate) fn input(&self) -> &str {
+        &self.input
+    }
+    pub(crate) fn cursor(&self) -> usize {
+        self.cursor
+    }
+    pub(crate) fn running(&self) -> bool {
+        self.running
+    }
+    /// 本回合已用时（未在跑时为 `None`）
+    pub(crate) fn elapsed_ms(&self) -> Option<i64> {
+        self.turn_started_ms
+            .map(|t| (virlen_core::telemetry::now_ms() - t).max(0))
+    }
+    pub(crate) fn frame(&self) -> u64 {
+        self.frame
+    }
+    pub(crate) fn tool_tail(&self) -> &str {
+        &self.tool_tail
+    }
+    pub(crate) fn interaction(&self) -> Option<&Interaction> {
+        self.interaction.as_ref()
+    }
+    pub(crate) fn clear_dirty(&mut self) {
+        self.dirty = false;
+    }
+    pub(crate) fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// 取走待固化的内容（拿走后 `inflight` 清空）。
+    ///
+    /// 只在「没有回合在跑」时给内容：回合中途固化会把「正在流式输出的正文」撕成两半
+    /// （上半在滚动区、下半还在视口里）。
+    pub(crate) fn take_commit(&mut self) -> Vec<OutLine> {
+        if !self.commit_pending || self.running {
+            return Vec::new();
+        }
+        self.commit_pending = false;
+        self.assistant_at = None;
+        self.tool_tail.clear();
+        std::mem::take(&mut self.inflight)
+    }
+
+    /// spinner / 计时用：只在有回合在跑时推进帧号
+    ///
+    /// ⚠️ 不置 `dirty`：重绘的「时机」由调用方按 `100ms` 节流决定
+    /// （这里置 dirty 会变成「每轮都画」= 无节制重绘）。
+    pub(crate) fn tick(&mut self) {
+        if self.running {
+            self.frame = self.frame.wrapping_add(1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;
