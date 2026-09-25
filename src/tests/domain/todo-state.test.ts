@@ -105,7 +105,7 @@ describe('validateTodos', () => {
 describe('checkTodoLimit', () => {
   it('超过 50 项返回错误文本，恰好 50 项通过', () => {
     expect(checkTodoLimit(50)).toBeNull()
-    expect(checkTodoLimit(51)).toContain('最多 50 项')
+    expect(checkTodoLimit(51)).toContain('max 50')
   })
 })
 
@@ -123,21 +123,21 @@ describe('渲染', () => {
   })
 
   it('renderTodoContent 空清单 = 已清空提示', () => {
-    expect(renderTodoContent([])).toContain('清单已清空')
+    expect(renderTodoContent([])).toContain('task list was cleared')
   })
 
   it('警告会被附在给模型的正文里', () => {
-    const text = renderTodoContent(todos, ['有 2 项处于 in_progress'])
-    expect(text).toContain('⚠️ 有 2 项处于 in_progress')
+    const text = renderTodoContent(todos, ['2 items are in_progress'])
+    expect(text).toContain('⚠️ 2 items are in_progress')
   })
 
   it('renderUserTodoContent 标明「用户改的」并禁止复原被移除项', () => {
     const text = renderUserTodoContent(todos, [
       { type: 'remove', content: '补充单测' },
     ])
-    expect(text).toContain('【用户更新了任务清单】')
-    expect(text).toContain('移除「补充单测」')
-    expect(text).toContain('不要重新加回被用户移除的任务')
+    expect(text).toContain('[User updated the task list]')
+    expect(text).toContain('removed "补充单测"')
+    expect(text).toContain('do not re-add tasks the user removed')
   })
 })
 
@@ -160,7 +160,7 @@ describe('diffTodos', () => {
     expect(types).toContain('remove')
     expect(types).toContain('status')
     expect(types).toContain('edit')
-    expect(changes.find((c) => c.type === 'status')!.to).toBe('已完成')
+    expect(changes.find((c) => c.type === 'status')!.to).toBe('completed')
   })
 
   it('无变化时返回空数组', () => {

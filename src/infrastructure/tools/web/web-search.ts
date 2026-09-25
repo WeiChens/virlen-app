@@ -18,42 +18,8 @@ import { searchProviderRegistry } from '@/domain/search'
 import { formatSearchResults } from './common'
 
 toolRegistry.register(
-  {
-    name: 'web_search',
-    label: t('网络搜索'),
-    description:
-      'Search the internet for up-to-date information. ' +
-      'Use this tool when you need current data, recent news, or information not available in your training data. ' +
-      'The search is powered by a configurable search provider (e.g., Tavily, Bing, SearXNG). ' +
-      'Returns search results with titles, URLs, and snippets. ' +
-      'When include_content=true, also returns the full page content when the provider supports it.',
-    parameters: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description:
-            'The search query. Be specific and use keywords for better results.',
-        },
-        max_results: {
-          type: 'number',
-          description:
-            'Maximum number of search results to return. Default: 10, Max: 50.',
-          default: 10,
-        },
-        time_range: {
-          type: 'string',
-          enum: ['day', 'week', 'month', 'year'],
-          description:
-            'Time range filter for the search results. ' +
-            '"day" = past 24h, "week" = past week, "month" = past month, "year" = past year. ' +
-            'Use this when the user asks for recent or latest information.',
-        },
-      },
-      required: ['query'],
-    },
-  },
-  (async (args: Record<string, any>, ctx: any): Promise<ToolResult> => {
+    'web_search',
+    (async (args: Record<string, any>, ctx: any): Promise<ToolResult> => {
     const query = args.query
     if (!query || typeof query !== 'string' || query.trim() === '') {
       return {
@@ -115,4 +81,5 @@ toolRegistry.register(
       },
     }
   }) as ToolExecutor,
+    t('网络搜索'),
 )

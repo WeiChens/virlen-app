@@ -17,12 +17,8 @@ import { listRegisteredSkills } from '@/skill'
 import { DEFAULT_AGENT_ID } from '@/ui/constants'
 import { appName } from '@/ui/constants'
 import { toolRegistry } from '@/domain/tools'
-import {
-  AI_AGENT_PRINCIPLE_PROMPT,
-  AI_AGENT_TOOL_USE_PROMPT,
-} from '@/domain/agent'
-
-const baseSystemPrompt = `${AI_AGENT_TOOL_USE_PROMPT}\n\n${AI_AGENT_PRINCIPLE_PROMPT}`
+import { composeSystemPrompt } from '@/domain/agent/compose-prompt'
+import type { SkillMetaLike } from '@/domain/agent/compose-prompt'
 
 /**
  * 组装 Agent 系统提示词
@@ -32,65 +28,49 @@ export async function assembleAgentPrompt(
   agent: Agent,
   workingDir?: string,
 ): Promise<string> {
-  const parts: string[] = [baseSystemPrompt]
   // 生效工作目录：会话指定 > Agent 默认（与 session.workspace 的取值口径一致）
   const effectiveWorkspace = workingDir || agent.defaultWorkspace
-  if (settingsState.value.allowEnvPrompt) {
-    const envInfo = await getEnvPrompt(effectiveWorkspace)
-    parts.push(envInfo)
-  }
+
+  const envPrompt = settingsState.value.allowEnvPrompt
+    ? await getEnvPrompt(effectiveWorkspace)
+    : undefined
+
   // 项目规则 / 记忆文件（默认 AGENTS.md）：与工作目录强相关，紧跟环境信息之后。
   // 无工作目录时回退到默认工作目录（与文件工具的 cwd 口径一致），读不到就不注入。
-  const rulesPrompt = await loadProjectRulesPrompt(
+  const projectRules = await loadProjectRulesPrompt(
     effectiveWorkspace || settingsState.value.defaultWorkspace,
     resolveProjectRulesFile(agent),
   )
-  if (rulesPrompt) parts.push(rulesPrompt)
-  if (agent.name || agent.description) {
-    parts.push(
-      `# 角色\n你是 ${agent.name}${agent.description ? '，' + agent.description : ''}`,
-    )
-  }
-  if (agent.identity) {
-    parts.push(`# 身份设定\n${agent.identity}`)
-  }
-  if (agent.personality) {
-    parts.push(`# 性格\n${agent.personality}`)
-  }
 
-  // 注入技能信息
+  // 技能信息：只注入「该 Agent 已启用」的那些（skillMetaPreload 关闭时不注入）
+  let skills: SkillMetaLike[] = []
   if (settingsState.value.skillMetaPreload && agent.skills?.length > 0) {
-    const allSkills = listRegisteredSkills()
-    const agentSkills = allSkills.filter((s) =>
-      agent.skills!.includes(s.meta.name),
-    )
-    if (agentSkills.length > 0) {
-      const skillLines: string[] = ['# 已启用的技能', '']
-      for (const skill of agentSkills) {
-        skillLines.push(`## ${skill.meta.name}`)
-        skillLines.push(skill.meta.description)
-        skillLines.push('')
-      }
-      skillLines.push(
-        '你可以使用以下工具查看和管理技能：',
-        '- `read_skill_source`：查看某个技能的源代码目录结构和 SKILL.md 全文',
-        '',
-      )
-      parts.push(skillLines.join('\n'))
-    }
+    skills = listRegisteredSkills()
+      .filter((s) => agent.skills!.includes(s.meta.name))
+      .map((s) => ({ name: s.meta.name, description: s.meta.description }))
   }
 
-  return parts.join('\n\n')
+  // 顺序与分隔符由 domain 层固定：必须与 Rust 侧 prompts/assemble.rs 逐字节一致
+  // （golden 测试 src/tests/domain/compose-prompt-golden.test.ts 守这条线）
+  return composeSystemPrompt({
+    envPrompt,
+    projectRules,
+    agentName: agent.name,
+    agentDescription: agent.description,
+    identity: agent.identity,
+    personality: agent.personality,
+    skills,
+  })
 }
 
 // ==================== 默认 Agent 初始化 ====================
 
 /**
  * 构建默认 Agent（所有已注册工具）
- * 纯函数，无副作用
+ * 无副作用；定义读取是异步的（定义来自权威源，机制 C）
  */
-function _buildDefaultAgent(): Agent {
-  const allTools = toolRegistry.listDefinitions().map((t) => t.name)
+async function _buildDefaultAgent(): Promise<Agent> {
+  const allTools = (await toolRegistry.listDefinitions()).map((t) => t.name)
   return {
     id: DEFAULT_AGENT_ID,
     name: appName,
@@ -113,19 +93,20 @@ function _buildDefaultAgent(): Agent {
 
 /**
  * 应用启动时调用：确保默认 Agent 存在，并把新增的内置工具补入其白名单
- * 必须在 toolsInit() 之后调用（依赖 toolRegistry.listDefinitions()）
+ * 必须在 toolsInit() + toolRegistry.init() 之后调用
+ * （依赖 toolRegistry.listDefinitions()：定义来自权威源，机制 C）
  *
  * ⚠️ 默认 Agent 的 allowTools 是「首次创建时的快照」，新版本上线的工具不会自动出现。
  * 这里只「补入缺失的工具」（不删除、不覆盖用户已有的选择）：默认 Agent 的定位就是
  * 「全能助手」，与 _buildDefaultAgent() 的语义一致；自定义 Agent 不在此处理。
  */
-export function initDefaultAgent(): void {
+export async function initDefaultAgent(): Promise<void> {
   const data = agentRepo.load()
-  const allToolNames = toolRegistry.listDefinitions().map((t) => t.name)
+  const allToolNames = (await toolRegistry.listDefinitions()).map((t) => t.name)
   const idx = data.agents.findIndex((a) => a.id === DEFAULT_AGENT_ID)
 
   if (idx === -1) {
-    data.agents = [...data.agents, _buildDefaultAgent()]
+    data.agents = [...data.agents, await _buildDefaultAgent()]
     agentRepo.save(data)
     return
   }

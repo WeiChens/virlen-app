@@ -65,13 +65,13 @@ fn canonicalize_partial(path: &str) -> Option<String> {
 /// 路径白名单/黑名单校验 — 与 `securityPort.isPathAllowed` 逻辑一致
 pub fn is_path_allowed(target: &str, mode: &str, security: &NativeToolSecurity) -> Result<(), String> {
     let canonical_target =
-        canonicalize_partial(target).ok_or_else(|| "路径无法解析".to_string())?;
+        canonicalize_partial(target).ok_or_else(|| "Path could not be resolved".to_string())?;
 
     // 1. 黑名单 > 一切
     for b in &security.blacklist {
         if let Some(canon) = canonicalize_existing(b) {
             if canonical_target == canon || canonical_target.starts_with(&format!("{}/", canon)) {
-                return Err(format!("路径已被黑名单拦截: {}", target));
+                return Err(format!("Path is blocked by the blacklist: {}", target));
             }
         }
     }
@@ -100,7 +100,7 @@ pub fn is_path_allowed(target: &str, mode: &str, security: &NativeToolSecurity) 
 
     // 4. 其他路径
     if mode == "w" {
-        return Err("路径不在白名单或工作目录内，且写权限仅允许白名单与工作目录".to_string());
+        return Err("Path is outside the whitelist and the working directory; write access is limited to the whitelist and the working directory".to_string());
     }
     Ok(())
 }
@@ -113,7 +113,7 @@ pub fn resolve_safe_path(
 ) -> Result<String, String> {
     let workspace = &security.workspace;
     if workspace.is_empty() {
-        return Err("resolveSafePath: workspace 是必填参数".to_string());
+        return Err("resolveSafePath: workspace is a required parameter".to_string());
     }
     if input_path.is_empty() {
         return Ok(workspace.clone());

@@ -4,6 +4,11 @@
  * 存储已注册的 Skill 元信息（RegisteredSkill[]）到 localStorage。
  * SKILLs 文件夹路径固定为 Tauri appDataDir/skills。
  * Skill 的实际文件内容通过文件系统读取（只读）。
+ *
+ * ⚠️ 自 Step 2 起，**Rust 原生路径不再读这个注册表**：`agent/native_tools/skill/` 直接扫
+ * `appDataDir/skills` 并解析 SKILL.md（CLI 没有 localStorage）。因此本文件的解析/扫盘逻辑
+ * （`parseSkillMeta` / `scanAndRegisterSkills` / `getSkillFileTree`）与
+ * `native_tools/skill/common.rs` 是**两份镜像**，改一边必须同步另一边（铁律 1）。
  */
 import StorageState from '@/utils/storageState'
 import type {

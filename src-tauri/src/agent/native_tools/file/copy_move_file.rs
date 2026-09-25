@@ -20,13 +20,13 @@ pub(crate) async fn copy_move_file_tool(
 
     if !std::path::Path::new(&source_path).exists() {
         return Ok(NativeToolOutcome::Value {
-            content: format!("错误：源路径不存在 — {}", source_path),
+            content: format!("Error: source path does not exist — {}", source_path),
             ui_data: None,
         });
     }
     if std::path::Path::new(&dest_path).exists() {
         return Ok(NativeToolOutcome::Value {
-            content: format!("错误：目标路径已存在 — {}，请先删除或选择其他路径", dest_path),
+            content: format!("Error: destination path already exists — {}; delete it first or pick another path", dest_path),
             ui_data: None,
         });
     }
@@ -47,17 +47,17 @@ pub(crate) async fn copy_move_file_tool(
                 if cross_device && !is_dir {
                     ensure_parent_dir(&dest_path)?;
                     std::fs::copy(&source_path, &dest_path)
-                        .map_err(|e| format!("错误：移动失败 — {}", e))?;
+                        .map_err(|e| format!("Error: move failed — {}", e))?;
                     std::fs::remove_file(&source_path)
-                        .map_err(|e| format!("错误：移动失败（清理源文件） — {}", e))?;
+                        .map_err(|e| format!("Error: move failed (cleaning up the source file) — {}", e))?;
                 } else {
-                    return Err(format!("错误：移动失败 — {}", e));
+                    return Err(format!("Error: move failed — {}", e));
                 }
             }
         }
-        let type_str = if is_dir { "目录" } else { "文件" };
+        let type_str = if is_dir { "directory" } else { "file" };
         Ok(NativeToolOutcome::Value {
-            content: format!("✅ 已移动{}: {}\n   → {}", type_str, source_path, dest_path),
+            content: format!("✅ Moved {}: {}\n   → {}", type_str, source_path, dest_path),
             ui_data: Some(json!({
                 "mode": "move",
                 "source": source_path,
@@ -68,15 +68,15 @@ pub(crate) async fn copy_move_file_tool(
     } else {
         if is_dir {
             return Ok(NativeToolOutcome::Value {
-                content: "错误：暂不支持复制目录，请使用 move 模式移动目录，或逐个复制目录内的文件".to_string(),
+                content: "Error: copying directories is not supported yet; use the move mode to move a directory, or copy the files inside it one by one".to_string(),
                 ui_data: None,
             });
         }
         ensure_parent_dir(&dest_path)?;
         std::fs::copy(&source_path, &dest_path)
-            .map_err(|e| format!("错误：复制失败 — {}", e))?;
+            .map_err(|e| format!("Error: copy failed — {}", e))?;
         Ok(NativeToolOutcome::Value {
-            content: format!("✅ 已复制文件: {}\n   → {}", source_path, dest_path),
+            content: format!("✅ File copied: {}\n   → {}", source_path, dest_path),
             ui_data: Some(json!({
                 "mode": "copy",
                 "source": source_path,

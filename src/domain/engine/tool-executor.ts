@@ -13,6 +13,7 @@ import type { Run, ToolStep } from './types'
 import { findNextStep, runToSnapshot } from './run-state'
 import {
   ToolContext,
+  ToolError,
   ToolExecutorResponse,
   UserInteractionRequired,
 } from '../tools/types'
@@ -212,7 +213,7 @@ async function executeSingleStep(
   // StormBreaker: 检测工具调用循环
   if (checkToolCallStorm(sessionId, step.toolName, step.input)) {
     step.status = 'failed'
-    step.error = '检测到工具调用循环，已自动拦截'
+    step.error = 'Tool-call loop detected and blocked automatically'
     track('engine.storm_break', {
       trace_id: getSessionTrace(sessionId),
       session_id: hashText(sessionId),
@@ -220,7 +221,7 @@ async function executeSingleStep(
       repeat_count: 3,
       window: 6,
     })
-    return `[StormBreaker] 工具 "${step.toolName}" 在最近几次调用中重复出现，已自动拦截。请重新思考策略，尝试不同的方法或直接给出最终回答。`
+    return `[StormBreaker] Tool "${step.toolName}" was repeated across the last few calls and has been blocked automatically. Rethink your strategy: try a different approach, or give the final answer directly.`
   }
 
   const toolCtx: ToolContext = {
@@ -246,6 +247,9 @@ async function executeSingleStep(
     if (execResult instanceof Error || execResult instanceof CmdError) {
       step.status = 'failed'
       step.error = execResult.message
+      // 失败也带结构化 uiData（D2 失败侧；如退出码 >= 2 的 stdout/stderr/exitCode）——
+      // 否则中文界面下只能直显模型侧英文报告（CmdError 已改为 extends ToolError）
+      if (execResult instanceof ToolError) step.uiData = execResult.uiData
       return execResult.message
     }
 
@@ -266,6 +270,7 @@ async function executeSingleStep(
     const msg = e.message || String(e)
     step.status = 'failed'
     step.error = msg
+    if (e instanceof ToolError) step.uiData = e.uiData
     return `error: ${msg}`
   }
 }
@@ -290,6 +295,7 @@ async function handleUserInteraction(
     if (result instanceof Error || result instanceof CmdError) {
       step.status = 'failed'
       step.error = result.message
+      if (result instanceof ToolError) step.uiData = result.uiData
       return result.message
     }
 

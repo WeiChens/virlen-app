@@ -9,6 +9,7 @@
 use super::bridge::AgentBridgeState;
 use super::cancellation::CancellationToken;
 use super::event_sink::EventSink;
+use super::host::HostEnv;
 use super::iteration::{run_iteration, RunIterationParams};
 use super::llm_loop::{execute_llm_round, ExecuteLlmRoundParams};
 use super::provider::{
@@ -30,6 +31,9 @@ pub struct AgentEngine {
     pub bridge: Arc<AgentBridgeState>,
     pub sink: Arc<dyn EventSink>,
     pub repo: Arc<dyn SessionRepo>,
+    /// 宿主环境（资源 / 数据目录）：原生工具（`vision_analyze`）需要
+    /// 「模型文件在哪」，而那是宿主才知道的信息（详见 `agent/host.rs`）
+    pub host: Arc<dyn HostEnv>,
     provider_factory: Arc<dyn ProviderFactory>,
     run_snapshots: Mutex<HashMap<String, RunSnapshot>>,
     active_cancels: Mutex<HashMap<String, CancellationToken>>,
@@ -47,6 +51,7 @@ impl AgentEngine {
                 bridge,
                 sink,
             }),
+            crate::host::default_host().clone(),
         )
     }
 
@@ -62,20 +67,23 @@ impl AgentEngine {
             sink,
             Arc::new(NoopSessionRepo),
             provider_factory,
+            crate::host::default_host().clone(),
         )
     }
 
-    /// 注入完整依赖（生产：SQLite repo + 默认 Provider 工厂）
+    /// 注入完整依赖（生产：SQLite repo + 默认 Provider 工厂 + GUI 宿主）
     pub fn with_deps(
         bridge: Arc<AgentBridgeState>,
         sink: Arc<dyn EventSink>,
         repo: Arc<dyn SessionRepo>,
         provider_factory: Arc<dyn ProviderFactory>,
+        host: Arc<dyn HostEnv>,
     ) -> Self {
         Self {
             bridge,
             sink,
             repo,
+            host,
             provider_factory,
             run_snapshots: Mutex::new(HashMap::new()),
             active_cancels: Mutex::new(HashMap::new()),
@@ -152,7 +160,7 @@ impl AgentEngine {
         // 1. 获取 provider
         let provider: Box<dyn Provider> = match &options.provider {
             Some(conn) => self.provider_factory.create(conn),
-            None => return Err("Provider 未配置".to_string()),
+            None => return Err("Provider is not configured".to_string()),
         };
         // 用量记账需要知道「钱花在哪个 provider 上」（连接信息已随 options 传入，见 ProviderConnection）
         let (provider_type, provider_config_id) = match &options.provider {
@@ -219,6 +227,7 @@ impl AgentEngine {
                 reasoning_effort: options.reasoning_effort.clone(),
                 max_iterations: options.max_iterations,
                 repo: self.repo.as_ref(),
+                host: self.host.as_ref(),
                 provider_type: &provider_type,
                 provider_config_id: &provider_config_id,
                 persist_snapshot: Some(&persist_closure),
@@ -286,6 +295,7 @@ impl AgentEngine {
                 }
             }),
             self.repo.as_ref(),
+            self.host.as_ref(),
         )
         .await;
 
@@ -354,6 +364,7 @@ impl AgentEngine {
                 effective_max_tokens,
                 reasoning_effort: reasoning_effort.clone(),
                 repo: self.repo.as_ref(),
+                host: self.host.as_ref(),
                 provider_type,
                 provider_config_id,
                 round: round_index,

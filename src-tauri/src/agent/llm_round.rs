@@ -35,7 +35,7 @@ pub async fn do_llm_round(
 ) -> Result<LlmRoundOutput, String> {
     let model = session.model_id.clone();
     let system_prompt = if session.system_prompt.trim().is_empty() {
-        "你是一个有用的 AI 助手。".to_string()
+        "You are a helpful AI assistant.".to_string()
     } else {
         session.system_prompt.clone()
     };

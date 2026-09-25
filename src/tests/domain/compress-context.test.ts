@@ -78,13 +78,13 @@ describe('compressContext', () => {
 
   it('没有可压缩的消息时应抛异常', async () => {
     const session = makeSession()
-    await expect(compressContext(session, [])).rejects.toThrow('没有可压缩的消息')
+    await expect(compressContext(session, [])).rejects.toThrow('No messages available to compress')
   })
 
   it('只有一条消息时应抛异常', async () => {
     const session = makeSession()
     await expect(compressContext(session, [makeMessage()])).rejects.toThrow(
-      '没有可压缩的消息',
+      'No messages available to compress',
     )
   })
 
@@ -92,7 +92,7 @@ describe('compressContext', () => {
     const session = makeSession({ modelId: '', providerConfigId: '' })
     await expect(
       compressContext(session, [makeMessage(), makeMessage()]),
-    ).rejects.toThrow('未配置模型或 Provider')
+    ).rejects.toThrow('The session has no model or provider configured')
   })
 
   it('Provider 未注册时应抛异常', async () => {
@@ -100,7 +100,7 @@ describe('compressContext', () => {
     const session = makeSession()
     await expect(
       compressContext(session, [makeMessage(), makeMessage()]),
-    ).rejects.toThrow('未注册')
+    ).rejects.toThrow('is not registered')
   })
 
   it('API 返回 usage 时应使用真实 Token 用量', async () => {
@@ -231,6 +231,6 @@ describe('compressContext', () => {
     const session = makeSession()
     await expect(
       compressContext(session, [makeMessage()], 'raw'),
-    ).rejects.toThrow('没有可压缩的消息')
+    ).rejects.toThrow('No messages available to compress')
   })
 })

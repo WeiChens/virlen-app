@@ -101,6 +101,9 @@ async fn test_execute_command_pty_sandboxed_end_to_end() {
         sink: &sink,
         bridge: &bridge,
         security: &sec,
+        repo: crate::agent::native_tools::noop_repo(),
+        skills: None,
+        host: crate::host::default_host().as_ref(),
     };
 
     let args = json!({
@@ -126,7 +129,7 @@ async fn test_execute_command_pty_sandboxed_end_to_end() {
             assert_eq!(ui["pty"], serde_json::json!(true));
             assert_eq!(ui["exitCode"], serde_json::json!(0));
             assert!(
-                content.contains("只读（不可写）"),
+                content.contains("read-only (no writes)"),
                 "readonly 模式应真的跑在沙盒里（而不是降级裸跑）: {content}"
             );
         }
@@ -159,6 +162,9 @@ async fn test_execute_command_pty_write_interaction() {
         sink: &sink,
         bridge: &bridge,
         security: &sec,
+        repo: crate::agent::native_tools::noop_repo(),
+        skills: None,
+        host: crate::host::default_host().as_ref(),
     };
 
     // 会话在 spawn 后立刻注册，这里轮询等到它出现再写（避免时序竞态）。
@@ -225,6 +231,9 @@ async fn test_execute_command_pty_disables_pager() {
         sink: &sink,
         bridge: &bridge,
         security: &sec,
+        repo: crate::agent::native_tools::noop_repo(),
+        skills: None,
+        host: crate::host::default_host().as_ref(),
     };
 
     let args = json!({
@@ -266,7 +275,7 @@ fn test_build_command_result_pty_flag() {
         false,
         false,
         30,
-        "终端环境: powershell · 写隔离",
+        "Terminal environment: powershell · write isolation",
         true,
         None,
         false,
@@ -276,13 +285,13 @@ fn test_build_command_result_pty_flag() {
             let ui = ui_data.expect("ui_data");
             assert_eq!(ui["pty"], serde_json::json!(true));
             assert_eq!(ui["stderr"], serde_json::json!(""));
-            // PTY 下 stderr 已合并进 stdout，不应出现「[标准错误]」分段
-            assert!(!content.contains("[标准错误]"));
+            // PTY 下 stderr 已合并进 stdout，不应出现「[stderr]」分段
+            assert!(!content.contains("[stderr]"));
         }
         other => panic!("expected Value, got {other:?}"),
     }
 
-    // 管道路径不带 pty 标记，并保留 [标准错误] 分段（向后兼容旧渲染分支）
+    // 管道路径不带 pty 标记，并保留 [stderr] 分段（向后兼容旧渲染分支）
     let pipes = build_command_result(
         "a\n".into(),
         "w\n".into(),
@@ -298,7 +307,7 @@ fn test_build_command_result_pty_flag() {
     match pipes {
         NativeToolOutcome::Value { content, ui_data } => {
             assert_eq!(ui_data.expect("ui_data")["pty"], serde_json::json!(false));
-            assert!(content.contains("[标准错误]"));
+            assert!(content.contains("[stderr]"));
         }
         other => panic!("expected Value, got {other:?}"),
     }
@@ -326,7 +335,7 @@ fn test_build_command_result_wait_reason() {
             assert_eq!(ui["waitReason"], serde_json::json!("exit"));
             // D5：管道路径也要下发同名 waitReason
             assert_eq!(ui["pty"], serde_json::json!(false));
-            assert!(!content.contains("等待输入"));
+            assert!(!content.contains("waiting for input"));
         }
         other => panic!("expected Value, got {other:?}"),
     }
@@ -374,7 +383,7 @@ fn test_build_command_result_wait_reason() {
                 serde_json::json!("timeout")
             );
             assert!(
-                content.contains("等待输入"),
+                content.contains("waiting for input"),
                 "超时无输出应引导等待输入: {content}"
             );
         }
@@ -396,7 +405,7 @@ fn test_build_command_result_wait_reason() {
     );
     match busy_timeout {
         NativeToolOutcome::Value { content, .. } => {
-            assert!(!content.contains("等待输入"), "有输出时不应引导: {content}");
+            assert!(!content.contains("waiting for input"), "有输出时不应引导: {content}");
         }
         other => panic!("expected Value, got {other:?}"),
     }
@@ -429,6 +438,9 @@ async fn test_pty_hold_freezes_timeout() {
         sink: &sink,
         bridge: &bridge,
         security: &sec,
+        repo: crate::agent::native_tools::noop_repo(),
+        skills: None,
+        host: crate::host::default_host().as_ref(),
     };
 
     // 会话一注册就接管（全程冻结）。timeout=1s 而命令跑 2.5s：
@@ -505,6 +517,9 @@ async fn test_pty_hold_hard_cap() {
         sink: &sink,
         bridge: &bridge,
         security: &sec,
+        repo: crate::agent::native_tools::noop_repo(),
+        skills: None,
+        host: crate::host::default_host().as_ref(),
     };
 
     let holder = tokio::spawn(async move {
@@ -540,7 +555,7 @@ async fn test_pty_hold_hard_cap() {
             let ui = ui_data.expect("ui_data");
             assert_eq!(ui["waitReason"], serde_json::json!("timeout"));
             assert_eq!(ui["holdTimedOut"], serde_json::json!(true));
-            assert!(content.contains("超时"), "content: {content}");
+            assert!(content.contains("timed out"), "content: {content}");
         }
         other => panic!("expected Value, got {other:?}"),
     }
@@ -571,6 +586,9 @@ async fn test_pty_interventions_counted() {
         sink: &sink,
         bridge: &bridge,
         security: &sec,
+        repo: crate::agent::native_tools::noop_repo(),
+        skills: None,
+        host: crate::host::default_host().as_ref(),
     };
 
     const SECRET: &str = "SECRET_TOKEN_123";
@@ -617,4 +635,48 @@ async fn test_pty_interventions_counted() {
     }
 
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// L6（失败侧）：退出码 >= 2 的失败**也要**下发结构化 `uiData`，
+/// 否则中文界面下只能把英文失败报告直接贴给用户。
+#[test]
+fn test_build_command_result_failure_keeps_ui_data() {
+    let failed = build_command_result(
+        "boom\n".into(),
+        String::new(),
+        Some(3),
+        false,
+        false,
+        30,
+        "Terminal environment: powershell",
+        true,
+        None,
+        false,
+    );
+    match failed {
+        NativeToolOutcome::Error { content, ui_data } => {
+            // 模型侧仍是固定英文报告
+            assert!(content.contains("Exit code: 3"), "content: {content}");
+            let ui = ui_data.expect("失败也应带 uiData");
+            assert_eq!(ui["exitCode"], serde_json::json!(3));
+            assert_eq!(ui["pty"], serde_json::json!(true));
+            assert_eq!(ui["waitReason"], serde_json::json!("exit"));
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+
+    // 退出码 1 不算失败（与旧行为一致）→ 仍走 Value
+    let warned = build_command_result(
+        "warn\n".into(),
+        String::new(),
+        Some(1),
+        false,
+        false,
+        30,
+        "",
+        false,
+        None,
+        false,
+    );
+    assert!(matches!(warned, NativeToolOutcome::Value { .. }));
 }

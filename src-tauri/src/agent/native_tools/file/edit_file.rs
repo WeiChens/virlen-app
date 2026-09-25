@@ -54,7 +54,7 @@ pub(crate) async fn edit_file_tool(
         })
         .await
         .map_err(|e| format!("Task join error: {}", e))?
-        .map_err(|msg| format!("错误：编辑失败 — {}", msg))?
+        .map_err(|msg| format!("Error: edit failed — {}", msg))?
     };
 
     // 构建 uiData：edits 数组，每个元素含上下文和行号（单/多编辑统一返回此结构）
@@ -73,7 +73,7 @@ pub(crate) async fn edit_file_tool(
 
     let total_replaced: usize = result.edits.iter().map(|e| e.replaced_count).sum();
     let content = format!(
-        "✅ 已编辑文件: {}\n  - 编辑: {} 处（共替换 {} 次）\n  - 共 {} 行\n  - hash10: {}",
+        "✅ File edited: {}\n  - Edits: {} block(s) ({} replacement(s) total)\n  - {} lines in file\n  - hash10: {}",
         full_path, result.edits.len(), total_replaced, result.line_count, result.hash10
     );
 

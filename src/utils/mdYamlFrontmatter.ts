@@ -195,9 +195,13 @@ export function parseSkillMdMeta(
     }
   }
 
-  // 提取 version：**Version:** X.X.X 或 Version: X.X.X
+  // 提取 version：兼容 `**Version:** X.X.X`（纯 Markdown 格式的文档写法，见 `docs/AGENTS.md` §9.2
+  // 与 `skill/importService.ts` 的错误提示示例）、`**Version**: X.X.X`、`Version: X.X.X`。
+  //
+  // 正则允许 `**` 落在冒号**外侧**（历史上不接受，与本节注释长期不符 —— 已修正）。
+  // Rust 原生镜像 `native_tools/skill/common.rs::RE_VERSION` 必须保持**同一结果**（铁律 1）。
   let version: string | undefined
-  const versionMatch = body.match(/(?:\*\*)?[Vv]ersion(?:\*\*)?:?\s*(\d+\.\d+\.\d+)/)
+  const versionMatch = body.match(/(?:\*\*)?[Vv]ersion(?:\*\*)?:?\s*(?:\*\*)?\s*(\d+\.\d+\.\d+)/)
   if (versionMatch) {
     version = versionMatch[1]
   }

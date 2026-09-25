@@ -24,38 +24,8 @@ async function ensureHtmlDeps(): Promise<{ cheerio: any; turndown: any }> {
 }
 
 toolRegistry.register(
-  {
-    name: 'web_fetch',
-    label: t('网页抓取'),
-    description: 'Fetch a URL. Returns Markdown (if htmlToMd=true).',
-    parameters: {
-      type: 'object',
-      properties: {
-        url: { type: 'string', description: 'URL to fetch' },
-        method: {
-          type: 'string',
-          description: 'HTTP method (GET, POST, etc.)',
-          default: 'GET',
-        },
-        body: {
-          type: 'string',
-          description: 'Request body for POST/PUT requests',
-        },
-        htmlToMd: {
-          type: 'boolean',
-          description: 'Convert HTML to Markdown',
-          default: true,
-        },
-        timeout: {
-          type: 'number',
-          description: 'Timeout in seconds. Default: 10.',
-          default: 10,
-        },
-      },
-      required: ['url'],
-    },
-  },
-  (async (args: Record<string, any>, ctx: ToolContext): Promise<string> => {
+    'web_fetch',
+    (async (args: Record<string, any>, ctx: ToolContext): Promise<string> => {
     const method = args.method || 'GET'
     const reqBody = args.body || null
     const htmlToMd = args.htmlToMd ?? true
@@ -177,4 +147,5 @@ toolRegistry.register(
     cancel()
     return result
   }) as ToolExecutor,
+    t('网页抓取'),
 )

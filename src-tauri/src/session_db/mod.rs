@@ -9,6 +9,7 @@
 //! - `row`：JSON 辅助 + `Row -> 领域对象` 映射 + 写入参数序列化
 //! - `message_query`：消息查询工具（窗口 / 时序）与消息检索的查询辅助
 //! - `usage`：用量账本（token 统计）的 DTO / 写入 / 聚合 / 明细 / 回填
+//! - `settings`：应用设置（配置下沉 D3）—— `app_settings` 表 + `SettingsRepo`
 //! - `sqlite`：`SqliteSessionRepo`（rusqlite 实现：WAL + Mutex 单写连接 + spawn_blocking）
 //! - `maintenance`：库维护（体积统计 / WAL 截断 / VACUUM，设置 → 存储用）
 //! - `commands`：`init_session_db` 与全部 Tauri 命令
@@ -22,16 +23,24 @@ mod message_query;
 mod repo;
 mod row;
 mod schema;
+mod settings;
 mod sqlite;
 mod types;
 mod usage;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 // `#[tauri::command]` 把命令注册在「定义它的模块」路径下（lib.rs 按 `session_db::commands::cmd_*` 引用），
 // 因此这里不重导出命令，只导出 `init_session_db`（普通函数，可安全重导出）。
 pub use commands::init_session_db;
+pub use commands::manage_noop_settings;
 pub use maintenance::DbMaintenance;
 pub use repo::{NoopSessionRepo, SessionRepo};
+pub use settings::{SettingsRepo, SqliteSettingsRepo};
+// 消息查询 DTO：原生工具（`agent::native_tools::chat`）需要它们来描述查询结果
+pub(crate) use types::{MessageTimelinePage, MessageWindow};
+/// 仅供测试构造 DTO（生产路径只读不构造）
+#[cfg(test)]
+pub(crate) use types::{MessageBrief, MessageTimelineItem, ToolCallBrief};
 pub use usage::UsageEntry;

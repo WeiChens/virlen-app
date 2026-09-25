@@ -256,12 +256,12 @@ impl Provider for NativeOpenAiProvider {
         let text = resp
             .text()
             .await
-            .map_err(|e| format!("读取响应失败: {}", e))?;
+            .map_err(|e| format!("Failed to read the response: {}", e))?;
         if !status.is_success() {
             return Err(format!("API Error ({}): {}", status.as_u16(), text));
         }
         let data: Value =
-            serde_json::from_str(&text).map_err(|e| format!("响应解析失败: {}", e))?;
+            serde_json::from_str(&text).map_err(|e| format!("Failed to parse the response: {}", e))?;
         Ok(self.parse_response(&data))
     }
 
@@ -284,7 +284,7 @@ impl Provider for NativeOpenAiProvider {
             let text = resp
                 .text()
                 .await
-                .map_err(|e| format!("读取错误响应失败: {}", e))?;
+                .map_err(|e| format!("Failed to read the error response: {}", e))?;
             return Err(format!("API Error ({}): {}", status.as_u16(), text));
         }
 

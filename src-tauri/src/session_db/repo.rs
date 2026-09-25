@@ -140,6 +140,15 @@ pub trait SessionRepo: Send + Sync {
     /// （见 `delete_session` 与 docs/token-usage-stats.md）。
     async fn purge_orphan_messages(&self) -> Result<usize, String>;
 
+    /// 是否存在**真实的持久化后端**（`NoopSessionRepo` 覆写为 `false`）。
+    ///
+    /// 消息查询工具（`list_messages` / `read_messages`）据此给出与 JS 侧一致的
+    /// 「本地存储不可用」提示 —— JS 路径是 `invoke(...)` 抛错 → `null` → 同一条文案。
+    /// 没有这个探针的话，`NoopSessionRepo` 的空结果会被误报成「该会话还没有消息」。
+    fn is_available(&self) -> bool {
+        true
+    }
+
     // ===== 用量账本（token 统计，见 `docs/token-usage-stats.md`） =====
 
     /// 追加用量流水（幂等：`message_id` 非空时同 id 只记一条）
@@ -160,6 +169,9 @@ pub struct NoopSessionRepo;
 
 #[async_trait]
 impl SessionRepo for NoopSessionRepo {
+    fn is_available(&self) -> bool {
+        false
+    }
     async fn upsert_session(&self, _session: &Session) -> Result<(), String> {
         Ok(())
     }

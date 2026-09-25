@@ -82,6 +82,10 @@ agent:tool-request { requestId, sessionId, toolCallId, toolName, args, skills }
   → JS 用 toolRegistry 执行
   → agent_tool_response { requestId, payload: {__kind, ...} }
 payload.__kind: value | error | interaction
+payload（error）: { __kind: "error", message, uiData? }
+  ⚠️ `error` 也可带 `uiData`：失败与成功同一套「模型侧英文 + UI 侧结构化」语义
+  （否则中文界面下只能把模型侧英文失败报告直接贴给用户）。
+  TS 侧载体：`domain/tools/types.ts::ToolError`（`CmdError extends ToolError`）。
 ```
 
 ### 用户交互（Rust → JS → Rust）
@@ -143,9 +147,17 @@ agent:provider-request { requestId, providerType, providerId, apiKey, baseUrl, r
 | `search_files_by_name` / `search_text_in_files` | 复用 `search.rs`（ripgrep 内核），支持 glob/正则 |
 | `search_knowledge_base` / `list_knowledge_bases` / `list_knowledge_base_documents` | 直接调 `rag::get_service()` |
 | `get_knowledge_base_document` / `delete_knowledge_base_document` / `write_to_knowledge_base` | 知识库读写 |
+| `todo_write` | 任务清单全量替换（无状态；`plan/common.rs` 与 TS `domain/todo/state.ts` 逐字对齐） |
+| `user_choice` | 交互请求（`NativeToolOutcome::Interaction` → 同一条用户交互通道，无执行逻辑） |
+| `list_messages` / `read_messages` | 消息查询（经 `ctx.repo` 直读 SQLite；`repo.is_available() == false` 时回与 JS 一致的「本地存储不可用」） |
+| `list_skills` / `read_skill_source` | 技能列表与源码（扫 `security.skills_dir` + 解析 SKILL.md；不依赖前端 localStorage 注册表 → CLI 可用） |
+| `get_current_time` | 当前时间（`chrono-tz` 内置 IANA 库；uiData 只下发 `{ timestamp, timezone }` —— 模型侧英文格式与 `Intl` `en-US` 逐字对齐） |
+| `vision_analyze` | 端侧视觉分析（功能三层：`crate::vision` 无 `tauri::` 的核心 + `vision_service.rs` 命令壳 + `native_tools/vision/`；模型目录经 `ctx.host` 定位 —— GUI 与 CLI 共用同一段推理实现） |
 
 目录与 JS `src/infrastructure/tools/` 一一对应：`file/`（8）、`search/`（2）、`execute/`（2）、
-`knowledge_base/`（6）；每个分类一个 `common.rs`（分类内公共）+ 一个工具一个 `.rs`。
+`knowledge_base/`（6）、`plan/`（1）、`system/`（2：`user_choice` / `get_current_time`）、
+`chat/`（2）、`skill/`（2）、`vision/`（1）；
+每个分类一个 `common.rs`（分类内公共）+ 一个工具一个 `.rs`。
 `mod.rs` 负责 `is_native_tool` / `execute_native_tool` 分发与 `NativeToolOutcome` / `NativeToolCtx` 定义，
 根 `common.rs` 放跨分类公共（`arg_*` 参数取值 + `resolve_safe_path` / `is_path_allowed`）。
 
@@ -157,6 +169,38 @@ workspace / permissions / skipDirs / blacklist / whitelist / skillsDir。
 Rust 侧 `NativeToolSecurity` 由 `native_tools/common.rs` 的 `resolve_safe_path` / `is_path_allowed`
 执行与前端 `securityService.resolveSafePath` 完全一致的路径校验。
 解析失败 → `security=None` → 工具自动回退 JS 桥。
+
+### 宿主注入（`NativeToolCtx.host`）
+
+需要「资源目录 / 数据目录在哪」的工具（`vision_analyze` 的模型文件）从 `ctx.host: &dyn HostEnv` 取。
+
+- trait 在 `src-tauri/src/agent/host.rs`（引擎核心内，**零 `tauri::`**），只有两个方法：
+  `resource_candidates()`（只读资源的候选根，按优先级）与 `data_dir()`（可写数据根）；
+- 实现只有两份：GUI `host::TauriHost`（`resource_dir()` / `app_data_dir()`）、
+  CLI `host::CliHost`（`$VIRLEN_RESOURCE_DIR` / `$VIRLEN_DATA_DIR` + exe 位置，
+  默认数据根 = `<平台数据根>/JianWeichen.virlen`，**与 GUI 同一个 `virlen.db`**）；
+- 注入链：`AgentEngine.host`（构造期） → `ExecuteLlmRoundParams.host` / `RunIterationParams.host`
+  → `execute_tool_steps` → `execute_single_step` → `NativeToolCtx.host`；
+- 没有注入点的边缘路径（TS 引擎的 `pty_run_command`）回落到 `host::default_host()`；
+- 视觉的三层分工：`crate::vision`（定位 / 懒加载 / 推理，**零 `tauri::`**）+
+  `vision_service.rs`（Tauri 命令壳）+ `native_tools/vision/`（工具层）——
+  共用同一段实现，不会出现两份模型探测逻辑。
+
+### 会话库注入（`NativeToolCtx.repo`）
+
+消息查询工具需要读会话库，因此 `NativeToolCtx` 与 `security` 一样显式注入 `repo: &dyn SessionRepo`：
+
+- Agent 引擎路径：`execute_tool_steps(..., repo)` → `execute_single_step(..., repo)` → ctx（生产为 `SqliteSessionRepo`，SQLite 不可用时为 `NoopSessionRepo`）；
+- TS 引擎路径（`run_command_for_ts_engine`）与单测：`native_tools::noop_repo()`（进程级单例）；
+- `SessionRepo::is_available()` 是「有无真实持久化后端」的探针（`Noop` 覆写为 `false`），
+  消息查询工具据此给出与 JS 路径（`invoke` 报错 → `null`）**逐字一致**的「本地存储不可用」文案。
+
+> 库**在哪**不再由 `tauri::AppHandle` 决定：入口是**零 `tauri::`** 的
+> `session_db::commands::open_session_db(host, spawn)`（= `host.data_dir()/virlen.db`，返回
+> `SessionDb { repo, settings, maintenance }`）。GUI 薄壳 `init_session_db(app)` 只负责把 `TauriHost`
+> 传进去并 `app.manage(...)`；CLI 用 `CliHost` ⇒ 与 GUI 读写**同一份** `virlen.db`（同一份会话 + 同一份配置）。
+> 后台任务（历史迁移 / 孤儿消息回收）用宿主传入的 `spawn` 派发，不假设调用方处于 tokio 运行时
+> （GUI 的 `.setup()` 里没有 tokio reactor 上下文）。详见 `docs/config-sink-plan.md` §5 S4。
 
 ### 原生命令审批协议
 
@@ -172,7 +216,8 @@ execute_command 需审批
 「需审批」由**权限三态**决定（`classify.rs::command_decision` + `resolve_decision`）：
 `permissions[name]`（`allow`/`ask`/`deny`）优先，缺失回退 legacy `approval_mode`；
 `deny` 永远优先；`sandbox:"off"` / `confirm:"terminal"` 强制至少 `ask`。
-`deny` 直接返回 `Err("操作已被权限设置禁止：<权限名>")`，不弹窗；`execute_script` 走独立的 `script.execute`。
+`deny` 直接报错（`Operation denied by the permission settings: <权限 name>`，模型侧固定英文，
+与 TS 执行器逐字对齐），不弹窗；`execute_script` 走独立的 `script.execute`。
 
 ### 取消语义改进
 
@@ -313,21 +358,21 @@ pub trait SessionRepo: Send + Sync {
 
 | 工具 | TS 实现 | 说明 |
 |---|---|---|
-| `get_current_time` | `infrastructure/tools/system/get-current-time.ts` | 简单工具，适合首批原生化 |
-| `user_choice` | `infrastructure/tools/system/user-choice.ts` | 需用户交互（`UserInteractionRequired` 信号）；`NativeToolOutcome` 已保留交互变体 |
+| `get_current_time` | `infrastructure/tools/system/get-current-time.ts` | ✅ **已原生化**（`native_tools/system/get_current_time.rs`，依赖 `chrono-tz`）：模型侧格式与 `Intl` `en-US` 实测输出逐字对齐；非法时区两侧同一文案 + 结构化 `uiData`（`errorKind`） |
+| `user_choice` | `infrastructure/tools/system/user-choice.ts` | ✅ **已原生化**（`native_tools/system/user_choice.rs`）：返回 `NativeToolOutcome::Interaction`，复用同一条用户交互通道 |
 | `web_fetch` | `infrastructure/tools/web/web-fetch.ts` | 需处理重定向/超时/HTML→MD |
 | `web_search` | `infrastructure/tools/web/web-search.ts` + `search-providers/`（tavily/searxng/bocha） | 多搜索提供商适配 |
-| `list_skills` | `infrastructure/tools/skill/list-skills.ts` | 技能扫描 |
-| `read_skill_source` | `infrastructure/tools/skill/read-skill-source.ts` | 读取技能源码目录 |
-| `todo_write` | `infrastructure/tools/plan/todo-write.ts` | 任务清单：无 IO / 无副作用，状态随 `tool_result` 消息的 `content`（给模型）+ `uiData`（给 UI）落库；两侧共用同一份语义（用户可在标题栏浮层里编辑，见 `services/todo-service.ts`） |
-| `vision_analyze`（工具分发） | `infrastructure/tools/vision/vision-analyze.ts` | 分发走 JS 桥；底层 `vision_service` 已是 Rust Tauri 命令 |
-| `list_messages` / `read_messages`（消息查询） | `infrastructure/tools/chat/*.ts` | 分发走 JS 桥（两引擎共用一份实现）；**底层查询已是 Rust 命令** `cmd_get_message_window` / `cmd_get_message_timeline` |
+| `list_skills` | `infrastructure/tools/skill/list-skills.ts` | ✅ **已原生化**（`native_tools/skill/`）：Rust 直接扫 `security.skills_dir` + 解析 SKILL.md（CLI 无 localStorage）；与 `src/skill/*` + `utils/mdYamlFrontmatter.ts` 逐字镜像（铁律 1） |
+| `read_skill_source` | `infrastructure/tools/skill/read-skill-source.ts` | ✅ **已原生化**（`native_tools/skill/`）：目录树 + SKILL.md 全文；路径来自扫盘结果（`skills_dir/<folder>`），不经用户输入拼路径 |
+| `todo_write` | `infrastructure/tools/plan/todo-write.ts` | ✅ **已原生化**（`native_tools/plan/`）：无 IO / 无副作用，状态随 `tool_result` 消息的 `content`（给模型）+ `uiData`（给 UI）落库；`common.rs` 与 TS `domain/todo/state.ts` 逐字镜像（铁律 1） |
+| `vision_analyze` | `infrastructure/tools/vision/vision-analyze.ts` | ✅ **已原生化**（`native_tools/vision/`）：经 `ctx.host` 定位模型目录后调 `crate::vision`（与 GUI 命令壳**同一段推理实现**）；三条分支与 TS 逐字对齐 —— 缺参 `Err` / 路径不存在 `Value("Error: source path does not exist — …")` / 推理失败 `Error("Vision Error: …")`；已由待办 #22-② 解决（`docs/host-abstraction-draft.md`） |
+| `list_messages` / `read_messages`（消息查询） | `infrastructure/tools/chat/*.ts` | ✅ **已原生化**（`native_tools/chat/`）：经 `ctx.repo` 直读 SQLite，不经 JS 桥；文本格式化 / 上限 / 预算与 `tools/chat/common.ts` 逐字镜像（铁律 1） |
 
 ### 4. 系统提示词组装
 
 | 功能 | TS 实现 | Rust 现状 |
 |---|---|---|
-| `assembleAgentPrompt`（tool-call-spec + core-principles + 环境提示 + 角色/性格 + 技能注入） | `services/agent-service.ts` + `domain/agent/prompts/*.md` | 无；Rust 仅使用前端组装好的 `session.systemPrompt`，为空时回退 `"你是一个有用的 AI 助手。"` |
+| `assembleAgentPrompt`（tool-call-spec + core-principles + 环境提示 + 角色/性格 + 技能注入） | `services/agent-service.ts` + `domain/agent/compose-prompt.ts` + `domain/agent/prompts/*.md` | **已有 Rust 版组装**（`agent/prompts/assemble.rs`，静态 md 用 `include_str!` 直接引用 TS 侧同一文件，两侧输出由 golden 测试锁定），但**尚未接入引擎 / CLI**——引擎仍只使用前端组装好的 `session.systemPrompt`，为空时回退 `"你是一个有用的 AI 助手。"` |
 
 ### 5. 前端职责（天然 JS，无需 Rust 化）
 
@@ -370,3 +415,55 @@ UI 渲染 / 设置管理 / i18n、`export-service` Markdown 导出、`download-s
 - `src/infrastructure/sessionRepo/index.ts`：IndexedDB → Rust 命令
 - `src/services/chat-service.ts`：`compressContext` 压缩后落库
 - `src/utils/db.ts`：IndexedDB 封装已删除
+
+---
+
+## 十二、「单一权威源」收敛（机制 C，进行中）
+
+**动机**：CLI / headless 需要在**没有 WebView、没有前端**的环境里组装 `tool_defs` 与系统提示词。
+若两侧各存一份定义，就会出现本项目最忌讳的「静默分叉」。因此约定：**Rust 侧是权威源，前端从它取值。**
+
+### 12.1 工具定义
+
+| 项 | 位置 | 说明 |
+|---|---|---|
+| **权威源** | `src-tauri/src/agent/tool_defs/definitions.json` | 28 个工具 × 三平台变体；平台键 `windows`/`macos`/`linux` 与 `std::env::consts::OS`、TS `platformSnapshot()` **同词表**（无需映射表）|
+| Rust 读取 | `agent::tool_defs`（`include_str!` + `once_cell` 懒解析）| `list_tool_definitions()` / `list_tool_definitions_for(platform)` / `tool_names()` |
+| 前端读取 | Tauri：`cmd_list_tool_definitions`；浏览器 dev / vitest：**直读同一份 JSON** | ✅ 同一份文件 → 不存在「快照漂移」，无需差异检查 |
+| 过渡期护栏 | `src/tests/contracts/tool-defs-contract.test.ts` | ④ 之前：TS 定义与权威源逐字比对（`EXPORT_TOOL_DEFS=1` 写回）；④ 之后：换成「**契约 ↔ 执行器一一对应**」|
+
+平台变体的唯一来源是两个工具的描述（`execute_command` / `execute_script` 的“当前终端是 …”那句话）；
+其余 26 个工具三平台完全相同。
+
+**进度（① → ④ 已完成）**
+
+- ✅ ① 权威源落盘（从 TS 注册中心一次性导出，随后剔除 `label`）+ ② `cmd_list_tool_definitions`（已在 `lib.rs::generate_handler!` 注册，铁律 4）
+- ✅ ③ 前端接入：`infrastructure/tools/definitions-source.ts`（Tauri 走命令；命令失败或非 Tauri 环境降级读**同一份内嵌 JSON**，零漂移）+ `main.ts` 组合根接线；`ToolRegistry` 接口**全异步**（`init()` / `register(name, executor, label?)` / `listDefinitions()`）
+- ✅ ④ 28 个工具文件的定义体已摘除（迁移脚本 `scripts/migrate-tool-defs.mjs`，可复现）；`label` 留在 TS（i18n 走 `t()`，Rust 不翻译）；定义专用常量/平台描述函数一并清理
+- ✅ 守卫换成「契约 ↔ 执行器一一对应」（契约里有定义→必须有执行器，反之亦然）
+- ✅ `AGENTS.md` §5.2 / 铁律 5 / §9.1 / §12 已同步
+
+**改定义的唯一两个入口**
+
+| 要改什么 | 改哪里 |
+|---|---|
+| 工具的 `description` / 参数 schema | `src-tauri/src/agent/tool_defs/definitions.json`（**三个平台变体都要改**）|
+| 执行逻辑 | `src/infrastructure/tools/<分类>/<工具>.ts`（**不写定义**，只 `register(name, executor, label?)`）|
+
+> ⚠️ `toolRegistry.listDefinitions()` 已是**异步**：调用方必须 `await`（引擎、`rust-engine.ts::resolveToolDefs`、`agent-service` 均已改）。
+
+### 12.2 系统提示词
+
+| 项 | 位置 | 说明 |
+|---|---|---|
+| 静态文本 | `src/domain/agent/prompts/*.md` | **单份**；Rust 用 `include_str!` 直接引用同一路径，**不复制副本** |
+| TS 组装 | `src/domain/agent/compose-prompt.ts`（纯函数，无 I/O）| 由 `services/agent-service.ts` 取数后调用 |
+| Rust 组装 | `src-tauri/src/agent/prompts/assemble.rs` | `compose_system_prompt()` / `build_project_rules_prompt()` |
+| 契约文件 | `src/tests/fixtures/system-prompt.golden.txt` | 两侧共读；TS 用 Vite `?raw`、Rust 运行时按相对路径读 |
+| 护栏 | `src/tests/domain/compose-prompt-golden.test.ts` ↔ `prompts::assemble::tests::golden_system_prompt_matches_fixture` | 同一组固定输入下**逐字节相等**；改任一侧都会让另一边失败 |
+
+重组/更新契约：`UPDATE_GOLDEN=1 cargo test --lib golden_system_prompt`（在 `src-tauri` 下）。
+
+⚠️ **行尾**：md 在工作区是 CRLF、Linux CI 是 LF（仓库无 `.gitattributes`），
+因此两侧比对先归一化成 LF。若要追求构建产物的字节确定性，
+应单独一个提交加 `.gitattributes`（`*.md text eol=lf`）——**不要与功能改动混在一起**。

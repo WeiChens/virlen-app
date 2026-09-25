@@ -13,35 +13,8 @@ import {
 import { t } from '@/ui/i18n'
 
 toolRegistry.register(
-  {
-    name: 'user_choice',
-    label: t('用户选择'),
-    description:
-      'Present a choice to the user. The AI provides a question, a list of options, and whether single or multiple selection is allowed. ' +
-      'A dialog will pop up for the user to answer. The result is returned after the user confirms.',
-    parameters: {
-      type: 'object',
-      properties: {
-        question: {
-          type: 'string',
-          description: 'The question to ask the user',
-        },
-        options: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'List of options for the user to choose from',
-        },
-        multi: {
-          type: 'boolean',
-          description:
-            'Whether multiple selection is allowed. If false, single selection.',
-          default: false,
-        },
-      },
-      required: ['question', 'options'],
-    },
-  },
-  (async (args: Record<string, any>, _ctx: ToolContext) => {
+    'user_choice',
+    (async (args: Record<string, any>, _ctx: ToolContext) => {
     // 返回交互信号，engine 层检查返回值处理
     return new UserInteractionRequired('user_choice', {
       question: args.question,
@@ -49,4 +22,5 @@ toolRegistry.register(
       multi: args.multi ?? false,
     })
   }) as ToolExecutor,
+    t('用户选择'),
 )

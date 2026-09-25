@@ -8,6 +8,7 @@ use super::bridge::{
 };
 use super::cancellation::CancellationToken;
 use super::event_sink::EventSink;
+use super::host::HostEnv;
 use super::llm_round::now_ms;
 use super::native_tools;
 use super::native_tools::NativeToolCtx;
@@ -56,6 +57,8 @@ pub async fn execute_tool_steps(
     security: Option<NativeToolSecurity>,
     persist_snapshot: Option<&(dyn Fn(&Run) + Sync + Send)>,
     repo: &dyn SessionRepo,
+    // 宿主环境：原生工具（vision）需要「资源 / 数据目录在哪」
+    host: &dyn HostEnv,
 ) -> (bool, Vec<Message>) {
     let session_id = run.session_id.clone();
     let trace_id = crate::telemetry::get_session_trace(&session_id);
@@ -92,6 +95,8 @@ pub async fn execute_tool_steps(
                 bridge,
                 skills.clone(),
                 security.clone(),
+                repo,
+                host,
             )
             .await;
         }
@@ -166,6 +171,8 @@ fn tool_category(tool_name: &str) -> &'static str {
         "web_search" | "web_fetch" => "web",
         "vision_analyze" => "vision",
         "list_skills" | "read_skill_source" => "skill",
+        "todo_write" => "plan",
+        "list_messages" | "read_messages" => "chat",
         "get_current_time" | "user_choice" => "system",
         _ => "system",
     }
@@ -294,11 +301,15 @@ async fn execute_single_step(
     bridge: &AgentBridgeState,
     skills: Option<Vec<String>>,
     security: Option<NativeToolSecurity>,
+    // 会话持久化后端：原生工具（消息查询）直读 SQLite，不经 JS 桥
+    repo: &dyn SessionRepo,
+    // 宿主环境：原生工具（vision）需要「资源 / 数据目录在哪」
+    host: &dyn HostEnv,
 ) -> String {
     // StormBreaker: 检测工具调用循环
     if check_tool_call_storm(session_id, &step.tool_name, &step.input) {
         step.status = ToolStepStatus::Failed;
-        step.error = Some("检测到工具调用循环，已自动拦截".to_string());
+        step.error = Some("Tool-call loop detected and blocked automatically".to_string());
         crate::telemetry::track(
             "engine.storm_break",
             json!({
@@ -309,12 +320,12 @@ async fn execute_single_step(
                 "window": 6,
             }),
         );
-        return "[StormBreaker] 工具 \"".to_string()
+        return "[StormBreaker] Tool \"".to_string()
             + &step.tool_name
-            + "\" 在最近几次调用中重复出现，已自动拦截。请重新思考策略，尝试不同的方法或直接给出最终回答。";
+            + "\" was repeated across the last few calls and has been blocked automatically. Rethink your strategy: try a different approach, or give the final answer directly.";
     }
 
-    // ===== 原生工具优先（P2：execute-command / 文件 / 搜索 / 知识库） =====
+    // ===== 原生工具优先（P2：命令 / 文件 / 搜索 / 知识库；Step 2：任务清单 / 用户选择） =====
     if let Some(sec) = &security {
         if native_tools::is_native_tool(&step.tool_name) {
             let ctx = NativeToolCtx {
@@ -324,6 +335,9 @@ async fn execute_single_step(
                 sink,
                 bridge,
                 security: sec,
+                repo,
+                skills: skills.as_deref(),
+                host,
             };
             let args = step.input.clone();
             let tool_name = step.tool_name.clone();
@@ -334,7 +348,7 @@ async fn execute_single_step(
                     Ok(native_tools::NativeToolOutcome::Value { .. }) => ("success", None),
                     Ok(native_tools::NativeToolOutcome::Interaction { .. }) => ("success", None),
                     Ok(native_tools::NativeToolOutcome::Shelved) => ("shelved", None),
-                    Ok(native_tools::NativeToolOutcome::Error(msg)) => ("fail", Some(msg.clone())),
+                    Ok(native_tools::NativeToolOutcome::Error { content, .. }) => ("fail", Some(content.clone())),
                     Err(e) => ("fail", Some(e.clone())),
                 };
                 let mut props = json!({
@@ -356,10 +370,13 @@ async fn execute_single_step(
                     step.ui_data = ui_data;
                     content
                 }
-                Ok(native_tools::NativeToolOutcome::Error(msg)) => {
+                Ok(native_tools::NativeToolOutcome::Error { content, ui_data }) => {
                     step.status = ToolStepStatus::Failed;
-                    step.error = Some(msg.clone());
-                    msg
+                    step.error = Some(content.clone());
+                    // 失败同样下发结构化 uiData（D2 的失败侧）：UI 能按界面语言重建，
+                    // 而不是把模型侧英文报告直接贴给用户（遗留项 L6）
+                    step.ui_data = ui_data;
+                    content
                 }
                 Ok(native_tools::NativeToolOutcome::Shelved) => "__SHELVED__".to_string(),
                 Ok(native_tools::NativeToolOutcome::Interaction {
@@ -411,10 +428,11 @@ async fn execute_single_step(
             step.ui_data = ui_data;
             content
         }
-        BridgeToolResult::Error(msg) => {
+        BridgeToolResult::Error { content, ui_data } => {
             step.status = ToolStepStatus::Failed;
-            step.error = Some(msg.clone());
-            msg
+            step.error = Some(content.clone());
+            step.ui_data = ui_data;
+            content
         }
         BridgeToolResult::Interaction {
             interaction_type,
@@ -458,10 +476,11 @@ async fn handle_user_interaction(
                 step.ui_data = ui_data;
                 content
             }
-            BridgeInteractionResult::Error(msg) => {
+            BridgeInteractionResult::Error { content, ui_data } => {
                 step.status = ToolStepStatus::Failed;
-                step.error = Some(msg.clone());
-                msg
+                step.error = Some(content.clone());
+                step.ui_data = ui_data;
+                content
             }
             BridgeInteractionResult::Shelved => "__SHELVED__".to_string(),
             BridgeInteractionResult::Cancelled => {

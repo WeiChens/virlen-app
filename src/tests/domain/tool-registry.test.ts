@@ -1,193 +1,125 @@
 /**
- * ToolRegistry 测试 — 工具注册中心
+ * ToolRegistry 测试（机制 C：定义来自权威源，前端只注册执行器）
  *
- * 覆盖场景：
- * - register 注册工具
- * - get 获取已注册的工具
- * - unregister 注销工具
- * - listDefinitions 列出所有定义
- * - listAll 列出所有注册的工具
- * - has 检查工具是否存在
- * - clear 清空所有工具
- * - 重复注册覆盖旧工具
- * - 注销不存在的工具返回 false
+ * 覆盖：
+ * - 注册 / 注销 / 清空，以及 UI 文案（label）的补齐
+ * - `listDefinitions` = **契约 ∩ 执行器**，顺序以契约为准
+ * - 诊断接口：契约缺执行器 / 执行器缺契约
+ * - 定义缓存：只载入一次；`invalidateDefinitions` 后可重新载入
+ * - 未注入加载器时报**可操作**的错误（而不是静默返回空表）
  */
-import { describe, it, expect, beforeEach } from 'vitest'
-import { ToolRegistryImpl } from '@/domain/tools'
-import type { ToolDefinition, ToolExecutor } from '@/domain/tools/types'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  ToolRegistryImpl,
+  setToolDefinitionsLoader,
+} from '@/domain/tools'
+import type { ResolvedToolDefinition, ToolExecutor } from '@/domain/tools/types'
 
-describe('ToolRegistryImpl', () => {
+const executor: ToolExecutor = async () => 'ok'
+
+/** 假契约：顺序为 alpha → beta → gamma（listDefinitions 必须按这个顺序返回） */
+const contract: ResolvedToolDefinition[] = [
+  {
+    name: 'alpha',
+    description: 'A',
+    parameters: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'beta',
+    description: 'B',
+    parameters: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'gamma',
+    description: 'G',
+    parameters: { type: 'object', properties: {}, required: [] },
+  },
+]
+
+function injectContract(defs: ResolvedToolDefinition[] = contract) {
+  const loader = vi.fn(async () => defs)
+  setToolDefinitionsLoader(loader)
+  return loader
+}
+
+describe('ToolRegistryImpl（机制 C）', () => {
   let registry: ToolRegistryImpl
-
-  const makeDef = (name: string): ToolDefinition => ({
-    name,
-    description: `Tool ${name}`,
-    parameters: {
-      type: 'object',
-      properties: {},
-      required: [],
-    },
-  })
-
-  const makeExecutor = (): ToolExecutor =>
-    vi.fn(async () => 'executed')
 
   beforeEach(() => {
     registry = new ToolRegistryImpl()
+    injectContract()
   })
 
-  it('register 应注册工具', async () => {
-    const def = makeDef('read_file')
-    const exec = makeExecutor()
-    await registry.register(def, exec)
+  it('listDefinitions 只返回「契约 ∩ 已注册执行器」，且顺序以契约为准', async () => {
+    await registry.register('gamma', executor)
+    await registry.register('alpha', executor)
 
-    const tool = await registry.get('read_file')
-    expect(tool).toBeDefined()
-    expect(tool!.definition.name).toBe('read_file')
-    expect(tool!.executor).toBe(exec)
+    const defs = await registry.listDefinitions()
+    expect(defs.map((d) => d.name)).toEqual(['alpha', 'gamma']) // beta 没有执行器 → 不出现
   })
 
-  it('重复注册应覆盖旧工具', async () => {
-    const def1 = makeDef('test_tool')
-    const exec1 = makeExecutor()
-    await registry.register(def1, exec1)
+  it('label 由注册提供（契约里没有 label，UI 文案不进契约）', async () => {
+    await registry.register('alpha', executor, '阿尔法')
+    await registry.register('beta', executor)
 
-    const def2: ToolDefinition = {
-      ...def1,
-      description: 'Updated description',
-    }
-    const exec2 = makeExecutor()
-    await registry.register(def2, exec2)
-
-    const tool = await registry.get('test_tool')
-    expect(tool!.definition.description).toBe('Updated description')
-    expect(tool!.executor).toBe(exec2)
+    const defs = await registry.listDefinitions()
+    expect(defs[0].label).toBe('阿尔法')
+    expect(defs[1].label).toBeUndefined()
   })
 
-  it('get 不存在的工具应返回 undefined', async () => {
-    const tool = await registry.get('nonexistent')
-    expect(tool).toBeUndefined()
+  it('get 需要定义与执行器同时存在', async () => {
+    await registry.register('alpha', executor, '阿尔法')
+
+    const found = await registry.get('alpha')
+    expect(found?.definition.name).toBe('alpha')
+    expect(found?.definition.label).toBe('阿尔法')
+    expect(found?.executor).toBe(executor)
+    // beta 在契约里但没有执行器 → undefined
+    expect(await registry.get('beta')).toBeUndefined()
   })
 
-  it('unregister 应注销工具', async () => {
-    await registry.register(makeDef('temp_tool'), makeExecutor())
-    const removed = await registry.unregister('temp_tool')
-    expect(removed).toBe(true)
-
-    const tool = await registry.get('temp_tool')
-    expect(tool).toBeUndefined()
-  })
-
-  it('unregister 不存在的工具应返回 false', async () => {
-    const removed = await registry.unregister('nonexistent')
-    expect(removed).toBe(false)
-  })
-
-  it('listDefinitions 应返回所有工具定义列表', async () => {
-    await registry.register(makeDef('tool_a'), makeExecutor())
-    await registry.register(makeDef('tool_b'), makeExecutor())
-
-    const defs = registry.listDefinitions()
-    expect(defs).toHaveLength(2)
-    expect(defs.map((d) => d.name).sort()).toEqual(['tool_a', 'tool_b'])
-  })
-
-  it('listDefinitions 应把惰性描述（工具级+参数级）求值为字符串', async () => {
-    let platform = 'windows'
-    const def: ToolDefinition = {
-      name: 'lazy_tool',
-      description: () => `platform=${platform}`,
-      parameters: {
-        type: 'object',
-        properties: {
-          cmd: { type: 'string', description: () => `cmd on ${platform}` },
-        },
-        required: ['cmd'],
-      },
-    }
-    await registry.register(def, makeExecutor())
-
-    const [d] = registry.listDefinitions()
-    expect(typeof d.description).toBe('string')
-    expect(d.description).toBe('platform=windows')
-    expect(d.parameters.properties.cmd.description).toBe('cmd on windows')
-
-    // 权威信息晚于注册就绪 → 下次 listDefinitions 拿到最新值
-    platform = 'macos'
-    const [d2] = registry.listDefinitions()
-    expect(d2.description).toBe('platform=macos')
-    expect(d2.parameters.properties.cmd.description).toBe('cmd on macos')
-  })
-
-  it('get/listAll 返回的也是已求值的纯字符串定义', async () => {
-    const def: ToolDefinition = {
-      name: 'resolve_tool',
-      description: () => 'resolved desc',
-      parameters: {
-        type: 'object',
-        properties: {
-          p: { type: 'string', description: () => 'resolved param' },
-        },
-        required: [],
-      },
-    }
-    await registry.register(def, makeExecutor())
-
-    const got = await registry.get('resolve_tool')
-    expect(got!.definition.description).toBe('resolved desc')
-    expect(got!.definition.parameters.properties.p.description).toBe(
-      'resolved param',
-    )
+  it('listAll 返回契约顺序的 定义+执行器 组合', async () => {
+    await registry.register('beta', executor)
+    await registry.register('gamma', executor)
 
     const all = await registry.listAll()
-    const d = all.find((t) => t.definition.name === 'resolve_tool')!
-    expect(d.definition.description).toBe('resolved desc')
+    expect(all.map((t) => t.definition.name)).toEqual(['beta', 'gamma'])
   })
 
-  it('listDefinitions 不改动注册时保存的原始定义（惰性函数仍保留）', async () => {
-    const fn = () => 'lazy'
-    const def: ToolDefinition = {
-      name: 'keep_raw',
-      description: fn,
-      parameters: {
-        type: 'object',
-        properties: {},
-        required: [],
-      },
-    }
-    await registry.register(def, makeExecutor())
+  it('诊断：契约缺执行器 / 执行器缺契约', async () => {
+    await registry.register('alpha', executor)
+    await registry.register('ghost', executor)
 
-    registry.listDefinitions()
-    expect(def.description).toBe(fn)
+    expect(await registry.missingExecutorNames()).toEqual(['beta', 'gamma'])
+    expect(await registry.missingDefinitionNames()).toEqual(['ghost'])
   })
 
-  it('空注册表 listDefinitions 应返回空数组', () => {
-    const defs = registry.listDefinitions()
-    expect(defs).toHaveLength(0)
-  })
+  it('unregister / has / clear', async () => {
+    await registry.register('alpha', executor)
+    expect(await registry.has('alpha')).toBe(true)
 
-  it('listAll 应返回所有注册的工具', async () => {
-    await registry.register(makeDef('tool_a'), makeExecutor())
-    await registry.register(makeDef('tool_b'), makeExecutor())
+    expect(await registry.unregister('alpha')).toBe(true)
+    expect(await registry.has('alpha')).toBe(false)
+    expect(await registry.listDefinitions()).toHaveLength(0)
 
-    const all = await registry.listAll()
-    expect(all).toHaveLength(2)
-    expect(all.every((t) => 'definition' in t && 'executor' in t)).toBe(true)
-  })
-
-  it('has 应正确检测工具是否存在', async () => {
-    expect(await registry.has('exists')).toBe(false)
-
-    await registry.register(makeDef('exists'), makeExecutor())
-    expect(await registry.has('exists')).toBe(true)
-  })
-
-  it('clear 应清空所有工具', async () => {
-    await registry.register(makeDef('tool_a'), makeExecutor())
-    await registry.register(makeDef('tool_b'), makeExecutor())
-    expect(registry.listDefinitions()).toHaveLength(2)
-
+    await registry.register('beta', executor)
     await registry.clear()
-    expect(registry.listDefinitions()).toHaveLength(0)
+    expect(await registry.listDefinitions()).toHaveLength(0)
+  })
+
+  it('定义只载入一次（缓存），invalidateDefinitions 后可重新载入', async () => {
+    const loader = injectContract()
+    await registry.listDefinitions()
+    await registry.listDefinitions()
+    expect(loader).toHaveBeenCalledTimes(1)
+
+    registry.invalidateDefinitions()
+    await registry.listDefinitions()
+    expect(loader).toHaveBeenCalledTimes(2)
+  })
+
+  it('未注入加载器时给出可操作的报错', async () => {
+    setToolDefinitionsLoader(null)
+    await expect(registry.listDefinitions()).rejects.toThrow(/加载器未注入/)
   })
 })

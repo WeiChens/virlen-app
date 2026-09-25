@@ -7,6 +7,7 @@ use crate::agent::types::{Message, Session, SessionParams};
 use crate::session_db::sqlite::SqliteSessionRepo;
 use serde_json::json;
 
+mod bootstrap;
 mod message_query;
 mod migration;
 mod search;
@@ -69,6 +70,6 @@ pub(crate) fn open_tmp_with_path() -> (SqliteSessionRepo, std::path::PathBuf) {
     (repo, db)
 }
 
-fn open_tmp() -> SqliteSessionRepo {
+pub(crate) fn open_tmp() -> SqliteSessionRepo {
     open_tmp_with_path().0
 }

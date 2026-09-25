@@ -14,19 +14,25 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import AgentEditModal from '@/ui/pages/Settings/agent-edit-modal'
 import { useMessageBox } from '@/ui/components/shared/MessageBox'
-import { toolRegistry } from '@/domain/tools'
-import type { ToolDefinition, ToolExecutor } from '@/domain/tools/types'
+import { setToolDefinitionsLoader, toolRegistry } from '@/domain/tools'
+import type { ResolvedToolDefinition, ToolExecutor } from '@/domain/tools/types'
 import type { Agent } from '@/types'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
-/** 测试用假工具（注册进真实注册中心，让「工具选择」Tab 有东西可过滤） */
-const fakeTool = (name: string, description: string): ToolDefinition => ({
+/**
+ * 测试用假契约（机制 C：定义来自权威源，注册中心只存执行器 + label）
+ * 注册进真实注册中心，让「工具选择」Tab 有东西可过滤
+ */
+const fakeDef = (name: string, description: string): ResolvedToolDefinition => ({
   name,
-  label: name,
   description,
   parameters: { type: 'object', properties: {}, required: [] },
 })
+const TEST_DEFS: ResolvedToolDefinition[] = [
+  fakeDef('alpha_tool', 'Fetches alpha data from the network'),
+  fakeDef('beta_tool', 'Writes beta content to disk'),
+]
 const noopExecutor = (async () => '') as ToolExecutor
 
 const AGENT: Agent = {
@@ -70,18 +76,14 @@ describe('AgentEditModal', () => {
   let container: HTMLDivElement
   let root: ReturnType<typeof createRoot>
 
-  beforeEach(() => {
+  beforeEach(async () => {
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
-    toolRegistry.register(
-      fakeTool('alpha_tool', 'Fetches alpha data from the network'),
-      noopExecutor,
-    )
-    toolRegistry.register(
-      fakeTool('beta_tool', 'Writes beta content to disk'),
-      noopExecutor,
-    )
+    // 定义走权威源（注入假契约），label 走注册（i18n 文案）
+    setToolDefinitionsLoader(async () => TEST_DEFS)
+    await toolRegistry.register('alpha_tool', noopExecutor, 'alpha_tool')
+    await toolRegistry.register('beta_tool', noopExecutor, 'beta_tool')
   })
 
   afterEach(() => {

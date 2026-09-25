@@ -96,7 +96,7 @@ export async function generateTitle(
   // 找到第一条用户消息，作为标题上下文基准
   const firstUserIdx = messages.findIndex((m) => m.role === 'user')
   if (firstUserIdx === -1) {
-    throw new Error('没有用户消息')
+    throw new Error('No user messages found')
   }
   const firstUser = messages[firstUserIdx]
   // 附带其后的首条 assistant 回复，帮助 AI 理解对话主题
@@ -107,12 +107,12 @@ export async function generateTitle(
   const providerId = session.providerConfigId
   const model = session.modelId
   if (!model || !providerId) {
-    throw new Error('会话未配置模型或 Provider')
+    throw new Error('The session has no model or provider configured')
   }
 
   const provider = await providerPort.get(providerId)
   if (!provider) {
-    throw new Error(`Provider "${providerId}" 未注册`)
+    throw new Error(`Provider "${providerId}" is not registered`)
   }
 
   // ⚠️ 必须清洗：首条 assistant 常常是「纯工具调用轮次」，直接透传会被 API 判为非法报文
@@ -168,7 +168,7 @@ export async function generateTitle(
 
   const title = sanitizeTitle(raw)
   if (!title) {
-    throw new Error('AI 未生成有效标题')
+    throw new Error('The AI did not generate a valid title')
   }
   return title
 }

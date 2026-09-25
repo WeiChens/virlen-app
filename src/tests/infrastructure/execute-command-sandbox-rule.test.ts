@@ -120,8 +120,9 @@ describe('execute_command · 命中「忽略沙盒命令」规则（TS 引擎路
     perms.set(PERM_INSTALL, 'allow')
     perms.set(PERM_ESCAPE, 'deny')
 
+    // P4b：拒绝文案固定为英文，且只报**权限 name**（稳定 key，与设置页一一对应）
     await expect(runExecutor({ command: 'pnpm install' })).rejects.toThrow(
-      /禁止/,
+      `Operation denied by the permission settings: ${PERM_ESCAPE}`,
     )
     // 一条命令都没跑
     expect(vi.mocked(runCommand)).not.toHaveBeenCalled()

@@ -11,35 +11,8 @@ import { t } from '@/ui/i18n'
 import { ragService } from '@/services/rag-service'
 
 toolRegistry.register(
-  {
-    name: 'get_knowledge_base_document',
-    label: t('获取文档内容'),
-    description:
-      'Get the full content of a specific document in a knowledge base. ' +
-      'Returns all text content of the document, which can be used for deep analysis, ' +
-      'summarization, or extracting specific information. ' +
-      'Use list_knowledge_base_documents first to find the document ID, ' +
-      'then use this tool to retrieve the full content.',
-    parameters: {
-      type: 'object',
-      properties: {
-        knowledge_base_id: {
-          type: 'string',
-          description:
-            'The ID of the knowledge base containing the document. ' +
-            'Use list_knowledge_bases tool to see available knowledge bases.',
-        },
-        document_id: {
-          type: 'string',
-          description:
-            'The ID of the document to retrieve. ' +
-            'Use list_knowledge_base_documents to find document IDs.',
-        },
-      },
-      required: ['knowledge_base_id', 'document_id'],
-    },
-  },
-  (async (args: Record<string, any>, _ctx: any): Promise<ToolResult> => {
+    'get_knowledge_base_document',
+    (async (args: Record<string, any>, _ctx: any): Promise<ToolResult> => {
     const kbId = args.knowledge_base_id
     if (!kbId || typeof kbId !== 'string') {
       return {
@@ -75,4 +48,5 @@ toolRegistry.register(
       }
     }
   }) as ToolExecutor,
+    t('获取文档内容'),
 )

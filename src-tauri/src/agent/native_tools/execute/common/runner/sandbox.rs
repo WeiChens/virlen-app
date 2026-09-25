@@ -383,12 +383,12 @@ pub(super) async fn run_command_sandboxed(
     };
 
     let env_note = if readonly_mode {
-        format!("终端环境: {shell} · 只读（不可写）")
+        format!("Terminal environment: {shell} · read-only (no writes)")
     } else if ctx.security.workspace.is_empty() {
-        format!("终端环境: {shell} · 写隔离")
+        format!("Terminal environment: {shell} · write isolation")
     } else {
         format!(
-            "终端环境: {shell} · 写隔离（可写根: {}；区外写入会被拒绝）",
+            "Terminal environment: {shell} · write isolation (writable roots: {}; writes outside are rejected)",
             ctx.security.workspace
         )
     };

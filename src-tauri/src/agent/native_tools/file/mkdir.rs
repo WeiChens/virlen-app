@@ -32,7 +32,7 @@ pub(crate) async fn mkdir_tool(
     }
 
     if raw_paths.is_empty() {
-        return Err("错误：请提供 \"path\" 或 \"paths\" 参数".to_string());
+        return Err("Error: provide either the \"path\" or the \"paths\" parameter".to_string());
     }
 
     let mut created: Vec<String> = Vec::new();
@@ -63,10 +63,10 @@ pub(crate) async fn mkdir_tool(
     let mut parts: Vec<String> = Vec::new();
     if !created.is_empty() {
         if created.len() == 1 {
-            parts.push(format!("📁 已创建目录: {}", created[0]));
+            parts.push(format!("📁 Directory created: {}", created[0]));
         } else {
             parts.push(format!(
-                "📁 已创建 {} 个目录:\n{}",
+                "📁 Created {} directories:\n{}",
                 created.len(),
                 created.iter().map(|p| format!("  - {}", p)).collect::<Vec<_>>().join("\n")
             ));
@@ -74,10 +74,10 @@ pub(crate) async fn mkdir_tool(
     }
     if !existed.is_empty() {
         if existed.len() == 1 {
-            parts.push(format!("ℹ️ 目录已存在: {}", existed[0]));
+            parts.push(format!("ℹ️ Directory already exists: {}", existed[0]));
         } else {
             parts.push(format!(
-                "ℹ️ 已存在 {} 个目录:\n{}",
+                "ℹ️ {} directories already exist:\n{}",
                 existed.len(),
                 existed.iter().map(|p| format!("  - {}", p)).collect::<Vec<_>>().join("\n")
             ));
@@ -85,7 +85,7 @@ pub(crate) async fn mkdir_tool(
     }
     if !errors.is_empty() {
         parts.push(format!(
-            "⚠️ 有 {} 个目录创建失败:\n{}",
+            "⚠️ Failed to create {} directories:\n{}",
             errors.len(),
             errors.iter().map(|e| format!("  - {}", e)).collect::<Vec<_>>().join("\n")
         ));

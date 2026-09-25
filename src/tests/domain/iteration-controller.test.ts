@@ -46,8 +46,8 @@ describe('buildFeedbackMessage', () => {
     expect(msg.role).toBe('feedback')
     expect(typeof msg.content).toBe('string')
     const content = msg.content as string
-    expect(content).toContain('【验证反馈】')
-    expect(content).toContain('未通过')
+    expect(content).toContain('[Verification feedback]')
+    expect(content).toContain('Not passed')
     expect(content).toContain('目标未达成：文件未创建')
     expect(content).toContain('[error]')
     expect(content).toContain('未找到目标文件')
@@ -55,7 +55,7 @@ describe('buildFeedbackMessage', () => {
     expect(content).toContain('[warning]')
     expect(content).toContain('文件内容不完整')
     expect(content).toContain('补充缺少的章节')
-    expect(content).toContain('请修正以上问题后重新尝试')
+    expect(content).toContain('Please fix the issues above and try again')
   })
 
   it('通过验证时不应包含问题列表和修复提示', () => {
@@ -68,9 +68,9 @@ describe('buildFeedbackMessage', () => {
     const msg = buildFeedbackMessage(result)
     const content = msg.content as string
 
-    expect(content).toContain('✅ 通过')
-    expect(content).not.toContain('请修正以上问题后重新尝试')
-    expect(content).not.toContain('发现的问题')
+    expect(content).toContain('✅ Passed')
+    expect(content).not.toContain('Please fix the issues above and try again')
+    expect(content).not.toContain('Issues found')
   })
 
   it('应包含 info 级别的问题', () => {

@@ -58,7 +58,7 @@ function buildExecutionTrace(messages: Message[]): string {
       }
       case 'tool': {
         const text = extractTextContent(msg.content)
-        const status = msg.isError ? ' (失败)' : ''
+        const status = msg.isError ? ' (failed)' : ''
         parts.push(`[Tool Result${status}] ${sliceHead(text, 500)}`)
         break
       }
@@ -66,7 +66,7 @@ function buildExecutionTrace(messages: Message[]): string {
     }
   }
 
-  return parts.join('\n') || '(无执行轨迹)'
+  return parts.join('\n') || '(no execution trace)'
 }
 
 /** 从 MessageContent 中提取纯文本 */
@@ -103,12 +103,12 @@ function parseVerificationResult(raw: string): VerificationResult {
   // 兜底：无法解析时返回"需要人工判断"
   return {
     passed: false,
-    summary: '无法解析验证结果，请人工判断',
+    summary: 'Could not parse the verification result; judge manually',
     issues: [
       {
         severity: 'warning',
-        description: '验证器返回了无法解析的响应',
-        suggestion: '请人工检查执行结果是否符合预期',
+        description: 'The verifier returned an unparsable response',
+        suggestion: 'Check manually whether the results match expectations',
       },
     ],
   }
@@ -178,7 +178,7 @@ export class LLMVerifier {
         {
           model: session.modelId,
           messages: verifyMessages,
-          systemPrompt: '你是一个精确的任务验证器。只输出 JSON。',
+          systemPrompt: 'You are a precise task verifier. Output JSON only.',
           temperature: 0.1, // 低温度以获得更一致的验证结果
           topP: 1.0,
           maxTokens: this.config.maxTokens ?? DEFAULT_VERIFY_MAX_TOKENS,
@@ -217,12 +217,12 @@ export class LLMVerifier {
       // 验证调用失败时返回未通过，让迭代循环继续或结束
       return {
         passed: false,
-        summary: `验证调用失败: ${e.message || String(e)}`,
+        summary: `Verification call failed: ${e.message || String(e)}`,
         issues: [
           {
             severity: 'error',
-            description: `验证 LLM 调用失败: ${e.message || String(e)}`,
-            suggestion: '请检查 provider 配置或网络连接后重试',
+            description: `Verification LLM call failed: ${e.message || String(e)}`,
+            suggestion: 'Check the provider configuration or network connection and try again',
           },
         ],
       }

@@ -75,17 +75,17 @@ export type IterationEventCallback = (event: IterationEvent) => void
 export function buildFeedbackMessage(result: VerificationResult): Message {
   const issueLines = result.issues.map(
     (issue, i) =>
-      `${i + 1}. [${issue.severity}] ${issue.description}\n   建议: ${issue.suggestion}`,
+      `${i + 1}. [${issue.severity}] ${issue.description}\n   Suggestion: ${issue.suggestion}`,
   )
 
   const content = [
-    '【验证反馈】',
+    '[Verification feedback]',
     '',
-    `验证结果: ${result.passed ? '✅ 通过' : '❌ 未通过'}`,
-    `摘要: ${result.summary}`,
+    `Result: ${result.passed ? '✅ Passed' : '❌ Not passed'}`,
+    `Summary: ${result.summary}`,
     '',
     ...(result.issues.length > 0
-      ? ['发现的问题:', ...issueLines, '', '请修正以上问题后重新尝试。']
+      ? ['Issues found:', ...issueLines, '', 'Please fix the issues above and try again.']
       : []),
   ].join('\n')
 

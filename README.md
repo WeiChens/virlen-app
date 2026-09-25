@@ -44,6 +44,17 @@
 | [pnpm](https://pnpm.io/)                       | ≥ 8     |
 | [Rust](https://www.rust-lang.org/)             | ≥ 1.78  |
 | [Tauri CLI](https://v2.tauri.app/start/cli/)   | ≥ 2.0   |
+| [LLVM / libclang](https://releases.llvm.org/)  | ≥ 15    |
+
+> `libclang` is a **build-time-only** requirement: `bindgen` generates the FFI
+> bindings for the embedded QuickJS engine that evaluates `js` sandbox rules.
+> Windows: install LLVM (e.g. `C:\Program Files\LLVM`) and set
+> `LIBCLANG_PATH=<LLVM>\bin`. `clang-sys` only probes `LIBCLANG_PATH` and
+> `llvm-config.exe` — it **never scans `PATH`** — so a non-default install
+> location (or a distribution without `llvm-config.exe`) **must** set it
+> explicitly. Set it as a **persistent user environment variable**, then
+> **reopen your terminal / IDE**: a temporary `$env:LIBCLANG_PATH` in one shell
+> does not reach the shell that `tauri dev` spawns.
 
 ### Install & Run
 
@@ -197,11 +208,11 @@ Since P1–P3, the core engine has been progressively ported to Rust (`src-tauri
 
 - **Chat loop**: LLM round → tool execution → result merge, pause/resume via Run Snapshot, cancellation handling
 - **SQLite session persistence**: sessions & messages are written directly to `virlen.db` by Rust (WAL + single-writer + `spawn_blocking`) — no IndexedDB, no dependency on the JS thread
-- **Native tools**: 18 high-value tools (file ops, command execution, search, knowledge base) execute natively in Rust; the rest fall back to the JS bridge
+- **Native tools**: 26 high-value tools (file ops, command execution, search, knowledge base, task list, user choice, message history, skills, current time, on-device vision) execute natively in Rust; the rest fall back to the JS bridge
 - **DeepSeek V3 tokenizer**: byte-level BPE token counting (`cmd_count_tokens`) powers accurate usage estimation in context compression
 - **Pseudo-vision analysis**: for text-only models, image blocks are replaced with local vision-analysis text natively in Rust
 
-Functions still provided by JS (bridged): **Gemini provider**, `compressContext`, `generateTitle`, and 9 low-frequency tools (`get_current_time`, `user_choice`, `web_fetch`, `web_search`, `list_skills`, `read_skill_source`, `vision_analyze` dispatch, `list_messages`, `read_messages`). See `docs/rust-engine.md` for the full matrix.
+Functions still provided by JS (bridged): **Gemini provider**, `compressContext`, `generateTitle`, and 2 low-frequency tools (`web_fetch`, `web_search`). See `docs/rust-engine.md` for the full matrix.
 
 These three checks — `npx tsc --noEmit`, `pnpm test` (Vitest), and `cargo test` — are enforced by CI on every version tag (`v*`); a failing check blocks the release. See `.github/workflows/`.
 

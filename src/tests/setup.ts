@@ -10,6 +10,8 @@
  *    但编辑器需要显式 import 才能获得类型提示。
  */
 import { vi } from 'vitest'
+import { setToolDefinitionsLoader } from '@/domain/tools'
+import { loadToolDefinitions } from '@/infrastructure/tools/definitions-source'
 
 // Mock @tauri-apps/api/core 的 invoke
 vi.mock('@tauri-apps/api/core', () => ({
@@ -97,3 +99,9 @@ global.fetch = vi.fn(() =>
     }),
   ),
 )
+
+// ==================== 工具定义权威源接线（机制 C） ====================
+// 等价于 `src/main.ts` 这个组合根的接线：注册中心不再自带定义，
+// 定义来自权威源。测试环境不是 Tauri → 真实适配器会走「内嵌契约 JSON」那条分支。
+// 不接这一步，任何用到真实 toolRegistry 的测试都会拿到「加载器未注入」的报错。
+setToolDefinitionsLoader(loadToolDefinitions)

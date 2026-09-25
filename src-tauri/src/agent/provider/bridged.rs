@@ -87,12 +87,12 @@ impl Provider for BridgedProvider {
                     if let Some(m) = result {
                         return Ok(m);
                     }
-                    return Err("Provider 未返回结果".into());
+                    return Err("Provider returned no result".into());
                 }
                 _ => {}
             }
         }
-        Err("Provider 流提前关闭".into())
+        Err("Provider stream closed early".into())
     }
 
     async fn chat_stream(

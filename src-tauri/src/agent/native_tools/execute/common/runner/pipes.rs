@@ -301,15 +301,15 @@ pub(super) async fn run_command_native_pipes(
 
     let env_note = {
         let mode = if bypass_sandbox {
-            "无沙盒（用户已批准绕过沙盒，完整权限）"
+            "no sandbox (bypass approved by the user, full permissions)"
         } else if sandbox_mode(ctx) == SandboxMode::Off {
-            "无沙盒（已关闭，完整权限）"
+            "no sandbox (disabled, full permissions)"
         } else if sandbox_degraded {
-            "无沙盒（沙盒不可用，已降级，完整权限）"
+            "no sandbox (unavailable, downgraded, full permissions)"
         } else {
-            "无沙盒（完整权限）"
+            "no sandbox (full permissions)"
         };
-        format!("终端环境: {shell} · {mode}")
+        format!("Terminal environment: {shell} · {mode}")
     };
 
     Ok(build_command_result(

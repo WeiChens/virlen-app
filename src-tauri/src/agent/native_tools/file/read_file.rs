@@ -19,7 +19,7 @@ async fn read_single_file(
     let result = tokio::task::spawn_blocking(move || file_ops::read_file(&full_path_c))
         .await
         .map_err(|e| format!("Task join error: {}", e))?
-        .map_err(|e| format!("错误：读取文件失败 — {}", e))?;
+        .map_err(|e| format!("Error: failed to read file — {}", e))?;
 
     let lines: Vec<&str> = result.content.split('\n').collect();
     let total_lines = lines.len();
@@ -32,16 +32,16 @@ async fn read_single_file(
 
     let mut header = vec![
         format!("📄 {}", full_path),
-        format!("📝 {} 行 / {}", total_lines, format_size(result.byte_size)),
+        format!("📝 {} lines / {}", total_lines, format_size(result.byte_size)),
         format!("🔑 hash10: {}", result.hash10),
-        format!("🔢 显示: 第 {}-{} 行 (共 {} 行)", display_start, display_end, total_lines),
+        format!("🔢 Showing: lines {}-{} (total {} lines)", display_start, display_end, total_lines),
     ];
     if start_idx > 0 {
-        header.push(format!("💡 提示: 使用 start_line={} 读取后续内容", display_end + 1));
+        header.push(format!("💡 Tip: use start_line={} to read more", display_end + 1));
     }
     if display_end < total_lines {
         header.push(format!(
-            "💡 提示: 文件内容未完整显示，剩余 {} 行。使用 start_line={} 读取后续内容",
+            "💡 Tip: content truncated, {} lines remaining. Use start_line={} to read more",
             total_lines - display_end,
             display_end + 1
         ));
@@ -95,7 +95,7 @@ pub(crate) async fn read_file_tool(
         let mut parts: Vec<String> = Vec::new();
         if contents.is_empty() && !errors.is_empty() {
             // 全部失败
-            return Ok(NativeToolOutcome::Error(errors.join("\n")));
+            return Ok(NativeToolOutcome::error(errors.join("\n")));
         }
         // 文件之间用分隔线隔开
         for (i, c) in contents.iter().enumerate() {
@@ -106,7 +106,7 @@ pub(crate) async fn read_file_tool(
         }
         if !errors.is_empty() {
             parts.push(format!(
-                "\n\n⚠️ 有 {} 个文件读取失败:\n{}",
+                "\n\n⚠️ Failed to read {} file(s):\n{}",
                 errors.len(),
                 errors.iter().map(|e| format!("  - {}", e)).collect::<Vec<_>>().join("\n")
             ));

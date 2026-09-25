@@ -21,49 +21,8 @@ interface FileSearchResult {
 }
 
 toolRegistry.register(
-  {
-    name: 'search_files_by_name',
-    label: t('文件名搜索'),
-    description:
-      'Search for files by filename. Supports plain text (case-insensitive substring match), ' +
-      'regex matching (use_regex=true), or glob patterns (glob=true, e.g. "**/*.ts", "*.json", "src/**/*.css"). ' +
-      'Returns a list of matching file paths.',
-    parameters: {
-      type: 'object',
-      properties: {
-        path: {
-          type: 'string',
-          description: 'Root directory to search in (e.g. "./src").',
-          default: '.',
-        },
-        query: {
-          type: 'string',
-          description:
-            'Filename pattern. Plain text (case-insensitive) by default, regex if use_regex=true, ' +
-            'glob pattern if glob=true (e.g. "**/*.ts", "*.json", "src/**/*.css").',
-        },
-        use_regex: {
-          type: 'boolean',
-          description: 'Whether query is a regex pattern. Default: false.',
-          default: false,
-        },
-        glob: {
-          type: 'boolean',
-          description:
-            'Whether query is a glob pattern (e.g. "**/*.ts", "*.json"). ' +
-            'When true, overrides use_regex — converts glob to regex automatically. Default: false.',
-          default: false,
-        },
-        max_results: {
-          type: 'number',
-          description: 'Maximum number of results. Default: 30.',
-          default: 30,
-        },
-      },
-      required: ['query'],
-    },
-  },
-  (async (args: Record<string, any>, ctx: ToolContext): Promise<ToolResult> => {
+    'search_files_by_name',
+    (async (args: Record<string, any>, ctx: ToolContext): Promise<ToolResult> => {
     // 参数校验：query 为必填
     if (!args.query) {
       return {
@@ -136,4 +95,5 @@ toolRegistry.register(
       },
     }
   }) as ToolExecutor,
+    t('文件名搜索'),
 )

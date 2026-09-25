@@ -1,33 +1,42 @@
 /**
  * get_current_time — 获取当前时间（支持 IANA 时区参数）
+ *
+ * 模型侧**固定英文**（与 Rust 原生实现 / CLI 一致，铁律 1）；
+ * UI 侧只下发「时间戳 + 时区」这个语言无关结构，由组件按当前 UI 语言本地化
+ * （`ui/pages/chat/components/tool-call/GetCurrentTimeMessage`）。
+ * 这样同一个工具在「Rust 引擎 / TS 引擎」×「中文 / 英文界面」四种组合下都不会分叉。
+ *
+ * ⚠️ Rust 侧原生实现已就位（`native_tools/system/get_current_time.rs`，`chrono-tz`）；
+ * 本文件是**回退路径**（浏览器 dev / TS 引擎）必须保持同结果：格式、默认时区、
+ * 非法时区文案一律逐字对齐。
  */
 import { toolRegistry } from '@/domain/tools'
-import type { ToolContext, ToolExecutor } from '@/domain/tools/types'
-import { t, getCurrentLanguage } from '@/ui/i18n'
+import {
+  ToolError,
+  type ToolContext,
+  type ToolExecutor,
+  type ToolResult,
+} from '@/domain/tools/types'
+import { t } from '@/ui/i18n'
 
 toolRegistry.register(
-  {
-    name: 'get_current_time',
-    label: t('获取当前时间'),
-    description: 'Get the current date and time.',
-    parameters: {
-      type: 'object',
-      properties: {
-        timezone: {
-          type: 'string',
-          description: 'IANA timezone (e.g. "Asia/Shanghai")',
-          default: 'Asia/Shanghai',
-        },
-      },
-      required: [],
-    },
-  },
-  (async (args: Record<string, any>, _ctx: ToolContext): Promise<string> => {
+    'get_current_time',
+    (async (args: Record<string, any>, _ctx: ToolContext): Promise<ToolResult> => {
+    const timezone = (args.timezone as string) || 'Asia/Shanghai'
     const now = new Date()
-    return now.toLocaleString(
-      getCurrentLanguage() === 'en-US' ? 'en-US' : 'zh-CN',
-      {
-        timeZone: args.timezone || 'Asia/Shanghai',
+    // 时区预校验：非法时 `Intl` 会抛 `RangeError`，而它的措辞随引擎/ICU 版本变化 ——
+    // 这里换成与 Rust 侧（`chrono_tz::Tz::from_str` 失败）**同一文案**，避免两侧分叉（铁律 1）。
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format(now)
+    } catch {
+      throw new ToolError(`Invalid time zone: "${timezone}"`, {
+        timezone,
+        errorKind: 'invalid_timezone',
+      })
+    }
+    return {
+      content: now.toLocaleString('en-US', {
+        timeZone: timezone,
         year: 'numeric',
         month: '2-digit',
         day: '2-digit',
@@ -35,7 +44,9 @@ toolRegistry.register(
         minute: '2-digit',
         second: '2-digit',
         weekday: 'long',
-      },
-    )
+      }),
+      uiData: { timestamp: now.getTime(), timezone },
+    }
   }) as ToolExecutor,
+    t('获取当前时间'),
 )

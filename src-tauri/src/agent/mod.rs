@@ -10,14 +10,17 @@ pub mod bridge;
 pub mod cancellation;
 pub mod engine;
 pub mod event_sink;
+pub mod host;
 pub mod iteration;
 pub mod llm_loop;
 pub mod llm_round;
 pub mod native_tools;
 pub mod process_tree;
+pub mod prompts;
 pub mod provider;
 pub mod run_state;
 pub mod storm_breaker;
+pub mod tool_defs;
 pub mod tool_executor;
 pub mod types;
 pub mod usage;
@@ -40,6 +43,8 @@ pub fn init_agent_engine(app: &tauri::AppHandle) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("[session_db] 初始化失败，回退到 Noop: {}", e);
+            // 配置仓储也要有兜底：否则设置页的 `cmd_settings_*` 会因「状态未注册」失败
+            session_db::manage_noop_settings(app);
             Arc::new(NoopSessionRepo)
         }
     };
@@ -51,6 +56,9 @@ pub fn init_agent_engine(app: &tauri::AppHandle) {
             bridge: bridge.clone(),
             sink: sink.clone(),
         }),
+        // 宿主环境（GUI）：资源目录（视觉模型）+ 数据目录（会话库）。
+        // 引擎核心只认 `HostEnv` trait，因此 headless / CLI 换 `CliHost` 即可。
+        Arc::new(crate::host::TauriHost::new(app.clone())),
     ));
     app.manage(bridge);
     app.manage(engine);
@@ -131,6 +139,14 @@ pub fn pty_set_held(tool_call_id: String, held: bool) -> bool {
 ///
 /// ⚠️ **审批不在这里做**：TS 侧 `execute_command` 已完成风险分类与审批（含 `confirm` / 绕过
 /// 沙盒的强制审批）；本命令只负责「执行一条已获批准的命令」。
+///
+/// 返回 `{ content, uiData, isError }`：
+/// - `isError = false` → 正常结果；
+/// - `isError = true` → **工具级失败**（如退出码 >= 2），`content` 是模型侧英文报告。
+///
+/// ⚠️ 旧实现用 `Err(String)` 回失败，只能传一个字符串 → 结构化 `uiData` 丢失，
+/// TS 引擎路径在中文界面下只能直显英文失败报告（遗留项 L6）。
+/// 真正的「调用级」异常（沙盒只读拒绝等）仍走 `Err`。
 #[tauri::command]
 pub async fn pty_run_command(
     session_id: String,
@@ -153,12 +169,23 @@ pub async fn pty_run_command(
     )
     .await?;
     match outcome {
-        native_tools::NativeToolOutcome::Value { content, ui_data } => {
-            Ok(serde_json::json!({ "content": content, "uiData": ui_data }))
+        native_tools::NativeToolOutcome::Value { content, ui_data } => Ok(serde_json::json!({
+            "content": content,
+            "uiData": ui_data,
+            "isError": false,
+        })),
+        // 退出码 >= 2 等失败：报告文本进 `content`（给模型），结构化字段进 `uiData`（给 UI）
+        native_tools::NativeToolOutcome::Error { content, ui_data } => Ok(serde_json::json!({
+            "content": content,
+            "uiData": ui_data,
+            "isError": true,
+        })),
+        native_tools::NativeToolOutcome::Interaction { .. } => {
+            Err("unexpected outcome: interaction".to_string())
         }
-        // 退出码 >= 2 等失败情况：原生运行器已把报告文本封进 Error
-        native_tools::NativeToolOutcome::Error(msg) => Err(msg),
-        other => Err(format!("unexpected outcome: {other:?}")),
+        native_tools::NativeToolOutcome::Shelved => {
+            Err("unexpected outcome: shelved".to_string())
+        }
     }
 }
 
@@ -198,6 +225,21 @@ pub fn agent_clear_run_snapshot(
 #[tauri::command]
 pub fn agent_dispose(state: tauri::State<'_, Arc<AgentEngine>>) {
     state.dispose();
+}
+
+/// 列出工具定义（**机制 C**：Rust 侧 `agent/tool_defs/definitions.json` 是权威源）
+///
+/// 前端 `toolRegistry` 在 Tauri 环境经此取值；浏览器 dev / vitest 则直读同一份 JSON
+/// （零漂移，不需要「快照 + 差异检查」那套）。
+///
+/// `platform` 省略时用当前平台（`std::env::consts::OS`）；显式传入主要用于取其它平台
+/// 变体（测试、跨平台预览）。
+#[tauri::command]
+pub fn cmd_list_tool_definitions(platform: Option<String>) -> Vec<types::ToolDefinition> {
+    match platform.as_deref() {
+        Some(p) => tool_defs::list_tool_definitions_for(p),
+        None => tool_defs::list_tool_definitions(),
+    }
 }
 
 // ==================== 桥接回执 ====================

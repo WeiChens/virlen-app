@@ -1,91 +1,161 @@
 /**
- * Tool 注册中心 — 管理所有注册的 tools
+ * Tool 注册中心 — 「工具定义权威源」与「执行器」的汇合点
+ *
+ * **机制 C 带来的职责变化**：
+ * - 前端**不再编写定义**：定义来自权威源（Rust 侧 `agent/tool_defs/definitions.json`），
+ *   经 `ToolDefinitionsLoader` 注入 —— Tauri 走 `cmd_list_tool_definitions`，
+ *   浏览器 dev / vitest 直读同一份 JSON（见 `infrastructure/tools/definitions-source.ts`）；
+ * - 注册中心只保存**执行器**（+ UI 文案 `label`，走 i18n）；
+ * - `listDefinitions()` 返回「契约 ∩ 已注册执行器」，**顺序以契约为准** ——
+ *   模型既不会看到没有实现的工具，也不会漏掉契约里新加的工具；
+ * - 所有读取接口都是**异步**的（定义可能在首次读取时才从 Rust / 内嵌 JSON 载入）。
+ *
+ * ⚠️ 惰性描述（`ResolvableString`）机制随定义一起移出前端：平台相关描述现在由契约的
+ * 三平台变体承载（`execute_command` / `execute_script`），不需要运行时求值。
  */
 import { ToolRegistry } from '../ports/ToolRegistry'
 import type {
-  RegisteredTool,
+  RegisteredExecutor,
   ResolvedRegisteredTool,
-  ResolvableString,
   ResolvedToolDefinition,
-  ToolDefinition,
   ToolExecutor,
 } from './types'
+import type { ToolDefinitionsLoader } from './definitions'
+
+// ==================== 定义加载器（组合根注入） ====================
+
+let definitionsLoader: ToolDefinitionsLoader | null = null
 
 /**
- * 求值单个惰性描述：函数在真正序列化时调用，拿到调用时刻的动态信息
- * （如 execute_command 的平台缓存，此时 Rust os_platform 通常已就绪）。
+ * 注入定义加载器。
+ *
+ * 组合根（`src/main.ts`）在启动时接上 infrastructure 的实现；测试可注入假数据。
+ * 换加载器会**清掉定义缓存**，避免测试之间或热更之后沿用旧定义。
  */
-function resolveResolvable(v: ResolvableString): string {
-  return typeof v === 'function' ? v() : v
+export function setToolDefinitionsLoader(
+  loader: ToolDefinitionsLoader | null,
+): void {
+  definitionsLoader = loader
+  toolRegistry.invalidateDefinitions()
 }
 
-/**
- * 拷贝 definition，并把所有惰性描述解析为纯字符串。
- * 返回的新对象不含任何函数，可直接 JSON 序列化或展示给 UI。
- * 惰性函数每次 listDefinitions()/get()/listAll() 时重新求值，
- * 因此权威信息（如 os_platform 缓存）晚于注册就绪时也能拿到最新值。
- */
-function resolveDefinition(def: ToolDefinition): ResolvedToolDefinition {
-  const properties: ResolvedToolDefinition['parameters']['properties'] = {}
-  for (const [key, prop] of Object.entries(def.parameters.properties)) {
-    if (prop.description === undefined || typeof prop.description === 'string') {
-      properties[key] = prop as ResolvedToolDefinition['parameters']['properties'][string]
-    } else {
-      properties[key] = { ...prop, description: prop.description() }
-    }
-  }
-  return {
-    ...def,
-    description: resolveResolvable(def.description),
-    parameters: { ...def.parameters, properties },
-  }
-}
+// ==================== 注册中心 ====================
 
 export class ToolRegistryImpl implements ToolRegistry {
-  private tools: Map<string, RegisteredTool> = new Map()
+  /** 执行器表：定义**不在**这里（定义由契约提供，避免第 2、3 份副本） */
+  private executors: Map<string, RegisteredExecutor> = new Map()
+  /** 权威定义缓存（已按平台选好） */
+  private definitions: ResolvedToolDefinition[] | null = null
+  /** 进行中的载入（并发去重，避免同时发起多次 IPC / 解析） */
+  private loading: Promise<void> | null = null
 
-  /** 注册一个 tool */
-  async register(definition: ToolDefinition, executor: ToolExecutor) {
-    // 保存原始定义（description 可能仍是惰性函数，待序列化时再求值）
-    this.tools.set(definition.name, { definition, executor })
+  /** 载入权威定义（幂等）。启动时预热可让失败早暴露 */
+  async init(): Promise<void> {
+    await this.ensureDefinitions()
+  }
+
+  /** 丢弃定义缓存（下次读取会重新载入） */
+  invalidateDefinitions(): void {
+    this.definitions = null
+    this.loading = null
+  }
+
+  private async ensureDefinitions(): Promise<ResolvedToolDefinition[]> {
+    if (this.definitions) return this.definitions
+    if (!this.loading) {
+      if (!definitionsLoader) {
+        throw new Error(
+          '工具定义加载器未注入：启动时请调用 setToolDefinitionsLoader(loadToolDefinitions)',
+        )
+      }
+      this.loading = definitionsLoader()
+        .then((defs) => {
+          this.definitions = defs
+        })
+        .finally(() => {
+          this.loading = null
+        })
+    }
+    await this.loading
+    return this.definitions ?? []
+  }
+
+  /** 注册执行器（定义来自权威源） */
+  async register(
+    name: string,
+    executor: ToolExecutor,
+    label?: string,
+  ): Promise<void> {
+    this.executors.set(name, { name, label, executor })
   }
 
   /** 注销一个 tool */
-  async unregister(name: string) {
-    return this.tools.delete(name)
+  async unregister(name: string): Promise<boolean> {
+    return this.executors.delete(name)
   }
 
-  /** 获取 tool（返回已解析定义：惰性描述已求值为纯字符串） */
+  /** 检查 tool 是否已注册执行器 */
+  async has(name: string): Promise<boolean> {
+    return this.executors.has(name)
+  }
+
+  /** 清空所有 tools（含定义缓存） */
+  async clear(): Promise<void> {
+    this.executors.clear()
+    this.invalidateDefinitions()
+  }
+
+  /** 契约 ∩ 执行器，顺序以契约为准；`label` 用注册时传入的 i18n 文案补齐 */
+  async listDefinitions(): Promise<ResolvedToolDefinition[]> {
+    const defs = await this.ensureDefinitions()
+    const out: ResolvedToolDefinition[] = []
+    for (const def of defs) {
+      const exec = this.executors.get(def.name)
+      if (exec) out.push(withLabel(def, exec))
+    }
+    return out
+  }
+
+  /** 获取单个 tool（定义与执行器缺一即 undefined） */
   async get(name: string): Promise<ResolvedRegisteredTool | undefined> {
-    const t = this.tools.get(name)
-    if (!t) return undefined
-    return { definition: resolveDefinition(t.definition), executor: t.executor }
+    const exec = this.executors.get(name)
+    if (!exec) return undefined
+    const def = (await this.ensureDefinitions()).find((d) => d.name === name)
+    if (!def) return undefined
+    return { definition: withLabel(def, exec), executor: exec.executor }
   }
 
-  /** 列出所有 tool 定义（用于发送给 LLM；惰性描述在此求值为字符串） */
-  listDefinitions(): ResolvedToolDefinition[] {
-    return Array.from(this.tools.values()).map((t) =>
-      resolveDefinition(t.definition),
-    )
-  }
-
-  /** 列出所有注册的 tool（返回已解析定义） */
+  /** 列出所有可用的已注册工具（契约顺序） */
   async listAll(): Promise<ResolvedRegisteredTool[]> {
-    return Array.from(this.tools.values()).map((t) => ({
-      definition: resolveDefinition(t.definition),
-      executor: t.executor,
-    }))
+    const defs = await this.ensureDefinitions()
+    const out: ResolvedRegisteredTool[] = []
+    for (const def of defs) {
+      const exec = this.executors.get(def.name)
+      if (exec) out.push({ definition: withLabel(def, exec), executor: exec.executor })
+    }
+    return out
   }
 
-  /** 检查 tool 是否存在 */
-  async has(name: string) {
-    return this.tools.has(name)
+  /** 诊断：契约里有定义、但没有执行器（正常为空） */
+  async missingExecutorNames(): Promise<string[]> {
+    const defs = await this.ensureDefinitions()
+    return defs.filter((d) => !this.executors.has(d.name)).map((d) => d.name)
   }
 
-  /** 清空所有 tools */
-  async clear() {
-    this.tools.clear()
+  /** 诊断：注册了执行器、但契约里没有定义（正常为空） */
+  async missingDefinitionNames(): Promise<string[]> {
+    const defs = await this.ensureDefinitions()
+    const names = new Set(defs.map((d) => d.name))
+    return [...this.executors.keys()].filter((n) => !names.has(n))
   }
+}
+
+/** 只补 UI 文案，其余字段原样使用契约（契约里没有 label） */
+function withLabel(
+  def: ResolvedToolDefinition,
+  exec: RegisteredExecutor,
+): ResolvedToolDefinition {
+  return exec.label ? { ...def, label: exec.label } : def
 }
 
 /** 全局 tool 注册中心 */

@@ -14,7 +14,6 @@ export type {
 } from './types'
 export { MAX_TODOS } from './types'
 export {
-  TODO_STATUS_LABEL,
   checkTodoLimit,
   computeStats,
   diffTodos,

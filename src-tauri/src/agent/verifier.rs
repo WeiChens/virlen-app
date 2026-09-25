@@ -43,7 +43,7 @@ fn build_execution_trace(messages: &[Message]) -> String {
             }
             "tool" => {
                 let text = msg.text_content();
-                let status = if msg.is_error.unwrap_or(false) { " (失败)" } else { "" };
+                let status = if msg.is_error.unwrap_or(false) { " (failed)" } else { "" };
                 let cut: String = text.chars().take(500).collect();
                 parts.push(format!("[Tool Result{}] {}", status, cut));
             }
@@ -52,7 +52,7 @@ fn build_execution_trace(messages: &[Message]) -> String {
     }
 
     if parts.is_empty() {
-        "(无执行轨迹)".to_string()
+        "(no execution trace)".to_string()
     } else {
         parts.join("\n")
     }
@@ -78,11 +78,11 @@ fn parse_verification_result(raw: &str) -> VerificationResult {
     // 兜底：无法解析时返回"需要人工判断"
     VerificationResult {
         passed: false,
-        summary: "无法解析验证结果，请人工判断".to_string(),
+        summary: "Could not parse the verification result; judge manually".to_string(),
         issues: vec![VerificationIssue {
             severity: "warning".to_string(),
-            description: "验证器返回了无法解析的响应".to_string(),
-            suggestion: "请人工检查执行结果是否符合预期".to_string(),
+            description: "The verifier returned an unparsable response".to_string(),
+            suggestion: "Check manually whether the results match expectations".to_string(),
         }],
     }
 }
@@ -166,7 +166,7 @@ pub async fn verify(
     let request = ChatRequest {
         model: session.model_id.clone(),
         messages: verify_messages,
-        system_prompt: Some("你是一个精确的任务验证器。只输出 JSON。".to_string()),
+        system_prompt: Some("You are a precise task verifier. Output JSON only.".to_string()),
         temperature: 0.1,
         top_p: 1.0,
         max_tokens: DEFAULT_VERIFY_MAX_TOKENS,
@@ -213,7 +213,7 @@ mod tests {
     fn parse_fallback() {
         let r = parse_verification_result("无法解析的内容");
         assert!(!r.passed);
-        assert!(r.summary.contains("人工判断"));
+        assert!(r.summary.contains("judge manually"));
     }
 
     #[test]

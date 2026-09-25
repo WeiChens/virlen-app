@@ -9,21 +9,8 @@ import { t } from '@/ui/i18n'
 import { ragService } from '@/services/rag-service'
 
 toolRegistry.register(
-  {
-    name: 'list_knowledge_bases',
-    label: t('列出知识库'),
-    description:
-      'List all available knowledge bases. ' +
-      'Returns the name, description, ID, and document count for each knowledge base. ' +
-      'Use this tool to discover which knowledge bases are available before searching or writing. ' +
-      'The ID field is required for search_knowledge_base and write_to_knowledge_base tools.',
-    parameters: {
-      type: 'object',
-      properties: {},
-      required: [],
-    },
-  },
-  (async (_args: Record<string, any>, _ctx: any): Promise<ToolResult> => {
+    'list_knowledge_bases',
+    (async (_args: Record<string, any>, _ctx: any): Promise<ToolResult> => {
     try {
       const kbs = await ragService.listKnowledgeBases()
 
@@ -100,4 +87,5 @@ toolRegistry.register(
       }
     }
   }) as ToolExecutor,
+    t('列出知识库'),
 )

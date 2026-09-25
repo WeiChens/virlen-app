@@ -1,7 +1,28 @@
 import { t } from '@/ui/i18n'
 import { toShortPath } from '@/utils/common'
 import { chatState, sessionStore, settingsState } from '@/ui/store'
+import { formatSize } from '@/infrastructure/tools/file/common'
 import { IToolCallMessage, ToolMessageProps } from './IToolCallMessage'
+
+/**
+ * 把 file_info 的结构化元信息按界面语言渲染。
+ *
+ * P4b：模型侧 `content` 固定英文，UI 侧改为按界面语言渲染结构化 `uiData`。
+ */
+function renderResult(ui: any): string {
+  const lines = [
+    `📋 ${ui.path}`,
+    `  ${t('类型')}: ${ui.isDirectory ? `📁 ${t('目录')}` : `📄 ${t('文件')}`}`,
+    ui.sizeBytes != null ? `  ${t('大小')}: ${formatSize(ui.sizeBytes)}` : '',
+    ui.atimeMs != null
+      ? `  ${t('访问时间')}: ${new Date(ui.atimeMs).toLocaleString()}`
+      : '',
+    ui.mtimeMs != null
+      ? `  ${t('修改时间')}: ${new Date(ui.mtimeMs).toLocaleString()}`
+      : '',
+  ]
+  return lines.filter(Boolean).join('\n')
+}
 
 class FileInfoMessage implements IToolCallMessage {
   getToolName(): string {
@@ -39,8 +60,12 @@ class FileInfoMessage implements IToolCallMessage {
     if (props.message?.isError) {
       return <div className="error">{props.message.content as string}</div>
     }
+    const ui = props.message?.uiData as any
+    // 有结构化元信息 → UI 侧本地化渲染；旧数据无 uiData → 回退模型侧文本
+    if (ui && ui.path) {
+      return <pre>{renderResult(ui)}</pre>
+    }
     if (props.message?.content) {
-      // const content = props.message.content as any
       return <pre>{props.message.content as string}</pre>
     }
     return null

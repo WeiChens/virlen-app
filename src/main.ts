@@ -1,7 +1,12 @@
 import { initEvnService } from './services/env-service'
 import { initI18n } from './ui/i18n'
 import { initDefaultAgent } from '@/services/agent-service'
-import { initDefaultWorkspace, settingsState } from '@/ui/store/settingStore'
+import {
+  initDefaultWorkspace,
+  settingsState,
+  hydrateSettings,
+  flushSettingsPersist,
+} from '@/ui/store/settingStore'
 import { initSkillStore } from '@/skill/skillStore'
 import { sessionStore } from '@/ui/store/sessionStore'
 import { agentStore } from '@/ui/store/agentStore'
@@ -10,6 +15,8 @@ import { render } from './ui/App'
 import { providerService } from './services/provider-service'
 import { searchProviderService } from './services/search-provider-service'
 import { toolsInit } from './infrastructure/tools'
+import { toolRegistry, setToolDefinitionsLoader } from '@/domain/tools'
+import { loadToolDefinitions } from '@/infrastructure/tools/definitions-source'
 import { securityService } from './services/security-service'
 import { checkUpdate, shouldShowUpdate } from './services/update-service'
 import updateEvent from './events/updateEvent'
@@ -123,11 +130,19 @@ async function checkForUpdates() {
  * 应用初始化
  */
 async function init() {
+  // 配置下沉（D3）：先把 Rust 侧 `app_settings` 水合进设置（幂等；非 Tauri 环境自动跳过）——
+  // 必须在最前面：i18n / 工作目录 / 会话加载 / 权限都直接依赖设置值。
+  await step('settings', () => hydrateSettings())
   // 用量统计（token 账本）：把领域侧记账端口绑到 Tauri/SQLite 实现；
   // 未绑定时 recordUsage 是空操作，因此业务代码可以无条件调用。
   bindUsageLedger(tauriUsageLedger)
   await step('toolsInit', () => toolsInit())
-  initDefaultAgent()
+  // 工具定义权威源接线（机制 C）：Tauri 走 Rust 命令 `cmd_list_tool_definitions`，
+  // 浏览器 dev / 测试读内嵌的同一份契约 JSON；随后预热一次，
+  // 让「契约与执行器不匹配」这类问题在启动阶段就暴露（而不是首次发消息才报）。
+  setToolDefinitionsLoader(loadToolDefinitions)
+  await step('toolDefinitions', () => toolRegistry.init())
+  await step('defaultAgent', () => initDefaultAgent())
   agentStore.reload()
   await Promise.all([
     step('sessionLoad', () => sessionStore.loadFromDB()),
@@ -168,6 +183,8 @@ if (typeof window !== 'undefined') {
       exit_reason: 'normal',
     })
     flushTelemetry()
+    // 设置落库是 debounce 的，退出前补一次（否则刚改的开关可能丢）
+    flushSettingsPersist()
   })
 }
 

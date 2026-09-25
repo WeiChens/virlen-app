@@ -28,8 +28,7 @@ mod tests;
 const TIMEOUT_IDLE_HINT_MAX_OUTPUT: usize = 16;
 
 /// 超时且全程无输出时追加到结果末尾的引导文案（面向模型，非 i18n）。
-const TIMEOUT_IDLE_HINT: &str = "（该命令在超时前几乎没有产生输出，通常意味着它在等待输入：密码 / y/n 确认 / REPL。\
-可让用户直接在终端中键击输入，或适当放宽超时时间。）";
+const TIMEOUT_IDLE_HINT: &str = "(the command produced almost no output before timing out, which usually means it was waiting for input: a password / y/n confirmation / REPL. Ask the user to type into the terminal directly, or raise the timeout.)";
 
 /// PTY 路径「禁用分页器」用的通用取值 —— 对 git / gh 都表示「不分页」。
 ///
@@ -111,7 +110,7 @@ pub(crate) async fn run_command_native(
     // 工具层在审批之前已做同样判定（避免「弹窗批准后又被拒」），这里兜底。
     if bypass_sandbox && sandbox_mode(ctx) == SandboxMode::Readonly {
         return Err(
-            "沙盒处于只读模式，不支持绕过沙盒执行；请先在设置中切换沙盒模式（或改用常规终端）"
+            "The sandbox is in read-only mode, so bypassing it is not allowed; switch the sandbox mode in settings first (or use a regular terminal)"
                 .to_string(),
         );
     }
@@ -162,11 +161,11 @@ pub(super) fn build_command_result(
         result.push('\n');
     }
     if killed_by_user {
-        result.push_str("命令已被用户取消\n");
+        result.push_str("Command cancelled by the user\n");
     } else if killed_by_timeout {
-        result.push_str(&format!("命令在 {:.3} 秒后超时并被终止\n", timeout_secs as f64));
+        result.push_str(&format!("Command timed out after {:.3}s and was terminated\n", timeout_secs as f64));
     } else {
-        result.push_str(&format!("退出码: {}\n", exit_code.map(|c| c.to_string()).unwrap_or_else(|| "null".into())));
+        result.push_str(&format!("Exit code: {}\n", exit_code.map(|c| c.to_string()).unwrap_or_else(|| "null".into())));
     }
     if !stdout.is_empty() {
         result.push_str(&process_terminal_output(&stdout));
@@ -175,7 +174,7 @@ pub(super) fn build_command_result(
         result.push_str("\n");
     }
     if !stderr.is_empty() {
-        result.push_str("[标准错误]\n");
+        result.push_str("[stderr]\n");
         result.push_str(&process_terminal_output(&stderr));
     }
     // ④：超时且全程几乎无输出 → 追加面向模型的引导（等待输入是最常见的原因）
@@ -188,47 +187,48 @@ pub(super) fn build_command_result(
 
     const MAX: usize = 32000;
     let out = if result.len() > MAX {
-        format!("{}...（已截断，共 {} 字符）", &result[..MAX], result.len())
+        format!("{}...(truncated, {} characters total)", &result[..MAX], result.len())
     } else {
         result
     };
 
+    // 结构化 uiData 先建好 —— **成功与失败共用同一份**（D2 的失败侧）：
+    // 以前退出码 >= 2 时直接 `Error(out)` 把它丢掉，UI 只能把英文失败报告直接贴给用户（L6）。
+    let mut ui = json!({
+        "stdout": stdout,
+        "stderr": stderr,
+        "exitCode": exit_code,
+        "pty": pty,
+        // Step 2 ④：结束原因（exit | timeout | cancelled）
+        "waitReason": wait_reason,
+    });
+    if let Value::Object(map) = &mut ui {
+        // ② 用户干预摘要（只记计数，不记内容，D4）
+        if let Some(iv) = interventions {
+            map.insert(
+                "userInterventions".into(),
+                json!({
+                    "keys": iv.keys,
+                    "enters": iv.enters,
+                    "ctrlC": iv.ctrl_c,
+                    "heldSeconds": iv.held_seconds,
+                }),
+            );
+        }
+        if hold_timed_out {
+            map.insert("holdTimedOut".into(), Value::Bool(true));
+        }
+    }
+
     if let Some(code) = exit_code {
         if code >= 2 {
-            return NativeToolOutcome::Error(out);
+            return NativeToolOutcome::error_with_ui(out, ui);
         }
     }
 
     NativeToolOutcome::Value {
         content: out,
-        ui_data: Some({
-            let mut ui = json!({
-                "stdout": stdout,
-                "stderr": stderr,
-                "exitCode": exit_code,
-                "pty": pty,
-                // Step 2 ④：结束原因（exit | timeout | cancelled）
-                "waitReason": wait_reason,
-            });
-            if let Value::Object(map) = &mut ui {
-                // ② 用户干预摘要（只记计数，不记内容，D4）
-                if let Some(iv) = interventions {
-                    map.insert(
-                        "userInterventions".into(),
-                        json!({
-                            "keys": iv.keys,
-                            "enters": iv.enters,
-                            "ctrlC": iv.ctrl_c,
-                            "heldSeconds": iv.held_seconds,
-                        }),
-                    );
-                }
-                if hold_timed_out {
-                    map.insert("holdTimedOut".into(), Value::Bool(true));
-                }
-            }
-            ui
-        }),
+        ui_data: Some(ui),
     }
 }
 

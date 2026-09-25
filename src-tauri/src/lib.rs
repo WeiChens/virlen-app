@@ -9,9 +9,11 @@ mod drag_drop;
 mod common_service;
 mod deepseek_tokenizer;
 mod file_ops;
+mod host;
 mod load_env;
 mod rag;
 mod session_db;
+mod vision;
 mod vision_service;
 mod search;
 mod speech_service;
@@ -318,7 +320,7 @@ pub fn run() {
             //     println!("[RAG] 知识库服务初始化成功");
             // }
 
-            vision_service::setup_vision(app)?;
+            // 视觉模型按需懒加载（`vision::analyze*` 内部管引用计数），启动期无需初始化
 
             // 系统托盘：关闭窗口改为隐藏（AI 继续在后台跑），托盘菜单提供真正的退出入口
             #[cfg(desktop)]
@@ -426,6 +428,8 @@ pub fn run() {
             agent::agent_get_run_snapshot,
             agent::agent_clear_run_snapshot,
             agent::agent_dispose,
+            // 工具定义权威源（机制 C：前端 toolRegistry 经此取值）
+            agent::cmd_list_tool_definitions,
             agent::agent_tool_response,
             agent::agent_user_interaction_response,
             agent::agent_round_boundary_response,
@@ -445,6 +449,10 @@ pub fn run() {
             session_db::commands::cmd_replace_session_messages,
             session_db::commands::cmd_append_messages,
             session_db::commands::cmd_truncate_session_messages,
+            // 应用设置（配置下沉 D3）
+            session_db::commands::cmd_settings_get_all,
+            session_db::commands::cmd_settings_upsert,
+            session_db::commands::cmd_settings_import,
             // 用量账本（token 统计）
             session_db::commands::cmd_append_usage,
             session_db::commands::cmd_usage_stats,

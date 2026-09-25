@@ -2,12 +2,14 @@
 //!
 //! 命令只做「参数兜底 + 调用 repo + 埋点」，业务语义都在 `SessionRepo` 实现里。
 
+use crate::agent::host::HostEnv;
 use crate::agent::types::{Message, Session};
 use crate::session_db::maintenance::{
     total_bytes, CheckpointResult, DbMaintenance, DbStats, MaintainResult,
 };
 use crate::session_db::repo::SessionRepo;
 use crate::session_db::sqlite::SqliteSessionRepo;
+use crate::session_db::{SettingsRepo, SqliteSettingsRepo};
 use crate::session_db::types::{
     MessagePage, MessageSearchPage, MessageTimelinePage, MessageWindow, SearchCursor,
     UserMessageRef, MSG_QUERY_MAX_LIMIT,
@@ -15,47 +17,104 @@ use crate::session_db::types::{
 use crate::session_db::usage::{UsageEntry, UsageQuery, UsageRecordPage, UsageStats};
 use std::sync::Arc;
 
+use super::settings::NoopSettingsRepo;
+
 // ==================== 初始化 ====================
 
-/// 初始化 SQLite 会话存储（应用启动时调用），返回可管理的 repo
-pub fn init_session_db(
-    app: &tauri::AppHandle,
-) -> Result<Arc<dyn SessionRepo>, String> {
-    use tauri::Manager;
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let db_path = data_dir.join("virlen.db");
-    let repo = Arc::new(SqliteSessionRepo::open(&db_path)?);
+/// 后台任务派发函数 —— 由宿主提供，见 [`open_session_db`]。
+///
+/// 之所以做成参数而不是写死 `tokio::spawn`：GUI 的 `.setup()` 回调里**没有 tokio
+/// reactor 上下文**（只能用 `tauri::async_runtime::spawn`），而 CLI（`#[tokio::main]`）
+/// 用 `tokio::spawn` —— 本文件不能假设调用方处于哪种运行时。
+type BoxFut = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
+pub type Spawner<'a> = &'a dyn Fn(BoxFut);
+
+/// 一个已打开的会话库：会话 repo + 配置 repo + 维护句柄（**同一个 `virlen.db`**）
+pub struct SessionDb {
+    pub repo: Arc<dyn SessionRepo>,
+    /// 应用设置（配置下沉 D3）——与会话**共用同一把连接锁**
+    pub settings: Arc<dyn SettingsRepo>,
+    /// 库维护句柄（设置 → 存储「立即整理」）
+    pub maintenance: Arc<DbMaintenance>,
+}
+
+/// 打开会话库（**零 `tauri::` 依赖**）——库路径完全由 `host.data_dir()` 决定。
+///
+/// 只要 GUI 与 CLI 的 `HostEnv::data_dir()` 指向同一目录，读写的就是同一份
+/// `virlen.db`（同一份会话 + 同一份配置）—— 这正是配置下沉 D3 的落点：
+/// CLI 侧只需 `open_session_db(&CliHost::from_env(), &|fut| { tokio::spawn(fut); })`
+/// 即接管同一份配置，不必等前端下发。
+///
+/// 后台任务（历史迁移 / 孤儿消息回收）经 `spawn` 派发，不由本函数假设运行时。
+pub fn open_session_db(host: &dyn HostEnv, spawn: Spawner<'_>) -> Result<SessionDb, String> {
+    let db_path = host.data_dir().join("virlen.db");
+    let sqlite = Arc::new(SqliteSessionRepo::open(&db_path)?);
+    let repo: Arc<dyn SessionRepo> = sqlite.clone();
+    // 应用设置（配置下沉 D3）：**复用同一把连接**（不引入第二个写连接 → 不会 SQLITE_BUSY），
+    // 因此设置写入与会话写入天然互斥；GUI 与 CLI 指向同一个 `virlen.db` 即共用同一份配置。
+    let settings: Arc<dyn SettingsRepo> = Arc::new(SqliteSettingsRepo::new(sqlite.conn.clone()));
     // 库维护句柄（设置 → 存储「立即整理」）：与 repo **共用同一把连接锁**，
     // 因此维护动作与聊天写入天然互斥；退出路径也用它做一次廉价的 WAL 截断。
-    app.manage(Arc::new(DbMaintenance::new(db_path.clone(), repo.conn.clone())));
+    let maintenance = Arc::new(DbMaintenance::new(db_path, sqlite.conn.clone()));
+
     // 历史数据迁移（回填 text_plain + 重建 FTS 索引）放后台执行，避免超大库首次启动卡顿。
     // 迁移完成前，检索自动回退到旧的 LIKE content 路径，结果依然正确。
-    if !repo.migration_done() {
-        let r = repo.clone();
-        tauri::async_runtime::spawn(async move {
+    if !sqlite.migration_done() {
+        let r = sqlite.clone();
+        spawn(Box::pin(async move {
             if let Err(e) = r.migrate().await {
                 eprintln!("[session_db] 后台迁移失败（检索将暂时回退旧路径）: {}", e);
             }
-        });
+        }));
     }
     // 兜底回收孤儿消息（`session_id` 指向不存在会话的行）：早期版本删除会话时若有 run
     // 在跑，会经由 append_messages 写入孤儿消息 —— 它们查不到也清不掉，只会让库文件
     // 只增不减。幂等；无孤儿时开销仅一次反连接扫描，故放后台、与迁移互不阻塞
     // （两者共用同一把连接锁，谁先谁后结果一致）。
     {
-        let r_purge = repo.clone();
-        tauri::async_runtime::spawn(async move {
+        let r_purge = sqlite.clone();
+        spawn(Box::pin(async move {
             match r_purge.purge_orphan_messages().await {
                 Ok(0) => {}
                 Ok(n) => eprintln!("[session_db] 已清理 {} 条孤儿消息", n),
                 Err(e) => eprintln!("[session_db] 孤儿消息清理失败: {}", e),
             }
-        });
+        }));
     }
-    Ok(repo)
+
+    Ok(SessionDb {
+        repo,
+        settings,
+        maintenance,
+    })
+}
+
+/// **GUI 入口**（薄壳）：构造 Tauri 宿主 → 打开会话库 → 注册 Tauri 状态。
+///
+/// headless / CLI 走 [`open_session_db`] + `CliHost`，因此本文件里只有这里（以及
+/// 下面的 [`manage_noop_settings`]）允许出现 `tauri::`。
+pub fn init_session_db(app: &tauri::AppHandle) -> Result<Arc<dyn SessionRepo>, String> {
+    use tauri::Manager;
+    let db = open_session_db(
+        &crate::host::TauriHost::new(app.clone()),
+        // `.setup()` 回调没有 tokio reactor 上下文 → 必须用 Tauri 自己的运行时派发
+        &|fut| {
+            tauri::async_runtime::spawn(fut);
+        },
+    )?;
+    app.manage(db.settings.clone());
+    app.manage(db.maintenance.clone());
+    Ok(db.repo.clone())
+}
+
+/// **GUI 兜底**：库打不开时把配置仓储换成 [`NoopSettingsRepo`]。
+///
+/// 不换的话 `cmd_settings_*` 会因「状态未注册」报错；换成 Noop 后命令正常返回，
+/// 并由 `cmd_settings_get_all` 如实报「本地存储不可用」（而不是假装表是空的 ——
+/// 那会让前端误判为「空表 → 该导入」）。
+pub fn manage_noop_settings(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    app.manage(Arc::new(NoopSettingsRepo) as Arc<dyn SettingsRepo>);
 }
 
 // ==================== Tauri 命令 ====================
@@ -432,6 +491,73 @@ pub async fn cmd_usage_clear(
         None,
         started,
         result.as_ref().ok().map(|n| *n as usize),
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
+}
+
+// ==================== 应用设置（配置下沉 D3） ====================
+//
+// 命令只做「参数兜底 + 调 repo + 埋点」，与上面的会话命令同风格。
+// 键名与前端 `SettingsStore` 字段同名同层（见 `settings.rs` 文件头）。
+
+/// 读取全部应用设置（GUI 启动水合 / CLI 读配置）
+///
+/// ⚠️ 无真实后端时**如实报错**（而不是返回空表）：前端 `hydrateSettings` 会捕获并
+/// 继续用 localStorage 的值；若返回空表，前端会误判为「首启 → 该把 localStorage 导入」
+/// 而反复调用 `cmd_settings_import`。
+#[tauri::command]
+pub async fn cmd_settings_get_all(
+    state: tauri::State<'_, Arc<dyn SettingsRepo>>,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    if !state.is_available() {
+        return Err("本地存储不可用（配置仓储未初始化）".to_string());
+    }
+    let started = crate::telemetry::now_ms();
+    let result = state.get_all().await;
+    track_db(
+        "settings_get",
+        None,
+        started,
+        result.as_ref().ok().map(|m| m.len()),
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
+}
+
+/// 写入 / 覆写若干应用设置（只动传入的键）
+#[tauri::command]
+pub async fn cmd_settings_upsert(
+    state: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    entries: serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    let started = crate::telemetry::now_ms();
+    let rows = entries.len();
+    let result = state.upsert(entries).await;
+    track_db(
+        "settings_upsert",
+        None,
+        started,
+        Some(rows),
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
+}
+
+/// 首启迁移：**仅当表为空**时导入（从 localStorage 带来的旧设置）；返回是否真的写入
+#[tauri::command]
+pub async fn cmd_settings_import(
+    state: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    entries: serde_json::Map<String, serde_json::Value>,
+) -> Result<bool, String> {
+    let started = crate::telemetry::now_ms();
+    let rows = entries.len();
+    let result = state.import_if_empty(entries).await;
+    track_db(
+        "settings_import",
+        None,
+        started,
+        result.as_ref().ok().map(|_| rows),
         result.as_ref().err().map(|s| s.as_str()),
     );
     result

@@ -2,9 +2,14 @@
  * todo/state — 任务清单纯函数（无状态、无 IO、可单测）
  *
  * 同时服务两条路径：
- * - TS 引擎：直接执行 todo_write
- * - Rust 引擎：todo_write 未原生化 → 经 JS 桥回到同一个 toolRegistry 执行
- * 因此两侧行为天然一致（不存在铁律 1 的分叉风险）。
+ * - TS 引擎：直接执行 `todo_write`（即 `infrastructure/tools/plan/todo-write.ts`）
+ * - Rust 引擎：**已原生化（Step 2）** → `native_tools/plan/{todo_write,common}.rs`
+ *
+ * ⚠️ 自 Step 2 起两侧是**两份实现**，存在铁律 1 的同步义务：工具执行真正用到的那几个
+ * 函数（`sanitizeTodos` / `computeStats` / `validateTodos` / `checkTodoLimit` /
+ * `renderTodoContent`）在 Rust 侧有逐字镜像，改一边必须改另一边；
+ * `diffTodos` / `pickCurrentTodos` / `shouldShowTodoEntry` 等只服务
+ * 「用户编辑清单」的 UI 与注入逻辑（数据源是消息历史），没有 Rust 镜像。
  *
  * UI 侧（标题栏按钮 / 徽章 / 浮层 / 消息流一行胶囊）也只从这里取数据，
  * 「唯一的那份清单」就靠 pickCurrentTodos 派生，不引入任何额外状态字段。
@@ -18,13 +23,6 @@ import type {
   TodoUiData,
 } from './types'
 import { MAX_TODOS } from './types'
-
-/** 状态 → 中文标签（给模型看的是英文 status，给人看的是这个） */
-export const TODO_STATUS_LABEL: Record<TodoStatus, string> = {
-  pending: '待办',
-  in_progress: '进行中',
-  completed: '已完成',
-}
 
 const VALID_STATUS: TodoStatus[] = ['pending', 'in_progress', 'completed']
 
@@ -104,7 +102,7 @@ export function validateTodos(todos: TodoItem[]): string[] {
   const inProgress = todos.filter((t) => t.status === 'in_progress')
   if (inProgress.length > 1) {
     warnings.push(
-      `有 ${inProgress.length} 项处于 in_progress（约定：同一时刻最多 1 项）`,
+      `${inProgress.length} items are in_progress (convention: at most 1 at a time)`,
     )
   }
   return warnings
@@ -113,7 +111,7 @@ export function validateTodos(todos: TodoItem[]): string[] {
 /** 超限检查（返回错误文本；null = 通过） */
 export function checkTodoLimit(rawCount: number): string | null {
   if (rawCount > MAX_TODOS) {
-    return `任务数量过多（${rawCount} 项，最多 ${MAX_TODOS} 项）。请把任务合并到更粗的粒度后重试。`
+    return `Too many tasks (${rawCount}, max ${MAX_TODOS}). Please merge them into coarser-grained tasks and retry.`
   }
   return null
 }
@@ -127,7 +125,7 @@ export function renderTodoContent(
 ): string {
   const s = computeStats(todos)
   if (todos.length === 0) {
-    return '[Todo list updated] 清单已清空（当前没有待办任务）。'
+    return '[Todo list updated] The task list was cleared (there are no pending tasks).'
   }
   const lines = todos.map(
     (t, i) =>
@@ -139,7 +137,7 @@ export function renderTodoContent(
     ...lines,
   ]
   if (warnings.length > 0) {
-    parts.push('', `⚠️ ${warnings.join('；')}`)
+    parts.push('', `⚠️ ${warnings.join('; ')}`)
   }
   parts.push(
     '',
@@ -148,23 +146,26 @@ export function renderTodoContent(
   return parts.join('\n')
 }
 
-/** 变更摘要（中文，供模型与 UI 共用） */
+/**
+ * 变更摘要（**英文**，仅用于「用户改了清单」的 feedback 消息正文，即模型侧）。
+ * 界面文案另有一份走 i18n 的实现：`ui/pages/chat/components/todo/brief.ts`（铁律 1/7）。
+ */
 export function renderChangeBrief(changes: TodoChange[]): string {
-  if (!changes || changes.length === 0) return '已更新'
+  if (!changes || changes.length === 0) return 'updated'
   const parts = changes.map((c) => {
     switch (c.type) {
       case 'add':
-        return `新增「${c.content}」`
+        return `added "${c.content}"`
       case 'remove':
-        return `移除「${c.content}」`
+        return `removed "${c.content}"`
       case 'status':
-        return `「${c.content}」→ ${c.to}`
+        return `"${c.content}" → ${c.to}`
       case 'edit':
-        return `改写为「${c.to}」`
+        return `rewritten to "${c.to}"`
       case 'reorder':
-        return '调整顺序'
+        return 'reordered'
       default:
-        return '更新'
+        return 'updated'
     }
   })
   return parts.join(' · ')
@@ -186,11 +187,13 @@ export function renderUserTodoContent(
     (t, i) =>
       `${i + 1}. [${t.status}] ${t.content}` + (t.note ? ` — ${t.note}` : ''),
   )
-  const parts = ['【用户更新了任务清单】', ...lines]
+  const parts = ['[User updated the task list]', ...lines]
   if (changes.length > 0) {
-    parts.push(`（用户：${renderChangeBrief(changes)}）`)
+    parts.push(`(User: ${renderChangeBrief(changes)})`)
   }
-  parts.push('请严格按这份清单继续，不要重新加回被用户移除的任务。')
+  parts.push(
+    'Follow this list strictly and do not re-add tasks the user removed.',
+  )
   return parts.join('\n')
 }
 
@@ -238,7 +241,7 @@ export function diffTodos(base: TodoItem[], next: TodoItem[]): TodoChange[] {
       changes.push({
         type: 'status',
         content: n.content,
-        to: TODO_STATUS_LABEL[n.status],
+        to: n.status,
         toStatus: n.status,
       })
     }

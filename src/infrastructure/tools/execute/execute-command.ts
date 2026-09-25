@@ -37,100 +37,17 @@ import {
   SANDBOX_RULE_BYPASS_HINT,
   classifyCommand,
   getRiskInfo,
-  platformSnapshot,
   registerPendingApproval,
   runCommand,
 } from './common'
 
-/** 沙盒模式通用说明（三平台共用尾部）。 */
-const SANDBOX_NOTE =
-  '结果首行是「终端环境」提示，报告沙盒模式——' +
-  '「写隔离」（只能在 workspace/白名单可写根内写入，区外写入会被拒绝）、' +
-  '「只读」（不可写）、或「无沙盒」（完整权限）。退出码 >= 2 表示命令执行失败。'
-
-/** sandbox 参数描述（LLM 面向）：什么时候该申请绕过沙盒。 */
-const SANDBOX_PARAM_NOTE =
-  '默认不传（继承设置里的沙盒模式）。传 "off" 表示**申请**不使用沙盒执行，' +
-  '仅用于沙盒下必然失败的场景：命令的子进程需要用管道 stdio 拉起孙进程' +
-  '（vitest / vite / jest / ts-node / node-gyp / child_process.exec* 等），' +
-  '沙盒的受限令牌会让那次 spawn 直接报 EPERM（日志形如 "spawn EPERM"）。' +
-  '该请求须经「沙盒脱壳」权限授权（默认弹窗确认，可设为允许/禁止）；沙盒为只读模式时会被直接拒绝。'
-
-/** 平台特定的工具描述。 */
-function buildToolDescription(platform: string): string {
-  const prefix =
-    platform === 'windows'
-      ? '执行任意 shell 命令。当前终端是 Windows PowerShell 5.1（powershell.exe），请使用 PowerShell 语法（不是 cmd）。'
-      : platform === 'macos'
-        ? '执行任意 shell 命令。当前终端是 zsh（macOS）。'
-        : '执行任意 shell 命令。当前终端是 sh（Linux/POSIX）。'
-  return (
-    prefix +
-    '仅在无专用工具时使用（git、npm、构建等）。' +
-    '文件/文本操作优先用 read_file、edit_file、write_file、search_* 等专用工具。' +
-    SANDBOX_NOTE
-  )
-}
-
-/** 平台特定的 command 参数描述。 */
-function buildCommandDescription(platform: string): string {
-  if (platform === 'windows') {
-    return (
-      '要执行的命令（PowerShell 语法，如 "Get-ChildItem"、"git status"、"node --version"）。' +
-      '支持管道、重定向（>$null / 2>$null）、分号顺序执行；不支持 && / ||。'
-    )
-  }
-  if (platform === 'macos') {
-    return '要执行的命令（zsh 语法，如 "ls -la"、"git status"、"node --version"）。支持 &&/|| 串联、管道、重定向。'
-  }
-  return '要执行的命令（sh/POSIX 语法，如 "ls -la"、"git status"、"node --version"）。支持 &&/|| 串联、管道、重定向。'
-}
+// 工具描述（含三平台变体）已收敛到权威源（机制 C）：
+// src-tauri/src/agent/tool_defs/definitions.json —— 见 docs/rust-engine.md §12。
+// 此处不再保留描述文本，避免与契约静默分叉。
 
 toolRegistry.register(
-  {
-    name: 'execute_command',
-    label: t('执行命令'),
-    // 惰性描述：listDefinitions() 真正序列化给 LLM 时才求值。
-    // 届时 platformSnapshot() 已大概率拿到 Rust os_platform 的权威平台（模块加载时已预热）。
-    description: () => buildToolDescription(platformSnapshot()),
-    parameters: {
-      type: 'object',
-      properties: {
-        command: {
-          type: 'string',
-          description: () => buildCommandDescription(platformSnapshot()),
-        },
-        tips: {
-          type: 'string',
-          description:
-            '简要说明这条命令的作用和执行原因（用用户的语言）。会显示在 UI 上，帮助用户理解命令的目的。',
-        },
-        sandbox: {
-          type: 'string',
-          enum: ['off'],
-          description: SANDBOX_PARAM_NOTE,
-        },
-        confirm: {
-          type: 'string',
-          enum: ['terminal'],
-          description:
-            '传 "terminal" 表示「先在终端里由用户确认再执行」：命令会显示成一行**可编辑**的命令，' +
-            '用户改完按 Enter 才真正执行，按 Esc 取消。适合需要用户拍板、可能被改写的命令' +
-            '（如 npm login / gh auth login 这类需要登录或输入的命令）。' +
-            '执行仍走同一条沙盒路径（用户写的命令 ≠ 免检命令）；仅 Windows 桌面端支持，' +
-            '不可用时自动回落为审批弹窗。',
-        },
-        timeout: {
-          type: 'number',
-          description:
-            '超时时间（秒）。超过该时间进程会被强制终止。默认 30。',
-          default: 30,
-        },
-      },
-      required: ['command'],
-    },
-  },
-  (async (
+    'execute_command',
+    (async (
     args: Record<string, any>,
     ctx: ToolContext,
   ): Promise<ToolResult | UserInteractionRequired> => {
@@ -162,10 +79,9 @@ toolRegistry.register(
     // ⚠️ 只针对 AI 的**显式申请**：命中「忽略沙盒命令」规则时只读模式**静默忽略规则**
     //   （命令继续走沙盒），不把一条本来能跑的命令变成报错。
     if (aiRequestedBypass && sandboxMode === 'readonly') {
+      // ⚠️ 模型侧文案：固定英文，与 Rust 原生实现（native_tools/execute/execute_command.rs）逐字对齐
       throw new Error(
-        t(
-          '沙盒处于只读模式，不支持绕过沙盒执行命令；请先在设置中切换沙盒模式（或改用常规终端）',
-        ),
+        'The sandbox is in read-only mode, so bypassing it to run a command is not allowed; switch the sandbox mode in settings first (or use a regular terminal)',
       )
     }
     // 「忽略沙盒命令」规则（设置 → 安全）：命中即**免脱壳审批 + 强制无沙盒执行** ——
@@ -203,10 +119,10 @@ toolRegistry.register(
       // 禁止：不执行、不弹窗，返回拒绝文本给模型（标明是哪个权限拦下的）
       const deniedPerm =
         escapeDecision === 'deny' ? PERM_SANDBOX_COMMAND : permName
+      // 只报**权限 name**（与设置页一一对应的稳定 key）：语言无关，
+      // 且与 Rust 原生实现逐字对齐（两处都不得再回落到本地化的权限中文名）
       throw new Error(
-        tpl('操作已被权限设置禁止：$__perm__', {
-          perm: t(permissionLabel(deniedPerm)),
-        }),
+        `Operation denied by the permission settings: ${deniedPerm}`,
       )
     }
 
@@ -260,4 +176,5 @@ toolRegistry.register(
       bypassSandbox,
     })
   }) as ToolExecutor,
+    t('执行命令'),
 )

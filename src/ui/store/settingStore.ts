@@ -8,6 +8,14 @@ import {
 } from '@/domain/permission'
 import StorageState from '@/utils/storageState'
 import { track, isSensitiveKey } from '@/utils/telemetry'
+import {
+  pickKnownSettings,
+  settingsRepo,
+  RESERVED_PREFIX,
+  SETTINGS_MIGRATED_FROM_KEY,
+  SETTINGS_SCHEMA_VERSION,
+  SETTINGS_SCHEMA_VERSION_KEY,
+} from '@/infrastructure/settingsRepo'
 import type { ModelPrice } from '@/domain/pricing'
 import type { CompressMode } from '@/domain/engine'
 
@@ -335,4 +343,100 @@ export async function initDefaultWorkspace(): Promise<void> {
   if (!settingsState.value.defaultWorkspace) {
     settingsState.setValue('defaultWorkspace', await resolveDefaultWorkspace())
   }
+}
+
+// ── 配置下沉（D3）：设置 → Rust 侧 `app_settings` 表（同一个 `virlen.db`） ──
+// 权威源是表；localStorage 只作同步初值 + 回滚信道（详见 `docs/config-sink-plan.md`）。
+// 键名与 `SettingsStore` 字段同名同层，两侧不建映射表（避免字段漂移）。
+export const SETTINGS_STORAGE_KEY = '_storage_state_virlen-settings'
+
+/** `SettingsStore` 认识的键（用于过滤表里的历史遗留键） */
+const SETTINGS_KNOWN_KEYS: string[] = Object.keys(defaultSettings)
+
+/** 落库 debounce（连续拖动开关只写一次） */
+const SETTINGS_SAVE_DEBOUNCE_MS = 400
+
+/** 待落库的键值（只累积**用户改过的键**，不做整份覆盖） */
+let pendingSettings: Record<string, unknown> = {}
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+let persistInstalled = false
+/** 水合期间不把「刚从表里读出来的值」再写回表 */
+let hydrating = false
+
+/** 当前设置的浅拷贝（只含已知键，用于首启导入） */
+function snapshotSettings(): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const key of SETTINGS_KNOWN_KEYS) {
+    out[key] = (settingsState.value as unknown as Record<string, unknown>)[key]
+  }
+  return out
+}
+
+/** 落库待写设置（debounce 到期 / 退出前调用） */
+function flushPendingSettings(): void {
+  if (saveTimer !== null) {
+    clearTimeout(saveTimer)
+    saveTimer = null
+  }
+  const entries = pendingSettings
+  pendingSettings = {}
+  if (Object.keys(entries).length === 0) return
+  settingsRepo.save(entries).catch((e) => {
+    console.warn('[settings] 写入 Rust 侧 app_settings 失败:', e)
+  })
+}
+
+/** 退出前把待写设置立刻落库（否则 debounce 未触发会丢掉最后一次改动） */
+export function flushSettingsPersist(): void {
+  flushPendingSettings()
+}
+
+/** 挂上「设置变更 → 落库」：保留既有 `onChange`（埋点）并链式调用 */
+function installSettingsPersist(): void {
+  if (persistInstalled) return
+  persistInstalled = true
+  const previous = settingsState.onChange
+  settingsState.onChange = (key, oldValue, newValue) => {
+    previous?.(key, oldValue, newValue)
+    if (hydrating) return
+    if (typeof key !== 'string' || key.startsWith(RESERVED_PREFIX)) return
+    pendingSettings[key] = newValue
+    if (saveTimer !== null) clearTimeout(saveTimer)
+    saveTimer = setTimeout(flushPendingSettings, SETTINGS_SAVE_DEBOUNCE_MS)
+  }
+}
+
+/**
+ * 从 Rust 侧水合设置（幂等；非 Tauri 环境直接返回）。
+ *
+ * 1. 表**非空** → 以表为准覆盖到 `settingsState`（只认已知键）；
+ * 2. 表**为空** → 把当前设置（localStorage + 上面的一次性迁移之后）整份导入 —— 老用户升级无感。
+ *
+ * ⚠️ 必须在 `init()` 里**早于** i18n / 工作目录 / 会话加载执行：它们都依赖设置。
+ */
+export async function hydrateSettings(): Promise<void> {
+  if (!settingsRepo.isAvailable()) return
+  try {
+    const stored = await settingsRepo.loadAll()
+    if (Object.keys(stored).length === 0) {
+      // 首启（或本功能上线后的第一次启动）：把现有设置导入表
+      await settingsRepo.importIfEmpty({
+        ...snapshotSettings(),
+        [SETTINGS_SCHEMA_VERSION_KEY]: SETTINGS_SCHEMA_VERSION,
+        [SETTINGS_MIGRATED_FROM_KEY]: 'localStorage',
+      })
+    } else {
+      const known = pickKnownSettings(stored, SETTINGS_KNOWN_KEYS)
+      hydrating = true
+      try {
+        settingsState.set(known as Partial<SettingsStore>)
+      } finally {
+        hydrating = false
+      }
+    }
+  } catch (e) {
+    console.warn('[settings] 读取 Rust 侧 app_settings 失败，继续使用本地设置:', e)
+    return
+  }
+  installSettingsPersist()
 }

@@ -64,7 +64,8 @@ describe('read_file 行内字符上限保护', () => {
     // 默认 max_line_chars=2000，返回内容应远小于 20 万字符原文
     expect(text.length).toBeLessThan(3000)
     // 截断标记 + max_line_chars 提示必须存在，AI 才能知道内容不完整
-    expect(text).toContain('已截断')
+    // （P4b：模型侧文案固定英文，不再随 UI 语言变化）
+    expect(text).toContain('truncated')
     expect(text).toContain('max_line_chars')
     // 表头仍应包含元信息
     expect(text).toContain('hash10: hash-huge')
@@ -85,7 +86,7 @@ describe('read_file 行内字符上限保护', () => {
 
     expect(text).toContain('line1')
     expect(text).toContain('line3')
-    expect(text).not.toContain('已截断')
+    expect(text).not.toContain('chars omitted')
   })
 
   it('多行超长内容应逐行截断并统计截断行数', async () => {
@@ -103,8 +104,8 @@ describe('read_file 行内字符上限保护', () => {
     const text = toText(result)
 
     // 每行 5000 字符 > 默认 max_line_chars=2000，5 行都应被截断
-    expect(text).toContain('已截断')
-    expect(text).toContain('有 5 行内容过长')
+    expect(text).toContain('chars omitted')
+    expect(text).toContain('5 line(s) too long')
     expect(text).toContain('max_line_chars')
     // 总长度应远小于原文 5 × 5000
     expect(text.length).toBeLessThan(5 * 2100 + 500)
@@ -127,7 +128,7 @@ describe('read_file 行内字符上限保护', () => {
     const text = toText(result)
 
     // 默认 max_lines=2000，剩余 1000 行；短行不触发行内截断
-    expect(text).toContain('剩余 1000 行')
-    expect(text).not.toContain('已截断')
+    expect(text).toContain('1000 lines remaining')
+    expect(text).not.toContain('chars omitted')
   })
 })

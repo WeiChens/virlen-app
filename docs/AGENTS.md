@@ -10,6 +10,8 @@
 > - `docs/pty-research.md` —— Windows ConPTY / 终端交互完整设计
 > - `docs/sandbox-implementation-plan.md` —— 跨平台沙盒实现
 > - `docs/埋点上报数据设计.md` —— 埋点事件与字段规范
+> - `docs/host-abstraction-draft.md` —— 宿主抽象（**方案 A 已实施**）：GUI / CLI 资源与数据目录的唯一接口
+> - `docs/config-sink-plan.md` —— 配置下沉（**落 SQLite，与 GUI 共用同一份 `virlen.db`**）+ D4 `js` 沙盒规则内嵌求值
 
 ---
 
@@ -96,7 +98,7 @@
 | `src/events/` | EventEmitter 事件总线（menu / settings / comment / toolInteract / update） | utils |
 | `src/utils/` | 无业务依赖工具：telemetry、storageState、EventEmitter、diff、mdYamlFrontmatter、pathCanonicealize… | 无 |
 | `src/tests/` | Vitest 测试，按 `domain / infrastructure / services / rag / utils / ui` 分目录 | — |
-| `src-tauri/src/` | Rust：`agent/`（镜像 TS 引擎）、`rag/`、`sandbox/`、`session_db/`、`file_ops.rs`、`search.rs`、`vision_service.rs`、`telemetry.rs`、`lib.rs` | — |
+| `src-tauri/src/` | Rust：`agent/`（镜像 TS 引擎）、`rag/`、`sandbox/`、`session_db/`、`host/`（宿主抽象：GUI/CLI 各一份实现）、`vision/`（端侧视觉核心，零 `tauri::`）、`file_ops.rs`、`search.rs`、`vision_service.rs`（视觉命令壳）、`telemetry.rs`、`lib.rs` | — |
 | `src-tauri/resources/` | 打包资源：`default-skills/`、`quasivision_models/`、`deepseek_tokenizer/`、`sandbox/`（`tauri.conf.json > bundle.resources` 必须同步） | — |
 
 > 端口清单（`src/domain/ports/`）：`AgentEnginePort`、`ProviderPort`、`SearchProviderPort`、`KnowledgeBasePort`、`SandboxPort`、`SecurityPort`、`ToolRegistry`。
@@ -127,7 +129,7 @@
    │      └─ 有 tool_calls ──► 工具执行  tool-executor             │
    │                              │                                │
    │         ┌────────────────────┴────────────────────┐          │
-   │         ▼ 原生工具（18 个）                          ▼ JS 桥   │
+   │         ▼ 原生工具（26 个）                          ▼ JS 桥   │
    │ Rust 直接执行                              Rust→JS→Rust 往返    │
    │ （先过安全校验）                            toolRegistry 执行    │
    │         └────────────────────┬────────────────────┘          │
@@ -181,21 +183,21 @@ iteration_verify_pass / iteration_verify_fail / iteration_max_exceeded / iterati
 | 方向 | 通道 | 说明 |
 |---|---|---|
 | Rust → JS | `agent:event` | 载荷 `{ sessionId, event }`，`event` 与 TS `AgentEvent` 完全一致，前端直接转发 `onEvent` |
-| Rust → JS | `agent:tool-request` | 未原生化工具交 JS 执行，JS 用 `toolRegistry` 跑完回 `agent_tool_response`（`payload.__kind: value \| error \| interaction`） |
+| Rust → JS | `agent:tool-request` | 未原生化工具交 JS 执行，JS 用 `toolRegistry` 跑完回 `agent_tool_response`（`payload.__kind: value \| error \| interaction`；**`error` 也可带 `uiData`** → 失败文案同样是「模型侧英文 + UI 侧结构化」） |
 | Rust → JS | `agent:user-interaction-request` | 用户交互（`user_choice` / 终端内确认）与**内部查询**（`sandbox_rule_check`，无 UI：命令是否命中「忽略沙盒命令」规则，见 §5.4），走 `chat-service` 注册的 session handler → `agent_user_interaction_response` |
 | Rust → JS | `agent:provider-request` | 未原生化的 Provider（目前 Gemini）交 JS，流式用 `agent_provider_stream_event` 逐条回传，结束 `agent_provider_stream_done` |
 | Rust → JS | `agent:round-boundary` | **轮次边界注入**：上一批工具已回复、下一次 LLM 请求尚未发出时回问 JS「有没有要注入的消息」（AI 回复期间用户**已应用**的任务清单变更），JS 用 `agent_round_boundary_response` 回 `{ messages }`；Rust 落库后追加进本轮消息列表，模型**这一轮**就能看到（超时 5s 兼底，失败降级为不注入）。TS 引擎同一时机走 `SendMessageOptions.onRoundBoundary`（铁律 1） |
 | JS → Rust | `agent_send_message` / `agent_cancel` / `agent_get_run_snapshot` / `agent_clear_run_snapshot` / `agent_dispose` / `agent_kill_command` / `pty_*` | 生命周期、取消、终端交互 |
 
-**未原生化的部分**（委托 TS）：`compressContext`、`generateTitle`、Gemini Provider，以及 web/vision/skill/system/chat 类工具。
+**未原生化的部分**（委托 TS）：`compressContext`、`generateTitle`、Gemini Provider，以及 web 类工具（`web_search` / `web_fetch`）。
 Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你是一个有用的 AI 助手。"`）。完整清单见 `docs/rust-engine.md`。
 
 > ⚠️ **改引擎语义（LLM 轮次 / 工具执行 / 暂停恢复 / 迭代验证 / 撤销）时，TS 与 Rust 两侧都要改**，否则默认路径与回退路径行为分叉（铁律 1）。
 
 ### 5.2 工具系统——能力扩展的唯一入口
 
-- **注册制**：一律 `toolRegistry.register(definition, executor)`；不写全局函数表。
-- **定义与执行器分离**；`definition.description` 可为**惰性函数**（序列化给 LLM 时才求值，用于平台相关的动态描述，如 `execute_command` 的平台缓存）。
+- **注册制**：`toolRegistry.register(name, executor, label?)`；不写全局函数表。
+- **定义与执行器分离，且定义只有一份（机制 C）**：工具定义在 **Rust 侧权威源** `src-tauri/src/agent/tool_defs/definitions.json`（28 工具 × 三平台变体 `windows`/`macos`/`linux`，键名与 `std::env::consts::OS` 同词表）；前端只注册执行器 + UI 文案（`label` 走 i18n，**不进契约**）。读取一律 `await toolRegistry.listDefinitions()`（**异步**接口），返回「契约 ∩ 已注册执行器」。详见 `docs/rust-engine.md` §12。
 - **10 大分类 / 28 个工具**（`src/domain/tools/category.ts` ↔ `src/infrastructure/tools/<分类>/`）：
 
   | 分类 id | 目录 | 工具数 | 代表工具 |
@@ -205,25 +207,34 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
   | `execute` | `tools/execute/` | 2 | execute_command / execute_script |
   | `knowledge_base` | `tools/knowledge-base/` | 6 | search / list / get / write / delete … |
   | `web` | `tools/web/` | 2 | web_search / web_fetch |
-  | `vision` | `tools/vision/` | 1 | vision_analyze |
+  | `vision` | `tools/vision/` | 1 | vision_analyze（✅ 已原生化） |
   | `skill` | `tools/skill/` | 2 | list_skills / read_skill_source |
   | `system` | `tools/system/` | 2 | get_current_time / user_choice |
   | `plan` | `tools/plan/` | 1 | todo_write（任务清单；用户可在标题栏浮层里直接编辑） |
   | `chat` | `tools/chat/` | 2 | list_messages / read_messages |
 
-- **原生化（18 个）**：`file`(8) + `search`(2) + `execute`(2) + `knowledge_base`(6)，分发在 `src-tauri/src/agent/native_tools/mod.rs::is_native_tool / execute_native_tool`。其余自动走 JS 桥。
+- **原生化（26 个）**：`file`(8) + `search`(2) + `execute`(2) + `knowledge_base`(6) + `plan`(1：`todo_write`) + `system`(2：`user_choice` / `get_current_time`) + `chat`(2：`list_messages` / `read_messages`) + `skill`(2：`list_skills` / `read_skill_source`) + `vision`(1：`vision_analyze`)，分发在 `src-tauri/src/agent/native_tools/mod.rs::is_native_tool / execute_native_tool`。其余自动走 JS 桥（`web_search` / `web_fetch`）。
+- **原生工具的会话库依赖**：需要读写会话库的工具（消息查询）从 `ctx.repo: &dyn SessionRepo` 取（由引擎注入；`repo.is_available()` 为 false 时如实回「本地存储不可用」）—— 与 `ctx.security` 同一种显式注入。
+- **原生工具的技能依赖**：技能工具从 `ctx.skills`（本 agent 启用的技能名）+ `ctx.security.skills_dir` 取数，**自行扫盘解析 SKILL.md**（不依赖前端 localStorage 注册表，CLI 同样可用）。
+- **原生工具的宿主依赖**：需要「资源目录 / 数据目录在哪」的工具（`vision_analyze` 的模型文件）从 `ctx.host: &dyn HostEnv` 取。宿主差异只有两份实现 —— GUI `host::TauriHost`（`resource_dir()` / `app_data_dir()`）、CLI `host::CliHost`（环境变量 + exe 位置）；**引擎核心（含 `native_tools/**`）不得出现 `tauri::`**，这是 headless 的前提。详见 `docs/host-abstraction-draft.md`。
+- **模型侧文案一律英文（D2-A）**：工具返回给 LLM 的文本（`content`、抛出的错误、引擎迭代 / 验证反馈、系统提示词）固定英文且**不进 i18n** —— 否则默认（Rust）与回退（TS）引擎、中 / 英界面会产出不同文本。界面展示改由**结构化 `uiData`** 按界面语言重建（组件优先渲染 `uiData`，缺失时回退 `content`，如 `tool-call/TerminalBlock.tsx::displayNote`）。因此：改 TS 执行器文案**必须与 Rust 原生实现逐字对齐**（铁律 1），新增返回值务必同时给出语言无关的 `uiData` 字段。
 - **跨层单例**：`src/infrastructure/tools/output-store.ts`（UI/services/engine 均引用）不归属任何分类，留在 tools 根目录。
 - **UI 渲染**：`src/ui/pages/chat/components/tool-call/<Tool>Message.tsx` 实现 `IToolCallMessage` 并 `register(...)`；未注册自动落 `DefaultMessage`。
 
 ### 5.3 持久化与数据
 
 - **会话消息**：Rust 侧 `src-tauri/src/session_db/`（已从单文件拆分为 15 文件目录）。
-  分层：`types.rs`（IPC DTO）/ `repo.rs`（trait + Noop）/ `schema.rs`（DDL + 迁移）/ `row.rs`（行映射）/ `message_query.rs`（检索）/ `usage.rs`（用量账本）/ `sqlite.rs`（实现）/ `commands.rs`（17 个 `cmd_*`）/ `tests/`。
+  分层：`types.rs`（IPC DTO）/ `repo.rs`（trait + Noop）/ `schema.rs`（DDL + 迁移）/ `row.rs`（行映射）/ `message_query.rs`（检索）/ `usage.rs`（用量账本）/ `settings.rs`（应用设置）/ `sqlite.rs`（实现）/ `commands.rs`（20 个 `cmd_*`）/ `tests/`。
   SQLite + WAL + 单写连接 + `spawn_blocking`；**先落库再 emit**。
+  ⚠️ 打开库的入口分两层（配置下沉 D3 的前置）：**零 `tauri::`** 的 `commands::open_session_db(host, spawn)`（库路径 = `host.data_dir()/virlen.db`，返回 `SessionDb { repo, settings, maintenance }`，后台任务由宿主传入的 `spawn` 派发）+ GUI 薄壳 `init_session_db(app)`（构造 `TauriHost` + `app.manage(...)`）。
+  ⇒ 「会话库 / 配置在哪」只由 `HostEnv::data_dir()` 决定 —— CLI 传 `$VIRLEN_DATA_DIR` 就与 GUI 共用**同一份** `virlen.db`。
 - **前端封装**：`src/infrastructure/sessionRepo/`（`cmd_list_sessions / cmd_get_session / cmd_get_messages / cmd_get_message_page / cmd_upsert_session / cmd_delete_session / cmd_replace_session_messages / cmd_append_messages` …）。
   启动只加载会话**元数据**，消息**懒加载**（`sessionStore.ensureMessagesLoaded`）。`utils/db.ts`（IndexedDB）已废弃删除，**不要复活**。
 - **用量账本（token 统计）**：账本 DTO / 聚合 / 明细在 `session_db/usage.rs`；前端 `statsRepo/`、`usage-ledger/`、`services/token-stats-service.ts`。
   ⚠️ **Rust 只回 token 数，费用一律前端算**；内置价目表固定存 USD（`src/domain/pricing/index.ts`），切币种时按固定汇率折算。
+- **应用配置（配置下沉 D3，见 `docs/config-sink-plan.md`）**：`session_db/settings.rs` 的 `app_settings` 表（一 key 一行，`value` 为 JSON 文本），与会话库**同文件 + 同一把单写连接**（不引入第二个写连接 → 无 `SQLITE_BUSY`；迁移/维护天然覆盖它）。命令 `cmd_settings_get_all` / `cmd_settings_upsert` / `cmd_settings_import`（后者**仅表空时**导入，供首启从 localStorage 迁移）。
+  ⚠️ **键名与前端 `SettingsStore` 字段同名同层**（如 `providers` / `permissions` / `sandboxMode`），**不建映射表**；保留键以 `__` 开头（`__schemaVersion` / `__migratedFrom`）。新增设置项时必须两侧一起看（字段漂移风险）。
+  前端接入：`infrastructure/settingsRepo/`（Tauri 命令 / 非 Tauri 自动降级空实现）+ `settingStore.hydrateSettings()`（启动水合，`main.ts` 里排最前）+ 变更 debounce 回写（退出前 `flushSettingsPersist()`）。localStorage 降为**同步初值 + 回滚信道**。
 
 ### 5.4 安全体系（四道闸）
 
@@ -252,6 +263,9 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 > 保存前的校验走 `compileSandboxRule`（**只验证能否编译，不执行规则体** —— 运行期抛错在生产按未命中处理，不该拦住保存）。
 > ⚠️ 规则**只**免「沙盒脱壳」：`terminal.*` / `script.execute` 的风险审批照旧（命中规则时弹窗追加 `SANDBOX_RULE_BYPASS_HINT` 说明原因）；
 > 「沙盒脱壳」权限设为 `deny` 时 **deny 仍然优先**（`apply_rule_clearance` 只把 `ask` 降为 `allow`）。
+>
+> ⚠️ **纯 Rust CLI 下 `js` 类规则原理上不可求值**（没有 JS 进程，而匹配器只有 TS 一份实现）→ 已定案 D4：内嵌 `quickjs_runtime`（**必须用 `quickjs-ng` 特性**，默认的 `bellard` 在 Windows MSVC 编译不过）自行求值。
+> 依赖已引入但**尚未接线**（待办 S7）。⚠️ 它带一个**构建期**硬依赖 `libclang`（bindgen），见 §7。详见 `docs/config-sink-plan.md` §4。
 
 ### 5.5 Provider 与搜索源
 
@@ -261,7 +275,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 
 ### 5.6 视觉 / RAG / Skill
 
-- **视觉**：`src-tauri/src/vision_service.rs` + `infrastructure/vision/` + `resources/quasivision_models/`。**图片不出本机**，不要改成上传。
+- **视觉**：核心（模型定位 + 懒加载 + 推理）在 `src-tauri/src/vision/`（**零 `tauri::`**，GUI 与原生工具共用）；`src-tauri/src/vision_service.rs` 只是 Tauri 命令壳；前端 `infrastructure/vision/`；模型在 `resources/quasivision_models/`。**图片不出本机**，不要改成上传。
 - **RAG 知识库**：`src-tauri/src/rag/`（`document.rs` / `embedding.rs` / `vector_store.rs` / `rag_service.rs`）+ `services/rag-service.ts` + `infrastructure/rag/`。向量索引用 turbovec。
 - **Skill**：`src/skill/`（加载 / 注册 / 导入 / 广场）+ 内置包在 `src-tauri/resources/default-skills/<name>/SKILL.md`。
 
@@ -293,7 +307,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 2. **事件契约不可擅自改名**：`AgentEventType` 是四方共享契约（TS 类型 → TS emit → Rust emit → chat-service 处理），新增必须四处一致。
 3. **引擎不碰持久化、不 import store**：TS 引擎经 `onEvent` 交 `chat-service` 落库；Rust 引擎由 `SessionRepo` 内部直落。
 4. **新增 Tauri 命令必须注册**：`src-tauri/src/lib.rs` 的 `tauri::generate_handler![...]`，否则前端 `invoke` 静默 404；涉及权限还要看 `src-tauri/capabilities/default.json`。
-5. **工具是「定义 + 执行器」分离注册制**：一律 `toolRegistry.register(definition, executor)`；`description` 可为惰性函数。
+5. **工具是「定义 + 执行器」分离注册制，且定义只有一份**：定义在 Rust 侧权威源 `src-tauri/src/agent/tool_defs/definitions.json`；前端 `toolRegistry.register(name, executor, label?)` 只注册执行器与 i18n 文案，读取走异步 `listDefinitions()`。**不要在任何一侧另写定义体**（`src/tests/contracts/tool-defs-contract.test.ts` 守这条线）。
 6. **写操作必须先过安全校验**：JS 侧 `securityService.resolveSafePath/isPathAllowed`，Rust 侧 `native_tools::resolve_safe_path / is_path_allowed`，两侧规则必须等价。禁止绕过。
    路径展开（`~` / `%USERPROFILE%`）与 canonicalize 规则**必须共用同一实现**：`src-tauri/src/sandbox/paths.rs::expand_user_path`（前端经 `canonicalize_path` 命令走同一函数）。禁止在任一侧另写一份展开/规范化逻辑，否则黑名单条目会在默认引擎下静默失效。
 7. **业务文案走 i18n**：`t('中文')`（中文即 key），变量模板用 `tpl('已删除 $__count__ 个会话', {count})`；新增 UI 文案必须同步 `src/ui/i18n/lang/en-US.json`。
@@ -322,6 +336,10 @@ pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 - 基线（README 记录，**本机沙盒未复现**，见 §11.2）：`cargo test` / `vitest run` 全绿、`tsc --noEmit` 零错误。
 - 提交前**至少**自查：`npx tsc --noEmit`（无新增错误）+ 受影响模块的测试。
 - ⚠️ 本机沙盒内 `vitest` / `vite build` 会因 `esbuild` 子进程 `spawn EPERM` 失败，须走**沙盒脱壳**（`sandbox:"off"`，见 §11.2）。
+- ⚠️ **Rust 构建需要 `libclang`**（`quickjs_runtime` → `hirofa-quickjs-sys` → `bindgen` 的**构建期**依赖）：Windows 装 LLVM 并设 `LIBCLANG_PATH=<LLVM>\bin`，否则 `cargo build` / `cargo check` / `tauri dev` 会在 `hirofa-quickjs-sys` 直接失败（报 `Unable to find libclang`）。
+  - `clang-sys` 只探测 `LIBCLANG_PATH` 与 `llvm-config.exe`，**不扫 `PATH`**：LLVM 装在非默认位置、或该发行版不带 `llvm-config.exe`（本机 `C:\config\LLVM` 即是）时**必须**显式设。
+  - 必须**持久化**（用户级环境变量）并**重开终端 / IDE**：临时 `$env:LIBCLANG_PATH` 只对当前 shell 生效，而 `pnpm tauri dev` 由 CLI 新起 shell 跑 `cargo run` → 表现为「手动 `cargo build` 能过、`tauri dev` 报 `Unable to find libclang`」。
+  - 该 bindgen 调用在 `hirofa-quickjs-sys/build.rs` 里**无条件**执行（无特性开关），**不能**用 feature 绕开。
 
 ---
 
@@ -348,26 +366,27 @@ pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 
 ### 9.1 新增一个工具
 
-1. **定义 + 执行器**（在所属分类目录新建文件）：
+1. **先写定义（Rust 侧权威源）**：在 `src-tauri/src/agent/tool_defs/definitions.json` 的**三个平台变体**里都补上该工具（`name` / `description` / `parameters`）；平台无关的工具三份内容相同，平台相关描述参考 `execute_command`。Rust 侧不用改代码（`include_str!` 自动带上），见 `docs/rust-engine.md` §12。
+
+2. **再写执行器**（在所属分类目录新建文件；**不写定义**）：
 
    ```ts
    toolRegistry.register(
-     { name: 'my_tool', label: t('我的工具'), description: 'English description for the LLM.',
-       parameters: { type: 'object', properties: {...}, required: [...] } },
+     'my_tool',
      (async (args, ctx: ToolContext) => {
        // ctx: { sessionId, toolCallId, abortSignal, write, skills }
        // 需要用户交互 → return new UserInteractionRequired('my_interaction', {...})
        return '给 LLM 的结果文本' | { content: string, uiData?: Record<string, any> }
      }) as ToolExecutor,
+     t('我的工具'), // 可选：UI 文案（i18n），不进契约
    )
    ```
 
-2. **挂进启动注册链**：分类 `index.ts` 加 `import './my-tool'`（新分类还需在 `tools/index.ts::toolsInit()` 加 `await import(...)`，并在 `domain/tools/category.ts` 的 `TOOL_CATEGORIES` 登记）。
-3. **公共函数**：同分类 ≥2 工具复用 → 抽到分类 `common.ts`。
-4. **UI 渲染**：`tool-call/` 新建 `XxxMessage.tsx` 实现 `IToolCallMessage` 并 `register(...)`（未注册落 `DefaultMessage`）。
-5. **是否原生化**：在 `native_tools/mod.rs` 的 `is_native_tool` + `execute_native_tool` 加分派，对应分类目录新建 `<工具>.rs`（复用 `common.rs`）。
-6. **测试**：`src/tests/infrastructure/*.test.ts`（JS）；Rust 加内联单测。
-7. 平台相关信息建议用惰性描述（参考 `tools/execute/common.ts::platformSnapshot()`）。
+3. **挂进启动注册链**：分类 `index.ts` 加 `import './my-tool'`（新分类还需在 `tools/index.ts::toolsInit()` 加 `await import(...)`，并在 `domain/tools/category.ts` 的 `TOOL_CATEGORIES` 登记）。
+4. **公共函数**：同分类 ≥2 工具复用 → 抽到分类 `common.ts`。
+5. **UI 渲染**：`tool-call/` 新建 `XxxMessage.tsx` 实现 `IToolCallMessage` 并 `register(...)`（未注册落 `DefaultMessage`）。
+6. **是否原生化**：在 `native_tools/mod.rs` 的 `is_native_tool` + `execute_native_tool` 加分派，对应分类目录新建 `<工具>.rs`（复用 `common.rs`）；需要会话库的工具从 `ctx.repo` 取（先看 `is_available()`），需要安全配置的从 `ctx.security` 取。
+7. **测试**：`src/tests/infrastructure/*.test.ts`（JS）；Rust 加内联单测。契约与执行器的名单一致性由 `src/tests/contracts/tool-defs-contract.test.ts` 守（契约里有定义 → 必须有执行器，反之亦然）。
 
 ### 9.2 新增 / 修改 Provider、搜索源、Skill
 
@@ -473,7 +492,8 @@ pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 | 改系统提示词 | `src/domain/agent/prompts/*.md` + `src/services/agent-service.ts`（组装顺序在此） |
 | 改上下文压缩 / 标题生成 | `src/domain/engine/compress-context.ts`（模式分派：`ai` LLM 摘要 / `raw` 正文压缩）+ `compress-raw.ts`（正文压缩的本地渲染）/ `generate-title.ts`（Rust 侧委托 TS）；产物在消息列表里的呈现：`ui/pages/chat/components/message/summary-message.tsx`（提示条 + 摘要弹窗） |
 | 改会话持久化 | `src-tauri/src/session_db/`（`sqlite.rs` / `schema.rs` / `commands.rs`）+ `src/infrastructure/sessionRepo/` + `src/ui/store/sessionStore.ts` |
-| 加 / 改工具 | `src/infrastructure/tools/<分类>/<工具>.ts`（+ 分类 `common.ts`、分类 `index.ts`）、`src/domain/tools/category.ts`、`src-tauri/src/agent/native_tools/<分类>/<工具>.rs`（+ `mod.rs` 分发）、`src/ui/pages/chat/components/tool-call/` |
+| 加 / 改工具 | **定义**：`src-tauri/src/agent/tool_defs/definitions.json`（权威源，三平台变体）；**执行器**：`src/infrastructure/tools/<分类>/<工具>.ts`（+ 分类 `common.ts`、分类 `index.ts`）；契约/注册中心：`src/domain/tools/{definitions,index,types}.ts` + `src/domain/ports/ToolRegistry.ts`；`src/domain/tools/category.ts`、`src-tauri/src/agent/native_tools/<分类>/<工具>.rs`（+ `mod.rs` 分发）、`src/ui/pages/chat/components/tool-call/` |
+| 改工具返回给模型的文案 / 增删 `uiData` | TS 执行器 `src/infrastructure/tools/<分类>/<工具>.ts` ↔ Rust 原生 `src-tauri/src/agent/native_tools/<分类>/<工具>.rs`（**逐字对齐**，模型侧固定英文）；界面侧只读 `uiData`，在 `src/ui/pages/chat/components/tool-call/<Tool>Message.tsx` / `TerminalBlock.tsx` 按界面语言重建 |
 | 改任务清单 / todo_write | `src/domain/todo/*`（纯函数）、`src/infrastructure/tools/plan/todo-write.ts`、`src/services/todo-service.ts`（落地，用户清单逐字生效）、`src/ui/store/todoDraftStore.ts`（回复期间的本地草稿；**关浮层丢弃未应用的草稿**）、`src/ui/pages/chat/components/todo/*`（标题栏入口 + 浮层；编辑期间 AI 又写清单 → 「放弃编辑并同步 / 覆盖更新」二选一） |
 | 改原生工具路径校验 / 参数取值 | `src-tauri/src/agent/native_tools/common.rs`（`resolve_safe_path` / `is_path_allowed` / `arg_*`）；路径展开共用 `src-tauri/src/sandbox/paths.rs::expand_user_path` |
 | 改文件读写底层 | `src-tauri/src/file_ops.rs` + `src/utils/diff.ts` |
@@ -482,9 +502,12 @@ pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 | 改终端输出处理（`\r`、ANSI） | `tools/execute/common.ts::processTerminalOutput`（UI 侧 `tool-call/Execute*Message.tsx` 复用）；Rust 侧 `native_tools/execute/common.rs::process_terminal_output`。两份**逐条对齐** |
 | 改工具授权确认弹窗 / 交互 | `ui/pages/chat/components/modals/authorization.tsx`；事件 `events/toolInteractEvent.ts::showAuthorization`；调度 `services/tool-service/command_confirm.ts`；Rust 侧下发同样字段 `native_tools/execute/{execute_command,execute_script}.rs` |
 | 改沙盒 / 权限 | `src-tauri/src/sandbox/**`、`src/infrastructure/sandbox/*`、`src/domain/security/index.ts` |
+| 改 `js` 类沙盒规则的求值（纯 Rust CLI 侧） | `docs/config-sink-plan.md` §4（设计已定案）+ `Cargo.toml` 的 `quickjs_runtime`（已引入、未接线）；实现位置预定 `src-tauri/src/security/js_rule.rs`，由 `native_tools/execute/common/rules.rs` 调用 |
 | 改「忽略沙盒命令」规则（命中即免脱壳审批 + 强制无沙盒执行） | 匹配器 `src/domain/security/sandbox-ignore-rules.ts`（含 `js` 默认模板 `SANDBOX_JS_DEFAULT_PATTERN` / `defaultSandboxRulePattern` / 排序 `moveSandboxIgnoreRule`+`reorderSandboxIgnoreRule` / 预设 `SANDBOX_RULE_PRESETS` / 编译校验 `compileSandboxRule`）；服务入口 `src/services/security-service.ts::matchSandboxIgnoreRule`；存储 `src/infrastructure/securityRepo/`（`sandboxIgnoreRules`）+ `src/ui/store/securityStore.ts`（`upsert/remove/setEnabled/move/reorder`）；UI `src/ui/pages/Settings/security-sandbox-rules.tsx`（拖拽几何 `./sandbox-rules-dnd.ts`；JS 输入用 `src/ui/components/code-editor/CodeEditor.tsx`；行内开关 `src/ui/components/shared/Toggle`）；**TS 路径决策** `src/infrastructure/tools/execute/{execute-command,execute-script}.ts`；**Rust 路径决策** `src-tauri/src/agent/native_tools/execute/{execute_command,execute_script}.rs` + `.../execute/common/rules.rs`（经内部交互 `sandbox_rule_check` 问 JS）+ `src/services/tool-service/index.ts`（回答该交互）+ `src/services/rust-engine.ts::resolveSecurityConfig`（`hasSandboxIgnoreRules`） |
-| 改视觉 | `src-tauri/src/vision_service.rs`、`src/infrastructure/vision/`、`src-tauri/resources/quasivision_models/` |
+| 改视觉 | 核心 `src-tauri/src/vision/`（模型定位 / 懒加载 / 推理，零 `tauri::`）、命令壳 `src-tauri/src/vision_service.rs`、原生工具 `src-tauri/src/agent/native_tools/vision/`、前端 `src/infrastructure/vision/`、模型 `src-tauri/resources/quasivision_models/` |
+| 改宿主抽象 / CLI 资源与数据目录 | trait `src-tauri/src/agent/host.rs`（`resource_candidates` / `data_dir`）＋两份实现 `src-tauri/src/host/{tauri_host,cli_host}.rs`；注入链 `AgentEngine.host` → `ExecuteLlmRoundParams.host` / `RunIterationParams.host` → `execute_tool_steps` → `NativeToolCtx.host` |
 | 改设置项 | `src/ui/store/settingStore.ts` + `src/ui/pages/Settings/*` + `src/ui/i18n/lang/en-US.json` |
+| 改配置下沉 / 设置落库 | Rust `src-tauri/src/session_db/settings.rs`（`app_settings` 表 + `SettingsRepo`）+ `session_db/commands.rs::cmd_settings_*`；前端 `src/infrastructure/settingsRepo/` + `settingStore.hydrateSettings()/flushSettingsPersist()` + `src/main.ts` 的 `step('settings')`；计划见 `docs/config-sink-plan.md` |
 | 改埋点 | `src/utils/telemetry/**`（+ `src-tauri/src/telemetry.rs` 的 panic 桥） |
 | 改 RAG / 知识库 | `src-tauri/src/rag/**`、`src/services/rag-service.ts`、`src/infrastructure/rag/` |
 | 改用量统计 / 费用 | `src-tauri/src/session_db/usage.rs`、`src/domain/pricing/index.ts`、`src/services/token-stats-service.ts`、`src/ui/pages/chat/components/token-stats/` |

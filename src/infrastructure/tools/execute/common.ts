@@ -16,10 +16,11 @@ import { t, tpl } from '@/ui/i18n'
 import { settingsState } from '@/ui/store'
 import { v4 } from '@/utils/uuid'
 import toolInteractEvent from '@/events/toolInteractEvent'
-import type {
-  ToolContext,
-  ToolExecutorResponse,
-  ToolResult,
+import {
+  ToolError,
+  type ToolContext,
+  type ToolExecutorResponse,
+  type ToolResult,
 } from '@/domain/tools/types'
 import { getSkillsDirPath } from '@/skill/skillStore'
 import { toolOutputStore } from '../output-store'
@@ -679,7 +680,11 @@ async function tryRunCommandNativePty(
   abortSignal?.addEventListener('abort', onAbort)
 
   try {
-    const res = await invoke<{ content: string; uiData?: Record<string, any> }>(
+    const res = await invoke<{
+      content: string
+      uiData?: Record<string, any>
+      isError?: boolean
+    }>(
       'pty_run_command',
       {
         sessionId,
@@ -695,9 +700,15 @@ async function tryRunCommandNativePty(
         onOutput: channel,
       },
     )
+    // Rust 侧成功与「退出码 >= 2 等工具级失败」都回 Ok，用 isError 区分：
+    // 失败时 uiData 同样存在（Tauri 的 Err 只能传一个字符串，结构化信息会丢 —— 遗留项 L6）
+    if (res.isError) {
+      throw new CmdError(res.content, res.uiData)
+    }
     return { content: res.content, uiData: res.uiData }
   } catch (e: any) {
-    // Rust 侧把「退出码 >= 2」等失败封成 Err（已格式化报告文本）→ CmdError，语义同管道路径
+    if (e instanceof CmdError) throw e
+    // 真正的「调用级」异常（沙盒只读拒绝等）：没有结构化信息
     throw new CmdError(typeof e === 'string' ? e : (e?.message ?? String(e)))
   } finally {
     abortSignal?.removeEventListener('abort', onAbort)
@@ -869,32 +880,36 @@ fi`,
     })
     output.exitCode = exitCode
 
+    // ⚠️ 以下 5 条是**模型侧**文案：固定英文，与 Rust 侧 runner
+    // （native_tools/execute/common/runner/mod.rs）逐字对齐（铁律 1）。
+    // 不进 i18n —— 否则默认（Rust）与回退（TS）引擎会产出不同文本；
+    // 界面语言由 UI 侧从结构化 uiData / 本地化文案重建（D2-A 的 X 解法）。
     let result = ''
     if (killedByUser) {
-      result += t('命令已被用户取消') + '\n'
+      result += 'Command cancelled by the user\n'
     } else if (killedByTimeout) {
-      result +=
-        tpl('命令在 $__time__ 秒后超时并被终止', {
-          time: (timeoutMs / 1000).toFixed(3),
-        }) + '\n'
+      result += `Command timed out after ${(timeoutMs / 1000).toFixed(
+        3,
+      )}s and was terminated\n`
     } else {
       // 被信号终止时没有退出码，输出 null（与 Rust 侧 runner 的文案保持一致）
-      result += tpl('退出码: $__code__', { code: exitCode ?? 'null' }) + '\n'
+      result += `Exit code: ${exitCode ?? 'null'}\n`
     }
     if (output.stdout) result += processTerminalOutput(output.stdout)
     if (output.stdout && output.stderr) result += '\n'
     if (output.stderr)
-      result += t('[标准错误]') + '\n' + processTerminalOutput(output.stderr)
+      result += '[stderr]\n' + processTerminalOutput(output.stderr)
 
     const MAX = 32000
     const out =
       result.length > MAX
         ? result.slice(0, MAX) +
-          tpl('...（已截断，共 $__count__ 字符）', { count: result.length })
+          `...(truncated, ${result.length} characters total)`
         : result
 
     if (exitCode != null && exitCode >= 2) {
-      throw new CmdError(out)
+      // 失败也带上结构化 uiData（stdout/stderr/exitCode），UI 才能按界面语言重建（L6）
+      throw new CmdError(out, { ...output })
     }
 
     return {
@@ -908,10 +923,15 @@ fi`,
   }
 }
 
-/** 命令以非 0/1 退出码结束（>= 2）时抛出，供工具层区分「命令失败」与「执行器异常」 */
-export class CmdError extends Error {
-  constructor(message: string) {
-    super(message)
+/**
+ * 命令以非 0/1 退出码结束（>= 2）时抛出，供工具层区分「命令失败」与「执行器异常」。
+ *
+ * 继承 `ToolError`：失败也携带结构化 `uiData`（stdout / stderr / exitCode），
+ * UI 才能按界面语言重建，而不是把模型侧英文报告直接贴给用户（遗留项 L6）。
+ */
+export class CmdError extends ToolError {
+  constructor(message: string, uiData?: Record<string, any>) {
+    super(message, uiData)
     this.name = 'CmdError'
   }
 }

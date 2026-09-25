@@ -46,7 +46,7 @@ pub(crate) async fn search_files_by_name_tool(
     let results = tokio::select! {
         _ = ctx.cancel.cancelled() => {
             cancel_flag.store(true, Ordering::SeqCst);
-            return Ok(NativeToolOutcome::Error(format!("[Search cancelled] Search for \"{}\" was cancelled.", query)));
+            return Ok(NativeToolOutcome::error(format!("[Search cancelled] Search for \"{}\" was cancelled.", query)));
         }
         r = task => r.map_err(|e| format!("Search failed: {}", e))?,
     };

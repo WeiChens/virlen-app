@@ -102,7 +102,7 @@ describe('LLMVerifier 取消处理', () => {
       controller.signal,
     )
     expect(result.passed).toBe(false)
-    expect(result.summary).toContain('验证调用失败')
+    expect(result.summary).toContain('Verification call failed')
   })
 
   it('goal/trace 中的 $&、$` 等特殊字符不应破坏 Prompt（String.replace 特殊模式回归）', async () => {

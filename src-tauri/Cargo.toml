@@ -59,6 +59,7 @@ turbovec = "0.9"                                                          # 向�
 text-splitter = "0.25"                                                    # 智能文本分块
 uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
+chrono-tz = "0.10"                                                        # IANA 时区库（get_current_time 原生实现；无 JS 的 CLI 没有 Intl）
 once_cell = "1"                                                           # 全局惰性初始化
 rand = { version = "0.8", features = ["small_rng"] }                      # 沙盒能力 SID 随机生成
 dunce = "1"                                                               # 路径 canonicalize（Windows UNC/长路径）
@@ -77,6 +78,22 @@ pdf-extract = "0.7" # PDF 文本提取
 # UI 检测、OCR、物体检测(YOLOE-26n)、图标分类
 # 内置跨平台 GPU 加速：Windows → DirectML, macOS → CoreML, Linux → CPU
 quasivision = "0.2.1"
+
+# ── js 类沙盒规则求值（D4 / 配置下沉） ──
+# 纯 Rust CLI 没有 JS 进程，「忽略沙盒命令」里的 js 规则必须由内嵌引擎求值
+# （规则体是用户代码 → 求值侧要限内存/限时、异常按「未命中」处理，见 docs/config-sink-plan.md §4）。
+#
+# ⚠️ 必须关掉默认特性：default 含 `typescript` → 会拖进**整套 SWC**
+#    （实测 +180 个 crate，含 swc_ecma_* / swc_bundler）。我们只调用规则体的纯 JS 函数，
+#    不需要 TS 转译。
+#
+# ⚠️ 引擎必须选 `quickjs-ng`（**不能**用默认的 `bellard`）：
+#    `libquickjs-sys` 在本 crate 里关掉了默认特性，必须显式二选一，而
+#    `bellard/quickjs/cutils.h` 无条件使用 GCC 内建（`__attribute__((unused))` /
+#    `__builtin_expect`）且**没有 MSVC 分支** → 在 Windows MSVC 下直接编译失败
+#    （实测：`libunicode.c(381): error C2143`）；`quickjs-ng` 分支带 `#if defined(_MSC_VER)`
+#    回退，是官方可维护分支。详见 docs/config-sink-plan.md §4.3。
+quickjs_runtime = { version = "0.18", default-features = false, features = ["quickjs-ng"] }
 
 # ── Windows 平台：WebView2 权限管理（麦克风/摄像头） ──
 [target.'cfg(target_os = "windows")'.dependencies]

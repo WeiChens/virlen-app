@@ -1,9 +1,9 @@
-请根据以上对话内容为本次会话生成一个简短标题。
-格式：直接返回标题文字本身，不要调用任何工具。
+Generate a short title for this session based on the conversation above.
+Format: return the title text itself; do not call any tool.
 
-要求：
-1. 标题长度不超过 30 个字符
-2. 直接返回标题，不要加引号、书名号、序号、冒号或任何解释性文字
-3. 使用与对话相同的语言
-4. 概括对话的核心主题或用户意图，而非机械复述原文
-5. 结尾不要使用标点符号
+Requirements:
+1. Keep the title within 30 characters.
+2. Return the title directly — no quotation marks, book-title marks, numbering, colons or any explanatory text.
+3. Use the same language as the conversation.
+4. Capture the core topic or the user's intent rather than mechanically restating the original text.
+5. Do not end with punctuation.

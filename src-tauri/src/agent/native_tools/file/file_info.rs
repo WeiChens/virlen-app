@@ -2,7 +2,7 @@
 
 use crate::agent::native_tools::common::{arg_str, resolve_safe_path};
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::common::{format_size, format_system_time};
 
@@ -15,13 +15,13 @@ pub(crate) async fn file_info_tool(
 
     if !std::path::Path::new(&full_path).exists() {
         return Ok(NativeToolOutcome::Value {
-            content: format!("错误：路径不存在 — {}", full_path),
+            content: format!("Error: path does not exist — {}", full_path),
             ui_data: None,
         });
     }
 
     let metadata = std::fs::metadata(&full_path)
-        .map_err(|e| format!("错误：获取信息失败 — {}", e))?;
+        .map_err(|e| format!("Error: failed to get file info — {}", e))?;
 
     let is_dir = metadata.is_dir();
     let size = metadata.len();
@@ -38,22 +38,40 @@ pub(crate) async fn file_info_tool(
 
     let lines = vec![
         format!("📋 {}", full_path),
-        format!("  类型: {}", if is_dir { "📁 目录" } else { "📄 文件" }),
-        format!("  大小: {}", format_size(size as usize)),
+        format!("  Type: {}", if is_dir { "📁 Directory" } else { "📄 File" }),
+        format!("  Size: {}", format_size(size as usize)),
         if atime.is_empty() {
             String::new()
         } else {
-            format!("  访问时间: {}", atime)
+            format!("  Accessed: {}", atime)
         },
         if mtime.is_empty() {
             String::new()
         } else {
-            format!("  修改时间: {}", mtime)
+            format!("  Modified: {}", mtime)
         },
     ];
 
+    // UI 侧结构化元信息（时间戳毫秒，由组件按界面语言本地化）
+    let atime_ms = metadata
+        .accessed()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64);
+    let mtime_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64);
+
     Ok(NativeToolOutcome::Value {
         content: lines.into_iter().filter(|l| !l.is_empty()).collect::<Vec<_>>().join("\n"),
-        ui_data: None,
+        ui_data: Some(json!({
+            "path": full_path,
+            "isDirectory": is_dir,
+            "sizeBytes": size,
+            "atimeMs": atime_ms,
+            "mtimeMs": mtime_ms,
+        })),
     })
 }

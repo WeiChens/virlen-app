@@ -247,11 +247,11 @@ impl Provider for NativeAnthropicProvider {
             r = self.http.post(&url).headers(self.headers()).json(&body).send() => r.map_err(|e| format!("API Error: {}", e))?,
         };
         let status = resp.status();
-        let text = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let text = resp.text().await.map_err(|e| format!("Failed to read the response: {}", e))?;
         if !status.is_success() {
             return Err(format!("API Error ({}): {}", status.as_u16(), text));
         }
-        let data: Value = serde_json::from_str(&text).map_err(|e| format!("响应解析失败: {}", e))?;
+        let data: Value = serde_json::from_str(&text).map_err(|e| format!("Failed to parse the response: {}", e))?;
         Ok(self.parse_response(&data))
     }
 
@@ -271,7 +271,7 @@ impl Provider for NativeAnthropicProvider {
         };
         let status = resp.status();
         if !status.is_success() {
-            let text = resp.text().await.map_err(|e| format!("读取错误响应失败: {}", e))?;
+            let text = resp.text().await.map_err(|e| format!("Failed to read the error response: {}", e))?;
             return Err(format!("API Error ({}): {}", status.as_u16(), text));
         }
 

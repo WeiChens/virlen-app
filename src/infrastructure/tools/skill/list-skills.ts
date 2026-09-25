@@ -2,28 +2,39 @@
  * list_skills — 查看当前代理拥有的所有技能
  *
  * ⚠️ 只读操作，不提供写能力。
+ *
+ * 模型侧**固定英文**（与 Rust 原生实现 / CLI 一致，铁律 1）；
+ * UI 侧下发结构化 `uiData.skills`（语言无关），由组件按 UI 语言渲染
+ * （`ui/pages/chat/components/tool-call/ListSkillsMessage`）。
+ *
+ * ⚠️ 已原生化（Step 2）：Rust 引擎走 `native_tools/skill/list_skills.rs`（默认路径），
+ * 本文件只服务 **TS 引擎**（回退路径）。元信息解析 / 扫盘逻辑在 `src/skill/*` +
+ * `src/utils/mdYamlFrontmatter.ts` ↔ `native_tools/skill/common.rs` 两份镜像，
+ * 改一边必须同步另一边（铁律 1）。
  */
 import { toolRegistry } from '@/domain/tools'
-import type { ToolContext, ToolExecutor } from '@/domain/tools/types'
+import type { ToolContext, ToolExecutor, ToolResult } from '@/domain/tools/types'
+import { t } from '@/ui/i18n'
+
+/** 单个技能交给 UI 的最小结构化信息（语言无关，供组件本地化渲染） */
+export interface SkillBrief {
+  name: string
+  description?: string
+  version?: string
+  tags?: string[]
+}
 
 toolRegistry.register(
-  {
-    name: 'list_skills',
-    label: '查看技能列表',
-    description:
-      '查看当前代理拥有的所有技能。返回技能名称和描述列表，让你了解自己可以使用的技能。',
-    parameters: {
-      type: 'object',
-      properties: {},
-      required: [],
-    },
-  },
-  (async (_args: Record<string, any>, ctx: ToolContext): Promise<string> => {
+    'list_skills',
+    (async (_args: Record<string, any>, ctx: ToolContext): Promise<ToolResult> => {
     const skillNames = ctx.skills || []
 
-    if (skillNames.length === 0) {
-      return '当前没有启用的技能。'
-    }
+    const empty = (): ToolResult => ({
+      content: 'No skills are currently enabled for this agent.',
+      uiData: { skills: [] as SkillBrief[] },
+    })
+
+    if (skillNames.length === 0) return empty()
 
     try {
       const { listRegisteredSkills } = await import('@/skill')
@@ -34,30 +45,33 @@ toolRegistry.register(
         skillNames.includes(s.meta.name),
       )
 
-      if (agentSkills.length === 0) {
-        // 技能已注册但未启用的情况
-        return '当前没有启用的技能。'
-      }
+      // 技能已注册但未启用的情况
+      if (agentSkills.length === 0) return empty()
 
-      const lines: string[] = [`已启用技能 (${agentSkills.length} 个)`, '']
+      const skills: SkillBrief[] = agentSkills.map((s) => ({
+        name: s.meta.name,
+        description: s.meta.description,
+        version: s.meta.version,
+        tags: s.meta.tags,
+      }))
 
-      for (const skill of agentSkills) {
-        lines.push(`  📌 **${skill.meta.name}**`)
-        lines.push(`     ${skill.meta.description}`)
-        if (skill.meta.version) {
-          lines.push(`     版本: ${skill.meta.version}`)
-        }
-        if (skill.meta.tags?.length) {
-          lines.push(`     标签: ${skill.meta.tags.join(', ')}`)
-        }
+      const lines: string[] = [`Enabled skills (${skills.length})`, '']
+      for (const s of skills) {
+        lines.push(`  📌 **${s.name}**`)
+        if (s.description) lines.push(`     ${s.description}`)
+        if (s.version) lines.push(`     Version: ${s.version}`)
+        if (s.tags?.length) lines.push(`     Tags: ${s.tags.join(', ')}`)
         lines.push('')
       }
+      lines.push("💡 Use `read_skill_source` to inspect a skill's source code.")
 
-      lines.push('💡 使用 `read_skill_source` 查看某个技能的源代码详情。')
-
-      return lines.join('\n')
+      return { content: lines.join('\n'), uiData: { skills } }
     } catch (e: any) {
-      return `获取技能列表失败: ${e.message || String(e)}`
+      return {
+        content: `Failed to list skills: ${e.message || String(e)}`,
+        uiData: { skills: [] as SkillBrief[] },
+      }
     }
   }) as ToolExecutor,
+    t('查看技能列表'),
 )

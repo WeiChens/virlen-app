@@ -20,7 +20,7 @@ import type { CompressMode } from '@/domain/engine'
 import type { RunSnapshot } from '@/domain/engine/types'
 import { agentEngine } from '@/domain'
 import { toolRegistry } from '@/domain/tools'
-import { UserInteractionRequired } from '@/domain/tools/types'
+import { ToolError, UserInteractionRequired } from '@/domain/tools/types'
 import type { ToolDefinition } from '@/domain/tools/types'
 import { createProviderInstance } from '@/infrastructure/provider'
 import { securityRepo } from '@/infrastructure/securityRepo'
@@ -186,6 +186,9 @@ async function handleToolRequest(payload: {
       payload: {
         __kind: 'error',
         message: e?.message || String(e),
+        // 失败也把结构化 uiData 带回 Rust（D2 失败侧；L6）——
+        // 没有它，中文界面下只能把模型侧英文错误文本直接贴给用户。
+        uiData: e instanceof ToolError ? e.uiData : undefined,
       },
     })
   }
@@ -200,7 +203,11 @@ function serializeToolResult(result: any): Record<string, any> {
     }
   }
   if (result instanceof Error) {
-    return { __kind: 'error', message: result.message }
+    return {
+      __kind: 'error',
+      message: result.message,
+      uiData: result instanceof ToolError ? result.uiData : undefined,
+    }
   }
   if (result && typeof result === 'object' && 'content' in result) {
     return { __kind: 'value', value: result.content, uiData: result.uiData }
@@ -277,7 +284,11 @@ async function handleUserInteractionRequest(payload: {
 
 function serializeInteractionResult(result: any): Record<string, any> {
   if (result instanceof Error) {
-    return { __kind: 'error', message: result.message }
+    return {
+      __kind: 'error',
+      message: result.message,
+      uiData: result instanceof ToolError ? result.uiData : undefined,
+    }
   }
   if (result && typeof result === 'object' && 'content' in result) {
     return { __kind: 'value', value: result.content, uiData: result.uiData }
@@ -346,13 +357,18 @@ export function isRustEngineEnabled(): boolean {
   return settingsState.value.useRustEngine && isTauriAvailable()
 }
 
-/** 解析工具定义（对齐 TS #resolveToolDefs） */
-export function resolveToolDefs(
+/**
+ * 解析工具定义（对齐 TS `#resolveToolDefs`）
+ *
+ * ⚠️ 异步：定义来自权威源（机制 C）——Tauri 下首次读取可能要走一次 IPC
+ * `cmd_list_tool_definitions`；调用方必须 await。
+ */
+export async function resolveToolDefs(
   enableTools: boolean,
   session: Session,
-): ToolDefinition[] {
+): Promise<ToolDefinition[]> {
   if (!enableTools) return []
-  const allToolDefs = toolRegistry.listDefinitions()
+  const allToolDefs = await toolRegistry.listDefinitions()
   if (session.allowedTools === undefined) return allToolDefs
   if (session.allowedTools.length === 0) return []
   return allToolDefs.filter((t) => session.allowedTools!.includes(t.name))
@@ -495,7 +511,7 @@ export const rustEngine: AgentEnginePort = {
           session: safeSession,
           messages: safeMessages,
           provider: resolveProviderConnection(session),
-          toolDefs: resolveToolDefs(enableTools, session),
+          toolDefs: await resolveToolDefs(enableTools, session),
           enableTools,
           maxTokens,
           resumeFromSnapshot: resumeFromSnapshot ?? null,

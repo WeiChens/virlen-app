@@ -158,18 +158,25 @@ Use this skill to generate videos.`
     const meta = parseSkillMdMeta(md)
     expect(meta.name).toBe('resume-cv-assistant')
     expect(meta.description).toBe('AI-powered skill for resume & CV polishing')
-    // 注意：当前 version 正则 `(?:\*\*)?[Vv]ersion(?:\*\*)?:?\s*(\d+\.\d+\.\d+)`
-    // 不支持 `**Version:**`（因为 `:** ` 中 `:`` 和 `*`` 相邻导致 `\s*` 不匹配），
-    // 因此 `**Version:** 1.2.0` 格式的版本号无法提取
-    expect(meta.version).toBeUndefined()
+    // `**Version:** 1.2.0` 是文档（`docs/AGENTS.md` §9.2）与 `skill/importService.ts`
+    // 错误提示共用的写法 —— 正则须支持 `**` 落在冒号外侧（历史上不支持，属既有缺陷，已修正）
+    expect(meta.version).toBe('1.2.0')
   })
 
-  it('应正确提取 version（Version: X.X.X 格式）', () => {
-    const md = `# My Tool
+  it('应正确提取 version（`**Version:**` / `**Version**:` / `Version:` 三种写法）', () => {
+    const cases: Array<[string, string]> = [
+      ['**Version:** 2.0.1', '2.0.1'],
+      ['**Version**: 2.0.2', '2.0.2'],
+      ['Version: 2.0.3', '2.0.3'],
+      ['version: 2.0.4', '2.0.4'],
+    ]
+    for (const [line, expected] of cases) {
+      const meta = parseSkillMdMeta(`# My Tool
 > A useful tool
-Version: 2.0.1`
-    const meta = parseSkillMdMeta(md)
-    expect(meta.version).toBe('2.0.1')
+
+${line}`)
+      expect(meta.version, line).toBe(expected)
+    }
   })
 
   it('纯 Markdown 格式无 version 时应返回 undefined', () => {

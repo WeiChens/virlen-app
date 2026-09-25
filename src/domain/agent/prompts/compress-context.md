@@ -1,8 +1,9 @@
-请对之前的对话历史进行总结，提炼关键信息。
-格式：直接返回文字，不要调用任何工具。
-要求：
+Summarize the previous conversation history and extract the key information.
+Format: return plain text directly; do not call any tool.
+Requirements:
 
-1. 提炼程度根据对话前后排序，最后的对话信息保留最多（可按原样输出），前面的对话信息保留最少
-2. 保留重要的决策、讨论结果、文件修改、问题分析和已完成的工具操作
-3. 按逻辑组织，保持清晰的结构
-4. 忽略无关紧要的细节
+1. Weight the level of detail by position: keep the most information from the most recent turns (you may reproduce them verbatim) and the least from the earliest turns.
+2. Preserve important decisions, discussion outcomes, file modifications, problem analyses and completed tool operations.
+3. Organize the summary logically and keep its structure clear.
+4. Omit insignificant details.
+5. Write the summary in the same language as the conversation.

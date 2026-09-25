@@ -2,47 +2,17 @@
  * mkdir — 创建目录（支持单个 path 与批量 paths，幂等：已存在视为成功）
  */
 import * as tauriFs from '@tauri-apps/plugin-fs'
-import { t, tpl } from '@/ui/i18n'
+import { t } from '@/ui/i18n'
 import { toolRegistry } from '@/domain/tools'
 import type { ToolContext, ToolExecutor, ToolResult } from '@/domain/tools/types'
 import { securityService } from '@/services/security-service'
 import { isTauriFsAvailable } from './common'
 
 toolRegistry.register(
-  {
-    name: 'mkdir',
-    label: t('创建目录'),
-    description:
-      'Create a directory (or directories). Pass "paths" (array) to create multiple directories in one call. ' +
-      'By default creates parent directories if they do not exist (recursive=true). ' +
-      'If a directory already exists, it is treated as success (idempotent).',
-    parameters: {
-      type: 'object',
-      properties: {
-        path: {
-          type: 'string',
-          description:
-            'Directory path to create (relative to workspace or absolute). Use this for a single directory.',
-        },
-        paths: {
-          type: 'array',
-          items: { type: 'string' },
-          description:
-            'Array of directory paths to create in one call. Use this to batch-create multiple directories.',
-        },
-        recursive: {
-          type: 'boolean',
-          description:
-            'Whether to create parent directories if they do not exist. Default: true.',
-          default: true,
-        },
-      },
-      oneOf: [{ required: ['path'] }, { required: ['paths'] }],
-      required: [],
-    },
-  },
-  (async (args: Record<string, any>, ctx: ToolContext): Promise<ToolResult> => {
-    if (!isTauriFsAvailable()) throw '[mkdir] 错误：当前不是 Tauri 环境'
+    'mkdir',
+    (async (args: Record<string, any>, ctx: ToolContext): Promise<ToolResult> => {
+    if (!isTauriFsAvailable())
+      throw '[mkdir] Error: not running in a Tauri environment'
 
     const recursive = args.recursive !== false
 
@@ -56,7 +26,7 @@ toolRegistry.register(
         : []
 
     if (rawPaths.length === 0) {
-      throw t('错误：请提供 "path" 或 "paths" 参数')
+      throw 'Error: provide either the "path" or the "paths" parameter'
     }
 
     const created: string[] = []
@@ -82,12 +52,14 @@ toolRegistry.register(
       }
     }
 
+    // ⚠️ 模型侧固定英文（P4b/D2-A）；UI 侧走 uiData 由组件按界面语言渲染。
+    // 文案与 Rust `native_tools/file/mkdir.rs` 逐字一致（铁律 1）。
     const parts: string[] = []
     if (created.length > 0) {
       parts.push(
         created.length === 1
-          ? `📁 ${tpl('已创建目录: $__path__', { path: created[0] })}`
-          : `📁 ${tpl('已创建 $__count__ 个目录', { count: created.length })}:\n${created
+          ? `📁 Directory created: ${created[0]}`
+          : `📁 Created ${created.length} directories:\n${created
               .map((p) => `  - ${p}`)
               .join('\n')}`,
       )
@@ -95,17 +67,17 @@ toolRegistry.register(
     if (existed.length > 0) {
       parts.push(
         existed.length === 1
-          ? `ℹ️ ${tpl('目录已存在: $__path__', { path: existed[0] })}`
-          : `ℹ️ ${tpl('已存在 $__count__ 个目录', { count: existed.length })}:\n${existed
+          ? `ℹ️ Directory already exists: ${existed[0]}`
+          : `ℹ️ ${existed.length} directories already exist:\n${existed
               .map((p) => `  - ${p}`)
               .join('\n')}`,
       )
     }
     if (errors.length > 0) {
       parts.push(
-        `⚠️ ${tpl('有 $__count__ 个目录创建失败', {
-          count: errors.length,
-        })}:\n${errors.map((e) => `  - ${e}`).join('\n')}`,
+        `⚠️ Failed to create ${errors.length} directories:\n${errors
+          .map((e) => `  - ${e}`)
+          .join('\n')}`,
       )
     }
 
@@ -122,4 +94,5 @@ toolRegistry.register(
       },
     }
   }) as ToolExecutor,
+    t('创建目录'),
 )

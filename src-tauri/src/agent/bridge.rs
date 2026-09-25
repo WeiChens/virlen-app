@@ -6,6 +6,8 @@
 //! - Rust 发出 `agent:tool-request` { requestId, sessionId, toolCallId, toolName, args, skills }
 //! - JS 执行工具后调用命令 `agent_tool_response(requestId, payload)`
 //! - payload: { __kind: "value"|"error"|"interaction", value?, uiData?, message?, interactionType?, interactionData? }
+//!   ⚠️ `__kind: "error"` 也允许携带 `uiData`：失败文案同样是「模型侧英文 + UI 侧结构化」两用，
+//!   UI 靠 `uiData` 按界面语言重建，否则只能直显英文报告。
 //!
 //! ## 用户交互（Rust → JS）
 //! - Rust 发出 `agent:user-interaction-request` { requestId, type, data }
@@ -141,7 +143,7 @@ impl AgentBridgeState {
                 "status": if outcome.is_ok() { "success" } else { "fail" },
             }),
         );
-        outcome.map_err(|_| format!("工具请求被丢弃: {}", tool_name))
+        outcome.map_err(|_| format!("Tool request was dropped: {}", tool_name))
     }
 
     /// 请求 JS 处理用户交互，等待回执
@@ -185,7 +187,7 @@ impl AgentBridgeState {
                 "status": if outcome.is_ok() { "success" } else { "fail" },
             }),
         );
-        outcome.map_err(|_| format!("用户交互请求被丢弃: {}", type_))
+        outcome.map_err(|_| format!("User-interaction request was dropped: {}", type_))
     }
 
     /// 打开一个 Provider 流通道（BridgedProvider 使用）
@@ -256,11 +258,11 @@ impl AgentBridgeState {
         let outcome = tokio::time::timeout(ROUND_BOUNDARY_TIMEOUT, rx).await;
         match outcome {
             Ok(Ok(value)) => Ok(value),
-            Ok(Err(_)) => Err("轮次边界请求被丢弃".to_string()),
+            Ok(Err(_)) => Err("Round-boundary request was dropped".to_string()),
             Err(_) => {
                 // 超时：主动摘下挂起槽位，避免 JS 迟到的回执写进已无用的通道
                 self.pending_round_boundaries.lock().await.remove(&request_id);
-                Err("轮次边界请求超时".to_string())
+                Err("Round-boundary request timed out".to_string())
             }
         }
     }
@@ -370,7 +372,8 @@ pub fn parse_round_boundary_messages(payload: &serde_json::Value) -> Vec<Message
 #[derive(Debug, Clone)]
 pub enum BridgeToolResult {
     Value { content: String, ui_data: Option<serde_json::Value> },
-    Error(String),
+    /// 失败：`content` = 模型侧固定英文；`ui_data` = 可选结构化描述（供 UI 按界面语言重建）
+    Error { content: String, ui_data: Option<serde_json::Value> },
     Interaction { interaction_type: String, interaction_data: serde_json::Value },
 }
 
@@ -379,13 +382,14 @@ impl BridgeToolResult {
     pub fn parse(payload: &serde_json::Value) -> BridgeToolResult {
         let kind = payload.get("__kind").and_then(|v| v.as_str()).unwrap_or("value");
         match kind {
-            "error" => BridgeToolResult::Error(
-                payload
+            "error" => BridgeToolResult::Error {
+                content: payload
                     .get("message")
                     .and_then(|v| v.as_str())
                     .unwrap_or("tool error")
                     .to_string(),
-            ),
+                ui_data: payload.get("uiData").cloned().filter(|v| !v.is_null()),
+            },
             "interaction" => BridgeToolResult::Interaction {
                 interaction_type: payload
                     .get("interactionType")
@@ -410,7 +414,8 @@ impl BridgeToolResult {
 #[derive(Debug, Clone)]
 pub enum BridgeInteractionResult {
     Value { content: String, ui_data: Option<serde_json::Value> },
-    Error(String),
+    /// 失败：同 `BridgeToolResult::Error`（`ui_data` 可选）
+    Error { content: String, ui_data: Option<serde_json::Value> },
     Shelved,
     Cancelled,
 }
@@ -419,13 +424,14 @@ impl BridgeInteractionResult {
     pub fn parse(payload: &serde_json::Value) -> BridgeInteractionResult {
         let kind = payload.get("__kind").and_then(|v| v.as_str()).unwrap_or("value");
         match kind {
-            "error" => BridgeInteractionResult::Error(
-                payload
+            "error" => BridgeInteractionResult::Error {
+                content: payload
                     .get("message")
                     .and_then(|v| v.as_str())
                     .unwrap_or("interaction error")
                     .to_string(),
-            ),
+                ui_data: payload.get("uiData").cloned().filter(|v| !v.is_null()),
+            },
             "shelved" => BridgeInteractionResult::Shelved,
             "cancelled" => BridgeInteractionResult::Cancelled,
             _ => BridgeInteractionResult::Value {
@@ -465,5 +471,61 @@ mod tests {
         assert!(parse_round_boundary_messages(&json!({})).is_empty());
         assert!(parse_round_boundary_messages(&json!({ "messages": null })).is_empty());
         assert!(parse_round_boundary_messages(&json!({ "messages": [] })).is_empty());
+    }
+
+    /// D2 的失败侧：`__kind: "error"` 也能带 `uiData`
+    /// （UI 按界面语言重建，而不是把模型侧英文报告直接贴给用户，见遗留项 L6）
+    #[test]
+    fn parse_error_payload_carries_ui_data() {
+        let parsed = BridgeToolResult::parse(&json!({
+            "__kind": "error",
+            "message": "Exit code: 2",
+            "uiData": { "exitCode": 2, "stdout": "", "stderr": "" },
+        }));
+        match parsed {
+            BridgeToolResult::Error { content, ui_data } => {
+                assert_eq!(content, "Exit code: 2");
+                assert_eq!(ui_data.expect("uiData 应保留")["exitCode"], json!(2));
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_error_payload_without_ui_data_is_tolerated() {
+        let parsed = BridgeToolResult::parse(&json!({ "__kind": "error", "message": "boom" }));
+        match parsed {
+            BridgeToolResult::Error { content, ui_data } => {
+                assert_eq!(content, "boom");
+                assert!(ui_data.is_none());
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        // `uiData: null` 与缺失等价
+        let parsed = BridgeToolResult::parse(&json!({
+            "__kind": "error",
+            "message": "boom",
+            "uiData": null,
+        }));
+        match parsed {
+            BridgeToolResult::Error { ui_data, .. } => assert!(ui_data.is_none()),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_interaction_error_payload_carries_ui_data() {
+        let parsed = BridgeInteractionResult::parse(&json!({
+            "__kind": "error",
+            "message": "denied",
+            "uiData": { "noteKind": "deleted" },
+        }));
+        match parsed {
+            BridgeInteractionResult::Error { content, ui_data } => {
+                assert_eq!(content, "denied");
+                assert_eq!(ui_data.expect("uiData 应保留")["noteKind"], json!("deleted"));
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
     }
 }

@@ -44,9 +44,10 @@ export function buildLiveSegments(raw: string): TerminalSegment[] {
 }
 
 /**
- * 完成后：优先用结构化的 uiData（stdout/stderr）；
- * 流字段缺失时（命令退出码 >= 2 会抛 CmdError，uiData 不会下发）
- * content 本身就是失败报告（含「退出码 / [标准错误]」），整体按 stderr 渲染。
+ * 完成后：优先用结构化的 `uiData`（stdout/stderr）—— **成功与失败都下发**：
+ * 退出码 >= 2 的失败同样带 `uiData`（`CmdError.uiData` ↔ Rust `NativeToolOutcome::Error.ui_data`，L6）。
+ * 仅当流字段缺失（旧消息 / 调用级异常）才回退 `content`：
+ * 这时 `content` 本身就是失败报告（含「Exit code / [stderr]」），整体按 stderr 渲染。
  */
 export function buildFinishedSegments(
   ui: Record<string, any> | undefined,
@@ -85,6 +86,31 @@ export function followBottomIfPinned(
   if (bottom >= threshold) return false
   el.scrollTop = el.scrollHeight
   return true
+}
+
+/**
+ * 终端输出末尾「附加说明」的展示文本（目前只有 execute_script 的脚本删除提示）。
+ *
+ * P4b：模型侧 `note` 固定英文，UI 侧改为按界面语言渲染结构化字段
+ * （`noteKind` / `notePath` / `noteError`，Rust 与 TS 两侧同构）；
+ * 旧消息没有这些字段 → 回退 `note` 原文（不做语言猜测，避免误判用户数据）。
+ */
+export function displayNote(
+  ui: Record<string, any> | undefined,
+): string | undefined {
+  if (!ui) return undefined
+  const kind = ui.noteKind
+  const path = ui.notePath
+  if (kind === 'deleted' && path) {
+    return tpl('🗑️ 已删除脚本文件: $__path__', { path })
+  }
+  if (kind === 'delete_failed' && path) {
+    return tpl('⚠️ 脚本文件删除失败: $__path__ — $__error__', {
+      path,
+      error: ui.noteError ?? '',
+    })
+  }
+  return ui.note
 }
 
 /** 完成态状态徽标：退出码 / 失败标识 */
@@ -367,7 +393,7 @@ export function TerminalView({
           cmd={cmd}
           cwd={cwd}
           fileLabel={fileLabel}
-          note={running ? undefined : message?.uiData?.note}
+          note={running ? undefined : displayNote(message?.uiData)}
           stream={stream}
           running={running}
           toolCallId={toolCallId}
@@ -392,7 +418,7 @@ export function TerminalView({
         title={title}
         cmd={cmd}
         fileLabel={fileLabel}
-        note={running ? undefined : message?.uiData?.note}
+        note={running ? undefined : displayNote(message?.uiData)}
         segments={segments}
         status={
           running ? undefined : (

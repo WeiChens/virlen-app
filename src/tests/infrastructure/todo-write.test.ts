@@ -84,7 +84,7 @@ describe('todo_write 执行', () => {
 
   it('空数组 = 清空清单（不是错误）', async () => {
     const result = await run({ todos: [] })
-    expect(textOf(result)).toContain('清单已清空')
+    expect(textOf(result)).toContain('task list was cleared')
     expect(uiOf(result).todos).toEqual([])
   })
 
@@ -103,7 +103,7 @@ describe('todo_write 执行', () => {
       id: String(i + 1),
       content: `任务 ${i + 1}`,
     }))
-    await expect(run({ todos })).rejects.toThrow(/最多 50 项/)
+    await expect(run({ todos })).rejects.toThrow(/max 50/)
   })
 
   it('多个 in_progress：只在正文里警告，不改数据', async () => {

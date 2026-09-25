@@ -7,6 +7,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { withCancelResult } from '@/utils/withCancel'
 import { toolRegistry } from '@/domain/tools'
 import type { ToolExecutor, ToolContext, ToolResult } from '@/domain/tools/types'
+import { t } from '@/ui/i18n'
 import { createSearchTask, resolveSearchRoot } from './common'
 
 interface TextSearchResult {
@@ -16,37 +17,8 @@ interface TextSearchResult {
 }
 
 toolRegistry.register(
-  {
-    name: 'search_text_in_files',
-    label: '搜索关键字',
-    description:
-      'Search for text content inside files recursively. **Supports regex patterns.** ' +
-      'Returns file path, line number, and the matching line content. ' +
-      'Automatically skips binary files and respects .gitignore. ' +
-      'Use this to find function definitions, variable usages, error messages, TODO comments, etc.',
-    parameters: {
-      type: 'object',
-      properties: {
-        path: {
-          type: 'string',
-          description: 'Root directory to search in (e.g. "./src").',
-          default: '.',
-        },
-        query: {
-          type: 'string',
-          description:
-            'Text or regex pattern to search for in file contents. Supports full regex syntax (e.g. "function\\s+\\w+" for function definitions, "TODO|FIXME" for TODOs).',
-        },
-        max_results: {
-          type: 'number',
-          description: 'Maximum number of results. Default: 30.',
-          default: 30,
-        },
-      },
-      required: ['query'],
-    },
-  },
-  (async (args: Record<string, any>, ctx: ToolContext): Promise<ToolResult> => {
+    'search_text_in_files',
+    (async (args: Record<string, any>, ctx: ToolContext): Promise<ToolResult> => {
     // 参数校验：query 为必填
     if (!args.query) {
       return {
@@ -100,4 +72,5 @@ toolRegistry.register(
       },
     }
   }) as ToolExecutor,
+    t('搜索关键字'),
 )

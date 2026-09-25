@@ -40,90 +40,21 @@ import {
   classifyCommand,
   detectPlatform,
   getRiskInfo,
-  platformSnapshot,
   registerPendingApproval,
   runCommand,
 } from './common'
 
-/** 平台特定的 command 参数描述（与 execute_command 对齐）。 */
-function buildCommandDescription(platform: string): string {
-  if (platform === 'windows') {
-    return (
-      '用于执行脚本文件的命令（PowerShell 语法），如 "node script.js"、"python task.py"、".\\run.ps1"。' +
-      '命令中请引用 file_path 指定的脚本文件；支持管道、重定向、分号顺序执行，不支持 && / ||。'
-    )
-  }
-  if (platform === 'macos') {
-    return (
-      '用于执行脚本文件的命令（zsh 语法），如 "node script.js"、"python task.py"、"bash run.sh"。' +
-      '命令中请引用 file_path 指定的脚本文件；支持 &&/|| 串联、管道、重定向。'
-    )
-  }
-  return (
-    '用于执行脚本文件的命令（sh/POSIX 语法），如 "node script.js"、"python task.py"、"sh run.sh"。' +
-    '命令中请引用 file_path 指定的脚本文件；支持 &&/|| 串联、管道、重定向。'
-  )
-}
+// 工具描述（含三平台变体）已收敛到权威源（机制 C）：
+// src-tauri/src/agent/tool_defs/definitions.json —— 见 docs/rust-engine.md §12。
 
 toolRegistry.register(
-  {
-    name: 'execute_script',
-    label: t('执行脚本'),
-    description: () =>
-      'Create a script file (file_path + file_content), then execute it with a shell command, ' +
-      'and by default delete the script file right after execution (end_del_file=true). ' +
-      'Use this instead of execute_command when the code to run is long/multi-line and awkward to inline. ' +
-      'The file is written through the same sandbox check as write_file; the command goes through the same approval flow as execute_command. ' +
-      '结果首行是「终端环境」提示；退出码 >= 2 表示命令执行失败。',
-    parameters: {
-      type: 'object',
-      properties: {
-        file_path: {
-          type: 'string',
-          description:
-            '脚本文件路径（相对 workspace 或绝对路径），如 "temp/run.js"。写入前会做沙盒校验。',
-        },
-        file_content: {
-          type: 'string',
-          description: '脚本文件内容（完整覆盖写入）。父目录不存在会自动创建。',
-        },
-        command: {
-          type: 'string',
-          description: () => buildCommandDescription(platformSnapshot()),
-        },
-        tips: {
-          type: 'string',
-          description:
-            '简要说明这条命令的作用和执行原因（用用户的语言）。会显示在 UI 上，帮助用户理解命令的目的。',
-        },
-        timeout: {
-          type: 'number',
-          description: '超时时间（秒）。超过该时间进程会被强制终止。默认 30。',
-          default: 30,
-        },
-        sandbox: {
-          type: 'string',
-          enum: ['off'],
-          description:
-            '默认不传（继承设置里的沙盒模式）。传 "off" 表示**申请**不使用沙盒执行脚本，' +
-            '仅用于沙盒下必然失败的场景（脚本内的子进程需要用管道 stdio 拉起孙进程等）。' +
-            '该请求按「沙盒脱壳·脚本执行」权限决策（默认弹窗确认）；沙盒为只读模式时会被直接拒绝。',
-        },
-        end_del_file: {
-          type: 'boolean',
-          description:
-            '执行完（含失败/超时）是否立即删除脚本文件。默认 true。设为 false 可保留脚本以便排查。',
-          default: true,
-        },
-      },
-      required: ['file_path', 'file_content', 'command'],
-    },
-  },
-  (async (
+    'execute_script',
+    (async (
     args: Record<string, any>,
     ctx: ToolContext,
   ): Promise<ToolResult | UserInteractionRequired> => {
-    if (!tauriFs) throw t('[execute_script] 错误：当前不是 Tauri 环境')
+    if (!tauriFs)
+      throw '[execute_script] Error: not running in a Tauri environment'
 
     const filePath = args.file_path as string
     const content = String(args.file_content ?? '')
@@ -136,8 +67,10 @@ toolRegistry.register(
     if (timeout > 300) timeout = 300
     const timeoutMs = timeout * 1000
 
-    if (!filePath) throw t('错误：请提供 file_path 参数')
-    if (!command) throw t('错误：请提供 command 参数')
+    // ⚠️ 以下报错均为**模型侧**文案：固定英文，与 Rust 原生实现
+    // （native_tools/execute/execute_script.rs）逐字对齐（铁律 1）。
+    if (!filePath) throw 'Missing required parameter: "file_path"'
+    if (!command) throw 'Missing required parameter: "command"'
 
     const fullPath = await securityService.resolveSafePath(
       filePath,
@@ -156,9 +89,7 @@ toolRegistry.register(
     //   （脚本继续走沙盒），不把一条本来能跑的调用变成报错。
     if (aiRequestedBypass && sandboxMode === 'readonly') {
       throw new Error(
-        t(
-          '沙盒处于只读模式，不支持绕过沙盒执行脚本；请先在设置中切换沙盒模式（或改用常规终端）',
-        ),
+        'The sandbox is in read-only mode, so bypassing it to run a script is not allowed; switch the sandbox mode in settings first (or use a regular terminal)',
       )
     }
     // 「忽略沙盒命令」规则（设置 → 安全）：命中即**免脱壳审批 + 强制无沙盒执行**。
@@ -178,9 +109,7 @@ toolRegistry.register(
 
     // 目标文件已存在则驳回，避免覆盖既有文件
     if (await tauriFs.exists(fullPath).catch(() => false)) {
-      throw tpl('错误：脚本文件已存在，已驳回以免覆盖 — $__path__', {
-        path: fullPath,
-      })
+      throw `Error: the script file already exists; refusing to overwrite it — ${fullPath}`
     }
 
     // 写文件 → 执行命令 → （可选）删除文件
@@ -201,15 +130,22 @@ toolRegistry.register(
         if (endDelFile) {
           const note = await deleteScriptFile(fullPath)
           return {
-            content: result.content + '\n' + note,
-            uiData: { ...(result.uiData ?? {}), note },
+            content: result.content + '\n' + note.text,
+            uiData: {
+              ...(result.uiData ?? {}),
+              // note：模型侧 + 旧消息回退用的英文文本；其余三个字段供 UI 本地化渲染
+              note: note.text,
+              noteKind: note.kind,
+              notePath: note.path,
+              ...(note.error ? { noteError: note.error } : {}),
+            },
           }
         }
         return result
       } catch (e) {
         // 执行失败/超时/取消：也照常清理脚本，避免残留
         if (endDelFile) {
-          await deleteScriptFile(fullPath).catch(() => { })
+          await deleteScriptFile(fullPath).catch(() => {})
         }
         throw e
       }
@@ -230,10 +166,10 @@ toolRegistry.register(
       // 禁止：不执行、不弹窗，返回拒绝文本给模型（标明是哪个权限拦下的）
       const deniedPerm =
         escapeDecision === 'deny' ? PERM_SANDBOX_SCRIPT : PERM_SCRIPT
+      // 只报**权限 name**（与设置页一一对应的稳定 key）：语言无关，
+      // 且与 Rust 原生实现逐字对齐
       throw new Error(
-        tpl('操作已被权限设置禁止：$__perm__', {
-          perm: t(permissionLabel(deniedPerm)),
-        }),
+        `Operation denied by the permission settings: ${deniedPerm}`,
       )
     }
     if (decision === 'allow') {
@@ -278,6 +214,7 @@ toolRegistry.register(
     if (bypassSandbox) payload.sandboxBypass = true
     return new UserInteractionRequired('confirm_command', payload)
   }) as ToolExecutor,
+    t('执行脚本'),
 )
 
 /** Windows 上会按「系统 ANSI 代码页」解析无 BOM 脚本的 shell 扩展名（PowerShell 脚本） */
@@ -324,21 +261,35 @@ async function writeScriptFile(
       applyScriptBom(fullPath, content, await detectPlatform()),
     )
   } catch (e: any) {
-    throw tpl('错误：写入脚本文件失败 — $__error__', {
-      error: e?.message || String(e),
-    })
+    throw `Error: failed to write the script file — ${e?.message || String(e)}`
   }
 }
 
-/** 删除脚本文件（移至回收站），返回 UI 提示文本 */
-async function deleteScriptFile(fullPath: string): Promise<string> {
+/** 脚本删除结果：模型侧英文文本 + 供 UI 按界面语言渲染的结构化字段。 */
+interface ScriptDeleteNote {
+  /** 模型侧文本（与 Rust 侧 `delete_script_file` 逐字对齐） */
+  text: string
+  kind: 'deleted' | 'delete_failed'
+  path: string
+  error?: string
+}
+
+/** 删除脚本文件（移至回收站），返回模型侧文本 + 结构化字段（UI 侧本地化渲染） */
+async function deleteScriptFile(fullPath: string): Promise<ScriptDeleteNote> {
   try {
     await invoke('move_to_trash', { path: fullPath })
-    return tpl('🗑️ 已删除脚本文件: $__path__', { path: fullPath })
-  } catch (e: any) {
-    return tpl('⚠️ 脚本文件删除失败: $__path__ — $__error__', {
+    return {
+      text: `🗑️ Script file deleted: ${fullPath}`,
+      kind: 'deleted',
       path: fullPath,
-      error: e?.message || String(e),
-    })
+    }
+  } catch (e: any) {
+    const error = e?.message || String(e)
+    return {
+      text: `⚠️ Failed to delete the script file: ${fullPath} — ${error}`,
+      kind: 'delete_failed',
+      path: fullPath,
+      error,
+    }
   }
 }

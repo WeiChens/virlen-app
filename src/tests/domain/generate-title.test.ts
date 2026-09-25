@@ -105,17 +105,17 @@ describe('generateTitle', () => {
 
   it('没有用户消息时应抛异常', async () => {
     const session = makeSession()
-    await expect(generateTitle(session, [])).rejects.toThrow('没有用户消息')
+    await expect(generateTitle(session, [])).rejects.toThrow('No user messages found')
     await expect(
       generateTitle(session, [makeMessage({ role: 'assistant' })]),
-    ).rejects.toThrow('没有用户消息')
+    ).rejects.toThrow('No user messages found')
   })
 
   it('未配置模型和 Provider 时应抛异常', async () => {
     const session = makeSession({ modelId: '', providerConfigId: '' })
     await expect(
       generateTitle(session, [makeMessage()]),
-    ).rejects.toThrow('未配置模型或 Provider')
+    ).rejects.toThrow('The session has no model or provider configured')
   })
 
   it('Provider 未注册时应抛异常', async () => {
@@ -123,7 +123,7 @@ describe('generateTitle', () => {
     const session = makeSession()
     await expect(
       generateTitle(session, [makeMessage()]),
-    ).rejects.toThrow('未注册')
+    ).rejects.toThrow('is not registered')
   })
 
   it('AI 返回标题时正常返回', async () => {
@@ -168,7 +168,7 @@ describe('generateTitle', () => {
     const session = makeSession()
     await expect(
       generateTitle(session, [makeMessage()]),
-    ).rejects.toThrow('AI 未生成有效标题')
+    ).rejects.toThrow('The AI did not generate a valid title')
   })
 
   it('附带首条 assistant 回复作为上下文', async () => {

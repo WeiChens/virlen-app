@@ -5,6 +5,7 @@
 use super::bridge::AgentBridgeState;
 use super::cancellation::CancellationToken;
 use super::event_sink::EventSink;
+use super::host::HostEnv;
 use super::llm_round::{do_llm_round, finalize_assistant_message};
 use super::provider::Provider;
 use crate::session_db::SessionRepo;
@@ -27,6 +28,8 @@ pub struct ExecuteLlmRoundParams<'a> {
     pub reasoning_effort: Option<String>,
     /// 消息持久化仓库（直接 SQLite 直落，用于执行过程中增量保存）
     pub repo: &'a dyn SessionRepo,
+    /// 宿主环境（原生工具 `vision_analyze` 需要「模型文件在哪」）
+    pub host: &'a dyn HostEnv,
     /// Provider 类型（openai / anthropic / gemini），仅用于用量记账
     pub provider_type: &'a str,
     /// Provider 配置 id，仅用于用量记账
@@ -64,6 +67,7 @@ pub async fn execute_llm_round(
         effective_max_tokens,
         reasoning_effort,
         repo,
+        host,
         provider_type,
         provider_config_id,
         persist_snapshot,
@@ -166,6 +170,7 @@ pub async fn execute_llm_round(
         security,
         persist_ref,
         repo,
+        host,
     )
     .await;
 

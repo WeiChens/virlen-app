@@ -24,6 +24,22 @@
 //! │   ├── common.rs          glob_to_regex / escape_regex
 //! │   ├── search_files_by_name.rs
 //! │   └── search_text_in_files.rs
+//! ├── plan/                  任务清单（1）
+//! │   ├── common.rs          清单归一化 / 统计 / 软校验 / 渲染（对齐 TS `domain/todo/state.ts`）
+//! │   └── todo_write.rs
+//! ├── system/                系统（2）
+//! │   ├── user_choice.rs     交互请求（无执行逻辑，仅经交互通道交给 UI）
+//! │   └── get_current_time.rs 当前时间（IANA 时区，chrono-tz）
+//! ├── chat/                  会话消息（2）
+//! │   ├── common.rs          文本格式化 / 输出上限 / 单会话字符预算（对齐 TS `tools/chat/common.ts`）
+//! │   ├── list_messages.rs   列出「已压缩区间」的消息时序
+//! │   └── read_messages.rs   按锚点读窗口内消息正文
+//! ├── skill/                 技能（2）
+//! │   ├── common.rs          SKILL.md 元信息解析 / 目录扫描 / 文件树
+//! │   ├── list_skills.rs
+//! │   └── read_skill_source.rs
+//! ├── vision/                视觉（1）
+//! │   └── vision_analyze.rs  端侧视觉分析（模型目录经 `ctx.host` 定位；无 `tauri::`）
 //! └── knowledge_base/        知识库（6）
 //!     ├── common.rs          rag_service / build_search_context
 //!     ├── search_knowledge_base.rs        list_knowledge_bases.rs
@@ -39,15 +55,31 @@
 //! - `search_files_by_name` / `search_text_in_files`
 //! - `search_knowledge_base` / `list_knowledge_bases` / `list_knowledge_base_documents`
 //!   / `get_knowledge_base_document` / `delete_knowledge_base_document` / `write_to_knowledge_base`
+//! - `todo_write`：任务清单全量替换（无状态；清单随 tool_result 的 `content` + `uiData` 落库）
+//! - `user_choice`：向用户提问（`Interaction` 变体 → 与 TS 引擎同一条用户交互通道）
+//! - `list_messages` / `read_messages`：查询「已被上下文压缩掉」的历史（经 `SessionRepo` 直读 SQLite；
+//!   `repo.is_available() == false` 时如实回「本地存储不可用」，与 JS 路径文案一致）
+//! - `list_skills` / `read_skill_source`：技能列表与源码（扫 `security.skills_dir` + 解析 SKILL.md，
+//!   不依赖前端 localStorage 注册表 —— 无 JS 的 CLI 同样可用）
+//! - `get_current_time`：当前时间（`chrono-tz` 内置 IANA 库；uiData 只下发
+//!   `{ timestamp, timezone }`，界面语言由 UI 组件重建）——
+//!   无 JS 的纯 Rust CLI 没有 `Intl`，故必须原生
+//! - `vision_analyze`：端侧视觉分析（quasivision；模型目录经 `ctx.host` 定位，
+//!   实现与 GUI 命令壳共用 `crate::vision` —— 纯端侧，图片不出本机）
 //!
-//! 未覆盖的工具（skill、vision、web、user_choice 等）仍走 JS 桥。
+//! 未覆盖的工具（web）仍走 JS 桥。
 //! 安全策略与前端 `securityService.resolveSafePath` / `securityPort.isPathAllowed` 对齐。
 
+mod chat;
 mod common;
 mod execute;
 mod file;
 mod knowledge_base;
+mod plan;
 mod search;
+mod skill;
+mod system;
+mod vision;
 
 #[cfg(test)]
 pub(crate) mod test_util;
@@ -62,7 +94,9 @@ pub(crate) use execute::{pty_key, pty_resize, pty_set_held, pty_write};
 use crate::agent::bridge::AgentBridgeState;
 use crate::agent::cancellation::CancellationToken;
 use crate::agent::event_sink::EventSink;
+use crate::agent::host::HostEnv;
 use crate::agent::types::NativeToolSecurity;
+use crate::session_db::{NoopSessionRepo, SessionRepo};
 use serde_json::Value;
 
 // ==================== 统一结果 ====================
@@ -71,12 +105,35 @@ use serde_json::Value;
 #[derive(Debug, Clone)]
 pub enum NativeToolOutcome {
     Value { content: String, ui_data: Option<Value> },
-    Error(String),
-    /// 保留：原生工具需要用户交互时（如 user_choice 原生化）返回此变体
-    #[allow(dead_code)]
+    Error { content: String, ui_data: Option<Value> },
+    /// 原生工具要求用户交互（如 `user_choice`）—— 由 `tool_executor` 转成
+    /// `agent:user-interaction-request` 交给 UI（与 TS 引擎 `UserInteractionRequired` 同一通道）
     Interaction { interaction_type: String, interaction_data: Value },
     /// 用户暂存交互 — 由 `execute_single_step` 转换为 `__SHELVED__` 暂停标记
     Shelved,
+}
+
+impl NativeToolOutcome {
+    /// 纯文本失败（无结构化信息 → UI 只能直显模型侧英文原文）
+    pub(crate) fn error(content: impl Into<String>) -> Self {
+        Self::Error {
+            content: content.into(),
+            ui_data: None,
+        }
+    }
+
+    /// 带结构化 `ui_data` 的失败
+    ///
+    /// 与 `Value` 同一套 D2 语义：`content` 给模型看（固定英文），`ui_data` 给 UI 看
+    /// （语言无关的结构化字段，由前端组件按界面语言重建文案）。
+    /// 例：`execute_command` 退出码 >= 2 时仍下发 `{ stdout, stderr, exitCode, pty, waitReason }`，
+    /// 界面就不会把英文失败报告直接贴给用户。
+    pub(crate) fn error_with_ui(content: impl Into<String>, ui_data: Value) -> Self {
+        Self::Error {
+            content: content.into(),
+            ui_data: Some(ui_data),
+        }
+    }
 }
 
 /// 原生工具执行上下文
@@ -87,6 +144,36 @@ pub struct NativeToolCtx<'a> {
     pub sink: &'a dyn EventSink,
     pub bridge: &'a AgentBridgeState,
     pub security: &'a NativeToolSecurity,
+    /// 会话持久化后端（消息查询工具用）。
+    ///
+    /// 与 `security` 同样的显式依赖注入：
+    /// - Agent 引擎路径 → `execute_tool_steps` 传入的 `SessionRepo`（SQLite 或 Noop）；
+    /// - TS 引擎路径（`run_command_for_ts_engine`）与测试 → [`noop_repo`]（可用性 false）。
+    pub repo: &'a dyn SessionRepo,
+    /// 本 agent 启用的技能名（`session.skills`）。
+    ///
+    /// 技能工具（`list_skills` / `read_skill_source`）用它做过滤与授权判断：
+    /// JS 入参（桥载荷）里的 `skills` 与这里同源，只是原生路径不再绕一圈桥。
+    pub skills: Option<&'a [String]>,
+    /// 宿主环境（资源目录 / 数据目录）。
+    ///
+    /// 同样是显式注入（与 `security` / `repo` / `skills` 一致）：
+    /// - Agent 引擎路径 → `AgentEngine.host`（GUI = `TauriHost`，CLI = `CliHost`）；
+    /// - TS 引擎路径（`run_command_for_ts_engine`）与测试 → `host::default_host()`。
+    ///
+    /// 用途：`vision_analyze` 需要「模型文件在哪」，而那是宿主才知道的信息。
+    /// ⚠️ 引擎核心里的 `tauri::` 命中数必须保持 0，宿主差异全部收在 `HostEnv` 后端。
+    pub host: &'a dyn HostEnv,
+}
+
+/// 无持久化后端的 `SessionRepo` 占位（TS 引擎路径的 ctx 只需要一个可用引用）。
+///
+/// ⚠️ `NoopSessionRepo::is_available() == false`，因此消息查询工具会如实回
+/// 「本地存储不可用」—— 而不是把空结果误报成「该会话还没有消息」。
+pub(crate) fn noop_repo() -> &'static NoopSessionRepo {
+    static REPO: once_cell::sync::Lazy<NoopSessionRepo> =
+        once_cell::sync::Lazy::new(NoopSessionRepo::default);
+    &REPO
 }
 
 /// 是否由原生 Rust 直接执行（否则走 JS 桥）
@@ -111,6 +198,14 @@ pub fn is_native_tool(name: &str) -> bool {
             | "get_knowledge_base_document"
             | "delete_knowledge_base_document"
             | "write_to_knowledge_base"
+            | "todo_write"
+            | "user_choice"
+            | "list_messages"
+            | "read_messages"
+            | "list_skills"
+            | "read_skill_source"
+            | "get_current_time"
+            | "vision_analyze"
     )
 }
 
@@ -145,6 +240,14 @@ pub async fn execute_native_tool(
             knowledge_base::delete_knowledge_base_document_tool(ctx, args).await
         }
         "write_to_knowledge_base" => knowledge_base::write_to_knowledge_base_tool(ctx, args).await,
+        "todo_write" => plan::todo_write_tool(ctx, args).await,
+        "user_choice" => system::user_choice_tool(ctx, args).await,
+        "list_messages" => chat::list_messages_tool(ctx, args).await,
+        "read_messages" => chat::read_messages_tool(ctx, args).await,
+        "list_skills" => skill::list_skills_tool(ctx, args).await,
+        "read_skill_source" => skill::read_skill_source_tool(ctx, args).await,
+        "get_current_time" => system::get_current_time_tool(ctx, args).await,
+        "vision_analyze" => vision::vision_analyze_tool(ctx, args).await,
         _ => Err(format!("Tool \"{}\" not implemented natively", tool_name)),
     }
 }
@@ -179,6 +282,11 @@ pub(crate) async fn run_command_for_ts_engine(
         sink,
         bridge: &bridge,
         security,
+        repo: noop_repo(),
+        skills: None,
+        // 本入口不经过 AgentEngine（TS 引擎路径），拿不到构造期注入的宿主；
+        // `execute_command` 也不用宿主信息，故用进程级默认宿主。
+        host: crate::host::default_host().as_ref(),
     };
     execute::run_command_native(&ctx, command, timeout_secs, bypass_sandbox).await
 }
@@ -208,6 +316,9 @@ mod tests {
             sink: &sink,
             bridge: &bridge,
             security: &sec,
+            repo: noop_repo(),
+            skills: None,
+            host: crate::host::default_host().as_ref(),
         };
 
         // 1. write_file（相对路径 → workspace 下，自动建父目录）

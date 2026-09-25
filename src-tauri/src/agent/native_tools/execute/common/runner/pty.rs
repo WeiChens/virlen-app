@@ -382,23 +382,23 @@ pub(super) async fn run_command_native_pty(
 
     let env_note = if ran_sandboxed {
         if readonly_mode {
-            format!("终端环境: {shell} · 只读（不可写）")
+            format!("Terminal environment: {shell} · read-only (no writes)")
         } else if ctx.security.workspace.is_empty() {
-            format!("终端环境: {shell} · 写隔离")
+            format!("Terminal environment: {shell} · write isolation")
         } else {
             format!(
-                "终端环境: {shell} · 写隔离（可写根: {}；区外写入会被拒绝）",
+                "Terminal environment: {shell} · write isolation (writable roots: {}; writes outside are rejected)",
                 ctx.security.workspace
             )
         }
     } else if sandbox_degraded {
-        format!("终端环境: {shell} · 无沙盒（沙盒不可用，已降级，完整权限）")
+        format!("Terminal environment: {shell} · no sandbox (unavailable, downgraded, full permissions)")
     } else if bypass_sandbox {
-        format!("终端环境: {shell} · 无沙盒（用户已批准绕过沙盒，完整权限）")
+        format!("Terminal environment: {shell} · no sandbox (bypass approved by the user, full permissions)")
     } else if sandbox_mode(ctx) == SandboxMode::Off {
-        format!("终端环境: {shell} · 无沙盒（已关闭，完整权限）")
+        format!("Terminal environment: {shell} · no sandbox (disabled, full permissions)")
     } else {
-        format!("终端环境: {shell} · 无沙盒（完整权限）")
+        format!("Terminal environment: {shell} · no sandbox (full permissions)")
     };
 
     Ok(build_command_result(

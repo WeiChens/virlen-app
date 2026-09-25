@@ -9,8 +9,10 @@
  * `content`（给模型）+ `uiData`（给 UI）一起落库，UI 侧由
  * `pickCurrentTodos()` 从消息里派生「唯一的那份清单」。
  *
- * 未原生化：Rust 引擎经 `agent:tool-request` 桥回到这里执行（同一份语义），
- * 因此 TS / Rust 两侧行为一致；若日后要原生化，必须两边同步实现。
+ * ⚠️ 已原生化（Step 2）：Rust 引擎走 `native_tools/plan/todo_write.rs`（默认路径），
+ * 本文件只服务 **TS 引擎**（回退路径）。两侧语义必须完全一致（铁律 1）：
+ * 改这里的三条校验文案 / `content` 渲染 / `uiData` 结构，必须同步改 Rust 侧
+ * `native_tools/plan/{todo_write,common}.rs`。
  */
 import { toolRegistry } from '@/domain/tools'
 import type { ToolContext, ToolExecutor, ToolResult } from '@/domain/tools/types'
@@ -27,69 +29,14 @@ import type { TodoUiData } from '@/domain/todo/types'
 import { MAX_TODOS } from '@/domain/todo/types'
 
 toolRegistry.register(
-  {
-    name: 'todo_write',
-    label: t('任务清单'),
-    description:
-      'Create and update the task list (todos) for the current session. ' +
-      'Always pass the COMPLETE list — this call REPLACES the previous list; ' +
-      `an empty array clears it. Up to ${MAX_TODOS} items. ` +
-      'Use it to plan multi-step work and keep progress visible: mark an item ' +
-      '"in_progress" before starting it and "completed" IMMEDIATELY after finishing it. ' +
-      'Keep at most ONE item "in_progress" at a time; the remaining items stay "pending". ' +
-      'Reuse the same "id" when updating an item so the user (and the UI) can track it. ' +
-      'Do not use it for a single trivial step.',
-    parameters: {
-      type: 'object',
-      properties: {
-        todos: {
-          type: 'array',
-          description:
-            'The complete task list, in execution order. Pass the full list on every call.',
-          items: {
-            type: 'object',
-            properties: {
-              id: {
-                type: 'string',
-                description:
-                  'Stable id for the item (e.g. "1"). Reuse it when updating so progress stays trackable.',
-              },
-              content: {
-                type: 'string',
-                description:
-                  'Imperative form, e.g. "Add unit tests for todo_write".',
-              },
-              status: {
-                type: 'string',
-                enum: ['pending', 'in_progress', 'completed'],
-                description:
-                  'Task status. Exactly one item should be "in_progress" at a time.',
-                default: 'pending',
-              },
-              activeForm: {
-                type: 'string',
-                description:
-                  'Present-continuous form shown while the item is in_progress, e.g. "Adding unit tests".',
-              },
-              note: {
-                type: 'string',
-                description: 'Optional one-line result or blocker note.',
-              },
-            },
-            required: ['content'],
-          },
-        },
-      },
-      required: ['todos'],
-    },
-  },
-  (async (
+    'todo_write',
+    (async (
     args: Record<string, any>,
     ctx: ToolContext,
   ): Promise<ToolResult> => {
     const raw = args?.todos
     if (raw !== undefined && raw !== null && !Array.isArray(raw)) {
-      throw new Error(t('错误："todos" 必须是数组'))
+      throw new Error('Error: "todos" must be an array')
     }
     const list = Array.isArray(raw) ? raw : []
 
@@ -100,7 +47,9 @@ toolRegistry.register(
     const todos = sanitizeTodos(list)
     // 传了内容但全部无效（缺 content）→ 报错，避免模型以为写进去了
     if (list.length > 0 && todos.length === 0) {
-      throw new Error(t('错误：todos 中没有任何有效的任务（content 不能为空）'))
+      throw new Error(
+        'Error: no valid task in "todos" (content must not be empty)',
+      )
     }
 
     const warnings = validateTodos(todos)
@@ -128,4 +77,5 @@ toolRegistry.register(
       uiData,
     }
   }) as ToolExecutor,
+    t('任务清单'),
 )

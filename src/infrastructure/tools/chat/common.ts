@@ -6,6 +6,10 @@
  *   - 面向模型的文本格式化（英文，与工具描述同语言；这不是 UI 文案，不进 i18n，
  *     与 `fileBlockToText` / `quoteBlockToText` 的处理一致）
  *   - 单会话字符预算（滑窗），防止模型反复查询把上下文刷爆
+ *
+ * ⚠️ Step 2 起 `list_messages` / `read_messages` 已在 Rust 侧原生化
+ * （`src-tauri/src/agent/native_tools/chat/`）—— 本文件的格式化 / 上限 / 预算逻辑
+ * 有了**第二份实现**，改一边必须同步另一边（铁律 1）。
  */
 import type {
   MessageTimelinePage,

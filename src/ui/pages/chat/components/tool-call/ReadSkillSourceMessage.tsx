@@ -12,9 +12,10 @@
  *    `tests/ui/tool-call-autocenter.test.tsx` 的回归说明）：写在类方法里属条件调用 hook，
  *    会让 React 记账错乱。因此展开视图拆成 `SkillSourceView` 函数组件承载 hook。
  *
- * ⚠️ 结果文本由 `infrastructure/tools/skill/read-skill-source.ts` 生成，
- *    分段标记（技能路径 / # 📂 目录结构 / # 📄 SKILL.md）是两侧的隐式契约。
- *    任一标记缺失（工具输出被改动、内容被截断）时**不做猜测**，整段回退为 `<pre>` 原文，
+ * ⚠️ 结果由 `infrastructure/tools/skill/read-skill-source.ts` 生成：
+ *    · 新数据走**结构化 `uiData`**（`{ skillPath, tree, md }`，语言无关）；
+ *    · 旧数据只有文本，这里回退解析 `content` 的中文分段标记。
+ *    两条路都取不到时**不做猜测**，整段回退为 `<pre>` 原文，
  *    否则会出现「把 SKILL.md 正文错当成目录树渲染」这类静默错位。
  */
 import { t } from '@/ui/i18n'
@@ -41,6 +42,19 @@ export interface SkillSourceParts {
   tree: string
   /** SKILL.md 正文 */
   skillMd: string
+}
+
+/**
+ * 优先用结构化 `uiData`（新数据）。三段都为空视为「没有可用结构」，交由调用方回退。
+ */
+function partsFromUiData(ui: unknown): SkillSourceParts | null {
+  if (!ui || typeof ui !== 'object') return null
+  const d = ui as Record<string, unknown>
+  const skillPath = typeof d.skillPath === 'string' ? d.skillPath : ''
+  const tree = typeof d.tree === 'string' ? d.tree : ''
+  const skillMd = typeof d.md === 'string' ? d.md : ''
+  if (!skillPath && !tree && !skillMd) return null
+  return { skillPath, tree, skillMd }
 }
 
 /**
@@ -186,12 +200,15 @@ class ReadSkillSourceMessage implements IToolCallMessage {
   getShortText(props: ToolMessageProps): React.ReactNode {
     try {
       const name = (props.useContent.input as any)?.name || ''
-      // 结果文本可达数十 KB（含 SKILL.md 全文），短文本只扫开头定位路径即可
+      // 定位技能路径：新数据直接取 uiData；旧数据只扫结果开头（正文可达数十 KB）
       const head =
         typeof props.message?.content === 'string'
           ? props.message.content.slice(0, 300)
           : ''
-      const skillPath = head.match(PATH_RE)?.[1]?.trim() || ''
+      const skillPath =
+        partsFromUiData(props.message?.uiData)?.skillPath ||
+        head.match(PATH_RE)?.[1]?.trim() ||
+        ''
 
       // 入参缺失（如工具直接报错）时没有技能名可展示，退回结果开头的一句话
       if (!name) {
@@ -232,7 +249,10 @@ class ReadSkillSourceMessage implements IToolCallMessage {
     return (
       <SkillSourceView
         name={((props.useContent.input as any)?.name as string) || ''}
-        parts={parseSkillSourceContent(content)}
+        parts={
+          partsFromUiData(props.message?.uiData) ??
+          parseSkillSourceContent(content)
+        }
         raw={content}
       />
     )

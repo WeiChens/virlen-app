@@ -184,12 +184,12 @@ export class IterationController {
         const errMsg = (e as any)?.message || String(e)
         verifyResult = {
           passed: false,
-          summary: `验证调用失败: ${errMsg}`,
+          summary: `Verification call failed: ${errMsg}`,
           issues: [
             {
               severity: 'error',
-              description: `验证 LLM 调用失败: ${errMsg}`,
-              suggestion: '请检查 provider 配置或网络连接后重试',
+              description: `Verification LLM call failed: ${errMsg}`,
+              suggestion: 'Check the provider configuration or network connection and try again',
             },
           ],
         }
@@ -220,7 +220,7 @@ export class IterationController {
           data: {
             iteration: iterSession.currentIteration,
             maxIterations: this.config.maxIterations,
-            summary: `目标在第 ${iterSession.currentIteration} 次迭代后达成`,
+            summary: `Goal achieved after ${iterSession.currentIteration} iteration(s)`,
           },
         })
         return { completed: true, messages }
@@ -257,7 +257,7 @@ export class IterationController {
       data: {
         iteration: iterSession.currentIteration,
         maxIterations: this.config.maxIterations,
-        summary: `超出最大迭代次数 (${this.config.maxIterations})，目标未完全达成`,
+        summary: `Exceeded the maximum number of iterations (${this.config.maxIterations}); the goal was not fully achieved`,
       },
     })
 
@@ -281,24 +281,24 @@ export class IterationController {
     const historySummary = iterSession.verificationHistory
       .map(
         (v, i) =>
-          `第 ${i + 1} 次: ${v.passed ? '✅' : '❌'} ${v.summary}`,
+          `Attempt ${i + 1}: ${v.passed ? '✅' : '❌'} ${v.summary}`,
       )
       .join('\n')
 
     const content = [
-      '【迭代结束报告】',
+      '[Iteration end report]',
       '',
-      `目标: ${iterSession.goal.description}`,
-      `总迭代次数: ${iterSession.currentIteration}/${iterSession.maxIterations}`,
-      `最终状态: ❌ 未完全达成`,
+      `Goal: ${iterSession.goal.description}`,
+      `Total iterations: ${iterSession.currentIteration}/${iterSession.maxIterations}`,
+      `Final status: ❌ Not fully achieved`,
       '',
-      '各轮验证结果:',
+      'Verification result per round:',
       historySummary,
       '',
-      '已达到最大迭代次数限制。请检查执行结果，考虑：',
-      '1. 调整目标描述，使其更具体明确',
-      '2. 手动完成剩余步骤',
-      '3. 增加最大迭代次数后重试',
+      'The maximum number of iterations has been reached. Review the results and consider:',
+      '1. Making the goal description more specific',
+      '2. Completing the remaining steps manually',
+      '3. Raising the max iterations and retrying',
     ].join('\n')
 
     return {

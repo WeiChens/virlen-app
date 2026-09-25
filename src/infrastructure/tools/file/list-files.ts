@@ -8,6 +8,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { toolRegistry } from '@/domain/tools'
 import type { ToolContext, ToolExecutor, ToolResult } from '@/domain/tools/types'
 import { securityService } from '@/services/security-service'
+import { t } from '@/ui/i18n'
 import { formatSize } from './common'
 
 /** Rust 返回的目录条目（结构化协议，无 magic string 冲突风险） */
@@ -23,39 +24,8 @@ interface RustDirEntry {
 const MAX_ITEMS = 600
 
 toolRegistry.register(
-  {
-    name: 'list_files',
-    label: '列出文件',
-    description:
-      'List files and directories in a given path. Shows relative paths from the given root.',
-    parameters: {
-      type: 'object',
-      properties: {
-        path: {
-          type: 'string',
-          description: 'Directory path. Default: workspace root.',
-          default: '.',
-        },
-        recursive: {
-          type: 'boolean',
-          description: 'Whether to list recursively. Default: false',
-          default: false,
-        },
-        includeHidden: {
-          type: 'boolean',
-          description: 'Include hidden files. Default: false',
-          default: false,
-        },
-        maxDepth: {
-          type: 'number',
-          description: 'Max recursion depth. Default: 5',
-          default: 5,
-        },
-      },
-      required: [],
-    },
-  },
-  (async (args: Record<string, any>, ctx: ToolContext): Promise<ToolResult> => {
+    'list_files',
+    (async (args: Record<string, any>, ctx: ToolContext): Promise<ToolResult> => {
     const dirPath = (args.path as string) || '.'
     const recursive = !!args.recursive
     const includeHidden = !!args.includeHidden
@@ -84,8 +54,18 @@ toolRegistry.register(
     })
 
     if (entries.length === 0) {
+      // ⚠️ 模型侧固定英文（P4b/D2-A）；UI 侧走 uiData 由组件按界面语言渲染
       return {
-        content: '（空目录）',
+        content: '(empty directory)',
+        uiData: {
+          count: 0,
+          items: [],
+          rootPath: rawDir,
+          nodes: [],
+          totalItems: 0,
+          maxItems: MAX_ITEMS,
+          truncated: false,
+        },
       }
     }
 
@@ -118,6 +98,8 @@ toolRegistry.register(
       name: string
       isDir: boolean
       size?: number | null
+      /** 该目录在 skipEachDirs 中 → UI 侧渲染「内部省略」标记（语言无关布尔值） */
+      elided?: boolean
       children: TreeNode[]
     }
 
@@ -126,7 +108,12 @@ toolRegistry.register(
       const stack: TreeNode[][] = [root]
       for (const e of entries) {
         if (e.type === 'enter_dir') {
-          const node: TreeNode = { name: e.name, isDir: true, children: [] }
+          const node: TreeNode = {
+            name: e.name,
+            isDir: true,
+            elided: skipEachDirs.includes(e.name),
+            children: [],
+          }
           stack[stack.length - 1].push(node)
           stack.push(node.children)
           continue
@@ -139,6 +126,7 @@ toolRegistry.register(
           name: e.name,
           isDir: e.type === 'dir',
           size: e.size,
+          elided: e.type === 'dir' && skipEachDirs.includes(e.name),
           children: [],
         })
       }
@@ -164,7 +152,7 @@ toolRegistry.register(
             ? `  (${formatSize(node.size)})`
             : ''
         renderLines.push(
-          `${prefix}${connector}${node.name}${node.isDir ? '/' : ''}${sizeStr}${node.isDir && skipEachDirs.includes(node.name) ? '  # 内部省略' : ''}`,
+          `${prefix}${connector}${node.name}${node.isDir ? '/' : ''}${sizeStr}${node.elided ? '  # elided' : ''}`,
         )
         renderItemCount++
 
@@ -176,17 +164,34 @@ toolRegistry.register(
 
     renderTree(tree, '')
 
+    /** 语言无关的目录树（供 UI 组件本地化渲染；content 里的树文本仍给模型） */
+    const toUiNodes = (nodes: TreeNode[]): any[] =>
+      nodes.map((n) => ({
+        name: n.name,
+        isDir: n.isDir,
+        ...(n.size != null ? { size: n.size } : {}),
+        ...(n.elided ? { elided: true } : {}),
+        ...(n.children.length > 0 ? { children: toUiNodes(n.children) } : {}),
+      }))
+
     const truncated = totalItems > MAX_ITEMS
+    // ⚠️ 与 Rust `native_tools/file/list_files.rs` 的 summary 逐字一致（铁律 1）
     const summary = truncated
-      ? `\n\n⚠️ 文件数量超过限制，仅显示前 ${MAX_ITEMS} 项（共 ${totalItems} 项）`
-      : `\n\n总计 ${totalItems} 项`
+      ? `\n\n⚠️ Too many files; showing only the first ${MAX_ITEMS} of ${totalItems} item(s)`
+      : `\n\n${totalItems} item(s) total`
 
     return {
       content: renderLines.join('\n') + summary,
       uiData: {
         count: items.length,
         items,
+        rootPath: rawDir,
+        nodes: toUiNodes(tree),
+        totalItems,
+        maxItems: MAX_ITEMS,
+        truncated,
       },
     }
   }) as ToolExecutor,
+    t('列出文件'),
 )

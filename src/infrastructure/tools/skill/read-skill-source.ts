@@ -3,43 +3,35 @@
  *
  * 同时返回技能文件夹的绝对路径，AI 可据此用 read_file 读取其他文件。
  * ⚠️ 只读操作，不提供写能力。
+ *
+ * 模型侧**固定英文**（与 Rust 原生实现 / CLI 一致，铁律 1）—— 原生实现已落地：
+ * `native_tools/skill/read_skill_source.rs`（默认引擎路径）；本文件只服务 **TS 引擎**（回退路径）。
+ * UI 侧下发结构化 `uiData: { skillPath, tree, md }`（语言无关），
+ * 组件据此渲染卡片（旧数据无 uiData 时回退解析 `content` 的中文分段标记）。
  */
 import { toolRegistry } from '@/domain/tools'
 import type { ToolContext, ToolExecutor, ToolResult } from '@/domain/tools/types'
 import { renderFileTree } from './common'
+import { t } from '@/ui/i18n'
 
 toolRegistry.register(
-  {
-    name: 'read_skill_source',
-    label: '查看技能源代码',
-    description:
-      '查看指定技能的源代码目录结构和 SKILL.md 文本内容，同时返回技能文件夹的绝对路径。' +
-      '输入技能名称（文件夹名），返回该 skill 目录下的所有文件列表、SKILL.md 全文和技能路径。' +
-      '拿到技能路径后，你可以使用 read_file 工具读取该路径下的其他文件。',
-    parameters: {
-      type: 'object',
-      properties: {
-        name: {
-          type: 'string',
-          description:
-            '技能名称（文件夹名），例如 "code-reviewer"。使用 list_skills 查看所有可用技能的名称。',
-        },
-      },
-      required: ['name'],
-    },
-  },
-  (async (args: Record<string, any>, ctx: ToolContext): Promise<ToolResult> => {
+    'read_skill_source',
+    (async (args: Record<string, any>, ctx: ToolContext): Promise<ToolResult> => {
     const skillName = args.name as string
 
     if (!skillName) {
-      return { content: '错误：请提供技能名称（name 参数）。' }
+      return {
+        content: 'Error: please provide a skill name (the "name" parameter).',
+      }
     }
 
     // 检查当前 agent 是否有此技能
     const agentSkills = ctx.skills || []
     if (agentSkills.length > 0 && !agentSkills.includes(skillName)) {
       return {
-        content: `错误：当前代理没有启用 "${skillName}" 技能。可使用 list_skills 查看已启用的技能。`,
+        content:
+          `Error: the current agent does not have the "${skillName}" skill enabled. ` +
+          'Use list_skills to see enabled skills.',
       }
     }
 
@@ -50,7 +42,9 @@ toolRegistry.register(
       const skill = getRegisteredSkill(skillName)
       if (!skill) {
         return {
-          content: `错误：技能 "${skillName}" 未注册。请先在设置中导入该技能。`,
+          content:
+            `Error: skill "${skillName}" is not registered. ` +
+            'Import it in Settings first.',
         }
       }
 
@@ -61,15 +55,16 @@ toolRegistry.register(
       // 渲染目录树
       const treeLines: string[] = [`📂 ${skill.meta.name}/`]
       renderFileTree(fileTree, '  ', treeLines)
+      const tree = treeLines.join('\n')
 
-      // 组装结果 — 顶部给出技能路径，AI 可用 read_file 读取其他文件
+      // 组装结果（模型侧固定英文）— 顶部给出技能路径，AI 可用 read_file 读取其他文件
       const result = [
-        `**📁 技能路径**: \`${skill.path}\``,
+        `**📁 Skill path**: \`${skill.path}\``,
         '',
         '---',
         '',
-        '# 📂 目录结构',
-        ...treeLines,
+        '# 📂 Directory structure',
+        tree,
         '',
         '---',
         '',
@@ -80,11 +75,13 @@ toolRegistry.register(
         .filter(Boolean)
         .join('\n')
 
-      return { content: result }
+      // UI 侧走结构化字段（语言无关），组件不必再解析文本
+      return { content: result, uiData: { skillPath: skill.path, tree, md: mdContent } }
     } catch (e: any) {
       return {
-        content: `读取技能 "${skillName}" 失败: ${e.message || String(e)}`,
+        content: `Failed to read skill "${skillName}": ${e.message || String(e)}`,
       }
     }
   }) as ToolExecutor,
+    t('查看技能源代码'),
 )

@@ -5,10 +5,13 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { invoke } from '@tauri-apps/api/core'
 import * as xtermModule from '@xterm/xterm'
 import { toolOutputStore } from '@/infrastructure/tools/output-store'
+import { CmdError } from '@/infrastructure/tools/execute/common'
+import { ToolError } from '@/domain/tools/types'
 import { settingsState } from '@/ui/store'
 import {
   buildFinishedSegments,
   buildLiveSegments,
+  displayNote,
   followBottomIfPinned,
   TerminalBlock,
   TerminalStatus,
@@ -122,7 +125,7 @@ describe('buildFinishedSegments（完成态）', () => {
     expect(
       buildFinishedSegments(
         { stdout: 'a\n', stderr: 'warn\n', exitCode: 0 },
-        '退出码: 0\na\n[标准错误]\nwarn\n',
+        'Exit code: 0\na\n[stderr]\nwarn\n',
         false,
       ),
     ).toEqual([
@@ -135,16 +138,35 @@ describe('buildFinishedSegments（完成态）', () => {
     expect(
       buildFinishedSegments(
         { stdout: '', stderr: '', exitCode: 0 },
-        '退出码: 0',
+        'Exit code: 0',
         false,
       ),
     ).toEqual([])
   })
 
   it('CmdError（退出码 >= 2，无 uiData）：content 整体按失败报告渲染（红）', () => {
+    // P4b：失败报告是**模型侧**文案（固定英文），无结构化流字段时原样展示
     expect(
-      buildFinishedSegments(undefined, '退出码: 2\na\n[标准错误]\nboom\n', true),
-    ).toEqual([{ kind: 'stderr', text: '退出码: 2\na\n[标准错误]\nboom' }])
+      buildFinishedSegments(
+        undefined,
+        'Exit code: 2\na\n[stderr]\nboom\n',
+        true,
+      ),
+    ).toEqual([{ kind: 'stderr', text: 'Exit code: 2\na\n[stderr]\nboom' }])
+  })
+
+  it('失败但带 uiData（L6 修复后）：用结构化流字段渲染，不再直显英文报告', () => {
+    // 退出码 >= 2 时 CmdError.uiData / Rust NativeToolOutcome::Error.ui_data 同样下发
+    expect(
+      buildFinishedSegments(
+        { stdout: 'partial\n', stderr: 'boom\n', exitCode: 2, pty: false },
+        'Exit code: 2\npartial\n[stderr]\nboom\n',
+        true,
+      ),
+    ).toEqual([
+      { kind: 'stdout', text: 'partial' },
+      { kind: 'stderr', text: 'boom' },
+    ])
   })
 
   it('保留首行缩进（不再 trim），退出码 1 的结果照常渲染', () => {
@@ -157,6 +179,64 @@ describe('buildFinishedSegments（完成态）', () => {
     expect(buildFinishedSegments({ exitCode: 0 }, 'some output', false)).toEqual([
       { kind: 'stdout', text: 'some output' },
     ])
+  })
+})
+
+/**
+ * L6（失败侧）的载荷契约：失败也要能携带结构化 `uiData`。
+ *
+ * 引擎与桥都靠「是不是 Error 实例」判定工具失败，而裸 `Error` 带不了结构化字段 →
+ * 失败文案在中文界面下只能直显英文。`CmdError extends ToolError`、`ToolError.uiData`
+ * 就是那条通路（TS 引擎 → `step.uiData`；JS 桥 → Rust → `tool_result_created` 消息）。
+ */
+describe('失败载荷（ToolError / CmdError）', () => {
+  it('CmdError 是 Error 且保留 uiData（退出码 / 流字段）', () => {
+    const err = new CmdError('Exit code: 2\nboom', {
+      stdout: '',
+      stderr: 'boom\n',
+      exitCode: 2,
+    })
+    expect(err).toBeInstanceOf(Error)
+    expect(err).toBeInstanceOf(ToolError)
+    expect(err.name).toBe('CmdError')
+    expect(err.message).toContain('Exit code: 2')
+    expect(err.uiData).toEqual({ stdout: '', stderr: 'boom\n', exitCode: 2 })
+  })
+
+  it('无结构化信息的失败仍可用（uiData 为 undefined）', () => {
+    expect(new CmdError('boom').uiData).toBeUndefined()
+    expect(new ToolError('boom').uiData).toBeUndefined()
+  })
+})
+
+/**
+ * 终端输出末尾的「附加说明」本地化（P4b-②）。
+ *
+ * 背景：execute_script 的脚本删除提示原先直接渲染 `uiData.note`，而 P3 已把它
+ * 固定成英文 → 中文界面 + 默认（Rust）引擎下会显示英文。现在改由语言无关的
+ * `noteKind` / `notePath` / `noteError` 重建；旧消息无这些字段时回退 note 原文。
+ */
+describe('displayNote（脚本删除说明的本地化）', () => {
+  it('结构化字段 → 按界面语言渲染（当前为中文）', () => {
+    expect(
+      displayNote({ noteKind: 'deleted', notePath: '/ws/run.js', note: 'x' }),
+    ).toBe('🗑️ 已删除脚本文件: /ws/run.js')
+
+    expect(
+      displayNote({
+        noteKind: 'delete_failed',
+        notePath: '/ws/run.js',
+        noteError: 'boom',
+        note: 'x',
+      }),
+    ).toBe('⚠️ 脚本文件删除失败: /ws/run.js — boom')
+  })
+
+  it('旧消息（无结构化字段）→ 回退 note 原文，不做语言猜测', () => {
+    expect(displayNote({ note: '🗑️ Script file deleted: /ws/run.js' })).toBe(
+      '🗑️ Script file deleted: /ws/run.js',
+    )
+    expect(displayNote(undefined)).toBeUndefined()
   })
 })
 
@@ -244,7 +324,8 @@ describe('TerminalView（运行态与完成态共用同一组件 / 同一 DOM �
   const finishedMessage = {
     id: 'm1',
     role: 'tool',
-    content: '退出码: 0\nok',
+    // P4b：模型侧 content 固定英文，UI 不再直接渲染它（改用 uiData.stdout）
+    content: 'Exit code: 0\nok',
     toolCallId: 't1',
     uiData: { stdout: 'ok\n', stderr: '', exitCode: 0 },
     timestamp: 0,
@@ -273,7 +354,9 @@ describe('TerminalView（运行态与完成态共用同一组件 / 同一 DOM �
     expect(html).toContain('class="execute-command-wrapper"')
     expect(html).toContain('class="code-pre-warpper"')
     expect(html).toContain('terminal-status')
+    // 状态徽标走 i18n（中文界面 → 中文）；模型侧 content 是英文且不参与渲染
     expect(html).toContain('退出码: 0')
+    expect(html).not.toContain('Exit code: 0')
     expect(html).toContain('terminal-stdout">ok</code>')
   })
 })

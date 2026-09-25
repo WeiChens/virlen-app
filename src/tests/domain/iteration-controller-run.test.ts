@@ -114,7 +114,7 @@ describe('IterationController.run 返回语义', () => {
       (m) =>
         m.role === 'assistant' &&
         typeof m.content === 'string' &&
-        m.content.includes('【迭代结束报告】'),
+        m.content.includes('[Iteration end report]'),
     )
     expect(hasReport).toBe(true)
   })

@@ -5,6 +5,7 @@
 use super::bridge::AgentBridgeState;
 use super::cancellation::CancellationToken;
 use super::event_sink::EventSink;
+use super::host::HostEnv;
 use super::llm_loop::{execute_llm_round, ExecuteLlmRoundParams};
 use super::llm_round::now_ms;
 use super::provider::Provider;
@@ -33,6 +34,8 @@ pub struct RunIterationParams<'a> {
     pub max_iterations: i64,
     /// 消息持久化仓库（直接 SQLite 直落，用于执行过程中增量保存）
     pub repo: &'a dyn SessionRepo,
+    /// 宿主环境（原生工具 `vision_analyze` 需要「模型文件在哪」）
+    pub host: &'a dyn HostEnv,
     /// Provider 类型（openai / anthropic / gemini），仅用于用量记账
     pub provider_type: &'a str,
     /// Provider 配置 id，仅用于用量记账
@@ -62,6 +65,7 @@ pub async fn run_iteration(
         reasoning_effort,
         max_iterations,
         repo,
+        host,
         provider_type,
         provider_config_id,
         persist_snapshot,
@@ -109,6 +113,7 @@ pub async fn run_iteration(
             persist_snapshot,
             clear_snapshot,
             repo,
+            host,
             provider_type,
             provider_config_id,
             round: current_iteration,
@@ -177,11 +182,11 @@ pub async fn run_iteration(
                 }
                 VerificationResult {
                     passed: false,
-                    summary: format!("验证调用失败: {}", e),
+                    summary: format!("Verification call failed: {}", e),
                     issues: vec![super::types::VerificationIssue {
                         severity: "error".to_string(),
-                        description: format!("验证 LLM 调用失败: {}", e),
-                        suggestion: "请检查 provider 配置或网络连接后重试".to_string(),
+                        description: format!("Verification LLM call failed: {}", e),
+                        suggestion: "Check the provider configuration or network connection and try again".to_string(),
                     }],
                 }
             }
@@ -219,7 +224,7 @@ pub async fn run_iteration(
                     json!({
                         "iteration": current_iteration,
                         "maxIterations": max_iterations,
-                        "summary": format!("目标在第 {} 次迭代后达成", current_iteration),
+                        "summary": format!("Goal achieved after {} iteration(s)", current_iteration),
                     }),
                 ),
             );
@@ -274,7 +279,7 @@ pub async fn run_iteration(
             json!({
                 "iteration": current_iteration,
                 "maxIterations": max_iterations,
-                "summary": format!("超出最大迭代次数 ({})，目标未完全达成", max_iterations),
+                "summary": format!("Exceeded the maximum number of iterations ({}); the goal was not fully achieved", max_iterations),
             }),
         ),
     );
@@ -313,7 +318,7 @@ pub fn build_feedback_message(result: &VerificationResult) -> Message {
         .enumerate()
         .map(|(i, issue)| {
             format!(
-                "{}. [{}] {}\n   建议: {}",
+                "{}. [{}] {}\n   Suggestion: {}",
                 i + 1,
                 issue.severity,
                 issue.description,
@@ -323,14 +328,14 @@ pub fn build_feedback_message(result: &VerificationResult) -> Message {
         .collect();
 
     let mut content = format!(
-        "【验证反馈】\n\n验证结果: {}\n摘要: {}\n",
-        if result.passed { "✅ 通过" } else { "❌ 未通过" },
+        "[Verification feedback]\n\nResult: {}\nSummary: {}\n",
+        if result.passed { "✅ Passed" } else { "❌ Not passed" },
         result.summary
     );
     if !result.issues.is_empty() {
-        content.push_str("\n发现的问题:\n");
+        content.push_str("\nIssues found:\n");
         content.push_str(&issue_lines.join("\n"));
-        content.push_str("\n\n请修正以上问题后重新尝试。");
+        content.push_str("\n\nPlease fix the issues above and try again.");
     }
 
     Message {
@@ -354,7 +359,7 @@ fn build_failure_report(
         .enumerate()
         .map(|(i, v)| {
             format!(
-                "第 {} 次: {} {}",
+                "Attempt {}: {} {}",
                 i + 1,
                 if v.passed { "✅" } else { "❌" },
                 v.summary
@@ -363,7 +368,7 @@ fn build_failure_report(
         .collect();
 
     let content = format!(
-        "【迭代结束报告】\n\n目标: {}\n总迭代次数: {}/{}\n最终状态: ❌ 未完全达成\n\n各轮验证结果:\n{}\n\n已达到最大迭代次数限制。请检查执行结果，考虑：\n1. 调整目标描述，使其更具体明确\n2. 手动完成剩余步骤\n3. 增加最大迭代次数后重试",
+        "[Iteration end report]\n\nGoal: {}\nTotal iterations: {}/{}\nFinal status: ❌ Not fully achieved\n\nVerification result per round:\n{}\n\nThe maximum number of iterations has been reached. Review the results and consider:\n1. Making the goal description more specific\n2. Completing the remaining steps manually\n3. Raising the max iterations and retrying",
         goal_desc,
         current_iteration,
         max_iterations,

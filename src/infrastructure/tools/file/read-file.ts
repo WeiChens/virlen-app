@@ -5,7 +5,7 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { withCancelResult } from '@/utils/withCancel'
-import { t, tpl } from '@/ui/i18n'
+import { t } from '@/ui/i18n'
 import { toolRegistry } from '@/domain/tools'
 import type { ToolContext, ToolExecutor, ToolResult } from '@/domain/tools/types'
 import { securityService } from '@/services/security-service'
@@ -22,54 +22,8 @@ interface FileReadResult {
 }
 
 toolRegistry.register(
-  {
-    name: 'read_file',
-    label: t('读取文件'),
-    description:
-      'Read a file\'s content. Returns content, line count, size, and hash10 (short fingerprint) (for edit_file conflict detection). ' +
-      'Pass "paths" (array) to read multiple files in one call — avoids N round-trips for N files.',
-    parameters: {
-      type: 'object',
-      properties: {
-        path: {
-          type: 'string',
-          description:
-            'File path (relative to workspace or absolute). Use this for a single file.',
-        },
-        paths: {
-          type: 'array',
-          items: { type: 'string' },
-          description:
-            'Array of file paths to read in one call. Use this to batch-read multiple files efficiently.',
-        },
-        start_line: {
-          type: 'number',
-          description:
-            'Starting line number (1-indexed). Use this to read a specific section of a large file. ' +
-            'When set, returns at most max_lines lines starting from this line. Default: 1.',
-          default: 1,
-        },
-        max_lines: {
-          type: 'number',
-          description:
-            'Max lines to read. Default is 2000. When start_line is used, this limits how many lines are returned.',
-          default: 2000,
-        },
-        max_line_chars: {
-          type: 'number',
-          description:
-            'Max characters per line. Default is 1600. ' +
-            'Prevents token explosion from single very long lines ' +
-            '(minified JS/CSS, long JSON/base64, etc.). Lines longer than this ' +
-            'are truncated with a marker so the AI knows content is incomplete.',
-          default: 1600,
-        },
-      },
-      oneOf: [{ required: ['path'] }, { required: ['paths'] }],
-      required: [],
-    },
-  },
-  (async (args: Record<string, any>, ctx: ToolContext): Promise<ToolResult> => {
+    'read_file',
+    (async (args: Record<string, any>, ctx: ToolContext): Promise<ToolResult> => {
     const maxLines = +(args.max_lines as number) || 2000
     const maxLineChars = +(args.max_line_chars as number) || 2000
     const startLine = Math.max(0, +(args.start_line as number) || 1)
@@ -111,7 +65,7 @@ toolRegistry.register(
         if (line.length > maxLineChars) {
           const omitted = line.length - maxLineChars
           slice.push(
-            `${sliceHead(line, maxLineChars)} … [已截断，省略 ${omitted} 字符]`,
+            `${sliceHead(line, maxLineChars)} … [truncated, ${omitted} chars omitted]`,
           )
           truncatedLineCount++
         } else {
@@ -123,46 +77,28 @@ toolRegistry.register(
       const displayEnd = startIdx + slice.length
       const remainingLines = Math.max(0, totalLines - displayEnd)
 
+      // ⚠️ 模型侧固定英文（P4b/D2-A）；UI 侧走 uiData 由组件渲染。
+      // 文案与 Rust `native_tools/file/read_file.rs` 一致（铁律 1）。
       const headerLines = [
         `📄 ${fullPath}`,
-        tpl('📝 $__lines__ 行 / $__size__', {
-          lines: totalLines,
-          size: formatSize(result.byte_size),
-        }),
+        `📝 ${totalLines} lines / ${formatSize(result.byte_size)}`,
         `🔑 hash10: ${result.hash10}`,
         startLine > 1
-          ? tpl('🔢 显示: 第 $__start__-$__end__ 行 (共 $__total__ 行)', {
-              start: displayStart,
-              end: displayEnd,
-              total: totalLines,
-            })
-          : tpl('🔢 显示: 第 1-$__end__ 行 (共 $__total__ 行)', {
-              end: displayEnd,
-              total: totalLines,
-            }),
+          ? `🔢 Showing: lines ${displayStart}-${displayEnd} (total ${totalLines} lines)`
+          : `🔢 Showing: lines 1-${displayEnd} (total ${totalLines} lines)`,
       ]
 
       if (truncatedLineCount > 0) {
         headerLines.push(
-          tpl(
-            '💡 提示: 有 $__count__ 行内容过长，已按每行 $__max__ 字符截断。可增大 max_line_chars 参数读取更多内容',
-            { count: truncatedLineCount, max: maxLineChars },
-          ),
+          `💡 Tip: ${truncatedLineCount} line(s) too long, truncated to ${maxLineChars} chars per line. Increase max_line_chars to read more`,
         )
       }
       if (startIdx > 0) {
-        headerLines.push(
-          tpl('💡 提示: 使用 start_line=$__line__ 读取后续内容', {
-            line: displayEnd + 1,
-          }),
-        )
+        headerLines.push(`💡 Tip: use start_line=${displayEnd + 1} to read more`)
       }
       if (remainingLines > 0) {
         headerLines.push(
-          tpl(
-            '💡 提示: 文件内容未完整显示，剩余 $__remaining__ 行。使用 start_line=$__next__ 读取后续内容',
-            { remaining: remainingLines, next: displayEnd + 1 },
-          ),
+          `💡 Tip: content truncated, ${remainingLines} lines remaining. Use start_line=${displayEnd + 1} to read more`,
         )
       }
 
@@ -212,7 +148,7 @@ toolRegistry.register(
         )
         if (errors.length > 0) {
           parts.push(
-            `\n\n⚠️ 有 ${errors.length} 个文件读取失败:\n` +
+            `\n\n⚠️ Failed to read ${errors.length} file(s):\n` +
               errors.map((e) => `  - ${e}`).join('\n'),
           )
         }
@@ -231,14 +167,13 @@ toolRegistry.register(
       // 单文件路径（向后兼容）
       const path = args.path as string
       if (!path) {
-        throw t('错误：请提供 "path" 或 "paths" 参数')
+        throw 'Missing required parameter: "path" or "paths"'
       }
       const r = await readSingleFile(path)
       return { content: r.content, uiData: r.uiData }
     } catch (e: any) {
-      throw tpl('错误：读取文件失败 — $__error__', {
-        error: e.message || String(e),
-      })
+      throw `Error: failed to read file — ${e.message || String(e)}`
     }
   }) as ToolExecutor,
+    t('读取文件'),
 )

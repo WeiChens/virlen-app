@@ -27,7 +27,7 @@ pub(super) fn ensure_parent_dir(path: &str) -> Result<(), String> {
         let parent_dir = &normalized[..parent];
         if !parent_dir.is_empty() {
             std::fs::create_dir_all(parent_dir)
-                .map_err(|e| format!("创建目录失败: {}", e))?;
+                .map_err(|e| format!("Failed to create directory: {}", e))?;
         }
     }
     Ok(())

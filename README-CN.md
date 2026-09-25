@@ -47,6 +47,14 @@
 | [pnpm](https://pnpm.io/)                     | ≥ 8      |
 | [Rust](https://www.rust-lang.org/)           | ≥ 1.78   |
 | [Tauri CLI](https://v2.tauri.app/start/cli/) | ≥ 2.0    |
+| [LLVM / libclang](https://releases.llvm.org/) | ≥ 15     |
+
+> `libclang` 是**仅构建期**依赖：`bindgen` 要为内嵌的 QuickJS 引擎（求值 `js` 类沙盒规则）生成 FFI 绑定。
+> Windows：装 LLVM（如 `C:\Program Files\LLVM`）并设 `LIBCLANG_PATH=<LLVM>\bin` —— `clang-sys` 只探测
+> `LIBCLANG_PATH` 与 `llvm-config.exe`，**不会扫 `PATH`**，所以非默认安装位置（或该发行版不带
+> `llvm-config.exe`）**必须**显式设置。请设为**用户级持久环境变量**并**重开终端 / IDE**：
+> 只在某个 shell 里临时 `$env:LIBCLANG_PATH` 传递不到 `tauri dev` 新起的那个 shell
+> （表现为「手动 `cargo build` 能过、`pnpm tauri dev` 报 `Unable to find libclang`」）。
 
 ### 安装与运行
 
@@ -199,11 +207,11 @@ src/
 
 - **聊天循环**：LLM 轮次 → 工具执行 → 结果合并，支持 Run Snapshot 暂停/恢复、取消处理
 - **SQLite 会话持久化**：会话与消息由 Rust 直接写入 `virlen.db`（WAL + 单写连接 + `spawn_blocking`）——不再使用 IndexedDB，不依赖 JS 线程
-- **原生工具**：18 个高价值工具（文件操作、命令执行、搜索、知识库）在 Rust 端原生执行，其余回退 JS 桥
+- **原生工具**：26 个高价值工具（文件操作、命令执行、搜索、知识库、任务清单、用户选择、消息查询、技能、当前时间、端侧视觉）在 Rust 端原生执行，其余回退 JS 桥
 - **DeepSeek V3 tokenizer**：字节级 BPE token 计数（`cmd_count_tokens`），为上下文压缩提供精确 usage 估算
 - **图片伪视觉分析**：纯文本模型场景下，图片块在 Rust 端原生替换为本地视觉分析文本
 
-仍由 JS 提供（桥接）的功能：**Gemini Provider**、`compressContext`、`generateTitle`，以及 9 个低频工具（`get_current_time`、`user_choice`、`web_fetch`、`web_search`、`list_skills`、`read_skill_source`、`vision_analyze` 分发、`list_messages`、`read_messages`）。完整矩阵见 `docs/rust-engine.md`。
+仍由 JS 提供（桥接）的功能：**Gemini Provider**、`compressContext`、`generateTitle`，以及 2 个低频工具（`web_fetch`、`web_search`）。完整矩阵见 `docs/rust-engine.md`。
 
 这三项检查——`npx tsc --noEmit`、`pnpm test`（Vitest）、`cargo test`——已由 CI 在每次打 tag（`v*`）时强制执行，任一失败即阻断发布。详见 `.github/workflows/`。
 

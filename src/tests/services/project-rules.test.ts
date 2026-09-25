@@ -83,8 +83,8 @@ describe('isSafeProjectRulesPath / normalizeProjectRulesPath', () => {
 describe('buildProjectRulesPrompt', () => {
   it('带标题、来源说明与正文', () => {
     const prompt = buildProjectRulesPrompt('AGENTS.md', '# 项目约定\n用 pnpm')
-    expect(prompt).toContain('# 项目规则（AGENTS.md）')
-    expect(prompt).toContain('以下内容来自当前工作目录下的 `AGENTS.md`')
+    expect(prompt).toContain('# Project Rules (AGENTS.md)')
+    expect(prompt).toContain('The content below comes from `AGENTS.md`')
     expect(prompt).toContain('# 项目约定')
     expect(prompt.endsWith('用 pnpm')).toBe(true)
   })
@@ -153,7 +153,7 @@ describe('loadProjectRulesPrompt', () => {
         line_count: 1,
       })
     const prompt = await loadProjectRulesPrompt('E:\\proj\\', 'AGENTS.md')
-    expect(prompt).toContain('# 项目规则（AGENTS.md）')
+    expect(prompt).toContain('# Project Rules (AGENTS.md)')
     expect(prompt).toContain('用 pnpm')
     expect(invokeMock).toHaveBeenLastCalledWith('read_file_with_hash', {
       path: 'E:/proj/AGENTS.md',
@@ -168,7 +168,7 @@ describe('loadProjectRulesPrompt', () => {
     expect(invokeMock).toHaveBeenCalledWith('stat_path', {
       path: 'E:/proj/AGENTS.md',
     })
-    expect(prompt).toContain('# 项目规则（AGENTS.md）')
+    expect(prompt).toContain('# Project Rules (AGENTS.md)')
 
     invokeMock.mockReset()
     invokeMock

@@ -5,6 +5,10 @@
  * 上下文中，重复下发只会浪费 token —— 因此这里**不返回**当下可见的消息。
  *
  * AI 用它拿到时序 + 消息 id（或按关键词定位），再用 read_messages 读取正文。
+ *
+ * ⚠️ 已原生化（Step 2）：Rust 引擎走 `native_tools/chat/list_messages.rs`（默认路径），
+ * 本文件只服务 **TS 引擎**（回退路径）；文本格式化 / 上限 / 预算在
+ * `tools/chat/common.ts` ↔ `native_tools/chat/common.rs` 两份镜像，改一边要同步另一边（铁律 1）。
  */
 import { toolRegistry } from '@/domain/tools'
 import type { ToolContext, ToolExecutor, ToolResult } from '@/domain/tools/types'
@@ -19,51 +23,11 @@ import {
   formatTimeline,
 } from './common'
 
-const DESCRIPTION = [
-  'List the timeline of messages that have been COMPRESSED AWAY in this conversation,',
-  'i.e. earlier messages that are no longer present in your current context because the',
-  'conversation was summarized. Messages that are still in your context are NOT returned —',
-  'do not use this tool to re-read what you already have.',
-  '',
-  'Each entry gives: sequence number (#seq), message ID, role, timestamp, a short preview',
-  '(<= 100 chars) and the names of any tools the message called. Deep-thinking (reasoning)',
-  'content is never exposed.',
-  '',
-  'Use it to: (1) discover the message ID of an earlier message and then read it with',
-  'read_messages; (2) find earlier messages by keyword. The newest page of the queryable',
-  'range is returned first; to page further back, call again with the returned cursor.',
-].join(' ')
+// 工具描述已收敛到权威源（机制 C）：src-tauri/src/agent/tool_defs/definitions.json
 
 toolRegistry.register(
-  {
-    name: 'list_messages',
-    label: t('列出历史消息'),
-    description: DESCRIPTION,
-    parameters: {
-      type: 'object',
-      properties: {
-        cursor: {
-          type: 'number',
-          description:
-            'Page cursor: only return messages with sequence before this value. ' +
-            'Omit it to get the newest page of the queryable range.',
-        },
-        keyword: {
-          type: 'string',
-          description:
-            'Optional keyword filter applied to the message plain text. ' +
-            'Only messages in the queryable (compressed) range are searched.',
-        },
-        limit: {
-          type: 'number',
-          description: `Maximum number of messages per page. Default: ${LIST_DEFAULT_LIMIT}, Max: ${LIST_MAX_LIMIT}.`,
-          default: LIST_DEFAULT_LIMIT,
-        },
-      },
-      required: [],
-    },
-  },
-  (async (args: Record<string, any>, ctx: ToolContext): Promise<ToolResult> => {
+    'list_messages',
+    (async (args: Record<string, any>, ctx: ToolContext): Promise<ToolResult> => {
     const sessionId = ctx.sessionId
     if (!sessionId) {
       return { content: 'No active conversation is available.' }
@@ -168,6 +132,7 @@ toolRegistry.register(
       },
     }
   }) as ToolExecutor,
+    t('列出历史消息'),
 )
 
 /** limit 收敛到 [1, LIST_MAX_LIMIT] */

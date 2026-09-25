@@ -12,28 +12,8 @@ import { t } from '@/ui/i18n'
 import { ragService } from '@/services/rag-service'
 
 toolRegistry.register(
-  {
-    name: 'list_knowledge_base_documents',
-    label: t('列出文档'),
-    description:
-      'List all documents in a specific knowledge base. ' +
-      'Returns the document name, ID, file type, chunk count, and status for each document. ' +
-      'Use this tool to discover document IDs needed for delete_knowledge_base_document. ' +
-      'Use list_knowledge_bases first to discover available knowledge base IDs.',
-    parameters: {
-      type: 'object',
-      properties: {
-        knowledge_base_id: {
-          type: 'string',
-          description:
-            'The ID of the knowledge base to list documents from. ' +
-            'Use list_knowledge_bases tool to see available knowledge bases.',
-        },
-      },
-      required: ['knowledge_base_id'],
-    },
-  },
-  (async (args: Record<string, any>, _ctx: any): Promise<ToolResult> => {
+    'list_knowledge_base_documents',
+    (async (args: Record<string, any>, _ctx: any): Promise<ToolResult> => {
     const kbId = args.knowledge_base_id
     if (!kbId || typeof kbId !== 'string') {
       return {
@@ -94,4 +74,5 @@ toolRegistry.register(
       }
     }
   }) as ToolExecutor,
+    t('列出文档'),
 )

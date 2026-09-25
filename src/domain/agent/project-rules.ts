@@ -78,10 +78,10 @@ export function buildProjectRulesPrompt(
   content: string,
 ): string {
   return [
-    `# 项目规则（${fileName}）`,
+    `# Project Rules (${fileName})`,
     '',
-    `以下内容来自当前工作目录下的 \`${fileName}\`，是本项目的约定与历史记忆。`,
-    '请把它当作**项目级要求**执行；与通用说明冲突时以本文件为准（用户当轮的明确要求除外）。',
+    `The content below comes from \`${fileName}\` in the current working directory; it is this project's conventions and historical memory.`,
+    'Treat it as a **project-level requirement**; when it conflicts with the general instructions, this file takes precedence (except for an explicit requirement from the user in the current turn).',
     '',
     content.trim(),
   ].join('\n')

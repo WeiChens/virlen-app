@@ -51,7 +51,7 @@ pub(crate) async fn execute_script_tool(
     );
     if ai_requested_bypass && sandbox_mode(ctx) == SandboxMode::Readonly {
         return Err(
-            "沙盒处于只读模式，不支持绕过沙盒执行脚本；请先在设置中切换沙盒模式（或改用常规终端）"
+            "The sandbox is in read-only mode, so bypassing it to run a script is not allowed; switch the sandbox mode in settings first (or use a regular terminal)"
                 .to_string(),
         );
     }
@@ -62,7 +62,7 @@ pub(crate) async fn execute_script_tool(
     // 目标文件已存在则驳回，避免覆盖既有文件
     if std::path::Path::new(&full_path).exists() {
         return Err(format!(
-            "错误：脚本文件已存在，已驳回以免覆盖 — {}",
+            "Error: the script file already exists; refusing to overwrite it — {}",
             full_path
         ));
     }
@@ -123,9 +123,11 @@ pub(crate) async fn execute_script_tool(
             } else {
                 PERM_SCRIPT
             };
+            // 只报**权限 name**（稳定 key，与设置页一一对应）：语言无关，
+            // 且与 TS 执行器（`tools/execute/execute-script.ts`）逐字对齐（铁律 1）。
             return Err(format!(
-                "操作已被权限设置禁止：{}",
-                permission_label(denied)
+                "Operation denied by the permission settings: {}",
+                denied
             ));
         }
         PermissionDecision::Allow => {
@@ -217,14 +219,16 @@ pub(crate) async fn execute_script_tool(
             }
             // 未实际执行（拒绝/其他）→ 未落盘，无需清理。
             // ⚠️ 必须走 Error（失败）通道：脚本一行都没跑，UI 不能显示成绿色「成功」。
-            Ok(NativeToolOutcome::Error(interaction_msg))
+            Ok(NativeToolOutcome::error(interaction_msg))
         }
-        BridgeInteractionResult::Error(msg) => Ok(NativeToolOutcome::Error(msg)),
+        BridgeInteractionResult::Error { content, ui_data } => {
+            Ok(NativeToolOutcome::Error { content, ui_data })
+        }
         BridgeInteractionResult::Shelved => Ok(NativeToolOutcome::Shelved),
         // 用户拒绝授权 / Esc 取消 → 脚本未落盘、未执行 → 同样按失败回报
         // （与 execute_command 原生路径、JS 桥路径、TS 引擎保持一致）
         BridgeInteractionResult::Cancelled => {
-            Ok(NativeToolOutcome::Error("[User cancelled]".to_string()))
+            Ok(NativeToolOutcome::error("[User cancelled]"))
         }
     }
 }
@@ -273,7 +277,7 @@ async fn finalize_script_run(
         tokio::task::spawn_blocking(move || file_ops::write_file(&full_path_c, &content_c)).await;
     match write_res {
         Ok(Ok(_)) => {}
-        Ok(Err(e)) => return Err(format!("错误：写入脚本文件失败 — {}", e)),
+        Ok(Err(e)) => return Err(format!("Error: failed to write the script file — {}", e)),
         Err(e) => return Err(format!("Task join error: {}", e)),
     }
 
@@ -287,45 +291,123 @@ async fn finalize_script_run(
     let del_note = delete_script_file(full_path).await;
     match outcome {
         Ok(NativeToolOutcome::Value { content, ui_data }) => Ok(NativeToolOutcome::Value {
-            content: format!("{}\n{}", content, del_note),
+            content: format!("{}\n{}", content, del_note.text),
             ui_data: attach_note(ui_data, &del_note),
         }),
-        Ok(NativeToolOutcome::Error(msg)) => {
-            Ok(NativeToolOutcome::Error(format!("{}\n{}", msg, del_note)))
-        }
-        Err(e) => Err(format!("{}\n{}", e, del_note)),
+        Ok(NativeToolOutcome::Error { content, ui_data }) => Ok(NativeToolOutcome::Error {
+            content: format!("{}\n{}", content, del_note.text),
+            // 失败同样保留结构化字段（并在有 note 时补上）——UI 才能按界面语言渲染（L6）
+            ui_data: attach_note(ui_data, &del_note),
+        }),
+        Err(e) => Err(format!("{}\n{}", e, del_note.text)),
         Ok(other) => Ok(other),
     }
 }
 
-/// 把删除提示写入 ui_data.note（供 UI 展示），保留原有字段。
-fn attach_note(ui_data: Option<Value>, note: &str) -> Option<Value> {
-    match ui_data {
-        Some(Value::Object(mut map)) => {
-            map.insert("note".into(), Value::String(note.to_string()));
-            Some(Value::Object(map))
+/// 脚本删除结果：模型侧英文文本 + 供 UI 按界面语言渲染的结构化字段。
+///
+/// ⚠️ 与 TS 侧 `ScriptDeleteNote`（`tools/execute/execute-script.ts`）逐字对齐（铁律 1）：
+/// `text` 是模型侧文案；`kind` / `path` / `error` 是语言无关数据，
+/// 由 `TerminalBlock` 按界面语言重建展示文本（旧消息无这些字段 → 回退 `note` 文本）。
+struct ScriptDeleteNote {
+    text: String,
+    kind: &'static str,
+    path: String,
+    error: Option<String>,
+}
+
+/// 把删除提示写入 ui_data（供 UI 展示 / 本地化渲染），保留原有字段。
+fn attach_note(ui_data: Option<Value>, note: &ScriptDeleteNote) -> Option<Value> {
+    let with_note = |mut map: serde_json::Map<String, Value>| {
+        map.insert("note".into(), Value::String(note.text.clone()));
+        map.insert("noteKind".into(), Value::String(note.kind.to_string()));
+        map.insert("notePath".into(), Value::String(note.path.clone()));
+        if let Some(err) = &note.error {
+            map.insert("noteError".into(), Value::String(err.clone()));
         }
-        Some(other) => Some(json!({ "data": other, "note": note })),
-        None => Some(json!({ "note": note })),
+        map
+    };
+    match ui_data {
+        Some(Value::Object(map)) => Some(Value::Object(with_note(map))),
+        Some(other) => {
+            let mut map = serde_json::Map::new();
+            map.insert("data".into(), other);
+            Some(Value::Object(with_note(map)))
+        }
+        None => Some(Value::Object(with_note(serde_json::Map::new()))),
     }
 }
 
-/// 删除脚本文件（移至回收站），返回 UI 提示文本。
-async fn delete_script_file(full_path: &str) -> String {
+/// 删除脚本文件（移至回收站），返回模型侧文本 + 结构化字段。
+async fn delete_script_file(full_path: &str) -> ScriptDeleteNote {
     let p = full_path.to_string();
     match tokio::task::spawn_blocking(move || trash::delete(&p)).await {
-        Ok(Ok(_)) => format!("🗑️ 已删除脚本文件: {}", full_path),
-        Ok(Err(e)) => format!("⚠️ 脚本文件删除失败: {} — {}", full_path, e),
-        Err(e) => format!(
-            "⚠️ 脚本文件删除失败: {} — Task join error: {}",
-            full_path, e
+        Ok(Ok(_)) => ScriptDeleteNote {
+            text: format!("🗑️ Script file deleted: {}", full_path),
+            kind: "deleted",
+            path: full_path.to_string(),
+            error: None,
+        },
+        Ok(Err(e)) => script_delete_failure(full_path, e.to_string()),
+        Err(e) => script_delete_failure(full_path, format!("Task join error: {}", e)),
+    }
+}
+
+/// 删除失败的统一构造（`text` 必须与 TS 侧 `deleteScriptFile` 的失败分支逐字对齐）。
+fn script_delete_failure(full_path: &str, error: String) -> ScriptDeleteNote {
+    ScriptDeleteNote {
+        text: format!(
+            "⚠️ Failed to delete the script file: {} — {}",
+            full_path, error
         ),
+        kind: "delete_failed",
+        path: full_path.to_string(),
+        error: Some(error),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{is_powershell_script, with_script_bom};
+    use super::{attach_note, is_powershell_script, script_delete_failure, with_script_bom, ScriptDeleteNote};
+    use serde_json::json;
+
+    #[test]
+    fn script_delete_note_structure() {
+        // 失败分支：文案与 TS 侧 `deleteScriptFile` 逐字对齐，且带结构化字段（UI 据此本地化）
+        let note = script_delete_failure("C:/ws/run.js", "boom".to_string());
+        assert_eq!(note.kind, "delete_failed");
+        assert_eq!(
+            note.text,
+            "⚠️ Failed to delete the script file: C:/ws/run.js — boom"
+        );
+        assert_eq!(note.error.as_deref(), Some("boom"));
+        assert_eq!(note.path, "C:/ws/run.js");
+    }
+
+    #[test]
+    fn attach_note_preserves_existing_fields() {
+        let note = ScriptDeleteNote {
+            text: "note-text".to_string(),
+            kind: "deleted",
+            path: "C:/ws/run.js".to_string(),
+            error: None,
+        };
+        // 原有 ui_data 字段保留，只追加 note*
+        let ui = attach_note(Some(json!({ "stdout": "hi" })), &note).unwrap();
+        assert_eq!(ui["stdout"], "hi");
+        assert_eq!(ui["note"], "note-text");
+        assert_eq!(ui["noteKind"], "deleted");
+        assert_eq!(ui["notePath"], "C:/ws/run.js");
+        assert!(ui.get("noteError").is_none());
+        // 非对象 ui_data 也不丢（包进 data）
+        let ui2 = attach_note(Some(json!("raw")), &note).unwrap();
+        assert_eq!(ui2["data"], "raw");
+        assert_eq!(ui2["noteKind"], "deleted");
+        // 无 ui_data → 只带 note 字段
+        let ui3 = attach_note(None, &note).unwrap();
+        assert_eq!(ui3["noteKind"], "deleted");
+        assert!(ui3.get("stdout").is_none());
+    }
 
     #[test]
     fn powershell_script_ext_detection() {

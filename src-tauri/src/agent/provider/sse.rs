@@ -15,7 +15,7 @@ pub(super) async fn read_sse_lines(
     loop {
         let chunk = tokio::select! {
             _ = cancel.cancelled() => return Err("cancelled".into()),
-            chunk = response.chunk() => chunk.map_err(|e| format!("SSE 读取失败: {}", e))?,
+            chunk = response.chunk() => chunk.map_err(|e| format!("SSE read failed: {}", e))?,
         };
         match chunk {
             Some(bytes) => {

@@ -2,7 +2,7 @@
 
 use crate::agent::native_tools::common::{arg_str, arg_str_array, resolve_safe_path};
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 pub(crate) async fn delete_file_tool(
     ctx: &NativeToolCtx<'_>,
@@ -20,7 +20,7 @@ pub(crate) async fn delete_file_tool(
 
     if raw_paths.is_empty() {
         return Ok(NativeToolOutcome::Value {
-            content: "错误：未提供要删除的路径（请使用 \"paths\" 数组，或单个 \"path\" 字符串）".to_string(),
+            content: "Error: no path to delete was provided (use a \"paths\" array, or a single \"path\" string)".to_string(),
             ui_data: None,
         });
     }
@@ -39,7 +39,7 @@ pub(crate) async fn delete_file_tool(
 
     for full_path in &full_paths {
         if !std::path::Path::new(full_path).exists() {
-            errors.push(format!("路径不存在 — {}", full_path));
+            errors.push(format!("Path does not exist — {}", full_path));
             continue;
         }
 
@@ -53,14 +53,14 @@ pub(crate) async fn delete_file_tool(
 
     let mut parts: Vec<String> = Vec::new();
     if deleted.len() == 1 {
-        parts.push(format!("🗑️ 已移至回收站: {}", deleted[0]));
+        parts.push(format!("🗑️ Moved to trash: {}", deleted[0]));
     } else if deleted.len() > 1 {
         let list = deleted
             .iter()
             .map(|p| format!("  - {}", p))
             .collect::<Vec<_>>()
             .join("\n");
-        parts.push(format!("🗑️ 已移至回收站 {} 项:\n{}", deleted.len(), list));
+        parts.push(format!("🗑️ Moved {} item(s) to trash:\n{}", deleted.len(), list));
     }
     if !errors.is_empty() {
         let list = errors
@@ -68,11 +68,11 @@ pub(crate) async fn delete_file_tool(
             .map(|e| format!("  - {}", e))
             .collect::<Vec<_>>()
             .join("\n");
-        parts.push(format!("⚠️ 有 {} 项删除失败:\n{}", errors.len(), list));
+        parts.push(format!("⚠️ Failed to delete {} item(s):\n{}", errors.len(), list));
     }
 
     Ok(NativeToolOutcome::Value {
         content: parts.join("\n"),
-        ui_data: None,
+        ui_data: Some(json!({ "deleted": deleted, "errors": errors })),
     })
 }

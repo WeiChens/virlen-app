@@ -3,41 +3,20 @@
  */
 import * as tauriFs from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
+import { t } from '@/ui/i18n'
 import { toolRegistry } from '@/domain/tools'
-import type { ToolContext, ToolExecutor } from '@/domain/tools/types'
+import type { ToolContext, ToolExecutor, ToolResult } from '@/domain/tools/types'
 import { securityService } from '@/services/security-service'
 import { isTauriFsAvailable } from './common'
 
 toolRegistry.register(
-  {
-    name: 'delete_file',
-    label: '删除文件',
-    description:
-      'Delete one or more files/directories. Accepts either "path" (single string) or "paths" (array of strings). ' +
-      'Deleted items are moved to trash/recycle bin.',
-    parameters: {
-      type: 'object',
-      properties: {
-        path: {
-          type: 'string',
-          description:
-            'Path to the file or directory to delete. Use this for a single item. (Deprecated in favor of "paths".)',
-        },
-        paths: {
-          type: 'array',
-          description:
-            'Array of paths to delete. Use this to delete multiple files/directories in one call.',
-          items: {
-            type: 'string',
-            description: 'Path to the file or directory to delete.',
-          },
-        },
-      },
-      required: [],
-    },
-  },
-  (async (args: Record<string, any>, ctx: ToolContext): Promise<string> => {
-    if (!isTauriFsAvailable()) return '[delete_file] 错误：当前不是 Tauri 环境'
+    'delete_file',
+    (async (
+      args: Record<string, any>,
+      ctx: ToolContext,
+    ): Promise<ToolResult | string> => {
+    if (!isTauriFsAvailable())
+      return '[delete_file] Error: not running in a Tauri environment'
 
     // 兼容单个 path 与多个 paths；过滤空字符串
     const rawPaths: string[] = Array.isArray(args.paths)
@@ -49,7 +28,7 @@ toolRegistry.register(
         : []
 
     if (rawPaths.length === 0) {
-      return '错误：未提供要删除的路径（请使用 "paths" 数组，或单个 "path" 字符串）'
+      return 'Error: no path to delete was provided (use a "paths" array, or a single "path" string)'
     }
 
     const deleted: string[] = []
@@ -64,7 +43,7 @@ toolRegistry.register(
       try {
         const exists = await tauriFs.exists(fullPath)
         if (!exists) {
-          errors.push(`路径不存在 — ${fullPath}`)
+          errors.push(`Path does not exist — ${fullPath}`)
           continue
         }
         await invoke('move_to_trash', { path: fullPath })
@@ -74,23 +53,26 @@ toolRegistry.register(
       }
     }
 
+    // ⚠️ 模型侧固定英文（P4b/D2-A）；UI 侧走 uiData 由组件按界面语言渲染。
+    // 文案与 Rust `native_tools/file/delete_file.rs` 逐字一致（铁律 1）。
     const parts: string[] = []
     if (deleted.length > 0) {
       parts.push(
         deleted.length === 1
-          ? `🗑️ 已移至回收站: ${deleted[0]}`
-          : `🗑️ 已移至回收站 ${deleted.length} 项:\n${deleted
+          ? `🗑️ Moved to trash: ${deleted[0]}`
+          : `🗑️ Moved ${deleted.length} item(s) to trash:\n${deleted
               .map((p) => `  - ${p}`)
               .join('\n')}`,
       )
     }
     if (errors.length > 0) {
       parts.push(
-        `⚠️ 有 ${errors.length} 项删除失败:\n${errors
+        `⚠️ Failed to delete ${errors.length} item(s):\n${errors
           .map((e) => `  - ${e}`)
           .join('\n')}`,
       )
     }
-    return parts.join('\n')
+    return { content: parts.join('\n'), uiData: { deleted, errors } }
   }) as ToolExecutor,
+    t('删除文件'),
 )

@@ -21,14 +21,14 @@ pub(crate) async fn write_file_tool(
         tokio::task::spawn_blocking(move || file_ops::write_file(&full_path_c, &content_c))
             .await
             .map_err(|e| format!("Task join error: {}", e))?
-            .map_err(|e| format!("错误：写入文件失败 — {}", e))?
+            .map_err(|e| format!("Error: failed to write file — {}", e))?
     };
 
     let existed = result.existed;
     let return_content = if existed {
-        format!("✅ 已覆写文件 ({}): {}", format_size(result.byte_size), full_path)
+        format!("✅ File overwritten ({}): {}", format_size(result.byte_size), full_path)
     } else {
-        format!("✅ 已创建文件 ({}): {}", format_size(result.byte_size), full_path)
+        format!("✅ File created ({}): {}", format_size(result.byte_size), full_path)
     };
 
     Ok(NativeToolOutcome::Value {

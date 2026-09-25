@@ -74,7 +74,7 @@ fn render_tree(
             String::new()
         };
         let skip_mark = if node.is_dir && skip_dirs.contains(&node.name) {
-            "  # 内部省略"
+            "  # elided"
         } else {
             ""
         };
@@ -92,6 +92,30 @@ fn render_tree(
             render_tree(&node.children, &next_prefix, skip_dirs, lines, count, max);
         }
     }
+}
+
+fn tree_to_json(nodes: &[TreeNode], skip_dirs: &[String]) -> Vec<Value> {
+    nodes
+        .iter()
+        .map(|n| {
+            let mut obj = serde_json::Map::new();
+            obj.insert("name".to_string(), Value::String(n.name.clone()));
+            obj.insert("isDir".to_string(), Value::Bool(n.is_dir));
+            if let Some(sz) = n.size {
+                obj.insert("size".to_string(), json!(sz));
+            }
+            if n.is_dir && skip_dirs.contains(&n.name) {
+                obj.insert("elided".to_string(), Value::Bool(true));
+            }
+            if !n.children.is_empty() {
+                obj.insert(
+                    "children".to_string(),
+                    Value::Array(tree_to_json(&n.children, skip_dirs)),
+                );
+            }
+            Value::Object(obj)
+        })
+        .collect()
 }
 
 pub(crate) async fn list_files_tool(
@@ -125,15 +149,23 @@ pub(crate) async fn list_files_tool(
     let entries = tokio::select! {
         _ = ctx.cancel.cancelled() => {
             cancel_flag.store(true, Ordering::SeqCst);
-            return Ok(NativeToolOutcome::Error("[Search cancelled] Directory listing was cancelled.".into()));
+            return Ok(NativeToolOutcome::error("[Search cancelled] Directory listing was cancelled."));
         }
         r = task => r.map_err(|e| format!("Directory listing failed: {}", e))?,
     };
 
     if entries.is_empty() {
         return Ok(NativeToolOutcome::Value {
-            content: "（空目录）".to_string(),
-            ui_data: None,
+            content: "(empty directory)".to_string(),
+            ui_data: Some(json!({
+                "count": 0,
+                "items": [],
+                "rootPath": raw_dir,
+                "nodes": [],
+                "totalItems": 0,
+                "maxItems": MAX_ITEMS,
+                "truncated": false,
+            })),
         });
     }
 
@@ -175,13 +207,23 @@ pub(crate) async fn list_files_tool(
     render_tree(&tree, "", &skip_dirs, &mut lines, &mut count, MAX_ITEMS);
 
     let summary = if truncated {
-        format!("\n\n⚠️ 文件数量超过限制，仅显示前 {} 项（共 {} 项）", MAX_ITEMS, total_items)
+        format!("\n\n⚠️ Too many files; showing only the first {} of {} item(s)", MAX_ITEMS, total_items)
     } else {
-        format!("\n\n总计 {} 项", total_items)
+        format!("\n\n{} item(s) total", total_items)
     };
+
+    let nodes_json = tree_to_json(&tree, &skip_dirs);
 
     Ok(NativeToolOutcome::Value {
         content: lines.join("\n") + &summary,
-        ui_data: Some(json!({ "count": items.len(), "items": items })),
+        ui_data: Some(json!({
+            "count": items.len(),
+            "items": items,
+            "rootPath": raw_dir,
+            "nodes": nodes_json,
+            "totalItems": total_items,
+            "maxItems": MAX_ITEMS,
+            "truncated": truncated,
+        })),
     })
 }

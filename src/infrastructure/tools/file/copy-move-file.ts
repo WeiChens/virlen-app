@@ -8,46 +8,15 @@
 import { toolRegistry } from '@/domain/tools'
 import type { ToolContext, ToolExecutor, ToolResult } from '@/domain/tools/types'
 import * as tauriFs from '@tauri-apps/plugin-fs'
-import { t, tpl } from '@/ui/i18n'
+import { t } from '@/ui/i18n'
 import { securityService } from '@/services/security-service'
 import { isTauriFsAvailable } from './common'
 
 toolRegistry.register(
-  {
-    name: 'copy_move_file',
-    label: t('复制/移动文件'),
-    description:
-      'Copy or move a file or directory. ' +
-      'By default moves (renames) the source to destination. ' +
-      'Set mode="copy" to copy instead. ' +
-      'Note: copy mode only supports files, not directories; use move mode for directories.',
-    parameters: {
-      type: 'object',
-      properties: {
-        source: {
-          type: 'string',
-          description:
-            'Source file or directory path (relative to workspace or absolute).',
-        },
-        destination: {
-          type: 'string',
-          description:
-            'Destination file or directory path (relative to workspace or absolute).',
-        },
-        mode: {
-          type: 'string',
-          description:
-            'Operation mode: "move" (default) to move/rename, "copy" to copy.',
-          enum: ['move', 'copy'],
-          default: 'move',
-        },
-      },
-      required: ['source', 'destination'],
-    },
-  },
-  (async (args: Record<string, any>, ctx: ToolContext): Promise<ToolResult> => {
+    'copy_move_file',
+    (async (args: Record<string, any>, ctx: ToolContext): Promise<ToolResult> => {
     if (!isTauriFsAvailable())
-      throw '[copy_move_file] 错误：当前不是 Tauri 环境'
+      throw '[copy_move_file] Error: not running in a Tauri environment'
 
     const sourcePath = await securityService.resolveSafePath(
       args.source as string,
@@ -61,12 +30,14 @@ toolRegistry.register(
     )
     const mode = (args.mode as string) || 'move'
 
+    // ⚠️ 模型侧固定英文（P4b/D2-A）；UI 侧走 uiData 由组件按界面语言渲染。
+    // 文案与 Rust `native_tools/file/copy_move_file.rs` 逐字一致（铁律 1）。
     try {
       // 检查源路径是否存在
       const exists = await tauriFs.exists(sourcePath)
       if (!exists) {
         return {
-          content: tpl('错误：源路径不存在 — $__path__', { path: sourcePath }),
+          content: `Error: source path does not exist — ${sourcePath}`,
         }
       }
 
@@ -74,10 +45,7 @@ toolRegistry.register(
       const destExists = await tauriFs.exists(destPath)
       if (destExists) {
         return {
-          content: tpl(
-            '错误：目标路径已存在 — $__path__，请先删除或选择其他路径',
-            { path: destPath },
-          ),
+          content: `Error: destination path already exists — ${destPath}; delete it first or pick another path`,
         }
       }
 
@@ -95,7 +63,7 @@ toolRegistry.register(
           ) {
             if (stat.isDirectory) {
               throw new Error(
-                t('无法跨设备移动目录，请先手动复制内容到目标设备后删除原目录'),
+                'Error: cannot move a directory across devices; copy its contents manually and delete the original directory',
               )
             }
             // 文件跨设备移动：先复制再删除
@@ -113,13 +81,9 @@ toolRegistry.register(
             throw renameErr
           }
         }
-        const type = stat.isDirectory ? t('目录') : t('文件')
+        const type = stat.isDirectory ? 'directory' : 'file'
         return {
-          content: tpl('✅ 已移动 $__type__: $__source__\n   → $__dest__', {
-            type,
-            source: sourcePath,
-            dest: destPath,
-          }),
+          content: `✅ Moved ${type}: ${sourcePath}\n   → ${destPath}`,
           uiData: {
             mode: 'move',
             source: sourcePath,
@@ -131,9 +95,8 @@ toolRegistry.register(
         // 复制模式
         if (stat.isDirectory) {
           return {
-            content: t(
-              '错误：暂不支持复制目录，请使用 move 模式移动目录，或逐个复制目录内的文件',
-            ),
+            content:
+              'Error: copying directories is not supported yet; use the move mode to move a directory, or copy the files inside it one by one',
           }
         }
 
@@ -149,10 +112,7 @@ toolRegistry.register(
 
         await tauriFs.copyFile(sourcePath, destPath)
         return {
-          content: tpl('✅ 已复制文件: $__source__\n   → $__dest__', {
-            source: sourcePath,
-            dest: destPath,
-          }),
+          content: `✅ File copied: ${sourcePath}\n   → ${destPath}`,
           uiData: {
             mode: 'copy',
             source: sourcePath,
@@ -162,11 +122,8 @@ toolRegistry.register(
         }
       }
     } catch (e: any) {
-      const opKey =
-        mode === 'move'
-          ? '错误：移动失败 — $__error__'
-          : '错误：复制失败 — $__error__'
-      throw tpl(opKey, { error: e.message || String(e) })
+      throw `Error: ${mode === 'move' ? 'move' : 'copy'} failed — ${e.message || String(e)}`
     }
   }) as ToolExecutor,
+    t('复制/移动文件'),
 )

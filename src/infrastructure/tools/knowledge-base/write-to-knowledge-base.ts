@@ -10,41 +10,8 @@ import { t } from '@/ui/i18n'
 import { ragService } from '@/services/rag-service'
 
 toolRegistry.register(
-  {
-    name: 'write_to_knowledge_base',
-    label: t('写入知识库'),
-    description:
-      'Write text content to a knowledge base. ' +
-      'Use this tool to save useful information, summaries, extracted knowledge, ' +
-      'or any content that should be stored for future reference and search. ' +
-      'The content will be automatically chunked, embedded, and indexed for semantic search. ' +
-      'Use list_knowledge_bases first to discover available knowledge bases and their IDs.',
-    parameters: {
-      type: 'object',
-      properties: {
-        knowledge_base_id: {
-          type: 'string',
-          description:
-            'The ID of the knowledge base to write to. ' +
-            'Use list_knowledge_bases tool to see available knowledge bases and their IDs.',
-        },
-        document_name: {
-          type: 'string',
-          description:
-            'A descriptive name for this document (e.g., "Meeting Notes - Q4 Planning", "Research Summary - Rust vs Go"). ' +
-            'This helps users identify the content later.',
-        },
-        content: {
-          type: 'string',
-          description:
-            'The text content to save. This can include formatted text, code snippets, structured data, etc. ' +
-            'The content will be automatically indexed and made searchable.',
-        },
-      },
-      required: ['knowledge_base_id', 'document_name', 'content'],
-    },
-  },
-  (async (args: Record<string, any>, _ctx: any): Promise<ToolResult> => {
+    'write_to_knowledge_base',
+    (async (args: Record<string, any>, _ctx: any): Promise<ToolResult> => {
     const kbId = args.knowledge_base_id
     if (!kbId || typeof kbId !== 'string') {
       return {
@@ -97,4 +64,5 @@ toolRegistry.register(
       }
     }
   }) as ToolExecutor,
+    t('写入知识库'),
 )

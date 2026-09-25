@@ -6,7 +6,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { withCancelResult } from '@/utils/withCancel'
 import { computeDiff, countDiffRows } from '@/utils/diff'
-import { t, tpl } from '@/ui/i18n'
+import { t } from '@/ui/i18n'
 import { toolRegistry } from '@/domain/tools'
 import type {
   ToolContext,
@@ -31,58 +31,8 @@ interface FileEditMultiResult {
 }
 
 toolRegistry.register(
-  {
-    name: 'edit_file',
-    label: t('编辑文件'),
-    description:
-      'Replace exact text in a file. Requires expected_hash10 from read_file (conflict detection). Prefer for partial edits over write_file. ' +
-      'Use the "edits" array to apply one or more edits in a single call — each edit is { old_string, new_string, replace_count }.',
-    parameters: {
-      type: 'object',
-      properties: {
-        path: {
-          type: 'string',
-          description: 'File path (relative to workspace or absolute).',
-        },
-        edits: {
-          type: 'array',
-          description:
-            'Array of edits to apply sequentially in one file. Each item: { old_string, new_string, replace_count }. ' +
-            'All edits share the same expected_hash10 and are applied in order on the same content. ' +
-            'Use this instead of multiple edit_file calls to avoid hash conflicts between edits.',
-          items: {
-            type: 'object',
-            properties: {
-              old_string: {
-                type: 'string',
-                description:
-                  'The exact existing text to replace. Include enough surrounding context for a unique match.',
-              },
-              new_string: {
-                type: 'string',
-                description: 'The new text to insert in place of old_string.',
-              },
-              replace_count: {
-                type: 'number',
-                description:
-                  'How many occurrences of old_string to replace. Default: 1. Set to 0 to replace all.',
-                default: 1,
-              },
-            },
-            required: ['old_string', 'new_string'],
-          },
-        },
-        expected_hash: {
-          type: 'string',
-          description:
-            'The hash10 value of the current file content, obtained from read_file output. ' +
-            'Used for conflict detection to ensure no one modified the file since you read it.',
-        },
-      },
-      required: ['path', 'edits', 'expected_hash'],
-    },
-  },
-  (async (
+    'edit_file',
+    (async (
     args: Record<string, any>,
     ctx: ToolContext,
   ): Promise<ToolExecutorResponse> => {
@@ -95,7 +45,7 @@ toolRegistry.register(
 
     const edits = Array.isArray(args.edits) ? args.edits : []
     if (edits.length === 0) {
-      throw t('错误：请提供 "edits" 参数（至少一项编辑）')
+      throw 'Missing required parameter: "edits" (array)'
     }
 
     // 规范化 edits 参数：每个 edit 的 replace_count 默认 1，0 表示全部
@@ -105,9 +55,7 @@ toolRegistry.register(
       const newString = (e.new_string ?? '').toString()
       const replaceCount = (e.replace_count as number) ?? 1
       if (!oldString) {
-        throw tpl('错误：第 $__n__ 处编辑的 old_string 不能为空', {
-          n: i + 1,
-        })
+        throw `Edit #${i + 1}: old_string is required and cannot be empty`
       }
       return {
         old_string: oldString,
@@ -159,19 +107,14 @@ toolRegistry.register(
       const totalDel = uiEdits.reduce((s, e) => s + e.delCount, 0)
       const totalIns = uiEdits.reduce((s, e) => s + e.insCount, 0)
 
+      // ⚠️ 模型侧固定英文（P4b/D2-A）。首行与 Rust `native_tools/file/edit_file.rs` 一致（铁律 1）。
       return {
         content:
-          tpl('✅ 已编辑文件: $__path__', { path: fullPath }) +
+          `✅ File edited: ${fullPath}` +
           '\n' +
-          `  - ${tpl('编辑 $__count__ 处（共替换 $__replaced__ 次）', {
-            count: result.edits.length,
-            replaced: totalReplaced,
-          })}\n` +
-          `  - ${tpl('减少 $__del__行,新增 $__ins__行', {
-            del: totalDel,
-            ins: totalIns,
-          })}\n` +
-          `  - ${tpl('共 $__count__ 行', { count: result.line_count })}\n` +
+          `  - ${result.edits.length} block(s) edited (${totalReplaced} replacement(s) total)\n` +
+          `  - ${totalDel} line(s) removed, ${totalIns} line(s) added\n` +
+          `  - ${result.line_count} lines total\n` +
           `  - hash10: ${result.hash10}`,
         uiData: {
           fullPath,
@@ -187,9 +130,10 @@ toolRegistry.register(
         msg.includes('Conflict') ||
         msg.includes('Cannot read')
       ) {
-        throw tpl('错误：编辑失败 — $__msg__', { msg })
+        throw `Error: edit failed — ${msg}`
       }
-      throw tpl('错误：编辑文件失败 — $__msg__', { msg })
+      throw `Error: file edit failed — ${msg}`
     }
   }) as ToolExecutor,
+    t('编辑文件'),
 )

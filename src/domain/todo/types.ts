@@ -35,7 +35,7 @@ export interface TodoChange {
   type: 'add' | 'remove' | 'status' | 'edit' | 'reorder'
   /** 涉及的任务正文（add / remove / status 时给出） */
   content?: string
-  /** status 变更后的中文标签 / edit 变更后的新正文（给模型的那份文案） */
+  /** status 变更后的状态值（英文枚举）/ edit 变更后的新正文（模型侧文案） */
   to?: string
   /** status 变更后的枚举值（UI 侧用它走 i18n 取标签） */
   toStatus?: TodoStatus

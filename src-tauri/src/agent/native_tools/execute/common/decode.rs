@@ -37,7 +37,7 @@ pub(super) fn decode_output(bytes: &[u8]) -> String {
 const STREAM_CAP: usize = 1024 * 1024;
 const STREAM_KEEP: usize = 256 * 1024;
 /// 发生截断时插在输出开头的提示。
-const STREAM_TRUNCATED_NOTE: &str = "（输出过长，早期内容已丢弃）\n";
+const STREAM_TRUNCATED_NOTE: &str = "(output too long; earlier content was dropped)\n";
 
 /// 有界追加**文本**：超过 `STREAM_CAP` 后丢弃最早的部分，只保留末尾 `STREAM_KEEP` 字节，
 /// 并在开头插入一次截断提示。按 UTF-8 边界对齐，避免把多字节字符切成两半。

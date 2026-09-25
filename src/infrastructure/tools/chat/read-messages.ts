@@ -10,6 +10,10 @@
  *   - 深度思考（reasoning）永不返回；
  *   - 工具调用只给「工具名 + 参数摘要」，参数与工具结果均截断到 ≈100 字符；
  *   - 单条正文 ≤ 4000 字符、单次窗口 ≤ 21 条、单次输出 ≤ 30000 字符。
+ *
+ * ⚠️ 已原生化（Step 2）：Rust 引擎走 `native_tools/chat/read_messages.rs`（默认路径），
+ * 本文件只服务 **TS 引擎**（回退路径）；与 `tools/chat/common.ts` ↔
+ * `native_tools/chat/common.rs` 是两份镜像，改一边要同步另一边（铁律 1）。
  */
 import { toolRegistry } from '@/domain/tools'
 import type { ToolContext, ToolExecutor, ToolResult } from '@/domain/tools/types'
@@ -25,53 +29,11 @@ import {
   formatWindow,
 } from './common'
 
-const DESCRIPTION = [
-  'Read the full text of earlier messages that have been COMPRESSED AWAY (they are no',
-  'longer in your current context). Only messages before the compression summary can be',
-  'read; anything still in your context is NOT returned.',
-  '',
-  'Provide message_id (obtained from list_messages) and a relative window:',
-  '  [-10, 0] = the anchor and the 10 messages before it;',
-  '  [0, 10]  = the anchor and the 10 messages after it;',
-  `  [-5, 5]  = 5 before and 5 after (default).`,
-  'If message_id (and seq) are omitted, the newest readable message is used as the anchor.',
-  '',
-  'Limits: at most 21 messages per call, each message text <= 4000 chars, each tool-call',
-  'detail <= 100 chars. Deep-thinking (reasoning) content is never returned. Do not call',
-  'this repeatedly to dump the whole history.',
-].join(' ')
+// 工具描述已收敛到权威源（机制 C）：src-tauri/src/agent/tool_defs/definitions.json
 
 toolRegistry.register(
-  {
-    name: 'read_messages',
-    label: t('读取历史消息'),
-    description: DESCRIPTION,
-    parameters: {
-      type: 'object',
-      properties: {
-        message_id: {
-          type: 'string',
-          description:
-            'Anchor message ID (from list_messages). Preferred over seq.',
-        },
-        seq: {
-          type: 'number',
-          description:
-            'Anchor message sequence number, used when message_id is not provided.',
-        },
-        window: {
-          type: 'array',
-          items: { type: 'number' },
-          description:
-            'Relative window [start, end] around the anchor, with start <= 0 <= end. ' +
-            'Examples: [-10,0] (10 before), [0,10] (10 after), [-5,5] (default).',
-          default: [-WINDOW_DEFAULT_SPAN, WINDOW_DEFAULT_SPAN],
-        },
-      },
-      required: [],
-    },
-  },
-  (async (args: Record<string, any>, ctx: ToolContext): Promise<ToolResult> => {
+    'read_messages',
+    (async (args: Record<string, any>, ctx: ToolContext): Promise<ToolResult> => {
     const sessionId = ctx.sessionId
     if (!sessionId) {
       return { content: 'No active conversation is available.' }
@@ -193,6 +155,7 @@ toolRegistry.register(
       },
     }
   }) as ToolExecutor,
+    t('读取历史消息'),
 )
 
 /**

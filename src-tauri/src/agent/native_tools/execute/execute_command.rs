@@ -46,7 +46,7 @@ pub(crate) async fn execute_command_tool(
     );
     if ai_requested_bypass && sandbox_mode(ctx) == SandboxMode::Readonly {
         return Err(
-            "沙盒处于只读模式，不支持绕过沙盒执行命令；请先在设置中切换沙盒模式（或改用常规终端）"
+            "The sandbox is in read-only mode, so bypassing it to run a command is not allowed; switch the sandbox mode in settings first (or use a regular terminal)"
                 .to_string(),
         );
     }
@@ -118,7 +118,12 @@ pub(crate) async fn execute_command_tool(
         } else {
             perm
         };
-        return Err(format!("操作已被权限设置禁止：{}", permission_label(denied)));
+        // 只报**权限 name**（稳定 key，与设置页一一对应）：语言无关，
+        // 且与 TS 执行器（`tools/execute/execute-command.ts`）逐字对齐（铁律 1）。
+        return Err(format!(
+            "Operation denied by the permission settings: {}",
+            denied
+        ));
     }
 
     if decision == PermissionDecision::Ask {
@@ -202,15 +207,17 @@ pub(crate) async fn execute_command_tool(
                 }
                 // 用户没有放行（既非「批准」也不是「允许」）→ 命令一行都没跑，
                 // ⚠️ 必须按**失败**回报：否则 tool 消息 is_error=false，工具卡片显示成绿色「成功」。
-                return Ok(NativeToolOutcome::Error(content));
+                return Ok(NativeToolOutcome::error(content));
             }
-            BridgeInteractionResult::Error(msg) => Ok(NativeToolOutcome::Error(msg)),
+            BridgeInteractionResult::Error { content, ui_data } => {
+                Ok(NativeToolOutcome::Error { content, ui_data })
+            }
             BridgeInteractionResult::Shelved => Ok(NativeToolOutcome::Shelved),
             // 用户拒绝授权 / Esc 取消 → 未执行任何命令。
             // ⚠️ 同样走 Error 通道（status=failed），与 JS 桥路径（tool_executor.rs::handle_user_interaction）
             // 和 TS 引擎保持一致，避免「拒绝授权」被渲染成绿色成功。
             BridgeInteractionResult::Cancelled => {
-                Ok(NativeToolOutcome::Error("[User cancelled]".to_string()))
+                Ok(NativeToolOutcome::error("[User cancelled]"))
             }
         }
     } else {
@@ -301,6 +308,9 @@ mod tests {
             sink: &sink,
             bridge: &bridge,
             security: &sec,
+            repo: crate::agent::native_tools::noop_repo(),
+            skills: None,
+            host: crate::host::default_host().as_ref(),
         };
 
         // 长命令：确保 kill 发生在执行中途
@@ -335,7 +345,7 @@ mod tests {
         match outcome {
             NativeToolOutcome::Value { content, .. } => {
                 assert!(
-                    content.contains("命令已被用户取消"),
+                    content.contains("Command cancelled by the user"),
                     "unexpected content: {}",
                     content
                 );
@@ -371,6 +381,9 @@ mod tests {
             sink: &sink,
             bridge: &bridge,
             security: &sec,
+            repo: crate::agent::native_tools::noop_repo(),
+            skills: None,
+            host: crate::host::default_host().as_ref(),
         };
 
         // 用户场景的结构：Start-Process 拉起一个长跑子进程（stdout/stderr 重定向到文件），
@@ -403,7 +416,7 @@ mod tests {
         match &outcome {
             NativeToolOutcome::Value { content, .. } => {
                 assert!(
-                    content.contains("命令已被用户取消"),
+                    content.contains("Command cancelled by the user"),
                     "unexpected content: {}",
                     content
                 );
@@ -453,6 +466,9 @@ mod tests {
             sink: &sink,
             bridge: &bridge,
             security: &sec,
+            repo: crate::agent::native_tools::noop_repo(),
+            skills: None,
+            host: crate::host::default_host().as_ref(),
         };
 
         // powershell 拉起 cmd → ping（两层后代），把子/孙 PID 写到文件，然后无限 sleep。
@@ -477,7 +493,7 @@ mod tests {
         match &outcome {
             NativeToolOutcome::Value { content, .. } => {
                 assert!(
-                    content.contains("超时"),
+                    content.contains("timed out"),
                     "unexpected content: {}",
                     content
                 );
@@ -675,12 +691,15 @@ mod tests {
             sink: &sink,
             bridge: &bridge,
             security: &sec,
+            repo: crate::agent::native_tools::noop_repo(),
+            skills: None,
+            host: crate::host::default_host().as_ref(),
         };
         let args = serde_json::json!({ "command": "echo hi", "sandbox": "off" });
         let err = execute_command_tool(&ctx, &args)
             .await
             .expect_err("readonly + sandbox:off 必须被拒绝");
-        assert!(err.contains("只读模式"), "unexpected error: {err}");
+        assert!(err.contains("read-only mode"), "unexpected error: {err}");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -798,6 +817,9 @@ mod tests {
             sink: sink.as_ref(),
             bridge: bridge.as_ref(),
             security: &sec,
+            repo: crate::agent::native_tools::noop_repo(),
+            skills: None,
+            host: crate::host::default_host().as_ref(),
         };
 
         let (confirmer, captured) = spawn_terminal_confirmer(
@@ -874,6 +896,9 @@ mod tests {
             sink: sink.as_ref(),
             bridge: bridge.as_ref(),
             security: &sec,
+            repo: crate::agent::native_tools::noop_repo(),
+            skills: None,
+            host: crate::host::default_host().as_ref(),
         };
 
         let (confirmer, _captured) = spawn_terminal_confirmer(
@@ -897,7 +922,7 @@ mod tests {
         assert!(confirmer.await.unwrap(), "应出现用户交互请求");
 
         match outcome {
-            NativeToolOutcome::Error(content) => {
+            NativeToolOutcome::Error { content, .. } => {
                 assert_eq!(content, "[User cancelled]");
             }
             other => panic!("拒绝授权必须走 Error（UI 标红），got {other:?}"),
@@ -948,6 +973,9 @@ mod tests {
             sink: sink.as_ref(),
             bridge: bridge.as_ref(),
             security: &sec,
+            repo: crate::agent::native_tools::noop_repo(),
+            skills: None,
+            host: crate::host::default_host().as_ref(),
         };
 
         // JS 侧应答：命中规则「装依赖」（内部查询，无 UI）
@@ -989,7 +1017,7 @@ mod tests {
             NativeToolOutcome::Value { content, .. } => {
                 assert!(content.contains("RULE_BYPASS_OK"), "content: {content}");
                 assert!(
-                    content.contains("无沙盒"),
+                    content.contains("no sandbox"),
                     "命中规则必须以「不使用沙盒」方式执行: {content}"
                 );
             }
@@ -1032,6 +1060,9 @@ mod tests {
                 sink: sink.as_ref(),
                 bridge: bridge.as_ref(),
                 security: &sec,
+                repo: crate::agent::native_tools::noop_repo(),
+                skills: None,
+                host: crate::host::default_host().as_ref(),
             };
             let (responder, _) = spawn_terminal_confirmer(
                 sink.clone(),
@@ -1066,7 +1097,7 @@ mod tests {
 
             // 命令权限禁止 → 一律以 Err 回报（未命中规则，不得因规则而放行）
             let err = outcome.expect_err("命令权限禁止应报错");
-            assert!(err.contains("禁止"), "err: {err}");
+            assert!(err.contains("denied by the permission settings"), "err: {err}");
 
             std::fs::remove_dir_all(&dir).ok();
         }

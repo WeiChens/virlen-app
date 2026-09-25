@@ -53,7 +53,7 @@ export async function doLLMRound(
   round?: number,
 ): Promise<ToolCallContext | null> {
   const model = session.modelId
-  const systemPrompt = session.systemPrompt || '你是一个有用的 AI 助手。'
+  const systemPrompt = session.systemPrompt || 'You are a helpful AI assistant.'
 
   const assistantMessage: Message = {
     id: v4(),

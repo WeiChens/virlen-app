@@ -127,6 +127,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_message ON usage_ledger(message_id)
   WHERE message_id IS NOT NULL;
 "#;
 
+/// 应用设置（配置下沉 D3）DDL
+///
+/// 为什么放会话库里：与会话共用**同一个 SQLite 文件与同一把单写连接** ——
+/// 不需要第二个写连接（不会 `SQLITE_BUSY`），迁移 / 维护（体积 / WAL 截断 / `VACUUM`）
+/// 也天然覆盖到它；CLI 与 GUI 只要指向同一个 `virlen.db` 就共用同一份配置。
+/// 一 key 一行（`value` 是 JSON 文本），详见 `settings.rs`。
+const SETTINGS_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS app_settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+"#;
+
 /// 当前 schema 版本（存于 `PRAGMA user_version`）。递增后由 `migrate()` 执行迁移
 /// （`open()` 只做快速初始化，耗时迁移在后台完成）。
 ///
@@ -152,6 +166,9 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<bool, String> {
     conn.execute_batch(USAGE_LEDGER_DDL)
         .map_err(|e| format!("初始化用量账本失败: {}", e))?;
     ensure_usage_duration_column(conn)?;
+    // 应用设置（配置下沉 D3）：纯建表，元数据级开销
+    conn.execute_batch(SETTINGS_DDL)
+        .map_err(|e| format!("初始化应用设置表失败: {}", e))?;
 
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))

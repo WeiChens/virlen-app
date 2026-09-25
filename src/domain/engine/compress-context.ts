@@ -93,7 +93,7 @@ export async function compressContext(
   const compressMessages = idx === -1 ? allMessages : allMessages.slice(idx)
 
   if (compressMessages.length <= 1) {
-    throw new Error('没有可压缩的消息')
+    throw new Error('No messages available to compress')
   }
 
   // ===== 正文压缩：纯本地渲染，不校验 Provider / 不发请求 / 不记账 =====
@@ -137,12 +137,12 @@ export async function compressContext(
   const providerId = session.providerConfigId
   const model = session.modelId
   if (!model || !providerId) {
-    throw new Error('会话未配置模型或 Provider')
+    throw new Error('The session has no model or provider configured')
   }
 
   const provider = await providerPort.get(providerId)
   if (!provider) {
-    throw new Error(`Provider "${providerId}" 未注册`)
+    throw new Error(`Provider "${providerId}" is not registered`)
   }
 
   const summaryPrompt = AI_AGEMT_COMPRESS_CONTEXT_PROMPT

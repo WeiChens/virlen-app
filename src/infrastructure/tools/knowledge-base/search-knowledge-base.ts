@@ -12,42 +12,8 @@ import { buildSearchContext } from './common'
 import { sliceHead } from '@/utils/text'
 
 toolRegistry.register(
-  {
-    name: 'search_knowledge_base',
-    label: t('搜索知识库'),
-    description:
-      'Search the knowledge base for relevant information. ' +
-      'Use this tool when you need to answer questions based on uploaded documents, ' +
-      'private data, or any content stored in the knowledge base. ' +
-      'Returns relevant text chunks with similarity scores and source document names. ' +
-      'The results can be used as context to answer user questions accurately. ' +
-      'Always call list_knowledge_bases first to discover available knowledge bases, ' +
-      'then use the correct knowledge_base_id for your search.',
-    parameters: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description:
-            'The search query. Be specific and use keywords for better results.',
-        },
-        knowledge_base_id: {
-          type: 'string',
-          description:
-            'The ID of the knowledge base to search in. ' +
-            'Use list_knowledge_bases tool to see available knowledge bases and their IDs.',
-        },
-        top_k: {
-          type: 'number',
-          description:
-            'Number of relevant chunks to return. Default: 5, Max: 20.',
-          default: 5,
-        },
-      },
-      required: ['query', 'knowledge_base_id'],
-    },
-  },
-  (async (args: Record<string, any>, _ctx: any): Promise<ToolResult> => {
+    'search_knowledge_base',
+    (async (args: Record<string, any>, _ctx: any): Promise<ToolResult> => {
     const query = args.query
     if (!query || typeof query !== 'string' || query.trim() === '') {
       return {
@@ -101,4 +67,5 @@ toolRegistry.register(
       }
     }
   }) as ToolExecutor,
+    t('搜索知识库'),
 )
