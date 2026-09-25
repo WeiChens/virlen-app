@@ -4,6 +4,11 @@ version = "1.1.43"
 description = "全能型 AI 智能体桌面客户端 — 多模型、工具调用、视觉识别、skill"
 authors = ["wei"]
 edition = "2021"
+# ⚠️ 必须显式指定：本 package 有**两个 bin**（GUI `virlen-app` + headless `virlen-cli`）后，
+#    `cargo run` 与 Tauri CLI 靠 `default-run` 认「主二进制」—— 不加就直接失败：
+#    `tauri build` 报 "failed to find main binary, make sure you have a package > default-run"（实测）。
+#    这也说明「把 CLI 做成第二个 bin」不改变 GUI 的默认目标。
+default-run = "virlen-app"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -13,6 +18,18 @@ edition = "2021"
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "ai_agent_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+# ── headless / CLI 入口 ──
+# 与 GUI 共用同一个 lib（`ai_agent_app_lib`）：引擎 / 会话库 / 配置 / 安全判定都零 `tauri::` 依赖，
+# 因此 CLI 只做「解析参数 → open_session_db → 调 repo」（见 `src/cli/`）。
+#
+# ⚠️ 这是**同一个 package 的第二个 bin**（GUI 的 bin 由 `src/main.rs` 自动发现，名字取自 package）。
+#    有多个 bin 后必须靠 `[package] default-run` 指定主二进制（见上文），
+#    否则 `tauri build` / `tauri dev` 直接报 "failed to find main binary"。
+# ⚠️ 它同样会跑 `build.rs`（tauri-build 要求 `frontendDist` 存在）：纯 Rust 构建前需先 `pnpm build`。
+[[bin]]
+name = "virlen-cli"
+path = "src/cli_main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

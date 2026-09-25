@@ -3,6 +3,8 @@
 use tauri::Manager;
 
 mod agent;
+/// headless CLI 入口（`virlen-cli` bin 只有三行转发，实现全在这里）
+pub mod cli;
 mod clipboard_files;
 #[cfg(target_os = "windows")]
 mod drag_drop;

@@ -71,6 +71,10 @@ impl Default for SandboxTextMode {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxIgnoreRule {
+    // 规则 id 由前端生成，Rust 侧只做匹配（按顺序取第一条命中的），不需要它 ——
+    // 但它是**随配置下发的线格式**的一部分（前端 identity / 后续去重与缓存键），
+    // 删掉字段会让反序列化丢失信息，故保留并显式允许「未被读取」。
+    #[allow(dead_code)]
     #[serde(default)]
     pub id: String,
     /// 规则名称（用户可读；只用于提示与日志，**不进埋点**，见 AGENTS §9）

@@ -33,8 +33,8 @@ pub(crate) mod tests;
 
 // `#[tauri::command]` 把命令注册在「定义它的模块」路径下（lib.rs 按 `session_db::commands::cmd_*` 引用），
 // 因此这里不重导出命令，只导出 `init_session_db`（普通函数，可安全重导出）。
-pub use commands::init_session_db;
-pub use commands::manage_noop_settings;
+// `open_session_db` / `SessionDb` 供 headless CLI（`crate::cli`）复用**同一条**库路径推导链。
+pub use commands::{init_session_db, manage_noop_settings, open_session_db};
 pub use maintenance::DbMaintenance;
 pub use repo::{NoopSessionRepo, SessionRepo};
 pub use settings::{NoopSettingsRepo, SettingsRepo, SqliteSettingsRepo};
