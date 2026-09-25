@@ -8,7 +8,7 @@
     🌐 <a href="README.md">English</a> | <strong>中文</strong>
   </p>
   <p align="center">
-    <img src="https://img.shields.io/badge/version-1.1.42-blue" alt="version">
+    <img src="https://img.shields.io/badge/version-1.1.43-blue" alt="version">
     <img src="https://img.shields.io/badge/Tauri-2.0-purple" alt="tauri">
     <img src="https://img.shields.io/badge/React-19-61DAFB" alt="react">
     <img src="https://img.shields.io/badge/TypeScript-7.0.2-3178C6" alt="typescript">
