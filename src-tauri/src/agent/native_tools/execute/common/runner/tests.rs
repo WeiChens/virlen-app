@@ -104,6 +104,7 @@ async fn test_execute_command_pty_sandboxed_end_to_end() {
         repo: crate::agent::native_tools::noop_repo(),
         skills: None,
         host: crate::host::default_host().as_ref(),
+        settings: crate::agent::native_tools::noop_settings(),
     };
 
     let args = json!({
@@ -165,6 +166,7 @@ async fn test_execute_command_pty_write_interaction() {
         repo: crate::agent::native_tools::noop_repo(),
         skills: None,
         host: crate::host::default_host().as_ref(),
+        settings: crate::agent::native_tools::noop_settings(),
     };
 
     // 会话在 spawn 后立刻注册，这里轮询等到它出现再写（避免时序竞态）。
@@ -234,6 +236,7 @@ async fn test_execute_command_pty_disables_pager() {
         repo: crate::agent::native_tools::noop_repo(),
         skills: None,
         host: crate::host::default_host().as_ref(),
+        settings: crate::agent::native_tools::noop_settings(),
     };
 
     let args = json!({
@@ -441,6 +444,7 @@ async fn test_pty_hold_freezes_timeout() {
         repo: crate::agent::native_tools::noop_repo(),
         skills: None,
         host: crate::host::default_host().as_ref(),
+        settings: crate::agent::native_tools::noop_settings(),
     };
 
     // 会话一注册就接管（全程冻结）。timeout=1s 而命令跑 2.5s：
@@ -520,6 +524,7 @@ async fn test_pty_hold_hard_cap() {
         repo: crate::agent::native_tools::noop_repo(),
         skills: None,
         host: crate::host::default_host().as_ref(),
+        settings: crate::agent::native_tools::noop_settings(),
     };
 
     let holder = tokio::spawn(async move {
@@ -589,6 +594,7 @@ async fn test_pty_interventions_counted() {
         repo: crate::agent::native_tools::noop_repo(),
         skills: None,
         host: crate::host::default_host().as_ref(),
+        settings: crate::agent::native_tools::noop_settings(),
     };
 
     const SECRET: &str = "SECRET_TOKEN_123";

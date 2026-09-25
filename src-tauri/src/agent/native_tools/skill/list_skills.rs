@@ -126,6 +126,7 @@ mod tests {
             repo: noop_repo(),
             skills: enabled,
             host: crate::host::default_host().as_ref(),
+            settings: crate::agent::native_tools::noop_settings(),
         };
         execute_native_tool(&ctx, "list_skills", &json!({}))
             .await

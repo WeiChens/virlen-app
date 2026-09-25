@@ -30,6 +30,8 @@ pub struct ExecuteLlmRoundParams<'a> {
     pub repo: &'a dyn SessionRepo,
     /// 宿主环境（原生工具 `vision_analyze` 需要「模型文件在哪」）
     pub host: &'a dyn HostEnv,
+    /// 应用配置仓储（`app_settings`）—— 原生工具 `web_search` 读搜索源配置
+    pub settings: &'a dyn crate::session_db::SettingsRepo,
     /// Provider 类型（openai / anthropic / gemini），仅用于用量记账
     pub provider_type: &'a str,
     /// Provider 配置 id，仅用于用量记账
@@ -68,6 +70,7 @@ pub async fn execute_llm_round(
         reasoning_effort,
         repo,
         host,
+        settings,
         provider_type,
         provider_config_id,
         persist_snapshot,
@@ -171,6 +174,7 @@ pub async fn execute_llm_round(
         persist_ref,
         repo,
         host,
+        settings,
     )
     .await;
 

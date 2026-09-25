@@ -45,6 +45,10 @@
 //!     ├── search_knowledge_base.rs        list_knowledge_bases.rs
 //!     ├── list_knowledge_base_documents.rs  get_knowledge_base_document.rs
 //!     └── delete_knowledge_base_document.rs write_to_knowledge_base.rs
+//! ├── web/                   网络（2）
+//! │   ├── common.rs          MAX_LENGTH / is_html / format_search_results（对齐 TS `tools/web/common.ts`）
+//! │   ├── web_fetch.rs       抓 URL（reqwest + htmd；二进制拒绝 / 超时·取消 / 截断）
+//! │   └── web_search.rs      经已配置搜索源检索（tavily / bocha；直读 `app_settings`）
 //! ```
 //!
 //! 覆盖工具（与 JS `toolRegistry` 同名工具对齐）：
@@ -66,8 +70,11 @@
 //!   无 JS 的纯 Rust CLI 没有 `Intl`，故必须原生
 //! - `vision_analyze`：端侧视觉分析（quasivision；模型目录经 `ctx.host` 定位，
 //!   实现与 GUI 命令壳共用 `crate::vision` —— 纯端侧，图片不出本机）
+//! - `web_fetch`：抓 URL（reqwest + htmd；二进制响应拒绝 / 超时·取消 / 20k 字符截断）
+//! - `web_search`：经已配置搜索源检索（tavily / bocha）—— 配置直读 `ctx.settings`
+//!   （`app_settings`，与「忽略沙盒命令」同一份来源），因此 CLI 同样可用
 //!
-//! 未覆盖的工具（web）仍走 JS 桥。
+//! 至此 **28 个工具全部有 Rust 原生实现**（不再有走 JS 桥的工具）。
 //! 安全策略与前端 `securityService.resolveSafePath` / `securityPort.isPathAllowed` 对齐。
 
 mod chat;
@@ -80,6 +87,7 @@ mod search;
 mod skill;
 mod system;
 mod vision;
+mod web;
 
 #[cfg(test)]
 pub(crate) mod test_util;
@@ -96,7 +104,7 @@ use crate::agent::cancellation::CancellationToken;
 use crate::agent::event_sink::EventSink;
 use crate::agent::host::HostEnv;
 use crate::agent::types::NativeToolSecurity;
-use crate::session_db::{NoopSessionRepo, SessionRepo};
+use crate::session_db::{NoopSettingsRepo, NoopSessionRepo, SessionRepo, SettingsRepo};
 use serde_json::Value;
 
 // ==================== 统一结果 ====================
@@ -164,6 +172,16 @@ pub struct NativeToolCtx<'a> {
     /// 用途：`vision_analyze` 需要「模型文件在哪」，而那是宿主才知道的信息。
     /// ⚠️ 引擎核心里的 `tauri::` 命中数必须保持 0，宿主差异全部收在 `HostEnv` 后端。
     pub host: &'a dyn HostEnv,
+    /// 应用配置仓储（`app_settings` 表）—— 需要「读配置」的原生工具用。
+    ///
+    /// 与 `repo` / `host` 同样的显式注入：
+    /// - GUI / CLI 引擎 → 与会话库**共用同一把连接**的 `SqliteSettingsRepo`（`SessionDb::settings`）；
+    /// - TS 引擎路径与测试 → [`noop_settings`]（`get_all()` 返回空表 → 工具按「未配置」处理）。
+    ///
+    /// 用途：`web_search` 读 `searchProviders` / `defaultSearchProviderId` ——
+    /// 与 S7 的 `security::load_sandbox_ignore_rules` 是**同一份配置来源**
+    /// （都落在 `app_settings`，因此 GUI 与 CLI 不分叉）。
+    pub settings: &'a dyn SettingsRepo,
 }
 
 /// 无持久化后端的 `SessionRepo` 占位（TS 引擎路径的 ctx 只需要一个可用引用）。
@@ -174,6 +192,16 @@ pub(crate) fn noop_repo() -> &'static NoopSessionRepo {
     static REPO: once_cell::sync::Lazy<NoopSessionRepo> =
         once_cell::sync::Lazy::new(NoopSessionRepo::default);
     &REPO
+}
+
+/// 无持久化后端的 `SettingsRepo` 占位（TS 引擎路径与测试用）。
+///
+/// `get_all()` 返回**空表**（不是 Err）—— 因此依赖配置的工具会得到「未配置」这种
+/// 正常业务结论，而不是把「没有后端」误报成工具失败。
+pub(crate) fn noop_settings() -> &'static NoopSettingsRepo {
+    static SETTINGS: once_cell::sync::Lazy<NoopSettingsRepo> =
+        once_cell::sync::Lazy::new(NoopSettingsRepo::default);
+    &SETTINGS
 }
 
 /// 是否由原生 Rust 直接执行（否则走 JS 桥）
@@ -206,6 +234,8 @@ pub fn is_native_tool(name: &str) -> bool {
             | "read_skill_source"
             | "get_current_time"
             | "vision_analyze"
+            | "web_fetch"
+            | "web_search"
     )
 }
 
@@ -248,6 +278,8 @@ pub async fn execute_native_tool(
         "read_skill_source" => skill::read_skill_source_tool(ctx, args).await,
         "get_current_time" => system::get_current_time_tool(ctx, args).await,
         "vision_analyze" => vision::vision_analyze_tool(ctx, args).await,
+        "web_fetch" => web::web_fetch_tool(ctx, args).await,
+        "web_search" => web::web_search_tool(ctx, args).await,
         _ => Err(format!("Tool \"{}\" not implemented natively", tool_name)),
     }
 }
@@ -287,6 +319,7 @@ pub(crate) async fn run_command_for_ts_engine(
         // 本入口不经过 AgentEngine（TS 引擎路径），拿不到构造期注入的宿主；
         // `execute_command` 也不用宿主信息，故用进程级默认宿主。
         host: crate::host::default_host().as_ref(),
+        settings: crate::agent::native_tools::noop_settings(),
     };
     execute::run_command_native(&ctx, command, timeout_secs, bypass_sandbox).await
 }
@@ -319,6 +352,7 @@ mod tests {
             repo: noop_repo(),
             skills: None,
             host: crate::host::default_host().as_ref(),
+            settings: crate::agent::native_tools::noop_settings(),
         };
 
         // 1. write_file（相对路径 → workspace 下，自动建父目录）

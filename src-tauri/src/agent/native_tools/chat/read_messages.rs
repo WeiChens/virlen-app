@@ -228,6 +228,7 @@ mod tests {
             repo,
             skills: None,
             host: crate::host::default_host().as_ref(),
+            settings: crate::agent::native_tools::noop_settings(),
         };
         execute_native_tool(&ctx, "read_messages", &args)
             .await

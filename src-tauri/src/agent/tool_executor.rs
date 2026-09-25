@@ -59,6 +59,8 @@ pub async fn execute_tool_steps(
     repo: &dyn SessionRepo,
     // 宿主环境：原生工具（vision）需要「资源 / 数据目录在哪」
     host: &dyn HostEnv,
+    // 应用配置仓储（`app_settings`）：`web_search` 需要读搜索源配置
+    settings: &dyn crate::session_db::SettingsRepo,
 ) -> (bool, Vec<Message>) {
     let session_id = run.session_id.clone();
     let trace_id = crate::telemetry::get_session_trace(&session_id);
@@ -97,6 +99,7 @@ pub async fn execute_tool_steps(
                 security.clone(),
                 repo,
                 host,
+                settings,
             )
             .await;
         }
@@ -292,7 +295,7 @@ fn notify_step_start(step: &ToolStep, sink: &dyn EventSink, session_id: &str) {
 }
 
 /// 执行单个 tool step，返回结果字符串或特殊标记 "__SHELVED__"
-/// 高价值工具原生 Rust 执行（无 JS 桥往返），其余工具走 JS 桥。
+/// 工具**全部**原生 Rust 执行（`is_native_tool` 已是全集 —— S5 后没有桥接工具）。
 async fn execute_single_step(
     session_id: &str,
     step: &mut ToolStep,
@@ -305,6 +308,8 @@ async fn execute_single_step(
     repo: &dyn SessionRepo,
     // 宿主环境：原生工具（vision）需要「资源 / 数据目录在哪」
     host: &dyn HostEnv,
+    // 应用配置仓储：`web_search` 直读 `searchProviders` / `defaultSearchProviderId`
+    settings: &dyn crate::session_db::SettingsRepo,
 ) -> String {
     // StormBreaker: 检测工具调用循环
     if check_tool_call_storm(session_id, &step.tool_name, &step.input) {
@@ -338,6 +343,7 @@ async fn execute_single_step(
                 repo,
                 skills: skills.as_deref(),
                 host,
+                settings,
             };
             let args = step.input.clone();
             let tool_name = step.tool_name.clone();

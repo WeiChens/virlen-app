@@ -110,6 +110,7 @@ mod tests {
             repo: crate::agent::native_tools::noop_repo(),
             skills: None,
             host: crate::host::default_host().as_ref(),
+            settings: crate::agent::native_tools::noop_settings(),
         };
         let outcome = execute_native_tool(&ctx, "todo_write", &args)
             .await

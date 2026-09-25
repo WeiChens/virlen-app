@@ -67,6 +67,12 @@ reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }
 async-trait = "0.1"                                                       # 异步 trait（Provider / ToolExecutor）
 zip = "2"                                                                 # ZIP 打包（知识库导出）
 
+# ── 网页抓取（web_fetch 原生：HTML → Markdown）──
+# htmd 是 turndown.js 的 Rust 移植（同为纯 Rust：html5ever + markup5ever_rcdom + phf），
+# 无 C 工具链要求。与 TS 侧 `turndown` **同源但非同实现** → Markdown 细节不完全一致
+# （已知差异，见 docs/rust-engine.md）。
+htmd = "0.5"
+
 # ── 会话持久化 ──
 # rusqlite（bundled 内置编译 SQLite，零系统依赖）
 # 会话/消息直接落 SQLite，不经过 JS/IndexedDB

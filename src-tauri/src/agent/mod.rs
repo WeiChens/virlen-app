@@ -30,7 +30,7 @@ use crate::agent::bridge::AgentBridgeState;
 use crate::agent::engine::AgentEngine;
 use crate::agent::event_sink::TauriEventSink;
 use crate::agent::provider::DefaultProviderFactory;
-use crate::session_db::{self, NoopSessionRepo, SessionRepo};
+use crate::session_db::{self, NoopSessionRepo, NoopSettingsRepo, SessionRepo, SettingsRepo};
 use std::sync::Arc;
 use tauri::Manager;
 
@@ -48,6 +48,12 @@ pub fn init_agent_engine(app: &tauri::AppHandle) {
             Arc::new(NoopSessionRepo)
         }
     };
+    // 应用配置仓储（`app_settings`）：`init_session_db` 已注册（失败分支注册 Noop），
+    // 这里取同一个实例交给引擎 —— 原生工具 `web_search` 因此能读到与 CLI 相同的搜索源配置。
+    let settings: Arc<dyn SettingsRepo> = app
+        .try_state::<Arc<dyn SettingsRepo>>()
+        .map(|s| s.inner().clone())
+        .unwrap_or_else(|| Arc::new(NoopSettingsRepo));
     let engine = Arc::new(AgentEngine::with_deps(
         bridge.clone(),
         sink.clone(),
@@ -59,6 +65,7 @@ pub fn init_agent_engine(app: &tauri::AppHandle) {
         // 宿主环境（GUI）：资源目录（视觉模型）+ 数据目录（会话库）。
         // 引擎核心只认 `HostEnv` trait，因此 headless / CLI 换 `CliHost` 即可。
         Arc::new(crate::host::TauriHost::new(app.clone())),
+        settings,
     ));
     app.manage(bridge);
     app.manage(engine);

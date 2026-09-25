@@ -22,7 +22,7 @@ use super::types::{
     AgentEvent, Message, NativeToolSecurity, Run, RunSnapshot, SendMessageOptions, Session,
     ToolDefinition,
 };
-use crate::session_db::{NoopSessionRepo, SessionRepo};
+use crate::session_db::{NoopSessionRepo, NoopSettingsRepo, SessionRepo, SettingsRepo};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -34,6 +34,11 @@ pub struct AgentEngine {
     /// 宿主环境（资源 / 数据目录）：原生工具（`vision_analyze`）需要
     /// 「模型文件在哪」，而那是宿主才知道的信息（详见 `agent/host.rs`）
     pub host: Arc<dyn HostEnv>,
+    /// 应用配置仓储（`app_settings` 表，与会话库**同一把连接**）。
+    ///
+    /// 显式注入（与 `repo` / `host` 同风格）：原生工具 `web_search` 需要读
+    /// `searchProviders` / `defaultSearchProviderId` —— 不必让前端下发，CLI 也自然可用。
+    pub settings: Arc<dyn SettingsRepo>,
     provider_factory: Arc<dyn ProviderFactory>,
     run_snapshots: Mutex<HashMap<String, RunSnapshot>>,
     active_cancels: Mutex<HashMap<String, CancellationToken>>,
@@ -52,6 +57,7 @@ impl AgentEngine {
                 sink,
             }),
             crate::host::default_host().clone(),
+            Arc::new(NoopSettingsRepo),
         )
     }
 
@@ -68,6 +74,7 @@ impl AgentEngine {
             Arc::new(NoopSessionRepo),
             provider_factory,
             crate::host::default_host().clone(),
+            Arc::new(NoopSettingsRepo),
         )
     }
 
@@ -78,12 +85,15 @@ impl AgentEngine {
         repo: Arc<dyn SessionRepo>,
         provider_factory: Arc<dyn ProviderFactory>,
         host: Arc<dyn HostEnv>,
+        // 应用配置仓储：与会话库共用同一把连接，原生工具（web_search）直读它
+        settings: Arc<dyn SettingsRepo>,
     ) -> Self {
         Self {
             bridge,
             sink,
             repo,
             host,
+            settings,
             provider_factory,
             run_snapshots: Mutex::new(HashMap::new()),
             active_cancels: Mutex::new(HashMap::new()),
@@ -228,6 +238,7 @@ impl AgentEngine {
                 max_iterations: options.max_iterations,
                 repo: self.repo.as_ref(),
                 host: self.host.as_ref(),
+                settings: self.settings.as_ref(),
                 provider_type: &provider_type,
                 provider_config_id: &provider_config_id,
                 persist_snapshot: Some(&persist_closure),
@@ -296,6 +307,7 @@ impl AgentEngine {
             }),
             self.repo.as_ref(),
             self.host.as_ref(),
+            self.settings.as_ref(),
         )
         .await;
 
@@ -365,6 +377,7 @@ impl AgentEngine {
                 reasoning_effort: reasoning_effort.clone(),
                 repo: self.repo.as_ref(),
                 host: self.host.as_ref(),
+                settings: self.settings.as_ref(),
                 provider_type,
                 provider_config_id,
                 round: round_index,

@@ -126,7 +126,7 @@ toolRegistry.register(
 
     // ---- 3. HTML 转 Markdown（最耗时的步骤）----
     checkAborted()
-    if (htmlToMd && isHtml(result)) {
+    if (htmlToMd && isHtml(result, contentType)) {
       const { cheerio, turndown } = await ensureHtmlDeps()
       const $ = cheerio.load(result)
       $('script, style, .hidden, footer, header, iframe, noscript').remove()

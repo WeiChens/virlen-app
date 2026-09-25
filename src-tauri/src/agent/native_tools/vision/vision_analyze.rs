@@ -108,6 +108,7 @@ mod tests {
             repo: crate::agent::native_tools::noop_repo(),
             skills: None,
             host,
+            settings: crate::agent::native_tools::noop_settings(),
         };
         vision_analyze_tool(&ctx, &args).await
     }

@@ -37,7 +37,7 @@ pub use commands::init_session_db;
 pub use commands::manage_noop_settings;
 pub use maintenance::DbMaintenance;
 pub use repo::{NoopSessionRepo, SessionRepo};
-pub use settings::{SettingsRepo, SqliteSettingsRepo};
+pub use settings::{NoopSettingsRepo, SettingsRepo, SqliteSettingsRepo};
 // 消息查询 DTO：原生工具（`agent::native_tools::chat`）需要它们来描述查询结果
 pub(crate) use types::{MessageTimelinePage, MessageWindow};
 /// 仅供测试构造 DTO（生产路径只读不构造）
