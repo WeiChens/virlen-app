@@ -345,6 +345,7 @@ pnpm test:watch / test:ui
 npx tsc --noEmit             # 类型检查（唯一「静态门禁」）
 cd src-tauri; cargo test     # Rust 侧测试（各模块内联 #[cfg(test)] mod tests）
 pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
+pnpm cli config get          # headless CLI（= cargo run --bin virlen-cli -- …；与 GUI 同一份 app_settings）
 ```
 
 - 测试文件实际位于 **`src/tests/**`（不是 `tests/`）**，`vitest.config.ts` include 已固定，setup 文件 `src/tests/setup.ts`（模拟 Tauri API）。
@@ -355,6 +356,8 @@ pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
   - `clang-sys` 只探测 `LIBCLANG_PATH` 与 `llvm-config.exe`，**不扫 `PATH`**：LLVM 装在非默认位置、或该发行版不带 `llvm-config.exe`（本机 `C:\config\LLVM` 即是）时**必须**显式设。
   - 必须**持久化**（用户级环境变量）并**重开终端 / IDE**：临时 `$env:LIBCLANG_PATH` 只对当前 shell 生效，而 `pnpm tauri dev` 由 CLI 新起 shell 跑 `cargo run` → 表现为「手动 `cargo build` 能过、`tauri dev` 报 `Unable to find libclang`」。
   - 该 bindgen 调用在 `hirofa-quickjs-sys/build.rs` 里**无条件**执行（无特性开关），**不能**用 feature 绕开。
+- ⚠️ `src-tauri` 有**两个 bin**：`virlen-app`（GUI）/ `virlen-cli`（headless）。`[package] default-run = "virlen-app"` **必须保留** —— 有第二个 bin 后 `tauri build` / `tauri dev` 靠它认主二进制，删掉会直接报 `failed to find main binary`（实测，见 §11.14）。
+  另：两个 bin 都会跑 `build.rs`（tauri-build 要求 `frontendDist` 存在）→ 只编 Rust（`cargo build` / `cargo test`）前也必须先 `pnpm build` 出 `dist/`。
 
 ---
 
@@ -495,6 +498,12 @@ pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 反之组件内自己切（如 `doSend` 新建会话）必须登记 `handledSessionRef`，否则兜底 effect 会去数据库重拉、把刚加的消息按旧内容覆盖。
 另：`message-list` 的 `hide`（容器 `opacity: 0`）在 `messages` 为空时也必须解除（见 `use-scroll-controller.ts`），否则空会话会一直「看起来是空的」。
 
+**11.14 新增第二个 bin 后必须补 `[package] default-run`** —— Tauri CLI 用 cargo 的**默认 bin** 当主二进制；package 里出现两个 bin（`virlen-app` GUI / `virlen-cli` headless）后它无法判断，`tauri build` 直接失败：
+`failed to find main binary, make sure you have a `package > default-run` in the Cargo.toml file`（实测）。
+修法：`src-tauri/Cargo.toml` 的 `[package]` 加 `default-run = "virlen-app"`（**删掉就会再次失败**）。
+另两条：CLI 的 bin 目标**不能**加 `windows_subsystem = "windows"`（它需要 stdout / stderr，与 `src/main.rs` 相反）；CLI 逻辑一律放 lib 的 `cli` 模块 —— **bin 目标不被单测引用**，写在 bin 里就测不到。
+验证手法：`npx tauri build --no-bundle --debug --config <覆盖 beforeBuildCommand 的 json>` → 末行应打印 `Built application at: …\virlen-app.exe`（不碰 `dist/`）。
+
 **踩坑前必读：`docs/tray-implementation-plan.md`**（托盘/关闭不退出/后台工作的完整方案与实现记录）。
 
 ---
@@ -518,10 +527,11 @@ pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 | 改终端输出处理（`\r`、ANSI） | `tools/execute/common.ts::processTerminalOutput`（UI 侧 `tool-call/Execute*Message.tsx` 复用）；Rust 侧 `native_tools/execute/common.rs::process_terminal_output`。两份**逐条对齐** |
 | 改工具授权确认弹窗 / 交互 | `ui/pages/chat/components/modals/authorization.tsx`；事件 `events/toolInteractEvent.ts::showAuthorization`；调度 `services/tool-service/command_confirm.ts`；Rust 侧下发同样字段 `native_tools/execute/{execute_command,execute_script}.rs` |
 | 改沙盒 / 权限 | `src-tauri/src/sandbox/**`、`src/infrastructure/sandbox/*`、`src/domain/security/index.ts` |
-| 改 `js` 类沙盒规则的求值（纯 Rust CLI 侧） | `docs/config-sink-plan.md` §4（设计已定案）+ `Cargo.toml` 的 `quickjs_runtime`（已引入、未接线）；实现位置预定 `src-tauri/src/security/js_rule.rs`，由 `native_tools/execute/common/rules.rs` 调用 |
+| 改 `js` 类沙盒规则的求值 | ✅ **已落地**（S7）：`src-tauri/src/security/js_rule.rs`（受限 QuickJS：**无 host 函数**、16MB 内存 / 512KB 栈 / 200ms 中断，异常与超时一律按未命中），由 `native_tools/execute/common/rules.rs` 调用；设计与依赖代价见 `docs/config-sink-plan.md` §4 |
 | 改「忽略沙盒命令」规则（命中即免脱壳审批 + 强制无沙盒执行） | **Rust 判定（权威：默认引擎 + CLI）** `src-tauri/src/security/{rules,js_rule}.rs`（text/regex 原生 + js 内嵌 QuickJS）+ `agent/native_tools/execute/common/rules.rs`（判定入口与提示文案）+ `.../execute/{execute_command,execute_script}.rs`；**规则来源** `app_settings` 的 `sandboxIgnoreRules` 键（Rust 侧 `session_db/settings.rs` + `security::load_sandbox_ignore_rules`；前端 `infrastructure/securityRepo/`（`hydrateSecurity` / `flushSecurityPersist`）+ `ui/store/securityStore.ts` + `main.ts` 的 `step('securityConfig')`）；**TS 侧实现（浏览器 dev / TS 引擎 / 设置页测试）** `domain/security/sandbox-ignore-rules.ts`（`SANDBOX_JS_DEFAULT_PATTERN` / `defaultSandboxRulePattern` / 排序 / 预设 / `compileSandboxRule`）+ `services/security-service.ts::matchSandboxIgnoreRule` + `infrastructure/tools/execute/{execute-command,execute-script}.ts`；**两侧契约** `src/tests/fixtures/sandbox-rules.golden.json`（TS `tests/domain/sandbox-rules-golden.test.ts` ↔ Rust `security/rules.rs` 的 golden 用例）；UI `ui/pages/Settings/security-sandbox-rules.tsx`（拖拽几何 `./sandbox-rules-dnd.ts`；JS 输入用 `ui/components/code-editor/CodeEditor.tsx`；行内开关 `ui/components/shared/Toggle`）；下发字段 `services/rust-engine.ts::resolveSecurityConfig`（`sandboxIgnoreRules`） |
 | 改视觉 | 核心 `src-tauri/src/vision/`（模型定位 / 懒加载 / 推理，零 `tauri::`）、命令壳 `src-tauri/src/vision_service.rs`、原生工具 `src-tauri/src/agent/native_tools/vision/`、前端 `src/infrastructure/vision/`、模型 `src-tauri/resources/quasivision_models/` |
 | 改宿主抽象 / CLI 资源与数据目录 | trait `src-tauri/src/agent/host.rs`（`resource_candidates` / `data_dir`）＋两份实现 `src-tauri/src/host/{tauri_host,cli_host}.rs`；注入链 `AgentEngine.host` → `ExecuteLlmRoundParams.host` / `RunIterationParams.host` → `execute_tool_steps` → `NativeToolCtx.host` |
+| 跑 / 扩展 headless CLI（`virlen-cli`） | 实现 `src-tauri/src/cli/{mod,config}.rs`（解析写成纯函数、输出走注入的 `Write` → 可单测）+ 三行转发 `src-tauri/src/cli_main.rs`；数据 / 资源目录 `src-tauri/src/host/cli_host.rs`（`$VIRLEN_DATA_DIR` 覆盖）；库入口 `session_db::open_session_db`（与 GUI **同一条**路径链 → 同一份 `virlen.db`）；便捷脚本 `pnpm cli …`；新增 bin 的连带要求见 §11.14 |
 | 改设置项 | `src/ui/store/settingStore.ts` + `src/ui/pages/Settings/*` + `src/ui/i18n/lang/en-US.json` |
 | 改配置下沉 / 设置落库 | Rust `src-tauri/src/session_db/settings.rs`（`app_settings` 表 + `SettingsRepo`）+ `session_db/commands.rs::cmd_settings_*`；前端 `src/infrastructure/settingsRepo/` + `settingStore.hydrateSettings()/flushSettingsPersist()` + `src/main.ts` 的 `step('settings')`；计划见 `docs/config-sink-plan.md` |
 | 改埋点 | `src/utils/telemetry/**`（+ `src-tauri/src/telemetry.rs` 的 panic 桥） |

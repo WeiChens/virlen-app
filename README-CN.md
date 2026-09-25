@@ -438,6 +438,23 @@ virlen-app/
 | `pnpm test`        | 运行单元测试（Vitest）          |
 | `pnpm test:watch`  | 监听模式运行测试                |
 | `pnpm test:ui`     | 启动 Vitest UI 测试面板         |
+| `pnpm cli`         | 运行 headless CLI（`config get/set`） |
+
+### Headless CLI（`virlen-cli`）
+
+桌面端与 CLI 共用同一个 `virlen.db` 里的 `app_settings` 表 —— 两者读到的永远是同一份配置：
+
+```bash
+pnpm build                            # 必须先有 dist/（tauri-build 要求 frontendDist）
+pnpm cli config path                  # -> <数据目录>/virlen.db（与桌面端同一个文件）
+pnpm cli config get                   # 输出全部设置（JSON）
+pnpm cli config get providers         # 只看指定键（有键不存在时退出码 1）
+pnpm cli config set defaultSelectModel gpt-4o      # 值优先按 JSON 解析，失败按字符串
+pnpm cli config set --string maxTokens 4096        # --string 强制写成字符串
+```
+
+`VIRLEN_DATA_DIR` 可覆盖数据目录（便携安装 / 测试用）。
+CLI 实现在 `src-tauri/src/cli/`（`cli_main.rs` 只是三行转发）；新增第二个 bin 的注意事项见 `docs/AGENTS.md` §11.14。
 
 ---
 

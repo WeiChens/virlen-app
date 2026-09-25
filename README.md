@@ -439,6 +439,23 @@ virlen-app/
 | `pnpm test`         | Run unit tests (Vitest)               |
 | `pnpm test:watch`   | Run tests in watch mode               |
 | `pnpm test:ui`      | Launch Vitest UI test panel           |
+| `pnpm cli`          | Headless CLI (`config get` / `set`)    |
+
+### Headless CLI
+
+The desktop app and the CLI share the same `app_settings` table inside one `virlen.db`, so both always read the same configuration:
+
+```bash
+pnpm build                            # dist/ must exist (tauri-build requires frontendDist)
+pnpm cli config path                  # -> <data dir>/virlen.db (same file as the desktop app)
+pnpm cli config get                   # print every setting as JSON
+pnpm cli config get providers         # print selected keys (exit 1 if a key is missing)
+pnpm cli config set defaultSelectModel gpt-4o      # bare values default to JSON, strings fall back
+pnpm cli config set --string maxTokens 4096        # --string forces a JSON string
+```
+
+`VIRLEN_DATA_DIR` overrides the data directory (handy for portable installs / tests).
+The CLI entry lives in `src-tauri/src/cli/` (`cli_main.rs` is just a three-line shim); notes for adding a second bin are in `docs/AGENTS.md` §11.14.
 
 ---
 
