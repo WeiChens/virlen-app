@@ -156,6 +156,9 @@ fn show_notification(
     title: Option<&str>,
     preview: Option<&str>,
 ) -> bool {
+    // 非 Windows 只有插件通道，用不到会话 id（只有自持 handle 的那条通道才知道点击属于哪条会话）
+    #[cfg(not(target_os = "windows"))]
+    let _ = session_id;
     #[cfg(target_os = "windows")]
     if let Some(ok) = show_owned(app, session_id, title, preview) {
         return ok;
@@ -193,7 +196,9 @@ fn show_via_plugin(app: &AppHandle, title: Option<&str>, preview: Option<&str>) 
 ///
 /// ⚠️ 清单模板 `scripts/msix/AppxManifest.xml.template` 只存在于打包分支
 /// `store-version`，本分支不参与打包，因此这里没有「直接读清单核对」的单测。
-#[cfg(any(target_os = "windows", test))]
+// ⚠️ 只在 Windows 上有用（MSIX 打包版的 toast AUMID）；原先的 `test` 兜底已无使用者，
+//    留着会让**非 Windows 的 test 构建**把它判成 dead-code（ci.yml 的 ubuntu clippy 真报）。
+#[cfg(target_os = "windows")]
 const PACKAGE_APP_ID: &str = "App";
 
 /// 传给 `CreateToastNotifierWithId` 的应用标识（**通知归属的唯一真源**）
@@ -212,6 +217,9 @@ const PACKAGE_APP_ID: &str = "App";
 ///
 /// ⚠️ 这里传**裸 AppId**而不是拼好的 `<PFN>!App`：平台对打包进程会自己补前缀，
 /// 裸值在「无条件补」与「仅未限定才补」两种规则下得到同一个结果（更稳）。
+/// ⚠️ 只在 Windows 使用（调用方 `show_owned` / `init_app_identity` 都是 Windows 专属）；
+///    `is_packaged()` 同样是 Windows-only —— 与本函数一致。
+#[cfg(target_os = "windows")]
 pub fn toast_app_id(app: &AppHandle) -> String {
     #[cfg(target_os = "windows")]
     if is_packaged() {
