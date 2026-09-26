@@ -350,7 +350,8 @@ cd src-tauri; cargo clippy --workspace --all-targets -- -D warnings   # Rust 静
 cd src-tauri; cargo test --workspace   # Rust 侧测试（⚠️ 必须 --workspace，见 §7 下注）
 pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 pnpm build:cli               # 打包 headless CLI（release 二进制；三元组用环境变量 CARGO_BUILD_TARGET，别用 `--target`，见 §11.31）
-                             # 产物 src-tauri/target[/<triple>]/release/virlen-cli[.exe]；发版由三个 build-*.yml 上传（§11.29）
+                             # 产物 src-tauri/target[/<triple>]/release/virlen-cli[.exe]；发版时三个 build-*.yml 会把它
+                             # 连同 quasivision_models 打成 **zip** 上传（§11.29）
 pnpm cli config get          # headless CLI（= cargo run -p virlen-cli -- …；与 GUI 同一份 app_settings）
 pnpm cli run "解释 README"   # 无界面跑一次 agent（stdout=正文 / stderr=工具进度；同一份会话库）
 pnpm cli list-session -g agent   # 列出会话（-g agent|workdir 分组；--limit / --json；含「上下文/200k」「条数」两列）
@@ -560,10 +561,13 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 - **⚠️ `cargo clippy --fix` 会引入编译错误**（本次它把 `#[cfg(test)]` 挪给新插入的 `impl Default` → 非 test 构建 `E0425`）→ 自动修复后**必须** `cargo check`，不能只看 clippy 退出码。
 - 门禁 `.github/workflows/ci.yml`：**每次 push / PR** 单平台（ubuntu）跑 `pnpm build`（= TS 类型检查 + 产出 `dist`）→ `cargo clippy --workspace --all-targets -- -D warnings`。**新代码不得再引入 clippy 告警**；⚠️ 只在 ubuntu 跑 → Windows 专属代码必须显式门禁（见 §11.31）。
 
-**11.29 CLI 打包并入三个平台的发版 workflow** —— 不新建 workflow，并进三个 `build-*.yml` 的 `build-*` job（复用同一套工具链 / `rust-cache` / `target`）；产物进 **Artifact + 同一个 Release**，形态 = **裸二进制**。
-- `package.json` 的 `build:cli` = `cargo build --manifest-path src-tauri/Cargo.toml -p virlen-cli --release`；CI 传三元组用 **`CARGO_BUILD_TARGET` 环境变量**（**不要** `pnpm run … -- --target`，见 §11.31）。每 job 三步：`Build CLI` → `Stage CLI binary` → `Upload CLI binary`（`if-no-files-found: error`），放在 `cargo install tauri-cli` **之前**（CLI 出问题即早退）。
-- **⚠️ 裸二进制必须平台区分命名**：三个 workflow 传的是**同一个 Release**，而 Linux / macOS 的 basename 都是 `virlen-cli` → 不改名会互相覆盖。故 `virlen-cli-windows-x64.exe` / `virlen-cli-linux-x64` / `virlen-cli-macos-arm64`（**不带版本号**，版本由 Release tag 承载）。Release 的 `files`：Windows 靠 `**/*.exe` 天然命中，Linux / macOS 是**无后缀**文件**必须显式列**。
-- **边界**：裸二进制在 Artifact 与 Release 上**都不保留可执行位**（Unix 需 `chmod +x`；macOS 还有 quarantine）；aarch64 的 ad-hoc 签名由链接器自动完成、**无需** codesign；三个 workflow 并发写同一个 Release 是**既有设计**。
+**11.29 CLI 打包并入三个平台的发版 workflow** —— 不新建 workflow，并进三个 `build-*.yml` 的 `build-*` job（复用同一套工具链 / `rust-cache` / `target`）；产物进 **Artifact + 同一个 Release**，形态 = **zip 包**（2026-09-26 由裸二进制改为 zip）。
+- `package.json` 的 `build:cli` = `cargo build --manifest-path src-tauri/Cargo.toml -p virlen-cli --release`；CI 传三元组用 **`CARGO_BUILD_TARGET` 环境变量**（**不要** `pnpm run … -- --target`，见 §11.31）。每 job 三步：`Build CLI` → `Stage CLI bundle` → `Upload CLI bundle`（`if-no-files-found: error`），放在 `cargo install tauri-cli` **之前**（CLI 出问题即早退）。
+- **zip 内容**：`virlen-cli[.exe]` + `quasivision_models/`（端侧视觉模型，36.9 MB）+ `README.txt`（文案唯一源 `.github/cli-bundle-README.txt`）+（仅 Windows）`DirectML.dll`。**为什么是 zip**：裸二进制不带模型 → 用户跑 `vision_analyze` 只会得到「quasivision models directory not found.」；且裸文件在 Artifact / Release 上**不保留可执行位**（Unix 要用户自己 `chmod +x`），zip 能保留。
+- **⚠️ 目录布局即契约**：`quasivision_models/` 必须与可执行文件**同级** → 命中 `CliHost` 资源候选最后一档 `<exe_dir>`（`virlen-core/src/host/cli_host.rs`）；挪进子目录就等于没带。
+- **⚠️ 平台区分命名**：三个 workflow 传的是**同一个 Release**，故 zip 名为 `virlen-cli-windows-x64.zip` / `virlen-cli-linux-x64.zip` / `virlen-cli-macos-arm64.zip`（**不带版本号**，版本由 tag 承载）。Release `files` 必须**显式列**各自的 `.zip`（`**/*.exe` / `**/*.dmg` 等命中不到）。
+- **打包自检**（发坏包前就失败）：stage 步骤断言 zip 内必须有 `virlen-cli[.exe]` / `README.txt` / `quasivision_models/ocr-models/ppocrv5_mobile_det.onnx`（= `vision::models_dir` 的就位判据），并单独拦「多套一层 `quasivision_models/quasivision_models/`」。
+- **边界**：aarch64 的 ad-hoc 签名由链接器自动完成、**无需** codesign；macOS 下载后仍有 quarantine（`xattr -d com.apple.quarantine virlen-cli`）；三个 workflow 并发写同一个 Release 是**既有设计**；Linux / macOS 的 `zip` 步骤**本地无法真跑**（本机无 zip 命令）—— 依据是 Info-ZIP 标准语义 + bsdtar 侧验证「条目名用 `/`、mode 可保留」。
 
 **11.30 上下文压缩下沉 core（`ai` / `raw` 两种模式）+ `chat` 显示占用 % + `list-session` 两列** —— 前提：压缩原先**只在 TS 侧**（Rust 只有提示词），连 GUI 走 Rust 引擎时也是回调 TS → 「CLI 能用」＝在 Rust 侧**新写一份**（用户拍板落 `virlen-core`，将来 GUI 可切过来只留一份）。
 - 常量与口径（与 TS 逐条对齐）：`CONTEXT_WINDOW_TOKENS = 200_000`（**用户要求先写死**，将来改「按模型下发」只改这一处）、`COMPRESS_MIN_RATIO = 0.4`、`context_tokens()`（`uiData.contextTokens > 0` 优先，否则 `usage.totalTokens`，从最后一条往前命中即止）。
@@ -618,7 +622,7 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 | 改 RAG / 知识库 | `src-tauri/virlen-core/src/rag/**`、`src/services/rag-service.ts`、`src/infrastructure/rag/` |
 | 改用量统计 / 费用 | `src-tauri/virlen-core/src/session_db/usage.rs`、`src/domain/pricing/index.ts`、`src/services/token-stats-service.ts`、`src/ui/pages/chat/components/token-stats/` |
 | 不让重复启动两个进程（第二实例 → 聚焦已有窗口） | `src-tauri/src/lib.rs` 的 `.plugin(tauri_plugin_single_instance::init(...))`（**必须第一个注册**）+ `src-tauri/src/tray/mod.rs::activate_main_window`；macOS「重新打开」=`RunEvent::Reopen` |
-| 发版 / 打包 | `src-tauri/tauri.conf.json` + `package.json` + `scripts/build-msix.ps1`、`scripts/msix/AppxManifest.xml.template`；**headless CLI 打包** = 本地 `pnpm build:cli`，CI 在三个 `build-*.yml` 的 `build-*` job 里（`Build CLI (virlen-cli)` → `Stage CLI binary` → `Upload CLI binary`，Artifact + 同一 Release 资产；命名 / glob 口径见 §11.29） |
+| 发版 / 打包 | `src-tauri/tauri.conf.json` + `package.json` + `scripts/build-msix.ps1`、`scripts/msix/AppxManifest.xml.template`；**headless CLI 打包** = 本地 `pnpm build:cli`（只出二进制），CI 在三个 `build-*.yml` 的 `build-*` job 里打成 **zip**（`Build CLI` → `Stage CLI bundle` → `Upload CLI bundle`，内含 `quasivision_models` + `README.txt`，Windows 另带 `DirectML.dll`）→ Artifact + 同一 Release 资产；zip 内布局 / 命名 / 自检口径见 §11.29 |
 
 ---
 
@@ -634,5 +638,5 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
   4. 若新增工具 → 注册链、UI 组件、Rust 白名单、i18n 文案是否齐备？
   5. 若新增 Tauri 命令 → `lib.rs` 是否已注册？`capabilities/default.json` 是否需补权限？
   6. 是否引入无关改动、是否触碰 §8 安全红线？
-  7. 若改了 workflow / 打包流程 → 产物路径与 `upload-artifact` 的 `path`、Release 的 `files` glob 是否对齐？（CLI 裸二进制的命名约束与三平台不重名要求见 §11.29；**CLI 构建步骤的三元组用 `CARGO_BUILD_TARGET` 环境变量**，不要走 `pnpm run … -- --target`，见 §11.31）；
+  7. 若改了 workflow / 打包流程 → 产物路径与 `upload-artifact` 的 `path`、Release 的 `files` glob 是否对齐？（CLI 发布物是 **zip**（含视觉模型）：命名约束 / zip 内布局 / 打包自检见 §11.29；**CLI 构建步骤的三元组用 `CARGO_BUILD_TARGET` 环境变量**，不要走 `pnpm run … -- --target`，见 §11.31）；
   8. 新增/修改了**平台专属代码**（`#[cfg(target_os = …)]`）→ 反向平台能不能编译？（CI 的 clippy 只在 ubuntu 跑，Windows 专属的常量 / 函数在 Linux 上就是 `dead-code`，必须显式门禁，见 §11.31）

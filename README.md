@@ -496,6 +496,9 @@ Boundaries (also documented in `pnpm cli run --help`):
 - when resuming with `--session`, the **working directory comes from the session record** (immutable after creation): a conflicting `--workspace` is rejected; only when the record is empty does it fall back to the default workspace → cwd, without writing back to the session.
 
 `VIRLEN_DATA_DIR` overrides the data directory (handy for portable installs / tests).
+
+Release builds ship the CLI as a **zip** (`virlen-cli-<platform>.zip`): the on-device vision models (`quasivision_models/`, 37 MB) sit **next to the binary** and a `README.txt` explains the rest — unzip and run, no extra setup. To keep the models elsewhere, point `VIRLEN_RESOURCE_DIR` at their parent directory; the built-in fallbacks are `<exe_dir>/resources` then `<exe_dir>`. The Windows package also carries `DirectML.dll` (ONNX Runtime's DirectML provider is a load-time import and the system copy is too old). `deepseek_tokenizer/` is **not** needed by the CLI — context usage is read from the DB.
+
 The CLI entry lives in `src-tauri/virlen-cli/src/main.rs` (a three-line shim over `virlen_cli::run`); **all command implementations live in that package's lib** (`src/lib.rs` for arg parsing/dispatch plus `config.rs` / `run.rs` / `list.rs` / `tui/`) — `virlen-core` contains no command entry points. The CLI package depends on `virlen-core` only, so it pulls in no Tauri code and never needs `dist/`. Workspace notes are in `docs/AGENTS.md` §11.14.
 
 ---

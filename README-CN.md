@@ -494,6 +494,9 @@ pnpm cli list-agent --json
 - 续用 `--session` 时**工作目录只认会话记录**（创建后不可变更）：`--workspace` 与之冲突会直接报错；记录为空时才回退「设置里的默认工作目录 → 当前目录」，且**不写回会话**。
 
 `VIRLEN_DATA_DIR` 可覆盖数据目录（便携安装 / 测试用）。
+
+发版产物是 **zip**（`virlen-cli-<平台>.zip`）：端侧视觉模型（`quasivision_models/`，37 MB）就在**可执行文件同级**，另附 `README.txt` 说明 —— 解压即用，无需额外配置。想把模型放别处，用 `VIRLEN_RESOURCE_DIR` 指向它的父目录即可；内置回落顺序是 `<exe 目录>/resources` → `<exe 目录>`。Windows 包还带 `DirectML.dll`（ONNX Runtime 的 DirectML 提供器是加载期静态导入，系统自带的版本太旧）。CLI **不需要** `deepseek_tokenizer/`（上下文占用直接读库）。
+
 CLI 入口在 `src-tauri/virlen-cli/src/main.rs`（三行转发 → `virlen_cli::run`），**命令实现全在该 package 的 lib**（`src/lib.rs` 参数解析/分派 + `config.rs` / `run.rs` / `list.rs` / `tui/`）—— core 不包含命令入口。该 package **只依赖 `virlen-core`**，因此不链接任何 Tauri 代码，也**不需要 `dist/`**。workspace 相关注意事项见 `docs/AGENTS.md` §11.14。
 
 ---
