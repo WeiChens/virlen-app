@@ -15,6 +15,10 @@ edition = "2021"
 #    这里只是 path 依赖，不发布到 crates.io，版本号仅作标识。
 #    见 scripts/update-version.mjs（发版脚本需同步覆盖本文件与 virlen-cli/Cargo.toml）。
 
+# 继承 workspace 的 lint 配置（见 src-tauri/Cargo.toml 的 `[workspace.lints]`）
+[lints]
+workspace = true
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

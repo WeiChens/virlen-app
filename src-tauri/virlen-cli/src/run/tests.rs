@@ -145,7 +145,7 @@ fn build_resources_uses_default_model_and_limits() {
     assert_eq!(res.max_tokens, 1234);
     assert_eq!(res.max_tool_rounds, 7);
     assert_eq!(res.max_iterations, 2);
-    assert_eq!(res.enable_tools, true);
+    assert!(res.enable_tools);
     assert_eq!(res.tool_defs.len(), 28, "启用工具时必须下发全量定义");
     assert_eq!(res.security.sandbox_mode, "off");
     assert_eq!(

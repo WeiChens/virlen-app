@@ -20,6 +20,13 @@ default-run = "virlen-app"
 members = ["virlen-core", "virlen-cli"]
 resolver = "2"
 
+# 链接器告警静音：MSVC `link.exe` 把「正在创建库 xxx.lib 和对象 xxx.exp」写到 **stdout**，
+# rustc 用 `linker_messages` lint 转述 —— 每个 cdylib/staticlib/bin 目标各一条，构建时相当吵。
+# 那是工具链的本地化进度提示，不是源码问题；真正的链接错误走 stderr 且是 error，不会被这里掩盖。
+# 三个成员统一继承（见各自 Cargo.toml 的 `[lints] workspace = true`）。
+[workspace.lints.rust]
+linker_messages = "allow"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
@@ -36,6 +43,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+# 继承 workspace 的 lint 配置（见上方 `[workspace.lints]`）
+[lints]
+workspace = true
 
 [dependencies]
 # 核心库（零 `tauri::`）：引擎 / 会话与配置持久化 / 沙盒 / 安全判定 / RAG / 视觉 / 宿主抽象。

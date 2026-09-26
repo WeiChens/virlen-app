@@ -155,12 +155,11 @@ pub(crate) async fn run_agents(
     let _ = writeln!(out, "共 {} 个 Agent\n", agents.len());
     let _ = writeln!(
         out,
-        "{}  {}  {}  {}  {}",
+        "{}  {}  {}  {}  名称",
         pad("ID", COL_ID),
         pad_left("会话数", COL_COUNT),
         pad("默认模型", COL_MODEL),
         pad("默认工作目录", COL_DIR),
-        "名称"
     );
     for a in &agents {
         let model = if a.default_model.model_id.trim().is_empty() {

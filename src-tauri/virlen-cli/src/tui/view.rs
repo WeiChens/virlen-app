@@ -381,7 +381,7 @@ fn status_line(s: &str, max_cols: u16) -> String {
         out.push(ch);
         used += w;
     }
-    out.extend(std::iter::repeat(' ').take(max - used));
+    out.extend(std::iter::repeat_n(' ', max - used));
     out
 }
 

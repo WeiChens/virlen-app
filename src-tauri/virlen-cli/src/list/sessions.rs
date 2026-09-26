@@ -110,11 +110,10 @@ pub(crate) async fn run_sessions(
             let _ = writeln!(out);
             let _ = writeln!(
                 out,
-                "{}  {}  {}  {}",
+                "{}  {}  {}  标题",
                 pad("ID", COL_ID),
                 pad("更新于", COL_TIME),
                 pad("模型", COL_MODEL),
-                "标题"
             );
             for s in &shown_sessions {
                 let _ = writeln!(out, "{}", session_line(s, ""));

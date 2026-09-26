@@ -16,6 +16,10 @@ edition = "2021"
 #
 # ⚠️ 版本号与 virlen-app / virlen-core / package.json / tauri.conf.json 同源（发版一并改）。
 
+# 继承 workspace 的 lint 配置（见 src-tauri/Cargo.toml 的 `[workspace.lints]`）
+[lints]
+workspace = true
+
 [dependencies]
 virlen-core = { path = "../virlen-core" }
 # `rt` + `macros`：`#[tokio::main(flavor = "current_thread")]` / `#[tokio::test]`；
