@@ -101,7 +101,8 @@ async fn raw_compress_appends_summary_and_refreshes_snapshot() {
     assert_eq!(report.message_count, 4, "原 3 条 + 1 条 summary");
     assert!(report.llm.is_none(), "正文压缩没有模型调用（不记账）");
     assert!(
-        report_line(&report).contains("正文压缩"),
+        report_line(&report, virlen_core::agent::compress::CONTEXT_WINDOW_TOKENS)
+            .contains("正文压缩"),
         "结果行要写明方式"
     );
 

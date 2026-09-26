@@ -22,8 +22,8 @@ import { t } from '@/ui/i18n'
 
 // ==================== 口径与几何常量（提到模块级，不在渲染里重算） ====================
 
-/** 100% 对应 200k tokens */
-const MAX_TOKENS_FULL = 200_000
+/** 「100%」对应的上下文窗口缺省值 —— 设置里可改（`SettingsStore.contextWindowTokens`） */
+const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000
 /** 用量低于该比例时，点击只提示「无需压缩」 */
 const COMPRESS_MIN_RATIO = 0.4
 /** 环形尺寸 / 线宽 / 半径 / 周长 */
@@ -117,7 +117,11 @@ export default function TokenRing({
         const totalTokens = findContextTokens(sessionId)
         if (totalTokens == null) return null
 
-        const ratio = Math.min(totalTokens / MAX_TOKENS_FULL, 1)
+        // 「100%」对应多少来自设置（全局；CLI 也读同一份）——只展示、不在此编辑
+        const contextWindow =
+          settingsState.value.contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS
+
+        const ratio = Math.min(totalTokens / contextWindow, 1)
         const settingMode = settingsState.value.contextCompressMode ?? 'ai'
 
         // 圆头端帽会各向外扩半个线宽（合起来一个线宽）：
@@ -130,7 +134,7 @@ export default function TokenRing({
 
         const tip = compacting
           ? t('正在压缩上下文...')
-          : `${formatTokens(totalTokens)} / ${formatTokens(MAX_TOKENS_FULL)} tokens（${Math.round(ratio * 100)}%）\n${t('点击压缩')}`
+          : `${formatTokens(totalTokens)} / ${formatTokens(contextWindow)} tokens（${Math.round(ratio * 100)}%）\n${t('点击压缩')}`
 
         /**
          * 触发压缩（`mode` 省略 = 用设置里的方式）。

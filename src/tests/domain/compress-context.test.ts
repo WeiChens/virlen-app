@@ -233,4 +233,64 @@ describe('compressContext', () => {
       compressContext(session, [makeMessage()], 'raw'),
     ).rejects.toThrow('No messages available to compress')
   })
+
+  // ===== 清单保活：压缩后模型仍应记得当前任务清单 =====
+  const todoMessage = (): Message => ({
+    id: 'todo-1',
+    role: 'tool',
+    content: '',
+    timestamp: Date.now(),
+    uiData: {
+      type: 'todo',
+      todos: [{ id: '1', content: '写工具', status: 'in_progress' }],
+      stats: { total: 1, completed: 0, inProgress: 1, pending: 0 },
+      source: 'model',
+    },
+  })
+
+  it('raw 模式：当前清单被补进摘要（压缩后模型仍记得清单）', async () => {
+    const session = makeSession({ modelId: '', providerConfigId: '' })
+    const result = await compressContext(
+      session,
+      [makeMessage({ role: 'user', content: '开始' }), todoMessage()],
+      'raw',
+    )
+    const body = String(result.messages[result.messages.length - 1].content)
+    expect(body).toContain('[Todo list updated]')
+    expect(body).toContain('写工具')
+  })
+
+  it('ai 模式：当前清单被补进摘要末尾', async () => {
+    mockChat.mockResolvedValue({
+      content: '摘要',
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    })
+    mockGet.mockResolvedValue({ chat: mockChat })
+
+    const result = await compressContext(makeSession(), [
+      makeMessage({ role: 'user', content: 'hi' }),
+      makeMessage({ role: 'assistant', content: 'ok' }),
+      todoMessage(),
+    ])
+    expect(result.summary.startsWith('摘要')).toBe(true)
+    expect(result.summary).toContain('[Todo list updated]')
+    expect(result.summary).toContain('写工具')
+  })
+
+  it('清单快照在更早的 summary 之前 → 不重复补入', async () => {
+    mockChat.mockResolvedValue({
+      content: '摘要',
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    })
+    mockGet.mockResolvedValue({ chat: mockChat })
+
+    const result = await compressContext(makeSession(), [
+      todoMessage(), // index 0（上一次压缩已处理）
+      makeMessage({ role: 'summary', content: '旧摘要', id: 'summary-1' }),
+      makeMessage({ role: 'user', content: '继续' }),
+      makeMessage({ role: 'assistant', content: '好' }),
+    ])
+    // 摘要末尾不应再挂一份清单
+    expect(result.summary).toBe('摘要')
+  })
 })

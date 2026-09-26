@@ -17,6 +17,17 @@ export interface SessionRepo {
   loadAll(): Promise<Session[]>
   /** 获取会话消息（懒加载：会话激活时调用） */
   getMessages(sessionId: string): Promise<Message[]>
+  /**
+   * 用 `messages` 替换会话「指定消息及其之后」的后缀（同一事务）。
+   *
+   * 用于「内存里只有一段连续后缀窗口」时回写（修复）结果，不触碰更早的历史；
+   * 当窗口就是整份历史时与全量替换等价。目标消息不存在时不删除任何行。
+   */
+  replaceMessagesFrom(
+    sessionId: string,
+    fromMessageId: string,
+    messages: Message[],
+  ): Promise<void>
   /** 分页获取会话消息（尾部窗口，向上回补更早的历史） */
   getMessagePage(
     sessionId: string,
@@ -309,6 +320,25 @@ class SessionRepoImpl implements SessionRepo {
       return await invoke<Message[]>('cmd_get_messages', { sessionId })
     } catch {
       return []
+    }
+  }
+
+  /** 用 `messages` 替换会话「指定消息及其之后」的后缀（不触碰更早的历史） */
+  async replaceMessagesFrom(
+    sessionId: string,
+    fromMessageId: string,
+    messages: Message[],
+  ): Promise<void> {
+    try {
+      await invoke('cmd_replace_session_messages_from', {
+        sessionId,
+        fromMessageId,
+        messages,
+      })
+    } catch (err) {
+      trackError('session.save.error', err, {
+        props: { session_id: hashText(sessionId), op: 'replace_from' },
+      })
     }
   }
 

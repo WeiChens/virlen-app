@@ -1,4 +1,5 @@
-.general-settings {
+.general-settings,
+.chat-settings {
   padding: 24px;
   display: flex;
   flex-direction: column;
@@ -8,9 +9,11 @@
     color: var(--text-secondary, #888);
     line-height: 1.6;
     margin: 2px 0 16px;
+
     b {
       color: var(--accent-color);
     }
+
     .t {
       margin-top: 8px;
       color: var(--text-primary);
@@ -20,7 +23,6 @@
   }
 
   // ==================== Add Dir Input ====================
-
   .add-dir-input {
     display: flex;
     align-items: center;
@@ -78,7 +80,6 @@
   }
 
   // ==================== Dir List ====================
-
   .empty-hint {
     font-size: var(--font-size-md);
     color: var(--text-secondary);
@@ -124,6 +125,7 @@
         transition:
           background 0.15s,
           color 0.15s;
+
         &:hover {
           /* 原 rgba(0, 0, 0, 0.2)：暗色主题下会在深底上压出一块黑斑，
              且与「危险删除」语义无关，改用语义化的危险底 */
@@ -149,6 +151,7 @@
     // flex: 1;
     overflow: hidden;
   }
+
   .section-title {
     font-size: var(--font-size-xl);
     font-weight: 600;
@@ -161,6 +164,7 @@
     top: 0;
     background-color: var(--bg-primary, #fff);
   }
+
   .setting-row {
     display: flex;
     align-items: center;
@@ -187,6 +191,7 @@
         color: var(--text-secondary, #999);
         margin-top: 2px;
         white-space: pre-wrap;
+        margin-right: 10px;
       }
     }
 
@@ -196,7 +201,6 @@
   }
 
   // ==================== Segmented Control ====================
-
   .segmented-control {
     display: flex;
     background: var(--input-bg, #f1f1f3);
@@ -234,7 +238,6 @@
   }
 
   // ==================== 授权模式描述 ====================
-
   .approval-desc {
     font-size: var(--font-size-sm);
     color: var(--text-secondary);
@@ -249,7 +252,6 @@
   }
 
   // ==================== Input with Button ====================
-
   .input-with-btn {
     display: flex;
     align-items: center;
@@ -299,8 +301,52 @@
     }
   }
 
-  // ==================== Toggle ====================
+  // ==================== 带单位的数值输入（如 200k） ====================
+  .unit-input {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 10px;
+    border: 1px solid var(--border-color, #d0d0d0);
+    border-radius: 6px;
+    background: var(--input-bg, #f9f9fa);
+    transition:
+      border-color 0.15s,
+      box-shadow 0.15s;
 
+    &:focus-within {
+      border-color: var(--accent-color, #4f46e5);
+      box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.15);
+    }
+
+    input {
+      width: 64px;
+      padding: 7px 0;
+      border: none;
+      outline: none;
+      background: transparent;
+      color: var(--text-primary, #1a1a1a);
+      font-size: var(--font-size-md);
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+      /* 去掉 number 的原生上下箭头（与整体风格不搭，值靠键盘改） */
+      -moz-appearance: textfield;
+      appearance: textfield;
+
+      &::-webkit-outer-spin-button,
+      &::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+      }
+    }
+
+    .unit {
+      margin-left: 4px;
+      font-size: var(--font-size-md);
+      color: var(--text-secondary, #888);
+    }
+  }
+
+  // ==================== Toggle ====================
   .toggle {
     position: relative;
     display: inline-block;
@@ -313,11 +359,11 @@
       width: 0;
       height: 0;
 
-      &:checked + .toggle-slider {
+      &:checked+.toggle-slider {
         background: var(--accent-color, #4f46e5);
       }
 
-      &:checked + .toggle-slider::before {
+      &:checked+.toggle-slider::before {
         transform: translateX(20px);
       }
     }
@@ -347,7 +393,6 @@
   }
 
   // ==================== 诊断埋点（§8） ====================
-
   .telemetry-toggle-wrap {
     display: flex;
     align-items: center;

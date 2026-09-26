@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use virlen_core::agent::bridge::{self, AgentBridgeState};
-use virlen_core::agent::compress::CompressMode;
+use virlen_core::agent::compress::{self as agent_compress, CompressMode};
 use virlen_core::agent::engine::AgentEngine;
 use virlen_core::agent::event_sink::EventSink;
 use virlen_core::agent::host::HostEnv;
@@ -140,6 +140,9 @@ pub(crate) async fn run_tui(
     if let Some(m) = default_compress_mode(&chat.rt.settings) {
         let _ = chat.evt.send(UiEvent::DefaultCompressMode(m));
     }
+    // 「100% 对应多少」来自 `app_settings.contextWindowTokens`（与桌面端同一键；缺失→默认 200k）
+    let window = agent_compress::window_tokens_from_settings(&chat.rt.settings);
+    let _ = chat.evt.send(UiEvent::ContextWindowTokens(window));
     // 一上来就把上下文占用推给状态行（续连已有会话时立刻能看到百分比）
     chat.refresh_context().await;
     let _ = chat.evt.send(UiEvent::Notice(
@@ -392,7 +395,8 @@ impl Chat {
                 let _ = self.evt.send(UiEvent::ContextUsage {
                     tokens: Some(report.after),
                 });
-                self.note(report_line(&report));
+                let window = agent_compress::window_tokens_from_settings(&self.rt.settings);
+                self.note(report_line(&report, window));
             }
             // 被闸拦下（上下文充裕 / 没有用量数据）：**提示**而不是报错
             Err(CompressError::Skipped(m)) => {

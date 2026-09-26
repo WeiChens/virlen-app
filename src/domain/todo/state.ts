@@ -162,6 +162,8 @@ export function renderChangeBrief(changes: TodoChange[]): string {
         return `"${c.content}" → ${c.to}`
       case 'edit':
         return `rewritten to "${c.to}"`
+      case 'note':
+        return `note on "${c.content}" updated`
       case 'reorder':
         return 'reordered'
       default:
@@ -247,6 +249,10 @@ export function diffTodos(base: TodoItem[], next: TodoItem[]): TodoChange[] {
     }
     if (b.content !== n.content) {
       changes.push({ type: 'edit', to: n.content })
+    }
+    // 备注也是用户可编辑字段：只改备注同样是一次修改（否则会被误判成「清单没有变化」）
+    if ((b.note || '') !== (n.note || '')) {
+      changes.push({ type: 'note', content: n.content, to: n.note || '' })
     }
   }
 

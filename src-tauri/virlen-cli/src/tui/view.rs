@@ -388,14 +388,14 @@ fn render_status(f: &mut Frame, st: &UiState, area: ratatui::layout::Rect) {
     if let Some(t) = s.tokens {
         parts.push(format!("{} tok", t));
     }
-    // 上下文占用（用户要求：显示百分比；100% 对应 200k，口径与桌面端 token 环一致）。
+    // 上下文占用（用户要求：显示百分比；100% 对应设置里的上下文窗口，口径与桌面端 token 环一致）。
     // 没有用量数据时**不显示**这一项（而不是显示 0% —— 那会让人以为上下文是空的）。
     if let Some(used) = s.context_tokens {
         parts.push(format!(
             "{}% ({}/{})",
-            agent_compress::context_percent(used),
+            agent_compress::context_percent(used, s.context_window_tokens),
             agent_compress::format_tokens(used),
-            agent_compress::format_tokens(agent_compress::CONTEXT_WINDOW_TOKENS)
+            agent_compress::format_tokens(s.context_window_tokens)
         ));
     }
     if let Some(ms) = st.elapsed_ms() {

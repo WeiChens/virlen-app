@@ -227,6 +227,61 @@ INSERT INTO messages (
         .map_err(|e| format!("DB task join error: {}", e))?
     }
 
+    async fn replace_messages_from(
+        &self,
+        session_id: &str,
+        from_message_id: &str,
+        messages: &[Message],
+    ) -> Result<(), String> {
+        let conn = self.conn.clone();
+        let session_id = session_id.to_string();
+        let from_message_id = from_message_id.to_string();
+        let messages = messages.to_vec();
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let conn = conn.lock().unwrap();
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| format!("开启事务失败: {}", e))?;
+            // 删除「目标消息及其之后」的后缀；目标不存在 → 子查询为 NULL → 不删任何行
+            //（与 `truncate_messages_from` 同一条安全约定），此时也不写入任何内容。
+            let deleted = tx
+                .execute(
+                    "DELETE FROM messages \
+                     WHERE session_id=?1 \
+                       AND rowid >= (SELECT rowid FROM messages WHERE id=?2 AND session_id=?1)",
+                    params![session_id, from_message_id],
+                )
+                .map_err(|e| format!("删除消息后缀失败: {}", e))?;
+            // 目标不存在（删了 0 行）→ 不写入，避免把消息追加到错误位置
+            if deleted == 0 {
+                tx.commit().map_err(|e| format!("提交事务失败: {}", e))?;
+                return Ok(());
+            }
+            {
+                let mut stmt = tx
+                    .prepare(
+                        r#"
+INSERT INTO messages (
+  id, session_id, role, content, tool_calls, reasoning_content, tool_call_id,
+  is_error, elapsed_ms, reasoning_elapsed_ms, ui_data, timestamp, streaming,
+  model, usage, image_vision_analyze_optimize, image_vision_analyze_result, text_plain
+) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
+"#,
+                    )
+                    .map_err(|e| format!("准备消息写入失败: {}", e))?;
+                for m in &messages {
+                    let params = message_insert_params(&session_id, m)?;
+                    stmt.execute(rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())))
+                        .map_err(|e| format!("写入消息失败: {}", e))?;
+                }
+            }
+            tx.commit().map_err(|e| format!("提交事务失败: {}", e))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
     async fn list_sessions(&self) -> Result<Vec<Session>, String> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || -> Result<Vec<Session>, String> {
@@ -346,6 +401,36 @@ INSERT INTO messages (
             let conn = conn.lock().unwrap();
             let mut stmt = conn
                 .prepare("SELECT * FROM messages WHERE session_id=?1 ORDER BY rowid ASC")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![session_id], |row| {
+                    message_from_row(row).map_err(row_err)
+                })
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
+    async fn get_context_messages(&self, session_id: &str) -> Result<Vec<Message>, String> {
+        let conn = self.conn.clone();
+        let session_id = session_id.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Vec<Message>, String> {
+            let conn = conn.lock().unwrap();
+            // 只读「最后一个 summary 及其之后」这一段：请求组装时 `provider::blocks::slice_messages`
+            // 本就丢掉 summary 之前的全部消息，因此把已被压缩的旧历史读进内存 / 反序列化是纯浪费
+            //（大历史下正是「继续」等恢复要等好几秒的主因之一）。
+            // 无 summary → `IFNULL(...)=0`，`rowid >= 0` 恒真，等价于取全部。
+            // 旧消息仍留在库里供 `list_messages` / `read_messages` 检索，本查询不删任何行。
+            let mut stmt = conn
+                .prepare(
+                    "SELECT * FROM messages WHERE session_id=?1 \
+                     AND rowid >= IFNULL((SELECT MAX(rowid) FROM messages \
+                                          WHERE session_id=?1 AND role='summary'), 0) \
+                     ORDER BY rowid ASC",
+                )
                 .map_err(|e| e.to_string())?;
             let rows = stmt
                 .query_map(params![session_id], |row| {

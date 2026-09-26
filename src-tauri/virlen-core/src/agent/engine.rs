@@ -159,12 +159,20 @@ impl AgentEngine {
         if let Err(e) = self.repo.upsert_session(&session).await {
             eprintln!("[session_db] upsert session 失败: {}", e);
         }
-        if let Err(e) = self
-            .repo
-            .append_messages_if_alive(&session_id, &options.messages)
-            .await
-        {
-            eprintln!("[session_db] 写入用户消息失败: {}", e);
+        //    断点恢复（resume）时**不重复整表回写**：此时 `options.messages` 是全量历史，
+        //    而它们在这之前就由引擎增量直落过（assistant / tool 结果各自落库，见
+        //    `execute_llm_round` / `execute_tool_steps`）。整表 upsert 一遍纯属浪费，
+        //    且随历史线性变慢 —— 正是「暂停恢复时交互弹窗要等好几秒」的根因之一
+        //    （恢复跳过 LLM，这段耗时不再被 LLM 等待掩盖）。
+        //    正常发送才需要「先落库再开始循环」（把新用户消息落库）。
+        if options.resume_from_snapshot.is_none() {
+            if let Err(e) = self
+                .repo
+                .append_messages_if_alive(&session_id, &options.messages)
+                .await
+            {
+                eprintln!("[session_db] 写入用户消息失败: {}", e);
+            }
         }
 
         // 1. 获取 provider
@@ -186,7 +194,23 @@ impl AgentEngine {
         };
 
         // 3. 维护内存中的消息列表，随 tool 循环增长
-        let mut current_messages = options.messages.clone();
+        //
+        //    断点恢复（resume）时以**本地库为权威**读回消息，而不用前端经 IPC 传来的整份历史：
+        //    暂停时全部消息均已落库（见 `execute_llm_round` / `execute_tool_steps` 的增量直落），
+        //    引擎直接读库可省掉「前端序列化整份历史 → IPC → Rust 反序列化」这段 O(历史) 开销
+        //    —— 恢复跳过 LLM，这段开销不再被 LLM 等待掩盖，正是大历史下「继续时弹窗要等好几秒」的主因。
+        //    ⚠️ 读的是 `get_context_messages` 而非 `get_messages`：请求组装只会用到最后一个
+        //    `summary` 及其之后的消息（见 `provider::blocks` 切片），已被压缩的旧历史不必读进内存。
+        //    读库失败 / 库不可用（Noop）/ 读到空时回退到前端传来的 `messages`（测试与无持久化后端的安全网）。
+        //    （与 `src/services/chat/flow.ts::resumePausedRun` 配对：Rust 引擎恢复时前端传空数组。）
+        let mut current_messages = if options.resume_from_snapshot.is_some() {
+            match self.repo.get_context_messages(&session_id).await {
+                Ok(msgs) if !msgs.is_empty() => msgs,
+                _ => options.messages.clone(),
+            }
+        } else {
+            options.messages.clone()
+        };
         let mut remaining_rounds = options.max_tool_rounds;
 
         let skills = session.skills.clone();
@@ -322,6 +346,14 @@ impl AgentEngine {
         if !completed {
             return None;
         }
+
+        // 恢复后所有待办步骤都已执行完（快照里的 pending / running 变为 completed / failed），
+        // 这份快照**必须清掉**：否则 `send_message` 收尾时 `finishWorking` 会读到一个「残留快照」，
+        // 把会话误标成「已暂停，是否继续？」；更糟的是下次「继续」会按残留快照把这些步骤
+        // **再跑一遍** → 同一 tool_call_id 产出第二条 tool 结果 → 服务端 400
+        //（`Messages with role 'tool' must be a response to a preceding message with 'tool_calls'`）。
+        // 恢复后的这一轮 LLM 若又产生 tool_calls，会由 `execute_llm_round` 重新落一份新快照。
+        self.clear_snapshot(session_id);
 
         let remaining = max_tool_rounds - snapshot.round.max(1);
         Some((messages, remaining))

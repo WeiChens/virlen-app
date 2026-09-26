@@ -78,6 +78,9 @@ impl UiState {
             UiEvent::DefaultCompressMode(m) => {
                 self.default_compress_mode = Some(m);
             }
+            UiEvent::ContextWindowTokens(w) => {
+                self.status.context_window_tokens = w;
+            }
             UiEvent::Interaction {
                 request_id,
                 kind,

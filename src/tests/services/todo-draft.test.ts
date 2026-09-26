@@ -250,4 +250,18 @@ describe('flushTodoDraft — 只有「已应用」的草稿才落地', () => {
     expect(messages().length).toBe(before)
     expect(getTodoDraft(SESSION_ID)).toBeUndefined()
   })
+
+  it('只改备注也算一次修改（回归：不再误报「清单没有变化」）', () => {
+    ensureTodoDraft(SESSION_ID, getEffectiveTodos(SESSION_ID))
+    const next = getEffectiveTodos(SESSION_ID).map((t) => ({ ...t }))
+    next[0].note = '补充说明'
+    updateTodoDraftItems(SESSION_ID, next)
+
+    expect(applyTodoDraft(SESSION_ID, 'user')).toBe(true)
+    const last = messages()[messages().length - 1]
+    expect(last.role).toBe('feedback')
+    const data = last.uiData as TodoUiData
+    expect(data.todos[0].note).toBe('补充说明')
+    expect(data.changes?.some((c) => c.type === 'note')).toBe(true)
+  })
 })

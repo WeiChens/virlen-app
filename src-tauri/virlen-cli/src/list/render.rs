@@ -20,7 +20,7 @@ pub(crate) const COL_MODEL: usize = 20;
 pub(crate) const COL_TITLE: usize = 40;
 pub(crate) const COL_COUNT: usize = 6;
 pub(crate) const COL_DIR: usize = 28;
-/// 「上下文」列：放得下 `100% 200k`（表头写 `上下文/200k`，即 100% 对应的窗口）
+/// 「上下文」列：放得下 `100% 200k`（表头写 `上下文/<窗口>`，即 100% 对应的窗口）
 pub(crate) const COL_CTX: usize = 13;
 /// 「条数」列（对话消息数）
 pub(crate) const COL_MSG: usize = 6;
@@ -117,7 +117,11 @@ pub(crate) fn effective_limit(limit: Option<usize>) -> usize {
 /// - `messageCount`（对话条数）与 `contextTokens` / `contextPercent` / `contextWindowTokens`；
 /// - 口径与桌面端 token 环一致（见 `virlen_core::agent::compress::context_tokens`）。
 /// - 没有用量数据时 `contextTokens` / `contextPercent` 为 `null`（**不是** 0）。
-pub(crate) fn session_json(s: &Session, stat: Option<&SessionStat>) -> Value {
+///
+/// `window` = 100% 对应的上下文窗口（`app_settings.contextWindowTokens`，见
+/// `agent_compress::window_tokens_from_settings`）—— `contextPercent` 与
+/// `contextWindowTokens` 都由它算。
+pub(crate) fn session_json(s: &Session, stat: Option<&SessionStat>, window: i64) -> Value {
     let ctx = stat.and_then(|st| st.context_tokens);
     json!({
         "id": s.id,
@@ -132,20 +136,20 @@ pub(crate) fn session_json(s: &Session, stat: Option<&SessionStat>) -> Value {
         "updatedAt": s.updated_at,
         "messageCount": stat.map(|st| st.messages).unwrap_or(0),
         "contextTokens": ctx,
-        "contextPercent": ctx.map(agent_compress::context_percent),
-        "contextWindowTokens": agent_compress::CONTEXT_WINDOW_TOKENS,
+        "contextPercent": ctx.map(|n| agent_compress::context_percent(n, window)),
+        "contextWindowTokens": window,
     })
 }
 
 /// 「上下文」列：`6% 12.5k`（百分比 + 绝对值；100% 对应的窗口写在**表头**里）。
 ///
 /// 无数据（新会话 / 从未发送过消息）时显示 `-`，**而不是** `0%` —— 0% 会被读成
-/// 「上下文是空的」。
-fn ctx_cell(stat: Option<&SessionStat>) -> String {
+/// 「上下文是空的」。`window` 仅供百分比口径（见 [`session_json`]）。
+fn ctx_cell(stat: Option<&SessionStat>, window: i64) -> String {
     match stat.and_then(|s| s.context_tokens) {
         Some(n) => format!(
             "{}% {}",
-            agent_compress::context_percent(n),
+            agent_compress::context_percent(n, window),
             agent_compress::format_tokens(n)
         ),
         None => "-".to_string(),
@@ -158,14 +162,19 @@ fn msg_cell(stat: Option<&SessionStat>) -> String {
 }
 
 /// 会话行：`ID  更新于  模型  上下文  条数  标题`（`indent` 供分组模式缩进）
-pub(crate) fn session_line(s: &Session, indent: &str, stat: Option<&SessionStat>) -> String {
+pub(crate) fn session_line(
+    s: &Session,
+    indent: &str,
+    stat: Option<&SessionStat>,
+    window: i64,
+) -> String {
     format!(
         "{}{}  {}  {}  {}  {}  {}",
         indent,
         pad(&s.id, COL_ID),
         pad(&fmt_time(s.updated_at), COL_TIME),
         pad(&brief(&s.model_id, COL_MODEL), COL_MODEL),
-        pad_left(&ctx_cell(stat), COL_CTX),
+        pad_left(&ctx_cell(stat, window), COL_CTX),
         pad_left(&msg_cell(stat), COL_MSG),
         brief(&s.title, COL_TITLE)
     )

@@ -114,7 +114,9 @@ pub(crate) async fn run_plain(
                 };
                 match compress_session(&mut rt, mode).await {
                     Ok(report) => {
-                        let _ = writeln!(out, "{}", report_line(&report));
+                        let window =
+                            agent_compress::window_tokens_from_settings(&rt.settings);
+                        let _ = writeln!(out, "{}", report_line(&report, window));
                         let _ = out.flush();
                     }
                     Err(CompressError::Skipped(m)) => {
@@ -175,11 +177,12 @@ pub(crate) async fn run_plain(
             Ok(()) => {
                 // 顺手报一下上下文占用（用户不用敲 /status 就知道该不该压）
                 let ctx = current_context_tokens(&rt).await;
+                let window = agent_compress::window_tokens_from_settings(&rt.settings);
                 let _ = writeln!(
                     err,
                     "[done] 用时 {} ms · 上下文 {}",
                     virlen_core::telemetry::now_ms() - started,
-                    context_line(ctx)
+                    context_line(ctx, window)
                 );
             }
             Err(e) => {
@@ -210,6 +213,7 @@ fn print_history_preview(rt: &SessionRuntime, out: &mut dyn Write) {
 pub(crate) fn status_text(rt: &SessionRuntime, context_tokens: Option<i64>) -> String {
     let s = &rt.session;
     let r = &rt.resources;
+    let window = agent_compress::window_tokens_from_settings(&rt.settings);
     format!(
         "会话    : {}（{}）\n\
          模型    : {} · Provider {}（{}）\n\
@@ -230,8 +234,8 @@ pub(crate) fn status_text(rt: &SessionRuntime, context_tokens: Option<i64>) -> S
         r.provider.provider_type,
         r.workspace,
         rt.messages.len(),
-        context_line(context_tokens),
-        agent_compress::format_tokens(agent_compress::CONTEXT_WINDOW_TOKENS),
+        context_line(context_tokens, window),
+        agent_compress::format_tokens(window),
         r.security.sandbox_mode,
         r.security.permissions.len(),
         if r.enable_tools {

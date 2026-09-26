@@ -569,8 +569,25 @@ export const rustEngine: AgentEnginePort = {
     allMessages: Message[],
     mode?: CompressMode,
   ): Promise<{ summary?: string; messages: Message[] }> {
-    // 上下文压缩暂由 TS 引擎提供（非聊天循环核心）
-    return agentEngine.compressContext(session, allMessages, mode)
+    // 统一到 core：与 CLI 共用 `virlen_core::agent::compress`（命令 `cmd_compress_context`）。
+    // - `raw` 纯本地渲染；`ai` 用原生 Provider（openai / anthropic）或桥接
+    //   （gemini 经 `agent:provider-request`，与正常聊天同一条路）。
+    // - **记账在后端完成**（与 CLI 同一入口 `agent::usage::record_usage`，kind = "compress"）；
+    //   落库仍由 chat-service 负责（`cmd_replace_session_messages`），与压缩前后一致。
+    const result = await invoke<{ summary: string; message: Message }>(
+      'cmd_compress_context',
+      {
+        session: sanitizeLoneSurrogates(session),
+        messages: sanitizeLoneSurrogates(allMessages),
+        toolDefs: await resolveToolDefs(true, session),
+        mode: mode ?? 'ai',
+        provider: resolveProviderConnection(session),
+      },
+    )
+    return {
+      summary: result.summary,
+      messages: [...allMessages, result.message],
+    }
   },
 
   async generateTitle(

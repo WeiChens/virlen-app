@@ -58,6 +58,21 @@ fn estimate_request_tokens(request: &ChatRequest) -> i64 {
     crate::agent::compress::estimate_tokens_concat(&refs)
 }
 
+/// 摘要请求的 `max_tokens`。
+///
+/// 会话值落在 `(0, DEFAULT_SUMMARY_MAX_TOKENS]` 时用它，否则退到默认摘要上限。
+/// 为什么不能直接用 `session.params.max_tokens`：GUI 会话默认是 `2000000`
+/// （`DEFAULT_SESSION_PARAMS`，语义是「不限制输出」，聊天时由全局 `settings.maxTokens`
+/// 另行覆盖），原样下发会被模型以 `Invalid max_tokens value, the valid range ...`（400）拒绝。
+/// 摘要是一次短输出，钳到合理上限即可。
+pub(super) fn summary_max_tokens(session_max: i64) -> i64 {
+    if session_max > 0 && session_max <= DEFAULT_SUMMARY_MAX_TOKENS {
+        session_max
+    } else {
+        DEFAULT_SUMMARY_MAX_TOKENS
+    }
+}
+
 /// 生成摘要（不发流式、不落库、不记账 —— 记账由调用方做）
 pub async fn summarize(
     session: &Session,
@@ -88,13 +103,10 @@ pub async fn summarize(
         tools: tool_defs.to_vec(),
         temperature: session.params.temperature,
         top_p: session.params.top_p,
-        // TS 传 undefined（用 provider 默认）；这里必须给正数 —— provider 会**无条件**
-        // 把 max_tokens 写进请求体，0 会被部分 API 拒掉（见 `compress/mod.rs` 文件头第 3 条）
-        max_tokens: if session.params.max_tokens > 0 {
-            session.params.max_tokens
-        } else {
-            DEFAULT_SUMMARY_MAX_TOKENS
-        },
+        // max_tokens：TS 传 undefined（用 provider 默认）；这里必须给**正数**
+        //（provider 会无条件写进请求体），但**不能**直接用 `session.params.max_tokens` ——
+        // GUI 会话默认 2000000，会被模型拒掉（400，见 [`summary_max_tokens`]）。
+        max_tokens: summary_max_tokens(session.params.max_tokens),
         stream: false,
         tool_choice: "none".to_string(),
         reasoning_effort: None,

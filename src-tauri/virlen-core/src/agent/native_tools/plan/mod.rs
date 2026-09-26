@@ -11,3 +11,6 @@ mod common;
 mod todo_write;
 
 pub(crate) use todo_write::todo_write_tool;
+// 压缩模块（`agent::compress`）复用同一套清单渲染：把「当前活跃清单」补进 summary 正文，
+// 保证上下文压缩后模型仍记得清单（铁律 1：与 TS `renderTodoContent` 逐字对齐）。
+pub(crate) use common::render_todo_content;

@@ -32,7 +32,7 @@ export type TodoSource = 'model' | 'user'
 
 /** 相对上一版清单的净变更（给模型解释「用户改了什么」+ UI 胶囊文案） */
 export interface TodoChange {
-  type: 'add' | 'remove' | 'status' | 'edit' | 'reorder'
+  type: 'add' | 'remove' | 'status' | 'edit' | 'note' | 'reorder'
   /** 涉及的任务正文（add / remove / status 时给出） */
   content?: string
   /** status 变更后的状态值（英文枚举）/ edit 变更后的新正文（模型侧文案） */

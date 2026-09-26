@@ -574,5 +574,17 @@ AI 摘要消息同时带前两个：拿 `usage` 当占用会显示成「压缩�
 2. **AI 摘要在 CLI 里不可取消**：主循环直接 `await`（TUI 线程独立照常渲染，期间按键排到压缩结束后处理）。上限由 provider 的 HTTP 超时决定。
 3. **`list-session` 表格约 139 列宽**：窄终端下最后一列（标题）会折行（真机已复现，列对齐不受影响）。需要机器可读请用 `--json`；要压窄就改 `list/render.rs` 的 `COL_*`（尤其 `COL_TITLE`）。
 4. **`raw` 压缩后的占用是粗估**（同 §11.4 第 1 条）；中文与代码混合文本下偏差最大。
-5. **压缩阈值 40% 是硬编码常量**（与 TS 同值），不随模型窗口变化 —— 与 `CONTEXT_WINDOW_TOKENS` 一起等「按模型下发」那次改造。
+5. **压缩阈值 40% 是硬编码常量**（与 TS 同值），不随模型窗口变化。
+
+> **后续更新**：窗口大小已不再写死 —— `app_settings.contextWindowTokens`（桌面端设置页可改，CLI 只读展示）为「100%」对应的 token 数；`CONTEXT_WINDOW_TOKENS = 200_000` 退为默认值，百分比（状态行 / `/status` / `list-session` / `/compress` 闸门）均按该窗口算。
+
+### 11.7 上下文压缩与「清单保活」
+
+压缩产物是一条 `role="summary"` 消息，而请求组装（`provider::blocks::slice_messages`）会丢弃**最后一个 summary 之前**的全部消息 —— 因此若「当前活跃清单」（消息历史里最后一条 `uiData.type == "todo"` 的快照，模型 `todo_write` 的 tool_result 或用户 feedback 都可能）落在压缩区间内，模型此后就看不到它（表现：压缩后 AI 忘记清单）。
+
+对策：压缩时把清单**原文**渲染成文本补在 summary 正文末尾（`agent::compress::todo_recap`，渲染复用 `plan::render_todo_content`）；summary 会被 Provider 统一映射成 `user` 消息，靠文本足够。
+⚠️ **不**把清单快照的 `tool` 消息原样搬到 summary 之后：`tool` 消息必须紧跟带 `tool_calls` 的 assistant 消息，否则 OpenAI / Anthropic 协议直接报错。
+
+- 只在快照**落在压缩区间内**（`index >= slice_start`）时补 —— 若它在更早的 summary 之前，说明上一次压缩已处理过，补了会重复。
+- TS 侧（`compress-context.ts::withTodoRecap`）与 Rust 侧**同语义**（铁律 1）；GUI 与 CLI 共用 core 实现（GUI 仍走 TS 那份）。
 

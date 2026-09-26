@@ -13,7 +13,7 @@
 
 use virlen_core::agent::cancellation::CancellationToken;
 use virlen_core::agent::compress as agent_compress;
-use virlen_core::agent::compress::{CompressMode, CONTEXT_WINDOW_TOKENS};
+use virlen_core::agent::compress::CompressMode;
 use virlen_core::agent::provider::create_native_provider;
 use virlen_core::agent::usage;
 use serde_json::{Map, Value};
@@ -111,15 +111,17 @@ pub(crate) async fn compress_session(
         .map_err(|e| CompressError::Failed(format!("读取会话消息失败: {}", e)))?;
 
     let before = agent_compress::context_tokens(&messages);
+    // 「100% 对应多少」来自 `app_settings.contextWindowTokens`（与桌面端同一键；缺失→默认 200k）
+    let window = agent_compress::window_tokens_from_settings(&rt.settings);
     // 与桌面端同一条闸（TS `COMPRESS_MIN_RATIO = 0.4`）：上下文充裕时不做无用功，
     // 但必须**明说是哪一条闸拦下的**，否则用户会以为功能坏了
-    if !agent_compress::should_compress(before) {
+    if !agent_compress::should_compress(before, window) {
         return Err(CompressError::Skipped(match before {
             Some(n) => format!(
                 "当前上下文很充裕（{}%，{} / {}），无需压缩",
-                agent_compress::context_percent(n),
+                agent_compress::context_percent(n, window),
                 agent_compress::format_tokens(n),
-                agent_compress::format_tokens(CONTEXT_WINDOW_TOKENS)
+                agent_compress::format_tokens(window)
             ),
             None => "该会话还没有用量数据（先发一条消息），暂时无法判断上下文占用".to_string(),
         }));
@@ -191,12 +193,14 @@ pub(crate) async fn compress_session(
 }
 
 /// 压缩结果的一行摘要（两种界面共用同一句话，避免口径分叉）
-pub(crate) fn report_line(r: &CompressReport) -> String {
+///
+/// `window` = 100% 对应的上下文窗口（`app_settings.contextWindowTokens`）。
+pub(crate) fn report_line(r: &CompressReport, window: i64) -> String {
     let fmt = |v: Option<i64>| match v {
         Some(n) => format!(
             "{}（{}%）",
             agent_compress::format_tokens(n),
-            agent_compress::context_percent(n)
+            agent_compress::context_percent(n, window)
         ),
         None => "-".to_string(),
     };
@@ -227,15 +231,20 @@ pub(crate) fn report_line(r: &CompressReport) -> String {
     )
 }
 
-/// 「占用」的一行展示（状态行 / `/status` / 收尾行共用）
-pub(crate) fn context_line(used: Option<i64>) -> String {
+/// 「占用」的一行展示（状态行 / `/status` / 收尾行共用）。
+///
+/// `window` = 100% 对应的上下文窗口（`app_settings.contextWindowTokens`）。
+pub(crate) fn context_line(used: Option<i64>, window: i64) -> String {
     match used {
         Some(n) => format!(
             "{} / {}（{}%）",
             agent_compress::format_tokens(n),
-            agent_compress::format_tokens(CONTEXT_WINDOW_TOKENS),
-            agent_compress::context_percent(n)
+            agent_compress::format_tokens(window),
+            agent_compress::context_percent(n, window)
         ),
-        None => format!("- / {}（本会话还没有用量数据）", agent_compress::format_tokens(CONTEXT_WINDOW_TOKENS)),
+        None => format!(
+            "- / {}（本会话还没有用量数据）",
+            agent_compress::format_tokens(window)
+        ),
     }
 }

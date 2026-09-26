@@ -253,13 +253,32 @@ execute_command 需审批
 
 | 时机 | 内容 |
 |---|---|
-| `sendMessage` 入口 | upsert 会话元数据 + 用户消息（发送即写） |
+| `sendMessage` 入口 | upsert 会话元数据 + 用户消息（发送即写）；⚠️ **断点恢复时不整表回写**（见下） |
 | 每轮 `execute_llm_round` 完成 | assistant 消息 + tool 结果消息（消息完成时写一次） |
 | 无 tool calls 的最终纯文本回复 | 单独落库（先落库再结束循环） |
 | `resume_run`（断点恢复） | 恢复执行产生的 tool 结果 |
 
 流式中间态（`stream_event` / `assistant_message_updated`）仍只用于 UI 渲染，
 不在流式过程中落库；消息 finalized 后一次性写入。
+
+**断点恢复（`resume_from_snapshot`）不走入口的那次整表回写**：消息改以**本地库为权威**读回
+（`SessionRepo::get_context_messages` —— 只取「最后一个 `summary` 及其之后」，读失败 / Noop /
+为空时回退到前端传来的 `messages`），前端
+`resumePausedRun` 在 Rust 引擎下**不再经 IPC 传整份历史**（传空数组）。
+暂停时消息均已增量直落，故入口的 `append_messages_if_alive` 与这次 IPC 传输都是纯浪费 ——
+省掉的是「序列化整份历史 → IPC → 反序列化 → 整表 upsert」，避免大历史（1000+ 条）下
+恢复时要等好几秒（详见 `AGENTS.md` §11.33）。
+
+**为什么是 `get_context_messages` 而非 `get_messages`**：请求组装（`provider::blocks::slice_messages`）
+只保留最后一个 `summary` 及其之后的消息，被压缩的旧历史读了也用不上 —— `get_context_messages`
+直接只读这一段（SQLite `rowid >= IFNULL((SELECT MAX(rowid) ... role='summary'), 0)`），
+省去旧历史的读取 / 反序列化（详见 `AGENTS.md` §11.35）。⚠️ 旧消息仍留在库里供
+`list_messages` / `read_messages` 检索「已压缩区间」，本方法不动库内容、不改语义。
+
+⚠️ **`resume_run` 跑完待办步骤后必须清快照**（`clear_snapshot`）：否则 `finishWorking` 会读到残留快照把会话误标成「已暂停」；
+且 `find_next_step` 把 `failed` 视为「未完成」（`failed` 已有 tool 结果）→ 下次「继续」会重跑该步骤 →
+同一 `tool_call_id` 产出第二条 tool 结果 → 服务端 400（详见 `AGENTS.md` §11.34）。
+故 `find_next_step` 只认 `pending | running` 为断点。
 
 ### 表结构（`app_data_dir/virlen.db`）
 
@@ -274,9 +293,12 @@ pub trait SessionRepo: Send + Sync {
     async fn upsert_session(&self, session: &Session) -> Result<(), String>;
     async fn append_messages(&self, session_id, messages) -> ...;
     async fn replace_messages(&self, session_id, messages) -> ...; // 前端压缩等全量替换
+    async fn replace_messages_from(&self, session_id, from_message_id, messages) -> ...; // 只替换「从该消息起」的后缀（事务原子）
+    async fn truncate_messages_from(&self, session_id, message_id) -> ...; // 删除该消息及其之后
     async fn list_sessions(&self) -> ...;
     async fn get_session(&self, session_id) -> ...;
     async fn get_messages(&self, session_id) -> ...;
+    async fn get_context_messages(&self, session_id) -> ...; // 只取最后一个 summary 及其之后（断点恢复用）
     async fn delete_session(&self, session_id) -> ...;
 }
 ```
@@ -299,6 +321,8 @@ pub trait SessionRepo: Send + Sync {
 | `cmd_upsert_session` | 创建/改名/pin/参数变更 |
 | `cmd_delete_session` | 删除会话及其消息 |
 | `cmd_replace_session_messages` | 前端上下文压缩后整批替换消息 |
+| `cmd_replace_session_messages_from` | 只替换「从指定消息起」的连续后缀（前端发送路径 B 方案的修复回写用，见 `AGENTS.md` §11.36） |
+| `cmd_compress_context` | 上下文压缩（GUI）：与 CLI 共用 `virlen_core::agent::compress`（见下） |
 
 ### 前端改造
 
@@ -316,7 +340,7 @@ pub trait SessionRepo: Send + Sync {
 ## 十、已知限制
 
 1. **Gemini 桥接**：未原生 HTTP，仍走 JS provider（且 TS Gemini 存在 #1 多轮工具 bug，可顺带修复）
-2. **compressContext** 仍由 TS 引擎提供（非聊天循环核心）；usage 的 token 估算已 Rust 化：
+2. **compressContext**：**GUI（Tauri）已切到 Rust**（命令 `cmd_compress_context` → `virlen_core::agent::compress`，与 CLI 同一份，见 `AGENTS.md` §11.36）；TS 那份（`domain/engine/compress-context.ts`）**仅用于非 Tauri（浏览器 dev / vitest）**。usage 的 token 估算已 Rust 化：
    调用 `deepseek_tokenizer::cmd_count_tokens`（DeepSeek V3 字节级 BPE 精确计数，
    资源 `resources/deepseek_tokenizer/tokenizer.json`，启动后台预热），非 Tauri 环境回退「字符数/4」
 3. **`generateTitle` 会话标题生成**：仍由 TS 引擎提供（非聊天循环核心；失败自动回退用户消息截取；
@@ -351,7 +375,7 @@ pub trait SessionRepo: Send + Sync {
 
 | 功能 | TS 实现 | Rust 现状 |
 |---|---|---|
-| `compressContext` 上下文压缩 | `domain/engine/compress-context.ts` | 无（TS 提供；usage token 计数已 Rust 化：`cmd_count_tokens`） |
+| `compressContext` 上下文压缩 | `domain/engine/compress-context.ts`（仅非 Tauri） | ✅ **GUI（Tauri）已走 Rust**：`cmd_compress_context` → `virlen_core::agent::compress`（与 CLI 同一份）；TS 那份仅用于浏览器 dev / vitest |
 | `generateTitle` 标题生成 | `domain/engine/generate-title.ts` | 无（TS 提供；`thinking:false` 禁用思考） |
 
 ### 3. 工具层（**已全部原生化**，无 JS 桥；本表保留「实现位置 + 对齐要点」）

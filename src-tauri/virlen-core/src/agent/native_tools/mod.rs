@@ -82,7 +82,7 @@ mod common;
 mod execute;
 mod file;
 mod knowledge_base;
-mod plan;
+pub(crate) mod plan;
 mod search;
 mod skill;
 mod system;

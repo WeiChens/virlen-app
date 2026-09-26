@@ -7,7 +7,7 @@
 import { settingsState } from '@/ui/store'
 import type { MessageContent, ProviderConfig, Session } from '@/types'
 import { agentEngine } from '@/domain'
-import { rustEngine, isRustEngineEnabled } from '@/services/rust-engine'
+import { rustEngine, isRustEngineEnabled, isTauriAvailable } from '@/services/rust-engine'
 
 // ==================== 埋点辅助（§5.4 / §5.5） ====================
 
@@ -57,6 +57,15 @@ function describeContent(content: MessageContent): {
  */
 export function getEngine(): typeof agentEngine {
   return isRustEngineEnabled() ? rustEngine : agentEngine
+}
+
+/**
+ * 压缩引擎选择：Tauri 下**一律走 Rust**（与 CLI 共用 core 同一份实现 `cmd_compress_context`），
+ * 与 `useRustEngine` 开关无关 —— 压缩不是聊天循环的一部分，没必要在默认引擎与回退引擎之间再分叉；
+ * 非 Tauri（浏览器 dev / vitest）没有后端，回退 TS 实现。
+ */
+export function getCompressEngine(): typeof agentEngine {
+  return isTauriAvailable() ? rustEngine : agentEngine
 }
 
 /**

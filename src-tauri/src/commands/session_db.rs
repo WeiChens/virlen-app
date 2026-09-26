@@ -351,6 +351,32 @@ pub async fn cmd_truncate_session_messages(
     result
 }
 
+/// 替换会话「指定消息及其之后」的后缀（前端在只加载了尾部窗口时回写修复结果用）
+///
+/// 与 `cmd_replace_session_messages`（全量替换）的区别：只动后缀，前缀（更早、可能尚未加载的历史）原样保留。
+/// ⚠️ 不刷新会话时间（修复不是用户发言）
+#[tauri::command]
+pub async fn cmd_replace_session_messages_from(
+    state: tauri::State<'_, Arc<dyn SessionRepo>>,
+    session_id: String,
+    from_message_id: String,
+    messages: Vec<Message>,
+) -> Result<(), String> {
+    let started = crate::telemetry::now_ms();
+    let rows = messages.len();
+    let result = state
+        .replace_messages_from(&session_id, &from_message_id, &messages)
+        .await;
+    track_db(
+        "replace_from",
+        Some(&session_id),
+        started,
+        Some(rows),
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
+}
+
 // ==================== 用量账本命令（token 统计） ====================
 
 /// 追加用量流水（TS 引擎 / 前端非消息型调用走此命令；Rust 引擎内部直落不经 IPC）

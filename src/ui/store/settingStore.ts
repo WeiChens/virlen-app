@@ -92,6 +92,13 @@ export interface SettingsStore {
    * - `raw`：正文压缩，本地渲染（毫秒级、零消耗，但保留全部正文、只去掉思考过程并省略超长工具输出）
    */
   contextCompressMode: CompressMode
+  /**
+   * 上下文窗口（token）—— token 环 / 压缩百分比里「100%」对应的窗口大小。
+   *
+   * 全局设置：桌面端与 CLI 读**同一份**（`app_settings.contextWindowTokens`）。
+   * 桌面端设置页可编辑；CLI 只读取展示（状态行 / list-session 的百分比口径）。
+   */
+  contextWindowTokens: number
   /** 是否启用「打开编辑器」功能 */
   editorOpenEnabled: boolean
   /** 编辑器配置列表（可配置多个，如 vscode、idea 等） */
@@ -151,6 +158,7 @@ const defaultSettings: SettingsStore = {
   useRustEngine: true,
   aiGenerateTitle: true,
   contextCompressMode: 'ai',
+  contextWindowTokens: 200000,
   editorOpenEnabled: true,
   editorOpenConfigs: [],
   editorOpenDefaultId: '',

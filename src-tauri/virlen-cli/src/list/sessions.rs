@@ -1,5 +1,6 @@
 //! `list-session` 的执行入口（`pub(super) async fn run_sessions` 的落点）
 
+use virlen_core::agent::compress as agent_compress;
 use virlen_core::agent::host::HostEnv;
 use virlen_core::agent::types::Session;
 use virlen_core::session_db::SessionStat;
@@ -53,6 +54,13 @@ pub(crate) async fn run_sessions(
     let shown_sessions: Vec<Session> = all.into_iter().take(limit).collect();
     let shown = shown_sessions.len();
 
+    // 「100% 对应多少」来自 `app_settings.contextWindowTokens`（与桌面端同一键；缺失→默认 200k）。
+    // 读不到配置不阻断列表：回退到默认窗口即可（百分比偏一点，总比不显示强）。
+    let window = match db.settings.get_all().await {
+        Ok(all) => agent_compress::window_tokens_from_settings(&all),
+        Err(_) => agent_compress::CONTEXT_WINDOW_TOKENS,
+    };
+
     // 每个会话的统计（消息条数 + 上下文占用）——**两条聚合查询**搞定，
     // 不逐个会话拉全部历史（大库上那会很慢，见 `SessionRepo::session_stats`）。
     // ⚠️ 统计失败**不中断列表**：这两列是附加信息，展示主体（会话本身）不应因此消失；
@@ -91,7 +99,7 @@ pub(crate) async fn run_sessions(
                             "sessions": g
                                 .sessions
                                 .iter()
-                                .map(|s| session_json(s, stat_of(&s.id)))
+                                .map(|s| session_json(s, stat_of(&s.id), window))
                                 .collect::<Vec<_>>(),
                         })
                     })
@@ -104,7 +112,7 @@ pub(crate) async fn run_sessions(
                     Value::Array(
                         shown_sessions
                             .iter()
-                            .map(|s| session_json(s, stat_of(&s.id)))
+                            .map(|s| session_json(s, stat_of(&s.id), window))
                             .collect(),
                     ),
                 );
@@ -144,11 +152,14 @@ pub(crate) async fn run_sessions(
                 pad("ID", COL_ID),
                 pad("更新于", COL_TIME),
                 pad("模型", COL_MODEL),
-                pad_left("上下文/200k", COL_CTX),
+                pad_left(
+                    &format!("上下文/{}", agent_compress::format_tokens(window)),
+                    COL_CTX
+                ),
                 pad_left("条数", COL_MSG),
             );
             for s in &shown_sessions {
-                let _ = writeln!(out, "{}", session_line(s, "", stat_of(&s.id)));
+                let _ = writeln!(out, "{}", session_line(s, "", stat_of(&s.id), window));
             }
         }
         Some(by) => {
@@ -156,7 +167,7 @@ pub(crate) async fn run_sessions(
             for group in group_sessions(shown_sessions, by, &agents) {
                 let _ = writeln!(out, "\n▌ {}（{}）", group.name, group.sessions.len());
                 for s in &group.sessions {
-                    let _ = writeln!(out, "{}", session_line(s, "  ", stat_of(&s.id)));
+                    let _ = writeln!(out, "{}", session_line(s, "  ", stat_of(&s.id), window));
                 }
             }
         }

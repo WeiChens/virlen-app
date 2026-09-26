@@ -7,6 +7,19 @@
  *   正文一字不删、只去掉思考过程并省略超长工具输出。
  *
  * 从 AgentEngine.compressContext() 提取为独立纯函数，不依赖 class this。
+ *
+ * ## 清单保活（重点）
+ *
+ * 压缩会把早期消息压进摘要；而 `buildRequest` 只保留**最后一个 summary 之后**的消息
+ * （`provider/openai.ts` / `anthropic.ts` / `gemini.ts` 同一条切片），因此若「当前活跃清单」
+ * （消息历史里最后一条 `uiData.type==='todo'` 的快照，模型 `todo_write` 或用户 feedback 都可能）
+ * 落在压缩区间内，模型此后就看不到它了 —— 表现就是「压缩后 AI 忘记清单」。
+ *
+ * 对策：把清单**原文**渲染成文本补在摘要正文末尾（见 `withTodoRecap`）——
+ * summary 会被三个 Provider 统一映射成 user 消息，只靠文本就足够；
+ * ⚠️ **不能**把清单快照的 `tool` 消息原样搬到 summary 之后：`tool` 消息必须紧跟带
+ * `tool_calls` 的 assistant 消息，否则 OpenAI / Anthropic 协议直接报错。
+ * 与 Rust 侧 `agent::compress` 同语义（铁律 1）。
  */
 import { v4 } from '@/utils/uuid'
 import type { Message, Session, TokenUsage } from '@/types'
@@ -17,6 +30,7 @@ import { promptText } from '../agent'
 import { invoke } from '@tauri-apps/api/core'
 import { ledgerTokensOf, recordUsage } from '../usage'
 import { buildRawSummary } from './compress-raw'
+import { pickCurrentTodos, renderTodoContent } from '@/domain/todo/state'
 
 /**
  * 压缩模式：
@@ -96,9 +110,26 @@ export async function compressContext(
     throw new Error('No messages available to compress')
   }
 
+  /**
+   * 清单保活：把「当前活跃清单」渲染成文本补进摘要正文。
+   *
+   * 仅在清单快照**落在本次压缩区间内**时补 —— 它马上会被新的 summary 覆盖、
+   * 模型将看不到；若它本来就在更早的 summary 之前，说明上一次压缩已处理过，补了会重复。
+   */
+  const sliceStart = idx === -1 ? 0 : idx
+  const currentTodos = pickCurrentTodos(allMessages)
+  const todoRecap =
+    currentTodos && currentTodos.index >= sliceStart
+      ? renderTodoContent(currentTodos.data.todos)
+      : ''
+  const withTodoRecap = (s: string): string =>
+    todoRecap ? `${s}\n\n${todoRecap}` : s
+
   // ===== 正文压缩：纯本地渲染，不校验 Provider / 不发请求 / 不记账 =====
   if (mode === 'raw') {
-    const { summary } = buildRawSummary(compressMessages)
+    const { summary: rawBody } = buildRawSummary(compressMessages)
+    // 摘要正文必须自包含：末尾补上当前清单（见函数头「清单保活」）
+    const summary = withTodoRecap(rawBody)
     // 压缩后的上下文占用（systemPrompt + 工具 schema + 摘要），本地 tokenizer 估算。
     // 写进 summary 消息的 usage：token 环 / UI 读最后一条带 usage 的消息，
     const allToolDefs = await toolRegistry.listDefinitions()
@@ -225,6 +256,9 @@ export async function compressContext(
     console.error('上下文压缩失败:', e)
     throw e
   }
+
+  // 摘要正文必须自包含：末尾补上当前清单（见函数头「清单保活」）
+  summaryContent = withTodoRecap(summaryContent)
 
   // 压缩后的上下文占用（systemPrompt + 工具 schema + 摘要），本地 tokenizer 估算。
   // ⚠️ 与上面 summaryMessage.usage 是**两个口径**，不可混用：

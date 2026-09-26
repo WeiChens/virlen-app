@@ -433,6 +433,8 @@ pub fn run() {
             commands::agent::cmd_agent_prompts,
             // 供应商目录（模板表 + 推理档位表；CLI 与 GUI 同一份 core 数据）
             commands::agent::cmd_provider_catalog,
+            // 上下文压缩（GUI）：与 CLI 共用 core 同一份实现
+            commands::agent::cmd_compress_context,
             commands::agent::agent_tool_response,
             commands::agent::agent_user_interaction_response,
             commands::agent::agent_round_boundary_response,
@@ -450,6 +452,7 @@ pub fn run() {
             commands::session_db::cmd_upsert_session,
             commands::session_db::cmd_delete_session,
             commands::session_db::cmd_replace_session_messages,
+            commands::session_db::cmd_replace_session_messages_from,
             commands::session_db::cmd_append_messages,
             commands::session_db::cmd_truncate_session_messages,
             // 应用设置（配置下沉 D3）

@@ -23,6 +23,7 @@ import { invoke } from '@tauri-apps/api/core'
 import {
   describeContent,
   engineKind,
+  getCompressEngine,
   getEngine,
   providerTypeOf,
   resolveReasoningEffort,
@@ -325,11 +326,23 @@ export async function resumePausedRun(
 
   const toolInteract = await toolService.createToolHandles(sessionId)
 
-  // 分页加载下，恢复暂停任务同样需要完整历史；
-  // 注意：此处**不能**补占位 tool 结果（悬空 tool_calls 正是本次要恢复执行的步骤）
-  const currentMessages = await prepareMessagesForSend(sessionId, {
-    repair: false,
-  })
+  // 恢复暂停任务的「历史消息」来源按引擎分流：
+  // - Rust 引擎：**不传**整份历史 —— 引擎以本地库为权威读回（暂停时消息均已落库），
+  //   省掉「序列化整份历史 → IPC → 反序列化」的 O(历史) 开销（大历史下正是「继续时
+  //   弹窗要等好几秒」的主因：恢复跳过 LLM，这段耗时不再被 LLM 等待掩盖）。
+  //   ⚠️ Rust 侧只读「最后一个 summary 及其之后」（`SessionRepo::get_context_messages`）——
+  //   请求组装本就丢掉更早的历史，被压缩的旧消息不必进上下文（见 AGENTS.md §11.35）。
+  // - TS 引擎（回退路径）：TS 引擎不读 Rust 侧 SessionRepo，仍需前端提供全量历史。
+  // 注意：此处**不能**补占位 tool 结果（悬空 tool_calls 正是本次要恢复执行的步骤）。
+  const rustEngineActive = engineKind() === 'rust'
+  const currentMessages = rustEngineActive
+    ? []
+    : await prepareMessagesForSend(sessionId, { repair: false })
+  // 埋点用的消息条数：Rust 引擎下取会话内存条数（暂停发生在一次完整 run 内，
+  // 该会话此前已被 run 全量加载）；TS 引擎下即实际发送的条数。
+  const messageCount = rustEngineActive
+    ? sessionStore.getSession(sessionId)?.messages.length ?? 0
+    : currentMessages.length
   const providerCfg = settingsState.value.providers.find(
     (p) => p.id === session.providerConfigId,
   )
@@ -356,7 +369,7 @@ export async function resumePausedRun(
     engine: engineKind(),
     trace_id: traceId,
     session_id: hashText(sessionId),
-    msg_count: currentMessages.length,
+    msg_count: messageCount,
     resumed: true,
   })
 
@@ -619,7 +632,12 @@ export async function compressContext(
     // raw = 正文压缩（本地渲染，不发请求）
     const mode =
       modeOverride ?? settingsState.value.contextCompressMode ?? 'ai'
-    const result = await getEngine().compressContext(session, allMessages, mode)
+    // Tauri 下走 Rust（与 CLI 同一份实现）；非 Tauri 回退 TS 实现
+    const result = await getCompressEngine().compressContext(
+      session,
+      allMessages,
+      mode,
+    )
     // 兜底：summary / 历史里若含孤立代理（半个 emoji），先清洗再写内存 + 落库。
     // 孤立代理经 JSON.stringify → Rust serde_json 会直接报
     // "unexpected end of hex escape"（源头已用 utils/text 安全截断，这里再防第三方网关产出）

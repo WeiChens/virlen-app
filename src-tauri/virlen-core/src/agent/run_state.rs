@@ -28,11 +28,20 @@ pub fn snapshot_to_run(snapshot: &RunSnapshot, session_id: &str) -> Run {
     }
 }
 
-/// 查找一个 run 中第一个未 completed 的 step 索引（用于断点恢复）
+/// 查找一个 run 中第一个**待执行**（pending / running）的 step 索引（用于断点恢复）
+///
+/// ⚠️ `failed` 与 `completed` 一样视为「已结束」：两者都已经产出了结果（见 `tool_executor`，
+/// 失败 / 被取消的 step 同样会写一条 tool 结果并落库）。若把 `failed` 也当作断点，
+/// 恢复时会把它**重跑一遍** → 同一条 tool_call_id 产出第二条 tool 结果 → 服务端 400。
 pub fn find_next_step(run: &Run) -> usize {
     run.steps
         .iter()
-        .position(|s| s.status != ToolStepStatus::Completed)
+        .position(|s| {
+            matches!(
+                s.status,
+                ToolStepStatus::Pending | ToolStepStatus::Running
+            )
+        })
         .unwrap_or(run.steps.len())
 }
 
@@ -75,6 +84,32 @@ mod tests {
     fn find_next_step_skips_completed() {
         let run = make_run();
         assert_eq!(find_next_step(&run), 1);
+    }
+
+    /// `failed` 同样视为「已结束」（已经产出过 tool 结果），不能再当断点重生。
+    #[test]
+    fn find_next_step_skips_failed_too() {
+        let run = Run {
+            steps: vec![
+                make_step(ToolStepStatus::Completed),
+                make_step(ToolStepStatus::Failed),
+                make_step(ToolStepStatus::Running),
+            ],
+            ..make_run()
+        };
+        assert_eq!(find_next_step(&run), 2);
+    }
+
+    #[test]
+    fn find_next_step_none_pending_returns_len() {
+        let run = Run {
+            steps: vec![
+                make_step(ToolStepStatus::Completed),
+                make_step(ToolStepStatus::Failed),
+            ],
+            ..make_run()
+        };
+        assert_eq!(find_next_step(&run), 2);
     }
 
     #[test]

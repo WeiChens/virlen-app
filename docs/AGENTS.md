@@ -570,12 +570,14 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 - **边界**：aarch64 的 ad-hoc 签名由链接器自动完成、**无需** codesign；macOS 下载后仍有 quarantine（`xattr -d com.apple.quarantine virlen-cli`）；三个 workflow 并发写同一个 Release 是**既有设计**；Linux / macOS 的 `zip` 步骤**本地无法真跑**（本机无 zip 命令）—— 依据是 Info-ZIP 标准语义 + bsdtar 侧验证「条目名用 `/`、mode 可保留」。
 
 **11.30 上下文压缩下沉 core（`ai` / `raw` 两种模式）+ `chat` 显示占用 % + `list-session` 两列** —— 前提：压缩原先**只在 TS 侧**（Rust 只有提示词），连 GUI 走 Rust 引擎时也是回调 TS → 「CLI 能用」＝在 Rust 侧**新写一份**（用户拍板落 `virlen-core`，将来 GUI 可切过来只留一份）。
-- 常量与口径（与 TS 逐条对齐）：`CONTEXT_WINDOW_TOKENS = 200_000`（**用户要求先写死**，将来改「按模型下发」只改这一处）、`COMPRESS_MIN_RATIO = 0.4`、`context_tokens()`（`uiData.contextTokens > 0` 优先，否则 `usage.totalTokens`，从最后一条往前命中即止）。
-- **三个数不能混**：`usage.totalTokens` = 那次摘要调用**花了多少**（含压缩前全部历史）；`uiData.contextTokens` = 压缩后下一轮请求**上下文多大**（本地估算）；状态行显示的是后者 / 200k。
+- 常量与口径（与 TS 逐条对齐）：`CONTEXT_WINDOW_TOKENS = 200_000`（**默认值**；实际值来自 `app_settings.contextWindowTokens`，桌面端设置页可改，CLI 只读展示 —— 见下）、`COMPRESS_MIN_RATIO = 0.4`、`context_tokens()`（`uiData.contextTokens > 0` 优先，否则 `usage.totalTokens`，从最后一条往前命中即止）。
+  - **更新**：窗口大小已由写死常量改为运行时可配 —— `context_ratio/context_percent/should_compress` 均新增 `window` 参数，取值经 `window_tokens_from_settings(&Map)` 从 `app_settings.contextWindowTokens` 读（缺失/非正数回退 `CONTEXT_WINDOW_TOKENS`）；TS 侧 `token-ring.tsx` 同理读 `settingsState.contextWindowTokens`。
+- **三个数不能混**：`usage.totalTokens` = 那次摘要调用**花了多少**（含压缩前全部历史）；`uiData.contextTokens` = 压缩后下一轮请求**上下文多大**（本地估算）；状态行显示的是后者 / 上下文窗口（默认 200k，可在桌面端设置页修改）。
 - 落点：core `agent/compress/`（`mod` 模式/常量/口径/切片 · `raw` 正文压缩渲染，端口自 `compress-raw.ts` · `ai` 非流式 `Provider::chat` + `tool_choice=none`），产物是**一条 `role="summary"` 消息**；CLI `session_rt/compress.rs`（TUI 与顺序输出模式**都调它**，不给两条路径分叉的机会）。
 - 交互：`/compress` 弹**显式选择面板**（↑↓/←→ 移动 + Enter + Esc；**字符键一律不参与** —— 与授权面板同一条 fail-closed 口径）；`/compress ai|raw` 直接指定；认不出的方式名**不静默退化**；占用 < 40% 按桌面端同口径拦下，`Skipped`（提示级反馈）与 `Failed`（报错）**分开**；顺序输出模式读设置里的 `contextCompressMode`，读不到就**要求写明方式**（不猜）。
 - 落库是**追加**不是替换（TS 走整表替换，`append_messages(&[summary])` 等效；旧消息留在库里，正是检索工具 `list_messages` / `read_messages` 的数据源）；`list-session` 两列来自 `SessionRepo::session_stats()`（两条聚合查询），`--json` 无数据是 `null` 而非 0，统计失败**不中断列表**（stderr 告警）。
-- **边界**：① 压缩后占用是**本地粗估**（CJK 0.6 token/字符）；② 截断按**码点**、TS 按 UTF-16 码元 → 阈值附近 ±1；③ AI 摘要在 CLI 里**不可取消**；④ `list-session` 表格约 **139 列宽**，窄终端标题列会折行（机器可读请用 `--json`）；⑤ TS 与 Rust **两份压缩实现暂时并存**（GUI 仍走 TS）；⑥ 选择面板的真终端外观与键位未人工复验。三个决策点、界面示意与完整验证见 `docs/cli-tui-plan.md` §11。
+- **清单保活**：压缩把早期消息压进摘要后，模型只看得到**最后一个 summary 之后**的消息 → 若「当前活跃清单」（最后一条 `uiData.type=="todo"` 快照）落在压缩区间内，模型就会「忘记清单」。对策：把清单**原文**渲染成文本补在 summary 正文末尾（TS `withTodoRecap` / Rust `todo_recap`，复用 `renderTodoContent` / `plan::render_todo_content`）；**不搬运 tool 消息**（`tool` 消息必须紧跟带 `tool_calls` 的 assistant，否则协议报错）。只在快照落在压缩区间内时补（否则上一次压缩已处理，补了重复）。两侧同语义，测试见 `compress-context.test.ts` / `compress/tests.rs`。
+- **边界**：① 压缩后占用是**本地粗估**（CJK 0.6 token/字符）；② 截断按**码点**、TS 按 UTF-16 码元 → 阈值附近 ±1；③ AI 摘要在 CLI 里**不可取消**；④ `list-session` 表格约 **139 列宽**，窄终端标题列会折行（机器可读请用 `--json`）；⑤ TS 与 Rust **两份压缩实现并存**，但 **GUI（Tauri）现在也走 Rust**（命令 `cmd_compress_context`），TS 那份仅用于非 Tauri（浏览器 dev / vitest）（见 §11.36）；⑥ 选择面板的真终端外观与键位未人工复验。三个决策点、界面示意与完整验证见 `docs/cli-tui-plan.md` §11。
 
 **11.31 CI 首次运行暴露的三类失败** —— 上一轮 push 后 `ci.yml` 与三个 `build-*.yml` **首次真正编译 Linux / macOS 目标**。
 - **① clippy 在 Ubuntu 上 11 条 `dead-code`**：全是**只在 Windows 才被调用**的 ConPTY 代码（`runner/mod.rs` 的 `PAGER_DISABLED` / `TICK` / `PTY_HOLD_MAX` / `pty_hold_max` / `HOLD_MAX_OVERRIDE_SECS`；`pty_session.rs` 的 `new` / `is_held` / `interventions` / `close_input` / `register` / `unregister` / `CLIENT_SIZE_WAIT` / `initial_size`；`test_util.rs` 的 `is_process_alive`）。修法：前 5 项（连同只服务它们的 `use std::time::Duration`）**逐项 `#[cfg(target_os = "windows")]`**；`pty_session.rs` 用**文件级** `#![cfg_attr(not(target_os = "windows"), allow(dead_code))]`（逐项门禁会连锁到结构体字段 → 「只写不读」的新告警；`Duration` / `Instant` 也会变成未使用导入）；`is_process_alive` 用平台 `cfg_attr(allow)`（非 Windows 的 `kill -0` 分支留给今后 Linux 用例）。
@@ -591,6 +593,40 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 - **结论 / 改哪里**：把读取移进组件体内（渲染期读）。判断标准：`providerCatalog()` / `providerTemplates()` / `reasoningEffortUnion()` / `defaultReasoningEffortList()` / `sortReasoningEfforts()` / `promptText()`、以及 `providerService.getDefaultProviderList()` —— 一律只在函数 / 组件 / 事件回调里调用，**模块顶层 == 未水合**。
 - 回归用例：`src/tests/contracts/provider-catalog-contract.test.ts`（用 `vi.resetModules()` 拿一份从未水合过的全新模块图，先断言它确实未水合、再导入 UI 模块）；全仓 407 个 ts/tsx 扫描确认该 bug 类只此一处。
 
+**11.33 大历史下「暂停 → 继续」恢复要等好几秒（2026-09-26 用户报回 → 已修）** —— 现象：会话消息 1000+ 条时，`user_choice` 弹窗点「暂存」再点「继续」，要等好几秒才重新弹出（同一会话切换走再切回来则无此问题）。
+- **根因**：一次发送本就带 O(历史) 开销 —— 前端把**整份历史**经 IPC 传给 Rust（`invoke('agent_send_message')`），Rust `send_message_inner` 入口又把整份历史 **upsert 回 SQLite**（`append_messages_if_alive`）。正常发送时这段耗时被「等 LLM」掩盖；而**恢复会跳过 LLM**，它第一次暴露 —— 历史越长越明显。
+- **改法（两侧配对）**：① Rust `send_message_inner`：`resume_from_snapshot.is_some()` 时**不再整表回写**（暂停时消息均已增量直落 —— `execute_llm_round` / `execute_tool_steps`，再 upsert 纯属浪费）；② 恢复时消息**以本地库为权威**读回（`SessionRepo::get_messages`，读失败 / Noop / 为空时回退到前端 `messages`），前端 `resumePausedRun` 在 **Rust 引擎下改传空数组**（TS 回退路径仍传全量 —— 它不读 Rust 侧 repo）。从而省掉「序列化整份历史 → IPC → 反序列化」。
+- **不要踩**：恢复的 `current_messages` 现在来自库（`ORDER BY rowid` = 逻辑序，与前端内存列表一致）；Rust 恢复路径跳过 `prepareMessagesForSend` 是安全的 —— 暂停必然发生在一次完整 run 内，该 run 的发送已 `ensureAllMessagesLoaded` 并清空了 `pendingRepairFlush`，故不会漏落「悬空 tool_calls 的占位修复」。CLI 恒传 `resume_from_snapshot: None`（`session_rt/mod.rs`），不受影响。
+- 回归用例：`agent/engine/tests.rs::resume_reads_messages_from_repo`（快照 + 空 `messages`，断言引擎发给 LLM 的消息含库中历史）。
+
+**11.34 「暂存 → 继续 → 取消」后会话残留「已暂停」+ 再次继续 400（2026-09-26 用户报回 → 已修）** —— 现象：`user_choice` 弹窗点「取消」、AI 回复结束后，会话仍显示「会话已暂停，是否继续？」；再点「继续」报 400 `Messages with role 'tool' must be a response to a preceding message with 'tool_calls'`。
+- **根因（两处）**：① `resume_run` 跑完快照里所有待办步骤后**没有清快照** —— `execute_llm_round` 里那次「工具全完成就 `clear_snapshot`」只覆盖**普通轮次**，恢复走的是 `resume_run`，它只 persist 不 clear。残留快照让 `finishWorking` 判定 `isPaused=true` → UI 误显示「已暂停」。② `find_next_step` / `findNextStep` 把 `failed` 也当成「未完成」—— 而 `failed`（被取消 / 出错 / StormBreaker）**已经写过一条 tool 结果并落库**。于是下次「继续」按残留快照把该步骤**重跑一遍** → 同一 `tool_call_id` 产出第二条 tool 结果 → 服务端 400。
+- **改法**：① `resume_run` 在 `completed` 后 `self.clear_snapshot(session_id)`（恢复后的这一轮 LLM 若又产生 tool_calls，会由 `execute_llm_round` 重新落一份新快照）；② `find_next_step` / `findNextStep` 只把 `pending | running` 当作断点（`completed | failed` 一律跳过），TS / Rust 同语义（铁律 1）。
+- 回归用例：`agent/engine/tests.rs::resume_completing_steps_clears_snapshot`（暂存 → 继续+取消，断言无残留快照）、`agent/run_state.rs` 与 `run-state.test.ts` 的 `find_next_step_skips_failed*`。
+
+**11.35 恢复读回「上下文」而非整份历史（2026-09-26 优化）** —— 承接 §11.33：恢复改由引擎读库后，仍把**整份历史**（含已被压缩的旧消息）读进内存 / 反序列化。但请求组装（`provider::blocks::slice_messages`，TS 为 `buildRequest`）本就**丢掉最后一个 `summary` 之前的全部消息**，那部分读了也用不上，正是「大历史下继续仍会等约一秒」的剩余来源。
+- **改法**：新增 `SessionRepo::get_context_messages` —— SQLite 用一条查询 `rowid >= IFNULL((SELECT MAX(rowid) ... role='summary'), 0)` 取「最后一个 `summary` 及其之后」，无 `summary` 则等价于全部；`engine.rs` 恢复路径改用它，不再用 `get_messages`。
+- **不要踩**：旧消息**仍留在库里**（供 `list_messages` / `read_messages` 检索「已压缩区间」），本改动只影响「回读进内存的上下文」，不动库内容；结果与切片逐条一致，语义不变。本轮**仅覆盖 Rust 恢复路径**；前端发送路径 / CLI 仍读全量（前端发送路径若要同样优化，需一并处理修复回写，见 §11.33 说明）—— **已由 §11.36 补齐**。
+- 回归用例：`session_db/tests/sessions.rs` 的 `context_messages_*`（从最后 summary 起 / 取最后一条 / 无 summary 全部 / 空会话 / 跨会话隔离）、`agent/engine/tests.rs::resume_reads_context_from_last_summary`（summary 之前的旧历史不得进上下文）。
+
+**11.36 「只加载到最后一个 summary」贯通：前端发送路径 + GUI 压缩切 Rust（2026-09-26）** —— 承接 §11.35。
+
+**① 前端发送路径也只读「最后 summary 之后」（B 方案，§11.35 遗留的补充）**
+- `sessionStore.ensureContextLoaded`：从尾部连续加载，**一旦加载窗口里出现 summary 就停**（消息是从尾部向前连续加载的，最后一个 summary 已在内存 ⇒ 它之后的消息必然也在）；无 summary 时退化为全量加载。
+- `prepareMessagesForSend` 改用它，并只把 `messages.slice(最后一条 summary 的下标)` 交给引擎（Rust `slice_messages` / TS `buildRequest` 本就切片，这里先裁掉可省一次 O(历史) 的 IPC）。
+- **修复回写改为「后缀替换」**：新增命令 `cmd_replace_session_messages_from`（`SessionRepo::replace_messages_from`：DELETE `rowid >= 目标` + 重写后缀，**同一事务**）。原 `pendingRepairFlush`（「等全量加载后再整体回写」）**删除** —— 内存消息列表**恒为连续后缀**，按 `messages[0].id` 做后缀替换永远安全，不再需要「全量加载」这个前置条件。
+- ⚠️ 不要踩：`append_messages` 是 upsert（不删行），但**不能**用它在后缀里补占位 tool 消息 —— 它把新行追加到 rowid 末尾，破坏「tool 紧跟 assistant(tool_calls)」的协议顺序；必须用 `replace_messages_from`（或全量 `replace_messages`）。
+
+**② GUI 上下文压缩切到 Rust（与 CLI 统一成一份）**
+- 新增 Tauri 命令 `cmd_compress_context`（`commands/agent.rs`），内部调 `virlen_core::agent::compress`（与 CLI `session_rt/compress.rs` **同一份实现**）。
+- provider：`ai` 模式用 `DefaultProviderFactory`（GUI 有 JS 宿主，gemini 走桥，与正常聊天同一条路）；`raw` 无需 provider。
+- **记账在 Rust**（`agent::usage::record_usage`，kind=`compress`）；**落库仍在前端**（`cmd_replace_session_messages`），与既有行为一致。
+- 前端选择器 `services/chat/common.ts::getCompressEngine()`：**Tauri 下一律 Rust**（与 `useRustEngine` 开关无关），非 Tauri（浏览器 dev / vitest）回退 TS。
+- ⚠️ TS 的 `compress-context.ts` / `compress-raw.ts` **未删除** —— 它们是**非 Tauri（浏览器 dev / vitest）的唯一实现**；两份仍须保持同语义（铁律 1）。
+- ⚠️ **摘要请求的 `max_tokens` 必须钳上限**：GUI 会话的 `params.maxTokens` 默认是 `2000000`（`DEFAULT_SESSION_PARAMS`，语义是「不限制输出」，聊天时由全局 `settings.maxTokens` 覆盖）；Rust 摘要若把它**原样**写进请求体，会被模型以 `Invalid max_tokens value, the valid range ...`（400）拒掉。修法：`compress::ai::summary_max_tokens` 把会话值钳到 `(0, DEFAULT_SUMMARY_MAX_TOKENS]`，否则用默认上限（TS 旧实现传 `undefined` = provider 默认，所以没这问题）。回归：`compress/tests.rs::summary_max_tokens_caps_absurd_session_values`。
+
+- 回归用例：`session_db/tests/sessions.rs::replace_from_*`（前缀保留 / 等价全量替换 / 目标不存在 no-op）、`src/tests/services/session-context-load.test.ts`（summary 在窗口内 / 外 / 无 summary）。
+
 **踩坑前必读：`docs/tray-implementation-plan.md`**（托盘 / 关闭不退出 / 后台工作的完整方案与实现记录）。
 
 ---
@@ -601,7 +637,7 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 |---|---|
 | 改聊天循环 / 工具循环 / 暂停恢复 | `src/domain/engine/*` **和** `src-tauri/virlen-core/src/agent/{engine,llm_round,tool_executor,llm_loop}.rs` |
 | 改系统提示词 | **文本**：`src-tauri/virlen-core/src/agent/prompts/*.md`（唯一源；前端经 `cmd_agent_prompts` 取）；**组装顺序**：`src/services/agent-service.ts`（GUI）+ `src-tauri/virlen-core/src/agent/prompts/assemble.rs`（Rust / CLI） |
-| 改上下文压缩 / 标题生成 | **压缩（权威、CLI 在用）** `src-tauri/virlen-core/src/agent/compress/`（`mod` 模式/常量/口径/切片 · `raw` 正文压缩渲染 · `ai` 非流式摘要）+ CLI 执行链 `src-tauri/virlen-cli/src/session_rt/compress.rs`（落库/记账/快照）+ TUI 入口 `src-tauri/virlen-cli/src/tui/{commands,state,view,app}.rs`（`/compress` 面板与状态行百分比）+ `list-session` 两列 `src-tauri/virlen-cli/src/list/{render,sessions}.rs` + `SessionRepo::session_stats`；**GUI 仍走 TS**：`src/domain/engine/compress-context.ts`（`ai` LLM 摘要 / `raw` 正文压缩分派）+ `compress-raw.ts`（本地渲染）/ `generate-title.ts`（Rust 侧委托 TS）；产物在消息列表里的呈现：`ui/pages/chat/components/message/summary-message.tsx` |
+| 改上下文压缩 / 标题生成 | **压缩（权威、CLI 在用）** `src-tauri/virlen-core/src/agent/compress/`（`mod` 模式/常量/口径/切片 · `raw` 正文压缩渲染 · `ai` 非流式摘要）+ CLI 执行链 `src-tauri/virlen-cli/src/session_rt/compress.rs`（落库/记账/快照）+ TUI 入口 `src-tauri/virlen-cli/src/tui/{commands,state,view,app}.rs`（`/compress` 面板与状态行百分比）+ `list-session` 两列 `src-tauri/virlen-cli/src/list/{render,sessions}.rs` + `SessionRepo::session_stats`；**GUI（Tauri）也走 Rust**（命令 `cmd_compress_context` → 同一份 `agent/compress`，见 §11.36）；TS 实现 `src/domain/engine/compress-context.ts`（`ai` LLM 摘要 / `raw` 正文压缩分派）+ `compress-raw.ts`（本地渲染）**仅用于非 Tauri（浏览器 dev / vitest）**；`generate-title.ts` 仍由 Rust 侧委托 TS；产物在消息列表里的呈现：`ui/pages/chat/components/message/summary-message.tsx` |
 | 改会话持久化 | `src-tauri/virlen-core/src/session_db/`（`sqlite.rs` / `schema.rs` / `open.rs`）+ 命令壳 `src-tauri/src/commands/session_db.rs` + `src/infrastructure/sessionRepo/` + `src/ui/store/sessionStore.ts` |
 | 加 / 改工具 | **定义**：`src-tauri/virlen-core/src/agent/tool_defs/definitions.json`（权威源，三平台变体）；**执行器**：`src/infrastructure/tools/<分类>/<工具>.ts`（+ 分类 `common.ts`、分类 `index.ts`）；契约/注册中心：`src/domain/tools/{definitions,index,types}.ts` + `src/domain/ports/ToolRegistry.ts`；`src/domain/tools/category.ts`、`src-tauri/virlen-core/src/agent/native_tools/<分类>/<工具>.rs`（+ `mod.rs` 分发）、`src/ui/pages/chat/components/tool-call/` |
 | 改工具返回给模型的文案 / 增删 `uiData` | TS 执行器 `src/infrastructure/tools/<分类>/<工具>.ts` ↔ Rust 原生 `src-tauri/virlen-core/src/agent/native_tools/<分类>/<工具>.rs`（**逐字对齐**，模型侧固定英文）；界面侧只读 `uiData`，在 `src/ui/pages/chat/components/tool-call/<Tool>Message.tsx` / `TerminalBlock.tsx` 按界面语言重建 |

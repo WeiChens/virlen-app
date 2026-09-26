@@ -14,7 +14,7 @@
  *   已应用（等本轮生效）的草稿不在此列，关窗不会丢；
  *   若编辑期间 AI 又写过清单，关窗丢弃的文案是「已放弃编辑，已同步 AI 的最新清单」
  *   （与浮层内「放弃编辑并同步」语义、文案一致）。
- * - 浮层里的来源徽章只在「用户改过 / 已应用」时出现 —— 「模型写入」是默认状态，不占位。
+ * - 点击浮层外部 / 再点一次图标 / 按 Esc 都关闭浮层（关闭 = 丢弃未应用的编辑）。
  * - 用户**还在编辑（未点「应用变更」）**时，徽章 / 来源徽章仍按消息历史那一份显示
  *   （只有浮层内能看到草稿），按钮用虚线描边提示「有未应用的编辑」；
  *   点过「应用」后草稿才接管显示（橙色 + 「已应用 · 待本轮生效」）。
@@ -94,6 +94,28 @@ export const TodoEntry = observer(function TodoEntry({ sessionId }: Props) {
     }
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  // Esc 关闭浮层。若焦点在浮层内的输入框（任务名 / 备注）里：
+  // 先退出输入（blur），不关浮层 —— 避免「正在打字误按 Esc 直接把编辑丢掉」；
+  // 输入框外按 Esc 才关。所有关闭路径共用 closePopover（会丢弃未应用的编辑）。
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      const active = document.activeElement as HTMLElement | null
+      if (
+        active &&
+        wrapRef.current?.contains(active) &&
+        (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')
+      ) {
+        active.blur()
+        return
+      }
+      closeRef.current()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
   }, [open])
 
   /**

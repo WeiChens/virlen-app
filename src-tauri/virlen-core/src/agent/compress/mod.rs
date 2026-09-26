@@ -20,6 +20,16 @@
 //! 检索「已压缩区间」；删掉会让那两个工具失去意义（TS 侧同样是整表替换成「原历史 + summary」，
 //! 等效于追加）。
 //!
+//! ## 清单保活（与 TS `compress-context.ts` 同语义）
+//!
+//! 压缩会把早期消息压进摘要，而请求组装只保留最后一个 summary 之后的消息 —— 若「当前活跃
+//! 清单」（最后一条 `uiData.type == "todo"` 的快照，模型 `todo_write` 的 tool_result 或用户
+//! feedback 都可能）落在压缩区间内，模型此后就看不到它（表现：压缩后 AI 忘记清单）。
+//! 对策：把清单原文（[`render_todo_content`]）补在 summary 正文末尾（[`todo_recap`]），
+//! summary 会被 Provider 统一映射成 user 消息，靠文本就足够。
+//! ⚠️ **不能**把清单快照的 `tool` 消息原样搬到 summary 之后：`tool` 消息必须紧跟带 `tool_calls`
+//! 的 assistant 消息，否则 OpenAI / Anthropic 协议直接报错。
+//!
 //! ## 与 TS 的差异（如实标注）
 //!
 //! 1. **token 计数**：TS 在 Tauri 下用 DeepSeek tokenizer（`cmd_count_tokens`）精确计数；
@@ -27,10 +37,11 @@
 //!    是估算值；而 `ai` 模式下 `usage.totalTokens` 仍是 provider 回报的**真实值**。
 //! 2. **截断单位**：TS 按 UTF-16 码元（并做代理对保护），Rust 按**字符（码点）**——
 //!    阈值附近可能有 ±1 字符差异；Rust 侧不可能切出非法字符。
-//! 3. **`max_tokens`**：TS 传 `undefined`（用 provider 默认）；本模块传会话自己的
-//!    `params.maxTokens`（<= 0 时退到 [`DEFAULT_SUMMARY_MAX_TOKENS`]）—— 因为
-//!    `ChatRequest.max_tokens` 是 `i64` 且 provider 会**无条件**把它写进请求体，
-//!    传 0 会被部分 API 拒掉。
+//! 3. **`max_tokens`**：TS 传 `undefined`（用 provider 默认）；本模块给一个**正数**
+//!    （provider 会**无条件**把它写进请求体），但会**钳到上限**：会话值落在
+//!    `(0, DEFAULT_SUMMARY_MAX_TOKENS]` 时用它，否则用 [`DEFAULT_SUMMARY_MAX_TOKENS`]
+//!    —— GUI 会话默认的 `2000000`（`DEFAULT_SESSION_PARAMS`，语义是「不限制输出」）
+//!    会被模型以 `Invalid max_tokens value ...`（400）拒掉（见 `ai::summary_max_tokens`）。
 
 pub mod ai;
 pub mod raw;
@@ -38,16 +49,31 @@ pub mod raw;
 mod tests;
 
 use crate::agent::cancellation::CancellationToken;
+use crate::agent::native_tools::plan::render_todo_content;
 use crate::agent::provider::Provider;
 use crate::agent::types::{Message, Session, TokenUsage, ToolDefinition};
 use serde_json::{json, Value};
 
-/// 100% 对应的上下文窗口（token）。
+/// 上下文窗口的**默认值**（token）—— 100% 对应多少。
 ///
-/// 与 TS `token-ring.tsx::MAX_TOKENS_FULL` 同值。⚠️ 目前是**写死的常量**
-/// （用户明确要求先写死、后续再按模型调整）：将来改为「按模型下发」时只需改这一处 ——
-/// CLI 状态行 / `/status` / `list-session` 的比例都从它算。
+/// 实际取值来自 `app_settings.contextWindowTokens`（CLI 与桌面端读**同一个键**，
+/// 见 [`window_tokens_from_settings`]）；本常量仅作缺省 / 兜底。
 pub const CONTEXT_WINDOW_TOKENS: i64 = 200_000;
+
+/// `app_settings` 里「上下文窗口」的键名 —— 与 TS `SettingsStore.contextWindowTokens` 同名。
+pub const CONTEXT_WINDOW_KEY: &str = "contextWindowTokens";
+
+/// 从 `app_settings` 读取「100% 对应的上下文窗口」（token）。
+///
+/// 缺失 / 非法 / 非正数 → 回退到默认 [`CONTEXT_WINDOW_TOKENS`]。CLI 与桌面端读的是
+/// **同一个键**，因此两端口径始终一致。
+pub fn window_tokens_from_settings(settings: &serde_json::Map<String, Value>) -> i64 {
+    settings
+        .get(CONTEXT_WINDOW_KEY)
+        .and_then(Value::as_i64)
+        .filter(|n| *n > 0)
+        .unwrap_or(CONTEXT_WINDOW_TOKENS)
+}
 
 /// 低于该占用比例不触发压缩 —— 与 TS `token-ring.tsx::COMPRESS_MIN_RATIO` 同值
 pub const COMPRESS_MIN_RATIO: f64 = 0.4;
@@ -125,22 +151,30 @@ pub fn context_tokens(messages: &[Message]) -> Option<i64> {
     None
 }
 
-/// 占用比例（0.0 ~ 1.0；超过窗口按 1.0 截断）—— 与 TS `Math.min(used / MAX, 1)` 一致
-pub fn context_ratio(used: i64) -> f64 {
-    (used as f64 / CONTEXT_WINDOW_TOKENS as f64).clamp(0.0, 1.0)
+/// 占用比例（0.0 ~ 1.0；超过窗口按 1.0 截断）—— 与 TS `Math.min(used / MAX, 1)` 一致。
+///
+/// `window` = 100% 对应的上下文窗口（见 [`window_tokens_from_settings`]）；非正数回退默认值，
+/// 避免除零。
+pub fn context_ratio(used: i64, window: i64) -> f64 {
+    let w = if window > 0 {
+        window
+    } else {
+        CONTEXT_WINDOW_TOKENS
+    };
+    (used as f64 / w as f64).clamp(0.0, 1.0)
 }
 
 /// 占用百分比（四舍五入的整数）—— 与 TS `Math.round(ratio * 100)` 一致
-pub fn context_percent(used: i64) -> u32 {
-    (context_ratio(used) * 100.0).round() as u32
+pub fn context_percent(used: i64, window: i64) -> u32 {
+    (context_ratio(used, window) * 100.0).round() as u32
 }
 
 /// 是否「值得压缩」—— 占用充裕时按 TS/GUI 同口径拦下（`< 40%`）
 ///
 /// `None`（还没有任何用量数据）视为不满足：没有数据就不该假设上下文快满了。
-pub fn should_compress(used: Option<i64>) -> bool {
+pub fn should_compress(used: Option<i64>, window: i64) -> bool {
     match used {
-        Some(n) => context_ratio(n) >= COMPRESS_MIN_RATIO,
+        Some(n) => context_ratio(n, window) >= COMPRESS_MIN_RATIO,
         None => false,
     }
 }
@@ -220,6 +254,38 @@ pub fn compress_slice(messages: &[Message]) -> &[Message] {
     }
 }
 
+/// 最后一条「清单快照」消息的下标（`uiData.type == "todo"`）。
+///
+/// 与 TS `pickCurrentTodos` 同义：模型 `todo_write` 的 tool_result 与用户改清单的 feedback
+/// 消息是**同构**的权威载体，谁最新谁生效（不限 role）。
+pub fn last_todo_index(messages: &[Message]) -> Option<usize> {
+    messages.iter().rposition(|m| {
+        m.ui_data
+            .as_ref()
+            .and_then(|u| u.get("type"))
+            .and_then(Value::as_str)
+            == Some("todo")
+    })
+}
+
+/// 「当前活跃清单」的文本回执 —— 压缩时补进 summary 正文，让模型压缩后仍记得清单。
+///
+/// 仅在清单快照**落在本次压缩区间内**（`index >= slice_start`）时返回：它马上会被新的
+/// summary 覆盖、模型将看不到；若它在更早的 summary 之前，说明上一次压缩已处理过，补了会重复。
+/// 渲染复用 [`render_todo_content`]（与 tool_result 的正文逐字同格式，铁律 1）。
+pub fn todo_recap(messages: &[Message], slice_start: usize) -> Option<String> {
+    let i = last_todo_index(messages)?;
+    if i < slice_start {
+        return None;
+    }
+    let todos = messages[i]
+        .ui_data
+        .as_ref()
+        .and_then(|u| u.get("todos"))
+        .and_then(Value::as_array)?;
+    Some(render_todo_content(todos, &[]))
+}
+
 // ==================== 压缩 ====================
 
 /// 压缩入参
@@ -288,12 +354,24 @@ pub async fn compress(
         return Err("没有可压缩的消息（至少需要 2 条）".to_string());
     }
 
+    // 清单保活：把「当前活跃清单」补进摘要正文（见 [`todo_recap`] 与模块头）。
+    let recap = todo_recap(
+        input.messages,
+        last_summary_index(input.messages).unwrap_or(0),
+    );
+    let with_recap = |s: String| match &recap {
+        Some(r) => format!("{}\n\n{}", s, r),
+        None => s,
+    };
+
     match input.mode {
         CompressMode::Raw => {
             let raw::RawCompressResult {
                 summary,
                 omitted_chars,
             } = raw::build_raw_summary(slice);
+            // 摘要正文必须自包含：末尾补上当前清单（见 [`todo_recap`]）
+            let summary = with_recap(summary);
             let ctx = post_compress_tokens(input.session, input.tool_defs, &summary);
             Ok(CompressOutput {
                 mode: CompressMode::Raw,
@@ -310,16 +388,18 @@ pub async fn compress(
                 .provider
                 .ok_or_else(|| "AI 摘要需要可用的 Provider（当前会话没有可用连接）".to_string())?;
             let out = ai::summarize(input.session, slice, input.tool_defs, provider, cancel).await?;
-            let ctx = post_compress_tokens(input.session, input.tool_defs, &out.content);
+            // 摘要正文必须自包含：末尾补上当前清单（见 [`todo_recap`]）
+            let content = with_recap(out.content);
+            let ctx = post_compress_tokens(input.session, input.tool_defs, &content);
             Ok(CompressOutput {
                 mode: CompressMode::Ai,
                 message: summary_message(
                     CompressMode::Ai,
-                    &out.content,
+                    &content,
                     out.usage.clone(),
                     ctx,
                 ),
-                summary: out.content,
+                summary: content,
                 omitted_chars: 0,
                 context_tokens: ctx,
                 llm: Some(LlmCall {

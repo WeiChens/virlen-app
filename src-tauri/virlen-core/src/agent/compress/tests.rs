@@ -9,6 +9,23 @@ use crate::agent::types::{ChatRequest, SessionParams, ToolUseContent};
 use async_trait::async_trait;
 use serde_json::json;
 
+#[test]
+fn summary_max_tokens_caps_absurd_session_values() {
+    // 会话值超出合理区间（如 GUI 默认 2000000）→ 退到默认摘要上限，避免模型 400
+    assert_eq!(super::ai::summary_max_tokens(0), DEFAULT_SUMMARY_MAX_TOKENS);
+    assert_eq!(super::ai::summary_max_tokens(-5), DEFAULT_SUMMARY_MAX_TOKENS);
+    assert_eq!(
+        super::ai::summary_max_tokens(2_000_000),
+        DEFAULT_SUMMARY_MAX_TOKENS
+    );
+    // 合理的会话值按原值用
+    assert_eq!(super::ai::summary_max_tokens(1024), 1024);
+    assert_eq!(
+        super::ai::summary_max_tokens(DEFAULT_SUMMARY_MAX_TOKENS),
+        DEFAULT_SUMMARY_MAX_TOKENS
+    );
+}
+
 // ==================== 夹具 ====================
 
 fn session() -> Session {
@@ -60,6 +77,13 @@ fn with_usage(mut m: Message, total: i64) -> Message {
 
 fn with_ctx(mut m: Message, ctx: i64) -> Message {
     m.ui_data = Some(json!({ "compressMode": "raw", "contextTokens": ctx }));
+    m
+}
+
+/// 一条「清单快照」消息（模型 `todo_write` 的 tool_result 形态）
+fn todo_msg(todos: Value) -> Message {
+    let mut m = msg("tool", "");
+    m.ui_data = Some(json!({ "type": "todo", "todos": todos }));
     m
 }
 
@@ -133,12 +157,12 @@ fn context_tokens_ignores_non_positive_ctx() {
 
 #[test]
 fn ratio_percent_and_format_match_ts() {
-    assert_eq!(context_ratio(100_000), 0.5);
+    assert_eq!(context_ratio(100_000, CONTEXT_WINDOW_TOKENS), 0.5);
     // 超过窗口按 1.0 截断（TS: Math.min(used / MAX, 1)）
-    assert_eq!(context_ratio(400_000), 1.0);
-    assert_eq!(context_percent(12_500), 6); // Math.round(0.0625 * 100)
-    assert_eq!(context_percent(100_000), 50);
-    assert_eq!(context_percent(0), 0);
+    assert_eq!(context_ratio(400_000, CONTEXT_WINDOW_TOKENS), 1.0);
+    assert_eq!(context_percent(12_500, CONTEXT_WINDOW_TOKENS), 6); // Math.round(0.0625 * 100)
+    assert_eq!(context_percent(100_000, CONTEXT_WINDOW_TOKENS), 50);
+    assert_eq!(context_percent(0, CONTEXT_WINDOW_TOKENS), 0);
     // 与 TS formatTokens 同口径
     assert_eq!(format_tokens(999), "999");
     assert_eq!(format_tokens(12_500), "12.5k");
@@ -146,11 +170,30 @@ fn ratio_percent_and_format_match_ts() {
 }
 
 #[test]
+fn window_tokens_come_from_settings() {
+    // 缺失 / 非法 / 非正数 → 默认值
+    let empty = serde_json::Map::new();
+    assert_eq!(window_tokens_from_settings(&empty), CONTEXT_WINDOW_TOKENS);
+    let negative = json!({ CONTEXT_WINDOW_KEY: -1 })
+        .as_object()
+        .cloned()
+        .unwrap();
+    assert_eq!(window_tokens_from_settings(&negative), CONTEXT_WINDOW_TOKENS);
+    // 合法值 → 原样（口径随窗口变化）
+    let custom = json!({ CONTEXT_WINDOW_KEY: 100_000 })
+        .as_object()
+        .cloned()
+        .unwrap();
+    assert_eq!(window_tokens_from_settings(&custom), 100_000);
+    assert_eq!(context_percent(50_000, 100_000), 50);
+}
+
+#[test]
 fn should_compress_uses_ts_threshold() {
-    assert!(!should_compress(None));
-    assert!(!should_compress(Some(79_999))); // < 40%
-    assert!(should_compress(Some(80_000))); // = 40%
-    assert!(should_compress(Some(150_000)));
+    assert!(!should_compress(None, CONTEXT_WINDOW_TOKENS));
+    assert!(!should_compress(Some(79_999), CONTEXT_WINDOW_TOKENS)); // < 40%
+    assert!(should_compress(Some(80_000), CONTEXT_WINDOW_TOKENS)); // = 40%
+    assert!(should_compress(Some(150_000), CONTEXT_WINDOW_TOKENS));
 }
 
 #[test]
@@ -227,6 +270,45 @@ async fn raw_mode_produces_self_contained_summary_message() {
     assert_eq!(out.message.usage.as_ref().unwrap().total_tokens, out.context_tokens);
     assert!(out.llm.is_none(), "raw 模式不发请求、不记账");
     assert!(out.context_tokens > 0);
+}
+
+// ==================== 清单保活 ====================
+
+#[test]
+fn todo_recap_skips_snapshot_before_last_summary() {
+    let msgs = vec![
+        todo_msg(json!([{ "id": "1", "content": "A", "status": "pending" }])), // index 0
+        msg("summary", "旧摘要"),                                                // index 1
+        msg("user", "继续"),
+    ];
+    // slice 从 index 1 起 → 快照在区间外（上一次压缩已处理）→ 不补
+    assert!(todo_recap(&msgs, 1).is_none());
+    // slice 从 0 起 → 快照在区间内 → 补
+    let recap = todo_recap(&msgs, 0).expect("应补入清单");
+    assert!(recap.contains("[Todo list updated]"), "recap: {recap}");
+    assert!(recap.contains("A"));
+}
+
+#[tokio::test]
+async fn raw_keeps_active_todo_in_summary() {
+    let s = session();
+    let msgs = vec![
+        msg("user", "开始"),
+        todo_msg(json!([{ "id": "1", "content": "写工具", "status": "in_progress" }])),
+    ];
+    let out = compress(CompressInput {
+        mode: CompressMode::Raw,
+        session: &s,
+        messages: &msgs,
+        tool_defs: &[],
+        provider: None,
+    }, &ctx_and_cancel())
+    .await
+    .unwrap();
+    // 压缩后模型看不到快照消息本体，但清单已补进摘要正文
+    assert!(out.summary.contains("[Todo list updated]"), "summary: {}", out.summary);
+    assert!(out.summary.contains("写工具"));
+    assert_eq!(out.message.content, Value::String(out.summary.clone()));
 }
 
 #[tokio::test]

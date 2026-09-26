@@ -7,7 +7,7 @@
  * - 空步骤列表
  * - 全部已完成
  * - 部分完成
- * - 中间有 failed 状态
+ * - 中间有 failed 状态（failed 视为已结束，不再作为断点）
  */
 import { describe, it, expect } from 'vitest'
 import {
@@ -117,15 +117,25 @@ describe('findNextStep', () => {
     expect(findNextStep(run)).toBe(2)
   })
 
-  it('中间有 failed 且其后的 step 为 pending 应返回 failed', () => {
+  it('failed 视为已结束（已有结果），应跳过后返回其后的 pending', () => {
     const run = makeRun({
       steps: [
         makeStep({ toolCallId: 'a', status: 'completed' }),
-        makeStep({ toolCallId: 'b', status: 'failed' }), // failed 也算未完成
+        makeStep({ toolCallId: 'b', status: 'failed' }), // 已结束，断点恢复不再重跑
         makeStep({ toolCallId: 'c', status: 'pending' }),
       ],
     })
-    expect(findNextStep(run)).toBe(1) // 返回 failed 的索引
+    expect(findNextStep(run)).toBe(2)
+  })
+
+  it('全部 failed / completed 应返回 steps.length', () => {
+    const run = makeRun({
+      steps: [
+        makeStep({ toolCallId: 'a', status: 'completed' }),
+        makeStep({ toolCallId: 'b', status: 'failed' }),
+      ],
+    })
+    expect(findNextStep(run)).toBe(2)
   })
 
   it('running 状态也应视为未完成', () => {

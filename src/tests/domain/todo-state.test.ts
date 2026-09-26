@@ -18,7 +18,7 @@ import {
   sameTodoList,
 } from '@/domain/todo/state'
 import type { Message } from '@/types'
-import type { TodoStatus } from '@/domain/todo/types'
+import type { TodoItem, TodoStatus } from '@/domain/todo/types'
 
 function toolMsg(id: string, uiData?: Record<string, any>): Message {
   return { id, role: 'tool', content: '', uiData, timestamp: 0 }
@@ -142,7 +142,7 @@ describe('渲染', () => {
 })
 
 describe('diffTodos', () => {
-  const base = [
+  const base: TodoItem[] = [
     { id: '1', content: 'a', status: 'pending' as const },
     { id: '2', content: 'b', status: 'pending' as const },
     { id: '3', content: 'c', status: 'pending' as const },
@@ -170,6 +170,31 @@ describe('diffTodos', () => {
   it('识别顺序变更', () => {
     const next = [base[1], base[0], base[2]].map((t) => ({ ...t }))
     expect(diffTodos(base, next).some((c) => c.type === 'reorder')).toBe(true)
+  })
+
+  it('识别备注变更（只改备注也算一次修改）', () => {
+    const next = base.map((t) => ({ ...t }))
+    next[0].note = '补充说明'
+    const changes = diffTodos(base, next)
+    expect(changes).toHaveLength(1)
+    expect(changes[0].type).toBe('note')
+    expect(changes[0].content).toBe('a')
+    expect(changes[0].to).toBe('补充说明')
+  })
+
+  it('备注改回原样 → 无变化', () => {
+    const withNote = base.map((t) => ({ ...t }))
+    withNote[0].note = 'x'
+    expect(diffTodos(base, withNote).some((c) => c.type === 'note')).toBe(true)
+    // 清掉备注回到 base → 不再有任何差异
+    const back = withNote.map((t) => {
+      const c = { ...t }
+      delete c.note
+      return c
+    })
+    expect(
+      diffTodos(base, back).filter((c) => c.type === 'note'),
+    ).toHaveLength(0)
   })
 })
 

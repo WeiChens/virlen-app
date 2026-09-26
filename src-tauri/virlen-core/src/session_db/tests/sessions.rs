@@ -258,6 +258,91 @@ async fn truncate_does_not_touch_other_sessions() {
 }
 
 #[tokio::test]
+async fn replace_from_rewrites_suffix_and_keeps_prefix() {
+    // 回归（B 方案）：发送/修复时内存里只有「连续后缀窗口」，回写修复结果不得抹掉更早的历史。
+    let repo = open_tmp();
+    repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+    let msgs: Vec<Message> = (1..=5)
+        .map(|i| test_message(&format!("m{}", i), "user"))
+        .collect();
+    repo.append_messages("s1", &msgs).await.unwrap();
+
+    // 从 m3 起替换：前缀 m1/m2 原样保留，后缀换成 m3b/m4b
+    repo.replace_messages_from(
+        "s1",
+        "m3",
+        &[
+            test_message("m3b", "assistant"),
+            test_message("m4b", "tool"),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let ids: Vec<String> = repo
+        .get_messages("s1")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    assert_eq!(ids, vec!["m1", "m2", "m3b", "m4b"], "只替换后缀，保留更早历史");
+    // 修复回写不是用户发言 → 会话时间不变
+    assert_eq!(
+        repo.get_session("s1").await.unwrap().unwrap().updated_at,
+        100,
+        "后缀替换不应刷新会话时间"
+    );
+}
+
+#[tokio::test]
+async fn replace_from_first_message_equals_full_replace() {
+    let repo = open_tmp();
+    repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+    repo.append_messages(
+        "s1",
+        &[test_message("m1", "user"), test_message("m2", "assistant")],
+    )
+    .await
+    .unwrap();
+    repo.replace_messages_from("s1", "m1", &[test_message("only", "user")])
+        .await
+        .unwrap();
+    let ids: Vec<String> = repo
+        .get_messages("s1")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    assert_eq!(ids, vec!["only"], "从第一条起替换 = 全量替换");
+}
+
+#[tokio::test]
+async fn replace_from_missing_message_is_noop() {
+    let repo = open_tmp();
+    repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+    repo.append_messages(
+        "s1",
+        &[test_message("m1", "user"), test_message("m2", "assistant")],
+    )
+    .await
+    .unwrap();
+    // 目标不存在：不删除任何行、也不写入
+    repo.replace_messages_from("s1", "nope", &[test_message("x", "user")])
+        .await
+        .unwrap();
+    let ids: Vec<String> = repo
+        .get_messages("s1")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    assert_eq!(ids, vec!["m1", "m2"]);
+}
+
+#[tokio::test]
 async fn list_sessions_sorted_desc() {
     let repo = open_tmp();
     repo.upsert_session(&test_session("a", "A", 100)).await.unwrap();
@@ -364,4 +449,112 @@ async fn user_message_refs_truncates_preview_to_420_chars() {
     let refs = repo.get_user_message_refs("s1").await.unwrap();
     assert_eq!(refs.len(), 1);
     assert_eq!(refs[0].preview.chars().count(), 420);
+}
+
+#[tokio::test]
+async fn context_messages_start_at_last_summary() {
+    // 回归：断点恢复等「以库为权威回读上下文」只需最后一个 summary 及其之后的消息
+    //（请求组装会丢掉更早的历史），不必把已被压缩的旧历史读进内存。
+    let repo = open_tmp();
+    repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+    repo.append_messages(
+        "s1",
+        &[
+            test_message("m1", "user"),
+            test_message("m2", "assistant"),
+            test_message("sum1", "summary"),
+            test_message("m3", "user"),
+            test_message("m4", "assistant"),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let ids: Vec<String> = repo
+        .get_context_messages("s1")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    assert_eq!(ids, vec!["sum1", "m3", "m4"], "上下文应从最后一条 summary 起");
+}
+
+#[tokio::test]
+async fn context_messages_use_latest_summary() {
+    // 多次压缩：只从**最后**一条 summary 起（更早的 summary 及其之前的消息都已进过上下文）
+    let repo = open_tmp();
+    repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+    repo.append_messages(
+        "s1",
+        &[
+            test_message("m1", "user"),
+            test_message("sum1", "summary"),
+            test_message("m2", "user"),
+            test_message("sum2", "summary"),
+            test_message("m3", "user"),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let ids: Vec<String> = repo
+        .get_context_messages("s1")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    assert_eq!(ids, vec!["sum2", "m3"]);
+}
+
+#[tokio::test]
+async fn context_messages_without_summary_return_all() {
+    let repo = open_tmp();
+    repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+    repo.append_messages(
+        "s1",
+        &[test_message("m1", "user"), test_message("m2", "assistant")],
+    )
+    .await
+    .unwrap();
+    let ids: Vec<String> = repo
+        .get_context_messages("s1")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    assert_eq!(ids, vec!["m1", "m2"], "无 summary 时应返回全部消息");
+}
+
+#[tokio::test]
+async fn context_messages_empty_for_missing_session() {
+    let repo = open_tmp();
+    assert!(repo.get_context_messages("nope").await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn context_messages_isolated_per_session() {
+    // summary 是「按会话」的：s2 的 summary 不应改变 s1 的上下文边界
+    let repo = open_tmp();
+    repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+    repo.upsert_session(&test_session("s2", "t", 100)).await.unwrap();
+    repo.append_messages("s2", &[test_message("x1", "summary")])
+        .await
+        .unwrap();
+    repo.append_messages(
+        "s1",
+        &[test_message("m1", "user"), test_message("m2", "assistant")],
+    )
+    .await
+    .unwrap();
+    let ids: Vec<String> = repo
+        .get_context_messages("s1")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    assert_eq!(ids, vec!["m1", "m2"], "其它会话的 summary 不影响本会话");
 }

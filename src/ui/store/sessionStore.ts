@@ -311,6 +311,36 @@ class SessionStore {
     }
   }
 
+  /**
+   * 确保「模型当前上下文」所需的消息已加载：从**最后一条 summary 起**（含它）到最新。
+   *
+   * 与 `ensureAllMessagesLoaded` 的差别：加载窗口里一旦出现 `summary` 就停止向更早处回补 ——
+   * 消息是**从尾部连续向前**加载的，最后一个 summary 已在内存 ⇒ 它之后的全部消息必然也在；
+   * 而请求组装（TS `buildRequest` / Rust `slice_messages`）本就丢掉 summary 之前的消息。
+   * 无 summary 时退化为全量加载（那时整份历史都是当前上下文）。
+   *
+   * 用于发送路径：避免为「模型根本看不到」的旧历史付出 O(历史) 的加载 + IPC 代价。
+   */
+  async ensureContextLoaded(sessionId: string): Promise<void> {
+    await this.ensureMessagesLoaded(sessionId)
+    let guard = 0
+    // 上限兜底，避免 hasMore 异常导致死循环
+    while (
+      this.hasMoreMessages(sessionId) &&
+      !this.hasSummaryInMemory(sessionId) &&
+      guard++ < 1000
+    ) {
+      const loaded = await this.loadOlderMessages(sessionId)
+      if (!loaded && this.hasMoreMessages(sessionId)) break
+    }
+  }
+
+  /** 已加载消息里是否含 summary（= 最后一个 summary 已在内存） */
+  private hasSummaryInMemory(sessionId: string): boolean {
+    const s = this.value.sessions.find((x) => x.id === sessionId)
+    return !!s?.messages.some((m) => m.role === 'summary')
+  }
+
   /** 标记会话消息已全部在内存（如上下文压缩整体替换后） */
   markMessagesFullyLoaded(sessionId: string): void {
     runInAction(() => {

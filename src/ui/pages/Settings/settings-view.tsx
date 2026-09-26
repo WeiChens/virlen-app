@@ -5,6 +5,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from 'react'
 import GeneralSettings from './general-settings'
+import ChatSettings from './chat-settings'
 import ProviderSettings from './provider-settings'
 import SecuritySettings from './security-settings'
 import AgentSettings from './agent-settings'
@@ -17,6 +18,7 @@ import StorageSettings from './storage-settings'
 import CloseSvg from '@/ui/components/icons/CloseSvg'
 import SettingSvg from '@/ui/components/icons/SettingSvg'
 import SystemSvg from '@/ui/components/icons/SystemSvg'
+import MessageSvg from '@/ui/components/icons/MessageSvg'
 import LockSvg from '@/ui/components/icons/LockSvg'
 import AgentSvg from '@/ui/components/icons/AgentSvg'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
@@ -30,6 +32,7 @@ import './settings-view.scss'
 
 export type SettingsPage =
   | 'general'
+  | 'chat'
   | 'provider'
   | 'security'
   | 'agent'
@@ -157,6 +160,12 @@ export default function SettingsView() {
               <span>{t('通用')}</span>
             </button>
             <button
+              className={`nav-item ${page === 'chat' ? 'active' : ''}`}
+              onClick={() => setPage('chat')}>
+              <MessageSvg fill="var(--nav-item-color)" />
+              <span>{t('聊天')}</span>
+            </button>
+            <button
               className={`nav-item ${page === 'storage' ? 'active' : ''}`}
               onClick={() => setPage('storage')}>
               <StorageSvg fill="var(--nav-item-color)" />
@@ -214,6 +223,7 @@ export default function SettingsView() {
         </div>
         <div className="settings-content">
           {page === 'general' && <GeneralSettings />}
+          {page === 'chat' && <ChatSettings />}
           {page === 'storage' && <StorageSettings />}
           {page === 'agent' && <AgentSettings />}
           {page === 'provider' && <ProviderSettings />}

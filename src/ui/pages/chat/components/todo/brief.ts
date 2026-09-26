@@ -33,6 +33,8 @@ export function changeBrief(changes: TodoChange[] | undefined): string {
           })
         case 'edit':
           return tpl('改写为「$__name__」', { name: c.to })
+        case 'note':
+          return tpl('「$__name__」备注已更新', { name: c.content })
         case 'reorder':
           return t('调整顺序')
         default:

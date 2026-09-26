@@ -16,10 +16,13 @@ use tauri::Emitter;
 use tauri::Manager;
 
 use virlen_core::agent::bridge::{self, AgentBridgeState};
+use virlen_core::agent::cancellation::CancellationToken;
+use virlen_core::agent::compress;
 use virlen_core::agent::engine::AgentEngine;
 use virlen_core::agent::event_sink::{self, EventSink};
-use virlen_core::agent::provider::DefaultProviderFactory;
+use virlen_core::agent::provider::{DefaultProviderFactory, ProviderFactory};
 use virlen_core::agent::types::AgentEvent;
+use virlen_core::agent::usage;
 use virlen_core::agent::{native_tools, prompts, provider, tool_defs, types};
 use virlen_core::session_db::{NoopSessionRepo, NoopSettingsRepo, SessionRepo, SettingsRepo};
 
@@ -288,6 +291,119 @@ pub fn cmd_agent_prompts() -> prompts::PromptTexts {
 #[tauri::command]
 pub fn cmd_provider_catalog() -> Result<provider::catalog::ProviderCatalog, String> {
     provider::catalog::provider_catalog()
+}
+
+/// 上下文压缩结果（GUI / CLI 共用 `virlen_core::agent::compress` 的实现）
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompressResultDto {
+    /// 实际使用的压缩方式（`ai` / `raw`）
+    pub mode: String,
+    /// 摘要正文（= `message.content` 的字符串形态）
+    pub summary: String,
+    /// 待**追加**到会话末尾的 summary 消息（含 `usage` / `uiData`）
+    pub message: types::Message,
+    /// `raw` 模式省略的字符数（`ai` 恒为 0）
+    pub omitted_chars: usize,
+    /// 压缩后的上下文占用（本地估算）
+    pub context_tokens: i64,
+    /// `ai` 模式那次模型调用的记账信息（已由后端写入账本）；`raw` 为 `None`
+    pub llm: Option<CompressLlmDto>,
+}
+
+/// `ai` 模式那次模型调用的记账信息
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompressLlmDto {
+    pub usage: types::TokenUsage,
+    pub estimated: bool,
+    pub duration_ms: i64,
+}
+
+/// 上下文压缩（GUI）—— 与 CLI 走**同一份** `virlen_core::agent::compress` 实现。
+///
+/// 为什么放后端：TS 侧原有一份 `compress-context.ts`，与 Rust 那份是「同语义两实现」；
+/// 统一到 core 后，GUI（默认引擎）与 CLI 的压缩口径只有一份，不会再漂移。
+///
+/// - `raw` 模式：纯本地渲染，不需要 provider；
+/// - `ai` 模式：用 [`DefaultProviderFactory`]（GUI 有 JS 宿主，Gemini 等桥接协议照常走双向桥，
+///   与正常聊天完全同一条路）。headless / CLI 没有 JS 宿主，走的是 `create_native_provider`。
+///
+/// 落库由前端完成（`cmd_replace_session_messages`）；**记账在此完成**（与 CLI 同一入口
+/// `agent::usage::record_usage`，kind = `compress`，且不刷新会话时间）。
+/// ⚠️ `#[allow(too_many_arguments)]`：Tauri 命令参数逐个从 JS 传，收结构体会要求前端改调用形状。
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn cmd_compress_context(
+    app: tauri::AppHandle,
+    bridge: tauri::State<'_, Arc<AgentBridgeState>>,
+    repo: tauri::State<'_, Arc<dyn SessionRepo>>,
+    session: types::Session,
+    messages: Vec<types::Message>,
+    tool_defs: Vec<types::ToolDefinition>,
+    mode: String,
+    provider: Option<types::ProviderConnection>,
+) -> Result<CompressResultDto, String> {
+    let mode =
+        compress::CompressMode::parse(&mode).ok_or_else(|| format!("未知的压缩方式: {}", mode))?;
+    let provider_obj: Option<Box<dyn provider::Provider>> = match mode {
+        compress::CompressMode::Ai => {
+            let conn = provider.as_ref().ok_or_else(|| {
+                "AI 摘要需要可用的 Provider（当前会话没有可用连接）".to_string()
+            })?;
+            // 与正常聊天同一个工厂：GUI 有 JS 宿主，gemini 等桥接协议照常工作
+            let factory = DefaultProviderFactory {
+                bridge: bridge.inner().clone(),
+                sink: Arc::new(TauriEventSink::new(app.clone())),
+            };
+            Some(factory.create(conn))
+        }
+        compress::CompressMode::Raw => None,
+    };
+    let out = compress::compress(
+        compress::CompressInput {
+            mode,
+            session: &session,
+            messages: &messages,
+            tool_defs: &tool_defs,
+            provider: provider_obj.as_deref(),
+        },
+        &CancellationToken::new(),
+    )
+    .await?;
+    // 记账：AI 摘要是一次真实消费（与 CLI 同一入口）；raw 没有模型调用 → `llm` 为 None → 不记账
+    if let Some(llm) = &out.llm {
+        let (ptype, pid) = provider
+            .as_ref()
+            .map(|p| (p.provider_type.as_str(), p.provider_id.as_str()))
+            .unwrap_or(("", ""));
+        usage::record_usage(
+            repo.inner().as_ref(),
+            &session.id,
+            &session,
+            ptype,
+            pid,
+            "compress",
+            None,
+            None,
+            Some(llm.usage.clone()),
+            llm.estimated,
+            Some(llm.duration_ms),
+        )
+        .await;
+    }
+    Ok(CompressResultDto {
+        mode: out.mode.as_str().to_string(),
+        summary: out.summary,
+        message: out.message,
+        omitted_chars: out.omitted_chars,
+        context_tokens: out.context_tokens,
+        llm: out.llm.map(|l| CompressLlmDto {
+            usage: l.usage,
+            estimated: l.estimated,
+            duration_ms: l.duration_ms,
+        }),
+    })
 }
 
 // ==================== 桥接回执 ====================

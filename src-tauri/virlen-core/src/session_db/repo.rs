@@ -67,6 +67,18 @@ pub trait SessionRepo: Send + Sync {
         session_id: &str,
         message_id: &str,
     ) -> Result<(), String>;
+    /// 删除会话中「指定消息及其之后」的全部消息，并在**同一事务**内把 `messages` 写入该后缀。
+    ///
+    /// 用于「内存里只有一段**连续后缀窗口**」时把（修复过的）窗口整体回写：
+    /// `replace_messages` 是全量替换，在只加载了尾部窗口时会把**还没加载的更早消息抹掉**；
+    /// 本方法只动「从目标消息起」的后缀，前缀（更早的历史）原样保留。
+    /// 目标消息不存在时不删除任何行、也不写入（与 `truncate_messages_from` 同一条安全约定）。
+    async fn replace_messages_from(
+        &self,
+        session_id: &str,
+        from_message_id: &str,
+        messages: &[Message],
+    ) -> Result<(), String>;
     /// 列出所有会话（不含 messages，按 updated_at 降序）
     async fn list_sessions(&self) -> Result<Vec<Session>, String>;
     /// 批量取每个会话的统计（消息条数 + 上下文占用 token）
@@ -79,6 +91,20 @@ pub trait SessionRepo: Send + Sync {
     async fn get_session(&self, session_id: &str) -> Result<Option<Session>, String>;
     /// 获取会话的全部消息（按插入顺序）
     async fn get_messages(&self, session_id: &str) -> Result<Vec<Message>, String>;
+
+    /// 获取「模型当前上下文」所需的消息：**从最后一条 `summary` 起**（含它）到最新，
+    /// 无 `summary` 时返回全部（均按插入顺序升序）。
+    ///
+    /// 语义等价于「`get_messages` 之后丢掉最后一个 summary 之前的全部消息」——
+    /// 请求组装（`agent::provider` 的切片）本就只保留最后一个 summary 及其之后的消息，
+    /// 因此断点恢复等「以库为权威回读上下文」的场景无需把已被压缩的旧历史读进内存 /
+    /// 反序列化（大历史下正是「继续」要等好几秒的主因之一）。
+    ///
+    /// ⚠️ 旧消息**仍留在库里**：模型侧查询工具（`list_messages` / `read_messages`）靠它们
+    /// 检索「已压缩区间」，删掉会让那两个工具失去意义。本方法只影响「回读进内存的上下文」，
+    /// 不影响库内容。
+    async fn get_context_messages(&self, session_id: &str) -> Result<Vec<Message>, String>;
+
     /// 分页获取会话消息（默认取尾部窗口；`before_rowid` 用于向上回补更早的历史）
     async fn get_message_page(
         &self,
@@ -202,6 +228,14 @@ impl SessionRepo for NoopSessionRepo {
     ) -> Result<(), String> {
         Ok(())
     }
+    async fn replace_messages_from(
+        &self,
+        _session_id: &str,
+        _from_message_id: &str,
+        _messages: &[Message],
+    ) -> Result<(), String> {
+        Ok(())
+    }
     async fn list_sessions(&self) -> Result<Vec<Session>, String> {
         Ok(Vec::new())
     }
@@ -213,6 +247,9 @@ impl SessionRepo for NoopSessionRepo {
         Ok(None)
     }
     async fn get_messages(&self, _session_id: &str) -> Result<Vec<Message>, String> {
+        Ok(Vec::new())
+    }
+    async fn get_context_messages(&self, _session_id: &str) -> Result<Vec<Message>, String> {
         Ok(Vec::new())
     }
     async fn get_message_page(

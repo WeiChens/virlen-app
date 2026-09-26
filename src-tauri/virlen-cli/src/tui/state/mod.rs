@@ -22,7 +22,7 @@ pub(crate) use self::line::*;
 use crate::tui::commands::Slash;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
-use virlen_core::agent::compress::CompressMode;
+use virlen_core::agent::compress::{CompressMode, CONTEXT_WINDOW_TOKENS};
 
 /// 归一化按键（`input.rs` 把 crossterm 的 `KeyEvent` 映射到这里 → 本模块可在无终端下单测）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,6 +86,9 @@ pub(crate) enum UiEvent {
     Compressing(bool),
     /// 设置里的默认压缩方式（选择面板据此标注「默认」并决定初始高亮）
     DefaultCompressMode(CompressMode),
+    /// 100% 对应的上下文窗口（`app_settings.contextWindowTokens`；主循环启动时下发）。
+    /// 状态行显示 `占用 / 它` 的百分比。⚠️ 与 `ContextUsage` 是两个口径（那个是「现在多大」）。
+    ContextWindowTokens(i64),
     /// 需要用户应答的交互（命令授权 / 选择）
     Interaction {
         request_id: String,
@@ -141,7 +144,7 @@ pub(crate) enum Action {
 }
 
 /// 状态行内容（`/status` 与底部状态行共用同一份数据）
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct Status {
     pub session_id: String,
     pub title: String,
@@ -153,8 +156,26 @@ pub(crate) struct Status {
     /// 当前上下文占用 token（`None` = 本会话还没有用量数据）
     ///
     /// 与 `tokens` 是两个口径：`tokens` 是花掉的总量，这个是**此刻上下文有多大**。
-    /// 状态行显示的是它 / 200k 的百分比。
+    /// 状态行显示的是它 / [`Status::context_window_tokens`] 的百分比。
     pub context_tokens: Option<i64>,
+    /// 100% 对应的上下文窗口（`app_settings.contextWindowTokens`；由主循环启动时下发）。
+    /// 默认取 [`CONTEXT_WINDOW_TOKENS`]，未下发时也得到合理值。
+    pub context_window_tokens: i64,
+}
+
+impl Default for Status {
+    fn default() -> Self {
+        Self {
+            session_id: String::new(),
+            title: String::new(),
+            model: String::new(),
+            workspace: String::new(),
+            messages: 0,
+            tokens: None,
+            context_tokens: None,
+            context_window_tokens: CONTEXT_WINDOW_TOKENS,
+        }
+    }
 }
 
 /// 授权面板的**显式选择项**（`confirm_command_native` 专用）。
