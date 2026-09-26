@@ -174,6 +174,7 @@ pub async fn verify(
         tool_choice: "none".to_string(),
         reasoning_effort: None,
         tools: Vec::new(),
+        thinking: None,
     };
 
     let response = provider.chat(&request, cancel).await?;

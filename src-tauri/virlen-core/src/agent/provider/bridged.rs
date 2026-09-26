@@ -53,6 +53,8 @@ impl BridgedProvider {
             "stream": request.stream,
             "tool_choice": request.tool_choice,
             "reasoningEffort": request.reasoning_effort,
+            // 桥接协议（gemini 等）在 TS provider 侧读 `thinking === false` 禁用思考
+            "thinking": request.thinking,
         })
     }
 }

@@ -46,6 +46,7 @@ fn chat_request(messages: Vec<Message>) -> ChatRequest {
         stream: false,
         tool_choice: "none".into(),
         reasoning_effort: None,
+        thinking: None,
     }
 }
 
@@ -289,4 +290,40 @@ fn anthropic_build_request_injects_vision_result() {
     let body_str = body.to_string();
     assert!(!body_str.contains("image_url"));
     assert!(body_str.contains("图中有一只猫"));
+}
+
+#[test]
+fn openai_thinking_false_disables_reasoning() {
+    // 与 TS `openai.ts` 同语义：thinking === false → `thinking:{type:'disabled'}` +
+    // `reasoning_effort:'none'`，且**优先于** request.reasoning_effort
+    let p = NativeOpenAiProvider::new("test", "key", "https://api.test.com");
+    let mut request = chat_request(vec![msg("user", json!("hi"), None, None)]);
+    request.thinking = Some(false);
+    request.reasoning_effort = Some("high".into()); // 必须被 thinking 覆盖
+    let body = p.build_request(&request);
+    assert_eq!(body["thinking"], json!({ "type": "disabled" }));
+    assert_eq!(body["reasoning_effort"], json!("none"));
+}
+
+#[test]
+fn openai_without_thinking_keeps_reasoning_effort() {
+    // thinking 为 None 时不写 thinking、reasoning_effort 照传（普通聊天路径）
+    let p = NativeOpenAiProvider::new("test", "key", "https://api.test.com");
+    let mut request = chat_request(vec![msg("user", json!("hi"), None, None)]);
+    request.reasoning_effort = Some("high".into());
+    let body = p.build_request(&request);
+    assert!(body["thinking"].is_null());
+    assert_eq!(body["reasoning_effort"], json!("high"));
+}
+
+#[test]
+fn anthropic_thinking_false_disables_reasoning() {
+    let p = NativeAnthropicProvider::new("test", "key", "https://api.test.com");
+    let mut request = chat_request(vec![msg("user", json!("hi"), None, None)]);
+    request.thinking = Some(false);
+    let body = p.build_request(&request);
+    assert_eq!(body["thinking"], json!({ "type": "disabled" }));
+    // 不禁用时不得写入该字段
+    let plain = p.build_request(&chat_request(vec![msg("user", json!("hi"), None, None)]));
+    assert!(plain["thinking"].is_null());
 }

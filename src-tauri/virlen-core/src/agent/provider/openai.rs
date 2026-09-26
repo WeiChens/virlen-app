@@ -152,7 +152,13 @@ impl NativeOpenAiProvider {
         if !request.tool_choice.is_empty() {
             body["tool_choice"] = Value::String(request.tool_choice.clone());
         }
-        if let Some(re) = &request.reasoning_effort {
+        // thinking 模式控制（**优先于 reasoningEffort**）—— 与 TS `openai.ts` 逐字对齐：
+        // - DeepSeek reasoner：`thinking: { type: 'disabled' }`
+        // - OpenAI 兼容 / o 系列：`reasoning_effort: 'none'`
+        if request.thinking == Some(false) {
+            body["thinking"] = json!({ "type": "disabled" });
+            body["reasoning_effort"] = Value::String("none".to_string());
+        } else if let Some(re) = &request.reasoning_effort {
             body["reasoning_effort"] = Value::String(re.clone());
         }
 

@@ -168,6 +168,10 @@ impl NativeAnthropicProvider {
         if request.tool_choice == "none" {
             body["tool_choice"] = json!({ "type": "none" });
         }
+        // thinking 模式控制（Anthropic extended thinking）—— 与 TS `anthropic.ts` 同语义
+        if request.thinking == Some(false) {
+            body["thinking"] = json!({ "type": "disabled" });
+        }
         body
     }
 

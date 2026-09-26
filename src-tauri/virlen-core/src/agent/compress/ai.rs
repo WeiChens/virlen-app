@@ -110,6 +110,8 @@ pub async fn summarize(
         stream: false,
         tool_choice: "none".to_string(),
         reasoning_effort: None,
+        // 压缩与 TS 同语义：不禁用思考（摘要本就是长输出）
+        thinking: None,
     };
 
     let started = crate::telemetry::now_ms();

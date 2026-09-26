@@ -188,6 +188,9 @@ pub async fn generate_title(
         stream: false,
         tool_choice: "none".to_string(),
         reasoning_effort: None,
+        // 标题是一次极短输出（max_tokens=40）：必须**禁用思考**，否则推理模型会把预算
+        // 耗在 reasoning 上、正文为空（与 TS `generate-title.ts` 的 `thinking: false` 对齐）
+        thinking: Some(false),
     };
 
     let started = crate::telemetry::now_ms();

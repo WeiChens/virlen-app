@@ -236,6 +236,13 @@ pub struct ChatRequest {
     pub stream: bool,
     pub tool_choice: String,
     pub reasoning_effort: Option<String>,
+    /// 是否启用思考 / 推理模式（与 TS `ChatRequest.thinking` 同语义）。
+    ///
+    /// - `Some(false)`：**禁用思考**（标题生成等短输出场景）—— openai 兼容写
+    ///   `thinking:{type:'disabled'}` + `reasoning_effort:'none'`；anthropic 写
+    ///   `thinking:{type:'disabled'}`；桥接协议（gemini 等）由 TS provider 处理。
+    /// - `None`：不干预（普通聊天 / 压缩 / 验证）。
+    pub thinking: Option<bool>,
 }
 
 #[derive(Debug, Clone)]

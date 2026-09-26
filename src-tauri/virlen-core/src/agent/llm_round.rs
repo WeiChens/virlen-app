@@ -87,6 +87,8 @@ pub async fn do_llm_round(
         stream: session.params.stream,
         tool_choice: "auto".to_string(),
         reasoning_effort: reasoning_effort.map(String::from),
+        // 普通聊天不禁用思考（只有标题生成那种短输出场景才需要）
+        thinking: None,
     };
 
     let trace_id = crate::telemetry::get_session_trace(session_id).unwrap_or_default();

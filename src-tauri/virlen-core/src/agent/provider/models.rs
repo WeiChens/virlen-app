@@ -103,6 +103,7 @@ pub async fn verify_connection(conn: &ProviderConnection, model: &str) -> Result
         stream: false,
         tool_choice: String::new(),
         reasoning_effort: None,
+        thinking: None,
     };
 
     let cancel = CancellationToken::new();
