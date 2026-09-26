@@ -12,7 +12,7 @@
  *   2. 适配器给出的内嵌目录 == 权威源文件本身（**不存在第二份副本**）；
  *   3. `providerCatalog()` 的 fail-fast 语义：未水合时抛错，水合后同步可读。
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import CATALOG_SOURCE from '../../../src-tauri/virlen-core/src/agent/provider/provider_catalog.json?raw'
 import {
   hasProviderCatalog,
@@ -73,5 +73,35 @@ describe('providerCatalog 的 fail-fast 语义', () => {
     expect(hasProviderCatalog()).toBe(true)
     expect(providerTemplates()).toEqual(SOURCE.templates)
     expect(reasoningEffortUnion()).toEqual(SOURCE.reasoningEffortUnion)
+  })
+})
+
+/**
+ * 启动顺序契约：**模块顶层不得读快照**（2026-09-26 真踩到的启动级 bug）
+ *
+ * 快照是「启动水合 + 同步读」：水合发生在 `main.ts` 的 `init()` 里，而 UI 模块经
+ * `App.tsx` **静态导入** —— ES 模块求值**先于** `main()`。谁在模块顶层读快照，谁就在
+ * 水合之前 fail-fast 抛错；更糟的是这会让整个依赖图求值失败，`main()` 根本不执行，
+ * 窗口（`visible: false`，只在 `requestAnimationFrame` 里 `show()`）永不显示。
+ *
+ * `tests/setup.ts` 的全局水合会把这一刻盖住，所以这里用 `vi.resetModules()` 拿一份
+ * **从未水合过**的全新模块图来复现，并先向内校验它确实未水合（否则用例会真空通过）。
+ */
+describe('启动顺序契约：目录未水合时 UI 模块仍可导入', () => {
+  // ⚠️ `vi.resetModules()` 只影响此后**动态导入**的模块图；本文件外层静态导入的那些实例
+  //    仍是 setup.ts 水合过的，所以这个用例不会污染同文件的其他用例。
+  it('setupFlow 不得在模块顶层读快照', async () => {
+    vi.resetModules()
+
+    // 前置校验（防止用例真空通过）：这份全新模块图确实未水合
+    const freshCatalog = await import('@/domain/provider/catalog')
+    expect(freshCatalog.hasProviderCatalog()).toBe(false)
+    const freshService = await import('@/services/provider-service')
+    expect(() => freshService.providerService.getDefaultProviderList()).toThrow(
+      /未水合/,
+    )
+
+    // 正题：未水合时导入 UI 模块不得抛错
+    await expect(import('@/ui/pages/setupFlow')).resolves.toBeDefined()
   })
 })

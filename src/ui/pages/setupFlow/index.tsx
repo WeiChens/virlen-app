@@ -28,7 +28,6 @@ interface Props {
 
 /* ==================== 自定义下拉框 ==================== */
 
-const defaultProviderList = providerService.getDefaultProviderList()
 function ProviderSelect({
   value,
   onChange,
@@ -51,7 +50,10 @@ function ProviderSelect({
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [open])
 
-  const options = defaultProviderList
+  // ⚠️ 必须在**渲染期**读模板表，不能在模块顶层读：本模块经 `App.tsx` 静态导入，
+  //    ES 模块求值**先于** `main.ts` 的 `main()` —— 那一刻 `providerCatalog()` 的快照
+  //    还是 `null`，会 fail-fast 抛错，整个应用起不来（窗口都不显示）。2026-09-26 真踩到。
+  const options = providerService.getDefaultProviderList()
   const selected = options.find((opt) => opt.templateName === value)
 
   return (
@@ -206,8 +208,11 @@ function SetupProviderPage({
   const [fetching, setFetching] = useState(false)
   const [saving, setSaving] = useState(false)
 
+  // 同上：渲染期读快照，不做模块顶层求值
   const template = selectedTemplate
-    ? defaultProviderList.find((opt) => opt.templateName === selectedTemplate)
+    ? providerService
+        .getDefaultProviderList()
+        .find((opt) => opt.templateName === selectedTemplate)
     : null
   const isCustom = selectedTemplate === 'custom'
 

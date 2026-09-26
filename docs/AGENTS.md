@@ -585,6 +585,12 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 - **边界**：非 Windows 的编译**本地无法复现**（依据是「clippy 已证明这些项在 Linux 上零引用 → 门禁掉不可能破坏编译」+ 逐项引用点 grep 审计）；`virlen-app` 的 Linux 专属分支（`#[cfg(target_os = "linux")]` 等约 7 处）**从未被 clippy 检查过**。
 - **④ 续修（同一轮第二次 push）**：core 修完后 ubuntu clippy 才轮到 `virlen-app`，又露出 **3 条同类告警**（全在 `tray/notify.rs`）—— `show_notification` 的 `session_id` 只在 Windows 分支用（补 `#[cfg(not(target_os = "windows"))] let _ = session_id;`）；`PACKAGE_APP_ID`（原 `cfg(any(windows, test))`，那个 `test` 兜底已无使用者）与 `toast_app_id`（调用方 `show_owned` / `init_app_identity` 都是 Windows 专属，同 `is_packaged()`）改成 `#[cfg(target_os = "windows")]`。判据：报错行的 `due to N previous errors` 就是该 target 的**全部**告警数，所以这批是完整的；剩下的未验证单元只有 `virlen-app` 的 bin（`main.rs`，3 行转发）。**教训同上：平台专属项一律显式门禁，两侧都得能编译。**
 
+**11.32 启动即崩：UI 模块在模块顶层读了「启动水合」的快照（2026-09-26 用户报回 → 已修）** —— 现象：启动报 `Uncaught Error: 供应商目录尚未水合…`，且窗口根本不显示（不是白屏，是压根没 `show()`）。
+- **根因**：`setupFlow/index.tsx` 模块顶层写了 `const defaultProviderList = providerService.getDefaultProviderList()`。快照是「启动水合 + 同步读」：水合在 `main.ts` 的 `init()` 里，而 `main.ts` **静态导入** `App.tsx` → `App.tsx` 静态导入 `SetupFlow` —— ES 模块求值**先于** `main()`，那一刻快照还是 `null` → `providerCatalog()` fail-fast 抛错 → 整张依赖图求值失败 → `main()` 不执行 → 窗口（`visible: false`，只在 `requestAnimationFrame` 里 `show()`）永不显示。
+- **为何测试没拦住**：`src/tests/setup.ts` 全局调了 `setProviderCatalog(...)`，把这一刻盖住了（`setPromptTexts` / `setToolDefinitionsLoader` 同理）。
+- **结论 / 改哪里**：把读取移进组件体内（渲染期读）。判断标准：`providerCatalog()` / `providerTemplates()` / `reasoningEffortUnion()` / `defaultReasoningEffortList()` / `sortReasoningEfforts()` / `promptText()`、以及 `providerService.getDefaultProviderList()` —— 一律只在函数 / 组件 / 事件回调里调用，**模块顶层 == 未水合**。
+- 回归用例：`src/tests/contracts/provider-catalog-contract.test.ts`（用 `vi.resetModules()` 拿一份从未水合过的全新模块图，先断言它确实未水合、再导入 UI 模块）；全仓 407 个 ts/tsx 扫描确认该 bug 类只此一处。
+
 **踩坑前必读：`docs/tray-implementation-plan.md`**（托盘 / 关闭不退出 / 后台工作的完整方案与实现记录）。
 
 ---
@@ -640,3 +646,4 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
   6. 是否引入无关改动、是否触碰 §8 安全红线？
   7. 若改了 workflow / 打包流程 → 产物路径与 `upload-artifact` 的 `path`、Release 的 `files` glob 是否对齐？（CLI 发布物是 **zip**（含视觉模型）：命名约束 / zip 内布局 / 打包自检见 §11.29；**CLI 构建步骤的三元组用 `CARGO_BUILD_TARGET` 环境变量**，不要走 `pnpm run … -- --target`，见 §11.31）；
   8. 新增/修改了**平台专属代码**（`#[cfg(target_os = …)]`）→ 反向平台能不能编译？（CI 的 clippy 只在 ubuntu 跑，Windows 专属的常量 / 函数在 Linux 上就是 `dead-code`，必须显式门禁，见 §11.31）
+  9. 有没有在**模块顶层**读「启动水合」的快照（`providerCatalog()` / `promptText()` / `providerService.getDefaultProviderList()` …）？那等于在 `main.ts` 水合之前读 —— 整个应用会**启动即崩、窗口都不显示**，见 §11.32；
