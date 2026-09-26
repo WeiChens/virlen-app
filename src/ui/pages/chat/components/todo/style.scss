@@ -278,8 +278,7 @@
   // 鼠标移入**这一行**（不一定非要停在文字上）就滚，移出即回到开头。
   // 长清单里每行都自己在滚会很吵，所以不做常驻动画。
   &:hover .todo-title.is-overflowing .todo-title-text {
-    animation: todo-title-marquee var(--todo-marquee-dur, 6s) ease-in-out
-      infinite alternate;
+    animation: todo-title-marquee var(--todo-marquee-dur, 6s) ease-in-out infinite alternate;
   }
 
   .todo-status {
@@ -458,6 +457,10 @@
     background: var(--primary-color, #3b6ef6);
     border-color: var(--primary-color, #3b6ef6);
     color: #fff;
+
+    &:hover:not(:disabled) {
+      background: var(--primary-hover, #4338ca);
+    }
   }
 
   &.ghost {

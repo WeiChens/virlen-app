@@ -185,6 +185,39 @@
     }
   }
 
+  /* 自定义时间区间：独占一行（flex-basis:100% 在 wrap 容器里强制换行） */
+  .custom-range {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-basis: 100%;
+
+    .range-input {
+      height: 26px;
+      padding: 0 8px;
+      border: 1px solid var(--border-color, #e5e5e5);
+      border-radius: 6px;
+      background: var(--bg-primary, #fff);
+      color: var(--text-primary, #1a1a1a);
+      font-size: 12px;
+
+      &:focus-visible {
+        outline: var(--focus-ring);
+        outline-offset: 1px;
+      }
+    }
+
+    .range-sep {
+      color: var(--text-secondary, #666);
+      font-size: 12px;
+    }
+
+    .range-hint {
+      color: var(--accent-warn, #f59e0b);
+      font-size: 12px;
+    }
+  }
+
   .scope-toggle {
     display: inline-flex;
     align-items: center;
@@ -585,6 +618,103 @@
   margin: 0;
   font-size: 12px;
   color: var(--accent-warn, #f59e0b);
+}
+
+/* ===== 明细汇总（点按钮触发，作用于全部筛选结果） ===== */
+.table-summary-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+
+  .summarize-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 12px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-primary, #1a1a1a);
+    font-size: 12px;
+    cursor: pointer;
+    min-width: 80px;
+    justify-content: center;
+    text-align: center;
+
+    &:hover:not(:disabled) {
+      background: var(--hover-bg, #f0f0f0);
+      border-color: var(--accent-color, #4f46e5);
+    }
+
+    &:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 2px;
+    }
+
+    .spinner {
+      width: 12px;
+      height: 12px;
+      margin: 0 auto;
+      border: 2px solid color-mix(in srgb, var(--accent-color, #4f46e5) 35%, transparent);
+      border-top-color: var(--accent-color, #4f46e5);
+      border-radius: 50%;
+      animation: tokenStatsSpin 0.7s linear infinite;
+    }
+  }
+
+  .summary-hint {
+    font-size: 12px;
+    color: var(--text-secondary, #666);
+  }
+
+  .table-summary {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    padding: 4px 12px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 8px;
+    background: var(--bg-secondary, #f7f7f8);
+
+    .summary-scope {
+      font-size: 12px;
+      color: var(--text-secondary, #666);
+    }
+
+    .summary-item {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 6px;
+
+      .summary-label {
+        font-size: 12px;
+        color: var(--text-secondary, #666);
+      }
+
+      .summary-value {
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+
+        &.strong {
+          font-weight: 600;
+        }
+      }
+    }
+  }
+}
+
+@keyframes tokenStatsSpin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* 侧边栏入口按钮（新对话下方） */

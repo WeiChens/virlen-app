@@ -1,0 +1,65 @@
+/**
+ * StepWorkdir — 引导第二步：设置工作目录样式
+ */
+
+.setup-workdir {
+  text-align: center;
+
+  h2 {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 8px;
+  }
+
+  /* 目录路径显示 */
+  .workdir-display {
+    margin: 28px 0;
+    padding: 16px 20px;
+    background: var(--bg-secondary);
+    border: 1.5px solid var(--border-color);
+    border-radius: 10px;
+    transition: border-color 0.15s ease;
+  }
+
+  .workdir-display:hover {
+    border-color: color-mix(in srgb, var(--primary) 45%, var(--border-color));
+  }
+
+  .workdir-path {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+    color: var(--text-primary);
+    word-break: break-all;
+    text-align: left;
+  }
+
+  .workdir-path-icon {
+    display: flex;
+    flex-shrink: 0;
+    color: var(--primary);
+
+    svg {
+      width: 22px;
+      height: 22px;
+    }
+  }
+
+  .workdir-path-text {
+    line-height: 1.5;
+    color: var(--text-primary);
+
+    /* 未选择目录时弱化显示，形成「空 / 有值」对比 */
+    &.is-empty {
+      color: var(--text-tertiary);
+    }
+  }
+
+  .workdir-hint {
+    margin: 12px 0 28px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+  }
+}

@@ -1,0 +1,199 @@
+/**
+ * StepProvider — 引导第三步：模型配置样式
+ */
+
+.setup-provider {
+  text-align: center;
+
+  h2 {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 8px;
+  }
+
+  .setup-provider-icon {
+    margin-bottom: 16px;
+    color: var(--primary);
+
+    svg {
+      width: 64px;
+      height: 64px;
+    }
+  }
+
+  /* ====== 字段区 ====== */
+
+  .api-key-section {
+    text-align: left;
+    margin-bottom: 28px;
+  }
+
+  .api-key-label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .api-key-input-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+
+  .api-key-input {
+    width: 100%;
+    height: 42px;
+    padding: 0 44px 0 14px;
+    font-size: 14px;
+    font-family: monospace;
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    border: 1.5px solid var(--border-color);
+    border-radius: 8px;
+    outline: none;
+    transition:
+      border-color 0.15s ease,
+      box-shadow 0.15s ease;
+
+    /* 无切换按钮的输入（如 Base URL）：右侧无需预留空间 */
+    &.has-no-toggle {
+      padding-right: 14px;
+    }
+  }
+
+  .api-key-input:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px var(--primary-soft);
+  }
+
+  .api-key-input::placeholder {
+    color: var(--text-tertiary);
+    font-family: inherit;
+  }
+
+  .api-key-toggle {
+    position: absolute;
+    right: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    color: var(--text-tertiary);
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition:
+      color 0.15s ease,
+      background 0.15s ease;
+
+    svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    &:hover {
+      color: var(--text-primary);
+      background: var(--hover-bg);
+    }
+
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 1px;
+    }
+  }
+
+  .api-key-hint {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+  }
+
+  /* 模型输入行 */
+  .model-input-row {
+    display: flex;
+    gap: 8px;
+
+    input {
+      flex: 1;
+      height: 42px;
+      padding: 0 12px;
+      font-size: 13px;
+      font-family: monospace;
+      color: var(--text-primary);
+      background: var(--bg-secondary);
+      border: 1.5px solid var(--border-color);
+      border-radius: 8px;
+      outline: none;
+      transition:
+        border-color 0.15s ease,
+        box-shadow 0.15s ease;
+    }
+
+    input:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px var(--primary-soft);
+    }
+
+    input::placeholder {
+      color: var(--text-tertiary);
+      font-family: inherit;
+    }
+  }
+
+  /* 自动获取模型按钮：降为次级视觉，避免与主操作争夺注意力 */
+  .fetch-models-btn {
+    padding: 0 16px;
+    height: 42px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--primary);
+    background: var(--primary-soft);
+    border: 1.5px solid color-mix(in srgb, var(--primary) 35%, transparent);
+    border-radius: 8px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition:
+      border-color 0.15s ease,
+      background 0.15s ease;
+
+    &:hover:not(:disabled) {
+      border-color: var(--primary);
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 2px;
+    }
+  }
+
+  /* ====== 内联错误 ====== */
+
+  .setup-error {
+    margin: -8px 0 20px;
+    padding: 10px 14px;
+    font-size: 13px;
+    text-align: left;
+    color: var(--color-error-text, var(--color-error));
+    background: var(--color-error-bg);
+    border: 1px solid var(--color-error-border);
+    border-radius: 8px;
+  }
+
+  /* 主按钮禁用原因提示 */
+  .setup-form-hint {
+    margin: 0 0 12px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+  }
+}

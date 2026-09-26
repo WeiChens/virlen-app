@@ -1,6 +1,9 @@
 /**
  * provider-edit-modal — Provider 编辑/添加表单
  * 纯 UI 组件，不依赖 store，通过 props 传值
+ *
+ * 表单按「基础信息 / 模型 / 高级设置」三段分组，便于扫描；
+ * 必填项、禁用原因与校验错误均就近提示。
  */
 import { useState, useEffect } from 'react'
 import Modal from '@/ui/components/shared/Modal'
@@ -88,6 +91,7 @@ export default function ProviderEditModal({
   const [fetching, setFetching] = useState(false)
   const [reasoningEffortList, setReasoningEffortList] = useState<string[]>([])
   const [reasoningEffort, setReasoningEffort] = useState('')
+  const [baseUrlError, setBaseUrlError] = useState('')
   useEffect(() => {
     if (visible) {
       if (initialConfig) {
@@ -125,10 +129,14 @@ export default function ProviderEditModal({
       }
       setShowKey(false)
       setNewModelId('')
+      setBaseUrlError('')
     }
   }, [visible, initialConfig, template])
 
   const isValid = label.trim() && type && (template || baseUrl.trim())
+
+  /** 模板自带类型/地址时，这两个字段不可编辑（"自定义"除外） */
+  const isTemplateFixed = templateName !== 'custom'
 
   function addModel() {
     const id = newModelId.trim()
@@ -161,12 +169,17 @@ export default function ProviderEditModal({
 
   function handleSave() {
     if (!isValid) return
+    setBaseUrlError('')
     if (!baseUrl.trim()) {
-      showToast(t('请输入 API 地址'))
+      const msg = t('请输入 API 地址')
+      setBaseUrlError(msg)
+      showToast(msg)
       return
     }
     if (isURL(baseUrl.trim()) === false) {
-      showToast(t('请输入正确的 API 地址'))
+      const msg = t('请输入正确的 API 地址')
+      setBaseUrlError(msg)
+      showToast(msg)
       return
     }
     onSave({
@@ -256,123 +269,190 @@ export default function ProviderEditModal({
       onClose={onClose}
       width={`min(90vw, 800px)`}
       closeOnClickOutside={false}
-      move>
-      <div className="provider-edit-form">
-        <div className="form-group">
-          <label>{t('名称')}</label>
-          <input
-            type="text"
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            placeholder={t('例如：我的 DeepSeek')}
-            autoComplete="off"
-          />
-        </div>
-
-        <div className="form-group">
-          <label>{t('类型')}</label>
-          {allowTypeList.length > 0 ? (
-            <Select
-              value={type}
-              onChange={(v) => {
-                setType(v)
-                const baseUrl =
-                  allowTypeList.find((t) => t.type === v)?.baseUrl || ''
-                setBaseUrl(baseUrl)
-              }}
-              options={allowTypeList.map((t) => ({
-                value: t.type,
-                label: t.type,
-              }))}
-              width={200}
-            />
-          ) : (
-            <Select
-              value={type}
-              onChange={(v) => setType(v)}
-              disabled={templateName !== 'custom'}
-              options={[
-                { value: 'openai', label: 'OpenAI' },
-                { value: 'anthropic', label: 'Anthropic' },
-                { value: 'gemini', label: 'Gemini' },
-              ]}
-              width={200}
-            />
+      move
+      footer={
+        <div className="provider-edit-footer">
+          {!isValid && (
+            <span className="form-footer-hint">
+              {t('请填写必填项（名称、API 地址）后保存')}
+            </span>
           )}
+          <button className="btn-cancel" onClick={onClose}>
+            {t('取消')}
+          </button>
+          <button
+            className="btn-confirm"
+            onClick={handleSave}
+            disabled={!isValid}>
+            {isEdit ? t('保存') : t('添加')}
+          </button>
         </div>
+      }>
+      <div className="provider-edit-form">
+        {/* ===== 基础信息 ===== */}
+        <section className="form-section">
+          <h4 className="form-section-title">{t('基础信息')}</h4>
 
-        <div className="form-group">
-          <label>{t('API 地址')}</label>
-          <div className="api-input-wrapper">
-            <input
-              type="text"
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="https://api.openai.com/v1"
-              disabled={templateName !== 'custom'}
-              autoComplete="off"
-            />
-            {currentTemplate?.officialLink && (
-              <a
-                className="link"
-                onClick={() => {
-                  openUrl(currentTemplate.officialLink!)
-                }}>
-                {t('服务商网址')}
-              </a>
+          <div className="form-grid">
+            <div className="form-group">
+              <label htmlFor="pe-name">
+                {t('名称')}
+                <span className="required" aria-hidden="true">
+                  *
+                </span>
+              </label>
+              <input
+                id="pe-name"
+                type="text"
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                placeholder={t('例如：我的 DeepSeek')}
+                autoComplete="off"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>{t('类型')}</label>
+              {allowTypeList.length > 0 ? (
+                <Select
+                  value={type}
+                  onChange={(v) => {
+                    setType(v)
+                    const baseUrl =
+                      allowTypeList.find((t) => t.type === v)?.baseUrl || ''
+                    setBaseUrl(baseUrl)
+                  }}
+                  options={allowTypeList.map((t) => ({
+                    value: t.type,
+                    label: t.type,
+                  }))}
+                  width="100%"
+                />
+              ) : (
+                <Select
+                  value={type}
+                  onChange={(v) => setType(v)}
+                  disabled={isTemplateFixed}
+                  options={[
+                    { value: 'openai', label: 'OpenAI' },
+                    { value: 'anthropic', label: 'Anthropic' },
+                    { value: 'gemini', label: 'Gemini' },
+                  ]}
+                  width="100%"
+                />
+              )}
+              {isTemplateFixed && (
+                <span className="form-hint">
+                  {t('由服务商模板预置，不可修改')}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="pe-baseurl">
+              {t('API 地址')}
+              {!isTemplateFixed && (
+                <span className="required" aria-hidden="true">
+                  *
+                </span>
+              )}
+            </label>
+            <div className="api-input-wrapper">
+              <input
+                id="pe-baseurl"
+                type="text"
+                value={baseUrl}
+                onChange={(e) => {
+                  setBaseUrl(e.target.value)
+                  if (baseUrlError) setBaseUrlError('')
+                }}
+                placeholder="https://api.openai.com/v1"
+                disabled={isTemplateFixed}
+                autoComplete="off"
+                aria-invalid={!!baseUrlError}
+              />
+              {currentTemplate?.officialLink && (
+                <button
+                  type="button"
+                  className="link"
+                  onClick={() => {
+                    openUrl(currentTemplate.officialLink!)
+                  }}>
+                  {t('服务商网址')}
+                </button>
+              )}
+            </div>
+            {baseUrlError && (
+              <span className="field-error" role="alert">
+                {baseUrlError}
+              </span>
+            )}
+            {isTemplateFixed && (
+              <span className="form-hint">
+                {t('由服务商模板预置，不可修改')}
+              </span>
             )}
           </div>
-        </div>
-        <div className="form-group">
-          <label>{t('API Key')}</label>
-          <div className="input-with-action">
-            <input
-              type={showKey ? 'text' : 'password'}
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="xx-..."
-              autoComplete={showKey ? 'off' : 'new-password'}
-            />
-            <button
-              type="button"
-              className={`toggle-vis ${showKey ? 'active' : ''}`}
-              onClick={() => setShowKey(!showKey)}
-              title={showKey ? t('隐藏') : t('显示')}>
-              {showKey ? <PwdShow /> : <PwdHide />}
-            </button>
-          </div>
-        </div>
 
-        <div className="form-group">
-          <div className="row">
-            <label>{t('模型列表')}</label>
-            <span
-              className="clear"
-              onClick={() => {
-                setModels([])
-              }}>
-              {t('清空')}
-            </span>
+          <div className="form-group">
+            <label htmlFor="pe-apikey">{t('API Key')}</label>
+            <div className="input-with-action">
+              <input
+                id="pe-apikey"
+                type={showKey ? 'text' : 'password'}
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="xx-..."
+                autoComplete={showKey ? 'off' : 'new-password'}
+              />
+              <button
+                type="button"
+                className={`toggle-vis ${showKey ? 'active' : ''}`}
+                onClick={() => setShowKey(!showKey)}
+                title={showKey ? t('隐藏') : t('显示')}
+                aria-label={showKey ? t('隐藏') : t('显示')}>
+                {showKey ? <PwdShow fill="currentColor" /> : <PwdHide fill="currentColor" />}
+              </button>
+            </div>
           </div>
-          <div className="model-list-section">
-            <div className="model-list-tags">
-              {models.length === 0 && (
-                <span className="model-empty">{t('暂未添加模型')}</span>
-              )}
-              {models.map((m) => (
-                <span key={m} className="model-tag">
-                  {m}
-                  <button
-                    type="button"
-                    className="model-tag-remove"
-                    onClick={() => removeModel(m)}>
-                    ×
-                  </button>
-                </span>
-              ))}
+        </section>
+
+        {/* ===== 模型 ===== */}
+        <section className="form-section">
+          <div className="form-group">
+            <div className="row">
+              <label htmlFor="pe-model-input">{t('模型')}</label>
+              <button
+                type="button"
+                className="clear"
+                onClick={() => setModels([])}
+                disabled={models.length === 0}>
+                {t('清空')}
+              </button>
+            </div>
+            <div className="model-list-section">
+              <div className="model-list-tags">
+                {models.length === 0 && (
+                  <span className="model-empty">{t('暂未添加模型')}</span>
+                )}
+                {models.map((m) => (
+                  <span key={m} className="model-tag">
+                    {m}
+                    <button
+                      type="button"
+                      className="model-tag-remove"
+                      onClick={() => removeModel(m)}
+                      aria-label={tpl('移除模型 $__model__', { model: m })}>
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
             </div>
             <div className="model-input-row">
               <input
+                id="pe-model-input"
                 type="text"
                 value={newModelId}
                 onChange={(e) => setNewModelId(e.target.value)}
@@ -384,7 +464,8 @@ export default function ProviderEditModal({
                 type="button"
                 className="model-add-btn"
                 onClick={addModel}
-                disabled={!newModelId.trim()}>
+                disabled={!newModelId.trim()}
+                aria-label={t('添加模型')}>
                 +
               </button>
               <button
@@ -395,59 +476,54 @@ export default function ProviderEditModal({
                 {fetching ? t('获取中...') : t('自动获取模型列表')}
               </button>
             </div>
-          </div>
-        </div>
 
-        <div className="form-group">
-          <label>{t('推理强度候选项')}</label>
-          <div className="effort-checkbox-list">
-            {reasoningEffortUnion().map((val) => (
-              <label
-                key={val}
-                className={`effort-checkbox ${reasoningEffortList.includes(val) ? 'checked' : ''}`}>
-                <input
-                  type="checkbox"
-                  checked={reasoningEffortList.includes(val)}
-                  onChange={() => toggleReasoningEffort(val)}
-                />
-                {val}
-              </label>
-            ))}
           </div>
-          <span className="form-hint">
-            {t('勾选该服务商实际支持的档位，聊天界面里只能从勾选值中切换')}
-          </span>
-        </div>
+        </section>
 
-        {reasoningEffortList.length > 0 && (
+        {/* ===== 高级设置 ===== */}
+        <section className="form-section">
           <div className="form-group">
-            <label>{t('默认推理强度')}</label>
-            <Select
-              value={reasoningEffort}
-              onChange={(v) => setReasoningEffort(v)}
-              options={[
-                { value: '', label: t('默认（不设置）') },
-                ...reasoningEffortList.map((val) => ({
-                  value: val,
-                  label: val,
-                })),
-              ]}
-              width={200}
-            />
+            <label>{t('推理强度候选项')}</label>
+            <div className="effort-checkbox-list">
+              {reasoningEffortUnion().map((val) => (
+                <label
+                  key={val}
+                  className={`effort-checkbox ${reasoningEffortList.includes(val) ? 'checked' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={reasoningEffortList.includes(val)}
+                    onChange={() => toggleReasoningEffort(val)}
+                  />
+                  {val}
+                </label>
+              ))}
+            </div>
             <span className="form-hint">
-              {t('会话未单独切换时使用此默认值')}
+              {t('勾选该服务商实际支持的档位，聊天界面里只能从勾选值中切换')}
             </span>
           </div>
-        )}
 
-        <div className="form-footer">
-          <button className="btn-cancel" onClick={onClose}>
-            {t('取消')}
-          </button>
-          <button className="btn-save" onClick={handleSave} disabled={!isValid}>
-            {isEdit ? t('保存') : t('添加')}
-          </button>
-        </div>
+          {reasoningEffortList.length > 0 && (
+            <div className="form-group">
+              <label>{t('默认推理强度')}</label>
+              <Select
+                value={reasoningEffort}
+                onChange={(v) => setReasoningEffort(v)}
+                options={[
+                  { value: '', label: t('默认（不设置）') },
+                  ...reasoningEffortList.map((val) => ({
+                    value: val,
+                    label: val,
+                  })),
+                ]}
+                width="100%"
+              />
+              <span className="form-hint">
+                {t('会话未单独切换时使用此默认值')}
+              </span>
+            </div>
+          )}
+        </section>
       </div>
     </Modal>
   )

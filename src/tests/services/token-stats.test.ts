@@ -37,9 +37,11 @@ import {
   loadStats,
   outputTokPerSec,
   parseTimeKey,
+  rangeToBounds,
   rangeToFromTs,
   resolvePrice,
   startOfToday,
+  summarizeRecords,
   timeKeyOf,
   type CostedRecord,
 } from '@/services/token-stats-service'
@@ -70,6 +72,24 @@ describe('时间范围', () => {
     expect(rangeToFromTs('today', base)).toBe(new Date(2026, 8, 21).getTime())
     expect(rangeToFromTs('7d', base)).toBe(new Date(2026, 8, 21).getTime() - 6 * DAY)
     expect(rangeToFromTs('all', base)).toBeUndefined()
+  })
+
+  it('rangeToBounds 覆盖 昨天（含上界）与自定义区间', () => {
+    const base = new Date(2026, 8, 21, 9, 0, 0).getTime() // 2026-09-21 09:00 本地
+    const today0 = new Date(2026, 8, 21).getTime()
+    // 昨天：[昨天 0 点, 今天 0 点 - 1ms]
+    expect(rangeToBounds('yesterday', base)).toEqual({
+      fromTs: today0 - DAY,
+      toTs: today0 - 1,
+    })
+    // 自定义：两端归一化（颠倒也从小到大）
+    expect(rangeToBounds('custom', base, { from: 500, to: 100 })).toEqual({
+      fromTs: 100,
+      toTs: 500,
+    })
+    // 自定义缺省 → 不过滤；预设范围只有下界
+    expect(rangeToBounds('custom', base, null)).toEqual({})
+    expect(rangeToBounds('7d', base)).toEqual({ fromTs: today0 - 6 * DAY })
   })
 })
 
@@ -305,6 +325,84 @@ describe('输出速度（tok/s）', () => {
     ]
     const out = filterAndSortRecords(data, {}, 'tokPerSec', 'desc')
     expect(out.map((r) => r.id)).toEqual([2, 1, 3])
+  })
+})
+
+describe('summarizeRecords（明细汇总，作用于全部筛选结果）', () => {
+  const rec = (p: Partial<CostedRecord>): CostedRecord => ({
+    id: 0,
+    ts: 0,
+    sessionId: 's1',
+    sessionTitle: '会话',
+    messageId: null,
+    model: 'gpt-4o',
+    providerType: null,
+    providerConfigId: null,
+    kind: 'chat_round',
+    round: null,
+    promptTokens: 0,
+    completionTokens: 0,
+    cachedTokens: 0,
+    totalTokens: 0,
+    estimated: false,
+    durationMs: 0,
+    traceId: null,
+    cost: { input: 0, output: 0, cached: 0, total: 0 },
+    ...p,
+  })
+
+  it('对全部记录求和（非当前页），tok/s 按可测行加权，费用温总', () => {
+    const s = summarizeRecords([
+      rec({
+        promptTokens: 100,
+        completionTokens: 200,
+        cachedTokens: 50,
+        totalTokens: 300,
+        durationMs: 1_000,
+        cost: { input: 0.1, output: 0.2, cached: 0.05, total: 0.35 },
+      }),
+      rec({
+        promptTokens: 10,
+        completionTokens: 20,
+        totalTokens: 30,
+        durationMs: 1_000,
+        cost: { input: 0.01, output: 0.02, cached: 0, total: 0.03 },
+      }),
+      // 未记耗时 → 不参与 tok/s（但 token 与费用仍计入合计）
+      rec({ promptTokens: 1, completionTokens: 5, totalTokens: 6, durationMs: 0 }),
+    ])
+    expect(s.count).toBe(3)
+    expect(s.promptTokens).toBe(111)
+    expect(s.completionTokens).toBe(225)
+    expect(s.cachedTokens).toBe(50)
+    expect(s.totalTokens).toBe(336)
+    expect(s.rateSamples).toBe(2)
+    // (200 + 20) / (2000 ms / 1000) = 110
+    expect(s.tokPerSec).toBeCloseTo(110)
+    // 费用逐项求和
+    expect(s.cost.total).toBeCloseTo(0.38)
+    expect(s.cost.input).toBeCloseTo(0.11)
+    expect(s.cost.output).toBeCloseTo(0.22)
+    expect(s.cost.cached).toBeCloseTo(0.05)
+  })
+
+  it('无可测行时 tok/s 为 null（不当 0）', () => {
+    const s = summarizeRecords([rec({ completionTokens: 10, durationMs: 0 })])
+    expect(s.tokPerSec).toBeNull()
+    expect(s.rateSamples).toBe(0)
+  })
+
+  it('空集合返回全 0 且 tok/s 为 null', () => {
+    expect(summarizeRecords([])).toEqual({
+      count: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      cachedTokens: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cached: 0, total: 0 },
+      tokPerSec: null,
+      rateSamples: 0,
+    })
   })
 })
 

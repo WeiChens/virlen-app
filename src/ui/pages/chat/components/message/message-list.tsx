@@ -89,6 +89,7 @@ function ChatMessageList(props: ChatMessageListProps) {
                 <MessageBubble
                   onEdit={m.handleEditBubble}
                   onDelete={m.handleDeleteBubble}
+                  onTransferSummary={m.handleTransferSummary}
                   onQuote={m.handleQuoteBubble}
                   onQuoteJump={onQuoteJump}
                   message={msg}

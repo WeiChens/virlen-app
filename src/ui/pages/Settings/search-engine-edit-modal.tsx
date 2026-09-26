@@ -115,7 +115,23 @@ export default function SearchEngineEditModal({
       onClose={onClose}
       width={460}
       closeOnClickOutside={false}
-      move>
+      move
+      footer={
+        <>
+          <button
+            className="btn-cancel"
+            onClick={onClose}
+            disabled={validating}>
+            {t('取消')}
+          </button>
+          <button
+            className="btn-confirm"
+            onClick={handleSave}
+            disabled={!isValid || validating}>
+            {validating ? t('验证中...') : isEdit ? t('保存') : t('添加')}
+          </button>
+        </>
+      }>
       <div className="search-engine-edit-form">
         {/* 名称 */}
         <div className="form-group">
@@ -222,18 +238,6 @@ export default function SearchEngineEditModal({
             autoComplete="off"
             disabled
           />
-        </div>
-        {/* 按钮 */}
-        <div className="form-footer">
-          <button className="btn-cancel" onClick={onClose}>
-            {t('取消')}
-          </button>
-          <button
-            className="btn-save"
-            onClick={handleSave}
-            disabled={!isValid || validating}>
-            {validating ? t('验证中...') : isEdit ? t('保存') : t('添加')}
-          </button>
         </div>
       </div>
     </Modal>

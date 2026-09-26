@@ -538,7 +538,10 @@ function ChatSidebar({
       className={`chat-sidebar ${chatState.value.sidebarOpen ? '' : 'collapsed'} ${className}`}
       style={style}>
       <div className="sidebar-header">
-        <ripple-button className="new-chat-btn" onClick={handleNewSession}>
+        <ripple-button
+          className="new-chat-btn"
+          title={`${t('新对话')} (Ctrl+N)`}
+          onClick={handleNewSession}>
           <AddSvg />
           <span>{t('新对话')}</span>
         </ripple-button>

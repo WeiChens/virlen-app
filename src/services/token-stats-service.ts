@@ -41,8 +41,18 @@ export type {
   UsageStatsQuery,
 } from '@/infrastructure/statsRepo'
 
-/** 时间范围预设 */
-export type UsageRange = 'today' | '7d' | '30d' | 'all'
+/**
+ * 时间范围预设。
+ *  - `yesterday`：昨天 0 点 ~ 昨天 23:59:59.999；
+ *  - `custom`：由用户指定的绝对时间区间（需同时传入 `customRange`）。
+ */
+export type UsageRange = 'today' | 'yesterday' | '7d' | '30d' | 'all' | 'custom'
+
+/** 自定义时间区间（绝对时间，Unix ms 闭区间；from / to 顺序无所谓，内部会归一化） */
+export interface CustomRange {
+  from: number
+  to: number
+}
 
 /** 分桶维度（与 Rust `usage_group_expr` 白名单一致） */
 export type UsageGroupBy =
@@ -192,6 +202,71 @@ export function filterAndSortRecords(
   return out
 }
 
+/**
+ * 明细汇总结果。
+ *
+ * 注意：`summarizeRecords` 对**传入的全部记录**汇总，调用方应传「全部筛选结果」而非当前页 ——
+ * 这正是「汇总不是只算当前分页」的关键。
+ */
+export interface RecordsSummary {
+  /** 参与汇总的记录条数（= 全部筛选结果条数） */
+  count: number
+  promptTokens: number
+  completionTokens: number
+  cachedTokens: number
+  totalTokens: number
+  /** 总费用（逐行 `cost.total` 累加，币种与明细列一致） */
+  cost: TokenCost
+  /** 加权输出速度（tok/s）；无可测行时为 null */
+  tokPerSec: number | null
+  /** 参与 tok/s 计算的可测行数（其余行旧流水未记耗时） */
+  rateSamples: number
+}
+
+/**
+ * 明细汇总（Prompt / Completion / Cached / 合计 / 费用 / tok·s）。
+ *
+ * tok/s 采用**加权口径**：可测行的 Completion 之和 ÷ 可测行耗时之和 —— 相当于把所有可测调用
+ * 当成一次连续生成来看，避免「逐行速度再求平均」被大量极小请求拉偏。可测行须同时满足
+ * `durationMs > 0` 与 `completionTokens > 0`（旧流水未记耗时 → 不参与，与 `outputTokPerSec` 一致）；
+ * 无可测行时返回 null，UI 显示 `-`（不能当 0）。
+ */
+export function summarizeRecords(records: CostedRecord[]): RecordsSummary {
+  let promptTokens = 0
+  let completionTokens = 0
+  let cachedTokens = 0
+  let totalTokens = 0
+  let rateDurMs = 0
+  let rateCompletion = 0
+  let rateSamples = 0
+  const cost: TokenCost = { input: 0, output: 0, cached: 0, total: 0 }
+  for (const r of records) {
+    promptTokens += r.promptTokens
+    completionTokens += r.completionTokens
+    cachedTokens += r.cachedTokens
+    totalTokens += r.totalTokens
+    cost.input += r.cost.input
+    cost.output += r.cost.output
+    cost.cached += r.cost.cached
+    cost.total += r.cost.total
+    if (r.durationMs > 0 && r.completionTokens > 0) {
+      rateDurMs += r.durationMs
+      rateCompletion += r.completionTokens
+      rateSamples++
+    }
+  }
+  return {
+    count: records.length,
+    promptTokens,
+    completionTokens,
+    cachedTokens,
+    totalTokens,
+    cost,
+    tokPerSec: rateDurMs > 0 ? rateCompletion / (rateDurMs / 1000) : null,
+    rateSamples,
+  }
+}
+
 const HOUR_MS = 3600 * 1000
 const DAY_MS = 24 * HOUR_MS
 
@@ -203,20 +278,48 @@ export function startOfToday(now = Date.now()): number {
 }
 
 /**
- * 时间范围 → 起始时间戳（Unix ms）；`all` 返回 undefined 表示不过滤。
- * 只有「结束」端是隐含的（= 调用时刻），补零时用它决定轴终点。
+ * 时间范围 → 查询边界（Unix ms）。`fromTs` / `toTs` 为 undefined 表示该端不过滤。
+ *
+ * 预设范围（今日 / 近 7 天 / 近 30 天 / 全部）只有「起始」边界，结束端隐含为调用时刻；
+ * 而「昨天」与「自定义」必须显式给出结束边界 —— 否则「昨天」会把今天一并算进来。
+ * Rust 侧过滤为闭区间（`ts >= fromTs AND ts <= toTs`）。
  */
-export function rangeToFromTs(range: UsageRange, now = Date.now()): number | undefined {
+export function rangeToBounds(
+  range: UsageRange,
+  now = Date.now(),
+  custom?: CustomRange | null,
+): { fromTs?: number; toTs?: number } {
   switch (range) {
     case 'today':
-      return startOfToday(now)
+      return { fromTs: startOfToday(now) }
+    case 'yesterday': {
+      const start = startOfToday(now) - DAY_MS
+      // 结束端取「今天 0 点 - 1ms」= 昨天的最后一毫秒（配合闭区间恰好覆盖整天）
+      return { fromTs: start, toTs: startOfToday(now) - 1 }
+    }
     case '7d':
-      return startOfToday(now) - 6 * DAY_MS
+      return { fromTs: startOfToday(now) - 6 * DAY_MS }
     case '30d':
-      return startOfToday(now) - 29 * DAY_MS
+      return { fromTs: startOfToday(now) - 29 * DAY_MS }
+    case 'custom': {
+      // 缺任一端就当作「不过滤」（UI 应在区间不完整时不触发查询）
+      if (!custom) return {}
+      return {
+        fromTs: Math.min(custom.from, custom.to),
+        toTs: Math.max(custom.from, custom.to),
+      }
+    }
     default:
-      return undefined
+      return {}
   }
+}
+
+/**
+ * 时间范围 → 起始时间戳（Unix ms）；无下界返回 undefined。
+ * 保留此函数以兼容既有调用 / 测试；需要上界时请改用 `rangeToBounds`。
+ */
+export function rangeToFromTs(range: UsageRange, now = Date.now()): number | undefined {
+  return rangeToBounds(range, now).fromTs
 }
 
 // ==================== 时间桶补零（修「断轴」） ====================
@@ -466,9 +569,11 @@ export async function loadStats(
   opts: StatsContext = {},
 ): Promise<UsageStatsView> {
   const now = opts.now ?? Date.now()
+  const bounds = rangeToBounds(range, now, opts.custom)
   const query: UsageStatsQuery = {
     groupBy,
-    fromTs: rangeToFromTs(range, now),
+    fromTs: bounds.fromTs,
+    toTs: bounds.toTs,
     sessionId: opts.sessionId,
   }
 
@@ -497,11 +602,13 @@ export async function loadStats(
         : firstKey
           ? parseTimeKey(groupBy, firstKey)
           : null
+    // 轴终点：有显式上界（昨天 / 自定义）就用上界，否则补到「现在」（不补未来时段）
+    const axisEndMs = query.toTs ?? now
     if (startDate) {
       // 逐级放粗，取「列数 ≤ MAX_TIME_BUCKETS」的第一档（最粗兜底为「按月」）
       let picked: TimeUnit = TIME_UNITS[TIME_UNITS.length - 1]
       for (const cand of TIME_UNITS.slice(TIME_UNITS.indexOf(groupBy))) {
-        if (approxBucketCount(cand, startDate.getTime(), now) <= MAX_TIME_BUCKETS) {
+        if (approxBucketCount(cand, startDate.getTime(), axisEndMs) <= MAX_TIME_BUCKETS) {
           picked = cand
           break
         }
@@ -512,7 +619,7 @@ export async function loadStats(
         stats = await statsRepo.stats({ ...query, groupBy: picked })
       }
       // keys 为 null（列数离谱）时放弃补零：宁可断轴，也不截断已有数据
-      const keys = fillTimeKeys(picked, startDate, new Date(now))
+      const keys = fillTimeKeys(picked, startDate, new Date(axisEndMs))
       if (keys) rawBuckets = densifyTimeBuckets(picked, keys, stats.buckets)
     }
   }
@@ -554,11 +661,15 @@ export interface RecordsContext {
   sessionId?: string
   limit?: number
   offset?: number
+  /** 自定义时间区间：仅当 `range === 'custom'` 时生效（见 `rangeToBounds`） */
+  custom?: CustomRange | null
 }
 
 /** 统计查询上下文 */
 export interface StatsContext {
   sessionId?: string
+  /** 自定义时间区间：仅当 `range === 'custom'` 时生效（见 `rangeToBounds`） */
+  custom?: CustomRange | null
   /**
    * 按会话分桶时，把 sessionId 映射回它当前的 provider/model（用于取准单价）。
    * 由 UI 从 `sessionStore` 提供 —— 服务层不去 import store 之外的东西。
@@ -578,8 +689,10 @@ export async function loadRecords(
   range: UsageRange,
   opts: RecordsContext = {},
 ): Promise<{ records: CostedRecord[]; total: number }> {
+  const bounds = rangeToBounds(range, Date.now(), opts.custom)
   const page = await statsRepo.records({
-    fromTs: rangeToFromTs(range),
+    fromTs: bounds.fromTs,
+    toTs: bounds.toTs,
     sessionId: opts.sessionId,
     limit: opts.limit ?? 100,
     offset: opts.offset ?? 0,
@@ -628,10 +741,11 @@ export function kindLabel(kind: string): string {
 /** 导出明细为 CSV（返回保存路径；取消返回 null） */
 export async function exportUsageCsv(
   range: UsageRange,
-  opts: { sessionId?: string; limit?: number } = {},
+  opts: { sessionId?: string; limit?: number; custom?: CustomRange | null } = {},
 ): Promise<string | null> {
   const { records } = await loadRecords(range, {
     sessionId: opts.sessionId,
+    custom: opts.custom,
     limit: opts.limit ?? 5000,
     offset: 0,
   })

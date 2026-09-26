@@ -1,0 +1,83 @@
+/**
+ * step-indicator — 引导流程顶部进度指示样式
+ */
+
+.step-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  list-style: none;
+  margin: 0 0 36px;
+  padding: 0;
+
+  .step-indicator-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-tertiary);
+    transition: color 0.2s ease;
+  }
+
+  .step-indicator-dot {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    background: var(--bg-secondary);
+    border: 1.5px solid var(--border-color);
+    transition:
+      color 0.2s ease,
+      background 0.2s ease,
+      border-color 0.2s ease,
+      box-shadow 0.2s ease;
+  }
+
+  .step-indicator-label {
+    white-space: nowrap;
+  }
+
+  .step-indicator-line {
+    width: 36px;
+    height: 2px;
+    margin: 0 10px;
+    border-radius: 1px;
+    background: var(--border-color);
+    transition: background 0.2s ease;
+  }
+
+  /* 当前步骤：高亮 + 光环 */
+  .step-indicator-item.is-active {
+    color: var(--text-primary);
+
+    .step-indicator-dot {
+      color: var(--primary-fg, #fff);
+      background: var(--primary);
+      border-color: var(--primary);
+      box-shadow: 0 0 0 4px var(--primary-soft);
+    }
+  }
+
+  /* 已完成步骤：实心 + 对勾，连接线填充 */
+  .step-indicator-item.is-done {
+    color: var(--text-secondary);
+
+    .step-indicator-dot {
+      color: var(--primary-fg, #fff);
+      background: var(--primary);
+      border-color: var(--primary);
+    }
+
+    .step-indicator-line {
+      background: var(--primary);
+    }
+  }
+}

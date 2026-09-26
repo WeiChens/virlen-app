@@ -608,8 +608,9 @@ describe('消息气泡右键', () => {
     await act(async () => root.unmount())
   })
 
-  it('压缩摘要：复制摘要 / 删除（删除即放弃压缩，删本条及之后）', async () => {
+  it('压缩摘要：复制 / 转移到新对话 / 删除（删除即放弃压缩，删本条及之后）', async () => {
     const onDelete = vi.fn()
+    const onTransferSummary = vi.fn()
     const { root } = await render(
       <MessageBubble
         message={
@@ -621,12 +622,13 @@ describe('消息气泡右键', () => {
           } as any
         }
         onDelete={onDelete}
+        onTransferSummary={onTransferSummary}
       />,
     )
 
     window.getSelection()!.removeAllRanges()
     await rightClick(document.querySelector('.message-compress-summary')!)
-    expect(menuLabels()).toEqual(['复制', '删除'])
+    expect(menuLabels()).toEqual(['复制', '转移到新对话', '删除'])
 
     // 复制的是摘要正文（不是提示条上的文案）
     await act(async () => {
@@ -634,10 +636,17 @@ describe('消息气泡右键', () => {
     })
     expect(copyText).toHaveBeenCalledWith('SUMMARY_BODY')
 
-    // 删除：先二次确认；取消 → 不删
+    // 转移到新对话：把该摘要的 id 交给调用方（由它建会话 + 切换）
     await rightClick(document.querySelector('.message-compress-summary')!)
     await act(async () => {
       menuButtons()[1].click()
+    })
+    expect(onTransferSummary).toHaveBeenCalledWith('sum1')
+
+    // 删除：先二次确认；取消 → 不删
+    await rightClick(document.querySelector('.message-compress-summary')!)
+    await act(async () => {
+      menuButtons()[2].click()
     })
     expect(MessageBox.warn).toHaveBeenCalled()
     expect(onDelete).not.toHaveBeenCalled()
@@ -646,7 +655,7 @@ describe('消息气泡右键', () => {
     vi.mocked(MessageBox.warn).mockResolvedValueOnce(true)
     await rightClick(document.querySelector('.message-compress-summary')!)
     await act(async () => {
-      menuButtons()[1].click()
+      menuButtons()[2].click()
     })
     expect(onDelete).toHaveBeenCalledWith('sum1')
 

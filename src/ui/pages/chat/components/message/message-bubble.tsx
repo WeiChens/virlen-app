@@ -44,6 +44,11 @@ interface Props {
   onEdit?: (message: string) => void
   onDelete?: (messageId: string) => void
   /**
+   * 右键「上下文压缩摘要」→「转移到新对话」：以当前会话为模板新建会话，
+   * 把该摘要作为新会话的首条消息并切换过去。不传则不展示该项。
+   */
+  onTransferSummary?: (messageId: string) => void
+  /**
    * 引用该消息（仅“有正文”的消息可引用）：把消息 id / 发送方 / 正文快照交给输入框
    *
    * 深思考 / 纯工具调用消息没有正文，不提供引用入口（气泡容器已隐藏操作栏）
@@ -78,6 +83,7 @@ function MessageBubble({
   message,
   onEdit,
   onDelete,
+  onTransferSummary,
   onQuote,
   onQuoteJump,
   toolResults,
@@ -201,20 +207,29 @@ function MessageBubble({
           selectAll: selectAllReasoning,
         })
       case 'summary': {
-        // 压缩摘要：只有「复制摘要」与「删除」两项。
+        // 压缩摘要：「复制 / 转移到新对话 / 删除」三项。
         // 它不是模型产出的一条对话，没有引用 / 编辑的语义；
-        // 但删除同样是「本条及之后全部删除」（删掉 summary = 放弃这次压缩，
+        // 「转移到新对话」= 把摘要拷进一个新会话当开头，方便在干净上下文里继续；
+        // 删除同样是「本条及之后全部删除」（删掉 summary = 放弃这次压缩，
         // 其后的对话也一并清掉），与其它气泡的删除语义保持一致。
-        return [
+        const items: ContextMenuItem[] = [
           ...textMenuItems(() => getContent(false)),
-          {
-            key: 'delete',
-            label: t('删除'),
-            divider: true,
-            danger: true,
-            onClick: confirmDeleteMessage,
-          },
         ]
+        if (onTransferSummary) {
+          items.push({
+            key: 'transfer-to-new-chat',
+            label: t('转移到新对话'),
+            onClick: () => onTransferSummary(message.id),
+          })
+        }
+        items.push({
+          key: 'delete',
+          label: t('删除'),
+          divider: true,
+          danger: true,
+          onClick: confirmDeleteMessage,
+        })
+        return items
       }
       default: {
         const items = textMenuItems(() => getContent(false))

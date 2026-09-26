@@ -26,7 +26,7 @@ function App() {
   return (
     <ErrorBoundary>
       <WindowLayout>
-        {page === 'onboarding' ? (
+        {page == 'onboarding' ? (
           <SetupFlow onComplete={() => setPage('chat')} />
         ) : (
           <Suspense fallback={null}>

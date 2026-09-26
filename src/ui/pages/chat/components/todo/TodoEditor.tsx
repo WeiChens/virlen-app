@@ -126,9 +126,8 @@ const TodoTitle = observer(function TodoTitle({
   return (
     <div
       ref={wrapRef}
-      className={`todo-title ${shift ? 'is-overflowing' : ''} ${
-        item.content ? '' : 'is-empty'
-      }`}
+      className={`todo-title ${shift ? 'is-overflowing' : ''} ${item.content ? '' : 'is-empty'
+        }`}
       onClick={() => setEditing(true)}>
       <span
         ref={textRef}
@@ -136,10 +135,10 @@ const TodoTitle = observer(function TodoTitle({
         style={
           shift
             ? ({
-                '--todo-marquee-shift': `${shift}px`,
-                // 时长按滚动距离线性放大，长任务名不会「一闪而过」
-                '--todo-marquee-dur': `${Math.min(14, Math.max(3, -shift / 16))}s`,
-              } as CSSProperties)
+              '--todo-marquee-shift': `${shift}px`,
+              // 时长按滚动距离线性放大，长任务名不会「一闪而过」
+              '--todo-marquee-dur': `${Math.min(14, Math.max(3, -shift / 16))}s`,
+            } as CSSProperties)
             : undefined
         }>
         {item.content || t('任务内容')}
@@ -345,9 +344,8 @@ export const TodoEditor = observer(function TodoEditor({
           {list.map((item) => (
             <div
               key={item.id}
-              className={`todo-row ${item.status === 'completed' ? 'is-done' : ''} ${
-                dragId === item.id ? 'is-dragging' : ''
-              }`}>
+              className={`todo-row ${item.status === 'completed' ? 'is-done' : ''} ${dragId === item.id ? 'is-dragging' : ''
+                }`}>
               <button
                 type="button"
                 className="todo-handle"
@@ -371,6 +369,7 @@ export const TodoEditor = observer(function TodoEditor({
                 onChange={(e) => patch(item.id, { note: e.target.value })}
                 placeholder={t('备注')}
                 spellCheck={false}
+                title={item.note}
               />
               <div className="todo-row-actions">
                 <button
@@ -427,8 +426,8 @@ export const TodoEditor = observer(function TodoEditor({
             ? t('AI 正在回复中：你的清单已生效，本轮结束后写入对话')
             : draft
               ? t(
-                  'AI 正在回复中：改动还只是草稿，点「应用变更 / 覆盖更新」后才会在本轮结束时生效',
-                )
+                'AI 正在回复中：改动还只是草稿，点「应用变更 / 覆盖更新」后才会在本轮结束时生效',
+              )
               : t('AI 正在回复中：你随时可以改这份清单，改完点「应用变更」才会生效')}
         </div>
       )}

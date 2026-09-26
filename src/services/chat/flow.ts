@@ -10,6 +10,7 @@ import {
   sessionStore,
   updateSessionRuntime,
   dropSessionRuntime,
+  agentStore,
 } from '@/ui/store'
 import { v4 } from '@/utils/uuid'
 import type { Agent, Message, MessageContent, Session } from '@/types'
@@ -123,6 +124,72 @@ export async function createSession(
     skills_count: session.skills?.length ?? 0,
   })
   return session
+}
+
+/**
+ * 把某条「上下文压缩摘要」转移到新对话。
+ *
+ * 语义：以源会话的 模型 / Agent / 工作目录 为模板新建一个会话，
+ * 把该摘要按值拷贝成新会话的**第一条消息**（`role='summary'`，与压缩产物同构），
+ * 让用户能在一个干净的上下文里、带着压缩后的历史继续对话。
+ *
+ * 与「压缩上下文」的关键差别：本路径**不产生引擎 run**，因此不会由 Rust 引擎直落 SQLite
+ * ——必须自己显式落库（`cmd_replace_session_messages`），否则摘要只活在内存里、重启后消失。
+ *
+ * 不触碰源会话（源会话的摘要原样保留，本操作是「拷贝」，不是「移动」）。
+ *
+ * @param sourceSessionId  源会话 id
+ * @param summaryMessageId 源会话里那条 `role='summary'` 消息的 id
+ * @returns 新会话 id；源会话 / 摘要不存在时返回 null（调用方据此不切会话）
+ */
+export async function transferSummaryToNewSession(
+  sourceSessionId: string,
+  summaryMessageId: string,
+): Promise<string | null> {
+  const source = sessionStore.getSession(sourceSessionId)
+  if (!source) return null
+
+  // 摘要一定是「最后一个 summary」，但尾部窗口可能尚未加载（会话刚激活时），先补齐再找
+  await sessionStore.ensureMessagesLoaded(sourceSessionId)
+  const summary = getSessionMessages(sourceSessionId).find(
+    (m) => m.id === summaryMessageId && m.role === 'summary',
+  )
+  if (!summary) return null
+
+  // 沿用源会话的 Agent（缺省则回退默认 Agent，由 createSession 兜底）
+  const agent = source.agentId ? agentStore.getAgent(source.agentId) : undefined
+
+  const session = await createSession(
+    source.title,
+    source.providerConfigId,
+    source.modelId,
+    agent,
+    source.workspace,
+  )
+
+  // 摘要按值拷贝（重新分配 id，避免跨会话复用同一消息 id）：保留 role / content /
+  // uiData（compressMode + contextTokens，气泡副标题要用）/ timestamp
+  const copy: Message = { ...summary, id: v4(), streaming: false }
+  addSessionMessage(session.id, copy)
+
+  // 本路径无 run，必须显式落库（同 compressContext 的兜底思路）
+  try {
+    await invoke('cmd_replace_session_messages', {
+      sessionId: session.id,
+      messages: sanitizeLoneSurrogates([copy]),
+    })
+  } catch (err) {
+    console.error('[chat] 转移到新对话落库失败:', err)
+    trackError('session.save.error', err, {
+      props: { session_id: hashText(session.id), op: 'transfer.persist' },
+    })
+  }
+
+  track('chat.summary.transfer', {
+    from_session_id: hashText(sourceSessionId),
+    to_session_id: hashText(session.id),
+  })
+  return session.id
 }
 
 /**

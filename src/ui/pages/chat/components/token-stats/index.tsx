@@ -30,9 +30,13 @@ import {
   loadRecords,
   loadStats,
   RECORDS_LOAD_CAP,
+  startOfToday,
+  summarizeRecords,
   type CostedBucket,
   type CostedRecord,
+  type CustomRange,
   type RecordSortKey,
+  type RecordsSummary,
   type SortDir,
   type UsageGroupBy,
   type UsageRange,
@@ -48,6 +52,7 @@ import {
 import UsageTable from './usage-table'
 import PriceEditor from './price-editor'
 import './style.scss'
+import { sleep } from '@/utils/common'
 
 const PAGE_SIZE = 50
 
@@ -65,9 +70,11 @@ interface Props {
 
 const RANGES: { key: UsageRange; label: string }[] = [
   { key: 'today', label: '今日' },
+  { key: 'yesterday', label: '昨天' },
   { key: '7d', label: '近 7 天' },
   { key: '30d', label: '近 30 天' },
   { key: 'all', label: '全部' },
+  { key: 'custom', label: '自定义' },
 ]
 
 const GROUPS: { key: UsageGroupBy; label: string }[] = [
@@ -88,12 +95,26 @@ function groupLabel(g: UsageGroupBy): string {
   return t(GROUPS.find((x) => x.key === g)?.label ?? g)
 }
 
+/** 时间戳 → `<input type="datetime-local">` 的本地值（`YYYY-MM-DDTHH:mm`） */
+function toLocalInputValue(ms: number): string {
+  const d = new Date(ms)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+/** `<input type="datetime-local">` 的本地值 → 时间戳（空 / 非法返回 null） */
+function parseLocalInput(value: string): number | null {
+  if (!value) return null
+  const ms = new Date(value).getTime()
+  return Number.isNaN(ms) ? null : ms
+}
+
 /** 饼图维度切换按钮 */
 const PIE_DIMS: { key: PieDim; label: string }[] = [
-  { key: 'kind', label: '按类型' },
+  { key: 'cost', label: '按费用' },
   { key: 'model', label: '按模型' },
   { key: 'tokens', label: '按 Token 类型' },
-  { key: 'cost', label: '按费用' },
+  { key: 'kind', label: '按类型' },
 ]
 
 /** 饼图标题（随维度变化；中文 key，渲染时走 t()） */
@@ -132,12 +153,15 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
   const [tab, setTab] = useState<Tab>('chart')
   const [range, setRange] = useState<UsageRange>('7d')
   const [groupBy, setGroupBy] = useState<UsageGroupBy>('day')
+  /** 自定义区间的 datetime-local 原始值（'' = 未填） */
+  const [customFrom, setCustomFrom] = useState('')
+  const [customTo, setCustomTo] = useState('')
   /** 只看当前会话（默认关，用户可切） */
   const [onlyCurrentSession, setOnlyCurrentSession] = useState(false)
   const [stats, setStats] = useState<UsageStatsView>(EMPTY_VIEW)
   const [kindStats, setKindStats] = useState<CostedBucket[]>([])
   /** 饼图归类维度：调用类型 / 模型 / token 类型 / 费用 */
-  const [pieDim, setPieDim] = useState<PieDim>('kind')
+  const [pieDim, setPieDim] = useState<PieDim>('cost')
   const [records, setRecords] = useState<CostedRecord[]>([])
   const [recordTotal, setRecordTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -150,9 +174,39 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
+  /** 明细汇总结果（点「汇总」后才有；筛选/取数变化即清空，避免过期数据） */
+  const [summary, setSummary] = useState<RecordsSummary | null>(null)
+  const [summarizing, setSummarizing] = useState(false)
 
   const scopeSessionId =
     onlyCurrentSession && sessionId ? sessionId : undefined
+
+  /** 自定义区间的绝对时间边界（两端都合法才生效，顺序自动归一化） */
+  const customRange = useMemo<CustomRange | null>(() => {
+    if (range !== 'custom') return null
+    const from = parseLocalInput(customFrom)
+    const to = parseLocalInput(customTo)
+    if (from == null || to == null) return null
+    return from <= to ? { from, to } : { from: to, to: from }
+  }, [range, customFrom, customTo])
+
+  /**
+   * 范围是否落在同一天（今日 / 昨天 / 自定义单日）：
+   * 按天分桶只会出一根柱子，需要切到小时粒度看趋势。
+   */
+  const singleDay = useMemo(() => {
+    if (range === 'today' || range === 'yesterday') return true
+    if (range === 'custom' && customRange) {
+      const a = new Date(customRange.from)
+      const b = new Date(customRange.to)
+      return (
+        a.getFullYear() === b.getFullYear() &&
+        a.getMonth() === b.getMonth() &&
+        a.getDate() === b.getDate()
+      )
+    }
+    return false
+  }, [range, customRange])
 
   /** sessionId → 该会话当前的 provider/model（给单价定位用） */
   const resolveSessionModel = useCallback((id: string) => {
@@ -165,10 +219,19 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
     setLoading(true)
     try {
       const [view, kinds, pageRes] = await Promise.all([
-        loadStats(range, groupBy, { sessionId: scopeSessionId, resolveSessionModel }),
-        loadStats(range, 'kind', { sessionId: scopeSessionId, resolveSessionModel }),
+        loadStats(range, groupBy, {
+          sessionId: scopeSessionId,
+          resolveSessionModel,
+          custom: customRange,
+        }),
+        loadStats(range, 'kind', {
+          sessionId: scopeSessionId,
+          resolveSessionModel,
+          custom: customRange,
+        }),
         loadRecords(range, {
           sessionId: scopeSessionId,
+          custom: customRange,
           // 明细改成「一次拉取（有上限）+ 客户端筛选 / 排序 / 分页」（原因见服务层注释）
           limit: RECORDS_LOAD_CAP,
           offset: 0,
@@ -182,27 +245,36 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
     } finally {
       setLoading(false)
     }
-  }, [range, groupBy, scopeSessionId, resolveSessionModel])
+  }, [range, groupBy, scopeSessionId, resolveSessionModel, customRange])
 
   // 打开面板 / 切范围 / 切维度 / 切会话范围时重新拉数；从「单价」页切回来也重拉：
   // 费用是**取数时**按当时单价算的（Rust 只回 token），改完单价必须重新取数，
   // 否则图表与明细会一直显示改价前的旧费用。
   useEffect(() => {
+    // 自定义区间尚未填完整时不查询（否则会退化成「全部」）
+    if (range === 'custom' && !customRange) return
     if (open && tab !== 'pricing') void refresh()
-  }, [open, tab, refresh])
+  }, [open, tab, refresh, range, customRange])
 
-  // 「今日」只有一天，按天分桶只会出一根柱子 → 自动切到小时粒度；
-  // 离开「今日」时若还停在小时粒度，退回按天（否则 7/30 天范围柱子会过密）。
-  // 依赖只有 `range`：用户手动切过的维度不受影响。
+  // 首次切到「自定义」时预填「今天 0 点 ~ 现在」，避免一进去就是空区间
   useEffect(() => {
-    if (range === 'today') {
+    if (range !== 'custom') return
+    setCustomFrom((v) => v || toLocalInputValue(startOfToday()))
+    setCustomTo((v) => v || toLocalInputValue(Date.now()))
+  }, [range])
+
+  // 单日范围（今日 / 昨天 / 自定义单日）按天分桶只会出一根柱子 → 自动切到小时粒度；
+  // 离开单日范围时若还停在小时粒度，退回按天（否则多天范围柱子会过密）。
+  // 依赖只有 `singleDay`：用户手动切过的维度不受影响。
+  useEffect(() => {
+    if (singleDay) {
       setGroupBy((g) =>
         g === 'day' || g === 'week' || g === 'month' ? 'hour' : g,
       )
     } else {
       setGroupBy((g) => (g === 'hour' ? 'day' : g))
     }
-  }, [range])
+  }, [singleDay])
 
   // Esc 关闭（与项目其它弹窗的键盘习惯一致）
   useEffect(() => {
@@ -238,9 +310,9 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
     (key: string): string => {
       switch (activeGroup) {
         case 'hour':
-          // '2026-09-21 14'：看「今日」时只显示 '14:00'；跨天则显示 '09-21 14'
+          // '2026-09-21 14'：单日范围只显示 '14:00'；跨天则显示 '09-21 14'
           if (key.length < 13) return key
-          return range === 'today' ? `${key.slice(11)}:00` : key.slice(5)
+          return singleDay ? `${key.slice(11)}:00` : key.slice(5)
         case 'day':
           // '2026-09-21' → '09-21'（周/月维度保留完整 key 更清晰）
           return key.length >= 10 ? key.slice(5) : key
@@ -254,7 +326,7 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
           return key || '-'
       }
     },
-    [activeGroup, range],
+    [activeGroup, singleDay],
   )
 
   const currency = currentCurrency()
@@ -349,10 +421,33 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
     [records],
   )
 
+  /**
+   * 汇总全部筛选结果（**非当前页**）。数据已在内存（一次拉取上限内的全部匹配行），
+   * 计算为 O(n)；仍异步让出一帧，保证 loading 先渲染 —— 这也是做成「点按钮才汇总」的原因。
+   */
+  const handleSummarize = useCallback(async () => {
+    if (summarizing) return
+    setSummarizing(true)
+    try {
+      await new Promise((r) => setTimeout(r, 0))
+      setSummary(summarizeRecords(filteredRecords))
+    } finally {
+      setSummarizing(false)
+    }
+  }, [summarizing, filteredRecords])
+
+  // 筛选条件或取数结果变化 → 旧汇总已过期，清空（需重新点「汇总」）
+  useEffect(() => {
+    setSummary(null)
+  }, [filteredRecords])
+
   const handleExport = async () => {
     setExporting(true)
     try {
-      const path = await exportUsageCsv(range, { sessionId: scopeSessionId })
+      const path = await exportUsageCsv(range, {
+        sessionId: scopeSessionId,
+        custom: customRange,
+      })
       showToast(path ? t('已导出用量明细') : t('导出已取消'), 2000)
     } catch (e: any) {
       showToast(t('导出失败：') + (e?.message || String(e)), 3000)
@@ -454,6 +549,35 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
               </button>
             ))}
           </div>
+          {range === 'custom' && (
+            <div
+              className="custom-range"
+              role="group"
+              aria-label={t('自定义时间区间')}>
+              <input
+                type="datetime-local"
+                className="range-input"
+                value={customFrom}
+                aria-label={t('开始时间')}
+                onChange={(e) => setCustomFrom(e.target.value)}
+              />
+              <span className="range-sep" aria-hidden="true">
+                ~
+              </span>
+              <input
+                type="datetime-local"
+                className="range-input"
+                value={customTo}
+                aria-label={t('结束时间')}
+                onChange={(e) => setCustomTo(e.target.value)}
+              />
+              {!customRange && (
+                <span className="range-hint">
+                  {t('请选择开始与结束时间')}
+                </span>
+              )}
+            </div>
+          )}
           {tab === 'chart' && (
             <div className="segmented">
               {GROUPS.map((g) => (
@@ -617,6 +741,9 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
               onSort={handleSort}
               onPageChange={setPage}
               truncated={truncated}
+              summary={summary}
+              summarizing={summarizing}
+              onSummarize={handleSummarize}
             />
           )}
 

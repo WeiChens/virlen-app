@@ -30,6 +30,7 @@ export { getEngine } from './chat/common'
 
 export {
   createSession,
+  transferSummaryToNewSession,
   deleteSessions,
   sendMessage,
   resumePausedRun,

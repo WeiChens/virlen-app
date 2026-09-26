@@ -1,0 +1,124 @@
+/**
+ * ProviderSelect — 服务商下拉框样式
+ */
+
+.provider-select {
+  position: relative;
+  margin-bottom: 24px;
+  text-align: left;
+
+  .provider-select-trigger {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    height: 48px;
+    padding: 0 14px;
+    background: var(--bg-secondary);
+    border: 1.5px solid var(--border-color);
+    border-radius: 10px;
+    cursor: pointer;
+    transition:
+      border-color 0.15s ease,
+      box-shadow 0.15s ease;
+    font-size: 14px;
+    color: var(--text-primary);
+  }
+
+  .provider-select-trigger:hover {
+    border-color: var(--primary);
+  }
+
+  .provider-select-trigger:focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  .provider-select-placeholder {
+    color: var(--text-tertiary);
+    flex: 1;
+    text-align: left;
+  }
+
+  .provider-select-icon {
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .provider-select-icon svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  .provider-select-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .provider-select-label {
+    flex: 1;
+    text-align: left;
+    font-weight: 500;
+  }
+
+  .provider-select-arrow {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    transition: transform 0.2s ease;
+    flex-shrink: 0;
+  }
+
+  .provider-select-arrow.open {
+    transform: rotate(180deg);
+  }
+
+  .provider-select-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background: var(--bg-primary);
+    border: 1.5px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: var(--shadow-md, 0 8px 24px rgba(0, 0, 0, 0.12));
+    z-index: 10;
+    overflow: hidden;
+    max-height: 260px;
+    overflow-y: auto;
+  }
+
+  .provider-select-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 14px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    transition: background 0.1s ease;
+    font-size: 14px;
+    color: var(--text-primary);
+    text-align: left;
+  }
+
+  .provider-select-item:hover {
+    background: var(--bg-secondary);
+  }
+
+  .provider-select-item.active {
+    background: var(--primary-soft);
+  }
+
+  .provider-select-url {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+}

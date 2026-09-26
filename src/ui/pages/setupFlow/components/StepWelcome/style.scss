@@ -1,0 +1,37 @@
+/**
+ * StepWelcome — 引导第一步：欢迎页样式
+ */
+
+.welcome-page {
+  text-align: center;
+
+  .welcome-logo {
+    margin-bottom: 24px;
+    color: var(--primary);
+  }
+
+  .welcome-logo svg {
+    filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.08));
+  }
+
+  .welcome-title {
+    font-size: 36px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 12px;
+  }
+
+  .welcome-subtitle {
+    max-width: 420px;
+    margin: 0 auto 40px;
+    font-size: 16px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+  }
+
+  .btn-start {
+    min-width: 200px;
+    height: 48px;
+    font-size: 16px;
+  }
+}

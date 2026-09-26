@@ -21,7 +21,10 @@ import {
   cancelPausedRun,
   deleteSessionMessage,
   resumePausedRun,
+  transferSummaryToNewSession,
 } from '@/services/chat-service'
+import { showToast } from '@/ui/components/shared/Toast'
+import { t } from '@/ui/i18n'
 import { isStreamingSession } from './helpers'
 import { useVirtualList } from './use-virtual-list'
 import { useScrollController } from './use-scroll-controller'
@@ -193,6 +196,27 @@ export function useChatMessageList({
     [syncMessagesToUI],
   )
 
+  /**
+   * 右键摘要 →「转移到新对话」：以源会话为模板新建会话、把摘要作为其首条消息，
+   * 然后切换过去。
+   *
+   * 这里只 `setValue('currentSessionId', newId)`：切会话的「装载消息 / 拉索引」由该值的
+   * 变化兜底（chat-view 的会话切换 effect 会接管），因此无需在本层重写切换逻辑。
+   * 回调刻意保持稳定引用（MessageBubble 已 memo，引用一变全部气泡重渲染）。
+   */
+  const handleTransferSummary = useCallback(async (messageId: string) => {
+    const sid = chatState.value.currentSessionId
+    if (!sid) return
+    const newId = await transferSummaryToNewSession(sid, messageId)
+    if (!newId) {
+      showToast(t('转移失败：找不到该摘要'))
+      return
+    }
+    chatState.setValue('currentSessionId', newId)
+    chatState.setValue('error', null)
+    showToast(t('已转移到新对话'))
+  }, [])
+
   function handleResume() {
     const sid = chatState.value.currentSessionId
     if (!sid) return
@@ -258,6 +282,7 @@ export function useChatMessageList({
     handleEditBubble,
     handleQuoteBubble,
     handleDeleteBubble,
+    handleTransferSummary,
     handleResume,
     handleCancelPaused,
   }

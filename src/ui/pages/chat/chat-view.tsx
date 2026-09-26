@@ -267,6 +267,24 @@ function ChatView() {
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [])
 
+  // Ctrl / Cmd + N 新建对话：等价于侧边栏「新对话」按钮（清空当前会话 → 回到新对话页）
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      // 只认纯 Ctrl/Cmd + N，避免与 Shift / Alt 组合冲突
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return
+      // 用 code 兼容非拉丁键盘布局（俄语等布局下 e.key 不是 'n'）
+      if (e.key?.toLowerCase() !== 'n' && e.code !== 'KeyN') return
+      // 焦点在终端内时让路：终端里 Ctrl+N 是发给 PTY 的控制字符（readline 的「下一行」），
+      // xterm 不阻止事件冒泡（会照常把控制字符发出去），只能在这里按事件目标跳过，
+      // 否则会「一边发控制字符、一边新建对话」。
+      if ((e.target as HTMLElement | null)?.closest?.('.xterm')) return
+      e.preventDefault()
+      chatState.set({ currentSessionId: null, error: null })
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [])
+
   // 鼠标拖拽调整侧边栏宽度
   function handleResizerMouseDown(e: React.MouseEvent<HTMLDivElement>) {
     e.preventDefault()

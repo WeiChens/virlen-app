@@ -86,7 +86,7 @@ export function SummaryModal({ visible, message, onClose }: SummaryModalProps) {
 interface Props {
   message: Message
   /**
-   * 右键菜单（由 message-bubble 统一接管）：摘要条目同样支持「复制 / 删除」。
+   * 右键菜单（由 message-bubble 统一接管）：摘要条目同样支持「复制 / 转移到新对话 / 删除」。
    *
    * 删除 summary = 放弃这次压缩，本条及之后的消息一并删除
    *（二次确认与其它气泡同源，见 message-bubble.confirmDeleteMessage）。

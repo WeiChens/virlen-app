@@ -12,6 +12,7 @@ import {
   outputTokPerSec,
   type CostedRecord,
   type RecordSortKey,
+  type RecordsSummary,
   type SortDir,
 } from '@/services/token-stats-service'
 
@@ -28,6 +29,12 @@ interface Props {
   onPageChange: (page: number) => void
   /** 服务端匹配行超过拉取上限（当前数据只是最近一批） */
   truncated?: boolean
+  /** 已汇总结果（点「汇总」后才有；null = 未汇总） */
+  summary?: RecordsSummary | null
+  /** 正在汇总（按钮显示 loading 并禁用） */
+  summarizing?: boolean
+  /** 点击「汇总」：对全部筛选结果（非当前页）汇总 */
+  onSummarize?: () => void
 }
 
 /** 可排序表头：同列切换升/降；未激活时显示淡色 ↕ 提示 */
@@ -84,6 +91,28 @@ function formatRate(v: number | null): string {
   return v >= 100 ? v.toFixed(0) : v.toFixed(1)
 }
 
+/** 汇总面板里的一个指标（标签 + 值） */
+function SummaryItem({
+  label,
+  value,
+  strong,
+  title,
+}: {
+  label: string
+  value: string
+  strong?: boolean
+  title?: string
+}) {
+  return (
+    <span className="summary-item" title={title}>
+      <span className="summary-label">{label}</span>
+      <span className={`summary-value${strong ? ' strong' : ''}`}>
+        {value}
+      </span>
+    </span>
+  )
+}
+
 export default function UsageTable({
   records,
   total,
@@ -96,6 +125,9 @@ export default function UsageTable({
   onSort,
   onPageChange,
   truncated,
+  summary,
+  summarizing,
+  onSummarize,
 }: Props) {
   const maxPage = Math.max(Math.ceil(total / pageSize), 1)
   return (
@@ -105,6 +137,59 @@ export default function UsageTable({
           {t('匹配记录过多，仅对最近加载的一批做筛选与排序，请缩小时间范围。')}
         </p>
       )}
+
+      {/* 汇总：对「全部筛选结果」而非当前页求和，故做成点按钮触发 + loading */}
+      <div className="table-summary-bar">
+        <button
+          type="button"
+          className="summarize-btn"
+          onClick={onSummarize}
+          disabled={summarizing || total === 0}>
+          {summarizing && <span className="spinner" aria-hidden="true" />}
+          {summarizing ? '' : t('查看汇总')}
+        </button>
+        {summary && (
+          <div className="table-summary" aria-live="polite">
+            <span className="summary-scope">
+              {tpl('总数 $__n__ 条', { n: summary.count })}
+            </span>
+            <SummaryItem
+              label="Prompt"
+              value={formatTokens(summary.promptTokens)}
+            />
+            <SummaryItem
+              label="Completion"
+              value={formatTokens(summary.completionTokens)}
+            />
+            <SummaryItem
+              label="Cached"
+              value={formatTokens(summary.cachedTokens)}
+            />
+            <SummaryItem
+              label={t('合计')}
+              value={formatTokens(summary.totalTokens)}
+              strong
+            />
+            <SummaryItem
+              label="tok/s"
+              value={formatRate(summary.tokPerSec)}
+              title={
+                summary.rateSamples < summary.count
+                  ? t('仅按记录了耗时的行做加权计算')
+                  : undefined
+              }
+            />
+            <SummaryItem
+              label={t('费用')}
+              value={formatCost(summary.cost.total, currency)}
+              title={t('按你填写的单价估算，非账单')}
+            />
+          </div>
+        )}
+      </div>
+
+
+
       <table className="token-stats-table">
         <thead>
           <tr>
