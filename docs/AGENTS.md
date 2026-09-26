@@ -349,7 +349,7 @@ npx tsc --noEmit             # 类型检查（静态门禁之一）
 cd src-tauri; cargo clippy --workspace --all-targets -- -D warnings   # Rust 静态门禁（须零告警；CI `ci.yml` 每次 push/PR 跑，见 §11.28）
 cd src-tauri; cargo test --workspace   # Rust 侧测试（⚠️ 必须 --workspace，见 §7 下注）
 pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
-pnpm build:cli               # 打包 headless CLI（release 二进制；`-- --target <triple>` 指定三元组）
+pnpm build:cli               # 打包 headless CLI（release 二进制；三元组用环境变量 CARGO_BUILD_TARGET，别用 `--target`，见 §11.31）
                              # 产物 src-tauri/target[/<triple>]/release/virlen-cli[.exe]；发版由三个 build-*.yml 上传（§11.29）
 pnpm cli config get          # headless CLI（= cargo run -p virlen-cli -- …；与 GUI 同一份 app_settings）
 pnpm cli run "解释 README"   # 无界面跑一次 agent（stdout=正文 / stderr=工具进度；同一份会话库）
@@ -743,13 +743,13 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 **11.29 CLI 打包并入三个平台的发版 workflow（2026-09-26 用户要求 → 已落地）** —— 需求（用户原话）：「package.json 添加打包 cli 的 script，然后 .github\workflows 也添加 cli 打包的构建流程」。
 
 - **做法（用户拍板）**：**不新建 workflow**，把 CLI 构建并进现有三个 `build-{windows,linux,macos}.yml` 的 `build-*` job —— 复用同一套 Rust 工具链 / `rust-cache` / `src-tauri/target`（core 的 release 编译结果直接共享），**不重复装依赖**。产物同时进 **Artifact** 与**同一个 Release**（与 GUI 安装包同处）。形态 = **裸二进制**（用户选定，不做归档）。
-- **`package.json`**：新增 `build:cli` = `cargo build --manifest-path src-tauri/Cargo.toml -p virlen-cli --release`。本地直接可用；CI 用 `pnpm run build:cli -- --target <triple>` 传三元组 —— `--` 会把参数透传给脚本内的 cargo（**已实测**：`pnpm run cli -- --help` → `cargo run … -- "--help"`）。
+- **`package.json`**：新增 `build:cli` = `cargo build --manifest-path src-tauri/Cargo.toml -p virlen-cli --release`。本地直接可用；CI 传三元组用 **cargo 原生环境变量** `CARGO_BUILD_TARGET=<triple>` + `pnpm run build:cli`（⚠️ **不要**用 `pnpm run build:cli -- --target <triple>`：pnpm 对 `--` 的处理随版本/平台而异，CI 上会把 `--` 一起透传 → cargo 报 `unexpected argument '--target'`，详见 §11.31）。
 - **每个 build job 新增两步**（放在 `cargo install tauri-cli` **之前** → CLI 出问题即早退，不必白等那趟编译）：
-  1. `Build CLI (virlen-cli)`：`pnpm run build:cli -- --target <triple>`；
+  1. `Build CLI (virlen-cli)`：`env: CARGO_BUILD_TARGET=<triple>` + `pnpm run build:cli`；
   2. `Stage CLI binary (platform-distinct name)` + `Upload CLI binary`：`mkdir -p cli-dist` → `cp <target>/release/virlen-cli[.exe] cli-dist/<平台名>` → 上传 artifact（`if-no-files-found: error`，与既有 `.dmg`/`.deb` 的 `warn` 不同 —— 这是本轮新增产物，缺失即真故障）。
 - **⚠️ 关键约束：裸二进制必须改成平台区分名**。三个 workflow 的 release job 传的是**同一个 Release**，而 Linux / macOS 的裸产物 basename 都是 `virlen-cli` → 不改名会**互相覆盖**。故：`virlen-cli-windows-x64.exe` / `virlen-cli-linux-x64` / `virlen-cli-macos-arm64`（**不带版本号** —— 版本由 Release tag 承载，与 `.dmg`/`.deb` 同口径）。
 - **Release 资产模式**：Windows 的 `artifacts/**/*.exe` 天然命中 `virlen-cli-windows-x64.exe`（无需另列）；Linux / macOS 是**无后缀**文件，必须显式加 `artifacts/**/virlen-cli-linux-x64` / `artifacts/**/virlen-cli-macos-arm64`。三者的 `List artifacts`（`find`）同步加上 `-name "virlen-cli-*"`。
-- **验证（本机实测）**：① `pnpm run build:cli -- --target x86_64-pc-windows-msvc` 真跑通（release，2m18s），产物落在 workflow 断言的 `src-tauri/target/x86_64-pc-windows-msvc/release/virlen-cli.exe`（42.1 MB），复现 stage 步骤改名后二进制可运行（`--help` 正常）；② `cargo tree -p virlen-cli` 与对照 `-p virlen-app` 用**同一模式**匹配：前者**无** `tauri v*`、后者有 `tauri v2.11.1` → CLI 二进制确实脱离 GUI 栈；③ `yaml.safe_load` 解析四个 workflow，语法合法且新步骤挂载正确；④ 按 `download-artifact` 布局模拟 glob 命中：三平台 10 个产物**全部命中**、CLI 资产名三平台**无重名**。
+- **验证（本机实测）**：① `pnpm run build:cli -- --target x86_64-pc-windows-msvc` 真跑通（release，2m18s；⚠️ 该形式只在「pnpm 会剥掉 `--`」的版本上成立 —— CI 上不可用，§11.31 已改成 `CARGO_BUILD_TARGET`），产物落在 workflow 断言的 `src-tauri/target/x86_64-pc-windows-msvc/release/virlen-cli.exe`（42.1 MB），复现 stage 步骤改名后二进制可运行（`--help` 正常）；② `cargo tree -p virlen-cli` 与对照 `-p virlen-app` 用**同一模式**匹配：前者**无** `tauri v*`、后者有 `tauri v2.11.1` → CLI 二进制确实脱离 GUI 栈；③ `yaml.safe_load` 解析四个 workflow，语法合法且新步骤挂载正确；④ 按 `download-artifact` 布局模拟 glob 命中：三平台 10 个产物**全部命中**、CLI 资产名三平台**无重名**。
 - **⚠️ 顺带修正两处既有瑕疵（macOS workflow）**：① 步骤编号原本缺 `4`（`5/6/7/8/9/10`）—— 借插入新步骤补回（`5→4`、`6→5`，其余编号因此**不用顺延**）；② `List artifacts` 的 `find … -name "*.dmg" -o -name "*.app.zip"` 缺括号，`-o` 的优先级会让**目录**也被列出（只影响日志输出）→ 补上 `\( … \)`。
 - **如实标注的边界**：新 workflow **无法本地真跑**；runner 上的 `cp` / `mkdir -p`（bash）、`upload-artifact`、`softprops/action-gh-release` 行为均按仓库内既有同类步骤推断 —— **首次打 tag 后请核对 Actions 与 Release 资产**。另：裸二进制在 `upload-artifact` 与 Release 上**都不保留可执行位**（Unix 用户需 `chmod +x`），macOS 经浏览器下载还会带 quarantine（`xattr -d com.apple.quarantine`）；aarch64 的 ad-hoc 签名由链接器自动完成，**无需** codesign 步骤。**三个 workflow 并发写同一个 Release 的竞态是既有设计**（本次未动，新增资产只是同 Release 多一个文件）。
 
@@ -767,6 +767,21 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 - **`list-session` 两列**：新增 `SessionRepo::session_stats()`（**两条聚合查询**：`COUNT(*) GROUP BY session_id` + 每会话「最新一条有 `usage` 或 `contextTokens>0`」的行；判定仍由 core 的 `context_tokens` 做，SQL 里不重写「哪个字段优先」）。人类可读输出加「上下文/200k」「条数」（右对齐），`--json` 加 `messageCount` / `contextTokens` / `contextPercent` / `contextWindowTokens`（无数据是 `null`，**不是** 0）。统计失败**不中断列表**（stderr 告警 + 两列按无数据展示）——静默降级会被当成「真的没数据」。
 - **验证**：`cargo test --workspace` **625 passed**（app 29 / cli 199 / core 397；本次 +43）；`cargo clippy --workspace --all-targets -- -D warnings` **0 告警**（exit 0）；**真机冒烟** `virlen-cli list-session --limit 5`（真实库 175 个会话）输出正常，例如 `4% 8.3k / 8 条`、`100% 356.0k / 2540 条` —— 后者恰好说明 **200k 只是占位**：真数据已超窗口，百分比按设计饱和到 100%；新增 4 条**真实 SQLite 集成测试**（`session_rt/tests.rs`：落库/快照/占用刷新、**失败不留半成品**、无用量数据被闸门拦下并说清原因、桥接协议在装配期被拒）。
 - **如实标注的边界**：① `uiData.contextTokens`（压缩后占用）是**本地粗估**（CJK 按 0.6 token/字符）——占用本身优先取供应商回报的真实用量，只有「压缩后」这个数不同；② 截断按**字符（码点）**，TS 按 UTF-16 码元 → 阈值附近 ±1 字符差异（Rust 侧不可能切出非法内容）；③ AI 摘要在 CLI 里**不可取消**（主循环 `await`；TUI 线程独立照常渲染，期间输入被状态机拦住、排到压缩结束后处理）；④ `list-session` 表格约 **139 列宽**，窄终端标题列会折行（真机已复现）——需要机器可读请用 `--json`；⑤ TS 与 Rust 两份压缩实现**暂时并存**（GUI 仍走 TS）：本次只新增 Rust 侧与 CLI 接线，**未动 GUI**；⑥ 选择面板的**真终端**外观与键位尚未人工复验（TestBackend 已断言选项/高亮/无光标，见 `docs/cli-tui-plan.md` §11）。
+
+**11.31 CI 首次运行暴露的三类失败修复（2026-09-26 用户报错 → 已落地）** —— 背景：上一轮提交 push 后，`ci.yml`（新增的门禁）与三个 `build-*.yml` 的 `test`/`build-*` job **首次真正编译 Linux / macOS 目标**，暴露出三处「只在非 Windows 平台才出现」的问题。
+
+- **① 🔴 clippy 门禁在 Ubuntu 上失败（11 条 `dead-code`）**：全是**只在 Windows 才被调用**的 ConPTY 代码 —— `runner/mod.rs` 的 `PAGER_DISABLED` / `TICK` / `PTY_HOLD_MAX` / `pty_hold_max` / `HOLD_MAX_OVERRIDE_SECS`，`pty_session.rs` 的 `PtySession::new` / `is_held` / `interventions` / `close_input` / `register` / `unregister` / `CLIENT_SIZE_WAIT` / `initial_size`，`test_util.rs` 的 `is_process_alive`。它们在 Windows 上有调用者（`runner/pty.rs` 整体 `#[cfg(target_os = "windows")]`），在 Linux 上**一个调用者都不存在** → `-D warnings` 当场判错。
+  - **修法**：`runner/mod.rs` 那 5 项（连同只服务它们的 `use std::time::Duration`）**逐项 `#[cfg(target_os = "windows")]`**；`pty_session.rs` 用**文件级** `#![cfg_attr(not(target_os = "windows"), allow(dead_code))]`（逐项门禁会连锁到结构体字段：`held` / `keys` / `enters` / `ctrl_c` 的读取者正是被门禁掉的那几个方法 → 字段变成「只写不读」的新告警；`Duration` / `Instant` 也会变成未使用导入）；`is_process_alive` 用 `#[cfg_attr(not(target_os = "windows"), allow(dead_code))]`（非 Windows 分支 `kill -0` 是给今后 Linux 用例留的，不删）。
+  - **⚠️ 教训**：`ci.yml` 只在 ubuntu 跑 → **Windows 专属代码必须显式门禁**；本地（Windows）clippy 全绿**不能**代表门禁通过。
+  - **⚠️ 两个属性坑**：① `#[cfg]` 写在 **doc 注释之前**最直观（属性间顺序随意，不影响语义）；② 文档列表项之后若无空行，续行会被判成 lazy continuation（`doc_lazy_continuation`）—— 本轮在 `same_path` 的新注释里真踩到（靠补空行解决）。
+- **② 🟠 macOS / Windows 的 `cargo test` 各失败 1 例（`resolve_workspace_accepts_same_path_written_differently`）**：**不是测试写错，是真 bug** —— `same_path()` 只比字符串，而 `resolve_workspace` 两侧来源不同（`--workspace` 已 `canonicalize`、会话记录**原样**使用），于是「同一个目录的两种写法」被判成「换目录」→ 续跑被无辜拦下。CI 上两种写法恰好都出现：macOS 的 `/var/...` vs `/private/var/...`（`/var` 是指向 `/private/var` 的符号链接）、Windows 的 8.3 短名 `C:\Users\RUNNER~1\...` vs 长名 `C:\Users\runneradmin\...`（Actions 的 `TEMP` 就是短名形式）。
+  - **修法**：`same_path` 改为**两侧各自 `dunce::canonicalize`（失败则退回原字符串）**后再比（仅做相等判定，返回值仍用记录原样）。canonicalize 失败时仍走字符串比较，所以「记录里的目录已被删除」的续跑场景**不受影响**——不能因为拿不到真身就判成换了目录。
+  - **补测**：`same_path_resolves_symlink_to_same_dir`（`#[cfg(unix)]`，覆盖 macOS 那一半，并断言「真不同必须判不同」）+ `same_path_falls_back_to_string_when_dir_is_missing`（跨平台，覆盖兜底分支）。
+- **③ 🔴 Linux 构建 job 的 CLI 步骤直接报错**：`pnpm run build:cli -- --target <triple>` 在 CI 上被 pnpm **连 `--` 一起透传**（cargo 收到 `-- --target` → `error: unexpected argument '--target' found`）。本机 pnpm **11.2.2** 会把 `--` 剥掉（所以上一轮「已实测透传正确」本身没错），CI 装的 `version: latest` 不剥 → **同一份 workflow 在本机与 CI 行为不同**。
+  - **修法**：改用 cargo 原生环境变量 —— `env: CARGO_BUILD_TARGET: <triple>` + `run: pnpm run build:cli`；**不经过任何参数转发**，语义与 `--target` 等价（产物同样落 `target/<triple>/release/`）。
+  - **验证**：本机 `CARGO_BUILD_TARGET=x86_64-pc-windows-msvc` + `pnpm run build:cli` 真跑通（23.9s，产物 `src-tauri/target/x86_64-pc-windows-msvc/release/virlen-cli.exe`，44.4 MB）；pnpm 参数语义本机实测：11.2.2 上 `pnpm run <script> -- --target X` 与 `pnpm run <script> --target X` 都得到 `--target X`。
+- **验证（本轮）**：`cargo clippy --workspace --all-targets -- -D warnings` **0 告警**（exit 0）；`cargo test --workspace` **626 passed**（app 29 / cli 200 / core 397；Windows 上 `#[cfg(unix)]` 那条不参与，Linux/macOS 上为 627）；`yaml.safe_load` 解析 4 个 workflow 通过；三个 `build-*.yml` 已无 `-- --target`。
+- **如实标注的边界**：① 非 Windows 的编译**本地无法复现**（无 Linux 工具链），本次依据是「clippy 已证明这些项在 Linux 上零引用 → 把它们门禁掉不可能破坏编译」+ 逐项引用点 grep 审计；② `ci.yml` 是**首次运行**且它编译到 `virlen-core` 就失败了 → **`virlen-app` 的 Linux 专属分支（`#[cfg(target_os = "linux")]` 等约 7 处）从未被 clippy 检查过**，若下一次 Actions 仍报别的告警，大概率是同一类「平台专属代码」问题；③ 仓库整体**不是 `rustfmt` 干净**（655 处历史差异，CI 不跑 fmt），本轮只保证改动处手写风格与周边一致。
 
 ---
 
@@ -819,4 +834,5 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
   4. 若新增工具 → 注册链、UI 组件、Rust 白名单、i18n 文案是否齐备？
   5. 若新增 Tauri 命令 → `lib.rs` 是否已注册？`capabilities/default.json` 是否需补权限？
   6. 是否引入无关改动、是否触碰 §8 安全红线？
-  7. 若改了 workflow / 打包流程 → 产物路径与 `upload-artifact` 的 `path`、Release 的 `files` glob 是否对齐？（CLI 裸二进制的命名约束与三平台不重名要求见 §11.29）
+  7. 若改了 workflow / 打包流程 → 产物路径与 `upload-artifact` 的 `path`、Release 的 `files` glob 是否对齐？（CLI 裸二进制的命名约束与三平台不重名要求见 §11.29；**CLI 构建步骤的三元组用 `CARGO_BUILD_TARGET` 环境变量**，不要走 `pnpm run … -- --target`，见 §11.31）；
+  8. 新增/修改了**平台专属代码**（`#[cfg(target_os = …)]`）→ 反向平台能不能编译？（CI 的 clippy 只在 ubuntu 跑，Windows 专属的常量 / 函数在 Linux 上就是 `dead-code`，必须显式门禁，见 §11.31）
