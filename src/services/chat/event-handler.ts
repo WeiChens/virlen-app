@@ -1,8 +1,8 @@
 /**
  * Agent 事件处理器 + 收尾逻辑
  *
- * ⚠️ 这里是 AgentEventType 契约在 service 层的唯一落点（铁律 2）。
- * 新增/改名事件类型时必须三处同步：TS 类型 → Rust emit → 本文件分支。
+ * ⚠️ 这里是 AgentEventType 契约在 service 层的唯一落点（铁律 2）：新增 / 改名事件类型时必须三处同步
+ * （TS 类型 → Rust emit → 本文件分支）。
  */
 import {
   getSessionRuntime,

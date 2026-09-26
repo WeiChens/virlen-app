@@ -115,12 +115,11 @@ export function flushAgentsPersist(): void {
 /**
  * 启动时同步 Agent 列表（幂等；非 Tauri 环境直接返回）。
  *
- * 1. 表里**已有**该键 → 表为准（CLI 改过的 Agent 在 GUI 里立即生效）；
- * 2. 表里**没有**该键 → 一次性迁移：把 localStorage 的历史副本写进表；
- * 3. 两条分支都会清掉 localStorage 的历史副本。
+ * 表里已有该键 → 表为准（CLI 改过的 Agent 在 GUI 里立即生效）；没有 → 一次性把 localStorage 的历史副本写
+ * 进表。两条分支都会清掉 localStorage 的历史副本。
  *
- * ⚠️ 必须在 `initDefaultAgent()` / `agentStore.reload()` **之前**调用（`main.ts` 的 agents
- * 步骤）：否则默认 Agent 补全读到空列表，会把已有 Agent 丢掉重建一份并覆盖表里的数据。
+ * ⚠️ 必须在 `initDefaultAgent()` / `agentStore.reload()` 之前调用（`main.ts` 的 agents 步骤）：否则默认
+ * Agent 补全读到空列表，会把已有 Agent 丢掉重建一份并覆盖表里的数据。
  */
 export async function hydrateAgents(): Promise<void> {
   if (!settingsRepo.isAvailable()) return

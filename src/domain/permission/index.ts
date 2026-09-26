@@ -1,16 +1,14 @@
 /**
  * permission — 权限注册表与三态决策（领域层，纯逻辑）
  *
- * 设计：把「需要用户授权的操作」抽象成带命名空间的权限 name，
- * 每种权限有 允许(allow) / 每次弹窗(ask) / 禁止(deny) 三态。
- * 终端命令按风险分类映射到 terminal.*，脚本执行映射到 script.execute；
- * 「沙盒脱壳」（AI 申请不使用沙盒执行，sandbox:"off"）另有独立门禁
- * sandbox.command.execute / sandbox.script.execute，与命令风险权限**取更严格者**。
- * 取代了旧的全局枚举 `commandApprovalMode`（过粗，无法单独控制某类操作）。
+ * 把「需要用户授权的操作」抽象成带命名空间的权限 name，每种权限有 允许(allow) / 每次弹窗(ask) /
+ * 禁止(deny) 三态。终端命令按风险分类映射到 `terminal.*`，脚本执行映射到 `script.execute`；
+ * 「沙盒脱壳」（AI 申请 `sandbox:"off"`）另有独立门禁 `sandbox.command.execute` /
+ * `sandbox.script.execute`，与命令风险权限**取更严格者**。取代了旧的全局枚举 `commandApprovalMode`
+ *（过粗，无法单独控制某类操作）。
  *
  * ⚠️ 本文件的常量与决策语义与 Rust 侧
- * `virlen-core/src/agent/native_tools/execute/common/classify.rs` 逐字对齐（铁律 1），
- * 改一边必须同步改另一边。
+ * `native_tools/execute/common/classify.rs` 逐字对齐（铁律 1），改一边必须同步改另一边。
  */
 
 /** 三态权限决策 */

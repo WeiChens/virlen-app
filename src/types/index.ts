@@ -109,9 +109,9 @@ export interface SkillContent {
   /**
    * 技能描述（来自 SKILL.md frontmatter）
    *
-   * ⚠️ 只服务 UI（消息气泡的技能卡片正文），不参与降级文本：`skillBlockToText` 与 Rust
-   * `skill_block_to_text` 都只取 name / path / content（块以 `Value` 解析，多余字段忽略），
-   * 所以加这个字段不改变发给模型的内容，也不涉及两侧同步。
+   * 只服务 UI（消息气泡的技能卡片正文），不参与降级文本：`skillBlockToText` 与 Rust
+   * `skill_block_to_text` 都只取 name / path / content（块以 `Value` 解析，多余字段忽略），所以加
+   * 这个字段不改变发给模型的内容，也不涉及两侧同步。
    */
   description?: string
   /** SKILL.md 全文快照 */
@@ -216,9 +216,9 @@ export const SKILL_CONTENT_LABEL = 'SKILL.md'
 /**
  * 技能引用块 → 发给 LLM 的文本形式
  *
- * 与 quoteBlockToText 一样由所有 Provider 共用，保证同一条消息在所有协议下
- * 对模型呈现完全一致。**SKILL.md 全文原样带出**（这正是「引用技能」的语义），
- * 目录行让模型能顺着 `Directory` 用文件工具读取脚本等其它资源。
+ * 与 `quoteBlockToText` 一样由所有 Provider 共用，保证同一条消息在所有协议下对模型呈现完全一致。
+ * **SKILL.md 全文原样带出**（这正是「引用技能」的语义），目录行让模型能顺着 `Directory` 用文件工具
+ * 读取脚本等其它资源。
  *
  * ```
  * [Skill]
@@ -228,7 +228,7 @@ export const SKILL_CONTENT_LABEL = 'SKILL.md'
  * <SKILL.md 全文>
  * ```
  *
- * ⚠️ 四个字段恒定输出（缺失留空），不做条件拼接：条件分支最容易让两侧输出差一个换行。
+ * ⚠️ 四个字段恒定输出（缺失留空），不做条件拼接 —— 条件分支最容易让两侧输出差一个换行。
  */
 export function skillBlockToText(block: SkillContent): string {
   return [
@@ -269,9 +269,9 @@ export interface TokenUsage {
   /**
    * 缓存命中的输入 token（API 明确回报时才有）。
    *
-   * ⚠️ 各家口径不同：OpenAI 兼容（含 DeepSeek）把它含在 `promptTokens` 里，Gemini 的
-   * `cachedContentTokenCount` 是其子集，Anthropic 的 `input_tokens` 本就不含缓存。
-   * 账本写入时按 provider 拉平（`domain/usage::ledgerTokensOf`），这里保持 API 原样供展示。
+   * 各家口径不同：OpenAI 兼容（含 DeepSeek）把它含在 `promptTokens` 里，Gemini 的
+   * `cachedContentTokenCount` 是其子集，Anthropic 的 `input_tokens` 本就不含缓存。账本写入时按
+   * provider 拉平（`domain/usage::ledgerTokensOf`），这里保持 API 原样供展示。
    */
   cachedTokens?: number
 }

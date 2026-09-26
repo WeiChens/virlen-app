@@ -1,22 +1,12 @@
 /**
  * 文本截断 / 清洗工具 —— **保证不产生孤立代理（lone surrogate）**
  *
- * ⚠️ 为什么必须安全（真实线上事故）：
- * JS 字符串是 UTF-16，`String.prototype.slice` 按**码元**切。emoji 等非 BMP 字符
- * 占两个码元（高代理 + 低代理），一旦切在中间就得到「孤立代理」。孤立代理经
- * `JSON.stringify` 会被转义成 `\ud83d` 这样的形式（ES2019 well-formed stringify），
- * 而 Rust 侧 `serde_json` 要求高低代理**必须成对**，遇到孤立高代理直接报
- * `unexpected end of hex escape at line 1 column N` —— 整次 `invoke` 直接失败，
- * 且报错点只有一串列号，极难定位。
+ * ⚠️ JS 字符串是 UTF-16，`slice` 按码元切，emoji 等非 BMP 字符占两个码元 —— 切在中间就得到孤立代理；
+ * 它经 `JSON.stringify` 会被转义成 `\ud83d`，而 Rust 侧 `serde_json` 要求高低代理成对，直接报
+ * `unexpected end of hex escape` 让整次 `invoke` 失败（只有一串列号，极难定位）。
  *
- * 已复现的现场：正文压缩（compress-raw）按码元截断工具输出 → summary 里带孤立代理
- * → 压缩时 `cmd_replace_session_messages` 落库失败（被空 catch 吞掉）→ 用户无感；
- * 下一次发消息时全量历史 + summary 一起过 IPC，`agent_send_message` 报错。
- *
- * 结论：**凡是会被序列化到 Rust（IPC 调用 / 落库）或被 LLM 读到的文本截断，
- * 都必须用这里的 `sliceHead` / `sliceTail`，不要直接 `slice(0, n)`。**
- *
- * 本文件不依赖任何业务模块（含埋点），保持 utils 层「无业务依赖」。
+ * 凡会被序列化到 Rust（IPC / 落库）或被 LLM 读到的截断，都必须用 `sliceHead` / `sliceTail`，
+ * 不要直接 `slice(0, n)`。本文件不依赖任何业务模块（保持 utils 层无业务依赖）。
  */
 
 /** 高代理（U+D800–U+DBFF）：必须紧跟低代理才构成合法字符 */

@@ -66,8 +66,8 @@ function isViewingSession(sessionId?: string | null): boolean {
 /**
  * 托盘**原生菜单 / tooltip**的文案。
  *
- * ⚠️ 托盘菜单是原生菜单，Rust 侧没有语言资源 —— i18n 必须由前端推（铁律 7）。
- * 带数量的文案保留 `$__count__` 占位符（同 `tpl()` 约定）由 Rust 替换：`t()` 只翻译、不替换。
+ * ⚠️ 托盘菜单是原生菜单，Rust 侧没有语言资源 —— i18n 必须由前端推（铁律 7）。带数量的文案保留
+ * `$__count__` 占位符（同 `tpl()` 约定）由 Rust 替换：`t()` 只翻译、不替换。
  */
 function trayLabels() {
   return {

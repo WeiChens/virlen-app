@@ -1,16 +1,14 @@
 /**
  * 工具定义契约 — 权威源的形状与选取规则（纯逻辑，无任何 I/O）
  *
- * **权威源只有一份**：`src-tauri/virlen-core/src/agent/tool_defs/definitions.json`
- *   - Rust 侧：`agent::tool_defs`（`include_str!` + 懒解析）
- *   - 前端：Tauri 运行时走命令 `cmd_list_tool_definitions`；
- *     浏览器 dev / vitest 直读**同一份 JSON**（见 `infrastructure/tools/definitions-source.ts`）
- * 因为是同一个物理文件，所以不存在「快照与源码漂移」，也不需要 CI 差异检查。
+ * **权威源只有一份**：`src-tauri/virlen-core/src/agent/tool_defs/definitions.json`（Rust 侧经
+ * `include_str!` 内嵌；前端 Tauri 运行时走命令 `cmd_list_tool_definitions`，浏览器 dev / vitest 直读同
+ * 一份 JSON）。因为是同一个物理文件，所以不存在「快照与源码漂移」，也不需要 CI 差异检查。
  *
  * 本模块只回答两件事：这份文件的形状是什么、怎么按平台取。
  *
- * ⚠️ 契约里不含 `label`：`label` 是 UI 文案（走 i18n `t()`）。若把它固定进契约，
- *    英文界面会退化成中文（Rust 不做翻译）。
+ * ⚠️ 契约里不含 `label`：它是 UI 文案（走 i18n `t()`）；若固定进契约，英文界面会退化成中文
+ *（Rust 不做翻译）。
  */
 import type { ResolvedToolDefinition } from './types'
 

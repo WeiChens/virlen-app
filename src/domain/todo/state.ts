@@ -1,17 +1,13 @@
 /**
  * todo/state — 任务清单纯函数（无状态、无 IO、可单测）
  *
- * 同时服务两条路径：
- * - TS 引擎：直接执行 `todo_write`（即 `infrastructure/tools/plan/todo-write.ts`）
- * - Rust 引擎：**已原生化（Step 2）** → `native_tools/plan/{todo_write,common}.rs`
+ * ⚠️ 自 Step 2 起工具已原生化，两侧是两份实现（铁律 1 同步义务）：工具执行真正用到的几个函数
+ * （`sanitizeTodos` / `computeStats` / `validateTodos` / `checkTodoLimit` / `renderTodoContent`）在
+ * Rust 侧有逐字镜像（`native_tools/plan/`），改一边必须改另一边；`diffTodos` / `pickCurrentTodos` /
+ * `shouldShowTodoEntry` 等只服务「用户编辑清单」的 UI 与注入逻辑，无 Rust 镜像。
  *
- * ⚠️ 自 Step 2 起两侧是两份实现（铁律 1 同步义务）：工具执行真正用到的几个函数
- * （`sanitizeTodos` / `computeStats` / `validateTodos` / `checkTodoLimit` / `renderTodoContent`）
- * 在 Rust 侧有逐字镜像，改一边必须改另一边；`diffTodos` / `pickCurrentTodos` /
- * `shouldShowTodoEntry` 等只服务「用户编辑清单」的 UI 与注入逻辑（数据源是消息历史），无 Rust 镜像。
- *
- * UI 侧（标题栏按钮 / 徽章 / 浮层 / 消息流一行胶囊）也只从这里取数据，
- * 「唯一的那份清单」就靠 pickCurrentTodos 派生，不引入任何额外状态字段。
+ * UI 侧（标题栏按钮 / 徽章 / 浮层 / 消息流一行胶囊）也只从这里取数据 ——「唯一的那份清单」靠
+ * `pickCurrentTodos` 从消息历史派生，不引入任何额外状态字段。
  */
 import type { Message } from '@/types'
 import type {

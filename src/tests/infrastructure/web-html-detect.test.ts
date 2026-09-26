@@ -1,20 +1,13 @@
 /**
  * `web_fetch` 的 HTML 判定（`isHtml`）golden 一致性测试（TS 侧）
  *
- * 目的：把「TS 判定」与「Rust 原生判定」钉死在同一份输入/输出上 —— 它决定
- * `htmlToMd` 是否生效，直接影响**模型读到的是 Markdown 还是原始 HTML**。
+ * 判定决定 `htmlToMd` 是否生效 —— 直接影响**模型读到的是 Markdown 还是原始 HTML**，因此两侧
+ * （`isHtml` ↔ Rust `is_html`）必须逐字等价（铁律 1）。契约文件（唯一事实源，两侧共读）：
+ * `src/tests/fixtures/web-html-detect.golden.json`（Rust 侧为 `native_tools/web/common.rs` 的单测）。
  *
- * 背景：`web_fetch` 已原生化（`src-tauri/virlen-core/src/agent/native_tools/web/web_fetch.rs`），
- * 判定逻辑两侧各写一份（`isHtml` ↔ `is_html`），必须逐字等价（铁律 1）。
- * 契约文件（唯一事实源，两侧共读）：
- *   src/tests/fixtures/web-html-detect.golden.json
- *   - TS：本测试（`@/infrastructure/tools/web/common.ts::isHtml`）
- *   - Rust：`native_tools/web/common.rs::tests::golden_html_detect_matches_ts`
- *
- * ⚠️ 判定规则（两侧一致）：
- *   ① Content-Type 优先：媒体类型 `text/html` / `application/xhtml+xml` → 直接认定；
- *   ② 否则回退形状判定（大小写不敏感）：剥 BOM + trim 后，`<!doctype html…` / `<html…`
- *      开头（后接标签边界）且 `</html>` 结尾。
+ * ⚠️ 判定规则（两侧一致）：① Content-Type 优先：媒体类型 `text/html` / `application/xhtml+xml` 直接
+ * 认定；② 否则回退形状判定（大小写不敏感）：剥 BOM + trim 后，`<!doctype html…` / `<html…` 开头
+ * （后接标签边界）且 `</html>` 结尾。
  *
  * fixture 里的 `contentType: null` 表示「响应头未提供」；两侧都按空串处理。
  */

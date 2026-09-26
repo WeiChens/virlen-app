@@ -447,9 +447,8 @@ export async function hydrateSettings(): Promise<void> {
  *
  * ⚠️ 只在「表已就绪」时调用：表读不到 / 首次导入失败时保留副本，作为后端故障的兜底。
  *
- * 用户看不到未水合的首帧：`main()` 在 `await init()`（首步即本函数）之后才 `render()`，
- * 窗口还要等 `requestAnimationFrame` 才 `show()`。唯一退化情形是「上次已删副本 + 本次后端
- * 不可用」→ 设置回默认值（无权威源，已属异常）。幂等：副本不存在时 `removeItem` 是空操作。
+ * 用户看不到未水合的首帧（`init()` 之后才 `render()`，窗口还要等一帧才 `show()`）。唯一退化情形是「上次已
+ * 删副本 + 本次后端不可用」→ 设置回默认值（无权威源，已属异常）。幂等：副本不存在时是空操作。
  */
 function dropLegacyLocalSnapshot(): void {
   try {

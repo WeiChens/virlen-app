@@ -1,19 +1,14 @@
 /**
  * file-transfer-service — 侧边栏文件操作（复制 / 粘贴 / 重命名 / 删除）
  *
- * 定位：这些动作是「安全校验 + 文件系统能力」的编排，与 UI 无关，
- * 所以放 services；文案与弹窗留给调用方 —— 与 `utils/clipboard.ts` 同一约定：
- * 本层只回答「成功没有 / 为什么失败」，由 UI 翻译成人话。
+ * 定位：这些动作是「安全校验 + 文件系统能力」的编排，与 UI 无关，所以放 services；文案与弹窗留给调用
+ * 方 —— 本层只回答「成功没有 / 为什么失败」，由 UI 翻译成人话。
  *
- * 剪贴板语义（对齐资源管理器 / VS Code）：**应用内**文件剪贴板，
- * 复制只记住路径，粘贴时才真正落盘。刻意不碰系统剪贴板（Windows 上要写
- * CF_HDROP 才能互通，属于另一件事）。
+ * 剪贴板语义（对齐资源管理器 / VS Code）：**应用内**文件剪贴板，复制只记住路径，粘贴时才真正落盘；
+ * 刻意不碰系统剪贴板（Windows 上要写 CF_HDROP 才能互通，属于另一件事）。另有「原位」操作 move
+ *（目录树里拖到别的目录）：走 rename —— 原子、不产生副本、同名直接算失败。
  *
- * 另有一类「原位」操作：move（目录树里拖到别的目录下）。它与 paste 的区别是
- * 走 rename —— 原子、不产生副本、同名直接算失败。
- *
- * ⚠️ 铁律 6：所有写操作（粘贴目标、重命名、删除）必须先过
- *    `securityService.resolveSafePath(..., 'w')`，禁止绕过。
+ * ⚠️ 铁律 6：所有写操作（粘贴目标、重命名、删除）必须先过 `securityService.resolveSafePath(..., 'w')`。
  */
 import * as tauriFs from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'

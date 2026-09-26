@@ -2,13 +2,10 @@
  * Provider Catalog 测试 — 供应商目录（模板表 + 推理强度档位表）
  *
  * ⚠️ 表的本体在 Rust（`virlen-core/src/agent/provider/provider_catalog.json`）：前端经
- * `setProviderCatalog()` 水合后同步读取（测试 setup 已完成水合）。本测试与 Rust 侧
- * `agent/provider/catalog.rs` 的单测是一对 —— 两侧盯同一批事实。
+ * `setProviderCatalog()` 水合后同步读取。本测试与 Rust 侧 `agent/provider/catalog.rs` 的单测是一对。
  *
- * 覆盖场景：
- * - 推理强度档位并集 / 默认勾选值 / 排序归一化
- * - 所有预定义模板的完整性（必填字段、类型、多协议、官网链接）
- * - 自定义模板的默认值
+ * 覆盖：推理强度档位并集 / 默认勾选值 / 排序归一化；所有预定义模板的完整性（必填字段、多协议、官网
+ * 链接）；自定义模板的默认值。
  */
 import { describe, it, expect } from 'vitest'
 import {

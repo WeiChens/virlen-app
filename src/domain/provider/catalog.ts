@@ -1,18 +1,14 @@
 /**
  * 供应商目录（模板表 + 推理强度档位表）的**前端侧快照**（纯模块，零 I/O）
  *
- * 数据本体在 Rust —— `src-tauri/virlen-core/src/agent/provider/provider_catalog.json`。
- * 前端**不再自带副本**：组合根（`src/main.ts`）启动时经 `loadProviderCatalog()` 水合一次，
- * 此后所有消费者**同步**读取。
+ * 数据本体在 Rust `virlen-core/src/agent/provider/provider_catalog.json`；前端不再自带副本：组合根
+ * （`src/main.ts`）启动时经 `loadProviderCatalog()` 水合一次，此后所有消费者同步读取。
  *
- * 为什么是「启动水合 + 同步读」而不是「每次异步去取」：
- * `sortReasoningEfforts()` 与 `providerTemplates()` 都在**渲染期被同步调用**
- * （`provider-edit-modal` / `reasoning-effort-slider` / `provider-service`），
- * 改成 async 会把它传染给整条 UI 链 —— 代价远大于「启动时等一次 IPC」。
- * 接线与提示词（`src/domain/agent/prompt-texts.ts`）同构。
+ * 为什么是「启动水合 + 同步读」：`sortReasoningEfforts()` 与 `providerTemplates()` 都在渲染期被同步
+ * 调用（`provider-edit-modal` / `reasoning-effort-slider` / `provider-service`），改成 async 会把它
+ * 传染给整条 UI 链。接线与提示词（`domain/agent/prompt-texts.ts`）同构。
  *
- * ⚠️ 未水合时抛错，不返回空表：空模板表会让「添加服务商」页面静默变空
- * （一张没有卡片的网格，用户不知道为什么），比直接报错难排查得多。
+ * ⚠️ 未水合时抛错，不返回空表：空模板表会让「添加服务商」页面静默变空，比直接报错难排查得多。
  */
 import type { ProviderConfigTemplate } from '@/types'
 

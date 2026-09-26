@@ -1,18 +1,14 @@
 /**
  * execute_script — 创建脚本文件并执行，可选执行后立即删除
  *
- * 与 `execute_command` 的分工：
- * - `execute_command`：执行一条内联 shell 命令（复杂多行脚本在内联时转义/引号很痛苦）
- * - `execute_script`：适合「需要一段较长的脚本」的场景——先落盘成文件，再用命令执行，
- *   执行完默认删除，避免污染工作目录。
+ * 与 `execute_command` 的分工：后者执行一条内联 shell 命令（多行脚本在内联时转义 / 引号很痛苦），本工
+ * 具适合「需要一段较长的脚本」—— 先落盘成文件再执行，执行完默认删除，避免污染工作目录。
  *
- * 审批：独立门禁 script.execute（允许 / 每次弹窗 / 禁止），与终端命令风险分类无关。
- * 申请不使用沙盒（sandbox:"off"）时另过「沙盒脱壳·脚本执行」门禁（与脚本权限取更严格者）；
- * 命中「忽略沙盒命令」规则（设置 → 安全）时**免脱壳审批并强制无沙盒执行**（不必 AI 申请）。
- * 沙盒：写文件走 securityService.resolveSafePath(mode='w')，超范围直接报错。
+ * 审批：独立门禁 `script.execute`（与终端命令风险分类无关）；申请不使用沙盒（`sandbox:"off"`）时另过
+ * 「沙盒脱壳·脚本执行」门禁（取更严格者）；命中「忽略沙盒命令」规则（设置 → 安全）时免脱壳审批并强制
+ * 无沙盒执行。写文件走 `securityService.resolveSafePath(mode='w')`，超范围直接报错。
  *
- * ⚠️ 规则语义与 Rust 原生路径（`native_tools/execute/execute_script.rs`）对齐，
- *    匹配对象是运行命令（不是脚本正文）。
+ * ⚠️ 规则语义与 Rust 原生路径（`execute_script.rs`）对齐，匹配对象是**运行命令**（不是脚本正文）。
  */
 import * as tauriFs from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
@@ -83,9 +79,8 @@ toolRegistry.register(
       String(args.sandbox ?? '').toLowerCase(),
     )
     const sandboxMode = settingsState.value.sandboxMode ?? 'on'
-    // 只读模式禁止绕过沙盒（与 Rust 原生路径一致）
-    // ⚠️ 只针对 AI 的显式申请：命中「忽略沙盒命令」规则时只读模式静默忽略规则
-    //   （脚本继续走沙盒），不把一条本来能跑的调用变成报错。
+    // 只读模式禁止 AI 显式申请绕过沙盒（与 Rust 原生路径一致）。
+    // ⚠️ 但只针对 AI 的显式申请：命中「忽略沙盒命令」规则时只读模式静默忽略规则（脚本继续走沙盒）。
     if (aiRequestedBypass && sandboxMode === 'readonly') {
       throw new Error(
         'The sandbox is in read-only mode, so bypassing it to run a script is not allowed; switch the sandbox mode in settings first (or use a regular terminal)',

@@ -336,8 +336,8 @@ export const SANDBOX_BYPASS_HINT =
 /**
  * 命中「忽略沙盒命令」规则时追加到审批弹窗的警告（命令 / 脚本共用；中文即 i18n key）。
  *
- * 与 `SANDBOX_BYPASS_HINT` 的区别：AI 并未申请脱壳，是用户自己的规则把这条命令改成了
- * 无沙盒执行 —— 用户需要看懂「为什么会绕沙盒」（否则会被当成失控）。`$__rule__` 为规则名。
+ * `$__rule__` 为规则名。与 `SANDBOX_BYPASS_HINT` 的区别：AI 并未申请脱壳，是用户自己的规则把这条
+ * 命令改成了无沙盒执行 —— 用户需要看懂「为什么会绕沙盒」（否则会被当成失控）。
  *
  * ⚠️ 与 Rust `rules.rs::with_rule_hint` 逐字一致（铁律 1）。
  */
@@ -417,10 +417,9 @@ function installListener(): void {
 // ══════════════════════════════════════════════════════════════════
 
 /**
- * 处理终端输出中的 \r（回车覆盖）和光标移动转义序列，
- * 返回处理后的纯文本（不包含颜色/样式 ANSI 码）。
+ * 处理终端输出中的 `\r`（回车覆盖）与光标移动 / 清屏转义序列，返回纯文本（不含颜色 / 样式 ANSI 码）。
  *
- * 用行缓冲区模拟虚拟终端：
+ * 用行缓冲区模拟虚拟终端，支持：
  * - \r        → 回到当前行首，后续字符覆盖
  * - \n        → 换行（光标移到下一行行首）
  * - \b        → 光标左移一格（退格）
@@ -435,8 +434,8 @@ function installListener(): void {
  * - \x1b]... BEL/ST → OSC（如改窗口标题），整条忽略
  * - 其他 \x1b[... 序列（颜色、样式、ECH 擦除字符等）→ 忽略
  *
- * ⚠️ 必须完整吞掉转义序列：旧实现只认 `ESC [` 且只吃 0-9;，`\x1b[?25l` 会把 "25l" 漏成
- * 正文（PTY / ConPTY 路径下这类序列极密集）。本函数与 Rust 侧
+ * ⚠️ 必须完整吞掉转义序列：旧实现只认 `ESC [` 且只吃 `0-9;`，`\x1b[?25l` 会把 "25l" 漏成正文
+ * （PTY / ConPTY 路径下这类序列极密集）。与 Rust
  * `native_tools/execute/common.rs::process_terminal_output` 逐条对齐（铁律 1），改一边必须同步另一边。
  */
 export function processTerminalOutput(raw: string): string {
@@ -877,8 +876,8 @@ fi`,
     output.exitCode = exitCode
 
     // ⚠️ 以下 5 条是模型侧文案：固定英文，与 Rust 侧 runner
-    // （native_tools/execute/common/runner/mod.rs）逐字对齐（铁律 1）。
-    // 不进 i18n —— 否则两侧引擎会产出不同文本；界面语言由 UI 从结构化 uiData 重建（D2-A）。
+    // （native_tools/execute/common/runner/mod.rs）逐字对齐（铁律 1）；不进 i18n，否则两侧会产出
+    // 不同文本（界面语言由 UI 从结构化 uiData 重建，D2-A）。
     let result = ''
     if (killedByUser) {
       result += 'Command cancelled by the user\n'

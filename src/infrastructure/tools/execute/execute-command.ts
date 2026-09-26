@@ -1,19 +1,16 @@
 /**
  * execute_command — 执行一条 shell 命令，自动超时杀进程
  *
- * shell 选择策略（见 ./common.ts runCommand）：
- * - Windows: Windows PowerShell 5.1（powershell.exe，不再混用 cmd）
- * - macOS: zsh
- * - Linux: sh
+ * shell 选择（见 ./common.ts runCommand）：Windows 用 Windows PowerShell 5.1（`powershell.exe`，不再
+ * 混用 cmd）、macOS 用 zsh、Linux 用 sh。
  *
- * 审批：按权限三态（settings.permissions[terminal.*]：允许 / 每次弹窗 / 禁止）决策；
- * 申请绕过沙盒（sandbox:"off"）时另过「沙盒脱壳·命令执行」权限（与风险权限取更严格者）；
- * 命中「忽略沙盒命令」规则（设置 → 安全）时**免脱壳审批并强制无沙盒执行**（不必 AI 申请）；
- * 命中弹窗时返回 UserInteractionRequired('confirm_command')，禁止时直接抛错。
+ * 审批：按权限三态（`settings.permissions[terminal.*]`：允许 / 每次弹窗 / 禁止）决策；申请绕过沙盒
+ * （`sandbox:"off"`）时另过「沙盒脱壳·命令执行」权限（与风险权限取更严格者）；命中「忽略沙盒命令」
+ * 规则（设置 → 安全）时免脱壳审批并强制无沙盒执行；命中弹窗时返回
+ * `UserInteractionRequired('confirm_command')`，禁止时直接抛错。
  *
- * ⚠️ 规则语义与 Rust 原生路径（`native_tools/execute/execute_command.rs`）对齐：两侧都用
- *    `securityService.matchSandboxIgnoreRule` 匹配（Rust 经 `sandbox_rule_check` 问同一函数），
- *    改一边必须同步另一边（铁律 1）。
+ * ⚠️ 规则语义与 Rust 原生路径（`native_tools/execute/execute_command.rs`）对齐，两侧共读同一份 golden
+ * 契约（`tests/fixtures/sandbox-rules.golden.json`）：改一边必须同步另一边（铁律 1）。
  */
 import { toolRegistry } from '@/domain/tools'
 import {
@@ -59,8 +56,7 @@ toolRegistry.register(
     const timeoutMs = (timeout ?? 30) * 1000
 
     // sandbox: 'off' → 申请「不使用沙盒」执行。
-    // ⚠️ 安全：该请求过「沙盒脱壳」权限门禁（与命令风险权限取更严格者，默认弹窗）；
-    //   readonly 模式直接拒绝。
+    // ⚠️ 该请求过「沙盒脱壳」权限门禁（与命令风险权限取更严格者，默认弹窗）；readonly 模式直接拒绝。
     const aiRequestedBypass = ['off', 'none'].includes(
       String(args.sandbox ?? '').toLowerCase(),
     )
@@ -75,17 +71,17 @@ toolRegistry.register(
     const base = await securityService.getPermissionDecision(permName)
     // 沙盒实际启用与否：off 时「申请绕过」没有意义（本来就不进沙盒），不参与脱壳门禁
     const sandboxMode = settingsState.value.sandboxMode ?? 'on'
-    // 只读模式禁止绕过沙盒（否则只读保护会被绕过；与 Rust 原生路径一致）
-    // ⚠️ 只针对 AI 的显式申请：命中「忽略沙盒命令」规则时只读模式静默忽略规则
-    //   （命令继续走沙盒），不把一条本来能跑的命令变成报错。
+    // 只读模式禁止 AI 显式申请绕过沙盒（与 Rust 原生路径一致）。
+    // ⚠️ 但只针对 AI 的显式申请：命中「忽略沙盒命令」规则时只读模式静默忽略规则（命令继续走沙盒），
+    //   不把一条本来能跑的命令变成报错。
     if (aiRequestedBypass && sandboxMode === 'readonly') {
       // ⚠️ 模型侧固定英文文案，与 Rust `execute_command.rs` 逐字对齐（铁律 1）
       throw new Error(
         'The sandbox is in read-only mode, so bypassing it to run a command is not allowed; switch the sandbox mode in settings first (or use a regular terminal)',
       )
     }
-    // 「忽略沙盒命令」规则（设置 → 安全）：命中即免脱壳审批 + 强制无沙盒执行，
-    // AI 没传 sandbox:"off" 也生效（该功能就是为了 npm/pnpm、vitest 这类高频命令不必每次授权）。
+    // 「忽略沙盒命令」规则（设置 → 安全）：命中即免脱壳审批 + 强制无沙盒执行，AI 没传 sandbox:"off"
+    // 也生效（该功能就是为了 npm/pnpm、vitest 这类高频命令不必每次授权）。
     // ⚠️ 只在沙盒启用时匹配：off 时无沙盒可脱；readonly 时脱壳被禁止。
     const ruleHit =
       sandboxMode === 'on'

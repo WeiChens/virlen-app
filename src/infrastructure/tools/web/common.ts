@@ -31,18 +31,13 @@ function startsWithTagBoundary(lower: string, prefix: string): boolean {
 /**
  * 判断响应体是否应按 HTML 处理（即 `htmlToMd` 是否生效）。
  *
- * 判定顺序（⚠️ 与 Rust `is_html` 逐字对齐，契约见
- * `src/tests/fixtures/web-html-detect.golden.json`，两侧共读）：
+ * 判定顺序（⚠️ 与 Rust `is_html` 逐字对齐，契约见 `src/tests/fixtures/web-html-detect.golden.json`，
+ * 两侧共读）：① **Content-Type 优先**（`text/html` / `application/xhtml+xml` 时直接认定）；② 否则回退
+ * **形状判定**（大小写不敏感）：剥 BOM + `trim()` 后以 `<!doctype html…` / `<html…` 开头（后接标签
+ * 边界）且以 `</html>` 结尾。
  *
- * 1. **Content-Type 优先**：媒体类型为 `text/html` / `application/xhtml+xml` 时直接认定 ——
- *    服务器已明确声明，不再看正文形状；
- * 2. 否则回退**形状判定**（**大小写不敏感**）：剥 BOM + `trim()` 后，要求以
- *    `<!doctype html…` 或 `<html…` 开头（后接标签边界）且以 `</html>` 结尾。
- *
- * 为什么要有 Content-Type 这一层：真实站点普遍返回**小写** `<!doctype html>`，
- * 旧实现只认大写 `<!DOCTYPE html>` → 大量网页被判成「非 HTML」，`htmlToMd` 形同虚设
- * （模型拿到的是原始 HTML 而不是 Markdown）。
- *
+ * 为什么要有 Content-Type 这一层：真实站点普遍返回**小写** `<!doctype html>`，旧实现只认大写 → 大量
+ * 网页被判成「非 HTML」，`htmlToMd` 形同虚设（模型拿到的是原始 HTML）。
  */
 export function isHtml(content: string, contentType?: string): boolean {
   // ① Content-Type 优先：媒体类型大小写不敏感，参数（`; charset=…`）不参与判定

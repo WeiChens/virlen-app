@@ -1,14 +1,12 @@
 /**
  * list_messages — 列出「已被上下文压缩掉」的历史消息时序
  *
- * 只覆盖「已压缩区间」（时序 < 最后一个 summary）：该区间之后的对话已在模型当前
- * 上下文中，重复下发只会浪费 token —— 因此这里**不返回**当下可见的消息。
+ * 只覆盖「已压缩区间」（时序 < 最后一个 summary）：之后的对话已在模型当前上下文中，重复下发只浪费
+ * token —— 因此这里不返回当下可见的消息。AI 用它拿到时序 + 消息 id（或按关键词定位），再用
+ * `read_messages` 读取正文。
  *
- * AI 用它拿到时序 + 消息 id（或按关键词定位），再用 read_messages 读取正文。
- *
- * ⚠️ 已原生化（Step 2）：Rust 引擎走 `native_tools/chat/list_messages.rs`（默认路径），
- * 本文件是回退路径；文本格式化 / 上限 / 预算在 `tools/chat/common.ts` ↔
- * `native_tools/chat/common.rs` 两份镜像，改一边要同步另一边（铁律 1）。
+ * ⚠️ 已原生化：Rust 引擎走 `native_tools/chat/list_messages.rs`（默认路径），本文件是回退路径；与
+ * `native_tools/chat/common.rs` 是两份镜像，改一边要同步另一边（铁律 1）。
  */
 import { toolRegistry } from '@/domain/tools'
 import type { ToolContext, ToolExecutor, ToolResult } from '@/domain/tools/types'

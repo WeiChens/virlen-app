@@ -131,9 +131,9 @@ export function cachedTokensOf(
 /**
  * 把 provider 回报的 usage 归一化成**账本口径**。
  *
- * 为什么要归一化：账本里 `promptTokens` 是**非缓存输入**、`cachedTokens` 单独一列，
- * 计费时按两档单价分别算（`domain/pricing::computeCost`）。而 OpenAI 兼容 / Gemini
- * 把缓存命中算在 `prompt_tokens` 里 —— 直接照抄会让这部分被按输入价**重复计一次钱**。
+ * 为什么要归一化：账本里 `promptTokens` 是**非缓存输入**、`cachedTokens` 单独一列，计费时按两档单价分别
+ * 算；而 OpenAI 兼容 / Gemini 把缓存命中算在 `prompt_tokens` 里 —— 直接照抄会让这部分被按输入价重复计一
+ * 次钱。
  *
  * ⚠️ 无 provider 归属信息时按 OpenAI 口径处理（更常见）；归一化后不变式：
  * `prompt + cached + completion === total`。

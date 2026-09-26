@@ -1,12 +1,12 @@
 /**
  * read_skill_source — 查看指定技能的源代码目录结构 + SKILL.md 全文
  *
- * 同时返回技能文件夹的绝对路径，AI 可据此用 read_file 读取其他文件。只读操作，不提供写能力。
+ * 同时返回技能文件夹的绝对路径，AI 可据此用 `read_file` 读取其他文件。只读操作，不提供写能力。
  *
  * ⚠️ 模型侧固定英文（与 Rust 原生实现 / CLI 一致，铁律 1）—— 原生实现已落地：
  * `native_tools/skill/read_skill_source.rs`（默认引擎路径），本文件是回退路径。UI 侧下发结构化
- * `uiData: { skillPath, tree, md }`（语言无关），组件据此渲染卡片（旧数据无 uiData 时
- * 回退解析 `content` 的中文分段标记）。
+ * `uiData: { skillPath, tree, md }`（语言无关），组件据此渲染卡片（旧数据无 uiData 时回退解析 `content`
+ * 的中文分段标记）。
  */
 import { toolRegistry } from '@/domain/tools'
 import type { ToolContext, ToolExecutor, ToolResult } from '@/domain/tools/types'

@@ -1,27 +1,20 @@
 /**
  * securityRepo — 安全配置的持久化 Repository
  *
- * 存储分工（配置下沉 D3，详见 `docs/config-sink-plan.md`）：
- * - **「忽略沙盒命令」规则**（`sandboxIgnoreRules`）：
- *   **唯一权威源是 Rust 侧 `app_settings` 表**（同一个 `virlen.db`）——
- *   GUI（默认 Rust 引擎）与 CLI 读写同一份，判定在 `src-tauri/virlen-core/src/security/`，
- *   因此不需要「问 JS」（原内部交互 `sandbox_rule_check` 已删除）。
- *   localStorage 不保存该字段：只在浏览器 dev / 非 Tauri 环境降级使用（见下）。
- * - **路径配置**（whitelist / blacklist / skipEachDirs）：仍存 localStorage
- *   （同步读 → 首帧不闪空）。
+ * 存储分工（配置下沉 D3，见 `docs/config-sink-plan.md`）：
+ * - 「忽略沙盒命令」规则：**唯一权威源是 Rust 侧 `app_settings` 表**（GUI 默认引擎与 CLI 读写同一份，
+ *   判定在 `virlen-core/src/security/`）；localStorage 不保存该字段，只在浏览器 dev / 非 Tauri 降级用。
+ * - 路径配置（whitelist / blacklist / skipEachDirs）：仍存 localStorage（同步读 → 首帧不闪空）。
  *
- * 启动同步（`hydrateSecurity`，幂等，`main.ts` 在窗口显示前调用）：
- * 1. 表里**有**该键 → 读进内存快照（`rulesSnapshot`）；
- * 2. 表里**没有** → 一次性迁移：把 localStorage 的历史副本写进表（老用户升级无感）。
- * 两条分支都会清掉 localStorage 里的规则字段 —— 因此「删掉表里的行」= 真正清空规则，
- * 不会被下一次启动迁回。
+ * 启动同步（`hydrateSecurity`，幂等，`main.ts` 在窗口显示前调用）：表里有该键 → 读进内存快照
+ * （`rulesSnapshot`）；没有 → 一次性把 localStorage 的历史副本迁进表。两条分支都会清掉 localStorage
+ * 里的规则字段 —— 因此「删掉表里的行」= 真正清空规则，不会被下次启动迁回。
  *
  * ⚠️ 规则匹配有两份实现，由 golden 契约收敛（`src/tests/fixtures/sandbox-rules.golden.json`）：
- * - Rust + CLI：`src-tauri/virlen-core/src/security/rules.rs`（text / regex 原生 + js 内嵌 QuickJS）；
- * - 浏览器 dev / 设置页「测试」：`@/domain/security/sandbox-ignore-rules`。
+ * `virlen-core/src/security/rules.rs`（text / regex 原生 + js 内嵌 QuickJS）↔ 浏览器 dev / 设置页
+ * 「测试」用的 `@/domain/security/sandbox-ignore-rules`。
  *
- * 非 Tauri 环境（浏览器 dev / vitest）：没有表可写 → 整体降级为 localStorage 持久化，
- * 保证 `pnpm dev` 下该功能仍可用（与配置下沉前的行为一致）。
+ * 非 Tauri 环境（浏览器 dev / vitest）没有表可写 → 整体降级为 localStorage 持久化。
  */
 import { getLocal, setLocal } from '@/utils/localStorage'
 import type { SimpleRepo } from '@/infrastructure/repo'

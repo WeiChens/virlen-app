@@ -1,16 +1,13 @@
 /**
  * command_confirm — 授权确认弹窗的交互逻辑（命令 / 脚本 / 沙盒脱壳等，通用）
  *
- * handler 收到 confirm_command 后：
- * 1. 弹「授权确认」弹窗（展示权限唯一 key + title / sub-title / desc）
- * 2. 用户点「允许」→ handler 自己调 runCommand 执行，把结果 resolve 回去
- * 3. 用户点「拒绝」→ reject 'cancelled'
- * 4. 用户点「暂存」→ throw InteractionShelved
+ * handler 收到 confirm_command 后：① 弹「授权确认」弹窗（展示权限唯一 key + title / sub-title / desc）；
+ * ② 用户点「允许」→ 自己调 runCommand 执行并 resolve；③ 「拒绝」→ reject 'cancelled'；
+ * ④ 「暂存」→ throw InteractionShelved。
  *
- * ⚠️ handler 只负责「问用户」与「放行 / 拒绝」，不做任何脱壳决策：「忽略沙盒命令」规则
- *    （设置 → 安全）在审批之前就定了是否强制无沙盒执行，匹配完全在 Rust 侧
- *    （`virlen-core/src/security/`；回退路径在 `tools/execute/*.ts`）。命中规则时根本走不到
- *    这里 —— 不要在本文里再加规则匹配（两处匹配会分叉）。
+ * ⚠️ handler 只负责「问用户」与「放行 / 拒绝」，不做任何脱壳决策：「忽略沙盒命令」规则（设置 → 安全）
+ * 在审批之前就定了是否强制无沙盒执行，匹配完全在 Rust 侧（`virlen-core/src/security/`；回退路径在
+ * `tools/execute/*.ts`）—— 命中规则时根本走不到这里，不要在本文里再加规则匹配（两处匹配会分叉）。
  */
 import { ToolExecutorResponse } from '@/domain/tools/types'
 import toolInteractEvent from '@/events/toolInteractEvent'

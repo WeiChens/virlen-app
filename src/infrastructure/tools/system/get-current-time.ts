@@ -1,13 +1,12 @@
 /**
  * get_current_time — 获取当前时间（支持 IANA 时区参数）
  *
- * 模型侧**固定英文**（与 Rust 原生实现 / CLI 一致，铁律 1）；
- * UI 侧只下发「时间戳 + 时区」这个语言无关结构，由组件按当前 UI 语言本地化
- * （`ui/pages/chat/components/tool-call/GetCurrentTimeMessage`）。
- * 这样同一个工具在「Rust 引擎 / TS 引擎」×「中文 / 英文界面」四种组合下都不会分叉。
+ * 模型侧**固定英文**（与 Rust 原生实现 / CLI 一致，铁律 1）；UI 侧只下发「时间戳 + 时区」这个语言无关
+ * 结构，由组件按当前 UI 语言本地化 —— 因此同一个工具在「Rust 引擎 / TS 引擎」×「中 / 英文界面」四种
+ * 组合下都不会分叉。
  *
- * ⚠️ Rust 侧原生实现已就位（`native_tools/system/get_current_time.rs`，`chrono-tz`）；
- * 本文件是回退路径，必须保持同结果：格式、默认时区、非法时区文案一律逐字对齐。
+ * ⚠️ Rust 侧原生实现已就位（`native_tools/system/get_current_time.rs`，`chrono-tz`）；本文件是回退路径，
+ * 必须保持同结果：格式、默认时区、非法时区文案一律逐字对齐。
  */
 import { toolRegistry } from '@/domain/tools'
 import {

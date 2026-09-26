@@ -1,19 +1,15 @@
 /**
  * read_messages — 按消息 id + 相对窗口读取「已被上下文压缩掉」的历史消息正文
  *
- * 与 list_messages 同源（同一 Rust 查询），只是定位方式不同：
- * 给定锚点（id 优先，可用 seq）与相对窗口 [-10,0] / [0,10] / [-5,5]，
- * 返回该窗口内各条消息的正文。
+ * 与 `list_messages` 同源（同一 Rust 查询），只是定位方式不同：给定锚点（id 优先，可用 seq）与相对
+ * 窗口 `[-10,0]` / `[0,10]` / `[-5,5]`，返回窗口内各条消息的正文。
  *
- * 约束（需求硬性）：
- *   - 只覆盖「已压缩区间」；触及边界即停止，并提示后续内容已在上下文中；
- *   - 深度思考（reasoning）永不返回；
- *   - 工具调用只给「工具名 + 参数摘要」，参数与工具结果均截断到 ≈100 字符；
- *   - 单条正文 ≤ 4000 字符、单次窗口 ≤ 21 条、单次输出 ≤ 30000 字符。
+ * 硬性约束：只覆盖「已压缩区间」（触及边界即停止，并提示后续内容已在上下文中）；深度思考永不返回；
+ * 工具调用只给「工具名 + 参数摘要」（参数与结果截断到 ≈100 字符）；单条正文 ≤ 4000 字符、单次窗口
+ * ≤ 21 条、单次输出 ≤ 30000 字符。
  *
- * ⚠️ 已原生化（Step 2）：Rust 引擎走 `native_tools/chat/read_messages.rs`（默认路径），
- * 本文件是回退路径；与 `tools/chat/common.ts` ↔ `native_tools/chat/common.rs` 是两份镜像，
- * 改一边要同步另一边（铁律 1）。
+ * ⚠️ 已原生化：Rust 引擎走 `native_tools/chat/read_messages.rs`（默认路径），本文件是回退路径；与
+ * `native_tools/chat/common.rs` 是两份镜像，改一边要同步另一边（铁律 1）。
  */
 import { toolRegistry } from '@/domain/tools'
 import type { ToolContext, ToolExecutor, ToolResult } from '@/domain/tools/types'

@@ -38,9 +38,9 @@ class SecurityServiceImpl implements SecurityService {
    *
    * 命中 → 该命令**免除「沙盒脱壳」审批**且**强制以「不使用沙盒」方式执行**。
    *
-   * ⚠️ 消费方只剩没有 Rust 可用的路径：`tools/execute/*.ts`、设置页「测试」按钮、保存期的
-   * `compileSandboxRule`；Rust 与 CLI 的判定在 `src-tauri/virlen-core/src/security/`
-   * （同一份 golden 契约收敛）。匹配异常一律返回 null（不脱壳），由匹配器内部保证。
+   * ⚠️ 消费方只剩没有 Rust 可用的路径（`tools/execute/*.ts`、设置页「测试」、保存期的
+   * `compileSandboxRule`）；Rust 与 CLI 的判定在 `virlen-core/src/security/`（同一份 golden 契约收敛）。
+   * 匹配异常一律返回 null（不脱壳），由匹配器内部保证。
    */
   async matchSandboxIgnoreRule(command: string): Promise<SandboxIgnoreRule | null> {
     if (!command || !command.trim()) return null

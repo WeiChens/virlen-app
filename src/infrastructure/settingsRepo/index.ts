@@ -1,20 +1,17 @@
 /**
- * settingsRepo — 应用设置的持久化 Repository（**配置下沉 D3**）
+ * settingsRepo — 应用设置的持久化 Repository（配置下沉 D3）
  *
- * 存储在 **Rust 侧 `app_settings` 表**（`src-tauri/virlen-core/src/session_db/settings.rs`），
- * 与会话库共用同一个 `virlen.db` —— 因此 GUI 与未来的 CLI 读写的是**同一份配置**。
+ * 存储在 **Rust 侧 `app_settings` 表**（`virlen-core/src/session_db/settings.rs`），与会话库共用同一个
+ * `virlen.db` —— GUI 与 CLI 读写的是**同一份配置**（见 `docs/config-sink-plan.md`）。
  *
- * 分工（详见 `docs/config-sink-plan.md`）：
- * - `app_settings` 表：**权威源** —— 启动水合、改动回写；
- * - localStorage：**已退出**（S3 收尾）—— 不再写（Tauri 下写入被丢弃，见
- *   `ui/store/settingStore.ts` 的 `settingsLocalStorage`），仅保留「读兼容」（历史副本）
- *   供同步初值；表就绪后历史副本即被删除（`dropLegacyLocalSnapshot`）。
- *   非 Tauri（浏览器 dev / vitest）没有表可写 → 仍用 localStorage 持久化。
+ * - `app_settings` 表：**权威源**（启动水合、改动回写）；
+ * - localStorage：**已退出**（S3 收尾）—— 不再写，仅保留「读兼容」（历史副本）供同步初值，表就绪后即
+ *   被删除（`dropLegacyLocalSnapshot`）。非 Tauri（浏览器 dev / vitest）没有表可写 → 仍用 localStorage。
  *
- * ⚠️ 键名与 `SettingsStore` 字段同名同层，两侧不建映射表（避免字段漂移）。
- * 保留键以 `__` 开头（`__schemaVersion` / `__migratedFrom`），业务键不得使用该前缀。
+ * ⚠️ 键名与 `SettingsStore` 字段同名同层，两侧不建映射表（避免字段漂移）；保留键以 `__` 开头
+ * （`__schemaVersion` / `__migratedFrom`），业务键不得使用该前缀。
  *
- * 非 Tauri 环境（浏览器 dev / vitest）自动降级为空实现：读回 `{}`、写入静默丢弃、不抛错。
+ * 非 Tauri 环境自动降级为空实现：读回 `{}`、写入静默丢弃、不抛错。
  */
 import { invoke } from '@tauri-apps/api/core'
 

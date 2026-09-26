@@ -16,9 +16,8 @@ import { track } from '@/utils/telemetry'
 /**
  * 窗口是否被隐藏到托盘时，先把它放出来。
  *
- * ⚠️ 必须传 `ensureVisible = true` 的场景：等用户交互（user_choice / 授权确认 / 终端内确认）
- * —— 隐藏窗口里的弹窗用户根本看不到，而 Rust 侧桥接回执（`agent/bridge.rs` 的 oneshot）
- * 没有超时，引擎会永久挂起。
+ * ⚠️ 必须传 `ensureVisible = true` 的场景：等用户交互（`user_choice` / 授权确认 / 终端内确认）—— 隐藏窗口
+ * 里的弹窗用户根本看不到，而 Rust 侧桥接回执没有超时，引擎会永久挂起。
  */
 async function ensureWindowVisible(): Promise<void> {
   const appWindow = getCurrentWindow()

@@ -1,31 +1,21 @@
 /**
  * sandbox-ignore-rules — 「忽略沙盒命令」规则（领域层，纯匹配逻辑）
  *
- * 背景：AI 执行 vitest / vite / jest / node-gyp 等需要「管道 stdio」的命令时，
- * 必须申请 `sandbox:"off"`（脱壳）——沙盒的受限令牌会让那次 spawn 直接 EPERM
- * （根因见 AGENTS §11.2）。每次脱壳都要走「沙盒脱壳」权限审批（默认弹窗），
- * 在「安装 / 测试」这类高频命令上非常烦人。
+ * AI 执行 vitest / vite / node-gyp 等需要「管道 stdio」的命令时必须申请 `sandbox:"off"`（脱壳）——
+ * 沙盒的受限令牌会让那次 spawn 直接 EPERM（根因见 AGENTS §11.2）。而每次脱壳都要走「沙盒脱壳」
+ * 审批，在「安装 / 测试」这类高频命令上非常烦人。
  *
- * 本模块提供「命令 → 是否命中忽略规则」的**纯函数**（不依赖 store / UI / i18n）：
- * 用户规则存 `settings → 安全 → 忽略沙盒命令`，命中的命令由
- * `services/tool-service/command_confirm.ts` 在交互层直接按「用户允许」放行，
- * 不再弹窗。
+ * 本模块提供「命令 → 是否命中忽略规则」的纯函数（不依赖 store / UI / i18n）：规则存
+ * `settings → 安全 → 忽略沙盒命令`，命中的命令由 `command_confirm.ts` 在交互层直接按「用户允许」放行。
  *
- * 三种规则（kind）：
- * - `text` ：字面量比较，再分 完全 / 前缀 / 后缀（textMode）；默认忽略大小写
- * - `regex`：正则源码（caseSensitive 决定是否加 `i`）
- * - `js`   ：用户自写的 JS，参数为 `command`，返回真值即命中。默认模板是一个
- *            带注释的 `function matchCommand(command) { ... return false }`；
- *            写法宽容（见 `buildJsFunction`）：函数声明 / 含 `return` 的函数体 /
- *            单表达式（自动补 `return (...)`）/ `const f = (command) => ...` 均可
+ * 三种规则（kind）：`text` 字面量比较（再分完全 / 前缀 / 后缀，默认忽略大小写）、`regex` 正则源码
+ * （`caseSensitive` 决定是否加 `i`）、`js` 用户自写 JS（参数 `command`，返回真值即命中；写法宽容见
+ * `buildJsFunction`）。匹配按列表顺序取**第一条命中且已启用**的规则（顺序即优先级）。
  *
  * ⚠️ 安全边界（改这里必须连同 `command_confirm.ts` 的拦截条件一起看）：
- * - 规则只免除「沙盒脱壳」审批，不改变命令本身的风险审批（`terminal.*` / `script.execute` 仍按设置弹窗）；
- * - `deny` 永远优先：拒绝发生在引擎侧（Rust），规则无从介入；
- * - `sandboxMode === 'readonly'` 时脱壳已被引擎拒绝，规则不生效；
- * - JS 规则在应用内求值（等价于用户自己写代码）；编译或运行抛错一律按「未命中」处理，绝不放行。
- *
- * 匹配顺序：按规则列表顺序取**第一条命中且已启用**的规则（列表顺序即优先级）。
+ * - 规则只免除「沙盒脱壳」审批，不改变命令本身的风险审批（`terminal.*` / `script.execute` 仍弹窗）；
+ * - `deny` 永远优先（拒绝发生在引擎侧 Rust，规则无从介入）；`readonly` 沙盒下脱壳已被拒，规则不生效；
+ * - JS 规则在应用内求值（等价于用户自己写代码）；编译或运行抛错一律按「未命中」，绝不放行。
  */
 import { v4 } from '@/utils/uuid'
 

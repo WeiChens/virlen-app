@@ -1,13 +1,12 @@
 /**
  * skillStore — Skill 注册与存储
  *
- * 存储已注册的 Skill 元信息（RegisteredSkill[]）到 localStorage。
- * SKILLs 文件夹路径固定为 Tauri appDataDir/skills。
- * Skill 的实际文件内容通过文件系统读取（只读）。
+ * 存储已注册的 Skill 元信息（`RegisteredSkill[]`）到 localStorage；SKILL.md 文件夹路径固定为 Tauri
+ * `appDataDir/skills`。Skill 的实际文件内容通过文件系统读取（只读）。
  *
- * ⚠️ 自 Step 2 起 Rust 原生路径不再读这个注册表（`native_tools/skill/` 直接扫 `appDataDir/skills`
- * 解析 SKILL.md；CLI 没有 localStorage）：本文件的 `parseSkillMeta` / `scanAndRegisterSkills` /
- * `getSkillFileTree` 与 `native_tools/skill/common.rs` 是两份镜像，改一边必须同步另一边（铁律 1）。
+ * ⚠️ 自 Step 2 起 Rust 原生路径不再读这个注册表（`native_tools/skill/` 直接扫盘解析 SKILL.md；CLI 没有
+ * localStorage）：本文件的 `parseSkillMeta` / `scanAndRegisterSkills` / `getSkillFileTree` 与
+ * `native_tools/skill/common.rs` 是两份镜像，改一边必须同步另一边（铁律 1）。
  */
 import StorageState from '@/utils/storageState'
 import type {

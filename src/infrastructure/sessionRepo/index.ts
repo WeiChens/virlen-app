@@ -40,8 +40,8 @@ export interface SessionRepo {
   /**
    * 「消息查询」工具：按锚点（id / seq）取前后 N 条的时序窗口。
    *
-   * ⚠️ 只覆盖「已压缩区间」（时序 < 最后一个 summary）：之后的对话已在模型上下文中，
-   * 重复下发只浪费 token。失败（非 Tauri / DB 异常）返回 `null`，由调用方转成提示。
+   * ⚠️ 只覆盖「已压缩区间」（时序 < 最后一个 summary）：之后的对话已在模型上下文中，重复下发只浪费 token。
+   * 失败（非 Tauri / DB 异常）返回 `null`，由调用方转成提示。
    */
   getMessageWindow(
     sessionId: string,

@@ -47,9 +47,8 @@ class SecurityStore {
   }
 
   /**
-   * 配置下沉（S7）：从 Rust 侧 `app_settings` 水合「忽略沙盒命令」规则，并刷新本地镜像。
-   *
-   * 幂等；非 Tauri 环境（浏览器 dev / vitest）直接返回，仍用 localStorage 的值。
+   * 配置下沉（S7）：从 Rust 侧 `app_settings` 水合「忽略沙盒命令」规则，并刷新本地镜像。幂等；非 Tauri
+   * 环境（浏览器 dev / vitest）直接返回，仍用 localStorage 的值。
    * ⚠️ 必须在任何执行路径之前完成 —— Rust 引擎 / CLI 的判定读的就是表里那一份。
    */
   async hydrate(): Promise<void> {

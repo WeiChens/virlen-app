@@ -1,8 +1,8 @@
 /**
  * input 组件常量
  *
- * ⚠️ 高度模型（改一个必须改另一个）：本文件的 INPUT_CHROME_HEIGHT(=58) ↔ style.scss 的
- *   .input-wrapper 静止高度 125 ↔ textarea 的 min-height 67px，必须保持 125 = 58 + 67。
+ * ⚠️ 高度模型（改一个必须改另一个）：本文件的 `INPUT_CHROME_HEIGHT(=58)` ↔ style.scss 的 `.input-wrapper`
+ * 静止高度 125 ↔ textarea 的 `min-height: 67px`，必须保持 125 = 58 + 67。
  */
 
 /**

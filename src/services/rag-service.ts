@@ -256,8 +256,8 @@ class RagService {
 
   /** 构建注入到 LLM 的上下文文本
    *
-   * ⚠️ 与 Rust 端 `rag_service.rs::format_context()` 是两份实现（Rust 版用于 UI 搜索测试
-   * `query_knowledge_base`，前端版用于 `queryWithOptions` 多库组合检索），修改时需同步两处。 */
+   * ⚠️ 与 Rust `rag_service.rs::format_context()` 是两份实现（Rust 版服务 UI 搜索测试，前端版服务
+   * `queryWithOptions` 多库组合检索），修改时需同步两处。 */
   private buildContextText(
     chunks: Array<{
       id: string

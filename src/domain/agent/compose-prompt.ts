@@ -1,20 +1,15 @@
 /**
  * compose-prompt — 系统提示词「纯组装」策略
  *
- * 只做一件事：把各来源的提示词片段按固定顺序拼成一个字符串。
- * **不做任何 I/O**（取数在 `services/agent-service.ts` + `env-service` + `project-rules-service`），
- * 因此可以被固定输入驱动、逐字节断言。
+ * 只做一件事：把各来源的片段按固定顺序拼成一个字符串。**不做任何 I/O**（取数在 `agent-service.ts` +
+ * `env-service` + `project-rules-service`），因此可以被固定输入驱动、逐字节断言。
  *
- * 为什么单独抽成文件：
- * Rust 引擎侧要组装**同一份**提示词（`src-tauri/virlen-core/src/agent/prompts/assemble.rs`，
- * 为 headless / CLI 做前置）。两侧用同一组输入必须得到逐字节相同的结果 ——
- * 这个函数就是 TS 侧的被比对对象，见 `src/tests/domain/compose-prompt-golden.test.ts`
- * 与 Rust 侧 `prompts::assemble::tests::golden_system_prompt_matches_fixture`。
+ * 抽成独立文件的原因：Rust 侧要组装**同一份**提示词（`virlen-core/src/agent/prompts/assemble.rs`），
+ * 两侧用同一组输入必须得到逐字节相同的结果 —— 本函数就是 TS 侧的被比对对象，见
+ * `src/tests/domain/compose-prompt-golden.test.ts`。
  *
- * ⚠️ 两个 md 资源（工具规范 / 核心原则）的唯一事实源在 Rust
- * （`virlen-core/src/agent/prompts/*.md`）：前端经 `promptText()` 读已水合的快照
- * （Tauri 走 `cmd_agent_prompts`；浏览器 dev / 测试直读同一份文件）。
- * 本模块只负责组装顺序与分隔符，不持有文本副本。
+ * ⚠️ 两个 md 资源（工具规范 / 核心原则）的唯一事实源在 Rust `virlen-core/src/agent/prompts/*.md`：
+ * 前端经 `promptText()` 读已水合的快照。本模块只负责组装顺序与分隔符，不持有文本副本。
  */
 import { promptText } from './prompt-texts'
 
