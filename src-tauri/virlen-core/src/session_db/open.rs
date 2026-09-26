@@ -1,17 +1,14 @@
 //! 打开会话库（`open_session_db`）—— 零 `tauri::` 依赖
 //!
-//! 库路径完全由 `host.data_dir()` 决定：只要 GUI 与 CLI 的 `HostEnv::data_dir()` 指向同一目录，
-//! 读写的就是同一份 `virlen.db`（同一份会话 + 同一份配置）—— 这正是配置下沉 D3 的落点：CLI 侧只
-//! 需 `open_session_db(&CliHost::from_env(), &|fut| { tokio::spawn(fut); })` 即接管同一份配置，
-//! 不必等前端下发。
+//! 库路径完全由 `host.data_dir()` 决定：只要 GUI 与 CLI 的 `HostEnv::data_dir()` 指向同一目录，读写的
+//! 就是同一份 `virlen.db`（同一份会话 + 同一份配置）—— 这正是配置下沉 D3 的落点：CLI 侧只需
+//! `open_session_db(&CliHost::from_env(), &|fut| { tokio::spawn(fut); })` 即接管同一份配置。
 //!
-//! ⚠️ Tauri 侧的三件事已移到 `virlen-app` 的 `src/commands/session_db.rs`（core 不得出现
-//! `tauri::`）：`init_session_db(app)`（构造 `TauriHost` 并注册 Tauri 状态）、
-//! `manage_noop_settings(app)`（库打不开时的 Noop 兜底）、全部 `cmd_*` 命令。
+//! ⚠️ Tauri 侧的三件事在 `virlen-app` 的 `src/commands/session_db.rs`（core 不得出现 `tauri::`）：
+//! `init_session_db(app)` / `manage_noop_settings(app)` / 全部 `cmd_*`。
 //!
-//! 后台任务派发函数做成参数而不是写死 `tokio::spawn`：GUI 的 `.setup()` 回调里没有 tokio reactor
-//! 上下文（只能用 `tauri::async_runtime::spawn`），而 CLI（`#[tokio::main]`）用 `tokio::spawn`
-//! —— 本文件不能假设调用方处于哪种运行时。
+//! 后台任务派发函数做成参数而不是写死 `tokio::spawn`：GUI 的 `.setup()` 回调里没有 tokio reactor 上下文
+//!（只能用 `tauri::async_runtime::spawn`），而 CLI（`#[tokio::main]`）用 `tokio::spawn`。
 
 use crate::agent::host::HostEnv;
 use crate::session_db::maintenance::DbMaintenance;

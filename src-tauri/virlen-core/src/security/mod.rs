@@ -1,15 +1,14 @@
 //! security — 安全域（纯 Rust，零 `tauri::`）
 //!
-//! 目前只包含「忽略沙盒命令」规则的判定：
-//! - [`rules`]：规则模型 + `text` / `regex` / `js` 三种匹配（与 TS 侧共读 golden 对齐）；
-//! - [`js_rule`]：`js` 规则体的内嵌 QuickJS 求值（受限 runtime：无 host 函数 / 内存 / 超时）。
+//! 目前只包含「忽略沙盒命令」规则的判定：[`rules`]（规则模型 + `text` / `regex` / `js` 三种匹配，与
+//! TS 侧共读 golden 对齐）、[`js_rule`]（`js` 规则体的内嵌 QuickJS 求值：无 host 函数 / 内存与超时限制）。
 //!
-//! ⚠️ 与 `crate::sandbox` 的分工：`sandbox` 是执行机制（Job Object / Landlock / 受限令牌），
-//! 这里是策略判定（这条命令要不要免脱壳审批），不碰任何平台执行细节。
+//! ⚠️ 与 `crate::sandbox` 的分工：`sandbox` 是执行机制（Job Object / Landlock / 受限令牌），这里是策略
+//! 判定（这条命令要不要免脱壳审批），不碰任何平台执行细节。
 //!
-//! 消费方：`agent/native_tools/execute/common/rules.rs`（Rust 引擎 + CLI 路径）。
-//! TS 实现（`src/domain/security/sandbox-ignore-rules.ts`）保留给浏览器 dev / 设置页「测试」
-//! 按钮，两侧行为由 golden 契约收敛。
+//! 消费方：`agent/native_tools/execute/common/rules.rs`（Rust 引擎 + CLI 路径）。TS 实现
+//!（`src/domain/security/sandbox-ignore-rules.ts`）保留给浏览器 dev / 设置页「测试」，两侧由 golden
+//! 契约收敛。
 
 mod js_rule;
 mod rules;
@@ -18,22 +17,18 @@ pub use rules::{find_matching_rule, parse_rules, SandboxIgnoreRule};
 
 /// 「忽略沙盒命令」规则在 `app_settings` 里的键名。
 ///
-/// ⚠️ 与前端 `SANDBOX_RULES_SETTINGS_KEY`（`src/infrastructure/securityRepo`）逐字一致 ——
-/// 键名字面量只在这里与前端各出现一次，避免「两侧各写一个字符串」而悄悄漂移（配置下沉的键名
-/// 约定，见 `docs/config-sink-plan.md` §6 R6）。
+/// ⚠️ 与前端 `SANDBOX_RULES_SETTINGS_KEY`（`src/infrastructure/securityRepo`）逐字一致 —— 键名字面量
+/// 只在这里与前端各出现一次，避免「两侧各写一个字符串」而悄悄漂移（见 `docs/config-sink-plan.md` §6 R6）。
 pub(crate) const SANDBOX_RULES_SETTINGS_KEY: &str = "sandboxIgnoreRules";
 
 /// 从配置后端读取「忽略沙盒命令」规则（没有前端时的读取入口）。
 ///
-/// 两条路径读的是同一个 `app_settings` 键，判定实现也是同一份（本模块）：
-/// - GUI（Rust 引擎）：由前端 `resolveSecurityConfig` 读同一键后随 `NativeToolSecurity` 下发
-///   —— 复用同一次 IO，命令执行时零额外开销；
-/// - CLI：没有前端，在构造 `NativeToolSecurity` 时调本函数填 `sandbox_ignore_rules` 即可。
+/// 两条路径读的是同一个 `app_settings` 键，判定实现也是同一份（本模块）：GUI 由前端
+/// `resolveSecurityConfig` 读同一键后随 `NativeToolSecurity` 下发（复用同一次 IO，执行时零额外开销）；
+/// CLI 没有前端，在构造 `NativeToolSecurity` 时调本函数填 `sandbox_ignore_rules`。
 ///
-/// 读取失败按「无规则」处理（fail-closed：不脱壳，只留一条 stderr 说明）。
-///
-/// ⚠️ 消费方是 CLI（`virlen-cli/src/run.rs`）：它没有前端下发 `NativeToolSecurity`，必须自己
-/// 读这一份 —— 这条入口存在的意义就是让「CLI 读同一份规则」只有一处键名 / 解析 / 错误处理。
+/// ⚠️ 读取失败按「无规则」处理（fail-closed：不脱壳，只留一条 stderr 说明）。这条入口存在的意义就是让
+/// 「CLI 读同一份规则」只有一处键名 / 解析 / 错误处理。
 pub async fn load_sandbox_ignore_rules(
     settings: &dyn crate::session_db::SettingsRepo,
 ) -> Vec<SandboxIgnoreRule> {

@@ -2,15 +2,12 @@
 //!
 //! 供 `web_fetch` / `web_search` 复用的纯函数与常量。
 //!
-//! ⚠️ 与 TS 侧 `src/infrastructure/tools/web/common.ts` 逐字对齐（铁律 1）：
-//! `formatSearchResults` 的输出会直接进模型上下文，两侧任何一字之差都会造成「默认引擎与回退
-//! 引擎给模型的搜索结果格式不同」。收敛靠两侧共读的 golden：
-//! `src/tests/fixtures/web-search-format.golden.json`（TS `tests/infrastructure/web-*.test.ts`
-//! ↔ Rust 本文件的 `golden_matches_ts_implementation`）。
+//! ⚠️ 与 TS 侧 `src/infrastructure/tools/web/common.ts` 逐字对齐（铁律 1）：`format_search_results` 的
+//! 输出会直接进模型上下文，任何一字之差都造成「默认引擎与回退引擎给模型的搜索结果格式不同」。收敛靠两
+//! 侧共读的 golden `src/tests/fixtures/web-search-format.golden.json`。
 //!
-//! 已知的字符计数口径差异：TS 的 `String.length` 是 UTF-16 码元数，Rust 的 `chars().count()`
-//! 是 Unicode 标量数（emoji 在 TS 里算 2、在 Rust 里算 1）。只影响「截断阈值」附近的行为，
-//! 不影响正常内容；截断本身两侧都按字符边界切，不会产生非法字节/孤立代理。
+//! 字符计数口径差异：TS 的 `String.length` 是 UTF-16 码元数，Rust 的 `chars().count()` 是 Unicode 标
+//! 量数（emoji 在 TS 里算 2、Rust 里算 1）—— 只影响截断阈值附近；两侧都按字符边界切，不产生非法字节。
 
 use serde_json::Value;
 
@@ -59,15 +56,13 @@ fn starts_with_tag_boundary(lower: &str, prefix: &str) -> bool {
 
 /// 判断响应体是否应按 HTML 处理（即调用方的 `htmlToMd` 是否生效）。
 ///
-/// 判定顺序（⚠️ 与 TS `isHtml` 逐字对齐，契约见
-/// `src/tests/fixtures/web-html-detect.golden.json`，两侧共读）：
+/// 判定顺序（⚠️ 与 TS `isHtml` 逐字对齐，契约见 `src/tests/fixtures/web-html-detect.golden.json`，两侧
+/// 共读）：① Content-Type 优先：媒体类型为 `text/html` / `application/xhtml+xml` 时直接认定；② 否则
+/// 回退形状判定（大小写不敏感）：剥 BOM + `trim()` 后，要求以 `<!doctype html…` 或 `<html…` 开头（后接
+/// 标签边界）且以 `</html>` 结尾。
 ///
-/// 1. Content-Type 优先：媒体类型为 `text/html` / `application/xhtml+xml` 时直接认定；
-/// 2. 否则回退形状判定（大小写不敏感）：剥 BOM + `trim()` 后，要求以 `<!doctype html…` 或
-///    `<html…` 开头（后接标签边界）且以 `</html>` 结尾。
-///
-/// 为什么要有 Content-Type 这一层：真实站点普遍返回小写 `<!doctype html>`，旧实现只认大写 →
-/// 大量网页被判成「非 HTML」，`htmlToMd` 形同虚设。
+/// 为什么要有 Content-Type 这一层：真实站点普遍返回小写 `<!doctype html>`，旧实现只认大写 → 大量网页被
+/// 判成「非 HTML」，`htmlToMd` 形同虚设。
 pub(crate) fn is_html(content: &str, content_type: &str) -> bool {
     // ① Content-Type 优先：媒体类型大小写不敏感，参数（`; charset=…`）不参与判定
     let media_type = content_type

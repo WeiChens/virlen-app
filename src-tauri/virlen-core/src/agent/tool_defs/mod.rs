@@ -1,18 +1,16 @@
 //! 工具定义的权威源（机制 C）—— 定义在此，前端经 Tauri 命令获取
 //!
-//! 背景：28 个工具定义原先只存在于 TS 侧（`toolRegistry.register` 的定义体），而 Rust 引擎 /
-//! CLI 也需要自己有一份（headless 场景无从组装 `tool_defs`）。若两侧各写一份就是第 2、第 3 份
-//! 定义 —— 本项目最忌讳的「静默分叉」。因此把定义收敛到本模块：
+//! 28 个工具定义原先只存在于 TS 侧，而 Rust 引擎 / CLI 也需要自己有一份；两侧各写一份就是第 2、第 3
+//! 份定义 —— 本项目最忌讳的「静默分叉」。因此收敛到本模块：
 //!
-//! - 数据三方同构：TS `ResolvedToolDefinition` ↔ 本文件 JSON ↔ `types::ToolDefinition`；
-//! - 平台相关描述（`execute_command` / `execute_script` 的命令示例）按 `windows` / `macos` /
-//!   `linux` 三变体存放 —— 键名与 `std::env::consts::OS`、TS `platformSnapshot()` 的词表完全一致，
-//!   无需映射表；
-//! - 前端在 Tauri 环境经 `cmd_list_tool_definitions` 取值；浏览器 dev / vitest 直接读
-//!   `definitions.json`（同一份文件，因此不存在「快照漂移」问题）。
+//! - 数据三方同构：TS `ResolvedToolDefinition` ↔ `definitions.json` ↔ `types::ToolDefinition`；
+//! - 平台相关描述（`execute_command` / `execute_script`）按 `windows` / `macos` / `linux` 三变体存放
+//!   —— 键名与 `std::env::consts::OS`、TS `platformSnapshot()` 的词表一致，无需映射表；
+//! - 前端在 Tauri 环境经 `cmd_list_tool_definitions` 取值；浏览器 dev / vitest 直读同一份 json，
+//!   因此不存在「快照漂移」。
 //!
-//! ⚠️ 以后修改工具定义：直接改 `definitions.json`（它就是权威源），不要再去 TS 侧另写一份定义
-//! 体。过渡期由契约测试 `src/tests/contracts/tool-defs-contract.test.ts` 兜底。
+//! ⚠️ 以后改工具定义直接改 `definitions.json`（它就是权威源），不要再去 TS 侧另写一份定义体；过渡期
+//! 由契约测试 `src/tests/contracts/tool-defs-contract.test.ts` 兜底。
 
 use once_cell::sync::Lazy;
 use serde::Deserialize;

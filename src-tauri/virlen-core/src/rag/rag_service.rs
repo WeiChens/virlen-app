@@ -62,9 +62,7 @@ impl RagService {
 
     // ===== 文档管理 =====
 
-    /// 添加文档到知识库
-    ///
-    /// 流程：解析文件 → 分块 → 嵌入 → 存储
+    /// 添加文档到知识库（流程：解析文件 → 分块 → 嵌入 → 存储）
     ///
     /// ⚠️ 单个文档超过 50MB 时拒绝处理，防止嵌入耗时过长导致超时。
     pub fn add_document(&self, kb_id: &str, file_path: &str) -> Result<DocumentInfo, String> {
@@ -96,11 +94,9 @@ impl RagService {
         Ok(doc_info)
     }
 
-    /// 通过文本内容添加文档（无需文件路径）
+    /// 通过文本内容添加文档（无文件路径；用于 AI Tool 直接写入知识库的场景）
     ///
-    /// 用于 AI Tool 直接写入知识库的场景。流程：分块 → 嵌入 → 存储
-    ///
-    /// ⚠️ 文本内容超过 50MB 时拒绝处理，防止嵌入耗时过长导致超时。
+    /// ⚠️ 内容超过 50MB 时拒绝处理，防止嵌入耗时过长导致超时。
     pub fn add_text_document(&self, kb_id: &str, doc_name: &str, content: &str) -> Result<DocumentInfo, String> {
         // 检查内容大小
         if content.len() as u64 > MAX_DOC_SIZE_BYTES {

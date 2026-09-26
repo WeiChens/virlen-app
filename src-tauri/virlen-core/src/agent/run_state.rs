@@ -30,9 +30,8 @@ pub fn snapshot_to_run(snapshot: &RunSnapshot, session_id: &str) -> Run {
 
 /// 查找一个 run 中第一个待执行（pending / running）的 step 索引（用于断点恢复）
 ///
-/// ⚠️ `failed` 与 `completed` 一样视为「已结束」：两者都已经产出了结果（见 `tool_executor`，
-/// 失败 / 被取消的 step 同样会写一条 tool 结果并落库）。若把 `failed` 也当作断点，恢复时会把它
-/// 重跑一遍 → 同一条 tool_call_id 产出第二条 tool 结果 → 服务端 400。
+/// ⚠️ `failed` 与 `completed` 一样视为「已结束」：两者都已经产出了结果并落库。若把 `failed` 也当作断点，
+/// 恢复时会把它重跑一遍 → 同一条 tool_call_id 产出第二条 tool 结果 → 服务端 400。
 pub fn find_next_step(run: &Run) -> usize {
     run.steps
         .iter()

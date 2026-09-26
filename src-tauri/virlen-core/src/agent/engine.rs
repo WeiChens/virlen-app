@@ -152,10 +152,10 @@ impl AgentEngine {
         let session_id = options.session_id.clone();
         let session = options.session.clone();
 
-        // 0. 持久化（先落库再开始循环）：会话元数据 + 用户消息。JS 卡住 / 崩溃不影响落库；
-        //    写入失败不中断聊天（尽力而为）。
-        //    ⚠️ 会话时间（updated_at）由前端在用户点发送时写好、随 session 一起 upsert；这里的
-        //    消息写入刻意不刷新它（AI 回复 / 工具结果同理，见 SessionRepo::append_messages）
+        // 0. 持久化（先落库再开始循环）：会话元数据 + 用户消息。JS 卡住 / 崩溃不影响落库；写入失败不中断
+        //    聊天（尽力而为）。
+        //    ⚠️ 会话时间（updated_at）由前端在用户点发送时随 session 一起 upsert；这里的消息写入刻意不刷新
+        //    它（AI 回复 / 工具结果同理，见 `SessionRepo::append_messages`）
         if let Err(e) = self.repo.upsert_session(&session).await {
             eprintln!("[session_db] upsert session 失败: {}", e);
         }
@@ -195,14 +195,13 @@ impl AgentEngine {
 
         // 3. 维护内存中的消息列表，随 tool 循环增长
         //
-        //    断点恢复（resume）时以本地库为权威读回消息，而不用前端经 IPC 传来的整份历史：暂停时
-        //    全部消息均已落库（见 `execute_llm_round` / `execute_tool_steps` 的增量直落），引擎直接
-        //    读库可省掉「前端序列化整份历史 → IPC → Rust 反序列化」这段 O(历史) 开销 —— 恢复跳过
-        //    LLM，这段开销不再被 LLM 等待掩盖，正是大历史下「继续时弹窗要等好几秒」的主因。
-        //    ⚠️ 读的是 `get_context_messages` 而非 `get_messages`：请求组装只会用到最后一个
-        //    `summary` 及其之后的消息（见 `provider::blocks` 切片），已被压缩的旧历史不必读进内存。
-        //    读库失败 / 库不可用（Noop）/ 读到空时回退到前端传来的 `messages`。
-        //    （与 `src/services/chat/flow.ts::resumePausedRun` 配对：Rust 引擎恢复时前端传空数组。）
+        //    断点恢复（resume）时以本地库为权威读回消息，而不用前端经 IPC 传来的整份历史：暂停时全部消息
+        //    均已落库（见 `execute_llm_round` / `execute_tool_steps` 的增量直落），引擎直接读库可省掉
+        //    「前端序列化整份历史 → IPC → Rust 反序列化」这段 O(历史) 开销 —— 恢复跳过 LLM，这段开销不再
+        //    被 LLM 等待掩盖，正是大历史下「继续时弹窗要等好几秒」的主因。
+        //    ⚠️ 读的是 `get_context_messages` 而非 `get_messages`：请求组装只会用到最后一个 `summary` 及其
+        //    之后的消息，已被压缩的旧历史不必读进内存。
+        //    读库失败 / 库不可用（Noop）/ 读到空时回退到前端传来的 `messages`（前端恢复时传空数组）。
         let mut current_messages = if options.resume_from_snapshot.is_some() {
             match self.repo.get_context_messages(&session_id).await {
                 Ok(msgs) if !msgs.is_empty() => msgs,

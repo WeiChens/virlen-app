@@ -211,18 +211,15 @@ impl StreamEventThrottle {
     }
 }
 
-/// 批量发送累积的流式增量（assistant_message_updated + stream_event）
-/// 无 pending 内容时直接返回，避免空事件
+/// 批量发送累积的流式增量（assistant_message_updated + stream_event）；无 pending 内容时直接返回。
 ///
-/// 正文只回传增量（`patch.contentDelta`）：本函数约每 60ms 触发一次，若每次都回传累积全量
-/// 正文，单次载荷随内容线性增长、整轮通信量即 O(n²)。全量正文由流结束帧兜底（`MessageStop`
-/// 的 `sync_assistant` 与 `finalize_assistant_message`），个别增量丢失也会被最终帧纠正。
+/// 正文只回传增量（`patch.contentDelta`）：本函数约每 60ms 触发一次，若每次回传累积全量，单次载荷随内容
+/// 线性增长、整轮通信量即 O(n²)。全量正文由流结束帧兜底（`sync_assistant` /
+/// `finalize_assistant_message`），个别增量丢失也会被最终帧纠正。
 ///
-/// ⚠️ 两个事件必须成对发出（同一次调用、同一份 delta）：`virlen-cli` 的两条输出路径各取其一
-/// —— `run` / 顺序输出模式读 `stream_event.delta`（`run/render.rs`），TUI 读
-/// `patch.contentDelta`（`tui/sink.rs`，它故意忽略 `stream_event` 以避免正文双份）。只发其中
-/// 一个不会让任何一侧报错，只会让那一侧静默丢正文 —— 因此这条隐式契约由
-/// `tests::delta_patch_and_stream_event_are_emitted_in_pairs` 逐条钉住。
+/// ⚠️ 两个事件必须成对发出（同一次调用、同一份 delta）：`virlen-cli` 的两条输出路径各取其一（`run` /
+/// 顺序输出模式读 `stream_event.delta`，TUI 读 `patch.contentDelta`）。只发其中一个不会让任何一侧报错，
+/// 只会让那一侧静默丢正文 —— 由单测逐条钉住。
 fn flush_stream_state(
     ctx: &ToolCallContext,
     model: &str,
@@ -621,9 +618,9 @@ mod tests {
     /// ⚠️ 隐式契约回归：一次流式回合里 `assistant_message_updated(patch.contentDelta)` 与
     /// `stream_event.delta` 必须逐个成对、同序、同内容。
     ///
-    /// 为什么必须钉住：`virlen-cli` 的两条渲染路径各取其一（`run` / 顺序输出取
-    /// `stream_event.delta`，TUI 取 `patch.contentDelta`）。若将来只发其中一个，两条路径都
-    /// 不会报错，只会有一条静默丢正文。这里把顺序与内容都比对，任何单侧改动立即失败。
+    /// 为什么必须钉住：`virlen-cli` 的两条渲染路径各取其一（`run` / 顺序输出取 `stream_event.delta`，
+    /// TUI 取 `patch.contentDelta`）。若将来只发其中一个，两条路径都不会报错，只会有一条静默丢正文。
+    /// 这里把顺序与内容都比对，任何单侧改动立即失败。
     #[test]
     fn delta_patch_and_stream_event_are_emitted_in_pairs() {
         let deltas: Vec<String> = (0..40).map(|i| format!("词{}", i % 7)).collect();

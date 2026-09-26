@@ -1,11 +1,10 @@
 //! 事件出口 — 将引擎事件转发到宿主
 //!
 //! - `agent:event` — 标准 AgentEvent（与前端 `onEvent` 载荷一致）
-//! - `agent:tool-request` / `agent:user-interaction-request` / `agent:provider-request`
-//!   — 双向桥请求（工具执行、用户交互、Provider 流）
+//! - `agent:tool-request` / `agent:user-interaction-request` / `agent:provider-request` — 双向桥请求
 //!
-//! ⚠️ 本文件（core）只有 trait 与测试实现；Tauri 实现（`TauriEventSink`，走 `app.emit`）
-//! 在 `virlen-app` 的 `src/commands/agent.rs` —— 否则 core 会引入 `tauri::`。
+//! ⚠️ 本文件（core）只有 trait 与测试实现；Tauri 实现（`TauriEventSink`，走 `app.emit`）在 `virlen-app`
+//! 的 `src/commands/agent.rs` —— 否则 core 会引入 `tauri::`。
 
 use super::types::AgentEvent;
 

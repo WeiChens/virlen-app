@@ -69,8 +69,8 @@ impl VectorStoreManager {
 
     /// 保存索引到磁盘（turbovec 二进制 + chunk_map JSON）
     ///
-    /// ⚠️ 安全校验：确保 `index_path` 和 `chunk_map_path` 均在 `kb_dir` 下，防止因调用方传入了
-    /// 意外路径导致数据写到错误位置。
+    /// ⚠️ 安全校验：确保 `index_path` 和 `chunk_map_path` 均在 `kb_dir` 下，防止调用方传入意外路径导致数据
+    /// 写到错误位置。
     pub(crate) fn save_index_to_disk(kb_dir: &PathBuf, index_path: &PathBuf, chunk_map_path: &PathBuf, state: &IndexState) -> Result<(), String> {
         // 校验路径合法性 — 防止路径穿越
         Self::validate_path_within(kb_dir, index_path, "索引文件")?;

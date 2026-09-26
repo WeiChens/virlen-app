@@ -1,17 +1,14 @@
-//! 正文压缩（本地渲染）—— 由 TS `domain/engine/compress-raw.ts` 移植
+//! 正文压缩（本地渲染）
 //!
-//! 只砍信息密度最低的部分：
-//! 1. 深度思考（`reasoningContent`）整段丢弃 —— 过程性内容，对后续对话价值最低；
-//! 2. 工具调用参数 / 工具结果超长则省略 —— 工具输出通常占历史里绝大部分 token；
-//! 3. 图片块进不了文本 → 降级为占位；该消息做过本地视觉分析则保留分析文本。
+//! 只砍信息密度最低的部分：① 深度思考（`reasoningContent`）整段丢弃（过程性内容，对后续对话价值最
+//! 低）；② 工具调用参数 / 工具结果超长则省略（工具输出通常占历史里绝大部分 token）；③ 图片块进不了
+//! 文本 → 降级为占位，该消息做过本地视觉分析则保留分析文本。
 //!
 //! 用户 / 助手正文一字不删。
 //!
 //! ⚠️ 产物必须自包含：请求组装会丢掉最后一个 summary 之前的全部消息
-//! （`provider::blocks::slice_messages`），所以这里把整段历史渲染成一段纯文本。
-//!
-//! 截断按字符（码点）计，TS 按 UTF-16 码元计 → 阈值附近可能有 ±1 字符的差异
-//! （见 `compress/mod.rs` 文件头「与 TS 的差异」）。Rust 侧按码点切分不会切出非法字符。
+//! （`provider::blocks::slice_messages`），所以这里把整段历史渲染成一段纯文本。截断按字符（码点）计
+//! （TS 按 UTF-16 码元 → 阈值附近可能差 ±1 字符）；按码点切分不会切出非法字符。
 
 use crate::agent::provider::{file_block_to_text, quote_block_to_text, skill_block_to_text};
 use crate::agent::types::Message;

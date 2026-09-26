@@ -616,9 +616,8 @@ INSERT INTO messages (
             .map_err(|e| format!("删除消息失败: {}", e))?;
             tx.execute("DELETE FROM sessions WHERE id=?1", params![session_id])
                 .map_err(|e| format!("删除会话失败: {}", e))?;
-            // ⚠️ 刻意不删除 usage_ledger 中该会话的流水：用量是「已发生过的消费」的事实记录，
-            // 删会话只删对话内容。标题在明细里 JOIN 不到时显示为「已删除会话」，总量不会缩水
-            // （见 docs/token-usage-stats.md）。
+            // ⚠️ 刻意不删除 usage_ledger 中该会话的流水：用量是「已发生过的消费」的事实记录，删会话只删对话
+            // 内容。标题在明细里 JOIN 不到时显示为「已删除会话」，总量不会缩水。
             tx.commit().map_err(|e| format!("提交事务失败: {}", e))?;
             Ok(())
         })

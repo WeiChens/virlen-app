@@ -1,19 +1,15 @@
 //! 数据库维护 — 体积统计 / WAL 截断 / VACUUM（设置 → 存储「立即整理」）
 //!
-//! `virlen.db` 的膨胀有两个结构性来源，靠删数据解决不了：
-//! 1. WAL 高水位：`-wal` 只在 checkpoint 能重置时才会缩回去，长跑进程里这个时机很难自然
-//!    出现（实测堆积到 99 MB，比库本身的碎片量还大）；
-//! 2. 空闲页不归还：`auto_vacuum=0` 时删除会话只是把页标记为空闲（freelist），文件只增不减
-//!    （实测 403 MB 里有 5.5% 是空闲页）。
+//! `virlen.db` 的膨胀有两个结构性来源，靠删数据解决不了：① WAL 高水位（`-wal` 只在 checkpoint 能重置
+//! 时才缩回去，长跑进程里这个时机很难自然出现）；② 空闲页不归还（`auto_vacuum=0` 时删除会话只是把页
+//! 标记为空闲，文件只增不减）。
 //!
-//! 本模块的操作全部经同一把连接锁（与 `SqliteSessionRepo` 共享），因此与聊天写入天然互斥：
-//! `stats`（文件大小 + PRAGMA + 行数，纯读、毫秒级）；`checkpoint_truncate`
-//! （`wal_checkpoint(TRUNCATE)`，把 `-wal` 收回 0）；`vacuum`（`VACUUM` 重建整库、回收空闲页
-//! 并把 `auto_vacuum` 切到 INCREMENTAL）。
+//! 本模块的操作全部经同一把连接锁（与 `SqliteSessionRepo` 共享），与聊天写入天然互斥：`stats`（文件
+//! 大小 + PRAGMA + 行数，纯读、毫秒级）、`checkpoint_truncate`（`wal_checkpoint(TRUNCATE)`，把 `-wal`
+//! 收回 0）、`vacuum`（`VACUUM` 重建整库、回收空闲页并把 `auto_vacuum` 切到 INCREMENTAL）。
 //!
-//! ⚠️ `VACUUM` 需约 2 倍库大小的临时空间且期间独占连接（数百 MB 库约 10–60 s），因此只在
-//! 用户显式点击时执行，绝不自动跑；退出时只做廉价的 WAL 截断（`try_checkpoint_truncate`，
-//! 拿不到锁就直接跳过）。
+//! ⚠️ `VACUUM` 需约 2 倍库大小的临时空间且期间独占连接（数百 MB 库约 10–60 s），因此只在用户显式点击
+//! 时执行，绝不自动跑；退出时只做廉价的 WAL 截断（`try_checkpoint_truncate`，拿不到锁就直接跳过）。
 
 use rusqlite::Connection;
 use serde::Serialize;

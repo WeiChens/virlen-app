@@ -20,8 +20,8 @@ pub trait SessionRepo: Send + Sync {
     /// 追加消息（事务；按消息 id 幂等，重复写入保留原 rowid，不改变读取顺序）
     ///
     /// ⚠️ 不刷新 `sessions.updated_at`：会话时间 = 用户最后一次发言的时间，只由前端
-    /// `sessionStore.touchSession()`（用户点发送的那一瞬间）经 `upsert_session` 写入；引擎侧
-    /// assistant / tool / 迭代反馈的落库都是 AI 活动，不得改写会话时间。
+    /// `sessionStore.touchSession()` 经 `upsert_session` 写入；引擎侧 assistant / tool / 迭代反馈的落库
+    /// 都是 AI 活动，不得改写会话时间。
     async fn append_messages(
         &self,
         session_id: &str,
@@ -92,16 +92,15 @@ pub trait SessionRepo: Send + Sync {
     /// 获取会话的全部消息（按插入顺序）
     async fn get_messages(&self, session_id: &str) -> Result<Vec<Message>, String>;
 
-    /// 获取「模型当前上下文」所需的消息：从最后一条 `summary` 起（含它）到最新，无 `summary`
-    /// 时返回全部（均按插入顺序升序）。
+    /// 获取「模型当前上下文」所需的消息：从最后一条 `summary` 起（含它）到最新，无 `summary` 时返回全部
+    /// （均按插入顺序升序）。
     ///
-    /// 语义等价于「`get_messages` 之后丢掉最后一个 summary 之前的全部消息」—— 请求组装
-    /// （`agent::provider` 的切片）本就只保留最后一个 summary 及其之后的消息，因此断点恢复等
-    /// 「以库为权威回读上下文」的场景无需把已压缩的旧历史读进内存 / 反序列化（大历史下正是
-    /// 「继续」要等好几秒的主因之一）。
+    /// 语义等价于「`get_messages` 之后丢掉最后一个 summary 之前的全部消息」—— 请求组装本就只保留最后一个
+    /// summary 及其之后的消息，因此断点恢复等「以库为权威回读上下文」的场景无需把已压缩的旧历史读进内存 /
+    /// 反序列化（大历史下正是「继续」要等好几秒的主因之一）。
     ///
-    /// ⚠️ 旧消息仍留在库里：模型侧查询工具（`list_messages` / `read_messages`）靠它们检索
-    /// 「已压缩区间」，删掉会让那两个工具失去意义。本方法只影响「回读进内存的上下文」。
+    /// ⚠️ 旧消息仍留在库里：模型侧查询工具（`list_messages` / `read_messages`）靠它们检索「已压缩区间」，
+    /// 删掉会让那两个工具失去意义。本方法只影响「回读进内存的上下文」。
     async fn get_context_messages(&self, session_id: &str) -> Result<Vec<Message>, String>;
 
     /// 分页获取会话消息（默认取尾部窗口；`before_rowid` 用于向上回补更早的历史）
@@ -165,10 +164,9 @@ pub trait SessionRepo: Send + Sync {
 
     /// 兜底回收孤儿消息（`session_id` 指向不存在会话的行），返回删除条数。
     ///
-    /// 用于清理历史遗留数据（早期版本删除会话时若有 run 在跑，会经由 `append_messages` 写入
-    /// 孤儿消息）。幂等；无孤儿时开销只是一次反连接扫描。
-    /// ⚠️ 不动 `usage_ledger`：用量是已发生消费的事实记录，删会话不清账（见 `delete_session`
-    /// 与 docs/token-usage-stats.md）。
+    /// 用于清理历史遗留数据（早期版本删除会话时若有 run 在跑，会经由 `append_messages` 写入孤儿消息）。
+    /// 幂等；无孤儿时开销只是一次反连接扫描。
+    /// ⚠️ 不动 `usage_ledger`：用量是已发生消费的事实记录，删会话不清账。
     async fn purge_orphan_messages(&self) -> Result<usize, String>;
 
     /// 是否存在**真实的持久化后端**（`NoopSessionRepo` 覆写为 `false`）。

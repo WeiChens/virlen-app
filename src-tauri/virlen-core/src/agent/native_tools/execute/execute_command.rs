@@ -31,11 +31,10 @@ pub(crate) async fn execute_command_tool(
         timeout = 300;
     }
 
-    // sandbox:"off" → 申请「不使用沙盒（受限令牌）」执行本命令。用途：沙盒下必然失败的场景
-    // ——命令的子进程需用管道 stdio 拉起孙进程（vitest / vite / jest / ts-node / node-gyp…），
-    // 受限令牌会让那次 spawn 直接 EPERM（根因见 AGENTS §11.2）。
-    // ⚠️ 该请求过「沙盒脱壳」权限门禁（与命令风险权限取更严格者，默认弹窗）；
-    // readonly 模式直接拒绝（否则只读保护会被绕过）。
+    // sandbox:"off" → 申请「不使用沙盒（受限令牌）」执行本命令。用途：沙盒下必然失败的场景（子进程需用管道
+    // stdio 拉起孙进程：vitest / vite / jest / ts-node / node-gyp…，受限令牌会让那次 spawn 直接 EPERM，
+    // 根因见 AGENTS §11.2）。
+    // ⚠️ 该请求过「沙盒脱壳」权限门禁（与命令风险权限取更严格者，默认弹窗）；readonly 模式直接拒绝。
     let ai_requested_bypass = matches!(
         arg_str(args, "sandbox")
             .unwrap_or_default()
@@ -58,11 +57,10 @@ pub(crate) async fn execute_command_tool(
     // ⚠️ Rust 是「是否走终端」的唯一判定方（前端不猜平台，避免三平台 / 降级行为分叉）。
     let terminal_presentation = confirm_terminal && pty_available();
 
-    // 「忽略沙盒命令」规则（设置 → 安全）：命中即免脱壳审批 + 强制无沙盒执行，所以即使 AI
-    // 没传 sandbox:"off" 也要判一次（见 common::rules 模块头注释）。判定完全在 Rust 侧本地
-    // 完成（规则随 security 快照下发）：无桥往返、无 IO；text / regex 原生求值，js 走 QuickJS。
-    // ⚠️ 只在沙盒启用时判定：off 时无沙盒可脱；readonly 时脱壳被禁止（规则静默忽略，
-    // 命令继续走沙盒，绝不因命中规则而拒绝执行）。
+    // 「忽略沙盒命令」规则（设置 → 安全）：命中即免脱壳审批 + 强制无沙盒执行，所以即使 AI 没传
+    // sandbox:"off" 也要判一次（见 `common::rules` 模块头注释）。判定完全在 Rust 侧本地完成（规则随 security
+    // 快照下发）：无桥往返、无 IO；text / regex 原生求值，js 走 QuickJS。
+    // ⚠️ 只在沙盒启用时判定：off 时无沙盒可脱；readonly 时脱壳被禁止（规则静默忽略，命令继续走沙盒）。
     let rule_hit = if sandbox_mode(ctx) == SandboxMode::On {
         match_sandbox_ignore_rule(ctx, &cmd_str).await
     } else {
@@ -87,8 +85,8 @@ pub(crate) async fn execute_command_tool(
         perm,
         risk,
     );
-    // 申请绕过沙盒且沙盒启用（readonly 已在上方直接拒绝）→ 额外过「沙盒脱壳」权限门禁
-    // （与风险权限取更严格者，默认 ask；可设为 allow 静默脱壳 / deny 直接禁止）。
+    // 申请绕过沙盒且沙盒启用（readonly 已在上方直接拒绝）→ 额外过「沙盒脱壳」权限门禁（与风险权限取更严格
+    // 者，默认 ask；可设为 allow 静默脱壳 / deny 直接禁止）。
     // ⚠️ 沙盒模式 off 时无沙盒可脱，不参与门禁（否则会对无关命令弹窗）。
     // 脱壳权限无 legacy 对应项 → approval_mode 传空串，只用权限表 / 注册表默认（ask）。
     let escape_decision = if bypass_sandbox && sandbox_mode(ctx) != SandboxMode::Off {
@@ -205,7 +203,7 @@ pub(crate) async fn execute_command_tool(
                     return run_command_native(ctx, &exec_cmd, timeout, bypass_sandbox).await;
                 }
                 // 用户没有放行（既非「批准」也不是「允许」）→ 命令一行都没跑，
-                // ⚠️ 必须按失败回报：否则 tool 消息 is_error=false，工具卡片显示成绿色「成功」。
+                // 必须按失败回报：否则 tool 消息 is_error=false，工具卡片显示成绿色「成功」。
                 Ok(NativeToolOutcome::error(content))
             }
             BridgeInteractionResult::Error { content, ui_data } => {
@@ -213,9 +211,8 @@ pub(crate) async fn execute_command_tool(
             }
             BridgeInteractionResult::Shelved => Ok(NativeToolOutcome::Shelved),
             // 用户拒绝授权 / Esc 取消 → 未执行任何命令。
-            // ⚠️ 同样走 Error 通道（status=failed），与 JS 桥路径
-            // （tool_executor.rs::handle_user_interaction）和前端回退路径保持一致，
-            // 避免「拒绝授权」被渲染成绿色成功。
+            // ⚠️ 同样走 Error 通道（status=failed），与 JS 桥路径（`tool_executor.rs::handle_user_interaction`）
+            // 和前端回退路径保持一致 —— 避免「拒绝授权」被渲染成绿色成功。
             BridgeInteractionResult::Cancelled => {
                 Ok(NativeToolOutcome::error("[User cancelled]"))
             }

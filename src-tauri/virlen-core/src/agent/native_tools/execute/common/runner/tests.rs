@@ -78,12 +78,10 @@ fn test_collect_extra_roots_skips_workspace_ancestor() {
 
 /// Step 1 端到端：沙盒开启时 PTY 路径能拿到正确输出、退出码与中文。
 ///
-/// 核心验收：受限令牌 + Job Object + ConPTY 三者共存（Spike 已验证），且命令真的能跑完、输出经
-/// 伪控制台回传、中文直接可读（无需 GBK 兜底）。
+/// 核心验收：受限令牌 + Job Object + ConPTY 三者共存，且命令真的能跑完、输出经伪控制台回传、中文直接可读。
 ///
-/// ⚠️ 这里故意用 readonly 模式：不授予任何额外写根，避免测试去改用户真实目录（whitelist 里的
-/// 路径）的 ACL。「可写根 + 受限令牌 + ConPTY」的组合由 Spike（`conpty_with_restricted_token`）
-/// 覆盖。
+/// ⚠️ 这里故意用 readonly 模式：不授予任何额外写根，避免测试去改用户真实目录的 ACL；「可写根 + 受限令牌 +
+/// ConPTY」的组合由 Spike 覆盖。
 #[tokio::test]
 #[cfg(target_os = "windows")]
 async fn test_execute_command_pty_sandboxed_end_to_end() {

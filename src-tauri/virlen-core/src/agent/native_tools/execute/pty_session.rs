@@ -1,15 +1,13 @@
 //! PTY 会话注册表 —— `tool_call_id` → 伪控制台输入通道。
 //!
-//! 用途：让用户在命令执行中「插键盘」（`docs/pty-research.md` §6.3）。运行器建好伪控制台后
-//! 把输入写端登记到本表；前端 `invoke('pty_write', { toolCallId, data })` 直接写进去 —— 走
-//! Tauri 命令而不是引擎事件总线，因此不污染 `AgentEventType` 四方契约（铁律 2）。命令结束
-//! （或超时/取消）时注销，避免写到已关闭的句柄。key 直接复用 `toolCallId`（前端
-//! `TerminalView` 已持有它，`rust-engine.ts` 也已按它注册 kill 入口），无需新增映射事件。
+//! 用途：让用户在命令执行中「插键盘」（`docs/pty-research.md` §6.3）。运行器建好伪控制台后把输入写端
+//! 登记到本表，前端 `invoke('pty_write', { toolCallId, data })` 直接写进去 —— 走 Tauri 命令而不是引擎
+//! 事件总线，不污染 `AgentEventType` 四方契约（铁律 2）。命令结束（或超时 / 取消）时注销，避免写到已
+//! 关闭的句柄。key 直接复用 `toolCallId`（前端 `TerminalView` 已持有它），无需新增映射事件。
 //!
-//! ⚠️ 中断语义（实测，§5.6）：`\x03` 只能影响「正在读 stdin 的进程」（shell 提示符 / REPL /
-//! `y/n` 提示）—— Windows 的控制台控制事件在有人读输入缓冲时才生成，`ping` 这类从不读
-//! stdin 的前台程序不会被 `\x03` 打断。因此中断主通道仍然是 Job Object /
-//! `agent_kill_command`，本模块只是补充手段。
+//! 中断语义（实测，§5.6）：`\x03` 只能影响「正在读 stdin 的进程」（shell 提示符 / REPL / `y/n`
+//! 提示）—— Windows 的控制台控制事件在有人读输入缓冲时才生成，`ping` 这类从不读 stdin 的前台程序不会
+//! 被 `\x03` 打断。因此中断主通道仍然是 Job Object / `agent_kill_command`，本模块只是补充手段。
 
 // 非 Windows 平台上本模块有一部分 API 没有调用者 —— 这不是死代码，而是「本模块一半的服务
 // 对象（ConPTY 运行器 `common/runner/pty.rs`）是 Windows 专属」的必然：`PtySession::new` /
@@ -30,8 +28,8 @@ use std::time::{Duration, Instant};
 
 /// ② 用户干预摘要（Step 2 ②）。
 ///
-/// ⚠️ 只记计数、不记内容：PTY 里用户敲的往往是密码 / token，正文一旦进工具结果就会进模型
-/// 上下文 + 落 SQLite，直接踩 §9 密钥红线（决策点 D4）。
+/// ⚠️ 只记计数、不记内容：PTY 里用户敲的往往是密码 / token，正文一旦进工具结果就会进模型上下文 + 落
+/// SQLite，直接踩 §9 密钥红线（决策点 D4）。
 #[derive(Default, Clone, Copy)]
 pub struct InterventionCounts {
     /// 写入次数（键击 / 粘贴各算一次）

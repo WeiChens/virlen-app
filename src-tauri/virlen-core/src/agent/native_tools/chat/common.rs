@@ -1,11 +1,8 @@
 //! chat — 消息查询公共（文本格式化 / 输出上限 / 单会话字符预算）
 //!
-//! ⚠️ 与 TS 侧 `src/infrastructure/tools/chat/common.ts` 逐字对齐（铁律 1）：
-//! `list_messages` / `read_messages` 原生化后，Rust 原生路径（默认）与 JS 回退路径必须
-//! 产出同一份 `content`（模型侧文本：英文，不进 i18n）。
-//!
-//! 硬上限三处一致：本文件 ↔ TS `tools/chat/common.ts` ↔ Rust
-//! `session_db::types::MSG_QUERY_*`（后者是服务端权威 clamp）。
+//! ⚠️ 与 TS 侧 `src/infrastructure/tools/chat/common.ts` 逐字对齐（铁律 1）：Rust 原生路径（默认）与 JS
+//! 回退路径必须产出同一份 `content`（模型侧文本：英文，不进 i18n）。硬上限三处一致：本文件 ↔ TS
+//! `tools/chat/common.ts` ↔ `session_db::types::MSG_QUERY_*`（后者是服务端权威 clamp）。
 
 use crate::session_db::{MessageTimelinePage, MessageWindow};
 use once_cell::sync::Lazy;
@@ -92,8 +89,8 @@ static BUDGETS: Lazy<Mutex<HashMap<String, (i64, usize)>>> = Lazy::new(|| Mutex:
 
 /// 判断本次还能否返回 `chars` 个字符，并从预算中扣除。
 ///
-/// ⚠️ StormBreaker 只能拦截「同名 + 同参」的重复调用，模型换个锚点 id 就能绕开；因此这里
-/// 再加一道按会话的滑窗预算，真正做到「不能把历史一次性刷出来」。
+/// ⚠️ StormBreaker 只能拦截「同名 + 同参」的重复调用，模型换个锚点 id 就能绕开；因此这里再加一道按会话的
+/// 滑窗预算，真正做到「不能把历史一次性刷出来」。
 pub(crate) fn consume_budget(session_id: &str, chars: usize) -> bool {
     let now = crate::telemetry::now_ms();
     // 持锁期间只做 O(1) 操作；毒锁（panic 后）也继续用，不让一次历史故障永久禁用预算

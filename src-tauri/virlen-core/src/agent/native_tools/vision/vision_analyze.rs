@@ -1,19 +1,14 @@
 //! `vision_analyze` 工具（原生）— 端侧视觉分析（UI 元素 + OCR + 图标 + 物体检测）
 //!
-//! ⚠️ 与 TS 侧 `infrastructure/tools/vision/vision-analyze.ts` 逐字对齐（铁律 1）：
+//! ⚠️ 与 TS 侧 `infrastructure/tools/vision/vision-analyze.ts` 逐字对齐（铁律 1）：缺少 `path` 时两侧
+//! 都失败；路径不存在时两侧都正常返回 `Error: source path does not exist — <p>`；模型目录缺失 / 推理
+//! 失败时两侧都回 `Vision Error: <msg>`。
 //!
-//! | 场景 | TS 行为 | 本实现 |
-//! |---|---|---|
-//! | 缺少 `path` | 安全路径解析抛错 → 桥回 `__kind:"error"` | `Err`（原生分发会加 `error: ` 前缀） |
-//! | 路径不存在 | 正常返回 `{ content: "Error: source path does not exist — <p>" }` | 同（`Value`，不是错误） |
-//! | 模型目录缺失 / 推理失败 | `VisionError` → 桥回 message `Vision Error: <msg>` | 同（`Error` 变体，不加 `error: ` 前缀） |
+//! 失败用 `NativeToolOutcome::error(...)` 而不是 `Err(...)`：后者会被 `execute_single_step` 统一前缀成
+//! `error: …`，与桥路径的裸 message 不一致。
 //!
-//! 为什么失败用 `NativeToolOutcome::error(...)` 而不是 `Err(...)`：`Err` 会被 `execute_single_step`
-//! 统一前缀成 `error: …`，与桥路径的裸 message 不一致。
-//!
-//! UI 侧（`VisionAnalyzeMessage`）直接渲染 `content`（tree text 语言无关），故不下发 uiData。
-//!
-//! 推理是秒级 CPU 密集同步调用，必须 `spawn_blocking` —— 聊天流式回传与它共用同一个 runtime。
+//! UI 侧（`VisionAnalyzeMessage`）直接渲染 `content`（tree text 语言无关），故不下发 uiData。推理是
+//! 秒级 CPU 密集同步调用，必须 `spawn_blocking`（与聊天流式回传共用同一个 runtime）。
 
 use crate::agent::native_tools::common::{arg_str, resolve_safe_path};
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};

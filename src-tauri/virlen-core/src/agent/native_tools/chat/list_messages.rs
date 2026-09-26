@@ -1,13 +1,12 @@
 //! `list_messages` 工具（原生）— 列出「已被上下文压缩掉」的历史消息时序
 //!
-//! 只覆盖「已压缩区间」（时序 < 最后一个 summary）：该区间之后的对话已在模型当前上下文中，
-//! 重复下发只会浪费 token —— 因此这里不返回当下可见的消息。
-//!
-//! AI 用它拿到时序 + 消息 id（或按关键词定位），再用 `read_messages` 读取正文。
+//! 只覆盖「已压缩区间」（时序 < 最后一个 summary）：该区间之后的对话已在模型当前上下文中，重复下发只会
+//! 浪费 token —— 因此这里不返回当下可见的消息。AI 用它拿到时序 + 消息 id（或按关键词定位），再用
+//! `read_messages` 读取正文。
 //!
 //! ⚠️ 与 TS 侧 `src/infrastructure/tools/chat/list-messages.ts` 逐字对齐（铁律 1）。查询直接走
-//! `SessionRepo`（SQLite），无 JS 桥往返；`repo.is_available() == false`（`NoopSessionRepo`，
-//! 即没有本地存储）时回与 JS 路径一致的「不可用」文案。
+//! `SessionRepo`（SQLite），无 JS 桥往返；`repo.is_available() == false`（`NoopSessionRepo`，即没有本地
+//! 存储）时回与 JS 路径一致的「不可用」文案。
 
 use super::common::{
     LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT, cap_output, consume_budget, format_timeline,

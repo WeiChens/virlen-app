@@ -1,25 +1,17 @@
 //! 供应商目录 —— 模板表 + 推理强度档位表的**唯一权威源**（机制 C 同款）
 //!
-//! 数据本体在同目录的 `provider_catalog.json`：
+//! 数据本体在同目录的 `provider_catalog.json`；两条路径同源（Rust `include_str!` 内嵌 ↔ 前端浏览器
+//! dev / vitest 用 `?raw` 直读同一份，见 `provider/catalog-source.ts`）→ 不可能漂移，因此不需要任何
+//! 「差异检查」逻辑（与 `agent/prompts` 同一取舍）。
 //!
-//! | 消费方 | 取值方式 |
-//! |---|---|
-//! | `virlen-cli` / Tauri 命令 | 本模块 `include_str!` 内嵌（编译期进二进制） |
-//! | 前端（浏览器 dev / vitest） | `?raw` 直读**同一份** json（见 `src/infrastructure/provider/catalog-source.ts`） |
-//!
-//! 两条路径同源 → 不可能漂移，因此不需要任何「差异检查」逻辑（与 `agent/prompts` 同一取舍）。
-//!
-//! ## 为什么把它从 TS 搬过来
-//!
-//! 搬迁前模板表只存在于 `src/domain/provider/config.ts`。`virlen-cli` 要做「逐步输入配置供应商」
-//! 的向导就必须用它 —— 而 CLI 里没有 JS，唯一的替代是抄一份到 Rust，那会立刻产生第二个
-//! 权威源（改一处忘另一处 = 静默分叉）。所以按「提示词 md 迁入 core」的同一套路搬过来。
+//! 搬过来的原因：模板表原先只在 `src/domain/provider/config.ts`，而 CLI 的配置向导必须用它 —— CLI
+//! 里没有 JS，抄一份到 Rust 会立刻产生第二个权威源（改一处忘另一处 = 静默分叉）。
 //!
 //! ## 排序口径（唯一一条）
 //!
-//! 推理档位的顺序即语义（`none/off < minimal < low < medium < high < xhigh < max`），
-//! 拖动条要单调、归一化要稳定，都依赖它。顺序由本文件 `reasoningEffortUnion` 定义；
-//! 前端 `sortReasoningEfforts()` 与 CLI 的选择顺序都按这个并集顺序产出。
+//! 推理档位的顺序即语义（`none/off < minimal < low < medium < high < xhigh < max`）：拖动条要单调、
+//! 归一化要稳定都依赖它。顺序由本文件 `reasoningEffortUnion` 定义，前端 `sortReasoningEfforts()` 与
+//! CLI 的选择顺序都按这个并集顺序产出。
 //! ⚠️ 改这个数组 = 同时改两侧行为（前端 `provider-config.test.ts` 与本模块单测都会盯着它）。
 
 use serde::{Deserialize, Serialize};

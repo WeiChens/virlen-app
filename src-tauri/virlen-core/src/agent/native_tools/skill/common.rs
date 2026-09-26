@@ -1,14 +1,11 @@
 //! skill — 技能分类公共（元信息解析 / 目录扫描 / 文件树）
 //!
-//! ⚠️ 与 TS 侧逐字对齐（铁律 1）：
-//! - [`parse_skill_entry`] ↔ `utils/mdYamlFrontmatter.ts::parseSkillMdMeta` +
-//!   `skill/skillStore.ts::parseSkillMeta`（YAML frontmatter 优先；无 frontmatter 时退回
-//!   「`# 标题` + `> 描述` + `**Version:** x.y.z`」纯 Markdown 格式）
-//! - [`normalize_skill_name`] ↔ `skill/types.ts::normalizeSkillName`（失败 = 该目录被跳过）
-//! - [`render_file_tree`] ↔ `tools/skill/common.ts::renderFileTree`（`├──` / `└──` 风格）
-//! - [`read_file_tree`] ↔ `skill/skillStore.ts::getSkillFileTree`（跳过隐藏项；目录名带 `/`）
-//! - [`scan_skills`] ↔ `skill/skillStore.ts::scanAndRegisterSkills`（TS 读 localStorage 注册表，
-//!   原生侧每次直接扫盘 —— 对无 JS 的 CLI 是唯一可行做法）
+//! ⚠️ 与 TS 侧逐字对齐（铁律 1）：[`parse_skill_entry`] ↔ `utils/mdYamlFrontmatter.ts::parseSkillMdMeta`
+//! 及 `skill/skillStore.ts::parseSkillMeta`（frontmatter 优先，无则退回「`# 标题` + `> 描述` +
+//! `**Version:** x.y.z`」）；[`normalize_skill_name`] ↔ `skill/types.ts::normalizeSkillName`；
+//! [`render_file_tree`] ↔ `tools/skill/common.ts::renderFileTree`；[`read_file_tree`] ↔
+//! `skillStore.ts::getSkillFileTree`；[`scan_skills`] ↔ `skillStore.ts::scanAndRegisterSkills`。
+//! （TS 读 localStorage 注册表，原生侧每次直接扫盘 —— 对无 JS 的 CLI 是唯一可行做法）
 
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -67,8 +64,8 @@ static RE_EMOJI: Lazy<Regex> = Lazy::new(|| {
     )
     .unwrap()
 });
-/// ⚠️ JS 的 `\w` 是 ASCII 的 `[A-Za-z0-9_]`，Rust regex 的 `\w` 默认 Unicode 感知，直接用
-/// 会把中文留下 —— 这里显式写成 ASCII 类，保持与 TS 同结果。
+/// ⚠️ JS 的 `\w` 是 ASCII 的 `[A-Za-z0-9_]`，Rust regex 的 `\w` 默认 Unicode 感知，直接用会把中文留下
+/// —— 这里显式写成 ASCII 类，保持与 TS 同结果。
 static RE_NON_WORD: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^A-Za-z0-9_\s-]").unwrap());
 static RE_WS_RUN: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+").unwrap());
 static RE_NON_NAME_CHAR: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^a-z0-9-]").unwrap());
@@ -427,9 +424,8 @@ mod tests {
         let entry = parse_skill_entry("fallback", md).unwrap();
         assert_eq!(entry.name, "resume-assistant", "标题 → 小写 + 空格转中划线");
         assert_eq!(entry.description, "AI-powered skill for resumes.");
-        // ⚠️ 逐字对齐 TS：`**Version:** x.y.z` 这种写法（`docs/AGENTS.md` §9.2 与 TS
-        //    `importService` 错误提示共用的示例）两侧都必须取到版本号 —— 历史缺陷（正则与
-        //    注释不符）已在两侧同时修正（铁律 1）。
+        // ⚠️ 逐字对齐 TS：`**Version:** x.y.z` 这种写法（`AGENTS.md` §9.2 与 TS `importService` 错误提示
+        //    共用的示例）两侧都必须取到版本号 —— 历史缺陷（正则与注释不符）已在两侧同时修正（铁律 1）。
         assert_eq!(
             entry.version.as_deref(),
             Some("1.0.0"),

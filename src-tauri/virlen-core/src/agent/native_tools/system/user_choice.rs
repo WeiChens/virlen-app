@@ -2,12 +2,10 @@
 //!
 //! 本工具没有自己的执行逻辑：它就是一个「用户交互请求」。原生路径返回
 //! [`NativeToolOutcome::Interaction`]，由 `tool_executor::handle_user_interaction` 经
-//! `agent:user-interaction-request` 交给 UI —— 与前端 `UserInteractionRequired` 走同一条通道
-//! （前端 `services/tool-service/index.ts` 按 `type === 'user_choice'` 分派到同一个弹窗处理器），
-//! 因此两侧行为天然一致。
+//! `agent:user-interaction-request` 交给 UI —— 与前端 `UserInteractionRequired` 走同一条通道（前端按
+//! `type === 'user_choice'` 分派到同一个弹窗处理器），因此两侧行为天然一致。
 //!
-//! ⚠️ 交互类型与载荷字段必须与 TS 侧 `src/infrastructure/tools/system/user-choice.ts` 一致
-//! （铁律 1）。
+//! ⚠️ 交互类型与载荷字段必须与 TS 侧 `src/infrastructure/tools/system/user-choice.ts` 一致（铁律 1）。
 
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
 use serde_json::{Map, Value};

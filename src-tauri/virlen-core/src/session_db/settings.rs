@@ -1,20 +1,15 @@
 //! 应用设置（配置下沉 D3）—— `app_settings` 表
 //!
-//! ## 为什么放在 `session_db` 下
+//! 放在 `session_db` 下的原因：配置与会话共用同一个 SQLite 文件与同一把单写连接 —— 不再需要第二个写
+//! 连接（不会引入 `SQLITE_BUSY`），迁移 / 维护（体积统计、WAL 截断、`VACUUM`）天然覆盖配置，CLI 与
+//! GUI 只要指向同一个 `virlen.db`（`HostEnv::data_dir()`）就共用同一份配置。
 //!
-//! 配置与会话共用同一个 SQLite 文件与同一把单写连接：不再需要第二个写连接（不会引入
-//! `SQLITE_BUSY`）；迁移 / 维护（体积统计、WAL 截断、`VACUUM`）天然覆盖配置；CLI 与 GUI
-//! 只要指向同一个 `virlen.db`（`HostEnv::data_dir()`）就共用同一份配置。
+//! 一 key 一行而不是整份 JSON 存一个 key：写入只改动过的那几个键 → 多窗口 / 并发场景不会因整份覆盖
+//! 而丢更新，`updated_at` 可用于定位「最近改了什么」。
 //!
-//! ## 为什么「一 key 一行」而不是整份 JSON 存一个 key
-//!
-//! 写入只改动过的那几个键 → 多窗口 / 并发场景不会因整份覆盖而丢更新；行数少、`updated_at`
-//! 可用于定位「最近改了什么」。
-//!
-//! ⚠️ 键名约定：与 `src/ui/store/settingStore.ts` 的 `SettingsStore` 字段同名同层
-//! （如 `providers` / `permissions` / `sandboxMode`），Rust 侧不建映射表 —— 这是避免「配置
-//! 字段漂移」的关键（详见 `docs/config-sink-plan.md` §6 R6）。保留键以 `__` 开头
-//! （`__schemaVersion` / `__migratedFrom`），业务键不得使用该前缀。
+//! ⚠️ 键名与 `src/ui/store/settingStore.ts` 的 `SettingsStore` 字段同名同层（如 `providers` /
+//! `permissions` / `sandboxMode`），Rust 侧不建映射表 —— 这是避免「配置字段漂移」的关键（见
+//! `docs/config-sink-plan.md` §6 R6）。保留键以 `__` 开头，业务键不得使用该前缀。
 
 use async_trait::async_trait;
 use rusqlite::{params, Connection};

@@ -71,12 +71,12 @@ fn is_decor(c: char) -> bool {
     ) || c.is_whitespace()
 }
 
-/// 清洗 AI 生成的标题 —— 与 TS `sanitizeTitle` 同语义：去首尾空白；去行首 markdown 装饰
-/// （`#` / `-` / `*` 与空白）；去首尾装饰符号（引号 / 书名号 / 括号 / 标点 / 空白）；压缩连续空白
-/// 为单个空格；超长按字符（码点）截断到 [`MAX_TITLE_LENGTH`] 并追加 `...`。
+/// 清洗 AI 生成的标题 —— 与 TS `sanitizeTitle` 同语义：去首尾空白；去行首 markdown 装饰（`#` / `-` / `*`
+/// 与空白）；去首尾装饰符号（引号 / 书名号 / 括号 / 标点 / 空白）；压缩连续空白为单个空格；超长按字符
+/// （码点）截断到 [`MAX_TITLE_LENGTH`] 并追加 `...`。
 ///
-/// ⚠️ 第 5 步的单位差异（TS 按 UTF-16 码元 + 代理对保护，Rust 按码点）：阈值附近可能有 ±1 字符
-/// 差异；Rust 侧不可能切出半个字符（孤立代理）。
+/// ⚠️ 第 5 步的单位差异（TS 按 UTF-16 码元 + 代理对保护，Rust 按码点）：阈值附近可能差 ±1 字符；Rust 侧
+/// 不可能切出半个字符（孤立代理）。
 pub fn sanitize_title(raw: &str) -> String {
     // ①② 去首尾空白 + 行首 markdown 装饰
     let after_md = raw

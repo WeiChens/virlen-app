@@ -1,18 +1,16 @@
 //! 宿主环境抽象 — 引擎核心与「宿主」之间的唯一接口
 //!
-//! 引擎核心（`agent/**`）必须保持零 `tauri::` 依赖（headless / CLI 的前提），但有两类信息只有
-//! 宿主知道：只读资源在哪（如 `quasivision_models`，打包后随安装目录走）、可写数据根在哪
-//! （会话库 `virlen.db`、日志、配置）。二者收敛成这个极小 trait，由宿主在构造期注入
-//! （`Arc<dyn HostEnv>`），与 `NativeToolCtx` 上的 `security` / `repo` / `skills` 同风格。
+//! 引擎核心（`agent/**`）必须零 `tauri::`（headless / CLI 的前提），但有两类信息只有宿主知道：只读
+//! 资源在哪（如 `quasivision_models`，打包后随安装目录走）、可写数据根在哪（会话库 / 日志 / 配置）。
+//! 二者收敛成这个极小 trait，由宿主在构造期注入（`Arc<dyn HostEnv>`），与 `NativeToolCtx` 上的
+//! `security` / `repo` 同风格。
 //!
-//! 约定（防止抽象面积蔓延）：只往里加「引擎自己拿不到的信息」—— 通知 / 托盘 / 窗口 / 剪贴板等
-//! 纯 GUI 能力不进这里，能由配置表达的东西也不进这里。
+//! 约定（防止抽象面积蔓延）：只往里加「引擎自己拿不到的信息」—— 通知 / 托盘 / 窗口 / 剪贴板等纯 GUI
+//! 能力不进这里，能由配置表达的东西也不进这里。
 //!
-//! 实现：GUI 用 `crate::host::TauriHost`（`app.path().resource_dir()` / `app_data_dir()`），
-//! CLI / 单测用 `crate::host::CliHost`（环境变量 + 可执行文件位置）。
-//!
-//! ⚠️ 本文件（以及 `crate::host` 之外的调用方）不得引入 `tauri::`。
-//! 设计草案见 `docs/host-abstraction-draft.md`。
+//! 实现：GUI 用 `crate::host::TauriHost`，CLI / 单测用 `crate::host::CliHost`。
+//! ⚠️ 本文件（以及 `crate::host` 之外的调用方）不得引入 `tauri::`。设计草案见
+//! `docs/host-abstraction-draft.md`。
 
 use std::path::PathBuf;
 
@@ -31,14 +29,11 @@ pub trait HostEnv: Send + Sync {
 
     /// 可写数据根（会话库 `virlen.db` / 日志 / 配置）。
     ///
-    /// ⚠️ GUI 与 CLI 必须指向同一目录 —— 否则 CLI 读写的是另一个空库，「同一份配置 /
-    /// 同一份会话」就不成立。消费方是 `session_db::open_session_db`
-    /// （库路径 = `data_dir()/virlen.db`）。
-    ///
-    /// - GUI：Tauri `app.path().app_data_dir()`（= `dirs::data_dir()/<bundle identifier>`）
-    /// - CLI：`$VIRLEN_DATA_DIR` → `%APPDATA%/<identifier>`（Win）/
-    ///   `~/Library/Application Support/<identifier>`（macOS）/
-    ///   `$XDG_DATA_HOME/<identifier>`（Linux）
+    /// ⚠️ GUI 与 CLI 必须指向同一目录 —— 否则 CLI 读写的是另一个空库，「同一份配置 / 同一份会话」就不
+    /// 成立。消费方是 `session_db::open_session_db`（库路径 = `data_dir()/virlen.db`）：
+    /// GUI 用 Tauri `app.path().app_data_dir()`（= `dirs::data_dir()/<identifier>`）；CLI 用
+    /// `$VIRLEN_DATA_DIR` → `%APPDATA%/<identifier>`（Win）/ `~/Library/Application Support/<identifier>`
+    /// （macOS）/ `$XDG_DATA_HOME/<identifier>`（Linux）。
     fn data_dir(&self) -> PathBuf;
 }
 

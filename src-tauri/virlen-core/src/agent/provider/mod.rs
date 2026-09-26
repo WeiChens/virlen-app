@@ -41,9 +41,8 @@ pub use bridged::BridgedProvider;
 pub use openai::NativeOpenAiProvider;
 pub use models::{list_models, verify_connection};
 
-// ⚠️ 附件 / 引用 / 技能的「块 → 文本」降级函数要被 `agent::compress::raw` 复用：上下文压缩渲染
-// 出的历史必须与「消息直接发给模型时」是同一套文本形式（铁律 1）。因此这里收窄为 `pub(crate)`
-// 转出（`blocks` 模块本身仍不对外）。
+// ⚠️ 附件 / 引用 / 技能的「块 → 文本」降级函数要被 `agent::compress::raw` 复用：压缩渲染出的历史必须与
+// 「消息直接发给模型时」是同一套文本形式（铁律 1）。因此这里收窄为 `pub(crate)` 转出（`blocks` 仍不对外）。
 pub(crate) use blocks::{file_block_to_text, quote_block_to_text, skill_block_to_text};
 
 // ==================== Provider trait ====================

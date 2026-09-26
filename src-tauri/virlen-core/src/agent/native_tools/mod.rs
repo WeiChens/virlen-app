@@ -165,10 +165,8 @@ pub struct NativeToolCtx<'a> {
     pub skills: Option<&'a [String]>,
     /// 宿主环境（资源目录 / 数据目录）。
     ///
-    /// 同样是显式注入（与 `security` / `repo` / `skills` 一致）：
-    /// - Agent 引擎路径 → `AgentEngine.host`（GUI = `TauriHost`，CLI = `CliHost`）；
-    /// - 回退路径（`run_command_for_ts_engine`）与测试 → `host::default_host()`。
-    ///
+    /// 同样是显式注入（与 `security` / `repo` / `skills` 一致）：Agent 引擎路径 → `AgentEngine.host`
+    /// （GUI = `TauriHost`，CLI = `CliHost`）；回退路径与测试 → `host::default_host()`。
     /// 用途：`vision_analyze` 需要「模型文件在哪」，而那是宿主才知道的信息。
     /// ⚠️ 引擎核心里的 `tauri::` 命中数必须保持 0，宿主差异全部收在 `HostEnv` 后端。
     pub host: &'a dyn HostEnv,
@@ -186,8 +184,8 @@ pub struct NativeToolCtx<'a> {
 
 /// 无持久化后端的 `SessionRepo` 占位（回退路径的 ctx 只需要一个可用引用）。
 ///
-/// ⚠️ `NoopSessionRepo::is_available() == false`，因此消息查询工具会如实回「本地存储不可用」
-/// —— 而不是把空结果误报成「该会话还没有消息」。
+/// ⚠️ `NoopSessionRepo::is_available() == false`，因此消息查询工具会如实回「本地存储不可用」—— 而不是把空
+/// 结果误报成「该会话还没有消息」。
 pub fn noop_repo() -> &'static NoopSessionRepo {
     static REPO: once_cell::sync::Lazy<NoopSessionRepo> =
         once_cell::sync::Lazy::new(NoopSessionRepo::default);

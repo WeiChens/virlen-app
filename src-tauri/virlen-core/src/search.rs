@@ -20,15 +20,13 @@ pub struct TextSearchResult {
 
 /// 按文件名搜索（支持纯文本模糊匹配或正则匹配）
 ///
-/// 三个参数控制「遍历范围」（侧边栏搜索框靠它们避免把 `node_modules` 扫一遍）：
-/// - `include_hidden=false`：跳过点文件 / 点目录（与目录树的 `list_directory` 一致）；
-/// - `skip_dir_names`：这些目录名整棵剪掉（`node_modules` / `dist` / `target` …），它们动辄
-///   几万文件，搜进去又慢又全是噪音；
-/// - `keep_dirs`：剪枝的例外，已归一化（`\` → `/`）的绝对路径 —— 用户已在目录树里展开过的
-///   那份忽略目录（展开了就是确实要看里面，不该再剪）。
+/// 三个参数控制「遍历范围」（侧边栏搜索框靠它们避免把 `node_modules` 扫一遍）：`include_hidden=false`
+/// 跳过点文件 / 点目录（与 `list_directory` 一致）；`skip_dir_names` 把这些目录名整棵剪掉（动辄几万
+/// 文件，搜进去又慢又全是噪音）；`keep_dirs` 是剪枝的例外（已归一化为 `/` 的绝对路径 —— 用户已在目录
+/// 树里展开过就是确实要看里面，不该再剪）。
 ///
-/// ⚠️ 模型工具（`native_tools::search`）调用时传 `true` + 两个空数组，保持原行为：它可以用
-/// 显式路径 / glob 表达「就要搜 node_modules」的意图，UI 搜索框没有这种表达手段。
+/// ⚠️ 模型工具（`native_tools::search`）调用时传 `true` + 两个空数组，保持原行为：它可以用显式路径 /
+/// glob 表达「就要搜 node_modules」的意图，UI 搜索框没有这种表达手段。
 ///
 /// `#[allow(too_many_arguments)]`：查询条件（root / query / regex / 上限）+ 剪枝策略
 /// （include_hidden / skip / keep）+ 取消位各自独立，收结构体只是换写法。

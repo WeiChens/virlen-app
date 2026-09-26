@@ -76,8 +76,8 @@ pub struct SandboxIgnoreRule {
     pub name: String,
     /// 是否启用。
     ///
-    /// ⚠️ 默认 false（缺字段 = 不启用）：TS 侧 `if (!rule.enabled) continue` 把缺失字段当
-    /// 「未启用」跳过；这里必须一致，否则会出现「TS 跳过、Rust 却命中」的分叉。
+    /// ⚠️ 默认 false（缺字段 = 不启用）：TS 侧把缺失字段当「未启用」跳过，这里必须一致，否则会出现
+    /// 「TS 跳过、Rust 却命中」的分叉。
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
