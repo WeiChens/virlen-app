@@ -2,7 +2,7 @@
   "name": "virlen-app",
   "description": "全能型 AI 智能体桌面客户端 — 多模型、工具调用、视觉识别、skill",
   "private": true,
-  "version": "1.1.43",
+  "version": "1.1.44",
   "license": "MIT",
   "type": "module",
   "scripts": {

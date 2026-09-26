@@ -1,6 +1,6 @@
 [package]
 name = "virlen-cli"
-version = "1.1.43"
+version = "1.1.44"
 description = "Virlen headless CLI（与桌面端共用同一份配置与会话库）"
 authors = ["wei"]
 edition = "2021"

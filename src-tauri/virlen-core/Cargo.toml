@@ -1,6 +1,6 @@
 [package]
 name = "virlen-core"
-version = "1.1.43"
+version = "1.1.44"
 description = "Virlen 核心库（零 tauri:: 依赖）：Agent 引擎 / 会话与配置持久化 / 沙盒 / 安全判定 / RAG / 视觉 / 宿主抽象"
 authors = ["wei"]
 edition = "2021"
