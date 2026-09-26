@@ -1,5 +1,6 @@
-use crate::tui::commands::Slash;
+use crate::tui::commands::{CompressArg, Slash};
 use serde_json::json;
+use virlen_core::agent::compress::CompressMode;
 
 use super::*;
 
@@ -582,4 +583,115 @@ fn submit_is_rejected_while_running() {
     keys(&mut st, "second");
     assert_eq!(st.apply_key(Key::Enter), None, "回合进行中不得再提交");
     assert_eq!(st.input(), "second", "输入内容应保留，回合结束后可直接回车");
+}
+
+// ==================== 上下文占用与压缩 ====================
+
+/// 上下文占用与「本进程累计 token」是两个口径，各走各的字段
+#[test]
+fn context_usage_event_updates_status() {
+    let mut st = UiState::new();
+    assert_eq!(st.status.context_tokens, None);
+    st.apply(UiEvent::ContextUsage {
+        tokens: Some(40_000),
+    });
+    assert_eq!(st.status.context_tokens, Some(40_000));
+    st.apply(UiEvent::Usage { total: 12_345 });
+    assert_eq!(st.status.tokens, Some(12_345));
+    assert_eq!(st.status.context_tokens, Some(40_000), "两个字段互不影响");
+    // 切到没有用量数据的会话 → 回到 None（界面上不显示百分比，而不是 0%）
+    st.apply(UiEvent::ContextUsage { tokens: None });
+    assert_eq!(st.status.context_tokens, None);
+}
+
+/// `/compress` 不带参数：只弹面板，**不产生动作**（选择由面板完成后才产生）
+#[test]
+fn compress_without_mode_opens_picker_and_produces_no_action() {
+    let mut st = UiState::new();
+    st.apply(UiEvent::DefaultCompressMode(CompressMode::Raw));
+    keys(&mut st, "/compress");
+    assert_eq!(st.apply_key(Key::Enter), None, "不带参数不得直接开压");
+    let p = st.picker().expect("应打开选择面板");
+    assert_eq!(p.options.len(), 2);
+    assert_eq!(p.index, 1, "初始高亮 = 设置里的默认方式");
+    // 命令回显立即固化（不属于任何回合）
+    assert!(st.inflight().iter().any(|l| l.text == "> /compress"));
+}
+
+/// ↑↓ 移动 + Enter 确认 → 产生压缩动作；两端停在原地（不回绕）
+#[test]
+fn picker_moves_and_confirms_a_mode() {
+    let mut st = UiState::new();
+    keys(&mut st, "/compress");
+    st.apply_key(Key::Enter);
+    assert_eq!(st.picker().unwrap().index, 0, "没配默认时高亮第一项");
+    assert_eq!(st.apply_key(Key::Down), None);
+    assert_eq!(st.picker().unwrap().index, 1);
+    st.apply_key(Key::Down);
+    assert_eq!(st.picker().unwrap().index, 1, "到了底就停住");
+    assert_eq!(
+        st.apply_key(Key::Enter),
+        Some(Action::Compress(CompressMode::Raw))
+    );
+    assert!(st.picker().is_none(), "确认后面板关闭");
+    // 结果回显在滚动区：用户看得见自己选了什么
+    assert!(st.inflight().iter().any(|l| l.text.contains("正文压缩")));
+}
+
+/// 面板开着时**普通字符不参与**（与授权面板同一条 fail-closed 口径）：
+/// 用户此刻很可能在盲打下一句消息，那些字符既不该改变高亮，也不该落进输入框。
+#[test]
+fn picker_ignores_letter_keys_and_esc_cancels() {
+    let mut st = UiState::new();
+    keys(&mut st, "/compress");
+    st.apply_key(Key::Enter);
+    for c in ['a', 'i', 'r', 'a', 'w'] {
+        assert_eq!(st.apply_key(Key::Char(c)), None);
+    }
+    assert!(st.input().is_empty(), "面板开着时字符不得落进输入框");
+    assert_eq!(st.picker().unwrap().index, 0, "字符不得改变高亮");
+    assert_eq!(st.apply_key(Key::Esc), None);
+    assert!(st.picker().is_none());
+    assert!(st.inflight().iter().any(|l| l.text == "→ 已取消压缩"));
+}
+
+/// 带参数走命令分派（直接压）；认不出的方式名**不得**静默退化成默认
+#[test]
+fn compress_mode_arg_goes_straight_through() {
+    let mut st = UiState::new();
+    keys(&mut st, "/compress ai");
+    assert_eq!(
+        st.apply_key(Key::Enter),
+        Some(Action::Compress(CompressMode::Ai))
+    );
+    assert!(st.picker().is_none(), "带参数不弹面板");
+    keys(&mut st, "/compress 全文");
+    assert_eq!(
+        st.apply_key(Key::Enter),
+        Some(Action::Slash(Slash::Compress(CompressArg::Invalid(
+            "全文".into()
+        ))))
+    );
+}
+
+/// 压缩期间：拦住新输入与固化，但 spinner 继续转（用户在等一次模型调用）
+#[test]
+fn compressing_blocks_input_and_commit_but_keeps_ticking() {
+    let mut st = UiState::new();
+    st.apply(UiEvent::Compressing(true));
+    assert!(st.busy() && !st.running(), "压缩中算忙，但不是回合");
+
+    keys(&mut st, "等一下");
+    assert_eq!(st.apply_key(Key::Enter), None, "压缩中不得再提交");
+    assert_eq!(st.input(), "等一下", "输入内容保留，压缩结束后可直接回车");
+    st.apply(UiEvent::Notice("提示".into()));
+    assert!(st.take_commit().is_empty(), "压缩中不得把在飞内容撕开固化");
+
+    assert_eq!(st.frame(), 0);
+    st.tick();
+    assert_eq!(st.frame(), 1, "压缩中也要推进 spinner");
+
+    st.apply(UiEvent::Compressing(false));
+    assert!(!st.busy());
+    assert!(!st.take_commit().is_empty(), "结束后恢复固化");
 }

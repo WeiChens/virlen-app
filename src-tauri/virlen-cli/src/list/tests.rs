@@ -1,5 +1,5 @@
 use virlen_core::agent::host::HostEnv;
-use virlen_core::agent::types::Session;
+use virlen_core::agent::types::{Message, Session, SessionParams, TokenUsage};
 use serde_json::{json, Map, Value};
 use std::sync::Arc;
 
@@ -8,7 +8,6 @@ use crate::EXIT_OK;
 use super::group::group_sessions;
 use super::render::{brief, display_width, effective_limit, fmt_time, pad, pad_left};
 use super::*;
-use virlen_core::agent::types::SessionParams;
 use virlen_core::host::CliHost;
 use std::path::PathBuf;
 
@@ -410,6 +409,129 @@ async fn list_agents_end_to_end_with_session_counts() {
     assert_eq!(v["agents"][0]["sessionCount"], 2);
     assert_eq!(v["agents"][0]["defaultModel"]["modelId"], "m1");
     assert_eq!(v["agents"][1]["sessionCount"], 1);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// 新增两列：上下文占用（%）与对话条数
+///
+/// 数据源是 `SessionRepo::session_stats`（两条聚合查询）；口径与桌面端 token 环一致：
+/// 取「最新一条带用量的消息」的 totalTokens。无用量时上下文列显示 `-`（**不是** 0%）。
+#[tokio::test]
+async fn list_sessions_shows_context_percent_and_message_count() {
+    let (host, dir) = temp_host();
+
+    // s1：3 条消息，最后一条 40k / 200k = 20%
+    seed(&host, vec![session("s1", "有历史", None, None, 300)], None).await;
+    {
+        let db = open_db(&host).unwrap();
+        let mut msgs: Vec<Message> = (0..2)
+            .map(|i| Message {
+                id: format!("m{i}"),
+                role: "user".into(),
+                content: json!("你好"),
+                timestamp: 10 + i as i64,
+                ..Default::default()
+            })
+            .collect();
+        let mut last = Message {
+            id: "m-last".into(),
+            role: "assistant".into(),
+            content: json!("回答"),
+            timestamp: 99,
+            ..Default::default()
+        };
+        last.usage = Some(TokenUsage {
+            prompt_tokens: 39_000,
+            completion_tokens: 1_000,
+            total_tokens: 40_000,
+            cached_tokens: None,
+        });
+        msgs.push(last);
+        db.repo.append_messages("s1", &msgs).await.unwrap();
+    }
+    // s2：有消息但从未拿到过用量 → 上下文列必须是 `-`
+    seed(&host, vec![session("s2", "无用量", None, None, 200)], None).await;
+    {
+        let db = open_db(&host).unwrap();
+        db.repo
+            .append_messages(
+                "s2",
+                &[Message {
+                    id: "u1".into(),
+                    role: "user".into(),
+                    content: json!("一句话"),
+                    timestamp: 1,
+                    ..Default::default()
+                }],
+            )
+            .await
+            .unwrap();
+    }
+
+    let mut out: Vec<u8> = Vec::new();
+    let mut err: Vec<u8> = Vec::new();
+    assert_eq!(
+        run_sessions(
+            &host,
+            SessionsCmd::List(ListSessionsOptions::default()),
+            &mut out,
+            &mut err
+        )
+        .await,
+        EXIT_OK,
+        "stderr={}",
+        String::from_utf8_lossy(&err)
+    );
+    let text = String::from_utf8_lossy(&out).to_string();
+    assert!(text.contains("上下文/200k"), "表头应标明 100% 对应的窗口: {text}");
+    assert!(text.contains("条数"), "表头应有条数列: {text}");
+
+    let line_of = |id: &str| {
+        text.lines()
+            .find(|l| l.starts_with(id))
+            .unwrap_or_else(|| panic!("找不到 {id} 那一行: {text}"))
+            .to_string()
+    };
+    let s1 = line_of("s1");
+    assert!(s1.contains("20%"), "40k/200k 应为 20%: {s1}");
+    assert!(s1.contains("40k"), "应带上绝对 token: {s1}");
+    assert!(s1.contains(" 3 ") || s1.trim_end().contains("3 "), "条数应为 3: {s1}");
+    let s2 = line_of("s2");
+    assert!(!s2.contains("%"), "无用量时上下文列不得显示百分比: {s2}");
+
+    // JSON 模式：派生字段给脚本用（无数据是 null，不是 0）
+    let mut out: Vec<u8> = Vec::new();
+    assert_eq!(
+        run_sessions(
+            &host,
+            SessionsCmd::List(ListSessionsOptions {
+                json: true,
+                ..Default::default()
+            }),
+            &mut out,
+            &mut err
+        )
+        .await,
+        EXIT_OK
+    );
+    let v: Value = serde_json::from_slice(&out).unwrap();
+    let find = |id: &str| {
+        v["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(find("s1")["messageCount"], 3);
+    assert_eq!(find("s1")["contextTokens"], 40_000);
+    assert_eq!(find("s1")["contextPercent"], 20);
+    assert_eq!(find("s1")["contextWindowTokens"], 200_000);
+    assert_eq!(find("s2")["messageCount"], 1);
+    assert!(find("s2")["contextTokens"].is_null());
+    assert!(find("s2")["contextPercent"].is_null());
 
     std::fs::remove_dir_all(&dir).ok();
 }

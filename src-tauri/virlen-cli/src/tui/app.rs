@@ -8,8 +8,11 @@
 //! | `Chat` | 主循环 | 引擎 + 桥 + 通道；一次回合一个 spawned 任务 |
 //! | `run_tui` | 调用方 | 接管终端、起线、receive 结果；失败超阈值则**降级**回顺序输出模式 |
 
-use crate::session_rt::{SessionRuntime, UNTITLED};
-use crate::tui::commands::Slash;
+use crate::session_rt::{
+    compress_session, current_context_tokens, default_compress_mode, report_line, CompressError,
+    SessionRuntime, UNTITLED,
+};
+use crate::tui::commands::{CompressArg, Slash};
 use crate::tui::state::{Action, Key, UiEvent, UiState};
 use crate::EXIT_OK;
 use std::io::Write;
@@ -17,6 +20,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use virlen_core::agent::bridge::{self, AgentBridgeState};
+use virlen_core::agent::compress::CompressMode;
 use virlen_core::agent::engine::AgentEngine;
 use virlen_core::agent::event_sink::EventSink;
 use virlen_core::agent::host::HostEnv;
@@ -124,12 +128,20 @@ pub(crate) async fn run_tui(
         evt: evt_tx.clone(),
         turns: turn_tx.clone(),
         running: false,
+        compressing: false,
+        context_tokens: None,
     };
     // 续连（`chat --session <id>`）时先把最近几条消息显示出来，方便用户预览历史。
     // 顺序在「已就绪」**之前**：先看见历史，再看见就绪；新会话没有历史 → 什么也不显示。
     let resumed = chat.rt.opts.session_id.is_some();
     chat.preview_history();
     chat.announce(if resumed { "已续连会话" } else { "已就绪" });
+    // 设置里的默认压缩方式（`app_settings.contextCompressMode`）→ 选择面板据此标「默认」
+    if let Some(m) = default_compress_mode(&chat.rt.settings) {
+        let _ = chat.evt.send(UiEvent::DefaultCompressMode(m));
+    }
+    // 一上来就把上下文占用推给状态行（续连已有会话时立刻能看到百分比）
+    chat.refresh_context().await;
     let _ = chat.evt.send(UiEvent::Notice(
         "Ctrl+C（空闲时）= 退出 · Esc = 取消当前回合 · /help 看命令".to_string(),
     ));
@@ -150,7 +162,7 @@ pub(crate) async fn run_tui(
             }
             outcome = turn_rx.recv() => {
                 if let Some(o) = outcome {
-                    chat.finish_turn(o);
+                    chat.finish_turn(o).await;
                 }
             }
         }
@@ -275,6 +287,10 @@ struct Chat {
     evt: mpsc::UnboundedSender<UiEvent>,
     turns: mpsc::UnboundedSender<TurnOutcome>,
     running: bool,
+    /// 正在压缩上下文（AI 摘要要一次模型调用，可能持续数秒）
+    compressing: bool,
+    /// 当前上下文占用（供 `/status` 显示；状态行那份由 UI 侧持有）
+    context_tokens: Option<i64>,
 }
 
 impl Chat {
@@ -286,8 +302,8 @@ impl Chat {
         let _ = self.evt.send(UiEvent::Error(s.into()));
     }
 
-    /// 把当前会话状态推给 UI（状态行 + 提示）
-    fn announce(&self, prefix: &str) {
+    /// 把会话元信息推给状态行（会话 / 模型 / 工作目录 / 消息数）
+    fn push_session(&self, messages: usize) {
         let s = &self.rt.session;
         let _ = self.evt.send(UiEvent::SessionChanged {
             session_id: s.id.clone(),
@@ -298,15 +314,30 @@ impl Chat {
             },
             model: self.rt.resources.model_id.clone(),
             workspace: self.rt.resources.workspace.clone(),
-            messages: self.rt.messages.len(),
+            messages,
         });
+    }
+
+    /// 把当前会话状态推给 UI（状态行 + 提示）
+    fn announce(&self, prefix: &str) {
+        self.push_session(self.rt.messages.len());
         self.note(format!(
             "{} · 会话 {} · 模型 {} · 工作目录 {}",
             prefix,
-            s.id,
+            self.rt.session.id,
             self.rt.resources.model_id,
             self.rt.resources.workspace
         ));
+    }
+
+    /// 刷新「当前上下文占用」（读数尾窗；口径在 core `compress::context_tokens`）
+    ///
+    /// 为什么读库而不是用事件里的 usage：引擎是「先落库再 emit」，所以回合结束时库里
+    /// 已经有带 `usage` 的助手消息 —— 与桌面端 token 环是同一个口径。
+    async fn refresh_context(&mut self) {
+        let tokens = current_context_tokens(&self.rt).await;
+        self.context_tokens = tokens;
+        let _ = self.evt.send(UiEvent::ContextUsage { tokens });
     }
 
     /// 续连时先展示历史预览（`chat --session <id>` 命中已有会话）。
@@ -319,7 +350,7 @@ impl Chat {
         }
     }
 
-    fn finish_turn(&mut self, o: TurnOutcome) {
+    async fn finish_turn(&mut self, o: TurnOutcome) {
         self.running = false;
         let (ok, error) = match o.result {
             Ok(()) => (true, None),
@@ -330,6 +361,49 @@ impl Chat {
             error,
             elapsed_ms: o.elapsed_ms,
         });
+        // 回合结束后刷新上下文占用（此时库里已有本轮的 usage）
+        self.refresh_context().await;
+    }
+
+    /// 压缩上下文（方式已选定）。
+    ///
+    /// 为什么直接 `await`（不 spawn）：压缩是「一次性、无中间事件」的操作，
+    /// 主循环等它即可 —— TUI 线程是独立的，照样在画 spinner 与「正在压缩」提示；
+    /// 期间的按键会排在通道里，压缩结束后按原语义处理（输入已被状态机拦住）。
+    async fn compress(&mut self, mode: CompressMode) {
+        if self.running || self.compressing {
+            self.error("正在运行或压缩中，请稍候");
+            return;
+        }
+        self.compressing = true;
+        let _ = self.evt.send(UiEvent::Compressing(true));
+        self.note(format!(
+            "正在压缩上下文（{}）…（AI 摘要需一次模型调用，请稍候）",
+            mode.label()
+        ));
+        let result = compress_session(&mut self.rt, mode).await;
+        self.compressing = false;
+        let _ = self.evt.send(UiEvent::Compressing(false));
+        match result {
+            Ok(report) => {
+                // 消息条数变了（多了一条 summary）→ 同步状态行
+                self.push_session(report.message_count);
+                self.context_tokens = Some(report.after);
+                let _ = self.evt.send(UiEvent::ContextUsage {
+                    tokens: Some(report.after),
+                });
+                self.note(report_line(&report));
+            }
+            // 被闸拦下（上下文充裕 / 没有用量数据）：**提示**而不是报错
+            Err(CompressError::Skipped(m)) => {
+                self.note(m);
+                self.refresh_context().await;
+            }
+            Err(e @ CompressError::Failed(_)) => {
+                self.error(format!("压缩失败: {}", e.message()));
+                self.refresh_context().await;
+            }
+        }
     }
 
     async fn handle(&mut self, a: Action) -> Flow {
@@ -362,6 +436,10 @@ impl Chat {
             }
             Action::Slash(cmd) => {
                 self.slash(cmd).await;
+                Flow::Continue
+            }
+            Action::Compress(mode) => {
+                self.compress(mode).await;
                 Flow::Continue
             }
         }
@@ -405,15 +483,31 @@ impl Chat {
         match cmd {
             Slash::Help => self.note(commands::help_text()),
             Slash::Exit => {} // 退出由 UI 侧直接处理（它已经发了 Action::Quit）
-            Slash::Status => self.note(status_text(&self.rt)),
+            Slash::Status => self.note(status_text(&self.rt, self.context_tokens)),
             Slash::Unknown(c) => self.note(format!("未知命令: /{}（/help 查看）", c)),
+            Slash::Compress(arg) => match arg {
+                // 防御分支：正常路径下「方式已定」由状态机直接发 `Action::Compress`，
+                // 不会绕到这里（`submit_input`）。留着它不影响正确性，也避免将来多一个
+                // 生产者时静默丢动作。
+                CompressArg::Mode(m) => self.compress(m).await,
+                CompressArg::Ask => {
+                    self.note("用法: /compress [ai|raw]（不带参数会弹出选择面板）")
+                }
+                CompressArg::Invalid(name) => self.note(format!(
+                    "未知压缩方式: {}（可用：ai = AI 摘要 / raw = 正文压缩）",
+                    name
+                )),
+            },
             Slash::New => {
-                if self.running {
-                    self.error("回合进行中不能切会话（Esc 先取消）");
+                if self.running || self.compressing {
+                    self.error("忙时不能切会话（等当前操作结束）");
                     return;
                 }
                 match self.rt.activate(None).await {
-                    Ok(()) => self.announce("已新建会话"),
+                    Ok(()) => {
+                        self.announce("已新建会话");
+                        self.refresh_context().await;
+                    }
                     Err(e) => self.error(format!("新建会话失败: {}", e)),
                 }
             }

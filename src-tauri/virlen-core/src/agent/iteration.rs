@@ -175,6 +175,7 @@ pub async fn run_iteration(
                     Some(current_iteration),
                     None,
                     outcome.usage,
+                    false,
                     Some(crate::telemetry::now_ms() - verify_started_ms),
                 )
                 .await;

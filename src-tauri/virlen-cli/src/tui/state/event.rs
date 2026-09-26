@@ -68,6 +68,16 @@ impl UiState {
             UiEvent::Usage { total } => {
                 self.status.tokens = Some(total);
             }
+            // 上下文占用（与 `Usage` 是两个口径：那个是「花了多少」，这个是「现在多大」）
+            UiEvent::ContextUsage { tokens } => {
+                self.status.context_tokens = tokens;
+            }
+            UiEvent::Compressing(on) => {
+                self.compressing = on;
+            }
+            UiEvent::DefaultCompressMode(m) => {
+                self.default_compress_mode = Some(m);
+            }
             UiEvent::Interaction {
                 request_id,
                 kind,

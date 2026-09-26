@@ -34,6 +34,21 @@ pub struct UserMessageRef {
     pub preview: String,
 }
 
+/// 单个会话的统计（`list-session` 的「上下文大小」「对话条数」两列）
+///
+/// 存在的理由：`list-session` 要一次列出几十个会话。「消息条数 + 上下文占用」需要扫消息表，
+/// 逐个会话调 `get_messages` 会把每个会话的**全部历史正文**都读进内存（大库上很慢）；
+/// 因此由仓储实现做**批量**聚合（一条 SQL 一个会话一行）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionStat {
+    pub session_id: String,
+    /// 会话内消息条数（无消息的会话不会出现在结果里，调用方按 0 处理）
+    pub messages: i64,
+    /// 当前上下文占用 token（口径 = `agent::compress::context_tokens`）；无数据时为 `None`
+    pub context_tokens: Option<i64>,
+}
+
 /// 消息检索结果项（会话内 / 跨会话通用）
 ///
 /// `text` 是「围绕首个命中位置生成的片段」（超长已省略号截断），

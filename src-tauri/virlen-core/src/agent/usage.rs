@@ -86,6 +86,8 @@ pub fn ledger_tokens(u: &TokenUsage, provider_type: &str) -> LedgerTokens {
 /// - `duration_ms`：本次 LLM 请求的墙钟耗时（含首字延迟）—— UI 用它算 tok/s；
 ///   拿不到就传 `None`（落库为 0，UI 显示 `-`）。与 TS 侧 `UsageLedgerRecord.durationMs` 对称（铁律 1）
 /// - `usage` 为 `None`（provider 未返回用量，如流式中断）时不记账
+/// - `estimated`：`usage` 是否为**本地估算**（provider 没回报用量时的兜底）——
+///   UI 需与真实用量区分展示（与 TS `recordUsage` 的 `estimated` 列语义一致）
 #[allow(clippy::too_many_arguments)]
 pub async fn record_usage(
     repo: &dyn SessionRepo,
@@ -97,6 +99,7 @@ pub async fn record_usage(
     round: Option<i64>,
     message_id: Option<&str>,
     usage: Option<TokenUsage>,
+    estimated: bool,
     duration_ms: Option<i64>,
 ) {
     let Some(u) = usage else {
@@ -117,7 +120,7 @@ pub async fn record_usage(
         completion_tokens: tokens.completion_tokens,
         cached_tokens: tokens.cached_tokens,
         total_tokens: tokens.total_tokens,
-        estimated: false,
+        estimated,
         // 非正耗时不记（如注入假时长 / 时钟回拨）→ UI 显示 '-' 而不是除零或无穷大
         duration_ms: duration_ms.filter(|d| *d > 0),
         trace_id: crate::telemetry::get_session_trace(session_id),

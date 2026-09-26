@@ -80,7 +80,10 @@ pub(super) fn slice_messages(messages: &[Message]) -> &[Message] {
 }
 
 /// 文件 / 文件夹附件块 → 文本（对齐 TS `fileBlockToText`）
-pub(super) fn file_block_to_text(block: &Value) -> String {
+///
+/// `pub(crate)`：`agent::compress::raw` 渲染压缩后的历史时复用同一套降级文案
+/// （见 `provider/mod.rs` 的转出），两侧文本形式必须一致。
+pub(crate) fn file_block_to_text(block: &Value) -> String {
     let path = block.get("path").and_then(Value::as_str).unwrap_or("");
     let is_dir = block.get("isDir").and_then(Value::as_bool).unwrap_or(false);
     let label = if is_dir {
@@ -92,7 +95,9 @@ pub(super) fn file_block_to_text(block: &Value) -> String {
 }
 
 /// 引用消息块 → 文本（对齐 TS `quoteBlockToText`）
-pub(super) fn quote_block_to_text(block: &Value) -> String {
+///
+/// `pub(crate)`：同 `file_block_to_text`（压缩渲染复用）。
+pub(crate) fn quote_block_to_text(block: &Value) -> String {
     let role = block.get("role").and_then(Value::as_str).unwrap_or("");
     let message_id = block.get("messageId").and_then(Value::as_str).unwrap_or("");
     let text = block.get("text").and_then(Value::as_str).unwrap_or("");
@@ -112,7 +117,7 @@ pub(super) fn quote_block_to_text(block: &Value) -> String {
 ///
 /// SKILL.md 全文原样带出（这就是「引用技能」的语义），目录行让模型能
 /// 顺着 `Directory` 用文件工具读取脚本等其它资源。
-pub(super) fn skill_block_to_text(block: &Value) -> String {
+pub(crate) fn skill_block_to_text(block: &Value) -> String {
     let name = block.get("name").and_then(Value::as_str).unwrap_or("");
     let path = block.get("path").and_then(Value::as_str).unwrap_or("");
     let content = block.get("content").and_then(Value::as_str).unwrap_or("");

@@ -6,7 +6,7 @@
 use crate::agent::types::{Message, Session};
 use crate::session_db::types::{
     MessagePage, MessageSearchPage, MessageTimelinePage, MessageWindow, SearchCursor,
-    UserMessageRef,
+    SessionStat, UserMessageRef,
 };
 use crate::session_db::usage::{UsageEntry, UsageQuery, UsageRecordPage, UsageStats};
 use async_trait::async_trait;
@@ -69,6 +69,12 @@ pub trait SessionRepo: Send + Sync {
     ) -> Result<(), String>;
     /// 列出所有会话（不含 messages，按 updated_at 降序）
     async fn list_sessions(&self) -> Result<Vec<Session>, String>;
+    /// 批量取每个会话的统计（消息条数 + 上下文占用 token）
+    ///
+    /// 专供 `list-session` 的两列。口径不在这里：`context_tokens` 由
+    /// [`crate::agent::compress::context_tokens`] 定义（与桌面端 token 环同一个口径），
+    /// 实现只需返回「该会话最后一条有 `usage` 或带 `uiData.contextTokens` 的消息」。
+    async fn session_stats(&self) -> Result<Vec<SessionStat>, String>;
     /// 获取单个会话元数据（不含 messages）
     async fn get_session(&self, session_id: &str) -> Result<Option<Session>, String>;
     /// 获取会话的全部消息（按插入顺序）
@@ -197,6 +203,10 @@ impl SessionRepo for NoopSessionRepo {
         Ok(())
     }
     async fn list_sessions(&self) -> Result<Vec<Session>, String> {
+        Ok(Vec::new())
+    }
+    async fn session_stats(&self) -> Result<Vec<SessionStat>, String> {
+        // 无持久化后端：没有统计数据（调用方按「0 条 / 无占用」展示）
         Ok(Vec::new())
     }
     async fn get_session(&self, _session_id: &str) -> Result<Option<Session>, String> {

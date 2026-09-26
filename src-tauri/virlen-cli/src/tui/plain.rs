@@ -5,8 +5,11 @@
 //! 混在 TUI 线程编排里最难被审视。
 
 use crate::run::{self, CliEventSink};
-use crate::session_rt::{SessionRuntime, UNTITLED};
-use crate::tui::commands::Slash;
+use crate::session_rt::{
+    compress_session, context_line, current_context_tokens, default_compress_mode, report_line,
+    CompressError, SessionRuntime, UNTITLED,
+};
+use crate::tui::commands::{CompressArg, Slash};
 use crate::EXIT_OK;
 use std::io::{IsTerminal, Write};
 use std::sync::Arc;
@@ -20,6 +23,7 @@ use virlen_core::agent::provider::DefaultProviderFactory;
 use super::commands;
 use super::history::{history_preview, resume_hint, HISTORY_PREVIEW};
 use super::Input;
+use virlen_core::agent::compress as agent_compress;
 
 // ==================== 顺序输出模式 ====================
 
@@ -84,8 +88,42 @@ pub(crate) async fn run_plain(
                 continue;
             }
             Some(Slash::Status) => {
-                let _ = writeln!(out, "{}", status_text(&rt));
+                let ctx = current_context_tokens(&rt).await;
+                let _ = writeln!(out, "{}", status_text(&rt, ctx));
                 let _ = out.flush();
+                continue;
+            }
+            // 压缩上下文（与 TUI 同一条执行链 `session_rt::compress_session`，只是没有面板）
+            Some(Slash::Compress(arg)) => {
+                let mode = match arg {
+                    CompressArg::Mode(m) => Some(m),
+                    // 顺序输出模式没有选择面板：用设置里的默认方式；
+                    // 设置里也没配就**不猜**，直接告诉用户要写明
+                    CompressArg::Ask => default_compress_mode(&rt.settings),
+                    CompressArg::Invalid(name) => {
+                        let _ = writeln!(err, "[chat] 未知压缩方式: {}（可用：ai / raw）", name);
+                        continue;
+                    }
+                };
+                let Some(mode) = mode else {
+                    let _ = writeln!(
+                        err,
+                        "[chat] 顺序输出模式没有选择面板，请指定方式：/compress ai 或 /compress raw"
+                    );
+                    continue;
+                };
+                match compress_session(&mut rt, mode).await {
+                    Ok(report) => {
+                        let _ = writeln!(out, "{}", report_line(&report));
+                        let _ = out.flush();
+                    }
+                    Err(CompressError::Skipped(m)) => {
+                        let _ = writeln!(err, "[chat] {}", m);
+                    }
+                    Err(e @ CompressError::Failed(_)) => {
+                        let _ = writeln!(err, "[chat] 压缩失败: {}", e.message());
+                    }
+                }
                 continue;
             }
             Some(Slash::New) => {
@@ -135,10 +173,13 @@ pub(crate) async fn run_plain(
         let _ = err.flush();
         match result {
             Ok(()) => {
+                // 顺手报一下上下文占用（用户不用敲 /status 就知道该不该压）
+                let ctx = current_context_tokens(&rt).await;
                 let _ = writeln!(
                     err,
-                    "[done] 用时 {} ms",
-                    virlen_core::telemetry::now_ms() - started
+                    "[done] 用时 {} ms · 上下文 {}",
+                    virlen_core::telemetry::now_ms() - started,
+                    context_line(ctx)
                 );
             }
             Err(e) => {
@@ -164,7 +205,9 @@ fn print_history_preview(rt: &SessionRuntime, out: &mut dyn Write) {
 }
 
 /// `/status` 的文本（两种模式共用；**必须**写明与桌面端的已知差异，红线 #6）
-pub(crate) fn status_text(rt: &SessionRuntime) -> String {
+///
+/// `context_tokens` = 当前上下文占用（两种界面各自已取到，避免这里再异步读库）。
+pub(crate) fn status_text(rt: &SessionRuntime, context_tokens: Option<i64>) -> String {
     let s = &rt.session;
     let r = &rt.resources;
     format!(
@@ -172,12 +215,14 @@ pub(crate) fn status_text(rt: &SessionRuntime) -> String {
          模型    : {} · Provider {}（{}）\n\
          工作目录: {}\n\
          消息数  : {}（本进程累计）\n\
+         上下文  : {}（100% = {}）\n\
          沙盒    : {} · 权限项 {} 条 · 工具 {}\n\
          已知与桌面端的差异:\n\
          \x20 - 不显示费用（价目表在前端 TS）\n\
-         \x20 - 上下文压缩未原生化（长会话可能撞上下文上限）\n\
+         \x20 - 上下文占用优先取供应商回报的真实用量；**压缩后的占用是本地粗估**\n\
+         \x20   （桌面端用 DeepSeek tokenizer 精确计数）\n\
          \x20 - 技能启用状态 / 路径黑白名单仍在桌面端 localStorage，CLI 读不到\n\
-         \x20 - Gemini 等需前端 JS 桥的 Provider 不支持（装配期已拒绝）",
+         \x20 - Gemini 等需前端 JS 桥的 Provider 不支持（装配期已拒绝；压缩同理）",
         s.id,
         if s.title.trim().is_empty() { UNTITLED } else { s.title.trim() },
         r.model_id,
@@ -185,6 +230,8 @@ pub(crate) fn status_text(rt: &SessionRuntime) -> String {
         r.provider.provider_type,
         r.workspace,
         rt.messages.len(),
+        context_line(context_tokens),
+        agent_compress::format_tokens(agent_compress::CONTEXT_WINDOW_TOKENS),
         r.security.sandbox_mode,
         r.security.permissions.len(),
         if r.enable_tools {

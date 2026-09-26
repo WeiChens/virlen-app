@@ -14,6 +14,8 @@
 
 pub mod bridge;
 pub mod cancellation;
+// `compress`：上下文压缩（两种模式）—— 与 TS `domain/engine/compress-*.ts` 同语义
+pub mod compress;
 pub mod engine;
 pub mod event_sink;
 pub mod host;

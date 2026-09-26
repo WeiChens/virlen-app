@@ -121,6 +121,7 @@ pub async fn execute_llm_round(
         Some(round),
         Some(&ledger_message_id),
         ledger_usage,
+        false,
         Some(round_duration_ms),
     )
     .await;

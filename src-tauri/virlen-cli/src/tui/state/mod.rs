@@ -22,6 +22,7 @@ pub(crate) use self::line::*;
 use crate::tui::commands::Slash;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
+use virlen_core::agent::compress::CompressMode;
 
 /// 归一化按键（`input.rs` 把 crossterm 的 `KeyEvent` 映射到这里 → 本模块可在无终端下单测）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,8 +74,18 @@ pub(crate) enum UiEvent {
         chars: usize,
         preview: String,
     },
-    /// token 用量累计
+    /// token 用量累计（**本进程累计**：用户一共花了多少 token）
     Usage { total: i64 },
+    /// 当前上下文占用 token
+    ///
+    /// ⚠️ 与 `Usage` 不是一回事：那个是「花了多少」，这个是「当前上下文有多大」——
+    /// 状态行的百分比用它。`None` = 本会话还没有用量数据（不显示百分比，而不是显示 0%）。
+    /// 口径见 `virlen_core::agent::compress::context_tokens`（与桌面端 token 环同一个）。
+    ContextUsage { tokens: Option<i64> },
+    /// 正在压缩上下文（AI 摘要要一次模型调用，可能持续数秒）
+    Compressing(bool),
+    /// 设置里的默认压缩方式（选择面板据此标注「默认」并决定初始高亮）
+    DefaultCompressMode(CompressMode),
     /// 需要用户应答的交互（命令授权 / 选择）
     Interaction {
         request_id: String,
@@ -115,6 +126,8 @@ pub(crate) enum Action {
     Submit(String),
     /// 斜杠命令
     Slash(Slash),
+    /// 压缩上下文（方式已在 UI 侧选定：面板选择或 `/compress ai|raw`）
+    Compress(CompressMode),
     /// 交互应答（`bridge::handle_user_interaction_response` 的原样载荷）
     Reply { request_id: String, payload: Value },
     /// 取消当前回合（`AgentEngine::cancel`）
@@ -137,6 +150,11 @@ pub(crate) struct Status {
     pub messages: usize,
     /// 本进程累计 token（引擎只给单轮 `usage`；这里做加法，拿不到就保持 None）
     pub tokens: Option<i64>,
+    /// 当前上下文占用 token（`None` = 本会话还没有用量数据）
+    ///
+    /// 与 `tokens` 是两个口径：`tokens` 是花掉的总量，这个是**此刻上下文有多大**。
+    /// 状态行显示的是它 / 200k 的百分比。
+    pub context_tokens: Option<i64>,
 }
 
 /// 授权面板的**显式选择项**（`confirm_command_native` 专用）。
@@ -298,6 +316,61 @@ impl Interaction {
     }
 }
 
+/// TUI **本地**选择面板（目前只有「压缩方式」一种用途）
+///
+/// 为什么复用不了 [`Interaction`]：那是**引擎发起**的交互（必须回执 `request_id`），
+/// 且它的选择类交互是「行输入序号 / 文本」。压缩方式是 TUI 自己发起的，要的是与授权面板
+/// 同款的**显式选择器**（↑↓ + Enter）—— 不经过桥、也不需要回执。
+#[derive(Debug, Clone)]
+pub(crate) struct Picker {
+    pub(crate) purpose: PickerPurpose,
+    pub(crate) options: Vec<PickerOption>,
+    /// 当前高亮项
+    pub(crate) index: usize,
+}
+
+/// 面板用途 —— 它同时是**标题的唯一来源**（加一种用途就只改这里）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PickerPurpose {
+    CompressMode,
+}
+
+impl PickerPurpose {
+    /// 面板标题
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            Self::CompressMode => "压缩上下文：选择方式",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PickerOption {
+    pub(crate) label: String,
+    pub(crate) action: PickerAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PickerAction {
+    Compress(CompressMode),
+}
+
+impl Picker {
+    /// 上下移动（两端停在原地，不回绕）：误触不会直接跳到另一端
+    pub(crate) fn moved(&self, delta: isize) -> usize {
+        if self.options.is_empty() {
+            return 0;
+        }
+        let last = self.options.len() - 1;
+        let next = self.index as isize + delta;
+        next.clamp(0, last as isize) as usize
+    }
+
+    pub(crate) fn selected(&self) -> Option<&PickerOption> {
+        self.options.get(self.index)
+    }
+}
+
 /// UI 状态
 #[derive(Debug)]
 pub(crate) struct UiState {
@@ -327,6 +400,8 @@ pub(crate) struct UiState {
     draft: String,
 
     running: bool,
+    /// 正在压缩上下文（与「回合进行中」互斥；两者都算「忙」，见 [`Self::busy`]）
+    compressing: bool,
     /// 本回合开始时间（状态行显示已用时；回合结束后清空）
     turn_started_ms: Option<i64>,
     frame: u64,
@@ -337,6 +412,10 @@ pub(crate) struct UiState {
     /// 当前交互 + 排队等着的（同一时刻可能来多个）
     interaction: Option<Interaction>,
     queue: VecDeque<Interaction>,
+    /// 本地选择面板（TUI 自己发起的，与引擎交互无关）
+    picker: Option<Picker>,
+    /// 设置里的默认压缩方式（`app_settings.contextCompressMode`；由主循环启动时下发）
+    default_compress_mode: Option<CompressMode>,
     pub status: Status,
 }
 
@@ -362,6 +441,7 @@ impl UiState {
             history_pos: None,
             draft: String::new(),
             running: false,
+            compressing: false,
             turn_started_ms: None,
             frame: 0,
             dirty: true,
@@ -369,6 +449,8 @@ impl UiState {
             should_quit: false,
             interaction: None,
             queue: VecDeque::new(),
+            picker: None,
+            default_compress_mode: None,
             status: Status::default(),
         }
     }
@@ -386,6 +468,20 @@ impl UiState {
     }
     pub(crate) fn running(&self) -> bool {
         self.running
+    }
+    /// 是否「忙」：回合在跑**或**正在压缩上下文。
+    ///
+    /// 两者都必须拦住新输入与「固化在飞内容」：压缩会替换上下文，
+    /// 与正在进行的一回合并行会让消息列表错乱（与 `submit_input` 的理由相同）。
+    pub(crate) fn busy(&self) -> bool {
+        self.running || self.compressing
+    }
+    pub(crate) fn compressing(&self) -> bool {
+        self.compressing
+    }
+    /// 当前本地选择面板（无则 `None`）
+    pub(crate) fn picker(&self) -> Option<&Picker> {
+        self.picker.as_ref()
     }
     /// 本回合已用时（未在跑时为 `None`）
     pub(crate) fn elapsed_ms(&self) -> Option<i64> {
@@ -413,7 +509,7 @@ impl UiState {
     /// 只在「没有回合在跑」时给内容：回合中途固化会把「正在流式输出的正文」撕成两半
     /// （上半在滚动区、下半还在视口里）。
     pub(crate) fn take_commit(&mut self) -> Vec<OutLine> {
-        if !self.commit_pending || self.running {
+        if !self.commit_pending || self.busy() {
             return Vec::new();
         }
         self.commit_pending = false;
@@ -427,9 +523,65 @@ impl UiState {
     /// ⚠️ 不置 `dirty`：重绘的「时机」由调用方按 `100ms` 节流决定
     /// （这里置 dirty 会变成「每轮都画」= 无节制重绘）。
     pub(crate) fn tick(&mut self) {
-        if self.running {
+        if self.busy() {
             self.frame = self.frame.wrapping_add(1);
         }
+    }
+
+    // ==================== 本地选择面板 ====================
+
+    /// 打开「压缩方式」选择面板（`/compress` 不带参数时）—— 唯一的构造入口
+    ///
+    /// 初始高亮 = 设置里的默认方式（与桌面端右键菜单标「默认」同口径）；
+    /// 设置里没配时高亮第一项（`[CompressMode::ALL]` 的顺序即展示顺序）。
+    pub(crate) fn open_compress_picker(&mut self) {
+        let default = self.default_compress_mode;
+        let options = CompressMode::ALL
+            .iter()
+            .map(|m| PickerOption {
+                label: if Some(*m) == default {
+                    format!("{}（默认）", m.label())
+                } else {
+                    m.label().to_string()
+                },
+                action: PickerAction::Compress(*m),
+            })
+            .collect();
+        self.picker = Some(Picker {
+            purpose: PickerPurpose::CompressMode,
+            options,
+            index: default
+                .and_then(|d| CompressMode::ALL.iter().position(|m| *m == d))
+                .unwrap_or(0),
+        });
+    }
+
+    /// 移动选择（返回是否真的移动了；面板不在时什么也不做）
+    pub(crate) fn picker_move(&mut self, delta: isize) {
+        if let Some(p) = self.picker.as_ref() {
+            let next = p.moved(delta);
+            if let Some(p) = self.picker.as_mut() {
+                p.index = next;
+            }
+        }
+    }
+
+    /// 关掉面板（Esc / Ctrl+C）：不产生任何动作
+    pub(crate) fn close_picker(&mut self) {
+        self.picker = None;
+    }
+
+    /// 确认当前高亮项 → 动作（面板随即关闭，回显选择结果）
+    pub(crate) fn picker_confirm(&mut self) -> Option<Action> {
+        let action = self.picker.as_ref()?.selected()?.action.clone();
+        let line = match &action {
+            PickerAction::Compress(m) => format!("→ 压缩方式: {}", m.label()),
+        };
+        self.inflight.push(OutLine::new(LineKind::Notice, line));
+        self.picker = None;
+        Some(match action {
+            PickerAction::Compress(m) => Action::Compress(m),
+        })
     }
 }
 

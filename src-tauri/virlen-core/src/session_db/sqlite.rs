@@ -17,7 +17,7 @@ use crate::session_db::schema::{
 };
 use crate::session_db::types::{
     MessagePage, MessageSearchPage, MessageTimelinePage, MessageWindow, SearchCursor,
-    UserMessageRef,
+    SessionStat, UserMessageRef,
 };
 use crate::session_db::usage::{
     self, backfill_usage_ledger, repair_usage_ledger_model, UsageEntry, UsageQuery,
@@ -25,6 +25,7 @@ use crate::session_db::usage::{
 };
 use async_trait::async_trait;
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -238,6 +239,82 @@ INSERT INTO messages (
                 .map_err(|e| e.to_string())?;
             rows.collect::<Result<Vec<_>, _>>()
                 .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
+    /// 批量统计：消息条数（`GROUP BY`）+ 上下文占用（每会话**最新一条**带用量的消息）。
+    ///
+    /// 为什么不是「逐会话 `get_messages`」：大库上那会把每个会话的**全部正文**读进内存。
+    /// 占用口径见 [`crate::agent::compress::context_tokens`] —— 这里只负责挑出候选行，
+    /// 判定走同一份实现（口径不出现第二份）。
+    async fn session_stats(&self) -> Result<Vec<SessionStat>, String> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<SessionStat>, String> {
+            let conn = conn.lock().unwrap();
+
+            // ① 消息条数
+            let mut counts: HashMap<String, i64> = HashMap::new();
+            {
+                let mut stmt = conn
+                    .prepare("SELECT session_id, COUNT(*) FROM messages GROUP BY session_id")
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                    })
+                    .map_err(|e| e.to_string())?;
+                for r in rows {
+                    let (id, n) = r.map_err(|e| e.to_string())?;
+                    counts.insert(id, n);
+                }
+            }
+
+            // ② 上下文占用：选择谓词 = 「TS `findContextTokens` 会在此行 return」的两个条件
+            //    （`usage` 有值 / `contextTokens > 0`），再按会话取 rowid 最大的那一行。
+            //    ⚠️ 只取候选行、口径交给 Rust 侧同一份实现：SQL 里不重复写「哪个字段优先」。
+            let mut ctx: HashMap<String, i64> = HashMap::new();
+            {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT session_id AS stat_session_id, * FROM messages \
+                         WHERE rowid IN ( \
+                             SELECT MAX(rowid) FROM messages \
+                             WHERE usage IS NOT NULL \
+                                OR json_extract(ui_data, '$.contextTokens') > 0 \
+                             GROUP BY session_id \
+                         )",
+                    )
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map([], |row| {
+                        let id: String = row.get("stat_session_id")?;
+                        let m = message_from_row(row).map_err(row_err)?;
+                        Ok((id, m))
+                    })
+                    .map_err(|e| e.to_string())?;
+                for r in rows {
+                    let (id, m) = r.map_err(|e| e.to_string())?;
+                    if let Some(v) =
+                        crate::agent::compress::context_tokens(std::slice::from_ref(&m))
+                    {
+                        ctx.insert(id, v);
+                    }
+                }
+            }
+
+            let mut ids: Vec<String> = counts.keys().chain(ctx.keys()).cloned().collect();
+            ids.sort();
+            ids.dedup();
+            Ok(ids
+                .into_iter()
+                .map(|session_id| SessionStat {
+                    messages: counts.get(&session_id).copied().unwrap_or(0),
+                    context_tokens: ctx.get(&session_id).copied(),
+                    session_id,
+                })
+                .collect())
         })
         .await
         .map_err(|e| format!("DB task join error: {}", e))?

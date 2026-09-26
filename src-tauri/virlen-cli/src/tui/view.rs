@@ -14,7 +14,8 @@
 //! 已固化的内容不在这里渲染 —— 它已经被 `term::commit` 写进终端**原生滚动区**
 //! （因此终端自带的滚动与鼠标选中复制都还在，见 `docs/cli-tui-plan.md` §4）。
 
-use crate::tui::state::{expand, ConfirmChoice, Interaction, LineKind, UiState};
+use crate::tui::state::{expand, ConfirmChoice, Interaction, LineKind, Picker, UiState};
+use virlen_core::agent::compress as agent_compress;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::buffer::CellDiffOption;
@@ -85,10 +86,7 @@ pub(crate) fn render(f: &mut Frame, st: &UiState) {
         width: outer.width.saturating_sub(RIGHT_MARGIN),
         ..outer
     };
-    let it_rows = st
-        .interaction()
-        .map(|_| interaction_rows(st.interaction().expect("已判空")))
-        .unwrap_or(0);
+    let it_rows = panel_rows(st);
     let rows = Layout::vertical([
         Constraint::Min(1),
         Constraint::Length(it_rows),
@@ -98,8 +96,11 @@ pub(crate) fn render(f: &mut Frame, st: &UiState) {
     .split(area);
 
     render_inflight(f, st, rows[0]);
-    if let Some(it) = st.interaction() {
-        render_interaction(f, st, it, rows[1]);
+    // 面板二选一：引擎交互（必须应答）优先于本地选择面板
+    match (st.interaction(), st.picker()) {
+        (Some(it), _) => render_interaction(f, st, it, rows[1]),
+        (None, Some(p)) => render_picker(f, p, rows[1]),
+        (None, None) => {}
     }
     let cursor = render_input(f, st, rows[2]);
     render_status(f, st, rows[3]);
@@ -122,12 +123,14 @@ pub(crate) fn render(f: &mut Frame, st: &UiState) {
             cell.set_diff_option(CellDiffOption::AlwaysUpdate);
         }
     }
-    // ⚠️ 授权面板是**显式二选一**，没有文本光标：
+    // ⚠️ 两个**显式选择**面板（授权 / 本地选择）都没有文本光标：
     //    ratatui 的 `try_draw` 只看 `frame.cursor_position`，为 `None` 时调 `hide_cursor()`
     //    → **不调** `set_cursor_position` 就是隐藏光标。把光标留在选择行会暗示
     //    「这里可以输入文本」，而那正是旧实现（回车即放行）被误触的根源。
     //    选择类交互仍显示行输入光标。
-    if !st.interaction().is_some_and(Interaction::is_confirm) {
+    let explicit_picker = st.interaction().is_some_and(Interaction::is_confirm)
+        || st.picker().is_some();
+    if !explicit_picker {
         f.set_cursor_position(cursor);
     }
 }
@@ -153,6 +156,27 @@ fn render_inflight(f: &mut Frame, st: &UiState, area: ratatui::layout::Rect) {
         Paragraph::new(lines).wrap(Wrap { trim: false }),
         area,
     );
+}
+
+/// 面板行数（0 = 不显示）
+///
+/// 交互面板（引擎发起）优先于本地选择面板：两者不会同时开，真同时开时以引擎那条为准
+/// —— 它必须被应答，否则引擎会一直等回执。
+fn panel_rows(st: &UiState) -> u16 {
+    if let Some(it) = st.interaction() {
+        interaction_rows(it)
+    } else if let Some(p) = st.picker() {
+        picker_rows(p)
+    } else {
+        0
+    }
+}
+
+/// 本地选择面板的行数：标题 + 选项 + 键位提示
+fn picker_rows(p: &Picker) -> u16 {
+    (p.options.len() as u16)
+        .saturating_add(2)
+        .min(INTERACTION_MAX_ROWS)
 }
 
 /// 交互面板：提示行数（0 = 不显示）
@@ -257,6 +281,42 @@ fn answer_row(it: &Interaction) -> Line<'static> {
     Line::from(spans)
 }
 
+/// 本地选择面板（TUI 自己发起的，如「压缩方式」）。
+///
+/// 与授权面板同款的**显式选择器**：选中项加方括号 + 反白加粗（方括号让「选了哪一项」
+/// 在纯文本上也可断言，`view/tests.rs` 直接断言 `[AI 摘要]`），分隔符用 ASCII `|`
+/// （`·` 是歧义宽度字符，同一行里会累积错位，见本文件 `RIGHT_MARGIN`）。
+fn render_picker(f: &mut Frame, p: &Picker, area: ratatui::layout::Rect) {
+    let mut lines = vec![Line::from(Span::styled(
+        format!("? {}", p.purpose.title()),
+        Style::default().fg(Color::Magenta),
+    ))];
+    for (i, opt) in p.options.iter().enumerate() {
+        let selected = i == p.index;
+        let style = if selected {
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::REVERSED | Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {}{}{}",
+                if selected { "[" } else { " " },
+                opt.label,
+                if selected { "]" } else { " " }
+            ),
+            style,
+        )));
+    }
+    lines.push(Line::from(Span::styled(
+        "  （↑/↓ 选择 | Enter 确认 | Esc 取消）",
+        Style::default().fg(Color::DarkGray),
+    )));
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+}
+
 fn render_interaction(f: &mut Frame, _st: &UiState, it: &Interaction, area: ratatui::layout::Rect) {
     let body = body_lines(it);
     // 行数不够时丢掉中间的正文行（保留第一行与回答行）
@@ -294,16 +354,17 @@ fn render_input(f: &mut Frame, st: &UiState, area: ratatui::layout::Rect) -> Pos
         .saturating_add(2)
         .saturating_add(UnicodeWidthStr::width(prefix.as_str()) as u16)
         .min(area.right().saturating_sub(1));
-    // 光标行：有交互时在交互面板的回答行上（那才是此刻在打字的地方）
-    let y = match st.interaction() {
-        Some(_) => area.y.saturating_sub(1),
-        None => area.y,
+    // 光标行：有面板时在面板的最后一行附近（输入行上移了一行）
+    let y = if st.interaction().is_some() || st.picker().is_some() {
+        area.y.saturating_sub(1)
+    } else {
+        area.y
     };
     Position::new(x, y)
 }
 
 fn render_status(f: &mut Frame, st: &UiState, area: ratatui::layout::Rect) {
-    let spinner = if st.running() {
+    let spinner = if st.busy() {
         ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"][(st.frame() as usize) % 8]
     } else {
         "·"
@@ -327,10 +388,22 @@ fn render_status(f: &mut Frame, st: &UiState, area: ratatui::layout::Rect) {
     if let Some(t) = s.tokens {
         parts.push(format!("{} tok", t));
     }
+    // 上下文占用（用户要求：显示百分比；100% 对应 200k，口径与桌面端 token 环一致）。
+    // 没有用量数据时**不显示**这一项（而不是显示 0% —— 那会让人以为上下文是空的）。
+    if let Some(used) = s.context_tokens {
+        parts.push(format!(
+            "{}% ({}/{})",
+            agent_compress::context_percent(used),
+            agent_compress::format_tokens(used),
+            agent_compress::format_tokens(agent_compress::CONTEXT_WINDOW_TOKENS)
+        ));
+    }
     if let Some(ms) = st.elapsed_ms() {
         parts.push(format!("{:.1}s", ms as f64 / 1000.0));
     }
-    let hint = if st.running() {
+    let hint = if st.compressing() {
+        "正在压缩上下文…"
+    } else if st.running() {
         "Esc 取消"
     } else {
         "/help | /exit"
@@ -392,6 +465,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::{Terminal, TerminalOptions, Viewport};
     use serde_json::json;
+    use virlen_core::agent::compress::CompressMode;
 
     const H: u16 = crate::tui::term::VIEWPORT_H;
 
@@ -738,5 +812,60 @@ mod tests {
         // 文本被截断：超长模型名不会完整出现
         let row: String = (0..w).map(|x| buf[(x, y)].symbol()).collect();
         assert!(!row.contains("aaaaaaaaaaaaaaaaaaaa"), "{row}");
+    }
+
+    /// 状态行显示上下文占用百分比（100% = 200k；口径与桌面端 token 环一致）
+    #[test]
+    fn status_line_shows_context_percent() {
+        let mut st = state();
+        submit(&mut st, "hi");
+        st.apply(UiEvent::ContextUsage {
+            tokens: Some(40_000),
+        });
+        let text = draw(&st);
+        assert!(text.contains("20%"), "应有百分比: {text}");
+        assert!(text.contains("40k"), "应带上绝对 token: {text}");
+        assert!(text.contains("200k"), "应写明 100% 对应的窗口: {text}");
+    }
+
+    /// 没有用量数据时**不显示**百分比：`0%` 会被读成「上下文是空的」
+    #[test]
+    fn status_line_hides_percent_without_usage_data() {
+        let mut st = state();
+        submit(&mut st, "hi");
+        let text = draw(&st);
+        assert!(!text.contains('%'), "无用量时不应出现百分比: {text}");
+    }
+
+    /// 压缩方式选择面板：两项都可见、选中项加方括号（纯文本可断言）、**不显示文本光标**
+    #[test]
+    fn compress_picker_lists_modes_without_cursor() {
+        let mut st = state();
+        st.apply(UiEvent::DefaultCompressMode(CompressMode::Raw));
+        for c in "/compress".chars() {
+            st.apply_key(Key::Char(c));
+        }
+        st.apply_key(Key::Enter);
+        let text = draw(&st);
+        assert!(text.contains("压缩上下文：选择方式"), "{text}");
+        assert!(text.contains("AI 摘要"), "{text}");
+        assert!(text.contains("正文压缩"), "{text}");
+        assert!(text.contains("[正文压缩（默认）]"), "默认方式应预选: {text}");
+
+        let mut t = term(60, 20);
+        t.draw(|f| render(f, &st)).unwrap();
+        assert!(
+            !t.backend().cursor_visible(),
+            "显式选择面板没有文本输入，不应显示光标"
+        );
+    }
+
+    /// 压缩中：状态行给提示（用户在等一次模型调用，得知道在发生什么）
+    #[test]
+    fn status_line_says_compressing() {
+        let mut st = state();
+        st.apply(UiEvent::Compressing(true));
+        let text = draw(&st);
+        assert!(text.contains("正在压缩上下文"), "{text}");
     }
 }

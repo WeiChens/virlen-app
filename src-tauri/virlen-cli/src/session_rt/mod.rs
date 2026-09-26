@@ -19,11 +19,16 @@
 //! - 这里**不重实现**安全判定：路径/权限/沙盒规则仍由 `virlen_core::security` 与原生工具负责。
 
 
+pub(crate) mod compress;
 pub(crate) mod resources;
 pub(crate) mod session;
 
+#[cfg(test)]
+mod tests;
+
 // 再导出：调用方（`run.rs` 的 `use crate::session_rt::*;`、`tui` 的具名导入）与
 // `run/tests.rs` 的 `use super::*` 都靠它 —— 搬了文件，**调用点一行都没改**。
+pub(crate) use self::compress::*;
 pub(crate) use self::resources::*;
 pub(crate) use self::session::*;
 

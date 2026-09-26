@@ -2,6 +2,7 @@
 
 use virlen_core::agent::host::HostEnv;
 use virlen_core::agent::types::Session;
+use virlen_core::session_db::SessionStat;
 use serde_json::{json, Map, Value};
 use std::io::Write;
 use std::sync::Arc;
@@ -10,7 +11,10 @@ use crate::{EXIT_ERROR, EXIT_OK};
 
 // 同层：`list` 的公共词汇与数据装载走 `super::*`；分组与渲染是**实现细节**，显式点名。
 use super::group::group_sessions;
-use super::render::{effective_limit, pad, session_json, session_line, COL_ID, COL_MODEL, COL_TIME};
+use super::render::{
+    effective_limit, pad, pad_left, session_json, session_line, COL_CTX, COL_ID, COL_MODEL, COL_MSG,
+    COL_TIME,
+};
 use super::*;
 
 /// `list-session` 入口。返回进程退出码。
@@ -49,6 +53,23 @@ pub(crate) async fn run_sessions(
     let shown_sessions: Vec<Session> = all.into_iter().take(limit).collect();
     let shown = shown_sessions.len();
 
+    // 每个会话的统计（消息条数 + 上下文占用）——**两条聚合查询**搞定，
+    // 不逐个会话拉全部历史（大库上那会很慢，见 `SessionRepo::session_stats`）。
+    // ⚠️ 统计失败**不中断列表**：这两列是附加信息，展示主体（会话本身）不应因此消失；
+    //    但必须显式告警，不能静默 —— 统计恒为 0 / `-` 会被当成「真的没数据」。
+    let stats: std::collections::HashMap<String, SessionStat> = match db.repo.session_stats().await {
+        Ok(list) => list.into_iter().map(|s| (s.session_id.clone(), s)).collect(),
+        Err(e) => {
+            let _ = writeln!(
+                err,
+                "[warn] 读取会话统计失败（上下文/条数两列按无数据展示）: {}",
+                e
+            );
+            std::collections::HashMap::new()
+        }
+    };
+    let stat_of = |id: &str| stats.get(id);
+
     if opts.json {
         let agents = load_agents(db.settings.as_ref()).await;
         let mut payload = Map::new();
@@ -67,7 +88,11 @@ pub(crate) async fn run_sessions(
                             "key": g.key,
                             "name": g.name,
                             "count": g.sessions.len(),
-                            "sessions": g.sessions.iter().map(session_json).collect::<Vec<_>>(),
+                            "sessions": g
+                                .sessions
+                                .iter()
+                                .map(|s| session_json(s, stat_of(&s.id)))
+                                .collect::<Vec<_>>(),
                         })
                     })
                     .collect();
@@ -76,7 +101,12 @@ pub(crate) async fn run_sessions(
             None => {
                 payload.insert(
                     "sessions".into(),
-                    Value::Array(shown_sessions.iter().map(session_json).collect()),
+                    Value::Array(
+                        shown_sessions
+                            .iter()
+                            .map(|s| session_json(s, stat_of(&s.id)))
+                            .collect(),
+                    ),
                 );
             }
         }
@@ -110,13 +140,15 @@ pub(crate) async fn run_sessions(
             let _ = writeln!(out);
             let _ = writeln!(
                 out,
-                "{}  {}  {}  标题",
+                "{}  {}  {}  {}  {}  标题",
                 pad("ID", COL_ID),
                 pad("更新于", COL_TIME),
                 pad("模型", COL_MODEL),
+                pad_left("上下文/200k", COL_CTX),
+                pad_left("条数", COL_MSG),
             );
             for s in &shown_sessions {
-                let _ = writeln!(out, "{}", session_line(s, ""));
+                let _ = writeln!(out, "{}", session_line(s, "", stat_of(&s.id)));
             }
         }
         Some(by) => {
@@ -124,7 +156,7 @@ pub(crate) async fn run_sessions(
             for group in group_sessions(shown_sessions, by, &agents) {
                 let _ = writeln!(out, "\n▌ {}（{}）", group.name, group.sessions.len());
                 for s in &group.sessions {
-                    let _ = writeln!(out, "{}", session_line(s, "  "));
+                    let _ = writeln!(out, "{}", session_line(s, "  ", stat_of(&s.id)));
                 }
             }
         }

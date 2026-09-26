@@ -4,7 +4,7 @@
 //! （运行中 = 取消，空闲 = 退出）都在这里；`input.rs` 只负责把 crossterm 的按键归一化成 `Key`。
 
 use super::*;
-use crate::tui::commands::Slash;
+use crate::tui::commands::{CompressArg, Slash};
 use serde_json::json;
 
 impl UiState {
@@ -13,6 +13,10 @@ impl UiState {
     /// 处理一个按键；需要异步侧配合时返回动作
     pub(crate) fn apply_key(&mut self, key: Key) -> Option<Action> {
         self.dirty = true;
+        // 面板优先：本地选择面板（TUI 自己发起）> 引擎交互（授权 / 选择）> 正常输入
+        if self.picker.is_some() {
+            return self.key_for_picker(key);
+        }
         if self.interaction.is_some() {
             return self.key_for_interaction(key);
         }
@@ -76,6 +80,32 @@ impl UiState {
                 self.should_quit = true;
                 Some(Action::Quit)
             }
+        }
+    }
+
+    /// 本地选择面板期间的按键。
+    ///
+    /// 与授权面板同一套安全口径：**只认方向键 + Enter + Esc**，普通字符一律不参与 ——
+    /// 用户此刻很可能在盲打下一句消息，那些字符不该被当成一次「选择」。
+    fn key_for_picker(&mut self, key: Key) -> Option<Action> {
+        match key {
+            Key::Up | Key::Left => {
+                self.picker_move(-1);
+                None
+            }
+            Key::Down | Key::Right => {
+                self.picker_move(1);
+                None
+            }
+            Key::Enter => self.picker_confirm(),
+            Key::Esc | Key::CtrlC => {
+                self.close_picker();
+                self.inflight.push(OutLine::new(LineKind::Notice, "→ 已取消压缩"));
+                self.commit_pending = true;
+                None
+            }
+            // 其余键（含字符 / Backspace）：不参与选择，也不落进输入框
+            _ => None,
         }
     }
 
@@ -161,13 +191,17 @@ impl UiState {
         if text.is_empty() {
             return None;
         }
-        // 回合进行中不接受新输入：**状态机自己拦住**，别让「UI 认为空闲、引擎还在跑」分叉
-        // （分叉的后果是同一会话上并发两个回合 —— 消息列表会乱）。输入框内容保留，
-        // 等回合结束再回车即可。
-        if self.running {
+        // 忙时不接受新输入（回合进行中或正在压缩上下文）：**状态机自己拦住**，
+        // 别让「UI 认为空闲、引擎还在跑」分叉（分叉的后果是同一会话上并发两个回合 —— 消息列表会乱）。
+        // 输入框内容保留，等它结束再回车即可。
+        if self.busy() {
             self.inflight.push(OutLine::new(
                 LineKind::Notice,
-                "（上一个回合还没结束：Esc 取消）",
+                if self.running {
+                    "（上一个回合还没结束：Esc 取消）"
+                } else {
+                    "（正在压缩上下文，请稍候）"
+                },
             ));
             self.commit_pending = true;
             return None;
@@ -184,12 +218,20 @@ impl UiState {
                 self.should_quit = true;
                 Some(Action::Quit)
             }
+            // `/compress <mode>`：方式已定 → **直接发执行动作**（不必绕 `Action::Slash` 再转发一次）
+            Some(Slash::Compress(CompressArg::Mode(m))) => {
+                self.echo_command(&text);
+                Some(Action::Compress(m))
+            }
+            // `/compress` 不带参数 → 弹选择面板：本回合**不产生动作**
+            // （等用户在面板里选定后再由 `picker_confirm` 产生 `Action::Compress`）
+            Some(Slash::Compress(CompressArg::Ask)) => {
+                self.echo_command(&text);
+                self.open_compress_picker();
+                None
+            }
             Some(cmd) => {
-                self.inflight
-                    .push(OutLine::new(LineKind::User, format!("> {}", text)));
-                // 斜杠命令的回显（及其随后由异步侧发来的提示）应立即进滚动区：
-                // 它们不属于任何回合，留在动态区会和下一个回合的输出混在一起
-                self.commit_pending = true;
+                self.echo_command(&text);
                 Some(Action::Slash(cmd))
             }
             None => {
@@ -205,6 +247,16 @@ impl UiState {
     }
 
     // ==================== 输入框编辑 ====================
+
+    /// 回显一条斜杠命令。
+    ///
+    /// 立即固化（`commit_pending`）：命令回显及其随后的提示不属于任何回合，
+    /// 留在动态区会和下一个回合的输出混在一起。
+    fn echo_command(&mut self, text: &str) {
+        self.inflight
+            .push(OutLine::new(LineKind::User, format!("> {}", text)));
+        self.commit_pending = true;
+    }
 
     /// 字符下标 → 字节下标
     fn byte_at(&self, char_idx: usize) -> usize {

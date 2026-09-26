@@ -41,6 +41,11 @@ pub use bridged::BridgedProvider;
 pub use openai::NativeOpenAiProvider;
 pub use models::{list_models, verify_connection};
 
+// ⚠️ 附件 / 引用 / 技能的「块 → 文本」降级函数要被 `agent::compress::raw` 复用：
+//    上下文压缩渲染出的历史必须与「消息直接发给模型时」是同一套文本形式（铁律 1）。
+//    因此这里收窄为 `pub(crate)` 转出（`blocks` 模块本身仍不对外）。
+pub(crate) use blocks::{file_block_to_text, quote_block_to_text, skill_block_to_text};
+
 // ==================== Provider trait ====================
 
 #[async_trait]
@@ -69,6 +74,33 @@ pub trait ProviderFactory: Send + Sync {
 pub struct DefaultProviderFactory {
     pub bridge: Arc<AgentBridgeState>,
     pub sink: Arc<dyn EventSink>,
+}
+
+/// 按连接信息创建**原生** Provider（openai 兼容 / anthropic）—— headless 环境专用。
+///
+/// 与 [`DefaultProviderFactory`] 的差别：后者对非 openai/anthropic 会返回
+/// [`BridgedProvider`]（需要 JS 宿主 + 双向事件桥）。headless 环境（CLI）**没有** JS 宿主，
+/// 调它只会永久挂起（引擎侧真实踩过的挂死）；因此这里对桥接协议直接**报错**，
+/// 让调用方在装配期就能给出可读提示。
+///
+/// 用在「不与对话消息列表打交道的一次性调用」上，典型是上下文压缩的 `ai` 摘要。
+pub fn create_native_provider(conn: &ProviderConnection) -> Result<Box<dyn Provider>, String> {
+    match conn.provider_type.as_str() {
+        "anthropic" => Ok(Box::new(NativeAnthropicProvider::new(
+            &conn.provider_id,
+            &conn.api_key,
+            &conn.base_url,
+        ))),
+        "openai" => Ok(Box::new(NativeOpenAiProvider::new(
+            &conn.provider_id,
+            &conn.api_key,
+            &conn.base_url,
+        ))),
+        other => Err(format!(
+            "Provider 协议 \"{}\" 需要前端 JS 桥，headless 环境不支持（可用：openai 兼容 / anthropic）",
+            other
+        )),
+    }
 }
 
 impl ProviderFactory for DefaultProviderFactory {

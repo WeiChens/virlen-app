@@ -12,6 +12,7 @@ mod message_query;
 mod migration;
 mod search;
 mod sessions;
+mod stats;
 mod usage;
 
 pub(crate) fn test_session(id: &str, title: &str, updated_at: i64) -> Session {
