@@ -96,9 +96,9 @@ async function _buildDefaultAgent(): Promise<Agent> {
  * 必须在 toolsInit() + toolRegistry.init() 之后调用
  * （依赖 toolRegistry.listDefinitions()：定义来自权威源，机制 C）
  *
- * ⚠️ 默认 Agent 的 allowTools 是「首次创建时的快照」，新版本上线的工具不会自动出现。
- * 这里只「补入缺失的工具」（不删除、不覆盖用户已有的选择）：默认 Agent 的定位就是
- * 「全能助手」，与 _buildDefaultAgent() 的语义一致；自定义 Agent 不在此处理。
+ * 默认 Agent 的 allowTools 是「首次创建时的快照」，新版本上线的工具不会自动出现。这里只
+ * 「补入缺失的工具」（不删除、不覆盖用户已有选择）—— 默认 Agent 的定位就是「全能助手」，
+ * 与 _buildDefaultAgent() 语义一致；自定义 Agent 不在此处理。
  */
 export async function initDefaultAgent(): Promise<void> {
   const data = agentRepo.load()

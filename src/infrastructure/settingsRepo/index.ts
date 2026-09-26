@@ -11,7 +11,7 @@
  *   供同步初值；表就绪后历史副本即被删除（`dropLegacyLocalSnapshot`）。
  *   非 Tauri（浏览器 dev / vitest）没有表可写 → 仍用 localStorage 持久化。
  *
- * ⚠️ 键名与 `SettingsStore` 字段**同名同层**，两侧不建映射表（避免字段漂移）。
+ * ⚠️ 键名与 `SettingsStore` 字段同名同层，两侧不建映射表（避免字段漂移）。
  * 保留键以 `__` 开头（`__schemaVersion` / `__migratedFrom`），业务键不得使用该前缀。
  *
  * 非 Tauri 环境（浏览器 dev / vitest）自动降级为空实现：读回 `{}`、写入静默丢弃、不抛错。

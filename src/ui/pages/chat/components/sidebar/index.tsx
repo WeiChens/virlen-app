@@ -260,12 +260,12 @@ function ChatSidebar({
     [onSelectSession],
   )
 
-  // ⚠️ 菜单项回调不再接收 MouseEvent：菜单由共享组件 ContextMenu 渲染，
-  // 它在调用 onClick 之前已先 onClose（见 ContextMenu/index.tsx::handleItemClick），
-  // 所以旧版的 e.stopPropagation() / setActiveMenuId(null) 一并去掉。
+  // 菜单项回调不再接收 MouseEvent：菜单由共享组件 ContextMenu 渲染，它在调用 onClick
+  // 之前已先 onClose（见 ContextMenu/index.tsx::handleItemClick），故旧版的
+  // e.stopPropagation() / setActiveMenuId(null) 一并去掉。
   const handleDelete = useCallback((sessionId: string) => {
-    // ⚠️ 走 chat-service 的 deleteSessions（先在引擎侧断流再删）：
-    // 直接 sessionStore.deleteSession 会在会话仍在生成时留下孤儿消息
+    // ⚠️ 走 chat-service 的 deleteSessions（先在引擎侧断流再删）：直接 sessionStore.deleteSession
+    // 会在会话仍在生成时留下孤儿消息
     void deleteSessions([sessionId])
     if (chatState.value.currentSessionId === sessionId) {
       chatState.set({ currentSessionId: null })

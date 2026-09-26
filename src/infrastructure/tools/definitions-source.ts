@@ -27,12 +27,11 @@ function isTauriEnv(): boolean {
 
 /**
  * 读取内嵌的权威源文件（浏览器 / 测试路径）。
- *
- * ⚠️ 用**动态** import：Tauri 构建里这条分支不会执行，JSON 会被单独打成按需 chunk，
+ * 用动态 import：Tauri 构建里这条分支不执行，JSON 会被单独打成按需 chunk，
  * 不会把 100+ KB 的契约塞进主包。
  */
 export async function loadDefinitionsFile(): Promise<ToolDefinitionsFile> {
-  // ⚠️ 动态 import 必须让 Vite 处理 `?raw`（不能加 @vite-ignore，否则运行时会拿不到内容）
+  // 动态 import 必须让 Vite 处理 `?raw`（不能加 @vite-ignore，否则运行时拿不到内容）
   const raw = (
     await import('../../../src-tauri/virlen-core/src/agent/tool_defs/definitions.json?raw')
   ).default

@@ -7,8 +7,7 @@
  * 这样同一个工具在「Rust 引擎 / TS 引擎」×「中文 / 英文界面」四种组合下都不会分叉。
  *
  * ⚠️ Rust 侧原生实现已就位（`native_tools/system/get_current_time.rs`，`chrono-tz`）；
- * 本文件是**回退路径**（浏览器 dev / TS 引擎）必须保持同结果：格式、默认时区、
- * 非法时区文案一律逐字对齐。
+ * 本文件是回退路径，必须保持同结果：格式、默认时区、非法时区文案一律逐字对齐。
  */
 import { toolRegistry } from '@/domain/tools'
 import {

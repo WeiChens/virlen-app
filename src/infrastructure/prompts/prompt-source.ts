@@ -10,10 +10,9 @@
  *
  * 因为两条路径同源，这里不需要任何「差异检查」逻辑（与 `definitions-source.ts` 同一取舍）。
  *
- * ⚠️ 用**静态** import（`definitions-source.ts` 用的是**动态** import）：提示词要在启动阶段
- *    **同步水合**（`setPromptTexts`），且五个文件合计约 4 KB —— 不值得为它引入 async 分支。
- *    也因此，Tauri 构建里这段文本会在 JS 包里出现一份 —— 但它**就是**同一份文件构建期读出来的，
- *    与 Rust 二进制里那份不可能漂移。
+ * 用静态 import（`definitions-source.ts` 用动态 import）：提示词要在启动阶段同步水合
+ * （`setPromptTexts`），且五个文件合计约 4 KB，不值得引入 async 分支。Tauri 构建里这段文本
+ * 会在 JS 包里多一份 —— 但它就是同一份文件构建期读出来的，与 Rust 二进制里那份不会漂移。
  */
 import { invoke } from '@tauri-apps/api/core'
 import type { PromptTexts } from '@/domain/agent'

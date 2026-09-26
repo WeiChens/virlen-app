@@ -77,8 +77,8 @@ toolRegistry.register(
       const displayEnd = startIdx + slice.length
       const remainingLines = Math.max(0, totalLines - displayEnd)
 
-      // ⚠️ 模型侧固定英文（P4b/D2-A）；UI 侧走 uiData 由组件渲染。
-      // 文案与 Rust `native_tools/file/read_file.rs` 一致（铁律 1）。
+      // ⚠️ 模型侧固定英文（P4b/D2-A）；UI 侧走 uiData。文案与 Rust
+      // `native_tools/file/read_file.rs` 一致（铁律 1）。
       const headerLines = [
         `📄 ${fullPath}`,
         `📝 ${totalLines} lines / ${formatSize(result.byte_size)}`,

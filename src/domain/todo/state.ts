@@ -5,11 +5,10 @@
  * - TS 引擎：直接执行 `todo_write`（即 `infrastructure/tools/plan/todo-write.ts`）
  * - Rust 引擎：**已原生化（Step 2）** → `native_tools/plan/{todo_write,common}.rs`
  *
- * ⚠️ 自 Step 2 起两侧是**两份实现**，存在铁律 1 的同步义务：工具执行真正用到的那几个
- * 函数（`sanitizeTodos` / `computeStats` / `validateTodos` / `checkTodoLimit` /
- * `renderTodoContent`）在 Rust 侧有逐字镜像，改一边必须改另一边；
- * `diffTodos` / `pickCurrentTodos` / `shouldShowTodoEntry` 等只服务
- * 「用户编辑清单」的 UI 与注入逻辑（数据源是消息历史），没有 Rust 镜像。
+ * ⚠️ 自 Step 2 起两侧是两份实现（铁律 1 同步义务）：工具执行真正用到的几个函数
+ * （`sanitizeTodos` / `computeStats` / `validateTodos` / `checkTodoLimit` / `renderTodoContent`）
+ * 在 Rust 侧有逐字镜像，改一边必须改另一边；`diffTodos` / `pickCurrentTodos` /
+ * `shouldShowTodoEntry` 等只服务「用户编辑清单」的 UI 与注入逻辑（数据源是消息历史），无 Rust 镜像。
  *
  * UI 侧（标题栏按钮 / 徽章 / 浮层 / 消息流一行胶囊）也只从这里取数据，
  * 「唯一的那份清单」就靠 pickCurrentTodos 派生，不引入任何额外状态字段。
@@ -286,9 +285,9 @@ export interface CurrentTodos {
 /**
  * 「唯一的那份清单」—— 从消息列表尾部倒序找第一条带清单快照的消息。
  *
- * ⚠️ 刻意**不区分 role**：模型写的（tool 消息）和用户改的（feedback 消息）
- * 是同一种权威载体，谁最新谁生效。这是「用户层面任务只有一份」的实现方式 ——
- * 消息里可以有 N 份快照，界面永远只呈现最后一份。
+ * 刻意不区分 role：模型写的（tool 消息）和用户改的（feedback 消息）是同一种权威载体，
+ * 谁最新谁生效 —— 这是「用户层面任务只有一份」的实现方式：消息里可以有 N 份快照，
+ * 界面永远只呈现最后一份。
  */
 export function pickCurrentTodos(messages: Message[]): CurrentTodos | null {
   if (!Array.isArray(messages)) return null

@@ -8,10 +8,9 @@
  * 尺寸靠 CSS 变量驱动（宽 / 高 / 滑块直径），位移量由 `calc()` 推导，
  * 因此新增尺寸只需要加一组变量，不用再手算 `translateX(20px)` 这类硬编码。
  *
- * ⚠️ 类名用 `virlen-toggle` 而不是 `.toggle`：既有页面里 `.toggle` 是**全局约定类**，
- *    甚至出现在 `.settings-panel .toggle input:focus-visible + .toggle-slider`
- *    这种跨层选择器里，沿用同名类会被那些规则意外命中（改一处、别处跟着变）。
- *    老页面的 `.toggle` 暂未迁移，二者可以并存。
+ * 类名用 `virlen-toggle` 而不是 `.toggle`：既有页面里 `.toggle` 是全局约定类，甚至出现在
+ * `.settings-panel .toggle input:focus-visible + .toggle-slider` 这种跨层选择器里，沿用同名类
+ * 会被那些规则意外命中（改一处、别处跟着变）。老页面的 `.toggle` 暂未迁移，二者可以并存。
  *
  * 无障碍：`role="switch"` + `aria-checked`；没有可见文字标签时**必须**传 `ariaLabel`；
  * 焦点环画在滑块上（checkbox 本体是零尺寸隐藏元素）。

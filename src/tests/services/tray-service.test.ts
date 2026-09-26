@@ -9,8 +9,8 @@
  * - 托盘左键单击：切到对应会话并清未读
  * - 窗口回到前台：清当前会话未读
  *
- * ⚠️ `tray-service` 的 `inited` 是模块级一次性标志，所以每个用例都要
- * `vi.resetModules()` 后重新动态 import，才能拿到干净的模块实例。
+ * `tray-service` 的 `inited` 是模块级一次性标志，所以每个用例都要 `vi.resetModules()`
+ * 后重新动态 import，才能拿到干净的模块实例。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { Session } from '@/types'
@@ -80,8 +80,8 @@ function makeSession(id: string, title: string): Session {
 /**
  * 只取 `tray_*` 调用。
  *
- * ⚠️ 不能直接断言 `invoke` 的总调用次数：`sessionStore` 的落库是**防抖**的
- * （`cmd_upsert_session` 会在稍后自己冒出来），会污染计数。
+ * 不能直接断言 `invoke` 的总调用次数：`sessionStore` 的落库是防抖的
+ * （`cmd_upsert_session` 会稍后自己冒出来），会污染计数。
  */
 function trayCalls(inv: { mock: { calls: unknown[][] } }): unknown[][] {
   return inv.mock.calls.filter(([cmd]) => String(cmd).startsWith('tray_'))
@@ -121,10 +121,10 @@ describe('tray-service', () => {
     inv.mockClear()
 
     // fireImmediately：启动即推一次（含 i18n 后的托盘文案），Rust 侧才拿得到用户的真实选择。
-    // ⚠️ 推送前会 `await ensureLanguageReady()`（见 tray-service::pushSettings），所以要等一个微任务
+    // 推送前会 `await ensureLanguageReady()`（见 tray-service::pushSettings），故等一个微任务
     initTrayService()
-    // ⚠️ 只查 `tray_sync_settings`：本文件共享同一份 localStorage，可能残留其它用例的状态
-    //    （会多出 `tray_clear_attention` / `tray_set_working`），断言总条数会不稳定
+    // 只查 `tray_sync_settings`：本文件共享同一份 localStorage，可能残留其它用例的状态
+    //   （多出 `tray_clear_attention` / `tray_set_working`），断言总条数不稳定
     const syncCalls = () =>
       trayCalls(inv).filter(([cmd]) => cmd === 'tray_sync_settings')
     await vi.waitFor(() => expect(syncCalls()).toHaveLength(1))
@@ -174,7 +174,7 @@ describe('tray-service', () => {
 
     initTrayService()
     // 启动时会先推一次设置（fireImmediately）；推送前 await 语言包就绪，故用 waitFor。
-    // ⚠️ 只查设置那一条：可能残留其它用例的 working 会话（会多推 tray_set_working）
+    // 只查设置那一条：可能残留其它用例的 working 会话（会多推 tray_set_working）
     await vi.waitFor(() =>
       expect(
         trayCalls(inv).filter(([cmd]) => cmd === 'tray_sync_settings'),

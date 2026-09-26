@@ -73,7 +73,7 @@ export function addSessionMessage(
       return
     }
     session.messages = [...session.messages, message]
-    // ⚠️ 不刷新 session.updatedAt：这里是所有消息（含 AI 回复、工具结果）的通用入口，
+    // 不刷新 session.updatedAt：这里是所有消息（含 AI 回复、工具结果）的通用入口，
     // 会话时间只由「用户发送消息」刷新（见 sessionStore.touchSession）。
     sessionStore.messagesChanged(sessionId)
     added = message

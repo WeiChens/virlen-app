@@ -71,10 +71,9 @@ export function buildFinishedSegments(
 /**
  * 把已贴底的滚动容器跟随到最底部。
  *
- * ⚠️ 必须传「真正可滚动的那个元素」：这里是 .code-pre-warpper
- * （max-height + overflow:auto）。内层 .code-pre 是 overflow:hidden 且无高度
- * 约束，它自己 scrollHeight === clientHeight，对 pre 调 scroll() 是空操作 ——
- * 曾经的实现就挂错了元素，导致运行中的终端永远停在输出顶部。
+ * 必须传「真正可滚动的那个元素」：这里是 .code-pre-warpper（max-height + overflow:auto）；
+ * 内层 .code-pre 是 overflow:hidden 且无高度约束，自身 scrollHeight === clientHeight，
+ * 对它调 scroll() 是空操作 —— 曾经挂错元素，导致运行中的终端永远停在输出顶部。
  *
  * @returns 是否执行了跟随（未贴底则返回 false，即"不打扰"）
  */
@@ -321,8 +320,8 @@ export function TerminalView({
   const running = !message
   const { output, entry } = useToolLiveOutput(toolCallId)
   const [killing, setKilling] = useState(false)
-  // 「打开即居中」只在**用户点开**时触发（`expand` 的 false→true）。
-  // ⚠️ 不能用 `!running`：运行中的终端即使没展开也会挂载，命令结束时会让列表被拽走。
+  // 「打开即居中」只在用户点开时触发（`expand` 的 false→true）。
+  // 不能用 `!running`：运行中的终端即使没展开也会挂载，命令结束时会让列表被拽走。
   const rootRef = useAutoCenter(!!expand)
   // 当前工作目录（= 工具实际执行目录）：会话 workspace 优先，其次默认 workspace。
   // 解析与 `securityService.getWorkspace` 一致（归一化反斜杠、去尾部斜杠），
@@ -363,7 +362,7 @@ export function TerminalView({
    * 并下发 `pty: false`，此时自动回到 `<pre>` 渲染。
    */
   // Step 2 ①：终端内确认 —— 命令尚未执行，在终端块里渲染可编辑命令行（不渲染 xterm）。
-  // ⚠️ 必须放在所有 hook 之后：pendingConfirm 出现 / 消失不能改变 hook 调用数量。
+  // 必须放在所有 hook 之后：pendingConfirm 出现 / 消失不能改变 hook 调用数量。
   if (running && entry?.pendingConfirm) {
     return (
       <div className="tool-cmd-running" ref={rootRef}>

@@ -12,7 +12,7 @@
  * 沙盒：写文件走 securityService.resolveSafePath(mode='w')，超范围直接报错。
  *
  * ⚠️ 规则语义与 Rust 原生路径（`native_tools/execute/execute_script.rs`）对齐，
- *    匹配对象是**运行命令**（不是脚本正文）。
+ *    匹配对象是运行命令（不是脚本正文）。
  */
 import * as tauriFs from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
@@ -67,8 +67,7 @@ toolRegistry.register(
     if (timeout > 300) timeout = 300
     const timeoutMs = timeout * 1000
 
-    // ⚠️ 以下报错均为**模型侧**文案：固定英文，与 Rust 原生实现
-    // （native_tools/execute/execute_script.rs）逐字对齐（铁律 1）。
+    // ⚠️ 以下报错为模型侧文案：固定英文，与 Rust `execute_script.rs` 逐字对齐（铁律 1）。
     if (!filePath) throw 'Missing required parameter: "file_path"'
     if (!command) throw 'Missing required parameter: "command"'
 
@@ -85,7 +84,7 @@ toolRegistry.register(
     )
     const sandboxMode = settingsState.value.sandboxMode ?? 'on'
     // 只读模式禁止绕过沙盒（与 Rust 原生路径一致）
-    // ⚠️ 只针对 AI 的**显式申请**：命中「忽略沙盒命令」规则时只读模式**静默忽略规则**
+    // ⚠️ 只针对 AI 的显式申请：命中「忽略沙盒命令」规则时只读模式静默忽略规则
     //   （脚本继续走沙盒），不把一条本来能跑的调用变成报错。
     if (aiRequestedBypass && sandboxMode === 'readonly') {
       throw new Error(
@@ -158,7 +157,7 @@ toolRegistry.register(
       bypassSandbox && sandboxMode !== 'off'
         ? await securityService.getPermissionDecision(PERM_SANDBOX_SCRIPT)
         : undefined
-    // 命中规则 → 用户已用规则预先授权脱壳（ask 视作 allow）；⚠️ deny 仍然优先
+    // 命中规则 → 用户已用规则预先授权脱壳（ask 视作 allow）；⚠️ deny 优先
     const escapeDecision =
       ruleHit && configuredEscape === 'ask' ? 'allow' : configuredEscape
     const decision = resolveCommandDecision(base, { escapeDecision })
@@ -205,7 +204,7 @@ toolRegistry.register(
       permName: shownPerm,
       title: t(permissionLabel(shownPerm)),
       subTitle: tips,
-      // ⚠️ 正文展示**脚本内容**（用户据此判断是否放行），运行命令放在 command 作说明
+      // ⚠️ 正文展示脚本内容（用户据此判断是否放行），运行命令放在 command 作说明
       desc: content,
       command,
       hint,
@@ -223,14 +222,11 @@ const PS_SCRIPT_EXT = /\.ps(m)?1$/i
 /**
  * 给脚本内容加 UTF-8 BOM（幂等）—— 与 Rust 侧 `with_script_bom` 等价。
  *
- * ⚠️ 为什么必须加：Windows PowerShell 5.1 读取**无 BOM** 的 .ps1 时不猜 UTF-8，
- * 而是按**系统 ANSI 代码页**（中文系统 CP936/GBK）解析源文件，脚本里的中文字面量
- * 在「解析阶段」就已经变成乱码（"脚本" → "鑴氭湰"）—— 之后无论怎么设置
- * `[Console]::OutputEncoding` 都还原不回来（输出侧本来就是对的，问题在输入端）。
- * 带 BOM 后 5.1 会按 UTF-8 解析，中文正常。
+ * 必须加：PowerShell 5.1 读无 BOM 的 .ps1 时不猜 UTF-8，而按系统 ANSI 代码页
+ * （中文系统 CP936/GBK）解析，中文字面量在解析阶段就已乱码（"脚本" → "鑴氭湰"），
+ * 之后设 `[Console]::OutputEncoding` 也还原不回来（问题在输入端）。带 BOM 即按 UTF-8 解析。
  *
- * 只对 Windows 上的 .ps1/.psm1 生效：其它脚本加 BOM 有害（.sh 的 shebang 会失效，
- * .js/.py 虽能容忍但没必要）。
+ * 只对 Windows 的 .ps1/.psm1 生效：.sh 加 BOM 会让 shebang 失效，.js/.py 虽能容忍但没必要。
  *
  * @param filePath 脚本完整路径（按扩展名判定是否需要 BOM）
  * @param platform Rust `os_platform` 返回值（windows / macos / linux）

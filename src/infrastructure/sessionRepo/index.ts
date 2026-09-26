@@ -40,10 +40,8 @@ export interface SessionRepo {
   /**
    * 「消息查询」工具：按锚点（id / seq）取前后 N 条的时序窗口。
    *
-   * ⚠️ **只覆盖「已压缩区间」**（时序 < 最后一个 summary）：该区间之后的对话
-   * 已在模型当前上下文中，重复下发只会浪费 token。
-   *
-   * 失败（非 Tauri 环境 / DB 异常）返回 `null`，由调用方转成提示。
+   * ⚠️ 只覆盖「已压缩区间」（时序 < 最后一个 summary）：之后的对话已在模型上下文中，
+   * 重复下发只浪费 token。失败（非 Tauri / DB 异常）返回 `null`，由调用方转成提示。
    */
   getMessageWindow(
     sessionId: string,
@@ -75,8 +73,8 @@ export interface SessionRepo {
   /**
    * 重建数据库（`VACUUM`：归还空闲页 + 切 `auto_vacuum=INCREMENTAL`）。
    *
-   * ⚠️ **独占连接**（数百 MB 库约 10–60 s）且需约 2 倍库大小的临时磁盘空间，
-   * 只在用户显式点击时调用；失败返回 `null`。
+   * 独占连接（数百 MB 库约 10–60 s）且需约 2 倍库大小的临时磁盘空间，只在用户显式点击时调用；
+   * 失败返回 `null`。
    */
   dbMaintain(): Promise<DbMaintainResult | null>
 }
@@ -434,13 +432,11 @@ class SessionRepoImpl implements SessionRepo {
   /**
    * 批量写入变化的会话，删除不存在的会话。
    *
-   * ⚠️ **差集在调用时立即算完**，只有「发送」被 800ms 合并。
-   * 不能把差集计算放在 debounce 回调里（早期实现）：`debounce` 只保留最后一次调用的
-   * 实参，中间那次的差集会被整体丢弃 —— 而 `sessionStore.persist()` 会同步前移
-   * `_lastSaved` 基线，丢弃的删除再也不会被补发。
-   * 实测后果：删除会话后 800ms 内只要再来一次 persist（发消息 touchSession / 改标题 /
-   * **AI 起标题完成** / 置顶…），该会话就不会从 SQLite 删除，重启后连同其消息一起复活，
-   * 数据库文件只增不减。
+   * 差集必须在调用时立即算完，只有「发送」被 800ms 合并：`debounce` 只保留最后一次调用的
+   * 实参，差集若放在回调里算，中间那次的差集会被整体丢弃，而 `sessionStore.persist()` 已
+   * 同步前移 `_lastSaved` 基线 —— 丢弃的删除再也不会被补发。实测后果：删除后 800ms 内只要
+   * 再来一次 persist（发消息 / 改标题 / AI 起标题完成 / 置顶…），该会话就不从 SQLite 删除，
+   * 重启后连同消息一起复活。
    */
   saveDiff(oldSessions: Session[], newSessions: Session[]): void {
     const oldMap = new Map(oldSessions.map((s) => [s.id, s]))
@@ -448,10 +444,9 @@ class SessionRepoImpl implements SessionRepo {
 
     for (const [id, session] of newMap) {
       const old = oldMap.get(id)
-      // ⚠️ 只能比「值」：oldSessions 是 store 传入的浅拷贝快照（persist() 里
-      // `map(s => ({ ...s }))`），与 store 里的活对象永远不是同一引用。
-      // 早期版本用 `|| old !== session` 兜底 → 恒为 true → 每次 persist() 都把
-      // 全部会话回写一遍（实测 152 个会话：改 1 个标题写了 152 次 SQLite，
+      // 只能比「值」：oldSessions 是 store 传入的浅拷贝快照（`map(s => ({ ...s }))`），
+      // 与活对象永远不是同一引用。早期用 `|| old !== session` 兜底 → 恒为 true →
+      // 每次 persist() 全量回写（实测 152 个会话：改 1 个标题写了 152 次 SQLite，
       // 占 rust.db.op 的 85%、SQLite 耗时的 88.7%）。
       if (!old || persistedSignature(old) !== persistedSignature(session)) {
         this.pendingPuts.set(id, session)

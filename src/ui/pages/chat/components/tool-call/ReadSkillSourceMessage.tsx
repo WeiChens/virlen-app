@@ -8,15 +8,14 @@
  *   · 分区：目录结构（等宽 <pre>）、SKILL.md（Markdown 渲染）
  *   · 展开时「打开即居中」（useAutoCenter，与 read_file / edit_file 一致）
  *
- * ⚠️ 「打开即居中」的 hook 只能在**组件顶层**无条件调用（见 useAutoCenter 文档与
- *    `tests/ui/tool-call-autocenter.test.tsx` 的回归说明）：写在类方法里属条件调用 hook，
- *    会让 React 记账错乱。因此展开视图拆成 `SkillSourceView` 函数组件承载 hook。
+ * 「打开即居中」的 hook 只能在组件顶层无条件调用（见 useAutoCenter 文档与
+ * `tests/ui/tool-call-autocenter.test.tsx`）：写在类方法里属条件调用，会让 React 记账错乱，
+ * 故展开视图拆成 `SkillSourceView` 函数组件承载 hook。
  *
- * ⚠️ 结果由 `infrastructure/tools/skill/read-skill-source.ts` 生成：
- *    · 新数据走**结构化 `uiData`**（`{ skillPath, tree, md }`，语言无关）；
- *    · 旧数据只有文本，这里回退解析 `content` 的中文分段标记。
- *    两条路都取不到时**不做猜测**，整段回退为 `<pre>` 原文，
- *    否则会出现「把 SKILL.md 正文错当成目录树渲染」这类静默错位。
+ * 结果由 `infrastructure/tools/skill/read-skill-source.ts` 生成：新数据走结构化 `uiData`
+ * （`{ skillPath, tree, md }`，语言无关）；旧数据只有文本，这里回退解析 `content` 的
+ * 中文分段标记。两条路都取不到时不做猜测、整段回退为 `<pre>` 原文，否则会把 SKILL.md
+ * 正文错当成目录树渲染。
  */
 import { t } from '@/ui/i18n'
 import { toShortPath } from '@/utils/common'
@@ -127,8 +126,8 @@ function SkillSourceView({
   parts: SkillSourceParts | null
   raw: string
 }) {
-  // ⚠️ 顶层无条件调用：本组件只在用户展开时挂载（折叠时 getExpandView 返回 null），
-  //    所以「挂载」本身就等价于一次用户手势，不会被动的消息到达/列表重挂载触发。
+  // 顶层无条件调用：本组件只在用户展开时挂载（折叠时 getExpandView 返回 null），
+  // 所以「挂载」本身等价于一次用户手势，不会被动的消息到达 / 列表重挂载触发。
   const rootRef = useAutoCenter()
   const skillPath = parts?.skillPath || ''
 

@@ -96,8 +96,8 @@ export function ensureTodoDraft(
 /**
  * 用新的清单内容替换草稿内容（base 保持不变）。
  *
- * ⚠️ 任何编辑都会把 `committed` 复位 —— 用户改完还没再点「应用」，
- * 这份改动就只是草稿，本轮结束 / 取消都不会带上它。
+ * 任何编辑都会把 `committed` 复位 —— 用户改完还没再点「应用」，这份改动就只是草稿，
+ * 本轮结束 / 取消都不会带上它。
  */
 export function updateTodoDraftItems(
   sessionId: string,
@@ -138,7 +138,7 @@ export function clearTodoDraft(sessionId: string): void {
  *
  * 约定：草稿只活在浮层里 —— 关掉浮层 = 放弃这次编辑（与主流内联编辑面板一致）：
  * 没点「应用变更 / 覆盖更新」就不算修改，不应该悄悄留在内存里、下次开窗又冒出来。
- * ⚠️ 「已应用」（committed）的草稿是「用户已确认、等本轮生效」，关窗时**绝不能丢**。
+ * ⚠️ 「已应用」（committed）的草稿是「用户已确认、等本轮生效」，关窗时绝不能丢。
  *
  * @returns 是否真的丢了东西（调用方据此决定要不要提示）
  */

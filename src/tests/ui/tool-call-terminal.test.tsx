@@ -675,10 +675,9 @@ describe('XtermTerminalBlock（PTY）结构与操作区', () => {
       />,
     )
 
-  // ⚠️ 按键条目前**只保留 Ctrl+D（EOF）**：桌面端可直接在终端里键击/粘贴输入
-  //    （xterm 的 onData 直送伪控制台），按键条只是给触屏 / 无键盘场景补一个「结束输入」入口。
-  //    Enter 归回车键 / Ctrl+C 归「终止」按钮，其余（Tab/↑/↓）已移除 —— 若日后恢复那批按钮，
-  //    请同步补回断言。
+  // 按键条目前只保留 Ctrl+D（EOF）：桌面端可直接在终端里键击 / 粘贴输入（xterm 的 onData
+  // 直送伪控制台），按键条只是给触屏 / 无键盘场景补一个「结束输入」入口。Enter 归回车键、
+  // Ctrl+C 归「终止」按钮，其余（Tab/↑/↓）已移除 —— 若日后恢复那批按钮，请同步补回断言。
   it('运行中：含按键条（Ctrl+D）、接管按钮、全屏按钮与终端容器', () => {
     const html = render(true)
     expect(html).toContain('is-pty')

@@ -45,7 +45,7 @@ export interface ParsedSkillMeta {
  * > My awesome skill description
  * **Version:** 1.0.0
  *
- * ⚠️ name 经过 normalizeSkillName 归一化（转小写、去空格、校验格式）
+ * name 经过 normalizeSkillName 归一化（转小写、去空格、校验格式）
  */
 function parseSkillMetaFromContent(
   _folderName: string,
@@ -161,7 +161,7 @@ export async function importSkillFromZip(zipPath: string): Promise<string[]> {
     const mdContent = await skillMdFile.async('string')
     const meta = parseSkillMetaFromContent('', mdContent)
 
-    // 4. ⚠️ 主键唯一性检查：如果该 name 已注册，给出明确提示
+    // 4. 主键唯一性检查：该 name 已注册时给出明确提示
     const existing = getRegisteredSkill(meta.name)
     if (existing) {
       console.warn(

@@ -4,7 +4,7 @@
  * 费用估算必须有单价，而单价「服务商随时会调、各家口径也不同」，
  * 所以这里让用户按 (Provider, 模型) 逐个填；未填的模型回退到内置价目表。
  *
- * ⚠️ 内置价目表是**预估值**，UI 必须提示用户核对（见 DEFAULT_MODEL_PRICES 注释）。
+ * 内置价目表是预估值，UI 必须提示用户核对（见 DEFAULT_MODEL_PRICES 注释）。
  */
 import { observer } from 'mobx-react-lite'
 import { settingsState } from '@/ui/store'
@@ -30,8 +30,8 @@ const PriceEditor = observer(function PriceEditor() {
   /**
    * 写入一行单价。
    *
-   * ⚠️ `base` 必须传「当前生效的单价」而不是全 0：用户只改输出价时，输入价要
-   * 保持生效值（可能是内置预估价），否则会被悄悄归零、费用算少。
+   * `base` 必须传「当前生效的单价」而不是全 0：用户只改输出价时，输入价要保持生效值
+   * （可能是内置预估价），否则会被悄悄归零、费用算少。
    */
   const setPrice = (
     key: string,

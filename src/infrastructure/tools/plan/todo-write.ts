@@ -10,9 +10,8 @@
  * `pickCurrentTodos()` 从消息里派生「唯一的那份清单」。
  *
  * ⚠️ 已原生化（Step 2）：Rust 引擎走 `native_tools/plan/todo_write.rs`（默认路径），
- * 本文件只服务 **TS 引擎**（回退路径）。两侧语义必须完全一致（铁律 1）：
- * 改这里的三条校验文案 / `content` 渲染 / `uiData` 结构，必须同步改 Rust 侧
- * `native_tools/plan/{todo_write,common}.rs`。
+ * 本文件是回退路径；两侧语义必须完全一致（铁律 1）：改这里的三条校验文案 / `content` 渲染 /
+ * `uiData` 结构，必须同步改 Rust 侧 `native_tools/plan/{todo_write,common}.rs`。
  */
 import { toolRegistry } from '@/domain/tools'
 import type { ToolContext, ToolExecutor, ToolResult } from '@/domain/tools/types'

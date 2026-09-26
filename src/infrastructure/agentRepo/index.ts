@@ -11,12 +11,11 @@
  *   表里**没有** → 一次性迁移 localStorage 的历史副本，然后清掉本地副本
  *   （避免出现第二份权威，也就不会「删了表里的行又被迁回」）。
  *
- * ⚠️ **为什么是「内存快照 + 同步 `load()`」**：`agentStore` 的 `getAgent()` 在**渲染期被同步
- * 调用**（如侧边栏分组 `groupSessionsByAgent`），`SimpleRepo` 接口不能变异步 ——
- * 因此与 `securityRepo` 的 `rulesSnapshot` 用同一招：异步读表 → 落内存快照 → 同步读快照。
+ * 「内存快照 + 同步 `load()`」的原因：`getAgent()` 在渲染期被同步调用（如侧边栏分组
+ * `groupSessionsByAgent`），而 `SimpleRepo` 不能是异步接口 —— 与 `securityRepo` 的
+ * `rulesSnapshot` 同一招：异步读表 → 落内存快照 → 同步读快照。
  *
- * ⚠️ 写入是 **debounce** 的（连续编辑 Agent 只写一次），退出前由
- * `flushAgentsPersist()` 补一次（`main.ts` 的 `beforeunload`）。
+ * 写入是 debounce 的（连续编辑只写一次），退出前由 `flushAgentsPersist()` 补一次。
  */
 import { getLocal, setLocal } from '@/utils/localStorage'
 import type { SimpleRepo } from '@/infrastructure/repo'
@@ -120,9 +119,8 @@ export function flushAgentsPersist(): void {
  * 2. 表里**没有**该键 → 一次性迁移：把 localStorage 的历史副本写进表；
  * 3. 两条分支都会清掉 localStorage 的历史副本。
  *
- * ⚠️ 调用时机：必须在 `initDefaultAgent()` / `agentStore.reload()` **之前**
- * （`main.ts` 的 `agents` 步骤）—— 否则默认 Agent 的补全逻辑读到的是空列表，
- * 会把「已有 Agent」丢掉、在本地重建一份，且落库后覆盖表里的数据。
+ * ⚠️ 必须在 `initDefaultAgent()` / `agentStore.reload()` **之前**调用（`main.ts` 的 agents
+ * 步骤）：否则默认 Agent 补全读到空列表，会把已有 Agent 丢掉重建一份并覆盖表里的数据。
  */
 export async function hydrateAgents(): Promise<void> {
   if (!settingsRepo.isAvailable()) return

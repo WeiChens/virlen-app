@@ -102,8 +102,8 @@ function isPlainObject(value: object): boolean {
 /**
  * 深拷贝式清洗任意 JSON 结构里的孤立代理（IPC 边界兜底）。
  *
- * ⚠️ 只在**检测到问题**时才重建对象/字符串（命中前不产生任何拷贝），
- * 所以对 1MB 级 payload 也只是几毫秒的线性扫描。
+ * 只在检测到问题时才重建对象 / 字符串（命中前不产生任何拷贝），所以对 1MB 级 payload
+ * 也只是几毫秒的线性扫描。
  * 用于「来源不可控」的入口：模型输出、第三方网关返回、用户粘贴等。
  */
 export function sanitizeLoneSurrogates<T>(value: T): T {

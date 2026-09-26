@@ -280,7 +280,7 @@ try {
     }
     settingsState.value.editorOpenConfigs = [migrated]
     settingsState.value.editorOpenDefaultId = migrated.id
-    // ⚠️ S3 收尾后不再写回 localStorage（迁移结果随首启 import 进表）
+    // S3 收尾后不再写回 localStorage（迁移结果随首启 import 进表）
   }
   // 清理旧字段（非枚举属类型定义字段，直接删除避免污染）
   const raw = settingsState.value as any
@@ -305,7 +305,7 @@ try {
       ...withDefaultPermissions(settingsState.value.permissions),
       ...migrated,
     }
-    // ⚠️ S3 收尾后不再写回 localStorage（迁移结果随首启 import 进表）
+    // S3 收尾后不再写回 localStorage（迁移结果随首启 import 进表）
     localStorage.setItem('virlen-permissions-migrated', '1')
   }
   if ('commandApprovalMode' in raw) {
@@ -408,7 +408,7 @@ function installSettingsPersist(): void {
  * 1. 表**非空** → 以表为准覆盖到 `settingsState`（只认已知键）；
  * 2. 表**为空** → 把当前设置（localStorage + 上面的一次性迁移之后）整份导入 —— 老用户升级无感。
  *
- * ⚠️ 必须在 `init()` 里**早于** i18n / 工作目录 / 会话加载执行：它们都依赖设置。
+ * 必须在 `init()` 里早于 i18n / 工作目录 / 会话加载执行：它们都依赖设置。
  */
 export async function hydrateSettings(): Promise<void> {
   if (!settingsRepo.isAvailable()) return
@@ -445,12 +445,11 @@ export async function hydrateSettings(): Promise<void> {
 /**
  * 删掉老版本遗留在 localStorage 的设置副本（S3 收尾 —— “清理回滚信道”）。
  *
- * ⚠️ 只在「表已就绪」时调用：表读不到 / 首次导入失败时**保留**副本，作为后端故障的兜底。
+ * ⚠️ 只在「表已就绪」时调用：表读不到 / 首次导入失败时保留副本，作为后端故障的兜底。
  *
- * 影响面（已实测代码路径）：`main()` 是 `await init()`（首步就是本函数）**之后**才 `render()`，
- * 且窗口在 `requestAnimationFrame` 里才 `show()` —— 所以**用户看不到未水合的首帧**。
- * 唯一退化情形：上次启动已删掉副本 + 本次后端不可用 → 设置回默认值（此时无权威源，已属异常）。
- * 幂等：副本不存在时 `removeItem` 是空操作。
+ * 用户看不到未水合的首帧：`main()` 在 `await init()`（首步即本函数）之后才 `render()`，
+ * 窗口还要等 `requestAnimationFrame` 才 `show()`。唯一退化情形是「上次已删副本 + 本次后端
+ * 不可用」→ 设置回默认值（无权威源，已属异常）。幂等：副本不存在时 `removeItem` 是空操作。
  */
 function dropLegacyLocalSnapshot(): void {
   try {

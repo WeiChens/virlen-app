@@ -15,8 +15,8 @@
  *   - TS：Vite `?raw` 导入（下方 import）+ `JSON.parse`
  *   - Rust：`CARGO_MANIFEST_DIR/../src/tests/fixtures/sandbox-rules.golden.json`（运行时读取）
  *
- * ⚠️ fixture 里只放「两侧都能求值」的用例：死循环 / 超内存 / host 能力探测只在 Rust 单测里
- *    （TS 侧是渲染进程内的 `new Function`，**没有**超时保护，跑死循环会卡死测试）。
+ * fixture 里只放「两侧都能求值」的用例：死循环 / 超内存 / host 能力探测只在 Rust 单测里
+ * （TS 侧是渲染进程内的 `new Function`，没有超时保护，跑死循环会卡死测试）。
  */
 import { describe, expect, it } from 'vitest'
 import GOLDEN_RAW from '@/tests/fixtures/sandbox-rules.golden.json?raw'

@@ -9,8 +9,8 @@
  *
  * 本模块只回答两件事：这份文件的形状是什么、怎么按平台取。
  *
- * ⚠️ 契约里**不含 `label`**：`label` 是 UI 文案（走 i18n `t()`），属前端职责。
- *    若把它固定进契约，英文界面会退化成中文（Rust 不做翻译）。
+ * ⚠️ 契约里不含 `label`：`label` 是 UI 文案（走 i18n `t()`）。若把它固定进契约，
+ *    英文界面会退化成中文（Rust 不做翻译）。
  */
 import type { ResolvedToolDefinition } from './types'
 

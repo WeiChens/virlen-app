@@ -203,9 +203,8 @@ export function startOfToday(now = Date.now()): number {
 }
 
 /**
- * 时间范围 → 起始时间戳（Unix ms）；`all` 返回 undefined 表示不过滤
- *
- * ⚠️ 只有「结束」端是隐含的（= 调用时刻）。补零时用它决定轴终点。
+ * 时间范围 → 起始时间戳（Unix ms）；`all` 返回 undefined 表示不过滤。
+ * 只有「结束」端是隐含的（= 调用时刻），补零时用它决定轴终点。
  */
 export function rangeToFromTs(range: UsageRange, now = Date.now()): number | undefined {
   switch (range) {
@@ -452,17 +451,14 @@ function addCost(a: TokenCost, b: TokenCost): TokenCost {
 /**
  * 查询聚合统计（含费用）。
  *
- * ⚠️ **合计费用只能按「模型」拆开算**（见 `loadStats` 里的第二次聚合）：
- * 时间 / 类型 / provider 这些维度的一个桶里往往混着多个模型，单价各不相同，
- * 用单一单价去乘桶内总量会算错；而桶里根本没有模型信息，连单价都取不到。
- *
- * ⚠️ 单位价只能按「模型」取，而按会话分桶时桶的 key 是 sessionId ——
- * 因此调用方可以通过 `resolveSessionModel` 把 sessionId 映射回它的 provider/model，
- * 否则该会话的单价只能退到内置价目表（或为 0）。
+ * 合计费用只能按「模型」拆开算（见 `loadStats` 的第二次聚合）：时间 / 类型 / provider 的
+ * 一个桶里往往混着多个模型、单价各不相同，用单一单价乘桶内总量会算错，而桶里根本没有
+ * 模型信息、连单价都取不到。同理单位价也只能按模型取，而按会话分桶时 key 是 sessionId ——
+ * 调用方需用 `resolveSessionModel` 映射回 provider/model，否则单价只能退到内置价目表（或 0）。
  *
  * 时间维度（hour/day/week/month）额外做两件事：
- *  1. **补零**：把范围内缺失的时段补成 0 桶，修「只在 7、8 点用过 → 图上只剩两根柱子」的断轴；
- *  2. **降级**：列数超 `MAX_TIME_BUCKETS` 时自动放粗粒度（小时→天→周→月），回传实际的 `groupBy`。
+ *  1. 补零：把范围内缺失的时段补成 0 桶，修「只在 7、8 点用过 → 图上只剩两根柱子」的断轴；
+ *  2. 降级：列数超 `MAX_TIME_BUCKETS` 时自动放粗粒度（小时→天→周→月），回传实际的 `groupBy`。
  */
 export async function loadStats(
   range: UsageRange,

@@ -19,13 +19,11 @@
  *            写法宽容（见 `buildJsFunction`）：函数声明 / 含 `return` 的函数体 /
  *            单表达式（自动补 `return (...)`）/ `const f = (command) => ...` 均可
  *
- * ⚠️ 安全边界（与产品约定一致，改这里必须连同 `command_confirm.ts` 的拦截条件一起看）：
- * - 规则**只免除「沙盒脱壳」审批**，不改变命令本身的风险审批
- *   （`terminal.*` / `script.execute` 仍按设置弹窗）；
- * - `deny`（禁止）永远优先：拒绝发生在引擎侧（TS / Rust），规则根本无从介入；
- * - `sandboxMode === 'readonly'` 时脱壳已被引擎直接拒绝，规则不生效；
- * - JS 规则在应用内求值（用户自己的配置，等价于用户自己写代码）；
- *   **编译或运行抛错一律按「未命中」处理**，绝不放行。
+ * ⚠️ 安全边界（改这里必须连同 `command_confirm.ts` 的拦截条件一起看）：
+ * - 规则只免除「沙盒脱壳」审批，不改变命令本身的风险审批（`terminal.*` / `script.execute` 仍按设置弹窗）；
+ * - `deny` 永远优先：拒绝发生在引擎侧（Rust），规则无从介入；
+ * - `sandboxMode === 'readonly'` 时脱壳已被引擎拒绝，规则不生效；
+ * - JS 规则在应用内求值（等价于用户自己写代码）；编译或运行抛错一律按「未命中」处理，绝不放行。
  *
  * 匹配顺序：按规则列表顺序取**第一条命中且已启用**的规则（列表顺序即优先级）。
  */
@@ -280,7 +278,7 @@ function buildJsFunction(pattern: string): (command: string) => unknown {
 /**
  * 用单条规则测试一条命令。
  *
- * ⚠️ 刻意**不看** `enabled`：UI 的「测试」按钮要对禁用中的草稿也能试；
+ * 刻意不看 `enabled`：UI 的「测试」按钮要对禁用中的草稿也能试；
  * 实际放行请用 `findMatchingSandboxRule`（它只认启用中的规则）。
  */
 export function testSandboxRule(

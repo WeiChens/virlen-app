@@ -144,13 +144,13 @@ async function init() {
   // 配置下沉（D3）：先把 Rust 侧 `app_settings` 水合进设置（幂等；非 Tauri 环境自动跳过）——
   // 必须在最前面：i18n / 工作目录 / 会话加载 / 权限都直接依赖设置值。
   await step('settings', () => hydrateSettings())
-  // 「忽略沙盒命令」规则下沉（S7）：规则以 `app_settings` 为**唯一源**（localStorage 不保存）。
-  // ⚠️ 走 store 的 hydrate（而非直接调 infra 的 hydrateSecurity）——它还会刷新 observable，
-  //    否则设置页读到的仍是模块加载瞬间的快照（看起来「还是 localStorage」）。
+  // 「忽略沙盒命令」规则下沉（S7）：规则以 `app_settings` 为唯一源（localStorage 不保存）。
+  // 走 store 的 hydrate 而非直接调 infra 的 hydrateSecurity —— 它还会刷新 observable，
+  // 否则设置页读到的仍是模块加载瞬间的快照。
   await step('securityConfig', () => securityStore.hydrate())
   // Agent 配置下沉（D3 延伸）：`agents` 以 `app_settings` 为唯一源（localStorage 只作迁移来源）。
-  // ⚠️ 必须在 `initDefaultAgent()` / `agentStore.reload()` **之前**——否则默认 Agent 的补全
-  //    会读到空列表、在本地重建并**覆盖**表里已有的 Agent。
+  // ⚠️ 必须在 `initDefaultAgent()` / `agentStore.reload()` 之前 —— 否则默认 Agent 的补全
+  //    读到空列表、在本地重建并覆盖表里已有的 Agent。
   await step('agents', () => hydrateAgents())
   // 用量统计（token 账本）：把领域侧记账端口绑到 Tauri/SQLite 实现；
   // 未绑定时 recordUsage 是空操作，因此业务代码可以无条件调用。

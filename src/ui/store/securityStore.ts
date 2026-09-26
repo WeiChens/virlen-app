@@ -5,7 +5,7 @@
  *  - 持有 mobx observable，供 UI 组件响应式渲染
  *  - 数据读写委托给 SimpleRepo
  *
- * ⚠️ 不属于此 Store 的职责：
+ * 不属于此 Store 的职责：
  *  - 业务规则校验 → 走 Application Service 或 Domain Port
  *  - 跨模块数据协调 → 走 Application Service
  */
@@ -50,7 +50,7 @@ class SecurityStore {
    * 配置下沉（S7）：从 Rust 侧 `app_settings` 水合「忽略沙盒命令」规则，并刷新本地镜像。
    *
    * 幂等；非 Tauri 环境（浏览器 dev / vitest）直接返回，仍用 localStorage 的值。
-   * ⚠️ 必须在任何执行路径之前完成 —— Rust 引擎 / CLI 判定读的就是表里那一份。
+   * ⚠️ 必须在任何执行路径之前完成 —— Rust 引擎 / CLI 的判定读的就是表里那一份。
    */
   async hydrate(): Promise<void> {
     await hydrateSecurity()

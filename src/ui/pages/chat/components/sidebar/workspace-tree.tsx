@@ -106,7 +106,7 @@ const SEARCH_DEBOUNCE_MS = 250
  * 例外：用户**在目录树里展开过**的那一份不剪（见 searchKeepDirs）、——展开了就是确实要看里面；
  * 点目录（`.git` / `.idea` …）则靠 `includeHidden: false` 整棵跳过，它们在树里本来就不可见。
  *
- * ⚠️ 只作用于侧边栏搜索框，不改变模型工具 `search_files_by_name` 的行为（见 Rust 侧注释）。
+ * 只作用于侧边栏搜索框，不改变模型工具 `search_files_by_name` 的行为（见 Rust 侧注释）。
  */
 const SEARCH_SKIP_DIR_NAMES = [
   'node_modules',
@@ -1012,9 +1012,8 @@ function WorkspaceTree({
     )
   }
 
-  // ⚠️ 菜单项必须在渲染时就把 target / 选择集捕获进闭包：
-  // ContextMenu 点击时会先 onClose（state 归 null）再执行 onClick，
-  // 回调里再读 menu.state 会拿到 null。
+  // 菜单项必须在渲染时就把 target / 选择集捕获进闭包：ContextMenu 点击时会先 onClose
+  // （state 归 null）再执行 onClick，回调里再读 menu.state 会拿到 null。
   const menuTarget = menu.state?.target
   // 右键命中未选中的行时，上一行 onContextMenu 已把选择收敛到它，这里自然就是单选
   const menuTargets = menuTarget
@@ -1050,7 +1049,7 @@ function WorkspaceTree({
         onChange={setQuery}
         placeholder={t('搜索文件或文件夹…')}
       />
-      {/* ⚠️ 滚动容器（virtualizer 的 getScrollElement）必须常驻：
+      {/* 滚动容器（virtualizer 的 getScrollElement）必须常驻：
           搜索时只换里面的子节点，不能把 .tree-scroll 一起卸载掉 */}
       <div className="tree-scroll" ref={scrollRef}>
         {isSearching ? (

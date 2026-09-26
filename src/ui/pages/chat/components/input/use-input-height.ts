@@ -1,8 +1,8 @@
 /**
  * 输入框高度拖拽（完全自包含，只碰 textareaRef + localStorage）
  *
- * ⚠️ 高度模型：拖拽给的是「输入区整体高度」，textarea 拿到的是扣掉
- * INPUT_CHROME_HEIGHT 的净高度。改这里请对照 constants.ts 的说明。
+ * 高度模型：拖拽给的是「输入区整体高度」，textarea 拿到的是扣掉 INPUT_CHROME_HEIGHT 的
+ * 净高度。改这里请对照 constants.ts 的说明。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { INPUT_CHROME_HEIGHT, MIN_HEIGHT } from './constants'

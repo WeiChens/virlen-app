@@ -6,7 +6,7 @@
  *   **唯一权威源是 Rust 侧 `app_settings` 表**（同一个 `virlen.db`）——
  *   GUI（默认 Rust 引擎）与 CLI 读写同一份，判定在 `src-tauri/virlen-core/src/security/`，
  *   因此不需要「问 JS」（原内部交互 `sandbox_rule_check` 已删除）。
- *   ⚠️ localStorage **不保存**该字段：它在浏览器 dev / 非 Tauri 环境才降级使用（见下）。
+ *   localStorage 不保存该字段：只在浏览器 dev / 非 Tauri 环境降级使用（见下）。
  * - **路径配置**（whitelist / blacklist / skipEachDirs）：仍存 localStorage
  *   （同步读 → 首帧不闪空）。
  *
@@ -16,10 +16,9 @@
  * 两条分支都会清掉 localStorage 里的规则字段 —— 因此「删掉表里的行」= 真正清空规则，
  * 不会被下一次启动迁回。
  *
- * ⚠️ 规则的匹配有两份实现，由 golden 契约收敛
- * （`src/tests/fixtures/sandbox-rules.golden.json`）：
- * - 默认引擎（Rust）+ CLI：`src-tauri/virlen-core/src/security/rules.rs`（text / regex 原生 + js 内嵌 QuickJS）；
- * - 浏览器 dev / TS 引擎路径 / 设置页「测试」：`@/domain/security/sandbox-ignore-rules`。
+ * ⚠️ 规则匹配有两份实现，由 golden 契约收敛（`src/tests/fixtures/sandbox-rules.golden.json`）：
+ * - Rust + CLI：`src-tauri/virlen-core/src/security/rules.rs`（text / regex 原生 + js 内嵌 QuickJS）；
+ * - 浏览器 dev / 设置页「测试」：`@/domain/security/sandbox-ignore-rules`。
  *
  * 非 Tauri 环境（浏览器 dev / vitest）：没有表可写 → 整体降级为 localStorage 持久化，
  * 保证 `pnpm dev` 下该功能仍可用（与配置下沉前的行为一致）。
@@ -171,8 +170,8 @@ export function flushSecurityPersist(): void {
  *
  * 两者随后都清掉 localStorage 的规则字段，避免「删了表里的行又被迁回」。
  *
- * ⚠️ 消费方是 `securityStore.hydrate()`（`main.ts` 的 `securityConfig` 步骤）——
- * 它还会刷新 store 的 observable，让设置页立即展示表里的值。
+ * 消费方是 `securityStore.hydrate()`（`main.ts` 的 `securityConfig` 步骤），它还会刷新
+ * store 的 observable，让设置页立即展示表里的值。
  */
 export async function hydrateSecurity(): Promise<void> {
   if (!settingsRepo.isAvailable()) return

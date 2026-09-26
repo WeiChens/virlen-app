@@ -228,9 +228,9 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
     [sortKey],
   )
 
-  // ⚠️ 一律用 `stats.groupBy`（**实际生效**的粒度），而不是用户点的 `groupBy`：
-  // 跨度太大时服务层会自动降级（如「全部 + 按小时」→ 按天/周），
-  // 若这里仍按用户所选切标签，降级后坐标轴文字会整排错位。
+  // 一律用 `stats.groupBy`（实际生效的粒度），而不是用户点的 `groupBy`：跨度太大时服务层
+  // 会自动降级（如「全部 + 按小时」→ 按天/周），若这里仍按用户所选切标签，
+  // 降级后坐标轴文字会整排错位。
   const activeGroup = stats.groupBy
 
   /** 分桶 key → 展示文案（按**实际生效**的粒度切，见 activeGroup 注释） */

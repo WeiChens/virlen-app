@@ -50,9 +50,9 @@ function ProviderSelect({
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [open])
 
-  // ⚠️ 必须在**渲染期**读模板表，不能在模块顶层读：本模块经 `App.tsx` 静态导入，
-  //    ES 模块求值**先于** `main.ts` 的 `main()` —— 那一刻 `providerCatalog()` 的快照
-  //    还是 `null`，会 fail-fast 抛错，整个应用起不来（窗口都不显示）。2026-09-26 真踩到。
+  // ⚠️ 必须在渲染期读模板表，不能在模块顶层读：本模块经 `App.tsx` 静态导入，ES 模块求值
+  // 先于 `main.ts` 的 `main()` —— 那一刻 `providerCatalog()` 的快照还是 `null`，会 fail-fast
+  // 抛错，整个应用起不来（窗口都不显示）。2026-09-26 真踩到。
   const options = providerService.getDefaultProviderList()
   const selected = options.find((opt) => opt.templateName === value)
 

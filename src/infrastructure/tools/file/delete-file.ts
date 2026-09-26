@@ -53,8 +53,8 @@ toolRegistry.register(
       }
     }
 
-    // ⚠️ 模型侧固定英文（P4b/D2-A）；UI 侧走 uiData 由组件按界面语言渲染。
-    // 文案与 Rust `native_tools/file/delete_file.rs` 逐字一致（铁律 1）。
+    // ⚠️ 模型侧固定英文（P4b/D2-A）；UI 侧走 uiData。文案与 Rust
+    // `native_tools/file/delete_file.rs` 逐字一致（铁律 1）。
     const parts: string[] = []
     if (deleted.length > 0) {
       parts.push(

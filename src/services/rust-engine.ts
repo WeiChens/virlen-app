@@ -45,8 +45,8 @@ let roundBoundaryHandler: RoundBoundaryHandler | null = null
 /**
  * 注册轮次边界处理器。
  *
- * ⚠️ 用注册而不是直接 import `services/todo-service`：本模块已被 todo-service 引用
- * （`isTauriAvailable`），直接反向 import 会形成循环依赖。
+ * 用注册而不是直接 import `services/todo-service`：本模块已被 todo-service 引用
+ * （`isTauriAvailable`），反向 import 会形成循环依赖。
  */
 export function setRoundBoundaryHandler(
   handler: RoundBoundaryHandler | null,
@@ -352,8 +352,8 @@ export function isTauriAvailable(): boolean {
 /**
  * 解析工具定义（对齐 TS `#resolveToolDefs`）
  *
- * ⚠️ 异步：定义来自权威源（机制 C）——Tauri 下首次读取可能要走一次 IPC
- * `cmd_list_tool_definitions`；调用方必须 await。
+ * 异步：定义来自权威源（机制 C）—— Tauri 下首次读取可能要走一次 IPC
+ * `cmd_list_tool_definitions`，调用方必须 await。
  */
 export async function resolveToolDefs(
   enableTools: boolean,

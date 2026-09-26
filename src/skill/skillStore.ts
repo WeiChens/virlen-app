@@ -5,10 +5,9 @@
  * SKILLs 文件夹路径固定为 Tauri appDataDir/skills。
  * Skill 的实际文件内容通过文件系统读取（只读）。
  *
- * ⚠️ 自 Step 2 起，**Rust 原生路径不再读这个注册表**：`agent/native_tools/skill/` 直接扫
- * `appDataDir/skills` 并解析 SKILL.md（CLI 没有 localStorage）。因此本文件的解析/扫盘逻辑
- * （`parseSkillMeta` / `scanAndRegisterSkills` / `getSkillFileTree`）与
- * `native_tools/skill/common.rs` 是**两份镜像**，改一边必须同步另一边（铁律 1）。
+ * ⚠️ 自 Step 2 起 Rust 原生路径不再读这个注册表（`native_tools/skill/` 直接扫 `appDataDir/skills`
+ * 解析 SKILL.md；CLI 没有 localStorage）：本文件的 `parseSkillMeta` / `scanAndRegisterSkills` /
+ * `getSkillFileTree` 与 `native_tools/skill/common.rs` 是两份镜像，改一边必须同步另一边（铁律 1）。
  */
 import StorageState from '@/utils/storageState'
 import type {
@@ -122,8 +121,7 @@ function parseSkillMeta(folderName: string, mdContent: string): SkillMeta {
 /**
  * 扫描 SKILLs 目录下所有子文件夹，注册其中包含 SKILL.md 的 skill
  *
- * ⚠️ 异常会向上抛出，由调用方（如 UI 层）捕获并展示给用户。
- * 只有单个目录不是合法 skill 时静默跳过（内层 catch）。
+ * 异常向上抛给调用方（UI 层）展示；仅「单个目录不是合法 skill」时静默跳过（内层 catch）。
  *
  * @returns 本次新注册的 skill 列表
  */
@@ -144,7 +142,7 @@ export async function scanAndRegisterSkills(): Promise<RegisteredSkill[]> {
       await stat(mdPath)
       const mdContent = await readTextFile(mdPath)
 
-      // ⚠️ 必须用 frontmatter 解析后的 name（归一化）做去重键
+      // 去重键用 frontmatter 解析后的 name（已归一化）
       const meta = parseSkillMeta(entry.name, mdContent)
 
       // 检查 name 是否已注册（主键唯一性检查）
@@ -169,8 +167,8 @@ export async function scanAndRegisterSkills(): Promise<RegisteredSkill[]> {
   }
 
   // ===== 清理：store 中有但磁盘目录已删除的 skill =====
-  // ⚠️ 用 s.path（注册时记录的实际路径）判断，不能用 meta.name 拼接
-  // 用户可能手动拷贝文件夹，目录名 ≠ SKILL.md 的 name
+  // 用 s.path（注册时的实际路径）判断，不能用 meta.name 拼：用户可能手动拷贝文件夹，
+  // 目录名 ≠ SKILL.md 的 name。
   const cleanupRemoved: string[] = []
   for (const s of skillStore.value.skills) {
     try {

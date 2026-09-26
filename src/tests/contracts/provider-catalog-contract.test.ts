@@ -88,8 +88,8 @@ describe('providerCatalog 的 fail-fast 语义', () => {
  * **从未水合过**的全新模块图来复现，并先向内校验它确实未水合（否则用例会真空通过）。
  */
 describe('启动顺序契约：目录未水合时 UI 模块仍可导入', () => {
-  // ⚠️ `vi.resetModules()` 只影响此后**动态导入**的模块图；本文件外层静态导入的那些实例
-  //    仍是 setup.ts 水合过的，所以这个用例不会污染同文件的其他用例。
+  // `vi.resetModules()` 只影响此后动态导入的模块图；本文件外层静态导入的那些实例
+  // 仍是 setup.ts 水合过的，所以这个用例不会污染同文件的其他用例。
   it('setupFlow 不得在模块顶层读快照', async () => {
     vi.resetModules()
 

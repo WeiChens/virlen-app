@@ -6,10 +6,8 @@
  * - 文档管理（上传、删除）
  * - 检索并将结果格式化注入到 Agent 上下文
  *
- * ⚠️ 配置读取策略：
- * RAG 配置（enabled / defaultKnowledgeBaseId / defaultTopK）直接从
- * settingsState (localStorage) 实时读取，不维护本地缓存副本。
- * 这样保证无论页面刷新还是设置页面修改，getConfig() 始终返回最新值。
+ * 配置读取策略：RAG 配置（enabled / defaultKnowledgeBaseId / defaultTopK）直接从
+ * settingsState 实时读取、不维护本地缓存副本，保证页面刷新或设置页修改后 getConfig() 始终最新。
  */
 
 import { knowledgeBaseStore } from '@/infrastructure/rag/knowledge-base-store'
@@ -258,10 +256,8 @@ class RagService {
 
   /** 构建注入到 LLM 的上下文文本
    *
-   * ⚠️ 此逻辑与 Rust 端 `rag_service.rs` 中的 `format_context()` 方法重复。
-   * Rust 端版本用于 UI 搜索测试（`query_knowledge_base` 命令），
-   * 前端版本用于引擎多知识库组合检索（`queryWithOptions`）。
-   * 修改时请同步更新两处。 */
+   * ⚠️ 与 Rust 端 `rag_service.rs::format_context()` 是两份实现（Rust 版用于 UI 搜索测试
+   * `query_knowledge_base`，前端版用于 `queryWithOptions` 多库组合检索），修改时需同步两处。 */
   private buildContextText(
     chunks: Array<{
       id: string

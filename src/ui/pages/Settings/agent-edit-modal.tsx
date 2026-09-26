@@ -120,7 +120,7 @@ function initialValues(agent: Agent | null): FormValues {
       modelId: '',
       defaultWorkspace: settingsState.value.defaultWorkspace,
       projectRulesFile: DEFAULT_PROJECT_RULES_FILE,
-      // ⚠️ 新建时工具在初始化 effect 里异步补齐（默认全选），基线快照会跟着刷新
+      // 新建时工具在初始化 effect 里异步补齐（默认全选），基线快照会跟着刷新
       allowTools: [],
       skills: [],
       temperature: 0.7,

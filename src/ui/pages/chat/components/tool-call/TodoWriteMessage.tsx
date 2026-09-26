@@ -1,9 +1,9 @@
 /**
  * TodoWriteMessage — todo_write 在消息流里的一行
  *
- * ⚠️ 刻意**不在消息流里展开清单内容**：用户层面任务只有一份，
- * 清单统一在标题栏的「任务清单」浮层里查看 / 编辑（见 components/todo/）。
- * 消息流只留一行摘要，保证「AI 编辑了流程」这件事可见、可回溯。
+ * 刻意不在消息流里展开清单内容：用户层面任务只有一份，清单统一在标题栏的「任务清单」
+ * 浮层里查看 / 编辑（见 components/todo/）。消息流只留一行摘要，保证「AI 编辑了流程」
+ * 这件事可见、可回溯。
  */
 import { t, tpl } from '@/ui/i18n'
 import { IToolCallMessage, ToolMessageProps } from './IToolCallMessage'

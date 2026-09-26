@@ -1,8 +1,8 @@
 /**
  * Agent 事件处理器 + 收尾逻辑
  *
- * ⚠️ 这里是 AgentEventType 契约在 service 层的唯一落点（铁律 2：事件契约四方一致）。
- * 新增/改名事件类型时务必四处同步：TS 类型 → TS 引擎 emit → Rust emit → 本文件分支。
+ * ⚠️ 这里是 AgentEventType 契约在 service 层的唯一落点（铁律 2）。
+ * 新增/改名事件类型时必须三处同步：TS 类型 → Rust emit → 本文件分支。
  */
 import {
   getSessionRuntime,
@@ -223,11 +223,10 @@ export function createEventHandler(
             pendingContent: '',
             streamingMessageId: null,
           })
-          // 本轮真正结束（非 paused）→ 落地用户在回复期间「已应用」的任务清单草稿。
-          // ⚠️ 只落地已应用的草稿：用户还在编辑（没点「应用变更」）的改动不算修改。
-          // ⚠️ paused 分支刻意不落地：本轮并未结束（等用户交互），草稿留到恢复后再合并。
-          // 放在下面整批落库之前：追加的 feedback 消息会一并被 TS 引擎路径落库。
-          // （落地结果不用单独广播：紧随其后的 onMessagesUpdate 已经带上这条新消息）
+          // 本轮真正结束（非 paused）→ 落地用户在回复期间「已应用」的任务清单草稿：
+          // 只落地已应用的（用户还在编辑的改动不算修改），paused 分支刻意不落地（本轮未结束，
+          // 草稿留到恢复后再合并）。放在下面整批落库之前，追加的 feedback 消息会一并落库；
+          // 落地结果不用单独广播 —— 紧随其后的 onMessagesUpdate 已带上这条新消息。
           flushTodoDraft(sessionId, 'stream_end')
           events?.onStreamEnd?.(sessionId)
           events?.onMessagesUpdate?.(sessionId)

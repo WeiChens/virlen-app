@@ -135,8 +135,8 @@ export function cachedTokensOf(
  * 计费时按两档单价分别算（`domain/pricing::computeCost`）。而 OpenAI 兼容 / Gemini
  * 把缓存命中算在 `prompt_tokens` 里 —— 直接照抄会让这部分被按输入价**重复计一次钱**。
  *
- * ⚠️ 没有 provider 归属信息时按 OpenAI 口径处理（更常见）；
- * 归一化后不变式：`prompt + cached + completion === total`。
+ * ⚠️ 无 provider 归属信息时按 OpenAI 口径处理（更常见）；归一化后不变式：
+ * `prompt + cached + completion === total`。
  */
 export function ledgerTokensOf(
   u: UsageLike,

@@ -71,13 +71,11 @@ function terminalTheme() {
 }
 
 /**
- * 终端字体栈 —— **必须是真等宽**（取法对齐桌面上那份 xterm-demo）。
+ * 终端字体栈 —— 必须是真等宽（取法对齐桌面上那份 xterm-demo）。
  *
- * ⚠️ 不能再用 `AlimamaAgileVF-Thin`（`<pre>` 版终端的字体）：它是**比例字体**
- * （实测 'W'=0.672em、'i'=0.147em、'1'=0.300em、空格 0.240em），而 xterm 会把每个
- * 字符塞进同一个固定宽的格子里（格子宽度按 'W' 这种最宽字形量出）→ 窄字符两侧被
- * 撑出大量空白，整行看起来「又宽又散」，列数也被算小、硬折行提前发生。
- * `<pre>` 用浏览器自然比例排版看不出问题，换成网格渲染（xterm）就暴露了。
+ * 不能用 `AlimamaAgileVF-Thin`（`<pre>` 版终端的字体）：它是比例字体（实测 'W'=0.672em、
+ * 'i'=0.147em、'1'=0.300em、空格 0.240em），而 xterm 把每个字符塞进同宽格子（按 'W' 量出），
+ * 窄字符两侧被撑空、列数算小、硬折行提前 —— 比例排版在 `<pre>` 下看不出，换成网格渲染就暴露。
  */
 const PTY_FONT =
   "'JetBrains Mono', 'Cascadia Code', Consolas, 'Courier New', monospace"
@@ -121,12 +119,11 @@ export function splitTrailingCr(text: string): [string, string] {
 }
 
 /**
- * 挂起尾部 `\r` 的**兜底写入延时**。
+ * 挂起尾部 `\r` 的兜底写入延时。
  *
- * ⚠️ 必须**大于**输出节流窗口（`NOTIFY_INTERVAL_MS`）：前端把 PTY 分片交给 xterm 是按
- * **节流后的通知**来的，相邻两次通知的最大间隔约等于一个节流窗口。若兜底延时 ≤ 该窗口，
- * 「先导 `\r`」可能在紧随其后的重绘到达**之前**就被写出去 → 又渲染出「光标闪到行首」的
- * 中间帧，等于把问题带回来。这里取「节流窗口 + 70ms」留足余量。
+ * 必须大于输出节流窗口（`NOTIFY_INTERVAL_MS`）：PTY 分片是按节流后的通知交给 xterm 的，
+ * 相邻两次通知的间隔约等于一个节流窗口；兜底延时 ≤ 该窗口时，「先导 `\r`」会赶在重绘
+ * 到达之前写出，又渲染出「光标闪到行首」的中间帧。故取「节流窗口 + 70ms」。
  */
 export const CR_HOLD_FLUSH_MS = NOTIFY_INTERVAL_MS + 70
 
@@ -352,21 +349,18 @@ export function XtermTerminal({
     /**
      * 把终端尺寸同步给后端伪控制台。
      *
-     * ⚠️ 两条硬约束（否则会出现「第一次运行多出很多空行」）：
-     *   1. **容器还没布局（宽高为 0）时绝不 resize** —— 此时 `fit()` 量不出尺寸，
-     *      而 `term.cols/rows` 还是 xterm 默认的 80×24；把它推给后端就是用**错误的行数**
-     *      去 `ResizePseudoConsole`，而 ConPTY 在「屏幕已有内容」后 resize 会整屏重绘、
-     *      并按新行数在内容下方补空行（实测：空行数 = 新行数 − 内容行数）。
-     *      「程序启动后第一次运行终端」正是容器还处于「隐藏/未布局」的那次。
-     *   2. **尺寸没变就不重复上报** —— ResizeObserver 会反复回调，重复 resize 同样会白刷空行。
+     * 两条硬约束（否则「第一次运行会多出很多空行」）：
+     *   1. 容器还没布局（宽高为 0）时绝不 resize —— `fit()` 量不出尺寸，`term.cols/rows`
+     *      还是默认 80×24，把它推给后端等于用错行数调 `ResizePseudoConsole`；ConPTY 在
+     *      「屏幕已有内容」后 resize 会整屏重绘并按新行数补空行（实测：空行数 = 新行数 − 内容行数）。
+     *   2. 尺寸没变就不重复上报 —— ResizeObserver 会反复回调，重复 resize 同样白刷空行。
      */
     /**
-     * 把尺寸发给后端伪控制台；**未命中会话时短重试**。
+     * 把尺寸发给后端伪控制台；未命中会话时短重试。
      *
-     * ⚠️ 为什么需要重试：前端 `fit()` 与后端 `create` 存在竞态。实测 fit 常早 ~0.9s 到达，
-     * 此时后端 PTY 会话还没注册、返回 false。若只发一次，尺寸就永远同步不过去，
-     * 伪控制台会停在 240×50 → 与真实尺寸不符 → ConPTY 每次重绘都补一堆空行。
-     * 后端同时把尺寸写进缓存（见 pty_session::pty_resize），双保险。
+     * 重试的原因：前端 `fit()` 与后端 `create` 有竞态（实测 fit 常早 ~0.9s 到达，此时
+     * PTY 会话还没注册、返回 false）；只发一次则尺寸永远同步不过去，伪控制台停在 240×50，
+     * ConPTY 每次重绘都补一堆空行。后端同时把尺寸写进缓存（`pty_session::pty_resize`）兜底。
      */
     function sendResize(cols: number, rows: number) {
       resizeGenRef.current += 1
@@ -414,13 +408,11 @@ export function XtermTerminal({
       invoke('pty_write', { toolCallId, data }).catch(() => { })
     })
 
-    // Ctrl+C / Cmd+C 智能复制：有选区 → 复制并拦下（\x03 不再发给伪控制台）；
-    // 无选区 → 放行，维持「Ctrl+C 发送 SIGINT 中断程序」的原语义。
-    // 这是 Windows Terminal / VS Code 终端的通用约定：复制与中断共用 Ctrl+C，
-    // 按「有无选区」区分，否则终端里永远无法用键盘复制（xterm 默认把 Ctrl+C
-    // 直接转成 \x03 发给 PTY，浏览器的 copy 事件被 preventDefault 吞掉）。
-    // ⚠️ 该 handler 对 keydown / keypress / keyup 都会被调用，只拦 keydown。
-    // 用 ev.code（物理键位）兼容非拉丁键盘布局（俄语等布局下 e.key 不是 'c'）。
+    // Ctrl+C / Cmd+C 智能复制：有选区 → 复制并拦下（\x03 不再发给伪控制台）；无选区 → 放行，
+    // 维持「Ctrl+C 发送 SIGINT」的原语义。这是 Windows Terminal / VS Code 的通用约定，
+    // 否则终端里永远无法用键盘复制（xterm 默认把 Ctrl+C 转成 \x03 发给 PTY）。
+    // handler 对 keydown / keypress / keyup 都会被调用，只拦 keydown；用 ev.code（物理键位）
+    // 兼容非拉丁键盘布局（俄语等布局下 e.key 不是 'c'）。
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== 'keydown') return true
       const isCopyCombo =
@@ -454,11 +446,10 @@ export function XtermTerminal({
      * 滚轮」（消费时它会 stopPropagation），即终端已到边界；此时只 `preventDefault()`
      * 取消「浏览器滚动链传导」，不碰 xterm 自己的 JS 滚动。
      *
-     * ⚠️ 两条红线：
-     *   1. **绝不能用捕获阶段**：xterm 的处理器一看到 `defaultPrevented === true` 就整体
-     *      退出（`_onMouseWheel` 首行），抢先拦会把终端滚轮彻底打死；
-     *   2. 输出一屏就装得下时（`baseY === 0`，没有回滚缓冲）**不拦** —— 终端本来就没东西
-     *      可滚，再拦就成了「滚轮死区」，交给消息列表更符合直觉。
+     * 两条红线：
+     *   1. 绝不能用捕获阶段：xterm 的处理器一看到 `defaultPrevented === true` 就整体退出
+     *      （`_onMouseWheel` 首行），抢先拦会把终端滚轮彻底打死；
+     *   2. 输出一屏装得下时（`baseY === 0`，无回滚缓冲）不拦 —— 否则成「滚轮死区」。
      */
     const onWheel = (ev: WheelEvent) => {
       if (ev.defaultPrevented) return
@@ -499,15 +490,13 @@ export function XtermTerminal({
   /**
    * 字号跟随「设置 → 通用 → 字体大小」。
    *
-   * ⚠️ 为什么用 `reaction` 而不是把字号加进创建 effect 的依赖：
-   *   终端实例**只随 `toolCallId` 重建**（重建会丢 scrollback / 滚动位置 / 已输入内容），
-   *   而字号是**命令式**写在实例上的（`term.options.fontSize`），因此监听 observable、
-   *   原地改实例选项即可 —— 即改即生效，不重建终端。
+   * 用 `reaction` 而不是把字号加进创建 effect 的依赖：终端实例只随 `toolCallId` 重建
+   * （重建会丢 scrollback / 滚动位置 / 已输入内容），而字号是命令式写在实例上的
+   * （`term.options.fontSize`）—— 监听 observable 原地改选项即可，不重建终端。
    *
-   * ⚠️ 字号变 → 字符格宽高变 → 必须重算列×行并同步给后端伪控制台，否则折行位置与
-   *   用户看到的终端不一致（容器高度固定时行数也会变）。直接复用 `syncSize()`：
-   *   它自带「容器未布局不上报」「尺寸未变不上报」两道保护，并按 `syncResize` 决定
-   *   是否真的 `pty_resize`（全屏双实例时只允许一份上报）。
+   * 字号变 → 字符格宽高变 → 必须重算列×行并同步给后端伪控制台，否则折行位置与用户看到
+   * 的不一致（容器高度固定时行数也会变）。直接复用 `syncSize()`：它自带「未布局不上报」
+   * 「尺寸未变不上报」两道保护，并按 `syncResize` 决定是否真的 `pty_resize`。
    */
   useEffect(() => {
     const applyFontPx = () => {

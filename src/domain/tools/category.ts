@@ -3,7 +3,7 @@
  *
  * 将工具按功能分组，方便用户在 Agent 编辑器中按组批量选择/取消。
  *
- * ⚠️ 分类 id 与工具实现目录一一对应（`src/infrastructure/tools/<目录>/`）：
+ * 分类 id 与工具实现目录一一对应（`src/infrastructure/tools/<目录>/`）：
  *   file         → tools/file/
  *   search       → tools/search/
  *   execute      → tools/execute/

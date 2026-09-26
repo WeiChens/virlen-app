@@ -16,7 +16,7 @@
  *   ② 否则回退形状判定（大小写不敏感）：剥 BOM + trim 后，`<!doctype html…` / `<html…`
  *      开头（后接标签边界）且 `</html>` 结尾。
  *
- * ⚠️ fixture 里的 `contentType: null` 表示「响应头未提供」；两侧都按空串处理。
+ * fixture 里的 `contentType: null` 表示「响应头未提供」；两侧都按空串处理。
  */
 import { describe, it, expect } from 'vitest'
 import GOLDEN from '@/tests/fixtures/web-html-detect.golden.json'

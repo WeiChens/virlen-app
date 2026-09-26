@@ -41,9 +41,9 @@ export function hasPromptTexts(): boolean {
 /**
  * 读取一条提示词（同步）。
  *
- * ⚠️ 未水合时**抛错**而不是返回空串：空提示词会**静默**改变模型行为（丢掉工具规范 /
- * 验证要求，模型照样能跑，只是变笨），而「启动少接了一步线」应当立刻炸出来。
- * 取舍与 `toolRegistry` 的「加载器未注入」一致。
+ * ⚠️ 未水合时抛错而不是返回空串：空提示词会静默改变模型行为（丢掉工具规范 / 验证要求，
+ * 模型照样能跑、只是变笨），而「启动少接了一步线」应当立刻炸出来。取舍与 `toolRegistry`
+ * 的「加载器未注入」一致。
  */
 export function promptText(key: PromptKey): string {
   if (!snapshot) {

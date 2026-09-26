@@ -3,7 +3,7 @@
  *
  * 设置侧栏「存储」用。柱体由「矩形 + 上下两个椭圆」拼成，
  * 再用 mask 挖掉两条窄带，形成「多层盘片」的数据库观感。
- * ⚠️ mask 的 id 是固定的：同页面渲染多个实例时它们共用同一份 mask（形状完全一致，结果不变）。
+ * mask 的 id 是固定的：同页面渲染多个实例时它们共用同一份 mask（形状完全一致，结果不变）。
  */
 export default ({ fill, className }: { fill?: string; className?: string }) => {
   return (

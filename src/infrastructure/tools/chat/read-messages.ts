@@ -12,8 +12,8 @@
  *   - 单条正文 ≤ 4000 字符、单次窗口 ≤ 21 条、单次输出 ≤ 30000 字符。
  *
  * ⚠️ 已原生化（Step 2）：Rust 引擎走 `native_tools/chat/read_messages.rs`（默认路径），
- * 本文件只服务 **TS 引擎**（回退路径）；与 `tools/chat/common.ts` ↔
- * `native_tools/chat/common.rs` 是两份镜像，改一边要同步另一边（铁律 1）。
+ * 本文件是回退路径；与 `tools/chat/common.ts` ↔ `native_tools/chat/common.rs` 是两份镜像，
+ * 改一边要同步另一边（铁律 1）。
  */
 import { toolRegistry } from '@/domain/tools'
 import type { ToolContext, ToolExecutor, ToolResult } from '@/domain/tools/types'

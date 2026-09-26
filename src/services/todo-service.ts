@@ -29,9 +29,9 @@
  * - AI 回复中用户点「应用变更」→ 只 `markTodoDraftCommitted()`，等轮次边界 / 本轮结束再落地
  * - 兜底：本轮结束（`stream_end` 非 paused）/ 用户取消 → `flushTodoDraft()`
  *   （纯文本回复的轮次没有「下一次请求」，只能靠这个兜底）
- * - ⚠️ **paused（等用户交互弹窗）不落地**：本轮并未真正结束，草稿留到恢复后合并
+ * - paused（等用户交互弹窗）不落地：本轮并未真正结束，草稿留到恢复后合并
  *
- * ⚠️ 只落地「已应用」的草稿：用户还在编辑（没点「应用变更」）的改动不算修改。
+ * 只落地「已应用」的草稿：用户还在编辑（没点「应用变更」）的改动不算修改。
  */
 import { invoke } from '@tauri-apps/api/core'
 import type { Message } from '@/types'
@@ -67,9 +67,8 @@ export function getEffectiveTodos(sessionId: string): TodoItem[] {
 /**
  * 构造并写入一条「用户更新了任务清单」的 feedback 消息。
  *
- * ⚠️ Tauri 下 `persistMessagesIfNeeded()` 有 `isTauriAvailable()` 守卫会跳过落库
- * （它假设消息由引擎内部直落），所以这里必须显式补落库 ——
- * 幂等：`messages.id` 是主键，`cmd_append_messages` 是 upsert。
+ * Tauri 下 `persistMessagesIfNeeded()` 有 `isTauriAvailable()` 守卫会跳过落库（它假设消息由
+ * 引擎内部直落），所以这里必须显式补落库；幂等：`messages.id` 是主键，`cmd_append_messages` 是 upsert。
  */
 function appendTodoFeedbackMessage(
   sessionId: string,

@@ -7,8 +7,8 @@
  * AI 用它拿到时序 + 消息 id（或按关键词定位），再用 read_messages 读取正文。
  *
  * ⚠️ 已原生化（Step 2）：Rust 引擎走 `native_tools/chat/list_messages.rs`（默认路径），
- * 本文件只服务 **TS 引擎**（回退路径）；文本格式化 / 上限 / 预算在
- * `tools/chat/common.ts` ↔ `native_tools/chat/common.rs` 两份镜像，改一边要同步另一边（铁律 1）。
+ * 本文件是回退路径；文本格式化 / 上限 / 预算在 `tools/chat/common.ts` ↔
+ * `native_tools/chat/common.rs` 两份镜像，改一边要同步另一边（铁律 1）。
  */
 import { toolRegistry } from '@/domain/tools'
 import type { ToolContext, ToolExecutor, ToolResult } from '@/domain/tools/types'

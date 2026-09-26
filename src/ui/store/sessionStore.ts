@@ -5,7 +5,7 @@
  *  - 持有 mobx observable（sessions 列表），供 UI 响应式渲染
  *  - 提供 CRUD 方法，持久化委托给 SessionRepo
  *
- * ⚠️ 不属于此 Store 的职责：
+ * 不属于此 Store 的职责：
  *  - 业务流程编排（如创建会话、发送消息） → Application Service
  *  - IndexedDB diff / debounce → SessionRepo
  */
@@ -71,11 +71,8 @@ class SessionStore {
         this.value.messagePaging = {}
         this.value.userMessageIndex = {}
       })
-      // ⚠️ 必须同步更新 _lastSaved 基线，否则 persist() 的 debounced saveDiff
-      // 传过去的 oldSessions=[]，导致任何删除操作都无法被识别（diff 认为没有要删的东西）
-      // ⚠️ 且必须是「快照」（浅拷贝），不能是 store 自己的活对象：否则对已有会话的
-      // 原地修改（如直接改 `session.title`）在 diff 时
-      // 会与基线指向同一对象，变化被吞掉。
+      // 基线必须同步更新且是浅拷贝快照：否则 debounce 的 saveDiff 拿到空列表或同一
+      // 引用，删除与原位修改都会被 diff 吞掉。
       this._lastSaved = sessions.map((s) => ({ ...s }))
       track('session.load', {
         session_count: sessions.length,
@@ -452,8 +449,8 @@ class SessionStore {
   /**
    * 更新会话部分字段
    *
-   * ⚠️ 不刷新 `updatedAt`：会话时间只由「用户发送消息」刷新（见 touchSession）。
-   * 改标题 / 切模型 / 调推理强度 / 置顶都属于元数据编辑，不是用户发言。
+   * 不刷新 `updatedAt`：会话时间只由「用户发送消息」刷新（见 touchSession），改标题 /
+   * 切模型 / 调推理强度 / 置顶都是元数据编辑。
    */
   updateSession(
     id: string,
@@ -520,9 +517,8 @@ class SessionStore {
     this.value.sessions = sessions
     this.dropMessagePaging([id])
     this.persist()
-    // ⚠️ 删除不能只靠 persist() 的 800ms 合并：删除是立即生效且不可撤销的动作，
-    // 合并窗口内任何一次其它变更都可能把它吞掉（会话+消息重启后复活）。
-    // 这里再直接落库一次（SQLite 删除是幂等的）。
+    // 删除不能只靠 persist() 的 800ms 合并：窗口内的其它变更会把它吞掉（会话重启后复活），
+    // 故这里再直接落库一次（SQLite 删除幂等）。
     void this.repo.deleteSessions([id])
     track('session.delete', {
       session_id: hashText(id),
@@ -533,8 +529,8 @@ class SessionStore {
   }
 
   /**
-   * 批量删除会话（只触发一次持久化）
-   * ⚠️ 不要在循环中逐个调用 deleteSession，会导致 debounce 覆盖丢失数据
+   * 批量删除会话（只触发一次持久化）。不要在循环里逐个调用 deleteSession ——
+   * debounce 会互相覆盖导致丢数据。
    */
   deleteSessions(ids: string[]): number {
     if (ids.length === 0) return 0

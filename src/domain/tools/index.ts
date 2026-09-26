@@ -10,8 +10,8 @@
  *   模型既不会看到没有实现的工具，也不会漏掉契约里新加的工具；
  * - 所有读取接口都是**异步**的（定义可能在首次读取时才从 Rust / 内嵌 JSON 载入）。
  *
- * ⚠️ 惰性描述（`ResolvableString`）机制随定义一起移出前端：平台相关描述现在由契约的
- * 三平台变体承载（`execute_command` / `execute_script`），不需要运行时求值。
+ * 惰性描述（`ResolvableString`）机制已随定义移出前端：平台相关描述现由契约的三平台变体
+ * 承载（`execute_command` / `execute_script`），不需要运行时求值。
  */
 import { ToolRegistry } from '../ports/ToolRegistry'
 import type {

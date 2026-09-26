@@ -353,9 +353,9 @@ function ChatView() {
 
   /**
    * 稳定的 setText 回调。
-   * ⚠️ 不要写成内联箭头（`setText={(t) => ref.current?.setText(t)}`）：
-   * message-list 会把它包进 useCallback 作为 MessageBubble 的 onEdit props，
-   * 引用一变就绕过了 memo，流式期间所有可见气泡都会跟着重渲染。
+   * 不要写成内联箭头（`setText={(t) => ref.current?.setText(t)}`）：message-list 会把它
+   * 包进 useCallback 作为 MessageBubble 的 onEdit props，引用一变就绕过 memo，
+   * 流式期间所有可见气泡都会跟着重渲染。
    */
   const handleSetText = useCallback((text: string) => {
     chatInputRef.current?.setText(text)

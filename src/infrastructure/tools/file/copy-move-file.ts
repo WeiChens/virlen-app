@@ -30,8 +30,8 @@ toolRegistry.register(
     )
     const mode = (args.mode as string) || 'move'
 
-    // ⚠️ 模型侧固定英文（P4b/D2-A）；UI 侧走 uiData 由组件按界面语言渲染。
-    // 文案与 Rust `native_tools/file/copy_move_file.rs` 逐字一致（铁律 1）。
+    // ⚠️ 模型侧固定英文（P4b/D2-A）；UI 侧走 uiData。文案与 Rust
+    // `native_tools/file/copy_move_file.rs` 逐字一致（铁律 1）。
     try {
       // 检查源路径是否存在
       const exists = await tauriFs.exists(sourcePath)

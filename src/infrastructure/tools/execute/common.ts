@@ -190,7 +190,7 @@ function unwrapShellWrapper(cmdStr: string, depth: number = 5): string {
 
 /**
  * 提取命令中所有被 &&、||、; 分隔的命令名（去重）
- * ⚠️ 引号内的分隔符不切分（如 `echo "a;b"` 不会把 `b` 当命令名）
+ * 引号内的分隔符不切分（如 `echo "a;b"` 不会把 `b` 当命令名）
  */
 export function extractAllCommandNames(raw: string): string[] {
   const segments = splitCommandRespectingQuotes(raw, ['&&', '||', ';'])
@@ -327,8 +327,7 @@ export function getRiskInfo(risk: string): { label: string; hint: string } {
 
 /**
  * 申请绕过沙盒（`sandbox:"off"`）时追加到审批弹窗的警告（命令 / 脚本共用；中文即 i18n key）。
- *
- * ⚠️ 文案与 Rust 侧 `classify.rs::SANDBOX_BYPASS_HINT` 逐字一致（铁律 1）。
+ * ⚠️ 与 Rust `classify.rs::SANDBOX_BYPASS_HINT` 逐字一致（铁律 1）。
  */
 export const SANDBOX_BYPASS_HINT =
   '⚠️ 该命令申请「不使用沙盒」执行：不受写隔离与受限令牌限制，可写入任意路径。' +
@@ -337,11 +336,10 @@ export const SANDBOX_BYPASS_HINT =
 /**
  * 命中「忽略沙盒命令」规则时追加到审批弹窗的警告（命令 / 脚本共用；中文即 i18n key）。
  *
- * 与 `SANDBOX_BYPASS_HINT` 的区别：AI 并未申请脱壳，是**用户自己的规则**把这条命令
- * 改成了无沙盒执行 —— 用户看到时要能明白「为什么会绕沙盒」（否则会被当成失控）。
- * `$__rule__` 为规则名（`tpl` 占位符）。
+ * 与 `SANDBOX_BYPASS_HINT` 的区别：AI 并未申请脱壳，是用户自己的规则把这条命令改成了
+ * 无沙盒执行 —— 用户需要看懂「为什么会绕沙盒」（否则会被当成失控）。`$__rule__` 为规则名。
  *
- * ⚠️ 文案与 Rust 侧 `rules.rs::with_rule_hint` 逐字一致（铁律 1）。
+ * ⚠️ 与 Rust `rules.rs::with_rule_hint` 逐字一致（铁律 1）。
  */
 export const SANDBOX_RULE_BYPASS_HINT =
   '⚠️ 该命令命中「忽略沙盒命令」规则「$__rule__」，将以「不使用沙盒」方式执行：' +
@@ -437,10 +435,9 @@ function installListener(): void {
  * - \x1b]... BEL/ST → OSC（如改窗口标题），整条忽略
  * - 其他 \x1b[... 序列（颜色、样式、ECH 擦除字符等）→ 忽略
  *
- * ⚠️ 必须**完整**吞掉转义序列：旧实现只认 `ESC [` 且只吃 0-9;，
- * `\x1b[?25l` 会把 "25l" 漏成正文 —— 而 PTY（ConPTY）路径下这类序列极其密集。
- * 本函数与 Rust 侧 `native_tools/execute/common.rs::process_terminal_output`
- * **逐条对齐**（铁律 1：双引擎语义同步），改一边必须同步改另一边。
+ * ⚠️ 必须完整吞掉转义序列：旧实现只认 `ESC [` 且只吃 0-9;，`\x1b[?25l` 会把 "25l" 漏成
+ * 正文（PTY / ConPTY 路径下这类序列极密集）。本函数与 Rust 侧
+ * `native_tools/execute/common.rs::process_terminal_output` 逐条对齐（铁律 1），改一边必须同步另一边。
  */
 export function processTerminalOutput(raw: string): string {
   if (!raw) return ''
@@ -667,8 +664,8 @@ async function tryRunCommandNativePty(
     invoke('agent_kill_command', { toolCallId }).catch(() => {})
   }
   // 注册带 kill 的 entry；pty=true → 运行中即用 xterm 渲染。
-  // ⚠️ register 会**替换**同 id 的 entry → 之前 `ctx.write` 写下的「> cmd」表头被清掉，
-  //    与 Rust 引擎路径观感一致（终端块本就单独渲染 `$ cmd` 那一行）。
+  // register 会替换同 id 的 entry（清掉先前 `ctx.write` 写下的「> cmd」表头），
+  // 与 Rust 引擎路径观感一致（终端块本就单独渲染 `$ cmd` 那一行）。
   toolOutputStore.register(toolCallId, {
     toolName,
     output: '',
@@ -850,9 +847,8 @@ fi`,
 
       const timer = setTimeout(async () => {
         killedByTimeout = true
-        // ⚠️ 必须先等 kill 真正执行完（Rust 侧递归枚举后代逐个 taskkill），
-        // 再等 close 事件（进程树确实退出）。不能发完信号立刻 resolve，
-        // 否则工具返回「已终止」但 node/npm/python 等子进程还活着。
+        // 必须先等 kill 真正执行完（Rust 侧递归枚举后代逐个 taskkill），再等 close 事件,
+        // 不能发完信号立刻 resolve —— 否则工具返回「已终止」但 node/npm/python 子进程还活着。
         try {
           await killProcessTree(shellName, child)
         } catch {
@@ -880,10 +876,9 @@ fi`,
     })
     output.exitCode = exitCode
 
-    // ⚠️ 以下 5 条是**模型侧**文案：固定英文，与 Rust 侧 runner
+    // ⚠️ 以下 5 条是模型侧文案：固定英文，与 Rust 侧 runner
     // （native_tools/execute/common/runner/mod.rs）逐字对齐（铁律 1）。
-    // 不进 i18n —— 否则默认（Rust）与回退（TS）引擎会产出不同文本；
-    // 界面语言由 UI 侧从结构化 uiData / 本地化文案重建（D2-A 的 X 解法）。
+    // 不进 i18n —— 否则两侧引擎会产出不同文本；界面语言由 UI 从结构化 uiData 重建（D2-A）。
     let result = ''
     if (killedByUser) {
       result += 'Command cancelled by the user\n'

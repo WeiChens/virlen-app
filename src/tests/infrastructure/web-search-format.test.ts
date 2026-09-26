@@ -11,8 +11,8 @@
  *   - Rust：`native_tools/web/common.rs::tests::golden_matches_ts_implementation`
  * 任一侧改了分隔符 / 缩进 / 字段顺序 / 截断文案，两侧测试都会失败。
  *
- * ⚠️ fixture 里的 `expected` 由 TS 实现生成（生成脚本已删），Rust 侧负责「跟随」。
- *   若确实要改格式，请**先改 TS、再重新生成 expected、最后让 Rust 对齐**（铁律 1 的方向性）。
+ * ⚠️ fixture 里的 `expected` 由 TS 实现生成（生成脚本已删），Rust 侧负责跟随。若确实要改格式，
+ * 请先改 TS、再重新生成 expected、最后让 Rust 对齐（铁律 1 的方向性）。
  */
 import { describe, it, expect } from 'vitest'
 import GOLDEN from '@/tests/fixtures/web-search-format.golden.json'

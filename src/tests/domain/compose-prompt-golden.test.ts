@@ -14,8 +14,8 @@
  *   `UPDATE_GOLDEN=1 cargo test --lib golden_system_prompt`（在 src-tauri 下运行）
  *   然后跑本测试确认两侧一致。
  *
- * ⚠️ 行尾：md 资源在工作区是 CRLF（Windows）/ LF（Linux CI），比对前统一归一化成 LF，
- *    比的是「文本内容」而不是行尾字节。
+ * 行尾：md 资源在工作区是 CRLF（Windows）/ LF（Linux CI），比对前统一归一化成 LF，
+ * 比的是「文本内容」而不是行尾字节。
  */
 import { describe, expect, it } from 'vitest'
 import GOLDEN_RAW from '@/tests/fixtures/system-prompt.golden.txt?raw'
@@ -25,7 +25,7 @@ import {
   composeSystemPrompt,
 } from '@/domain/agent/compose-prompt'
 
-// ⚠️ 与 Rust 侧 `prompts::assemble::tests` 的常量**逐字一致**（否则比对的是别的东西）
+// ⚠️ 与 Rust 侧 `prompts::assemble::tests` 的常量逐字一致（否则比对的是别的东西）
 const FIXTURE_FILE_NAME = 'AGENTS.md'
 const FIXTURE_RULES_CONTENT =
   '# AGENTS.md — 示例项目\n\n- 规则 A：缩进用 2 空格\n- 规则 B：提交信息用英文\n'

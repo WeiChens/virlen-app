@@ -29,8 +29,8 @@ export interface SecurityService {
    *
    * 命中 → 该命令**免除「沙盒脱壳」审批**并**强制以「不使用沙盒」方式执行**
    * （即 AI 不必显式传 `sandbox:"off"`）。
-   * ⚠️ 匹配实现只有一份（`@/domain/security/sandbox-ignore-rules`）——Rust 原生路径
-   * 也经桥问到同一个函数，不重实现（规则含用户自写的 `js` 函数）。
+   * ⚠️ TS 侧匹配实现只有一份（`@/domain/security/sandbox-ignore-rules`）—— 回退路径与
+   * 设置页「测试」都走它，不重实现（规则含用户自写的 `js` 函数）。
    */
   matchSandboxIgnoreRule(command: string): Promise<SandboxIgnoreRule | null>
 

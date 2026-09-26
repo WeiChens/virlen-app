@@ -46,8 +46,8 @@ const PER_TOKENS = 1_000_000
 /**
  * 固定汇率：1 USD = 7.2 CNY。
  *
- * ⚠️ 内置价目表（`DEFAULT_MODEL_PRICES`）**固定按 USD 存储**，切到人民币时用它折算，
- * 不联网、不随时间更新 —— 只求量级正确；用户可在单价页覆写为实际签约价。
+ * 内置价目表（`DEFAULT_MODEL_PRICES`）固定按 USD 存储，切人民币时按此折算，不联网、
+ * 不随时间更新（只求量级正确）；用户可在单价页覆写为实际签约价。
  */
 export const USD_TO_CNY = 7.2
 
@@ -88,9 +88,8 @@ export interface DefaultPriceEntry {
 /**
  * 内置价目表（**预估值，务必提示用户核对**）。
  *
- * ⚠️ 这些数字来自公开定价的粗略整理，服务商会随时调价、也可能按量阶梯计价，
- * 因此本表只用于「新用户开箱时有个大致量级」，UI 必须醒目提示
- * 「费用为按你填写的单价估算，非账单」。用户可在设置里覆盖任意模型。
+ * 这些数字来自公开定价的粗略整理，服务商随时调价或按量阶梯计价，故本表只用于「开箱时
+ * 有个大致量级」；UI 必须醒目提示「费用为按你填写的单价估算，非账单」，用户可覆盖任意模型。
  *
  * 币种统一为 USD / 1M tokens（DeepSeek 官方定价为人民币，此处按量级折算）。
  * 切到人民币时按 `USD_TO_CNY` 折算（见 `convertFromUsd`）；用户自填单价按其币种原样使用。
@@ -120,7 +119,7 @@ export const DEFAULT_MODEL_PRICES: DefaultPriceEntry[] = [
     price: { input: 2, output: 12, cachedInput: 0.2 },
   },
   {
-    // ⚠️ 口径冲突：OpenRouter 标 $2/$10，而财联社 / 钛媒体等报道为 $5/$30；此处取 OpenRouter。
+    // 口径冲突：OpenRouter 标 $2/$10，财联社 / 钛媒体报道 $5/$30；此处取 OpenRouter。
     match: ['gpt-5.6-sol', 'gpt-sol'],
     label: 'GPT-5.6 Sol',
     price: { input: 2, output: 10, cachedInput: 0.2 },
@@ -167,7 +166,7 @@ export const DEFAULT_MODEL_PRICES: DefaultPriceEntry[] = [
     price: { input: 1.1, output: 4.4, cachedInput: 0.275 },
   },
   // ---- DeepSeek（当前代，官方 api-docs.deepseek.com/quick_start/pricing）----
-  // ⚠️ 官方分峰值 / 非峰值（非峰值 = 峰值的一半，覆盖周末与中国法定节假日）；此处取**非峰值**。
+  // 官方分峰值 / 非峰值（非峰值 = 峰值一半，覆盖周末与中国法定节假日）；此处取非峰值。
   {
     match: ['deepseek-v4-pro', 'deepseek-pro'],
     label: 'DeepSeek V4 Pro',
@@ -212,8 +211,8 @@ export const DEFAULT_MODEL_PRICES: DefaultPriceEntry[] = [
   },
   // ---- Anthropic（上一代，保留兼容）----
   {
-    // ⚠️ 该条会连带命中 claude-opus-4.5 ~ 4.8（官方现价 $5/$25、缓存 $0.50），
-    //    此处沿用旧价 $15/$75（Claude 3 Opus 档）；如需精确请在单价页覆盖。
+    // 该条连带命中 claude-opus-4.5 ~ 4.8（官方 $5/$25、缓存 $0.50），此处沿用旧价
+    // $15/$75（Claude 3 Opus 档）；如需精确请在单价页覆盖。
     match: ['claude-opus-4', 'claude-3-opus'],
     label: 'Claude Opus',
     price: { input: 15, output: 75, cachedInput: 1.5 },

@@ -6,8 +6,8 @@
  * 2. 一次运行结束时通知 Rust（由 `chat/event-handler.ts::finishWorking` 调用），
  *    由 Rust 决定是否打扰用户、走哪条提醒通道。
  *
- * ⚠️ 「关闭窗口 = 隐藏到托盘」不在这里实现：Rust 拦 `WindowEvent::CloseRequested`
- * 直接 `hide()`，所以前端标题栏关闭按钮一行都不用改。
+ * 「关闭窗口 = 隐藏到托盘」不在这里：Rust 拦 `WindowEvent::CloseRequested` 直接 `hide()`，
+ * 前端标题栏关闭按钮无需改动。
  */
 import { reaction } from 'mobx'
 import { invoke } from '@tauri-apps/api/core'
@@ -67,8 +67,7 @@ function isViewingSession(sessionId?: string | null): boolean {
  * 托盘**原生菜单 / tooltip**的文案。
  *
  * ⚠️ 托盘菜单是原生菜单，Rust 侧没有语言资源 —— i18n 必须由前端推（铁律 7）。
- * 带数量的文案在这里保留 `$__count__` 占位符（与 `tpl()` 同一约定），由 Rust 在数量变化时替换：
- * `t()` 只翻译、不替换占位符，所以拿到的是模板而不是成品文案。
+ * 带数量的文案保留 `$__count__` 占位符（同 `tpl()` 约定）由 Rust 替换：`t()` 只翻译、不替换。
  */
 function trayLabels() {
   return {
@@ -86,9 +85,8 @@ function trayLabels() {
 /**
  * 推送设置 + 托盘文案。
  *
- * ⚠️ 必须先 `await ensureLanguageReady()`：切语言的“生效”在 `useLanguage()` 的
- * reaction 里异步完成，而本 reaction 注册更早（`main.ts` 的 init 早于 App 渲染）
- * ⇒ 不等待就一定拿到**旧语言**，托盘菜单会滞后一次。
+ * 必须先 `await ensureLanguageReady()`：切语言的生效在 `useLanguage()` 的 reaction 里异步完成，
+ * 而本 reaction 注册更早（`main.ts` 早于 App 渲染），不等待就会推旧语言（托盘菜单滞后一次）。
  */
 async function pushSettings(): Promise<void> {
   await ensureLanguageReady()
@@ -165,10 +163,8 @@ export function initTrayService(): void {
 
   // ④ 托盘左键单击 → 切到「最早那条未读」的会话（Rust 侧已完成 show + focus）
   //
-  // ⚠️ 这里**只改 store**，不在这里做懒加载 / 组件状态同步：那两件事必须落在
-  // `chat-view` 的会话切换逻辑里（React 镜像 state 只有组件能改）。
-  // 组件侧靠「外部入口兜底 effect」接住（见 `chat-view.tsx` 中 `handledSessionRef` 一段）——
-  // 否则会出现「跳到该会话但消息列表是空的」。
+  // 这里只改 store：懒加载与组件状态同步必须落在 `chat-view` 的会话切换逻辑里（React
+  // 镜像 state 只有组件能改，见 `handledSessionRef`），否则消息列表会是空的。
   void listen<{ sessionId: string }>(EVENT_ACTIVATE, (event) => {
     const sessionId = event.payload?.sessionId
     if (!sessionId || !sessionStore.getSession(sessionId)) return

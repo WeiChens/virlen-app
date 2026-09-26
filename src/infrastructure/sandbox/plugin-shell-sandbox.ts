@@ -161,9 +161,8 @@ export class PluginShellSandbox implements SandboxPort {
 
       const timer = setTimeout(async () => {
         killedByTimeout = true
-        // ⚠️ 必须先等 kill 真正执行完（Rust 侧递归枚举后代逐个 taskkill），
-        // 再等 close 事件（进程树确实退出）。不能发完信号立刻 resolve，
-        // 否则工具返回「已超时」但子进程还活着。
+        // 必须先等 kill 真正执行完（Rust 侧递归枚举后代逐个 taskkill），再等 close 事件；
+        // 不能发完信号立刻 resolve —— 否则工具返回「已超时」但子进程还活着。
         try {
           await killProcessTree(shell, child)
         } catch {

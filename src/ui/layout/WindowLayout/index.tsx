@@ -90,7 +90,7 @@ const WindowLayout = ({ children, padding = 0, className }: Props) => {
 
   async function handleUpdateForceCancel() {
     // 强制更新被取消 → 真正退出应用。
-    // ⚠️ 不能再用 close()：托盘开启后关闭窗口只是隐藏（AI 继续在后台跑），
+    // 不能再用 close()：托盘开启后关闭窗口只是隐藏（AI 继续在后台跑），
     // 那样更新包永远装不上 —— 所以走托盘模块的退出入口。
     try {
       await invoke('tray_quit')

@@ -12,7 +12,7 @@
  * 另有一类「原位」操作：move（目录树里拖到别的目录下）。它与 paste 的区别是
  * 走 rename —— 原子、不产生副本、同名直接算失败。
  *
- * ⚠️ 铁律 6：所有**写**操作（粘贴目标、重命名、删除）必须先过
+ * ⚠️ 铁律 6：所有写操作（粘贴目标、重命名、删除）必须先过
  *    `securityService.resolveSafePath(..., 'w')`，禁止绕过。
  */
 import * as tauriFs from '@tauri-apps/plugin-fs'
@@ -39,7 +39,7 @@ export interface FileOpResult {
 
 /**
  * 同名冲突时自动添加的后缀（与资源管理器的「 - 副本」一致）。
- * ⚠️ 它会成为磁盘上的文件名，故不进 i18n（同 ATTACHED_FILE_LABEL 的处理）。
+ * 它会成为磁盘上的文件名，故不进 i18n（同 ATTACHED_FILE_LABEL 的处理）。
  */
 const DUPLICATE_SUFFIX = ' - 副本'
 

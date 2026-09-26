@@ -5,7 +5,7 @@
  *  - 编排安全相关业务流程（工作区解析、权限校验、默认安全配置初始化）
  *  - 协调 Domain（securityPort）与 Infrastructure（securityRepo）
  *
- * ⚠️ 不直接访问 UI Store（securityStore），通过 Repo 读写持久化数据。
+ * 不直接访问 UI Store（securityStore），通过 Repo 读写持久化数据。
  */
 import {
   sessionStore,
@@ -38,10 +38,9 @@ class SecurityServiceImpl implements SecurityService {
    *
    * 命中 → 该命令**免除「沙盒脱壳」审批**且**强制以「不使用沙盒」方式执行**。
    *
-   * ⚠️ 消费方只剩**没有 Rust 可用**的路径：TS 引擎（用户关闭 Rust 引擎 / 浏览器 dev）的
-   * `tools/execute/*.ts`、设置页「测试」按钮、保存期 `compileSandboxRule`。
-   * 默认引擎（Rust）与 CLI 的判定在 `src-tauri/virlen-core/src/security/`（由同一份 golden 契约收敛）。
-   * 匹配异常一律返回 null（不脱壳），由匹配器内部保证。
+   * ⚠️ 消费方只剩没有 Rust 可用的路径：`tools/execute/*.ts`、设置页「测试」按钮、保存期的
+   * `compileSandboxRule`；Rust 与 CLI 的判定在 `src-tauri/virlen-core/src/security/`
+   * （同一份 golden 契约收敛）。匹配异常一律返回 null（不脱壳），由匹配器内部保证。
    */
   async matchSandboxIgnoreRule(command: string): Promise<SandboxIgnoreRule | null> {
     if (!command || !command.trim()) return null

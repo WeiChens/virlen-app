@@ -37,8 +37,7 @@ toolRegistry.register(
       const lineCount = content.replace(/\r\n/g, '\n').split('\n').length
       const size = formatSize(new TextEncoder().encode(content).length)
 
-      // ⚠️ 模型侧固定英文（P4b/D2-A）。
-      // 文案与 Rust `native_tools/file/write_file.rs` 一致（铁律 1）。
+      // ⚠️ 模型侧固定英文（P4b/D2-A）。文案与 Rust `native_tools/file/write_file.rs` 一致（铁律 1）。
       const returnContent = existed
         ? `✅ File overwritten (${size}): ${fullPath}`
         : `✅ File created (${size}): ${fullPath}`

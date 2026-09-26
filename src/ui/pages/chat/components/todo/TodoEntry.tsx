@@ -125,8 +125,8 @@ export const TodoEntry = observer(function TodoEntry({ sessionId }: Props) {
   const show = shouldShowTodoEntry(session?.messages || [])
 
   // 入口被隐藏期间把 open 复位：否则下次它自己又弹开（open 是本地 state）
-  // ⚠️ 有草稿时不走这里 —— 此时入口靠草稿例外继续显示，用户的编辑还在手里，
-  //    不能因为「入口不该显示」就把浮层关掉（关掉会连编辑一起丢）。
+  // ⚠️ 有草稿时不走这里 —— 此时入口靠草稿例外继续显示，用户的编辑还在手里，不能因为
+  // 「入口不该显示」就把浮层关掉（关掉会连编辑一起丢）。
   useEffect(() => {
     if (!show && !draft) setOpen(false)
   }, [show, draft])

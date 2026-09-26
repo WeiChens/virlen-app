@@ -8,7 +8,7 @@
  *   - user_choice          → user_choice.ts
  *   - confirm_command      → confirm_command.ts
  *
- * ⚠️ 一个 session 在一次 tool 循环中可能先后触发多种交互类型
+ * 一个 session 在一次 tool 循环中可能先后触发多种交互类型
  *   （如先 confirm_command 再 user_choice），因此不能只缓存一种 handler。
  *
  * 注：曾经的 `sandbox_rule_check`（Rust 问 JS「这条命令命中「忽略沙盒命令」规则了吗」）

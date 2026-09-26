@@ -57,9 +57,8 @@ export interface SendMessageOptions {
    * 消息列表，模型才能在这一轮里看到；返回值会被追加进本轮消息列表。
    * 抛错 / 返回空数组都视为「无可注入」。
    *
-   * ⚠️ Rust 引擎不用这个回调（消息列表在 Rust 内存里，前端改不了），
-   * 它走桥接 `agent:round-boundary` → `agent_round_boundary_response`，
-   * 语义对齐但通道不同（铁律 1，见 docs/AGENTS.md §5.1）。
+   * ⚠️ Rust 引擎不用这个回调（消息列表在 Rust 内存里，前端改不了），走桥接
+   * `agent:round-boundary` → `agent_round_boundary_response`：语义对齐、通道不同（铁律 1，§5.1）。
    */
   onRoundBoundary?: (sessionId: string) => Message[] | Promise<Message[]>
 }
@@ -67,8 +66,7 @@ export interface SendMessageOptions {
 /**
  * 每次 LLM 一轮对话产生的临时上下文（引擎内部使用）。
  *
- * ⚠️ 保留本类型只因为 Rust 侧 `agent::types::ToolCallContext` 有同名对应物；
- * TS 引擎移除后前端已无消费方。
+ * ⚠️ 保留本类型只因 Rust 侧 `agent::types::ToolCallContext` 有同名对应物（前端已无消费方）。
  */
 export interface ToolCallContext {
   assistantMessage: Message
@@ -127,7 +125,7 @@ export interface Run {
 /**
  * Run 快照 —— 断点恢复用（只存引擎侧内存 / Rust 侧内存 Map，页面刷新后即失效）。
  *
- * ⚠️ 由 Rust 引擎权威产出：`agent_get_run_snapshot` 返回值即此形状（camelCase）。
+ * ⚠️ 由 Rust 引擎权威产出：`agent_get_run_snapshot` 的返回值即此形状（camelCase）。
  */
 export interface RunSnapshot {
   assistantMessageId: string

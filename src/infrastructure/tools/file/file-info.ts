@@ -37,8 +37,8 @@ toolRegistry.register(
       const atimeMs = stat.atime ? stat.atime.getTime() : null
       const mtimeMs = stat.mtime ? stat.mtime.getTime() : null
 
-      // ⚠️ 模型侧固定英文（P4b/D2-A）；UI 侧走 uiData 由组件按界面语言渲染。
-      // 文案与 Rust `native_tools/file/file_info.rs` 逐字一致（铁律 1）。
+      // ⚠️ 模型侧固定英文（P4b/D2-A）；UI 侧走 uiData。文案与 Rust
+      // `native_tools/file/file_info.rs` 逐字一致（铁律 1）。
       const content = [
         `📋 ${fullPath}`,
         `  Type: ${stat.isDirectory ? '📁 Directory' : '📄 File'}`,

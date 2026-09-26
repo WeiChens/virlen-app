@@ -9,11 +9,11 @@
  * 层级约定（与项目其他浮层对齐）：
  *   全屏浮层 500 < 本菜单 600 < Modal 800 < Toast 3012
  *
- * ⚠️ 两个必须挂**捕获阶段**的监听（踩过的坑）：
- *   - mousedown 捕获：抢在菜单项自身的 click 之前判定「是否点在外面」，
- *     不会误伤菜单项；也避免被兄弟节点的 stopPropagation 吃掉；
- *   - keydown 捕获 + stopPropagation：Esc 只关菜单，不再连带触发外层的 Esc
- *     （终端全屏、图片预览等都在 document 上听了 Esc，两处监听同时消费会「一按两动作」）。
+ * 两个必须挂捕获阶段的监听（踩过的坑）：
+ *   - mousedown 捕获：抢在菜单项自身的 click 之前判定「是否点在外面」，不会误伤菜单项，
+ *     也避免被兄弟节点的 stopPropagation 吃掉；
+ *   - keydown 捕获 + stopPropagation：Esc 只关菜单，不再连带触发外层的 Esc（终端全屏、
+ *     图片预览等都在 document 上听了 Esc，两处同时消费会「一按两动作」）。
  *
  * 展开方向由 `placement` 决定（默认右下）；需要「贴在按钮左上方」时传 `placement="top-left"`。
  */

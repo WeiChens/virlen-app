@@ -11,10 +11,10 @@
  * 这个函数就是 TS 侧的被比对对象，见 `src/tests/domain/compose-prompt-golden.test.ts`
  * 与 Rust 侧 `prompts::assemble::tests::golden_system_prompt_matches_fixture`。
  *
- * ⚠️ 两个 md 资源（工具规范 / 核心原则）的**唯一事实源在 Rust**
- * （`src-tauri/virlen-core/src/agent/prompts/*.md`）：前端经 `promptText()` 读已水合的快照
- * （Tauri 走 `cmd_agent_prompts`；浏览器 dev / 测试直读 core 里**同一份**文件）。
- * 本模块只负责**组装顺序与分隔符**，不持有任何文本副本。
+ * ⚠️ 两个 md 资源（工具规范 / 核心原则）的唯一事实源在 Rust
+ * （`virlen-core/src/agent/prompts/*.md`）：前端经 `promptText()` 读已水合的快照
+ * （Tauri 走 `cmd_agent_prompts`；浏览器 dev / 测试直读同一份文件）。
+ * 本模块只负责组装顺序与分隔符，不持有文本副本。
  */
 import { promptText } from './prompt-texts'
 

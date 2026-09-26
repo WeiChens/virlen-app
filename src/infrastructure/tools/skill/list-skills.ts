@@ -1,16 +1,14 @@
 /**
  * list_skills — 查看当前代理拥有的所有技能
  *
- * ⚠️ 只读操作，不提供写能力。
+ * 只读操作，不提供写能力。
  *
- * 模型侧**固定英文**（与 Rust 原生实现 / CLI 一致，铁律 1）；
- * UI 侧下发结构化 `uiData.skills`（语言无关），由组件按 UI 语言渲染
- * （`ui/pages/chat/components/tool-call/ListSkillsMessage`）。
+ * ⚠️ 模型侧固定英文（与 Rust 原生实现 / CLI 一致，铁律 1）；UI 侧下发结构化 `uiData.skills`
+ * （语言无关），由组件按 UI 语言渲染（`tool-call/ListSkillsMessage`）。
  *
  * ⚠️ 已原生化（Step 2）：Rust 引擎走 `native_tools/skill/list_skills.rs`（默认路径），
- * 本文件只服务 **TS 引擎**（回退路径）。元信息解析 / 扫盘逻辑在 `src/skill/*` +
- * `src/utils/mdYamlFrontmatter.ts` ↔ `native_tools/skill/common.rs` 两份镜像，
- * 改一边必须同步另一边（铁律 1）。
+ * 本文件是回退路径。元信息解析 / 扫盘逻辑在 `src/skill/*` + `src/utils/mdYamlFrontmatter.ts` ↔
+ * `native_tools/skill/common.rs` 两份镜像，改一边必须同步另一边（铁律 1）。
  */
 import { toolRegistry } from '@/domain/tools'
 import type { ToolContext, ToolExecutor, ToolResult } from '@/domain/tools/types'

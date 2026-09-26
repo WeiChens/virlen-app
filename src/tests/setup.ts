@@ -4,10 +4,8 @@
  * Tauri 的 @tauri-apps/api 在 Node.js 测试环境中不可用，
  * 所有测试中涉及 Tauri 调用的模块需要被 Mock。
  *
- * ⚠️ vi.mock() 会被 Vitest 提升（hoist）到文件最顶部，
- *    因此 import { vi } 必须在 vi.mock() 之前书写。
- *    Vitest 运行时已提供全局 vi（globals: true），
- *    但编辑器需要显式 import 才能获得类型提示。
+ * vi.mock() 会被 Vitest 提升（hoist）到文件最顶部，因此 import { vi } 必须在 vi.mock() 之前
+ * 书写。Vitest 运行时已提供全局 vi（globals: true），但编辑器需要显式 import 才有类型提示。
  */
 import { vi } from 'vitest'
 import { setToolDefinitionsLoader } from '@/domain/tools'

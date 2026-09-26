@@ -5,10 +5,9 @@
  * **真正输入代码**，因此保留编辑能力与右键菜单，只做“减法”——关掉小地图 / 折叠 /
  * 行高亮，控制视觉噪音与体积。典型用途：设置 → 安全 → 忽略沙盒命令的 JS 规则。
  *
- * ⚠️ 项目用的是 Monaco **精简构建**（见 `src/monaco/setupMonaco.ts`）：
- *    只注册了各语言的 Monarch 词法高亮，**不打包 TS/JS 语言服务（无 Web Worker）**。
- *    所以这里没有智能补全、没有语法诊断——错误由业务侧自行校验后提示
- *    （如 `domain/security/sandbox-ignore-rules.ts` 的 `testSandboxRule`）。
+ * 项目用的是 Monaco 精简构建（见 `src/monaco/setupMonaco.ts`）：只注册各语言的 Monarch
+ * 词法高亮，不打包 TS/JS 语言服务（无 Web Worker）。所以这里没有智能补全、没有语法诊断 ——
+ * 错误由业务侧自行校验后提示（如 `domain/security/sandbox-ignore-rules.ts` 的 `testSandboxRule`）。
  *
  * 用法：
  *   <CodeEditor value={code} onChange={setCode} language="javascript" height={160} />

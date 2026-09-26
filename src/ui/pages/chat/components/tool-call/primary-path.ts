@@ -9,7 +9,7 @@
  * 已经统一（见 infrastructure/tools/file|search|vision），键名清单是稳定契约；
  * 反过来给十来个工具各加一个 `getPrimaryPath()` 只会把同一件事抄十遍。
  *
- * ⚠️ 拿不到就返回 undefined（调用方据此决定**不开**菜单），不要猜。
+ * 拿不到就返回 undefined（调用方据此决定不开菜单），不要猜。
  */
 
 /** 单个字符串型路径键（按优先级：主操作对象 > 目标） */

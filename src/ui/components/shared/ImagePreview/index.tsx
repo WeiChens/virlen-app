@@ -39,10 +39,9 @@ function ImagePreview() {
   /**
    * 大图右键菜单（复制图片 / 另存为）。
    *
-   * ⚠️ 菜单必须渲染在 **overlay 的兄弟位置**（而不是 overlay 内部）：
-   * `image-preview-overlay` 根节点上挂了「点击任意处关闭预览」，而 React 的事件
-   * 是按 **React 树**（而非 DOM 树）冒泡的 —— 菜单虽然经 portal 挂到了 body，
-   * 但只要它在 React 树里是 overlay 的子节点，点菜单项就会连着把预览一起关掉。
+   * 菜单必须渲染在 overlay 的兄弟位置（而不是内部）：`image-preview-overlay` 根节点上挂了
+   * 「点击任意处关闭预览」，而 React 事件按 React 树（而非 DOM 树）冒泡 —— 菜单虽经 portal
+   * 挂到 body，只要它在 React 树里是 overlay 的子节点，点菜单项就会连着把预览一起关掉。
    */
   const menu = useContextMenu<string>()
 

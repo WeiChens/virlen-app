@@ -128,13 +128,11 @@ export async function createSession(
 /**
  * 删除会话（**唯一入口**）—— 先断流，再删库
  *
- * ⚠️ 必须先在引擎侧取消运行、再清掉运行快照，最后才删会话：
- * Rust 引擎在聊天循环内**直落 SQLite**（engine.rs / llm_loop.rs / tool_executor.rs），
- * 若会话行已删而 run 仍在跑，后续 append 会把消息写进「没有会话」的数据行里 ——
- * 这类孤儿消息查询查不到（检索是 JOIN sessions）、也没有任何清理逻辑，
- * 只会让数据库文件只增不减。
+ * ⚠️ 顺序必须是「引擎侧取消运行 → 清运行快照 → 删会话」：Rust 引擎在聊天循环内直落 SQLite，
+ * 会话行已删而 run 仍在跑时，后续 append 会写出孤儿消息（检索走 JOIN sessions 查不到，
+ * 也没有清理逻辑，只会让库文件只增不减）。
  *
- * （Rust 侧还有一道 `append_messages_if_alive` 守卫作为兼底，两边都不能省。）
+ * （Rust 侧 `append_messages_if_alive` 只是兜底，两边都不能省。）
  *
  * @returns 实际删除的会话数
  */
@@ -326,11 +324,10 @@ export async function resumePausedRun(
 
   const toolInteract = await toolService.createToolHandles(sessionId)
 
-  // 恢复暂停任务：**不传**整份历史 —— 引擎以本地库为权威读回（暂停时消息均已落库），
-  // 省掉「序列化整份历史 → IPC → 反序列化」的 O(历史) 开销（大历史下正是「继续时
-  // 弹窗要等好几秒」的主因：恢复跳过 LLM，这段耗时不再被 LLM 等待掩盖）。
-  // ⚠️ Rust 侧只读「最后一个 summary 及其之后」（`SessionRepo::get_context_messages`）——
-  // 请求组装本就丢掉更早的历史，被压缩的旧消息不必进上下文（见 AGENTS.md §11.35）。
+  // 恢复暂停任务时不传整份历史：引擎以本地库为权威读回（暂停时消息均已落库），省掉
+  // 「序列化 → IPC → 反序列化」的 O(历史) 开销（大历史下「继续要等几秒」的主因之一）。
+  // ⚠️ Rust 侧只读「最后一个 summary 及其之后」（`SessionRepo::get_context_messages`），
+  // 被压缩的旧消息本就不进上下文（见 AGENTS.md §11.35）。
   // 注意：此处**不能**补占位 tool 结果（悬空 tool_calls 正是本次要恢复执行的步骤）。
   const currentMessages: Message[] = []
   // 埋点用的消息条数：取会话内存条数（暂停发生在一次完整 run 内，该会话此前已被 run 全量加载）
@@ -653,9 +650,9 @@ export async function compressContext(
         messages: safeMessages,
       })
     } catch (err) {
-      // ⚠️ 绝不能空 catch：这边内存已是压缩后的消息、DB 还是旧的，两边不一致
-      //    （曾出现问题：summary 里含孤立代理 → serde_json 报错 → 静默失败，
-      //     用户看到「压缩成功」，下次发消息才炸在 agent_send_message 上）。
+      // ⚠️ 不能空 catch：内存已是压缩后的消息而 DB 还是旧的，静默失败后两边不一致
+      //   （曾出现 summary 含孤立代理 → serde_json 报错 → 用户看到「压缩成功」，
+      //    下次发消息才炸在 agent_send_message 上）。
       console.error('[chat] 压缩结果落库失败:', err)
       trackError('session.save.error', err, {
         props: { session_id: hashText(sessionId), op: 'compress.persist' },

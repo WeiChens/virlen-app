@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-// ⚠️ vi.mock 会被提升到文件顶部，故 mock 的 fn 必须用 vi.hoisted 声明
+// vi.mock 会被提升到文件顶部，故 mock 的 fn 必须用 vi.hoisted 声明
 const { getMessageTimeline, getMessageWindow } = vi.hoisted(() => ({
   getMessageTimeline: vi.fn(),
   getMessageWindow: vi.fn(),

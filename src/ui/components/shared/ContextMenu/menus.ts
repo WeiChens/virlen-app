@@ -32,9 +32,8 @@ function toastFail(message: string): void {
  * 「在文件管理器中显示」走 `revealItemInDir`，它由 capabilities 的
  * `opener:default` 覆盖（已含 allow-reveal-item-in-dir），无需单独授权。
  *
- * ⚠️ `openPath` / `revealItemInDir` 只认**绝对路径**，而工具入参里 LLM 常写
- * 相对工作目录的路径（如 `src/a.ts`）。不经 `workspace` 补齐就丢给系统，
- * 资源管理器会定位错地方。调用方有空时**务必传 workspace**。
+ * `openPath` / `revealItemInDir` 只认绝对路径，而工具入参里 LLM 常写相对工作目录的路径
+ * （如 `src/a.ts`）。不经 `workspace` 补齐就丢给系统会定位错地方 —— 调用方务必传 workspace。
  */
 export function fileMenuItems(
   path: string,

@@ -65,8 +65,7 @@ function SecuritySettings() {
 }
 
 /** 文件访问安全：白名单 / 黑名单 / 忽略遍历文件夹（原安全页主体） */
-// ⚠️ 子组件必须自己 observer：父组件不再直接读取 securityStore，
-// 否则名单增删后不会重渲染。
+// 子组件必须自己 observer：父组件不再直接读取 securityStore，否则名单增删后不会重渲染。
 const FileAccessSecurity = observer(function FileAccessSecurity() {
   const [inputDir, setInputDir] = useState('')
   const [activeList, setActiveList] = useState<ListType>('whitelist')

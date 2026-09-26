@@ -6,8 +6,8 @@
  * 也会让虚拟列表的测量 / Markdown 渲染成本飙升，所以列表里只渲染
  * 一条紧凑提示条，点击后弹窗查看完整摘要。
  *
- * ⚠️ 摘要内容只在弹窗里渲染 —— 提示条本身**不得**出现摘要正文
- * （有回归测试钉住这条契约：src/tests/ui/summary-message.test.tsx）。
+ * ⚠️ 摘要内容只在弹窗里渲染 —— 提示条本身不得出现摘要正文（回归测试钉住这条契约：
+ * `src/tests/ui/summary-message.test.tsx`）。
  */
 import { useState, type MouseEvent as ReactMouseEvent } from 'react'
 import type { Message } from '@/types'
@@ -38,9 +38,9 @@ function summaryText(message: Message): string {
 /**
  * 副标题：压缩方式 + （正文压缩才有）压缩后上下文占用 + 时间
  *
- * ⚠️ 只有正文压缩（`compressMode==='raw'`）才有「压缩后上下文占用」这个概念：
- * AI 摘要消息的 `usage` 是**那次摘要调用**的消耗，不是压缩后的上下文大小，
- * 拿它当占用展示会误导，所以用 `uiData.contextTokens` 区分。
+ * 只有正文压缩（`compressMode === 'raw'`）才有「压缩后上下文占用」这个概念：AI 摘要消息的
+ * `usage` 是那次摘要调用的消耗、不是压缩后的上下文大小，拿它当占用展示会误导，
+ * 故用 `uiData.contextTokens` 区分。
  */
 function metaText(message: Message): string {
   const parts: string[] = []

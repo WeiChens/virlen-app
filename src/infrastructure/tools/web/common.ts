@@ -31,7 +31,7 @@ function startsWithTagBoundary(lower: string, prefix: string): boolean {
 /**
  * 判断响应体是否应按 HTML 处理（即 `htmlToMd` 是否生效）。
  *
- * 判定顺序（⚠️ **与 Rust `is_html` 逐字对齐**，契约见
+ * 判定顺序（⚠️ 与 Rust `is_html` 逐字对齐，契约见
  * `src/tests/fixtures/web-html-detect.golden.json`，两侧共读）：
  *
  * 1. **Content-Type 优先**：媒体类型为 `text/html` / `application/xhtml+xml` 时直接认定 ——

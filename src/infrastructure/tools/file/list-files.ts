@@ -54,7 +54,7 @@ toolRegistry.register(
     })
 
     if (entries.length === 0) {
-      // ⚠️ 模型侧固定英文（P4b/D2-A）；UI 侧走 uiData 由组件按界面语言渲染
+      // 模型侧固定英文（P4b/D2-A）；UI 侧走 uiData 由组件按界面语言渲染
       return {
         content: '(empty directory)',
         uiData: {

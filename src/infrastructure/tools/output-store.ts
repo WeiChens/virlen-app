@@ -66,11 +66,11 @@ class ToolOutputStore {
   /**
    * 尾沿补发定时器。
    *
-   * ⚠️ 只做「前沿节流」是**错的**：落在同一个 `NOTIFY_INTERVAL_MS` 窗口内的后续分片会
-   * 只入缓冲、不通知，而且**永远不会补发**。交互式命令（`npm init`）刷一波就停在等输入，
-   * 尾片（无换行的提示符 `package name: (wei) `）恰好落在窗口内 → 一直不上屏，
-   * **要等用户敲一个键、子进程产生新输出时才被顺带刷出来**（这就是「按了键提示符才出现」的根因）。
-   * 这里在命中间隔时挂一个定时器，窗口结束时补通知一次，保证「最后一片一定上屏」。
+   * 只做「前沿节流」是错的：落在同一 `NOTIFY_INTERVAL_MS` 窗口内的后续分片只入缓冲、
+   * 不通知，且永远不会补发。交互式命令（`npm init`）刷一波后停在等输入，尾片（无换行的
+   * 提示符 `package name: (wei) `）恰好落在窗口内就一直不上屏，要等用户敲键、子进程再产出
+   * 才被顺带刷出来（这就是「按了键提示符才出现」的根因）。故在命中间隔时挂定时器，
+   * 窗口结束时补通知一次，保证最后一片一定上屏。
    */
   private trailing = new Map<string, ReturnType<typeof setTimeout>>()
 
@@ -115,8 +115,8 @@ class ToolOutputStore {
 
   /** Step 2 ①：写入「终端内确认」的待确认命令（此时命令尚未执行）。 */
   setPendingConfirm(toolCallId: string, info: PendingConfirmInfo) {
-    // ⚠️ 必须**替换为新对象**：UI 侧 `useToolLiveOutput` 靠对象引用变化触发重渲染
-    // （就地改字段 + 同一引用 → React 不会重渲染，「待确认命令行」永远不会出现）。
+    // 必须替换为新对象：UI 侧 `useToolLiveOutput` 靠对象引用变化触发重渲染，
+    // 就地改字段（同一引用）→ React 不重渲染，「待确认命令行」永远不会出现。
     const existing = this.map.get(toolCallId) ?? {
       toolName: 'execute_command',
       output: '',

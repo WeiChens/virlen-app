@@ -7,9 +7,8 @@
  *     与 `fileBlockToText` / `quoteBlockToText` 的处理一致）
  *   - 单会话字符预算（滑窗），防止模型反复查询把上下文刷爆
  *
- * ⚠️ Step 2 起 `list_messages` / `read_messages` 已在 Rust 侧原生化
- * （`src-tauri/virlen-core/src/agent/native_tools/chat/`）—— 本文件的格式化 / 上限 / 预算逻辑
- * 有了**第二份实现**，改一边必须同步另一边（铁律 1）。
+ * ⚠️ Step 2 起 `list_messages` / `read_messages` 已在 Rust 侧原生化（`native_tools/chat/`）——
+ * 本文件的格式化 / 上限 / 预算逻辑有了第二份实现，改一边必须同步另一边（铁律 1）。
  */
 import type {
   MessageTimelinePage,
@@ -45,8 +44,8 @@ const budgets = new Map<string, BudgetEntry>()
 /**
  * 判断本次还能否返回 `chars` 个字符，并从预算中扣除。
  *
- * ⚠️ StormBreaker 只能拦截「同名 + 同参」的重复调用；模型换一个锚点 id 就能绕开。
- * 因此这里再加一道按会话的滑窗预算，真正做到「不能把历史一次性刷出来」。
+ * StormBreaker 只能拦「同名 + 同参」的重复调用，模型换个锚点 id 就能绕开；
+ * 因此这里再加一道按会话的滑窗预算，做到「不能把历史一次性刷出来」。
  */
 export function consumeBudget(sessionId: string, chars: number): boolean {
   const now = Date.now()

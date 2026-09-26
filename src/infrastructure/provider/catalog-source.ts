@@ -11,8 +11,8 @@
  *
  * 因为两条路径同源，这里不需要任何「差异检查」逻辑（与 `prompts/prompt-source.ts` 同一取舍）。
  *
- * ⚠️ 用**静态** import：目录要在启动阶段**同步水合**（`setProviderCatalog`），
- * 且整个 json 约 2.7 KB —— 不值得为它引入 async 分支。
+ * 用静态 import：目录要在启动阶段同步水合（`setProviderCatalog`），且整个 json 约 2.7 KB，
+ * 不值得引入 async 分支。
  */
 import { invoke } from '@tauri-apps/api/core'
 import { setProviderCatalog, type ProviderCatalog } from '@/domain/provider/catalog'
