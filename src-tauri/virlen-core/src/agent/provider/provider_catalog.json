@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "note": "供应商目录（模板表 + 推理强度档位表）的**唯一权威源**。Rust 侧 include_str! 内嵌（CLI 与 GUI 命令都用它）；前端在浏览器 dev / vitest 下以 ?raw 直读本文件 —— 两条路径读的是同一份物理文件，因此不可能漂移。改这里就是改两侧。",
+  "reasoningEffortUnion": [
+    "none",
+    "off",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max"
+  ],
+  "defaultReasoningEffortList": [
+    "low",
+    "medium",
+    "high"
+  ],
+  "templates": [
+    {
+      "templateName": "deepseek",
+      "type": "openai",
+      "label": "DeepSeek",
+      "baseUrl": "https://api.deepseek.com",
+      "allowTypeList": [
+        {
+          "type": "openai",
+          "baseUrl": "https://api.deepseek.com"
+        },
+        {
+          "type": "anthropic",
+          "baseUrl": "https://api.deepseek.com/anthropic"
+        }
+      ],
+      "allowReasoningEffortList": [
+        "high",
+        "max"
+      ],
+      "officialLink": "https://platform.deepseek.com"
+    },
+    {
+      "templateName": "zhipu",
+      "type": "openai",
+      "label": "智普",
+      "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+      "officialLink": "https://open.bigmodel.cn"
+    },
+    {
+      "templateName": "qwen",
+      "type": "openai",
+      "label": "千问",
+      "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "allowTypeList": [
+        {
+          "type": "openai",
+          "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        },
+        {
+          "type": "anthropic",
+          "baseUrl": "https://dashscope.aliyuncs.com/apps/anthropic/v1"
+        }
+      ],
+      "allowReasoningEffortList": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "officialLink": "https://bailian.console.aliyun.com"
+    },
+    {
+      "templateName": "openai",
+      "type": "openai",
+      "label": "OpenAI",
+      "baseUrl": "https://api.openai.com/v1",
+      "allowReasoningEffortList": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "officialLink": "https://platform.openai.com"
+    },
+    {
+      "templateName": "anthropic",
+      "type": "anthropic",
+      "label": "Anthropic",
+      "baseUrl": "https://api.anthropic.com/v1",
+      "officialLink": "https://www.anthropic.com"
+    },
+    {
+      "templateName": "gemini",
+      "type": "gemini",
+      "label": "Google Gemini",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta"
+    },
+    {
+      "templateName": "custom",
+      "type": "openai",
+      "label": "自定义",
+      "baseUrl": "",
+      "allowReasoningEffortList": [
+        "low",
+        "medium",
+        "high"
+      ]
+    }
+  ]
+}

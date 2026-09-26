@@ -4,7 +4,7 @@
 //! 1. 把 [`TauriEventSink`] / `TauriHost` 注入引擎（[`init_agent_engine`]）；
 //! 2. 暴露命令：`agent_send_message` / `agent_cancel` / `agent_kill_command` / `pty_*`
 //!    / `agent_get_run_snapshot` / `agent_clear_run_snapshot` / `agent_dispose`
-//!    / `cmd_list_tool_definitions` / `cmd_agent_prompts`；
+//!    / `cmd_list_tool_definitions` / `cmd_agent_prompts` / `cmd_provider_catalog`；
 //! 3. 把 JS 侧回执转交引擎：`agent_tool_response` / `agent_user_interaction_response`
 //!    / `agent_round_boundary_response` / `agent_provider_stream_event` / `agent_provider_stream_done`。
 //!
@@ -20,7 +20,7 @@ use virlen_core::agent::engine::AgentEngine;
 use virlen_core::agent::event_sink::{self, EventSink};
 use virlen_core::agent::provider::DefaultProviderFactory;
 use virlen_core::agent::types::AgentEvent;
-use virlen_core::agent::{native_tools, prompts, tool_defs, types};
+use virlen_core::agent::{native_tools, prompts, provider, tool_defs, types};
 use virlen_core::session_db::{NoopSessionRepo, NoopSettingsRepo, SessionRepo, SettingsRepo};
 
 use super::session_db::{init_session_db, manage_noop_settings};
@@ -276,6 +276,18 @@ pub fn cmd_list_tool_definitions(platform: Option<String>) -> Vec<types::ToolDef
 #[tauri::command]
 pub fn cmd_agent_prompts() -> prompts::PromptTexts {
     prompts::all_prompt_texts()
+}
+
+/// 供应商目录（模板表 + 推理强度档位表）—— **权威源在 core**
+///（`virlen-core/src/agent/provider/provider_catalog.json`）
+///
+/// 与 `cmd_agent_prompts` 同一模式：CLI 与 GUI 读同一份数据；前端浏览器 dev / vitest
+/// 直读 core 目录里**同一份** json（`?raw`），因此两条路径不可能漂移。
+///
+/// 返回 `Result`：目录是**数据**，被改坏时应当给调用方一个可读错误，而不是 panic。
+#[tauri::command]
+pub fn cmd_provider_catalog() -> Result<provider::catalog::ProviderCatalog, String> {
+    provider::catalog::provider_catalog()
 }
 
 // ==================== 桥接回执 ====================

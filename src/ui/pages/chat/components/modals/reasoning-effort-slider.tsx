@@ -16,9 +16,9 @@ import {
 import { observer } from 'mobx-react-lite'
 import { settingsState, sessionStore, chatState } from '@/ui/store'
 import {
-  DEFAULT_REASONING_EFFORT_LIST,
+  defaultReasoningEffortList,
   sortReasoningEfforts,
-} from '@/domain/provider/config'
+} from '@/domain/provider/catalog'
 import { t, tpl } from '@/ui/i18n'
 import Tooltip from '@/ui/components/shared/Tooltip'
 
@@ -94,7 +94,7 @@ function ReasoningEffortSlider() {
   const candidates =
     configured ??
     (provider && provider.type === 'openai'
-      ? [...DEFAULT_REASONING_EFFORT_LIST]
+      ? [...defaultReasoningEffortList()]
       : null)
 
   const rawValue = sessionId

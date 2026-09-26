@@ -12,6 +12,8 @@
 //! - `anthropic` Anthropic Messages API
 //! - `bridged`  转发到 JS（Gemini 等）
 //! - `sse`      流式响应逐行读取
+//! - `models`   模型列表拉取（配置向导 / 连通性检查用；不属于运行时 `Provider` trait）
+//! - `catalog`  **供应商目录（模板表 + 推理档位表）的唯一权威源**（数据在同名 json 里）
 
 use super::bridge::AgentBridgeState;
 use super::cancellation::CancellationToken;
@@ -25,6 +27,11 @@ mod bridged;
 mod anthropic;
 mod openai;
 mod sse;
+mod models;
+
+// ⚠️ `pub mod`（不是 `mod` + `pub use`）：供应商目录是**配置侧数据**，
+//    与运行时 `Provider` trait 无关，调用方按路径取更清楚（`agent::provider::catalog`）。
+pub mod catalog;
 
 #[cfg(test)]
 mod tests;
@@ -32,6 +39,7 @@ mod tests;
 pub use anthropic::NativeAnthropicProvider;
 pub use bridged::BridgedProvider;
 pub use openai::NativeOpenAiProvider;
+pub use models::{list_models, verify_connection};
 
 // ==================== Provider trait ====================
 

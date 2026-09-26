@@ -5,7 +5,7 @@
  * 属于 Store 与 Engine 之间的编排逻辑，不应在 Store 层处理。
  */
 import { providerPort } from '@/domain'
-import { PROVIDER_TEMPLATES } from '@/domain/provider/config'
+import { providerTemplates } from '@/domain/provider/catalog'
 import { createProviderInstance } from '@/infrastructure/provider'
 import { IProvider } from '@/infrastructure/provider/types'
 import { settingsState } from '@/ui/store'
@@ -28,7 +28,7 @@ class ProviderServiceImpl implements ProviderService {
     }
   }
   getDefaultProviderList(): ProviderConfigTemplate[] {
-    return PROVIDER_TEMPLATES
+    return providerTemplates()
   }
   register(config: ProviderConfig): boolean {
     const provider = createProviderInstance(config)

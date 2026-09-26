@@ -429,6 +429,8 @@ pub fn run() {
             commands::agent::cmd_list_tool_definitions,
             // 提示词权威源（同上：提示词 md 存在 core，前端经此取值）
             commands::agent::cmd_agent_prompts,
+            // 供应商目录（模板表 + 推理档位表；CLI 与 GUI 同一份 core 数据）
+            commands::agent::cmd_provider_catalog,
             commands::agent::agent_tool_response,
             commands::agent::agent_user_interaction_response,
             commands::agent::agent_round_boundary_response,

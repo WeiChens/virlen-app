@@ -21,6 +21,10 @@ import { loadToolDefinitions } from '@/infrastructure/tools/definitions-source'
 // Tauri 走 `cmd_agent_prompts`、浏览器 dev / 测试读同一份 md。
 import { setPromptTexts } from '@/domain/agent'
 import { loadPromptTexts } from '@/infrastructure/prompts/prompt-source'
+// 供应商目录权威源（与提示词同一模式）：模板表 / 推理强度档位表本体在
+// `virlen-core/src/agent/provider/provider_catalog.json`，Tauri 走 `cmd_provider_catalog`、
+// 浏览器 dev / 测试读同一份 json。
+import { hydrateProviderCatalog } from '@/infrastructure/provider/catalog-source'
 import { securityService } from './services/security-service'
 import { checkUpdate, shouldShowUpdate } from './services/update-service'
 import updateEvent from './events/updateEvent'
@@ -164,6 +168,9 @@ async function init() {
   // 提示词权威源接线（与工具定义同一模式）：必须在任何组装系统提示词的路径之前完成 ——
   // `promptText()` 在未水合时直接抛错（宁可启动失败，也不要静默丢掉工具规范 / 验证要求）。
   await step('prompts', async () => setPromptTexts(await loadPromptTexts()))
+  // 供应商目录（与提示词同一模式）：必须在任何渲染「添加服务商」入口之前完成 ——
+  // `providerCatalog()` 未水合时直接抛错（宁可启动失败，也不要静默渲染出一张空模板网格）。
+  await step('providerCatalog', () => hydrateProviderCatalog())
   await step('defaultAgent', () => initDefaultAgent())
   agentStore.reload()
   await Promise.all([

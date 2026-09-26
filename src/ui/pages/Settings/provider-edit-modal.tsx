@@ -16,10 +16,10 @@ import { isURL } from '@/utils/common'
 import { createProviderInstance } from '@/infrastructure/provider'
 import { providerService } from '@/services/provider-service'
 import {
-  REASONING_EFFORT_UNION,
-  DEFAULT_REASONING_EFFORT_LIST,
+  reasoningEffortUnion,
+  defaultReasoningEffortList,
   sortReasoningEfforts,
-} from '@/domain/provider/config'
+} from '@/domain/provider/catalog'
 
 /**
  * 老数据迁移：只有单个 reasoningEffort 时，候选项用默认基础档位 + 该单值合成，
@@ -30,7 +30,7 @@ function migrateReasoningEffortList(
   list?: string[],
 ): string[] {
   if (list && list.length > 0) return [...list]
-  const base = [...DEFAULT_REASONING_EFFORT_LIST]
+  const base = [...defaultReasoningEffortList()]
   if (reasoningEffort && !base.includes(reasoningEffort)) {
     base.push(reasoningEffort)
   }
@@ -111,7 +111,7 @@ export default function ProviderEditModal({
         setBaseUrl(template.baseUrl)
         setTemplateName(template.templateName)
         setModels([])
-        setReasoningEffortList([...DEFAULT_REASONING_EFFORT_LIST])
+        setReasoningEffortList([...defaultReasoningEffortList()])
         setReasoningEffort('')
       } else {
         // 无模板时默认 openai 类型
@@ -120,7 +120,7 @@ export default function ProviderEditModal({
         setBaseUrl('')
         setTemplateName('custom')
         setModels([])
-        setReasoningEffortList([...DEFAULT_REASONING_EFFORT_LIST])
+        setReasoningEffortList([...defaultReasoningEffortList()])
         setReasoningEffort('')
       }
       setShowKey(false)
@@ -244,7 +244,7 @@ export default function ProviderEditModal({
       } else {
         setBaseUrl(currentTemplate.baseUrl)
       }
-      setReasoningEffortList([...DEFAULT_REASONING_EFFORT_LIST])
+      setReasoningEffortList([...defaultReasoningEffortList()])
       setReasoningEffort('')
     }
   }, [templateName])
@@ -401,7 +401,7 @@ export default function ProviderEditModal({
         <div className="form-group">
           <label>{t('推理强度候选项')}</label>
           <div className="effort-checkbox-list">
-            {REASONING_EFFORT_UNION.map((val) => (
+            {reasoningEffortUnion().map((val) => (
               <label
                 key={val}
                 className={`effort-checkbox ${reasoningEffortList.includes(val) ? 'checked' : ''}`}>

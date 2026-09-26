@@ -10,6 +10,8 @@
 //! virlen-cli chat [选项]                      交互式会话（内联视口 TUI；非终端自动降级）
 //! virlen-cli list-session [-g agent|workdir]  列出会话（可分组）
 //! virlen-cli list-agent                       列出 Agent
+//! virlen-cli provider <add|edit|rm|list|test> 交互式管理供应商配置（逐步录入 + 验证）
+//! virlen-cli agent <add|edit|rm|list>          交互式管理 Agent 配置（逐步录入）
 //! ```
 //!
 //! 为什么命令实现住在本 crate 的 lib（而不是 core / bin）：
@@ -38,6 +40,12 @@ mod list;
 mod run;
 mod session_rt;
 mod tui;
+// 配置向导：`provider` / `agent` 两个交互式子命令 + 共用设施
+// （`wizard` 问答原语 / `settings_edit` 数组键的按 id 增删改）
+mod agent;
+mod provider;
+mod settings_edit;
+mod wizard;
 
 use std::io::Write;
 use std::sync::Arc;
@@ -61,6 +69,8 @@ pub(crate) enum Command {
     Chat(tui::ChatCmd),
     ListSessions(list::SessionsCmd),
     ListAgents(list::AgentsCmd),
+    Provider(provider::ProvCmd),
+    Agent(agent::AgentCmd),
 }
 
 /// 帮助文本（`help` / `--help` / 用法错误时一并打印）
@@ -83,6 +93,9 @@ Virlen CLI（headless）—— 与桌面端读写同一份配置（app_settings 
   virlen-cli list-session [-g agent|workdir] [--limit N] [--json]
                                          列出会话（与桌面端同一份库；`--help` 看说明）
   virlen-cli list-agent [--json]         列出 Agent（app_settings.agents）
+  virlen-cli provider <add|edit|rm|list|test>
+                                         交互式管理供应商配置（逐步录入 → 验证 → 写入）
+  virlen-cli agent <add|edit|rm|list>   交互式管理 Agent 配置（逐步录入）
   virlen-cli help | --help | -h          显示本帮助
   virlen-cli version | --version | -V    显示版本
 
@@ -111,6 +124,8 @@ pub(crate) fn parse_args(args: &[String]) -> Result<Command, String> {
             list::parse_sessions(it.collect()).map(Command::ListSessions)
         }
         "list-agent" | "list-agents" => list::parse_agents(it.collect()).map(Command::ListAgents),
+        "provider" => provider::parse(it.collect()).map(Command::Provider),
+        "agent" => agent::parse(it.collect()).map(Command::Agent),
         other => Err(format!("未知命令: {}", other)),
     }
 }
@@ -158,6 +173,15 @@ pub async fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i
         Ok(Command::ListAgents(cmd)) => {
             let host: Arc<dyn HostEnv> = Arc::new(CliHost::from_env());
             list::run_agents(&host, cmd, out, err).await
+        }
+        // 配置向导：两条都是交互式命令（非终端时自己在入口给出用法错误，不会挂住）
+        Ok(Command::Provider(cmd)) => {
+            let host: Arc<dyn HostEnv> = Arc::new(CliHost::from_env());
+            provider::run(&host, cmd, out, err).await
+        }
+        Ok(Command::Agent(cmd)) => {
+            let host: Arc<dyn HostEnv> = Arc::new(CliHost::from_env());
+            agent::run(&host, cmd, out, err).await
         }
     }
 }

@@ -1,28 +1,29 @@
 /**
- * Provider Config 测试 — 供应商模板配置
+ * Provider Catalog 测试 — 供应商目录（模板表 + 推理强度档位表）
+ *
+ * ⚠️ 表的**本体在 Rust**（`src-tauri/virlen-core/src/agent/provider/provider_catalog.json`）：
+ * 前端经 `setProviderCatalog()` 水合后**同步**读取（测试 setup 已完成水合）。
+ * 这份测试与 Rust 侧 `agent/provider/catalog.rs` 的单测是**一对**——两侧盯同一批事实。
  *
  * 覆盖场景：
- * - 所有预定义模板的完整性
- * - 每个模板的类型和必填字段
- * - DeepSeek 模板的多协议支持
- * - 千问模板的 reasoningEffort 配置
- * - OpenAI 模板的 reasoningEffort 配置
+ * - 推理强度档位并集 / 默认勾选值 / 排序归一化
+ * - 所有预定义模板的完整性（必填字段、类型、多协议、官网链接）
  * - 自定义模板的默认值
- * - 推理强度档位并集 / 默认勾选值
  */
 import { describe, it, expect } from 'vitest'
 import {
-  PROVIDER_TEMPLATES,
-  REASONING_EFFORT_UNION,
-  DEFAULT_REASONING_EFFORT_LIST,
-} from '@/domain/provider/config'
+  providerTemplates,
+  reasoningEffortUnion,
+  defaultReasoningEffortList,
+  sortReasoningEfforts,
+} from '@/domain/provider/catalog'
 
 describe('REASONING_EFFORT_UNION', () => {
   it('应覆盖各厂商档位名称的并集（共 8 个）', () => {
     // 'off' 与 'none' 同义（关闭推理），必须紧跟在 'none' 之后——
     // sortReasoningEfforts 依赖该顺序做归一化，档位需单调：
     // none/off < minimal < low < medium < high < xhigh < max
-    expect([...REASONING_EFFORT_UNION]).toEqual([
+    expect([...reasoningEffortUnion()]).toEqual([
       'none',
       'off',
       'minimal',
@@ -35,19 +36,40 @@ describe('REASONING_EFFORT_UNION', () => {
   })
 
   it('默认勾选应为 low / medium / high', () => {
-    expect(DEFAULT_REASONING_EFFORT_LIST).toEqual(['low', 'medium', 'high'])
+    expect(defaultReasoningEffortList()).toEqual(['low', 'medium', 'high'])
   })
 
   it('默认勾选值必须都在并集内', () => {
-    for (const v of DEFAULT_REASONING_EFFORT_LIST) {
-      expect(REASONING_EFFORT_UNION).toContain(v as any)
+    for (const v of defaultReasoningEffortList()) {
+      expect(reasoningEffortUnion()).toContain(v)
     }
+  })
+})
+
+describe('sortReasoningEfforts', () => {
+  it('应按并集顺序重排（用户勾选顺序是任意的）', () => {
+    expect(sortReasoningEfforts(['high', 'none', 'low', 'max'])).toEqual([
+      'none',
+      'low',
+      'high',
+      'max',
+    ])
+  })
+
+  it('不修改入参', () => {
+    const input = ['high', 'low']
+    sortReasoningEfforts(input)
+    expect(input).toEqual(['high', 'low'])
+  })
+
+  it('未知档位排到最后（不丢值）', () => {
+    expect(sortReasoningEfforts(['zzz', 'low'])).toEqual(['low', 'zzz'])
   })
 })
 
 describe('PROVIDER_TEMPLATES', () => {
   it('应包含所有预定义模板', () => {
-    const templateNames = PROVIDER_TEMPLATES.map((t) => t.templateName)
+    const templateNames = providerTemplates().map((t) => t.templateName)
     expect(templateNames).toContain('deepseek')
     expect(templateNames).toContain('zhipu')
     expect(templateNames).toContain('qwen')
@@ -58,7 +80,7 @@ describe('PROVIDER_TEMPLATES', () => {
   })
 
   it('每个模板都应包含必填字段', () => {
-    for (const tmpl of PROVIDER_TEMPLATES) {
+    for (const tmpl of providerTemplates()) {
       expect(tmpl.templateName).toBeTruthy()
       expect(tmpl.type).toBeTruthy()
       expect(tmpl.label).toBeTruthy()
@@ -69,13 +91,13 @@ describe('PROVIDER_TEMPLATES', () => {
 
   it('模板类型应为 openai、anthropic 或 gemini', () => {
     const validTypes = ['openai', 'anthropic', 'gemini']
-    for (const tmpl of PROVIDER_TEMPLATES) {
+    for (const tmpl of providerTemplates()) {
       expect(validTypes).toContain(tmpl.type)
     }
   })
 
   describe('DeepSeek', () => {
-    const deepseek = PROVIDER_TEMPLATES.find((t) => t.templateName === 'deepseek')
+    const deepseek = providerTemplates().find((t) => t.templateName === 'deepseek')
 
     it('应支持多协议切换', () => {
       expect(deepseek!.allowTypeList).toHaveLength(2)
@@ -94,7 +116,7 @@ describe('PROVIDER_TEMPLATES', () => {
   })
 
   describe('千问 (Qwen)', () => {
-    const qwen = PROVIDER_TEMPLATES.find((t) => t.templateName === 'qwen')
+    const qwen = providerTemplates().find((t) => t.templateName === 'qwen')
 
     it('应支持 URL 兼容格式', () => {
       expect(qwen!.baseUrl).toContain('dashscope.aliyuncs.com')
@@ -112,7 +134,7 @@ describe('PROVIDER_TEMPLATES', () => {
   })
 
   describe('OpenAI', () => {
-    const openai = PROVIDER_TEMPLATES.find((t) => t.templateName === 'openai')
+    const openai = providerTemplates().find((t) => t.templateName === 'openai')
 
     it('应使用正确的 API 端点', () => {
       expect(openai!.baseUrl).toBe('https://api.openai.com/v1')
@@ -124,7 +146,7 @@ describe('PROVIDER_TEMPLATES', () => {
   })
 
   describe('Anthropic', () => {
-    const anthropic = PROVIDER_TEMPLATES.find((t) => t.templateName === 'anthropic')
+    const anthropic = providerTemplates().find((t) => t.templateName === 'anthropic')
 
     it('应使用正确的 API 端点', () => {
       expect(anthropic!.baseUrl).toBe('https://api.anthropic.com/v1')
@@ -136,7 +158,7 @@ describe('PROVIDER_TEMPLATES', () => {
   })
 
   describe('Gemini', () => {
-    const gemini = PROVIDER_TEMPLATES.find((t) => t.templateName === 'gemini')
+    const gemini = providerTemplates().find((t) => t.templateName === 'gemini')
 
     it('应使用正确的 API 端点', () => {
       expect(gemini!.baseUrl).toBe('https://generativelanguage.googleapis.com/v1beta')
@@ -148,7 +170,7 @@ describe('PROVIDER_TEMPLATES', () => {
   })
 
   describe('自定义模板', () => {
-    const custom = PROVIDER_TEMPLATES.find((t) => t.templateName === 'custom')
+    const custom = providerTemplates().find((t) => t.templateName === 'custom')
 
     it('baseUrl 应为空字符串（用户自行填写）', () => {
       expect(custom!.baseUrl).toBe('')
@@ -165,12 +187,12 @@ describe('PROVIDER_TEMPLATES', () => {
 
   describe('模板类型兼容性', () => {
     it('openai 类型的模板应包含正确的类型', () => {
-      const openaiTemplates = PROVIDER_TEMPLATES.filter((t) => t.type === 'openai')
+      const openaiTemplates = providerTemplates().filter((t) => t.type === 'openai')
       expect(openaiTemplates.length).toBeGreaterThanOrEqual(4) // deepseek, zhipu, qwen, openai, custom
     })
 
     it('每个 allowTypeList 中的类型和 baseUrl 应有效', () => {
-      for (const tmpl of PROVIDER_TEMPLATES) {
+      for (const tmpl of providerTemplates()) {
         if (!tmpl.allowTypeList) continue
         for (const alt of tmpl.allowTypeList) {
           expect(alt.type).toBeTruthy()

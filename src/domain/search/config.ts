@@ -1,7 +1,7 @@
 /**
  * 搜索供应商配置模板和类型定义
  *
- * 类比 domain/provider/config.ts（LLM 供应商配置模板），
+ * 类比 domain/provider/catalog.ts（LLM 供应商配置模板；数据本体已在 virlen-core），
  * 定义了内置搜索供应商的元信息和可持久化的配置结构。
  */
 
