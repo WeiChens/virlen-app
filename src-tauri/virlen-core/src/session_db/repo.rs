@@ -178,7 +178,7 @@ pub trait SessionRepo: Send + Sync {
         true
     }
 
-    // ===== 用量账本（token 统计，见 `docs/token-usage-stats.md`） =====
+    // ===== 用量账本（token 统计） =====
 
     /// 追加用量流水（幂等：`message_id` 非空时同 id 只记一条）
     async fn append_usage(&self, entries: &[UsageEntry]) -> Result<(), String>;

@@ -7,7 +7,7 @@ import {
 /**
  * `toolOutputStore` 输出节流回归。
  *
- * 背景（见 docs/terminal-live-output-investigation.md）：
+ * 背景：
  * 只做「前沿节流」会丢帧 —— 落在同一 50ms 窗口内的后续分片永不补发。交互式命令
  * （`npm init`）刷一波就停在等输入，尾片（无换行的提示符 `package name: (wei) `）
  * 恰好落在窗口内 → 一直不上屏，**要等用户敲一个键才被顺带刷出来**。

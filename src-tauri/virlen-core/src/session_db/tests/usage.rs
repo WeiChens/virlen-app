@@ -129,7 +129,7 @@ async fn usage_records_join_session_title_and_survive_session_delete() {
     assert_eq!(page.total, 1);
     assert_eq!(page.records[0].session_title.as_deref(), Some("会话一"));
 
-    // 删会话只删对话内容，用量流水保留（口径见 docs/token-usage-stats.md）
+    // 删会话只删对话内容，用量流水保留
     repo.delete_session("s1").await.unwrap();
     let page = repo.usage_records(&UsageQuery::default()).await.unwrap();
     assert_eq!(page.total, 1, "删会话后用量记录仍保留");

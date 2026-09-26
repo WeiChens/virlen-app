@@ -95,7 +95,6 @@ CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(timestamp);
 /// 产生消息的 LLM 调用；账本是**每次 LLM 调用一条流水**，因此
 /// （1）能覆盖标题生成 / 迭代校验等不产生消息的调用；
 /// （2）独立于会话生命周期 —— 删除会话不清账，历史总量不会缩水。
-/// 详见 `docs/token-usage-stats.md`。
 const USAGE_LEDGER_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS usage_ledger (
   id                 INTEGER PRIMARY KEY AUTOINCREMENT,

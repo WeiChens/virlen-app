@@ -1,7 +1,7 @@
 /**
  * tray-service 测试
  *
- * 覆盖（对应 `docs/tray-implementation-plan.md` §10 前端单测）：
+ * 覆盖：
  * - 非 Tauri 环境：不注册任何监听、不发任何命令（浏览器 dev / vitest 下必须零副作用）
  * - 设置同步：启动推一次 + 变更后立即推送（含 i18n 托盘文案，Rust 侧据此决定关闭/退出语义）
  * - 工作状态派生：0→1、1→2、2→0 时 `tray_set_working` 的调用序列（同会话只推一次，去重）

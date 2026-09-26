@@ -7,7 +7,6 @@
  * 为什么要单独记账而不复用 `messages.usage`：
  *   1. 标题生成 / 迭代校验这类调用**不产生消息**，usage 若只挂在消息上就会丢失；
  *   2. 账本独立于会话生命周期 —— 删除会话不清账，历史总量不会缩水。
- * 设计见 `docs/token-usage-stats.md`。
  *
  * 依赖方向：`domain/` 不能依赖 `infrastructure/`（不能直接 invoke Tauri），
  * 因此这里只定义「写入口 + 注入点」；真正的 SQLite 实现由 `services` 层在启动时

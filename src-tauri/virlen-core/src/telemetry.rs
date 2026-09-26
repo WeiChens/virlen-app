@@ -7,8 +7,7 @@
 //! - **CLI / 单测**：不注册 sink → `track()` 静默丢弃（与原「APP 未登记」行为一致）。
 //!
 //! 约定：
-//! - event_name / props 与 docs/埋点上报数据设计.md §5.13 / §12.13 对齐；
-//!   props 只是「事件私有字段」，公共字段由前端补齐。
+//! - event_name 沿用既有埋点命名（`域.动作`）；props 只放「事件私有字段」，公共字段由前端补齐。
 //! - `session_id` 一律使用 `hash_id`（与前端 `hashText` 完全一致，SHA 前 16 位语义），
 //!   保证与前端事件可关联且不泄漏原始 ID。
 //! - panic 经 panic hook：实时回传 + 落盘（`<数据目录>/telemetry_panics.log`）；
