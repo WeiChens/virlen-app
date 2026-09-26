@@ -6,7 +6,7 @@
 > 与 `README.md` 冲突时以本文件 + 代码现状为准（README 存在若干过期描述，见 §11.3）。
 >
 > **深读入口（细节已下沉，不在本文件展开）**
-> - `docs/rust-engine.md` —— 引擎未 Rust 化清单与双引擎差异
+> - `docs/rust-engine.md` —— 引擎 Rust 化清单与已知差异
 > - `docs/pty-research.md` —— Windows ConPTY / 终端交互完整设计
 > - `docs/sandbox-implementation-plan.md` —— 跨平台沙盒实现
 > - `docs/埋点上报数据设计.md` —— 埋点事件与字段规范
@@ -18,14 +18,14 @@
 
 ## 0. 30 秒导读
 
-**Virlen（未霖）**是一个基于 **Tauri v2** 的跨平台 **AI Agent 桌面客户端**——不是聊天壳，而是「**可扩展的 Agent 运行平台**」：多模型接入、可插拔工具、本地视觉/RAG/Skill、多层安全、以及一套 **TS + Rust 双实现的 Agent 引擎**。
+**Virlen（未霖）**是一个基于 **Tauri v2** 的跨平台 **AI Agent 桌面客户端**——不是聊天壳，而是「**可扩展的 Agent 运行平台**」：多模型接入、可插拔工具、本地视觉/RAG/Skill、多层安全、以及一套 **Rust 实现的 Agent 引擎**（`virlen-core`，GUI 与 CLI 共用；原 TS 引擎已移除）。
 
 理解本项目，抓住四条主线即可：
 
 1. **内核是「Agent 循环」**——LLM 轮次 → 工具执行 → 迭代验证 → 循环，直到收敛（见 §4、§5.1）。
 2. **能力靠「工具」扩展**——工具是「定义 + 执行器」分离的注册制，可 JS 实现、也可 Rust 原生化（见 §5.2）。
 3. **安全贯穿全文**——路径黑白名单 / 权限三态 / 跨平台沙盒 / 工具风暴防护四道闸（见 §5.4、§8）。
-4. **双引擎是最大与众不同点**——同一套语义有两份实现，改语义必须两侧同步（见 §5.1、§7 铁律 1）。
+4. **引擎只有一份（Rust）**——聊天循环 / 工具执行 / 上下文压缩 / 标题生成全在 `src-tauri/virlen-core/src/agent/`；GUI 与 CLI 共用同一份。TS 侧只剩「被 Rust 回调的部分」（工具执行器 / Gemini provider / 提示词组装 / 事件契约），它们仍须与 Rust 同语义（见 §5.1、§7 铁律 1）。
 
 ---
 
@@ -41,7 +41,7 @@
 | **Skill 机制** | `SKILL.md` 领域知识包，注入系统提示词 + 源码目录只读可查 |
 | **多层安全** | 路径黑白名单、权限三态、跨平台 Shell 沙盒、工具风暴防护（StormBreaker） |
 | **会话与记忆** | 暂停/恢复（Run Snapshot）、LLM 上下文压缩、本地 RAG（turbovec 向量索引）、用量账本 |
-| **双 Agent 引擎** | Rust 原生引擎（默认，`src-tauri/virlen-core/src/agent/`）+ TS 引擎（回退，`src/domain/engine/`） |
+| **Agent 引擎** | 仅 Rust（`src-tauri/virlen-core/src/agent/`，GUI 与 CLI 共用）；原 TS 引擎 `src/domain/engine/` 已移除（见 §11.37） |
 
 ---
 
@@ -100,7 +100,7 @@
 | `src/utils/` | 无业务依赖工具：telemetry、storageState、EventEmitter、diff、mdYamlFrontmatter、pathCanonicealize… | 无 |
 | `src/tests/` | Vitest 测试，按 `domain / infrastructure / services / rag / utils / ui` 分目录 | — |
 | `src-tauri/src/` | **GUI 壳**（`virlen-app`，**唯一**的 Tauri 侧）：`lib.rs`（窗口 / 托盘 / 插件 / 命令注册）、`commands/{agent,session_db,rag}.rs`（全部 `#[tauri::command]`）、`host/tauri_host.rs`（`TauriHost`）、`telemetry.rs`（Tauri 埋点出口 + panic 拉取命令）、`tray/`、`drag_drop.rs`、`clipboard_files*`、`vision_service.rs`（视觉命令壳）、`common_service.rs`、`deepseek_tokenizer.rs`、`load_env.rs`、`speech_service.rs`、`task_manager.rs` | `virlen-core` + Tauri |
-| `src-tauri/virlen-core/` | **核心库**（`virlen-core`，**零 `tauri::`**，GUI 与 CLI 共用）：`agent/`（镜像 TS 引擎）、`session_db/`（含 `open.rs`）、`sandbox/`、`security/`、`rag/`、`vision/`、`host/{mod,cli_host}.rs`、`file_ops.rs`、`search.rs`、`telemetry.rs`（sink 可插拔）—— **不含任何命令入口** | 第三方 crate（**不得**依赖 tauri / virlen-app） |
+| `src-tauri/virlen-core/` | **核心库**（`virlen-core`，**零 `tauri::`**，GUI 与 CLI 共用）：`agent/`（Agent 引擎本体：循环 / 工具 / 压缩 / 标题 / provider）、`session_db/`（含 `open.rs`）、`sandbox/`、`security/`、`rag/`、`vision/`、`host/{mod,cli_host}.rs`、`file_ops.rs`、`search.rs`、`telemetry.rs`（sink 可插拔）—— **不含任何命令入口** | 第三方 crate（**不得**依赖 tauri / virlen-app） |
 | `src-tauri/virlen-cli/` | **headless CLI**（`virlen-cli` package，**命令实现本体**）：lib = `lib.rs`（参数解析 / 分派 / `USAGE` / `EXIT_*`）+ `config.rs` / `list.rs` / `run.rs` / `tui/`（TUI **规划中**），`src/main.rs` 仅三行转发；**只依赖 core** → 二进制里没有 GUI 栈 | `virlen-core` + `tokio` / `serde` / `serde_json` / `chrono` / `uuid` / `dunce` |
 | `src-tauri/resources/` | 打包资源：`default-skills/`、`quasivision_models/`、`deepseek_tokenizer/`、`sandbox/`（`tauri.conf.json > bundle.resources` 必须同步） | — |
 
@@ -121,8 +121,7 @@
    ┌───────────────────────────────────────┘  · session + 历史消息 + SKILL.md 领域知识
    │                                            · 工具定义（toolRegistry.listDefinitions()）
    ▼
-③ 选择引擎  getEngine()  ── isRustEngineEnabled() && Tauri 可用 ──►  Rust 引擎（默认）
-                          └── 否则（浏览器 dev / vitest / 用户关闭）─►  TS 引擎（回退）
+③ 取引擎    getEngine()  ──►  Rust 引擎适配器（`services/rust-engine.ts`，恒为它；TS 引擎已移除）
    ▼
 ④ Agent 循环（两侧同构）
    ┌──────────────────────────────────────────────────────────────┐
@@ -144,9 +143,9 @@
    │                   StormBreaker 防重复工具风暴                 │
    └──────────────────────────────┬───────────────────────────────┘
    ▼
-⑤ 持久化（两条路径，互斥）
-   · TS 引擎  → chat-service.persistMessagesIfNeeded()（!isRustEngineEnabled() 守卫）
-   · Rust 引擎 → session_db/ 的 SessionRepo 在引擎内部直落 SQLite（先落库再 emit）
+⑤ 持久化（Rust 引擎内部直落）
+   · Tauri  → Rust 引擎在 `session_db/` 内部直落 SQLite（先落库再 emit）
+   · 非 Tauri（vitest）→ chat-service.persistMessagesIfNeeded()（isTauriAvailable() 守卫）
    ▼
 ⑥ 事件回 UI
    onEvent → chat-service.createEventHandler() → agentStore / sessionStore（MobX）
@@ -154,7 +153,7 @@
    ui/pages/chat 渲染（消息列表用 @tanstack/react-virtual 动态高度虚拟滚动 + 懒加载）
 ```
 
-**关键契约**：`AgentEventType`（`src/types/index.ts`）是 **TS 引擎、Rust `event_sink`、`chat-service.createEventHandler`、`rust-engine.ts` 四方共享**的事件契约。当前 18 种：
+**关键契约**：`AgentEventType`（`src/types/index.ts`）是 **Rust `event_sink`、`chat-service.createEventHandler`、`rust-engine.ts` 三方共享**的事件契约。当前 18 种：
 
 ```
 stream_start / stream_event / stream_end · tool_call / user_interaction / error
@@ -169,17 +168,18 @@ iteration_verify_pass / iteration_verify_fail / iteration_max_exceeded / iterati
 
 ## 5. 主要子系统地图（「主要的地方」）
 
-### 5.1 Agent 引擎（双实现）——本项目的心脏
+### 5.1 Agent 引擎（**仅 Rust**）——本项目的心脏
 
-两份实现，同一套语义：
+聊天循环只有一份实现（原 TS 引擎已移除，见 §11.37）：
 
-| | TS 引擎 | Rust 引擎 |
-|---|---|---|
-| 入口 | `src/domain/engine/engine.ts` | `src-tauri/virlen-core/src/agent/engine.rs` |
-| 触发 | 浏览器 dev / vitest / 用户关闭 Rust 引擎 | **默认开启**（`settings.useRustEngine` + Tauri 可用） |
-| 共同接口 | `AgentEnginePort`：`sendMessage / getRunSnapshot / clearRunSnapshot / cancel / compressContext / generateTitle` | 同 |
-| 循环编排 | `llm-loop.ts` / `llm-round.ts` / `tool-executor.ts` / `iteration-controller.ts` / `verifier.ts` / `storm-breaker.ts` | `llm_loop.rs` / `llm_round.rs` / `tool_executor.rs` / `iteration.rs` / `verifier.rs` / `storm_breaker.rs` |
-| 持久化 | **不碰**：消息经 `onEvent` 抛给 `chat-service` | 引擎内直落 SQLite（`session_db/`，先落库再 emit） |
+| | Rust 引擎 |
+|---|---|
+| 入口 | `src-tauri/virlen-core/src/agent/engine.rs` |
+| 触发 | 恒为它（前端 `services/chat/common.ts::getEngine()` 直接返回 `services/rust-engine.ts` 适配器） |
+| 接口 | `AgentEnginePort`：`sendMessage / getRunSnapshot / clearRunSnapshot / cancel / compressContext / generateTitle` |
+| 循环编排 | `llm_loop.rs` / `llm_round.rs` / `tool_executor.rs` / `iteration.rs` / `verifier.rs` / `storm_breaker.rs` |
+| 压缩 / 标题 | `compress/`（`ai` / `raw`）+ `title.rs` —— GUI 与 CLI 共用（命令 `cmd_compress_context` / `cmd_generate_title`） |
+| 持久化 | 引擎内直落 SQLite（`session_db/`，先落库再 emit） |
 
 **Rust 桥协议**（与 `src-tauri/virlen-core/src/agent/bridge.rs` 严格对应）：
 
@@ -189,14 +189,14 @@ iteration_verify_pass / iteration_verify_fail / iteration_max_exceeded / iterati
 | Rust → JS | `agent:tool-request` | 未原生化工具交 JS 执行，JS 用 `toolRegistry` 跑完回 `agent_tool_response`（`payload.__kind: value \| error \| interaction`；**`error` 也可带 `uiData`** → 失败文案同样是「模型侧英文 + UI 侧结构化」） |
 | Rust → JS | `agent:user-interaction-request` | 用户交互（`user_choice` / 终端内确认），走 `chat-service` 注册的 session handler → `agent_user_interaction_response` |
 | Rust → JS | `agent:provider-request` | 未原生化的 Provider（目前 Gemini）交 JS，流式用 `agent_provider_stream_event` 逐条回传，结束 `agent_provider_stream_done` |
-| Rust → JS | `agent:round-boundary` | **轮次边界注入**：上一批工具已回复、下一次 LLM 请求尚未发出时回问 JS「有没有要注入的消息」（AI 回复期间用户**已应用**的任务清单变更），JS 用 `agent_round_boundary_response` 回 `{ messages }`；Rust 落库后追加进本轮消息列表，模型**这一轮**就能看到（超时 5s 兼底，失败降级为不注入）。TS 引擎同一时机走 `SendMessageOptions.onRoundBoundary`（铁律 1） |
+| Rust → JS | `agent:round-boundary` | **轮次边界注入**：上一批工具已回复、下一次 LLM 请求尚未发出时回问 JS「有没有要注入的消息」（AI 回复期间用户**已应用**的任务清单变更），JS 用 `agent_round_boundary_response` 回 `{ messages }`；Rust 落库后追加进本轮消息列表，模型**这一轮**就能看到（超时 5s 兼底，失败降级为不注入） |
 | JS → Rust | `agent_send_message` / `agent_cancel` / `agent_get_run_snapshot` / `agent_clear_run_snapshot` / `agent_dispose` / `agent_kill_command` / `pty_*` | 生命周期、取消、终端交互 |
 
-**未原生化的部分**（委托 TS）：`compressContext`、`generateTitle`、Gemini Provider。
+**未原生化的部分**（仍委托 TS）：Gemini Provider（`agent:provider-request` 桥）。
 > **28 个工具已全部原生化**（S5 补齐 `web_fetch` / `web_search`）——`is_native_tool` 就是全集，**没有工具再走 JS 桥**。
 Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你是一个有用的 AI 助手。"`）。完整清单见 `docs/rust-engine.md`。
 
-> ⚠️ **改引擎语义（LLM 轮次 / 工具执行 / 暂停恢复 / 迭代验证 / 撤销）时，TS 与 Rust 两侧都要改**，否则默认路径与回退路径行为分叉（铁律 1）。
+> ⚠️ **改引擎语义（LLM 轮次 / 工具执行 / 暂停恢复 / 迭代验证 / 撤销）只需改 Rust**（`virlen-core`）；但**被 Rust 回调的 TS 部分**（工具执行器 / Gemini provider / 提示词组装 / 事件契约）仍须与 Rust 同语义（铁律 1）。
 
 ### 5.2 工具系统——能力扩展的唯一入口
 
@@ -223,7 +223,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 - **原生工具的会话库依赖**：需要读写会话库的工具（消息查询）从 `ctx.repo: &dyn SessionRepo` 取（由引擎注入；`repo.is_available()` 为 false 时如实回「本地存储不可用」）—— 与 `ctx.security` 同一种显式注入。
 - **原生工具的技能依赖**：技能工具从 `ctx.skills`（本 agent 启用的技能名）+ `ctx.security.skills_dir` 取数，**自行扫盘解析 SKILL.md**（不依赖前端 localStorage 注册表，CLI 同样可用）。
 - **原生工具的宿主依赖**：需要「资源目录 / 数据目录在哪」的工具（`vision_analyze` 的模型文件）从 `ctx.host: &dyn HostEnv` 取。宿主差异只有两份实现 —— GUI `host::TauriHost`（`resource_dir()` / `app_data_dir()`）、CLI `host::CliHost`（环境变量 + exe 位置）；**引擎核心（含 `native_tools/**`）不得出现 `tauri::`**，这是 headless 的前提。详见 `docs/host-abstraction-draft.md`。
-- **模型侧文案一律英文（D2-A）**：工具返回给 LLM 的文本（`content`、抛出的错误、引擎迭代 / 验证反馈、系统提示词）固定英文且**不进 i18n** —— 否则默认（Rust）与回退（TS）引擎、中 / 英界面会产出不同文本。界面展示改由**结构化 `uiData`** 按界面语言重建（组件优先渲染 `uiData`，缺失时回退 `content`，如 `tool-call/TerminalBlock.tsx::displayNote`）。因此：改 TS 执行器文案**必须与 Rust 原生实现逐字对齐**（铁律 1），新增返回值务必同时给出语言无关的 `uiData` 字段。
+- **模型侧文案一律英文（D2-A）**：工具返回给 LLM 的文本（`content`、抛出的错误、引擎迭代 / 验证反馈、系统提示词）固定英文且**不进 i18n** —— 否则 Rust 原生工具与 JS 执行器（Rust 回调）、中 / 英界面会产出不同文本。界面展示改由**结构化 `uiData`** 按界面语言重建（组件优先渲染 `uiData`，缺失时回退 `content`，如 `tool-call/TerminalBlock.tsx::displayNote`）。因此：改 TS 执行器文案**必须与 Rust 原生实现逐字对齐**（铁律 1），新增返回值务必同时给出语言无关的 `uiData` 字段。
 - **跨层单例**：`src/infrastructure/tools/output-store.ts`（UI/services/engine 均引用）不归属任何分类，留在 tools 根目录。
 - **UI 渲染**：`src/ui/pages/chat/components/tool-call/<Tool>Message.tsx` 实现 `IToolCallMessage` 并 `register(...)`；未注册自动落 `DefaultMessage`。
 
@@ -253,7 +253,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 | **路径校验** | `domain/security/index.ts` + `services/security-service.ts` + `utils/pathCanonicealize.ts`；Rust 镜像 `native_tools/common.rs` | 优先级 **黑名单 > 白名单 > 工作目录**；写模式（`mode='w'`）仅允许白名单 + 工作目录，**两侧规则必须等价** |
 | **权限三态** | `domain/permission/index.ts` + `settings.permissions`；Rust 镜像 `native_tools/execute/common/classify.rs` | 命令按 `safe/install/dangerous` 映射，脚本走 `script.execute`，沙盒脱壳走 `sandbox.*.execute`；`deny` 永远优先；脱壳与命令权限**取更严格者**（默认 `ask`） |
 | **跨平台沙盒** | `infrastructure/sandbox/*` + `src-tauri/virlen-core/src/sandbox/` | Windows：Job Object + 受限令牌 + ACL；Linux：Landlock（默认拒写）；macOS：`sandbox/macos/mod.rs`。**禁止绕过沙盒直接 spawn**。可写根**只来自** workspace + 白名单：**不自动豁免**包管理器缓存（`~/.npm` / pnpm store / `~/.cargo`…）等区外目录——该「环境探测 + ACL 授予」机制已**整体移除**（实测不好用），要放行区外写入请让命令命中下方「忽略沙盒命令」规则 |
-| **工具风暴防护** | `domain/engine/storm-breaker.ts` / `agent/storm_breaker.rs` | 滑窗（window 6 / threshold 3）检测重复 `(toolName, args)`，命中即中断循环 |
+| **工具风暴防护** | `agent/storm_breaker.rs` | 滑窗（window 6 / threshold 3）检测重复 `(toolName, args)`，命中即中断循环 |
 
 > 唯一「绕过沙盒」的例外：`execute_command` / `execute_script` 传 `sandbox:"off"`（见 §8、§11.2），按脱壳权限决策、`readonly` 直接拒绝，并埋点 `tool.sandbox.bypass`。
 
@@ -262,13 +262,13 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 > 该规则也是「区外写入」（如 `npm install` 写 `~/.npm`、pnpm store）的**唯一推荐放行方式**（不要再做沙盒侧自动探测/豁免）。
 > **匹配有两份实现（S7 起），由两侧共读的 golden 收敛**（`src/tests/fixtures/sandbox-rules.golden.json`）：
 > - **Rust 侧（权威：默认引擎 + CLI）**：`src-tauri/virlen-core/src/security/`（`rules.rs`：`text` / `regex` 原生 + `js` 交内嵌 QuickJS `js_rule.rs`）；
-> - **TS 侧（浏览器 dev / TS 引擎路径 / 设置页「测试」）**：`domain/security/sandbox-ignore-rules.ts`，经 `securityService.matchSandboxIgnoreRule` 使用。
+> - **TS 侧（浏览器 dev / 设置页「测试」）**：`domain/security/sandbox-ignore-rules.ts`，经 `securityService.matchSandboxIgnoreRule` 使用。
 > **规则来源是 `app_settings` 的 `sandboxIgnoreRules` 键**（配置下沉 D3；`infrastructure/securityRepo` 启动水合 + debounce 回写，退出前 flush）：
 > ⚠️ **单一源：localStorage 不保存该字段**（`securityRepo.save()` 只写三个路径配置；Tauri 下 `load()` 只认内存快照）。
 > 启动入口是 `securityStore.hydrate()`：表里**有**该键 → 读进内存快照；表里**没有** → 一次性迁移 localStorage 的历史副本进表。
 > 两条分支随后都**清掉** localStorage 的规则字段 —— 因此「删掉表里的行」= 真正清空规则（不会被迁回）。
 > - **Rust 引擎路径**（默认）在 `native_tools/execute/{execute_command,execute_script}.rs` 里**本地判定**（规则随 `NativeToolSecurity.sandbox_ignore_rules` 下发，零 IPC、零 IO）；
-> - **TS 引擎路径**在 `infrastructure/tools/execute/{execute-command,execute-script}.ts` 里定 `bypassSandbox`；
+> - **JS 执行器路径**在 `infrastructure/tools/execute/{execute-command,execute-script}.ts` 里定 `bypassSandbox`；
 > - **CLI** 没有前端，用 `security::load_sandbox_ignore_rules(&db.settings)` 读**同一个键**。
 > ⚠️ 原「内部交互 `sandbox_rule_check` 问 JS」已**删除**（它要求存在 JS 宿主，纯 Rust CLI 问不到，只能白等超时后按未命中）。
 > `js` 规则的输入是代码编辑器 `ui/components/code-editor/CodeEditor`（可编辑的精简版 Monaco，见 `monaco/setupMonaco.ts`：只有词法高亮，**无语言服务/无诊断**）；
@@ -320,10 +320,10 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 
 ## 6. 铁律（改代码前必读，违反将导致行为分叉 / 静默失效）
 
-1. **双引擎同步**：`src/domain/engine/*`（TS）与 `src-tauri/virlen-core/src/agent/*`（Rust）是同一套语义的两份实现。
-   改「LLM 轮次 / 工具执行 / 暂停恢复 / 迭代验证 / 撤销语义」时**两边都要改**。
+1. **引擎语义只在 Rust，但被回调的 TS 须同语义**：聊天循环 / 工具执行 / 压缩 / 标题全在 `src-tauri/virlen-core/src/agent/*`（TS 引擎已移除）。
+   改「LLM 轮次 / 工具执行 / 暂停恢复 / 迭代验证 / 撤销语义」只需改 Rust；但**被 Rust 回调的 TS 部分**（工具执行器 / Gemini provider / 提示词组装 / `AgentEventType` 契约）仍须与 Rust 逐字对齐。
 2. **事件契约不可擅自改名**：`AgentEventType` 是四方共享契约（TS 类型 → TS emit → Rust emit → chat-service 处理），新增必须四处一致。
-3. **引擎不碰持久化、不 import store**：TS 引擎经 `onEvent` 交 `chat-service` 落库；Rust 引擎由 `SessionRepo` 内部直落。
+3. **引擎不碰前端 store**：Rust 引擎由 `SessionRepo` 内部直落 SQLite（先落库再 emit），前端只消费 `onEvent` / `agent:event`。
 4. **新增 Tauri 命令必须注册**：`src-tauri/src/lib.rs` 的 `tauri::generate_handler![...]`，否则前端 `invoke` 静默 404；涉及权限还要看 `src-tauri/capabilities/default.json`。
 5. **工具是「定义 + 执行器」分离注册制，且定义只有一份**：定义在 Rust 侧权威源 `src-tauri/virlen-core/src/agent/tool_defs/definitions.json`；前端 `toolRegistry.register(name, executor, label?)` 只注册执行器与 i18n 文案，读取走异步 `listDefinitions()`。**不要在任何一侧另写定义体**（`src/tests/contracts/tool-defs-contract.test.ts` 守这条线）。
 6. **写操作必须先过安全校验**：JS 侧 `securityService.resolveSafePath/isPathAllowed`，Rust 侧 `native_tools::resolve_safe_path / is_path_allowed`，两侧规则必须等价。禁止绕过。
@@ -339,7 +339,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 
 ```bash
 pnpm install                 # 依赖安装（首次 / 依赖变更后必须执行）
-pnpm dev                     # 仅前端（Vite，端口 1420，strictPort；浏览器模式自动回退 TS 引擎）
+pnpm dev                     # 仅前端（Vite，端口 1420，strictPort；⚠️ 浏览器模式没有后端，聊天与压缩不可用）
 pnpm tauri dev               # 桌面端开发（前端 + Rust）
 pnpm build                   # tsc && rimraf dist && vite build
 pnpm tauri build             # 桌面端安装包
@@ -426,7 +426,7 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 ### 9.2 新增 / 修改 Provider、搜索源、Skill
 
 - **LLM Provider**：实现 `IProvider` → `provider/index.ts::createProviderInstance` 注册 → 模板放 `domain/provider/config.ts`。要 Rust 原生支持需在 `agent/provider.rs` 加实现，否则自动走 `BridgedProvider`。
-- **搜索源**：实现 `ISearchProvider` → 放 `infrastructure/search-providers/` → `factory.ts` 注册 → 配置存 `SettingsStore.searchProviders`（已下沉 `app_settings`）。⚠️ **若要被默认引擎（Rust）+ CLI 使用，还要在 `src-tauri/virlen-core/src/agent/native_tools/web/web_search.rs` 里加同名分支**（当前只有 `tavily` / `bocha`）——否则该搜索源只在浏览器 dev / TS 引擎路径生效。
+- **搜索源**：实现 `ISearchProvider` → 放 `infrastructure/search-providers/` → `factory.ts` 注册 → 配置存 `SettingsStore.searchProviders`（已下沉 `app_settings`）。⚠️ **若要被默认引擎（Rust）+ CLI 使用，还要在 `src-tauri/virlen-core/src/agent/native_tools/web/web_search.rs` 里加同名分支**（当前只有 `tavily` / `bocha`）——否则该搜索源只在浏览器 dev / JS 执行器路径生效。
 - **内置 Skill**：`src-tauri/resources/default-skills/<name>/SKILL.md`，frontmatter 至少 `name` / `description`（也兼容纯 Markdown：`# 标题` + `> 描述` + `**Version:** x.y.z`，解析器 `utils/mdYamlFrontmatter.ts`）；目录名应与 `name` 一致；脚本放 `scripts/`。
 
 ---
@@ -461,7 +461,7 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 **11.7 Windows `execute_command` 走 ConPTY（伪控制台）** —— stdout / stderr **合并为一条 VT 流**，`uiData.pty = true`（前端用 xterm 渲染，非 PTY 才回落 `<pre>`）；完整背景见 `docs/pty-research.md`。
 - 给模型看的文本必须过 `process_terminal_output`（完整吞掉 ECMA-48 转义序列，**Rust / TS 两侧必须同步**）；**不要再假设子进程 stdio 是管道**。
 - 交互走 Tauri 命令 `pty_write` / `pty_resize` / `pty_key`（**不经引擎事件总线**）。两条红线：用户输入正文**不回灌**给模型；终端内确认的命令**仍走沙盒 + 同一条执行路径**。
-- 缺口：TS 引擎路径未 PTY 化；常驻交互 shell（Step 3）未做；Unix PTY 未实现（`runner/pty.rs` 整体 Windows 门禁，见 §11.31）。
+- 缺口：常驻交互 shell（Step 3）未做；Unix PTY 未实现（`runner/pty.rs` 整体 Windows 门禁，见 §11.31）。
 
 **11.8 拖拽取文件路径：`dragDropEnabled` 只能为 `true`（与 HTML5 拖拽互斥）** —— 原生拖放能拿真实路径（`onDragDropEvent().payload.paths`），但页面收不到 HTML5 `drop`。实现见 `ui/pages/chat/components/input/index.tsx`（监听 + 命中判断）+ `input/hooks.ts`（同类说明散见于 `use-tree-drag.ts` / `sandbox-rules-dnd.ts` 的文件头）。
 附件：`MessageContent` 的 `file` 块**只存路径**，各 Provider 统一降级为文本（TS `fileBlockToText` ↔ Rust `provider.rs`，**两侧文案必须一致**；`ATTACHED_FILE_LABEL` / `ATTACHED_DIR_LABEL` 用英文、不进 i18n）。
@@ -576,8 +576,8 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 - 落点：core `agent/compress/`（`mod` 模式/常量/口径/切片 · `raw` 正文压缩渲染，端口自 `compress-raw.ts` · `ai` 非流式 `Provider::chat` + `tool_choice=none`），产物是**一条 `role="summary"` 消息**；CLI `session_rt/compress.rs`（TUI 与顺序输出模式**都调它**，不给两条路径分叉的机会）。
 - 交互：`/compress` 弹**显式选择面板**（↑↓/←→ 移动 + Enter + Esc；**字符键一律不参与** —— 与授权面板同一条 fail-closed 口径）；`/compress ai|raw` 直接指定；认不出的方式名**不静默退化**；占用 < 40% 按桌面端同口径拦下，`Skipped`（提示级反馈）与 `Failed`（报错）**分开**；顺序输出模式读设置里的 `contextCompressMode`，读不到就**要求写明方式**（不猜）。
 - 落库是**追加**不是替换（TS 走整表替换，`append_messages(&[summary])` 等效；旧消息留在库里，正是检索工具 `list_messages` / `read_messages` 的数据源）；`list-session` 两列来自 `SessionRepo::session_stats()`（两条聚合查询），`--json` 无数据是 `null` 而非 0，统计失败**不中断列表**（stderr 告警）。
-- **清单保活**：压缩把早期消息压进摘要后，模型只看得到**最后一个 summary 之后**的消息 → 若「当前活跃清单」（最后一条 `uiData.type=="todo"` 快照）落在压缩区间内，模型就会「忘记清单」。对策：把清单**原文**渲染成文本补在 summary 正文末尾（TS `withTodoRecap` / Rust `todo_recap`，复用 `renderTodoContent` / `plan::render_todo_content`）；**不搬运 tool 消息**（`tool` 消息必须紧跟带 `tool_calls` 的 assistant，否则协议报错）。只在快照落在压缩区间内时补（否则上一次压缩已处理，补了重复）。两侧同语义，测试见 `compress-context.test.ts` / `compress/tests.rs`。
-- **边界**：① 压缩后占用是**本地粗估**（CJK 0.6 token/字符）；② 截断按**码点**、TS 按 UTF-16 码元 → 阈值附近 ±1；③ AI 摘要在 CLI 里**不可取消**；④ `list-session` 表格约 **139 列宽**，窄终端标题列会折行（机器可读请用 `--json`）；⑤ TS 与 Rust **两份压缩实现并存**，但 **GUI（Tauri）现在也走 Rust**（命令 `cmd_compress_context`），TS 那份仅用于非 Tauri（浏览器 dev / vitest）（见 §11.36）；⑥ 选择面板的真终端外观与键位未人工复验。三个决策点、界面示意与完整验证见 `docs/cli-tui-plan.md` §11。
+- **清单保活**：压缩把早期消息压进摘要后，模型只看得到**最后一个 summary 之后**的消息 → 若「当前活跃清单」（最后一条 `uiData.type=="todo"` 快照）落在压缩区间内，模型就会「忘记清单」。对策：把清单**原文**渲染成文本补在 summary 正文末尾（TS `withTodoRecap` / Rust `todo_recap`，复用 `renderTodoContent` / `plan::render_todo_content`）；**不搬运 tool 消息**（`tool` 消息必须紧跟带 `tool_calls` 的 assistant，否则协议报错）。只在快照落在压缩区间内时补（否则上一次压缩已处理，补了重复）。两侧同语义（TS 实现已移除，见 §11.37）；测试见 `compress/tests.rs`。
+- **边界**：① 压缩后占用是**本地粗估**（CJK 0.6 token/字符）；② 截断按**码点**、TS 按 UTF-16 码元 → 阈值附近 ±1；③ AI 摘要在 CLI 里**不可取消**；④ `list-session` 表格约 **139 列宽**，窄终端标题列会折行（机器可读请用 `--json`）；⑤ 压缩只有一份实现（Rust，GUI 与 CLI 共用；TS 那份已随引擎移除，见 §11.37）；⑥ 选择面板的真终端外观与键位未人工复验。三个决策点、界面示意与完整验证见 `docs/cli-tui-plan.md` §11。
 
 **11.31 CI 首次运行暴露的三类失败** —— 上一轮 push 后 `ci.yml` 与三个 `build-*.yml` **首次真正编译 Linux / macOS 目标**。
 - **① clippy 在 Ubuntu 上 11 条 `dead-code`**：全是**只在 Windows 才被调用**的 ConPTY 代码（`runner/mod.rs` 的 `PAGER_DISABLED` / `TICK` / `PTY_HOLD_MAX` / `pty_hold_max` / `HOLD_MAX_OVERRIDE_SECS`；`pty_session.rs` 的 `new` / `is_held` / `interventions` / `close_input` / `register` / `unregister` / `CLIENT_SIZE_WAIT` / `initial_size`；`test_util.rs` 的 `is_process_alive`）。修法：前 5 项（连同只服务它们的 `use std::time::Duration`）**逐项 `#[cfg(target_os = "windows")]`**；`pty_session.rs` 用**文件级** `#![cfg_attr(not(target_os = "windows"), allow(dead_code))]`（逐项门禁会连锁到结构体字段 → 「只写不读」的新告警；`Duration` / `Instant` 也会变成未使用导入）；`is_process_alive` 用平台 `cfg_attr(allow)`（非 Windows 的 `kill -0` 分支留给今后 Linux 用例）。
@@ -595,16 +595,16 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 
 **11.33 大历史下「暂停 → 继续」恢复要等好几秒（2026-09-26 用户报回 → 已修）** —— 现象：会话消息 1000+ 条时，`user_choice` 弹窗点「暂存」再点「继续」，要等好几秒才重新弹出（同一会话切换走再切回来则无此问题）。
 - **根因**：一次发送本就带 O(历史) 开销 —— 前端把**整份历史**经 IPC 传给 Rust（`invoke('agent_send_message')`），Rust `send_message_inner` 入口又把整份历史 **upsert 回 SQLite**（`append_messages_if_alive`）。正常发送时这段耗时被「等 LLM」掩盖；而**恢复会跳过 LLM**，它第一次暴露 —— 历史越长越明显。
-- **改法（两侧配对）**：① Rust `send_message_inner`：`resume_from_snapshot.is_some()` 时**不再整表回写**（暂停时消息均已增量直落 —— `execute_llm_round` / `execute_tool_steps`，再 upsert 纯属浪费）；② 恢复时消息**以本地库为权威**读回（`SessionRepo::get_messages`，读失败 / Noop / 为空时回退到前端 `messages`），前端 `resumePausedRun` 在 **Rust 引擎下改传空数组**（TS 回退路径仍传全量 —— 它不读 Rust 侧 repo）。从而省掉「序列化整份历史 → IPC → 反序列化」。
+- **改法（两侧配对）**：① Rust `send_message_inner`：`resume_from_snapshot.is_some()` 时**不再整表回写**（暂停时消息均已增量直落 —— `execute_llm_round` / `execute_tool_steps`，再 upsert 纯属浪费）；② 恢复时消息**以本地库为权威**读回（`SessionRepo::get_messages`，读失败 / Noop / 为空时回退到前端 `messages`），前端 `resumePausedRun` 改传空数组（引擎以库为权威）。从而省掉「序列化整份历史 → IPC → 反序列化」。
 - **不要踩**：恢复的 `current_messages` 现在来自库（`ORDER BY rowid` = 逻辑序，与前端内存列表一致）；Rust 恢复路径跳过 `prepareMessagesForSend` 是安全的 —— 暂停必然发生在一次完整 run 内，该 run 的发送已 `ensureAllMessagesLoaded` 并清空了 `pendingRepairFlush`，故不会漏落「悬空 tool_calls 的占位修复」。CLI 恒传 `resume_from_snapshot: None`（`session_rt/mod.rs`），不受影响。
 - 回归用例：`agent/engine/tests.rs::resume_reads_messages_from_repo`（快照 + 空 `messages`，断言引擎发给 LLM 的消息含库中历史）。
 
 **11.34 「暂存 → 继续 → 取消」后会话残留「已暂停」+ 再次继续 400（2026-09-26 用户报回 → 已修）** —— 现象：`user_choice` 弹窗点「取消」、AI 回复结束后，会话仍显示「会话已暂停，是否继续？」；再点「继续」报 400 `Messages with role 'tool' must be a response to a preceding message with 'tool_calls'`。
 - **根因（两处）**：① `resume_run` 跑完快照里所有待办步骤后**没有清快照** —— `execute_llm_round` 里那次「工具全完成就 `clear_snapshot`」只覆盖**普通轮次**，恢复走的是 `resume_run`，它只 persist 不 clear。残留快照让 `finishWorking` 判定 `isPaused=true` → UI 误显示「已暂停」。② `find_next_step` / `findNextStep` 把 `failed` 也当成「未完成」—— 而 `failed`（被取消 / 出错 / StormBreaker）**已经写过一条 tool 结果并落库**。于是下次「继续」按残留快照把该步骤**重跑一遍** → 同一 `tool_call_id` 产出第二条 tool 结果 → 服务端 400。
-- **改法**：① `resume_run` 在 `completed` 后 `self.clear_snapshot(session_id)`（恢复后的这一轮 LLM 若又产生 tool_calls，会由 `execute_llm_round` 重新落一份新快照）；② `find_next_step` / `findNextStep` 只把 `pending | running` 当作断点（`completed | failed` 一律跳过），TS / Rust 同语义（铁律 1）。
-- 回归用例：`agent/engine/tests.rs::resume_completing_steps_clears_snapshot`（暂存 → 继续+取消，断言无残留快照）、`agent/run_state.rs` 与 `run-state.test.ts` 的 `find_next_step_skips_failed*`。
+- **改法**：① `resume_run` 在 `completed` 后 `self.clear_snapshot(session_id)`（恢复后的这一轮 LLM 若又产生 tool_calls，会由 `execute_llm_round` 重新落一份新快照）；② `find_next_step` 只把 `pending | running` 当作断点（`completed | failed` 一律跳过）。
+- 回归用例：`agent/engine/tests.rs::resume_completing_steps_clears_snapshot`（暂存 → 继续+取消，断言无残留快照）、`agent/run_state.rs` 的 `find_next_step_skips_failed*`。
 
-**11.35 恢复读回「上下文」而非整份历史（2026-09-26 优化）** —— 承接 §11.33：恢复改由引擎读库后，仍把**整份历史**（含已被压缩的旧消息）读进内存 / 反序列化。但请求组装（`provider::blocks::slice_messages`，TS 为 `buildRequest`）本就**丢掉最后一个 `summary` 之前的全部消息**，那部分读了也用不上，正是「大历史下继续仍会等约一秒」的剩余来源。
+**11.35 恢复读回「上下文」而非整份历史（2026-09-26 优化）** —— 承接 §11.33：恢复改由引擎读库后，仍把**整份历史**（含已被压缩的旧消息）读进内存 / 反序列化。但请求组装（`provider::blocks::slice_messages`）本就**丢掉最后一个 `summary` 之前的全部消息**，那部分读了也用不上，正是「大历史下继续仍会等约一秒」的剩余来源。
 - **改法**：新增 `SessionRepo::get_context_messages` —— SQLite 用一条查询 `rowid >= IFNULL((SELECT MAX(rowid) ... role='summary'), 0)` 取「最后一个 `summary` 及其之后」，无 `summary` 则等价于全部；`engine.rs` 恢复路径改用它，不再用 `get_messages`。
 - **不要踩**：旧消息**仍留在库里**（供 `list_messages` / `read_messages` 检索「已压缩区间」），本改动只影响「回读进内存的上下文」，不动库内容；结果与切片逐条一致，语义不变。本轮**仅覆盖 Rust 恢复路径**；前端发送路径 / CLI 仍读全量（前端发送路径若要同样优化，需一并处理修复回写，见 §11.33 说明）—— **已由 §11.36 补齐**。
 - 回归用例：`session_db/tests/sessions.rs` 的 `context_messages_*`（从最后 summary 起 / 取最后一条 / 无 summary 全部 / 空会话 / 跨会话隔离）、`agent/engine/tests.rs::resume_reads_context_from_last_summary`（summary 之前的旧历史不得进上下文）。
@@ -621,11 +621,17 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 - 新增 Tauri 命令 `cmd_compress_context`（`commands/agent.rs`），内部调 `virlen_core::agent::compress`（与 CLI `session_rt/compress.rs` **同一份实现**）。
 - provider：`ai` 模式用 `DefaultProviderFactory`（GUI 有 JS 宿主，gemini 走桥，与正常聊天同一条路）；`raw` 无需 provider。
 - **记账在 Rust**（`agent::usage::record_usage`，kind=`compress`）；**落库仍在前端**（`cmd_replace_session_messages`），与既有行为一致。
-- 前端选择器 `services/chat/common.ts::getCompressEngine()`：**Tauri 下一律 Rust**（与 `useRustEngine` 开关无关），非 Tauri（浏览器 dev / vitest）回退 TS。
-- ⚠️ TS 的 `compress-context.ts` / `compress-raw.ts` **未删除** —— 它们是**非 Tauri（浏览器 dev / vitest）的唯一实现**；两份仍须保持同语义（铁律 1）。
+- 前端选择器 `services/chat/common.ts::getCompressEngine()`：恒为 Rust（TS 引擎移除后与 `getEngine()` 同一份，见 §11.37）。
+- ⚠️ TS 的 `compress-context.ts` / `compress-raw.ts` 当时**未删除** —— 它们是**非 Tauri（浏览器 dev / vitest）的唯一实现**，两份当时仍须同语义；**现已随 TS 引擎移除，见 §11.37**。
 - ⚠️ **摘要请求的 `max_tokens` 必须钳上限**：GUI 会话的 `params.maxTokens` 默认是 `2000000`（`DEFAULT_SESSION_PARAMS`，语义是「不限制输出」，聊天时由全局 `settings.maxTokens` 覆盖）；Rust 摘要若把它**原样**写进请求体，会被模型以 `Invalid max_tokens value, the valid range ...`（400）拒掉。修法：`compress::ai::summary_max_tokens` 把会话值钳到 `(0, DEFAULT_SUMMARY_MAX_TOKENS]`，否则用默认上限（TS 旧实现传 `undefined` = provider 默认，所以没这问题）。回归：`compress/tests.rs::summary_max_tokens_caps_absurd_session_values`。
 
 - 回归用例：`session_db/tests/sessions.rs::replace_from_*`（前缀保留 / 等价全量替换 / 目标不存在 no-op）、`src/tests/services/session-context-load.test.ts`（summary 在窗口内 / 外 / 无 summary）。
+
+**11.37 移除 TS 引擎：引擎统一为 Rust（2026-09-26）** —— 背景：CLI（headless）把大量原在前端的逻辑搬进 `virlen-core` 后，「双引擎」（`src/domain/engine/*` ↔ `virlen-core/src/agent/*`）变成纯负担 —— 同一套语义两份实现，改一边就得同步另一边。
+- **改动**：① `virlen-core` 新增 `agent/title.rs`（AI 标题生成；GUI 命令 `cmd_generate_title` + CLI `chat` 首回合后调用，逐字对齐原 TS `generate-title.ts`）；② `ChatRequest` 增加 `thinking: Option<bool>`（补齐原 TS 标题请求依赖的「禁用思考」，openai / anthropic / bridged 三处落请求体）；③ 删除 `src/domain/engine/**`（14 文件）与 9 个只测 TS 引擎内部的 vitest 文件；④ 共享契约类型迁到 `src/domain/ports/engine.ts`（`SendMessageOptions` / `Run` / `ToolStep` / `RunSnapshot` / `CompressMode`）；⑤ `getEngine()` / `getCompressEngine()` 恒返回 `services/rust-engine.ts`；⑥ 删 `useRustEngine` 设置项 / UI 开关 / 埋点分支。
+- **仍然保留的 TS 部分**（Rust 会回调，必须与 Rust 同语义）：工具执行器（`agent:tool-request`）、Gemini provider（`agent:provider-request`）、系统提示词组装（`assembleAgentPrompt` → `session.systemPrompt`）、`AgentEventType` 契约、各类水合适配器（prompts / tool defs / provider catalog）。
+- **不要踩**：① 非 Tauri（纯浏览器 `pnpm dev` / vitest）**没有可用的聊天引擎**（产品不走该路线）—— 引擎行为一律以 Rust 侧测试为准；② 删 TS 引擎时**必须同时删引用它的测试**（`npx tsc --noEmit` 覆盖 `src/tests`，留着会编译失败）；③ 原 TS 版「标题禁用思考」的能力**不能丢**（否则推理模型上 40 token 被 reasoning 吃掉、标题只能回退首行）—— 这就是 `thinking` 字段存在的原因。
+- 回归用例：Rust `agent::title`（8 例）、`agent::provider::tests::{openai,anthropic}_thinking_*`。
 
 **踩坑前必读：`docs/tray-implementation-plan.md`**（托盘 / 关闭不退出 / 后台工作的完整方案与实现记录）。
 
@@ -635,9 +641,9 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 
 | 我要做的事 | 去哪里 |
 |---|---|
-| 改聊天循环 / 工具循环 / 暂停恢复 | `src/domain/engine/*` **和** `src-tauri/virlen-core/src/agent/{engine,llm_round,tool_executor,llm_loop}.rs` |
+| 改聊天循环 / 工具循环 / 暂停恢复 | `src-tauri/virlen-core/src/agent/{engine,llm_round,tool_executor,llm_loop}.rs`（TS 引擎已移除，见 §11.37） |
 | 改系统提示词 | **文本**：`src-tauri/virlen-core/src/agent/prompts/*.md`（唯一源；前端经 `cmd_agent_prompts` 取）；**组装顺序**：`src/services/agent-service.ts`（GUI）+ `src-tauri/virlen-core/src/agent/prompts/assemble.rs`（Rust / CLI） |
-| 改上下文压缩 / 标题生成 | **压缩（权威、CLI 在用）** `src-tauri/virlen-core/src/agent/compress/`（`mod` 模式/常量/口径/切片 · `raw` 正文压缩渲染 · `ai` 非流式摘要）+ CLI 执行链 `src-tauri/virlen-cli/src/session_rt/compress.rs`（落库/记账/快照）+ TUI 入口 `src-tauri/virlen-cli/src/tui/{commands,state,view,app}.rs`（`/compress` 面板与状态行百分比）+ `list-session` 两列 `src-tauri/virlen-cli/src/list/{render,sessions}.rs` + `SessionRepo::session_stats`；**GUI（Tauri）也走 Rust**（命令 `cmd_compress_context` → 同一份 `agent/compress`，见 §11.36）；TS 实现 `src/domain/engine/compress-context.ts`（`ai` LLM 摘要 / `raw` 正文压缩分派）+ `compress-raw.ts`（本地渲染）**仅用于非 Tauri（浏览器 dev / vitest）**；`generate-title.ts` 仍由 Rust 侧委托 TS；产物在消息列表里的呈现：`ui/pages/chat/components/message/summary-message.tsx` |
+| 改上下文压缩 / 标题生成 | **压缩（权威、CLI 在用）** `src-tauri/virlen-core/src/agent/compress/`（`mod` 模式/常量/口径/切片 · `raw` 正文压缩渲染 · `ai` 非流式摘要）+ CLI 执行链 `src-tauri/virlen-cli/src/session_rt/compress.rs`（落库/记账/快照）+ TUI 入口 `src-tauri/virlen-cli/src/tui/{commands,state,view,app}.rs`（`/compress` 面板与状态行百分比）+ `list-session` 两列 `src-tauri/virlen-cli/src/list/{render,sessions}.rs` + `SessionRepo::session_stats`；**GUI（Tauri）也走 Rust**（命令 `cmd_compress_context` → 同一份 `agent/compress`，见 §11.36）；**标题生成** `src-tauri/virlen-core/src/agent/title.rs`（命令 `cmd_generate_title`；CLI 在 `chat` 首回合后调用，失败回退 `title_from_prompt` 首行截取）；产物在消息列表里的呈现：`ui/pages/chat/components/message/summary-message.tsx` |
 | 改会话持久化 | `src-tauri/virlen-core/src/session_db/`（`sqlite.rs` / `schema.rs` / `open.rs`）+ 命令壳 `src-tauri/src/commands/session_db.rs` + `src/infrastructure/sessionRepo/` + `src/ui/store/sessionStore.ts` |
 | 加 / 改工具 | **定义**：`src-tauri/virlen-core/src/agent/tool_defs/definitions.json`（权威源，三平台变体）；**执行器**：`src/infrastructure/tools/<分类>/<工具>.ts`（+ 分类 `common.ts`、分类 `index.ts`）；契约/注册中心：`src/domain/tools/{definitions,index,types}.ts` + `src/domain/ports/ToolRegistry.ts`；`src/domain/tools/category.ts`、`src-tauri/virlen-core/src/agent/native_tools/<分类>/<工具>.rs`（+ `mod.rs` 分发）、`src/ui/pages/chat/components/tool-call/` |
 | 改工具返回给模型的文案 / 增删 `uiData` | TS 执行器 `src/infrastructure/tools/<分类>/<工具>.ts` ↔ Rust 原生 `src-tauri/virlen-core/src/agent/native_tools/<分类>/<工具>.rs`（**逐字对齐**，模型侧固定英文）；界面侧只读 `uiData`，在 `src/ui/pages/chat/components/tool-call/<Tool>Message.tsx` / `TerminalBlock.tsx` 按界面语言重建 |
@@ -645,13 +651,13 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 | 改原生工具路径校验 / 参数取值 | `src-tauri/virlen-core/src/agent/native_tools/common.rs`（`resolve_safe_path` / `is_path_allowed` / `arg_*`）；路径展开共用 `src-tauri/virlen-core/src/sandbox/paths.rs::expand_user_path` |
 | 改文件读写底层 | `src-tauri/virlen-core/src/file_ops.rs` + `src/utils/diff.ts` |
 | 改文件搜索 | `src-tauri/virlen-core/src/search.rs`（`search_files_by_name` / `search_text_in_files` 原生） |
-| 改网络搜索 / 网页抓取（`web_search` / `web_fetch`） | **Rust 原生（权威）** `src-tauri/virlen-core/src/agent/native_tools/web/{web_search,web_fetch,common}.rs`（`web_search` 经 `ctx.settings` 直读 `app_settings` 的 `searchProviders` / `defaultSearchProviderId`）；**TS 侧（浏览器 dev / TS 引擎路径）** `src/infrastructure/tools/web/*.ts` + `src/infrastructure/search-providers/{factory,tavily,bocha}.ts`；**两侧结果文本契约** `src/tests/fixtures/web-search-format.golden.json`；搜索源配置 `src/services/search-provider-service.ts` + `src/domain/search/*`；已知差异（HTML→Markdown 细节）见 `docs/rust-engine.md` §3 |
+| 改网络搜索 / 网页抓取（`web_search` / `web_fetch`） | **Rust 原生（权威）** `src-tauri/virlen-core/src/agent/native_tools/web/{web_search,web_fetch,common}.rs`（`web_search` 经 `ctx.settings` 直读 `app_settings` 的 `searchProviders` / `defaultSearchProviderId`）；**JS 执行器（浏览器 dev）** `src/infrastructure/tools/web/*.ts` + `src/infrastructure/search-providers/{factory,tavily,bocha}.ts`；**两侧结果文本契约** `src/tests/fixtures/web-search-format.golden.json`；搜索源配置 `src/services/search-provider-service.ts` + `src/domain/search/*`；已知差异（HTML→Markdown 细节）见 `docs/rust-engine.md` §3 |
 | 改命令执行 / 风险分类 / 权限审批 | `src/domain/permission/index.ts`（+ Rust 镜像 `native_tools/execute/common/classify.rs`）；工具 `tools/execute/common.ts` + `execute-command.ts`/`execute-script.ts`；Rust 原生 `native_tools/execute/`。PTY 相关另见 `sandbox/windows/conpty.rs`、`native_tools/execute/pty_session.rs`、`tool-call/XtermTerminal.tsx`、`tool-call/TerminalConfirmBlock.tsx` |
 | 改终端输出处理（`\r`、ANSI） | `tools/execute/common.ts::processTerminalOutput`（UI 侧 `tool-call/Execute*Message.tsx` 复用）；Rust 侧 `native_tools/execute/common.rs::process_terminal_output`。两份**逐条对齐** |
 | 改工具授权确认弹窗 / 交互 | `ui/pages/chat/components/modals/authorization.tsx`；事件 `events/toolInteractEvent.ts::showAuthorization`；调度 `services/tool-service/command_confirm.ts`；Rust 侧下发同样字段 `native_tools/execute/{execute_command,execute_script}.rs` |
 | 改沙盒 / 权限 | `src-tauri/virlen-core/src/sandbox/**`、`src/infrastructure/sandbox/*`、`src/domain/security/index.ts` |
 | 改 `js` 类沙盒规则的求值 | ✅ **已落地**（S7）：`src-tauri/virlen-core/src/security/js_rule.rs`（受限 QuickJS：**无 host 函数**、16MB 内存 / 512KB 栈 / 200ms 中断，异常与超时一律按未命中），由 `native_tools/execute/common/rules.rs` 调用；设计与依赖代价见 `docs/config-sink-plan.md` §4 |
-| 改「忽略沙盒命令」规则（命中即免脱壳审批 + 强制无沙盒执行） | **Rust 判定（权威：默认引擎 + CLI）** `src-tauri/virlen-core/src/security/{rules,js_rule}.rs`（text/regex 原生 + js 内嵌 QuickJS）+ `agent/native_tools/execute/common/rules.rs`（判定入口与提示文案）+ `.../execute/{execute_command,execute_script}.rs`；**规则来源** `app_settings` 的 `sandboxIgnoreRules` 键（Rust 侧 `session_db/settings.rs` + `security::load_sandbox_ignore_rules`；前端 `infrastructure/securityRepo/`（`hydrateSecurity` / `flushSecurityPersist`）+ `ui/store/securityStore.ts` + `main.ts` 的 `step('securityConfig')`）；**TS 侧实现（浏览器 dev / TS 引擎 / 设置页测试）** `domain/security/sandbox-ignore-rules.ts`（`SANDBOX_JS_DEFAULT_PATTERN` / `defaultSandboxRulePattern` / 排序 / 预设 / `compileSandboxRule`）+ `services/security-service.ts::matchSandboxIgnoreRule` + `infrastructure/tools/execute/{execute-command,execute-script}.ts`；**两侧契约** `src/tests/fixtures/sandbox-rules.golden.json`（TS `tests/domain/sandbox-rules-golden.test.ts` ↔ Rust `security/rules.rs` 的 golden 用例）；UI `ui/pages/Settings/security-sandbox-rules.tsx`（拖拽几何 `./sandbox-rules-dnd.ts`；JS 输入用 `ui/components/code-editor/CodeEditor.tsx`；行内开关 `ui/components/shared/Toggle`）；下发字段 `services/rust-engine.ts::resolveSecurityConfig`（`sandboxIgnoreRules`） |
+| 改「忽略沙盒命令」规则（命中即免脱壳审批 + 强制无沙盒执行） | **Rust 判定（权威：默认引擎 + CLI）** `src-tauri/virlen-core/src/security/{rules,js_rule}.rs`（text/regex 原生 + js 内嵌 QuickJS）+ `agent/native_tools/execute/common/rules.rs`（判定入口与提示文案）+ `.../execute/{execute_command,execute_script}.rs`；**规则来源** `app_settings` 的 `sandboxIgnoreRules` 键（Rust 侧 `session_db/settings.rs` + `security::load_sandbox_ignore_rules`；前端 `infrastructure/securityRepo/`（`hydrateSecurity` / `flushSecurityPersist`）+ `ui/store/securityStore.ts` + `main.ts` 的 `step('securityConfig')`）；**TS 侧实现（浏览器 dev / 设置页「测试」）** `domain/security/sandbox-ignore-rules.ts`（`SANDBOX_JS_DEFAULT_PATTERN` / `defaultSandboxRulePattern` / 排序 / 预设 / `compileSandboxRule`）+ `services/security-service.ts::matchSandboxIgnoreRule` + `infrastructure/tools/execute/{execute-command,execute-script}.ts`；**两侧契约** `src/tests/fixtures/sandbox-rules.golden.json`（TS `tests/domain/sandbox-rules-golden.test.ts` ↔ Rust `security/rules.rs` 的 golden 用例）；UI `ui/pages/Settings/security-sandbox-rules.tsx`（拖拽几何 `./sandbox-rules-dnd.ts`；JS 输入用 `ui/components/code-editor/CodeEditor.tsx`；行内开关 `ui/components/shared/Toggle`）；下发字段 `services/rust-engine.ts::resolveSecurityConfig`（`sandboxIgnoreRules`） |
 | 改视觉 | 核心 `src-tauri/virlen-core/src/vision/`（模型定位 / 懒加载 / 推理，零 `tauri::`）、命令壳 `src-tauri/src/vision_service.rs`、原生工具 `src-tauri/virlen-core/src/agent/native_tools/vision/`、前端 `src/infrastructure/vision/`、模型 `src-tauri/resources/quasivision_models/` |
 | 改宿主抽象 / CLI 资源与数据目录 | trait `src-tauri/virlen-core/src/agent/host.rs`（`resource_candidates` / `data_dir`）＋ CLI 实现 `src-tauri/virlen-core/src/host/cli_host.rs` ＋ GUI 实现 `src-tauri/src/host/tauri_host.rs`；注入链 `AgentEngine.host` → `ExecuteLlmRoundParams.host` / `RunIterationParams.host` → `execute_tool_steps` → `NativeToolCtx.host` |
 | 跑 / 扩展 headless CLI（`virlen-cli`） | 实现全在 **`src-tauri/virlen-cli/src/`**（本 crate 的 **lib**；core **不含命令入口**），**上下文压缩**的执行链在 `session_rt/compress.rs`（`compress_session` / `current_context_tokens` / `report_line`；TUI 与顺序输出模式共用）；`lib.rs`（参数解析 / 分派 / `USAGE` / `EXIT_*`）+ `config.rs`（配置读写）+ `run/`（无界面跑一次 agent：`mod` 参数解析 + `run()` 驱动 / `render` 事件→文本纯函数与 `Rendered`/`flush_rendered` / `ask` 交互应答 / `sink` `CliEventSink` / `tests`）+ `session_rt/`（**`run` 与 `chat` 共用**：`mod` `RunOptions` / `Resources` / `SessionRuntime::{bootstrap, bootstrap_chat, activate, turn_messages, send_options}` + `resources` 装配链（`resolve_workspace` / `build_resources` / `build_system_prompt` / `read_project_rules`） + `session` 会话装载（`load_or_create_session` / `new_session` / `title_from_prompt`））+ `list/`（`list-session [-g agent\|workdir]` / `list-agent`：`mod` 参数解析与执行入口 / `group` 分组纯函数 / `render` 按**显示列宽**对齐 / `sessions` / `agents`）+ `provider.rs` / `agent.rs`（**交互式配置向导**，见 §11.27）+ `wizard.rs` / `settings_edit.rs`（向导原语 / 数组键按 id 增删改）+ `tui/`（**交互式 TUI，已落地**：`mod` 入口与降级策略 / `app` 线程编排 / `plain` 顺序输出模式 / `sink` 结构化事件出口 / `state/`（`line` 行模型与 ANSI 清洗 + `event` 事件解释 + `key` 按键）/ `view` 纯渲染 / `commands` / `input` / `term`；**各目录配 `tests.rs`** —— 切分口径与代价见 §11.18）；`src/main.rs` 仅三行转发（**bin 目标不被单测引用**）；数据 / 资源目录 `src-tauri/virlen-core/src/host/cli_host.rs`（`$VIRLEN_DATA_DIR` 覆盖）；库入口 `virlen_core::session_db::open_session_db`（与 GUI **同一条**路径链 → 同一份 `virlen.db`）；「忽略沙盒命令」规则走 `security::load_sandbox_ignore_rules`（同一份 `app_settings`）；技能目录推导 `run/session_rt` 侧 `existing_skills_dir`（= `<data_dir>/skills`，与前端 `skillStore` 规则一致）；便捷脚本 `pnpm cli …`；连带要求见 §11.14、三条边界见 §11.15、剩余 localStorage 数据见 §11.16 |
@@ -676,7 +682,7 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 - **提交前自查清单**：
   1. `npx tsc --noEmit` 无新增错误；动了 `src-tauri/` 则 `cargo clippy --workspace --all-targets -- -D warnings` **零告警**（CI 门禁，见 §11.28）；
   2. 受影响模块的 `vitest` 通过；动了 `src-tauri/` 则 `cargo test --workspace` 通过（**拆包后必须带 `--workspace`**，见 §7/§11.14）；
-  3. 若改了引擎语义 → TS 与 Rust 两侧是否都已同步？事件契约是否四方一致？
+  3. 若改了引擎语义 → **只需改 Rust**（TS 引擎已移除，见 §11.37）；但**被 Rust 回调的 TS 部分**（工具执行器 / Gemini provider / 提示词组装）与**事件契约**是否已同步？
   4. 若新增工具 → 注册链、UI 组件、Rust 白名单、i18n 文案是否齐备？
   5. 若新增 Tauri 命令 → `lib.rs` 是否已注册？`capabilities/default.json` 是否需补权限？
   6. 是否引入无关改动、是否触碰 §8 安全红线？

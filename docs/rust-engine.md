@@ -5,15 +5,16 @@
 原 `src/domain/engine/`（约 1800 行 TS）实现 agent 聊天循环：
 LLM 调用 → 工具执行 → 结果合并 →（迭代模式）验证反馈。
 
-目标：将聊天循环核心逻辑移植到 Rust（Tauri 后端），
-同时保证 **平滑过渡**（行为一致、flag 可切换、可随时回退）。
+目标：将聊天循环核心逻辑移植到 Rust（Tauri 后端），保证行为一致。
+**✅ 已完成（2026-09-26）**：TS 引擎整体移除，引擎只有 Rust 一份
+（见 `AGENTS.md` §11.37）；本文标题保留历史「移植」语义，下文各处「对应 TS」
+仅作**溯源**用（那些 TS 文件已删除）。
 
 ## 二、架构总览
 
 ```
 ┌────────────────────────── 前端 (TS) ──────────────────────────┐
-│ chat-service ── getEngine() ──► agentEngine (TS)             │
-│                        └──────► rustEngine (rust-engine.ts)   │
+│ chat-service ── getEngine() ──► rustEngine (rust-engine.ts)   │
 │                                        │ invoke               │
 │                                        ▼                      │
 │  rust-engine-bridge (rust-engine.ts) ◄──► agent:tool-request  │
@@ -54,8 +55,12 @@ LLM 调用 → 工具执行 → 结果合并 →（迭代模式）验证反馈�
 | `verifier.rs` | `verifier.ts` | 迭代验证器 |
 | `iteration.rs` | `iteration-controller.ts` | 执行→验证→修复循环 |
 | `engine.rs` | `engine.ts` | AgentEngine 主类（注入 SessionRepo 持久化） |
+| `title.rs` | `generate-title.ts`（已删除） | 会话标题生成（GUI 命令 `cmd_generate_title` / CLI `chat` 首回合后调用；失败回退 `title_from_prompt`） |
 | `mod.rs` | — | Tauri 命令注册 + 初始化 |
 | `session_db/` | `infrastructure/sessionRepo` | 会话/消息 SQLite 直落（`SessionRepo` trait + SQLite/Noop 实现；按职责拆为 types / repo / schema / row / message_query / usage / sqlite / commands / tests） |
+
+> ⚠️ 「对应 TS」列里的 TS 实现**已随 TS 引擎移除**（见 `AGENTS.md` §11.37），保留仅作溯源；
+> Rust 侧不再是「移植副本」，而是唯一实现。
 
 ## 四、桥接协议
 
@@ -323,6 +328,7 @@ pub trait SessionRepo: Send + Sync {
 | `cmd_replace_session_messages` | 前端上下文压缩后整批替换消息 |
 | `cmd_replace_session_messages_from` | 只替换「从指定消息起」的连续后缀（前端发送路径 B 方案的修复回写用，见 `AGENTS.md` §11.36） |
 | `cmd_compress_context` | 上下文压缩（GUI）：与 CLI 共用 `virlen_core::agent::compress`（见下） |
+| `cmd_generate_title` | 会话标题生成（GUI）：与 CLI 共用 `virlen_core::agent::title`（记账 kind=`title`；落库由前端写回会话标题） |
 
 ### 前端改造
 
@@ -330,9 +336,8 @@ pub trait SessionRepo: Send + Sync {
 - `src/ui/store/sessionStore.ts`：`ensureMessagesLoaded(sessionId)` 懒加载；`loadedMessageIds` 去重；新建会话标记已加载（内存即真相）
 - `src/ui/pages/chat/chat-view.tsx`：`handleSelectSession` 会话激活时懒加载消息并刷新 UI
 - `src/services/chat-service.ts`：
-  - Rust 引擎路径：引擎内部直落，JS 跳过
-  - **TS 引擎路径**：`persistMessagesIfNeeded()`（`!isRustEngineEnabled()` 守卫）在
-    `addSessionMessage`（用户/assistant/tool 消息）和 `stream_end`（兜底整批）落库
+  - 引擎（Rust）内部直落，非 Tauri（vitest）才走 `persistMessagesIfNeeded()` 兜底路径
+  - 旧「TS 引擎路径」（`!isRustEngineEnabled()` 守卫）已随 TS 引擎移除（见 `AGENTS.md` §11.37）
   - `compressContext` 压缩后调 `cmd_replace_session_messages` 落库
 - `src/utils/db.ts`：IndexedDB 封装已废弃删除
 - 前端只负责渲染 + 会话元数据管理 + TS 引擎路径消息落库；Rust 引擎路径消息落库完全在引擎内部
@@ -340,11 +345,12 @@ pub trait SessionRepo: Send + Sync {
 ## 十、已知限制
 
 1. **Gemini 桥接**：未原生 HTTP，仍走 JS provider（且 TS Gemini 存在 #1 多轮工具 bug，可顺带修复）
-2. **compressContext**：**GUI（Tauri）已切到 Rust**（命令 `cmd_compress_context` → `virlen_core::agent::compress`，与 CLI 同一份，见 `AGENTS.md` §11.36）；TS 那份（`domain/engine/compress-context.ts`）**仅用于非 Tauri（浏览器 dev / vitest）**。usage 的 token 估算已 Rust 化：
+2. **compressContext**：✅ **已完全 Rust 化**（命令 `cmd_compress_context` → `virlen_core::agent::compress`，GUI 与 CLI 同一份）。usage 的 token 估算已 Rust 化：
    调用 `deepseek_tokenizer::cmd_count_tokens`（DeepSeek V3 字节级 BPE 精确计数，
    资源 `resources/deepseek_tokenizer/tokenizer.json`，启动后台预热），非 Tauri 环境回退「字符数/4」
-3. **`generateTitle` 会话标题生成**：仍由 TS 引擎提供（非聊天循环核心；失败自动回退用户消息截取；
-   `thinking: false` 禁用思考，避免 maxTokens 被 reasoning 消耗导致标题为空）
+3. **`generateTitle` 会话标题生成**：✅ **已 Rust 化**（`agent/title.rs` + 命令 `cmd_generate_title`；CLI 在 `chat`
+   首回合后调用，失败回退 `title_from_prompt` 首行截取）。⚠️ 请求带 `thinking: false` 禁用思考
+   （`ChatRequest.thinking`），否则推理模型上 `max_tokens=40` 被 reasoning 吃掉 → 标题为空只能回退。
 4. **`maxToolRounds` 迭代模式**：#5 旧问题在 Rust 版 iteration 中同样存在（暂未修）
 5. **原生 execute_command 无流式输出**：结果在命令结束后一次性返回（JS 桥路径可通过
    `toolOutputStore` 实时刷新终端）。后续可增加 `tool:output` 事件桥
@@ -355,14 +361,14 @@ pub trait SessionRepo: Send + Sync {
 
 8. **历史 IndexedDB 数据已废弃**：升级后旧会话不迁移（Q2=C 决策），从空库开始
 9. **部分前端手动消息操作不落库**：`repairSessionIfNeeded` / `deleteSessionMessage` /
-   `clearSessionMessages` 只改内存态，DB 中旧消息可能残留（Rust 引擎路径与 TS 引擎路径的
-   `addSessionMessage`/`stream_end` 落库不受影响）
+   `clearSessionMessages` 只改内存态，DB 中旧消息可能残留
 10. **非 Tauri / SQLite 初始化失败**：回退 `NoopSessionRepo`，会话不持久化（聊天功能不受影响）
 
 ## 附：JS 端有但 Rust 暂不处理的功能清单
 
-> 以下功能目前由 JS 提供（Rust 引擎通过双向桥 / 直接委托回 JS），
+> 以下功能目前由 JS 提供（Rust 引擎通过双向桥回调 JS，或由 GUI 侧独立使用），
 > 作为后续 Rust 化的候选清单。已 Rust 化的功能不在此列。
+> ⚠️ **注意**：TS 引擎已移除（`AGENTS.md` §11.37），但下面这些 JS 部分**仍在被 Rust 回调 / 仍在使用**，不可删。
 
 ### 1. Provider 层
 
@@ -375,8 +381,8 @@ pub trait SessionRepo: Send + Sync {
 
 | 功能 | TS 实现 | Rust 现状 |
 |---|---|---|
-| `compressContext` 上下文压缩 | `domain/engine/compress-context.ts`（仅非 Tauri） | ✅ **GUI（Tauri）已走 Rust**：`cmd_compress_context` → `virlen_core::agent::compress`（与 CLI 同一份）；TS 那份仅用于浏览器 dev / vitest |
-| `generateTitle` 标题生成 | `domain/engine/generate-title.ts` | 无（TS 提供；`thinking:false` 禁用思考） |
+| `compressContext` 上下文压缩 | `domain/engine/compress-context.ts`（已删除） | ✅ **已完全 Rust 化**：`cmd_compress_context` → `virlen_core::agent::compress`（GUI 与 CLI 同一份） |
+| `generateTitle` 标题生成 | `domain/engine/generate-title.ts`（已删除） | ✅ **已 Rust 化**：`agent/title.rs` + `cmd_generate_title`（`thinking: Some(false)` 禁用思考） |
 
 ### 3. 工具层（**已全部原生化**，无 JS 桥；本表保留「实现位置 + 对齐要点」）
 

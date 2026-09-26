@@ -149,7 +149,7 @@ CLI 显式参数  >  环境变量（VIRLEN_*）  >  app_settings 表  >  内置�
 
 > **S7 之后的现状（本文件下文以“现状”描述）**：匹配下沉到 Rust（`src-tauri/virlen-core/src/security/`），
 > 规则整体随 `NativeToolSecurity.sandbox_ignore_rules` 下发，`sandbox_rule_check` 桥交互**已删除**；
-> TS 实现仍保留给浏览器 dev / TS 引擎 / 设置页「测试」，两侧由 golden 契约收敛。
+> TS 实现仍保留给浏览器 dev / 设置页「测试」 / JS 执行器路径，两侧由 golden 契约收敛。
 - 唯一的保存期校验是 `compileSandboxRule`（**只验证能否编译**，不执行规则体）。
 
 ⇒ **纯 Rust CLI 没有 JS 进程**，`js` 规则在原理上无法求值 —— 这就是 D4 必须定案的原因。
