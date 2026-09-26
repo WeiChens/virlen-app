@@ -41,8 +41,8 @@ struct TurnOutcome {
 
 /// TUI 线程的退出报告
 ///
-/// ⚠️ 退化的原因不在这里传：它走 `Action::Degrade(String)` 这条既有通道（主循环是从那里读到原因
-/// 并决定切模式的）。本枚举只是「怎么退的」的自述。
+/// 退化的原因不在这里传（走 `Action::Degrade(String)` 这条既有通道，主循环从那里读到原因并切模式）；
+/// 本枚举只是「怎么退的」的自述。
 enum TuiExit {
     /// 用户主动退出（或收到 Shutdown）
     Quit,
@@ -221,7 +221,7 @@ fn tui_loop(
         while let Ok(ev) = evt_rx.try_recv() {
             st.apply(ev);
         }
-        // ② 终端事件 —— ⚠️ 必须排在绘制之前：resize 那一下的 `draw` 正是会撞上故障的那次
+        // ② 终端事件 —— 必须排在绘制之前：resize 那一下的 `draw` 正是会撞上故障的那次
         keys.clear();
         match input::drain(POLL, &mut keys) {
             Ok(Some((w, h))) => {

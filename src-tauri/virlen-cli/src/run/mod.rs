@@ -4,36 +4,28 @@
 //! virlen-cli run [选项] <prompt>
 //! ```
 //!
-//! ## 形态与边界
-//!
-//! - 一次性：发送一条用户消息，跑完整个 agent 循环（含工具调用）后退出；没有 REPL。
-//! - 与桌面端同一份数据：库路径 = `host.data_dir()/virlen.db`（与 `config` 子命令同一条推导链）。
-//!   消息由引擎先落库再 emit，因此 `--session <id>` 续跑读到的就是桌面端那份历史。
-//! - 无 JS：CLI 里没有前端，于是
-//!   - 工具执行不需要桥 —— 28 个工具已全部原生化（`is_native_tool` 是全集）。
-//!     ⚠️ 但必须下发 `security`（`Some(..)`）：`tool_executor` 用 `security.is_some()` 决定走原生
-//!     还是走 JS 桥，缺了它 CLI 会去请求一个不存在的 JS 宿主而挂起。
-//!   - 未原生化能力（`BridgedProvider`，目前只有 Gemini）在装配阶段直接拒绝：给可读错误，而不是
-//!     等桥无应答挂住。
+//! - 一次性：发一条用户消息，跑完整个 agent 循环（含工具调用）后退出，没有 REPL。
+//! - 与桌面端同一份数据：库路径 = `host.data_dir()/virlen.db`；消息由引擎先落库再 emit，因此
+//!   `--session <id>` 续跑读到的就是桌面端那份历史。
+//! - 无 JS：28 个工具全部原生化（`is_native_tool` 是全集）。⚠️ 但必须下发 `security`（`Some(..)`）——
+//!   `tool_executor` 用 `security.is_some()` 决定走原生还是走 JS 桥，缺了它 CLI 会去请求一个不存在的
+//!   JS 宿主而挂起；未原生化能力（`BridgedProvider`，目前只有 Gemini）在装配阶段直接拒绝，给可读错误。
 //!
 //! ## 输出约定（stdout 只放正文，方便管道）
 //!
-//! - stdout：助手正文流式增量；`--json` 时改为「每行一个 `AgentEvent`」的 JSON Lines。
-//! - stderr：工具进度 / 交互提示 / 错误 / 收尾摘要。
+//! stdout 放助手正文流式增量（`--json` 时改为每行一个 `AgentEvent` 的 JSON Lines）；stderr 放工具进度 /
+//! 交互提示 / 错误 / 收尾摘要。
 //!
-//! ⚠️ 事件文本由 [`render_event`]（纯函数）产出，经无界通道交给 `run()` 的 select 循环写入注入的
-//! `out` / `err`。为什么绕这一圈：`EventSink` 是同步 trait 且要求 `Send + Sync`，无法借用
-//! `&mut dyn Write`；走通道既满足 trait 约束，又保住了「输出走注入的 Write → 单测能断言」这条
-//! 既有约定（`config.rs` 同款做法）。
+//! 事件文本由 [`render_event`]（纯函数）产出后经无界通道交给 `run()` 的 select 循环写入注入的
+//! `out` / `err`：`EventSink` 是同步 trait 且要求 `Send + Sync`，无法借用 `&mut dyn Write`；走通道既
+//! 满足 trait 约束，又保住了「输出走注入的 Write → 单测能断言」这条既有约定。
 //!
 //! ## 交互（用户拍板方案 A）
 //!
-//! 权限为 `ask` 的命令授权（`confirm_command_native`）与 `user_choice` 都在终端里问：stdin 是
-//! TTY → 提示后读一行（`y` / `yes` 放行，其余按拒绝）；stdin 不是 TTY（管道 / CI）→ 一律拒绝
-//! （fail-closed，安全优先）。
+//! 权限为 `ask` 的命令授权（`confirm_command_native`）与 `user_choice` 都在终端里问：stdin 是 TTY →
+//! 提示后读一行（`y` / `yes` 放行，其余按拒绝）；不是 TTY（管道 / CI）→ 一律拒绝（fail-closed）。
 //!
-//! ⚠️ 卡住的代价：引擎在等交互回执时是 `rx.await`，不回就永远不返回 —— 因此每种交互类型（含未知
-//! 类型）都必须给出应答。
+//! ⚠️ 每种交互类型（含未知类型）都必须应答：引擎等回执时是 `rx.await`，不回就永远不返回。
 
 use virlen_core::agent::bridge::AgentBridgeState;
 use virlen_core::agent::engine::AgentEngine;
@@ -44,8 +36,8 @@ use std::io::{IsTerminal, Write};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-// ⚠️ glob 导入是纯搬移的护栏：`session_rt` 里的装配/会话装载原来是本模块的函数，搬走后用同一批
-// 名字重新引入，本文件的调用点与 `mod tests` 都不需要改（改的越少，行为分叉的风险越小）。
+// glob 导入是「纯搬移」的护栏：装配 / 会话装载的函数搬到 `session_rt` 后用同一批名字重新引入，
+// 本文件的调用点与 `mod tests` 都不需要改。
 use crate::session_rt::*;
 use crate::{EXIT_ERROR, EXIT_OK};
 

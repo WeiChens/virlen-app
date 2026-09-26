@@ -1,50 +1,30 @@
 //! `virlen-cli chat` —— 交互式会话：默认是**内联视口 TUI**，另有**顺序输出模式**兜底
 //!
-//! ## 形态
-//!
 //! ```text
 //! virlen-cli chat [--session <id>] [--workspace <path>] [--no-tui]
 //! ```
 //!
-//! 与桌面端共用同一份会话库（`virlen.db`）：在 CLI 里接着桌面端没说完的话继续，反之亦然。
+//! 与桌面端共用同一份会话库（`virlen.db`）；`--session <id>` 续连时开头先显示最近 5 条历史
+//! （见 `history.rs`），退出时打印完整会话 id 与续连命令。
 //!
-//! 退出时会打印**会话 id** 与续连命令（`virlen-cli chat --session <id>`）；用 `--session <id>`
-//! 重连时，开头会先把最近 5 条历史显示出来（见 `history.rs`）—— 免得用户回来面对一块空白，不知道
-//! 上次说到哪。
-//!
-//! ## 两条路径，一条语义
-//!
-//! | 模式 | 何时使用 | 呈现 |
-//! |---|---|---|
-//! | TUI（内联视口） | `stdout` / `stdin` 都是终端，且没给 `--no-tui` | 正文固化进终端原生滚动区，输入框 + 状态行钉在底部 |
-//! | 顺序输出 | ① 非终端（管道 / 重定向 / CI）② 终端连续失败超 5s（降级）③ `--no-tui` | 纯文本顺序打印 + 行输入（复用 `run` 的渲染） |
-//!
-//! 两条路径共用 `SessionRuntime`（装配 / 切会话 / 每回合消息）与 `EventSink` 的应答约定，差别只在
-//! 「事件怎么呈现」与「输入从哪来」—— 不重实现任何判定（安全 / 工具 / 会话）。
+//! 两条路径（TUI / 顺序输出）共用 `SessionRuntime` 与 `EventSink` 的应答约定，差别只在「事件怎么
+//! 呈现」与「输入从哪来」—— 非终端（管道 / CI）或终端连续失败超 5s 时降级为顺序输出，不重实现
+//! 任何判定（安全 / 工具 / 会话）。
 //!
 //! ## 线程与任务
 //!
-//! `main.rs` 是 `#[tokio::main(flavor = "current_thread")]`，且本 crate 只开了 tokio 的 `rt`：
-//!
-//! ```text
-//! 主任务（tokio 当前线程）：select! { 用户动作 ← TUI 线程 | 回合结果 ← spawned 任务 }
-//! TUI 线程（独立 std::thread）：轮询按键 → 状态机 → 固化/绘制（终端只在它手里）
-//! ```
-//!
-//! 为什么回合要 `tokio::spawn`：`send_message` 是一个长 future，而主任务同时还要处理「用户按了
-//! Esc / 又敲了一条消息」。把它 spawn 出去、用 channel 收结果，`select!` 的分支就始终是两条无
-//! 条件的 `recv()`（不需要「有回合才启用某个分支」那种借来借去的写法）。
+//! 主任务（tokio 当前线程）只 `select!` 两条无条件分支：用户动作 ← TUI 线程、回合结果 ← spawned
+//! 任务。回合必须 spawn 出去（`send_message` 是长 future，主任务同时还要处理按键），用 channel 收
+//! 结果，`select!` 才不需要「有回合才启用某分支」那种借来借去的写法。
 //!
 //! ## 交互（异步审批）
 //!
-//! `run` 是同步阻塞读 stdin 应答交互；TUI 里不能这么做（会和输入框抢同一个 stdin）。这里改成：
-//! 事件出口把交互请求送进 UI → UI 渲染成问题 → 按键产生 `Action::Reply` → 主任务用
-//! `bridge::handle_user_interaction_response` 回执。未知类型也必须答，否则引擎会一直等回执
-//! （`run.rs` 文件头已记录这条教训）。
+//! `run` 同步阻塞读 stdin，TUI 不能这么做（会和输入框抢同一个 stdin）：事件出口把交互请求送进
+//! UI → 按键产生 `Action::Reply` → 主任务用 `bridge::handle_user_interaction_response` 回执。
 //!
-//! ⚠️ 授权（`confirm_command_native`）在 TUI 里是显式二选一（←/→ + Enter，默认「拒绝」），而不是
-//! `run` 那种「行输入 + 回车放行」—— 用户此刻完全可能正在打字，把空白输入当「允许」会让一次误触
-//! Enter 直接放行危险命令（fail-open）。语义差异与理由见 `state/mod.rs::ConfirmChoice`。
+//! ⚠️ 未知交互类型也必须应答，否则引擎一直等回执；授权是显式二选一（←/→ + Enter，默认「拒绝」），
+//! 不能像 `run` 那样把空白输入当「允许」—— 用户此刻可能正在打字，一次误触 Enter 就放行了危险命令
+//! （fail-open，见 `state/mod.rs::ConfirmChoice`）。
 
 
 pub(crate) mod commands;

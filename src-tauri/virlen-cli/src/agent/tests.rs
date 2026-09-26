@@ -13,7 +13,7 @@ fn args(v: &[&'static str]) -> Vec<&'static str> {
 
 /// 造一个输入脚本游标。
 ///
-/// ⚠️ 必须补行尾换行：末尾的空串不占一行，否则会「少一行输入」在半路 EOF。
+/// 必须补行尾换行：末尾的空串不占一行，否则会「少一行输入」在半路 EOF。
 fn cursor<S: AsRef<str>>(lines: &[S]) -> Cursor<Vec<u8>> {
     let mut text = lines
         .iter()

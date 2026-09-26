@@ -54,8 +54,8 @@ pub(crate) fn parse_slash(input: &str) -> Option<Slash> {
 
 /// 解析 `/compress` 的第二个词
 ///
-/// ⚠️ 认不出的方式名不能静默退化成默认方式：压缩会改写上下文，用户以为压的是 A、实际压的是 B
-/// 是不可接受的 —— 必须回显「你的输入没被采纳」。
+/// ⚠️ 认不出的方式名不能静默退化成默认方式：压缩会改写上下文，用户以为压的是 A、实际压的是 B 不可接受 ——
+/// 必须回显「你的输入没被采纳」。
 fn parse_compress_arg(arg: &str) -> CompressArg {
     if arg.is_empty() {
         return CompressArg::Ask;

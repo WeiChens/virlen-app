@@ -1,39 +1,24 @@
 //! `virlen-cli` —— Virlen 的 headless 入口（命令实现本体，不是空壳）
 //!
-//! 形态：`virlen-cli <命令> [参数]`。已落地：
-//!
 //! ```text
-//! virlen-cli config get [key ...]             读全部 / 指定键（JSON 输出）
-//! virlen-cli config set [--string] k v        写入（值优先按 JSON 解析）
-//! virlen-cli config path                      打印实际使用的库文件路径
-//! virlen-cli run [选项] <prompt>              无界面跑一次 agent（headless 对话）
-//! virlen-cli chat [选项]                      交互式会话（内联视口 TUI；非终端自动降级）
-//! virlen-cli list-session [-g agent|workdir]  列出会话（可分组）
-//! virlen-cli list-agent                       列出 Agent
-//! virlen-cli provider <add|edit|rm|list|test> 交互式管理供应商配置（逐步录入 + 验证）
-//! virlen-cli agent <add|edit|rm|list>          交互式管理 Agent 配置（逐步录入）
+//! virlen-cli config get|set|path ...            读 / 写配置（与 GUI 同一份 `app_settings`）
+//! virlen-cli run [选项] <prompt>                无界面跑一次 agent（headless 对话）
+//! virlen-cli chat [选项]                        交互式会话（内联视口 TUI；非终端自动降级）
+//! virlen-cli list-session | list-agent          列出会话 / Agent
+//! virlen-cli provider <add|edit|rm|list|test>   交互式管理供应商配置
+//! virlen-cli agent <add|edit|rm|list>           交互式管理 Agent 配置
 //! ```
 //!
-//! 为什么命令实现住在本 crate 的 lib（而不是 core / bin）：
+//! 命令实现住在本 crate 的 lib（不是 bin）：bin 目标（`src/main.rs`）无法被单测引用，`main.rs` 只做
+//! 三行转发。三方分工是「core / cli / tauri」各自只依赖内层：`virlen-core`（引擎 / 持久化 / 沙盒 /
+//! 安全 / RAG / 视觉，零 `tauri::`）、本 crate（headless 命令 + TUI，只依赖 core）、`virlen-app`
+//! （GUI 壳，唯一 Tauri 侧）。
 //!
-//! 三 crate 的分工是「core / cli / tauri」三个模块，各自只依赖内层：
+//! 与 GUI 同一份数据：库路径完全由 `HostEnv::data_dir()` 决定（`CliHost` 默认值与 Tauri
+//! `app_data_dir()` 同形 → 同一个 `virlen.db`），所以 `config set` 改的就是桌面端读的那份配置
+//! （`app_settings` 表，见 `docs/config-sink-plan.md`）。
 //!
-//! | crate | 角色 | 边界 |
-//! |---|---|---|
-//! | `virlen-core` | 引擎 / 持久化 / 沙盒 / 安全 / RAG / 视觉 | 零 `tauri::`，也不含命令入口 |
-//! | `virlen-cli`（本 crate） | headless 命令实现 + 交互式 TUI（`chat`） | 只依赖 core；零 `tauri::` |
-//! | `virlen-app` | GUI 壳（Tauri 命令 / 托盘 / 平台集成） | 唯一 Tauri 侧 |
-//!
-//! ⚠️ bin 目标（`src/main.rs`）无法被单测引用，因此逻辑都在本 lib 里，`main.rs` 保持三行转发
-//! 三行转发 —— 测得到才算落地。（这些代码原住在 `virlen-core/src/cli/`，迁出的目的就是
-//! 让 core 只管引擎与持久化，把「有哪些入口 / 长什么样」留给本 crate。）
-//!
-//! - **与 GUI 同一份数据**：库路径完全由 `HostEnv::data_dir()` 决定（`CliHost` 的默认值
-//!   与 Tauri `app_data_dir()` 同形 → 同一个 `virlen.db`），所以 `config set` 改的就是
-//!   桌面端读的那份配置（`app_settings` 表，见 `docs/config-sink-plan.md`）。
-//!
-//! ⚠️ 输出文案用中文：与 crate 内其它用户可见消息一致（Tauri 命令的错误文案、
-//! `eprintln!` 提示）。JSON 输出保持原样，脚本可直接解析。
+//! 输出文案用中文（与 crate 内其它用户可见消息一致），JSON 输出保持原样，脚本可直接解析。
 
 mod config;
 mod list;

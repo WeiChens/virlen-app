@@ -61,10 +61,9 @@ pub(crate) async fn run_sessions(
         Err(_) => agent_compress::CONTEXT_WINDOW_TOKENS,
     };
 
-    // 每个会话的统计（消息条数 + 上下文占用）—— 两条聚合查询搞定，不逐个会话拉全部历史（大库上
-    // 那会很慢，见 `SessionRepo::session_stats`）。
-    // ⚠️ 统计失败不中断列表：这两列是附加信息，展示主体（会话本身）不应因此消失；但必须显式告警，
-    //    不能静默 —— 统计恒为 0 / `-` 会被当成「真的没数据」。
+    // 每个会话的统计（消息条数 + 上下文占用）—— 两条聚合查询搞定，不逐个会话拉全部历史（大库上会很慢）。
+    // ⚠️ 统计失败不中断列表（这两列是附加信息），但必须显式告警、不能静默 —— 统计恒为 0 / `-` 会被当成
+    // 「真的没数据」。
     let stats: std::collections::HashMap<String, SessionStat> = match db.repo.session_stats().await {
         Ok(list) => list.into_iter().map(|s| (s.session_id.clone(), s)).collect(),
         Err(e) => {

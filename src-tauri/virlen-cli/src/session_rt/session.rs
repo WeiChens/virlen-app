@@ -54,9 +54,8 @@ pub(crate) async fn load_or_create_session(
     if let Some(mid) = opts.model_id.as_ref() {
         session.model_id = mid.clone();
     }
-    // ⚠️ 会话的工作目录创建时定下、之后不可变（与桌面端 `getWorkspace(session.id)` 同语义）：
-    // 续用路径一律不写回 —— 曾经的 bug 就是这里无条件覆盖，换个目录续跑就把会话的工作目录改掉
-    // （桌面端看到的工作目录也跟着变）。
+    // ⚠️ 会话的工作目录创建时定下、之后不可变（与桌面端 `getWorkspace(session.id)` 同语义）：续用路径一律
+    // 不写回 —— 无条件覆盖会让「换个目录续跑」把会话的工作目录改掉。
     if opts.append_system_prompt.is_some() {
         // 追加指令来自本次命令行 → 只影响本次调用（不写回会话的系统提示词）
         session.system_prompt = resources.system_prompt.clone();

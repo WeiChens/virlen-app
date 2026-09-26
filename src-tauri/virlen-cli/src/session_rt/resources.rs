@@ -139,18 +139,12 @@ pub(crate) fn canonicalize_workspace(raw: &str, cwd: &Path) -> Result<String, St
     Ok(canon.to_string_lossy().to_string())
 }
 
-/// 两个路径是否指向同一目录：先按文件系统真身比较（`canonicalize`），失败（目录已不存在等）再退回
-/// 字符串比较 —— 忽略结尾分隔符，Windows 下大小写不敏感（用户写 `E:\proj\` / `e:/Proj` 不该被判
-/// 成「改目录」）。
+/// 两个路径是否指向同一目录：先按文件系统真身比较（`canonicalize`），失败（目录已不存在等）再退回字符串
+/// 比较 —— 忽略结尾分隔符，Windows 下大小写不敏感。
 ///
-/// ⚠️ 为何必须 canonicalize：本函数两侧的来源不同 —— `asked` 来自命令行（已 canonicalize），
-/// `recorded` 来自会话记录（按约定原样使用）。同一个目录常有两种写法，且都不是用户写错：
-///   - macOS：`/var/...` vs `/private/var/...`（`/var` 是指向 `/private/var` 的符号链接，
-///     `std::env::temp_dir()` 给的是前者，`canonicalize` 得到后者）；
-///   - Windows：8.3 短名 vs 长名（`C:\Users\RUNNER~1\...` vs `C:\Users\runneradmin\...`，
-///     GitHub Actions 的 `TEMP` 就是短名形式）。
-///
-/// 只比字符串会把这些判成「换目录」→ 续跑被无辜拦下（ci.yml 的 macos/windows 用例真踩到）。
+/// 为何必须 canonicalize：两侧的来源不同（`asked` 来自命令行、`recorded` 来自会话记录）。同一个目
+/// 录常有两种写法，且都不是用户写错：macOS 的 `/var/...` vs `/private/var/...`（符号链接）、Windows 的
+/// 8.3 短名 vs 长名（`C:\Users\RUNNER~1\...`）。只比字符串会把它们判成「换目录」→ 续跑被无辜拦下。
 ///
 /// 只用 canonicalize 做相等判定；返回值仍用记录原样（见 [`resolve_workspace`]）。
 pub(crate) fn same_path(a: &str, b: &str) -> bool {
@@ -434,13 +428,11 @@ pub(crate) fn read_project_rules(workspace: &Path) -> Option<String> {
 
 /// 技能目录：`<data_dir>/skills`（存在才返回）。
 ///
-/// 前端 `skillStore` 的规则是「技能目录固定为 Tauri `appDataDir/skills`」（见其文件头），而 CLI 的
-/// `HostEnv::data_dir()` 与 Tauri `appDataDir()` 指向同一目录（`host/cli_host.rs` 的既有保证）
-/// —— 因此 CLI 可以自行推导，不需要前端下发 `NativeToolSecurity.skills_dir`。
-///
-/// ⚠️ 不推导的后果是静默的：`list_skills` / `read_skill_source` 会按「无技能」返回（见
-/// `native_tools/skill/list_skills.rs`），模型会以为这个环境没有技能。目录不存在时保持 `None`
-/// （与桌面端首次启动、尚无技能时的行为一致）。
+/// 前端 `skillStore` 的规则是「技能目录固定为 Tauri `appDataDir/skills`」，而 CLI 的
+/// `HostEnv::data_dir()` 与 Tauri `appDataDir()` 指向同一目录 —— 因此 CLI 可以自行推导，不需要前端
+/// 下发 `NativeToolSecurity.skills_dir`。
+/// 不推导的后果是静默的：`list_skills` / `read_skill_source` 会按「无技能」返回，模型会以为这个环境
+/// 没有技能。目录不存在时保持 `None`（与桌面端首次启动、尚无技能时的行为一致）。
 pub(crate) fn existing_skills_dir(host: &Arc<dyn HostEnv>) -> Option<String> {
     let dir = host.data_dir().join("skills");
     dir.is_dir().then(|| dir.to_string_lossy().to_string())

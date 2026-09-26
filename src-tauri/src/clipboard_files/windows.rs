@@ -100,9 +100,8 @@ pub fn read_format_bytes(id: u32) -> Option<Vec<u8>> {
 
 /// 读取剪贴板文本（CF_UNICODETEXT；调用前必须已 open_with_retry）。
 ///
-/// ⚠️ 不能复用 `read_format_bytes`：它按「第一个 0 字节」截断，而 UTF-16 里 ASCII 字符的第二个字节
-/// 就是 0（'A' = 0x0041），会把文本砍成一个字符。这里按 u16 逐个读到 NUL 或块尾，再
-/// `from_utf16_lossy`（剪贴板里偶见坏代理对，丢字符比整个粘贴失败好）。
+/// 不能复用 `read_format_bytes`：它按「第一个 0 字节」截断，而 UTF-16 里 ASCII 的第二个字节就是 0，会把
+/// 文本砍成一个字符。这里按 u16 逐个读到 NUL 或块尾，再 `from_utf16_lossy`。
 pub fn read_unicode_text() -> String {
     let handle = unsafe { GetClipboardData(CF_UNICODETEXT) };
     if handle.is_null() {

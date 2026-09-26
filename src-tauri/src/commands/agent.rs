@@ -116,14 +116,14 @@ pub fn agent_kill_command(tool_call_id: String) -> bool {
     native_tools::kill_running_command(&tool_call_id)
 }
 
-/// 向正在运行的 PTY 会话写入数据（用户中途插键盘，Step 1）。
+/// 向正在运行的 PTY 会话写入数据（用户中途插键盘）。
 ///
-/// `data` 是原始文本：普通按键、粘贴内容，或控制字节（`\x03` = Ctrl+C）。
-/// ⚠️ `\x03` 只能影响「正在读 stdin 的进程」（shell 提示符 / REPL / `y/n` 提示）；中断主通道仍是
-/// `agent_kill_command`（Job Object 杀树），见 docs/pty-research.md §5.6。
+/// `data` 是原始文本：普通按键、粘贴内容，或控制字节（`\x03` = Ctrl+C）。`\x03` 只能影响「正在读
+/// stdin 的进程」（shell 提示符 / REPL / `y/n` 提示）；中断主通道仍是 `agent_kill_command`（Job
+/// Object 杀树），见 docs/pty-research.md §5.6。
 ///
-/// 会话 key 直接用 `toolCallId`，前端 `TerminalView` 已持有 → 无需新增映射事件；走 Tauri 命令而不
-/// 经过引擎事件总线，因此不污染 `AgentEventType` 四方契约（铁律 2）。
+/// 会话 key 直接用 `toolCallId`（前端 `TerminalView` 已持有）；走 Tauri 命令而不经过引擎事件总线，
+/// 不污染 `AgentEventType` 四方契约（铁律 2）。
 #[tauri::command]
 pub fn pty_write(tool_call_id: String, data: String) -> bool {
     native_tools::pty_write(&tool_call_id, &data)
@@ -156,23 +156,16 @@ pub fn pty_set_held(tool_call_id: String, held: bool) -> bool {
     native_tools::pty_set_held(&tool_call_id, held)
 }
 
-/// 原生执行入口（前端回退路径用，`docs/pty-research.md` §7 #14）。
+/// 原生执行入口（前端回退路径用，`docs/pty-research.md` §7 #14）
 ///
-/// 让前端回退路径的 `execute_command` 也能享受 Rust 侧的原生能力：沙盒（受限令牌 + ACL）、ConPTY
-/// （ANSI / 交互 / 用户插键盘）、统一超时/取消/接管、`uiData.pty` 标记。
+/// 让前端回退路径的 `execute_command` 也能用上 Rust 侧原生能力：沙盒（受限令牌 + ACL）、ConPTY
+/// （ANSI / 交互 / 用户插键盘）、统一超时取消、`uiData.pty` 标记。输出经 `ipc::Channel` 流式回传
+/// （而非 `app.emit`）→ 不经过引擎事件总线，不污染 `AgentEventType`（铁律 2），也不会与 Rust 引擎路径
+/// 重复 append。
 ///
-/// 输出经 `ipc::Channel` 流式回传（而非 `app.emit`）：一步送到发起它的调用方，不经过引擎事件总线
-/// → 不污染 `AgentEventType`（铁律 2），也无需前端安装/去重全局 `agent:tool-output` 监听（避免与
-/// Rust 引擎路径重复 append）。
-///
-/// ⚠️ 审批不在这里做：前端 `execute_command` 已完成风险分类与审批（含 `confirm` / 绕过沙盒的强制
-/// 审批）；本命令只负责「执行一条已获批准的命令」。
-///
-/// 返回 `{ content, uiData, isError }`：`isError = false` → 正常结果；`isError = true` → 工具级失败
-/// （如退出码 >= 2），`content` 是模型侧英文报告。
-///
-/// ⚠️ 旧实现用 `Err(String)` 回失败，只能传一个字符串 → 结构化 `uiData` 丢失，中文界面下只能直显
-/// 英文失败报告（遗留项 L6）。真正的「调用级」异常（沙盒只读拒绝等）仍走 `Err`。
+/// ⚠️ 审批不在这里做：前端 `execute_command` 已完成风险分类与审批，本命令只负责「执行一条已获批准
+/// 的命令」。返回 `{ content, uiData, isError }`：`isError = true` 表示工具级失败（如退出码 >= 2），
+/// `content` 是模型侧英文报告；真正的「调用级」异常（沙盒只读拒绝等）仍走 `Err(String)`。
 #[tauri::command]
 pub async fn pty_run_command(
     session_id: String,
@@ -318,18 +311,15 @@ pub struct CompressLlmDto {
     pub duration_ms: i64,
 }
 
-/// 上下文压缩（GUI）—— 与 CLI 走**同一份** `virlen_core::agent::compress` 实现。
-///
-/// 为什么放后端：TS 侧原有一份 `compress-context.ts`（「同语义两实现」），统一到 core 后 GUI 与
-/// CLI 的压缩口径只有一份，不会再漂移。
+/// 上下文压缩（GUI）—— 与 CLI 走**同一份** `virlen_core::agent::compress`
 ///
 /// - `raw` 模式：纯本地渲染，不需要 provider；
-/// - `ai` 模式：用 [`DefaultProviderFactory`]（GUI 有 JS 宿主，Gemini 等桥接协议照常走双向桥，与
-///   正常聊天完全同一条路）。headless / CLI 没有 JS 宿主，走的是 `create_native_provider`。
+/// - `ai` 模式：用 [`DefaultProviderFactory`]（GUI 有 JS 宿主，Gemini 等桥接协议照常走双向桥）；
+///   headless / CLI 没有 JS 宿主，走 `create_native_provider`。
 ///
 /// 落库由前端完成（`cmd_replace_session_messages`）；记账在此完成（与 CLI 同一入口
 /// `agent::usage::record_usage`，kind = `compress`，且不刷新会话时间）。
-/// ⚠️ `#[allow(too_many_arguments)]`：Tauri 命令参数逐个从 JS 传，收结构体会要求前端改调用形状。
+/// `#[allow(too_many_arguments)]`：Tauri 命令参数逐个从 JS 传，收结构体会要求前端改调用形状。
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn cmd_compress_context(

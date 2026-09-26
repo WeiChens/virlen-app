@@ -312,11 +312,10 @@ impl SessionRuntime {
 
     /// 新会话首回合结束后尝试用 AI 覆盖标题（失败则保持 [`title_from_prompt`] 的兜底值）。
     ///
-    /// 与 GUI 同一条路：把「首条用户消息 + 其后的首条助手消息」交给
-    /// `virlen_core::agent::title::generate_title`（与桌面端 `cmd_generate_title` 同一份实现）。
-    /// ⚠️ headless 环境没有 JS 宿主：gemini 等桥接协议拿不到 provider → 直接跳过（保持兜底标题）。
-    ///
-    /// 返回 `Some(新标题)` 表示确实改写了（调用方据此刷新界面）；`None` = 没做 / 失败。
+    /// 与 GUI 同一条路（`virlen_core::agent::title::generate_title`，与桌面端 `cmd_generate_title` 同一份
+    /// 实现）。
+    /// headless 环境没有 JS 宿主：gemini 等桥接协议拿不到 provider → 直接跳过（保持兜底标题）。
+    /// 返回 `Some(新标题)` = 确实改写了；`None` = 没做 / 失败。
     pub(crate) async fn generate_title_if_needed(&mut self) -> Option<String> {
         // 只尝试一次：无论成败都清标记（与桌面端「标题仍为默认值才触发一次」同语义）
         if !self.title_is_placeholder {

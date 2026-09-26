@@ -8,23 +8,21 @@
 //! virlen-cli provider test <id>          连通性检查（拉模型列表 + 发一条 ping）
 //! ```
 //!
-//! ## 为什么要有这条命令
-//!
-//! 在此之前「配一个供应商」只有一条路：`config set providers '[{…完整 JSON…}]'` —— 而那是整键
-//! 覆盖：想加一个供应商，必须把已有全部 provider 连 `id` / `createdAt` 一起抄进去，漏一个字段
-//! 就把现有配置毁掉（评审项 N2）。本命令把这件事变成「回答几个问题」。
+//! 存在的理由：此前只能 `config set providers '[{…完整 JSON…}]'`，而那是整键覆盖 —— 想加一个供应商
+//! 必须把已有全部 provider 连 `id` / `createdAt` 一起抄进去，漏一个字段就把现有配置毁掉（评审项 N2）。
+//! 本命令把这件事变成「回答几个问题」。
 //!
 //! ## 三条口径（都对齐桌面端）
 //!
-//! 1. 字段名逐字对齐前端 `ProviderConfig`（`templateName` / `baseUrl` / `reasoningEffortList`…）：
-//!    两侧不建映射表（`docs/config-sink-plan.md` §6 R6）。
-//! 2. 模板表 / 推理档位表来自 `virlen-core`（`agent/provider/provider_catalog.json`）—— 与桌面端
-//!    读的是同一份，不在这里另抄一份。
-//! 3. 只写自己改的字段（`settings_edit::upsert_by_id` 的字段级合并）：`enabled`、`createdAt` 以及
+//! 1. 字段名逐字对齐前端 `ProviderConfig`（`templateName` / `baseUrl` / `reasoningEffortList`…）
+//!    —— 两侧**不建映射表**（`docs/config-sink-plan.md` §6 R6）；
+//! 2. 模板表 / 推理档位表来自 `virlen-core`（`agent/provider/provider_catalog.json`）—— 与桌面端读的
+//!    是同一份，不在这里另抄一份；
+//! 3. 只写自己改的字段（`settings_edit::upsert_by_id` 的字段级合并）：`enabled` / `createdAt` 以及
 //!    桌面端以后新增的字段都不会被抹掉。
 //!
-//! ⚠️ 已知限制：`gemini` 等未原生化的协议走前端 JS 桥（`BridgedProvider`），CLI 里没有 JS ——
-//! 向导会在第 3 步明确拒绝，而不是让你配完才发现跑不起来（`session_rt::resources` 也是这个口径）。
+//! ⚠️ `gemini` 等未原生化的协议走前端 JS 桥（`BridgedProvider`），CLI 里没有 JS —— 向导会在第 3 步
+//! 明确拒绝，而不是让你配完才发现跑不起来（`session_rt::resources` 也是这个口径）。
 
 use serde_json::{json, Map, Value};
 use std::io::{BufRead, IsTerminal, Write};

@@ -1,10 +1,9 @@
 //! `provider` 子命令的单测
 //!
-//! 交互部分喂脚本跑（`Prompter` 的 `tty = false`，见 `wizard.rs` 文件头约束 3）—— 因此整条向导
-//! （不含网络）都能在 CI 里回归。
+//! 交互部分喂脚本跑（`Prompter` 的 `tty = false`）—— 因此整条向导（不含网络）都能在 CI 里回归。
 //!
-//! ⚠️ 有网的两条路径（拉模型列表、连通性验证）在测试里走的是「不触发」的分支：编辑一个 `apiKey`
-//! 为空的供应商 → 跳过自动拉取；验证那步脚本答 `n`。
+//! 有网的两条路径（拉模型列表、连通性验证）在测试里走「不触发」的分支：编辑一个 `apiKey` 为空的供应商
+//! → 跳过自动拉取；验证那步脚本答 `n`。
 
 use super::*;
 use serde_json::json;
@@ -16,8 +15,8 @@ fn args(v: &[&'static str]) -> Vec<&'static str> {
 
 /// 造一个输入脚本游标。
 ///
-/// ⚠️ 必须补行尾换行：`["6", ""]` 直接 `join("\n")` 只得到 `"6\n"` —— 末尾那个空串不占一行，
-/// 会「少一行输入」而在半路 EOF（真踩过）。
+/// 必须补行尾换行：`["6", ""]` 直接 `join("\n")` 只得到 `"6\n"` —— 末尾那个空串不占一行，会「少一行
+/// 输入」而在半路 EOF。
 fn cursor<S: AsRef<str>>(lines: &[S]) -> Cursor<Vec<u8>> {
     let mut text = lines
         .iter()
@@ -233,8 +232,8 @@ async fn wizard_rejects_gemini_protocol_early() {
 
 /// 新增：Base URL 写错要**当场重问**，而不是留到第一次请求才炸
 ///
-/// ⚠️ 脚本在「重问」处直接 EOF：这样用例不碰网络（一旦继续下去就会去拉模型列表），同时又能断言
-/// 「错误提示出现了」与「确实重新提问了」两件事。
+/// 脚本在「重问」处直接 EOF：这样用例不碰网络（一旦继续下去就会去拉模型列表），同时又能断言「错误提示
+/// 出现了」与「确实重新提问了」两件事。
 #[tokio::test]
 async fn wizard_reprompts_on_invalid_base_url() {
     let catalog = provider_catalog().unwrap();

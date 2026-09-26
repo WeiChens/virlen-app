@@ -1,8 +1,7 @@
 //! 托盘命令 — 前端的唯一接口
 //!
-//! ⚠️ 新增命令必须注册进 `lib.rs` 的 `generate_handler![]`（铁律 4），否则前端 `invoke` 静默 404。
-//! 这些都是「应用自有命令」，不需要 `capabilities/default.json` 里的权限条目（窗口可见性/焦点判定
-//! 都在 Rust 内做，前端不需要 window 权限）。
+//! ⚠️ 新增命令必须注册进 `lib.rs` 的 `generate_handler![]`（铁律 4），否则前端 `invoke` 静默 404。这些都是
+//! 「应用自有命令」，不需要 `capabilities/default.json` 里的权限条目（窗口可见性 / 焦点判定都在 Rust 内做）。
 //!
 //! 约定：托盘是增强能力，任何失败都不能影响聊天主流程 —— 所以这里的命令一律不返回错误（前端也是
 //! fire-and-forget）。

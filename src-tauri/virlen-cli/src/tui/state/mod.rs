@@ -47,7 +47,7 @@ pub(crate) enum Key {
 pub(crate) enum UiEvent {
     /// 正文增量（`assistant_message_updated.patch.contentDelta`，唯一被打印的正文来源）
     ///
-    /// ⚠️ `stream_event` 里也有同一份 delta —— 两者都取会出现双份正文；这里取带 `messageId`
+    /// `stream_event` 里也有同一份 delta —— 两者都取会出现双份正文；这里取带 `messageId`
     /// 的那一条（多一个 id 才能把「工具行插在同一条消息的正文之后」认对，见 `assistant_blocks`）。
     TextDelta {
         message_id: String,
@@ -77,16 +77,16 @@ pub(crate) enum UiEvent {
     Usage { total: i64 },
     /// 当前上下文占用 token
     ///
-    /// ⚠️ 与 `Usage` 不是一回事：那个是「花了多少」，这个是「当前上下文有多大」—— 状态行的
-    /// 百分比用它。`None` = 本会话还没有用量数据（不显示百分比，而不是显示 0%）。口径见
-    /// `virlen_core::agent::compress::context_tokens`（与桌面端 token 环同一个）。
+    /// 与 `Usage` 不是一回事：那个是「花了多少」，这个是「当前上下文有多大」（状态行的百分比用它）；
+    /// `None` = 本会话还没有用量数据（不显示百分比，而不是显示 0%）。口径见
+    /// `virlen_core::agent::compress::context_tokens`。
     ContextUsage { tokens: Option<i64> },
     /// 正在压缩上下文（AI 摘要要一次模型调用，可能持续数秒）
     Compressing(bool),
     /// 设置里的默认压缩方式（选择面板据此标注「默认」并决定初始高亮）
     DefaultCompressMode(CompressMode),
     /// 100% 对应的上下文窗口（`app_settings.contextWindowTokens`；主循环启动时下发）。状态行
-    /// 显示 `占用 / 它` 的百分比。⚠️ 与 `ContextUsage` 是两个口径（那个是「现在多大」）。
+    /// 显示 `占用 / 它` 的百分比。与 `ContextUsage` 是两个口径（那个是「现在多大」）。
     ContextWindowTokens(i64),
     /// 需要用户应答的交互（命令授权 / 选择）
     Interaction {
@@ -138,7 +138,7 @@ pub(crate) enum Action {
     Quit,
     /// TUI 线程自己坏了（连续绘制失败）→ 主循环切「顺序输出模式」
     ///
-    /// ⚠️ 它不是「UI 动作」，借这条通道只是省一个 select 分支；语义上属于 TUI 线程的退出报告。
+    /// 它不是「UI 动作」，借这条通道只是省一个 select 分支；语义上属于 TUI 线程的退出报告。
     Degrade(String),
 }
 
@@ -179,10 +179,9 @@ impl Default for Status {
 
 /// 授权面板的**显式选择项**（`confirm_command_native` 专用）。
 ///
-/// ⚠️ 默认必须是 [`ConfirmChoice::Deny`]。授权是这次工具调用的唯一人工闸门：用户此刻完全可能
-/// 正在输入框里打字（交互期间按键全部落到交互上），若「什么都不按 + 回车」＝放行，误触一次
-/// Enter 就等于批准了一条危险命令。这与 `run/ask.rs` 的 fail-closed 口径（stdin 非 TTY /
-/// 空输入一律拒绝）是同一件事。
+/// ⚠️ 默认必须是 [`ConfirmChoice::Deny`]：授权是这次工具调用的唯一人工闸门 —— 用户此刻完全可能正在输入框
+/// 里打字（交互期间按键全部落到交互上），若「什么都不按 + 回车」＝放行，误触一次 Enter 就等于批准了一条
+/// 危险命令（与 `run/ask.rs` 的 fail-closed 口径同源）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConfirmChoice {
     Deny,
@@ -398,12 +397,9 @@ pub(crate) struct UiState {
     inflight: Vec<OutLine>,
     /// 各条助手消息的正文块在 `inflight` 里的下标（key = `messageId`）
     ///
-    /// ⚠️ 必须按 id 认块，不能用「当前正在追加的那一块」（旧写法就是后者，已踩坑）：一次工具
-    /// 调用的两个事件是交错到达的 —— `tool_call`（工具行）先到，
-    /// `assistant_message_updated{streaming:false}`（收尾帧，带全量正文）后到。只记「当前块」
-    /// 的话，收尾帧会被当成新消息再插一块 → 正文整段重复，而且下一轮的增量会接着写进那一块，
-    /// 于是下一轮正文长在工具结果之前，看着就像「工具输出来到了下一轮回复后面」（真机实测，
-    /// 见 `docs/AGENTS.md` §11.22）。
+    /// 必须按 id 认块，不能用「当前正在追加的那一块」：一次工具调用的两个事件是交错到达的（工具行先到、
+    /// 收尾帧后到），只记「当前块」会把收尾帧当成新消息再插一块 → 正文整段重复，而且下一轮的增量会接着写
+    /// 进那一块（看着像「工具输出来到了下一轮回复后面」，见 `docs/AGENTS.md` §11.22）。
     assistant_blocks: HashMap<String, usize>,
     /// 已经打过「工具开始行」的 tool_call id（同一次调用会来两帧，必须去重）
     started_tools: HashSet<String>,
@@ -540,7 +536,7 @@ impl UiState {
 
     /// spinner / 计时用：只在有回合在跑时推进帧号
     ///
-    /// ⚠️ 不置 `dirty`：重绘的「时机」由调用方按 `100ms` 节流决定（这里置 dirty 会变成
+    /// 不置 `dirty`：重绘的「时机」由调用方按 `100ms` 节流决定（这里置 dirty 会变成
     /// 「每轮都画」= 无节制重绘）。
     pub(crate) fn tick(&mut self) {
         if self.busy() {

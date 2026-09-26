@@ -33,9 +33,8 @@ use std::time::{Duration, Instant};
 
 /// 内联视口高度。
 ///
-/// ⚠️ `ratatui-core` 的 `Terminal.viewport` 是私有字段，`Terminal::resize(area)` 对内联视口只用
-/// 「构造期的高度」重算原点 → 运行期改不了高度（除非重建 Terminal）。因此这个常量就是「在飞内容
-/// 尾巴 + 交互面板 + 输入行 + 状态行」的硬上限。
+/// `ratatui-core` 的 `Terminal.viewport` 是私有字段，`resize()` 对内联视口只用构造期高度重算原点 →
+/// 运行期改不了高度。本常量就是「在飞内容尾巴 + 交互面板 + 输入行 + 状态行」的硬上限。
 pub(crate) const VIEWPORT_H: u16 = 10;
 
 /// resize 去抖窗口：这段时间内完全不碰终端
@@ -75,7 +74,7 @@ fn install_panic_hook() {
     ONCE.call_once(|| {
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            // ⚠️ 这里绝对不能 println!/eprintln!（stdout 可能正是坏掉的那个）→ 一律 writeln! + 忽略错误
+            // 绝对不能 println!/eprintln!（stdout 可能正是坏掉的那个）→ 一律 writeln! 并忽略错误
             let _ = disable_raw_mode();
             let mut out = io::stdout();
             let _ = execute!(out, cursor::Show);
@@ -243,7 +242,7 @@ impl Tui {
 
 /// 一批 `OutLine` 的**视觉**行高（按 `width` 换行后）。
 ///
-/// ⚠️ 必须与渲染时用同一套参数（`Wrap { trim: false }`），否则「算 3 行、画 5 行」→ 丢内容。
+/// 必须与渲染用同一套参数（`Wrap { trim: false }`），否则「算 3 行、画 5 行」→ 丢内容。
 fn out_lines_height(lines: &[OutLine], width: u16) -> usize {
     expand(lines)
         .iter()
@@ -278,20 +277,12 @@ fn chunk(lines: &[OutLine], width: u16, max_h: usize) -> Vec<Vec<OutLine>> {
 
 /// 修复 ratatui `insert_before`（无 `scrolling-regions` 时）的 continuation 空格 bug。
 ///
-/// 背景（实测，见 `docs/AGENTS.md` §11.19）：
+/// 视口内 diff 会跳过宽字符后的 continuation cell，而 `insert_before` 在 Windows 上走的
+/// `insert_before_no_scrolling_regions` 会逐 cell 遍历、不跳过（continuation cell 的 symbol 是空格），
+/// 于是固化的正文每个宽字符后多一个空格（`我 是 你 的`）。这里在交给 `insert_before` 前把它清成空串。
 ///
-/// - 视口内渲染走 `diff_iter`，会跳过宽字符（中文/emoji）后面的 continuation cell；
-/// - 但 `insert_before` 在 Windows 上走 `insert_before_no_scrolling_regions`（`scrolling-regions`
-///   feature 的 `ScrollUpInRegion` 在 winapi 下直接返回 `Unsupported`，不可用），其 `draw_lines`
-///   直接遍历 buffer 的每个 cell，不跳过 continuation —— 而 continuation cell 的 symbol 是空格，
-///   于是固化的正文每个宽字符后面多出一个空格（`我 是 你 的`）。
-///
-/// 这里在交给 `insert_before` 前，把 continuation cell 的 symbol 清成空串：`draw_lines` 输出
-/// `Print("")` 就不再有空格。判断口径与 ratatui 内部 diff 的 skip 一致：宽字符（`cell_width ≥ 2`）
-/// 后面紧跟的 `(w-1)` 个 cell 就是 continuation。
-///
-/// ⚠️ 必须 `set_symbol("")` 而不是 `reset()`：`reset` 回到 `symbol = None`，而 `Cell::symbol()`
-/// 对 `None` 返回 `" "`（空格），等于没清。
+/// 必须 `set_symbol("")` 而不是 `reset()`（`reset` 回到 `symbol = None`，而 `Cell::symbol()` 对 `None`
+/// 返回 `" "`，等于没清）。
 fn strip_wide_continuations(buf: &mut Buffer) {
     let width = buf.area.width as usize;
     for row in buf.content.chunks_mut(width) {
