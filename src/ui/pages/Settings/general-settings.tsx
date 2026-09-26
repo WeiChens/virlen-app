@@ -214,27 +214,6 @@ function GeneralSettings() {
             </label>
           </div>
         </div>
-        <div className="setting-row">
-          <div className="setting-label">
-            <span className="label-text">{t('Rust 原生引擎')}</span>
-            <span className="label-desc">
-              {t(
-                '使用 Rust 实现底层agent循环',
-              )}
-            </span>
-          </div>
-          <div className="setting-control">
-            <label className="toggle">
-              <input
-                type="checkbox"
-                aria-label={t('Rust 原生引擎')}
-                checked={s.useRustEngine}
-                onChange={(e) => update('useRustEngine', e.target.checked)}
-              />
-              <span className="toggle-slider" />
-            </label>
-          </div>
-        </div>
       </div>
       <h2 className="section-title">{t('诊断埋点')}</h2>
 

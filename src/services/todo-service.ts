@@ -45,7 +45,7 @@ import {
 } from '@/domain/todo/state'
 import type { TodoChange, TodoItem, TodoUiData } from '@/domain/todo/types'
 import { addSessionMessage, getSessionMessages } from '@/services/chat/messages'
-import { isRustEngineEnabled } from '@/services/rust-engine'
+import { isTauriAvailable } from '@/services/rust-engine'
 import {
   clearTodoDraft,
   getTodoDraft,
@@ -67,8 +67,8 @@ export function getEffectiveTodos(sessionId: string): TodoItem[] {
 /**
  * 构造并写入一条「用户更新了任务清单」的 feedback 消息。
  *
- * ⚠️ Rust 引擎路径下 `persistMessagesIfNeeded()` 有 `!isRustEngineEnabled()` 守卫
- * 会跳过落库（它假设消息由引擎内部直落），所以这里必须显式补落库 ——
+ * ⚠️ Tauri 下 `persistMessagesIfNeeded()` 有 `isTauriAvailable()` 守卫会跳过落库
+ * （它假设消息由引擎内部直落），所以这里必须显式补落库 ——
  * 幂等：`messages.id` 是主键，`cmd_append_messages` 是 upsert。
  */
 function appendTodoFeedbackMessage(
@@ -91,7 +91,7 @@ function appendTodoFeedbackMessage(
     timestamp: Date.now(),
   }
   addSessionMessage(sessionId, message)
-  if (isRustEngineEnabled()) {
+  if (isTauriAvailable()) {
     void invoke('cmd_append_messages', {
       sessionId,
       messages: [message],

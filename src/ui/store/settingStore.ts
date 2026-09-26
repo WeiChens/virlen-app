@@ -78,8 +78,6 @@ export interface SettingsStore {
   ragDefaultKnowledgeBaseId: string
   /** 默认检索数量 */
   ragDefaultTopK: number
-  /** 是否启用 Rust 原生引擎（默认开启；会话/消息由 Rust SQLite 直落） */
-  useRustEngine: boolean
   /**
    * 是否用 AI 生成会话标题（默认开启）。
    * 关闭后不再发起标题生成的 LLM 调用，直接截取首条用户消息作为标题。
@@ -155,7 +153,6 @@ const defaultSettings: SettingsStore = {
   ragEnabled: false,
   ragDefaultKnowledgeBaseId: '',
   ragDefaultTopK: 5,
-  useRustEngine: true,
   aiGenerateTitle: true,
   contextCompressMode: 'ai',
   contextWindowTokens: 200000,
@@ -261,24 +258,6 @@ function settingChangeValue(key: string, value: unknown): unknown {
       : value
   }
   return value
-}
-
-// ── Rust 引擎转正一次性迁移（P3 会话持久化） ──
-// 老版本 useRustEngine 默认 false 且已被持久化进 localStorage，
-// 新默认值 true 无法覆盖已存值。此处一次性强制切换并同步写回，
-// 避免老用户升级后仍走 TS 引擎导致消息不落库（数据丢失风险）。
-// 迁移完成后用户可自由开关，不再强制。
-try {
-  if (!localStorage.getItem('virlen-rust-engine-migrated')) {
-    if (settingsState.value.useRustEngine === false) {
-      settingsState.setValue('useRustEngine', true)
-      // ⚠️ S3 收尾后**不再写回 localStorage**：值随本模块顶部的设置（`snapshotSettings`）
-      //    在首启时导入表；表已非空时以表为准（见 `hydrateSettings`）。这里只改内存。
-    }
-    localStorage.setItem('virlen-rust-engine-migrated', '1')
-  }
-} catch {
-  // 非浏览器环境忽略
 }
 
 // ── 打开编辑器：旧版单命令 → 新版多配置 一次性迁移 ──

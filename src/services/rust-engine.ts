@@ -2,8 +2,8 @@
  * Rust 引擎适配器 — 实现与 TS AgentEngine 相同的 AgentEnginePort 接口
  *
  * 平滑过渡的关键：
- * - chat-service 无感知切换（getEngine() 按 settings.useRustEngine 选择）
- * - 事件契约与 TS 引擎完全一致（agent:event → onEvent）
+ * - chat-service 无感知调用（`getEngine()` 恒返回本适配器；TS 引擎已移除）
+ * - 事件契约与 Rust 引擎 emit 的 `agent:event` 一致
  * - 工具执行 / 用户交互 / Gemini Provider 通过双向桥回 JS
  * - 原生 OpenAI / Anthropic 由 Rust 直接 HTTP 调用
  *
@@ -46,7 +46,7 @@ let roundBoundaryHandler: RoundBoundaryHandler | null = null
  * 注册轮次边界处理器。
  *
  * ⚠️ 用注册而不是直接 import `services/todo-service`：本模块已被 todo-service 引用
- * （`isRustEngineEnabled`），直接反向 import 会形成循环依赖。
+ * （`isTauriAvailable`），直接反向 import 会形成循环依赖。
  */
 export function setRoundBoundaryHandler(
   handler: RoundBoundaryHandler | null,
@@ -347,11 +347,6 @@ async function handleProviderRequest(payload: {
 /** 是否在 Tauri 环境（不在则回退 TS 引擎） */
 export function isTauriAvailable(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
-}
-
-/** 是否启用 Rust 引擎 */
-export function isRustEngineEnabled(): boolean {
-  return settingsState.value.useRustEngine && isTauriAvailable()
 }
 
 /**

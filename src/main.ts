@@ -57,12 +57,8 @@ const PROCESS_START_TS = Date.now()
 installTelemetry({
   isEnabled: () => settingsState.value.telemetryEnabled,
   runtimeContext: () => ({
-    engine:
-      settingsState.value.useRustEngine &&
-      typeof window !== 'undefined' &&
-      '__TAURI_INTERNALS__' in window
-        ? 'rust'
-        : 'ts',
+    // 引擎恒为 Rust（TS 引擎已移除）；保留字段只为埋点历史数据可区分（旧值可能是 'ts'）
+    engine: 'rust',
     theme: settingsState.value.theme,
     font_size: settingsState.value.fontSize,
     locale: settingsState.value.language,

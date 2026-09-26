@@ -1,27 +1,27 @@
 /**
  * 会话消息 CRUD（原 chat-service 内联，合并自 messages.ts）
  *
- * 全部操作作用于 sessionStore 的内存消息列表，并按引擎路径决定是否落库：
- * - TS 引擎：本层负责调用 cmd_append_messages 等命令落库
- * - Rust 引擎：引擎内部直落 SQLite，本层跳过（见 persistMessagesIfNeeded 的守卫）
+ * 全部操作作用于 sessionStore 的内存消息列表，并按宿主决定是否由本层落库：
+ * - Tauri（有 Rust 后端）：引擎内部直落 SQLite，本层跳过（见 persistMessagesIfNeeded 的守卫）
+ * - 非 Tauri（vitest）：本层负责调用 cmd_append_messages 等命令落库（invoke 为桩）
  */
 import { runInAction } from 'mobx'
 import { sessionStore } from '@/ui/store'
 import { v4 } from '@/utils/uuid'
 import type { Message } from '@/types'
 import { invoke } from '@tauri-apps/api/core'
-import { isRustEngineEnabled } from '@/services/rust-engine'
+import { isTauriAvailable } from '@/services/rust-engine'
 import { sanitizeLoneSurrogates } from '@/utils/text'
 
 /**
- * TS 引擎路径消息落库（Rust 引擎路径由引擎内部直落 SQLite，跳过）。
+ * TS 引擎路径消息落库（Tauri 下由引擎内部直落 SQLite，跳过）。
  * fire-and-forget：不 await，落库不阻塞 UI。
  */
 export function persistMessagesIfNeeded(
   sessionId: string,
   messages: Message[],
 ): void {
-  if (isRustEngineEnabled()) return
+  if (isTauriAvailable()) return
   if (!messages.length) return
   try {
     // 兜底：孤立代理（半个 emoji）经 JSON.stringify → Rust serde_json 会报
