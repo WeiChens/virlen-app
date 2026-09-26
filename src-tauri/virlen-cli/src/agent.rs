@@ -11,18 +11,18 @@
 //!
 //! | 要枚举的东西 | 来源 |
 //! |---|---|
-//! | **工具名**（28 个） | `virlen_core::agent::tool_defs::list_tool_definitions()`（机制 C 的权威源） |
-//! | **技能名** | `<data_dir>/skills` 的子目录（与 `skillStore` 的固定规则一致） |
-//! | **供应商 + 模型** | `app_settings.providers`（只取 `enabled`） |
+//! | 工具名（28 个） | `virlen_core::agent::tool_defs::list_tool_definitions()`（机制 C 的权威源） |
+//! | 技能名 | `<data_dir>/skills` 的子目录（与 `skillStore` 的固定规则一致） |
+//! | 供应商 + 模型 | `app_settings.providers`（只取 `enabled`） |
 //!
 //! ## 字段与校验口径对齐桌面端
 //!
-//! - `name` / `description` **必填**（`agent-edit-modal.tsx::validate` 同样强制）；
-//! - `projectRulesFile` 为空 = 不注入；非空必须是**工作目录内的相对路径**
-//!   （与 `src/domain/agent/project-rules.ts::normalizeProjectRulesPath` 同一批规则 ——
-//!   两边都拦的理由相同：规则文件全文会逐字进系统提示词）；
-//! - ⚠️ **默认 Agent（`__default__`）不可删除**：桌面端靠它兜底（`initDefaultAgent` 会把它
-//!   重新建出来，并与这里的写入互相覆盖），所以这里直接拒绝。
+//! - `name` / `description` 必填（`agent-edit-modal.tsx::validate` 同样强制）；
+//! - `projectRulesFile` 为空 = 不注入；非空必须是工作目录内的相对路径（与
+//!   `src/domain/agent/project-rules.ts::normalizeProjectRulesPath` 同一批规则 —— 两边都拦的
+//!   理由相同：规则文件全文会逐字进系统提示词）；
+//! - ⚠️ 默认 Agent（`__default__`）不可删除：桌面端靠它兜底（`initDefaultAgent` 会把它重新建
+//!   出来，并与这里的写入互相覆盖），所以这里直接拒绝。
 
 use serde_json::{json, Map, Value};
 use std::io::{BufRead, IsTerminal, Write};
@@ -835,14 +835,13 @@ async fn run_rm(
 
 /// 项目规则文件路径：必须是**工作目录内的相对路径**
 ///
-/// 与 `src/domain/agent/project-rules.ts::normalizeProjectRulesPath` **同一批规则**
-/// （允许 `AGENTS.md` / `.cursor/rules.md` / `.\docs\MEMORY.md`；拒绝绝对路径 / 盘符 / `~` /
-/// 任意 `..` 段 / 空字节 / 超 200 字符）。
+/// 与 `src/domain/agent/project-rules.ts::normalizeProjectRulesPath` 同一批规则（允许 `AGENTS.md` /
+/// `.cursor/rules.md` / `.\docs\MEMORY.md`；拒绝绝对路径 / 盘符 / `~` / 任意 `..` 段 / 空字节 /
+/// 超 200 字符）。
 ///
-/// ⚠️ 两侧各有一份实现是有代价的（可能漂移）。**真正的准入闸仍在 TS 读路径上**
-/// （CLI 不读规则文件，见 `session_rt/resources.rs` 里写死的 `AGENTS.md`），
-/// 所以这里只是「别让脏值进配置」—— 差异的后果是多一次驳回，不是安全漏洞。
-/// 改规则时两处一起改。
+/// ⚠️ 两侧各有一份实现是有代价的（可能漂移）。真正的准入闸仍在 TS 读路径上（CLI 不读规则文件，
+/// 见 `session_rt/resources.rs` 里写死的 `AGENTS.md`），所以这里只是「别让脏值进配置」—— 差异的
+/// 后果是多一次驳回，不是安全漏洞。改规则时两处一起改。
 fn validate_project_rules_path(input: &str) -> Result<(), String> {
     let raw = input.trim().replace('\\', "/");
     if raw.is_empty() {

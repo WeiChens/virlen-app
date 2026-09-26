@@ -5,20 +5,20 @@
 //! virlen-cli list-agent   [--json]
 //! ```
 //!
-//! ## 数据来源（都是与桌面端**同一份** `virlen.db`）
+//! ## 数据来源（都是与桌面端同一份 `virlen.db`）
 //!
-//! - **会话**：`sessions` 表（`SessionRepo::list_sessions`，按 `updated_at` 降序）。
-//!   `-g` 分组用的 `agent_id` / `workspace` 就是表里的列，与桌面端侧边栏分组同源。
-//! - **Agent**：`app_settings` 的 `agents` 键 —— 与 GUI 共用同一份（配置下沉 D3 的延伸，
-//!   见 `src/infrastructure/agentRepo`）。⚠️ 在 agents 下沉之前，这份数据只存在于
-//!   桌面端 localStorage，CLI 根本读不到；下沉后两侧才真正一致。
+//! - 会话：`sessions` 表（`SessionRepo::list_sessions`，按 `updated_at` 降序）。`-g` 分组用的
+//!   `agent_id` / `workspace` 就是表里的列，与桌面端侧边栏分组同源。
+//! - Agent：`app_settings` 的 `agents` 键 —— 与 GUI 共用同一份（配置下沉 D3 的延伸，见
+//!   `src/infrastructure/agentRepo`）。在 agents 下沉之前，这份数据只存在于桌面端 localStorage，
+//!   CLI 根本读不到；下沉后两侧才真正一致。
 //!
 //! ## 与 GUI 的文案 / 语义对齐
 //!
-//! - 未分组 key 用 `__ungrouped__`、组名「未分组 / 未知代理」——与
+//! - 未分组 key 用 `__ungrouped__`、组名「未分组 / 未知代理」—— 与
 //!   `ui/pages/chat/components/sidebar/index.tsx` 的 `UNGROUPED_KEY` 及分组函数一致；
 //! - 会话顺序 = 表顺序（`updated_at` 降序），不在这里重排；
-//! - 输出文案用**中文**（与 crate 内其它用户可见消息一致），`--json` 面向脚本。
+//! - 输出文案用中文（与 crate 内其它用户可见消息一致），`--json` 面向脚本。
 
 pub(crate) mod agents;
 pub(crate) mod group;

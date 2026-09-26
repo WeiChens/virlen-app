@@ -17,8 +17,8 @@ use virlen_core::agent::types::Message;
 
 /// 续连时预览的历史消息条数。
 ///
-/// 用户 2026-09-26 定案：取**最近 5 条**（会话末尾）—— 续连时最有用的是「上次说到哪」，
-/// 而不是会话开头的寒暄。⚠️ `get_messages` 返回的是**从旧到新**的时序，所以这里取的是**尾部**。
+/// 用户 2026-09-26 定案：取最近 5 条（会话末尾）—— 续连时最有用的是「上次说到哪」，而不是会话
+/// 开头的寒暄。⚠️ `get_messages` 返回的是从旧到新的时序，所以这里取的是尾部。
 pub(crate) const HISTORY_PREVIEW: usize = 5;
 
 /// 单条预览行最多显示的字符数（预览是「一眼看清」，不是把整段历史重放一遍）
@@ -50,8 +50,8 @@ pub(crate) fn history_preview(messages: &[Message], max: usize) -> Vec<OutLine> 
 
 /// 退出时的续连提示（两种模式共用）。
 ///
-/// ⚠️ 会话 id **完整**给出（不截断）：它要能被直接复制回命令行 —— 这与状态行里那个
-/// 只显示前 8 位的 `short_id` 是**两种用途**，不要图省事合并。
+/// ⚠️ 会话 id 完整给出（不截断）：它要能被直接复制回命令行 —— 这与状态行里那个只显示前 8 位的
+/// `short_id` 是两种用途，不要图省事合并。
 pub(crate) fn resume_hint(session_id: &str) -> String {
     format!(
         "[chat] 会话 id: {id}\n[chat] 续连本会话: virlen-cli chat --session {id}",

@@ -139,21 +139,20 @@ pub(crate) fn canonicalize_workspace(raw: &str, cwd: &Path) -> Result<String, St
     Ok(canon.to_string_lossy().to_string())
 }
 
-/// 两个路径是否指向同一目录：先按**文件系统真身**比较（`canonicalize`），
-/// 失败（目录已不存在等）再退回字符串比较——忽略结尾分隔符，Windows 下大小写不敏感
-/// （用户写 `E:\proj\` / `e:/Proj` 不该被判成「改目录」）。
+/// 两个路径是否指向同一目录：先按文件系统真身比较（`canonicalize`），失败（目录已不存在等）再退回
+/// 字符串比较 —— 忽略结尾分隔符，Windows 下大小写不敏感（用户写 `E:\proj\` / `e:/Proj` 不该被判
+/// 成「改目录」）。
 ///
-/// ⚠️ 为何必须 canonicalize：本函数两侧的来源**不同**——
-/// `asked` 来自命令行（已 canonicalize），`recorded` 来自会话记录（按约定原样使用）。
-/// 同一个目录常有两种写法，且**都不是用户写错**：
+/// ⚠️ 为何必须 canonicalize：本函数两侧的来源不同 —— `asked` 来自命令行（已 canonicalize），
+/// `recorded` 来自会话记录（按约定原样使用）。同一个目录常有两种写法，且都不是用户写错：
 ///   - macOS：`/var/...` vs `/private/var/...`（`/var` 是指向 `/private/var` 的符号链接，
 ///     `std::env::temp_dir()` 给的是前者，`canonicalize` 得到后者）；
-///   - Windows：8.3 短名 vs 长名（`C:\Users\RUNNER~1\...` vs
-///     `C:\Users\runneradmin\...`，GitHub Actions 的 `TEMP` 就是短名形式）。
+///   - Windows：8.3 短名 vs 长名（`C:\Users\RUNNER~1\...` vs `C:\Users\runneradmin\...`，
+///     GitHub Actions 的 `TEMP` 就是短名形式）。
 ///
-/// 只比字符串会把这些判成「换目录」→ 续跑被**无辜拦下**（ci.yml 的 macos/windows 用例真踩到）。
+/// 只比字符串会把这些判成「换目录」→ 续跑被无辜拦下（ci.yml 的 macos/windows 用例真踩到）。
 ///
-/// 只用 canonicalize 做**相等判定**；返回值仍用记录原样（见 [`resolve_workspace`]）。
+/// 只用 canonicalize 做相等判定；返回值仍用记录原样（见 [`resolve_workspace`]）。
 pub(crate) fn same_path(a: &str, b: &str) -> bool {
     /// canonicalize 成功则用真身，失败（如目录已被删除）则退回原字符串
     fn canon_or_self(p: &str) -> String {
@@ -231,8 +230,8 @@ pub(crate) fn build_resources(
         workspace: workspace.clone(),
         // 旧单一审批模式：CLI 不传（空串 → 走 permissions 表 → 缺失项回退注册表默认值）
         approval_mode: String::new(),
-        // ⚠️ skipDirs / blacklist / whitelist 在桌面端存 localStorage，CLI 读不到 → 空。
-        // 路径安全仍由「工作目录 + 沙盒 + 权限三态」兜底（见文件头「已知限制」）。
+        // ⚠️ skipDirs / blacklist / whitelist 在桌面端存 localStorage，CLI 读不到 → 空。路径安全
+        // 仍由「工作目录 + 沙盒 + 权限三态」兜底（见文件头「已知限制」）。
         skip_dirs: Vec::new(),
         blacklist: Vec::new(),
         whitelist: Vec::new(),
@@ -435,14 +434,13 @@ pub(crate) fn read_project_rules(workspace: &Path) -> Option<String> {
 
 /// 技能目录：`<data_dir>/skills`（存在才返回）。
 ///
-/// 前端 `skillStore` 的规则是「技能目录**固定**为 Tauri `appDataDir/skills`」
-/// （见其文件头），而 CLI 的 `HostEnv::data_dir()` 与 Tauri `appDataDir()` 指向
-/// **同一目录**（`host/cli_host.rs` 的既有保证）—— 因此 CLI 可以自行推导，
-/// 不需要前端下发 `NativeToolSecurity.skills_dir`。
+/// 前端 `skillStore` 的规则是「技能目录固定为 Tauri `appDataDir/skills`」（见其文件头），而 CLI 的
+/// `HostEnv::data_dir()` 与 Tauri `appDataDir()` 指向同一目录（`host/cli_host.rs` 的既有保证）
+/// —— 因此 CLI 可以自行推导，不需要前端下发 `NativeToolSecurity.skills_dir`。
 ///
-/// ⚠️ 不推导的后果是**静默**的：`list_skills` / `read_skill_source` 会按
-/// 「无技能」返回（见 `native_tools/skill/list_skills.rs`），模型会以为这个环境没有技能。
-/// 目录不存在时保持 `None`（与桌面端首次启动、尚无技能时的行为一致）。
+/// ⚠️ 不推导的后果是静默的：`list_skills` / `read_skill_source` 会按「无技能」返回（见
+/// `native_tools/skill/list_skills.rs`），模型会以为这个环境没有技能。目录不存在时保持 `None`
+/// （与桌面端首次启动、尚无技能时的行为一致）。
 pub(crate) fn existing_skills_dir(host: &Arc<dyn HostEnv>) -> Option<String> {
     let dir = host.data_dir().join("skills");
     dir.is_dir().then(|| dir.to_string_lossy().to_string())

@@ -24,7 +24,7 @@ pub(crate) struct Prompter<'a> {
     input: &'a mut dyn BufRead,
     out: &'a mut dyn Write,
     /// stdin 是不是真终端 —— 只影响「密文输入」能否走 raw mode。
-    /// ⚠️ 测试恒传 `false`（见文件头约束 3）。
+    /// 测试恒传 `false`（见文件头约束 3）。
     tty: bool,
 }
 
@@ -42,8 +42,8 @@ impl<'a> Prompter<'a> {
 
     /// 打印一步的分隔标题（`第 3 步：API 地址`）
     ///
-    /// ⚠️ 只有序号、没有「共 N 步」：向导里有的步会被跳过（如模板不支持切协议、没勾任何
-    /// 推理档位），写死的总数后面会与序号对不上，反而像 bug。
+    /// ⚠️ 只有序号、没有「共 N 步」：向导里有的步会被跳过（如模板不支持切协议、没勾任何推理
+    /// 档位），写死的总数后面会与序号对不上，反而像 bug。
     pub(crate) fn step(&mut self, idx: usize, title: &str) {
         let _ = writeln!(self.out, "\n── 第 {} 步：{} ──", idx, title);
     }

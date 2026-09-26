@@ -21,7 +21,7 @@ use super::*;
 /// `app_settings.agents` 里一个 Agent（只取列出所需字段；字段名与前端 `Agent` 同名）
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-/// ⚠️ 字段为 `pub(crate)`：分组（`group.rs`）要读 `id` / `name`，单测要直接造数据。
+/// 字段为 `pub(crate)`：分组（`group.rs`）要读 `id` / `name`，单测要直接造数据。
 /// 这是「纯搬运」的代价 —— 原来它们在同一个文件里，私有字段天然可见。
 pub(crate) struct AgentLite {
     pub(crate) id: String,

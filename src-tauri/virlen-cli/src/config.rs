@@ -1,12 +1,12 @@
 //! `config` 子命令 —— headless 读写 `app_settings`（配置下沉 D3 的 CLI 入口）
 //!
-//! 补偿「配置不可用编辑器手改」的易用性损失（`docs/config-sink-plan.md` §0 代价 3）：
-//! GUI 与 CLI 写的是**同一个** `virlen.db` 的 `app_settings` 表。
+//! 补偿「配置不可用编辑器手改」的易用性损失（`docs/config-sink-plan.md` §0 代价 3）：GUI 与 CLI
+//! 写的是同一个 `virlen.db` 的 `app_settings` 表。
 //!
-//! ⚠️ 键名与前端 `SettingsStore` 字段**同名**（camelCase，如 `providers` / `sandboxMode`），
-//! Rust 侧**不建映射表** —— 这是「避免两侧字段漂移」的关键约定（同文件 §6 R6）。
-//! 因此本命令**不校验**键名（Rust 侧没有权威 schema）：写错键名会新增一行垃圾配置，
-//! 而不是报错。这是有意的取舍（否则就得在 Rust 侧维护一份字段清单，反而引入漂移源）。
+//! ⚠️ 键名与前端 `SettingsStore` 字段同名（camelCase，如 `providers` / `sandboxMode`），Rust 侧
+//! 不建映射表 —— 这是「避免两侧字段漂移」的关键约定（同文件 §6 R6）。因此本命令不校验键名
+//! （Rust 侧没有权威 schema）：写错键名会新增一行垃圾配置，而不是报错。这是有意的取舍（否则就得
+//! 在 Rust 侧维护一份字段清单，反而引入漂移源）。
 
 use virlen_core::agent::host::HostEnv;
 use virlen_core::session_db::{open_session_db, SettingsRepo};

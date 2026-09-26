@@ -37,12 +37,11 @@ impl OutLine {
     }
 }
 
-/// 去掉终端**转义序列**与控制字符（工具输出可能带 ANSI 颜色 / 进度条 / `\r`）——
-/// 不清理就会**把界面本身画乱**（ratatui 会把 `[31m` 当普通字符算宽度）。
-/// 保留 `\n`（分段）与 `\t`（缩进）。
+/// 去掉终端转义序列与控制字符（工具输出可能带 ANSI 颜色 / 进度条 / `\r`）—— 不清理就会把界面本身
+/// 画乱（ratatui 会把 `[31m` 当普通字符算宽度）。保留 `\n`（分段）与 `\t`（缩进）。
 ///
-/// ⚠️ 只滤「控制字符」是不够的：ESC 被抹掉后 `[31m` 会**留下可见文本** ——
-/// 必须整段识别 CSI（`ESC [ … 终止字节`）与 OSC（`ESC ] … BEL/ST`）。
+/// ⚠️ 只滤「控制字符」是不够的：ESC 被抹掉后 `[31m` 会留下可见文本 —— 必须整段识别 CSI
+/// （`ESC [ … 终止字节`）与 OSC（`ESC ] … BEL/ST`）。
 pub(crate) fn sanitize(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut it = s.chars().peekable();

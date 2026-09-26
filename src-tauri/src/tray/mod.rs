@@ -1,16 +1,15 @@
 //! 系统托盘 — 关闭不退出 · 后台持续工作 · 完成提醒
 //!
-//! 本模块是「关闭窗口 / 真正退出」两个动作的**唯一权威**：前端不做任何拦截，
-//! 标题栏关闭按钮走的还是 `window.close()` → `CloseRequested` → 在这里改成 `hide()`。
+//! 本模块是「关闭窗口 / 真正退出」两个动作的唯一权威：前端不做任何拦截，标题栏关闭按钮走的还是
+//! `window.close()` → `CloseRequested` → 在这里改成 `hide()`。
 //!
 //! 两类状态的归属必须分清：
-//! - **业务状态**（谁在工作 / 谁刚跑完）：真源在**前端** `sessionRuntimeState`
-//!   （TS 与 Rust 两种引擎都经过它），前端用 `commands` 里的命令增量推送 —
-//!   引擎层零改动（铁律 1/3 不受影响）；
-//! - **平台状态**（窗口是否隐藏 / 是否在退出 / 托盘是否可用）：真源在本模块。
+//! - 业务状态（谁在工作 / 谁刚跑完）：真源在前端 `sessionRuntimeState`，前端用 `commands` 里的命令
+//!   增量推送 —— 引擎层零改动（铁律 1/3 不受影响）；
+//! - 平台状态（窗口是否隐藏 / 是否在退出 / 托盘是否可用）：真源在本模块。
 //!
-//! ⚠️ 托盘创建失败（Linux 缺 appindicator / 无桌面环境）时 `available=false`，
-//! `decide_close` 必须回退成「真退出」—— 否则窗口被隐藏又没有托盘 = 用户看不见也退不掉。
+//! ⚠️ 托盘创建失败（Linux 缺 appindicator / 无桌面环境）时 `available=false`，`decide_close` 必须
+//! 回退成「真退出」—— 否则窗口被隐藏又没有托盘 = 用户看不见也退不掉。
 
 pub mod commands;
 pub mod notify;
@@ -226,8 +225,8 @@ pub fn should_hide_on_close(app: &AppHandle) -> bool {
 
 /// 所有窗口都已关闭时，是否拦下退出
 ///
-/// ⚠️ 窗口已被销毁（不是 hide）时放行：那种情况拦下来也打不开窗口，
-/// 只会留下一个「没窗口、托盘也打不开界面」的僵尸进程。
+/// ⚠️ 窗口已被销毁（不是 hide）时放行：那种情况拦下来也打不开窗口，只会留下一个「没窗口、托盘也
+/// 打不开界面」的僵尸进程。
 pub fn should_prevent_exit(app: &AppHandle, code: Option<i32>) -> bool {
     if decide_exit(code, app.state::<TrayState>().inner()) != ExitAction::Prevent {
         return false;
@@ -289,8 +288,8 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
 
 /// 窗口事件入口（lib.rs 只做转发）
 ///
-/// ⚠️ 这里是「关闭 ≠ 退出」的唯一落点：拦住 `CloseRequested` 并 `hide()`，
-/// 前端标题栏关闭按钮因此**一行都不用改**。
+/// ⚠️ 这里是「关闭 ≠ 退出」的唯一落点：拦住 `CloseRequested` 并 `hide()`，前端标题栏关闭按钮
+/// 因此一行都不用改。
 pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
         let app = window.app_handle();
@@ -325,20 +324,19 @@ pub fn show_main_window(app: &AppHandle, focus: bool) {
 /// 从「应用外部」把主窗口捞回来并聚焦
 ///
 /// 两个调用方（都意味着「用户想看到窗口」）：
-/// - **第二个实例被启动**：`tauri_plugin_single_instance` 已经把那个进程杀掉了（见 `lib.rs`），
-///   这里只需在第一实例里响应；
-/// - **macOS 重新打开**：点 Dock 图标 / 双击 Finder 里的 app（`RunEvent::Reopen`）——
-///   窗口藏进托盘后不处理这个事件，用户会觉得「点了没反应」。
+/// - 第二个实例被启动：`tauri_plugin_single_instance` 已经把那个进程杀掉了（见 `lib.rs`），这里
+///   只需在第一实例里响应；
+/// - macOS 重新打开：点 Dock 图标 / 双击 Finder 里的 app（`RunEvent::Reopen`）—— 窗口藏进托盘后
+///   不处理这个事件，用户会觉得「点了没反应」。
 ///
 /// 此时窗口可能藏在托盘里（`CloseRequested` → `hide()`）、被最小化、或被其它窗口盖住，
-/// `show_main_window` 三种情况都覆盖；顺带 `refresh_tray` 把 tooltip 从
-/// 「已隐藏到托盘，右键可退出」纠正回来。
+/// `show_main_window` 三种情况都覆盖；顺带 `refresh_tray` 把 tooltip 从「已隐藏到托盘，右键可退出」
+/// 纠正回来。
 ///
-/// ⚠️ **「点击系统通知」不靠这里**：Windows 的 toast 点击是**进程内**投递
-/// （`tauri-plugin-notification` 却把 handle 丢了 → 点了没有任何反应，见 `notify.rs`），
-/// 现在由 `notify::show_owned` 自持 handle **精确**切到那条回复。这里保留
-/// `activate_next_unread` 只作兜底：万一某些配置下系统**按 AUMID 启动了新进程**
-/// （被单实例插件拦下后回调到这里），也至少能把窗口拎出来并切到最早那条未读。
+/// ⚠️ 「点击系统通知」不靠这里：Windows 的 toast 点击是进程内投递（`tauri-plugin-notification` 却
+/// 把 handle 丢了 → 点了没有任何反应，见 `notify.rs`），现在由 `notify::show_owned` 自持 handle
+/// 精确切到那条回复。这里保留 `activate_next_unread` 只作兜底：万一某些配置下系统按 AUMID 启动了
+/// 新进程（被单实例插件拦下后回调到这里），也至少能把窗口拎出来并切到最早那条未读。
 pub fn activate_main_window(app: &AppHandle, reason: &str) {
     if app.try_state::<TrayState>().is_none() {
         return;
@@ -436,21 +434,19 @@ fn quit_now(app: &AppHandle) {
 
 /// 销毁托盘图标 —— **退出前必调**（`lib.rs` 的 `ExitRequested` / `Exit` 两处调用）
 ///
-/// ⚠️ 不调会留下 Windows 的「幽灵图标」：托盘图标挂在进程的 message-only window 上，
-/// Shell 不会因为进程死亡自动清掉它，必须显式 `Shell_NotifyIconW(NIM_DELETE)`
-/// （由 `tray-icon` 的 `Drop` 发出，见 `tray-icon/src/platform_impl/windows/mod.rs`）。
-/// 而底层是 `Rc<RefCell<platform_impl::TrayIcon>>` —— **最后一份引用 Drop 时才发删除消息**，
-/// 恰恰这里有两份引用在互相续命：
-///   ① `TrayState.tray`（我们自己的克隆）；
-///   ② tauri 资源表里的那份。
-/// 更麻烦的是 `TrayState → TrayIcon → AppHandle → AppManager → TrayState` 构成**引用环**，
-/// 托管状态根本不会被 Drop —— 于是 `cleanup_before_exit()` 清完资源表后仍有一份活着，
-/// `NIM_DELETE` 永远发不出去，图标一直挂在通知区域，直到鼠标划过才被 Shell 清掉。
-/// 所以必须把两份引用**都显式丢掉**：只丢一份（无论哪份）都不够。
+/// ⚠️ 不调会留下 Windows 的「幽灵图标」：托盘图标挂在进程的 message-only window 上，Shell 不会
+/// 因为进程死亡自动清掉它，必须显式 `Shell_NotifyIconW(NIM_DELETE)`（由 `tray-icon` 的 `Drop`
+/// 发出，见 `tray-icon/src/platform_impl/windows/mod.rs`）。而底层是
+/// `Rc<RefCell<platform_impl::TrayIcon>>` —— 最后一份引用 Drop 时才发删除消息，恰恰这里有两份引用
+/// 在互相续命：① `TrayState.tray`（我们自己的克隆）；② tauri 资源表里的那份。更麻烦的是
+/// `TrayState → TrayIcon → AppHandle → AppManager → TrayState` 构成引用环，托管状态根本不会被
+/// Drop —— 于是 `cleanup_before_exit()` 清完资源表后仍有一份活着，`NIM_DELETE` 永远发不出去，图标
+/// 一直挂在通知区域，直到鼠标划过才被 Shell 清掉。所以必须把两份引用都显式丢掉：只丢一份（无论
+/// 哪份）都不够。
 ///
 /// 幂等：第二次调用直接返回（退出路径有两个调用点，且可能在 `ExitRequested` 已清过）。
-/// 副作用：`available` 置 false → `close_to_tray` 随之失效，销毁后关闭窗口一律真退出
-/// （托盘都没了，再隐藏窗口就会变成「没窗口也退不掉」的僵尸进程）。
+/// 副作用：`available` 置 false → `close_to_tray` 随之失效，销毁后关闭窗口一律真退出（托盘都没了，
+/// 再隐藏窗口就会变成「没窗口也退不掉」的僵尸进程）。
 pub fn destroy(app: &AppHandle) {
     let state = app.state::<TrayState>();
     if !mark_destroyed(state.inner()) {
@@ -563,8 +559,8 @@ fn clear_attention_in(state: &TrayState, session_id: Option<&str>) {
 
 /// 取出「最早那条未读」并从队列清掉（含合并窗口记录）
 ///
-/// ⚠️ 先把 `attention` 的锁放掉再动 `notify_log` —— Rust 的 `Mutex` 不可重入，
-/// 直接复用 `clear_attention_in` 会自己锁自己（死锁）。
+/// ⚠️ 先把 `attention` 的锁放掉再动 `notify_log` —— Rust 的 `Mutex` 不可重入，直接复用
+/// `clear_attention_in` 会自己锁自己（死锁）。
 fn take_earliest_unread(state: &TrayState) -> Option<String> {
     let id = {
         let mut list = state.attention.lock().unwrap();
@@ -664,8 +660,8 @@ pub fn refresh_tray(app: &AppHandle) {
         labels.status_idle.clone()
     };
 
-    // ⚠️ 先取出句柄并释放锁，再调 UI：`set_tooltip` / `set_text` 在非主线程上会
-    // 切到主线程并**阻塞等待**；持锁等待期间主线程若正好在托盘事件里取同一把锁 → 互锁
+    // ⚠️ 先取出句柄并释放锁，再调 UI：`set_tooltip` / `set_text` 在非主线程上会切到主线程并阻塞
+    // 等待；持锁等待期间主线程若正好在托盘事件里取同一把锁 → 互锁
     let tray = state.tray.lock().unwrap().clone();
     let status_item = state.status_item.lock().unwrap().clone();
     let menu_show = state.menu_show.lock().unwrap().clone();
@@ -708,8 +704,8 @@ pub fn refresh_tray(app: &AppHandle) {
 ///
 /// Phase 1 零美术资源：直接改 RGBA 像素。Phase 3 再换成正式的两态图标。
 ///
-/// ⚠️ 参数必须是 `&'a Image<'a>`：`Image::rgba()` 的签名是 `fn rgba(&'a self) -> &'a [u8]`
-/// （`'a` 就是 `Image` 自己的 lifetime 参数），只能对「引用与其 lifetime 参数一致」的值调用。
+/// ⚠️ 参数必须是 `&'a Image<'a>`：`Image::rgba()` 的签名是 `fn rgba(&'a self) -> &'a [u8]`（`'a`
+/// 就是 `Image` 自己的 lifetime 参数），只能对「引用与其 lifetime 参数一致」的值调用。
 fn icon_with_dot<'a>(base: &'a Image<'a>) -> Image<'static> {
     let (w, h) = (base.width(), base.height());
     let mut rgba = base.rgba().to_vec();

@@ -1,15 +1,15 @@
-//! 上下文压缩的**执行链**（`chat` 的 TUI 与顺序输出模式共用）
+//! 上下文压缩的执行链（`chat` 的 TUI 与顺序输出模式共用）
 //!
-//! 为什么单独一层：这条链步骤多且顺序敏感 —— 「读全量历史 → 判定是否值得压 → 建 provider
-//! → 调用 core 的压缩 → **落库** → **记账** → 刷新会话快照」。TUI 与顺序输出模式都要它，
-//! 复制第二份就会分叉（CLI 侧的同类教训见 `session_rt/mod.rs` 文件头）。
+//! 为什么单独一层：这条链步骤多且顺序敏感 —— 「读全量历史 → 判定是否值得压 → 建 provider →
+//! 调用 core 的压缩 → 落库 → 记账 → 刷新会话快照」。TUI 与顺序输出模式都要它，复制第二份就会分叉
+//! （CLI 侧的同类教训见 `session_rt/mod.rs` 文件头）。
 //!
-//! 判定 / 口径 / 渲染都**不在这里**：它们全在 `virlen_core::agent::compress`（与 TS 同语义）。
-//! 本模块只负责「按 CLI 的约定把那一刻接起来」。
+//! 判定 / 口径 / 渲染都不在这里：它们全在 `virlen_core::agent::compress`。本模块只负责「按 CLI
+//! 的约定把那一刻接起来」。
 //!
-//! ⚠️ 落库是**追加一条 summary**，不是替换整表：请求组装时引擎会丢掉最后一个 summary
-//! 之前的全部消息（`provider::blocks::slice_messages`），因此旧消息留在库里不影响下一轮请求，
-//! 而且模型侧的查询工具（`list_messages` / `read_messages`）正是靠它们检索「已压缩区间」。
+//! ⚠️ 落库是追加一条 summary，不是替换整表：请求组装时引擎会丢掉最后一个 summary 之前的全部消息
+//! （`provider::blocks::slice_messages`），因此旧消息留在库里不影响下一轮请求，而且模型侧的查询
+//! 工具（`list_messages` / `read_messages`）正是靠它们检索「已压缩区间」。
 
 use virlen_core::agent::cancellation::CancellationToken;
 use virlen_core::agent::compress as agent_compress;

@@ -4,8 +4,8 @@
 //! 1. 把 Tauri emit 注册成 core 的 `TelemetrySink`（core 内约百处 `track()` 调用点因此完全不用改）；
 //! 2. 提供前端就绪后主动拉取 panic 的命令（Tauri 事件不缓冲，setup 阶段 emit 会丢）。
 //!
-//! ⚠️ 这里同时重导出 core 的埋点工具函数，让 GUI 内部沿用既有的
-//! `crate::telemetry::track(...)` 写法（tray / deepseek_tokenizer 等约 20 处）。
+//! ⚠️ 这里同时重导出 core 的埋点工具函数，让 GUI 内部沿用既有的 `crate::telemetry::track(...)`
+//! 写法（tray / deepseek_tokenizer 等约 20 处）。
 
 use serde_json::Value;
 use std::sync::Arc;

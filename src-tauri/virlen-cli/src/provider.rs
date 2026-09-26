@@ -1,30 +1,30 @@
-//! `provider` 子命令 —— **交互式**增删改查供应商配置（`app_settings.providers`）
+//! `provider` 子命令 —— 交互式增删改查供应商配置（`app_settings.providers`）
 //!
 //! ```text
 //! virlen-cli provider add                交互向导：逐步录入 → 验证 → 落库
 //! virlen-cli provider edit [<id>]        交互向导（现有值作默认；API Key 留空 = 保留）
 //! virlen-cli provider rm <id> [--yes]    删除（需确认；--yes 跳过）
-//! virlen-cli provider list [--json]      列出（**不打印 apiKey**）
+//! virlen-cli provider list [--json]      列出（不打印 apiKey）
 //! virlen-cli provider test <id>          连通性检查（拉模型列表 + 发一条 ping）
 //! ```
 //!
 //! ## 为什么要有这条命令
 //!
-//! 在此之前「配一个供应商」只有一条路：`config set providers '[{…完整 JSON…}]'` ——
-//! 而那是**整键覆盖**：想加一个供应商，必须把已有全部 provider 连 `id` / `createdAt` 一起
-//! 抄进去，漏一个字段就把现有配置毁掉（评审项 N2）。本命令把这件事变成「回答几个问题」。
+//! 在此之前「配一个供应商」只有一条路：`config set providers '[{…完整 JSON…}]'` —— 而那是整键
+//! 覆盖：想加一个供应商，必须把已有全部 provider 连 `id` / `createdAt` 一起抄进去，漏一个字段
+//! 就把现有配置毁掉（评审项 N2）。本命令把这件事变成「回答几个问题」。
 //!
 //! ## 三条口径（都对齐桌面端）
 //!
-//! 1. **字段名逐字对齐**前端 `ProviderConfig`（`templateName` / `baseUrl` / `reasoningEffortList`…）：
+//! 1. 字段名逐字对齐前端 `ProviderConfig`（`templateName` / `baseUrl` / `reasoningEffortList`…）：
 //!    两侧不建映射表（`docs/config-sink-plan.md` §6 R6）。
-//! 2. **模板表 / 推理档位表来自 `virlen-core`**（`agent/provider/provider_catalog.json`）——
-//!    与桌面端读的是同一份，不在这里另抄一份。
-//! 3. **只写自己改的字段**（`settings_edit::upsert_by_id` 的字段级合并）：`enabled`、
-//!    `createdAt` 以及桌面端以后新增的字段都不会被抹掉。
+//! 2. 模板表 / 推理档位表来自 `virlen-core`（`agent/provider/provider_catalog.json`）—— 与桌面端
+//!    读的是同一份，不在这里另抄一份。
+//! 3. 只写自己改的字段（`settings_edit::upsert_by_id` 的字段级合并）：`enabled`、`createdAt` 以及
+//!    桌面端以后新增的字段都不会被抹掉。
 //!
-//! ⚠️ **已知限制**：`gemini` 等未原生化的协议走前端 JS 桥（`BridgedProvider`），CLI 里没有 JS
-//! —— 向导会在第 3 步明确拒绝，而不是让你配完才发现跑不起来（`session_rt::resources` 也是这个口径）。
+//! ⚠️ 已知限制：`gemini` 等未原生化的协议走前端 JS 桥（`BridgedProvider`），CLI 里没有 JS ——
+//! 向导会在第 3 步明确拒绝，而不是让你配完才发现跑不起来（`session_rt::resources` 也是这个口径）。
 
 use serde_json::{json, Map, Value};
 use std::io::{BufRead, IsTerminal, Write};
@@ -320,7 +320,7 @@ fn pick_provider_id(arr: &[Value], out: &mut dyn Write) -> Result<String, i32> {
     let mut p = Prompter::new(&mut input, out, tty);
     match p.choose("请选择要编辑的供应商：", &labels, 0) {
         Ok(i) => Ok(get_str(&arr[i], ID_FIELD)),
-        // ⚠️ 错误也得能看见：`p` 还抓着 `out`，所以经它写
+        // 错误也得能看见：`p` 还抓着 `out`，所以经它写
         Err(e) => {
             p.say(&e);
             Err(EXIT_ERROR)

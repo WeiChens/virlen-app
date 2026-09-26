@@ -310,7 +310,7 @@ pub async fn cmd_replace_session_messages(
     result
 }
 
-/// 追加消息（前端 TS 引擎路径落库用；Rust 引擎路径由引擎内部直落）
+/// 追加消息（前端落库用；Rust 引擎路径由引擎内部直落）
 /// ⚠️ 不刷新会话时间（AI 回复 / 工具结果 / 用户消息都由会话元数据的那次 upsert 定时间）
 #[tauri::command]
 pub async fn cmd_append_messages(
@@ -353,7 +353,8 @@ pub async fn cmd_truncate_session_messages(
 
 /// 替换会话「指定消息及其之后」的后缀（前端在只加载了尾部窗口时回写修复结果用）
 ///
-/// 与 `cmd_replace_session_messages`（全量替换）的区别：只动后缀，前缀（更早、可能尚未加载的历史）原样保留。
+/// 与 `cmd_replace_session_messages`（全量替换）的区别：只动后缀，前缀（更早、可能尚未加载的
+/// 历史）原样保留。
 /// ⚠️ 不刷新会话时间（修复不是用户发言）
 #[tauri::command]
 pub async fn cmd_replace_session_messages_from(
@@ -463,9 +464,9 @@ pub async fn cmd_usage_clear(
 
 /// 读取全部应用设置（GUI 启动水合 / CLI 读配置）
 ///
-/// ⚠️ 无真实后端时**如实报错**（而不是返回空表）：前端 `hydrateSettings` 会捕获并
-/// 继续用 localStorage 的值；若返回空表，前端会误判为「首启 → 该把 localStorage 导入」
-/// 而反复调用 `cmd_settings_import`。
+/// ⚠️ 无真实后端时如实报错（而不是返回空表）：前端 `hydrateSettings` 会捕获并继续用 localStorage
+/// 的值；若返回空表，前端会误判为「首启 → 该把 localStorage 导入」而反复调用
+/// `cmd_settings_import`。
 #[tauri::command]
 pub async fn cmd_settings_get_all(
     state: tauri::State<'_, Arc<dyn SettingsRepo>>,
@@ -550,8 +551,8 @@ pub async fn cmd_db_checkpoint(
 
 /// 立即整理数据库：`wal_checkpoint(TRUNCATE)` 回收 `-wal`，再 `VACUUM` 归还空闲页
 ///
-/// ⚠️ **只在用户显式点击时调用**：`VACUUM` 期间独占连接（数百 MB 库约 10–60 s），
-/// 且需要约 2 倍库大小的临时磁盘空间（SQLite 放在系统临时目录）。
+/// ⚠️ 只在用户显式点击时调用：`VACUUM` 期间独占连接（数百 MB 库约 10–60 s），且需要约 2 倍库大小
+/// 的临时磁盘空间（SQLite 放在系统临时目录）。
 #[tauri::command]
 pub async fn cmd_db_maintain(
     m: tauri::State<'_, Arc<DbMaintenance>>,

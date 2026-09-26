@@ -28,9 +28,9 @@ impl HostEnv for TauriHost {
             out.push(res.clone());
             out.push(res.join("resources"));
         }
-        // ⚠️ Tauri 的 resource_dir() 在 Windows 上可能返回带 `\\?\` 前缀的 verbatim
-        // 路径（quasivision 内部按字符串拼 "subdir/file"，verbatim 下 "/" 不算分隔符）。
-        // 剥前缀由调用方（`vision::models_dir`）统一处理，避免每份实现各写一遍。
+        // ⚠️ Tauri 的 resource_dir() 在 Windows 上可能返回带 `\\?\` 前缀的 verbatim 路径
+        // （quasivision 内部按字符串拼 "subdir/file"，verbatim 下 "/" 不算分隔符）。剥前缀由调用方
+        // （`vision::models_dir`）统一处理，避免每份实现各写一遍。
         out
     }
 

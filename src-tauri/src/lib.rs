@@ -63,7 +63,7 @@ async fn save_file_to_path(buffer: Vec<u8>, path: String) -> Result<(), String> 
 }
 
 #[tauri::command]
-// ⚠️ `#[allow(too_many_arguments)]`：Tauri 命令参数逐个从 JS 传，收结构体会要求前端改调用形状。
+// `#[allow(too_many_arguments)]`：Tauri 命令参数逐个从 JS 传，收结构体会要求前端改调用形状。
 #[allow(clippy::too_many_arguments)]
 async fn search_files_by_name(
     root: String,
@@ -272,16 +272,16 @@ async fn edit_file_multi_in_place(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // ⚠️ 单实例必须**第一个**注册（插件的 setup 按注册顺序执行，且在 `App::build()` 内、
-    // 早于下方 `.setup()` 与窗口创建）：这样第二个实例才能在「建窗口 / 建托盘 / 连数据库」
-    // 之前就退出，不会多出一个托盘图标或半初始化的进程。
+    // ⚠️ 单实例必须第一个注册（插件的 setup 按注册顺序执行，且在 `App::build()` 内、早于下方
+    // `.setup()` 与窗口创建）：这样第二个实例才能在「建窗口 / 建托盘 / 连数据库」之前就退出，不会
+    // 多出一个托盘图标或半初始化的进程。
     //
-    // **dev 下不启用**（`tauri dev` 跑 devUrl 的开发模式）：开发时允许并存多个实例 ——
-    // 否则上一次没关干净的 dev 实例（关窗口只是隐藏到托盘，进程还在）会把新起的那次顶掉，
-    // 表现为「`pnpm tauri dev` 跑完什么都没出现」（参数交给旧进程后自己退了）。
-    // 判定用 `tauri::is_dev()`：它由 tauri 的 build script 写成 `DEP_TAURI_DEV`
-    // （生产构建会启用 `tauri/custom-protocol`），与「是不是开发模式」严格一致；
-    // 注意**不要**自己写 `cfg!(feature = "custom-protocol")` —— 本包没声明这个 feature。
+    // dev 下不启用（`tauri dev` 跑 devUrl 的开发模式）：开发时允许并存多个实例 —— 否则上一次没关干
+    // 净的 dev 实例（关窗口只是隐藏到托盘，进程还在）会把新起的那次顶掉，表现为
+    // 「`pnpm tauri dev` 跑完什么都没出现」（参数交给旧进程后自己退了）。
+    // 判定用 `tauri::is_dev()`：它由 tauri 的 build script 写成 `DEP_TAURI_DEV`（生产构建会启用
+    // `tauri/custom-protocol`），与「是不是开发模式」严格一致；注意不要自己写
+    // `cfg!(feature = "custom-protocol")` —— 本包没声明这个 feature。
     let mut builder = tauri::Builder::default();
     if !tauri::is_dev() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
@@ -502,9 +502,9 @@ pub fn run() {
                     if tray::should_prevent_exit(app, code) {
                         api.prevent_exit();
                     } else {
-                        // ⚠️ 退出前必须显式销毁托盘图标，否则通知区域会留下「幽灵图标」
-                        // （鼠标划过才消失）—— 托管状态与托盘句柄构成引用环，
-                        // 底层 NIM_DELETE 在 `cleanup_before_exit` 里发不出去。详见 `tray::destroy`。
+                        // ⚠️ 退出前必须显式销毁托盘图标，否则通知区域会留下「幽灵图标」（鼠标划过
+                        // 才消失）—— 托管状态与托盘句柄构成引用环，底层 NIM_DELETE 在
+                        // `cleanup_before_exit` 里发不出去。详见 `tray::destroy`。
                         tray::destroy(app);
                     }
                 }

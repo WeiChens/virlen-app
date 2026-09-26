@@ -45,8 +45,8 @@ pub(crate) fn is_wide(c: char) -> bool {
 
 /// 终端显示宽度（中文按 2 列）
 ///
-/// ⚠️ Rust 的 `{:<n}` 按**字符数**补齐，中文列（如「会话数」= 6 列 / 3 字符）会错位，
-/// 所以表格一律走本文件的 `pad` / `pad_left`。
+/// ⚠️ Rust 的 `{:<n}` 按字符数补齐，中文列（如「会话数」= 6 列 / 3 字符）会错位，所以表格一律走
+/// 本文件的 `pad` / `pad_left`。
 pub(crate) fn display_width(s: &str) -> usize {
     s.chars().map(|c| if is_wide(c) { 2 } else { 1 }).sum()
 }

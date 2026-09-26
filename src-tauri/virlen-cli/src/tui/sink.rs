@@ -150,7 +150,7 @@ impl EventSink for UiEventSink {
     fn emit_raw(&self, event_name: &str, payload: Value) {
         match event_name {
             // 真的在问用户（命令授权 / 选择）：送进 UI 渲染，等按键回来再回执。
-            // ⚠️ 这里**不能**同步阻塞读 stdin —— 那会和输入框抢同一个 stdin（`run.rs` 的做法不适用）
+            // ⚠️ 这里不能同步阻塞读 stdin —— 那会和输入框抢同一个 stdin（`run.rs` 的做法不适用）
             "agent:user-interaction-request" => {
                 let kind = payload
                     .get("type")

@@ -26,7 +26,7 @@ impl Script {
     }
 
     fn prompt(&mut self) -> Prompter<'_> {
-        // ⚠️ `tty = false`：绝不能去读真实控制台（见 wizard.rs 文件头约束 3）
+        // `tty = false`：绝不能去读真实控制台（见 wizard.rs 文件头约束 3）
         Prompter::new(&mut self.input, &mut self.out, false)
     }
 
