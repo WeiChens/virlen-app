@@ -148,10 +148,16 @@ jobs:
       # 放在 `cargo install tauri-cli` 之前：CLI 出问题即早退，不必白等那趟编译。
       # ⚠️ CLI 与前端 dist 无关（上面的 `pnpm install` 对它只是顺带复用同一 job）；
       #    三元组显式指定，产物路径必须与下方 artifact / Release 的 glob 一一对齐。
-      # ⚠️ `pnpm run build:cli -- <args>` 里的 `--` 会把参数透传给脚本内的 cargo（已实测）。
+      # ⚠️ 目标三元组用 cargo 原生环境变量 `CARGO_BUILD_TARGET` 传，**不**走 `--target` 参数：
+      #    参数得经 `pnpm run` 转发，而 pnpm 对 `--` 的处理随版本/平台不同 —— 本机 pnpm 11.2.2
+      #    会把 `--` 剥掉（cargo 收到 `--target`，正常），CI 装的 latest 却会透传
+      #    （cargo 收到 `-- --target` → `error: unexpected argument '--target' found`，构建直接失败）。
+      #    环境变量不经过任何参数转发，语义与 `--target` 等价（产物同样落 target/<triple>/release/）。
       - name: Build CLI (virlen-cli)
         shell: bash
-        run: pnpm run build:cli -- --target x86_64-unknown-linux-gnu
+        env:
+          CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu
+        run: pnpm run build:cli
 
       # ── 7. Install Tauri CLI ────────────────────────────────────────────
       - name: Install Tauri CLI

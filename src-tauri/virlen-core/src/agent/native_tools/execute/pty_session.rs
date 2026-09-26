@@ -15,6 +15,19 @@
 //! 才生成的，`ping` 这类从不读 stdin 的前台程序**不会**被 `\x03` 打断 —— 因此
 //! **中断主通道仍然是 Job Object / `agent_kill_command`**，本模块只是补充手段。
 
+// ⚠️ 非 Windows 平台上本模块有一部分 API 没有调用者 —— 这**不是**死代码，而是「本模块
+//    一半的服务对象（ConPTY 运行器 `common/runner/pty.rs`）是 Windows 专属」的必然结果：
+//    `PtySession::new` / `register` / `unregister` / `initial_size` / `is_held` /
+//    `interventions` / `close_input` 只被那条路径（及其同样 Windows 门禁的测试）调用。
+//    而**注册表本身必须留在所有平台**：`virlen-app` 的 `pty_write` / `pty_resize` /
+//    `pty_key` / `pty_set_held` 命令在各平台都会注册（非 Windows 下按「无会话」返回 false）。
+//
+//    这里按**文件级 allow** 而不是逐项 `#[cfg(target_os = "windows")]`：后者会连锁到结构体
+//    字段 —— `held` / `keys` / `enters` / `ctrl_c` 的读取者正是被门禁掉的那几个方法，
+//    字段立刻变成「只写不读」→ 新的 dead_code；`Duration` / `Instant` 也会变成未使用导入。
+//    Windows 上（这些代码真正的运行平台）本属性不生效，门禁强度不变。
+#![cfg_attr(not(target_os = "windows"), allow(dead_code))]
+
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;

@@ -416,6 +416,38 @@ fn resolve_workspace_accepts_same_path_written_differently() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// 同一目录的两种写法：**符号链接** vs 真实路径（macOS 的 `/var` → `/private/var` 正是这一形）
+/// —— 必须判成同一目录，否则续跑被无辜拦下（ci.yml 的 macos 用例踩到过）。
+#[cfg(unix)]
+#[test]
+fn same_path_resolves_symlink_to_same_dir() {
+    let base = std::env::temp_dir().join(format!("virlen_cli_ws_l_{}", uuid::Uuid::new_v4()));
+    let real = base.join("real");
+    let other = base.join("other");
+    let link = base.join("link");
+    std::fs::create_dir_all(&real).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    // 软链写法 ↔ 真实路径 → 同一目录
+    assert!(same_path(&link.to_string_lossy(), &real.to_string_lossy()));
+    // 真不同的目录仍必须判成不同（防止 canonicalize 被写成「永远相等」）
+    assert!(!same_path(&link.to_string_lossy(), &other.to_string_lossy()));
+
+    std::fs::remove_dir_all(&base).ok();
+}
+
+/// 记录里的目录**已被删掉** → 两侧 canonicalize 都失败，必须退回字符串比较
+/// （不能因为「拿不到真身」就判成换个目录：那会让「续跑一个旧会话」直接失败）
+#[test]
+fn same_path_falls_back_to_string_when_dir_is_missing() {
+    let missing = std::env::temp_dir().join(format!("virlen_cli_ws_g_{}", uuid::Uuid::new_v4()));
+    let plain = missing.to_string_lossy().to_string();
+    let with_sep = format!("{}{}", plain, std::path::MAIN_SEPARATOR);
+    assert!(same_path(&with_sep, &plain), "缺失目录应退回字符串比较（忽略结尾分隔符）");
+    assert!(!same_path(&plain, &format!("{}x", plain)));
+}
+
 /// 续用时 `--workspace` 与会话记录冲突 → 明确报错（会话的工作目录不可变更）
 #[test]
 fn resolve_workspace_rejects_conflicting_workspace_on_resume() {

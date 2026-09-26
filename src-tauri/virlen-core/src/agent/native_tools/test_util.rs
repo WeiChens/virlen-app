@@ -29,6 +29,11 @@ pub(crate) fn test_security_bare(workspace: &str) -> NativeToolSecurity {
 }
 
 /// 检查进程是否存活（Windows 用 Get-Process，其他平台用 kill -0）
+///
+/// ⚠️ 当前**只有 Windows 用例**（`execute_command/tests.rs` 的进程树 kill 验证，同样带
+///    Windows 门禁）在调用它 → 非 Windows 下这个函数没有调用者。它本身是「两平台各自实现」
+///    的探针，非 Windows 分支（`kill -0`）是给今后 Linux 用例留的，故按平台 allow 而不是删掉。
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn is_process_alive(pid: u32) -> bool {
     #[cfg(target_os = "windows")]
     {

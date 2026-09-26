@@ -139,11 +139,28 @@ pub(crate) fn canonicalize_workspace(raw: &str, cwd: &Path) -> Result<String, St
     Ok(canon.to_string_lossy().to_string())
 }
 
-/// 两个路径是否指向同一目录：忽略结尾分隔符，Windows 下大小写不敏感
+/// 两个路径是否指向同一目录：先按**文件系统真身**比较（`canonicalize`），
+/// 失败（目录已不存在等）再退回字符串比较——忽略结尾分隔符，Windows 下大小写不敏感
 /// （用户写 `E:\proj\` / `e:/Proj` 不该被判成「改目录」）。
 ///
-/// 只用于「命令行与会话记录是否冲突」的判定 —— 安全校验有自己那套 canonicalize。
+/// ⚠️ 为何必须 canonicalize：本函数两侧的来源**不同**——
+/// `asked` 来自命令行（已 canonicalize），`recorded` 来自会话记录（按约定原样使用）。
+/// 同一个目录常有两种写法，且**都不是用户写错**：
+///   - macOS：`/var/...` vs `/private/var/...`（`/var` 是指向 `/private/var` 的符号链接，
+///     `std::env::temp_dir()` 给的是前者，`canonicalize` 得到后者）；
+///   - Windows：8.3 短名 vs 长名（`C:\Users\RUNNER~1\...` vs
+///     `C:\Users\runneradmin\...`，GitHub Actions 的 `TEMP` 就是短名形式）。
+///
+/// 只比字符串会把这些判成「换目录」→ 续跑被**无辜拦下**（ci.yml 的 macos/windows 用例真踩到）。
+///
+/// 只用 canonicalize 做**相等判定**；返回值仍用记录原样（见 [`resolve_workspace`]）。
 pub(crate) fn same_path(a: &str, b: &str) -> bool {
+    /// canonicalize 成功则用真身，失败（如目录已被删除）则退回原字符串
+    fn canon_or_self(p: &str) -> String {
+        dunce::canonicalize(p)
+            .map(|c| c.to_string_lossy().to_string())
+            .unwrap_or_else(|_| p.to_string())
+    }
     fn norm(p: &str) -> String {
         let t = p.trim_end_matches(['/', '\\']);
         if cfg!(windows) {
@@ -152,7 +169,7 @@ pub(crate) fn same_path(a: &str, b: &str) -> bool {
             t.to_string()
         }
     }
-    norm(a) == norm(b)
+    norm(&canon_or_self(a)) == norm(&canon_or_self(b))
 }
 
 /// 组装引擎入参（纯逻辑 + 读项目规则文件）。

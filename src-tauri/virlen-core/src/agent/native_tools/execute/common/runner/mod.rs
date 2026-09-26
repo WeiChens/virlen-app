@@ -9,6 +9,8 @@
 
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
 use serde_json::{json, Value};
+// `Duration` 只被下面那几个 ConPTY 专属常量用到 → 一起门禁（否则非 Windows 下是未使用导入）
+#[cfg(target_os = "windows")]
 use std::time::Duration;
 
 use super::super::pty_session;
@@ -30,6 +32,12 @@ const TIMEOUT_IDLE_HINT_MAX_OUTPUT: usize = 16;
 /// 超时且全程无输出时追加到结果末尾的引导文案（面向模型，非 i18n）。
 const TIMEOUT_IDLE_HINT: &str = "(the command produced almost no output before timing out, which usually means it was waiting for input: a password / y/n confirmation / REPL. Ask the user to type into the terminal directly, or raise the timeout.)";
 
+// ── 以下 5 项只服务 ConPTY 路径 ──────────────────────────────────────────────
+//    调用者只有 `runner/pty.rs`（本文件里 `#[cfg(target_os = "windows")] mod pty;`）
+//    与它同样带 Windows 门禁的测试 → 非 Windows 平台**必然无调用者**。
+//    故选逐项门禁而非 `allow(dead_code)`：非 Windows 上它们确实不存在，比「压告警」更贴近事实。
+//    ⚠️ 将来落 Unix PTY 时，这里要与 `mod pty;` 一起改成 `cfg(any(...))`。
+#[cfg(target_os = "windows")]
 /// PTY 路径「禁用分页器」用的通用取值 —— 对 git / gh 都表示「不分页」。
 ///
 /// 背景：ConPTY 让子进程的 stdout 变成 **TTY**，于是会分页的工具（git / gh / bat…）启动
@@ -47,12 +55,15 @@ const TIMEOUT_IDLE_HINT: &str = "(the command produced almost no output before t
 /// Windows 上 `cat` 常不在 PATH → 反而报「找不到 cat」。要覆盖它们需另立方案（打包 cat 直通）。
 const PAGER_DISABLED: &str = "cat";
 
+#[cfg(target_os = "windows")]
 /// ② 超时预算的心跳周期（接管冻结 / 预算扣减都按它推进，Step 2 ②）。
 const TICK: Duration = Duration::from_millis(250);
 
+#[cfg(target_os = "windows")]
 /// ② 接管硬上限（对齐 WinkTerm 的 TTL，决策点 D3）：接管**不等于**无限期挂起。
 const PTY_HOLD_MAX: Duration = Duration::from_secs(30 * 60);
 
+#[cfg(target_os = "windows")]
 /// ② 取接管上限。单测用 `HOLD_MAX_OVERRIDE_SECS` 缩短，避免真等 30 分钟。
 fn pty_hold_max() -> Duration {
     #[cfg(test)]
@@ -65,6 +76,7 @@ fn pty_hold_max() -> Duration {
     PTY_HOLD_MAX
 }
 
+#[cfg(target_os = "windows")]
 /// 仅测试用：可注入的接管上限（秒；0 = 用默认 `PTY_HOLD_MAX`）。
 #[cfg(test)]
 static HOLD_MAX_OVERRIDE_SECS: std::sync::atomic::AtomicU64 =
