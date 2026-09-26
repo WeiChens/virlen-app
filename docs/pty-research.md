@@ -1,63 +1,47 @@
 # PTY 终端改造 — 调研报告与方案选型
 
-> **状态**：**Step 1（L2 PTY 改造）已落地并实测通过**（2026-09-18 本机，见 §8.1）；
-> **Step 2（交互语义）已实施并实测通过**（见 §8 Step 2 与 §8.2；D1–D6 已按建议默认值定稿）；
-> Step 0 Spike 保留作回归测试（`conpty_spike.rs`）
-> **决策**：采用**方案 B — 自研 ConPTY**（见 §4.2），不使用 `portable-pty`
-> **关键结论**：**受限令牌 + Job Object + ConPTY 三者可以共存** —— 原 §7 风险 #1 已消除
-> **日期**：2026-09-18（Spike 实测同日记入）
-> **调研范围**：社区对标实现 2 个、Rust PTY 生态、ConPTY 官方 API 指南、**本机 Spike 实测**
-> **Spike 代码**：`src-tauri/virlen-core/src/sandbox/windows/conpty_spike.rs`（`#[cfg(test)]`）
-> **相关**：`docs/rust-engine.md`（引擎架构）、`AGENTS.md` §5 铁律 / §9 安全红线 / §11.2
+> **状态**：Step 0 Spike、Step 1（L2 PTY 改造）、Step 2（交互语义）**均已落地并实测通过**（2026-09-18/19，见 §8）。
+> **决策**：采用**方案 B — 自研 ConPTY**（§4.2），不使用 `portable-pty`。
+> **关键结论**：**受限令牌 + Job Object + ConPTY 三者可以共存**（原 §7 风险 #1 已消除）。
+> **相关**：`docs/rust-engine.md`（引擎架构）、`AGENTS.md` §6 铁律 / §8 安全红线 / §11.2。
 
 ---
 
 ## 一、背景与目标
 
-当前 `execute_command`（Rust 原生 `native_tools/execute/execute_command.rs` + TS 侧
-`infrastructure/tools/execute/execute-command.ts`）是**一次性、单向管道**模型：
+改造前 `execute_command`（Rust 原生 `native_tools/execute/execute_command.rs` + TS 侧
+`infrastructure/tools/execute/execute-command.ts`）是**一次性、单向管道**模型：子进程
+`hStdInput = null`（`sandbox/windows/spawn.rs`）、stdout/stderr 各一条匿名管道，跑完才返回
+（结果按 `stdout` / `[标准错误]` 分段）；用户对执行中的干预只有「**执行前**弹窗审批」与
+「**执行中**杀进程树」两种。
 
-- 子进程 `hStdInput = null`（`sandbox/windows/spawn.rs`），stdout/stderr 各一条匿名管道；
-- 跑完才返回，结果里按 `stdout` / `[标准错误]` 分段；
-- 用户对「执行中」的干预手段只有两个：**执行前**弹窗审批、**执行中**杀进程树。
+因此这些场景全部不可用：`npm login` / `gh auth login` / 密码或 `y/n` 提示 /
+REPL（`python` / `gdb` / `mysql`）首次交互 → 挂到超时；进度条、彩色输出、TUI 光标控制 →
+`\r` / ANSI 被 `processTerminalOutput` 粗暴压平；用户当场接管纠正 → 只能杀掉重来；
+Ctrl+C → 只能杀整棵进程树（粗暴，且丢失 partial 输出语义）。
 
-因此以下场景全部不可用：
-
-| 场景 | 现状 |
-|---|---|
-| `npm login` / `gh auth login` 等需要输入 | 挂到超时 |
-| `y/n` 确认、密码提示 | 挂到超时 |
-| `python` / `gdb` / `mysql` REPL 首次交互 | 不可用 |
-| 进度条、彩色输出、TUI 光标控制 | `\r` / ANSI 被 `processTerminalOutput` 粗暴压平 |
-| 命令跑偏时用户当场接管纠正 | 只能杀掉重来 |
-| Ctrl+C 中断 | 只能杀整棵进程树（粗暴，且丢失 partial 输出语义） |
-
-**目标**：把 `execute_command` 的 stdio 从「匿名管道」换成「伪控制台（PTY）」，
-使 AI 可运行、**用户可干预、可交互**。
+**目标**：把 stdio 从「匿名管道」换成「伪控制台（PTY）」，使 AI 可运行、**用户可干预、可交互**。
 
 ---
 
 ## 二、概念分层（先分清层次，否则方案必被谈乱）
 
-社区实践里「给 AI 一个终端」其实是三个量级完全不同的东西，混谈必然踩坑：
+社区实践里「给 AI 一个终端」是三个量级完全不同的东西，混谈必然踩坑：
 
-| 层 | 形态 | 是否需要哨兵 | 难度 |
+| 层 | 形态 | 需要哨兵 | 难度 |
 |---|---|---|---|
 | **L1** | 单向管道 → 双向真终端（stdin 是控制台） | 否 | 低 |
-| **L2** | PTY 挂在**每次一条命令的短命 shell** 上，进程退出 = 命令结束 | **否**（退出码就是真的） | 低 |
-| **L3** | 常驻交互式 shell，AI 与用户共享同一会话 | **是**（需哨兵检测命令边界） | 高 |
+| **L2** | PTY 挂在**每次一条命令的短命 shell** 上，进程退出 = 命令结束 | 否（退出码是真的） | 低 |
+| **L3** | 常驻交互式 shell，AI 与用户共享同一会话 | 是（需哨兵检测命令边界） | 高 |
 
 **关键结论：Virlen 现有架构天然就是 L2** —— 每次调用 spawn 一个
-`powershell -NoProfile -Command "<cmd>"`。这带来四个白捡的好处：
+`powershell -NoProfile -Command "<cmd>"`。四个白捡的好处：**不需要哨兵**（进程退出即命令结束，
+`exit_code` 由 `wait_and_read_exit_code()` 直接拿到，不必注入 `echo <SENTINEL>` 再剥回来）、
+**不需要「shell 跳转重挂」**（`ssh` / `su` / `docker exec` 进去后哨兵会丢，是 L3 才要额外处理的）、
+**不需要 `output_ref` 两级取数**（沿用现有 32 KB 截断即可）、
+**用户干预实现量极小**（一个 `pty_write` 命令 + 前端输入框）。
 
-1. **不需要哨兵**：进程退出即命令结束，`exit_code` 由 `wait_and_read_exit_code()` 直接拿到，
-   不必往 shell 里注入 `echo <SENTINEL>` 再从输出流里剥回来。
-2. **不需要「shell 跳转重挂」**：`ssh` / `su` / `docker exec` 进去后哨兵会丢，
-   这是 L3 方案必须额外处理的，而 L2 不存在这个问题。
-3. **不需要 `output_ref` 两级取数**：可以直接沿用现有 32 KB 截断策略。
-4. **用户干预的实现量极小**：一个 `pty_write` 命令 + 前端加输入框即可。
-
-> 因此本次改造建议**先做 L2**，L3（常驻会话 + 哨兵 + 接管交还）作为后续可选演进。
+> 因此本次改造**先做 L2**，L3（常驻会话 + 哨兵 + 接管交还）作为后续可选演进。
 
 ---
 
@@ -65,51 +49,32 @@
 
 ### 3.1 WinkTerm（`Cznorth/winkterm`，MIT，Python + Next.js）
 
-**核心哲学：「AI 不偷偷替你执行命令」**——AI 把命令写进你的输入行然后停下，
-你按 `Enter` 才跑；按 `Backspace` 可改，`Ctrl+C` 可取消。主动权始终在人手里。
+**核心哲学：「AI 不偷偷替你执行命令」**——AI 把命令写进你的输入行然后停下，你按 `Enter`
+才跑，`Backspace` 可改、`Ctrl+C` 可取消，主动权始终在人手里。工具面：`terminal_input`
+（执行 / 发控制键并取结果）、**`write_command`**（**只写进输入行、不执行，等你确认**）、
+`get_terminal_context`（只读地取输出，无副作用）。
 
-三个工具的设计：
-
-| 工具 | 语义 |
-|---|---|
-| `terminal_input` | 执行命令 / 发控制键，并拿到执行结果 |
-| **`write_command`** | **只把命令写进输入行、不执行，然后停下等你确认** |
-| `get_terminal_context` | 只读地读取终端输出内容（不产生副作用） |
-
-后端 Agent API 的工程细节（均为实践沉淀，非设计推演）：
-
-- `exec`：**原子执行 + 哨兵**，返回 stdout + **真实 `exit_code`** + 当前 `cwd`；
-  哨兵自动剥掉命令回显与提示符。
-- `input`：**命名控制键** `{"keys": ["ctrl+c"]}`，不必往 JSON 里塞裸控制字节；
-  `data_b64` / `command_b64` 绕过多层引号转义地狱。
-- `snapshot?pattern=`：服务端在 **256 KB 滚动缓冲**内做正则匹配，省带宽。
-- `stream`：SSE 推流，服务长命令 / `tail -f`，支持 `since` 断线续传。
-- **wait reason 字段**：区分 `idle` / `timeout` / `no_output` —— 比「只有超时」信息丰富得多。
-- TTL 30 分钟自动清理，避免遗忘的终端泄漏。
-- 技术栈：FastAPI + LangGraph + Python `pty` 后端，Next.js + **xterm.js** 前端，WebSocket 传输。
+后端工程细节（实践沉淀）：`exec` 原子执行 + 哨兵，返回 stdout + 真实 `exit_code` + 当前 `cwd`
+（哨兵自动剥掉命令回显与提示符）；`input` 用**命名控制键** `{"keys": ["ctrl+c"]}`（不必往 JSON
+塞裸控制字节；`data_b64` / `command_b64` 绕开引号转义）；`snapshot?pattern=` 在服务端 256 KB
+滚动缓冲内正则匹配，省带宽；`stream` 走 SSE 服务长命令 / `tail -f` 并支持 `since` 断线续传；
+**wait reason** 区分 `idle` / `timeout` / `no_output`；TTL 30 分钟自动清理。
+技术栈：FastAPI + LangGraph + Python `pty` 后端，Next.js + **xterm.js** 前端，WebSocket 传输。
 
 ### 3.2 terminal-mcp（`fzxbl/terminal-mcp`，MIT，Go，MCP 服务器）
 
-比 WinkTerm 更工程化，六个机制值得完整吸收：
-
-1. **真 PTY + 常驻会话**，明确反对「一次性 exec 管道」。
-2. **可观测**：每个会话给一个 live web terminal URL，用户开着就能实时看 AI 的每一步。
-3. **接管 / 交还（takeover / release）** —— 本次调研看到的最贴合「用户可干预」的交互模型：
-   - 点「接管」→ `held=true`，**AI 的写入立即暂停**；
-   - 用户手敲命令 → 被重建为 `[rc=n] $ cmd` 喂回给 AI；
-   - 点「交还」→ AI **带着「用户刚才干了什么」的完整上下文**继续，不丢状态、不用重新解释。
-4. **哨兵 + 跳转重挂**（配置项 `shell_switch_commands`）：`ssh` / `su` / `docker exec` /
-   `chroot` 进去后自动重装哨兵，保证跟踪不断。
-5. **LLM 友好输出 + 内存有界**：
-   - 剥离 ANSI，并且**卡住不完整的转义序列**（半个 `\x1b[` 不发给模型）；
-   - 会话日志 append-only 落盘作为真相来源，内存只留有界 tail cache
-     → `yes` / `cat 大文件` 打不爆内存；
-   - 超长结果返回 `output_ref`，模型用
-     `terminal_explore(op=stat|grep|read, line_offset, limit, pattern, before, after)`
-     按需取行。
-6. **围栏（fence）**：`resource_limit_cmd` 注入 `ulimit`，**且每次切 shell 都重新注入**；
-   硬限制被所有子进程继承，未提权进程无法自行提高 → Agent 换 shell 也逃不掉。
-   （Virlen 已有沙盒，这是同类问题的另一种解法；其「模型不可见」的思路值得借鉴。）
+比 WinkTerm 更工程化，六个机制值得完整吸收：① **真 PTY + 常驻会话**（明确反对「一次性 exec
+管道」）；② **可观测**（每个会话给一个 live web terminal URL，用户开着就能实时看 AI 每一步）；
+③ **接管 / 交还（takeover / release）** —— 本次调研看到的最贴合「用户可干预」的模型：
+接管 → `held=true`、**AI 写入立即暂停**，用户手敲的命令被重建为 `[rc=n] $ cmd` 喂回给 AI；
+交还 → AI **带着「用户刚才干了什么」的完整上下文**继续，不丢状态；④ **哨兵 + 跳转重挂**
+（配置项 `shell_switch_commands`：进 `ssh` / `su` / `docker exec` / `chroot` 后自动重装哨兵）；
+⑤ **LLM 友好输出 + 内存有界**（剥离 ANSI 且**卡住不完整的转义序列**，半个 `\x1b[` 不发给模型；
+会话日志 append-only 落盘为真相源、内存只留有界 tail cache → `yes` / `cat 大文件` 打不爆内存；
+超长结果返回 `output_ref`，模型用 `terminal_explore(op=stat|grep|read, line_offset, limit,
+pattern, before, after)` 按需取行）；⑥ **围栏（fence）**（`resource_limit_cmd` 注入 `ulimit`，
+**且每次切 shell 都重新注入**，硬限制被所有子进程继承、未提权进程无法自行提高 —— Virlen 已有
+沙盒，这是同类问题的另一种解法，其「模型不可见」的思路值得借鉴）。
 
 工具面：`terminal_open / send / output / explore / control / status / close / list`
 
@@ -137,9 +102,8 @@
 
 ### 4.1 方案 A：`portable-pty`（**弃用**）
 
-wezterm 出品，事实上的 Rust 跨平台 PTY 标准，MIT。
-当前版本 0.9.0（2026-09-08），依赖 `winapi 0.3`（Windows 侧 ConPTY）、`nix 0.28`、
-`filedescriptor`、`serial2`、`shell-words`。
+wezterm 出品，事实上的 Rust 跨平台 PTY 标准（0.9.0，2026-09-08，MIT），依赖 `winapi 0.3`
+（Windows 侧 ConPTY）/ `nix 0.28` / `filedescriptor` / `serial2` / `shell-words`。
 
 API 很干净：
 
@@ -152,34 +116,27 @@ writeln!(pair.master.take_writer()?, "ls -l\r\n")?;
 // MasterPty::resize(PtySize) 可动态改尺寸
 ```
 
-**弃用理由（致命）**：`SlavePty::spawn_command(cmd)` **不接受自定义访问令牌**，
-其 Windows 实现内部自己走 `CreateProcessW`。要走它就等于二选一：
-
-- 放弃受限令牌沙盒 → **直接违反 `AGENTS.md` §9**（禁止绕过沙盒直接 spawn）；
-- 或者 fork / patch 该 crate 的 Windows spawn 路径 → 长期维护负担，且其依赖 `winapi 0.3`
-  与本项目已用的 `windows-sys 0.61` 并存，符号体系割裂。
+**弃用理由（致命）**：`SlavePty::spawn_command(cmd)` **不接受自定义访问令牌**，其 Windows
+实现内部自己走 `CreateProcessW`。要走它只能二选一：放弃受限令牌沙盒（**直接违反
+`AGENTS.md` §8**：禁止绕过沙盒直接 spawn），或 fork / patch 该 crate 的 Windows spawn 路径
+（长期维护负担，且其 `winapi 0.3` 与本项目已用的 `windows-sys 0.61` 并存、符号体系割裂）。
 
 ### 4.2 方案 B：自研 ConPTY（**采纳**）★
 
-**决策：自己用 `windows-sys` 实现 ConPTY。**
+**决策：自己用 `windows-sys` 实现 ConPTY。** 理由：
 
-理由：
+1. **保住沙盒**：受限令牌（`CreateRestrictedToken`）+ Job Object + 伪控制台可以挂在**同一个
+   `PROC_THREAD_ATTRIBUTE_LIST`** 上，一次性原子完成、无中间态。
+2. **现有基建已完成大半**：`sandbox/windows/spawn.rs` 已在用属性列表（`ProcThreadAttributeList`
+   + `PROC_THREAD_ATTRIBUTE_JOB_LIST`），改造只需 `count: 1 → 2` 再加一条属性。
+3. **依赖零增量**：`windows-sys = "0.61"` 已在 `Cargo.toml`，所需 feature（`Win32_System_Console`
+   / `_Pipes` / `_JobObjects` / `_Threading`）也已启用（符号归属见 §7 #2）。
+4. **不引入新 crate 的版本 / 许可 / 构建风险**（§11.2：本机依赖变更本就敏感）。
+5. **Unix 侧本来也不依赖它**：Linux/macOS 用标准 `openpty` + `fork/exec`，沙盒是 Landlock
+   （继承跨 exec），实现比 Windows 简单。
 
-1. **保住沙盒**：受限令牌（`CreateRestrictedToken`）+ Job Object + 伪控制台可以挂在
-   **同一个 `PROC_THREAD_ATTRIBUTE_LIST`** 上，一次性原子完成，无中间态。
-2. **现有基建已完成大半**：`src-tauri/virlen-core/src/sandbox/windows/spawn.rs` 已经在用属性列表
-   （`ProcThreadAttributeList` + `PROC_THREAD_ATTRIBUTE_JOB_LIST`），
-   结构就是 `InitializeProcThreadAttributeList(count)`，改造只需 `count: 1 → 2` 再加一条属性。
-3. **依赖零增量**：`windows-sys = "0.61"` 已在 `Cargo.toml`，且已启用
-   `Win32_System_Console` / `Win32_System_Pipes` / `Win32_System_JobObjects` /
-   `Win32_System_Threading` feature（`CreatePseudoConsole` 等符号的 feature 归属**待 spike 确认**）。
-4. **不引入新 crate 的版本/许可/构建风险**（§11.2 提示本机 `pnpm install` 与依赖变更本就敏感）。
-5. **Unix 侧本来也不依赖它**：Linux/macOS 用标准 `openpty` + `fork/exec`，
-   沙盒是 Landlock（继承跨 exec），实现比 Windows 简单。
-
-**代价（如实记录）**：需要自己处理 §5 列出的若干 ConPTY 陷阱，代码量约
-`spawn.rs` 的一个平行实现（估计 300–400 行 + 单测），比 `portable-pty` 方案多写一些，
-但换来沙盒完整性与依赖可控。
+**代价（如实记录）**：需要自己处理 §5 列出的若干 ConPTY 陷阱，代码量约 `spawn.rs` 的一个
+平行实现（估计 300–400 行 + 单测），比 `portable-pty` 方案多写一些，但换来沙盒完整性与依赖可控。
 
 ---
 
@@ -210,9 +167,9 @@ CloseHandle(outputWriteSide);
 //    读 outputReadSide → 收 VT 渲染输出
 ```
 
-**⚠️ 必须遵守**：三个 `HPCON` API —— `CreatePseudoConsole` / `ResizePseudoConsole` /
-`ClosePseudoConsole`。`ClosePseudoConsole(hPC)` 会终止所有附加的字符模式应用
-**及其进程树**（因此与 Job Object 存在功能重叠，需明确二者职责，见 §5.6）。
+**⚠️ 三个 `HPCON` API 必须成对处理**：`CreatePseudoConsole` / `ResizePseudoConsole` /
+`ClosePseudoConsole`。`ClosePseudoConsole(hPC)` 会终止所有附加的字符模式应用**及其进程树**
+（与 Job Object 功能重叠，职责划分见 §5.6）。
 
 ### 5.2 属性列表：`PSEUDOCONSOLE` 与既有 `JOB_LIST` 的写法**不同** ⚠️
 
@@ -234,8 +191,8 @@ UpdateProcThreadAttribute(si.lpAttributeList, 0,
                           hpc, sizeof(hpc), NULL, NULL);
 ```
 
-**两者语义不同（一个是数组指针，一个是值本身）**，直接照抄 `set_job` 的写法把
-`&hpc` 传进去会失败。新增方法建议命名区分，并加注释说明差异：
+**两者语义不同（一个是数组指针，一个是值本身）**：照抄 `set_job` 把 `&hpc` 传进去会失败。
+新增方法建议命名区分，并在代码里注明差异：
 
 ```rust
 fn set_pseudoconsole(&mut self, hpc: HPCON) -> Result<()> {
@@ -249,7 +206,7 @@ fn set_pseudoconsole(&mut self, hpc: HPCON) -> Result<()> {
 
 ### 5.3 `STARTUPINFO`：`STARTF_USESTDHANDLES` **必须设置**，三个句柄置 NULL ⚠️⚠️
 
-> **本节结论已由 §8.0 实测修正。** 初版判断（「去掉 `STARTF_USESTDHANDLES`」）是**错的**：
+> 本节结论已由 §8.0 实测修正：初版判断（「去掉 `STARTF_USESTDHANDLES`」）是**错的** ——
 > 实测会导致子进程继承父进程的 std 句柄，命令真实输出漏出伪控制台。
 
 现有 `create_sandboxed_process()` 是：
@@ -272,59 +229,42 @@ let ok = CreateProcessAsUserW(.., /*bInheritHandles*/ 0,  // 不再继承管道
     CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT, ..);  // 不设 CREATE_NO_WINDOW
 ```
 
-ConPTY 路径下：**子进程的控制台来自伪控制台，不再通过 std 句柄传递**，但 **std 句柄仍须显式清空**：
+ConPTY 路径下子进程的控制台来自伪控制台、不再经 std 句柄传递，但 **std 句柄仍须显式清空**：
+**必须设 `STARTF_USESTDHANDLES` 并把三个句柄全部置 NULL** —— Windows 的「标准句柄总是被继承」
+行为会让子进程拿到**父进程的 std 句柄**，`bInheritHandles = 0` **挡不住这条**（实测见 §8.0）；
+置 NULL 后 CRT 在「句柄无效 + 进程已附着控制台」时会回退打开 `CONOUT$` / `CONIN$`，输出即正确
+进入伪控制台。另：`bInheritHandles` 应为 **0**（不再需要继承管道写端）；
+**`EXTENDED_STARTUPINFO_PRESENT` 必须保留**（属性列表靠它生效）；`CREATE_NO_WINDOW` 实测
+**不设**也能正常工作（未出现黑窗口，与官方示例一致）→ 建议不设。
 
-- ✅ **必须设 `STARTF_USESTDHANDLES` 并把三个句柄全部置 NULL**。
-  不设该标志时，Windows 的「标准句柄总是被继承」行为会让子进程拿到**父进程的 std 句柄**
-  —— `bInheritHandles = 0` **挡不住这条**（实测见 §8.0）。置 NULL 后，CRT 在
-  「句柄无效 + 进程已附着控制台」时会回退打开 `CONOUT$` / `CONIN$`，输出即正确进入伪控制台。
-- `bInheritHandles` 应为 **0**（不再需要继承管道写端）。
-- **`EXTENDED_STARTUPINFO_PRESENT` 必须保留**（属性列表靠它生效）。
-- `CREATE_NO_WINDOW`：实测**不设**也能正常工作（未出现黑窗口，与官方示例一致）→ 建议不设。
-
-> 建议：新增一个**独立的** ConPTY spawn 函数（如 `conpty.rs::create_sandboxed_process_pty`），
-> **不要**在 `create_sandboxed_process` 里加 `if` 分支 —— 两条路径的 `STARTUPINFO`
-> 语义根本不同，混在一起极易出隐性 bug。这也符合 §5 铁律 8「最小改动、不动无关代码」。
+> 建议：新增**独立的** ConPTY spawn 函数（如 `conpty.rs::create_sandboxed_process_pty`），
+> **不要**在 `create_sandboxed_process` 里加 `if` 分支 —— 两条路径的 `STARTUPINFO` 语义根本
+> 不同，混在一起极易出隐性 bug（也符合铁律 8「最小改动、不动无关代码」）。
 
 ### 5.4 同步 I/O 限制：**不能用 tokio 异步管道** ⚠️
 
-官方明确：通信通道只需**同步** I/O 句柄 ——
-「File or I/O device handles like a file stream or pipe are acceptable as long as an
-**`OVERLAPPED` structure is not required** for asynchronous communication」。
+官方明确：通信通道只需**同步** I/O 句柄（只要不需要 `OVERLAPPED`）。因此 **不能**把
+`outputReadSide` 交给 tokio 异步读，必须在 `spawn_blocking` 里阻塞式 `ReadFile`；
+**裸跑路径也要一并改造**（原 `run_command_native` 裸跑分支用 `tokio::process::Command` +
+`AsyncReadExt`）—— 好消息是**沙盒路径 `run_command_sandboxed` 已经是 `spawn_blocking` +
+阻塞 `read`**，该模式直接复用。
 
-这意味着：
-
-- **不能**直接把 `outputReadSide` 交给 tokio 做异步读；
-- 必须用 `spawn_blocking` 里阻塞式 `ReadFile`；
-- **裸跑路径要一并改造**：现在 `run_command_native` 裸跑分支用的是
-  `tokio::process::Command` + `AsyncReadExt`（异步）。换 ConPTY 后这条路径也要改成
-  阻塞读 + `spawn_blocking`。
-  → 好消息：**沙盒路径 `run_command_sandboxed` 已经是 `spawn_blocking` + 阻塞 `read`**，
-  这个模式直接复用。
-
-官方另一条明确建议：**每条通道用单独线程服务**，各自维护缓冲区状态与消息队列；
-「Servicing all of the pseudoconsole activities on the same thread may result in a deadlock
-where one of the communications buffers is filled and waiting for your action while you
-attempt to dispatch a blocking request on another channel.」
+官方另一条明确建议：**每条通道用单独线程服务**，各自维护缓冲区状态与消息队列 —— 否则
+「一个通信缓冲区已填满、在等你处理，而你正阻塞在另一条通道上」时可能死锁。
 
 ### 5.5 关停顺序与死锁风险 ⚠️
 
-`ClosePseudoConsole` 有明确的死锁警告，两条都要处理：
+`ClosePseudoConsole` 有明确的死锁警告，两条都要处理：① 关闭时会向 `hOutput` 发出最后一帧，
+**读线程必须仍处于排空状态**（不能先停读线程再关伪控制台）；② 用
+`PSEUDOCONSOLE_INHERIT_CURSOR` 时不响应游标继承查询也会死锁 —— 我们传 `0`（不使用该 flag）规避。
 
-1. 「**关闭会话时可能发出最后一帧更新到 `hOutput`，应从通信通道缓冲区中排空**」 ——
-   即关停期间**读线程必须仍处于排空状态**，不能先停读线程再关伪控制台。
-2. 若创建时用了 `PSEUDOCONSOLE_INHERIT_CURSOR`，不响应游标继承查询消息也会死锁
-   （我们**不使用该 flag**，传 `0`，规避这条）。
+另一条启动期陷阱：伪控制台在子进程**正在启动时**被关闭会弹出错误对话框（错误码形如
+`0xc0000142`；对子进程而言「句柄无效」与「会话已关闭」表现一致）→ **不要在 spawn 后立刻
+`ClosePseudoConsole`**（本项目的「快速失败 / 降级」逻辑要注意别踩这条）。
 
-另一条启动期陷阱：伪控制台在子进程**正在启动时**被关闭，会弹出错误对话框，
-错误码形如 `0xc0000142`；对子进程而言「句柄无效」与「会话已关闭」表现一致。
-→ 因此**不要在 spawn 后立刻 `ClosePseudoConsole`**。
-（本项目的「快速失败/降级」逻辑要注意别踩这条。）
-
-**建议的 teardown 顺序**：
-杀进程树（Job Object / `kill_process_tree`）→ 等读线程自然 EOF →
-再 `ClosePseudoConsole` → 关掉 `inputWriteSide` / `outputReadSide`。
-配合现有「kill 后 3 秒清理窗口」的兜底逻辑（见 `run_command_native`）。
+**建议的 teardown 顺序**：杀进程树（Job Object / `kill_process_tree`）→ 等读线程自然 EOF →
+再 `ClosePseudoConsole` → 关掉 `inputWriteSide` / `outputReadSide`；配合现有「kill 后 3 秒
+清理窗口」的兜底逻辑（见 `run_command_native`）。
 
 > **实测（§8.0）**：按上述顺序执行，在**读线程仍处于排空状态**时调 `ClosePseudoConsole`，
 > 3.6–14.7 ms 即返回，读线程随后收到 EOF 正常退出 —— **未出现死锁**。
@@ -351,17 +291,19 @@ ConPTY 在**屏幕已有内容**之后收到 `ResizePseudoConsole`，会**整屏
 | 240×50 建 → **输出后** resize 到 80×**30** | ⚠️ 多出 **29 个换行 = 内容 9 + 空行 21** |
 | 直接按目标尺寸建、**不 resize** | ✅ 干净（**初始尺寸偏大也不会有空行**） |
 
-**结论**：多余空行数 = `新行数 − 内容行数`。（用户看到的「一大堆空格」就是这些 `\x1b[K\r\n` 把视图往下推。）
+**结论**：多余空行数 = `新行数 − 内容行数`（用户看到的「一大堆空格」就是这些 `\x1b[K\r\n` 把视图往下推）。因此有**两条硬约束**（违反就会出现「程序启动后第一次运行终端时多出一大堆空行」）：
 
-**因此有两条硬约束**（违反就会出现「程序启动后第一次运行终端时多出一大堆空行」）：
+1. **容器还没布局（宽高为 0）时前端绝不 `pty_resize`** —— 此时 `fit()` 量不出尺寸，
+   `term.cols/rows` 还是 xterm 默认的 **80×24**，推给后端就是用**错误行数** resize（首屏正是
+   这种情况：`message-list` 初次打开会先隐藏容器、等布局稳定再显示，见 `message-list.tsx` 的
+   `needInitialBottomRef`）。
+2. **尺寸没变就不要再调 `ResizePseudoConsole`** —— `ResizeObserver` 会反复回调，重复 resize 会
+   反复白刷空行。
 
-1. **容器还没布局（宽高为 0）时，前端绝不 `pty_resize`** —— 此时 `fit()` 量不出尺寸，`term.cols/rows` 还是 xterm 默认的 **80×24**，推给后端就是用**错误行数**去 resize。首屏恰好是这种情况（`message-list` 初次打开会先隐藏容器、等布局稳定再显示，见 `message-list.tsx` 的 `needInitialBottomRef`）。
-2. **尺寸没变就不要再调 `ResizePseudoConsole`** —— `ResizeObserver` 会反复回调，重复 resize 会反复白刷空行。
-
-**落地**：
-
-- 前端 `XtermTerminal.syncSize`：容器 `clientWidth/Height <= 0` → 直接 return；`fit()` 抛错 → return；与上次尺寸相同 → return（`lastSizeRef`）。
-- 后端 `pty_session`：`SizeTracker` 记住当前尺寸，`pty_resize` 尺寸未变时**直接返回 true、不调 API**；并把最近一次的客户端尺寸缓存起来（`initial_size`），**新建伪控制台时直接用它作初始尺寸** → 后续会话的首次上报天然是 no-op，根本不重绘。
+**落地**：前端 `XtermTerminal.syncSize`（容器 `clientWidth/Height <= 0` → return；`fit()` 抛错 →
+return；与上次尺寸相同 → return，靠 `lastSizeRef`）；后端 `pty_session`（`SizeTracker` 记住当前
+尺寸，`pty_resize` 尺寸未变时**直接返回 true、不调 API**；并把最近一次客户端尺寸缓存起来
+`initial_size`，**新建伪控制台时直接用它作初始尺寸** → 后续会话的首次上报天然是 no-op，不重绘）。
 
 #### 5.7.1 ⚠️ 勘误：上述「缓存初始尺寸」曾**完全失效**（前端 fit 早于后端 create）
 
@@ -372,8 +314,7 @@ let Some(session) = lookup(tool_call_id) else { return false };   // ← 先查�
 if let Ok(mut g) = LAST_CLIENT_SIZE.lock() { *g = Some(..) };      // ← 才写缓存
 ```
 
-但实测存在**竞态**（前端加了临时日志后抓取，日志形如
-`pty_resize:result … 113x13 ok=false` 紧跟 `ok=true`）：
+但实测存在**竞态**（日志形如 `pty_resize:result … 113x13 ok=false` 紧跟 `ok=true`）：
 
 | 时刻（相对挂载） | 事件 |
 |---|---|
@@ -382,25 +323,21 @@ if let Ok(mut g) = LAST_CLIENT_SIZE.lock() { *g = Some(..) };      // ← 才写
 | +0.4s | 后端 `create`：缓存为空 → 退回默认 **240×50** |
 | +0.4s+ | 前端有 `lastSizeRef` 去重，**不再补发** → 尺寸永远停在 240×50 |
 
-后果：ConPTY 以 240×50 运行，而 xterm 只有 13 行 → 每次重绘都按「50 行」补
-`\x1b[K\r\n`（≈ `50 − 内容行数` 个空行，与 §5.7 表一致）。且因为缓存**从来没被写过**，
-这不是「只在第一次」——**是每次都坏**（第二次看起来不同，只是内容行数不同）。
+后果：ConPTY 以 240×50 运行，而 xterm 只有 13 行 → 每次重绘都按「50 行」补 `\x1b[K\r\n`
+（≈ `50 − 内容行数` 个空行，与 §5.7 表一致）。且因为缓存**从来没被写过**，这不是「只在第一次」
+—— **是每次都坏**（第二次只是内容行数不同）。
 
-**修复（两处，缺一不可）：**
+**修复（两处，缺一不可）**：① **后端 `pty_resize` 把缓存写入提到 `lookup` 之前** —— 即使会话
+未就绪，尺寸也已进缓存，紧接其后的 `create` 通过 `initial_size()` 直接按正确尺寸建控制台 →
+**根本不发生 resize** → 无空行；② **前端 `XtermTerminal.sendResize` 未命中会话时短重试**
+（120ms × 最多 8 次；尺寸变化 / 卸载作废旧链）—— 兜底「`create` 抢跑在前」，重试命中会话时
+通常仍在子进程输出之前，resize 早于内容 → 干净。
 
-1. **后端 `pty_resize`：把缓存写入提到 `lookup` 之前**。这样即使会话未就绪，
-   尺寸也已进缓存，紧接其后的 `create` 通过 `initial_size()` 直接按正确尺寸建控制台
-   → **根本不发生 resize** → 不重绘 → 无空行。
-2. **前端 `XtermTerminal.sendResize`：未命中会话时短重试**（120ms × 最多 8 次；
-   尺寸变化 / 卸载作废旧链）。作为「`create` 抢跑在前」的兜底：重试命中会话时通常
-   仍在子进程输出之前，resize 早于内容 → 干净。
-
-> **实测验证**：修复后日志为 `resize → no-session(cache-seeded)` 紧接
-> `create size=113x13`（不再是 240×50），`\x1b[K\r\n` 由 ~38 个降到 0~3 个，
-> `npm init` 全程正常（含逐字段 `\e[12;1H…` 重定位）。
-> ⚠️ 反思：§5.7 初版那句「第二次运行就正常」是**错的**——它假定缓存会被填上，
-> 但写入点摆在 `lookup` 之后，缓存**永远填不上**。教训：跨前后端共享的状态，
-> 其写入时机必须在「依赖它的下游」之前，否则就是一个静默失效的缓存。
+> **实测验证**：修复后日志为 `resize → no-session(cache-seeded)` 紧接 `create size=113x13`
+> （不再是 240×50），`\x1b[K\r\n` 由 ~38 个降到 0~3 个，`npm init` 全程正常。
+> ⚠️ 反思：§5.7 初版那句「第二次运行就正常」是**错的** —— 它假定缓存会被填上，但写入点摆在
+> `lookup` 之后，缓存**永远填不上**。教训：跨前后端共享的状态，写入时机必须在「依赖它的下游」
+> 之前，否则就是一个静默失效的缓存。
 
 #### 5.7.2 ⚠️ 再勘误：TS 引擎路径下 `create` **抢在**首次上报之前（顺序相反）
 
@@ -412,29 +349,23 @@ if let Ok(mut g) = LAST_CLIENT_SIZE.lock() { *g = Some(..) };      // ← 才写
 | 谁先挂终端 | 引擎先发「步骤开始」事件 → UI 挂载终端并上报尺寸 → **才**执行工具 | 工具就地 `invoke('pty_run_command')`；终端要等 `toolOutputStore.register({pty:true})` 触发的**下一次 React 渲染**才挂载 |
 | `create` 时的缓存 | **已有值**（上报早 ~0.4s 到）→ 直接用正确尺寸 | **还是空的** → §5.7.1 的「缓存提前」无从生效 |
 
-因此 §5.7.1 的两处修复在 TS 路径**双双失灵**：
+因此 §5.7.1 的两处修复在 TS 路径**双双失灵**：① 缓存写入提前 —— `create` 跑的时候**根本还
+没有任何上报**，没有可提前的东西；② 前端重试 —— 它只在 `pty_resize` 返回 `false`（会话未注册）
+时触发，而 TS 路径下上报**晚于** `create`、会话**已注册** → 返回 `true` → **不触发重试**。
+于是 `create` 用兜底 **240×50** 建好伪控制台，首帧按 50 行铺满 → 内容下方补出 `\x1b[K\r\n`
+（≈ `50 − 内容行数` 个空行）。用户视角即「TS 引擎路径下 `npm init` 第一次运行又是一大堆空行」
+—— 与 §5.7.1 修好前的 Rust 路径**同症不同因**。
 
-1. **缓存写入提前**：没有可提前的东西——`create` 跑的时候**根本还没有任何上报**；
-2. **前端重试**：重试只在 `pty_resize` 返回 `false`（会话未注册）时触发；而 TS 路径下
-   上报**晚于** `create`，会话**已注册** → 返回 `true` → **不触发重试**。
-
-于是 `create` 已用兜底 **240×50** 建好伪控制台，首帧按 50 行铺满 → 内容下方补出
-`\x1b[K\r\n`（≈ `50 − 内容行数` 个空行，与 §5.7 表一致）。用户视角即「TS 引擎路径下
-`npm init` 第一次运行又是一大堆空行」——与 §5.7.1 修好前的 Rust 路径**同症不同因**。
-
-**修复：让 `create` 主动等一等首次上报。**
-
-`pty_session::initial_size` 由同步改为 **`async`**：缓存为空时按 20ms 轮询、最多等
-`CLIENT_SIZE_WAIT = 800ms`，**拿到客户端真实尺寸再建伪控制台**；超时（终端从不上报，
-如非 PTY 渲染）才退回 `fallback`。
+**修复：让 `create` 主动等一等首次上报。** `pty_session::initial_size` 由同步改为 **`async`**：
+缓存为空时按 20ms 轮询、最多等 `CLIENT_SIZE_WAIT = 800ms`，**拿到客户端真实尺寸再建伪控制台**；
+超时（终端从不上报，如非 PTY 渲染）才退回 `fallback`。
 
 - **正常情况**：登记 `pty:true` → React 下一帧挂载 xterm → `fit()` → 上报，全程约一两帧
-  （几十 ms）≪ 800ms → `create` 用真实尺寸 → **不发生 resize → 无空行**；随后那次上报
-  因尺寸相同被 `SizeTracker` 判为 **no-op**。
+  （几十 ms）≪ 800ms → `create` 用真实尺寸 → **不发生 resize → 无空行**；随后那次上报因尺寸
+  相同被 `SizeTracker` 判为 **no-op**。
 - **Rust 引擎路径**：缓存早已有值 → `initial_size` **立即返回**，无等待、行为不变。
-- **与 §5.7.1 的关系**：§5.7.1 的 ① 仍必要——它保证「等待期间**晚到的上报**」能进缓存
-  （`pty_resize` 先把尺寸写缓存、再查会话）；本节的「主动等待」+ ① 的「缓存提前」
-  共同构成 TS 路径的完整修复，② 的重试继续作为 `create` 极端抢跑时的兜底。
+- **与 §5.7.1 的关系**：① 仍必要 —— 它保证「等待期间**晚到的上报**」能进缓存；本节的「主动
+  等待」+ ① 的「缓存提前」共同构成 TS 路径的完整修复，② 的重试继续作为极端抢跑的兜底。
 
 > 落地：`pty_session::initial_size` 改为 `pub async fn`，`run_command_native_pty` 处
 > 改为 `pty_session::initial_size((DEFAULT_COLS, DEFAULT_ROWS)).await`。
@@ -475,19 +406,14 @@ if let Ok(mut g) = LAST_CLIENT_SIZE.lock() { *g = Some(..) };      // ← 才写
   → processTerminalOutput() 从头到尾重跑一遍 ANSI/\r 解析
 ```
 
-PTY 输出是带光标控制的原始流且刷新极快（进度条、`npm install`），
-**整体重跑整个累积字符串是 O(n²)**，会烧 CPU 并卡 UI。
-
-改造方向（对齐 terminal-mcp）：
-
-1. **增量解析**：维护一个持久解析状态（当前行/列、缓冲区），只处理新增 chunk，不重跑历史；
-2. **半截转义序列待发**：chunk 边界可能切断 `\x1b[`，未闭合的序列要**留在 pending** 等下一块
-   （现有 `TerminalDecoder` 已有类似思路处理 UTF-8 跨块，可参照其「pending + 三态判定」结构）；
-3. **内存有界**：会话日志 append-only 落盘为真相来源，内存只留 tail cache；
-   否则 `yes` / `cat 大文件` 会打爆内存（现有实现是无限增长 `String`）；
-4. **stdout/stderr 合并**：PTY 只有一条输出流 → `ToolOutput.uiData` 的 `{stdout, stderr, exitCode}`
-   结构与 `agent:tool-output` 的 `stream: 'stdout'|'stderr'` 字段在 PTY 路径下失去意义。
-   → 建议 `uiData` 增加 `pty: true` 标记，UI 据此走单流渲染；旧字段保留以兼容非 PTY 路径。
+PTY 输出是带光标控制的原始流且刷新极快（进度条、`npm install`），**整体重跑累积字符串是
+O(n²)**，会烧 CPU 并卡 UI。改造方向（对齐 terminal-mcp）：① **增量解析**（维护持久解析状态 ——
+当前行/列、缓冲区，只处理新增 chunk）；② **半截转义序列待发**（chunk 边界可能切断 `\x1b[`，
+未闭合的序列留在 pending；可参照现有 `TerminalDecoder` 处理 UTF-8 跨块的「pending + 三态判定」
+结构）；③ **内存有界**（会话日志 append-only 落盘为真相源，内存只留 tail cache；否则
+`yes` / `cat 大文件` 会打爆现有那个无限增长的 `String`）；④ **stdout/stderr 合并**（PTY 只有一条
+输出流 → `uiData` 的 `{stdout, stderr, exitCode}` 与 `agent:tool-output` 的 `stream` 字段在 PTY
+路径下失去意义 → 建议 `uiData` 增 `pty: true` 标记，UI 据此走单流渲染，旧字段保留以兼容）。
 
 ### 6.3 事件与命令契约
 
@@ -522,7 +448,7 @@ TS 引擎路径（回退）──────── invoke ────┘
   （建议同步，行为一致；但要注意脚本场景很少需要交互，收益主要是 ANSI 正确）。
 - **`processTerminalOutput` 是 UI 与 Rust 两侧的镜像实现**（`common.ts` 与
   `native_tools/execute/common.rs`，且 `TerminalBlock.tsx` 复用 JS 版）→ 增量解析改造要**两侧同步**。
-- **`tsconfig` 注意**：`strict: true` 但 `strictNullChecks: false`（§11.6），改 UI 时别按纯严格模式假设。
+- **`tsconfig` 注意**：`strict: true` 但 `strictNullChecks: false`（`AGENTS.md` §11.5），改 UI 时别按纯严格模式假设。
 
 ---
 
@@ -536,11 +462,11 @@ TS 引擎路径（回退）──────── invoke ────┘
 | 4 | conhost/OpenConsole 宿主在受限令牌下的「两遍检查」 | ✅与 #1 同批通过（未出现 ACCESS_DENIED） | Spike 实测 |
 | 5 | **`STARTF_USESTDHANDLES` 的处理方式** | ✅**已修正**：必须设置且三句柄置 NULL（初版判断错误，见 §5.3 / §8.0） | Spike 实测 |
 | 6 | **`\x03` 能否中断前台命令** | ✅**已确认不能**：只能影响「正在读输入的进程」；中断主通道仍须 Job Object（见 §5.6） | Spike 实测 |
-| 7 | 前端终端模拟器选型（`@xterm/xterm`） | ✅**已引入且 lock 已补齐**：`@xterm/xterm@6.0.0` + `@xterm/addon-fit@0.11.0` | Step 1 落地时 `node_modules` 里已有（junction → `.pnpm`）故**未跑 `pnpm install`**，但 `pnpm-lock.yaml` **未登记** → 已由用户执行 `pnpm add` 补上（2026-09-18 核实：lock 里 `importers` / `packages` / `snapshots` 三处均有记录）→ CI 的 `--frozen-lockfile` 不再阻塞 |
+| 7 | 前端终端模拟器选型（`@xterm/xterm`） | ✅ 已引入且 lock 已补齐（`@xterm/xterm@6.0.0` + `@xterm/addon-fit@0.11.0`）：Step 1 落地时 `node_modules` 已有（junction → `.pnpm`）故未跑 `pnpm install`，`pnpm-lock.yaml` 未登记 → 已由用户 `pnpm add` 补上（`importers` / `packages` / `snapshots` 三处均有记录）→ CI 的 `--frozen-lockfile` 不再阻塞 |
 | 8 | 输出流合并导致 `[标准错误]` 分段与 `stream` 字段语义消失 | ✅**已实现** | PTY 路径 `stream` 恒为 `stdout`、`stderr` 恒为空串，`uiData.pty = true`（旧字段保留以兼容非 PTY） |
 | 9 | PTY 输出含 `\x1b[87X` / `\x1b]0;…\x07` 等序列，`<pre>` 无法表达 | ✅**已解决** | 前端用 xterm 渲染 + 增量写入；模型可见文本走升级后的 ANSI 解析器 |
 | 10 | **旧 ANSI 解析器把私有模式参数漏成正文**（`\x1b[?25l` → 输出里混进 `25l`） | ✅**已修（两侧同步）** | 旧实现只认 `ESC [` 且只吃 `0-9;`；ConPTY 输出里 `?25l/?25h` 极其密集 → 按 ECMA-48 完整吞掉（参数/中间/结束字节 + OSC + 三字节转义） |
-| 11 | **伪控制台按列宽硬换行**：折行产生的换行会进入模型可见文本 | 已缓解，未消除 | 初始尺寸改用客户端上报值（`initial_size`，见 §5.7.1 / §5.7.2）→ 折行列宽与用户所见一致；缓存未命中时短暂等待上报（§5.7.2），超时才兜底 240×50；彻底解决需按需 reflow，属后续阶段 |
+| 11 | **伪控制台按列宽硬换行**：折行产生的换行会进入模型可见文本 | 已缓解，未消除：初始尺寸改用客户端上报值（`initial_size`，§5.7.1 / §5.7.2）→ 折行列宽与用户所见一致；缓存未命中时短暂等待上报，超时才兜底 240×50；彻底解决需按需 reflow（后续阶段） |
 | 12 | **后台进程语义变化**：`ClosePseudoConsole` 会终止附着其上的进程 → **裸跑路径**下 `start` 拉起的后台进程不再存活（沙盒路径本来就会杀，见 windows/mod.rs） | 已识别，**接受** | 属 ConPTY 固有行为；仅影响 `sandbox:"off"` 的少数用法 |
 | 13 | 内存无界：`yes` / `cat 大文件` 打爆内存 | ✅**已缓解** | 单条流 1 MB 上限；超出后丢弃早期内容（保留末尾 256 KB）并在输出开头插入提示 |
 | 14 | **TS 引擎路径尚未 PTY 化** | ✅**已实现**（`pty_run_command`） | TS 分支经 `pty_run_command` 复用 Rust 原生运行器（沙盒 + ConPTY + `ipc::Channel` 流式回传），与 Rust 引擎路径**共用同一套执行语义**（铁律 1）；非 Tauri / 非 Windows 仍回落 `plugin-shell` 管道 + `<pre>` |
@@ -552,14 +478,11 @@ TS 引擎路径（回退）──────── invoke ────┘
 | 20 | **用户编辑命令后不再二次审批**（用户本人就是审批人），但编辑可能把命令改成远超原风险的东西 | ✅**已实现**（Step 2 ①） | 编辑后**重新 `classify_command`**（风险升高仅埋点 `interaction.command.confirm.escalated`，只记级别不记正文，用例 `test_terminal_confirm_reclassify_escalation`）、仍走沙盒 + PTY 同一路径、`readonly` 拒绝逻辑保持前置 |
 | 21 | **PTY 下 stdout 是 TTY → 触发分页器**：`git diff` / `git log` / `git show`、`gh`、`bat` 等检测到 stdout 是 TTY 便启动 `less`/`more`，命令跑完却停在分页界面等按键（表现为「最后提示需要交互式操作才能看完」），AI 无法按 `q` → 等价于卡死 | ✅**已修复** | PTY 路径注入三个专用开关：`GIT_PAGER=cat`（`git_pager()` 对 `cat`/空串**硬编码特判** = 不分页）、`GH_PAGER=cat`（`IOStreams.StartPager()` 见 `cat` 直接 return）、`BAT_PAGING=never`（等价 `--paging=never`）——三者均**不会真调 `cat`**，Windows 无 `cat` 也安全（用例 `test_execute_command_pty_disables_pager`）；**刻意不设通用 `PAGER`**（`aws` 等会真 exec，反而报错）；管道路径 stdout 非 TTY → 本就不分页，无需改动 |
 
-**关于原 #1 的推理链（已被 §8.0 实测证实）**：
-
-- 有利面（**猜对了**）：`CreatePseudoConsole` 在 Virlen 自己（非受限）进程内调用；通信管道由
-  **我们自己的 `CreatePipe` 创建**（匿名管道，SD 取自令牌默认 DACL）——
-  **确实不是 §11.2 的命名管道坑**。
-- 不利面（**猜错了**）：担心 conhost/OpenConsole 宿主的「两遍访问检查」会拦住 ——
-  实测**未被拦住**，`CreateProcessAsUserW` 一次成功。
-- 结论：**方案 B 成立**，无需走「PTY 路径降级回匿名管道」的退路。
+**关于原 #1 的推理链（已被 §8.0 实测证实）**：猜对的是「`CreatePseudoConsole` 在 Virlen 自己
+（非受限）进程内调用 + 通信管道由**我们自己的 `CreatePipe`** 创建（匿名管道，SD 取自令牌默认
+DACL）→ 确实不是 §11.2 的命名管道坑」；猜错的是「担心 conhost/OpenConsole 宿主的两遍访问检查
+会拦住」—— 实测**未被拦住**，`CreateProcessAsUserW` 一次成功。**结论：方案 B 成立**，无需走
+「PTY 路径降级回匿名管道」的退路。
 
 ---
 
@@ -779,27 +702,11 @@ JS → Rust（`agent_user_interaction_response` 的 `content`，字符串，JSON
 | 非 Tauri（浏览器 dev / vitest） | 同上（`invoke` 不可用） |
 | TS 引擎路径 | TS 执行器见到 `confirm:"terminal"` → **强制 `needsApproval = true`**（回落弹窗）；PTY 化仍记 §7 #14 |
 
-**文件级改动清单**
-
-| 文件 | 改动 |
-|---|---|
-| `src-tauri/virlen-core/src/agent/native_tools/execute/execute_command.rs` | 解析新参数 `confirm`；伪控制台可用时在交互 `data` 里加 `presentation:"terminal"`；解析回传 content（JSON → 命令）→ 用改后命令执行；重新分类 + 埋点 |
-| `src-tauri/virlen-core/src/agent/native_tools/execute/common.rs` | 暴露「伪控制台是否可用」判定（上一行要用；`cfg(target_os="windows")` 且 `PseudoConsole::create` 试建成功） |
-| `src/infrastructure/tools/execute/execute-command.ts` | 参数定义加 `confirm`（含 LLM 面向描述）；执行器：`confirm === 'terminal'` → 强制 `needsApproval = true`，payload 带 `confirm:'terminal'` |
-| `src/infrastructure/tools/output-store.ts` | `ToolOutput` 加 `pendingConfirm?: { command, risk, label, hint, tips }` 与 `lastOutputAt?: number`（④ 用） |
-| `src/services/tool-service/command_confirm.ts` | `createNativeCommandConfirmHandles`：`data.presentation === 'terminal'` 时**不 emit** `showCommandConfirm`，改为 `toolOutputStore` 写入 `pendingConfirm`；`commandResolve` 的值**透传**（JSON 原样 resolve），非 JSON 退回 `'approved'`；提交后清空 `pendingConfirm` |
-| `src/events/toolInteractEvent.ts` | 新增纯 UI 事件 `terminalConfirmSubmit(toolCallId, command)` / `terminalConfirmCancel(toolCallId)`（组件 → service，不让组件直接摸 service） |
-| `src/ui/pages/chat/components/tool-call/TerminalBlock.tsx` | `TerminalView` 新增分支：`entry.pendingConfirm` 存在 → 渲染 `<TerminalConfirmBlock>`（此时**尚无 PTY**，不渲染 xterm） |
-| `src/ui/pages/chat/components/tool-call/TerminalConfirmBlock.tsx` | **新建**：可编辑命令行 + 风险徽标 + 「尚未执行」文案 + Enter/Esc 键处理 |
-| `src/ui/pages/chat/components/tool-call/style.scss` | `.execute-command-wrapper.is-confirm` 等（与运行态**显著区分**，见 §7 #16） |
-| `src/ui/i18n/lang/en-US.json` | 新增文案，见 2.7 |
+**文件级改动清单**（均已实施）：`native_tools/execute/execute_command.rs`（解析 `confirm`；伪控制台可用时在交互 `data` 里加 `presentation:"terminal"`；解析回传 content 的 JSON → 用改后命令执行；重新分类 + 埋点）、`native_tools/execute/common.rs`（暴露「伪控制台是否可用」判定：`cfg(target_os="windows")` 且 `PseudoConsole::create` 试建成功）、`infrastructure/tools/execute/execute-command.ts`（参数加 `confirm` 含 LLM 面向描述；`confirm === 'terminal'` → 强制 `needsApproval = true`）、`infrastructure/tools/output-store.ts`（`ToolOutput` 加 `pendingConfirm?: { command, risk, label, hint, tips }` 与 `lastOutputAt?: number`）、`services/tool-service/command_confirm.ts`（`presentation === 'terminal'` 时**不 emit** `showCommandConfirm`，改写 `toolOutputStore.pendingConfirm`；`commandResolve` 透传 JSON、非 JSON 退回 `'approved'`；提交后清空）、`events/toolInteractEvent.ts`（新增纯 UI 事件 `terminalConfirmSubmit` / `terminalConfirmCancel`）、`tool-call/TerminalBlock.tsx`（`entry.pendingConfirm` 存在 → 渲染确认块，此时**尚无 PTY**、不渲染 xterm）、`tool-call/TerminalConfirmBlock.tsx`（**新建**）、`tool-call/style.scss`（`.is-confirm`，与运行态**显著区分**，见 §7 #16）、`i18n/lang/en-US.json`（见 2.7）。
 
 **测试计划**
 
-- Rust：`test_execute_command_terminal_confirm_roundtrip`（伪造桥回 `{"approved":true,"command":"echo edited"}` → 用**输出内容**断言跑的是改后命令）；
-  `test_execute_command_terminal_confirm_cancelled`（回 `Cancelled` → `[User cancelled]`）；
-  `test_terminal_confirm_reclassify_escalation`（编辑成危险命令 → 分类与埋点参数正确）；
-  `test_terminal_confirm_no_presentation_without_pty`（伪控制台不可用时 `data` 里**没有** `presentation`）。
+- Rust：`test_execute_command_terminal_confirm_roundtrip`（桥回 `{"approved":true,"command":"echo edited"}` → 用**输出内容**断言跑的是改后命令）、`test_execute_command_terminal_confirm_cancelled`（回 `Cancelled` → `[User cancelled]`）、`test_terminal_confirm_reclassify_escalation`（编辑成危险命令 → 分类与埋点参数正确）、`test_terminal_confirm_no_presentation_without_pty`（伪控制台不可用时 `data` 里**没有** `presentation`）。
 - TS：`parseTerminalConfirmPayload` 的 JSON / 非 JSON / 空串三分支；`confirm:'terminal'` → `needsApproval === true`。
 
 ---
@@ -840,28 +747,25 @@ loop {
 }
 ```
 
-- 选「心跳 + 预算」而不是 `Sleep::reset()`：预算剩多少是**显式状态**，好断言、好单测，
-  也不会因为 reset 时序写出难查的边界 bug；代价是每 250 ms 醒一次（对 CPU 无实质影响，
-  但要保证该分支的 `if` 卫兵与既有 4 个分支的卫兵不互相遮蔽）。
-- `PTY_HOLD_MAX = 30 min`（对齐 WinkTerm 的 TTL），写成常量、**不做设置项**（先简单）。
-- 事件摘要进 `uiData.userInterventions`：`{ keys, enters, ctrlC, heldSeconds }` + 顶层 `holdTimedOut`。
-  **只记计数，不记内容**（D4）；`pty_write` / `pty_key` 都经过 `PtySession::write()`，在那里记账。
+- 选「心跳 + 预算」而不是 `Sleep::reset()`：预算剩多少是**显式状态**，好断言、好单测，也不会因 reset
+  时序写出难查的边界 bug；代价是每 250 ms 醒一次（对 CPU 无实质影响，但要保证该分支的 `if` 卫兵与
+  既有 4 个分支的卫兵不互相遮蔽）。
+- `PTY_HOLD_MAX = 30 min`（对齐 WinkTerm 的 TTL），写成常量、**不做设置项**。
+- 事件摘要进 `uiData.userInterventions`：`{ keys, enters, ctrlC, heldSeconds }` + 顶层 `holdTimedOut`
+  —— **只记计数，不记内容**（D4）；`pty_write` / `pty_key` 都经过 `PtySession::write()`，在那里记账。
 
-**文件级改动清单**
+**文件级改动清单**（均已实施）：`native_tools/execute/pty_session.rs`（`PtySession` 加
+`held: AtomicBool` + `InterventionLog`，新增 `pty_set_held` / `interventions()`，`write()` 记账）、
+`native_tools/execute/common.rs`（超时改「预算 + 心跳」；结束时取 `heldSeconds` / 计数塞 `uiData`；
+`build_command_result` 增 `wait_reason` / `interventions` 参数，管道路径传 `pty:false` + 同名字段）、
+`agent/mod.rs` + `src-tauri/src/lib.rs`（新增 Tauri 命令 `pty_set_held(toolCallId, held) -> bool`
+并注册，铁律 4）、`tool-call/XtermTerminal.tsx`（header 增「接管 / 交还」按钮，`running` 且有会话时；
+`invoke` 返回 `false` → 复位按钮）、`i18n/lang/en-US.json`（见 2.7）。
 
-| 文件 | 改动 |
-|---|---|
-| `src-tauri/virlen-core/src/agent/native_tools/execute/pty_session.rs` | `PtySession` 加 `held: AtomicBool` + `InterventionLog`（计数）；新增 `pty_set_held` / `interventions()`；`write()` 记账 |
-| `src-tauri/virlen-core/src/agent/native_tools/execute/common.rs` | 超时改「预算 + 心跳」（见上）；结束时取 `heldSeconds` / 计数塞 `uiData`；`build_command_result` 增 `wait_reason` / `interventions` 参数（管道路径传 `pty:false` + 同名字段） |
-| `src-tauri/virlen-core/src/agent/mod.rs` + `src-tauri/src/lib.rs` | 新增 Tauri 命令 `pty_set_held(toolCallId, held) -> bool`，并在 `generate_handler!` 注册（铁律 4） |
-| `src/ui/pages/chat/components/tool-call/XtermTerminal.tsx` | header 增「接管 / 交还」按钮（`running` 且有会话时）；接管态显示暂停标记；`invoke` 返回 `false` → 复位按钮（命令已结束） |
-| `src/ui/i18n/lang/en-US.json` | 见 2.7 |
-
-**测试计划**
-
-- `test_pty_hold_freezes_timeout`：`timeout=2`，0.5 s 时置 held、2.5 s 后交还 → 总耗时 > 2.5 s 且**未**超时、`heldSeconds >= 2`；
-- `test_pty_hold_hard_cap`：把上限做成可注入常量（`#[cfg(test)]` 缩短）→ 到顶被终止，`waitReason == "timeout"` 且 `holdTimedOut == true`；
-- `test_pty_interventions_counted`：若干次 `pty_write` → `keys` / `enters` / `ctrlC` 计数正确，**并断言 `uiData` 里不含用户输入文本**（D4 的回归保护）。
+**测试计划**：`test_pty_hold_freezes_timeout`（`timeout=2`，0.5 s 置 held、2.5 s 交还 → 总耗时
+> 2.5 s 且**未**超时、`heldSeconds >= 2`）；`test_pty_hold_hard_cap`（上限做成可注入常量 →
+到顶被终止，`waitReason == "timeout"` 且 `holdTimedOut == true`）；`test_pty_interventions_counted`
+（若干次 `pty_write` → 计数正确，**并断言 `uiData` 里不含用户输入文本**，D4 回归保护）。
 
 ---
 
@@ -912,13 +816,10 @@ loop {
   可让用户在终端中输入，或改用 `confirm:"terminal"` 先确认再执行。」
 - **不新增后端空闲事件**：不做「N 秒无输出」的后端推送 —— 那会污染 `AgentEventType` 四方契约（铁律 2）。
 
-**前端：「疑似等待输入」提示（本地计时，零后端成本）**
-
-- `ToolOutput` 加 `lastOutputAt`（`append` 时打时间戳）；
-- `running && Date.now() - lastOutputAt >= IDLE_HINT_MS (15_000)` → 终端块下方显示
-  「N 秒无输出，可能正在等待输入（可直接在终端中输入）」；
-- 判定逻辑抽成**导出的纯函数** `shouldHintIdle(now, lastOutputAt, running)` 供单测；
-- 定时器只在 `running` 时挂（命令结束即无开销）。
+**前端「疑似等待输入」提示（本地计时，零后端成本）**：`ToolOutput` 加 `lastOutputAt`（`append`
+时打时间戳）；`running && Date.now() - lastOutputAt >= IDLE_HINT_MS (15_000)` → 终端块下方显示
+「N 秒无输出，可能正在等待输入（可直接在终端中输入）」；判定抽成**导出的纯函数**
+`shouldHintIdle(now, lastOutputAt, running)` 供单测；定时器只在 `running` 时挂。
 
 **测试计划**：`test_build_command_result_wait_reason`（三个值 + 管道路径也下发）；
 TS `shouldHintIdle` 的边界（未运行 / 无输出记录 / 恰好 15 s / 超过 15 s）。
@@ -929,18 +830,16 @@ TS `shouldHintIdle` 的边界（未运行 / 无输出记录 / 恰好 15 s / 超�
 
 - **复用 `TerminalBlock` 的既有做法**：同一个 block 渲染两份（原位 + `createPortal` 到 body），
   而不是搬迁终端实例；Esc 退出；按钮沿用 `FullScreenSvg` / `ExitFullScreenSvg`。
-- **为什么不需要 serialization**：`XtermTerminal` 的写入是**自包含**的 —— 首帧整段
-  `term.write(stream)`，之后只追增量（`stream.startsWith(written)` 判断）。
-  因此全屏时新挂载的实例在首帧就拿到了**完整 scrollback**（受 `scrollback: 2000` 约束），
-  无需 `serialize`/`restore`，也不需要「搬迁实例保 scrollback」那套复杂逻辑
-  （Step 1 §8.1 里那句「全屏需重建终端实例并保 scrollback」**可以改写成这条更简单的结论**）。
+- **为什么不需要 serialization**：`XtermTerminal` 的写入**自包含** —— 首帧整段 `term.write(stream)`、
+  之后只追增量（`stream.startsWith(written)` 判断），因此全屏时新挂载的实例首帧就拿到了**完整
+  scrollback**（受 `scrollback: 2000` 约束），无需 `serialize` / `restore`，也不需要「搬迁实例保
+  scrollback」那套复杂逻辑。
 - 进入全屏后**补一次 `term.scrollToBottom()`**（新实例默认停在顶部）；
   原位那份**保持挂载**（虚拟列表条目矮下去会触发重测量 → 滚动跳动，与 `<pre>` 版同因）。
-- **尺寸同步权（`pty_resize`）在两份实例间移交**：两份的列宽/行数不同，若都上报会互相覆盖
-  后端尺寸。故同一时刻**只让一份独占同步** —— 进入全屏后由**全屏实例**独占上报、原位实例暂停
-  （并作废其在途的 `pty_resize` 重试链）；**退出全屏同步权交回原位实例，且强制重发一次**
-  （原位尺寸未变，`lastSizeRef` 去重会跳过上报）。实现见 `XtermTerminal` 的
-  `syncResize` 与 `useEffect([syncResize])` 交接 effect。
+- **尺寸同步权（`pty_resize`）在两份实例间移交**：两份列宽 / 行数不同，都上报会互相覆盖后端尺寸，
+  故同一时刻**只让一份独占同步** —— 全屏后由**全屏实例**独占上报、原位实例暂停（并作废其在途的
+  `pty_resize` 重试链）；**退出全屏交回原位实例并强制重发一次**（原位尺寸未变，`lastSizeRef`
+  去重会跳过）。实现见 `XtermTerminal` 的 `syncResize` 与 `useEffect([syncResize])` 交接 effect。
 - ⚠️ 代价：全屏期间两个实例同时解析同一条流（≈2× CPU），见 §7 #19 —— 短时交互态，接受。
 
 **测试计划**：TS 侧只覆盖纯逻辑（全屏是 DOM 行为，交给手动验收）。
@@ -949,25 +848,16 @@ TS `shouldHintIdle` 的边界（未运行 / 无输出记录 / 恰好 15 s / 超�
 
 #### 2.7 文档与文案同步清单
 
-- **i18n（`src/ui/i18n/lang/en-US.json`，中文即 key）**：
-  「接管」「交还」「已接管：超时已暂停（上限 30 分钟）」「终止执行」「尚未执行」
-  「按 Enter 执行，Esc 取消；可直接编辑」「等待用户确认」「用户已编辑该命令」
-  「N 秒无输出，可能正在等待输入（可直接在终端中输入）」「全屏」「退出全屏」；
-  `tpl` 模板：`tpl('已暂停超时 $__secs__ 秒', { secs })` 之类（按最终 UI 定）。
-- **`docs/AGENTS.md`**：§11.7 追加「Step 2 已实现的部分」；快速定位表的 PTY 落点补
-  `TerminalConfirmBlock.tsx` / `pty_key` / `pty_set_held`。
+- **i18n（`src/ui/i18n/lang/en-US.json`，中文即 key）**：新增「接管」「交还」「已接管：超时已暂停（上限 30 分钟）」「终止执行」「尚未执行」「按 Enter 执行，Esc 取消；可直接编辑」「等待用户确认」「用户已编辑该命令」「N 秒无输出，可能正在等待输入（可直接在终端中输入）」「全屏」「退出全屏」，以及 `tpl('已暂停超时 $__secs__ 秒', { secs })` 这类模板。
+- **`docs/AGENTS.md`**：§11.7 追加「Step 2 已实现的部分」；快速定位表的 PTY 落点补 `TerminalConfirmBlock.tsx` / `pty_key` / `pty_set_held`。
 - **本文件**：实施完成后把本节状态改成实测结果（含 §8.1 那种表格）。
 
-#### 2.8 实施顺序与提交切分（建议）
+#### 2.8 实施顺序与提交切分（已按此执行）
 
-| 批次 | 内容 | 为什么这个顺序 |
-|---|---|---|
-| **2a** | ④ `waitReason` + ⑤ 全屏 + ③ `pty_key` | 全部是**新增字段 / 新增命令**，不碰审批与超时语义，回归面最小 |
-| **2b** | ② `held` | 只改超时预算这一处，且有单测直接驱动预算函数 |
-| **2c** | ① 终端内确认 | 动桥载荷 + 新增 UI 分支，风险最高，放最后单独一批提交 |
-
-每批次独立提交，提交信息写清「Rust 侧改了什么 / 前端改了什么」，并各自跑通
-`cargo test --lib` + `npx vitest run` + `npx tsc --noEmit`。
+三批：**2a**（④ `waitReason` + ⑤ 全屏 + ③ `pty_key` —— 全是新增字段 / 命令，不碰审批与超时语义，
+回归面最小）→ **2b**（② `held` —— 只改超时预算一处，且有单测直接驱动）→ **2c**（① 终端内确认 ——
+动桥载荷 + 新增 UI 分支，风险最高）。每批独立提交并各自跑通 `cargo test --lib` +
+`npx vitest run` + `npx tsc --noEmit`。
 
 #### 2.9 验收标准
 
@@ -999,7 +889,7 @@ cargo check --all-targets               # 目标是 0 warning
 | **D1** | `write_command` 的形态：`execute_command` 加 `confirm:"terminal"` 参数，还是新增独立工具 `write_command` | **参数**（不新增工具 = 少改注册链 / UI 组件 / i18n / 双引擎；语义完全一致）。若更看重「模型一眼看出这是请人确认」，再改独立工具 |
 | **D2** | 是否把「终端内确认」升级成**审批模式的一个选项**（`commandApprovalMode: 'terminal'`） | **本轮不做**：那会改变**所有用户**的审批体验（`all` / `risky` / `install` 三个档位都受影响），风险与收益不匹配 |
 | **D3** | `held` 硬上限取值 | **30 min**（对齐 WinkTerm TTL），写死常量；若你觉得该更短（如 10 min）我改 |
-| **D4** | 用户输入**内容**是否回灌给模型 | **不回灌**，只回事件计数。理由：PTY 里用户敲的往往是**密码 / token**（`npm login` / `gh auth login` 的典型场景），正文一旦进工具结果就会**进模型上下文 + 落 SQLite** → 直接踩 §9 的密钥红线。若坚持要正文，需要先定「敏感输入如何识别 / 打码」的策略 |
+| **D4** | 用户输入**内容**是否回灌给模型 | **不回灌**，只回事件计数。理由：PTY 里用户敲的往往是**密码 / token**（`npm login` / `gh auth login` 的典型场景），正文一旦进工具结果就会**进模型上下文 + 落 SQLite** → 直接踩 `AGENTS.md` §8 的密钥红线。若坚持要正文，需要先定「敏感输入如何识别 / 打码」的策略 |
 | **D5** | `waitReason` 是否也下发给**管道路径** | **下发**（语义统一，UI 不必分叉）。代价是 TS 引擎路径仍缺该字段（已记 §7 #14） |
 | **D6** | 实施顺序 2a → 2b → 2c | 建议按此顺序；也可只挑其中一批（如只做 2a） |
 
@@ -1013,12 +903,10 @@ cargo check --all-targets               # 目标是 0 warning
 
 ### 8.2 Step 2 实测结果
 
-**实现范围**：2a（④ `waitReason` + ⑤ xterm 全屏 + ③ `pty_key`）→ 2b（② `held` 接管/交还）
-→ 2c（① 终端内确认），即 §2.8 的三批顺序。
-
-**新增 Tauri 命令**（均已注册进 `lib.rs`，铁律 4）：
-`pty_key(toolCallId, keys: string[])`、`pty_set_held(toolCallId, held) -> bool`
-（`pty_write` / `pty_resize` 沿用 Step 1）。
+**实现范围**：2a（④ `waitReason` + ⑤ xterm 全屏 + ③ `pty_key`）→ 2b（② `held`）→ 2c（① 终端内
+确认），即 §2.8 的三批顺序。**新增 Tauri 命令**（均已注册进 `lib.rs`，铁律 4）：
+`pty_key(toolCallId, keys: string[])`、`pty_set_held(toolCallId, held) -> bool`（`pty_write` /
+`pty_resize` 沿用 Step 1）。
 
 | 用例 | 覆盖 |
 |---|---|
@@ -1047,16 +935,10 @@ cargo check --all-targets               # 目标是 0 warning
   `setEntry(out)` 收到同一引用不会触发重渲染 → `setPendingConfirm` / `clearPendingConfirm`
   必须**替换为新对象**（已加单测钉住）；就地改字段会让确认块永远不出现。
 
-**决策点定稿（D1–D6，均按建议默认值）**
-
-| # | 结论 |
-|---|---|
-| D1 | 用 `execute_command` 的 `confirm:"terminal"` 参数，**不新增工具** |
-| D2 | 不把终端内确认升级成 `commandApprovalMode` 的档位（改动面太大） |
-| D3 | 接管硬上限 **30 min**（`PTY_HOLD_MAX`，写死常量） |
-| D4 | 用户输入**正文不回灌**：`uiData.userInterventions` 只记 `{keys,enters,ctrlC,heldSeconds}` |
-| D5 | `waitReason` **也下发给管道路径**（TS 引擎路径仍缺，见 §7 #14） |
-| D6 | 按 2a → 2b → 2c 三批落地 |
+**决策点定稿（D1–D6 均按建议默认值，逐条见 §2.10）**：D1 用 `confirm:"terminal"` 参数、**不新增
+工具**；D2 不升级成 `commandApprovalMode` 档位；D3 接管硬上限 **30 min**（`PTY_HOLD_MAX` 写死
+常量）；D4 用户输入**正文不回灌**（`uiData.userInterventions` 只记 `{keys,enters,ctrlC,heldSeconds}`）；
+D5 `waitReason` 也下发给管道路径；D6 按 2a → 2b → 2c 落地。
 
 **仍存在的缺口（刻意延后）**
 

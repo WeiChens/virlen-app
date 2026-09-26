@@ -16,7 +16,7 @@
 | 注入位置 | `AgentEngine::new` 构造期 | ✅ `AgentEngine.host` 字段 + `with_deps(..., host)`；`new` / `with_provider_factory` 默认用 `host::default_host()`（既有单测无需改） |
 | 视觉分层 | `vision/mod.rs` 无 `tauri::` + `vision_service.rs` 薄壳 | ✅ 一致；`VisionState` / `setup_vision` **已删除**（引用计数改为 `vision::REFCOUNT` 进程级静态，CLI 同样可用） |
 | 无注入点的路径 | （草案未提） | 新增 `host::default_host()`：只给 TS 引擎的 `pty_run_command` 这类拿不到 `AgentEngine` 的入口用（均为 CLI 语义） |
-| `data_dir` 的消费方 | 本次即用 | ⚠️ **本项尚无调用方**（会话库仍由 `session_db::init_session_db` 自取 `app_data_dir()`），故暂标 `#[allow(dead_code)]`；消费方是待办 #E（配置 + 会话库统一落 `HostEnv::data_dir()`） |
+| `data_dir` 的消费方 | 本次即用 | 落地时暂无调用方（当时会话库仍自取 `app_data_dir()`）；**现已由 `session_db::open_session_db(host, …)` 消费**（见 `docs/config-sink-plan.md` §5 S4） |
 | 顺带修掉 | （草案未提） | 模型**加载失败未回滚引用计数**的既存泄漏（失败后 refcount 永久 > 0 → 后续永不再尝试加载） |
 
 验收：`cargo test` 334 passed / 0 failed（本轮 +15 用例）；`npx tsc --noEmit` exit 0；`npx vitest run` 82 文件 / 1016 用例。
@@ -26,40 +26,27 @@
 
 ---
 
-## 1. 问题取证（现状事实）
+## 1. 问题取证（改造前的事实）
 
-`vision_service.rs` 与宿主（Tauri）的耦合点**只有 5 处**，且全部落在 `agent/` **之外**：
-
-| 位置 | 宿主依赖 | 用途 |
-|---|---|---|
-| `vision_service.rs:16` | `use tauri::{AppHandle, Manager}` | 唯一的宿主类型引入 |
-| `resolve_models_dir(app)`（:50） | `app.path().resource_dir()` | 定位 `quasivision_models`（3 个候选路径 + Windows `\\?\` 前缀处理） |
-| `load_models(app)`（:98） | `AppHandle` | 进程级懒加载模型 |
-| `setup_vision(app)`（:39） | `&mut tauri::App` | 启动阶段初始化 |
-| `vision_analyze` / `vision_analyze_base64`（:164 / :191） | `AppHandle`（命令入参） | IPC 入口 |
-
-**关键判断（决定抽象的最小切口）**：
-
-- 真正的推理（`quasivision`）**不认识 Tauri**；宿主依赖只存在于「**模型文件在哪**」（资源目录）与「**何时初始化**」（setup / 懒加载）两件事上。
-- 因此**不需要**抽象「推理后端」（那会把模型管理泄漏进引擎），只需要抽象「**资源定位**」这一项能力。
-- 现状之所以「引擎核心零 `tauri::`」成立，是因为视觉这条链**根本没进 `agent/`** —— 一旦按原样把 `AppHandle` 塞进 `native_tools/vision/`，这条前提立刻失效。
+`vision_service.rs` 与宿主的耦合点**只有 5 处**且全在 `agent/` 之外：`use tauri::{AppHandle,
+Manager}`、`resolve_models_dir(app)`（`resource_dir()` 定位模型，3 候选路径 + Windows `\\?\` 前缀）、
+`load_models(app)`（进程级懒加载）、`setup_vision(app)`（启动初始化）、两个 `vision_analyze*` 命令
+（`AppHandle` 入参）。**关键判断**：真正的推理（`quasivision`）不认识 Tauri，宿主依赖只在「**模型文件
+在哪**」与「**何时初始化**」两件事上 → 只需抽象「**资源定位**」一项能力，不抽象「推理后端」（那会把
+模型管理泄漏进引擎）。而「引擎核心零 `tauri::`」当时成立只是因为视觉这条链**根本没进 `agent/`** ——
+一旦把 `AppHandle` 塞进 `native_tools/vision/`，前提立刻失效。
 
 ---
 
 ## 2. 设计目标 / 非目标
 
-**目标**
+**目标**：① 引擎（`agent/**`）在「无 Tauri」环境下可编译可运行，宿主差异只以 **trait 对象**注入；
+② GUI 行为与现状**完全等价**（资源目录探测顺序、模型懒加载语义、错误文案都不变）；③ 抽象**尽可能小**
+（只放「引擎自己拿不到」的东西，能靠配置 / 环境变量表达的不进 trait）；④ 与既有注入风格一致
+（`NativeToolCtx` 已有 `security` / `repo` / `skills` 三处，`host` 是第四处）。
 
-1. 引擎（`agent/**`）在「无 Tauri」环境下可编译、可运行；宿主差异只以 **trait 对象**形式注入。
-2. GUI 行为与现状**完全等价**（资源目录探测顺序、模型懒加载语义、错误文案都不变）。
-3. 抽象**尽可能小**：只放「引擎自己拿不到」的东西；能靠配置/环境变量表达的，不放进 trait。
-4. 与既有注入风格一致：`NativeToolCtx` 已有 `security` / `repo` / `skills` 三处显式注入，`host` 是第四处，形状照抄。
-
-**非目标**
-
-- 不抽象「通知 / 托盘 / 窗口 / 剪贴板 / 拖放」等纯 GUI 能力（CLI 不需要，也不需要引擎知道）。
-- 不引入 feature 分裂的默认路径（见 §3-C，仅作为可选加固）。
-- 不在本轮改动任何代码。
+**非目标**：不抽象「通知 / 托盘 / 窗口 / 剪贴板 / 拖放」等纯 GUI 能力；不引入 feature 分裂的默认路径
+（见 §3-C，仅作可选加固）；本轮不改任何代码。
 
 ---
 
@@ -102,20 +89,14 @@ pub trait HostEnv: Send + Sync {
 }
 ```
 
-**为什么是这两个方法**：`resource_candidates` 解开 `vision_analyze`（本轮的阻塞点）；
-`data_dir` 是 #E（配置下沉）的既有需求，且同样属于「宿主才知道」的信息，一次收拢、避免二次改 trait。
+**为什么是这两个方法**：`resource_candidates` 解开 `vision_analyze`（本轮的阻塞点）；`data_dir` 是
+#E（配置下沉）的既有需求，且同属「宿主才知道」的信息 —— 一次收拢，避免二次改 trait。
 
 ### 4.2 两个实现（都在 `agent/` 之外）
 
-```rust
-// virlen-app/src/host/tauri_host.rs —— GUI 实现（唯一允许出现 tauri:: 的地方）
-pub struct TauriHost(tauri::AppHandle);
-impl HostEnv for TauriHost { /* resource_dir() / app_data_dir() */ }
-
-// virlen-core/src/host/cli_host.rs —— 引擎单测 / CLI
-pub struct CliHost { /* 由环境变量与 exe 位置推导 */ }
-impl HostEnv for CliHost { ... }
-```
+GUI：`virlen-app/src/host/tauri_host.rs` 的 `TauriHost(tauri::AppHandle)`（**唯一允许出现 `tauri::`
+的地方**，`resource_dir()` / `app_data_dir()`）；CLI / 单测：`virlen-core/src/host/cli_host.rs` 的
+`CliHost`（由环境变量与 exe 位置推导）。
 
 ### 4.3 注入路径（与 `repo` / `security` 同风格）
 
@@ -130,10 +111,10 @@ impl HostEnv for CliHost { ... }
 
 ### 4.4 视觉推理模块的归属
 
-- 保留 `vision_service.rs` 作为**GUI 命令壳**（`#[tauri::command]` + `AppHandle` 注入 `TauriHost`）。
-- 把「模型定位 + 懒加载 + 推理调用」抽到 `src-tauri/virlen-core/src/vision/mod.rs`（**无 `tauri::`**）：
-  `pub fn models_dir(host: &dyn HostEnv) -> Result<PathBuf, String>` / `pub fn analyze(host, path) -> Result<String, String>`。
-- 这样 `native_tools/vision/vision_analyze.rs` 与 `vision_service.rs` **共用同一段实现**，不会出现两份模型探测逻辑（铁律 1 的同精神）。
+`vision_service.rs` 保留为 **GUI 命令壳**（`#[tauri::command]` + `AppHandle` 注入 `TauriHost`）；把
+「模型定位 + 懒加载 + 推理调用」抽到 `virlen-core/src/vision/mod.rs`（**无 `tauri::`**，`models_dir(host)` /
+`analyze(host, path)`）→ `native_tools/vision/vision_analyze.rs` 与命令壳**共用同一段实现**，不会出现
+两份模型探测逻辑（铁律 1 的同精神）。
 
 ---
 
@@ -146,7 +127,7 @@ impl HostEnv for CliHost { ... }
 | S3 | `NativeToolCtx` 增 `host`；`vision_analyze` 原生化（`native_tools/vision/`）+ 登记 `is_native_tool` | ✅ 已完成（+15 Rust 用例，覆盖「缺参 / 路径不存在 / 模型目录缺失」三条对齐分支） |
 | S4 | （可选）CLI 入口与 feature 分离 | ⏸ **未做**（方案 C，按 §6-4 的结论推迟到 CLI 真正独立发布时） |
 
-**规模预估**：S1–S3 约 5 个文件、200~300 行净增（不含测试），无事件契约改动 —— 属「低风险、可直接排期」。
+**规模预估**：S1–S3 约 5 个文件、200~300 行净增（不含测试），无事件契约改动。
 
 ---
 

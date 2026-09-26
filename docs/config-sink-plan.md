@@ -12,19 +12,15 @@
 
 | 项 | 首版草案（磁盘 JSON） | 现定稿（SQLite） |
 |---|---|---|
-| 存储位置 | `<data_dir>/config.json` | **`<data_dir>/virlen.db` 的 `app_settings` 表**（与会话库同一个文件） |
-| 一致性 | 原子写 + `.bak` + 「解析失败不回退默认」 | **由 SQLite 事务保证**（无需 `.tmp`/`.bak`）；连接沿用单写连接 + `spawn_blocking` |
+| 存储位置 | `<data_dir>/config.json` | **`<data_dir>/virlen.db` 的 `app_settings` 表**（与会话库同一文件） |
+| 一致性 | 原子写 + `.bak` + 「解析失败不回退默认」 | **由 SQLite 事务保证**；连接沿用单写连接 + `spawn_blocking` |
 | 覆盖环境变量 | `VIRLEN_CONFIG_DIR` | **不再需要**（库路径由 `HostEnv::data_dir()` 决定，`$VIRLEN_DATA_DIR` 覆盖） |
-| 版本 | JSON 里的 `schemaVersion` | 表内保留键 `__schemaVersion`（会话库的 `PRAGMA user_version` 管表结构，两者互不干扰） |
-| 迁移 | 首启从 localStorage 导入 | **不变**（首启把 localStorage 现有设置整份导入，写一次即可） |
+| 版本 | JSON 里的 `schemaVersion` | 表内保留键 `__schemaVersion`（表结构版本仍由 `PRAGMA user_version` 管，两者互不干扰） |
+| 迁移 | 首启从 localStorage 导入 | **不变** |
 
-**为什么更好**：会话库已经具备「WAL + 单写连接 + `spawn_blocking` + 迁移框架 + 维护命令（体积/整理）」，
-配置只是多一张表 —— 不需要新造一套文件读写与并发/损坏处理；CLI 与 GUI 天然共用同一个文件。
+**为什么更好**：会话库已具备「WAL + 单写连接 + `spawn_blocking` + 迁移框架 + 维护命令」，配置只是多一张表 —— 不必新造一套文件读写与并发 / 损坏处理，CLI 与 GUI 天然共用同一文件。
 
-**代价（如实登记）**：
-1. 配置与聊天写入**共用一把连接锁** → 设置写入是短事务（微秒级），可接受；但 `VACUUM`（设置 → 存储「立即整理」）期间设置写入会排队，这与现状一致。
-2. 备份/导出设置 = 随库文件一起（用户已有的「整理/体积」界面因此天然涵盖配置）。
-3. 「用编辑器手改配置」不再可行（JSON 时可行）—— 这是取舍，**手改需求改为后续 CLI 子命令**（见 §5 S6）。
+**代价（如实登记）**：① 配置与聊天写入**共用一把连接锁** —— 设置写入是短事务（微秒级）可接受，但 `VACUUM`（设置 → 存储「立即整理」）期间设置写入会排队（与现状一致）；② 备份 / 导出设置随库文件一起（用户已有的「整理 / 体积」界面天然涵盖）；③ 「用编辑器手改配置」不再可行 —— **手改需求改为 CLI 子命令**（§5 S6）。
 
 ---
 
@@ -41,28 +37,19 @@
 | 「忽略沙盒命令」规则（含 `js` 规则体） | ✅ **已下沉**（S7）：`app_settings.sandboxIgnoreRules`（**单一源**，localStorage 不再保存该字段） | ✅ |
 | Agent 配置（`agents`） | ✅ **已下沉**（本轮）：`app_settings.agents`（**单一源**；localStorage 仅作迁移来源 / 非 Tauri 降级） | ✅ |
 
-> ⚠️ 上表前四行是**首版草案时的状况**（说明动机用）：S3 收尾后 `settings` 全量、搜索源与 Provider 配置都已随设置下沉，
-> 现在已不存在「前端 localStorage 是唯一来源」的项。剩余未下沉的只有安全侧的**路径白/黑名单与跳过目录**、**技能启用状态**，
-> 清单与对 headless 的具体影响见 `docs/AGENTS.md` §11.16。
->
-> 结论（**历史**）：**不做配置下沉，`#17` 无法开工**（没有 API key、没有搜索源、没有工作目录）。
+> ⚠️ 上表前四行是**首版草案时的状况**（说明动机用）：S3 收尾后 `settings` 全量、搜索源与 Provider 配置都已随设置下沉，已不存在「前端 localStorage 是唯一来源」的项；剩余未下沉的只有安全侧的**路径白 / 黑名单与跳过目录**、**技能启用状态**（清单与影响见 `AGENTS.md` §11.16）。结论（**历史**）：**不做配置下沉，`#17` 无法开工**。
 
 ---
 
 ## 2. 目标 / 非目标
 
-**目标**
+**目标**：① 一份配置存于 `app_settings` 表，GUI 与 CLI 读写同一份（GUI 的 localStorage **已完全退出**：
+不再写、表就绪后删副本，只保留「读兼容」）；② 引擎侧只吃「配置快照」，不关心它从哪来（保持 `security` /
+`repo` / `host` 那种显式注入）；③ CLI 无 GUI 启动即具备工作目录、沙盒模式、技能目录、权限、Provider、
+搜索源；④ 迁移**无感**（老用户的 localStorage 设置首启自动导入）。
 
-1. 一份配置存于 `app_settings` 表，GUI 与 CLI 读写同一份；GUI 的 localStorage **已完全退出**（S3 收尾：不再写、表就绪后删副本，只保留「读兼容」）。
-2. 引擎侧只吃「配置快照」，不关心它从哪来（保持 `security` / `repo` / `host` 那种显式注入）。
-3. CLI 无 GUI 启动即具备：工作目录、沙盒模式、技能目录、权限、Provider、搜索源。
-4. 迁移**无感**：老用户的 localStorage 设置首启自动导入，无需手工重配。
-
-**非目标**
-
-- 不下沉 UI 状态（展开项、窗口尺寸、草稿）—— 那属于界面偏好，CLI 不关心。
-- 不做多用户 / 多 profile。
-- 本期不迁移**密钥的存储方式**（见 §6 风险 R3）。
+**非目标**：不下沉 UI 状态（展开项 / 窗口尺寸 / 草稿）；不做多用户 / 多 profile；本期不迁移**密钥的
+存储方式**（见 §6 R3）。
 
 ---
 
@@ -78,12 +65,9 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 ```
 
-- **一 key 一行**（而非整份 JSON 塞一个 key）：
-  - 写入是「只改我动过的键」，避免整份覆盖造成的**丢更新**（多窗口/并发时更安全）；
-  - 体积小、`updated_at` 能定位「最近改了什么」。
-- 键名与 `src/ui/store/settingStore.ts` 的 `SettingsStore` 接口**同名同层**（如 `providers`、`permissions`、`sandboxMode`），
-  Rust 侧不建映射表 —— 这是**避免字段漂移**的关键约定（§6 R6）。
-- 保留键：`__schemaVersion`（配置结构的版本，独立于表结构版本）。
+- **一 key 一行**（而非整份 JSON 塞一个 key）：写入只改动过的键 → 避免整份覆盖造成的**丢更新**；体积小，`updated_at` 可定位「最近改了什么」。
+- 键名与 `settingStore.ts` 的 `SettingsStore` 接口**同名同层**（`providers` / `permissions` / `sandboxMode`…），Rust 侧不建映射表 —— **避免字段漂移**的关键约定（§6 R6）。
+- 保留键：`__schemaVersion`（配置结构版本，独立于表结构版本）。
 
 ### 3.2 Rust 侧形状（与 `SessionRepo` 同风格）
 
@@ -118,18 +102,9 @@ CLI 显式参数  >  环境变量（VIRLEN_*）  >  app_settings 表  >  内置�
 
 ### 3.5 前端接入（`src/ui/store/settingStore.ts`）
 
-- `StorageState` 换用**只读 localStorage 适配器**（`settingsLocalStorage`，S3 收尾）：
-  - **读**：仍读真 localStorage → 兼容老版本遗留的副本（同步初值）；
-  - **写**：Tauri 下**丢弃**（设置只落表，避免 apiKey 等密钥明文存两份）/ 非 Tauri 下照写
-    （浏览器 dev 没有表可写，不能丢持久化）；
-  - 水合成功（表已就绪）后删掉历史副本（`dropLegacyLocalSnapshot`）。
-- `src/infrastructure/settingsRepo/`（浏览器 dev / vitest 自动降级为空实现）：
-  - 启动：`loadAll()` → `cmd_settings_get_all` → 有值则 `settingsState.set(...)`；**表为空**则把当前设置整份 `cmd_settings_import` 上去；
-  - 变更：`settingsState.onChange` 已存在（埋点用）→ 追加一个 debounce 的 `save(entries)` 落库。
-- `src/main.ts` 的 `init()` 增加一步 `await step('settings', () => hydrateSettings())`，
-  **排在 `i18n` / `sessionLoad` / `security` 之前**（语言/主题/工作目录要先于它们生效）。
-  ⚠️ `main()` 是 `await init()` **之后**才 `render()`、窗口在首帧 `requestAnimationFrame` 里才 `show()`
-  → 用户看不到未水合的帧（删副本不会造成可见闪烁）。
+- `StorageState` 换用**只读 localStorage 适配器**（`settingsLocalStorage`）：**读**仍读真 localStorage（兼容老版本遗留副本，作同步初值）；**写**在 Tauri 下**丢弃**（设置只落表，避免 apiKey 明文存两份）、非 Tauri 下照写（浏览器 dev 没有表可写，不能丢持久化）；水合成功后删掉历史副本（`dropLegacyLocalSnapshot`）。
+- `src/infrastructure/settingsRepo/`（浏览器 dev / vitest 自动降级为空实现）：启动 `loadAll()` → `cmd_settings_get_all` → 有值则 `settingsState.set(...)`、**表为空**则整份 `cmd_settings_import`；变更走已存在的 `settingsState.onChange` 追加一个 debounce 的 `save(entries)`。
+- `src/main.ts` 的 `init()` 增加 `await step('settings', () => hydrateSettings())`，**排在 `i18n` / `sessionLoad` / `security` 之前**（语言 / 主题 / 工作目录要先于它们生效）。⚠️ `main()` 在 `await init()` **之后**才 `render()`、窗口在首帧 `requestAnimationFrame` 里才 `show()` → 用户看不到未水合的帧。
 
 ### 3.6 迁移（一次性）
 
@@ -187,38 +162,20 @@ CLI 显式参数  >  环境变量（VIRLEN_*）  >  app_settings 表  >  内置�
 选定：`quickjs_runtime = { version = "0.18", default-features = false, features = ["quickjs-ng"] }`。
 三项都必须写清楚，否则后来人会踩同一个坑：
 
-**(1) 必须关掉默认特性（否则 +180 个 crate）**
-`default = ["console", "setimmediate", "setinterval", "settimeout", "typescript", "bellard"]`，
-其中 `typescript` 会拖进**整套 SWC**（`swc_ecma_*` / `swc_bundler` …）。实测对比：
+**(1) 必须关掉默认特性（否则 +180 个 crate）**：`default` 含 `typescript` → 拖进整套 SWC
+（`swc_ecma_*` / `swc_bundler`…）。实测对比：默认（含 `typescript`）**+180** 个 `Cargo.lock` 包；
+`default-features = false` + 引擎二选一 **+29**（我们只调用规则体的纯 JS 函数，不需要 TS 转译）。
 
-| 特性集 | `Cargo.lock` 新增包 | 说明 |
-|---|---|---|
-| 默认（含 `typescript`） | **+180** | 我们只调用规则体的纯 JS 函数，不需要 TS 转译 |
-| `default-features = false` + 引擎二选一 | **+29** | 见 `src-tauri/Cargo.toml` 的注释 |
+**(2) 引擎必须选 `quickjs-ng`**：`hirofa-quickjs-sys` 关了默认特性，必须显式二选一 —— `bellard`（库默认）
+❌ **Windows MSVC 编译失败**（`bellard/quickjs/cutils.h` 无条件使用 GCC 内建且无 MSVC 分支，实测报
+`libunicode.c(381): error C2143`）；`quickjs-ng` ✅ 带 `#if defined(_MSC_VER) && !defined(__clang__)` 回退。
 
-**(2) 引擎必须选 `quickjs-ng`（默认的 `bellard` 在 Windows 编译不过）**
-`hirofa-quickjs-sys` 把默认特性关了，所以必须显式二选一；而两个分支的 MSVC 兼容性不同：
-
-- `bellard`（库的默认）：❌ **Windows MSVC 编译失败** ——
-  `bellard/quickjs/cutils.h` **无条件**使用 GCC 内建且无 MSVC 分支
-  （`#define __maybe_unused __attribute__((unused))`、`likely(x) = __builtin_expect(...)`），
-  实测报 `libunicode.c(381): error C2143: 语法错误: 缺少")"`。
-- `quickjs-ng`：✅ 通过 —— `quickjs-ng/quickjs/cutils.h` 带 `#if defined(_MSC_VER) && !defined(__clang__)`
-  回退（`#define __attribute__(x)`、空 `__maybe_unused`）。
-
-**(3) 构建期硬依赖 `libclang`（bindgen）**
-`hirofa-quickjs-sys` 用 `bindgen` 生成绑定 → 需要 **libclang**：
-- Windows：装 LLVM 并设 `LIBCLANG_PATH=<LLVM>\bin`（本机 `C:\config\LLVM\bin`，`libclang.dll` 83 MB）；
-- macOS：Xcode CLT 自带；
-- Linux：`libclang-dev`（CI 镜像需确认，见 §6 R4）。
-
-  Windows 实测补充（2026-09 踩到，三点）：
-  - `clang-sys` 只探测 `LIBCLANG_PATH` 与 `llvm-config.exe`，**不扫 `PATH`**：本机 LLVM 装在非标准位置
-    `C:\config\LLVM` 且该发行版**不带 `llvm-config.exe`** → 无法自动识别，**必须**显式设 `LIBCLANG_PATH`；
-  - 该变量须**持久化**（用户级环境变量）+ **重开终端**：临时 `$env:LIBCLANG_PATH` 只对当前 shell 生效，
-    而 `pnpm tauri dev` 由 CLI 新起 shell 跑 `cargo run` → 表现为「手动 `cargo build` 通过、`tauri dev` 报
-    `Unable to find libclang`」；
-  - 该 bindgen 调用在 `hirofa-quickjs-sys/build.rs` 里**无条件**执行（无特性开关），**不能**用 feature 绕开。
+**(3) 构建期硬依赖 `libclang`（bindgen）**：Windows 装 LLVM 并设 `LIBCLANG_PATH=<LLVM>\bin`（本机
+`C:\config\LLVM\bin`）；macOS 由 Xcode CLT 自带；Linux 需 `libclang-dev`（CI 镜像待确认，见 §6 R4）。
+该调用在 `hirofa-quickjs-sys/build.rs` 里**无条件**执行，**不能**用 feature 绕开。⚠️ Windows 上
+`clang-sys` 只探测 `LIBCLANG_PATH` 与 `llvm-config.exe`、**不扫 `PATH`**，且该变量必须**持久化 + 重开
+终端**（否则表现成「手动 `cargo build` 通过、`tauri dev` 报 `Unable to find libclang`」）——
+**完整排查步骤见 `AGENTS.md` §7**。
 
 **(4) 本机（Windows x86_64 MSVC）实测结果**
 
@@ -257,15 +214,11 @@ CLI 显式参数  >  环境变量（VIRLEN_*）  >  app_settings 表  >  内置�
 | **S6** | CLI 子命令：`config get/set`（替代「手改 JSON」的易用性损失） | ✅ **已完成**（与 CLI 二进制落地同批）：`src-tauri/virlen-cli/src/{lib,config}.rs`；`config get [key …]` / `config set [--string] <key> <value>` / `config path`，值优先按 JSON 解析、失败按字符串；缺失键警告 + 退出码 1；12 个 Rust 单测（含真 SQLite 往返）。见 §5.1 |
 | **S7** | `js` 规则内嵌求值 + **规则判定整体下沉 Rust**（§4） | ✅ **已完成**：`src-tauri/virlen-core/src/security/{rules,js_rule}.rs`（text / regex 原生 + js 受限 QuickJS 求值）+ `native_tools/execute/common/rules.rs` 本地判定 + `security::load_sandbox_ignore_rules`（CLI 读取入口）；规则来源下沉为 `app_settings.sandboxIgnoreRules`（**单一源**：localStorage 不再保存该字段；前端 `securityStore.hydrate()` 水合 + debounce 回写）；`sandbox_rule_check` 桥交互删除；两侧共读 golden `src/tests/fixtures/sandbox-rules.golden.json`。门禁：`cargo test` 372 / `vitest` 1025 / `tsc` 0 |
 
-> S1/S2 是必须先做的；S7 可以晚于 S5（过渡期行为见 §6 待定项 1）。
->
-> **当前进度：S1 ✅、S2 ✅、S4 ✅、S5 ✅、S7 ✅、S3 ✅（收尾已完成）。**
-> localStorage 里的存量设置会在首次启动时整份导入 `app_settings`；之后读源已是表。
-> S3 收尾进一步：**localStorage 不再保存设置副本**（Tauri 下写入被丢弃、表就绪后删掉历史副本），
-> 密钥（`providers[].apiKey` / `searchProviders[].apiKey`）不再在 localStorage 重复存一份明文。
-> 「忽略沙盒命令」规则更进一步：S7 起 **localStorage 完全不保存它**（单一源在表）——
-> `load()` 在 Tauri 下只认内存快照（来自表），启动时的历史副本一次性迁进表后即从 localStorage 清除。
-> **下一站 = 待定（S1–S7 与 CLI 二进制均已完成）。** S6（CLI `config get/set`）与 headless CLI 二进制已落地（见 §5.1）；剩余可选项见 §6 待定项。
+> **当前进度：S1–S7 全部 ✅（含 S3 收尾）**，headless CLI 二进制与 S6（CLI `config get/set`）也已落地
+> （见 §5.1）；剩余可选项见 §6 待定项。存量设置首启整份导入 `app_settings`，之后读源即表；
+> **localStorage 不再保存设置副本**（Tauri 下写入被丢弃、表就绪后删历史副本）→ 密钥
+> （`providers[].apiKey` / `searchProviders[].apiKey`）不再明文存两份；「忽略沙盒命令」规则自 S7 起
+> **localStorage 完全不保存**（单一源在表，`load()` 在 Tauri 下只认来自表的内存快照）。
 
 ### 5.1 CLI 落地形态（headless，已完成）
 
@@ -275,10 +228,10 @@ CLI 显式参数  >  环境变量（VIRLEN_*）  >  app_settings 表  >  内置�
 | 实现 | `src-tauri/virlen-cli/src/lib.rs`（参数解析 / 帮助 / 版本 / 分派）+ `src-tauri/virlen-cli/src/config.rs`（`get` / `set` / `path`）；解析写成纯函数、输出走**注入的** `Write` → 12 个单测（含真 SQLite 往返、「path 不建库」、「另一个进程读同一目录」） |
 | 库路径 | 复用 `virlen_core::session_db::open_session_db(&CliHost::from_env(), …)` —— 与 GUI **同一条**推导链（`host.data_dir()/virlen.db`），因此不存在「CLI 改的配置桌面端读不到」 |
 | 目录覆盖 | `VIRLEN_DATA_DIR`（环境变量）> 默认 `<平台数据根>/JianWeichen.virlen`；`config path` 可直接核对与 GUI 是否同一份 |
-| ⚠️ 连带要求 | `cargo test` 必须带 `--workspace`（拆包后裸 `cargo test` 只跑 `virlen-app`，会静默漏掉 core 的用例）；`[package] default-run = "virlen-app"` 保留为防御性声明 |
-| 验证 | `cargo test --workspace` 395 passed / 2 ignored；`npx tauri build --no-bundle --debug --config <覆盖 beforeBuildCommand 的 json>` → 末行 `Built application at: …/virlen-app.exe`；`cargo tree -p virlen-cli` 无 tauri 系（比 GUI 少 94 个 crate）；CLI 端到端冒烟用临时 `VIRLEN_DATA_DIR`（不碰真实库） |
-| 已落地（后续批次） | `run`（无界面跑一次 agent）、`list-session [-g agent\|workdir]`、`list-agent`（读 `app_settings.agents`）—— 实现同在 `src-tauri/virlen-cli/src/`（**core 不含命令入口**）；边界见 `docs/AGENTS.md` §11.15 / §11.16 |
-| 尚未做 | `set` **不校验键名**（Rust 侧没有权威 schema，与 §6 R6 的「同名字段直接映射」一致）；没有 `unset` 子命令；交互式 `tui` 目前只有设计说明（规划中） |
+| ⚠️ 连带要求 | `cargo test` 必须带 `--workspace`（拆包后裸跑只跑 `virlen-app`，会静默漏掉 core 的用例）；`[package] default-run = "virlen-app"` 保留为防御性声明 |
+| 验证 | `cargo test --workspace` 全绿；`npx tauri build --no-bundle --debug` → `Built application at: …/virlen-app.exe`；`cargo tree -p virlen-cli` 无 tauri 系（比 GUI 少 94 个 crate）；CLI 端到端冒烟用临时 `VIRLEN_DATA_DIR`（不碰真实库） |
+| 已落地（后续批次） | `run`、`list-session [-g agent\|workdir]`、`list-agent`（读 `app_settings.agents`）、交互式 `tui`（`chat`）—— 实现同在 `src-tauri/virlen-cli/src/`（**core 不含命令入口**）；边界见 `AGENTS.md` §11.15 / §11.16，TUI 见 `docs/cli-tui-plan.md` |
+| 尚未做 | `config set` **不校验键名**（Rust 侧没有权威 schema，与 §6 R6 一致）；没有 `unset` 子命令 |
 
 ---
 
@@ -294,10 +247,9 @@ CLI 显式参数  >  环境变量（VIRLEN_*）  >  app_settings 表  >  内置�
 | R6 配置与前端字段漂移 | 高 | 约定「同名字段直接映射」，不写映射表；**新增设置项时必须同时改 Rust 侧 schema 文档**（列入 PR 检查清单） |
 | R7 库体积增长 | 低 | 配置量级是 KB，相对消息正文可忽略；「设置 → 存储」已能查看/整理 |
 
-**待定项**
-
-1. ~~**S7 之前 CLI 遇到 `js` 规则**~~ → **已消解**：S7 已实现内嵌求值，CLI 与 GUI 是同一个实现，不再需要过渡策略。
-2. ~~**`js` 规则的语法子集**~~ → **已消解**：不额外限定语法子集，改由两侧共读的 golden 逐条对齐 TS `buildJsFunction`
-   的 5 级宽容策略（function 声明 / 赋值式箭头 / 含 `return` / 单表达式 / 原样语句体）。
-   已知差异只剩「Rust `regex` 不支持 lookaround → 按未命中」（安全侧）。
-3. **是否把 `usage-ledger` / `security` 等其它配置一并纳入**：`security` 的「忽略沙盒命令」规则**已纳入**（S7，单一源在表）；`whitelist` / `blacklist` / `skipEachDirs` 与 `usage-ledger` 本期不做。
+**待定项**（前两项已消解）：① ~~S7 之前 CLI 遇到 `js` 规则~~ → S7 已实现内嵌求值，CLI 与 GUI 同一实现；
+② ~~`js` 规则的语法子集~~ → 不额外限定，改由两侧共读的 golden 逐条对齐 TS `buildJsFunction` 的 5 级
+宽容策略（function 声明 / 赋值式箭头 / 含 `return` / 单表达式 / 原样语句体），已知差异只剩「Rust
+`regex` 不支持 lookaround → 按未命中」（安全侧）；③ **是否把 `usage-ledger` / `security` 等其它配置
+一并纳入**：`security` 的「忽略沙盒命令」**已纳入**（S7），`whitelist` / `blacklist` /
+`skipEachDirs` 与 `usage-ledger` 本期不做。

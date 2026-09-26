@@ -1,8 +1,8 @@
 # `virlen-cli chat`（交互式 TUI）方案与实测记录
 
-> 状态：**P1 已落地**（`virlen-cli chat` 可用：内联视口 TUI + 顺序输出降级 + 多轮 + 异步审批 + Esc 取消
-> + 实时输出尾部 + 状态行 + `/help /exit /status /new`）；§8 六项已拍板（见该节）；
-> 实测记录见 §2 与 §7.2。与 `config-sink-plan.md` / `pty-research.md` 同级：本文是结论与实测证据的沉淀。
+> 状态：**已落地** —— P1/P2（内联视口 TUI + 顺序输出降级 + 多轮 + 异步审批 + Esc 取消 + 实时输出尾部 +
+> 状态行 + 斜杠命令），并叠加 §10（配置向导）、§11（上下文占用 / 压缩）。§8 六项已拍板；实测记录见
+> §2、§7.2、§8.2。与 `config-sink-plan.md` / `pty-research.md` 同级：本文是结论与实测证据的沉淀。
 >
 > 前置：headless 基础能力（`run` / `list-session` / `list-agent` / `config`）已落地，见 `AGENTS.md` §11.14–§11.16。
 
@@ -20,22 +20,22 @@
 
 | # | 决策 | 依据 |
 |---|---|---|
-| D5 | 形态 = **内联视口**（`Viewport::Inline`），非全屏、非纯行模式 | 用户拍板；全屏会失去终端原生滚动/复制；行模式做不到 spinner 与选项式审批 |
-| D6 | 选型验证（spike）建在**仓库之外**（`%TEMP%\ratatui-inline-spike`），验证通过再引依赖 | 用户拍板；期间仓库零改动（`Cargo.toml` / `Cargo.lock` 未被触碰） |
-| D7 | 只加 `ratatui`，**不单独声明 `crossterm`**（用 ratatui 的重导出 `ratatui::crossterm`） | 避免同一 crate 双版本（ratatui 0.30 用 `ratatui-crossterm` 0.1.2 → crossterm 0.29） |
-| D8 | **弃用** `scrolling-regions` feature | 用户实测：模式 A（默认）按 `m` 不闪烁，与模式 B 无观感差异；且该 feature 在 Windows 无 winapi 实现（见 §3.1-3） |
-| D9 | 固化必须**分块**（按「终端高 − 视口高」切段），不能一次性灌入 | 实测：一次性固化 120 行只落地 20 行（被上限截断） |
+| D5 | 形态 = **内联视口**（`Viewport::Inline`），非全屏、非纯行模式 | 全屏会失去终端原生滚动 / 复制；行模式做不到 spinner 与选项式审批 |
+| D6 | 选型验证（spike）建在**仓库之外**（`%TEMP%\ratatui-inline-spike`），验证通过再引依赖 | 期间仓库零改动（`Cargo.toml` / `Cargo.lock` 未被触碰） |
+| D7 | 只加 `ratatui`，**不单独声明 `crossterm`**（用其重导出 `ratatui::crossterm`） | 避免同一 crate 双版本（ratatui 0.30 → `ratatui-crossterm` 0.1.2 → crossterm 0.29） |
+| D8 | **弃用** `scrolling-regions` feature | 实测：模式 A（默认）按 `m` 不闪烁、与 B 无观感差异；且该 feature 在 Windows 无 winapi 实现（§3.1-3） |
+| D9 | 固化必须**分块**（按「终端高 − 视口高」切段） | 实测：一次性固化 120 行只落地 20 行 |
 
 ---
 
 ## 2. 实测证据（4 轮，均在真实终端）
 
-| 轮次 | 环境 | 手段 | 结果 |
-|---|---|---|---|
-| R1 | cmd.exe（用户手动） | 内联视口演示；A/B 两种固化实现 | 前几秒不在底部、随后贴底（**正常**：`insert_before` 先把视口推到屏底才滚动上方）；`w` 之后固化内容完整；**可鼠标选中复制**；**中文可输入**；A 不闪烁；B 与 A 无差别；**改窗口大小 → A、B 均崩溃退出**；`q` 正常退出 |
-| R2 | Virlen 桌面端终端 | 同上 + `ansi-probe` | 「完全看不到界面但输入有效」→ **假象**：当时命令被 `… 2>&1 \| Out-String` 包成管道（裸跑正常）；另 `ansi-probe` 在**放大窗口**时崩溃 |
-| R3 | cmd.exe **双击 `.cmd` 启动器** | 四组对照（同一套"缩小窗口"动作） | `sizetest`（纯文本，无 ratatui）**放大缩小都没问题**；`sizetest-raw`（+raw mode）**没问题**；`spike` 内联**只绘制不固化** → **崩**；`spike` 全屏 → **崩** |
-| R4 | 我的**非污染**复现（`start` 起独立控制台 + `SetWindowPos` 改尺寸） | 矩阵对照 | 独立控制台下 `stdout/stderr/stdin_is_terminal=true`；第一次 resize 后 **`autoresize` 与 `terminal.size()` 持续失败于 `os error 233`**；**关掉事件源**（不 poll/read）**照样失败**；**`sizetest` 在同一脚手架下 6 次尺寸变化、`size()` 全程可读、`write_fails=0`**（证明脚手架有判别力）；失败**是短暂的**（重试后自愈）；**加 300ms 去抖后连续 20 次快速改尺寸：10 次 resize、0 次失败、进程存活** |
+| 轮次 | 结论 |
+|---|---|
+| R1（cmd.exe，手动） | 内联视口 / 固化 / 鼠标选中复制 / 中文输入均正常（前几秒不在底部属**正常**：`insert_before` 先把视口推到屏底）；**改窗口大小 → 崩** |
+| R2（桌面端终端） | 「完全看不到界面但输入有效」是**假象** —— 命令被 `… 2>&1 \| Out-String` 包成了管道（裸跑正常） |
+| R3（双击 `.cmd` 启动器，四组对照） | 纯文本 ✓、`raw mode` ✓、`spike` 内联**只绘制不固化** ✗、`spike` 全屏 ✗ → 范围收窄到绘制路径 |
+| R4（独立控制台 + `SetWindowPos` 改尺寸） | resize 后 `autoresize` 与 `terminal.size()` 持续失败于 `os error 233`；**关掉事件源照样失败**；同脚手架下 `sizetest` 6 次尺寸变化全程可读（证明脚手架有判别力）；失败**短暂**（重试自愈）；**加 300ms 去抖后连跑 20 次快速改尺寸：0 失败、进程存活** |
 
 > R2 的教训值得单独记：**验证 TUI 时不能用 `… \| Out-String` 之类的管道包装**，否则 stdout 变成管道，界面"看不见"会被误判成环境不支持。
 
@@ -54,20 +54,21 @@
 
 ### 3.2 「拖动窗口 → 程序退出」的根因（实测定位）
 
-**证据链**：
-
-1. R3 的四组对照把范围收窄到「**ratatui 的绘制路径**」：纯文本输出不受影响、`raw mode` 不受影响、`insert_before` 不是必要条件、全屏与内联一样会崩。
-2. R4 在**独立控制台**（非管道）里复现，确认失败来自 **`crossterm::terminal::size()`** —— 其实现是
-   `ScreenBuffer::current()` → `Handle::new(CurrentOutputHandle)` → **`CreateFileW("CONOUT$")`** → `GetConsoleScreenBufferInfo`，
-   报 **`os error 233` = `ERROR_PIPE_NOT_CONNECTED`**。
-3. 关掉事件源后**照样失败** → 与 crossterm 的事件读取无关。
-4. 同一脚手架下 `sizetest`（只 `println` + 每 300ms 调一次 `terminal::size()`，不启 VT 输出、不绘制）**20 次尺寸变化 0 失败** → 控制台 API 本身没坏，是**特定路径**在窗口尺寸变更期间断连。
+**证据链**：① R3 的四组对照把范围收窄到「**ratatui 的绘制路径**」（纯文本输出 ✓、`raw mode` ✓、
+`insert_before` 不是必要条件、全屏与内联一样会崩）；② R4 在**独立控制台**（非管道）里复现，确认失败
+来自 **`crossterm::terminal::size()`** —— `ScreenBuffer::current()` → `Handle::new(CurrentOutputHandle)`
+→ **`CreateFileW("CONOUT$")`** → `GetConsoleScreenBufferInfo`，报 **`os error 233` =
+`ERROR_PIPE_NOT_CONNECTED`**；③ 关掉事件源后**照样失败** → 与 crossterm 的事件读取无关；④ 同一脚手架下
+`sizetest`（只 `println` + 每 300ms 调一次 `terminal::size()`，不启 VT 输出、不绘制）**20 次尺寸变化
+0 失败** → 控制台 API 本身没坏，是**特定路径**在窗口尺寸变更期间断连。
 
 **结论**：**conhost 在窗口尺寸变更期间会让 `CONOUT$` 相关查询/写入短暂失败**，持续约 **0.25–5 s** 后自愈；触发条件是「**启用 VT 输出 + 绘制**」这条路径（即任何真正的 TUI，不只是 ratatui）。
 
 > ⚠️ **严谨性说明**：上述触发条件由**对照实验排除法**得出（纯文本输出 ✓、`raw mode` ✓、内联不固化 ✗、全屏 ✗），**未逐项分离「启用 VT 输出」与「输出量大小」**两个变量。对实施无影响（两者在真 TUI 里必然同时存在），但若日后要报给上游（ratatui / crossterm），需先补这一步分离实验。
 
-**而真正让用户看到"崩溃退出"的是我们自己的写法**：失败被当成致命错误 → 退出路径用 `println!` 写 stdout → 写失败本身又触发 `std` panic（`failed printing to stdout: os error 233`）→ `abort`（退出码 `0xC0000409`），并且 ratatui 的 restore 钩子把 panic 文本冲掉，于是"崩了但什么都没留下"。
+**而真正让用户看到「崩溃退出」的是我们自己的写法**：失败被当成致命错误 → 退出路径用 `println!`
+写 stdout → 写失败本身又触发 `std` panic（`failed printing to stdout: os error 233`）→ `abort`
+（退出码 `0xC0000409`），且 ratatui 的 restore 钩子把 panic 文本冲掉，于是「崩了但什么都没留下」。
 
 ### 3.3 因此：TUI 必须内建的四条（缺一不可）
 
@@ -98,16 +99,18 @@
 
 **现象**：`virlen-cli chat` 底部两行是 `>` 与状态行，但光标不落在 `>` 后面，而在状态行开头；敲字时文字直接盖在状态行上（若输入的是 `abc`，状态行就变成 `STabcS-ROW …` 这种样子）。
 
-**取证工具（已建在仓库外，可复用）**：`%TEMP%\ratatui-inline-spike`
+**取证工具（建在仓库外，可复用）**：`%TEMP%\ratatui-inline-spike`。`console_probe.exe bottom
+<variant>` 在**隐藏的新控制台**里跑同一套 ratatui 序列、每步用 WinAPI 读回真实屏幕（`buffer` / `win` /
+`cursor` + 每行文本）写进 `%TEMP%\console-probe.txt`（`variant` 做 A/B：`style` / `spanstyle` /
+`long` / `t2`…）；`watch [pid]` / `watchloop <pid> <n> <ms>` / `type <pid> <text> [enter]`
+**附加到另一个进程的控制台**（`FreeConsole` + `AttachConsole`）取屏 / 用 `WriteConsoleInputW` 注入
+按键（不需窗口焦点）→ 可对**真 app** 逐帧观测。
 
-- `console_probe.exe bottom <variant>`：在**隐藏的新控制台**里跑同一套 ratatui 序列，每一步用 WinAPI 读回真实屏幕（`buffer`/`win`（窗口原点）/`cursor` + 每一行文本）写入 `%TEMP%\console-probe.txt`；`variant` 用来做 A/B（`style` = 用 `Paragraph` 级样式、`spanstyle` = 样式落在 `Span`、`long` = 长 ASCII 文本、`t2` = 裁到 118 格…）。
-- `console_probe.exe watch <pid>` / `watchloop <pid> <n> <ms>` / `type <pid> <text> [enter]`：**附加到另一个进程的控制台**（`FreeConsole` + `AttachConsole`）取屏 / 用 `WriteConsoleInputW` 注入按键（不需窗口焦点）→ 因此可以对**真 app** 逐帧观测。
-
-**根因（逐帧实测）**：**写到某一行的最后一格时 conhost 会留下一个「待换行」；当它兑现时行号已在屏底，控制台就把整屏上滚一行**。ratatui/crossterm 不知道这件事，于是：
-
-- 视口里的**正文比 ratatui 模型偏上一行**（窗口回退1），
-- 但**光标仍按模型落位**（crossterm 的 CUP 是视口相对坐标）→ **光标落在状态行上**；
-- 之后每帧的 diff 只重画“变了的格子”，而模型以为输入行在第 28 行 → 敲下的字被画在第 28 行（= 视觉上的状态行）→ **输入的文字覆盖状态行**。
+**根因（逐帧实测）**：**写到某一行的最后一格时，conhost 会留下一个「待换行」；当它兑现时行号已在
+屏底，控制台就把整屏上滚一行**。ratatui / crossterm 不知道这件事：视口里的**正文比 ratatui 模型偏上
+一行**，但**光标仍按模型落位**（crossterm 的 CUP 是视口相对坐标）→ 光标落在状态行上；之后每帧的
+diff 只重画「变了的格子」，而模型以为输入行在第 28 行 → 敲下的字被画在视觉上的状态行上 →
+**输入的文字覆盖状态行**。
 
 **关键实验（120x30 控制台、视口贴底；「上滚」= `win_top` +1）**：
 
@@ -128,7 +131,10 @@
 |---|---|---|---|---|---|---|
 | 终端推进列数 | 1 | **2** | **2** | 2 | 1 | 1 |
 
-⇒ **`·` 这类「歧义宽度」字符在 CJK 字体下由终端按 2 列推进，而 ratatui 按 1 列排版**。这直接解释了上表的后三行：原代码把整行空格也涂色（`Paragraph` 级样式）→ 逐格画到行尾；文本里 5 个 `·` 让实际宽度多出 5 列 → 顶出 120 列行尾 → 待换行在屏底兑现 → **整屏上滚**。`unicode-width` 的 `width_cjk` 与实测一致（`·` 算 2 列），所以用它算上限是对的；`width`（默认口径）会偏低。
+⇒ **`·` 这类「歧义宽度」字符在 CJK 字体下由终端按 2 列推进，而 ratatui 按 1 列排版** —— 这直接解释
+了上表后三行：原代码把整行空格也涂色（`Paragraph` 级样式）→ 逐格画到行尾；文本里 5 个 `·` 让实际
+宽度多出 5 列 → 顶出 120 列行尾 → 待换行在屏底兑现 → **整屏上滚**。`unicode-width` 的 `width_cjk`
+与实测一致（`·` 算 2 列），故用它算上限是对的，`width`（默认口径）偏低。
 
 
 **修法**（`virlen-cli/src/tui/view.rs`，±20 行）：整帧往右收 `RIGHT_MARGIN = 2` 列；状态行的颜色只落在 `Span`；状态行文本按 **`width_cjk`** 截断后再用空格补满到 `区宽 - RIGHT_MARGIN`（文本与补白同一上限 ⇒ 所有帧都只画 `[0, 上限)`，残字无处藏身）。`unicode-width` 因此开了 `cjk` feature（只新增 `*_cjk`，不改 `width()`，对 ratatui 无影响）。
@@ -139,55 +145,98 @@
 
 ### 3.6 固化正文的中文「每字一个空格」：ratatui `insert_before` 的 continuation bug（2026-09-26 用户报回 → 已修）
 
-**现象**：`virlen-cli chat` 退出后回看的会话输出里，中文/emoji 每个字后多一个空格（`我 是 你 的 **AI 智 能 助 手 **`）；但**输入框里的中文**（视口内）正常紧凑。
+**现象**：退出后回看的会话输出里，中文 / emoji 每个字后多一个空格（`我 是 你 的 **AI 智 能 助 手 **`），
+而**输入框里的中文**（视口内）正常紧凑。
 
-**根因（源码确证，非推测）**：ratatui buffer 里宽字符后面有一个 **continuation cell**（`CellDiffOption::Skip`，symbol=空格）。视口内渲染走 `Terminal::draw → diff_iter`（跳过 continuation）；固化走 `Terminal::insert_before`，但 Windows 上 `scrolling-regions` feature 不可用（`ScrollUpInRegion` 的 winapi 返回 `Unsupported`），落到 `insert_before_no_scrolling_regions → draw_lines`——它**直接遍历 buffer 每个 cell**、不跳过 continuation → 每个宽字符后多输出一个空格。
+**根因（源码确证）**：ratatui buffer 里宽字符后有一个 **continuation cell**（`CellDiffOption::Skip`，
+symbol = 空格）。视口内渲染走 `Terminal::draw → diff_iter`（跳过它），而固化走
+`Terminal::insert_before` —— Windows 上 `scrolling-regions` 不可用（`ScrollUpInRegion` 的 winapi 返回
+`Unsupported`），落到 `insert_before_no_scrolling_regions → draw_lines`，它**逐 cell 遍历、不跳过**
+continuation → 每个宽字符后多输出一个空格。
 
-**修法**（`virlen-cli/src/tui/term.rs`）：`insert_before` 的 `draw_fn` 里、`Widget::render` 后调 `strip_wide_continuations`：把宽字符（`cell_width ≥ 2`）后面 `(w-1)` 个 continuation cell 的 symbol 清成空串（`set_symbol("")`，不是 `reset()`——`reset` 后 `symbol()` 返回 `" "` 等于没清）。
+**修法**（`tui/term.rs`）：`insert_before` 的 `draw_fn` 里、`Widget::render` 后调
+`strip_wide_continuations` —— 把宽字符（`cell_width ≥ 2`）后面 `(w-1)` 个 continuation cell 的 symbol
+清成空串（必须 `set_symbol("")`：`reset()` 后 `symbol()` 返回 `" "`，等于没清）。
 
-**验收**：真机注入中文提问 → 固化后滚动区中文紧凑无间隔（修前每字一个空格）；单测 `strip_wide_continuations_*`（cli 123 → **125**，全仓 508 passed）。
+**验收**：真机注入中文提问 → 固化后滚动区中文紧凑无间隔；单测 `strip_wide_continuations_*`
+（cli 123 → **125**，全仓 508 passed）。
 
-**如实标注**：这是绕过 ratatui 的 bug，不是上游修复；`draw_lines` 或 Windows `scrolling-regions` 一旦上游修好，此 workaround 可删。
+**如实标注**：这是**绕过** ratatui 的 bug，不是上游修复；`draw_lines` 或 Windows
+`scrolling-regions` 一旦上游修好，此 workaround 可删。
 
 ### 3.7 中文「残影」：一行变短后多出来的汉字不消失（2026-09-26 用户报回 → 已修）
 
-**现象**：长中文回答在在飞区滚动（或状态行变短）时，**行尾残留孤立的汉字**（实测 `…现实可能性。␣␣␣洛`、`…图灵机的提出␣␣␣洛`），即“某行比上一帧短，多出来的字符不消失”。
+**现象**：长中文回答在在飞区滚动（或状态行变短）时**行尾残留孤立的汉字**（实测 `…现实可能性。␣␣␣洛`），
+即「某行比上一帧短，多出来的字符不消失」。
 
-**根因（源码级）**：`ratatui-core/src/buffer/diff.rs` 在「宽字符被窄字符替换」时**不重发宽字符的 trailing（第 2 列）**——只在「previous 宽字符带可见样式」时才强制重发，否则 `else` 分支什么都不做（注释假设 *“标准宽字符（CJK）终端能很好处理”*）。**该假设在 conhost 上不成立**：conhost 不会在「窄字符覆盖宽字符起始列」时清掉第 2 列 → 半个/整个汉字残留。我们的正文是 `Style::default()`（无 bg）→ 正好落进那个“什么都不做”的分支。
+**根因（源码级）**：`ratatui-core/src/buffer/diff.rs` 在「宽字符被窄字符替换」时**不重发宽字符的
+trailing（第 2 列）** —— 只在「previous 宽字符带可见样式」时才强制重发，否则 `else` 分支什么都不做
+（注释假设「标准宽字符终端能很好处理」）。**该假设在 conhost 上不成立**：conhost 不会在「窄字符覆盖
+宽字符起始列」时清掉第 2 列 → 半个 / 整个汉字残留；而我们的正文是 `Style::default()`（无 bg）→ 正好
+落进那个「什么都不做」的分支。
 
-**修法**（`virlen-cli/src/tui/view.rs`）：整帧渲染后把视口所有 cell 标为 `CellDiffOption::AlwaysUpdate`（diff 绕过相等判断 → 每帧完整重画；**只画 `[0, 宽-RIGHT_MARGIN)` 列**，右侧保留列不能画，否则触发 §3.5 的上滚）。视口 10×118，重画量可忽略。
+**修法**（`tui/view.rs`）：整帧渲染后把视口所有 cell 标为 `CellDiffOption::AlwaysUpdate`（diff 绕过
+相等判断 → 每帧完整重画；**只画 `[0, 宽-RIGHT_MARGIN)` 列**，右侧保留列不能画，否则触发 §3.5 的上滚）。
+视口 10×118，重画量可忽略。
 
-**连带**：`AlwaysUpdate` 让状态行整行连续重写，暴露了状态行里 `·`（歧义宽度）的错位（运行中变成 `… Documents1.1s · Es消`）→ **状态行分隔符 ` · ` 改为 ASCII ` | `**（ASCII 两边宽度一致）。
+**连带**：`AlwaysUpdate` 让状态行整行连续重写，暴露了状态行里 `·`（歧义宽度）的错位 → **状态行分隔符
+` · ` 改为 ASCII ` | `**（ASCII 两边宽度一致）。
 
-**验收**：真机长中文回答 + `watchloop` 连拍 60 帧 → 无孤立汉字残留、状态行干净；单测 `status_line_has_no_ambiguous_width_chars`（cli 125 → **126**，全仓 508 passed）。
+**验收**：真机长中文回答 + `watchloop` 连拍 60 帧 → 无孤立汉字残留、状态行干净；单测
+`status_line_has_no_ambiguous_width_chars`（cli 125 → **126**，全仓 508 passed）。
 
-**如实标注**：`AlwaysUpdate` 是绕过 ratatui 的 diff bug（上游修 `diff.rs` 后可撤）；代价是视口每帧全量重画。
+**如实标注**：`AlwaysUpdate` 是**绕过** ratatui 的 diff bug（上游修 `diff.rs` 后可撤）；代价是视口
+每帧全量重画。
 
 ### 3.8 工具调用处的「正文重复 / 时序错乱」：助手正文块按 `messageId` 认（2026-09-26 用户报回 → 已修）
 
-**现象**（用户原话：“工具输出的时序为什么在下一轮 ai 回复的后面？”）：`⏺ user_choice(...)` 之后**又出现一段助手正文**；而`→ 答案`（答题回显）与 `⎿ ok · N 字符 · …`（工具结果）反而被顶到**下一轮正文之后**。
+**现象**（用户原话：「工具输出的时序为什么在下一轮 ai 回复的后面？」）：`⏺ user_choice(...)` 之后
+**又出现一段助手正文**，而 `→ 答案`（答题回显）与 `⎿ ok · N 字符 · …`（工具结果）反被顶到**下一轮
+正文之后**。
 
-**引擎的事件顺序（源码确证）**：① 增量 `assistant_message_updated{streaming:true, contentDelta}`（`llm_round.rs::flush_stream_state`）→ ② `tool_call`（工具行）→ ③ **收尾帧** `{streaming:false, content=<全量>}`（`finalize_assistant_message`，在**执行工具之前**）→ ④ 交互请求 / 用户应答 → ⑤ `tool_result_created`（`execute_tool_steps` 是**顺序** `for`）→ ⑥ 下一轮 LLM（**新的** `messageId`）。⇒ “工具结果先于下一轮正文”是引擎侧保证的。
+**引擎的事件顺序（源码确证）**：① 增量 `assistant_message_updated{streaming:true, contentDelta}`
+（`llm_round.rs::flush_stream_state`）→ ② `tool_call` → ③ **收尾帧** `{streaming:false, content=<全量>}`
+（`finalize_assistant_message`，在**执行工具之前**）→ ④ 交互请求 / 用户应答 → ⑤ `tool_result_created`
+（`execute_tool_steps` 是**顺序** `for`）→ ⑥ 下一轮 LLM（**新的** `messageId`）。⇒ 「工具结果先于下一轮
+正文」是引擎侧保证的。
 
-**根因（UI 侧）**：旧状态机只记“当前正在追加的那一块”（`assistant_at`），而 `ToolStart` 会把它置 `None` → ③ 的收尾帧找不到原块，被当成**新消息**再插一块（**正文重复**）；紧接着 ⑥ 的增量**继续写进那一块**（它成了“当前块”）→ 下一轮正文长在 ④⑤ **之前**（**时序错乱**）。**一个 bug，两个症状。**
+**根因（UI 侧）**：旧状态机只记「当前正在追加的那一块」（`assistant_at`），而 `ToolStart` 会把它置
+`None` → ③ 的收尾帧找不到原块、被当成**新消息**再插一块（**正文重复**），紧接着 ⑥ 的增量又**继续写进
+那一块** → 下一轮正文长在 ④⑤ **之前**（**时序错乱**）。**一个 bug，两个症状。**
 
-**修法**：正文块改为**按 `messageId` 认块** —— `state/mod.rs` 新增 `assistant_blocks: HashMap<String, usize>`（`take_commit` 一并清空），`state/event.rs` 的 `append_assistant / set_assistant` 走新的 `assistant_idx(msg_id, create)`；增量来源改用 `assistant_message_updated.patch.contentDelta`（同一份 delta，但**多带 `messageId`**），`stream_event` 于是只记不送（两者都取会双份正文）。
+**修法**：正文块改为**按 `messageId` 认块** —— `state/mod.rs` 新增
+`assistant_blocks: HashMap<String, usize>`（`take_commit` 一并清空），`state/event.rs` 的
+`append_assistant` / `set_assistant` 走新的 `assistant_idx(msg_id, create)`；增量来源改用
+`assistant_message_updated.patch.contentDelta`（同一份 delta，但**多带 `messageId`**），`stream_event`
+于是只记不送（两者都取会双份正文）。
 
-**验收**：单测 `finalize_frame_after_tool_call_reuses_the_same_block` / `next_message_text_starts_a_new_block_after_the_tool_line`（cli 126 → **128**，全仓 508 → **512**）；真机 `user_choice` 场景（探针 `typecn` 注入「中国历史」→ `type1` 答 1）修前同屏可见“⏺ 后重复正文 + →/⎿ 被顶到下一轮正文之后”。
+**验收**：单测 `finalize_frame_after_tool_call_reuses_the_same_block` /
+`next_message_text_starts_a_new_block_after_the_tool_line`（cli 126 → **128**，全仓 508 → **512**）；
+真机 `user_choice` 场景（探针 `typecn` 注入「中国历史」→ `type1` 答 1）。
 
 ### 3.9 续连体验：退出给出会话 id 与续连命令，重连先预览最近 5 条（2026-09-26 用户要求 → 已落地）
 
-**需求**（用户原话）：① 结束会话时显示 session id，「方便用户续连」；② `[chat] 已退出` 出现时给出 `virlen-cli chat --session <session id>`；③ 重连成功后先加载 top 5 条消息显示出来，「方便用户预览历史」。
+**需求**（用户原话）：① 结束会话时显示 session id「方便用户续连」；② 给出 `virlen-cli chat --session
+<id>`；③ 重连成功后先加载 top 5 条消息「方便用户预览历史」。
 
-**口径**：③ 按**最近 5 条**实现（`get_messages` 是 `ORDER BY rowid ASC`，取尾部）；退出提示里的 id **完整**给出（状态行的 `short_id` 只留前 8 位，不足以续连）。
+**口径**：③ 按**最近 5 条**（`get_messages` 是 `ORDER BY rowid ASC`，取尾部）；退出提示里的 id
+**完整**给出（状态行的 `short_id` 只留前 8 位，不足以续连）。
 
-**落点**：`tui/history.rs`（`history_preview` / `resume_hint`，纯函数，TUI 与顺序输出**共用一份**）→ `UiEvent::History(Vec<OutLine>)` → `state/event.rs` 整批进 `inflight` + `commit_pending`（**立刻固化进原生滚动区**，与 `Notice` 的区别是按角色着色）。TUI 路径下预览在「已续连会话」提示之前；顺序输出模式下直接打 stdout。
+**落点**：`tui/history.rs`（`history_preview` / `resume_hint`，纯函数，TUI 与顺序输出**共用一份**）→
+`UiEvent::History(Vec<OutLine>)` → `state/event.rs` 整批进 `inflight` + `commit_pending`
+（**立刻固化进原生滚动区**）。TUI 路径下预览在「已续连会话」提示之前；顺序输出模式直接打 stdout。
 
-**验收**：单测 7 条（cli 128 → **135**，全仓 512 → **518**）；真机顺序输出模式：退出打印 `[chat] 会话 id: …` / `[chat] 续连本会话: virlen-cli chat --session …`，把该命令原样贴回去则 stdout 先打 `—— 历史预览：最近 N 条 / 共 M 条 ——` + 每角色一行。⚠️ TUI 路径未在无头演练中覆盖。详见 `docs/AGENTS.md` §11.23。
+**验收**：单测 7 条（cli 128 → **135**，全仓 512 → **518**）；真机顺序输出模式：退出打印 `[chat] 会话
+id: …` / `[chat] 续连本会话: virlen-cli chat --session …`，把该命令原样贴回去则 stdout 先打
+`—— 历史预览：最近 N 条 / 共 M 条 ——` + 每角色一行。⚠️ TUI 路径未在无头演练中覆盖。
+详见 `docs/AGENTS.md` §11.23。
 
 ### 3.10 授权面板改成**显式二选一**（代码审查发现 fail-open → 已修）
 
-**问题**：授权面板在 TUI 里是「行输入 + 回车放行」—— `Interaction::answer()` 把**空白输入**当「允许」，而界面上写的是 `[y/N]`。又因为交互期间的按键**全部**落到交互上，用户正在打字时的一次误触 Enter 就直接批准了危险命令（`execute_command` 会真的跑）；而同项目的 `run` / 顺序输出模式（`run/ask.rs`）**一直是** fail-closed（非 TTY / 空输入 = 拒绝）—— 两条路径对同一件事给出相反的安全语义。
+**问题**：授权面板在 TUI 里是「行输入 + 回车放行」—— `Interaction::answer()` 把**空白输入**当「允许」
+（界面却写 `[y/N]`），且交互期间按键**全部**落到交互上 → 用户打字时的一次误触 Enter 就直接批准了危险
+命令；而同项目的 `run` / 顺序输出模式（`run/ask.rs`）**一直是** fail-closed（非 TTY / 空输入 = 拒绝）
+—— 两条路径对同一件事给出相反的安全语义。
 
 **修法**（`tui/state/{mod,key}.rs` + `tui/view.rs`）：授权改为**显式选择**，默认选「拒绝」。
 
@@ -315,45 +364,44 @@ src-tauri/virlen-cli/src/
 
 ### 7.1 P0 落地记录（2026-09-25）
 
-- 新增 `src-tauri/virlen-cli/src/session_rt.rs`：`RunOptions` / `ProviderLite` / `Resources` / `resolve_workspace` /
-  `build_resources` / `build_system_prompt` / `load_or_create_session` / `SessionRuntime::{bootstrap, send_options}`；
-  `run.rs` 只留「参数解析 + 事件渲染 + 交互应答 + select 循环」，装配段改为调 `SessionRuntime::bootstrap`（`run.rs` 2087 → 1471 行）。
-- **搬运方式**：按锚点机械切分（脚本），`run.rs` 用 `use crate::session_rt::*;` 重新引入同名项 ——
-  因此本文件的调用点与 `mod tests`（63 个用例）**一行都不用改**。这层 glob 是纯搬移的护栏，不是风格选择。
-- **验收证据**：`run --workspace <ws> "现在几点？"` 对本地 mock Provider —— stdout 仍**只有正文**、stderr 仍有
-  `[run] session=… model=… tools=28 workspace=<ws>` 与 `[done] 用时 … ms`、2 个会话 / 6 条消息落库、
-  **落库的 `workspace` 未被改写**（正是那个 bug 的回归点）、`AGENTS.md` 仍被注入、工具定义仍在请求体里。
-- **已知待办**：`SessionRuntime` 的 `host` / `settings` / `cwd` 目前只有写入（已标 `#[allow(dead_code)]` 并写明原因）——
-  它们属于 P1 的**切会话**入口，那一步落地后**请删掉该属性**。
-- **未做（属 P1）**：`activate()`（切会话唯一入口）、`Command::Chat` 子命令、`tui/` 实现。
+抽出 `session_rt.rs`（`RunOptions` / `Resources` / `resolve_workspace` / `build_resources` /
+`build_system_prompt` / `load_or_create_session` / `SessionRuntime::{bootstrap, send_options}`），
+`run.rs` 只留「参数解析 + 事件渲染 + 交互应答 + select 循环」（2087 → 1471 行）；切分按锚点机械进行
+（脚本）并用 `use crate::session_rt::*;` 重新引入同名项，故调用点与 63 个 `mod tests` **一行未改**。
+
+**验收证据**：`run --workspace <ws> "现在几点？"` 对本地 mock Provider —— stdout 仍**只有正文**、stderr
+仍有 `[run] session=… model=… tools=28 workspace=<ws>` 与 `[done] 用时 … ms`、2 个会话 / 6 条消息落库、
+**落库的 `workspace` 未被改写**（正是那个 bug 的回归点）、`AGENTS.md` 仍被注入、工具定义仍在请求体里。
+**未做（属 P1）**：`activate()`（切会话唯一入口）、`Command::Chat`、`tui/`（`SessionRuntime` 的
+`host` / `settings` / `cwd` 当时只有写入，已随 P1 删掉 `#[allow(dead_code)]`）。
 
 ### 7.2 P1 落地记录（2026-09-26）
 
-**新增依赖**：`ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"] }` + `unicode-width = "0.2"`
-（后者已在依赖树内，不新增 crate；**不单独声明 `crossterm`** → 用 `ratatui::crossterm` 重导出，避免同 crate 双版本）。
-只进 `virlen-cli`：GUI 二进制的依赖与体积不受影响。
+**新增依赖**：`ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"] }` +
+`unicode-width = "0.2"`（已在依赖树内；**不单独声明 `crossterm`**，用 `ratatui::crossterm` 重导出以
+避免同 crate 双版本）。只进 `virlen-cli`：GUI 二进制的依赖与体积不受影响。
 
-**新增文件**（`src-tauri/virlen-cli/src/`）：
+**新增文件**（`virlen-cli/src/`）：`tui/state.rs`（纯状态机，**事件语义只在这里解释一次** —— tool_call
+两帧去重、ANSI 剔除、token 按 messageId 求和）、`tui/view.rs`（纯渲染，`TestBackend` 可断言）、
+`tui/commands.rs`（斜杠命令解析，未知命令不得当提问发给模型）、`tui/input.rs`（crossterm 按键 →
+归一化 `Key`）、`tui/term.rs`（终端接管 / 恢复 + **四条措施** + **分块固化**）、`tui/mod.rs`（编排：
+参数解析、TUI 线程、`select!` 主循环、顺序输出模式）。
 
-| 文件 | 职责 | 可测性 |
-|---|---|---|
-| `tui/state.rs` | 纯状态机：`UiEvent`/`Key` → `UiState` + `Action`；**事件语义只在这里解释一次**（如 tool_call 两帧去重、ANSI 剔除、token 按 messageId 求和） | 纯单测 |
-| `tui/view.rs` | 纯渲染：`&UiState` → `Frame` | `TestBackend` 断言 |
-| `tui/commands.rs` | 斜杠命令解析（未知命令不得当提问发给模型） | 纯单测 |
-| `tui/input.rs` | crossterm 按键 → 归一化 `Key`；读一批事件（返回 resize 尺寸） | 纯单测（映射）/ 真终端 |
-| `tui/term.rs` | 终端接管/恢复 + **四条措施**（去抖、退避重试、禁 `println!` + panic 钩子落盘、降级判定）+ **分块固化** | 真终端 |
-| `tui/mod.rs` | 编排：`chat` 参数解析、TUI 线程、`select!` 主循环、**顺序输出模式**、事件出口 → UI 的映射 | 入口与 sink 映射可单测 |
+**改动**：`session_rt.rs` 新增 `bootstrap_chat` / `activate` / `turn_messages` / `new_session` /
+`recorded_workspace`（**并删掉 `#[allow(dead_code)]`**）；`run.rs` 的 `CliEventSink` / `flush_rendered`
+提为 `pub(crate)`（顺序输出模式复用同一份渲染）；`lib.rs` 新增 `chat` 子命令。
 
-**改动**：`session_rt.rs` 新增 `bootstrap_chat` / `activate` / `turn_messages` / `new_session` / `recorded_workspace`
-（**并删掉 `#[allow(dead_code)]`**：三个字段现在真的被读了）；`run.rs` 的 `CliEventSink` / `flush_rendered` 提为 `pub(crate)`（顺序输出模式复用同一份渲染）；`lib.rs` 新增 `chat` 子命令。
-
-**两处与设计文档不同的决定**：① **输入不另起线程**（原计划 `input.rs` 是「输入线程 + 通道」）：绘制与状态都在 TUI 线程，`poll(60ms)` 本就带超时，多一个线程只多一个同步点；② **`chat` 不接受位置参数**（`chat 你好` 直接报错并引导到 `run`），避免用户以为它是一次性调用。
+**两处与设计不同的决定**：① **输入不另起线程**（绘制与状态都在 TUI 线程，`poll(60ms)` 本就带超时，
+多一个线程只多一个同步点）；② **`chat` 不接受位置参数**（`chat 你好` 直接报错并引导到 `run`），避免
+被误当成一次性调用。
 
 ### 7.3 模块瘦身（2026-09-26 — P2 之前的一次结构整理）
 
-**起因**：P1 之后 `tui/mod.rs` 1506 行、`run.rs` 1474 行、`tui/state.rs` 1240 行、`list.rs` 1122 行、`session_rt.rs` 833 行——单文件承担过多职责，审阅与定位成本高（core 侧 `execute_command.rs` 更极端：1075 行里 794 行是测试）。
+**起因**：P1 之后 `tui/mod.rs` 1506、`run.rs` 1474、`tui/state.rs` 1240、`list.rs` 1122、
+`session_rt.rs` 833 行 —— 单文件职责过多（core 侧 `execute_command.rs` 更极端：1075 行里 794 行是测试）。
 
-**做法**：全部按「**目录模块 + 测试外移 + 纯搬运**」处理（口径、三个搬运陷阱与代价见 `AGENTS.md` §11.18）。本轮范围：`virlen-cli` 五个文件 + `virlen-core` 三个文件（用户拍板）。
+**做法**：全部按「**目录模块 + 测试外移 + 纯搬运**」处理（口径、三个搬运陷阱与代价见 `AGENTS.md`
+§11.18）；范围 = `virlen-cli` 五个文件 + `virlen-core` 三个文件。
 
 | 原文件 | 现状（行数） |
 |---|---|
@@ -366,11 +414,15 @@ src-tauri/virlen-cli/src/
 | core `execute/execute_command.rs` 1075 | **281** + `tests.rs 794` |
 | core `agent/engine.rs` 888 | 468 + `tests.rs 419` |
 
-**验收**：`cargo test --workspace` **504 passed**（app 29 / cli 121 / core 354，2 ignored）——与拆分前**完全一致**；`cargo check --all-targets` 对三个 package 均 **0 error / 0 warning**；重建后的 `virlen-cli.exe` 冒烟 6 项（`chat --help` / `chat --no-tui` 非 TTY 降级 / `run --help` / `list-session --help` / `list-agent` 空库 / 未知子命令 exit 2）与拆分前一致。
+**验收**：`cargo test --workspace` **504 passed**（app 29 / cli 121 / core 354，2 ignored）—— 与拆分前
+**完全一致**；`cargo check --all-targets` 三个 package 均 **0 error / 0 warning**；重建的 `virlen-cli.exe`
+冒烟 6 项（`chat --help` / 非 TTY 降级 / `run --help` / `list-session --help` / 空库 `list-agent` /
+未知子命令 exit 2）与拆分前一致。
 
-**代价与边界**：跨文件使用的方法/字段放宽为 `pub(crate)`（清单见 `AGENTS.md` §11.18）；**语义零改动**（纯搬运，未动任何逻辑分支）。
-
-**未拆（下次可继续）**：`agent/llm_round.rs` 705、`native_tools/execute/common/runner/tests.rs` 688、`rag/embedding.rs` 649、`agent/tool_executor.rs` 551、`agent/bridge.rs` 531、`rag/rag_service.rs` 502、`execute_command/tests.rs` 794。
+**代价与边界**：跨文件使用的方法 / 字段放宽为 `pub(crate)`（清单见 `AGENTS.md` §11.18）；**语义零改动**。
+**未拆（下次可继续）**：`agent/llm_round.rs` 705、`native_tools/execute/common/runner/tests.rs` 688、
+`rag/embedding.rs` 649、`agent/tool_executor.rs` 551、`agent/bridge.rs` 531、`rag/rag_service.rs` 502、
+`execute_command/tests.rs` 794。
 
 **实测（均在真实终端）**：
 

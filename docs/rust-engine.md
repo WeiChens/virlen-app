@@ -50,7 +50,7 @@ LLM 调用 → 工具执行 → 结果合并 →（迭代模式）验证反馈�
 | `bridge.rs` | — | 双向桥接状态（工具/交互/Provider 流） |
 | `llm_round.rs` | `llm-round.ts` | LLM 轮次（流式/非流式、tool_use 收集） |
 | `tool_executor.rs` | `tool-executor.ts` | 工具步骤执行（桥接 JS + 原生优先分发）、用户交互 |
-| `native_tools/` | `infrastructure/tools/*`（toolRegistry） | 原生工具执行器（18 个，按分类拆子模块，见第八节） |
+| `native_tools/` | `infrastructure/tools/*`（toolRegistry） | 原生工具执行器（**28 个**，按分类拆子模块，见第八节） |
 | `llm_loop.rs` | `llm-loop.ts` | 「LLM→工具」共享编排 |
 | `verifier.rs` | `verifier.ts` | 迭代验证器 |
 | `iteration.rs` | `iteration-controller.ts` | 执行→验证→修复循环 |
@@ -117,28 +117,22 @@ agent:provider-request { requestId, providerType, providerId, apiKey, baseUrl, r
 | `anthropic` | ✅ 原生 HTTP | Messages API + SSE |
 | `gemini` | 🔄 JS 桥 | 复用现有 TS provider（原生化列入 P2） |
 
-## 六、平滑过渡开关
+## 六、平滑过渡开关（**已移除**）
 
-- `settingsState.useRustEngine`（默认 `true`，设置页「通用 → Rust 原生引擎」）
-  - P3 起转正：agent 逻辑与持久化均已 Rust 化，新用户默认开启
-  - 老用户升级时做**一次性迁移**（`virlen-rust-engine-migrated`），强制切换一次避免消息不落库
-- `chat-service.getEngine()` 按 flag 选择 `rustEngine` 或 `agentEngine`
-- 非 Tauri 环境（浏览器 dev / vitest）自动回退 TS 引擎
-- 两个引擎实现**同一接口** `AgentEnginePort`，前端零侵入
+历史：曾有 `settingsState.useRustEngine` 开关（含一次性迁移 `virlen-rust-engine-migrated`），
+`chat-service.getEngine()` 按它选择 `rustEngine` 或 TS 的 `agentEngine`。**TS 引擎已整体删除**
+（`AGENTS.md` §11.37）→ `getEngine()` 恒返回 Rust，开关 / 迁移 / 设置项均已删除；本节仅作溯源。
 
 ## 七、测试与验证
 
-- Rust：`cargo test` → 101 通过（agent + RAG + session_db + deepseek_tokenizer + provider）
-  - `engine::tests::normal_loop_tool_then_text`：完整循环（LLM→工具→结果→stream_end）
-  - `engine::tests::tool_interaction_routes_session`：交互桥 sessionId 路由
-  - `engine::tests::cancel_is_not_error_and_keeps_partial`：用户取消不当作错误、partial 保留
-  - `native_tools::tests::*` / `native_tools::execute::common::tests::*`：原生工具分发链路、命令风险分类、终端输出解码
-  - `native_tools::execute::execute_command::tests::*`：终止/超时杀进程树（真实 spawn 的集成测试）
-  - `session_db::tests::*`：SQLite 会话/消息读写、幂等、替换、删除、排序（按 sessions / search / migration / message_query / usage 分文件）
-  - `deepseek_tokenizer::tests::*`：字节级 BPE 与官方 transformers 输出对齐、字节表、切分
-  - `provider::tests::*`：本地图片伪视觉分析（imageVisionAnalyzeOptimize）注入、OpenAI/Anthropic 请求体
-  - `storm_breaker / run_state / cancellation / verifier / iteration` 单元测试
-- TS：`npx tsc --noEmit` 零错误；`npx vitest run` 346 通过
+- Rust：`cargo test --workspace`（**必须带 `--workspace`**，见 `AGENTS.md` §7 / §11.14）。覆盖面：
+  引擎循环（`engine::tests::normal_loop_tool_then_text` 等）、交互桥 sessionId 路由、取消不当作错误
+  （`cancel_is_not_error_and_keeps_partial`）、原生工具分发与命令风险分类、终端输出解码、终止 / 超时
+  杀进程树（真实 spawn 的集成测试）、`session_db::tests::*`（读写 / 幂等 / 替换 / 删除 / 排序 / 检索 /
+  用量，按 sessions / search / migration / message_query / usage 分文件）、`deepseek_tokenizer::tests::*`
+  （字节级 BPE 与官方 transformers 对齐）、`provider::tests::*`（请求体与伪视觉注入）、
+  `storm_breaker / run_state / cancellation / verifier / iteration` 单元测试。
+- TS：`npx tsc --noEmit` + `npx vitest run`。**具体用例数以 `AGENTS.md` §7 的验证基线为准**，本文不复制数字。
 
 ## 八、P2：高价值工具原生 Rust 化
 
@@ -345,16 +339,17 @@ pub trait SessionRepo: Send + Sync {
 ## 十、已知限制
 
 1. **Gemini 桥接**：未原生 HTTP，仍走 JS provider（且 TS Gemini 存在 #1 多轮工具 bug，可顺带修复）
-2. **compressContext**：✅ **已完全 Rust 化**（命令 `cmd_compress_context` → `virlen_core::agent::compress`，GUI 与 CLI 同一份）。usage 的 token 估算已 Rust 化：
-   调用 `deepseek_tokenizer::cmd_count_tokens`（DeepSeek V3 字节级 BPE 精确计数，
-   资源 `resources/deepseek_tokenizer/tokenizer.json`，启动后台预热），非 Tauri 环境回退「字符数/4」
-3. **`generateTitle` 会话标题生成**：✅ **已 Rust 化**（`agent/title.rs` + 命令 `cmd_generate_title`；CLI 在 `chat`
-   首回合后调用，失败回退 `title_from_prompt` 首行截取）。⚠️ 请求带 `thinking: false` 禁用思考
-   （`ChatRequest.thinking`），否则推理模型上 `max_tokens=40` 被 reasoning 吃掉 → 标题为空只能回退。
+2. **compressContext**：✅ 已完全 Rust 化（`cmd_compress_context` → `virlen_core::agent::compress`，
+   GUI 与 CLI 同一份；口径见 `AGENTS.md` §11.30）。token 估算用 `deepseek_tokenizer::cmd_count_tokens`
+   （DeepSeek V3 字节级 BPE，资源 `resources/deepseek_tokenizer/tokenizer.json`，启动后台预热），
+   非 Tauri 回退「字符数 / 4」。
+3. **`generateTitle`**：✅ 已 Rust 化（`agent/title.rs` + `cmd_generate_title`；CLI 在 `chat` 首回合后
+   调用，失败回退 `title_from_prompt`）。⚠️ 请求带 `thinking: false` 禁用思考（`ChatRequest.thinking`），
+   否则推理模型上 `max_tokens=40` 会被 reasoning 吃掉 → 标题为空只能回退。
 4. **`maxToolRounds` 迭代模式**：#5 旧问题在 Rust 版 iteration 中同样存在（暂未修）
-5. **原生 execute_command 无流式输出**：结果在命令结束后一次性返回（JS 桥路径可通过
-   `toolOutputStore` 实时刷新终端）。后续可增加 `tool:output` 事件桥
-6. **Linux execute_command 未做 unshare 只读保护**（JS 版有 mount namespace 保护技能目录）
+5. ~~原生 execute_command 无流式输出~~ → ✅ 已有实时输出（`agent:tool-output`，PTY 路径经
+   `ipc::Channel`；CLI 目前丢弃该事件，见 `docs/cli-tui-plan.md` §3.4）
+6. **Linux execute_command 未做 unshare 只读保护**
 7. **`copy_move_file` 跨设备移动**：文件支持 copy+remove 回退；目录跨设备直接报错
 
 ### 会话持久化（P3）相关限制
@@ -414,37 +409,27 @@ UI 渲染 / 设置管理 / i18n、`export-service` Markdown 导出、`download-s
 
 ### P1（引擎循环移植）
 
-- `Cargo.toml`：新增 `reqwest stream` feature、`async-trait`
-- `src-tauri/virlen-core/src/agent/`：14 个新模块（约 2000 行 Rust + 测试）
-- `src-tauri/src/lib.rs`：注册 agent 模块 + 9 个 Tauri 命令
-- `src/services/rust-engine.ts`：适配器 + 双向桥（约 350 行）
-- `src/services/chat-service.ts`：`getEngine()` 选择器
-- `src/ui/store/settingStore.ts`：`useRustEngine` 开关
-- `src/ui/pages/Settings/general-settings.tsx`：设置项 UI
+`Cargo.toml` 加 `reqwest stream` + `async-trait`；`virlen-core/src/agent/` 新增 14 个模块（约 2000 行
+Rust + 测试）；`src-tauri/src/lib.rs` 注册 agent 模块 + 9 个 Tauri 命令；前端加 `rust-engine.ts`
+（适配器 + 双向桥，约 350 行）与 `chat-service.getEngine()` 选择器（当时的 `useRustEngine` 开关与设置
+项 UI 已随 §六 删除）。
 
 ### P2（高价值工具原生化）
 
-- `Cargo.toml`：tokio 增加 `process` / `io-util` / `time`
-- `src-tauri/virlen-core/src/agent/native_tools/`：新增（按分类拆分的 18 个原生工具 + 分类 `common.rs` + 测试）
-- `src-tauri/virlen-core/src/agent/tool_executor.rs`：原生分发优先 + `NativeToolOutcome` 统一处理
-- `src-tauri/virlen-core/src/agent/types.rs`：`NativeToolSecurity` + `SendMessageOptions.security`
-- `src-tauri/virlen-core/src/agent/llm_loop.rs` / `iteration.rs` / `engine.rs`：安全配置透传
-- `src-tauri/virlen-core/src/file_ops.rs`：新增 `write_file`
-- `src-tauri/virlen-core/src/rag/mod.rs`：暴露 `pub fn get_service()`
-- `src-tauri/virlen-core/src/search.rs`：`DirEntryType` 派生 `Clone/Copy`
-- `src/services/rust-engine.ts`：`resolveSecurityConfig()` 解析安全配置
-- `src/services/tool-service/`：新增 `confirm_command_native` 原生审批 handles
+tokio 加 `process` / `io-util` / `time`；新增 `native_tools/`（按分类拆分的工具子模块 + 分类
+`common.rs` + 测试；S5 补齐后共 **28 个**）；`tool_executor.rs` 改为原生分发优先 +
+`NativeToolOutcome` 统一处理；`types.rs` 增 `NativeToolSecurity` 与 `SendMessageOptions.security`，
+经 `llm_loop.rs` / `iteration.rs` / `engine.rs` 透传；`file_ops.rs` 增 `write_file`；`rag/mod.rs` 暴露
+`get_service()`；`search.rs` 的 `DirEntryType` 派生 `Clone/Copy`；前端 `rust-engine.ts` 增
+`resolveSecurityConfig()`，`tool-service/` 增 `confirm_command_native` 原生审批 handles。
 
 ### P3（会话持久化 SQLite 直落）
 
-- `Cargo.toml`：新增 `rusqlite = { version = "0.32", features = ["bundled"] }`
-- `src-tauri/virlen-core/src/session_db.rs`：新增（SessionRepo trait + Sqlite/Noop 实现 + 7 个测试）
-- `src-tauri/virlen-core/src/agent/engine.rs`：注入 `SessionRepo`；3 个写库点（入口用户消息 / 每轮结果 / resume）
-- `src-tauri/virlen-core/src/agent/mod.rs`：`init_agent_engine` 创建 SQLite repo + `app.manage`
-- `src-tauri/src/lib.rs`：注册 `session_db` 模块 + 6 个命令
-- `src/infrastructure/sessionRepo/index.ts`：IndexedDB → Rust 命令
-- `src/services/chat-service.ts`：`compressContext` 压缩后落库
-- `src/utils/db.ts`：IndexedDB 封装已删除
+`Cargo.toml` 加 `rusqlite = { features = ["bundled"] }`；新增 `session_db`（`SessionRepo` trait +
+Sqlite/Noop 实现 + 测试；现为 15 文件目录）；`agent/engine.rs` 注入 `SessionRepo` 并设 3 个写库点
+（入口用户消息 / 每轮结果 / resume）；`agent/mod.rs` 的 `init_agent_engine` 创建 repo 并 `app.manage`；
+`lib.rs` 注册 `session_db` 模块 + 命令；前端 `sessionRepo/index.ts` 改走 Rust 命令、
+`chat-service` 压缩后落库、`utils/db.ts`（IndexedDB 封装）删除。
 
 ---
 

@@ -8,11 +8,9 @@
 > **深读入口（细节已下沉，不在本文件展开）**
 > - `docs/rust-engine.md` —— 引擎 Rust 化清单与已知差异
 > - `docs/pty-research.md` —— Windows ConPTY / 终端交互完整设计
-> - `docs/sandbox-implementation-plan.md` —— 跨平台沙盒实现
-> - `docs/埋点上报数据设计.md` —— 埋点事件与字段规范
 > - `docs/host-abstraction-draft.md` —— 宿主抽象（**方案 A 已实施**）：GUI / CLI 资源与数据目录的唯一接口
-> - `docs/config-sink-plan.md` —— 配置下沉（**落 SQLite，与 GUI 共用同一份 `virlen.db`**）+ D4 `js` 沙盒规则内嵌求值
-> - `docs/cli-tui-plan.md` —— CLI 交互式 TUI（`virlen-cli chat`）方案、选型实测与 Windows 终端硬坑
+> - `docs/config-sink-plan.md` —— 配置下沉（**落 SQLite，与 GUI 共用同一份 `virlen.db`**）+ `js` 沙盒规则内嵌求值
+> - `docs/cli-tui-plan.md` —— CLI 交互式 TUI（`virlen-cli chat`）与配置向导、上下文压缩的方案 / 实测
 
 ---
 
@@ -314,7 +312,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 - `track('domain.action', props)` / `trackPerf` / `startSpan`（`utils/telemetry`）。命名 `域.动作`（如 `chat.message.send`、`engine.iteration.verify`、`session.create`）。
 - **默认关闭**（`telemetryEnabled`），必须保持「关闭时零开销」。
 - Rust 侧 `src-tauri/src/telemetry.rs` 做 panic 桥（落盘 + 前端就绪后拉取）。
-- 密钥打码：`utils/telemetry/redact.ts`、`isSensitiveKey()`。规范见 `docs/埋点上报数据设计.md`。
+- 密钥打码：`utils/telemetry/redact.ts`、`isSensitiveKey()`。事件名沿用 `域.动作`，公共字段由前端补齐。
 
 ---
 
@@ -450,7 +448,7 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 
 ## 11. 常见坑（踩过的，别再踩）
 
-> **速查级**：每条只留「现象 → 根因 → 结论 / 改哪里」。专项细节在各自文档里（PTY `docs/pty-research.md`、TUI `docs/cli-tui-plan.md`、托盘 `docs/tray-implementation-plan.md`、Rust 引擎 `docs/rust-engine.md`）；本节被压掉的长篇叙述与实验记录见 git 历史（`git log -p docs/AGENTS.md`）。
+> **速查级**：每条只留「现象 → 根因 → 结论 / 改哪里」。专项细节在各自文档里（PTY `docs/pty-research.md`、TUI `docs/cli-tui-plan.md`、托盘 `src-tauri/src/tray/`、Rust 引擎 `docs/rust-engine.md`）；本节被压掉的长篇叙述与实验记录见 git 历史（`git log -p docs/AGENTS.md`）。
 
 **11.1 PowerShell 5.1 按本地代码页（GBK）读文件** —— 看含中文的源码会乱码：读加 `-Encoding UTF8`；写统一用 `write_file` / `edit_file`（UTF-8）。
 
@@ -504,141 +502,92 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 仍在 localStorage：`virlen-security` 的 `whitelist` / `blacklist` / `skipEachDirs`（路径安全少一半，见 §11.15 第 3 条）；`virlen-skills` 的**启用状态**（技能目录固定为 `<data_dir>/skills`、CLI 自行推导 → `list_skills` 可用，但不知道桌面端勾了哪些）；UI 偏好 / 埋点缓冲 / 更新偏好（无需下沉）。
 判断标准一句：**headless 侧的功能要不要它** —— 要就照 `securityRepo` / `agentRepo` 的模板下沉（表为权威 + 内存快照 + 首启迁移 + debounce 落库 + 退出前 flush）。
 
-**11.17 CLI 交互式 TUI（`virlen-cli chat`）与 Windows 上的一条硬坑** —— 完整方案与实测见 `docs/cli-tui-plan.md`。
-- **形态已定**：ratatui **内联视口**（`Viewport::Inline`）—— 已完成内容固化进终端**原生滚动区**，输入框 + 状态行钉在底部。内联两条硬约束：**高度只能在构造期定死**（`Terminal.viewport` 是私有字段）；固化必须**分块**（否则一次灌 120 行只落地 20 行）。
-- **⚠️ 硬坑**：Windows 上「改变窗口大小」后 `crossterm::terminal::size()` 会持续失败于 `os error 233`，约 0.25–5 s 后自愈 —— 排除法已确认**不是** ratatui 逻辑 / 事件源 / `insert_before` / 内联独有，触发条件是「**启用 VT 输出 + 绘制**」，属 conhost 环境行为。**真正让用户看到「崩溃」的是写法**：失败被当致命错误 → 退出时 `println!` 又失败 → std panic → `abort`，且 ratatui 的 restore 钩子把 panic 文本冲掉（「崩了但什么都没留下」）。
-- **任何 TUI 必须内建四条**：① **resize 去抖**（`Event::Resize` 后 300ms 内不碰终端；⚠️ **读事件要排在绘制之前**）；② **重试退避**（失败 → 记日志 + 退避 250ms）；③ **I/O 失败路径禁止 `println!`**（一律 `writeln!` + 忽略错误，并自装 panic 钩子先落盘 `Backtrace::force_capture()`）；④ **降级**（连续失败超 5 s → 顺序输出模式）。
-- **两条路径一条语义**：默认内联视口 TUI；stdout / stdin 非终端（管道 / 重定向 / CI）、`--no-tui`、或连续失败超 5 s → 切**顺序输出模式**（复用 `run::CliEventSink` 的文本渲染 + 行读入，不写第二份渲染）。落点 `virlen-cli/src/tui/`：`mod`（参数 + 终端能力判定 + 降级）/ `app`（线程编排）/ `plain`（顺序输出）/ `sink`（`UiEventSink`）/ `state/{mod,line,event,key}`（状态机与按键）/ `view`（纯渲染，`TestBackend` 可断言）/ `commands`（斜杠命令解析）/ `input` / `term`（独占终端，四条措施都在这）/ `tests.rs`。
-- **线程模型**：TUI 跑在**独立 `std::thread`**（终端只在它手里，自己 `poll(60ms)` 读键）；引擎回合 `tokio::spawn` 出去，主任务只在 `select!` 里等「用户动作」与「回合结果」。`run` 的同步 `ask_user` 会和输入框抢同一个 stdin → TUI 改成「事件出口送进 UI → 按键产生 `Action::Reply` → 主任务回执」，**排队**且**未知类型也答**。
-- **`chat` 与 `run` 共用 `session_rt`**：切会话 / 新建必须走 `SessionRuntime::{bootstrap_chat, activate, turn_messages}`（重读会话记录 → 重算工作目录与安全配置 → 重取会话）；**每回合重读库**拿历史（库里那份才是权威）。
-- **验证与两个手法坑**：真终端压测 30 次改尺寸（含比视口还矮的 `48x5`）+ 极小窗口，全程存活、0 panic。往**独立控制台**注入按键要 `FindWindow` → `ShowWindow(SW_RESTORE)` → **`SetForegroundWindow`** → `SendKeys`（`AppActivate` 不可靠）；`TestBackend` 断言**必须跳过宽字符后面的填充格**（否则中文断言假失败）。⚠️ 未实测：降级第②条（要人为造终端故障）、macOS / Linux 冒烟、「在桌面端自带终端里跑 `chat`」的双层 PTY。验证时**不要用 `… 2>&1 | Out-String` 之类的管道包装**（stdout 变管道 = 界面「看不见」，曾被误判为环境不支持）。
+**11.17 CLI 交互式 TUI（`virlen-cli chat`）** —— 形态（ratatui 内联视口）、Windows「改窗口尺寸 → `os error 233`」硬坑、必须内建的四条措施、线程模型、与 `run` 共用 `session_rt`、验证手法两坑，**完整实测与方案见 `docs/cli-tui-plan.md`**（§3.2 根因 / §3.3 四条措施 / §5 架构）。此处只留必读口径：
+- 内联两条硬约束：**高度只能在构造期定死**（`Terminal.viewport` 是私有字段）；固化必须**分块**（一次灌 120 行只落地 20 行）。
+- 降级三条触发（stdout / stdin 非终端、连续失败 5 s、`--no-tui`）→ 复用 `run::CliEventSink` 的文本渲染，**不写第二份**。
+- ⚠️ 未实测：降级第②条（需人为造终端故障）、macOS / Linux 冒烟、「在桌面端自带终端里跑 `chat`」的双层 PTY。
+- 验证时**不要用 `… 2>&1 | Out-String` 之类的管道包装**（stdout 变管道 → 界面「看不见」，曾被误判为环境不支持）。
 
-**11.18 大文件怎么拆（CLI / core 瘦身口径）** —— `run.rs` 1474 行、`tui/mod.rs` 1506 行这类「什么都往里塞」的文件已难审阅（`execute_command.rs` 更极端：1075 行里 794 行是测试）。
-- **口径：目录模块 + 测试外移 + 纯搬运** —— `foo.rs` → `foo/{mod.rs,<职责>.rs,tests.rs}`；`mod.rs` 只放本模块的公共词汇（类型 / 入口 / 命令解析），子模块只放实现 → `crate::foo::X` 路径**一行都不用改**；必要时 `pub(crate) use self::<sub>::*;` **再导出**（`tui/mod.rs`、`run/mod.rs` 正是这么做的：**搬了文件，没搬调用点**）。
-- **`tests.rs` 是惯用做法**：`#[cfg(test)] mod tests;` + 兄弟文件；测试段整体回退 4 空格缩进，**绝不逐条改测试**。一次只动一个文件，搬完立刻跑门禁（`cargo test --workspace` + `cargo check -p <pkg> --all-targets`）—— 纯搬运的好处是「失败必是搬错了位置」。
-- **⚠️ 三个搬运陷阱**：① `impl Foo { … }` 是整块，切到多文件要各自补 `impl Foo {` 与 `}`（跨文件 `impl` 合法，且**子模块能访问父模块的私有字段**，不必放宽字段）；② 多行 `use x::{ … }` 必须整块搬；③ 文件以 `}}` 收尾时（`fn` 与 `mod tests` 同行关闭）外移测试要**少留一个 `}`**。
-- **代价（如实标注）**：跨文件使用的东西必须放宽可见性 —— 本次 `pub(crate)` 放宽了 `session_rt::Resources` 字段、`list::AgentLite` 字段、`rag::vector_store::IndexState`、`tui::state::UiState` 的私有方法等。**不是设计变差**，是把「文件内私有可见性」换成显式 `pub(crate)`。
-- **还没拆的（下次按同一口径继续）**：`agent/llm_round.rs` 705、`execute/common/runner/tests.rs` 688、`rag/embedding.rs` 649、`agent/tool_executor.rs` 551、`agent/bridge.rs` 531、`rag/rag_service.rs` 502、`execute_command/tests.rs` 794（可按场景再分文件）。
+**11.18 大文件怎么拆（CLI / core 瘦身口径）** —— 口径 = **目录模块 + 测试外移 + 纯搬运**：`foo.rs` → `foo/{mod.rs,<职责>.rs,tests.rs}`，`mod.rs` 只放本模块公共词汇（类型 / 入口 / 命令解析），必要时 `pub(crate) use self::<sub>::*;` 再导出 → **搬了文件，没搬调用点**（`crate::foo::X` 一行都不用改）。`tests.rs` 用 `#[cfg(test)] mod tests;`，测试段整体回退 4 空格，**绝不逐条改测试**；一次只动一个文件，搬完立刻跑门禁（`cargo test --workspace` + `cargo check -p <pkg> --all-targets`）。
+- ⚠️ 三个搬运陷阱：① `impl Foo { … }` 是整块，切到多文件要各自补 `impl Foo {` 与 `}`（跨文件 `impl` 合法，**子模块能访问父模块私有字段**，不必放宽字段）；② 多行 `use x::{ … }` 必须整块搬；③ 文件以 `}}` 收尾时外移测试要**少留一个 `}`**。
+- **代价（如实标注）**：跨文件使用的东西必须放宽可见性（本次 `pub(crate)` 放宽了 `session_rt::Resources` / `list::AgentLite` 字段、`rag::vector_store::IndexState`、`tui::state::UiState` 的私有方法等）—— 不是设计变差，是把「文件内私有」换成显式 `pub(crate)`。
+- 本轮范围与行数对照、代价清单见 `docs/cli-tui-plan.md` §7.3；**还没拆的**：`agent/llm_round.rs` 705、`execute/common/runner/tests.rs` 688、`rag/embedding.rs` 649、`agent/tool_executor.rs` 551、`agent/bridge.rs` 531、`rag/rag_service.rs` 502、`execute_command/tests.rs` 794。
 
-**11.19 conhost 屏底行：光标压在状态行上、输入覆盖状态行（已修）** —— 现象：`>` 后面输入的字**盖在状态行上**。根因（逐帧实测）：**写到某一行的最后一格**会让 conhost 留下「待换行」，一旦在屏底兑现就**整屏上滚一行**，而 ratatui / crossterm 不知道 → 视口正文比 ratatui 模型偏上一行，**光标仍按模型落位**。
-- 结论：**任何一行都不能碰到屏的最后一格**，而状态行**又必须把自己的尾巴涂满**（否则状态行变短时上一帧的残字会留下）→ 靠「**整帧右侧留白 `RIGHT_MARGIN = 2` + 状态行用 `width_cjk` 算宽度**」同时满足。
-- 为什么用 `width_cjk`：实测 `·`(U+00B7) / `—` 这类**歧义宽度**字符在 CJK 字体下由**终端**按 2 列推进，而 ratatui 按 1 列排版（`unicode-width` 的 `*_cjk` 与实测一致）。
-- 修法（`tui/view.rs`）：① 整帧往右收 2 列；② 状态行的颜色只落 `Span`，**不再用 `Paragraph` 级样式**（否则整行空格被涂色 → 逐格画到行尾）；③ 状态行按 `width_cjk` 截断后**用空格补满到 `区宽 - 2`**（文本与补白同一上限 → 残字无处藏身）。测试固化在 `tui/view::tests`（断言涂满到 `宽 - 2*RIGHT_MARGIN` 且最后两列零样式）。
-- **⚠️ 剩余风险**：正文里出现歧义宽度字符仍可能**轻微错位**；某行若被排满并溢出到最后一格仍可能上滚（`RIGHT_MARGIN=2` 只缓了一部分）。彻底解要等 ratatui 支持按 CJK 口径排版，或 TUI 自带宽度测量后自行折行。本次只取屏 / 注入按键验证，没做人眼观感确认。
+**11.19 conhost 屏底行：光标压在状态行上、输入覆盖状态行（已修）** —— 写到某行**最后一格**会让 conhost 留下「待换行」，在屏底兑现即**整屏上滚一行**（ratatui / crossterm 不知道）→ 正文比模型偏上一行、**光标仍按模型落位**。结论：**任何一行都不能碰到屏的最后一格**，而状态行**又必须把尾巴涂满**（否则变短时上一帧残字留下）→ 用「整帧右留 `RIGHT_MARGIN = 2` + 状态行按 `width_cjk` 算宽」（`·` / `—` 这类**歧义宽度**字符在 CJK 字体下由终端按 2 列推进、ratatui 按 1 列）。⚠️ **剩余风险**：正文含歧义宽度字符仍可能轻微错位、排满的行仍可能上滚，**未做人眼观感确认**。见 `docs/cli-tui-plan.md` §3.5。
 
-**11.20 固化正文中文「每字一个空格」：`insert_before` 的 continuation bug（已修）** —— 根因：buffer 里宽字符后面有一个 continuation cell；视口内 `draw → diff_iter` **会跳过**它，而 Windows 上 `scrolling-regions` feature 不可用 → 固化落到 `insert_before_no_scrolling_regions → draw_lines`，它**逐 cell 输出、不跳过** → 每个宽字符后多一个空格。修法（`tui/term.rs::strip_wide_continuations`）：把 continuation cell 的 symbol 清成**空串**（⚠️ 必须 `set_symbol("")`，`reset()` 会退回 `" "`）。这是**绕过**上游 bug，ratatui 修了可删。
+**11.20 固化正文中文「每字一个空格」（已修）** —— 固化落到 `draw_lines` 时**逐 cell** 输出、不跳宽字符的 continuation cell。修法 `tui/term.rs::strip_wide_continuations`：把它的 symbol 清成**空串**（⚠️ 必须 `set_symbol("")`，`reset()` 会退回 `" "`）。**绕过**上游 bug；见 §3.6。
 
-**11.21 中文「残影」：一行变短后多出来的汉字不消失（已修）** —— 根因（ratatui 源码级）：`ratatui-core/buffer/diff.rs` 在「**宽字符被窄字符替换**」时**不重发**宽字符的第 2 列（注释假设终端会自己处理 —— conhost 不成立），而我们无 bg 样式的正文正好落进那个「什么都不做」的分支。修法（`tui/view.rs`）：整帧渲染后把视口所有 cell 标 `CellDiffOption::AlwaysUpdate`（绕开 diff → 每帧完整重画）；**⚠️ 只画 `[0, 宽 - RIGHT_MARGIN)` 列**（右侧保留列绝不能画，否则触发 §11.19 的整屏上滚）。
-- 连带修：整行连续重写暴露了状态行里 `·` 的宽度错位 → **状态行分隔符由 ` · ` 改为 ASCII ` | `**。代价是视口每帧全量重画（10×118，交互式 TUI 可忽略）。同为**绕过**上游 bug。
+**11.21 中文「残影」（一行变短后多出的汉字不消失，已修）** —— `ratatui-core` 的 diff 在「宽字符被窄字符替换」时**不重发第 2 列**（注释假设终端自己处理 —— conhost 不成立）。修法：整帧标 `CellDiffOption::AlwaysUpdate`（每帧完整重画；⚠️ **只画 `[0, 宽 - RIGHT_MARGIN)` 列**，右侧保留列画了就触发 §11.19 的上滚）；连带把状态行分隔符改成 ASCII ` | `。同为**绕过**上游 bug；见 §3.7。
 
-**11.22 工具调用处的「正文重复 / 时序错乱」：助手正文块必须按 `messageId` 认（已修）** —— 引擎的事件顺序（源码确证）：正文增量 → `tool_call` → **收尾帧**（`finalize_assistant_message`，在**工具执行之前**）→ 交互请求 / 应答 → `tool_result_created` → 下一轮 LLM（**新的** `messageId`）→「工具结果先于下一轮正文」是引擎侧保证的。
-- UI 侧根因：状态机只记「当前正在追加的那一块」，而 `ToolStart` 把它置 `None` → 收尾帧找不到原块、被当成**新消息**又插一块（**正文整段重复**）；下一轮的增量又写进那一块 → 屏幕上看着就是「工具输出跑到下一轮回复后面」。**一个 bug，两个症状。**
-- 修法：正文块改**按 `messageId` 认**（`state/mod.rs::assistant_blocks` + `state/event.rs` 的 `assistant_idx` / `append_assistant` / `set_assistant`）；增量来源从 `stream_event` 换成 `assistant_message_updated.patch.contentDelta`（多带 `messageId`；**两者都取会双份正文**）。
-- 取证手法（仓库外探针 `%TEMP%\ratatui-inline-spike` 的 `console_probe`）：`typecn`（注入中文提问）/ `type1` / `typehelp` / `typeexit`；**`scrollback <pid> [n]`** 读「窗口底往上 n 行」的缓冲区 —— `dump` 只读窗口内 30 行，而固化进的是**原生滚动区**，核验行序只能这样读。
+**11.22 工具调用处的「正文重复 / 时序错乱」（已修）** —— 引擎事件顺序：正文增量 → `tool_call` → **收尾帧**（`finalize_assistant_message`，在**工具执行之前**）→ 交互 → `tool_result_created` → 下一轮（**新** `messageId`）。UI 侧根因：旧状态机只记「当前块」而 `ToolStart` 把它置 `None` → 收尾帧被当成新消息又插一块（正文重复）、下一轮增量续写同一块（时序错乱）—— **一个 bug，两个症状**。修法：正文块**按 `messageId` 认**（`assistant_blocks` / `assistant_idx`），增量来源改用 `assistant_message_updated.patch.contentDelta`（**与 `stream_event` 同取会双份正文**）。见 §3.8。
 
-**11.23 续连体验：退出打印 session id + 续连命令，重连先预览最近 5 条（已落地）** —— 起因：退出只留一句「已保存」，而状态行里是**截断到前 8 位**的 `short_id`，不足以续连。
-- 口径：「top 5」按**最近 5 条**（`SessionRepo::get_messages` 是 `ORDER BY rowid ASC` → 取尾部 `len-5..`），续连时有用的是「上次说到哪」。落点 `virlen-cli/src/tui/history.rs`（`HISTORY_PREVIEW` / `history_preview` / `resume_hint`），TUI 与顺序输出模式**各调一次同一份**。
-- 展示通道：新增 `UiEvent::History(Vec<OutLine>)` → 整批进 `inflight` 并置 `commit_pending` → **立刻固化**（预览不属于任何回合，留在动态区会被第一个回合挤掉）；顺序输出模式直接打到 **stdout**。纯工具调用的助手消息退化为 `[AI] （调用工具 xxx）`；新会话无历史 → 连表头都不打。
+**11.23 续连体验（已落地）** —— 退出打印**完整** session id 与 `virlen-cli chat --session <id>`（状态行的 `short_id` 只有前 8 位，不足以续连）；重连先预览**最近 5 条**（`tui/history.rs`，TUI 与顺序输出共用同一份纯函数）。见 §3.9。
 
 **11.24 评审后的四项修复（`6beb531..f6c0681`）**
-- **① 授权面板 fail-open（最严重，安全红线）** —— 旧实现是「行输入 + 回车放行」：**空白输入**被当成「允许」（界面却写 `[y/N]`），且交互期间按键**全部**落到交互上 → 「用户正在打下一句、误触 Enter」＝**直接批准危险命令**。修法：改成**显式二选一** `ConfirmChoice { Deny, Allow }`（默认 `Deny`）+ `Interaction::new()`（唯一构造入口）；←/↑ 拒绝、→/↓ 允许、Enter 确认高亮项、Esc/Ctrl+C 拒绝，**普通字符（含 `y`/`n`/Backspace）一律不参与**；回显按**实际发出的载荷**判「✔ 已允许 / ✘ 已拒绝」；授权面板**不调 `set_cursor_position`**（否则 ratatui 隐藏光标 —— 光标停在选择行正是旧实现被误触的暗示）。**交互一律 fail-closed。**
-- **② core 的 `println!` 污染 CLI stdout** —— `virlen-core/src/vision/mod.rs` 有 7 处 `println!`（搬进 core 后 CLI 也在用同一份），插进 `run --json` 的 JSON Lines 就会让下游解析失败、而 CLI **无从改道**。修法：全改 `eprintln!`，并在模块头写明「本模块进度日志一律走 stderr」。
-- **③ 两条渲染路径的事件配对是隐式契约** —— `run/render.rs` 取 `stream_event.delta`、`tui/sink.rs` 取 `assistant_message_updated.patch.contentDelta`（**故意忽略**前者以免正文双份），两者都在 `llm_round.rs::flush_stream_state` 发出，但**没有任何东西钉住** → 将来只发一个不会报错，只会让那一侧**静默丢正文**。修法：该函数文档写明「必须成对发出」+ 回归 `delta_patch_and_stream_event_are_emitted_in_pairs`。
-- **④ GUI 壳残留 23 项死依赖** —— `virlen-app/Cargo.toml` 仍声明 `rusqlite` / `quickjs_runtime` / `reqwest` / `quasivision` 等（`src-tauri/src/**` 里使用次数均为 0）。代价不只是白编译：**同一 crate 被两个成员声明时特性相加**，任一处改动都会**静默**改变另一处构建（`quickjs_runtime` 的 `quickjs-ng` 正是「必须写对」的项）。已整批删除，保留项逐个 grep 确认在用；HTMD「与 TS turndown 同源非同实现」的注释补回 core。
+- **① 授权面板 fail-open（安全红线）** —— 旧实现把**空白输入**当「允许」，且交互期间按键全落到交互上 → 误触 Enter 即**批准危险命令**。改成**显式二选一** `ConfirmChoice { Deny, Allow }`（默认 `Deny`，`Interaction::new()` 唯一构造入口）：←/↑ 拒绝、→/↓ 允许、Enter 确认高亮项、Esc/Ctrl+C 拒绝，**普通字符（含 `y`/`n`/Backspace）一律不参与**；面板不调 `set_cursor_position`。**交互一律 fail-closed**；见 §3.10。
+- **② core 的 `println!` 污染 CLI stdout** —— `vision/mod.rs` 的 7 处 `println!` 会插进 `run --json` 的 JSON Lines → 全改 `eprintln!`，模块头写明「进度日志一律走 stderr」。
+- **③ 两条渲染路径的事件配对是隐式契约** —— `run/render.rs` 取 `stream_event.delta`、`tui/sink.rs` 取 `assistant_message_updated.patch.contentDelta`（故意忽略前者以免正文双份），两者都由 `llm_round.rs::flush_stream_state` 成对发出却**没有东西钉住** → 只发一个会让那一侧**静默丢正文**。修法：该函数文档写明 + 回归 `delta_patch_and_stream_event_are_emitted_in_pairs`。
+- **④ GUI 壳残留 23 项死依赖** —— `virlen-app/Cargo.toml` 声明了 `rusqlite` / `quickjs_runtime` / `reqwest` 等零使用依赖：**同一 crate 被两个成员声明时特性相加**，任一处改动会**静默**改变另一处构建。已整批删除。
 - **仍未闭环**：§11.23 的 TUI 续连预览需真终端复验；`list/group.rs` 与桌面端侧边栏的分组口径差异（Workspace 组名 GUI 取 basename / CLI 用全路径；排序 `localeCompare('zh-CN')` vs 码点序）**本次未动**。
 
-**11.25 `assemble.rs` 注释纠错 + 显式写下「CLI 与 GUI 的提示词差异」** —— 原模块头写着「没有生产调用方（CLI 尚未接入）」并压着 `#![allow(dead_code)]`，而 CLI 早就是它的生产调用方（照注释读代码的人会以为改它没人受影响）；golden 守的是**组装规则**，**守不住「喂进去的片段」**。
-- 差异（定论）：环境信息 GUI 有**每个工具版本**、CLI 只有 `std::env::consts::OS` + 架构；**角色 / 身份 / 性格 / 技能 CLI 不注入**（是「没有数据」而非「另一份实现」）。
-- **⚠️ 顺带发现的真缺陷（未修，等拍板）**：`resources.rs::read_project_rules` 返回文件原文、直接当 `PromptParts::project_rules` 传入，而该字段的契约是「`build_project_rules_prompt` 的产物」→ CLI 会话的模型**看不到**「这是项目级要求、与通用说明冲突时以它为准」那段取舍说明。修法是**一行**（改调 `build_project_rules_prompt`），因涉及提示词内容（会影响模型行为）故**未擅自改**。
+**11.25 `assemble.rs` 注释纠错 + 明确写下「CLI 与 GUI 的提示词差异」** —— 原模块头写着「没有生产调用方」，而 CLI 早就是它的生产调用方（会误导读代码的人）；golden 守的是**组装规则**，**守不住「喂进去的片段」**。定论差异：环境信息 GUI 有**每个工具版本**、CLI 只有 `OS` + 架构；**角色 / 身份 / 性格 / 技能 CLI 不注入**（是「没有数据」而非「另一份实现」）。
+- ⚠️ **顺带发现的真缺陷（未修，等拍板）**：`resources.rs::read_project_rules` 返回文件原文、直接当 `PromptParts::project_rules` 传入，而该字段契约是「`build_project_rules_prompt` 的产物」→ CLI 会话的模型**看不到**「项目级要求、与通用说明冲突时以它为准」那段说明。修法是**一行**（改调 `build_project_rules_prompt`），因影响模型行为故**未擅自改**。
 
-**11.26 提示词「跨语言文件耦合」解耦** —— 改前 `virlen-core` 用 `include_str!("../../../../../src/domain/agent/prompts/*.md")`（**Rust 的编译依赖前端目录布局**），且 `verify-prompt.md` 两侧**真分叉**（TS 英文 / Rust 中文）。
-- 改后：**唯一源**在 `src-tauri/virlen-core/src/agent/prompts/*.md`（5 份），Rust `include_str!` **就地**引用；新增 `PromptTexts` + `all_prompt_texts()` + 命令 `cmd_agent_prompts`（一次全量约 4 KB）；前端 `prompt-source.ts`（Tauri 走命令、浏览器 / vitest 用 `?raw`，**同一份 md**）+ `prompt-texts.ts`（`setPromptTexts()` 启动水合一次 + `promptText()` 同步读 —— `baseSystemPrompt()` 是同步函数，改 async 会传染整条组装链与所有调用方）。⚠️ 未水合时**抛错**而不是返回空串：空提示词会**静默**改变模型行为。
-- `verify-prompt.md` 以 TS 英文版为准合并（Rust 中文副本删除），`verifier.rs` / `verifier.ts` 从此读同一份。**「文本住哪」与「谁来组装」是两件事** —— 组装逻辑本次未动。
+**11.26 提示词「跨语言文件耦合」解耦** —— 改前 `virlen-core` 用 `include_str!("../../../../../src/domain/agent/prompts/*.md")`（**Rust 的编译依赖前端目录布局**），且 `verify-prompt.md` 两侧**真分叉**（TS 英文 / Rust 中文）。改后**唯一源** = `src-tauri/virlen-core/src/agent/prompts/*.md`（5 份，`include_str!` 就地引用），前端经 `cmd_agent_prompts` + `prompt-source.ts`（浏览器 / vitest 用 `?raw`）取**同一份**；`verify-prompt.md` 以 TS 英文版合并。⚠️ 未水合时**抛错**而不返回空串（空提示词会静默改变模型行为）。**「文本住哪」与「谁来组装」是两件事** —— 组装逻辑未动。
 
-**11.27 CLI 配置向导 `provider` / `agent` + 供应商目录迁入 core** —— 改前只能 `config set providers '[{…完整 JSON…}]'`：**整键覆盖**（漏一个字段就毁掉现有配置）、写错键名**静默无效**（退出码却是 0）、与桌面端 debounce 落库冲突窗口大。完整设计见 `docs/cli-tui-plan.md` §10。
-- 两件前置：① 供应商模板表 / 推理档位表原只在 TS → 搬到 `virlen-core/src/agent/provider/provider_catalog.json`（Rust `include_str!` + 前端 `?raw`，**同一份物理文件**）+ 命令 `cmd_provider_catalog`，删掉 `src/domain/provider/config.ts`；② 原生 `Provider` trait **没有 `list_models`** → core 新增 `agent/provider/models.rs`，**不加进 trait**（否则 `BridgedProvider` 也得陪跑）；`reqwest` 本就在 core → **CLI 的依赖表一个都没加**。
-- CLI 新增：`wizard.rs`（问答原语：默认值 / 可重问 / **密文关回显** / 多选；**EOF 一律报错**，不进「空输入 → 重问」死循环）、`settings_edit.rs`（数组键按 id 增删改 + **字段级合并** + 回读校验）、`provider.rs` / `agent.rs`（各 10 步向导 + `list` / `test` / `rm`）。写入**只动改到的字段**（`enabled` / `createdAt` / 桌面端以后新增的字段都不会被抹掉）。
-- **⚠️ 刻意不做**：`add` / `edit` 不支持命令行开关（向导的价值就是逐步录入 + 当场校验；脚本逃生口仍是 `config set`）；**stdin 不是终端 → 直接报用法错误（退出码 2）**，绝不半交互挂住。
-- **未闭环**：① **不是乐观锁** —— 桌面端开着时仍可能整组覆盖（回读校验只能把覆盖变成可见错误）；② `config get` 仍**明文输出 `apiKey`**（评审项 N1，未勾选 → 未动；新命令 `provider list` 已自行打码，没有新增泄漏面）；③ 项目规则文件路径校验有 TS / Rust **两份**实现（真准入闸仍在前端）；④ raw-mode 密文输入只能人眼验。
+**11.27 CLI 配置向导 `provider` / `agent` + 供应商目录迁入 core** —— 改前只能 `config set providers '[{…完整 JSON…}]'`：**整键覆盖**（漏一个字段就毁掉现有配置）、写错键名**静默无效**（退出码却 0）。前置：模板表 / 推理档位表搬到 `virlen-core/src/agent/provider/provider_catalog.json`（Rust `include_str!` + 前端 `?raw`，**同一份物理文件**）+ 命令 `cmd_provider_catalog`；core 新增 `agent/provider/models.rs`（**不加进 trait**，否则 `BridgedProvider` 也得陪跑）。CLI 新增 `wizard.rs`（问答原语：默认值 / 可重问 / **密文关回显** / 多选；**EOF 一律报错**）、`settings_edit.rs`（数组键按 id 增删改 + **字段级合并** + 回读校验）、`provider.rs` / `agent.rs`（各 10 步向导 + `list` / `test` / `rm`），写入**只动改到的字段**。
+- ⚠️ **刻意不做**：`add` / `edit` 不支持命令行开关（脚本逃生口仍是 `config set`）；**stdin 不是终端 → 直接报用法错误（退出码 2）**，绝不半交互挂住。
+- **未闭环**：① **不是乐观锁**（桌面端开着时仍可能整组覆盖，回读校验只能把覆盖变成可见错误）；② `config get` 仍**明文输出 `apiKey`**（新命令 `provider list` 已自行打码，无新增泄漏面）；③ 项目规则文件路径校验仍是 TS / Rust **两份**实现（真准入闸在前端）；④ raw-mode 密文输入只能人眼验。详见 `docs/cli-tui-plan.md` §10。
 
-**11.28 clippy 告警清零 + 新增 per-push CI 门禁** —— 改前三个 `build-*.yml` 的 `test` job 只在打 tag / 手动时跑，**不含 clippy**；`cargo clippy --workspace --all-targets` 有 **77 条**告警（`cargo check` 看不到）。
-- 口径：先用 `cargo clippy --fix` 修**机械项**，再处理设计类 —— `too_many_arguments`（8 处，装配链 / 桥协议函数）加带说明的 `#[allow]`；`type_complexity` 抽 `type` 别名（⚠️ **别名里的 trait object 生命周期必须显式**：写在别名里会退化成默认 `'static` → `BoxedPersistSnapshotFn<'a>` 要写 `+ 'a`）；`large_enum_variant` 把 `ProviderBridgeMsg::Done.result` **装箱**（`Event(Value)` 是流式热路径）；doc 缩进类补空行 / 模块头 `/** … */` → `/*! … */`。
-- **⚠️ `cargo clippy --fix` 会引入编译错误**（本次它把 `#[cfg(test)]` 挪给新插入的 `impl Default` → 非 test 构建 `E0425`）→ 自动修复后**必须** `cargo check`，不能只看 clippy 退出码。
-- 门禁 `.github/workflows/ci.yml`：**每次 push / PR** 单平台（ubuntu）跑 `pnpm build`（= TS 类型检查 + 产出 `dist`）→ `cargo clippy --workspace --all-targets -- -D warnings`。**新代码不得再引入 clippy 告警**；⚠️ 只在 ubuntu 跑 → Windows 专属代码必须显式门禁（见 §11.31）。
+**11.28 clippy 告警清零 + per-push CI 门禁** —— 改前 `cargo clippy --workspace --all-targets` 有 **77 条**告警（`cargo check` 看不到），且三个 `build-*.yml` 的 test job 不含 clippy。口径：`cargo clippy --fix` 修机械项，设计类逐项处理 —— `too_many_arguments` 加带说明的 `#[allow]`；`type_complexity` 抽 `type` 别名（⚠️ **别名里的 trait object 生命周期必须显式**，否则退化成默认 `'static`）；`large_enum_variant` 把非热路径装箱；doc 缩进类补空行 / 模块头改 `/*! … */`。
+- ⚠️ **`cargo clippy --fix` 会引入编译错误**（本次把 `#[cfg(test)]` 挪给新插入的 `impl Default` → 非 test 构建 `E0425`）→ 自动修复后**必须** `cargo check`，不能只看 clippy 退出码。
+- 门禁 `.github/workflows/ci.yml`：**每次 push / PR** 单平台（ubuntu）跑 `pnpm build` → `cargo clippy --workspace --all-targets -- -D warnings`。⚠️ **只在 ubuntu 跑** → Windows 专属代码必须显式门禁（§11.31）。
 
-**11.29 CLI 打包并入三个平台的发版 workflow** —— 不新建 workflow，并进三个 `build-*.yml` 的 `build-*` job（复用同一套工具链 / `rust-cache` / `target`）；产物进 **Artifact + 同一个 Release**，形态 = **zip 包**（2026-09-26 由裸二进制改为 zip）。
-- `package.json` 的 `build:cli` = `cargo build --manifest-path src-tauri/Cargo.toml -p virlen-cli --release`；CI 传三元组用 **`CARGO_BUILD_TARGET` 环境变量**（**不要** `pnpm run … -- --target`，见 §11.31）。每 job 三步：`Build CLI` → `Stage CLI bundle` → `Upload CLI bundle`（`if-no-files-found: error`），放在 `cargo install tauri-cli` **之前**（CLI 出问题即早退）。
-- **zip 内容**：`virlen-cli[.exe]` + `quasivision_models/`（端侧视觉模型，36.9 MB）+ `README.txt`（文案唯一源 `.github/cli-bundle-README.txt`）+（仅 Windows）`DirectML.dll`。**为什么是 zip**：裸二进制不带模型 → 用户跑 `vision_analyze` 只会得到「quasivision models directory not found.」；且裸文件在 Artifact / Release 上**不保留可执行位**（Unix 要用户自己 `chmod +x`），zip 能保留。
-- **⚠️ 目录布局即契约**：`quasivision_models/` 必须与可执行文件**同级** → 命中 `CliHost` 资源候选最后一档 `<exe_dir>`（`virlen-core/src/host/cli_host.rs`）；挪进子目录就等于没带。
-- **⚠️ 平台区分命名**：三个 workflow 传的是**同一个 Release**，故 zip 名为 `virlen-cli-windows-x64.zip` / `virlen-cli-linux-x64.zip` / `virlen-cli-macos-arm64.zip`（**不带版本号**，版本由 tag 承载）。Release `files` 必须**显式列**各自的 `.zip`（`**/*.exe` / `**/*.dmg` 等命中不到）。
-- **打包自检**（发坏包前就失败）：stage 步骤断言 zip 内必须有 `virlen-cli[.exe]` / `README.txt` / `quasivision_models/ocr-models/ppocrv5_mobile_det.onnx`（= `vision::models_dir` 的就位判据），并单独拦「多套一层 `quasivision_models/quasivision_models/`」。
-- **边界**：aarch64 的 ad-hoc 签名由链接器自动完成、**无需** codesign；macOS 下载后仍有 quarantine（`xattr -d com.apple.quarantine virlen-cli`）；三个 workflow 并发写同一个 Release 是**既有设计**；Linux / macOS 的 `zip` 步骤**本地无法真跑**（本机无 zip 命令）—— 依据是 Info-ZIP 标准语义 + bsdtar 侧验证「条目名用 `/`、mode 可保留」。
+**11.29 CLI 打包并入三个平台的发版 workflow** —— 不新建 workflow，并进三个 `build-*.yml` 的 `build-*` job（复用同一套工具链 / `rust-cache` / `target`）；产物进 **Artifact + 同一 Release**，形态 = **zip**（2026-09-26 由裸二进制改为 zip）。zip 内容：`virlen-cli[.exe]` + `quasivision_models/`（端侧视觉模型 36.9 MB）+ `README.txt`（文案唯一源 `.github/cli-bundle-README.txt`）+（仅 Windows）`DirectML.dll`。**为什么是 zip**：裸二进制不带模型 → `vision_analyze` 只会得到「models directory not found.」；且裸文件在 Artifact / Release 上**不保留可执行位**。
+- CI 传三元组用 **`CARGO_BUILD_TARGET` 环境变量**（**不要** `pnpm run … -- --target`，见 §11.31）。
+- ⚠️ **目录布局即契约**：`quasivision_models/` 必须与可执行文件**同级**（命中 `CliHost` 资源候选最后一档 `<exe_dir>`）；挪进子目录就等于没带。
+- ⚠️ **平台区分命名**：三个 workflow 传的是**同一个 Release**，故 zip 名为 `virlen-cli-windows-x64.zip` / `virlen-cli-linux-x64.zip` / `virlen-cli-macos-arm64.zip`（**不带版本号**，版本由 tag 承载）；Release `files` 必须**显式列**各自的 `.zip`。
+- **打包自检**：stage 步骤断言 zip 内必须有 `virlen-cli[.exe]` / `README.txt` / `quasivision_models/ocr-models/ppocrv5_mobile_det.onnx`，并单独拦「多套一层 `quasivision_models/quasivision_models/`」。
+- **边界**：aarch64 的 ad-hoc 签名由链接器自动完成（无需 codesign）；macOS 下载后仍有 quarantine（`xattr -d com.apple.quarantine`）；三个 workflow 并发写同一个 Release 是**既有设计**；Linux / macOS 的 `zip` 步骤**本地无法真跑**（本机无 zip 命令），依据是 Info-ZIP 标准语义 + bsdtar 侧验证。
 
-**11.30 上下文压缩下沉 core（`ai` / `raw` 两种模式）+ `chat` 显示占用 % + `list-session` 两列** —— 前提：压缩原先**只在 TS 侧**（Rust 只有提示词），连 GUI 走 Rust 引擎时也是回调 TS → 「CLI 能用」＝在 Rust 侧**新写一份**（用户拍板落 `virlen-core`，将来 GUI 可切过来只留一份）。
-- 常量与口径（与 TS 逐条对齐）：`CONTEXT_WINDOW_TOKENS = 200_000`（**默认值**；实际值来自 `app_settings.contextWindowTokens`，桌面端设置页可改，CLI 只读展示 —— 见下）、`COMPRESS_MIN_RATIO = 0.4`、`context_tokens()`（`uiData.contextTokens > 0` 优先，否则 `usage.totalTokens`，从最后一条往前命中即止）。
-  - **更新**：窗口大小已由写死常量改为运行时可配 —— `context_ratio/context_percent/should_compress` 均新增 `window` 参数，取值经 `window_tokens_from_settings(&Map)` 从 `app_settings.contextWindowTokens` 读（缺失/非正数回退 `CONTEXT_WINDOW_TOKENS`）；TS 侧 `token-ring.tsx` 同理读 `settingsState.contextWindowTokens`。
-- **三个数不能混**：`usage.totalTokens` = 那次摘要调用**花了多少**（含压缩前全部历史）；`uiData.contextTokens` = 压缩后下一轮请求**上下文多大**（本地估算）；状态行显示的是后者 / 上下文窗口（默认 200k，可在桌面端设置页修改）。
-- 落点：core `agent/compress/`（`mod` 模式/常量/口径/切片 · `raw` 正文压缩渲染，端口自 `compress-raw.ts` · `ai` 非流式 `Provider::chat` + `tool_choice=none`），产物是**一条 `role="summary"` 消息**；CLI `session_rt/compress.rs`（TUI 与顺序输出模式**都调它**，不给两条路径分叉的机会）。
-- 交互：`/compress` 弹**显式选择面板**（↑↓/←→ 移动 + Enter + Esc；**字符键一律不参与** —— 与授权面板同一条 fail-closed 口径）；`/compress ai|raw` 直接指定；认不出的方式名**不静默退化**；占用 < 40% 按桌面端同口径拦下，`Skipped`（提示级反馈）与 `Failed`（报错）**分开**；顺序输出模式读设置里的 `contextCompressMode`，读不到就**要求写明方式**（不猜）。
-- 落库是**追加**不是替换（TS 走整表替换，`append_messages(&[summary])` 等效；旧消息留在库里，正是检索工具 `list_messages` / `read_messages` 的数据源）；`list-session` 两列来自 `SessionRepo::session_stats()`（两条聚合查询），`--json` 无数据是 `null` 而非 0，统计失败**不中断列表**（stderr 告警）。
-- **清单保活**：压缩把早期消息压进摘要后，模型只看得到**最后一个 summary 之后**的消息 → 若「当前活跃清单」（最后一条 `uiData.type=="todo"` 快照）落在压缩区间内，模型就会「忘记清单」。对策：把清单**原文**渲染成文本补在 summary 正文末尾（TS `withTodoRecap` / Rust `todo_recap`，复用 `renderTodoContent` / `plan::render_todo_content`）；**不搬运 tool 消息**（`tool` 消息必须紧跟带 `tool_calls` 的 assistant，否则协议报错）。只在快照落在压缩区间内时补（否则上一次压缩已处理，补了重复）。两侧同语义（TS 实现已移除，见 §11.37）；测试见 `compress/tests.rs`。
-- **边界**：① 压缩后占用是**本地粗估**（CJK 0.6 token/字符）；② 截断按**码点**、TS 按 UTF-16 码元 → 阈值附近 ±1；③ AI 摘要在 CLI 里**不可取消**；④ `list-session` 表格约 **139 列宽**，窄终端标题列会折行（机器可读请用 `--json`）；⑤ 压缩只有一份实现（Rust，GUI 与 CLI 共用；TS 那份已随引擎移除，见 §11.37）；⑥ 选择面板的真终端外观与键位未人工复验。三个决策点、界面示意与完整验证见 `docs/cli-tui-plan.md` §11。
+**11.30 上下文压缩下沉 core（`ai` / `raw`）+ `chat` 显示占用 % + `list-session` 两列** —— 压缩原先**只在 TS 侧**（GUI 走 Rust 引擎时也是回调 TS）→「CLI 能用」＝在 Rust 侧**新写一份**（用户拍板落 `virlen-core`，GUI 后来切过来，见 §11.36）。常量与口径：`CONTEXT_WINDOW_TOKENS = 200_000`（**默认值**，实际值取 `app_settings.contextWindowTokens`）、`COMPRESS_MIN_RATIO = 0.4`、`context_tokens()`（`uiData.contextTokens > 0` 优先，否则 `usage.totalTokens`）。
+- **三个数不能混**：`usage.totalTokens` = 那次摘要调用**花了多少**（含压缩前全部历史）；`uiData.contextTokens` = 压缩后下一轮请求**上下文多大**（本地估算）；状态行显示后者 / 上下文窗口。
+- 落点：core `agent/compress/`（`mod` 模式 / 常量 / 口径 / 切片 · `raw` 正文压缩渲染 · `ai` 非流式 `Provider::chat` + `tool_choice=none`），产物是**一条 `role="summary"` 消息**；CLI 执行链 `session_rt/compress.rs`（TUI 与顺序输出模式**都调它**）。**`/compress` 面板字符键一律不参与**（与授权面板同一条 fail-closed 口径）；占用 < 40% 拦下；`Skipped`（提示级）与 `Failed`（报错）**分开**。
+- **落库是追加不是替换**（TS 走整表替换；旧消息留在库里，正是 `list_messages` / `read_messages` 的数据源）；`list-session` 两列来自 `SessionRepo::session_stats()`，`--json` 无数据是 `null`，统计失败**不中断列表**。
+- **清单保活**：压缩后模型只看得到**最后一个 summary 之后**的消息 → 若「当前活跃清单」落在压缩区间内就会被忘记。对策：把清单**原文**渲染成文本补在 summary 正文末尾（`compress::todo_recap`，复用 `plan::render_todo_content`）；**不搬运 tool 消息**（`tool` 必须紧跟带 `tool_calls` 的 assistant，否则协议报错）；只在快照落在压缩区间内时补。
+- **边界**：① 压缩后占用是**本地粗估**（CJK 0.6 token/字符）；② 截断按**码点**、TS 按 UTF-16 码元 → 阈值附近 ±1；③ AI 摘要在 CLI 里**不可取消**；④ `list-session` 表格约 **139 列宽**，窄终端标题列会折行（机器可读请用 `--json`）；⑤ 选择面板的真终端外观与键位**未人工复验**。详见 `docs/cli-tui-plan.md` §11。
 
 **11.31 CI 首次运行暴露的三类失败** —— 上一轮 push 后 `ci.yml` 与三个 `build-*.yml` **首次真正编译 Linux / macOS 目标**。
-- **① clippy 在 Ubuntu 上 11 条 `dead-code`**：全是**只在 Windows 才被调用**的 ConPTY 代码（`runner/mod.rs` 的 `PAGER_DISABLED` / `TICK` / `PTY_HOLD_MAX` / `pty_hold_max` / `HOLD_MAX_OVERRIDE_SECS`；`pty_session.rs` 的 `new` / `is_held` / `interventions` / `close_input` / `register` / `unregister` / `CLIENT_SIZE_WAIT` / `initial_size`；`test_util.rs` 的 `is_process_alive`）。修法：前 5 项（连同只服务它们的 `use std::time::Duration`）**逐项 `#[cfg(target_os = "windows")]`**；`pty_session.rs` 用**文件级** `#![cfg_attr(not(target_os = "windows"), allow(dead_code))]`（逐项门禁会连锁到结构体字段 → 「只写不读」的新告警；`Duration` / `Instant` 也会变成未使用导入）；`is_process_alive` 用平台 `cfg_attr(allow)`（非 Windows 的 `kill -0` 分支留给今后 Linux 用例）。
-  **⚠️ 教训**：本地（Windows）clippy 全绿**不代表**门禁通过。属性坑：文档列表项后不补空行会触发 `doc_lazy_continuation`。
-- **② macOS / Windows 各 1 例测试失败（真 bug）**：`same_path()` 只比字符串，而 `resolve_workspace` 两侧来源不同（`--workspace` 已 canonicalize、会话记录**原样**）→「同一个目录的两种写法」被判成换目录、续跑被无辜拦下。CI 上两种写法恰好都出现：macOS `/var` vs `/private/var`（符号链接）、Windows 8.3 短名 `RUNNER~1` vs 长名 `runneradmin`（Actions 的 `TEMP` 就是短名）。修法：**两侧各自 `dunce::canonicalize`（失败退回原字符串）**后再比；补 2 条单测（unix 软链 + 目录缺失兜底）。
-- **③ Linux 构建 job 的 CLI 步骤直接报错**：`pnpm run build:cli -- --target <triple>` 在 CI 上被 pnpm **连 `--` 一起透传**（cargo 报 `unexpected argument '--target'`）；本机 pnpm 11.2.2 会把 `--` 剥掉 → **同一份 workflow 在本机与 CI 行为不同**。修法：改 `env: CARGO_BUILD_TARGET=<triple>` + `pnpm run build:cli`（不经过任何参数转发，语义与 `--target` 等价，产物同样落 `target/<triple>/release/`）。
-- **边界**：非 Windows 的编译**本地无法复现**（依据是「clippy 已证明这些项在 Linux 上零引用 → 门禁掉不可能破坏编译」+ 逐项引用点 grep 审计）；`virlen-app` 的 Linux 专属分支（`#[cfg(target_os = "linux")]` 等约 7 处）**从未被 clippy 检查过**。
-- **④ 续修（同一轮第二次 push）**：core 修完后 ubuntu clippy 才轮到 `virlen-app`，又露出 **3 条同类告警**（全在 `tray/notify.rs`）—— `show_notification` 的 `session_id` 只在 Windows 分支用（补 `#[cfg(not(target_os = "windows"))] let _ = session_id;`）；`PACKAGE_APP_ID`（原 `cfg(any(windows, test))`，那个 `test` 兜底已无使用者）与 `toast_app_id`（调用方 `show_owned` / `init_app_identity` 都是 Windows 专属，同 `is_packaged()`）改成 `#[cfg(target_os = "windows")]`。判据：报错行的 `due to N previous errors` 就是该 target 的**全部**告警数，所以这批是完整的；剩下的未验证单元只有 `virlen-app` 的 bin（`main.rs`，3 行转发）。**教训同上：平台专属项一律显式门禁，两侧都得能编译。**
+- **① clippy 在 Ubuntu 上 11 条 `dead-code`**：全是**只在 Windows 才被调用**的 ConPTY 代码（`runner/mod.rs` 的 `PAGER_DISABLED` / `TICK` / `PTY_HOLD_MAX` / `pty_hold_max` / `HOLD_MAX_OVERRIDE_SECS`；`pty_session.rs` 的 `new` / `is_held` / `interventions` / `close_input` / `register` / `unregister` / `CLIENT_SIZE_WAIT` / `initial_size`；`test_util.rs` 的 `is_process_alive`）。修法：前 5 项（连同只服务它们的 `use std::time::Duration`）**逐项 `#[cfg(target_os = "windows")]`**；`pty_session.rs` 用**文件级** `#![cfg_attr(not(target_os = "windows"), allow(dead_code))]`（逐项门禁会连锁到结构体字段 → 新告警）；`is_process_alive` 用平台 `cfg_attr(allow)`。**⚠️ 教训：本地（Windows）clippy 全绿不代表门禁通过**；属性坑：文档列表项后不补空行会触发 `doc_lazy_continuation`。
+- **② macOS / Windows 各 1 例测试失败（真 bug）**：`same_path()` 只比字符串，而 `resolve_workspace` 两侧来源不同（`--workspace` 已 canonicalize、会话记录**原样**）→「同一个目录的两种写法」被判成换目录、续跑被无辜拦下（CI 上两种写法恰好都出现：macOS `/var` vs `/private/var`、Windows 8.3 短名 `RUNNER~1` vs 长名）。修法：**两侧各自 `dunce::canonicalize`（失败退回原字符串）**后再比 + 2 条单测。
+- **③ Linux 构建 job 的 CLI 步骤直接报错**：`pnpm run build:cli -- --target <triple>` 在 CI 上被 pnpm **连 `--` 一起透传**（cargo 报 `unexpected argument '--target'`），而本机 pnpm 11.2.2 会把 `--` 剥掉 → **同一份 workflow 在本机与 CI 行为不同**。修法：改 `env: CARGO_BUILD_TARGET=<triple>` + `pnpm run build:cli`（语义等价，产物同样落 `target/<triple>/release/`）。
+- **④ 续修（同一轮第二次 push）**：core 修完后 ubuntu clippy 才轮到 `virlen-app`，又露出 **3 条同类告警**（全在 `tray/notify.rs`：`show_notification` 的 `session_id` 只在 Windows 分支用；`PACKAGE_APP_ID` 与 `toast_app_id` 的调用方都是 Windows 专属）→ 改成 `#[cfg(target_os = "windows")]`。判据：报错行的 `due to N previous errors` 就是该 target 的**全部**告警数。**教训同①：平台专属项一律显式门禁，两侧都得能编译。**
+- **边界**：非 Windows 的编译**本地无法复现**（依据是「clippy 已证明这些项在 Linux 上零引用 → 门禁掉不可能破坏编译」+ 逐项引用点 grep 审计）；`virlen-app` 的 Linux 专属分支（约 7 处）**从未被 clippy 检查过**。
 
-**11.32 启动即崩：UI 模块在模块顶层读了「启动水合」的快照（2026-09-26 用户报回 → 已修）** —— 现象：启动报 `Uncaught Error: 供应商目录尚未水合…`，且窗口根本不显示（不是白屏，是压根没 `show()`）。
-- **根因**：`setupFlow/index.tsx` 模块顶层写了 `const defaultProviderList = providerService.getDefaultProviderList()`。快照是「启动水合 + 同步读」：水合在 `main.ts` 的 `init()` 里，而 `main.ts` **静态导入** `App.tsx` → `App.tsx` 静态导入 `SetupFlow` —— ES 模块求值**先于** `main()`，那一刻快照还是 `null` → `providerCatalog()` fail-fast 抛错 → 整张依赖图求值失败 → `main()` 不执行 → 窗口（`visible: false`，只在 `requestAnimationFrame` 里 `show()`）永不显示。
+**11.32 启动即崩：UI 模块在模块顶层读了「启动水合」的快照（用户报回 → 已修）** —— 现象：启动报 `Uncaught Error: 供应商目录尚未水合…`，且窗口根本不显示（不是白屏，是压根没 `show()`）。根因：`setupFlow/index.tsx` 模块顶层写了 `providerService.getDefaultProviderList()`，而水合在 `main.ts` 的 `init()` 里，`main.ts` 又**静态导入** `App.tsx` → `App.tsx` 静态导入 `SetupFlow` ⇒ ES 模块求值**先于** `main()`，那一刻快照还是 `null` → fail-fast 抛错 → 整张依赖图求值失败 → 窗口（`visible: false`，只在 `requestAnimationFrame` 里 `show()`）永不显示。
 - **为何测试没拦住**：`src/tests/setup.ts` 全局调了 `setProviderCatalog(...)`，把这一刻盖住了（`setPromptTexts` / `setToolDefinitionsLoader` 同理）。
-- **结论 / 改哪里**：把读取移进组件体内（渲染期读）。判断标准：`providerCatalog()` / `providerTemplates()` / `reasoningEffortUnion()` / `defaultReasoningEffortList()` / `sortReasoningEfforts()` / `promptText()`、以及 `providerService.getDefaultProviderList()` —— 一律只在函数 / 组件 / 事件回调里调用，**模块顶层 == 未水合**。
-- 回归用例：`src/tests/contracts/provider-catalog-contract.test.ts`（用 `vi.resetModules()` 拿一份从未水合过的全新模块图，先断言它确实未水合、再导入 UI 模块）；全仓 407 个 ts/tsx 扫描确认该 bug 类只此一处。
+- **判断标准**：`providerCatalog()` / `providerTemplates()` / `reasoningEffortUnion()` / `defaultReasoningEffortList()` / `sortReasoningEfforts()` / `promptText()` / `providerService.getDefaultProviderList()` —— 一律只在函数 / 组件 / 事件回调里调用，**模块顶层 == 未水合**。
+- 回归用例 `src/tests/contracts/provider-catalog-contract.test.ts`（用 `vi.resetModules()` 拿一份从未水合过的全新模块图，先断言确实未水合、再导入 UI 模块）；全仓 ts/tsx 扫描确认该 bug 类只此一处。
 
-**11.33 大历史下「暂停 → 继续」恢复要等好几秒（2026-09-26 用户报回 → 已修）** —— 现象：会话消息 1000+ 条时，`user_choice` 弹窗点「暂存」再点「继续」，要等好几秒才重新弹出（同一会话切换走再切回来则无此问题）。
-- **根因**：一次发送本就带 O(历史) 开销 —— 前端把**整份历史**经 IPC 传给 Rust（`invoke('agent_send_message')`），Rust `send_message_inner` 入口又把整份历史 **upsert 回 SQLite**（`append_messages_if_alive`）。正常发送时这段耗时被「等 LLM」掩盖；而**恢复会跳过 LLM**，它第一次暴露 —— 历史越长越明显。
-- **改法（两侧配对）**：① Rust `send_message_inner`：`resume_from_snapshot.is_some()` 时**不再整表回写**（暂停时消息均已增量直落 —— `execute_llm_round` / `execute_tool_steps`，再 upsert 纯属浪费）；② 恢复时消息**以本地库为权威**读回（`SessionRepo::get_messages`，读失败 / Noop / 为空时回退到前端 `messages`），前端 `resumePausedRun` 改传空数组（引擎以库为权威）。从而省掉「序列化整份历史 → IPC → 反序列化」。
-- **不要踩**：恢复的 `current_messages` 现在来自库（`ORDER BY rowid` = 逻辑序，与前端内存列表一致）；Rust 恢复路径跳过 `prepareMessagesForSend` 是安全的 —— 暂停必然发生在一次完整 run 内，该 run 的发送已 `ensureAllMessagesLoaded` 并清空了 `pendingRepairFlush`，故不会漏落「悬空 tool_calls 的占位修复」。CLI 恒传 `resume_from_snapshot: None`（`session_rt/mod.rs`），不受影响。
-- 回归用例：`agent/engine/tests.rs::resume_reads_messages_from_repo`（快照 + 空 `messages`，断言引擎发给 LLM 的消息含库中历史）。
+**11.33 大历史下「暂停 → 继续」要等好几秒（用户报回 → 已修）** —— 根因：一次发送本就带 O(历史) 开销（前端把**整份历史**经 IPC 传给 Rust，Rust 入口又整份 upsert 回 SQLite）；正常发送时这段被「等 LLM」掩盖，而**恢复会跳过 LLM**，于是第一次暴露。改法（两侧配对）：① Rust `send_message_inner` 在 `resume_from_snapshot.is_some()` 时**不再整表回写**；② 恢复时消息**以本地库为权威**读回（`SessionRepo::get_messages`，读失败 / Noop / 为空时回退前端 `messages`），前端 `resumePausedRun` 改传空数组 —— 省掉「序列化整份历史 → IPC → 反序列化」。回归用例 `agent/engine/tests.rs::resume_reads_messages_from_repo`。
 
-**11.34 「暂存 → 继续 → 取消」后会话残留「已暂停」+ 再次继续 400（2026-09-26 用户报回 → 已修）** —— 现象：`user_choice` 弹窗点「取消」、AI 回复结束后，会话仍显示「会话已暂停，是否继续？」；再点「继续」报 400 `Messages with role 'tool' must be a response to a preceding message with 'tool_calls'`。
-- **根因（两处）**：① `resume_run` 跑完快照里所有待办步骤后**没有清快照** —— `execute_llm_round` 里那次「工具全完成就 `clear_snapshot`」只覆盖**普通轮次**，恢复走的是 `resume_run`，它只 persist 不 clear。残留快照让 `finishWorking` 判定 `isPaused=true` → UI 误显示「已暂停」。② `find_next_step` / `findNextStep` 把 `failed` 也当成「未完成」—— 而 `failed`（被取消 / 出错 / StormBreaker）**已经写过一条 tool 结果并落库**。于是下次「继续」按残留快照把该步骤**重跑一遍** → 同一 `tool_call_id` 产出第二条 tool 结果 → 服务端 400。
-- **改法**：① `resume_run` 在 `completed` 后 `self.clear_snapshot(session_id)`（恢复后的这一轮 LLM 若又产生 tool_calls，会由 `execute_llm_round` 重新落一份新快照）；② `find_next_step` 只把 `pending | running` 当作断点（`completed | failed` 一律跳过）。
-- 回归用例：`agent/engine/tests.rs::resume_completing_steps_clears_snapshot`（暂存 → 继续+取消，断言无残留快照）、`agent/run_state.rs` 的 `find_next_step_skips_failed*`。
+**11.34 「暂存 → 继续 → 取消」后残留「已暂停」+ 再次继续 400（用户报回 → 已修）** —— 根因（两处）：① `resume_run` 跑完快照里所有待办步骤后**没有清快照**（`execute_llm_round` 里那次 `clear_snapshot` 只覆盖**普通轮次**）→ 残留快照让 UI 误显示「已暂停」；② `find_next_step` 把 `failed` 也当「未完成」，而 `failed`（被取消 / 出错 / StormBreaker）**已写过一条 tool 结果并落库** → 下次「继续」按残留快照重跑该步骤 → 同一 `tool_call_id` 产出第二条 tool 结果 → 服务端 400。改法：① `resume_run` 在 `completed` 后 `clear_snapshot`；② `find_next_step` 只把 `pending | running` 当作断点。回归用例 `resume_completing_steps_clears_snapshot` / `find_next_step_skips_failed*`。
 
-**11.35 恢复读回「上下文」而非整份历史（2026-09-26 优化）** —— 承接 §11.33：恢复改由引擎读库后，仍把**整份历史**（含已被压缩的旧消息）读进内存 / 反序列化。但请求组装（`provider::blocks::slice_messages`）本就**丢掉最后一个 `summary` 之前的全部消息**，那部分读了也用不上，正是「大历史下继续仍会等约一秒」的剩余来源。
-- **改法**：新增 `SessionRepo::get_context_messages` —— SQLite 用一条查询 `rowid >= IFNULL((SELECT MAX(rowid) ... role='summary'), 0)` 取「最后一个 `summary` 及其之后」，无 `summary` 则等价于全部；`engine.rs` 恢复路径改用它，不再用 `get_messages`。
-- **不要踩**：旧消息**仍留在库里**（供 `list_messages` / `read_messages` 检索「已压缩区间」），本改动只影响「回读进内存的上下文」，不动库内容；结果与切片逐条一致，语义不变。本轮**仅覆盖 Rust 恢复路径**；前端发送路径 / CLI 仍读全量（前端发送路径若要同样优化，需一并处理修复回写，见 §11.33 说明）—— **已由 §11.36 补齐**。
-- 回归用例：`session_db/tests/sessions.rs` 的 `context_messages_*`（从最后 summary 起 / 取最后一条 / 无 summary 全部 / 空会话 / 跨会话隔离）、`agent/engine/tests.rs::resume_reads_context_from_last_summary`（summary 之前的旧历史不得进上下文）。
+**11.35 恢复读回「上下文」而非整份历史** —— 承接 §11.33：恢复改由引擎读库后，仍把**整份历史**读进内存，而请求组装（`provider::blocks::slice_messages`）本就**丢掉最后一个 `summary` 之前的全部消息**。改法：新增 `SessionRepo::get_context_messages` —— 一条查询 `rowid >= IFNULL((SELECT MAX(rowid) … role='summary'), 0)` 取「最后一个 `summary` 及其之后」，`engine.rs` 恢复路径改用它。**不要踩**：旧消息**仍留在库里**（供 `list_messages` / `read_messages` 检索「已压缩区间」），本改动只影响「回读进内存的上下文」，语义不变；本轮**仅覆盖 Rust 恢复路径**（前端发送路径 / CLI 由 §11.36 补齐）。回归用例 `context_messages_*` / `resume_reads_context_from_last_summary`。
 
-**11.36 「只加载到最后一个 summary」贯通：前端发送路径 + GUI 压缩切 Rust（2026-09-26）** —— 承接 §11.35。
+**11.36 「只加载到最后一个 summary」贯通：前端发送路径 + GUI 压缩切 Rust**
+- **① 前端发送路径也只读「最后 summary 之后」**：`sessionStore.ensureContextLoaded` 从尾部连续加载、**一旦加载窗口里出现 summary 就停**（无 summary 时退化为全量加载）；`prepareMessagesForSend` 只把 `messages.slice(最后一条 summary 的下标)` 交给引擎。**修复回写改为「后缀替换」**：新增命令 `cmd_replace_session_messages_from`（`SessionRepo::replace_messages_from`：DELETE `rowid >= 目标` + 重写后缀，**同一事务**），原 `pendingRepairFlush` **删除** —— 内存消息列表**恒为连续后缀**，按 `messages[0].id` 做后缀替换永远安全。
+  - ⚠️ 不要踩：`append_messages` 是 upsert（不删行），**不能**用它在后缀里补占位 tool 消息 —— 它把新行追加到 rowid 末尾，破坏「tool 紧跟 assistant(tool_calls)」的协议顺序；必须用 `replace_messages_from`（或全量 `replace_messages`）。
+- **② GUI 上下文压缩切到 Rust（与 CLI 统一成一份）**：新增命令 `cmd_compress_context`（内部调 `virlen_core::agent::compress`，与 CLI `session_rt/compress.rs` **同一份实现**）；`ai` 模式用 `DefaultProviderFactory`（GUI 有 JS 宿主，gemini 走桥），`raw` 无需 provider；**记账在 Rust**（`agent::usage::record_usage`，kind=`compress`）、**落库仍在前端**（`cmd_replace_session_messages`）。
+  - ⚠️ **摘要请求的 `max_tokens` 必须钳上限**：GUI 会话的 `params.maxTokens` 默认是 `2000000`（语义「不限制输出」），Rust 摘要若原样写进请求体会被模型以 `Invalid max_tokens value`（400）拒掉 → `compress::ai::summary_max_tokens` 把会话值钳到 `(0, DEFAULT_SUMMARY_MAX_TOKENS]`。回归 `summary_max_tokens_caps_absurd_session_values`。
 
-**① 前端发送路径也只读「最后 summary 之后」（B 方案，§11.35 遗留的补充）**
-- `sessionStore.ensureContextLoaded`：从尾部连续加载，**一旦加载窗口里出现 summary 就停**（消息是从尾部向前连续加载的，最后一个 summary 已在内存 ⇒ 它之后的消息必然也在）；无 summary 时退化为全量加载。
-- `prepareMessagesForSend` 改用它，并只把 `messages.slice(最后一条 summary 的下标)` 交给引擎（Rust `slice_messages` / TS `buildRequest` 本就切片，这里先裁掉可省一次 O(历史) 的 IPC）。
-- **修复回写改为「后缀替换」**：新增命令 `cmd_replace_session_messages_from`（`SessionRepo::replace_messages_from`：DELETE `rowid >= 目标` + 重写后缀，**同一事务**）。原 `pendingRepairFlush`（「等全量加载后再整体回写」）**删除** —— 内存消息列表**恒为连续后缀**，按 `messages[0].id` 做后缀替换永远安全，不再需要「全量加载」这个前置条件。
-- ⚠️ 不要踩：`append_messages` 是 upsert（不删行），但**不能**用它在后缀里补占位 tool 消息 —— 它把新行追加到 rowid 末尾，破坏「tool 紧跟 assistant(tool_calls)」的协议顺序；必须用 `replace_messages_from`（或全量 `replace_messages`）。
-
-**② GUI 上下文压缩切到 Rust（与 CLI 统一成一份）**
-- 新增 Tauri 命令 `cmd_compress_context`（`commands/agent.rs`），内部调 `virlen_core::agent::compress`（与 CLI `session_rt/compress.rs` **同一份实现**）。
-- provider：`ai` 模式用 `DefaultProviderFactory`（GUI 有 JS 宿主，gemini 走桥，与正常聊天同一条路）；`raw` 无需 provider。
-- **记账在 Rust**（`agent::usage::record_usage`，kind=`compress`）；**落库仍在前端**（`cmd_replace_session_messages`），与既有行为一致。
-- 前端选择器 `services/chat/common.ts::getCompressEngine()`：恒为 Rust（TS 引擎移除后与 `getEngine()` 同一份，见 §11.37）。
-- ⚠️ TS 的 `compress-context.ts` / `compress-raw.ts` 当时**未删除** —— 它们是**非 Tauri（浏览器 dev / vitest）的唯一实现**，两份当时仍须同语义；**现已随 TS 引擎移除，见 §11.37**。
-- ⚠️ **摘要请求的 `max_tokens` 必须钳上限**：GUI 会话的 `params.maxTokens` 默认是 `2000000`（`DEFAULT_SESSION_PARAMS`，语义是「不限制输出」，聊天时由全局 `settings.maxTokens` 覆盖）；Rust 摘要若把它**原样**写进请求体，会被模型以 `Invalid max_tokens value, the valid range ...`（400）拒掉。修法：`compress::ai::summary_max_tokens` 把会话值钳到 `(0, DEFAULT_SUMMARY_MAX_TOKENS]`，否则用默认上限（TS 旧实现传 `undefined` = provider 默认，所以没这问题）。回归：`compress/tests.rs::summary_max_tokens_caps_absurd_session_values`。
-
-- 回归用例：`session_db/tests/sessions.rs::replace_from_*`（前缀保留 / 等价全量替换 / 目标不存在 no-op）、`src/tests/services/session-context-load.test.ts`（summary 在窗口内 / 外 / 无 summary）。
-
-**11.37 移除 TS 引擎：引擎统一为 Rust（2026-09-26）** —— 背景：CLI（headless）把大量原在前端的逻辑搬进 `virlen-core` 后，「双引擎」（`src/domain/engine/*` ↔ `virlen-core/src/agent/*`）变成纯负担 —— 同一套语义两份实现，改一边就得同步另一边。
-- **改动**：① `virlen-core` 新增 `agent/title.rs`（AI 标题生成；GUI 命令 `cmd_generate_title` + CLI `chat` 首回合后调用，逐字对齐原 TS `generate-title.ts`）；② `ChatRequest` 增加 `thinking: Option<bool>`（补齐原 TS 标题请求依赖的「禁用思考」，openai / anthropic / bridged 三处落请求体）；③ 删除 `src/domain/engine/**`（14 文件）与 9 个只测 TS 引擎内部的 vitest 文件；④ 共享契约类型迁到 `src/domain/ports/engine.ts`（`SendMessageOptions` / `Run` / `ToolStep` / `RunSnapshot` / `CompressMode`）；⑤ `getEngine()` / `getCompressEngine()` 恒返回 `services/rust-engine.ts`；⑥ 删 `useRustEngine` 设置项 / UI 开关 / 埋点分支。
-- **仍然保留的 TS 部分**（Rust 会回调，必须与 Rust 同语义）：工具执行器（`agent:tool-request`）、Gemini provider（`agent:provider-request`）、系统提示词组装（`assembleAgentPrompt` → `session.systemPrompt`）、`AgentEventType` 契约、各类水合适配器（prompts / tool defs / provider catalog）。
-- **不要踩**：① 非 Tauri（纯浏览器 `pnpm dev` / vitest）**没有可用的聊天引擎**（产品不走该路线）—— 引擎行为一律以 Rust 侧测试为准；② 删 TS 引擎时**必须同时删引用它的测试**（`npx tsc --noEmit` 覆盖 `src/tests`，留着会编译失败）；③ 原 TS 版「标题禁用思考」的能力**不能丢**（否则推理模型上 40 token 被 reasoning 吃掉、标题只能回退首行）—— 这就是 `thinking` 字段存在的原因。
+**11.37 移除 TS 引擎：引擎统一为 Rust** —— 背景：CLI 把大量原在前端的逻辑搬进 `virlen-core` 后，「双引擎」（`src/domain/engine/*` ↔ `virlen-core/src/agent/*`）变成纯负担 —— 同一套语义两份实现，改一边就得同步另一边。
+- **改动**：① core 新增 `agent/title.rs`（AI 标题生成，逐字对齐原 TS `generate-title.ts`）；② `ChatRequest` 增加 `thinking: Option<bool>`（openai / anthropic / bridged 三处落请求体）；③ 删 `src/domain/engine/**`（14 文件）与 9 个只测 TS 引擎内部的 vitest 文件；④ 共享契约类型迁到 `src/domain/ports/engine.ts`；⑤ `getEngine()` / `getCompressEngine()` 恒返回 `services/rust-engine.ts`；⑥ 删 `useRustEngine` 设置项 / UI 开关 / 埋点分支。
+- **仍然保留的 TS 部分**（Rust 会回调，必须与 Rust 同语义）：工具执行器（`agent:tool-request`）、Gemini provider（`agent:provider-request`）、系统提示词组装、`AgentEventType` 契约、各类水合适配器。
+- **不要踩**：① 非 Tauri（浏览器 `pnpm dev` / vitest）**没有可用的聊天引擎**（引擎行为一律以 Rust 侧测试为准）；② 删 TS 引擎时**必须同时删引用它的测试**（`tsc` 覆盖 `src/tests`）；③ 原 TS 版「标题禁用思考」的能力**不能丢**（否则推理模型上 40 token 被 reasoning 吃掉、标题只能回退首行）—— 这正是 `thinking` 字段存在的原因。
 - 回归用例：Rust `agent::title`（8 例）、`agent::provider::tests::{openai,anthropic}_thinking_*`。
 
-**踩坑前必读：`docs/tray-implementation-plan.md`**（托盘 / 关闭不退出 / 后台工作的完整方案与实现记录）。
+**托盘 / 关闭不退出 / 后台工作**：实现见 `src-tauri/src/tray/`（模块头即设计说明），无独立文档。
 
 ---
 
