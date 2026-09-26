@@ -112,12 +112,23 @@ jobs:
         shell: bash
         run: pnpm install --frozen-lockfile
 
-      # ── 5. Install Tauri CLI ────────────────────────────────────────────
+      # ── 5. Build CLI (virlen-cli) ──
+      # headless CLI 与 GUI **同源同 workspace**（共享 Cargo.lock / target/ / rust-cache），
+      # 但只依赖 virlen-core → 二进制里没有 tauri / wry / tao / webview2-com。
+      # 放在 `cargo install tauri-cli` 之前：CLI 出问题即早退，不必白等那趟编译。
+      # ⚠️ CLI 与前端 dist 无关（上面的 `pnpm install` 对它只是顺带复用同一 job）；
+      #    三元组显式指定，产物路径必须与下方 artifact / Release 的 glob 一一对齐。
+      # ⚠️ `pnpm run build:cli -- <args>` 里的 `--` 会把参数透传给脚本内的 cargo（已实测）。
+      - name: Build CLI (virlen-cli)
+        shell: bash
+        run: pnpm run build:cli -- --target x86_64-pc-windows-msvc
+
+      # ── 6. Install Tauri CLI ────────────────────────────────────────────
       - name: Install Tauri CLI
         shell: bash
         run: cargo install tauri-cli --version "^2.0"
 
-      # ── 6. Build the app ────────────────────────────────────────────────
+      # ── 7. Build the app ────────────────────────────────────────────────
       - name: Build Virlen for Windows
         shell: bash
         env:
@@ -127,7 +138,7 @@ jobs:
         run: |
           pnpm tauri build --target x86_64-pc-windows-msvc
 
-      # ── 7. Upload build artifacts ───────────────────────────────────────
+      # ── 8. Upload build artifacts ───────────────────────────────────────
       - name: Upload NSIS installer
         uses: actions/upload-artifact@v4
         with:
@@ -144,7 +155,27 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # ── 8. (Optional) Create Release on tag push ───────────────────────────
+      # ── 9. Stage & upload CLI binary ────────────────────────────────────
+      # 裸二进制形态（不做归档）：CLI 产物同样进 Artifact 与 Release。
+      # ⚠️ 必须改成**平台区分名**：三个 build-*.yml 的 release job 会把产物传到**同一个
+      #    Release**，而 Linux / macOS 的裸产物 basename 都是 `virlen-cli` → 同名互相覆盖。
+      # ⚠️ 文件名不带版本号：版本由 Release tag 承载（与 .dmg / .deb / .exe 同口径）。
+      - name: Stage CLI binary (platform-distinct name)
+        shell: bash
+        run: |
+          mkdir -p cli-dist
+          cp src-tauri/target/x86_64-pc-windows-msvc/release/virlen-cli.exe cli-dist/virlen-cli-windows-x64.exe
+
+      - name: Upload CLI binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: Virlen-CLI-Windows-x64-${{ github.sha }}
+          path: cli-dist/virlen-cli-windows-x64.exe
+          # 本轮新增的产物：缺失代表构建/落盘真的出了问题，必须失败（不用 warn）
+          if-no-files-found: error
+          retention-days: 14
+
+  # ── 10. (Optional) Create Release on tag push ───────────────────────────
   release:
     name: Create Release
     if: startsWith(github.ref, 'refs/tags/v')
@@ -169,6 +200,8 @@ jobs:
         with:
           name: Virlen ${{ github.ref_name }}
           generate_release_notes: true
+          # CLI 裸二进制 `virlen-cli-windows-x64.exe` 已被下面 `**/*.exe` 命中，无需另列；
+          # 加平台后缀正是为了让三平台的裸产物不在同一个 Release 上互相覆盖。
           files: |
             artifacts/**/*.exe
             artifacts/**/*.msi

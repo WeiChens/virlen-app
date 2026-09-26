@@ -349,6 +349,8 @@ npx tsc --noEmit             # 类型检查（静态门禁之一）
 cd src-tauri; cargo clippy --workspace --all-targets -- -D warnings   # Rust 静态门禁（须零告警；CI `ci.yml` 每次 push/PR 跑，见 §11.28）
 cd src-tauri; cargo test --workspace   # Rust 侧测试（⚠️ 必须 --workspace，见 §7 下注）
 pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
+pnpm build:cli               # 打包 headless CLI（release 二进制；`-- --target <triple>` 指定三元组）
+                             # 产物 src-tauri/target[/<triple>]/release/virlen-cli[.exe]；发版由三个 build-*.yml 上传（§11.29）
 pnpm cli config get          # headless CLI（= cargo run -p virlen-cli -- …；与 GUI 同一份 app_settings）
 pnpm cli run "解释 README"   # 无界面跑一次 agent（stdout=正文 / stderr=工具进度；同一份会话库）
 pnpm cli list-session -g agent   # 列出会话（-g agent|workdir 分组；--limit / --json）
@@ -737,6 +739,19 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 - **新增门禁** `.github/workflows/ci.yml`：**每次 push / PR** 单平台（ubuntu）跑 `pnpm build`（= TS 类型检查 + 产出 `dist`，`tauri-build` 编译 virlen-app 需要）→ `cargo clippy --workspace --all-targets -- -D warnings`。存量已清零，**新代码不得再引入 clippy 告警**。
 - **验证**：`cargo clippy --workspace --all-targets -- -D warnings` **0 告警**（exit 0）；`cargo test --workspace` **582 passed**；`npx tsc --noEmit` 0；`npx vitest run` **91 文件 / 1059 tests**。
 
+**11.29 CLI 打包并入三个平台的发版 workflow（2026-09-26 用户要求 → 已落地）** —— 需求（用户原话）：「package.json 添加打包 cli 的 script，然后 .github\workflows 也添加 cli 打包的构建流程」。
+
+- **做法（用户拍板）**：**不新建 workflow**，把 CLI 构建并进现有三个 `build-{windows,linux,macos}.yml` 的 `build-*` job —— 复用同一套 Rust 工具链 / `rust-cache` / `src-tauri/target`（core 的 release 编译结果直接共享），**不重复装依赖**。产物同时进 **Artifact** 与**同一个 Release**（与 GUI 安装包同处）。形态 = **裸二进制**（用户选定，不做归档）。
+- **`package.json`**：新增 `build:cli` = `cargo build --manifest-path src-tauri/Cargo.toml -p virlen-cli --release`。本地直接可用；CI 用 `pnpm run build:cli -- --target <triple>` 传三元组 —— `--` 会把参数透传给脚本内的 cargo（**已实测**：`pnpm run cli -- --help` → `cargo run … -- "--help"`）。
+- **每个 build job 新增两步**（放在 `cargo install tauri-cli` **之前** → CLI 出问题即早退，不必白等那趟编译）：
+  1. `Build CLI (virlen-cli)`：`pnpm run build:cli -- --target <triple>`；
+  2. `Stage CLI binary (platform-distinct name)` + `Upload CLI binary`：`mkdir -p cli-dist` → `cp <target>/release/virlen-cli[.exe] cli-dist/<平台名>` → 上传 artifact（`if-no-files-found: error`，与既有 `.dmg`/`.deb` 的 `warn` 不同 —— 这是本轮新增产物，缺失即真故障）。
+- **⚠️ 关键约束：裸二进制必须改成平台区分名**。三个 workflow 的 release job 传的是**同一个 Release**，而 Linux / macOS 的裸产物 basename 都是 `virlen-cli` → 不改名会**互相覆盖**。故：`virlen-cli-windows-x64.exe` / `virlen-cli-linux-x64` / `virlen-cli-macos-arm64`（**不带版本号** —— 版本由 Release tag 承载，与 `.dmg`/`.deb` 同口径）。
+- **Release 资产模式**：Windows 的 `artifacts/**/*.exe` 天然命中 `virlen-cli-windows-x64.exe`（无需另列）；Linux / macOS 是**无后缀**文件，必须显式加 `artifacts/**/virlen-cli-linux-x64` / `artifacts/**/virlen-cli-macos-arm64`。三者的 `List artifacts`（`find`）同步加上 `-name "virlen-cli-*"`。
+- **验证（本机实测）**：① `pnpm run build:cli -- --target x86_64-pc-windows-msvc` 真跑通（release，2m18s），产物落在 workflow 断言的 `src-tauri/target/x86_64-pc-windows-msvc/release/virlen-cli.exe`（42.1 MB），复现 stage 步骤改名后二进制可运行（`--help` 正常）；② `cargo tree -p virlen-cli` 与对照 `-p virlen-app` 用**同一模式**匹配：前者**无** `tauri v*`、后者有 `tauri v2.11.1` → CLI 二进制确实脱离 GUI 栈；③ `yaml.safe_load` 解析四个 workflow，语法合法且新步骤挂载正确；④ 按 `download-artifact` 布局模拟 glob 命中：三平台 10 个产物**全部命中**、CLI 资产名三平台**无重名**。
+- **⚠️ 顺带修正两处既有瑕疵（macOS workflow）**：① 步骤编号原本缺 `4`（`5/6/7/8/9/10`）—— 借插入新步骤补回（`5→4`、`6→5`，其余编号因此**不用顺延**）；② `List artifacts` 的 `find … -name "*.dmg" -o -name "*.app.zip"` 缺括号，`-o` 的优先级会让**目录**也被列出（只影响日志输出）→ 补上 `\( … \)`。
+- **如实标注的边界**：新 workflow **无法本地真跑**；runner 上的 `cp` / `mkdir -p`（bash）、`upload-artifact`、`softprops/action-gh-release` 行为均按仓库内既有同类步骤推断 —— **首次打 tag 后请核对 Actions 与 Release 资产**。另：裸二进制在 `upload-artifact` 与 Release 上**都不保留可执行位**（Unix 用户需 `chmod +x`），macOS 经浏览器下载还会带 quarantine（`xattr -d com.apple.quarantine`）；aarch64 的 ad-hoc 签名由链接器自动完成，**无需** codesign 步骤。**三个 workflow 并发写同一个 Release 的竞态是既有设计**（本次未动，新增资产只是同 Release 多一个文件）。
+
 ---
 
 ## 12. 快速定位表
@@ -772,7 +787,7 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 | 改 RAG / 知识库 | `src-tauri/virlen-core/src/rag/**`、`src/services/rag-service.ts`、`src/infrastructure/rag/` |
 | 改用量统计 / 费用 | `src-tauri/virlen-core/src/session_db/usage.rs`、`src/domain/pricing/index.ts`、`src/services/token-stats-service.ts`、`src/ui/pages/chat/components/token-stats/` |
 | 不让重复启动两个进程（第二实例 → 聚焦已有窗口） | `src-tauri/src/lib.rs` 的 `.plugin(tauri_plugin_single_instance::init(...))`（**必须第一个注册**）+ `src-tauri/src/tray/mod.rs::activate_main_window`；macOS「重新打开」=`RunEvent::Reopen` |
-| 发版 / 打包 | `src-tauri/tauri.conf.json` + `package.json` + `scripts/build-msix.ps1`、`scripts/msix/AppxManifest.xml.template` |
+| 发版 / 打包 | `src-tauri/tauri.conf.json` + `package.json` + `scripts/build-msix.ps1`、`scripts/msix/AppxManifest.xml.template`；**headless CLI 打包** = 本地 `pnpm build:cli`，CI 在三个 `build-*.yml` 的 `build-*` job 里（`Build CLI (virlen-cli)` → `Stage CLI binary` → `Upload CLI binary`，Artifact + 同一 Release 资产；命名 / glob 口径见 §11.29） |
 
 ---
 
@@ -788,3 +803,4 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
   4. 若新增工具 → 注册链、UI 组件、Rust 白名单、i18n 文案是否齐备？
   5. 若新增 Tauri 命令 → `lib.rs` 是否已注册？`capabilities/default.json` 是否需补权限？
   6. 是否引入无关改动、是否触碰 §8 安全红线？
+  7. 若改了 workflow / 打包流程 → 产物路径与 `upload-artifact` 的 `path`、Release 的 `files` glob 是否对齐？（CLI 裸二进制的命名约束与三平台不重名要求见 §11.29）

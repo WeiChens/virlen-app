@@ -116,7 +116,7 @@ jobs:
           workspaces: src-tauri
           cache-on-failure: true
 
-      # ── 5. Install macOS system dependencies (for Tauri) ────────────────
+      # ── 4. Install macOS system dependencies (for Tauri) ────────────────
       # Most Tauri deps (webkit, gtk) are for Linux only.
       # On macOS, Xcode command line tools + WebKit are built-in.
       # We just make sure Rust targets are correctly set.
@@ -127,10 +127,22 @@ jobs:
           # Ensure Xcode command line tools are available
           xcode-select -p || xcode-select --install
 
-      # ── 6. Install frontend dependencies ─────────────────────────────────
+      # ── 5. Install frontend dependencies ─────────────────────────────────
       - name: Install frontend dependencies
         shell: bash
         run: pnpm install --frozen-lockfile
+
+      # ── 6. Build CLI (virlen-cli) ──
+      # headless CLI 与 GUI **同源同 workspace**（共享 Cargo.lock / target/ / rust-cache），
+      # 但只依赖 virlen-core → 二进制里没有 tauri / wry / tao / webview2-com。
+      # 放在 `cargo install tauri-cli` 之前：CLI 出问题即早退，不必白等那趟编译。
+      # ⚠️ CLI 与前端 dist 无关（上面的 `pnpm install` 对它只是顺带复用同一 job）；
+      #    三元组显式指定，产物路径必须与下方 artifact / Release 的 glob 一一对齐。
+      # ⚠️ `pnpm run build:cli -- <args>` 里的 `--` 会把参数透传给脚本内的 cargo（已实测）。
+      # ⚠️ aarch64 上链接器会自动做 ad-hoc 签名（Apple Silicon 的硬性要求），无需 codesign 步骤。
+      - name: Build CLI (virlen-cli)
+        shell: bash
+        run: pnpm run build:cli -- --target aarch64-apple-darwin
 
       # ── 7. Install Tauri CLI ────────────────────────────────────────────
       - name: Install Tauri CLI
@@ -172,7 +184,28 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # ── 10. (Optional) Create Release on tag push ───────────────────────────
+      # ── 10. Stage & upload CLI binary ───────────────────────────────────
+      # 裸二进制形态（不做归档）：CLI 产物同样进 Artifact 与 Release。
+      # ⚠️ 必须改成**平台区分名**：三个 build-*.yml 的 release job 会把产物传到**同一个
+      #    Release**，而 Linux / macOS 的裸产物 basename 都是 `virlen-cli` → 同名互相覆盖。
+      # ⚠️ 文件名不带版本号：版本由 Release tag 承载（与 .dmg 同口径）。
+      - name: Stage CLI binary (platform-distinct name)
+        shell: bash
+        run: |
+          mkdir -p cli-dist
+          cp src-tauri/target/aarch64-apple-darwin/release/virlen-cli cli-dist/virlen-cli-macos-arm64
+          chmod +x cli-dist/virlen-cli-macos-arm64
+
+      - name: Upload CLI binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: Virlen-CLI-macOS-arm64-${{ github.sha }}
+          path: cli-dist/virlen-cli-macos-arm64
+          # 本轮新增的产物：缺失代表构建/落盘真的出了问题，必须失败（不用 warn）
+          if-no-files-found: error
+          retention-days: 14
+
+  # ── 11. (Optional) Create Release on tag push ───────────────────────────
   release:
     name: Create Release
     if: startsWith(github.ref, 'refs/tags/v')
@@ -190,14 +223,20 @@ jobs:
       - name: List artifacts
         shell: bash
         run: |
-          find artifacts -type f -name "*.dmg" -o -name "*.app.zip" | sort
+          find artifacts -type f \( -name "*.dmg" -o -name "*.app.zip" -o -name "virlen-cli-*" \) | sort
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: Virlen ${{ github.ref_name }}
           generate_release_notes: true
+          # CLI 裸二进制（无后缀）命中不了 .dmg / .app.zip → 显式列出；
+          # 平台后缀避免三平台在同一 Release 上同名覆盖。
+          # ⚠️ 裸二进制不带可执行位 → 使用者下载后需 `chmod +x virlen-cli-macos-arm64`；
+          #    浏览器下载会打上 quarantine，若被 Gatekeeper 拦住用
+          #    `xattr -d com.apple.quarantine virlen-cli-macos-arm64`（本仓库无 Apple 签名证书）。
           files: |
             artifacts/**/*.dmg
             artifacts/**/*.app.zip
+            artifacts/**/virlen-cli-macos-arm64
           fail_on_unmatched_files: false

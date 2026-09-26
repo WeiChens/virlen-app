@@ -15,6 +15,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "cli": "cargo run --manifest-path src-tauri/Cargo.toml -p virlen-cli --",
+    "build:cli": "cargo build --manifest-path src-tauri/Cargo.toml -p virlen-cli --release",
     "build:msix": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-msix.ps1",
     "update": "node scripts/update-version.mjs"
   },

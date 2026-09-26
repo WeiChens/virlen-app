@@ -142,12 +142,23 @@ jobs:
         shell: bash
         run: pnpm install --frozen-lockfile
 
-      # ── 6. Install Tauri CLI ────────────────────────────────────────────
+      # ── 6. Build CLI (virlen-cli) ──
+      # headless CLI 与 GUI **同源同 workspace**（共享 Cargo.lock / target/ / rust-cache），
+      # 但只依赖 virlen-core → 二进制里没有 tauri / wry / tao / webview2-com。
+      # 放在 `cargo install tauri-cli` 之前：CLI 出问题即早退，不必白等那趟编译。
+      # ⚠️ CLI 与前端 dist 无关（上面的 `pnpm install` 对它只是顺带复用同一 job）；
+      #    三元组显式指定，产物路径必须与下方 artifact / Release 的 glob 一一对齐。
+      # ⚠️ `pnpm run build:cli -- <args>` 里的 `--` 会把参数透传给脚本内的 cargo（已实测）。
+      - name: Build CLI (virlen-cli)
+        shell: bash
+        run: pnpm run build:cli -- --target x86_64-unknown-linux-gnu
+
+      # ── 7. Install Tauri CLI ────────────────────────────────────────────
       - name: Install Tauri CLI
         shell: bash
         run: cargo install tauri-cli --version "^2.0"
 
-      # ── 7. Build the app ────────────────────────────────────────────────
+      # ── 8. Build the app ────────────────────────────────────────────────
       - name: Build Virlen for Linux
         shell: bash
         env:
@@ -157,7 +168,7 @@ jobs:
         run: |
           pnpm tauri build --target x86_64-unknown-linux-gnu
 
-      # ── 8. Upload build artifacts ───────────────────────────────────────
+      # ── 9. Upload build artifacts ───────────────────────────────────────
       - name: Upload .deb package
         uses: actions/upload-artifact@v4
         with:
@@ -182,7 +193,28 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # ── 9. (Optional) Create Release on tag push ───────────────────────────
+      # ── 10. Stage & upload CLI binary ───────────────────────────────────
+      # 裸二进制形态（不做归档）：CLI 产物同样进 Artifact 与 Release。
+      # ⚠️ 必须改成**平台区分名**：三个 build-*.yml 的 release job 会把产物传到**同一个
+      #    Release**，而 Linux / macOS 的裸产物 basename 都是 `virlen-cli` → 同名互相覆盖。
+      # ⚠️ 文件名不带版本号：版本由 Release tag 承载（与 .deb / .AppImage 同口径）。
+      - name: Stage CLI binary (platform-distinct name)
+        shell: bash
+        run: |
+          mkdir -p cli-dist
+          cp src-tauri/target/x86_64-unknown-linux-gnu/release/virlen-cli cli-dist/virlen-cli-linux-x64
+          chmod +x cli-dist/virlen-cli-linux-x64
+
+      - name: Upload CLI binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: Virlen-CLI-Linux-x64-${{ github.sha }}
+          path: cli-dist/virlen-cli-linux-x64
+          # 本轮新增的产物：缺失代表构建/落盘真的出了问题，必须失败（不用 warn）
+          if-no-files-found: error
+          retention-days: 14
+
+  # ── 11. (Optional) Create Release on tag push ───────────────────────────
   release:
     name: Create Release
     if: startsWith(github.ref, 'refs/tags/v')
@@ -200,15 +232,20 @@ jobs:
       - name: List artifacts
         shell: bash
         run: |
-          find artifacts -type f \( -name "*.deb" -o -name "*.AppImage" -o -name "*.rpm" \) | sort
+          find artifacts -type f \( -name "*.deb" -o -name "*.AppImage" -o -name "*.rpm" -o -name "virlen-cli-*" \) | sort
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: Virlen ${{ github.ref_name }}
           generate_release_notes: true
+          # CLI 裸二进制是**无后缀**文件（.deb / .AppImage / .rpm 都命中不了）→ 必须显式列；
+          # 平台后缀让三平台产物在同一个 Release 上不互相覆盖。
+          # ⚠️ 裸二进制不带可执行位（upload-artifact 与 Release 资产都不保留 mode）→
+          #    使用者下载后需 `chmod +x virlen-cli-linux-x64`。
           files: |
             artifacts/**/*.deb
             artifacts/**/*.AppImage
             artifacts/**/*.rpm
+            artifacts/**/virlen-cli-linux-x64
           fail_on_unmatched_files: false
