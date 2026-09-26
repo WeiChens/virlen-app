@@ -12,6 +12,8 @@
 import { vi } from 'vitest'
 import { setToolDefinitionsLoader } from '@/domain/tools'
 import { loadToolDefinitions } from '@/infrastructure/tools/definitions-source'
+import { setPromptTexts } from '@/domain/agent'
+import { embeddedPromptTexts } from '@/infrastructure/prompts/prompt-source'
 
 // Mock @tauri-apps/api/core 的 invoke
 vi.mock('@tauri-apps/api/core', () => ({
@@ -105,3 +107,8 @@ global.fetch = vi.fn(() =>
 // 定义来自权威源。测试环境不是 Tauri → 真实适配器会走「内嵌契约 JSON」那条分支。
 // 不接这一步，任何用到真实 toolRegistry 的测试都会拿到「加载器未注入」的报错。
 setToolDefinitionsLoader(loadToolDefinitions)
+
+// ==================== 提示词权威源接线 ====================
+// 同理：文本本体在 core，测试环境不是 Tauri → 真实适配器会走「内嵌 md」那条分支。
+// 不接这一步，任何真调 `composeSystemPrompt()` / `promptText()` 的测试都会拿到「未水合」的报错。
+setPromptTexts(embeddedPromptTexts())

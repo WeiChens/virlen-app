@@ -427,6 +427,8 @@ pub fn run() {
             commands::agent::agent_dispose,
             // 工具定义权威源（机制 C：前端 toolRegistry 经此取值）
             commands::agent::cmd_list_tool_definitions,
+            // 提示词权威源（同上：提示词 md 存在 core，前端经此取值）
+            commands::agent::cmd_agent_prompts,
             commands::agent::agent_tool_response,
             commands::agent::agent_user_interaction_response,
             commands::agent::agent_round_boundary_response,

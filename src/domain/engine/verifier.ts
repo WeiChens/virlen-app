@@ -6,7 +6,7 @@
  * - 每次 LLM 产出 tool_calls 并执行完毕后，立即验证一次
  * - 如果 LLM 没有产生 tool_calls，也做一次验证
  */
-import VERIFY_PROMPT_TEMPLATE from './prompts/verify-prompt.md?raw'
+import { promptText } from '@/domain/agent'
 import type { IProvider } from '@/infrastructure/provider/types'
 import type { Message, Session } from '@/types'
 import type { Goal, VerificationResult } from './iteration-types'
@@ -29,7 +29,7 @@ function buildVerifyPrompt(goal: Goal, messages: Message[]): string {
 
   // 使用函数式 replacer：避免 goal/trace 中的 $&、$'、$` 等被 String.replace
   // 当作特殊替换模式解析而损坏 Prompt（字符串参数会解析 $&/$'/$`/$n）。
-  return VERIFY_PROMPT_TEMPLATE.replace('{{goal}}', () =>
+  return promptText('verifyPrompt').replace('{{goal}}', () =>
     goal.description,
   ).replace('{{trace}}', () => trace)
 }

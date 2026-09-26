@@ -41,6 +41,11 @@
 //! 这里改成：事件出口把交互请求送进 UI → UI 渲染成问题 → 按键产生 `Action::Reply`
 //! → 主任务用 `bridge::handle_user_interaction_response` 回执。
 //! **未知类型也必须答**，否则引擎会一直等回执（`run.rs` 文件头已记录这条教训）。
+//!
+//! ⚠️ 授权（`confirm_command_native`）在 TUI 里是**显式二选一**（←/→ + Enter，默认「拒绝」），
+//! 而不是 `run` 那种「行输入 + 回车放行」—— 用户此刻完全可能正在打字，把空白输入当
+//! 「允许」会让一次误触 Enter 直接放行危险命令（fail-open）。语义差异与理由见
+//! `state/mod.rs::ConfirmChoice`。
 
 
 pub(crate) mod commands;
@@ -110,6 +115,8 @@ virlen-cli chat —— 交互式会话（与桌面端共用同一份配置与会
 界面内的命令:
   /help  /status  /new  /exit           （见 `chat` 内的 /help）
   按键: Enter 提交 · Esc 取消当前回合 · ↑↓ 历史 · Ctrl+C 取消/退出 · Ctrl+D 退出
+  授权面板（命令需授权时弹出）: ←/→（或 ↑/↓）选择「拒绝 / 允许」· Enter 确认
+                               默认选中「拒绝」—— 不动就回车 = 拒绝
 
 运行模式:
   默认是内联视口 TUI（正文固化进终端原生滚动区，输入框钉在底部）。

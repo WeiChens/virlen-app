@@ -11,11 +11,12 @@
  * 这个函数就是 TS 侧的被比对对象，见 `src/tests/domain/compose-prompt-golden.test.ts`
  * 与 Rust 侧 `prompts::assemble::tests::golden_system_prompt_matches_fixture`。
  *
- * ⚠️ 两个 md 资源是本项目提示词的**唯一事实源**，Rust 侧用 `include_str!` 直接引用
- * 同一路径，不允许在任何一侧复制副本。
+ * ⚠️ 两个 md 资源（工具规范 / 核心原则）的**唯一事实源在 Rust**
+ * （`src-tauri/virlen-core/src/agent/prompts/*.md`）：前端经 `promptText()` 读已水合的快照
+ * （Tauri 走 `cmd_agent_prompts`；浏览器 dev / 测试直读 core 里**同一份**文件）。
+ * 本模块只负责**组装顺序与分隔符**，不持有任何文本副本。
  */
-import TOOL_CALL_SPEC from './prompts/tool-call-spec.md?raw'
-import CORE_PRINCIPLES from './prompts/core-principles.md?raw'
+import { promptText } from './prompt-texts'
 
 /** 技能元信息（只取注入提示词需要的两项） */
 export interface SkillMetaLike {
@@ -39,7 +40,7 @@ export interface SystemPromptParts {
 
 /** 基础提示词：工具调用规范 + 核心原则（与 Rust `prompts::base_system_prompt` 对应） */
 export function baseSystemPrompt(): string {
-  return `${TOOL_CALL_SPEC}\n\n${CORE_PRINCIPLES}`
+  return `${promptText('toolCallSpec')}\n\n${promptText('corePrinciples')}`
 }
 
 /**

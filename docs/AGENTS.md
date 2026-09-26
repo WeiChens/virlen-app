@@ -657,6 +657,46 @@ pnpm cli list-agent              # 列出 Agent（读 app_settings.agents，含�
 - **验证**：新增单测 7 条 —— `state/tests.rs`（`history_preview_commits_immediately_with_roles` / `empty_history_is_ignored`）、`tui/tests.rs`（`history_preview_keeps_only_the_last_five` / `history_preview_is_empty_without_messages` / `history_preview_falls_back_to_tool_calls` / `resume_hint_carries_the_full_id_and_a_copyable_command` / `plain_mode_resume_prints_history_preview_and_exit_hint`）。`cargo test --workspace` cli 128 → **135**、全仓 512 → **518**（app 29 / cli 135 / core 354）；`cargo check --workspace --all-targets` **0 error / 0 warning**。
 - **真机演练（顺序输出模式，临时 `VIRLEN_DATA_DIR`）**：RUN 1 退出时 stderr 打出 `[chat] 会话 id: 850c0537-…` + `[chat] 续连本会话: virlen-cli chat --session 850c0537-…`；把该命令原样贴回去 RUN 2，stdout 先打 `—— 历史预览：最近 2 条 / 共 2 条 ——` / `[你] hello there` / `[你] second question`。⚠️ **TUI 路径（`Viewport::Inline`）需要真终端，未在本次无头演练中覆盖** —— 单测只覆盖到 `UiEvent::History` 这一层。
 
+**11.24 评审后的四项修复（2026-09-26 代码审查 `6beb531..f6c0681` → 已修）** —— 对 `feat/cil-headless` 整条分支做了一次全量 review（322 文件 / +29926 −6070），修掉其中四项：**TUI 授权面板 fail-open**、**core 的 `println!` 污染 CLI stdout**、**两条 CLI 渲染路径依赖的隐式事件配对契约**、**GUI 壳残留的死依赖**。
+
+- **① 授权面板 fail-open（最严重）** —— 现象：TUI 的授权面板是「行输入 + 回车放行」：`Interaction::answer()` 把**空白输入**当「允许」，界面上却写着 `[y/N]`。而交互期间按键**全部**落到交互上（`key_for_interaction`），于是「用户正在打下一句 → 误触 Enter」＝**直接批准危险命令**（`execute_command` 会真的跑）；对照 `run` / 顺序输出模式（`run/ask.rs`）**一直是** fail-closed（非 TTY / 空输入 = 拒绝）→ 同一件事两条路径给出相反的安全语义。**修法**：授权改成**显式二选一** —— 新增 `ConfirmChoice { Deny, Allow }`（默认 `Deny`）+ `Interaction::new()`（**唯一**构造入口）；←/↑ = 拒绝、→/↓ = 允许、Enter 确认**高亮项**、Esc/Ctrl+C = 拒绝，**普通字符（含 `y`/`n`/Backspace）一律不参与**；`answer()` 只看 `self.confirm`，与输入框彻底解耦；回显行改由 `answer_line(&payload)` 产出（按**实际发出的载荷**判「✔ 已允许 / ✘ 已拒绝」，界面与引擎不会分叉）。视图渲染成 `[拒绝] / [允许]`（选中项 `REVERSED|BOLD`，**纯文本可断言**）；**授权面板不调 `set_cursor_position`** —— ratatui 的 `try_draw` 在 `cursor_position == None` 时调 `hide_cursor()`，把光标留在选择行正是旧实现被误触的暗示；`user_choice` 等行输入类交互键位**不变**，仍显示光标。
+- **② `println!` 污染 CLI 的机器可读 stdout** —— `virlen-core/src/vision/mod.rs` 有 **7 处 `println!`**（GUI 时代 stdout 无人使用，**搬进 core 后 CLI 也在用同一份**）：`run --json` 的 stdout 是 JSON Lines、非 `--json` 时是助手正文，调一次 `vision_analyze` 就会插进 `[Vision] Loading models...`，下游解析直接失败 —— 而 CLI **无从改道**（写的是进程 stdout，不经注入的 `out`）。**修法**：7 处全改 `eprintln!`，并在模块头写明「本模块进度日志一律走 stderr」。GUI 行为不变（GUI 进程无控制台，两个流都无处可去）。
+- **③ 两条渲染路径的事件配对是隐式契约** —— `run` / 顺序输出模式取 `stream_event.delta`（`run/render.rs`），TUI 取 `assistant_message_updated.patch.contentDelta`（`tui/sink.rs`，它**故意忽略** `stream_event` 以避免正文双份）。二者目前都在 `llm_round.rs::flush_stream_state` 同一处发出，但**没有任何东西钉住这件事**：将来只发其中一个不会让任何一侧报错，只会让那一侧**静默丢正文**。**修法**：在该函数文档写明「两个事件必须成对发出（同一次调用、同一份 delta）」，并新增回归 `delta_patch_and_stream_event_are_emitted_in_pairs` —— 逐条比对两者的**顺序与内容**，再断言拼出来的正文等于 provider 发出的全量。
+- **④ GUI 壳残留 23 项已归 core 的依赖** —— `virlen-app/Cargo.toml` 仍声明着 `rusqlite` / `quickjs_runtime` / `turbovec` / `reqwest` / `htmd` / `pdf-extract` / `text-splitter` / `quasivision` / `rand` / `sha2` / `hex` / `encoding_rs` / `async-trait` / `dunce` / `zip` / `chrono` / `chrono-tz` / `uuid` / `walkdir` / `ignore` / `grep*` / `anyhow` —— 实测在 `src-tauri/src/**` 里**直接使用次数均为 0**（`quasivision` 只剩注释）。代价不只是白编译：**feature 统一副作用** —— 同一 crate 被两个成员声明时特性相加，任一处改动都会**静默**改变另一处的构建（`quickjs_runtime` 的 `quickjs-ng` 正是「必须写对」的项）。**修法**：整批删除并在清单旁留下「为什么只留这些 / 新增前先问它是不是 GUI 壳的事」；`cargo tree -p virlen-app -i rusqlite` 复核为「仅经 `virlen-core`」。⚠️ 保留项（`regex` / `once_cell` / `tokio` / `trash` / `image` / `base64` / `windows` / `windows-sys` / `webview2-com` / `windows-core` / `notify-rust`）**逐个 grep 确认在用**后才保留；HTMD 的「与 TS 侧 turndown 同源非同实现」注释同时补回了 `virlen-core/Cargo.toml`（信息不能随依赖一起搬丢）。
+- **验证**：`cargo test --workspace` = app 29 + cli **139**（135 → +4）+ core **355**（354 → +1）= **523 passed**（2 ignored），exit 0；`cargo check --workspace --all-targets` **0 error / 0 warning**。⚠️ 一条如实标注的残留：`cargo test` 的**链接**阶段会出 1 条 `linker_messages` 告警（MSVC `link.exe` 的 stdout 被 rustc 转述，**与源码无关**，`cargo check` 下不出现）。
+- **仍未闭环（等拍板）**：§11.23 的 TUI 续连预览仍需真终端复验；评审里列出的其余项 —— `list/group.rs` 与桌面端侧边栏的分组口径差异（Workspace 组名 GUI 取 basename / CLI 用全路径；排序 GUI 用 `localeCompare('zh-CN')` / CLI 用码点序）—— **本次未动**。（`prompts/assemble.rs` 的过期注释已在 **§11.25** 修复。）
+
+**11.25 P2-3：删掉 `assemble.rs` 的过期注释 + 把「CLI 与 GUI 的提示词差异」显式写下来（2026-09-26 续评审 → 已落地）** —— 沿用 §11.24 那次 review 的编号，本次只处理 P2-3（其余项等用户后续确认）。
+
+- **问题 ①（会主动误导人）**：`virlen-core/src/agent/prompts/assemble.rs` 的模块头写着「⚠️ 目前**没有生产调用方**（CLI 尚未接入），仅测试使用」，并压着一条模块级 `#![allow(dead_code)]` —— 而 CLI 早在 `virlen-cli/src/session_rt/resources.rs::build_system_prompt` 就是它的生产调用方。照注释读代码的人会以为「改这个文件没人受影响」。
+- **问题 ②（golden 守不住的那一层）**：golden 用**同一组固定输入**比对，守的是「组装规则（顺序 / 分隔符）」，**守不住「喂进去的片段」**；而 CLI 实际喂的 `PromptParts` 与 GUI 并不相同，文档里却只有一句笼统的「与 TS 逐字节对齐」。
+- **修法**：
+  1. 模块注释改为「**调用方**」（CLI 生产接入点 + GUI 仍走 TS 组装）+ 一张 **CLI vs GUI 已知差异表**；`docs/rust-engine.md` §12.2 放同一张表并互相指向（**改一处要同步另一处**）。
+  2. 删掉 `#![allow(dead_code)]` —— `prompts` 是 `pub` 链（`lib.rs → agent/mod.rs → prompts/mod.rs`），lib crate 里 `pub fn` 视为可达；实测 `cargo check -p virlen-core --all-targets` **无 dead_code 告警**（原那条 allow 是「尚未接入」时期的遗留）。
+- **差异表（定论，非推测）**：
+
+  | 片段 | GUI（`services/agent-service.ts`） | CLI（`virlen-cli/src/session_rt/resources.rs`） |
+  |---|---|---|
+  | 环境信息 | `get_env_info`：`- OS: Windows 10.0.19045` + 每个工具版本（如 `- node:24.10.0`） | `std::env::consts::OS`：`- OS: windows (x86_64)`，**无工具版本**（headless 不探测） |
+  | 项目规则 | `buildProjectRulesPrompt` 包装（`# Project Rules (AGENTS.md)` 标题 + 「优先级高于通用说明」声明） | ⚠️ **直接塞文件原文**（未包装）—— 与 `PromptParts::project_rules` 的契约不符 |
+  | 角色 / 身份 / 性格 / 技能 | Agent 配置 + 技能注册表注入 | **不注入**（headless 没有这些输入 —— 是「没有数据」而非「另一份实现」） |
+
+- **⚠️ 顺带发现（未修，等拍板）**：上表第二行是真**缺陷**而非「设计差异」—— `resources.rs::read_project_rules` 返回文件原文，`build_system_prompt` 直接把它当 `PromptParts::project_rules` 传进去，而该字段的契约写明是「`build_project_rules_prompt` 的产物」；GUI 侧 `loadProjectRulesPrompt` 是**包过的**。后果：CLI 会话的模型**看不到**「这是项目级要求、与通用说明冲突时以它为准」这段取舍说明（`build_project_rules_prompt` 的注释明说「模型对项目约定与通用说明冲突时的取舍全靠这段文字」）。修法是**一行**（CLI 改调 `build_project_rules_prompt(PROJECT_RULES_FILE, content)`），因涉及提示词内容（会影响模型行为）故**未擅自改**。
+- **验证**：`cargo test --workspace` = app 29 + cli **139** + core **355** = **523 passed**（2 ignored），exit 0；`cargo check --workspace --all-targets` **0 error / 0 warning**（含移除 `allow(dead_code)` 后的重编译）。
+
+**11.26 提示词「跨语言文件耦合」解耦：md 全部搬进 `virlen-core`，前端经命令取（2026-09-26 用户要求 → 已落地）** —— 需求（用户原话）：「解决一下提示词引用耦合性的问题，`src\domain\agent\prompts` 的提示词全部放到 rust 部分，然后 tauri 前端如果需要就通过 rust 获取」。
+
+- **改前的病**：`virlen-core/src/agent/prompts/mod.rs` 里写的是 `include_str!("../../../../../src/domain/agent/prompts/tool-call-spec.md")` —— **Rust 的编译依赖前端目录布局**，前端挪一个文件夹就构建失败（报错只给缺失路径，看不出该谁负责）；反过来也一样（TS `?raw` 读 core 的 `definitions.json`）。另有一处**真分叉**：`verify-prompt.md` 两侧各存一份且内容不同（TS 英文 / Rust 中文）。
+- **改后的形态（与工具定义「机制 C」同构）**：
+  - **唯一源**在 `src-tauri/virlen-core/src/agent/prompts/*.md`（5 份：`tool-call-spec` / `core-principles` / `compress-context` / `generate-title` / `verify-prompt`）；Rust 一律 `include_str!("<同名文件>")` **就地**引用；
+  - Rust 新增 `PromptTexts` + `all_prompt_texts()`，Tauri 命令 **`cmd_agent_prompts`** 一次全量返回（约 4 KB）；
+  - 前端 `src/infrastructure/prompts/prompt-source.ts`：Tauri 走命令，浏览器 dev / vitest **静态 `?raw`** 读同一份 md（兜底也是同一份文本，降级不改模型看到的字）；
+  - 前端 `src/domain/agent/prompt-texts.ts`：`setPromptTexts()`（组合根 `main.ts` 启动水合一次）+ `promptText(key)`（此后**同步**读）。为什么不是每次都 async 取 —— `baseSystemPrompt()` 是同步函数，改 async 会传染整条组装链与所有调用方；
+  - ⚠️ `promptText()` 未水合时**抛错**而不是返回空串：空提示词会**静默**改变模型行为（丢掉工具规范 / 验证要求，模型照样能跑、只是变笨）。
+- **`verify-prompt.md` 合并（用户拍板：以 TS 现有【英文】版为准）**：删掉 Rust 的中文副本，用 TS 的英文版落位；`verifier.rs` 与 `verifier.ts` 从此读**同一份**（Rust 侧 `const VERIFY_PROMPT_TEMPLATE = include_str!(…)` → `prompts::VERIFY_PROMPT`）。
+- **验证**：`cargo test --workspace` = app 29 + cli 139 + core **358**（355 → +3：`prompts::tests` 的「注册表与常量一致 / 五个都非空 / 验证模板带两个占位符」）= **526 passed**（2 ignored）；`cargo check --workspace --all-targets` **0 error / 0 warning**；`npx tsc --noEmit` 0；`npx vitest run` 全绿（新增 `src/tests/contracts/agent-prompts-contract.test.ts`，6 条：五提示词齐备 / 关键标记 / 内嵌文本 == 权威源 / 非 Tauri 回退 / 未水合抛错 / 水合后可读）。
+- **本次未动**：组装逻辑本身（GUI 仍自己组装、CLI 仍走 `resources.rs::build_system_prompt`）——“文本住哪”与“谁来组装”是两件事。
+
 **11.18 大文件怎么拆（2026-09-26 CLI/core 瘦身的口径与代价）** —— 起因：`run.rs` 1474 行、`tui/mod.rs` 1506 行这类「什么都往里塞」的文件已难以审阅（`execute_command.rs` 更极端：1075 行里 794 行是测试）。
 
 - **口径：目录模块 + 测试外移 + 纯搬运**。`foo.rs` → `foo/{mod.rs,<职责>.rs,tests.rs}`；`mod.rs` 只放「本模块的公共词汇」（类型 / 入口 / 命令解析），子模块里只有实现，因此 `crate::foo::X` 这些路径**一行都不用改**。需要时对子模块做 `pub(crate) use self::<sub>::*;` **再导出**（`tui/mod.rs` 的 `pub(crate) use self::app::*;`、`run/mod.rs` 的 `use self::render::*;` 就是这个作用：**搬了文件，没搬调用点**）。
@@ -676,7 +716,7 @@ pnpm cli list-agent              # 列出 Agent（读 app_settings.agents，含�
 | 我要做的事 | 去哪里 |
 |---|---|
 | 改聊天循环 / 工具循环 / 暂停恢复 | `src/domain/engine/*` **和** `src-tauri/virlen-core/src/agent/{engine,llm_round,tool_executor,llm_loop}.rs` |
-| 改系统提示词 | `src/domain/agent/prompts/*.md` + `src/services/agent-service.ts`（组装顺序在此） |
+| 改系统提示词 | **文本**：`src-tauri/virlen-core/src/agent/prompts/*.md`（唯一源；前端经 `cmd_agent_prompts` 取）；**组装顺序**：`src/services/agent-service.ts`（GUI）+ `src-tauri/virlen-core/src/agent/prompts/assemble.rs`（Rust / CLI） |
 | 改上下文压缩 / 标题生成 | `src/domain/engine/compress-context.ts`（模式分派：`ai` LLM 摘要 / `raw` 正文压缩）+ `compress-raw.ts`（正文压缩的本地渲染）/ `generate-title.ts`（Rust 侧委托 TS）；产物在消息列表里的呈现：`ui/pages/chat/components/message/summary-message.tsx`（提示条 + 摘要弹窗） |
 | 改会话持久化 | `src-tauri/virlen-core/src/session_db/`（`sqlite.rs` / `schema.rs` / `open.rs`）+ 命令壳 `src-tauri/src/commands/session_db.rs` + `src/infrastructure/sessionRepo/` + `src/ui/store/sessionStore.ts` |
 | 加 / 改工具 | **定义**：`src-tauri/virlen-core/src/agent/tool_defs/definitions.json`（权威源，三平台变体）；**执行器**：`src/infrastructure/tools/<分类>/<工具>.ts`（+ 分类 `common.ts`、分类 `index.ts`）；契约/注册中心：`src/domain/tools/{definitions,index,types}.ts` + `src/domain/ports/ToolRegistry.ts`；`src/domain/tools/category.ts`、`src-tauri/virlen-core/src/agent/native_tools/<分类>/<工具>.rs`（+ `mod.rs` 分发）、`src/ui/pages/chat/components/tool-call/` |

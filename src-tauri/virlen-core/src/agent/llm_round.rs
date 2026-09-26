@@ -209,6 +209,12 @@ impl StreamEventThrottle {
 /// 累积全量正文，单次载荷随内容线性增长、整轮通信量即 O(n²)。全量正文由流结束帧兜底
 /// ——`MessageStop` 的 `sync_assistant` 与 `finalize_assistant_message`，
 /// 因此个别增量事件丢失也会被最终帧纠正。
+///
+/// ⚠️ **两个事件必须成对发出（同一次调用、同一份 delta）**：`virlen-cli` 的两条输出路径
+/// 各取其一 —— `run` / 顺序输出模式读 `stream_event.delta`（`run/render.rs`），
+/// TUI 读 `patch.contentDelta`（`tui/sink.rs`，它**故意忽略** `stream_event` 以避免正文双份）。
+/// 只发其中一个不会让任何一侧报错，只会让那一侧**静默丢正文** —— 因此这条隐式契约由
+/// `tests::delta_patch_and_stream_event_are_emitted_in_pairs` 逐条钉住。
 fn flush_stream_state(
     ctx: &ToolCallContext,
     model: &str,
@@ -602,6 +608,63 @@ mod tests {
         // 关键控制事件不应被节流
         assert!(count_events(&sink, "assistant_message_created") >= 1);
         assert!(count_events(&sink, "assistant_message_updated") >= 1);
+    }
+
+    /// ⚠️ 隐式契约回归：一次流式回合里 `assistant_message_updated(patch.contentDelta)`
+    /// 与 `stream_event.delta` 必须**逐个成对、同序、同内容**。
+    ///
+    /// 为什么必须钉住：`virlen-cli` 的两条渲染路径各取其一 ——
+    /// `run` / 顺序输出模式取 `stream_event.delta`，TUI 取 `patch.contentDelta`。
+    /// 若将来只发其中一个（比如给非流式 provider 开分支），**两条路径不会报错**，
+    /// 只会有一条**静默丢正文**。这里把顺序与内容都比对，任何单侧改动立即失败。
+    #[test]
+    fn delta_patch_and_stream_event_are_emitted_in_pairs() {
+        let deltas: Vec<String> = (0..40).map(|i| format!("词{}", i % 7)).collect();
+        let provider = ThrottleMockProvider {
+            deltas: deltas.clone(),
+        };
+        let sink = TestEventSink::new();
+        let cancel = CancellationToken::new();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(do_llm_round(
+            &session(),
+            &provider,
+            &[],
+            &[],
+            &cancel,
+            &sink,
+            "s1",
+            None,
+            None,
+            1,
+        ))
+        .expect("llm round 应成功");
+
+        // 按事件顺序各收一份（同一份 delta 的两种载体）
+        let (patches, stream): (Vec<String>, Vec<String>) = {
+            let events = sink.events.lock().unwrap();
+            let patches = events
+                .iter()
+                .filter(|(_, v)| v["type"].as_str() == Some("assistant_message_updated"))
+                .filter_map(|(_, v)| v["data"]["patch"]["contentDelta"].as_str().map(String::from))
+                .collect();
+            let stream = events
+                .iter()
+                .filter(|(_, v)| v["type"].as_str() == Some("stream_event"))
+                .filter_map(|(_, v)| v["data"]["delta"].as_str().map(String::from))
+                .collect();
+            (patches, stream)
+        };
+
+        assert!(!patches.is_empty(), "流式回合必须发出正文增量帧");
+        assert_eq!(
+            patches, stream,
+            "contentDelta 与 stream_event.delta 必须逐个成对且同序同内容"
+            // 顺序不同 → 客户端拼接出的正文会错位；数量不同 → 某条路径静默丢正文
+        );
+        // 两份载体拼出来的正文必须等于 provider 发出的全量（节流不丢内容）
+        assert_eq!(patches.concat(), deltas.concat());
     }
 
     /// 节流窗口 = 正文尾部可见延迟的上限，必须在一帧内

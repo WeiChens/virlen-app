@@ -4,7 +4,7 @@
 //! 1. 把 [`TauriEventSink`] / `TauriHost` 注入引擎（[`init_agent_engine`]）；
 //! 2. 暴露命令：`agent_send_message` / `agent_cancel` / `agent_kill_command` / `pty_*`
 //!    / `agent_get_run_snapshot` / `agent_clear_run_snapshot` / `agent_dispose`
-//!    / `cmd_list_tool_definitions`；
+//!    / `cmd_list_tool_definitions` / `cmd_agent_prompts`；
 //! 3. 把 JS 侧回执转交引擎：`agent_tool_response` / `agent_user_interaction_response`
 //!    / `agent_round_boundary_response` / `agent_provider_stream_event` / `agent_provider_stream_done`。
 //!
@@ -20,7 +20,7 @@ use virlen_core::agent::engine::AgentEngine;
 use virlen_core::agent::event_sink::{self, EventSink};
 use virlen_core::agent::provider::DefaultProviderFactory;
 use virlen_core::agent::types::AgentEvent;
-use virlen_core::agent::{native_tools, tool_defs, types};
+use virlen_core::agent::{native_tools, prompts, tool_defs, types};
 use virlen_core::session_db::{NoopSessionRepo, NoopSettingsRepo, SessionRepo, SettingsRepo};
 
 use super::session_db::{init_session_db, manage_noop_settings};
@@ -265,6 +265,17 @@ pub fn cmd_list_tool_definitions(platform: Option<String>) -> Vec<types::ToolDef
         Some(p) => tool_defs::list_tool_definitions_for(p),
         None => tool_defs::list_tool_definitions(),
     }
+}
+
+/// 列出全部模型侧提示词文本（**提示词 md 的唯一源在 `virlen-core`**，前端经此取值）
+///
+/// 与 `cmd_list_tool_definitions` 同一模式：权威源在 Rust，前端不再自带副本；
+/// 浏览器 dev / vitest 直读 core 目录里的同一份 md（零漂移，不需要「快照 diff」那套）。
+///
+/// 提示词是**静态文本**（无平台变体、无运行期参数），因此没有入参、也无需预热缓存。
+#[tauri::command]
+pub fn cmd_agent_prompts() -> prompts::PromptTexts {
+    prompts::all_prompt_texts()
 }
 
 // ==================== 桥接回执 ====================

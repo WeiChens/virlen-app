@@ -7,7 +7,7 @@
 import type { Message, Session } from '@/types'
 import { ChatRequest } from '@/infrastructure/provider/types'
 import { providerPort } from '../provider'
-import { AI_AGENT_GENERATE_TITLE_PROMPT } from '../agent'
+import { promptText } from '../agent'
 import { ledgerTokensOf, recordUsage } from '../usage'
 import { sliceHead } from '@/utils/text'
 
@@ -126,7 +126,7 @@ export async function generateTitle(
       ...contextMessages,
       {
         role: 'user',
-        content: AI_AGENT_GENERATE_TITLE_PROMPT,
+        content: promptText('generateTitle'),
         id: 'generate-title-request',
         timestamp: Date.now(),
       },

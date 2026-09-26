@@ -37,7 +37,7 @@ vi.mock('@/domain/tools', () => ({
 }))
 
 vi.mock('@/domain/agent', () => ({
-  AI_AGEMT_COMPRESS_CONTEXT_PROMPT: '请对以上对话进行摘要总结',
+  promptText: () => '请对以上对话进行摘要总结',
 }))
 
 vi.mock('@/utils/uuid', () => ({

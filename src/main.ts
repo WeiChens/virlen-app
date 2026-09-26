@@ -17,6 +17,10 @@ import { searchProviderService } from './services/search-provider-service'
 import { toolsInit } from './infrastructure/tools'
 import { toolRegistry, setToolDefinitionsLoader } from '@/domain/tools'
 import { loadToolDefinitions } from '@/infrastructure/tools/definitions-source'
+// 提示词权威源（同工具定义）：文本本体在 `virlen-core/src/agent/prompts/*.md`，
+// Tauri 走 `cmd_agent_prompts`、浏览器 dev / 测试读同一份 md。
+import { setPromptTexts } from '@/domain/agent'
+import { loadPromptTexts } from '@/infrastructure/prompts/prompt-source'
 import { securityService } from './services/security-service'
 import { checkUpdate, shouldShowUpdate } from './services/update-service'
 import updateEvent from './events/updateEvent'
@@ -157,6 +161,9 @@ async function init() {
   // 让「契约与执行器不匹配」这类问题在启动阶段就暴露（而不是首次发消息才报）。
   setToolDefinitionsLoader(loadToolDefinitions)
   await step('toolDefinitions', () => toolRegistry.init())
+  // 提示词权威源接线（与工具定义同一模式）：必须在任何组装系统提示词的路径之前完成 ——
+  // `promptText()` 在未水合时直接抛错（宁可启动失败，也不要静默丢掉工具规范 / 验证要求）。
+  await step('prompts', async () => setPromptTexts(await loadPromptTexts()))
   await step('defaultAgent', () => initDefaultAgent())
   agentStore.reload()
   await Promise.all([

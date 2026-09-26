@@ -35,7 +35,7 @@ vi.mock('@/domain/provider', () => ({
 }))
 
 vi.mock('@/domain/agent', () => ({
-  AI_AGENT_GENERATE_TITLE_PROMPT: '请为以上对话生成一个简短标题',
+  promptText: () => '请为以上对话生成一个简短标题',
 }))
 
 vi.mock('@/utils/uuid', () => ({

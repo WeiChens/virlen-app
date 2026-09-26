@@ -14,7 +14,7 @@
 //! 已固化的内容不在这里渲染 —— 它已经被 `term::commit` 写进终端**原生滚动区**
 //! （因此终端自带的滚动与鼠标选中复制都还在，见 `docs/cli-tui-plan.md` §4）。
 
-use crate::tui::state::{expand, Interaction, LineKind, UiState};
+use crate::tui::state::{expand, ConfirmChoice, Interaction, LineKind, UiState};
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::buffer::CellDiffOption;
@@ -103,6 +103,7 @@ pub(crate) fn render(f: &mut Frame, st: &UiState) {
     }
     let cursor = render_input(f, st, rows[2]);
     render_status(f, st, rows[3]);
+
     // ⚠️ Windows conhost 的**中文残影**修复（实测；见 `docs/AGENTS.md` §11.21、`cli-tui-plan.md` §3.7）：
     //
     // ratatui 的 diff 在「宽字符被窄字符替换」时**不会**重发宽字符的 trailing（第 2 列）——
@@ -121,7 +122,14 @@ pub(crate) fn render(f: &mut Frame, st: &UiState) {
             cell.set_diff_option(CellDiffOption::AlwaysUpdate);
         }
     }
-    f.set_cursor_position(cursor);
+    // ⚠️ 授权面板是**显式二选一**，没有文本光标：
+    //    ratatui 的 `try_draw` 只看 `frame.cursor_position`，为 `None` 时调 `hide_cursor()`
+    //    → **不调** `set_cursor_position` 就是隐藏光标。把光标留在选择行会暗示
+    //    「这里可以输入文本」，而那正是旧实现（回车即放行）被误触的根源。
+    //    选择类交互仍显示行输入光标。
+    if !st.interaction().is_some_and(Interaction::is_confirm) {
+        f.set_cursor_position(cursor);
+    }
 }
 
 /// 在飞内容：只显示**尾部**（视口高度固定，装不下就滚尾部 —— 这是设计的硬约束）
@@ -182,15 +190,71 @@ fn body_lines(it: &Interaction) -> Vec<String> {
     out
 }
 
-/// 回答行的提示（光标前的那段）
+/// 回答行的提示（选项 / 输入区之前的那段）
 fn answer_prefix(it: &Interaction) -> String {
     if it.is_confirm() {
-        "  允许执行？[y/N] ".to_string()
+        // 不再写 `[y/N]`：授权不再是「回车即放行」的行输入，而是二选一（见 `answer_row`）
+        "  允许执行？".to_string()
     } else if it.multi() {
         "  选择（序号或文本，逗号分隔可多选）: ".to_string()
     } else {
         "  选择（序号或文本）: ".to_string()
     }
+}
+
+/// 回答行：
+/// - 授权（`confirm`）= **显式二选一**，选中的那个加方括号 + 反白加粗，默认选中「拒绝」；
+/// - 其它 = 行输入（提示 + 已输入文本）。
+///
+/// ⚠️ 方括号不是装饰：它让「当前选中的是哪一项」在**纯文本上也可断言**
+/// （`view/tests.rs` 直接断言 `[拒绝]` / `[允许]`），不必逐格去读 `REVERSED`。
+fn answer_row(it: &Interaction) -> Line<'static> {
+    let prefix = Span::styled(answer_prefix(it), Style::default().fg(Color::Magenta));
+    if !it.is_confirm() {
+        return Line::from(vec![
+            prefix,
+            Span::styled(
+                it.input.clone(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]);
+    }
+
+    let mut spans = vec![prefix];
+    for choice in [ConfirmChoice::Deny, ConfirmChoice::Allow] {
+        let selected = it.confirm == choice;
+        let style = if selected {
+            let color = if choice == ConfirmChoice::Allow {
+                Color::Green
+            } else {
+                Color::Red
+            };
+            Style::default()
+                .fg(color)
+                .add_modifier(Modifier::REVERSED | Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        spans.push(Span::styled(
+            format!(
+                "{}{}{}",
+                if selected { "[" } else { " " },
+                choice.label(),
+                if selected { "]" } else { " " }
+            ),
+            style,
+        ));
+        spans.push(Span::raw(" "));
+    }
+    // 分隔符用 ASCII `|`（不用 `·`）：`·` 是「歧义宽度」字符 —— ratatui 算 1 列、
+    // conhost 在 CJK 字体下推进 2 列，同一行里会累积错位（见本文件 `RIGHT_MARGIN`）
+    spans.push(Span::styled(
+        "（←/→ 选择 | Enter 确认）",
+        Style::default().fg(Color::DarkGray),
+    ));
+    Line::from(spans)
 }
 
 fn render_interaction(f: &mut Frame, _st: &UiState, it: &Interaction, area: ratatui::layout::Rect) {
@@ -211,15 +275,7 @@ fn render_interaction(f: &mut Frame, _st: &UiState, it: &Interaction, area: rata
             ))
         })
         .collect();
-    lines.push(Line::from(vec![
-        Span::styled(answer_prefix(it), Style::default().fg(Color::Magenta)),
-        Span::styled(
-            it.input.clone(),
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]));
+    lines.push(answer_row(it));
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
@@ -395,6 +451,18 @@ mod tests {
         text_of(&t)
     }
 
+    /// 推入一次授权请求（`confirm_command_native`）—— 多处复用
+    fn push_confirm(st: &mut UiState) {
+        st.apply(UiEvent::Interaction {
+            request_id: "r1".into(),
+            kind: "confirm_command_native".into(),
+            data: json!({
+                "title": "删除目录", "desc": "rm -rf build", "hint": "不可恢复",
+                "risk": "dangerous"
+            }),
+        });
+    }
+
     #[test]
     fn renders_transcript_input_and_status() {
         let mut st = state();
@@ -483,28 +551,70 @@ mod tests {
         }
     }
 
+    /// 授权面板是**显式二选一**：两个选项都可见、默认高亮「拒绝」、**不显示文本光标**。
+    ///
+    /// 回归背景（fail-open → fail-closed）：旧实现是「行输入 + 回车放行」，提示写着 `[y/N]`
+    /// 但空白输入会被当作「允许」，光标还停在回答行暗示「这里可以打字」—— 用户正在打
+    /// 下一句消息时误触一次 Enter，就等于批准了一条危险命令。
     #[test]
-    fn confirm_panel_shows_risk_and_cursor_moves_to_answer() {
+    fn confirm_panel_is_an_explicit_picker_with_deny_preselected() {
         let mut st = state();
-        st.apply(UiEvent::Interaction {
-            request_id: "r1".into(),
-            kind: "confirm_command_native".into(),
-            data: json!({
-                "title": "删除目录", "desc": "rm -rf build", "hint": "不可恢复",
-                "risk": "dangerous"
-            }),
-        });
+        push_confirm(&mut st);
         let text = draw(&st);
         assert!(text.contains("需要授权"), "{text}");
         assert!(text.contains("删除目录"), "{text}");
         assert!(text.contains("dangerous"), "{text}");
         assert!(text.contains("rm -rf build"), "{text}");
-        assert!(text.contains("[y/N]"), "{text}");
+        // 显式选择：默认选中「拒绝」，「允许」未被选中
+        assert!(text.contains("[拒绝]"), "默认应高亮拒绝: {text}");
+        assert!(!text.contains("[允许]"), "默认不得高亮允许: {text}");
+        // 「回车即放行」的暗示必须消失
+        assert!(!text.contains("[y/N]"), "{text}");
 
         let mut t = term(60, 20);
         t.draw(|f| render(f, &st)).unwrap();
+        assert!(
+            !t.backend().cursor_visible(),
+            "授权面板没有文本输入，不应显示光标"
+        );
+    }
+
+    /// → / ↓ 把高亮移到「允许」；← / ↑ 移回「拒绝」（两端不越界）
+    #[test]
+    fn confirm_panel_highlight_follows_arrow_keys() {
+        let mut st = state();
+        push_confirm(&mut st);
+
+        st.apply_key(Key::Right);
+        let text = draw(&st);
+        assert!(text.contains("[允许]"), "{text}");
+        assert!(!text.contains("[拒绝]"), "{text}");
+
+        st.apply_key(Key::Down);
+        assert!(draw(&st).contains("[允许]"), "↓ 与 → 同向");
+
+        st.apply_key(Key::Left);
+        let text = draw(&st);
+        assert!(text.contains("[拒绝]"), "← 应移回拒绝: {text}");
+        assert!(!text.contains("[允许]"), "{text}");
+
+        st.apply_key(Key::Up);
+        assert!(draw(&st).contains("[拒绝]"), "↑ 与 ← 同向");
+    }
+
+    /// 选择类交互（`user_choice`）仍是行输入：光标显示在回答行上
+    #[test]
+    fn choice_panel_keeps_the_line_input_cursor() {
+        let mut st = state();
+        st.apply(UiEvent::Interaction {
+            request_id: "r1".into(),
+            kind: "user_choice".into(),
+            data: json!({ "question": "q", "options": ["A"] }),
+        });
+        let mut t = term(60, 20);
+        t.draw(|f| render(f, &st)).unwrap();
+        assert!(t.backend().cursor_visible(), "行输入类交互应显示光标");
         let pos = t.get_cursor_position().unwrap();
-        // 光标应在交互回答行（输入行的上一行）
         assert!(pos.y >= H - 3, "光标应在底部区域: {pos:?}");
     }
 

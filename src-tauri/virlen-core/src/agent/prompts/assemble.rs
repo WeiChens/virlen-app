@@ -10,10 +10,26 @@
 //! | `compose_system_prompt()` | `composeSystemPrompt()` |
 //! | `build_project_rules_prompt()` | `domain/agent/project-rules.ts::buildProjectRulesPrompt` |
 //!
-//! ⚠️ 目前**没有生产调用方**（CLI 尚未接入），仅测试使用；接入点见
-//! `docs/rust-engine.md` 的「JS 端有但 Rust 暂不处理」清单第 4 条。
-
-#![allow(dead_code)]
+//! ## 调用方（改本模块前先确认不破坏谁）
+//!
+//! - **CLI（生产）**：`virlen-cli` 的 `session_rt/resources.rs::build_system_prompt` ——
+//!   headless 下没有前端，系统提示词只能在这里拼；
+//! - **GUI**：组装仍在 TS（`services/agent-service.ts::assembleAgentPrompt`，结果快照进
+//!   `session.systemPrompt`）；对 GUI 而言本模块只承担「golden 比对的另一半」。
+//!
+//! ## ⚠️ CLI 与 GUI 的**已知差异**（golden 守不住这一层，别误以为「已完全对齐」）
+//!
+//! 顺序与分隔符由 golden 逐字节锁定、两侧一致；但**喂进来的 `PromptParts` 两侧不同** ——
+//! golden 用的是**固定输入**，它守的是「组装规则」，守不住「输入内容」：
+//!
+//! | 片段 | GUI（`agent-service.ts`） | CLI（`session_rt/resources.rs`） |
+//! |---|---|---|
+//! | 环境信息 | `get_env_info`：`- OS: Windows 10.0.19045` + 每个工具版本（`- node:24.10.0`） | `std::env::consts::OS`：`- OS: windows (x86_64)`，**不含工具版本**（headless 不探测） |
+//! | 项目规则 | `buildProjectRulesPrompt` 包装：带 `# Project Rules (AGENTS.md)` 标题与「优先级高于通用说明」声明 | ⚠️ 目前**直接塞文件原文**（未经 `build_project_rules_prompt`），与 `PromptParts::project_rules` 的契约不符 —— **待确认是否应一并包装** |
+//! | 角色 / 身份 / 性格 / 技能 | 由 Agent 配置 + 技能注册表注入 | **不注入**（headless 没有这些输入，是「没有数据」而非「另一份实现」） |
+//!
+//! 结论：环境信息**无法**逐字节同源（CLI 拿不到 OS 版本号、也不探测工具版本），只能保证
+//! 「格式与位置一致」；角色/技能同理（无输入）。改这里请同步本表与 `docs/rust-engine.md` §12.2。
 
 use super::{CORE_PRINCIPLES, TOOL_CALL_SPEC};
 

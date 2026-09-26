@@ -185,6 +185,27 @@
 
 **验收**：单测 7 条（cli 128 → **135**，全仓 512 → **518**）；真机顺序输出模式：退出打印 `[chat] 会话 id: …` / `[chat] 续连本会话: virlen-cli chat --session …`，把该命令原样贴回去则 stdout 先打 `—— 历史预览：最近 N 条 / 共 M 条 ——` + 每角色一行。⚠️ TUI 路径未在无头演练中覆盖。详见 `docs/AGENTS.md` §11.23。
 
+### 3.10 授权面板改成**显式二选一**（代码审查发现 fail-open → 已修）
+
+**问题**：授权面板在 TUI 里是「行输入 + 回车放行」—— `Interaction::answer()` 把**空白输入**当「允许」，而界面上写的是 `[y/N]`。又因为交互期间的按键**全部**落到交互上，用户正在打字时的一次误触 Enter 就直接批准了危险命令（`execute_command` 会真的跑）；而同项目的 `run` / 顺序输出模式（`run/ask.rs`）**一直是** fail-closed（非 TTY / 空输入 = 拒绝）—— 两条路径对同一件事给出相反的安全语义。
+
+**修法**（`tui/state/{mod,key}.rs` + `tui/view.rs`）：授权改为**显式选择**，默认选「拒绝」。
+
+| 键 | 行为 |
+|---|---|
+| ← / ↑ | 选中「拒绝」 |
+| → / ↓ | 选中「允许」 |
+| Enter | 确认**当前高亮项**（不动就回车 = 拒绝） |
+| Esc / Ctrl+C | 等同「拒绝」 |
+| 其它（含 `y` / `n` / Backspace） | **一律不参与**（用户此刻可能在打字，不得当作对授权的表态） |
+
+- 新增 `ConfirmChoice { Deny, Allow }`（默认 `Deny`）+ `Interaction::new()`（**唯一**构造入口，默认值只定一次）；`Interaction::answer()` 只看 `self.confirm`，与输入框内容彻底解耦；面板回显行由 `Interaction::answer_line(&payload)` 产出（按**实际发出的载荷**判「✔ 已允许 / ✘ 已拒绝」，界面与引擎不会分叉）。
+- 视图：选项渲染成 `[拒绝] / [允许]`（选中项加方括号 + `REVERSED|BOLD`，未选中 DarkGray）→ **纯文本即可断言**，不必逐格读 `REVERSED`。分隔符用 ASCII `|`（`·` 是歧义宽度字符，见 §3.5）。
+- 光标：授权面板**不调** `set_cursor_position` —— ratatui 的 `try_draw` 在 `cursor_position == None` 时调 `hide_cursor()`，等价于隐藏光标（把光标留在选择行会暗示「这里可以打字」，那正是旧实现被误触的根源）；`user_choice` 等行输入类仍显示光标。
+- 提示文案同步更新：`tui/commands.rs::help_text()` 与 `chat --help` 都写明键位与「不动就回车 = 拒绝」。
+
+**验收**：新增回归 6 条 —— `state/tests.rs`（`confirm_defaults_to_deny_so_a_stray_enter_never_approves` / `confirm_requires_moving_the_highlight_to_allow` / `confirm_ignores_letter_keys_and_keeps_input_clean`）、`view/tests.rs`（`confirm_panel_is_an_explicit_picker_with_deny_preselected` / `confirm_panel_highlight_follows_arrow_keys` / `choice_panel_keeps_the_line_input_cursor`）；cli 135 → **139**，全仓 518 → **523**；`cargo check --workspace --all-targets` 0 error / 0 warning。详见 `docs/AGENTS.md` §11.24。
+
 ---
 
 ## 4. 目标界面（内联视口）
@@ -274,9 +295,12 @@ src-tauri/virlen-cli/src/
 1. **同一份库与配置**：`HostEnv::data_dir()`（`virlen.db` + `app_settings`）；TUI 不引入任何私有存储。
 2. **不重实现判定**：工具/沙盒/权限判定仍在 `security::` 与 `native_tools/`；TUI 只负责"提问与展示"。
 3. **审批文案不自造**：`title/desc/hint/risk` 由 Rust 侧下发，TUI 直接展示。
-4. **不新增事件类型**（TUI 是纯消费方）→ 不触碰"四处一致"契约。
-5. **「记住授权」若要做**，只能写 `app_settings.settings.permissions`（桌面端读同一份）——**改安全配置，需明确拍板**。
-6. **已知缺口必须在 `/status` 里明示**：`/compact`（`compressContext` 未原生化）、费用（价目表在 TS）、技能启用状态与路径黑白名单（仍在 localStorage，见 §11.16）、Gemini（`BridgedProvider` 在装配期已被拒绝）。
+4. **授权必须是显式表态**：TUI 用「←/→ 选择 + Enter 确认，默认拒绝」（见 §3.10）；
+   `run` / 顺序输出模式用「读一行，仅 `y`/`yes` 放行」—— 两者形式不同，但**语义一致**：
+   没有主动表态（TUI 不动高亮 / 行输入不输出 `y`）= 拒绝。任何一侧都不允许把「空白输入」当「允许」。
+5. **不新增事件类型**（TUI 是纯消费方）→ 不触碰"四处一致"契约。
+6. **「记住授权」若要做**，只能写 `app_settings.settings.permissions`（桌面端读同一份）——**改安全配置，需明确拍板**。
+7. **已知缺口必须在 `/status` 里明示**：`/compact`（`compressContext` 未原生化）、费用（价目表在 TS）、技能启用状态与路径黑白名单（仍在 localStorage，见 §11.16）、Gemini（`BridgedProvider` 在装配期已被拒绝）。
 
 ---
 

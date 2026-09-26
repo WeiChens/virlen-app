@@ -73,12 +73,7 @@ impl UiState {
                 kind,
                 data,
             } => {
-                let it = Interaction {
-                    request_id,
-                    kind,
-                    data,
-                    input: String::new(),
-                };
+                let it = Interaction::new(request_id, kind, data);
                 match self.interaction {
                     None => self.interaction = Some(it),
                     Some(_) => self.queue.push_back(it),

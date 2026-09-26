@@ -139,17 +139,62 @@ pub(crate) struct Status {
     pub tokens: Option<i64>,
 }
 
+/// 授权面板的**显式选择项**（`confirm_command_native` 专用）。
+///
+/// ⚠️ 默认必须是 [`ConfirmChoice::Deny`]。授权是这次工具调用的**唯一人工闸门**：
+/// 用户此刻完全可能正在输入框里打字（交互期间按键全部落到交互上），
+/// 若「什么都不按 + 回车」＝放行，误触一次 Enter 就等于批准了一条危险命令。
+/// 这与 `run/ask.rs` 的 fail-closed 口径（stdin 非 TTY / 空输入一律拒绝）是同一件事。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConfirmChoice {
+    Deny,
+    Allow,
+}
+
+impl ConfirmChoice {
+    /// ← / ↑：选「拒绝」（两项之间的端点，停在原地）
+    pub(crate) fn left(self) -> Self {
+        Self::Deny
+    }
+
+    /// → / ↓：选「允许」
+    pub(crate) fn right(self) -> Self {
+        Self::Allow
+    }
+
+    /// 面板上的选项文案
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Deny => "拒绝",
+            Self::Allow => "允许",
+        }
+    }
+}
+
 /// 一次待应答的交互
 #[derive(Debug, Clone)]
 pub(crate) struct Interaction {
     pub request_id: String,
     pub kind: String,
     pub data: Value,
-    /// 用户正在输入的回答
+    /// 用户正在输入的回答（`user_choice` 等行输入类交互使用）
     pub input: String,
+    /// 授权面板的显式选择（仅 `confirm_command_native` 使用；**默认拒绝**）
+    pub(crate) confirm: ConfirmChoice,
 }
 
 impl Interaction {
+    /// 新建一次待应答交互（**唯一**的构造入口 —— 显式选择的默认值只在这里定一次）
+    pub(crate) fn new(request_id: String, kind: String, data: Value) -> Self {
+        Self {
+            request_id,
+            kind,
+            data,
+            input: String::new(),
+            confirm: ConfirmChoice::Deny,
+        }
+    }
+
     fn str_field(&self, k: &str) -> String {
         self.data
             .get(k)
@@ -205,18 +250,20 @@ impl Interaction {
             .unwrap_or_default()
     }
 
-    /// 由当前输入生成桥协议载荷（**每种交互类型都必须给出应答**，否则引擎会一直等回执）
+    /// 由当前状态生成桥协议载荷（**每种交互类型都必须给出应答**，否则引擎会一直等回执）
     ///
-    /// 选择解析复用 `run.rs::resolve_choice` —— 与 `virlen-cli run` 同一份语义
-    /// （序号 / 选项文本 / 大小写 / 多选逗号 / 非选项文本按自定义回复）。
+    /// 授权（`confirm`）：看**显式选择** `self.confirm`，与输入框里的文字无关
+    /// —— 用户此刻可能正在打下一句消息，那些字符不得被当作用户对授权的表态。
+    /// 选择（`user_choice` 等）：解析复用 `run.rs::resolve_choice` —— 与 `virlen-cli run`
+    /// 同一份语义（序号 / 选项文本 / 大小写 / 多选逗号 / 非选项文本按自定义回复）。
     pub(crate) fn answer(&self) -> Value {
         if self.is_confirm() {
-            let raw = self.input.trim().to_ascii_lowercase();
-            // 回车 = 允许（提示里写的是 [y/N]，但回车放行更顺手：危险操作仍由权限表拦）
-            return if raw.is_empty() || raw == "y" || raw == "yes" {
-                json!({ "__kind": "value", "value": "approved" })
-            } else {
-                json!({ "__kind": "cancelled" })
+            return match self.confirm {
+                // 与桌面端弹窗同一条路径（`Rust 侧 parse_approval` 认 `approved` 文本）
+                ConfirmChoice::Allow => json!({ "__kind": "value", "value": "approved" }),
+                // ⚠️ 拒绝走 `cancelled`：与 Esc / 非 TTY 同一条路径 ——
+                // `execute_command` 收到 `Cancelled` 时命令**一行都没跑**（不是「跑了但报失败」）
+                ConfirmChoice::Deny => json!({ "__kind": "cancelled" }),
             };
         }
         if self.kind == "user_choice" {
@@ -228,6 +275,26 @@ impl Interaction {
         }
         // 未知类型也要答（见 `run.rs` 文件头：不回就等于把引擎挂死）
         json!({ "__kind": "cancelled" })
+    }
+
+    /// 面板上回显的**结果行**（交互关闭前把用户的表态固化进滚动区）。
+    ///
+    /// 判定依据是**实际发出的载荷**而不是内部状态：这样「界面上写了什么」与
+    /// 「引擎收到了什么」不可能分叉。
+    pub(crate) fn answer_line(&self, payload: &Value) -> String {
+        if self.is_confirm() {
+            return match payload.get("__kind").and_then(Value::as_str) {
+                Some("value") => "✔ 已允许".to_string(),
+                _ => "✘ 已拒绝".to_string(),
+            };
+        }
+        format!(
+            "→ {}",
+            payload
+                .get("value")
+                .and_then(Value::as_str)
+                .unwrap_or("（取消）")
+        )
     }
 }
 

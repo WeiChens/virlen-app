@@ -51,16 +51,8 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-http = "2"
 tauri-plugin-shell = "2"
-walkdir = "2"
-ignore = "0.4"
-grep = "^0.4.1"
-grep-regex = "^0.1.14"
-grep-searcher = "^0.1.16"
-regex = "1"
-anyhow = "1"
-sha2 = "0.10"
-hex = "0.4"
-encoding_rs = "0.8"
+regex = "1" # deepseek_tokenizer 的分词正则
+once_cell = "1" # 全局惰性初始化
 tokio = { version = "1", features = [
     "rt",
     "macros",
@@ -70,71 +62,15 @@ tokio = { version = "1", features = [
     "io-util",
     "time",
 ] }
-trash = "5"
-image = "0.25"
-base64 = "0.22"
-
-# ── RAG 知识库 ──
-# 使用 turbovec（Google TurboQuant 算法）作为向量索引
-# 4-bit 量化 + SIMD 搜索，零外部依赖
-# 暴力余弦相似度 → 8-16x 压缩 + SIMD 加速
-turbovec = "0.9"                                                          # 向量量化索引（2-4 bit, SIMD 搜索）
-text-splitter = "0.25"                                                    # 智能文本分块
-uuid = { version = "1", features = ["v4"] }
-chrono = "0.4"
-chrono-tz = "0.10"                                                        # IANA 时区库（get_current_time 原生实现；无 JS 的 CLI 没有 Intl）
-once_cell = "1"                                                           # 全局惰性初始化
-rand = { version = "0.8", features = ["small_rng"] }                      # 沙盒能力 SID 随机生成
-dunce = "1"                                                               # 路径 canonicalize（Windows UNC/长路径）
-reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }
-async-trait = "0.1"                                                       # 异步 trait（Provider / ToolExecutor）
-zip = "2"                                                                 # ZIP 打包（知识库导出）
-
-# ── 网页抓取（web_fetch 原生：HTML → Markdown）──
-# htmd 是 turndown.js 的 Rust 移植（同为纯 Rust：html5ever + markup5ever_rcdom + phf），
-# 无 C 工具链要求。与 TS 侧 `turndown` **同源但非同实现** → Markdown 细节不完全一致
-# （已知差异，见 docs/rust-engine.md）。
-htmd = "0.5"
-
-# ── 会话持久化 ──
-# rusqlite（bundled 内置编译 SQLite，零系统依赖）
-# 会话/消息直接落 SQLite，不经过 JS/IndexedDB
-rusqlite = { version = "0.32", features = ["bundled"] }
-# 文档解析
-pdf-extract = "0.7" # PDF 文本提取
-
-# ── quasivision 全能视觉引擎 ──
-# UI 检测、OCR、物体检测(YOLOE-26n)、图标分类
-# 内置跨平台 GPU 加速：Windows → DirectML, macOS → CoreML, Linux → CPU
-quasivision = "0.2.1"
-
-# ── js 类沙盒规则求值（D4 / 配置下沉） ──
-# 纯 Rust CLI 没有 JS 进程，「忽略沙盒命令」里的 js 规则必须由内嵌引擎求值
-# （规则体是用户代码 → 求值侧要限内存/限时、异常按「未命中」处理，见 docs/config-sink-plan.md §4）。
-#
-# ⚠️ 必须关掉默认特性：default 含 `typescript` → 会拖进**整套 SWC**
-#    （实测 +180 个 crate，含 swc_ecma_* / swc_bundler）。我们只调用规则体的纯 JS 函数，
-#    不需要 TS 转译。
-#
-# ⚠️ 引擎必须选 `quickjs-ng`（**不能**用默认的 `bellard`）：
-#    `libquickjs-sys` 在本 crate 里关掉了默认特性，必须显式二选一，而
-#    `bellard/quickjs/cutils.h` 无条件使用 GCC 内建（`__attribute__((unused))` /
-#    `__builtin_expect`）且**没有 MSVC 分支** → 在 Windows MSVC 下直接编译失败
-#    （实测：`libunicode.c(381): error C2143`）；`quickjs-ng` 分支带 `#if defined(_MSC_VER)`
-#    回退，是官方可维护分支。详见 docs/config-sink-plan.md §4.3。
-quickjs_runtime = { version = "0.18", default-features = false, features = ["quickjs-ng"] }
+trash = "5" # move_to_trash（回收站）
+image = "0.25" # 剪贴板图片（CF_DIB）
+base64 = "0.22" # 视觉命令的 base64 载荷
 
 # ── Windows 平台：WebView2 权限管理（麦克风/摄像头） ──
 [target.'cfg(target_os = "windows")'.dependencies]
 webview2-com = "0.38"
 windows-core = "0.61"
-# notify-rust：**自持 NotificationHandle** 才能收到「点击系统通知」
-# （tauri-plugin-notification 把 handle 丢了 → 点击事件没人收，表现为「点了完全没反应」，
-#  见 src/tray/notify.rs::show_owned）。它本来就是通知插件的传递依赖（同一份 4.18，
-#  仅 Windows 编译、特性不变），不会新增额外编译产物。
 notify-rust = "4"
-# 自定义 OLE 拖放目标（drag_drop.rs）：比 wry 更能听懂别的程序的拖拽数据
-# （IDropTarget + IDataObject 读 CF_HDROP / CF_UNICODETEXT / 自定义格式）
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

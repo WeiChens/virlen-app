@@ -3,6 +3,7 @@
 //! 移植自 `src/domain/engine/verifier.ts`。
 
 use super::cancellation::CancellationToken;
+use super::prompts::VERIFY_PROMPT;
 use super::provider::Provider;
 use super::types::{
     ChatRequest, Goal, Message, Session, TokenUsage, VerificationIssue, VerificationResult,
@@ -10,12 +11,11 @@ use super::types::{
 use serde_json::Value;
 
 const DEFAULT_VERIFY_MAX_TOKENS: i64 = 4096;
-const VERIFY_PROMPT_TEMPLATE: &str = include_str!("prompts/verify-prompt.md");
 
 /// 构建验证 prompt
 fn build_verify_prompt(goal: &Goal, messages: &[Message]) -> String {
     let trace = build_execution_trace(messages);
-    VERIFY_PROMPT_TEMPLATE
+    VERIFY_PROMPT
         .replace("{{goal}}", &goal.description)
         .replace("{{trace}}", &trace)
 }

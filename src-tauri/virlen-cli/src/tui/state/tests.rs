@@ -13,6 +13,15 @@ fn keys(st: &mut UiState, s: &str) -> Option<Action> {
     last
 }
 
+/// 推入一次授权请求（`confirm_command_native`）—— 多处复用
+fn push_confirm(st: &mut UiState, request_id: &str) {
+    st.apply(UiEvent::Interaction {
+        request_id: request_id.to_string(),
+        kind: "confirm_command_native".into(),
+        data: json!({ "title": "删除目录", "desc": "rm -rf", "risk": "dangerous" }),
+    });
+}
+
 #[test]
 fn typing_then_enter_submits_and_echoes() {
     let mut st = UiState::new();
@@ -352,9 +361,11 @@ fn confirm_interaction_answers_and_queues_next() {
     });
     assert_eq!(st.interaction().unwrap().request_id, "r1");
 
-    // 交互期间按键只进交互，不进输入框
+    // 授权面板：显式选择 —— 普通字符**不参与**（用户此刻可能在打字），也不进输入框
     keys(&mut st, "y");
     assert_eq!(st.input(), "");
+    // → 把高亮移到「允许」，再回车才放行
+    assert_eq!(st.apply_key(Key::Right), None);
     let act = st.apply_key(Key::Enter);
     assert_eq!(
         act,
@@ -366,6 +377,7 @@ fn confirm_interaction_answers_and_queues_next() {
     // 队列里的下一个顶上
     assert_eq!(st.interaction().unwrap().request_id, "r2");
 
+    // 选择类仍是行输入（序号 / 文本都可用）
     keys(&mut st, "2");
     let act = st.apply_key(Key::Enter);
     assert_eq!(
@@ -411,24 +423,87 @@ fn interaction_esc_cancels_and_unknown_kind_is_answered() {
     );
 }
 
+/// 回归（fail-open → fail-closed）：授权面板的**默认项是「拒绝」**。
+///
+/// 旧实现把空白输入当作「允许」（提示写着 `[y/N]` 却回车即放行）：用户正在打下一句
+/// 消息时的一次误触 Enter，就等于批准了一条危险命令（`execute_command` 会真的跑）。
+/// 这里钉住：**不主动移动高亮 + 回车 = 拒绝**。
 #[test]
-fn empty_answer_to_confirm_means_allow_and_other_text_denies() {
-    let mk = |input: &str| Interaction {
-        request_id: "r".into(),
-        kind: "confirm_command_native".into(),
-        data: json!({}),
-        input: input.to_string(),
-    };
+fn confirm_defaults_to_deny_so_a_stray_enter_never_approves() {
+    let mut st = UiState::new();
+    push_confirm(&mut st, "r1");
+
+    // 先把输入框写满（模拟「用户正在打字」），再误触 Enter
+    keys(&mut st, "帮我看看");
+    let act = st.apply_key(Key::Enter).unwrap();
     assert_eq!(
-        mk("").answer(),
-        json!({ "__kind": "value", "value": "approved" })
+        act,
+        Action::Reply {
+            request_id: "r1".into(),
+            payload: json!({ "__kind": "cancelled" }),
+        },
+        "误触 Enter 绝不能放行"
     );
+    // 结果行按「实际发出的载荷」回显
+    let texts: Vec<String> = st.inflight().iter().map(|l| l.text.clone()).collect();
+    assert!(texts.iter().any(|t| t == "✘ 已拒绝"), "{texts:?}");
+}
+
+/// 授权必须**主动**把高亮移到「允许」：→/↓ 选中、←/↑ 撤回
+#[test]
+fn confirm_requires_moving_the_highlight_to_allow() {
+    let mut st = UiState::new();
+    push_confirm(&mut st, "r1");
+
+    // → 选「允许」→ 回车放行
+    st.apply_key(Key::Right);
+    let act = st.apply_key(Key::Enter).unwrap();
     assert_eq!(
-        mk("YES").answer(),
-        json!({ "__kind": "value", "value": "approved" })
+        act,
+        Action::Reply {
+            request_id: "r1".into(),
+            payload: json!({ "__kind": "value", "value": "approved" }),
+        }
     );
-    assert_eq!(mk("n").answer(), json!({ "__kind": "cancelled" }));
-    assert_eq!(mk("随便").answer(), json!({ "__kind": "cancelled" }));
+    let texts: Vec<String> = st.inflight().iter().map(|l| l.text.clone()).collect();
+    assert!(texts.iter().any(|t| t == "✔ 已允许"), "{texts:?}");
+
+    // ↓ 同向；← 撤回后回车又是拒绝（两端不越界）
+    let mut st = UiState::new();
+    push_confirm(&mut st, "r2");
+    st.apply_key(Key::Down);
+    st.apply_key(Key::Up);
+    st.apply_key(Key::Left);
+    st.apply_key(Key::Left);
+    assert_eq!(
+        st.apply_key(Key::Enter).unwrap(),
+        Action::Reply {
+            request_id: "r2".into(),
+            payload: json!({ "__kind": "cancelled" }),
+        }
+    );
+}
+
+/// 授权面板**不吃普通字符**：`y` / `YES` / 回车组合都不能绕过显式选择，
+/// 也不会污染输入框（用户打的字不该被当成对授权的表态）
+#[test]
+fn confirm_ignores_letter_keys_and_keeps_input_clean() {
+    let mut st = UiState::new();
+    push_confirm(&mut st, "r1");
+
+    keys(&mut st, "y");
+    keys(&mut st, "YES");
+    assert_eq!(st.input(), "", "授权期间的字符不得进输入框");
+    // 连 Backspace 也不改变选择
+    st.apply_key(Key::Backspace);
+    assert_eq!(
+        st.apply_key(Key::Enter).unwrap(),
+        Action::Reply {
+            request_id: "r1".into(),
+            payload: json!({ "__kind": "cancelled" }),
+        },
+        "只有 →/↓ 才能把选择挪到「允许」"
+    );
 }
 
 #[test]

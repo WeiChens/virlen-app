@@ -10,6 +10,13 @@
 //! [`crate::agent::host::HostEnv`]。
 //!
 //! 模型文件位置：`<资源根>/quasivision_models/`，结构 `ocr-models/ + icon-classifier/ + object-detection/`。
+//!
+//! ⚠️ 本模块的进度日志一律走 **stderr**（`eprintln!`），**绝不能** `println!`：
+//! 本 crate 现在也被 headless CLI（`virlen-cli run --json`）使用，而它的 **stdout 是机器可读
+//! 通道**（每行一个 `AgentEvent` 的 JSON Lines；非 `--json` 时是助手正文）——
+//! 在这里插一行 `[Vision] Loading models...` 会让下游解析直接失败（且 CLI 无从改道，
+//! 它写的是进程 stdout，不经注入的 `Write`）。GUI 侧行为不变：GUI 进程没有控制台，
+//! 两个流都无处可去。
 
 use crate::agent::host::{compile_time_resource_root, HostEnv};
 use once_cell::sync::Lazy;
@@ -115,10 +122,10 @@ fn load_models(models_dir: &Path) -> Result<ModelGuard, String> {
         models_dir.join("ocr-models").to_string_lossy().to_string(),
     );
 
-    println!("[Vision] Loading models from: {}", models_dir_str);
+    eprintln!("[Vision] Loading models from: {}", models_dir_str);
     match quasivision::init_models(&models_dir_str) {
         Ok(()) => {
-            println!("[Vision] Models loaded (refcount={})", *guard);
+            eprintln!("[Vision] Models loaded (refcount={})", *guard);
             Ok(ModelGuard)
         }
         Err(e) => {
@@ -134,13 +141,13 @@ fn unload_models() {
     let mut guard = match REFCOUNT.lock() {
         Ok(g) => g,
         Err(_) => {
-            println!("[Vision] Failed to lock refcount for unload");
+            eprintln!("[Vision] Failed to lock refcount for unload");
             return;
         }
     };
 
     if *guard == 0 {
-        println!("[Vision] unload_models called but refcount already 0");
+        eprintln!("[Vision] unload_models called but refcount already 0");
         return;
     }
 
@@ -149,16 +156,16 @@ fn unload_models() {
     drop(guard); // 释放锁，clean_models 可能很慢
 
     if remaining > 0 {
-        println!(
+        eprintln!(
             "[Vision] Skipping unload, still {} callers using models",
             remaining
         );
         return;
     }
 
-    println!("[Vision] Unloading models (last caller)...");
+    eprintln!("[Vision] Unloading models (last caller)...");
     quasivision::clean_models();
-    println!("[Vision] Models unloaded, memory freed");
+    eprintln!("[Vision] Models unloaded, memory freed");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

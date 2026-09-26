@@ -372,7 +372,7 @@ pub trait SessionRepo: Send + Sync {
 
 | 功能 | TS 实现 | Rust 现状 |
 |---|---|---|
-| `assembleAgentPrompt`（tool-call-spec + core-principles + 环境提示 + 角色/性格 + 技能注入） | `services/agent-service.ts` + `domain/agent/compose-prompt.ts` + `domain/agent/prompts/*.md` | **已有 Rust 版组装**（`agent/prompts/assemble.rs`，静态 md 用 `include_str!` 直接引用 TS 侧同一文件，两侧输出由 golden 测试锁定），但**尚未接入引擎 / CLI**——引擎仍只使用前端组装好的 `session.systemPrompt`，为空时回退 `"你是一个有用的 AI 助手。"` |
+| `assembleAgentPrompt`（tool-call-spec + core-principles + 环境提示 + 角色/性格 + 技能注入） | `services/agent-service.ts` + `domain/agent/compose-prompt.ts` | **已有 Rust 版组装**（`agent/prompts/assemble.rs`；静态 md 已在 Rust 侧 `agent/prompts/*.md`，`include_str!` 就地引用，前端经 `cmd_agent_prompts` 取，两侧输出由 golden 测试锁定）。**CLI 已接入**（`virlen-cli` 的 `session_rt/resources.rs::build_system_prompt`）；GUI 仍走 TS 组装（结果快照进 `session.systemPrompt`，为空时引擎回退 `"你是一个有用的 AI 助手。"`）。⚠️ CLI 实际喂进去的 `PromptParts` 与 GUI **不同**（env 无工具版本 / 项目规则未包装 / 无角色与技能）—— 见 §12.2 |
 
 ### 5. 前端职责（天然 JS，无需 Rust 化）
 
@@ -456,13 +456,25 @@ UI 渲染 / 设置管理 / i18n、`export-service` Markdown 导出、`download-s
 
 | 项 | 位置 | 说明 |
 |---|---|---|
-| 静态文本 | `src/domain/agent/prompts/*.md` | **单份**；Rust 用 `include_str!` 直接引用同一路径，**不复制副本** |
-| TS 组装 | `src/domain/agent/compose-prompt.ts`（纯函数，无 I/O）| 由 `services/agent-service.ts` 取数后调用 |
+| 静态文本（**唯一源**） | `src-tauri/virlen-core/src/agent/prompts/*.md` | 5 份：`tool-call-spec` / `core-principles` / `compress-context` / `generate-title` / `verify-prompt`。Rust `include_str!` **就地**引用（不再 `../../../../../` 指向前端）；前端**不自带副本** |
+| 前端取值 | Tauri → `cmd_agent_prompts`（`agent::prompts::all_prompt_texts`）；浏览器 dev / vitest → 直读上表同一份 md（`?raw`） | 适配器 `src/infrastructure/prompts/prompt-source.ts`；组合根 `src/main.ts` 启动水合（`setPromptTexts`），此后 `promptText(key)` **同步**读（未水合直接抛错） |
+| TS 组装 | `src/domain/agent/compose-prompt.ts`（纯函数，无 I/O）| 由 `services/agent-service.ts` 取数后调用；文本经 `@/domain/agent` 的 `promptText()` 取 |
 | Rust 组装 | `src-tauri/virlen-core/src/agent/prompts/assemble.rs` | `compose_system_prompt()` / `build_project_rules_prompt()` |
 | 契约文件 | `src/tests/fixtures/system-prompt.golden.txt` | 两侧共读；TS 用 Vite `?raw`、Rust 运行时按相对路径读 |
 | 护栏 | `src/tests/domain/compose-prompt-golden.test.ts` ↔ `prompts::assemble::tests::golden_system_prompt_matches_fixture` | 同一组固定输入下**逐字节相等**；改任一侧都会让另一边失败 |
 
 重组/更新契约：`UPDATE_GOLDEN=1 cargo test --lib golden_system_prompt`（在 `src-tauri` 下）。
+
+⚠️ **golden 守的是「组装规则」，不是「输入内容」**：两侧用**同一组固定输入**比对顺序与分隔符，
+因此「CLI 实际喂进去的片段与 GUI 不同」它**测不出来**。已知差异如下（不是意外，是 headless 的限制）：
+
+| 片段 | GUI（`services/agent-service.ts`） | CLI（`virlen-cli/src/session_rt/resources.rs`） |
+|---|---|---|
+| 环境信息 | `get_env_info`：`- OS: Windows 10.0.19045` + 每个工具版本（`- node:24.10.0`） | `std::env::consts::OS`：`- OS: windows (x86_64)`，**不含工具版本**（headless 不探测） |
+| 项目规则 | `buildProjectRulesPrompt` 包装（`# Project Rules (AGENTS.md)` 标题 + 「优先级高于通用说明」声明） | ⚠️ **直接塞文件原文**（未经 `build_project_rules_prompt`）—— 与 `PromptParts::project_rules` 的契约不符，**待确认是否一并包装** |
+| 角色 / 身份 / 性格 / 技能 | Agent 配置 + 技能注册表注入 | **不注入**（headless 没有这些输入，是「没有数据」而非「另一份实现」） |
+
+同一份对照表也写在 `agent/prompts/assemble.rs` 的模块注释里 —— **改一处要同步另一处**。
 
 ⚠️ **行尾**：md 在工作区是 CRLF、Linux CI 是 LF（仓库无 `.gitattributes`），
 因此两侧比对先归一化成 LF。若要追求构建产物的字节确定性，

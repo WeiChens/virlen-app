@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::tui::commands::Slash;
-use serde_json::{json, Value};
+use serde_json::json;
 
 impl UiState {
     // ==================== 按键 ====================
@@ -79,49 +79,76 @@ impl UiState {
         }
     }
 
-    /// 交互待答期间的按键：全部送给交互，不落到输入框
+    /// 交互待答期间的按键。
+    ///
+    /// 两种交互的键盘模型**刻意不同**：
+    /// - 授权（`confirm_command_native`）：**显式二选一** —— ←/↑ = 拒绝、→/↓ = 允许、
+    ///   Enter 确认当前高亮项，默认高亮「拒绝」。普通字符**一律不接受**（用户此刻
+    ///   很可能正在打下一句消息，`y` / `n` 都不是对授权的表态）；
+    /// - 选择（`user_choice` 等）：仍是行输入（不是安全闸门，序号 / 文本都可用）。
+    ///
+    /// ⚠️ 历史实现把授权也做成「行输入 + 回车放行」（空白 = 允许）：用户打字时的
+    /// 一次误触 Enter 就直接批准了危险命令。这条 fail-open 已被移除，回归用例见
+    /// `state/tests.rs::confirm_defaults_to_deny_so_a_stray_enter_never_approves`。
     fn key_for_interaction(&mut self, key: Key) -> Option<Action> {
-        let it = self.interaction.as_mut()?;
+        // ① 只影响「交互内部状态」的键（选择移动 / 行编辑）：吞掉，不产生动作
+        if let Some(it) = self.interaction.as_mut() {
+            match (it.is_confirm(), key) {
+                (true, Key::Left) | (true, Key::Up) => {
+                    it.confirm = it.confirm.left();
+                    return None;
+                }
+                (true, Key::Right) | (true, Key::Down) => {
+                    it.confirm = it.confirm.right();
+                    return None;
+                }
+                // 授权面板不吃普通字符（含 Backspace / Delete）：不污染输入框，也不改变选择
+                (true, _) => {}
+                (false, Key::Char(c)) => {
+                    it.input.push(c);
+                    return None;
+                }
+                (false, Key::Backspace) => {
+                    it.input.pop();
+                    return None;
+                }
+                (false, _) => {}
+            }
+        }
+        // ② 结束这次交互的键（其余键在此被忽略）
         match key {
-            Key::Char(c) => {
-                it.input.push(c);
-                None
-            }
-            Key::Backspace => {
-                it.input.pop();
-                None
-            }
-            Key::Enter => {
-                let payload = it.answer();
-                let line = if it.is_confirm() {
-                    if matches!(payload.get("__kind").and_then(Value::as_str), Some("value")) {
-                        "✔ 已允许".to_string()
-                    } else {
-                        "✘ 已拒绝".to_string()
-                    }
-                } else {
-                    format!(
-                        "→ {}",
-                        payload.get("value").and_then(Value::as_str).unwrap_or("（取消）")
-                    )
-                };
-                let request_id = it.request_id.clone();
-                self.inflight.push(OutLine::new(LineKind::Notice, line));
-                self.close_interaction();
-                Some(Action::Reply { request_id, payload })
-            }
-            Key::Esc | Key::CtrlC => {
-                let request_id = it.request_id.clone();
-                self.inflight
-                    .push(OutLine::new(LineKind::Notice, "→ 已取消"));
-                self.close_interaction();
-                Some(Action::Reply {
-                    request_id,
-                    payload: json!({ "__kind": "cancelled" }),
-                })
-            }
+            Key::Enter => self.answer_interaction(),
+            Key::Esc | Key::CtrlC => self.cancel_interaction(),
             _ => None,
         }
+    }
+
+    /// 确认当前交互：授权 = **高亮项**，选择 = 已输入的文本
+    fn answer_interaction(&mut self) -> Option<Action> {
+        let (request_id, payload, line) = {
+            let it = self.interaction.as_ref()?;
+            let payload = it.answer();
+            let line = it.answer_line(&payload);
+            (it.request_id.clone(), payload, line)
+        };
+        self.inflight.push(OutLine::new(LineKind::Notice, line));
+        self.close_interaction();
+        Some(Action::Reply {
+            request_id,
+            payload,
+        })
+    }
+
+    /// 取消当前交互（Esc / Ctrl+C）—— 与授权面板选「拒绝」是同一条回执
+    fn cancel_interaction(&mut self) -> Option<Action> {
+        let request_id = self.interaction.as_ref()?.request_id.clone();
+        self.inflight
+            .push(OutLine::new(LineKind::Notice, "→ 已取消"));
+        self.close_interaction();
+        Some(Action::Reply {
+            request_id,
+            payload: json!({ "__kind": "cancelled" }),
+        })
     }
 
     fn close_interaction(&mut self) {

@@ -13,7 +13,7 @@ import type { Message, Session, TokenUsage } from '@/types'
 import { ChatRequest } from '@/infrastructure/provider/types'
 import { providerPort } from '../provider'
 import { toolRegistry } from '../tools'
-import { AI_AGEMT_COMPRESS_CONTEXT_PROMPT } from '../agent'
+import { promptText } from '../agent'
 import { invoke } from '@tauri-apps/api/core'
 import { ledgerTokensOf, recordUsage } from '../usage'
 import { buildRawSummary } from './compress-raw'
@@ -145,7 +145,7 @@ export async function compressContext(
     throw new Error(`Provider "${providerId}" is not registered`)
   }
 
-  const summaryPrompt = AI_AGEMT_COMPRESS_CONTEXT_PROMPT
+  const summaryPrompt = promptText('compressContext')
 
   const allToolDefs = await toolRegistry.listDefinitions()
   const toolDefs =
