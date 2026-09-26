@@ -413,3 +413,94 @@ src-tauri/virlen-cli/src/
 5. ✅ **极小窗口**（终端高 < 视口高 + 1）：真终端实测过 `48x5` 与 `39x8`（比 10 行视口还矮）——**不崩、不失败**；`TestBackend` 下 `1x1` 也不 panic。
 6. **渲染观感未确认**：颜色 / 对齐 / 中文输入 / 鼠标选中复制 / 中文宽度下的光标位置——**必须人眼**。
 7. **`/status` 的 token 计数**按 `messageId` 去重求和（同一条消息重复上报不会重复计），但引擎在部分路径下可能不发 `usage`（则该行保持空）。
+
+---
+
+## 10. CLI 配置向导（`provider` / `agent`）—— 评估 → 设计 → 实现（2026-09-26）
+
+### 10.1 起因（用户原话）
+
+> 「评估一下 cli 还缺少什么功能，我希望 cli 可以单独配置一个供应商（不是 json 赋值）。是一个流程，让用户逐步输入数据，最后验证，也可以单独配置一个 agent」
+
+### 10.2 评估：这条命令填的是哪个坑
+
+**改前**「配一个供应商」只有一条路：`config set providers '[{…完整 JSON…}]'` —— 而它是**整键覆盖**：
+
+| 症状 | 证据 |
+|---|---|
+| 想加一个供应商，必须把**已有全部** provider 连 `id` / `createdAt` 一起抄进 JSON，漏一个字段就毁掉现有配置 | `config.rs::set` 单键 upsert；`session_db/settings.rs` 无数组合并 |
+| 写错键名**静默无效**（退出码 0、无任何提示、GUI 永远读不到） | 前端 `settingsRepo::pickKnownSettings` 丢弃未知键；`config.rs` 自己也不校验键名 |
+| `config get` 把 `providers[].apiKey` **明文**打到 stdout | `config.rs::get` → `get_all()` 原样 `to_pretty` |
+| 数组只能整组写 → 与桌面端（内存快照 + 400ms debounce 整组落库）的**冲突窗口很大** | `agentRepo::schedulePersist` / `settingStore::installSettingsPersist` |
+
+**其余缺口（本次未做，按优先级留档）**：`session rm/rename/export`、`list-skill`、`usage`、`doctor`（自检）、`chat` 内 `/provider` `/model` 切换、`run --pick`。
+
+### 10.3 技术前提（先解决才能写向导）
+
+| # | 事实 | 处理 |
+|---|---|---|
+| 1 | `PROVIDER_TEMPLATES` / `REASONING_EFFORT_UNION` / `DEFAULT_REASONING_EFFORT_LIST` 只存在于 `src/domain/provider/config.ts`，**Rust 侧没有** → CLI 要么抄一份（第二个权威源），要么搬过来 | 按 §11.26「提示词迁 core」的同一套路搬到 `virlen-core/src/agent/provider/provider_catalog.json` |
+| 2 | 原生 `Provider` trait 只有 `chat` / `chat_stream`，**没有 `list_models`** | core 新增 `agent/provider/models.rs`（`list_models` / `verify_connection`），**不加进 trait**（否则 `BridgedProvider` 也得陪跑一遍） |
+| 3 | `reqwest` 只在 core 里（CLI 自身没有） | 校验逻辑放 core；`virlen-cli` 的依赖表**一个都没加** |
+| 4 | `gemini` 走 `BridgedProvider`（需要前端 JS） | 向导在第 3 步**提前拒绝**，而不是配完才发现跑不起来 |
+| 5 | Agent 需要的两个枚举源**已经在 core** | 工具：`tool_defs::list_tool_definitions()`；技能：`<data_dir>/skills` 子目录（`AgentEnv::load` 一处备齐） |
+
+### 10.4 设计（已实现）
+
+```
+virlen-cli provider add | edit [<id>] | rm <id> [--yes] | list [--json] | test <id>
+virlen-cli agent    add | edit [<id>] | rm <id> [--yes] | list [--json]
+```
+
+**`provider add` 十步**：模板 → 名称 → 协议类型 → API 地址 → API Key（**关回显**）→ 模型列表
+（`GET {base}/models` 自动拉取，失败 / 超 50 个 / 无 key → 手工输入）→ 推理档位多选 → 默认档位 →
+**连通性验证**（发一条 `ping`，与 GUI `validateApiKey` 同一路径、同样 `max_tokens: 1`）→ 回显确认 → **按 id 合并写入**。
+
+**`agent add` 十步**：名称 → 描述 → 身份/性格 → 工作目录 → 项目规则文件（相对路径校验）→
+默认模型（供应商 → 模型）→ 工具白名单（默认全选）→ 技能 → 温度/topP → 回显确认。
+
+**三条口径**（都对齐桌面端）：
+
+1. **字段名逐字对齐**前端 `ProviderConfig` / `Agent`（两侧不建映射表，`docs/config-sink-plan.md` §6 R6）；
+2. **模板表 / 档位表来自 core**（与桌面端同一份）；工具 / 技能来自各自权威处；
+3. **只写自己改的字段** —— `settings_edit::upsert_by_id` 走**字段级合并**：`enabled` / `createdAt` /
+   桌面端以后新增的字段都不会被抹掉；写完**回读比对**，被并发覆盖时直接报错（**不是乐观锁**，见 §10.7）。
+
+**⚠️ 刻意没做的事**：`add` / `edit` **不支持命令行开关**（只能交互）。理由：向导的价值就是「逐步录入 + 当场校验」，
+加一套 flag 壳会让两条路径都难维护；而脚本本来就有 `config set` 这条逃生口。stdin 不是终端时**直接报用法错误（退出码 2）**，绝不半交互挂住。
+
+### 10.5 实现落点
+
+| 文件 | 放什么 |
+|---|---|
+| `virlen-core/src/agent/provider/provider_catalog.json` | **模板表 + 档位表的唯一物理源**（`include_str!` / 前端 `?raw` 同读一份） |
+| `virlen-core/src/agent/provider/catalog.rs` | 解析 / `find_template` / `effort_rank`；`pub mod catalog` |
+| `virlen-core/src/agent/provider/models.rs` | `list_models`（openai `/models`；anthropic 用 **origin**，对齐 TS）/ `verify_connection`（`ping`，`max_tokens: 1`） |
+| `src-tauri/src/commands/agent.rs` | 命令 **`cmd_provider_catalog`**（`lib.rs` 已注册） |
+| `src/domain/provider/catalog.ts` | 前端快照：`setProviderCatalog` / `providerCatalog()`（**未水合抛错**）/ `providerTemplates` / `reasoningEffortUnion` / `defaultReasoningEffortList` / `sortReasoningEfforts`（**替换**被删掉的 `domain/provider/config.ts`） |
+| `src/infrastructure/provider/catalog-source.ts` | Tauri 走命令 / 浏览器 dev·vitest `?raw` 读同一份 json + `hydrateProviderCatalog()` |
+| `virlen-cli/src/wizard.rs`（+ `wizard/tests.rs`） | 问答原语：`text` / `text_opt` / `text_with`（**校验不过就重问**）/ `secret`·`secret_opt`（真终端 raw mode **关回显**，Drop 守卫恢复）/ `choose` / `multi`（编号 / `all` / `none`）/ `confirm`；**EOF 一律报错**，绝不进「空输入→重问」死循环 |
+| `virlen-cli/src/settings_edit.rs` | 数组键的按 id 增删改 + **字段级合并** + 回读校验 |
+| `virlen-cli/src/provider.rs`（+ `provider/tests.rs`） | `provider` 子命令（10 步向导 + `list` / `test` / `rm`） |
+| `virlen-cli/src/agent.rs`（+ `agent/tests.rs`） | `agent` 子命令（10 步向导 + `list`（复用 `list-agent`）/ `rm`） |
+
+### 10.6 验证（本机实测）
+
+| 项 | 结果 |
+|---|---|
+| `cargo test --workspace` | **582 passed**（app 29 / cli **183**（139→+44）/ core **370**（358→+12）；2 ignored） |
+| `cargo clippy --workspace --all-targets` | 新增文件 **0 告警**（历史 74 条未动） |
+| `npx tsc --noEmit` | exit 0 |
+| `npx vitest run` | **91 文件 / 1059 tests**（90/1050 → +1 文件 `provider-catalog-contract.test.ts`、+9 用例） |
+| **真机冒烟**（临时 `VIRLEN_DATA_DIR`） | `provider list`（空库 / 有数据 / 表格对齐）、`provider list --json`（apiKey → `****efgh`）、`agent list`、`provider test`（快速失败 + 两条检查各自报告）、`provider rm --yes`（**带「Agent 仍引用」告警**）、`agent rm __default__`（拒绝）、非终端跑 `add`（退出码 2） |
+| 向导本身的可用性 | 在一次「误在真终端里跑」的冒烟中意外验到：模板列表、分步提问、**密文输入回显 `***`**、真实 HTTP 401 报告均正常 |
+
+### 10.7 未闭环 / 已知限制（如实标注）
+
+1. **不是乐观锁**：桌面端正在运行时，它的内存快照 + debounce 落库仍会**整组覆盖**本次改动；回读校验只能把「已经发生」的覆盖变成一条可见错误，不能阻止它。命令成功时会打一行提示让用户重启桌面端。
+2. **`provider add` / `edit` 需要真终端**（stdin 不是终端就直接报用法错误）—— 这是有意的，不是待办。
+3. **`gemini` 等未原生化协议在 CLI 里配不了**：向导明确拒绝并给出「改 openai 兼容端点」的替代做法。
+4. **`config get` 仍会明文输出 `apiKey`**（评审项 N1，用户本次未勾选 → **未动**）；`provider list` / `provider list --json` 已自行打码，**没有**新增泄漏面。
+5. **项目规则文件路径校验有两份实现**（TS `normalizeProjectRulesPath` ↔ Rust `validate_project_rules_path`）：真正的准入闸仍在前端读路径上（CLI 不读规则文件），差异的后果只是多一次驳回。改规则要**两处一起改**。
+6. **未做端到端的自动交互测试**：`wizard` / `provider` / `agent` 的用例都是「喂脚本 + 断言」，真实 raw-mode 密文输入与真终端的按键流**只能人眼验**（与 §9 第 6 条同类）。
+
