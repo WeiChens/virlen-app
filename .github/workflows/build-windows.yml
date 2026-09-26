@@ -161,22 +161,64 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      # ── 9. Stage & upload CLI binary ────────────────────────────────────
-      # 裸二进制形态（不做归档）：CLI 产物同样进 Artifact 与 Release。
-      # ⚠️ 必须改成**平台区分名**：三个 build-*.yml 的 release job 会把产物传到**同一个
-      #    Release**，而 Linux / macOS 的裸产物 basename 都是 `virlen-cli` → 同名互相覆盖。
-      # ⚠️ 文件名不带版本号：版本由 Release tag 承载（与 .dmg / .deb / .exe 同口径）。
-      - name: Stage CLI binary (platform-distinct name)
-        shell: bash
+      # ── 9. Stage & upload CLI bundle (zip) ──────────────────────────────
+      # 产物形态是 **zip 包**，不是裸二进制：裸 exe 不带 `quasivision_models/`，用户在别的
+      # 机器上跑 `vision_analyze` 只会拿到「quasivision models directory not found.」。
+      # zip 内容：exe + 端侧视觉模型 + DirectML.dll + README.txt（说明文案的唯一源是
+      # `.github/cli-bundle-README.txt`，三个平台共用一份）。
+      # ⚠️ 三平台共写**同一个 Release**，靠 zip 名区分；zip **内部**文件名可以同名
+      #    （Windows 是 `virlen-cli.exe`，Linux / macOS 是 `virlen-cli`）。
+      # ⚠️ 文件名不带版本号：版本由 Release tag 承载（与 .exe / .msi 同口径）。
+      # ⚠️ **目录布局即契约**：`quasivision_models/` 必须与 exe **同级** —— 这样才命中
+      #    `CliHost` 资源候选的最后一档 `<exe_dir>`（`virlen-core/src/host/cli_host.rs`）。
+      - name: Stage CLI bundle (binary + vision models → zip)
+        shell: pwsh
         run: |
-          mkdir -p cli-dist
-          cp src-tauri/target/x86_64-pc-windows-msvc/release/virlen-cli.exe cli-dist/virlen-cli-windows-x64.exe
+          $stage = "cli-dist/bundle"
+          # 幂等：每次从零开始，否则重复执行会把 quasivision_models/ 再套一层（实测踩过）
+          Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path "$stage/quasivision_models" | Out-Null
+          Copy-Item src-tauri/target/x86_64-pc-windows-msvc/release/virlen-cli.exe "$stage/virlen-cli.exe"
+          # ⚠️ 必须用 `src/*`（复制内容），不能用 `Copy-Item -Recurse <src> <dst>`：后者在 dst
+          #    已存在时会套成 `dst/<src 名>/...` → zip 里出现 `quasivision_models/quasivision_models/`（实测）。
+          Copy-Item -Recurse "src-tauri/resources/quasivision_models/*" "$stage/quasivision_models"
+          Copy-Item .github/cli-bundle-README.txt "$stage/README.txt"
+          # DirectML.dll：onnxruntime 本身是**静态链接**进 exe 的，但 DirectML EP 是 PE 静态导入
+          #    → 加载期就要在 exe 同目录里找到它（System32 自带的是 1.0.200713，版本过旧）。
+          $dml = "src-tauri/target/x86_64-pc-windows-msvc/release/DirectML.dll"
+          if (Test-Path $dml) {
+            Copy-Item $dml "$stage/DirectML.dll"
+            Write-Host "DirectML.dll ($((Get-Item $dml).VersionInfo.FileVersion)) 已打入"
+          } else {
+            Write-Host "::warning::$dml 不存在 → zip 不含 DirectML.dll，用户机上 DirectML EP 可能无法初始化"
+          }
+          Compress-Archive -Path "$stage/*" -DestinationPath cli-dist/virlen-cli-windows-x64.zip -Force
+          Write-Host "--- zip 内容 ---"
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::OpenRead("cli-dist/virlen-cli-windows-x64.zip").Entries |
+            ForEach-Object { "{0,12:N0}  {1}" -f $_.Length, $_.FullName }
+          # 自检：就位判据文件必须在 zip 里（.NET 读出的 FullName 用 \ 分隔 → 先归一化），
+          # 否则发出去的包在用户机上必然报「quasivision models directory not found.」
+          # —— 这种「静默坏包」必须在 CI 里拦住，而不是等用户发现。
+          # ⚠️ 程序集在这里**自己**加载，别依赖上面打印内容那段：缺它时 OpenRead 会抛错、
+          #    $names 变空 → 报「缺少 xxx」（fail-closed 但容易被误当成真的漏文件）。
+          Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null
+          $z = [System.IO.Compression.ZipFile]::OpenRead("cli-dist/virlen-cli-windows-x64.zip")
+          $names = $z.Entries.FullName -replace '\\', '/'
+          $z.Dispose()
+          foreach ($need in @("virlen-cli.exe", "README.txt", "quasivision_models/ocr-models/ppocrv5_mobile_det.onnx")) {
+            if ($names -notcontains $need) { Write-Host "::error::zip 里缺少 $need"; exit 1 }
+          }
+          # 防嵌套：多套一层时上面那条判据仍会过（第一层原样还在），必须单独拦
+          if ($names -match '^quasivision_models/quasivision_models/') {
+            Write-Host "::error::zip 里出现嵌套的 quasivision_models/quasivision_models/"; exit 1
+          }
 
-      - name: Upload CLI binary
+      - name: Upload CLI bundle
         uses: actions/upload-artifact@v4
         with:
           name: Virlen-CLI-Windows-x64-${{ github.sha }}
-          path: cli-dist/virlen-cli-windows-x64.exe
+          path: cli-dist/virlen-cli-windows-x64.zip
           # 本轮新增的产物：缺失代表构建/落盘真的出了问题，必须失败（不用 warn）
           if-no-files-found: error
           retention-days: 14
@@ -199,16 +241,17 @@ jobs:
       - name: List artifacts
         shell: bash
         run: |
-          find artifacts -type f \( -name "*.exe" -o -name "*.msi" \) | sort
+          find artifacts -type f \( -name "*.exe" -o -name "*.msi" -o -name "virlen-cli-*.zip" \) | sort
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: Virlen ${{ github.ref_name }}
           generate_release_notes: true
-          # CLI 裸二进制 `virlen-cli-windows-x64.exe` 已被下面 `**/*.exe` 命中，无需另列；
-          # 加平台后缀正是为了让三平台的裸产物不在同一个 Release 上互相覆盖。
+          # CLI 以 **zip** 发布（内含 quasivision_models / DirectML.dll）→ `**/*.exe` 命中不到，
+          # 必须显式列；zip 名带平台后缀，三平台产物在同一个 Release 上不互相覆盖。
           files: |
             artifacts/**/*.exe
             artifacts/**/*.msi
+            artifacts/**/virlen-cli-windows-x64.zip
           fail_on_unmatched_files: false

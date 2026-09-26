@@ -190,23 +190,50 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      # ── 10. Stage & upload CLI binary ───────────────────────────────────
-      # 裸二进制形态（不做归档）：CLI 产物同样进 Artifact 与 Release。
-      # ⚠️ 必须改成**平台区分名**：三个 build-*.yml 的 release job 会把产物传到**同一个
-      #    Release**，而 Linux / macOS 的裸产物 basename 都是 `virlen-cli` → 同名互相覆盖。
+      # ── 10. Stage & upload CLI bundle (zip) ─────────────────────────────
+      # 产物形态是 **zip 包**（可执行文件 + `quasivision_models/` + `README.txt`）：裸二进制不带
+      # 模型，用户在别的机器上跑 `vision_analyze` 只会拿到「quasivision models directory not found.」。
+      # ⚠️ 三平台共写**同一个 Release**，靠 zip 名区分；zip **内部**文件名可以同名。
       # ⚠️ 文件名不带版本号：版本由 Release tag 承载（与 .dmg 同口径）。
-      - name: Stage CLI binary (platform-distinct name)
+      # ⚠️ **目录布局即契约**：`quasivision_models/` 必须与可执行文件**同级** —— 这样才命中
+      #    `CliHost` 资源候选的最后一档 `<exe_dir>`（`virlen-core/src/host/cli_host.rs`）。
+      # ⚠️ macOS 上 ONNX Runtime 走**系统 CoreML 框架**，没有 Windows 那种必须随包分发的 dll
+      #    （所以本 zip 里没有 DirectML.dll，与 Windows 包不同）。
+      # ⚠️ 用 `zip`（保留 Unix 可执行位）而不是上裸文件：裸文件在 Artifact 与 Release 上
+      #    **不保留 mode**，使用者得自己 `chmod +x`；zip 解压后即可执行。
+      - name: Stage CLI bundle (binary + vision models → zip)
         shell: bash
         run: |
-          mkdir -p cli-dist
-          cp src-tauri/target/aarch64-apple-darwin/release/virlen-cli cli-dist/virlen-cli-macos-arm64
-          chmod +x cli-dist/virlen-cli-macos-arm64
+          # 幂等：每次从零开始，否则重复执行会把 quasivision_models/ 再套一层（实测踩过）
+          rm -rf cli-dist/bundle
+          mkdir -p cli-dist/bundle/quasivision_models
+          cp src-tauri/target/aarch64-apple-darwin/release/virlen-cli cli-dist/bundle/virlen-cli
+          chmod +x cli-dist/bundle/virlen-cli
+          # ⚠️ 用 `src/.`（复制内容），不能用 `cp -r <src> <dst>`：后者在 dst 已存在时
+          #    会套成 `dst/<src 名>/...` → zip 里出现 `quasivision_models/quasivision_models/`。
+          cp -r src-tauri/resources/quasivision_models/. cli-dist/bundle/quasivision_models/
+          cp .github/cli-bundle-README.txt cli-dist/bundle/README.txt
+          # 显式列条目（不用 `zip -r out.zip .`）：条目名确定、不带 `./` 前缀
+          cd cli-dist/bundle
+          zip -r -q ../virlen-cli-macos-arm64.zip virlen-cli quasivision_models README.txt
+          cd ../..
+          unzip -l cli-dist/virlen-cli-macos-arm64.zip
+          # 自检：就位判据文件必须在 zip 里，否则发出去的包在用户机上必然报
+          # 「quasivision models directory not found.」—— 这种「静默坏包」必须在 CI 里拦住。
+          for need in virlen-cli README.txt quasivision_models/ocr-models/ppocrv5_mobile_det.onnx; do
+            unzip -Z1 cli-dist/virlen-cli-macos-arm64.zip | grep -qx "$need" \
+              || { echo "::error::zip 里缺少 $need"; exit 1; }
+          done
+          # 防嵌套：多套一层时上面那条判据仍会过（第一层原样还在），必须单独拦
+          if unzip -Z1 cli-dist/virlen-cli-macos-arm64.zip | grep -q '^quasivision_models/quasivision_models/'; then
+            echo "::error::zip 里出现嵌套的 quasivision_models/quasivision_models/"; exit 1
+          fi
 
-      - name: Upload CLI binary
+      - name: Upload CLI bundle
         uses: actions/upload-artifact@v4
         with:
           name: Virlen-CLI-macOS-arm64-${{ github.sha }}
-          path: cli-dist/virlen-cli-macos-arm64
+          path: cli-dist/virlen-cli-macos-arm64.zip
           # 本轮新增的产物：缺失代表构建/落盘真的出了问题，必须失败（不用 warn）
           if-no-files-found: error
           retention-days: 14
@@ -229,20 +256,19 @@ jobs:
       - name: List artifacts
         shell: bash
         run: |
-          find artifacts -type f \( -name "*.dmg" -o -name "*.app.zip" -o -name "virlen-cli-*" \) | sort
+          find artifacts -type f \( -name "*.dmg" -o -name "*.app.zip" -o -name "virlen-cli-*.zip" \) | sort
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: Virlen ${{ github.ref_name }}
           generate_release_notes: true
-          # CLI 裸二进制（无后缀）命中不了 .dmg / .app.zip → 显式列出；
-          # 平台后缀避免三平台在同一 Release 上同名覆盖。
-          # ⚠️ 裸二进制不带可执行位 → 使用者下载后需 `chmod +x virlen-cli-macos-arm64`；
-          #    浏览器下载会打上 quarantine，若被 Gatekeeper 拦住用
-          #    `xattr -d com.apple.quarantine virlen-cli-macos-arm64`（本仓库无 Apple 签名证书）。
+          # CLI 以 **zip** 发布（内含 quasivision_models / README.txt）→ .dmg / .app.zip 命中不到，
+          # 必须显式列；zip 名带平台后缀，三平台产物在同一个 Release 上不互相覆盖。
+          # ⚠️ 可执行位由 zip 保留，但**浏览器下载会打上 quarantine**、本仓库无 Apple 签名证书，
+          #    若被 Gatekeeper 拦住：`xattr -d com.apple.quarantine virlen-cli`（解压后）。
           files: |
             artifacts/**/*.dmg
             artifacts/**/*.app.zip
-            artifacts/**/virlen-cli-macos-arm64
+            artifacts/**/virlen-cli-macos-arm64.zip
           fail_on_unmatched_files: false
