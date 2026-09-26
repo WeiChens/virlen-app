@@ -2,7 +2,7 @@
  * chat-service 编排层 — 消息发送、暂停恢复、取消、上下文压缩、会话创建
  *
  * 负责：校验入参 → 创建/持久化用户消息 → 调引擎 → 通过事件处理器回写 store。
- * 引擎通过 getEngine() 选择（Rust 原生 / TS 回退）。
+ * 引擎恒为 Rust（`getEngine()`）—— TS 引擎已移除。
  */
 import {
   getSessionRuntime,
@@ -326,23 +326,15 @@ export async function resumePausedRun(
 
   const toolInteract = await toolService.createToolHandles(sessionId)
 
-  // 恢复暂停任务的「历史消息」来源按引擎分流：
-  // - Rust 引擎：**不传**整份历史 —— 引擎以本地库为权威读回（暂停时消息均已落库），
-  //   省掉「序列化整份历史 → IPC → 反序列化」的 O(历史) 开销（大历史下正是「继续时
-  //   弹窗要等好几秒」的主因：恢复跳过 LLM，这段耗时不再被 LLM 等待掩盖）。
-  //   ⚠️ Rust 侧只读「最后一个 summary 及其之后」（`SessionRepo::get_context_messages`）——
-  //   请求组装本就丢掉更早的历史，被压缩的旧消息不必进上下文（见 AGENTS.md §11.35）。
-  // - TS 引擎（回退路径）：TS 引擎不读 Rust 侧 SessionRepo，仍需前端提供全量历史。
+  // 恢复暂停任务：**不传**整份历史 —— 引擎以本地库为权威读回（暂停时消息均已落库），
+  // 省掉「序列化整份历史 → IPC → 反序列化」的 O(历史) 开销（大历史下正是「继续时
+  // 弹窗要等好几秒」的主因：恢复跳过 LLM，这段耗时不再被 LLM 等待掩盖）。
+  // ⚠️ Rust 侧只读「最后一个 summary 及其之后」（`SessionRepo::get_context_messages`）——
+  // 请求组装本就丢掉更早的历史，被压缩的旧消息不必进上下文（见 AGENTS.md §11.35）。
   // 注意：此处**不能**补占位 tool 结果（悬空 tool_calls 正是本次要恢复执行的步骤）。
-  const rustEngineActive = engineKind() === 'rust'
-  const currentMessages = rustEngineActive
-    ? []
-    : await prepareMessagesForSend(sessionId, { repair: false })
-  // 埋点用的消息条数：Rust 引擎下取会话内存条数（暂停发生在一次完整 run 内，
-  // 该会话此前已被 run 全量加载）；TS 引擎下即实际发送的条数。
-  const messageCount = rustEngineActive
-    ? sessionStore.getSession(sessionId)?.messages.length ?? 0
-    : currentMessages.length
+  const currentMessages: Message[] = []
+  // 埋点用的消息条数：取会话内存条数（暂停发生在一次完整 run 内，该会话此前已被 run 全量加载）
+  const messageCount = sessionStore.getSession(sessionId)?.messages.length ?? 0
   const providerCfg = settingsState.value.providers.find(
     (p) => p.id === session.providerConfigId,
   )

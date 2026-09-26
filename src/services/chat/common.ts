@@ -6,13 +6,19 @@
  */
 import { settingsState } from '@/ui/store'
 import type { MessageContent, ProviderConfig, Session } from '@/types'
-import { agentEngine } from '@/domain'
-import { rustEngine, isRustEngineEnabled, isTauriAvailable } from '@/services/rust-engine'
+import type { AgentEnginePort } from '@/domain/ports'
+import { rustEngine } from '@/services/rust-engine'
 
 // ==================== 埋点辅助（§5.4 / §5.5） ====================
 
-function engineKind(): 'rust' | 'ts' {
-  return isRustEngineEnabled() ? 'rust' : 'ts'
+/**
+ * 引擎标识 —— 恒为 `'rust'`。
+ *
+ * TS 引擎已移除（引擎统一为 Rust）；保留本函数只因为埋点字段 `engine` 的**历史取值**
+ * 含 `'ts'`，历史数据仍要能区分。
+ */
+function engineKind(): 'rust' {
+  return 'rust'
 }
 
 function providerTypeOf(session: Session): string {
@@ -51,21 +57,18 @@ function describeContent(content: MessageContent): {
 }
 
 /**
- * 获取当前激活的 Agent 引擎
- * - useRustEngine=true 且 Tauri 可用 → Rust 原生引擎
- * - 否则 → TS 引擎（回退）
+ * 获取当前 Agent 引擎 —— **恒为 Rust 引擎**。
+ *
+ * TS 引擎已移除（引擎统一为 Rust）；非 Tauri 环境（浏览器 dev / vitest）没有后端，
+ * 不再有回退引擎 —— 产品不走纯浏览器路线。
  */
-export function getEngine(): typeof agentEngine {
-  return isRustEngineEnabled() ? rustEngine : agentEngine
+export function getEngine(): AgentEnginePort {
+  return rustEngine
 }
 
-/**
- * 压缩引擎选择：Tauri 下**一律走 Rust**（与 CLI 共用 core 同一份实现 `cmd_compress_context`），
- * 与 `useRustEngine` 开关无关 —— 压缩不是聊天循环的一部分，没必要在默认引擎与回退引擎之间再分叉；
- * 非 Tauri（浏览器 dev / vitest）没有后端，回退 TS 实现。
- */
-export function getCompressEngine(): typeof agentEngine {
-  return isTauriAvailable() ? rustEngine : agentEngine
+/** 压缩引擎：与 `getEngine()` 同一份（Rust，与 CLI 共用 core 实现 `cmd_compress_context`）。 */
+export function getCompressEngine(): AgentEnginePort {
+  return rustEngine
 }
 
 /**
