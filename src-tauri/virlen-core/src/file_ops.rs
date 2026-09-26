@@ -86,7 +86,7 @@ fn read_file_text(path: &str) -> Result<String, String> {
     }
 
     // ---- 4. 全部失败 → 判断是二进制还是未知编码 ----
-    let filename = path.split(&['/', '\\'][..]).last().unwrap_or(path);
+    let filename = path.split(&['/', '\\'][..]).next_back().unwrap_or(path);
 
     // 含空字节 → 判定为二进制文件
     if raw.contains(&0x00) {
@@ -198,9 +198,7 @@ fn apply_single_edit(
 ) -> Result<SingleEditResult, String> {
     let actual_count = normalized.matches(old_string).count();
     if actual_count == 0 {
-        return Err(format!(
-            "old_string not found. The content you want to replace does not exist in the file."
-        ));
+        return Err("old_string not found. The content you want to replace does not exist in the file.".to_string());
     }
 
     let replace_all = replace_count == usize::MAX;

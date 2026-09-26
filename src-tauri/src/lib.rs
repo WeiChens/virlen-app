@@ -63,6 +63,8 @@ async fn save_file_to_path(buffer: Vec<u8>, path: String) -> Result<(), String> 
 }
 
 #[tauri::command]
+// ⚠️ `#[allow(too_many_arguments)]`：Tauri 命令参数逐个从 JS 传，收结构体会要求前端改调用形状。
+#[allow(clippy::too_many_arguments)]
 async fn search_files_by_name(
     root: String,
     query: String,
@@ -94,7 +96,7 @@ async fn search_files_by_name(
 
     let result = tokio::time::timeout(std::time::Duration::from_secs(30), task)
         .await
-        .map_err(|_| format!("Search timed out after 30s"))?
+        .map_err(|_| "Search timed out after 30s".to_string())?
         .map_err(|e| format!("Search failed: {}", e))?;
 
     task_manager::unregister(&task_id);
@@ -118,7 +120,7 @@ async fn search_text_in_files(
 
     let result = tokio::time::timeout(std::time::Duration::from_secs(30), task)
         .await
-        .map_err(|_| format!("Search timed out after 30s"))?
+        .map_err(|_| "Search timed out after 30s".to_string())?
         .map_err(|e| format!("Search failed: {}", e))?;
 
     task_manager::unregister(&task_id);

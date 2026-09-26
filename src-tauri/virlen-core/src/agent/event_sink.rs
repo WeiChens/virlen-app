@@ -19,6 +19,7 @@ pub trait EventSink: Send + Sync {
 /// 测试用事件收集器
 #[cfg(test)]
 #[allow(dead_code)]
+#[derive(Default)]
 pub struct TestEventSink {
     pub events: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
 }

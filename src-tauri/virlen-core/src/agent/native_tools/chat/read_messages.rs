@@ -28,8 +28,8 @@ fn parse_window(raw: Option<&Value>) -> (usize, usize) {
             let end = number_of(items.get(1));
             if let (Some(s), Some(e)) = (start, end) {
                 if s <= 0.0 && e >= 0.0 {
-                    let before = ((-s).floor() as i64).min(WINDOW_MAX_BACK).max(0);
-                    let after = (e.floor() as i64).min(WINDOW_MAX_FWD).max(0);
+                    let before = ((-s).floor() as i64).clamp(0, WINDOW_MAX_BACK);
+                    let after = (e.floor() as i64).clamp(0, WINDOW_MAX_FWD);
                     return (before as usize, after as usize);
                 }
             }

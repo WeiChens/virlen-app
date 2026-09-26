@@ -200,7 +200,7 @@ fn strip_invisible_blocks(html: &str) -> String {
 fn convert_html_to_markdown(html: &str) -> String {
     let cleaned = strip_invisible_blocks(html);
     // 每次调用新建转换器（构建成本只是装配 handler 表，相对解析网页可忽略）
-    htmd::convert(&cleaned).unwrap_or_else(|_| cleaned)
+    htmd::convert(&cleaned).unwrap_or(cleaned)
 }
 
 #[cfg(test)]

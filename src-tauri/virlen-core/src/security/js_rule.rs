@@ -185,7 +185,7 @@ mod tests {
             "}",
         ]
         .join("\n");
-        assert_eq!(match_command(&default_pattern, "pnpm test").unwrap(), false);
+        assert!(!match_command(&default_pattern, "pnpm test").unwrap());
     }
 
     #[test]

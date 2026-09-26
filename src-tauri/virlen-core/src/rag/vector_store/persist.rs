@@ -5,7 +5,7 @@
 //! 也在这里 —— 安全判定与拼接放在一处才不会被绕过。
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use turbovec::IdMapIndex;
 
 use super::*;
@@ -101,7 +101,7 @@ impl VectorStoreManager {
     /// 校验 `sub_path` 是否以 `base_dir` 为前缀（防止路径穿越）
     ///
     /// 使用父目录的 canonicalize 做校验，因为 sub_path 本身可能尚不存在（首次写入时）。
-    pub(crate) fn validate_path_within(base_dir: &PathBuf, sub_path: &PathBuf, label: &str) -> Result<(), String> {
+    pub(crate) fn validate_path_within(base_dir: &Path, sub_path: &Path, label: &str) -> Result<(), String> {
         let canonical_base = base_dir
             .canonicalize()
             .map_err(|_| format!("{} 路径校验失败: 基础目录不存在 ({})", label, base_dir.display()))?;

@@ -280,6 +280,10 @@ impl AgentEngine {
     }
 
     /// 断点恢复：从 snapshot 重建 run，执行未完成的 tool steps
+    ///
+    /// ⚠️ `#[allow(too_many_arguments)]`：快照恢复要把整条装配链的原样上下文（会话 / 取消 /
+    /// 技能 / 安全策略 / 当前消息 / 轮次上限）一起带进去，逐项都是独立事实，无内聚可压。
+    #[allow(clippy::too_many_arguments)]
     async fn resume_run(
         &self,
         snapshot: &RunSnapshot,
@@ -400,7 +404,7 @@ impl AgentEngine {
                 // 最终纯文本回复 / 用户取消的部分回复：先落库再结束循环
                 if let Err(e) = self
                     .repo
-                    .append_messages_if_alive(&session_id, &[result.assistant_message])
+                    .append_messages_if_alive(session_id, &[result.assistant_message])
                     .await
                 {
                     eprintln!("[session_db] 写入最终回复失败: {}", e);
@@ -456,7 +460,7 @@ impl AgentEngine {
 
     /// 销毁引擎
     pub fn dispose(&self) {
-        for (_, token) in self.active_cancels.lock().unwrap().iter() {
+        for token in self.active_cancels.lock().unwrap().values() {
             token.cancel();
         }
         self.active_cancels.lock().unwrap().clear();

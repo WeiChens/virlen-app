@@ -79,17 +79,14 @@ impl Provider for BridgedProvider {
             .await?;
 
         while let Some(msg) = rx.recv().await {
-            match msg {
-                ProviderBridgeMsg::Done { result, error } => {
-                    if let Some(err) = error {
-                        return Err(err);
-                    }
-                    if let Some(m) = result {
-                        return Ok(m);
-                    }
-                    return Err("Provider returned no result".into());
+            if let ProviderBridgeMsg::Done { result, error } = msg {
+                if let Some(err) = error {
+                    return Err(err);
                 }
-                _ => {}
+                if let Some(m) = *result {
+                    return Ok(m);
+                }
+                return Err("Provider returned no result".into());
             }
         }
         Err("Provider stream closed early".into())

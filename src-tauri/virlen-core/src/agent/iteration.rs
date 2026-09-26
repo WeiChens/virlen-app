@@ -10,7 +10,7 @@ use super::llm_loop::{execute_llm_round, ExecuteLlmRoundParams};
 use super::llm_round::now_ms;
 use super::provider::Provider;
 use super::types::{
-    AgentEvent, Goal, Message, NativeToolSecurity, Run, Session, ToolDefinition, VerificationResult,
+    AgentEvent, Goal, Message, NativeToolSecurity, Session, ToolDefinition, VerificationResult,
 };
 use super::verifier::verify;
 use crate::session_db::SessionRepo;
@@ -42,7 +42,7 @@ pub struct RunIterationParams<'a> {
     pub provider_type: &'a str,
     /// Provider 配置 id，仅用于用量记账
     pub provider_config_id: &'a str,
-    pub persist_snapshot: Option<&'a (dyn Fn(&str, &Run) + Sync + Send)>,
+    pub persist_snapshot: Option<super::PersistSnapshotFn<'a>>,
     pub clear_snapshot: Option<&'a (dyn Fn(&str) + Sync + Send)>,
 }
 
@@ -130,7 +130,7 @@ pub async fn run_iteration(
         // ⚠️ 均不刷新会话时间（AI 发言不是用户发言）
         if result.ctx.is_none() {
             if let Err(e) = repo
-                .append_messages_if_alive(session_id, &[result.assistant_message.clone()])
+                .append_messages_if_alive(session_id, std::slice::from_ref(&result.assistant_message))
                 .await
             {
                 eprintln!("[session_db] 写入迭代纯文本回答失败: {}", e);
@@ -251,7 +251,7 @@ pub async fn run_iteration(
         messages.push(feedback_msg.clone());
         // 反馈消息也落库（与 TS 引擎路径通过事件持久化行为一致）
         if let Err(e) = repo
-            .append_messages_if_alive(session_id, &[feedback_msg.clone()])
+            .append_messages_if_alive(session_id, std::slice::from_ref(&feedback_msg))
             .await
         {
             eprintln!("[session_db] 写入验证反馈消息失败: {}", e);
@@ -298,7 +298,7 @@ pub async fn run_iteration(
     messages.push(failure_report.clone());
     // 失败报告落库（正常结束也保证最终回答可恢复）
     if let Err(e) = repo
-        .append_messages_if_alive(session_id, &[failure_report.clone()])
+        .append_messages_if_alive(session_id, std::slice::from_ref(&failure_report))
         .await
     {
         eprintln!("[session_db] 写入迭代失败报告失败: {}", e);

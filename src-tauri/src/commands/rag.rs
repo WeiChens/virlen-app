@@ -51,7 +51,7 @@ pub async fn create_knowledge_base(
     .await
     .map_err(|e| format!("任务执行失败: {}", e))??;
 
-    Ok(serde_json::to_value(kb).map_err(|e| format!("序列化失败: {}", e))?)
+    serde_json::to_value(kb).map_err(|e| format!("序列化失败: {}", e))
 }
 
 /// 列出所有知识库
@@ -107,7 +107,7 @@ pub async fn add_document_to_knowledge_base(
     .await
     .map_err(|e| format!("任务执行失败: {}", e))??;
 
-    Ok(serde_json::to_value(doc_info).map_err(|e| format!("序列化失败: {}", e))?)
+    serde_json::to_value(doc_info).map_err(|e| format!("序列化失败: {}", e))
 }
 
 /// 初始化知识库 — 如果没有任何知识库，自动创建一个默认知识库
@@ -274,7 +274,7 @@ pub async fn write_text_to_knowledge_base(
     .await
     .map_err(|e| format!("任务执行失败: {}", e))??;
 
-    Ok(serde_json::to_value(doc_info).map_err(|e| format!("序列化失败: {}", e))?)
+    serde_json::to_value(doc_info).map_err(|e| format!("序列化失败: {}", e))
 }
 
 /// 编辑知识库中的文档 — 用新文件替换
@@ -298,7 +298,7 @@ pub async fn edit_document_in_knowledge_base(
     .await
     .map_err(|e| format!("任务执行失败: {}", e))??;
 
-    Ok(serde_json::to_value(doc_info).map_err(|e| format!("序列化失败: {}", e))?)
+    serde_json::to_value(doc_info).map_err(|e| format!("序列化失败: {}", e))
 }
 
 /// 编辑知识库中的文本文档 — 用新内容替换（AI Tool 直接调用）
@@ -324,5 +324,5 @@ pub async fn edit_text_in_knowledge_base(
     .await
     .map_err(|e| format!("任务执行失败: {}", e))??;
 
-    Ok(serde_json::to_value(doc_info).map_err(|e| format!("序列化失败: {}", e))?)
+    serde_json::to_value(doc_info).map_err(|e| format!("序列化失败: {}", e))
 }

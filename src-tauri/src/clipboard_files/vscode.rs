@@ -1,4 +1,4 @@
-/**
+/*!
  * clipboard_files::vscode — 解析 VS Code 的 `code/file-list`
  *
  * VS Code 在资源管理器面板里「复制文件」时，会把文件列表写进一个自定义剪贴板格式
@@ -80,7 +80,7 @@ fn uri_to_path(uri: &str) -> Option<String> {
 
 /// 去掉 URI 的 ?query 与 #fragment（路径里这些字符一定是编码过的）
 fn strip_query_and_fragment(path: &str) -> &str {
-    let end = path.find(|c| c == '?' || c == '#').unwrap_or(path.len());
+    let end = path.find(['?', '#']).unwrap_or(path.len());
     &path[..end]
 }
 

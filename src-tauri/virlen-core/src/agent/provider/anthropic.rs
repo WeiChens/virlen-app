@@ -286,13 +286,13 @@ impl Provider for NativeAnthropicProvider {
         let result = read_sse_lines(resp, cancel, &mut |line: String| {
             let trimmed = line.trim();
 
-            if trimmed.starts_with("event:") {
-                current_event = trimmed[6..].trim().to_string();
+            if let Some(rest) = trimmed.strip_prefix("event:") {
+                current_event = rest.trim().to_string();
                 return true;
             }
 
-            if trimmed.starts_with("data:") {
-                let data_str = trimmed[5..].trim().to_string();
+            if let Some(rest) = trimmed.strip_prefix("data:") {
+                let data_str = rest.trim().to_string();
                 if data_str == "[DONE]" {
                     on_event(StreamEvent::MessageStop {
                         reasoning_content: if thinking_buffer.is_empty() {

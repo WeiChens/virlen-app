@@ -903,7 +903,7 @@ mod tests {
             ]
         };
         // 红点圆心：右下角留 1px 边距、半径 = min(w,h)/4
-        let r = (32 / 4) as i32;
+        let r = 32 / 4;
         let c = 32 - r - 1;
         assert_eq!(px(c as u32, c as u32), [0xF2, 0x4D, 0x4D, 0xFF]);
         // 左上角保持原样

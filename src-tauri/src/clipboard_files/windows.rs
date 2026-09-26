@@ -1,4 +1,4 @@
-/**
+/*!
  * clipboard_files::windows — Windows 剪贴板原语
  *
  * 只做「系统调用」，不掺杂业务解析，供上层（clipboard_files.rs）组合：

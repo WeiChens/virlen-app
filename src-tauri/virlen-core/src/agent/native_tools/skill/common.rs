@@ -1,8 +1,8 @@
 //! skill — 技能分类公共（元信息解析 / 目录扫描 / 文件树）
 //!
 //! ⚠️ 与 TS 侧**逐字对齐**（铁律 1）：
-//! - [`parse_skill_entry`] ↔ `utils/mdYamlFrontmatter.ts::parseSkillMdMeta`
-//!   + `skill/skillStore.ts::parseSkillMeta`（YAML frontmatter 优先；无 frontmatter 时退回
+//! - [`parse_skill_entry`] ↔ `utils/mdYamlFrontmatter.ts::parseSkillMdMeta` +
+//!   `skill/skillStore.ts::parseSkillMeta`（YAML frontmatter 优先；无 frontmatter 时退回
 //!   「`# 标题` + `> 描述` + `**Version:** x.y.z`」纯 Markdown 格式）
 //! - [`normalize_skill_name`] ↔ `skill/types.ts::normalizeSkillName`（失败 = 该目录被跳过）
 //! - [`render_file_tree`] ↔ `tools/skill/common.ts::renderFileTree`（`├──` / `└──` 风格）

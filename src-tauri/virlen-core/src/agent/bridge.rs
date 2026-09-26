@@ -83,8 +83,14 @@ pub struct RoundBoundaryRequestPayload {
 /// Provider 桥接流消息（JS → Rust）
 #[derive(Debug)]
 pub enum ProviderBridgeMsg {
+    /// 流式增量（热路径：每个 token 一条）—— `Value` 小，是枚举尺寸的基准
     Event(serde_json::Value),
-    Done { result: Option<Message>, error: Option<String> },
+    /// 结束（每轮一条）—— `Message` 结构体大（>300B），故 **装箱** 以免把整个枚举
+    /// （含热路径的 `Event`）撑到 `Message` 的尺寸。
+    Done {
+        result: Box<Option<Message>>,
+        error: Option<String>,
+    },
 }
 
 /// 双向桥接状态（Tauri managed state）
@@ -191,6 +197,10 @@ impl AgentBridgeState {
     }
 
     /// 打开一个 Provider 流通道（BridgedProvider 使用）
+    ///
+    /// ⚠️ `#[allow(too_many_arguments)]`：每个参数都是独立的桥协议字段，收成结构体
+    /// 只是把同一批字段换个地方写，不增加任何约束力。
+    #[allow(clippy::too_many_arguments)]
     pub async fn open_provider_stream(
         &self,
         sink: &dyn EventSink,
@@ -308,7 +318,10 @@ pub async fn handle_provider_stream_done(
 ) {
     if let Some(tx) = state.pending_providers.lock().await.remove(request_id) {
         let _ = tx
-            .send(ProviderBridgeMsg::Done { result, error })
+            .send(ProviderBridgeMsg::Done {
+                result: Box::new(result),
+                error,
+            })
             .await;
     }
 }

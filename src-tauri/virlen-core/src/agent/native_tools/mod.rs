@@ -389,7 +389,7 @@ mod tests {
             let args = json!({ "path": outside_str, "content": "x" });
             let outcome = execute_native_tool(&ctx, "write_file", &args).await;
             assert!(
-                matches!(outcome, Err(_)),
+                outcome.is_err(),
                 "write outside workspace should fail"
             );
         }

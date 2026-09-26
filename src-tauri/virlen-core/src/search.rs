@@ -30,6 +30,10 @@ pub struct TextSearchResult {
 /// ⚠️ 模型工具（`native_tools::search`）调用时传 `true` + 两个空数组，**保持原行为**：
 /// 它可以用显式路径 / glob 表达「就要搜 node_modules」的意图，UI 搜索框没有这种表达手段，
 /// 所以默认剪枝的取舍只落在 UI 侧。
+///
+/// ⚠️ `#[allow(too_many_arguments)]`：查询条件（root / query / regex / 上限）+ 剪枝策略
+/// （include_hidden / skip / keep）+ 取消位各自独立；收结构体只是换写法。
+#[allow(clippy::too_many_arguments)]
 pub fn search_files_by_name(
     root: &str,
     query: &str,
@@ -179,20 +183,21 @@ pub fn list_directory(
 
     walk_dir(
         root_path,
-        root_path,
         0,
         recursive,
         include_hidden,
         max_depth,
-        &skip_each_dirs,
+        skip_each_dirs,
         &mut results,
         cancel_flag,
     );
     results
 }
 
+/// ⚠️ `#[allow(too_many_arguments)]`：遍历状态（目录 / 深度 / 递归 / 隐藏项 / 上限 /
+/// 剪枝表 / 结果 / 取消位）逐项独立，收结构体无收益。
+#[allow(clippy::too_many_arguments)]
 fn walk_dir(
-    base: &std::path::Path,
     dir: &std::path::Path,
     depth: usize,
     recursive: bool,
@@ -253,7 +258,6 @@ fn walk_dir(
                     size: None,
                 });
                 walk_dir(
-                    base,
                     &entry.path(),
                     depth + 1,
                     recursive,

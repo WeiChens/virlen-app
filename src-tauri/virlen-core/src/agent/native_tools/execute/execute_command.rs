@@ -208,7 +208,7 @@ pub(crate) async fn execute_command_tool(
                 }
                 // 用户没有放行（既非「批准」也不是「允许」）→ 命令一行都没跑，
                 // ⚠️ 必须按**失败**回报：否则 tool 消息 is_error=false，工具卡片显示成绿色「成功」。
-                return Ok(NativeToolOutcome::error(content));
+                Ok(NativeToolOutcome::error(content))
             }
             BridgeInteractionResult::Error { content, ui_data } => {
                 Ok(NativeToolOutcome::Error { content, ui_data })

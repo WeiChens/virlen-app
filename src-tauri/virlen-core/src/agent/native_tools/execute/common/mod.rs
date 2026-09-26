@@ -6,8 +6,7 @@
 //!   3. [`registry`] 运行中命令注册表（前端 ToolOutput.kill → 终止整棵进程树）
 //!   4. [`terminal`] 终端输出处理（\r 覆盖 / ANSI 转义序列）
 //!   5. [`runner`]   统一运行器 run_command_native（沙盒优先，失败降级裸跑；`bypass_sandbox` 时直接裸跑）
-//!   6. [`rules`]    「忽略沙盒命令」规则：命中的命令免脱壳审批 + 强制无沙盒执行
-//!                   （**Rust 侧本地判定**：text / regex 原生，js 交内嵌 QuickJS）
+//!   6. [`rules`]    「忽略沙盒命令」规则：命中的命令免脱壳审批 + 强制无沙盒执行（**Rust 侧本地判定**：text / regex 原生，js 交内嵌 QuickJS）
 
 mod classify;
 mod decode;

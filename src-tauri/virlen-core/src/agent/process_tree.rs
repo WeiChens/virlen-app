@@ -114,7 +114,7 @@ fn windows_descendants(root_pid: u32) -> Vec<u32> {
         TH32CS_SNAPPROCESS,
     };
     unsafe {
-        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS as u32, 0);
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if snapshot.is_null() {
             return Vec::new();
         }

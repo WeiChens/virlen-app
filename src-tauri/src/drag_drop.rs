@@ -1,4 +1,4 @@
-/**
+/*!
  * drag_drop — Windows 自定义 OLE 拖放目标
  *
  * 为什么不用 Tauri 自带的 onDragDropEvent：
@@ -11,6 +11,7 @@
  *   1. CF_HDROP                     —— 资源管理器拖来的文件（真实路径）
  *   2. code/file-list               —— VS Code 复制时用的自定义格式（拖拽一般没有，顺带兜住）
  *   3. CF_UNICODETEXT (text/plain)  —— VS Code 拖拽时放的“换行分隔路径文本”
+ *
  * 解析复用 clipboard_files::vscode（它同时能解析 URI 与纯路径）。
  *
  * 注入方式沿用 wry 的手法：枚举目标窗口的所有子窗口（WebView2 的内层窗口），

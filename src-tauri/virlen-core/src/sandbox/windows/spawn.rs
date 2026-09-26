@@ -101,7 +101,7 @@ pub fn make_env_block(env: &BTreeMap<String, String>) -> Vec<u16> {
     });
     let mut w: Vec<u16> = Vec::new();
     for (k, v) in items {
-        let mut s = to_wide(&format!("{k}={v}"));
+        let mut s = to_wide(format!("{k}={v}"));
         s.pop(); // 去掉结尾 0，再加一个作为条目分隔
         w.extend_from_slice(&s);
         w.push(0);
@@ -360,14 +360,14 @@ impl SandboxChild {
 
 /// 创建一对匿名管道，返回 (读端, 写端)。写端可继承，读端不可继承。
 unsafe fn create_inheritable_pipe() -> Result<(HANDLE, HANDLE)> {
-    let mut sa = SECURITY_ATTRIBUTES {
+    let sa = SECURITY_ATTRIBUTES {
         nLength: mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
         lpSecurityDescriptor: std::ptr::null_mut(),
         bInheritHandle: 1,
     };
     let mut read: HANDLE = std::ptr::null_mut();
     let mut write: HANDLE = std::ptr::null_mut();
-    let ok = CreatePipe(&mut read, &mut write, &mut sa, 0);
+    let ok = CreatePipe(&mut read, &mut write, &sa, 0);
     if ok == 0 {
         return Err(anyhow!("CreatePipe failed: {}", GetLastError()));
     }

@@ -37,7 +37,7 @@ mod tests {
         let path = file.to_string_lossy().to_string();
 
         let w = file_ops::write_file(&path, "hello\nworld\n").unwrap();
-        assert!(w.existed == false);
+        assert!(!w.existed);
         let r = file_ops::read_file(&path).unwrap();
         assert_eq!(r.content, "hello\nworld\n");
         assert_eq!(r.hash10, w.hash10);

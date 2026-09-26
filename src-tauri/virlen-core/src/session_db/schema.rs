@@ -254,12 +254,10 @@ fn ensure_text_plain_column(conn: &Connection) -> Result<(), String> {
             let rows = stmt
                 .query_map([], |row| row.get::<_, String>(1))
                 .map_err(|e| e.to_string())?;
-            for name in rows {
-                if let Ok(n) = name {
-                    if n == "text_plain" {
-                        has = true;
-                        break;
-                    }
+            for n in rows.flatten() {
+                if n == "text_plain" {
+                    has = true;
+                    break;
                 }
             }
         }

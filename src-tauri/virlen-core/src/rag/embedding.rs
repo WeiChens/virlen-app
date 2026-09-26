@@ -231,9 +231,7 @@ impl OllamaEmbeddingProvider {
             .unwrap_or_else(|| "nomic-embed-text".to_string());
 
         // 设置维度
-        let dims = if selected.starts_with("bge-m3") {
-            1024
-        } else if selected.starts_with("mxbai-embed-large") {
+        let dims = if selected.starts_with("bge-m3") || selected.starts_with("mxbai-embed-large") {
             1024
         } else {
             768

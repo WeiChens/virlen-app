@@ -70,7 +70,7 @@ pub(super) fn last_summary_index(messages: &[Message]) -> usize {
     }
 }
 
-pub(super) fn slice_messages<'a>(messages: &'a [Message]) -> &'a [Message] {
+pub(super) fn slice_messages(messages: &[Message]) -> &[Message] {
     let start = last_summary_index(messages);
     if start == 0 {
         messages
@@ -231,6 +231,7 @@ pub(super) fn text_of_content(content: &Value) -> String {
 /// 当 user 消息标记了 `imageVisionAnalyzeOptimize=true` 且带 `imageVisionAnalyzeResult` 时：
 /// - 移除 image_url 块（不把原始 base64 图片发给纯文本 LLM）
 /// - 追加 `\n\n{分析结果}` 文本块
+///
 /// 否则返回 None（content 原样发送）
 pub(super) fn process_vision_content(msg: &Message) -> Option<Value> {
     let result = msg.image_vision_analyze_result.as_deref().unwrap_or("");

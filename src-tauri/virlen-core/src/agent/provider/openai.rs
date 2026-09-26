@@ -192,7 +192,7 @@ impl NativeOpenAiProvider {
             if !tcs.is_empty() {
                 let parsed: Vec<ToolUseContent> = tcs
                     .iter()
-                    .filter_map(|tc| {
+                    .map(|tc| {
                         let id = tc.get("id").and_then(Value::as_str).unwrap_or("").to_string();
                         let name = tc
                             .get("function")
@@ -206,12 +206,12 @@ impl NativeOpenAiProvider {
                             .and_then(Value::as_str)
                             .unwrap_or("{}");
                         let input = serde_json::from_str(args).unwrap_or(Value::Null);
-                        Some(ToolUseContent {
+                        ToolUseContent {
                             type_: "tool_use".into(),
                             id,
                             name,
                             input,
-                        })
+                        }
                     })
                     .collect();
                 message.tool_calls = Some(parsed);

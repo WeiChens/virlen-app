@@ -21,6 +21,10 @@ pub struct LlmRoundOutput {
 }
 
 /// 执行一轮 LLM 调用（流式 / 非流式），收集 text + tool_calls
+///
+/// ⚠️ `#[allow(too_many_arguments)]`：一轮调用的输入本就是「会话 + 供应商 + 工具表 + 历史 +
+/// 取消 + 事件出口 + 会话 id + 覆盖项 + 推理档位」，全是独立事实；收结构体只是换个写法。
+#[allow(clippy::too_many_arguments)]
 pub async fn do_llm_round(
     session: &Session,
     provider: &dyn Provider,
@@ -170,6 +174,13 @@ pub async fn do_llm_round(
 /// 注意：本值只影响「事件密度」，不再影响载荷大小（正文走增量补丁，单次 O(1)，
 /// 见 `flush_stream_state`）。
 const STREAM_THROTTLE_MS: i64 = 16;
+// 编译期钉住：节流窗口 = 正文尾部可见延迟的上限，必须在一帧内（~16ms）。
+// 回归背景：provider 累积 tool 参数 JSON 期间**零事件**，窗口过大时这段空窗里积压的尾部
+// 正文就不显示（「回复没显示全 / 停在半句话」）。
+const _: () = assert!(
+    STREAM_THROTTLE_MS <= 20,
+    "STREAM_THROTTLE_MS 须在一帧内（<=20ms）"
+);
 
 /// 流式事件节流器 — 距上次发送不足 interval_ms 时丢弃中间事件，force_flush 强制补发
 struct StreamEventThrottle {
@@ -401,7 +412,7 @@ fn collect_tool_use(
         .assistant_message
         .tool_calls
         .as_ref()
-        .map_or(false, |tcs| tcs.iter().any(|t| t.id == tool_use.id));
+        .is_some_and(|tcs| tcs.iter().any(|t| t.id == tool_use.id));
     let needs_sync = if !already_in_assistant {
         ctx.assistant_message
             .tool_calls
@@ -674,11 +685,8 @@ mod tests {
     ///（「回复正文没显示全 / 停在半句话」）。
     #[test]
     fn stream_throttle_tail_is_within_one_frame() {
-        assert!(
-            STREAM_THROTTLE_MS <= 20,
-            "节流窗口决定正文尾部延迟，须在一帧内（16ms 左右），当前 {}ms",
-            STREAM_THROTTLE_MS
-        );
+        // 上界已由模块顶部的 `const _` 断言在编译期钉住（见 `STREAM_THROTTLE_MS`）。
+        // 本用例只验运行期行为：窗口内的多次到达被合并、跨过窗口才放行。
 
         // 窗口内多次到达 → 只放行第一次（合并）；跨过窗口 → 放行
         let mut throttle = StreamEventThrottle::new(STREAM_THROTTLE_MS);

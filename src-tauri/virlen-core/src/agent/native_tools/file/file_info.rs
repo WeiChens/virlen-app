@@ -28,12 +28,12 @@ pub(crate) async fn file_info_tool(
     let atime = metadata
         .accessed()
         .ok()
-        .map(|t| format_system_time(t))
+        .map(format_system_time)
         .unwrap_or_default();
     let mtime = metadata
         .modified()
         .ok()
-        .map(|t| format_system_time(t))
+        .map(format_system_time)
         .unwrap_or_default();
 
     let lines = vec![

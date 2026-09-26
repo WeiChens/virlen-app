@@ -48,6 +48,10 @@ pub fn create_run(session_id: &str, ctx: &ToolCallContext, round: i64) -> Run {
 
 /// 逐步骤执行 run 中的工具调用。
 /// 从第一个非 completed 的 step 开始，遇到暂停时保存进度并返回 false。
+///
+/// ⚠️ `#[allow(too_many_arguments)]`：run / 取消 / 事件出口 / 桥 / 技能 / 安全策略 /
+/// 快照回调 / 会话库 / 宿主 / 配置库，全部是装配链上的独立依赖，收结构体不增约束力。
+#[allow(clippy::too_many_arguments)]
 pub async fn execute_tool_steps(
     run: &mut Run,
     cancel: &CancellationToken,
@@ -130,7 +134,7 @@ pub async fn execute_tool_steps(
         // 关键：单个 tool 完成即落库（而非等整轮结束再批量写），
         // 即使中途崩溃/卡死，已完成步骤的「工具响应」也已持久化。
         if let Err(e) = repo
-            .append_messages_if_alive(&session_id, &[tool_result_msg.clone()])
+            .append_messages_if_alive(&session_id, std::slice::from_ref(&tool_result_msg))
             .await
         {
             eprintln!("[session_db] 写入工具结果消息失败: {}", e);
@@ -296,6 +300,9 @@ fn notify_step_start(step: &ToolStep, sink: &dyn EventSink, session_id: &str) {
 
 /// 执行单个 tool step，返回结果字符串或特殊标记 "__SHELVED__"
 /// 工具**全部**原生 Rust 执行（`is_native_tool` 已是全集 —— S5 后没有桥接工具）。
+///
+/// ⚠️ `#[allow(too_many_arguments)]`：同上，参数为装配链上的独立依赖，收结构体无收益。
+#[allow(clippy::too_many_arguments)]
 async fn execute_single_step(
     session_id: &str,
     step: &mut ToolStep,

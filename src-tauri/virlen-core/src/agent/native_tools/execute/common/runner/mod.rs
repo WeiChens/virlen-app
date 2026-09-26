@@ -40,6 +40,7 @@ const TIMEOUT_IDLE_HINT: &str = "(the command produced almost no output before t
 ///   - git `GIT_PAGER=cat`：`git_pager()` 对 `cat`/空串**硬编码特判** = 不分页；
 ///   - gh  `GH_PAGER=cat` ：`IOStreams.StartPager()` 见 `cat` 直接 return = 不分页；
 ///   - bat `BAT_PAGING=never`：等价 `--paging=never`（零外部依赖）。
+///
 /// 因此本值**不会真的去执行 `cat` 二进制**，Windows 没有 `cat` 也安全。
 ///
 /// ⚠️ 刻意**不**设通用 `PAGER`：`gh`/`bat` 之外的工具（如 `aws`）会**真的 exec** `PAGER`，
@@ -135,6 +136,10 @@ pub(crate) async fn run_command_native(
 /// `interventions`（Step 2 ②）：用户干预摘要（**只记计数，不记内容**，D4）。
 /// PTY 路径传 `Some`；管道路径 / 无会话时传 `None`（则 uiData 不含该字段）。
 /// `hold_timed_out`：是否因接管到达硬上限被终止（`waitReason=timeout` 的子情况）。
+///
+/// ⚠️ `#[allow(too_many_arguments)]`：参数就是命令结果的各独立字段（stdout / stderr /
+/// 退出码 / 两种终止原因 / 超时 / 环境说明 / PTY 标志 / 干预计数 / 接管超时），无内聚可压。
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_command_result(
     stdout: String,
     stderr: String,
@@ -171,7 +176,7 @@ pub(super) fn build_command_result(
         result.push_str(&process_terminal_output(&stdout));
     }
     if !stdout.is_empty() && !stderr.is_empty() {
-        result.push_str("\n");
+        result.push('\n');
     }
     if !stderr.is_empty() {
         result.push_str("[stderr]\n");

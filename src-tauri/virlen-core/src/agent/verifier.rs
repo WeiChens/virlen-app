@@ -101,7 +101,7 @@ fn normalize_result(raw: &Value) -> VerificationResult {
         .and_then(Value::as_array)
         .map(|arr| {
             arr.iter()
-                .filter_map(|i| {
+                .map(|i| {
                     let severity = i
                         .get("severity")
                         .and_then(Value::as_str)
@@ -111,7 +111,7 @@ fn normalize_result(raw: &Value) -> VerificationResult {
                     } else {
                         "warning"
                     };
-                    Some(VerificationIssue {
+                    VerificationIssue {
                         severity: severity.to_string(),
                         description: i
                             .get("description")
@@ -123,7 +123,7 @@ fn normalize_result(raw: &Value) -> VerificationResult {
                             .and_then(Value::as_str)
                             .unwrap_or("")
                             .to_string(),
-                    })
+                    }
                 })
                 .collect()
         })

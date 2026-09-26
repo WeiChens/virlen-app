@@ -205,6 +205,7 @@ static LAST_CLIENT_SIZE: LazyLock<Mutex<Option<(i16, i16)>>> =
 ///     `create` 时缓存还是空的。若此时用默认 240×50 建控制台，ConPTY 的**首帧**就会按
 ///     50 行铺满（内容下方补 ~39 个 `\r\n`）；随后前端上报真实尺寸虽然会触发 resize，
 ///     但那些空行**已经进了终端缓冲**，撤不回来。
+///
 /// 所以这里短暂等待客户端上报；拿到真实尺寸再建 → 首帧就是对的。
 /// 超时（前端从不挂载终端，如非 PTY 渲染）则退回 `fallback`，不额外拖慢。
 const CLIENT_SIZE_WAIT: Duration = Duration::from_millis(800);
@@ -270,7 +271,7 @@ pub fn pty_resize(tool_call_id: &str, cols: u16, rows: u16) -> bool {
     // 真正触发了 `ResizePseudoConsole` —— ConPTY 会整屏重绘（含 `\e[H` 归位）
     #[cfg(target_os = "windows")]
     {
-        return crate::sandbox::pty::resize_raw(session.hpc(), cols as i16, rows as i16);
+        crate::sandbox::pty::resize_raw(session.hpc(), cols as i16, rows as i16)
     }
     #[cfg(not(target_os = "windows"))]
     {

@@ -36,7 +36,7 @@ pub struct ExecuteLlmRoundParams<'a> {
     pub provider_type: &'a str,
     /// Provider 配置 id，仅用于用量记账
     pub provider_config_id: &'a str,
-    pub persist_snapshot: Option<&'a (dyn Fn(&str, &Run) + Sync + Send)>,
+    pub persist_snapshot: Option<super::PersistSnapshotFn<'a>>,
     pub clear_snapshot: Option<&'a (dyn Fn(&str) + Sync + Send)>,
     /// 当前 LLM 轮次序号（1 基），透传给 engine.round.* 埋点
     pub round: i64,
@@ -156,7 +156,7 @@ pub async fn execute_llm_round(
         p(session_id, &run);
     }
 
-    let persist_closure: Option<Box<dyn Fn(&Run) + Sync + Send>> = persist_snapshot.map(|p| {
+    let persist_closure: Option<super::BoxedPersistSnapshotFn<'_>> = persist_snapshot.map(|p| {
         let c = move |r: &Run| {
             p(session_id, r);
         };

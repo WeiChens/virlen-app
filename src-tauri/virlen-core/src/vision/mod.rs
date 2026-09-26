@@ -262,7 +262,7 @@ fn run_analysis(
     quasivision::compute_prominence(&mut elements);
 
     // ── 建立父子关系 ──
-    elements.sort_by(|a, b| b.area().cmp(&a.area()));
+    elements.sort_by_key(|e| std::cmp::Reverse(e.area()));
     for e in &mut elements {
         e.parent = None;
         e.children = None;

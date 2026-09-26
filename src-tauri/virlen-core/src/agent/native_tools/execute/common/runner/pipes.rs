@@ -55,7 +55,7 @@ pub(super) async fn run_command_native_pipes(
         );
         (
             "powershell",
-            vec!["-NoProfile".into(), "-Command".into(), prefixed.into()],
+            vec!["-NoProfile".into(), "-Command".into(), prefixed],
         )
     } else if platform == "macos" {
         ("zsh", vec!["-c".into(), cmd_str.into()])

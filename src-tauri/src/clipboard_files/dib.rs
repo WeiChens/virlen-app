@@ -1,4 +1,4 @@
-/**
+/*!
  * clipboard_files::dib — 图片字节 → Windows DIB（CF_DIB）
  *
  * 为什么需要它：把图片放进系统剪贴板，Windows 上标准做法是写 CF_DIB

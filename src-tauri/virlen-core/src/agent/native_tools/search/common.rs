@@ -26,7 +26,7 @@ pub(super) fn glob_to_regex(pattern: &str) -> String {
                 let end = i + 1 + end;
                 let opts: Vec<String> = pattern[i + 1..end]
                     .split(',')
-                    .map(|o| escape_regex(o))
+                    .map(escape_regex)
                     .collect();
                 re.push('(');
                 re.push_str(&opts.join("|"));

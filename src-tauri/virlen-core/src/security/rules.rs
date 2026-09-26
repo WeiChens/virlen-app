@@ -32,7 +32,9 @@ use serde_json::Value;
 /// 规则的匹配类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum SandboxRuleKind {
+    #[default]
     Text,
     Regex,
     Js,
@@ -41,16 +43,13 @@ pub enum SandboxRuleKind {
     Unknown,
 }
 
-impl Default for SandboxRuleKind {
-    fn default() -> Self {
-        Self::Text
-    }
-}
 
 /// 文本规则的比较方式
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum SandboxTextMode {
+    #[default]
     Exact,
     Prefix,
     Suffix,
@@ -59,11 +58,6 @@ pub enum SandboxTextMode {
     Unknown,
 }
 
-impl Default for SandboxTextMode {
-    fn default() -> Self {
-        Self::Exact
-    }
-}
 
 /// 一条「忽略沙盒命令」规则
 ///
