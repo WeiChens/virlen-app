@@ -345,7 +345,8 @@ pnpm build                   # tsc && rimraf dist && vite build
 pnpm tauri build             # 桌面端安装包
 pnpm test                    # vitest run（配置见 vitest.config.ts）
 pnpm test:watch / test:ui
-npx tsc --noEmit             # 类型检查（唯一「静态门禁」）
+npx tsc --noEmit             # 类型检查（静态门禁之一）
+cd src-tauri; cargo clippy --workspace --all-targets -- -D warnings   # Rust 静态门禁（须零告警；CI `ci.yml` 每次 push/PR 跑，见 §11.28）
 cd src-tauri; cargo test --workspace   # Rust 侧测试（⚠️ 必须 --workspace，见 §7 下注）
 pnpm build:msix              # Windows MSIX 打包（scripts/build-msix.ps1）
 pnpm cli config get          # headless CLI（= cargo run -p virlen-cli -- …；与 GUI 同一份 app_settings）
@@ -724,6 +725,18 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 
 **踩坑前必读：`docs/tray-implementation-plan.md`**（托盘/关闭不退出/后台工作的完整方案与实现记录）。
 
+**11.28 clippy 告警清零 + 新增 per-push CI 门禁（2026-09-26 用户要求 → 已落地）** —— 需求（用户原话）：「CI 加 clippy 门禁」。
+
+- **改前状态**：三个 `build-{windows,linux,macos}.yml` 的 `test` job 只在**打 tag（`v*`）/ 手动**时跑（= 发版门禁），**不含 clippy**；`cargo clippy --workspace --all-targets` 有 **77 条**告警（`cargo check` 看不到）。
+- **清理口径**：先用 `cargo clippy --fix` 批量修**机械项**（`map_or→is_some_and` / `&[x.clone()]→std::slice::from_ref(&x)` / `format!(纯字面量)→to_string` / 手写 `impl Default`→`derive(Default)` / `match` 单模式→`if let` / `last()→next_back()` / 多余 `as` 与 `&` / `push_str("\n")→push('\n')` 等）；再处理设计类：
+  - **`too_many_arguments`（8 处）加带说明的 `#[allow]`** —— 都是装配链 / 桥协议函数，参数各自独立，收结构体只是换写法。
+  - **`type_complexity` 抽 `type` 别名**（`agent/mod.rs` 的 `PersistSnapshotFn` / `BoxedPersistSnapshotFn`）⚠️ 别名里的 trait object **生命周期必须显式**：写在别名里会退化成默认 `'static`（`let` 注解位置才可推断），故 `BoxedPersistSnapshotFn<'a>` 用 `+ 'a`、使用处写 `<'_>`。
+  - **`large_enum_variant`**：`ProviderBridgeMsg::Done.result` **装箱** —— `Event(Value)` 是流式热路径，别被体积大的 `Done` 拖大整个枚举。
+  - **doc 缩进类**（`doc_lazy_continuation` / `doc_overindented_list_items`）：列表项之后**补空行**断开 lazy continuation、或把续行并入本行；模块头 `/** … */` → **`/*! … */`**（内层文档，天然规避 `empty_line_after_doc_comments`）。
+- **⚠️ `cargo clippy --fix` 会引入编译错误**：本次它把 `#[cfg(test)]` 属性挪给了新插入的 `impl Default`，导致 `impl TestEventSink` 在**非 test 构建**下 `E0425`。**自动修复后必须 `cargo check`**，不能只看 clippy 退出码。
+- **新增门禁** `.github/workflows/ci.yml`：**每次 push / PR** 单平台（ubuntu）跑 `pnpm build`（= TS 类型检查 + 产出 `dist`，`tauri-build` 编译 virlen-app 需要）→ `cargo clippy --workspace --all-targets -- -D warnings`。存量已清零，**新代码不得再引入 clippy 告警**。
+- **验证**：`cargo clippy --workspace --all-targets -- -D warnings` **0 告警**（exit 0）；`cargo test --workspace` **582 passed**；`npx tsc --noEmit` 0；`npx vitest run` **91 文件 / 1059 tests**。
+
 ---
 
 ## 12. 快速定位表
@@ -769,7 +782,7 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
   涉及引擎/持久化的改动请在正文写清「TS / Rust 两侧都改了什么」。
 - 一次提交只做一件事；格式化 / 重命名等噪音改动不要混进功能提交。
 - **提交前自查清单**：
-  1. `npx tsc --noEmit` 无新增错误；
+  1. `npx tsc --noEmit` 无新增错误；动了 `src-tauri/` 则 `cargo clippy --workspace --all-targets -- -D warnings` **零告警**（CI 门禁，见 §11.28）；
   2. 受影响模块的 `vitest` 通过；动了 `src-tauri/` 则 `cargo test --workspace` 通过（**拆包后必须带 `--workspace`**，见 §7/§11.14）；
   3. 若改了引擎语义 → TS 与 Rust 两侧是否都已同步？事件契约是否四方一致？
   4. 若新增工具 → 注册链、UI 组件、Rust 白名单、i18n 文案是否齐备？

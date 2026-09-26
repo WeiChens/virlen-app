@@ -1,0 +1,80 @@
+# =============================================================================
+# Virlen CI — 每次 push / PR 的静态检查门禁
+# =============================================================================
+# 与 build-*.yml（发版打包）**分工不同**：那三个只在打 tag（v*）/ 手动时跑；
+# 本 workflow 在**每次 push 与 PR**上跑轻量静态检查，尽早拦住问题。
+#
+# 为什么单平台（ubuntu）就够：`cargo clippy` / `tsc` 的结果与平台无关，
+# 没必要在 win/mac/linux 上各跑一遍（那是 build-*.yml 的事）。
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static-checks:
+    name: Clippy (-D warnings) + TS typecheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Rust toolchain (with clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust cargo registry & build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+
+      # 编译 virlen-app 需要与打包相同的系统依赖（webkit2gtk / openblas 等）
+      - name: Install Linux system dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            libopenblas-dev
+
+      - name: Install frontend dependencies
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
+      # `pnpm build` = `tsc && rimraf dist && vite build`：
+      # 一次完成 TS 类型检查，并产出 dist —— tauri-build 编译 virlen-app 时要求 frontendDist 存在。
+      - name: Build frontend (TS typecheck + dist)
+        shell: bash
+        run: pnpm build
+
+      # 门禁：任何 clippy 告警即失败（-D warnings）。
+      # 存量告警已清零（见 docs/AGENTS.md §11.28），新代码不得再引入。
+      - name: Rust clippy (-D warnings)
+        working-directory: src-tauri
+        shell: bash
+        run: cargo clippy --workspace --all-targets -- -D warnings
