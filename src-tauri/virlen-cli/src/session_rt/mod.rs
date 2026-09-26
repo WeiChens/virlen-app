@@ -95,6 +95,15 @@ pub(crate) struct SessionRuntime {
     pub(crate) messages: Vec<Message>,
     /// 会话记录里**没有**工作目录（本次用了推出的值、且**未写回会话**）→ 调用方据此提示用户
     pub(crate) workspace_inferred: bool,
+    /// 标题是否还是「首行截取」（[`title_from_prompt`]）的兵底值 —— 新会话首回合结束后
+    /// 用它决定要不要调一次 AI 标题（见 [`Self::generate_title_if_needed`]）。
+    ///
+    /// 与桌面端「仅当标题仍是默认值时才触发一次 AI 命名」同语义：
+    /// - 新建会话（`--session` 未给 / `/new`）→ `true`；
+    /// - 续用已有会话 → `false`（不改别人已有的标题）。
+    ///
+    /// 无论 AI 成败都会置 `false`（只尝试一次，失败保持首行标题）。
+    pub(crate) title_is_placeholder: bool,
 }
 
 /// `chat` 的新会话在首次提交前没有标题 —— `/status` 里显示它比显示空白强
@@ -152,6 +161,8 @@ impl SessionRuntime {
                 .is_empty();
 
         let (session, messages) = load_or_create_session(&db, &resources, &opts).await?;
+        // 新建会话（未给 `--session`）的标题是「首行截取」的兵底值 → 首回合后可尝试 AI 覆盖
+        let title_is_placeholder = opts.session_id.is_none();
 
         Ok(Self {
             host: host.clone(),
@@ -163,6 +174,7 @@ impl SessionRuntime {
             session,
             messages,
             workspace_inferred,
+            title_is_placeholder,
         })
     }
 
@@ -257,6 +269,8 @@ impl SessionRuntime {
                 self.messages = Vec::new();
             }
         }
+        // 新建（`None`）的标题仍待 AI 生成；续用已有会话不动它的标题
+        self.title_is_placeholder = session_id.is_none();
         Ok(())
     }
 
@@ -294,6 +308,59 @@ impl SessionRuntime {
         // （`chat` 不直接用它发请求，但 `/status` 的消息计数、以及将来可能的消费方都看它）
         self.messages = messages.clone();
         Ok(messages)
+    }
+
+    /// 新会话首回合结束后**尝试**用 AI 覆盖标题（失败则保持 [`title_from_prompt`] 的兵底值）。
+    ///
+    /// 与 GUI 同一条路：把「首条用户消息 + 其后的首条助手消息」交给
+    /// `virlen_core::agent::title::generate_title`（与桌面端 `cmd_generate_title` 同一份实现）。
+    /// ⚠️ headless 环境没有 JS 宿主：gemini 等桥接协议拿不到 provider → 直接跳过（保持兵底标题）。
+    ///
+    /// 返回 `Some(新标题)` 表示确实改写了（调用方据此刷新界面）；`None` = 没做 / 失败。
+    pub(crate) async fn generate_title_if_needed(&mut self) -> Option<String> {
+        // 只尝试一次：无论成败都清标记（与桌面端「标题仍为默认值才触发一次」同语义）
+        if !self.title_is_placeholder {
+            return None;
+        }
+        self.title_is_placeholder = false;
+
+        // 桥接协议（gemini 等）在 headless 下不可用 → 保持低成本的兵底标题
+        let provider =
+            virlen_core::agent::provider::create_native_provider(&self.resources.provider).ok()?;
+        let messages = self.messages.clone();
+        let out = virlen_core::agent::title::generate_title(
+            &self.session,
+            &messages,
+            provider.as_ref(),
+            &virlen_core::agent::cancellation::CancellationToken::new(),
+        )
+        .await
+        .ok()?;
+
+        self.session.title = out.title.clone();
+        self.session.updated_at = virlen_core::telemetry::now_ms();
+        // 记账：标题生成是一次真实消费（与桌面端同一入口，kind = "title"）
+        if let Some(u) = &out.usage {
+            virlen_core::agent::usage::record_usage(
+                self.db.repo.as_ref(),
+                &self.session.id,
+                &self.session,
+                &self.resources.provider.provider_type,
+                &self.resources.provider.provider_id,
+                "title",
+                None,
+                None,
+                Some(u.clone()),
+                false,
+                Some(out.duration_ms),
+            )
+            .await;
+        }
+        // 落库：标题写回会话（与引擎「先落库再通知界面」同一条口径）
+        if let Err(e) = self.db.repo.upsert_session(&self.session).await {
+            eprintln!("[title] 标题落库失败: {}", e);
+        }
+        Some(out.title)
     }
 
     /// 把当前状态映射成一次 `send_message` 的入参。

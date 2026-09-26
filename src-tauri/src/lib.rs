@@ -435,6 +435,8 @@ pub fn run() {
             commands::agent::cmd_provider_catalog,
             // 上下文压缩（GUI）：与 CLI 共用 core 同一份实现
             commands::agent::cmd_compress_context,
+            // 会话标题生成（GUI）：与 CLI 共用 core 同一份实现
+            commands::agent::cmd_generate_title,
             commands::agent::agent_tool_response,
             commands::agent::agent_user_interaction_response,
             commands::agent::agent_round_boundary_response,

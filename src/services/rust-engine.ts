@@ -18,7 +18,6 @@ import type { AgentEnginePort } from '@/domain/ports'
 import type { SendMessageOptions } from '@/domain/engine'
 import type { CompressMode } from '@/domain/engine'
 import type { RunSnapshot } from '@/domain/engine/types'
-import { agentEngine } from '@/domain'
 import { toolRegistry } from '@/domain/tools'
 import { ToolError, UserInteractionRequired } from '@/domain/tools/types'
 import type { ToolDefinition } from '@/domain/tools/types'
@@ -594,7 +593,19 @@ export const rustEngine: AgentEnginePort = {
     session: Session,
     messages: Message[],
   ): Promise<string> {
-    // 标题生成暂由 TS 引擎提供（非聊天循环核心，走同一 provider 通道）
-    return agentEngine.generateTitle(session, messages)
+    // 统一到 core：与 CLI 共用 `virlen_core::agent::title`（命令 `cmd_generate_title`）。
+    // - 记账在后端完成（同一入口 `agent::usage::record_usage`，kind = "title"）；
+    //   落库（写回会话标题）仍由 chat-service 负责（与压缩前后一致）。
+    // - 与正常聊天同一条 provider 通道（openai/anthropic 原生、gemini 经双向桥）。
+    const provider = resolveProviderConnection(session)
+    if (!provider) {
+      throw new Error('会话没有可用的 Provider，无法生成标题')
+    }
+    const result = await invoke<{ title: string }>('cmd_generate_title', {
+      session: sanitizeLoneSurrogates(session),
+      messages: sanitizeLoneSurrogates(messages),
+      provider,
+    })
+    return result.title
   },
 }

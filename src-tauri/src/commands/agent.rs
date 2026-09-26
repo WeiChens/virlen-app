@@ -23,7 +23,7 @@ use virlen_core::agent::event_sink::{self, EventSink};
 use virlen_core::agent::provider::{DefaultProviderFactory, ProviderFactory};
 use virlen_core::agent::types::AgentEvent;
 use virlen_core::agent::usage;
-use virlen_core::agent::{native_tools, prompts, provider, tool_defs, types};
+use virlen_core::agent::{native_tools, prompts, provider, title, tool_defs, types};
 use virlen_core::session_db::{NoopSessionRepo, NoopSettingsRepo, SessionRepo, SettingsRepo};
 
 use super::session_db::{init_session_db, manage_noop_settings};
@@ -403,6 +403,71 @@ pub async fn cmd_compress_context(
             estimated: l.estimated,
             duration_ms: l.duration_ms,
         }),
+    })
+}
+
+/// 会话标题生成结果（GUI DTO）
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TitleResultDto {
+    /// 清洗后的标题（保证非空）
+    pub title: String,
+    /// 那次模型调用的用量；provider 未回报时为 `None`
+    pub usage: Option<types::TokenUsage>,
+    /// 本次请求的墙钟耗时（含首字延迟）
+    pub duration_ms: i64,
+}
+
+/// 会话标题生成（GUI）—— 与 CLI 走**同一份** `virlen_core::agent::title`。
+///
+/// 为什么放后端：TS 侧原有一份 `generate-title.ts`，与 Rust 那份是「同语义两实现」；
+/// 统一到 core 后只有一份，不会再漂移。GUI 用 [`DefaultProviderFactory`]（有 JS 宿主，
+/// Gemini 等桥接协议照常走双向桥，与正常聊天完全同一条路）；headless / CLI 走
+/// `create_native_provider`（见 `virlen-cli/src/session_rt`）。
+///
+/// 落库（把标题写回会话）由调用方完成；**记账在此完成**（与 CLI 同一入口
+/// `agent::usage::record_usage`，kind = `title`；provider 未回报 usage 时不记）。
+#[tauri::command]
+pub async fn cmd_generate_title(
+    app: tauri::AppHandle,
+    bridge: tauri::State<'_, Arc<AgentBridgeState>>,
+    repo: tauri::State<'_, Arc<dyn SessionRepo>>,
+    session: types::Session,
+    messages: Vec<types::Message>,
+    provider: types::ProviderConnection,
+) -> Result<TitleResultDto, String> {
+    let factory = DefaultProviderFactory {
+        bridge: bridge.inner().clone(),
+        sink: Arc::new(TauriEventSink::new(app.clone())),
+    };
+    let provider_obj = factory.create(&provider);
+    let out = title::generate_title(
+        &session,
+        &messages,
+        provider_obj.as_ref(),
+        &CancellationToken::new(),
+    )
+    .await?;
+    if let Some(u) = &out.usage {
+        usage::record_usage(
+            repo.inner().as_ref(),
+            &session.id,
+            &session,
+            &provider.provider_type,
+            &provider.provider_id,
+            "title",
+            None,
+            None,
+            Some(u.clone()),
+            false,
+            Some(out.duration_ms),
+        )
+        .await;
+    }
+    Ok(TitleResultDto {
+        title: out.title,
+        usage: out.usage,
+        duration_ms: out.duration_ms,
     })
 }
 

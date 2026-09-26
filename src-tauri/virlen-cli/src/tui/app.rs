@@ -366,6 +366,10 @@ impl Chat {
         });
         // 回合结束后刷新上下文占用（此时库里已有本轮的 usage）
         self.refresh_context().await;
+        // 新会话首回合后尝试 AI 标题（失败保持首行标题）；成功则同步状态行
+        if self.rt.generate_title_if_needed().await.is_some() {
+            self.push_session(self.rt.messages.len());
+        }
     }
 
     /// 压缩上下文（方式已选定）。

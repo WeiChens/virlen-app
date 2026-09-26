@@ -184,6 +184,8 @@ pub(crate) async fn run_plain(
                     virlen_core::telemetry::now_ms() - started,
                     context_line(ctx, window)
                 );
+                // 新会话首回合后尝试 AI 标题（失败保持首行标题）；标题在 /status 里可见
+                let _ = rt.generate_title_if_needed().await;
             }
             Err(e) => {
                 let _ = writeln!(err, "[error] {}", e);

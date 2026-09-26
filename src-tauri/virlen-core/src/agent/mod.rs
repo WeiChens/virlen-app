@@ -28,6 +28,8 @@ pub mod prompts;
 pub mod provider;
 pub mod run_state;
 pub mod storm_breaker;
+// `title`：会话标题生成（LLM）—— GUI / CLI 共用（原 TS `domain/engine/generate-title.ts`）
+pub mod title;
 pub mod tool_defs;
 pub mod tool_executor;
 pub mod types;
