@@ -578,7 +578,8 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
   **⚠️ 教训**：本地（Windows）clippy 全绿**不代表**门禁通过。属性坑：文档列表项后不补空行会触发 `doc_lazy_continuation`。
 - **② macOS / Windows 各 1 例测试失败（真 bug）**：`same_path()` 只比字符串，而 `resolve_workspace` 两侧来源不同（`--workspace` 已 canonicalize、会话记录**原样**）→「同一个目录的两种写法」被判成换目录、续跑被无辜拦下。CI 上两种写法恰好都出现：macOS `/var` vs `/private/var`（符号链接）、Windows 8.3 短名 `RUNNER~1` vs 长名 `runneradmin`（Actions 的 `TEMP` 就是短名）。修法：**两侧各自 `dunce::canonicalize`（失败退回原字符串）**后再比；补 2 条单测（unix 软链 + 目录缺失兜底）。
 - **③ Linux 构建 job 的 CLI 步骤直接报错**：`pnpm run build:cli -- --target <triple>` 在 CI 上被 pnpm **连 `--` 一起透传**（cargo 报 `unexpected argument '--target'`）；本机 pnpm 11.2.2 会把 `--` 剥掉 → **同一份 workflow 在本机与 CI 行为不同**。修法：改 `env: CARGO_BUILD_TARGET=<triple>` + `pnpm run build:cli`（不经过任何参数转发，语义与 `--target` 等价，产物同样落 `target/<triple>/release/`）。
-- **边界**：非 Windows 的编译**本地无法复现**（依据是「clippy 已证明这些项在 Linux 上零引用 → 门禁掉不可能破坏编译」+ 逐项引用点 grep 审计）；`virlen-app` 的 Linux 专属分支（`#[cfg(target_os = "linux")]` 等约 7 处）**从未被 clippy 检查过**，若下次 Actions 仍报别的告警，大概率是同一类「平台专属代码」问题。
+- **边界**：非 Windows 的编译**本地无法复现**（依据是「clippy 已证明这些项在 Linux 上零引用 → 门禁掉不可能破坏编译」+ 逐项引用点 grep 审计）；`virlen-app` 的 Linux 专属分支（`#[cfg(target_os = "linux")]` 等约 7 处）**从未被 clippy 检查过**。
+- **④ 续修（同一轮第二次 push）**：core 修完后 ubuntu clippy 才轮到 `virlen-app`，又露出 **3 条同类告警**（全在 `tray/notify.rs`）—— `show_notification` 的 `session_id` 只在 Windows 分支用（补 `#[cfg(not(target_os = "windows"))] let _ = session_id;`）；`PACKAGE_APP_ID`（原 `cfg(any(windows, test))`，那个 `test` 兜底已无使用者）与 `toast_app_id`（调用方 `show_owned` / `init_app_identity` 都是 Windows 专属，同 `is_packaged()`）改成 `#[cfg(target_os = "windows")]`。判据：报错行的 `due to N previous errors` 就是该 target 的**全部**告警数，所以这批是完整的；剩下的未验证单元只有 `virlen-app` 的 bin（`main.rs`，3 行转发）。**教训同上：平台专属项一律显式门禁，两侧都得能编译。**
 
 **踩坑前必读：`docs/tray-implementation-plan.md`**（托盘 / 关闭不退出 / 后台工作的完整方案与实现记录）。
 
