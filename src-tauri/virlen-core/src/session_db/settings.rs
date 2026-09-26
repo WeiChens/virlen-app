@@ -2,29 +2,28 @@
 //!
 //! ## 为什么放在 `session_db` 下
 //!
-//! 配置与会话**共用同一个 SQLite 文件与同一把单写连接**：
-//! - 不再需要「第二个写连接」→ 不会引入 `SQLITE_BUSY`；
-//! - 迁移 / 维护（体积统计、WAL 截断、`VACUUM`）天然覆盖配置，不必再造一套；
-//! - CLI 与 GUI 只要指向同一个 `virlen.db`（`HostEnv::data_dir()`）就共用同一份配置。
+//! 配置与会话共用同一个 SQLite 文件与同一把单写连接：不再需要第二个写连接（不会引入
+//! `SQLITE_BUSY`）；迁移 / 维护（体积统计、WAL 截断、`VACUUM`）天然覆盖配置；CLI 与 GUI
+//! 只要指向同一个 `virlen.db`（`HostEnv::data_dir()`）就共用同一份配置。
 //!
 //! ## 为什么「一 key 一行」而不是整份 JSON 存一个 key
 //!
-//! - 写入只改**动过的那几个键** → 多窗口 / 并发场景不会因整份覆盖而丢更新；
-//! - 行数少、`updated_at` 可用于定位「最近改了什么」。
+//! 写入只改动过的那几个键 → 多窗口 / 并发场景不会因整份覆盖而丢更新；行数少、`updated_at`
+//! 可用于定位「最近改了什么」。
 //!
-//! ⚠️ **键名约定**：与 `src/ui/store/settingStore.ts` 的 `SettingsStore` 字段**同名同层**
-//! （如 `providers` / `permissions` / `sandboxMode`），Rust 侧**不建映射表** ——
-//! 这是避免「配置字段漂移」的关键（详见 `docs/config-sink-plan.md` §6 R6）。
-//! 保留键以 `__` 开头（`__schemaVersion` / `__migratedFrom`），业务键不得使用该前缀。
+//! ⚠️ 键名约定：与 `src/ui/store/settingStore.ts` 的 `SettingsStore` 字段同名同层
+//! （如 `providers` / `permissions` / `sandboxMode`），Rust 侧不建映射表 —— 这是避免「配置
+//! 字段漂移」的关键（详见 `docs/config-sink-plan.md` §6 R6）。保留键以 `__` 开头
+//! （`__schemaVersion` / `__migratedFrom`），业务键不得使用该前缀。
 
 use async_trait::async_trait;
 use rusqlite::{params, Connection};
 use serde_json::{Map, Value};
 use std::sync::{Arc, Mutex};
 
-/// 配置**结构**版本键（独立于 `schema.rs` 的表结构版本 `PRAGMA user_version`）
+/// 配置结构版本键（独立于 `schema.rs` 的表结构版本 `PRAGMA user_version`）
 ///
-/// ⚠️ 写入方是待办 #E-S2（前端首启从 localStorage 迁移时写一次）；在它落地前暂无 Rust 消费方。
+/// 写入方是待办 #E-S2（前端首启从 localStorage 迁移时写一次）；在它落地前暂无 Rust 消费方。
 #[allow(dead_code)]
 pub const SETTINGS_SCHEMA_VERSION_KEY: &str = "__schemaVersion";
 /// 迁移来源键（首启从 localStorage 导入时写一次，便于排查）
@@ -188,7 +187,7 @@ impl SettingsRepo for NoopSettingsRepo {
     async fn get_all(&self) -> Result<Map<String, Value>, String> {
         Ok(Map::new())
     }
-    /// ⚠️ 静默丢弃：无后端时写入不应把调用方（前端自动保存）打断
+    /// 静默丢弃：无后端时写入不应把调用方（前端自动保存）打断
     async fn upsert(&self, _entries: Map<String, Value>) -> Result<(), String> {
         Ok(())
     }

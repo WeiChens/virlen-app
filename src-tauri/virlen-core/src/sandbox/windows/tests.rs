@@ -566,10 +566,10 @@ impl AttrList {
         Ok(())
     }
 
-    /// PSEUDOCONSOLE：value = **句柄值本身**，size = `size_of::<HPCON>()`。
+    /// PSEUDOCONSOLE：value = 句柄值本身，size = `size_of::<HPCON>()`。
     ///
-    /// ⚠️ 注意与 `set_job` 的**语义差异**（见 `docs/pty-research.md` §5.2）：
-    /// JOB_LIST 要的是「句柄数组的指针」，而 PSEUDOCONSOLE 要的是「句柄值本身」。
+    /// ⚠️ 注意与 `set_job` 的语义差异（见 `docs/pty-research.md` §5.2）：JOB_LIST 要的是「句柄
+    /// 数组的指针」，而 PSEUDOCONSOLE 要的是「句柄值本身」。
     fn set_pseudoconsole(&mut self, hpc: HPCON) -> Result<(), String> {
         let value = hpc as *const c_void;
         let size = std::mem::size_of::<HPCON>();
@@ -700,9 +700,9 @@ fn conpty_with_restricted_token() {
         si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
         si.StartupInfo.lpDesktop = desktop_wide.as_mut_ptr();
         si.lpAttributeList = attrs.as_mut_ptr();
-        // ⚠️ 必须显式设置 STARTF_USESTDHANDLES 并把三个句柄置 NULL。
-        // 不设该标志时子进程会继承父进程的 std 句柄（Windows「标准句柄总是被继承」，
-        // bInheritHandles=0 挡不住），导致命令真实输出漏到父进程 stdout 而没进伪控制台。
+        // ⚠️ 必须显式设置 STARTF_USESTDHANDLES 并把三个句柄置 NULL。不设该标志时子进程会继承
+        // 父进程的 std 句柄（Windows「标准句柄总是被继承」，bInheritHandles=0 挡不住），导致
+        // 命令真实输出漏到父进程 stdout 而没进伪控制台。
         si.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
         si.StartupInfo.hStdInput = std::ptr::null_mut();
         si.StartupInfo.hStdOutput = std::ptr::null_mut();

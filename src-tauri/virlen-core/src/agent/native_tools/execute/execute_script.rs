@@ -41,7 +41,7 @@ pub(crate) async fn execute_script_tool(
     }
 
     // sandbox:"off" → 申请「不使用沙盒」执行脚本（与 execute_command 同语义）。
-    // ⚠️ 只读模式直接拒绝（否则只读保护会被绕过）。
+    // ⚠️ 只读模式直接拒绝，否则只读保护会被绕过。
     let ai_requested_bypass = matches!(
         arg_str(args, "sandbox")
             .unwrap_or_default()
@@ -68,11 +68,10 @@ pub(crate) async fn execute_script_tool(
     }
 
     // 「忽略沙盒命令」规则（设置 → 安全）：与 execute_command 同语义 —— 命中即免脱壳审批
-    // **并强制无沙盒执行**（AI 没传 sandbox:"off" 也生效），匹配对象是**运行命令**
-    // （不是脚本正文，见 common::rules 模块头注释）。
-    // 位置：放在「脚本已存在」快速失败之后，不值得为一条必然报错的调用多判一次规则。
-    // ⚠️ 判定完全在 Rust 侧本地完成（规则随 security 快照下发）：无桥往返、无 IO。
-    // ⚠️ 只在沙盒**启用**时判定：off 时无沙盒可脱；readonly 时脱壳被禁止（规则静默忽略）。
+    // 并强制无沙盒执行（AI 没传 sandbox:"off" 也生效），匹配对象是运行命令（不是脚本正文，
+    // 见 common::rules 模块头注释）。判定完全在 Rust 侧本地完成：无桥往返、无 IO。
+    // 放在「脚本已存在」快速失败之后，不值得为一条必然报错的调用多判一次规则。
+    // ⚠️ 只在沙盒启用时判定：off 时无沙盒可脱；readonly 时脱壳被禁止（规则静默忽略）。
     let rule_hit = if sandbox_mode(ctx) == SandboxMode::On {
         match_sandbox_ignore_rule(ctx, &cmd_str).await
     } else {
@@ -107,7 +106,7 @@ pub(crate) async fn execute_script_tool(
             "safe",
         );
         // 命中「忽略沙盒命令」规则 → 用户已用规则预先授权脱壳（ask 视作 allow）；
-        // ⚠️ deny 仍然优先：规则不能推翻显式禁止
+        // ⚠️ deny 仍优先：规则不能推翻显式禁止
         Some(if rule_hit.is_some() {
             apply_rule_clearance(configured)
         } else {
@@ -175,7 +174,7 @@ pub(crate) async fn execute_script_tool(
         "permName": shown_perm,
         "title": permission_label(shown_perm),
         "subTitle": tips,
-        // ⚠️ 正文展示**脚本内容**（用户据此判断是否放行），运行命令放在 command 作说明
+        // 正文展示脚本内容（用户据此判断是否放行），运行命令放在 command 作说明
         "desc": content,
         "command": cmd_str,
         "hint": hint,
@@ -218,7 +217,7 @@ pub(crate) async fn execute_script_tool(
                 .await;
             }
             // 未实际执行（拒绝/其他）→ 未落盘，无需清理。
-            // ⚠️ 必须走 Error（失败）通道：脚本一行都没跑，UI 不能显示成绿色「成功」。
+            // ⚠️ 必须走 Error 通道：脚本一行都没跑，UI 不能显示成绿色「成功」。
             Ok(NativeToolOutcome::error(interaction_msg))
         }
         BridgeInteractionResult::Error { content, ui_data } => {
@@ -241,14 +240,10 @@ fn is_powershell_script(path: &str) -> bool {
 
 /// 给脚本内容补 UTF-8 BOM（幂等）—— 与 JS 侧 `applyScriptBom` 等价。
 ///
-/// ⚠️ 为什么必须加：Windows PowerShell 5.1 读取**无 BOM** 的 .ps1 时不猜 UTF-8，
-/// 而是按系统 ANSI 代码页（中文系统 CP936/GBK）解析源文件，脚本里的中文字面量
-/// 在「解析阶段」就变成乱码（"脚本" → "鑴氭湰"）—— 之后无论怎么设置
-/// `[Console]::OutputEncoding` 都还原不回来（输出侧本来就对，问题在输入端）。
-/// 带 BOM 后 5.1 会按 UTF-8 解析。
-///
-/// 只对 Windows 上的 .ps1/.psm1 生效：其它脚本加 BOM 有害（.sh 的 shebang 会失效，
-/// .js/.py 虽能容忍但没必要）。
+/// ⚠️ 必须加：PowerShell 5.1 读无 BOM 的 .ps1 时按系统 ANSI 代码页（中文 CP936）解析源文件，
+/// 中文字面量在解析阶段就变成乱码（"脚本" → "鑴氭湰"），之后再设
+/// `[Console]::OutputEncoding` 也还原不回来。只对 Windows 的 .ps1/.psm1 生效（.sh 加 BOM 会
+/// 让 shebang 失效，.js/.py 虽能容忍但没必要）。
 fn with_script_bom(path: &str, content: &str, is_windows: bool) -> String {
     if is_windows && is_powershell_script(path) && !content.starts_with('\u{FEFF}') {
         format!("\u{FEFF}{}", content)
@@ -271,7 +266,7 @@ async fn finalize_script_run(
 ) -> Result<NativeToolOutcome, String> {
     // 1. 写脚本文件（自动创建父目录）
     let full_path_c = full_path.to_string();
-    // ⚠️ 落盘内容可能与入参不同：Windows 上的 .ps1/.psm1 需补 UTF-8 BOM（见 with_script_bom）
+    // 落盘内容可能与入参不同：Windows 的 .ps1/.psm1 需补 UTF-8 BOM（见 with_script_bom）
     let content_c = with_script_bom(full_path, content, cfg!(target_os = "windows"));
     let write_res =
         tokio::task::spawn_blocking(move || file_ops::write_file(&full_path_c, &content_c)).await;
@@ -306,9 +301,9 @@ async fn finalize_script_run(
 
 /// 脚本删除结果：模型侧英文文本 + 供 UI 按界面语言渲染的结构化字段。
 ///
-/// ⚠️ 与 TS 侧 `ScriptDeleteNote`（`tools/execute/execute-script.ts`）逐字对齐（铁律 1）：
-/// `text` 是模型侧文案；`kind` / `path` / `error` 是语言无关数据，
-/// 由 `TerminalBlock` 按界面语言重建展示文本（旧消息无这些字段 → 回退 `note` 文本）。
+/// ⚠️ 与 JS 侧 `ScriptDeleteNote`（`tools/execute/execute-script.ts`）逐字对齐（铁律 1）：
+/// `text` 为模型侧文案，`kind` / `path` / `error` 是语言无关数据，由 `TerminalBlock` 按界面
+/// 语言重建展示文本（旧消息无这些字段 → 回退 `note` 文本）。
 struct ScriptDeleteNote {
     text: String,
     kind: &'static str,

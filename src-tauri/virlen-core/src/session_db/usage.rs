@@ -416,11 +416,10 @@ pub(crate) async fn records(
         let limit = query.limit.unwrap_or(200).clamp(1, 5000) as i64;
         let offset = query.offset.unwrap_or(0) as i64;
 
-        // ⚠️ COUNT 的表**必须与 `usage_where` 用的别名一致**：过滤条件里的列都写成
-        // `u.ts` / `u.session_id`（明细查询有 JOIN，必须带前缀）。若这里写
-        // `FROM usage_ledger`（无别名），只要带了任何过滤条件，SQLite 就会报
-        // `no such column: u.ts` → 明细与 CSV 导出在「今日 / 近 7 天 / 近 30 天」下
-        // 全部空白（只有「全部」不过滤才正常）。
+        // ⚠️ COUNT 的表必须与 `usage_where` 用的别名一致：过滤条件里的列都写成 `u.ts` /
+        // `u.session_id`（明细查询有 JOIN，必须带前缀）。若这里写 `FROM usage_ledger`（无别名），
+        // 只要带了任何过滤条件，SQLite 就会报 `no such column: u.ts` → 明细与 CSV 导出在
+        // 「今日 / 近 7 天 / 近 30 天」下全部空白（只有「全部」不过滤才正常）。
         let total: i64 = conn
             .query_row(
                 &format!("SELECT COUNT(*) FROM usage_ledger u{where_sql}"),

@@ -6,8 +6,8 @@
 //! - Rust 发出 `agent:tool-request` { requestId, sessionId, toolCallId, toolName, args, skills }
 //! - JS 执行工具后调用命令 `agent_tool_response(requestId, payload)`
 //! - payload: { __kind: "value"|"error"|"interaction", value?, uiData?, message?, interactionType?, interactionData? }
-//!   ⚠️ `__kind: "error"` 也允许携带 `uiData`：失败文案同样是「模型侧英文 + UI 侧结构化」两用，
-//!   UI 靠 `uiData` 按界面语言重建，否则只能直显英文报告。
+//!   ⚠️ `__kind: "error"` 也允许携带 `uiData`：失败文案同样是「模型侧英文 + UI 侧结构化」
+//!   两用，UI 靠 `uiData` 按界面语言重建，否则只能直显英文报告。
 //!
 //! ## 用户交互（Rust → JS）
 //! - Rust 发出 `agent:user-interaction-request` { requestId, type, data }
@@ -25,8 +25,8 @@
 //!   `agent:round-boundary` { requestId, sessionId }
 //! - JS 回 `agent_round_boundary_response(requestId, payload)`，
 //!   payload: { messages: Message[] }（无注入时为空数组）
-//! - 用途：用户在 AI 回复期间「应用」的任务清单变更，必须在**下一次请求之前**
-//!   进入消息列表，模型才能在这一轮里看到；否则要等整个循环结束、用户再说一句话才生效。
+//! - 用途：用户在 AI 回复期间「应用」的任务清单变更，必须在下一次请求之前进入消息列表，
+//!   模型才能在这一轮里看到；否则要等整个循环结束、用户再说一句话才生效。
 
 use crate::agent::event_sink::EventSink;
 use crate::agent::types::Message;
@@ -198,8 +198,8 @@ impl AgentBridgeState {
 
     /// 打开一个 Provider 流通道（BridgedProvider 使用）
     ///
-    /// ⚠️ `#[allow(too_many_arguments)]`：每个参数都是独立的桥协议字段，收成结构体
-    /// 只是把同一批字段换个地方写，不增加任何约束力。
+    /// `#[allow(too_many_arguments)]`：每个参数都是独立的桥协议字段，收成结构体只是换个
+    /// 地方写，不增加任何约束力。
     #[allow(clippy::too_many_arguments)]
     pub async fn open_provider_stream(
         &self,
@@ -242,8 +242,8 @@ impl AgentBridgeState {
 
     /// 请求 JS 在轮次边界注入消息（工具回复后、下一次 LLM 请求前），等待回执
     ///
-    /// ⚠️ 带超时：JS 侧若没装监听器（前端版本不匹配）就永远不会回执，
-    /// 这里必须自己兜底 —— 否则整个 agent 循环会卡在这一步。
+    /// ⚠️ 必须带超时：JS 侧若没装监听器（前端版本不匹配）就永远不会回执，不兜底会让整个
+    /// agent 循环卡在这一步。
     pub async fn request_round_boundary(
         &self,
         sink: &dyn EventSink,
@@ -341,13 +341,12 @@ pub async fn handle_round_boundary_response(
 
 /// 轮次边界注入（工具回复后、下一次 LLM 请求发出前调用）
 ///
-/// 向 JS 索取「AI 回复期间用户已应用的任务清单变更」等消息，追加进 `messages`，
-/// 让紧接着的那次请求就能看到 —— 而不是等整个 agent 循环结束、用户再说一句话才生效。
+/// 向 JS 索取「AI 回复期间用户已应用的任务清单变更」等消息，追加进 `messages`，让紧接着的
+/// 那次请求就能看到 —— 而不是等整个 agent 循环结束、用户再说一句话才生效。
 ///
-/// ⚠️ 任何失败（超时 / 解析失败 / 写库失败）都降级为「不注入」：
-/// 只丢失一次提前生效的机会，绝不影响本轮执行。
-/// 与 TS 引擎 `SendMessageOptions.onRoundBoundary` 是同一语义（铁律 1），
-/// 只是 Rust 侧多一次 IPC 往返（消息列表在 Rust 内存里，前端无法直接改）。
+/// ⚠️ 任何失败（超时 / 解析失败 / 写库失败）都降级为「不注入」：只丢一次提前生效的机会，
+/// 绝不影响本轮执行。与前端监听回调同语义（铁律 1），只是 Rust 侧多一次 IPC 往返
+/// （消息列表在 Rust 内存里，前端无法直接改）。
 pub async fn inject_round_boundary_messages(
     state: &AgentBridgeState,
     sink: &dyn EventSink,

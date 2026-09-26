@@ -44,7 +44,7 @@ pub(crate) type PersistSnapshotFn<'a> = &'a (dyn Fn(&str, &types::Run) + Sync + 
 
 /// 装箱后的持久化闭包 —— `llm_loop` 把 `persist_snapshot` 捕获成本地闭包时用。
 ///
-/// ⚠️ 生命周期参数不可省：它是 trait object 的 **object lifetime**。写在类型别名里时该 bound
-/// 会退化成默认的 `'static`（不像 `let` 注解那样可被推断），必须显式带出来；
-/// 使用处用 `BoxedPersistSnapshotFn<'_>` 让编译器推断。
+/// 生命周期参数不可省：它是 trait object 的 object lifetime。写在类型别名里时该 bound 会退化
+/// 成默认的 `'static`（不像 `let` 注解那样可被推断），必须显式带出来；使用处用
+/// `BoxedPersistSnapshotFn<'_>` 让编译器推断。
 pub(crate) type BoxedPersistSnapshotFn<'a> = Box<dyn Fn(&types::Run) + Sync + Send + 'a>;

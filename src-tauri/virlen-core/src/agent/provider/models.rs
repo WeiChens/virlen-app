@@ -1,22 +1,20 @@
-//! 模型列表拉取 + 连通性验证 —— **配置向导**用（不属于运行时 `Provider` trait）
+//! 模型列表拉取 + 连通性验证 —— 配置向导用（不属于运行时 `Provider` trait）
 //!
-//! 为什么单独一个模块而不加进 `Provider` trait：
+//! 为什么单独一个模块而不加进 `Provider` trait：`list_models` 只在「配供应商」这一刻用得上，
+//! 引擎跑一轮对话完全不需要它，加进 trait 就得连 `BridgedProvider`（Gemini 等走 JS 桥的）
+//! 一起实现一遍；而且这里的能力是面向调用方（CLI 向导 / 诊断命令）的，不是面向引擎的。
 //!
-//! 1. `list_models` 只在「配供应商」这一刻用得上，引擎跑一轮对话完全不需要它；
-//!    加进 trait 就得连 `BridgedProvider`（Gemini 等走 JS 桥的）一起实现一遍 —— 那是无意义的负担。
-//! 2. 这里的能力是**面向调用方**的（CLI 向导 / 未来的诊断命令），不是面向引擎的。
-//!
-//! ## 与 TS 的口径（铁律 1：双引擎同语义）
+//! ## 与 TS 的口径（铁律 1：两侧同语义）
 //!
 //! 两个函数都是 `src/infrastructure/provider/{openai,anthropic}.ts` 里同名逻辑的移植：
 //!
 //! | 能力 | TS 落点 | 请求 |
 //! |---|---|---|
-//! | `listModels()` | `openai.ts:120` / `anthropic.ts:161` | `GET {base}/models`（anthropic 用 **origin**，即 scheme://host） |
-//! | `validateApiKey()` | `openai.ts:85` / `anthropic.ts:131` | 发一条 `ping` 的最小对话，**`max_tokens: 1`** |
+//! | `listModels()` | `openai.ts:120` / `anthropic.ts:161` | `GET {base}/models`（anthropic 用 origin，即 scheme://host） |
+//! | `validateApiKey()` | `openai.ts:85` / `anthropic.ts:131` | 发一条 `ping` 的最小对话，`max_tokens: 1` |
 //!
 //! ⚠️ anthropic 的 `listModels` 故意不拼 basePath（TS 用 `new URL(baseUrl)` 取 `protocol//host`）：
-//! 因为 Anthropic 的模型列表在**根域**上，不在 `/v1` 下面。这里逐字对齐。
+//! 因为 Anthropic 的模型列表在根域上，不在 `/v1` 下面。这里逐字对齐。
 
 use super::super::cancellation::CancellationToken;
 use super::super::types::{ChatRequest, Message, ProviderConnection};
@@ -30,8 +28,8 @@ const PING_TEXT: &str = "ping";
 
 /// 列表拉取的超时上限。
 ///
-/// ⚠️ `reqwest::Client::new()` **默认没有超时** —— 配置向导里一个不可达的 Base URL 会把
-/// 用户永久卡在「正在拉取…」。20s 足够一次正常的 /models 往返，也短到用户不会以为死机。
+/// ⚠️ `reqwest::Client::new()` 默认没有超时 —— 配置向导里一个不可达的 Base URL 会把用户
+/// 永久卡在「正在拉取…」。20s 足够一次正常的 /models 往返，也短到用户不会以为死机。
 const LIST_MODELS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// 带超时的 HTTP 客户端（构建失败时退回默认客户端 —— 不因为一个超时配置让功能不可用）
@@ -64,10 +62,10 @@ pub async fn list_models(
 
 /// 验证「这个 key + baseUrl + model 真的能用」—— 发一条 `ping` 的最小对话。
 ///
-/// 与 GUI「验证 API Key」同一条路径、同一个 `max_tokens: 1`：因此 CLI 里能从 401/404/额度错误里
-/// 拿到与桌面端**一致**的判定。成功时返回助手回答的纯文本（一般只有 1 个 token，可能为空串）。
+/// 与 GUI「验证 API Key」同一条路径、同一个 `max_tokens: 1`，因此 CLI 里能从 401/404/额度错误
+/// 里拿到与桌面端一致的判定。成功时返回助手回答的纯文本（一般只有 1 个 token，可能为空串）。
 ///
-/// ⚠️ 这是**真实计费调用**（虽然只花 1 个 token）。向导里应把它作为可选步骤并提前说明。
+/// ⚠️ 这是真实计费调用（虽然只花 1 个 token）。向导里应把它作为可选步骤并提前说明。
 pub async fn verify_connection(conn: &ProviderConnection, model: &str) -> Result<String, String> {
     let provider: Box<dyn Provider> = match conn.provider_type.as_str() {
         "openai" => Box::new(NativeOpenAiProvider::new(

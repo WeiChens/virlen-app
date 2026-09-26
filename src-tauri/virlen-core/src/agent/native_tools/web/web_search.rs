@@ -1,12 +1,11 @@
 //! `web_search` 工具（原生）— 通过已配置的搜索源检索互联网。
 //!
-//! ## 配置来源（与 S7 同一套：**读的就是 CLI 会读的那份**）
+//! ## 配置来源（与 S7 同一套：读的就是 CLI 会读的那份）
 //!
-//! 搜索源配置（`searchProviders` / `defaultSearchProviderId`）随 `SettingsStore`
-//! 一起下沉到了 `app_settings` 表，因此这里经 `ctx.settings` **直读**同一份配置 ——
-//! GUI（Rust 引擎）与 CLI 行为天然一致，也不需要前端下发任何字段。
-//! （对比：`sandbox_ignore_rules` 走的是「随消息下发」，因为沙盒判定要求每条命令零 IO；
-//! 这里一次调用一次网络请求，读一次表的开销可忽略。）
+//! 搜索源配置（`searchProviders` / `defaultSearchProviderId`）随 `SettingsStore` 一起下沉到了
+//! `app_settings` 表，因此这里经 `ctx.settings` 直读同一份配置 —— GUI（Rust 引擎）与 CLI 行为
+//! 天然一致，也不需要前端下发任何字段。（对比：`sandbox_ignore_rules` 走的是「随消息下发」，
+//! 因为沙盒判定要求每条命令零 IO；这里一次调用一次网络请求，读一次表的开销可忽略。）
 //!
 //! ## 与 TS 侧的对齐
 //!
@@ -18,7 +17,7 @@
 //! - 请求体与响应字段映射一致（`days` 仅 `time_range=day` 时出现 —— 对齐 JS `undefined` 被丢弃）；
 //! - 失败文案一致（`Tavily API error (status): body` / `博查 API error ...`）。
 //!
-//! ⚠️ 与 TS 侧一样**只支持 `tavily` / `bocha`**：`searxng` 在 TS 的 `factory.ts` 里被注释掉
+//! ⚠️ 与 TS 侧一样只支持 `tavily` / `bocha`：`searxng` 在 TS 的 `factory.ts` 里被注释掉
 //! （未接入运行时），因此「配了 searxng 但没配可用源」在两侧都表现为「未配置搜索源」。
 
 use crate::agent::cancellation::CancellationToken;
@@ -108,7 +107,7 @@ pub(crate) async fn web_search_tool(
     };
     let elapsed_ms = started.elapsed().as_millis() as u64;
 
-    // 5. 无结果（⚠️ TS 用的是**原始** query —— 这里同样不做 trim）
+    // 5. 无结果（TS 用的是原始 query —— 这里同样不做 trim）
     if items.is_empty() {
         return Ok(NativeToolOutcome::Value {
             content: format!("No search results found for \"{}\".", query),
@@ -289,7 +288,7 @@ async fn search_bocha(
                 .map(|p| SearchItem {
                     title: p.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                     url: p.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    // ⚠️ 博查的 snippet 取自 `summary` 字段（不是 `snippet`）
+                    // 博查的 snippet 取自 `summary` 字段（不是 `snippet`）
                     snippet: p.get("summary").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                     icon: p.get("siteIcon").and_then(|v| v.as_str()).map(|s| s.to_string()),
                     published_date: p

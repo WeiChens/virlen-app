@@ -1,25 +1,25 @@
 //! 供应商目录 —— 模板表 + 推理强度档位表的**唯一权威源**（机制 C 同款）
 //!
-//! 数据本体在**同目录的 `provider_catalog.json`**：
+//! 数据本体在同目录的 `provider_catalog.json`：
 //!
 //! | 消费方 | 取值方式 |
 //! |---|---|
 //! | `virlen-cli` / Tauri 命令 | 本模块 `include_str!` 内嵌（编译期进二进制） |
 //! | 前端（浏览器 dev / vitest） | `?raw` 直读**同一份** json（见 `src/infrastructure/provider/catalog-source.ts`） |
 //!
-//! 两条路径同源 → 不可能漂移，因此**不需要**任何「差异检查」逻辑（与 `agent/prompts` 同一取舍）。
+//! 两条路径同源 → 不可能漂移，因此不需要任何「差异检查」逻辑（与 `agent/prompts` 同一取舍）。
 //!
 //! ## 为什么把它从 TS 搬过来
 //!
 //! 搬迁前模板表只存在于 `src/domain/provider/config.ts`。`virlen-cli` 要做「逐步输入配置供应商」
-//! 的向导就必须用它 —— 而 CLI 里**没有 JS**，唯一的替代是抄一份到 Rust，那会立刻产生第二个
+//! 的向导就必须用它 —— 而 CLI 里没有 JS，唯一的替代是抄一份到 Rust，那会立刻产生第二个
 //! 权威源（改一处忘另一处 = 静默分叉）。所以按「提示词 md 迁入 core」的同一套路搬过来。
 //!
 //! ## 排序口径（唯一一条）
 //!
-//! 推理档位的**顺序即语义**（`none/off < minimal < low < medium < high < xhigh < max`），
+//! 推理档位的顺序即语义（`none/off < minimal < low < medium < high < xhigh < max`），
 //! 拖动条要单调、归一化要稳定，都依赖它。顺序由本文件 `reasoningEffortUnion` 定义；
-//! 前端 `sortReasoningEfforts()` 与 CLI 的选择顺序都**按这个并集顺序**产出。
+//! 前端 `sortReasoningEfforts()` 与 CLI 的选择顺序都按这个并集顺序产出。
 //! ⚠️ 改这个数组 = 同时改两侧行为（前端 `provider-config.test.ts` 与本模块单测都会盯着它）。
 
 use serde::{Deserialize, Serialize};
@@ -54,8 +54,8 @@ pub struct ProviderTemplate {
     /// 多协议可选项；不存在 = 该模板不支持切协议
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_type_list: Option<Vec<ProviderTypeOption>>,
-    /// ⚠️ **仅作参考数据**，不再参与 UI 选项计算（选项已改为用户从并集里多选，
-    /// 见 `ProviderConfig.reasoningEffortList`）。字段保留是为了不丢各平台支持情况的事实。
+    /// 仅作参考数据，不再参与 UI 选项计算（选项已改为用户从并集里多选，见
+    /// `ProviderConfig.reasoningEffortList`）。字段保留是为了不丢各平台支持情况的事实。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_reasoning_effort_list: Option<Vec<String>>,
     /// 官网地址（前端「服务商网址」链接）

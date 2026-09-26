@@ -22,8 +22,8 @@ pub struct LlmRoundOutput {
 
 /// 执行一轮 LLM 调用（流式 / 非流式），收集 text + tool_calls
 ///
-/// ⚠️ `#[allow(too_many_arguments)]`：一轮调用的输入本就是「会话 + 供应商 + 工具表 + 历史 +
-/// 取消 + 事件出口 + 会话 id + 覆盖项 + 推理档位」，全是独立事实；收结构体只是换个写法。
+/// `#[allow(too_many_arguments)]`：一轮调用的输入本就是「会话 + 供应商 + 工具表 + 历史 +
+/// 取消 + 事件出口 + 会话 id + 覆盖项 + 推理档位」，全是独立事实，收结构体只是换个写法。
 #[allow(clippy::too_many_arguments)]
 pub async fn do_llm_round(
     session: &Session,
@@ -163,18 +163,14 @@ pub async fn do_llm_round(
 
 /// 流式事件发送节流间隔（毫秒）— 最多合并约一帧的增量
 ///
-/// ⚠️ 这个值就是**正文尾部可见延迟的上限**：增量在窗口内被积压，只有窗口到点
-/// （或流结束的 force_flush）才发出。而「正文结束 → 工具调用出现」之间存在一段
-/// **零事件空窗** —— provider 在累积 tool 参数 JSON 期间不发任何事件
-///（见 `provider/openai.rs`：tool_calls 分片只进 `tool_acc`，直到 `finish_reason`
-/// 才发一条 `ToolUse`）。空窗里积压的尾部正文就一直不显示，表现为
-/// 「回复正文没显示全 / 像是停在半句话」（参数越长，这只停得越久）。
+/// 这个值就是正文尾部可见延迟的上限：增量在窗口内积压，只有窗口到点（或流结束的 force_flush）
+/// 才发出。而「正文结束 → 工具调用出现」之间存在一段零事件空窗 —— provider 在累积 tool 参数
+/// JSON 期间不发任何事件（见 `provider/openai.rs`：tool_calls 分片只进 `tool_acc`，直到
+/// `finish_reason` 才发一条 `ToolUse`），空窗里积压的尾部正文就一直不显示，表现为「回复正文
+/// 没显示全 / 像是停在半句话」。取一帧（16ms）可把这段延迟压到不可见。
 ///
-/// 取一帧（16ms）可把这段延迟压到不可见；不能取消节流——同一帧内到达的多个
-/// token 合并成一次 UI 更新，避免前端为每个 token 都重建一次消息对象。
-///
-/// 注意：本值只影响「事件密度」，不再影响载荷大小（正文走增量补丁，单次 O(1)，
-/// 见 `flush_stream_state`）。
+/// 不能取消节流：同一帧内到达的多个 token 合并成一次 UI 更新，避免前端为每个 token 都重建
+/// 一次消息对象。本值只影响事件密度，不影响载荷大小（见 `flush_stream_state`）。
 const STREAM_THROTTLE_MS: i64 = 16;
 // 编译期钉住：节流窗口 = 正文尾部可见延迟的上限，必须在一帧内（~16ms）。
 // 回归背景：provider 累积 tool 参数 JSON 期间**零事件**，窗口过大时这段空窗里积压的尾部
@@ -218,15 +214,14 @@ impl StreamEventThrottle {
 /// 批量发送累积的流式增量（assistant_message_updated + stream_event）
 /// 无 pending 内容时直接返回，避免空事件
 ///
-/// ⚠️ 正文只回传增量（`patch.contentDelta`）：本函数每 60ms 触发一次，若每次都回传
-/// 累积全量正文，单次载荷随内容线性增长、整轮通信量即 O(n²)。全量正文由流结束帧兜底
-/// ——`MessageStop` 的 `sync_assistant` 与 `finalize_assistant_message`，
-/// 因此个别增量事件丢失也会被最终帧纠正。
+/// 正文只回传增量（`patch.contentDelta`）：本函数约每 60ms 触发一次，若每次都回传累积全量
+/// 正文，单次载荷随内容线性增长、整轮通信量即 O(n²)。全量正文由流结束帧兜底（`MessageStop`
+/// 的 `sync_assistant` 与 `finalize_assistant_message`），个别增量丢失也会被最终帧纠正。
 ///
-/// ⚠️ **两个事件必须成对发出（同一次调用、同一份 delta）**：`virlen-cli` 的两条输出路径
-/// 各取其一 —— `run` / 顺序输出模式读 `stream_event.delta`（`run/render.rs`），
-/// TUI 读 `patch.contentDelta`（`tui/sink.rs`，它**故意忽略** `stream_event` 以避免正文双份）。
-/// 只发其中一个不会让任何一侧报错，只会让那一侧**静默丢正文** —— 因此这条隐式契约由
+/// ⚠️ 两个事件必须成对发出（同一次调用、同一份 delta）：`virlen-cli` 的两条输出路径各取其一
+/// —— `run` / 顺序输出模式读 `stream_event.delta`（`run/render.rs`），TUI 读
+/// `patch.contentDelta`（`tui/sink.rs`，它故意忽略 `stream_event` 以避免正文双份）。只发其中
+/// 一个不会让任何一侧报错，只会让那一侧静默丢正文 —— 因此这条隐式契约由
 /// `tests::delta_patch_and_stream_event_are_emitted_in_pairs` 逐条钉住。
 fn flush_stream_state(
     ctx: &ToolCallContext,
@@ -623,13 +618,12 @@ mod tests {
         assert!(count_events(&sink, "assistant_message_updated") >= 1);
     }
 
-    /// ⚠️ 隐式契约回归：一次流式回合里 `assistant_message_updated(patch.contentDelta)`
-    /// 与 `stream_event.delta` 必须**逐个成对、同序、同内容**。
+    /// ⚠️ 隐式契约回归：一次流式回合里 `assistant_message_updated(patch.contentDelta)` 与
+    /// `stream_event.delta` 必须逐个成对、同序、同内容。
     ///
-    /// 为什么必须钉住：`virlen-cli` 的两条渲染路径各取其一 ——
-    /// `run` / 顺序输出模式取 `stream_event.delta`，TUI 取 `patch.contentDelta`。
-    /// 若将来只发其中一个（比如给非流式 provider 开分支），**两条路径不会报错**，
-    /// 只会有一条**静默丢正文**。这里把顺序与内容都比对，任何单侧改动立即失败。
+    /// 为什么必须钉住：`virlen-cli` 的两条渲染路径各取其一（`run` / 顺序输出取
+    /// `stream_event.delta`，TUI 取 `patch.contentDelta`）。若将来只发其中一个，两条路径都
+    /// 不会报错，只会有一条静默丢正文。这里把顺序与内容都比对，任何单侧改动立即失败。
     #[test]
     fn delta_patch_and_stream_event_are_emitted_in_pairs() {
         let deltas: Vec<String> = (0..40).map(|i| format!("词{}", i % 7)).collect();

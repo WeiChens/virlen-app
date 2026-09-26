@@ -1,12 +1,12 @@
 //! plan — 任务清单纯函数（无状态 / 无 IO）
 //!
-//! ⚠️ 与 TS 侧 `src/domain/todo/state.ts` **逐字对齐**（铁律 1）：`todo_write` 原生化后，
-//! Rust 原生路径（默认引擎）与 JS 桥路径（TS 引擎）必须产出同一份 `content`（给模型）
-//! 与同一份 `uiData`（给 UI）。改一边必须同步另一边。
+//! ⚠️ 与 TS 侧 `src/domain/todo/state.ts` 逐字对齐（铁律 1）：`todo_write` 原生化后，Rust 原生
+//! 路径（默认引擎）与 JS 回退路径必须产出同一份 `content`（给模型）与同一份 `uiData`（给 UI）。
+//! 改一边必须同步另一边。
 //!
-//! 此处只移植**工具执行真正用到**的那部分（归一化 / 统计 / 软校验 / 渲染）。
-//! `diffTodos` / `pickCurrentTodos` / `shouldShowTodoEntry` 等只服务「用户编辑清单」的
-//! UI 与注入逻辑（数据源是消息历史），仍留在 TS 侧 —— 那是 JS 的天然职责。
+//! 此处只移植工具执行真正用到的那部分（归一化 / 统计 / 软校验 / 渲染）。`diffTodos` /
+//! `pickCurrentTodos` / `shouldShowTodoEntry` 等只服务「用户编辑清单」的 UI 与注入逻辑
+//! （数据源是消息历史），仍留在 TS 侧 —— 那是 JS 的天然职责。
 
 use serde_json::{json, Map, Value};
 
@@ -21,8 +21,8 @@ const VALID_STATUS: [&str; 3] = ["pending", "in_progress", "completed"];
 
 /// 按 **UTF-16 code unit** 截断 —— 与 JS `String.prototype.slice(0, max)` 同一计数口径。
 ///
-/// ⚠️ 不能用 `chars().take(max)`：那是 Unicode 标量值计数，含 emoji（星形平面字符，
-/// JS 里算 2 个单位）时切点会与 TS 侧不同 → 同一输入两侧产出不同文本（铁律 1）。
+/// ⚠️ 不能用 `chars().take(max)`：那是 Unicode 标量值计数，含 emoji（星形平面字符，JS 里算
+/// 2 个单位）时切点会与 TS 侧不同 → 同一输入两侧产出不同文本（铁律 1）。
 fn clip_utf16(s: &str, max: usize) -> String {
     let mut units = 0usize;
     let mut out = String::new();

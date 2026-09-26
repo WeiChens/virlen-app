@@ -381,8 +381,8 @@ async fn ai_mode_uses_provider_usage_and_keeps_two_accounting_scopes() {
 
     assert_eq!(out.mode, CompressMode::Ai);
     assert_eq!(out.summary, "这是摘要");
-    // ⚠️ 两个口径不可混用：usage = 这次摘要调用的真实消耗（含压缩前全部历史）；
-    //    contextTokens = 压缩后下一轮请求的上下文大小（本地估算，必然更小）
+    // 两个口径不可混用：usage = 这次摘要调用的真实消耗（含压缩前全部历史）；contextTokens =
+    // 压缩后下一轮请求的上下文大小（本地估算，必然更小）
     let usage = out.message.usage.as_ref().unwrap();
     assert_eq!(usage.total_tokens, 90_120);
     assert_eq!(

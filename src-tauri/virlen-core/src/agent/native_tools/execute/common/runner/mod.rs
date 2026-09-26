@@ -36,23 +36,23 @@ const TIMEOUT_IDLE_HINT: &str = "(the command produced almost no output before t
 //    调用者只有 `runner/pty.rs`（本文件里 `#[cfg(target_os = "windows")] mod pty;`）
 //    与它同样带 Windows 门禁的测试 → 非 Windows 平台**必然无调用者**。
 //    故选逐项门禁而非 `allow(dead_code)`：非 Windows 上它们确实不存在，比「压告警」更贴近事实。
-//    ⚠️ 将来落 Unix PTY 时，这里要与 `mod pty;` 一起改成 `cfg(any(...))`。
+//    将来落 Unix PTY 时，这里要与 `mod pty;` 一起改成 `cfg(any(...))`。
 #[cfg(target_os = "windows")]
 /// PTY 路径「禁用分页器」用的通用取值 —— 对 git / gh 都表示「不分页」。
 ///
-/// 背景：ConPTY 让子进程的 stdout 变成 **TTY**，于是会分页的工具（git / gh / bat…）启动
-/// 分页器（`less` / `more`）停在界面等按键，命令明明跑完却卡在最后一行（AI 无法按 `q`）。
-/// 改造前走匿名管道时 stdout 不是 TTY，自动不分页，所以看不到这个问题。
+/// 背景：ConPTY 让子进程的 stdout 变成 TTY，于是会分页的工具（git / gh / bat…）启动分页器
+/// （`less` / `more`）停在界面等按键，命令明明跑完却卡在最后一行（AI 无法按 `q`）。改造前走
+/// 匿名管道时 stdout 不是 TTY，自动不分页，所以看不到这个问题。
 ///
 /// 各处取值见 `run_command_native_pty` 的 `env_extra`，逐条均有工具源码佐证：
-///   - git `GIT_PAGER=cat`：`git_pager()` 对 `cat`/空串**硬编码特判** = 不分页；
+///   - git `GIT_PAGER=cat`：`git_pager()` 对 `cat`/空串硬编码特判 = 不分页；
 ///   - gh  `GH_PAGER=cat` ：`IOStreams.StartPager()` 见 `cat` 直接 return = 不分页；
 ///   - bat `BAT_PAGING=never`：等价 `--paging=never`（零外部依赖）。
 ///
-/// 因此本值**不会真的去执行 `cat` 二进制**，Windows 没有 `cat` 也安全。
+/// 因此本值不会真的去执行 `cat` 二进制，Windows 没有 `cat` 也安全。
 ///
-/// ⚠️ 刻意**不**设通用 `PAGER`：`gh`/`bat` 之外的工具（如 `aws`）会**真的 exec** `PAGER`，
-/// Windows 上 `cat` 常不在 PATH → 反而报「找不到 cat」。要覆盖它们需另立方案（打包 cat 直通）。
+/// 刻意不设通用 `PAGER`：`gh`/`bat` 之外的工具（如 `aws`）会真的 exec `PAGER`，Windows 上
+/// `cat` 常不在 PATH → 反而报「找不到 cat」。要覆盖它们需另立方案（打包 cat 直通）。
 const PAGER_DISABLED: &str = "cat";
 
 #[cfg(target_os = "windows")]
@@ -142,15 +142,15 @@ pub(crate) async fn run_command_native(
 /// `pty`：是否来自伪控制台路径。uiData 里加这个标记后，UI 可据此走 xterm 单流渲染
 /// （PTY 下 stdout/stderr 已合并，`[标准错误]` 分段与 `stream` 字段失去意义，§6.2）。
 ///
-/// `waitReason`（Step 2 ④）：`exit` | `timeout` | `cancelled`。由结束原因直接推导，
-/// **管道路径也下发**（D5：语义统一，UI 与模型侧都不必按路径分叉）。
+/// `waitReason`：`exit` | `timeout` | `cancelled`。由结束原因直接推导，管道路径也下发
+/// （D5：语义统一，UI 与模型侧都不必按路径分叉）。
 ///
-/// `interventions`（Step 2 ②）：用户干预摘要（**只记计数，不记内容**，D4）。
-/// PTY 路径传 `Some`；管道路径 / 无会话时传 `None`（则 uiData 不含该字段）。
-/// `hold_timed_out`：是否因接管到达硬上限被终止（`waitReason=timeout` 的子情况）。
+/// `interventions`：用户干预摘要（只记计数，不记内容，D4）。PTY 路径传 `Some`；管道路径 /
+/// 无会话时传 `None`（则 uiData 不含该字段）。`hold_timed_out`：是否因接管到达硬上限被终止
+/// （`waitReason=timeout` 的子情况）。
 ///
-/// ⚠️ `#[allow(too_many_arguments)]`：参数就是命令结果的各独立字段（stdout / stderr /
-/// 退出码 / 两种终止原因 / 超时 / 环境说明 / PTY 标志 / 干预计数 / 接管超时），无内聚可压。
+/// `#[allow(too_many_arguments)]`：参数就是命令结果的各独立字段（stdout / stderr / 退出码 /
+/// 两种终止原因 / 超时 / 环境说明 / PTY 标志 / 干预计数 / 接管超时），无内聚可压。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_command_result(
     stdout: String,

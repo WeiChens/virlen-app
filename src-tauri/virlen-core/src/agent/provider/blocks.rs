@@ -34,8 +34,8 @@ const QUOTE_CONTENT_LABEL: &str = "Content";
 
 /// 技能引用块降级成文本时使用的标签。
 ///
-/// 与 TS 侧 `src/types/index.ts` 的同名常量必须逐字一致（铁律 1），
-/// 同时与 TS `skillBlockToText` 的拼接格式保持一致：
+/// 与 TS 侧 `src/types/index.ts` 的同名常量必须逐字一致（铁律 1），同时与 TS
+/// `skillBlockToText` 的拼接格式保持一致：
 ///
 /// ```text
 /// [Skill]
@@ -45,8 +45,8 @@ const QUOTE_CONTENT_LABEL: &str = "Content";
 /// <SKILL.md 全文>
 /// ```
 ///
-/// ⚠️ 四个字段恒定输出（缺失时为空值），不做条件拼接 —— 条件分支最容易
-/// 让 TS / Rust 两侧的输出产生一个换行的差异。
+/// ⚠️ 四个字段恒定输出（缺失时为空值），不做条件拼接 —— 条件分支最容易让 TS / Rust 两侧的输出
+/// 产生一个换行的差异。
 const SKILL_BLOCK_LABEL: &str = "[Skill]";
 const SKILL_NAME_LABEL: &str = "Name";
 const SKILL_DIR_LABEL: &str = "Directory";

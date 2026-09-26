@@ -1,17 +1,14 @@
 //! `read_skill_source` 工具（原生）— 读取技能源码目录结构 + SKILL.md 全文
 //!
-//! 同时返回技能文件夹的绝对路径，AI 可据此用 `read_file` 读取其他文件。
-//! ⚠️ 只读操作，不提供写能力。
+//! 同时返回技能文件夹的绝对路径，AI 可据此用 `read_file` 读取其他文件。只读操作，不提供写能力。
 //!
-//! ⚠️ 与 TS 侧 `src/infrastructure/tools/skill/read-skill-source.ts` **逐字对齐**（铁律 1）：
+//! ⚠️ 与 TS 侧 `src/infrastructure/tools/skill/read-skill-source.ts` 逐字对齐（铁律 1）：
 //! - `content` 固定英文（模型侧）；
 //! - `uiData: { skillPath, tree, md }` 为语言无关的结构化数据（UI 侧据此渲染卡片）。
 //!
-//! 语义（与 TS 一致）：
-//! - 必须给 `name`；
-//! - `ctx.skills` 非空时才校验「该技能是否已启用」（为空 = 不限制，历史行为）；
-//! - 技能未注册（扫不到）→ 明确报错；
-//! - 结果分段先过滤空串再 `\n` 拼接 —— 复刻 TS 的 `.filter(Boolean)`（它把原意是空行的 `''` 也丢掉了）。
+//! 语义（与 TS 一致）：必须给 `name`；`ctx.skills` 非空时才校验「该技能是否已启用」（为空 =
+//! 不限制，历史行为）；技能未注册（扫不到）→ 明确报错；结果分段先过滤空串再 `\n` 拼接
+//! —— 复刻 TS 的 `.filter(Boolean)`（它把原意是空行的 `''` 也丢掉了）。
 
 use super::common::{read_file_tree, render_file_tree, scan_skills};
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
@@ -88,7 +85,7 @@ pub(crate) async fn read_skill_source_tool(
     render_file_tree(&tree_entries, "  ", &mut lines);
     let tree = lines.join("\n");
 
-    // ⚠️ 逐字复刻 TS：数组里的空串（原意是空行）会被 `.filter(Boolean)` 丢掉
+    // 逐字复刻 TS：数组里的空串（原意是空行）会被 `.filter(Boolean)` 丢掉
     let parts: Vec<String> = vec![
         format!("**📁 Skill path**: `{}`", skill.path),
         String::new(),
@@ -220,7 +217,7 @@ mod tests {
         let outcome = run(&dir, None, json!({ "name": "demo" })).await;
 
         let text = content_of(&outcome);
-        // ⚠️ TS 的 `.filter(Boolean)` 把空行也过滤掉了 → 各段紧邻
+        // TS 的 `.filter(Boolean)` 把空行也过滤掉了 → 各段紧邻
         assert!(text.starts_with("**📁 Skill path**: `"));
         assert!(text.contains("`\n---\n# 📂 Directory structure\n📂 demo/\n  ├── SKILL.md\n  └── scripts/\n      └── run.js\n---\n# 📄 SKILL.md\n"));
         assert!(text.ends_with(MD), "SKILL.md 全文必须原样附上");

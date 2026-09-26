@@ -1,9 +1,9 @@
 //! 宿主实现 — [`HostEnv`] 的 **CLI / 无 GUI** 版本
 //!
 //! 与 `virlen-app` 的 `TauriHost` 只差「资源目录怎么找」「数据目录在哪」，不含任何业务逻辑。
-//! 两者都在构造期**显式注入**（`Arc<dyn HostEnv>`），没有隐式全局依赖。
+//! 两者都在构造期显式注入（`Arc<dyn HostEnv>`），没有隐式全局依赖。
 //!
-//! ⚠️ 本模块（`virlen-core`）**不得**出现 `tauri::` —— GUI 的 `TauriHost` 住在
+//! ⚠️ 本模块（`virlen-core`）不得出现 `tauri::` —— GUI 的 `TauriHost` 住在
 //! `virlen-app/src/host/tauri_host.rs`。
 
 pub mod cli_host;
@@ -18,9 +18,8 @@ use std::sync::Arc;
 
 /// 进程级默认宿主（CLI 语义）。
 ///
-/// ⚠️ **只给「没有注入点」的边缘路径用**：如 TS 引擎的 `pty_run_command`（GUI 侧命令），
-/// 它不经过 `AgentEngine`，拿不到构造期注入的宿主。
-/// 生产主路径（Agent 引擎 → `NativeToolCtx.host`）一律走显式注入，
+/// ⚠️ 只给「没有注入点」的边缘路径用：如 GUI 侧的 `pty_run_command`，它不经过 `AgentEngine`，
+/// 拿不到构造期注入的宿主。生产主路径（Agent 引擎 → `NativeToolCtx.host`）一律走显式注入，
 /// 不用全局单例 —— 否则 CLI / GUI 的初始化顺序会变成隐式依赖，单测也无法并行。
 pub fn default_host() -> &'static Arc<dyn HostEnv> {
     static HOST: Lazy<Arc<dyn HostEnv>> = Lazy::new(|| Arc::new(CliHost::from_env()));

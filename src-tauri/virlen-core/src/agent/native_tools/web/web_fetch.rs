@@ -3,24 +3,24 @@
 //! ## 与 TS 侧的对齐
 //!
 //! 镜像 `src/infrastructure/tools/web/web-fetch.ts`：
-//! - 参数默认值（`method=GET` / `htmlToMd=true` / `timeout=10s`）与「只支持文本响应」的
-//!   **二进制 Content-Type 清单**逐字一致；
-//! - 截断阈值 `MAX_LENGTH = 20000` 与截断文案 `\n\n... [truncated: response body was N chars, showing first M]` 一致；
+//! - 参数默认值（`method=GET` / `htmlToMd=true` / `timeout=10s`）与「只支持文本响应」的二进制
+//!   Content-Type 清单逐字一致；
+//! - 截断阈值 `MAX_LENGTH = 20000` 与截断文案
+//!   `\n\n... [truncated: response body was N chars, showing first M]` 一致；
 //! - 失败文案一致（cancelled / timed out / binary Content-Type / failed to read response body）；
-//! - HTML 判定（`isHtml`）一致：**Content-Type 优先**（`text/html` / `application/xhtml+xml`），
-//!   否则回退形状判定（**大小写不敏感**、剥 BOM）—— 两侧共读 golden
+//! - HTML 判定（`isHtml`）一致：Content-Type 优先（`text/html` / `application/xhtml+xml`），
+//!   否则回退形状判定（大小写不敏感、剥 BOM）—— 两侧共读 golden
 //!   `src/tests/fixtures/web-html-detect.golden.json`。
 //!
-//! ## 已知差异（**HTML→Markdown 的细节**）
+//! ## 已知差异（HTML→Markdown 的细节）
 //!
 //! TS 用 `cheerio + turndown`，Rust 用 `htmd`（turndown.js 的 Rust 移植）—— 同源不同实现：
-//! - ⚠️ **htmd 不会跳过 `script` / `style` 的文本内容**（实测 0.5.5：
-//!   `<script>alert(1)</script>` 的 `alert(1)` 照样进 Markdown，`skip_tags` 也拦不住）
-//!   → 本模块在转换前用正则**整块剥离** `script / style / iframe / noscript / footer / header`，
-//!   对齐 TS 的 cheerio `remove`；
-//! - TS 是真 DOM 解析，这里是**正则近似**：未闭合标签、注释里的伪标签等边界情形可能不同
-//!   （未闭合时保守放行 —— 宁可多留，也不吞掉正文）；
-//! - TS 还按 `class="hidden"` 移除节点，Rust 侧无法按类名判断 → **保留**（差异）；
+//! - ⚠️ htmd 不会跳过 `script` / `style` 的文本内容（实测 0.5.5：`<script>alert(1)</script>`
+//!   的 `alert(1)` 照样进 Markdown，`skip_tags` 也拦不住）→ 本模块在转换前用正则整块剥离
+//!   `script / style / iframe / noscript / footer / header`，对齐 TS 的 cheerio `remove`；
+//! - TS 是真 DOM 解析，这里是正则近似：未闭合标签、注释里的伪标签等边界情形可能不同（未闭合
+//!   时保守放行 —— 宁可多留，也不吞掉正文）；
+//! - TS 还按 `class="hidden"` 移除节点，Rust 侧无法按类名判断 → 保留（差异）；
 //! - 其余 Markdown 细节（空行数量、链接风格、列表缩进…）不保证逐字相同。
 //!
 //! 该差异只影响「模型读到的网页正文格式」，不影响任何结构化字段或安全判定；
@@ -28,8 +28,8 @@
 //!
 //! ## 不阻塞 runtime
 //!
-//! HTML 解析 + Markdown 转换是纯 CPU 工作（网页可达 MB 级），放 `spawn_blocking`，
-//! 避免占住 tokio worker（TS 侧在主线程做同样的事，是它的既有行为）。
+//! HTML 解析 + Markdown 转换是纯 CPU 工作（网页可达 MB 级），放 `spawn_blocking`，避免占住
+//! tokio worker。
 
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
 use once_cell::sync::Lazy;
@@ -180,11 +180,11 @@ pub(crate) async fn web_fetch_tool(
 /// 「不可见内容」节点：整块剥离（含子节点文本）——
 /// 与 TS 侧 cheerio 的 `$('script, style, .hidden, footer, header, iframe, noscript').remove()` 等价。
 ///
-/// ⚠️ 为什么不用 `htmd::skip_tags`：实测（htmd 0.5.5）它只跳过**标签本身**的 handler，
-/// 元素内的文本仍会进 Markdown（`<script>alert(1)</script>` → `alert(1)`）。
+/// ⚠️ 为什么不用 `htmd::skip_tags`：实测（htmd 0.5.5）它只跳过标签本身的 handler，元素内的
+/// 文本仍会进 Markdown（`<script>alert(1)</script>` → `alert(1)`）。
 static INVISIBLE_BLOCK: Lazy<Regex> = Lazy::new(|| {
-    // ⚠️ Rust 的 `regex` crate **不支持反向引用**（`\1`）—— 只能把六种标签逐一写开，
-    //    每种都要求「同名标签成对」闭合。
+    // Rust 的 `regex` crate 不支持反向引用（`\1`）—— 只能把六种标签逐一写开，每种都要求
+    // 「同名标签成对」闭合。
     Regex::new(
         r"(?is)<script\b[^>]*>.*?</script\s*>|<style\b[^>]*>.*?</style\s*>|<iframe\b[^>]*>.*?</iframe\s*>|<noscript\b[^>]*>.*?</noscript\s*>|<footer\b[^>]*>.*?</footer\s*>|<header\b[^>]*>.*?</header\s*>",
     )

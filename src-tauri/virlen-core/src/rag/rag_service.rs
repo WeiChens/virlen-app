@@ -66,7 +66,7 @@ impl RagService {
     ///
     /// 流程：解析文件 → 分块 → 嵌入 → 存储
     ///
-    /// ⚠️ 单个文档超过 50MB 时会拒绝处理，防止嵌入耗时过长导致超时。
+    /// ⚠️ 单个文档超过 50MB 时拒绝处理，防止嵌入耗时过长导致超时。
     pub fn add_document(&self, kb_id: &str, file_path: &str) -> Result<DocumentInfo, String> {
         // 1. 提前检查文件大小（避免解析大文件浪费资源）
         let metadata = std::fs::metadata(file_path)
@@ -98,10 +98,9 @@ impl RagService {
 
     /// 通过文本内容添加文档（无需文件路径）
     ///
-    /// 用于 AI Tool 直接写入知识库的场景。
-    /// 流程：分块 → 嵌入 → 存储
+    /// 用于 AI Tool 直接写入知识库的场景。流程：分块 → 嵌入 → 存储
     ///
-    /// ⚠️ 文本内容超过 50MB 时会拒绝处理，防止嵌入耗时过长导致超时。
+    /// ⚠️ 文本内容超过 50MB 时拒绝处理，防止嵌入耗时过长导致超时。
     pub fn add_text_document(&self, kb_id: &str, doc_name: &str, content: &str) -> Result<DocumentInfo, String> {
         // 检查内容大小
         if content.len() as u64 > MAX_DOC_SIZE_BYTES {
@@ -257,8 +256,7 @@ impl RagService {
 
     /// 将检索结果格式化为上下文文本（供 LLM 使用）
     ///
-    /// ⚠️ 此逻辑与前端 `rag-service.ts` 中的 `buildContextText()` 方法重复。
-    /// 修改时请同步更新两处。
+    /// ⚠️ 与前端 `rag-service.ts` 的 `buildContextText()` 重复，修改时请同步更新两处。
     pub fn format_context(chunks: &[ChunkResult], max_chars: usize) -> String {
         let mut context = String::new();
         context.push_str("以下是从知识库中检索到的相关文档片段：\n\n");

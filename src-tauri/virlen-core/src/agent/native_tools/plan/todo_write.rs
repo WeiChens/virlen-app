@@ -1,16 +1,15 @@
-//! `todo_write` 工具（原生）— 任务清单**全量替换**。
+//! `todo_write` 工具（原生）— 任务清单全量替换。
 //!
-//! 语义：模型每次必须传完整清单；空数组 = 清空清单（不做 merge/增量 —— 增量需要保存
-//! 「上一版」状态，而状态只在消息历史里，工具执行器读不到，反而会引入一份影子状态）。
+//! 语义：模型每次必须传完整清单；空数组 = 清空清单（不做 merge/增量 —— 增量需要保存「上一版」
+//! 状态，而状态只在消息历史里，工具执行器读不到，反而会引入一份影子状态）。
 //!
-//! 状态存放：本工具**不保存任何状态** —— 清单随 tool_result 消息的
-//! `content`（给模型）+ `uiData`（给 UI）一起落库，UI 侧由 `pickCurrentTodos()`
-//! 从消息里派生「唯一的那份清单」。
+//! 状态存放：本工具不保存任何状态 —— 清单随 tool_result 消息的 `content`（给模型）+
+//! `uiData`（给 UI）一起落库，UI 侧由 `pickCurrentTodos()` 从消息里派生「唯一的那份清单」。
 //!
-//! ⚠️ 与 TS 侧 `src/infrastructure/tools/plan/todo-write.ts` **逐字对齐**（铁律 1）：
-//! 三条校验错误的文本、`content` 渲染、`uiData` 结构都必须两侧一致。
-//! 错误一律走 `NativeToolOutcome::Error`（content = 原文），与 JS 桥的
-//! `BridgeToolResult::Error` 同形；**不要**用 `Err()`（那会被前缀成 `error: …`）。
+//! ⚠️ 与 TS 侧 `src/infrastructure/tools/plan/todo-write.ts` 逐字对齐（铁律 1）：三条校验错误的
+//! 文本、`content` 渲染、`uiData` 结构都必须两侧一致。错误一律走 `NativeToolOutcome::Error`
+//! （content = 原文），与 JS 桥的 `BridgeToolResult::Error` 同形；不要用 `Err()`（那会被前缀成
+//! `error: …`）。
 
 use crate::agent::native_tools::plan::common::{
     check_todo_limit, compute_stats, render_todo_content, sanitize_todos, validate_todos,

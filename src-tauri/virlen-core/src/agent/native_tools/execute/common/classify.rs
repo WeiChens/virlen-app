@@ -133,7 +133,7 @@ fn split_command_respecting_quotes(raw: &str, separators: &[&str]) -> Vec<String
 }
 
 /// 提取命令中所有被 &&、||、; 分隔的命令名（去重）
-/// ⚠️ 引号内的分隔符不切分（如 `echo "a;b"` 不会把 `b` 当命令名）
+/// 引号内的分隔符不切分（如 `echo "a;b"` 不会把 `b` 当命令名）
 fn extract_all_command_names(raw: &str) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     let segments = split_command_respecting_quotes(raw, &["&&", "||", ";"]);

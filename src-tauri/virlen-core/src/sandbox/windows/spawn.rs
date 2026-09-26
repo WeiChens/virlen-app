@@ -5,11 +5,11 @@
 //!   2. 支持 `raw_cmdline` 原样透传（cmd /s /c 嵌套引号不被 CRT 引号撕碎）；
 //!   3. 进程放入 Job Object（KILL_ON_JOB_CLOSE + 超时/取消整树终止），
 //!      并在创建时经 PROC_THREAD_ATTRIBUTE_JOB_LIST 原子挂入（无竞态）；
-//!   4. Step 1（PTY 改造）新增**平行**的伪控制台路径 `create_sandboxed_process_pty` /
+//!   4. PTY 改造新增平行的伪控制台路径 `create_sandboxed_process_pty` /
 //!      `create_bare_process_pty`：stdio 不再走匿名管道，而是经
 //!      `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` 接到伪控制台。
-//!      ⚠️ 两条路径的 STARTUPINFO 语义根本不同，故**不**在 `create_sandboxed_process`
-//!      里加 if 分支（见 docs/pty-research.md §5.3）。
+//!      ⚠️ 两条路径的 STARTUPINFO 语义根本不同，故不在 `create_sandboxed_process` 里加
+//!      if 分支（见 docs/pty-research.md §5.3）。
 
 use std::collections::BTreeMap;
 use std::ffi::c_void;
@@ -186,8 +186,8 @@ impl ProcThreadAttributeList {
 
     /// `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`：把伪控制台挂进属性列表。
     ///
-    /// ⚠️ 与 `set_job` 的**语义差异**（`docs/pty-research.md` §5.2）：
-    /// `JOB_LIST` 要的是「指向句柄数组的指针」，而 `PSEUDOCONSOLE` 要的是「**句柄值本身**」。
+    /// ⚠️ 与 `set_job` 的语义差异（`docs/pty-research.md` §5.2）：`JOB_LIST` 要的是「指向句柄
+    /// 数组的指针」，而 `PSEUDOCONSOLE` 要的是「句柄值本身」。
     /// 照抄 `set_job` 的写法把 `&hpc` 传进来会失败（Spike 已实测两种写法的差异）。
     fn set_pseudoconsole(&mut self, hpc: HPCON) -> Result<()> {
         let value = hpc as *const c_void;
@@ -557,11 +557,11 @@ fn create_process_pty_core(
         let mut si: STARTUPINFOEXW = mem::zeroed();
         si.StartupInfo.cb = mem::size_of::<STARTUPINFOEXW>() as u32;
         si.StartupInfo.lpDesktop = desktop_wide.as_mut_ptr();
-        // ⚠️ 实测结论（docs/pty-research.md §5.3 / §8.0）：必须设 STARTF_USESTDHANDLES，
-        // 并把 stdin/stdout/stderr 三个句柄**全部置 NULL**。
-        // 不设该标志时，Windows 的「标准句柄总是被继承」行为会让子进程拿到**父进程的 std 句柄**
-        // —— bInheritHandles = 0 挡不住这条 —— 命令真实输出会漏到父进程 stdout 而非伪控制台。
-        // 置 NULL 后，CRT 会在「句柄无效 + 进程已附着控制台」时回退打开 CONOUT$ / CONIN$。
+        // ⚠️ 实测结论（docs/pty-research.md §5.3 / §8.0）：必须设 STARTF_USESTDHANDLES，并把
+        // stdin/stdout/stderr 三个句柄全部置 NULL。不设该标志时，Windows 的「标准句柄总是被
+        // 继承」行为会让子进程拿到父进程的 std 句柄 —— bInheritHandles = 0 挡不住这条 ——
+        // 命令真实输出会漏到父进程 stdout 而非伪控制台。置 NULL 后，CRT 会在「句柄无效 +
+        // 进程已附着控制台」时回退打开 CONOUT$ / CONIN$。
         si.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
         si.StartupInfo.hStdInput = std::ptr::null_mut();
         si.StartupInfo.hStdOutput = std::ptr::null_mut();

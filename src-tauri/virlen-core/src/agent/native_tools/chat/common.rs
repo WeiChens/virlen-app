@@ -1,8 +1,8 @@
 //! chat — 消息查询公共（文本格式化 / 输出上限 / 单会话字符预算）
 //!
-//! ⚠️ 与 TS 侧 `src/infrastructure/tools/chat/common.ts` **逐字对齐**（铁律 1）：
-//! `list_messages` / `read_messages` 原生化后，Rust 原生路径（默认）与 JS 路径（TS 引擎）
-//! 必须产出同一份 `content`（模型侧文本：英文，**不进 i18n**）。
+//! ⚠️ 与 TS 侧 `src/infrastructure/tools/chat/common.ts` 逐字对齐（铁律 1）：
+//! `list_messages` / `read_messages` 原生化后，Rust 原生路径（默认）与 JS 回退路径必须
+//! 产出同一份 `content`（模型侧文本：英文，不进 i18n）。
 //!
 //! 硬上限三处一致：本文件 ↔ TS `tools/chat/common.ts` ↔ Rust
 //! `session_db::types::MSG_QUERY_*`（后者是服务端权威 clamp）。
@@ -32,8 +32,8 @@ pub(crate) const BUDGET_MAX_CHARS: usize = 60_000;
 
 /// 与 TS `Number(...)` 同口径的数字取值。
 ///
-/// ⚠️ 只覆盖实际会出现的形态（数字 / 数字字符串 / 布尔）；`null` 与缺失一律视作
-/// 「未传」（更符合工具语义，也不对应 TS 里 `Number(null) === 0` 那个边角）。
+/// 只覆盖实际会出现的形态（数字 / 数字字符串 / 布尔）；`null` 与缺失一律视作「未传」
+/// （更符合工具语义，也不对应 TS 里 `Number(null) === 0` 那个边角）。
 pub(crate) fn number_of(v: Option<&Value>) -> Option<f64> {
     match v {
         Some(Value::Number(n)) => n.as_f64(),
@@ -92,8 +92,8 @@ static BUDGETS: Lazy<Mutex<HashMap<String, (i64, usize)>>> = Lazy::new(|| Mutex:
 
 /// 判断本次还能否返回 `chars` 个字符，并从预算中扣除。
 ///
-/// ⚠️ StormBreaker 只能拦截「同名 + 同参」的重复调用；模型换一个锚点 id 就能绕开。
-/// 因此这里再加一道按会话的滑窗预算，真正做到「不能把历史一次性刷出来」。
+/// ⚠️ StormBreaker 只能拦截「同名 + 同参」的重复调用，模型换个锚点 id 就能绕开；因此这里
+/// 再加一道按会话的滑窗预算，真正做到「不能把历史一次性刷出来」。
 pub(crate) fn consume_budget(session_id: &str, chars: usize) -> bool {
     let now = crate::telemetry::now_ms();
     // 持锁期间只做 O(1) 操作；毒锁（panic 后）也继续用，不让一次历史故障永久禁用预算
@@ -216,7 +216,7 @@ pub(crate) fn format_window(win: &MessageWindow) -> String {
         for tc in &m.tool_calls {
             lines.push(format!("  tool: {} {}", tc.name, tc.input_brief));
         }
-        // ⚠️ TS 用真值判断（空串当无）→ 这里同样把空串视作缺失
+        // TS 用真值判断（空串当无）→ 这里同样把空串视作缺失
         if let Some(tcid) = m.tool_call_id.as_deref().filter(|s| !s.is_empty()) {
             let err = if m.is_error == Some(true) { " (error)" } else { "" };
             lines.push(format!("  toolCallId: {}{}", tcid, err));

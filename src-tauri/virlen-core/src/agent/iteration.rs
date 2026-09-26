@@ -125,8 +125,8 @@ pub async fn run_iteration(
         .await?;
 
         // 本轮落库：ctx=Some（有 tool calls）时 assistant/tool 已在执行途中增量直落
-        // （llm_loop 落 assistant、tool_executor 逐条落 tool 结果），无需重复写；
-        // 仅 ctx=None（纯文本回答 / 取消的部分回答）未落库，这里兜底补写一次。
+        // （llm_loop 落 assistant、tool_executor 逐条落 tool 结果），无需重复写；仅 ctx=None
+        // （纯文本回答 / 取消的部分回答）未落库，这里兜底补写一次。
         // ⚠️ 均不刷新会话时间（AI 发言不是用户发言）
         if result.ctx.is_none() {
             if let Err(e) = repo

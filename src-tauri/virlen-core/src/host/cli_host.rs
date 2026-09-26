@@ -2,10 +2,10 @@
 //!
 //! 资源与数据目录全部由「环境变量 + 可执行文件位置」推导。
 //!
-//! ⚠️ **`data_dir()` 的默认值必须与 GUI 的 `app_data_dir()` 一致** ——
-//! Tauri v2 的 `app_data_dir()` = `dirs::data_dir()/<bundle identifier>`，
-//! 因此这里也按 `<平台数据根>/<identifier>` 拼，CLI 与 GUI 才会落到同一个 `virlen.db`。
-//! identifier 取自 `src-tauri/tauri.conf.json`（改一处必须改另一处）。
+//! ⚠️ `data_dir()` 的默认值必须与 GUI 的 `app_data_dir()` 一致 —— Tauri v2 的 `app_data_dir()`
+//! = `dirs::data_dir()/<bundle identifier>`，因此这里也按 `<平台数据根>/<identifier>` 拼，CLI 与
+//! GUI 才会落到同一个 `virlen.db`。identifier 取自 `src-tauri/tauri.conf.json`（改一处必须改另一
+//! 处）。
 //!
 //! 覆盖链：
 //! ```text

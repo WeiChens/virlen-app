@@ -1,16 +1,13 @@
 //! `read_messages` 工具（原生）— 按消息 id + 相对窗口读取「已被上下文压缩掉」的历史消息正文
 //!
-//! 与 `list_messages` 同源（同一 `SessionRepo` 查询），只是定位方式不同：
-//! 给定锚点（id 优先，可用 seq）与相对窗口 `[-10,0]` / `[0,10]` / `[-5,5]`，
-//! 返回该窗口内各条消息的正文。
+//! 与 `list_messages` 同源（同一 `SessionRepo` 查询），只是定位方式不同：给定锚点（id 优先，
+//! 可用 seq）与相对窗口 `[-10,0]` / `[0,10]` / `[-5,5]`，返回该窗口内各条消息的正文。
 //!
-//! 约束（需求硬性）：
-//!   - 只覆盖「已压缩区间」；触及边界即停止，并提示后续内容已在上下文中；
-//!   - 深度思考（reasoning）永不返回；
-//!   - 工具调用只给「工具名 + 参数摘要」（≤100 字符，由 `session_db` 侧截断）；
-//!   - 单条正文 ≤ 4000 字符、单次窗口 ≤ 21 条、单次输出 ≤ 30000 字符。
+//! 约束（需求硬性）：只覆盖「已压缩区间」（触及边界即停止，并提示后续内容已在上下文中）；深度
+//! 思考（reasoning）永不返回；工具调用只给「工具名 + 参数摘要」（≤100 字符，由 `session_db`
+//! 侧截断）；单条正文 ≤ 4000 字符、单次窗口 ≤ 21 条、单次输出 ≤ 30000 字符。
 //!
-//! ⚠️ 与 TS 侧 `src/infrastructure/tools/chat/read-messages.ts` **逐字对齐**（铁律 1）。
+//! ⚠️ 与 TS 侧 `src/infrastructure/tools/chat/read-messages.ts` 逐字对齐（铁律 1）。
 
 use super::common::{
     WINDOW_DEFAULT_SPAN, WINDOW_MAX_BACK, WINDOW_MAX_FWD, cap_output, consume_budget, format_window,

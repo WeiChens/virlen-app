@@ -1,8 +1,8 @@
-//! `ai` 模式 —— 一次**非流式**模型调用生成摘要（对齐 TS `compress-context.ts` 的 ai 分支）
+//! `ai` 模式 —— 一次非流式模型调用生成摘要（由 TS `compress-context.ts` 的 ai 分支移植）
 //!
-//! 为什么走 `Provider::chat`（非流式）而不是 `chat_stream`：摘要是一次性的短输出，
-//! 不需要增量渲染，也不进对话消息列表（只记用量账本）。TS 侧同样是 `provider.chat(request)`
-//! + `stream: false`。
+//! 为什么走 `Provider::chat`（非流式）而不是 `chat_stream`：摘要是一次性的短输出，不需要增量
+//! 渲染，也不进对话消息列表（只记用量账本）。TS 侧同样是 `provider.chat(request)` +
+//! `stream: false`。
 //!
 //! ⚠️ `tool_choice = "none"`：压缩请求**不允许**模型发起工具调用（它只该输出摘要文本）。
 

@@ -1,7 +1,7 @@
 //! 系统提示词组装（Rust 侧）—— 与 TS `domain/agent/compose-prompt.ts` 对齐
 //!
-//! 纯字符串拼接，**不做任何 I/O**：取数（环境信息、项目规则文件、技能列表）由调用方
-//! 准备好后作为参数传入 —— 这样 CLI / GUI / 测试可以各取所需，组装结果却必须一致。
+//! 纯字符串拼接，不做任何 I/O：取数（环境信息、项目规则文件、技能列表）由调用方准备好后作为
+//! 参数传入 —— 这样 CLI / GUI / 测试可以各取所需，组装结果却必须一致。
 //!
 //! 与 TS 侧的对应关系（改任何一处都要两边一起改，golden 测试会兜底）：
 //! | Rust | TS |
@@ -17,19 +17,19 @@
 //! - **GUI**：组装仍在 TS（`services/agent-service.ts::assembleAgentPrompt`，结果快照进
 //!   `session.systemPrompt`）；对 GUI 而言本模块只承担「golden 比对的另一半」。
 //!
-//! ## ⚠️ CLI 与 GUI 的**已知差异**（golden 守不住这一层，别误以为「已完全对齐」）
+//! ## ⚠️ CLI 与 GUI 的已知差异（golden 守不住这一层，别误以为「已完全对齐」）
 //!
-//! 顺序与分隔符由 golden 逐字节锁定、两侧一致；但**喂进来的 `PromptParts` 两侧不同** ——
-//! golden 用的是**固定输入**，它守的是「组装规则」，守不住「输入内容」：
+//! 顺序与分隔符由 golden 逐字节锁定、两侧一致；但喂进来的 `PromptParts` 两侧不同 —— golden
+//! 用的是固定输入，它守的是「组装规则」，守不住「输入内容」：
 //!
 //! | 片段 | GUI（`agent-service.ts`） | CLI（`session_rt/resources.rs`） |
 //! |---|---|---|
-//! | 环境信息 | `get_env_info`：`- OS: Windows 10.0.19045` + 每个工具版本（`- node:24.10.0`） | `std::env::consts::OS`：`- OS: windows (x86_64)`，**不含工具版本**（headless 不探测） |
+//! | 环境信息 | `get_env_info`：`- OS: Windows 10.0.19045` + 每个工具版本（`- node:24.10.0`） | `std::env::consts::OS`：`- OS: windows (x86_64)`，不含工具版本（headless 不探测） |
 //! | 项目规则 | `buildProjectRulesPrompt` 包装：带 `# Project Rules (AGENTS.md)` 标题与「优先级高于通用说明」声明 | ⚠️ 目前**直接塞文件原文**（未经 `build_project_rules_prompt`），与 `PromptParts::project_rules` 的契约不符 —— **待确认是否应一并包装** |
-//! | 角色 / 身份 / 性格 / 技能 | 由 Agent 配置 + 技能注册表注入 | **不注入**（headless 没有这些输入，是「没有数据」而非「另一份实现」） |
+//! | 角色 / 身份 / 性格 / 技能 | 由 Agent 配置 + 技能注册表注入 | 不注入（headless 没有这些输入，是「没有数据」而非「另一份实现」） |
 //!
-//! 结论：环境信息**无法**逐字节同源（CLI 拿不到 OS 版本号、也不探测工具版本），只能保证
-//! 「格式与位置一致」；角色/技能同理（无输入）。改这里请同步本表与 `docs/rust-engine.md` §12.2。
+//! 结论：环境信息无法逐字节同源（CLI 拿不到 OS 版本号、也不探测工具版本），只能保证「格式与
+//! 位置一致」；角色/技能同理（无输入）。改这里请同步本表与 `docs/rust-engine.md` §12.2。
 
 use super::{CORE_PRINCIPLES, TOOL_CALL_SPEC};
 
@@ -139,8 +139,8 @@ mod tests {
     use std::path::PathBuf;
 
     // ── 固定输入 ──
-    // ⚠️ 必须与 TS 侧 `src/tests/domain/compose-prompt-golden.test.ts` 的常量**逐字一致**，
-    //    否则 golden 比对失去意义（两侧输入不同 = 比对的是别的东西）。
+    // ⚠️ 必须与 TS 侧 `src/tests/domain/compose-prompt-golden.test.ts` 的常量逐字一致，否则
+    //    golden 比对失去意义（两侧输入不同 = 比对的是别的东西）。
     const FIXTURE_FILE_NAME: &str = "AGENTS.md";
     const FIXTURE_RULES_CONTENT: &str =
         "# AGENTS.md — 示例项目\n\n- 规则 A：缩进用 2 空格\n- 规则 B：提交信息用英文\n";

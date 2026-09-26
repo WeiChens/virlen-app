@@ -247,9 +247,10 @@ pub(super) async fn run_command_native_pipes(
     }
 
     // 收尾：等待读取任务和 wait 任务结束，拿到完整输出。
-    // ⚠️ 被终止/超时/取消后，若进程树没杀干净（如 taskkill 权限不足、detached 子进程仍持有管道），
-    // 直接 .await 会无限挂起 → 工具永远不返回，前端「终止」按钮看似失效（命令一直显示运行中）。
-    // 因此 kill/超时路径限制等待窗口：3 秒内收不完就补刀强杀并 abort 任务，用已流式收到的输出返回。
+    // ⚠️ 被终止/超时/取消后，若进程树没杀干净（如 taskkill 权限不足、detached 子进程仍持有
+    // 管道），直接 .await 会无限挂起 → 工具永远不返回，前端「终止」按钮看似失效（命令一直显示
+    // 运行中）。因此 kill/超时路径限制等待窗口：3 秒内收不完就补刀强杀并 abort 任务，用已流式
+    // 收到的输出返回。
     let stdout_abort = stdout_handle.abort_handle();
     let stderr_abort = stderr_handle.abort_handle();
     let wait_abort = wait_handle.abort_handle();

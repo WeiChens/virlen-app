@@ -14,12 +14,11 @@
 //! - `maintenance`：库维护（体积统计 / WAL 截断 / VACUUM，设置 → 存储用）
 //! - `open`：`open_session_db`（**零 `tauri::`** —— GUI 与 CLI 共用的同一份打开路径）
 //!
-//! ⚠️ 全部 `#[tauri::command]`（`cmd_*`）与 `init_session_db` / `manage_noop_settings`
-//! 不在本 crate：它们需要 `tauri::AppHandle`，因此住在 `virlen-app` 的
-//! `src/commands/session_db.rs`。
+//! ⚠️ 全部 `#[tauri::command]`（`cmd_*`）与 `init_session_db` / `manage_noop_settings` 不在本
+//! crate：它们需要 `tauri::AppHandle`，因此住在 `virlen-app` 的 `src/commands/session_db.rs`。
 //!
-//! 表结构：`sessions`（会话元数据）+ `messages`（消息，rowid 排序）拆表。
-//! 复杂字段（params / tags / content / tool_calls / ui_data 等）以 JSON 列存储。
+//! 表结构：`sessions`（会话元数据）+ `messages`（消息，rowid 排序）拆表。复杂字段（params / tags /
+//! content / tool_calls / ui_data 等）以 JSON 列存储。
 
 pub(crate) mod open;
 pub(crate) mod maintenance;

@@ -114,8 +114,8 @@ pub struct TokenUsage {
     /// 缓存命中的输入 token（provider 明确回报时才有）。
     ///
     /// ⚠️ 各家口径不同：OpenAI 兼容（含 DeepSeek）与 Gemini 把它算在 `prompt_tokens` 里，
-    /// Anthropic 的 `input_tokens` 本来就不含缓存。
-    /// 账本写入时由 `usage::ledger_tokens` 按 provider 拉平口径，此处保持 API 原样。
+    /// Anthropic 的 `input_tokens` 本来就不含缓存。账本写入时由 `usage::ledger_tokens` 按
+    /// provider 拉平口径，此处保持 API 原样。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cached_tokens: Option<i64>,
 }
@@ -352,15 +352,15 @@ pub struct NativeToolSecurity {
     pub permissions: std::collections::BTreeMap<String, String>,
     /// 「忽略沙盒命令」规则**全量**（设置 → 安全 → 忽略沙盒命令）。
     ///
-    /// 与 `permissions` / `blacklist` 同一套做法：由**配置来源**解析后整体下发，
-    /// 引擎侧不再回问 JS（原内部交互 `sandbox_rule_check` 已连同桥一起删除）。
+    /// 与 `permissions` / `blacklist` 同一套做法：由配置来源解析后整体下发，引擎侧不再回问 JS
+    /// （原内部交互 `sandbox_rule_check` 已连同桥一起删除）。
     /// - GUI（Rust 引擎）：`resolveSecurityConfig` 下发 `app_settings.sandboxIgnoreRules` 的当前快照；
     /// - CLI：入口从同一个 `app_settings` 键读同一份；
-    /// - 判定在 Rust 侧完成（`crate::security::find_matching_rule`：text / regex 原生，
-    ///   `js` 交内嵌 QuickJS，见 `crate::security::js_rule`）。
+    /// - 判定在 Rust 侧完成（`crate::security::find_matching_rule`：text / regex 原生，`js` 交
+    ///   内嵌 QuickJS，见 `crate::security::js_rule`）。
     ///
-    /// ⚠️ 逐条**不做**预编译：规则量级是「几条到几十条」，遍历一次的开销远小于一次 IPC；
-    /// regex 另有进程级编译缓存（`security::rules::regex_matches`）。
+    /// 逐条不做预编译：规则量级是「几条到几十条」，遍历一次的开销远小于一次 IPC；regex 另有
+    /// 进程级编译缓存（`security::rules::regex_matches`）。
     #[serde(default)]
     pub sandbox_ignore_rules: Vec<crate::security::SandboxIgnoreRule>,
 }

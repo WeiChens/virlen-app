@@ -1,14 +1,14 @@
 //! ConPTY 运行器（Windows）—— 命令在一个伪控制台里跑。
 //!
 //! 与管道路径的关键差异（均已实测，见 `docs/pty-research.md` §5）：
-//!   1. stdout/stderr **合并**为一条 VT 流（伪控制台只有一条输出通道）；
-//!   2. 通信通道必须是**同步** I/O，所以读线程走 `spawn_blocking` + 阻塞 `Read`；
-//!   3. **结束判定不能用「输出通道 EOF」**：输出管道要等 `ClosePseudoConsole` 之后才断开
+//!   1. stdout/stderr 合并为一条 VT 流（伪控制台只有一条输出通道）；
+//!   2. 通信通道必须是同步 I/O，所以读线程走 `spawn_blocking` + 阻塞 `Read`；
+//!   3. 结束判定不能用「输出通道 EOF」：输出管道要等 `ClosePseudoConsole` 之后才断开
 //!      （Spike 实测），因此主循环以「进程退出」为结束条件，收尾时先关伪控制台再等读线程；
 //!   4. 输出严格为 UTF-8（中文直接可读）→ §11.1 的 GBK 兜底在 PTY 路径上几乎不触发。
 //!
-//! ⚠️ 已知语义变化：`ClosePseudoConsole` 会终止仍附着在伪控制台上的进程，因此
-//! **裸跑路径下 `start` 之类拉起的后台进程不再存活**（沙盒路径本来就会杀，见 windows/mod.rs）。
+//! ⚠️ 已知语义变化：`ClosePseudoConsole` 会终止仍附着在伪控制台上的进程，因此裸跑路径下
+//! `start` 之类拉起的后台进程不再存活（沙盒路径本来就会杀，见 windows/mod.rs）。
 
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
 use serde_json::json;
@@ -47,9 +47,9 @@ pub(super) async fn run_command_native_pty(
     // `pty_resize` 就是 no-op，ConPTY 不会重绘、也就不会在内容下方补出多余空行
     // （见 pty_session::SizeTracker 与 docs/pty-research.md §5.7）。
     //
-    // ⚠️ `initial_size` 会在缓存为空时**短暂等待**客户端上报（最多 ~800ms）——
-    // 这是 TS 引擎路径的关键：`pty_run_command` 往往先于终端挂载，不等待就会用 240×50
-    // 建控制台，首帧按 50 行铺满 → 一大堆空行（见 §5.7.2）。
+    // ⚠️ `initial_size` 会在缓存为空时短暂等待客户端上报（最多 ~800ms）：`pty_run_command`
+    // 往往先于终端挂载，不等待就会用 240×50 建控制台，首帧按 50 行铺满 → 一大堆空行
+    // （见 §5.7.2）。
     let (init_cols, init_rows) = pty_session::initial_size((DEFAULT_COLS, DEFAULT_ROWS)).await;
     let mut pty = match PseudoConsole::create(init_cols, init_rows) {
         Ok(p) => p,
@@ -316,9 +316,9 @@ pub(super) async fn run_command_native_pty(
         if killed_by_timeout || killed_by_user {
             break;
         }
-        // ⚠️ 不能用「输出通道 EOF」作为结束条件：输出管道要等 ClosePseudoConsole 之后
-        // 才断开（Spike 实测）。命令结束的判定是**进程退出**；收尾时再关伪控制台，
-        // 让读线程把剩余输出排空并自然收到 EOF。
+        // ⚠️ 不能用「输出通道 EOF」作为结束条件：输出管道要等 ClosePseudoConsole 之后才断开
+        // （Spike 实测）。命令结束的判定是进程退出；收尾时再关伪控制台，让读线程把剩余输出
+        // 排空并自然收到 EOF。
         if got_exit {
             break;
         }

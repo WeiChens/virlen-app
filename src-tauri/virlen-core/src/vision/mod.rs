@@ -1,22 +1,19 @@
-//! 端侧视觉分析（quasivision）—— **无 `tauri::` 依赖**
+//! 端侧视觉分析（quasivision）—— 无 `tauri::` 依赖
 //!
-//! 从 `vision_service.rs` 抽出的核心实现：模型目录定位 + 进程级懒加载 + 推理调用。
-//! 抽出的唯一目的是让 **GUI 命令壳**（`vision_service.rs`）与 **原生工具**
-//! （`native_tools/vision/vision_analyze.rs`）共用同一段实现 ——
-//! 否则会出现两份模型探测逻辑（铁律 1 的同精神）。
+//! 从 `vision_service.rs` 抽出的核心实现：模型目录定位 + 进程级懒加载 + 推理调用。抽出的唯一目的
+//! 是让 GUI 命令壳（`vision_service.rs`）与原生工具（`native_tools/vision/vision_analyze.rs`）
+//! 共用同一段实现 —— 否则会出现两份模型探测逻辑（铁律 1 的同精神）。
 //!
-//! ⚠️ 本文件不得引入 `tauri::`：`native_tools` 依赖它，而 `agent/**` 必须保持
-//! 「引擎核心零 `tauri::`」（headless / CLI 的前提）。宿主差异一律走
-//! [`crate::agent::host::HostEnv`]。
+//! ⚠️ 本文件不得引入 `tauri::`：`native_tools` 依赖它，而 `agent/**` 必须保持「引擎核心零
+//! `tauri::`」（headless / CLI 的前提）。宿主差异一律走 [`crate::agent::host::HostEnv`]。
 //!
 //! 模型文件位置：`<资源根>/quasivision_models/`，结构 `ocr-models/ + icon-classifier/ + object-detection/`。
 //!
-//! ⚠️ 本模块的进度日志一律走 **stderr**（`eprintln!`），**绝不能** `println!`：
-//! 本 crate 现在也被 headless CLI（`virlen-cli run --json`）使用，而它的 **stdout 是机器可读
-//! 通道**（每行一个 `AgentEvent` 的 JSON Lines；非 `--json` 时是助手正文）——
-//! 在这里插一行 `[Vision] Loading models...` 会让下游解析直接失败（且 CLI 无从改道，
-//! 它写的是进程 stdout，不经注入的 `Write`）。GUI 侧行为不变：GUI 进程没有控制台，
-//! 两个流都无处可去。
+//! ⚠️ 本模块的进度日志一律走 stderr（`eprintln!`），绝不能 `println!`：本 crate 现在也被
+//! headless CLI（`virlen-cli run --json`）使用，而它的 stdout 是机器可读通道（每行一个
+//! `AgentEvent` 的 JSON Lines；非 `--json` 时是助手正文）—— 在这里插一行
+//! `[Vision] Loading models...` 会让下游解析直接失败（且 CLI 无从改道，它写的是进程 stdout，
+//! 不经注入的 `Write`）。GUI 侧行为不变：GUI 进程没有控制台，两个流都无处可去。
 
 use crate::agent::host::{compile_time_resource_root, HostEnv};
 use once_cell::sync::Lazy;

@@ -76,8 +76,8 @@ pub struct SandboxIgnoreRule {
     pub name: String,
     /// 是否启用。
     ///
-    /// ⚠️ 默认 **false**（缺字段 = 不启用）：TS 侧 `if (!rule.enabled) continue`
-    /// 把缺失字段当「未启用」跳过；这里必须一致，否则会出现「TS 跳过、Rust 却命中」的分叉。
+    /// ⚠️ 默认 false（缺字段 = 不启用）：TS 侧 `if (!rule.enabled) continue` 把缺失字段当
+    /// 「未启用」跳过；这里必须一致，否则会出现「TS 跳过、Rust 却命中」的分叉。
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
@@ -326,8 +326,8 @@ mod tests {
         assert_eq!(find_matching_rule(&[third, fourth], "npm i").unwrap().id, "a2");
     }
 
-    /// ⚠️ 缺 `enabled` 字段 → TS 侧 `!rule.enabled` 视为未启用而跳过；
-    /// Rust 必须同样跳过，否则产生「GUI 跳过、CLI 命中」的分叉。
+    /// ⚠️ 缺 `enabled` 字段 → TS 侧 `!rule.enabled` 视为未启用而跳过；Rust 必须同样跳过，
+    /// 否则产生「GUI 跳过、CLI 命中」的分叉。
     #[test]
     fn missing_enabled_field_defaults_to_disabled() {
         let no_enabled = rule(json!({

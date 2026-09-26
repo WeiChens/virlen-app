@@ -85,7 +85,7 @@ pub(crate) fn apply_rule_clearance(decision: PermissionDecision) -> PermissionDe
 
 /// 命中规则时追加到风险提示后的说明文案。
 ///
-/// ⚠️ 与 TS 侧 `SANDBOX_RULE_BYPASS_HINT`（i18n key，`tools/execute/common.ts`）**逐字对齐** ——
+/// ⚠️ 与 TS 侧 `SANDBOX_RULE_BYPASS_HINT`（i18n key，`tools/execute/common.ts`）逐字对齐 ——
 /// 两条路径的弹窗文案必须一致（与 `SANDBOX_BYPASS_HINT` 同样的约定：Rust 侧直接下发中文）。
 pub(crate) fn with_rule_hint(base_hint: &str, rule_name: &str) -> String {
     let note = format!(

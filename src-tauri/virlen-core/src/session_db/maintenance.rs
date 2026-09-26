@@ -1,20 +1,19 @@
 //! 数据库维护 — 体积统计 / WAL 截断 / VACUUM（设置 → 存储「立即整理」）
 //!
-//! 为什么需要它：`virlen.db` 的膨胀有两个**结构性**来源，靠删数据解决不了 ——
-//! 1. **WAL 高水位**：`-wal` 只在 checkpoint 能重置时才会缩回去，长跑进程里这个时机
-//!    很难自然出现（实测堆积到 99 MB，比库本身的碎片量还大）；
-//! 2. **空闲页不归还**：`auto_vacuum=0` 时删除会话只是把页标记为空闲（freelist），
-//!    文件只增不减（实测 403 MB 里有 5.5% 是空闲页）。
+//! `virlen.db` 的膨胀有两个结构性来源，靠删数据解决不了：
+//! 1. WAL 高水位：`-wal` 只在 checkpoint 能重置时才会缩回去，长跑进程里这个时机很难自然
+//!    出现（实测堆积到 99 MB，比库本身的碎片量还大）；
+//! 2. 空闲页不归还：`auto_vacuum=0` 时删除会话只是把页标记为空闲（freelist），文件只增不减
+//!    （实测 403 MB 里有 5.5% 是空闲页）。
 //!
-//! 本模块提供「立即整理」所需的操作，全部经**同一把连接锁**（与 `SqliteSessionRepo`
-//! 共享），因此与聊天写入天然互斥，不会读到半截数据：
-//! - `stats`：文件大小 + PRAGMA + 行数（纯读，毫秒级，供设置页展示）；
-//! - `checkpoint_truncate`：`wal_checkpoint(TRUNCATE)`，把 `-wal` 收回 0；
-//! - `vacuum`：`VACUUM` 重建整库（回收空闲页，并把 `auto_vacuum` 切到 INCREMENTAL）。
+//! 本模块的操作全部经同一把连接锁（与 `SqliteSessionRepo` 共享），因此与聊天写入天然互斥：
+//! `stats`（文件大小 + PRAGMA + 行数，纯读、毫秒级）；`checkpoint_truncate`
+//! （`wal_checkpoint(TRUNCATE)`，把 `-wal` 收回 0）；`vacuum`（`VACUUM` 重建整库、回收空闲页
+//! 并把 `auto_vacuum` 切到 INCREMENTAL）。
 //!
-//! ⚠️ `VACUUM` 需要**约 2 倍库大小的临时空间**（SQLite 放在系统临时目录里）且期间独占
-//! 连接（数百 MB 库约 10–60 s），因此只在用户显式点击时执行，绝不自动跑；
-//! 退出时只做廉价的 WAL 截断（`try_checkpoint_truncate`，拿不到锁就直接跳过）。
+//! ⚠️ `VACUUM` 需约 2 倍库大小的临时空间且期间独占连接（数百 MB 库约 10–60 s），因此只在
+//! 用户显式点击时执行，绝不自动跑；退出时只做廉价的 WAL 截断（`try_checkpoint_truncate`，
+//! 拿不到锁就直接跳过）。
 
 use rusqlite::Connection;
 use serde::Serialize;
@@ -34,7 +33,7 @@ pub const WAL_SIZE_LIMIT: i64 = 16 * 1024 * 1024;
 #[serde(rename_all = "camelCase")]
 pub struct DbStats {
     /// 主库文件 `virlen.db` 的物理大小。
-    /// ⚠️ `VACUUM` 之后要等一次 checkpoint 才会真正变小，所以它可能滞后于 `page_bytes`。
+    /// `VACUUM` 之后要等一次 checkpoint 才会真正变小，所以它可能滞后于 `page_bytes`。
     pub db_bytes: u64,
     /// `-wal` 的物理大小（>0 表示有尚未并入主库的写入）
     pub wal_bytes: u64,
@@ -103,7 +102,7 @@ impl DbMaintenance {
     /// WAL 截断。
     ///
     /// async 版而非同步：`-wal` 上百 MB 时把页搬回主库要几秒，不能占着 runtime 线程。
-    /// ⚠️ 可能等到连接锁（引擎正在写），**退出路径请用 `try_checkpoint_truncate`**。
+    /// ⚠️ 可能等到连接锁（引擎正在写），退出路径请用 `try_checkpoint_truncate`。
     pub async fn checkpoint_truncate(&self) -> Result<CheckpointResult, String> {
         let conn = self.conn.clone();
         let db_path = self.db_path.clone();
@@ -135,9 +134,9 @@ impl DbMaintenance {
             // 先把 WAL 里的页搬回主库：VACUUM 读的是主库文件
             let checkpoint = checkpoint_on(&conn, &db_path, true)?;
             let started = crate::telemetry::now_ms();
-            // ⚠️ `auto_vacuum` 必须先设、再 VACUUM 才生效。切成 INCREMENTAL 后，
-            // 以后删除会话留下的空闲页会被新数据复用（而不是把文件越撑越大）；
-            // 代价是每 32768 页多一个指针映射页（几 KB），可忽略。
+            // `auto_vacuum` 必须先设、再 VACUUM 才生效。切成 INCREMENTAL 后，以后删除会话
+            // 留下的空闲页会被新数据复用（而不是把文件越撑越大）；代价是每 32768 页多一个
+            // 指针映射页（几 KB），可忽略。
             conn.execute_batch("PRAGMA auto_vacuum=INCREMENTAL; VACUUM;")
                 .map_err(|e| {
                     format!(

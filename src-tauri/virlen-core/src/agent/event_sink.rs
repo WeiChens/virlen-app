@@ -1,6 +1,6 @@
 //! 事件出口 — 将引擎事件转发到宿主
 //!
-//! - `agent:event` — 标准 AgentEvent（与 TS 引擎 onEvent 载荷一致）
+//! - `agent:event` — 标准 AgentEvent（与前端 `onEvent` 载荷一致）
 //! - `agent:tool-request` / `agent:user-interaction-request` / `agent:provider-request`
 //!   — 双向桥请求（工具执行、用户交互、Provider 流）
 //!

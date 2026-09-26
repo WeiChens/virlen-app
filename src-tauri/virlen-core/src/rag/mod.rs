@@ -1,13 +1,11 @@
-//! RAG 知识库模块（**零 `tauri::` 依赖**）
+//! RAG 知识库模块（零 `tauri::` 依赖）
 //!
-//! 提供基于本地文件存储的 RAG 知识库功能：
-//! - 知识库的创建、删除、列表
-//! - 文档的添加、删除、列表
-//! - 语义检索（向量相似度搜索）
+//! 提供基于本地文件存储的 RAG 知识库功能：知识库的创建、删除、列表；文档的添加、删除、列表；
+//! 语义检索（向量相似度搜索）。
 //!
-//! ⚠️ 数据目录由**宿主注入**（`HostEnv::data_dir()`）而不是从 `tauri::AppHandle` 取 ——
-//! 这样 CLI 与 GUI 落在同一目录、读写同一份知识库。
-//! Tauri 命令（`#[tauri::command]`）在 `virlen-app` 的 `src/commands/rag.rs`。
+//! ⚠️ 数据目录由宿主注入（`HostEnv::data_dir()`）而不是从 `tauri::AppHandle` 取 —— 这样 CLI 与
+//! GUI 落在同一目录、读写同一份知识库。Tauri 命令（`#[tauri::command]`）在 `virlen-app` 的
+//! `src/commands/rag.rs`。
 
 pub mod document;
 pub mod embedding;

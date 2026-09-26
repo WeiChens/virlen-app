@@ -1,31 +1,24 @@
 //! PTY 会话注册表 —— `tool_call_id` → 伪控制台输入通道。
 //!
-//! 用途：让用户在命令执行中「插键盘」（`docs/pty-research.md` §6.3）。
+//! 用途：让用户在命令执行中「插键盘」（`docs/pty-research.md` §6.3）。运行器建好伪控制台后
+//! 把输入写端登记到本表；前端 `invoke('pty_write', { toolCallId, data })` 直接写进去 —— 走
+//! Tauri 命令而不是引擎事件总线，因此不污染 `AgentEventType` 四方契约（铁律 2）。命令结束
+//! （或超时/取消）时注销，避免写到已关闭的句柄。key 直接复用 `toolCallId`（前端
+//! `TerminalView` 已持有它，`rust-engine.ts` 也已按它注册 kill 入口），无需新增映射事件。
 //!
-//!   - 运行器建好伪控制台后，把**输入写端**登记到本表；
-//!   - 前端 `invoke('pty_write', { toolCallId, data })` 直接写进去 —— 走 Tauri 命令而不是
-//!     引擎事件总线，因此**不污染 `AgentEventType` 四方契约**（铁律 2）；
-//!   - 命令结束（或超时/取消）时注销，避免写到已关闭的句柄。
-//!
-//! 会话 key 直接复用 `toolCallId`：前端 `TerminalView` 已持有它，
-//! `rust-engine.ts` 也已按它注册 kill 入口 → **无需新增映射事件**，改动量最小的接法。
-//!
-//! ⚠️ 中断语义（实测结论，§5.6）：`\x03` 只能影响「正在读 stdin 的进程」
-//! （shell 提示符 / REPL / `y/n` 提示）。Windows 的控制台控制事件是在**有人读输入缓冲**时
-//! 才生成的，`ping` 这类从不读 stdin 的前台程序**不会**被 `\x03` 打断 —— 因此
-//! **中断主通道仍然是 Job Object / `agent_kill_command`**，本模块只是补充手段。
+//! ⚠️ 中断语义（实测，§5.6）：`\x03` 只能影响「正在读 stdin 的进程」（shell 提示符 / REPL /
+//! `y/n` 提示）—— Windows 的控制台控制事件在有人读输入缓冲时才生成，`ping` 这类从不读
+//! stdin 的前台程序不会被 `\x03` 打断。因此中断主通道仍然是 Job Object /
+//! `agent_kill_command`，本模块只是补充手段。
 
-// ⚠️ 非 Windows 平台上本模块有一部分 API 没有调用者 —— 这**不是**死代码，而是「本模块
-//    一半的服务对象（ConPTY 运行器 `common/runner/pty.rs`）是 Windows 专属」的必然结果：
-//    `PtySession::new` / `register` / `unregister` / `initial_size` / `is_held` /
-//    `interventions` / `close_input` 只被那条路径（及其同样 Windows 门禁的测试）调用。
-//    而**注册表本身必须留在所有平台**：`virlen-app` 的 `pty_write` / `pty_resize` /
-//    `pty_key` / `pty_set_held` 命令在各平台都会注册（非 Windows 下按「无会话」返回 false）。
-//
-//    这里按**文件级 allow** 而不是逐项 `#[cfg(target_os = "windows")]`：后者会连锁到结构体
-//    字段 —— `held` / `keys` / `enters` / `ctrl_c` 的读取者正是被门禁掉的那几个方法，
-//    字段立刻变成「只写不读」→ 新的 dead_code；`Duration` / `Instant` 也会变成未使用导入。
-//    Windows 上（这些代码真正的运行平台）本属性不生效，门禁强度不变。
+// 非 Windows 平台上本模块有一部分 API 没有调用者 —— 这不是死代码，而是「本模块一半的服务
+// 对象（ConPTY 运行器 `common/runner/pty.rs`）是 Windows 专属」的必然：`PtySession::new` /
+// `register` / `unregister` / `initial_size` / `is_held` / `interventions` / `close_input` 只被
+// 那条路径（及其同样 Windows 门禁的测试）调用，而注册表本身必须留在所有平台（`pty_write` /
+// `pty_resize` / `pty_key` / `pty_set_held` 命令各平台都会注册，非 Windows 下按「无会话」
+// 返回 false）。这里按文件级 allow 而不是逐项 `#[cfg(target_os = "windows")]`：后者会连锁到
+// 结构体字段（`held` / `keys` / `enters` / `ctrl_c` 的读取者正是被门禁掉的那几个方法，字段
+// 立刻变成「只写不读」→ 新的 dead_code），`Duration` / `Instant` 也会变成未使用导入。
 #![cfg_attr(not(target_os = "windows"), allow(dead_code))]
 
 use std::collections::HashMap;
@@ -37,8 +30,8 @@ use std::time::{Duration, Instant};
 
 /// ② 用户干预摘要（Step 2 ②）。
 ///
-/// ⚠️ **只记计数，不记内容**：PTY 里用户敲的往往是密码 / token，
-/// 正文一旦进工具结果就会进模型上下文 + 落 SQLite，直接踩 §9 密钥红线（决策点 D4）。
+/// ⚠️ 只记计数、不记内容：PTY 里用户敲的往往是密码 / token，正文一旦进工具结果就会进模型
+/// 上下文 + 落 SQLite，直接踩 §9 密钥红线（决策点 D4）。
 #[derive(Default, Clone, Copy)]
 pub struct InterventionCounts {
     /// 写入次数（键击 / 粘贴各算一次）
@@ -53,10 +46,9 @@ pub struct InterventionCounts {
 
 /// 伪控制台尺寸去重器。
 ///
-/// ⚠️ 为什么必须去重：ConPTY 在「屏幕已有内容」之后收到 `ResizePseudoConsole`，会
-/// **整屏重绘**并按新行数在内容下方补空行（本机实测：补出的空行数 = 新行数 − 内容行数，
-/// 见 `docs/pty-research.md` §5.7）。前端 `ResizeObserver` 会重复上报同一尺寸，
-/// 若每次都真去 resize，终端里就会白刷出一堆空行。
+/// ConPTY 在「屏幕已有内容」后收到 `ResizePseudoConsole` 会整屏重绘、并按新行数在内容下方
+/// 补空行（实测：空行数 = 新行数 − 内容行数，见 `docs/pty-research.md` §5.7）；前端
+/// `ResizeObserver` 会重复上报同一尺寸，每次都真 resize 就会白刷一堆空行。
 #[derive(Default)]
 pub struct SizeTracker {
     current: Option<(i16, i16)>,
@@ -226,8 +218,8 @@ const CLIENT_SIZE_WAIT: Duration = Duration::from_millis(800);
 /// 新建伪控制台应使用的初始尺寸：优先最近一次客户端上报值；没有则**短暂等待**客户端上报，
 /// 超时仍没有才用 `fallback`（见 `CLIENT_SIZE_WAIT`）。
 ///
-/// ⚠️ 必须配合 `pty_resize` 里的「**先写缓存再查会话**」：前端上报时若会话尚未注册，
-/// 尺寸仍会先进缓存，本函数的等待循环才能看到它。
+/// 必须配合 `pty_resize` 里的「先写缓存再查会话」：前端上报时若会话尚未注册，尺寸仍会先进
+/// 缓存，本函数的等待循环才能看到它。
 pub async fn initial_size(fallback: (i16, i16)) -> (i16, i16) {
     fn read() -> Option<(i16, i16)> {
         LAST_CLIENT_SIZE.lock().ok().and_then(|g| *g)
@@ -257,18 +249,13 @@ pub fn pty_write(tool_call_id: &str, data: &str) -> bool {
 
 /// 调整指定会话的伪控制台尺寸（`pty_resize` 命令入口）。
 ///
-/// ⚠️ 与上报尺寸**相同**时直接返回 true，**不调用** `ResizePseudoConsole`：
-/// ConPTY 在「屏幕已有内容」后 resize 会整屏重绘并在内容下方补空行
-/// （空行数 = 新行数 − 内容行数），而前端 `ResizeObserver` 会重复上报同一尺寸。
+/// 与上报尺寸相同时直接返回 true、不调用 `ResizePseudoConsole`：ConPTY 在「屏幕已有内容」
+/// 后 resize 会整屏重绘并补空行，而前端 `ResizeObserver` 会重复上报同一尺寸。
 pub fn pty_resize(tool_call_id: &str, cols: u16, rows: u16) -> bool {
-    // ⚠️ 关键：**先**记下客户端尺寸（无论会话是否已注册）。
-    //
-    // 前端 fit() 往往早于后端 `create`（本机实测：resize 约早 0.9s 到达，此时会话
-    // 尚未注册 → lookup 未命中）。若只在命中会话时才写缓存，首次运行时缓存永远是空
-    // → `create` 只能退回默认 240×50 → 与真实尺寸（如 109×13）不符
-    // → ConPTY 每次重绘都按 50 行补空行（空行数 = 行数 − 内容行数）。
-    // 把写入提到 lookup 之前，就能让紧接其后的 `create` 用上正确尺寸（`initial_size`）；
-    // 前端另有重试兜底（见 XtermTerminal.sendResize）。
+    // 先记下客户端尺寸（无论会话是否已注册）：前端 fit() 往往早于后端 `create`（实测 resize
+    // 约早 0.9s 到达，此时 lookup 未命中）。只在命中会话时才写缓存的话，首次运行缓存永远是空
+    // → `create` 退回默认 240×50 → ConPTY 每次重绘都按 50 行补空行。写入提到 lookup 之前，
+    // 紧接其后的 `create` 才能用上正确尺寸（`initial_size`）。
     if let Ok(mut g) = LAST_CLIENT_SIZE.lock() {
         *g = Some((cols as i16, rows as i16));
     }
@@ -296,14 +283,14 @@ pub fn pty_resize(tool_call_id: &str, cols: u16, rows: u16) -> bool {
 
 /// 命名控制键 → 发送字节的映射（Step 2 ③）。
 ///
-/// 为什么在 Rust 里做映射：命名 → 字节的映射表**只能有一份**（铁律 1 的同类问题）。
-/// 前端只发键名（`"ctrl+c"`），不发裸控制字节 —— 也就不必往 JSON 里塞 `\u0003` 之类的转义。
+/// 为什么在 Rust 里做：命名 → 字节的映射表只能有一份（铁律 1 的同类问题）。前端只发键名
+/// （`"ctrl+c"`），不发裸控制字节，也就不必往 JSON 里塞 `\u0003` 之类的转义。
 ///
-/// - 伪控制台的 Enter 是 **CR**（`\r`），不是 LF；
+/// - 伪控制台的 Enter 是 CR（`\r`），不是 LF；
 /// - 方向键 / Home / End / Delete / PageUp / PageDown 用标准 CSI（xterm 序列）；
-/// - `ctrl+<a..z>` 有**通用规则**：字母码 − 0x60（`ctrl+c` → `\x03`、`ctrl+d` → `\x04`…）；
-/// - ⚠️ `backspace` 发 `\x08`（与 `\x7f` 的取舍**未实测**，见 docs/pty-research.md §7 #18）；
-/// - 未知名字返回 `None`（调用方跳过该键，**不**整体失败，便于前端无脑加按钮）。
+/// - `ctrl+<a..z>` 有通用规则：字母码 − 0x60（`ctrl+c` → `\x03`、`ctrl+d` → `\x04`…）；
+/// - `backspace` 发 `\x08`（与 `\x7f` 的取舍未实测，见 docs/pty-research.md §7 #18）；
+/// - 未知名字返回 `None`（调用方跳过该键，不整体失败，便于前端无脑加按钮）。
 pub fn key_sequence(name: &str) -> Option<String> {
     let n = name.trim().to_ascii_lowercase();
     match n.as_str() {

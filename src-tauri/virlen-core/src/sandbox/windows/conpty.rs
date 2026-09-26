@@ -1,4 +1,4 @@
-//! ConPTY（伪控制台）封装 —— Step 1：把 `execute_command` 的 stdio 从匿名管道换成伪控制台。
+//! ConPTY（伪控制台）封装 —— 把 `execute_command` 的 stdio 从匿名管道换成伪控制台。
 //!
 //! 权威依据：`docs/pty-research.md` §5（实现要点）与 §8.0（本机 Spike 实测结论）。
 //! 下面每条「为什么这么写」都已在 `conpty_spike.rs` 里实测验证过：
@@ -10,7 +10,7 @@
 //!      （见 `spawn.rs::create_process_pty_core`）；
 //!   4. 关停顺序：**杀进程树 → 关伪控制台 → 读线程收到 EOF**。
 //!      ⚠️ 伪控制台的输出管道在 `ClosePseudoConsole` 之后才断开，所以「等 EOF 再关」会死等；
-//!      正确顺序是「先关伪控制台，读线程**仍在排空**，随后自然收 EOF」（Spike 实测 3.6–14.7ms）。
+//!      正确顺序是「先关伪控制台，读线程仍在排空，随后自然收 EOF」（Spike 实测 3.6–14.7ms）。
 
 use std::fs::File;
 use std::os::windows::io::{FromRawHandle, RawHandle};
@@ -152,9 +152,9 @@ impl PseudoConsole {
 
     /// 关闭伪控制台（幂等）。
     ///
-    /// ⚠️ `ClosePseudoConsole` 会终止所有附着在伪控制台上的字符模式应用**及其进程树**，
-    /// 因此调用前必须先把该杀的东西杀掉、把该收的输出收完（§5.5 / §5.6）。
-    /// 调用后输出管道断开，读线程会自然收到 EOF。
+    /// ⚠️ `ClosePseudoConsole` 会终止所有附着在伪控制台上的字符模式应用及其进程树，因此调用前
+    /// 必须先把该杀的东西杀掉、把该收的输出收完（§5.5 / §5.6）。调用后输出管道断开，读线程
+    /// 会自然收到 EOF。
     pub fn close(&mut self) {
         if self.hpc != 0 {
             let h = self.hpc;
@@ -175,8 +175,8 @@ impl Drop for PseudoConsole {
 
 /// 按原始 `HPCON` 调整尺寸 —— 供 `pty_session` 在命令运行中响应前端 `pty_resize`。
 ///
-/// ⚠️ 调用方必须保证会话尚未关闭：`HPCON` 是裸句柄，关闭后再用属于未定义行为。
-/// `pty_session` 的注销流程是「先移除表项 → 再关伪控制台」，因此不会命中这种情况。
+/// ⚠️ 调用方必须保证会话尚未关闭：`HPCON` 是裸句柄，关闭后再用属于未定义行为。`pty_session`
+/// 的注销流程是「先移除表项 → 再关伪控制台」，因此不会命中这种情况。
 pub fn resize_raw(hpc: HPCON, cols: i16, rows: i16) -> bool {
     if hpc == 0 {
         return false;
