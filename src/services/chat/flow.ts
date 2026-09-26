@@ -14,7 +14,7 @@ import {
 import { v4 } from '@/utils/uuid'
 import type { Agent, Message, MessageContent, Session } from '@/types'
 import { DEFAULT_SESSION_PARAMS } from '@/types'
-import type { CompressMode } from '@/domain/engine'
+import type { CompressMode } from '@/domain/ports'
 import { settingsState } from '@/ui/store'
 import { toolService } from '@/services/tool-service'
 import { showToast } from '@/ui/components/shared/Toast'

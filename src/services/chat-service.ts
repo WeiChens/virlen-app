@@ -4,7 +4,7 @@
  * 实现已按职责拆分到 `./chat/*`，本文件只做统一重导出，保持既有 import 路径不变：
  *   import { sendMessage } from '@/services/chat-service'
  *
- * 职责：封装所有与 agentEngine + store 的数据交互，
+ * 职责：封装所有与引擎 + store 的数据交互，
  *       不依赖 React 组件，只通过回调通知 UI 层更新。
  *
  * 核心能力：

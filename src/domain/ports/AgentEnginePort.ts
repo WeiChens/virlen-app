@@ -1,7 +1,5 @@
-import { SendMessageOptions } from '@/domain/engine'
-import type { CompressMode } from '@/domain/engine'
-import { RunSnapshot } from '../engine/types'
-import { Message, Session } from '@/types'
+import type { CompressMode, RunSnapshot, SendMessageOptions } from './engine'
+import type { Message, Session } from '@/types'
 
 export interface AgentEnginePort {
   /**

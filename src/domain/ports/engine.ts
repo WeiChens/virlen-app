@@ -1,16 +1,20 @@
 /**
- * Agent 引擎内部类型定义
+ * 引擎契约类型 —— chat-service 与引擎适配器共用的共享类型
  *
- * 从 index.ts 拆分，减少文件体积
+ * 原位于 `src/domain/engine/types.ts`（TS 引擎内部类型）。TS 引擎已移除，但这些类型仍是
+ * `AgentEnginePort` 与 `services/rust-engine.ts` 之间的接口契约，因此迁到 ports 层保留。
  */
-import type {
-  Message,
-  ToolUseContent,
-  AgentEventCallback,
-  Session,
-} from '@/types'
-import { ToolExecutorResponse } from '../tools/types'
+import type { Message, Session } from '@/types'
+import type { AgentEventCallback, ToolUseContent } from '@/types'
+import type { ToolExecutorResponse } from '@/domain/tools/types'
 
+/**
+ * 上下文压缩方式 —— 与 Rust `CompressMode`（`'ai' | 'raw'`）取值一致，
+ * 也与 `app_settings.contextCompressMode` 同值。
+ */
+export type CompressMode = 'ai' | 'raw'
+
+/** 发送一次消息（一个 run）的入参 —— `AgentEnginePort.sendMessage` 的选项 */
 export interface SendMessageOptions {
   /** 完整 Session 对象，engine 只读 */
   session: Session
@@ -37,7 +41,7 @@ export interface SendMessageOptions {
   resumeFromSnapshot?: RunSnapshot
   /** 来自 provider 配置的 reasoningEffort（如 o 系列模型的 low/medium/high） */
   reasoningEffort?: string
-  /** 读取最大工具调用轮数，默认 30  */
+  /** 读取最大工具调用轮数，默认 30 */
   maxToolRounds?: number
   /**
    * 迭代目标 — 设置后启用「执行→验证→修复」自主迭代模式。
@@ -61,7 +65,10 @@ export interface SendMessageOptions {
 }
 
 /**
- * 每次 LLM 一轮对话产生的临时上下文
+ * 每次 LLM 一轮对话产生的临时上下文（引擎内部使用）。
+ *
+ * ⚠️ 保留本类型只因为 Rust 侧 `agent::types::ToolCallContext` 有同名对应物；
+ * TS 引擎移除后前端已无消费方。
  */
 export interface ToolCallContext {
   assistantMessage: Message
@@ -69,18 +76,18 @@ export interface ToolCallContext {
   roundContent: string
   reasoningContent: string
 }
+
 /**
- * Run (执行批次) 状态管理
+ * Run（执行批次）状态管理
  *
  * 一个 Run 表示一次 sendMessage 调用中 LLM 产出的一个工具调用批次，
  * 包括该批次中每个 tool 的执行进度和结果。
  *
  * 语义：
- * - 每次 LLM 流结束(产生 tool_calls) → 创建一个 Run
+ * - 每次 LLM 流结束（产生 tool_calls）→ 创建一个 Run
  * - Run 包含多个 ToolStep（每个 tool call 一个 step）
  * - 可暂停/恢复：检查当前是第几个 step，前面的结果已存储
  */
-
 export type ToolStepStatus = 'pending' | 'running' | 'completed' | 'failed'
 
 /** 单个 tool 步骤 */
@@ -118,10 +125,9 @@ export interface Run {
 }
 
 /**
- * Run 状态管理器 — 负责创建、查询、更新执行批次状态
+ * Run 快照 —— 断点恢复用（只存引擎侧内存 / Rust 侧内存 Map，页面刷新后即失效）。
  *
- * 存储方案：写入 engine 内部 Map (内存)，不随会话持久化。
- * 页面刷新后 run 状态自动清空，tool run 断点恢复仅在页面内有效。
+ * ⚠️ 由 Rust 引擎权威产出：`agent_get_run_snapshot` 返回值即此形状（camelCase）。
  */
 export interface RunSnapshot {
   assistantMessageId: string

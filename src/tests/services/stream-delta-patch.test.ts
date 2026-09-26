@@ -9,8 +9,7 @@
  * 引擎侧契约（两侧对称，铁律 1）：
  * - 流式帧：只带 `contentDelta`（或思考快照 `reasoningContent`）
  * - 结束帧：带全量 `content`，用于兜底自愈
- * 见 `src-tauri/virlen-core/src/agent/llm_round.rs::flush_stream_state`、
- * `src/domain/engine/llm-round.ts::syncContentDelta`。
+ * 见 `src-tauri/virlen-core/src/agent/llm_round.rs::flush_stream_state`。
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 import { getSessionRuntime, sessionStore } from '@/ui/store'

@@ -17,7 +17,7 @@ import {
   SETTINGS_SCHEMA_VERSION_KEY,
 } from '@/infrastructure/settingsRepo'
 import type { ModelPrice } from '@/domain/pricing'
-import type { CompressMode } from '@/domain/engine'
+import type { CompressMode } from '@/domain/ports'
 
 export type { EditorOpenConfig }
 

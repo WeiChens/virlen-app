@@ -265,7 +265,7 @@ export function createEventHandler(
  * 还原 assistant 消息补丁：把流式增量补丁（`patch.contentDelta`）拼成完整正文。
  *
  * 引擎流式期间只回传增量（全量正文会让 IPC 载荷变成 O(n²)，见
- * `agent/llm_round.rs::flush_stream_state` / `domain/engine/llm-round.ts::syncContentDelta`），
+ * `agent/llm_round.rs::flush_stream_state`），
  * 结束帧仍回传全量 `patch.content`。
  *
  * 拼不上（消息未加载 / 正文非字符串）时退化为「只应用其余字段」，

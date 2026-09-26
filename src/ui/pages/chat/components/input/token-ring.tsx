@@ -11,7 +11,7 @@ import { Observer } from 'mobx-react-lite'
 import type { CSSProperties } from 'react'
 import { sessionStore, settingsState } from '@/ui/store'
 import { compressContext } from '@/services/chat-service'
-import type { CompressMode } from '@/domain/engine'
+import type { CompressMode } from '@/domain/ports'
 import Tooltip from '@/ui/components/shared/Tooltip'
 import { showToast } from '@/ui/components/shared/Toast'
 import ContextMenu, {

@@ -23,7 +23,7 @@ class InteractionShelved extends Error {
 }
 
 export interface UserChoiceHandles {
-  /** 给 agentEngine 的 onUserInteraction 回调 */
+  /** 给引擎的 onUserInteraction 回调 */
   handler: (type: string, data: Record<string, any>) => Promise<ToolResult>
   cleanup: () => void
 }

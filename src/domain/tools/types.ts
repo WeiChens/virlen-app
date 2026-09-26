@@ -72,7 +72,7 @@ export class UserInteractionRequired {
  * UI 看语言无关的结构化字段、按界面语言重建文案。
  *
  * 为什么要专门一个类型：引擎与桥都靠「是不是 `Error` 实例」判定工具失败
- * （`domain/engine/tool-executor.ts` / `services/rust-engine.ts` / Rust `NativeToolOutcome::Error`），
+ * （`services/rust-engine.ts` 的桥接层 / Rust `NativeToolOutcome::Error`），
  * 而裸 `Error` 带不了结构化字段 → 失败文案在中文界面下只能直显英文（遗留项 L6）。
  */
 export class ToolError extends Error {
