@@ -85,7 +85,14 @@ describe('工具契约（权威源结构）', () => {
   })
 })
 
-describe('契约 ↔ 执行器一一对应（真实适配器 + 真实 toolsInit）', () => {
+/**
+ * 契约 ↔ 执行器一一对应 —— 每个用例都走 `freshRegistry()`：
+ * `vi.resetModules()` + 动态 import 整个模块图 + 真跑 `toolsInit()`，是本文件里最重的一组。
+ *
+ * ⚠️ **超时已放宽**：并行负载下实测从 ~2s 涨到 12s，会撞上 vitest 默认 5s 超时产生**假失败**
+ * （单独跑全绿、复跑也全绿）。这里验的是「契约与执行器名单是否一致」，不是「多快能导入」。
+ */
+describe('契约 ↔ 执行器一一对应（真实适配器 + 真实 toolsInit）', { timeout: 30_000 }, () => {
   it('所有契约定义都有执行器，且没有多余执行器', async () => {
     const registry = await freshRegistry()
 

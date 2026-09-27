@@ -484,6 +484,16 @@ pub fn run() {
             // macOS 离线语音识别（SFSpeechRecognizer）
             speech_service::macos_request_speech_authorization,
             speech_service::macos_transcribe_speech,
+            // 手机控制（配对表持久化）
+            commands::phone_pairing::cmd_phone_pairing_load,
+            commands::phone_pairing::cmd_phone_pairing_save,
+            // 手机控制（电脑设备身份持久化 —— 「重新获取还是同一个」的落点）
+            commands::phone_device::cmd_phone_identity_load,
+            commands::phone_device::cmd_phone_identity_save,
+            // 手机控制（审计落盘：append-only JSONL）
+            commands::phone_audit::cmd_phone_audit_append,
+            commands::phone_audit::cmd_phone_audit_list,
+            commands::phone_audit::cmd_phone_audit_clear,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

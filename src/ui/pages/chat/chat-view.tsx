@@ -29,6 +29,7 @@ import {
   createSession,
   addSessionMessage,
   updateSessionMessage,
+  activateSession,
 } from '@/services/chat-service'
 import ChatSidebar from './components/sidebar'
 import ChatInput, {
@@ -458,6 +459,23 @@ function ChatView() {
     },
     [applyMessagesUpdate],
   )
+  /**
+   * 消息镜像的**兜底同步**（2026-09-27 手机控制真机反馈修复）。
+   *
+   * 背景：`messages` 是本地 state 镜像，过去只由「发起方传 events.onMessagesUpdate」
+   * 驱动 —— 手机 bridge 的 `host.session.send` 拿不到组件回调闭包，改了 store 也刷不到
+   * 视图，表现为「手机发消息，电脑端侧栏 / working 都变了，但消息要切会话才出现」。
+   * 同类先例已有一次（`compressContext` 注释：不通知就「要切会话才刷新」）。
+   *
+   * 订 store 的 `messagesChanged`（全部消息 CRUD 的唯一收口点）后，**任何**来源
+   * （手机 / 托盘 / 压缩回填 / 未来新增路径）的消息变更都会到达这里；
+   * 走 `syncMessagesToUI`（rAF 合批）：同帧内与 `onMessagesUpdate` 的 schedule
+   * 自动去重，流式性能不受影响（重复 schedule 取最后一次参数）。
+   */
+  useEffect(
+    () => sessionStore.onMessagesChanged(syncMessagesToUI),
+    [syncMessagesToUI],
+  )
   // 当 currentSessionId 变为 null 时清空 messages（并丢弃未消费的检索跳转目标）
   useEffect(() => {
     if (!chatState.value.currentSessionId) {
@@ -501,24 +519,20 @@ function ChatView() {
     // 先登记再干活：本函数内部会再次写同值 currentSessionId，
     // 早登记可避免兜底 effect 与自身重入（重入会把刚装载的消息又刷一遍）
     handledSessionRef.current = sessionId
-    // 进入会话 → 清除新回复标记（托盘唤起 / 检索跳转等入口也一并覆盖）
-    updateSessionRuntime(sessionId, { hasNewReply: false })
     const fromSessionId = chatState.value.currentSessionId
     const switchStart =
       typeof performance !== 'undefined' ? performance.now() : Date.now()
+    // 数据侧准备（清未读 / 懒加载 / 修复悬空 tool_calls / 锚点索引）——
+    // 与手机接口层共用同一个入口（`services/chat/session.ts::activateSession`），
+    // 否则两份必然分叉。
+    // ⚠️ 不 await：其中的「清未读」在首个 await 之前同步完成，时序与原实现一致
+    const prep = activateSession(sessionId)
     chatState.setValue('currentSessionId', sessionId)
     // 切换会话时，从该会话的运行时状态恢复错误信息（跨会话不丢失）
     chatState.setValue('error', getSessionRuntime(sessionId).error)
     setMessages([...session.messages])
-    // 懒加载：会话激活时从 SQLite 拉取历史消息（仅首次）
-    await sessionStore.ensureMessagesLoaded(sessionId)
-    // 消息到位后再检测中断残留（悬空 tool_calls）——上面的 effect 在消息加载完成前
-    // 就已触发，可能拿到空列表，这里再兜一次，修复结果会一并渲染出来
-    const switchRt = getSessionRuntime(sessionId)
-    repairSessionIfNeeded(sessionId, switchRt.working || switchRt.paused)
-    // 锚点列表需要「全量用户消息」：只拉 id + 摘要（不含 AI/工具正文，体积小）
-    void sessionStore.ensureUserMessageIndex(sessionId)
-    const updated = sessionStore.getSession(sessionId)
+    // 消息到位后再渲染一次（悬空 tool_calls 的修复结果也在这里一并出现）
+    const updated = await prep
     if (updated && chatState.value.currentSessionId === sessionId) {
       setMessages([...updated.messages])
     }

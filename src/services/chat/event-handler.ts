@@ -57,7 +57,6 @@ export function createEventHandler(
         }
         updateSessionRuntime(sessionId, {
           pendingContent: (sessionRt.pendingContent || '') + delta,
-          streamingMessageId: event.data?.messageId || null,
         })
         events?.onPendingContent?.(sessionId, delta)
         events?.onMessagesUpdate?.(sessionId)
@@ -78,6 +77,14 @@ export function createEventHandler(
             trMsg.rounds += 1
           }
           addSessionMessage(sessionId, event.data.message)
+          // 记录「正在生成的那条消息」：
+          // ⚠️ Rust 引擎的 `stream_event` **不带 messageId**（`llm_round.rs::flush_stream_state`），
+          // 所以这个字段只能由本事件与下面的定稿补丁维护；手机控制 bridge 的流式通道
+          // 已改为直接读 store 里 `streaming===true` 的消息（不再依赖此字段），
+          // 这里保持它的语义正确，避免下一个消费者再被「永远为 null」坑一次。
+          if (event.data.message.role === 'assistant' && event.data.message.streaming) {
+            updateSessionRuntime(sessionId, { streamingMessageId: event.data.message.id })
+          }
           events?.onMessagesUpdate?.(sessionId)
         }
         break
@@ -95,6 +102,10 @@ export function createEventHandler(
               event.data.patch,
             ),
           )
+          // 定稿补丁（`streaming:false`）→ 该条不再生成中
+          if (event.data.patch.streaming === false) {
+            updateSessionRuntime(sessionId, { streamingMessageId: null })
+          }
           events?.onMessagesUpdate?.(sessionId)
         }
         break
@@ -107,12 +118,25 @@ export function createEventHandler(
         }
         break
 
+      case 'tool_progress': {
+        // 引擎在**累积工具参数**期间推送的进度（§27）：这段时间没有任何其它事件，
+        // 手机据此显示「正在写入 write_file · 1.2k 字符…」，而不是让用户看着
+        // 「正文停在半句话」以为卡死。
+        const tp = event.data ?? {}
+        updateSessionRuntime(sessionId, {
+          toolProgress: { name: String(tp.name ?? ''), chars: Number(tp.chars ?? 0) },
+        })
+        break
+      }
+
       case 'tool_call': {
         const trTc = activeTraces.get(sessionId)
         const toolCallId = event.data?.id
         if (trTc && typeof toolCallId === 'string') {
           trTc.toolCallIds.add(toolCallId)
         }
+        // 参数已生成完、工具开始执行 —— 进度该收了（否则会一直显示「正在生成…」）
+        updateSessionRuntime(sessionId, { toolProgress: null })
         events?.onMessagesUpdate?.(sessionId)
         break
       }
@@ -333,6 +357,8 @@ export async function finishWorking(
     updateSessionRuntime(sessionId, {
       pendingContent: '',
       streamingMessageId: null,
+      // 本轮结束：工具进度必须一起收（§27）—— 否则界面会一直挂着「正在生成…」
+      toolProgress: null,
     })
     events?.onWorkingChange?.(sessionId, false)
     events?.onMessagesUpdate?.(sessionId)

@@ -28,7 +28,7 @@ import AgentSvg from '@/ui/components/icons/AgentSvg'
 import PinSvg from '@/ui/components/icons/PinSvg'
 import ExportDialog from '@/ui/pages/chat/components/modals/ExportDialog'
 import { exportSessionToFile } from '@/services/export-service'
-import { deleteSessions } from '@/services/chat-service'
+import { deleteSessions, renameSession } from '@/services/chat-service'
 import { showToast } from '@/ui/components/shared/Toast'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 import Modal, { ModalFooterButtons } from '@/ui/components/shared/Modal'
@@ -283,9 +283,9 @@ function ChatSidebar({
 
   const handleSaveEdit = useCallback(
     (sessionId: string) => {
-      if (editTitle.trim()) {
-        sessionStore.updateSessionTitle(sessionId, editTitle.trim())
-      }
+      // ⚠️ 走 chat-service 的 renameSession（用例层）：空标题 / 超长标题的校验只在服务层存在，
+      // 接口层（手机）与侧栏共用同一份规则（§3 原则：组件与接口层不得各写一份）
+      renameSession(sessionId, editTitle)
       setEditingId(null)
     },
     [editTitle],

@@ -3,10 +3,13 @@
 //! 移植自 TS `src/infrastructure/provider/openai.ts`（铁律 1：双引擎同语义）。
 
 use super::blocks::{openai_content, process_vision_content, slice_messages, text_of_content};
-use super::sse::read_sse_lines;
+use super::sse::{read_sse_lines, SseItem};
 use super::Provider;
 use super::super::cancellation::CancellationToken;
-use super::super::types::{ChatRequest, Message, StreamEvent, TokenUsage, ToolUseContent};
+use super::super::types::{
+    ChatRequest, Message, ProgressThrottle, StreamEvent, TokenUsage, ToolUseContent,
+    TOOL_PROGRESS_INTERVAL_MS,
+};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
@@ -300,8 +303,18 @@ impl Provider for NativeOpenAiProvider {
         let mut tool_acc: std::collections::HashMap<usize, (String, String, String)> =
             std::collections::HashMap::new();
         let mut tool_fired = false;
+        // 工具参数累积期的进度节流器（见 `StreamEvent::ToolArgsProgress`）
+        let mut progress = ProgressThrottle::new(TOOL_PROGRESS_INTERVAL_MS);
 
-        let result = read_sse_lines(resp, cancel, &mut |line: String| {
+        let result = read_sse_lines(resp, cancel, &mut |item: SseItem| {
+            let line = match item {
+                SseItem::Idle => {
+                    // 静默期心跳（§27）：让引擎把节流器里扣着的正文尾部刷出去
+                    on_event(StreamEvent::Idle);
+                    return true;
+                }
+                SseItem::Line(l) => l,
+            };
             let trimmed = line.trim();
             if !trimmed.starts_with("data:") {
                 return true;
@@ -359,6 +372,12 @@ impl Provider for NativeOpenAiProvider {
                             .and_then(Value::as_str)
                         {
                             entry.2.push_str(args);
+                            // 参数累积期的进度上报（节流）：工具名在首个分片里已给出
+                            if progress.allow(crate::telemetry::now_ms()) {
+                                let chars = entry.2.chars().count();
+                                let name = entry.1.clone();
+                                on_event(StreamEvent::ToolArgsProgress { index: idx, name, chars });
+                            }
                         }
                     }
                 }

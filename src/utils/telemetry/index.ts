@@ -216,6 +216,16 @@ export function isTelemetryBuildDisabled(): boolean {
 }
 
 /**
+ * 开关当前是否开启（**供高频路径提前返回**）。
+ *
+ * `track()` 关闭时确实是一次调用即返回，但**构造 props 的成本仍在调用方** ——
+ * 流式帧 / ICE 信令这类每秒几十次的节点，必须先问这里再构造载荷（AGENTS.md §5.8「关闭时零开销」）。
+ */
+export function isTelemetryEnabled(): boolean {
+  return isEnabled()
+}
+
+/**
  * 解析「事件级」链路字段（顶层）。
  *
  * §4：trace_id / span_id 是事件级顶层字段。多数调用方为就近传参把它们放进了 props，

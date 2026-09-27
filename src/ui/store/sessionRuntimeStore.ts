@@ -18,6 +18,13 @@ export interface SessionRuntime {
   hasNewReply: boolean
   /** 该会话最近一次 AI 回复的错误信息（跨会话切换保留，切回时仍展示） */
   error: string | null
+  /**
+   * 正在生成的工具调用进度（引擎在累积参数期间推送；无 = null）。
+   *
+   * 语义：`working === true` 时的「在生成什么」——没有它时，模型写大参数
+   * （如 2000 字的 `write_file`）会让界面停在「AI 正在处理…」数十秒（§27）。
+   */
+  toolProgress: { name: string; chars: number } | null
 }
 
 interface SessionRuntimeStore {
@@ -54,6 +61,7 @@ export function getSessionRuntime(sessionId: string): SessionRuntime {
         paused: false,
         hasNewReply: false,
         error: null,
+        toolProgress: null,
       }
     })
   }

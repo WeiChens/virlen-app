@@ -251,6 +251,59 @@ pub enum StreamEvent {
     ToolUse(ToolUseContent),
     MessageStop { reasoning_content: Option<String>, usage: Option<TokenUsage> },
     Error(String),
+    /// 工具参数生成进度（provider 在**累积** tool 参数期间按节流上报）。
+    ///
+    /// 为什么需要它（真机缺陷根因，见 `docs/phone-control-bridge.md` §27）：provider 在累积
+    /// 参数 JSON 期间**不发任何事件** —— anthropic 的 `input_json_delta`、openai 的
+    /// `tool_calls[].function.arguments` 都只进本地累积器，直到 `content_block_stop` /
+    /// `finish_reason` 才发一条 `ToolUse`。于是「正文结束 → 工具调用出现」之间存在一段
+    /// **零事件空窗**：长参数（如 `write_file` 写一篇文章）可达数秒到数十秒，这段时间
+    /// 上层（桌面 UI / 手机）只能看到「正文停在半句话」，分不清是在生成还是卡死了。
+    ///
+    /// 只带「工具名 + 已累积字符数」：**不带参数内容**（带宽、隐私、上层也不需要）。
+    /// `index` 是 provider 侧的工具序号（一次响应可能有多个 tool call 并行累积）。
+    ToolArgsProgress { index: usize, name: String, chars: usize },
+    /// 静默心跳 —— provider 在**长时间没有新 chunk** 时按定时上报（见 `provider/sse.rs`）。
+    ///
+    /// 为什么需要它（2026-09-29 二次复盘，见 `docs/phone-control-bridge.md` §27）：
+    /// `ToolArgsProgress` 只在 provider **收到参数分片**时才发。若 provider 在
+    /// 「正文结束 → 首个参数分片」之间整段时间**一个字节都不发**（服务端在生成 / 参数非增量
+    /// 下发），这段时间仍没有任何事件 —— 引擎节流器里扣着的正文尾部就继续不显示。
+    /// 本事件由 SSE 读循环的**定时器**产生，与「有没有 chunk」无关，
+    /// 从而把「正文尾部可见延迟」钉在确定的上界内。
+    ///
+    /// 引擎收到它只做一件事：把积压的正文 / 思考增量刷出去（无积压则是 no-op）。
+    Idle,
+}
+
+/// 工具进度上报的节流间隔（毫秒）。
+///
+/// provider 每收到一片参数就累积一次，但**不必每片都上报**：这是给人看的进度，
+/// 300ms 已足够「在动」的观感，且能把一篇 2000 字文章的参数生成压到 ~30 条事件。
+pub const TOOL_PROGRESS_INTERVAL_MS: i64 = 300;
+
+/// 事件节流器 —— 距上次放行不足 `interval_ms` 一律丢弃（用于 provider 侧的高频进度上报）。
+///
+/// 与 `llm_round::StreamEventThrottle` 同形但语义不同：那个节流的是**正文增量**
+/// （引擎内部，带 force_flush 语义）；这个只用于「进度」这类**可丢**事件。
+pub struct ProgressThrottle {
+    interval_ms: i64,
+    last_ms: i64,
+}
+
+impl ProgressThrottle {
+    pub const fn new(interval_ms: i64) -> Self {
+        Self { interval_ms, last_ms: 0 }
+    }
+
+    /// 距上次放行已超过间隔 → 放行并记录（`now` 由调用方传入，便于测试注入时间）
+    pub fn allow(&mut self, now: i64) -> bool {
+        if now - self.last_ms < self.interval_ms {
+            return false;
+        }
+        self.last_ms = now;
+        true
+    }
 }
 
 // ==================== Agent 事件 ====================
@@ -474,5 +527,20 @@ mod tests {
         assert_eq!(v["type"], "stream_event");
         assert_eq!(v["data"]["delta"], "x");
         assert!(v.get("error").is_none());
+    }
+
+    /// 进度节流：首次即放行，间隔内一律丢弃，到点再放行（§27 的 300ms 口径）。
+    ///
+    /// 为什么得钉住：provider 每收到一片参数就会调一次 `allow`，若节流失效，
+    /// 一篇 2000 字文章的写文件会产生数百条进度事件（桌面 / 手机都要跟着重渲染）。
+    #[test]
+    fn progress_throttle_limits_rate() {
+        let mut t = super::ProgressThrottle::new(super::TOOL_PROGRESS_INTERVAL_MS);
+        assert!(t.allow(10_000), "首次调用应放行");
+        assert!(!t.allow(10_100), "未到间隔应丢弃");
+        assert!(!t.allow(10_299), "未到间隔应丢弃");
+        assert!(t.allow(10_300), "到间隔应放行");
+        assert!(!t.allow(10_301), "刚放行过应再等一个间隔");
+        assert!(t.allow(10_900), "跨过多个间隔后仍应放行");
     }
 }

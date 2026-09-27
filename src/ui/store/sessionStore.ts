@@ -44,6 +44,14 @@ class SessionStore {
   private loadedMessageIds = new Set<string>()
   /** 已加载过用户消息索引的会话 id 集合 */
   private loadedUserIndexIds = new Set<string>()
+  /**
+   * 「消息变更」的订阅者（UI 镜像同步的**兜底通道**，2026-09-27 真机反馈修复）。
+   *
+   * 普通 Set（非 observable）：订阅关系不参与响应式，避免自触发。
+   */
+  private readonly messagesChangedListeners = new Set<
+    (sessionId: string) => void
+  >()
 
   constructor(private repo: SessionRepo) {
     makeObservable(this, {
@@ -52,6 +60,15 @@ class SessionStore {
       updateSession: action,
       touchSession: action,
       deleteSession: action,
+      /**
+       * ⚠️ 必须声明为 action（否则 `enforceActions: 'always'` 下是「脱离 action 改可观测值」）：
+       * 本类其它直接写 `value.sessions` 的方法要么是 action，要么自行 `runInAction`，
+       * 仅 `deleteSessions` / `notifySessionChanged` 两处漏了 —— 单例下看不出来，
+       * 一旦有 observer（手机推送的 reaction 就是）就会报 MobX strict-mode 警告，
+       * 且派生值可见到「未成批」的中间态。
+       */
+      deleteSessions: action,
+      notifySessionChanged: action,
       clear: action,
     })
   }
@@ -400,11 +417,40 @@ class SessionStore {
   }
 
   /**
+   * 订阅「消息变更」，返回取消订阅函数。
+   *
+   * ⚠️ 为什么存在（2026-09-27 手机控制真机反馈）：`chat-view` 的消息列表是 React
+   * 本地镜像（`useState`），过去只由**发起方**的 `ChatServiceEvents.onMessagesUpdate`
+   * 驱动 —— 于是任何「不是组件自己发起」的路径（手机 bridge 的 `host.session.send`）
+   * 改了 store 也刷不到 UI，表现为「手机上发了消息，电脑端要切会话才看到」。
+   * 同类先例已出现过（`compressContext` 的注释：不通知就「要切会话才刷新」），
+   * 说明「每个调用方记得通知」是反模式。`messagesChanged` 是消息 CRUD 的
+   * **唯一收口点**，订它即覆盖全部来源（含未来新增的路径）。
+   *
+   * 与 `onMessagesUpdate` 的分工：那个是显式通知（组件自己发送时用，可立即生效），
+   * 本订阅是兜底通道（高频流式走 rAF 合批，重复 schedule 同帧去重、无额外渲染）。
+   */
+  onMessagesChanged(listener: (sessionId: string) => void): () => void {
+    this.messagesChangedListeners.add(listener)
+    return () => {
+      this.messagesChangedListeners.delete(listener)
+    }
+  }
+
+  /**
    * 消息变更通知（服务层消息 CRUD 调用此方法）
    * 只持久化、不走 diff、不污染 _lastSaved 基线
    */
   messagesChanged(sessionId: string): void {
     this._debouncedPersistSession(sessionId)
+    // 广播给订阅者（UI 镜像同步等）；单个订阅者抛错不影响持久化与其它订阅者
+    for (const listener of this.messagesChangedListeners) {
+      try {
+        listener(sessionId)
+      } catch (err) {
+        console.error('[sessionStore] 消息变更订阅者抛错:', err)
+      }
+    }
   }
 
   // ========== CRUD ==========

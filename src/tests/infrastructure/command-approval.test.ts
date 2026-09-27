@@ -7,11 +7,15 @@
  * - sessionId / toolCallId 不匹配时不应执行
  * - 用户拒绝后注册表被清理，后续确认无效
  * - run 返回 rejected promise 时应原样交给调用方处理
+ *
+ * 另含 `interactionId` 精确路由回归（手机控制前置改造）：
+ * 授权 / 提问的应答必须带 id，否则两个会话同时挂起时一次应答会同时 resolve 两者。
  */
 import { describe, it, expect } from 'vitest'
 import toolInteractEvent from '@/events/toolInteractEvent'
 import { registerPendingApproval } from '@/infrastructure/tools/execute/common'
 import { createNativeCommandConfirmHandles } from '@/services/tool-service/command_confirm'
+import { createUserChoiceHandles } from '@/services/tool-service/user_choice'
 import { toolOutputStore } from '@/infrastructure/tools/output-store'
 import type { ToolExecutorResponse } from '@/domain/tools/types'
 
@@ -153,8 +157,8 @@ describe('createNativeCommandConfirmHandles 终端内确认（Step 2 ①）', ()
   it('无 presentation：仍走弹窗（showAuthorization），行为不变', async () => {
     const handles = createNativeCommandConfirmHandles('s3')
     const shows: any[] = []
-    const off = toolInteractEvent.on('showAuthorization', (...args) => {
-      shows.push(args)
+    const off = toolInteractEvent.on('showAuthorization', (payload) => {
+      shows.push(payload)
     })
     const p = handles.handler('confirm_command_native', {
       desc: 'ls',
@@ -166,13 +170,167 @@ describe('createNativeCommandConfirmHandles 终端内确认（Step 2 ①）', ()
       toolCallId: 'tc-M',
     })
     expect(shows.length).toBe(1)
+    expect(shows[0].toolCallId).toBe('tc-M')
     expect(toolOutputStore.get('tc-M')?.pendingConfirm).toBeUndefined()
 
-    // 收尾：模拟用户关闭弹窗，避免 promise 悬挂
-    toolInteractEvent.emit('commandReject', 'cancelled')
+    // 收尾：模拟用户关闭弹窗，避免 promise 悬挂（应答必须带 interactionId）
+    toolInteractEvent.emit('commandReject', shows[0].interactionId, 'cancelled')
     await expect(p).rejects.toBeTruthy()
 
     off()
+    handles.cleanup()
+  })
+})
+
+/**
+ * `interactionId` 精确路由 —— 手机控制前置改造的回归
+ *
+ * 改造前：应答事件**只带值不带标识**，而所有 handles 实例都监听同一个全局事件 ——
+ * 两个交互同时挂起时，**一次应答会同时 resolve 两者**（串扰）；手机端作为第二个
+ * 应答源更是无从知道自己应答的是哪一个（见 docs/phone-control-bridge.md §7-①）。
+ */
+describe('interactionId 精确路由（多交互并发不串扰）', () => {
+  /** 断言一个 promise 在下一轮宏任务前仍未定稿（未被串扰地提前 resolve / reject） */
+  async function expectPending(p: Promise<unknown>): Promise<void> {
+    let settled = false
+    void p.then(
+      () => {
+        settled = true
+      },
+      () => {
+        settled = true
+      },
+    )
+    await new Promise((r) => setTimeout(r, 0))
+    expect(settled).toBe(false)
+  }
+
+  it('授权：两个会话同时挂起，应答 A 不会 resolve B', async () => {
+    const handlesA = createNativeCommandConfirmHandles('s1')
+    const handlesB = createNativeCommandConfirmHandles('s2')
+    const shows: any[] = []
+    const off = toolInteractEvent.on('showAuthorization', (p) => {
+      shows.push(p)
+    })
+
+    const pA = handlesA.handler('confirm_command_native', {
+      desc: 'cmd-A',
+      toolCallId: 'tc-A',
+      permName: 'permission.a',
+      title: 'A',
+    })
+    const pB = handlesB.handler('confirm_command_native', {
+      desc: 'cmd-B',
+      toolCallId: 'tc-B',
+      permName: 'permission.b',
+      title: 'B',
+    })
+    expect(shows.length).toBe(2)
+    expect(shows[0].interactionId).not.toBe(shows[1].interactionId)
+    // 载荷必须带齐会话与 tool call —— 手机端靠它路由到对应会话的视图
+    expect(shows[0].sessionId).toBe('s1')
+    expect(shows[1].sessionId).toBe('s2')
+    expect(shows[0].toolCallId).toBe('tc-A')
+
+    // 只应答 A
+    toolInteractEvent.emit('commandResolve', shows[0].interactionId, '')
+    await expect(pA).resolves.toBe('approved')
+    // B 必须仍未决 —— 修复前它会被 A 的应答一起放行
+    await expectPending(pB)
+
+    // 再应答 B
+    toolInteractEvent.emit('commandResolve', shows[1].interactionId, '')
+    await expect(pB).resolves.toBe('approved')
+
+    off()
+    handlesA.cleanup()
+    handlesB.cleanup()
+  })
+
+  it('未知 / 过期 interactionId 的应答一律忽略', async () => {
+    const handles = createNativeCommandConfirmHandles('s1')
+    const shows: any[] = []
+    const off = toolInteractEvent.on('showAuthorization', (p) => {
+      shows.push(p)
+    })
+    const p = handles.handler('confirm_command_native', {
+      desc: 'ls',
+      toolCallId: 'tc-1',
+    })
+
+    toolInteractEvent.emit('commandResolve', 'not-the-id', '')
+    await expectPending(p)
+
+    // 正确 id 仍能应答（忽略不影响后续）
+    toolInteractEvent.emit('commandResolve', shows[0].interactionId, '')
+    await expect(p).resolves.toBe('approved')
+
+    off()
+    handles.cleanup()
+  })
+
+  it('user_choice：两个会话同时提问，应答 A 不会 resolve B', async () => {
+    const handlesA = createUserChoiceHandles('s1')
+    const handlesB = createUserChoiceHandles('s2')
+    const shows: any[] = []
+    const off = toolInteractEvent.on('showChoice', (p) => {
+      shows.push(p)
+    })
+
+    const pA = handlesA.handler('user_choice', {
+      question: 'q-A',
+      options: ['a1', 'a2'],
+      multi: false,
+      toolCallId: 'tc-A',
+    })
+    const pB = handlesB.handler('user_choice', {
+      question: 'q-B',
+      options: ['b1'],
+      multi: true,
+      toolCallId: 'tc-B',
+    })
+    expect(shows.length).toBe(2)
+    expect(shows[0].sessionId).toBe('s1')
+    expect(shows[0].toolCallId).toBe('tc-A')
+    expect(shows[0].question).toBe('q-A')
+    expect(shows[1].multi).toBe(true)
+
+    toolInteractEvent.emit('resolve', shows[0].interactionId, { content: 'A' })
+    await expect(pA).resolves.toEqual({ content: 'A' })
+    await expectPending(pB)
+
+    toolInteractEvent.emit('resolve', shows[1].interactionId, { content: 'B' })
+    await expect(pB).resolves.toEqual({ content: 'B' })
+
+    off()
+    handlesA.cleanup()
+    handlesB.cleanup()
+  })
+
+  it('应答后广播 interactionSettled（供第二个应答端收起 UI）', async () => {
+    const handles = createNativeCommandConfirmHandles('s1')
+    const shows: any[] = []
+    const settled: Array<[string, string]> = []
+    const offShow = toolInteractEvent.on('showAuthorization', (p) => {
+      shows.push(p)
+    })
+    const offSettled = toolInteractEvent.on(
+      'interactionSettled',
+      (interactionId, outcome) => {
+        settled.push([interactionId, outcome])
+      },
+    )
+
+    const p = handles.handler('confirm_command_native', {
+      desc: 'ls',
+      toolCallId: 'tc-1',
+    })
+    toolInteractEvent.emit('commandReject', shows[0].interactionId, 'cancelled')
+    await expect(p).rejects.toBe('cancelled')
+    expect(settled).toEqual([[shows[0].interactionId, 'reject']])
+
+    offShow()
+    offSettled()
     handles.cleanup()
   })
 })

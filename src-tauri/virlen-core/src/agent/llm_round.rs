@@ -309,6 +309,41 @@ async fn handle_streaming(
         StreamEvent::Error(err) => {
             sink.emit_agent_event(session_id, &AgentEvent::error(err));
         }
+        StreamEvent::ToolArgsProgress { index, name, chars } => {
+            // ① 借这次事件把**积压的正文**发出去。
+            //    参数累积期没有正文增量，尾部那段正文本来要憋到 MessageStop 的 force_flush
+            //    才可见（用户看到的就是「停在半句话，该轮结束才补全」）。进度事件的到达
+            //    恰好是「正文已不再增长」的信号，用它把尾巴补上。
+            throttle.force_flush();
+            flush_stream_state(ctx, model, sink, session_id, &pending_delta, &pending_reasoning);
+            pending_delta.clear();
+            pending_reasoning = None;
+            // ② 上报进度（provider 已按 TOOL_PROGRESS_INTERVAL_MS 节流，此处不再节流）
+            sink.emit_agent_event(
+                session_id,
+                &AgentEvent::new(
+                    "tool_progress",
+                    json!({ "index": index, "name": name, "chars": chars }),
+                ),
+            );
+        }
+        StreamEvent::Idle => {
+            // 静默心跳（§27）：provider 长时间没有新 chunk 时，把节流器里扣着的
+            // 正文 / 思考增量刷出去 —— 无积压则是 no-op（正常流式下几乎不会走到这里）。
+            if !pending_delta.is_empty() || pending_reasoning.is_some() {
+                throttle.force_flush();
+                flush_stream_state(
+                    ctx,
+                    model,
+                    sink,
+                    session_id,
+                    &pending_delta,
+                    &pending_reasoning,
+                );
+                pending_delta.clear();
+                pending_reasoning = None;
+            }
+        }
         StreamEvent::ReasoningContentChange(rc) => {
             if reasoning_start.is_none() {
                 reasoning_start = Some(now_ms());
@@ -613,6 +648,178 @@ mod tests {
         // 关键控制事件不应被节流
         assert!(count_events(&sink, "assistant_message_created") >= 1);
         assert!(count_events(&sink, "assistant_message_updated") >= 1);
+    }
+
+    /// 工具参数累积期的进度（§27）：**既要上报进度，也要顺手把积压的正文发出去**。
+    ///
+    /// 回归背景：provider 在累积 tool 参数期间不发任何事件，正文尾部本来要憋到
+    /// `MessageStop` 的 force_flush 才可见 —— 用户看到的是「正文停在半句话，该轮结束才补全」。
+    /// 本用例断言两件事：
+    ///   1. `tool_progress` 事件带 `{ index, name, chars }`，**不带参数内容**；
+    ///   2. 积压的正文在进度事件到达时就已成帧（紧邻在进度事件之前）——这正是「停半句话」的解药。
+    struct ToolProgressThenStopProvider;
+
+    #[async_trait]
+    impl Provider for ToolProgressThenStopProvider {
+        async fn chat(
+            &self,
+            _request: &ChatRequest,
+            _cancel: &CancellationToken,
+        ) -> Result<Message, String> {
+            unreachable!("进度测试只走 chat_stream")
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: &ChatRequest,
+            _cancel: &CancellationToken,
+            on_event: &mut (dyn FnMut(StreamEvent) + Send),
+        ) -> Result<(), String> {
+            // 正文（因节流窗口而积压），随后转入参数累积期 —— 与真实 provider 的时序一致
+            on_event(StreamEvent::TextDelta("正文".into()));
+            on_event(StreamEvent::TextDelta("尾巴".into()));
+            on_event(StreamEvent::ToolArgsProgress {
+                index: 0,
+                name: "write_file".into(),
+                chars: 1200,
+            });
+            on_event(StreamEvent::MessageStop {
+                reasoning_content: None,
+                usage: None,
+            });
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn tool_args_progress_reports_progress_and_flushes_pending_text() {
+        let sink = TestEventSink::new();
+        let cancel = CancellationToken::new();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(do_llm_round(
+            &session(),
+            &ToolProgressThenStopProvider,
+            &[],
+            &[],
+            &cancel,
+            &sink,
+            "s1",
+            None,
+            None,
+            1,
+        ))
+        .expect("llm round 应成功");
+
+        let events = sink.events.lock().unwrap();
+        let kinds: Vec<&str> = events
+            .iter()
+            .map(|(_, v)| v["type"].as_str().unwrap_or(""))
+            .collect();
+        let progress_idx = kinds
+            .iter()
+            .position(|k| *k == "tool_progress")
+            .expect("应发出 tool_progress 事件");
+
+        // ① 载荷：只带工具名与字符数（**不带参数内容** —— 带宽 / 隐私都不允许）
+        let payload = &events[progress_idx].1["data"];
+        assert_eq!(payload["name"], "write_file");
+        assert_eq!(payload["chars"], 1200);
+        assert_eq!(payload["index"], 0);
+        assert!(
+            payload.get("text").is_none() && payload.get("input").is_none(),
+            "进度事件不得携带参数内容：{payload}"
+        );
+
+        // ② 积压的那一段在**进度事件之前**已成帧 —— 而不是等到 MessageStop。
+        //    节流语义：首个 delta 会直接发出（`last_emit_ms` 初值为 0），**窗口内**到达的
+        //    "尾巴" 才会积压；进度事件到达时正好把它补上。
+        //    若去掉进度分支里的 flush，这里拿到的会是 "正文"（首个 delta 已发过），断言立即失败。
+        let flushed_before = events[..progress_idx]
+            .iter()
+            .rev()
+            .filter(|(_, v)| v["type"].as_str() == Some("assistant_message_updated"))
+            .find_map(|(_, v)| v["data"]["patch"]["contentDelta"].as_str());
+        assert_eq!(
+            flushed_before,
+            Some("尾巴"),
+            "进度事件到达时应立即把积压正文成帧（否则就是「停在半句话、结束才补全」）"
+        );
+    }
+
+    /// 静默兜底（§27 补充）：正文之后 provider **长时间零 chunk** —— 只发一个 `Idle`，
+    /// 引擎就必须把扣住的正文尾部刷出去，而**不是**等到 `MessageStop`。
+    ///
+    /// 判别手法：在 `Idle` 与 `MessageStop` 之间插一条 `Error`（引擎的 Error 分支只发错误、
+    /// **不刷正文**）。于是「尾巴」的成帧必须排在 error 事件**之前**，才能证明是 `Idle` 刷的。
+    /// 去掉引擎的 `Idle` 分支后，尾巴会落到 error 之后（由 MessageStop 的 force_flush 补发），
+    /// 本断言立即失败。
+    struct TextThenIdleProvider;
+
+    #[async_trait]
+    impl Provider for TextThenIdleProvider {
+        async fn chat(
+            &self,
+            _request: &ChatRequest,
+            _cancel: &CancellationToken,
+        ) -> Result<Message, String> {
+            unreachable!("静默兜底测试只走 chat_stream")
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: &ChatRequest,
+            _cancel: &CancellationToken,
+            on_event: &mut (dyn FnMut(StreamEvent) + Send),
+        ) -> Result<(), String> {
+            on_event(StreamEvent::TextDelta("正文".into()));
+            on_event(StreamEvent::TextDelta("尾巴".into()));
+            // 长时间无 chunk：读循环（sse.rs）发出的静默心跳
+            on_event(StreamEvent::Idle);
+            // 标记：一条**不刷正文**的事件（Error 分支只发错误）
+            on_event(StreamEvent::Error("marker".into()));
+            on_event(StreamEvent::MessageStop {
+                reasoning_content: None,
+                usage: None,
+            });
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn idle_tick_flushes_pending_text_before_stream_end() {
+        let sink = TestEventSink::new();
+        let cancel = CancellationToken::new();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(do_llm_round(
+            &session(),
+            &TextThenIdleProvider,
+            &[],
+            &[],
+            &cancel,
+            &sink,
+            "s1",
+            None,
+            None,
+            1,
+        ))
+        .expect("llm round 应成功");
+
+        let events = sink.events.lock().unwrap();
+        let tail_idx = events
+            .iter()
+            .position(|(_, v)| {
+                v["type"].as_str() == Some("assistant_message_updated")
+                    && v["data"]["patch"]["contentDelta"].as_str() == Some("尾巴")
+            })
+            .expect("尾部「尾巴」应被成帧");
+        let error_idx = events
+            .iter()
+            .position(|(_, v)| v["type"].as_str() == Some("error"))
+            .expect("标记事件应存在");
+        assert!(
+            tail_idx < error_idx,
+            "静默心跳到达时应立即把积压正文成帧（由 Idle 刷，而非等 MessageStop）"
+        );
     }
 
     /// ⚠️ 隐式契约回归：一次流式回合里 `assistant_message_updated(patch.contentDelta)` 与

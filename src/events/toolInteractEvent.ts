@@ -3,26 +3,70 @@
  *
  * 连接 chat-service（工具调用层）与 tool-ui（UI 层），取代所有 window.* 全局挂载。
  *
+ * ⚠️ **核心不变量（手机控制前置改造，2026-09）：每次「提问 / 授权」都有唯一的 `interactionId`，
+ * 应答方必须原样回传它。**
+ *
+ * 为什么必须这样：一次 run 内可以并发挂起多个交互（不同会话 / 不同 tool call）。
+ * 改造前应答事件**只带值不带标识**，而所有 handles 实例都监听同一个全局事件 —— 两个交互
+ * 同时挂起时，一次应答会同时 resolve 两者（串扰）。手机端作为第二个应答源更是**无从知道**
+ * 自己在应答哪一个（见 `docs/phone-control-bridge.md` §7-①）。
+ *
  * 事件清单：
  *   user_choice 系列：
  *     showChoice  → chat-service 触发，tool-ui 监听打开选择弹窗
- *     resolve     → tool-ui 触发确认结果，chat-service 收到后 resolve Promise
- *     reject      → tool-ui 触发取消/暂存，chat-service 收到后 reject Promise
+ *     resolve     → tool-ui 触发确认结果（带 interactionId），chat-service 收到后 resolve Promise
+ *     reject      → tool-ui 触发取消/暂存（带 interactionId），chat-service 收到后 reject Promise
  *
  *   授权（authorization）系列 —— 通用的「授权确认」弹窗（不限于命令/脚本）：
  *     showAuthorization → tool 层触发，tool-ui 监听打开授权确认弹窗
- *     commandResolve    → tool-ui 触发“允许”，tool 层收到后 resolve
- *     commandReject     → tool-ui 触发拒绝/暂存，tool 层收到后 reject
+ *     commandResolve    → tool-ui 触发“允许”（带 interactionId），tool 层收到后 resolve
+ *     commandReject     → tool-ui 触发拒绝/暂存（带 interactionId），tool 层收到后 reject
+ *
+ *   终态广播：
+ *     interactionSettled → 某个交互已被应答（允许/拒绝/暂存）。
+ *       用途：**第二个应答端**（手机 / 另一个弹窗）据此收起自己的 UI，避免重复应答。
+ *       应答的发起端自己已经收起，收到该事件应为幂等无操作。
+ *
+ *   终端内确认（Step 2 ①）—— **按 toolCallId 路由**（组件本来就按 toolCallId 渲染）：
+ *     terminalConfirmSubmit / terminalConfirmCancel
+ *
+ *   原始审批注册表（`infrastructure/tools/execute/common.ts`，**按 approvalId 路由**）：
+ *     userAllowCmd / userCmdRejected
  */
 import { ToolExecutorResponse, ToolResult } from '@/domain/tools/types'
 import EventEmitter from '@/utils/EventEmitter'
+
+/**
+ * 一次交互（提问 / 授权）的公共标识。
+ *
+ * 应答方（桌面 UI / 手机端）必须把 `interactionId` 原样回传 —— 这是工具侧
+ * 「多交互并发时精确路由」的唯一依据。
+ */
+export interface InteractionRef {
+  /** 本次交互的唯一 id（每弹一次生成一个） */
+  interactionId: string
+  /** 归属会话（手机端据此路由到对应会话的视图） */
+  sessionId: string
+  /** 关联的 tool call id（用于在消息流里定位到具体的工具块） */
+  toolCallId: string
+}
+
+/** 用户选择（user_choice tool）的请求载荷 */
+export interface ChoiceRequest extends InteractionRef {
+  /** 问题文本 */
+  question: string
+  /** 选项列表 */
+  options: string[]
+  /** 是否多选 */
+  multi: boolean
+}
 
 /**
  * 一次授权确认请求（通用，不限于命令/脚本）。
  *
  * 未来的授权类型（如自定义权限）只需构造同样的结构即可复用同一个弹窗。
  */
-export interface AuthorizationRequest {
+export interface AuthorizationRequest extends InteractionRef {
   /** 权限唯一 key（跨 TS / Rust 稳定契约），如 `terminal.normal.execute` */
   permName: string
   /** 权限名称（展示，即 permissionLabel） */
@@ -40,24 +84,34 @@ export interface AuthorizationRequest {
   hint?: string
   /** 风险等级（仅用于配色，可空） */
   risk?: string
+  /**
+   * AI 申请「不使用沙盒」执行本次操作。
+   *
+   * 供手机控制侧**审批分级**使用（§16.2）—— 脱壳是高危面，手机批准前必须二次确认。
+   * 不参与弹窗渲染（警告文案已在 `hint` 里），故不影响既有 UI。
+   */
+  sandboxBypass?: boolean
 }
+
+/** 一次交互的最终归宿（`interactionSettled` 的载荷） */
+export type InteractionOutcome = 'allow' | 'reject' | 'shelve'
 
 type ToolInteractEvents = {
   // user_choice
-  showChoice: (
-    sessionId: string,
-    question: string,
-    options: string[],
-    multi: boolean,
-    toolCallId: string,
-  ) => void
-  resolve: (value: ToolResult) => void
-  reject: (reason: string) => void
+  showChoice: (payload: ChoiceRequest) => void
+  resolve: (interactionId: string, value: ToolResult) => void
+  reject: (interactionId: string, reason: string) => void
 
   // authorization（授权确认）
   showAuthorization: (payload: AuthorizationRequest) => void
-  commandResolve: (value: string) => void
-  commandReject: (reason: string) => void
+  commandResolve: (interactionId: string, value: string) => void
+  commandReject: (interactionId: string, reason: string) => void
+
+  /** 某个交互已被应答 —— 其他应答端据此收起自己的 UI（幂等） */
+  interactionSettled: (
+    interactionId: string,
+    outcome: InteractionOutcome,
+  ) => void
 
   /**
    * Step 2 ① 终端内确认（纯 UI 事件，组件 → tool-service，不让组件直接摸 service）：

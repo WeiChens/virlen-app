@@ -53,6 +53,24 @@ import { dropTodoDrafts } from '@/ui/store/todoDraftStore'
 import { setRoundBoundaryHandler } from '@/services/rust-engine'
 
 /**
+ * 会话是否正在跑 run（**并发保护的判据**）。
+ *
+ * 桌面端靠按钮禁用规避重复发送，但手机端是第二个操作源 —— 没有这层检查时，
+ * 两端同时发送会起两个引擎 run 去写同一份 messages（消息交错 / 结构损坏），
+ * 见 `docs/phone-control-bridge.md` §7-④。
+ *
+ * 为什么一次同步检查就够：从函数入口到下面 `updateSessionRuntime({working:true})`
+ * 的占位之间**没有任何 await** —— JS 单线程下这一段不可被打断，检查与占位是原子的，
+ * 不存在「两个调用都通过检查」的窗口。
+ */
+function isSessionBusy(sessionId: string): boolean {
+  return sessionRuntimeState.value.sessions[sessionId]?.working === true
+}
+
+/** 会话忙时的统一提示（与既有错误文案同风格：短句、直接说明怎么办） */
+const MSG_SESSION_BUSY = '该会话正在回复中，请等待完成或先取消'
+
+/**
  * 轮次边界处理器（工具回复后、下一次 LLM 请求前）。
  *
  * 落地「AI 回复期间用户已应用」的清单变更并返回消息：
@@ -247,6 +265,12 @@ export async function sendMessage(
     return
   }
 
+  // ===== 并发保护：同一会话同时只能有一个 run（手机端接入后的必备检查）=====
+  if (isSessionBusy(sessionId)) {
+    events?.onError?.(sessionId, MSG_SESSION_BUSY)
+    return
+  }
+
   if (!session.modelId || !session.providerConfigId) {
     events?.onError?.(sessionId, '未选择模型')
     return
@@ -371,6 +395,12 @@ export async function resumePausedRun(
     return
   }
 
+  // ===== 并发保护：同一会话同时只能有一个 run =====
+  if (isSessionBusy(sessionId)) {
+    events?.onError?.(sessionId, MSG_SESSION_BUSY)
+    return
+  }
+
   const snapshot = await getEngine().getRunSnapshot(sessionId)
   if (!snapshot) {
     events?.onError?.(sessionId, '没有可恢复的暂停任务')
@@ -490,6 +520,12 @@ export async function sendMessageWithGoal(
   let session = sessionStore.getSession(sessionId)
   if (!session) {
     events?.onError?.(sessionId, '会话不存在')
+    return
+  }
+
+  // ===== 并发保护：同一会话同时只能有一个 run（与 sendMessage 同一判据）=====
+  if (isSessionBusy(sessionId)) {
+    events?.onError?.(sessionId, MSG_SESSION_BUSY)
     return
   }
 

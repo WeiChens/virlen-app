@@ -1,0 +1,299 @@
+.phone-control {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+  height: 100%;
+
+  &__head h2 {
+    margin: 0 0 6px;
+    font-size: 18px;
+  }
+
+  &__sub {
+    margin: 0;
+    color: var(--text-secondary, #8a8a94);
+    font-size: 13px;
+  }
+
+  &__toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    user-select: none;
+  }
+
+  &__status {
+    font-size: 13px;
+    color: var(--text-secondary, #8a8a94);
+  }
+
+  &__qr {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+
+    canvas {
+      background: #fff;
+      border-radius: 6px;
+      padding: 8px;
+    }
+  }
+
+  &__payload {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 1;
+
+    textarea {
+      width: 100%;
+      font: 12px/1.4 ui-monospace, monospace;
+      resize: vertical;
+    }
+  }
+
+  &__devices {
+    h3 {
+      margin: 0 0 8px;
+      font-size: 14px;
+    }
+  }
+
+  &__empty {
+    color: var(--text-secondary, #8a8a94);
+    font-size: 13px;
+  }
+
+  &__device {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 6px;
+    margin-bottom: 6px;
+  }
+
+  /* 设备名过长时截断，而不是把「移除」按钮挤出可视区 */
+  &__device-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* M6：一台手机两行 —— 名字 / （key · 凭证有效期 · 上次连接） */
+  &__device-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  &__device-meta {
+    font-size: 12px;
+    color: var(--text-secondary, #8a8a94);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* 已绑定手机的说明段（移除的后果 / 凭证期限）—— 纯文字，不抢视觉重心 */
+  &__tip {
+    margin: 6px 0 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-secondary, #8a8a94);
+  }
+
+  /* 二维码倒计时（「还剩 N 秒」）与「到期自动刷新」的口径提示 */
+  &__ticket {
+    font-size: 12px;
+    color: var(--text-secondary, #8a8a94);
+  }
+
+  /* ── ICE 配置折叠区（§31）──
+     平时收起（大多数用户不需要改），展开后与其它区块保持同样的左对齐与间距。 */
+  &__ice {
+    summary {
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    > *:not(summary) {
+      margin-top: 8px;
+    }
+  }
+
+  /* 当前生效的 ICE 来源（"服务端下发（2 个服务器）" 之类） */
+  &__ice-status {
+    font-size: 12px;
+    color: var(--text-secondary, #8a8a94);
+  }
+
+  /* 自定义配置非法：红字提醒，但不阻断连接（会自动降级到服务端默认） */
+  &__ice-error {
+    font-size: 12px;
+    color: var(--color-danger, #e53e3e);
+  }
+
+  &__ice-text {
+    width: 100%;
+    box-sizing: border-box;
+    font: 12px/1.4 ui-monospace, monospace;
+    resize: vertical;
+  }
+
+  &__ice-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  &__audit-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+
+    h3 {
+      margin: 0;
+      font-size: 14px;
+    }
+  }
+
+  &__audit-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 6px;
+  }
+
+  &__audit-item {
+    padding: 6px 10px;
+    font: 12px/1.5 ui-monospace, monospace;
+    border-bottom: 1px solid var(--border-color, #e5e5e5);
+    word-break: break-all;
+
+    &:last-child {
+      border-bottom: none;
+    }
+
+    /* 被拒的操作：需要一眼可辨（审计的价值就在于异常可见） */
+    &--denied {
+      color: #e06c75;
+    }
+
+    /* 审批决策：与普通 RPC 区分（谁批了什么比读了什么更重要） */
+    &--approval {
+      color: #d19a66;
+    }
+  }
+
+  &__confirm {
+    position: fixed;
+    inset: 0;
+    /* 与 theme.css 的 --modal-overlay 同源（原先硬编码，暗色主题下无从调整） */
+    background: var(--modal-overlay, rgba(0, 0, 0, 0.5));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+
+  &__confirm-body {
+    /* ⚠️ 2026-09-29 缺陷修复（§26）：原为 `var(--bg-elevated, #1c1c22)`，但 `--bg-elevated`
+       在全项目**从未定义** → 永远走 fallback：亮色主题下弹窗是近黑底＋近黑字（标题几乎不可读），
+       这正是「配对确认弹窗没有 CSS 样式」的主因。改用与 `shared/Modal` 一致的 --bg-primary，
+       并补上边框与投影（--shadow-md 本就是「弹窗投影」用途的令牌）。 */
+    background: var(--bg-primary, #fff);
+    border: 1px solid var(--border-color, #e5e5e5);
+    box-shadow: var(--shadow-md, 0 8px 24px rgba(0, 0, 0, 0.12));
+    border-radius: 10px;
+    padding: 20px 24px;
+    min-width: 280px;
+    text-align: center;
+
+    h4 {
+      margin: 0 0 8px;
+    }
+
+    p {
+      margin: 0 0 16px;
+      color: var(--text-secondary, #8a8a94);
+      font-size: 13px;
+    }
+  }
+
+  &__confirm-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+  }
+
+  /* ── 按钮 ──
+     ⚠️ 2026-09-29 缺陷修复（§26）：tsx 用的是 `btn` / `btn--primary` / `btn--danger` /
+     `btn--small`，但**本文件与全局样式中都没有这些类的定义**（全项目仅此处在用裸 `btn`；
+     其它页用的是 `btn-cancel` / `btn-secondary` 等各自作用域内的类名）→ 本页按钮一直是
+     浏览器默认外观，配对确认弹窗（「拒绝 / 允许」）里最刺眼。
+     配色一律取 theme.css 的语义令牌，亮 / 暗主题自动跟随。 */
+  .btn {
+    padding: 6px 14px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 6px;
+    background: var(--bg-primary, #fff);
+    color: var(--text-primary, #1a1a1a);
+    font-size: 13px;
+    line-height: 1.4;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+
+    &:hover:not(:disabled) {
+      background: var(--hover-bg, #f0f0f0);
+    }
+
+    /* 此前 Settings 目录各页的自定义按钮普遍缺焦点环，这里不重蹈 */
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 2px;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* 主操作（配对确认的「允许」） */
+    &--primary {
+      border-color: transparent;
+      background: var(--accent-color, #4f46e5);
+      color: var(--btn-primary-color, #fff);
+
+      &:hover:not(:disabled) {
+        background: var(--accent-hover, #4338ca);
+      }
+    }
+
+    /* 危险操作（「移除」已绑定手机）：低强调红字，hover 才铺底 */
+    &--danger {
+      border-color: transparent;
+      background: transparent;
+      color: var(--color-danger, #e53e3e);
+
+      &:hover:not(:disabled) {
+        background: var(--color-danger-bg, #fee2e2);
+      }
+    }
+
+    /* 小号（「清空记录」）—— 必须排在基础款之后才能盖掉 padding */
+    &--small {
+      padding: 3px 10px;
+      font-size: 12px;
+    }
+  }
+}

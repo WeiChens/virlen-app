@@ -8,5 +8,8 @@
 //! ⚠️ 新增命令后必须登记到 `lib.rs` 的 `tauri::generate_handler![...]`（铁律 4）。
 
 pub mod agent;
+pub mod phone_audit;
+pub mod phone_device;
+pub mod phone_pairing;
 pub mod rag;
 pub mod session_db;

@@ -12,6 +12,13 @@
  * 字段与通用授权弹窗（`AuthorizationRequest`）对齐：permName/title/subTitle/desc/hint/risk。
  */
 export interface PendingConfirmInfo {
+  /**
+   * 本次交互的 id（M4 新增）。
+   *
+   * 终端内确认**不弹 modal**，因此不会触发 `showAuthorization` —— 手机控制侧要把它
+   * 登记成一张可应答卡片，就必须能拿到同一个 id（否则无法与 `interactionSettled` 对齐，§16.4）。
+   */
+  interactionId?: string
   /** 权限唯一 key（展示） */
   permName?: string
   /** 权限名称（展示） */
@@ -24,6 +31,8 @@ export interface PendingConfirmInfo {
   hint?: string
   /** 风险等级（配色） */
   risk?: string
+  /** AI 申请不使用沙盒执行（手机控制侧分级用，不影响前端渲染） */
+  sandboxBypass?: boolean
 }
 
 export interface ToolOutput {

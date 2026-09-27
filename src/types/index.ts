@@ -364,6 +364,14 @@ export type AgentEventType =
   | 'stream_event'
   | 'stream_end'
   | 'tool_call'
+  /**
+   * 工具参数生成进度（载荷 `{ index, name, chars }`）。
+   *
+   * 引擎在**累积 tool 参数**期间不发任何其它事件（provider 的分片只进本地累积器），
+   * 长参数（如 `write_file` 写一篇文章）意味着数秒到数十秒的静默 —— 消费方用它把
+   * 「工作中」说清楚（桌面 / 手机 / 托盘）。见 `docs/phone-control-bridge.md` §27。
+   */
+  | 'tool_progress'
   | 'user_interaction'
   | 'error'
   | 'update_message_id'

@@ -12,11 +12,13 @@
  * - resumePausedRun(): 从暂停的 run 快照恢复执行（统一恢复入口）
  * - cancelMessage(): 取消正在处理的请求
  * - deleteSessions(): 删除会话（唯一入口：先断流再删库，防止孤儿消息）
+ * - activateSession(): 进入会话的数据侧准备（组件与手机接口层共用）
  *
  * 注意：暂停/恢复机制基于 Run Snapshot 模型，旧版 shelvedChoiceState 已废弃。
  *
  * 子模块分工：
  * - ./chat/flow.ts          编排：发送 / 恢复 / 取消 / 上下文压缩 / 建会话
+ * - ./chat/session.ts       会话激活（数据侧）：清未读 / 懒加载 / 修复 / 锚点索引
  * - ./chat/event-handler.ts AgentEventType 契约落点 + 收尾（finishWorking）
  * - ./chat/messages.ts      内存消息 CRUD + 按引擎路径落库
  * - ./chat/repair.ts        悬空 tool_calls 修复 + 发送前准备
@@ -54,3 +56,6 @@ export {
   repairSessionIfNeeded,
   checkAndRepairMessageList,
 } from './chat/repair'
+
+/** 会话激活（数据侧）—— 组件与手机接口层共用的唯一入口；并含会话写操作用例（M4） */
+export { activateSession, renameSession, setSessionPinned, MAX_SESSION_TITLE_LEN } from './chat/session'

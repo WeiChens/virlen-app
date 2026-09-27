@@ -15,6 +15,7 @@ import SearchEngineSettings from './search-engine-settings'
 import KnowledgeBaseSettings from './knowledge-base-settings'
 import EditorSettings from './editor-settings'
 import StorageSettings from './storage-settings'
+import PhoneControlSettings from './phone-control-settings'
 import CloseSvg from '@/ui/components/icons/CloseSvg'
 import SettingSvg from '@/ui/components/icons/SettingSvg'
 import SystemSvg from '@/ui/components/icons/SystemSvg'
@@ -26,6 +27,7 @@ import QuickInputSvg from '@/ui/components/icons/QuickInputSvg'
 import SearchSvg from '@/ui/components/icons/SearchSvg'
 import CodeSvg from '@/ui/components/icons/CodeSvg'
 import StorageSvg from '@/ui/components/icons/StorageSvg'
+import PhoneSvg from '@/ui/components/icons/PhoneSvg'
 import settingsEvent from '@/events/settingsEvent'
 import { t } from '@/ui/i18n'
 import './settings-view.scss'
@@ -42,6 +44,7 @@ export type SettingsPage =
   | 'knowledge-base'
   | 'editor'
   | 'storage'
+  | 'phone-control'
 
 export default function SettingsView() {
   const [open, setOpen] = useState(false)
@@ -190,6 +193,12 @@ export default function SettingsView() {
               <span>{t('安全')}</span>
             </button>
             <button
+              className={`nav-item ${page === 'phone-control' ? 'active' : ''}`}
+              onClick={() => setPage('phone-control')}>
+              <PhoneSvg fill="var(--nav-item-color)" />
+              <span>{t('手机控制')}</span>
+            </button>
+            <button
               className={`nav-item ${page === 'skill' ? 'active' : ''}`}
               onClick={() => setPage('skill')}>
               <FolderSvg fill="var(--nav-item-color)" />
@@ -225,6 +234,7 @@ export default function SettingsView() {
           {page === 'general' && <GeneralSettings />}
           {page === 'chat' && <ChatSettings />}
           {page === 'storage' && <StorageSettings />}
+          {page === 'phone-control' && <PhoneControlSettings />}
           {page === 'agent' && <AgentSettings />}
           {page === 'provider' && <ProviderSettings />}
           {page === 'security' && <SecuritySettings />}

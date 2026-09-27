@@ -11,6 +11,11 @@ import { Observer } from 'mobx-react-lite'
 import type { CSSProperties } from 'react'
 import { sessionStore, settingsState } from '@/ui/store'
 import { compressContext } from '@/services/chat-service'
+import {
+  COMPRESS_MIN_RATIO,
+  contextWindowOf,
+  pickContextTokens,
+} from '@/domain/usage/context-occupancy'
 import type { CompressMode } from '@/domain/ports'
 import Tooltip from '@/ui/components/shared/Tooltip'
 import { showToast } from '@/ui/components/shared/Toast'
@@ -20,12 +25,10 @@ import ContextMenu, {
 } from '@/ui/components/shared/ContextMenu'
 import { t } from '@/ui/i18n'
 
-// ==================== 口径与几何常量（提到模块级，不在渲染里重算） ====================
+// ==================== 几何常量（提到模块级，不在渲染里重算） ====================
 
-/** 「100%」对应的上下文窗口缺省值 —— 设置里可改（`SettingsStore.contextWindowTokens`） */
-const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000
-/** 用量低于该比例时，点击只提示「无需压缩」 */
-const COMPRESS_MIN_RATIO = 0.4
+// 「100%」对应的上下文窗口缺省值、占用阈值、占用口径本身均在
+// `@/domain/usage/context-occupancy`（单一真源：手机控制接口层读同一份）
 /** 环形尺寸 / 线宽 / 半径 / 周长 */
 const RING_SIZE = 30
 const RING_STROKE = 4
@@ -62,25 +65,12 @@ function modeLabel(mode: CompressMode) {
 }
 
 /**
- * 取「当前上下文占用」——从后往前，命中即止。
- *
- * 两个口径必须区分（见 compress-context.ts）：
- * - `uiData.contextTokens`：压缩产物的「压缩后上下文大小」（本地估算）；
- * - `usage.totalTokens`：该消息所属那轮调用的真实 token（供应商回报）。
- *
- * AI 摘要消息的 `usage` 是**那次摘要调用**的消耗（prompt 含压缩前的全部历史），
- * 拿它当占用会显示成「压缩后反而更大」，所以带 contextTokens 的消息一律优先。
+ * 取「当前上下文占用」（口径见 `@/domain/usage/context-occupancy`）。
  */
 function findContextTokens(sessionId: string): number | null {
   const msgs = sessionStore.getSession(sessionId)?.messages
   if (!msgs) return null
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    const ctx = msgs[i].uiData?.contextTokens
-    if (typeof ctx === 'number' && ctx > 0) return ctx
-    const usage = msgs[i].usage
-    if (usage) return usage.totalTokens
-  }
-  return null
+  return pickContextTokens(msgs)
 }
 
 interface Props {
@@ -117,9 +107,8 @@ export default function TokenRing({
         const totalTokens = findContextTokens(sessionId)
         if (totalTokens == null) return null
 
-        // 「100%」对应多少来自设置（全局；CLI 也读同一份）——只展示、不在此编辑
-        const contextWindow =
-          settingsState.value.contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS
+        // 「100%」对应多少来自设置（全局；CLI 与手机控制接口层读同一份）——只展示、不在此编辑
+        const contextWindow = contextWindowOf(settingsState.value.contextWindowTokens)
 
         const ratio = Math.min(totalTokens / contextWindow, 1)
         const settingMode = settingsState.value.contextCompressMode ?? 'ai'

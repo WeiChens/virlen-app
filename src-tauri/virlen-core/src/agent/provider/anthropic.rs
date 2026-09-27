@@ -3,10 +3,13 @@
 //! 移植自 TS `src/infrastructure/provider/anthropic.ts`（铁律 1：双引擎同语义）。
 
 use super::blocks::{anthropic_blocks, process_vision_content, slice_messages, text_of_content};
-use super::sse::read_sse_lines;
+use super::sse::{read_sse_lines, SseItem};
 use super::Provider;
 use super::super::cancellation::CancellationToken;
-use super::super::types::{ChatRequest, Message, StreamEvent, TokenUsage, ToolUseContent};
+use super::super::types::{
+    ChatRequest, Message, ProgressThrottle, StreamEvent, TokenUsage, ToolUseContent,
+    TOOL_PROGRESS_INTERVAL_MS,
+};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
@@ -284,10 +287,20 @@ impl Provider for NativeAnthropicProvider {
         let mut tool_uses: std::collections::HashMap<usize, ToolUseContent> = Default::default();
         let mut input_partials: std::collections::HashMap<usize, String> = Default::default();
         let mut tool_fired = false;
+        // 工具参数累积期的进度节流器（见 `StreamEvent::ToolArgsProgress`）
+        let mut progress = ProgressThrottle::new(TOOL_PROGRESS_INTERVAL_MS);
         let mut thinking_buffer = String::new();
         let mut last_usage: Option<TokenUsage> = None;
 
-        let result = read_sse_lines(resp, cancel, &mut |line: String| {
+        let result = read_sse_lines(resp, cancel, &mut |item: SseItem| {
+            let line = match item {
+                SseItem::Idle => {
+                    // 静默期心跳（§27）：让引擎把节流器里扣着的正文尾部刷出去
+                    on_event(StreamEvent::Idle);
+                    return true;
+                }
+                SseItem::Line(l) => l,
+            };
             let trimmed = line.trim();
 
             if let Some(rest) = trimmed.strip_prefix("event:") {
@@ -341,7 +354,20 @@ impl Provider for NativeAnthropicProvider {
                                 }
                                 Some("input_json_delta") => {
                                     let partial = delta.get("partial_json").and_then(Value::as_str).unwrap_or("");
-                                    input_partials.entry(index).or_default().push_str(partial);
+                                    let acc = input_partials.entry(index).or_default();
+                                    acc.push_str(partial);
+                                    // 参数累积期的进度上报（节流）：工具名在 content_block_start 时已知
+                                    if progress.allow(crate::telemetry::now_ms()) {
+                                        let name = tool_uses
+                                            .get(&index)
+                                            .map(|t| t.name.clone())
+                                            .unwrap_or_default();
+                                        on_event(StreamEvent::ToolArgsProgress {
+                                            index,
+                                            name,
+                                            chars: acc.chars().count(),
+                                        });
+                                    }
                                 }
                                 Some("thinking_delta") => {
                                     let thinking = delta.get("thinking").and_then(Value::as_str).unwrap_or("");
