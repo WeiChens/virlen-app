@@ -1,3 +1,19 @@
+# 本仓库是**独立项目**：`virlen-remote` 从 npmjs 安装（见 package.json），不再依赖外层 pnpm 工作区。
+#
+# 这个文件的作用只剩一件：pnpm 11 起，**构建脚本白名单**（allowBuilds）要写在这里
+# （package.json 里的 pnpm.onlyBuiltDependencies 从 pnpm 11 起不再被读取）。
+# 少了它，pnpm install 会跳过 esbuild 等包的构建脚本，vite / vitest 会跑不起来。
+#
+# 若安装时看到「Ignored build scripts: xxx」的提示，把那个包名加到这里并重装。
 allowBuilds:
   '@parcel/watcher': true
   esbuild: true
+minimumReleaseAgeExclude:
+  - virlen-remote@0.1.0
+
+# ⚠️ 在 `virlen-remote` 发布到 npmjs **之前**，`pnpm test` / `pnpm dev` 这类脚本会因为 pnpm 的依赖状态自检
+# 去注册表查询 `virlen-remote@^0.1.0` 而报 ERR_PNPM_FETCH_404（真实依赖还没上架）。
+# 发布前如需在本机跑脚本，两种做法：
+#   1）用 `npx vitest run` / `npx tsc` / `npm run build`（`npm` 不做这项校验）；
+#   2）临时打开下面这行（发布后建议改回注释，保留“依赖过期”提醒）。
+# verify-deps-before-run: false
