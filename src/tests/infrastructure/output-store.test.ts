@@ -154,3 +154,49 @@ describe('toolOutputStore.pendingConfirm（终端内确认）', () => {
     expect(toolOutputStore.get(ID)?.pendingConfirm?.desc).toBe('ls')
   })
 })
+
+/**
+ * `setSandbox` / `register` 对「实际沙盒模式」的读写语义。
+ *
+ * 背景：终端 header-left 要显示本条命令**实际**的运行模式（Rust 判定，运行中经
+ * `agent:tool-env` 事件写入）。两条不变量：
+ *  1. `setSandbox` 替换对象引用（否则 UI 的 `useToolLiveOutput` 不重渲染）；同值幂等。
+ *  2. `register` 替换 entry 时**不得丢掉**已写入的 sandbox。
+ */
+describe('toolOutputStore 沙盒模式（sandbox）', () => {
+  const ID = 'tc-sandbox'
+  beforeEach(() => toolOutputStore.remove(ID))
+  afterEach(() => toolOutputStore.remove(ID))
+
+  it('setSandbox 写入；同值不重复通知，变更才逐次通知', () => {
+    toolOutputStore.setSandbox(ID, 'write_isolation')
+    expect(toolOutputStore.get(ID)?.sandbox).toBe('write_isolation')
+
+    const before = toolOutputStore.get(ID)
+    let notified = 0
+    const unsub = toolOutputStore.subscribe((id) => {
+      if (id === ID) notified++
+    })
+    toolOutputStore.setSandbox(ID, 'write_isolation') // 同值
+    expect(notified).toBe(0)
+    expect(toolOutputStore.get(ID)).toBe(before)
+
+    toolOutputStore.setSandbox(ID, 'readonly') // 变更 → 通知 + 新引用
+    expect(notified).toBe(1)
+    expect(toolOutputStore.get(ID)).not.toBe(before)
+    expect(toolOutputStore.get(ID)?.sandbox).toBe('readonly')
+    unsub()
+  })
+
+  it('register 替换 entry 时保留已写入的 sandbox', () => {
+    toolOutputStore.setSandbox(ID, 'no_sandbox_bypass')
+    toolOutputStore.register(ID, {
+      toolName: 'execute_command',
+      output: '',
+      pty: true,
+    })
+    const entry = toolOutputStore.get(ID)
+    expect(entry?.sandbox).toBe('no_sandbox_bypass') // 保留旧 sandbox
+    expect(entry?.pty).toBe(true) // register 的新字段生效
+  })
+})

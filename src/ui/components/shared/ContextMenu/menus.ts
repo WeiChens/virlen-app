@@ -142,15 +142,17 @@ export function imageMenuItems(
  *
  * 选区优先是刻意的：菜单项叫「复制」，用户已经拖选了半句话时，
  * 期望复制的就是那半句而不是整段（与终端 Ctrl+C 的约定一致）。
+ *
+ * `copyLabel` 用于「复制」语义在别处有更具体称呼的场景（如代码块的「复制代码」）。
  */
 export function textMenuItems(
   getText: () => string,
-  opts: { selectAll?: () => void; allLabel?: string } = {},
+  opts: { selectAll?: () => void; allLabel?: string; copyLabel?: string } = {},
 ): ContextMenuItem[] {
   const items: ContextMenuItem[] = [
     {
       key: 'copy',
-      label: t('复制'),
+      label: opts.copyLabel ?? t('复制'),
       onClick: async () => {
         const selected = window.getSelection?.()?.toString() ?? ''
         const text = selected || getText()

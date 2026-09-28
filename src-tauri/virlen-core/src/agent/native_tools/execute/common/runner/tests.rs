@@ -4,7 +4,7 @@
 // 属 Windows 专属（下方逐个 `#[cfg(target_os = "windows")]` 门禁），避免 Linux CI 误报。
 use crate::agent::native_tools::NativeToolOutcome;
 
-use super::build_command_result;
+use super::{attach_sandbox, build_command_result};
 
 #[cfg(target_os = "windows")]
 use {
@@ -683,4 +683,49 @@ fn test_build_command_result_failure_keeps_ui_data() {
         false,
     );
     assert!(matches!(warned, NativeToolOutcome::Value { .. }));
+}
+
+/// `attach_sandbox` 必须把沙盒模式写进 `uiData.sandbox`（成功与失败两侧都要）。
+#[test]
+fn test_attach_sandbox_sets_ui_field() {
+    let base = build_command_result(
+        "out\n".into(),
+        String::new(),
+        Some(0),
+        false,
+        false,
+        30,
+        "Terminal environment: powershell · write isolation",
+        true,
+        None,
+        false,
+    );
+    match attach_sandbox(base, "write_isolation") {
+        NativeToolOutcome::Value { ui_data, .. } => {
+            let ui = ui_data.expect("ui_data");
+            assert_eq!(ui["sandbox"], serde_json::json!("write_isolation"));
+        }
+        other => panic!("expected Value, got {other:?}"),
+    }
+
+    // 失败侧（退出码 >= 2 → Error）同样要带上 sandbox
+    let failed = build_command_result(
+        "boom\n".into(),
+        String::new(),
+        Some(3),
+        false,
+        false,
+        30,
+        "Terminal environment: powershell · no sandbox (disabled, full permissions)",
+        true,
+        None,
+        false,
+    );
+    match attach_sandbox(failed, "no_sandbox_disabled") {
+        NativeToolOutcome::Error { ui_data, .. } => {
+            let ui = ui_data.expect("uiData");
+            assert_eq!(ui["sandbox"], serde_json::json!("no_sandbox_disabled"));
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
 }

@@ -67,6 +67,18 @@ function isSessionBusy(sessionId: string): boolean {
   return sessionRuntimeState.value.sessions[sessionId]?.working === true
 }
 
+/**
+ * 会话是否处于**活跃执行**（区别于「忙」）。
+ *
+ * 暂停态（`working && paused`）是一条**已挂起等待恢复**的 run —— 它保留 `working=true` 只是为了让
+ * 发送路径继续拦住「暂停期间发新消息」，但它并非正在回复。恢复入口 `resumePausedRun` 恰恰只在
+ * 这种状态下被调用，若沿用 `isSessionBusy` 就会把合法的「继续」一并拦死。
+ */
+function isSessionActivelyWorking(sessionId: string): boolean {
+  const rt = sessionRuntimeState.value.sessions[sessionId]
+  return rt?.working === true && rt.paused !== true
+}
+
 /** 会话忙时的统一提示（与既有错误文案同风格：短句、直接说明怎么办） */
 const MSG_SESSION_BUSY = '该会话正在回复中，请等待完成或先取消'
 
@@ -395,8 +407,10 @@ export async function resumePausedRun(
     return
   }
 
-  // ===== 并发保护：同一会话同时只能有一个 run =====
-  if (isSessionBusy(sessionId)) {
+  // ===== 并发保护：同一会话同时只能有一个**活跃执行**的 run =====
+  // 注意用「活跃执行」而非 `isSessionBusy`：暂停态的 `working` 仍为 true（用于拦住暂停期间发新消息），
+  // 但暂停态正是本函数的合法入口 —— 用「忙」判据会把「继续」按钮误拦（回归缺陷）。
+  if (isSessionActivelyWorking(sessionId)) {
     events?.onError?.(sessionId, MSG_SESSION_BUSY)
     return
   }

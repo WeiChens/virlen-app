@@ -22,6 +22,7 @@ import { textMenuItems } from '@/ui/components/shared/ContextMenu/menus'
 import { NOTIFY_INTERVAL_MS } from '@/infrastructure/tools/output-store'
 import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
 import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
+import { SandboxBadge } from './SandboxBadge'
 
 /**
  * PTY 终端块 —— 用 xterm.js 渲染伪控制台（ConPTY）的原始 VT 流。
@@ -704,6 +705,7 @@ export function XtermTerminalBlock({
   fileLabel,
   note,
   status,
+  sandbox,
   stream,
   running,
   toolCallId,
@@ -720,6 +722,8 @@ export function XtermTerminalBlock({
   /** 输出末尾的附加说明（如脚本执行的 note） */
   note?: string
   status?: ReactNode
+  /** 本次命令**实际**的沙盒模式（header-left 徽标；缺省则不显示） */
+  sandbox?: string
   stream: string
   running: boolean
   toolCallId: string
@@ -758,6 +762,7 @@ export function XtermTerminalBlock({
           <span className="xterm-dot xterm-dot--red" />
           <span className="xterm-dot xterm-dot--yellow" />
           <span className="xterm-dot xterm-dot--green" />
+          <SandboxBadge kind={sandbox} />
           {
             held && <span className='xterm-hint'>{t('已接管：超时已暂停（上限 30 分钟）')}</span>
           }

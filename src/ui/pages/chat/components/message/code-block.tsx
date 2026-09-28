@@ -23,13 +23,19 @@ import { observer } from 'mobx-react-lite'
 import CopySvg from '@/ui/components/icons/CopySvg'
 import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
 import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
-import CodePreview from '@/ui/components/code-preview/CodePreview'
+import CodePreview, {
+  type CodePreviewApi,
+} from '@/ui/components/code-preview/CodePreview'
 import './code-block.scss'
 import { openPath } from '@tauri-apps/plugin-opener'
 import { resolve } from '@tauri-apps/api/path'
 import { chatState, sessionStore, settingsState } from '@/ui/store'
 import { t } from '@/ui/i18n'
 import { useAutoCenter } from '@/ui/hooks/useAutoCenter'
+import ContextMenu, {
+  useContextMenu,
+} from '@/ui/components/shared/ContextMenu'
+import { textMenuItems } from '@/ui/components/shared/ContextMenu/menus'
 
 // ==================== 工具函数 ====================
 
@@ -353,12 +359,16 @@ function MonacoCodeView({
   fontSize,
   showLineNumbers,
   startLineNumber,
+  onSelectionChange,
+  onApiReady,
 }: {
   language?: string
   code: string
   fontSize?: number
   showLineNumbers?: boolean
   startLineNumber?: number
+  onSelectionChange?: (selectedText: string) => void
+  onApiReady?: (api: CodePreviewApi | null) => void
 }) {
   const fontPx = resolveCodeFontPx(fontSize)
   const lineH = Math.max(16, Math.round(fontPx * 1.5))
@@ -374,6 +384,8 @@ function MonacoCodeView({
       showLineNumbers={showLineNumbers}
       startLineNumber={startLineNumber}
       fontSize={fontPx}
+      onSelectionChange={onSelectionChange}
+      onApiReady={onApiReady}
     />
   )
 }
@@ -463,6 +475,37 @@ function CodeBlock({
   // React 就会抛 #300「Rendered fewer hooks than expected. This may be caused by an
   // accidental early return statement.」（行内路径 autoCenter=false，effect 自身不做任何事）
   const rootRef = useAutoCenter(autoCenter)
+  /**
+   * 代码块自己的右键菜单。
+   *
+   * 必要性：代码块常嵌在消息气泡（`.message-body`）里，而气泡本身也有右键菜单
+   * （复制 / 引用 / 编辑 / 删除），其「复制」取的是**整条气泡正文**。
+   * 又因 Monaco 的选区不进 `window.getSelection()`，气泡菜单的「选区优先」拿不到代码选区，
+   * 于是右键代码块再「复制」会复制整条气泡 —— 这里补一个代码块专属菜单拦下事件
+   * （`openAt` 会 preventDefault + stopPropagation，气泡不再接管）。
+   *
+   * 同样必须在行内代码的提前 return 之前调用：行内/块状共用同一 fiber（见下方注释）。
+   */
+  const menu = useContextMenu()
+  /**
+   * Monaco 当前选区文本（由 CodePreview 的 onSelectionChange 上报）。
+   *
+   * 用 ref 而非 state：菜单项在渲染时现算，读取时无需触发重渲染。
+   * Monaco 右键**不改选区**（选中逻辑只响应左/中键，见 monaco mouseHandler），
+   * 因此右键那一刻读取即为用户框选的内容；无选区时为空串（菜单回退到整段代码）。
+   * 流式/超大文件的 <pre> 回退路径不经过 Monaco，此项恒为空串，由 window 选区接管。
+   */
+  const monacoSelectionRef = useRef('')
+  /**
+   * 命令式 API（Monaco 全选）：分「原位 / 全屏」两份。
+   * 全屏时原位那份仍挂载（保列表高度），若不区分，菜单可能把全选作用到看不见的那一份上。
+   * 取用优先全屏，其次原位；未挂载/已卸载时为 null。
+   */
+  const monacoApiNormalRef = useRef<CodePreviewApi | null>(null)
+  const monacoApiFullRef = useRef<CodePreviewApi | null>(null)
+  /** 流式/超大文件的 <pre> 回退节点（全选时用其 DOM 选区），同样分原位 / 全屏 */
+  const preNormalRef = useRef<HTMLPreElement | null>(null)
+  const preFullRef = useRef<HTMLPreElement | null>(null)
 
   // Esc 退出全屏（与 ImagePreview 等浮层保持一致的操作习惯）
   useEffect(() => {
@@ -525,6 +568,30 @@ function CodeBlock({
   }
 
   /**
+   * 全选代码（菜单项）。
+   *
+   * 两条渲染路径分别处理：
+   * - Monaco：走命令式 API（`setSelection(fullRange)`），选区会经 onSelectionChange 上报，
+   *   紧接着的「复制代码」才能拿到；
+   * - <pre> 回退：用 DOM Range 选中节点内容（与深思考「全选」同法）。
+   * 优先取全屏那份（若开着全屏）。
+   */
+  function selectAllCode() {
+    const api = monacoApiFullRef.current ?? monacoApiNormalRef.current
+    if (api) {
+      api.selectAll()
+      return
+    }
+    const el = preFullRef.current ?? preNormalRef.current
+    if (!el) return
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+  }
+
+  /**
    * 渲染代码块本体。
    *
    * `isFull` 时用于全屏浮层：不禁 maxHeight/width（改由 CSS 铺满可用区域），
@@ -539,7 +606,8 @@ function CodeBlock({
           maxHeight: !isFull && maxHeight ? maxHeight : undefined,
           width: !isFull && width ? width : undefined,
           overflow: isFull || maxHeight ? 'auto' : 'visible',
-        }}>
+        }}
+        onContextMenu={(e) => menu.openAt(e, undefined)}>
         <div className="code-block-header">
           <div className="code-block-header-info">
             <span className="code-language">{displayLang}</span>
@@ -589,6 +657,10 @@ function CodeBlock({
         {streaming || code.length > LARGE_CODE_LIMIT ? (
           <div className="code-streaming-fallback">
             <pre
+              ref={(el) => {
+                if (isFull) preFullRef.current = el
+                else preNormalRef.current = el
+              }}
               className="code-fallback"
               style={{ fontSize: `${resolveCodeFontPx(fontSize)}px` }}>
               <code>{code}</code>
@@ -601,6 +673,13 @@ function CodeBlock({
             code={code}
             showLineNumbers={showLineNumbers}
             startLineNumber={startLineNumber}
+            onSelectionChange={(text) => {
+              monacoSelectionRef.current = text
+            }}
+            onApiReady={(api) => {
+              if (isFull) monacoApiFullRef.current = api
+              else monacoApiNormalRef.current = api
+            }}
           />
         )}
       </div>
@@ -616,6 +695,17 @@ function CodeBlock({
           <div className="code-block-fullscreen-layer">{renderBlock(true)}</div>,
           document.body,
         )}
+      {/* 代码块右键菜单：复制代码 / 全选（选区优先，无选区则整段）。挂 body，浮层亦可用 */}
+      {menu.state && (
+        <ContextMenu
+          position={menu.state.position}
+          items={textMenuItems(() => monacoSelectionRef.current || code, {
+            copyLabel: t('复制代码'),
+            selectAll: selectAllCode,
+          })}
+          onClose={menu.close}
+        />
+      )}
     </>
   )
 }

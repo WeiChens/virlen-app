@@ -12,7 +12,10 @@ use super::super::registry::{
     Terminator,
 };
 use super::sandbox::run_command_sandboxed;
-use super::{build_command_result, sandbox_mode, SandboxMode};
+use super::{
+    attach_sandbox, build_command_result, emit_sandbox_env, sandbox_mode, SandboxBypass,
+    SandboxMode,
+};
 
 /// 匿名管道运行器（改造前的实现）。
 ///
@@ -21,12 +24,13 @@ pub(super) async fn run_command_native_pipes(
     ctx: &NativeToolCtx<'_>,
     cmd_str: &str,
     timeout_secs: i64,
-    bypass_sandbox: bool,
+    bypass: SandboxBypass,
 ) -> Result<NativeToolOutcome, String> {
     use tokio::io::AsyncReadExt;
     use tokio::process::Command;
     use tokio::time::sleep;
 
+    let bypass_sandbox = bypass.is_bypass();
     let platform = std::env::consts::OS;
     let is_win = platform == "windows";
 
@@ -44,6 +48,23 @@ pub(super) async fn run_command_native_pipes(
             }
         }
     }
+
+    // 走到这里 = 裸跑（无沙盒）：本次实际模式（UI 徽标用）+ 运行中即时下发。
+    // ⚠️ 与下方 env_note 的判定同源同序，改动需两侧同步。
+    let sandbox_kind = if bypass_sandbox {
+        if matches!(bypass, SandboxBypass::Rule) {
+            "no_sandbox_rule"
+        } else {
+            "no_sandbox_bypass"
+        }
+    } else if sandbox_mode(ctx) == SandboxMode::Off {
+        "no_sandbox_disabled"
+    } else if sandbox_degraded {
+        "no_sandbox_degraded"
+    } else {
+        "no_sandbox"
+    };
+    emit_sandbox_env(ctx, sandbox_kind);
 
     let (shell, args): (&str, Vec<String>) = if is_win {
         // Windows 统一走 Windows PowerShell 5.1（powershell.exe），不再混用 cmd：
@@ -301,7 +322,11 @@ pub(super) async fn run_command_native_pipes(
 
     let env_note = {
         let mode = if bypass_sandbox {
-            "no sandbox (bypass approved by the user, full permissions)"
+            if matches!(bypass, SandboxBypass::Rule) {
+                "no sandbox (matched ignore rule, full permissions)"
+            } else {
+                "no sandbox (bypass approved by the user, full permissions)"
+            }
         } else if sandbox_mode(ctx) == SandboxMode::Off {
             "no sandbox (disabled, full permissions)"
         } else if sandbox_degraded {
@@ -312,16 +337,19 @@ pub(super) async fn run_command_native_pipes(
         format!("Terminal environment: {shell} · {mode}")
     };
 
-    Ok(build_command_result(
-        stdout,
-        stderr,
-        exit_code,
-        killed_by_user,
-        killed_by_timeout,
-        timeout_secs,
-        &env_note,
-        false, // 管道路径：stdout/stderr 分流，不是 PTY
-        None,  // 管道路径无 PTY 会话 → 无干预摘要
-        false,
+    Ok(attach_sandbox(
+        build_command_result(
+            stdout,
+            stderr,
+            exit_code,
+            killed_by_user,
+            killed_by_timeout,
+            timeout_secs,
+            &env_note,
+            false, // 管道路径：stdout/stderr 分流，不是 PTY
+            None,  // 管道路径无 PTY 会话 → 无干预摘要
+            false,
+        ),
+        sandbox_kind,
     ))
 }

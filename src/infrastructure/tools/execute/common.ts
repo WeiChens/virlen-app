@@ -646,6 +646,7 @@ async function tryRunCommandNativePty(
   toolName: string,
   skillsDir: string,
   bypassSandbox: boolean,
+  bypassByRule: boolean,
 ): Promise<ToolResult | null> {
   // 仅 Windows 桌面端有 ConPTY；其他平台 / 浏览器 dev 继续走 plugin-shell。
   if (platformSnapshot() !== 'windows' || !isTauriEnv()) return null
@@ -653,8 +654,13 @@ async function tryRunCommandNativePty(
   const { toolCallId, sessionId, abortSignal } = ctx
 
   // 流式输出 → toolOutputStore（与 Rust 引擎路径的 agent:tool-output 监听等价）
-  const channel = new Channel<{ chunk?: string }>()
+  const channel = new Channel<{ chunk?: string; sandbox?: string }>()
   channel.onmessage = (payload) => {
+    // `agent:tool-env`：命令开始执行时下发的实际沙盒模式（运行中徽标）
+    if (payload?.sandbox) {
+      toolOutputStore.setSandbox(toolCallId, payload.sandbox)
+      return
+    }
     const chunk = payload?.chunk ?? ''
     if (chunk) toolOutputStore.append(toolCallId, chunk)
   }
@@ -693,6 +699,7 @@ async function tryRunCommandNativePty(
         },
         timeoutSecs: Math.min(300, Math.max(1, Math.round(timeoutMs / 1000))),
         bypassSandbox,
+        bypassByRule,
         onOutput: channel,
       },
     )
@@ -725,7 +732,7 @@ export async function runCommand(
   timeoutMs: number,
   ctx: ToolContext,
   toolName: string = 'execute_command',
-  opts?: { bypassSandbox?: boolean },
+  opts?: { bypassSandbox?: boolean; bypassByRule?: boolean },
 ): Promise<ToolResult> {
   const platform = await detectPlatform()
   const isWin = platform === 'windows'
@@ -745,6 +752,7 @@ export async function runCommand(
     toolName,
     skillsDir,
     opts?.bypassSandbox ?? false,
+    opts?.bypassByRule ?? false,
   )
   if (native) return native
 

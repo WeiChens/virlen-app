@@ -25,13 +25,16 @@ use super::super::registry::{
 };
 use super::pipes::run_command_native_pipes;
 use super::sandbox::prepare_sandbox_session;
-use super::{build_command_result, pty_hold_max, sandbox_mode, SandboxMode, PAGER_DISABLED, TICK};
+use super::{
+    attach_sandbox, build_command_result, emit_sandbox_env, pty_hold_max, sandbox_mode,
+    SandboxBypass, SandboxMode, PAGER_DISABLED, TICK,
+};
 
 pub(super) async fn run_command_native_pty(
     ctx: &NativeToolCtx<'_>,
     cmd_str: &str,
     timeout_secs: i64,
-    bypass_sandbox: bool,
+    bypass: SandboxBypass,
 ) -> Result<NativeToolOutcome, String> {
     use crate::sandbox::pty::{
         create_bare_process_pty, current_env, PseudoConsole, DEFAULT_COLS, DEFAULT_ROWS,
@@ -39,6 +42,8 @@ pub(super) async fn run_command_native_pty(
     };
     use std::io::Read;
     use tokio::sync::mpsc;
+
+    let bypass_sandbox = bypass.is_bypass();
 
     // 1) 伪控制台。建不起来就降级回匿名管道（保留改造前的实现作兜底）。
     //
@@ -52,7 +57,7 @@ pub(super) async fn run_command_native_pty(
         Ok(p) => p,
         Err(e) => {
             eprintln!("[pty] CreatePseudoConsole unavailable, degraded to pipes: {e}");
-            return run_command_native_pipes(ctx, cmd_str, timeout_secs, bypass_sandbox).await;
+            return run_command_native_pipes(ctx, cmd_str, timeout_secs, bypass).await;
         }
     };
 
@@ -162,6 +167,29 @@ pub(super) async fn run_command_native_pty(
     let child = Arc::new(child);
     // 受限令牌只在 spawn 时用得上，尽早释放（与管道路径一致）。
     drop(session.take());
+
+    // 本次实际沙盒模式：结构化下发（UI 徽标）+ 运行中即时事件。
+    // ⚠️ 与函数末尾 env_note 的判定**同源同序**，任何一侧改动都要同步另一侧。
+    let sandbox_kind = if ran_sandboxed {
+        if readonly_mode {
+            "readonly"
+        } else {
+            "write_isolation"
+        }
+    } else if sandbox_degraded {
+        "no_sandbox_degraded"
+    } else if bypass_sandbox {
+        if matches!(bypass, SandboxBypass::Rule) {
+            "no_sandbox_rule"
+        } else {
+            "no_sandbox_bypass"
+        }
+    } else if sandbox_mode(ctx) == SandboxMode::Off {
+        "no_sandbox_disabled"
+    } else {
+        "no_sandbox"
+    };
+    emit_sandbox_env(ctx, sandbox_kind);
 
     // 4) 注册「运行中命令」（前端终止按钮）与「PTY 会话」（前端插键盘）
     let child_for_kill = child.clone();
@@ -390,24 +418,31 @@ pub(super) async fn run_command_native_pty(
     } else if sandbox_degraded {
         format!("Terminal environment: {shell} · no sandbox (unavailable, downgraded, full permissions)")
     } else if bypass_sandbox {
-        format!("Terminal environment: {shell} · no sandbox (bypass approved by the user, full permissions)")
+        if matches!(bypass, SandboxBypass::Rule) {
+            format!("Terminal environment: {shell} · no sandbox (matched ignore rule, full permissions)")
+        } else {
+            format!("Terminal environment: {shell} · no sandbox (bypass approved by the user, full permissions)")
+        }
     } else if sandbox_mode(ctx) == SandboxMode::Off {
         format!("Terminal environment: {shell} · no sandbox (disabled, full permissions)")
     } else {
         format!("Terminal environment: {shell} · no sandbox (full permissions)")
     };
 
-    Ok(build_command_result(
-        stdout,
-        // PTY 只有一条输出流：stderr 已合并进 stdout，因此 stderr 恒为空。
-        String::new(),
-        exit_code,
-        killed_by_user,
-        killed_by_timeout,
-        timeout_secs,
-        &env_note,
-        true,
-        Some(&interventions),
-        hold_timed_out,
+    Ok(attach_sandbox(
+        build_command_result(
+            stdout,
+            // PTY 只有一条输出流：stderr 已合并进 stdout，因此 stderr 恒为空。
+            String::new(),
+            exit_code,
+            killed_by_user,
+            killed_by_timeout,
+            timeout_secs,
+            &env_note,
+            true,
+            Some(&interventions),
+            hold_timed_out,
+        ),
+        sandbox_kind,
     ))
 }

@@ -113,12 +113,34 @@ pub(crate) fn pty_available() -> bool {
 /// 受限令牌会使那次 spawn 报 EPERM（根因见 AGENTS §11.2）。
 ///
 /// `pub(crate)`：除工具层外，TS 引擎路径经 `pty_run_command` 也复用本运行器（§7 #14）。
+/// 脱壳（不使用沙盒）的**原因** —— 决定 UI 徽标与模型侧 `env_note` 的措辞。
+///
+/// 为什么不复用 `bool`：命中「忽略沙盒命令」规则 与 AI 显式申请 `sandbox:"off"` 是
+/// **两种不同的授权来源**，UI 需据实区分（前者是用户预授权，后者是本轮审批）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SandboxBypass {
+    /// 不脱壳（走高隔离沙盒）
+    None,
+    /// AI 显式申请 `sandbox:"off"`（本轮已获用户审批）
+    Requested,
+    /// 命中「忽略沙盒命令」规则（用户预先授权，见设置 → 安全）
+    Rule,
+}
+
+impl SandboxBypass {
+    /// 是否需要跳过沙盒（两种脱壳来源任一）。
+    pub(crate) fn is_bypass(self) -> bool {
+        !matches!(self, SandboxBypass::None)
+    }
+}
+
 pub(crate) async fn run_command_native(
     ctx: &NativeToolCtx<'_>,
     cmd_str: &str,
     timeout_secs: i64,
-    bypass_sandbox: bool,
+    bypass: SandboxBypass,
 ) -> Result<NativeToolOutcome, String> {
+    let bypass_sandbox = bypass.is_bypass();
     // 只读模式的最后一道闸：禁止绕过沙盒（覆盖所有调用路径，含 TS 引擎入口 pty_run_command）。
     // 工具层在审批之前已做同样判定（避免「弹窗批准后又被拒」），这里兜底。
     if bypass_sandbox && sandbox_mode(ctx) == SandboxMode::Readonly {
@@ -129,11 +151,11 @@ pub(crate) async fn run_command_native(
     }
     #[cfg(target_os = "windows")]
     {
-        return pty::run_command_native_pty(ctx, cmd_str, timeout_secs, bypass_sandbox).await;
+        return pty::run_command_native_pty(ctx, cmd_str, timeout_secs, bypass).await;
     }
     #[cfg(not(target_os = "windows"))]
     {
-        pipes::run_command_native_pipes(ctx, cmd_str, timeout_secs, bypass_sandbox).await
+        pipes::run_command_native_pipes(ctx, cmd_str, timeout_secs, bypass).await
     }
 }
 
@@ -247,6 +269,48 @@ pub(super) fn build_command_result(
         content: out,
         ui_data: Some(ui),
     }
+}
+
+/// 把本次命令**实际**的沙盒模式以结构化字段写入结果的 `uiData.sandbox`。
+///
+/// 与 `env_note`（给模型看的人类可读首行）互补：`sandbox` 给 UI 看，语言无关、稳定。
+/// 稳定取值（前端据此映射徽标文案）：
+/// - `write_isolation` —— 沙盒写隔离（仅工作目录 / 白名单根可写）
+/// - `readonly` —— 沙盒只读
+/// - `no_sandbox_bypass` —— 无沙盒（用户批准脱壳：`sandbox:"off"` 或命中规则）
+/// - `no_sandbox_disabled` —— 无沙盒（设置里已关闭）
+/// - `no_sandbox_degraded` —— 无沙盒（沙盒不可用，已降级）
+/// - `no_sandbox` —— 无沙盒（其它）
+///
+/// 交互 / 暂存类结果无 `uiData`，原样返回；`uiData` 理论上恒为 `Some`（见构建处），
+/// 防御性地按需新建 `{}`。
+pub(super) fn attach_sandbox(mut outcome: NativeToolOutcome, sandbox: &str) -> NativeToolOutcome {
+    let ui = match &mut outcome {
+        NativeToolOutcome::Value { ui_data, .. } | NativeToolOutcome::Error { ui_data, .. } => {
+            ui_data
+        }
+        _ => return outcome,
+    };
+    let value = ui.get_or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if let Value::Object(map) = value {
+        map.insert("sandbox".into(), Value::String(sandbox.to_string()));
+    }
+    outcome
+}
+
+/// 命令开始执行时，向 UI 下发本条命令的沙盒模式（原始事件 `agent:tool-env`）。
+///
+/// 「运行中」阶段尚无 `uiData`（结果要等结束才组装），但用户需要**立刻**知道终端以何种
+/// 沙盒模式运行，故单开一个原始事件（与 `agent:tool-output` 同层，不进 `AgentEventType`）。
+pub(super) fn emit_sandbox_env(ctx: &NativeToolCtx<'_>, sandbox: &str) {
+    ctx.sink.emit_raw(
+        "agent:tool-env",
+        json!({
+            "sessionId": ctx.session_id,
+            "toolCallId": ctx.tool_call_id,
+            "sandbox": sandbox,
+        }),
+    );
 }
 
 /// 终端沙盒运行模式。

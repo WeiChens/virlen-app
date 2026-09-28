@@ -174,6 +174,7 @@ pub async fn pty_run_command(
     security: types::NativeToolSecurity,
     timeout_secs: i64,
     bypass_sandbox: bool,
+    bypass_by_rule: bool,
     on_output: tauri::ipc::Channel<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
     let sink = ChannelEventSink { channel: on_output };
@@ -185,6 +186,7 @@ pub async fn pty_run_command(
         &security,
         timeout_secs,
         bypass_sandbox,
+        bypass_by_rule,
     )
     .await?;
     match outcome {
@@ -216,7 +218,9 @@ struct ChannelEventSink {
 impl event_sink::EventSink for ChannelEventSink {
     fn emit_agent_event(&self, _session_id: &str, _event: &types::AgentEvent) {}
     fn emit_raw(&self, event_name: &str, payload: serde_json::Value) {
-        if event_name == "agent:tool-output" {
+        // 实时输出（`agent:tool-output`）与沙盒模式（`agent:tool-env`）都要送到发起方：
+        // 后者让 JS 回退路径的终端块在「运行中」也能显示沙盒徽标。其余事件忽略。
+        if event_name == "agent:tool-output" || event_name == "agent:tool-env" {
             let _ = self.channel.send(payload);
         }
     }

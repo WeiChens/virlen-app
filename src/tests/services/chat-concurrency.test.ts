@@ -104,6 +104,17 @@ describe('会话并发保护（E_BUSY）', () => {
     expect(goalErrors).toEqual([BUSY_MSG])
   })
 
+  it('暂停态（working+paused）不是「忙」：「继续」能进入恢复流程', async () => {
+    // 回归缺陷：resumePausedRun 曾复用 isSessionBusy（只看 working），
+    // 而暂停态的 working 仍为 true → 点「继续」必被误拦。此用例锁死该行为。
+    const id = seed()
+    updateSessionRuntime(id, { working: true, paused: true })
+    const errors: string[] = []
+    await resumePausedRun(id, { onError: (_s, m) => errors.push(m) })
+    // 未被 BUSY_MSG 拦下 → 继续走到「无快照」分支（测试环境无 Tauri 引擎，快照恒为 null）
+    expect(errors).toEqual(['没有可恢复的暂停任务'])
+  })
+
   it('会话不存在时仍报「会话不存在」（先于并发检查）', async () => {
     const errors: string[] = []
     await sendMessage('no-such-session', 'hello', {

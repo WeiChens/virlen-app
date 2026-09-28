@@ -8,8 +8,11 @@
 allowBuilds:
   '@parcel/watcher': true
   esbuild: true
+# 注意：本列表的条目必须是**纯包名**。pnpm 的 lockfile 供应链校验只认纯包名 —— 写成
+# `virlen-remote@0.1.1` 这类「名@版本」对本校验**无效**（实测），会拦住自家刚发布的版本。
+# 本包是我们自己维护的，故整包豁免最小发布时长。
 minimumReleaseAgeExclude:
-  - virlen-remote@0.1.0
+  - virlen-remote
 
 # ⚠️ 在 `virlen-remote` 发布到 npmjs **之前**，`pnpm test` / `pnpm dev` 这类脚本会因为 pnpm 的依赖状态自检
 # 去注册表查询 `virlen-remote@^0.1.0` 而报 ERR_PNPM_FETCH_404（真实依赖还没上架）。

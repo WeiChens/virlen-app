@@ -145,6 +145,7 @@ toolRegistry.register(
         run: () =>
           runCommand(cmdStr, cwd, timeoutMs, ctx, 'execute_command', {
             bypassSandbox,
+            bypassByRule: !!ruleHit,
           }),
       })
 
@@ -169,6 +170,7 @@ toolRegistry.register(
     ctx.write(`> ${cmdStr}\n`)
     return runCommand(cmdStr, cwd, timeoutMs, ctx, 'execute_command', {
       bypassSandbox,
+      bypassByRule: !!ruleHit,
     })
   }) as ToolExecutor,
     t('执行命令'),

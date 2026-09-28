@@ -5,13 +5,13 @@
  * 覆盖 `phoneControlStore`；真机连接状态由服务回调驱动。
  *
  * 视觉结构（自上而下）：开关卡片 → 扫码配对卡片 → 高级（ICE 折叠）→ 已绑定手机 → 操作记录，
- * 最后是被手机配对请求唤起的确认弹窗。细节（配对数据 JSON、ICE 文本）一律收进折叠区，
+ * 最后是被手机配对请求唤起的确认弹窗。细节（配对链接、ICE 文本）一律收进折叠区，
  * 首屏只留「现在能不能连、怎么连」。
  */
 import { useEffect, useRef, useState } from 'react'
 import QRCode from 'qrcode'
 import { observer } from 'mobx-react-lite'
-import { PAIRING_TICKET_TTL_MS, describeGrantRemaining } from 'virlen-remote'
+import { PAIRING_TICKET_TTL_MS, buildPairingUrl, describeGrantRemaining } from 'virlen-remote'
 import { phoneControlStore } from '@/ui/store/phoneControlStore'
 import { DEVICE_NAME_MAX, type PhoneControlStatus } from '@/bridge'
 import Toggle from '@/ui/components/shared/Toggle'
@@ -243,7 +243,7 @@ export default observer(function PhoneControlSettings() {
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || !s.payload) return
-    void QRCode.toCanvas(canvas, JSON.stringify(s.payload), { width: QR_SIZE, margin: 1 })
+    void QRCode.toCanvas(canvas, buildPairingUrl(s.payload), { width: QR_SIZE, margin: 1 })
   }, [s.payload])
 
   // 打开面板时读回磁盘审计（Tauri）；浏览器 harness 下是空操作
@@ -351,14 +351,17 @@ export default observer(function PhoneControlSettings() {
             </span>
           </div>
 
-          {/* 配对载荷是排查用的，不是给人读的 —— 收进折叠区，别占首屏 */}
+          {/*
+            配对链接（`https://virlen.cn/mobile?t=<配对数据>`）—— 既是排查用的，也是「手动输入 / 分享」的复制源。
+            既是链接就能被系统相机 / 微信扫开直接配对，数据本体是 `vrp1:` 混淆串（不是明文 JSON）。
+          */}
           <details className="phone-control__payload">
-            <summary>{t('配对数据（排查用）')}</summary>
+            <summary>{t('配对链接（排查 / 手动输入用）')}</summary>
             <textarea
               readOnly
               rows={5}
               spellCheck={false}
-              value={s.payload ? JSON.stringify(s.payload, null, 2) : ''}
+              value={s.payload ? buildPairingUrl(s.payload) : ''}
             />
           </details>
         </section>

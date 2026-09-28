@@ -23,6 +23,7 @@ import type { OnMount } from '@monaco-editor/react'
 import Editor from '@monaco-editor/react'
 import type * as MonacoNs from 'monaco-editor'
 import type { CSSProperties } from 'react'
+import { useEffect, useRef } from 'react'
 
 // 必须先引入：精简版 monaco + 语言高亮注册 + One Dark 主题
 import '@/monaco/setupMonaco'
@@ -44,6 +45,15 @@ const GUTTER_TO_CONTENT_GAP = 14
 const GUTTER_INNER_PAD = 5
 /** 需要挖掉行号区底色、改由编辑器底色绘制的宽度（px） */
 const GUTTER_BG_CUTOUT = GUTTER_TO_CONTENT_GAP - GUTTER_INNER_PAD
+
+/**
+ * CodePreview 对外暴露的命令式 API（挂载后经 `onApiReady` 下发，卸载时下发 null）。
+ * 仅提供给外层做「全选 → 复制」这类需要操动编辑器的动作。
+ */
+export interface CodePreviewApi {
+  /** 全选编辑器内容（并把焦点移入编辑器，选区会经 onSelectionChange 上报） */
+  selectAll: () => void
+}
 
 export interface CodePreviewProps {
   /** 要展示的代码文本 */
@@ -68,6 +78,21 @@ export interface CodePreviewProps {
   className?: string
   /** 传入扩展名/路径可让 Monaco 推断语言 */
   path?: string
+  /**
+   * 选区文本变化回调（含空串）。
+   *
+   * 为什么需要：Monaco 的选区**不进 `window.getSelection()`**，外层（如 `CodeBlock`
+   * 的右键菜单/复制）想拿到「用户选中的代码」只能靠它上报。
+   * 只读预览：onDidChangeCursorSelection 触发时取 `model.getValueInRange(selection)`。
+   */
+  onSelectionChange?: (selectedText: string) => void
+  /**
+   * 编辑器挂载完毕下发命令式 API（卸载时回调 null）。
+   *
+   * 为什么不用 ref：本组件在聊天里被大量只读预览复用，forwardRef 会扩大改动面；
+   * 用回调下发 API 更轻，且卸载时能顺带清空，避免外层拿到已 dispose 的编辑器。
+   */
+  onApiReady?: (api: CodePreviewApi | null) => void
 }
 
 /** 预览固定选项：只读 + 关闭一切“编辑/输入”能力 */
@@ -163,7 +188,33 @@ export default function CodePreview(props: CodePreviewProps) {
   // 预览固定只读；即使外层误改 props 也会被 updateOptions 兜底
   const handleMount: OnMount = (editor) => {
     editor.updateOptions({ readOnly: true, domReadOnly: true })
+    // 选区变化 → 上报文本（Monaco 选区不入 window.getSelection，外层菜单靠它）
+    editor.onDidChangeCursorSelection(() => {
+      if (!props.onSelectionChange) return
+      const selection = editor.getSelection()
+      const model = editor.getModel()
+      props.onSelectionChange(
+        selection && model ? model.getValueInRange(selection) : '',
+      )
+    })
+    // 下发命令式 API（全选等）——卸载时由下面的 effect 回调 null
+    props.onApiReady?.({
+      selectAll: () => {
+        const model = editor.getModel()
+        if (!model) return
+        editor.setSelection(model.getFullModelRange())
+        editor.focus()
+      },
+    })
   }
+
+  // 卸载时清空 API：避免外层持有一个已 dispose 的编辑器。
+  // 用 ref 取最新的 onApiReady（它在父组件里通常是内联箭头，每次渲染都会变）。
+  const onApiReadyRef = useRef(props.onApiReady)
+  onApiReadyRef.current = props.onApiReady
+  useEffect(() => {
+    return () => onApiReadyRef.current?.(null)
+  }, [])
 
   return (
     <div

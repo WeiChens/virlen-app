@@ -22,6 +22,7 @@ import {
   registerHostHandlers,
   type Endpoint,
   type HostDataSource,
+  type HostEmit,
   type HostRegistration,
   type StreamMode,
 } from 'virlen-remote'
@@ -53,7 +54,7 @@ export { SubscriptionRegistry } from './subscription'
 export { createDesktopHostSource } from './host-source'
 export type { HelloOutcome } from './host-source'
 export { createStoreBridge } from './store-bridge'
-export { PhoneControlService, REJECT_KICK_DELAY_MS } from './phone-control'
+export { PhoneControlService, REJECT_KICK_DELAY_MS, HANDSHAKE_DEADLINE_MS } from './phone-control'
 export type {
   PhoneControlOptions,
   PhoneControlStatus,
@@ -117,6 +118,13 @@ export interface PhoneBridgeOptions {
   requireAuthorization?: boolean
   /** 每次 `host.hello` 的结论 —— 服务据此决定「算不算已连接」（链路通 ≠ 授权通过）。 */
   onHelloResult?: (outcome: HelloOutcome) => void
+  /**
+   * 收到 `host.hello` **请求**的那一刻回调（早于一切 `await`）。
+   *
+   * 服务用它取消「链路 open 后迟迟不握手」的兜底计时器 —— 与 `onHelloResult` 的区别是
+   * 「收到」vs「出结论」，后者会被首次配对的确认弹窗（可能等几十秒）拖后。
+   */
+  onHelloReceived?: () => void
 }
 
 export interface PhoneBridge {
@@ -124,6 +132,17 @@ export interface PhoneBridge {
   readonly pairing: PairingStore
   readonly audit: AuditLog
   readonly interactions: InteractionRegistry
+  /**
+   * 把一条 `HostEvents` 推给手机（与 store / 交互推送**同一条出口**）。
+   *
+   * 为什么暴露它：有些事件的事实**不在 store 里** —— 最典型的是链路通讯类型
+   * （`host.event.connection.changed`）：它只存在于本机 `RTCPeerConnection` 的 ICE 候选对里，
+   * 由持有 PC 的 `PhoneControlService` 算出来。没有这个出口，那个事实就发不出去。
+   *
+   * ⚠️ 走的是 `endpoint.emit`（已含 `requireAuthorization` 出站闸门 + 埋点）：
+   * 未完成 `hello` 的链路**发不出去**，这是有意的。
+   */
+  readonly emit: HostEmit
   dispose(): void
 }
 
@@ -219,6 +238,7 @@ export function startPhoneBridge(endpoint: Endpoint, options: PhoneBridgeOptions
       if (outcome.ok) authorized = true
       options.onHelloResult?.(outcome)
     },
+    onHelloReceived: options.onHelloReceived,
   })
 
   const registration: HostRegistration = registerHostHandlers(
@@ -236,6 +256,7 @@ export function startPhoneBridge(endpoint: Endpoint, options: PhoneBridgeOptions
     pairing,
     audit,
     interactions,
+    emit,
     dispose() {
       interactionHost.dispose()
       storeBridge.dispose()

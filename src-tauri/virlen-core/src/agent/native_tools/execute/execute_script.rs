@@ -11,8 +11,8 @@ use serde_json::{json, Value};
 use super::common::{
     apply_rule_clearance, match_sandbox_ignore_rule, classify_command, command_decision,
     permission_label, resolve_decision, risk_info, run_command_native, sandbox_mode,
-    with_bypass_hint, with_rule_hint, PermissionDecision, SandboxMode, PERM_SANDBOX_SCRIPT,
-    PERM_SCRIPT,
+    with_bypass_hint, with_rule_hint, PermissionDecision, SandboxBypass, SandboxMode,
+    PERM_SANDBOX_SCRIPT, PERM_SCRIPT,
 };
 
 /// 执行脚本工具（原生）— 创建脚本文件并执行，可选执行后立即删除。
@@ -85,6 +85,14 @@ pub(crate) async fn execute_script_tool(
     }
     // 实际是否以「不使用沙盒」方式执行：AI 显式申请 ∪ 命中规则
     let bypass_sandbox = ai_requested_bypass || rule_hit.is_some();
+    // 脱壳原因（供运行器区分「AI 申请」/「命中规则」）
+    let bypass = if rule_hit.is_some() {
+        SandboxBypass::Rule
+    } else if ai_requested_bypass {
+        SandboxBypass::Requested
+    } else {
+        SandboxBypass::None
+    };
 
     // 权限：脚本执行独立门禁（script.execute，默认每次弹窗；与命令风险分类无关）。
     // permissions 表优先，回退 legacy approval_mode（兼容老客户端 / 测试）。
@@ -136,7 +144,7 @@ pub(crate) async fn execute_script_tool(
                 &full_path,
                 &content,
                 end_del_file,
-                bypass_sandbox,
+                bypass,
             )
             .await;
         }
@@ -211,7 +219,7 @@ pub(crate) async fn execute_script_tool(
                     &full_path,
                     &content,
                     end_del_file,
-                    bypass_sandbox,
+                    bypass,
                 )
                 .await;
             }
@@ -260,7 +268,7 @@ async fn finalize_script_run(
     full_path: &str,
     content: &str,
     end_del_file: bool,
-    bypass_sandbox: bool,
+    bypass: SandboxBypass,
 ) -> Result<NativeToolOutcome, String> {
     // 1. 写脚本文件（自动创建父目录）
     let full_path_c = full_path.to_string();
@@ -274,8 +282,8 @@ async fn finalize_script_run(
         Err(e) => return Err(format!("Task join error: {}", e)),
     }
 
-    // 2. 执行命令（bypass_sandbox 来自 sandbox:"off" 申请，已在上方过权限门禁）
-    let outcome = run_command_native(ctx, cmd_str, timeout_secs, bypass_sandbox).await;
+    // 2. 执行命令（bypass 来自 sandbox:"off" 申请 / 命中忽略规则，已在上方过权限门禁）
+    let outcome = run_command_native(ctx, cmd_str, timeout_secs, bypass).await;
 
     // 3. 按需删除脚本（含失败/超时）
     if !end_del_file {

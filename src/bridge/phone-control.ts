@@ -173,6 +173,19 @@ function normalizeBase(url: string): string {
  */
 export const REJECT_KICK_DELAY_MS = 500
 
+/**
+ * 「链路已 `open` 却迟迟没收到 `host.hello`」的兜底截止（毫秒）。
+ *
+ * 为什么需要：授权只发生在 `hello` 里，而**链路可以在同一次会话里被对端透明重建** ——
+ * 手机端只看到 `connecting → open`，不会重跑连接流程，也就不会重发 `hello`。此时电脑端会
+ * 永远停在「正在验证接入的设备」，而手机端还显示「在线」（典型：被移除的旧客户端在静默重连）。
+ *
+ * 取值刻意 > 手机端的 `HELLO_TIMEOUT_MS`（4 秒）：正常手机在链路 open 后立刻发 `hello`，
+ * 收到请求即取消本计时（见 `onHelloReceived`）—— 所以本截止只对「开了链路却不说话」的对端生效；
+ * 首次配对的确认弹窗（可能等几十秒）也因「请求已收到」而不受影响。
+ */
+export const HANDSHAKE_DEADLINE_MS = 8000
+
 export class PhoneControlService {
   /**
    * 配对表（票据 / 已绑定设备）。
@@ -221,12 +234,17 @@ export class PhoneControlService {
   /** 待执行的「踢链」（见 `REJECT_KICK_DELAY_MS`）；连续被拒只留一个定时器。 */
   private kickTimer: ReturnType<typeof setTimeout> | null = null
   /**
+   * 「链路 open 后握手截止」计时器（见 `HANDSHAKE_DEADLINE_MS`）。
+   * 收到 `host.hello` 请求即取消；到点仍未收到 → 踢掉这条链路。
+   */
+  private handshakeTimer: ReturnType<typeof setTimeout> | null = null
+  /**
    * 通讯类型巡检器（链路开着期间定时复查）。
    *
    * 为什么必须巡检而不是只靠事件：所选候选对会在打洞完成后、变网重协商后**变化**，
    * 而 ICE 状态可以一直停在 `completed` —— 那一刻一个事件都不会来（详见 `link-kind.ts`）。
    */
-  private readonly kindWatch = new LinkKindWatcher((kind) => this.options.onLinkKindChange?.(kind))
+  private readonly kindWatch = new LinkKindWatcher((kind) => this.onLinkKind(kind))
 
   constructor(private readonly options: PhoneControlOptions) {
     this.base = normalizeBase(options.signalUrl)
@@ -262,6 +280,47 @@ export class PhoneControlService {
   /** 当前链路的通讯类型（`direct` = P2P 直连 / `relay` = TURN 中继 / `unknown` = 没结论）。 */
   getLinkKind(): LinkKind {
     return this.kindWatch.kind
+  }
+
+  /**
+   * 通讯类型变化 → 桌面设置页 + 手机（`host.event.connection.changed`）。
+   *
+   * 为什么两处都要喂：
+   *  - **桌面设置页**：用户在那台电脑前就能看到「这次是直连还是走中继」；
+   *  - **手机**：协议事件让手机**拿电脑视角交叉校验**本端自己的判定 —— 两端口径已在共享包
+   *    （`virlen-remote` 的 `classifyLinkKind`）收敛，对不上就说明有一端的 stats 读取出了问题。
+   *
+   * ⚠️ 事件的取值域只有 `direct` / `relay`（见协议表）：`unknown` = **没有结论**，
+   * 此时**不发** —— 宁可让手机看不到电脑视角，也不发一个猜测。
+   */
+  private onLinkKind(kind: LinkKind): void {
+    this.options.onLinkKindChange?.(kind)
+    if (kind !== 'direct' && kind !== 'relay') return
+    // 链路已拆时 `bridge` 为 `null`（`unknown` 也在此路径上）—— 不发是正确行为
+    this.bridge?.emit('host.event.connection.changed', { path: kind })
+  }
+
+  /**
+   * 开始「握手截止」计时：链路已 `open`，但还没收到 `host.hello`。
+   *
+   * 到点仍未收到 → 判定这不是一个合法会话（典型：被移除的旧客户端静默重连），踢掉这条链路 ——
+   * 链路真正断开后，手机端才会走自己的重连并重新握手（届时会被 `rejectPeer` 拒掉）。
+   */
+  private armHandshakeDeadline(): void {
+    this.clearHandshakeDeadline()
+    this.handshakeTimer = setTimeout(() => {
+      this.handshakeTimer = null
+      // 已授权 / 已停用都不该再踢（前者是正常通话，后者没有链路）
+      if (this.authorized || this.status === 'disabled') return
+      this.dropLink('handshake-timeout')
+    }, HANDSHAKE_DEADLINE_MS)
+  }
+
+  /** 取消「握手截止」计时（收到 hello / 链路离开 open / 拆链 / 停用）。 */
+  private clearHandshakeDeadline(): void {
+    if (this.handshakeTimer == null) return
+    clearTimeout(this.handshakeTimer)
+    this.handshakeTimer = null
   }
 
   /** 待应答交互注册表（M4）；未启用时为 `null`。 */
@@ -384,6 +443,8 @@ export class PhoneControlService {
       //    能重连。只有它能让「移除」真的生效（详见 `PhoneBridgeOptions.requireAuthorization`）。
       requireAuthorization: true,
       onHelloResult: (outcome) => this.applyHelloOutcome(outcome),
+      // 收到 hello 请求就取消兜底截止（早于确认弹窗的 await，见 `HANDSHAKE_DEADLINE_MS`）
+      onHelloReceived: () => this.clearHandshakeDeadline(),
     })
 
     transport.onStateChange((state) => {
@@ -403,16 +464,28 @@ export class PhoneControlService {
          * 所以这里只承认「有人接入了，正在验证」，等 `applyHelloOutcome` 出结论。
          */
         this.setLinkStatus('verifying')
+        // 兜底：open 之后迟迟不握手（典型：被移除的旧客户端静默重连）→ 限期踢掉
+        this.armHandshakeDeadline()
       } else if (state === 'connecting') {
         // 断了 / 等重连：巡检停、结论作废，别把上一次的「直连」糊在界面上
         this.kindWatch.stop()
         this.authorized = false
+        this.clearHandshakeDeadline()
+        /*
+         * 链路不再 `open` = 那台手机此刻不连着 →「已连接」高亮跟着熄掉。
+         *
+         * ⚠️ 真机缺陷：手机**主动断开**时，RTC 链路回到的是 `connecting`（见 `rtc.ts` 的状态映射：
+         * `disconnected` 与 `dc.onclose` 都映射到它），**不是** `closed`。旧实现只在 `closed` 分支
+         * 清在线标记，于是「状态已是『等待手机连接…』、列表里那一行却还高亮着已连接」。
+         */
+        this.pairing.setActive(null)
         // 传 `''` 而不是省略：省略时 `setStatus` 会因为「状态没变」提前返回，
         // 上一条拒绝原因会赖在胶囊里（`''` 在界面上就是不显示括号）
         this.setLinkStatus('waiting', '')
       } else if (state === 'closed') {
         this.kindWatch.stop()
         this.authorized = false
+        this.clearHandshakeDeadline()
         // 链路关了 = 那台手机不再连着 →「已连接」高亮跟着熄掉
         this.pairing.setActive(null)
         this.setLinkStatus('error', '链路已关闭')
@@ -469,6 +542,7 @@ export class PhoneControlService {
     this.authorized = false
     // 链路都没了，谈不上「直连还是中继」（`stop` 内部会归零并广播 `unknown`）
     this.kindWatch.stop()
+    this.clearHandshakeDeadline()
     // 停了就不该再有「哪台手机连着」的说法
     this.pairing.setActive(null)
   }
@@ -480,6 +554,8 @@ export class PhoneControlService {
    * 被拒则是另一件事 —— 状态进 `rejected`（不是「继续等」），并把这条链路踢掉（见 `rejectPeer`）。
    */
   private applyHelloOutcome(outcome: HelloOutcome): void {
+    // 握手已出结论：无论成败，兜底截止都不该再留着（成败各走各的收尾）
+    this.clearHandshakeDeadline()
     // ⚠️ 用 `=== false` 而不是 `if (!outcome.ok)`：本工程 tsconfig 关了 `strictNullChecks`，
     //    真值判断**收窄不了**联合类型（同一约定见 `host-source.ts` 的 hello）
     if (outcome.ok === false) {

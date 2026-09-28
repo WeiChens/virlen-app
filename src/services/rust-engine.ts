@@ -126,6 +126,17 @@ function ensureBridgeStarted(): Promise<void> {
       }
       toolOutputStore.append(payload.toolCallId, chunk)
     })
+    // 命令开始执行时，Rust 下发本条命令的**实际**沙盒模式（运行中即可在终端 header 显示徽标）。
+    // 完成态以后端权威字段 `uiData.sandbox` 为准（见 TerminalBlock / XtermTerminal）。
+    await listen('agent:tool-env', (e) => {
+      const p = e.payload as {
+        sessionId: string
+        toolCallId: string
+        sandbox: string
+      }
+      if (!p?.toolCallId || !p.sandbox) return
+      toolOutputStore.setSandbox(p.toolCallId, p.sandbox)
+    })
     bridgeStarted = true
   })()
   return bridgeStartPromise

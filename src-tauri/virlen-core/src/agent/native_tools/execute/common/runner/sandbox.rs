@@ -18,7 +18,7 @@ use super::super::registry::{
     kill_process_tree, register_running_command, unregister_running_command, wait_for_kill_request,
     Terminator,
 };
-use super::{build_command_result, sandbox_mode, SandboxMode};
+use super::{attach_sandbox, build_command_result, emit_sandbox_env, sandbox_mode, SandboxMode};
 
 /// 展开路径中的环境变量占位符：%VAR%（Windows）与 ~（Unix）。
 pub(super) fn expand_env_vars(path: &str) -> PathBuf {
@@ -205,6 +205,10 @@ pub(super) async fn run_command_sandboxed(
     let child_for_kill = child.clone();
     let terminator: Option<Terminator> = Some(Arc::new(move || child_for_kill.terminate()));
     let kill_requested = register_running_command(ctx.tool_call_id, pid, terminator);
+
+    // 本函数恒为**沙盒路径**：实际模式即 readonly / write_isolation。
+    let sandbox_kind = if readonly_mode { "readonly" } else { "write_isolation" };
+    emit_sandbox_env(ctx, sandbox_kind);
 
     // 5) 实时输出：管道读端在 spawn_blocking 线程里阻塞 read，经 mpsc 回传
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<(String, String)>();
@@ -393,16 +397,19 @@ pub(super) async fn run_command_sandboxed(
         )
     };
 
-    Ok(build_command_result(
-        stdout,
-        stderr,
-        exit_code,
-        killed_by_user,
-        killed_by_timeout,
-        timeout_secs,
-        &env_note,
-        false, // 管道路径：stdout/stderr 分流，不是 PTY
-        None,  // 管道路径无 PTY 会话 → 无干预摘要
-        false,
+    Ok(attach_sandbox(
+        build_command_result(
+            stdout,
+            stderr,
+            exit_code,
+            killed_by_user,
+            killed_by_timeout,
+            timeout_secs,
+            &env_note,
+            false, // 管道路径：stdout/stderr 分流，不是 PTY
+            None,  // 管道路径无 PTY 会话 → 无干预摘要
+            false,
+        ),
+        sandbox_kind,
     ))
 }

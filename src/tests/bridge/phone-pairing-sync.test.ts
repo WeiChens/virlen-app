@@ -14,10 +14,24 @@
  *  4. 注入配对表时服务不碰落盘与通知（所有权归调用方，防两个所有者互相覆盖）。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Endpoint, createCaller, createMemoryPair, type HelloResult, type HostApi } from 'virlen-remote'
+import { Endpoint, createCaller, createMemoryPair, MemoryTransport, type HelloResult, type HostApi, type TransportState } from 'virlen-remote'
 import { PairingStore, PhoneControlService, type PairingSnapshot, type PhoneControlOptions } from '@/bridge'
 
 const cleanups: Array<() => void> = []
+
+/**
+ * 能模拟「链路回到 `connecting`」的 memory transport。
+ *
+ * 真实 RTC 链路里 `disconnected` / `dc.onclose` 都映射到 `connecting`（不是 `closed`），而
+ * `MemoryTransport` 的公开辅助只有 `open` / `disconnect`(→closed) / `reconnect` ——
+ * 少了这一档，真机上最容易出的那类「手机主动断开」就测不到。`setState` 是私有的，
+ * 这里仅测试内通过 cast 触达（运行时就是一次普通的状态广播）。
+ */
+class StallingTransport extends MemoryTransport {
+  stall(): void {
+    ;(this as unknown as { setState(state: TransportState): void }).setState('connecting')
+  }
+}
 
 afterEach(() => {
   while (cleanups.length) cleanups.pop()!()
@@ -129,6 +143,42 @@ describe('哪台手机现在连着（activeDeviceId）', () => {
     hostT.disconnect()
     // 断开的是「连接」而不是「绑定」：列表还在，只是不再标「已连接」
     expect(pairing.activeDeviceId).toBe(null)
+    expect(pairing.list()).toHaveLength(1)
+  })
+
+  /**
+   * 真机缺陷回归：手机**主动断开**时，RTC 链路回到的是 `connecting`（`rtc.ts`：`disconnected` /
+   * `dc.onclose` 都映射到它），**不是** `closed`。旧实现只在 `closed` 清在线标记 →
+   * 「状态已『等待手机连接…』、列表那一行却还高亮着已连接」。
+   */
+  it('链路回到 connecting（抖动 / 手机主动断开）→ 在线标记也要清掉', async () => {
+    const hostT = new StallingTransport()
+    const mobileT = new MemoryTransport()
+    hostT.peer = mobileT
+    mobileT.peer = hostT
+    hostT.open()
+    mobileT.open()
+
+    const pairing = new PairingStore()
+    const service = new PhoneControlService(
+      baseOptions({ createTransport: () => hostT, pairing, confirmPair: async () => true }),
+    )
+    const mobileEp = new Endpoint({ transport: mobileT })
+    const caller = createCaller<HostApi>(mobileEp)
+    cleanups.push(() => {
+      service.disable()
+      mobileEp.dispose()
+      hostT.close()
+      mobileT.close()
+    })
+    service.enable()
+
+    await hello(caller, service.pairingPayload().ticket)
+    expect(pairing.activeDeviceId).toBe(pairing.list()[0].deviceId)
+
+    hostT.stall()
+    expect(pairing.activeDeviceId).toBe(null)
+    // 断开的是「连接」而不是「绑定」：设备仍在列表里
     expect(pairing.list()).toHaveLength(1)
   })
 

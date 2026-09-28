@@ -267,7 +267,19 @@ export class PairingStore {
 
   /* ───────────────────────── 凭证（长期） ───────────────────────── */
 
-  /** 用票据登记一台手机并**签发凭证**（首次配对路径）。 */
+  /**
+   * 用票据登记一台手机并**签发凭证**（首次配对路径）。
+   *
+   * ⚠️ **同一台手机重复扫码不新增记录**（按 `mobileKey` 归并）：手机每次扫到的都是一张
+   * 新的一次性票据，若每次 `redeem` 都新登记一条，「已绑定手机」列表就会堆出多条一模一样的
+   * 记录。凭证（`token`）本就允许换新 —— **记录只留一条，凭证换成最新的**，授权通过后写回即可。
+   *
+   * 归并口径：
+   *  - 命中已有设备（按 `mobileKey`）→ **复用同一条**（`deviceId` / `name` / `pairedAt` 不变），
+   *    换发一版新 `grant`，并置为当前在线设备；
+   *  - 未命中（新手机，或原记录已被移除）→ 新登记一条；
+   *  - 两种情况都**清掉该 key 的「已移除」墓碑** —— 重新配对成功 = 它不再是「被移除」的。
+   */
   redeemTicket(
     ticket: string,
     options: { mobileKey?: string | null; name?: string; now?: number } = {},
@@ -277,20 +289,32 @@ export class PairingStore {
       throw new Error('配对票据无效或已过期')
     }
     this.tickets.delete(ticket)
+
+    const existing = options.mobileKey ? this.lookupByMobileKey(options.mobileKey) : null
     const grant = issueGrant(now)
-    const device: PairedDevice = {
-      ...grant,
-      deviceId: `dev-${randomToken()}`,
-      mobileKey: options.mobileKey ?? null,
-      name: normalizeDeviceName(options.name) ?? DEFAULT_DEVICE_NAME,
-      pairedAt: now,
-    }
+    const device: PairedDevice = existing
+      ? {
+          ...existing,
+          ...grant, // 换最新凭证；deviceId / name / pairedAt 沿用原记录
+          mobileKey: options.mobileKey ?? existing.mobileKey,
+        }
+      : {
+          ...grant,
+          deviceId: `dev-${randomToken()}`,
+          mobileKey: options.mobileKey ?? null,
+          name: normalizeDeviceName(options.name) ?? DEFAULT_DEVICE_NAME,
+          pairedAt: now,
+        }
+
+    // 换 token 时删掉旧键的反查项，否则 `byToken` 里会残留一条指向同一设备的旧凭证
+    if (existing) this.byToken.delete(existing.token)
     this.index(device)
+    this.clearRevoked(device.mobileKey)
     // 刚兑换票据 = 这台手机此刻就在用（直接写字段，与下面的 notify 合并成一次变更通知）
     this.activeId = device.deviceId
     this.notify()
     track(PHONE_EVENTS.pairTicket, {
-      action: 'redeem',
+      action: existing ? 'redeem-existing' : 'redeem',
       ticket_hash: tokenHash(ticket),
       device_id_hash: tokenHash(device.deviceId),
       tickets: this.tickets.size,
@@ -471,6 +495,13 @@ export class PairingStore {
   isRevoked(mobileKey: string | undefined): boolean {
     if (!mobileKey) return false
     return this.revoked.some((r) => r.mobileKey === mobileKey)
+  }
+
+  /** 清掉某台手机的「已移除」墓碑（重新配对成功后调用）。 */
+  private clearRevoked(mobileKey: string | null): void {
+    if (!mobileKey) return
+    const next = this.revoked.filter((r) => r.mobileKey !== mobileKey)
+    if (next.length !== this.revoked.length) this.revoked = next
   }
 
   list(): PairedDevice[] {

@@ -119,7 +119,7 @@ toolRegistry.register(
           timeoutMs,
           ctx,
           'execute_script',
-          { bypassSandbox },
+          { bypassSandbox, bypassByRule: !!ruleHit },
         )
         if (endDelFile) {
           const note = await deleteScriptFile(fullPath)

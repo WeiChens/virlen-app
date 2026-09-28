@@ -11,7 +11,7 @@ use super::common::{
     apply_rule_clearance, match_sandbox_ignore_rule, classify_command, command_decision,
     permission_for_risk, permission_label, pty_available, resolve_decision, risk_info,
     run_command_native, sandbox_mode, with_bypass_hint, with_rule_hint, PermissionDecision,
-    SandboxMode, PERM_SANDBOX_COMMAND,
+    SandboxBypass, SandboxMode, PERM_SANDBOX_COMMAND,
 };
 
 /// 执行 shell 命令（原生）
@@ -75,6 +75,14 @@ pub(crate) async fn execute_command_tool(
     }
     // 实际是否以「不使用沙盒」方式执行：AI 显式申请 ∪ 命中规则
     let bypass_sandbox = ai_requested_bypass || rule_hit.is_some();
+    // 脱壳原因（供运行器区分「AI 申请」/「命中规则」 —— 决定 UI 徽标与 env_note 措辞）
+    let bypass = if rule_hit.is_some() {
+        SandboxBypass::Rule
+    } else if ai_requested_bypass {
+        SandboxBypass::Requested
+    } else {
+        SandboxBypass::None
+    };
 
     let risk = classify_command(&cmd_str);
     let perm = permission_for_risk(risk);
@@ -200,7 +208,7 @@ pub(crate) async fn execute_command_tool(
                             json!({ "tool_name": "execute_command", "risk": risk, "status": "approved" }),
                         );
                     }
-                    return run_command_native(ctx, &exec_cmd, timeout, bypass_sandbox).await;
+                    return run_command_native(ctx, &exec_cmd, timeout, bypass).await;
                 }
                 // 用户没有放行（既非「批准」也不是「允许」）→ 命令一行都没跑，
                 // 必须按失败回报：否则 tool 消息 is_error=false，工具卡片显示成绿色「成功」。
@@ -218,7 +226,7 @@ pub(crate) async fn execute_command_tool(
             }
         }
     } else {
-        run_command_native(ctx, &cmd_str, timeout, bypass_sandbox).await
+        run_command_native(ctx, &cmd_str, timeout, bypass).await
     }
 }
 

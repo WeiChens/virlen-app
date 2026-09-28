@@ -299,6 +299,7 @@ pub async fn run_command_for_ts_engine(
     security: &NativeToolSecurity,
     timeout_secs: i64,
     bypass_sandbox: bool,
+    bypass_by_rule: bool,
 ) -> Result<NativeToolOutcome, String> {
     // 取消：TS 引擎的「终止」按钮走 `agent_kill_command`（运行中命令注册表），
     // 不依赖这个 token；这里用一个不会被触发的 token 即可
@@ -319,7 +320,14 @@ pub async fn run_command_for_ts_engine(
         host: crate::host::default_host().as_ref(),
         settings: crate::agent::native_tools::noop_settings(),
     };
-    execute::run_command_native(&ctx, command, timeout_secs, bypass_sandbox).await
+    let bypass = if bypass_by_rule {
+        execute::SandboxBypass::Rule
+    } else if bypass_sandbox {
+        execute::SandboxBypass::Requested
+    } else {
+        execute::SandboxBypass::None
+    };
+    execute::run_command_native(&ctx, command, timeout_secs, bypass).await
 }
 
 #[cfg(test)]
@@ -415,6 +423,7 @@ mod tests {
             &sec,
             30,
             false,
+            false,
         )
         .await
         .expect("TS 引擎执行入口不应报错");
@@ -426,6 +435,12 @@ mod tests {
                 assert_eq!(ui.get("exitCode").and_then(|v| v.as_i64()), Some(0), "uiData: {ui}");
                 // Windows → true（ConPTY）；其他平台 → false（管道）。两种情况都得有该标记。
                 assert!(ui.get("pty").is_some(), "uiData 应带 pty 标记: {ui}");
+                // 本次实际沙盒模式（UI 徽标用）—— 裸跑 security（sandbox_mode=off）下应为 "no_sandbox_disabled"。
+                assert_eq!(
+                    ui.get("sandbox").and_then(|v| v.as_str()),
+                    Some("no_sandbox_disabled"),
+                    "uiData 应带 sandbox 标记: {ui}"
+                );
             }
             other => panic!("expected Value, got {other:?}"),
         }

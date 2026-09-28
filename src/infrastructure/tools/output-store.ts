@@ -55,6 +55,14 @@ export interface ToolOutput {
    * 用户提交 / 取消后由 `clearPendingConfirm` 清空。
    */
   pendingConfirm?: PendingConfirmInfo
+  /**
+   * 本次命令**实际**的沙盒模式（Rust 侧判定后下发）。
+   *
+   * 取值：`write_isolation` | `readonly` | `no_sandbox_bypass` | `no_sandbox_disabled` |
+   * `no_sandbox_degraded` | `no_sandbox`。运行中经 `agent:tool-env` 事件写入；
+   * 完成态以后端权威字段 `uiData.sandbox` 为准（本字段仅覆盖运行中阶段）。
+   */
+  sandbox?: string
 }
 
 /**
@@ -85,7 +93,13 @@ class ToolOutputStore {
 
   /** 注册一个 tool 输出状态 */
   register(toolCallId: string, output: ToolOutput) {
-    this.map.set(toolCallId, { ...output })
+    // 保留已由 `agent:tool-env` 写入的 sandbox：register 会替换 entry（清掉先前的
+    // 「> cmd」表头），但沙盒模式是权威信息，不能在替换中丢掉。
+    const prev = this.map.get(toolCallId)
+    const next: ToolOutput = prev?.sandbox
+      ? { ...output, sandbox: prev.sandbox }
+      : { ...output }
+    this.map.set(toolCallId, next)
     this.cancelTrailing(toolCallId)
     this.notify(toolCallId)
   }
@@ -141,6 +155,22 @@ class ToolOutputStore {
     const next = { ...entry }
     delete next.pendingConfirm
     this.map.set(toolCallId, next)
+    this.notify(toolCallId)
+  }
+
+  /**
+   * 写入某命令**实际**的沙盒模式（运行中经 `agent:tool-env` 下发）。
+   *
+   * 与 `setPendingConfirm` 同理：必须替换为新对象，UI 的 `useToolLiveOutput`
+   * 靠对象引用变化触发重渲染；同值幂等（避免无谓重渲染）。
+   */
+  setSandbox(toolCallId: string, sandbox: string) {
+    const existing = this.map.get(toolCallId) ?? {
+      toolName: 'execute_command',
+      output: '',
+    }
+    if (existing.sandbox === sandbox) return
+    this.map.set(toolCallId, { ...existing, sandbox })
     this.notify(toolCallId)
   }
 

@@ -121,6 +121,14 @@ export interface DesktopHostSourceDeps {
    * 「链路已经建好、界面却说还在等待」或反之的状态谎报。
    */
   onHelloResult?: (outcome: HelloOutcome) => void
+  /**
+   * 收到 `host.hello` **请求**的那一刻回调 —— 早于一切 `await`（首次配对的确认弹窗可能让人等几十秒）。
+   *
+   * 用途：电脑端据此**取消「链路已 open 却迟迟不握手」的兜底计时器**（见 `PhoneControlService`）——
+   * 只要对端发起了握手，就不该把它当成「开了链路却不说话的僵尸对端」踢掉；
+   * 与 `onHelloResult` 的区别是「收到」vs「出结论」，前者不能被确认弹窗的等待拖后。
+   */
+  onHelloReceived?: () => void
 }
 
 export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSource {
@@ -137,6 +145,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
     onStreamMode,
     onSubscribe,
     onHelloResult,
+    onHelloReceived,
   } = deps
 
   const auditOp = (method: string, sessionId?: string, detail?: string): void => {
@@ -209,6 +218,8 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
 
   return {
     async hello(params: HelloParams): Promise<HelloResult> {
+      // 先于一切 `await`：取消电脑端的「握手截止」兜底（首次配对可能弹窗等人）
+      onHelloReceived?.()
       const token = params.token
       // 埋点参数摘要（与 `phone.rpc.call` 同一份口径）
       const helloProps = summarizeParams('host.hello', params)

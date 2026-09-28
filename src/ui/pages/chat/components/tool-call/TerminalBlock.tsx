@@ -10,6 +10,7 @@ import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
 import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
 import { XtermTerminalBlock } from './XtermTerminal'
 import { TerminalConfirmBlock } from './TerminalConfirmBlock'
+import { SandboxBadge } from './SandboxBadge'
 import { useAutoCenter } from '@/ui/hooks/useAutoCenter'
 
 /**
@@ -142,6 +143,8 @@ interface TerminalBlockProps {
   segments: TerminalSegment[]
   /** header 右侧状态徽标 */
   status?: ReactNode
+  /** 本次命令**实际**的沙盒模式（header-left 徽标；缺省则不显示） */
+  sandbox?: string
   /** 运行中：输出增长时自动跟随到底部（仅当用户已在底部附近） */
   followBottom?: boolean
   /** 运行中才有：终止回调 */
@@ -156,6 +159,7 @@ export function TerminalBlock({
   note,
   segments,
   status,
+  sandbox,
   followBottom,
   onKill,
   killing,
@@ -203,6 +207,7 @@ export function TerminalBlock({
         className={`execute-command-wrapper${isFull ? ' is-fullscreen' : ''}`}>
         <div className="header">
           <span className="title">{title}</span>
+          <SandboxBadge kind={sandbox} />
           {status}
           <div className="terminal-header-actions">
             <button
@@ -319,6 +324,11 @@ export function TerminalView({
 }) {
   const running = !message
   const { output, entry } = useToolLiveOutput(toolCallId)
+  // 实际沙盒模式：运行中取 `agent:tool-env` 写下的值；完成态以后端权威 `uiData.sandbox` 为准
+  // （`?? entry?.sandbox` 兑底旧代码路径 / 极端时序）。
+  const sandbox = running
+    ? entry?.sandbox
+    : (message?.uiData?.sandbox ?? entry?.sandbox)
   const [killing, setKilling] = useState(false)
   // 「打开即居中」只在用户点开时触发（`expand` 的 false→true）。
   // 不能用 `!running`：运行中的终端即使没展开也会挂载，命令结束时会让列表被拽走。
@@ -396,6 +406,7 @@ export function TerminalView({
           stream={stream}
           running={running}
           toolCallId={toolCallId}
+          sandbox={sandbox}
           status={
             running ? undefined : (
               <TerminalStatus
@@ -419,6 +430,7 @@ export function TerminalView({
         fileLabel={fileLabel}
         note={running ? undefined : displayNote(message?.uiData)}
         segments={segments}
+        sandbox={sandbox}
         status={
           running ? undefined : (
             <TerminalStatus

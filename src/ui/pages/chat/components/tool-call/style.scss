@@ -517,6 +517,26 @@
     }
   }
 
+  /* 沙盒模式徽标（header-left）：显示本条命令**实际**的运行模式（Rust 下发） */
+  .terminal-sandbox-badge {
+    flex-shrink: 0;
+    padding: 0 6px;
+    border-radius: 3px;
+    font-size: var(--font-size-xs);
+    font-weight: 500;
+    line-height: 16px;
+    color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.72));
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    white-space: nowrap;
+
+    &.is-danger {
+      color: #ffd7d7;
+      background: rgba(216, 34, 34, 0.18);
+      border-color: rgba(216, 34, 34, 0.5);
+    }
+  }
+
   /* 内置全屏按钮（与代码块头部的全屏按钮同款，见 message/code-block.scss） */
   .terminal-fullscreen-btn {
     display: flex;

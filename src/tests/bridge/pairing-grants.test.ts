@@ -114,6 +114,59 @@ describe('PairingStore —— 票据', () => {
   })
 })
 
+describe('PairingStore —— 同一台手机重复扫码（按 mobileKey 归并）', () => {
+  it('再次扫码：复用同一条记录（不新增），凭证换成最新的', () => {
+    const store = new PairingStore()
+    const first = store.redeemTicket(store.issueTicket(), { mobileKey: 'mk-1', name: '小米', now: T0 })
+    const second = store.redeemTicket(store.issueTicket(), { mobileKey: 'mk-1', now: T0 + DAY })
+
+    // 记录只有一条；deviceId / name / pairedAt 不变（是同一台手机，不是复制一份）
+    expect(store.list().length).toBe(1)
+    expect(second.deviceId).toBe(first.deviceId)
+    expect(second.name).toBe('小米')
+    expect(second.pairedAt).toBe(T0)
+
+    // 凭证换新：新凭证可用，旧凭证不再可用
+    expect(second.token).not.toBe(first.token)
+    expect(second.token).toMatch(/^gt-/)
+    expect(store.lookup(second.token)?.deviceId).toBe(first.deviceId)
+    expect(store.lookup(first.token)).toBe(null)
+    expect(store.authorize({ token: second.token, mobileKey: 'mk-1', now: T0 + DAY }).ok).toBe(true)
+    expect(store.authorize({ token: first.token, mobileKey: 'mk-1', now: T0 + DAY }).ok).toBe(false)
+
+    // 重复扫码也算「它此刻连着」
+    expect(store.activeDeviceId).toBe(first.deviceId)
+  })
+
+  it('不同 mobileKey：各自一条记录（不误合并）', () => {
+    const store = new PairingStore()
+    store.redeemTicket(store.issueTicket(), { mobileKey: 'mk-a', name: 'A', now: T0 })
+    store.redeemTicket(store.issueTicket(), { mobileKey: 'mk-b', name: 'B', now: T0 })
+    expect(store.list().map((d) => d.mobileKey).sort()).toEqual(['mk-a', 'mk-b'])
+  })
+
+  it('没有 mobileKey（旧手机）：无法归并，各扫各的仍各记一条（保持原行为）', () => {
+    const store = new PairingStore()
+    store.redeemTicket(store.issueTicket(), { name: '旧手机', now: T0 })
+    store.redeemTicket(store.issueTicket(), { name: '旧手机', now: T0 })
+    expect(store.list().length).toBe(2)
+  })
+
+  it('被移除后重新扫码：原记录已删 → 新登记一条，且墓碑被清掉', () => {
+    const store = new PairingStore()
+    const device = store.register('手机', { mobileKey: 'mk-1', now: T0 })
+    store.revoke(device.deviceId, T0)
+    expect(store.isRevoked('mk-1')).toBe(true)
+
+    const again = store.redeemTicket(store.issueTicket(), { mobileKey: 'mk-1', now: T0 + DAY })
+    expect(store.list().length).toBe(1)
+    // 原记录已被移除（不是复用），所以是新 deviceId
+    expect(again.deviceId).not.toBe(device.deviceId)
+    // 重新配对成功 = 不再是「被移除」的
+    expect(store.isRevoked('mk-1')).toBe(false)
+  })
+})
+
 describe('PairingStore —— 撤销与墓碑', () => {
   it('撤销：凭证立即失效，且给手机留一条「你是被移除的」依据', () => {
     const store = new PairingStore()
