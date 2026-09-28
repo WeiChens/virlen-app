@@ -4,18 +4,9 @@
  */
 export default function PhoneSvg({ fill = 'currentColor' }: { fill?: string }) {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      width="16"
-      height="16"
-      fill="none"
-      stroke={fill}
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true">
-      <rect x="6" y="2.5" width="12" height="19" rx="2.5" />
-      <line x1="10" y1="18.5" x2="14" y2="18.5" />
+    <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" p-id="9660" width="200" height="200">
+      <path d="M768 0l-576 0c-35.20512 0-64 28.79488-64 64l0 896c0 35.20512 28.79488 64 64 64l576 0c35.20512 0 64-28.79488 64-64l0-896c0-35.20512-28.79488-64-64-64zM480.01024 977.77664c-27.48416 0-49.78688-22.28224-49.78688-49.78688s22.28224-49.78688 49.78688-49.78688 49.78688 22.28224 49.78688 49.78688-22.28224 49.78688-49.78688 49.78688zM768 832l-576 0 0-704 576 0 0 704z" fill={fill}>
+      </path>
     </svg>
   )
 }

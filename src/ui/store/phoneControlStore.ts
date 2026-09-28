@@ -11,6 +11,27 @@
  *
  * 不并入 `ui/store/index` barrel —— 它 import `@/bridge`，而 `@/bridge` 又依赖 `@/ui/store`，
  * 走 barrel 会形成环。按具体路径引用即可。
+ *
+ * M8 起：本 store **持有配对表**（`pairing`）并自己管落盘与变更订阅。理由是真机缺陷
+ * 「扫码配对通过后『已绑定的手机』不新增」：
+ *  - 列表要**冒泡**：配对表一变就刷（靠 `pairing.onChange`），而不是只在 enable /
+ *    点「允许」的瞬间拉一次 —— 那一刻手机还没兑换票据（hello 是异步的），拉到的必然是旧的；
+ *  - 列表要**随时可见**：未启用时服务根本不存在，而磁盘里可能已经有几台手机。
+ *
+ * M9 起又两件（真机反馈）：
+ *  - **移除正在连接的那台 = 立刻断它的链**：`revokeDevice` 发现目标是当前在线设备时，
+ *    让服务把链路拆掉重开（`PhoneControlService.dropLink`）—— 否则它会继续操作到链路自己断为止；
+ *  - **通讯类型可见**：`direct`（P2P 直连）/ `relay`（TURN 中继）由服务从 ICE 候选对判定后上报，
+ *    本 store 只镜像（`linkKind`），设置页把它显在状态胶囊旁边。
+ *
+ * M10 起（真机反馈「移除后它又连回来」）—— 移除的语义补到完整：
+ *  - 移除会**作废所有未使用的配对票**（`PairingStore.revoke`），所以那台手机上缓存的二维码
+ *    不再有配对权；`revokeDevice` 随之**换一张新码**，屏上的码始终可用；
+ *  - 链路的 **RPC 与推送都过握手闸门**（未通过 `hello` 一律不给），
+ *    详见 `PhoneControlService` ← `PhoneBridgeOptions.requireAuthorization`。
+ *
+ * M12 起：「已绑定的手机」可以**改名**（`renameDevice`）。名字是本机给人看的标签，
+ * 改它不碰凭证 / 不碰链路 —— 详见 `PairingStore.rename`。
  */
 import { action, computed, makeObservable, observable, runInAction } from 'mobx'
 import { invoke } from '@tauri-apps/api/core'
@@ -25,10 +46,13 @@ import {
 } from 'virlen-remote'
 import {
   AuditLog,
+  PairingStore,
   PhoneControlService,
   type AuditEntry,
+  type LinkKind,
   type PairedDevice,
   type PairingPayload,
+  type PairingSnapshot,
   type PhoneControlStatus,
   type PhonePairingPersistence,
 } from '@/bridge'
@@ -77,7 +101,11 @@ function inTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
 
-/** Tauri 环境：把配对表落盘到 `<data_dir>/phone-pairing.json`（Rust 命令）。 */
+/**
+ * Tauri 环境：把配对表落盘到 `<data_dir>/phone-pairing.json`（Rust 命令）。
+ *
+ * 落盘由**本 store** 负责（配对表归它持有），服务不再重复管一份。
+ */
 function buildPersistence(): PhonePairingPersistence | undefined {
   if (!inTauri()) return undefined
   return {
@@ -118,6 +146,15 @@ class PhoneControlStore {
   status: PhoneControlStatus = 'disabled'
   payload: PairingPayload | null = null
   devices: PairedDevice[] = []
+  /** 现在**正连着**本机的那台手机（设备 id；没连接时为 `null`）—— 列表据此高亮。 */
+  activeDeviceId: string | null = null
+  /**
+   * 当前链路的通讯类型（`direct` = P2P 直连 / `relay` = TURN 中继 / `unknown` = 没结论）。
+   *
+   * 与 `status` 正交：`status` 说「连没连上」，它说「怎么连上的」；链路一断就回到 `unknown`
+   * （设置页据此决定收不收起那枚胶囊）。
+   */
+  linkKind: LinkKind = 'unknown'
   pendingPair: PendingPair | null = null
   error: string | null = null
   /** 本机设备身份（异步就绪；就绪前不允许启用服务，否则会用一个临时 key 建房间）。 */
@@ -151,6 +188,14 @@ class PhoneControlStore {
   /** 审计日志（与 bridge **同一实例**，否则设置页读不到 bridge 写下的记录）。 */
   readonly audit: AuditLog
 
+  /**
+   * 配对表（票据 / 已绑定设备）—— 与 `PhoneControlService` **同一实例**。
+   *
+   * 本 store 持有而不是让服务持有，是为了「未启用也能看到已绑定的手机」；
+   * 服务启停 / 改 ICE 重建都换不掉这张表。落盘与变更订阅见 `restorePairing()`。
+   */
+  readonly pairing = new PairingStore()
+
   private service: PhoneControlService | null = null
   private ticketTimer: ReturnType<typeof setInterval> | null = null
 
@@ -161,6 +206,8 @@ class PhoneControlStore {
       status: observable,
       payload: observable.ref,
       devices: observable,
+      activeDeviceId: observable,
+      linkKind: observable,
       pendingPair: observable.ref,
       error: observable,
       identity: observable.ref,
@@ -181,6 +228,7 @@ class PhoneControlStore {
       refreshTicket: action,
       answerPair: action,
       revokeDevice: action,
+      renameDevice: action,
       loadAuditHistory: action,
       clearAudit: action,
       loadIceText: action,
@@ -190,6 +238,44 @@ class PhoneControlStore {
       refreshIce: action,
     })
     void this.initIdentity()
+    void this.restorePairing()
+  }
+
+  /**
+   * 启动即读回配对表，并**订阅后续变更**。
+   *
+   * 订阅必须在构造时就挂好（不能等启用服务）：手机兑换票据（`pairing.redeemTicket`）发生在
+   * 用户点「允许」**之后**的异步链路里，设置页那一刻去拉列表只会拉到空 —— 这正是
+   * 「扫码授权绑定通过连接后，已绑定的手机没有数据新增」的根因。
+   */
+  private async restorePairing(): Promise<void> {
+    const persistence = buildPersistence()
+    // 配对表一变：落盘（旁路，失败不影响本次会话）+ 刷界面
+    this.pairing.onChange = (snap) => {
+      persistence?.save(JSON.stringify(snap))
+      this.syncDevices()
+    }
+    if (!persistence) return
+    try {
+      const raw = await persistence.load()
+      if (raw) {
+        runInAction(() => {
+          this.pairing.restore(JSON.parse(raw) as PairingSnapshot)
+        })
+      }
+    } catch {
+      /* 坏数据 / 读取失败：保持空配对表（下一次变更会覆盖落盘） */
+    }
+    this.syncDevices()
+  }
+
+  /** 把配对表的最新状态搬进可观察字段（设备列表 + 在线标记）。 */
+  private syncDevices(): void {
+    const view = this.pairing.view()
+    runInAction(() => {
+      this.devices = view.devices
+      this.activeDeviceId = view.activeDeviceId
+    })
   }
 
   /** 设备 key 必须在**任何**房间/二维码之前就绪 —— 它是房间号的来源。 */
@@ -274,6 +360,7 @@ class PhoneControlStore {
       this.status = 'disabled'
       this.payload = null
       this.ticketLeftSec = null
+      this.linkKind = 'unknown'
       this.error = null
     }
   }
@@ -414,9 +501,38 @@ class PhoneControlStore {
     this.sync()
   }
 
+  /**
+   * 移除一台已配对手机（**不依赖服务是否启用**：配对表本来就归本 store 持有）。
+   *
+   * ⚠️ 移除的若是**此刻正连着**的那台，光删记录不够：链路不会自己断，它会一直操作到链路
+   * 关闭为止（凭证虽已失效，但已建好的 RPC 通道不看凭证）→ 让服务把这条链路拆掉重开。
+   * 判断用 `pairing.activeDeviceId` 而不是本 store 的镜像字段：配对表才是唯一真源。
+   */
   revokeDevice(deviceId: string): void {
-    this.service?.pairing.revoke(deviceId)
-    this.sync()
+    const connected = this.pairing.activeDeviceId === deviceId
+    // 变更会经 `pairing.onChange` 回到 `syncDevices()`，这里不必再手动同步
+    this.pairing.revoke(deviceId)
+    if (connected) this.service?.dropLink()
+    /*
+     * 票已随移除一并作废（`PairingStore.revoke`）→ 屏幕上那张码已经扫不动了，
+     * 立即换一张新的：被移除的那台手机手上缓存的旧票不再有配对权，而别的手机照常可扫。
+     */
+    if (this.enabled) this.refreshTicket()
+  }
+
+  /**
+   * 给一台已配对手机**改名**（设置页行内编辑的唯一入口）。
+   *
+   * 与「移除」同一口径：**不依赖服务是否启用** —— 配对表归本 store 持有（见类注释 M8 段），
+   * 未启用时也照样改得了名；改名也不碰链路（名字不进授权判定，不会让在连着的那台掉线）。
+   * 变更经 `pairing.onChange` 回到 `syncDevices()`（列表镜像 + 落盘一起刷新），这里不再手动同步。
+   *
+   * @returns 真的改成了 `true`；设备已不在列表里（或名字非法）`false` —— 设置页据此提示，
+   *          而不是静默地什么都不发生
+   */
+  renameDevice(deviceId: string, name: string): boolean {
+    const updated = this.pairing.rename(deviceId, name)
+    return updated !== null
   }
 
   /** 二维码倒计时（1 秒一跳）；到期那一刻**立刻换新码**，屏幕上永远是可用的。 */
@@ -456,7 +572,8 @@ class PhoneControlStore {
       // ICE 由本 store 解析后传入（默认值来自信令服务下发；源码里不再有任何 TURN 凭证）
       iceServers: this.iceServers,
       iceSource: this.iceSource,
-      persistence: buildPersistence(),
+      // 与设置页共用同一张配对表（表归本 store 持有 → 落盘与变更订阅也在本 store，见 restorePairing）
+      pairing: this.pairing,
       // 与设置页共用同一份审计（否则「操作记录」看不到 bridge 写下的条目）
       audit: this.audit,
       // 手机批准高风险操作时提醒电脑前的人（§16.3-2）
@@ -475,18 +592,25 @@ class PhoneControlStore {
           this.error = detail ?? null
         })
       },
+      // 通讯类型（P2P 直连 / TURN 中继）—— 独立于状态：状态说「连没连上」，它说「怎么连上的」
+      onLinkKindChange: (kind) => {
+        runInAction(() => {
+          this.linkKind = kind
+        })
+      },
     })
     this.service = service
     return service
   }
 
+  /** 刷新二维码载荷（服务启停 / 确认配对后调用）；设备列表由 `syncDevices` 负责。 */
   private sync(): void {
     const service = this.service
     if (!service) return
     runInAction(() => {
       this.payload = service.pairingPayload()
-      this.devices = service.pairing.list()
     })
+    this.syncDevices()
   }
 }
 

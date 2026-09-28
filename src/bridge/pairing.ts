@@ -14,7 +14,10 @@
  *   1. 电脑出码（内含一次性票据）→ 手机扫码 → hello 带票据 + 手机 key；
  *   2. 电脑弹窗确认 → **签发凭证**（`grant`）→ 交回手机（`HelloResult.grant`）；
  *   3. 之后手机拿凭证直连，每次成功连接**滑动续期**（`touch`），到 90 天硬上限后必须重新扫码；
- *   4. 电脑端「移除」= 删记录 + 记一条 tombstone → 手机再连将被明确告知「已被移除」（`revoked`）。
+ *   4. 电脑端「移除」= 删记录 + 记一条 tombstone + **作废所有未使用的票** → 手机再连将被明确告知
+ *      「已被移除」（`revoked`）；它手上那张（或截屏里的）二维码也不再有配对权。
+ *   5. 「改名」= 只换一个**本地标签**（`rename`）：名字不进授权判定，于是改名既不重新配对、
+ *      也不影响已连着的那台（手机侧甚至不知道本机给它起了什么名）。
  */
 import {
   GRANT_MAX_LIFETIME_MS,
@@ -37,7 +40,13 @@ export interface PairedDevice extends GrantRecord {
    * `null` = 旧版手机（当时没有这个字段）—— 等它下次带 key 连上时回填（`touch`）。
    */
   mobileKey: string | null
-  /** 手机显示名（默认「Virlen 手机」）。 */
+  /**
+   * 手机显示名 —— 手机自己报的（`host.hello` 的 `mobileName`），用户可在设置页改成任何名字
+   * （`PairingStore.rename`）；两者都没有时用 `DEFAULT_DEVICE_NAME`。
+   *
+   * ⚠️ 名字是**本机给人看的标签**，不参与授权判定（认的是 `token` / `mobileKey`）——
+   * 所以改名不需要重新配对，也不会让正连着的那台掉线。
+   */
   name: string
   /** 首次配对时刻。 */
   pairedAt: number
@@ -68,6 +77,21 @@ export type AuthorizationResult =
 const REVOKED_KEEP = 20
 /** 同时保留的待用票据上限（旧票据不作废，只按 TTL 失效；见 `refreshTicket`）。 */
 const TICKETS_KEEP = 8
+/**
+ * 手机的默认名字：手机在 `host.hello` 里**没报**名字时用（旧版手机 / 故意不报）。
+ *
+ * ⚠️ 三处（兑换票据 / 直接登记 / 旧记录迁移）**必须**共用这一个常量：以前是三份写死的
+ *「Virlen 手机」字面量，改一处漏两处就会让 `rename` 的「名字没变」判断失效。
+ */
+export const DEFAULT_DEVICE_NAME = 'Virlen 手机'
+/**
+ * 设备名长度上限（超出截断）。
+ *
+ * 名字会进列表、审计与埋点（`device_name`），必须有个上界：超长名字会把设置页那一行挤爆，
+ * 也会让埋点包凭空变大。设置页的输入框同用这个上限（`maxLength`），于是「截断」在界面上
+ * 通常不会真的发生 —— 但**真源在本文件**，手改磁盘快照进来的超长名字同样会被截。
+ */
+export const DEVICE_NAME_MAX = 32
 
 export class PairingStore {
   private readonly byToken = new Map<string, PairedDevice>()
@@ -75,8 +99,22 @@ export class PairingStore {
   private readonly byMobileKey = new Map<string, PairedDevice>()
   private readonly tickets = new Map<string, number>() // ticket → issuedAt
   private revoked: Array<{ mobileKey: string; at: number }> = []
+  /**
+   * 当前**正连着**的已配对设备（设置页「已连接」高亮）。
+   *
+   * ⚠️ 这是**瞬时**状态，故意**不进 `snapshot()`**：重启后「谁连着」本来就该从零开始，
+   * 落盘只会把一台早就断开的手机永远标成「已连接」。
+   */
+  private activeId: string | null = null
 
-  /** 变更回调（持久化用）：任何票据 / 设备变更后触发。 */
+  /**
+   * 变更回调：任何票据 / 设备 / 在线标记变更后触发。
+   *
+   * 两件事都挂在这一个信号上（**别再新增第二个回调**）：
+   *  - 持久化落盘（服务内部 / 设置页 store 都这么用）；
+   *  - UI 刷新 —— ⚠️ 这正是「扫码配对后『已绑定的手机』不新增」的缺陷根源：
+   *    没有这个信号，配对表怎么变都不会冒泡到设置页。
+   */
   onChange: ((snapshot: PairingSnapshot) => void) | null = null
 
   /* ───────────────────────── 快照 / 迁移 ───────────────────────── */
@@ -102,6 +140,8 @@ export class PairingStore {
     this.byDeviceId.clear()
     this.byMobileKey.clear()
     this.tickets.clear()
+    // 在线标记不随快照恢复（且可能指向一条已被覆盖掉的记录）→ 一律归零
+    this.activeId = null
     for (const raw of (data.devices ?? []) as Array<Partial<PairedDevice>>) {
       const device = migrateDevice(raw)
       if (!device) continue
@@ -120,6 +160,26 @@ export class PairingStore {
     this.byToken.set(device.token, device)
     this.byDeviceId.set(device.deviceId, device)
     if (device.mobileKey) this.byMobileKey.set(device.mobileKey, device)
+  }
+
+  /* ───────────────────────── 在线标记（瞬时，不落盘） ───────────────────────── */
+
+  /** 现在正连着本机的设备 id（没有连接时为 `null`）。 */
+  get activeDeviceId(): string | null {
+    return this.activeId
+  }
+
+  /**
+   * 标记「哪台手机现在连着」（链路断开 / 停用时传 `null`）。
+   *
+   * 只在**真的变了**的时候通知：链路抖动（close → open 反复）不该反复触发落盘与重渲染。
+   * 设备已被移除 / 不认识时归一成 `null` —— 「已连接」必须指向列表里真实存在的一行。
+   */
+  setActive(deviceId: string | null): void {
+    const next = deviceId && this.byDeviceId.has(deviceId) ? deviceId : null
+    if (this.activeId === next) return
+    this.activeId = next
+    this.notify()
   }
 
   /* ───────────────────────── 票据（一次性） ───────────────────────── */
@@ -222,10 +282,12 @@ export class PairingStore {
       ...grant,
       deviceId: `dev-${randomToken()}`,
       mobileKey: options.mobileKey ?? null,
-      name: options.name?.trim() || 'Virlen 手机',
+      name: normalizeDeviceName(options.name) ?? DEFAULT_DEVICE_NAME,
       pairedAt: now,
     }
     this.index(device)
+    // 刚兑换票据 = 这台手机此刻就在用（直接写字段，与下面的 notify 合并成一次变更通知）
+    this.activeId = device.deviceId
     this.notify()
     track(PHONE_EVENTS.pairTicket, {
       action: 'redeem',
@@ -246,12 +308,41 @@ export class PairingStore {
       ...issueGrant(now),
       deviceId: `dev-${randomToken()}`,
       mobileKey: options.mobileKey ?? null,
-      name,
+      name: normalizeDeviceName(name) ?? DEFAULT_DEVICE_NAME,
       pairedAt: now,
     }
     this.index(device)
     this.notify()
     return device
+  }
+
+  /**
+   * 给一台已配对手机**改名**（设置页行内编辑的唯一入口）。
+   *
+   * 名字是纯本地标注 —— 手机关心的是凭证（`token`），它甚至不知道本机给它起了什么名。
+   * 所以这里刻意**只动 `name`**：`token` / 有效期 / `mobileKey` / `pairedAt` / 在线标记一律不变
+   * （改名不是重新授权，也不会把正连着的那台踢下线）。
+   *
+   * 三条判定：
+   *  - 名字非法（空白 / 非字符串）→ `null` 且**保持原名**。把设备名清成空串会让列表出现一行
+   *    无名记录，比拒绝更难解释；设置页的「保存」按钮同理（空白时禁用）；
+   *  - 名字没变 → 返回当前记录，**不发通知**（一次无意义的落盘 + 全页重渲染不值得，与
+   *    `setActive` 同一取舍）；
+   *  - 设备不存在 → `null`（多半是它刚被移除，调用方据此提示）。
+   *
+   * @returns 改好后的设备；设备不存在或名字非法时 `null`
+   */
+  rename(deviceId: string, name: string): PairedDevice | null {
+    const current = this.byDeviceId.get(deviceId)
+    if (!current) return null
+    const next = normalizeDeviceName(name)
+    if (!next) return null
+    if (next === current.name) return current
+    const updated: PairedDevice = { ...current, name: next }
+    // 三张索引表共用同一个对象引用：改了名字必须**重新登记**，否则按凭证 / key 反查拿到的是旧对象
+    this.index(updated)
+    this.notify()
+    return updated
   }
 
   /** 按凭证串找设备（**不**校验有效期 —— 由 `authorize` 统一判定）。 */
@@ -327,6 +418,8 @@ export class PairingStore {
     this.byToken.set(updated.token, updated)
     this.byDeviceId.set(updated.deviceId, updated)
     if (mobileKey) this.byMobileKey.set(mobileKey, updated)
+    // 握过手 = 它现在就连着（`authorize` 只在成功后调 touch）
+    this.activeId = updated.deviceId
     this.notify()
     return updated
   }
@@ -336,22 +429,40 @@ export class PairingStore {
    *
    * 同时记一条墓碑：手机下次来连时能被明确告知「已被移除」（而不是笼统的「凭证无效」）——
    * 这正是用户要的「移除后点击列表连不上，必须重新扫码」的可解释版本。
+   *
+   * ⚠️ **同时作废所有未使用的配对票**（M10 真机反馈）。
+   *
+   * 为什么「删设备 + 记墓碑」还不够：**票本身是一种「配对权」** —— 任何拿到它的端（只要出示
+   * 就给配）都能换出一台**新**设备。而被移除的那台手机手上正好可能有票：它扫过屏上那张码、
+   * 缓存过配对载荷，断开后自动重试时把票再交一次，就又是一台「已绑定的手机」。
+   * 于是「移除」在用户看来等于没移除（删记录 → 立刻长回来）。
+   *
+   * 票只按 TTL 自然过期（`refreshTicket` 的既定语义），所以这里必须显式全清：
+   * 清掉之后，被移除的那台手机**唯一**的回来方式就只剩「重新扫电脑屏幕上那张新码 + 电脑确认」。
+   * 清票的副作用（扫到旧码的人会拿到 `ticket-expired`）由调用方补齐：
+   * `PhoneControlService` 会在移除后立刻换一张新码，屏上的码始终可用。
    */
   revoke(deviceId: string, now: number = Date.now()): boolean {
     const device = this.byDeviceId.get(deviceId)
     if (!device) return false
     this.byDeviceId.delete(deviceId)
     this.byToken.delete(device.token)
+    // 移除的正是当前连着的那台 → 在线标记同步清掉（否则列表里会留下一个指向空行的「已连接」）
+    if (this.activeId === deviceId) this.activeId = null
     if (device.mobileKey) {
       this.byMobileKey.delete(device.mobileKey)
       this.revoked = [...this.revoked.filter((r) => r.mobileKey !== device.mobileKey), { mobileKey: device.mobileKey, at: now }].slice(
         -REVOKED_KEEP,
       )
     }
+    // 已发出去的票一律不再作数（见上面的说明）；数量只为埋点，不留存原文
+    const droppedTickets = this.tickets.size
+    this.tickets.clear()
     this.notify()
     track(PHONE_EVENTS.pairRevoke, {
       device_id_hash: tokenHash(deviceId),
       remaining: this.byDeviceId.size,
+      tickets_dropped: droppedTickets,
     })
     return true
   }
@@ -364,6 +475,16 @@ export class PairingStore {
 
   list(): PairedDevice[] {
     return [...this.byDeviceId.values()].sort((a, b) => b.pairedAt - a.pairedAt)
+  }
+
+  /**
+   * 列表 + 在线标记（设置页「已绑定的手机」的全部读取面）。
+   *
+   * `activeId` 单独给而不是塞进 `PairedDevice`：它是「这次连接」的事实，不是设备本身的属性，
+   * 落盘的快照里也不该有它。
+   */
+  view(): { devices: PairedDevice[]; activeDeviceId: string | null } {
+    return { devices: this.list(), activeDeviceId: this.activeId }
   }
 
   get size(): number {
@@ -386,13 +507,27 @@ function migrateDevice(raw: Partial<PairedDevice> | null | undefined): PairedDev
   return {
     deviceId: typeof raw.deviceId === 'string' && raw.deviceId ? raw.deviceId : `dev-${randomToken()}`,
     mobileKey: typeof raw.mobileKey === 'string' && raw.mobileKey ? raw.mobileKey : null,
-    name: typeof raw.name === 'string' && raw.name.trim() ? raw.name : 'Virlen 手机',
+    name: normalizeDeviceName(raw.name) ?? DEFAULT_DEVICE_NAME,
     token: raw.token,
     issuedAt,
     expiresAt,
     pairedAt,
     ...(typeof raw.lastSeenAt === 'number' ? { lastSeenAt: raw.lastSeenAt } : {}),
   }
+}
+
+/**
+ * 归一一个设备名：折叠空白（换行 / 制表符都压成空格）+ 去首尾 + 截到 `DEVICE_NAME_MAX`。
+ *
+ * 折叠空白不只是洁癖：名字会进列表的一行、审计正文与埋点，带换行的名字会把那三处都撑歪。
+ *
+ * @returns 可用的名字；**全是空白 / 不是字符串**时 `null`（调用方一律回退到默认名或保持原名）
+ */
+export function normalizeDeviceName(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const oneLine = raw.replace(/\s+/g, ' ').trim()
+  if (!oneLine) return null
+  return oneLine.length > DEVICE_NAME_MAX ? oneLine.slice(0, DEVICE_NAME_MAX) : oneLine
 }
 
 function randomToken(): string {

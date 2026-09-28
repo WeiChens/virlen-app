@@ -21,6 +21,7 @@ import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import * as sass from 'sass'
+import type { PhoneControlStatus } from '@/bridge'
 
 /** 读项目内文件；cwd 不对时给出可读错误（而不是让下游拿到空串后"静默通过"） */
 function readProjectFile(rel: string): string {
@@ -40,6 +41,22 @@ const globalCss = [
   readProjectFile('src/ui/App.css'),
   readProjectFile('src/ui/styles/theme.css'),
 ].join('\n')
+
+/**
+ * 状态胶囊的修饰符清单。
+ *
+ * 写成 `Record<PhoneControlStatus, true>` 而不是普通数组：这样**联合类型新增一个状态、这里忘了补**
+ * （或者多出一个不存在的状态）都是编译错误。配合下面的断言，把「加了状态却忘了样式」变成可发现的失败 ——
+ * tsx 里的 `phone-control__status--${s.status}` 是模板串，静态扫描盖不到它。
+ */
+const STATUS_MODIFIERS: Record<PhoneControlStatus, true> = {
+  disabled: true,
+  waiting: true,
+  verifying: true,
+  connected: true,
+  rejected: true,
+  error: true,
+}
 
 /** 明确豁免：确实无需样式的纯结构类（每条都要写清理由） */
 const ALLOWED_WITHOUT_STYLE = new Set<string>([
@@ -99,6 +116,14 @@ describe('phone-control 设置页 —— 类名与样式定义成对', () => {
       ...new Set([...stripComments(pageScss).matchAll(/var\((--[a-zA-Z][\w-]*)/g)].map((m) => m[1])),
     ]
     expect(usedVars.filter((v) => !definedVars.has(v))).toEqual([])
+  })
+
+  it('每种连接状态都有胶囊样式（防「加了状态却让它裸奔」）', () => {
+    for (const status of Object.keys(STATUS_MODIFIERS)) {
+      expect(pageCss, `缺少 .phone-control__status--${status} 的样式`).toContain(
+        `.phone-control__status--${status}`,
+      )
+    }
   })
 
   it('按钮基础款与三个修饰符都有**本页作用域**的规则（防「按钮裸奔」回归）', () => {

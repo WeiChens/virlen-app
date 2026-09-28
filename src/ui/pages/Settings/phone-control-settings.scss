@@ -1,150 +1,432 @@
+/**
+ * phone-control-settings — 设置 → 手机控制
+ *
+ * 版式：页头（图标 + 标题 + 一句话）→ 开关卡片 → 各功能区卡片（圆角 + --card-bg 面）。
+ * 配色一律取 theme.css 的语义令牌，亮 / 暗主题自动跟随；唯一的硬编码是二维码底板的白底
+ * （扫码识别率优先于主题一致性）。
+ *
+ * ⚠️ 本文件的类名 / 变量与 `src/tests/ui/phone-control-style-contract.test.ts` 成对约束：
+ *  - tsx 里出现的**静态** className 必须在此定义（否则用例失败）；
+ *  - 这里用到的每个 `var(--x)` 都必须已在 theme.css / App.css 里定义（防「幽灵变量」静默降级）；
+ *  - `.phone-control .btn` 及 `--primary` / `--danger` / `--small` 三个修饰符必须保留。
+ */
+
 .phone-control {
-  padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  overflow-y: auto;
   height: 100%;
+  box-sizing: border-box;
+  padding: 20px 24px 28px;
+  overflow-y: auto;
+  color: var(--text-primary, #1a1a1a);
+  font-size: var(--font-size-md, 13px);
 
-  &__head h2 {
-    margin: 0 0 6px;
-    font-size: 18px;
-  }
-
-  &__sub {
-    margin: 0;
-    color: var(--text-secondary, #8a8a94);
-    font-size: 13px;
-  }
-
-  &__toggle {
+  /* ── 页头 ── */
+  &__head {
     display: flex;
     align-items: center;
-    gap: 8px;
-    user-select: none;
+    gap: 12px;
   }
 
-  &__status {
-    font-size: 13px;
-    color: var(--text-secondary, #8a8a94);
-  }
-
-  &__qr {
+  &__head-icon {
     display: flex;
-    gap: 16px;
-    align-items: flex-start;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    background: var(--primary-soft, #eef2ff);
+    /* 用 --link-color 而不是 --accent-color：前者就是「品牌色做文字」的语义令牌，
+       暗色档取提亮一档的值（#8b86f7），压在 --primary-soft 上才读得清 */
+    color: var(--link-color, #4f46e5);
 
-    canvas {
-      background: #fff;
-      border-radius: 6px;
-      padding: 8px;
+    svg {
+      width: 20px;
+      height: 20px;
+      fill: currentColor;
     }
   }
 
-  &__payload {
+  &__head-text {
+    min-width: 0;
+  }
+
+  &__title {
+    margin: 0;
+    font-size: var(--font-size-2xl, 18px);
+    font-weight: 600;
+    line-height: 1.3;
+  }
+
+  &__sub {
+    margin: 2px 0 0;
+    color: var(--text-secondary, #666);
+    font-size: var(--font-size-sm, 12px);
+    line-height: 1.5;
+  }
+
+  /* ── 主开关卡片 ── */
+  &__switch {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 16px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 12px;
+    background: var(--card-bg, #fafafa);
+    transition:
+      border-color 0.2s ease,
+      background 0.2s ease;
+  }
+
+  &__switch-text {
     display: flex;
     flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  &__switch-title {
+    font-size: var(--font-size-base, 14px);
+    font-weight: 600;
+  }
+
+  &__switch-desc {
+    font-size: var(--font-size-sm, 12px);
+    line-height: 1.5;
+    color: var(--text-secondary, #666);
+  }
+
+  /* 状态 + 通讯类型：并排一行（窄面板时允许换行，不挤压） */
+  &__status-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
     gap: 8px;
-    flex: 1;
+    margin-top: 3px;
+  }
+
+  /* 连接状态胶囊：色 + 圆点双重编码（不靠颜色单一通道传达状态） */
+  &__status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 9px 2px 7px;
+    border-radius: 999px;
+    background: var(--input-bg, #f1f1f3);
+    color: var(--text-secondary, #666);
+    font-size: var(--font-size-xs, 11px);
+    line-height: 1.7;
+
+    /* 停用：就是「什么都没发生」的基础款（灰）。显式写出来，让「每种状态都有样式」可被断言——
+       否则新增状态时漏一份样式的代价是绚丽的默认色，而不是编译错误 */
+    &--disabled {
+      background: var(--input-bg, #f1f1f3);
+      color: var(--text-secondary, #666);
+    }
+
+    &--waiting {
+      background: var(--color-warning-bg, #fffbeb);
+      color: var(--color-warning-text, #b45309);
+    }
+
+    /* 「有人接入了、正在验证它是谁」—— 同属琥珀档（还没结论），但与「没人在连」分开 */
+    &--verifying {
+      background: var(--color-warning-bg, #fffbeb);
+      color: var(--color-warning-text, #b45309);
+    }
+
+    /* 「已拒绝接入（原因）」：这是一个**已成立的否定结论**，用错误色，不参与呼吸动画 */
+    &--rejected {
+      background: var(--color-error-bg, #ffebe9);
+      color: var(--color-error-text, #991b1b);
+    }
+
+    &--connected {
+      background: var(--color-success-bg, #dafbe1);
+      color: var(--color-success-text, #2e7d32);
+    }
+
+    &--error {
+      background: var(--color-error-bg, #ffebe9);
+      color: var(--color-error-text, #991b1b);
+    }
+  }
+
+  /*
+   * 通讯类型胶囊（P2P 直连 / TURN 中继）。
+   *
+   * 故意不复用状态胶囊的绿色：两个绿胶囊并排会被读成「同一件事的两种说法」。
+   * 直连 = 品牌色（正常路径）；中继 = 琥珀（能用，但字节过了服务器 —— 值得看一眼）。
+   */
+  &__link {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: var(--font-size-xs, 11px);
+    line-height: 1.7;
+
+    &--direct {
+      background: var(--primary-soft, #eef2ff);
+      color: var(--link-color, #4f46e5);
+    }
+
+    &--relay {
+      background: var(--color-warning-bg, #fffbeb);
+      color: var(--color-warning-text, #b45309);
+    }
+  }
+
+  &__dot {
+    flex: 0 0 auto;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  /* 等待连接时呼吸一下，让「还差一步」看得见（「已拒绝」不呼吸：那是已定的事，不再等什么） */
+  &__status--waiting &__dot,
+  &__status--verifying &__dot {
+    animation: phone-control-pulse 1.6s ease-in-out infinite;
+  }
+
+  /* ── 功能区卡片 ── */
+  &__card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 12px;
+    background: var(--card-bg, #fafafa);
+  }
+
+  &__card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 24px;
+  }
+
+  &__card-title {
+    margin: 0;
+    font-size: var(--font-size-base, 14px);
+    font-weight: 600;
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  /* 数量角标（「已绑定的手机 2」） */
+  &__count {
+    padding: 0 8px;
+    border-radius: 999px;
+    background: var(--tag-bg, #e8e8ed);
+    color: var(--text-secondary, #666);
+    font-size: var(--font-size-xs, 11px);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.8;
+  }
+
+  /* ── 扫码配对 ── */
+  &__pair {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  &__qr {
+    position: relative;
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    padding: 10px;
+    border: 1px solid var(--border-color-light, rgba(0, 0, 0, 0.08));
+    border-radius: 10px;
+    /* 二维码底板必须白底（暗色主题下也一样），否则相机识别率下降 */
+    background: #fff;
+
+    canvas {
+      display: block;
+      width: 200px;
+      height: 200px;
+    }
+  }
+
+  &__qr-hint {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary, #666);
+    font-size: var(--font-size-sm, 12px);
+  }
+
+  &__steps {
+    display: flex;
+    flex: 1 1 160px;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+
+    li {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      color: var(--text-secondary, #666);
+      font-size: var(--font-size-sm, 12px);
+      line-height: 1.6;
+    }
+  }
+
+  &__step {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    margin-top: 2px;
+    border-radius: 50%;
+    background: var(--primary-soft, #eef2ff);
+    color: var(--link-color, #4f46e5);
+    font-size: var(--font-size-2xs, 10px);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 二维码倒计时：进度条 + 秒数（transition 与 1s 一跳对齐，视觉上连续） */
+  &__ticket {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  &__ticket-bar {
+    display: block;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--input-bg, #f1f1f3);
+    overflow: hidden;
+  }
+
+  &__ticket-fill {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+    background: var(--accent-color, #4f46e5);
+    transition: width 0.9s linear;
+  }
+
+  &__ticket-text {
+    color: var(--text-secondary, #666);
+    font-size: var(--font-size-xs, 11px);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 配对数据（排查用）：默认收起，别让一坨 JSON 抢首屏 */
+  &__payload {
+    padding-top: 10px;
+    border-top: 1px dashed var(--border-color, #e5e5e5);
+
+    summary {
+      color: var(--text-secondary, #666);
+      font-size: var(--font-size-xs, 11px);
+      cursor: pointer;
+
+      &:hover {
+        color: var(--text-primary, #1a1a1a);
+      }
+
+      &:focus-visible {
+        outline: var(--focus-ring);
+        outline-offset: 2px;
+      }
+    }
 
     textarea {
       width: 100%;
-      font: 12px/1.4 ui-monospace, monospace;
+      box-sizing: border-box;
+      margin-top: 8px;
+      padding: 8px 10px;
+      border: 1px solid var(--border-color, #e5e5e5);
+      border-radius: 8px;
+      background: var(--bg-primary, #fff);
+      color: var(--text-secondary, #666);
+      font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+      font-size: var(--font-size-xs, 11px);
+      line-height: 1.5;
       resize: vertical;
     }
   }
 
-  &__devices {
-    h3 {
-      margin: 0 0 8px;
-      font-size: 14px;
-    }
-  }
-
-  &__empty {
-    color: var(--text-secondary, #8a8a94);
-    font-size: 13px;
-  }
-
-  &__device {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 10px;
-    border: 1px solid var(--border-color, #e5e5e5);
-    border-radius: 6px;
-    margin-bottom: 6px;
-  }
-
-  /* 设备名过长时截断，而不是把「移除」按钮挤出可视区 */
-  &__device-name {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  /* M6：一台手机两行 —— 名字 / （key · 凭证有效期 · 上次连接） */
-  &__device-info {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-  }
-
-  &__device-meta {
-    font-size: 12px;
-    color: var(--text-secondary, #8a8a94);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  /* 已绑定手机的说明段（移除的后果 / 凭证期限）—— 纯文字，不抢视觉重心 */
-  &__tip {
-    margin: 6px 0 0;
-    font-size: 12px;
-    line-height: 1.5;
-    color: var(--text-secondary, #8a8a94);
-  }
-
-  /* 二维码倒计时（「还剩 N 秒」）与「到期自动刷新」的口径提示 */
-  &__ticket {
-    font-size: 12px;
-    color: var(--text-secondary, #8a8a94);
-  }
-
   /* ── ICE 配置折叠区（§31）──
-     平时收起（大多数用户不需要改），展开后与其它区块保持同样的左对齐与间距。 */
+     平时收起（大多数用户不需要改）；收起时只有「标题 + 三角」，展开后与其它卡片同节奏。 */
   &__ice {
+    padding: 12px 16px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 12px;
+    background: var(--card-bg, #fafafa);
+
     summary {
-      cursor: pointer;
-      font-size: 14px;
+      color: var(--text-primary, #1a1a1a);
+      font-size: var(--font-size-base, 14px);
       font-weight: 600;
+      cursor: pointer;
+
+      &:focus-visible {
+        outline: var(--focus-ring);
+        outline-offset: 2px;
+      }
     }
 
     > *:not(summary) {
-      margin-top: 8px;
+      margin-top: 10px;
     }
   }
 
   /* 当前生效的 ICE 来源（"服务端下发（2 个服务器）" 之类） */
   &__ice-status {
-    font-size: 12px;
-    color: var(--text-secondary, #8a8a94);
+    color: var(--text-secondary, #666);
+    font-size: var(--font-size-sm, 12px);
+    line-height: 1.5;
   }
 
   /* 自定义配置非法：红字提醒，但不阻断连接（会自动降级到服务端默认） */
   &__ice-error {
-    font-size: 12px;
     color: var(--color-danger, #e53e3e);
+    font-size: var(--font-size-sm, 12px);
+    line-height: 1.5;
   }
 
   &__ice-text {
     width: 100%;
     box-sizing: border-box;
-    font: 12px/1.4 ui-monospace, monospace;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 8px;
+    background: var(--bg-primary, #fff);
+    color: var(--text-primary, #1a1a1a);
+    font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+    font-size: var(--font-size-xs, 11px);
+    line-height: 1.5;
     resize: vertical;
+
+    &:focus {
+      border-color: var(--accent-color, #4f46e5);
+      outline: none;
+    }
   }
 
   &__ice-actions {
@@ -152,33 +434,243 @@
     gap: 8px;
   }
 
+  /* 说明段（移除的后果 / 凭证期限 / ICE 留空语义）—— 纯文字，不抢视觉重心 */
+  &__tip {
+    margin: 0;
+    color: var(--text-secondary, #666);
+    font-size: var(--font-size-xs, 11px);
+    line-height: 1.6;
+
+    code {
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: var(--inline-code-bg, #e8e8ed);
+      color: var(--inline-code-color, #642dd1);
+      font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+    }
+  }
+
+  /* ── 已绑定手机 ── */
+  &__device {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 10px;
+    background: var(--bg-primary, #fff);
+  }
+
+  /*
+   * 在线的那一行（此刻正连着本机）：成功色描边 + 左侧强调条 + 极淡底色。
+   * 底色必须**很淡** —— 重了会让里面的「已连接」徽标（同一套 success 色）融进背景里。
+   */
+  &__device--online {
+    border-color: var(--color-success);
+    background: color-mix(in srgb, var(--color-success) 7%, var(--bg-primary));
+    box-shadow: inset 3px 0 0 var(--color-success);
+  }
+
+  &__device-icon {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--primary-soft, #eef2ff);
+    color: var(--link-color, #4f46e5);
+
+    svg {
+      width: 15px;
+      height: 15px;
+      fill: currentColor;
+    }
+  }
+
+  /* 一台手机两行 —— 名字 / （key · 凭证有效期 · 上次连接） */
+  &__device-info {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  /* 名字 + 在线徽标同一行：只截断名字，徽标始终可见 */
+  &__device-name {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    font-size: var(--font-size-base, 14px);
+    font-weight: 600;
+  }
+
+  /* 设备名过长时截断，而不是把行尾的按钮挤出可视区 */
+  &__device-name-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /*
+   * 改名输入框：占满名字那一格（与 `__device-name-text` 同一字号字重，切换时行高不跳）。
+   * 底色故意用 `--input-bg`（比卡片底灰一档）—— 它要一眼看出「这格现在能打字」。
+   */
+  &__device-input {
+    flex: 1;
+    min-width: 0;
+    padding: 1px 8px;
+    border: 1px solid var(--accent-color, #4f46e5);
+    border-radius: 7px;
+    background: var(--input-bg, #f1f1f3);
+    color: var(--text-primary, #1a1a1a);
+    font-family: inherit;
+    font-size: var(--font-size-base, 14px);
+    font-weight: 600;
+    outline: none;
+
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 1px;
+    }
+
+    &::placeholder {
+      color: var(--text-tertiary, #767676);
+      font-weight: 400;
+    }
+  }
+
+  /*
+   * 行尾操作组（改名 / 移除 → 编辑时换成 保存 / 取消）。
+   * 自己一组而不是当兄弟元素：否则两个按钮各拿一份外面 12px 的间距，右侧会空一大块。
+   */
+  &__device-actions {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 6px;
+  }
+
+  /* 编辑态：这一行描成品牌色，明确「正在改的是这一行」（多台手机时最要紧的一件事） */
+  &__device--editing {
+    border-color: var(--accent-color, #4f46e5);
+  }
+
+  /* 「已连接」徽标：色 + 圆点双重编码（与页面顶部状态胶囊同一套语义色） */
+  &__device-live {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 5px;
+    padding: 1px 8px 1px 6px;
+    border-radius: 999px;
+    background: var(--color-success-bg, #dafbe1);
+    color: var(--color-success-text, #2e7d32);
+    font-size: var(--font-size-xs, 11px);
+    font-weight: 500;
+    line-height: 1.7;
+  }
+
+  &__device-live-dot {
+    flex: 0 0 auto;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: phone-control-pulse 1.6s ease-in-out infinite;
+  }
+
+  &__device-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-width: 0;
+    font-size: var(--font-size-xs, 11px);
+  }
+
+  /* 元信息胶囊：比「· 分隔的长句」更容易按列扫读 */
+  &__chip {
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--tag-bg, #e8e8ed);
+    color: var(--text-secondary, #666);
+    white-space: nowrap;
+  }
+
+  /* ── 空态 ── */
+  &__empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 22px 12px;
+    border: 1px dashed var(--border-color, #e5e5e5);
+    border-radius: 10px;
+    color: var(--text-secondary, #666);
+    font-size: var(--font-size-sm, 12px);
+    text-align: center;
+
+    p {
+      margin: 0;
+      line-height: 1.6;
+    }
+
+    svg {
+      width: 22px;
+      height: 22px;
+      fill: currentColor;
+      opacity: 0.5;
+    }
+  }
+
+  /* ── 操作记录（审计）── */
+  &__audit {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
   &__audit-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 8px;
-
-    h3 {
-      margin: 0;
-      font-size: 14px;
-    }
+    gap: 12px;
   }
 
   &__audit-list {
-    list-style: none;
+    max-height: 240px;
     margin: 0;
     padding: 0;
-    max-height: 220px;
-    overflow-y: auto;
     border: 1px solid var(--border-color, #e5e5e5);
-    border-radius: 6px;
+    border-radius: 10px;
+    background: var(--bg-primary, #fff);
+    list-style: none;
+    overflow-y: auto;
+    scrollbar-width: thin;
+
+    &::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    &::-webkit-scrollbar-thumb {
+      border-radius: 4px;
+      background: var(--scrollbar-thumb, #ccc);
+    }
   }
 
   &__audit-item {
-    padding: 6px 10px;
-    font: 12px/1.5 ui-monospace, monospace;
-    border-bottom: 1px solid var(--border-color, #e5e5e5);
-    word-break: break-all;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border-color-light, rgba(0, 0, 0, 0.08));
+    font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+    font-size: var(--font-size-xs, 11px);
+    line-height: 1.6;
+    word-break: break-word;
 
     &:last-child {
       border-bottom: none;
@@ -186,72 +678,129 @@
 
     /* 被拒的操作：需要一眼可辨（审计的价值就在于异常可见） */
     &--denied {
-      color: #e06c75;
+      color: var(--color-error-text, #991b1b);
     }
 
     /* 审批决策：与普通 RPC 区分（谁批了什么比读了什么更重要） */
     &--approval {
-      color: #d19a66;
+      color: var(--color-warning-text, #b45309);
     }
   }
 
+  &__audit-time {
+    flex: 0 0 auto;
+    color: var(--text-tertiary, #767676);
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__audit-badge {
+    flex: 0 0 auto;
+    padding: 0 6px;
+    border-radius: 4px;
+    background: var(--tag-bg, #e8e8ed);
+    color: var(--text-secondary, #666);
+    font-size: var(--font-size-2xs, 10px);
+    line-height: 1.9;
+  }
+
+  &__audit-text {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* ── 手机配对确认弹窗 ── */
   &__confirm {
     position: fixed;
     inset: 0;
-    /* 与 theme.css 的 --modal-overlay 同源（原先硬编码，暗色主题下无从调整） */
-    background: var(--modal-overlay, rgba(0, 0, 0, 0.5));
+    z-index: 1300;
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 1000;
+    padding: 20px;
+    /* 与 theme.css 的 --modal-overlay 同源（原先硬编码，暗色主题下无从调整） */
+    background: var(--modal-overlay, rgba(0, 0, 0, 0.5));
+    animation: phone-control-fade 0.16s ease;
   }
 
   &__confirm-body {
-    /* ⚠️ 2026-09-29 缺陷修复（§26）：原为 `var(--bg-elevated, #1c1c22)`，但 `--bg-elevated`
-       在全项目**从未定义** → 永远走 fallback：亮色主题下弹窗是近黑底＋近黑字（标题几乎不可读），
-       这正是「配对确认弹窗没有 CSS 样式」的主因。改用与 `shared/Modal` 一致的 --bg-primary，
-       并补上边框与投影（--shadow-md 本就是「弹窗投影」用途的令牌）。 */
-    background: var(--bg-primary, #fff);
+    width: 100%;
+    max-width: 320px;
+    padding: 20px;
     border: 1px solid var(--border-color, #e5e5e5);
+    /* 取 --bg-primary 而不是 --bg-elevated（后者全项目从未定义，会静默降级成 fallback） */
+    border-radius: 14px;
+    background: var(--bg-primary, #fff);
     box-shadow: var(--shadow-md, 0 8px 24px rgba(0, 0, 0, 0.12));
-    border-radius: 10px;
-    padding: 20px 24px;
-    min-width: 280px;
     text-align: center;
+    animation: phone-control-pop 0.18s ease;
 
     h4 {
-      margin: 0 0 8px;
+      margin: 0 0 6px;
+      font-size: var(--font-size-lg, 15px);
+      font-weight: 600;
     }
 
     p {
-      margin: 0 0 16px;
-      color: var(--text-secondary, #8a8a94);
-      font-size: 13px;
+      margin: 0 0 18px;
+      color: var(--text-secondary, #666);
+      font-size: var(--font-size-sm, 12px);
+      line-height: 1.6;
+    }
+  }
+
+  &__confirm-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    margin-bottom: 10px;
+    border-radius: 50%;
+    background: var(--primary-soft, #eef2ff);
+    color: var(--link-color, #4f46e5);
+
+    svg {
+      width: 22px;
+      height: 22px;
+      fill: currentColor;
     }
   }
 
   &__confirm-actions {
     display: flex;
     gap: 10px;
-    justify-content: center;
+
+    button {
+      flex: 1;
+    }
   }
 
   /* ── 按钮 ──
-     ⚠️ 2026-09-29 缺陷修复（§26）：tsx 用的是 `btn` / `btn--primary` / `btn--danger` /
-     `btn--small`，但**本文件与全局样式中都没有这些类的定义**（全项目仅此处在用裸 `btn`；
-     其它页用的是 `btn-cancel` / `btn-secondary` 等各自作用域内的类名）→ 本页按钮一直是
-     浏览器默认外观，配对确认弹窗（「拒绝 / 允许」）里最刺眼。
-     配色一律取 theme.css 的语义令牌，亮 / 暗主题自动跟随。 */
+     ⚠️ 保留理由见文件头：tsx 用 `btn` / `btn--primary` / `btn--danger` / `btn--small`，
+     本页作用域内必须齐全（全项目仅此处在用裸 `btn`），否则按钮会退回浏览器默认外观。 */
   .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
     padding: 6px 14px;
     border: 1px solid var(--border-color, #e5e5e5);
-    border-radius: 6px;
+    border-radius: 8px;
     background: var(--bg-primary, #fff);
     color: var(--text-primary, #1a1a1a);
-    font-size: 13px;
+    font-size: var(--font-size-md, 13px);
     line-height: 1.4;
     cursor: pointer;
-    transition: background 0.15s ease, border-color 0.15s ease;
+    transition:
+      background 0.15s ease,
+      border-color 0.15s ease,
+      color 0.15s ease;
+
+    svg {
+      width: 13px;
+      height: 13px;
+      fill: currentColor;
+    }
 
     &:hover:not(:disabled) {
       background: var(--hover-bg, #f0f0f0);
@@ -268,7 +817,7 @@
       cursor: not-allowed;
     }
 
-    /* 主操作（配对确认的「允许」） */
+    /* 主操作（配对确认的「允许」/ ICE 的「保存」） */
     &--primary {
       border-color: transparent;
       background: var(--accent-color, #4f46e5);
@@ -281,6 +830,8 @@
 
     /* 危险操作（「移除」已绑定手机）：低强调红字，hover 才铺底 */
     &--danger {
+      flex: 0 0 auto;
+      padding: 6px 10px;
       border-color: transparent;
       background: transparent;
       color: var(--color-danger, #e53e3e);
@@ -290,10 +841,48 @@
       }
     }
 
-    /* 小号（「清空记录」）—— 必须排在基础款之后才能盖掉 padding */
+    /* 小号（「刷新二维码」/「清空记录」）—— 必须排在基础款之后才能盖掉 padding */
     &--small {
-      padding: 3px 10px;
-      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 7px;
+      font-size: var(--font-size-sm, 12px);
     }
+  }
+}
+
+/* 状态圆点呼吸（等待手机连接时） */
+@keyframes phone-control-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.35;
+    transform: scale(0.7);
+  }
+}
+
+/* 弹窗入场 */
+@keyframes phone-control-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes phone-control-pop {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }

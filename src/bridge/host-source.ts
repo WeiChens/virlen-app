@@ -68,6 +68,21 @@ import type { InteractionRegistry } from './interaction-registry'
 import type { PairingStore } from './pairing'
 import type { SubscriptionRegistry } from './subscription'
 
+/**
+ * 一次 `host.hello` 的结论 —— **链路级的授权事实**。
+ *
+ * 谁关心它：
+ *  - `startPhoneBridge` 的握手闸门（`requireAuthorization`）：`ok` 之前，`host.*` 一律拒；
+ *  - `PhoneControlService`：`ok` 才算「手机已连上」（设置页的状态胶囊据此变色）。
+ *
+ * 为何单独上报而不是让服务自己看链路状态：**链路通 ≠ 授权通过** —— WebRTC 建起来只说明
+ * 有人进了房间（房间号由设备 key 派生，被移除的手机也进得来），而真正的「这是谁、准不准」
+ * 只发生在 `hello` 里。
+ */
+export type HelloOutcome =
+  | { ok: true }
+  | { ok: false; reason: CredentialRejectReason | 'denied' | 'ticket-expired' }
+
 export interface DesktopHostSourceDeps {
   pairing: PairingStore
   acl: Acl
@@ -99,6 +114,13 @@ export interface DesktopHostSourceDeps {
    * 沿用旧基准会发出 `offset` 对不上的增量（客户端得靠拉全文自纠）。
    */
   onSubscribe?: (sessionId: string) => void
+  /**
+   * 每次 `hello` 的结论（成功 / 因何被拒）。
+   *
+   * ⚠️ **三个分支都要报**（首次配对成功 / 用户拒绝 / 凭证或票据问题），缺一个就会出现
+   * 「链路已经建好、界面却说还在等待」或反之的状态谎报。
+   */
+  onHelloResult?: (outcome: HelloOutcome) => void
 }
 
 export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSource {
@@ -114,6 +136,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
     confirmPair,
     onStreamMode,
     onSubscribe,
+    onHelloResult,
   } = deps
 
   const auditOp = (method: string, sessionId?: string, detail?: string): void => {
@@ -209,12 +232,33 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
           if (!approved) {
             audit.record({ method: 'host.hello', allowed: false, detail: '用户拒绝配对' })
             track(PHONE_EVENTS.pairHello, { ...helloProps, ok: false, reason: 'user-denied' })
+            // 拒绝就是拒绝：闸门不放行，界面也不该显示「已连接」
+            onHelloResult?.({ ok: false, reason: 'denied' })
             throw new BridgeError('E_DENIED', '电脑端拒绝了本次配对', { data: { reason: 'denied' } })
           }
-          const device = pairing.redeemTicket(token as string, {
-            mobileKey: params.mobileKey,
-            name: params.mobileName,
-          })
+          let device: ReturnType<typeof pairing.redeemTicket>
+          try {
+            device = pairing.redeemTicket(token as string, {
+              mobileKey: params.mobileKey,
+              name: params.mobileName,
+            })
+          } catch {
+            /*
+             * ⚠️ 票在**确认弹窗期间**失效了。两个真实场景：
+             *  - 用户对着弹窗想了超过 5 分钟（票的 TTL）；
+             *  - 期间用户到设置页把**另一台**手机移除了 —— `PairingStore.revoke` 会作废所有
+             *    未使用的票（被移除的那台可能正缓存着屏上那张票，不清就等于没移除）。
+             * 必须给手机「请重新扫码」，而不是把 `redeemTicket` 的裸 Error 漏成内部错误。
+             */
+            onHelloResult?.({ ok: false, reason: 'ticket-expired' })
+            audit.record({ method: 'host.hello', allowed: false, detail: '票据在确认期间失效' })
+            track(PHONE_EVENTS.pairHello, { ...helloProps, ok: false, reason: 'ticket-expired' })
+            throw new BridgeError('E_DENIED', describeReject('ticket-expired'), {
+              data: { reason: 'ticket-expired' },
+            })
+          }
+          // 票已兑换 + 凭证已签发 = 这台手机正式获权（闸门放行、界面显示「已连接」）
+          onHelloResult?.({ ok: true })
           auditOp('host.hello', undefined, `platform=${params.client.platform} 首次配对：${device.name}`)
           track(PHONE_EVENTS.pairHello, {
             ...helloProps,
@@ -233,11 +277,13 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
         const message = describeReject(verdict.reason)
         audit.record({ method: 'host.hello', allowed: false, detail: message })
         track(PHONE_EVENTS.pairHello, { ...helloProps, ok: false, reason: verdict.reason })
+        onHelloResult?.({ ok: false, reason: verdict.reason })
         throw new BridgeError('E_DENIED', message, { data: { reason: verdict.reason } })
       }
 
       // ── 已授权：老设备凭凭证直连（顺带滑动续期）──
       const device = verdict.device
+      onHelloResult?.({ ok: true })
       auditOp('host.hello', undefined, `platform=${params.client.platform} device=${device.name}`)
       track(PHONE_EVENTS.pairHello, {
         ...helloProps,

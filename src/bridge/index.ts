@@ -17,14 +17,21 @@
  * 只导出工厂，由 M3 的传输层在连接建立后调用；M2 通过 vitest（memory transport）验证。
  * 数据源与 mock（`virlen-remote/testing`）共用同一份分发胶水，故此处逻辑已被 mock 路径覆盖。
  */
-import { registerHostHandlers, type Endpoint, type HostRegistration, type StreamMode } from 'virlen-remote'
+import {
+  BridgeError,
+  registerHostHandlers,
+  type Endpoint,
+  type HostDataSource,
+  type HostRegistration,
+  type StreamMode,
+} from 'virlen-remote'
 import { Acl, DEFAULT_CAPABILITIES, type Capability } from './acl'
 import { AuditLog, type AuditEntry, type AuditPersist } from './audit'
 import { PairingStore } from './pairing'
 import { SubscriptionRegistry } from './subscription'
 import { attachInteractionSources } from './interaction-source'
 import { InteractionRegistry } from './interaction-registry'
-import { createDesktopHostSource } from './host-source'
+import { createDesktopHostSource, type HelloOutcome } from './host-source'
 import { createStoreBridge, type StoreBridge } from './store-bridge'
 import { createTracedEmit, instrumentPhoneRpc } from './telemetry'
 
@@ -38,12 +45,15 @@ export { InteractionRegistry, normalizeChoiceAnswer } from './interaction-regist
 export type { InteractionSink, InteractionRegistryDeps, ChoiceAnswer } from './interaction-registry'
 export { attachInteractionSources } from './interaction-source'
 export type { AttachInteractionOptions, InteractionHost } from './interaction-source'
-export { PairingStore } from './pairing'
+export { PairingStore, DEFAULT_DEVICE_NAME, DEVICE_NAME_MAX, normalizeDeviceName } from './pairing'
 export type { PairedDevice, PairingSnapshot, AuthorizationResult } from './pairing'
+export { classifyLinkKind, probeLinkKind, LinkKindWatcher, LINK_KIND_POLL_MS } from './link-kind'
+export type { LinkKind } from './link-kind'
 export { SubscriptionRegistry } from './subscription'
 export { createDesktopHostSource } from './host-source'
+export type { HelloOutcome } from './host-source'
 export { createStoreBridge } from './store-bridge'
-export { PhoneControlService } from './phone-control'
+export { PhoneControlService, REJECT_KICK_DELAY_MS } from './phone-control'
 export type {
   PhoneControlOptions,
   PhoneControlStatus,
@@ -85,6 +95,28 @@ export interface PhoneBridgeOptions {
   notify?: (text: string) => void
   /** 复用既有审计日志（如设置页需要读同一份记录）；不传则新建。 */
   audit?: AuditLog
+  /**
+   * **握手闸门**（M10，真机缺陷「移除后手机又连回来」）。
+   *
+   * 开启后：这条链路上除 `host.hello` 以外的**所有** `host.*` 调用，都必须先有一次成功的
+   * `hello`，否则一律 `E_DENIED`。
+   *
+   * 为什么必须有：房间号由电脑设备 key 派生（被移除的那台手机也拿得到），所以「把它踢出去」
+   * 在信令层做不到 —— 它随时能重进房间、重新把 WebRTC 链路建起来。而**授权只发生在 hello 里**：
+   * 不设这道闸门时，一台已被移除的手机只要把链路建起来，就能照常调 `host.session.list` /
+   * `send` / `delete`（`acl.assert` 只看静态能力集，**不看**这条连接是谁），
+   * 于是「移除」在用户看来等于没移除。
+   *
+   * 默认关：单测 / 联调里直接打 RPC 是既有约定（见 `phone-bridge.test.ts`）；
+   * 生产路径（`PhoneControlService`）必须开。
+   *
+   * ⚠️ 开闸是**链路级**的一次性事实（`ok` 之后就开着），所以「拒绝」只能靠不开闸 ——
+   * 而只靠不开闸还不够让用户看出「移除生效了」：链路还在、界面就没有一个否定结论可显示。
+   * 那半边在 `PhoneControlService.rejectPeer()`：握手被拒 = 连链路一起踢。
+   */
+  requireAuthorization?: boolean
+  /** 每次 `host.hello` 的结论 —— 服务据此决定「算不算已连接」（链路通 ≠ 授权通过）。 */
+  onHelloResult?: (outcome: HelloOutcome) => void
 }
 
 export interface PhoneBridge {
@@ -108,6 +140,30 @@ export function startPhoneBridge(endpoint: Endpoint, options: PhoneBridgeOptions
 
   // ⚠️ 埋点包装必须在 `registerHostHandlers` **之前**（否则注册的是未包装的 handler，见 telemetry.ts）
   const rpcTrace = instrumentPhoneRpc(endpoint)
+  /**
+   * 本次链路是否已通过 `hello`（`requireAuthorization` 的判定依据；每条链路各自一份）。
+   *
+   * 两个出口都看它：入站 `host.*`（`gatedHostSource`）与**出站推送**（下面的 `endpoint.emit` 补丁）。
+   */
+  let authorized = false
+  if (options.requireAuthorization) {
+    /*
+     * 出站闸门 —— 未授权的链路**连推送都不给**。
+     *
+     * 为什么只有入站闸门不够：`store-bridge` 与交互注册表走的是**旁路推送**（mobx reaction → emit），
+     * 不经过 `endpoint.handle`。一条没握过手的链路虽然调不动 `host.*`，却仍会收到会话列表变更、
+     * 消息正文流这些事件 —— 对一台已被移除的手机来说，那同样叫「连上了」。
+     *
+     * 补在 `endpoint.emit` 上而不是逐处包 emit：推的人有好几个（store-bridge / 交互 / 埋点包装），
+     * 而 `emit` 只有一个出口；`createTracedEmit` 内部也是**动态**取 `endpoint.emit`，
+     * 补在这里一并盖住。
+     *
+     * ⚠️ 代价：被拦掉的那几帧会被埋点包装记成 `phone.push.dropped reason=not-sent`
+     *（它只看得见「没发出去」）。宁可这样，也不要在多个推入口各包一层 —— 漏掉的那个就是新的漏洞。
+     */
+    const rawEmit = endpoint.emit.bind(endpoint)
+    endpoint.emit = (topic: string, payload?: unknown) => (authorized ? rawEmit(topic, payload) : false)
+  }
   // 出站事件统一走包装后的 emit：既推给手机，也留下埋点（含 `emit` 返回 false 的「被静默丢弃」）
   const emit = createTracedEmit(endpoint)
 
@@ -153,13 +209,27 @@ export function startPhoneBridge(endpoint: Endpoint, options: PhoneBridgeOptions
     },
     /** 重新订阅 = 手机侧正文从零开始（切回会话 / 重连）→ 重置该会话的增量基准 */
     onSubscribe: (sessionId: string) => storeBridge.resetStreams(sessionId),
+    /**
+     * 握手结论既开闸门，也上报给调用方。
+     *
+     * ⚠️ 只有 `ok` 能开闸：拒绝（已被移除 / 凭证过期 / 用户点了拒绝）之后**不能**再放行 ——
+     * 那正是「移除一台手机后它重连回来还能操作本机」的漏洞所在。
+     */
+    onHelloResult: (outcome: HelloOutcome) => {
+      if (outcome.ok) authorized = true
+      options.onHelloResult?.(outcome)
+    },
   })
 
-  const registration: HostRegistration = registerHostHandlers(endpoint, source, {
-    hostInfo: { platform: 'desktop', appVersion },
-    capabilities: acl.capabilities,
-    deviceName,
-  })
+  const registration: HostRegistration = registerHostHandlers(
+    endpoint,
+    options.requireAuthorization ? gatedHostSource(source, () => authorized) : source,
+    {
+      hostInfo: { platform: 'desktop', appVersion },
+      capabilities: acl.capabilities,
+      deviceName,
+    },
+  )
 
   return {
     deviceId,
@@ -176,4 +246,25 @@ export function startPhoneBridge(endpoint: Endpoint, options: PhoneBridgeOptions
       subscriptions.clear()
     },
   }
+}
+
+/**
+ * 把「这条链路是否通过了 `hello`」变成硬闸门（`requireAuthorization`）。
+ *
+ * 用 `Proxy` 而不是逐个方法包一层：`registerHostHandlers` 注册的方法集随协议增长（现在 20 个），
+ * 手写清单迟早漏一个 —— 而漏掉的那个就是一条不设防的后门。这里只豁免 `hello` 本身（它是开门的那把钥匙）。
+ */
+function gatedHostSource(source: HostDataSource, isAuthorized: () => boolean): HostDataSource {
+  return new Proxy(source, {
+    get(target, prop, receiver) {
+      const value: unknown = Reflect.get(target, prop, receiver)
+      if (typeof value !== 'function' || prop === 'hello') return value
+      return (...args: unknown[]) => {
+        if (!isAuthorized()) {
+          throw new BridgeError('E_DENIED', '尚未完成配对握手（host.hello）—— 本链路未获授权')
+        }
+        return (value as (...a: unknown[]) => unknown).apply(target, args)
+      }
+    },
+  }) as HostDataSource
 }

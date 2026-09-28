@@ -155,4 +155,30 @@ describe('PairingStore —— 撤销与墓碑', () => {
     const store = new PairingStore()
     expect(store.revoke('dev-nope')).toBe(false)
   })
+
+  /**
+   * M10 真机反馈：移除一台手机后，它断开又自动重连，结果**又连上了**。
+   *
+   * 记录与凭证都删对了 —— 漏的是**票**：票是一张「配对权」，任何端出示它就能换出一台**新**设备，
+   * 而被移除的那台手机手上正好可能有（它扫过屏上那张码、缓存过配对载荷）。
+   */
+  it('移除 = 删记录 + 记墓碑 + **作废所有未使用的票**（旧码不再有配对权）', () => {
+    const store = new PairingStore()
+    const t1 = store.issueTicket()
+    const device = store.register('手机', { mobileKey: 'mk-1', now: T0 })
+    const t2 = store.issueTicket()
+    expect(store.pendingTickets()).toBe(2)
+
+    expect(store.revoke(device.deviceId, T0)).toBe(true)
+
+    expect(store.list()).toEqual([])
+    expect(store.lookup(device.token)).toBe(null)
+    expect(store.isRevoked('mk-1')).toBe(true)
+    // 已发出去的票一张都不作数（无论是最早那张还是刚刚那张）
+    expect(store.hasValidTicket(t1)).toBe(false)
+    expect(store.hasValidTicket(t2)).toBe(false)
+    expect(store.pendingTickets()).toBe(0)
+    // 快照里也不留票：否则重启后它们又「活」了
+    expect(store.snapshot().tickets).toEqual([])
+  })
 })

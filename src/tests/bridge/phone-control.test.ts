@@ -135,24 +135,68 @@ describe('PhoneControlService —— 配对载荷（M6）', () => {
 })
 
 describe('PhoneControlService —— 状态机', () => {
-  it('enable → waiting；链路 open → connected；disable → disabled', () => {
+  /**
+   * M10 修正：**链路通 ≠ 手机已连上**；M11 再补一刀：**「有人在连」≠「在等手机连」**。
+   *
+   * 原实现把 `transport` 的 `open` 直接当「已连接」。真机反馈正好踩在这上面：被移除的手机
+   * 重连上来、WebRTC 又建好了，界面于是显示「已连接」—— 而它手上那张票 / 凭证早就作废了。
+   * 改成「等握手」之后又留下另一个含糊：链路 open 一律写成「等待手机握手…」，
+   * 用户读到的是「我在等它连上」，而事实往往是「刚才被移除的那台又摸进来了」。
+   * 现在这段落进 `verifying`（有人接入了、还没证明它是谁），否定结论另走 `rejected`。
+   */
+  it('enable → waiting；链路 open → verifying（有人接入，尚未证明它是谁）；disable → disabled', () => {
     const transport = new MemoryTransport() // 初始 connecting
     const statuses: PhoneControlStatus[] = []
+    const details: Array<string | undefined> = []
     const service = makeService({
       createTransport: () => transport,
-      onStatusChange: (s) => statuses.push(s),
+      onStatusChange: (s, detail) => {
+        statuses.push(s)
+        details.push(detail)
+      },
     })
     service.enable()
     expect(service.getStatus()).toBe('waiting')
 
     transport.open() // 模拟 DataChannel 就绪
-    expect(service.getStatus()).toBe('connected')
+    expect(service.getStatus()).toBe('verifying')
+    // 不再是「等待手机握手…」：链路已通，没人在等谁
+    expect(details).not.toContain('链路已建立，等待手机握手…')
 
     service.disable()
     expect(service.getStatus()).toBe('disabled')
     expect(statuses).toContain('waiting')
-    expect(statuses).toContain('connected')
     expect(statuses[statuses.length - 1]).toBe('disabled')
+  })
+
+  it('hello 通过 → connected（授权了才算连上）', async () => {
+    const { service, caller } = setup()
+    expect(service.getStatus()).toBe('waiting')
+
+    await hello(caller, service.pairingPayload().ticket)
+
+    expect(service.getStatus()).toBe('connected')
+  })
+
+  it('hello 被拒（已被移除）→ `rejected` + 原因（不是含糊的「还在等」）', async () => {
+    const details: Array<string | undefined> = []
+    const statuses: PhoneControlStatus[] = []
+    const { service, caller } = setup({
+      onStatusChange: (s, detail) => {
+        statuses.push(s)
+        details.push(detail)
+      },
+    })
+    const device = service.pairing.register('手机', { mobileKey: MOBILE_KEY })
+    service.pairing.revoke(device.deviceId)
+
+    await expect(hello(caller, device.token)).rejects.toMatchObject({ code: 'E_DENIED' })
+
+    // 拒绝是一个**已成立的否定结论**：界面必须说「已拒绝接入（该手机已被移除）」，
+    // 而不是「等待手机连接…」—— 后者会被读成「我在等它」，与事实相反
+    expect(service.getStatus()).toBe('rejected')
+    expect(statuses).toContain('rejected')
+    expect(details).toContain('该手机已被移除')
   })
 })
 

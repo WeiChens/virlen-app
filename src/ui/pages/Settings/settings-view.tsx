@@ -195,7 +195,7 @@ export default function SettingsView() {
             <button
               className={`nav-item ${page === 'phone-control' ? 'active' : ''}`}
               onClick={() => setPage('phone-control')}>
-              <PhoneSvg fill="var(--nav-item-color)" />
+              <PhoneSvg  />
               <span>{t('手机控制')}</span>
             </button>
             <button
