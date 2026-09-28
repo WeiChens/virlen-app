@@ -39,4 +39,6 @@ pub(crate) use rules::{apply_rule_clearance, match_sandbox_ignore_rule, with_rul
 // `kill_running_command` / `run_command_native`：供 `execute::mod` 再导出，
 // `run_command_native` 另供 TS 引擎路径经 `pty_run_command` 复用。
 pub use registry::kill_running_command;
-pub(crate) use runner::{run_command_native, SandboxBypass};
+pub(crate) use runner::run_command_native;
+// `SandboxBypass`：跨 crate 供 TS 引擎入口 `run_command_for_ts_engine` 构造。
+pub use runner::SandboxBypass;

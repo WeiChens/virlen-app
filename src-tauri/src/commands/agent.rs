@@ -166,6 +166,10 @@ pub fn pty_set_held(tool_call_id: String, held: bool) -> bool {
 /// ⚠️ 审批不在这里做：前端 `execute_command` 已完成风险分类与审批，本命令只负责「执行一条已获批准
 /// 的命令」。返回 `{ content, uiData, isError }`：`isError = true` 表示工具级失败（如退出码 >= 2），
 /// `content` 是模型侧英文报告；真正的「调用级」异常（沙盒只读拒绝等）仍走 `Err(String)`。
+///
+/// `#[allow(too_many_arguments)]`：Tauri 命令参数逐个从 JS `invoke` 传入，
+/// 收结构体会要求前端改调用形状（与 `cmd_compress_context` 同一取舍）。
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn pty_run_command(
     session_id: String,
@@ -178,6 +182,15 @@ pub async fn pty_run_command(
     on_output: tauri::ipc::Channel<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
     let sink = ChannelEventSink { channel: on_output };
+    // 两个 bool 入参（来自前端：AI 申请 / 命中忽略规则）→ 脱壳原因枚举。
+    // 优先级与 Rust 侧一致：命中「忽略沙盒命令」规则优先于本轮审批。
+    let bypass = if bypass_by_rule {
+        native_tools::SandboxBypass::Rule
+    } else if bypass_sandbox {
+        native_tools::SandboxBypass::Requested
+    } else {
+        native_tools::SandboxBypass::None
+    };
     let outcome = native_tools::run_command_for_ts_engine(
         &sink,
         &session_id,
@@ -185,8 +198,7 @@ pub async fn pty_run_command(
         &command,
         &security,
         timeout_secs,
-        bypass_sandbox,
-        bypass_by_rule,
+        bypass,
     )
     .await?;
     match outcome {

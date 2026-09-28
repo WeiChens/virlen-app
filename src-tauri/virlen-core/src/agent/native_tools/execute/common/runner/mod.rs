@@ -112,13 +112,15 @@ pub(crate) fn pty_available() -> bool {
 /// 失败的场景：子进程需要用管道 stdio 拉起孙进程（vitest/vite/jest/node-gyp 等），
 /// 受限令牌会使那次 spawn 报 EPERM（根因见 AGENTS §11.2）。
 ///
-/// `pub(crate)`：除工具层外，TS 引擎路径经 `pty_run_command` 也复用本运行器（§7 #14）。
 /// 脱壳（不使用沙盒）的**原因** —— 决定 UI 徽标与模型侧 `env_note` 的措辞。
 ///
 /// 为什么不复用 `bool`：命中「忽略沙盒命令」规则 与 AI 显式申请 `sandbox:"off"` 是
 /// **两种不同的授权来源**，UI 需据实区分（前者是用户预授权，后者是本轮审批）。
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SandboxBypass {
+///
+/// `pub`：TS 引擎入口 [`crate::agent::native_tools::run_command_for_ts_engine`]
+/// 经 `pty_run_command`（GUI 壳）接收本类型，跨 crate 传递（§7 #14）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SandboxBypass {
     /// 不脱壳（走高隔离沙盒）
     None,
     /// AI 显式申请 `sandbox:"off"`（本轮已获用户审批）

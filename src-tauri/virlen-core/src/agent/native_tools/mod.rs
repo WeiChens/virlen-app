@@ -96,6 +96,8 @@ pub(crate) mod test_util;
 #[allow(unused_imports)]
 pub use common::{is_path_allowed, resolve_safe_path};
 pub use execute::kill_running_command;
+// `SandboxBypass`：TS 引擎入口 `run_command_for_ts_engine` 的脱壳原因入参（跨 crate）。
+pub use execute::SandboxBypass;
 // PTY 会话交互：前端中途插键盘 / 改窗口尺寸 / 命名控制键 / 接管交还（Step 1 + Step 2 ③②）
 pub use execute::{pty_key, pty_resize, pty_set_held, pty_write};
 
@@ -291,6 +293,9 @@ pub async fn execute_native_tool(
 /// 与 `execute_native_tool(ctx, "execute_command", args)` 的**唯一区别**：
 /// **不做风险分类与审批** —— 审批（权限三态 / `sandbox:"off"` 强制审批）
 /// 由 TS 侧的 `execute_command` 工具负责，本入口只负责「执行一条已获批准的命令」。
+///
+/// `bypass` 为脱壳原因（`None` / `Requested` / `Rule`）—— 用枚举而非两个 `bool`，
+/// 既避免 `(true, true)` 这种无法表达优先级的非法组合，也把参数个数控制在 7 个以内。
 pub async fn run_command_for_ts_engine(
     sink: &dyn EventSink,
     session_id: &str,
@@ -298,8 +303,7 @@ pub async fn run_command_for_ts_engine(
     command: &str,
     security: &NativeToolSecurity,
     timeout_secs: i64,
-    bypass_sandbox: bool,
-    bypass_by_rule: bool,
+    bypass: execute::SandboxBypass,
 ) -> Result<NativeToolOutcome, String> {
     // 取消：TS 引擎的「终止」按钮走 `agent_kill_command`（运行中命令注册表），
     // 不依赖这个 token；这里用一个不会被触发的 token 即可
@@ -319,13 +323,6 @@ pub async fn run_command_for_ts_engine(
         // `execute_command` 也不用宿主信息，故用进程级默认宿主。
         host: crate::host::default_host().as_ref(),
         settings: crate::agent::native_tools::noop_settings(),
-    };
-    let bypass = if bypass_by_rule {
-        execute::SandboxBypass::Rule
-    } else if bypass_sandbox {
-        execute::SandboxBypass::Requested
-    } else {
-        execute::SandboxBypass::None
     };
     execute::run_command_native(&ctx, command, timeout_secs, bypass).await
 }
@@ -422,8 +419,7 @@ mod tests {
             "echo hello_ts_engine",
             &sec,
             30,
-            false,
-            false,
+            execute::SandboxBypass::None,
         )
         .await
         .expect("TS 引擎执行入口不应报错");

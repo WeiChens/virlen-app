@@ -17,7 +17,9 @@ mod pty_session;
 pub use common::kill_running_command;
 // `run_command_native`：供 TS 引擎路径经 `pty_run_command` Tauri 命令复用
 // 「沙盒 + ConPTY」运行器（docs/pty-research.md §7 #14）
-pub(crate) use common::{run_command_native, SandboxBypass};
+pub(crate) use common::run_command_native;
+// `SandboxBypass`：TS 引擎入口 `run_command_for_ts_engine` 的入参，需跨 crate 可见。
+pub use common::SandboxBypass;
 pub(crate) use execute_command::execute_command_tool;
 pub(crate) use execute_script::execute_script_tool;
 // PTY 会话交互入口（供 `agent/mod.rs` 的 `pty_write` / `pty_resize` / `pty_key` / `pty_set_held` Tauri 命令转调）
