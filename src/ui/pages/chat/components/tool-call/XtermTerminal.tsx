@@ -19,6 +19,7 @@ import ContextMenu, {
   type ContextMenuItem,
 } from '@/ui/components/shared/ContextMenu'
 import { textMenuItems } from '@/ui/components/shared/ContextMenu/menus'
+import { copyText, readClipboardText } from '@/utils/clipboard'
 import { NOTIFY_INTERVAL_MS } from '@/infrastructure/tools/output-store'
 import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
 import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
@@ -187,47 +188,10 @@ export class PendingCrWriter {
 }
 
 /**
- * 把文本写进系统剪贴板（右键「复制」/ Ctrl+C 智能复制共用）。
- *
- * 正常走 `navigator.clipboard`（WebView2 里可用，与 code-block.tsx 的复制同款路径）；
- * 异常（无 API / 无用户激活）退回 `execCommand('copy')` 兜底。
+ * 剪贴板读写（复制 / 粘贴）统一走 `utils/clipboard`：
+ * 同一套逻辑（写入退 `execCommand` 兜底、读取优先 Tauri 原生命令从而绕开
+ * WebView2 的「剪贴板读」权限）现在被终端与输入框共用，不再各写一份。
  */
-async function writeClipboardText(text: string): Promise<void> {
-  try {
-    await navigator.clipboard?.writeText(text)
-    return
-  } catch {
-    // 走 execCommand 兜底
-  }
-  const textarea = document.createElement('textarea')
-  textarea.value = text
-  document.body.appendChild(textarea)
-  textarea.select()
-  document.execCommand('copy')
-  document.body.removeChild(textarea)
-}
-
-/**
- * 读系统剪贴板文本（右键「粘贴」用）。
- *
- * 优先 Tauri 原生命令：WebView2 的 `navigator.clipboard.readText()` 受「剪贴板读」
- * 权限约束（默认 NotAllowedError），而 Rust 侧已有现成的 Windows 剪贴板原语
- * （CF_UNICODETEXT，与读 CF_HDROP 同一套路），不依赖 WebView 权限。
- * 命令不可用（浏览器 dev）/ 返回空（非 Windows 暂未实现）→ 退浏览器剪贴板 API。
- */
-async function readClipboardText(): Promise<string> {
-  try {
-    const text = await invoke<string>('read_clipboard_text')
-    if (text) return text
-  } catch {
-    // 非 Tauri 环境 / 命令失败 → 走浏览器剪贴板兜底
-  }
-  try {
-    return (await navigator.clipboard?.readText()) ?? ''
-  } catch {
-    return ''
-  }
-}
 
 export function XtermTerminal({
   stream,
@@ -425,7 +389,7 @@ export function XtermTerminal({
       ev.preventDefault()
       const text = term.getSelection()
       term.clearSelection()
-      void writeClipboardText(text)
+      void copyText(text)
       // false = xterm 不再处理该键，\x03 不会经 onData → pty_write 发出去
       return false
     })
@@ -573,7 +537,7 @@ export function XtermTerminal({
     if (!term) return
     const text = term.getSelection()
     if (!text) return
-    await writeClipboardText(text)
+    await copyText(text)
     term.clearSelection()
     term.focus()
   }

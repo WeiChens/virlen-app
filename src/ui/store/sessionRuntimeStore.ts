@@ -4,8 +4,32 @@ import RuntimeState from '@/utils/runtimeState'
 
 /** 单个会话的运行时状态 */
 export interface SessionRuntime {
-  /** 是否正在 AI 回复中 */
+  /**
+   * 是否正在 AI 回复中 —— **引擎 run 的锁**。
+   *
+   * 并发保护的唯一判据（`chat/flow.ts::isSessionBusy`）：手机端 / 托盘 / 多窗口靠它挡
+   * 「同一会话同时起两个 run 去写同一份 messages」。
+   *
+   * ⚠️ 不要拿它当「界面在忙」的展示位：发送**之前**的本地准备请用下面的 `preparing`，
+   * 否则会把同一次发送的后续步骤锁死（见 `preparing` 的注释）。
+   */
   working: boolean
+  /**
+   * 本地前置处理中（图片视觉分析等）—— **尚无引擎 run**。
+   *
+   * 与 `working` 的唯一差别，也是关键差别：
+   *  - `working`：有一个**引擎 run 在跑**（发送 / 恢复链路上的状态机，同时是并发锁）；
+   *  - `preparing`：发送**之前**的本地准备 —— `chat-view.doSend` 里逐张跑
+   *    `vision.analyzeBase64` 本地识别图片，可能要好几秒。纯展示。
+   *
+   * 为什么必须分开（回归缺陷，2026-10）：本地识别曾用 `working: true` 点亮输入区指示器，
+   * 而那把锁是**同一次发送**稍后要过的关 —— 识别结束后紧接着的 `sendMessage` 被自己判成
+   * 「该会话正在回复中，请等待完成或先取消」：用户消息已经显示出来，却永远等不到回复。
+   *
+   * 界面要表达「这个会话在忙」用 `isSessionRuntimeBusy(rt)`（两者取或）。
+   * 除 `chat-view.doSend` 外**不要**再写这个字段。
+   */
+  preparing: boolean
   /** 流式回复中累积的内容（切换会话时保留） */
   pendingContent: string
   /** 正在进行的流式消息 ID */
@@ -56,6 +80,7 @@ export function getSessionRuntime(sessionId: string): SessionRuntime {
       sessionRuntimeState.value.sessions[sessionId] = {
         compacting: false,
         working: false,
+        preparing: false,
         pendingContent: '',
         streamingMessageId: null,
         paused: false,
@@ -79,6 +104,17 @@ export function updateSessionRuntime(
   runInAction(() => {
     Object.assign(rt, patch)
   })
+}
+
+/**
+ * 该会话在**界面上**是否显示「忙碌」（引擎 run 在跑 或 本地前置处理中）。
+ *
+ * ⚠️ 这不是并发锁 —— 锁只认 `working`（`chat/flow.ts::isSessionBusy`）。这里多算一个
+ * `preparing`，是为了让「用户点发送 → 本地识别图片 → 引擎开跑」这条链路上，
+ * 指示器 / 侧边栏圆点 / 托盘状态不出现闪断。
+ */
+export function isSessionRuntimeBusy(rt: SessionRuntime): boolean {
+  return rt.working || rt.preparing
 }
 
 /**

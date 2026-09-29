@@ -38,6 +38,7 @@ export {
   getSessionRuntime,
   updateSessionRuntime,
   dropSessionRuntime,
+  isSessionRuntimeBusy,
 } from './sessionRuntimeStore'
 export type { SessionRuntime } from './sessionRuntimeStore'
 export {

@@ -18,6 +18,7 @@ import type { Session, Message } from '@/types'
 import {
   chatState,
   getSessionRuntime,
+  isSessionRuntimeBusy,
   sessionStore,
   agentStore,
   settingsState,
@@ -485,10 +486,12 @@ function ChatSidebar({
     const rt = getSessionRuntime(session.id)
     const isCurrent = session.id === chatState.value.currentSessionId
     const isEdit = editingId === session.id
+    // 「在忙」= 引擎 run 在跑 或 本地前置处理中（图片识别），见 sessionRuntimeStore
+    const isBusy = isSessionRuntimeBusy(rt)
     return (
       <div
         key={session.id}
-        className={`session-item ${isCurrent ? 'active' : ''} ${rt.working ? 'working' : ''} ${session.pinned ? 'pinned' : ''}`}
+        className={`session-item ${isCurrent ? 'active' : ''} ${isBusy ? 'working' : ''} ${session.pinned ? 'pinned' : ''}`}
         onClick={() => handleSelect(session.id)}
         // 右键即菜单（原来的「更多」按钮已移除）：openAt 会 preventDefault +
         // stopPropagation，顺带拦掉浏览器默认菜单与外层的右键处理
@@ -523,7 +526,7 @@ function ChatSidebar({
                   <svg className="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="200" height="200"><path d="M885.333333 85.333333H138.666667a53.393333 53.393333 0 0 0-53.333334 53.333334v746.666666a53.393333 53.393333 0 0 0 53.333334 53.333334h746.666666a53.393333 53.393333 0 0 0 53.333334-53.333334V138.666667a53.393333 53.393333 0 0 0-53.333334-53.333334z m-458.666666 618.666667a21.333333 21.333333 0 0 1-42.666667 0V320a21.333333 21.333333 0 0 1 42.666667 0z m213.333333 0a21.333333 21.333333 0 0 1-42.666667 0V320a21.333333 21.333333 0 0 1 42.666667 0z" fill="var(--accent-color)"></path></svg>
                 </span>
               )}
-              {rt.working && <span className="working-indicator" />}
+              {isBusy && <span className="working-indicator" />}
               <span className="session-title">{session.title}</span>
             </div>
           )}
@@ -873,9 +876,9 @@ function SessionGroupView({
    */
   const menu = useContextMenu<SessionGroup>()
 
-  // 检查组内是否有会话正在工作中
+  // 检查组内是否有会话正在工作中（含本地前置处理：run 在跑 或 图片识别中）
   const hasWorkingSession = useMemo(
-    () => group.sessions.some((s) => getSessionRuntime(s.id).working),
+    () => group.sessions.some((s) => isSessionRuntimeBusy(getSessionRuntime(s.id))),
     [group.sessions],
   )
 

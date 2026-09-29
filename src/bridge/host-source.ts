@@ -37,6 +37,7 @@ import {
 import {
   agentStore,
   chatState,
+  isSessionRuntimeBusy,
   sessionRuntimeState,
   sessionStore,
   settingsState,
@@ -363,8 +364,11 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
     send(params: SendParams) {
       acl.assert('session.send')
       requireSession(params.sessionId)
-      // 并发保护：桌面端靠按钮禁用规避，手机是第二个操作源，必须由权威侧拦截
-      if (sessionRuntimeState.value.sessions[params.sessionId]?.working) {
+      // 并发保护：桌面端靠按钮禁用规避，手机是第二个操作源，必须由权威侧拦截。
+      // 判据含 `preparing`（见 sessionRuntimeStore）：桌面端刚点下发送、还在本地识别图片时，
+      // 这次发送**已经在途**，不能让手机插进来起第二个 run。只读不建条目。
+      const busyRt = sessionRuntimeState.value.sessions[params.sessionId]
+      if (busyRt && isSessionRuntimeBusy(busyRt)) {
         throw new BridgeError('E_BUSY', '该会话正在回复中，请稍后再试')
       }
       const before = new Set(getSessionMessages(params.sessionId).map((m) => m.id))

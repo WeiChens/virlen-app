@@ -63,6 +63,10 @@ import {
 } from './attachment-strips'
 import { GoalInputRow } from './goal-input-row'
 import { InputToolbar } from './input-toolbar'
+import ContextMenu, {
+  useContextMenu,
+} from '@/ui/components/shared/ContextMenu'
+import { editableMenuItems } from '@/ui/components/shared/ContextMenu/editable'
 import type { Props, RefProps } from './types'
 import type { QuoteAttachment } from './hooks'
 import './style.scss'
@@ -99,6 +103,16 @@ function ChatInput(
   )
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const wrapperRef = useRef<HTMLDivElement>(null)
+
+  /**
+   * 输入框右键菜单（剪切 / 复制 / 粘贴 / 全选）
+   *
+   * 自绘窗口全局禁用了浏览器原生右键菜单（`WindowLayout` 的 onContextMenu），
+   * 而输入框原生菜单里恰好全是常用操作，只能自补。
+   * 菜单项**渲染时现算**（`editableMenuItems` 按当前选区 / 只读状态决定禁用态），
+   * 关闭行为（点外部 / Esc）、贴边钳制、层级都由共享 ContextMenu 统一处理。
+   */
+  const inputMenu = useContextMenu<void>()
 
   // ===== 输入框高度拖拽拉伸 =====
   const { wrapperHeight, isResizingState, handleResizeStart } =
@@ -587,6 +601,12 @@ function ChatInput(
           }}
           onKeyDown={handleKeyDown}
           onPaste={handlers.handlePaste}
+          onContextMenu={(e) => {
+            // 硬禁用时不开菜单：控件已被 disabled，剪切 / 粘贴都无处落脚
+            // （AI 工作中不算硬禁用 —— 仍可继续打字，只是不能发送）
+            if (disabled) return
+            inputMenu.openAt(e, undefined)
+          }}
           placeholder={
             images.length > 0 ||
             files.length > 0 ||
@@ -626,6 +646,16 @@ function ChatInput(
           onSend={handlers.handleSend}
           onMessagesUpdate={onMessagesUpdate}
         />
+
+        {/* 输入框右键菜单：经 createPortal 挂 body（消息列表祖先带 transform/
+            overflow，fixed 定位会被牵连），浅色皮肤与输入区配色一致。 */}
+        {inputMenu.state && (
+          <ContextMenu
+            position={inputMenu.state.position}
+            items={editableMenuItems(textareaRef.current)}
+            onClose={inputMenu.close}
+          />
+        )}
       </div>
     </div>
   )

@@ -465,6 +465,18 @@ describe('host.session.send —— 保护与拒绝', () => {
     ).rejects.toMatchObject({ code: 'E_BUSY' })
   })
 
+  it('桌面端正在本地识别图片（preparing）→ E_BUSY（不让手机插进来起第二个 run）', async () => {
+    // 桌面点下发送后、引擎开跑前有一段本地准备（图片视觉分析）。
+    // 那一次发送**已经在途**，手机不能在这时插进来。
+    sessionStore.saveSession(makeSession('s-prep-busy', '准备中'))
+    const h = setup()
+    updateSessionRuntime('s-prep-busy', { preparing: true })
+    await expect(
+      h.caller.call('host.session.send', { sessionId: 's-prep-busy', text: 'x' }),
+    ).rejects.toMatchObject({ code: 'E_BUSY' })
+    updateSessionRuntime('s-prep-busy', { preparing: false })
+  })
+
   it('会话不存在 → E_NOT_FOUND', async () => {
     const h = setup()
     await expect(

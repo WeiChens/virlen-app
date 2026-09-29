@@ -110,6 +110,11 @@ export function toMessageDTO(message: Message, toolNames?: ReadonlyMap<string, s
  * ⚠️ 读运行时状态时**只读不建**（`sessionRuntimeState.value.sessions[id]?.working`）：
  * `getSessionRuntime()` 会在缺失时创建条目，而本函数会在 mobx reaction 的推导里被调用 ——
  * 在推导中写观测值会触发 MobX 告警 / 重入。这里用可选链规避。
+ *
+ * ⚠️ `working` 字段只映射引擎 run（**不并入**本地的 `preparing`，见 sessionRuntimeStore）：
+ * 桌面端本地识别图片的那几秒，手机看到的是「空闲」，但它这时候发消息会被宿主侧以
+ * `E_BUSY` 拦下（`host-source.send` 用 `isSessionRuntimeBusy`）—— 拦得住不够不成两个 run，
+ * 只是提示晚一步出现。
  */
 export function toSessionSummaryDTO(session: Session): SessionSummaryDTO {
   const rt = sessionRuntimeState.value.sessions[session.id]

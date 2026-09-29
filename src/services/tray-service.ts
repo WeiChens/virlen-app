@@ -16,6 +16,7 @@ import { isTauriAvailable } from '@/services/rust-engine'
 import { t, ensureLanguageReady } from '@/ui/i18n'
 import {
   chatState,
+  isSessionRuntimeBusy,
   sessionRuntimeState,
   sessionStore,
   settingsState,
@@ -128,10 +129,12 @@ export function initTrayService(): void {
   //    用 reaction 而不是在 flow/engine 里逐点上报：`working` 有 5+ 处变更点
   //    （flow.ts 发送/恢复/取消、finishWorking…），逐点上报必然会漏；
   //    这里只观察 sessionRuntimeState，两种引擎通吃，且引擎层零改动（铁律 1/3）。
+  //    判据用 `isSessionRuntimeBusy`：图片本地识别期间也算「在途」（Rust 侧「退出会中断
+  //    它们」的二次确认要包含它），见 sessionRuntimeStore。
   reaction(
     () =>
       Object.entries(sessionRuntimeState.value.sessions)
-        .filter(([, rt]) => rt.working)
+        .filter(([, rt]) => isSessionRuntimeBusy(rt))
         .map(([id]) => id)
         .sort()
         .join('|'),

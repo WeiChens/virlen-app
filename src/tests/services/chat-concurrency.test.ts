@@ -16,6 +16,7 @@ import {
   getSessionRuntime,
   updateSessionRuntime,
   dropSessionRuntime,
+  isSessionRuntimeBusy,
 } from '@/ui/store/sessionRuntimeStore'
 import {
   sendMessage,
@@ -121,6 +122,56 @@ describe('会话并发保护（E_BUSY）', () => {
       onError: (_s, m) => errors.push(m),
     })
     expect(errors).toEqual(['会话不存在'])
+  })
+
+  it('本地前置处理（preparing：图片本地识别）不算「忙」，本次发送不被自己的锁拦下', async () => {
+    // 回归缺陷（2026-10 用户报）：`chat-view.doSend` 为了点亮「视觉分析中」指示器写了
+    // `working: true`，而本地识别结束后紧接着的 sendMessage 开头就是这把锁 ——
+    // 用户消息已显示，却报「该会话正在回复中，请等待完成或先取消」。
+    // 修法：本地准备换用 `preparing`（锁只认 `working`）。
+    const id = seed()
+    updateSessionRuntime(id, { preparing: true })
+    const errors: string[] = []
+    await sendMessage(id, 'hello', { onError: (_s, m) => errors.push(m) })
+    // 没被 BUSY 拦下 → 继续走到下一道校验（该会话故意不带 modelId）
+    expect(errors).toEqual(['未选择模型'])
+  })
+
+  it('同一判据覆盖 sendMessageWithGoal / resumePausedRun', async () => {
+    const id = seed()
+    updateSessionRuntime(id, { preparing: true })
+    const goalErrors: string[] = []
+    const resumeErrors: string[] = []
+    await sendMessageWithGoal(id, 'hello', 'goal', {
+      onError: (_s, m) => goalErrors.push(m),
+    })
+    await resumePausedRun(id, { onError: (_s, m) => resumeErrors.push(m) })
+    expect(goalErrors).toEqual(['未选择模型'])
+    // 恢复路径用的是「活跃执行」判据（working && !paused），preparing 同样不算
+    expect(resumeErrors).toEqual(['没有可恢复的暂停任务'])
+  })
+
+  it('本地准备结束后重新被锁（preparing 不泄露到 run 阶段）', async () => {
+    const id = seed()
+    // 识别结束 → 引擎开跑：此时必须重新拦住手机端 / 第二个操作源
+    updateSessionRuntime(id, { preparing: false, working: true })
+    const errors: string[] = []
+    await sendMessage(id, 'hello', { onError: (_s, m) => errors.push(m) })
+    expect(errors).toEqual([BUSY_MSG])
+  })
+})
+
+describe('isSessionRuntimeBusy（界面用的「在忙」，不是锁）', () => {
+  it('working 或 preparing 任一为真 → 忙（指示器不因本地识别而闪断）', () => {
+    const id = seed()
+    const busy = () => isSessionRuntimeBusy(getSessionRuntime(id))
+    expect(busy()).toBe(false)
+    updateSessionRuntime(id, { preparing: true })
+    expect(busy()).toBe(true)
+    updateSessionRuntime(id, { preparing: false, working: true })
+    expect(busy()).toBe(true)
+    updateSessionRuntime(id, { working: false })
+    expect(busy()).toBe(false)
   })
 })
 

@@ -20,6 +20,7 @@ import {
   getSessionRuntime,
   sessionRuntimeState,
   updateSessionRuntime,
+  isSessionRuntimeBusy,
   agentStore,
 } from '@/ui/store'
 import {
@@ -560,7 +561,7 @@ function ChatView() {
   const currentRt = chatState.value.currentSessionId
     ? getSessionRuntime(chatState.value.currentSessionId)
     : null
-  const isCurrentWorking = currentRt?.working ?? false
+  const isCurrentWorking = currentRt ? isSessionRuntimeBusy(currentRt) : false
 
   // 发送消息
   function handleSend(
@@ -702,37 +703,48 @@ function ChatView() {
       images.length > 0 &&
       settingsState.value.imageVisionAnalyzeOptimize
     ) {
-      // 激活 loading 状态，让 working-indicator 显示「视觉分析中」
-      updateSessionRuntime(sid, { working: true })
+      // 本地逐张识别图片期间点亮输入区指示器（「视觉分析中...」）。
+      //
+      // ⚠️ 用 `preparing` 而不是 `working`：后者是**并发锁**（`chat/flow.ts::isSessionBusy`），
+      //    写成它之后，本函数识别结束时紧接着的 `sendMessage` 会被自己的锁判成
+      //    「该会话正在回复中，请等待完成或先取消」——用户消息已经显示出来，
+      //    却永远等不到回复。语义差异见 `sessionRuntimeStore.preparing`。
+      updateSessionRuntime(sid, { preparing: true })
       chatState.setValue('loadingText', t('视觉分析中...'))
 
-      imageOptimize = true
-      const analyses = await Promise.all(
-        images.map((img) =>
-          vision.analyzeBase64(img.url).catch((err): null => {
-            console.error('vision_analyze failed:', err)
-            return null
-          }),
-        ),
-      )
-      const validResults = analyses.filter(Boolean) as VisionAnalyzeResult[]
-      if (validResults.length > 0) {
-        // 按序号组装多图分析结果，让 AI 知道每张图片对应哪个分析
-        // 格式：
-        //   用户上传了{N}张图片
-        //
-        //   第1张图片
-        //   [分析结果]
-        //
-        //   第2张图片
-        //   [分析结果]
-        const parts = validResults.map(
-          (r, i) => tpl('第$__n__张图片\n$__text__', { n: i + 1, text: r.combined_text }),
+      try {
+        imageOptimize = true
+        const analyses = await Promise.all(
+          images.map((img) =>
+            vision.analyzeBase64(img.url).catch((err): null => {
+              console.error('vision_analyze failed:', err)
+              return null
+            }),
+          ),
         )
-        imageAnalyzeResult =
-          tpl('用户上传了$__count__张图片\n\n', { count: validResults.length }) + parts.join('\n\n')
+        const validResults = analyses.filter(Boolean) as VisionAnalyzeResult[]
+        if (validResults.length > 0) {
+          // 按序号组装多图分析结果，让 AI 知道每张图片对应哪个分析
+          // 格式：
+          //   用户上传了{N}张图片
+          //
+          //   第1张图片
+          //   [分析结果]
+          //
+          //   第2张图片
+          //   [分析结果]
+          const parts = validResults.map(
+            (r, i) => tpl('第$__n__张图片\n$__text__', { n: i + 1, text: r.combined_text }),
+          )
+          imageAnalyzeResult =
+            tpl('用户上传了$__count__张图片\n\n', { count: validResults.length }) + parts.join('\n\n')
+        }
+        if (!imageAnalyzeResult) imageOptimize = false
+      } finally {
+        // 本地准备阶段到此为止：识别成功 / 失败 / 抛错都必须解除，
+        // 否则该会话会一直停在「忙碌」上（输入区再也发不出消息）。
+        updateSessionRuntime(sid, { preparing: false })
       }
-      if (!imageAnalyzeResult) imageOptimize = false
     }
 
     // ── 分析完成后，更新已显示的消息，补上分析结果字段 ──

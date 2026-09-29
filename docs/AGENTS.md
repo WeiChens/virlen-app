@@ -587,6 +587,12 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 - **不要踩**：① 非 Tauri（浏览器 `pnpm dev` / vitest）**没有可用的聊天引擎**（引擎行为一律以 Rust 侧测试为准）；② 删 TS 引擎时**必须同时删引用它的测试**（`tsc` 覆盖 `src/tests`）；③ 原 TS 版「标题禁用思考」的能力**不能丢**（否则推理模型上 40 token 被 reasoning 吃掉、标题只能回退首行）—— 这正是 `thinking` 字段存在的原因。
 - 回归用例：Rust `agent::title`（8 例）、`agent::provider::tests::{openai,anthropic}_thinking_*`。
 
+**11.38 输入框右键菜单：受控控件的值必须走「原生 setter + input 事件」** —— 自绘窗口全局禁用了浏览器原生右键菜单（`WindowLayout`），而输入框的原生菜单里恰好全是常用操作（剪切/复制/粘贴/全选）→ 只能自补：菜单项工厂 `ui/components/shared/ContextMenu/editable.ts::editableMenuItems`，目前接线在聊天输入框 `input/index.tsx`。
+- **值怎么改**：项目输入框全是 React 受控，直接 `el.value = next` 会被下次渲染写回旧值。正确姿势 = 用**原型上的**原生 setter 改值（React 会在节点实例上包一层 value 存取器做变更追踪，原型 setter 恰好绕过它）+ 派发 `input` 事件让 `onChange` 收到 → state 与 DOM 一起前进。⚠️ **不要**用 `document.execCommand('insertText')`（jsdom 里不存在，新老 WebView2 行为也不一）。光标要在派发事件**之前**摆好 —— 受控组件的 `onChange` 常顺手记 `selectionStart`。
+- **焦点与选区**：菜单项是 `<button>`，mousedown 就把输入框的焦点抢走了 → 每个动作都先按「打开菜单那一刻的选区」复原（`focusWithSelection`；顺序必须是先 `focus()` 再 `setSelectionRange()`，反了会被浏览器自己的选区记忆覆盖）。
+- **边界**：右键「粘贴」只处理文本（读剪贴板走 `read_clipboard_text`，与 §11.9 的文件路径读取同一套原生链路）；剪贴板里是图片 / 文件时**静默不动** —— 那两种仍走 Ctrl+V 的专属链路（`input/use-input-handlers.ts::handlePaste`）。**不做「撤销」**：`replaceValue` 会截断原生撤销栈，做了也是假的，真撤销请用 Ctrl+Z。
+- 回归用例：`src/tests/ui/input-context-menu.test.tsx`（工厂 / 接线 / 受控同步）、`src/tests/utils/clipboard.test.ts` 的 `readClipboardText`。
+
 **托盘 / 关闭不退出 / 后台工作**：实现见 `src-tauri/src/tray/`（模块头即设计说明），无独立文档。
 
 ---
@@ -608,6 +614,7 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 | 改网络搜索 / 网页抓取（`web_search` / `web_fetch`） | **Rust 原生（权威）** `src-tauri/virlen-core/src/agent/native_tools/web/{web_search,web_fetch,common}.rs`（`web_search` 经 `ctx.settings` 直读 `app_settings` 的 `searchProviders` / `defaultSearchProviderId`）；**JS 执行器（浏览器 dev）** `src/infrastructure/tools/web/*.ts` + `src/infrastructure/search-providers/{factory,tavily,bocha}.ts`；**两侧结果文本契约** `src/tests/fixtures/web-search-format.golden.json`；搜索源配置 `src/services/search-provider-service.ts` + `src/domain/search/*`；已知差异（HTML→Markdown 细节）见 `docs/rust-engine.md` §3 |
 | 改命令执行 / 风险分类 / 权限审批 | `src/domain/permission/index.ts`（+ Rust 镜像 `native_tools/execute/common/classify.rs`）；工具 `tools/execute/common.ts` + `execute-command.ts`/`execute-script.ts`；Rust 原生 `native_tools/execute/`。PTY 相关另见 `sandbox/windows/conpty.rs`、`native_tools/execute/pty_session.rs`、`tool-call/XtermTerminal.tsx`、`tool-call/TerminalConfirmBlock.tsx` |
 | 改终端输出处理（`\r`、ANSI） | `tools/execute/common.ts::processTerminalOutput`（UI 侧 `tool-call/Execute*Message.tsx` 复用）；Rust 侧 `native_tools/execute/common.rs::process_terminal_output`。两份**逐条对齐** |
+| 加 / 改输入框右键菜单（剪切 / 复制 / 粘贴 / 全选） | 菜单项工厂 `src/ui/components/shared/ContextMenu/editable.ts`（`editableMenuItems`，按选区 / 只读状态现算禁用态）；接线 `src/ui/pages/chat/components/input/index.tsx`（`useContextMenu` + `onContextMenu`）；剪贴板读写 `src/utils/clipboard.ts`（`copyText` / `readClipboardText`，与终端右键菜单共用）；受控控件改值的坑见 §11.38 |
 | 改工具授权确认弹窗 / 交互 | `ui/pages/chat/components/modals/authorization.tsx`；事件 `events/toolInteractEvent.ts::showAuthorization`；调度 `services/tool-service/command_confirm.ts`；Rust 侧下发同样字段 `native_tools/execute/{execute_command,execute_script}.rs` |
 | 改沙盒 / 权限 | `src-tauri/virlen-core/src/sandbox/**`、`src/infrastructure/sandbox/*`、`src/domain/security/index.ts` |
 | 改 `js` 类沙盒规则的求值 | ✅ **已落地**（S7）：`src-tauri/virlen-core/src/security/js_rule.rs`（受限 QuickJS：**无 host 函数**、16MB 内存 / 512KB 栈 / 200ms 中断，异常与超时一律按未命中），由 `native_tools/execute/common/rules.rs` 调用；设计与依赖代价见 `docs/config-sink-plan.md` §4 |

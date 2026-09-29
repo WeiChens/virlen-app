@@ -1,10 +1,11 @@
 /**
  * utils/clipboard —— 剪贴板 / 另存为公共工具
  *
- * 重点覆盖三条容易错的链路：
+ * 重点覆盖四条容易错的链路：
  *   1. 图片字节的来源（dataURL 本地解码 / 远端走 plugin-http 绕 CORS）；
  *   2. 「复制图片」的原生优先 + 浏览器兜底（原生失败必须真的退到 ClipboardItem）；
- *   3. 「另存为」的写出内容与「用户取消不算失败」。
+ *   3. 「另存为」的写出内容与「用户取消不算失败」；
+ *   4. 「读剪贴板文本」的原生优先与两级兜底（终端 / 输入框右键「粘贴」共用）。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
@@ -17,6 +18,7 @@ import {
   defaultImageName,
   imageExtOf,
   imageMimeOf,
+  readClipboardText,
   readImageBytes,
   saveImageAs,
 } from '@/utils/clipboard'
@@ -91,6 +93,42 @@ describe('copyText', () => {
     document.execCommand = vi.fn(() => true)
     expect(await copyText('fallback')).toBe(true)
     expect(document.execCommand).toHaveBeenCalledWith('copy')
+  })
+})
+
+describe('readClipboardText', () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset()
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { readText: vi.fn().mockResolvedValue('from-browser') },
+      configurable: true,
+    })
+  })
+
+  it('优先 Tauri 原生命令（绕开 WebView2 的剪贴板读权限）', async () => {
+    vi.mocked(invoke).mockResolvedValue('from-native')
+    expect(await readClipboardText()).toBe('from-native')
+    expect(invoke).toHaveBeenCalledWith('read_clipboard_text')
+    expect(navigator.clipboard.readText).not.toHaveBeenCalled()
+  })
+
+  it('命令不可用（浏览器 dev / 命令失败）→ 退浏览器剪贴板 API', async () => {
+    vi.mocked(invoke).mockRejectedValue(new Error('not tauri'))
+    expect(await readClipboardText()).toBe('from-browser')
+  })
+
+  it('原生返回空串（非 Windows 未实现）→ 也退浏览器兜底', async () => {
+    vi.mocked(invoke).mockResolvedValue('')
+    expect(await readClipboardText()).toBe('from-browser')
+  })
+
+  it('两条路都拿不到 → 空串（调用方静默跳过，不提示「剪贴板是空的」）', async () => {
+    vi.mocked(invoke).mockRejectedValue(new Error('not tauri'))
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { readText: vi.fn().mockRejectedValue(new Error('denied')) },
+      configurable: true,
+    })
+    expect(await readClipboardText()).toBe('')
   })
 })
 
