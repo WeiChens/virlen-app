@@ -104,7 +104,7 @@ function DeviceRow({
   /** 改名提交（已 trim，且保证与当前名字不同）；真的改没改成由父层提示 */
   onRename: (name: string) => void
 }) {
-  const last = device.lastSeenAt ? new Date(device.lastSeenAt).toLocaleString() : '从未'
+  const last = device.lastSeenAt ? new Date(device.lastSeenAt).toLocaleString() : t('从未')
   /** 是否正在改这一行的名字 */
   const [editing, setEditing] = useState(false)
   /** 编辑草稿（只在编辑态有意义；开始编辑时回填当前名） */
@@ -180,9 +180,11 @@ function DeviceRow({
           )}
         </span>
         <span className="phone-control__device-meta">
-          <span className="phone-control__chip">{shortKey(device.mobileKey)}</span>
-          <span className="phone-control__chip">凭证{describeGrantRemaining(device)}</span>
-          <span className="phone-control__chip">上次连接 {last}</span>
+          <span className="phone-control__chip">{t(shortKey(device.mobileKey))}</span>
+          <span className="phone-control__chip">
+            {tpl('凭证$__grant__', { grant: describeGrantRemaining(device) })}
+          </span>
+          <span className="phone-control__chip">{tpl('上次连接 $__time__', { time: last })}</span>
         </span>
       </div>
       <span className="phone-control__device-actions">
@@ -228,12 +230,26 @@ function auditTime(e: AuditEntry): string {
 /** 审计条目的正文（保留 `by` / `tier` 等关键信息，便于「谁批了什么」一眼看清）。 */
 function auditText(e: AuditEntry): string {
   if (e.kind === 'approval') {
-    const who = e.by === 'mobile' ? '手机' : '电脑'
-    const what = e.decision === 'allow' ? '批准' : e.decision === 'shelve' ? '暂存' : '拒绝'
-    const tier = e.tier === 'high' ? '（高风险）' : ''
-    return `${who}${what}${tier}：${e.detail ?? ''}${e.commandPreview ? ` — ${e.commandPreview}` : ''}`
+    const who = e.by === 'mobile' ? t('手机') : t('电脑')
+    const tier = e.tier === 'high' ? t('（高风险）') : ''
+    // 整句当模板，而不是拼「谁 + 动作」两个片段：中英文的语序与词间空格都不同，
+    // 片段拼接在英文里会拼出 “Phone Approved…” 这类缺空格的句子。
+    const key =
+      e.decision === 'allow'
+        ? '$__who__批准$__tier__：$__detail__$__command__'
+        : e.decision === 'shelve'
+          ? '$__who__暂存$__tier__：$__detail__$__command__'
+          : '$__who__拒绝$__tier__：$__detail__$__command__'
+    return tpl(key, {
+      who,
+      tier,
+      detail: e.detail ?? '',
+      command: e.commandPreview ? ` — ${e.commandPreview}` : '',
+    })
   }
-  return `${e.method}${e.detail ? `（${e.detail}）` : ''}`
+  return e.detail
+    ? tpl('$__method__（$__detail__）', { method: e.method, detail: e.detail })
+    : e.method
 }
 
 export default observer(function PhoneControlSettings() {
@@ -272,7 +288,7 @@ export default observer(function PhoneControlSettings() {
         <div className="phone-control__head-text">
           <h2 className="phone-control__title">{t('手机控制')}</h2>
           <p className="phone-control__sub">
-            用手机扫码配对，在外网查看与操作本机 Agent（P2P 加密链路）。
+            {t('用手机扫码配对，在外网查看与操作本机 Agent（P2P 加密链路）。')}
           </p>
         </div>
       </header>
@@ -289,8 +305,8 @@ export default observer(function PhoneControlSettings() {
           <span className="phone-control__status-row">
             <span className={`phone-control__status phone-control__status--${s.status}`}>
               <span className="phone-control__dot" aria-hidden="true" />
-              {STATUS_TEXT[s.status] ?? s.status}
-              {s.error ? `（${s.error}）` : ''}
+              {t(STATUS_TEXT[s.status] ?? s.status)}
+              {s.error ? tpl('（$__error__）', { error: s.error }) : ''}
             </span>
             {/*
               通讯类型：状态说「连没连上」，它说「怎么连上的」—— 并排看才完整。
@@ -299,9 +315,9 @@ export default observer(function PhoneControlSettings() {
             {s.status === 'connected' && LINK_TEXT[s.linkKind] && (
               <span
                 className={`phone-control__link phone-control__link--${s.linkKind}`}
-                title={LINK_HINT[s.linkKind]}
+                title={t(LINK_HINT[s.linkKind])}
               >
-                {LINK_TEXT[s.linkKind]}
+                {t(LINK_TEXT[s.linkKind])}
               </span>
             )}
           </span>
@@ -395,10 +411,7 @@ export default observer(function PhoneControlSettings() {
           />
         ))}
         <p className="phone-control__tip">
-          改名只改本机显示的标签（手机侧不知道本机给它起了什么名），不影响它的授权与连接。
-          移除后该手机立刻断开（若此刻正连着），它手上的授权与旧二维码一并作废 ——
-          想再连必须重新扫屏上的新码并由你确认；它自己重连上来的那几次会被直接拒掉
-          （状态胶囊会写「已拒绝接入」）。授权凭证当月有效，每次连接自动续期，最长 90 天。
+          {t('改名只改本机显示的标签（手机侧不知道本机给它起了什么名），不影响它的授权与连接。 移除后该手机立刻断开（若此刻正连着），它手上的授权与旧二维码一并作废 —— 想再连必须重新扫屏上的新码并由你确认；它自己重连上来的那几次会被直接拒掉（状态胶囊会写「已拒绝接入」）。授权凭证当月有效，每次连接自动续期，最长 90 天。')}
         </p>
       </section>
             {/*
@@ -414,12 +427,16 @@ export default observer(function PhoneControlSettings() {
       >
         <summary>{t('高级：ICE 服务器（STUN / TURN）')}</summary>
         <div className="phone-control__ice-status">
-          当前生效：{s.iceDetail}
-          {s.iceLoading ? '（解析中…）' : ''}
+          {t('当前生效：')}
+          {s.iceDetail}
+          {s.iceLoading ? t('（解析中…）') : ''}
           {s.iceWarning ? ` · ${s.iceWarning}` : ''}
         </div>
         {s.iceCustomError && (
-          <div className="phone-control__ice-error">自定义配置有问题：{s.iceCustomError}</div>
+          <div className="phone-control__ice-error">
+            {t('自定义配置有问题：')}
+            {s.iceCustomError}
+          </div>
         )}
         <textarea
           className="phone-control__ice-text"
@@ -442,9 +459,8 @@ export default observer(function PhoneControlSettings() {
           </button>
         </div>
         <p className="phone-control__tip">
-          留空 = 用服务端下发的默认值（信令服务的 <code>GET /ice</code>，配置在服务端 .env）；
-          填了就完全用你这份（自建 coturn / 内网 STUN / 公共 STUN 都行）。保存后如果手机控制已启用，
-          会重建链路让新配置立即生效（二维码会换一张）。
+          {t('留空 = 用服务端下发的默认值（信令服务的')} <code>GET /ice</code>
+          {t('，配置在服务端 .env）；填了就完全用你这份（自建 coturn / 内网 STUN / 公共 STUN 都行）。保存后如果手机控制已启用，会重建链路让新配置立即生效（二维码会换一张）。')}
         </p>
       </details>
 

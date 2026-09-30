@@ -40,6 +40,7 @@
 | **多层安全** | 路径黑白名单、权限三态、跨平台 Shell 沙盒、工具风暴防护（StormBreaker） |
 | **会话与记忆** | 暂停/恢复（Run Snapshot）、LLM 上下文压缩、本地 RAG（turbovec 向量索引）、用量账本 |
 | **Agent 引擎** | 仅 Rust（`src-tauri/virlen-core/src/agent/`，GUI 与 CLI 共用）；原 TS 引擎 `src/domain/engine/` 已移除（见 §11.37） |
+| **手机控制** | 手机扫码配对后远程操作本机（会话 / 发消息 / 应答工具审批）：电脑侧接口层在 `src/bridge/`，传输用自维护 npm 包 `virlen-remote`（WebRTC + SSE 信令，见 §5.9） |
 
 ---
 
@@ -47,7 +48,7 @@
 
 | 层 | 技术 |
 |---|---|
-| 前端 | React 19、TypeScript（`strict: true` 但 `strictNullChecks: false`）、Vite 7、MobX 6（`mobx` / `mobx-react-lite`）、Sass、react-markdown + remark-gfm、PrismJS、Monaco、turndown + cheerio、JSZip、`@tanstack/react-virtual`、echarts、xterm |
+| 前端 | React 19、TypeScript（`strict: true` 但 `strictNullChecks: false`）、Vite 7、MobX 6（`mobx` / `mobx-react-lite`）、Sass、react-markdown + remark-gfm、PrismJS、Monaco、turndown + cheerio、JSZip、`@tanstack/react-virtual`、echarts、xterm、virlen-remote（手机控制传输层，自维护 npm 包） |
 | 测试 | Vitest 4（jsdom，全局 `vi`）；Rust 内联 `#[cfg(test)] mod tests` |
 | 后端 | Tauri 2、Tokio、Serde、rusqlite（bundled, WAL）、reqwest（原生 SSE）、turbovec + text-splitter（RAG）、grep/walkdir/ignore（文件搜索）、sha2、trash、quasivision、image、pdf-extract |
 | 包管理 | pnpm（`pnpm-workspace.yaml` 需 `allowBuilds: esbuild/@parcel/watcher`） |
@@ -93,6 +94,7 @@
 | `src/infrastructure/` | 端口实现：Provider、工具实现、沙盒、sessionRepo、search-providers、vision、RAG 存储、usage-ledger | domain、types、utils |
 | `src/services/` | 应用编排：chat-service（最大）、agent-service（提示词组装）、rust-engine（Rust 桥）、security/rag/export/update/token-stats 等 | domain、infrastructure、ui/store（读设置） |
 | `src/ui/` | React + MobX：pages（chat / Settings / setupFlow）、components、store、i18n、layout、hooks | 全部下层 |
+| `src/bridge/` | 手机控制「电脑侧接口层」（装配入口 `startPhoneBridge` + ACL / 审批分级 / 审计 / 配对 / DTO 投影 / store 旁路推送），生产接线在 `ui/store/phoneControlStore.ts`（见 §5.9） | services、domain、infrastructure、ui/store、utils、events、`virlen-remote` |
 | `src/skill/` | Skill 加载 / 注册 / 导入 / 广场 | 工具化使用 |
 | `src/events/` | EventEmitter 事件总线（menu / settings / comment / toolInteract / update） | utils |
 | `src/utils/` | 无业务依赖工具：telemetry、storageState、EventEmitter、diff、mdYamlFrontmatter、pathCanonicealize… | 无 |
@@ -313,6 +315,31 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 - **默认关闭**（`telemetryEnabled`），必须保持「关闭时零开销」。
 - Rust 侧 `src-tauri/src/telemetry.rs` 做 panic 桥（落盘 + 前端就绪后拉取）。
 - 密钥打码：`utils/telemetry/redact.ts`、`isSensitiveKey()`。事件名沿用 `域.动作`，公共字段由前端补齐。
+
+### 5.9 手机控制（电脑侧 Bridge）
+
+手机扫码配对后**远程操作本机**（看会话 / 发消息 / 应答工具审批）。电脑侧只做「接口层」，传输交给自维护的 npm 包 `virlen-remote`。
+
+- **装配入口（唯一）**：`src/bridge/index.ts::startPhoneBridge(endpoint, opts)` —— 在一条已建立的 `Endpoint` 上装出三件套：`registerHostHandlers(source)`（`host.*` RPC）、`createStoreBridge(emit)`（`host.event.*` 推送）、配对 / ACL / 审计。
+- **生产接线**：`src/ui/store/phoneControlStore.ts` 实例化 `PhoneControlService` / `PairingStore` / `AuditLog`；设置页 `ui/pages/Settings/phone-control-settings.tsx` 是 QR、设备列表、审计记录的入口。
+- **传输**：WebRTC（`virlen-remote`）+ SSE 信令（`SseSignalingClient`）。信令基址存 `localStorage['virlen.phone.signal']`（默认 `https://virlen.cn/api/rtc/`），自定义 ICE 同样落 `localStorage`（清应用数据即回服务端默认，不丢功能）。
+- **落盘**：配对表 / 设备身份 / 审计经 Rust 命令持久化 —— `cmd_phone_{pairing,device,audit}_*`（`src-tauri/src/commands/phone_{pairing,device,audit}.rs`，已在 `lib.rs` 注册）。
+
+| 文件（`src/bridge/`，15 个） | 职责 |
+|---|---|
+| `index.ts` | 装配入口 + 对外导出面 |
+| `phone-control.ts` | 电脑端常驻服务：握手、配对请求、拒签踢链、状态推送 |
+| `host-source.ts` | 真实 `HostDataSource`：把手机 RPC 落到本机 `sessionStore` / `chat-service` |
+| `store-bridge.ts` | mobx `reaction` 旁路订阅本机 store，把变化推给手机 |
+| `dto.ts` | DTO 投影（**白名单**出参，不整包外发内部结构） |
+| `pairing.ts` / `device-identity.ts` | 配对凭证与电脑设备身份（「重新获取还是同一台」） |
+| `acl.ts` / `approval-policy.ts` / `audit.ts` | 授权策略（**默认拒绝**）/ 审批分级判定 / 操作留痕 |
+| `interaction-registry.ts` / `interaction-source.ts` | 待应答交互注册表（手机应答与本机弹窗同源） |
+| `telemetry.ts` / `subscription.ts` / `link-kind.ts` | 通讯层埋点 / 订阅计数 / 链路类型（P2P 直连或 TURN 中继） |
+
+- **依赖方向**：`src/bridge/` 依赖 `services` / `domain` / `infrastructure` / `ui/store` / `utils` / `events`；而 `ui/store/phoneControlStore.ts` 反过来 import `@/bridge` —— 两者**双向依赖**，改动时留意模块初始化顺序。
+- 测试：`src/tests/bridge/*`（memory transport）与 `src/tests/ui/phone-control-*`。
+- **设计文档未落地**：`src/` 内 16 个文件引用 `docs/phone-control-bridge.md` 的 §号（§16.2 / §25 / §27 / §30 …），但该文件不存在；读到时不要当成已有资料。
 
 ---
 
@@ -626,6 +653,7 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 | 改 Agent 配置（agents）的持久化 / 与 CLI 共享 | 权威源 = `app_settings` 的 `agents` 键；前端 `src/infrastructure/agentRepo/index.ts`（**内存快照 + debounce 落库 + 首启迁移**，与 `securityRepo` 同款）+ `src/ui/store/agentStore.ts` + `src/main.ts` 的 `agents` 水合步骤（⚠️ **必须在 `initDefaultAgent()` / `agentStore.reload()` 之前**，否则默认 Agent 的补全会读到空列表并**覆盖**表里已有的 Agent）；CLI 侧 `src-tauri/virlen-cli/src/list/`（`agents.rs` 的 `list-agent` / `sessions.rs` + `group.rs` 的 `list-session -g agent`）；契约测试 `src/tests/infrastructure/agent-repo-settings.test.ts` |
 | 用 CLI **交互式**配一个供应商 / Agent（`virlen-cli provider|agent add`，**已落地**） | 方案与实测 `docs/cli-tui-plan.md` §10，连带约束见 §11.27；命令实现在 `src-tauri/virlen-cli/src/{provider,agent}.rs`（+ 各自 `tests.rs`）；共用设施 `src-tauri/virlen-cli/src/wizard.rs`（问答原语 / 密文输入）+ `settings_edit.rs`（数组键按 id 增删改 + 字段级合并 + 回读校验）；**供应商模板表 / 推理档位表** 唯一源 `src-tauri/virlen-core/src/agent/provider/provider_catalog.json`（+ `catalog.rs` / 命令 `cmd_provider_catalog` / 前端 `domain/provider/catalog.ts` + `infrastructure/provider/catalog-source.ts`）；**模型列表与连通性验证** `src-tauri/virlen-core/src/agent/provider/models.rs`（`list_models` / `verify_connection`） |
 | 改设置项 | `src/ui/store/settingStore.ts` + `src/ui/pages/Settings/*` + `src/ui/i18n/lang/en-US.json` |
+| 改手机控制 / 配对 / 审计（电脑侧） | 装配 `src/bridge/index.ts::startPhoneBridge` → 服务 `phone-control.ts` → 真实数据源 `host-source.ts`；策略与留痕 `acl.ts` / `approval-policy.ts` / `audit.ts` / `pairing.ts` / `dto.ts` / `store-bridge.ts` / `interaction-*.ts`；接线 `src/ui/store/phoneControlStore.ts` + 设置页 `src/ui/pages/Settings/phone-control-settings.tsx`；落盘命令 `src-tauri/src/commands/phone_{pairing,device,audit}.rs`；传输共享包 `virlen-remote`（信令 / ICE 存 `localStorage`）；测试 `src/tests/bridge/*`、`src/tests/ui/phone-control-*`；设计文档 `docs/phone-control-bridge.md` **尚未落地**（16 个文件引用其 §号） |
 | 改配置下沉 / 设置落库 | Rust `src-tauri/virlen-core/src/session_db/settings.rs`（`app_settings` 表 + `SettingsRepo`）+ 命令壳 `src-tauri/src/commands/session_db.rs::cmd_settings_*`；前端 `src/infrastructure/settingsRepo/` + `settingStore.hydrateSettings()/flushSettingsPersist()` + `src/main.ts` 的 `step('settings')`；计划见 `docs/config-sink-plan.md` |
 | 改埋点 | `src/utils/telemetry/**`（前端）；Rust 侧分两半：**出口** `src-tauri/src/telemetry.rs`（`TauriTelemetrySink` → `agent:telemetry` 事件 + `telemetry_drain_panics` 命令）、**其余**（`track` / `hash_id` / `now_ms` / 会话 trace / panic 钩子与落盘）在 `src-tauri/virlen-core/src/telemetry.rs`（sink 可插拔） |
 | 改 RAG / 知识库 | `src-tauri/virlen-core/src/rag/**`、`src/services/rag-service.ts`、`src/infrastructure/rag/` |
