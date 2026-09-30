@@ -387,11 +387,20 @@ export class PhoneControlService {
   }
 
   /**
-   * 票据到期时重新生成（设置页倒计时归零时调）。
+   * 票据**不可用**时重新生成（设置页倒计时 1 秒一跳时调）—— 三种都算：
+   *  - 还没生成过；
+   *  - 过了 TTL（5 分钟）；
+   *  - **已被扫走**（一次性票据在 `redeemTicket` 里被删）或随「移除设备」被清空。
+   *
+   * ⚠️ 只查 TTL 是不够的（真机缺陷）：兑换发生在用户点「允许」**之后**，比它早的任何一次刷新
+   * 都会错过这次消费，于是屏幕上那张码会一直「看着有效」到 TTL 到期 —— 真机表现就是「第一台
+   * 手机连上后，第二台手机再扫屏幕上那张码，得到『二维码已过期』」，而它的接入在 `hello` 授权
+   * **之前**就已把第一台顶掉（顶号发生在传输层）。
+   *
    * @returns 是否真的换了新票
    */
-  rotateTicketIfExpired(now: number = Date.now()): boolean {
-    if (this.ticket && now < this.ticketIssuedAt + PAIRING_TICKET_TTL_MS) return false
+  rotateTicketIfStale(now: number = Date.now()): boolean {
+    if (this.ticket && this.pairing.hasValidTicket(this.ticket, now)) return false
     this.issueTicket()
     return true
   }
@@ -403,7 +412,7 @@ export class PhoneControlService {
     this.clearRejectNotice()
     if (!this.ticket) this.issueTicket()
     // 每次启用（含重新启用）都用新票：旧票据靠 TTL 自然失效，不断别人的在途扫码
-    this.rotateTicketIfExpired()
+    this.rotateTicketIfStale()
     this.startLink()
   }
 

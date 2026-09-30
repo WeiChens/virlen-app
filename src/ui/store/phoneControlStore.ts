@@ -535,7 +535,7 @@ class PhoneControlStore {
     return updated !== null
   }
 
-  /** 二维码倒计时（1 秒一跳）；到期那一刻**立刻换新码**，屏幕上永远是可用的。 */
+  /** 二维码倒计时（1 秒一跳）；票据一失效（到期 / **被扫走**）就立刻换新码，屏幕上永远是可用的。 */
   private startTicketTimer(): void {
     if (this.ticketTimer) return
     this.ticketTimer = setInterval(() => this.tickTicket(), TICKET_TICK_MS)
@@ -554,7 +554,12 @@ class PhoneControlStore {
       this.stopTicketTimer()
       return
     }
-    const rotated = service.rotateTicketIfExpired()
+    /*
+     * 「不可用」的三种都要换新：还没票 / 到期 / **被扫走**（兑换即从票据表删除）。
+     * 只等到期才换的话，屏幕上会留一张死码最长 5 分钟 —— 真机反馈是「第二台手机扫它只得
+     * 『二维码已过期』」；兑换发生在用户点「允许」之后，屏上那张码必须跟着转，才始终可扫。
+     */
+    const rotated = service.rotateTicketIfStale()
     runInAction(() => {
       if (rotated) this.payload = service.pairingPayload()
       this.ticketLeftSec = remainingSec(service.ticketDeadline)

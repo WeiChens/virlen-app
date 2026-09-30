@@ -122,14 +122,26 @@ describe('PhoneControlService —— 配对载荷（M6）', () => {
     service.disable()
   })
 
-  it('rotateTicketIfExpired：未到期的票不动，到期的换新', () => {
+  it('rotateTicketIfStale：未到期的票不动；**被扫走（已兑换）**或到期的换新', () => {
     const service = makeService()
     const first = service.pairingPayload().ticket
-    expect(service.rotateTicketIfExpired()).toBe(false)
+    expect(service.rotateTicketIfStale()).toBe(false)
     expect(service.pairingPayload().ticket).toBe(first)
-    // 把「现在」推到 TTL 之后
-    expect(service.rotateTicketIfExpired(Date.now() + PAIRING_TICKET_TTL_MS + 1)).toBe(true)
-    expect(service.pairingPayload().ticket).not.toBe(first)
+
+    /*
+     * 真机缺陷回归：「第一台手机连上后，第二台手机再扫屏幕上那张码 → 二维码已过期」。
+     * 兑换 = 票据被删（一次性）。只查 TTL 的旧实现会让这张死票留在屏幕上最长 5 分钟 ——
+     * 下一台手机扫它必然被拒（而它的接入在 hello 之前就把已连的那台顶掉了）。
+     */
+    service.pairing.redeemTicket(first, { mobileKey: MOBILE_KEY, name: '先连上的手机' })
+    expect(service.rotateTicketIfStale()).toBe(true)
+    const second = service.pairingPayload().ticket
+    expect(second).not.toBe(first)
+    expect(service.pairing.hasValidTicket(second)).toBe(true)
+
+    // 把「现在」推到 TTL 之后（到期同样换新）
+    expect(service.rotateTicketIfStale(Date.now() + PAIRING_TICKET_TTL_MS + 1)).toBe(true)
+    expect(service.pairingPayload().ticket).not.toBe(second)
     service.disable()
   })
 })

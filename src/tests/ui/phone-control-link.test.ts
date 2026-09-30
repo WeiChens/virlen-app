@@ -14,10 +14,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const h = vi.hoisted(() => {
   const created: Array<Record<string, any>> = []
+  // 票据序号：跨用例单调递增。假服务实例被多个用例复用，而每个用例会把 `refreshes` 清零 ——
+  // 票值不能只靠它，否则新旧票可能撞上同一个串，断言「码换了」就会假绿
+  let ticketSeq = 0
   class FakeService {
     enabled = false
     drops = 0
     refreshes = 0
+    /** 「屏上」那张票（与真实现的缓存票据同语义：refresh / 轮换都会换它）。 */
+    liveTicket = 'pr-fake'
+    /** 模拟「票据被扫走（兑换即删）」：置 true 后，下一次轮换换新并复位。 */
+    stale = false
     constructor(readonly options: Record<string, any>) {
       created.push(this as unknown as Record<string, any>)
     }
@@ -32,18 +39,26 @@ const h = vi.hoisted(() => {
       this.drops += 1
     }
     pairingPayload() {
-      return { host: 'dk-fake', name: '假电脑', ticket: 'pr-fake', signal: 'https://fake/' }
+      return { host: 'dk-fake', name: '假电脑', ticket: this.liveTicket, signal: 'https://fake/' }
     }
     get ticketDeadline() {
       return Date.now() + 60_000
     }
-    rotateTicketIfExpired() {
-      return false
+    /** 真实现是「票据不可用（到期 / 被扫走 / 被清空）就换新」；假实现只演「被扫走」。 */
+    rotateTicketIfStale() {
+      if (!this.stale) return false
+      this.stale = false
+      this.refreshes += 1
+      ticketSeq += 1
+      this.liveTicket = `pr-fake-${ticketSeq}`
+      return true
     }
     /** 每次刷新返回一张**不同**的票，好让用例能断言「屏上的码确实换了」。 */
     refreshTicket() {
       this.refreshes += 1
-      return { ...this.pairingPayload(), ticket: `pr-fake-${this.refreshes}` }
+      ticketSeq += 1
+      this.liveTicket = `pr-fake-${ticketSeq}`
+      return { ...this.pairingPayload(), ticket: this.liveTicket }
     }
   }
   return { created, FakeService }
@@ -179,5 +194,31 @@ describe('移除设备时的断链', () => {
     phoneControlStore.revokeDevice(online.deviceId)
     expect(service.drops).toBe(1)
     expect(phoneControlStore.activeDeviceId).toBe(null)
+  })
+})
+
+describe('票据被扫走后的自动换码（真机缺陷回归）', () => {
+  /**
+   * 缺陷现场：第一台手机配对成功后，屏幕上那张码已随兑换作废（一次性票据），而屏幕上没人换新 ——
+   * 第二台手机扫它只会得到「二维码已过期」；更糟的是它的接入在 `hello` 授权**之前**就把第一台
+   * 顶掉了（顶号发生在传输层），于是「没顶号成功，原手机却被顶出来」。
+   *
+   * 这里钉的是接线：票据失效（= 被扫走）后，倒计时的一跳（≤1s）就把屏上的码换成新的。
+   */
+  it('票据失效（被扫走）后，倒计时的一跳就把屏上的码换新', async () => {
+    const service = await enableStore()
+    const before = phoneControlStore.payload?.ticket
+
+    // 模拟「另一台手机把屏上那张码扫走」：真实现里票据此刻已从票据表删除
+    service.stale = true
+
+    // 倒计时 1 秒一跳（真实定时器：enableStore 自己 await 真实时间，不用 fake timers）
+    for (let i = 0; i < 60 && phoneControlStore.payload?.ticket === before; i += 1) {
+      await sleep(50)
+    }
+
+    expect(service.refreshes).toBeGreaterThanOrEqual(1)
+    expect(phoneControlStore.payload?.ticket).not.toBe(before)
+    expect(phoneControlStore.payload?.ticket).toBe(service.liveTicket)
   })
 })
