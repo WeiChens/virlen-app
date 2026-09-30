@@ -88,9 +88,21 @@ fn parse_sessions_defaults_and_flags() {
         Ok(SessionsCmd::List(ListSessionsOptions {
             group: Some(GroupBy::Agent),
             limit: Some(10),
+            search: None,
             json: true,
         }))
     );
+    // `-s` / `--search`：取值先 trim（前后空格不该影响匹配）
+    for flag in ["-s", "--search"] {
+        assert_eq!(
+            parse_sessions(args(&[flag, "  票据  "])),
+            Ok(SessionsCmd::List(ListSessionsOptions {
+                search: Some("票据".to_string()),
+                ..Default::default()
+            })),
+            "旗标 {flag}"
+        );
+    }
     // 0 = 全部
     assert_eq!(
         parse_sessions(args(&["--limit", "0"])),
@@ -112,6 +124,8 @@ fn parse_sessions_help_and_errors() {
     assert!(parse_sessions(args(&["--limit", "abc"])).is_err(), "非数字");
     assert!(parse_sessions(args(&["--limit", "1001"])).is_err(), "超上限");
     assert!(parse_sessions(args(&["--nope"])).is_err(), "未知选项");
+    assert!(parse_sessions(args(&["-s"])).is_err(), "search 缺取值");
+    assert!(parse_sessions(args(&["--search", "  "])).is_err(), "空白关键词");
 }
 
 #[test]
@@ -126,6 +140,35 @@ fn parse_agents_flags_and_errors() {
     );
     assert_eq!(parse_agents(args(&["--help"])), Ok(AgentsCmd::Help));
     assert!(parse_agents(args(&["nope"])).is_err());
+}
+
+// ==================== 关键词筛选 ====================
+
+/// 只筛**会话元数据**：标题 / 模型 / 工作目录 / Agent id 与名称都能命中，
+/// 而消息正文（本函数根本拿不到）不在考虑范围
+#[test]
+fn filter_sessions_matches_metadata_only() {
+    let agents = vec![agent("a1", "Virlen")];
+    let sessions = vec![
+        session("s1", "票据问题", Some("a1"), Some("E:/proj"), 400),
+        session("s2", "无关标题", None, Some("E:/other"), 300),
+        session("s3", "另一个", Some("a1"), Some("E:/proj"), 200),
+        session("s4", "第四个", None, None, 100),
+    ];
+    let ids = |kw: &str| {
+        filter_sessions(sessions.clone(), kw, &agents)
+            .into_iter()
+            .map(|s| s.id)
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(ids("票据"), vec!["s1"], "标题命中");
+    assert_eq!(ids("E:/proj"), vec!["s1", "s3"], "工作目录命中（保持输入顺序）");
+    assert_eq!(ids("m1"), vec!["s1", "s2", "s3", "s4"], "模型 id 也参与（测试夹具都是 m1）");
+    assert_eq!(ids("virlen"), vec!["s1", "s3"], "Agent 名（大小写不敏感）");
+    assert_eq!(ids("a1"), vec!["s1", "s3"], "Agent id");
+    assert!(ids("绝不存在").is_empty());
+    assert_eq!(ids("   "), vec!["s1", "s2", "s3", "s4"], "空白 = 不筛");
 }
 
 // ==================== 分组 ====================
@@ -345,6 +388,91 @@ async fn list_sessions_limit_and_empty_db() {
     let text = String::from_utf8_lossy(&out).to_string();
     assert!(text.contains("共 3 个会话，显示 2"), "text={text}");
     assert!(!text.contains("三"), "超出 limit 的不显示");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// 关键词筛选必须在 `--limit` **之前**生效：否则「取最近 N 条再筛」会把匹配项截掉，
+/// 用户会以为「库里没有」。
+#[tokio::test]
+async fn list_sessions_search_filters_before_limit() {
+    let (host, dir) = temp_host();
+    seed(
+        &host,
+        vec![
+            session("s1", "票据问题", None, None, 400),
+            session("s2", "别的会话", None, None, 300),
+            session("s3", "也是票据", None, None, 200),
+        ],
+        None,
+    )
+    .await;
+
+    let mut out: Vec<u8> = Vec::new();
+    let mut err: Vec<u8> = Vec::new();
+    assert_eq!(
+        run_sessions(
+            &host,
+            SessionsCmd::List(ListSessionsOptions {
+                limit: Some(1),
+                search: Some("票据".into()),
+                ..Default::default()
+            }),
+            &mut out,
+            &mut err
+        )
+        .await,
+        EXIT_OK,
+        "stderr={}",
+        String::from_utf8_lossy(&err)
+    );
+    let text = String::from_utf8_lossy(&out).to_string();
+    assert!(text.contains("共 3 个会话"), "总数仍是全库: {text}");
+    assert!(text.contains("匹配「票据」2 个"), "要报出匹配数: {text}");
+    assert!(text.contains("s1"), "匹配里最近的那条要显示: {text}");
+    assert!(!text.contains("s3"), "被 limit 截掉: {text}");
+    assert!(!text.contains("s2"), "没匹配的不显示: {text}");
+
+    // 没命中：明确说「没有匹配」，并指向正确的命令（正文检索不是本命令）
+    let mut out: Vec<u8> = Vec::new();
+    assert_eq!(
+        run_sessions(
+            &host,
+            SessionsCmd::List(ListSessionsOptions {
+                search: Some("绝不出现".into()),
+                ..Default::default()
+            }),
+            &mut out,
+            &mut err
+        )
+        .await,
+        EXIT_OK
+    );
+    let text = String::from_utf8_lossy(&out).to_string();
+    assert!(text.contains("没有匹配"), "{text}");
+    assert!(text.contains("session search"), "要指向正文检索命令: {text}");
+
+    // JSON：total / matched / shown / search 四个数可被脚本区分
+    let mut out: Vec<u8> = Vec::new();
+    assert_eq!(
+        run_sessions(
+            &host,
+            SessionsCmd::List(ListSessionsOptions {
+                search: Some("票据".into()),
+                json: true,
+                ..Default::default()
+            }),
+            &mut out,
+            &mut err
+        )
+        .await,
+        EXIT_OK
+    );
+    let v: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(v["total"], 3);
+    assert_eq!(v["matched"], 2);
+    assert_eq!(v["shown"], 2);
+    assert_eq!(v["search"], "票据");
 
     std::fs::remove_dir_all(&dir).ok();
 }

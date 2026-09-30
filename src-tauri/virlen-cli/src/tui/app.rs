@@ -9,10 +9,10 @@
 //! | `run_tui` | 调用方 | 接管终端、起线、receive 结果；失败超阈值则**降级**回顺序输出模式 |
 
 use crate::session_rt::{
-    compress_session, current_context_tokens, default_compress_mode, report_line, CompressError,
-    SessionRuntime, UNTITLED,
+    compress_session, current_context_tokens, default_compress_mode, models_text, report_line,
+    switch_model, CompressError, SessionRuntime, UNTITLED,
 };
-use crate::tui::commands::{CompressArg, Slash};
+use crate::tui::commands::{CompressArg, ModelArg, Slash};
 use crate::tui::state::{Action, Key, UiEvent, UiState};
 use crate::EXIT_OK;
 use std::io::Write;
@@ -519,6 +519,23 @@ impl Chat {
                     Err(e) => self.error(format!("新建会话失败: {}", e)),
                 }
             }
+            Slash::Model(arg) => match arg {
+                ModelArg::List => self.note(models_text(&self.rt)),
+                ModelArg::Set(id) => {
+                    // 先把结果取出来（而不是在 match 的 scrutinee 里 await）：
+                    // scrutinee 里的临时变量活到整个 match 结束，会让下面的 `self.*` 借不到。
+                    let outcome = switch_model(&mut self.rt, &id).await;
+                    match outcome {
+                        Ok(msg) => {
+                            // 模型换了 → 状态行要立刻跟上（`SessionChanged` 带回 model 字段）
+                            self.push_session(self.rt.messages.len());
+                            self.note(msg);
+                        }
+                        // 校验不过（模型不在 Provider 的 models 里）→ 给出可选清单，不静默换
+                        Err(e) => self.error(e),
+                    }
+                }
+            },
         }
     }
 }

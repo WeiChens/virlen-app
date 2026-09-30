@@ -17,8 +17,19 @@ pub(crate) enum Slash {
     New,
     /// 压缩上下文（`/compress [ai|raw]`）
     Compress(CompressArg),
+    /// 查看 / 切换当前会话的模型（`/model [<id>]`）
+    Model(ModelArg),
     /// 未识别的命令：**不能**当普通消息发给模型（用户以为自己敲的是命令）
     Unknown(String),
+}
+
+/// `/model` 的参数
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ModelArg {
+    /// 不带参数 → 列出当前模型与可选模型（`session_rt::models_text`）
+    List,
+    /// 指定模型 id → 切换（校验与落库在 `session_rt::switch_model`，这里只解析）
+    Set(String),
 }
 
 /// `/compress` 的参数
@@ -48,6 +59,8 @@ pub(crate) fn parse_slash(input: &str) -> Option<Slash> {
         "new" => Slash::New,
         // `/compress`（弹面板）/ `/compress ai|raw`（直接指定）
         "compress" | "compact" => Slash::Compress(parse_compress_arg(arg)),
+        // `/model`（列清单）/ `/model <id>`（切换）
+        "model" => Slash::Model(parse_model_arg(arg)),
         other => Slash::Unknown(other.to_string()),
     })
 }
@@ -66,6 +79,16 @@ fn parse_compress_arg(arg: &str) -> CompressArg {
     }
 }
 
+/// 解析 `/model` 的第二个词：空 = 列清单（不猜一个模型去切）
+fn parse_model_arg(arg: &str) -> ModelArg {
+    let t = arg.trim();
+    if t.is_empty() {
+        ModelArg::List
+    } else {
+        ModelArg::Set(t.to_string())
+    }
+}
+
 /// `/help` 的文本（也在 `chat --help` 里给出提示用）
 pub(crate) fn help_text() -> String {
     "\
@@ -73,6 +96,7 @@ pub(crate) fn help_text() -> String {
   /help            显示本帮助
   /status          显示会话 / 模型 / 工作目录 / 上下文占用 / 用量，以及与桌面端的已知能力差异
   /new             新建会话（当前会话留在库里，可在桌面端继续）
+  /model [模型id]  查看 / 切换当前会话的模型（不带参数则列出当前 Provider 的可用模型）
   /compress [ai|raw]  压缩上下文（不带参数则弹出模式选择面板）
   /exit            退出（同 Ctrl+C / Ctrl+D）
 
@@ -162,12 +186,28 @@ mod tests {
     #[test]
     fn help_lists_every_command() {
         let h = help_text();
-        for c in ["/help", "/status", "/new", "/compress", "/exit"] {
+        for c in ["/help", "/status", "/new", "/compress", "/exit", "/model"] {
             assert!(h.contains(c), "帮助里缺少 {c}");
         }
         // 面板键位与两种模式都必须写在帮助里（用户不看源码也知道怎么用）
         for s in ["AI 摘要", "正文压缩", "Enter", "Esc"] {
             assert!(h.contains(s), "帮助里缺少 {s}");
         }
+    }
+
+    /// `/model`：不带参数 = 列清单；带参数 = 切换（空值绝不静默退化成别的模型）
+    #[test]
+    fn parses_model_command() {
+        assert_eq!(parse_slash("/model"), Some(Slash::Model(ModelArg::List)));
+        assert_eq!(parse_slash("/model   "), Some(Slash::Model(ModelArg::List)));
+        assert_eq!(
+            parse_slash("/model deepseek-v4"),
+            Some(Slash::Model(ModelArg::Set("deepseek-v4".into())))
+        );
+        // 大小写按命令名归一（命令名不敏感，参数原样保留）
+        assert_eq!(
+            parse_slash("/MODEL GPT-4o"),
+            Some(Slash::Model(ModelArg::Set("GPT-4o".into())))
+        );
     }
 }

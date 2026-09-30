@@ -64,6 +64,12 @@ pub(crate) struct Resources {
     pub(crate) provider: ProviderConnection,
     /// 实际使用的模型 id（写进 session.model_id）
     pub(crate) model_id: String,
+    /// 当前 Provider 配置里声明的可用模型（`app_settings.providers[].models`）。
+    ///
+    /// 留给 `chat` 的 `/model`：切换时的候选清单与校验依据。它与 `resolve_connection`
+    /// 校验 `--model` 用的是**同一份数据**，因此「命令行能指定的模型」与「界面里能切到的模型」
+    /// 不会分叉。
+    pub(crate) models: Vec<String>,
     pub(crate) tool_defs: Vec<ToolDefinition>,
     pub(crate) enable_tools: bool,
     pub(crate) security: NativeToolSecurity,
@@ -206,6 +212,15 @@ pub(crate) fn build_resources(
         fallback,
     )?;
 
+    // 可用模型清单：从**被选中的那个 Provider** 上取（`resolve_connection` 只回连接信息，
+    // 模型数组还在 `ProviderLite` 里）。取不到（配置在两次查询之间被改）时为空 —— `/model`
+    // 会据此报「没有可选模型」，而不是崩在这里。
+    let models = providers
+        .iter()
+        .find(|p| p.id == provider.provider_id)
+        .map(|p| p.models.clone())
+        .unwrap_or_default();
+
     // 工作目录：**续用会话时以会话记录为准**，否则 `--workspace` / 默认工作目录 / cwd
     // （见 `resolve_workspace`）
     let workspace = resolve_workspace(
@@ -261,6 +276,7 @@ pub(crate) fn build_resources(
     Ok(Resources {
         provider,
         model_id,
+        models,
         tool_defs,
         enable_tools,
         security,

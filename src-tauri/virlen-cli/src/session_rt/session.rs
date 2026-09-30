@@ -117,3 +117,94 @@ pub(crate) fn new_session(resources: &Resources, title: &str) -> Session {
         system_prompt_manually_edited: None,
     }
 }
+
+// ==================== 模型清单与切换（`/model`） ====================
+
+/// `/model` 不带参数时的清单文本：当前模型 + 可用模型（当前那个打 `*`）。
+///
+/// 候选来自 `Resources::models`（= `app_settings.providers[].models`）—— 与
+/// `--model` 的校验同一份数据，因此「命令行能指定的」与「界面里能切到的」不会分叉。
+pub(crate) fn models_text(rt: &SessionRuntime) -> String {
+    let mut s = format!(
+        "当前模型: {} · Provider {}（{}）\n可用模型:",
+        rt.resources.model_id,
+        rt.resources.provider.provider_id,
+        rt.resources.provider.provider_type
+    );
+    if rt.resources.models.is_empty() {
+        s.push_str(" （无 —— 用 `virlen-cli provider edit` 补模型后重启会话）");
+        return s;
+    }
+    for m in &rt.resources.models {
+        s.push_str(&format!(
+            "\n  {} {}",
+            if *m == rt.resources.model_id { "*" } else { " " },
+            m
+        ));
+    }
+    s.push_str("\n切换: /model <模型id>");
+    s
+}
+
+/// 切换当前会话使用的模型（`/model <id>`）：**校验 → 改内存 → 落库**。
+///
+/// 校验与 `--model` 同一条口径（[`resolve_connection`]）：给了却没配就报错，
+/// 绝不静默换一个 —— 「以为在用 A 模型、实际跑 B 模型」是最难排查的一类问题。
+///
+/// 落库走 `upsert_session`（先落库再交给界面，与引擎「先落库再 emit」同一条约定）：
+/// 用户切完模型直接退出时，下次 `--session` 续跑必须看到的是新模型。
+/// 返回可直接展示的中文句子。
+pub(crate) async fn switch_model(rt: &mut SessionRuntime, model: &str) -> Result<String, String> {
+    let model = model.trim();
+    if model.is_empty() {
+        return Err("模型 id 不能为空".to_string());
+    }
+    if !rt.resources.models.iter().any(|m| m == model) {
+        return Err(format!(
+            "Provider `{}` 未配置模型 `{}`（可用: {}；要新增请用 `virlen-cli provider edit`）",
+            rt.resources.provider.provider_id,
+            model,
+            if rt.resources.models.is_empty() {
+                "无".to_string()
+            } else {
+                rt.resources.models.join(", ")
+            }
+        ));
+    }
+    let previous = rt.resources.model_id.clone();
+    if previous == model {
+        return Ok(format!("模型未变（仍是 {}）", model));
+    }
+    rt.resources.model_id = model.to_string();
+    rt.session.model_id = model.to_string();
+    // 会话时间 = 用户最后一次动作的时间（与桌面端切模型同语义）
+    rt.session.updated_at = virlen_core::telemetry::now_ms();
+    rt.db
+        .repo
+        .upsert_session(&rt.session)
+        .await
+        .map_err(|e| format!("模型已切换为 {}，但落库失败: {}", model, e))?;
+    Ok(format!("模型已切换: {} → {}", previous, model))
+}
+
+/// 消息内容 → 纯文本（string 或 text block 数组；与引擎侧同一口径）。
+///
+/// 它**不属于 TUI**（原住在 `tui/sink.rs`）：`session show` 要看消息正文，
+/// 而反过来让命令层依赖界面层是错的，所以搬到「与界面无关」的这里。
+pub(crate) fn message_text(content: &Value) -> String {
+    match content {
+        Value::String(s) => s.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(|b| {
+                if b.get("type").and_then(Value::as_str) == Some("text") {
+                    b.get("text").and_then(Value::as_str).map(String::from)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => String::new(),
+    }
+}

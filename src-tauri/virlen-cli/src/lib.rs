@@ -23,8 +23,10 @@
 mod config;
 mod list;
 mod run;
+mod session;
 mod session_rt;
 mod tui;
+mod usage;
 // 配置向导：`provider` / `agent` 两个交互式子命令 + 共用设施
 // （`wizard` 问答原语 / `settings_edit` 数组键的按 id 增删改）
 mod agent;
@@ -54,6 +56,8 @@ pub(crate) enum Command {
     Chat(tui::ChatCmd),
     ListSessions(list::SessionsCmd),
     ListAgents(list::AgentsCmd),
+    Session(session::SessionCmd),
+    Usage(usage::UsageCmd),
     Provider(provider::ProvCmd),
     Agent(agent::AgentCmd),
 }
@@ -78,6 +82,11 @@ Virlen CLI（headless）—— 与桌面端读写同一份配置（app_settings 
   virlen-cli list-session [-g agent|workdir] [--limit N] [--json]
                                          列出会话（与桌面端同一份库；`--help` 看说明）
   virlen-cli list-agent [--json]         列出 Agent（app_settings.agents）
+  virlen-cli session <show|search|rm|purge>
+                                         会话管理：查看一条会话 / 检索历史正文 /
+                                         删除会话 / 回收孤儿消息（`session --help` 看说明）
+  virlen-cli usage [选项]                用量账本（token 统计；`usage --help` 看选项）
+                                         只统计 token，不显示费用（价目表在前端 TS）
   virlen-cli provider <add|edit|rm|list|test>
                                          交互式管理供应商配置（逐步录入 → 验证 → 写入）
   virlen-cli agent <add|edit|rm|list>   交互式管理 Agent 配置（逐步录入）
@@ -109,6 +118,8 @@ pub(crate) fn parse_args(args: &[String]) -> Result<Command, String> {
             list::parse_sessions(it.collect()).map(Command::ListSessions)
         }
         "list-agent" | "list-agents" => list::parse_agents(it.collect()).map(Command::ListAgents),
+        "session" | "sessions" => session::parse(it.collect()).map(Command::Session),
+        "usage" | "usage-stats" => usage::parse(it.collect()).map(Command::Usage),
         "provider" => provider::parse(it.collect()).map(Command::Provider),
         "agent" => agent::parse(it.collect()).map(Command::Agent),
         other => Err(format!("未知命令: {}", other)),
@@ -158,6 +169,16 @@ pub async fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i
         Ok(Command::ListAgents(cmd)) => {
             let host: Arc<dyn HostEnv> = Arc::new(CliHost::from_env());
             list::run_agents(&host, cmd, out, err).await
+        }
+        // 会话管理（查看 / 检索 / 删除 / 回收）：同样需要 `Arc<dyn HostEnv>`
+        Ok(Command::Session(cmd)) => {
+            let host: Arc<dyn HostEnv> = Arc::new(CliHost::from_env());
+            session::run(&host, cmd, out, err).await
+        }
+        // 用量账本（只读）：与桌面端同一份 `usage_ledger`
+        Ok(Command::Usage(cmd)) => {
+            let host: Arc<dyn HostEnv> = Arc::new(CliHost::from_env());
+            usage::run(&host, cmd, out, err).await
         }
         // 配置向导：两条都是交互式命令（非终端时自己在入口给出用法错误，不会挂住）
         Ok(Command::Provider(cmd)) => {

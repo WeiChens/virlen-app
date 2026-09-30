@@ -15,6 +15,9 @@ Virlen CLI（headless）—— 解压即用包
   ./virlen-cli chat                         交互式会话（内联视口 TUI；非终端环境自动降级）
   ./virlen-cli run "帮我看看这张截图"          无界面跑一次 agent
   ./virlen-cli list-session --limit 5       列出会话（含上下文占用与条数）
+  ./virlen-cli session show <id>            查看一条会话（模型 / 时间 / 条数 / 上下文占用）
+  ./virlen-cli session search "关键词"       跨所有会话检索历史正文
+  ./virlen-cli usage --group-by model       用量账本（token 统计；金额请在桌面端看）
   ./virlen-cli config get                   读取配置（与桌面端同一份）
   库文件位置：<平台数据根>/JianWeichen.virlen/virlen.db（与桌面端同一个库）。
   可用 VIRLEN_DATA_DIR 覆盖数据目录。

@@ -6,10 +6,10 @@
 
 use crate::run::{self, CliEventSink};
 use crate::session_rt::{
-    compress_session, context_line, current_context_tokens, default_compress_mode, report_line,
-    CompressError, SessionRuntime, UNTITLED,
+    compress_session, context_line, current_context_tokens, default_compress_mode, models_text,
+    report_line, switch_model, CompressError, SessionRuntime, UNTITLED,
 };
-use crate::tui::commands::{CompressArg, Slash};
+use crate::tui::commands::{CompressArg, ModelArg, Slash};
 use crate::EXIT_OK;
 use std::io::{IsTerminal, Write};
 use std::sync::Arc;
@@ -136,6 +136,25 @@ pub(crate) async fn run_plain(
                     Err(e) => {
                         let _ = writeln!(err, "[chat] 新建会话失败: {}", e);
                     }
+                }
+                continue;
+            }
+            // 模型清单 / 切换（与 TUI 同一条实现 `session_rt::switch_model`）
+            Some(Slash::Model(arg)) => {
+                match arg {
+                    ModelArg::List => {
+                        let _ = writeln!(out, "{}", models_text(&rt));
+                        let _ = out.flush();
+                    }
+                    ModelArg::Set(id) => match switch_model(&mut rt, &id).await {
+                        Ok(msg) => {
+                            let _ = writeln!(out, "{}", msg);
+                            let _ = out.flush();
+                        }
+                        Err(e) => {
+                            let _ = writeln!(err, "[chat] {}", e);
+                        }
+                    },
                 }
                 continue;
             }

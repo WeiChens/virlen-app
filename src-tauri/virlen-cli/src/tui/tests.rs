@@ -77,9 +77,30 @@ fn parse_defaults_to_new_session() {
             session_id: Some("s1".into()),
             workspace: Some("E:/w".into()),
             no_tui: true,
+            ..Default::default()
         }))
     );
     assert_eq!(parse(args(&["-h"])), Ok(ChatCmd::Help));
+}
+
+/// 与 `run` 对齐的三个选项：`--provider` / `--model` / `--no-tools`
+#[test]
+fn parse_accepts_provider_model_and_no_tools() {
+    assert_eq!(
+        parse(args(&[
+            "--provider", "p1", "--model", "m2", "--no-tools"
+        ])),
+        Ok(ChatCmd::Chat(ChatOptions {
+            provider_id: Some("p1".into()),
+            model_id: Some("m2".into()),
+            no_tools: true,
+            ..Default::default()
+        }))
+    );
+    // 缺取值 / 空取值都要报错（不静默当默认）
+    assert!(parse(args(&["--model"])).is_err());
+    assert!(parse(args(&["--provider", ""])).is_err());
+    assert!(parse(args(&["--no-tools=1"])).is_err(), "只认开关形式");
 }
 
 #[test]
@@ -90,6 +111,126 @@ fn parse_rejects_bad_usage() {
     // `chat` 不接受位置参数：一次性提问走 `run`，否则用户会以为 `chat 你好` 是一次性调用
     let e = parse(args(&["你好"])).unwrap_err();
     assert!(e.contains("run"), "应引导到 run: {e}");
+}
+
+/// 写一份带**两个**模型的 Provider 配置（`/model` 切换需要候选清单里有第二个）
+async fn seed_provider_two_models(h: &Arc<dyn HostEnv>) {
+    let provider = json!([{
+        "id": "p1", "name": "本地", "type": "openai", "apiKey": "k",
+        "baseUrl": "http://127.0.0.1:1/v1", "models": ["m1", "m2"], "enabled": true
+    }]);
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    assert_eq!(
+        config::run(
+            h.as_ref(),
+            ConfigCmd::Set {
+                key: "providers".into(),
+                value: provider
+            },
+            &mut out,
+            &mut err
+        )
+        .await,
+        EXIT_OK
+    );
+}
+
+/// `/model`：不带参数列清单；带参数切换并**落库**（否则下次 `--session` 续跑还是旧模型）
+#[tokio::test]
+async fn plain_mode_model_command_lists_and_switches() {
+    let dir = tmpdir("model");
+    let h = host(&dir);
+    seed_provider_two_models(&h).await;
+
+    // ① 列清单
+    let mut out: Vec<u8> = Vec::new();
+    let mut err: Vec<u8> = Vec::new();
+    let mut cursor = std::io::Cursor::new(b"/model\n/exit\n".to_vec());
+    let mut input = Input::Buf(&mut cursor);
+    assert_eq!(
+        run_with(
+            &h,
+            ChatCmd::Chat(ChatOptions {
+                no_tui: true,
+                ..Default::default()
+            }),
+            &mut out,
+            &mut err,
+            &mut input
+        )
+        .await,
+        EXIT_OK
+    );
+    let text = String::from_utf8_lossy(&out).to_string();
+    assert!(text.contains("当前模型: m1"), "{text}");
+    assert!(text.contains("可用模型"), "{text}");
+    assert!(text.contains("m2"), "候选清单要含第二个模型: {text}");
+
+    // ② 切到 m2：回显 + 落库
+    let mut out: Vec<u8> = Vec::new();
+    let mut err: Vec<u8> = Vec::new();
+    let mut cursor = std::io::Cursor::new(b"/model m2\n/exit\n".to_vec());
+    let mut input = Input::Buf(&mut cursor);
+    assert_eq!(
+        run_with(
+            &h,
+            ChatCmd::Chat(ChatOptions {
+                no_tui: true,
+                ..Default::default()
+            }),
+            &mut out,
+            &mut err,
+            &mut input
+        )
+        .await,
+        EXIT_OK
+    );
+    assert!(
+        String::from_utf8_lossy(&out).contains("模型已切换: m1 → m2"),
+        "out={}",
+        String::from_utf8_lossy(&out)
+    );
+    let db = virlen_core::session_db::open_session_db(h.as_ref(), &|fut| {
+        tokio::spawn(fut);
+    })
+    .unwrap();
+    let sessions = db.repo.list_sessions().await.unwrap();
+    assert_eq!(sessions[0].model_id, "m2", "新模型必须落库");
+
+    // ③ 不在 Provider 的 models 里 → 报错且**不改**会话（绝不静默换一个）
+    let mut out: Vec<u8> = Vec::new();
+    let mut err: Vec<u8> = Vec::new();
+    let mut cursor = std::io::Cursor::new(b"/model nope\n/exit\n".to_vec());
+    let mut input = Input::Buf(&mut cursor);
+    assert_eq!(
+        run_with(
+            &h,
+            ChatCmd::Chat(ChatOptions {
+                no_tui: true,
+                ..Default::default()
+            }),
+            &mut out,
+            &mut err,
+            &mut input
+        )
+        .await,
+        EXIT_OK
+    );
+    let e = String::from_utf8_lossy(&err).to_string();
+    assert!(e.contains("未配置模型"), "要指出模型没配: {e}");
+    assert!(e.contains("m1") && e.contains("m2"), "要给出可选清单: {e}");
+    assert!(
+        !db.repo
+            .list_sessions()
+            .await
+            .unwrap()
+            .iter()
+            .any(|s| s.model_id == "nope"),
+        "失败的切换不得落库"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 // ==================== 顺序输出模式（可测的那条路径） ====================

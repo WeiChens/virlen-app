@@ -638,5 +638,75 @@ AI 摘要消息同时带前两个：拿 `usage` 当占用会显示成「压缩�
 ⚠️ **不**把清单快照的 `tool` 消息原样搬到 summary 之后：`tool` 消息必须紧跟带 `tool_calls` 的 assistant 消息，否则 OpenAI / Anthropic 协议直接报错。
 
 - 只在快照**落在压缩区间内**（`index >= slice_start`）时补 —— 若它在更早的 summary 之前，说明上一次压缩已处理过，补了会重复。
-- TS 侧（`compress-context.ts::withTodoRecap`）与 Rust 侧**同语义**（铁律 1）；GUI 与 CLI 共用 core 实现（GUI 仍走 TS 那份）。
+- **同语义的一份实现**：Rust `agent::compress::todo_recap`；GUI（Tauri）自 §11.36 起也走 Rust（`cmd_compress_context` → 同一份 `agent/compress`），CLI 走 `session_rt/compress.rs`，**不存在第二份 TS 实现**。
+
+---
+
+## 12. 会话管理 / 用量账本 / TUI 换模型（2026-09-30）
+
+起因：一次 CLI 体检（拿 `virlen-core` 的公开能力面逐项对照）发现三处「core 已有、CLI 没有入口」：
+
+| # | 缺口 | 结论 |
+|---|---|---|
+| A2 | `session_db` 的 `delete_session` / `purge_orphan_messages` / `search_messages` 在 CLI **一个入口都没有** | 新增 `session <show\|search\|rm\|purge>` |
+| A3 | 账本的 `usage_stats` / `usage_records` 同样未接线（CLI 只能看**本进程**的实时 token） | 新增 `usage` 子命令 |
+| A4 | `chat` 比 `run` 少 `--model` / `--provider` / `--no-tools`；TUI 里换模型只能退出重来 | `ChatOptions` 对齐 `run` + 新增 `/model` |
+
+### 12.1 `session <show|search|rm|purge>`
+
+```text
+virlen-cli session show <id> [--messages N] [--json]                       元信息（+ 最近 N 条预览）
+virlen-cli session search <关键词> [--session <id>] [--limit N] [--json]    检索消息正文
+virlen-cli session rm <id> [--yes]                                         删会话（连同消息）
+virlen-cli session purge [--yes]                                           回收孤儿消息（并等它跑完）
+```
+
+- **两条路别混**（两处帮助文本里都写死了）：`list-session -s|--search` 只筛**会话元数据**（标题 / 工作目录 / Agent / id）；`session search` 检索**消息正文**。前者是「找会话」，后者是「找某句话」。在 `list-session --search` 里搜正文关键词而没命中时，stderr 会明确指路：`关键词只筛会话元数据；检索消息正文请用 virlen-cli session search`。
+- **`show` 的上下文列**：与会话列表同一套 `SessionRepo::session_stats`；**从未拿到用量数据时显示 `-（从未拿到用量数据）`，不是 `0%`** —— 「没有数据」与「占用为零」是两件事。`--json` 另带 `messagesRequested`（区分「没要预览」与「真没消息」）。
+- **`rm` / `purge` 是 fail-closed 的**：stdin 不是终端（管道 / CI / 重定向）且未给 `--yes` → 直接 `EXIT_USAGE`(2)，**绝不读 stdin 干等**。判定抽成纯函数 `needs_yes_gate(yes, interactive)`：真路径要读 stdin，会挂住单测。
+- **`purge` 的口径要诚实**：`open_session_db` 自己就会 spawn 一次后台回收，所以「确实有孤儿可回收」在真端到端里**造不出确定性场景**（写了会 flaky）→ 单测只断言「正常情况下恒为 0 条」，非 0 分支靠纯函数 `purge_line(n)` 覆盖。命令本身**显式 await** 回收（短命进程里后台任务可能来不及跑完），帮助文本也这么写。
+- **删会话不清用量账本**（用量是已发生消费的事实记录）；`rm` 成功后的 stderr 明确写出这一点（并指路 `virlen-cli usage`）。
+- 检索口径与桌面端一致：默认只看 `user` / `assistant` 两类消息（不含工具结果），按时间倒序。
+
+### 12.2 `usage` —— 只报 token，不报钱
+
+```text
+virlen-cli usage [--session <id>] [--model <m>] [--kind <k>]
+                 [--since <日期>] [--until <日期>]
+                 [--group-by day|hour|week|month|model|session|kind|provider]
+                 [--records] [--limit N] [--json]
+```
+
+- **价目表在前端 TS**（`src/domain/pricing/index.ts`），Rust 侧不持价 —— 既有约定（`AGENTS.md` §5.3「Rust 只回 token 数，费用一律前端算」）。所以本命令**不抄第二份价格表**：stderr 指路「费用请在桌面端看」，JSON 带 `"costIncluded": false`。
+- **两个白名单必须硬挡**：`--group-by`（8 项：`day` / `hour` / `week` / `month` / `model` / `session` / `kind` / `provider`）与 `--kind`（6 项：`chat_round` / `compress` / `title` / `verify` / `embedding` / `legacy`）都与 core 的匹配表**逐字一致** —— core 的 `usage_group_expr` 对认不出的维度**静默退回 `day`**，不挡就会让用户看着「按模型」的表得出按天分桶的结论。
+- `--since/--until` 收 `YYYY-MM-DD`（**本地时区**；`--until` 取当日 `23:59:59.999`）或毫秒时间戳。实测 chrono 的 `%m/%d` 宽容，`2026-9-1` 也能解析 → 单测只否定真错的格式（别按「必须补零」写断言）。
+- 空桶 key（无会话 id / 未记录模型）给占位文案「（无会话）」/「（未记录）」，`--group-by session` 时换成会话标题 —— 避免表格出现空格子，也避免「标题查不到就显示空」。
+- 「数据范围」（`first_ts` / `last_ts`）**不受过滤条件影响**：它回答的是「这份账本从什么时候开始有数据」。
+
+### 12.3 `chat` 选项对齐 `run` + `/model`
+
+- `ChatOptions` 增 `--provider <id>` / `--model <id>` / `--no-tools`（与 `run` 同义，复用 `RunOptions` 的装配链），帮助文本已同步。
+- 新增斜杠命令 `/model [<id>]`：
+  - 不带参数 → `session_rt::models_text()`：`当前模型: <id> · Provider <pid>（<type>）` + 可用模型清单（当前项打 `*`）；候选来自 `Resources::models`（= `app_settings.providers[].models`），**与 `--model` 的校验同一份数据** → 「命令行能指定的」与「界面里能切到的」不会分叉。
+  - 带参数 → `session_rt::switch_model()`：**校验 → 改内存 → `upsert_session` 落库**（先落库再交给界面，与引擎「先落库再 emit」同一条约定：切完直接退出，下次 `--session` 续跑必须看到新模型）；不在该 Provider 的模型列表里就**报错并给出可选清单，绝不静默换**（「以为在用 A 模型、实际跑 B」是最难排查的一类问题）；重复设同一模型返回「模型未变」且**不写库**。
+- TUI（`tui/app.rs`）与顺序输出模式（`tui/plain.rs`）**两条路径都接**。⚠️ 踩过的坑：别在 `match` 的 scrutinee 里直接 `.await`（会延长临时变量生命周期 → 借用冲突），先把结果取出来再 match。
+- 顺带去重：`tui/sink.rs` 的 `text_of` 改成 `session_rt::message_text` 的**再导出别名**（`pub(crate) use`），同 crate 不再有两份实现，调用点与既有测试不动。
+
+### 12.4 验证（本机实测）
+
+| 项 | 结果 |
+|---|---|
+| `cargo test -p virlen-cli` | **232 passed**（改动前 200，+32） |
+| `cargo clippy -p virlen-cli --all-targets -- -D warnings` | exit 0（顺带修掉一处 `while_let_on_iterator`） |
+| 真二进制冒烟（临时 `VIRLEN_DATA_DIR`，不碰真实库） | `/model` 清单（`* m1`）→ `模型已切换: m1 → m2` → `ghost` 报错并给可选清单；`list-session --search` 命中 / 未命中（给出指路文案）；`session show --messages 3` / `--json`、`session search` 命中并带会话标题；`session rm` 无 `--yes` → **exit=2**、带 `--yes` → 删除成功且提示「用量账本不受影响」；`usage` 空态 / 日期过滤 / `--group-by minute` → exit=2 |
+| 顶层 `help` | 已含 `session <show\|search\|rm\|purge>` 与 `usage [选项]` 两行 |
+
+> 附带确认（非本次改动）：失败的回合也会落库会话与用户消息 —— 引擎是「先落库再开始循环」。
+
+### 12.5 未做 / 边界
+
+- **`usage` 不显示费用**是有意为之（见 12.2），不是未完成项；金额只在桌面端「用量统计」里。
+- `session` 没有 `rename` / `export`（core 无对应能力，属**新增功能**而非接线，不在本次范围）。
+- `purge` 在极短命进程里若后台回收尚未跑完就已退出，仍可能残留孤儿 —— 但下次任意 CLI / GUI 开库时会再收一次（`open_session_db` 既有行为）。
+- 本次**未动** `run` 的 stdin prompt（A1）、`config get` 明文输出 apiKey（B1）、`run/sink.rs` 的 `mutex unwrap`（B2）、TUI 线程 `expect`（B3）、`run` 的 stderr 噪音开关（C1）—— 体检里列为候选，用户未选。
 

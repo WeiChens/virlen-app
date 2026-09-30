@@ -49,9 +49,18 @@ pub(crate) async fn run_sessions(
     };
 
     let total = all.len();
+    // Agent 清单要在筛选**之前**拿到：关键词匹配把 Agent 名也算在内（用户记得的往往是
+    // 「Virlen」而不是 uuid）。一次读完，后面分组 / JSON 复用同一份，不再重复读设置。
+    let agents = load_agents(db.settings.as_ref()).await;
+    // 筛选必须在 `--limit` 之前：否则「最近 50 条」先把匹配项截掉了，用户会以为搜不到
+    let matched: Vec<Session> = match opts.search.as_deref() {
+        Some(kw) => filter_sessions(all, kw, &agents),
+        None => all,
+    };
+    let matched_count = matched.len();
     let limit = effective_limit(opts.limit);
     // 先截断再分组：分组模式下每组拿到的都是「最近的那批」，与「最近 50 条」的直觉一致
-    let shown_sessions: Vec<Session> = all.into_iter().take(limit).collect();
+    let shown_sessions: Vec<Session> = matched.into_iter().take(limit).collect();
     let shown = shown_sessions.len();
 
     // 「100% 对应多少」来自 `app_settings.contextWindowTokens`（与桌面端同一键；缺失→默认 200k）。
@@ -78,10 +87,15 @@ pub(crate) async fn run_sessions(
     let stat_of = |id: &str| stats.get(id);
 
     if opts.json {
-        let agents = load_agents(db.settings.as_ref()).await;
         let mut payload = Map::new();
         payload.insert("total".into(), json!(total));
+        // `matched` = 关键词筛完的条数（未筛时等于 total）—— 脚本据此区分「库里就没有」与「被筛掉了」
+        payload.insert("matched".into(), json!(matched_count));
         payload.insert("shown".into(), json!(shown));
+        payload.insert(
+            "search".into(),
+            opts.search.clone().map(Value::String).unwrap_or(Value::Null),
+        );
         payload.insert(
             "groupBy".into(),
             opts.group.map(|g| json!(g.as_str())).unwrap_or(Value::Null),
@@ -130,12 +144,25 @@ pub(crate) async fn run_sessions(
         let _ = writeln!(out, "没有会话。");
         return EXIT_OK;
     }
+    if matched_count == 0 {
+        let _ = writeln!(
+            out,
+            "共 {} 个会话，没有匹配「{}」的（关键词只筛会话元数据；检索消息正文请用 `virlen-cli session search`）",
+            total,
+            opts.search.as_deref().unwrap_or("")
+        );
+        return EXIT_OK;
+    }
     let _ = writeln!(
         out,
-        "共 {} 个会话，显示 {}{}",
+        "共 {} 个会话{}，显示 {}{}",
         total,
+        match opts.search.as_deref() {
+            Some(kw) => format!("，匹配「{}」{} 个", kw, matched_count),
+            None => String::new(),
+        },
         shown,
-        if shown < total {
+        if shown < matched_count {
             format!("（--limit {} 调整，0 = 全部）", limit)
         } else {
             String::new()
@@ -162,7 +189,6 @@ pub(crate) async fn run_sessions(
             }
         }
         Some(by) => {
-            let agents = load_agents(db.settings.as_ref()).await;
             for group in group_sessions(shown_sessions, by, &agents) {
                 let _ = writeln!(out, "\n▌ {}（{}）", group.name, group.sessions.len());
                 for s in &group.sessions {

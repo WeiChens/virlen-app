@@ -230,8 +230,8 @@ CLI 显式参数  >  环境变量（VIRLEN_*）  >  app_settings 表  >  内置�
 | 目录覆盖 | `VIRLEN_DATA_DIR`（环境变量）> 默认 `<平台数据根>/JianWeichen.virlen`；`config path` 可直接核对与 GUI 是否同一份 |
 | ⚠️ 连带要求 | `cargo test` 必须带 `--workspace`（拆包后裸跑只跑 `virlen-app`，会静默漏掉 core 的用例）；`[package] default-run = "virlen-app"` 保留为防御性声明 |
 | 验证 | `cargo test --workspace` 全绿；`npx tauri build --no-bundle --debug` → `Built application at: …/virlen-app.exe`；`cargo tree -p virlen-cli` 无 tauri 系（比 GUI 少 94 个 crate）；CLI 端到端冒烟用临时 `VIRLEN_DATA_DIR`（不碰真实库） |
-| 已落地（后续批次） | `run`、`list-session [-g agent\|workdir]`、`list-agent`（读 `app_settings.agents`）、交互式 `tui`（`chat`）—— 实现同在 `src-tauri/virlen-cli/src/`（**core 不含命令入口**）；边界见 `AGENTS.md` §11.15 / §11.16，TUI 见 `docs/cli-tui-plan.md` |
-| 尚未做 | `config set` **不校验键名**（Rust 侧没有权威 schema，与 §6 R6 一致）；没有 `unset` 子命令 |
+| 已落地（后续批次） | `run`、`list-session [-g agent\|workdir] [-s\|--search]`、`list-agent`（读 `app_settings.agents`）、交互式 `tui`（`chat`，含 `/model` / `/compress`）、`session <show\|search\|rm\|purge>`（会话详情 / 正文检索 / 删会话 / 回收孤儿消息）、`usage`（账本 token 统计；**只报 token 不报钱**）—— 实现同在 `src-tauri/virlen-cli/src/`（**core 不含命令入口**）；边界见 `AGENTS.md` §11.15 / §11.16，TUI 与上述子命令见 `docs/cli-tui-plan.md`（§10–§12） |
+| 尚未做 | `config set` **不校验键名**（Rust 侧没有权威 schema，与 §6 R6 一致）；没有 `unset` 子命令；`session` 无 `rename` / `export`（core 无对应能力）；`usage` 不显示金额（价目表只在前端 TS，见 `AGENTS.md` §5.3） |
 
 ---
 

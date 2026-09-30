@@ -32,6 +32,7 @@ pub(crate) use self::agents::*;
 pub(crate) use self::sessions::*;
 
 use virlen_core::agent::host::HostEnv;
+use virlen_core::agent::types::Session;
 use virlen_core::session_db::{open_session_db, SessionDb};
 use std::sync::Arc;
 
@@ -77,6 +78,8 @@ pub(crate) struct ListSessionsOptions {
     pub group: Option<GroupBy>,
     /// `None` = 默认；`Some(0)` = 全部
     pub limit: Option<usize>,
+    /// 关键词筛选（**只看会话元数据**，不碰消息正文 —— 正文检索是 `session search`）
+    pub search: Option<String>,
     pub json: bool,
 }
 
@@ -110,12 +113,16 @@ virlen-cli list-session —— 列出会话（与桌面端同一份 virlen.db）
   -g, --group <agent|workdir>   分组显示：按 Agent / 按工作目录
                                 （`workspace` 是 `workdir` 的别名；不传则不分组）
       --limit <N>               最多显示 N 条（默认 50；0 = 全部，上限 1000）
+  -s, --search <关键词>         按会话元数据筛选（标题 / 工作目录 / 模型 / Agent 名，
+                                大小写不敏感，子串匹配）
       --json                    输出 JSON（便于脚本）
   -h, --help                    显示本帮助
 
 说明:
   会话按最近更新倒序（与桌面端列表一致）；分组时组内同样保持该顺序。
   未关联 Agent / 无工作目录的会话归入「未分组」。
+  -s/--search 只筛**会话元数据**（标题 / 工作目录 / 模型 / Agent id 与名称），不检索消息正文 ——
+  要在历史正文里找东西请用 `virlen-cli session search <关键词>`（两者不可互相替代）。
   「上下文/<窗口>」列 = 当前上下文占用（百分比 + 绝对 token，与桌面端 token 环同口径）；
   窗口大小（100% 对应多少）取自 app_settings.contextWindowTokens，可在桌面端设置里修改；
   「条数」列 = 会话内消息条数。两者无数据时显示 `-` / `0`（而不是 0%）。
@@ -154,6 +161,13 @@ pub(crate) fn parse_sessions(args: Vec<&str>) -> Result<SessionsCmd, String> {
                     format!("-g 取值无效: {}（可选: agent | workdir）", raw)
                 })?);
             }
+            "-s" | "--search" => {
+                let raw = it.next().ok_or_else(|| "选项 -s/--search 缺少取值".to_string())?;
+                if raw.trim().is_empty() {
+                    return Err("选项 -s/--search 的取值不能为空（不想筛就别传）".to_string());
+                }
+                opts.search = Some(raw.trim().to_string());
+            }
             "--limit" => {
                 let raw = it.next().ok_or_else(|| "选项 --limit 缺少取值".to_string())?;
                 let n: usize = raw
@@ -191,6 +205,52 @@ pub(crate) fn parse_agents(args: Vec<&str>) -> Result<AgentsCmd, String> {
         }
     }
     Ok(AgentsCmd::List(opts))
+}
+
+// ==================== 关键词筛选 ====================
+
+/// 按关键词筛会话 —— **只看会话元数据**（标题 / 模型 / 工作目录 / Agent id 与名称），
+/// 不碰消息正文。
+///
+/// 为什么不做正文检索：那是 `session search` 的活（走 `SessionRepo::search_messages`）。
+/// 两者不能互相替代：列表筛选要在 `--limit` **之前**完成（否则匹配项会被限量截掉），
+/// 而全文检索的代价是逐条读正文 —— 放在「列表」里就成了不可控开销。
+///
+/// 大小写不敏感、子串匹配；关键词为空白时原样返回（当作没筛）。
+pub(crate) fn filter_sessions(
+    sessions: Vec<Session>,
+    keyword: &str,
+    agents: &[AgentLite],
+) -> Vec<Session> {
+    let kw = keyword.trim().to_lowercase();
+    if kw.is_empty() {
+        return sessions;
+    }
+    sessions
+        .into_iter()
+        .filter(|s| session_matches(s, &kw, agents))
+        .collect()
+}
+
+/// 单个会话是否命中关键词（`kw` 必须是已小写的非空串）
+fn session_matches(s: &Session, kw: &str, agents: &[AgentLite]) -> bool {
+    let hit = |v: &str| v.to_lowercase().contains(kw);
+    if hit(&s.title) || hit(&s.model_id) {
+        return true;
+    }
+    if s.workspace.as_deref().map(hit).unwrap_or(false) {
+        return true;
+    }
+    if let Some(aid) = s.agent_id.as_deref() {
+        if hit(aid) {
+            return true;
+        }
+        // Agent 名也参与匹配：用户记得的往往是「Virlen」而不是它的 uuid
+        if let Some(a) = agents.iter().find(|a| a.id == aid) {
+            return hit(&a.name);
+        }
+    }
+    false
 }
 
 // ==================== 执行 ====================

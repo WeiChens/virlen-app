@@ -4,6 +4,7 @@
 //! 这个**原样转交**给 UI —— 因为 TUI 要自己决定「哪些进在飞区、哪些进状态行」。
 //! 文件末尾三个纯函数（`input_preview` / `text_of` / `first_line`）是它的格式化助手，
 //! 与它同生共死：状态行与工具行只用得上一行信息量。
+//! ⚠️ 其中 `text_of` 是 `session_rt::message_text` 的再导出（实现只有一份，见其定义处）。
 
 use crate::tui::state::UiEvent;
 use serde_json::{json, Value};
@@ -317,23 +318,10 @@ pub(crate) fn input_preview(input: Option<&Value>) -> String {
 }
 
 /// 消息内容 → 纯文本（string 或 text block 数组；与引擎侧同一口径）
-pub(crate) fn text_of(content: &Value) -> String {
-    match content {
-        Value::String(s) => s.clone(),
-        Value::Array(blocks) => blocks
-            .iter()
-            .filter_map(|b| {
-                if b.get("type").and_then(Value::as_str) == Some("text") {
-                    b.get("text").and_then(Value::as_str).map(String::from)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" "),
-        _ => String::new(),
-    }
-}
+///
+/// 实现已搬到 `session_rt::message_text`（`session show` 也要用它，而它不属于界面层）；
+/// 这里保留原名再导出，呼叫点与测试都不必改，且**只有一份实现**。
+pub(crate) use crate::session_rt::message_text as text_of;
 
 /// 取首行并截断（预览绝不带换行，否则会把动态区顶掉）
 pub(crate) fn first_line(s: &str, max: usize) -> String {

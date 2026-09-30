@@ -73,6 +73,50 @@ fn with_usage(mut m: Message, total: i64) -> Message {
     m
 }
 
+/// `/model` 的两条语义：清单要标出当前模型；切换要**校验 + 落库 + 幂等**
+#[tokio::test]
+async fn switch_model_validates_persists_and_is_idempotent() {
+    let (mut rt, dir) = runtime().await;
+
+    // 清单：当前模型打 `*`，并标明 Provider
+    let text = models_text(&rt);
+    assert!(text.contains("当前模型: m1"), "{text}");
+    assert!(text.contains("* m1"), "当前项要标星: {text}");
+
+    // 校验：不在 Provider 的 models 里 → 报错，且内存里也不变
+    let err = switch_model(&mut rt, "ghost").await.unwrap_err();
+    assert!(err.contains("未配置模型"), "{err}");
+    assert_eq!(rt.resources.model_id, "m1");
+    assert_eq!(rt.session.model_id, "m1");
+
+    // 空 id 也算用法错误（不能默默不动）
+    assert!(switch_model(&mut rt, "   ").await.unwrap_err().contains("不能为空"));
+
+    // 补上第二个模型（`resources.models` 就是 Provider 那份清单）→ 切换 + 落库
+    rt.resources.models.push("m2".to_string());
+    let ok = switch_model(&mut rt, "m2").await.expect("已配的模型应能切");
+    assert!(ok.contains("m1 → m2"), "{ok}");
+    assert_eq!(rt.session.model_id, "m2");
+
+    let db = open_session_db(rt.host.as_ref(), &|fut| {
+        tokio::spawn(fut);
+    })
+    .unwrap();
+    let stored = db
+        .repo
+        .get_session(&rt.session.id)
+        .await
+        .unwrap()
+        .expect("切模型时会把会话落库");
+    assert_eq!(stored.model_id, "m2", "必须是库里那份也变了");
+
+    // 幂等：同一个模型再来一次 → 明确说「未变」（不重复写库、也不报错）
+    let same = switch_model(&mut rt, "m2").await.unwrap();
+    assert!(same.contains("模型未变"), "{same}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// 正文压缩：闸门 → 压缩 → **落库** → 快照/占用刷新 → 再压被闸门拦下
 #[tokio::test]
 async fn raw_compress_appends_summary_and_refreshes_snapshot() {

@@ -64,6 +64,12 @@ pub(crate) struct ChatOptions {
     /// 续用已有会话
     pub session_id: Option<String>,
     pub workspace: Option<String>,
+    /// 指定 Provider 配置 id（与 `run --provider` 同义；不传则沿用会话自身）
+    pub provider_id: Option<String>,
+    /// 指定模型 id（与 `run --model` 同义；运行中也可用 `/model` 换）
+    pub model_id: Option<String>,
+    /// 不启用工具（纯问答；与 `run --no-tools` 同义）
+    pub no_tools: bool,
     /// 强制顺序输出模式（不打终端界面的主意）
     pub no_tui: bool,
 }
@@ -88,11 +94,15 @@ virlen-cli chat —— 交互式会话（与桌面端共用同一份配置与会
                         ⚠️ 续用 --session 时以**会话记录**为准：记录非空且与本值不同会直接报错
                         （会话的工作目录创建后不可变更）；记录为空时依次回退「设置里的默认
                         工作目录」→ 当前目录，且**不写回会话**
+  --provider <id>       指定 Provider 配置 id（默认沿用会话自身 / 设置的默认值）
+  --model <id>          指定模型 id（默认沿用会话自身 / 设置的默认值；
+                        运行中也可用 `/model` 切换，会话内切换会落库）
+  --no-tools            不启用工具（纯问答；与 `run --no-tools` 同义）
   --no-tui              强制「顺序输出模式」（纯文本 + 行输入；管道 / CI / 排障时用）
   -h, --help            显示本帮助
 
 界面内的命令:
-  /help  /status  /new  /exit           （见 `chat` 内的 /help）
+  /help  /status  /new  /model  /exit           （见 `chat` 内的 /help）
   按键: Enter 提交 · Esc 取消当前回合 · ↑↓ 历史 · Ctrl+C 取消/退出 · Ctrl+D 退出
   授权面板（命令需授权时弹出）: ←/→（或 ↑/↓）选择「拒绝 / 允许」· Enter 确认
                                默认选中「拒绝」—— 不动就回车 = 拒绝
@@ -118,7 +128,8 @@ pub(crate) fn parse(args: Vec<&str>) -> Result<ChatCmd, String> {
         match arg {
             "-h" | "--help" => return Ok(ChatCmd::Help),
             "--no-tui" => opts.no_tui = true,
-            "--session" | "--workspace" => {
+            "--no-tools" => opts.no_tools = true,
+            "--session" | "--workspace" | "--provider" | "--model" => {
                 let value = it
                     .next()
                     .ok_or_else(|| format!("选项 {} 缺少取值", arg))?
@@ -129,6 +140,8 @@ pub(crate) fn parse(args: Vec<&str>) -> Result<ChatCmd, String> {
                 match arg {
                     "--session" => opts.session_id = Some(value),
                     "--workspace" => opts.workspace = Some(value),
+                    "--provider" => opts.provider_id = Some(value),
+                    "--model" => opts.model_id = Some(value),
                     _ => unreachable!("选项已在 match 中穷举"),
                 }
             }
@@ -205,6 +218,9 @@ pub(crate) async fn run_with(
     let run_opts = RunOptions {
         session_id: opts.session_id.clone(),
         workspace: opts.workspace.clone(),
+        provider_id: opts.provider_id.clone(),
+        model_id: opts.model_id.clone(),
+        no_tools: opts.no_tools,
         ..Default::default()
     };
     let rt = match SessionRuntime::bootstrap_chat(host, run_opts).await {
