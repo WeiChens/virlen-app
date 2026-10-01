@@ -27,6 +27,17 @@ resolver = "2"
 [workspace.lints.rust]
 linker_messages = "allow"
 
+# `clippy::double_must_use`（clippy 1.99 起）：`async-trait 0.1.89` 会给宏生成的每个 trait 方法
+# 注入 `#[must_use]`，而这些方法返回的 `Pin<Box<dyn Future>>` 已被 clippy 视为 `#[must_use]` →
+# 判定为「重复的 must_use」并报错（`-D warnings` 下即失败）。这是宏实现导致的误报：
+#   - 无法从源码移除：`#[must_use]` 在 `async_trait` 的展开里，调用方改不了；
+#   - 无法升级 async-trait 到已修复的 0.1.92：它依赖 `syn = "3"`，而 quickjs 的 build-dependency
+#     `bindgen 0.73` 声明 `syn = ">=2, <4"` —— 会被统一到 syn 3，与仍用 syn 2 的 `prettyplease`
+#     类型不匹配，构建直接失败（实测）。
+# 因此按 clippy 官方提示（help: add `#[allow(clippy::double_must_use)]`）在 workspace 层放行。
+[workspace.lints.clippy]
+double_must_use = "allow"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
