@@ -25,6 +25,7 @@ import {
   type HostEmit,
   type HostRegistration,
   type StreamMode,
+  type TransferTier,
 } from 'virlen-remote'
 import { Acl, DEFAULT_CAPABILITIES, type Capability } from './acl'
 import { AuditLog, type AuditEntry, type AuditPersist } from './audit'
@@ -48,8 +49,16 @@ export { attachInteractionSources } from './interaction-source'
 export type { AttachInteractionOptions, InteractionHost } from './interaction-source'
 export { PairingStore, DEFAULT_DEVICE_NAME, DEVICE_NAME_MAX, normalizeDeviceName } from './pairing'
 export type { PairedDevice, PairingSnapshot, AuthorizationResult } from './pairing'
-export { classifyLinkKind, probeLinkKind, LinkKindWatcher, LINK_KIND_POLL_MS } from './link-kind'
-export type { LinkKind } from './link-kind'
+export {
+  classifyLinkKind,
+  probeLinkKind,
+  LinkKindWatcher,
+  LINK_KIND_POLL_MS,
+  /* §33：链路类型 → 传输档位（完整 / 精简）+ 裁剪的能力名（两端同一份口径） */
+  transferTierOf,
+  MESSAGE_DETAIL_CAPABILITY,
+} from './link-kind'
+export type { LinkKind, TransferTier } from './link-kind'
 export { SubscriptionRegistry } from './subscription'
 export { createDesktopHostSource } from './host-source'
 export type { HelloOutcome } from './host-source'
@@ -66,6 +75,7 @@ export {
   toSessionSummaryDTO,
   toRuntimeDTO,
   projectContentToText,
+  collectQuotes,
   buildToolNameIndex,
   normalizeWorkspace,
 } from './dto'
@@ -125,6 +135,18 @@ export interface PhoneBridgeOptions {
    * 「收到」vs「出结论」，后者会被首次配对的确认弹窗（可能等几十秒）拖后。
    */
   onHelloReceived?: () => void
+  /**
+   * 当前**传输档位**的**策略来源**（§33）—— 由持有 `RTCPeerConnection` 的
+   * `PhoneControlService` 给出（`() => transferTierOf(kindWatch.kind)`）。
+   *
+   * 为何由外部注入：档位的事实（直连 / 中继）只存在于**本机的 ICE 候选对**里，
+   * 而本模块不碰 WebRTC（它只管「拿到字节之后怎么发」）。
+   *
+   * ⚠️ 传进来的是**策略**，不是**生效值**：本模块还要叠上「对端能不能渲染省略标记」
+   * （见 `peerSupportsDetail`）—— 对不认识标记的旧手机端，一律回到 `full`。
+   * 不传 = 永远 `full`（老行为，一个字节都不少发）。
+   */
+  transferTier?: () => TransferTier
 }
 
 export interface PhoneBridge {
@@ -201,9 +223,28 @@ export function startPhoneBridge(endpoint: Endpoint, options: PhoneBridgeOptions
    */
   let peerStreamMode: StreamMode = 'full'
 
+  /**
+   * 对端（当前这台手机）是否声明了能渲染「正文被省略」的标记（§33）。
+   *
+   * 默认 `false` —— **保守侧是「全量发送」**：宁可多花点流量，也不要在一台旧手机上说
+   * 「这次调用没有输出」（它根本不认识 `detail` 字段）。每次成功的 `hello` 重报，
+   * 所以同一房间先后接入不同手机（顶号）不会把上一台的声明漏给下一台。
+   */
+  let peerSupportsDetail = false
+  /** 档位策略（直连 / 中继算出来的「想怎么发」），由调用方注入。 */
+  const tierPolicy = options.transferTier ?? ((): TransferTier => 'full')
+  /**
+   * **生效档位** = 策略档位 ∧ 对端够新。
+   *
+   * 任一条件不满足就回到 `full` —— 裁剪是**不可见的损失**（用户看不到「本来会发什么」），
+   * 所以凡是拿不准的情形都宁可多发。
+   */
+  const effectiveTier = (): TransferTier => (peerSupportsDetail ? tierPolicy() : 'full')
+
   // store-bridge 先建：host-source 的 hello / subscribe 两条路径要回头调它（重置流式基准）
   const storeBridge: StoreBridge = createStoreBridge(emit, subscriptions, {
     streamMode: () => peerStreamMode,
+    transferTier: effectiveTier,
   })
 
   const source = createDesktopHostSource({
@@ -228,6 +269,16 @@ export function startPhoneBridge(endpoint: Endpoint, options: PhoneBridgeOptions
     },
     /** 重新订阅 = 手机侧正文从零开始（切回会话 / 重连）→ 重置该会话的增量基准 */
     onSubscribe: (sessionId: string) => storeBridge.resetStreams(sessionId),
+    /** §33：档位（发送侧裁剪 + 拉取侧同档）—— 每次调用现读，跟着链路类型变 */
+    transferTier: effectiveTier,
+    /**
+     * §33：手机声明的「能渲染省略标记」—— 决定 `effectiveTier` 是否真的裁剪。
+     *
+     * 只在握手成功时报（与 `onStreamMode` 同理）：被拒的握手不该改已经在链路上的那台手机的待遇。
+     */
+    onDetailSupport: (supported: boolean) => {
+      peerSupportsDetail = supported
+    },
     /**
      * 握手结论既开闸门，也上报给调用方。
      *

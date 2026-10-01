@@ -20,6 +20,12 @@
  * 且「新正文以**已发出的正文**为前缀」—— 首帧、正文被改写、`final` 收尾帧一律发整段。
  * 带宽差一个量级（一条 n 字回复：O(n²) → O(n)），而报文形状多了一个 `offset` 用于客户端对齐。
  *
+ * **§33 传输档位**：精简档（TURN 中继 / 链路类型未判定）下，`role:'tool'` 的**输出正文**不下发
+ * （带 `MessageDTO.detail='omitted'`），只保留工具名 —— 工具输出是手机上最大的一笔流量。
+ * 档位从 `transferTier()` 读（调用方已把「对端能不能渲染省略标记」合进去了），
+ * 且**只影响下一次发什么**：快照存的是与档位无关的完整投影，所以档位变化本身不发任何事件
+ * （拍板的「不补发」，也让「切档位」不会把手机上已有的正文抹掉）。
+ *
  * ⚠️ 流式的**数据源是 store 里那条 `streaming === true` 的消息**，不是
  * `sessionRuntimeState.streamingMessageId`（2026-09-28 真机缺陷根因，§22.4）：Rust 引擎的
  * `stream_event` 只带 `{delta}`（不带 `messageId`，见 `agent/llm_round.rs::flush_stream_state`），
@@ -28,7 +34,7 @@
  * （与桌面 UI 同一个真相），谁忘了维护运行时字段都影响不到这条通道。
  */
 import { reaction, type IReactionDisposer } from 'mobx'
-import type { HostEmit, StreamMode } from 'virlen-remote'
+import type { HostEmit, StreamMode, TransferTier } from 'virlen-remote'
 import type { Message } from '@/types'
 import { sessionRuntimeState, sessionStore, settingsState } from '@/ui/store'
 import { contextWindowOf, pickContextTokens, toContextInfo } from '@/domain/usage/context-occupancy'
@@ -158,6 +164,17 @@ export interface StoreBridgeOptions {
    * 传函数而不是值：同一条链路可能先后接入不同手机（顶号），读时取最新声明。
    */
   streamMode?: () => StreamMode
+  /**
+   * 当前**传输档位**（§33）—— 精简档下工具输出正文不下发。默认 `() => 'full'`（旧行为）。
+   *
+   * 传函数而不是值（与 `streamMode` 同理）：档位由**链路类型**决定，而链路类型是会变的
+   * （刚打通时可能是中继，打洞成功后换成直连）—— 每次推送都重读，才能让档位立刻跟上。
+   *
+   * ⚠️ 调用方（`startPhoneBridge`）传进来的是**生效档位**：它已经把「对端是否声明了能渲染
+   * 省略标记」合进去了（见 `MESSAGE_DETAIL_CAPABILITY`）。本模块不再自己判断 ——
+   * 档位的唯一口径在共享包。
+   */
+  transferTier?: () => TransferTier
 }
 
 export function createStoreBridge(
@@ -170,8 +187,14 @@ export function createStoreBridge(
   /** 流式进度：sessionId → { messageId, seq, sent }（`sent` = 已下发的正文，即增量基准）。 */
   const streaming = new Map<string, { messageId: string; seq: number; sent: string }>()
   const streamMode = options.streamMode ?? ((): StreamMode => 'full')
+  const transferTier = options.transferTier ?? ((): TransferTier => 'full')
 
   function diffMessages(): void {
+    /*
+     * 一次 diff 只读一次档位：批内不许出现「一半精简一半完整」
+     * （档位会在两次 emit 之间被巡检改写，读两次就可能新旧混着发）。
+     */
+    const tier = transferTier()
     for (const s of sessionStore.value.sessions) {
       if (!subscriptions.has(s.id)) continue
       let map = emitted.get(s.id)
@@ -186,15 +209,27 @@ export function createStoreBridge(
         // 流式中的消息：内容走 stream 通道，定稿（streaming=false）后再走消息通道
         if (m.streaming) continue
         seen.add(m.id)
-        const dto = toMessageDTO(m, toolNames)
-        const json = JSON.stringify(dto)
+        /*
+         * ⚠️ **变更检测用完整投影，发送用档位投影**：两件事必须分开。
+         *
+         * 若把档位投影的结果直接存进快照，就会有一个很难查的后果：「切到精简档」本身会把
+         * 手机上**已经收到的正文**抹掉 —— 触发点还是**别的消息**变化引起的整会话 diff
+         * （本函数每次都会跑过会话里全部消息）：用户读到一半的工具输出，会因为另一条消息
+         * 定稿而静默变成「已省略」。档位变化只能影响「下一次发什么」，不能改写已发出的事实。
+         *
+         * 于是快照里永远是**与档位无关**的完整投影：档位变化本身一个事件都不发
+         * （拍板的「不补发」就是这么落地的）。
+         */
+        const full = toMessageDTO(m, toolNames, 'full')
+        const json = JSON.stringify(full)
+        const payload = tier === 'lean' ? toMessageDTO(m, toolNames, 'lean') : full
         const prev = map.get(m.id)
         if (prev === undefined) {
           map.set(m.id, json)
-          emit('host.event.message.added', { sessionId: s.id, message: dto })
+          emit('host.event.message.added', { sessionId: s.id, message: payload })
         } else if (prev !== json) {
           map.set(m.id, json)
-          emit('host.event.message.updated', { sessionId: s.id, message: dto })
+          emit('host.event.message.updated', { sessionId: s.id, message: payload })
         }
       }
       /**

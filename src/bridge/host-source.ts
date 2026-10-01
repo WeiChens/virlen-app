@@ -11,6 +11,8 @@
  */
 import {
   BridgeError,
+  MESSAGE_DELETE_CAPABILITY,
+  MESSAGE_DETAIL_CAPABILITY,
   type AnswerParams,
   type AnswerResult,
   type CompressParams,
@@ -18,6 +20,7 @@ import {
   type ContextParams,
   type CreateSessionParams,
   type CredentialRejectReason,
+  type DeleteMessageParams,
   type DeleteSessionParams,
   type GrantRecord,
   type HelloParams,
@@ -32,6 +35,7 @@ import {
   type SessionSummaryDTO,
   type SetModelParams,
   type StreamMode,
+  type TransferTier,
   type WorkspaceOptionDTO,
 } from 'virlen-remote'
 import {
@@ -48,6 +52,7 @@ import {
   cancelMessage,
   compressContext,
   createSession,
+  deleteSessionMessage,
   deleteSessions,
   getSessionMessages,
   renameSession,
@@ -56,6 +61,7 @@ import {
   setSessionPinned,
   MAX_SESSION_TITLE_LEN,
 } from '@/services/chat-service'
+import { buildUserContent } from '@/utils/messageContent'
 import {
   shouldCompress,
   toContextInfo,
@@ -109,6 +115,22 @@ export interface DesktopHostSourceDeps {
    */
   onStreamMode?: (mode: StreamMode) => void
   /**
+   * 当前**传输档位**（§33）：`lean` 时工具输出正文不下发（带 `detail:'omitted'` 标记）。
+   *
+   * 为何是函数：档位由链路类型决定，而链路类型会变（刚打通可能先走中继，打洞成功后换直连）——
+   * 每次拉取都重读，档位才能立刻跟上。不传 = `'full'`（旧行为，一个字节都不少发）。
+   */
+  transferTier?: () => TransferTier
+  /**
+   * 手机在 `hello` 里是否声明了能渲染「正文被省略」的标记（`MESSAGE_DETAIL_CAPABILITY`）。
+   *
+   * 为何需要知道：**已部署的旧手机端不认 `detail` 字段**，会把被省略的正文显示成
+   * 「这次调用没有输出」—— 那是假话。所以对旧手机端必须继续全量发送（见 `startPhoneBridge`）。
+   *
+   * 与 `onStreamMode` 同理：**只在握手成功的分支调**（拒绝不该影响已经在链路上的那台手机）。
+   */
+  onDetailSupport?: (supported: boolean) => void
+  /**
    * 某会话被加入订阅集合时回调（`subscribe` / `createSession` 两条路径）。
    *
    * store-bridge用它**重置该会话的流式基准**：新订阅者手上的正文从零开始，
@@ -144,6 +166,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
     appVersion,
     confirmPair,
     onStreamMode,
+    onDetailSupport,
     onSubscribe,
     onHelloResult,
     onHelloReceived,
@@ -152,6 +175,15 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
   const auditOp = (method: string, sessionId?: string, detail?: string): void => {
     audit.record({ method, allowed: true, sessionId, detail })
   }
+
+  /**
+   * 当前生效的传输档位（§33）。**每次拉取都读一次**，不缓存。
+   *
+   * 拉取（`host.session.messages` / `host.session.message.get`）必须与推送（`store-bridge`）
+   * 用同一个档位：否则会出现「推送省了、拉取又把全文补回来」的缝 —— 而重开会话（走拉取）
+   * 恰恰是本功能最常见的路径之一，缝一开就等于流量白省。
+   */
+  const currentTier = (): TransferTier => deps.transferTier?.() ?? 'full'
 
   /** 会话存在性检查（四个写操作共用，避免各写一份）。 */
   const requireSession = (sessionId: string): void => {
@@ -227,6 +259,19 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
       const verdict = pairing.authorize({ token, mobileKey: params.mobileKey })
       // §32：手机声明的流式偏好（只在下面的成功分支落地生效）
       const streamMode: StreamMode = params.streamMode === 'delta' ? 'delta' : 'full'
+      /*
+       * §33：手机是否声明了能渲染「正文被省略」的标记。
+       *
+       * 认的是一个**新名字**（`MESSAGE_DETAIL_CAPABILITY`）—— 旧版手机端的能力表里没有它，
+       * 这正是我们要的：老客户端自己说了「不懂这个」，电脑端就别裁剪（否则它的工具卡片会把
+       * 省略显示成「这次调用没有输出」）。
+       *
+       * 为何这里用能力名、而 §32 的流式偏好用的是参数：§32 避开能力名是因为旧客户端**声明了
+       * `stream.delta` 却没实现**（M3 就写进了能力表）—— 本能力名从未发布过，没有这种包袹，
+       * 而它表达的确是「我会什么」而不是「我这次要什么」。
+       */
+      const detailSupported =
+        Array.isArray(params.capabilities) && params.capabilities.includes(MESSAGE_DETAIL_CAPABILITY)
 
       // ⚠️ 本工程 tsconfig 显式关了 `strictNullChecks`，于是**布尔判别字段的真值判断不收窄联合**
       //（`if (verdict.ok)` 收窄不了，`if (verdict.ok === false)` 可以）—— 故这里一律写显式比较。
@@ -282,6 +327,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
             grant_days_left: daysLeft(device.expiresAt),
           })
           onStreamMode?.(streamMode)
+          onDetailSupport?.(detailSupported)
           return helloResult(params, { deviceName, deviceId, appVersion, acl, grant: grantOf(device) })
         }
 
@@ -307,6 +353,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
         grant_days_left: daysLeft(device.expiresAt),
       })
       onStreamMode?.(streamMode)
+      onDetailSupport?.(detailSupported)
       return helloResult(params, { deviceName, deviceId, appVersion, acl, grant: grantOf(device) })
     },
 
@@ -319,6 +366,8 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
     async getMessages(params: MsgPageParams): Promise<MsgPageDTO> {
       acl.assert('session.list')
       requireSession(params.sessionId)
+      // §33：档位一次读到底（同一次应答不许一半精简一半完整）
+      const tier = currentTier()
       // ⚠️ 分页游标（M5）：
       //  - 首页（无 `fromRowid`）：返回**已加载窗口的全部消息**（= `MESSAGE_PAGE_SIZE`）而非再 `slice` ——
       //    游标（rowid）只对「已加载窗口的最旧一条」成立，若展示窗口更窄，游标会指向窗口**之外**
@@ -335,7 +384,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
         return {
           // 工具名索引从**已加载窗口**构建：工具调用与它的结果总是相邻（同一轮对话），
           // 跨页工具调用拿不到名字时只显示「工具」（手机端不猜）
-          messages: added.map((m) => toMessageDTO(m, buildToolNameIndex(after))),
+          messages: added.map((m) => toMessageDTO(m, buildToolNameIndex(after), tier)),
           hasMore: sessionStore.hasMoreMessages(params.sessionId),
           cursor: paging?.oldestRowid ?? null,
         }
@@ -346,7 +395,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
       const paging = sessionStore.value.messagePaging[params.sessionId]
       auditOp('host.session.messages', params.sessionId)
       return {
-        messages: all.map((m) => toMessageDTO(m, toolNames)),
+        messages: all.map((m) => toMessageDTO(m, toolNames, tier)),
         hasMore: sessionStore.hasMoreMessages(params.sessionId),
         cursor: paging?.oldestRowid ?? null,
       }
@@ -358,7 +407,9 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
       const found = loaded.find((m) => m.id === params.messageId)
       if (!found) throw new BridgeError('E_NOT_FOUND', `消息不存在：${params.messageId}`)
       auditOp('host.session.message.get', params.sessionId)
-      return toMessageDTO(found, buildToolNameIndex(loaded))
+      // 单条拉取与窗口拉取同档位：它在手机上只用于「流式接不上时拉全文对齐」
+      // （§32）——而那是 assistant 正文（不受精简影响），故此处裁到的只是工具消息
+      return toMessageDTO(found, buildToolNameIndex(loaded), currentTier())
     },
 
     send(params: SendParams) {
@@ -372,12 +423,23 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
         throw new BridgeError('E_BUSY', '该会话正在回复中，请稍后再试')
       }
       const before = new Set(getSessionMessages(params.sessionId).map((m) => m.id))
+      /*
+       * 引用（§36）：手机端发 `quotes` 时，本条用户消息的 content 不再是裸字符串，
+       * 而是与**桌面输入框同一条路径**组装出来的内容块（`buildUserContent`）——
+       * 于是引擎 / 持久化 / 桌面渲染 / 导出全都与桌面发的那条一模一样（结构化 quote 块）。
+       *
+       * ⚠️ 无引用时保持原来的 `params.text`（裸字符串）**不做任何变换**：
+       * 那条路径跑了几十个版本，没有理由因为本次改动把它换成 `[{type:'text'}]`。
+       */
+      const content = params.quotes?.length
+        ? buildUserContent(params.text, [], [], params.quotes)
+        : params.text
       // fire-and-forget：RPC 只回「投递确认」，过程由 store-bridge 经事件推（§3.3）
       //
       // ⚠️ 必须带最小 events（2026-09-27 真机反馈修复）：桌面端错误条由 `onError` 驱动，
       //    缺省时手机触发的失败在电脑端**完全静默**（会话像「卡住」而无任何提示）。
       //    消息镜像同步**不**依赖这里 —— 已由 `sessionStore.onMessagesChanged` 兜底。
-      void sendMessage(params.sessionId, params.text, {
+      void sendMessage(params.sessionId, content, {
         onError: (sid, error) => {
           // 与桌面发送路径同构：写会话运行时（跨会话保留），当前会话再同步到全局态立即展示
           updateSessionRuntime(sid, { error })
@@ -389,7 +451,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
       const added = getSessionMessages(params.sessionId).find(
         (m) => !before.has(m.id) && m.role === 'user',
       )
-      auditOp('host.session.send', params.sessionId)
+      auditOp('host.session.send', params.sessionId, params.quotes?.length ? `quotes=${params.quotes.length}` : undefined)
       return { messageId: added?.id ?? '' }
     },
 
@@ -510,6 +572,54 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
       subscriptions.remove(params.sessionId)
       interactions.settleBySession(params.sessionId, 'expired')
       auditOp('host.session.delete', params.sessionId, `deleted=${deleted}`)
+      return { ok: true as const }
+    },
+
+    /**
+     * 删除单条消息**及其之后的全部消息**（截断）—— 与桌面右键菜单的「删除」
+     * **同一条落点**（`chat-service` 的 `deleteSessionMessage`，§36）。
+     *
+     * 三道闸都在这里（**不依赖手机 UI**，§7-⑪）：
+     * 1. `confirm:true` —— 不可逆，缺则拒；
+     * 2. 会话**正忙**时拒（`E_BUSY`）—— 与 `send` 用**同一个** `isSessionRuntimeBusy`
+     *    （含 `preparing`）：删断正在跑的 run 会留下悬空工具调用，而电脑端自己发消息时
+     *    也会被同一条闸拦住，两个入口的后果必须一致；
+     * 3. 目标是工具消息时拒 —— 工具结果与发起它的 assistant 消息是一体两面
+     *    （桌面端同样不允许，`deleteSessionMessage` 内部也再拦一道）。
+     *
+     * 成功后**不在这里发快照**：store-bridge 的 diff 会发现消息减少，并推
+     * `host.event.session.messages.reset`（手机端重拉窗口，天然幂等）。
+     */
+    deleteMessage(params: DeleteMessageParams) {
+      acl.assert(MESSAGE_DELETE_CAPABILITY)
+      if (params.confirm !== true) {
+        audit.record({
+          method: 'host.session.message.delete',
+          allowed: false,
+          sessionId: params.sessionId,
+          detail: '缺少 confirm（未二次确认）',
+        })
+        throw new BridgeError('E_CONFIRM_REQUIRED', '删除消息需二次确认（confirm:true）')
+      }
+      requireSession(params.sessionId)
+      const rt = sessionRuntimeState.value.sessions[params.sessionId]
+      if (rt && isSessionRuntimeBusy(rt)) {
+        throw new BridgeError('E_BUSY', '该会话正在回复中，请稍后再试')
+      }
+      const target = getSessionMessages(params.sessionId).find((m) => m.id === params.messageId)
+      if (!target) throw new BridgeError('E_NOT_FOUND', `消息不存在：${params.messageId}`)
+      if (target.role === 'tool') {
+        throw new BridgeError('E_BAD_REQUEST', '工具消息不能单独删除')
+      }
+      /*
+       * ⚠️ 消息窗口可能只加载了一部分（§20.2 分页）：`deleteSessionMessage` 里的截断
+       * 会把「已加载窗口」中该条之后的部分删掉，而 DB 侧的截断命令按同一个 messageId 执行 ——
+       * 两边口径一致（都从该锚点往后截），不会出现「内存删了 DB 没删」。
+       */
+      if (!deleteSessionMessage(params.sessionId, params.messageId)) {
+        throw new BridgeError('E_NOT_FOUND', `消息不存在或不允许删除：${params.messageId}`)
+      }
+      auditOp('host.session.message.delete', params.sessionId, `from=${params.messageId}`)
       return { ok: true as const }
     },
 

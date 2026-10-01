@@ -11,7 +11,7 @@
  * ⚠️ **能力集是「UI 显隐的依据」，不是唯一防线**：每个 handler 仍各自 `assert`（§7-⑪ 的教训——
  * 「手机不显示按钮」绝不能当作隔离）。
  */
-import { BridgeError } from 'virlen-remote'
+import { BridgeError, MESSAGE_DELETE_CAPABILITY, MESSAGE_DETAIL_CAPABILITY, MESSAGE_QUOTE_CAPABILITY } from 'virlen-remote'
 
 export type Capability =
   | 'session.list'
@@ -43,6 +43,32 @@ export type Capability =
   | 'session.context'
   /** 压缩上下文（**破坏性**：用摘要替换历史，需 `confirm:true`，与删除会话同档）。 */
   | 'session.compress'
+  /**
+   * §33：按链路类型**裁剪下行正文**（中继 / 类型未知 → 工具输出省略，带 `detail:'omitted'`）。
+   *
+   * ⚠️ 它不是权限，而是**功能标记**（与 `stream.delta` 同类，不会被 `assert()` 拦）——
+   * 写进本表的用途是让手机端在 `hello` 应答里看到「本机电脑端支持档位」，
+   * 从而把面板文案说得精确（否则手机无法区分「工具输出被策略省略」与「电脑端太旧、不支持省略」）。
+   *
+   * 用 `typeof` 绑到共享包的常量上：这个名字是**两端契约**（手机端在 `hello.capabilities` 里声明同一个），
+   * 手写字符串迟早会一边写成 `message.details` 而无人发现。
+   */
+  | typeof MESSAGE_DETAIL_CAPABILITY
+  /**
+   * §36：删除单条消息（及其之后全部）。
+   *
+   * 与上面那个**不同，这是权限而不是功能标记**：它不可逆地截断历史（含用户还没看过的
+   * 后续对话），所以 handler 里会独立 `assert` —— 手机端隐藏入口只是 UI 收敛（§7-⑪）。
+   */
+  | typeof MESSAGE_DELETE_CAPABILITY
+  /**
+   * §36：结构化引用（`SendParams.quotes` / `MessageDTO.quotes`）。
+   *
+   * 与 `MESSAGE_DETAIL_CAPABILITY` 同类，是**功能标记**（不会被 `assert()` 拦）：
+   * 引用本身就是 `session.send` 的一个参数，不是新权限。写进本表的用途是让手机端知道
+   * 「本机电脑端认识 `quotes`」——旧电脑端会静默丢掉它（用户以为引用了，AI 却当没看见）。
+   */
+  | typeof MESSAGE_QUOTE_CAPABILITY
 
 /** 默认允许的能力（M4 写操作全开 + §22 模型/目录/上下文 —— 用户拍板）。 */
 export const DEFAULT_CAPABILITIES: Capability[] = [
@@ -60,6 +86,11 @@ export const DEFAULT_CAPABILITIES: Capability[] = [
   'session.workspace',
   'session.context',
   'session.compress',
+  // §33：本机支持传输档位（裁剪 + 省略标记）—— 不是权限，是功能标记（见 `Capability`）
+  MESSAGE_DETAIL_CAPABILITY,
+  // §36：消息级操作 —— 删除是权限，引用是功能标记（同上）
+  MESSAGE_DELETE_CAPABILITY,
+  MESSAGE_QUOTE_CAPABILITY,
 ]
 
 export class Acl {

@@ -8,10 +8,19 @@
  *
  * 图片 / 文件等富内容一律降级为占位符（§7-⑦）：`ImageContent` 可能内嵌大段 base64，
  * 下行就是流量事故。图片引用（ref）留到二期。
+ *
+ * ⚠️ **一个例外：引用（`quote`）**。自 §36 起它以结构化字段 `MessageDTO.quotes` 下行
+ * （手机端要把它渲染成引用条），**不再**展平进 `text` —— 两条路同时走就会显示两遍。
  */
 import type { Message, MessageContent, Session } from '@/types'
 import { agentStore, sessionRuntimeState, settingsState } from '@/ui/store'
-import type { MessageDTO, RuntimeDTO, SessionSummaryDTO } from 'virlen-remote'
+import type {
+  MessageDTO,
+  MessageQuote,
+  RuntimeDTO,
+  SessionSummaryDTO,
+  TransferTier,
+} from 'virlen-remote'
 
 /** 电脑侧 `MessageRole`（含 summary / feedback）→ 协议四角色白名单。 */
 const ROLE_MAP: Record<Message['role'], MessageDTO['role']> = {
@@ -26,8 +35,17 @@ const ROLE_MAP: Record<Message['role'], MessageDTO['role']> = {
  * 把消息内容投影为纯文本（剥离 base64 / 富内容）。
  *
  * 同时被 store-bridge 用作「消息指纹」的一部分 —— 见 store-bridge 的下行 diff。
+ *
+ * `options.skipQuotes`：**跳过引用块**（它们已结构化地下行到 `MessageDTO.quotes`）。
+ * 不跳的话手机端会把同一段引文显示两遍（引用条 + 正文里的 `[引用] …`），
+ * 而「正文里本来就写着 `[引用]`」这种巧合无法用字符串判断去重。
+ *
+ * ⚠️ 默认**不跳**（旧行为）：指纹仍把引用算进去，否则改引用块不会触发任何下行更新。
  */
-export function projectContentToText(content: MessageContent): string {
+export function projectContentToText(
+  content: MessageContent,
+  options: { skipQuotes?: boolean } = {},
+): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
   const parts: string[] = []
@@ -43,6 +61,7 @@ export function projectContentToText(content: MessageContent): string {
         parts.push(`[文件] ${block.name ?? block.path}`)
         break
       case 'quote':
+        if (options.skipQuotes) break
         parts.push(`[引用] ${block.text}`)
         break
       case 'skill':
@@ -59,6 +78,24 @@ export function projectContentToText(content: MessageContent): string {
     }
   }
   return parts.join('\n')
+}
+
+/**
+ * 取出消息里的**结构化引用**（§36）：与 `QuoteContent` 同构，但只含协议要的四个字段。
+ *
+ * 为什么必须结构化下行（而不是继续靠 `[引用] …` 前缀）：手机端要把引用渲染成气泡上方的
+ * 引用条（对应桌面 `QuoteChip`），而展平后的文本**再也拆不回来** —— 正文里本来就可能有
+ * 同样的字样。
+ */
+export function collectQuotes(content: MessageContent): MessageQuote[] {
+  if (typeof content === 'string') return []
+  if (!Array.isArray(content)) return []
+  const quotes: MessageQuote[] = []
+  for (const block of content) {
+    if (block.type !== 'quote') continue
+    quotes.push({ messageId: block.messageId, role: block.role, text: block.text })
+  }
+  return quotes
 }
 
 /**
@@ -90,17 +127,47 @@ export function buildToolNameIndex(messages: readonly Message[]): Map<string, st
   return index
 }
 
-export function toMessageDTO(message: Message, toolNames?: ReadonlyMap<string, string>): MessageDTO {
+/**
+ * 消息投影（白名单）。
+ *
+ * `tier` = 当前**传输档位**（§33）：`lean`（精简）时 `role:'tool'` 的正文**不下发** ——
+ * 工具输出是手机上最大的一笔流量（`git diff` / 命令回显单条就几 KB），而它恰好是用户
+ * 在手机屏上最难读完的东西。其余角色（assistant 正文 / 用户消息 / 压缩摘要）一律完整下发：
+ * 那些就是「主要内容」，砍掉它比砍工具输出更贵（用户看不到 AI 说了什么）。
+ *
+ * 裁剪后正文为空 → 必须带 `detail:'omitted'`：手机端靠它区分「本来就没输出」与「被省略了」，
+ * 否则会向用户显示一句不成立的「这次调用没有输出」。
+ *
+ * ⚠️ 默认 `full`（旧行为）：调用方不传档位时**绝不**少发东西 —— 裁剪必须是显式选择，
+ * 不能因为“某处忘了传参”而静默发生。
+ */
+export function toMessageDTO(
+  message: Message,
+  toolNames?: ReadonlyMap<string, string>,
+  tier: TransferTier = 'full',
+): MessageDTO {
   const toolName =
     message.role === 'tool' && message.toolCallId
       ? toolNames?.get(message.toolCallId)
       : undefined
+  // 引用块走结构化字段（§36）—— 投影正文时把它们跳过，否则手机端会显示两遍
+  const quotes = collectQuotes(message.content)
+  const text = projectContentToText(message.content, { skipQuotes: quotes.length > 0 })
+  /*
+   * 只有「确实有可见正文」才打省略标记：本来就空的输出不打 —— 那会让手机端把
+   * 「这次调用真没输出」错报成「被省略了」（反过来撒谎，同样不行）。
+   * 判据用 `trim()`，与手机端 `hasBody()` 同一口径（它也是按 trim 判空）。
+   */
+  const omit = tier === 'lean' && message.role === 'tool' && text.trim().length > 0
   return {
     id: message.id,
     role: ROLE_MAP[message.role] ?? 'system',
-    text: projectContentToText(message.content),
+    text: omit ? '' : text,
     createdAt: message.timestamp,
+    ...(omit ? { detail: 'omitted' as const } : {}),
     ...(toolName ? { toolName } : {}),
+    // 无引用则整个字段不带（不为旧手机端凭空多出一个空数组）
+    ...(quotes.length > 0 ? { quotes } : {}),
   }
 }
 

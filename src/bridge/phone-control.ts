@@ -37,7 +37,7 @@ import {
 import { hashText, urlHost } from '@/utils/telemetry'
 import { AuditLog, type AuditPersist } from './audit'
 import type { InteractionRegistry } from './interaction-registry'
-import { LinkKindWatcher, type LinkKind } from './link-kind'
+import { LinkKindWatcher, transferTierOf, type LinkKind } from './link-kind'
 import { PairingStore, type PairingSnapshot } from './pairing'
 import { startPhoneBridge, type HelloOutcome, type PhoneBridge } from './index'
 import {
@@ -454,6 +454,17 @@ export class PhoneControlService {
       onHelloResult: (outcome) => this.applyHelloOutcome(outcome),
       // 收到 hello 请求就取消兜底截止（早于确认弹窗的 await，见 `HANDSHAKE_DEADLINE_MS`）
       onHelloReceived: () => this.clearHandshakeDeadline(),
+      /*
+       * §33：传输档位策略 —— 「直连发完整，中继 / 类型未知发精简」。
+       *
+       * 口径不在这里现算，而是读共享包的 `transferTierOf(kindWatch.kind)` —— 手机端也读同一份，
+       * 两边不会「一个说精简、一个说完整」。
+       *
+       * ⚠️ 巡检起点是**握手成功之后**（见 `applyHelloOutcome`），所以链路刚建成那几毫秒里
+       * `kindWatch.kind` 还是 `unknown` → 按拍板结果走**精简**（宁可把其实是直连的链路先按精简发，
+       * 也不要在开局那一屏——手机一连上就拉的整个消息窗口，恰好是全量最大的一笔——自走完整）。
+       */
+      transferTier: () => transferTierOf(this.kindWatch.kind),
     })
 
     transport.onStateChange((state) => {

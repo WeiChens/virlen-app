@@ -13,7 +13,7 @@ import QRCode from 'qrcode'
 import { observer } from 'mobx-react-lite'
 import { PAIRING_TICKET_TTL_MS, buildPairingUrl, describeGrantRemaining } from 'virlen-remote'
 import { phoneControlStore } from '@/ui/store/phoneControlStore'
-import { DEVICE_NAME_MAX, type PhoneControlStatus } from '@/bridge'
+import { DEVICE_NAME_MAX, transferTierOf, type PhoneControlStatus, type TransferTier } from '@/bridge'
 import Toggle from '@/ui/components/shared/Toggle'
 import { showToast } from '@/ui/components/shared/Toast'
 import PhoneSvg from '@/ui/components/icons/PhoneSvg'
@@ -57,10 +57,33 @@ const LINK_TEXT: Record<string, string> = {
   relay: 'TURN 中继',
 }
 
-/** 通讯类型的解释（悬停提示）：胶囊上只给结论，原因放这里。 */
+/**
+ * 通讯类型的解释（悬停提示）：胶囊上只给结论，原因放这里。
+ *
+ * §33：把**传输档位**一并写进来 —— 档位就由通讯类型决定（见共享包的 `transferTierOf`），
+ * 用户在这台电脑前就能知道「那条链路到底发不发工具输出」。
+ *
+ * 中继那条多一句「旧手机端仍按完整下发」的尾巴：档位的生效还取决于**对端能不能渲染省略标记**
+ * （`MESSAGE_DETAIL_CAPABILITY`），而那件事未在本页建模（不为一个「缓存没刷新的旧 PWA」
+ * 多养一份状态）—— 与其说一句可能不成立的结论，不如把例外写清。
+ */
 const LINK_HINT: Record<string, string> = {
-  direct: '两台设备已直接打通（局域网或 NAT 打洞），字节不经服务器转发。',
-  relay: '网络无法直连，字节经 TURN 服务器转发 —— 能用，但比直连慢。',
+  direct: '两台设备已直接打通（局域网或 NAT 打洞），字节不经服务器转发。传输档位：完整（正文与工具输出全量下发）。',
+  relay:
+    '网络无法直连，字节经 TURN 服务器转发 —— 能用，但比直连慢。' +
+    '传输档位：精简（只发正文与状态，工具输出省略，省下的是手机的流量）。' +
+    '若这台手机端版本较旧、不认识省略标记，则实际仍按完整下发。',
+}
+
+/**
+ * 传输档位的短文案（§33）：胶囊上跟在通讯类型后面。
+ *
+ * 为什么不与 `LINK_TEXT` 合成一张表：档位是从通讯类型**推导**出来的（`transferTierOf`），
+ * 合成一张表就等于把「推导」抄成「枚举」，两处迟早对不上（试想将来直连也走精简的情形）。
+ */
+const TIER_TEXT: Record<TransferTier, string> = {
+  full: '完整传输',
+  lean: '精简传输',
 }
 
 /** 配对三步（放在二维码旁边，省掉用户「扫完该干嘛」的猜测）。 */
@@ -317,7 +340,7 @@ export default observer(function PhoneControlSettings() {
                 className={`phone-control__link phone-control__link--${s.linkKind}`}
                 title={t(LINK_HINT[s.linkKind])}
               >
-                {t(LINK_TEXT[s.linkKind])}
+                {`${t(LINK_TEXT[s.linkKind])} · ${t(TIER_TEXT[transferTierOf(s.linkKind)])}`}
               </span>
             )}
           </span>

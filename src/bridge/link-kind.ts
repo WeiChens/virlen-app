@@ -21,5 +21,14 @@ export {
   probeLinkKind,
   LinkKindWatcher,
   LINK_KIND_POLL_MS,
+  /*
+   * §33：链路类型 → **传输档位**（`full` / `lean`）。
+   *
+   * 它放在本文件（而不是调用方现算）的理由与上面完全一致：档位是**两端都要读**的口径
+   * （电脑端据此裁剪、手机端据此解释「工具输出为什么是空的」），错一份就是自相矛盾。
+   */
+  transferTierOf,
+  /** §33 的能力名：手机端声明它 = 能渲染省略标记；电脑端列出它 = 会按档位裁剪。 */
+  MESSAGE_DETAIL_CAPABILITY,
 } from 'virlen-remote'
-export type { LinkKind } from 'virlen-remote'
+export type { LinkKind, TransferTier } from 'virlen-remote'
