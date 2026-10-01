@@ -18,7 +18,12 @@ import {
   type HelloResult,
   type HostApi,
 } from 'virlen-remote'
-import { PhoneControlService, type PhoneControlOptions, type PhoneControlStatus } from '@/bridge'
+import {
+  DEFAULT_DEVICE_NAME,
+  PhoneControlService,
+  type PhoneControlOptions,
+  type PhoneControlStatus,
+} from '@/bridge'
 
 const cleanups: Array<() => void> = []
 
@@ -272,6 +277,71 @@ describe('PhoneControlService —— 首次绑定与授权凭证（M6）', () =>
 
     await expect(hello(caller, 'bogus')).rejects.toMatchObject({ code: 'E_DENIED' })
     expect(called).toBe(false)
+  })
+
+  /*
+   * 确认弹窗上要显示**手机**的名字 —— 真机缺陷回归。
+   *
+   * 曾经的实现把本机的 `deviceName` 填了进去（本文件里是「我的电脑」，生产里是「Virlen 电脑」），
+   * 用户看到的是「「我的电脑」请求连接并操作本机，是否允许？」—— 主语错了，读起来像电脑在请求自己。
+   */
+  it('首次绑定：确认弹窗拿到的是**手机**上报的名字，不是本机名', async () => {
+    const seen: string[] = []
+    const { service, caller } = setup({
+      confirmPair: async ({ mobileName }) => {
+        seen.push(mobileName)
+        return true
+      },
+    })
+
+    await hello(caller, service.pairingPayload().ticket)
+
+    expect(seen).toEqual(['测试手机'])
+    // 回归钉子：本机名（`makeService` 的 deviceName）不允许出现在这里
+    expect(seen).not.toContain('我的电脑')
+  })
+
+  it('手机没报名字（旧版端）→ 弹窗与配对表用**同一个**兜底名', async () => {
+    const seen: string[] = []
+    const { service, caller } = setup({
+      confirmPair: async ({ mobileName }) => {
+        seen.push(mobileName)
+        return true
+      },
+    })
+
+    // 旧版手机：带票据但不带 mobileKey / mobileName
+    await caller.call('host.hello', {
+      protocolVersion: 1,
+      client: { platform: 'test', appVersion: '0' },
+      capabilities: [],
+      token: service.pairingPayload().ticket,
+    })
+
+    expect(seen).toEqual([DEFAULT_DEVICE_NAME])
+    // 弹窗说的名字 == 随后「已绑定的手机」列表里的名字（两处必须是同一套兜底）
+    expect(service.pairing.list()[0].name).toBe(DEFAULT_DEVICE_NAME)
+  })
+
+  it('手机报的名字先归一（折叠空白 / 截断）再进弹窗 —— 与配对表同一套规则', async () => {
+    const seen: string[] = []
+    const { service, caller } = setup({
+      confirmPair: async ({ mobileName }) => {
+        seen.push(mobileName)
+        return true
+      },
+    })
+
+    await caller.call('host.hello', {
+      protocolVersion: 1,
+      client: { platform: 'test', appVersion: '0' },
+      capabilities: [],
+      token: service.pairingPayload().ticket,
+      mobileName: '  小米\n14  ',
+    })
+
+    expect(seen).toEqual(['小米 14'])
+    expect(service.pairing.list()[0].name).toBe('小米 14')
   })
 
   it('凭证过期 → E_DENIED(data.reason=expired)（手机端据此提示重新扫码）', async () => {

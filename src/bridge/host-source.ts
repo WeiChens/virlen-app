@@ -72,7 +72,7 @@ import { previewOf, type AuditLog } from './audit'
 import { PHONE_EVENTS, summarizeParams, tokenHash } from './telemetry'
 import { track } from '@/utils/telemetry'
 import type { InteractionRegistry } from './interaction-registry'
-import type { PairingStore } from './pairing'
+import { DEFAULT_DEVICE_NAME, normalizeDeviceName, type PairingStore } from './pairing'
 import type { SubscriptionRegistry } from './subscription'
 
 /**
@@ -105,8 +105,16 @@ export interface DesktopHostSourceDeps {
    * 首次绑定确认（拍板：扫码 → 尝试绑定 → **电脑弹窗确认**）。
    * 票据首次兑换时调用；返回 false 则拒绝（`E_DENIED`）。
    * 不传时默认放行（仅测试 / 无人值守场景；生产必须传）。
+   *
+   * ⚠️ `mobileName` 是**请求方（手机）**的名字（`host.hello` 的 `mobileName`），已按
+   * `normalizeDeviceName` 归一、缺省时回退 `DEFAULT_DEVICE_NAME` —— 与 `redeemTicket` 落进
+   * 配对表的那个名字**同源同规则**，于是「弹窗上显示的名字」与「随后列表里出现的名字」必然一致。
+   *
+   * 字段名**有意不叫 `deviceName`**：本文件的 `deps.deviceName` 是**本机（电脑）**的名字。
+   * 两个名字曾经同名，结果弹窗拿错了一个 —— 显示成「「Virlen 电脑」请求连接并操作本机」，
+   * 而事实是手机在请求。改名就是为了让这类错误在编译期不可能发生。
    */
-  confirmPair?: (ctx: { token: string; deviceName: string }) => Promise<boolean>
+  confirmPair?: (ctx: { token: string; mobileName: string }) => Promise<boolean>
   /**
    * 手机在 `hello` 里声明的流式偏好（§32）；**只在握手成功的分支调**。
    *
@@ -279,7 +287,17 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
         // ── 首次配对：票据有效 → 桌面确认 → 签发凭证 ──
         if (verdict.reason === 'first-time') {
           const confirmStartedAt = Date.now()
-          const approved = confirmPair ? await confirmPair({ token: token as string, deviceName }) : true
+          /*
+           * 弹窗上要显示的是**手机**的名字 —— 手机在 `hello` 里自己报的那个（`mobileName`），
+           * 而不是本机的 `deviceName`。
+           *
+           * 归一 + 兜底必须与 `redeemTicket`（下面几行）**走同一套**：否则手机没报名字时
+           * （旧版手机），弹窗说「Virlen 手机」（兜底），列表里却是另一个名字。
+           */
+          const requesterName = normalizeDeviceName(params.mobileName) ?? DEFAULT_DEVICE_NAME
+          const approved = confirmPair
+            ? await confirmPair({ token: token as string, mobileName: requesterName })
+            : true
           track(PHONE_EVENTS.pairConfirm, {
             approved,
             asked: confirmPair != null,

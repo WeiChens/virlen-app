@@ -534,8 +534,9 @@ export default observer(function PhoneControlSettings() {
             </span>
             <h4>{t('有手机请求配对')}</h4>
             <p>
+              {/* 名字是**手机**的（`mobileName`）；电脑自己的名字不在这里出现 */}
               {tpl('「$__name__」请求连接并操作本机，是否允许？', {
-                name: s.pendingPair.deviceName,
+                name: s.pendingPair.mobileName,
               })}
             </p>
             <div className="phone-control__confirm-actions">

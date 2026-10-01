@@ -62,7 +62,13 @@ import settingsEvent from '@/events/settingsEvent'
 
 interface PendingPair {
   token: string
-  deviceName: string
+  /**
+   * 请求方（**手机**）的名字 —— 由 bridge 侧归一 + 兜底，界面直接显示。
+   *
+   * 别改回 `deviceName`：那是**本机（电脑）**的名字，本字段拿错一次就会让确认弹窗
+   * 显示成「「Virlen 电脑」请求连接并操作本机」。
+   */
+  mobileName: string
   resolve: (ok: boolean) => void
 }
 
@@ -586,7 +592,7 @@ class PhoneControlStore {
       confirmPair: (ctx) =>
         new Promise<boolean>((resolve) => {
           runInAction(() => {
-            this.pendingPair = { token: ctx.token, deviceName: ctx.deviceName, resolve }
+            this.pendingPair = { token: ctx.token, mobileName: ctx.mobileName, resolve }
           })
           // 弹设置页「手机控制」，让用户当面确认
           settingsEvent.emit('openSettings', 'phone-control')

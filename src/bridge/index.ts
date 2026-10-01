@@ -92,8 +92,13 @@ export interface PhoneBridgeOptions {
   appVersion?: string
   /** 复用既有配对表（如从设置页传入）；不传则新建。 */
   pairing?: PairingStore
-  /** 首次绑定确认（电脑弹窗）；返回 false 则拒绝。不传默认放行（生产必须传）。 */
-  confirmPair?: (ctx: { token: string; deviceName: string }) => Promise<boolean>
+  /**
+   * 首次绑定确认（电脑弹窗）；返回 false 则拒绝。不传默认放行（生产必须传）。
+   *
+   * `mobileName` = 请求方（手机）的名字（已归一 + 兜底，可直接显示）。
+   * ⚠️ 不是本机名：上面 `deviceName` 才是本机（电脑）的名字。
+   */
+  confirmPair?: (ctx: { token: string; mobileName: string }) => Promise<boolean>
   /**
    * 审计落盘（旁路，fire-and-forget）。Tauri 下接 Rust `cmd_phone_audit_append`。
    * 不传则只保留内存缓冲（浏览器 harness / 单测）。

@@ -95,8 +95,12 @@ export interface PhoneControlOptions {
   iceServers?: IceServerInit[]
   /** 本次 ICE 的来源（`custom` / `remote` / `cache` / `stale-cache` / `none`），只进埋点。 */
   iceSource?: string
-  /** 首次绑定确认（桌面弹窗）；返回 false 则拒绝。生产必须传。 */
-  confirmPair?: (ctx: { token: string; deviceName: string }) => Promise<boolean>
+  /**
+   * 首次绑定确认（桌面弹窗）；返回 false 则拒绝。生产必须传。
+   *
+   * `mobileName` = 请求方（手机）的名字（已归一 + 兜底，可直接显示）。
+   */
+  confirmPair?: (ctx: { token: string; mobileName: string }) => Promise<boolean>
   /**
    * 审计日志实例（M4）：由调用方（设置页 store）持有，使设置页能读到与 bridge **同一份**记录。
    * 不传则内部新建（仅内存）。

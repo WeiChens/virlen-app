@@ -84,7 +84,7 @@ const cleanups: Array<() => void> = []
 
 function setup(options: {
   capabilities?: Capability[]
-  confirmPair?: (ctx: { token: string; deviceName: string }) => Promise<boolean>
+  confirmPair?: (ctx: { token: string; mobileName: string }) => Promise<boolean>
 } = {}): Harness {
   const [hostT, mobileT] = createMemoryPair()
   const hostEp = new Endpoint({ transport: hostT, defaultTimeoutMs: 2000 })
