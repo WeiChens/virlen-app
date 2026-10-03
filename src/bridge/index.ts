@@ -63,7 +63,12 @@ export { SubscriptionRegistry } from './subscription'
 export { createDesktopHostSource } from './host-source'
 export type { HelloOutcome } from './host-source'
 export { createStoreBridge } from './store-bridge'
-export { PhoneControlService, REJECT_KICK_DELAY_MS, HANDSHAKE_DEADLINE_MS } from './phone-control'
+export {
+  PhoneControlService,
+  REJECT_KICK_DELAY_MS,
+  HANDSHAKE_DEADLINE_MS,
+  LINK_CLOSED_RECOVER_MS,
+} from './phone-control'
 export type {
   PhoneControlOptions,
   PhoneControlStatus,
@@ -76,7 +81,7 @@ export {
   toRuntimeDTO,
   projectContentToText,
   collectQuotes,
-  buildToolNameIndex,
+  buildToolCallIndex,
   normalizeWorkspace,
 } from './dto'
 export { PHONE_EVENTS, PHONE_EVENT_NAMES } from './telemetry'
@@ -272,8 +277,18 @@ export function startPhoneBridge(endpoint: Endpoint, options: PhoneBridgeOptions
       peerStreamMode = mode
       storeBridge.resetStreams()
     },
-    /** 重新订阅 = 手机侧正文从零开始（切回会话 / 重连）→ 重置该会话的增量基准 */
-    onSubscribe: (sessionId: string) => storeBridge.resetStreams(sessionId),
+    /**
+     * 重新订阅（切回会话 / 重连）要做两件事：
+     *
+     * 1. 重置该会话的流式增量基准 —— 手机手上没有正文了（见 `resetStreams`）；
+     * 2. **补推一次运行时快照** —— 订阅登记表不是 observable，订阅本身不触发任何 reaction，
+     *    只推「变化」的话「订阅那一刻的现值」（error / paused / working / compacting）永远缺席。
+     *    真机反馈：电脑端会话报错后手机上什么都看不到（2026-10）。
+     */
+    onSubscribe: (sessionId: string) => {
+      storeBridge.resetStreams(sessionId)
+      storeBridge.pushRuntime(sessionId)
+    },
     /** §33：档位（发送侧裁剪 + 拉取侧同档）—— 每次调用现读，跟着链路类型变 */
     transferTier: effectiveTier,
     /**

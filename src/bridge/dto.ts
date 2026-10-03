@@ -13,13 +13,18 @@
  * （手机端要把它渲染成引用条），**不再**展平进 `text` —— 两条路同时走就会显示两遍。
  */
 import type { Message, MessageContent, Session } from '@/types'
-import { agentStore, sessionRuntimeState, settingsState } from '@/ui/store'
-import type {
-  MessageDTO,
-  MessageQuote,
-  RuntimeDTO,
-  SessionSummaryDTO,
-  TransferTier,
+import { agentStore, sessionRuntimeState, sessionStore, settingsState } from '@/ui/store'
+import { toShortPath } from '@/utils/common'
+import {
+  elideMiddle,
+  formatToolArgs,
+  summarizeToolArgs,
+  TOOL_DETAIL_MAX,
+  type MessageDTO,
+  type MessageQuote,
+  type RuntimeDTO,
+  type SessionSummaryDTO,
+  type TransferTier,
 } from 'virlen-remote'
 
 /** 电脑侧 `MessageRole`（含 summary / feedback）→ 协议四角色白名单。 */
@@ -111,20 +116,61 @@ export function normalizeWorkspace(path: string | null | undefined): string | un
 }
 
 /**
- * 构造「toolCallId → 工具名」索引。
+ * 触发某次工具调用的信息（`toolCallId` → 工具名 + 入参）。
  *
- * 工具结果的正文里**没有**工具名（只有结果文本），名字在**发起该调用的 assistant 消息**的
- * `toolCalls[].name` 上。匹配规则与桌面 `message-list/helpers.ts::resolveJumpAnchorId`
- * **完全一致**（同一个 `toolCallId` 对应同一条调用），否则手机与电脑会显示不同的工具名。
+ * 工具结果消息（`role:'tool'`）**只有结果文本**：名字与入参都在**发起该调用的 assistant
+ * 消息**的 `toolCalls[]` 上。手机端要回答「这一步在干什么」（看的是哪个文件 / 执行的什么命令），
+ * 就得靠这个索引把两者接起来。
  */
-export function buildToolNameIndex(messages: readonly Message[]): Map<string, string> {
-  const index = new Map<string, string>()
+export interface ToolCallInfo {
+  name: string
+  /**
+   * 工具入参（引擎给的原始形状）。
+   *
+   * ⚠️ **绝不下行**：`write_file.content` / `edit_file.edits[].old_string` 可能是整篇文章。
+   * 它只用于生成一行摘要（`summarizeToolArgs`），摘要本身有长度硬上限。
+   */
+  input?: unknown
+}
+
+/**
+ * 构造「toolCallId → 工具调用」索引。
+ *
+ * 匹配规则与桌面 `message-list/helpers.ts::resolveJumpAnchorId` **完全一致**（同一个
+ * `toolCallId` 对应同一条调用），否则手机与电脑会显示不同的工具名 / 入参。
+ */
+export function buildToolCallIndex(messages: readonly Message[]): Map<string, ToolCallInfo> {
+  const index = new Map<string, ToolCallInfo>()
   for (const message of messages) {
     for (const call of message.toolCalls ?? []) {
-      if (call?.id && call.name) index.set(call.id, call.name)
+      if (call?.id && call.name) index.set(call.id, { name: call.name, input: call.input })
     }
   }
   return index
+}
+
+/**
+ * 当前会话的工作目录：工具入参里的绝对路径按它缩短（与桌面卡片 `toShortPath` 同一口径）。
+ *
+ * 取不到就返回 `undefined`——`toShortPath` 遇到空 base 会原样返回路径，于是「拿不到工作
+ * 目录」退化成「显示完整路径」，而不是拼出一个错的相对路径。
+ */
+function workspaceOfSession(sessionId: string | undefined): string | undefined {
+  if (!sessionId) return undefined
+  return (
+    sessionStore.getSession(sessionId)?.workspace || settingsState.value.defaultWorkspace || undefined
+  )
+}
+
+/**
+ * 投影的可选项（都是「格式化上下文」，与白名单字段无关）。
+ */
+export interface MessageProjectionOptions {
+  /**
+   * 会话 id：用于取工作目录，把工具入参里的**绝对路径**缩成相对路径
+   * （与桌面工具卡片同一口径，见 `workspaceOfSession`）。不传 = 路径原样。
+   */
+  sessionId?: string
 }
 
 /**
@@ -140,25 +186,50 @@ export function buildToolNameIndex(messages: readonly Message[]): Map<string, st
  *
  * ⚠️ 默认 `full`（旧行为）：调用方不传档位时**绝不**少发东西 —— 裁剪必须是显式选择，
  * 不能因为“某处忘了传参”而静默发生。
+ *
+ * `toolArgs`（入参摘要）**不受档位影响**：它只有一行、且正好是「工具输出被略掉」时
+ * 用户唯一还看得见的东西（“这一步在干什么”）。`toolArgsFull`（展开区完整入参）同理 —— 输出被
+ * 略掉时，那一块反而是用户在手机上唯一还能看到的现场。
  */
 export function toMessageDTO(
   message: Message,
-  toolNames?: ReadonlyMap<string, string>,
+  toolCalls?: ReadonlyMap<string, ToolCallInfo>,
   tier: TransferTier = 'full',
+  options: MessageProjectionOptions = {},
 ): MessageDTO {
-  const toolName =
+  const call =
     message.role === 'tool' && message.toolCallId
-      ? toolNames?.get(message.toolCallId)
+      ? toolCalls?.get(message.toolCallId)
       : undefined
+  const toolName = call?.name
+  /*
+   * 入参的两种呈现：折叠态一行摘要（`summarizeToolArgs`）与展开态完整入参
+   * （`formatToolArgs`）。**同一个 shortenPath 回调** —— 路径按工作目录缩短，
+   * 且折叠 / 展开必须显示成同一个样子（点开卡片发现路径变了，用户会以为改坏了什么）。
+   */
+  const shortenPath = (path: string) => toShortPath(path, workspaceOfSession(options.sessionId))
+  const toolArgs = call
+    ? summarizeToolArgs(call.name, call.input, { shortenPath })
+    : undefined
+  const toolArgsFull = call ? formatToolArgs(call.input, { shortenPath }) : undefined
   // 引用块走结构化字段（§36）—— 投影正文时把它们跳过，否则手机端会显示两遍
   const quotes = collectQuotes(message.content)
-  const text = projectContentToText(message.content, { skipQuotes: quotes.length > 0 })
+  const rawText = projectContentToText(message.content, { skipQuotes: quotes.length > 0 })
+  /*
+   * 工具输出与入参详情**同一条上限**（`TOOL_DETAIL_MAX` = 5000，超出中间省略）：
+   * 手机上「拉开一看几千行」跟没有一样，而结论在两头（开头是命令，结尾是报错 / 汇总）。
+   * 顺带省掉的是真金白银 —— `git diff` / 读大文件的输出动辄几十 KB。
+   *
+   * ⚠️ 只对 `role:'tool'` 做：assistant 正文是「主要内容」，砍它比砍工具输出更贵。
+   * 被省略的字符数由 `elideMiddle` 写进正文（那一行才是「被砍过」的凭证）。
+   */
+  const text = message.role === 'tool' ? elideMiddle(rawText, TOOL_DETAIL_MAX) : rawText
   /*
    * 只有「确实有可见正文」才打省略标记：本来就空的输出不打 —— 那会让手机端把
    * 「这次调用真没输出」错报成「被省略了」（反过来撒谎，同样不行）。
    * 判据用 `trim()`，与手机端 `hasBody()` 同一口径（它也是按 trim 判空）。
    */
-  const omit = tier === 'lean' && message.role === 'tool' && text.trim().length > 0
+  const omit = tier === 'lean' && message.role === 'tool' && rawText.trim().length > 0
   return {
     id: message.id,
     role: ROLE_MAP[message.role] ?? 'system',
@@ -166,6 +237,10 @@ export function toMessageDTO(
     createdAt: message.timestamp,
     ...(omit ? { detail: 'omitted' as const } : {}),
     ...(toolName ? { toolName } : {}),
+    // 拿不到就不带（旧电脑端 / 跨页工具调用）—— 手机端据此只显示工具名，不猜
+    ...(toolArgs ? { toolArgs } : {}),
+    // 展开区的完整入参（比摘要重得多）：只在用户点开卡片后才渲染，字段本身与摘要同源
+    ...(toolArgsFull ? { toolArgsFull } : {}),
     // 无引用则整个字段不带（不为旧手机端凭空多出一个空数组）
     ...(quotes.length > 0 ? { quotes } : {}),
   }

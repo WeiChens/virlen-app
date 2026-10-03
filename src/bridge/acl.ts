@@ -11,7 +11,13 @@
  * ⚠️ **能力集是「UI 显隐的依据」，不是唯一防线**：每个 handler 仍各自 `assert`（§7-⑪ 的教训——
  * 「手机不显示按钮」绝不能当作隔离）。
  */
-import { BridgeError, MESSAGE_DELETE_CAPABILITY, MESSAGE_DETAIL_CAPABILITY, MESSAGE_QUOTE_CAPABILITY } from 'virlen-remote'
+import {
+  BridgeError,
+  MESSAGE_DELETE_CAPABILITY,
+  MESSAGE_DETAIL_CAPABILITY,
+  MESSAGE_QUOTE_CAPABILITY,
+  SESSION_AGENT_CAPABILITY,
+} from 'virlen-remote'
 
 export type Capability =
   | 'session.list'
@@ -43,6 +49,17 @@ export type Capability =
   | 'session.context'
   /** 压缩上下文（**破坏性**：用摘要替换历史，需 `confirm:true`，与删除会话同档）。 */
   | 'session.compress'
+  /**
+   * 新建会话时**选定 Agent**（`CreateSessionParams.agentId` / `host.agent.list`）。
+   *
+   * ⚠️ 这是**权限**而不是功能标记（与 §33 的 `message.detail` 不同）：归属 Agent 决定这条会话的
+   * systemPrompt / 工具白名单 / skills / 默认参数（`chat-service.createSession`）——
+   * 选一个 Agent 就是选一套授权范围。手机端不显示选择器只是 UI 收敛，handler 里照样独立 `assert`。
+   *
+   * 用 `typeof` 绑到共享包的常量上：这个名字是**两端契约**（手机端在 `hello.capabilities` 里
+   * 比对同一个），手写字符串迟早会一边写成 `session.agents` 而无人发现。
+   */
+  | typeof SESSION_AGENT_CAPABILITY
   /**
    * §33：按链路类型**裁剪下行正文**（中继 / 类型未知 → 工具输出省略，带 `detail:'omitted'`）。
    *
@@ -86,6 +103,8 @@ export const DEFAULT_CAPABILITIES: Capability[] = [
   'session.workspace',
   'session.context',
   'session.compress',
+  // §22：新建会话时选定 Agent（权限；旧手机端不认识这个能力名，也就不会显示选择器）
+  SESSION_AGENT_CAPABILITY,
   // §33：本机支持传输档位（裁剪 + 省略标记）—— 不是权限，是功能标记（见 `Capability`）
   MESSAGE_DETAIL_CAPABILITY,
   // §36：消息级操作 —— 删除是权限，引用是功能标记（同上）

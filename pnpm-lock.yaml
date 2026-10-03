@@ -40,7 +40,7 @@ importers:
         version: 6.0.0
       bing-cn-mcp:
         specifier: ^1.0.2
-        version: 1.0.2
+        version: 1.0.2(debug@4.4.3)
       cheerio:
         specifier: ^1.2.0
         version: 1.2.0
@@ -87,8 +87,8 @@ importers:
         specifier: ^7.2.4
         version: 7.2.4
       virlen-remote:
-        specifier: ^0.5.0
-        version: 0.5.0
+        specifier: link:../virlen-remote
+        version: link:../virlen-remote
     devDependencies:
       '@tauri-apps/cli':
         specifier: ^2.11.5
@@ -2300,10 +2300,6 @@ packages:
   vfile@6.0.3:
     resolution: {integrity: sha512-KzIbH/9tXat2u30jf+smMwFCsno4wHVdNmzFyL+T/L3UGqqk6JKfVqOFOZEpZSHADH1k40ab6NUIXZq422ov3Q==}
 
-  virlen-remote@0.5.0:
-    resolution: {integrity: sha512-Et+3g0z7pHatukWmlLBI2qCedZv4hhyS86EX9kLSL8U1SHiYMy/z/IbHEcThyjCKQzTSlAYKCPkO80KXhIoMng==}
-    engines: {node: '>=18'}
-
   vite@7.3.3:
     resolution: {integrity: sha512-/4XH147Ui7OGTjg3HbdWe5arnZQSbfuRzdr9Ec7TQi5I7R+ir0Rlc9GIvD4v0XZurELqA035KVXJXpR61xhiTA==}
     engines: {node: ^20.19.0 || >=22.12.0}
@@ -3217,9 +3213,9 @@ snapshots:
 
   asynckit@0.4.0: {}
 
-  axios@1.16.0:
+  axios@1.16.0(debug@4.4.3):
     dependencies:
-      follow-redirects: 1.16.0
+      follow-redirects: 1.16.0(debug@4.4.3)
       form-data: 4.0.5
       proxy-from-env: 2.1.0
     transitivePeerDependencies:
@@ -3235,10 +3231,10 @@ snapshots:
     dependencies:
       require-from-string: 2.0.2
 
-  bing-cn-mcp@1.0.2:
+  bing-cn-mcp@1.0.2(debug@4.4.3):
     dependencies:
       '@modelcontextprotocol/sdk': 1.29.0(zod@3.25.76)
-      axios: 1.16.0
+      axios: 1.16.0(debug@4.4.3)
       cheerio: 1.2.0
       zod: 3.25.76
     transitivePeerDependencies:
@@ -3609,7 +3605,9 @@ snapshots:
 
   flatted@3.4.2: {}
 
-  follow-redirects@1.16.0: {}
+  follow-redirects@1.16.0(debug@4.4.3):
+    optionalDependencies:
+      debug: 4.4.3
 
   form-data@4.0.5:
     dependencies:
@@ -4755,8 +4753,6 @@ snapshots:
     dependencies:
       '@types/unist': 3.0.3
       vfile-message: 4.0.3
-
-  virlen-remote@0.5.0: {}
 
   vite@7.3.3(@types/node@26.6.3)(sass@1.99.0):
     dependencies:

@@ -138,12 +138,18 @@ afterEach(() => {
 // ───────────────────────── 1. 投影层：裁什么、不裁什么 ─────────────────────────
 
 describe('toMessageDTO —— 档位只裁「详细内容」（工具输出正文）', () => {
-  it('精简档 + 工具输出 → 正文清空 + `detail:omitted`，且**保留工具名**', () => {
-    const dto = toMessageDTO(toolMessage('t1', 'tc1', 'git diff 的一大段输出'), new Map([['tc1', 'run_command']]), 'lean')
+  it('精简档 + 工具输出 → 正文清空 + `detail:omitted`，且**保留工具名与入参摘要**', () => {
+    const dto = toMessageDTO(
+      toolMessage('t1', 'tc1', 'git diff 的一大段输出'),
+      new Map([['tc1', { name: 'run_command', input: { command: 'git diff' } }]]),
+      'lean',
+    )
     expect(dto.text).toBe('')
     expect(dto.detail).toBe('omitted')
     // 「这一步调了什么」必须留着：否则会话里会凭空少一步（用户不知道 AI 干了什么）
     expect(dto.toolName).toBe('run_command')
+    // 正文被裁掉时，入参摘要就是用户唯一还看得见的「在干什么」——它不受档位影响
+    expect(dto.toolArgs).toBe('git diff')
   })
 
   it('精简档不动其它角色：assistant 正文 / 用户消息 / 压缩摘要一律完整', () => {

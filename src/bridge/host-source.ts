@@ -13,6 +13,7 @@ import {
   BridgeError,
   MESSAGE_DELETE_CAPABILITY,
   MESSAGE_DETAIL_CAPABILITY,
+  type AgentOptionDTO,
   type AnswerParams,
   type AnswerResult,
   type CompressParams,
@@ -66,7 +67,7 @@ import {
   shouldCompress,
   toContextInfo,
 } from '@/domain/usage/context-occupancy'
-import { buildToolNameIndex, normalizeWorkspace, toMessageDTO, toRuntimeDTO, toSessionSummaryDTO } from './dto'
+import { buildToolCallIndex, normalizeWorkspace, toMessageDTO, toRuntimeDTO, toSessionSummaryDTO } from './dto'
 import type { Acl } from './acl'
 import { previewOf, type AuditLog } from './audit'
 import { PHONE_EVENTS, summarizeParams, tokenHash } from './telemetry'
@@ -257,6 +258,28 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
     }
   }
 
+  /**
+   * Agent 查找 + 校验（新建会话时手机指定归属 Agent）。
+   *
+   * ⚠️ **不看手机端显不显示选择器**（§7-⑪ 的教训）：候选集由 `host.agent.list` 给出，
+   * 这里再查一次表 —— 手机传一个不存在的 id（或本机已删掉的 Agent）一律拒。
+   * 权限也在这一层兜住：`session.agent` 是「换 systemPrompt / 工具白名单」的授权，
+   * 未授权的链路即便知道 id 也不能选。
+   */
+  const requireAgent = (requested: string) => {
+    acl.assert('session.agent')
+    const agent = agentStore.getAgent(requested.trim())
+    if (!agent) {
+      audit.record({
+        method: 'host.session.create',
+        allowed: false,
+        detail: `Agent 不存在：${previewOf(requested)}`,
+      })
+      throw new BridgeError('E_BAD_REQUEST', '该 Agent 不存在（候选集见 host.agent.list）')
+    }
+    return agent
+  }
+
   return {
     async hello(params: HelloParams): Promise<HelloResult> {
       // 先于一切 `await`：取消电脑端的「握手截止」兜底（首次配对可能弹窗等人）
@@ -400,20 +423,24 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
         const paging = sessionStore.value.messagePaging[params.sessionId]
         auditOp('host.session.messages', params.sessionId, `older=${added.length}`)
         return {
-          // 工具名索引从**已加载窗口**构建：工具调用与它的结果总是相邻（同一轮对话），
-          // 跨页工具调用拿不到名字时只显示「工具」（手机端不猜）
-          messages: added.map((m) => toMessageDTO(m, buildToolNameIndex(after), tier)),
+          /*
+           * 工具名 / 入参索引从**已加载窗口**构建：工具调用与它的结果总是相邻（同一轮对话），
+           * 跨页工具调用拿不到名字与入参时，手机端只显示工具名（不猜）
+           */
+          messages: added.map((m) =>
+            toMessageDTO(m, buildToolCallIndex(after), tier, { sessionId: params.sessionId }),
+          ),
           hasMore: sessionStore.hasMoreMessages(params.sessionId),
           cursor: paging?.oldestRowid ?? null,
         }
       }
       await sessionStore.ensureMessagesLoaded(params.sessionId)
       const all = getSessionMessages(params.sessionId)
-      const toolNames = buildToolNameIndex(all)
+      const toolCalls = buildToolCallIndex(all)
       const paging = sessionStore.value.messagePaging[params.sessionId]
       auditOp('host.session.messages', params.sessionId)
       return {
-        messages: all.map((m) => toMessageDTO(m, toolNames, tier)),
+        messages: all.map((m) => toMessageDTO(m, toolCalls, tier, { sessionId: params.sessionId })),
         hasMore: sessionStore.hasMoreMessages(params.sessionId),
         cursor: paging?.oldestRowid ?? null,
       }
@@ -427,7 +454,9 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
       auditOp('host.session.message.get', params.sessionId)
       // 单条拉取与窗口拉取同档位：它在手机上只用于「流式接不上时拉全文对齐」
       // （§32）——而那是 assistant 正文（不受精简影响），故此处裁到的只是工具消息
-      return toMessageDTO(found, buildToolNameIndex(loaded), currentTier())
+      return toMessageDTO(found, buildToolCallIndex(loaded), currentTier(), {
+        sessionId: params.sessionId,
+      })
     },
 
     send(params: SendParams) {
@@ -452,6 +481,20 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
       const content = params.quotes?.length
         ? buildUserContent(params.text, [], [], params.quotes)
         : params.text
+      /*
+       * 与桌面「重新发送时清除当前会话的错误状态」（`chat-view.handleSend`）同构：
+       * 手机发新消息也是一次重试 —— 上一条错误必须在这里落下去。
+       *
+       * 为什么不能省：不清的话它会一直挂在会话运行时里，手机每次重开这个会话都会收到一份
+       * 带着旧错误的运行时快照（`storeBridge.pushRuntime`），用户看到一条永远关不掉的红条。
+       *
+       * ⚠️ 全局态只在「这条会话正是桌面当前会话」时才清 —— 否则会误清掉桌面上正在看的
+       * 另一个会话的错误条。
+       */
+      updateSessionRuntime(params.sessionId, { error: null })
+      if (params.sessionId === chatState.value.currentSessionId) {
+        chatState.setValue('error', null)
+      }
       // fire-and-forget：RPC 只回「投递确认」，过程由 store-bridge 经事件推（§3.3）
       //
       // ⚠️ 必须带最小 events（2026-09-27 真机反馈修复）：桌面端错误条由 `onError` 驱动，
@@ -532,8 +575,14 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
         throw new BridgeError('E_BAD_REQUEST', '模型服务与模型 id 必须成对给出')
       }
       if (providerConfigId && modelId) requireModel(providerConfigId, modelId)
+      /*
+       * Agent：手机指定时才查表（不传 = 电脑侧默认 Agent，与桌面「直接新建」同构）。
+       * 校验放在接口层而不在 chat-service —— 候选集与权限都是「手机控制」这一层的事，
+       * 而 `chat-service.createSession` 还要服务桌面（桌面直接传 Agent 对象，本就无需查表）。
+       */
+      const agent = params.agentId != null ? requireAgent(params.agentId) : undefined
       // 走 chat-service 的 createSession（systemPrompt / Agent 默认值 / 工作目录的组装都在那里）
-      const session = await createSession(title, providerConfigId, modelId, undefined, workspace)
+      const session = await createSession(title, providerConfigId, modelId, agent, workspace)
       /**
        * ⚠️ 手机自建的会话**立即纳入订阅集合**（2026-09-29 真机缺陷，§24）。
        *
@@ -548,7 +597,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
       auditOp(
         'host.session.create',
         session.id,
-        `${title || '（默认标题）'}${workspace ? ` @ ${workspace}` : ''}`,
+        `${title || '（默认标题）'}${workspace ? ` @ ${workspace}` : ''}${agent ? ` · Agent ${agent.name}` : ''}`,
       )
       return { sessionId: session.id }
     },
@@ -669,7 +718,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
       return interactions.list()
     },
 
-    // ─────────────────── §22：模型 / 工作目录 / 上下文 ───────────────────
+    // ─────────────────── §22：模型 / Agent / 工作目录 / 上下文 ───────────────────
 
     /** 已启用的模型服务与模型（白名单：**不含** apiKey / baseUrl / params）。 */
     listModels(): ModelProviderDTO[] {
@@ -711,6 +760,30 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
       const workspaces = collectWorkspaces()
       auditOp('host.workspace.list', undefined, `${workspaces.length} 个候选目录`)
       return workspaces
+    },
+
+    /**
+     * 新建会话可选的 Agent 候选集（手机端 Agent 选择器）。
+     *
+     * 白名单投影：只给 `id` / `name` / 默认模型 / 默认工作目录 —— **不含** `systemPrompt`
+     * （可达数十 KB）、`allowTools` / `skills` / `params`（§7-⑥ 同一条纪律）。
+     * 默认值只供手机端展示与联动；真正的组装仍在 `chat-service.createSession` 里做，
+     * 所以手机端传不传模型 / 目录都不影响最终结果。
+     */
+    listAgents(): AgentOptionDTO[] {
+      acl.assert('session.agent')
+      const agents = agentStore.listAgents().map((agent) => {
+        const workspace = normalizeWorkspace(agent.defaultWorkspace)
+        return {
+          id: agent.id,
+          name: agent.name,
+          // 老数据可能缺默认模型 / 默认目录 → 缺了就不带字段（手机端按「未配置」显示）
+          ...(agent.defaultModel ? { defaultModel: { ...agent.defaultModel } } : {}),
+          ...(workspace ? { defaultWorkspace: workspace } : {}),
+        }
+      })
+      auditOp('host.agent.list', undefined, `${agents.length} 个候选 Agent`)
+      return agents
     },
 
     /**

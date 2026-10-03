@@ -19,6 +19,9 @@
  * 「没人在连」、「有人在连但还没证明它是谁」、「刚拒了一台」——原实现把它们挤进
  * 「等待手机连接…（链路已建立，等待手机握手…）」，用户读到的就成了「我在等它连上」。
  *
+ * `error`（链路已关闭）**不是终点**：`closed` 是终态（PC 已 failed / closed），停在原地只意味着
+ * 手机再也连不回来 —— 过 `LINK_CLOSED_RECOVER_MS` 仍未恢复就原地重开，回到「等待手机连接…」。
+ *
  * ⚠️ 真机蜂窝网联调需人工完成（无法在此环境跑真实 WebRTC）。
  */
 import {
@@ -190,6 +193,21 @@ export const REJECT_KICK_DELAY_MS = 500
  */
 export const HANDSHAKE_DEADLINE_MS = 8000
 
+/**
+ * 「链路已关闭」在界面上停留多久后**自动复位**（毫秒）。
+ *
+ * 为什么必须有这一条（真机反馈：电脑端停在「出错（链路已关闭）」，手机再也连不回来）：
+ * `closed` 是**终态** —— 它来自 PeerConnection 的 `failed` / `closed`（见 `rtc.ts` 的
+ * `onConnectionState`），那条 PC 已经不可恢复；而 host 角色的下一次协商仍会复用它
+ *（`ensurePC` 里 `if (this.pc) return this.pc`）→ 手机即便重新进房间、信令也把 `peer-joined`
+ * 送到了，电脑端也只是对着一条死 PC 发 offer：**链路永远建不起来**，界面上却只有一句「出错」。
+ *
+ * 取值是刻意留的观察窗：真机上的短抖动（手机切网 / 息屏）会先走对端自己的重连 —— 那条路让链路
+ * 回到 `connecting`（可恢复的等待态，**不在**本复位的范围内）；只有真的停在 `closed` 上，
+ * 才由我们这边原地重开（`dropLink`，二维码与票据不变）。
+ */
+export const LINK_CLOSED_RECOVER_MS = 3000
+
 export class PhoneControlService {
   /**
    * 配对表（票据 / 已绑定设备）。
@@ -242,6 +260,11 @@ export class PhoneControlService {
    * 收到 `host.hello` 请求即取消；到点仍未收到 → 踢掉这条链路。
    */
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * 「链路已关闭」的自动复位计时器（见 `LINK_CLOSED_RECOVER_MS`）。
+   * 到点仍停在 `error` → 原地重开链路，回到「等待手机连接…」。
+   */
+  private recoverTimer: ReturnType<typeof setTimeout> | null = null
   /**
    * 通讯类型巡检器（链路开着期间定时复查）。
    *
@@ -325,6 +348,41 @@ export class PhoneControlService {
     if (this.handshakeTimer == null) return
     clearTimeout(this.handshakeTimer)
     this.handshakeTimer = null
+  }
+
+  /**
+   * 安排「链路已关闭」的自愈：到点仍停在**同一条**已关闭的链路上 → 拆掉重开
+   *（回到「等待手机连接…」，二维码与票据不变）。
+   *
+   * 为什么不是当场重开：需要一个观察窗把「真的死了」与「对端正在自己重连」分开 —— 后者会让链路
+   * 回到 `connecting`（可恢复），此时重开只是白折腾一次，见 `LINK_CLOSED_RECOVER_MS`。
+   *
+   * 拒绝结论生效期间**不安排**：那段时间链路事件一律不参与状态机（见 `setLinkStatus`），
+   * 拆链另有 `rejectPeer` 的踢链计时器负责。
+   */
+  private armLinkRecovery(transport: Transport): void {
+    this.clearLinkRecovery()
+    if (this.rejectReason != null) return
+    this.recoverTimer = setTimeout(() => {
+      this.recoverTimer = null
+      /*
+       * 到点复核三件事（这几秒里任何一件都可能变）：
+       *  - 链路没被换过（用户操作 / 踢链都已经重开过一条，别去拆新的那条）；
+       *  - 服务还开着（`disabled` 时没有链路可重开）；
+       *  - 仍停在「出错」上（链路自己回来了 / 已进别的结论 → 不复位）。
+       */
+      if (this.transport !== transport) return
+      if (this.status === 'disabled') return
+      if (this.status !== 'error') return
+      this.dropLink('link-closed')
+    }, LINK_CLOSED_RECOVER_MS)
+  }
+
+  /** 取消「链路已关闭」的自动复位（拆链 / 停用）。 */
+  private clearLinkRecovery(): void {
+    if (this.recoverTimer == null) return
+    clearTimeout(this.recoverTimer)
+    this.recoverTimer = null
   }
 
   /** 待应答交互注册表（M4）；未启用时为 `null`。 */
@@ -513,6 +571,12 @@ export class PhoneControlService {
         // 链路关了 = 那台手机不再连着 →「已连接」高亮跟着熄掉
         this.pairing.setActive(null)
         this.setLinkStatus('error', '链路已关闭')
+        /*
+         * ⚠️ 不能停在这里（真机反馈：电脑端一直显示「出错（链路已关闭）」，手机再也连不回来）：
+         * `closed` 是**终态** —— 那条 PC 已 failed / closed，而 host 侧下一次协商会复用它
+         *（`rtc.ts::ensurePC`）→ 新手机进房间也只会对上一条死 PC。过几秒仍是这个状态就原地重开。
+         */
+        this.armLinkRecovery(transport)
       }
     })
 
@@ -567,6 +631,8 @@ export class PhoneControlService {
     // 链路都没了，谈不上「直连还是中继」（`stop` 内部会归零并广播 `unknown`）
     this.kindWatch.stop()
     this.clearHandshakeDeadline()
+    // 拆链 = 自愈已经发生（`dropLink` 紧接着就会重开），旧的定时器不能再来拆一次新链路
+    this.clearLinkRecovery()
     // 停了就不该再有「哪台手机连着」的说法
     this.pairing.setActive(null)
   }

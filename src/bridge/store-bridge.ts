@@ -12,6 +12,11 @@
  * 2. `message.added/updated` + `message.stream` + `messages.reset` —— **仅推「已订阅」会话**（手机打开过的）；
  * 3. `session.runtime.changed` + `session.context.changed` —— 仅推「已订阅」会话。
  *
+ * ⚠️ **变化之外还得有一次「现值」**：本模块全部靠 reaction 推变化，而订阅本身不触发 reaction
+ * （`SubscriptionRegistry` 是普通 Set）—— 所以「订阅那一刻的运行时状态」必须由调用方
+ * （`host-source` 的 subscribe / create 路径）显式补一次 `pushRuntime(sessionId)`。
+ * 少了这一帧，手机打开一个「在它没看的时候出过错」的会话时，错误原因根本不会出现。
+ *
  * 流式策略（§3.6 / §32）：正在生成的那条消息**只走 `message.stream`**，
  * 定稿后再作为 `message.added` 补发一条完整消息 —— 于是消息通道天然幂等，不必处理中间态。
  *
@@ -39,7 +44,7 @@ import type { Message } from '@/types'
 import { sessionRuntimeState, sessionStore, settingsState } from '@/ui/store'
 import { contextWindowOf, pickContextTokens, toContextInfo } from '@/domain/usage/context-occupancy'
 import {
-  buildToolNameIndex,
+  buildToolCallIndex,
   projectContentToText,
   toMessageDTO,
   toRuntimeDTO,
@@ -72,8 +77,8 @@ function messageFingerprint(subscriptions: SubscriptionRegistry): string {
     const messages = s.messages // 始终读取（建立跟踪）
     for (const m of messages) {
       // 未订阅也要「轻触」消息字段，保证跟踪持续（内容读取较重，仅订阅时读）
-      // ⚠️ `toolCalls` / `toolCallId` 必须一起读：工具名靠它们解析（`buildToolNameIndex`），
-      // 工具名在调用后被回填（finalize 才带上 tool_calls），漏读就会出现「手机永远没有工具名」。
+      // ⚠️ `toolCalls` / `toolCallId` 必须一起读：工具名与入参摘要靠它们解析（`buildToolCallIndex`），
+      // 两者都在调用后被回填（finalize 才带上 tool_calls），漏读就会出现「手机永远没有工具名 / 入参」。
       const meta = `${s.id}\u0001${m.id}\u0001${m.streaming ? 1 : 0}\u0001${m.toolCalls?.length ?? 0}\u0001${m.toolCallId ?? ''}`
       if (!subscribed) continue
       parts.push(`${meta}\u0001${m.role}\u0001${projectContentToText(m.content)}`)
@@ -154,6 +159,21 @@ export interface StoreBridge {
    * 客户端收到一个 `offset` 对不上的增量 —— 轻则触发一次冗余的拉全文，重则静默错位。
    */
   resetStreams(sessionId?: string): void
+  /**
+   * **补推一次运行时快照**（不传 = 全部已订阅会话）。
+   *
+   * 为什么必需：本模块的四条通道都靠 mobx `reaction` 推「变化」，而订阅登记表是**普通 Set
+   * （非 observable）** —— 订阅本身不触发任何 reaction。于是「订阅那一刻的现值」永远不会到达
+   * 手机：出错（`error`）、暂停（`paused`）、正在压缩（`compacting`）、甚至 `working` 的初值
+   * 全部缺席，直到下一次运行时变化才补上。手机打开一个「在它没看的时候出过错 / 被暂存过」的
+   * 会话时，看到的就是一个没有任何解释的空会话（2026-10 真机反馈：电脑端会话报错，
+   * 手机端连错误原因都看不到）。
+   *
+   * ⚠️ 调用方必须确保该会话**已在订阅集合里**（本方法与其它通道走同一道门，未订阅的不外发）。
+   * 报文形状与变化推送**完全一致**（同一个 `toRuntimeDTO`）：手机端不需要区分
+   * 「这是快照还是变化」—— 缺字段即代表电脑侧那边已经没有这个状态（如错误已被清掉）。
+   */
+  pushRuntime(sessionId?: string): void
 }
 
 export interface StoreBridgeOptions {
@@ -203,8 +223,8 @@ export function createStoreBridge(
         emitted.set(s.id, map)
       }
       const seen = new Set<string>()
-      // 工具名索引：每会话整窗构建一次（与手机端「拿不到名字就只显示工具」一致）
-      const toolNames = buildToolNameIndex(s.messages)
+      // 工具名 / 入参索引：每会话整窗构建一次（与手机端「拿不到名字就只显示工具」一致）
+      const toolCalls = buildToolCallIndex(s.messages)
       for (const m of s.messages) {
         // 流式中的消息：内容走 stream 通道，定稿（streaming=false）后再走消息通道
         if (m.streaming) continue
@@ -220,9 +240,9 @@ export function createStoreBridge(
          * 于是快照里永远是**与档位无关**的完整投影：档位变化本身一个事件都不发
          * （拍板的「不补发」就是这么落地的）。
          */
-        const full = toMessageDTO(m, toolNames, 'full')
+        const full = toMessageDTO(m, toolCalls, 'full', { sessionId: s.id })
         const json = JSON.stringify(full)
-        const payload = tier === 'lean' ? toMessageDTO(m, toolNames, 'lean') : full
+        const payload = tier === 'lean' ? toMessageDTO(m, toolCalls, 'lean', { sessionId: s.id }) : full
         const prev = map.get(m.id)
         if (prev === undefined) {
           map.set(m.id, json)
@@ -310,13 +330,23 @@ export function createStoreBridge(
     () => diffMessages(),
   )
 
+  /**
+   * 推一次运行时快照 —— 「变化推送」之外的另一半（订阅 / 重订阅时补发）。
+   *
+   * 与指纹 reaction 共用同一个出口：报文形状必须一致，否则手机端要为「快照」再写一套解析。
+   */
+  function pushRuntime(sessionId?: string): void {
+    const ids = sessionId ? [sessionId] : subscriptions.snapshot()
+    for (const id of ids) {
+      // 与其它通道同一道订阅门：未订阅的会话一个字节都不外发
+      if (!subscriptions.has(id)) continue
+      emit('host.event.session.runtime.changed', { sessionId: id, runtime: toRuntimeDTO(id) })
+    }
+  }
+
   const disposeRuntime = reaction(
     () => runtimeFingerprint(subscriptions),
-    () => {
-      for (const id of subscriptions.snapshot()) {
-        emit('host.event.session.runtime.changed', { sessionId: id, runtime: toRuntimeDTO(id) })
-      }
-    },
+    () => pushRuntime(),
   )
 
   const disposeStream = reaction(
@@ -360,5 +390,6 @@ export function createStoreBridge(
       if (sessionId) streaming.delete(sessionId)
       else streaming.clear()
     },
+    pushRuntime,
   }
 }

@@ -338,6 +338,31 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 | `telemetry.ts` / `subscription.ts` / `link-kind.ts` | 通讯层埋点 / 订阅计数 / 链路类型（P2P 直连或 TURN 中继） |
 
 - **依赖方向**：`src/bridge/` 依赖 `services` / `domain` / `infrastructure` / `ui/store` / `utils` / `events`；而 `ui/store/phoneControlStore.ts` 反过来 import `@/bridge` —— 两者**双向依赖**，改动时留意模块初始化顺序。
+- **服务状态机（`phone-control.ts`，设置页那颗胶囊的真相）**：`waiting → verifying → connected`，另加两个否定态（`rejected` 谁被拒了 / `error` 链路故障）。
+  ⚠️ **`error`（链路已关闭）不是终点**：`closed` 是终态 —— 那条 PeerConnection 已 `failed`/`closed`，而 host 侧下一次协商会复用它（共享包 `rtc.ts::ensurePC` 的 `if (this.pc)`），于是**手机再也连不回来**。所以 `closed` 后过 `LINK_CLOSED_RECOVER_MS`（3s）仍停在 `error` 就自动 `dropLink()` 原地重开（票据不变、回到「等待手机连接…」）。到点复核「链路没换过 / 服务还开着 / 仍停在 error」，链路自己回到 `connecting`/`open` 就不拆；拒绝结论生效期间不安排（拆链由踢链负责，`phone-link-recover.test.ts` 钉住四条）。
+- **手机端重连令牌必须是凭证（`grant`），不是一次性票据**：扫码配对成功时 `host.hello` 会回传凭证，手机端必须把它**同时**写进「设备记录」与「重连参数」（`virlen-mobile/src/store/connection.ts` 的 `lastOptions.token`）。
+  ⚠️ 只写设备记录、重连参数仍留着那张票 → 票在那次配对里已被电脑端消费（`redeemTicket` 删票），此后每次重连 / 重新授权都拿**作废的票**握手：电脑端 `pairing.authorize` 判 `ticket-expired`（状态进 `rejected`「已拒绝接入（二维码已过期）」），手机端据 `HARD_DENIALS` 退回登录页并提示「重新扫码」——而两边列表里那台手机都还在（配对记录本身是好的）。真机反馈正是这三个看似矛盾的现象同时出现。回归用例 `virlen-mobile/src/tests/pairing-token-refresh.test.ts`。
+- **推送是「变化驱动」，不是「状态驱动」（改动时最容易踩的点）**：`store-bridge.ts` 四条通道全部靠 mobx `reaction` 推**变化**，而订阅登记表（`subscription.ts`）是**普通 Set（非 observable）**——**订阅本身不触发任何推送**。所以「订阅那一刻的现值」必须由 `host-source.ts` 的 subscribe / create 路径显式补一次（`storeBridge.pushRuntime`）。
+  少了这一帧的后果是「手机看得见进度、却看不见状态」：会话在手机没订阅的那段时间里**出过的错**（`RuntimeDTO.error`）、**被暂存的 run**（`paused`）、甚至 `working` 的初值都不会到达手机——打开那个会话只看到一个没有任何解释的空会话（手机侧 `virlen-mobile/src/store/chat.ts` 的 `sessionError` 就是这条通道的落点）。
+- **运行时状态由电脑侧权威**：错误文案来自 `sessionRuntimeState`（电脑侧写入），手机侧只做投影——所以「重新发送时清掉上一条错误」必须在电脑侧做（`host-source.ts::send` 与桌面 `chat-view.handleSend` 同构），否则手机会被补推的快照顶得反复弹同一条红条。
+- **Agent 选择（协议 0.6.0）**：新建会话时可指定**归属 Agent**（此前手机建的会话永远归默认 Agent）。
+  - 电脑侧：`host.agent.list` 给候选集（白名单：`id` / `name` / `defaultModel` / `defaultWorkspace`，**不含** `systemPrompt` / `allowTools` / `skills` / `params`）；`host.session.create` 的 `CreateSessionParams.agentId` 带归属，未知 id → `E_BAD_REQUEST` 并进审计（`host-source.ts::requireAgent`）；不传 = 默认 Agent（旧行为不变）。
+  - 权限位 `session.agent`（常量 `SESSION_AGENT_CAPABILITY`，见 `acl.ts`）：这是**权限**而不是功能标记 —— 选 Agent 就是选 systemPrompt / 工具白名单 / skills，所以 handler 里独立 `assert`，不靠手机端隐藏入口（§7-⑪）。
+  - **已有会话的 Agent 不可改**：换 Agent 就是换提示词与工具白名单，历史对话会前后错配（与「工作目录只在新建时确定」同一条理由）。因此只有「新建时指定」，没有 `setAgent`。
+  - 手机端（`virlen-mobile`）：`store/chat.ts` 的 `draft.agentId` + `loadAgents()`，面板 `ui/components/NewChatPanel.tsx` + `ui/components/ModelPicker.tsx::AgentPicker`。**换 Agent 会清掉草稿里的模型 / 工作目录**（与桌面 `chat-view` 那条 effect 同语义）；旧电脑端没有该能力 → 选择器不显示，且创建时**不携带** `agentId`（否则会被静默丢掉，用户以为选了却没生效）。
+- **工具消息的四个下行字段（白名单投影，`bridge/dto.ts::toMessageDTO`）**：`toolName` / `toolArgs`（折叠态一行）/ `toolArgsFull`（展开区完整入参）/ `text`。
+  工具结果消息（`role:'tool'`）**自己只有结果文本**，名字与入参都在**发起此次调用的 assistant 消息**的 `toolCalls[]` 上 —— 靠 `buildToolCallIndex`（`toolCallId` → `{name, input}`，匹配规则与桌面 `resolveJumpAnchorId` 一致）接起来。
+  `toolArgs` 是**一行摘要**（`src/store/chat.ts` / `npm run build` / `在 src 中搜索 sessionError`），由共享包的 `summarizeToolArgs` 生成（真实电脑侧与演示宿主 `testing/mock-host.ts` 共用同一份，避免两端漂移）；路径按会话工作目录缩短（`toShortPath`，与桌面卡片同口径）。
+  ⚠️ **摘要绝不下行正文**（`write_file.content` / `edit_file.edits[].old_string` 可能是整篇文章）；`toolArgs` **不受传输档位影响**——它只有一行，且正好是工具输出被精简档略掉时用户唯一还看得见的东西。
+  拿不到就整个字段缺席（旧电脑端 / 跨页工具调用）→ 手机端只显示工具名，**不要用正文反推**。
+- **展开区的完整入参（`toolArgsFull`）与 5000 字符中间省略**（2026-10 第二轮真机反馈：「入参显示不完整」）：
+  - 折叠态那一行是**摘出来的**（只挑主参数 + 160 字符上限），用户点开卡片想看的就是剩下的部分 → `formatToolArgs(input, {shortenPath})` 给**入参本身**（两空格缩进的 JSON，与桌面导出同一形态），路径走**同一个** `shortenPath` 回调（折叠 / 展开显示成两个路径会被当成点坏东西）。
+  - 纪律与摘要**反了一面**：摘要“只给摘要不给原文”，展开区允许出现正文 —— 前提是**用户主动点开才渲染**（手机端 `ui/components/MessageList.tsx` 的 `.tool-card__args-detail`，超出 **7 行**靠 CSS 内部滚）。
+  - 长度统一由 `TOOL_DETAIL_MAX`（5000）+ `elideMiddle`（**中间省略**，标记行写进正文）兜住；**工具输出（`text`）用同一条线**，而 assistant / 用户正文一个字不裁（那是「主要内容」）。
+  - 用例：`src/tests/bridge/phone-tool-args.test.ts`（投影）、共享包 `tests/tool-args.test.ts`、手机端 `chat-tool-card.test.ts`（折叠态不进 DOM）。
+- **依赖形态（2026-10 起）**：`virlen-remote` 在 `virlen-app` 与 `virlen-mobile` 里都是 **`link:../virlen-remote`**（本地仓库 `C:\code\virlen\virlen-remote`）。
+  ⚠️ 改完该仓库的 `src` 必须 **`pnpm build`**（`scripts/build.mjs` 生成 `dist`）—— 两端 import 的是 `dist`，不重建就会「源码改了、行为没变」。改协议（方法表 / DTO / 能力名）时两端要一起对齐。
+  发版时：把本地改动推回上游仓库 → 按 `prepublishOnly`（`typecheck && test && build`）发版 → 两端依赖改回版本号。
 - 测试：`src/tests/bridge/*`（memory transport）与 `src/tests/ui/phone-control-*`。
 - **设计文档未落地**：`src/` 内 16 个文件引用 `docs/phone-control-bridge.md` 的 §号（§16.2 / §25 / §27 / §30 …），但该文件不存在；读到时不要当成已有资料。
 
