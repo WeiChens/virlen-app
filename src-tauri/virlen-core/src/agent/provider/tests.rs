@@ -4,7 +4,7 @@
 //! 避免依赖父模块的私有 use 绑定（可读性也更好）。
 
 use super::blocks::process_vision_content;
-use super::super::types::{ChatRequest, Message, ToolUseContent};
+use super::super::types::{ChatRequest, Message, ToolDefinition, ToolParameters, ToolUseContent};
 use super::{NativeAnthropicProvider, NativeOpenAiProvider};
 use serde_json::{json, Value};
 
@@ -326,4 +326,141 @@ fn anthropic_thinking_false_disables_reasoning() {
     // 不禁用时不得写入该字段
     let plain = p.build_request(&chat_request(vec![msg("user", json!("hi"), None, None)]));
     assert!(plain["thinking"].is_null());
+}
+
+// ==================== Anthropic prompt caching（显式缓存断点） ====================
+//
+// 背景：Anthropic 的前缀缓存**必须显式打断点**，否则 `cache_read_input_tokens` 恒为 0
+//（= 每轮按输入价全额重算整段历史）。断点位置策略写死在 `anthropic.rs::build_request`，
+// 这三条测试就是它的护栏。
+
+/// 造一条「带工具 + 可选 system」的请求（断点 ①/② 的前提）
+fn cache_request(system: Option<&str>, tool_count: usize, messages: Vec<Message>) -> ChatRequest {
+    let mut req = chat_request(messages);
+    req.system_prompt = system.map(String::from);
+    req.tools = (0..tool_count)
+        .map(|i| ToolDefinition {
+            name: format!("tool_{i}"),
+            label: None,
+            description: "d".into(),
+            parameters: ToolParameters {
+                type_: "object".into(),
+                properties: json!({}),
+                required: vec![],
+                one_of: None,
+            },
+        })
+        .collect();
+    req
+}
+
+/// 数一个 body 里一共打了几个 `cache_control`（用来守「上限 4」）
+fn count_breakpoints(v: &Value) -> usize {
+    match v {
+        Value::Object(map) => {
+            let self_hit = usize::from(map.contains_key("cache_control"));
+            self_hit + map.values().map(count_breakpoints).sum::<usize>()
+        }
+        Value::Array(arr) => arr.iter().map(count_breakpoints).sum(),
+        _ => 0,
+    }
+}
+
+#[test]
+fn anthropic_marks_three_cache_breakpoints() {
+    let p = NativeAnthropicProvider::new("test", "key", "https://api.test.com");
+    let request = cache_request(
+        Some("  你是助手  "), // 故意带空白：断点挂在 trim 后的文本上，与旧实现逐字一致
+        3,
+        vec![
+            msg("user", json!("第一轮"), None, None),
+            msg("user", json!("第二轮"), None, None),
+        ],
+    );
+    let body = p.build_request(&request);
+
+    // ① 工具尾：**只有最后一个**工具带断点
+    let tools = body["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 3);
+    assert!(tools[0]["cache_control"].is_null());
+    assert!(tools[1]["cache_control"].is_null());
+    assert_eq!(tools[2]["cache_control"], json!({ "type": "ephemeral" }));
+
+    // ② system 由裸字符串改成「带断点的文本块数组」，文本仍按 trim 后下发
+    assert_eq!(body["system"][0]["type"], json!("text"));
+    assert_eq!(body["system"][0]["text"], json!("你是助手"));
+    assert_eq!(body["system"][0]["cache_control"], json!({ "type": "ephemeral" }));
+
+    // ③ 只有**最后一条**消息的**最后一个**块带断点；更早的消息一个都不带
+    let msgs = body["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 2);
+    assert_eq!(count_breakpoints(&msgs[0]), 0, "历史消息不得带断点");
+    let tail = msgs[1]["content"].as_array().unwrap().last().unwrap();
+    assert_eq!(tail["cache_control"], json!({ "type": "ephemeral" }));
+
+    // 上限 4：这里一共 3 个
+    assert_eq!(count_breakpoints(&body), 3);
+}
+
+#[test]
+fn anthropic_breakpoints_degrade_when_parts_are_missing() {
+    let p = NativeAnthropicProvider::new("test", "key", "https://api.test.com");
+
+    // 无工具 + 无 system（标题生成 / 校验这类一次性请求的形状）→ 只剩对话尾一个
+    let body = p.build_request(&cache_request(
+        None,
+        0,
+        vec![msg("user", json!("hi"), None, None)],
+    ));
+    assert!(body["tools"].is_null());
+    assert!(body["system"].is_null());
+    assert_eq!(count_breakpoints(&body), 1);
+
+    // 末尾块不可缓存（空 content 数组）→ 不硬塞断点，也不 panic
+    let body = p.build_request(&cache_request(
+        Some("S"),
+        0,
+        vec![msg("user", json!([]), None, None)],
+    ));
+    assert_eq!(body["messages"][0]["content"], json!([]));
+    assert_eq!(count_breakpoints(&body), 1, "只剩 system 那一个");
+
+    // 空文本块同理：只带 thinking 的 assistant 会拼成 [thinking, text("")]，末尾是空文本
+    let mut m = msg("assistant", json!(""), None, None);
+    m.reasoning_content = Some("想了很久".into());
+    let body = p.build_request(&cache_request(None, 0, vec![m]));
+    assert_eq!(body["messages"][0]["content"][0]["type"], json!("thinking"));
+    assert!(body["messages"][0]["content"][1]["cache_control"].is_null());
+    assert_eq!(count_breakpoints(&body), 0);
+}
+
+#[test]
+fn mark_tail_block_only_touches_whitelisted_non_empty_blocks() {
+    // 白名单内的非空文本 → 打上
+    let mut ok = json!({ "role": "user", "content": [{ "type": "text", "text": "x" }] });
+    assert!(super::anthropic::mark_tail_block(&mut ok));
+    assert_eq!(ok["content"][0]["cache_control"], json!({ "type": "ephemeral" }));
+
+    // thinking 不在白名单：挂上去会被服务端 400 掉整个请求
+    let mut thinking = json!({ "role": "assistant", "content": [{ "type": "thinking", "thinking": "…" }] });
+    assert!(!super::anthropic::mark_tail_block(&mut thinking));
+    assert!(thinking["content"][0].get("cache_control").is_none());
+
+    // 块类型对但内容为空 / 全空白 → 也不挂（不给边界情况再添一个变数）
+    for text in ["", "   \n "] {
+        let mut m = json!({ "role": "assistant", "content": [{ "type": "text", "text": text }] });
+        assert!(!super::anthropic::mark_tail_block(&mut m), "空文本不应打断点");
+    }
+
+    // 空数组 / content 不是数组 → 什么都不做（不得 panic）
+    let mut empty = json!({ "role": "user", "content": [] });
+    assert!(!super::anthropic::mark_tail_block(&mut empty));
+    let mut string_content = json!({ "role": "user", "content": "hi" });
+    assert!(!super::anthropic::mark_tail_block(&mut string_content));
+
+    // tool_result / tool_use / image 都在白名单里
+    for kind in ["tool_result", "tool_use", "image"] {
+        let mut m = json!({ "role": "user", "content": [{ "type": kind }] });
+        assert!(super::anthropic::mark_tail_block(&mut m), "{kind} 应在白名单里");
+    }
 }

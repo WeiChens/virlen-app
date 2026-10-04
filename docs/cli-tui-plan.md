@@ -607,6 +607,7 @@ AI 摘要消息同时带前两个：拿 `usage` 当占用会显示成「压缩�
 2. **截断单位**：TS 按 UTF-16 码元（并做代理对保护），Rust 按字符（码点）→ 阈值附近 ±1 字符差异；Rust 侧不可能切出非法内容。
 3. **`max_tokens`**：TS 传 `undefined`（用 provider 默认），Rust 传会话自己的 `params.maxTokens`（<= 0 时退 4096）—— `ChatRequest.max_tokens` 是 `i64` 且 provider 会**无条件**写进请求体，传 0 会被部分 API 拒掉。
 4. **未动 GUI**：TS 那份仍在（GUI 仍走它），两份实现暂时并存。
+5. **`tool_choice` 已由 `none` 改为 `auto`**（2026-10-04）：服务端对 `none` 的请求不渲染 tools 段落 → 前缀缓存永远接不上（详见 `docs/AGENTS.md` §11.30）。模型违约（发起工具调用 / 空正文）时**回退 `raw`**：报告里的 `mode` 显示「正文压缩」，但后面仍会带上「摘要调用 N tok」—— 那次调用真的花掉了钱，也已记入账本。
 
 ### 11.5 验证
 

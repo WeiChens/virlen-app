@@ -575,6 +575,9 @@ export const rustEngine: AgentEnginePort = {
     // 统一到 core：与 CLI 共用 `virlen_core::agent::compress`（命令 `cmd_compress_context`）。
     // - `raw` 纯本地渲染；`ai` 用原生 Provider（openai / anthropic）或桥接
     //   （gemini 经 `agent:provider-request`，与正常聊天同一条路）。
+    // - ⚠️ `ai` 模式的请求形状由 core 决定（`tool_choice=auto` + 照常下发 tools、`stream=false`）：
+    //   服务端对 `tool_choice=none` 不渲染 tools 段落，前缀缓存会**整段失效**（详见
+    //   `docs/AGENTS.md` §11.30）；模型违约时 core 会自己回退 `raw`（前端无需处理）。
     // - **记账在后端完成**（与 CLI 同一入口 `agent::usage::record_usage`，kind = "compress"）；
     //   落库仍由 chat-service 负责（`cmd_replace_session_messages`），与压缩前后一致。
     const result = await invoke<{ summary: string; message: Message }>(

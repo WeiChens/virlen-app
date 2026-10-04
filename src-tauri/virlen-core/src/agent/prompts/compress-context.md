@@ -1,5 +1,5 @@
 Summarize the previous conversation history and extract the key information.
-Format: return plain text directly; do not call any tool.
+Format: your entire reply must be the summary text itself — never call any tool or function, and never return an empty reply.
 Requirements:
 
 1. Weight the level of detail by position: keep the most information from the most recent turns (you may reproduce them verbatim) and the least from the earliest turns.

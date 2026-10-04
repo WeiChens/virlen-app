@@ -3,6 +3,8 @@
 //! ## 两种模式
 //!
 //! - [`CompressMode::Ai`]：一次非流式模型调用（提示词 `prompts::COMPRESS_CONTEXT`），最省 token，但慢、且本身要花钱；
+//!   ⚠️ 请求必须与聊天请求**同构**（`tool_choice = auto` + 同样下发 `tools`），否则前缀缓存接不上（见 `ai` 模块头）；
+//!   模型违约（工具调用 / 空正文）时**回退 `raw`**（见 [`CompressMode::Ai`] 分支）。
 //! - [`CompressMode::Raw`]：正文压缩，纯本地渲染（[`raw::build_raw_summary`]），毫秒级零消耗；正文一字不
 //!   删，只丢深度思考并省略超长工具输出。
 //!
@@ -25,6 +27,10 @@
 //! - 截断单位：按字符（码点），阈值附近与 TS 的 UTF-16 口径可能差 ±1 字符；
 //! - `max_tokens` 必须钳到 [`DEFAULT_SUMMARY_MAX_TOKENS`]：GUI 会话默认的 `2000000`（语义是「不限制
 //!   输出」）会被模型以 400 `Invalid max_tokens value` 拒掉（见 `ai::summary_max_tokens`）。
+//! - `ai` 模式的 `tool_choice` 必须是 `auto`（**不能用 `none`**）：服务端对 `none` 的请求不渲染 tools
+//!   段落，前缀缓存因此永远接不上（实测命中率 54% ↔ 98%+，见 `ai` 模块头）；对应的代价（模型真发起
+//!   工具调用 / 返回空正文）由 [`ai::ContractViolation`] 护栏兜住 —— 命中即**回退 `raw`**，但那次
+//!   调用**照常记账**（钱已花掉，`llm` 因此非空而 `mode` 报 `raw`）。
 
 pub mod ai;
 pub mod raw;
@@ -304,7 +310,10 @@ pub struct CompressOutput {
     pub omitted_chars: usize,
     /// 压缩后的上下文占用（本地估算）—— 与 `message.uiData.contextTokens` 同值
     pub context_tokens: i64,
-    /// `ai` 模式的那次模型调用（`raw` 模式为 `None`）
+    /// `ai` 模式的那次模型调用（`raw` 模式为 `None`）。
+    ///
+    /// ⚠️ 例外：`ai` 模式因[契约护栏](ai::ContractViolation)回退 `raw` 时 `mode` 是 `Raw`、本字段
+    /// 却**非空**（那次调用确实发生了，要记账）—— 判据是「有没有发生模型调用」，不是「哪个模式」。
     pub llm: Option<LlmCall>,
 }
 
@@ -371,6 +380,36 @@ pub async fn compress(
                 .provider
                 .ok_or_else(|| "AI 摘要需要可用的 Provider（当前会话没有可用连接）".to_string())?;
             let out = ai::summarize(input.session, slice, input.tool_defs, provider, cancel).await?;
+
+            // 契约护栏（见 `ai` 模块头）：`tool_choice = auto` 是换取前缀缓存的前提，
+            // 模型理论上仍可发起工具调用或返回空正文 —— 两者都不能当摘要用
+            //（空正文当摘要会**直接清空历史**）。回退 `raw` 本地渲染，但**照常记账**：
+            // 那次调用真发生了（钱已花掉）→ `llm` 非空；`mode` 报 `raw` 是因为正文确实是 raw 渲染的。
+            if let Some(violation) = out.contract_violation {
+                crate::telemetry::track(
+                    "engine.compress.ai_fallback",
+                    json!({ "reason": violation.as_str() }),
+                );
+                let raw::RawCompressResult {
+                    summary,
+                    omitted_chars,
+                } = raw::build_raw_summary(slice);
+                let summary = with_recap(summary);
+                let ctx = post_compress_tokens(input.session, input.tool_defs, &summary);
+                return Ok(CompressOutput {
+                    mode: CompressMode::Raw,
+                    message: summary_message(CompressMode::Raw, &summary, out.usage.clone(), ctx),
+                    summary,
+                    omitted_chars,
+                    context_tokens: ctx,
+                    llm: Some(LlmCall {
+                        usage: out.usage,
+                        estimated: out.estimated,
+                        duration_ms: out.duration_ms,
+                    }),
+                });
+            }
+
             // 摘要正文必须自包含：末尾补上当前清单（见 [`todo_recap`]）
             let content = with_recap(out.content);
             let ctx = post_compress_tokens(input.session, input.tool_defs, &content);

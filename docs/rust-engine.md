@@ -371,12 +371,13 @@ pub trait SessionRepo: Send + Sync {
 |---|---|---|
 | Gemini 原生 HTTP | `infrastructure/provider/gemini.ts` | 无原生，走 JS 桥（`BridgedProvider`） |
 | provider `listModels` / `validateApiKey` | 各 TS provider | 无原生（配置 UI 用，非聊天核心） |
+| 提示词缓存（prompt caching） | 各 TS provider **都没实现**（`anthropic.ts` 只读 `cache_read_input_tokens`、从不写断点） | ✅ **Rust 侧已实现**：Anthropic 显式 `cache_control` 断点 3 处（`provider/anthropic.rs::build_request`，块类型走白名单）；OpenAI 兼容靠服务端自动前缀缓存，但**请求形状必须与聊天同构**（`tool_choice=auto` + 照常下发 `tools`）。详见 `AGENTS.md` §11.40 |
 
 ### 2. 引擎层
 
 | 功能 | TS 实现 | Rust 现状 |
 |---|---|---|
-| `compressContext` 上下文压缩 | `domain/engine/compress-context.ts`（已删除） | ✅ **已完全 Rust 化**：`cmd_compress_context` → `virlen_core::agent::compress`（GUI 与 CLI 同一份） |
+| `compressContext` 上下文压缩 | `domain/engine/compress-context.ts`（已删除） | ✅ **已完全 Rust 化**：`cmd_compress_context` → `virlen_core::agent::compress`（GUI 与 CLI 同一份）。⚠️ `ai` 模式的请求必须与**聊天请求同构**（`tool_choice=auto` + 照常下发 `tools`）：服务端对 `tool_choice=none` 不渲染 tools 段落，前缀缓存会整段失效（实测命中率 54% ↔ 98%+，见 `AGENTS.md` §11.30） |
 | `generateTitle` 标题生成 | `domain/engine/generate-title.ts`（已删除） | ✅ **已 Rust 化**：`agent/title.rs` + `cmd_generate_title`（`thinking: Some(false)` 禁用思考） |
 
 ### 3. 工具层（**已全部原生化**，无 JS 桥；本表保留「实现位置 + 对齐要点」）

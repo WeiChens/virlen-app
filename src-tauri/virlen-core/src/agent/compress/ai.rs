@@ -3,7 +3,21 @@
 //! 为什么走 `Provider::chat`（非流式）而不是 `chat_stream`：摘要是一次性的短输出，不需要增量渲染，也不进
 //! 对话消息列表（只记用量账本）。
 //!
-//! ⚠️ `tool_choice = "none"`：压缩请求不允许模型发起工具调用（它只该输出摘要文本）。
+//! ## ⚠️ `tool_choice` 必须是 `auto`，绝不能用 `none`（2026-10-04 修订）
+//!
+//! 原实现用 `tool_choice = "none"` 表达「禁止模型发起工具调用」，**代价是前缀缓存**：
+//! 服务端对 `tool_choice = "none"` 的请求**不渲染 tools 段落**，于是压缩请求的 prompt 从系统提示词
+//! 之后立刻与聊天请求分歧 —— 自动前缀缓存（DeepSeek / OpenAI）与 GLM 的 `prompt_tokens_details`
+//! 永远接不上，每次压缩都按输入价**全额重算**整段上下文。
+//!
+//! 实测（同一会话、相距数十秒的一次聊天与一次压缩）：
+//! - `tool_choice = "none"`（旧）：压缩只命中 54.2%（且命中的 512 token ≈ 系统提示词那一小段），
+//!   输入体量也只有聊天请求的 ~1/8（少了 tools 那一整段）；
+//! - `tool_choice = "auto"`（现）：压缩命中 **98%+**，输入体量回到与聊天同一量级。
+//!
+//! 因此这里与聊天请求**同构**（同样 `auto` + 同样 `tools`），改用**契约护栏**兜住「模型真的发起
+//! 工具调用 / 返回空正文」：见 [`AiSummary::contract_violation`]，由调用方（[`super::compress`]）
+//! 回退 `raw` 模式 —— 既不吃缓存亏，也不让一次跑偏的输出污染摘要。
 
 use crate::agent::cancellation::CancellationToken;
 use crate::agent::prompts;
@@ -23,6 +37,34 @@ pub struct AiSummary {
     pub estimated: bool,
     /// 本次请求的墙钟耗时（含首字延迟）—— 供用量账本算 tok/s
     pub duration_ms: i64,
+    /// `None` = 正常拿到摘要正文；`Some` = 模型违反「只输出摘要文本」的契约。
+    ///
+    /// 出现 `Some` 时 `content` **不可用**（空、或与工具调用混在一起），调用方应回退 `raw` 模式，
+    /// 并用本次 `usage` / `duration_ms` 照常记账（调用真发生了，钱已经花掉）。
+    pub contract_violation: Option<ContractViolation>,
+}
+
+/// AI 摘要的**契约违反**类型 —— 模型没按「只输出摘要文本」办。
+///
+/// 为什么需要它：`tool_choice = "auto"` 是**为了前缀缓存**（见模块头）才不得不用，代价是模型理论上
+/// 仍可发起工具调用。压缩请求不在工具执行链路里（没人回填 tool 结果），真发生了只能丢弃这次输出。
+/// 但**不能当硬错误**：调用方要回退 `raw` 并照常记账。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContractViolation {
+    /// 模型发起了工具调用（这轮输出不可用）
+    ToolCalls,
+    /// 正文为空 —— 把它当摘要会**清空整个历史**，必须回退
+    EmptyContent,
+}
+
+impl ContractViolation {
+    /// 埋点用的稳定短名（**不含任何正文**，见 `utils/telemetry` 的脱敏口径）
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ContractViolation::ToolCalls => "tool_calls",
+            ContractViolation::EmptyContent => "empty_content",
+        }
+    }
 }
 
 /// 消息 content → 参与 token 估算的文本（对齐 TS `estimateRequestTokens`）
@@ -107,7 +149,9 @@ pub async fn summarize(
         // GUI 会话默认 2000000，会被模型拒掉（400，见 [`summary_max_tokens`]）。
         max_tokens: summary_max_tokens(session.params.max_tokens),
         stream: false,
-        tool_choice: "none".to_string(),
+        // ⚠️ 必须 `auto`：`none` 会让服务端不渲染 tools 段落 → 前缀缓存永远接不上（见模块头）。
+        // 代价（模型真发起工具调用）由下面的契约护栏兜住。
+        tool_choice: "auto".to_string(),
         reasoning_effort: None,
         // 压缩与 TS 同语义：不禁用思考（摘要本就是长输出）
         thinking: None,
@@ -120,6 +164,20 @@ pub async fn summarize(
     let content = match &response.content {
         Value::String(s) => s.clone(),
         other => other.to_string(),
+    };
+
+    // 契约护栏（见模块头）：`auto` 是换取前缀缓存的前提，这里把它兜住。
+    // 顺序有意义 —— 「发起了工具调用」比「正文为空」更具体，优先报它（便于定位）。
+    let contract_violation = if response
+        .tool_calls
+        .as_ref()
+        .is_some_and(|calls| !calls.is_empty())
+    {
+        Some(ContractViolation::ToolCalls)
+    } else if content.trim().is_empty() {
+        Some(ContractViolation::EmptyContent)
+    } else {
+        None
     };
 
     // 用量优先取 provider 的**真实值**（非流式响应三种协议都带 usage）；
@@ -146,5 +204,6 @@ pub async fn summarize(
         usage,
         estimated,
         duration_ms,
+        contract_violation,
     })
 }

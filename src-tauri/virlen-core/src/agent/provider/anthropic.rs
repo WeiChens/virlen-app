@@ -1,6 +1,17 @@
 //! Anthropic Messages API Provider
 //!
 //! 移植自 TS `src/infrastructure/provider/anthropic.ts`（铁律 1：双引擎同语义）。
+//!
+//! ## ⚠️ 与 TS 的唯一有意分歧：显式缓存断点（`cache_control`）
+//!
+//! Anthropic 的前缀缓存**不像** OpenAI / DeepSeek 那样自动生效 —— 不显式打断点，
+//! `usage.cache_read_input_tokens` **恒为 0**（等于每一轮都按输入价全额重算整段历史）。
+//! 因此本文件在组装请求时打 3 个断点（官方上限 4 个），见 [`mark_tail_block`] 与 `build_request`
+//! 里的三处断点注释。
+//!
+//! 这里**只改 Rust 侧**、不去同步 TS 的 `anthropic.ts`：TS 那份 buildRequest 已不在对话路径上
+//! （anthropic 恒为原生 Provider，见 [`super::DefaultProviderFactory`]），只在 vitest 里跑；
+//! 两边都实现会把「断点位置策略」变成两份要同步的状态，得不偿失。
 
 use super::blocks::{anthropic_blocks, process_vision_content, slice_messages, text_of_content};
 use super::sse::{read_sse_lines, SseItem};
@@ -14,6 +25,77 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 // ==================== Anthropic Provider ====================
+
+/// 显式缓存断点的取值 —— 全仓库**唯一**写 `cache_control` 的地方。
+///
+/// 5 分钟 TTL；写入按 1.25x 输入价、命中按 0.1x 输入价计费（先读缓存，只写"上次断点之后的新内容"）。
+fn cache_control_breakpoint() -> Value {
+    json!({ "type": "ephemeral" })
+}
+
+/// 允许挂 `cache_control` 的块类型（**白名单**）。
+///
+/// 为什么用白名单而不是黑名单：块类型不对会被服务端**直接 400 掉整个请求** ——
+/// 「顺手省钱的优化」绝对不能变成「聊天打不开」。`thinking` 块尤其不能挂。
+const CACHEABLE_BLOCK_TYPES: [&str; 5] = ["text", "image", "tool_use", "tool_result", "document"];
+
+/// 一个块能不能挂 `cache_control`。
+///
+/// 两道关：① 类型在白名单里；② 文本块的内容不能是空/空白。
+/// 第 ② 条容易漏：块类型对了但正文为空时，服务端本就在「接受与拒绝」的边缘，此时再挂一个断点
+/// 等于把一个已存在的边界情况变成 400（同样适用「宁可少一个断点」的口径）。
+fn is_cacheable_tail(block: &Value) -> bool {
+    let Some(kind) = block.get("type").and_then(Value::as_str) else {
+        return false;
+    };
+    if !CACHEABLE_BLOCK_TYPES.contains(&kind) {
+        return false;
+    }
+    if kind == "text" {
+        return block
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|t| !t.trim().is_empty());
+    }
+    true
+}
+
+/// 给一条消息的**最后一个可缓存块**打上断点；打上返回 `true`。
+///
+/// 找不到可缓存块（`content` 不是数组 / 数组为空 / 末尾块不满足 [`is_cacheable_tail`]）时
+/// **什么都不做** —— 少一个断点只是少省一点钱，不是错误。
+///
+/// `pub(super)`：与 `process_vision_content` 同理，供 `provider/tests.rs` 直接单测。
+pub(super) fn mark_tail_block(message: &mut Value) -> bool {
+    let Some(last) = message
+        .get_mut("content")
+        .and_then(Value::as_array_mut)
+        .and_then(|blocks| blocks.last_mut())
+    else {
+        return false;
+    };
+    if !is_cacheable_tail(last) {
+        return false;
+    }
+    match last.as_object_mut() {
+        Some(obj) => {
+            obj.insert("cache_control".into(), cache_control_breakpoint());
+            true
+        }
+        None => false,
+    }
+}
+
+// 缓存断点的 3 个落点（官方上限 4 个；全部在 `build_request` 里就地打）：
+//
+// 1. **最后一个工具定义** —— 纯静态；只要工具集相同，跨会话也能复用；
+// 2. **系统提示词块**（数组形态） —— 覆盖「工具 + 系统提示词」这一整段静态头部，会话内每轮复用；
+// 3. **最后一条消息的末尾块**（`mark_tail_block`） —— 对话前缀随轮次增长，
+//    命中「上一轮已缓存的整段历史」；这正是 Anthropic 顶级 `cache_control` 自动缓存的语义
+//    （「断点落在最后一个可缓存块，随对话前移」），这里是它的手动等价实现。
+//
+// 为什么可以无脑打：前缀不足最小长度（多数模型 1024 token，部分 Haiku/Opus 型号更高）时
+// 服务端**静默跳过**、不报错；且写入按段**增量**计费，1 号被 2 号覆盖也不重复花钱。
 
 pub struct NativeAnthropicProvider {
     api_key: String,
@@ -151,11 +233,16 @@ impl NativeAnthropicProvider {
             "messages": messages,
         });
         if !system.trim().is_empty() {
-            body["system"] = Value::String(system.trim().to_string());
+            // 数组形态（而非裸字符串）才能挂断点 —— 断点 ②（静态头部：工具 + 系统提示词）
+            body["system"] = json!([{
+                "type": "text",
+                "text": system.trim(),
+                "cache_control": cache_control_breakpoint(),
+            }]);
         }
         body["temperature"] = Value::from(request.temperature);
         if !request.tools.is_empty() {
-            let tools: Vec<Value> = request
+            let mut tools: Vec<Value> = request
                 .tools
                 .iter()
                 .map(|t| {
@@ -166,7 +253,16 @@ impl NativeAnthropicProvider {
                     })
                 })
                 .collect();
+            // 断点 ①：工具定义末尾（纯静态）
+            if let Some(obj) = tools.last_mut().and_then(Value::as_object_mut) {
+                obj.insert("cache_control".into(), cache_control_breakpoint());
+            }
             body["tools"] = Value::Array(tools);
+        }
+        // 断点 ③：对话末尾（最后一条消息的最后一个可缓存块）—— 每轮向后移一格，
+        // 于是这轮命中「上一轮已经写好的整段前缀」。
+        if let Some(last) = body["messages"].as_array_mut().and_then(|m| m.last_mut()) {
+            mark_tail_block(last);
         }
         if request.tool_choice == "none" {
             body["tool_choice"] = json!({ "type": "none" });

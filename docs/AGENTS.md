@@ -604,7 +604,8 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 
 **11.30 上下文压缩下沉 core（`ai` / `raw`）+ `chat` 显示占用 % + `list-session` 两列** —— 压缩原先**只在 TS 侧**（GUI 走 Rust 引擎时也是回调 TS）→「CLI 能用」＝在 Rust 侧**新写一份**（用户拍板落 `virlen-core`，GUI 后来切过来，见 §11.36）。常量与口径：`CONTEXT_WINDOW_TOKENS = 200_000`（**默认值**，实际值取 `app_settings.contextWindowTokens`）、`COMPRESS_MIN_RATIO = 0.4`、`context_tokens()`（`uiData.contextTokens > 0` 优先，否则 `usage.totalTokens`）。
 - **三个数不能混**：`usage.totalTokens` = 那次摘要调用**花了多少**（含压缩前全部历史）；`uiData.contextTokens` = 压缩后下一轮请求**上下文多大**（本地估算）；状态行显示后者 / 上下文窗口。
-- 落点：core `agent/compress/`（`mod` 模式 / 常量 / 口径 / 切片 · `raw` 正文压缩渲染 · `ai` 非流式 `Provider::chat` + `tool_choice=none`），产物是**一条 `role="summary"` 消息**；CLI 执行链 `session_rt/compress.rs`（TUI 与顺序输出模式**都调它**）。**`/compress` 面板字符键一律不参与**（与授权面板同一条 fail-closed 口径）；占用 < 40% 拦下；`Skipped`（提示级）与 `Failed`（报错）**分开**。
+- 落点：core `agent/compress/`（`mod` 模式 / 常量 / 口径 / 切片 · `raw` 正文压缩渲染 · `ai` 非流式 `Provider::chat` + **`tool_choice=auto`**（⚠️ **不能用 `none`**，见下条）），产物是**一条 `role="summary"` 消息**；CLI 执行链 `session_rt/compress.rs`（TUI 与顺序输出模式**都调它**）。**`/compress` 面板字符键一律不参与**（与授权面板同一条 fail-closed 口径）；占用 < 40% 拦下；`Skipped`（提示级）与 `Failed`（报错）**分开**。
+- **⚠️ `ai` 摘要请求的 `tool_choice` 必须是 `auto`（2026-10-04 修订）**：服务端对 `tool_choice=none` 的请求**不渲染 tools 段落** → 压缩请求的 prompt 从系统提示词之后**立刻**与聊天请求分歧，自动前缀缓存（DeepSeek / OpenAI）与 GLM 的 `prompt_tokens_details` 永远接不上。实测（同一会话、相距数十秒）：`none` 时压缩只命中 **54.2%**（而且命中的 512 token ≈ 系统提示词那一小段）、输入体量只有聊天的 ~1/8；改 `auto` 后回到 **98%+**、输入体量与聊天同量级。代价（模型真发起工具调用 / 返回空正文）由 `ai::ContractViolation` 护栏兜住 → 命中即**回退 `raw`**（正文本地渲染，避免空正文把历史清空），但那一次调用**照常记账**（`llm` 非空、`mode` 报 `raw`）；`compress-context.md` 也补了「整条回复就是摘要正文，不得调用工具 / 不得空回复」。
 - **落库是追加不是替换**（TS 走整表替换；旧消息留在库里，正是 `list_messages` / `read_messages` 的数据源）；`list-session` 两列来自 `SessionRepo::session_stats()`，`--json` 无数据是 `null`，统计失败**不中断列表**。
 - **清单保活**：压缩后模型只看得到**最后一个 summary 之后**的消息 → 若「当前活跃清单」落在压缩区间内就会被忘记。对策：把清单**原文**渲染成文本补在 summary 正文末尾（`compress::todo_recap`，复用 `plan::render_todo_content`）；**不搬运 tool 消息**（`tool` 必须紧跟带 `tool_calls` 的 assistant，否则协议报错）；只在快照落在压缩区间内时补。
 - **边界**：① 压缩后占用是**本地粗估**（CJK 0.6 token/字符）；② 截断按**码点**、TS 按 UTF-16 码元 → 阈值附近 ±1；③ AI 摘要在 CLI 里**不可取消**；④ `list-session` 表格约 **139 列宽**，窄终端标题列会折行（机器可读请用 `--json`）；⑤ 选择面板的真终端外观与键位**未人工复验**。详见 `docs/cli-tui-plan.md` §11。
@@ -656,6 +657,15 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 - **顺带去重**：`tui/sink.rs` 的 `text_of` 改为 `session_rt::message_text` 的**再导出别名**（`pub(crate) use`），消除同 crate 两份实现，调用点与既有测试不动。
 - 门禁：`cargo test -p virlen-cli` **200 → 232 passed**、`cargo clippy -p virlen-cli --all-targets -- -D warnings` = 0；真二进制冒烟（临时 `VIRLEN_DATA_DIR`，不碰真实库）逐项过 —— `/model` 清单与切换、`session show/search/rm/purge`、`usage` 空态 / 日期过滤 / `--group-by minute` 被白名单挡成 exit=2。
 
+**11.40 提示词缓存（2026-10-04）：压缩请求的 `tool_choice` + Anthropic 显式断点** —— 起因：体检发现「AI 压缩不吃缓存」（同一会话：chat 命中 98.7%、`compress` 仅 3.0%）。
+- **根因 ①（OpenAI 兼容协议）**：`ai` 压缩请求用 `tool_choice: "none"` 表达「禁止模型调工具」，而服务端对 `none` 的请求**不渲染 tools 段落** → 压缩请求的 prompt 从**系统提示词之后立刻**与聊天请求分歧，自动前缀缓存（DeepSeek / OpenAI）与 GLM 的 `prompt_tokens_details` 永远接不上。改法：与聊天请求**同构**（`tool_choice: "auto"` + 照常下发 `tools`），代价用 `ai::ContractViolation` 护栏兜（工具调用 / 空正文 → **回退 `raw`**，但那一次调用**照常记账**，`llm` 非空而 `mode` 报 `raw`）。实测：压缩命中 54.2% → **98%+**。详见 §11.30。
+- **根因 ②（Anthropic）**：其前缀缓存**不自动生效** —— 不显式打断点，`cache_read_input_tokens` **恒为 0**（`provider/anthropic.rs` 过去只**读**该字段、从不写；全仓库 + 全 git 历史 `cache_control` 出现 **0** 次）。改法：`provider/anthropic.rs::build_request` 打 3 个显式断点（官方上限 4 个）—— ① 最后一个工具定义（纯静态，跨会话只要工具集相同就能复用）② `system` 改成**带断点的文本块数组**（覆盖「工具 + 系统提示词」这整段静态头部）③ 最后一条消息的最后一个**可缓存块**（对话前缀随轮次前移，即官方顶级 `cache_control` 自动缓存的手动等价实现）。
+- ⚠️ **块类型白名单**（`CACHEABLE_BLOCK_TYPES` = `text` / `image` / `tool_use` / `tool_result` / `document`）：类型不对会被服务端**直接 400 掉整个请求** —— 「顺手省钱的优化」绝不能变成「聊天打不开」；`thinking` 不在白名单，**空 / 全空白文本块也不挂**（块类型对但内容为空时本就在接受边缘）。找不到可缓存块就**少打一个断点**，不是错误。
+- ⚠️ **未达标不报错**：前缀不足最小长度（多数模型 1024 token，部分 Haiku/Opus 型号更高）时服务端**静默跳过**，所以可以无脑打；写入按段**增量**计费（1.25x），命中 0.1x，5 分钟 TTL。
+- **只改 Rust、不同步 TS**：`src/infrastructure/provider/anthropic.ts` 的 `buildRequest` 已**不在对话路径上**（anthropic 恒为原生 Provider，见 `DefaultProviderFactory`），只在 vitest 里跑；两边都实现等于把「断点位置策略」变成两份要同步的状态（与 §11.37 同一口径）。
+- **测试**：`provider/tests.rs` 的 `anthropic_marks_three_cache_breakpoints`（三处落点 + 只有末尾工具 / 末尾块带 + 总数 3 ≤ 4）、`anthropic_breakpoints_degrade_when_parts_are_missing`（缺工具 / 缺 system / 末尾不可缓存）、`mark_tail_block_only_touches_whitelisted_non_empty_blocks`（白名单 + 空文本 + 空数组不 panic）。
+- ⚠️ **已知缺口（记账口径，尚未修）**：`anthropic.rs::parse_response` 把 `cache_read_input_tokens + cache_creation_input_tokens` 合成一个 `cached_tokens`，而前端 `domain/pricing` 只有**一个** `cachedInput` 单价（Anthropic 按 0.1x 配）→ **缓存写入的 1.25x 被当 0.1x 计价**（该桶约低估 12.5 倍）。要修得给账本加「缓存写入」一列（Rust DTO / SQLite schema / TS 类型 / 价目表 / UI 五处联动）。
+
 **托盘 / 关闭不退出 / 后台工作**：实现见 `src-tauri/src/tray/`（模块头即设计说明），无独立文档。
 
 ---
@@ -694,6 +704,7 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 | 改埋点 | `src/utils/telemetry/**`（前端）；Rust 侧分两半：**出口** `src-tauri/src/telemetry.rs`（`TauriTelemetrySink` → `agent:telemetry` 事件 + `telemetry_drain_panics` 命令）、**其余**（`track` / `hash_id` / `now_ms` / 会话 trace / panic 钩子与落盘）在 `src-tauri/virlen-core/src/telemetry.rs`（sink 可插拔） |
 | 改 RAG / 知识库 | `src-tauri/virlen-core/src/rag/**`、`src/services/rag-service.ts`、`src/infrastructure/rag/` |
 | 改用量统计 / 费用 | `src-tauri/virlen-core/src/session_db/usage.rs`、`src/domain/pricing/index.ts`、`src/services/token-stats-service.ts`、`src/ui/pages/chat/components/token-stats/` |
+| 改提示词缓存 / 追查「命中率掉了」 | OpenAI 兼容：`provider/openai.rs::build_request`（`tool_choice` 决定服务端**是否渲染 tools 段落** —— 压缩踩过的坑见 §11.30）；Anthropic：`provider/anthropic.rs::build_request` 的三处显式断点（§11.40）；命中量看账本 `usage_ledger.cached_tokens`（表 `usage_ledger` / 界面 `token-stats`） |
 | 不让重复启动两个进程（第二实例 → 聚焦已有窗口） | `src-tauri/src/lib.rs` 的 `.plugin(tauri_plugin_single_instance::init(...))`（**必须第一个注册**）+ `src-tauri/src/tray/mod.rs::activate_main_window`；macOS「重新打开」=`RunEvent::Reopen` |
 | 发版 / 打包 | `src-tauri/tauri.conf.json` + `package.json` + `scripts/build-msix.ps1`、`scripts/msix/AppxManifest.xml.template`；**headless CLI 打包** = 本地 `pnpm build:cli`（只出二进制），CI 在三个 `build-*.yml` 的 `build-*` job 里打成 **zip**（`Build CLI` → `Stage CLI bundle` → `Upload CLI bundle`，内含 `quasivision_models` + `README.txt`，Windows 另带 `DirectML.dll`）→ Artifact + 同一 Release 资产；zip 内布局 / 命名 / 自检口径见 §11.29 |
 

@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::agent::cancellation::CancellationToken;
-use crate::agent::types::{ChatRequest, SessionParams, ToolUseContent};
+use crate::agent::types::{ChatRequest, SessionParams, ToolDefinition, ToolParameters, ToolUseContent};
 use async_trait::async_trait;
 use serde_json::json;
 
@@ -87,6 +87,21 @@ fn todo_msg(todos: Value) -> Message {
     m
 }
 
+/// 一份最小工具定义（只用来断言 `tools` 被**原样下发**）
+fn tool_defs() -> Vec<ToolDefinition> {
+    vec![ToolDefinition {
+        name: "read_file".into(),
+        label: None,
+        description: "读取文件内容".into(),
+        parameters: ToolParameters {
+            type_: "object".into(),
+            properties: json!({ "path": { "type": "string" } }),
+            required: vec!["path".into()],
+            one_of: None,
+        },
+    }]
+}
+
 /// 可控 provider（ai 模式的单测用）
 struct MockProvider {
     reply: String,
@@ -104,6 +119,85 @@ impl Provider for MockProvider {
             id: "resp".into(),
             role: "assistant".into(),
             content: Value::String(self.reply.clone()),
+            usage: self.usage.clone(),
+            timestamp: 0,
+            ..Default::default()
+        })
+    }
+
+    async fn chat_stream(
+        &self,
+        _request: &ChatRequest,
+        _cancel: &CancellationToken,
+        _on_event: &mut (dyn FnMut(crate::agent::types::StreamEvent) + Send),
+    ) -> Result<(), String> {
+        unreachable!("压缩只走非流式 chat")
+    }
+}
+
+/// 会**记下实际发出的请求**的 provider —— 用来钉住 `tool_choice` / `tools` / `stream`
+/// 与聊天请求同构（前缀缓存的硬前提，见 `ai` 模块头）。
+struct RecordingProvider {
+    reply: String,
+    usage: Option<TokenUsage>,
+    /// 非空 = 模拟「模型没按契约办，发起了工具调用」
+    tool_calls: Option<Vec<ToolUseContent>>,
+    seen: std::sync::Mutex<Option<ChatRequest>>,
+}
+
+impl RecordingProvider {
+    fn new(reply: &str) -> Self {
+        Self {
+            reply: reply.to_string(),
+            usage: None,
+            tool_calls: None,
+            seen: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn with_tool_call(mut self) -> Self {
+        self.tool_calls = Some(vec![ToolUseContent {
+            type_: "tool_use".into(),
+            id: "call-1".into(),
+            name: "read_file".into(),
+            input: json!({ "path": "a.txt" }),
+        }]);
+        self
+    }
+
+    fn with_usage(mut self, total: i64) -> Self {
+        self.usage = Some(TokenUsage {
+            prompt_tokens: total - 10,
+            completion_tokens: 10,
+            total_tokens: total,
+            cached_tokens: Some(total - 20),
+        });
+        self
+    }
+
+    /// 取回这次调用**实际发出去**的请求
+    fn request(&self) -> ChatRequest {
+        self.seen
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("provider 必须被调用过")
+    }
+}
+
+#[async_trait]
+impl Provider for RecordingProvider {
+    async fn chat(
+        &self,
+        request: &ChatRequest,
+        _cancel: &CancellationToken,
+    ) -> Result<Message, String> {
+        *self.seen.lock().unwrap() = Some(request.clone());
+        Ok(Message {
+            id: "resp".into(),
+            role: "assistant".into(),
+            content: Value::String(self.reply.clone()),
+            tool_calls: self.tool_calls.clone(),
             usage: self.usage.clone(),
             timestamp: 0,
             ..Default::default()
@@ -484,4 +578,107 @@ async fn compress_mode_parse_and_labels() {
         input: json!({ "path": "a" }),
     };
     assert_eq!(tc.name, "read_file");
+}
+
+// ==================== ai 模式：前缀缓存契约 + 契约护栏 ====================
+
+#[tokio::test]
+async fn ai_mode_uses_auto_tool_choice_to_keep_prompt_cache() {
+    // 前缀缓存契约：压缩请求必须与聊天请求**同构**。曾经用 "none" 表达「禁止模型发起工具调用」，
+    // 代价是服务端对 "none" 的请求**不渲染 tools 段落** → 压缩请求的 prompt 从系统提示词之后
+    // 立刻与聊天请求分歧，缓存前缀永远接不上（实测命中率 54% ↔ 98%+，见 `ai` 模块头）。
+    // 这条断言就是那个修复的护栏，别改回 "none"。
+    let s = session();
+    let defs = tool_defs();
+    let provider = RecordingProvider::new("这是摘要");
+    let msgs = vec![msg("user", "1"), msg("assistant", "2")];
+    let out = compress(
+        CompressInput {
+            mode: CompressMode::Ai,
+            session: &s,
+            messages: &msgs,
+            tool_defs: &defs,
+            provider: Some(&provider),
+        },
+        &ctx_and_cancel(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(out.mode, CompressMode::Ai);
+    let req = provider.request();
+    assert_eq!(
+        req.tool_choice, "auto",
+        "❌ 一旦用 none，服务端就不渲染 tools → 前缀缓存全丢"
+    );
+    assert_eq!(req.tools.len(), defs.len(), "tools 必须照常下发（与聊天一致）");
+    assert!(req.system_prompt.is_some(), "系统提示词照常带");
+    // 与聊天的差异只剩 stream（摘要是一次性短输出，不需要增量渲染）
+    assert!(!req.stream);
+}
+
+#[tokio::test]
+async fn ai_mode_falls_back_to_raw_when_model_calls_a_tool() {
+    // 护栏：`auto` 换来缓存，代价是模型理论上可发起工具调用 —— 压缩不在工具执行链路里
+    //（没人回填 tool 结果），这轮输出只能丢弃。但**不是硬错误**：钱已花掉，要照常记账。
+    let s = session();
+    let provider = RecordingProvider::new("我这就去读文件")
+        .with_tool_call()
+        .with_usage(12_345);
+    let msgs = vec![msg("user", "第一个问题"), msg("assistant", "第一个回答")];
+    let defs = tool_defs();
+    let out = compress(
+        CompressInput {
+            mode: CompressMode::Ai,
+            session: &s,
+            messages: &msgs,
+            tool_defs: &defs,
+            provider: Some(&provider),
+        },
+        &ctx_and_cancel(),
+    )
+    .await
+    .unwrap();
+
+    // 正文回退到 raw（本地渲染，一字不删）
+    assert_eq!(out.mode, CompressMode::Raw);
+    assert_eq!(
+        out.message.ui_data.as_ref().unwrap()["compressMode"],
+        json!("raw")
+    );
+    assert!(out.summary.contains("第一个回答"), "必须是 raw 渲染的正文");
+    assert!(
+        !out.summary.contains("我这就去读文件"),
+        "跑偏的 AI 输出绝不能进摘要"
+    );
+    // 但那次调用真发生了 → `llm` 非空、用量原样带回（记账在调用方）
+    let llm = out.llm.expect("契约违反也要记账（钱已花掉）");
+    assert_eq!(llm.usage.total_tokens, 12_345);
+    assert!(!llm.estimated, "provider 回报了 usage → 不标 estimated");
+}
+
+#[tokio::test]
+async fn ai_mode_falls_back_to_raw_when_summary_is_empty() {
+    // 空正文比「乱答」更危险：把它当摘要 = **历史被清空**。
+    let s = session();
+    let provider = RecordingProvider::new("  \n \t").with_usage(500);
+    let msgs = vec![msg("user", "第一个问题"), msg("assistant", "第一个回答")];
+    let out = compress(
+        CompressInput {
+            mode: CompressMode::Ai,
+            session: &s,
+            messages: &msgs,
+            tool_defs: &[],
+            provider: Some(&provider),
+        },
+        &ctx_and_cancel(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(out.mode, CompressMode::Raw);
+    assert!(out.summary.contains("第一个问题"));
+    assert!(out.summary.contains("第一个回答"));
+    let llm = out.llm.expect("契约违反也要记账");
+    assert_eq!(llm.usage.total_tokens, 500);
 }
