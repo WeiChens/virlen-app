@@ -239,15 +239,7 @@
         gap: 6px;
         font-size: var(--font-size-xs);
         color: var(--text-secondary, #888);
-
-        select {
-          padding: 4px 6px;
-          border: 1px solid var(--border-color, #e5e5e5);
-          border-radius: 6px;
-          background: var(--bg-primary, #fff);
-          color: var(--text-primary, #1a1a1a);
-          font-size: var(--font-size-sm);
-        }
+        // 分类 / 级别用的是共享 `Select`（自带样式），这里不再定 select 的外观
       }
     }
   }

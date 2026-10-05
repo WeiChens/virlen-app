@@ -173,6 +173,23 @@ async function click(el: Element) {
   })
 }
 
+/**
+ * 往「记忆内容」里输入。
+ *
+ * ⚠️ 受控组件：必须走原生 setter + `input` 事件，直接赋 `value` 不会触发 React 的 onChange。
+ */
+async function typeSummary(text: string) {
+  const textarea = document.querySelector<HTMLTextAreaElement>('.memory-form-summary')!
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      'value',
+    )!.set!
+    setter.call(textarea, text)
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
 beforeEach(() => {
   vi.mocked(listMemories).mockReset()
   vi.mocked(upsertMemory).mockReset()
@@ -231,16 +248,7 @@ it('新增记忆：写入仓储后重新拉列表；空内容则不写只提示'
   const { root } = await render()
 
   await click(buttonByText('新增记忆'))
-  const textarea = document.querySelector<HTMLTextAreaElement>('.memory-form-summary')!
-  await act(async () => {
-    // React 受控组件：必须走原生 setter + input 事件，直接赋 value 不会触发 onChange
-    const setter = Object.getOwnPropertyDescriptor(
-      HTMLTextAreaElement.prototype,
-      'value',
-    )!.set!
-    setter.call(textarea, '用户要求回复简洁')
-    textarea.dispatchEvent(new Event('input', { bubbles: true }))
-  })
+  await typeSummary('用户要求回复简洁')
   await click(buttonByText('保存'))
 
   expect(upsertMemory).toHaveBeenCalledTimes(1)
@@ -254,6 +262,40 @@ it('新增记忆：写入仓储后重新拉列表；空内容则不写只提示'
   await click(buttonByText('新增记忆'))
   await click(buttonByText('保存'))
   expect(upsertMemory).toHaveBeenCalledTimes(1)
+
+  await act(async () => root.unmount())
+})
+
+it('分类 / 级别用共享 Select 组件（下拉选择真的写进草稿）', async () => {
+  const { root } = await render()
+
+  await click(buttonByText('新增记忆'))
+  await typeSummary('下拉选择要写进草稿')
+  const selects = document.querySelectorAll<HTMLElement>('.memory-form .custom-select')
+  expect(selects).toHaveLength(2) // 分类 / 级别
+  // 本表单不该再有原生 select：原生下拉的视觉 / 键位与其它设置页不一致，
+  // 且会被设置页的滚动容器裁剪
+  expect(document.querySelectorAll('.memory-form select')).toHaveLength(0)
+
+  // 展开「分类」→ 选「决策」（下拉面板 Portal 到 body）
+  await click(selects[0])
+  const kindOptions = Array.from(
+    document.querySelectorAll<HTMLElement>('.custom-select__dropdown .custom-select__option'),
+  )
+  expect(kindOptions.map((o) => o.textContent)).toEqual(['用户偏好', '项目', '决策', '事实'])
+  await click(kindOptions.find((o) => o.textContent === '决策')!)
+
+  // 展开「级别」→ 选「永久」
+  await click(selects[1])
+  const levelOptions = Array.from(
+    document.querySelectorAll<HTMLElement>('.custom-select__dropdown .custom-select__option'),
+  )
+  await click(levelOptions.find((o) => o.textContent === '永久')!)
+
+  await click(buttonByText('保存'))
+  const saved = vi.mocked(upsertMemory).mock.calls[0][0]
+  expect(saved.kind).toBe('decision')
+  expect(saved.level).toBe('permanent')
 
   await act(async () => root.unmount())
 })

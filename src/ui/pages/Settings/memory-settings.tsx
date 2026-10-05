@@ -20,6 +20,7 @@ import { observer } from 'mobx-react-lite'
 import { settingsState } from '@/ui/store'
 import { t, tpl } from '@/ui/i18n'
 import Toggle from '@/ui/components/shared/Toggle'
+import Select, { type SelectOption } from '@/ui/components/shared/Select'
 import { showToast } from '@/ui/components/shared/Toast'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 import {
@@ -67,6 +68,18 @@ const KIND_LABELS: Record<MemoryKind, string> = {
   decision: t('决策'),
   fact: t('事实'),
 }
+
+/** 分类下拉（走共享 `Select`，与其它设置页同一套控件；`value` 永远是存储用的英文枚举） */
+const KIND_OPTIONS: SelectOption[] = MEMORY_KINDS.map((k) => ({
+  value: k,
+  label: KIND_LABELS[k],
+}))
+
+/** 级别下拉（普通 / 永久 = 注入策略，别用「低 / 高」这类含糊说法） */
+const LEVEL_OPTIONS: SelectOption[] = [
+  { value: 'normal', label: t('普通') },
+  { value: 'permanent', label: t('永久') },
+]
 
 function emptyDraft(): MemoryDraft {
   return { summary: '', kind: 'project', level: 'normal', disabled: false }
@@ -706,24 +719,23 @@ function MemorySettings() {
           <div className="memory-form-row">
             <label>
               <span>{t('分类')}</span>
-              <select
+              {/* 走共享 `Select` 而不是原生 <select>：下拉面板 Portal 到 body，不会被设置页的
+                  滚动容器裁剪，视觉 / 键位也与其它设置页一致 */}
+              <Select
                 value={draft.kind}
-                onChange={(e) => setDraft({ ...draft, kind: e.target.value as MemoryKind })}>
-                {MEMORY_KINDS.map((k) => (
-                  <option key={k} value={k}>
-                    {KIND_LABELS[k]}
-                  </option>
-                ))}
-              </select>
+                onChange={(v) => setDraft({ ...draft, kind: v as MemoryKind })}
+                options={KIND_OPTIONS}
+                width={120}
+              />
             </label>
             <label>
               <span>{t('级别')}</span>
-              <select
+              <Select
                 value={draft.level}
-                onChange={(e) => setDraft({ ...draft, level: e.target.value as MemoryLevel })}>
-                <option value="normal">{t('普通')}</option>
-                <option value="permanent">{t('永久')}</option>
-              </select>
+                onChange={(v) => setDraft({ ...draft, level: v as MemoryLevel })}
+                options={LEVEL_OPTIONS}
+                width={120}
+              />
             </label>
             <button className="memory-action-btn primary" onClick={handleSave}>
               {t('保存')}
