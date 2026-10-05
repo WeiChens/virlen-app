@@ -24,6 +24,7 @@ import {
   MAX_OVERSCAN_ITEMS,
   OVERSCAN,
   OVERSCAN_PX,
+  OVERSCAN_SCREENS,
 } from './constants'
 import { EMPTY_ANCHOR_USERS } from './types'
 import type { AnchorUser } from './types'
@@ -138,8 +139,8 @@ export function useVirtualList({
   )
 
   /**
-   * 按「像素」而不是「条数」计算渲染范围：视口上下各多渲染约一屏内容，
-   * 给滚动（含快速 / 惯性滚动）留出反应空间。
+   * 按「像素」而不是「条数」计算渲染范围：总渲染高度 ≈ RENDER_RANGE_SCREENS × 视口高，
+   * 视口上下各分一半（单侧 OVERSCAN_SCREENS 屏），给滚动（含快速 / 惯性滚动）留出反应空间。
    */
   const rangeExtractor = useCallback((range: Range) => {
     const { startIndex, endIndex, count } = range
@@ -148,12 +149,15 @@ export function useVirtualList({
     const virt = rowVirtualizerRef.current
     const m = virt?.measurementsCache
     if (!virt || !m || m.length < count) {
-      // 兜底（实例 / 测量值尚未就绪）：退回按条数扩展
-      start = Math.max(startIndex - OVERSCAN, 0)
-      end = Math.min(endIndex + OVERSCAN, count - 1)
+      // 兜底（实例 / 测量值尚未就绪）：退回按条数扩展（同样用已按屏数放大的上限）
+      start = Math.max(startIndex - MAX_OVERSCAN_ITEMS, 0)
+      end = Math.min(endIndex + MAX_OVERSCAN_ITEMS, count - 1)
     } else {
-      // 缓冲区取「一屏高度」与 OVERSCAN_PX 的较大值
-      const buffer = Math.max(OVERSCAN_PX, virt.scrollRect?.height ?? 0)
+      // 缓冲区取「视口高 × 单侧屏数」与 OVERSCAN_PX 的较大值
+      const buffer = Math.max(
+        OVERSCAN_PX,
+        (virt.scrollRect?.height ?? 0) * OVERSCAN_SCREENS,
+      )
       // 向上扩展，直到覆盖顶部缓冲区或达到条数上限
       const topLimit = (m[startIndex]?.start ?? 0) - buffer
       while (
@@ -183,9 +187,19 @@ export function useVirtualList({
     count: messages.length,
     getScrollElement: () => containerRef.current,
     estimateSize,
+    // 「条数 overscan」**不决定渲染范围**（渲染范围由 rangeExtractor 按像素给出，
+    // 见 RENDER_RANGE_SCREENS），只影响平滑滚动时允许重新测量的条目窗口。
     overscan: OVERSCAN,
     getItemKey,
     rangeExtractor,
+    // ⚠️ 必须关掉库默认开启的 flushSync（否则 React 报
+    // “flushSync was called from inside a lifecycle method … message-list.tsx”）：
+    // 条目高度测量（measureElement 的 ref 回调 / ResizeObserver）发生在 React 的
+    // 提交 / 生命周期阶段，而库在「本次测量同步改写了 scrollTop」时会
+    // flushSync(rerender) 强制重渲染 —— 在渲染/提交中调 flushSync 是 React 明令禁止的。
+    // 关掉后改成普通 setState：提交阶段 / rAF 里调度的更新仍会在本帧绘制前处理，
+    // 观感一致，只是不再有这条告警。
+    useFlushSync: false,
     // 以「底部」为锚：
     //  - 贴底时新消息 / 流式增长自动跟随（anchorTo=end + followOnAppend）
     //  - 前插历史时按锚点项回推 scrollTop，视口不跳动

@@ -18,19 +18,31 @@ export const ESTIMATED_ITEM_HEIGHT = 120
  */
 export const OVERSCAN = 32
 /**
- * 视口上下各自额外渲染的像素缓冲（视口更高时按「一屏」计）。
+ * 渲染范围相对「视口高度」的倍数：总渲染高度 ≈ 该值 × 视口高，
+ * 视口上下各分一半作缓冲（见 rangeExtractor）。
+ *
+ * 值越大，快速 / 惯性滚动时越不容易露白，代价是同时在 DOM 里的消息越多。
+ * 3 → 上下各 1 屏；10 → 上下各 4.5 屏。
+ */
+export const RENDER_RANGE_SCREENS = 10
+/** 单侧像素缓冲的「屏数」= (总倍数 - 1) / 2（随 RENDER_RANGE_SCREENS 联动） */
+export const OVERSCAN_SCREENS = (RENDER_RANGE_SCREENS - 1) / 2
+/**
+ * 视口上下各自额外渲染的像素缓冲**下限**（视口高度未知 / 窗口极窄时兜底）。
  *
  * 库默认的 overscan 是「条数」，而消息气泡矮的只有几十像素、高的上千像素，
  * 按条数扩展时缓冲区的真实像素可能只有一两百 → 快速滚动 / 惯性滚动时
  * 新条目还没来得及挂载就已经进入视口，表现为露白 + 抖动。
- * 改成按像素扩展后，视口上下始终各有约一屏的已渲染内容作为缓冲。
+ * 改成按像素扩展后，缓冲随视口高度走（单侧 OVERSCAN_SCREENS 屏），本值只兜底。
  */
 export const OVERSCAN_PX = 800
 /**
- * 单侧最多额外渲染的条数。
- * 条目很矮（短句）时防止一次性挂载过多 DOM；默认下限 20，OVERSCAN 调大时跟随。
+ * 单侧最多额外渲染的条数（条目很矮时防止一次性挂载过多 DOM 的保险丝）。
+ *
+ * 与「单侧屏数」等比放大：原值 32（= OVERSCAN）对应单侧 1 屏，
+ * 现在单侧 4.5 屏 → 144；否则矮消息会先撞条数上限，像素倍数被压回去。
  */
-export const MAX_OVERSCAN_ITEMS = Math.max(20, OVERSCAN)
+export const MAX_OVERSCAN_ITEMS = Math.max(20, OVERSCAN) * OVERSCAN_SCREENS
 /** 距底部 ≤ 该值视为「贴在底部」：新消息 / 流式增长时自动跟随 */
 export const AT_BOTTOM_THRESHOLD = 120
 /** 距顶部 ≤ 该值触发回补更早消息 */
