@@ -7,17 +7,26 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Window } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
 import { appLogo, appName } from '@/ui/constants'
-// import { useMessageBox } from '@/ui/components/shared/MessageBox'
+// 同名两个东西：`useMessageBox()` 给的是**组件**（下面 `<MessageBox />` 渲染用）；
+// 这里额外取模块级的**命令式** API，`MessagePrompt.propt()` 返回 boolean 的确认框
 // import useLoading from '@/utils/loading'
-import { useToast } from '@/ui/components/shared/Toast'
+import { useToast, showToast } from '@/ui/components/shared/Toast'
 import SplitScreenSvg from '@/ui/components/icons/SplitScreenSvg'
 import AboutSvg from '@/ui/components/icons/AboutSvg'
 import AboutModal from './view/AboutModal'
 import UpdateModal from '@/ui/components/shared/UpdateModal/UpdateModal'
 import menuEvent from '@/events/menuEvent'
 import updateEvent from '@/events/updateEvent'
-import { useMessageBox } from '@/ui/components/shared/MessageBox'
+import {
+  useMessageBox,
+  MessageBox as MessagePrompt,
+} from '@/ui/components/shared/MessageBox'
 import type { ICheckUpdateResponse } from '@/types'
+import { observer } from 'mobx-react-lite'
+import PhoneSvg from '@/ui/components/icons/PhoneSvg'
+import { phoneControlStore } from '@/ui/store/phoneControlStore'
+import { t } from '@/ui/i18n'
+import { phoneToggleView } from './phone-toggle'
 // import windowEvent from '@/events/windowEvent'
 
 interface Props {
@@ -27,6 +36,14 @@ interface Props {
 }
 const { MessageBox } = useMessageBox()
 const { Toast } = useToast()
+
+/**
+ * 过渡态兜底时长（毫秒）。
+ *
+ * 「点了开启」到 `enabled` 翻转之间要初始化设备身份 + 解析 ICE；异常且服务又没上报 error 时，
+ * 兜一个超时把按钮放回可点状态，避免它永远停在「正在启用…」。
+ */
+const PHONE_START_TIMEOUT_MS = 20_000
 
 const WindowLayout = ({ children, padding = 0, className }: Props) => {
   const currentWindow = useRef(null as unknown as Window)
@@ -99,6 +116,49 @@ const WindowLayout = ({ children, padding = 0, className }: Props) => {
       currentWindow.current?.close()
     }
   }
+
+  // ===== 手机控制快捷开关（标题栏） =====
+  /** 「点了开启、服务还没起来」的过渡态（为什么需要它见 phone-toggle.ts） */
+  const [phoneStarting, setPhoneStarting] = useState(false)
+  const phoneEnabled = phoneControlStore.enabled
+  const phone = phoneToggleView({
+    enabled: phoneEnabled,
+    starting: phoneStarting,
+    status: phoneControlStore.status,
+  })
+
+  useEffect(() => {
+    if (!phoneStarting) return
+    // 服务起来了 → 退出过渡态
+    if (phoneEnabled) {
+      setPhoneStarting(false)
+      return
+    }
+    // 否则兜一个超时（见 PHONE_START_TIMEOUT_MS）
+    const timer = setTimeout(() => setPhoneStarting(false), PHONE_START_TIMEOUT_MS)
+    return () => clearTimeout(timer)
+  }, [phoneStarting, phoneEnabled])
+
+  async function phoneHandle(): Promise<void> {
+    if (phoneStarting) return
+    if (!phoneEnabled) {
+      // 纯开关：只启用，不跳设置页（配对二维码在「设置 → 手机控制」里）
+      setPhoneStarting(true)
+      phoneControlStore.setEnabled(true)
+      return
+    }
+    // 关掉会立即断开正在操作的手机 —— 连着的时候先确认，其余情况一键关
+    if (phoneControlStore.status === 'connected') {
+      const ok = await MessagePrompt.propt(
+        t('关闭手机控制？'),
+        t('这台手机正在操作本机，关闭会立即断开连接。'),
+        { confirmText: t('关闭'), cancelText: t('取消'), danger: true },
+      )
+      if (!ok) return
+    }
+    phoneControlStore.setEnabled(false)
+    showToast(t('已关闭手机控制'), 2000)
+  }
   return (
     <div
       className="WindowLayout"
@@ -119,6 +179,19 @@ const WindowLayout = ({ children, padding = 0, className }: Props) => {
           <div data-tauri-drag-region>{title}</div>
         </div>
         <div className="window-controls">
+          {/*
+            手机控制快捷开关：点一下开、再点一下关（**不做页面跳转**；扫码配对仍在设置页）。
+            图标用 PhoneSvg 的 `currentColor`，所以亮 / 暗与状态点颜色都走 CSS 的 `color`。
+          */}
+          <div
+            className={`control phone${phone.active ? ' on' : ''}`}
+            title={phone.hint}
+            onClick={() => void phoneHandle()}>
+            <PhoneSvg />
+            {phone.dot && (
+              <span className={`phone-dot phone-dot--${phone.dot}`} />
+            )}
+          </div>
           <div className="control about" onClick={() => aboutHandle()}>
             <AboutSvg />
           </div>
@@ -158,4 +231,4 @@ const WindowLayout = ({ children, padding = 0, className }: Props) => {
     </div>
   )
 }
-export default WindowLayout
+export default observer(WindowLayout)

@@ -379,6 +379,19 @@
         text-overflow: ellipsis;
       }
 
+      // 已置顶的分组 → 只在分组头挂一枚图钉（图标 / 分组名不做高亮，用色同会话项的置顶指示器）
+      .group-pin-indicator {
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+
+        svg {
+          width: 12px;
+          height: 12px;
+          fill: var(--accent-color, #4f46e5);
+        }
+      }
+
       // 折叠分组内有未查看的新回复 → 分组头部红点
       .new-reply-dot {
         width: 8px;

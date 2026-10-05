@@ -69,6 +69,44 @@
           background-color: var(--color-error, #e81123);
         }
       }
+
+      /* 手机控制快捷开关。
+         PhoneSvg 的 path 是 `fill="currentColor"`，所以亮 / 暗与状态点用色都走 `color`
+         —— 上面的 `.control svg { fill: white }` 只管到 <svg> 元素，盖不住 path 上的属性。 */
+      .phone {
+        position: relative;
+        color: rgba(255, 255, 255, 0.5); // 未开启：暗一档，与旁边的窗口按钮区分开
+
+        &:hover,
+        &.on {
+          color: #fff;
+        }
+
+        /* 连线状态点：等待（琥珀，呼吸）/ 已连接（绿）/ 出错或被拒（红） */
+        .phone-dot {
+          position: absolute;
+          right: 3px;
+          bottom: 3px;
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          pointer-events: none;
+
+          &--waiting {
+            background: var(--color-warning, #f59e0b);
+            animation: phoneDotPulse 1.5s ease-in-out infinite;
+          }
+
+          &--connected {
+            background: var(--color-success, #0fcd55);
+          }
+
+          &--error {
+            background: var(--color-error, #cf222e);
+          }
+        }
+      }
+
       .minimize {
         &:hover {
           svg {
@@ -143,5 +181,17 @@
         }
       }
     }
+  }
+}
+
+/* 手机控制状态点的呼吸动画（等待手机连接时提示「还在跑」） */
+@keyframes phoneDotPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.35;
   }
 }

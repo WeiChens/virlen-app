@@ -70,6 +70,14 @@ export interface SettingsStore {
   goalQuickInputTemplates: QuickInputTemplate[]
   /** 会话侧边栏分组方式 */
   sessionGroupType: SessionGroupType
+  /**
+   * 已置顶的**分组** key（按分组维度分开存）。
+   *
+   * 分组是**虚拟**的（按 Agent / 工作目录现算出来，没有实体可挂字段），所以置顶状态只能
+   * 住在设置里。两个维度必须分开：`UNGROUPED_KEY`（未分组 / 未设置工作目录）在两个维度
+   * 里是同一个字面量，混在一份列表里会互相串。
+   */
+  pinnedSessionGroups: Record<SessionGroupType, string[]>
   /** 是否对上传的图片自动执行 vision_analyze 提取结构化数据 */
   imageVisionAnalyzeOptimize: boolean
   /** RAG 知识库配置 */
@@ -163,6 +171,7 @@ const defaultSettings: SettingsStore = {
   quickInputTemplates: [],
   goalQuickInputTemplates: [],
   sessionGroupType: 'workspace',
+  pinnedSessionGroups: { agent: [], workspace: [] },
   imageVisionAnalyzeOptimize: true,
   ragEnabled: false,
   ragDefaultKnowledgeBaseId: '',

@@ -6,7 +6,8 @@
  *    会话 = 标题 / 分组名，工作目录 = 磁盘递归搜文件名，技能 = 名称 / 描述 / 标签；
  *    关键词挂在**此处**（侧边栏常驻），所以切页签回来仍在
  *  - 会话：每个会话显示 working 状态指示（流式回复中）、按 Agent 或工作目录分组、
- *    支持导出为 Markdown、置顶、导入知识库；
+ *    支持导出为 Markdown、置顶会话 / 置顶分组、导入知识库；
+ *    **置顶的“分组”排到列表最前**（见 session-grouping.ts；状态存设置项 pinnedSessionGroups）；
  *    **会话项与分组头的操作统一收拢到右键菜单**（共享组件 ContextMenu，
  *    与「工作目录 / 技能」页签同一套样式）—— 旧的两颗「更多」按钮已移除
  *  - 工作目录：当前工作目录的文件树（只读，见 workspace-tree.tsx）
@@ -52,6 +53,12 @@ import WorkspaceTree from './workspace-tree'
 import SkillList from './skill-list'
 import SidebarSearch from './search-box'
 import { filterSessionGroups } from './session-filter'
+import {
+  groupSessions,
+  toggleGroupPin,
+  UNGROUPED_KEY,
+  type SessionGroup as AnySessionGroup,
+} from './session-grouping'
 
 interface Props {
   onSelectSession: (sessionId: string) => void
@@ -67,8 +74,8 @@ interface Props {
   className?: string
 }
 
-/** 未分组会话的虚拟 key */
-const UNGROUPED_KEY = '__ungrouped__'
+/** 本页签的分组始终装完整会话对象（分组规则本身与 Session 解耦，见 session-grouping） */
+type SessionGroup = AnySessionGroup<Session>
 
 /** 侧边栏页签 */
 type SidebarTab = 'sessions' | 'workspace' | 'skills'
@@ -79,82 +86,6 @@ const SIDEBAR_TABS: { key: SidebarTab; label: string }[] = [
   { key: 'workspace', label: '工作目录' },
   { key: 'skills', label: '技能' },
 ]
-
-type SessionGroup = {
-  key: string
-  name: string
-  icon: string
-  /** 悬停提示文本：Agent 简介 或 工作目录完整路径 */
-  title: string
-  sessions: Session[]
-}
-
-/**
- * 将会话列表按 Agent 分组
- */
-function groupSessionsByAgent(sessions: Session[]): SessionGroup[] {
-  const groupMap = new Map<string, SessionGroup>()
-
-  for (const session of sessions) {
-    const key = session.agentId || UNGROUPED_KEY
-    let group = groupMap.get(key)
-    if (!group) {
-      let name: string
-      let title: string
-      if (key === UNGROUPED_KEY) {
-        name = t('未分组')
-        title = t('未关联 Agent 的会话')
-      } else {
-        const agent = agentStore.getAgent(key)
-        name = agent?.name || t('未知代理')
-        title = agent?.description || name
-      }
-      group = { key, name, icon: 'agent', title, sessions: [] }
-      groupMap.set(key, group)
-    }
-    group.sessions.push(session)
-  }
-
-  return Array.from(groupMap.values()).sort((a, b) => {
-    const aKnown = a.key !== UNGROUPED_KEY && !!agentStore.getAgent(a.key)
-    const bKnown = b.key !== UNGROUPED_KEY && !!agentStore.getAgent(b.key)
-    if (aKnown !== bKnown) return aKnown ? -1 : 1
-    if (a.key === UNGROUPED_KEY) return 1
-    if (b.key === UNGROUPED_KEY) return -1
-    return a.name.localeCompare(b.name, 'zh-CN')
-  })
-}
-
-/**
- * 将会话列表按工作目录分组
- */
-function groupSessionsByWorkspace(sessions: Session[]): SessionGroup[] {
-  const groupMap = new Map<string, SessionGroup>()
-
-  for (const session of sessions) {
-    const key = session.workspace || UNGROUPED_KEY
-    let group = groupMap.get(key)
-    if (!group) {
-      const name =
-        key === UNGROUPED_KEY
-          ? t('未设置工作目录')
-          : key.split(/[/]|[\\]/).pop() || key
-      const title =
-        key === UNGROUPED_KEY
-          ? t('未设置工作目录的会话')
-          : tpl('工作目录: $__path__', { path: key })
-      group = { key, name, icon: 'folder', title, sessions: [] }
-      groupMap.set(key, group)
-    }
-    group.sessions.push(session)
-  }
-
-  return Array.from(groupMap.values()).sort((a, b) => {
-    if (a.key === UNGROUPED_KEY) return 1
-    if (b.key === UNGROUPED_KEY) return -1
-    return a.name.localeCompare(b.name, 'zh-CN')
-  })
-}
 
 function ChatSidebar({
   onSelectSession,
@@ -203,13 +134,18 @@ function ChatSidebar({
   const currentSessionId = chatState.value.currentSessionId
   /** 会话搜索关键词（trim + 小写后交给 filterSessionGroups） */
   const sessionKeyword = sessionQuery.trim().toLowerCase()
+  // 已置顶的分组（只取当前维度那一份；表里没有该键 / 旧数据时兜底为空）
+  const pinnedGroupKeys =
+    settingsState.value.pinnedSessionGroups?.[sessionGroupType] ?? []
   const groups = useMemo(() => {
-    const all =
-      sessionGroupType === 'workspace'
-        ? groupSessionsByWorkspace(sessions)
-        : groupSessionsByAgent(sessions)
+    // 分组规则（含分组置顶）在 session-grouping 里，这里只注入 Agent 查询与置顶 key
+    const all = groupSessions(sessions, {
+      type: sessionGroupType,
+      lookupAgent: (agentId) => agentStore.getAgent(agentId),
+      pinnedGroups: pinnedGroupKeys,
+    })
     return filterSessionGroups(all, sessionKeyword)
-  }, [sessions, sessionGroupType, sessionKeyword])
+  }, [sessions, sessionGroupType, sessionKeyword, pinnedGroupKeys])
 
   const handleNewSession = useCallback(() => {
     chatState.set({ currentSessionId: null, error: null })
@@ -298,6 +234,26 @@ function ChatSidebar({
       [agentId]: !prev[agentId],
     }))
   }, [])
+
+  /**
+   * 置顶 / 取消置顶**分组**。
+   *
+   * 分组是按 Agent / 工作目录现算出来的虚拟分组，没有实体可挂字段，所以置顶状态存在
+   * 设置项 `pinnedSessionGroups`（按维度分开，见 session-grouping 的注释）。
+   */
+  const handleToggleGroupPin = useCallback(
+    (groupKey: string) => {
+      const all = settingsState.value.pinnedSessionGroups ?? {
+        agent: [],
+        workspace: [],
+      }
+      settingsState.setValue('pinnedSessionGroups', {
+        ...all,
+        [sessionGroupType]: toggleGroupPin(all[sessionGroupType], groupKey),
+      })
+    },
+    [sessionGroupType],
+  )
 
   const handleOpenExport = useCallback((sessionId: string) => {
     setExportSessionId(sessionId)
@@ -595,6 +551,7 @@ function ChatSidebar({
                 sessionGroupType={sessionGroupType}
                 // 搜索时强制展开：命中项藏在折叠的分组里等于没搜到
                 isCollapsed={sessionKeyword ? false : !expandGroups[group.key]}
+                isPinned={pinnedGroupKeys.includes(group.key)}
                 isUngrouped={group.key === UNGROUPED_KEY}
                 hasActiveSession={
                   !!currentSessionId &&
@@ -603,6 +560,7 @@ function ChatSidebar({
                 renderSession={renderSession}
                 onToggleGroup={() => toggleGroup(group.key)}
                 onNewSession={() => handleNewSessionInGroup(group)}
+                onTogglePin={() => handleToggleGroupPin(group.key)}
               />
             ))
           ) : sessionKeyword ? (
@@ -850,23 +808,29 @@ interface SessionGroupViewProps {
   group: SessionGroup
   sessionGroupType: 'agent' | 'workspace'
   isCollapsed: boolean
+  /** 该分组已置顶（排到列表最前 + 分组头图钉 + 强调色） */
+  isPinned: boolean
   isUngrouped: boolean
   /** 组内是否包含当前选中的会话（用于分组高亮） */
   hasActiveSession: boolean
   renderSession: (session: Session) => JSX.Element
   onToggleGroup: () => void
   onNewSession: () => void
+  /** 置顶 / 取消置顶本分组 */
+  onTogglePin: () => void
 }
 
 function SessionGroupView({
   group,
   sessionGroupType,
   isCollapsed,
+  isPinned,
   isUngrouped,
   hasActiveSession,
   renderSession,
   onToggleGroup,
   onNewSession,
+  onTogglePin,
 }: SessionGroupViewProps) {
   const [showAll, setShowAll] = useState(false)
   /**
@@ -928,6 +892,11 @@ function SessionGroupView({
   const groupMenuItems = useMemo((): ContextMenuItem[] => {
     const items: ContextMenuItem[] = [
       { key: 'new-session', label: t('新对话'), onClick: onNewSession },
+      {
+        key: 'pin-group',
+        label: isPinned ? t('取消置顶分组') : t('置顶分组'),
+        onClick: onTogglePin,
+      },
     ]
     // 「打开文件路径 / 编辑智能体」按分组维度二选一，未分组时两个都不适用
     if (group.key !== UNGROUPED_KEY) {
@@ -956,9 +925,11 @@ function SessionGroupView({
     })
     return items
   }, [
+    isPinned,
     sessionGroupType,
     group.key,
     onNewSession,
+    onTogglePin,
     handleOpenWorkspace,
     handleEditAgent,
     handleDeleteAllSessions,
@@ -986,6 +957,12 @@ function SessionGroupView({
         {/* 折叠分组内有未查看的新回复 → 分组头部红点 */}
         {isCollapsed && hasNewReplySession && (
           <span className="new-reply-dot" title={t('有新的回复')} />
+        )}
+        {/* 已置顶分组 → 只挂一枚图钉，不改图标 / 文字颜色（样式见 .group-pin-indicator） */}
+        {isPinned && (
+          <span className="group-pin-indicator" title={t('已置顶分组')}>
+            <PinSvg />
+          </span>
         )}
         <span className="group-name">{group.name}</span>
         {/* 会话数只是计数（点击行为交给整行 = 折叠/展开），操作全在右键菜单里 */}
