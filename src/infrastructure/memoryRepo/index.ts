@@ -31,18 +31,26 @@ const EMPTY_SECTION: MemoryPromptSection = {
 }
 
 /**
- * 取建会话用的注入段（带排除项）。
+ * 取建会话用的注入段（带工作目录与预览标记）。
  *
  * 失败 / 非 Tauri → 空段（= 不注入）。**不抛错**：记忆读不到时对话应当照常进行。
  *
+ * `workspace`：本次会话的**生效工作目录**（会话指定 > Agent 默认）。Rust 侧据此筛掉
+ * 「属于别的项目」的项目记忆；空 / 不传 = 只注入不限定项目的记忆。
+ *
  * `forPreview`：面板查看预览 / 预算行时为 `true` —— 埋点据此区分「真实建会话时的截断告警」
- * 与「用户在看面板」，否则每次打开面板都会抬高告警计数（指标就废了）。
+ * 与「用户在看面板」，否则每次打开面板都会抬高告警计数（指标就废了）。面板传的是设置里的
+ * **默认工作目录**：预览与真实会话走同一套规则，只是工作目录不同。
  */
-export async function loadMemorySection(forPreview = false): Promise<MemoryPromptSection> {
+export async function loadMemorySection(
+  forPreview = false,
+  workspace?: string | null,
+): Promise<MemoryPromptSection> {
   if (!isTauri()) return EMPTY_SECTION
   try {
     const section = await invoke<MemoryPromptSection>('cmd_memory_prompt_section', {
       forPreview,
+      workspace: workspace ?? null,
     })
     return { ...EMPTY_SECTION, ...(section ?? {}) }
   } catch (e: any) {
@@ -51,7 +59,7 @@ export async function loadMemorySection(forPreview = false): Promise<MemoryPromp
   }
 }
 
-/** 列出记忆（设置页面板）。失败 → 空列表 + 控制台告警 */
+/** 列出记忆（设置页「记忆列表」弹窗的数据源）。失败 → 空列表 + 控制台告警 */
 export async function listMemories(includeDisabled = true): Promise<MemoryRecord[]> {
   if (!isTauri()) return []
   try {
@@ -172,12 +180,17 @@ const UNAVAILABLE: MemoryToolOutput = {
   uiData: { available: false },
 }
 
-/** `memory_search`：关键词检索（`level` / `kind` / `limit` 可省略） */
+/** `memory_search`：关键词检索（`level` / `kind` / `limit` 可省略）
+ *
+ * `workspace`：会话工作目录 —— 与注入同一套项目作用域，别的项目的记忆不会返回
+ * （`uiData.hiddenByScope` 说明有多少条被藏起来）。
+ */
 export async function searchMemories(
   query: string,
   level?: string,
   kind?: string,
   limit?: number,
+  workspace?: string,
 ): Promise<MemoryToolOutput> {
   if (!isTauri()) return UNAVAILABLE
   try {
@@ -186,6 +199,7 @@ export async function searchMemories(
       level: level ?? null,
       kind: kind ?? null,
       limit: limit ?? null,
+      workspace: workspace ?? null,
     })
   } catch (e: any) {
     return { content: `Error searching memories: ${e?.message || String(e)}`, uiData: { mode: 'error' } }
@@ -202,7 +216,11 @@ export async function recallMemory(memoryId: string): Promise<MemoryToolOutput> 
   }
 }
 
-/** `memory_write`：写入一条记忆（`detail` 非空 → 详情落专用知识库） */
+/** `memory_write`：写入一条记忆（`detail` 非空 → 详情落专用知识库）
+ *
+ * `workspace`：会话工作目录 —— `kind = 'project'` 时它成为这条记忆的项目作用域
+ * （与 Rust 原生工具同口径：模型不必猜路径）。
+ */
 export async function writeMemory(params: {
   summary: string
   kind: string
@@ -210,6 +228,8 @@ export async function writeMemory(params: {
   detail?: string
   /** 来源会话（记进 `source_session_id`，便于溯源） */
   sessionId?: string
+  /** 会话工作目录（项目记忆的作用域） */
+  workspace?: string
 }): Promise<MemoryToolOutput> {
   if (!isTauri()) return UNAVAILABLE
   try {
@@ -219,6 +239,7 @@ export async function writeMemory(params: {
       level: params.level ?? null,
       detail: params.detail ?? null,
       sessionId: params.sessionId ?? null,
+      workspace: params.workspace ?? null,
     })
   } catch (e: any) {
     return { content: `Error saving memory: ${e?.message || String(e)}`, uiData: { mode: 'error' } }

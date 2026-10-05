@@ -37,6 +37,17 @@ export type MemoryLevel = (typeof MEMORY_LEVELS)[number]
 export const MEMORY_KINDS = ['user', 'project', 'decision', 'fact'] as const
 export type MemoryKind = (typeof MEMORY_KINDS)[number]
 
+/**
+ * 项目分类（只有它才允许带 `projectPath`）—— 与 Rust `MEMORY_KIND_PROJECT` 同值。
+ *
+ * 不变量（两侧都守）：非 `project` 的记忆带上路径会被服务端清掉 —— 那种记忆会变成
+ * 「只在某个目录下可见」，用户到别的项目里根本找不到它。
+ */
+export const MEMORY_KIND_PROJECT = 'project'
+
+/** 项目路径的长度上限（与 Rust `MEMORY_PROJECT_PATH_MAX_CHARS` 同值；超限服务端拒绝） */
+export const MEMORY_PROJECT_PATH_MAX_CHARS = 500
+
 /** `app_settings` 键名（与 Rust 侧同名同层，不建映射表） */
 export const MEMORY_ENABLED_KEY = 'memoryEnabled'
 export const MEMORY_NORMAL_TOP_K_KEY = 'memoryNormalTopK'
@@ -107,6 +118,14 @@ export interface MemoryRecord {
   level: MemoryLevel | string
   kind: MemoryKind | string
   summary: string
+  /**
+   * 项目路径（仅 `kind === 'project'` 才有意义）：该记忆只在「会话工作目录 = 它 或 它之下的子目录」
+   * 时注入与召回；`null` / 空 = 不限定项目（跨项目通用）。
+   *
+   * ⚠️ 匹配在 Rust 侧（`agent::memory::scope`）：真实建会话时传会话工作目录，面板预览传设置里的
+   * 默认工作目录 —— 前端不自己判路径，只负责把工作目录传下去。
+   */
+  projectPath?: string | null
   detailKbId?: string | null
   detailDocId?: string | null
   tags?: string[]

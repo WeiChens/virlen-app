@@ -1,20 +1,16 @@
 // 长期记忆面板（记忆功能 P0）—— 与 agent-settings 同一套密度与配色变量
+//
+// ⚠️ 记忆**列表**住在弹窗里（`memory/MemoryListModal.tsx`），但它渲染在 `.memory-settings`
+// 这个根节点内（Modal 是固定定位覆盖层，不是 Portal），所以下面这套 `.memory-settings .memory-*`
+// 作用域对弹窗内的元素同样成立 —— 列表样式不必写第二份，也不必用 `:global`。
 .memory-settings {
   padding: 24px;
   display: flex;
   flex-direction: column;
 
-  // ==================== 吸顶区（标题 + 批量栏） ====================
+  // ==================== 设置页标题行 ====================
   //
-  // 为什么整块吸顶：批量栏必须在**任何滚动位置**都可见 —— 否则在长列表底部勾选后
-  // 还要滚回顶部才能操作，多选就白做了。标题与批量栏同住一块，避免两段 sticky 互相压住。
-  .memory-sticky {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    background: var(--bg-primary, #fff);
-  }
-
+  // 设置页上只有设置项 + 一个「记忆列表（N 条）」入口；列表本体（含筛选栏、批量栏）在弹窗里。
   .memory-header {
     display: flex;
     align-items: center;
@@ -24,18 +20,30 @@
     border-bottom: 1px solid var(--border-color, #e5e5e5);
   }
 
-  // ==================== 批量操作栏（只在选中了条目时渲染） ====================
+  // ==================== 批量操作栏（**常驻**；未选中时整排禁用） ====================
+  //
+  // 常驻而不是「选中才渲染」：出现 / 消失会把下面的表格上下顶动一次，勾选时视线得重新找位置；
+  // 常驻也顺带告诉用户「选中之后能做什么」。但底色只在真勾了东西时才亮 —— 否刚页面上永远
+  // 挂着一块比表格还抢眼的主色块。
 
   .memory-batch-bar {
     display: flex;
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
-    padding: 4px 10px 6px;
-    margin-bottom: 8px;
+    // 贴右：左边留给筛选下拉（左边管「看哪些」，右边管「动哪些」）
+    margin-left: auto;
+    padding: 3px 8px;
     border-radius: 8px;
-    // 淡主色块：一眼看出「现在在多选态」，与常态列表区分开
-    background: var(--accent-bg, var(--primary-soft, #eef2ff));
+    // 与左边筛选的分隔线（没选中时也能看出这是两块不同的东西）
+    border-left: 1px solid var(--border-color, #e5e5e5);
+
+    // 淡主色块：一眼看出「现在在多选态」
+    &.is-active {
+      background: var(--accent-bg, var(--primary-soft, #eef2ff));
+      // 已经上了底色，留着分隔线反而脏
+      border-left-color: transparent;
+    }
 
     .memory-batch-count {
       font-size: var(--font-size-xs);
@@ -193,24 +201,14 @@
     }
   }
 
-  // ==================== 编辑表单 ====================
+  // ==================== 编辑 / 新增表单（子弹窗内） ====================
+  //
+  // 不再是列表里的内联表单：它在 `MemoryEditModal` 里，外框由弹窗给，这里只管表单本身
 
   .memory-form {
-    margin: 10px 0;
-    padding: 12px;
-    border: 1px solid var(--accent-color, #4f46e5);
-    border-radius: 8px;
-
-    .memory-form-title {
-      font-size: var(--font-size-sm);
-      font-weight: 600;
-      margin-bottom: 8px;
-      color: var(--text-primary, #1a1a1a);
-    }
-
     .memory-form-summary {
       width: 100%;
-      min-height: 56px;
+      min-height: 76px;
       resize: vertical;
       padding: 8px 10px;
       border: 1px solid var(--border-color, #e5e5e5);
@@ -219,10 +217,41 @@
       color: var(--text-primary, #1a1a1a);
       font-size: var(--font-size-sm);
       font-family: inherit;
+
+      &:focus {
+        outline: none;
+        border-color: var(--accent-color, #4f46e5);
+      }
+    }
+
+    // 项目路径（编辑弹窗里的作用域输入）：占满整行 —— 它通常是一条很长的路径，
+    // 挤在一半宽度里只能看到开头，用户无法确认自己填得对不对
+    .memory-form-scope {
+      label {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .memory-form-path {
+        flex: 1;
+        min-width: 0;
+        padding: 4px 8px;
+        border: 1px solid var(--border-color, #e5e5e5);
+        border-radius: 6px;
+        background: var(--bg-primary, #fff);
+        color: var(--text-primary, #1a1a1a);
+        font-size: var(--font-size-sm);
+        font-family: inherit;
+
+        &:focus {
+          outline: none;
+          border-color: var(--accent-color, #4f46e5);
+        }
+      }
     }
 
     .memory-form-hint {
-      margin: 4px 0 8px;
+      margin: 4px 0 0;
       font-size: var(--font-size-2xs, var(--font-size-xs));
       color: var(--text-secondary, #888);
     }
@@ -230,8 +259,9 @@
     .memory-form-row {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 16px;
       flex-wrap: wrap;
+      margin-top: 8px;
 
       label {
         display: flex;
@@ -244,9 +274,7 @@
     }
   }
 
-  // ==================== 列表 ====================
-
-  // 记忆条目 / 分区标题共用的复选框
+  // ==================== 复选框（表头全选与行选中共用） ====================
   //
   // 用原生 input + accent-color（而不是自绘方框）：主题变量直接生效、**半选态由浏览器绘制**、
   // 无障碍语义默认正确；自绘那套要自己画「✓」与「–」，收益只有形状。
@@ -259,115 +287,247 @@
     cursor: pointer;
   }
 
-  .memory-section {
-    margin-top: 14px;
+  // ==================== 列表：紧凑表格 ====================
+  //
+  // 为何用表格：记忆的字段是**结构化的**（分类 / 级别 / 记录日 / 来源日 / 使用次数），卡片式列表只能
+  // 把它们挤成一行小标签，横向还浪费一大片空白。表格让同一列对齐，扫一眼就能比较「哪些是永久、
+  // 哪些很久没被用到」—— 而「比一比再清理」正是用户来这个弹窗的常态。
+  //
+  // 紧凑与省略是刻意的（小字号 + 单行省略 + 悬停看全文）：一屏多看几条，比每条都摊开有用。
 
-    .memory-section-title {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: var(--font-size-sm);
-      font-weight: 600;
-      color: var(--text-secondary, #888);
-      margin-bottom: 6px;
-
-      // 本区选中计数（只在有选中时出现，与批量栏同一口径）
-      .memory-section-picked {
-        font-size: var(--font-size-xs);
-        font-weight: 400;
-        color: var(--accent-color, #4f46e5);
-      }
-    }
+  .memory-table-wrap {
+    flex: 1;
+    min-height: 0;
+    // 表格的滚动由这一层负责（不是模态框 body）：表头吸顶才有唯一的参照系
+    overflow: auto;
   }
 
-  .memory-list {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
+  // ❗ 表格样式**不嵌在 `.memory-table-wrap` 里**：选择器短一层，表头吸顶 / 省略这些关键声明
+  // 在样式契约里也能直接断言到（嵌套一层就得写全路径，重构时容易错）
+  .memory-table {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: var(--font-size-xs);
 
-  .memory-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
-    border-radius: 8px;
-    border: 1px solid transparent;
-    transition: background 0.12s;
-    // 整行可点 = 切换选中（复选框本体只有 15px，长列表里逐条去抠太费手）
-    cursor: pointer;
-
-    &:hover {
-      background: var(--border-color, #f0f0f0);
-      border-color: var(--border-color, #e5e5e5);
-    }
-
-    // 选中态：必须与「悬停」区分得开 —— 悬停只是路过，选中是要动手的
-    &.is-selected {
-      background: var(--accent-bg, var(--primary-soft, #eef2ff));
-      border-color: color-mix(in srgb, var(--accent-color, #4f46e5) 45%, transparent);
-    }
-
-    // 停用：整行降权，但仍可读（用户要能看清自己停用了什么）
-    &.is-off {
-      opacity: 0.55;
-    }
-
-    .memory-item-main {
-      flex: 1;
-      min-width: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 3px;
-    }
-
-    .memory-item-summary {
-      font-size: var(--font-size-base);
-      color: var(--text-primary, #1a1a1a);
-      word-break: break-word;
-    }
-
-    .memory-item-meta {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex-wrap: wrap;
-      font-size: var(--font-size-xs);
-      color: var(--text-secondary, #888);
-    }
-
-    .memory-item-kind,
-    .memory-item-day,
-    .memory-item-hits,
-    .memory-item-off {
-      background: var(--tag-bg, #e8e8ed);
-      padding: 1px 8px;
-      border-radius: 10px;
+    th,
+    td {
+      padding: 4px 6px;
+      text-align: left;
+      overflow: hidden;
+      text-overflow: ellipsis;
       white-space: nowrap;
     }
 
-    .memory-item-off {
+    thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: var(--bg-primary, #fff);
+      border-bottom: 1px solid var(--border-color, #e5e5e5);
+      font-weight: 600;
+      color: var(--text-secondary, #888);
+    }
+
+    tbody tr {
+      cursor: pointer;
+      transition: background 0.12s;
+
+      td {
+        border-bottom: 1px solid var(--hover-bg, #fafafa);
+        color: var(--text-primary, #1a1a1a);
+      }
+
+      &:hover {
+        background: var(--hover-bg, #fafafa);
+      }
+
+      // 选中态必须与「悬停」区分得开：悬停只是路过，选中是要动手的
+      &.is-selected {
+        background: var(--accent-bg, var(--primary-soft, #eef2ff));
+      }
+
+      // 停用：整行降权，但仍可读（用户要能看清自己停用了什么）
+      &.is-off {
+        opacity: 0.55;
+      }
+    }
+
+    .memory-cell-check {
+      // 复选框不能被 ellipsis 裁掉
+      overflow: visible;
+      text-align: center;
+    }
+
+    .memory-cell-kind,
+    .memory-cell-project,
+    .memory-cell-level,
+    .memory-cell-date,
+    .memory-cell-source,
+    .memory-cell-hits,
+    .memory-cell-state {
+      color: var(--text-secondary, #888);
+    }
+
+    // 数字列用等宽数字：一列扫下来对齐，比按比例字好读
+    .memory-cell-date,
+    .memory-cell-source,
+    .memory-cell-hits {
+      font-variant-numeric: tabular-nums;
+    }
+
+    // 状态列只在「已停用」时有字，用告警色
+    .memory-cell-state {
       color: var(--color-danger, #e53e3e);
     }
 
-    .memory-item-actions {
-      display: flex;
-      gap: 2px;
-      flex-shrink: 0;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-      // 默认隐形：列表的常态是「读」，操作只在要用的时候出现（悬停 / 键盘聚焦）
-      opacity: 0;
-      // 隐形时也不能被点到：否则「移到按钮位置立刻点下去」会命中一个还看不见的按钮
-      pointer-events: none;
-      transition: opacity 0.12s;
+    // 列宽（固定布局，内容列吃剩下的空间）
+    .memory-col-check {
+      width: 36px;
     }
 
-    // `:focus-within` 是给键盘留的生路 —— 只靠 hover 的隐形按钮键盘永远 Tab 不到（WCAG 2.4.7）
-    &:hover .memory-item-actions,
-    &:focus-within .memory-item-actions {
-      opacity: 1;
-      pointer-events: auto;
+    .memory-col-kind {
+      width: 76px;
+    }
+
+    // 项目路径：宽一点（路径比分类长得多），仍靠省略号 + 悬停看全文
+    .memory-col-project {
+      width: 150px;
+    }
+
+    .memory-col-level {
+      width: 64px;
+    }
+
+    .memory-col-date {
+      width: 92px;
+    }
+
+    .memory-col-source {
+      width: 92px;
+    }
+
+    .memory-col-hits {
+      // 「使用次数」表头是 4 个汉字：56px 会把表头截成「使用次…」，窄了不好读
+      width: 76px;
+    }
+
+    .memory-col-state {
+      width: 64px;
+    }
+  }
+
+  // ==================== 列表弹窗的工具栏（筛选 / 批量 / 提示） ====================
+  //
+  // 与表格滚动区分开：筛选栏与批量栏常驻不滚。批量栏必须在**任何滚动位置**都可见 ——
+  // 否则在长表格底部勾选后还要滚回顶部才能操作，多选就失去意义了。
+
+  .memory-toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 12px 8px;
+    border-bottom: 1px solid var(--border-color, #e5e5e5);
+
+    .memory-filter-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+
+      .memory-search {
+        flex: 1;
+        min-width: 0;
+        padding: 4px 8px;
+        border: 1px solid var(--border-color, #e5e5e5);
+        border-radius: 6px;
+        background: var(--bg-primary, #fff);
+        color: var(--text-primary, #1a1a1a);
+        font-size: var(--font-size-xs);
+        font-family: inherit;
+
+        &:focus {
+          outline: none;
+          border-color: var(--accent-color, #4f46e5);
+        }
+      }
+
+      .memory-count {
+        font-size: var(--font-size-xs);
+        color: var(--text-secondary, #888);
+        white-space: nowrap;
+      }
+
+      .memory-toolbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-left: auto;
+      }
+    }
+
+    // 第二行：左边两个筛选下拉，右边批量操作。两边各自成组、各自可换行
+    // （共 920px 宽度下这一行放得下，窄下来时优先保证不溢出）。
+    .memory-action-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+
+      .memory-filter-selects {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      // 下拉前面的小字标签（级别 / 分类）：共享 `Select` 不带标签，筛选栏得自己说明白
+      .memory-filter-label {
+        font-size: var(--font-size-xs);
+        color: var(--text-secondary, #888);
+        white-space: nowrap;
+      }
+    }
+
+    // 「点击整行可编辑…」—— 行内操作去掉之后，得有一条路告诉用户动作在哪儿
+    .memory-list-hint {
+      margin: 0;
+      font-size: var(--font-size-2xs, var(--font-size-xs));
+      color: var(--text-secondary, #888);
+      line-height: 1.4;
+    }
+  }
+
+  // ==================== 分页（在弹窗 footer，不随表格滚动） ====================
+
+  .memory-pager {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    gap: 10px;
+
+    .memory-pager-info,
+    .memory-pager-size,
+    .memory-pager-page {
+      font-size: var(--font-size-xs);
+      color: var(--text-secondary, #888);
+      white-space: nowrap;
+    }
+
+    .memory-pager-page {
+      font-variant-numeric: tabular-nums;
+    }
+
+    .memory-pager-size {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .memory-pager-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
   }
 
@@ -425,4 +585,44 @@
     color: var(--text-secondary, #888);
     font-size: var(--font-size-xs);
   }
+}
+
+// ==================== 列表 / 编辑弹窗的外框（`memory/*Modal`） ====================
+//
+// ⚠️ 选择器都带 `.modal-content` 这一层：`Modal/style.scss` 里的 `.modal-overlay .modal-content
+// .modal-body` 与我的 `.memory-settings .memory-list-modal .modal-body` **特异性相同**，
+// 谁生效要看样式文件的引入顺序（很脆）。多带一层类名就稳定胜出，与引入顺序无关。
+
+// 弹窗内是「工具栏（不滚）/ 表格滚动区 / 分页」三段式：**让模态框 body 交出滚动权**，
+// 滚动交给 `.memory-table-wrap`。否则表头的 `position: sticky` 会和工具栏抢同一个 `top: 0`，
+// 两者必然互相压住（叠在一起）。
+.memory-settings .modal-content.memory-list-modal .modal-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+// 分页控件在模态框 footer 里：Modal 的 `.modal-footer button` 是给「取消 / 确定」准备的大按钮
+// （8px 20px 内边距），分页是密集小控件，这里显式压回去（选择器比 Modal 那条更具体）。
+.memory-settings .modal-content.memory-list-modal .modal-footer {
+  padding: 6px 12px;
+
+  button {
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: var(--font-size-xs);
+  }
+}
+
+// 编辑子弹窗的「取消 / 保存」：与其它弹窗的按钮同一尺寸，取消给描边（否则看起来像纯文本）
+.memory-settings .modal-content.memory-edit-modal .modal-footer button {
+  padding: 6px 18px;
+  border-radius: 6px;
+  font-size: var(--font-size-sm);
+}
+
+.memory-settings .modal-content.memory-edit-modal .modal-footer .memory-action-btn:not(.primary) {
+  border: 1px solid var(--border-color, #e5e5e5);
+  color: var(--text-primary, #1a1a1a);
 }

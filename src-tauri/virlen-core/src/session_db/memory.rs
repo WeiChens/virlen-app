@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS memories (
   level             TEXT NOT NULL,
   kind              TEXT NOT NULL,
   summary           TEXT NOT NULL,
+  project_path      TEXT,
   detail_kb_id      TEXT,
   detail_doc_id     TEXT,
   tags              TEXT NOT NULL DEFAULT '[]',
@@ -87,6 +88,12 @@ CREATE TABLE IF NOT EXISTS memory_runs (
 pub const MEMORY_LEVEL_NORMAL: &str = "normal";
 /// 永久记忆：**全量注入**，不参与 top-k 淘汰
 pub const MEMORY_LEVEL_PERMANENT: &str = "permanent";
+
+/// 项目记忆的分类值（与 TS `MEMORY_KINDS` 里的 `project` 同值）。
+///
+/// 只有它才允许带 `project_path`：别的分类是「跨项目通用的事实」，带上路径会让该记忆
+/// 凭空只在某一个目录下可见（用户也不会想到去别的项目找它）。
+pub const MEMORY_KIND_PROJECT: &str = "project";
 
 /// `memories.origin`：由 P2 蒸馏产出（「重新整理某天」只删这一类，用户手写的永不动）
 pub const MEMORY_ORIGIN_DISTILL: &str = "distill";
@@ -222,6 +229,12 @@ pub struct MemoryRecord {
     pub kind: String,
     /// 记忆正文（硬上限见 `agent::memory::MEMORY_SUMMARY_MAX_CHARS`；写入前由命令层钳制）
     pub summary: String,
+    /// 项目路径（仅 `kind = project` 才有）：该记忆只在「工作目录 = 它 或 它之下的子目录」
+    /// 的会话里注入与召回。`None` / 空 = 不限定项目（跨项目通用）。
+    ///
+    /// 老库的列由 `schema.rs` 的 `ensure_memories_project_path_column` 补出（补为 NULL = 通用），
+    /// **升级后行为不变**：原来怎么注入的，升级后还是怎么注入（不静默丢记忆）。
+    pub project_path: Option<String>,
     pub detail_kb_id: Option<String>,
     pub detail_doc_id: Option<String>,
     pub tags: Vec<String>,
@@ -409,6 +422,11 @@ fn memory_from_row(row: &rusqlite::Row) -> rusqlite::Result<MemoryRecord> {
         level: row.get("level")?,
         kind: row.get("kind")?,
         summary: row.get("summary")?,
+        // 空串 / NULL 一律收敛为 None：库里不该出现「有路径但是空串」这种半状态
+        project_path: row
+            .get::<_, Option<String>>("project_path")?
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
         detail_kb_id: row.get("detail_kb_id")?,
         detail_doc_id: row.get("detail_doc_id")?,
         tags: tags_from_json(&tags_json),
@@ -553,13 +571,14 @@ fn get_in_conn(conn: &Connection, id: &str) -> Result<Option<MemoryRecord>, Stri
 fn upsert_in_conn(conn: &Connection, r: &MemoryRecord, now_ms: i64) -> Result<(), String> {
     conn.execute(
         "INSERT INTO memories (
-            id, level, kind, summary, detail_kb_id, detail_doc_id, tags, source_day,
+            id, level, kind, summary, project_path, detail_kb_id, detail_doc_id, tags, source_day,
             source_session_id, origin, hits, last_used_at, created_at, updated_at, disabled
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14)
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14, ?15)
          ON CONFLICT(id) DO UPDATE SET
             level = excluded.level,
             kind = excluded.kind,
             summary = excluded.summary,
+            project_path = excluded.project_path,
             detail_kb_id = excluded.detail_kb_id,
             detail_doc_id = excluded.detail_doc_id,
             tags = excluded.tags,
@@ -571,6 +590,7 @@ fn upsert_in_conn(conn: &Connection, r: &MemoryRecord, now_ms: i64) -> Result<()
             r.level,
             r.kind,
             r.summary,
+            r.project_path,
             r.detail_kb_id,
             r.detail_doc_id,
             tags_to_json(&r.tags),
@@ -956,14 +976,58 @@ mod tests {
 
     /// 建表随开库自动完成，且可重复执行（快速路径幂等）
     #[tokio::test]
-    async fn schema_is_created_and_idempotent() {
-        let (repo, dir) = tmp_repo();
+    async fn schema_is_created_and_idempotent() {        let (repo, dir) = tmp_repo();
         repo.upsert(&record("m1", MEMORY_LEVEL_NORMAL, "第一条")).await.unwrap();
         // 再开一次（模拟第二次启动）：表已存在 → 不报错、数据还在
         let session =
             crate::session_db::sqlite::SqliteSessionRepo::open(&dir.join("virlen.db")).unwrap();
         let repo2 = SqliteMemoryRepo::new(session.conn.clone());
         assert_eq!(repo2.list(None, false).await.unwrap().len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 老库（`memories` 表建于 `project_path` 之前）→ 开库自动补列，
+    /// 且升级前就存在的记忆读出来是**不限定项目**（行为与升级前一致，不静默丢记忆）
+    #[tokio::test]
+    async fn legacy_memories_table_gets_project_path_column() {
+        let dir =
+            std::env::temp_dir().join(format!("virlen_memory_legacy_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("virlen.db");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            // 「上一个版本」的表结构 = 当前 DDL 删掉 project_path 那一行（**不手抄 DDL**：
+            // 抄一遍迟早与真 DDL 分叉，而这种测试一旦分叉就再也测不出真实迁移路径）
+            let legacy_ddl = MEMORY_DDL.replace("  project_path      TEXT,\n", "");
+            assert_ne!(
+                legacy_ddl, MEMORY_DDL,
+                "DDL 里找不到 project_path 那一行 —— 改列名/缩进时记得同步本用例"
+            );
+            conn.execute_batch(&legacy_ddl).unwrap();
+            conn.execute_batch(
+                "INSERT INTO memories (id, level, kind, summary, tags, source_day, origin, created_at, updated_at)\n\
+                 VALUES ('m_old', 'normal', 'project', '升级前就存在的项目记忆', '[]', '', 'user', 1, 1);\n\
+                 INSERT INTO memories_fts(memories_fts) VALUES('rebuild');",
+            )
+            .unwrap();
+        }
+
+        let session = crate::session_db::sqlite::SqliteSessionRepo::open(&db).unwrap();
+        let repo = SqliteMemoryRepo::new(session.conn.clone());
+        let all = repo.list(None, true).await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].summary, "升级前就存在的项目记忆");
+        assert_eq!(all[0].project_path, None, "补出来的列是 NULL = 不限定项目");
+
+        // 补出来的列可正常写入（不是只能读的遗留列；FTS 也会跟着新值维护）
+        let mut scoped = all[0].clone();
+        scoped.project_path = Some("C:/code/app".into());
+        repo.upsert(&scoped).await.unwrap();
+        assert_eq!(
+            repo.get("m_old").await.unwrap().unwrap().project_path.as_deref(),
+            Some("C:/code/app")
+        );
+        assert_eq!(repo.search("升级前", None, None, 5).await.unwrap().len(), 1);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -990,10 +1054,36 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// 项目作用域的回环：写进去 / 读回来 / 覆盖写可清除（面板把路径删空就是回到「不限定项目」）
+    #[tokio::test]
+    async fn project_path_roundtrips_and_can_be_cleared() {
+        let (repo, dir) = tmp_repo();
+        let mut scoped = record("m1", MEMORY_LEVEL_NORMAL, "项目约定");
+        scoped.project_path = Some("C:/work/app".into());
+        repo.upsert(&scoped).await.unwrap();
+        assert_eq!(
+            repo.get("m1").await.unwrap().unwrap().project_path.as_deref(),
+            Some("C:/work/app")
+        );
+
+        // 用户把路径清空（= 不限定项目）→ 库里真的变回 NULL，而不是留个空串
+        let mut cleared = scoped.clone();
+        cleared.project_path = None;
+        repo.upsert(&cleared).await.unwrap();
+        assert_eq!(repo.get("m1").await.unwrap().unwrap().project_path, None);
+
+        // 空串读回来也是 None（库里理论上不该有，但不该把空串当项目路径参与比较）
+        let mut blank = scoped.clone();
+        blank.id = "m2".into();
+        blank.project_path = Some("   ".into());
+        repo.upsert(&blank).await.unwrap();
+        assert_eq!(repo.get("m2").await.unwrap().unwrap().project_path, None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// 覆盖写不能清掉历史统计（created_at / hits / last_used_at 是数据，不是本次输入）
     #[tokio::test]
-    async fn upsert_keeps_history_fields() {
-        let (repo, dir) = tmp_repo();
+    async fn upsert_keeps_history_fields() {        let (repo, dir) = tmp_repo();
         repo.upsert(&record("m1", MEMORY_LEVEL_NORMAL, "旧摘要")).await.unwrap();
         repo.touch(&["m1".to_string()], 1_700_000_000_500).await.unwrap();
 

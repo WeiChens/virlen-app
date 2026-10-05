@@ -17,6 +17,7 @@ pub mod export;
 pub mod kb;
 pub mod models;
 pub mod prompt;
+pub mod scope;
 pub mod store;
 pub mod tools;
 

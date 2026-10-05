@@ -11,6 +11,7 @@
 //! 由 UI 组件按界面语言重建。
 
 use crate::agent::memory::kb;
+use crate::agent::memory::scope::{self, scope_for_write};
 use crate::agent::memory::{
     clamp_summary, is_valid_kind, is_valid_level, new_memory_id, MEMORY_KINDS, MEMORY_LEVEL_NORMAL,
     MEMORY_SUMMARY_HINT_CHARS, MEMORY_SUMMARY_MAX_CHARS,
@@ -48,6 +49,14 @@ pub struct MemoryToolDeps<'a> {
     pub rag: Option<&'static RagService>,
     /// 来源会话（写入时记进 `source_session_id`，便于溯源）
     pub session_id: &'a str,
+    /// 当前会话的**工作目录**（已解析：会话指定 > Agent 默认）。
+    ///
+    /// 两个用途：
+    /// 1. 写 `kind = project` 的记忆时作为它的项目路径（见 `scope::scope_for_write`）；
+    /// 2. 检索时筛掉属于**别的项目**的记忆（与注入同一规则，见 `scope::memory_applies`）。
+    ///
+    ///    空串 = 没有工作目录 → 项目记忆一概不写路径 / 不检索到。
+    pub workspace: &'a str,
     pub now_ms: i64,
 }
 
@@ -87,11 +96,41 @@ pub async fn run_search(
         .unwrap_or(MEMORY_SEARCH_DEFAULT_LIMIT as i64)
         .clamp(1, MEMORY_SEARCH_MAX_LIMIT as i64) as usize;
 
-    let found = deps.repo.search(query, level, kind, limit).await?;
+    // 一次取满上限（本地 SQLite、20 行，开销可忽略）：作用域过滤在 Rust 侧做，
+    // 若只取 `limit` 条再筛，别的项目的高热记忆会先把名额占完 —— 本项目明明有命中却报「没搜到」。
+    let fetched = deps
+        .repo
+        .search(query, level, kind, MEMORY_SEARCH_MAX_LIMIT.max(limit))
+        .await?;
+    // 被作用域藏起来的条数（如实报出去：错报「没记过」比多一句说明危险得多）
+    let mut hidden_by_scope = 0usize;
+    let found: Vec<MemoryRecord> = fetched
+        .into_iter()
+        .filter(|m| {
+            if scope::memory_applies(m, deps.workspace) {
+                true
+            } else {
+                hidden_by_scope += 1;
+                false
+            }
+        })
+        .take(limit)
+        .collect();
     if found.is_empty() {
+        let mut content = format!("No memories found for \"{}\".", query);
+        if let Some(note) = scope_note(hidden_by_scope) {
+            content.push('\n');
+            content.push_str(&note);
+        }
         return Ok(MemoryToolOutput {
-            content: format!("No memories found for \"{}\".", query),
-            ui_data: json!({ "mode": "search", "query": query, "count": 0, "items": [] }),
+            content,
+            ui_data: json!({
+                "mode": "search",
+                "query": query,
+                "count": 0,
+                "hiddenByScope": hidden_by_scope,
+                "items": [],
+            }),
         });
     }
 
@@ -103,6 +142,10 @@ pub async fn run_search(
     let mut lines = vec![format!("Found {} memories for \"{}\":", found.len(), query)];
     for m in &found {
         lines.push(format_memory_line(m));
+    }
+    if let Some(note) = scope_note(hidden_by_scope) {
+        lines.push(String::new());
+        lines.push(note);
     }
     lines.push(String::new());
     lines.push(
@@ -116,9 +159,24 @@ pub async fn run_search(
             "mode": "search",
             "query": query,
             "count": found.len(),
+            "hiddenByScope": hidden_by_scope,
             "items": found.iter().map(memory_ui_item).collect::<Vec<_>>(),
         }),
     })
+}
+
+/// 「有多少条命中因项目作用域被藏起来」的说明行（没有就不加）。
+///
+/// 为什么一定要说：不说的话，模型（和看它回话的用户）会得出「没记过」这个**错误结论**
+/// —— 记忆确实存在，只是属于另一个项目。
+fn scope_note(hidden: usize) -> Option<String> {
+    if hidden == 0 {
+        return None;
+    }
+    Some(format!(
+        "Note: {} more match(es) belong to other projects and are hidden in this workspace.",
+        hidden
+    ))
 }
 
 // ==================== memory_recall ====================
@@ -224,6 +282,8 @@ pub struct WriteRequest<'a> {
 /// `memory_write`：写入一条记忆（用户当场说「记住这个」时）。
 ///
 /// - 正文：先按 [`MEMORY_SUMMARY_MAX_CHARS`] 截断（提示词要求 ≤ [`MEMORY_SUMMARY_HINT_CHARS`]）；
+/// - `kind = project` 时**自动**带上当前会话的工作目录作为项目路径（模型不必（也不该）自己猜路径）：
+///   这条记忆之后只在该项目（或其子目录）里注入与召回；
 /// - `detail` 非空 → 详情落知识库；**落库失败不牵连记忆条目**（返回里说明「只存了摘要」）；
 /// - `level` 可给 `permanent`（已定稿：不设二次确认门，用户可以事后在面板降级 / 停用 / 删除）。
 pub async fn run_write(
@@ -250,12 +310,15 @@ pub async fn run_write(
     }
     let level = level.unwrap_or(MEMORY_LEVEL_NORMAL);
     let detail = req.detail.unwrap_or("").trim();
+    // 项目作用域：只有 project 才带，且以**当前工作目录**为值（模型看不到别的项目路径）
+    let project_path = scope_for_write(kind, deps.workspace);
 
     let mut record = MemoryRecord {
         id: new_memory_id(),
         level: level.to_string(),
         kind: kind.to_string(),
         summary: summary.clone(),
+        project_path,
         origin: "model".to_string(),
         source_session_id: Some(deps.session_id.to_string()).filter(|s| !s.is_empty()),
         created_at: deps.now_ms,
@@ -304,6 +367,13 @@ pub async fn run_write(
         "Saved memory (id: {}, level: {}, kind: {}): {}",
         record.id, record.level, record.kind, record.summary
     );
+    if let Some(path) = record.project_path.as_deref() {
+        // 告诉模型它刚写的这条是「项目记忆」：以后再写同类事实时分类才一致
+        content.push_str(&format!(
+            "\nScope: project at {} (injected only in sessions working inside it).",
+            path
+        ));
+    }
     if let Some(note) = &detail_note {
         content.push('\n');
         content.push_str(note);
@@ -321,6 +391,7 @@ pub async fn run_write(
             "memoryId": record.id,
             "level": record.level,
             "kind": record.kind,
+            "projectPath": record.project_path,
             "hasDetail": record.detail_doc_id.is_some(),
             "truncated": raw_len > MEMORY_SUMMARY_MAX_CHARS,
             "chars": record.summary.chars().count(),
@@ -523,11 +594,21 @@ mod tests {
     }
 
     fn deps<'a>(repo: &'a StubRepo, settings: &'a NoopSettingsRepo) -> MemoryToolDeps<'a> {
+        deps_in(repo, settings, "")
+    }
+
+    /// 带工作目录的依赖（项目作用域用例用）
+    fn deps_in<'a>(
+        repo: &'a StubRepo,
+        settings: &'a NoopSettingsRepo,
+        workspace: &'a str,
+    ) -> MemoryToolDeps<'a> {
         MemoryToolDeps {
             repo,
             settings,
             rag: None,
             session_id: "s1",
+            workspace,
             now_ms: 1_700_000_000_000,
         }
     }
@@ -738,5 +819,81 @@ mod tests {
         assert_eq!(out.ui_data["hasDetail"], false);
         // 记忆条目照写（详情写不进去不牵连记忆本身）
         assert_eq!(repo.items.lock().unwrap().len(), 1);
+    }
+
+    // ── 项目作用域 ──
+
+    #[tokio::test]
+    async fn project_writes_get_the_workspace_others_do_not() {
+        let repo = StubRepo::new(true, vec![]);
+        let settings = NoopSettingsRepo;
+        let d = deps_in(&repo, &settings, "C:/work/app");
+
+        run_write(&d, WriteRequest { summary: "项目约定", kind: "project", level: None, detail: None })
+            .await
+            .unwrap();
+        run_write(&d, WriteRequest { summary: "用户喜欢简洁", kind: "user", level: None, detail: None })
+            .await
+            .unwrap();
+
+        let stored = repo.items.lock().unwrap().clone();
+        assert_eq!(stored[0].project_path.as_deref(), Some("C:/work/app"));
+        assert_eq!(stored[1].project_path, None, "非 project 分类不限定项目");
+
+        // 没有工作目录时（CLI / 未设目录的会话）project 也不带路径 = 通用记忆
+        let repo2 = StubRepo::new(true, vec![]);
+        run_write(
+            &deps_in(&repo2, &settings, "  "),
+            WriteRequest { summary: "项目约定", kind: "project", level: None, detail: None },
+        )
+        .await
+        .unwrap();
+        assert_eq!(repo2.items.lock().unwrap()[0].project_path, None);
+    }
+
+    #[tokio::test]
+    async fn write_reports_the_scope_to_the_model() {
+        let repo = StubRepo::new(true, vec![]);
+        let settings = NoopSettingsRepo;
+        let out = run_write(
+            &deps_in(&repo, &settings, "C:/work/app"),
+            WriteRequest { summary: "项目约定", kind: "project", level: None, detail: None },
+        )
+        .await
+        .unwrap();
+        assert!(out.content.contains("Scope: project at C:/work/app"), "{}", out.content);
+        assert_eq!(out.ui_data["projectPath"], "C:/work/app");
+    }
+
+    #[tokio::test]
+    async fn search_hides_other_projects_and_says_how_many() {
+        let mut mine = rec("m_mine", "记忆功能实现");
+        mine.project_path = Some("C:/work/app".into());
+        let mut other = rec("m_other", "记忆功能的历史决策");
+        other.project_path = Some("C:/work/other".into());
+        let repo = StubRepo::new(true, vec![mine, other]);
+        let settings = NoopSettingsRepo;
+
+        let out = run_search(&deps_in(&repo, &settings, "C:/work/app/src"), "记忆功能", None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(out.ui_data["count"], 1);
+        assert_eq!(out.ui_data["items"][0]["id"], "m_mine");
+        assert_eq!(out.ui_data["hiddenByScope"], 1);
+        assert!(
+            out.content.contains("1 more match(es) belong to other projects"),
+            "必须如实说明被藏起来的条数，否则看起来像「没记过」：{}",
+            out.content
+        );
+        // 只给看得见的那条记账
+        assert_eq!(repo.touched.lock().unwrap().as_slice(), ["m_mine".to_string()]);
+
+        // 全部命中都被藏起来时也要说清楚（不然就是一句干巴巴的 "No memories found"）
+        let out = run_search(&deps_in(&repo, &settings, "C:/work/third"), "记忆功能", None, None, None)
+            .await
+            .unwrap();
+        assert!(out.content.starts_with("No memories found"));
+        assert!(out.content.contains("2 more match(es) belong to other projects"));
+        assert!(repo.touched.lock().unwrap().iter().all(|id| id != "m_other"));
     }
 }

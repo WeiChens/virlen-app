@@ -1,13 +1,23 @@
 /**
- * memory-settings — 长期记忆面板（记忆功能 P0）
+ * memory-settings — 长期记忆设置页（记忆功能 P0）+ 列表弹窗（`memory/MemoryListModal`）
  *
- * 覆盖四件容易出错的事：
- * 1. **分区与计数**：永久 / 普通两块必须按 `level` 分开（级别就是注入策略，混在一起用户没法审）；
- * 2. **写操作真的落到仓储**：新增 / 删除 / 升级 / 停用都是「调仓储 + 重新拉列表」，
+ * 覆盖这些容易出错的事：
+ * 1. **表格展示**：每条记忆的字段（内容 / 分类 / 级别 / 记录日 / 来源日 / 命中 / 状态）各就其列
+ *    —— 字段错列比不好看严重得多，用户会照着一列做判断；
+ * 2. **写操作真的落到仓储**：新增 / 编辑 / 删除 / 升级 / 停用都是「调仓储 + 重新拉列表」，
  *    少了 reload 会出现「界面上改了、实际没生效」；
  * 3. **注入预览展示的是后端渲染结果**：前端不自己拼 `# Memory` 段（否则用户看到的不是模型收到的）；
  * 4. **蒸馏整理（P2）**：按钮按「昨天」触发、状态行如实展示上次结果、失败可重跑 ——
- *    整理是**花了钱的动作**，界面绝不能让它显得「点了没反应」。
+ *    整理是**花了钱的动作**，界面绝不能让它显得「点了没反应」；
+ * 5. **列表只在弹窗里**：设置页 content 只留设置项 + 一个「记忆列表（N 条）」入口。
+ *    因此本文件里除入口与设置项外，断言列表的用例都先打开弹窗（`render()` 默认就开，
+ *    要测「默认不开」的用例传 `{ openList: false }`）；
+ * 6. **记录日期**：每条要标出「什么时候记下的」（`createdAt`，缺失时不编日期）；
+ * 7. **筛选与分页**：内容模糊搜索、分类 / 级别两个下拉筛选、分页 —— 三者的组合最容易出
+ *    「看起来空了」这类假象（页码停在越界处、筛选后不重置页），所以逐条守着；
+ * 8. **多选与批量**：行内已无操作按钮，停用 / 删除 / 升降级全走「勾选 + 批量栏」，
+ *    因此「勾选真的生效、条数与事实一致」比过去更关键；批量栏**常驻**（未选中时全禁用），
+ *    所以不再断言「没选中时它不存在」，而是断言「它在、但不可点」。
  *
  * 仓储全部 mock：本用例只验界面行为，Rust 侧的选取 / 渲染规则由 `cargo test -p virlen-core --lib memory` 守。
  */
@@ -80,15 +90,7 @@ const normalMemory: MemoryRecord = {
   summary: '在 virlen-app 实现记忆功能',
   hits: 0,
   sourceDay: '2026-10-05',
-}
-
-/** 第 2 条永久 —— 「分区全选」与「半选态」需要一个以上的同区条目 */
-const permanentMemory2: MemoryRecord = {
-  id: 'm_p2',
-  level: 'permanent',
-  kind: 'decision',
-  summary: '改动一律走 worktree',
-  hits: 1,
+  projectPath: 'C:/code/virlen-app',
 }
 
 /** 已停用的普通记忆 —— 批量操作必须跳过「本来就如此」的条目 */
@@ -100,14 +102,37 @@ const disabledNormalMemory: MemoryRecord = {
   disabled: true,
 }
 
-async function render() {
+/** 造一批普通记忆（分页用例要 > 1 页的数据） */
+function manyMemories(n: number): MemoryRecord[] {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `m_${i + 1}`,
+    level: 'normal',
+    kind: 'fact',
+    summary: `批量记忆 ${i + 1}`,
+    hits: i,
+  }))
+}
+
+async function render(options: { openList?: boolean } = {}) {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
   await act(async () => {
     root.render(<MemorySettings />)
   })
+  // 列表在一个弹窗里（设置页只留一个入口按钮）：断言列表的用例先把它打开。
+  // 默认打开是为了让「列表行为」的用例读起来仍像在操作列表，而不是每处都重复点一下入口。
+  if (options.openList !== false) await click(listButton())
   return { host, root }
+}
+
+/** 「记忆列表（N 条）」入口按钮 —— 设置页上列表的**唯一**入口 */
+function listButton(): HTMLButtonElement {
+  const found = Array.from(document.querySelectorAll('button')).find((b) =>
+    b.textContent?.trim().startsWith('记忆列表'),
+  )
+  if (!found) throw new Error('找不到「记忆列表」入口按钮')
+  return found as HTMLButtonElement
 }
 
 /** 按文本找按钮（面板里按钮很多，按文案定位最贴近用户行为） */
@@ -119,52 +144,81 @@ function buttonByText(text: string): HTMLButtonElement {
   return found as HTMLButtonElement
 }
 
-/**
- * 某一行的行内按钮。
- *
- * ⚠️ 必须按行定位：批量栏里的按钮与行内按钮**同名**（「停用」「删除」…），
- * 用 `buttonByText` 会随「批量栏在不在」而指向不同元素 —— 那种用例测的不是用户看到的东西。
- */
-function rowButton(summary: string, text: string): HTMLButtonElement {
-  const row = Array.from(document.querySelectorAll<HTMLElement>('.memory-item')).find((el) =>
-    el.querySelector('.memory-item-summary')?.textContent?.includes(summary),
-  )
-  if (!row) throw new Error(`找不到记忆条目：${summary}`)
-  const found = Array.from(row.querySelectorAll('button')).find(
-    (b) => b.textContent?.trim() === text,
-  )
-  if (!found) throw new Error(`条目「${summary}」里找不到按钮：${text}`)
-  return found as HTMLButtonElement
+/** 表格里的数据行 */
+function rows(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>('.memory-table tbody tr'))
 }
 
-/** 批量栏里的按钮（批量栏不存在时直接失败，而不是静默拿到行内按钮） */
+/** 按内容定位一行 */
+function rowBy(summary: string): HTMLElement {
+  const row = rows().find((r) =>
+    r.querySelector('.memory-cell-summary')?.textContent?.includes(summary),
+  )
+  if (!row) throw new Error(`找不到记忆行：${summary}`)
+  return row
+}
+
+/** 某一行的某一列 */
+function cell(summary: string, cls: string): HTMLElement {
+  const el = rowBy(summary).querySelector<HTMLElement>(`.${cls}`)
+  if (!el) throw new Error(`行「${summary}」里找不到列：${cls}`)
+  return el
+}
+
+/**
+ * 行内的复选框。
+ *
+ * ⚠️ 表头全选框用的是同一个 `.memory-check`：必须按容器分，否则「勾第 1 行」会勾到表头。
+ */
+function itemChecks(): HTMLInputElement[] {
+  return Array.from(
+    document.querySelectorAll<HTMLInputElement>('.memory-table tbody .memory-check'),
+  )
+}
+
+/** 表头全选框（只作用于本页） */
+function headerCheck(): HTMLInputElement {
+  const el = document.querySelector<HTMLInputElement>('.memory-table thead .memory-check')
+  if (!el) throw new Error('表头全选框未渲染')
+  return el
+}
+
+/** 勾选一条（按内容定位，别按序号 —— 序号会随后端排序变） */
+async function selectRow(summary: string) {
+  await click(cell(summary, 'memory-cell-check').querySelector('input')!)
+}
+
+/**
+ * 批量栏。
+ *
+ * ⚠️ 它现在**常驻**（未选中时按钮全禁用），所以「取不到」就是 bug —— 直接报错而不是返回 null，
+ * 避免用例里写成 `?.textContent` 后静默地什么都验不到。
+ */
+function batchBar(): HTMLElement {
+  const el = document.querySelector<HTMLElement>('.memory-batch-bar')
+  if (!el) throw new Error('批量栏未渲染（它是常驻的）')
+  return el
+}
+
+/** 批量栏里的按钮（按文案定位） */
 function batchButton(text: string): HTMLButtonElement {
-  const bar = document.querySelector('.memory-batch-bar')
-  if (!bar) throw new Error('批量栏未渲染')
-  const found = Array.from(bar.querySelectorAll('button')).find(
+  const found = Array.from(batchBar().querySelectorAll('button')).find(
     (b) => b.textContent?.trim() === text,
   )
   if (!found) throw new Error(`批量栏里找不到按钮：${text}`)
   return found as HTMLButtonElement
 }
 
-/** 记忆行里的复选框（分区标题的全选框也用 .memory-check，所以必须按容器分） */
-function itemChecks(): HTMLInputElement[] {
-  return Array.from(
-    document.querySelectorAll<HTMLInputElement>('.memory-item .memory-check'),
-  )
+/** 批量栏的文案 */
+function batchText(): string {
+  return batchBar().textContent ?? ''
 }
 
-/** 分区标题的全选框（顺序 = 渲染顺序：永久区在前） */
-function sectionChecks(): HTMLInputElement[] {
-  return Array.from(
-    document.querySelectorAll<HTMLInputElement>('.memory-section-title .memory-check'),
-  )
-}
-
-/** 批量栏的文案（不存在则返回 null，便于断言「没选中时不该有它」） */
-function batchText(): string | null {
-  return document.querySelector('.memory-batch-bar')?.textContent ?? null
+/** 分页栏（表格为空时不渲染） */
+function pager(): HTMLElement {
+  const el = document.querySelector<HTMLElement>('.memory-pager')
+  if (!el) throw new Error('分页栏未渲染')
+  return el
 }
 
 async function click(el: Element) {
@@ -174,20 +228,50 @@ async function click(el: Element) {
 }
 
 /**
- * 往「记忆内容」里输入。
+ * 往受控输入里打字。
  *
  * ⚠️ 受控组件：必须走原生 setter + `input` 事件，直接赋 `value` 不会触发 React 的 onChange。
  */
-async function typeSummary(text: string) {
-  const textarea = document.querySelector<HTMLTextAreaElement>('.memory-form-summary')!
+async function typeInto(selector: string, text: string) {
+  const el = document.querySelector(selector)
+  if (!el) throw new Error(`找不到输入框：${selector}`)
+  const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement : HTMLInputElement
   await act(async () => {
-    const setter = Object.getOwnPropertyDescriptor(
-      HTMLTextAreaElement.prototype,
-      'value',
-    )!.set!
-    setter.call(textarea, text)
-    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    const setter = Object.getOwnPropertyDescriptor(proto.prototype, 'value')!.set!
+    setter.call(el, text)
+    el.dispatchEvent(new Event('input', { bubbles: true }))
   })
+}
+
+/** 工具栏第二行的筛选下拉（共享 `Select`，下拉面板 Portal 到 body） */
+async function pickFilter(cls: 'memory-filter-kind' | 'memory-filter-level', label: string) {
+  const trigger = document.querySelector<HTMLElement>(`.memory-filter-selects .${cls}`)
+  if (!trigger) throw new Error(`找不到筛选下拉：${cls}`)
+  await click(trigger)
+  const options = Array.from(
+    document.querySelectorAll<HTMLElement>('.custom-select__dropdown .custom-select__option'),
+  )
+  const target = options.find((o) => o.textContent === label)
+  if (!target) throw new Error(`${cls} 下拉里找不到：${label}`)
+  await click(target)
+}
+
+/** 级别筛选 */
+const pickLevelFilter = (label: string) => pickFilter('memory-filter-level', label)
+/** 分类筛选 */
+const pickKindFilter = (label: string) => pickFilter('memory-filter-kind', label)
+
+/** 改每页条数（footer 里的共享 `Select`） */
+async function pickPageSize(label: string) {
+  const trigger = document.querySelector<HTMLElement>('.memory-pager .custom-select')
+  if (!trigger) throw new Error('找不到每页条数下拉')
+  await click(trigger)
+  const options = Array.from(
+    document.querySelectorAll<HTMLElement>('.custom-select__dropdown .custom-select__option'),
+  )
+  const target = options.find((o) => o.textContent === label)
+  if (!target) throw new Error(`每页条数下拉里找不到：${label}`)
+  await click(target)
 }
 
 beforeEach(() => {
@@ -225,21 +309,116 @@ beforeEach(() => {
   vi.mocked(writeTextFile).mockClear()
 })
 
-it('按级别分区展示，并显示命中次数与来源日', async () => {
+// ==================== 表格展示 ====================
+
+it('表格展示：一行一条记忆，字段各就其列（含记录日与来源日）', async () => {
   const { root } = await render()
 
-  const sections = Array.from(document.querySelectorAll('.memory-section-title')).map(
+  const headers = Array.from(document.querySelectorAll('.memory-table thead th')).map(
     (n) => n.textContent,
   )
-  expect(sections[0]).toContain('永久记忆')
-  expect(sections[0]).toContain('1')
-  expect(sections[1]).toContain('普通记忆')
+  expect(headers).toEqual(['', '内容', '分类', '项目', '级别', '记录', '来源', '使用次数', '状态'])
 
-  const items = Array.from(document.querySelectorAll<HTMLElement>('.memory-item'))
-  expect(items).toHaveLength(2)
-  expect(items[0].textContent).toContain('用户偏好中文回复')
-  expect(items[0].textContent).toContain('命中 3 次')
-  expect(items[1].textContent).toContain('在 virlen-app 实现记忆功能')
+  expect(rows()).toHaveLength(2)
+  // 顺序沿用后端给的（永久在前 → 新建在前），前端不再自己分区
+  expect(cell('用户偏好中文回复', 'memory-cell-summary').textContent).toBe('用户偏好中文回复')
+  expect(cell('用户偏好中文回复', 'memory-cell-kind').textContent).toBe('用户偏好')
+  expect(cell('用户偏好中文回复', 'memory-cell-level').textContent).toBe('永久')
+  expect(cell('在 virlen-app 实现记忆功能', 'memory-cell-level').textContent).toBe('普通')
+  expect(cell('在 virlen-app 实现记忆功能', 'memory-cell-kind').textContent).toBe('项目')
+  expect(cell('用户偏好中文回复', 'memory-cell-source').textContent).toBe('2026-10-05')
+  // 「使用次数」= 被注入 / 被检索到的累计次数（top-k 排序的输入，不是本次会话的数）
+  expect(cell('用户偏好中文回复', 'memory-cell-hits').textContent).toBe('3')
+  // 没有 createdAt 的条目不编日期（桩数据 / 老数据），显示占位符
+  expect(cell('用户偏好中文回复', 'memory-cell-date').textContent).toBe('—')
+  expect(cell('用户偏好中文回复', 'memory-cell-state').textContent).toBe('')
+
+  await act(async () => root.unmount())
+})
+
+it('列表不常驻设置页：默认没有任何条目，点「记忆列表」才在弹窗里出现', async () => {
+  const { root } = await render({ openList: false })
+
+  // 设置项还在（列表搬走 ≠ 面板空了）
+  expect(document.querySelector('.memory-switch-row')).not.toBeNull()
+  expect(document.querySelector('.memory-run-row')).not.toBeNull()
+  expect(document.querySelector('.memory-budget-row')).not.toBeNull()
+
+  // 列表本体（表格 / 分页 / 批量栏）一个都不在设置页里
+  expect(document.querySelectorAll('.memory-table')).toHaveLength(0)
+  expect(document.querySelector('.memory-pager')).toBeNull()
+  expect(document.querySelector('.modal-overlay')).toBeNull()
+
+  // 入口按钮带条数（用户不打开弹窗也能知道库里有多少条）
+  expect(listButton().textContent?.trim()).toBe('记忆列表（2 条）')
+
+  await click(listButton())
+  expect(document.querySelector('.modal-overlay')).not.toBeNull()
+  expect(rows()).toHaveLength(2)
+  expect(document.querySelector('.memory-list-modal .memory-table')).not.toBeNull()
+
+  // 关掉后列表重新收起来（设置页恢复成「只有设置项」的样子）
+  await click(document.querySelector('.modal-close')!)
+  expect(document.querySelector('.modal-overlay')).toBeNull()
+  expect(document.querySelectorAll('.memory-table')).toHaveLength(0)
+  expect(document.querySelector('.memory-pager')).toBeNull()
+
+  await act(async () => root.unmount())
+})
+
+it('每条记忆标出记录日期；来源日单独标出；缺失时不编日期（一律本地时区）', async () => {
+  // 用本地时间构造：日期按本地时区格式化，这样断言不受跑测机器的时区影响
+  const created = new Date(2026, 9, 5, 14, 20).getTime()
+  const updated = new Date(2026, 9, 6, 9, 2).getTime()
+  vi.mocked(listMemories).mockResolvedValue([
+    // 蒸馏产出：记录日（刚整理完的今天）与来源日（被整理的那一天）本来就可以不同天
+    { ...permanentMemory, createdAt: created, updatedAt: updated, sourceDay: '2026-10-04' },
+    // 既无 createdAt 也无来源日：两列都显示占位符，不编日期
+    { ...normalMemory, createdAt: undefined, sourceDay: undefined },
+  ])
+  const { root } = await render()
+
+  expect(cell('用户偏好中文回复', 'memory-cell-date').textContent).toBe('2026-10-05')
+  expect(cell('用户偏好中文回复', 'memory-cell-source').textContent).toBe('2026-10-04')
+  // 表格只放得下日期：精确到分钟的记录 / 更新时间进 title（悬停可看）
+  const title = cell('用户偏好中文回复', 'memory-cell-date').getAttribute('title')!
+  expect(title).toContain('记录 2026-10-05 14:20')
+  expect(title).toContain('更新 2026-10-06 09:02')
+
+  expect(cell('在 virlen-app 实现记忆功能', 'memory-cell-date').textContent).toBe('—')
+  expect(cell('在 virlen-app 实现记忆功能', 'memory-cell-source').textContent).toBe('—')
+
+  await act(async () => root.unmount())
+})
+
+// ==================== 编辑子弹窗（点整行打开） ====================
+
+it('点击整行打开编辑子弹窗（带出该行内容），保存后写仓储并刷新列表', async () => {
+  const { root } = await render()
+
+  // 行内已经没有任何操作按钮了：编辑靠点整行
+  expect(rowBy('用户偏好中文回复').querySelectorAll('button')).toHaveLength(0)
+
+  await click(rowBy('用户偏好中文回复'))
+  const form = document.querySelector<HTMLTextAreaElement>(
+    '.memory-edit-modal .memory-form-summary',
+  )!
+  expect(form.value).toBe('用户偏好中文回复')
+  // 点行 ≠ 选中：批量栏里的计数不能因此变成 1（它是常驻的，所以看计数而不是看有无）
+  expect(batchText()).toContain('已选 0 条')
+  expect(batchButton('删除').disabled).toBe(true)
+
+  await typeInto('.memory-edit-modal .memory-form-summary', '用户偏好简洁回复')
+  await click(buttonByText('保存'))
+
+  const saved = vi.mocked(upsertMemory).mock.calls[0][0]
+  expect(saved.id).toBe('m_p1')
+  expect(saved.summary).toBe('用户偏好简洁回复')
+  expect(saved.level).toBe('permanent')
+  // 初次加载 + 打开弹窗时重取 + 保存后刷新
+  expect(vi.mocked(listMemories)).toHaveBeenCalledTimes(3)
+  // 保存后子弹窗关闭
+  expect(document.querySelector('.memory-edit-modal')).toBeNull()
 
   await act(async () => root.unmount())
 })
@@ -248,7 +427,7 @@ it('新增记忆：写入仓储后重新拉列表；空内容则不写只提示'
   const { root } = await render()
 
   await click(buttonByText('新增记忆'))
-  await typeSummary('用户要求回复简洁')
+  await typeInto('.memory-edit-modal .memory-form-summary', '用户要求回复简洁')
   await click(buttonByText('保存'))
 
   expect(upsertMemory).toHaveBeenCalledTimes(1)
@@ -256,12 +435,16 @@ it('新增记忆：写入仓储后重新拉列表；空内容则不写只提示'
   expect(saved.summary).toBe('用户要求回复简洁')
   expect(saved.level).toBe('normal')
   expect(saved.kind).toBe('project')
-  expect(vi.mocked(listMemories)).toHaveBeenCalledTimes(2) // 初次 + 保存后刷新
+  expect(vi.mocked(listMemories)).toHaveBeenCalledTimes(3)
 
   // 空内容：不写仓储（Rust 侧也会拒，但别让用户白跑一趟 IPC）
   await click(buttonByText('新增记忆'))
   await click(buttonByText('保存'))
   expect(upsertMemory).toHaveBeenCalledTimes(1)
+  expect(showToast).toHaveBeenCalledWith(
+    expect.stringContaining('记忆内容不能为空'),
+    expect.any(Number),
+  )
 
   await act(async () => root.unmount())
 })
@@ -270,11 +453,12 @@ it('分类 / 级别用共享 Select 组件（下拉选择真的写进草稿）',
   const { root } = await render()
 
   await click(buttonByText('新增记忆'))
-  await typeSummary('下拉选择要写进草稿')
-  const selects = document.querySelectorAll<HTMLElement>('.memory-form .custom-select')
-  expect(selects).toHaveLength(2) // 分类 / 级别
-  // 本表单不该再有原生 select：原生下拉的视觉 / 键位与其它设置页不一致，
-  // 且会被设置页的滚动容器裁剪
+  await typeInto('.memory-edit-modal .memory-form-summary', '下拉选择要写进草稿')
+  const selects = document.querySelectorAll<HTMLElement>(
+    '.memory-edit-modal .memory-form .custom-select',
+  )
+  expect(selects).toHaveLength(2) // 分类 / 级别（项目路径是文本框，不是下拉）
+  // 本表单不该用原生 select：原生下拉的视觉 / 键位与其它设置页不一致，且会被弹窗的滚动容器裁剪
   expect(document.querySelectorAll('.memory-form select')).toHaveLength(0)
 
   // 展开「分类」→ 选「决策」（下拉面板 Portal 到 body）
@@ -300,28 +484,62 @@ it('分类 / 级别用共享 Select 组件（下拉选择真的写进草稿）',
   await act(async () => root.unmount())
 })
 
-it('删除走二次确认；升级级别调用 setMemoryLevel', async () => {
+it('项目路径：只在「项目」分类下出现；非项目保存时被清掉；留空 = 不限定项目', async () => {
+  await act(async () => {
+    settingsState.setValue('defaultWorkspace', 'C:/code/virlen-app')
+  })
   const { root } = await render()
 
-  await click(rowButton('在 virlen-app 实现记忆功能', '升级为永久'))
-  expect(setMemoryLevel).toHaveBeenCalledWith('m_n1', 'permanent')
+  // 新增默认就是「项目」→ 路径输入框在，且能一键填默认工作目录
+  await click(buttonByText('新增记忆'))
+  expect(document.querySelector('.memory-form-path')).not.toBeNull()
+  await click(buttonByText('用默认工作目录'))
+  await typeInto('.memory-edit-modal .memory-form-summary', '项目约定：pnpm build')
+  await click(buttonByText('保存'))
+  expect(vi.mocked(upsertMemory).mock.calls[0][0].projectPath).toBe('C:/code/virlen-app')
 
-  await click(rowButton('用户偏好中文回复', '删除'))
-  expect(deleteMemory).toHaveBeenCalled()
-  // 初次加载 + 升级后刷新 + 删除后刷新
-  expect(vi.mocked(listMemories)).toHaveBeenCalledTimes(3)
+  // 改成「用户偏好」→ 路径输入框消失，且草稿里的路径被清空（不留半状态）
+  await click(buttonByText('新增记忆'))
+  await click(buttonByText('用默认工作目录'))
+  await typeInto('.memory-edit-modal .memory-form-summary', '用户偏好中文')
+  const kindSelect = document.querySelector<HTMLElement>(
+    '.memory-edit-modal .memory-form .custom-select',
+  )!
+  await click(kindSelect)
+  const opts = Array.from(
+    document.querySelectorAll<HTMLElement>('.custom-select__dropdown .custom-select__option'),
+  )
+  await click(opts.find((o) => o.textContent === '用户偏好')!)
+  expect(document.querySelector('.memory-form-path')).toBeNull()
+  await click(buttonByText('保存'))
+  expect(vi.mocked(upsertMemory).mock.calls[1][0].kind).toBe('user')
+  expect(vi.mocked(upsertMemory).mock.calls[1][0].projectPath).toBeNull()
+
+  // 用完恢复全局设置（defaultWorkspace 是全局 store，留着会影响后面的用例）
+  await act(async () => {
+    settingsState.setValue('defaultWorkspace', '')
+  })
+  await act(async () => root.unmount())
+})
+
+it('项目列：项目记忆显示路径（悬停看全文），非项目留空，不限项目明说「所有项目」', async () => {
+  vi.mocked(listMemories).mockResolvedValue([
+    normalMemory, // project + 有路径
+    permanentMemory, // user → 该列留空
+    { ...disabledNormalMemory, kind: 'project' }, // project 但没限项目
+  ])
+  const { root } = await render()
+
+  const scoped = cell('在 virlen-app 实现记忆功能', 'memory-cell-project')
+  expect(scoped.textContent).toBe('C:/code/virlen-app')
+  expect(scoped.title).toBe('C:/code/virlen-app')
+  expect(cell('用户偏好中文回复', 'memory-cell-project').textContent).toBe('')
+  expect(cell('旧的技术选型笔记（已过时）', 'memory-cell-project').textContent).toBe('所有项目')
 
   await act(async () => root.unmount())
 })
 
-it('停用：切换 disabled', async () => {
-  const { root } = await render()
-
-  await click(rowButton('用户偏好中文回复', '停用'))
-  expect(setMemoryDisabled).toHaveBeenCalledWith('m_p1', true)
-
-  await act(async () => root.unmount())
-})
+// ==================== 设置项 ====================
 
 it('注入预览展示后端渲染的段文本（前端不自己拼）', async () => {
   const { root } = await render()
@@ -350,10 +568,7 @@ it('开关与注入条数写进设置（键名与 Rust 侧同名）', async () =
     '.memory-num input[type="number"]',
   )!
   await act(async () => {
-    const setter = Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      'value',
-    )!.set!
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
     setter.call(numberInput, '7')
     numberInput.dispatchEvent(new Event('input', { bubbles: true }))
   })
@@ -404,8 +619,8 @@ it('尚未整理过时给出状态行；点「立即整理昨天」按昨天触�
     expect.any(Number),
   )
   // 整理后重新拉列表与流水（否则用户看不到刚产的条目）
-  expect(vi.mocked(listMemories)).toHaveBeenCalledTimes(2)
-  expect(vi.mocked(listMemoryRuns)).toHaveBeenCalledTimes(2)
+  expect(vi.mocked(listMemories)).toHaveBeenCalledTimes(3)
+  expect(vi.mocked(listMemoryRuns)).toHaveBeenCalledTimes(3)
 
   await act(async () => root.unmount())
 })
@@ -530,12 +745,15 @@ it('超出预算时常驻行变告警并给出可操作建议', async () => {
 
 it('写操作后重新取注入段：告警必须是当前状态', async () => {
   const { root } = await render()
-  expect(vi.mocked(loadMemorySection)).toHaveBeenCalledTimes(1)
-  // 面板取段一律带 `true`：后端据此不打截断告警埋点（否则指标被面板刷高）
-  expect(vi.mocked(loadMemorySection)).toHaveBeenCalledWith(true)
-
-  await click(rowButton('用户偏好中文回复', '停用'))
+  // 初次加载 + 打开列表弹窗时重取
   expect(vi.mocked(loadMemorySection)).toHaveBeenCalledTimes(2)
+  // 面板取段一律带 `true`：后端据此不打截断告警埋点（否则指标被面板刷高）；
+  // 第二个参数是工作目录 —— 面板传设置里的**默认工作目录**（项目作用域的基准）
+  expect(vi.mocked(loadMemorySection)).toHaveBeenCalledWith(true, '')
+
+  await selectRow('用户偏好中文回复')
+  await click(batchButton('停用'))
+  expect(vi.mocked(loadMemorySection)).toHaveBeenCalledTimes(3)
 
   await act(async () => root.unmount())
 })
@@ -590,67 +808,204 @@ it('导出：用户取消保存 / 后端无文本时都不静默', async () => {
   await act(async () => root.unmount())
 })
 
-// ==================== 多选与批量操作 ====================
-//
-// 这一组守三件事：
-// ① 常态列表不该挂着每条 4 个按钮（操作只在悬停 / 键盘聚焦时显形，样式契约见
-//    `memory-settings-style-contract.test.ts`）；
-// ② 选中态与批量栏的**数字必须与列表一致** —— 刷新后选中集要收敛，不能出现「已选 3 条」
-//    而实际只剩 1 条可操作；
-// ③ 批量操作只对「确实需要改」的条目下手，失败的条数如实上报（静默吞掉失败比报错更糟）。
+// ==================== 筛选（模糊搜索 / 级别） ====================
 
-it('未选中时没有批量栏；勾选 / 点整行都能选中，取消选择后批量栏消失', async () => {
+it('模糊搜索：按内容过滤（大小写不敏感），没有命中时给可读提示', async () => {
   const { root } = await render()
 
-  expect(document.querySelector('.memory-batch-bar')).toBeNull()
+  await typeInto('.memory-search', 'VIRLEN')
+  expect(rows()).toHaveLength(1)
+  expect(rows()[0].querySelector('.memory-cell-summary')!.textContent).toContain('virlen-app')
+  // 筛选后的条数如实显示（否则用户不知道筛掉了多少）
+  expect(document.querySelector('.memory-count')!.textContent).toContain('筛选出 1 条')
 
-  await click(itemChecks()[0]) // 永久那条
+  await typeInto('.memory-search', '没有这条')
+  expect(rows()).toHaveLength(0)
+  expect(document.querySelector('.memory-empty')!.textContent).toContain('没有匹配的记忆')
+  // 空结果时不该渲染一个无意义的分页栏
+  expect(document.querySelector('.memory-pager')).toBeNull()
+
+  await typeInto('.memory-search', '')
+  expect(rows()).toHaveLength(2)
+
+  await act(async () => root.unmount())
+})
+
+it('级别筛选：只留永久 / 只留普通；与搜索叠加', async () => {
+  const { root } = await render()
+
+  await pickLevelFilter('永久')
+  expect(rows()).toHaveLength(1)
+  expect(cell('用户偏好中文回复', 'memory-cell-level').textContent).toBe('永久')
+
+  await pickLevelFilter('普通')
+  expect(rows()).toHaveLength(1)
+  expect(cell('在 virlen-app 实现记忆功能', 'memory-cell-level').textContent).toBe('普通')
+
+  // 两个条件叠加：级别=普通 + 内容搜索命中永久那条 → 空结果（不是「忽略掉其中一个条件」）
+  await typeInto('.memory-search', '用户偏好')
+  expect(rows()).toHaveLength(0)
+
+  await pickLevelFilter('全部')
+  expect(rows()).toHaveLength(1)
+
+  await act(async () => root.unmount())
+})
+
+it('分类筛选：只留选中的分类；与级别、搜索三者叠加', async () => {
+  vi.mocked(listMemories).mockResolvedValue([
+    permanentMemory, // user / permanent
+    normalMemory, // project / normal
+    disabledNormalMemory, // fact / normal（已停用也要能筛出来 —— 否则没地方管理它们）
+  ])
+  const { root } = await render()
+
+  expect(rows()).toHaveLength(3)
+
+  await pickKindFilter('事实')
+  expect(rows()).toHaveLength(1)
+  expect(cell('旧的技术选型笔记（已过时）', 'memory-cell-kind').textContent).toBe('事实')
+  // 计数如实反映筛选（用户得知道被筛掉了多少）
+  expect(document.querySelector('.memory-count')!.textContent).toContain('筛选出 1 条 / 共 3 条')
+
+  // 与级别叠加：事实里没有永久 → 空（不是「忽略掉其中一个条件」）
+  await pickLevelFilter('永久')
+  expect(rows()).toHaveLength(0)
+  expect(document.querySelector('.memory-empty')!.textContent).toContain('没有匹配的记忆')
+
+  await pickLevelFilter('全部')
+  await pickKindFilter('项目')
+  expect(rows()).toHaveLength(1)
+  expect(rows()[0].querySelector('.memory-cell-summary')!.textContent).toContain('virlen-app')
+
+  // 与搜索叠加：项目 + 搜「用户偏好」 → 空
+  await typeInto('.memory-search', '用户偏好')
+  expect(rows()).toHaveLength(0)
+
+  await pickKindFilter('全部')
+  expect(rows()).toHaveLength(1)
+
+  await act(async () => root.unmount())
+})
+
+it('工具栏两行：两个筛选下拉都在第二行左侧，批量栏常驻在第二行右侧', async () => {
+  const { root } = await render()
+
+  const row = document.querySelector('.memory-action-row')!
+  // 两个下拉（分类 / 级别）都在第二行的筛选组里；第一行只留搜索与导出 / 新增
+  expect(row.querySelectorAll('.memory-filter-selects .custom-select')).toHaveLength(2)
+  expect(document.querySelector('.memory-filter-row .custom-select')).toBeNull()
+  // 批量栏与筛选同住第二行（右侧），**未选中时也在**，只是按钮全禁用
+  expect(row.querySelector('.memory-batch-bar')).not.toBeNull()
+  expect(batchText()).toContain('已选 0 条')
+
+  await act(async () => root.unmount())
+})
+
+// ==================== 分页 ====================
+
+it('分页：默认每页 20 条，可翻页、可改每页条数，切页不丢选中', async () => {
+  vi.mocked(listMemories).mockResolvedValue(manyMemories(25))
+  const { root } = await render()
+
+  expect(rows()).toHaveLength(20)
+  expect(pager().textContent).toContain('共 25 条')
+  expect(pager().querySelector('.memory-pager-page')!.textContent).toContain('1 / 2')
+  // 第一页是 20 条：上一页按钮必须禁用
+  expect(buttonByText('上一页').disabled).toBe(true)
+
+  // 表头全选只作用于**本页**（否则一不小心就删掉 25 条）
+  await click(headerCheck())
+  expect(batchText()).toContain('已选 20 条')
+
+  await click(buttonByText('下一页'))
+  expect(rows()).toHaveLength(5)
+  expect(pager().querySelector('.memory-pager-page')!.textContent).toContain('2 / 2')
+  // 选中集跨页保留；提示里说清有 20 条不在这一页（否则「删除」会删掉看不见的）
+  expect(headerCheck().checked).toBe(false)
+  expect(batchText()).toContain('已选 20 条')
+  expect(batchText()).toContain('其中 20 条不在当前页')
+
+  // 改每页条数 → 回第 1 页并显示全部；选中集这时全在眼前，提示应消失
+  await pickPageSize('50')
+  expect(rows()).toHaveLength(25)
+  expect(pager().querySelector('.memory-pager-page')!.textContent).toContain('1 / 1')
+  expect(batchText()).toContain('已选 20 条')
+  expect(batchText()).not.toContain('不在当前页')
+
+  await act(async () => root.unmount())
+})
+
+it('筛选后页码回到第 1 页（否则会停在越界的页上，看起来像「空了」）', async () => {
+  vi.mocked(listMemories).mockResolvedValue(manyMemories(25))
+  const { root } = await render()
+
+  await click(buttonByText('下一页'))
+  expect(rows()).toHaveLength(5)
+
+  // 搜索只剩 1 条命中 → 页码必须回到 1（25 条里的第二页在新结果集里根本不存在）
+  await typeInto('.memory-search', '批量记忆 3')
+  expect(rows()).toHaveLength(1)
+  expect(pager().querySelector('.memory-pager-page')!.textContent).toContain('1 / 1')
+
+  await act(async () => root.unmount())
+})
+
+// ==================== 多选与批量操作 ====================
+//
+// 行内已经没有任何操作按钮（升级 / 降级 / 停用 / 删除全去掉），所以这一组是**唯一的操作路径**：
+// 勾选 → 批量栏。三件事必须守住：
+// ① 常态下批量栏也在（只是全禁用，不说「点不动」的废话）；② 计数与事实一致（刷新后收敛、越界提示）；
+// ③ 只动「确实需要改」的条目。
+
+it('批量栏常驻：未选中时按钮全禁用且给出「怎么开始」，勾选后才可点，取消选择后回到禁用', async () => {
+  const { root } = await render()
+
+  // 常驻：位置固定在第二行右侧，不会因为勾选而冒出来把表格上下顶动
+  expect(document.querySelectorAll('.memory-batch-bar')).toHaveLength(1)
+  expect(batchText()).toContain('已选 0 条')
+  for (const label of ['升级为永久', '降级为普通', '停用', '启用', '删除', '取消选择']) {
+    expect(batchButton(label).disabled, `${label} 未选中时应当是禁用的`).toBe(true)
+  }
+  // 灰着的同时要说清怎么开始（否则一排灰按钮看着就像坏了）
+  expect(batchButton('删除').title).toContain('先勾选')
+  expect(batchBar().classList.contains('is-active')).toBe(false)
+
+  await click(itemChecks()[0])
   expect(batchText()).toContain('已选 1 条')
-  expect(document.querySelectorAll('.memory-item')[0].classList.contains('is-selected')).toBe(
-    true,
-  )
+  expect(rows()[0].classList.contains('is-selected')).toBe(true)
+  expect(batchBar().classList.contains('is-active')).toBe(true) // 选中才亮底
+  expect(batchButton('删除').disabled).toBe(false)
 
-  // 点整行（不是复选框）也切换选中：复选框本体只有 15px，长列表里逐条去抠太费手
-  await click(document.querySelectorAll('.memory-item')[1])
+  await click(itemChecks()[1])
   expect(batchText()).toContain('已选 2 条')
 
   await click(buttonByText('取消选择'))
-  expect(document.querySelector('.memory-batch-bar')).toBeNull()
-  expect(document.querySelectorAll('.memory-item.is-selected')).toHaveLength(0)
+  expect(batchText()).toContain('已选 0 条')
+  expect(batchBar().classList.contains('is-active')).toBe(false)
+  expect(batchButton('删除').disabled).toBe(true)
+  expect(document.querySelectorAll('.memory-table tbody tr.is-selected')).toHaveLength(0)
 
   await act(async () => root.unmount())
 })
 
-it('行内操作不会顺手把这一条选上（否则点「停用」会连选择一起变）', async () => {
+it('表头全选：支持半选态，且只作用于本页', async () => {
   const { root } = await render()
 
-  await click(rowButton('用户偏好中文回复', '停用'))
-  expect(setMemoryDisabled).toHaveBeenCalledWith('m_p1', true)
-  expect(document.querySelector('.memory-batch-bar')).toBeNull()
+  expect(headerCheck().checked).toBe(false)
 
-  await act(async () => root.unmount())
-})
+  await click(itemChecks()[0]) // 2 条里只选了 1 条
+  expect(headerCheck().checked).toBe(false)
+  expect(headerCheck().indeterminate).toBe(true) // 半选：不能显示成「全都没选」
 
-it('分区全选：支持半选态，且只作用于本区', async () => {
-  vi.mocked(listMemories).mockResolvedValue([permanentMemory, permanentMemory2, normalMemory])
-  const { root } = await render()
-
-  const [permAll, normalAll] = sectionChecks()
-  expect(permAll.checked).toBe(false)
-
-  await click(itemChecks()[0]) // 永久区只选了 1 / 2 条
-  expect(itemChecks()[0].checked).toBe(true)
-  expect(permAll.checked).toBe(false)
-  expect(permAll.indeterminate).toBe(true) // 半选：不能显示成「全都没选」
-
-  await click(permAll)
-  expect(permAll.indeterminate).toBe(false)
-  expect(permAll.checked).toBe(true)
+  await click(headerCheck())
+  expect(headerCheck().indeterminate).toBe(false)
+  expect(headerCheck().checked).toBe(true)
   expect(batchText()).toContain('已选 2 条')
-  expect(normalAll.checked).toBe(false) // 本区全选不该波及另一区
 
-  await click(permAll) // 再点一次 = 取消本区
-  expect(document.querySelector('.memory-batch-bar')).toBeNull()
+  await click(headerCheck()) // 再点一次 = 取消本页
+  expect(batchText()).toContain('已选 0 条')
+  expect(batchButton('删除').disabled).toBe(true)
 
   await act(async () => root.unmount())
 })
@@ -659,7 +1014,7 @@ it('批量停用 / 启用：跳过已经如此的条目，并报真实条数', a
   vi.mocked(listMemories).mockResolvedValue([permanentMemory, disabledNormalMemory])
   const { root } = await render()
 
-  await click(sectionChecks()[1]) // 普通区全选 = 只选中那条已停用的
+  await selectRow('旧的技术选型笔记（已过时）') // 这条本来就是停用的
   expect(batchButton('停用').disabled).toBe(true) // 没有可停用的 → 按钮必须是禁的
   expect(batchButton('停用').title).toContain('都已停用')
   expect(batchButton('启用').disabled).toBe(false)
@@ -675,21 +1030,21 @@ it('批量停用 / 启用：跳过已经如此的条目，并报真实条数', a
   await act(async () => root.unmount())
 })
 
-it('批量改级别：只动需要改的，提示里报的是真实条数', async () => {
-  vi.mocked(listMemories).mockResolvedValue([permanentMemory, normalMemory])
+it('单条停用 / 升级：勾一条再点批量按钮（行内已无按钮）', async () => {
   const { root } = await render()
 
-  await click(itemChecks()[1]) // 普通那条
+  await selectRow('在 virlen-app 实现记忆功能')
   expect(batchButton('降级为普通').disabled).toBe(true) // 本来就是普通 → 不该让人点
-  expect(batchButton('升级为永久').disabled).toBe(false)
-
   await click(batchButton('升级为永久'))
-  expect(setMemoryLevel).toHaveBeenCalledTimes(1)
   expect(setMemoryLevel).toHaveBeenCalledWith('m_n1', 'permanent')
   expect(showToast).toHaveBeenCalledWith(
     expect.stringContaining('已升级为永久 1 条记忆'),
     expect.any(Number),
   )
+
+  await selectRow('用户偏好中文回复')
+  await click(batchButton('停用'))
+  expect(setMemoryDisabled).toHaveBeenCalledWith('m_p1', true)
 
   await act(async () => root.unmount())
 })
@@ -732,7 +1087,7 @@ it('批量操作失败不静默：成功与失败条数分开报', async () => {
     expect.any(Number),
   )
   // 成功与否都要重新拉列表：界面不能停在「以为删掉了」的状态
-  expect(vi.mocked(listMemories)).toHaveBeenCalledTimes(2)
+  expect(vi.mocked(listMemories)).toHaveBeenCalledTimes(3)
 
   await act(async () => root.unmount())
 })
@@ -748,7 +1103,12 @@ it('刷新后选中集收敛：已不存在的条目不会留在计数里', asyn
 
   vi.mocked(listMemories).mockResolvedValue([]) // 模拟「在别处被删掉 / 整理覆盖了」
   await click(buttonByText('刷新'))
-  expect(document.querySelector('.memory-batch-bar')).toBeNull()
+  // 收敛后回到「什么都没选」，批量栏仍在但按钮全禁用
+  expect(batchText()).toContain('已选 0 条')
+  expect(batchButton('删除').disabled).toBe(true)
+  // 列表空了 → 分页栏也不该留着
+  expect(document.querySelector('.memory-pager')).toBeNull()
+  expect(document.querySelector('.memory-empty')).not.toBeNull()
 
   await act(async () => root.unmount())
 })

@@ -10,13 +10,14 @@
 
 use crate::agent::memory::distill::DistilledMemory;
 use crate::agent::memory::kb;
+use crate::agent::memory::scope;
 use crate::agent::memory::{
     near_duplicate, new_memory_id, normalize_summary, NearDuplicate, MEMORY_MAX_TAGS,
 };
 use crate::rag::rag_service::RagService;
 use crate::session_db::{
-    MemoryRecord, MemoryRepo, SessionMaterial, SettingsRepo, MEMORY_LEVEL_PERMANENT,
-    MEMORY_ORIGIN_DISTILL,
+    MemoryRecord, MemoryRepo, SessionMaterial, SettingsRepo, MEMORY_KIND_PROJECT,
+    MEMORY_LEVEL_PERMANENT, MEMORY_ORIGIN_DISTILL,
 };
 
 /// 落库所需的依赖（显式注入，便于单测替换）
@@ -67,13 +68,16 @@ pub async fn store_distilled(
             outcome.duplicates += 1;
             continue;
         }
+        // 这条产出的项目作用域（只有项目记忆才有；见 `resolve_project_path`）
+        let project = resolve_project_path(item, sources);
         // 第一道：规范化后完全相同（含同一天同一批里的重复 —— 模型偶尔会把同一条写两遍）
         if norms.iter().any(|n| n == &norm) {
             outcome.duplicates += 1;
             continue;
         }
-        // 第二道：近重复 → 合并（而不是再写一条）
-        if let Some((idx, ev)) = best_near_duplicate(&state, &item.summary) {
+        // 第二道：近重复 → 合并（而不是再写一条）。**同项目之间才比** —— 跨项目合并会让一方
+        // 再也看不到自己项目的记忆（正文只能留一份、作用域只能是一个）。
+        if let Some((idx, ev)) = best_near_duplicate(&state, &item.summary, project.as_deref()) {
             let ctx = MergeCtx {
                 deps,
                 item,
@@ -97,6 +101,7 @@ pub async fn store_distilled(
             level: item.level.clone(),
             kind: item.kind.clone(),
             summary: item.summary.clone(),
+            project_path: project,
             detail_kb_id: None,
             detail_doc_id: None,
             tags: merge_tags(item, sources),
@@ -138,9 +143,20 @@ pub async fn store_distilled(
 ///
 /// 选取规则：先看共享 gram 数（证据量），再看包含率；都相等时取**先出现的**那条
 /// —— 全序，同一份输入永远合并到同一条。
-fn best_near_duplicate(state: &[MemoryRecord], summary: &str) -> Option<(usize, NearDuplicate)> {
+///
+/// `project` = 本次产出的项目作用域：**只在同一作用域内找候选**。两条文本几乎相同但分别属于
+/// 项目 A / B 时，合并后正文只能留一份、`project_path` 只能是一个 —— 另一方（或双方）就再也
+/// 看不到它了。宁可库里多一条，也不要静默地把 A 项目的结论发给 B 项目。
+fn best_near_duplicate(
+    state: &[MemoryRecord],
+    summary: &str,
+    project: Option<&str>,
+) -> Option<(usize, NearDuplicate)> {
     let mut best: Option<(usize, NearDuplicate)> = None;
     for (idx, m) in state.iter().enumerate() {
+        if !scope::same_project(m.project_path.as_deref(), project) {
+            continue;
+        }
         let Some(ev) = near_duplicate(summary, &m.summary) else {
             continue;
         };
@@ -361,6 +377,43 @@ async fn store_detail(
     Ok((kb_id, doc_id))
 }
 
+/// 蒸馏产出的项目作用域：**只有 `kind = project` 才定项目**，且只能定到「当天素材真实出现过的
+/// 工作目录」。
+///
+/// 两条规则（按优先级）：
+/// 1. **当天素材只有一条会话** → 直接用它：确定性最高（产出只可能来自那一个目录），不必问模型；
+/// 2. **多条会话** → 用模型给的 `projectPath`，但必须与素材里的某个工作目录是**同一处**
+///    （归一化后相等），否则丢弃（当全局记忆）；模型压根没给路径 → 同样是全局。
+///
+/// 为什么不能一律听模型的：它看到的是「会话标题 + `workspace:` 字符串」，让它自由填写出的是
+/// 根本不存在的目录 —— 而路径写错的后果是**这条记忆对谁都不可见**。按素材对账之后，最坏情况
+/// 只是退化成「不限定项目」（照旧注入），不会凭空消失。
+fn resolve_project_path(item: &DistilledMemory, sources: &[SessionMaterial]) -> Option<String> {
+    if item.kind != MEMORY_KIND_PROJECT {
+        return None;
+    }
+    // 素材里出现过的工作目录（去空白、去重，保序）
+    let mut seen: Vec<&str> = Vec::new();
+    for m in sources {
+        let Some(ws) = m.workspace.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        if !seen.iter().any(|s| scope::path_key(s) == scope::path_key(ws)) {
+            seen.push(ws);
+        }
+    }
+    match seen.as_slice() {
+        [only] => Some((*only).to_string()),
+        _ => {
+            let want = item.project_path.as_deref()?;
+            let key = scope::path_key(want);
+            seen.iter()
+                .find(|w| scope::path_key(w) == key)
+                .map(|w| (*w).to_string())
+        }
+    }
+}
+
 /// 素材只有**一条**会话时才回填来源会话（多会话合成时没有单一来源，留空 —— 面板据 `source_day` 溯源）
 fn single_session(sources: &[SessionMaterial]) -> Option<String> {
     match sources {
@@ -526,11 +579,21 @@ mod tests {
     }
 
     fn item(summary: &str, level: &str) -> DistilledMemory {
+        distilled(summary, level, "project", None)
+    }
+
+    fn distilled(
+        summary: &str,
+        level: &str,
+        kind: &str,
+        project_path: Option<&str>,
+    ) -> DistilledMemory {
         DistilledMemory {
             summary: summary.into(),
-            kind: "project".into(),
+            kind: kind.into(),
             level: level.into(),
             tags: vec![],
+            project_path: project_path.map(String::from),
             detail_title: None,
             detail_body: None,
         }
@@ -573,6 +636,8 @@ mod tests {
         assert_eq!(stored[0].created_at, 1_700_000_000_000);
         // 工作目录名自动进 tags（一期「全局唯一 + tags 记工作目录」）
         assert_eq!(stored[0].tags, vec!["virlen-app".to_string()]);
+        // 且这个工作目录就是它的项目作用域（单会话素材 → 不必问模型）
+        assert_eq!(stored[0].project_path.as_deref(), Some("C:\\code\\virlen-app"));
         assert!(stored[0].id.starts_with("m_"));
     }
 
@@ -634,6 +699,7 @@ mod tests {
             kind: "decision".into(),
             level: MEMORY_LEVEL_NORMAL.into(),
             tags: vec!["记忆".into()],
+            project_path: None,
             detail_title: Some("设计要点".into()),
             detail_body: Some("详".repeat(500)),
         };
@@ -703,6 +769,136 @@ mod tests {
         assert_eq!(workspace_label("C:\\code\\virlen-app"), "virlen-app");
         assert_eq!(workspace_label("/home/me/proj/"), "proj");
         assert_eq!(workspace_label(""), "");
+    }
+
+    // ==================== 项目作用域 ====================
+
+    /// 单会话素材 → 直接用它（不问模型）；非 project 分类一律不定项目
+    #[test]
+    fn resolve_project_path_prefers_the_only_workspace_of_the_day() {
+        let one = [source(Some("C:/code/app"))];
+        assert_eq!(
+            resolve_project_path(&item("改了构建脚本", MEMORY_LEVEL_NORMAL), &one),
+            Some("C:/code/app".to_string())
+        );
+        // 单会话 + 模型也说了个路径 → 仍然以素材为准（模型可能把它归一化了）
+        assert_eq!(
+            resolve_project_path(
+                &distilled("改了构建脚本", MEMORY_LEVEL_NORMAL, "project", Some("C:/code/app/")),
+                &one
+            ),
+            Some("C:/code/app".to_string())
+        );
+        // 用户偏好这类不该被绑到项目上
+        assert_eq!(
+            resolve_project_path(
+                &distilled("用户偏好中文", MEMORY_LEVEL_NORMAL, "user", Some("C:/code/app")),
+                &one
+            ),
+            None
+        );
+        // 素材没有工作目录 → 不定项目（不凭模型的说法定）
+        assert_eq!(
+            resolve_project_path(
+                &distilled("改了构建脚本", MEMORY_LEVEL_NORMAL, "project", Some("C:/code/app")),
+                &[source(None)]
+            ),
+            None
+        );
+    }
+
+    /// 多会话素材 → 只能用「素材里真出现过」的工作目录（对账失败就当全局记忆）
+    #[test]
+    fn resolve_project_path_validates_model_against_the_material() {
+        let mut second = source(Some("C:/code/other"));
+        second.session_id = "s2".into();
+        let many = [source(Some("C:/code/app")), second];
+
+        assert_eq!(
+            resolve_project_path(
+                &distilled("app 的构建命令", MEMORY_LEVEL_NORMAL, "project", Some("C:/code/app")),
+                &many
+            ),
+            Some("C:/code/app".to_string())
+        );
+        // 大小写 / 分隔符不同也算同一处，但存的是素材里的原样字符串
+        assert_eq!(
+            resolve_project_path(
+                &distilled("app 的构建命令", MEMORY_LEVEL_NORMAL, "project", Some("c:/code/app/")),
+                &many
+            ),
+            Some("C:/code/app".to_string())
+        );
+        // 模型凭空造了个路径 → 丢弃（= 全局记忆），绝不让它凭空消失
+        assert_eq!(
+            resolve_project_path(
+                &distilled("app 的构建命令", MEMORY_LEVEL_NORMAL, "project", Some("D:/nope")),
+                &many
+            ),
+            None
+        );
+        // 模型没说 → 全局（多项目的一天，默认不绑定）
+        assert_eq!(
+            resolve_project_path(&item("跨项目的结论", MEMORY_LEVEL_NORMAL), &many),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn distilled_project_memories_get_their_scope_stored() {
+        let repo = StubRepo::default();
+        let settings = NoopSettingsRepo;
+        store_distilled(
+            &deps(&repo, &settings),
+            "2026-10-05",
+            &[
+                item("app 的构建命令是 pnpm build", MEMORY_LEVEL_NORMAL),
+                distilled("用户偏好中文", MEMORY_LEVEL_NORMAL, "user", None),
+            ],
+            &[source(Some("C:/code/app"))],
+            1,
+        )
+        .await
+        .unwrap();
+        let stored = repo.items.lock().unwrap().clone();
+        assert_eq!(stored[0].project_path.as_deref(), Some("C:/code/app"));
+        assert_eq!(stored[1].project_path, None, "user 分类不绑定项目");
+    }
+
+    /// 两个项目里的「长得几乎一样」的两条**不得**合并：
+    /// 合并后正文只能留一份、作用域只能是一个 —— 另一方就再也看不到它了。
+    #[tokio::test]
+    async fn near_duplicates_from_different_projects_stay_separate() {
+        let repo = StubRepo::default();
+        let settings = NoopSettingsRepo;
+        let mut other = source(Some("C:/code/other"));
+        other.session_id = "s2".into();
+
+        store_distilled(
+            &deps(&repo, &settings),
+            "2026-10-04",
+            &[item("构建命令是 pnpm build", MEMORY_LEVEL_NORMAL)],
+            &[source(Some("C:/code/app"))],
+            100,
+        )
+        .await
+        .unwrap();
+        let out = store_distilled(
+            &deps(&repo, &settings),
+            "2026-10-05",
+            &[item("构建命令是 pnpm build，且带 lint", MEMORY_LEVEL_NORMAL)],
+            &[other],
+            200,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(out.merged, 0, "跨项目不得合并");
+        assert_eq!(out.records.len(), 1, "另一条按新增落库");
+        let stored = repo.items.lock().unwrap().clone();
+        assert_eq!(stored.len(), 2);
+        assert_eq!(stored[0].project_path.as_deref(), Some("C:/code/app"));
+        assert_eq!(stored[1].project_path.as_deref(), Some("C:/code/other"));
     }
 
     // ==================== 近重复合并（P3） ====================

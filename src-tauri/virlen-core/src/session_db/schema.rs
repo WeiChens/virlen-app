@@ -181,6 +181,8 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<bool, String> {
         .map_err(|e| format!("初始化记忆表失败: {}", e))?;
     // 记忆整理流水补 `merged` 列（记忆功能 P3）：同样是元数据级 ALTER，不占 SCHEMA_VERSION
     ensure_memory_run_merged_column(conn)?;
+    // 记忆补 `project_path` 列（项目作用域）：同样是元数据级 ALTER，不占 SCHEMA_VERSION
+    ensure_memories_project_path_column(conn)?;
 
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -285,6 +287,42 @@ fn ensure_memory_run_merged_column(conn: &Connection) -> Result<(), String> {
             [],
         )
         .map_err(|e| format!("添加 memory_runs.merged 列失败: {}", e))?;
+    }
+    Ok(())
+}
+
+/// 老库给 `memories` 补 `project_path` 列（项目作用域；新库由 DDL 直接建出，这里检测后跳过）。
+///
+/// 与 `ensure_usage_duration_column` 同一策略：元数据级 `ALTER`（可空、无默认值，不重写表），
+/// 放在 `init_schema` 快速路径里，**不占 `SCHEMA_VERSION`**。
+///
+/// 旧记忆补出来是 **NULL = 不限定项目**：升级前它们对所有会话都注入，升级后保持这一行为 ——
+/// 否则一次升级会把用户全部已有项目记忆静默“藏”起来（用户根本没给它们指过路径）。
+///
+/// ⚠️ 老库的列会追加在**表尾**、新库在 `summary` 之后：列顺序不同无害 ——
+/// 读写都走列名（`row.get("project_path")` / INSERT 的显式列清单），不依赖位置。
+fn ensure_memories_project_path_column(conn: &Connection) -> Result<(), String> {
+    let exists = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(memories)")
+            .map_err(|e| format!("读取 memories 表结构失败: {}", e))?;
+        let mut has = false;
+        {
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(|e| e.to_string())?;
+            for name in rows.flatten() {
+                if name == "project_path" {
+                    has = true;
+                    break;
+                }
+            }
+        }
+        has
+    };
+    if !exists {
+        conn.execute("ALTER TABLE memories ADD COLUMN project_path TEXT", [])
+            .map_err(|e| format!("添加 memories.project_path 列失败: {}", e))?;
     }
     Ok(())
 }

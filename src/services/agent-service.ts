@@ -43,11 +43,12 @@ export async function assembleAgentPrompt(
     resolveProjectRulesFile(agent),
   )
 
-  // 长期记忆（记忆功能 P0）：**每个新会话**都注入「全部永久 + 普通 top20」。
-  // 段文本由 Rust 侧唯一渲染（选取 / 预算裁剪只有一份实现）；取不到就不注入（与项目规则同语义）。
+  // 长期记忆（记忆功能 P0）：**每个新会话**都注入「不限定项目 + 命中本次工作目录的项目记忆」
+  // （永久全量 + 普通 top20）。段文本由 Rust 侧唯一渲染（选取 / 预算裁剪 / 项目作用域只有一份实现）；
+  // 取不到就不注入（与项目规则同语义）。
   // 与项目规则一样，注入只发生在**建会话那一刻**：会话中途新增的记忆不影响已建会话的
   // systemPrompt（保持 prompt cache 命中率），需要时靠工具召回（P1）。
-  const memorySection = await loadMemorySection()
+  const memorySection = await loadMemorySection(false, effectiveWorkspace)
   // 计入「被使用」（hits 是 top20 的排序输入）；fire-and-forget，不阻塞建会话
   touchMemories(memorySection.ids)
 

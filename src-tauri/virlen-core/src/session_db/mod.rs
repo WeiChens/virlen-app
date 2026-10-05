@@ -36,8 +36,9 @@ pub use open::{open_session_db, SessionDb, Spawner};
 // 长期记忆（记忆功能 P0/P2）：`memories` / `memory_runs` 两张表 —— 与会话 / 配置同一个 `virlen.db`
 pub use memory::{
     decide_claim, ClaimDecision, ClaimOptions, MemoryRecord, MemoryRepo, MemoryRun, NoopMemoryRepo,
-    SqliteMemoryRepo, MEMORY_LEVEL_NORMAL, MEMORY_LEVEL_PERMANENT, MEMORY_ORIGIN_DISTILL,
-    MEMORY_RUN_DONE, MEMORY_RUN_FAILED, MEMORY_RUN_PARTIAL, MEMORY_RUN_RUNNING, MEMORY_RUN_SKIPPED,
+    SqliteMemoryRepo, MEMORY_KIND_PROJECT, MEMORY_LEVEL_NORMAL, MEMORY_LEVEL_PERMANENT,
+    MEMORY_ORIGIN_DISTILL, MEMORY_RUN_DONE, MEMORY_RUN_FAILED, MEMORY_RUN_PARTIAL,
+    MEMORY_RUN_RUNNING, MEMORY_RUN_SKIPPED,
 };
 // 库维护（GUI 命令 `cmd_db_*` 需要）
 pub use maintenance::{total_bytes, CheckpointResult, DbMaintenance, DbStats, MaintainResult};

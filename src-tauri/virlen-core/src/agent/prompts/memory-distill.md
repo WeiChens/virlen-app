@@ -29,20 +29,26 @@ pollutes every later conversation. Precision matters far more than coverage.
 2. Write `summary` in the SAME language as the material (Chinese material → Chinese summary).
 3. `kind` is one of `user` (preferences, traits), `project` (work done), `decision` (a chosen
    approach) or `fact` (stable facts).
-4. `level` is `normal` by default. Use `permanent` only for what must shape **every** future session
+4. For `kind: "project"` items, also set `projectPath` to the **exact** `workspace:` string shown in
+the material this fact comes from (copy it character by character, do not normalize or invent it).
+   Memories with a `projectPath` are only injected into sessions working inside that directory, so a
+   wrong path hides the memory from everyone. Omit `projectPath` when the material shows no
+   `workspace:`, when several projects are involved and the item is not clearly about one of them, or
+   for every other `kind`.
+5. `level` is `normal` by default. Use `permanent` only for what must shape **every** future session
    (strong preferences, standing requirements); everything else stays `normal`.
-5. Skip anything already covered by the existing memories below, including near-duplicates.
-6. `tags` holds 0-3 short labels (project or topic names), never sentences.
-7. If an item matters but does not fit in one line, set `needs_detail` to true and provide
+6. Skip anything already covered by the existing memories below, including near-duplicates.
+7. `tags` holds 0-3 short labels (project or topic names), never sentences.
+8. If an item matters but does not fit in one line, set `needs_detail` to true and provide
    `detail_title` plus `detail_body` (the full detail, up to about 8000 characters). Otherwise omit
    both fields.
-8. Return at most 10 memories. Few sharp memories beat many vague ones.
+9. Return at most 10 memories. Few sharp memories beat many vague ones.
 
 ## Output format
 
 Reply with strict JSON only — no markdown fences, no commentary:
 
-{"memories":[{"summary":"...","kind":"project","level":"normal","tags":["virlen-app"],"needs_detail":false}]}
+{"memories":[{"summary":"...","kind":"project","level":"normal","projectPath":"C:/code/app","tags":["virlen-app"],"needs_detail":false}]}
 
 ## Existing memories (do not repeat)
 

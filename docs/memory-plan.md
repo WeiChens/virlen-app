@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS memories (
   level             TEXT NOT NULL,             -- 'normal' | 'permanent'
   kind              TEXT NOT NULL,             -- 'user' | 'project' | 'decision' | 'fact'
   summary           TEXT NOT NULL,             -- 记忆正文，硬上限 MEMORY_SUMMARY_MAX_CHARS(150，超出截断)
+  project_path      TEXT,                      -- 项目作用域（仅 kind='project'）：可空，NULL = 不限定项目
   detail_kb_id      TEXT,                      -- 详情所在知识库（可空）
   detail_doc_id     TEXT,                      -- 详情文档 id（可空）
   tags              TEXT NOT NULL DEFAULT '[]',-- JSON 数组（工作目录 / 项目名 / 主题）
@@ -111,6 +112,46 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
 );
 -- 同步触发器与 messages_fts_ai/ad/au 同构（schema.rs 里已有范本，直接照抄改名）
 ```
+
+### 3.1.1 项目作用域（`project_path`）
+
+**问题**：`kind = 'project'` 的记忆只对某个项目有意义，但早期实现里它们会被注入到**每个**会话
+（你去改前端项目，却收到后端项目的构建命令记忆）。早期的缓解手段是「工作目录名进 `tags`」——
+标签只是给人看的，选取逻辑根本不吃它，所以等于没筛。
+
+**规则（已定稿：单向包含）**
+
+```
+命中 ⇔ 会话工作目录 == 项目路径  或  会话工作目录在项目路径之下（子目录）
+```
+
+- 工作目录为空（会话 / Agent 都没配目录）→ 项目记忆**一律不注入**（宁可少注入，不要错注入）；
+- 不限定项目的记忆（`project_path` 为空：用户偏好 / 通用事实 / **升级前的老数据**）→ 永远适用；
+- 只有 `kind = 'project'` 允许带路径（其它分类带上 = 记忆只在某个目录下可见，没人找得到）——
+  这条不变量在命令层 / 工具层 / 蒸馏落库三处都守；
+- 匹配是**纯字符串**判定（`agent::memory::scope`）：统一分隔符 / 尾斜杠 / 平台大小写，但**不 canonicalize**
+  —— 记忆里的路径是「当时那个会话的工作目录」这个标签，可能早就不存在了；相对路径也不能按进程目录解析。
+
+**路径从哪来**
+
+| 写入路径 | 项目路径取值 |
+|---|---|
+| `memory_write` 工具（会话中 AI 写） | 当前会话工作目录（`security.workspace`）—— 模型不必猜路径 |
+| `cmd_memory_write`（TS 回退路径） | 同上（由前端 `securityService.getWorkspace(sessionId)` 解析后传入） |
+| 面板新增 / 编辑 | 用户显式填写（可一键填默认工作目录）；留空 = 所有项目可见 |
+| 蒸馏（`store_distilled`） | 单会话素材 → 直接用那个会话的工作目录；多会话 → 用模型给的 `projectPath`，**但必须与当天素材里的某个工作目录是同一处**，否则丢弃（= 全局记忆） |
+
+**连带影响（改这里时别丢）**
+
+1. **注入**（`prompt::load_memory_section`）先按作用域筛，再走「永久全量 + 普通 top-k」——
+   作用域是资格赛，被筛掉的记忆**不占 top-k 名额**；
+2. **检索**（`memory_search`）同规则，且如实报出「有多少条命中因属于别的项目被藏起来」
+   （不报的话模型/用户会得出「没记过」这个错误结论）；
+3. **近重复合并**只在同一作用域内比（`store::best_near_duplicate`）—— 跨项目合并会让一方
+   再也看不到自己项目的记忆（正文只能留一份、作用域只能是一个）；
+4. **面板列表显示全部**（含别的项目的），否则用户没法管理；
+5. 老库由 `ensure_memories_project_path_column` 补列（元数据级 ALTER，**不占 `SCHEMA_VERSION`**），
+   补出来是 NULL = 不限定项目 → **升级后行为与升级前一致**，不会静默丢掉任何记忆。
 
 ### 3.2 `memory_runs` 表 —— 幂等与可观测
 

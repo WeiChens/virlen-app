@@ -21,7 +21,10 @@ use virlen_core::agent::memory::{
     clamp_summary, is_valid_kind, is_valid_level, new_memory_id, MEMORY_SUMMARY_MAX_CHARS,
 };
 // 记忆 DTO / 级别常量只有一份（住在持久化层），命令层从这里取
-use virlen_core::session_db::{MemoryRecord, MemoryRepo, SettingsRepo, MEMORY_LEVEL_NORMAL};
+use virlen_core::agent::memory::scope::MEMORY_PROJECT_PATH_MAX_CHARS;
+use virlen_core::session_db::{
+    MemoryRecord, MemoryRepo, SettingsRepo, MEMORY_KIND_PROJECT, MEMORY_LEVEL_NORMAL,
+};
 
 /// 列出记忆（设置页面板的数据源）
 #[tauri::command]
@@ -33,6 +36,11 @@ pub async fn cmd_memory_list(
 }
 
 /// 新增 / 编辑一条记忆（面板「保存」与 P1 的 `memory_write` 工具共用同一条路径）
+///
+/// 项目路径的**服务端不变量**（UI 与工具都要守住，这里是最後一道）：
+/// - 只有 `kind = project` 才能带路径（别的分类带上就变成「只在某个目录下可见」，没人找得到）；
+/// - 空白串收敛为 `None`（= 不限定项目）；
+/// - 超长拒绝（路径是用户输入，不能无界落库）。
 #[tauri::command]
 pub async fn cmd_memory_upsert(
     state: tauri::State<'_, Arc<dyn MemoryRepo>>,
@@ -56,6 +64,28 @@ pub async fn cmd_memory_upsert(
     }
     record.summary = summary;
 
+    // ⚠️ 不能直接用 `scope_for_write(kind, 传进来的路径)`（那个函数算的是「当前工作目录」）——
+    // 面板保存的是**用户显式指定**的路径，这里只做「仅 project 保留 + 空白收敛 + 长度校验」。
+    let path = if record.kind == MEMORY_KIND_PROJECT {
+        record
+            .project_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+    } else {
+        None
+    };
+    if let Some(p) = path.as_deref() {
+        if p.chars().count() > MEMORY_PROJECT_PATH_MAX_CHARS {
+            return Err(format!(
+                "项目路径过长（最多 {} 字符）",
+                MEMORY_PROJECT_PATH_MAX_CHARS
+            ));
+        }
+    }
+    record.project_path = path;
+
     state.upsert(&record).await?;
     crate::telemetry::track(
         "memory.upsert",
@@ -63,8 +93,9 @@ pub async fn cmd_memory_upsert(
             "level": record.level,
             "kind": record.kind,
             "chars": record.summary.chars().count(),
-            // 只上报「有没有详情链接」，不上报内容
+            // 只上报「有没有详情链接 / 有没有项目作用域」，不上报路径本身与内容
             "has_detail": record.detail_doc_id.is_some(),
+            "scoped": record.project_path.is_some(),
         }),
     );
     Ok(())
@@ -141,13 +172,23 @@ pub async fn cmd_memory_touch(
 ///
 /// `for_preview`（设置页看预览 / 预算行）为 `true` 时**不打截断告警埋点**：
 /// 否则每次打开面板都会抬高告警计数，指标就废了。
+///
+/// `workspace`：本次会话的工作目录（会话指定 > Agent 默认）。面板预览传设置里的**默认工作目录**，
+/// 于是预览与真实会话用的是同一套作用域规则，只是工作目录不同。
 #[tauri::command]
 pub async fn cmd_memory_prompt_section(
     memory: tauri::State<'_, Arc<dyn MemoryRepo>>,
     settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    workspace: Option<String>,
     for_preview: Option<bool>,
 ) -> Result<MemoryPromptSection, String> {
-    let section = load_memory_section(memory.inner().as_ref(), settings.inner().as_ref(), crate::telemetry::now_ms()).await;
+    let section = load_memory_section(
+        memory.inner().as_ref(),
+        settings.inner().as_ref(),
+        workspace.as_deref(),
+        crate::telemetry::now_ms(),
+    )
+    .await;
     if for_preview != Some(true)
         && (section.dropped_normal > 0 || section.dropped_permanent > 0)
     {
@@ -290,22 +331,29 @@ pub async fn cmd_memory_runs(
 // 2. 设置页 / 调试入口可以直接复用（不必新写一份查询逻辑）。
 
 /// 组装记忆操作依赖（与原生工具的 `native_tools/memory/common.rs::deps` 同口径：
-/// RAG 未初始化 → `None`，工具降级为「详情不可读写」，不影响记忆条目本身）
+/// RAG 未初始化 → `None`，工具降级为「详情不可读写」，不影响记忆条目本身）。
+///
+/// `workspace`：会话工作目录 —— 写入时给 `kind = project` 定作用域，检索时筛掉别的项目的记忆。
 fn memory_deps<'a>(
     memory: &'a dyn MemoryRepo,
     settings: &'a dyn SettingsRepo,
     session_id: Option<&'a str>,
+    workspace: Option<&'a str>,
 ) -> MemoryToolDeps<'a> {
     MemoryToolDeps {
         repo: memory,
         settings,
         rag: virlen_core::rag::get_service().ok(),
         session_id: session_id.unwrap_or(""),
+        workspace: workspace.unwrap_or(""),
         now_ms: crate::telemetry::now_ms(),
     }
 }
 
 /// `memory_search` 的等价命令（关键词检索长期记忆）
+///
+/// `workspace`：会话工作目录 —— 与注入同一套项目作用域，别的项目的记忆不会返回
+/// （结果里的 `hiddenByScope` 说明有多少条被藏起来）。
 #[tauri::command]
 pub async fn cmd_memory_search(
     memory: tauri::State<'_, Arc<dyn MemoryRepo>>,
@@ -314,8 +362,14 @@ pub async fn cmd_memory_search(
     level: Option<String>,
     kind: Option<String>,
     limit: Option<i64>,
+    workspace: Option<String>,
 ) -> Result<MemoryToolOutput, String> {
-    let deps = memory_deps(memory.inner().as_ref(), settings.inner().as_ref(), None);
+    let deps = memory_deps(
+        memory.inner().as_ref(),
+        settings.inner().as_ref(),
+        None,
+        workspace.as_deref(),
+    );
     let out = run_search(
         &deps,
         &query,
@@ -342,7 +396,12 @@ pub async fn cmd_memory_recall(
     settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
     memory_id: String,
 ) -> Result<MemoryToolOutput, String> {
-    let deps = memory_deps(memory.inner().as_ref(), settings.inner().as_ref(), None);
+    let deps = memory_deps(
+        memory.inner().as_ref(),
+        settings.inner().as_ref(),
+        None,
+        None,
+    );
     let out = run_recall(&deps, &memory_id).await?;
     crate::telemetry::track(
         "memory.recall",
@@ -355,6 +414,13 @@ pub async fn cmd_memory_recall(
 }
 
 /// `memory_write` 的等价命令（`session_id` 由前端传入，写入时记进 `source_session_id`）
+///
+/// `workspace`：会话工作目录 —— `kind = project` 时作为这条记忆的项目作用域
+/// （与原生工具同口径：模型不必猜路径）。
+///
+/// `#[allow(too_many_arguments)]`：Tauri 命令参数逐个从 JS `invoke` 传入，
+/// 收成结构体会要求前端改调用形状（与 `commands/agent.rs` 同口径）。
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn cmd_memory_write(
     memory: tauri::State<'_, Arc<dyn MemoryRepo>>,
@@ -364,11 +430,13 @@ pub async fn cmd_memory_write(
     level: Option<String>,
     detail: Option<String>,
     session_id: Option<String>,
+    workspace: Option<String>,
 ) -> Result<MemoryToolOutput, String> {
     let deps = memory_deps(
         memory.inner().as_ref(),
         settings.inner().as_ref(),
         session_id.as_deref(),
+        workspace.as_deref(),
     );
     let out = run_write(
         &deps,
@@ -386,6 +454,8 @@ pub async fn cmd_memory_write(
             "level": out.ui_data.get("level").and_then(|v| v.as_str()).unwrap_or(""),
             "kind": out.ui_data.get("kind").and_then(|v| v.as_str()).unwrap_or(""),
             "has_detail": out.ui_data.get("hasDetail").and_then(|v| v.as_bool()).unwrap_or(false),
+            // 只上报「有没有项目作用域」，不上报路径本身
+            "scoped": out.ui_data.get("projectPath").map(|v| !v.is_null()).unwrap_or(false),
             "chars": out.ui_data.get("chars").and_then(|v| v.as_i64()).unwrap_or(0),
         }),
     );

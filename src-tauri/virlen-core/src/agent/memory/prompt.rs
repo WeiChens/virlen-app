@@ -1,11 +1,13 @@
 //! 记忆注入段的**取数编排**（唯一实现，GUI 命令与 CLI 共用）
 //!
-//! 把三件事串起来：读开关 → 取记忆 → 选取并渲染。选中即返回 id 列表，供调用方在会话建成后
-//! 记一次「被使用」（`hits += 1`）—— 「什么被注入了」是可观测的，top-k 的排序输入也才成立。
+//! 把四件事串起来：读开关 → 读工作目录 → 取记忆（按项目作用域过滤）→ 选取并渲染（top-k / 预算）。
+//! 选中即返回 id 列表，供调用方在会话建成后记一次「被使用」（`hits += 1`）
+//! —— 「什么被注入了」是可观测的，top-k 的排序输入也才成立。
 //!
 //! 开关的**默认值是「开」**（已定稿）：表里没有该键（新老用户都可能没有）时按开处理，
 //! 因此「没配过」不会静默变成「记忆功能不生效」。
 
+use crate::agent::memory::scope::filter_for_workspace;
 use crate::agent::memory::{
     render_memory_section, select_for_inject, MEMORY_NORMAL_TOP_K_DEFAULT, MEMORY_NORMAL_TOP_K_MAX,
     MEMORY_PROMPT_MAX_CHARS,
@@ -65,11 +67,16 @@ pub fn top_k_from_settings(settings: &Map<String, Value>) -> usize {
 
 /// 读取并渲染注入段。
 ///
+/// `workspace` 是**本次会话的工作目录**（已解析：会话指定 > Agent 默认）：
+/// 只有「不限定项目」或「工作目录命中其项目路径」的记忆会进入候选，其余连排序都不参与。
+/// 传 `None` / 空 → 只注入不限定项目的记忆（见 `scope::applies`）。
+///
 /// 失败一律按「不注入」处理（返回空段而不是抛错）：记忆是**增强**，读不到不该让建会话失败
 /// —— 与项目规则文件「读不到就不注入」同一取舍。
 pub async fn load_memory_section(
     memories: &dyn MemoryRepo,
     settings: &dyn SettingsRepo,
+    workspace: Option<&str>,
     now_ms: i64,
 ) -> MemoryPromptSection {
     let settings_map = match settings.get_all().await {
@@ -92,7 +99,10 @@ pub async fn load_memory_section(
         }
     };
 
-    let selection = select_for_inject(&all, now_ms, top_k);
+    // 先按项目作用域筛掉不属于这个工作目录的记忆，再走「永久全量 + 普通 top-k」的选取：
+    // 作用域是资格赛，不该占用 top-k 的名额（否则一个无关项目就能把本项目的记忆挤下去）。
+    let scoped = filter_for_workspace(&all, workspace.unwrap_or(""));
+    let selection = select_for_inject(&scoped, now_ms, top_k);
     MemoryPromptSection {
         text: render_memory_section(&selection.items),
         ids: selection.items.iter().map(|m| m.id.clone()).collect(),
@@ -138,6 +148,71 @@ mod tests {
         assert_eq!(top_k_from_settings(&settings_with(&[(MEMORY_NORMAL_TOP_K_KEY, Value::from(999))])), MEMORY_NORMAL_TOP_K_MAX);
         assert_eq!(top_k_from_settings(&settings_with(&[(MEMORY_NORMAL_TOP_K_KEY, Value::from(0))])), 1, "0 会退化成「不注入普通记忆」，钳到 1");
         assert_eq!(top_k_from_settings(&settings_with(&[(MEMORY_NORMAL_TOP_K_KEY, Value::String("x".into()))])), MEMORY_NORMAL_TOP_K_DEFAULT);
+    }
+
+    /// 项目作用域：只注入「不限定项目」+「工作目录命中其项目路径」的记忆
+    #[tokio::test]
+    async fn project_scope_filters_by_workspace() {
+        let mut mine = sample_memories()[1].clone();
+        mine.id = "m_mine".into();
+        mine.summary = "本项目：构建命令是 pnpm build".into();
+        mine.project_path = Some("C:/work/app".into());
+        let mut other = mine.clone();
+        other.id = "m_other".into();
+        other.summary = "别的项目：用 cargo run".into();
+        other.project_path = Some("C:/work/other".into());
+
+        let all = vec![
+            sample_memories()[0].clone(), // 永久 + 不限定项目
+            mine,
+            other,
+        ];
+        let memories = StubMemoryRepo(all);
+        let settings = StubSettingsRepo(Map::new());
+
+        let section = load_memory_section(&memories, &settings, Some("C:/work/app/src"), 1_000).await;
+        assert!(section.text.contains("本项目：构建命令是 pnpm build"));
+        assert!(section.text.contains("用户偏好中文回复"), "不限定项目的照旧注入");
+        assert!(
+            !section.text.contains("别的项目：用 cargo run"),
+            "别的项目的记忆不得进入本会话"
+        );
+        assert!(!section.ids.contains(&"m_other".to_string()));
+
+        // 没有工作目录 → 只剩不限定项目的那条（宁可少注入，不要错注入）
+        let section = load_memory_section(&memories, &settings, None, 1_000).await;
+        assert_eq!(section.ids, vec!["m_p1".to_string()]);
+        let section = load_memory_section(&memories, &settings, Some("   "), 1_000).await;
+        assert_eq!(section.ids, vec!["m_p1".to_string()]);
+    }
+
+    /// 作用域是**资格赛**：被筛掉的记忆不占用 top-k 名额
+    #[tokio::test]
+    async fn out_of_scope_memories_do_not_consume_top_k_slots() {
+        let mut all: Vec<MemoryRecord> = (0..3)
+            .map(|i| MemoryRecord {
+                id: format!("other{}", i),
+                level: MEMORY_LEVEL_NORMAL.into(),
+                kind: "project".into(),
+                summary: format!("别的项目 {}", i),
+                hits: 100, // 热度很高：若不过滤，它们会吃光 top-k
+                project_path: Some("C:/work/other".into()),
+                ..Default::default()
+            })
+            .collect();
+        all.push(MemoryRecord {
+            id: "mine".into(),
+            level: MEMORY_LEVEL_NORMAL.into(),
+            kind: "project".into(),
+            summary: "本项目的一条".into(),
+            project_path: Some("C:/work/app".into()),
+            ..Default::default()
+        });
+
+        let memories = StubMemoryRepo(all);
+        let settings = StubSettingsRepo(settings_with(&[(MEMORY_NORMAL_TOP_K_KEY, Value::from(1))]));
+        let section = load_memory_section(&memories, &settings, Some("C:/work/app"), 1_000).await;
+        assert_eq!(section.ids, vec!["mine".to_string()]);
     }
 
     /// 桩：记忆仓储（只实现本用例需要的 list）
@@ -261,7 +336,7 @@ mod tests {
         let memories = StubMemoryRepo(sample_memories());
         let settings = StubSettingsRepo(Map::new());
 
-        let section = load_memory_section(&memories, &settings, 1_000).await;
+        let section = load_memory_section(&memories, &settings, None, 1_000).await;
         assert!(section.text.contains("## Permanent"));
         assert!(section.text.contains("用户偏好中文回复"));
         assert_eq!(
@@ -271,7 +346,7 @@ mod tests {
         );
 
         let off = StubSettingsRepo(settings_with(&[(MEMORY_ENABLED_KEY, Value::Bool(false))]));
-        let section = load_memory_section(&memories, &off, 1_000).await;
+        let section = load_memory_section(&memories, &off, None, 1_000).await;
         assert!(section.text.is_empty(), "关掉开关必须完全不注入");
         assert!(section.ids.is_empty());
     }
@@ -284,7 +359,7 @@ mod tests {
             MEMORY_NORMAL_TOP_K_KEY,
             Value::from(1),
         )]));
-        let section = load_memory_section(&memories, &settings, 1_000).await;
+        let section = load_memory_section(&memories, &settings, None, 1_000).await;
         assert_eq!(section.ids.len(), 2, "永久 1 条 + 普通 1 条");
         assert!(section.ids.contains(&"m_p1".to_string()));
     }
@@ -294,7 +369,7 @@ mod tests {
     async fn section_reports_real_chars_and_budget() {
         let memories = StubMemoryRepo(sample_memories());
         let settings = StubSettingsRepo(Map::new());
-        let section = load_memory_section(&memories, &settings, 1_000).await;
+        let section = load_memory_section(&memories, &settings, None, 1_000).await;
         assert_eq!(
             section.chars,
             section.text.chars().count(),
@@ -306,7 +381,7 @@ mod tests {
 
         // 不注入时也带着预算：面板要能显示「0 / 4000」而不是「预算未知」
         let off = StubSettingsRepo(settings_with(&[(MEMORY_ENABLED_KEY, Value::Bool(false))]));
-        let off_section = load_memory_section(&memories, &off, 1_000).await;
+        let off_section = load_memory_section(&memories, &off, None, 1_000).await;
         assert_eq!(off_section.chars, 0);
         assert_eq!(off_section.budget, MEMORY_PROMPT_MAX_CHARS);
     }
@@ -336,7 +411,7 @@ mod tests {
 
         let memories = StubMemoryRepo(all);
         let settings = StubSettingsRepo(Map::new());
-        let section = load_memory_section(&memories, &settings, 1_000).await;
+        let section = load_memory_section(&memories, &settings, None, 1_000).await;
         assert!(section.dropped_normal > 0, "必然要裁普通记忆");
         assert!(section.chars <= section.budget);
         assert_eq!(section.text.chars().count(), section.chars);

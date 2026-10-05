@@ -8,13 +8,16 @@ use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
 /// - `repo`：记忆仓储（库打不开时是 `NoopMemoryRepo` → 工具如实回「本地存储不可用」）；
 /// - `rag`：RAG 服务未初始化（无库环境 / 浏览器 dev）→ `None`，工具降级为
 ///   「详情落不了库 / 读不到详情」，**不影响**记忆条目本身；
-/// - `session_id`：写入时记进 `source_session_id`，让每条记忆都能溯源到会话。
+/// - `session_id`：写入时记进 `source_session_id`，让每条记忆都能溯源到会话；
+/// - `workspace`：会话工作目录（`security.workspace`）—— `memory_write` 靠它给项目记忆定作用域，
+///   `memory_search` 靠它筛掉别的项目的记忆。
 pub(super) fn deps<'a>(ctx: &'a NativeToolCtx<'_>) -> MemoryToolDeps<'a> {
     MemoryToolDeps {
         repo: ctx.memory,
         settings: ctx.settings,
         rag: crate::rag::get_service().ok(),
         session_id: ctx.session_id,
+        workspace: &ctx.security.workspace,
         now_ms: crate::telemetry::now_ms(),
     }
 }

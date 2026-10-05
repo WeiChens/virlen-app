@@ -45,6 +45,11 @@ pub struct DistilledMemory {
     /// `normal` | `permanent`（只有模型明确写了 `permanent` 才会是它）
     pub level: String,
     pub tags: Vec<String>,
+    /// 硬提议的**项目路径**（仅 `kind = project` 有意义）。
+    ///
+    /// ⚠️ 这里只是「模型说它是哪个项目的」，**不直接落库**：[`crate::agent::memory::store`]
+    /// 会拿它去当天素材的工作目录里对账，对不上就当全局记忆（模型没见过的东西不许进库）。
+    pub project_path: Option<String>,
     /// 需要落知识库的详情（标题与正文成对出现；否则都是 `None`）
     pub detail_title: Option<String>,
     pub detail_body: Option<String>,
@@ -272,11 +277,20 @@ fn parse_distill_item(item: &Value) -> Option<DistilledMemory> {
         .unwrap_or_default();
 
     let (detail_title, detail_body) = parse_detail(item);
+    // 项目路径：只接受字符串（键名宽容：提示词写 `projectPath`，模型偶尔会写成蛇形）
+    let project_path = item
+        .get("projectPath")
+        .or_else(|| item.get("project_path"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
     Some(DistilledMemory {
         summary,
         kind,
         level,
         tags,
+        project_path,
         detail_title,
         detail_body,
     })
@@ -438,6 +452,26 @@ mod tests {
         let raw = r#"{"memories":[{"summary":"用户要求所有回复用中文","kind":"user","level":"permanent"}]}"#;
         let items = parse_distill_response(raw).unwrap();
         assert_eq!(items[0].level, MEMORY_LEVEL_PERMANENT);
+    }
+
+    #[test]
+    fn project_path_is_parsed_leniently_but_not_trusted_here() {
+        // 键名宽容（提示词写 camelCase，模型偶尔会写成蛇形）+ 空白收敛
+        let raw = r#"{"memories":[
+            {"summary":"a","kind":"project","projectPath":"  C:/code/app  "},
+            {"summary":"b","kind":"project","project_path":"/home/me/proj"},
+            {"summary":"c","kind":"project","projectPath":"   "},
+            {"summary":"d","kind":"project"},
+            {"summary":"e","kind":"user","projectPath":"C:/code/app"}
+        ]}"#;
+        let items = parse_distill_response(raw).unwrap();
+        assert_eq!(items[0].project_path.as_deref(), Some("C:/code/app"));
+        assert_eq!(items[1].project_path.as_deref(), Some("/home/me/proj"));
+        assert_eq!(items[2].project_path, None, "空白 = 没给");
+        assert_eq!(items[3].project_path, None);
+        // ⚠️ 解析**不**判断 kind：user 也带路径时这里原样保留，由 store 的 `resolve_project_path`
+        // 决定「非 project 一律不落库」—— 解析层只管形状，不管语义（两者各自单测）
+        assert_eq!(items[4].project_path.as_deref(), Some("C:/code/app"));
     }
 
     #[test]
