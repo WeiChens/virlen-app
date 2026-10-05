@@ -23,9 +23,13 @@
  *     commandReject     → tool-ui 触发拒绝/暂存（带 interactionId），tool 层收到后 reject
  *
  *   终态广播：
- *     interactionSettled → 某个交互已被应答（允许/拒绝/暂存）。
+ *     interactionSettled → 某个交互已结束（允许 / 拒绝 / 暂存 / `expired` = 没人回答）。
  *       用途：**第二个应答端**（手机 / 另一个弹窗）据此收起自己的 UI，避免重复应答。
  *       应答的发起端自己已经收起，收到该事件应为幂等无操作。
+ *
+ *       ⚠️ 手机控制侧的注册表（`bridge/interaction-source.ts`）**也发**这个事件：手机批完、
+ *       或交互被收敛（会话被取消 / 被删除）时，靠它收起桌面上的弹窗。
+ *       那种情况下会把共享包的 `expired` 映射成 `reject`（本机监听方只看 id，不看 outcome）。
  *
  *   终端内确认（Step 2 ①）—— **按 toolCallId 路由**（组件本来就按 toolCallId 渲染）：
  *     terminalConfirmSubmit / terminalConfirmCancel
@@ -93,8 +97,14 @@ export interface AuthorizationRequest extends InteractionRef {
   sandboxBypass?: boolean
 }
 
-/** 一次交互的最终归宿（`interactionSettled` 的载荷） */
-export type InteractionOutcome = 'allow' | 'reject' | 'shelve'
+/**
+ * 一次交互的最终归宿（`interactionSettled` 的载荷）。
+ *
+ * `expired` = **没人回答**：交互随运行结束被收敛（桌面点停止 / 手机取消或删除会话 / 引擎放弃）。
+ * 与共享包 `virlen-remote` 的 `InteractionOutcome` 里那个 `expired` 同名同义（1:1 透传，不再近似）。
+ * 它和 `reject`（用户点了拒绝）是两件事 —— 手机端与埋点都靠这个区别判断「谁答的 / 有没有人答」。
+ */
+export type InteractionOutcome = 'allow' | 'reject' | 'shelve' | 'expired'
 
 type ToolInteractEvents = {
   // user_choice

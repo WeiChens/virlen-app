@@ -18,6 +18,7 @@ import toolInteractEvent from '@/events/toolInteractEvent'
 import { toolOutputStore } from '@/infrastructure/tools/output-store'
 import { track } from '@/utils/telemetry'
 import { v4 } from '@/utils/uuid'
+import { InteractionEnded } from './interaction-end'
 
 class InteractionShelved extends Error {
   shelveMessage: string
@@ -156,6 +157,26 @@ export function createCommandConfirmHandles(
     },
   )
 
+  /**
+   * 运行结束时的收尾：把**还没被回答**的那次交互收敛掉（F4）。
+   *
+   * 语义、顺序与取值同 `user_choice.ts::endPending`（那里有完整的「为何必须在 cleanup 里做」）——
+   * 一句话：`cleanup()` 之后监听器就拆了，而「运行结束」≠「用户答过了」。
+   */
+  function endPending(): void {
+    const interactionId = pendingInteractionId
+    if (!interactionId) return
+    const reject = interactionReject
+    pendingInteractionId = null
+    interactionResolve = null
+    interactionReject = null
+    pendingCommand = ''
+    pendingToolCallId = ''
+    pendingApprovalId = ''
+    toolInteractEvent.emit('interactionSettled', interactionId, 'expired')
+    reject?.(new InteractionEnded())
+  }
+
   return {
     handler: async (_type: string, data: Record<string, any>) => {
       pendingCommand = data.command || data.desc || ''
@@ -193,6 +214,8 @@ export function createCommandConfirmHandles(
       })
     },
     cleanup: () => {
+      // 先收敛未答的交互（否则监听器一拆，它就永远收不掉了）
+      endPending()
       offResolve()
       offReject()
     },
@@ -311,12 +334,18 @@ export function createNativeCommandConfirmHandles(
         action: 'allow',
         latency_ms: showTime ? Date.now() - showTime : undefined,
       })
-      toolOutputStore.clearPendingConfirm(toolCallId)
-      // ⚠️ 必须回传命令正文：用户可能改过，只回「批准」会让 Rust 跑旧命令
-      resolve(JSON.stringify({ approved: true, command }))
+      /*
+       * ⚠️ **先广播终态、再清 `pendingConfirm`**（2026-10 埋点失真）：桥接层的注册表把
+       * 「待确认消失」当成一次本机观察到的终态（具体终态未知 → `expired`），而它是**同步**触发的
+       * —— 先清后播的话，注册表已按 `expired` 落了终态，手机端这条**被放行**的记录就显示成
+       * 「不知怎么结束的」（本应是 `allow`）。
+       */
       if (interactionId) {
         toolInteractEvent.emit('interactionSettled', interactionId, 'allow')
       }
+      toolOutputStore.clearPendingConfirm(toolCallId)
+      // ⚠️ 必须回传命令正文：用户可能改过，只回「批准」会让 Rust 跑旧命令
+      resolve(JSON.stringify({ approved: true, command }))
     },
   )
   const offTermCancel = toolInteractEvent.on(
@@ -336,13 +365,32 @@ export function createNativeCommandConfirmHandles(
         latency_ms: showTime ? Date.now() - showTime : undefined,
       })
       track('interaction.cancel', { phase: 'command_confirm' })
-      toolOutputStore.clearPendingConfirm(toolCallId)
-      reject('cancelled')
+      // 同 offTermSubmit：终态必须先广播（否则被注册表的 `expired` 抢先落）
       if (interactionId) {
         toolInteractEvent.emit('interactionSettled', interactionId, 'reject')
       }
+      toolOutputStore.clearPendingConfirm(toolCallId)
+      reject('cancelled')
     },
   )
+
+  /**
+   * 运行结束时的收尾（原生路径）：除了 Promise，还要撤掉**终端内确认**那条待确认命令行
+   * —— run 都结束了，它已经不可能再被确认（否则终端块上会留一行点不动的命令）。
+   */
+  function endPending(): void {
+    const interactionId = pendingInteractionId
+    if (!interactionId) return
+    const reject = interactionReject
+    const toolCallId = pendingToolCallId
+    pendingInteractionId = null
+    interactionResolve = null
+    interactionReject = null
+    pendingApprovalId = ''
+    if (toolCallId) toolOutputStore.clearPendingConfirm(toolCallId)
+    toolInteractEvent.emit('interactionSettled', interactionId, 'expired')
+    reject?.(new InteractionEnded())
+  }
 
   return {
     handler: async (_type: string, data: Record<string, any>) => {
@@ -399,6 +447,8 @@ export function createNativeCommandConfirmHandles(
       })
     },
     cleanup: () => {
+      // 先收敛未答的交互（含终端内确认的待确认命令行）
+      endPending()
       offResolve()
       offReject()
       offTermSubmit()

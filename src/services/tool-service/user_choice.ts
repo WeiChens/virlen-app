@@ -13,6 +13,7 @@ import toolInteractEvent from '@/events/toolInteractEvent'
 import { track, getSessionTrace } from '@/utils/telemetry'
 import type { ToolResult } from '@/domain/tools/types'
 import { v4 } from '@/utils/uuid'
+import { InteractionEnded } from './interaction-end'
 
 /**
  * 用户暂存交互 — 不通知 AI，直接中断当前 tool 循环，
@@ -96,6 +97,29 @@ export function createUserChoiceHandles(
     },
   )
 
+  /**
+   * 运行结束时的收尾：把**还没被回答**的那次交互收敛掉（F4）。
+   *
+   * 为何必须在 `cleanup()` 里做：`cleanup()` 一跑监听器就拆了，此后任何应答事件都到不了这里
+   * —— 而「运行结束」≠「用户答过了」：桌面点停止、手机取消 / 删除会话、引擎放弃这次交互请求，
+   * 这四条路上这次交互都还没被回答。不收敛的两个后果：
+   *  ① 这个 Promise 永不 settle → `handleUserInteractionRequest` 的 `await` 永远挂着、闭包被一直引用；
+   *  ② 手机侧那张卡片永远不消失（没人告诉它“这条已经结束了”）→ 点一下得「已在电脑上处理」。
+   *
+   * ⚠️ 顺序与取值：**先广播终态、再 reject**（桌面弹窗与手机侧注册表都靠那条事件收 UI），
+   * 且广播用 `'expired'`（**没人回答**）而不是 `'reject'`（用户拒绝）—— 两者在手机端与埋点里含义不同。
+   */
+  function endPending(): void {
+    const interactionId = pendingInteractionId
+    if (!interactionId) return
+    const reject = interactionReject
+    pendingInteractionId = null
+    interactionResolve = null
+    interactionReject = null
+    toolInteractEvent.emit('interactionSettled', interactionId, 'expired')
+    reject?.(new InteractionEnded())
+  }
+
   return {
     handler: async (type: string, data: Record<string, any>) => {
       showTime = Date.now()
@@ -123,6 +147,8 @@ export function createUserChoiceHandles(
       })
     },
     cleanup: () => {
+      // 先收敛未答的交互（否则监听器一拆，它就永远收不掉了）
+      endPending()
       offResolve()
       offReject()
     },

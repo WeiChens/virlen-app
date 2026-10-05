@@ -14,7 +14,7 @@
 import { describe, it, expect } from 'vitest'
 import toolInteractEvent from '@/events/toolInteractEvent'
 import { registerPendingApproval } from '@/infrastructure/tools/execute/common'
-import { createNativeCommandConfirmHandles } from '@/services/tool-service/command_confirm'
+import { createCommandConfirmHandles, createNativeCommandConfirmHandles } from '@/services/tool-service/command_confirm'
 import { createUserChoiceHandles } from '@/services/tool-service/user_choice'
 import { toolOutputStore } from '@/infrastructure/tools/output-store'
 import type { ToolExecutorResponse } from '@/domain/tools/types'
@@ -332,5 +332,75 @@ describe('interactionId 精确路由（多交互并发不串扰）', () => {
     offShow()
     offSettled()
     handles.cleanup()
+  })
+})
+
+/**
+ * 运行结束（`cleanup()`）时必须收敛未答的交互（F4）
+ *
+ * `cleanup()` 是**唯一**的「运行结束」钩子（`services/chat/flow.ts` 的 finally）—— 它一跑，
+ * 各 handles 的监听器就拆了。而「运行结束」≠「用户答过了」：桌面点停止 / 手机取消或删除会话 /
+ * 引擎放弃这次交互请求，这四条路上这次交互都还没被回答。不收敛的三个后果：
+ *   ① 那个 Promise 永不 settle（`handleUserInteractionRequest` 的 await 永远挂着、闭包被一直引用）；
+ *   ② 终端块上留一行点不动的「待确认命令行」；
+ *   ③ 手机侧那张卡片永远不消失 → 点一下得「该请求已在电脑上处理」。
+ *
+ * ⚠️ 终态是 `expired`（**没人回答**）而不是 `reject`（用户拒绝）：这两件事在手机端与埋点里含义不同。
+ */
+describe('运行结束时收敛未答的交互（F4）', () => {
+  it('终端内确认：清 pendingConfirm + 终态 expired + Promise 收掉', async () => {
+    const handles = createNativeCommandConfirmHandles('s-f4-1')
+    const settled: Array<[string, string]> = []
+    const offSettled = toolInteractEvent.on(
+      'interactionSettled',
+      (interactionId, outcome) => {
+        settled.push([interactionId, outcome])
+      },
+    )
+    const p = handles.handler('confirm_command_native', {
+      presentation: 'terminal',
+      desc: 'npm login',
+      toolCallId: 'tc-F4',
+    })
+    const interactionId =
+      toolOutputStore.get('tc-F4')!.pendingConfirm!.interactionId!
+
+    // 运行结束（flow.ts 的 finally）—— 用户一直没作答
+    handles.cleanup()
+
+    expect(toolOutputStore.get('tc-F4')?.pendingConfirm).toBeUndefined()
+    expect(settled).toEqual([[interactionId, 'expired']])
+    await expect(p).rejects.toMatchObject({ name: 'InteractionEnded' })
+
+    offSettled()
+    toolOutputStore.remove('tc-F4')
+  })
+
+  it('弹窗授权：终态 expired + Promise 收掉', async () => {
+    const handles = createCommandConfirmHandles('s-f4-2')
+    const settled: Array<[string, string]> = []
+    const offSettled = toolInteractEvent.on(
+      'interactionSettled',
+      (interactionId, outcome) => {
+        settled.push([interactionId, outcome])
+      },
+    )
+    const shown: string[] = []
+    const offShow = toolInteractEvent.on('showAuthorization', (payload) => {
+      shown.push(payload.interactionId)
+    })
+    const p = handles.handler('confirm_command', {
+      desc: 'rm -rf /tmp/x',
+      toolCallId: 'tc-F4-M',
+    })
+    expect(shown).toHaveLength(1)
+
+    handles.cleanup()
+
+    expect(settled).toEqual([[shown[0], 'expired']])
+    await expect(p).rejects.toMatchObject({ name: 'InteractionEnded' })
+
+    offSettled()
+    offShow()
   })
 })

@@ -32,6 +32,7 @@ import {
   buildPairingPayload,
   roomFor,
   type GrantRecord,
+  type HostEmit,
   type IceServerInit,
   type PairingPayload,
   type SignalingChannel,
@@ -39,6 +40,7 @@ import {
 } from 'virlen-remote'
 import { hashText, urlHost } from '@/utils/telemetry'
 import { AuditLog, type AuditPersist } from './audit'
+import { createInteractionRegistry, wireInteractionSources } from './interaction-source'
 import type { InteractionRegistry } from './interaction-registry'
 import { LinkKindWatcher, transferTierOf, type LinkKind } from './link-kind'
 import { PairingStore, type PairingSnapshot } from './pairing'
@@ -109,6 +111,21 @@ export interface PhoneControlOptions {
    * 不传则内部新建（仅内存）。
    */
   audit?: AuditLog
+  /**
+   * 复用调用方持有的**待应答交互注册表**（设置页 store 传入）。
+   *
+   * 为什么必须能注入（2026-10 真机缺陷）：注册表原先归**服务实例**所有，而服务实例会在
+   * 「改 ICE」时被换掉（`RTCPeerConnection` 的 `iceServers` 只能构造时给，见
+   * `phoneControlStore.rebuildService`）—— 换一次就把排队中的交互连表一起丢掉：
+   * 手机上那张卡片变成点不动的僵尸（点一下得 `not-found`），而电脑侧弹窗与引擎仍在等。
+   * 把表交给 store 持有（与配对表、审计同一套做法），启停 / 改 ICE 换的只是「谁在用这张表」。
+   *
+   * ⚠️ 注入时**推送出口由调用方给**（表的 `emit` 必须指向「当前那个服务实例」，
+   * 见 `emitToLink`）；本类只负责接线，且生命周期 **= 启用**（`enable()` 挂 / `disable()` 解，
+   * 见 `attachInteractions` / `detachInteractions`）—— 停用时不再登记、也不再有
+   * `phone.interaction.*` 埋点，而表里的条目**不动**（远端下线 ≠ 交互结束）。
+   */
+  interactions?: InteractionRegistry
   /** 审计落盘（旁路）。Tauri 下接 Rust JSONL 追加。 */
   auditPersist?: AuditPersist
   /** 桌面侧提示（手机批准高风险操作时，§16.3-2）。 */
@@ -273,10 +290,51 @@ export class PhoneControlService {
    */
   private readonly kindWatch = new LinkKindWatcher((kind) => this.onLinkKind(kind))
 
+  /** 服务级审计（与交互注册表同一份）—— 见构造器里的说明。 */
+  private readonly auditLog: AuditLog
+  /**
+   * 解绑本机交互来源（`toolInteractEvent` → 注册表）—— 见 `attachInteractions` / `detachInteractions`。
+   *
+   * 生命周期 = **启用**：`enable()` 挂、`disable()` 解。**非 `null` 即表示「在挂」**，
+   * 因此它同时是「只接一次线」的护栏。
+   */
+  private detachInteractionSources: (() => void) | null = null
+
   constructor(private readonly options: PhoneControlOptions) {
     this.base = normalizeBase(options.signalUrl)
     this.ownsPairing = options.pairing == null
     this.pairing = options.pairing ?? new PairingStore()
+    /*
+     * ⚠️ 审计 + 交互注册表是**服务级**的，在 `ownsPairing` 的提前 return **之前**建 ——
+     * 它们不能挂在链路上（见 `PhoneBridgeOptions.interactions` 的说明）。
+     *
+     * 审计先建：注册表与链路要**共用同一份**（否则手机侧的批准会写进一个链路级对象，
+     * 设置页的「操作记录」只看得见同一链路生命周期内的那几条）。
+     */
+    this.auditLog = options.audit ?? new AuditLog(undefined, options.auditPersist)
+    /*
+     * 交互注册表：优先用调用方注入的那一份（设置页 store 持有 → **跨服务实例存活**，
+     * 见 `options.interactions` 的说明）；不注入时自建（单测 / 独立使用）。
+     *
+     * ⚠️ 构造时**不接线**（接线随启用走，见 `attachInteractions`）：表存在 ≠ 有远端在等着应答。
+     * 把接线留在构造里，会让「启用过又关掉」的用户在关闭期间继续登记并上报
+     * `phone.interaction.*`（远端根本没人能应答）。
+     * 表本身没有“销毁”这个概念 —— 注入态下换实例不碰它，排队中的交互不受影响。
+     */
+    this.interactions =
+      options.interactions ??
+      createInteractionRegistry({
+        /*
+         * 推到**当前链路**：链路重建后自动指到新链路；此刻没有链路（未启用 / 正在重开）时
+         * 什么都不做 —— 待应答条目仍留在表里，手机连上后靠 `host.interaction.list` 快照补齐。
+         * 走 `bridge.emit` 而不是直接 `endpoint.emit`：那里有出站闸门（未握手不给推）与推送埋点。
+         */
+        emit: (topic, payload) => {
+          this.emitToLink(topic, payload)
+        },
+        audit: this.auditLog,
+        notify: options.notify,
+      })
     // 注入的配对表：落盘 + 变更通知都在调用方那边（参见 options.pairing 的说明）
     if (!this.ownsPairing) return
     const persistence = options.persistence
@@ -385,9 +443,28 @@ export class PhoneControlService {
     this.recoverTimer = null
   }
 
-  /** 待应答交互注册表（M4）；未启用时为 `null`。 */
-  get interactions(): InteractionRegistry | null {
-    return this.bridge?.interactions ?? null
+  /**
+   * 待应答交互注册表（M4）—— **服务级，跨链路存活**。
+   *
+   * ⚠️ 以前这里是 `this.bridge?.interactions ?? null`（一条链路一份）—— 那正是
+   * 「AI 调 `user_choice` 时手机端看不到、点一下却提示『该请求已在电脑上处理』」的根因：
+   * 电脑侧换链路会把还没被应答的交互一起丢掉，而手机侧再拉快照也拿不回来了。
+   * 现在它属于服务：链路重建时会被注入新链路（`startLink`）。
+   * 未启用时也**不再是 null**（表里可能正等着某条交互）。
+   * 可由调用方注入（`options.interactions`，设置页 store 持有）—— 那样它连**服务实例**的更替
+   * （改 ICE）都能跨越。
+   */
+  readonly interactions: InteractionRegistry
+
+  /**
+   * 把事件推给**当前**链路（没有链路 / 没握手 → 丢弃；走 `bridge.emit`，保留出站闸门与推送埋点）。
+   *
+   * 为什么对外暴露：交互注册表的推送出口必须是「**当前**那个服务实例」—— 表可以由调用方持有
+   * 从而跨服务实例存活（`options.interactions`），而服务实例在改 ICE 时会被更换。
+   * 注入方因此需要一个稳定的转发入口：`(t, p) => store.service?.emitToLink(t, p)`。
+   */
+  emitToLink: HostEmit = (topic, payload) => {
+    this.bridge?.emit(topic, payload)
   }
 
   /** 信令房间号 —— **由电脑设备 key 派生**（`roomFor`，与手机端同一份实现）。 */
@@ -475,7 +552,38 @@ export class PhoneControlService {
     if (!this.ticket) this.issueTicket()
     // 每次启用（含重新启用）都用新票：旧票据靠 TTL 自然失效，不断别人的在途扫码
     this.rotateTicketIfStale()
+    // 先挂上本机交互来源，再开链路（见 attachInteractions / detachInteractions）
+    this.attachInteractions()
     this.startLink()
+  }
+
+  /**
+   * 挂上本机交互来源（提问 / 授权 / 终端确认 → 注册表）。**同一张表只接一次线。**
+   *
+   * 与 `detachInteractions` 成对，生命周期 = **启用**。
+   */
+  private attachInteractions(): void {
+    if (this.detachInteractionSources) return
+    this.detachInteractionSources = wireInteractionSources(this.interactions)
+  }
+
+  /**
+   * 解绑本机交互来源（停用 / 释放）。
+   *
+   * ⚠️ 为什么停用也要解绑（2026-10 复查）：接线订阅的是**全局** `toolInteractEvent`，与链路无关 ——
+   * 不解绑的话，用户「启用过再关掉」之后，桌面每次提问 / 授权仍会登记并上报 `phone.interaction.*`
+   *（远端根本没人能应答，纯噪音），而这些登记的收敛还得靠「桌面应答必广播 `interactionSettled`」
+   * 这条**别的模块**的不变量兜着（跨模块隐式依赖，没有测试钉住它）。
+   *
+   * ⚠️ 表里的条目**不清**：它们代表「电脑侧真正还在等的交互」，本机弹窗与 handles 都不受影响，
+   * 重新启用后仍在表里（手机连上即可应答）。已知且接受的边界：停用**期间**在桌面答掉的那些交互
+   * 不会再被收敛（此刻本机观察不到）→ 重新启用后手机可能看到一张点一下就提示「已在电脑上处理」
+   * 的卡片。刻意如此 —— 清空它只能走 `settle()`，而那条会**同步回声**到本机、把桌面正在等的弹窗
+   * 收掉（引擎随之卡在等回执上），代价远大于收益。
+   */
+  private detachInteractions(): void {
+    this.detachInteractionSources?.()
+    this.detachInteractionSources = null
   }
 
   /**
@@ -507,8 +615,10 @@ export class PhoneControlService {
       appVersion: this.options.appVersion,
       pairing: this.pairing,
       confirmPair: this.options.confirmPair,
-      audit: this.options.audit,
+      // 服务级审计 + 服务级交互注册表：两者都**不随链路销毁**
+      audit: this.auditLog,
       auditPersist: this.options.auditPersist,
+      interactions: this.interactions,
       notify: this.options.notify,
       // ⚠️ 必须开这道闸门：房间号由设备 key 派生，「把它踢出房间」做不到 —— 被移除的手机随时
       //    能重连。只有它能让「移除」真的生效（详见 `PhoneBridgeOptions.requireAuthorization`）。
@@ -706,14 +816,31 @@ export class PhoneControlService {
     this.setStatus(status, detail)
   }
 
-  /** 停用：断开链路并释放接口层。 */
+  /** 停用：断开链路并释放接口层（**连本机交互来源一起解绑**，见 `detachInteractions`）。 */
   disable(): void {
     traceLinkDisable({ reason: 'disable', uptimeMs: this.enabledAt ? Date.now() - this.enabledAt : 0 })
+    // 远端下线了：本机交互来源一并解绑，否则关闭期间仍在登记 + 上报（见 detachInteractions）
+    this.detachInteractions()
     // 停用是「从头再来」：拒绝结论与待踢的定时器都到此为止（否则它们会打在重新启用后的新链路上）
     this.clearRejectNotice()
     this.teardownLink()
     this.enabledAt = 0
     this.setStatus('disabled')
+  }
+
+  /**
+   * 释放**服务级**资源（调用方决定不再使用本服务时调）。
+   *
+   * 就是 `disable()` —— 它已经解绑了本机交互来源（那个全局监听器不解绑，换了实例就成了悬空监听）。
+   * 配对表 / 审计 / **注入的交互注册表**都不动 —— 它们归调用方持有，也不随实例更替而丢。
+   *
+   * ⚠️ 与 `disable()` 的区别：`disable()` 之后还能 `enable()`；`dispose()` 是「不再复用这个实例」。
+   * 两者对注册表的处置**相同**（都不清空、都解绑接线）—— 这正是「改 ICE 换实例后条目仍在」的前提：
+   * `rebuildService()` 是「dispose 旧的 + enable 新的」，而 `enableAsync` 在 identity / ICE 都已解析时
+   * **整段同步执行**，故这条路径上不存在「接线断着」的窗口。
+   */
+  dispose(): void {
+    this.disable()
   }
 
   private buildRtcTransport(): RtcTransport {

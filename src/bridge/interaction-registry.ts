@@ -12,6 +12,10 @@
  *  - 单测可以注入假 sink，断言「手机点允许 → 电脑侧收到的载荷与桌面点击**完全同形**」；
  *  - 未来把交互搬到别处（如 Rust 侧审批）只需换一个 sink 实现，本类的校验逻辑不动。
  *
+ * ⚠️ **终态必须通知两端**（2026-10）：`emit` 把 `interaction.resolved` 推给**手机**，
+ * `notifyLocalSettled` 通知**本机**（收起桌面上那张弹窗）。缺任一端都会留下
+ * 「用户看得见、却点不动」的僵尸弹窗。
+ *
  * ⚠️ **高风险批准必须带 `confirmed: true`**：校验在这里做（服务端权威），
  * 手机 UI 的二次确认只是「第一道摩擦」——§16.2 明确要求两侧独立成立。
  */
@@ -55,6 +59,20 @@ export interface InteractionRegistryDeps {
   audit?: AuditLog
   /** 桌面侧提示（手机批准高风险操作时提醒电脑前的人，§16.3-2）。 */
   notify?: (text: string) => void
+  /**
+   * 把终态同步广播给**本机**应答端（桌面 `tool-ui` 据此收掉那张弹窗）。
+   *
+   * 为什么必须有（2026-10 真机缺陷）：`emit` 只到**手机**，于是「谁先应答」决定了另一端的下场 ——
+   *  - 手机先应答 → 桌面弹窗没人收，用户看到一张点不动的僵尸弹窗（再点一次就是对同一条交互重复应答）；
+   *  - 电脑侧把交互收敛成终态（`settleBySession`：手机端取消会话 / 删除会话）→ 桌面同样没人收。
+   * 落点是 `toolInteractEvent.interactionSettled`（注入，见 `interaction-source.ts`）。
+   * ⚠️ 桌面自己应答时**不需要**这条（桌面各 handles 应答后会自己广播，见
+   * `services/tool-service/{user_choice,command_confirm}.ts`），故本回调**必须幂等**。
+   */
+  notifyLocalSettled?: (
+    interactionId: string,
+    outcome: InteractionOutcome,
+  ) => void
   /** 现在（可注入，便于测试）。 */
   now?: () => number
 }
@@ -62,6 +80,17 @@ export interface InteractionRegistryDeps {
 export class InteractionRegistry {
   private readonly pending = new Map<string, InteractionDTO>()
   private readonly now: () => number
+
+  /**
+   * 正在处理「手机应答」的交互 id（只在 `answer()` 的**同步窗口内**存活）。
+   *
+   * 为何必需：`InteractionSink` 的落点是**本机既有的交互事件**（`resolve` / `commandResolve`…），
+   * 而本机 handles 应答成功后又会广播 `interactionSettled`（那是给「第二个应答端」收 UI 用的）。
+   * 那条广播会**同步**回到本注册表 —— 不压住它，它会先于 `answerInner` 把条目按 `by:'host'`
+   * 收掉：手机端于是把自己刚批的那一下显示成「电脑已处理」，`phone.interaction.resolved.by`
+   * 也永远失真（排查「到底谁答的」时这个字段是唯一的依据）。
+   */
+  private readonly answering = new Set<string>()
 
   constructor(private readonly deps: InteractionRegistryDeps) {
     this.now = deps.now ?? (() => Date.now())
@@ -108,10 +137,43 @@ export class InteractionRegistry {
       pending_ms: dto ? this.now() - dto.createdAt : undefined,
       pending_remaining: this.pending.size,
     })
+    // 本机（桌面）也要收起那张弹窗 —— `emit` 只把 `interaction.resolved` 推给手机
+    this.deps.notifyLocalSettled?.(interactionId, outcome)
+  }
+
+  /**
+   * 本机应答端（桌面弹窗 / 终端确认块）处理了该交互。
+   *
+   * ⚠️ **凡「本机观察到的终态」都走这里**，不要直调 `settle`。本机观察有三种：
+   * 桌面 handles 的 `interactionSettled`、终端 `pendingConfirm` 消失、本机自己收敛。
+   * 三种都可能在**手机正在应答**时同步触发，而那一条必须留给手机自己落终态（见 `answering`）。
+   * 与 `settle(…, 'host')` 的唯一区别就是这个让位。
+   */
+  settleByLocal(interactionId: string, outcome: InteractionOutcome): void {
+    if (this.answering.has(interactionId)) return
+    this.settle(interactionId, outcome, 'host')
   }
 
   has(interactionId: string): boolean {
     return this.pending.has(interactionId)
+  }
+
+  /**
+   * 按 `toolCallId` 找**终端内确认**那条（`presentation: 'terminal'`）。
+   *
+   * 为什么由注册表提供：这个查询原先记在 `wireInteractionSources` 的**接线级** Map 里，
+   * 接线被重挂（改 ICE → 换服务实例 → 旧实例 `dispose()` 解绑、新实例重新接线）就空了 ——
+   * 而表是**跳实例存活**的（那正是上一条不变量的内容），所以「这条终端确认还在不在等」
+   * 只能问表，不能问接线。
+   *
+   * 线性扫描（队列通常 0~2 条）；调用方先判 `size` 短路（这是个每次工具输出都会走的热路径）。
+   */
+  findTerminalByToolCall(toolCallId: string): InteractionDTO | undefined {
+    if (!toolCallId) return undefined
+    for (const dto of this.pending.values()) {
+      if (dto.presentation === 'terminal' && dto.toolCallId === toolCallId) return dto
+    }
+    return undefined
   }
 
   /**
@@ -157,7 +219,14 @@ export class InteractionRegistry {
   answer(params: AnswerParams): AnswerResult {
     const pending = this.pending.get(params.interactionId)
     const pendingMs = pending ? this.now() - pending.createdAt : undefined
-    const result = this.answerInner(params)
+    // 标记「这一条正在由手机应答」—— sink 会同步触发本机回执链，见 `answering`
+    this.answering.add(params.interactionId)
+    let result: AnswerResult
+    try {
+      result = this.answerInner(params)
+    } finally {
+      this.answering.delete(params.interactionId)
+    }
     track(PHONE_EVENTS.interactionAnswer, {
       interaction_id: params.interactionId,
       session_id: pending?.sessionId || undefined,

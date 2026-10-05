@@ -31,7 +31,7 @@ import { Acl, DEFAULT_CAPABILITIES, type Capability } from './acl'
 import { AuditLog, type AuditEntry, type AuditPersist } from './audit'
 import { PairingStore } from './pairing'
 import { SubscriptionRegistry } from './subscription'
-import { attachInteractionSources } from './interaction-source'
+import { attachInteractionSources, type InteractionHost } from './interaction-source'
 import { InteractionRegistry } from './interaction-registry'
 import { createDesktopHostSource, type HelloOutcome } from './host-source'
 import { createStoreBridge, type StoreBridge } from './store-bridge'
@@ -45,7 +45,7 @@ export { classifyApproval, KNOWN_PERMS } from './approval-policy'
 export type { ApprovalDescriptor, ApprovalPolicy } from './approval-policy'
 export { InteractionRegistry, normalizeChoiceAnswer } from './interaction-registry'
 export type { InteractionSink, InteractionRegistryDeps, ChoiceAnswer } from './interaction-registry'
-export { attachInteractionSources } from './interaction-source'
+export { attachInteractionSources, createInteractionRegistry } from './interaction-source'
 export type { AttachInteractionOptions, InteractionHost } from './interaction-source'
 export { PairingStore, DEFAULT_DEVICE_NAME, DEVICE_NAME_MAX, normalizeDeviceName } from './pairing'
 export type { PairedDevice, PairingSnapshot, AuthorizationResult } from './pairing'
@@ -157,6 +157,27 @@ export interface PhoneBridgeOptions {
    * 不传 = 永远 `full`（老行为，一个字节都不少发）。
    */
   transferTier?: () => TransferTier
+  /**
+   * 复用**服务级**交互注册表（`PhoneControlService` 持有；不传则本函数自建一份、随链路销毁）。
+   *
+   * ⚠️ 为什么要能注入（2026-10 真机缺陷：AI 调 `user_choice` 时手机端看不到、
+   * 点一下却提示「该请求已在电脑上处理」，而电脑上根本没人答过）：
+   * 「有哪些交互在等应答」是**电脑侧的事实**，不属于某一条链路。本函数按链路创建、
+   * `dispose()` 时丢弃自建注册表 —— 而电脑侧换链路是常态（`closed` 自愈、`open` 后 8s 未握手、
+   * 移除手机、改 ICE），于是排队的交互会**静默消失**：
+   *  - 手机侧：卡片成为僵尸（`interaction.list` 已经空了，点一下得 `not-found`），
+   *    「断开重连」也拉不回来（新链路的表天然是空的）；
+   *  - 电脑侧：桌面弹窗与引擎仍在等，**谁都没答过**。
+   *
+   * 注入时本函数**不接管它的生命周期**：
+   *  - 不接线（`toolInteractEvent` → 注册表的三个来源由持有者用 `wireInteractionSources`
+   *    接一次；接两次会让每个交互被登记两遍）；
+   *  - `dispose()` 也不销毁它。
+   *
+   * 推送出口由持有者给（服务用 `(t, p) => currentBridge?.emit(t, p)`）—— 于是重连后
+   * 推送自动落到新链路，而手机侧靠 `host.interaction.list` 快照把卡片拿回来。
+   */
+  interactions?: InteractionRegistry
 }
 
 export interface PhoneBridge {
@@ -219,11 +240,25 @@ export function startPhoneBridge(endpoint: Endpoint, options: PhoneBridgeOptions
   const emit = createTracedEmit(endpoint)
 
   // 先建注册表（host-source 的 answer 要用它），再由 interaction-source 把真实事件接上去
-  const interactionHost = attachInteractionSources(emit, {
-    audit,
-    notify: options.notify,
-  })
-  const interactions = interactionHost.registry
+  //
+  // ⚠️ 两态（2026-10 真机缺陷「AI 调 user_choice 时手机端看不到」）：
+  //  - **注入态**（生产，`PhoneControlService` 传）：表归服务所有，**跨链路存活** ——
+  //    本函数既不接线也不销毁它。链路重建（`closed` 自愈 / 握手超时 / 移除设备 / 改 ICE）
+  //    换的是 `Endpoint` 与 `PhoneBridge`，不该把排队中的 `user_choice` / 授权一起扔掉：
+  //    那些是**电脑侧的事实**（桌面弹窗与引擎都还在等），扔了就会出现「谁都没答过，
+  //    手机上那张卡片却成了僵尸（点一下得『该请求已在电脑上处理』）」。
+  //  - **自建态**（散装 / 单测）：照旧自建一份并接线，随本链路一起销毁。
+  let interactionHost: InteractionHost | null = null
+  let interactions: InteractionRegistry
+  if (options.interactions) {
+    interactions = options.interactions
+  } else {
+    interactionHost = attachInteractionSources(emit, {
+      audit,
+      notify: options.notify,
+    })
+    interactions = interactionHost.registry
+  }
 
   /**
    * 手机声明的流式偏好（§32）：默认 `'full'`（每帧整段），声明 `delta` 才走增量。
@@ -329,7 +364,8 @@ export function startPhoneBridge(endpoint: Endpoint, options: PhoneBridgeOptions
     interactions,
     emit,
     dispose() {
-      interactionHost.dispose()
+      // 只拆**自建**的（注入的表由持有者管：它还要活到下一条链路）
+      interactionHost?.dispose()
       storeBridge.dispose()
       registration.dispose()
       // 埋点收尾：先把推送统计冲出去（`phone.push.stats`），再拆掉包装

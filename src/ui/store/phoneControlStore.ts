@@ -40,15 +40,19 @@ import {
   readCustomIceText,
   resolveIceServers,
   writeCustomIceText,
+  type HostEmit,
   type IceServerInit,
   type IceSource,
   type IceStoragePort,
+  type Transport,
 } from 'virlen-remote'
 import {
   AuditLog,
   PairingStore,
   PhoneControlService,
+  createInteractionRegistry,
   type AuditEntry,
+  type InteractionRegistry,
   type LinkKind,
   type PairedDevice,
   type PairingPayload,
@@ -202,8 +206,30 @@ class PhoneControlStore {
    */
   readonly pairing = new PairingStore()
 
+  /**
+   * 待应答交互注册表（提问 / 授权）—— 与配对表、审计同一套做法：**本 store 持有**。
+   *
+   * 为什么不能留在服务实例上（2026-10）：服务实例在「改 ICE」时会被换掉
+   * （`RTCPeerConnection` 的 `iceServers` 只能构造时给，见 `rebuildService`），
+   * 换一次就把排队中的交互连表一起丢掉 —— 手机上那张卡片变成点不动的僵尸
+   *（点一下得 `not-found`），而电脑侧弹窗与引擎仍在等。
+   *
+   * **懒建**（首次建服务时）：未启用手机控制就不建表、不接线，也就不会有 `phone.interaction.*` 埋点。
+   */
+  private interactions: InteractionRegistry | null = null
+
   private service: PhoneControlService | null = null
   private ticketTimer: ReturnType<typeof setInterval> | null = null
+
+  /**
+   * 测试注入：建服务时转交给 `PhoneControlOptions.createTransport`（默认建 host 角色的 `RtcTransport`）。
+   *
+   * 为何它必须在 **store 这一层**能注：jsdom 里没有 `RTCPeerConnection`，而「启用 → 手机连上 →
+   * 改 ICE 重建服务 → 手机重连」这条整链路只有 store 能驱动。单测靠 memory transport 把它跑起来，
+   * 从而验证 store 的胶水（见 `src/tests/ui/phone-control-relink.test.ts`）。
+   * **生产路径不设置它。**
+   */
+  createTransport?: (room: string) => Transport
 
   constructor() {
     this.audit = new AuditLog(undefined, (entry) => this.onAudit(entry))
@@ -471,11 +497,46 @@ class PhoneControlStore {
    * `RTCPeerConnection` 的 `iceServers` 只在构造时生效（改不了），而链路的生命周期归
    * `PhoneControlService` 管 —— 做法就是「停掉旧服务 + 丢引用 + 重新启用」。
    * 副作用：二维码会换一张（与「重新启用」同一语义，用户看得见）。
+   *
+   * ⚠️ 这里是**唯一**换掉服务实例的路径（`setEnabled(false/true)` 复用同一个实例）。
+   * 丢服务用 `dispose()`（= 「不再复用这个实例」；内部就是 `disable()` —— 停链路 + 解绑本机
+   * 交互来源，那个全局监听器不会悬空）。
+   * 三份「跨实例存活」的对象都归本 store：配对表、审计、**待应答交互注册表**
+   *（`ensureInteractions`，表不随实例更替而丢）。
+   * ⚠️ 这条路径**不存在「接线断着」的窗口**：`dispose()` 后紧接着 `enableAsync()`，而 identity /
+   * ICE 都已解析时 `enableAsync` 整段**同步**执行（路径上没有 await 点），接线在同一个 tick 内重新挂好。
    */
   private rebuildService(): void {
-    this.service?.disable()
+    this.service?.dispose()
     this.service = null
     void this.enableAsync()
+  }
+
+  /**
+   * 待应答交互注册表（懒建 + 跨服务实例复用）。
+   *
+   * ⚠️ **推送出口写成本 store 的方法引用，而不是某个服务实例的**：改 ICE 后服务实例会换，
+   * 出口必须自动指到「现在那个」（`service?.emitToLink`；没有服务 / 没有链路时丢弃 ——
+   * 条目仍在表里，手机连上后靠 `host.interaction.list` 快照补齐）。
+   *
+   * ⚠️ **接线（`toolInteractEvent` → 本表）不在本函数里**：它随**服务启停**走
+   *（`PhoneControlService.enable()` 挂、`disable()` 解，见 `attachInteractions`）。
+   * 于是「关掉手机控制」期间不会登记、也不会有 `phone.interaction.*` 埋点；
+   * 而表本身**不清空** —— 本机弹窗与引擎还在等，重新启用后手机连上即可应答。
+   * 本函数只管**懒建**：从未启用过手机控制就不建表、不接线。
+   */
+  private ensureInteractions(): InteractionRegistry {
+    if (this.interactions) return this.interactions
+    // 显式标注 `HostEmit`：它是泛型签名，箭头函数直接传给工厂会丢掉类型参数
+    const emit: HostEmit = (topic, payload) => this.service?.emitToLink(topic, payload)
+    this.interactions = createInteractionRegistry({
+      emit,
+      // 与设置页共用同一份审计（否则手机侧的批准不进「操作记录」）
+      audit: this.audit,
+      // 手机批准高风险操作时提醒电脑前的人（§16.3-2）
+      notify: (text) => showToast(text, 6000),
+    })
+    return this.interactions
   }
 
   /**
@@ -587,6 +648,10 @@ class PhoneControlStore {
       pairing: this.pairing,
       // 与设置页共用同一份审计（否则「操作记录」看不到 bridge 写下的条目）
       audit: this.audit,
+      // 待应答交互的表也归本 store 持有 —— 改 ICE 换服务实例时它必须活下来（见 ensureInteractions）
+      interactions: this.ensureInteractions(),
+      // 测试注入（生产不设置）：把 store 收到的传输工厂转交给服务
+      ...(this.createTransport ? { createTransport: this.createTransport } : {}),
       // 手机批准高风险操作时提醒电脑前的人（§16.3-2）
       notify: (text) => showToast(text, 6000),
       confirmPair: (ctx) =>

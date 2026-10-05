@@ -39,7 +39,16 @@ type InteractionHandler = (
 /** 轮次边界处理器（chat-service 注册）—— 返回要注入下一次 LLM 请求的消息 */
 type RoundBoundaryHandler = (sessionId: string) => Message[]
 
-const sessionHandlers = new Map<string, InteractionHandler>()
+/**
+ * 会话级交互处理器。
+ *
+ * 值里带一个**归属令牌**：注册方（每个 run 一次）持有它，注销时回传 —— 用于防止
+ * 交错的 run 互删处理器（见 `unregisterSessionToolHandler`）。
+ */
+const sessionHandlers = new Map<
+  string,
+  { handler: InteractionHandler; token: object }
+>()
 let roundBoundaryHandler: RoundBoundaryHandler | null = null
 
 /**
@@ -57,10 +66,25 @@ export function setRoundBoundaryHandler(
 export function registerSessionToolHandler(
   sessionId: string,
   handler: InteractionHandler,
-): void {
-  sessionHandlers.set(sessionId, handler)
+): object {
+  const token = {}
+  sessionHandlers.set(sessionId, { handler, token })
+  return token
 }
-export function unregisterSessionToolHandler(sessionId: string): void {
+/**
+ * 注销会话的交互处理器，返回的**归属令牌**必须原样回传。
+ *
+ * ⚠️ 为什么要令牌（2026-10）：原先只按 `sessionId` 注销，交错的 run（同一会话重发、
+ * 手机端与桌面端几乎同时发、暂停恢复）会互相删表 —— 先结束的那个把后一个的处理器删掉，
+ * 后一个的 `user_choice` / 授权请求就落到「无处理器」分支：用户什么都没看到，AI 却收到「用户取消」。
+ * 传令牌时做归属校验（已被顶替 → 什么都不做）；不传 = 无条件注销（兼容旧调用 / 测试清理）。
+ */
+export function unregisterSessionToolHandler(
+  sessionId: string,
+  token?: object,
+): void {
+  const current = sessionHandlers.get(sessionId)
+  if (token && current && current.token !== token) return
   sessionHandlers.delete(sessionId)
 }
 
@@ -254,23 +278,54 @@ async function handleRoundBoundary(payload: {
   }).catch(() => {})
 }
 
-async function handleUserInteractionRequest(payload: {
+/**
+ * 处理 Rust 发来的用户交互请求（提问 / 授权）。
+ *
+ * 导出仅为**单测**能直接驱动这条回执路径；真正的调用方是 `agent:user-interaction-request`
+ * 监听器，前端其余部分不应主动调用。
+ */
+export async function handleUserInteractionRequest(payload: {
   requestId: string
   sessionId: string
   type: string
   data: Record<string, any>
 }): Promise<void> {
   const { requestId, sessionId, type, data } = payload
-  const handler = sessionHandlers.get(sessionId)
-  if (!handler) {
+  const entry = sessionHandlers.get(sessionId)
+  if (!entry) {
+    /*
+     * ⚠️ 这里**不能**静默回 `cancelled`（2026-10 真机缺陷）：那会把「没人能应答」伪装成「用户取消」——
+     * Rust 侧据此把工具结果写成 `[User cancelled]`，AI 顺势跳过这一步，界面上不留任何痕迹，
+     * 用户与排查者都无从知道**这个问题从未被展示过**。
+     * 故：留痕（控制台 + 埋点 `error.bridge`）+ 回 `error`（作工具失败结果，消息流里看得见）。
+     */
+    console.warn(
+      '[rust-engine] 收到用户交互请求，但该会话没有注册处理器 —— ' +
+        `AI 的提问/授权请求从未展示给用户（sessionId=${sessionId} type=${type}）`,
+    )
+    trackError('error.bridge', new Error('no interaction handler for this session'), {
+      traceId: getSessionTrace(sessionId),
+      props: {
+        direction: 'rust2js',
+        kind: 'user-interaction-orphan',
+        session_id: sessionId,
+        interaction_type: type,
+      },
+    })
     await invoke('agent_user_interaction_response', {
       requestId,
-      payload: { __kind: 'cancelled' },
+      payload: {
+        // 给模型的英文说明（工具结果文案与 TS 引擎同口径：模型侧英文、UI 侧结构化）
+        __kind: 'error',
+        message:
+          'Failed to ask the user: no interaction handler is attached to this session, ' +
+          'so the question was never shown. Do not retry this call; tell the user instead.',
+      },
     })
     return
   }
   try {
-    const result = await handler(type, data)
+    const result = await entry.handler(type, data)
     await invoke('agent_user_interaction_response', {
       requestId,
       payload: serializeInteractionResult(result),
@@ -280,6 +335,22 @@ async function handleUserInteractionRequest(payload: {
       await invoke('agent_user_interaction_response', {
         requestId,
         payload: { __kind: 'shelved' },
+      })
+    } else if (e?.name === 'InteractionEnded') {
+      /*
+       * 运行结束时被收敛（桌面点停止 / 手机取消或删除会话 / 引擎放弃这次交互请求）：
+       * **不是**用户点了取消。同上面那条「不许静默消费」的纪律 —— 如实回一条工具级失败
+       *（`__kind:'error'` 在三条交互路径上都映射成失败的工具结果，不会中断 run），
+       * 而不是伪装成 `[User cancelled]`。
+       */
+      await invoke('agent_user_interaction_response', {
+        requestId,
+        payload: {
+          __kind: 'error',
+          message:
+            'The interaction was ended before it was answered (the run was cancelled or the session was deleted). ' +
+            'The user never answered this question; do not retry this call.',
+        },
       })
     } else {
       await invoke('agent_user_interaction_response', {
@@ -446,10 +517,11 @@ export const rustEngine: AgentEnginePort = {
     } = options
     const sessionId = session.id
 
-    // 注册用户交互处理器（供桥接层使用）
-    if (onUserInteraction) {
-      registerSessionToolHandler(sessionId, onUserInteraction)
-    }
+    // 注册用户交互处理器（供桥接层使用），并留下**本次 run 的归属令牌** ——
+    // 注销时回传它，否则交错的 run 会互相删表（见 `unregisterSessionToolHandler`）
+    const handlerToken = onUserInteraction
+      ? registerSessionToolHandler(sessionId, onUserInteraction)
+      : null
 
     // 监听 Rust 引擎事件
     let unlisten: UnlistenFn | null = null
@@ -538,7 +610,9 @@ export const rustEngine: AgentEnginePort = {
       onEvent?.({ type: 'error', error: msg })
     } finally {
       unlisten?.()
-      unregisterSessionToolHandler(sessionId)
+      // 只注销**自己注册的那一次**：本 run 没注册（无 onUserInteraction）就什么都不做，
+      // 且已被别人顶替时也删不掉别人的处理器
+      if (handlerToken) unregisterSessionToolHandler(sessionId, handlerToken)
     }
   },
 
