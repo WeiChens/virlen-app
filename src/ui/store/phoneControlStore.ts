@@ -544,6 +544,10 @@ class PhoneControlStore {
    *
    * 用户拍板的做法（2026-09-27）：每次切到「手机控制」菜单就重新生成一遍二维码 ——
    * 面板上那张码可能已经放了几分钟，而用户此刻才举起手机去扫。
+   *
+   * 顺手对一次「房间在线」的账（`verifyRoomPresence`）：用户正盯着那颗胶囊，而它可能是
+   * 一句假话（信令事件流静默死掉时，电脑端会停在「等待手机连接…」，手机上却已显示
+   * 「电脑不在线」）。定时自检最长要等 `ROOM_PRESENCE_CHECK_MS`，打开面板这一刻不该再等。
    */
   onPanelOpen(): void {
     if (!this.enabled) return
@@ -552,6 +556,7 @@ class PhoneControlStore {
     this.payload = service.refreshTicket()
     this.ticketLeftSec = remainingSec(service.ticketDeadline)
     this.startTicketTimer()
+    void service.verifyRoomPresence()
   }
 
   refreshTicket(): void {

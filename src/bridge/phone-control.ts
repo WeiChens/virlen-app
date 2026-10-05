@@ -22,6 +22,11 @@
  * `error`（链路已关闭）**不是终点**：`closed` 是终态（PC 已 failed / closed），停在原地只意味着
  * 手机再也连不回来 —— 过 `LINK_CLOSED_RECOVER_MS` 仍未恢复就原地重开，回到「等待手机连接…」。
  *
+ * 还有一件事在状态机之外：**本机到底还在不在信令房间里**。房间里那份「在线」完全取决于 SSE
+ * 事件流活着，而它可能静默死掉（代理超时 / 服务重启 / 换链那一刻网络未就绪）—— 本机收不到任何
+ * 事件，于是停在「等待手机连接…」这句假话上，而手机上看到的已是「电脑不在线」。
+ * 故服务按 `ROOM_PRESENCE_CHECK_MS` 拿手机端那份事实反查自己（`verifyRoomPresence`）。
+ *
  * ⚠️ 真机蜂窝网联调需人工完成（无法在此环境跑真实 WebRTC）。
  */
 import {
@@ -30,6 +35,7 @@ import {
   RtcTransport,
   SseSignalingClient,
   buildPairingPayload,
+  fetchRoomStatus,
   roomFor,
   type GrantRecord,
   type HostEmit,
@@ -162,6 +168,25 @@ export interface PhoneControlOptions {
    */
   pairing?: PairingStore
   /**
+   * 房间在线自检（定时问信令服务「我这间房里还有电脑在吗」）。
+   *
+   * 默认走信令服务的 `POST /status`（共享包 `fetchRoomStatus`，**不占房间、不打扰任何对端**）。
+   * 返回值的三种含义必须分开：
+   *  - `true`：服务端确认本机在房间里（正常）；
+   *  - `false`：**明确不在** —— 手机端此刻看到的就是「电脑不在线」；
+   *  - `null`：问不到（服务不可达 / 旧版服务没有 `/status` / 应答里没有这一间）—— **不动作**，
+   *    宁可漏判也不凭一次没答上来就拆链路。
+   *
+   * 为什么需要这一道（真机反馈：电脑端「等待手机连接…」，手机端却显示「电脑不在线」，
+   * 怎么都连不回来）：房间里的「在线」完全取决于 SSE 事件流活着 —— 它静默死掉（代理超时 /
+   * 服务重启 / 链路重开时那一下网络未就绪）时本机**收不到任何事件**，状态机就停在「等待」上
+   * 一句假话，而事实上手机已经找不到它了。这里用「手机看到的那份真相（`/status`）」
+   * 反查自己，对不上就原地重开。
+   *
+   * 注入点（生产不设置）：单测/联调直接喂结论，不必真发请求。
+   */
+  probeRoom?: (room: string) => Promise<boolean | null>
+  /**
    * 配对表变更回调（票据 / 设备 / 在线标记任一变化）。
    *
    * ⚠️ 只在服务**自己持有**配对表（未注入 `pairing`）时生效；注入时由调用方自行订阅 ——
@@ -225,6 +250,31 @@ export const HANDSHAKE_DEADLINE_MS = 8000
  */
 export const LINK_CLOSED_RECOVER_MS = 3000
 
+/**
+ * 「房间在线」自检的间隔（毫秒）。
+ *
+ * 只在服务启用期间跑，而且**只在没有手机连着时真去问**（有手机在用时不去動那条链路）。
+ * 取值向信令服务的心跳看齐（`: hb` 每 20 秒一次，实测）：比它更快没有额外信息，比它慢太多
+ * （分钟级）则修得太晚。
+ *
+ * 代价是一次极小的 `POST /status`（不占房间）—— 与手机端登录页那份轮询（`ONLINE_POLL_MS`，
+ * 15 秒）同一量级，服务端完全吃得下。
+ */
+export const ROOM_PRESENCE_CHECK_MS = 20_000
+
+/**
+ * 默认的房间自检：问信令服务「我这间房里还有 host 吗」。
+ *
+ * 用共享包的 `fetchRoomStatus`（失败返回空数组而不抛错）—— 于是「问不到」与「明确不在」
+ * 天然分得开：前者给 `null`（不动作），后者才给 `false`（该重开了）。
+ */
+async function defaultProbeRoom(base: string, room: string): Promise<boolean | null> {
+  const list = await fetchRoomStatus({ baseUrl: base, rooms: [room] })
+  const found = list.find((status) => status.room === room)
+  if (!found || typeof found.hostOnline !== 'boolean') return null
+  return found.hostOnline
+}
+
 export class PhoneControlService {
   /**
    * 配对表（票据 / 已绑定设备）。
@@ -282,6 +332,27 @@ export class PhoneControlService {
    * 到点仍停在 `error` → 原地重开链路，回到「等待手机连接…」。
    */
   private recoverTimer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * 本链路是否已报过 `closed`（终态）。
+   *
+   * 为什么需要它单独一份，而不看 `status === 'error'`：`closed` 之后还会来**拆链的余音** ——
+   * 对端离开会走 `onPeer(null)`（→ `connecting`）、我们自己的拆除动作在浏览器里也会补一两条
+   * 收尾事件（见共享包 `rtc.ts::teardownPeer`，那些已经被摘掉了，但这类事件源不止一处）。
+   * 旧实现允许它们把状态写回「等待手机连接…」，自动复位一看「已经不是 error 了」就放弃：
+   * **电脑端就此停在「等待手机连接…」，而信令房间早已没有它** —— 手机端因此显示
+   * 「电脑不在线」且再也连不回来（2026-10 真机反馈）。
+   *
+   * 所以：只有 `open`（链路真的回来了，那时会重新握手）能抹掉这个标记；
+   * 停在 `connecting` / `waiting` 一律不算恢复 —— 那条 PC 已经 failed/closed，
+   * 而 host 侧下一次协商还会复用它（共享包 `ensurePC` 的 `if (this.pc)`），谁也救不回来。
+   */
+  private linkClosed = false
+  /**
+   * 「房间在线」自检计时器（见 `ROOM_PRESENCE_CHECK_MS`）。生命周期 = 启用期间。
+   */
+  private presenceTimer: ReturnType<typeof setInterval> | null = null
+  /** 自检请求是否在途（避免上一次没返回就又发一次）。 */
+  private presenceBusy = false
   /**
    * 通讯类型巡检器（链路开着期间定时复查）。
    *
@@ -409,30 +480,39 @@ export class PhoneControlService {
   }
 
   /**
-   * 安排「链路已关闭」的自愈：到点仍停在**同一条**已关闭的链路上 → 拆掉重开
+   * 安排「链路已关闭」的自愈：到点仍是**同一条**已关闭、且没被授权过的链路 → 拆掉重开
    *（回到「等待手机连接…」，二维码与票据不变）。
    *
    * 为什么不是当场重开：需要一个观察窗把「真的死了」与「对端正在自己重连」分开 —— 后者会让链路
-   * 回到 `connecting`（可恢复），此时重开只是白折腾一次，见 `LINK_CLOSED_RECOVER_MS`。
+   * 回到 `open`（那时会重新握手，见 `linkClosed` 的清零点），此时重开只是白折腾一次，
+   * 见 `LINK_CLOSED_RECOVER_MS`。
    *
-   * 拒绝结论生效期间**不安排**：那段时间链路事件一律不参与状态机（见 `setLinkStatus`），
-   * 拆链另有 `rejectPeer` 的踢链计时器负责。
+   * 到点复核四件事（这几秒里任何一件都可能变）：
+   *  - 链路没被换过（用户操作 / 踢链都已经重开过一条，别去拆新的那条）；
+   *  - 服务还开着（`disabled` 时没有链路可重开）；
+   *  - 没有拒绝结论生效（那段时间链路事件一律不参与状态机，拆链另有 `rejectPeer` 的踢链负责）——
+   *    `evenWhenRejected` 可越过这一条（房间自检用：那条结论与「我还在不在房间里」无关，
+   *    见 `onRoomLost`）；
+   *  - `linkClosed` 还在（链路真的回到过 `open` 才会被抹掉；只回到 `connecting` 不算 ——
+   *    见 `linkClosed` 的说明）。
+   *
+   * `reason` 只进埋点（`phone.link.disable`）：让「这条链路为什么被换掉」事后答得上来。
    */
-  private armLinkRecovery(transport: Transport): void {
+  private armLinkRecovery(
+    transport: Transport,
+    reason: string = 'link-closed',
+    options: { evenWhenRejected?: boolean } = {},
+  ): void {
+    const rejectBlocks = options.evenWhenRejected !== true
     this.clearLinkRecovery()
-    if (this.rejectReason != null) return
+    if (rejectBlocks && this.rejectReason != null) return
     this.recoverTimer = setTimeout(() => {
       this.recoverTimer = null
-      /*
-       * 到点复核三件事（这几秒里任何一件都可能变）：
-       *  - 链路没被换过（用户操作 / 踢链都已经重开过一条，别去拆新的那条）；
-       *  - 服务还开着（`disabled` 时没有链路可重开）；
-       *  - 仍停在「出错」上（链路自己回来了 / 已进别的结论 → 不复位）。
-       */
       if (this.transport !== transport) return
-      if (this.status === 'disabled') return
-      if (this.status !== 'error') return
-      this.dropLink('link-closed')
+      if (this.isDisabled()) return
+      if (rejectBlocks && this.rejectReason != null) return
+      if (!this.linkClosed) return
+      this.dropLink(reason)
     }, LINK_CLOSED_RECOVER_MS)
   }
 
@@ -441,6 +521,85 @@ export class PhoneControlService {
     if (this.recoverTimer == null) return
     clearTimeout(this.recoverTimer)
     this.recoverTimer = null
+  }
+
+  /** 开「房间在线」自检（幂等；生命周期 = 一条链路）。 */
+  private startPresenceWatch(): void {
+    if (this.presenceTimer) return
+    this.presenceTimer = setInterval(() => {
+      void this.verifyRoomPresence()
+    }, ROOM_PRESENCE_CHECK_MS)
+  }
+
+  private stopPresenceWatch(): void {
+    if (!this.presenceTimer) return
+    clearInterval(this.presenceTimer)
+    this.presenceTimer = null
+    this.presenceBusy = false
+  }
+
+  /**
+   * 服务是否已停用。
+   *
+   * 刻意写成方法而不是就地比较 `this.status === 'disabled'`：属性上的类型收窄会跨 `await`
+   * 残留（TS 不认为它可能变），于是 `verifyRoomPresence` 里那次「请求回来后再看服务还开着吗」
+   * 会被判成「不可能成立」（TS2367）。方法调用带回了新的作用域，收窄归零。
+   */
+  private isDisabled(): boolean {
+    return this.status === 'disabled'
+  }
+
+  /**
+   * 「本机还在房间里吗」—— 拿手机端看到的那份事实反查自己（见 `options.probeRoom`）。
+   *
+   * 两个触发点：定时（`ROOM_PRESENCE_CHECK_MS`）与设置页打开那一刻（`phoneControlStore.onPanelOpen`
+   * —— 用户正盯着那颗胶囊看，此刻对一次账最值）。
+   *
+   * 跳过条件（宁可漏判也不误拆）：
+   *  - 服务未启用 / 链路已拆（没东西可重开）；
+   *  - **有手机正连着**（`authorized`）：一条能用的链路不能因为一次自检就拆掉 —— 真的丢了房间
+   *    也会在它下线后（下一次自检）补上；
+   *  - 上一次自检还没回来。
+   *
+   * 命中「明确不在房间」→ 先如实报出结论，再走与「链路已关闭」同一条观察窗/原地重开路径。
+   */
+  async verifyRoomPresence(): Promise<void> {
+    const transport = this.transport
+    if (!transport || this.status === 'disabled' || this.authorized || this.presenceBusy) return
+    this.presenceBusy = true
+    const probe = this.options.probeRoom ?? ((room: string) => defaultProbeRoom(this.base, room))
+    let present: boolean | null = null
+    try {
+      present = await probe(this.room)
+    } catch {
+      // 自检本身出错 = 问不到（不是「不在」）—— 与 `null` 同一条路，绝不凭这个拆链路
+      present = null
+    } finally {
+      this.presenceBusy = false
+    }
+    if (present !== false) return
+    // 请求在途期间可能变的事：链路被换过（用户点刷新 / 踢链 / 改 ICE）、服务已停、
+    // 或者手机正好在这几十毫秒里连上了 —— 这三种下都不再插手。
+    if (this.transport !== transport || this.authorized || this.isDisabled()) return
+    this.onRoomLost(transport)
+  }
+
+  /**
+   * 自检结论「本机已不在房间里」→ 与「链路已关闭」同一收口（结论 + 观察窗 + 原地重开）。
+   *
+   * 房间是**别人（信令服务）的事实**：它说不在，手机上看到的就是「电脑不在线」——
+   * 界面必须先把真相说出来（而不是继续说「等待手机连接…」），再重建自己在那只房间里的位置。
+   *
+   * ⚠️ 与 `closed` 那条路唯一的区别：**拒绝结论生效期间也照排重开**（`evenWhenRejected`）。
+   * 「这台手机被拒了」与「本机还在不在房间里」是两件事 —— 而屏上那张二维码此刻还在等别的
+   * 手机来扫，房间不在就等于扫了也连不上。两个动作不会打架：踢链（500ms）先跑一步，
+   * 本计时器到点会发现链路已经换过，自行退出（`setLinkStatus` 同样会把「信令连接已断开」
+   * 这一句拦下来 —— 那时胶囊里已经有更重要的结论「已拒绝接入」，不该被顶掉）。
+   */
+  private onRoomLost(transport: Transport): void {
+    this.linkClosed = true
+    this.setLinkStatus('error', '信令连接已断开')
+    this.armLinkRecovery(transport, 'not-in-room', { evenWhenRejected: true })
   }
 
   /**
@@ -607,8 +766,9 @@ export class PhoneControlService {
       (this.buildRtcTransport() as unknown as Transport)
     this.transport = transport
     this.endpoint = new Endpoint({ transport, defaultTimeoutMs: 15_000 })
-    // 新链路 = 重新开始授权（闸门从未授权起算）
+    // 新链路 = 重新开始授权（闸门从未授权起算）；同时清掉上一条链路的「已关闭」标记
     this.authorized = false
+    this.linkClosed = false
     this.bridge = startPhoneBridge(this.endpoint, {
       deviceName: this.options.deviceName,
       deviceId: this.options.deviceKey,
@@ -656,6 +816,11 @@ export class PhoneControlService {
          * 所以这里只承认「有人接入了，正在验证」，等 `applyHelloOutcome` 出结论。
          */
         this.setLinkStatus('verifying')
+        /*
+         * 链路真的回来了 —— `closed` 的标记到此为止（哪怕它只活了 1 秒）。
+         * `open` 会重新走一次 `hello`（闸门重新打开），所以这里不算「带病恢复」。
+         */
+        this.linkClosed = false
         // 兜底：open 之后迟迟不握手（典型：被移除的旧客户端静默重连）→ 限期踢掉
         this.armHandshakeDeadline()
       } else if (state === 'connecting') {
@@ -671,6 +836,16 @@ export class PhoneControlService {
          * 清在线标记，于是「状态已是『等待手机连接…』、列表里那一行却还高亮着已连接」。
          */
         this.pairing.setActive(null)
+        /*
+         * ⚠️ **链路已报过 `closed` 之后，这条 `connecting` 不许把状态写回「等待手机连接…」**。
+         *
+         * `closed` 是终态（那条 PC 已 failed / closed，且仍会被下一次协商复用）；紧跟其后的
+         * `connecting` 多半只是**拆链的余音**（对端离开的 `peer-left`、被关掉的 DataChannel 的迟到事件）。
+         * 写成「等待」就等于告诉用户「一切正常，只是还没人来」—— 而它已经谁也救不回来了：
+         * 手机端看到的是「电脑不在线」，且再也连不回来（2026-10 真机）。
+         * 保持「出错（链路已关闭）」不动，把话交给已排队的原地重开说完。
+         */
+        if (this.linkClosed) return
         // 传 `''` 而不是省略：省略时 `setStatus` 会因为「状态没变」提前返回，
         // 上一条拒绝原因会赖在胶囊里（`''` 在界面上就是不显示括号）
         this.setLinkStatus('waiting', '')
@@ -680,11 +855,13 @@ export class PhoneControlService {
         this.clearHandshakeDeadline()
         // 链路关了 = 那台手机不再连着 →「已连接」高亮跟着熄掉
         this.pairing.setActive(null)
+        this.linkClosed = true
         this.setLinkStatus('error', '链路已关闭')
         /*
          * ⚠️ 不能停在这里（真机反馈：电脑端一直显示「出错（链路已关闭）」，手机再也连不回来）：
          * `closed` 是**终态** —— 那条 PC 已 failed / closed，而 host 侧下一次协商会复用它
-         *（`rtc.ts::ensurePC`）→ 新手机进房间也只会对上一条死 PC。过几秒仍是这个状态就原地重开。
+         *（`rtc.ts::ensurePC`）→ 新手机进房间也只会对上一条死 PC。几秒后仍未真正恢复就原地重开
+         *（见 `armLinkRecovery`：只认 `open` 为恢复，「回到 connecting」不算）。
          */
         this.armLinkRecovery(transport)
       }
@@ -709,6 +886,8 @@ export class PhoneControlService {
 
     void Promise.resolve(transport.start?.()).catch((err) => this.setStatus('error', String(err)))
     this.setLinkStatus('waiting')
+    // 新链路摆好了：开始按 `ROOM_PRESENCE_CHECK_MS` 反查「信令服务还认得本机吗」（见 `verifyRoomPresence`）
+    this.startPresenceWatch()
   }
 
   /**
@@ -738,11 +917,15 @@ export class PhoneControlService {
     transport?.close()
     // 授权随链路一起消失：下一条链路要重新走 hello
     this.authorized = false
+    // 链路都没了，「已关闭」这个标记也到此为止（新的链路从 `linkClosed = false` 起算，见 `startLink`）
+    this.linkClosed = false
     // 链路都没了，谈不上「直连还是中继」（`stop` 内部会归零并广播 `unknown`）
     this.kindWatch.stop()
     this.clearHandshakeDeadline()
     // 拆链 = 自愈已经发生（`dropLink` 紧接着就会重开），旧的定时器不能再来拆一次新链路
     this.clearLinkRecovery()
+    // 房间自检也随链路走（`startLink` 会重新开）：否则它会在链路换代的空隙里拿着旧链路问话
+    this.stopPresenceWatch()
     // 停了就不该再有「哪台手机连着」的说法
     this.pairing.setActive(null)
   }

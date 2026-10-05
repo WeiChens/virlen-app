@@ -68,6 +68,7 @@ export {
   REJECT_KICK_DELAY_MS,
   HANDSHAKE_DEADLINE_MS,
   LINK_CLOSED_RECOVER_MS,
+  ROOM_PRESENCE_CHECK_MS,
 } from './phone-control'
 export type {
   PhoneControlOptions,
