@@ -146,7 +146,11 @@ fn build_resources_uses_default_model_and_limits() {
     assert_eq!(res.max_tool_rounds, 7);
     assert_eq!(res.max_iterations, 2);
     assert!(res.enable_tools);
-    assert_eq!(res.tool_defs.len(), 28, "启用工具时必须下发全量定义");
+    assert_eq!(
+        res.tool_defs.len(),
+        virlen_core::agent::tool_defs::tool_count(),
+        "启用工具时必须下发全量定义（数量取自权威源，避免每加一个工具就改断言）"
+    );
     assert_eq!(res.security.sandbox_mode, "off");
     assert_eq!(
         res.security.permissions.get("terminal.normal.execute"),

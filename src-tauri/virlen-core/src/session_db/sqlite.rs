@@ -16,8 +16,8 @@ use crate::session_db::schema::{
     backfill_text_plain, init_schema, FTS_TRIGGERS_DDL, SCHEMA_VERSION, SEARCH_INDEX_DDL,
 };
 use crate::session_db::types::{
-    MessagePage, MessageSearchPage, MessageTimelinePage, MessageWindow, SearchCursor,
-    SessionStat, UserMessageRef,
+    MessagePage, MessageSearchPage, MessageTimelinePage, MessageWindow, ModelUsageCount,
+    SearchCursor, SessionMaterial, SessionStat, UserMessageRef,
 };
 use crate::session_db::usage::{
     self, backfill_usage_ledger, repair_usage_ledger_model, UsageEntry, UsageQuery,
@@ -661,6 +661,47 @@ INSERT INTO messages (
 
     async fn clear_usage(&self) -> Result<i64, String> {
         usage::clear(self.conn.clone()).await
+    }
+
+    async fn usage_model_counts(
+        &self,
+        kind: &str,
+        limit: usize,
+    ) -> Result<Vec<ModelUsageCount>, String> {
+        let conn = self.conn.clone();
+        let kind = kind.to_string();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().unwrap();
+            usage::model_counts_in_conn(&conn, &kind, limit)
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
+    // ===== 记忆蒸馏素材（P2）：实现见 message_query.rs =====
+
+    async fn day_materials(
+        &self,
+        start_ms: i64,
+        end_ms: i64,
+    ) -> Result<Vec<SessionMaterial>, String> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().unwrap();
+            message_query::day_materials_in_conn(&conn, start_ms, end_ms)
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
+    async fn earliest_message_ts(&self) -> Result<Option<i64>, String> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().unwrap();
+            message_query::earliest_message_ts_in_conn(&conn)
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
     }
 }
 

@@ -53,6 +53,8 @@ interface ThemeColors {
   input: string
   output: string
   cached: string
+  /** 缓存写入量（仅 Anthropic）：与「缓存命中」必须区分 —— 两者计价差 12.5 倍 */
+  cacheWrite: string
 }
 
 function themeColors(): ThemeColors {
@@ -63,6 +65,8 @@ function themeColors(): ThemeColors {
     input: cssVar('--primary', '#4f46e5'),
     output: cssVar('--accent-warn', '#f59e0b'),
     cached: cssVar('--accent-success', '#22c55e'),
+    // 与饼图调色板第 4 色一致（#8b5cf6），切换维度时不跳色
+    cacheWrite: cssVar('--accent-info', '#8b5cf6'),
   }
 }
 
@@ -90,6 +94,7 @@ function tokenAxisTooltip(
         `${t('输入')}: ${formatTokens(b.promptTokens)}`,
         `${t('输出')}: ${formatTokens(b.completionTokens)}`,
         `${t('缓存')}: ${formatTokens(b.cachedTokens)}`,
+        `${t('缓存写入')}: ${formatTokens(b.cacheWriteTokens)}`,
         `${t('合计')}: <b>${formatTokens(b.totalTokens)}</b>`,
         `${t('费用')}: ${formatCost(b.cost.total, currency)}`,
       ].join('<br/>')
@@ -158,6 +163,15 @@ export function buildTokenBarOption(
         barMaxWidth: 26,
         data: buckets.map((b) => b.cachedTokens),
       },
+      {
+        // 缓存写入（仅 Anthropic）：不计入这列的话，堆叠柱的高度会小于「合计」
+        name: t('缓存写入'),
+        type: 'bar',
+        stack: 'tokens',
+        itemStyle: { color: c.cacheWrite },
+        barMaxWidth: 26,
+        data: buckets.map((b) => b.cacheWriteTokens),
+      },
     ],
   }
 }
@@ -224,6 +238,7 @@ export function buildTokenLineOption(
       line(t('输入'), c.input, buckets.map((b) => b.promptTokens)),
       line(t('输出'), c.output, buckets.map((b) => b.completionTokens)),
       line(t('缓存'), c.cached, buckets.map((b) => b.cachedTokens)),
+      line(t('缓存写入'), c.cacheWrite, buckets.map((b) => b.cacheWriteTokens)),
     ],
   }
 }

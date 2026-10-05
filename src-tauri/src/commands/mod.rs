@@ -3,11 +3,12 @@
 //! 命令只做「参数兜底 + 转交」—— 业务语义全在 `virlen-core`。集中在一个目录下是因为 core 不得出现
 //! `tauri::`，故所有 `#[tauri::command]` 都必须住在 GUI crate；按域分文件后与 core 的模块名一一对应：
 //! [`agent`]（引擎命令 + 桥接回执 + PTY 交互）、[`session_db`]（会话 / 消息 / 用量 / 设置 / 库维护）、
-//! [`rag`]（知识库）。
+//! [`rag`]（知识库）、[`memory`]（长期记忆：面板 + 建会话注入段）。
 //!
 //! ⚠️ 新增命令后必须登记到 `lib.rs` 的 `tauri::generate_handler![...]`（铁律 4）。
 
 pub mod agent;
+pub mod memory;
 pub mod phone_audit;
 pub mod phone_device;
 pub mod phone_pairing;

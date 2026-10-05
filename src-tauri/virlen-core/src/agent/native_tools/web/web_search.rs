@@ -353,6 +353,7 @@ mod tests {
             bridge: &bridge,
             security: &sec,
             repo: noop_repo(),
+            memory: crate::agent::native_tools::noop_memory(),
             skills: None,
             host: crate::host::default_host().as_ref(),
             settings,

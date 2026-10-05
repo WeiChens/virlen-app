@@ -109,6 +109,7 @@ export type RecordSortKey =
   | 'promptTokens'
   | 'completionTokens'
   | 'cachedTokens'
+  | 'cacheWriteTokens'
   | 'totalTokens'
   | 'tokPerSec'
 
@@ -184,6 +185,8 @@ export function filterAndSortRecords(
         return r.completionTokens
       case 'cachedTokens':
         return r.cachedTokens
+      case 'cacheWriteTokens':
+        return r.cacheWriteTokens
       case 'totalTokens':
         return r.totalTokens
       case 'tokPerSec':
@@ -214,6 +217,7 @@ export interface RecordsSummary {
   promptTokens: number
   completionTokens: number
   cachedTokens: number
+  cacheWriteTokens: number
   totalTokens: number
   /** 总费用（逐行 `cost.total` 累加，币种与明细列一致） */
   cost: TokenCost
@@ -235,19 +239,22 @@ export function summarizeRecords(records: CostedRecord[]): RecordsSummary {
   let promptTokens = 0
   let completionTokens = 0
   let cachedTokens = 0
+  let cacheWriteTokens = 0
   let totalTokens = 0
   let rateDurMs = 0
   let rateCompletion = 0
   let rateSamples = 0
-  const cost: TokenCost = { input: 0, output: 0, cached: 0, total: 0 }
+  const cost: TokenCost = { input: 0, output: 0, cached: 0, cacheWrite: 0, total: 0 }
   for (const r of records) {
     promptTokens += r.promptTokens
     completionTokens += r.completionTokens
     cachedTokens += r.cachedTokens
+    cacheWriteTokens += r.cacheWriteTokens
     totalTokens += r.totalTokens
     cost.input += r.cost.input
     cost.output += r.cost.output
     cost.cached += r.cost.cached
+    cost.cacheWrite += r.cost.cacheWrite
     cost.total += r.cost.total
     if (r.durationMs > 0 && r.completionTokens > 0) {
       rateDurMs += r.durationMs
@@ -260,6 +267,7 @@ export function summarizeRecords(records: CostedRecord[]): RecordsSummary {
     promptTokens,
     completionTokens,
     cachedTokens,
+    cacheWriteTokens,
     totalTokens,
     cost,
     tokPerSec: rateDurMs > 0 ? rateCompletion / (rateDurMs / 1000) : null,
@@ -475,6 +483,7 @@ function emptyBucket(key: string): UsageBucket {
     promptTokens: 0,
     completionTokens: 0,
     cachedTokens: 0,
+    cacheWriteTokens: 0,
     totalTokens: 0,
     calls: 0,
     estimatedCalls: 0,
@@ -534,12 +543,13 @@ function costBucket(bucket: UsageBucket, price: ModelPrice | null): CostedBucket
     promptTokens: bucket.promptTokens,
     completionTokens: bucket.completionTokens,
     cachedTokens: bucket.cachedTokens,
+    cacheWriteTokens: bucket.cacheWriteTokens,
   }
   return { ...bucket, cost: computeCost(tokens, price) }
 }
 
 /** 零费用（reduce 初值） */
-const ZERO_COST: TokenCost = { input: 0, output: 0, cached: 0, total: 0 }
+const ZERO_COST: TokenCost = { input: 0, output: 0, cached: 0, cacheWrite: 0, total: 0 }
 
 /** 费用逐项相加 */
 function addCost(a: TokenCost, b: TokenCost): TokenCost {
@@ -547,6 +557,7 @@ function addCost(a: TokenCost, b: TokenCost): TokenCost {
     input: a.input + b.input,
     output: a.output + b.output,
     cached: a.cached + b.cached,
+    cacheWrite: a.cacheWrite + b.cacheWrite,
     total: a.total + b.total,
   }
 }
@@ -705,6 +716,7 @@ export async function loadRecords(
           promptTokens: r.promptTokens,
           completionTokens: r.completionTokens,
           cachedTokens: r.cachedTokens,
+          cacheWriteTokens: r.cacheWriteTokens,
         },
         resolvePrice(r.providerConfigId, r.model),
       ),
@@ -731,6 +743,8 @@ export function kindLabel(kind: string): string {
       return t('结果校验')
     case 'embedding':
       return t('向量化')
+    case 'memory':
+      return t('记忆整理')
     case 'legacy':
       return t('历史记录')
     default:
@@ -759,6 +773,7 @@ export async function exportUsageCsv(
     'Prompt Tokens',
     'Completion Tokens',
     'Cached Tokens',
+    'Cache Write Tokens',
     'Total Tokens',
     'Output Tok/s',
     t('估算'),
@@ -776,6 +791,7 @@ export async function exportUsageCsv(
         r.promptTokens,
         r.completionTokens,
         r.cachedTokens,
+        r.cacheWriteTokens,
         r.totalTokens,
         outputTokPerSec(r)?.toFixed(1) ?? '',
         r.estimated ? t('估算') : '',

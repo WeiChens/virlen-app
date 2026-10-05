@@ -5,6 +5,7 @@
 //!
 //! 具体实现都在这里，`sqlite::SqliteSessionRepo` 只做转发。
 
+use crate::session_db::types::ModelUsageCount;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -27,13 +28,18 @@ pub struct UsageEntry {
     pub model: String,
     pub provider_type: Option<String>,
     pub provider_config_id: Option<String>,
-    /// chat_round | compress | title | verify | embedding | legacy
+    /// chat_round | compress | title | verify | embedding | memory | legacy
     pub kind: String,
     pub round: Option<i64>,
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
-    /// 缓存读/写（= total - prompt - completion）
+    /// 缓存**命中（读取）**量（Anthropic `cache_read_input_tokens`；OpenAI 兼容 / Gemini 的缓存也归这一档）
     pub cached_tokens: i64,
+    /// 缓存**写入**量（Anthropic `cache_creation_input_tokens`，1.25x 输入价）；其余 provider 恒 0
+    ///
+    /// ⚠️ 与 `cached_tokens` 必须分列：两者计价差 12.5 倍（0.1x ↔ 1.25x）。
+    /// 口径：`prompt + cached + cache_write + completion = total`
+    pub cache_write_tokens: i64,
     pub total_tokens: i64,
     /// 是否为本地估算值（非 API 返回）
     pub estimated: bool,
@@ -66,7 +72,10 @@ pub struct UsageBucket {
     pub key: String,
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
+    /// 缓存命中（读取）量
     pub cached_tokens: i64,
+    /// 缓存写入量（1.25x 输入价；非 Anthropic 恒 0）
+    pub cache_write_tokens: i64,
     pub total_tokens: i64,
     /// 调用次数
     pub calls: i64,
@@ -104,6 +113,7 @@ pub struct UsageRecord {
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
     pub cached_tokens: i64,
+    pub cache_write_tokens: i64,
     pub total_tokens: i64,
     pub estimated: bool,
     /// LLM 请求耗时（ms）；0 = 未测量（历史流水），UI 显示 `-`
@@ -273,9 +283,9 @@ pub(crate) async fn append(
                     r#"
 INSERT OR IGNORE INTO usage_ledger (
   ts, session_id, message_id, model, provider_type, provider_config_id,
-  kind, round, prompt_tokens, completion_tokens, cached_tokens, total_tokens,
-  estimated, duration_ms, trace_id
-) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+  kind, round, prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens,
+  total_tokens, estimated, duration_ms, trace_id
+) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
 "#,
                 )
                 .map_err(|e| format!("准备用量写入失败: {}", e))?;
@@ -292,6 +302,7 @@ INSERT OR IGNORE INTO usage_ledger (
                     e.prompt_tokens,
                     e.completion_tokens,
                     e.cached_tokens,
+                    e.cache_write_tokens,
                     e.total_tokens,
                     e.estimated as i64,
                     e.duration_ms.unwrap_or(0).max(0),
@@ -324,6 +335,7 @@ SELECT {key_expr} AS bucket_key,
    COALESCE(SUM(prompt_tokens), 0),
    COALESCE(SUM(completion_tokens), 0),
    COALESCE(SUM(cached_tokens), 0),
+   COALESCE(SUM(cache_write_tokens), 0),
    COALESCE(SUM(total_tokens), 0),
    COUNT(*),
    COALESCE(SUM(estimated), 0)
@@ -346,9 +358,10 @@ ORDER BY bucket_key ASC
                             prompt_tokens: row.get(1)?,
                             completion_tokens: row.get(2)?,
                             cached_tokens: row.get(3)?,
-                            total_tokens: row.get(4)?,
-                            calls: row.get(5)?,
-                            estimated_calls: row.get(6)?,
+                            cache_write_tokens: row.get(4)?,
+                            total_tokens: row.get(5)?,
+                            calls: row.get(6)?,
+                            estimated_calls: row.get(7)?,
                         })
                     })
                 .map_err(|e| e.to_string())?;
@@ -363,6 +376,7 @@ ORDER BY bucket_key ASC
 SELECT COALESCE(SUM(prompt_tokens), 0),
    COALESCE(SUM(completion_tokens), 0),
    COALESCE(SUM(cached_tokens), 0),
+   COALESCE(SUM(cache_write_tokens), 0),
    COALESCE(SUM(total_tokens), 0),
    COUNT(*),
    COALESCE(SUM(estimated), 0)
@@ -379,9 +393,10 @@ FROM usage_ledger{where_sql}
                         prompt_tokens: row.get(0)?,
                         completion_tokens: row.get(1)?,
                         cached_tokens: row.get(2)?,
-                        total_tokens: row.get(3)?,
-                        calls: row.get(4)?,
-                        estimated_calls: row.get(5)?,
+                        cache_write_tokens: row.get(3)?,
+                        total_tokens: row.get(4)?,
+                        calls: row.get(5)?,
+                        estimated_calls: row.get(6)?,
                     })
                 },
             )
@@ -431,7 +446,7 @@ pub(crate) async fn records(
             r#"
 SELECT u.id, u.ts, u.session_id, s.title, u.message_id, u.model,
    u.provider_type, u.provider_config_id, u.kind, u.round,
-   u.prompt_tokens, u.completion_tokens, u.cached_tokens, u.total_tokens,
+   u.prompt_tokens, u.completion_tokens, u.cached_tokens, u.cache_write_tokens, u.total_tokens,
    u.estimated, u.duration_ms, u.trace_id
 FROM usage_ledger u
 LEFT JOIN sessions s ON s.id = u.session_id{where_sql}
@@ -468,10 +483,11 @@ LIMIT ?{limit_idx} OFFSET ?{offset_idx}
                             prompt_tokens: row.get(10)?,
                             completion_tokens: row.get(11)?,
                             cached_tokens: row.get(12)?,
-                            total_tokens: row.get(13)?,
-                            estimated: row.get::<_, i64>(14)? != 0,
-                            duration_ms: row.get(15)?,
-                            trace_id: row.get(16)?,
+                            cache_write_tokens: row.get(13)?,
+                            total_tokens: row.get(14)?,
+                            estimated: row.get::<_, i64>(15)? != 0,
+                            duration_ms: row.get(16)?,
+                            trace_id: row.get(17)?,
                         })
                     })
                 .map_err(|e| e.to_string())?;
@@ -495,4 +511,40 @@ pub(crate) async fn clear(conn: Arc<Mutex<Connection>>) -> Result<i64, String> {
     })
     .await
     .map_err(|e| format!("DB task join error: {}", e))?
+}
+
+/// 某类调用按模型的频次（倒序）—— **记忆蒸馏选模型**的依据（方案 §4.3：
+/// 「压缩会话时用得最多的模型」排首位）。
+///
+/// 只统计 `model` 非空的流水（历史流水可能为空串 —— 补不回来的那部分不参与排序）；
+/// `provider_config_id` 可能为 `NULL`（早期流水）→ 归一成空串（调用方会跳过它）。
+pub(crate) fn model_counts_in_conn(
+    conn: &Connection,
+    kind: &str,
+    limit: usize,
+) -> Result<Vec<ModelUsageCount>, String> {
+    let limit = limit.clamp(1, 100) as i64;
+    let mut stmt = conn
+        .prepare(
+            "SELECT COALESCE(provider_config_id, '') AS pid, model AS model, COUNT(*) AS calls \
+               FROM usage_ledger \
+              WHERE kind = ?1 AND COALESCE(model, '') != '' \
+              GROUP BY pid, model \
+              ORDER BY calls DESC, model ASC LIMIT ?2",
+        )
+        .map_err(|e| format!("准备模型频次查询失败: {}", e))?;
+    let rows = stmt
+        .query_map(params![kind, limit], |row| {
+            Ok(ModelUsageCount {
+                provider_config_id: row.get("pid")?,
+                model: row.get("model")?,
+                calls: row.get("calls")?,
+            })
+        })
+        .map_err(|e| format!("查询模型频次失败: {}", e))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
 }

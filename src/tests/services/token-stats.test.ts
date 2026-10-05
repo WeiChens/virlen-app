@@ -55,6 +55,7 @@ function bucket(key: string, prompt: number, completion: number) {
     promptTokens: prompt,
     completionTokens: completion,
     cachedTokens: 0,
+    cacheWriteTokens: 0,
     totalTokens: prompt + completion,
     calls: 1,
     estimatedCalls: 0,
@@ -254,6 +255,7 @@ describe('loadRecords', () => {
           promptTokens: 1_000_000,
           completionTokens: 0,
           cachedTokens: 0,
+          cacheWriteTokens: 0,
           totalTokens: 1_000_000,
           estimated: false,
           durationMs: 2_000,
@@ -312,11 +314,12 @@ describe('输出速度（tok/s）', () => {
         promptTokens: 0,
         completionTokens,
         cachedTokens: 0,
+        cacheWriteTokens: 0,
         totalTokens: completionTokens,
         estimated: false,
         durationMs,
         traceId: null,
-        cost: { input: 0, output: 0, cached: 0, total: 0 },
+        cost: { input: 0, output: 0, cached: 0, cacheWrite: 0, total: 0 },
       })
     const data = [
       rec(1, 100, 10_000), // 10 tok/s
@@ -343,11 +346,12 @@ describe('summarizeRecords（明细汇总，作用于全部筛选结果）', () 
     promptTokens: 0,
     completionTokens: 0,
     cachedTokens: 0,
+    cacheWriteTokens: 0,
     totalTokens: 0,
     estimated: false,
     durationMs: 0,
     traceId: null,
-    cost: { input: 0, output: 0, cached: 0, total: 0 },
+    cost: { input: 0, output: 0, cached: 0, cacheWrite: 0, total: 0 },
     ...p,
   })
 
@@ -359,14 +363,14 @@ describe('summarizeRecords（明细汇总，作用于全部筛选结果）', () 
         cachedTokens: 50,
         totalTokens: 300,
         durationMs: 1_000,
-        cost: { input: 0.1, output: 0.2, cached: 0.05, total: 0.35 },
+        cost: { input: 0.1, output: 0.2, cached: 0.05, cacheWrite: 0, total: 0.35 },
       }),
       rec({
         promptTokens: 10,
         completionTokens: 20,
         totalTokens: 30,
         durationMs: 1_000,
-        cost: { input: 0.01, output: 0.02, cached: 0, total: 0.03 },
+        cost: { input: 0.01, output: 0.02, cached: 0, cacheWrite: 0, total: 0.03 },
       }),
       // 未记耗时 → 不参与 tok/s（但 token 与费用仍计入合计）
       rec({ promptTokens: 1, completionTokens: 5, totalTokens: 6, durationMs: 0 }),
@@ -375,6 +379,7 @@ describe('summarizeRecords（明细汇总，作用于全部筛选结果）', () 
     expect(s.promptTokens).toBe(111)
     expect(s.completionTokens).toBe(225)
     expect(s.cachedTokens).toBe(50)
+    expect(s.cacheWriteTokens).toBe(0)
     expect(s.totalTokens).toBe(336)
     expect(s.rateSamples).toBe(2)
     // (200 + 20) / (2000 ms / 1000) = 110
@@ -398,8 +403,9 @@ describe('summarizeRecords（明细汇总，作用于全部筛选结果）', () 
       promptTokens: 0,
       completionTokens: 0,
       cachedTokens: 0,
+      cacheWriteTokens: 0,
       totalTokens: 0,
-      cost: { input: 0, output: 0, cached: 0, total: 0 },
+      cost: { input: 0, output: 0, cached: 0, cacheWrite: 0, total: 0 },
       tokPerSec: null,
       rateSamples: 0,
     })
@@ -421,14 +427,15 @@ describe('filterAndSortRecords（明细客户端筛选 / 排序）', () => {
     promptTokens: 0,
     completionTokens: 0,
     cachedTokens: 0,
+    cacheWriteTokens: 0,
     totalTokens: 0,
     estimated: false,
     durationMs: 0,
     traceId: null,
-    cost: { input: 0, output: 0, cached: 0, total: 0 },
+    cost: { input: 0, output: 0, cached: 0, cacheWrite: 0, total: 0 },
     ...p,
   })
-  const zero = { input: 0, output: 0, cached: 0, total: 0 }
+  const zero = { input: 0, output: 0, cached: 0, cacheWrite: 0, total: 0 }
   const data: CostedRecord[] = [
     rec({
       id: 1,

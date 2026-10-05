@@ -327,7 +327,9 @@ impl NativeAnthropicProvider {
                 prompt_tokens: input,
                 completion_tokens: output,
                 total_tokens: input + output + cache_read + cache_create,
-                cached_tokens: Some(cache_read + cache_create),
+                // 读 / 写分开报：两者差 12.5 倍（命中 0.1x ↔ 写入 1.25x），账本要分列入账
+                cached_tokens: Some(cache_read),
+                cache_write_tokens: Some(cache_create),
             });
         }
 
@@ -497,7 +499,9 @@ impl Provider for NativeAnthropicProvider {
                                 prompt_tokens: input,
                                 completion_tokens: output,
                                 total_tokens: input + output + cache_read + cache_create,
-                                cached_tokens: Some(cache_read + cache_create),
+                                // 读 / 写分开报（同 parse_response）
+                                cached_tokens: Some(cache_read),
+                                cache_write_tokens: Some(cache_create),
                             });
                         }
                         if !tool_fired {

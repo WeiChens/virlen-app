@@ -24,7 +24,9 @@ use virlen_core::agent::provider::{DefaultProviderFactory, ProviderFactory};
 use virlen_core::agent::types::AgentEvent;
 use virlen_core::agent::usage;
 use virlen_core::agent::{native_tools, prompts, provider, title, tool_defs, types};
-use virlen_core::session_db::{NoopSessionRepo, NoopSettingsRepo, SessionRepo, SettingsRepo};
+use virlen_core::session_db::{
+    MemoryRepo, NoopMemoryRepo, NoopSessionRepo, NoopSettingsRepo, SessionRepo, SettingsRepo,
+};
 
 use super::session_db::{init_session_db, manage_noop_settings};
 
@@ -75,6 +77,12 @@ pub fn init_agent_engine(app: &tauri::AppHandle) {
         .try_state::<Arc<dyn SettingsRepo>>()
         .map(|s| s.inner().clone())
         .unwrap_or_else(|| Arc::new(NoopSettingsRepo));
+    // 长期记忆仓储：同一把连接（`SessionDb.memory`）—— 三个 `memory_*` 原生工具直读它。
+    // 库打不开时退化为 Noop（工具如实回「本地存储不可用」，而不是把读不到说成没有记忆）。
+    let memory: Arc<dyn MemoryRepo> = app
+        .try_state::<Arc<dyn MemoryRepo>>()
+        .map(|s| s.inner().clone())
+        .unwrap_or_else(|| Arc::new(NoopMemoryRepo));
     let engine = Arc::new(AgentEngine::with_deps(
         bridge.clone(),
         sink.clone(),
@@ -87,6 +95,7 @@ pub fn init_agent_engine(app: &tauri::AppHandle) {
         // 引擎核心只认 `HostEnv` trait，因此 headless / CLI 换 `CliHost` 即可。
         Arc::new(crate::host::TauriHost::new(app.clone())),
         settings,
+        memory,
     ));
     app.manage(bridge);
     app.manage(engine);

@@ -193,6 +193,7 @@ pub async fn summarize(
                     completion_tokens: completion,
                     total_tokens: prompt + completion,
                     cached_tokens: None,
+                    cache_write_tokens: None,
                 },
                 true,
             )

@@ -65,6 +65,8 @@ pub async fn execute_tool_steps(
     host: &dyn HostEnv,
     // 应用配置仓储（`app_settings`）：`web_search` 需要读搜索源配置
     settings: &dyn crate::session_db::SettingsRepo,
+    // 长期记忆仓储（`memories` 表）：`memory_search` / `memory_recall` / `memory_write` 直读它
+    memory: &dyn crate::session_db::MemoryRepo,
 ) -> (bool, Vec<Message>) {
     let session_id = run.session_id.clone();
     let trace_id = crate::telemetry::get_session_trace(&session_id);
@@ -104,6 +106,7 @@ pub async fn execute_tool_steps(
                 repo,
                 host,
                 settings,
+                memory,
             )
             .await;
         }
@@ -317,6 +320,8 @@ async fn execute_single_step(
     host: &dyn HostEnv,
     // 应用配置仓储：`web_search` 直读 `searchProviders` / `defaultSearchProviderId`
     settings: &dyn crate::session_db::SettingsRepo,
+    // 长期记忆仓储：三个记忆工具直读（与会话库同一把连接锁）
+    memory: &dyn crate::session_db::MemoryRepo,
 ) -> String {
     // StormBreaker: 检测工具调用循环
     if check_tool_call_storm(session_id, &step.tool_name, &step.input) {
@@ -351,6 +356,7 @@ async fn execute_single_step(
                 skills: skills.as_deref(),
                 host,
                 settings,
+                memory,
             };
             let args = step.input.clone();
             let tool_name = step.tool_name.clone();

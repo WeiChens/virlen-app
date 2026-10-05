@@ -34,11 +34,11 @@
 | 能力域 | 说明 |
 |---|---|
 | **多 Provider** | OpenAI 兼容 / Anthropic / Gemini；支持自定义 Base URL、自定义 Header、`reasoningEffort` |
-| **Function Calling** | 文件读写、命令执行、网页抓取、搜索、视觉分析、知识库、会话消息检索、任务规划共 10 大类 28 个工具 |
+| **Function Calling** | 文件读写、命令执行、网页抓取、搜索、视觉分析、知识库、长期记忆（检索/召回/写入）、会话消息检索、任务规划共 11 大类 31 个工具 |
 | **端侧视觉引擎** | `quasivision` ONNX 纯本地推理：UI 元素检测 / PP-OCR v5 / YOLOE-26n 物体检测 / 图标分类（图片不出本机） |
 | **Skill 机制** | `SKILL.md` 领域知识包，注入系统提示词 + 源码目录只读可查 |
 | **多层安全** | 路径黑白名单、权限三态、跨平台 Shell 沙盒、工具风暴防护（StormBreaker） |
-| **会话与记忆** | 暂停/恢复（Run Snapshot）、LLM 上下文压缩、本地 RAG（turbovec 向量索引）、用量账本 |
+| **会话与记忆** | 暂停/恢复（Run Snapshot）、LLM 上下文压缩、本地 RAG（turbovec 向量索引）、用量账本、**长期记忆**（`memories` 表 + 建会话注入 `# Memory` 段 + 设置页面板 + `memory_search` / `memory_recall` / `memory_write` 三个原生工具 + **P2 蒸馏**：启动/面板/CLI 触发把前一天各会话摘要提炼成记忆 + **P3 去重合并 / 导出 JSON / 预算告警**，详见 `docs/memory-plan.md` / `docs/memory-p0-plan.md` / `docs/memory-p2-plan.md` / `docs/memory-p3-plan.md`） |
 | **Agent 引擎** | 仅 Rust（`src-tauri/virlen-core/src/agent/`，GUI 与 CLI 共用）；原 TS 引擎 `src/domain/engine/` 已移除（见 §11.37） |
 | **手机控制** | 手机扫码配对后远程操作本机（会话 / 发消息 / 应答工具审批）：电脑侧接口层在 `src/bridge/`，传输用自维护 npm 包 `virlen-remote`（WebRTC + SSE 信令，见 §5.9） |
 
@@ -131,7 +131,7 @@
    │      └─ 有 tool_calls ──► 工具执行  tool-executor             │
    │                              │                                │
    │         ┌────────────────────┴────────────────────┐          │
-   │         ▼ 原生工具（26 个）                          ▼ JS 桥   │
+   │         ▼ 原生工具（31 个）                          ▼ JS 桥   │
    │ Rust 直接执行                              Rust→JS→Rust 往返    │
    │ （先过安全校验）                            toolRegistry 执行    │
    │         └────────────────────┬────────────────────┘          │
@@ -193,7 +193,7 @@ iteration_verify_pass / iteration_verify_fail / iteration_max_exceeded / iterati
 | JS → Rust | `agent_send_message` / `agent_cancel` / `agent_get_run_snapshot` / `agent_clear_run_snapshot` / `agent_dispose` / `agent_kill_command` / `pty_*` | 生命周期、取消、终端交互 |
 
 **未原生化的部分**（仍委托 TS）：Gemini Provider（`agent:provider-request` 桥）。
-> **28 个工具已全部原生化**（S5 补齐 `web_fetch` / `web_search`）——`is_native_tool` 就是全集，**没有工具再走 JS 桥**。
+> **31 个工具已全部原生化**（S5 补齐 `web_fetch` / `web_search`，P1 补齐 `memory_*`）——`is_native_tool` 就是全集，**没有工具再走 JS 桥**。
 Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你是一个有用的 AI 助手。"`）。完整清单见 `docs/rust-engine.md`。
 
 > ⚠️ **改引擎语义（LLM 轮次 / 工具执行 / 暂停恢复 / 迭代验证 / 撤销）只需改 Rust**（`virlen-core`）；但**被 Rust 回调的 TS 部分**（工具执行器 / Gemini provider / 提示词组装 / 事件契约）仍须与 Rust 同语义（铁律 1）。
@@ -201,8 +201,8 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 ### 5.2 工具系统——能力扩展的唯一入口
 
 - **注册制**：`toolRegistry.register(name, executor, label?)`；不写全局函数表。
-- **定义与执行器分离，且定义只有一份（机制 C）**：工具定义在 **Rust 侧权威源** `src-tauri/virlen-core/src/agent/tool_defs/definitions.json`（28 工具 × 三平台变体 `windows`/`macos`/`linux`，键名与 `std::env::consts::OS` 同词表）；前端只注册执行器 + UI 文案（`label` 走 i18n，**不进契约**）。读取一律 `await toolRegistry.listDefinitions()`（**异步**接口），返回「契约 ∩ 已注册执行器」。详见 `docs/rust-engine.md` §12。
-- **10 大分类 / 28 个工具**（`src/domain/tools/category.ts` ↔ `src/infrastructure/tools/<分类>/`）：
+- **定义与执行器分离，且定义只有一份（机制 C）**：工具定义在 **Rust 侧权威源** `src-tauri/virlen-core/src/agent/tool_defs/definitions.json`（31 工具 × 三平台变体 `windows`/`macos`/`linux`，键名与 `std::env::consts::OS` 同词表）；前端只注册执行器 + UI 文案（`label` 走 i18n，**不进契约**）。读取一律 `await toolRegistry.listDefinitions()`（**异步**接口），返回「契约 ∩ 已注册执行器」。详见 `docs/rust-engine.md` §12。
+- **11 大分类 / 31 个工具**（`src/domain/tools/category.ts` ↔ `src/infrastructure/tools/<分类>/`）：
 
   | 分类 id | 目录 | 工具数 | 代表工具 |
   |---|---|:--:|---|
@@ -216,11 +216,14 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
   | `system` | `tools/system/` | 2 | get_current_time / user_choice |
   | `plan` | `tools/plan/` | 1 | todo_write（任务清单；用户可在标题栏浮层里直接编辑） |
   | `chat` | `tools/chat/` | 2 | list_messages / read_messages |
+  | `memory` | `tools/memory/` | 3 | memory_search / memory_recall / memory_write（长期记忆） |
 
-- **原生化（28 个 = 全部）**：`file`(8) + `search`(2) + `execute`(2) + `knowledge_base`(6) + `plan`(1：`todo_write`) + `system`(2：`user_choice` / `get_current_time`) + `chat`(2：`list_messages` / `read_messages`) + `skill`(2：`list_skills` / `read_skill_source`) + `vision`(1：`vision_analyze`) + `web`(2：`web_fetch` / `web_search`)，分发在 `src-tauri/virlen-core/src/agent/native_tools/mod.rs::is_native_tool / execute_native_tool`。**无任何工具走 JS 桥**。
+- **原生化（31 个 = 全部）**：`file`(8) + `search`(2) + `execute`(2) + `knowledge_base`(6) + `plan`(1：`todo_write`) + `system`(2：`user_choice` / `get_current_time`) + `chat`(2：`list_messages` / `read_messages`) + `memory`(3：`memory_search` / `memory_recall` / `memory_write`) + `skill`(2：`list_skills` / `read_skill_source`) + `vision`(1：`vision_analyze`) + `web`(2：`web_fetch` / `web_search`)，分发在 `src-tauri/virlen-core/src/agent/native_tools/mod.rs::is_native_tool / execute_native_tool`。**无任何工具走 JS 桥**。
   - `web_search` 的搜索源配置由引擎经 `NativeToolCtx::settings` **直读 `app_settings`**（与「忽略沙盒命令」规则同一份来源）→ CLI 同样可用；
   - `web_fetch` 的 HTML→Markdown 用 `htmd`（TS 侧是 `turndown`）——**Markdown 细节两侧不完全一致**（已知差异，见 `docs/rust-engine.md` §3）。
+  - `memory_*` 的语义实现在 `agent::memory::tools`（**与 GUI 命令 `cmd_memory_*` 共用一份**），详情正文落专用知识库（`记忆详情`，`kb_id` 缓存在保留设置键 `__memoryKbId`）。
 - **原生工具的会话库依赖**：需要读写会话库的工具（消息查询）从 `ctx.repo: &dyn SessionRepo` 取（由引擎注入；`repo.is_available()` 为 false 时如实回「本地存储不可用」）—— 与 `ctx.security` 同一种显式注入。
+- **原生工具的长期记忆依赖**：`memory_*` 从 `ctx.memory: &dyn MemoryRepo` 取（同样由引擎注入，与会话库**共用同一把连接锁**；`is_available()` 为 false 时如实回「本地存储不可用」）；详情知识库经 `ctx.settings`（`__memoryKbId` 缓存）+ 进程级 RAG 服务，RAG 未初始化时降级为「不落详情 / 读不到详情」，不牵连记忆条目本身。
 - **原生工具的技能依赖**：技能工具从 `ctx.skills`（本 agent 启用的技能名）+ `ctx.security.skills_dir` 取数，**自行扫盘解析 SKILL.md**（不依赖前端 localStorage 注册表，CLI 同样可用）。
 - **原生工具的宿主依赖**：需要「资源目录 / 数据目录在哪」的工具（`vision_analyze` 的模型文件）从 `ctx.host: &dyn HostEnv` 取。宿主差异只有两份实现 —— GUI `host::TauriHost`（`resource_dir()` / `app_data_dir()`）、CLI `host::CliHost`（环境变量 + exe 位置）；**引擎核心（含 `native_tools/**`）不得出现 `tauri::`**，这是 headless 的前提。详见 `docs/host-abstraction-draft.md`。
 - **模型侧文案一律英文（D2-A）**：工具返回给 LLM 的文本（`content`、抛出的错误、引擎迭代 / 验证反馈、系统提示词）固定英文且**不进 i18n** —— 否则 Rust 原生工具与 JS 执行器（Rust 回调）、中 / 英界面会产出不同文本。界面展示改由**结构化 `uiData`** 按界面语言重建（组件优先渲染 `uiData`，缺失时回退 `content`，如 `tool-call/TerminalBlock.tsx::displayNote`）。因此：改 TS 执行器文案**必须与 Rust 原生实现逐字对齐**（铁律 1），新增返回值务必同时给出语言无关的 `uiData` 字段。
@@ -229,10 +232,10 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 
 ### 5.3 持久化与数据
 
-- **会话消息**：Rust 侧 `src-tauri/virlen-core/src/session_db/`（已从单文件拆分为 15 文件目录）。
-  分层：`types.rs`（IPC DTO）/ `repo.rs`（trait + Noop）/ `schema.rs`（DDL + 迁移）/ `row.rs`（行映射）/ `message_query.rs`（检索）/ `usage.rs`（用量账本）/ `settings.rs`（应用设置）/ `sqlite.rs`（实现）/ `commands.rs`（20 个 `cmd_*`）/ `tests/`。
+- **会话消息**：Rust 侧 `src-tauri/virlen-core/src/session_db/`（已从单文件拆分为 16 文件目录）。
+  分层：`types.rs`（IPC DTO）/ `repo.rs`（trait + Noop）/ `schema.rs`（DDL + 迁移）/ `row.rs`（行映射）/ `message_query.rs`（检索 + 蒸馏素材 `day_materials`）/ `usage.rs`（用量账本 + 模型频次）/ `settings.rs`（应用设置）/ `memory.rs`（长期记忆 + `MemoryRepo` + 整理流水）/ `sqlite.rs`（实现）/ `commands.rs`（20 个 `cmd_*`）/ `tests/`。
   SQLite + WAL + 单写连接 + `spawn_blocking`；**先落库再 emit**。
-  ⚠️ 打开库的入口分两层（配置下沉 D3 的前置）：**零 `tauri::`** 的 `commands::open_session_db(host, spawn)`（库路径 = `host.data_dir()/virlen.db`，返回 `SessionDb { repo, settings, maintenance }`，后台任务由宿主传入的 `spawn` 派发）+ GUI 薄壳 `init_session_db(app)`（构造 `TauriHost` + `app.manage(...)`）。
+  ⚠️ 打开库的入口分两层（配置下沉 D3 的前置）：**零 `tauri::`** 的 `commands::open_session_db(host, spawn)`（库路径 = `host.data_dir()/virlen.db`，返回 `SessionDb { repo, settings, memory, maintenance }`，后台任务由宿主传入的 `spawn` 派发）+ GUI 薄壳 `init_session_db(app)`（构造 `TauriHost` + `app.manage(...)`）。
   ⇒ 「会话库 / 配置在哪」只由 `HostEnv::data_dir()` 决定 —— CLI 传 `$VIRLEN_DATA_DIR` 就与 GUI 共用**同一份** `virlen.db`。
 - **前端封装**：`src/infrastructure/sessionRepo/`（`cmd_list_sessions / cmd_get_session / cmd_get_messages / cmd_get_message_page / cmd_upsert_session / cmd_delete_session / cmd_replace_session_messages / cmd_append_messages` …）。
   启动只加载会话**元数据**，消息**懒加载**（`sessionStore.ensureMessagesLoaded`）。`utils/db.ts`（IndexedDB）已废弃删除，**不要复活**。
@@ -475,7 +478,7 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 3. **挂进启动注册链**：分类 `index.ts` 加 `import './my-tool'`（新分类还需在 `tools/index.ts::toolsInit()` 加 `await import(...)`，并在 `domain/tools/category.ts` 的 `TOOL_CATEGORIES` 登记）。
 4. **公共函数**：同分类 ≥2 工具复用 → 抽到分类 `common.ts`。
 5. **UI 渲染**：`tool-call/` 新建 `XxxMessage.tsx` 实现 `IToolCallMessage` 并 `register(...)`（未注册落 `DefaultMessage`）。
-6. **是否原生化**：在 `native_tools/mod.rs` 的 `is_native_tool` + `execute_native_tool` 加分派，对应分类目录新建 `<工具>.rs`（复用 `common.rs`）；需要会话库的工具从 `ctx.repo` 取（先看 `is_available()`），需要安全配置的从 `ctx.security` 取。
+6. **是否原生化**：在 `native_tools/mod.rs` 的 `is_native_tool` + `execute_native_tool` 加分派，对应分类目录新建 `<工具>.rs`（复用 `common.rs`）；需要会话库的工具从 `ctx.repo` 取（先看 `is_available()`），需要长期记忆的从 `ctx.memory` 取（同有 `is_available()`），需要安全配置的从 `ctx.security` 取。⚠️ 新增 `NativeToolCtx` 字段要同步改所有构造点（引擎链：`tool_executor` → `llm_loop` / `iteration` → `engine` → GUI `init_agent_engine` / CLI `run`|`tui`）。
 7. **测试**：`src/tests/infrastructure/*.test.ts`（JS）；Rust 加内联单测。契约与执行器的名单一致性由 `src/tests/contracts/tool-defs-contract.test.ts` 守（契约里有定义 → 必须有执行器，反之亦然）。
 
 ### 9.2 新增 / 修改 Provider、搜索源、Skill
@@ -544,7 +547,7 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 自检：`cargo tree -p virlen-cli` 不含 tauri / wry / tao（实测 CLI 少 94 个依赖 crate，但二进制只小约 5% —— linker 本来就会死代码消除）；`[package] default-run = "virlen-app"` 是防御性声明（缺它曾报 `failed to find main binary`）。
 
 **11.15 headless CLI `run` 的四条边界（都是有意设计，不是缺陷）**
-1. **无前端 = 无 JS 桥** —— 28 个工具全部原生，但 `security` **必须**下发 `Some(..)`（`tool_executor` 靠它决定原生 or 走桥，缺了会去等一个不存在的 JS 宿主而**永久挂起**）；`BridgedProvider`（Gemini 等）在**装配阶段**直接报错。
+1. **无前端 = 无 JS 桥** —— 31 个工具全部原生，但 `security` **必须**下发 `Some(..)`（`tool_executor` 靠它决定原生 or 走桥，缺了会去等一个不存在的 JS 宿主而**永久挂起**）；`BridgedProvider`（Gemini 等）在**装配阶段**直接报错。
 2. **交互一律 fail-closed** —— `run.rs::ask_user` 只在 stdin 是 TTY 时提示并读一行（`y`/`yes` 放行），否则回 `{__kind:"cancelled"}`（一行命令都不跑）。⚠️ **只重定向 stdout/stderr 时 stdin 仍是终端** → 会按交互模式等输入（看着像卡住）——要么连 stdin 一起重定向，要么把权限改成 allow/deny。
 3. **桌面端存 localStorage 的白/黑名单、跳过目录 CLI 读不到**（按空处理）—— 路径安全只由「工作目录 + 沙盒 + 权限三态」兜底；反过来 `permissions` / `sandboxMode` / `sandboxIgnoreRules` 都在 `app_settings`，CLI 与桌面端天然一致。
 4. **会话的工作目录创建后不可变更** —— 续跑只认会话记录，`--workspace` 与之不同直接报错；记录为空才按 `--workspace` → `defaultWorkspace` → cwd 回退，且**不写回会话**（`resources.rs::resolve_workspace`，纯函数有单测）。⚠️ 它同时决定工具 cwd / 沙箱可写根 / 提示词里的工作目录 / `AGENTS.md` 注入点 —— 曾经取 cwd 并写回会话 = 模型在另一个项目里读写（真实 bug；「同一目录的两种写法」判定见 §11.31）。
@@ -664,7 +667,16 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 - ⚠️ **未达标不报错**：前缀不足最小长度（多数模型 1024 token，部分 Haiku/Opus 型号更高）时服务端**静默跳过**，所以可以无脑打；写入按段**增量**计费（1.25x），命中 0.1x，5 分钟 TTL。
 - **只改 Rust、不同步 TS**：`src/infrastructure/provider/anthropic.ts` 的 `buildRequest` 已**不在对话路径上**（anthropic 恒为原生 Provider，见 `DefaultProviderFactory`），只在 vitest 里跑；两边都实现等于把「断点位置策略」变成两份要同步的状态（与 §11.37 同一口径）。
 - **测试**：`provider/tests.rs` 的 `anthropic_marks_three_cache_breakpoints`（三处落点 + 只有末尾工具 / 末尾块带 + 总数 3 ≤ 4）、`anthropic_breakpoints_degrade_when_parts_are_missing`（缺工具 / 缺 system / 末尾不可缓存）、`mark_tail_block_only_touches_whitelisted_non_empty_blocks`（白名单 + 空文本 + 空数组不 panic）。
-- ⚠️ **已知缺口（记账口径，尚未修）**：`anthropic.rs::parse_response` 把 `cache_read_input_tokens + cache_creation_input_tokens` 合成一个 `cached_tokens`，而前端 `domain/pricing` 只有**一个** `cachedInput` 单价（Anthropic 按 0.1x 配）→ **缓存写入的 1.25x 被当 0.1x 计价**（该桶约低估 12.5 倍）。要修得给账本加「缓存写入」一列（Rust DTO / SQLite schema / TS 类型 / 价目表 / UI 五处联动）。
+- ⚠️ **记账口径的缺口（缓存写入 1.25x 被当 0.1x 计价）已修** —— 见 §11.41。
+
+**11.41 账本把「缓存写入」独立成列（2026-10-04，承接 §11.40 ②）** —— 起因：Anthropic 的 cache **读**按 0.1x 输入价、**写**按 1.25x，而账本只有一个 `cached_tokens` 列 → 写入被按命中价计，**该桶低估约 12.5 倍**（只有在缓存真打上断点之后才会踩到）。
+- **Rust**：`types::TokenUsage` 增 `cache_write_tokens: Option<i64>`（`anthropic.rs` 的 `parse_response` 与流式 `message_delta` 把 `cache_read` / `cache_creation` **分别**入列，不再相加）；`agent/usage.rs::ledger_tokens` 增 `LedgerTokens.cache_write_tokens` —— 不变式改为 `prompt + cached + cache_write + completion === total`，且「缓存含在 prompt 里」的 provider（OpenAI 兼容 / Gemini）把读 + 写**一起**从 prompt 扣掉，推导分支也要扣掉已回报的写入量；`session_db/usage.rs` 的 `UsageEntry` / `UsageBucket` / `UsageRecord` + 写入与两处聚合 SQL + 明细 SELECT 全部加该列。
+- **迁移**：新库由 DDL 直接建出；老库走 `schema.rs::ensure_usage_cache_write_column`（与 `duration_ms` 同策略：**元数据级 ALTER**，带默认值、不重写表，放在 `init_schema` 快速路径，**不占 `SCHEMA_VERSION`**）。⚠️ 旧流水补出来恒为 0 —— 历史数据已经分不开读 / 写，只能不计写入费（略偏低，但不会算错）。
+- **TS**：`types::TokenUsage` / `domain/usage`（`ledgerTokensOf` 镜像）/ `statsRepo` / `token-stats-service`（明细 + 聚合 + CSV）全部加 `cacheWriteTokens`；`domain/pricing` 的 `ModelPrice` 加 `cacheWrite`（**缺省回退输入价**：宁可高估 20%，也不能按命中价低估 92%）、`BillableTokens` / `TokenCost` / `computeCost` 同步；7 条 Anthropic 内置价按官方规则填 `cacheWrite = 1.25 × input`。
+- **UI**：token-stats 的堆叠柱 / 折线加第 4 个系列（不画的话堆叠高度会小于「合计」）、tooltip、饼图的「按 Token 类型」、卡片、明细列（`CacheW`）与汇总条；中英双语文案「缓存写入 / Cache write」。
+- **CLI**：`usage` 的聚合表加 `cacheW` 列（四段之和才等于 `total`；明细仍靠 `--json` 看全字段）。
+- ⚠️ **仍未覆盖**：OpenAI 系（GPT-5.6+）官方对缓存写入也收 1.25x，但**用量接口不回报写入 token 数**（含在 `prompt_tokens` 里）→ 没量可乘，这类模型费用略偏低（写入那段少算 25%）；Anthropic 的 1 小时 TTL 写入价是 2x，本项目只打 5 分钟断点、也只填 1.25x。详见 `docs/token-usage-stats.md` §10。
+- **测试**：`agent::usage` 3 条（读 / 写拆分、推导分支扣写入、非 Anthropic 恒 0）、`session_db::tests::usage` 1 条（分列落库 + 分列聚合 + 不变式）、`pricing.test.ts` 4 条（写入价 / 缺省回退 / 12.5 倍关系 / 内置价 = 1.25×input）、`usage-ledger.test.ts` 2 条（Anthropic 读 / 写分列、推导扣写入）。
 
 **托盘 / 关闭不退出 / 后台工作**：实现见 `src-tauri/src/tray/`（模块头即设计说明），无独立文档。
 
@@ -678,6 +690,7 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 | 改系统提示词 | **文本**：`src-tauri/virlen-core/src/agent/prompts/*.md`（唯一源；前端经 `cmd_agent_prompts` 取）；**组装顺序**：`src/services/agent-service.ts`（GUI）+ `src-tauri/virlen-core/src/agent/prompts/assemble.rs`（Rust / CLI） |
 | 改上下文压缩 / 标题生成 | **压缩（权威、CLI 在用）** `src-tauri/virlen-core/src/agent/compress/`（`mod` 模式/常量/口径/切片 · `raw` 正文压缩渲染 · `ai` 非流式摘要）+ CLI 执行链 `src-tauri/virlen-cli/src/session_rt/compress.rs`（落库/记账/快照）+ TUI 入口 `src-tauri/virlen-cli/src/tui/{commands,state,view,app}.rs`（`/compress` 面板与状态行百分比）+ `list-session` 两列 `src-tauri/virlen-cli/src/list/{render,sessions}.rs` + `SessionRepo::session_stats`；**GUI（Tauri）也走 Rust**（命令 `cmd_compress_context` → 同一份 `agent/compress`，见 §11.36）；**标题生成** `src-tauri/virlen-core/src/agent/title.rs`（命令 `cmd_generate_title`；CLI 在 `chat` 首回合后调用，失败回退 `title_from_prompt` 首行截取）；产物在消息列表里的呈现：`ui/pages/chat/components/message/summary-message.tsx` |
 | 改会话持久化 | `src-tauri/virlen-core/src/session_db/`（`sqlite.rs` / `schema.rs` / `open.rs`）+ 命令壳 `src-tauri/src/commands/session_db.rs` + `src/infrastructure/sessionRepo/` + `src/ui/store/sessionStore.ts` |
+| 改长期记忆（memory） | **方案**：`docs/memory-plan.md`（P0：`docs/memory-p0-plan.md`；P2 蒸馏：`docs/memory-p2-plan.md`；P3 去重合并/导出/预算告警：`docs/memory-p3-plan.md`）；**纯逻辑（选取/渲染/近重复判定，唯一实现）**：`src-tauri/virlen-core/src/agent/memory/mod.rs`；**取数编排**：同目录 `prompt.rs`；**三工具语义（与 GUI 命令共用）**：同目录 `tools.rs`（`memory_search` / `memory_recall` / `memory_write`）+ **详情知识库胶水** `kb.rs`（`记忆详情`、`__memoryKbId`）；**P2 蒸馏**：同目录 `distill.rs`（提示词组装 / JSON 解析 / 一次调用）+ `models.rs`（候选排序：`memoryModel` → 压缩频次 → 默认模型，上限 3）+ `store.rs`（两道去重 / 落库 / 详情入 KB / 按天清理）+ `consolidate.rs`（逐日编排 / 抢锁 / 降级链 / 记账）；**P3 导出**：同目录 `export.rs`（版本化信封 + 全序排序）；**提示词**：`agent/prompts/memory-distill.md`（占位符 `{{existing}}` / `{{material}}`）；**原生工具壳**：`agent/native_tools/memory/`；**存取**：`session_db/memory.rs`（`memories` / `memory_runs` + `MemoryRepo`：`list`/`get`/`search`/`upsert`/`delete`/`set_level`/`set_disabled`/`touch`/`get_run`/`list_runs`/`last_done_day`/`claim_run`/`finish_run`/`delete_distilled_day`，DDL 走 `init_schema` 快速路径、**不占 `SCHEMA_VERSION`**；老库补 `memory_runs.merged` 列走 `schema.rs::ensure_memory_run_merged_column`）；**命令**：`src-tauri/src/commands/memory.rs`（含 `cmd_memory_consolidate` / `cmd_memory_runs` / `cmd_memory_export`，⤳ 铁律 4 注册）；**触发点**：`src/main.ts`（启动非阻塞）+ `ui/pages/Settings/memory-settings.tsx`（「立即整理昨天」/「导出 JSON」）+ `src-tauri/virlen-cli/src/memory.rs`（`memory list` / `memory consolidate` / `memory export`）；**注入接线**：`src/services/agent-service.ts` + `src/domain/agent/compose-prompt.ts` ↔ `agent/prompts/assemble.rs`（golden 守）；**前端**：`src/infrastructure/memoryRepo/` + `src/domain/memory/` + `src/infrastructure/tools/memory/` + `ui/pages/Settings/memory-settings.tsx` + `tool-call/MemoryMessage.tsx` |
 | 加 / 改工具 | **定义**：`src-tauri/virlen-core/src/agent/tool_defs/definitions.json`（权威源，三平台变体）；**执行器**：`src/infrastructure/tools/<分类>/<工具>.ts`（+ 分类 `common.ts`、分类 `index.ts`）；契约/注册中心：`src/domain/tools/{definitions,index,types}.ts` + `src/domain/ports/ToolRegistry.ts`；`src/domain/tools/category.ts`、`src-tauri/virlen-core/src/agent/native_tools/<分类>/<工具>.rs`（+ `mod.rs` 分发）、`src/ui/pages/chat/components/tool-call/` |
 | 改工具返回给模型的文案 / 增删 `uiData` | TS 执行器 `src/infrastructure/tools/<分类>/<工具>.ts` ↔ Rust 原生 `src-tauri/virlen-core/src/agent/native_tools/<分类>/<工具>.rs`（**逐字对齐**，模型侧固定英文）；界面侧只读 `uiData`，在 `src/ui/pages/chat/components/tool-call/<Tool>Message.tsx` / `TerminalBlock.tsx` 按界面语言重建 |
 | 改任务清单 / todo_write | `src/domain/todo/*`（纯函数）、`src/infrastructure/tools/plan/todo-write.ts`、`src/services/todo-service.ts`（落地，用户清单逐字生效）、`src/ui/store/todoDraftStore.ts`（回复期间的本地草稿；**关浮层丢弃未应用的草稿**）、`src/ui/pages/chat/components/todo/*`（标题栏入口 + 浮层；编辑期间 AI 又写清单 → 「放弃编辑并同步 / 覆盖更新」二选一） |
@@ -694,7 +707,7 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 | 改「忽略沙盒命令」规则（命中即免脱壳审批 + 强制无沙盒执行） | **Rust 判定（权威：默认引擎 + CLI）** `src-tauri/virlen-core/src/security/{rules,js_rule}.rs`（text/regex 原生 + js 内嵌 QuickJS）+ `agent/native_tools/execute/common/rules.rs`（判定入口与提示文案）+ `.../execute/{execute_command,execute_script}.rs`；**规则来源** `app_settings` 的 `sandboxIgnoreRules` 键（Rust 侧 `session_db/settings.rs` + `security::load_sandbox_ignore_rules`；前端 `infrastructure/securityRepo/`（`hydrateSecurity` / `flushSecurityPersist`）+ `ui/store/securityStore.ts` + `main.ts` 的 `step('securityConfig')`）；**TS 侧实现（浏览器 dev / 设置页「测试」）** `domain/security/sandbox-ignore-rules.ts`（`SANDBOX_JS_DEFAULT_PATTERN` / `defaultSandboxRulePattern` / 排序 / 预设 / `compileSandboxRule`）+ `services/security-service.ts::matchSandboxIgnoreRule` + `infrastructure/tools/execute/{execute-command,execute-script}.ts`；**两侧契约** `src/tests/fixtures/sandbox-rules.golden.json`（TS `tests/domain/sandbox-rules-golden.test.ts` ↔ Rust `security/rules.rs` 的 golden 用例）；UI `ui/pages/Settings/security-sandbox-rules.tsx`（拖拽几何 `./sandbox-rules-dnd.ts`；JS 输入用 `ui/components/code-editor/CodeEditor.tsx`；行内开关 `ui/components/shared/Toggle`）；下发字段 `services/rust-engine.ts::resolveSecurityConfig`（`sandboxIgnoreRules`） |
 | 改视觉 | 核心 `src-tauri/virlen-core/src/vision/`（模型定位 / 懒加载 / 推理，零 `tauri::`）、命令壳 `src-tauri/src/vision_service.rs`、原生工具 `src-tauri/virlen-core/src/agent/native_tools/vision/`、前端 `src/infrastructure/vision/`、模型 `src-tauri/resources/quasivision_models/` |
 | 改宿主抽象 / CLI 资源与数据目录 | trait `src-tauri/virlen-core/src/agent/host.rs`（`resource_candidates` / `data_dir`）＋ CLI 实现 `src-tauri/virlen-core/src/host/cli_host.rs` ＋ GUI 实现 `src-tauri/src/host/tauri_host.rs`；注入链 `AgentEngine.host` → `ExecuteLlmRoundParams.host` / `RunIterationParams.host` → `execute_tool_steps` → `NativeToolCtx.host` |
-| 跑 / 扩展 headless CLI（`virlen-cli`） | 实现全在 **`src-tauri/virlen-cli/src/`**（本 crate 的 **lib**；core **不含命令入口**），**上下文压缩**的执行链在 `session_rt/compress.rs`（`compress_session` / `current_context_tokens` / `report_line`；TUI 与顺序输出模式共用）；`lib.rs`（参数解析 / 分派 / `USAGE` / `EXIT_*`）+ `config.rs`（配置读写）+ `session.rs`（`session show|search|rm|purge`：会话详情（含上下文占用）/ **正文检索** / 删会话 / 回收孤儿消息；非终端下 `rm` / `purge` **必须** `--yes`，见 §11.39）+ `usage.rs`（`usage` 用量账本：token 聚合 + 可选明细；维度白名单与 core `usage_group_expr` 逐字一致；**只报 token 不报钱**）+ `run/`（无界面跑一次 agent：`mod` 参数解析 + `run()` 驱动 / `render` 事件→文本纯函数与 `Rendered`/`flush_rendered` / `ask` 交互应答 / `sink` `CliEventSink` / `tests`）+ `session_rt/`（**`run` 与 `chat` 共用**：`mod` `RunOptions` / `Resources` / `SessionRuntime::{bootstrap, bootstrap_chat, activate, turn_messages, send_options}` + `resources` 装配链（`resolve_workspace` / `build_resources` / `build_system_prompt` / `read_project_rules`） + `session` 会话装载（`load_or_create_session` / `new_session` / `title_from_prompt`））+ `list/`（`list-session [-g agent\|workdir] [-s\|--search <关键词>]` / `list-agent`：`mod` 参数解析与执行入口 / `group` 分组纯函数 / `render` 按**显示列宽**对齐 / `sessions` / `agents`）+ `provider.rs` / `agent.rs`（**交互式配置向导**，见 §11.27）+ `wizard.rs` / `settings_edit.rs`（向导原语 / 数组键按 id 增删改）+ `tui/`（**交互式 TUI，已落地**：`mod` 入口与降级策略 / `app` 线程编排 / `plain` 顺序输出模式 / `sink` 结构化事件出口 / `state/`（`line` 行模型与 ANSI 清洗 + `event` 事件解释 + `key` 按键）/ `view` 纯渲染 / `commands` / `input` / `term`；**各目录配 `tests.rs`** —— 切分口径与代价见 §11.18）；`src/main.rs` 仅三行转发（**bin 目标不被单测引用**）；数据 / 资源目录 `src-tauri/virlen-core/src/host/cli_host.rs`（`$VIRLEN_DATA_DIR` 覆盖）；库入口 `virlen_core::session_db::open_session_db`（与 GUI **同一条**路径链 → 同一份 `virlen.db`）；「忽略沙盒命令」规则走 `security::load_sandbox_ignore_rules`（同一份 `app_settings`）；技能目录推导 `run/session_rt` 侧 `existing_skills_dir`（= `<data_dir>/skills`，与前端 `skillStore` 规则一致）；便捷脚本 `pnpm cli …`；连带要求见 §11.14、三条边界见 §11.15、剩余 localStorage 数据见 §11.16 |
+| 跑 / 扩展 headless CLI（`virlen-cli`） | 实现全在 **`src-tauri/virlen-cli/src/`**（本 crate 的 **lib**；core **不含命令入口**），**上下文压缩**的执行链在 `session_rt/compress.rs`（`compress_session` / `current_context_tokens` / `report_line`；TUI 与顺序输出模式共用）；`lib.rs`（参数解析 / 分派 / `USAGE` / `EXIT_*`）+ `config.rs`（配置读写）+ `session.rs`（`session show|search|rm|purge`：会话详情（含上下文占用）/ **正文检索** / 删会话 / 回收孤儿消息；非终端下 `rm` / `purge` **必须** `--yes`，见 §11.39）+ `memory.rs`（`memory list|consolidate|export`：长期记忆列表 / **蒸馏整理** / **导出 JSON**（与 GUI 同一份 core 实现；headless 只支持 openai 兼容 / anthropic 协议））+ `usage.rs`（`usage` 用量账本：token 聚合 + 可选明细；维度白名单与 core `usage_group_expr` 逐字一致；**只报 token 不报钱**）+ `run/`（无界面跑一次 agent：`mod` 参数解析 + `run()` 驱动 / `render` 事件→文本纯函数与 `Rendered`/`flush_rendered` / `ask` 交互应答 / `sink` `CliEventSink` / `tests`）+ `session_rt/`（**`run` 与 `chat` 共用**：`mod` `RunOptions` / `Resources` / `SessionRuntime::{bootstrap, bootstrap_chat, activate, turn_messages, send_options}` + `resources` 装配链（`resolve_workspace` / `build_resources` / `build_system_prompt` / `read_project_rules`） + `session` 会话装载（`load_or_create_session` / `new_session` / `title_from_prompt`））+ `list/`（`list-session [-g agent\|workdir] [-s\|--search <关键词>]` / `list-agent`：`mod` 参数解析与执行入口 / `group` 分组纯函数 / `render` 按**显示列宽**对齐 / `sessions` / `agents`）+ `provider.rs` / `agent.rs`（**交互式配置向导**，见 §11.27）+ `wizard.rs` / `settings_edit.rs`（向导原语 / 数组键按 id 增删改）+ `tui/`（**交互式 TUI，已落地**：`mod` 入口与降级策略 / `app` 线程编排 / `plain` 顺序输出模式 / `sink` 结构化事件出口 / `state/`（`line` 行模型与 ANSI 清洗 + `event` 事件解释 + `key` 按键）/ `view` 纯渲染 / `commands` / `input` / `term`；**各目录配 `tests.rs`** —— 切分口径与代价见 §11.18）；`src/main.rs` 仅三行转发（**bin 目标不被单测引用**）；数据 / 资源目录 `src-tauri/virlen-core/src/host/cli_host.rs`（`$VIRLEN_DATA_DIR` 覆盖）；库入口 `virlen_core::session_db::open_session_db`（与 GUI **同一条**路径链 → 同一份 `virlen.db`）；「忽略沙盒命令」规则走 `security::load_sandbox_ignore_rules`（同一份 `app_settings`）；技能目录推导 `run/session_rt` 侧 `existing_skills_dir`（= `<data_dir>/skills`，与前端 `skillStore` 规则一致）；便捷脚本 `pnpm cli …`；连带要求见 §11.14、三条边界见 §11.15、剩余 localStorage 数据见 §11.16 |
 | 做 / 改 CLI 交互式 TUI（`virlen-cli chat`，**已落地**） | 方案与实测结论 `docs/cli-tui-plan.md`（**上下文占用百分比 / 压缩面板见 §11**）；实现 `src-tauri/virlen-cli/src/tui/`（纯逻辑 `state/`（`line`/`event`/`key`，含**本地选择面板** `Picker`）+ `view`/`commands`，终端只在 `term`，编排在 `app`/`mod`，降级形态在 `plain`）+ 会话装配/切会话 `src-tauri/virlen-cli/src/session_rt/`（`mod` 的 `bootstrap_chat` / `activate` / `turn_messages` + `resources` / `session`（含 `/model` 的 `models_text` / `switch_model` 与 `message_text`；`tui/sink.rs` 的 `text_of` 是后者的再导出别名） / `compress`）+ 入口 `src-tauri/virlen-cli/src/lib.rs`；实测脚手架（**仓库外**、一次性）`%TEMP%\ratatui-inline-spike`（`tools\repro-case.ps1` 压测「改窗口尺寸」，**必须用 `start` 起独立控制台，不能用 `Start-Process`**，否则验的是调用方的环境；向控制台注入按键需 `SetForegroundWindow` + `SendKeys`，`AppActivate` 不可靠） |
 | 改 Agent 配置（agents）的持久化 / 与 CLI 共享 | 权威源 = `app_settings` 的 `agents` 键；前端 `src/infrastructure/agentRepo/index.ts`（**内存快照 + debounce 落库 + 首启迁移**，与 `securityRepo` 同款）+ `src/ui/store/agentStore.ts` + `src/main.ts` 的 `agents` 水合步骤（⚠️ **必须在 `initDefaultAgent()` / `agentStore.reload()` 之前**，否则默认 Agent 的补全会读到空列表并**覆盖**表里已有的 Agent）；CLI 侧 `src-tauri/virlen-cli/src/list/`（`agents.rs` 的 `list-agent` / `sessions.rs` + `group.rs` 的 `list-session -g agent`）；契约测试 `src/tests/infrastructure/agent-repo-settings.test.ts` |
 | 用 CLI **交互式**配一个供应商 / Agent（`virlen-cli provider|agent add`，**已落地**） | 方案与实测 `docs/cli-tui-plan.md` §10，连带约束见 §11.27；命令实现在 `src-tauri/virlen-cli/src/{provider,agent}.rs`（+ 各自 `tests.rs`）；共用设施 `src-tauri/virlen-cli/src/wizard.rs`（问答原语 / 密文输入）+ `settings_edit.rs`（数组键按 id 增删改 + 字段级合并 + 回读校验）；**供应商模板表 / 推理档位表** 唯一源 `src-tauri/virlen-core/src/agent/provider/provider_catalog.json`（+ `catalog.rs` / 命令 `cmd_provider_catalog` / 前端 `domain/provider/catalog.ts` + `infrastructure/provider/catalog-source.ts`）；**模型列表与连通性验证** `src-tauri/virlen-core/src/agent/provider/models.rs`（`list_models` / `verify_connection`） |
@@ -704,7 +717,7 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 | 改埋点 | `src/utils/telemetry/**`（前端）；Rust 侧分两半：**出口** `src-tauri/src/telemetry.rs`（`TauriTelemetrySink` → `agent:telemetry` 事件 + `telemetry_drain_panics` 命令）、**其余**（`track` / `hash_id` / `now_ms` / 会话 trace / panic 钩子与落盘）在 `src-tauri/virlen-core/src/telemetry.rs`（sink 可插拔） |
 | 改 RAG / 知识库 | `src-tauri/virlen-core/src/rag/**`、`src/services/rag-service.ts`、`src/infrastructure/rag/` |
 | 改用量统计 / 费用 | `src-tauri/virlen-core/src/session_db/usage.rs`、`src/domain/pricing/index.ts`、`src/services/token-stats-service.ts`、`src/ui/pages/chat/components/token-stats/` |
-| 改提示词缓存 / 追查「命中率掉了」 | OpenAI 兼容：`provider/openai.rs::build_request`（`tool_choice` 决定服务端**是否渲染 tools 段落** —— 压缩踩过的坑见 §11.30）；Anthropic：`provider/anthropic.rs::build_request` 的三处显式断点（§11.40）；命中量看账本 `usage_ledger.cached_tokens`（表 `usage_ledger` / 界面 `token-stats`） |
+| 改提示词缓存 / 追查「命中率掉了」 | OpenAI 兼容：`provider/openai.rs::build_request`（`tool_choice` 决定服务端**是否渲染 tools 段落** —— 压缩踩过的坑见 §11.30）；Anthropic：`provider/anthropic.rs::build_request` 的三处显式断点（§11.40）；命中 / 写入量看账本 `usage_ledger.cached_tokens` 与 `cache_write_tokens`（§11.41；界面 `token-stats`） |
 | 不让重复启动两个进程（第二实例 → 聚焦已有窗口） | `src-tauri/src/lib.rs` 的 `.plugin(tauri_plugin_single_instance::init(...))`（**必须第一个注册**）+ `src-tauri/src/tray/mod.rs::activate_main_window`；macOS「重新打开」=`RunEvent::Reopen` |
 | 发版 / 打包 | `src-tauri/tauri.conf.json` + `package.json` + `scripts/build-msix.ps1`、`scripts/msix/AppxManifest.xml.template`；**headless CLI 打包** = 本地 `pnpm build:cli`（只出二进制），CI 在三个 `build-*.yml` 的 `build-*` job 里打成 **zip**（`Build CLI` → `Stage CLI bundle` → `Upload CLI bundle`，内含 `quasivision_models` + `README.txt`，Windows 另带 `DirectML.dll`）→ Artifact + 同一 Release 资产；zip 内布局 / 命名 / 自检口径见 §11.29 |
 

@@ -79,6 +79,20 @@ export interface SettingsStore {
   /** 默认检索数量 */
   ragDefaultTopK: number
   /**
+   * 长期记忆开关（默认**开**）。
+   *
+   * 与 Rust 侧 `agent::memory::prompt::MEMORY_ENABLED_KEY` 同名：真源在 `app_settings`，
+   * 关掉后建会话不再注入 `# Memory` 段（蒸馏调用属 P2，同样受它控制）。
+   */
+  memoryEnabled: boolean
+  /**
+   * 普通记忆注入条数（默认 20）。
+   *
+   * 上限固定为 `MEMORY_NORMAL_TOP_K_MAX`（20）——方案语义就是「普通记忆注入 top20」，
+   * 永久记忆不受它影响。
+   */
+  memoryNormalTopK: number
+  /**
    * 是否用 AI 生成会话标题（默认开启）。
    * 关闭后不再发起标题生成的 LLM 调用，直接截取首条用户消息作为标题。
    */
@@ -153,6 +167,8 @@ const defaultSettings: SettingsStore = {
   ragEnabled: false,
   ragDefaultKnowledgeBaseId: '',
   ragDefaultTopK: 5,
+  memoryEnabled: true,
+  memoryNormalTopK: 20,
   aiGenerateTitle: true,
   contextCompressMode: 'ai',
   contextWindowTokens: 200000,

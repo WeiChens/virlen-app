@@ -7,7 +7,7 @@
 //! virlen-cli agent list [--json]      等同 `list-agent`（同一份实现）
 //! ```
 //!
-//! 三个枚举源都来自权威处，不在这里另抄一份：工具名 28 个取自
+//! 三个枚举源都来自权威处，不在这里另抄一份：工具名 31 个取自
 //! `virlen_core::agent::tool_defs::list_tool_definitions()`（机制 C）、技能名取 `<data_dir>/skills`
 //! 的子目录（与 `skillStore` 同一规则）、供应商 + 模型取 `app_settings.providers`（只取 `enabled`）。
 //!

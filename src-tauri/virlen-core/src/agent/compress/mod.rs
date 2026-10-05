@@ -443,6 +443,7 @@ fn raw_usage(context_tokens: i64) -> TokenUsage {
         completion_tokens: 0,
         total_tokens: context_tokens,
         cached_tokens: None,
+        cache_write_tokens: None,
     }
 }
 

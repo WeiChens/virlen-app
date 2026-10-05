@@ -7,6 +7,7 @@
 //! virlen-cli list-session | list-agent          列出会话 / Agent
 //! virlen-cli provider <add|edit|rm|list|test>   交互式管理供应商配置
 //! virlen-cli agent <add|edit|rm|list>           交互式管理 Agent 配置
+//! virlen-cli memory <list|consolidate>          长期记忆（列出 / 蒸馏整理）
 //! ```
 //!
 //! 命令实现住在本 crate 的 lib（不是 bin）：bin 目标（`src/main.rs`）无法被单测引用，`main.rs` 只做
@@ -22,6 +23,7 @@
 
 mod config;
 mod list;
+mod memory;
 mod run;
 mod session;
 mod session_rt;
@@ -57,6 +59,8 @@ pub(crate) enum Command {
     ListSessions(list::SessionsCmd),
     ListAgents(list::AgentsCmd),
     Session(session::SessionCmd),
+    /// 长期记忆（记忆功能 P2：查看 / 蒸馏整理）
+    Memory(memory::MemoryCmd),
     Usage(usage::UsageCmd),
     Provider(provider::ProvCmd),
     Agent(agent::AgentCmd),
@@ -85,6 +89,9 @@ Virlen CLI（headless）—— 与桌面端读写同一份配置（app_settings 
   virlen-cli session <show|search|rm|purge>
                                          会话管理：查看一条会话 / 检索历史正文 /
                                          删除会话 / 回收孤儿消息（`session --help` 看说明）
+  virlen-cli memory <list|consolidate>
+                                         长期记忆：列出记忆 / 整理（把某天的会话素材蒸馏成记忆；
+                                         与桌面端同一份库与同一套逻辑，`memory --help` 看说明）
   virlen-cli usage [选项]                用量账本（token 统计；`usage --help` 看选项）
                                          只统计 token，不显示费用（价目表在前端 TS）
   virlen-cli provider <add|edit|rm|list|test>
@@ -119,6 +126,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<Command, String> {
         }
         "list-agent" | "list-agents" => list::parse_agents(it.collect()).map(Command::ListAgents),
         "session" | "sessions" => session::parse(it.collect()).map(Command::Session),
+        "memory" | "memories" => memory::parse(it.collect()).map(Command::Memory),
         "usage" | "usage-stats" => usage::parse(it.collect()).map(Command::Usage),
         "provider" => provider::parse(it.collect()).map(Command::Provider),
         "agent" => agent::parse(it.collect()).map(Command::Agent),
@@ -174,6 +182,11 @@ pub async fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i
         Ok(Command::Session(cmd)) => {
             let host: Arc<dyn HostEnv> = Arc::new(CliHost::from_env());
             session::run(&host, cmd, out, err).await
+        }
+        // 长期记忆（列表 / 整理）：需要宿主（库路径 + 知识库目录）
+        Ok(Command::Memory(cmd)) => {
+            let host: Arc<dyn HostEnv> = Arc::new(CliHost::from_env());
+            memory::run(&host, cmd, out, err).await
         }
         // 用量账本（只读）：与桌面端同一份 `usage_ledger`
         Ok(Command::Usage(cmd)) => {

@@ -117,6 +117,13 @@ pub struct TokenUsage {
     /// 就不含缓存。账本写入时由 `usage::ledger_tokens` 按 provider 拉平，此处保持 API 原样。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cached_tokens: Option<i64>,
+    /// 缓存**写入**的输入 token（Anthropic 的 `cache_creation_input_tokens`；其余 provider 恒 `None`）。
+    ///
+    /// 为什么必须与 `cached_tokens` 分开：Anthropic 的缓存**读**按 0.1x 输入价、**写**按 1.25x 输入价
+    /// 计费，若合成一个数就没法分别计价（写入会被当读取，该部分低估约 12.5 倍）。
+    /// 账本里是单独一列（`session_db::usage::UsageEntry::cache_write_tokens`），收费在前端算。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -5,8 +5,8 @@
 
 use crate::agent::types::{Message, Session};
 use crate::session_db::types::{
-    MessagePage, MessageSearchPage, MessageTimelinePage, MessageWindow, SearchCursor,
-    SessionStat, UserMessageRef,
+    MessagePage, MessageSearchPage, MessageTimelinePage, MessageWindow, ModelUsageCount,
+    SearchCursor, SessionMaterial, SessionStat, UserMessageRef,
 };
 use crate::session_db::usage::{UsageEntry, UsageQuery, UsageRecordPage, UsageStats};
 use async_trait::async_trait;
@@ -169,6 +169,28 @@ pub trait SessionRepo: Send + Sync {
     /// ⚠️ 不动 `usage_ledger`：用量是已发生消费的事实记录，删会话不清账。
     async fn purge_orphan_messages(&self) -> Result<usize, String>;
 
+    // ===== 记忆蒸馏素材（P2）：素材是 `messages` 的投影，与记忆表无关，因此留在本 trait =====
+
+    /// 某一天（本地日界 `[start_ms, end_ms)`）各会话的素材。
+    ///
+    /// 降级链：有 `role='summary'` 用当天**最后一条**摘要；没有就用当天 `user` / `assistant`
+    /// 正文摘录；两者都没有的会话不出现。详见 `session_db::message_query::day_materials_in_conn`。
+    async fn day_materials(
+        &self,
+        start_ms: i64,
+        end_ms: i64,
+    ) -> Result<Vec<SessionMaterial>, String>;
+
+    /// 库里最早一条消息的时间（首次整理时用它决定「从哪天开始补」）；空库 / 无后端 → `None`
+    async fn earliest_message_ts(&self) -> Result<Option<i64>, String>;
+
+    /// `usage_ledger` 里某 `kind` 的模型使用频次（倒序）—— 蒸馏选模型的依据（方案 §4.3）
+    async fn usage_model_counts(
+        &self,
+        kind: &str,
+        limit: usize,
+    ) -> Result<Vec<ModelUsageCount>, String>;
+
     /// 是否存在**真实的持久化后端**（`NoopSessionRepo` 覆写为 `false`）。
     ///
     /// 消息查询工具（`list_messages` / `read_messages`）据此给出与 JS 侧一致的
@@ -320,6 +342,24 @@ impl SessionRepo for NoopSessionRepo {
     }
     async fn purge_orphan_messages(&self) -> Result<usize, String> {
         Ok(0)
+    }
+    async fn day_materials(
+        &self,
+        _start_ms: i64,
+        _end_ms: i64,
+    ) -> Result<Vec<SessionMaterial>, String> {
+        // 无持久化后端：没有素材 → 蒸馏链自然降级为「跳过这一天」
+        Ok(Vec::new())
+    }
+    async fn earliest_message_ts(&self) -> Result<Option<i64>, String> {
+        Ok(None)
+    }
+    async fn usage_model_counts(
+        &self,
+        _kind: &str,
+        _limit: usize,
+    ) -> Result<Vec<ModelUsageCount>, String> {
+        Ok(Vec::new())
     }
     async fn append_usage(&self, _entries: &[UsageEntry]) -> Result<(), String> {
         Ok(())

@@ -2,7 +2,7 @@
 //!
 //! 库的打开、会话与配置的读写实现全在 `virlen-core::session_db`（零 `tauri::`）。本文件只有三件事：
 //! 1. `init_session_db`：构造 `TauriHost` → 打开库 → 注册 Tauri 状态；
-//! 2. `manage_noop_settings`：库打不开时的 Noop 兜底（否则设置命令会因「状态未注册」失败）；
+//! 2. `manage_noop_settings`：库打不开时的 Noop 兜底（否则设置 / **记忆**命令会因「状态未注册」失败）；
 //! 3. 全部 `cmd_*`：只做「参数兜底 + 调用 repo + 埋点」，业务语义都在 `SessionRepo` 实现里。
 //!
 //! ```text
@@ -17,10 +17,10 @@ use std::sync::Arc;
 use virlen_core::agent::types::{Message, Session};
 use virlen_core::session_db::{
     open_session_db, 
-    total_bytes, CheckpointResult, DbMaintenance, DbStats, MaintainResult, MessagePage,
-    MessageSearchPage, MessageTimelinePage, MessageWindow, NoopSettingsRepo, SearchCursor,
-    SessionRepo, SettingsRepo, UsageEntry, UsageQuery, UsageRecordPage, UsageStats, UserMessageRef,
-    MSG_QUERY_MAX_LIMIT,
+    total_bytes, CheckpointResult, DbMaintenance, DbStats, MaintainResult, MemoryRepo,
+    MessagePage, MessageSearchPage, MessageTimelinePage, MessageWindow, NoopMemoryRepo,
+    NoopSettingsRepo, SearchCursor, SessionRepo, SettingsRepo, UsageEntry, UsageQuery,
+    UsageRecordPage, UsageStats, UserMessageRef, MSG_QUERY_MAX_LIMIT,
 };
 
 /// **GUI 入口**（薄壳）：构造 Tauri 宿主 → 打开会话库 → 注册 Tauri 状态。
@@ -37,18 +37,20 @@ pub fn init_session_db(app: &tauri::AppHandle) -> Result<Arc<dyn SessionRepo>, S
         },
     )?;
     app.manage(db.settings.clone());
+    app.manage(db.memory.clone());
     app.manage(db.maintenance.clone());
     Ok(db.repo.clone())
 }
 
-/// **GUI 兜底**：库打不开时把配置仓储换成 [`NoopSettingsRepo`]。
+/// **GUI 兜底**：库打不开时把配置 / 记忆仓储换成 Noop。
 ///
-/// 不换的话 `cmd_settings_*` 会因「状态未注册」报错；换成 Noop 后命令正常返回，
+/// 不换的话 `cmd_settings_*` / `cmd_memory_*` 会因「状态未注册」报错；换成 Noop 后命令正常返回，
 /// 并由 `cmd_settings_get_all` 如实报「本地存储不可用」（而不是假装表是空的 ——
-/// 那会让前端误判为「空表 → 该导入」）。
+/// 那会让前端误判为「空表 → 该导入」）。记忆同理：“没有记忆”才是那时的正确语义。
 pub fn manage_noop_settings(app: &tauri::AppHandle) {
     use tauri::Manager;
     app.manage(Arc::new(NoopSettingsRepo) as Arc<dyn SettingsRepo>);
+    app.manage(Arc::new(NoopMemoryRepo) as Arc<dyn MemoryRepo>);
 }
 
 // ==================== Tauri 命令 ====================

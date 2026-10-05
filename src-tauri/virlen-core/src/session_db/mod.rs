@@ -4,9 +4,10 @@
 //!
 //! 模块划分（原单文件 `session_db.rs` 4200+ 行）：`types`（IPC DTO）、`repo`（`SessionRepo` trait +
 //! `NoopSessionRepo`）、`schema`（DDL + schema 初始化 + 历史数据迁移）、`row`（JSON 辅助 + 行映射）、
-//! `message_query`（消息查询 / 检索辅助）、`usage`（用量账本）、`settings`（`app_settings` 表 +
-//! `SettingsRepo`）、`sqlite`（rusqlite 实现：WAL + Mutex 单写连接 + `spawn_blocking`）、
-//! `maintenance`（体积统计 / WAL 截断 / VACUUM）、`open`（`open_session_db`，零 `tauri::`）。
+//! `message_query`（消息查询 / 检索辅助 / 蒸馏素材）、`usage`（用量账本）、`settings`（`app_settings`
+//! 表 + `SettingsRepo`）、`memory`（`memories` / `memory_runs` + `MemoryRepo`）、`sqlite`（rusqlite
+//! 实现：WAL + Mutex 单写连接 + `spawn_blocking`）、`maintenance`（体积统计 / WAL 截断 / VACUUM）、
+//! `open`（`open_session_db`，零 `tauri::`）。
 //!
 //! ⚠️ 全部 `#[tauri::command]`（`cmd_*`）与 `init_session_db` / `manage_noop_settings` 不在本 crate：
 //! 它们需要 `tauri::AppHandle`，住在 `virlen-app` 的 `src/commands/session_db.rs`。
@@ -16,6 +17,7 @@
 
 pub(crate) mod open;
 pub(crate) mod maintenance;
+mod memory;
 mod message_query;
 mod repo;
 mod row;
@@ -31,14 +33,20 @@ pub(crate) mod tests;
 // `open_session_db` / `SessionDb` / `Spawner` 是 GUI（`virlen-app`）与 CLI（`virlen-cli`）
 // 共用**同一条**库路径推导链的唯一入口，因此在这里公开重导出。
 pub use open::{open_session_db, SessionDb, Spawner};
+// 长期记忆（记忆功能 P0/P2）：`memories` / `memory_runs` 两张表 —— 与会话 / 配置同一个 `virlen.db`
+pub use memory::{
+    decide_claim, ClaimDecision, ClaimOptions, MemoryRecord, MemoryRepo, MemoryRun, NoopMemoryRepo,
+    SqliteMemoryRepo, MEMORY_LEVEL_NORMAL, MEMORY_LEVEL_PERMANENT, MEMORY_ORIGIN_DISTILL,
+    MEMORY_RUN_DONE, MEMORY_RUN_FAILED, MEMORY_RUN_PARTIAL, MEMORY_RUN_RUNNING, MEMORY_RUN_SKIPPED,
+};
 // 库维护（GUI 命令 `cmd_db_*` 需要）
 pub use maintenance::{total_bytes, CheckpointResult, DbMaintenance, DbStats, MaintainResult};
 pub use repo::{NoopSessionRepo, SessionRepo};
 pub use settings::{NoopSettingsRepo, SettingsRepo, SqliteSettingsRepo};
 // IPC DTO：GUI 的 `cmd_*` 命令签名用到（core 内部的原生工具同样使用）
 pub use types::{
-    MessagePage, MessageSearchPage, MessageTimelinePage, MessageWindow, SearchCursor,
-    SessionStat, UserMessageRef, MSG_QUERY_MAX_LIMIT,
+    MessagePage, MessageSearchPage, MessageTimelinePage, MessageWindow, ModelUsageCount,
+    SearchCursor, SessionMaterial, SessionStat, UserMessageRef, MSG_QUERY_MAX_LIMIT,
 };
 /// 仅供测试构造 DTO（生产路径只读不构造）
 #[cfg(test)]

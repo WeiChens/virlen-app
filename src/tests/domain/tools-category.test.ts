@@ -17,8 +17,8 @@ import {
 } from '@/domain/tools/category'
 
 describe('TOOL_CATEGORIES', () => {
-  it('应该包含 10 个分类', () => {
-    expect(TOOL_CATEGORIES).toHaveLength(10)
+  it('应该包含 11 个分类', () => {
+    expect(TOOL_CATEGORIES).toHaveLength(11)
   })
 
   it('每个分类都应该有 id、label 和 toolNames', () => {
@@ -93,6 +93,17 @@ describe('TOOL_CATEGORIES', () => {
     expect(chatCat!.toolNames).toContain('list_messages')
     expect(chatCat!.toolNames).toContain('read_messages')
   })
+
+  it('长期记忆分类应包含三个 memory_* 工具', () => {
+    const memoryCat = TOOL_CATEGORIES.find((c) => c.id === 'memory')
+    expect(memoryCat).toBeDefined()
+    expect(memoryCat!.label).toBe('长期记忆')
+    expect(memoryCat!.toolNames).toEqual([
+      'memory_search',
+      'memory_recall',
+      'memory_write',
+    ])
+  })
 })
 
 describe('getCategoryId', () => {
@@ -109,6 +120,9 @@ describe('getCategoryId', () => {
     expect(getCategoryId('list_messages')).toBe('chat')
     expect(getCategoryId('read_messages')).toBe('chat')
     expect(getCategoryId('todo_write')).toBe('plan')
+    expect(getCategoryId('memory_search')).toBe('memory')
+    expect(getCategoryId('memory_recall')).toBe('memory')
+    expect(getCategoryId('memory_write')).toBe('memory')
   })
 
   it('未知工具应返回 undefined', () => {

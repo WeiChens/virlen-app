@@ -18,6 +18,7 @@ export type PromptKey =
   | 'compressContext'
   | 'generateTitle'
   | 'verifyPrompt'
+  | 'memoryDistill'
 
 /** 全量提示词文本 */
 export type PromptTexts = Record<PromptKey, string>

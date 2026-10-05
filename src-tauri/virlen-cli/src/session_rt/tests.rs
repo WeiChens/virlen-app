@@ -69,6 +69,7 @@ fn with_usage(mut m: Message, total: i64) -> Message {
         completion_tokens: 10,
         total_tokens: total,
         cached_tokens: None,
+        cache_write_tokens: None,
     });
     m
 }

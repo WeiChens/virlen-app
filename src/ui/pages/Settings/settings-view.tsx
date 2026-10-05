@@ -16,6 +16,7 @@ import KnowledgeBaseSettings from './knowledge-base-settings'
 import EditorSettings from './editor-settings'
 import StorageSettings from './storage-settings'
 import PhoneControlSettings from './phone-control-settings'
+import MemorySettings from './memory-settings'
 import CloseSvg from '@/ui/components/icons/CloseSvg'
 import SettingSvg from '@/ui/components/icons/SettingSvg'
 import SystemSvg from '@/ui/components/icons/SystemSvg'
@@ -28,6 +29,7 @@ import SearchSvg from '@/ui/components/icons/SearchSvg'
 import CodeSvg from '@/ui/components/icons/CodeSvg'
 import StorageSvg from '@/ui/components/icons/StorageSvg'
 import PhoneSvg from '@/ui/components/icons/PhoneSvg'
+import PinSvg from '@/ui/components/icons/PinSvg'
 import settingsEvent from '@/events/settingsEvent'
 import { t } from '@/ui/i18n'
 import './settings-view.scss'
@@ -45,6 +47,7 @@ export type SettingsPage =
   | 'editor'
   | 'storage'
   | 'phone-control'
+  | 'memory'
 
 export default function SettingsView() {
   const [open, setOpen] = useState(false)
@@ -223,6 +226,12 @@ export default function SettingsView() {
               <span>{t('知识库')}</span>
             </button>
             <button
+              className={`nav-item ${page === 'memory' ? 'active' : ''}`}
+              onClick={() => setPage('memory')}>
+              <PinSvg fill="var(--nav-item-color)" />
+              <span>{t('记忆')}</span>
+            </button>
+            <button
               className={`nav-item ${page === 'editor' ? 'active' : ''}`}
               onClick={() => setPage('editor')}>
               <CodeSvg fill="var(--nav-item-color)" />
@@ -242,6 +251,7 @@ export default function SettingsView() {
           {page === 'quickinput' && <QuickInputSettings />}
           {page === 'search-engine' && <SearchEngineSettings />}
           {page === 'knowledge-base' && <KnowledgeBaseSettings />}
+          {page === 'memory' && <MemorySettings />}
           {page === 'editor' && <EditorSettings />}
         </div>
       </div>

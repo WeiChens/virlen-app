@@ -24,18 +24,51 @@ import {
 describe('computeCost', () => {
   it('按每 1M tokens 的三档单价分别计费', () => {
     const cost = computeCost(
-      { promptTokens: 1_000_000, completionTokens: 500_000, cachedTokens: 2_000_000 },
+      {
+        promptTokens: 1_000_000,
+        completionTokens: 500_000,
+        cachedTokens: 2_000_000,
+        cacheWriteTokens: 0,
+      },
       { input: 2, output: 10, cachedInput: 0.2 },
     )
     expect(cost.input).toBeCloseTo(2)
     expect(cost.output).toBeCloseTo(5)
     expect(cost.cached).toBeCloseTo(0.4)
+    expect(cost.cacheWrite).toBeCloseTo(0)
     expect(cost.total).toBeCloseTo(7.4)
+  })
+
+  it('缓存写入按写入价单独计费（Anthropic 1.25x）', () => {
+    // Sonnet 5：input 2 / cachedInput 0.2 / cacheWrite 2.5
+    const price = { input: 2, output: 10, cachedInput: 0.2, cacheWrite: 2.5 }
+    const cost = computeCost(
+      { promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheWriteTokens: 1_000_000 },
+      price,
+    )
+    expect(cost.cacheWrite).toBeCloseTo(2.5)
+    expect(cost.total).toBeCloseTo(2.5)
+
+    // 这就是本次修复：同一份 token 按「写入」计比按「命中」计贵 12.5 倍，
+    // 合并在 cachedTokens 里就会把写入当命中，低估 92%
+    const asRead = computeCost(
+      { promptTokens: 0, completionTokens: 0, cachedTokens: 1_000_000, cacheWriteTokens: 0 },
+      price,
+    ).cached
+    expect(cost.cacheWrite / asRead).toBeCloseTo(12.5)
+  })
+
+  it('缓存写入价缺省时回退输入价（宁可高估 20%，不按命中价低估 92%）', () => {
+    const cost = computeCost(
+      { promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheWriteTokens: 1_000_000 },
+      { input: 2, output: 10, cachedInput: 0.2 },
+    )
+    expect(cost.cacheWrite).toBeCloseTo(2)
   })
 
   it('缓存价缺省时回退输入价（宁可高估，不静默漏计）', () => {
     const cost = computeCost(
-      { promptTokens: 0, completionTokens: 0, cachedTokens: 1_000_000 },
+      { promptTokens: 0, completionTokens: 0, cachedTokens: 1_000_000, cacheWriteTokens: 0 },
       { input: 3, output: 15 },
     )
     expect(cost.cached).toBeCloseTo(3)
@@ -43,19 +76,23 @@ describe('computeCost', () => {
 
   it('没有单价时返回 0，不抛错', () => {
     expect(
-      computeCost({ promptTokens: 100, completionTokens: 100, cachedTokens: 0 }, null)
-        .total,
+      computeCost(
+        { promptTokens: 100, completionTokens: 100, cachedTokens: 0, cacheWriteTokens: 0 },
+        null,
+      ).total,
     ).toBe(0)
     expect(
-      computeCost({ promptTokens: 100, completionTokens: 100, cachedTokens: 0 }, undefined)
-        .total,
+      computeCost(
+        { promptTokens: 100, completionTokens: 100, cachedTokens: 0, cacheWriteTokens: 0 },
+        undefined,
+      ).total,
     ).toBe(0)
   })
 
   it('token 全为 0 时费用为 0', () => {
     expect(
       computeCost(
-        { promptTokens: 0, completionTokens: 0, cachedTokens: 0 },
+        { promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheWriteTokens: 0 },
         { input: 5, output: 5, cachedInput: 1 },
       ).total,
     ).toBe(0)
@@ -125,11 +162,15 @@ describe('内置价币种折算', () => {
     expect(convertFromUsd(p, 'USD')).toEqual(p)
   })
 
-  it('CNY 按固定汇率折算（含缓存价）', () => {
-    const p = convertFromUsd({ input: 2, output: 10, cachedInput: 0.2 }, 'CNY')
+  it('CNY 按固定汇率折算（含缓存读 / 写价）', () => {
+    const p = convertFromUsd(
+      { input: 2, output: 10, cachedInput: 0.2, cacheWrite: 2.5 },
+      'CNY',
+    )
     expect(p.input).toBeCloseTo(2 * USD_TO_CNY)
     expect(p.output).toBeCloseTo(10 * USD_TO_CNY)
     expect(p.cachedInput).toBeCloseTo(0.2 * USD_TO_CNY)
+    expect(p.cacheWrite).toBeCloseTo(2.5 * USD_TO_CNY)
   })
 
   it('折算后清除浮点尾巴（0.66 × 7.2 不再出现 4.752000000000001）', () => {
@@ -143,7 +184,24 @@ describe('内置价币种折算', () => {
   })
 
   it('无缓存价时保持 undefined（不臆造，让 computeCost 回退输入价）', () => {
-    expect(convertFromUsd({ input: 1, output: 2 }, 'CNY').cachedInput).toBeUndefined()
+    const p = convertFromUsd({ input: 1, output: 2 }, 'CNY')
+    expect(p.cachedInput).toBeUndefined()
+    expect(p.cacheWrite).toBeUndefined()
+  })
+
+  it('Anthropic 内置价的写入价 = 1.25 × 输入价（官方 5 分钟 TTL 规则）', () => {
+    for (const model of [
+      'claude-fable',
+      'claude-opus-5',
+      'claude-sonnet-5',
+      'claude-haiku-4-5',
+      'claude-3-5-sonnet',
+      'claude-3-opus',
+    ]) {
+      const p = findDefaultPrice(model)
+      expect(p, model).not.toBeNull()
+      expect(p?.cacheWrite, model).toBeCloseTo((p?.input ?? 0) * 1.25)
+    }
   })
 
   it('findDefaultPriceInCurrency 折算内置价；未收录 → null', () => {

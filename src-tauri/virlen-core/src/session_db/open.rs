@@ -12,6 +12,7 @@
 
 use crate::agent::host::HostEnv;
 use crate::session_db::maintenance::DbMaintenance;
+use crate::session_db::memory::{MemoryRepo, SqliteMemoryRepo};
 use crate::session_db::repo::SessionRepo;
 use crate::session_db::sqlite::SqliteSessionRepo;
 use crate::session_db::{SettingsRepo, SqliteSettingsRepo};
@@ -21,11 +22,13 @@ use std::sync::Arc;
 type BoxFut = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
 pub type Spawner<'a> = &'a dyn Fn(BoxFut);
 
-/// 一个已打开的会话库：会话 repo + 配置 repo + 维护句柄（**同一个 `virlen.db`**）
+/// 一个已打开的会话库：会话 repo + 配置 repo + 记忆 repo + 维护句柄（**同一个 `virlen.db`**）
 pub struct SessionDb {
     pub repo: Arc<dyn SessionRepo>,
     /// 应用设置（配置下沉 D3）——与会话**共用同一把连接锁**
     pub settings: Arc<dyn SettingsRepo>,
+    /// 长期记忆（记忆功能 P0）——同样共用同一把连接锁
+    pub memory: Arc<dyn MemoryRepo>,
     /// 库维护句柄（设置 → 存储「立即整理」）
     pub maintenance: Arc<DbMaintenance>,
 }
@@ -40,6 +43,9 @@ pub fn open_session_db(host: &dyn HostEnv, spawn: Spawner<'_>) -> Result<Session
     // 应用设置（配置下沉 D3）：**复用同一把连接**（不引入第二个写连接 → 不会 SQLITE_BUSY），
     // 因此设置写入与会话写入天然互斥；GUI 与 CLI 指向同一个 `virlen.db` 即共用同一份配置。
     let settings: Arc<dyn SettingsRepo> = Arc::new(SqliteSettingsRepo::new(sqlite.conn.clone()));
+    // 长期记忆（记忆功能 P0）：同样复用这把连接（一个写连接 → 不会 SQLITE_BUSY；
+    // 记忆写入与会话写入天然互斥，不需要额外同步原语）。
+    let memory: Arc<dyn MemoryRepo> = Arc::new(SqliteMemoryRepo::new(sqlite.conn.clone()));
     // 库维护句柄（设置 → 存储「立即整理」）：与 repo **共用同一把连接锁**，
     // 因此维护动作与聊天写入天然互斥；退出路径也用它做一次廉价的 WAL 截断。
     let maintenance = Arc::new(DbMaintenance::new(db_path, sqlite.conn.clone()));
@@ -72,6 +78,7 @@ pub fn open_session_db(host: &dyn HostEnv, spawn: Spawner<'_>) -> Result<Session
     Ok(SessionDb {
         repo,
         settings,
+        memory,
         maintenance,
     })
 }

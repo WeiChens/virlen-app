@@ -233,6 +233,8 @@ impl NativeOpenAiProvider {
                 completion_tokens: usage.get("completion_tokens").and_then(Value::as_i64).unwrap_or(0),
                 total_tokens: usage.get("total_tokens").and_then(Value::as_i64).unwrap_or(0),
                 cached_tokens: openai_cached_tokens(usage),
+                // OpenAI 兼容协议的前缀缓存是**自动**的、不计写入费，也没有写入量可报
+                cache_write_tokens: None,
             });
         }
 
@@ -389,6 +391,8 @@ impl Provider for NativeOpenAiProvider {
                     completion_tokens: usage.get("completion_tokens").and_then(Value::as_i64).unwrap_or(0),
                     total_tokens: usage.get("total_tokens").and_then(Value::as_i64).unwrap_or(0),
                     cached_tokens: openai_cached_tokens(usage),
+                    // 同上：OpenAI 兼容协议没有缓存写入量
+                    cache_write_tokens: None,
                 });
             }
 

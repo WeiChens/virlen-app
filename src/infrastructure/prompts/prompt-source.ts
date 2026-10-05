@@ -11,7 +11,7 @@
  * 因为两条路径同源，这里不需要任何「差异检查」逻辑（与 `definitions-source.ts` 同一取舍）。
  *
  * 用静态 import（`definitions-source.ts` 用动态 import）：提示词要在启动阶段同步水合
- * （`setPromptTexts`），且五个文件合计约 4 KB，不值得引入 async 分支。Tauri 构建里这段文本
+ * （`setPromptTexts`），且六个文件合计约 6 KB，不值得引入 async 分支。Tauri 构建里这段文本
  * 会在 JS 包里多一份 —— 但它就是同一份文件构建期读出来的，与 Rust 二进制里那份不会漂移。
  */
 import { invoke } from '@tauri-apps/api/core'
@@ -21,6 +21,7 @@ import CORE_PRINCIPLES from '../../../src-tauri/virlen-core/src/agent/prompts/co
 import COMPRESS_CONTEXT from '../../../src-tauri/virlen-core/src/agent/prompts/compress-context.md?raw'
 import GENERATE_TITLE from '../../../src-tauri/virlen-core/src/agent/prompts/generate-title.md?raw'
 import VERIFY_PROMPT from '../../../src-tauri/virlen-core/src/agent/prompts/verify-prompt.md?raw'
+import MEMORY_DISTILL from '../../../src-tauri/virlen-core/src/agent/prompts/memory-distill.md?raw'
 
 /** 是否在 Tauri 环境（与 `services/rust-engine.ts::isTauriAvailable` 同一判据） */
 function isTauriEnv(): boolean {
@@ -40,6 +41,7 @@ export function embeddedPromptTexts(): PromptTexts {
     compressContext: COMPRESS_CONTEXT,
     generateTitle: GENERATE_TITLE,
     verifyPrompt: VERIFY_PROMPT,
+    memoryDistill: MEMORY_DISTILL,
   }
 }
 

@@ -118,6 +118,7 @@ pub(crate) async fn run_tui(
         }),
         host.clone(),
         rt.db.settings.clone(),
+        rt.db.memory.clone(),
     ));
     let (turn_tx, mut turn_rx) = mpsc::unbounded_channel::<TurnOutcome>();
 

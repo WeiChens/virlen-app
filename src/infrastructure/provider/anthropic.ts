@@ -51,16 +51,24 @@ interface AnthropicResponse {
 }
 
 /**
- * Anthropic 的**缓存命中**输入量 = cache_read + cache_creation。
+ * Anthropic 的**缓存命中（读取）**输入量 = `cache_read_input_tokens`。
  *
  * Anthropic 的 `input_tokens` 不含缓存（与 OpenAI 口径相反），
  * 因此这里报的值是「额外的缓存部分」，账本口径拉平见 `domain/usage::ledgerTokensOf`。
+ * ⚠️ **不要**把 `cache_creation_input_tokens` 并进来：那是**写入**量（1.25x 输入价），
+ * 与命中量（0.1x）差 12.5 倍，合并后无法分别计价（见 `anthropicCacheWriteTokens`）。
  */
 function anthropicCachedTokens(usage: {
   cache_read_input_tokens?: number
+}): number {
+  return usage.cache_read_input_tokens ?? 0
+}
+
+/** Anthropic 的**缓存写入**量（`cache_creation_input_tokens`，按 1.25x 输入价计费） */
+function anthropicCacheWriteTokens(usage: {
   cache_creation_input_tokens?: number
 }): number {
-  return (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
+  return usage.cache_creation_input_tokens ?? 0
 }
 
 /**
@@ -337,6 +345,7 @@ export class AnthropicProvider implements IProvider {
                         (data.usage.cache_read_input_tokens ?? 0) +
                         (data.usage.cache_creation_input_tokens ?? 0),
                       cachedTokens: anthropicCachedTokens(data.usage),
+                      cacheWriteTokens: anthropicCacheWriteTokens(data.usage),
                     }
                   }
                   if (
@@ -579,6 +588,7 @@ export class AnthropicProvider implements IProvider {
           (data.usage.cache_read_input_tokens ?? 0) +
           (data.usage.cache_creation_input_tokens ?? 0),
         cachedTokens: anthropicCachedTokens(data.usage),
+        cacheWriteTokens: anthropicCacheWriteTokens(data.usage),
       }
     }
 

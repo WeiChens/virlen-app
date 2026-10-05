@@ -107,6 +107,65 @@ pub const MSG_QUERY_TOOL_DETAIL_MAX_CHARS: usize = 100;
 /// 概览摘要最多返回的字符数
 pub const MSG_QUERY_PREVIEW_MAX_CHARS: usize = 100;
 
+// ==================== 记忆蒸馏素材（P2） ====================
+//
+// 为什么素材查询放在会话库：它是 `messages` 的投影（要 JOIN `sessions` 拿标题 / 工作目录），
+// 与记忆表无关。上限常量同样放这里 —— 它们由 SQL 侧的截断使用，只有一个实现。
+
+/// 素材里单个会话最多取多少条正文（降级链：当天无摘要时）
+pub const MATERIAL_TRANSCRIPT_MESSAGES_PER_SESSION: usize = 12;
+/// 素材里单个会话的正文摘录字符上限（超长部分**从最早那头**截掉：新内容更值钱）
+pub const MATERIAL_TRANSCRIPT_CHARS_PER_SESSION: usize = 4000;
+/// 素材里单条摘要的字符上限（压缩摘要可能很长，超长部分只是烧 token）
+pub const MATERIAL_SUMMARY_MAX_CHARS: usize = 4000;
+
+/// 一天里**一个会话**的素材（`SessionRepo::day_materials` 的元素）
+///
+/// 优先用 `summary`（上下文压缩的产物，自包含且已经去掉过程）；
+/// `summary` 为空时用 `transcript`（当天 user / assistant 正文摘录）—— 这就是方案 §4.1 的降级链。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
+pub struct SessionMaterial {
+    pub session_id: String,
+    pub title: String,
+    pub workspace: Option<String>,
+    pub agent_id: Option<String>,
+    /// 当天该会话的**最后一条**摘要（压缩摘要自包含，多条会重复蒸馏同一段历史）
+    pub summary: Option<String>,
+    /// 当天该会话的正文摘录（仅在没有摘要时使用；已按上限截断）
+    pub transcript: String,
+    /// 该会话当天最后一次活动时间（排序 / 超预算裁剪用）
+    pub updated_at: i64,
+}
+
+impl SessionMaterial {
+    /// 实际要喂给模型的素材文本（摘要优先，否则正文摘录）
+    pub fn text(&self) -> &str {
+        match self.summary.as_deref() {
+            Some(s) if !s.trim().is_empty() => s,
+            _ => &self.transcript,
+        }
+    }
+
+    /// 是否用了降级素材（无摘要）—— 埋点与报告里区分「摘要素材」与「正文素材」
+    pub fn is_fallback(&self) -> bool {
+        self.summary.as_deref().map(str::trim).unwrap_or("").is_empty()
+            && !self.transcript.trim().is_empty()
+    }
+}
+
+/// `usage_ledger` 里某类调用按模型的频次（蒸馏模型候选的来源）
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelUsageCount {
+    /// Provider 配置 id（历史流水可能为空串）
+    pub provider_config_id: String,
+    pub model: String,
+    /// 调用次数（倒序排列的依据）
+    pub calls: i64,
+}
+
 /// 工具调用的精简描述（只告诉模型「调用了什么工具 + 关键参数」）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

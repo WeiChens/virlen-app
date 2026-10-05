@@ -29,6 +29,8 @@ import { securityService } from './services/security-service'
 import { checkUpdate, shouldShowUpdate } from './services/update-service'
 import updateEvent from './events/updateEvent'
 import { ragService } from './services/rag-service'
+// 长期记忆（P2）：启动时非阻塞触发一次「第二天整理」（幂等；关开关时后端直接返回空）
+import { consolidateMemories } from '@/infrastructure/memoryRepo'
 import { installTelemetry, track, trackPerf, flushTelemetry } from '@/utils/telemetry'
 import { installGlobalErrorHandlers } from '@/utils/telemetry/errorHandler'
 import { bindUsageLedger } from '@/domain/usage'
@@ -198,6 +200,26 @@ async function init() {
   ragService.initKnowledgeBases().catch((err) => {
     console.warn('[RAG] init knowledge bases failed:', err)
   })
+
+  // 长期记忆的「第二天整理」（记忆功能 P2）：把已结束未整理的日期逐日蒸馏成记忆。
+  // 为什么是「启动时补跑」而不是常驻定时器：后台 LLM 调用不可见、费用不可控，且与暂停/退出语义冲突
+  //（方案 §1 非目标）。
+  // ⚠️ 刻意**不走 `step()` 也不 await**：`step()` 会等 fn 跑完（并把它算进启动耗时 / 失败即中断），
+  // 而这一步要调模型、可能跑几十秒 —— 绝不能拖住启动。它自己的成败由后端埋点
+  // （`memory.consolidate`）与面板状态行负责，这里只打日志。
+  // 幂等：同一天只跑一次（`memory_runs` 主键即幂等键）；关掉「启用记忆」时后端直接返回。
+  void consolidateMemories()
+    .then((report) => {
+      if (report && report.items > 0) {
+        console.info(
+          `[memory] 已整理 ${report.days.length} 天，新增 ${report.items} 条记忆（${report.details} 条详情）`,
+        )
+      }
+    })
+    .catch((err) => {
+      // 记忆是增强能力：整理失败只打日志，不影响启动，也不弹窗打扰用户
+      console.warn('[memory] 整理失败（不影响启动）:', err)
+    })
 }
 
 // 退出前记录并落盘（§5.1 app.exit）

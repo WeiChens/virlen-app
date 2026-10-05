@@ -22,7 +22,9 @@ use super::types::{
     AgentEvent, Message, NativeToolSecurity, Run, RunSnapshot, SendMessageOptions, Session,
     ToolDefinition,
 };
-use crate::session_db::{NoopSessionRepo, NoopSettingsRepo, SessionRepo, SettingsRepo};
+use crate::session_db::{
+    MemoryRepo, NoopSessionRepo, NoopSettingsRepo, NoopMemoryRepo, SessionRepo, SettingsRepo,
+};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -39,6 +41,11 @@ pub struct AgentEngine {
     /// 显式注入（与 `repo` / `host` 同风格）：原生工具 `web_search` 需要读
     /// `searchProviders` / `defaultSearchProviderId` —— 不必让前端下发，CLI 也自然可用。
     pub settings: Arc<dyn SettingsRepo>,
+    /// 长期记忆仓储（`memories` 表，同样与会话库**同一把连接**）。
+    ///
+    /// 显式注入（同风格）：原生工具 `memory_search` / `memory_recall` / `memory_write` 用它
+    /// 读写长期记忆 —— 库打不开时注入 `NoopMemoryRepo`（工具会如实回「本地存储不可用」）。
+    pub memory: Arc<dyn MemoryRepo>,
     provider_factory: Arc<dyn ProviderFactory>,
     run_snapshots: Mutex<HashMap<String, RunSnapshot>>,
     active_cancels: Mutex<HashMap<String, CancellationToken>>,
@@ -58,6 +65,7 @@ impl AgentEngine {
             }),
             crate::host::default_host().clone(),
             Arc::new(NoopSettingsRepo),
+            Arc::new(NoopMemoryRepo),
         )
     }
 
@@ -75,6 +83,7 @@ impl AgentEngine {
             provider_factory,
             crate::host::default_host().clone(),
             Arc::new(NoopSettingsRepo),
+            Arc::new(NoopMemoryRepo),
         )
     }
 
@@ -87,6 +96,8 @@ impl AgentEngine {
         host: Arc<dyn HostEnv>,
         // 应用配置仓储：与会话库共用同一把连接，原生工具（web_search）直读它
         settings: Arc<dyn SettingsRepo>,
+        // 长期记忆仓储：同上（`open_session_db` 用它换到同一把连接上的 `SqliteMemoryRepo`）
+        memory: Arc<dyn MemoryRepo>,
     ) -> Self {
         Self {
             bridge,
@@ -94,6 +105,7 @@ impl AgentEngine {
             repo,
             host,
             settings,
+            memory,
             provider_factory,
             run_snapshots: Mutex::new(HashMap::new()),
             active_cancels: Mutex::new(HashMap::new()),
@@ -262,6 +274,7 @@ impl AgentEngine {
                 repo: self.repo.as_ref(),
                 host: self.host.as_ref(),
                 settings: self.settings.as_ref(),
+                memory: self.memory.as_ref(),
                 provider_type: &provider_type,
                 provider_config_id: &provider_config_id,
                 persist_snapshot: Some(&persist_closure),
@@ -335,6 +348,7 @@ impl AgentEngine {
             self.repo.as_ref(),
             self.host.as_ref(),
             self.settings.as_ref(),
+            self.memory.as_ref(),
         )
         .await;
 
@@ -413,6 +427,7 @@ impl AgentEngine {
                 repo: self.repo.as_ref(),
                 host: self.host.as_ref(),
                 settings: self.settings.as_ref(),
+                memory: self.memory.as_ref(),
                 provider_type,
                 provider_config_id,
                 round: round_index,

@@ -14,6 +14,7 @@ fn usage(total: i64) -> TokenUsage {
         completion_tokens: 10,
         total_tokens: total,
         cached_tokens: None,
+        cache_write_tokens: None,
     }
 }
 

@@ -7,7 +7,7 @@
  *     （`infrastructure/prompts/prompt-source.ts`）
  *
  * 守三条线：
- *   1. 五个提示词齐备、非空，且关键标记（基础段标题 / 验证占位符）没丢；
+ *   1. 六个提示词齐备、非空，且关键标记（基础段标题 / 验证与蒸馏占位符）没丢；
  *   2. 适配器给出的内嵌文本 == 权威源文件本身（**不存在第二份副本**）；
  *   3. `promptText()` 的 fail-fast 语义：未水合时抛错，水合后同步可读。
  */
@@ -17,6 +17,7 @@ import CORE_PRINCIPLES from '../../../src-tauri/virlen-core/src/agent/prompts/co
 import COMPRESS_CONTEXT from '../../../src-tauri/virlen-core/src/agent/prompts/compress-context.md?raw'
 import GENERATE_TITLE from '../../../src-tauri/virlen-core/src/agent/prompts/generate-title.md?raw'
 import VERIFY_PROMPT from '../../../src-tauri/virlen-core/src/agent/prompts/verify-prompt.md?raw'
+import MEMORY_DISTILL from '../../../src-tauri/virlen-core/src/agent/prompts/memory-distill.md?raw'
 import {
   hasPromptTexts,
   promptText,
@@ -35,23 +36,26 @@ const SOURCE: Record<PromptKey, string> = {
   compressContext: COMPRESS_CONTEXT,
   generateTitle: GENERATE_TITLE,
   verifyPrompt: VERIFY_PROMPT,
+  memoryDistill: MEMORY_DISTILL,
 }
 
 const KEYS = Object.keys(SOURCE) as PromptKey[]
 
 describe('提示词契约（权威源在 virlen-core）', () => {
-  it('五个提示词齐备且非空', () => {
-    expect(KEYS).toHaveLength(5)
+  it('六个提示词齐备且非空', () => {
+    expect(KEYS).toHaveLength(6)
     for (const key of KEYS) {
       expect(SOURCE[key].trim().length, `提示词 ${key} 为空`).toBeGreaterThan(20)
     }
   })
 
-  it('关键标记没丢（基础段标题 / 验证占位符）', () => {
+  it('关键标记没丢（基础段标题 / 验证占位符 / 蒸馏占位符）', () => {
     expect(SOURCE.toolCallSpec).toContain('# Tool Call Specification')
     expect(SOURCE.corePrinciples).toContain('# Core Principles')
     expect(SOURCE.verifyPrompt).toContain('{{goal}}')
     expect(SOURCE.verifyPrompt).toContain('{{trace}}')
+    expect(SOURCE.memoryDistill).toContain('{{existing}}')
+    expect(SOURCE.memoryDistill).toContain('{{material}}')
   })
 
   it('适配器给出的内嵌文本就是权威源本身（不存在第二份副本）', () => {

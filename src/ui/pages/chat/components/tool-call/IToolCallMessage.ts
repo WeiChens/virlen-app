@@ -22,6 +22,7 @@ import KnowledgeBaseMessage from './KnowledgeBaseMessage'
 import MkdirMessage from './MkdirMessage'
 import QueryMessagesMessage from './QueryMessagesMessage'
 import TodoWriteMessage from './TodoWriteMessage'
+import MemoryMessage from './MemoryMessage'
 
 export interface IToolCallMessage {
   getToolName(): string
@@ -82,6 +83,10 @@ registerMulti(
 registerMulti(
   ['list_messages', 'read_messages'],
   () => new QueryMessagesMessage(),
+)
+registerMulti(
+  ['memory_search', 'memory_recall', 'memory_write'],
+  () => new MemoryMessage(),
 )
 
 export const getToolCallMessage = (type: string) => {

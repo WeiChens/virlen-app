@@ -6,8 +6,9 @@
  *
  * 口径说明：
  * - 单价单位统一为「每 1,000,000 tokens 的金额」，币种由设置里的 `currency` 决定；
- * - 账本里的 `promptTokens` 是**非缓存输入**（Anthropic 语义），缓存量单独记在
- *   `cachedTokens` 里，因此可以按不同单价分别计费；
+ * - 账本里的 `promptTokens` 是**非缓存输入**（Anthropic 语义），缓存**命中（读取）**记在 `cachedTokens`、
+ *   缓存**写入**记在 `cacheWriteTokens`，三档单价分开算 —— 混在一起会算错钱：
+ *   Anthropic 的写入价（1.25x 输入）是命中价（0.1x 输入）的 12.5 倍；
  * - 内置价目表仅作**默认填充**用途，价格随时会变 —— UI 必须提示用户核对（见 §价目表注释）。
  */
 
@@ -17,8 +18,15 @@ export interface ModelPrice {
   input: number
   /** 输出价 */
   output: number
-  /** 缓存命中输入价（未填/为 0 时按输入价计） */
+  /** 缓存**命中（读取）**输入价（未填/为 0 时按输入价计） */
   cachedInput?: number
+  /**
+   * 缓存**写入**输入价。
+   *
+   * 目前只有 Anthropic 有这个概念（5 分钟 TTL = **1.25 × 输入价**）。
+   * 缺省时按**输入价**计（缺省高估 20%，也好过按命中价低估 92%）。
+   */
+  cacheWrite?: number
 }
 
 /** 一次（或一批）调用的费用拆解 */
@@ -27,17 +35,21 @@ export interface TokenCost {
   input: number
   /** 输出部分费用 */
   output: number
-  /** 缓存部分费用 */
+  /** 缓存**命中（读取）**部分费用 */
   cached: number
+  /** 缓存**写入**部分费用 */
+  cacheWrite: number
   /** 合计 */
   total: number
 }
 
-/** 参与计费的 token 三元组（与 `usage_ledger` 的列同名） */
+/** 参与计费的 token 四元组（与 `usage_ledger` 的列同名） */
 export interface BillableTokens {
   promptTokens: number
   completionTokens: number
   cachedTokens: number
+  /** 缓存写入量（非 Anthropic 恒 0） */
+  cacheWriteTokens: number
 }
 
 /** 每 1M tokens 的换算基数 */
@@ -61,14 +73,24 @@ export function computeCost(
   tokens: BillableTokens,
   price: ModelPrice | null | undefined,
 ): TokenCost {
-  if (!price) return { input: 0, output: 0, cached: 0, total: 0 }
+  if (!price) return { input: 0, output: 0, cached: 0, cacheWrite: 0, total: 0 }
   const input = ((tokens.promptTokens || 0) * (price.input || 0)) / PER_TOKENS
   const output =
     ((tokens.completionTokens || 0) * (price.output || 0)) / PER_TOKENS
   // 缓存价缺省时按输入价计（大多数服务商都低于输入价，但缺省宁可高估不高漏）
   const cachedRate = price.cachedInput || price.input || 0
   const cached = ((tokens.cachedTokens || 0) * cachedRate) / PER_TOKENS
-  return { input, output, cached, total: input + output + cached }
+  // 缓存写入同样缺省按输入价计：Anthropic 实际是 1.25x（高估 20%），
+  // 但若错按命中价（0.1x）会低估 92% —— 宁可高估
+  const writeRate = price.cacheWrite ?? price.input
+  const cacheWrite = ((tokens.cacheWriteTokens || 0) * writeRate) / PER_TOKENS
+  return {
+    input,
+    output,
+    cached,
+    cacheWrite,
+    total: input + output + cached + cacheWrite,
+  }
 }
 
 /** 账本 → 单价表的键：Provider 配置 id + 模型 id */
@@ -95,6 +117,11 @@ export interface DefaultPriceEntry {
  * 切到人民币时按 `USD_TO_CNY` 折算（见 `convertFromUsd`）；用户自填单价按其币种原样使用。
  * 匹配顺序自上而下，先命中先用；同一厂商内**越具体的 match 越靠前**
  * （如 `gpt-5.6-luna` 必须排在泛化的 `gpt-5.6` 之前）。
+ *
+ * Anthropic 的 `cacheWrite` 统一按官方规则填 **1.25 × input**（5 分钟 TTL 的写入价；
+ * 命中价 `cachedInput` 则为 0.1 × input）。OpenAI 官方也在 GPT-5.6+ 对写入收 1.25x，
+ * 但**用量接口不回报写入 token 数**（写入量含在 `prompt_tokens` 里），没量可乘，
+ * 故不在此填 `cacheWrite`（后果：这类模型的费用会略偏低，见 `docs/token-usage-stats.md`）。
  *
  * 最近一次核对：2026-09-21。来源：Anthropic 官方定价页（anthropic.com/pricing）、
  * DeepSeek 官方文档（api-docs.deepseek.com）、OpenRouter 模型 API（结构化）及公开报道；
@@ -192,22 +219,22 @@ export const DEFAULT_MODEL_PRICES: DefaultPriceEntry[] = [
   {
     match: ['claude-fable'],
     label: 'Claude Fable 5.1',
-    price: { input: 10, output: 50, cachedInput: 0.25 },
+    price: { input: 10, output: 50, cachedInput: 0.25, cacheWrite: 12.5 },
   },
   {
     match: ['claude-opus-5'],
     label: 'Claude Opus 5',
-    price: { input: 5, output: 25, cachedInput: 0.5 },
+    price: { input: 5, output: 25, cachedInput: 0.5, cacheWrite: 6.25 },
   },
   {
     match: ['claude-sonnet-5'],
     label: 'Claude Sonnet 5',
-    price: { input: 2, output: 10, cachedInput: 0.2 },
+    price: { input: 2, output: 10, cachedInput: 0.2, cacheWrite: 2.5 },
   },
   {
     match: ['claude-haiku-4-5', 'claude-haiku-4.5'],
     label: 'Claude Haiku 4.5',
-    price: { input: 1, output: 5, cachedInput: 0.1 },
+    price: { input: 1, output: 5, cachedInput: 0.1, cacheWrite: 1.25 },
   },
   // ---- Anthropic（上一代，保留兼容）----
   {
@@ -215,17 +242,17 @@ export const DEFAULT_MODEL_PRICES: DefaultPriceEntry[] = [
     // $15/$75（Claude 3 Opus 档）；如需精确请在单价页覆盖。
     match: ['claude-opus-4', 'claude-3-opus'],
     label: 'Claude Opus',
-    price: { input: 15, output: 75, cachedInput: 1.5 },
+    price: { input: 15, output: 75, cachedInput: 1.5, cacheWrite: 18.75 },
   },
   {
     match: ['claude-sonnet-4', 'claude-3-7-sonnet', 'claude-3-5-sonnet'],
     label: 'Claude Sonnet',
-    price: { input: 3, output: 15, cachedInput: 0.3 },
+    price: { input: 3, output: 15, cachedInput: 0.3, cacheWrite: 3.75 },
   },
   {
     match: ['claude-haiku', 'claude-3-5-haiku'],
     label: 'Claude Haiku',
-    price: { input: 0.8, output: 4, cachedInput: 0.08 },
+    price: { input: 0.8, output: 4, cachedInput: 0.08, cacheWrite: 1 },
   },
   // ---- Google（当前代）----
   {
@@ -319,6 +346,10 @@ export function convertFromUsd(price: ModelPrice, currency: string): ModelPrice 
       price.cachedInput == null
         ? price.cachedInput
         : roundPrice(price.cachedInput * USD_TO_CNY),
+    cacheWrite:
+      price.cacheWrite == null
+        ? price.cacheWrite
+        : roundPrice(price.cacheWrite * USD_TO_CNY),
   }
 }
 

@@ -14,6 +14,7 @@
  *   system       → tools/system/
  *   plan         → tools/plan/
  *   chat         → tools/chat/
+ *   memory       → tools/memory/
  * 新增工具时请同时更新此处分类与对应的实现目录。
  */
 
@@ -112,6 +113,15 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     toolNames: [
       'list_messages',
       'read_messages',
+    ],
+  },
+  {
+    id: 'memory',
+    label: '长期记忆',
+    toolNames: [
+      'memory_search',
+      'memory_recall',
+      'memory_write',
     ],
   },
 ]

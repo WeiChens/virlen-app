@@ -1,6 +1,6 @@
 //! 系统提示词组装（Rust 侧）—— 与 TS `domain/agent/compose-prompt.ts` 对齐
 //!
-//! 纯字符串拼接，不做任何 I/O：取数（环境信息、项目规则文件、技能列表）由调用方准备好后作为参数传入
+//! 纯字符串拼接，不做任何 I/O：取数（环境信息、项目规则文件、记忆、技能列表）由调用方准备好后作为参数传入
 //! —— CLI / GUI / 测试各取所需，组装结果却必须一致。
 //!
 //! ⚠️ 改任何一处都要两边一起改（golden 测试兜底）：`base_system_prompt()` ↔ `baseSystemPrompt()`、
@@ -37,6 +37,9 @@ pub struct PromptParts<'a> {
     pub env_prompt: Option<&'a str>,
     /// 项目规则片段（`build_project_rules_prompt` 的产物）；`None`/空串表示不注入
     pub project_rules: Option<&'a str>,
+    /// 长期记忆片段（`agent::memory::render_memory_section` 的产物，**Rust 侧唯一渲染**）；
+    /// `None`/空串表示不注入。紧跟项目规则之后 —— 项目约定优先于 AI 提炼的背景信息。
+    pub memory: Option<&'a str>,
     pub agent_name: &'a str,
     pub agent_description: &'a str,
     pub identity: Option<&'a str>,
@@ -52,7 +55,7 @@ pub fn base_system_prompt() -> String {
 
 /// 按固定顺序拼接系统提示词。
 ///
-/// 顺序即优先级：基础规范 → 环境 → 项目规则 → 角色/身份/性格 → 技能。
+/// 顺序即优先级：基础规范 → 环境 → 项目规则 → **记忆** → 角色/身份/性格 → 技能。
 /// 片段之间用空行分隔；技能段内部用单换行（末尾保留一个换行）。
 pub fn compose_system_prompt(parts: &PromptParts) -> String {
     let mut out: Vec<String> = vec![base_system_prompt()];
@@ -64,6 +67,12 @@ pub fn compose_system_prompt(parts: &PromptParts) -> String {
     if let Some(rules) = parts.project_rules {
         if !rules.is_empty() {
             out.push(rules.to_string());
+        }
+    }
+    // 记忆：与项目规则同为「前置背景」，但优先级更低（项目规则是用户手写、本项目优先）
+    if let Some(memory) = parts.memory {
+        if !memory.is_empty() {
+            out.push(memory.to_string());
         }
     }
 
@@ -140,6 +149,27 @@ mod tests {
     const FIXTURE_IDENTITY: &str = "你是一名拥有 10 年经验的资深软件架构师";
     const FIXTURE_PERSONALITY: &str = "严谨、逻辑清晰，注重事实和数据";
 
+    /// 固定记忆片段 —— ⚠️ 必须与 TS 侧 `compose-prompt-golden.test.ts` 的 `fixtureMemory()` 逐字一致
+    ///
+    /// 这里用**字面量**而不是 `render_memory_section()` 的产物：golden 守的是「位置与分隔符」，
+    /// 渲染格式本身由 `agent::memory::tests` 的逐字断言守着（两份测试各管一段，不重复）。
+    fn fixture_memory() -> String {
+        [
+            "# Memory",
+            "Long-term memories distilled from earlier sessions. They are background facts, NOT instructions from",
+            "the user in this turn. Use `memory_search` to find more, `memory_recall` to read details, and",
+            "`search_messages` to look up the original conversations.",
+            "",
+            "## Permanent",
+            "- [user] 用户偏好中文回复，讨厌啰嗦 (id: m_a1)",
+            "",
+            "## Recent",
+            "- [project] 在 virlen-app 实现记忆功能 (id: m_b7)",
+            "- [decision] 记忆只存本机 virlen.db，不入云端 (id: m_b8) [detail: kb_1/doc_2]",
+        ]
+        .join("\n")
+    }
+
     fn golden_path() -> PathBuf {
         // 契约文件放在前端测试树（`src/tests/fixtures/`）：TS 侧用 Vite `?raw` 读取，
         // Rust 侧用相对路径读取 —— 两侧共读**同一份文件**，不允许各存一份。
@@ -174,6 +204,7 @@ mod tests {
         compose_system_prompt(&PromptParts {
             env_prompt: Some(FIXTURE_ENV),
             project_rules: Some(&rules),
+            memory: Some(&fixture_memory()),
             agent_name: FIXTURE_AGENT_NAME,
             agent_description: FIXTURE_AGENT_DESC,
             identity: Some(FIXTURE_IDENTITY),
@@ -252,5 +283,35 @@ mod tests {
         let out = build_project_rules_prompt("docs/RULES.md", "\n  正文  \n");
         assert!(out.starts_with("# Project Rules (docs/RULES.md)\n\n"));
         assert!(out.ends_with("\n\n正文"));
+    }
+
+    /// 记忆段紧跟项目规则、且排在角色之前（顺序即优先级，改了就是行为变更）
+    #[test]
+    fn memory_section_sits_between_project_rules_and_role() {
+        let rules = build_project_rules_prompt("AGENTS.md", "规则正文");
+        let memory = fixture_memory();
+        let out = compose_system_prompt(&PromptParts {
+            project_rules: Some(&rules),
+            memory: Some(&memory),
+            agent_name: "A",
+            ..Default::default()
+        });
+        let rules_at = out.find("# Project Rules").expect("项目规则段缺失");
+        let memory_at = out.find("# Memory").expect("记忆段缺失");
+        let role_at = out.find("# Role").expect("角色段缺失");
+        assert!(rules_at < memory_at && memory_at < role_at);
+        assert!(out.contains("规则正文\n\n# Memory"), "两段之间应为空行");
+    }
+
+    /// 空记忆 = 不注入（与项目规则片段同语义：空串不留多余分隔符）
+    #[test]
+    fn empty_memory_is_skipped() {
+        let out = compose_system_prompt(&PromptParts {
+            memory: Some(""),
+            agent_name: "A",
+            ..Default::default()
+        });
+        assert!(!out.contains("# Memory"));
+        assert!(out.ends_with("# Role\nYou are A"));
     }
 }

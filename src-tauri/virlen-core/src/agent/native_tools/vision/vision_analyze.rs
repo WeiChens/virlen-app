@@ -101,6 +101,7 @@ mod tests {
             bridge: &bridge,
             security: sec,
             repo: crate::agent::native_tools::noop_repo(),
+            memory: crate::agent::native_tools::noop_memory(),
             skills: None,
             host,
             settings: crate::agent::native_tools::noop_settings(),

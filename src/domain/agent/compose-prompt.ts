@@ -25,6 +25,12 @@ export interface SystemPromptParts {
   envPrompt?: string
   /** 项目规则片段（`buildProjectRulesPrompt` 的产物）；空串/undefined 表示不注入 */
   projectRules?: string
+  /**
+   * 长期记忆片段（`# Memory`）—— 由 Rust 侧 `agent::memory::render_memory_section` 渲染好后传入。
+   * 前端**不复制**选取规则（top-k / 预算裁剪只有一份实现，见 `docs/memory-plan.md` §4.5）：
+   * 本模块只负责「把它插在项目规则之后、角色之前」。
+   */
+  memory?: string
   agentName?: string
   agentDescription?: string
   identity?: string
@@ -41,7 +47,7 @@ export function baseSystemPrompt(): string {
 /**
  * 按固定顺序拼接系统提示词。
  *
- * 顺序即优先级：基础规范 → 环境 → 项目规则 → 角色/身份/性格 → 技能。
+ * 顺序即优先级：基础规范 → 环境 → 项目规则 → 记忆 → 角色/身份/性格 → 技能。
  * 片段之间用空行分隔；技能段内部用单换行（末尾保留一个换行）。
  */
 export function composeSystemPrompt(parts: SystemPromptParts): string {
@@ -50,6 +56,8 @@ export function composeSystemPrompt(parts: SystemPromptParts): string {
   // 注意：`undefined` 才代表「不注入」；空串是「注入了但内容为空」（与旧行为一致）
   if (parts.envPrompt !== undefined) out.push(parts.envPrompt)
   if (parts.projectRules) out.push(parts.projectRules)
+  // 记忆：与项目规则同为「前置背景」，但优先级更低（项目规则是用户手写、本项目优先）
+  if (parts.memory) out.push(parts.memory)
 
   const name = parts.agentName ?? ''
   const description = parts.agentDescription ?? ''

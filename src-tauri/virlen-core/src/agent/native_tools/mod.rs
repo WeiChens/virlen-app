@@ -45,6 +45,11 @@
 //!     ├── search_knowledge_base.rs        list_knowledge_bases.rs
 //!     ├── list_knowledge_base_documents.rs  get_knowledge_base_document.rs
 //!     └── delete_knowledge_base_document.rs write_to_knowledge_base.rs
+//! ├── memory/                长期记忆（3）
+//! │   ├── common.rs          依赖组装（ctx → MemoryToolDeps）/ 结果转换
+//! │   ├── memory_search.rs   关键词检索（FTS5 trigram，短查询回退 LIKE）
+//! │   ├── memory_recall.rs   取详情正文（无详情 → 如实回「摘要即全文」）
+//! │   └── memory_write.rs    写入记忆（`detail` 非空 → 详情落专用知识库）
 //! ├── web/                   网络（2）
 //! │   ├── common.rs          MAX_LENGTH / is_html / format_search_results（对齐 TS `tools/web/common.ts`）
 //! │   ├── web_fetch.rs       抓 URL（reqwest + htmd；二进制拒绝 / 超时·取消 / 截断）
@@ -73,8 +78,11 @@
 //! - `web_fetch`：抓 URL（reqwest + htmd；二进制响应拒绝 / 超时·取消 / 20k 字符截断）
 //! - `web_search`：经已配置搜索源检索（tavily / bocha）—— 配置直读 `ctx.settings`
 //!   （`app_settings`，与「忽略沙盒命令」同一份来源），因此 CLI 同样可用
+//! - `memory_search` / `memory_recall` / `memory_write`：长期记忆的召回与写入（`ctx.memory` 直读
+//!   同一份 `virlen.db`；详情正文落专用知识库，条目只留 link）—— 语义实现在 `agent::memory::tools`，
+//!   与 GUI 命令 `cmd_memory_*` 共用一份
 //!
-//! 至此 **28 个工具全部有 Rust 原生实现**（不再有走 JS 桥的工具）。
+//! 至此 **31 个工具全部有 Rust 原生实现**（不再有走 JS 桥的工具）。
 //! 安全策略与前端 `securityService.resolveSafePath` / `securityPort.isPathAllowed` 对齐。
 
 mod chat;
@@ -82,6 +90,7 @@ mod common;
 mod execute;
 mod file;
 mod knowledge_base;
+mod memory;
 pub(crate) mod plan;
 mod search;
 mod skill;
@@ -106,7 +115,9 @@ use crate::agent::cancellation::CancellationToken;
 use crate::agent::event_sink::EventSink;
 use crate::agent::host::HostEnv;
 use crate::agent::types::NativeToolSecurity;
-use crate::session_db::{NoopSettingsRepo, NoopSessionRepo, SessionRepo, SettingsRepo};
+use crate::session_db::{
+    MemoryRepo, NoopMemoryRepo, NoopSettingsRepo, NoopSessionRepo, SessionRepo, SettingsRepo,
+};
 use serde_json::Value;
 
 // ==================== 统一结果 ====================
@@ -182,6 +193,14 @@ pub struct NativeToolCtx<'a> {
     /// 与 S7 的 `security::load_sandbox_ignore_rules` 是**同一份配置来源**
     /// （都落在 `app_settings`，因此 GUI 与 CLI 不分叉）。
     pub settings: &'a dyn SettingsRepo,
+    /// 长期记忆仓储（`memories` 表）。
+    ///
+    /// 与会话库**共用同一把连接锁**（`open_session_db` 里同一个 `Arc<Mutex<Connection>>`），
+    /// 因此记忆写入与会话写入天然互斥，不需要额外同步。
+    ///
+    /// 回退路径（TS 引擎入口 / 无库环境）→ [`noop_memory`]：三个记忆工具会如实回
+    /// 「本地存储不可用」，而不是把「读不到」说成「没有记忆」。
+    pub memory: &'a dyn MemoryRepo,
 }
 
 /// 无持久化后端的 `SessionRepo` 占位（回退路径的 ctx 只需要一个可用引用）。
@@ -202,6 +221,16 @@ pub fn noop_settings() -> &'static NoopSettingsRepo {
     static SETTINGS: once_cell::sync::Lazy<NoopSettingsRepo> =
         once_cell::sync::Lazy::new(NoopSettingsRepo::default);
     &SETTINGS
+}
+
+/// 无持久化后端的 `MemoryRepo` 占位（回退路径的 ctx 只需要一个可用引用）。
+///
+/// ⚠️ `NoopMemoryRepo::is_available() == false`，因此记忆工具会如实回「本地存储不可用」——
+/// 而不是把空结果误报成「没有相关记忆」。
+pub fn noop_memory() -> &'static NoopMemoryRepo {
+    static MEMORY: once_cell::sync::Lazy<NoopMemoryRepo> =
+        once_cell::sync::Lazy::new(NoopMemoryRepo::default);
+    &MEMORY
 }
 
 /// 是否由原生 Rust 直接执行（否则走 JS 桥）
@@ -236,6 +265,9 @@ pub fn is_native_tool(name: &str) -> bool {
             | "vision_analyze"
             | "web_fetch"
             | "web_search"
+            | "memory_search"
+            | "memory_recall"
+            | "memory_write"
     )
 }
 
@@ -280,6 +312,9 @@ pub async fn execute_native_tool(
         "vision_analyze" => vision::vision_analyze_tool(ctx, args).await,
         "web_fetch" => web::web_fetch_tool(ctx, args).await,
         "web_search" => web::web_search_tool(ctx, args).await,
+        "memory_search" => memory::memory_search_tool(ctx, args).await,
+        "memory_recall" => memory::memory_recall_tool(ctx, args).await,
+        "memory_write" => memory::memory_write_tool(ctx, args).await,
         _ => Err(format!("Tool \"{}\" not implemented natively", tool_name)),
     }
 }
@@ -323,6 +358,7 @@ pub async fn run_command_for_ts_engine(
         // `execute_command` 也不用宿主信息，故用进程级默认宿主。
         host: crate::host::default_host().as_ref(),
         settings: crate::agent::native_tools::noop_settings(),
+        memory: crate::agent::native_tools::noop_memory(),
     };
     execute::run_command_native(&ctx, command, timeout_secs, bypass).await
 }
@@ -353,6 +389,7 @@ mod tests {
             bridge: &bridge,
             security: &sec,
             repo: noop_repo(),
+            memory: crate::agent::native_tools::noop_memory(),
             skills: None,
             host: crate::host::default_host().as_ref(),
             settings: crate::agent::native_tools::noop_settings(),

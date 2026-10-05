@@ -65,6 +65,7 @@ pub(crate) async fn run_plain(
         }),
         host.clone(),
         rt.db.settings.clone(),
+        rt.db.memory.clone(),
     );
 
     loop {

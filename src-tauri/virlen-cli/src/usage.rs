@@ -20,7 +20,7 @@
 //!
 //! ## 三个数不能混（与桌面端同口径）
 //!
-//! - `prompt` / `completion` / `cached` / `total`：**这一次调用**的花费（供应商回报值，
+//! - `prompt` / `completion` / `cached` / `cacheW` / `total`：**这一次调用**的花费（供应商回报值，
 //!   `estimated=true` 的流水是本地估算，会单独计数）；
 //! - `calls`：调用次数（同一 messageId 只记一条，幂等键在写入侧）；
 //! - 数据范围（`first_ts` / `last_ts`）：账本覆盖的时间区间，**不受过滤条件影响** ——
@@ -382,19 +382,22 @@ fn render_report(
     let _ = writeln!(out, "\n按{}分桶:", dim);
     let _ = writeln!(
         out,
-        "  {}  {}  {}  {}  {}  {}  {}",
+        "  {}  {}  {}  {}  {}  {}  {}  {}",
         pad(&format!("{}（{}）", dim, opts.group_by), COL_KEY),
         pad_left("次数", COL_CALLS),
         pad_left("total", COL_TOKENS),
         pad_left("prompt", COL_TOKENS),
         pad_left("completion", COL_TOKENS),
         pad_left("cached", COL_SMALL),
+        // cacheW = 缓存**写入**量（目前只有 Anthropic 有，1.25x 输入价）。
+        // 与 cached（命中，0.1x）必须分开看：四段之和才等于 total
+        pad_left("cacheW", COL_SMALL),
         pad_left("估算", COL_SMALL),
     );
     for b in &stats.buckets {
         let _ = writeln!(
             out,
-            "  {}  {}  {}  {}  {}  {}  {}",
+            "  {}  {}  {}  {}  {}  {}  {}  {}",
             pad(&bucket_label(&opts.group_by, &b.key, titles), COL_KEY),
             pad_left(&b.calls.to_string(), COL_CALLS),
             pad_left(&agent_compress::format_tokens(b.total_tokens), COL_TOKENS),
@@ -404,13 +407,17 @@ fn render_report(
                 COL_TOKENS
             ),
             pad_left(&agent_compress::format_tokens(b.cached_tokens), COL_SMALL),
+            pad_left(
+                &agent_compress::format_tokens(b.cache_write_tokens),
+                COL_SMALL,
+            ),
             pad_left(&b.estimated_calls.to_string(), COL_SMALL),
         );
     }
     let t = &stats.totals;
     let _ = writeln!(
         out,
-        "  {}  {}  {}  {}  {}  {}  {}",
+        "  {}  {}  {}  {}  {}  {}  {}  {}",
         pad("合计", COL_KEY),
         pad_left(&t.calls.to_string(), COL_CALLS),
         pad_left(&agent_compress::format_tokens(t.total_tokens), COL_TOKENS),
@@ -420,6 +427,10 @@ fn render_report(
             COL_TOKENS
         ),
         pad_left(&agent_compress::format_tokens(t.cached_tokens), COL_SMALL),
+        pad_left(
+            &agent_compress::format_tokens(t.cache_write_tokens),
+            COL_SMALL,
+        ),
         pad_left(&t.estimated_calls.to_string(), COL_SMALL),
     );
     let _ = writeln!(

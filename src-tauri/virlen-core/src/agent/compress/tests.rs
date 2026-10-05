@@ -71,6 +71,7 @@ fn with_usage(mut m: Message, total: i64) -> Message {
         completion_tokens: 0,
         total_tokens: total,
         cached_tokens: None,
+        cache_write_tokens: None,
     });
     m
 }
@@ -171,6 +172,7 @@ impl RecordingProvider {
             completion_tokens: 10,
             total_tokens: total,
             cached_tokens: Some(total - 20),
+            cache_write_tokens: None,
         });
         self
     }
@@ -461,6 +463,7 @@ async fn ai_mode_uses_provider_usage_and_keeps_two_accounting_scopes() {
             completion_tokens: 120,
             total_tokens: 90_120,
             cached_tokens: None,
+            cache_write_tokens: None,
         }),
     };
     let out = compress(CompressInput {

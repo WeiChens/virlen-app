@@ -1,6 +1,6 @@
 //! 工具定义的权威源（机制 C）—— 定义在此，前端经 Tauri 命令获取
 //!
-//! 28 个工具定义原先只存在于 TS 侧，而 Rust 引擎 / CLI 也需要自己有一份；两侧各写一份就是第 2、第 3
+//! 31 个工具定义原先只存在于 TS 侧，而 Rust 引擎 / CLI 也需要自己有一份；两侧各写一份就是第 2、第 3
 //! 份定义 —— 本项目最忌讳的「静默分叉」。因此收敛到本模块：
 //!
 //! - 数据三方同构：TS `ResolvedToolDefinition` ↔ `definitions.json` ↔ `types::ToolDefinition`；
@@ -75,7 +75,7 @@ pub fn tool_count() -> usize {
 mod tests {
     use super::*;
 
-    const EXPECTED_TOOLS: usize = 28;
+    const EXPECTED_TOOLS: usize = 31;
 
     #[test]
     fn all_platforms_present_and_complete() {

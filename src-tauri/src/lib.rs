@@ -455,6 +455,24 @@ pub fn run() {
             commands::session_db::cmd_settings_get_all,
             commands::session_db::cmd_settings_upsert,
             commands::session_db::cmd_settings_import,
+            // 长期记忆（记忆功能 P0：面板 CRUD + 建会话注入段）
+            commands::memory::cmd_memory_list,
+            commands::memory::cmd_memory_upsert,
+            commands::memory::cmd_memory_delete,
+            commands::memory::cmd_memory_set_level,
+            commands::memory::cmd_memory_set_disabled,
+            commands::memory::cmd_memory_prompt_section,
+            commands::memory::cmd_memory_touch,
+            commands::memory::cmd_memory_limits,
+            // 长期记忆（P1：三个 `memory_*` 工具的 GUI 孪生 —— 与原生工具共用 core 实现）
+            commands::memory::cmd_memory_search,
+            commands::memory::cmd_memory_recall,
+            commands::memory::cmd_memory_write,
+            // 长期记忆（P2：蒸馏整理 —— 同一份 core 实现，CLI 也走它）
+            commands::memory::cmd_memory_consolidate,
+            commands::memory::cmd_memory_runs,
+            // 长期记忆（P3：导出 JSON —— 前端选路径写文件，Rust 只给文本）
+            commands::memory::cmd_memory_export,
             // 用量账本（token 统计）
             commands::session_db::cmd_append_usage,
             commands::session_db::cmd_usage_stats,

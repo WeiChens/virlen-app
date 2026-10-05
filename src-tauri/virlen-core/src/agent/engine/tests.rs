@@ -605,6 +605,7 @@ async fn resume_reads_messages_from_repo() {
         }),
         crate::host::default_host().clone(),
         Arc::new(crate::session_db::NoopSettingsRepo),
+        Arc::new(crate::session_db::NoopMemoryRepo),
     );
 
     // 快照里有一个待执行的 tool step；前端 **不传** 历史消息（修复后的行为）
@@ -723,6 +724,7 @@ async fn resume_reads_context_from_last_summary() {
         }),
         crate::host::default_host().clone(),
         Arc::new(crate::session_db::NoopSettingsRepo),
+        Arc::new(crate::session_db::NoopMemoryRepo),
     );
 
     let snapshot = RunSnapshot {

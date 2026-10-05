@@ -30,9 +30,13 @@ pub const GENERATE_TITLE: &str = include_str!("generate-title.md");
 /// 结果验证模板（占位符 `{{goal}}` / `{{trace}}`）
 pub const VERIFY_PROMPT: &str = include_str!("verify-prompt.md");
 
+/// 长期记忆蒸馏指令（占位符 `{{existing}}` / `{{material}}`）——
+/// 一次非流式调用把「一天各会话的摘要 / 正文摘录」提炼成 ≤120 字符的记忆条目（记忆功能 P2）
+pub const MEMORY_DISTILL: &str = include_str!("memory-distill.md");
+
 /// 全部提示词文本 —— **前端取值的唯一出口**（Tauri 命令 `cmd_agent_prompts` 的载荷）
 ///
-/// 一次性全量返回（五个文件合计约 4 KB）：前端启动阶段水合一次，此后同步读取。
+/// 一次性全量返回（六个文件合计约 6 KB）：前端启动阶段水合一次，此后同步读取。
 /// 比「一个提示词一个命令」简单，也避开了「只水合了一半」这种中间态。
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +46,7 @@ pub struct PromptTexts {
     pub compress_context: &'static str,
     pub generate_title: &'static str,
     pub verify_prompt: &'static str,
+    pub memory_distill: &'static str,
 }
 
 /// 取全部提示词文本
@@ -52,6 +57,7 @@ pub fn all_prompt_texts() -> PromptTexts {
         compress_context: COMPRESS_CONTEXT,
         generate_title: GENERATE_TITLE,
         verify_prompt: VERIFY_PROMPT,
+        memory_distill: MEMORY_DISTILL,
     }
 }
 
@@ -68,9 +74,10 @@ mod tests {
         assert_eq!(t.compress_context, COMPRESS_CONTEXT);
         assert_eq!(t.generate_title, GENERATE_TITLE);
         assert_eq!(t.verify_prompt, VERIFY_PROMPT);
+        assert_eq!(t.memory_distill, MEMORY_DISTILL);
     }
 
-    /// 五个文件都是真内容（防止有人清空文件后构建仍然通过）
+    /// 六个文件都是真内容（防止有人清空文件后构建仍然通过）
     #[test]
     fn all_prompts_are_non_empty() {
         let t = all_prompt_texts();
@@ -80,6 +87,7 @@ mod tests {
             ("compress_context", t.compress_context),
             ("generate_title", t.generate_title),
             ("verify_prompt", t.verify_prompt),
+            ("memory_distill", t.memory_distill),
         ] {
             assert!(body.trim().len() > 20, "提示词 `{}` 内容为空或过短", name);
         }
@@ -90,5 +98,15 @@ mod tests {
     fn verify_prompt_carries_both_placeholders() {
         assert!(VERIFY_PROMPT.contains("{{goal}}"), "缺 {{goal}} 占位符");
         assert!(VERIFY_PROMPT.contains("{{trace}}"), "缺 {{trace}} 占位符");
+    }
+
+    /// 蒸馏提示词的两个占位符必须在（`agent::memory::distill` 靠字符串替换）
+    #[test]
+    fn memory_distill_prompt_carries_both_placeholders() {
+        assert!(MEMORY_DISTILL.contains("{{existing}}"), "缺 {{existing}} 占位符");
+        assert!(MEMORY_DISTILL.contains("{{material}}"), "缺 {{material}} 占位符");
+        // 长度与格式要求写在提示词里（硬上限的权威在代码，但模型必须先被要求）
+        assert!(MEMORY_DISTILL.contains("120"));
+        assert!(MEMORY_DISTILL.contains("{\"memories\""));
     }
 }

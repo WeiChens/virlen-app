@@ -6,10 +6,12 @@
 use crate::session_db::row::{content_plain_text, row_err, truncate_chars};
 use crate::session_db::types::{
     MessageBrief, MessageSearchItem, MessageSearchPage, MessageTimelineItem, MessageTimelinePage,
-    MessageWindow, SearchCursor, ToolCallBrief, MSG_QUERY_MAX_BACK, MSG_QUERY_MAX_FWD,
-    MSG_QUERY_MAX_LIMIT, MSG_QUERY_MAX_SPAN, MSG_QUERY_PREVIEW_MAX_CHARS,
-    MSG_QUERY_TEXT_MAX_CHARS, MSG_QUERY_TOOL_DETAIL_MAX_CHARS,
+    MessageWindow, SearchCursor, ToolCallBrief, MATERIAL_SUMMARY_MAX_CHARS,
+    MATERIAL_TRANSCRIPT_CHARS_PER_SESSION, MATERIAL_TRANSCRIPT_MESSAGES_PER_SESSION,
+    MSG_QUERY_MAX_BACK, MSG_QUERY_MAX_FWD, MSG_QUERY_MAX_LIMIT, MSG_QUERY_MAX_SPAN,
+    MSG_QUERY_PREVIEW_MAX_CHARS, MSG_QUERY_TEXT_MAX_CHARS, MSG_QUERY_TOOL_DETAIL_MAX_CHARS,
 };
+use crate::session_db::types::SessionMaterial;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::sync::{Arc, Mutex};
 
@@ -670,4 +672,219 @@ pub(crate) async fn search_messages(
     })
     .await
     .map_err(|e| format!("DB task join error: {}", e))?
+}
+
+// ==================== 记忆蒸馏素材（P2） ====================
+
+/// 取某一天（本地日界的毫秒区间 `[start_ms, end_ms)`）**各会话**的素材（纯函数）。
+///
+/// 降级链（方案 §4.1）：
+/// 1. 该会话当天有 `role='summary'` → 取**最后一条**（压缩摘要自包含，早的只是它的前缀，
+///    多条一起喂会让同一段历史被蒸馏多次）；
+/// 2. 没有摘要但当天有对话 → 取当天 `user` / `assistant` 的正文摘录（每会话限
+///    [`MATERIAL_TRANSCRIPT_MESSAGES_PER_SESSION`] 条 / [`MATERIAL_TRANSCRIPT_CHARS_PER_SESSION`] 字符，
+///    **从最早那头**截：新内容更值钱）；
+/// 3. 两者都没有（当天只有工具消息 / 只有图片）→ 该会话**不进素材**（调用方据此判「无素材 → skipped」）。
+///
+/// 排序：`updated_at ASC, session_id ASC` —— 全序，便于调用方按「从旧到新」裁预算，测试也才能断言。
+pub(crate) fn day_materials_in_conn(
+    conn: &Connection,
+    start_ms: i64,
+    end_ms: i64,
+) -> Result<Vec<SessionMaterial>, String> {
+    use std::collections::BTreeMap;
+
+    // ① 会话元信息（当天有活动的会话）——单独查，后面两个查询就不用重复 JOIN sessions
+    let mut meta: BTreeMap<String, (String, Option<String>, Option<String>)> = BTreeMap::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT s.id AS id, s.title AS title, s.workspace AS workspace, s.agent_id AS agent_id \
+                   FROM sessions s \
+                  WHERE EXISTS (SELECT 1 FROM messages m \
+                                 WHERE m.session_id = s.id AND m.timestamp >= ?1 AND m.timestamp < ?2)",
+            )
+            .map_err(|e| format!("准备素材会话查询失败: {}", e))?;
+        let rows = stmt
+            .query_map(params![start_ms, end_ms], |row| {
+                Ok((
+                    row.get::<_, String>("id")?,
+                    (
+                        row.get::<_, String>("title")?,
+                        row.get::<_, Option<String>>("workspace")?,
+                        row.get::<_, Option<String>>("agent_id")?,
+                    ),
+                ))
+            })
+            .map_err(|e| format!("查询素材会话失败: {}", e))?;
+        for row in rows {
+            let (id, info) = row.map_err(|e| e.to_string())?;
+            meta.insert(id, info);
+        }
+    }
+    if meta.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut out: BTreeMap<String, SessionMaterial> = BTreeMap::new();
+
+    // ② 摘要（每会话取最后一条：`ORDER BY ts ASC` + 覆盖写入）
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT m.session_id AS session_id, m.content AS content, m.timestamp AS ts \
+                   FROM messages m \
+                  WHERE m.role = 'summary' AND m.timestamp >= ?1 AND m.timestamp < ?2 \
+                  ORDER BY m.timestamp ASC, m.rowid ASC",
+            )
+            .map_err(|e| format!("准备摘要素材查询失败: {}", e))?;
+        let rows = stmt
+            .query_map(params![start_ms, end_ms], |row| {
+                let content_json: String = row.get("content")?;
+                let content: serde_json::Value =
+                    serde_json::from_str(&content_json).unwrap_or(serde_json::Value::Null);
+                Ok((
+                    row.get::<_, String>("session_id")?,
+                    row.get::<_, i64>("ts")?,
+                    content_plain_text(&content),
+                ))
+            })
+            .map_err(|e| format!("查询摘要素材失败: {}", e))?;
+        for row in rows {
+            let (sid, ts, text) = row.map_err(|e| e.to_string())?;
+            let head: String = text.trim().chars().take(MATERIAL_SUMMARY_MAX_CHARS).collect();
+            if head.is_empty() {
+                continue;
+            }
+            let Some((title, workspace, agent_id)) = meta.get(&sid).cloned() else {
+                continue; // 会话行已删（孤儿消息）→ 没有标题与工作目录，不入素材
+            };
+            out.insert(
+                sid.clone(),
+                SessionMaterial {
+                    session_id: sid,
+                    title,
+                    workspace,
+                    agent_id,
+                    summary: Some(head),
+                    transcript: String::new(),
+                    updated_at: ts,
+                },
+            );
+        }
+    }
+
+    // ③ 正文摘录（只给**没有摘要**的会话 —— 有摘要时正文纯属重复）
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT m.session_id AS session_id, m.role AS role, m.text_plain AS text_plain, \
+                        m.content AS content, m.timestamp AS ts \
+                   FROM messages m \
+                  WHERE m.role IN ('user', 'assistant') AND m.timestamp >= ?1 AND m.timestamp < ?2 \
+                  ORDER BY m.timestamp ASC, m.rowid ASC",
+            )
+            .map_err(|e| format!("准备正文素材查询失败: {}", e))?;
+        let rows = stmt
+            .query_map(params![start_ms, end_ms], |row| {
+                let role: String = row.get("role")?;
+                let plain: String = row.get::<_, Option<String>>("text_plain")?.unwrap_or_default();
+                // `text_plain` 可能为空（历史行未回填）→ 从 content JSON 现取，保证降级链不因迁移状态而失效
+                let text = if plain.trim().is_empty() {
+                    let content_json: String = row.get("content")?;
+                    let content: serde_json::Value =
+                        serde_json::from_str(&content_json).unwrap_or(serde_json::Value::Null);
+                    content_plain_text(&content)
+                } else {
+                    plain
+                };
+                Ok((
+                    row.get::<_, String>("session_id")?,
+                    role,
+                    text,
+                    row.get::<_, i64>("ts")?,
+                ))
+            })
+            .map_err(|e| format!("查询正文素材失败: {}", e))?;
+
+        let mut per_session: BTreeMap<String, Vec<(String, String, i64)>> = BTreeMap::new();
+        for row in rows {
+            let (sid, role, text, ts) = row.map_err(|e| e.to_string())?;
+            if text.trim().is_empty() {
+                continue;
+            }
+            per_session.entry(sid).or_default().push((role, text, ts));
+        }
+
+        for (sid, msgs) in per_session {
+            if out.contains_key(&sid) {
+                continue; // 有摘要 → 用摘要（降级链只在没有摘要时生效）
+            }
+            let Some((title, workspace, agent_id)) = meta.get(&sid).cloned() else {
+                continue;
+            };
+            let updated_at = msgs.last().map(|m| m.2).unwrap_or(0);
+            // 只取当天最后的 N 条（再往前的正文对「今天做了什么」贡献很小）
+            let start = msgs.len().saturating_sub(MATERIAL_TRANSCRIPT_MESSAGES_PER_SESSION);
+            let lines: Vec<String> = msgs[start..]
+                .iter()
+                .map(|(role, text, _)| format!("{}: {}", role, text.trim()))
+                .collect();
+            let transcript = join_tail_within_budget(&lines, MATERIAL_TRANSCRIPT_CHARS_PER_SESSION);
+            if transcript.trim().is_empty() {
+                continue;
+            }
+            out.insert(
+                sid.clone(),
+                SessionMaterial {
+                    session_id: sid,
+                    title,
+                    workspace,
+                    agent_id,
+                    summary: None,
+                    transcript,
+                    updated_at,
+                },
+            );
+        }
+    }
+
+    let mut materials: Vec<SessionMaterial> = out.into_values().collect();
+    // 全序：旧 → 新（调用方按「从旧到新」裁预算），同一时间按 session_id 升序
+    materials.sort_by(|a, b| {
+        a.updated_at
+            .cmp(&b.updated_at)
+            .then_with(|| a.session_id.cmp(&b.session_id))
+    });
+    Ok(materials)
+}
+
+/// 把若干行从**尾部**往前拼到字符预算内（新内容更值钱）；单行超预算时保留它的尾部。
+fn join_tail_within_budget(lines: &[String], max_chars: usize) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut used = 0usize;
+    for line in lines.iter().rev() {
+        let n = line.chars().count();
+        if !kept.is_empty() && used + n > max_chars {
+            break;
+        }
+        used += n;
+        kept.push(line.as_str());
+    }
+    kept.reverse();
+    let joined = kept.join("\n");
+    if joined.chars().count() <= max_chars {
+        return joined;
+    }
+    // 单行就超预算：保留**尾部**（结论通常在最后）
+    let skip = joined.chars().count() - max_chars;
+    joined.chars().skip(skip).collect()
+}
+
+/// 库里最早一条消息的时间（首次整理时决定「从哪天开始补」）；空库 → `None`
+pub(crate) fn earliest_message_ts_in_conn(conn: &Connection) -> Result<Option<i64>, String> {
+    conn.query_row("SELECT MIN(timestamp) FROM messages", [], |row| {
+        row.get::<_, Option<i64>>(0)
+    })
+    .map_err(|e| format!("查询最早消息时间失败: {}", e))
 }

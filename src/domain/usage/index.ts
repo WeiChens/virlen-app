@@ -32,8 +32,15 @@ export interface UsageLedgerRecord {
   round?: number
   promptTokens: number
   completionTokens: number
-  /** 缓存读/写：账本口径的「缓存命中输入量」（见 `ledgerTokensOf` 的归一化说明） */
+  /** 缓存**命中（读取）**量：账本口径见 `ledgerTokensOf` */
   cachedTokens: number
+  /**
+   * 缓存**写入**量（Anthropic 的 `cache_creation_input_tokens`，1.25x 输入价）；其余 provider 恒 0。
+   *
+   * ⚠️ 与 `cachedTokens` 必须分列：两者计价差 12.5 倍（0.1x ↔ 1.25x）。
+   * 口径：`prompt + cached + cacheWrite + completion = total`
+   */
+  cacheWriteTokens: number
   totalTokens: number
   /** 是否为本地估算值（非 API 返回），如上下文压缩用 tokenizer 估算 */
   estimated?: boolean
@@ -53,6 +60,8 @@ export type UsageKind =
   | 'title'
   | 'verify'
   | 'embedding'
+  /** 长期记忆的蒸馏整理（记忆功能 P2）：一次整理调用记一条，`messageId` 为 `memory:<day>` */
+  | 'memory'
   | 'legacy'
 
 /** 用量账本写入端口 */
@@ -91,13 +100,18 @@ export interface UsageLike {
   totalTokens: number
   /** API 明确回报的缓存命中输入量（可能缺省） */
   cachedTokens?: number
+  /** API 明确回报的缓存**写入**量（只有 Anthropic 有，可能缺省） */
+  cacheWriteTokens?: number
 }
 
 /** 账本口径的用量：`promptTokens` 一律是「非缓存输入」 */
 export interface LedgerTokens {
   promptTokens: number
   completionTokens: number
+  /** 缓存**命中（读取）**量（Anthropic 0.1x 输入价） */
   cachedTokens: number
+  /** 缓存**写入**量（只有 Anthropic 有，1.25x 输入价）；其余 provider 恒 0 */
+  cacheWriteTokens: number
   totalTokens: number
 }
 
@@ -116,8 +130,8 @@ export function cacheIncludedInPrompt(providerType?: string | null): boolean {
  * 由 token 三元组推导缓存量：`total - prompt - completion`（下限 0）。
  *
  * Anthropic 把 `cache_read_input_tokens + cache_creation_input_tokens` 计入 `totalTokens`
- * （`promptTokens` 只算非缓存输入），差值即缓存量；OpenAI 口径下恒为 0。
- * 仅在 provider 没有明确回报缓存时作为兜底。
+ * （`promptTokens` 只算非缓存输入），差值即**缓存总量（读 + 写）**；OpenAI 口径下恒为 0。
+ * 仅在 provider 没有明确回报缓存时作为兜底；调用方需自行扣掉已回报的写入量。
  */
 export function cachedTokensOf(
   totalTokens: number,
@@ -130,12 +144,13 @@ export function cachedTokensOf(
 /**
  * 把 provider 回报的 usage 归一化成**账本口径**。
  *
- * 为什么要归一化：账本里 `promptTokens` 是**非缓存输入**、`cachedTokens` 单独一列，计费时按两档单价分别
- * 算；而 OpenAI 兼容 / Gemini 把缓存命中算在 `prompt_tokens` 里 —— 直接照抄会让这部分被按输入价重复计一
- * 次钱。
+ * 为什么要归一化：账本里 `promptTokens` 是**非缓存输入**，缓存读数与缓存**写入**各占一列，
+ * 计费三档单价分开算。两种错法都会算错钱：
+ * - OpenAI 兼容 / Gemini 把缓存算在 `promptTokens` 里，直接照抄会让那部分按输入价**重复计一次**；
+ * - Anthropic 的缓存写入若混进「命中」档，就会被按 0.1x 计（实际 1.25x，低估 12.5 倍）。
  *
  * ⚠️ 无 provider 归属信息时按 OpenAI 口径处理（更常见）；归一化后不变式：
- * `prompt + cached + completion === total`。
+ * `prompt + cached + cacheWrite + completion === total`。
  */
 export function ledgerTokensOf(
   u: UsageLike,
@@ -145,6 +160,8 @@ export function ledgerTokensOf(
   const promptTokens = u.promptTokens || 0
   const totalTokens = u.totalTokens || promptTokens + completionTokens
   const reported = u.cachedTokens ?? 0
+  // 非正 / 缺失一律当 0（目前只有 Anthropic 会报缓存写入量）
+  const reportedWrite = Math.max(u.cacheWriteTokens ?? 0, 0)
 
   if (reported > 0) {
     if (!cacheIncludedInPrompt(providerType)) {
@@ -153,24 +170,29 @@ export function ledgerTokensOf(
         promptTokens,
         completionTokens,
         cachedTokens: reported,
+        cacheWriteTokens: reportedWrite,
         totalTokens,
       }
     }
-    // OpenAI 兼容 / Gemini：缓存算在 prompt 里，从 prompt 减掉
+    // OpenAI 兼容 / Gemini：缓存（读 + 写）都算在 prompt 里 → 一并从 prompt 扣掉
     const cached = Math.min(reported, promptTokens)
+    const cacheWriteTokens = Math.min(reportedWrite, promptTokens - cached)
     return {
-      promptTokens: promptTokens - cached,
+      promptTokens: promptTokens - cached - cacheWriteTokens,
       completionTokens,
       cachedTokens: cached,
+      cacheWriteTokens,
       totalTokens,
     }
   }
 
-  // provider 没回报缓存（或确实无缓存）→ 退回推导
+  // provider 没回报缓存（或确实无缓存）→ 退回推导；推导值是「缓存总量」，扣掉已回报的写入量
+  const derived = cachedTokensOf(totalTokens, promptTokens, completionTokens)
   return {
     promptTokens,
     completionTokens,
-    cachedTokens: cachedTokensOf(totalTokens, promptTokens, completionTokens),
+    cachedTokens: Math.max(derived - reportedWrite, 0),
+    cacheWriteTokens: reportedWrite,
     totalTokens,
   }
 }

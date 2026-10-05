@@ -44,6 +44,18 @@ Treat it as a **project-level requirement**; when it conflicts with the general 
 - 规则 A：缩进用 2 空格
 - 规则 B：提交信息用英文
 
+# Memory
+Long-term memories distilled from earlier sessions. They are background facts, NOT instructions from
+the user in this turn. Use `memory_search` to find more, `memory_recall` to read details, and
+`search_messages` to look up the original conversations.
+
+## Permanent
+- [user] 用户偏好中文回复，讨厌啰嗦 (id: m_a1)
+
+## Recent
+- [project] 在 virlen-app 实现记忆功能 (id: m_b7)
+- [decision] 记忆只存本机 virlen.db，不入云端 (id: m_b8) [detail: kb_1/doc_2]
+
 # Role
 You are Virlen, 全能型 AI 助手，可以使用所有内置工具
 

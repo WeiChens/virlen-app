@@ -274,6 +274,13 @@ export interface TokenUsage {
    * provider 拉平（`domain/usage::ledgerTokensOf`），这里保持 API 原样供展示。
    */
   cachedTokens?: number
+  /**
+   * 缓存**写入**的输入 token（Anthropic 的 `cache_creation_input_tokens`；其余 provider 恒缺省）。
+   *
+   * ⚠️ 必须与 `cachedTokens` 分开：Anthropic 的缓存**读**按 0.1x 输入价、**写**按 1.25x 计费，
+   * 合成一个数就没法分别计价（写入会被当读取，那部分低估约 12.5 倍）。
+   */
+  cacheWriteTokens?: number
 }
 
 export interface Agent {

@@ -28,7 +28,10 @@ export interface UsageBucket {
   key: string
   promptTokens: number
   completionTokens: number
+  /** 缓存命中（读取）量 */
   cachedTokens: number
+  /** 缓存写入量（仅 Anthropic；1.25x 输入价） */
+  cacheWriteTokens: number
   totalTokens: number
   /** 调用次数 */
   calls: number
@@ -60,6 +63,7 @@ export interface UsageRecord {
   promptTokens: number
   completionTokens: number
   cachedTokens: number
+  cacheWriteTokens: number
   totalTokens: number
   estimated: boolean
   /** LLM 请求耗时（ms，含首字延迟）；0 = 未测量（旧流水）→ 算不出 tok/s */
@@ -87,6 +91,7 @@ const EMPTY_STATS: UsageStats = {
     promptTokens: 0,
     completionTokens: 0,
     cachedTokens: 0,
+    cacheWriteTokens: 0,
     totalTokens: 0,
     calls: 0,
     estimatedCalls: 0,

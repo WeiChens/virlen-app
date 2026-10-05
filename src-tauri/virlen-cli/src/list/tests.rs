@@ -574,6 +574,7 @@ async fn list_sessions_shows_context_percent_and_message_count() {
             completion_tokens: 1_000,
             total_tokens: 40_000,
             cached_tokens: None,
+            cache_write_tokens: None,
         });
         msgs.push(last);
         db.repo.append_messages("s1", &msgs).await.unwrap();

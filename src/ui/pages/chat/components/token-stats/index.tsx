@@ -135,10 +135,11 @@ const EMPTY_VIEW: UsageStatsView = {
     promptTokens: 0,
     completionTokens: 0,
     cachedTokens: 0,
+    cacheWriteTokens: 0,
     totalTokens: 0,
     calls: 0,
     estimatedCalls: 0,
-    cost: { input: 0, output: 0, cached: 0, total: 0 },
+    cost: { input: 0, output: 0, cached: 0, cacheWrite: 0, total: 0 },
     currency: 'USD',
   },
   firstTs: null,
@@ -372,6 +373,15 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
           lines: [
             `${t('合计')}: ${formatTokens(totals.cachedTokens)}`,
             `${t('费用')}: ${formatCost(cost.cached, currency)}`,
+          ],
+        },
+        {
+          // 缓存写入（仅 Anthropic，1.25x 输入价）：与「命中」分开看才有意义
+          name: t('缓存写入'),
+          value: totals.cacheWriteTokens,
+          lines: [
+            `${t('合计')}: ${formatTokens(totals.cacheWriteTokens)}`,
+            `${t('费用')}: ${formatCost(cost.cacheWrite, currency)}`,
           ],
         },
       ]
@@ -667,6 +677,10 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
                 <StatCard
                   label={t('缓存')}
                   value={formatTokens(totals.cachedTokens)}
+                />
+                <StatCard
+                  label={t('缓存写入')}
+                  value={formatTokens(totals.cacheWriteTokens)}
                 />
                 <StatCard
                   label={t('估算费用')}

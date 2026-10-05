@@ -355,6 +355,7 @@ mod tests {
                 completion_tokens: 5,
                 total_tokens: 15,
                 cached_tokens: None,
+                cache_write_tokens: None,
             }),
             seen,
         }

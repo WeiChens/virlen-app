@@ -31,6 +31,7 @@ function record(): UsageLedgerRecord {
     promptTokens: 100,
     completionTokens: 20,
     cachedTokens: 0,
+    cacheWriteTokens: 0,
     totalTokens: 120,
   }
 }
@@ -99,24 +100,42 @@ describe('ledgerTokensOf（口径拉平）', () => {
     )
     expect(t.promptTokens).toBe(200)
     expect(t.cachedTokens).toBe(800)
-    // 不变式：归一化后三档之和必须等于 total
-    expect(t.promptTokens + t.cachedTokens + t.completionTokens).toBe(
-      t.totalTokens,
-    )
+    expect(t.cacheWriteTokens).toBe(0)
+    // 不变式：归一化后四档之和必须等于 total
+    expect(
+      t.promptTokens + t.cachedTokens + t.cacheWriteTokens + t.completionTokens,
+    ).toBe(t.totalTokens)
   })
 
-  it('Anthropic：prompt 本来就不含缓存 → 原样保留', () => {
+  it('Anthropic：prompt 本来就不含缓存 → 原样保留，且读 / 写分列', () => {
     const t = ledgerTokensOf(
       {
         promptTokens: 100,
         completionTokens: 50,
         totalTokens: 300,
-        cachedTokens: 150,
+        cachedTokens: 40,
+        cacheWriteTokens: 110,
       },
       'anthropic',
     )
     expect(t.promptTokens).toBe(100)
-    expect(t.cachedTokens).toBe(150)
+    // 读 0.1x、写 1.25x：合并成一个数就再也分不出计价档（本次修复的点）
+    expect(t.cachedTokens).toBe(40)
+    expect(t.cacheWriteTokens).toBe(110)
+  })
+
+  it('Anthropic 未回报缓存时：推导值里也要扣掉写入量', () => {
+    const t = ledgerTokensOf(
+      {
+        promptTokens: 100,
+        completionTokens: 50,
+        totalTokens: 310,
+        cacheWriteTokens: 60,
+      },
+      'anthropic',
+    )
+    expect(t.cacheWriteTokens).toBe(60)
+    expect(t.cachedTokens).toBe(100) // 推导 160 − 写入 60
   })
 
   it('Gemini 的 cachedContentTokenCount 是 prompt 子集 → 同样减掉', () => {

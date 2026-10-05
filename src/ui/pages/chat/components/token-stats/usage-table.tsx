@@ -166,6 +166,11 @@ export default function UsageTable({
               value={formatTokens(summary.cachedTokens)}
             />
             <SummaryItem
+              label="CacheW"
+              value={formatTokens(summary.cacheWriteTokens)}
+              title={t('缓存写入：Anthropic 按 1.25x 输入价计费')}
+            />
+            <SummaryItem
               label={t('合计')}
               value={formatTokens(summary.totalTokens)}
               strong
@@ -228,6 +233,19 @@ export default function UsageTable({
               Cached
             </SortTh>
             <SortTh
+              keyName="cacheWriteTokens"
+              activeKey={sortKey}
+              dir={sortDir}
+              onSort={onSort}
+              num>
+              <span
+                title={t(
+                  '缓存写入：Anthropic 按 1.25x 输入价计费，与缓存命中（0.1x）分开看',
+                )}>
+                CacheW
+              </span>
+            </SortTh>
+            <SortTh
               keyName="totalTokens"
               activeKey={sortKey}
               dir={sortDir}
@@ -255,7 +273,7 @@ export default function UsageTable({
         <tbody>
           {records.length === 0 && (
             <tr>
-              <td className="empty" colSpan={10}>
+              <td className="empty" colSpan={11}>
                 {loading ? t('加载中...') : t('暂无用量记录')}
               </td>
             </tr>
@@ -281,6 +299,7 @@ export default function UsageTable({
               <td className="num">{formatTokens(r.promptTokens)}</td>
               <td className="num">{formatTokens(r.completionTokens)}</td>
               <td className="num">{formatTokens(r.cachedTokens)}</td>
+              <td className="num">{formatTokens(r.cacheWriteTokens)}</td>
               <td className="num strong">{formatTokens(r.totalTokens)}</td>
               <td className="num">{formatRate(outputTokPerSec(r))}</td>
               <td className="num">{formatCost(r.cost.total, currency)}</td>

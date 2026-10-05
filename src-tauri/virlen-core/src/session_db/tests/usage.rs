@@ -26,6 +26,7 @@ fn usage_entry(id: Option<&str>, ts: i64, kind: &str, total: i64) -> UsageEntry 
         prompt_tokens: total - 20,
         completion_tokens: 20,
         cached_tokens: 0,
+        cache_write_tokens: 0,
         total_tokens: total,
         estimated: false,
         duration_ms: Some(TEST_DURATION_MS),
@@ -235,6 +236,38 @@ async fn usage_duration_round_trip_and_legacy_zero() {
     );
     assert_eq!(by_id["m2"], 0, "未测量的流水落 0");
     assert_eq!(by_id["m3"], 0, "负耗时不记（避免负 tok/s）");
+}
+
+#[tokio::test]
+async fn usage_cache_write_is_stored_and_aggregated_separately() {
+    // Anthropic 形状：命中 40 / 写入 60 必须**分列**落库与聚合 ——
+    // 两者计价差 12.5 倍（命中 0.1x ↔ 写入 1.25x），合成一个数就再也分不出来了。
+    let repo = open_tmp();
+    let mut entry = usage_entry(Some("m1"), 1_000, "chat_round", 250);
+    entry.prompt_tokens = 100;
+    entry.completion_tokens = 50;
+    entry.cached_tokens = 40;
+    entry.cache_write_tokens = 60;
+    entry.total_tokens = 250;
+    repo.append_usage(&[entry]).await.unwrap();
+
+    // 明细回读
+    let page = repo.usage_records(&UsageQuery::default()).await.unwrap();
+    assert_eq!(page.records[0].cached_tokens, 40);
+    assert_eq!(page.records[0].cache_write_tokens, 60);
+
+    // 聚合分列
+    let stats = repo.usage_stats(&UsageQuery::default()).await.unwrap();
+    assert_eq!(stats.totals.cached_tokens, 40);
+    assert_eq!(stats.totals.cache_write_tokens, 60);
+    // 口径不变式：四段之和 = total
+    assert_eq!(
+        stats.totals.prompt_tokens
+            + stats.totals.cached_tokens
+            + stats.totals.cache_write_tokens
+            + stats.totals.completion_tokens,
+        stats.totals.total_tokens
+    );
 }
 
 #[tokio::test]

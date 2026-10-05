@@ -32,6 +32,8 @@ pub struct ExecuteLlmRoundParams<'a> {
     pub host: &'a dyn HostEnv,
     /// 应用配置仓储（`app_settings`）—— 原生工具 `web_search` 读搜索源配置
     pub settings: &'a dyn crate::session_db::SettingsRepo,
+    /// 长期记忆仓储（`memories` 表）—— 原生工具 `memory_*` 直读它
+    pub memory: &'a dyn crate::session_db::MemoryRepo,
     /// Provider 类型（openai / anthropic / gemini），仅用于用量记账
     pub provider_type: &'a str,
     /// Provider 配置 id，仅用于用量记账
@@ -71,6 +73,7 @@ pub async fn execute_llm_round(
         repo,
         host,
         settings,
+        memory,
         provider_type,
         provider_config_id,
         persist_snapshot,
@@ -176,6 +179,7 @@ pub async fn execute_llm_round(
         repo,
         host,
         settings,
+        memory,
     )
     .await;
 

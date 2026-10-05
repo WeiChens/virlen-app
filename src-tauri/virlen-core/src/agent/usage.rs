@@ -37,51 +37,68 @@ pub fn cache_in_prompt(provider_type: &str) -> bool {
 pub struct LedgerTokens {
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
+    /// 缓存**命中（读取）**量：Anthropic 按 0.1x 输入价；OpenAI 兼容 / Gemini 的缓存也归这一档
     pub cached_tokens: i64,
+    /// 缓存**写入**量：目前只有 Anthropic 会有（按 1.25x 输入价），其余 provider 恒 0
+    pub cache_write_tokens: i64,
     pub total_tokens: i64,
 }
 
 /// 把 provider 回报的 usage 归一化成**账本口径**（与 TS `domain/usage::ledgerTokensOf` 一致）。
 ///
-/// 为什么要归一化：账本里 `prompt_tokens` 是**非缓存输入**、`cached_tokens` 单独一列，
-/// 计费两档单价分开算。OpenAI 兼容 / Gemini 把缓存算在 prompt 里，回填时直接照抄
-/// 会让缓存那部分被按输入价**重复计一次钱**。
+/// 为什么要归一化：账本里 `prompt_tokens` 是**非缓存输入**，缓存读数与缓存**写入**各占一列，
+/// 计费三档单价分开算。两种错法都会算错钱：
+/// - OpenAI 兼容 / Gemini 把缓存算在 prompt 里，直接照抄会让那部分按输入价**重复计一次**；
+/// - Anthropic 的缓存写入若混进「命中」档，就会被按 0.1x 计（实际 1.25x，低估 12.5 倍）。
 ///
-/// 不变式：`prompt + cached + completion === total`。
+/// 不变式：`prompt + cached + cache_write + completion === total`。
 pub fn ledger_tokens(u: &TokenUsage, provider_type: &str) -> LedgerTokens {
+    // 非正 / 缺失一律当 0（目前只有 Anthropic 会报缓存写入量）
+    let write = u.cache_write_tokens.filter(|n| *n > 0).unwrap_or(0);
     match u.cached_tokens.filter(|n| *n > 0) {
         Some(reported) => {
             if cache_in_prompt(provider_type) {
-                // cached 不可能大于 prompt：异常数据就按 prompt 截断，不得出现负数 prompt
-                let cached = reported.min(u.prompt_tokens);
+                // 缓存（读 + 写）都算在 prompt 里 → 一并从 prompt 扣掉；
+                // 截断保证不出现负数 prompt（异常数据宁可少算，不得为负）
+                let read = reported.min(u.prompt_tokens);
+                let write = write.min(u.prompt_tokens - read);
                 LedgerTokens {
-                    prompt_tokens: u.prompt_tokens - cached,
+                    prompt_tokens: u.prompt_tokens - read - write,
                     completion_tokens: u.completion_tokens,
-                    cached_tokens: cached,
+                    cached_tokens: read,
+                    cache_write_tokens: write,
                     total_tokens: u.total_tokens,
                 }
             } else {
+                // Anthropic：`input_tokens` 本来就不含缓存，原样保留
                 LedgerTokens {
                     prompt_tokens: u.prompt_tokens,
                     completion_tokens: u.completion_tokens,
                     cached_tokens: reported,
+                    cache_write_tokens: write,
                     total_tokens: u.total_tokens,
                 }
             }
         }
         // provider 没回报缓存（或确实无缓存）→ 退回推导
-        None => LedgerTokens {
-            prompt_tokens: u.prompt_tokens,
-            completion_tokens: u.completion_tokens,
-            cached_tokens: cached_tokens_of(u.total_tokens, u.prompt_tokens, u.completion_tokens),
-            total_tokens: u.total_tokens,
-        },
+        None => {
+            // 推导出来的是「缓存总量」（读 + 写）：已明确回报的写入量要从里面扣出来
+            let derived =
+                cached_tokens_of(u.total_tokens, u.prompt_tokens, u.completion_tokens);
+            LedgerTokens {
+                prompt_tokens: u.prompt_tokens,
+                completion_tokens: u.completion_tokens,
+                cached_tokens: derived.saturating_sub(write),
+                cache_write_tokens: write,
+                total_tokens: u.total_tokens,
+            }
+        }
     }
 }
 
 /// 记录一条用量流水。
 ///
-/// - `kind`：`chat_round` | `verify` | `title` | `compress` | `embedding`
+/// - `kind`：`chat_round` | `verify` | `title` | `compress` | `embedding` | `memory`
 /// - `message_id`：`chat_round` 传 assistant 消息 id 作幂等键；其余传 `None`（每次调用独立记账）
 /// - `duration_ms`：本次 LLM 请求的墙钟耗时（含首字延迟）—— UI 用它算 tok/s；
 ///   拿不到就传 `None`（落库为 0，UI 显示 `-`）。与 TS 侧 `UsageLedgerRecord.durationMs` 对称（铁律 1）
@@ -119,6 +136,7 @@ pub async fn record_usage(
         prompt_tokens: tokens.prompt_tokens,
         completion_tokens: tokens.completion_tokens,
         cached_tokens: tokens.cached_tokens,
+        cache_write_tokens: tokens.cache_write_tokens,
         total_tokens: tokens.total_tokens,
         estimated,
         // 非正耗时不记（如注入假时长 / 时钟回拨）→ UI 显示 '-' 而不是除零或无穷大
@@ -150,7 +168,57 @@ mod tests {
             completion_tokens: completion,
             total_tokens: total,
             cached_tokens: cached,
+            cache_write_tokens: None,
         }
+    }
+
+    /// Anthropic 形状：缓存读 / 写分别回报
+    fn usage_with_cache(prompt: i64, completion: i64, total: i64, read: i64, write: i64) -> TokenUsage {
+        TokenUsage {
+            prompt_tokens: prompt,
+            completion_tokens: completion,
+            total_tokens: total,
+            cached_tokens: Some(read),
+            cache_write_tokens: Some(write),
+        }
+    }
+
+    #[test]
+    fn ledger_tokens_splits_cache_read_from_write() {
+        // 这就是本次修复的核心：不分列就会把「写」当「读」计价（0.1x vs 1.25x，差 12.5 倍）
+        let t = ledger_tokens(&usage_with_cache(100, 50, 250, 40, 60), "anthropic");
+        assert_eq!(t.prompt_tokens, 100);
+        assert_eq!(t.cached_tokens, 40, "命中（读）单独一列");
+        assert_eq!(t.cache_write_tokens, 60, "写入单独一列");
+        assert_eq!(
+            t.prompt_tokens + t.cached_tokens + t.cache_write_tokens + t.completion_tokens,
+            t.total_tokens,
+            "归一化后 prompt + cached + cache_write + completion 必须等于 total"
+        );
+    }
+
+    #[test]
+    fn ledger_tokens_write_split_survives_the_derived_branch() {
+        // provider 只报了 total（没报 cached）但要报写入量时，写入不得被并进「命中」里
+        let mut u = usage(100, 50, 310, None);
+        u.cache_write_tokens = Some(60);
+        let t = ledger_tokens(&u, "anthropic");
+        assert_eq!(t.cache_write_tokens, 60);
+        assert_eq!(t.cached_tokens, 100, "推导出 160，扣掉 60 写入后剩 100 命中");
+        assert_eq!(
+            t.prompt_tokens + t.cached_tokens + t.cache_write_tokens + t.completion_tokens,
+            t.total_tokens
+        );
+    }
+
+    #[test]
+    fn ledger_tokens_keeps_write_zero_for_openai_like_providers() {
+        let t = ledger_tokens(&usage(1000, 100, 1100, Some(800)), "openai");
+        assert_eq!(t.cache_write_tokens, 0);
+        assert_eq!(
+            t.prompt_tokens + t.cached_tokens + t.cache_write_tokens + t.completion_tokens,
+            t.total_tokens
+        );
     }
 
     #[test]
@@ -159,6 +227,7 @@ mod tests {
         let t = ledger_tokens(&usage(1000, 100, 1100, Some(800)), "openai");
         assert_eq!(t.prompt_tokens, 200);
         assert_eq!(t.cached_tokens, 800);
+        assert_eq!(t.cache_write_tokens, 0);
         assert_eq!(
             t.prompt_tokens + t.cached_tokens + t.completion_tokens,
             t.total_tokens,

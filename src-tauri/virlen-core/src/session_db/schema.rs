@@ -3,6 +3,7 @@
 //! - 建表 / 补列 / FTS 虚表等元数据级操作走快速路径（`init_schema`）；
 //! - 大批量回填（`text_plain`、用量账本）由 `migrate()` 在后台执行，避免超大库首次启动卡顿。
 
+use crate::session_db::memory::MEMORY_DDL;
 use crate::session_db::row::content_plain_text;
 use rusqlite::{params, Connection};
 use std::sync::{Arc, Mutex};
@@ -108,8 +109,12 @@ CREATE TABLE IF NOT EXISTS usage_ledger (
   round              INTEGER,
   prompt_tokens      INTEGER NOT NULL DEFAULT 0,
   completion_tokens  INTEGER NOT NULL DEFAULT 0,
-  -- 缓存读/写：= total - prompt - completion（Anthropic 把 cache 计入 total；OpenAI 口径恒为 0）
+  -- 缓存**命中（读取）**量：Anthropic = cache_read_input_tokens；OpenAI 兼容 / Gemini = prompt_tokens_details
+  -- 口径：cached_tokens + cache_write_tokens + prompt_tokens + completion_tokens = total_tokens
   cached_tokens      INTEGER NOT NULL DEFAULT 0,
+  -- 缓存**写入**量：目前只有 Anthropic 有（cache_creation_input_tokens，按 1.25x 输入价计费）；
+  -- 其余 provider 恒 0。⚠️ 与 cached_tokens 必须分列：两者计价差 12.5 倍（0.1x ↔ 1.25x）
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
   total_tokens       INTEGER NOT NULL DEFAULT 0,
   -- 1 = 本地估算值（非 API 返回），如上下文压缩的 DeepSeek BPE 估算
   estimated          INTEGER NOT NULL DEFAULT 0,
@@ -165,9 +170,17 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<bool, String> {
     conn.execute_batch(USAGE_LEDGER_DDL)
         .map_err(|e| format!("初始化用量账本失败: {}", e))?;
     ensure_usage_duration_column(conn)?;
+    ensure_usage_cache_write_column(conn)?;
     // 应用设置（配置下沉 D3）：纯建表，元数据级开销
     conn.execute_batch(SETTINGS_DDL)
         .map_err(|e| format!("初始化应用设置表失败: {}", e))?;
+    // 长期记忆（记忆功能 P0）：纯建表 + 索引 + FTS 虚表 + 触发器，元数据级开销。
+    // ⚠️ 有意**不递增 `SCHEMA_VERSION`**：本次是纯新增、无历史数据要回填，而递增版本会让
+    // `migrate()` 对全库执行一次 `messages_fts` rebuild（大库分钟级），白付代价。
+    conn.execute_batch(MEMORY_DDL)
+        .map_err(|e| format!("初始化记忆表失败: {}", e))?;
+    // 记忆整理流水补 `merged` 列（记忆功能 P3）：同样是元数据级 ALTER，不占 SCHEMA_VERSION
+    ensure_memory_run_merged_column(conn)?;
 
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -238,6 +251,76 @@ fn ensure_usage_duration_column(conn: &Connection) -> Result<(), String> {
             [],
         )
         .map_err(|e| format!("添加 usage_ledger.duration_ms 列失败: {}", e))?;
+    }
+    Ok(())
+}
+
+/// 老库给 `memory_runs` 补 `merged` 列（记忆功能 P3；新库由 DDL 直接建出，这里检测后跳过）。
+///
+/// 与 `ensure_usage_duration_column` 同一策略：元数据级 `ALTER`（带默认值，不重写表），
+/// 放在 `init_schema` 快速路径里，**不占 `SCHEMA_VERSION`**。
+/// 旧流水补出来恒为 0：那时候还没有近重复合并，0 正是事实。
+fn ensure_memory_run_merged_column(conn: &Connection) -> Result<(), String> {
+    let exists = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(memory_runs)")
+            .map_err(|e| format!("读取 memory_runs 表结构失败: {}", e))?;
+        let mut has = false;
+        {
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(|e| e.to_string())?;
+            for name in rows.flatten() {
+                if name == "merged" {
+                    has = true;
+                    break;
+                }
+            }
+        }
+        has
+    };
+    if !exists {
+        conn.execute(
+            "ALTER TABLE memory_runs ADD COLUMN merged INTEGER NOT NULL DEFAULT 0",
+            [],
+        )
+        .map_err(|e| format!("添加 memory_runs.merged 列失败: {}", e))?;
+    }
+    Ok(())
+}
+
+/// 老库给 `usage_ledger` 补 `cache_write_tokens` 列（新库由 DDL 直接建出，这里检测后跳过）。
+///
+/// 与 `ensure_usage_duration_column` 同一策略：元数据级 `ALTER`（带默认值，不重写表），
+/// 放在 `init_schema` 快速路径里，不占 `SCHEMA_VERSION` 迁移版本。
+/// ⚠️ 旧流水补出来恒为 0：历史数据**区分不出** Anthropic 的缓存写入量（`parse_response` 过去把
+/// `cache_read + cache_creation` 合成了一个数），所以只能保持 0（= 不计写入费）而不是猜一个值
+/// —— 旧流水会略偏低，但不会算错。
+fn ensure_usage_cache_write_column(conn: &Connection) -> Result<(), String> {
+    let exists = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(usage_ledger)")
+            .map_err(|e| format!("读取 usage_ledger 表结构失败: {}", e))?;
+        let mut has = false;
+        {
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(|e| e.to_string())?;
+            for name in rows.flatten() {
+                if name == "cache_write_tokens" {
+                    has = true;
+                    break;
+                }
+            }
+        }
+        has
+    };
+    if !exists {
+        conn.execute(
+            "ALTER TABLE usage_ledger ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0",
+            [],
+        )
+        .map_err(|e| format!("添加 usage_ledger.cache_write_tokens 列失败: {}", e))?;
     }
     Ok(())
 }
