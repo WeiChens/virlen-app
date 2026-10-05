@@ -35,9 +35,9 @@ vi.mock('@/infrastructure/memoryRepo', () => ({
 }))
 
 vi.mock('@/ui/components/shared/Toast', () => ({ showToast: vi.fn() }))
-// 删除是二次确认的：测试里一律「点了确定」
+// 删除是二次确认的：默认一律「点了确定」（要测「取消」的用例自己覆写一次）
 vi.mock('@/ui/components/shared/MessageBox', () => ({
-  MessageBox: { propt: vi.fn(() => Promise.resolve(true)) },
+  MessageBox: { propt: vi.fn(() => Promise.resolve<boolean | null>(true)) },
 }))
 // 导出走「选路径 + 写文件」（与导出会话 / 用量 CSV 同一范式）：这里把两个插件换成桩，
 // 才能断言「真的把文本写给用户选的文件」，而不是只看 toast。
@@ -58,6 +58,7 @@ import {
   upsertMemory,
 } from '@/infrastructure/memoryRepo'
 import { showToast } from '@/ui/components/shared/Toast'
+import { MessageBox } from '@/ui/components/shared/MessageBox'
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeTextFile } from '@tauri-apps/plugin-fs'
 
@@ -81,6 +82,24 @@ const normalMemory: MemoryRecord = {
   sourceDay: '2026-10-05',
 }
 
+/** 第 2 条永久 —— 「分区全选」与「半选态」需要一个以上的同区条目 */
+const permanentMemory2: MemoryRecord = {
+  id: 'm_p2',
+  level: 'permanent',
+  kind: 'decision',
+  summary: '改动一律走 worktree',
+  hits: 1,
+}
+
+/** 已停用的普通记忆 —— 批量操作必须跳过「本来就如此」的条目 */
+const disabledNormalMemory: MemoryRecord = {
+  id: 'm_n2',
+  level: 'normal',
+  kind: 'fact',
+  summary: '旧的技术选型笔记（已过时）',
+  disabled: true,
+}
+
 async function render() {
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -98,6 +117,54 @@ function buttonByText(text: string): HTMLButtonElement {
   )
   if (!found) throw new Error(`找不到按钮：${text}`)
   return found as HTMLButtonElement
+}
+
+/**
+ * 某一行的行内按钮。
+ *
+ * ⚠️ 必须按行定位：批量栏里的按钮与行内按钮**同名**（「停用」「删除」…），
+ * 用 `buttonByText` 会随「批量栏在不在」而指向不同元素 —— 那种用例测的不是用户看到的东西。
+ */
+function rowButton(summary: string, text: string): HTMLButtonElement {
+  const row = Array.from(document.querySelectorAll<HTMLElement>('.memory-item')).find((el) =>
+    el.querySelector('.memory-item-summary')?.textContent?.includes(summary),
+  )
+  if (!row) throw new Error(`找不到记忆条目：${summary}`)
+  const found = Array.from(row.querySelectorAll('button')).find(
+    (b) => b.textContent?.trim() === text,
+  )
+  if (!found) throw new Error(`条目「${summary}」里找不到按钮：${text}`)
+  return found as HTMLButtonElement
+}
+
+/** 批量栏里的按钮（批量栏不存在时直接失败，而不是静默拿到行内按钮） */
+function batchButton(text: string): HTMLButtonElement {
+  const bar = document.querySelector('.memory-batch-bar')
+  if (!bar) throw new Error('批量栏未渲染')
+  const found = Array.from(bar.querySelectorAll('button')).find(
+    (b) => b.textContent?.trim() === text,
+  )
+  if (!found) throw new Error(`批量栏里找不到按钮：${text}`)
+  return found as HTMLButtonElement
+}
+
+/** 记忆行里的复选框（分区标题的全选框也用 .memory-check，所以必须按容器分） */
+function itemChecks(): HTMLInputElement[] {
+  return Array.from(
+    document.querySelectorAll<HTMLInputElement>('.memory-item .memory-check'),
+  )
+}
+
+/** 分区标题的全选框（顺序 = 渲染顺序：永久区在前） */
+function sectionChecks(): HTMLInputElement[] {
+  return Array.from(
+    document.querySelectorAll<HTMLInputElement>('.memory-section-title .memory-check'),
+  )
+}
+
+/** 批量栏的文案（不存在则返回 null，便于断言「没选中时不该有它」） */
+function batchText(): string | null {
+  return document.querySelector('.memory-batch-bar')?.textContent ?? null
 }
 
 async function click(el: Element) {
@@ -132,6 +199,9 @@ beforeEach(() => {
   })
   vi.mocked(exportMemories).mockReset()
   vi.mocked(exportMemories).mockResolvedValue(null)
+  // 二次确认默认「确定」（队列里的 once 实现必须清掉，否则会漏到下一条用例）
+  vi.mocked(MessageBox.propt).mockReset()
+  vi.mocked(MessageBox.propt).mockResolvedValue(true)
   // 文件插件是模块级桩：用例之间必须清干净（否则「取消不写文件」会看到上一条用例的调用）
   vi.mocked(save).mockClear()
   vi.mocked(save).mockResolvedValue('C:/tmp/virlen-memory.json')
@@ -191,10 +261,10 @@ it('新增记忆：写入仓储后重新拉列表；空内容则不写只提示'
 it('删除走二次确认；升级级别调用 setMemoryLevel', async () => {
   const { root } = await render()
 
-  await click(buttonByText('升级为永久'))
+  await click(rowButton('在 virlen-app 实现记忆功能', '升级为永久'))
   expect(setMemoryLevel).toHaveBeenCalledWith('m_n1', 'permanent')
 
-  await click(buttonByText('删除'))
+  await click(rowButton('用户偏好中文回复', '删除'))
   expect(deleteMemory).toHaveBeenCalled()
   // 初次加载 + 升级后刷新 + 删除后刷新
   expect(vi.mocked(listMemories)).toHaveBeenCalledTimes(3)
@@ -205,7 +275,7 @@ it('删除走二次确认；升级级别调用 setMemoryLevel', async () => {
 it('停用：切换 disabled', async () => {
   const { root } = await render()
 
-  await click(buttonByText('停用'))
+  await click(rowButton('用户偏好中文回复', '停用'))
   expect(setMemoryDisabled).toHaveBeenCalledWith('m_p1', true)
 
   await act(async () => root.unmount())
@@ -422,7 +492,7 @@ it('写操作后重新取注入段：告警必须是当前状态', async () => {
   // 面板取段一律带 `true`：后端据此不打截断告警埋点（否则指标被面板刷高）
   expect(vi.mocked(loadMemorySection)).toHaveBeenCalledWith(true)
 
-  await click(buttonByText('停用'))
+  await click(rowButton('用户偏好中文回复', '停用'))
   expect(vi.mocked(loadMemorySection)).toHaveBeenCalledTimes(2)
 
   await act(async () => root.unmount())
@@ -474,6 +544,169 @@ it('导出：用户取消保存 / 后端无文本时都不静默', async () => {
     expect.stringContaining('导出失败'),
     expect.any(Number),
   )
+
+  await act(async () => root.unmount())
+})
+
+// ==================== 多选与批量操作 ====================
+//
+// 这一组守三件事：
+// ① 常态列表不该挂着每条 4 个按钮（操作只在悬停 / 键盘聚焦时显形，样式契约见
+//    `memory-settings-style-contract.test.ts`）；
+// ② 选中态与批量栏的**数字必须与列表一致** —— 刷新后选中集要收敛，不能出现「已选 3 条」
+//    而实际只剩 1 条可操作；
+// ③ 批量操作只对「确实需要改」的条目下手，失败的条数如实上报（静默吞掉失败比报错更糟）。
+
+it('未选中时没有批量栏；勾选 / 点整行都能选中，取消选择后批量栏消失', async () => {
+  const { root } = await render()
+
+  expect(document.querySelector('.memory-batch-bar')).toBeNull()
+
+  await click(itemChecks()[0]) // 永久那条
+  expect(batchText()).toContain('已选 1 条')
+  expect(document.querySelectorAll('.memory-item')[0].classList.contains('is-selected')).toBe(
+    true,
+  )
+
+  // 点整行（不是复选框）也切换选中：复选框本体只有 15px，长列表里逐条去抠太费手
+  await click(document.querySelectorAll('.memory-item')[1])
+  expect(batchText()).toContain('已选 2 条')
+
+  await click(buttonByText('取消选择'))
+  expect(document.querySelector('.memory-batch-bar')).toBeNull()
+  expect(document.querySelectorAll('.memory-item.is-selected')).toHaveLength(0)
+
+  await act(async () => root.unmount())
+})
+
+it('行内操作不会顺手把这一条选上（否则点「停用」会连选择一起变）', async () => {
+  const { root } = await render()
+
+  await click(rowButton('用户偏好中文回复', '停用'))
+  expect(setMemoryDisabled).toHaveBeenCalledWith('m_p1', true)
+  expect(document.querySelector('.memory-batch-bar')).toBeNull()
+
+  await act(async () => root.unmount())
+})
+
+it('分区全选：支持半选态，且只作用于本区', async () => {
+  vi.mocked(listMemories).mockResolvedValue([permanentMemory, permanentMemory2, normalMemory])
+  const { root } = await render()
+
+  const [permAll, normalAll] = sectionChecks()
+  expect(permAll.checked).toBe(false)
+
+  await click(itemChecks()[0]) // 永久区只选了 1 / 2 条
+  expect(itemChecks()[0].checked).toBe(true)
+  expect(permAll.checked).toBe(false)
+  expect(permAll.indeterminate).toBe(true) // 半选：不能显示成「全都没选」
+
+  await click(permAll)
+  expect(permAll.indeterminate).toBe(false)
+  expect(permAll.checked).toBe(true)
+  expect(batchText()).toContain('已选 2 条')
+  expect(normalAll.checked).toBe(false) // 本区全选不该波及另一区
+
+  await click(permAll) // 再点一次 = 取消本区
+  expect(document.querySelector('.memory-batch-bar')).toBeNull()
+
+  await act(async () => root.unmount())
+})
+
+it('批量停用 / 启用：跳过已经如此的条目，并报真实条数', async () => {
+  vi.mocked(listMemories).mockResolvedValue([permanentMemory, disabledNormalMemory])
+  const { root } = await render()
+
+  await click(sectionChecks()[1]) // 普通区全选 = 只选中那条已停用的
+  expect(batchButton('停用').disabled).toBe(true) // 没有可停用的 → 按钮必须是禁的
+  expect(batchButton('停用').title).toContain('都已停用')
+  expect(batchButton('启用').disabled).toBe(false)
+
+  await click(batchButton('启用'))
+  expect(setMemoryDisabled).toHaveBeenCalledTimes(1)
+  expect(setMemoryDisabled).toHaveBeenCalledWith('m_n2', false)
+  expect(showToast).toHaveBeenCalledWith(
+    expect.stringContaining('已启用 1 条记忆'),
+    expect.any(Number),
+  )
+
+  await act(async () => root.unmount())
+})
+
+it('批量改级别：只动需要改的，提示里报的是真实条数', async () => {
+  vi.mocked(listMemories).mockResolvedValue([permanentMemory, normalMemory])
+  const { root } = await render()
+
+  await click(itemChecks()[1]) // 普通那条
+  expect(batchButton('降级为普通').disabled).toBe(true) // 本来就是普通 → 不该让人点
+  expect(batchButton('升级为永久').disabled).toBe(false)
+
+  await click(batchButton('升级为永久'))
+  expect(setMemoryLevel).toHaveBeenCalledTimes(1)
+  expect(setMemoryLevel).toHaveBeenCalledWith('m_n1', 'permanent')
+  expect(showToast).toHaveBeenCalledWith(
+    expect.stringContaining('已升级为永久 1 条记忆'),
+    expect.any(Number),
+  )
+
+  await act(async () => root.unmount())
+})
+
+it('批量删除：二次确认带条数；取消则不删', async () => {
+  const { root } = await render()
+
+  await click(itemChecks()[0])
+  await click(itemChecks()[1])
+  vi.mocked(MessageBox.propt).mockResolvedValueOnce(null) // 用户取消（Esc / 关窗）
+
+  await click(batchButton('删除'))
+  expect(vi.mocked(MessageBox.propt).mock.calls[0][1]).toContain('2')
+  expect(deleteMemory).not.toHaveBeenCalled()
+
+  await click(batchButton('删除')) // 这次默认实现 = 点了确定
+  expect(deleteMemory).toHaveBeenCalledTimes(2)
+  expect(deleteMemory).toHaveBeenCalledWith('m_p1')
+  expect(deleteMemory).toHaveBeenCalledWith('m_n1')
+  expect(showToast).toHaveBeenCalledWith(
+    expect.stringContaining('已删除 2 条记忆'),
+    expect.any(Number),
+  )
+
+  await act(async () => root.unmount())
+})
+
+it('批量操作失败不静默：成功与失败条数分开报', async () => {
+  const { root } = await render()
+
+  await click(itemChecks()[0])
+  await click(itemChecks()[1])
+  vi.mocked(deleteMemory)
+    .mockResolvedValueOnce(true) // m_p1
+    .mockRejectedValueOnce(new Error('磁盘只读')) // m_n1 → 单条失败不拖垮整批
+
+  await click(batchButton('删除'))
+  expect(showToast).toHaveBeenCalledWith(
+    expect.stringContaining('已删除 1 条记忆，1 条失败'),
+    expect.any(Number),
+  )
+  // 成功与否都要重新拉列表：界面不能停在「以为删掉了」的状态
+  expect(vi.mocked(listMemories)).toHaveBeenCalledTimes(2)
+
+  await act(async () => root.unmount())
+})
+
+it('刷新后选中集收敛：已不存在的条目不会留在计数里', async () => {
+  // ⚠️ 上一条「开关」用例会把全局开关翻到 false，而「刷新」按钮在记忆关闭时是禁用的 ——
+  // 这里显式打开，让本用例不依赖执行顺序
+  settingsState.setValue('memoryEnabled', true)
+  const { root } = await render()
+
+  await click(itemChecks()[0])
+  expect(batchText()).toContain('已选 1 条')
+
+  vi.mocked(listMemories).mockResolvedValue([]) // 模拟「在别处被删掉 / 整理覆盖了」
+  await click(buttonByText('刷新'))
+  expect(document.querySelector('.memory-batch-bar')).toBeNull()
 
   await act(async () => root.unmount())
 })

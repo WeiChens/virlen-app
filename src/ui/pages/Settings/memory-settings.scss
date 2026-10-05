@@ -4,6 +4,17 @@
   display: flex;
   flex-direction: column;
 
+  // ==================== 吸顶区（标题 + 批量栏） ====================
+  //
+  // 为什么整块吸顶：批量栏必须在**任何滚动位置**都可见 —— 否则在长列表底部勾选后
+  // 还要滚回顶部才能操作，多选就白做了。标题与批量栏同住一块，避免两段 sticky 互相压住。
+  .memory-sticky {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--bg-primary, #fff);
+  }
+
   .memory-header {
     display: flex;
     align-items: center;
@@ -11,10 +22,33 @@
     margin-bottom: 12px;
     padding-bottom: 10px;
     border-bottom: 1px solid var(--border-color, #e5e5e5);
-    position: sticky;
-    top: 0;
-    background-color: var(--bg-primary, #fff);
-    z-index: 1;
+  }
+
+  // ==================== 批量操作栏（只在选中了条目时渲染） ====================
+
+  .memory-batch-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 4px 10px 6px;
+    margin-bottom: 8px;
+    border-radius: 8px;
+    // 淡主色块：一眼看出「现在在多选态」，与常态列表区分开
+    background: var(--accent-bg, var(--primary-soft, #eef2ff));
+
+    .memory-batch-count {
+      font-size: var(--font-size-xs);
+      font-weight: 600;
+      color: var(--text-primary, #1a1a1a);
+      margin-right: 4px;
+      white-space: nowrap;
+    }
+
+    // 「取消选择」是退出多选的动作，不是批量动作：贴到最右，与左边几个分开
+    .memory-batch-clear {
+      margin-left: auto;
+    }
   }
 
   // 标题右侧的动作区（导出 JSON / 新增记忆）—— 导出是次要动作，放左边
@@ -95,7 +129,10 @@
     padding: 2px 0 6px;
 
     &.is-warn {
-      color: var(--warning-color, #d97706);
+      // ⚠️ 原先用的 `--warning-color` 全项目从未定义 → 告警永远是硬编码的亮色档（#d97706），
+      // 暗色主题下只有约 4.0:1。改用主题确实定义了的「警告文字档」
+      // （亮 #b45309 / 暗 #f9e2af，两档都过 AA）。
+      color: var(--color-warning-text, #b45309);
       font-weight: 500;
     }
   }
@@ -217,14 +254,37 @@
 
   // ==================== 列表 ====================
 
+  // 记忆条目 / 分区标题共用的复选框
+  //
+  // 用原生 input + accent-color（而不是自绘方框）：主题变量直接生效、**半选态由浏览器绘制**、
+  // 无障碍语义默认正确；自绘那套要自己画「✓」与「–」，收益只有形状。
+  .memory-check {
+    flex-shrink: 0;
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    accent-color: var(--accent-color, #4f46e5);
+    cursor: pointer;
+  }
+
   .memory-section {
     margin-top: 14px;
 
     .memory-section-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
       font-size: var(--font-size-sm);
       font-weight: 600;
       color: var(--text-secondary, #888);
       margin-bottom: 6px;
+
+      // 本区选中计数（只在有选中时出现，与批量栏同一口径）
+      .memory-section-picked {
+        font-size: var(--font-size-xs);
+        font-weight: 400;
+        color: var(--accent-color, #4f46e5);
+      }
     }
   }
 
@@ -242,10 +302,18 @@
     border-radius: 8px;
     border: 1px solid transparent;
     transition: background 0.12s;
+    // 整行可点 = 切换选中（复选框本体只有 15px，长列表里逐条去抠太费手）
+    cursor: pointer;
 
     &:hover {
       background: var(--border-color, #f0f0f0);
       border-color: var(--border-color, #e5e5e5);
+    }
+
+    // 选中态：必须与「悬停」区分得开 —— 悬停只是路过，选中是要动手的
+    &.is-selected {
+      background: var(--accent-bg, var(--primary-soft, #eef2ff));
+      border-color: color-mix(in srgb, var(--accent-color, #4f46e5) 45%, transparent);
     }
 
     // 停用：整行降权，但仍可读（用户要能看清自己停用了什么）
@@ -296,6 +364,18 @@
       flex-shrink: 0;
       flex-wrap: wrap;
       justify-content: flex-end;
+      // 默认隐形：列表的常态是「读」，操作只在要用的时候出现（悬停 / 键盘聚焦）
+      opacity: 0;
+      // 隐形时也不能被点到：否则「移到按钮位置立刻点下去」会命中一个还看不见的按钮
+      pointer-events: none;
+      transition: opacity 0.12s;
+    }
+
+    // `:focus-within` 是给键盘留的生路 —— 只靠 hover 的隐形按钮键盘永远 Tab 不到（WCAG 2.4.7）
+    &:hover .memory-item-actions,
+    &:focus-within .memory-item-actions {
+      opacity: 1;
+      pointer-events: auto;
     }
   }
 

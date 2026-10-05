@@ -70,15 +70,31 @@ pub async fn cmd_memory_upsert(
     Ok(())
 }
 
-/// 删除一条记忆；返回是否真的删到
+/// 删除一条记忆；返回是否真的删到。
+///
+/// ⚠️ **连带删掉它的详情文档**（详情正文在专用知识库「记忆详情」里，条目只是指向它的 link）——
+/// 只删条目会在知识库里留下一份永远不会被引用的正文，用户清理记忆时越积越多。
+/// 详情删失败不影响「记忆已删」这个事实（孤儿文档可在知识库页手动删），但会如实记进埋点。
 #[tauri::command]
 pub async fn cmd_memory_delete(
     state: tauri::State<'_, Arc<dyn MemoryRepo>>,
     id: String,
 ) -> Result<bool, String> {
-    let removed = state.delete(&id).await?;
-    crate::telemetry::track("memory.delete", serde_json::json!({ "removed": removed }));
-    Ok(removed)
+    let out = virlen_core::agent::memory::store::forget_memory(
+        state.inner().as_ref(),
+        virlen_core::rag::get_service().ok(),
+        &id,
+    )
+    .await?;
+    crate::telemetry::track(
+        "memory.delete",
+        serde_json::json!({
+            "removed": out.removed,
+            // null = 这条本来就没有详情；false = 详情没删掉（知识库里可能留下孤儿文档）
+            "detail_removed": out.detail_removed,
+        }),
+    );
+    Ok(out.removed)
 }
 
 /// 改级别（普通 ↔ 永久）；非法级别直接拒绝（这是权限级字段：永久 = 全量注入）
