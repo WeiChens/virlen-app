@@ -190,23 +190,15 @@ const UpdateModal = ({ show, updateInfo, onHide, onForceCancel }: Props) => {
               <div className="version-label">
                 {t('当前版本')}: v{currentVersion || '...'}
               </div>
+              {/* 策略提示的颜色与字号都在 UpdateModal.scss 的 .policy-hint 里：
+                  内联 px 用不了 CSS 变量，用户切大字号时这两行不会跟着变 */}
               {isForceUpdate && (
-                <div
-                  style={{
-                    color: '#e74c3c',
-                    fontSize: '13px',
-                    marginTop: '8px',
-                  }}>
+                <div className="policy-hint is-force">
                   {t('此版本为强制更新，请升级后继续使用')}
                 </div>
               )}
               {isRecommended && (
-                <div
-                  style={{
-                    color: '#f39c12',
-                    fontSize: '13px',
-                    marginTop: '8px',
-                  }}>
+                <div className="policy-hint is-recommended">
                   {t('建议更新至最新版本，获得更好的体验')}
                 </div>
               )}

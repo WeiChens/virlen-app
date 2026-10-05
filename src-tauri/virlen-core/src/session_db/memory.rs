@@ -20,6 +20,13 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
+use crate::agent::memory::new_memory_id;
+
+/// 生成 id 的最大尝试次数（撞主键就重试）——
+/// 10 位 base36（≈3.7e15）下第一次就中的概率是 1 - O(n/3.7e15)；8 次只是把「库坏了」这种
+/// 非撞车情形也变成有界的，不会死循环。
+const MEMORY_ID_MAX_ATTEMPTS: usize = 8;
+
 /// 记忆表结构（幂等）。由 `schema::init_schema` 在快速路径执行。
 pub(crate) const MEMORY_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS memories (
@@ -264,6 +271,17 @@ pub trait MemoryRepo: Send + Sync {
 
     /// 新增 / 覆盖一条（同 id 即更新；`created_at` 保持首次写入值）
     async fn upsert(&self, record: &MemoryRecord) -> Result<(), String>;
+
+    /// 生成一个**当前库里不存在**的记忆 id（写入新条目时用，见 `agent::memory::new_memory_id`）。
+    ///
+    /// 为何不只靠随机：`upsert` 是 `ON CONFLICT(id) DO UPDATE` —— 撞主键会**静默覆盖**另一条
+    /// 记忆。短 id（12 字符）把撞车概率压到可忽略，但「可忽略」在数据丢失面前不算保证，
+    /// 所以生成后查一次主键（走 `memories` 的 PK 索引，**只在写入路径上**，不碰读取热路径）。
+    ///
+    /// 默认实现 = 纯随机（测试桩 / [`NoopMemoryRepo`] 用；它们本来就不真写库）。
+    async fn new_id(&self) -> String {
+        new_memory_id()
+    }
 
     /// 删除；返回是否真的删到
     async fn delete(&self, id: &str) -> Result<bool, String>;
@@ -566,6 +584,17 @@ fn get_in_conn(conn: &Connection, id: &str) -> Result<Option<MemoryRecord>, Stri
     }
 }
 
+/// id 是否已被占用（`memories` 主键点查；写入路径专用，不在读取热路径上）
+fn id_taken_in_conn(conn: &Connection, id: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM memories WHERE id = ?1)",
+        params![id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|n| n != 0)
+    .map_err(|e| format!("查询记忆 id 是否占用失败: {}", e))
+}
+
 /// 写入（纯函数）：同 id 覆盖，但 `created_at` 与 `hits` / `last_used_at` 保持库中现值 ——
 /// 它们是「历史统计」，不能被编辑摘要这种动作清掉。
 fn upsert_in_conn(conn: &Connection, r: &MemoryRecord, now_ms: i64) -> Result<(), String> {
@@ -645,6 +674,25 @@ impl MemoryRepo for SqliteMemoryRepo {
         })
         .await
         .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
+    async fn new_id(&self) -> String {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().unwrap();
+            for _ in 0..MEMORY_ID_MAX_ATTEMPTS {
+                let id = new_memory_id();
+                // 查询失败按「已占用」处理：多试一次总比返回一个没确认过的 id 便宜
+                if !id_taken_in_conn(&conn, &id).unwrap_or(true) {
+                    return id;
+                }
+            }
+            // 连撞 8 次 / 库读不了：退回长 id（uuid 只有 32 位十六进制，撞车概率可忽略）。
+            // 它照样合法（id 一直是 TEXT，没长度约定），只是长一点 —— 总好过覆盖别人的记忆。
+            format!("m_{}", uuid::Uuid::new_v4().simple())
+        })
+        .await
+        .unwrap_or_else(|_| new_memory_id())
     }
 
     async fn delete(&self, id: &str) -> Result<bool, String> {
@@ -976,13 +1024,47 @@ mod tests {
 
     /// 建表随开库自动完成，且可重复执行（快速路径幂等）
     #[tokio::test]
-    async fn schema_is_created_and_idempotent() {        let (repo, dir) = tmp_repo();
+    async fn schema_is_created_and_idempotent() {
+        let (repo, dir) = tmp_repo();
         repo.upsert(&record("m1", MEMORY_LEVEL_NORMAL, "第一条")).await.unwrap();
         // 再开一次（模拟第二次启动）：表已存在 → 不报错、数据还在
         let session =
             crate::session_db::sqlite::SqliteSessionRepo::open(&dir.join("virlen.db")).unwrap();
         let repo2 = SqliteMemoryRepo::new(session.conn.clone());
         assert_eq!(repo2.list(None, false).await.unwrap().len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 新 id 由仓储发：短、唯一，且能真的写进库
+    #[tokio::test]
+    async fn new_id_is_short_unique_and_writable() {
+        let (repo, dir) = tmp_repo();
+        let mut ids = std::collections::HashSet::new();
+        for _ in 0..200 {
+            let id = repo.new_id().await;
+            assert!(id.starts_with("m_"), "前缀：{id}");
+            assert_eq!(id.len(), 12, "`m_` + 10 位 base36：{id}");
+            assert!(ids.insert(id.clone()), "重复发放：{id}");
+        }
+        // 发出来的 id 真的能落库（不是「看着唯一、写不进去」）
+        let fresh = repo.new_id().await;
+        repo.upsert(&record(&fresh, MEMORY_LEVEL_NORMAL, "新条目")).await.unwrap();
+        assert!(repo.get(&fresh).await.unwrap().is_some());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 查重机制的**直接**测试 —— 上面那个用例只能碰运气撞上重复，
+    /// 这条把守卫本身钉住（撞主键的后果是 `upsert` 静默覆盖另一条记忆，不能只靠概率）。
+    #[tokio::test]
+    async fn id_taken_in_conn_detects_occupied_ids() {
+        let (repo, dir) = tmp_repo();
+        repo.upsert(&record("m_abc1234567", MEMORY_LEVEL_NORMAL, "占位"))
+            .await
+            .unwrap();
+        let conn = repo.conn.clone();
+        let conn = conn.lock().unwrap();
+        assert!(id_taken_in_conn(&conn, "m_abc1234567").unwrap());
+        assert!(!id_taken_in_conn(&conn, "m_zzzzzzzzzz").unwrap());
         std::fs::remove_dir_all(&dir).ok();
     }
 

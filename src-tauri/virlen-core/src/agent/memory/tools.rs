@@ -13,7 +13,7 @@
 use crate::agent::memory::kb;
 use crate::agent::memory::scope::{self, scope_for_write};
 use crate::agent::memory::{
-    clamp_summary, is_valid_kind, is_valid_level, new_memory_id, MEMORY_KINDS, MEMORY_LEVEL_NORMAL,
+    clamp_summary, is_valid_kind, is_valid_level, MEMORY_KINDS, MEMORY_LEVEL_NORMAL,
     MEMORY_SUMMARY_HINT_CHARS, MEMORY_SUMMARY_MAX_CHARS,
 };
 use crate::rag::rag_service::RagService;
@@ -149,7 +149,7 @@ pub async fn run_search(
     }
     lines.push(String::new());
     lines.push(
-        "Use memory_recall with a memory id to read the stored detail of entries marked \"has detail\"."
+        "Entries showing an id also have a stored detail: read it with `memory_recall <id>`."
             .to_string(),
     );
 
@@ -314,7 +314,8 @@ pub async fn run_write(
     let project_path = scope_for_write(kind, deps.workspace);
 
     let mut record = MemoryRecord {
-        id: new_memory_id(),
+        // id 由仓储发（生成 + 查一遍主键），短 id 撞车时不会覆盖别人
+        id: deps.repo.new_id().await,
         level: level.to_string(),
         kind: kind.to_string(),
         summary: summary.clone(),
@@ -402,17 +403,21 @@ pub async fn run_write(
 
 // ==================== 内部辅助 ====================
 
-/// 单条记忆的模型侧文本行（与 `# Memory` 注入段同风格，便于模型把两处对应起来）
+/// 单条记忆的模型侧文本行（与 `# Memory` 注入段同风格，便于模型把两处对应起来）。
+///
+/// id 的规则与注入段**逐字一致**：**只有带详情的条目才给 id**（没有详情的记忆召回出来就是
+/// 这一行本身 —— 给 id 等于诱导模型白花一次工具调用）；`kb_id` / `doc_id` 一律不露（召回只要
+/// 记忆 id，链接是内部实现细节）。
 fn format_memory_line(m: &MemoryRecord) -> String {
-    let mut flags = format!("id: {}, kind: {}, level: {}", m.id, m.kind, m.level);
+    let mut flags = format!("kind: {}, level: {}", m.kind, m.level);
     if !m.source_day.trim().is_empty() {
         flags.push_str(&format!(", day: {}", m.source_day));
     }
     if m.hits > 0 {
         flags.push_str(&format!(", hits: {}", m.hits));
     }
-    if detail_link(m).is_some() {
-        flags.push_str(", has detail");
+    if let Some((_kb, _doc)) = detail_link(m) {
+        flags.push_str(&format!(", id: {}", m.id));
     }
     format!("- ({}) {}", flags, m.summary)
 }
@@ -430,14 +435,10 @@ fn memory_ui_item(m: &MemoryRecord) -> Value {
     })
 }
 
-/// 详情链接（两半都非空才算有）
+/// 详情链接（两半都非空才算有）—— 判定口径在 [`crate::agent::memory::detail_link`]，只有那一份；
+/// 这里只是把 `&str` 拷成自有 `String`（调用处要拿去建 / 删文档）
 fn detail_link(m: &MemoryRecord) -> Option<(String, String)> {
-    match (m.detail_kb_id.as_deref(), m.detail_doc_id.as_deref()) {
-        (Some(kb), Some(doc)) if !kb.trim().is_empty() && !doc.trim().is_empty() => {
-            Some((kb.to_string(), doc.to_string()))
-        }
-        _ => None,
-    }
+    crate::agent::memory::detail_link(m).map(|(kb, doc)| (kb.to_string(), doc.to_string()))
 }
 
 /// `Option<&str>` → 去空白后的 `Option<&str>`（空串视为「没给」）
@@ -653,12 +654,36 @@ mod tests {
             .unwrap();
 
         assert!(out.content.contains("Found 1 memories for \"记忆功能\""));
-        assert!(out.content.contains("id: m_a1, kind: project, level: normal, day: 2026-10-05"));
+        // 没有详情 → 不给 id（与注入段同一条规则）
+        assert!(out.content.contains("- (kind: project, level: normal, day: 2026-10-05)"));
+        assert!(!out.content.contains("m_a1"), "没详情的条目不得带 id：{out:?}");
         assert!(out.content.contains("memory_recall"));
         assert_eq!(out.ui_data["count"], 1);
+        // UI 数据里 id 照旧（面板的选中 / 操作靠它），模型侧文本才是「按需给」
         assert_eq!(out.ui_data["items"][0]["id"], "m_a1");
+        assert_eq!(out.ui_data["items"][0]["hasDetail"], false);
         // 命中即记账（top-k 排序的输入）
         assert_eq!(repo.touched.lock().unwrap().as_slice(), ["m_a1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn search_line_carries_id_only_for_entries_with_a_detail() {
+        let with_detail = {
+            let mut r = rec("m_d1", "有详情的记忆");
+            r.detail_kb_id = Some("kb_1".into());
+            r.detail_doc_id = Some("doc_1".into());
+            r
+        };
+        let repo = StubRepo::new(true, vec![with_detail]);
+        let settings = NoopSettingsRepo;
+        let out = run_search(&deps(&repo, &settings), "有详情", None, None, None)
+            .await
+            .unwrap();
+        assert!(out.content.contains("id: m_d1"), "{}", out.content);
+        // kb / doc 不进模型侧文本：召回只要记忆 id
+        assert!(!out.content.contains("kb_1") && !out.content.contains("doc_1"));
+        assert!(out.content.contains("memory_recall"));
+        assert_eq!(out.ui_data["items"][0]["hasDetail"], true);
     }
 
     #[tokio::test]

@@ -7,7 +7,6 @@ import {
   ToolMessageProps,
 } from './IToolCallMessage'
 import { Message, ToolUseContent } from '@/types'
-import { ToolCallGroup } from './tool-call-group'
 import { extractReactNodeText } from '@/utils/common'
 import { chatState, sessionStore, settingsState } from '@/ui/store'
 import ContextMenu, {
@@ -15,7 +14,6 @@ import ContextMenu, {
 } from '@/ui/components/shared/ContextMenu'
 import { fileMenuItems } from '@/ui/components/shared/ContextMenu/menus'
 import { primaryPathOf } from './primary-path'
-export { ToolCallGroup }
 
 /**
  * 展开视图渲染错误兜底。

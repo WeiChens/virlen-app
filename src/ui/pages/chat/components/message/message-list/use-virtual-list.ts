@@ -59,7 +59,7 @@ export function useVirtualList({
 
   /**
    * 取某条消息 toolCalls 对应的结果数组（按索引对齐）。
-   * 结果消息引用未变时返回缓存数组 → MessageBubble / ToolCallGroup 不会因
+   * 结果消息引用未变时返回缓存数组 → MessageBubble（及其工具卡片）不会因
    *「messages 数组整体换新」而重渲染。
    */
   function toolResultsFor(msg: Message): (Message | undefined)[] {

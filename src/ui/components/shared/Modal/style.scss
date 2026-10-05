@@ -75,8 +75,12 @@
         font-size: var(--font-size-3xl);
         color: var(--btn-primary-color, #fff);
         padding: 0;
-        width: 20px;
-        height: 20px;
+        /* 方框由字号推导：1em @ 3xl = medium 20px（与原来逐像素一致），
+           大字号下自动到 22px。用 min-* 而不是固定 width/height，
+           字形比 1em 宽时也只会把热区撞大，不会把 ✕ 压住 */
+        min-width: 1em;
+        min-height: 1em;
+        line-height: 1;
         display: flex;
         align-items: center;
         justify-content: center;

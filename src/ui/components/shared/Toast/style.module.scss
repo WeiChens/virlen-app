@@ -25,6 +25,9 @@
   pointer-events: none;
   z-index: 3012;
   .box {
+    /* 显式声明继承源：toast 挂在 body 下，字号来自 --font-size-base，
+       写出来是为了“跟随用户字号”这件事可被契约测试锁住（而不是靠隐式继承） */
+    font-size: var(--font-size-base);
     padding: 8px;
     border-radius: 5px;
     box-shadow: 0 2px 5px rgba(0, 0, 0, 0.119);

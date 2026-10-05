@@ -18,7 +18,7 @@ use virlen_core::agent::memory::tools::{
     run_recall, run_search, run_write, MemoryToolDeps, MemoryToolOutput, WriteRequest,
 };
 use virlen_core::agent::memory::{
-    clamp_summary, is_valid_kind, is_valid_level, new_memory_id, MEMORY_SUMMARY_MAX_CHARS,
+    clamp_summary, is_valid_kind, is_valid_level, MEMORY_SUMMARY_MAX_CHARS,
 };
 // 记忆 DTO / 级别常量只有一份（住在持久化层），命令层从这里取
 use virlen_core::agent::memory::scope::MEMORY_PROJECT_PATH_MAX_CHARS;
@@ -57,7 +57,8 @@ pub async fn cmd_memory_upsert(
         record.kind = "fact".to_string();
     }
     if record.id.trim().is_empty() {
-        record.id = new_memory_id();
+        // 新条目的 id 由仓储发（它会查一遍主键，避免短 id 撞车时静默覆盖别的记忆）
+        record.id = state.new_id().await;
     }
     if record.origin.trim().is_empty() {
         record.origin = "user".to_string();

@@ -14,7 +14,7 @@ import { timeFormat, formatDuration } from '@/utils/time'
 import { memo, useRef, useState } from 'react'
 import CollapsedSvg from '@/ui/components/icons/CollapsedSvg'
 import ThinkSvg from '@/ui/components/icons/ThinkSvg'
-import { ToolCallMessage, ToolCallGroup } from '../tool-call'
+import { ToolCallMessage } from '../tool-call'
 import { changeBrief } from '../todo/brief'
 import SummaryMessage from './summary-message'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
@@ -27,7 +27,6 @@ import QuickInputSvg from '@/ui/components/icons/QuickInputSvg'
 import { Observer } from 'mobx-react-lite'
 import { openPath } from '@tauri-apps/plugin-opener'
 import { getFileBlocks, getQuoteBlocks, getSkillBlocks } from '@/utils/messageContent'
-import QuoteSvg from '@/ui/components/icons/QuoteSvg'
 import QuoteChip from '@/ui/components/shared/QuoteChip'
 import ContextMenu, {
   useContextMenu,
@@ -430,14 +429,14 @@ function MessageBubble({
                             // 没有目录就不给菜单（fileMenuItems 需要一个能用的绝对路径）
                             s.path
                               ? (e) =>
-                                  menu.openAt(e, { kind: 'skill', path: s.path! })
+                                menu.openAt(e, { kind: 'skill', path: s.path! })
                               : undefined
                           }
                           onClick={
                             s.path
                               ? () => {
-                                  openPath(s.path!).catch(() => { })
-                                }
+                                openPath(s.path!).catch(() => { })
+                              }
                               : undefined
                           }
                         />
@@ -565,20 +564,13 @@ function MessageBubble({
         </div>
       )}
       {message.toolCalls && message.toolCalls.length > 0 && (
-        <ToolCallGroup
-          toolCalls={message.toolCalls}
-          toolResults={toolResults}
-          showContent={!!showContent}>
-          <div className="message-tool-calls">
-            {message.toolCalls.map((tc, i) => (
-              <ToolCallMessage
-                key={tc.id}
-                message={tc}
-                result={toolResults?.[i]}
-              />
-            ))}
-          </div>
-        </ToolCallGroup>
+        message.toolCalls.map((tc, i) => (
+          <ToolCallMessage
+            key={tc.id}
+            message={tc}
+            result={toolResults?.[i]}
+          />
+        ))
       )}
       {/* 右键菜单：正文 / 摘要 / 图片 / 文件 / 深度思考共用一套（同一时刻只开一个） */}
       {menu.state && (

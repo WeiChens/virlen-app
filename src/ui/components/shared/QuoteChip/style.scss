@@ -11,14 +11,17 @@
   display: inline-flex;
   align-items: center;
   max-width: 100%;
-  height: 24px;
+  /* 24px = 2.2em @ medium（xs 令牌 = 11px），随字号走（small 22px / large 26.4px）；
+     min-height 保证字号变大时只撑高、不裁切 */
+  min-height: 2.2em;
   padding: 0 4px 0 6px;
   gap: 6px;
   border: 1px solid var(--border-color, #e5e5e5);
   border-radius: 8px;
   background: var(--bg-secondary, #fafafa);
   color: var(--text-secondary, #666);
-  font-size: var(--font-size-xs, 12px);
+  /* 字号只认 --font-size-* 令牌（不写 px 兜底：兜底值不跟主题走，会漂移） */
+  font-size: var(--font-size-xs);
   line-height: 1.6;
   user-select: none;
   overflow: hidden;
@@ -50,11 +53,12 @@
     }
   }
 
-  /* 左侧引用色条：与消息气泡里的引用块视觉对应 */
+  /* 左侧引用色条：与消息气泡里的引用块视觉对应
+     高度取 1.1em（medium = 11px 字号 → 12.1px，与原本的 12px 一致），随字号等比例变化 */
   .quote-chip-bar {
     flex-shrink: 0;
     width: 2px;
-    height: 12px;
+    height: 1.1em;
     border-radius: 1px;
     background: var(--accent-color, #4f46e5);
   }
@@ -94,14 +98,15 @@
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    width: 16px;
-    height: 16px;
+    /* ✕ 的字号与外框一起跟随设置：2xs 令牌 + 1.6em 方框（medium = 10px → 16px） */
+    width: 1.6em;
+    height: 1.6em;
     padding: 0;
     border: none;
     border-radius: 50%;
     background: transparent;
     color: var(--text-tertiary, #999);
-    font-size: 10px;
+    font-size: var(--font-size-2xs);
     line-height: 1;
     cursor: pointer;
     opacity: 0;

@@ -11,7 +11,13 @@
   transition:
     border-color 0.15s,
     box-shadow 0.15s;
-  min-height: 34px;
+  /* 字号令牌挂在本体上：下面的 2.6em 以及内部文字都以它为基准（em 看的是自身 font-size）。
+     不能只写在 .custom-select__value 上 —— 那样本体的 font-size 还是继承来的，
+     2.6em 会按外层字号算（medium 下 14px × 2.6 = 36.4px，而不是 34px）。 */
+  font-size: var(--font-size-md);
+  /* 34px = 2.6em @ medium（md 令牌 = 13px）：控件高度跟着字号走
+     （small 31.2px / medium 33.8px / large 36.4px），不再是与字号无关的固定值 */
+  min-height: 2.6em;
 
   &:focus-visible,
   &.is-open {
@@ -44,7 +50,7 @@
   }
 
   .custom-select__value {
-    font-size: 13px;
+    font-size: var(--font-size-md);
     color: var(--text-primary, #1a1a1a);
     white-space: nowrap;
     overflow: hidden;
@@ -90,7 +96,7 @@
 
   .custom-select__option {
     padding: 7px 12px;
-    font-size: 13px;
+    font-size: var(--font-size-md);
     color: var(--text-primary, #1a1a1a);
     border-radius: 6px;
     cursor: pointer;

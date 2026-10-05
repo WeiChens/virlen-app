@@ -2,8 +2,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 12px;
-  margin: 0 8px 2px;
+  padding: 3px 12px;
+  margin: 0 8px 0px;
   border-radius: 6px;
   font-size: var(--font-size-sm);
   max-width: 80%;
@@ -41,7 +41,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     color: var(--text-secondary, #6b7280);
-    font-size: var(--font-size-sm);
+    font-size: var(--font-size-xs);
   }
 
   .tool-call-status {
@@ -64,7 +64,7 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: var(--font-size-xs);
+    font-size: var(--font-size-2xs);
     color: var(--text-secondary, #6b7280);
     flex: 1;
   }
@@ -745,86 +745,6 @@
   }
 }
 
-// ==================== ToolCallGroup 折叠容器 ====================
-.tool-call-group {
-  margin: 4px 0px;
-  margin-bottom: 10px;
-
-  .tool-call-group-header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 12px;
-    padding-left: 7px;
-    border-radius: 6px;
-    cursor: pointer;
-    user-select: none;
-    background: var(--hover-bg, #f3f4f6);
-    transition: background 0.15s;
-    width: fit-content;
-    margin-left: 12px;
-
-    &:hover {
-      background: var(--border-color, #e5e7eb);
-    }
-
-    .tool-call-group-arrow {
-      width: 14px;
-      height: 14px;
-      color: var(--text-secondary, #6b7280);
-      transition: transform 0.2s;
-      transform: rotate(-90deg);
-      flex-shrink: 0;
-
-      &.expanded {
-        transform: rotate(0deg);
-      }
-    }
-
-    .tool-call-group-summary {
-      font-size: var(--font-size-sm);
-      color: var(--text-secondary, #6b7280);
-      white-space: nowrap;
-    }
-
-    .tool-call-group-badge {
-      font-size: var(--font-size-xs);
-      color: var(--accent-warn, #f59e0b);
-    }
-  }
-
-  // 单工具时不显示折叠交互
-  &.no-collapse {
-    .tool-call-group-header-static {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 2px 0;
-      width: fit-content;
-
-      .tool-call-group-summary {
-        font-size: var(--font-size-sm);
-        color: var(--text-secondary, #6b7280);
-        white-space: nowrap;
-      }
-
-      .tool-call-group-badge {
-        font-size: var(--font-size-xs);
-        color: var(--accent-warn, #f59e0b);
-      }
-    }
-  }
-
-  &.collapsed {
-    .tool-call-group-header {
-      opacity: 0.7;
-    }
-  }
-
-  .tool-call-group-body {
-    margin-top: 2px;
-  }
-}
 
 // ==================== Web Search Results ====================
 .web-search-results {

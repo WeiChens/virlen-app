@@ -244,7 +244,11 @@
      （code-block.scss 的 .code-block-fullscreen-layer）共用这一份，避免两边各写一个 30px */
   --window-top-bar-height: 30px;
 
-  /* ===== 字号等级（medium 默认） ===== */
+  /* ===== 字号等级（medium 默认） =====
+     单一事实来源：组件里不许再写 px 字号，一律 font-size: var(--font-size-*)；
+     承载文字的盒子（chip 高度 / 控件最小高 / ✕ 按钮外框）用 em 挂到这些令牌上，
+     保证字号一变盒子跟着变，而不是把文字挤住。
+     契约与回归防线：src/tests/ui/shared-font-size-contract.test.ts */
   --font-size-2xs: 10px;
   --font-size-xs: 11px;
   --font-size-sm: 12px;

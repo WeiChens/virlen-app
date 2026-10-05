@@ -2,7 +2,8 @@
   padding-top: 10px;
   overflow-x: hidden;
   .text {
-    font-size: 12px;
+    /* 字号只认主题令牌（用户切小/中/大字号时随 html[data-font-size] 变） */
+    font-size: var(--font-size-sm);
     white-space: pre-wrap;
     word-break: break-all;
   }
@@ -13,11 +14,16 @@
     margin-top: 5px;
     .cancel,
     .confirm {
-      font-size: 12px;
+      /* 高度不再写死：26px = 12px 字号 + 7px×2 内边距（medium），
+         字号变大时按钮跟着长高。
+         height: auto 是必需的：ripple-button 自带 height: 35px，
+         只写 min-height 压不住它（height 优先级高于 min-height） */
+      font-size: var(--font-size-sm);
+      line-height: 1;
+      height: auto;
+      min-height: 26px;
+      padding: 7px 18px;
       border-radius: 6px;
-      line-height: 26px;
-      height: 26px;
-      padding: 0px 18px;
     }
     .cancel {
       background-color: rgba(205, 205, 205, 0.233);

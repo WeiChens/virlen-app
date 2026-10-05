@@ -1,4 +1,7 @@
 .UpdateModal-component {
+  /* 本组件所有字号一律走 --font-size-* 令牌（见 ui/styles/theme.css），
+     用户切小/中/大字号时随 html[data-font-size] 一起变；
+     并且不写 px 兜底：兜底值不跟主题走，早晚与实际值漂移。 */
   font-family: AlimamaAgileVF-Thin, 'Noto Color Emoji';
   input {
     font-family: AlimamaAgileVF-Thin, 'Noto Color Emoji';
@@ -35,9 +38,10 @@
       align-items: center;
       /* 同 AboutModal：原硬编码 #565656 在暗色底仅 1.24:1 */
       color: var(--text-primary);
-      height: 45px;
+      /* 标题行不写死高度：字号变大时行高自己撞开 */
+      min-height: 45px;
       .title {
-        font-size: 15px;
+        font-size: var(--font-size-lg);
       }
 
       .remove {
@@ -67,7 +71,7 @@
         display: inline-block;
         background: var(--primary-color);
         color: #fff;
-        font-size: 14px;
+        font-size: var(--font-size-base);
         padding: 4px 16px;
         border-radius: 20px;
         font-weight: bold;
@@ -75,8 +79,25 @@
       }
 
       .version-label {
-        font-size: 13px;
+        font-size: var(--font-size-md);
         color: var(--text-secondary, #888);
+      }
+
+      /* 更新策略提示（强制 / 建议）
+         原先是 TSX 里的内联 fontSize: '13px' —— 内联 px 用不了 var()，
+         用户切大字号时这两行永远不变；拿到样式里才能跟随设置。
+         颜色写在样式类里，危险/提醒语义与字号解耦。 */
+      .policy-hint {
+        font-size: var(--font-size-md);
+        margin-top: 8px;
+
+        &.is-force {
+          color: #e74c3c;
+        }
+
+        &.is-recommended {
+          color: #f39c12;
+        }
       }
     }
 
@@ -89,14 +110,14 @@
       overflow-y: auto;
 
       .changelog-title {
-        font-size: 13px;
+        font-size: var(--font-size-md);
         font-weight: bold;
         margin-bottom: 8px;
         color: var(--text-primary);
       }
 
       .changelog-content {
-        font-size: 13px;
+        font-size: var(--font-size-md);
         line-height: 1.6;
         color: var(--text-secondary, #666);
         white-space: pre-wrap;
@@ -115,7 +136,7 @@
         border: 1px solid var(--border-color, #ddd);
         border-radius: 6px;
         padding: 8px 32px;
-        font-size: 14px;
+        font-size: var(--font-size-base);
         cursor: pointer;
         transition: opacity 0.2s;
         font-family: AlimamaAgileVF-Thin;
@@ -131,7 +152,7 @@
         border: none;
         border-radius: 6px;
         padding: 8px 32px;
-        font-size: 14px;
+        font-size: var(--font-size-base);
         cursor: pointer;
         transition: opacity 0.2s;
         font-family: AlimamaAgileVF-Thin;
@@ -149,7 +170,7 @@
       border: none;
       border-radius: 6px;
       padding: 8px 32px;
-      font-size: 14px;
+      font-size: var(--font-size-base);
       cursor: pointer;
       transition: opacity 0.2s;
       font-family: AlimamaAgileVF-Thin;
@@ -175,7 +196,7 @@
         background: none;
         border: none;
         color: var(--text-secondary, #888);
-        font-size: 12px;
+        font-size: var(--font-size-sm);
         cursor: pointer;
         padding: 4px 6px;
         font-family: AlimamaAgileVF-Thin;
@@ -188,7 +209,7 @@
 
       .btn-text-separator {
         color: var(--border-color, #ddd);
-        font-size: 12px;
+        font-size: var(--font-size-sm);
         user-select: none;
       }
     }
@@ -199,21 +220,21 @@
       text-align: center;
 
       .download-title {
-        font-size: 16px;
+        font-size: var(--font-size-xl);
         font-weight: bold;
         margin-bottom: 20px;
         color: var(--text-primary);
       }
 
       .download-error-title {
-        font-size: 16px;
+        font-size: var(--font-size-xl);
         font-weight: bold;
         margin-bottom: 10px;
         color: #e74c3c;
       }
 
       .download-error-msg {
-        font-size: 13px;
+        font-size: var(--font-size-md);
         color: var(--text-secondary, #888);
         margin-bottom: 8px;
         word-break: break-word;
@@ -242,7 +263,7 @@
       .progress-info {
         display: flex;
         justify-content: space-between;
-        font-size: 12px;
+        font-size: var(--font-size-sm);
         color: var(--text-secondary, #888);
         margin-bottom: 10px;
 
@@ -252,7 +273,7 @@
       }
 
       .download-done-hint {
-        font-size: 13px;
+        font-size: var(--font-size-md);
         color: #27ae60;
         margin-top: 8px;
       }

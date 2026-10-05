@@ -778,7 +778,7 @@
       },
       {
         "name": "memory_search",
-        "description": "Search your long-term memory by keyword (substring match, Chinese included). Memories are short distilled notes (<=120 chars) from earlier sessions: user preferences, project facts, decisions. The most important ones are already in your context (the \"# Memory\" block) - use this tool for entries that are not there. Memories that belong to another project (their project path does not contain the session workspace) are hidden here; the result states how many were hidden. Results carry ids; call memory_recall to read the full detail of an entry marked \"has detail\".",
+        "description": "Search your long-term memory by keyword (substring match, Chinese included). Memories are short distilled notes (<=120 chars) from earlier sessions: user preferences, project facts, decisions. The most important ones are already in your context (the \"# Memory\" block) - use this tool for entries that are not there. Memories that belong to another project (their project path does not contain the session workspace) are hidden here; the result states how many were hidden. Results carry an id only for entries that have a stored detail; call memory_recall with it to read that detail.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -817,13 +817,13 @@
       },
       {
         "name": "memory_recall",
-        "description": "Read one memory in full by its id. When the content was too large for a short note, the detail lives in a dedicated knowledge base and this tool returns it. If the entry has no stored detail, the summary itself is the whole content (the tool says so explicitly). Take the id from the \"# Memory\" context block or from memory_search results.",
+        "description": "Read one memory in full by its id. When the content was too large for a short note, the detail lives in a dedicated knowledge base and this tool returns it. If the entry has no stored detail, the summary itself is the whole content (the tool says so explicitly). An id is shown only for entries that have a stored detail (in the \"# Memory\" block and in memory_search results); entries without one have nothing to recall, so the summary above them is the whole content.",
         "parameters": {
           "type": "object",
           "properties": {
             "memory_id": {
               "type": "string",
-              "description": "Memory id, e.g. \"m_1f3c9a4b\"."
+              "description": "Memory id, e.g. \"m_3f9k2x8b1q\"."
             }
           },
           "required": [
@@ -1648,7 +1648,7 @@
       },
       {
         "name": "memory_search",
-        "description": "Search your long-term memory by keyword (substring match, Chinese included). Memories are short distilled notes (<=120 chars) from earlier sessions: user preferences, project facts, decisions. The most important ones are already in your context (the \"# Memory\" block) - use this tool for entries that are not there. Memories that belong to another project (their project path does not contain the session workspace) are hidden here; the result states how many were hidden. Results carry ids; call memory_recall to read the full detail of an entry marked \"has detail\".",
+        "description": "Search your long-term memory by keyword (substring match, Chinese included). Memories are short distilled notes (<=120 chars) from earlier sessions: user preferences, project facts, decisions. The most important ones are already in your context (the \"# Memory\" block) - use this tool for entries that are not there. Memories that belong to another project (their project path does not contain the session workspace) are hidden here; the result states how many were hidden. Results carry an id only for entries that have a stored detail; call memory_recall with it to read that detail.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1687,13 +1687,13 @@
       },
       {
         "name": "memory_recall",
-        "description": "Read one memory in full by its id. When the content was too large for a short note, the detail lives in a dedicated knowledge base and this tool returns it. If the entry has no stored detail, the summary itself is the whole content (the tool says so explicitly). Take the id from the \"# Memory\" context block or from memory_search results.",
+        "description": "Read one memory in full by its id. When the content was too large for a short note, the detail lives in a dedicated knowledge base and this tool returns it. If the entry has no stored detail, the summary itself is the whole content (the tool says so explicitly). An id is shown only for entries that have a stored detail (in the \"# Memory\" block and in memory_search results); entries without one have nothing to recall, so the summary above them is the whole content.",
         "parameters": {
           "type": "object",
           "properties": {
             "memory_id": {
               "type": "string",
-              "description": "Memory id, e.g. \"m_1f3c9a4b\"."
+              "description": "Memory id, e.g. \"m_3f9k2x8b1q\"."
             }
           },
           "required": [
@@ -2518,7 +2518,7 @@
       },
       {
         "name": "memory_search",
-        "description": "Search your long-term memory by keyword (substring match, Chinese included). Memories are short distilled notes (<=120 chars) from earlier sessions: user preferences, project facts, decisions. The most important ones are already in your context (the \"# Memory\" block) - use this tool for entries that are not there. Memories that belong to another project (their project path does not contain the session workspace) are hidden here; the result states how many were hidden. Results carry ids; call memory_recall to read the full detail of an entry marked \"has detail\".",
+        "description": "Search your long-term memory by keyword (substring match, Chinese included). Memories are short distilled notes (<=120 chars) from earlier sessions: user preferences, project facts, decisions. The most important ones are already in your context (the \"# Memory\" block) - use this tool for entries that are not there. Memories that belong to another project (their project path does not contain the session workspace) are hidden here; the result states how many were hidden. Results carry an id only for entries that have a stored detail; call memory_recall with it to read that detail.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2557,13 +2557,13 @@
       },
       {
         "name": "memory_recall",
-        "description": "Read one memory in full by its id. When the content was too large for a short note, the detail lives in a dedicated knowledge base and this tool returns it. If the entry has no stored detail, the summary itself is the whole content (the tool says so explicitly). Take the id from the \"# Memory\" context block or from memory_search results.",
+        "description": "Read one memory in full by its id. When the content was too large for a short note, the detail lives in a dedicated knowledge base and this tool returns it. If the entry has no stored detail, the summary itself is the whole content (the tool says so explicitly). An id is shown only for entries that have a stored detail (in the \"# Memory\" block and in memory_search results); entries without one have nothing to recall, so the summary above them is the whole content.",
         "parameters": {
           "type": "object",
           "properties": {
             "memory_id": {
               "type": "string",
-              "description": "Memory id, e.g. \"m_1f3c9a4b\"."
+              "description": "Memory id, e.g. \"m_3f9k2x8b1q\"."
             }
           },
           "required": [

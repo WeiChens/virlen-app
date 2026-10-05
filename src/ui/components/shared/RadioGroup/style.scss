@@ -9,7 +9,8 @@
     padding: 0px 10px;
     cursor: pointer;
     transition: 0.3s;
-    font-size: 12px;
+    /* 字号只认主题令牌；本组件不写死高度，文字一变高整块跟着长 */
+    font-size: var(--font-size-sm);
     user-select: none;
     border: 1px solid var(--radio-border-color, #424141a6);
     border-radius: 4px;

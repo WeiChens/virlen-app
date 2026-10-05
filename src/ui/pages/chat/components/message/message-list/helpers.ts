@@ -32,7 +32,7 @@ export function isStreamingSession(sessionId: string): boolean {
  * 把「检索命中点」解析成一个**可定位的消息 id**。
  *
  * tool 消息（role='tool'）在列表中不渲染气泡 —— 工具结果挂在发起该调用的
- * assistant 气泡下方的工具卡片里（见 message-bubble 的 ToolCallGroup），
+ * assistant 气泡下方的工具卡片里（见 message-bubble 的 ToolCallMessage 渲染），
  * 它自己那一行高度为 0。若直接跳 tool 消息，会落在一条看不见的空行上。
  * 因此命中 tool 消息时，改为定位到「发起该 tool_call 的 assistant 消息」
  * （工具结果排在调用之后，所以往前找宿主，取最近的一个）。

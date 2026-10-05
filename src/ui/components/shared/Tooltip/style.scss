@@ -8,13 +8,16 @@
   z-index: 9999;
   background: var(--tooltip-bg, #333);
   color: var(--tooltip-color, #fff);
-  font-size: 11px;
+  /* 字号只认 --font-size-* 令牌（气泡文字本来就该跟随用户字号） */
+  font-size: var(--font-size-xs);
   line-height: 1.5;
   padding: 5px 10px;
   border-radius: 6px;
   // box-sizing: border-box;
   width: max-content;
-  max-width: 260px;
+  /* 260px = 24em @ medium（xs = 11px）：字号变大时气泡同步变宽，
+     否则小气泡里每行只能放几个字，读起来更碎 */
+  max-width: 24em;
   white-space: normal;
   word-wrap: break-word;
   overflow-wrap: break-word;

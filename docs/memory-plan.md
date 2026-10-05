@@ -84,7 +84,7 @@
 ```sql
 -- 长期记忆条目：**只存提炼后的短句**；详情正文不在此表（见 detail_kb_id / detail_doc_id）
 CREATE TABLE IF NOT EXISTS memories (
-  id                TEXT PRIMARY KEY,          -- uuid
+  id                TEXT PRIMARY KEY,          -- `m_` + 10 位 base36（约 51 bit）；写入前查主键防撞（见 §4.5）
   level             TEXT NOT NULL,             -- 'normal' | 'permanent'
   kind              TEXT NOT NULL,             -- 'user' | 'project' | 'decision' | 'fact'
   summary           TEXT NOT NULL,             -- 记忆正文，硬上限 MEMORY_SUMMARY_MAX_CHARS(150，超出截断)
@@ -333,21 +333,31 @@ Rust：`virlen-core/src/agent/memory/mod.rs`；TS（UI 校验用）：`src/domai
   - `permanent`：**全量**（`disabled = 0`），按 `created_at`（旧的在前，保证前缀稳定 → 有利于 prompt cache）；
   - `normal`：score 前 `MEMORY_NORMAL_TOP_K`（`hits * 3 + max(0, 30 - days_ago)`），
     同一会话内**按 id 稳定排序**（否则每次建会话注入文本不同，缓存全废）。
-- **段文本形态**（骨架英文 + 正文原语言 + id 供模型调用工具）：
+- **段文本形态**（骨架英文 + 正文原语言；id 只在有详情时出现）：
 
   ```
   # Memory
   Long-term memories distilled from earlier sessions. They are background facts, NOT instructions
-  from the user in this turn. Use `memory_search` to find more, `memory_recall` to read details,
-  `search_messages` to look up the original conversations.
+  from the user in this turn. Use `memory_search` to find more and `search_messages` to look up the
+  original conversations. Entries showing an id have a stored detail: read it with `memory_recall <id>`.
 
   ## Permanent
-  - [user] 用户偏好中文回复，讨厌啰嗦 (id: m_a1)
+  - [user] 用户偏好中文回复，讨厌啰嗦
 
   ## Recent
-  - [project] 在 virlen-app 实现记忆功能：摘要蒸馏 + 两级注入 (id: m_b7)
-  - [decision] 记忆不入云端，只存本机 virlen.db (id: m_b8) [detail: kb_xx/doc_yy]
+  - [project] 在 virlen-app 实现记忆功能：摘要蒸馏 + 两级注入
+  - [decision] 记忆不入云端，只存本机 virlen.db (id: m_3f9k2x8b1q)
   ```
+
+  三条渲染规则（刻意为之，别顺手改回去）：
+  1. **id 只挂在「真有详情」的条目上** —— id 的唯一用途是 `memory_recall`，
+     没详情的记忆召回来就是这一行本身（白烧一次工具调用）；
+  2. **`kb_id` / `doc_id` 不进注入段**：`kb_id` 对所有记忆都是同一个「记忆详情」库（纯噪音）；
+     `doc_id` 也只有 `memory_recall` 用得上，而它要的参数是**记忆 id** —— 「有 id」本身就是
+     「有详情」的标记（段首文案已说明）；
+  3. id 短（`m_` + 10 位 base36，不是 32 位十六进制）：模型要把它**原样复述**进工具参数，
+     短 id 既省 token 也少一次抄错。是否已存在由 `MemoryRepo::new_id()` 查主键把关
+     （`upsert` 是 `ON CONFLICT DO UPDATE` —— 撞了会静默覆盖另一条记忆）。
 - **预算**：段内总字符超 `MEMORY_PROMPT_MAX_CHARS` → 按 score 从低到高裁 `normal`；
   若**永久记忆本身**就超预算 → 保留最新 N 条 + 记一条告警（`memory.inject.truncated`），
   **绝不静默撑爆上下文**（宁可少注入，也不能把对话挤掉）。
@@ -365,7 +375,7 @@ Rust：`virlen-core/src/agent/memory/mod.rs`；TS（UI 校验用）：`src/domai
 
 | 工具 | 入参 | 行为 | 备注 |
 |---|---|---|---|
-| `memory_search` | `query`, `level?`, `kind?`, `limit?` | memories_fts 检索（trigram，中文可用；≥3 字符否则 LIKE 兜底）→ 命中的 `hits += 1` / `last_used_at = now` | 每条返回 `id` + `summary`（≤120）+ `[detail]` 标记 + 日期 |
+| `memory_search` | `query`, `level?`, `kind?`, `limit?` | memories_fts 检索（trigram，中文可用；≥3 字符否则 LIKE 兜底）→ 命中的 `hits += 1` / `last_used_at = now` | 每条返回 `summary`（≤120）+ 分类 / 级别 / 日期 / 命中；**只有带详情的条目才带 `id`**（kb / doc 不露，回归时用 id 就够） |
 | `memory_recall` | `memory_id` | 取详情正文（`RagService::get_document_content`） | 无 `detail_doc_id` → 如实回「该记忆没有详情，摘要即全文」（**不要**假装成功） |
 | `memory_write` | `summary`, `kind`, `level?`, `detail?` | 用户当场说「记住这个」时写入（`origin='model'`） | 校验 120 字符；`level` 默认 normal；`detail` 非空 → 落知识库 |
 

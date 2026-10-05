@@ -82,8 +82,10 @@
 
   .toolbar-scale {
     color: white;
-    font-size: 14px;
-    min-width: 50px;
+    /* 百分比文字跟随用户字号；min-width 用 em（3.6em ≈ 50px @ base）——
+       字号变大时数字不会被 50px 框挤到换行 */
+    font-size: var(--font-size-base);
+    min-width: 3.6em;
     text-align: center;
     user-select: none;
   }
@@ -157,7 +159,7 @@
   left: 50%;
   transform: translateX(-50%);
   color: white;
-  font-size: 14px;
+  font-size: var(--font-size-base);
   background: rgba(0, 0, 0, 0.6);
   padding: 8px 16px;
   border-radius: 16px;
@@ -184,8 +186,9 @@
     }
 
     .toolbar-scale {
-      font-size: 12px;
-      min-width: 40px;
+      /* 窄屏降一档字号（原为硬编码 12px） */
+      font-size: var(--font-size-sm);
+      min-width: 3.4em;
     }
   }
 
@@ -209,7 +212,7 @@
 
   .image-preview-index {
     bottom: 10px;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     padding: 6px 12px;
   }
 }

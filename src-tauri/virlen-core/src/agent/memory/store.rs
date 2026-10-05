@@ -12,7 +12,7 @@ use crate::agent::memory::distill::DistilledMemory;
 use crate::agent::memory::kb;
 use crate::agent::memory::scope;
 use crate::agent::memory::{
-    near_duplicate, new_memory_id, normalize_summary, NearDuplicate, MEMORY_MAX_TAGS,
+    near_duplicate, normalize_summary, NearDuplicate, MEMORY_MAX_TAGS,
 };
 use crate::rag::rag_service::RagService;
 use crate::session_db::{
@@ -97,7 +97,8 @@ pub async fn store_distilled(
         }
 
         let mut record = MemoryRecord {
-            id: new_memory_id(),
+            // id 由仓储发（生成 + 查重），短 id 撞车时不会覆盖别人
+            id: deps.memory.new_id().await,
             level: item.level.clone(),
             kind: item.kind.clone(),
             summary: item.summary.clone(),

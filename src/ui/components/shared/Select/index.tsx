@@ -20,6 +20,25 @@ export interface SelectOption {
   title?: string,
 }
 
+/** 下拉面板高度上限（与 style.scss 的 .custom-select__dropdown max-height 一致） */
+const DROPDOWN_MAX_HEIGHT = 240
+/** 量不到真实行高时的兜底值（medium 字号下的实测行高）；jsdom 没有布局引擎，单测会走到这里 */
+const FALLBACK_ROW_HEIGHT = 34
+/** style.scss 里 .custom-select__option 的 margin-bottom */
+const ROW_GAP = 2
+/** style.scss 里 .custom-select__dropdown 的 padding（4px × 2） */
+const DROPDOWN_PADDING = 8
+
+/**
+ * 估算展开后的下拉面板高度。
+ *
+ * 行高由调用方**实测**传入，因此面板高度会跟着用户字号变：
+ * 字号调大 → 行高变大 → 面板更高。
+ */
+export function dropdownContentHeight(rowHeight: number, count: number): number {
+  return rowHeight * count + ROW_GAP * Math.max(count - 1, 0) + DROPDOWN_PADDING
+}
+
 interface SelectProps {
   value: any
   onChange: (value: any) => void
@@ -88,7 +107,15 @@ function Select({
     if (!trigger) return
     const rect = trigger.getBoundingClientRect()
     const spaceBelow = window.innerHeight - rect.bottom
-    const h = Math.min(options.length * 34 + 8, 240)
+    /* 行高必须实测，不能写死「每行 34px」：行高 = 字号 × 行高倍率 + 上下内边距，
+       用户把字号调大时每行会一起变高，写死就会低估面板高度，
+       「下面还放得下吗」的判断跟着错 → 面板被视口裁掉。 */
+    const row = dropdownRef.current?.querySelector<HTMLElement>('.custom-select__option')
+    const rowHeight = row?.getBoundingClientRect().height || FALLBACK_ROW_HEIGHT
+    const h = Math.min(
+      dropdownContentHeight(rowHeight, options.length),
+      DROPDOWN_MAX_HEIGHT,
+    )
     setDropdownStyle({
       left: rect.left,
       width: rect.width,
