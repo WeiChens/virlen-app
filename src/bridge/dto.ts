@@ -22,6 +22,7 @@ import {
   TOOL_DETAIL_MAX,
   type MessageDTO,
   type MessageQuote,
+  type RunningToolDTO,
   type RuntimeDTO,
   type SessionSummaryDTO,
   type TransferTier,
@@ -281,8 +282,52 @@ export function toSessionSummaryDTO(session: Session): SessionSummaryDTO {
   }
 }
 
+/**
+ * 「**正在执行中**的工具」——已声明、但结果消息还没到的那些调用（§27 的姊妹投影）。
+ *
+ * 为什么需要（2026-10 真机反馈：电脑上有一张呼吸点卡片，手机上只剩「正在思考」）：
+ * 工具消息（`role:'tool'`）只在**执行完之后**才作为消息下行 —— 从「参数生成完、工具开跑」
+ * 到「结果到达」这段静默期，手机端本来**没有任何东西可看**（隔壁那个 `toolProgress`
+ * 只管**累积参数**那段，工具一开跑就被清掉）。
+ *
+ * 判据与桌面 pending 卡片**逐字一致**（`message-list/use-virtual-list.ts::toolResultsFor`）：
+ * assistant 消息 `toolCalls[]` 里的 id，减去已有结果的 tool 消息的 `toolCallId`，剩下的就是
+ * 正在执行的（同一条规则才能保证「电脑上看到的几个正在跑」与「手机上列出的几行」对得上）。
+ *
+ * ⚠️ **线性扫描（不建索引、不缓存）是故意的**：会话消息是**追加**的，而这里要在
+ * `store-bridge` 的 reaction 推导里被调用 —— 一次 O(n) 扫描（只看 `role` / `toolCallId` /
+ * `toolCalls` 三个字段，不碰正文）比维护一份要同步失效的索引安全得多。
+ */
+export function runningToolsOf(sessionId: string): RunningToolDTO[] {
+  const messages = sessionStore.getSession(sessionId)?.messages ?? []
+  if (messages.length === 0) return []
+  // 已有结果的 toolCallId（有结果 = 不再「执行中」）
+  const settled = new Set<string>()
+  for (const message of messages) {
+    if (message.role === 'tool' && message.toolCallId) settled.add(message.toolCallId)
+  }
+  const shortenPath = (path: string) => toShortPath(path, workspaceOfSession(sessionId))
+  const out: RunningToolDTO[] = []
+  for (const message of messages) {
+    for (const call of message.toolCalls ?? []) {
+      if (!call?.id || !call.name || settled.has(call.id)) continue
+      // 摘要与工具消息的 `toolArgs` 同一个格式化口径（同一个 shortenPath 回调）——
+      // 同一份路径不能在「执行中」与「已完成」两张卡上显示成两个样子
+      const args = summarizeToolArgs(call.name, call.input, { shortenPath })
+      out.push({ toolCallId: call.id, name: call.name, ...(args ? { args } : {}) })
+    }
+  }
+  return out
+}
+
 export function toRuntimeDTO(sessionId: string): RuntimeDTO {
   const rt = sessionRuntimeState.value.sessions[sessionId]
+  /*
+   * 执行中的工具**只在 run 跑着的时候**投影：`working` 是「有一个引擎 run 在跑」的锁，
+   * 它一落下来（崩了 / 被取消 / 重启后残留的悬空 tool_calls）那些没有结果的调用就只是
+   * **历史遗留**，不是「正在执行」—— 否则手机会一直挂着一行点不动的「正在执行…」。
+   */
+  const runningTools = rt?.working === true ? runningToolsOf(sessionId) : []
   return {
     working: rt?.working === true,
     ...(rt?.paused ? { paused: true } : {}),
@@ -290,5 +335,7 @@ export function toRuntimeDTO(sessionId: string): RuntimeDTO {
     ...(rt?.compacting ? { compacting: true } : {}),
     // 工具参数生成进度（§27）：有才带，无则不带字段（手机端 `undefined` = 无进度）
     ...(rt?.toolProgress ? { toolProgress: rt.toolProgress } : {}),
+    // 执行中的工具（§27 姊妹）：同一套「有才带」的口径（字段缺席 = 此刻没有在跑的工具）
+    ...(runningTools.length > 0 ? { runningTools } : {}),
   }
 }

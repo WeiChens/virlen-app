@@ -87,7 +87,18 @@ function messageFingerprint(subscriptions: SubscriptionRegistry): string {
   return parts.join('\u0003')
 }
 
-/** 运行时指纹（working / paused / error / compacting）。 */
+/**
+ * 运行时指纹（working / paused / error / compacting / 工具进度 / 执行中的工具）。
+ *
+ * ⚠️ 「执行中的工具」不能只看 `sessionRuntimeState`：它不是某个字段，而是一个**派生投影**
+ * （`toRuntimeDTO → runningToolsOf`，从消息里的声明与结果算出来）—— 所以这里直接拿
+ * **即将推送的那份 DTO** 当指纹（与 `listFingerprint` 同一条做法：推什么就看什么，
+ * 新增字段时不会漏）。
+ *
+ * ⚠️ 这一步在 reaction 推导里跑，而它现在会读到 `s.messages`：
+ * `runningToolsOf` 只读 `role` / `toolCallId` / `toolCalls` 三个字段，**不读正文** ——
+ * 这是故意的：读正文会让每一个流式 token 都把这个 reaction 唤起来（而它算出的结果一个字都不会变）。
+ */
 function runtimeFingerprint(subscriptions: SubscriptionRegistry): string {
   const parts: string[] = []
   const sessions = sessionRuntimeState.value.sessions
@@ -95,10 +106,17 @@ function runtimeFingerprint(subscriptions: SubscriptionRegistry): string {
     const rt = sessions[id]
     if (!rt) continue
     // 始终读取字段（建立跟踪），仅订阅者纳入输出
-    const sig = `${id}\u0001${rt.working ? 1 : 0}\u0001${rt.paused ? 1 : 0}\u0001${rt.error ?? ''}\u0001${rt.compacting ? 1 : 0}\u0001${rt.toolProgress ? `${rt.toolProgress.name}:${rt.toolProgress.chars}` : '-'}`
+    const sig = `${id}\u0001${rt.working ? 1 : 0}\u0001${rt.paused ? 1 : 0}\u0001${rt.error ?? ''}\u0001${rt.compacting ? 1 : 0}\u0001${rt.toolProgress ? `${rt.toolProgress.name}:${rt.toolProgress.chars}` : '-'}\u0001${runningToolsSignature(id)}`
     if (subscriptions.has(id)) parts.push(sig)
   }
   return parts.join('\u0002')
+}
+
+/** 「执行中的工具」的指纹串 —— 直接取即将下发的那份投影（推什么就看什么）。 */
+function runningToolsSignature(sessionId: string): string {
+  const tools = toRuntimeDTO(sessionId).runningTools
+  if (!tools || tools.length === 0) return '-'
+  return tools.map((t) => `${t.toolCallId}\u0001${t.name}\u0001${t.args ?? ''}`).join('\u0003')
 }
 
 /**

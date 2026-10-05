@@ -376,6 +376,13 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
   - 纪律与摘要**反了一面**：摘要“只给摘要不给原文”，展开区允许出现正文 —— 前提是**用户主动点开才渲染**（手机端 `ui/components/MessageList.tsx` 的 `.tool-card__args-detail`，超出 **7 行**靠 CSS 内部滚）。
   - 长度统一由 `TOOL_DETAIL_MAX`（5000）+ `elideMiddle`（**中间省略**，标记行写进正文）兜住；**工具输出（`text`）用同一条线**，而 assistant / 用户正文一个字不裁（那是「主要内容」）。
   - 用例：`src/tests/bridge/phone-tool-args.test.ts`（投影）、共享包 `tests/tool-args.test.ts`、手机端 `chat-tool-card.test.ts`（折叠态不进 DOM）。
+- **「工具在执行」也要下行**（2026-10 真机反馈：「工具在电脑上有显示（呼吸点卡片），手机上只看到『正在思考』」）：`RuntimeDTO.runningTools?: RunningToolDTO[]`（协议 0.6.1）。
+  根因是这段状态**只活在电脑侧的界面推导里**（桌面 `message-bubble.tsx` + `use-virtual-list.ts::toolResultsFor` 把「assistant 的 `toolCalls[]` 减掉已有结果」渲染成 pending 卡片），而工具消息（`role:'tool'`）**只在执行完之后**才作为消息下行；隔壁的 `toolProgress` 又只管**参数累积**期（工具一开跑就被清掉）—— 中间那段静默期手机端无东西可看。
+  - 电脑侧：`bridge/dto.ts::runningToolsOf(sessionId)` 做同一个推导（**判据与桌面逐字一致**，否则「电脑上看到几个在跑」与「手机上列几行」会对不上），`toRuntimeDTO` 只在 `working === true` 时带上它（否则崩了 / 被取消 / 重启后残留的悬空 `tool_calls` 会变成一行永远「正在执行」的僵尸）；`args` 走**同一个** `summarizeToolArgs` + `shortenPath`（与已完成卡片的 `toolArgs` 同源、同一条长度上限，**绝不含参数正文**）。
+  - 推送：`store-bridge.ts` 的 `runtimeFingerprint` 必须把它算进去，否则**静默不同步**（工具开跑 / 跑完各一帧）。那里直接拿 `toRuntimeDTO(...).runningTools` 当指纹（「推什么就看什么」，新增字段不会漏）—— ⚠️ 所以这个 reaction 现在会读 `s.messages`，而 `runningToolsOf` **只读 `role` / `toolCallId` / `toolCalls`，不读正文**（读正文 = 每个流式 token 都把它唤起来，而结果一个字都不会变）。
+  - 手机端：`store/chat.ts` 的 `runningTools` 切片 + `ui/components/MessageList.tsx` 的尾部 `StreamingBubble` 渲染成一行一个呼吸点（`正在执行 read_file · src/store/chat.ts`），与流式正文**并存**（正文在上、工具行在下，与电脑同一次序）；**有它时不再显示「正在思考…」占位**（两个状态打架 = 看起来像卡死）；**暂停态不显示**（暂停时那些调用是「等继续」，不是「正在执行」）；最多列 3 行、多出来的报「等 N 个工具」（少列几条不能不告知）。文案口径在 `lib/messages.ts::runningToolLabel` / `runningToolsView`（纯函数，可单测）。
+  - 联调：演示宿主新增 `setRunningTools(sessionId, tools | null)`（与 `setToolProgress` 对称），手机端 `/host.html` 上有「参数累积中 / 开始执行 / 执行完毕」三个按钮。
+  - 用例：`src/tests/bridge/phone-running-tools.test.ts`（投影 + 推送 + 订阅门）、共享包 `tests/running-tools.test.ts`（mock 宿主那一帧）、手机端 `chat-running-tool.test.ts`（DOM：行文案 / 与正文先后 / 收工消失 / 暂停不显示）与 `session-config-helpers.test.ts`（文案与截断）。
 - **依赖形态（2026-10 起）**：`virlen-remote` 在 `virlen-app` 与 `virlen-mobile` 里都是 **`link:../virlen-remote`**（本地仓库 `C:\code\virlen\virlen-remote`）。
   ⚠️ 改完该仓库的 `src` 必须 **`pnpm build`**（`scripts/build.mjs` 生成 `dist`）—— 两端 import 的是 `dist`，不重建就会「源码改了、行为没变」。改协议（方法表 / DTO / 能力名）时两端要一起对齐。
   发版时：把本地改动推回上游仓库 → 按 `prepublishOnly`（`typecheck && test && build`）发版 → 两端依赖改回版本号。
