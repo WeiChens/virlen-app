@@ -6,13 +6,21 @@
  *
  * 1. **不可逆操作必须二次确认**：`confirm !== true` 时拒且**不触达服务层**（手机 UI 的确认不算数）；
  * 2. **与桌面 token 环同判据**：占用未达 `COMPRESS_MIN_RATIO` 时拒（不是另立一套标准）；
- * 3. **并发保护**：正在回复 → `E_BUSY`。
+ * 3. **并发保护**：正在回复 → `E_BUSY`；
+ * 4. **压缩方式如实下发**（§22）：`mode` 原样交给服务层（`compressContext` 的第三个参数），
+ *    不传 = 沿用桌面设置，**传了但不认识一律拒**（落回缺省 = 替用户花钱）。
  *
  * 压缩本身的语义（摘要怎么写、消息怎么替换）由 `services/chat/flow.ts` 与引擎负责，不在这里重复验证。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Endpoint, createCaller, createMemoryPair, type HostApi } from 'virlen-remote'
-import { startPhoneBridge, type PhoneBridge } from '@/bridge'
+import {
+  COMPRESS_MODE_CAPABILITY,
+  Endpoint,
+  createCaller,
+  createMemoryPair,
+  type HostApi,
+} from 'virlen-remote'
+import { DEFAULT_CAPABILITIES, startPhoneBridge, type PhoneBridge } from '@/bridge'
 import { compressContext, getSessionMessages } from '@/services/chat-service'
 import { sessionStore, settingsState, updateSessionRuntime } from '@/ui/store'
 import type { Message, Session } from '@/types'
@@ -141,7 +149,8 @@ describe('host.session.compress —— 三道闸', () => {
       h.caller.call('host.session.compress', { sessionId: 's-c', confirm: true }),
     ).resolves.toEqual({ ok: true })
     expect(mockedCompress).toHaveBeenCalledTimes(1)
-    expect(mockedCompress).toHaveBeenCalledWith('s-c')
+    // 不传 mode = 与改动前**完全同形**的一次调用（第三个参数为 undefined → 服务层用设置里的方式）
+    expect(mockedCompress).toHaveBeenCalledWith('s-c', undefined, undefined)
     expect(h.bridge.audit.list()[0]).toMatchObject({
       method: 'host.session.compress',
       allowed: true,
@@ -170,5 +179,68 @@ describe('host.session.compress —— 三道闸', () => {
     mobileEp.dispose()
     hostT.close()
     mobileT.close()
+  })
+})
+
+// ───────────────────────── 压缩方式（§22）─────────────────────────
+
+/**
+ * 为何单独一组：手机端的「选哪种压缩」**完全靠这个参数**，而它的失败形态全都是静默的 ——
+ * 参数丢了、写错了、或不传时被当成缺省，用户看到的都是一句「压缩完成」且账单里多一笔钱。
+ */
+describe('host.session.compress —— 压缩方式（§22）', () => {
+  it('本机如实声明能力名（否则手机端只会渲染一个按钮，选择器那条路根本进不来）', () => {
+    expect(DEFAULT_CAPABILITIES).toContain(COMPRESS_MODE_CAPABILITY)
+    // 它只回答「认不认识这个参数」；压缩本身的授权是另一个能力名（破坏性）
+    expect(DEFAULT_CAPABILITIES).toContain('session.compress')
+  })
+
+  it('mode 原样交给服务层（compressContext 的第三个参数），并如实留痕', async () => {
+    mockedMessages.mockReturnValue([usageMessage(DEFAULT_WINDOW * 0.9)])
+    const h = setup()
+    await expect(
+      h.caller.call('host.session.compress', { sessionId: 's-c', confirm: true, mode: 'raw' }),
+    ).resolves.toEqual({ ok: true })
+    expect(mockedCompress).toHaveBeenCalledWith('s-c', undefined, 'raw')
+    expect(h.bridge.audit.list()[0]!.detail).toContain('mode=raw')
+    h.dispose()
+  })
+
+  it('大小写与首尾空白被容忍（与 Rust CompressMode::parse 同宽容度），但**归一后**才下发', async () => {
+    mockedMessages.mockReturnValue([usageMessage(DEFAULT_WINDOW * 0.9)])
+    const h = setup()
+    await expect(
+      h.caller.call('host.session.compress', {
+        sessionId: 's-c',
+        confirm: true,
+        mode: ' AI ' as never,
+      }),
+    ).resolves.toEqual({ ok: true })
+    expect(mockedCompress).toHaveBeenCalledWith('s-c', undefined, 'ai')
+    h.dispose()
+  })
+
+  it('未知 mode → E_BAD_REQUEST，且不触达服务层（不落回缺省替用户花钱）', async () => {
+    mockedMessages.mockReturnValue([usageMessage(DEFAULT_WINDOW * 0.9)])
+    const h = setup()
+    await expect(
+      h.caller.call('host.session.compress', {
+        sessionId: 's-c',
+        confirm: true,
+        mode: 'summary' as never,
+      }),
+    ).rejects.toMatchObject({ code: 'E_BAD_REQUEST' })
+    expect(mockedCompress).not.toHaveBeenCalled()
+    h.dispose()
+  })
+
+  it('不传 mode → 沿用电脑侧设置，留痕写明来源（旧手机端的行为一字不变）', async () => {
+    mockedMessages.mockReturnValue([usageMessage(DEFAULT_WINDOW * 0.9)])
+    const h = setup()
+    await h.caller.call('host.session.compress', { sessionId: 's-c', confirm: true })
+    expect(mockedCompress).toHaveBeenCalledWith('s-c', undefined, undefined)
+    // 「不传」不等于「ai」：真正生效的是桌面设置里的那一档，留痕不得把它写成具体方式
+    expect(h.bridge.audit.list()[0]!.detail).toContain('mode=host-setting')
+    h.dispose()
   })
 })

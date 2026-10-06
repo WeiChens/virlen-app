@@ -11,16 +11,20 @@
  *
  * ⚠️ **一个例外：引用（`quote`）**。自 §36 起它以结构化字段 `MessageDTO.quotes` 下行
  * （手机端要把它渲染成引用条），**不再**展平进 `text` —— 两条路同时走就会显示两遍。
+ * §37 的**文件引用**同理（`MessageDTO.files`）：展平后的 `[文件] <名字>` 只有名字没有路径，
+ * 同一目录下的两个 `index.ts` 在手机上长得一模一样。
  */
 import type { Message, MessageContent, Session } from '@/types'
 import { agentStore, sessionRuntimeState, sessionStore, settingsState } from '@/ui/store'
 import { toShortPath } from '@/utils/common'
 import {
+  baseNameOfPath,
   elideMiddle,
   formatToolArgs,
   summarizeToolArgs,
   TOOL_DETAIL_MAX,
   type MessageDTO,
+  type MessageFileRef,
   type MessageQuote,
   type RunningToolDTO,
   type RuntimeDTO,
@@ -42,15 +46,17 @@ const ROLE_MAP: Record<Message['role'], MessageDTO['role']> = {
  *
  * 同时被 store-bridge 用作「消息指纹」的一部分 —— 见 store-bridge 的下行 diff。
  *
- * `options.skipQuotes`：**跳过引用块**（它们已结构化地下行到 `MessageDTO.quotes`）。
- * 不跳的话手机端会把同一段引文显示两遍（引用条 + 正文里的 `[引用] …`），
+ * `options.skipQuotes` / `options.skipFiles`：**跳过引用块 / 文件块**
+ * （它们已结构化地下行到 `MessageDTO.quotes` / `MessageDTO.files`）。
+ * 不跳的话手机端会把同一段引文 / 同一个附件显示两遍（引用条 + 正文里的 `[引用] …`），
  * 而「正文里本来就写着 `[引用]`」这种巧合无法用字符串判断去重。
  *
- * ⚠️ 默认**不跳**（旧行为）：指纹仍把引用算进去，否则改引用块不会触发任何下行更新。
+ * ⚠️ 两个开关都默认**不跳**（旧行为）：指纹仍把它们算进去，否则改了引用块 / 换了附件
+ * 不会触发任何下行更新。
  */
 export function projectContentToText(
   content: MessageContent,
-  options: { skipQuotes?: boolean } = {},
+  options: { skipQuotes?: boolean; skipFiles?: boolean } = {},
 ): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
@@ -64,6 +70,7 @@ export function projectContentToText(
         parts.push('[图片]')
         break
       case 'file':
+        if (options.skipFiles) break
         parts.push(`[文件] ${block.name ?? block.path}`)
         break
       case 'quote':
@@ -102,6 +109,33 @@ export function collectQuotes(content: MessageContent): MessageQuote[] {
     quotes.push({ messageId: block.messageId, role: block.role, text: block.text })
   }
   return quotes
+}
+
+/**
+ * 取出消息里的**文件引用**（§37）：与 `FileContent` 同构，但只含协议要的四个字段。
+ *
+ * 为什么必须结构化下行（而不是继续靠 `[文件] …` 前缀）：那个前缀**只有名字没有路径**，
+ * 也没有体积 —— 手机上「附了哪个文件」就答不出来（同目录下两个 `index.ts` 长得一样）。
+ * 与 §36 的 `collectQuotes` 同一条理由。
+ *
+ * `name` 用**与共享包同一个兜底口径**（`sanitizeFileRefs` 也是「空则取路径末段」）：
+ * 老消息里 `name` 可能缺席（上传链路曾经不带它），而协议要求它必填。
+ */
+export function collectFiles(content: MessageContent): MessageFileRef[] {
+  if (typeof content === 'string') return []
+  if (!Array.isArray(content)) return []
+  const files: MessageFileRef[] = []
+  for (const block of content) {
+    if (block.type !== 'file') continue
+    const name = block.name?.trim() || baseNameOfPath(block.path)
+    files.push({
+      path: block.path,
+      name,
+      ...(block.isDir !== undefined ? { isDir: block.isDir } : {}),
+      ...(block.size !== undefined ? { size: block.size } : {}),
+    })
+  }
+  return files
 }
 
 /**
@@ -213,9 +247,13 @@ export function toMessageDTO(
     ? summarizeToolArgs(call.name, call.input, { shortenPath })
     : undefined
   const toolArgsFull = call ? formatToolArgs(call.input, { shortenPath }) : undefined
-  // 引用块走结构化字段（§36）—— 投影正文时把它们跳过，否则手机端会显示两遍
+  // 引用块与文件块走结构化字段（§36 / §37）—— 投影正文时把它们跳过，否则手机端会各显示两遍
   const quotes = collectQuotes(message.content)
-  const rawText = projectContentToText(message.content, { skipQuotes: quotes.length > 0 })
+  const files = collectFiles(message.content)
+  const rawText = projectContentToText(message.content, {
+    skipQuotes: quotes.length > 0,
+    skipFiles: files.length > 0,
+  })
   /*
    * 工具输出与入参详情**同一条上限**（`TOOL_DETAIL_MAX` = 5000，超出中间省略）：
    * 手机上「拉开一看几千行」跟没有一样，而结论在两头（开头是命令，结尾是报错 / 汇总）。
@@ -244,6 +282,8 @@ export function toMessageDTO(
     ...(toolArgsFull ? { toolArgsFull } : {}),
     // 无引用则整个字段不带（不为旧手机端凭空多出一个空数组）
     ...(quotes.length > 0 ? { quotes } : {}),
+    // 文件引用同上：无则不带
+    ...(files.length > 0 ? { files } : {}),
   }
 }
 

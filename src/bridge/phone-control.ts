@@ -797,6 +797,15 @@ export class PhoneControlService {
        * 也不要在开局那一屏——手机一连上就拉的整个消息窗口，恰好是全量最大的一笔——自走完整）。
        */
       transferTier: () => transferTierOf(this.kindWatch.kind),
+      /*
+       * §37：非中继门槛 —— 文件传输在**确认走了 TURN 中继**时拒（手机端也据此置灰入口）。
+       *
+       * 为何不复用上面的 `transferTier`：两者口径有意不同（`unknown` 时档位算精简、
+       * 但文件传输放行）—— 详见共享包 `fileTransferDeniedReason` 与被拒绝的代价。
+       * 注入的是**函数**：链路类型会变（刚打通可能先走中继，打洞成功后换直连），
+       * 每次请求现读才跟得上。
+       */
+      linkKind: () => this.kindWatch.kind,
     })
 
     transport.onStateChange((state) => {

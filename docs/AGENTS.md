@@ -328,11 +328,12 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 - **传输**：WebRTC（`virlen-remote`）+ SSE 信令（`SseSignalingClient`）。信令基址存 `localStorage['virlen.phone.signal']`（默认 `https://virlen.cn/api/rtc/`），自定义 ICE 同样落 `localStorage`（清应用数据即回服务端默认，不丢功能）。
 - **落盘**：配对表 / 设备身份 / 审计经 Rust 命令持久化 —— `cmd_phone_{pairing,device,audit}_*`（`src-tauri/src/commands/phone_{pairing,device,audit}.rs`，已在 `lib.rs` 注册）。
 
-| 文件（`src/bridge/`，15 个） | 职责 |
+| 文件（`src/bridge/`，17 个） | 职责 |
 |---|---|
 | `index.ts` | 装配入口 + 对外导出面 |
 | `phone-control.ts` | 电脑端常驻服务：握手、配对请求、拒签踢链、状态推送 |
-| `host-source.ts` | 真实 `HostDataSource`：把手机 RPC 落到本机 `sessionStore` / `chat-service` |
+| `host-source.ts` | 真实 `HostDataSource`（**会话域**）：把手机 RPC 落到本机 `sessionStore` / `chat-service` |
+| `file-source.ts` / `file-tauri.ts` | 工作目录文件（**文件域**）：浏览 / 分块读 / 原子上传；`file-source` 是对接层，`file-tauri` 是 Tauri 版文件端口 |
 | `store-bridge.ts` | mobx `reaction` 旁路订阅本机 store，把变化推给手机 |
 | `dto.ts` | DTO 投影（**白名单**出参，不整包外发内部结构） |
 | `pairing.ts` / `device-identity.ts` | 配对凭证与电脑设备身份（「重新获取还是同一台」） |
@@ -389,6 +390,90 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
   - 手机端：`store/chat.ts` 的 `runningTools` 切片 + `ui/components/MessageList.tsx` 的尾部 `StreamingBubble` 渲染成一行一个呼吸点（`正在执行 read_file · src/store/chat.ts`），与流式正文**并存**（正文在上、工具行在下，与电脑同一次序）；**有它时不再显示「正在思考…」占位**（两个状态打架 = 看起来像卡死）；**暂停态不显示**（暂停时那些调用是「等继续」，不是「正在执行」）；最多列 3 行、多出来的报「等 N 个工具」（少列几条不能不告知）。文案口径在 `lib/messages.ts::runningToolLabel` / `runningToolsView`（纯函数，可单测）。
   - 联调：演示宿主新增 `setRunningTools(sessionId, tools | null)`（与 `setToolProgress` 对称），手机端 `/host.html` 上有「参数累积中 / 开始执行 / 执行完毕」三个按钮。
   - 用例：`src/tests/bridge/phone-running-tools.test.ts`（投影 + 推送 + 订阅门）、共享包 `tests/running-tools.test.ts`（mock 宿主那一帧）、手机端 `chat-running-tool.test.ts`（DOM：行文案 / 与正文先后 / 收工消失 / 暂停不显示）与 `session-config-helpers.test.ts`（文案与截断）。
+- **手机端「进入后默认打开哪个会话」（用户拍板，2026-10）**：**正在工作的 → 否则最近更新的**，**置顶不参与**（`virlen-mobile/src/lib/session-entry.ts::pickEntrySession`，纯函数）。
+  ⚠️ 以前取的是列表**第一个**，而列表顺序是「置顶优先 → `updatedAt` 倒序」（`sessionStore.listSessions()`）—— 于是**置顶的老会话**把「最近在用的那个」顶掉了，真机表现是「每次打开手机都跑到一个几天没动的会话里」。
+  口径细节：多个在工作的取其中**最近更新**的；并列（含时间拿不到）保持列表里**靠前**的那个；**已有当前会话时不切**（链路抖动 / 代际更替后的重新挂载不该把用户正看的会话换掉）；一条会话都没有 → 停在「新对话」。
+  ⚠️ `updatedAt` **只由用户发送消息刷新**（`sessionStore.touchSession`）—— 它真的是「最近用过」，不是「最近被改过」（改标题 / 置顶 / 切模型都不刷新它）。
+  联调：演示宿主 `?entry=pin` / `?entry=work` 造出这两种只有在真机上才出现的形态；用例 `virlen-mobile/src/tests/session-entry.test.ts`。
+- **工作目录文件（§37）**：手机端能浏览 / 预览 / 下载 / **上传**当前会话工作目录里的文件（入口在会话信息面板的「工作目录」那一行：**浏览文件**）。
+  ⚠️ 顶栏**早已收到三个图标**（信号 / ＋ / 会话列表）：五个 38px 图标就是 206px，360px 的屏上左侧标题只剩 ~100px（真机反馈「五个按钮和左边叠在一起了」）。文件入口当初也试过放顶栏，已下沉；`设置` 同理（在会话抽屉底栏）。
+  - **协议（六个方法）**：`host.file.list`（非递归列目录）/ `host.file.read`（分块读，单次 ≤ `FILE_CHUNK_BYTES` = 256KB）/ `host.file.write.begin|chunk|finish|abort`（分块上传）。能力名三档（**默认全开**）：`file.browse` / `file.download` / `file.upload`（拆三档而不是一个：能看「有哪些文件」与能看「文件里写了什么」是两种强度，写又是第三种）。
+  - **为何是 base64 分块而不是整文件 / 二进制帧**：帧层载荷是 UTF-8 JSON 且要**攒齐全部分片**才交付 —— 整文件塞一次会同时炸掉两端的组装缓冲；换二进制帧则要改帧格式与主版本。代价是 33% 的 base64 开销，换来进度可见、可取消、单请求内存上界固定。
+    电脑侧读分块走 `open + seek + read`（`file-tauri.ts`）而不是 `plugin-fs.readFile`（**它把整个文件读进内存** —— 手机上点开 500MB 的视频时 webview 先 OOM，而我们只要前 256KB），为此 `src-tauri/capabilities/default.json` 里开了 `fs:allow-open` / `fs:allow-seek`（实际边界仍由 `fs:scope` 与本层传入的**已过安全校验**的绝对路径决定）。
+  - ⚠️ **越权防线只有一道，且在电脑侧**：手机传来的路径先被 `normalizeRelPath` 规整（逃出工作目录的 `..` 段就地吃掉），再由 **`securityService.resolveSafePath`**（与桌面文件工具同一个入口）落到绝对路径并过黑白名单。`file-source.ts` 里**不得**自己做路径拼接 —— 两份拼接逻辑就是两个边界。安全拒绝归一成 `E_DENIED`（而不是让它成为一个普通 `Error` → 手机端看到「电脑端内部错误：路径不在…」，用户会去重试、去报修）。
+  - ⚠️ **非中继门槛不在 ACL 里**（它是链路质量，不是授权）：口径是共享包的 `fileTransferDeniedReason()`，**只在确认走了 TURN 中继时拒**（`direct` / `unknown` 放行 —— `unknown` 是常态：同源 Broadcast 联调、非 WebRTC 链路、刚打通那几秒；把它判成禁用等于功能在联调里根本进不来）。链路事实只有拿 `RTCPeerConnection` 的那一层知道，故由 `PhoneControlService` 注入 `linkKind: () => kindWatch.kind`（与 `transferTier` 同一做法）。**唯一的例外是 `abort`**：它只删自己的临时文件，链路刚变中继 / 断掉时恰恰最需要能清掉它。
+  - ⚠️ **上传是原子的**：`begin` 之后字节只写临时文件（`.virlen-upload-<id>.virlen-part`），`finish` 才 `rename` 到目标名 —— 传输中断 / 用户取消不会在用户项目里留下一个「打开是坏的」半截文件。`finish` 时若目标名被抢（用户同时在电脑上存了同名文件），**按同一条冲突口径再让一次名**并把新名字如实回给手机。同名自动加「 - 副本」（与桌面 `file-transfer-service` 同一条口径）。
+  - 两个注入口：`fileSystem`（文件系统端口，不传 = Tauri 真机实现）与 `resolvePath`（安全校验）—— 本层的全部纪律（上限 / 临时文件 / 乱序拒绝）都值得单测，而单测里没有 Tauri（`src/tests/bridge/phone-files.test.ts` 注入内存端口 + 假安全校验）。
+  - 手机端（`virlen-mobile`）：`store/files.ts` + `ui/components/FileSheet.tsx`；门槛判定收在 `fileStore.blockReason()`（能力 + 链路合成一句话，UI 只负责置灰与展示）。本端另有一条**本机内存**上限制（`DOWNLOAD_MAX_BYTES` = 64MB）：分块收下来的字节要拼成 Blob 才能交给系统分享，而 Blob 在手机上就是内存。列表区两条布局 / 加载态纪律（面包屑常驻、进目录不清空列表）见 §11.42、§11.43。
+  - 联调：演示宿主自带一棵**真**文件树（含一张真 PNG 与一个未知类型的 `build/app.bin`）；`?files=relay` 让所有文件 RPC 一律拒（验证手机端整面板显示同一句理由）。
+  - 用例：电脑侧 `src/tests/bridge/phone-files.test.ts`（越权 / 中继 / ACL / 原子落盘 / 乱序与未传完）；共享包 `tests/files.test.ts`（分类 / base64 / 路径 / mock 宿主）；手机端 `files-lib.test.ts`（纯函数）、`files-store.test.ts`（与 mock 宿主经内存链路对跑）、`files-ui.test.ts`（DOM：进目录 / 预览 / 中继置灰 / 两个入口）。
+- **压缩上下文可选两种方式（§22）**：`CompressParams.mode`（`'ai'` = AI 摘要 / `'raw'` = 正文压缩）。
+  能力名 `session.compress.mode`（常量 `COMPRESS_MODE_CAPABILITY`，见共享包 `protocol/compress.ts`）。
+  - ⚠️ **为何要能力名**：`mode` 是普通字段，**旧电脑端会静默忽略它**而按电脑侧设置压缩 ——
+    用户侧表现是「我点了『正文压缩』，结果还是 AI 摘要（还花了钱）」，没有任何报错可查。
+    所以手机端**只在电脑端声明它时才给两个按钮**，否则只给一个「压缩上下文」（不传 `mode`）。
+  - 它是**功能标记**而不是权限：压缩本身的授权仍是 `session.compress`（破坏性、需 `confirm: true`，
+    handler 里独立 `assert`）。电脑侧 `host-source.ts::compress` 仍**独立校一遍取值**：
+    没传 = 沿用桌面设置里的那一档（与改动前同形的一次调用）；**传了但不认识 → `E_BAD_REQUEST`**
+    （落回缺省等于把手机端的一个拼写错误变成一次要花钱的模型调用）；留痕写明 `mode=…` / `mode=host-setting`。
+  - 落地：手机端 `store/chat.ts::compressContext(sessionId, mode)` 只在能力允许时才把 `mode` 放进请求；
+    UI 是会话信息面板「上下文」块里的**两个按钮**（`AI 摘要压缩` / `正文压缩`，各自二次确认）；
+    `sentMode` 只用来决定哪一颗按钮转圈（压缩中的真实进度仍是电脑侧推来的 `compacting`）。
+  - 联调：演示宿主（`virlen-remote/testing`）按 `mode` 出不同产物，`lastCompress()` 是观察口；
+    手机端 `/host.html` 的说明已注明两个入口。
+  - 用例：电脑侧 `src/tests/bridge/phone-compress-wiring.test.ts`（原样下发 / 归一化 / 未知取值拒 / 不传=沿用设置）；
+    共享包 `tests/compress.test.ts`（取值域 + mock 真的走出不同产物）；
+    手机端 `chat-compress-mode.test.ts`（DOM：两个按钮 / 选了真的走那种 / 取消不发 / 旧电脑端只给一个按钮且不传 `mode`）。
+- **手机端界面字号五档（特小 / 小 / 中 / 大 / 特大）**：`--fs` = `0.80 / 0.90 / 1 / 1.12 / 1.26`
+  （`virlen-mobile/src/theme.css` 的 `:root[data-size]`，取值域在 `src/lib/prefs.ts::SIZE_PREFS`）。
+  - 原有三档的**取值名不动**（`s` / `m` / `l`），所以存储里的 `{"size":"l"}` 不需要迁移；
+    新增 `xs` / `xl`，真机反馈是「还想再小一点」——旧「小」（0.92→0.90）在长命令 / 长表格前仍偏大，
+    而字号不能靠浏览器缩放解决（`zoom` 会把 `position: fixed` 的抽屉与底部面板一起缩）。
+  - 中档恒为 1（默认值 + 其余四档的基准）；面板里的「A」预览与文字**竖向叠放**（五列在 360px 屏上
+    放不下横排的 A + 两个字，截断的标签比不显示更糟）。
+  - 用例：`ui-prefs.test.ts`（含直接读 `theme.css` 比对取值集合 / 递增性 / 中档为 1 —— 少一条 CSS 规则
+    就是「点了没反应」）、`settings-sheet-ui.test.ts`（五档逐一点到 DOM + 标签顺序）。
+- **编辑电脑上的文件（§37 覆写保存）**：手机端可改工作目录里的**纯文本 / 代码 / Markdown 源码**。
+  协议面 = `host.file.write.begin` 带 `overwrite: true` + `expectMtimeMs` / `expectSize`（归 `file.edit` 档）；
+  `host.file.read` / `.finish` 的应答各多一个 `mtimeMs`（打开时的版本凭据 / 覆写后的新版本）。
+  - ⚠️ **与上传是两条路**：覆写要求目标**已存在**（不新建）、**不做同名改名**（不产生「 - 副本」）、
+    必须带版本（不给 → `E_BAD_REQUEST`，于是「盲写」不存在）；版本不符 → `E_CONFLICT`。
+    电脑侧**独立**再校一遍可编辑扩展名（`isEditableFileName`）与编辑上限（`FILE_EDIT_MAX_BYTES` = 256KB）。
+  - **落盘前再校验一次版本**（`finish`）：begin 与 finish 之间隔着网络，AI 可能正好在这期间写完那个文件。
+  - 手机端那三个「存回去就把文件搞坏」的坑全由共享包兜住：**CRLF**（textarea 只有 LF）、
+    **BOM**、**非 UTF-8 拒绝编辑**（`decodeUtf8Strict`；宽容解码的乱码存回去就是毁文件）——见 §11.44。
+  - 降级：旧电脑端没有 `file.edit` → 手机端只给只读预览（旧电脑端会静默忽略 `overwrite`，
+    一次覆盖保存会退化成「另存为 - 副本」，用户以为改了、原文件其实没动）。
+  - 落地：电脑侧 `src/bridge/file-source.ts`（覆写分支 + `requireAuthorizedUpload`：授权按**记录自己的写入方式**算）
+    + 端口 `file-tauri.ts`（`statFile` / `replaceFile`）；手机端 `store/files.ts`（编辑态 / 保存 / 冲突 / 重新载入）
+    + `ui/components/FileSheet.tsx`（编辑区 + 未保存确认 + 冲突两个按钮）。
+  - 用例：电脑侧 `src/tests/bridge/phone-files.test.ts`（两档授权独立 / 冲突的两个窗口 / 不改名 / 中途放弃）；
+    共享包 `tests/files-edit.test.ts`（换行往返 / BOM / GBK 拒编 / 覆写链路）；
+    手机端 `src/tests/files-edit.test.ts`（字节真落到宿主 / CRLF 保留 / 冲突两条选择 / 取消不发 RPC）。
+- **引用电脑上的文件（§37 的延伸）**：手机端把讲题里的文件面板里挑中的文件**挂到要发的那条消息上**（入口：文件面板预览头的「引用」按钮）。
+  与桌面输入框的「文件附件」（`FileAttachment`）**同一条口径**：只带**路径 + 展示元数据**，不搬运内容 ——
+  真正的读取交给 AI 用 `read_file` 按需完成。
+  - 协议面：`SendParams.files?: MessageFileRef[]` + `MessageDTO.files?: MessageFileRef[]`（与 §36 的 `quotes` 并列）；
+    能力名 `message.file`（`MESSAGE_FILE_CAPABILITY`，**功能标记**不是权限：引用本身就是 `session.send` 的一个参数）。
+    电脑侧 `host-source.ts::send` 把两件结构化输入一起交给 `buildUserContent`（块顺序 quote → text → file），
+    于是引擎 / 持久化 / 桌面渲染 / 导出与桌面拖一个文件进输入框**完全一致**。
+  - ⚠️ **校验口径只有一份**（共享包 `sanitizeFileRefs`，电脑侧与演示宿主共用）：
+    形状非法 / 超条数（`MESSAGE_FILE_MAX` = 20）/ 路径过长（`MESSAGE_FILE_PATH_MAX` = 1024）→
+    **拒整条**（`E_BAD_REQUEST`，并留痕 `allowed: false`），**不静默丢掉那一条** —— 丢一条时
+    手机上 chip 还在、用户以为附上了，而 AI 从未看到（§36 引用那次踩过的坑，见 §11.45-②）。
+    `isDir` / `size` 只是展示元数据（形状不对就丢字段）；路径分隔符归一为 `/`；同一路径去重。
+  - ⚠️ **文件引用不进 `text`**（与 `quotes` 同一纪律）：电脑侧投影正文时本就会把文件块展平成
+    `[文件] <名字>`（§7-⑦，与图片同一套降级规则），两条路同时走会显示两遍 —— 而那个展平占位符
+    **只有名字没有路径**（同一目录下两个 `index.ts` 长得一样）。
+  - 降级：旧电脑端没有 `message.file` → 手机端**不给「引用」入口**（它会把 `files` 静默丢掉；
+    ⚠️ 与只读两项不同，**不能整面板置灰** —— 浏览 / 预览 / 下载 / 编辑都还能用）。
+  - 落地：手机端 `ui/components/FileSheet.tsx`（预览头「引用 / 已引用」开关，点完**不关面板**：
+    可以接着引用下一个）、`ui/pages/Chat.tsx`（`pendingFiles` + 输入区 chip + 发送带 `files`）、
+    `store/chat.ts::send(text, quotes, files)`、`lib/message-rows.ts::rendersNothing`（只附文件的消息
+    也必须占行）、`ui/components/FileIcon.tsx`（面板行 / 输入区 chip / 气泡 chip 共用一张图标表）。
+  - 用例：电脑侧 `src/tests/bridge/phone-file-refs.test.ts`（投影 / 端到端落块 / 拒整条 + 审计 / 能力声明）；
+    共享包 `tests/message-files.test.ts`（校验与归一）；手机端 `src/tests/files-ref.test.ts`
+    （纯函数 + 行模型 + 面板→chip→电脑侧收到 + 旧电脑端不显示入口）。
 - **依赖形态（2026-10 起）**：`virlen-remote` 在 `virlen-app` 与 `virlen-mobile` 里都是 **`link:../virlen-remote`**（本地仓库 `C:\code\virlen\virlen-remote`）。
   ⚠️ 改完该仓库的 `src` 必须 **`pnpm build`**（`scripts/build.mjs` 生成 `dist`）—— 两端 import 的是 `dist`，不重建就会「源码改了、行为没变」。改协议（方法表 / DTO / 能力名）时两端要一起对齐。
   发版时：把本地改动推回上游仓库 → 按 `prepublishOnly`（`typecheck && test && build`）发版 → 两端依赖改回版本号。
@@ -704,6 +789,72 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 - ⚠️ **仍未覆盖**：OpenAI 系（GPT-5.6+）官方对缓存写入也收 1.25x，但**用量接口不回报写入 token 数**（含在 `prompt_tokens` 里）→ 没量可乘，这类模型费用略偏低（写入那段少算 25%）；Anthropic 的 1 小时 TTL 写入价是 2x，本项目只打 5 分钟断点、也只填 1.25x。详见 `docs/token-usage-stats.md` §10。
 - **测试**：`agent::usage` 3 条（读 / 写拆分、推导分支扣写入、非 Anthropic 恒 0）、`session_db::tests::usage` 1 条（分列落库 + 分列聚合 + 不变式）、`pricing.test.ts` 4 条（写入价 / 缺省回退 / 12.5 倍关系 / 内置价 = 1.25×input）、`usage-ledger.test.ts` 2 条（Anthropic 读 / 写分列、推导扣写入）。
 
+**11.42 手机端文件面板：条目一多，面包屑被挤成一条缝（用户报回 → 已修）** —— 现象：目录里条目多了之后，面板顶部的面包屑只剩「一点点」（文字被截去大半），想回上一级得先滚回顶部。
+- 根因：面包屑是 `.sheet__body`（`flex` 列 + `overflow-y: auto`）的子项，而它自己写了 `overflow-x: auto` —— 这会让 `overflow-y` **也算成 `auto`**，于是它是一个**滚动容器**；**滚动容器的自动最小高度是 0**，所以内容装不下时，收缩量（`flex-shrink`）几乎全落到它头上（其余子项 `overflow` 可见，最小高度 = 内容高度，压不动）。
+- 结论：**flex 列里凡自带滚动的子项（`overflow: auto/hidden/scroll`），都必须自己声明 `flex: none`（或 `flex-shrink: 0`）**；判断时别只看有没有写 `overflow-y` —— 写了 `overflow-x: auto` 就已经是滚动容器了。
+- 顺带改成 `position: sticky; top: 0` 常驻面板顶部。⚠️ sticky 的代价：**必须自己铺一层与 `.sheet` 同色的背景**（否则列表行从它背后滚过时直接「叠字」），再用 `padding-bottom: 14px` + `margin-bottom: -12px` 盖住 `.sheet__body` 的 12px 间距而不改视觉间距。
+- 落地与守卫：`virlen-mobile/src/ui/components/FileSheet.css`；**`jsdom` 不做布局，这类缺陷在 DOM 断言里根本看不见**（元素在、文案在、click 也照旧触发），所以守卫用例直接读样式表 —— `files-ui.test.ts` 的「文件面板的布局契约」（钉 `flex: none`，并比对面包屑底色与 `.sheet` 底色**同色**）。
+
+**11.43 手机端文件面板：进目录时把列表换成一行提示 = 高度先塌再撑的「闪一下」（用户报回 → 已修）** —— 现象：点进一个子目录，界面明显闪动一下。
+- 根因：`fileStore.load()` **并没有**清 `entries`（上一份列表还在 state 里），是**渲染**把它换成了单行提示（`loading ? hint : list`）；面板高度是内容撑的，于是「塌 → 撑」两下。
+- 结论：**加载中保留上一份内容，等应答回来直接替换**；加载提示放在**既不占高度、也不随内容滚**的地方（这里是标题栏下方的绝对定位胶囊，定位父级 `.sheet__head` 因此加了 `position: relative`）。首屏（还没有上一份列表）保持原样给一行提示。
+- 顺带一条：在途时旧行本来就是 `disabled`（`isBusy()` 含 `loading`），所以「旧列表点不动」**不用额外做** —— 但**新增行内交互时得自己走 `busy`**，否则就是拿旧目录的条目发新请求。
+- 守卫（`files-ui.test.ts`）：把电脑侧的列目录**拖慢 40ms**，点进去后**不等应答**就地断言「行数不变 + 出现加载提示」，再等应答验「整体替换」。不拖慢是测不到的 —— 内存链路会在同一次 `act` 里就答完。
+
+**11.44 手机端编辑电脑上的文件：三个「存回去就把文件搞坏」的坑（§37 覆写保存）** ——
+1. **换行**：`<textarea>` 的 value 只有 LF（HTML 规范），而 Windows 源码大多 CRLF ——
+   照 LF 存回去 = 在「只改三个字符」的改动里混进一次**全文行尾改写**（diff 满屏红）。修法：
+   先 `detectEolStyle` 记住原风格（按多数判），保存时 `encodeEditedText` 还原；而且必须
+   **先拉平再铺**（`applyEolStyle`），只做 `\n → \r\n` 会把已有的 CRLF 变成 `\r\r\n`
+   = 「保存一次多出一堆空行」。
+2. **编码**：宽容解码（GBK 中文注释）看着能用，**存回去就是毁文件**（原本在电脑上还能正常看，
+   之后连电脑上也读不回来了）→ `decodeUtf8Strict` 返回 `null` 就不给编辑入口，只说「请在电脑上改」。
+3. **并发**：从手机上打开到按保存之间，电脑上的 AI / 用户 / 编辑器都可能写过它 → 必须带
+   `expectMtimeMs` 校验（且 `finish` 落盘前**再来一次**），否则那些改动被**静默吞掉**且用户毫无察觉。
+   「强制覆盖」= 先取一次当前版本再写，**不是盲写**。
+
+**11.45 共享包契约的四个坑（文件引用 §37 落地时踩到的，前两条是跨仓通用的）**：
+1. **`strictNullChecks: false` 会让布尔字面量的判别联合彻底无法收窄** —— `virlen-app` 的 tsconfig 是
+   `strict: true` 但 **`strictNullChecks: false`**，于是共享包里写成
+   `type R = { ok: true; files } | { ok: false; reason }` 之后，电脑侧那句
+   `if (!r.ok) { …r.reason… }` 直接 **TS2339：`reason` 不存在于 `R`**（两边的分支都收窄不了，
+   连 `return r.reason` 也不给过）。**契约放在共享包里就不能只在一边成立** → 改成
+   `{ ok: boolean; files; reason: string }`（不变式：`ok === (reason === '')`），消费方不需要收窄。
+   证据：临时探针文件在 `virlen-app` 里跑 `tsc --noEmit` 复现（见 `message-files.ts` 的 `FileRefSanitizeResult`）。
+2. **「静默丢掉一条」比报错难查得多（假绿灯）** —— 手机端的 chip 由**手机端自己**渲染，电脑侧把
+   非法条目删掉之后**一切照旧成功**：用户看到 chip 在、消息里也有，而 AI 从未看到那个文件。
+   所以形状非法一律**拒整条**（`E_BAD_REQUEST`）+ 审计留痕。同一条纪律在 §36 引用、
+   §22 压缩方式上都出现过：**宁可不让发，也不要发一个「看起来成了」的**。
+3. **`[文件] …` 展平占位符丢了路径** —— `dto.ts::projectContentToText` 原本把文件块投影成
+   `[文件] ${block.name ?? block.path}`：**只有名字**（同一目录下两个 `index.ts` 手机上分不出）、
+   没有体积、也无法回显。所以拿了 §36 的同一条做法（结构化下行 + `skipQuotes` / `skipFiles`
+   两个开关），⚠️ 但**两个开关都必须默认关**：`store-bridge` 的消息指纹故意不跳，
+   否则「换了个附件」不会触发任何下行更新（手机端停在旧 chip 上）。
+4. **「只附文件不写话」是一条完全正常的消息** —— 行模型 `rendersNothing` 只看正文的话会把它
+   当成「什么都渲染不出来」而**不占行**（用户亲眼看自己发的那条不见了）。判据必须与 `MessageRow`
+   的 `return null` 分支一致，且**每次新增一类结构化附件（引用 / 文件 / 以后还会有）都要回去改它**。
+
+**11.46 手机端「默认打开第一个会话」= 默认打开【置顶】的那个（用户报回 → 已修）** ——
+现象：每次打开（刷新 / 重连后重进）手机端都跑到一个**几天没动**的会话里，而最近在用的那个要手工去抽屉里选。
+根因不在「默认打开第一个」这句，而在**那个「第一个」是谁**：电脑侧的会话列表是
+`sessionStore.listSessions()` 排的「**置顶优先** → `updatedAt` 倒序」，所以 `sessions[0]` 是**置顶**项，
+而不是最近用过的项（`virlen-mobile/src/ui/pages/Chat.tsx` 挂载 effect 里那句 `snap.sessions[0].id`）。
+口径（用户拍板）：**正在工作的会话优先**（`SessionSummaryDTO.working === true`，电脑侧权威；多个则取其中
+`updatedAt` 最大的），**否则取 `updatedAt` 最大的**；**置顶不参与这个选择** —— 置顶的意思是「别让它被淹没」，
+不是「每次进来都回到它」。实现收在纯函数 `lib/session-entry.ts::pickEntrySession`（可单测）。
+连带三条（都会踩）：
+1. **列表顺序不能动**（手机端不得重排）：抽屉 / 分组 / 「组内顺序 = 电脑侧给的顺序」全靠它
+   （`lib/session-groups.ts`）—— 要改「默认进哪个」只能在**这个纯函数里**自己比 `updatedAt`，不要顺手 sort 全表。
+2. **必须保留「已有当前会话就不切」的守卫**：这个挂载 effect 不只跑在首屏，链路抖动 / 代际更替后重新挂载
+   （`App.tsx` 在 `status !== 'online'` 时把整页换成 `Login`）也会跑它 —— 少了守卫，用户正看着的会话会被
+   自己顶掉；那条路上真正该做的只是重拉（`chatStore.resync`）。
+3. **`working` 是电脑侧给的快照事实**（`toSessionSummaryDTO` 取 `sessionRuntimeState`），所以「工作中优先」
+   在**进入那一刻**就成立，不需要额外 RPC；但它也只是那一刻的事实 —— **不做轮询、不做自动跳转**
+   （「某个会话开始工作了就自动切过去」会把用户正在读的内容换掉，且用户没有任何办法关掉它）。
+回归：`virlen-mobile/src/tests/session-entry.test.ts`（纯函数 8 例 + DOM 端到端 4 例；后者在改回
+`sessions[0]` 的实现下会红 —— 已实测）。演示宿主 `?entry=pin` / `?entry=work`（`src/dev/host-harness.ts`）
+把「置顶但更旧」与「另一个会话正在工作」这两种真机形态造出来，真机/联调都能一眼看到标题换没换。
+
 **托盘 / 关闭不退出 / 后台工作**：实现见 `src-tauri/src/tray/`（模块头即设计说明），无独立文档。
 
 ---
@@ -739,6 +890,9 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 | 用 CLI **交互式**配一个供应商 / Agent（`virlen-cli provider|agent add`，**已落地**） | 方案与实测 `docs/cli-tui-plan.md` §10，连带约束见 §11.27；命令实现在 `src-tauri/virlen-cli/src/{provider,agent}.rs`（+ 各自 `tests.rs`）；共用设施 `src-tauri/virlen-cli/src/wizard.rs`（问答原语 / 密文输入）+ `settings_edit.rs`（数组键按 id 增删改 + 字段级合并 + 回读校验）；**供应商模板表 / 推理档位表** 唯一源 `src-tauri/virlen-core/src/agent/provider/provider_catalog.json`（+ `catalog.rs` / 命令 `cmd_provider_catalog` / 前端 `domain/provider/catalog.ts` + `infrastructure/provider/catalog-source.ts`）；**模型列表与连通性验证** `src-tauri/virlen-core/src/agent/provider/models.rs`（`list_models` / `verify_connection`） |
 | 改设置项 | `src/ui/store/settingStore.ts` + `src/ui/pages/Settings/*` + `src/ui/i18n/lang/en-US.json` |
 | 改手机控制 / 配对 / 审计（电脑侧） | 装配 `src/bridge/index.ts::startPhoneBridge` → 服务 `phone-control.ts` → 真实数据源 `host-source.ts`；策略与留痕 `acl.ts` / `approval-policy.ts` / `audit.ts` / `pairing.ts` / `dto.ts` / `store-bridge.ts` / `interaction-*.ts`；接线 `src/ui/store/phoneControlStore.ts` + 设置页 `src/ui/pages/Settings/phone-control-settings.tsx`；落盘命令 `src-tauri/src/commands/phone_{pairing,device,audit}.rs`；传输共享包 `virlen-remote`（信令 / ICE 存 `localStorage`）；测试 `src/tests/bridge/*`、`src/tests/ui/phone-control-*`；设计文档 `docs/phone-control-bridge.md` **尚未落地**（16 个文件引用其 §号） |
+| 改手机端的文件浏览 / 预览 / 编辑（§37） | 电脑侧 `src/bridge/file-source.ts`（纪律：越权只有 `resolvePath` / 非中继 / 分块 / 临时文件 / **覆写与两道冲突校验**）+ 端口 `file-tauri.ts`（`statFile` / `replaceFile`）；共享包 `virlen-remote/src/protocol/files.ts`（分类 / 限额 / base64 / 路径 / **编辑往返：EOL·BOM·严格 UTF-8**）；手机端 `store/files.ts` + `ui/components/FileSheet.{tsx,css}`；坑与用例清单见 §5.9 那一节与 §11.44 |
+| 改「把电脑上的文件引用到对话」（§37 的延伸） | 契约 `virlen-remote/src/protocol/message-files.ts`（`MessageFileRef` / `MESSAGE_FILE_CAPABILITY` / 限额 / **`sanitizeFileRefs` = 两端唯一校验口径**）+ `protocol/api.ts`（`SendParams.files` / `MessageDTO.files`）；电脑侧 `src/bridge/host-source.ts::send`（校验 + 并入 `buildUserContent` + 审计 `files=N`）+ `dto.ts`（`collectFiles` / `projectContentToText` 的 `skipFiles`）；手机端 `ui/components/FileSheet.tsx`（「引用」开关）+ `ui/pages/Chat.tsx`（`pendingFiles` / chip）+ `lib/message-rows.ts`（`rendersNothing` 要算上 files）；坑见 §5.9 与 §11.45 |
+| 改手机端**进入时默认打开哪个会话** | 纯函数 `virlen-mobile/src/lib/session-entry.ts::pickEntrySession`（**正在工作的优先 → 否则 `updatedAt` 最大；置顶不参与**）+ 挂载 effect `ui/pages/Chat.tsx`（已有当前会话则不切）；列表顺序仍是电脑侧权威（`sessionStore.listSessions()`：置顶优先 → 倒序），手机端**不得重排**；联调 `?entry=pin\|work`（`src/dev/host-harness.ts`）；用例 `virlen-mobile/src/tests/session-entry.test.ts`；坑见 §11.46 |
 | 改配置下沉 / 设置落库 | Rust `src-tauri/virlen-core/src/session_db/settings.rs`（`app_settings` 表 + `SettingsRepo`）+ 命令壳 `src-tauri/src/commands/session_db.rs::cmd_settings_*`；前端 `src/infrastructure/settingsRepo/` + `settingStore.hydrateSettings()/flushSettingsPersist()` + `src/main.ts` 的 `step('settings')`；计划见 `docs/config-sink-plan.md` |
 | 改埋点 | `src/utils/telemetry/**`（前端）；Rust 侧分两半：**出口** `src-tauri/src/telemetry.rs`（`TauriTelemetrySink` → `agent:telemetry` 事件 + `telemetry_drain_panics` 命令）、**其余**（`track` / `hash_id` / `now_ms` / 会话 trace / panic 钩子与落盘）在 `src-tauri/virlen-core/src/telemetry.rs`（sink 可插拔） |
 | 改 RAG / 知识库 | `src-tauri/virlen-core/src/rag/**`、`src/services/rag-service.ts`、`src/infrastructure/rag/` |

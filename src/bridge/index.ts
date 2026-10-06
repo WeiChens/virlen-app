@@ -33,7 +33,11 @@ import { PairingStore } from './pairing'
 import { SubscriptionRegistry } from './subscription'
 import { attachInteractionSources, type InteractionHost } from './interaction-source'
 import { InteractionRegistry } from './interaction-registry'
-import { createDesktopHostSource, type HelloOutcome } from './host-source'
+import { createDesktopHostSource, sessionWorkspaceOf, type HelloOutcome } from './host-source'
+import { createHostFiles, type FileSystemPort, type HostFiles } from './file-source'
+import { createTauriFileSystem } from './file-tauri'
+import { securityService } from '@/services/security-service'
+import type { LinkKind } from './link-kind'
 import { createStoreBridge, type StoreBridge } from './store-bridge'
 import { createTracedEmit, instrumentPhoneRpc } from './telemetry'
 
@@ -60,8 +64,12 @@ export {
 } from './link-kind'
 export type { LinkKind, TransferTier } from './link-kind'
 export { SubscriptionRegistry } from './subscription'
-export { createDesktopHostSource } from './host-source'
+export { createDesktopHostSource, sessionWorkspaceOf } from './host-source'
 export type { HelloOutcome } from './host-source'
+/* ── §37：工作目录文件（接口层 + Tauri 端口）── */
+export { createHostFiles } from './file-source'
+export type { FileSystemPort, FileSysEntry, HostFiles, HostFilesDeps } from './file-source'
+export { createTauriFileSystem } from './file-tauri'
 export { createStoreBridge } from './store-bridge'
 export {
   PhoneControlService,
@@ -82,6 +90,7 @@ export {
   toRuntimeDTO,
   projectContentToText,
   collectQuotes,
+  collectFiles,
   buildToolCallIndex,
   normalizeWorkspace,
 } from './dto'
@@ -158,6 +167,29 @@ export interface PhoneBridgeOptions {
    * 不传 = 永远 `full`（老行为，一个字节都不少发）。
    */
   transferTier?: () => TransferTier
+  /**
+   * §37：当前链路通讯类型（**非中继门槛**的唯一来源）。
+   *
+   * 为什么不复用上面的 `transferTier`：两者的口径**有意不同** —— 档位把 `unknown` 也算精简
+   * （拿不准就少发正文），而文件传输只在**确认走了中继**时拒（`unknown` 放行，否则
+   * 同源 Broadcast 联调与非 WebRTC 链路永远传不了文件）。见共享包 `fileTransferDeniedReason`。
+   *
+   * 不传 = 不限制（单测 / 联调；生产由 `PhoneControlService` 注入 `() => kindWatch.kind`）。
+   */
+  linkKind?: () => LinkKind
+  /**
+   * §37：文件系统端口（不传 = Tauri 真机实现）。
+   *
+   * 之所以能注入：本接口层的全部纪律（带宽上限 / 临时文件 / 越权路径规整 / ACL）都值得单测，
+   * 而单测里没有 Tauri。装配处不传就是生产行为。
+   */
+  fileSystem?: FileSystemPort
+  /**
+   * §37：路径安全校验（不传 = `securityService.resolveSafePath`，与桌面文件工具同一个入口）。
+   *
+   * ⚠️ **不要**在别处另写一份路径拼接 / 越权判断：手机端能看到哪个目录，全由这一道决定。
+   */
+  resolvePath?: (input: string, mode: 'r' | 'w', sessionId: string) => Promise<string>
   /**
    * 复用**服务级**交互注册表（`PhoneControlService` 持有；不传则本函数自建一份、随链路销毁）。
    *
@@ -293,7 +325,7 @@ export function startPhoneBridge(endpoint: Endpoint, options: PhoneBridgeOptions
     transferTier: effectiveTier,
   })
 
-  const source = createDesktopHostSource({
+  const sessionSource = createDesktopHostSource({
     pairing,
     acl,
     audit,
@@ -347,6 +379,30 @@ export function startPhoneBridge(endpoint: Endpoint, options: PhoneBridgeOptions
     },
     onHelloReceived: options.onHelloReceived,
   })
+
+  /*
+   * §37：把「会话数据源」与「文件接口层」合成一份 `HostDataSource`。
+   *
+   * 为什么在装配层拼而不是塞进 `host-source.ts`：两者接的是**两套完全不同的依赖**
+   * （会话库 / 磁盘），合成点越往外越好 —— 这份对象随后只被 `registerHostHandlers`
+   * 与握手闸门（`gatedHostSource` 的 Proxy）消费，多点少点都在这里看得见。
+   *
+   * ⚠️ `linkKind` 由调用方注入（生产 = `PhoneControlService` 的巡检器）：非中继门槛要看的
+   * 是**当前**链路事实，它在 `RTCPeerConnection` 里，只有持有 PC 的那一层知道（与 `transferTier` 同理）。
+   */
+  const files: HostFiles = createHostFiles({
+    acl,
+    audit,
+    files: options.fileSystem ?? createTauriFileSystem(),
+    resolvePath:
+      options.resolvePath ??
+      ((input: string, mode: 'r' | 'w', sessionId: string) =>
+        securityService.resolveSafePath(input, mode, sessionId)),
+    workspaceOf: sessionWorkspaceOf,
+    linkKind: options.linkKind,
+  })
+
+  const source: HostDataSource = { ...sessionSource, ...files }
 
   const registration: HostRegistration = registerHostHandlers(
     endpoint,

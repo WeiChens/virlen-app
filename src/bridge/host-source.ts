@@ -11,8 +11,11 @@
  */
 import {
   BridgeError,
+  COMPRESS_MODE_CAPABILITY,
   MESSAGE_DELETE_CAPABILITY,
   MESSAGE_DETAIL_CAPABILITY,
+  compressModeOf,
+  sanitizeFileRefs,
   type AgentOptionDTO,
   type AnswerParams,
   type AnswerResult,
@@ -70,6 +73,7 @@ import {
 import { buildToolCallIndex, normalizeWorkspace, toMessageDTO, toRuntimeDTO, toSessionSummaryDTO } from './dto'
 import type { Acl } from './acl'
 import { previewOf, type AuditLog } from './audit'
+import type { HostFiles } from './file-source'
 import { PHONE_EVENTS, summarizeParams, tokenHash } from './telemetry'
 import { track } from '@/utils/telemetry'
 import type { InteractionRegistry } from './interaction-registry'
@@ -90,6 +94,15 @@ import type { SubscriptionRegistry } from './subscription'
 export type HelloOutcome =
   | { ok: true }
   | { ok: false; reason: CredentialRejectReason | 'denied' | 'ticket-expired' }
+
+/**
+ * 会话域的 `HostDataSource` —— 就是移除「§37 文件六件套」后的那一份。
+ *
+ * 为何要单独一个类型（而不是继续返回完整的 `HostDataSource`）：文件接口层有自己的依赖
+ * （磁盘 / 安全校验），装配点在 `bridge/index.ts`。让本函数**声明它不实现**文件方法，
+ * 于是「漏拼一节」会在装配处直接报错，而不是等真机上手机点开文件面板才发现是空实现。
+ */
+export type DesktopHostSource = Omit<HostDataSource, keyof HostFiles>
 
 export interface DesktopHostSourceDeps {
   pairing: PairingStore
@@ -163,7 +176,7 @@ export interface DesktopHostSourceDeps {
   onHelloReceived?: () => void
 }
 
-export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSource {
+export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHostSource {
   const {
     pairing,
     acl,
@@ -183,6 +196,20 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
 
   const auditOp = (method: string, sessionId?: string, detail?: string): void => {
     audit.record({ method, allowed: true, sessionId, detail })
+  }
+
+  /**
+   * `host.session.send` 的审计说明：引用了多少条 / 附了几个文件（两者都为 0 = 普通一条，
+   * 不带 detail —— 与这行以前的行为一字不差）。
+   *
+   * 为何把两件事写成一句话：审计列表里要能一眼看出「这条消息带了什么」，
+   * 而不是翻两条记录去拼。
+   */
+  const sendAuditDetail = (quotes: number, files: number): string | undefined => {
+    const parts: string[] = []
+    if (quotes > 0) parts.push(`quotes=${quotes}`)
+    if (files > 0) parts.push(`files=${files}`)
+    return parts.length ? parts.join(' ') : undefined
   }
 
   /**
@@ -471,16 +498,37 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
       }
       const before = new Set(getSessionMessages(params.sessionId).map((m) => m.id))
       /*
-       * 引用（§36）：手机端发 `quotes` 时，本条用户消息的 content 不再是裸字符串，
-       * 而是与**桌面输入框同一条路径**组装出来的内容块（`buildUserContent`）——
-       * 于是引擎 / 持久化 / 桌面渲染 / 导出全都与桌面发的那条一模一样（结构化 quote 块）。
+       * 文件引用（§37）：手机端把文件面板里挑中的文件挂在消息上，这里把它组装成与**桌面输入框
+       * 同一条路径**的内容块（`buildUserContent` 的 files 位）—— 于是引擎 / 持久化 / 桌面渲染 /
+       * 导出全都与桌面拖一个文件进输入框完全一致（结构化 file 块）。
        *
-       * ⚠️ 无引用时保持原来的 `params.text`（裸字符串）**不做任何变换**：
+       * 校验走**共享包**的 `sanitizeFileRefs`（与演示宿主同一份，不在这里另写一套）：
+       * ⚠️ 形状非法**拒整条**（不是丢掉那一条就照发）—— 丢一条时手机端 chip 还在、
+       * 用户会以为带上了，而 AI 从未看到（§36 引用那次踩过的坑）。被拒时**留痕**：
+       * 「发了但被拒」必须能在审计里查到原因。
+       */
+      const fileRefs = sanitizeFileRefs(params.files)
+      if (!fileRefs.ok) {
+        audit.record({
+          method: 'host.session.send',
+          allowed: false,
+          sessionId: params.sessionId,
+          detail: `files 非法：${fileRefs.reason}`,
+        })
+        throw new BridgeError('E_BAD_REQUEST', fileRefs.reason)
+      }
+      /*
+       * 引用（§36）与文件（§37）都走**结构化内容块**：手机端发 `quotes` / `files` 时，本条用户消息的
+       * content 不再是裸字符串，而是与桌面输入框同一条路径组装出来的内容块（`buildUserContent`）。
+       * 块顺序也由它定（quote → text → file），两端同构。
+       *
+       * ⚠️ 两者都没有时保持原来的 `params.text`（裸字符串）**不做任何变换**：
        * 那条路径跑了几十个版本，没有理由因为本次改动把它换成 `[{type:'text'}]`。
        */
-      const content = params.quotes?.length
-        ? buildUserContent(params.text, [], [], params.quotes)
-        : params.text
+      const content =
+        params.quotes?.length || fileRefs.files.length
+          ? buildUserContent(params.text, [], fileRefs.files, params.quotes)
+          : params.text
       /*
        * 与桌面「重新发送时清除当前会话的错误状态」（`chat-view.handleSend`）同构：
        * 手机发新消息也是一次重试 —— 上一条错误必须在这里落下去。
@@ -512,7 +560,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
       const added = getSessionMessages(params.sessionId).find(
         (m) => !before.has(m.id) && m.role === 'user',
       )
-      auditOp('host.session.send', params.sessionId, params.quotes?.length ? `quotes=${params.quotes.length}` : undefined)
+      auditOp('host.session.send', params.sessionId, sendAuditDetail(params.quotes?.length ?? 0, fileRefs.files.length))
       return { messageId: added?.id ?? '' }
     },
 
@@ -809,7 +857,9 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
      * 三道闸与桌面 token 环同构（不是另立标准）：
      * 1. `confirm:true`（不可逆操作，手机 UI 的确认不算数）；
      * 2. 正在回复 / 正在压缩 → `E_BUSY`；
-     * 3. 占用未达 `COMPRESS_MIN_RATIO` → 拒（与桌面「当前上下文很充裕，无需压缩」同判据）。
+     * 3. 占用未达 `COMPRESS_MIN_RATIO` → 拒（与桌面「当前上下文很充裕，无需压缩」同判据）；
+     * 4. `mode` 传了就必须认得（未知取值 → `E_BAD_REQUEST`，**不落回缺省** ——
+     *    落回缺省等于把手机端的一个拼写错误变成一次要花钱的模型调用）。
      *
      * 过程不进本 RPC：进度走 `runtime.compacting`，结果走 `messages.reset`（手机重拉窗口）
      * 与 `message.added`（摘要消息）—— 与 `send` / `resume` 同形（§3.3）。
@@ -825,6 +875,14 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
         })
         throw new BridgeError('E_CONFIRM_REQUIRED', '压缩上下文需二次确认（confirm:true）')
       }
+      /*
+       * 压缩方式：手机端只能在自己确认「电脑端声明了 `COMPRESS_MODE_CAPABILITY`」时才传，
+       * 本端仍独立校一遍取值 —— 不传（旧手机端）= 沿用桌面设置里的那一档（与改动前一字不变）。
+       */
+      const mode = params.mode == null ? undefined : compressModeOf(params.mode)
+      if (params.mode != null && !mode) {
+        throw new BridgeError('E_BAD_REQUEST', `未知的压缩方式：${String(params.mode)}`)
+      }
       requireSession(params.sessionId)
       const rt = sessionRuntimeState.value.sessions[params.sessionId]
       if (rt?.working) throw new BridgeError('E_BUSY', '该会话正在回复中，无法压缩上下文')
@@ -837,8 +895,13 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
       if (!shouldCompress(context)) {
         throw new BridgeError('E_BAD_REQUEST', '当前上下文很充裕，无需压缩')
       }
-      void compressContext(params.sessionId).catch(() => {})
-      auditOp('host.session.compress', params.sessionId, `tokens=${context.tokens}`)
+      void compressContext(params.sessionId, undefined, mode).catch(() => {})
+      auditOp(
+        'host.session.compress',
+        params.sessionId,
+        // 如实记下本次生效的方式（含「沿用电脑侧设置」这一情形的来源）
+        `tokens=${context.tokens}${mode ? ` mode=${mode}` : ' mode=host-setting'}`,
+      )
       return { ok: true as const }
     },
   }
@@ -846,6 +909,16 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): HostDataSo
 
 /** 供 store-bridge 构造运行时 DTO（避免重复 import 面）。 */
 export { toRuntimeDTO }
+
+/**
+ * 会话工作目录（§37 的文件接口层用它把相对路径落到盘上）。
+ *
+ * 为什么从这里出而不是让 `bridge/index.ts` 直接 import `@/ui/store`：本文件已经是
+ * 「bridge 依赖 ui/store」的唯一入口，多一个入口就多一处模块初始化顺序的隐式约束。
+ */
+export function sessionWorkspaceOf(sessionId: string): string | null {
+  return sessionStore.getSession(sessionId)?.workspace ?? null
+}
 
 /* ───────────────────────── hello 应答的组装与拒绝文案（M6） ───────────────────────── */
 

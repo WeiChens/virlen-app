@@ -36,6 +36,8 @@
     "fs:allow-copy-file",
     "fs:allow-truncate",
     "fs:allow-rename",
+    "fs:allow-open",
+    "fs:allow-seek",
     {
       "identifier": "fs:scope",
       "allow": [
