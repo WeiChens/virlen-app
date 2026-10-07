@@ -35,6 +35,12 @@ export interface SettingsStore {
   language: 'zh-CN' | 'en-US'
   theme: 'light' | 'dark' | 'system'
   fontSize: 'small' | 'medium' | 'large'
+  /**
+   * 主题色（品牌色）：`''` = 内置默认酭蓝（theme.scss 的 $brand-default）；
+   * `'#rrggbb'` = 用户在设置里选的色（预设色板或取色器，两者都存成同一个格式）。
+   * 亮 / 暗两档不由这里存 —— 由 theme.scss（预设）与 ui/theme/accentPalette.ts（任意色）派生。
+   */
+  accentColor: string
   /** 隐藏 toolCall 思考过程消息 */
   hideToolCallThink: boolean
   /** 权限三态表：权限 name → allow | ask | deny（终端命令 / 脚本执行） */
@@ -123,6 +129,7 @@ const defaultSettings: SettingsStore = {
   language: 'zh-CN',
   theme: 'system',
   fontSize: 'medium',
+  accentColor: '',
   hideToolCallThink: true,
   permissions: withDefaultPermissions(undefined),
   sandboxMode: 'on',

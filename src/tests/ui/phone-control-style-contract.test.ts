@@ -36,10 +36,14 @@ function readProjectFile(rel: string): string {
 
 const pageTsx = readProjectFile('src/ui/pages/Settings/phone-control-settings.tsx')
 const pageScss = readProjectFile('src/ui/pages/Settings/phone-control-settings.scss')
-/** 全局样式：`ui/App.tsx` 在入口处引入，全应用可见 */
+/** 全局样式：`ui/App.tsx` 在入口处引入，全应用可见。
+ *  theme.scss 必须**编译**后再查变量：品牌令牌现在由 SCSS 函数派生（`@include accent-vars`），
+ *  源码里根本没有 `--primary: #…` 这种字面声明，拿原文做「幽灵变量」检查会把它们全判成未定义。 */
 const globalCss = [
   readProjectFile('src/ui/App.css'),
-  readProjectFile('src/ui/styles/theme.css'),
+  sass
+    .compileString(readProjectFile('src/ui/styles/theme.scss'))
+    .css.replace(/@charset\s+"[^"]*";/g, ''),
 ].join('\n')
 
 /**
@@ -107,7 +111,7 @@ describe('phone-control 设置页 —— 类名与样式定义成对', () => {
   it('scss 里引用的 CSS 变量都真的已定义（防「幽灵变量」静默降级为 fallback）', () => {
     // 本缺陷的第二根因就是这个：`var(--bg-elevated, #1c1c22)` —— `--bg-elevated` 全项目
     // 从未定义，于是弹窗永远是近黑底（亮色主题下标题不可读），而**编译 / 类型检查都不报错**。
-    // 口径：变量只需在全局样式（theme.css / App.css）里有定义；若将来本页需要用 JS 内联的
+    // 口径：变量只需在全局样式（theme.scss 编译产物 / App.css）里有定义；若将来本页需要用 JS 内联的
     // 变量（如 `--x` 由 TS 写入），请加白名单并注明理由，不要删这条断言。
     const definedVars = new Set(
       [...stripComments(globalCss).matchAll(/(--[a-zA-Z][\w-]*)\s*:/g)].map((m) => m[1]),

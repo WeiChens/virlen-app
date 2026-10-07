@@ -196,7 +196,7 @@ const FileAccessSecurity = observer(function FileAccessSecurity() {
                 autoComplete="off"
               />
               <button className="add-btn" onClick={handleAdd}>
-                <AddSvg fill="#fff" />
+                <AddSvg fill="currentColor" />
               </button>
             </div>
           </div>

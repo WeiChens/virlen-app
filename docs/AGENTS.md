@@ -605,7 +605,10 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 - **状态**：MobX 单一 store + `StorageState`（`utils/storageState.ts`）。⚠️ **设置类**（`settingsState`，key `_storage_state_virlen-settings`）自 S3 起 **Tauri 下不再写 localStorage**（权威源是 `app_settings` 表，见 §5.3）。新增设置项记得加进 `SettingsStore` 接口 + `defaultSettings` + 设置页 UI（`ui/pages/Settings/`）。
 - **会话持久化**：见 §5.3。启动只加载元数据，消息懒加载；`utils/db.ts` 已废弃，不要复活。
 - **组件事件**：`src/events/*` 的 EventEmitter；禁止 `window.*` 全局挂载。
-- **样式**：组件目录内 `style.scss`，BEM 类名；主题变量在 `ui/styles/theme.css`。
+- **样式**：组件目录内 `style.scss`，BEM 类名；主题变量在 `ui/styles/theme.scss`（原 `theme.css`，改为 scss 后品牌色由 SCSS 函数派生）。
+- **主题色（品牌色）**：唯一色源 = 品牌基色。默认档与预设色板由 `theme.scss` 的 `accent-tokens()` **构建期**算死（预设用 `<html data-accent='<name>'>` 选中，零运行期计算）；用户在「设置 → 通用 → 主题色」选的**任意颜色**由 `ui/theme/accentPalette.ts` 用**同一套系数**在运行期派生，经 `ui/hooks/useAccentColor.ts` 注入 `:root[data-theme=…]` 覆盖样式。
+  - ⚠️ **改一处必须改两处**：SCSS 的 `$accent-mix-*` 与 TS 的 `ACCENT_MIX` 一一对应；`src/tests/ui/accent-color-contract.test.ts` 会把 `theme.scss` 编译出来逐令牌对拍，漂了就是红的。
+  - ⚠️ **品牌底色上的文字/图标一律用 `var(--primary-fg)`**（标题栏用 `var(--primary-bar-fg)`），不许写 `#fff`/`fill: white` —— 浅色主题色时前景会自动转黑，写死白字就糊在亮底上了（同一用例里有全仓扫描守卫）。
 - **窗口**：无边框自绘 + 首帧 `show()`。
 - **性能**：消息列表虚拟滚动 + 分页（改 `message-list.tsx` 注意 `measureElement`）。
 - **埋点**：`track('域.动作', props)`，默认关闭、关闭时零开销。

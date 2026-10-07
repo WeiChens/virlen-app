@@ -313,7 +313,7 @@ function SkillPlaza() {
                             </>
                           ) : (
                             <>
-                              <AddSvg fill="#fff" />
+                              <AddSvg fill="currentColor" />
                               {t('导入')}
                             </>
                           )}

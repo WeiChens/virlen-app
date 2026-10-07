@@ -70,7 +70,7 @@
       .new-version-badge {
         display: inline-block;
         background: var(--primary-color);
-        color: #fff;
+        color: var(--primary-fg);
         font-size: var(--font-size-base);
         padding: 4px 16px;
         border-radius: 20px;
@@ -166,7 +166,7 @@
     // ===== 通用「更新/重试」按钮样式 =====
     .btn-update {
       background: var(--primary-color);
-      color: #fff;
+      color: var(--primary-fg);
       border: none;
       border-radius: 6px;
       padding: 8px 32px;

@@ -4,11 +4,18 @@
  *
  * 聊天相关条目已拆到独立菜单 `chat-settings`（含原「会话管理」的「侧边栏分组」）。
  */
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { observer } from 'mobx-react-lite'
 import { settingsState } from '@/ui/store'
 import type { SettingsStore, SandboxMode } from '@/ui/store'
 import { showToast } from '@/ui/components/shared/Toast'
+import {
+  ACCENT_PRESETS,
+  DEFAULT_ACCENT,
+  normalizeHex,
+} from '@/ui/theme/accentPalette'
+import { applyAccentColor } from '@/ui/hooks/useAccentColor'
 import {
   telemetryState,
   recordTelemetryToggle,
@@ -20,6 +27,101 @@ import Select from '@/ui/components/shared/Select'
 import { t, tpl } from '@/ui/i18n'
 import './general-settings.scss'
 import { openUrl } from '@tauri-apps/plugin-opener'
+
+/**
+ * 主题色取色控件：预设色板 + 原生取色器 + 十六进制输入 + 恢复默认。
+ *
+ * 拖动原生取色器时的预览直接写样式（`applyAccentColor`），**不落库** ——
+ * 否则拖一下就是上百次 `settings.change` 埋点与落库，而用户只是“看看这个色好不好看”。
+ * 提交点放在失焦（原生取色器关闭时必挨）→ 一次拖拽全程只落库一次。
+ */
+function AccentColorField({
+  color,
+  onChange,
+}: {
+  color: string
+  onChange: (value: string) => void
+}) {
+  /** 当前生效色（自定义值非法或为空时就是内置默认色） */
+  const current = normalizeHex(color) ?? DEFAULT_ACCENT
+  const [draft, setDraft] = useState(current)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // 外部值变了（点色板、恢复默认）→ 输入框跟着走；但正在输入时不抢用户的光标
+  useEffect(() => {
+    if (document.activeElement !== inputRef.current) setDraft(current)
+  }, [current])
+
+  function commit(next: string) {
+    const hex = normalizeHex(next)
+    if (hex) onChange(hex)
+    else {
+      setDraft(current)
+      applyAccentColor(color)
+    }
+  }
+  const lastAccetColor = useRef(current)
+
+  return (
+    <div className="accent-field">
+      <div className="accent-swatches" role="group" aria-label={t('主题色')}>
+        {ACCENT_PRESETS.map((p) => (
+          <button
+            key={p.name}
+            type="button"
+            className={`accent-swatch ${current === p.color ? 'active' : ''}`}
+            style={{ '--swatch': p.color } as CSSProperties}
+            title={t(p.label)}
+            aria-label={t(p.label)}
+            aria-pressed={current === p.color}
+            onClick={() => onChange(p.color)}
+          />
+        ))}
+      </div>
+
+      <div className="accent-custom">
+        <input
+          type="color"
+          className="accent-native"
+          aria-label={t('自定义主题色')}
+          value={current}
+          onChange={(e) => {
+            lastAccetColor.current = e.currentTarget.value
+            applyAccentColor(e.currentTarget.value)
+          }}
+          onBlur={() => {
+            commit(lastAccetColor.current)
+          }
+          }
+        />
+        <input
+          ref={inputRef}
+          className="accent-hex"
+          aria-label={t('主题色色值（#RRGGBB）')}
+          spellCheck={false}
+          value={draft}
+          onChange={(e) => {
+            setDraft(e.target.value)
+            const hex = normalizeHex(e.target.value)
+            if (hex) applyAccentColor(hex)
+          }}
+          onBlur={(e) => commit(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commit(e.currentTarget.value)
+            if (e.key === 'Escape') commit(color)
+          }}
+        />
+        <button
+          type="button"
+          className="accent-reset"
+          disabled={color === ''}
+          onClick={() => onChange('')}>
+          {t('恢复默认')}
+        </button>
+      </div>
+    </div>
+  )
+}
 
 function GeneralSettings() {
   const s = settingsState.value
@@ -151,6 +253,20 @@ function GeneralSettings() {
                 </button>
               ))}
             </div>
+          </div>
+        </div>
+
+        {/* 本行的控件是整条色板（≈470px），挤不下 label 右侧的一行 —— 单独堆叠：
+           标签在上、色板在下，否则中文 label 会被压成一列竖排字 */}
+        <div className="setting-row is-stacked">
+          <div className="setting-label">
+            <span className="label-text">{t('主题色')}</span>
+          </div>
+          <div className="setting-control">
+            <AccentColorField
+              color={s.accentColor}
+              onChange={(v) => update('accentColor', v)}
+            />
           </div>
         </div>
 

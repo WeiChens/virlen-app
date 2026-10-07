@@ -19,7 +19,7 @@
     }
     &.active {
       background-color: var(--accent-color);
-      color: #fff;
+      color: var(--primary-fg);
       &:hover {
         background-color: var(--accent-color);
         opacity: 1;

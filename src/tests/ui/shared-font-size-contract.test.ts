@@ -3,7 +3,7 @@
  *
  * 缺陷背景（本次优化的动机）：
  * 用户在「设置 → 字体大小」切小/中/大，靠的是 `<html data-font-size>` 覆盖
- * `ui/styles/theme.css` 里的 `--font-size-*` 一组变量（见 hooks/useFontSize.ts）。
+ * `ui/styles/theme.scss` 里的 `--font-size-*` 一组变量（见 hooks/useFontSize.ts）。
  * 也就是说：**组件里只要写了 px 字号，那处就永远不跟着变**。
  * 这批组件里踩过的坑：
  *   ① hardcode 的字号 —— UpdateModal 里 17 处、MessageBox/Select/Tooltip/Slider/RadioGroup/ImagePreview 若干；
@@ -93,7 +93,7 @@ function decl(file: string, selector: string, prop: string): string | undefined 
   return declAll(file, selector, prop).pop()
 }
 
-const globalCss = [readProjectFile('src/ui/App.css'), readProjectFile('src/ui/styles/theme.css')].join(
+const globalCss = [readProjectFile('src/ui/App.css'), readProjectFile('src/ui/styles/theme.scss')].join(
   '\n',
 )
 

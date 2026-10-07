@@ -22,7 +22,8 @@
         width: fit-content;
         margin-left: auto;
         background: var(--btn-bg-primary, #4f46e5);
-        color: #fff;
+        /* 品牌底上的文字：浅色主题色时 --primary-fg 会自动变黑（见 theme.scss） */
+        color: var(--primary-fg);
         border-radius: 16px 4px 16px 16px;
         word-break: break-word;
 

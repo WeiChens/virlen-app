@@ -42,7 +42,7 @@
 
       &:focus {
         border-color: var(--accent-color, #4f46e5);
-        box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.15);
+        box-shadow: var(--focus-shadow);
       }
 
       &::placeholder {
@@ -59,7 +59,7 @@
       border: none;
       border-radius: 6px;
       background: var(--accent-color, #4f46e5);
-      color: #fff;
+      color: var(--primary-fg);
       cursor: pointer;
       transition: opacity 0.15s;
 
@@ -269,7 +269,7 @@
 
       &:focus {
         border-color: var(--accent-color, #4f46e5);
-        box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.15);
+        box-shadow: var(--focus-shadow);
       }
 
       &::placeholder {
@@ -315,7 +315,7 @@
 
     &:focus-within {
       border-color: var(--accent-color, #4f46e5);
-      box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.15);
+      box-shadow: var(--focus-shadow);
     }
 
     input {
@@ -439,7 +439,7 @@
       &.primary {
         background: var(--accent-color, #4f46e5);
         border-color: var(--accent-color, #4f46e5);
-        color: #fff;
+        color: var(--primary-fg);
 
         &:hover:not(:disabled) {
           opacity: 0.9;
@@ -453,6 +453,128 @@
           border-color: var(--color-danger);
         }
       }
+    }
+  }
+
+  /**
+   * 堆叠行：标签在上、控件在下。
+   * 用于「控件本身就有一整行宽」的条目（如主题色色板 ≈470px）——
+   * 塞在 label 右侧时，中文 label 会被挤成一列竖排字（真机反馈过）。
+   */
+  .setting-row.is-stacked {
+    flex-direction: column;
+    align-items: stretch;
+    /* 基类是 flex-start/space-between 的横向行；改列向后要显式收回，
+       否则将来有人给这一行加高度时，两块会被推到两端 */
+    justify-content: flex-start;
+    gap: 10px;
+
+    .setting-control {
+      flex-shrink: 1;
+      width: 100%;
+    }
+  }
+
+  // ==================== 主题色取色器 ====================
+  .accent-field {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px 14px;
+    flex-wrap: wrap;
+  }
+
+  .accent-swatches {
+    display: flex;
+    gap: 6px;
+    margin-left: 8px;
+  }
+
+  /* 色板按钮：底色靠内联的 --swatch（预设色值），不在这里写死颜色 */
+  .accent-swatch {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 50%;
+    background: var(--swatch);
+    cursor: pointer;
+    transition: transform 0.12s;
+
+    &:hover {
+      transform: scale(1.12);
+    }
+
+    /* 选中环用「背景色 + 品牌色」两道描边：不论色板是什么色，环都能看清 */
+    &.active {
+      box-shadow:
+        0 0 0 2px var(--bg-primary),
+        0 0 0 4px var(--swatch);
+    }
+  }
+
+  .accent-custom {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 4px;
+  }
+
+  /* 原生取色器：只留一个色块，边框与输入框同款 */
+  .accent-native {
+    width: 30px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--input-bg);
+    cursor: pointer;
+
+    &::-webkit-color-swatch-wrapper {
+      padding: 3px;
+    }
+
+    &::-webkit-color-swatch {
+      border: none;
+      border-radius: 4px;
+    }
+  }
+
+  .accent-hex {
+    width: 88px;
+    padding: 6px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--input-bg);
+    color: var(--text-primary);
+    font-size: var(--font-size-md);
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    outline: none;
+
+    &:focus {
+      border-color: var(--accent-color);
+      box-shadow: var(--focus-shadow);
+    }
+  }
+
+  .accent-reset {
+    padding: 6px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: var(--font-size-md);
+    cursor: pointer;
+    transition: all 0.15s;
+
+    &:hover:not(:disabled) {
+      border-color: var(--accent-color);
+      color: var(--text-primary);
+    }
+
+    &:disabled {
+      opacity: 0.45;
+      cursor: default;
     }
   }
 }

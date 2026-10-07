@@ -31,7 +31,7 @@
     }
     .confirm {
       background-color: var(--accent-color);
-      color: white;
+      color: var(--primary-fg);
 
       /* 破坏性操作（删除/清空）的确认按钮：不再与普通「确定」同色 */
       &.danger {

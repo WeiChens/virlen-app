@@ -456,7 +456,7 @@
   &.primary {
     background: var(--primary-color, #3b6ef6);
     border-color: var(--primary-color, #3b6ef6);
-    color: #fff;
+    color: var(--primary-fg);
 
     &:hover:not(:disabled) {
       background: var(--primary-hover, #4338ca);

@@ -106,7 +106,7 @@
 
     &.kb-btn-primary {
       background: var(--accent-color);
-      color: white;
+      color: var(--primary-fg);
       border-color: var(--accent-color);
 
       &:hover {
@@ -277,7 +277,7 @@
 
     button.btn-confirm {
       background: var(--accent-color);
-      color: white;
+      color: var(--primary-fg);
       border: 1px solid var(--accent-color);
       border-radius: 6px;
 

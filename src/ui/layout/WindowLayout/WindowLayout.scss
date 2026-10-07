@@ -56,7 +56,8 @@
           margin: auto;
           width: 16px;
           height: 16px;
-          fill: white;
+          /* 标题栏图标跟随标题栏前景（浅色主题色时自动转黑，见 theme.scss） */
+          fill: var(--primary-bar-fg);
         }
         &:hover {
           background-color: var(--primary-hover);
@@ -75,11 +76,11 @@
          —— 上面的 `.control svg { fill: white }` 只管到 <svg> 元素，盖不住 path 上的属性。 */
       .phone {
         position: relative;
-        color: rgba(255, 255, 255, 0.5); // 未开启：暗一档，与旁边的窗口按钮区分开
+        color: color-mix(in srgb, var(--primary-bar-fg) 50%, transparent); // 未开启：暗一档，与旁边的窗口按钮区分开
 
         &:hover,
         &.on {
-          color: #fff;
+          color: var(--primary-bar-fg);
         }
 
         /* 连线状态点：等待（琥珀，呼吸）/ 已连接（绿）/ 出错或被拒（红） */

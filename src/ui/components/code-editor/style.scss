@@ -17,7 +17,7 @@
   /* 聚焦时与同页其它表单控件（.form-input:focus）保持同一套强调色 */
   &:focus-within {
     border-color: var(--accent-color, #4f46e5);
-    box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.15);
+    box-shadow: var(--focus-shadow);
   }
 
   /* 编辑器自己会绘制 virlen-dark 的底色 / 行号区底色（与聊天里的代码预览同一套配色），

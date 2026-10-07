@@ -1,7 +1,8 @@
 import { useState, lazy, Suspense } from 'react'
 import './App.css'
-import './styles/theme.css'
+import './styles/theme.scss'
 import { useTheme } from './hooks/useTheme'
+import { useAccentColor } from './hooks/useAccentColor'
 import { useFontSize } from './hooks/useFontSize'
 import { useLanguage } from './i18n'
 import { settingsState } from '@/ui/store/settingStore'
@@ -14,6 +15,7 @@ import ImagePreview from './components/shared/ImagePreview'
 import ErrorBoundary from './components/shared/ErrorBoundary'
 function App() {
   useTheme()
+  useAccentColor()
   useFontSize()
   useLanguage()
 

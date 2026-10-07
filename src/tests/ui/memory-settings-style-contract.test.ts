@@ -38,10 +38,14 @@ const tsx = readProjectFile('src/ui/pages/Settings/memory-settings.tsx')
 /** 列表本体（表格 / 批量栏 / 分页）在弹窗组件里：设置页只留设置项 + 一个入口按钮 */
 const listTsx = readProjectFile('src/ui/pages/Settings/memory/MemoryListModal.tsx')
 const css = sass.compileString(scss).css
-/** 全局样式（`ui/App.tsx` 在入口处引入，全应用可见）：变量定义去这里查 */
+/** 全局样式（`ui/App.tsx` 在入口处引入，全应用可见）：变量定义去这里查。
+ *  theme.scss 必须**编译**后再查：品牌令牌由 SCSS 函数派生（`@include accent-vars`），
+ *  源码里没有 `--primary: #…` 这种字面声明。 */
 const globalCss = [
   readProjectFile('src/ui/App.css'),
-  readProjectFile('src/ui/styles/theme.css'),
+  sass
+    .compileString(readProjectFile('src/ui/styles/theme.scss'))
+    .css.replace(/@charset\s+"[^"]*";/g, ''),
 ].join('\n')
 
 /**
