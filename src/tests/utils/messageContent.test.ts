@@ -15,6 +15,8 @@ import {
   getQuoteBlocks,
   getSkillBlocks,
   fileBlocksToText,
+  messageHasAttachmentBlocks,
+  messageHasVisibleContent,
 } from '@/utils/messageContent'
 import { fileBlockToText, quoteBlockToText, skillBlockToText } from '@/types'
 
@@ -390,5 +392,46 @@ describe('skillBlockToText', () => {
     ).toBe(
       '[Skill]\nName: code-reviewer\nDirectory: C:/skills/code-reviewer\nSKILL.md:\n# 规则',
     )
+  })
+})
+
+// ==================== 可见内容判据（工具组 / 气泡隐藏同源） ====================
+
+describe('messageHasAttachmentBlocks / messageHasVisibleContent', () => {
+  it('字符串 content：附件块为 false，正文决定可见内容', () => {
+    expect(messageHasAttachmentBlocks('plain')).toBe(false)
+    expect(messageHasVisibleContent({ content: 'hi' })).toBe(true)
+    expect(messageHasVisibleContent({ content: '   ' })).toBe(false)
+    expect(messageHasVisibleContent({ content: [] })).toBe(false)
+  })
+
+  it('只有图片 / 文件 / 引用 / 技能块（无正文）也算可见内容', () => {
+    expect(
+      messageHasVisibleContent({
+        content: [{ type: 'image_url', image_url: { url: 'x' } }] as any,
+      }),
+    ).toBe(true)
+    expect(
+      messageHasVisibleContent({ content: [{ type: 'file', path: 'a' }] as any }),
+    ).toBe(true)
+    expect(
+      messageHasVisibleContent({
+        content: [{ type: 'quote', messageId: 'm', role: 'user', text: '' }] as any,
+      }),
+    ).toBe(true)
+    expect(
+      messageHasVisibleContent({
+        content: [{ type: 'skill', name: 's', content: 'c' }] as any,
+      }),
+    ).toBe(true)
+  })
+
+  it('messageHasAttachmentBlocks 对每个非文本块都返回 true', () => {
+    expect(
+      messageHasAttachmentBlocks([
+        { type: 'quote', messageId: 'm', role: 'user', text: '' },
+      ] as any),
+    ).toBe(true)
+    expect(messageHasAttachmentBlocks([{ type: 'text', text: 'x' }])).toBe(false)
   })
 })

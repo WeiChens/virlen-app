@@ -7,7 +7,9 @@
 // 段首宿主的正文不走这里：它由组件复用普通 assistant 消息的容器渲染（见 .tsx）。
 
 .tool-group {
-  margin: 2px 8px;
+  // 左缘对齐消息正文：气泡水平内边距 20px + 内容包装左外边距 8px = 28px。
+  // 组头/组内卡片的**内容**左缘（而非盒左缘）也由下面的 padding-left 对到同一列。
+  margin: 2px 8px 2px 28px;
   max-width: 82%;
   width: fit-content;
 
@@ -88,8 +90,13 @@
     flex-direction: column;
     gap: 2px;
     margin-top: 2px;
-    padding-left: 6px;
+    padding-left: 10px;
     border-left: 1px solid var(--border-color, #e5e5e5);
+  }
+
+  // 组内卡片去掉自身左外边距：左缘由 .tool-group 统一对齐（否则会再右移 8px，与组头错位）
+  &__body .tool-call-message {
+    margin-left: 0;
   }
 
   &__member {

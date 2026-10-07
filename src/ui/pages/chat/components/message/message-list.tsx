@@ -76,12 +76,17 @@ function ChatMessageList(props: ChatMessageListProps) {
             if (!row) return null
             // 工具组行：一段连续的工具调用合成一行（折叠头 + 展开后的卡片列表）
             if (row.kind === 'tools') {
+              // 命中的消息可能落在某个组里（检索 / 引用跳转会解析到工具宿主 assistant）：
+              // 该组整行高亮，与单条消息同一套 `.highlighted` 视觉（否则跳过去毫无反馈）。
+              const rowHighlighted = row.messageIndexes.some(
+                (i) => messages[i]?.id === m.highlightMsgId,
+              )
               return (
                 <div
                   key={vi.key}
                   data-index={vi.index}
                   ref={m.rowVirtualizer.measureElement}
-                  className="message-item-wrap"
+                  className={`message-item-wrap${rowHighlighted ? ' highlighted' : ''}`}
                   style={{
                     position: 'absolute',
                     top: vi.start,
@@ -90,7 +95,8 @@ function ChatMessageList(props: ChatMessageListProps) {
                   }}>
                   <ToolCallGroup
                     groupKey={row.key}
-                    messages={row.messageIndexes.map((i) => messages[i])}
+                    messages={messages}
+                    messageIndexes={row.messageIndexes}
                     toolResultsFor={m.toolResultsFor}
                     open={m.openGroups[row.key] === true}
                     onToggle={m.toggleGroup}

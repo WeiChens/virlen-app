@@ -26,7 +26,7 @@
  * 行模型是**纯函数**：可单测（`tests/ui/tool-group-rows.test.ts`），组件只负责摆 HTML。
  */
 import type { Message } from '@/types'
-import { messageHasBody } from '@/utils/messageContent'
+import { messageHasAttachmentBlocks, messageHasBody } from '@/utils/messageContent'
 import { tpl } from '@/ui/i18n'
 
 /** 列表的一行。 */
@@ -61,20 +61,9 @@ export const TOOL_GROUP_PREFIX = 'tools:'
 export function isToolCallMessage(message: Message): boolean {
   if (message.role !== 'assistant') return false
   if (!message.toolCalls || message.toolCalls.length === 0) return false
-  const content = message.content
-  if (typeof content !== 'string') {
-    if (
-      content.some(
-        (b) =>
-          b.type === 'image_url' ||
-          b.type === 'file' ||
-          b.type === 'quote' ||
-          b.type === 'skill',
-      )
-    ) {
-      return false
-    }
-  }
+  // 带引用 / 图片 / 文件 / 技能块的不并入：那些块在气泡里另有可见渲染，
+  // 吞进折叠组会连带把它们藏掉（判据与气泡同源，见 messageHasAttachmentBlocks）。
+  if (messageHasAttachmentBlocks(message.content)) return false
   return true
 }
 
@@ -106,7 +95,10 @@ export function buildRows(
         messageIndexes: run,
       })
     } else {
-      // 只有一次工具调用：保持原来那张单卡（不必套一层折叠头）
+      // 只有一次工具调用：保持原来那张单卡（不必套一层折叠头）。
+      // ⚠️ 不变量：run 的每个成员都至少 1 个 toolCalls（见 isToolCallMessage），
+      // 故 `calls < 2` 只可能在 run.length === 1 时成立 —— 这里丢弃 run[1..] 是安全的。
+      // 将来若放宽 isToolCallMessage（允许 0 调用的消息入段），必须同步改这里。
       rows.push({ kind: 'one', key: messages[run[0]].id, messageIndex: run[0] })
     }
     run = []

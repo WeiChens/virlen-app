@@ -98,6 +98,22 @@ export function useChatMessageList({
     toolResultsCacheRef,
   })
 
+  // ==================== 命中工具组：自动展开 ====================
+  // 检索（Ctrl+P）/ 引用跳转会命中工具宿主 assistant，经 resolveJumpAnchorId 后置入
+  // highlightMsgId。若命中落在某个折叠组里，不展开的话用户只看到一行折叠头、看不到内容 ——
+  // 这里把该组自动打开（不自动收起：留给用户自己折）。
+  useEffect(() => {
+    if (!highlightMsgId) return
+    const row = virtual.rows.find(
+      (r) =>
+        r.kind === 'tools' &&
+        r.messageIndexes.some((i) => messages[i]?.id === highlightMsgId),
+    )
+    if (!row) return
+    const key = row.key
+    setOpenGroups((prev) => (prev[key] ? prev : { ...prev, [key]: true }))
+  }, [highlightMsgId, virtual.rows, messages])
+
   // ==================== 切会话：清缓存 + 标记「需要贴底」 ====================
   // 声明在滚动控制器之前：必须在「消息变化 effect」之前运行，
   // 以便后者读到最新的 needInitialBottomRef。

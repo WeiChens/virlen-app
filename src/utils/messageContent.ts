@@ -165,6 +165,33 @@ export function messageHasBody(message: { content: MessageContent }): boolean {
   return messageBodyText(message.content).length > 0
 }
 
+/**
+ * 消息是否带有**非文本的可见内容块**（引用 / 图片 / 文件 / 技能）。
+ *
+ * ⚠️ 这些块在气泡里都有各自的可见渲染（引用条 / 缩略图 / 文件 chip / 技能卡），
+ * 因此它们和「正文」一样属于「看得见的内容」：
+ *  - 列表行模型（`message-list/rows.ts`）据它判断「这条 assistant 该不该并入折叠的工具组」；
+ *  - 消息气泡（`hideMessageBubble` / `showAsToolCall`）据它决定「只有工具调用时要不要整条隐藏」。
+ * 两处必须**同源**，否则会出现「非文本内容被一起藏掉」或「被折叠吞掉」。
+ */
+export function messageHasAttachmentBlocks(content: MessageContent): boolean {
+  if (typeof content === 'string') return false
+  return content.some(
+    (b) =>
+      b.type === 'image_url' ||
+      b.type === 'file' ||
+      b.type === 'quote' ||
+      b.type === 'skill',
+  )
+}
+
+/** 消息是否有「可见内容」—— 正文，或非文本可见块（引用 / 图片 / 文件 / 技能）。 */
+export function messageHasVisibleContent(message: {
+  content: MessageContent
+}): boolean {
+  return messageHasBody(message) || messageHasAttachmentBlocks(message.content)
+}
+
 /** 从 content 中取出所有文件附件块（消息气泡渲染 chip 用） */
 export function getFileBlocks(content: MessageContent): FileContent[] {
   if (typeof content === 'string') return []

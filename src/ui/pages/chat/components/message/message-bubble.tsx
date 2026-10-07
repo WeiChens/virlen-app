@@ -26,7 +26,7 @@ import SkillChip from '@/ui/components/shared/SkillChip'
 import QuickInputSvg from '@/ui/components/icons/QuickInputSvg'
 import { Observer } from 'mobx-react-lite'
 import { openPath } from '@tauri-apps/plugin-opener'
-import { getFileBlocks, getQuoteBlocks, getSkillBlocks, messageHasBody } from '@/utils/messageContent'
+import { getFileBlocks, getQuoteBlocks, getSkillBlocks, messageHasVisibleContent } from '@/utils/messageContent'
 import QuoteChip from '@/ui/components/shared/QuoteChip'
 import ContextMenu, {
   useContextMenu,
@@ -263,11 +263,12 @@ function MessageBubble({
     }
   }
 
-  // assistant 只有 tool_calls 没有文本内容时，显示为紧凑的 tool-call 卡片
-  // （「有没有正文」走共享判据 messageHasBody，与列表行模型的工具组判据同源）
-  const hasBody = messageHasBody(message)
+  // assistant 只有 tool_calls、且没有任何「可见内容」（正文 / 引用 / 图片 / 文件 / 技能）时，
+  // 显示为紧凑的 tool-call 卡片。判据走共享的 messageHasVisibleContent，
+  // 与列表行模型的工具组判据同源 —— 两者一旦漂移就会「非文本内容被一起藏掉」。
+  const hasVisibleContent = messageHasVisibleContent(message)
   const showAsToolCall =
-    isAssistant && !!message.toolCalls?.length && !hasBody
+    isAssistant && !!message.toolCalls?.length && !hasVisibleContent
   // tool 消息内容只是纯结果文本，用简洁方式展示
   const showContent = getContent()
 
@@ -283,7 +284,7 @@ function MessageBubble({
     isAssistant &&
     message.toolCalls &&
     message.toolCalls.length > 0 &&
-    !hasBody &&
+    !hasVisibleContent &&
     hideToolCallThink
 
   // 上下文压缩产物（role='summary'）：正文可能极长，不在消息流里铺开，

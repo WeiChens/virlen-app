@@ -199,4 +199,34 @@ describe('ChatMessageList：工具组接线', () => {
     // 两个工具调用各自作为卡片平铺（MessageBubble 的 toolCalls 直接渲染）
     expect(container!.querySelectorAll('.tool-card').length).toBe(2)
   })
+
+  it('检索 / 引用跳转命中组内工具消息 → 自动展开该组并高亮', async () => {
+    // r1 是工具结果 → resolveJumpAnchorId 解析到宿主 assistant a1 → 命中组内成员
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    act(() => {
+      root!.render(
+        <ChatMessageList
+          messages={messages}
+          setMessages={() => {}}
+          setText={() => {}}
+          jumpTarget={{ id: 'r1', sessionId: SESSION, nonce: 1 }}
+        />,
+      )
+    })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+    })
+
+    // 组被自动展开（否则用户只看到一行折叠头，看不到命中的内容）
+    expect(container!.querySelector('.tool-group__body')).not.toBeNull()
+    expect(
+      container!.querySelector('.tool-group__head')?.getAttribute('aria-expanded'),
+    ).toBe('true')
+    // 整个组行高亮（与单条消息同一套 .highlighted 视觉）
+    expect(
+      container!.querySelector('.message-item-wrap.highlighted'),
+    ).not.toBeNull()
+  })
 })

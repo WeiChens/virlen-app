@@ -67,24 +67,30 @@ export function useVirtualList({
 
   /**
    * 取某条消息 toolCalls 对应的结果数组（按索引对齐）。
-   * 结果消息引用未变时返回缓存数组 → MessageBubble（及其工具卡片）不会因
+   * 结果消息引用未变时返回缓存数组 → MessageBubble / ToolCallGroup 不会因
    *「messages 数组整体换新」而重渲染。
+   *
+   * ⚠️ 必须是 `useCallback`（依赖仅 toolResultById）：它作为 prop 传给 memo 化的
+   * 行组件，若每次渲染都换新引用，会直接击穿 `memo`（滚动/悬停也会带着全部可见行重渲染）。
    */
-  function toolResultsFor(msg: Message): (Message | undefined)[] {
-    const tcs = msg.toolCalls
-    if (!tcs || tcs.length === 0) return EMPTY_TOOL_RESULTS
-    const next = tcs.map((tc) => toolResultById.get(tc.id))
-    const prev = toolResultsCacheRef.current.get(msg.id)
-    if (
-      prev &&
-      prev.length === next.length &&
-      prev.every((p, i) => p === next[i])
-    ) {
-      return prev
-    }
-    toolResultsCacheRef.current.set(msg.id, next)
-    return next
-  }
+  const toolResultsFor = useCallback(
+    (msg: Message): (Message | undefined)[] => {
+      const tcs = msg.toolCalls
+      if (!tcs || tcs.length === 0) return EMPTY_TOOL_RESULTS
+      const next = tcs.map((tc) => toolResultById.get(tc.id))
+      const prev = toolResultsCacheRef.current.get(msg.id)
+      if (
+        prev &&
+        prev.length === next.length &&
+        prev.every((p, i) => p === next[i])
+      ) {
+        return prev
+      }
+      toolResultsCacheRef.current.set(msg.id, next)
+      return next
+    },
+    [toolResultById],
+  )
 
   // ==================== 行模型（消息 → 虚拟行） ====================
   // 连续的工具调用合并成一行（见 rows.ts）；未启用折叠时退化为「一条消息 = 一行」。
