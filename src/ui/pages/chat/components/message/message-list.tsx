@@ -15,6 +15,7 @@
 import { useCallback } from 'react'
 import { observer } from 'mobx-react-lite'
 import MessageBubble from './message-bubble'
+import ToolCallGroup from './tool-call-group'
 import { useChatMessageList } from './message-list/use-message-list'
 import { AnchorDots } from './message-list/anchor-dots'
 import {
@@ -71,7 +72,33 @@ function ChatMessageList(props: ChatMessageListProps) {
           )}
 
           {m.virtualItems.map((vi) => {
-            const msg = messages[vi.index]
+            const row = m.rows[vi.index]
+            if (!row) return null
+            // 工具组行：一段连续的工具调用合成一行（折叠头 + 展开后的卡片列表）
+            if (row.kind === 'tools') {
+              return (
+                <div
+                  key={vi.key}
+                  data-index={vi.index}
+                  ref={m.rowVirtualizer.measureElement}
+                  className="message-item-wrap"
+                  style={{
+                    position: 'absolute',
+                    top: vi.start,
+                    left: 0,
+                    width: '100%',
+                  }}>
+                  <ToolCallGroup
+                    groupKey={row.key}
+                    messages={row.messageIndexes.map((i) => messages[i])}
+                    toolResultsFor={m.toolResultsFor}
+                    open={m.openGroups[row.key] === true}
+                    onToggle={m.toggleGroup}
+                  />
+                </div>
+              )
+            }
+            const msg = messages[row.messageIndex]
             if (!msg) return null
             return (
               <div

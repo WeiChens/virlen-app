@@ -139,6 +139,32 @@ export function buildUserContent(
   return blocks
 }
 
+/**
+ * 消息正文文本（文本块拼接，去首尾空白）。
+ *
+ * 与消息气泡的 `getContent()` 同口径：只取 `text` 块，不含引用 / 技能 / 文件 / 图片 ——
+ * 后几类在气泡里另有渲染，不是「正文」。
+ */
+export function messageBodyText(content: MessageContent): string {
+  if (typeof content === 'string') return content.trim()
+  return content
+    .filter((b) => b.type === 'text')
+    .map((b) => ('text' in b ? b.text : ''))
+    .join('')
+    .trim()
+}
+
+/**
+ * 消息是否有正文（空白正文一律视为没有）。
+ *
+ * ⚠️ 这是「有没有正文」的**唯一判据**：消息气泡（`showAsToolCall` / `hideMessageBubble`）
+ * 与列表行模型（工具组是否成立）都必须走本函数 —— 两处判据一旦漂移，就会出现
+ * 「有内容的行被丢掉」或「空行占着位置」。
+ */
+export function messageHasBody(message: { content: MessageContent }): boolean {
+  return messageBodyText(message.content).length > 0
+}
+
 /** 从 content 中取出所有文件附件块（消息气泡渲染 chip 用） */
 export function getFileBlocks(content: MessageContent): FileContent[] {
   if (typeof content === 'string') return []

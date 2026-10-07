@@ -15,6 +15,7 @@ import {
   chatState,
   getSessionRuntime,
   sessionStore,
+  settingsState,
   updateSessionRuntime,
 } from '@/ui/store'
 import {
@@ -64,6 +65,13 @@ export function useChatMessageList({
   /** 检索跳转后临时高亮的目标消息 id（到时自动清除） */
   const [highlightMsgId, setHighlightMsgId] = useState<string | null>(null)
   const [activeUserMsgId, setActiveUserMsgId] = useState<string | null>(null)
+  /**
+   * 工具组折叠态：行 key → 是否展开。
+   *
+   * ⚠️ 必须住在列表层：组行会随虚拟化卸载，存在行组件内部（或行内 state）会「滚回来就复原」。
+   * 仅当设置项 `hideToolCallThink` 开启（启用分组）时才有意义。
+   */
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
 
   // ==================== 会话派生 ====================
   const sessionId = chatState.value.currentSessionId
@@ -73,6 +81,11 @@ export function useChatMessageList({
   const currentRt = sessionId ? getSessionRuntime(sessionId) : null
   const isCurrentPaused = currentRt?.paused ?? false
   const error = chatState.value.error
+  /**
+   * 是否启用工具组折叠：仅当「隐藏工具调用的思考过程消息」开启时可折叠（用户诉求）。
+   * 关闭时行模型退化为「一条消息 = 一行」，与改动前一致。
+   */
+  const groupTools = settingsState.value.hideToolCallThink
 
   // ==================== 虚拟滚动核心 ====================
   const virtual = useVirtualList({
@@ -80,6 +93,7 @@ export function useChatMessageList({
     messagesRef,
     sessionId,
     hasMoreInDb,
+    groupTools,
     containerRef,
     toolResultsCacheRef,
   })
@@ -105,6 +119,8 @@ export function useChatMessageList({
       highlightTimerRef.current = null
     }
     setHighlightMsgId(null)
+    // 切会话：清掉组折叠态（新会话的组 key 与旧会话无关）
+    setOpenGroups({})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
 
@@ -116,6 +132,8 @@ export function useChatMessageList({
     hasMoreInDb,
     setMessages,
     containerRef,
+    rowsRef: virtual.rowsRef,
+    rowIndexOfMessageRef: virtual.rowIndexOfMessageRef,
     pendingJumpIdRef,
     needInitialBottomRef,
     settleTimerRef,
@@ -144,6 +162,7 @@ export function useChatMessageList({
     userMessages: virtual.userMessages,
     rowVirtualizer: virtual.rowVirtualizer,
     jumpTo: virtual.jumpTo,
+    rowIndexOfMessageRef: virtual.rowIndexOfMessageRef,
     activeMsgIdRef,
     activeUserMsgId,
     setActiveUserMsgId,
@@ -253,6 +272,11 @@ export function useChatMessageList({
     chatState.setValue('error', null)
   }, [])
 
+  /** 切换某个工具组的折叠态（按行 key 记账） */
+  const toggleGroup = useCallback((key: string) => {
+    setOpenGroups((prev) => ({ ...prev, [key]: !prev[key] }))
+  }, [])
+
   return {
     // 容器 / 渲染控制
     containerRef,
@@ -267,6 +291,9 @@ export function useChatMessageList({
     // 虚拟滚动
     rowVirtualizer: virtual.rowVirtualizer,
     virtualItems: virtual.virtualItems,
+    rows: virtual.rows,
+    openGroups,
+    toggleGroup,
     toolResultsFor: virtual.toolResultsFor,
     anchorUsers: virtual.anchorUsers,
     // 滚动

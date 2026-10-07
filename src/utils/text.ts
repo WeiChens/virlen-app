@@ -83,6 +83,17 @@ export function stripLoneSurrogates(text: string): string {
   return out
 }
 
+/**
+ * 文本行数（**末尾空行不算**）。
+ *
+ * 工具输出几乎都以换行结尾，不扣掉末尾空行的话每条都会多报一行，
+ * 而这种「差一行」的小错会让人开始怀疑其它数字。
+ */
+export function countLines(text: string): number {
+  const body = text.replace(/\n+$/, '')
+  return body.trim() ? body.split('\n').length : 0
+}
+
 /** 纯对象判定：只递归普通对象，避免破坏 Date / ArrayBuffer 等实例 */
 function isPlainObject(value: object): boolean {
   const proto = Object.getPrototypeOf(value)

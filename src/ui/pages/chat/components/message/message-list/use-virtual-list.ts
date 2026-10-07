@@ -15,6 +15,7 @@ import type { Range, Virtualizer } from '@tanstack/react-virtual'
 import type { Message } from '@/types'
 import { sessionStore } from '@/ui/store'
 import { previewOfMessage } from './helpers'
+import { buildRows, buildRowIndexMap, type ListRow } from './rows'
 import {
   AT_BOTTOM_THRESHOLD,
   EMPTY_TOOL_RESULTS,
@@ -35,6 +36,11 @@ interface Params {
   messagesRef: { current: Message[] }
   sessionId: string | null
   hasMoreInDb: boolean
+  /**
+   * 是否启用工具组折叠（= 设置项 `hideToolCallThink`）。
+   * 为 false 时行模型退化为「一条消息 = 一行」，与改动前完全一致。
+   */
+  groupTools: boolean
   /** 滚动容器（虚拟库的 getScrollElement） */
   containerRef: { current: HTMLDivElement | null }
   /** message.id → toolCalls 结果数组的缓存（引用稳定，保证 memo 命中） */
@@ -46,6 +52,7 @@ export function useVirtualList({
   messagesRef,
   sessionId,
   hasMoreInDb,
+  groupTools,
   containerRef,
   toolResultsCacheRef,
 }: Params) {
@@ -78,6 +85,20 @@ export function useVirtualList({
     toolResultsCacheRef.current.set(msg.id, next)
     return next
   }
+
+  // ==================== 行模型（消息 → 虚拟行） ====================
+  // 连续的工具调用合并成一行（见 rows.ts）；未启用折叠时退化为「一条消息 = 一行」。
+  const rows = useMemo(() => buildRows(messages, groupTools), [messages, groupTools])
+  /** 供「只注册一次」的回调读取最新的行模型 */
+  const rowsRef = useRef<readonly ListRow[]>(rows)
+  rowsRef.current = rows
+  /** 消息下标 → 行下标（锚点 / 检索命中等入口拿到的是消息下标） */
+  const rowIndexOfMessage = useMemo(
+    () => buildRowIndexMap(messages, rows),
+    [messages, rows],
+  )
+  const rowIndexOfMessageRef = useRef<readonly number[]>(rowIndexOfMessage)
+  rowIndexOfMessageRef.current = rowIndexOfMessage
 
   // 用户消息（本地已加载的，用于「跟随最新用户消息」）
   const userMessages = useMemo(
@@ -117,10 +138,10 @@ export function useVirtualList({
   }, [userMsgIndex, localUserSig])
 
   // ==================== 虚拟滚动核心 ====================
-  // getItemKey 用消息 id（稳定），前插历史时测量缓存可跟随同一条消息，
-  // 库据此把「视口锚点项」保持在原位置 → 上翻不跳动。
+  // getItemKey 用行 key（稳定）：`one` 行 = 消息 id，`tools` 行 = `tools:` + 首条 id。
+  // 前插历史时测量缓存可跟随同一行，库据此把「视口锚点项」保持在原位置 → 上翻不跳动。
   const getItemKey = useCallback(
-    (index: number) => messagesRef.current[index]?.id ?? `idx-${index}`,
+    (index: number) => rowsRef.current[index]?.key ?? `row-${index}`,
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   )
@@ -184,7 +205,7 @@ export function useVirtualList({
   }, [])
 
   const rowVirtualizer = useVirtualizer({
-    count: messages.length,
+    count: rows.length,
     getScrollElement: () => containerRef.current,
     estimateSize,
     // 「条数 overscan」**不决定渲染范围**（渲染范围由 rangeExtractor 按像素给出，
@@ -256,6 +277,9 @@ export function useVirtualList({
   return {
     rowVirtualizer,
     virtualItems,
+    rows,
+    rowsRef,
+    rowIndexOfMessageRef,
     jumpTo,
     refreshEstimatedItemHeight,
     toolResultsFor,

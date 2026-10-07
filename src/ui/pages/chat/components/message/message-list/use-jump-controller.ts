@@ -32,6 +32,8 @@ interface Params {
   userMessages: Message[]
   rowVirtualizer: Virtualizer<HTMLDivElement, Element>
   jumpTo: (idx: number) => void
+  /** 消息下标 → 行下标（锚点 / 检索命中拿到的是消息下标） */
+  rowIndexOfMessageRef: { current: readonly number[] }
   activeMsgIdRef: { current: string | null }
   activeUserMsgId: string | null
   setActiveUserMsgId: (id: string | null) => void
@@ -54,6 +56,7 @@ export function useJumpController({
   userMessages,
   rowVirtualizer,
   jumpTo,
+  rowIndexOfMessageRef,
   activeMsgIdRef,
   activeUserMsgId,
   setActiveUserMsgId,
@@ -89,7 +92,9 @@ export function useJumpController({
       const inMemory = messagesRef.current.findIndex((m) => m.id === inMemoryId)
       if (inMemory >= 0) {
         if (highlight) flashHighlight(inMemoryId)
-        requestAnimationFrame(() => jumpTo(inMemory))
+        requestAnimationFrame(() =>
+          jumpTo(rowIndexOfMessageRef.current[inMemory] ?? inMemory),
+        )
         return
       }
 

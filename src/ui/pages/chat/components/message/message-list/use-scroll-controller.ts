@@ -13,6 +13,7 @@ import type { Message } from '@/types'
 import { chatState, sessionStore } from '@/ui/store'
 import commentEvent from '@/events/commentEvent'
 import { isStreamingSession } from './helpers'
+import type { ListRow } from './rows'
 import {
   AT_BOTTOM_THRESHOLD,
   MAX_SETTLE_POLLS,
@@ -26,6 +27,10 @@ interface Params {
   hasMoreInDb: boolean
   setMessages: (msgs: Message[]) => void
   containerRef: { current: HTMLDivElement | null }
+  /** 行模型（虚拟库 / 跳转均以行下标工作） */
+  rowsRef: { current: readonly ListRow[] }
+  /** 消息下标 → 行下标（锚点定位需要换算） */
+  rowIndexOfMessageRef: { current: readonly number[] }
   /** 待执行的锚点跳转目标（由跳转控制器写入，这里提交后消费） */
   pendingJumpIdRef: { current: string | null }
   /** 切会话后需要「先滚到底部 + 布局稳定后再显示」 */
@@ -48,6 +53,8 @@ export function useScrollController({
   hasMoreInDb,
   setMessages,
   containerRef,
+  rowsRef,
+  rowIndexOfMessageRef,
   pendingJumpIdRef,
   needInitialBottomRef,
   settleTimerRef,
@@ -102,7 +109,7 @@ export function useScrollController({
     if (settleTimerRef.current) clearInterval(settleTimerRef.current)
     settleTimerRef.current = null
     const scrollToEnd = () => {
-      const count = messagesRef.current.length
+      const count = rowsRef.current.length
       if (count > 0) rowVirtualizer.scrollToIndex(count - 1, { align: 'end' })
     }
     scrollToEnd()
@@ -170,7 +177,7 @@ export function useScrollController({
       pendingJumpIdRef.current = null
       const idx = messagesRef.current.findIndex((m) => m.id === pendingJumpId)
       if (idx >= 0) {
-        jumpTo(idx)
+        jumpTo(rowIndexOfMessageRef.current[idx] ?? idx)
         return
       }
     }
@@ -182,9 +189,9 @@ export function useScrollController({
     }
     const last = messages[count - 1]
     if (last?.role === 'user') {
-      // 用户刚发送消息 → 立即滚动到底部
+      // 用户刚发送消息 → 立即滚动到底部（行下标 = 末行）
       setHide(false)
-      rowVirtualizer.scrollToIndex(count - 1, {
+      rowVirtualizer.scrollToIndex(rowsRef.current.length - 1, {
         align: 'end',
         behavior: 'auto',
       })
@@ -228,7 +235,7 @@ export function useScrollController({
       let closestDist = Infinity
       for (let i = 0; i < list.length; i++) {
         if (list[i].role !== 'user') continue
-        const start = measurements[i]?.start
+        const start = measurements[rowIndexOfMessageRef.current[i]]?.start
         if (start === undefined) continue
         const dist = Math.abs(start - probe)
         if (dist < closestDist) {
@@ -307,7 +314,7 @@ export function useScrollController({
 
   // 滚动到底部按钮点击
   const handleScrollToBottom = useCallback(() => {
-    const count = messagesRef.current.length
+    const count = rowsRef.current.length
     if (count === 0) return
     // 流式回复中底部高度每个 token 都在增长：虚拟库会每帧重算目标偏移，
     // 距离超过一屏时反复以 smooth 重发 scrollTo 会不断重启平滑动画（抽搐）。
