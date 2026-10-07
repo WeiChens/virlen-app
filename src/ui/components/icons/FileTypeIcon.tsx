@@ -1,8 +1,6 @@
 /**
- * FileTypeIcon — 根据文件扩展名显示对应的文件类型图标
- *
- * 参考 tmp_files 中的 SVG 设计，去掉文件轮廓背景，
- * 所有图标使用 currentColor 与文本颜色一致。
+ * FileTypeIcon — 按扩展名显示对应的文件类型图标。
+ * 图标去掉文件轮廓背景，统一用 currentColor 跟随文本色。
  */
 
 export type FileCategory =
@@ -114,10 +112,7 @@ interface Props {
   className?: string
 }
 
-/**
- * 文件类型图标组件
- * 根据文件名后缀自动匹配对应分类的图标，所有图标统一使用 currentColor
- */
+/** 按文件名后缀选分类图标 */
 export default function FileTypeIcon({ filename, className }: Props) {
   const category = getFileCategory(filename)
 
@@ -142,9 +137,7 @@ export default function FileTypeIcon({ filename, className }: Props) {
   )
 }
 
-// ==================== 各类图标 ====================
-
-/** 代码图标 — 参考 源代码5.svg：方框 + 尖括号 */
+/** 代码图标：方框 + 尖括号 */
 function CodeIcon() {
   return (
     <>
@@ -153,7 +146,7 @@ function CodeIcon() {
   )
 }
 
-/** 图片图标 — 参考 图片.svg：山脉+太阳 */
+/** 图片图标：山与太阳 */
 function ImageIcon() {
   return (
     <>
@@ -162,7 +155,7 @@ function ImageIcon() {
   )
 }
 
-/** 视频图标 — 参考 video.svg：摄像机 + 播放按钮 */
+/** 视频图标：摄像机 + 播放按钮 */
 function VideoIcon() {
   return (
     <>
@@ -171,7 +164,7 @@ function VideoIcon() {
   )
 }
 
-/** 音频图标 — 参考 music.svg：音符 */
+/** 音频图标：音符 */
 function AudioIcon() {
   return (
     <>
@@ -180,7 +173,7 @@ function AudioIcon() {
   )
 }
 
-/** 文档图标 — 参考 DOC.svg：带字行的文档 + 飘页角 */
+/** 文档图标：带字行的文档 + 飘页角 */
 function DocIcon() {
   return (
     <>
@@ -190,7 +183,7 @@ function DocIcon() {
   )
 }
 
-/** 压缩包图标 — 参考 压缩包.svg：盒子 + 叠块 */
+/** 压缩包图标：盒子 + 叠块 */
 function ArchiveIcon() {
   return (
     <>
@@ -199,7 +192,7 @@ function ArchiveIcon() {
   )
 }
 
-/** 配置图标 — 参考 configur-16.svg：齿轮 */
+/** 配置图标：齿轮 */
 function ConfigIcon() {
   return (
     <>
@@ -211,7 +204,7 @@ function ConfigIcon() {
   )
 }
 
-/** 默认文件图标 — 参考 file.svg：飘角文档 */
+/** 默认文件图标：飘角文档 */
 function DefaultIcon() {
   return (
     <>

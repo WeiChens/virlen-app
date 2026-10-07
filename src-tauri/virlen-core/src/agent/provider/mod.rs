@@ -1,19 +1,12 @@
-//! Provider 层 — 原生 HTTP 实现 + JS 桥接实现
+//! Provider 层 — 原生 HTTP 实现 + JS 桥接实现。
 //!
-//! - `NativeOpenAiProvider`：OpenAI 兼容协议（OpenAI / DeepSeek / Moonshot / Ollama / 自定义）
-//! - `NativeAnthropicProvider`：Anthropic Messages API
-//! - `BridgedProvider`：转发到 JS 侧已有 provider（如 Gemini），通过双向事件桥
-//!
-//! 本文件是模块入口：只放 `Provider` / `ProviderFactory` 两个 trait 与默认工厂，
-//! 具体实现按厂商拆到子模块，对外 API 在此统一重导出（调用方路径不变）：
-//!
-//! - `blocks`   内容块降级（file / quote / skill → 文本、vision 处理）
-//! - `openai`   OpenAI 兼容协议
-//! - `anthropic` Anthropic Messages API
-//! - `bridged`  转发到 JS（Gemini 等）
-//! - `sse`      流式响应逐行读取
-//! - `models`   模型列表拉取（配置向导 / 连通性检查用；不属于运行时 `Provider` trait）
-//! - `catalog`  **供应商目录（模板表 + 推理档位表）的唯一权威源**（数据在同名 json 里）
+//! 本文件是模块入口：只放 `Provider` / `ProviderFactory` trait 与默认工厂，实现按厂商拆到子模块：
+//! - `openai` / `anthropic`：原生 HTTP 实现（DeepSeek / Moonshot / Ollama 等走 openai 兼容协议）
+//! - `bridged`：转发到 JS 侧 provider（如 Gemini），走双向事件桥
+//! - `blocks`：内容块降级（file / quote / skill → 文本、vision 处理）
+//! - `sse`：流式响应逐行读取
+//! - `models`：模型列表拉取（配置向导 / 连通性检查）
+//! - `catalog`：供应商目录（模板表 + 推理档位表）的唯一权威源（数据在同名 json）
 
 use super::bridge::AgentBridgeState;
 use super::cancellation::CancellationToken;

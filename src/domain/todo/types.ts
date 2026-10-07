@@ -1,10 +1,9 @@
-/**
- * todo/types — 任务清单（todo）领域类型
- *
- * 「任务清单」既是模型可见的工具（todo_write），也是用户可编辑的界面对象。
- * 单一权威源 = 会话消息里最后一条带 `uiData.type === 'todo'` 的消息，
- * 因此模型写入与用户修改共用同一份结构（差别只有 `source`）。
- */
+  /**
+   * 任务清单领域类型。
+   *
+   * 「清单」既是模型工具（todo_write）也是用户可编辑的界面对象，共用同一份结构（差别只有 `source`）；
+   * 权威源 = 会话消息里最后一条带 `uiData.type === 'todo'` 的消息。
+   */
 
 /** 任务状态（三态 —— 与工具 schema、模型约定严格一致，不引入 cancelled） */
 export type TodoStatus = 'pending' | 'in_progress' | 'completed'

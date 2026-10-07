@@ -1,24 +1,16 @@
 /*!
  * drag_drop — Windows 自定义 OLE 拖放目标
  *
- * 为什么不用 Tauri 自带的 onDragDropEvent：
- *   Tauri 的拖放由 wry 实现，它的 DragEnter 只会 GetData(CF_HDROP)，拿不到就直接判为
- *   无效（连 DROPEFFECT 都不设），于是 Drop 根本不会触发。而 VS Code 拖拽文件时并不放
- *   CF_HDROP，只放了 text/plain（换行分隔的路径文本）+ Chromium 的“虚拟文件”，
- *   结果拖进本应用毫无反应（连高亮都没有）。
+ * 为什么不用 Tauri 自带的 onDragDropEvent：它由 wry 实现，DragEnter 只 GetData(CF_HDROP)，
+ * 拿不到就判无效（连 DROPEFFECT 都不设）→ Drop 不触发；而 VS Code 拖文件时只放 text/plain
+ * （换行路径文本），于是拖进本应用毫无反应。
  *
- * 本模块自己实现 IDropTarget，按优先级识别三种格式：
- *   1. CF_HDROP                     —— 资源管理器拖来的文件（真实路径）
- *   2. code/file-list               —— VS Code 复制时用的自定义格式（拖拽一般没有，顺带兜住）
- *   3. CF_UNICODETEXT (text/plain)  —— VS Code 拖拽时放的“换行分隔路径文本”
+ * 自实现 IDropTarget，按优先级识别：CF_HDROP（资源管理器）→ code/file-list（VS Code 复制）
+ * → CF_UNICODETEXT（VS Code 拖拽）。解析复用 `clipboard_files::vscode`。
+ * 注入沿用 wry 手法：枚举 WebView2 子窗口，RevokeDragDrop + RegisterDragDrop 换成自己的实现。
  *
- * 解析复用 clipboard_files::vscode（它同时能解析 URI 与纯路径）。
- *
- * 注入方式沿用 wry 的手法：枚举目标窗口的所有子窗口（WebView2 的内层窗口），
- * RevokeDragDrop + RegisterDragDrop 换成我们的实现。
- *
- * 与前端约定：通过 Tauri 事件 `virlen:drag-drop` 下发，payload 形状与原 DragDropEvent
- * 完全一致（{ type, paths, position }），前端只把监听源从 onDragDropEvent 换成 listen 即可。
+ * 与前端约定：经 Tauri 事件 `virlen:drag-drop` 下发，payload 与原 DragDropEvent 一致
+ * （{ type, paths, position }），前端只需把监听源换成 listen。
  */
 
 use std::cell::UnsafeCell;

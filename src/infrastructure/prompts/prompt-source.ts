@@ -1,18 +1,10 @@
 /**
- * 提示词来源适配器（infrastructure）—— 把 Rust 侧的提示词交给 domain 层
+ * 提示词来源适配器（infrastructure）—— 把 Rust 侧的提示词交给 domain 层。
  *
- * 两条路径读的是**同一份物理文件** `src-tauri/virlen-core/src/agent/prompts/*.md`：
- *
- * | 环境 | 取值方式 | 说明 |
- * |---|---|---|
- * | Tauri 运行时 | `cmd_agent_prompts` | Rust `include_str!` 已把文本嵌进二进制；权威且只有一份 |
- * | 浏览器 dev / vitest | 静态 `?raw` 导入 | 构建期从 core 目录读同一份文件 |
- *
- * 因为两条路径同源，这里不需要任何「差异检查」逻辑（与 `definitions-source.ts` 同一取舍）。
- *
- * 用静态 import（`definitions-source.ts` 用动态 import）：提示词要在启动阶段同步水合
- * （`setPromptTexts`），且六个文件合计约 6 KB，不值得引入 async 分支。Tauri 构建里这段文本
- * 会在 JS 包里多一份 —— 但它就是同一份文件构建期读出来的，与 Rust 二进制里那份不会漂移。
+ * 两条路径读**同一份物理文件** src-tauri/virlen-core/src/agent/prompts/*.md：Tauri 运行时走
+ * cmd_agent_prompts（Rust include_str! 已把文本嵌进二进制，权威且只有一份）；浏览器 dev / vitest 走静态 ?raw 导入。
+ * 两路径同源，故无需「差异检查」。用静态 import（提示词启动阶段同步水合，六个文件共约 6 KB）；Tauri 构建里 JS 包
+ * 会多一份同样的文本，但它就是同一份文件构建期读出来的，不会漂移。
  */
 import { invoke } from '@tauri-apps/api/core'
 import type { PromptTexts } from '@/domain/agent'
@@ -28,12 +20,7 @@ function isTauriEnv(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
 
-/**
- * 内嵌提示词（构建期从 core 目录读入）。
- *
- * 它既是**浏览器 dev / vitest** 的取值路径，也是 Tauri 下命令失败时的兜底 ——
- * 兜底给的仍是同一份文本，所以降级不会改变模型看到的内容。
- */
+/** 内嵌提示词（构建期从 core 读入）：浏览器 dev / vitest 的取值路径，也是 Tauri 命令失败时的兜底（同一份文本）。 */
 export function embeddedPromptTexts(): PromptTexts {
   return {
     toolCallSpec: TOOL_CALL_SPEC,

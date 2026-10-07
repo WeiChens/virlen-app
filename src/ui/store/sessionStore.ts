@@ -1,13 +1,6 @@
 /**
- * sessionStore — UI 层会话 Store
- *
- * 职责：
- *  - 持有 mobx observable（sessions 列表），供 UI 响应式渲染
- *  - 提供 CRUD 方法，持久化委托给 SessionRepo
- *
- * 不属于此 Store 的职责：
- *  - 业务流程编排（如创建会话、发送消息） → Application Service
- *  - IndexedDB diff / debounce → SessionRepo
+ * UI 层会话 Store：持有 sessions 的 mobx observable + CRUD 方法，持久化全委托给 `SessionRepo`。
+ * 不含业务编排（创建会话 / 发消息 → Application Service），也不含 diff / debounce（→ SessionRepo）。
  */
 import { action, makeObservable, observable, runInAction } from 'mobx'
 import type { Session } from '@/types'
@@ -34,21 +27,14 @@ class SessionStore {
     sessions: Session[]
     /** 各会话的消息分页状态（参与 observable，驱动 UI「查看更多」显隐） */
     messagePaging: Record<string, MessagePaging>
-    /**
-     * 各会话的「全量用户消息索引」（右侧锚点列表用）。
-     * 只含 id + 摘要，不含 AI/工具正文，可一次性覆盖整个会话历史。
-     */
+    /** 各会话的「全量用户消息索引」（右侧锚点列表用）：只含 id + 摘要，可一次性覆盖整个历史。 */
     userMessageIndex: Record<string, UserMessageRef[]>
   } = { sessions: [], messagePaging: {}, userMessageIndex: {} }
   /** 已加载过消息的会话 id 集合（避免重复拉取） */
   private loadedMessageIds = new Set<string>()
   /** 已加载过用户消息索引的会话 id 集合 */
   private loadedUserIndexIds = new Set<string>()
-  /**
-   * 「消息变更」的订阅者（UI 镜像同步的**兜底通道**，2026-09-27 真机反馈修复）。
-   *
-   * 普通 Set（非 observable）：订阅关系不参与响应式，避免自触发。
-   */
+  /** 「消息变更」订阅者（UI 镜像同步的兜底通道）。普通 Set（非 observable）：订阅关系不参与响应式，避免自触发。 */
   private readonly messagesChangedListeners = new Set<
     (sessionId: string) => void
   >()
@@ -60,20 +46,14 @@ class SessionStore {
       updateSession: action,
       touchSession: action,
       deleteSession: action,
-      /**
-       * ⚠️ 必须声明为 action（否则 `enforceActions: 'always'` 下是「脱离 action 改可观测值」）：
-       * 本类其它直接写 `value.sessions` 的方法要么是 action，要么自行 `runInAction`，
-       * 仅 `deleteSessions` / `notifySessionChanged` 两处漏了 —— 单例下看不出来，
-       * 一旦有 observer（手机推送的 reaction 就是）就会报 MobX strict-mode 警告，
-       * 且派生值可见到「未成批」的中间态。
-       */
+      /** ⚠️ 必须声明 action：本类写 `value.sessions` 的其它路径都走 action / `runInAction`，只剩这两处漏了 —— 单例下看不出，有 observer（手机推送的 reaction）就报 MobX strict-mode 警告。 */
       deleteSessions: action,
       notifySessionChanged: action,
       clear: action,
     })
   }
 
-  // ========== 初始化 ==========
+  // 初始化
 
   /** 从 Rust SQLite 加载所有会话元数据（消息懒加载，激活时再拉取） */
   async loadFromDB(): Promise<void> {
@@ -88,8 +68,7 @@ class SessionStore {
         this.value.messagePaging = {}
         this.value.userMessageIndex = {}
       })
-      // 基线必须同步更新且是浅拷贝快照：否则 debounce 的 saveDiff 拿到空列表或同一
-      // 引用，删除与原位修改都会被 diff 吞掉。
+      // 基线必须同步更新且是浅拷贝快照：否则 debounce 的 saveDiff 拿到空列表或同一引用，删除与原位修改都会被 diff 吞掉
       this._lastSaved = sessions.map((s) => ({ ...s }))
       track('session.load', {
         session_count: sessions.length,
@@ -113,10 +92,7 @@ class SessionStore {
     }
   }
 
-  /**
-   * 懒加载会话消息（会话激活时调用）。
-   * 已加载过 / 新建会话（内存即真相）直接跳过。
-   */
+  /** 懒加载会话消息（会话激活时调用）；已加载过 / 新建会话（内存即真相）直接跳过。 */
   async ensureMessagesLoaded(sessionId: string): Promise<void> {
     if (this.loadedMessageIds.has(sessionId)) return
     const idx = this.value.sessions.findIndex((s) => s.id === sessionId)
@@ -167,24 +143,18 @@ class SessionStore {
     return this.value.messagePaging[sessionId]?.hasMoreOlder ?? false
   }
 
-  /**
-   * 该会话的历史消息是否「已全量在内存」（已加载过且没有更早的分页）。
-   *
-   * 用于判断能否把内存态消息整体回写 SQLite（
-   * 未全量加载时整体回写会把还没拉取的旧消息抹掉）。
-   */
+  /** 历史消息是否「已全量在内存」（已加载过且无更早分页）—— 判断能否把内存态消息整体回写 SQLite（未全量时回写会抹掉还没拉取的旧消息）。 */
   isMessagesFullyLoaded(sessionId: string): boolean {
     return (
       this.loadedMessageIds.has(sessionId) && !this.hasMoreMessages(sessionId)
     )
   }
 
-  // ========== 用户消息轻量索引（右侧锚点列表） ==========
+  // 用户消息轻量索引（右侧锚点列表）
 
   /**
-   * 确保会话的「全量用户消息索引」已加载。
-   * 只拉 user 消息的 id + 摘要（不含 AI / 工具正文），因此可一次性覆盖整个会话历史，
-   * 不会重新引入「切换会话时搬运数千条消息」的卡顿。
+   * 确保「全量用户消息索引」已加载：只拉 user 消息的 id + 摘要（不含 AI / 工具正文），
+   * 可一次性覆盖整个历史，不会重新引入「切会话搬运数千条消息」的卡顿。
    */
   async ensureUserMessageIndex(sessionId: string): Promise<void> {
     if (this.loadedUserIndexIds.has(sessionId)) return
@@ -210,10 +180,8 @@ class SessionStore {
   }
 
   /**
-   * 从会话的「全量用户消息索引」中剔除指定用户消息（删除 / 清空消息时调用）。
-   *
-   * 索引是一次性从 SQLite 拉取后缓存的（loadedUserIndexIds 保证只加载一次），
-   * 删除消息不会让它自动失效；若不同步剔除，右侧锚点列表会残留已删除消息的圆点。
+   * 从「全量用户消息索引」剔除指定用户消息（删除 / 清空消息时调用）。
+   * 索引是一次性拉取后缓存的，不会自动失效；不同步剔除，锚点列表会残留已删除消息的圆点。
    */
   dropUserMessagesFromIndex(sessionId: string, ids: Iterable<string>): void {
     const refs = this.value.userMessageIndex[sessionId]
@@ -231,8 +199,7 @@ class SessionStore {
   }
 
   /**
-   * 向上回补一页更早的消息（前插到消息列表头部）。
-   * 同一会话的并发调用会复用同一个请求，避免把同一页重复前插两次。
+   * 向上回补一页更早的消息（前插到列表头部）；同会话并发调用复用同一请求，避免同页重复前插。
    * @returns 是否实际加载到了更早的消息
    */
   loadOlderMessages(sessionId: string): Promise<boolean> {
@@ -310,11 +277,7 @@ class SessionStore {
     }
   }
 
-  /**
-   * 确保会话「全部」历史消息已加载。
-   * 用于发送消息 / 上下文压缩 / 导出等需要完整上下文的场景。
-   * 失败时安全退出，不阻塞调用方。
-   */
+  /** 确保「全部」历史消息已加载（发送 / 上下文压缩 / 导出等需完整上下文的场景）；失败安全退出，不阻塞调用方。 */
   async ensureAllMessagesLoaded(sessionId: string): Promise<void> {
     await this.ensureMessagesLoaded(sessionId)
     let guard = 0
@@ -326,14 +289,12 @@ class SessionStore {
   }
 
   /**
-   * 确保「模型当前上下文」所需的消息已加载：从**最后一条 summary 起**（含它）到最新。
+   * 确保「模型当前上下文」已加载：从**最后一条 summary**（含它）到最新。
    *
-   * 与 `ensureAllMessagesLoaded` 的差别：加载窗口里一旦出现 `summary` 就停止向更早处回补 ——
-   * 消息是**从尾部连续向前**加载的，最后一个 summary 已在内存 ⇒ 它之后的全部消息必然也在；
-   * 而请求组装（TS `buildRequest` / Rust `slice_messages`）本就丢掉 summary 之前的消息。
-   * 无 summary 时退化为全量加载（那时整份历史都是当前上下文）。
-   *
-   * 用于发送路径：避免为「模型根本看不到」的旧历史付出 O(历史) 的加载 + IPC 代价。
+   * 与 `ensureAllMessagesLoaded` 的差别：窗口里一出现 `summary` 就停止向更早回补 —— 消息是从尾部
+   * 连续向前加载的，最后一个 summary 已在内存 ⇒ 它之后全部也在；而请求组装（TS `buildRequest` /
+   * Rust `slice_messages`）本就丢掉 summary 之前的部分。无 summary 时退化为全量加载。
+   * 发送路径用它，避免为「模型根本看不到」的旧历史付 O(历史) 的加载 + IPC 代价。
    */
   async ensureContextLoaded(sessionId: string): Promise<void> {
     await this.ensureMessagesLoaded(sessionId)
@@ -387,9 +348,9 @@ class SessionStore {
     }
   }
 
-  // ========== 持久化 ==========
+  // 持久化
 
-  /** 路径 B/C: 会话元数据变更 → 防抖 + diff */
+  /** 会话元数据变更 → 防抖 + diff */
   private persist(): void {
     this.repo.saveDiff(this._lastSaved, this.value.sessions)
     // 浅拷贝解引用，使下次 diff 能正确检测变化
@@ -397,11 +358,11 @@ class SessionStore {
   }
   private _lastSaved: Session[] = []
 
-  // ========== 路径 A: 消息变更 → 直接持久化（高频，无 diff，独立 debounce） ==========
+  // 消息变更 → 直接持久化（高频，无 diff，独立 debounce）
 
   private _messageDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
-  /** 消息变更后触发防抖持久化（300ms 合并，直接写 IndexedDB） */
+  /** 消息变更后触发防抖持久化（300ms 合并，直接写 SQLite） */
   private _debouncedPersistSession(sessionId: string): void {
     const existing = this._messageDebounceTimers.get(sessionId)
     if (existing) clearTimeout(existing)
@@ -419,16 +380,12 @@ class SessionStore {
   /**
    * 订阅「消息变更」，返回取消订阅函数。
    *
-   * ⚠️ 为什么存在（2026-09-27 手机控制真机反馈）：`chat-view` 的消息列表是 React
-   * 本地镜像（`useState`），过去只由**发起方**的 `ChatServiceEvents.onMessagesUpdate`
-   * 驱动 —— 于是任何「不是组件自己发起」的路径（手机 bridge 的 `host.session.send`）
-   * 改了 store 也刷不到 UI，表现为「手机上发了消息，电脑端要切会话才看到」。
-   * 同类先例已出现过（`compressContext` 的注释：不通知就「要切会话才刷新」），
-   * 说明「每个调用方记得通知」是反模式。`messagesChanged` 是消息 CRUD 的
-   * **唯一收口点**，订它即覆盖全部来源（含未来新增的路径）。
+   * ⚠️ 存在的理由：`chat-view` 的消息列表是 React 本地镜像（`useState`），过去只由**发起方**的
+   * `onMessagesUpdate` 驱动 —— 非组件自己发起的路径（手机 bridge 的 `host.session.send`）改了 store
+   * 也刷不到 UI（表现为「手机上发了消息，电脑端要切会话才看到」）。「每个调用方记得通知」是反模式；
+   * `messagesChanged` 是消息 CRUD 的唯一收口点，订它即覆盖全部来源（含未来新增）。
    *
-   * 与 `onMessagesUpdate` 的分工：那个是显式通知（组件自己发送时用，可立即生效），
-   * 本订阅是兜底通道（高频流式走 rAF 合批，重复 schedule 同帧去重、无额外渲染）。
+   * 与 `onMessagesUpdate` 的分工：那是显式通知（组件自己发送时用，可立即生效），本订阅是兜底通道。
    */
   onMessagesChanged(listener: (sessionId: string) => void): () => void {
     this.messagesChangedListeners.add(listener)
@@ -437,10 +394,7 @@ class SessionStore {
     }
   }
 
-  /**
-   * 消息变更通知（服务层消息 CRUD 调用此方法）
-   * 只持久化、不走 diff、不污染 _lastSaved 基线
-   */
+  /** 消息变更通知（服务层消息 CRUD 调用此方法）；只持久化，不走 diff，不污染 `_lastSaved` 基线。 */
   messagesChanged(sessionId: string): void {
     this._debouncedPersistSession(sessionId)
     // 广播给订阅者（UI 镜像同步等）；单个订阅者抛错不影响持久化与其它订阅者
@@ -453,7 +407,7 @@ class SessionStore {
     }
   }
 
-  // ========== CRUD ==========
+  // CRUD
 
   /** 保存会话（新增或更新） */
   saveSession(session: Session): void {
@@ -493,10 +447,10 @@ class SessionStore {
   }
 
   /**
-   * 更新会话部分字段
+   * 更新会话部分字段。
    *
-   * 不刷新 `updatedAt`：会话时间只由「用户发送消息」刷新（见 touchSession），改标题 /
-   * 切模型 / 调推理强度 / 置顶都是元数据编辑。
+   * 不刷新 `updatedAt`：会话时间只由「用户发送消息」刷新（见 `touchSession`），改标题 / 切模型 /
+   * 调推理强度 / 置顶都算元数据编辑。
    */
   updateSession(
     id: string,
@@ -525,12 +479,9 @@ class SessionStore {
   /**
    * 刷新「会话时间」（`updatedAt`）—— **只有用户发送消息的那一刻可以调用**。
    *
-   * 产品语义：会话时间 = 用户最后一次发言的时间。会话列表按它倒序、侧边栏显示它，
-   * 因此 AI 回复 / 工具结果 / 迭代反馈 / AI 起标题 / 手动改标题 / 切模型 / 置顶
-   * 都**不能**刷新它，否则列表时间会被 AI 的活动顶掉、顺序随回复乱跳。
-   *
-   * 唯一调用点：`chat-service.sendMessage` / `sendMessageWithGoal` 的发送入口
-   * （含迭代模式与 skipUserMessage 分支，两条路径都经过那里）。
+   * 产品语义：会话时间 = 用户最后一次发言的时间，列表按它倒序。AI 回复 / 工具结果 / 迭代反馈 /
+   * 起标题 / 手动改标题 / 切模型 / 置顶都**不能**刷新它，否则列表时间被 AI 活动顶掉、顺序乱跳。
+   * 唯一调用点：`chat-service` 的 `sendMessage` / `sendMessageWithGoal` 发送入口。
    */
   touchSession(id: string): void {
     const idx = this.value.sessions.findIndex((s) => s.id === id)
@@ -563,8 +514,7 @@ class SessionStore {
     this.value.sessions = sessions
     this.dropMessagePaging([id])
     this.persist()
-    // 删除不能只靠 persist() 的 800ms 合并：窗口内的其它变更会把它吞掉（会话重启后复活），
-    // 故这里再直接落库一次（SQLite 删除幂等）。
+    // 删除不能只靠 persist() 的合并：窗口内的其它变更会把它吞掉（重启后会话复活），故再直接落库一次（删除幂等）
     void this.repo.deleteSessions([id])
     track('session.delete', {
       session_id: hashText(id),
@@ -574,10 +524,7 @@ class SessionStore {
     return true
   }
 
-  /**
-   * 批量删除会话（只触发一次持久化）。不要在循环里逐个调用 deleteSession ——
-   * debounce 会互相覆盖导致丢数据。
-   */
+  /** 批量删除会话（只触发一次持久化）。不要在循环里逐个调用 `deleteSession` —— debounce 互相覆盖会丢数据。 */
   deleteSessions(ids: string[]): number {
     if (ids.length === 0) return 0
     const idSet = new Set(ids)
@@ -587,7 +534,7 @@ class SessionStore {
     this.value.sessions = newSessions
     this.dropMessagePaging(ids)
     this.persist()
-    // 同 deleteSession：立即落库，不让删除被防抖合并吞掉
+    // 同 deleteSession：立即落库，免得被防抖合并吞掉
     void this.repo.deleteSessions(ids)
     track('session.delete', { batch: true, count: deletedCount })
     return deletedCount

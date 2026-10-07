@@ -64,7 +64,6 @@ interface Params {
 }
 
 export function useInputHandlers(p: Params) {
-  // ===== 发送 =====
   function handleSend() {
     const trimmed = p.value.trim()
     const hasAttachment =
@@ -96,7 +95,6 @@ export function useInputHandlers(p: Params) {
     }
   }
 
-  // ===== 取消 / 暂停恢复 =====
   function handleCancel() {
     const sid = chatState.value.currentSessionId
     if (!sid) {
@@ -115,7 +113,6 @@ export function useInputHandlers(p: Params) {
     }
   }
 
-  // ===== 路径自动补全 — 选中 =====
   const handlePathSelect = useCallback(
     (selectedName: string) => {
       const before = p.value.slice(0, p.cursorPos)
@@ -141,12 +138,10 @@ export function useInputHandlers(p: Params) {
       let newFragment: string
 
       if (isDir) {
-        // === 选中目录：保留 @，继续嵌套浏览 ===
         // "@" + "src/" + "components/" → "@src/components/"
         newFragment = fragment.slice(0, atIdx + 1) + dirPart + selectedName
         // 不关闭自动补全，useEffect 检测到 text 变化后会重新触发
       } else {
-        // === 选中文件：删除 @，插入纯路径 ===
         // "" + "src/" + "main.ts" → "src/main.ts"
         newFragment = fragment.slice(0, atIdx) + dirPart + selectedName
         p.closeAutocomplete()
@@ -169,7 +164,6 @@ export function useInputHandlers(p: Params) {
     [p.value, p.cursorPos, p.closeAutocomplete],
   )
 
-  // ===== 图片选择：点击文件选择器 =====
   const handleImageButtonClick = useCallback(() => {
     p.fileInputRef.current?.click()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -187,7 +181,6 @@ export function useInputHandlers(p: Params) {
     [p.addImages],
   )
 
-  // ===== 剪贴板粘贴 =====
   // 图片：剪贴板直接给了内容，沿用原有链路
   // 文件：剪贴板只给 File 拿不到路径，整批交给原生剪贴板读（acceptClipboardFiles）
   const handlePaste = useCallback(
@@ -233,7 +226,6 @@ export function useInputHandlers(p: Params) {
     [p.addImages, p.acceptClipboardFiles, p.pasteSeenRef],
   )
 
-  // ===== 拖拽（浏览器调试模式的兼底）=====
   // Tauri 桌面端 dragDropEnabled=true，页面收不到 HTML5 的 drop，走原生通道
   const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -266,7 +258,6 @@ export function useInputHandlers(p: Params) {
     [p.addImages, p.setIsDragOver],
   )
 
-  // ===== 快捷输入选择 =====
   const handleQuickInputSelect = useCallback(
     (template: { text: string }) => {
       if (p.loading) return
@@ -280,7 +271,6 @@ export function useInputHandlers(p: Params) {
     [p.loading, p.setValue, p.textareaRef],
   )
 
-  // ===== 验证目标快捷输入选择 =====
   const handleGoalQuickInputSelect = useCallback(
     (template: { text: string }) => {
       if (p.loading) return

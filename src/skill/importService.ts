@@ -1,12 +1,8 @@
 /**
- * importService — Skill ZIP 导入
+ * importService — Skill ZIP 导入。
  *
- * 流程：
- * 1. 用户选择 ZIP 文件（Tauri 文件对话框）
- * 2. 读取 ZIP 中的 SKILL.md，解析 frontmatter 获取 name
- * 3. 校验 SKILL.md 格式（必须有 frontmatter 且包含 name）
- * 4. 解压到 appDataDir/skills/{name}/
- * 5. 自动注册 skill
+ * 流程：选 ZIP → 读其中 SKILL.md 解析 frontmatter 取 name → 校验（须有 frontmatter 且含 name）→
+ * 解压到 appDataDir/skills/{name}/ → 自动注册。
  */
 import {
   getSkillsDirPath,
@@ -16,7 +12,7 @@ import {
 import { normalizeSkillName } from './types'
 import { parseSkillMdMeta } from '@/utils/mdYamlFrontmatter'
 
-// ==================== SKILL.md 格式校验 ====================
+// SKILL.md 格式校验
 
 /** 解析后的技能元信息 */
 export interface ParsedSkillMeta {
@@ -27,25 +23,8 @@ export interface ParsedSkillMeta {
 }
 
 /**
- * 解析 SKILL.md 内容，提取元信息
- *
- * 兼容两种格式：
- *   - 标准 YAML frontmatter（--- name: xxx ---）
- *   - 纯 Markdown 无 frontmatter（# 标题 + > 描述 + **Version:**）
- *
- * 格式一：
- * ---
- * name: my-skill
- * description: My awesome skill
- * version: 1.0.0
- * ---
- *
- * 格式二：
- * # 📝 My Skill
- * > My awesome skill description
- * **Version:** 1.0.0
- *
- * name 经过 normalizeSkillName 归一化（转小写、去空格、校验格式）
+ * 解析 SKILL.md 内容，提取元信息。兼容标准 YAML frontmatter 与纯 Markdown（# 标题 + > 描述 + **Version:**）；
+ * name 经 normalizeSkillName 归一化。
  */
 function parseSkillMetaFromContent(
   _folderName: string,

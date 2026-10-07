@@ -1,24 +1,18 @@
 /**
- * use-tree-drag —— 指针拖拽（拖到输入框 = 引用，拖到目录行 = 移动）
+ * use-tree-drag —— 指针拖拽（拖到输入框 = 引用，拖到目录行 = 移动）。
  *
- * 复用：「技能」页签的技能卡片也用它（只有「拖到输入框」一种落点，
- * 传 `onDropIntoDir` 空实现即可，页面里本来就没有 `[data-tree-dir]`）。
+ * 「技能」页签的技能卡片也复用它（只有「拖到输入框」一种落点，onDropIntoDir 传空实现即可）。
  *
- * 为什么不用 HTML5 drag & drop：`tauri.conf.json` 里 `dragDropEnabled` 必须为 true
- * （与 HTML5 拖拽互斥，见 AGENTS §11.8），Windows 上页面收不到 drag/drop 事件 ——
- * 拖放由 Rust 的 `drag_drop` 模块（自定义 OLE 目标）接管。
- * 所以这里用**指针事件**自绘一个跟随光标的 ghost，按 elementFromPoint 判定落点。
+ * 不用 HTML5 drag & drop 的原因：`tauri.conf.json` 的 `dragDropEnabled` 必须为 true（与 HTML5
+ * 拖拽互斥），Windows 上页面收不到 drag/drop 事件 —— 拖放已由 Rust 的 `drag_drop` 模块接管。
+ * 这里改用指针事件自绘 ghost，按 elementFromPoint 判定落点。
  *
- * 落点有两类（互斥，不会同时命中）：
- *   - `[data-tree-dir]`（目录行）      → 移动进去，回调 onDropIntoDir
- *   - `[data-file-drop-zone]`（输入框）→ 挂成附件，回调 onDropToInput
- * 落点高亮直接改 DOM 类（不改 React state）—— 指针每次移入新落点才变一次，
- * 走 state 会把整个虚拟列表都重渲一遍。
+ * 落点两类（互斥）：`[data-tree-dir]`（目录行）→ onDropIntoDir；`[data-file-drop-zone]`
+ *（输入框）→ onDropToInput。高亮直接改 DOM 类而非 React state —— 指针每次移入新落点才变一次，
+ * 走 state 会把整个虚拟列表重渲一遍。
  *
- * 与调用方的约定：
- *   - `startDrag(e, items)` 挂在行的 onPointerDown 上（右键 / 中键自动忽略）
- *   - `draggedRef.current` 为 true 表示「这一轮交互是拖拽」，
- *     行的 onClick / onDoubleClick 需据此吞掉激活（判定后自行置回 false）
+ * 与调用方约定：`startDrag(e, items)` 挂在行的 onPointerDown（右键 / 中键自动忽略）；
+ * `draggedRef.current` 为 true 表示「本轮交互是拖拽」，行的 click / dblclick 需据此吞掉激活。
  */
 import { useCallback, useEffect, useRef } from 'react'
 import { tpl } from '@/ui/i18n'
@@ -49,10 +43,7 @@ export interface TreeDragOptions {
   onDropToInput: (items: TreeDragItem[]) => void
   /** 松手在目录行上（移动到该目录） */
   onDropIntoDir: (items: TreeDragItem[], targetDir: string) => void
-  /**
-   * 该目录能否接收这批拖拽项。
-   * 返回 false 时不加高亮、松手也不触发 —— 落点是否合法由调用方给（见 canMoveInto）。
-   */
+  /** 该目录能否接收这批拖拽项；false 时不加高亮、松手也不触发（合法性由调用方判断） */
   canDropIntoDir?: (items: TreeDragItem[], targetDir: string) => boolean
 }
 
@@ -62,9 +53,8 @@ export function useTreeDrag(options: TreeDragOptions) {
   /** 卸载兜底用的清理函数 */
   const cleanupRef = useRef<(() => void) | null>(null)
   /**
-   * 选项存 ref：调用方每次渲染都会传新函数（它们捕获了最新的选择集），
-   * 而 startDrag 必须保持稳定引用（要挂到每一行的 onPointerDown 上），
-   * 不这样做就会持有首次渲染时的旧闭包。
+   * 选项存 ref：调用方每次渲染都传新函数（捕获了最新选择集），而 startDrag 必须保持稳定引用
+   *（要挂到每一行的 onPointerDown），否则会一直持有首次渲染时的旧闭包。
    */
   const optionsRef = useRef(options)
   optionsRef.current = options

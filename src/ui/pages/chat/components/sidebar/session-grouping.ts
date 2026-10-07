@@ -1,18 +1,13 @@
 /**
- * session-grouping —— 侧边栏「会话」页签的分组规则（纯函数，无 React / store 依赖）
+ * 侧边栏「会话」页签的分组规则（纯函数，无 React / store 依赖）。
  *
- * 分组维度由 `settings.sessionGroupType` 决定：按 **Agent** 或按 **工作目录**。
+ * 维度由 `settings.sessionGroupType` 决定：按 Agent 或按工作目录。置顶分组排最前（置顶组之间保持名称序）；
+ * 置顶 key 按维度分开存（见 `settingStore.pinnedSessionGroups`）—— `UNGROUPED_KEY` 在两个维度里是同一个
+ * 字面量，混一份列表会互相串。
  *
- * **分组置顶**：置顶的分组排到列表最前（置顶组之间保持原有名称序）。
- * 置顶的 key 列表按维度分开存（见 `settingStore.pinnedSessionGroups`）——
- * 「未分组 / 未设置工作目录」这类虚拟 key 在两个维度里是同一个字面量，
- * 混在一份列表里会互相串。
- *
- * ⚠️ **组内顺序 = 入参顺序**：会话排序（会话级 `pinned` 优先 → `updatedAt` 倒序）的
- *    唯一来源是 `sessionStore.listSessions()`，这里只做「聚合 + 分组置顶」，
- *    不重复实现一遍排序（两份排序规则迟早会走偏）。调用方必须传已排序的列表。
- *
- * Agent 名称 / 简介由 `lookupAgent` 回调注入（模块不直接依赖 agentStore，便于单测）。
+ * ⚠️ **组内顺序 = 入参顺序**：会话排序（会话级 `pinned` → `updatedAt` 倒序）的唯一来源是
+ * `sessionStore.listSessions()`，这里只做聚合 + 分组置顶，调用方必须传已排序的列表。
+ * Agent 名称 / 简介由 `lookupAgent` 回调注入（不直接依赖 agentStore，方便单测）。
  */
 import { t, tpl } from '@/ui/i18n'
 
@@ -70,9 +65,7 @@ export function groupSessions<S extends GroupableSession>(
 
 /**
  * 翻转某个分组的置顶态：返回**新数组**（不改入参，便于直接塞回 MobX observable）。
- *
- * 数组顺序不是展示顺序（展示 = 置顶优先 + 组名序，见 `pinnedFirst`），
- * 所以新置顶的 key 直接追加即可。
+ * 数组顺序不是展示顺序（展示 = 置顶优先 + 组名序，见 `pinnedFirst`），所以直接追加即可。
  */
 export function toggleGroupPin(
   pinned: readonly string[] | undefined,

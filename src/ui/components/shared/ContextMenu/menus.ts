@@ -1,12 +1,9 @@
 /**
- * menus — 右键菜单项工厂
+ * menus — 右键菜单项工厂：文件 / 图片 / 只读文本三类，供消息气泡、图片预览浮层、
+ * 工具调用卡片、终端等按需取用，文案与失败兜底只有一份。
  *
- * 把「同一类右键对象」的菜单收在一处：文件、图片、只读文本。
- * 各处（消息气泡 / 图片预览浮层 / 工具调用卡片 / 终端）只挑需要的工厂调用，
- * 文案、提示、失败兜底都只有一份实现。
- *
- * 这里属于 ui 层：可以依赖 i18n / Toast（`utils/clipboard.ts` 则刻意不依赖，
- * 它只回答「成功没有」，由本文件翻译成人话）。
+ * 属 ui 层，可依赖 i18n / Toast（`utils/clipboard.ts` 刻意不依赖它，只回答「成功没有」，
+ * 由本文件翻译成人话）。
  */
 import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener'
 import { t, tpl } from '@/ui/i18n'
@@ -21,7 +18,6 @@ import {
 import { editorService } from '@/services/editor-service'
 import type { ContextMenuItem } from './index'
 
-/** 打开失败/未实现时统一提示（不弹原生报错，避免打断） */
 function toastFail(message: string): void {
   showToast(message)
 }
@@ -29,17 +25,15 @@ function toastFail(message: string): void {
 /**
  * 文件 / 目录菜单：打开、编辑器打开、在文件管理器中显示、复制路径。
  *
- * 「在文件管理器中显示」走 `revealItemInDir`，它由 capabilities 的
- * `opener:default` 覆盖（已含 allow-reveal-item-in-dir），无需单独授权。
- *
- * `openPath` / `revealItemInDir` 只认绝对路径，而工具入参里 LLM 常写相对工作目录的路径
- * （如 `src/a.ts`）。不经 `workspace` 补齐就丢给系统会定位错地方 —— 调用方务必传 workspace。
+ * `openPath` / `revealItemInDir` 只认绝对路径，而 LLM 入参常是相对工作目录的（如 `src/a.ts`）
+ * —— 调用方务必传 workspace，否则系统会定位错地方。
+ * reveal 由 capabilities 的 `opener:default` 覆盖（含 allow-reveal-item-in-dir），无需单独授权。
  */
 export function fileMenuItems(
   path: string,
   opts: { isDir?: boolean; workspace?: string; line?: number } = {},
 ): ContextMenuItem[] {
-  // 相对路径 → 绝对路径（已是绝对路径 / 无从得知工作目录时原样返回）
+  // 已是绝对路径 / 无 workspace 时原样返回
   const target = toAbsolutePath(path, opts.workspace)
   const items: ContextMenuItem[] = [
     {
@@ -51,9 +45,8 @@ export function fileMenuItems(
     },
   ]
 
-  // 「编辑器打开」：与文件工具卡片（ReadFileMessage / WriteFileMessage / EditFileMessage）
-  // 里给 CodeBlock 配的动作**同源** —— 都走 editorService.openFile（按设置里的编辑器命令模板
-  // 启动，未配置则回退首个预设）。目录不适用，故跳过。
+  // 与文件工具卡片给 CodeBlock 配的动作同源：都走 editorService.openFile（按设置里的编辑器
+  // 命令模板启动，未配置则回退首个预设）。目录不适用，跳过。
   if (!opts.isDir) {
     items.push({
       key: 'open-in-editor',
@@ -64,7 +57,7 @@ export function fileMenuItems(
           line: opts.line,
         })
         if (!result.ok) {
-          // 未启用时给出可执行的指引（与目录树等其他入口同一句话）
+          // 未启用时给可执行指引（与目录树等入口同一句话）
           showToast(
             editorService.isEnabled()
               ? t('打开失败')
@@ -98,9 +91,8 @@ export function fileMenuItems(
 
 /**
  * 图片菜单：复制图片、另存为。
- *
- * 复制走「原生 CF_DIB → 浏览器 ClipboardItem」两级兜底（见 utils/clipboard.ts）；
- * 另存为弹系统保存对话框，取消不算失败（不提示）。
+ * 复制走「原生 CF_DIB → ClipboardItem」两级兜底（见 utils/clipboard.ts）；
+ * 另存为取消不算失败（不提示）。
  */
 export function imageMenuItems(
   src: string,
@@ -140,10 +132,9 @@ export function imageMenuItems(
 /**
  * 只读文本菜单：复制（**选区优先**，无选区才整段）、全选。
  *
- * 选区优先是刻意的：菜单项叫「复制」，用户已经拖选了半句话时，
- * 期望复制的就是那半句而不是整段（与终端 Ctrl+C 的约定一致）。
- *
- * `copyLabel` 用于「复制」语义在别处有更具体称呼的场景（如代码块的「复制代码」）。
+ * 选区优先是刻意的：菜单叫「复制」而用户已拖选半句话时，期望复制的是那半句
+ * （与终端 Ctrl+C 的约定一致）。`copyLabel` 供「复制」在别处有更具体称呼的场景
+ * （如代码块的「复制代码」）。
  */
 export function textMenuItems(
   getText: () => string,
@@ -166,7 +157,7 @@ export function textMenuItems(
       key: 'select-all',
       label: opts.allLabel ?? t('全选'),
       onClick: opts.selectAll,
-      // 全选后通常紧接着还要「复制」，菜单保持打开（与终端菜单同一约定）
+      // 全选后通常紧接着「复制」，菜单保持打开（与终端菜单同一约定）
       keepOpen: true,
     })
   }

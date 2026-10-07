@@ -1,20 +1,8 @@
 /**
- * search-provider-service — 搜索供应商持久化 & 初始化服务
+ * search-provider-service — 搜索供应商持久化 & 初始化（类比 provider-service.ts）。
  *
- * 完全类比 provider-service.ts（LLM 供应商）的模式：
- *
- * 持久化流程：
- *   localStorage ←→ settingsState.searchProviders ←→ searchProviderService.initSearchProviders()
- *        ↑                                                    ↓
- *   存 SearchProviderConfig []                        SearchProviderRegistry (内存)
- *   （可序列化 JSON）                                  （ISearchProvider 实例）
- *
- * 生命周期：
- *   1. 应用启动时，main.ts 调用 initSearchProviders()
- *   2. 从 localStorage 读取已持久化的配置列表
- *   3. 遍历配置，用 createSearchProviderInstance() 创建实例
- *   4. 注册到全局 searchProviderRegistry
- *   5. 设置默认搜索供应商
+ * localStorage ←→ settingsState.searchProviders ←→ searchProviderRegistry（内存）。
+ * 启动时 main.ts 调 initSearchProviders()：读配置 → 建实例 → 注册 → 设默认。
  */
 import { searchProviderRegistry } from '@/domain/search'
 import { createSearchProviderInstance } from '@/infrastructure/search-providers'
@@ -23,11 +11,7 @@ import type { SearchProviderConfig } from '@/domain/search/config'
 import type { ISearchProvider } from '@/domain/search/types'
 
 class SearchProviderServiceImpl implements SearchProviderService {
-  /**
-   * 应用启动时调用 — 从持久化配置重建搜索供应商实例
-   *
-   * 对应 providerService.initProviders()
-   */
+  /** 启动时从持久化配置重建实例；对应 providerService.initProviders()。 */
   initSearchProviders(): void {
     for (const config of settingsState.value.searchProviders) {
       if (!config.enabled) continue
@@ -54,63 +38,45 @@ class SearchProviderServiceImpl implements SearchProviderService {
     searchProviderRegistry.list()
   }
 
-  /**
-   * 添加一个新的搜索供应商配置，并注册到运行时
-   *
-   * @param config 搜索供应商配置
-   */
   async addConfig(config: SearchProviderConfig): Promise<void> {
-    // 1. 持久化配置
     const list = [...settingsState.value.searchProviders, config]
     settingsState.setValue('searchProviders', list)
 
-    // 2. 创建实例并注册
     if (config.enabled) {
       const provider = createSearchProviderInstance(config)
       await searchProviderRegistry.register(config.id, provider)
     }
 
-    // 3. 如果是第一个供应商，自动设为默认
+    // 如果是第一个供应商，自动设为默认
     if (!settingsState.value.defaultSearchProviderId) {
       settingsState.setValue('defaultSearchProviderId', config.id)
       await searchProviderRegistry.setDefault(config.id)
     }
   }
 
-  /**
-   * 更新已有的搜索供应商配置
-   */
   async updateConfig(config: SearchProviderConfig): Promise<void> {
-    // 1. 先从注册中心移除旧的实例
     await searchProviderRegistry.unregister(config.id)
 
-    // 2. 更新持久化配置
     const list = settingsState.value.searchProviders.map((p) =>
       p.id === config.id ? config : p,
     )
     settingsState.setValue('searchProviders', list)
 
-    // 3. 如果启用，重新创建并注册
     if (config.enabled) {
       const provider = createSearchProviderInstance(config)
       await searchProviderRegistry.register(config.id, provider)
     }
   }
 
-  /**
-   * 删除搜索供应商配置
-   */
   async removeConfig(id: string): Promise<void> {
-    // 1. 从注册中心移除
     await searchProviderRegistry.unregister(id)
 
-    // 2. 从持久化配置中删除
     const list = settingsState.value.searchProviders.filter(
       (p) => p.id !== id,
     )
     settingsState.setValue('searchProviders', list)
 
-    // 3. 如果删的是默认供应商，重置默认
+    // 删的是默认供应商则重置默认（取下一个启用的）
     if (settingsState.value.defaultSearchProviderId === id) {
       const newDefault = list.find((p) => p.enabled)
       settingsState.setValue(
@@ -125,10 +91,7 @@ class SearchProviderServiceImpl implements SearchProviderService {
     }
   }
 
-  /**
-   * 注册新的供应商实例（不持久化，仅运行时）
-   * 用于需要动态注册但不需要持久化的场景
-   */
+  /** 仅运行时注册（不持久化），用于动态注册场景。 */
   async registerProvider(id: string, provider: ISearchProvider): Promise<void> {
     await searchProviderRegistry.register(id, provider)
   }

@@ -1,8 +1,7 @@
-//! chat — 消息查询公共（文本格式化 / 输出上限 / 单会话字符预算）
+//! chat — 消息查询公共（文本格式化 / 输出上限 / 单会话字符预算）。
 //!
-//! ⚠️ 与 TS 侧 `src/infrastructure/tools/chat/common.ts` 逐字对齐（铁律 1）：Rust 原生路径（默认）与 JS
-//! 回退路径必须产出同一份 `content`（模型侧文本：英文，不进 i18n）。硬上限三处一致：本文件 ↔ TS
-//! `tools/chat/common.ts` ↔ `session_db::types::MSG_QUERY_*`（后者是服务端权威 clamp）。
+//! ⚠️ 与 TS `chat/common.ts` 逐字对齐（铁律 1）：原生路径与 JS 回退路径产出同一份 `content`（英文，
+//! 不进 i18n）。硬上限三处一致：本文件 ↔ TS `common.ts` ↔ `session_db::types::MSG_QUERY_*`（服务端权威）。
 
 use crate::session_db::{MessageTimelinePage, MessageWindow};
 use once_cell::sync::Lazy;
@@ -27,10 +26,8 @@ pub(crate) const BUDGET_MAX_CHARS: usize = 60_000;
 
 // ==================== 参数取值（JS 同口径） ====================
 
-/// 与 TS `Number(...)` 同口径的数字取值。
-///
-/// 只覆盖实际会出现的形态（数字 / 数字字符串 / 布尔）；`null` 与缺失一律视作「未传」
-/// （更符合工具语义，也不对应 TS 里 `Number(null) === 0` 那个边角）。
+/// 与 TS `Number(...)` 同口径的数字取值（只覆盖会出现的数字 / 数字串 / 布尔；`null` 与缺失视作
+/// 「未传」，不套用 TS 的 `Number(null) === 0`）。
 pub(crate) fn number_of(v: Option<&Value>) -> Option<f64> {
     match v {
         Some(Value::Number(n)) => n.as_f64(),
@@ -56,8 +53,8 @@ pub(crate) fn utf16_len(s: &str) -> usize {
     s.chars().map(|c| c.len_utf16()).sum()
 }
 
-/// 取前 `max` 个 **UTF-16 码元**（代理对安全）—— 与 TS `utils/text.ts::sliceHead` 同语义：
-/// 截断点正好落在代理对中间时**少取一个字符**，绝不产出半个 emoji。
+/// 取前 `max` 个 UTF-16 码元（代理对安全）—— 与 TS `sliceHead` 同语义：截断点落在代理对中间时少取
+/// 一个字符，绝不产出半个 emoji。
 pub(crate) fn slice_head(text: &str, max: usize) -> String {
     let mut units = 0usize;
     let mut out = String::new();

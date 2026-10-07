@@ -1,20 +1,11 @@
 //! `web_search` 工具（原生）— 通过已配置的搜索源检索互联网。
 //!
-//! ## 配置来源（读的就是 CLI 会读的那份）
+//! 配置来源：`searchProviders` / `defaultSearchProviderId` 在 `app_settings` 表，经 `ctx.settings` 直读
+//! —— GUI 与 CLI 天然一致（对比：`sandbox_ignore_rules` 随消息下发，因沙盒判定要求每条命令零 IO）。
 //!
-//! 搜索源配置（`searchProviders` / `defaultSearchProviderId`）随 `SettingsStore` 下沉到了
-//! `app_settings` 表，这里经 `ctx.settings` 直读 —— GUI 与 CLI 天然一致，也不需要前端下发任何字段。
-//!（对比：`sandbox_ignore_rules` 走「随消息下发」，因为沙盒判定要求每条命令零 IO。）
-//!
-//! ## 与 TS 侧逐字对齐（铁律 1）
-//!
-//! 镜像 `src/infrastructure/tools/web/web-search.ts` + `search-providers/{tavily,bocha}.ts`：三类文案
-//!（参数校验 / 未配置搜索源 / 无结果）、结果文本（`super::common::format_search_results`，两侧共读
-//! golden 收敛）、`uiData` 形状、请求体与响应字段映射（`days` 仅 `time_range=day` 时出现）、失败文案
-//! 均一致。
-//!
-//! ⚠️ 与 TS 一样只支持 `tavily` / `bocha`：`searxng` 在 TS 的 `factory.ts` 里被注释掉（未接入运行时），
-//! 因此「配了 searxng 但没配可用源」在两侧都表现为「未配置搜索源」。
+//! ⚠️ 与 TS `web-search.ts` + `search-providers/{tavily,bocha}.ts` 逐字对齐（铁律 1）：三类文案、结果
+//! 文本（共读 golden）、`uiData` 形状、请求体与响应字段映射均一致。与 TS 一样只支持 `tavily` / `bocha`
+//! （`searxng` 未接入，两侧都表现为「未配置搜索源」）。
 
 use crate::agent::cancellation::CancellationToken;
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};

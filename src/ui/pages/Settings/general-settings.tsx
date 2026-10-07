@@ -61,7 +61,6 @@ function GeneralSettings() {
     settingsState.setValue(key, value)
   }
 
-  // ==================== 诊断埋点（§8） ====================
   const telemetryBuildDisabled = isTelemetryBuildDisabled()
 
   function toggleTelemetry(enabled: boolean) {

@@ -1,10 +1,8 @@
-//! TUI 的事件出口 —— 把引擎事件**结构化**送进 UI 线程（渲染交给 `view`）
+//! TUI 的事件出口 —— 把引擎事件结构化送进 UI 线程（渲染交给 `view`）。
 //!
-//! 与 `run::CliEventSink` 的差别值得写在这里：那个把事件渲染成**文本**写流，
-//! 这个**原样转交**给 UI —— 因为 TUI 要自己决定「哪些进在飞区、哪些进状态行」。
-//! 文件末尾三个纯函数（`input_preview` / `text_of` / `first_line`）是它的格式化助手，
-//! 与它同生共死：状态行与工具行只用得上一行信息量。
-//! ⚠️ 其中 `text_of` 是 `session_rt::message_text` 的再导出（实现只有一份，见其定义处）。
+//! 与 `run::CliEventSink` 的差别：那个把事件渲染成文本写流，这个原样转交给 UI（TUI 自决「哪些进
+//! 在飞区、哪些进状态行」）。末尾三个纯函数（`input_preview` / `text_of` / `first_line`）是它的
+//! 格式化助手。⚠️ `text_of` 是 `session_rt::message_text` 的再导出。
 
 use crate::tui::state::UiEvent;
 use serde_json::{json, Value};
@@ -19,10 +17,7 @@ use super::term;
 
 // ==================== 事件出口（结构化，不做文本渲染） ====================
 
-/// TUI 的事件出口：把引擎事件**结构化**送进 UI 线程（渲染交给 `view`）。
-///
-/// 与 `run::CliEventSink` 的差别：那个把事件渲染成文本写流；这个原样转交 UI，
-/// 因为 TUI 要自己决定「哪些进在飞区、哪些进状态行」。
+/// TUI 的事件出口：把引擎事件结构化送进 UI 线程（渲染交给 `view`）。
 pub(crate) struct UiEventSink {
     tx: mpsc::UnboundedSender<UiEvent>,
     bridge: Arc<AgentBridgeState>,

@@ -1,28 +1,20 @@
 /**
  * 电脑侧「工作目录文件」接口层（§37）—— 手机端浏览 / 预览 / 下载 / 上传 / **编辑**本机文件的落点。
  *
- * ## 为什么单独一个文件（而不是塞进 `host-source.ts`）
+ * 单独成文件（不塞进 host-source.ts）：host-source 接会话域（sessionStore / chat-service），这里接
+ * 文件系统 + 安全校验（另一套依赖 / 失败模式）；可注入内存 FileSystemPort 在无 Tauri 环境完整单测。
  *
- * `host-source.ts` 接的是 `sessionStore` / `chat-service`（会话域），而这里接的是
- * **文件系统 + 安全校验**（另一套依赖、另一套失败模式）。分开的收益很具体：
- * 本文件可以在没有 Tauri、没有会话库的环境下被完整单测（注入内存版 `FileSystemPort`）。
- *
- * ## 六条纪律（改动时逐条对照）
- *
- * 1. **越权防线只有一道，且必须是 `resolvePath`**：手机传来的路径先被
- *    `normalizeRelPath` 规整（`..` 逃逸段就地丢掉），再由 `resolvePath` 落到会话工作目录
- *    并过黑白名单。本文件**不得**自己做路径拼接 —— 两份拼接逻辑就是两个边界。
- * 2. **非中继**：`fileTransferDeniedReason(linkKind())` 说了算（两端同一句话）。
- *    只拒**确认走了 TURN 中继**的链路（`relay`），`unknown` 放行（否则 Broadcast 联调
- *    与非 WebRTC 链路永远进不来）。唯一的例外是 `abort`（只做清理，见那里的注释）。
- * 3. **分块**：单次 RPC 最多 `FILE_CHUNK_BYTES` 字节；读写都按这个上限夹一次。
- *    上限的另一层含义是**内存上界**：一次请求最多拼一份 256KB 的字节 + 350KB 的 base64。
- * 4. **一切写入都先落临时文件、`finish` 才落盘**：中断 / 取消 / 出错都不会在用户项目里
- *    留下一个「打开是坏的」半截文件。
- * 5. **每一步都独立 `assert`**（§7-⑪ 的教训）：手机端不显示入口绝不等于隔离。
- * 6. **覆写（编辑保存）与上传是同一条分块通道上的两条路**（`overwrite` 切换）：覆写要求目标
- *    已存在、必须带打开时的版本（`expectMtimeMs`）、`finish` 时**替换**目标而不是挑空位改名；
- *    授权也是另一档（`file.edit`）。收尾前**再校验一次**版本 —— begin 与 finish 之间隔着网络。
+ * 六条纪律（改动时逐条对照）：
+ * 1. **越权防线只有一道、且必须是 resolvePath**：路径先经 normalizeRelPath 规整（`..` 逃逸段丢掉），
+ *    再由 resolvePath 落到会话工作目录并过黑白名单；本文件**不得**自己拼路径（两份拼接 = 两个边界）。
+ * 2. **非中继**：fileTransferDeniedReason(linkKind()) 说了算（两端同一句话），只拒确认走 relay 的链路，
+ *    unknown 放行（否则 Broadcast 联调与非 WebRTC 链路永远进不来）；唯一例外 abort（只做清理）。
+ * 3. **分块**：单次 RPC 最多 FILE_CHUNK_BYTES，读写都夹一次 —— 上界即内存上界（≤ 256KB 字节 + 350KB base64）。
+ * 4. **一切写入先落临时文件、finish 才落盘**：中断 / 取消 / 出错都不会在项目里留下半截坏文件。
+ * 5. **每一步独立 assert**（§7-⑪）：手机端不显示入口绝不等于隔离。
+ * 6. **覆写（编辑保存）与上传是同一条分块通道上的两条路**（overwrite 切换）：覆写要求目标已存在、带打开时
+ *    版本（expectMtimeMs）、finish 时**替换**而非挑空位改名；授权另一档（file.edit）。收尾前**再校验一次**版本
+ *    —— begin 与 finish 之间隔着网络。
  */
 import {
   BridgeError,

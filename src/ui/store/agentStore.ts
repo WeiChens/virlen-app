@@ -1,12 +1,6 @@
 /**
- * agentStore — UI 层 Store
- *
- * 职责：
- *  - 持有 mobx observable，供 UI 组件响应式渲染
- *  - 数据读写委托给 SimpleRepo<AgentStoreData>
- *
- * 注意：为避免循环依赖（@/agent → engine.ts → @/store），
- * 直接引用子路径而非 @/agent 桶导出。
+ * UI 层 Store：持有 mobx observable 供组件响应式渲染，读写委托给 `SimpleRepo<AgentStoreData>`。
+ * 为避免循环依赖（@/agent → engine.ts → @/store），直接引用子路径而非 `@/agent` 桶导出。
  */
 import { makeObservable, observable } from 'mobx'
 import type { SimpleRepo } from '@/infrastructure/repo'
@@ -16,7 +10,7 @@ import { v4 as uuid } from '@/utils/uuid'
 import { DEFAULT_AGENT_ID } from '@/ui/constants'
 
 class AgentStore {
-  /** mobx observable — UI 组件直接绑定此属性 */
+  /** mobx observable，UI 组件直接绑定 */
   value: AgentStoreData = { agents: [] }
 
   constructor(private repo: SimpleRepo<AgentStoreData>) {
@@ -31,7 +25,7 @@ class AgentStore {
     this.repo.save(this.value)
   }
 
-  /** 根据 ID 获取 Agent（id 为 undefined 时找不到，直接返回 undefined） */
+  /** 按 ID 获取 Agent */
   getAgent(id: string | undefined): Agent | undefined {
     return this.value.agents.find((a) => a.id === id)
   }

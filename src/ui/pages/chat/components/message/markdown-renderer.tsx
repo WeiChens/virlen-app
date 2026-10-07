@@ -1,16 +1,10 @@
 // @ts-nocheck
 /**
- * MarkdownRenderer — Markdown 渲染
+ * Markdown 渲染（react-markdown + remark-gfm，代码高亮交给 `CodeBlock`）。
  *
- * 使用 react-markdown + remark-gfm 渲染 Markdown，代码高亮由 CodeBlock 处理。
- *
- * ⚡ 流式性能（两级，对应 trace 里「主线程被 Render 阶段占满」的问题）：
- *  1. rAF 节流：把高频 chunk 更新合并到每帧一次（useThrottledContent）
- *  2. 前缀冻结：流式期间把「已定稿的块」与「正在增长的尾部」拆成两棵子树
- *     （见 streamMarkdown.splitStablePrefix）。前缀子树被 memo 冻住，内容不变时
- *     React 直接跳过整棵 reconcile，每帧只重建尾部那一小块。
- *     此前每帧都要重新 reconcile 整篇文档的元素树，长回复下这是主要 CPU 来源。
- *     消息结束时（streaming=false）整篇一次性渲染，保证最终结果与不拆分一致。
+ * ⚡ 流式性能两级：① rAF 节流把高频 chunk 合并到每帧一次；② 前缀冻结 —— 把「已定稿的块」与「正在增长的
+ * 尾部」拆成两棵子树（见 `splitStablePrefix`），前缀被 memo 冻住，内容不变时整棵跳过 reconcile，每帧只重建
+ * 尾部。此前每帧 reconcile 整篇文档是主要 CPU 来源；消息结束时整篇一次性渲染，保证最终结果不变。
  */
 import { memo, useState, useRef, useEffect, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
@@ -19,18 +13,11 @@ import CodeBlock from './code-block'
 import { splitStablePrefix } from './streamMarkdown'
 import './markdown-renderer.scss'
 
-// ==================== 常量 ====================
-
 /** 稳定的 remark 插件数组（避免每次渲染新建数组） */
 const REMARK_PLUGINS = [remarkGfm]
 
-// ==================== Hook：rAF 节流 ====================
-
 /**
- * 使用 requestAnimationFrame 对 content 进行节流。
- *
- * - streaming=true：只在每帧 (raf) 更新一次 displayContent，高频 content 变化被合并
- * - streaming=false：立即更新，取消 pending raf，确保最终结果准确
+ * rAF 节流 content：streaming 时每帧最多更新一次（高频 content 变化被合并）；非 streaming 立即更新并取消 pending rAF。
  */
 function useThrottledContent(content: string, streaming?: boolean): string {
   const [displayContent, setDisplayContent] = useState(content)
@@ -72,8 +59,6 @@ function useThrottledContent(content: string, streaming?: boolean): string {
   return displayContent
 }
 
-// ==================== 组件 ====================
-
 interface Props {
   content: string
   isUser?: boolean
@@ -94,11 +79,8 @@ function LinkRenderer({ href, children, ...props }: any) {
 }
 
 /**
- * MarkdownBody — 纯渲染体。
- *
- * props 只有 content / streaming 两个基本类型，内容不变时 memo 命中，React
- * 会整棵跳过（这正是「前缀冻结」能省掉 reconcile 的原因）。
- * components 用 useMemo 按 streaming 缓存，保证引用稳定。
+ * 纯渲染体：props 只有两个基本类型，内容不变时 memo 命中、React 整棵跳过（这正是「前缀冻结」能省掉
+ * reconcile 的原因）。components 用 useMemo 按 streaming 缓存，保证引用稳定。
  */
 const MarkdownBody = memo(function MarkdownBody({
   content,
@@ -173,22 +155,20 @@ const MarkdownBody = memo(function MarkdownBody({
   )
 })
 
-/**
- * MarkdownRenderer — 渲染 Markdown 内容
- */
+/** Markdown 渲染入口（用户消息不走 Markdown，直接原样输出）。 */
 export default memo(function MarkdownRenderer({
   content,
   isUser,
   streaming,
 }: Props) {
-  // ---- rAF 节流：避免流式高频更新导致 ReactMarkdown 重复解析 ----
+  // rAF 节流：避免流式高频更新导致 ReactMarkdown 重复解析
   const displayContent = useThrottledContent(content, streaming)
 
   if (isUser) {
     return <>{displayContent}</>
   }
 
-  // ---- 流式隔离：已定稿前缀冻结，每帧只重建尾部 ----
+  // 流式隔离：已定稿前缀冻结，每帧只重建尾部
   if (streaming) {
     const [prefix, tail] = splitStablePrefix(displayContent)
     if (prefix) {

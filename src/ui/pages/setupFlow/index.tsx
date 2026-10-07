@@ -37,17 +37,14 @@ function SetupFlow({ onComplete }: Props) {
         <StepIndicator current={step} />
 
         {step === 'welcome' ? (
-          /* ====== 第一步：欢迎页 ====== */
           <div className="step-page welcome" key="welcome">
             <StepWelcome onNext={() => goTo('setWorkdir')} />
           </div>
         ) : step === 'setWorkdir' ? (
-          /* ====== 第二步：设置工作目录 ====== */
           <div className="step-page step-enter" key={`workdir-${animKey}`}>
             <StepWorkdir onNext={() => goTo('setup')} />
           </div>
         ) : (
-          /* ====== 第三步：模型配置 ====== */
           <div className="step-page step-enter" key={`setup-${animKey}`}>
             <StepProvider
               onBack={() => goTo('setWorkdir')}

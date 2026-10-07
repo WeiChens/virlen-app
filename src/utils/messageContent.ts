@@ -1,14 +1,9 @@
 /**
- * messageContent — 用户消息 content 的组装与解析
+ * messageContent — 用户消息 content 的组装与解析。
  *
- * 输入框里的附件有四种形态：
- *   - 图片：base64 dataURL（本轮请求需要真实图片内容）
- *   - 文件：仅绝对路径（不拷贝文件内容，交由 AI 用工具按需读取）
- *   - 引用：被引用消息的 id + 发送方 + 正文快照（原消息可能被删除 / 压缩）
- *   - 技能：SKILL.md 全文快照（技能是「领域知识包」，引用即发送内容）
- *
- * 这里把「引用 + 技能 + 文本 + 图片 + 文件」统一成 MessageContent，供发送链路复用；
- * 反向解析（从 content 里取回文件块 / 引用块 / 技能块）供消息气泡渲染 chip 使用。
+ * 输入框附件四种形态：图片（base64 dataURL，本轮请求需真实内容）、文件（仅绝对路径，交 AI 用工具读）、
+ * 引用（被引用消息 id + 发送方 + 正文快照）、技能（SKILL.md 全文快照）。这里把「引用 + 技能 + 文本 + 图片 + 文件」
+ * 统一成 MessageContent；反向解析（取回文件 / 引用 / 技能块）供气泡渲染 chip。
  */
 import {
   fileBlockToText,
@@ -55,17 +50,11 @@ export interface SkillInput {
 }
 
 /**
- * 组装用户消息 content
+ * 组装用户消息 content。
  *
- * 文本规则与原有图片链路保持一致：
- *   - 有文本 → 原样发送
- *   - 无文本但有引用 → 补一句「请针对引用的消息回复」
- *   - 无文本但有技能 → 补一句「请参考我引用的技能」
- *   - 无文本但有图片 → 补一句「分析这张/这N张图片」
- *   - 无文本但有文件 → 补一句「看看这些文件」
- *
- * 块顺序固定为 quote → skill → text → image → file：引用与技能都是「本条消息附带的
- * 上下文」，放在最前，模型先看到背景再看到指令；图片 / 文件是搬运对象，落在最后。
+ * 文本规则：有文本原样；否则按「引用 → 技能 → 图片 → 文件」补一句提示。块顺序固定
+ * quote → skill → text → image → file：引用与技能是本条消息附带的上下文（放最前，模型先看背景再看指令），
+ * 图片 / 文件是搬运对象（落最后）。
  */
 export function buildUserContent(
   text: string,
@@ -140,10 +129,7 @@ export function buildUserContent(
 }
 
 /**
- * 消息正文文本（文本块拼接，去首尾空白）。
- *
- * 与消息气泡的 `getContent()` 同口径：只取 `text` 块，不含引用 / 技能 / 文件 / 图片 ——
- * 后几类在气泡里另有渲染，不是「正文」。
+ * 消息正文文本（文本块拼接，去首尾空白）。与气泡的 getContent() 同口径：只取 text 块，不含引用 / 技能 / 文件 / 图片。
  */
 export function messageBodyText(content: MessageContent): string {
   if (typeof content === 'string') return content.trim()
@@ -157,22 +143,17 @@ export function messageBodyText(content: MessageContent): string {
 /**
  * 消息是否有正文（空白正文一律视为没有）。
  *
- * ⚠️ 这是「有没有正文」的**唯一判据**：消息气泡（`showAsToolCall` / `hideMessageBubble`）
- * 与列表行模型（工具组是否成立）都必须走本函数 —— 两处判据一旦漂移，就会出现
- * 「有内容的行被丢掉」或「空行占着位置」。
+ * ⚠️ 这是「有没有正文」的**唯一判据**：消息气泡与列表行模型（工具组是否成立）都必须走本函数 ——
+ * 两处判据一旦漂移，就会出现「有内容的行被丢掉」或「空行占着位置」。
  */
 export function messageHasBody(message: { content: MessageContent }): boolean {
   return messageBodyText(message.content).length > 0
 }
 
 /**
- * 消息是否带有**非文本的可见内容块**（引用 / 图片 / 文件 / 技能）。
- *
- * ⚠️ 这些块在气泡里都有各自的可见渲染（引用条 / 缩略图 / 文件 chip / 技能卡），
- * 因此它们和「正文」一样属于「看得见的内容」：
- *  - 列表行模型（`message-list/rows.ts`）据它判断「这条 assistant 该不该并入折叠的工具组」；
- *  - 消息气泡（`hideMessageBubble` / `showAsToolCall`）据它决定「只有工具调用时要不要整条隐藏」。
- * 两处必须**同源**，否则会出现「非文本内容被一起藏掉」或「被折叠吞掉」。
+ * 消息是否带有**非文本的可见内容块**（引用 / 图片 / 文件 / 技能）—— 它们在气泡里各有渲染，与正文同属「看得见的
+ * 内容」。⚠️ 列表行模型（rows.ts）与气泡（hideMessageBubble / showAsToolCall）必须**同源**，否则会出现
+ * 「非文本内容被一起藏掉」或「被折叠吞掉」。
  */
 export function messageHasAttachmentBlocks(content: MessageContent): boolean {
   if (typeof content === 'string') return false

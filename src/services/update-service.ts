@@ -1,10 +1,6 @@
 /**
- * update-service — 版本更新检查服务
- *
- * 调用后端 API POST /api/public/versions/check-update 检查更新，
- * 供桌面客户端启动时或手动检查更新使用。
- *
- * 支持「忽略当前版本」和「7日内不再提示」两种用户偏好。
+ * update-service — 版本更新检查服务。
+ * 调后端 POST /api/public/versions/check-update；支持「忽略当前版本」与「7 日内不再提示」。
  */
 import { getVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
@@ -78,29 +74,19 @@ export function getSnoozeUntil(): number | null {
 }
 
 /**
- * 判断是否应该显示更新弹窗
- *
- * 检查逻辑：
- * 1. 如果最新版本已被用户忽略 → 不弹窗
- * 2. 如果用户设置了 7 日免打扰且尚未到期 → 不弹窗
- * 3. 否则 → 弹窗
+ * 判断是否应该显示更新弹窗：最新版本未被忽略 且 不在 7 日免打扰期内。
  */
 export function shouldShowUpdate(updateInfo: ICheckUpdateResponse): boolean {
   const latestVersion = updateInfo.latest_version?.version
   if (!latestVersion) return false
 
-  // 检查是否被用户忽略
   const ignoredVersion = getIgnoredVersion()
   if (ignoredVersion === latestVersion) {
-    // console.log(`[UpdateService] 版本 ${latestVersion} 已被用户忽略，跳过弹窗`)
     return false
   }
 
-  // 检查 7 日免打扰
   const snoozeUntil = getSnoozeUntil()
   if (snoozeUntil !== null) {
-    // const remainingDays = Math.ceil((snoozeUntil - Date.now()) / (1000 * 60 * 60 * 24))
-    // [UpdateService] 免打扰还剩 ${remainingDays} 天，跳过弹窗
     return false
   }
 

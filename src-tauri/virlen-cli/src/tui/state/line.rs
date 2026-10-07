@@ -1,8 +1,6 @@
-//! 固化行的模型与文本清洗（`LineKind` / `OutLine` / `sanitize` / `expand`）
-//!
-//! 这四样是「一屏文本怎么表示」的全部约定：`sanitize` 决定**什么能进终端**（ANSI 转义与控制字符
-//! 必须整段剥掉，否则会把界面画乱），`expand` 决定**视口与固化算高度的口径一致**（各切一次就会
-//! 出现内容被截断或错位）。它们没有状态、不依赖 `UiState`，因此单独一层。
+//! 固化行的模型与文本清洗（`LineKind` / `OutLine` / `sanitize` / `expand`）：`sanitize` 决定什么
+//! 能进终端（ANSI 转义与控制字符须整段剥掉，否则画乱界面），`expand` 决定视口与固化算高度口径一致。
+//! 无状态、不依赖 `UiState`，故单独一层。
 
 /// 一行输出的**语义**（渲染层据此上色；状态机不关心颜色）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,11 +35,9 @@ impl OutLine {
     }
 }
 
-/// 去掉终端转义序列与控制字符（工具输出可能带 ANSI 颜色 / 进度条 / `\r`）—— 不清理就会把界面本身画乱
-/// （ratatui 会把 `[31m` 当普通字符算宽度）。保留 `\n`（分段）与 `\t`（缩进）。
-///
-/// 只滤「控制字符」不够：ESC 被抹掉后 `[31m` 会留下可见文本 —— 必须整段识别 CSI（`ESC [ … 终止字节`）
-/// 与 OSC（`ESC ] … BEL/ST`）。
+/// 去掉终端转义序列与控制字符（工具输出可能带 ANSI 颜色 / 进度条 / `\r`）—— 不清理会把界面画乱
+/// （ratatui 会把 `[31m` 当普通字符算宽度）。保留 `\n` / `\t`。只滤控制字符不够（ESC 被抹掉后
+/// `[31m` 仍可见），必须整段识别 CSI（`ESC [ … 终止字节`）与 OSC（`ESC ] … BEL/ST`）。
 pub(crate) fn sanitize(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut it = s.chars().peekable();

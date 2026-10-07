@@ -1,15 +1,8 @@
 /**
- * Gemini Provider — 使用 Google AI API 格式
- *
- * 与 OpenAI 不同：
- * - API 端点是 genai API（google-generativeai SDK / 原生 REST）
- * - messages 使用 contents[] 结构：[{role, parts:[{text, ...}, {functionCall, ...}]}]
- * - tool 调用使用 functionCall / functionResponse 嵌入 parts
- * - 流式使用 Server-Sent Events (SSE)
- * - API 密钥通过查询参数 ?key=xxx 传递
- *
- * API 端点：https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
- * 流式：https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent
+ * Gemini Provider —— 使用 Google AI API 格式（与 OpenAI 不同）：端点为 genai API；messages 用
+ * contents[{role, parts:[{text,...},{functionCall,...}]}]；tool 调用用 functionCall / functionResponse 嵌入 parts；
+ * 流式走 SSE；API key 经查询参数 ?key= 传递。
+ * 端点：…/v1beta/models/{model}:generateContent（流式 :streamGenerateContent）。
  */
 import type { Message, StreamCallback, TokenUsage, ToolUseContent } from '@/types'
 import { fileBlockToText, quoteBlockToText, skillBlockToText } from '@/types'

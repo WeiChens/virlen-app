@@ -31,10 +31,9 @@ pub(crate) async fn execute_command_tool(
         timeout = 300;
     }
 
-    // sandbox:"off" → 申请「不使用沙盒（受限令牌）」执行本命令。用途：沙盒下必然失败的场景（子进程需用管道
-    // stdio 拉起孙进程：vitest / vite / jest / ts-node / node-gyp…，受限令牌会让那次 spawn 直接 EPERM，
-    // 根因见 AGENTS §11.2）。
-    // ⚠️ 该请求过「沙盒脱壳」权限门禁（与命令风险权限取更严格者，默认弹窗）；readonly 模式直接拒绝。
+    // sandbox:"off" → 申请无沙盒执行本命令（子进程需用管道 stdio 拉起孙进程时，受限令牌会让
+    // spawn 直接 EPERM，见 AGENTS §11.2）。⚠️ 过「沙盒脱壳」权限门禁（与命令风险权限取更严格者）；
+    // readonly 模式直接拒绝。
     let ai_requested_bypass = matches!(
         arg_str(args, "sandbox")
             .unwrap_or_default()
@@ -49,8 +48,7 @@ pub(crate) async fn execute_command_tool(
         );
     }
 
-    // confirm:"terminal" → 终端内确认（Step 2 ①，WinkTerm `write_command` 的 L2 等价物）。
-    // 仅当伪控制台可用时才真正走终端呈现；否则前端自动回落现有弹窗（降级可见）。
+    // confirm:"terminal" → 终端内确认（Step 2 ①）。仅在伪控制台可用时走终端呈现，否则前端回落弹窗。
     let confirm_terminal = arg_str(args, "confirm")
         .map(|s| s.trim().eq_ignore_ascii_case("terminal"))
         .unwrap_or(false);

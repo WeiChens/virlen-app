@@ -1,13 +1,7 @@
 /**
- * RAG 服务 — 编排知识库检索流程
+ * RAG 服务 — 编排知识库检索流程：知识库 CRUD、文档管理（上传/删除）、检索并格式化注入 Agent 上下文。
  *
- * 负责：
- * - 知识库的 CRUD 操作
- * - 文档管理（上传、删除）
- * - 检索并将结果格式化注入到 Agent 上下文
- *
- * 配置读取策略：RAG 配置（enabled / defaultKnowledgeBaseId / defaultTopK）直接从
- * settingsState 实时读取、不维护本地缓存副本，保证页面刷新或设置页修改后 getConfig() 始终最新。
+ * 配置直接从 settingsState 实时读取、不维护本地缓存副本，保证页面刷新或设置页修改后 getConfig() 始终最新。
  */
 
 import { knowledgeBaseStore } from '@/infrastructure/rag/knowledge-base-store'
@@ -24,13 +18,10 @@ class RagService {
   /** 最大上下文字符数（固定，不从配置读取） */
   private maxContextChars = 8000
 
-  // ===== 配置管理 =====
+  // 配置管理
 
   /**
-   * 获取当前 RAG 配置
-   *
-   * 实时从 settingsState 读取，不缓存。
-   * 保证引擎和工具永远读到最新值。
+   * 获取当前 RAG 配置（实时从 settingsState 读取，不缓存，保证引擎和工具永远读到最新值）。
    */
   getConfig(): RAGConfig {
     try {
@@ -73,7 +64,7 @@ class RagService {
     return cfg.enabled && cfg.defaultKnowledgeBaseId.length > 0
   }
 
-  // ===== 知识库管理 =====
+  // 知识库管理
 
   /** 创建知识库 */
   async createKnowledgeBase(
@@ -98,7 +89,7 @@ class RagService {
     }
   }
 
-  // ===== 文档管理 =====
+  // 文档管理
 
   /** 添加文档到知识库 */
   async addDocument(
@@ -175,7 +166,7 @@ class RagService {
     return knowledgeBaseStore.initKnowledgeBases()
   }
 
-  // ===== 检索 =====
+  // 检索
 
   /** 检索知识库 */
   async query(

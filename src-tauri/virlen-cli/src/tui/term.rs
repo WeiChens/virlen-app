@@ -1,20 +1,12 @@
-//! 终端接管与恢复 —— raw mode、内联视口、**四条健壮性措施**、降级判定
+//! 终端接管与恢复 —— raw mode、内联视口、四条健壮性措施、降级判定。
 //!
-//! ## 为什么这里写得这么"怂"（每处都要重试）
-//!
-//! 实测结论（`docs/cli-tui-plan.md` §3.2）：Windows 上**改窗口尺寸期间，conhost 会让
-//! `CONOUT$` 相关查询/写入短暂失败**（`os error 233`，`ERROR_PIPE_NOT_CONNECTED`），
-//! 约 0.25–5 s 后自愈 —— 而 `Terminal::draw` / `size()` / `insert_before` 都会走这条路径。
-//!
-//! 真正让用户看到「崩溃退出」的是**我们自己的写法**：把瞬时失败当致命错误 →
-//! 退出路径 `println!` 又失败 → `std` panic → abort（`0xC0000409`）。因此：
-//!
-//! 1. **resize 去抖**：收到 resize 后 300ms 内不碰终端（`note_resize` / `in_debounce`），
-//!    且调用方必须**把读事件排在绘制之前**；
+//! Windows 上改窗口尺寸期间 conhost 会让 `CONOUT$` 查询/写入短暂失败（`os error 233`），约
+//! 0.25–5s 自愈，而 `draw` / `size` / `insert_before` 都走这条路径。真的崩是因为我们把瞬时失败
+//! 当致命错误、退出路径 `println!` 再失败 → panic → abort。故四条措施：
+//! 1. **resize 去抖**：收到 resize 后 300ms 内不碰终端，调用方须把读事件排在绘制之前；
 //! 2. **退避重试**：`draw` / `commit` / `size` 失败先记日志 + 退避 250ms 重试；
-//! 3. **禁止 `println!`**：一切输出走 `writeln!` 且忽略错误；自装 panic 钩子先把消息与
-//!    backtrace 落盘（终端会被 restore 冲掉，屏幕上的字留不住）；
-//! 4. **降级**：连续失败超阈值（20 × 250ms ≈ 5s）→ 返回 `Err`，调用方切「顺序输出模式」。
+//! 3. **禁止 `println!`**：输出走 `writeln!` 且忽略错误；自装 panic 钩子先把消息与 backtrace 落盘；
+//! 4. **降级**：连续失败超阈值（20 × 250ms ≈ 5s）→ 返回 `Err`，调用方切顺序输出模式。
 
 use crate::tui::state::{expand, OutLine, UiState};
 use crate::tui::view;
@@ -31,10 +23,8 @@ use std::path::PathBuf;
 use std::sync::Once;
 use std::time::{Duration, Instant};
 
-/// 内联视口高度。
-///
-/// `ratatui-core` 的 `Terminal.viewport` 是私有字段，`resize()` 对内联视口只用构造期高度重算原点 →
-/// 运行期改不了高度。本常量就是「在飞内容尾巴 + 交互面板 + 输入行 + 状态行」的硬上限。
+/// 内联视口高度：`ratatui` 的内联视口运行期改不了高度（`resize()` 只用构造期高度重算原点），
+/// 本常量即「在飞内容尾巴 + 交互面板 + 输入行 + 状态行」的硬上限。
 pub(crate) const VIEWPORT_H: u16 = 10;
 
 /// resize 去抖窗口：这段时间内完全不碰终端

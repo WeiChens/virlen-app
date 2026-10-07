@@ -1,25 +1,14 @@
-//! quasivision 视觉服务的 **Tauri 命令壳**
+//! quasivision 视觉服务的 Tauri 命令壳。
 //!
-//! 真正的实现（模型目录定位 / 进程级懒加载 / 推理 pipeline）在 `crate::vision` ——
-//! 那里**不含 `tauri::`**，因此 GUI 命令壳与原生工具
-//! （`native_tools/vision/vision_analyze.rs`）共用同一段实现，不会出现两份模型探测逻辑。
-//!
-//! 本文件只负责两件事：
-//!   1. 把 IPC 入参（文件路径 / base64 data URL）翻译成字节；
-//!   2. 把 `crate::vision` 的结果原样回传。
-//!
-//! 命令：
-//!   - `vision_analyze`        → 从文件路径读取图片分析
-//!   - `vision_analyze_base64` → 从 base64 data URL 分析（粘贴/拖拽截图无需落盘）
+//! 实现（模型目录定位 / 懒加载 / 推理）在 `virlen_core::vision`（不含 `tauri::`），
+//! 故与原生工具 `native_tools/vision/vision_analyze.rs` 共用同一段实现。
+//! 本文件只把入参（文件路径 / base64 data URL）翻译成字节，再把结果回传。
 
 use crate::host::TauriHost;
 use virlen_core::vision::{self, VisionAnalyzeResult};
 use tauri::AppHandle;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 命令 1：从文件路径读取图片分析
-// ═══════════════════════════════════════════════════════════════════════════
-
+/// 从文件路径读取图片分析
 #[tauri::command]
 pub async fn vision_analyze(
     app: AppHandle,
@@ -29,10 +18,7 @@ pub async fn vision_analyze(
     vision::analyze_path(&host, &image_path)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 命令 2：从 base64 data URL 分析（粘贴/拖拽截图无需落盘）
-// ═══════════════════════════════════════════════════════════════════════════
-
+/// 从 base64 data URL 分析（粘贴/拖拽截图无需落盘）
 #[tauri::command]
 pub async fn vision_analyze_base64(
     app: AppHandle,

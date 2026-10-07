@@ -1,28 +1,18 @@
-//! 「忽略沙盒命令」规则 —— 纯 Rust 匹配器（text / regex / js）
+//! 「忽略沙盒命令」规则 —— 纯 Rust 匹配器（text / regex / js）。
 //!
-//! ## 为什么 Rust 要自己实现一份
+//! ## 为什么 Rust 自己实现一份
+//! 原实现「匹配只有 JS 一份」，Rust 侧经内部交互问 JS —— 纯 Rust CLI 没有 JS 进程，只能白等超时后按未命中
+//! 处理（规则在 CLI 下完全失效）。现把匹配下沉到 Rust（**默认引擎 + CLI 的权威实现**），与 TS 逐条对齐：
+//! 由两侧**共读**的 golden 用例保证（`tests/fixtures/sandbox-rules.golden.json`）；TS 侧实现
+//!（`src/domain/security/sandbox-ignore-rules.ts`）**仍保留**给浏览器 dev / 设置页「测试」。
 //!
-//! 规则支持三种 `kind`：`text`（完全/前缀/后缀）、`regex`、`js`（用户自写函数）。
-//! 原实现里「匹配只有 JS 一份」，Rust 侧经内部交互 `sandbox_rule_check` 问 JS ——
-//! 但那要求**存在一个 JS 宿主**：纯 Rust CLI 没有 JS 进程，问不到，只能白等超时后
-//! 按未命中处理（规则在 CLI 下完全失效）。
+//! ## 已知差异（方向都是「不放行」或仅影响非 ASCII）
+//! - `regex`：Rust 不支持 lookaround / backreference，这类规则编译失败 → 按**未命中**（即「CLI 比 GUI 更
+//!   保守」，绝不静默放行）；
+//! - `\d` / `\w` / `\s`：Rust 默认 Unicode 语义，比 JS（ASCII）更宽（影响面仅限非 ASCII 输入）；
+//! - 两侧都不跨规则共享状态：每条命令独立求值。
 //!
-//! 现在把匹配下沉到 Rust（**默认引擎 + CLI 的权威实现**），与 TS 侧逐条对齐：
-//! - 对齐由两侧**共读**的 golden 用例保证：`src/tests/fixtures/sandbox-rules.golden.json`
-//!   （TS: `src/tests/domain/sandbox-rules-golden.test.ts`；Rust: 本文件 `tests` 模块）；
-//! - TS 侧实现（`src/domain/security/sandbox-ignore-rules.ts`）**仍然保留**：
-//!   浏览器 dev / 用户关闭 Rust 引擎时没有 Rust 可用，设置页的「测试」按钮与
-//!   保存期 `compileSandboxRule` 也依赖它。
-//!
-//! ## 已知差异（记录在案；方向都是「不放行」或仅影响非 ASCII）
-//! - `regex`：Rust `regex` **不支持 lookaround / backreference**。这类规则在 Rust 侧
-//!   编译失败 → 按**未命中**处理（JS 侧能编译且可能命中）—— 即「CLI 比 GUI 更保守」，
-//!   绝不会静默放行；
-//! - `\d` / `\w` / `\s`：Rust 默认 Unicode 语义，比 JS（ASCII 语义）更宽。命令本身
-//!   基本都是 ASCII，影响面仅限「非 ASCII 输入 + 简写字符类」的组合；
-//! - 两侧**都不**做「跨规则状态共享」：每条命令独立求值。
-//!
-//! 匹配顺序：按列表顺序取**第一条命中且已启用**的规则（列表顺序即优先级）。
+//! 匹配顺序：按列表顺序取**第一条命中且已启用**的规则。
 
 use once_cell::sync::Lazy;
 use regex::Regex;

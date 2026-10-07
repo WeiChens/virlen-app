@@ -1,11 +1,7 @@
-//! knowledge_base — 知识库分类（分类 id: knowledge_base）
-//!
-//! 一个工具一个文件（6 个）：
-//! `search_knowledge_base` / `list_knowledge_bases` / `list_knowledge_base_documents`
-//! / `get_knowledge_base_document` / `delete_knowledge_base_document` / `write_to_knowledge_base`
-//!
-//! `common.rs` 为分类内公共：RAG 服务入口 `rag_service`、检索结果 → 上下文文本
-//! `build_search_context`。
+//! knowledge_base — 知识库分类（分类 id: knowledge_base），6 个工具：`search_knowledge_base` /
+//! `list_knowledge_bases` / `list_knowledge_base_documents` / `get_knowledge_base_document` /
+//! `delete_knowledge_base_document` / `write_to_knowledge_base`。
+//! `common.rs` 为 `rag_service`（RAG 入口）与 `build_search_context`（结果 → 上下文文本）。
 
 mod common;
 mod delete_knowledge_base_document;

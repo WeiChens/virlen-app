@@ -1,22 +1,20 @@
 /**
- * CodeEditor —— 可编辑的精简版 Monaco 编辑器（带语法高亮的小代码输入框）
+ * CodeEditor —— 可编辑的精简版 Monaco（带语法高亮的小代码输入框）
  *
- * 与 `CodePreview`（只读预览：隐藏光标、关右键菜单、关输入）相对：本组件用于
- * **真正输入代码**，因此保留编辑能力与右键菜单，只做“减法”——关掉小地图 / 折叠 /
- * 行高亮，控制视觉噪音与体积。典型用途：设置 → 安全 → 忽略沙盒命令的 JS 规则。
+ * 与 `CodePreview`（只读：隐藏光标、关右键菜单、关输入）相对：本组件用于**真正输入**，
+ * 保留编辑与右键菜单，只减掉噪音与体积（小地图 / 折叠 / 行高亮）。
+ * 典型用途：设置 → 安全 → 忽略沙盒命令的 JS 规则。
  *
- * 项目用的是 Monaco 精简构建（见 `src/monaco/setupMonaco.ts`）：只注册各语言的 Monarch
- * 词法高亮，不打包 TS/JS 语言服务（无 Web Worker）。所以这里没有智能补全、没有语法诊断 ——
- * 错误由业务侧自行校验后提示（如 `domain/security/sandbox-ignore-rules.ts` 的 `testSandboxRule`）。
+ * 精简构建只注册 Monarch 词法高亮（见 `src/monaco/setupMonaco.ts`），不打包语言服务（无 Worker），
+ * 所以没有补全、没有语法诊断 —— 错误由业务侧自行校验（如 `security/sandbox-ignore-rules.ts`）。
  *
- * 用法：
- *   <CodeEditor value={code} onChange={setCode} language="javascript" height={160} />
+ * 用法：<CodeEditor value={code} onChange={setCode} language="javascript" height={160} />
  */
 import type { OnMount } from '@monaco-editor/react'
 import Editor from '@monaco-editor/react'
 import type * as MonacoNs from 'monaco-editor'
 
-// 必须先引入：精简版 monaco + 语言高亮注册 + One Dark 主题
+// 必须最先引入：精简 monaco + 高亮注册 + One Dark 主题
 import '@/monaco/setupMonaco'
 import './style.scss'
 
@@ -52,11 +50,11 @@ function buildEditorOptions(
     domReadOnly: readOnly,
     ariaLabel,
 
-    // ── 关掉“重量级”编辑器能力（体积 / 噪音 / 无语言服务时无意义）──
+    // 关掉重量级能力：体量 / 噪音都大，且无语言服务时本就没有内容
     minimap: { enabled: false },
     folding: false,
     stickyScroll: { enabled: false },
-    // 精简构建没有语言服务：补全 / 参数提示 / 悬浮都只会显示“无内容”，直接关掉
+    // 无语言服务：补全 / 参数提示 / 悬浮只会显示「无内容」
     quickSuggestions: false,
     suggestOnTriggerCharacters: false,
     wordBasedSuggestions: 'off',
@@ -71,7 +69,6 @@ function buildEditorOptions(
     bracketPairColorization: { enabled: true },
     guides: { indentation: false, bracketPairs: false },
 
-    // ── 输入体验 ──
     fontSize,
     fontFamily:
       "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', Consolas, 'Courier New', monospace",
@@ -114,7 +111,7 @@ export default function CodeEditor(props: CodeEditorProps) {
   } = props
 
   const handleMount: OnMount = (editor) => {
-    // 每次挂载都按 props 兜底一次（避免外部复用实例时残留上一次的只读态）
+    // 挂载时按 props 兜底一次，避免复用实例残留上一次的只读态
     editor.updateOptions({ readOnly, domReadOnly: readOnly })
   }
 

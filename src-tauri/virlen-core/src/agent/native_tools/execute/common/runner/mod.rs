@@ -1,11 +1,7 @@
-//! 统一运行器 —— 平台分发入口（Windows 走 ConPTY，其余平台走匿名管道）。
-//!
-//! - [`pipes`]   匿名管道运行器（非 Windows 主路径 / ConPTY 不可用时降级兜底）
-//! - [`pty`]     ConPTY 运行器（Windows，命令在伪控制台里跑）
-//! - [`sandbox`] 沙盒会话准备与沙盒内（管道）运行
-//!
-//! 本文件持有：平台分发入口 [`run_command_native`]、结果组装 [`build_command_result`]、
-//! 超时/接管预算常量，以及沙盒运行模式判定 [`sandbox_mode`] / [`SandboxMode`]。
+//! 统一运行器 —— 平台分发入口（Windows 走 ConPTY，其余走匿名管道）：`pipes`（管道运行器，
+//! 非 Windows 主路径 / ConPTY 不可用时兜底）、`pty`（ConPTY 运行器）、`sandbox`（沙盒会话准备
+//! 与沙盒内运行）。本文件持有分发入口 [`run_command_native`]、结果组装、预算常量与
+//! [`sandbox_mode`] / [`SandboxMode`]。
 
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
 use serde_json::{json, Value};
@@ -23,36 +19,23 @@ mod sandbox;
 #[cfg(test)]
 mod tests;
 
-/// Step 2 ④：判定「超时前全程几乎无输出」的输出上限（trim 后字符数）。
-///
-/// 低于此值即认为命令卡在等待输入（密码 / `y/n` / REPL）——这是 PTY 交互场景里
-/// 最常见的超时原因，值得在结果里显式引导模型（与管道路径同样适用，见 D5）。
+/// 判定「超时前全程几乎无输出」的输出上限（trim 后字符数）：低于此值即认为命令卡在等输入
+/// （密码 / `y/n` / REPL），在结果里显式引导模型。
 const TIMEOUT_IDLE_HINT_MAX_OUTPUT: usize = 16;
 
 /// 超时且全程无输出时追加到结果末尾的引导文案（面向模型，非 i18n）。
 const TIMEOUT_IDLE_HINT: &str = "(the command produced almost no output before timing out, which usually means it was waiting for input: a password / y/n confirmation / REPL. Ask the user to type into the terminal directly, or raise the timeout.)";
 
-// ── 以下 5 项只服务 ConPTY 路径 ──────────────────────────────────────────────
-//    调用者只有 `runner/pty.rs`（本文件里 `#[cfg(target_os = "windows")] mod pty;`）
-//    与它同样带 Windows 门禁的测试 → 非 Windows 平台**必然无调用者**。
-//    故选逐项门禁而非 `allow(dead_code)`：非 Windows 上它们确实不存在，比「压告警」更贴近事实。
-//    将来落 Unix PTY 时，这里要与 `mod pty;` 一起改成 `cfg(any(...))`。
+// ── 以下 5 项只服务 ConPTY 路径（调用者只有 `mod pty` 及其测试）→ 逐项 Windows 门禁，
+//    比「压告警」更贴近事实。将来落 Unix PTY 时与 `mod pty;` 一起改成 `cfg(any(...))`。
 #[cfg(target_os = "windows")]
-/// PTY 路径「禁用分页器」用的通用取值 —— 对 git / gh 都表示「不分页」。
+/// PTY 路径「禁用分页器」用的通用取值（对 git / gh 都表示不分页）。
 ///
-/// 背景：ConPTY 让子进程的 stdout 变成 TTY，于是会分页的工具（git / gh / bat…）启动分页器
-/// （`less` / `more`）停在界面等按键，命令明明跑完却卡在最后一行（AI 无法按 `q`）。改造前走
-/// 匿名管道时 stdout 不是 TTY，自动不分页，所以看不到这个问题。
-///
-/// 各处取值见 `run_command_native_pty` 的 `env_extra`，逐条均有工具源码佐证：
-///   - git `GIT_PAGER=cat`：`git_pager()` 对 `cat`/空串硬编码特判 = 不分页；
-///   - gh  `GH_PAGER=cat` ：`IOStreams.StartPager()` 见 `cat` 直接 return = 不分页；
-///   - bat `BAT_PAGING=never`：等价 `--paging=never`（零外部依赖）。
-///
-/// 因此本值不会真的去执行 `cat` 二进制，Windows 没有 `cat` 也安全。
-///
-/// 刻意不设通用 `PAGER`：`gh`/`bat` 之外的工具（如 `aws`）会真的 exec `PAGER`，Windows 上
-/// `cat` 常不在 PATH → 反而报「找不到 cat」。要覆盖它们需另立方案（打包 cat 直通）。
+/// ConPTY 让子进程 stdout 变成 TTY，会分页的工具（git / gh / bat…）启动分页器卡在最后一行
+/// （AI 无法按 `q`）；管道路径 stdout 不是 TTY，自动不分页。取值各有工具源码佐证：git / gh
+/// `*_PAGER=cat`（对 `cat` 硬编码特判 = 不分页）、bat `BAT_PAGING=never`。故本值不会真执行
+/// `cat`，Windows 无 `cat` 也安全。刻意不设通用 `PAGER`：`aws` 等会真 exec `PAGER`，Windows
+/// 上常报「找不到 cat」。
 const PAGER_DISABLED: &str = "cat";
 
 #[cfg(target_os = "windows")]

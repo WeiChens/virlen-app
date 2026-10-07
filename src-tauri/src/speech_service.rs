@@ -1,13 +1,9 @@
-//! macOS 离线语音识别（Apple SFSpeechRecognizer）
+//! macOS 离线语音识别（Apple SFSpeechRecognizer）。
 //!
-//! 仅 macOS 生效：依赖 `speech` crate v0.5.0（Swift 桥接 Apple Speech.framework）。
-//! 其他平台保留命令签名并返回明确错误，不影响 Windows/Linux 构建。
+//! 仅 macOS 生效（依赖 `speech` crate v0.5.0）；其他平台保留命令签名并返回错误，不影响构建。
 //!
-//! ## 为什么锁定 0.5.0
-//! `speech` 0.8.x 的 Swift 桥接引用了 macOS 26 SDK 才有的
-//! `SFSpeechLanguageModel.Configuration(weight:)` 构造器，在旧版 Xcode/SDK
-//! 上编译会报 `extra argument 'weight' in call`。0.5.0 只用到 macOS 14+ 的
-//! API，且 `recognize_in_path` 强制 on-device（离线、免 Key），完全满足需求。
+//! 锁定 0.5.0：0.8.x 的 Swift 桥接引用了 macOS 26 SDK 才有的 API，旧 SDK 编译报
+//! `extra argument 'weight' in call`；0.5.0 只用 macOS 14+ API，且强制 on-device（离线免 Key）。
 
 /// 请求语音识别授权（幂等：已授权则直接返回）
 /// 返回值：authorized / denied / restricted / not-determined

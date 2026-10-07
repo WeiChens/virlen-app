@@ -15,9 +15,7 @@ use super::common::{
     PERM_SANDBOX_SCRIPT, PERM_SCRIPT,
 };
 
-/// 执行脚本工具（原生）— 创建脚本文件并执行，可选执行后立即删除。
-///
-/// 流程：沙盒校验路径 → （按 script.execute 权限三态审批）→ 写脚本 → 执行 → 按 end_del_file 删除。
+/// 创建脚本文件并执行，可选执行后立即删除。
 pub(crate) async fn execute_script_tool(
     ctx: &NativeToolCtx<'_>,
     args: &Value,
@@ -40,8 +38,7 @@ pub(crate) async fn execute_script_tool(
         timeout = 300;
     }
 
-    // sandbox:"off" → 申请「不使用沙盒」执行脚本（与 execute_command 同语义）。
-    // ⚠️ 只读模式直接拒绝，否则只读保护会被绕过。
+    // sandbox:"off" → 申请无沙盒执行脚本（同 execute_command）。⚠️ 只读模式直接拒绝。
     let ai_requested_bypass = matches!(
         arg_str(args, "sandbox")
             .unwrap_or_default()

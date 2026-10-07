@@ -1,11 +1,6 @@
 /**
- * hooks — 聊天输入框的自定义 hooks
- *
- * useImageAttachment — 图片附件管理（选取 / 粘贴 / 拖拽 / 磁盘路径）
- * useFileAttachment  — 文件附件管理（只存路径，不拷贝文件内容）
- * useQuoteAttachment — 引用消息管理（只存被引用消息的 id / 发送方 / 正文快照）
- * useSkillAttachment — 技能引用管理（读 SKILL.md **全文**快照，与文件附件相反）
- * useVoiceInput      — 语音输入（Web Speech API）
+ * 聊天输入框的自定义 hooks：图片附件（选取 / 粘贴 / 拖拽 / 磁盘路径）、文件附件（只存路径）、
+ * 引用消息（存 id / 发送方 / 正文快照）、技能引用（读 SKILL.md **全文快照**，与文件附件相反）、语音输入。
  */
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
@@ -15,9 +10,7 @@ import { showToast } from '@/ui/components/shared/Toast'
 import { t, tpl } from '@/ui/i18n'
 import { getRegisteredSkill } from '@/skill'
 
-// ====================================================================
 // 图片附件
-// ====================================================================
 
 /** 图片附件 */
 export interface ImageAttachment {
@@ -76,10 +69,7 @@ function fileToDataUrl(file: File): Promise<string> {
   })
 }
 
-/**
- * 图片附件管理 hook
- * 返回 images 状态及操作方法，供 ChatInput 消费
- */
+/** 图片附件管理 hook（images 状态 + 操作方法，供 ChatInput 消费）。 */
 export function useImageAttachment() {
   const [images, setImages] = useState<ImageAttachment[]>([])
 
@@ -106,8 +96,7 @@ export function useImageAttachment() {
   }, [])
 
   /**
-   * 从磁盘路径添加图片（拖拽 / 剪贴板只给路径时使用）
-   * 读字节 → 还原成 File → 走与选图完全相同的压缩链路
+   * 从磁盘路径添加图片（拖拽 / 剪贴板只给路径时用）：读字节 → 还原成 File → 走与选图相同的压缩链路。
    */
   const addImagePaths = useCallback(async (paths: string[]) => {
     const newImages: ImageAttachment[] = []
@@ -139,9 +128,7 @@ export function useImageAttachment() {
   return { images, setImages, addImages, addImagePaths, removeImage, clearImages }
 }
 
-// ====================================================================
 // 文件附件（只存路径，不拷贝文件内容）
-// ====================================================================
 
 /** 文件附件 */
 export interface FileAttachment {
@@ -159,9 +146,7 @@ export interface FileAttachment {
 /** 走「图片分支」的扩展名（与 <input accept> 白名单保持一致） */
 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp']
 
-/**
- * 路径分隔符统一成 /（与全项目其他路径保持一致，便于展示与拼接）
- */
+/** 路径分隔符统一成 /（与全项目其他路径一致，便于展示与拼接） */
 export function normalizeFsPath(p: string): string {
   return p.replace(/\\/g, '/')
 }
@@ -204,10 +189,8 @@ function mimeOf(p: string): string {
 }
 
 /**
- * 读取磁盘上的图片 → dataURL（超尺寸自动压缩）
- *
- * 拖拽进来的是「路径」而不是 File，这里读字节还原成 File，
- * 复用 fileToDataUrl 的压缩逻辑，行为与 <input type="file"> 选图完全一致。
+ * 读取磁盘上的图片 → dataURL（超尺寸自动压缩）。
+ * 拖拽进来的是「路径」而不是 File，这里读字节还原成 File 复用 `fileToDataUrl`，行为与选图完全一致。
  */
 export async function readImageFileAsDataUrl(path: string): Promise<string> {
   const bytes = await tauriFs.readFile(path)
@@ -219,10 +202,8 @@ export async function readImageFileAsDataUrl(path: string): Promise<string> {
 }
 
 /**
- * 文件附件管理 hook
- *
- * 只保存路径与展示元数据（stat 得到的体积 / 是否目录），
- * 不复制、不读取文件内容——真正的读取交给 AI 用 read_file 工具按需完成。
+ * 文件附件管理 hook：只存路径与展示元数据（stat 得到的体积 / 是否目录），不复制不读取内容 ——
+ * 真正的读取交给 AI 用 read_file 工具按需完成。
  */
 export function useFileAttachment() {
   const [files, setFiles] = useState<FileAttachment[]>([])
@@ -272,9 +253,7 @@ export function useFileAttachment() {
   return { files, setFiles, addPaths, removeFile, clearFiles }
 }
 
-// ====================================================================
 // 引用消息（只存被引用消息的元数据 + 正文快照）
-// ====================================================================
 
 /** 引用附件 */
 export interface QuoteAttachment {
@@ -287,11 +266,8 @@ export interface QuoteAttachment {
 }
 
 /**
- * 引用消息管理 hook
- *
- * 与文件 / 图片附件不同，引用不做任何 IO：只把「哪条消息」记下来，
- * 正文以快照形式一并保存——原消息可能被删除、被上下文压缩（summary）替换，
- * 或被分页懒加载移出内存，只存 id 的话发给模型的引用内容会缺。
+ * 引用消息管理 hook。与文件 / 图片附件不同，引用不做任何 IO：只记「哪条消息」+ 正文快照 ——
+ * 原消息可能被删除、被上下文压缩（summary）替换，或被分页懒加载移出内存，只存 id 发给模型的引用会缺。
  */
 export function useQuoteAttachment() {
   const [quotes, setQuotes] = useState<QuoteAttachment[]>([])
@@ -318,9 +294,7 @@ export function useQuoteAttachment() {
   return { quotes, setQuotes, addQuote, removeQuote, clearQuotes }
 }
 
-// ====================================================================
 // 技能引用（存 SKILL.md 全文快照）
-// ====================================================================
 
 /** 技能引用附件 */
 export interface SkillAttachment {
@@ -336,19 +310,14 @@ export interface SkillAttachment {
 }
 
 /**
- * SKILL.md 最大收录字符数
- *
- * 技能说明通常几 KB，但用户完全可以塞一本手册进去——那会把单次请求体撑爆。
- * 超限则截断（并明确提示），而不是静默失败或原样发出去。
+ * SKILL.md 最大收录字符数。技能说明通常几 KB，但用户完全可以塞一本手册进去——那会把单次请求体撑爆。
+ * 超限则截断并明确提示，而不是静默失败或原样发出去。
  */
 const SKILL_MD_MAX_CHARS = 100_000
 
 /**
- * 技能引用管理 hook
- *
- * 与文件附件（只记路径，内容交给模型用工具读）的关键区别：这里**读全文并快照**。
- * 读的是 `skill.path/SKILL.md` 而不是按技能名拼路径——技能目录名允许与
- * frontmatter 的 name 不一致（见 skillStore 的注册逻辑），path 才是权威。
+ * 技能引用管理 hook。与文件附件（只记路径，内容交给模型用工具读）的关键区别：这里**读全文并快照**。
+ * 读 `skill.path/SKILL.md` 而不是按技能名拼路径 —— 技能目录名允许与 frontmatter 的 name 不一致，`path` 才是权威。
  */
 export function useSkillAttachment() {
   const [skills, setSkills] = useState<SkillAttachment[]>([])
@@ -410,9 +379,7 @@ export function useSkillAttachment() {
   }, [])
 
   /**
-   * 按技能名移除引用
-   *
-   * 侧边栏卡片「再点一下取消」和输入框 chip 的 ✕ 走两条路：chip 持有 id，卡片只知道名字。
+   * 按技能名移除引用。侧边栏卡片「再点一下取消」和输入框 chip 的 ✕ 走两条路：chip 持有 id，卡片只知道名字。
    */
   const removeSkillsByName = useCallback((names: string[]) => {
     const targets = new Set(names)
@@ -427,18 +394,13 @@ export function useSkillAttachment() {
   return { skills, setSkills, addSkills, removeSkill, removeSkillsByName, clearSkills }
 }
 
-// ====================================================================
 // 剪贴板里的文件路径（原生）
-// ====================================================================
 
 /**
- * 读系统剪贴板里的文件路径
- *
- * 页面 paste 事件只能拿到 File（有文件名、没有磁盘路径），资源管理器 / VS Code 里
- * 「复制」的文件在 WebView2 里往往连文本形式都拿不到，所以路径统一问原生要。
- * 原生侧识别 Windows 上两种格式：资源管理器的 CF_HDROP、VS Code 的 code/file-list。
- * 非 Tauri 环境 / 平台不支持（macOS、Linux）/ 剪贴板里没有文件，一律返回空数组，
- * 由调用方退回「从剪贴板文本里解析路径」的兜底逻辑。
+ * 读系统剪贴板里的文件路径。页面 paste 事件只能拿到 File（无磁盘路径），资源管理器 / VS Code 里
+ * 「复制」的文件在 WebView2 里往往连文本都拿不到 → 路径统一问原生（Windows 上识别资源管理器的
+ * CF_HDROP、VS Code 的 code/file-list）。非 Tauri / 平台不支持 / 无文件一律返回空数组，
+ * 由调用方退回「从剪贴板文本解析路径」的兜底。
  */
 export async function readClipboardFilePaths(): Promise<string[]> {
   try {
@@ -449,9 +411,7 @@ export async function readClipboardFilePaths(): Promise<string[]> {
   }
 }
 
-// ====================================================================
 // 语音输入
-// ====================================================================
 
 /** 是否在 Tauri 环境 */
 function isTauriEnv(): boolean {
@@ -486,15 +446,10 @@ function mimeToExt(mimeType: string): string {
 }
 
 /**
- * 语音输入 hook
- *
- * ## 双引擎策略
- * - **Tauri macOS**：WKWebView 无 SpeechRecognition，改用
- *   `getUserMedia + MediaRecorder` 录音 → 落盘 → Rust 调 Apple
- *   SFSpeechRecognizer（离线、免 Key）识别。
- * - **其他环境（Chrome / Edge / Windows Tauri）**：使用 Web Speech API（SpeechRecognition）。
- *
- * @param onSpeechResult 语音识别结果回调，接收完整文本
+ * 语音输入 hook（双引擎）：**Tauri macOS** 上 WKWebView 没有 SpeechRecognition，改用
+ * `getUserMedia + MediaRecorder` 录音 → 落盘 → Rust 调 Apple SFSpeechRecognizer（离线、免 Key）；
+ * **其他环境**（Chrome / Edge / Windows Tauri）用 Web Speech API。
+ * @param onSpeechResult 识别结果回调（完整文本）
  */
 export function useVoiceInput(onSpeechResult: (text: string) => void) {
   const [isRecording, setIsRecording] = useState(false)

@@ -1,11 +1,8 @@
 /**
- * message-list「跳转 / 锚点」控制器
+ * message-list「跳转 / 锚点」控制器：锚点点击定位（必要时按需回补历史）、检索跳转（Ctrl+P）
+ * 滚动定位 + 临时高亮、锚点列表跟随最新用户消息、活跃圆点自动滚入可视区。
  *
- * 负责：锚点点击定位（必要时按需回补历史）、检索跳转（Ctrl+P）滚动定位 + 临时高亮、
- * 锚点列表跟随最新用户消息、活跃圆点自动滚入可视区。
- *
- * `pendingJumpIdRef` / `needInitialBottomRef` / `settleTimerRef` 与滚动控制器共享，
- * 由 message-list 控制器创建后注入；回调依赖数组保持与原实现一致。
+ * `pendingJumpIdRef` / `needInitialBottomRef` / `settleTimerRef` 与滚动控制器共享。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Virtualizer } from '@tanstack/react-virtual'
@@ -80,14 +77,12 @@ export function useJumpController({
     [],
   )
 
-  // ==================== 锚点点击：跳转到指定消息（必要时按需回补历史） ====================
   const scrollToMessage = useCallback(
     async (msgId: string, highlight = false) => {
       const sid = chatState.value.currentSessionId
       if (!sid) return
 
-      // ① 已在内存 → 直接跳（count 已包含该消息，可立即跳转）
-      // tool 命中先解析到宿主 assistant（见 resolveJumpAnchorId）
+      // ① 已在内存 → 直接跳（count 已包含该消息）；tool 命中先解析到宿主 assistant
       const inMemoryId = resolveJumpAnchorId(messagesRef.current, msgId) ?? msgId
       const inMemory = messagesRef.current.findIndex((m) => m.id === inMemoryId)
       if (inMemory >= 0) {
@@ -144,9 +139,8 @@ export function useJumpController({
     [jumpTo, setMessages, flashHighlight],
   )
 
-  // ==================== 检索跳转：滚动定位 + 高亮 ====================
-  // 由 Ctrl+P 检索弹窗选中结果时下发 jumpTarget。等目标会话激活后再跳，并取消
-  // 「切会话贴底稳定」流程 —— 否则 settle 轮询会在跳转后把视口重新拉回底部。
+  // 由 Ctrl+P 检索弹窗选中结果时下发 jumpTarget：等目标会话激活后再跳，并取消「切会话贴底稳定」
+  // 流程 —— 否则 settle 轮询会在跳转后把视口重新拉回底部。
   useEffect(() => {
     if (!jumpTarget || !sessionId) return
     if (jumpTarget.sessionId !== sessionId) return

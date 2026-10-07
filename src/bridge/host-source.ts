@@ -1,13 +1,9 @@
 /**
- * 电脑侧真实 `HostDataSource` —— 把手机 RPC 落到本机 `sessionStore` / `chat-service`。
+ * 电脑侧真实 HostDataSource —— 把手机 RPC 落到本机 sessionStore / chat-service。
  *
- * 与 `virlen-remote/testing` 的 mock 宿主**共用同一份分发胶水**（`registerHostHandlers`），
- * 本文件只负责「数据从哪来」与「ACL / 审计」。
- *
- * 分工：
- * - **读**：`sessionStore`（listSessions / messages），白名单投影（`dto.ts`）；
- * - **写**：转发 `chat-service`（sendMessage 的**唯一入口**，杜绝旁路写 store）；
- * - **事件**：不在本文件推 —— 由 `store-bridge.ts` 用 mobx reaction 旁路订阅（§4.1）。
+ * 与 virlen-remote/testing 的 mock 宿主**共用同一份分发胶水**（registerHostHandlers），本文件只管
+ *「数据从哪来」与「ACL / 审计」：读走 sessionStore + 白名单投影（dto.ts）；写转发 chat-service
+ *（sendMessage 的**唯一入口**，杜绝旁路写 store）；事件不在本文件推 —— 由 store-bridge.ts 用 mobx reaction。
  */
 import {
   BridgeError,
@@ -608,7 +604,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
       return { ok: true as const }
     },
 
-    // ───────────────────────── M4 写操作（§16.1）─────────────────────────
+    // M4 写操作（§16.1）
 
     async createSession(params: CreateSessionParams) {
       acl.assert('session.create')
@@ -766,7 +762,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
       return interactions.list()
     },
 
-    // ─────────────────── §22：模型 / Agent / 工作目录 / 上下文 ───────────────────
+    // §22：模型 / Agent / 工作目录 / 上下文
 
     /** 已启用的模型服务与模型（白名单：**不含** apiKey / baseUrl / params）。 */
     listModels(): ModelProviderDTO[] {

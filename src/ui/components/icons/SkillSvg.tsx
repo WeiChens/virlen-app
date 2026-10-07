@@ -1,8 +1,6 @@
 /**
- * SkillSvg — 技能（Skill）图标：拼图块
- *
- * 用于侧边栏技能卡片、输入框技能引用 chip、消息气泡技能卡片。
- * 沿用其它 icon 组件的约定：只接 fill / className，尺寸由使用方的 CSS 决定。
+ * SkillSvg — 技能（Skill）图标：拼图块，用于侧栏技能卡片、输入框技能 chip、气泡技能卡片。
+ * 与其它 icon 一致：只接 fill / className，尺寸由使用方 CSS 决定。
  */
 export default ({ fill, className }: { fill?: string; className?: string }) => {
   return (

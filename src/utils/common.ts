@@ -1,11 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { isValidElement, ReactNode } from 'react'
 
-/**
- * 判断是不是空字符串。null，undefined，""，" "都会返回true
- * @param str
- * @returns
- */
+/** 判断是不是空字符串（null / undefined / "" / 空白串都会返回 true）。 */
 export const isEmpty = (str: string) => {
   if (!str) return true
   if (typeof str == 'number') return false
@@ -13,37 +9,23 @@ export const isEmpty = (str: string) => {
   return false
 }
 
-/**
- * 判断是否全是中文
- * @param str
- * @returns
- */
+/** 是否全是中文。 */
 export function isAllChinaLanguage(str: string) {
   let reg = /^[\u4E00-\u9FFF]+$/
   return reg.test(str)
 }
 
-/**
- * 是否是手机号码
- * @param phone
- * @returns
- */
+/** 是否是手机号码（中国大陆）。 */
 export function isPhone(phone: string) {
   return /^(13[0-9]|14[01456879]|15[0-35-9]|16[2567]|17[0-8]|18[0-9]|19[0-35-9])\d{8}$/.test(
     phone,
   )
 }
-/**
- * 是否是手机号码(全球范围)
- * @param phone
- * @returns
- */
+/** 是否是手机号码（全球范围）。 */
 export function isGlobalPhone(phone: string) {
   return /(\d{1,4})\s?\d{1,4}-?\d{1,9}$/.test(phone)
 }
-/**
- * 获取随机ID
- */
+/** 获取随机 ID。 */
 export const UUID = () => {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
     var r = (Math.random() * 16) | 0,
@@ -54,21 +36,16 @@ export const UUID = () => {
 
 export const ToJSON = (obj: any) => JSON.stringify(obj)
 
-/**
- * 时间格式化
- * @param date
- * @param fmt
- * @returns
- */
+/** 时间格式化（fmt 默认 yyyy-MM-dd hh:mm:ss）。 */
 export const dateFormat = (date: Date, fmt = 'yyyy-MM-dd hh:mm:ss') => {
   var o = {
-    'M+': date.getMonth() + 1, //月份
-    'd+': date.getDate(), //日
-    'h+': date.getHours(), //小时
-    'm+': date.getMinutes(), //分
-    's+': date.getSeconds(), //秒
-    'q+': Math.floor((date.getMonth() + 3) / 3), //季度
-    S: date.getMilliseconds(), //毫秒
+    'M+': date.getMonth() + 1,
+    'd+': date.getDate(),
+    'h+': date.getHours(),
+    'm+': date.getMinutes(),
+    's+': date.getSeconds(),
+    'q+': Math.floor((date.getMonth() + 3) / 3),
+    S: date.getMilliseconds(),
   }
   if (fmt == null) {
     return date.toDateString()
@@ -89,45 +66,26 @@ export const dateFormat = (date: Date, fmt = 'yyyy-MM-dd hh:mm:ss') => {
   return fmt
 }
 
-/**
- * 深拷贝一个对象 注意:函数无法拷贝
- * @param o
- * @returns
- */
+/** 深拷贝一个对象（注意：函数无法拷贝）。 */
 export const copyObject = <T>(o: T): T => JSON.parse(JSON.stringify(o))
 
-/**
- * 睡眠函数
- * @param time 睡眠时间（毫秒）
- */
+/** 睡眠函数（毫秒）。 */
 export const sleep = (time = 200): Promise<true> =>
   new Promise((r, _) => setTimeout(() => r(true), time))
 
-/**
- * 密码加密
- * @param str
- * @returns
- */
+/** 密码加密（转 `\uXXXX` 序列）。 */
 export function decToHex(str: string) {
   var res = []
   for (var i = 0; i < str.length; i++)
     res[i] = ('00' + str.charCodeAt(i).toString(16)).slice(-4)
   return '\\u' + res.join('\\u')
 }
-/**
- * 密码解密
- * @param str
- * @returns
- */
+/** 密码解密。 */
 export function hexToDec(str: string) {
   str = str.replace(/\\/g, '%')
   return unescape(str)
 }
-/**
- * 判断是不是网址
- * @param str
- * @returns
- */
+/** 是否是网址（含域名 / IP / localhost）。 */
 export function isURL(str: string) {
   // 匹配域名（含 localhost）的 URL
   const urlRegex =
@@ -138,11 +96,7 @@ export function isURL(str: string) {
   return urlRegex.test(str.trim()) || ipIP.test(str.trim())
 }
 
-/**
- * 创建一个Date对象，主要是解决苹果端无法用 yyyy-MM-dd的格式创建对象
- * @param res
- * @returns
- */
+/** 创建 Date（解决苹果端无法用 yyyy-MM-dd 格式创建）。 */
 export const newDate = (res: any) => {
   if (typeof res == 'string') {
     return new Date(res.replace(/[-]/g, '/'))
@@ -150,12 +104,7 @@ export const newDate = (res: any) => {
   return new Date(res)
 }
 
-/**
- * 如果的一个参数为 null或0或空字符串，就会返回第二个参数
- * @param value
- * @param exists 兜底值
- * @returns 最后的值
- */
+/** 第一个参数为 null / 0 / 空字符串时返回第二个参数。 */
 export function ifUnExists<T>(value: T, exists: T): T {
   if (typeof value == 'string' && value.trim() == '') {
     return exists
@@ -166,19 +115,11 @@ export function ifUnExists<T>(value: T, exists: T): T {
   return value
 }
 
-/**
- * 是否是邮箱
- * @param email
- * @returns
- */
+/** 是否是邮箱。 */
 export const isEmail = (email: string) =>
   /^[a-zA-Z0-9._%±]+@[a-zA-Z0-9.-]+.[a-zA-Z]{2,}$/.test(email)
 
-/**
- * 解析网址参数
- * @param {string} url
- * @returns
- */
+/** 解析网址参数，返回 { path, query }。 */
 export function parseUrl(url: string) {
   if (!url.includes('?')) {
     return {
@@ -198,12 +139,7 @@ export function parseUrl(url: string) {
     query,
   }
 }
-/**
- * 根据年月获取日数
- * @param year
- * @param months
- * @returns
- */
+/** 根据年月获取当月天数。 */
 export const getMonthDates = (year: number, months: number) => {
   const arr = [1, 3, 5, 7, 8, 10, 12]
   if (arr.includes(months)) return 31
@@ -310,9 +246,7 @@ function appendFormData(formData: FormData, data: any, parentKey = '') {
   }
 }
 /**
- * 将对象转换为 FormData
- * @param obj
- * @returns
+ * 将对象转换为 FormData。
  */
 export function objectToFormData(obj: any) {
   const formData = new FormData()
@@ -321,11 +255,8 @@ export function objectToFormData(obj: any) {
 }
 
 /**
- * 节流函数 - 确保函数在指定时间内最多执行一次
- * @param fn 需要节流的函数
- * @param wait 等待时间（毫秒）
- * @param immediate 是否立即执行
- * @returns 节流后的函数
+ * 节流函数 —— 确保函数在指定时间内最多执行一次。
+ * @param wait 等待时间（毫秒）；@param immediate 是否首次立即执行
  */
 export function throttle<T extends (...args: any[]) => any>(
   fn: T,
@@ -363,9 +294,7 @@ export function throttle<T extends (...args: any[]) => any>(
     }
   }
 }
-/**
- * 压缩图片文件
- */
+/** 压缩图片文件（居中裁成 size×size 的 jpeg）。 */
 export function compressImage(file: File, size = 200) {
   const [p, resolve, reject] = createResolvablePromise<File>()
   const reader = new FileReader()
@@ -446,10 +375,10 @@ export function fomatFloat(num: number | string, n = 2) {
   if (isNaN(f)) {
     return false
   }
-  f = Math.round(num * Math.pow(10, n)) / Math.pow(10, n) // n 幂
+  f = Math.round(num * Math.pow(10, n)) / Math.pow(10, n)
   let s = f.toString()
   let rs = s.indexOf('.')
-  //判定如果是整数，增加小数点再补0
+  // 整数：补小数点与 n 位 0
   if (rs < 0) {
     rs = s.length
     s += '.'
@@ -459,12 +388,7 @@ export function fomatFloat(num: number | string, n = 2) {
   }
   return s
 }
-/**
- * 尝试解析 JSON 字符串
- * @param str
- * @param defaultValue
- * @returns
- */
+/** 尝试解析 JSON 字符串，失败返回 defaultValue。 */
 export function tryParseJson(str: string, defaultValue: any = null) {
   if (!str) {
     return defaultValue
@@ -483,12 +407,7 @@ export function tryParseJson(str: string, defaultValue: any = null) {
 export function endsWith(str: string, suffix: string[]) {
   return suffix.some((s) => str.endsWith(s))
 }
-/**
- * 列表分组
- * @param list
- * @param groupKey
- * @returns
- */
+/** 列表按 groupKey 分组。 */
 export function listGroup<T>(list: T[], groupKey: keyof T) {
   const groupList: {
     name: T[keyof T]
@@ -538,12 +457,7 @@ export function htmlToText(html: string) {
   return div.textContent || div.innerText || ''
 }
 
-/**
- * 获取url文件名
- * @param url url
- * @param defaultName 默认文件名
- * @returns
- */
+/** 从 URL 取文件名（取不到用 defaultName）。 */
 export function getUrlFileName(url: string, defaultName = 'download') {
   if (!url) return defaultName
   const fileName = url
@@ -555,10 +469,7 @@ export function getUrlFileName(url: string, defaultName = 'download') {
 }
 
 /**
- * 将绝对路径转为相对路径（相对于工作目录）
- * @param absolutePath 绝对路径
- * @param workspace 工作目录，不传则从 settingsState 读取
- * @returns 如果在工作目录下返回相对路径，否则返回原路径
+ * 将绝对路径转为相对路径（相对于工作目录）：在工作目录下返回相对路径，否则返回原路径。
  */
 export function toShortPath(absolutePath: string, workspace?: string): string {
   if (!absolutePath) return absolutePath
@@ -577,17 +488,10 @@ export function toShortPath(absolutePath: string, workspace?: string): string {
 /**
  * 把（可能是相对工作目录的）路径补成绝对路径 —— `toShortPath` 的逆操作。
  *
- * 为什么需要：工具卡片上显示的路径是相对工作目录的短路径，而工具**入参**里 LLM 也常
- * 写相对路径（系统提示词已告知当前工作目录）。但交给系统的能力（`openPath` /
- * `revealItemInDir`）只认绝对路径：把 `src/a.ts` 直接交给「在文件管理器中显示」，
- * 资源管理器会定位到错误目录 / 直接失败。
- *
- * 判定「已是绝对路径」（与 `securityService.resolveSafePath` 同款）：以 `/`、`\`
- * （POSIX 根 / UNC / Windows 根）开头，或形如 `C:` 的盘符。`workspace` 为空时原样返回
- * （宁可不改，也不要拼出一个错误的路径）。
- *
- * @param path 原始路径（可能是绝对的，也可能是相对工作目录的）
- * @param workspace 工作目录；缺省则原样返回
+ * 为什么需要：工具卡片显示的是相对短路径，而 LLM 也常写相对路径；但交给系统的能力（`openPath` /
+ * `revealItemInDir`）只认绝对路径，把 `src/a.ts` 直接交给「在文件管理器中显示」会定位到错误目录 / 失败。
+ * 判定「已是绝对路径」（与 `resolveSafePath` 同款）：以 `/`、`\`（POSIX 根 / UNC / Windows 根）开头，或形如
+ * `C:` 的盘符。`workspace` 为空时原样返回（宁可不改，也不拼出错误路径）。
  */
 export function toAbsolutePath(path: string, workspace?: string): string {
   if (!path) return path
@@ -602,10 +506,7 @@ export function toAbsolutePath(path: string, workspace?: string): string {
   return `${base}/${rel}`
 }
 
-/**
- * 获取文件父级路径
- * @param path 
- */
+/** 获取文件父级路径。 */
 export function getFileParentDir(path: string) {
   path = path.replace(/\\/g, '/').replace(/\/+$/, '')
   return path.substring(0, path.lastIndexOf('/'))
@@ -629,11 +530,7 @@ export const disableNotNumber = (e: React.KeyboardEvent<HTMLDivElement>) => {
   }
 }
 
-/**
- * 格式化时间为相对时间显示
- * @param date 要格式化的日期对象
- * @returns 格式化后的时间字符串
- */
+/** 格式化时间为相对时间显示（如 X 秒前 / 今日 h:mm / 周一 h:mm）。 */
 export function formatRelativeTime(date: Date): string {
   const now = new Date()
 
@@ -753,7 +650,7 @@ export function getMatch<T = any>(
 let _platform: 'windows' | 'macos' | 'linux' | null = null
 
 /**
- * 检测当前操作系统平台。
+ * 检测当前操作系统平台（Rust os_platform 权威，失败用 UA 兜底）。
  */
 export async function getPlatform(): Promise<'windows' | 'macos' | 'linux'> {
   if (_platform) return _platform

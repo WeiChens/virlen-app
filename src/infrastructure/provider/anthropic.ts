@@ -1,11 +1,7 @@
 /**
- * Anthropic Provider — 使用 Anthropic Messages API 格式
- *
- * 与 OpenAI（content 为字符串/tool_calls 在顶层）不同：
- * - content 始终为 block array，tool_use/tool_result 嵌入 content 内
- * - 流式输出包含 content_block_delta / content_block_stop 事件
- * - 使用 x-api-key header
- * - API 端点：https://api.anthropic.com/v1/messages
+ * Anthropic Provider —— 使用 Anthropic Messages API 格式（与 OpenAI 不同）：content 始终为 block array，
+ * tool_use / tool_result 嵌入 content 内；流式含 content_block_delta / content_block_stop 事件；用 x-api-key header。
+ * 端点：https://api.anthropic.com/v1/messages
  */
 import type {
   Message,

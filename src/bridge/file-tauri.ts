@@ -1,27 +1,18 @@
 /**
- * Tauri 版文件系统端口（§37 的生产实现）—— `FileSystemPort` 的真身。
+ * Tauri 版文件系统端口（§37 的生产实现）—— FileSystemPort 的真身。
  *
- * 与 `file-source.ts` 的分工：**那一层管纪律**（带宽上限、临时文件、越权路径规整、ACL），
- * 本文件只管「本机的文件系统怎么读写」。分开的收益是 `file-source.ts` 的全部纪律都能在没有
- * Tauri 的环境里被单测（注入内存端口），而这里剩下的只有 API 形状的适配。
+ * 与 file-source.ts 分工：那一层管纪律（带宽上限、临时文件、越权路径规整、ACL），本文件只管「本机文件
+ * 系统怎么读写」。于是 file-source 的全部纪律都能在无 Tauri 环境被单测，这里只剩 API 形状的适配。
  *
- * ## 为什么读取要 `open + seek + read` 而不是 `readFile`
+ * 读取用 open + seek + read 而非 readFile：readFile 会把**整个文件**读进内存（点开 500MB 视频先 OOM），
+ * 而我们只要前 256KB。故 capabilities 里开了 fs:allow-open / fs:allow-seek，边界由 fs:scope 与本层传入的
+ * **已过安全校验的绝对路径**共同决定。
  *
- * `plugin-fs.readFile()` 把**整个文件**读进内存：手机上点开一个 500MB 的视频，webview 先 OOM，
- * 而我们只要前 256KB。分块读取必须靠文件句柄（`seek` 到偏移再读一段），
- * 于是 `capabilities/default.json` 里开了 `fs:allow-open` 与 `fs:allow-seek`
- * —— 前者不带范围，实际边界由 `fs:scope`（`**`）与本层传入的**已过安全校验的绝对路径**共同决定。
+ * 写入用 append: true 而非自己维护偏移：临时文件只追加，让系统调用负责定位，顺序性由 file-source 校验
+ *（offset 必须等于已接收字节数），两层合起来才等于「写进去的字节就是传出去的字节」。
  *
- * ## 为什么写入用 `append: true` 而不是自己维护偏移
- *
- * 临时文件是**只追加**的（`begin` 建、`chunk` 追加、`finish` 改名）。让系统调用负责定位，
- * 我们只保证「按顺序、按已接收字节数」地追加 —— 顺序性由 `file-source.ts` 校验
- * （`offset` 必须等于已接收字节数），两层合起来才等于「写进去的字节就是传出去的字节」。
- *
- * ## 覆写（编辑保存）为什么是 `rename` 覆盖，而不是「删了再写」
- *
- * `rename` 覆盖目标是一个**原子**动作，而「先删目标、再把临时文件改过去」会在两次调用之间留下一个
- * 「文件不存在」的窗口 —— 用户的编辑器 / 构建工具完全可能正好在那个窗口里读到 404。
+ * 覆写用 rename 覆盖而非「删了再写」：rename 覆盖是**原子**动作，而「先删目标、再把临时文件改过去」会在
+ * 两次调用之间留下一个「文件不存在」的窗口（用户的编辑器 / 构建工具可能正好读到 404）。
  */
 import { invoke } from '@tauri-apps/api/core'
 import * as tauriFs from '@tauri-apps/plugin-fs'

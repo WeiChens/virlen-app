@@ -9,13 +9,11 @@ import type { MessageContent, ProviderConfig, Session } from '@/types'
 import type { AgentEnginePort } from '@/domain/ports'
 import { rustEngine } from '@/services/rust-engine'
 
-// ==================== 埋点辅助（§5.4 / §5.5） ====================
+// 埋点辅助（§5.4 / §5.5）
 
 /**
- * 引擎标识 —— 恒为 `'rust'`。
- *
- * TS 引擎已移除（引擎统一为 Rust）；保留本函数只因为埋点字段 `engine` 的**历史取值**
- * 含 `'ts'`，历史数据仍要能区分。
+ * 引擎标识 —— 恒为 'rust'。TS 引擎已移除；保留本函数只因为埋点字段 `engine` 的
+ * **历史取值**含 `'ts'`，历史数据仍要能区分。
  */
 function engineKind(): 'rust' {
   return 'rust'
@@ -58,9 +56,7 @@ function describeContent(content: MessageContent): {
 
 /**
  * 获取当前 Agent 引擎 —— **恒为 Rust 引擎**。
- *
- * TS 引擎已移除（引擎统一为 Rust）；非 Tauri 环境（浏览器 dev / vitest）没有后端，
- * 不再有回退引擎 —— 产品不走纯浏览器路线。
+ * TS 引擎已移除；非 Tauri 环境（浏览器 dev / vitest）没有回退引擎 —— 产品不走纯浏览器路线。
  */
 export function getEngine(): AgentEnginePort {
   return rustEngine
@@ -72,10 +68,7 @@ export function getCompressEngine(): AgentEnginePort {
 }
 
 /**
- * 解析本次请求实际使用的推理强度
- *
- * 优先级：会话级选择（聊天界面切换）> 服务商配置的默认值；
- * 两者都没有则不传该参数，交给服务端默认行为。
+ * 解析本次请求实际使用的推理强度：会话级选择 > 服务商配置默认值；都没有则不传（交给服务端默认）。
  */
 function resolveReasoningEffort(
   session: Session,

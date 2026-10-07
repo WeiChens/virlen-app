@@ -56,34 +56,9 @@
 //! │   └── web_search.rs      经已配置搜索源检索（tavily / bocha；直读 `app_settings`）
 //! ```
 //!
-//! 覆盖工具（与 JS `toolRegistry` 同名工具对齐）：
-//! - `execute_command`：shell 命令执行（风险分类 → 审批 → 原生 spawn + 超时/取消）
-//! - `execute_script`：写脚本文件并执行（可选执行后删除）
-//! - `read_file` / `edit_file` / `write_file` / `list_files` / `delete_file` / `file_info`
-//!   / `copy_move_file` / `mkdir`
-//! - `search_files_by_name` / `search_text_in_files`
-//! - `search_knowledge_base` / `list_knowledge_bases` / `list_knowledge_base_documents`
-//!   / `get_knowledge_base_document` / `delete_knowledge_base_document` / `write_to_knowledge_base`
-//! - `todo_write`：任务清单全量替换（无状态；清单随 tool_result 的 `content` + `uiData` 落库）
-//! - `user_choice`：向用户提问（`Interaction` 变体 → 与 TS 引擎同一条用户交互通道）
-//! - `list_messages` / `read_messages`：查询「已被上下文压缩掉」的历史（经 `SessionRepo` 直读 SQLite；
-//!   `repo.is_available() == false` 时如实回「本地存储不可用」，与 JS 路径文案一致）
-//! - `list_skills` / `read_skill_source`：技能列表与源码（扫 `security.skills_dir` + 解析 SKILL.md，
-//!   不依赖前端 localStorage 注册表 —— 无 JS 的 CLI 同样可用）
-//! - `get_current_time`：当前时间（`chrono-tz` 内置 IANA 库；uiData 只下发
-//!   `{ timestamp, timezone }`，界面语言由 UI 组件重建）——
-//!   无 JS 的纯 Rust CLI 没有 `Intl`，故必须原生
-//! - `vision_analyze`：端侧视觉分析（quasivision；模型目录经 `ctx.host` 定位，
-//!   实现与 GUI 命令壳共用 `crate::vision` —— 纯端侧，图片不出本机）
-//! - `web_fetch`：抓 URL（reqwest + htmd；二进制响应拒绝 / 超时·取消 / 20k 字符截断）
-//! - `web_search`：经已配置搜索源检索（tavily / bocha）—— 配置直读 `ctx.settings`
-//!   （`app_settings`，与「忽略沙盒命令」同一份来源），因此 CLI 同样可用
-//! - `memory_search` / `memory_recall` / `memory_write`：长期记忆的召回与写入（`ctx.memory` 直读
-//!   同一份 `virlen.db`；详情正文落专用知识库，条目只留 link）—— 语义实现在 `agent::memory::tools`，
-//!   与 GUI 命令 `cmd_memory_*` 共用一份
-//!
-//! 至此 **31 个工具全部有 Rust 原生实现**（不再有走 JS 桥的工具）。
-//! 安全策略与前端 `securityService.resolveSafePath` / `securityPort.isPathAllowed` 对齐。
+//! **31 个工具全部有 Rust 原生实现**（不再有走 JS 桥的工具）。安全策略与前端
+//! `securityService.resolveSafePath` / `securityPort.isPathAllowed` 对齐；各工具的模型侧
+//! `content` / `uiData` 与 TS 回退路径逐字对齐（铁律 1）。
 
 mod chat;
 mod common;
@@ -143,12 +118,9 @@ impl NativeToolOutcome {
         }
     }
 
-    /// 带结构化 `ui_data` 的失败
-    ///
-    /// 与 `Value` 同一套 D2 语义：`content` 给模型看（固定英文），`ui_data` 给 UI 看
-    /// （语言无关的结构化字段，由前端组件按界面语言重建文案）。
-    /// 例：`execute_command` 退出码 >= 2 时仍下发 `{ stdout, stderr, exitCode, pty, waitReason }`，
-    /// 界面就不会把英文失败报告直接贴给用户。
+    /// 带结构化 `ui_data` 的失败（D2 语义同 `Value`：`content` 给模型固定英文，`ui_data`
+    /// 给 UI 按界面语言重建）。例：`execute_command` 退出码 >= 2 时仍下发
+    /// `{ stdout, stderr, exitCode, pty, waitReason }`。
     pub(crate) fn error_with_ui(content: impl Into<String>, ui_data: Value) -> Self {
         Self::Error {
             content: content.into(),
@@ -165,68 +137,42 @@ pub struct NativeToolCtx<'a> {
     pub sink: &'a dyn EventSink,
     pub bridge: &'a AgentBridgeState,
     pub security: &'a NativeToolSecurity,
-    /// 会话持久化后端（消息查询工具用）。
-    ///
-    /// 与 `security` 同样的显式依赖注入：
-    /// - Agent 引擎路径 → `execute_tool_steps` 传入的 `SessionRepo`（SQLite 或 Noop）；
-    /// - TS 引擎路径（`run_command_for_ts_engine`）与测试 → [`noop_repo`]（可用性 false）。
+    /// 会话持久化后端（消息查询工具用）。显式注入：Agent 引擎路径传入真实 `SessionRepo`；
+    /// TS 引擎路径与测试用 [`noop_repo`]（可用性 false）。
     pub repo: &'a dyn SessionRepo,
-    /// 本 agent 启用的技能名（`session.skills`）。
-    ///
-    /// 技能工具（`list_skills` / `read_skill_source`）用它做过滤与授权判断：
-    /// JS 入参（桥载荷）里的 `skills` 与这里同源，只是原生路径不再绕一圈桥。
+    /// 本 agent 启用的技能名（`session.skills`）—— 技能工具用它做过滤与授权判断。
     pub skills: Option<&'a [String]>,
-    /// 宿主环境（资源目录 / 数据目录）。
-    ///
-    /// 同样是显式注入（与 `security` / `repo` / `skills` 一致）：Agent 引擎路径 → `AgentEngine.host`
-    /// （GUI = `TauriHost`，CLI = `CliHost`）；回退路径与测试 → `host::default_host()`。
-    /// 用途：`vision_analyze` 需要「模型文件在哪」，而那是宿主才知道的信息。
-    /// ⚠️ 引擎核心里的 `tauri::` 命中数必须保持 0，宿主差异全部收在 `HostEnv` 后端。
+    /// 宿主环境（资源目录 / 数据目录）。显式注入：GUI = `TauriHost`，CLI = `CliHost`，
+    /// 回退路径与测试 = `host::default_host()`。用途：`vision_analyze` 定位模型文件。
+    /// ⚠️ 引擎核心里 `tauri::` 命中数必须保持 0，宿主差异全收在 `HostEnv` 后端。
     pub host: &'a dyn HostEnv,
-    /// 应用配置仓储（`app_settings` 表）—— 需要「读配置」的原生工具用。
-    ///
-    /// 与 `repo` / `host` 同样的显式注入：
-    /// - GUI / CLI 引擎 → 与会话库**共用同一把连接**的 `SqliteSettingsRepo`（`SessionDb::settings`）；
-    /// - TS 引擎路径与测试 → [`noop_settings`]（`get_all()` 返回空表 → 工具按「未配置」处理）。
-    ///
-    /// 用途：`web_search` 读 `searchProviders` / `defaultSearchProviderId` ——
-    /// 与 S7 的 `security::load_sandbox_ignore_rules` 是**同一份配置来源**
-    /// （都落在 `app_settings`，因此 GUI 与 CLI 不分叉）。
+    /// 应用配置仓储（`app_settings` 表）—— 需要读配置的原生工具用。显式注入：GUI / CLI 用
+    /// 与会话库共连接的 `SqliteSettingsRepo`；TS 引擎路径与测试用 [`noop_settings`]（空表 →
+    /// 工具按「未配置」处理）。用途：`web_search` 读 `searchProviders` / `defaultSearchProviderId`。
     pub settings: &'a dyn SettingsRepo,
-    /// 长期记忆仓储（`memories` 表）。
-    ///
-    /// 与会话库**共用同一把连接锁**（`open_session_db` 里同一个 `Arc<Mutex<Connection>>`），
-    /// 因此记忆写入与会话写入天然互斥，不需要额外同步。
-    ///
-    /// 回退路径（TS 引擎入口 / 无库环境）→ [`noop_memory`]：三个记忆工具会如实回
-    /// 「本地存储不可用」，而不是把「读不到」说成「没有记忆」。
+    /// 长期记忆仓储（`memories` 表）。与会话库共用同一把连接锁，写入天然互斥。
+    /// 回退路径（TS 引擎入口 / 无库环境）→ [`noop_memory`]：记忆工具如实回「本地存储不可用」。
     pub memory: &'a dyn MemoryRepo,
 }
 
-/// 无持久化后端的 `SessionRepo` 占位（回退路径的 ctx 只需要一个可用引用）。
-///
-/// ⚠️ `NoopSessionRepo::is_available() == false`，因此消息查询工具会如实回「本地存储不可用」—— 而不是把空
-/// 结果误报成「该会话还没有消息」。
+/// 无持久化后端的 `SessionRepo` 占位。⚠️ `is_available() == false`，消息查询工具会如实回
+/// 「本地存储不可用」，而不是把空结果误报成「该会话还没有消息」。
 pub fn noop_repo() -> &'static NoopSessionRepo {
     static REPO: once_cell::sync::Lazy<NoopSessionRepo> =
         once_cell::sync::Lazy::new(NoopSessionRepo::default);
     &REPO
 }
 
-/// 无持久化后端的 `SettingsRepo` 占位（TS 引擎路径与测试用）。
-///
-/// `get_all()` 返回**空表**（不是 Err）—— 因此依赖配置的工具会得到「未配置」这种
-/// 正常业务结论，而不是把「没有后端」误报成工具失败。
+/// 无持久化后端的 `SettingsRepo` 占位（TS 引擎路径与测试用）。`get_all()` 返回空表（不是 Err），
+/// 依赖配置的工具因此得到「未配置」这种正常结论，而非误报工具失败。
 pub fn noop_settings() -> &'static NoopSettingsRepo {
     static SETTINGS: once_cell::sync::Lazy<NoopSettingsRepo> =
         once_cell::sync::Lazy::new(NoopSettingsRepo::default);
     &SETTINGS
 }
 
-/// 无持久化后端的 `MemoryRepo` 占位（回退路径的 ctx 只需要一个可用引用）。
-///
-/// ⚠️ `NoopMemoryRepo::is_available() == false`，因此记忆工具会如实回「本地存储不可用」——
-/// 而不是把空结果误报成「没有相关记忆」。
+/// 无持久化后端的 `MemoryRepo` 占位。⚠️ `is_available() == false`，记忆工具如实回
+/// 「本地存储不可用」，而不是把空结果误报成「没有相关记忆」。
 pub fn noop_memory() -> &'static NoopMemoryRepo {
     static MEMORY: once_cell::sync::Lazy<NoopMemoryRepo> =
         once_cell::sync::Lazy::new(NoopMemoryRepo::default);
@@ -319,18 +265,11 @@ pub async fn execute_native_tool(
     }
 }
 
-/// 供 **TS 引擎路径** 执行命令（`docs/pty-research.md` §7 #14）。
+/// 供 **TS 引擎路径** 执行命令（`docs/pty-research.md` §7 #14）：把执行下沉到原生运行器
+/// （沙盒优先 + ConPTY + 超时/取消/接管），经 `EventSink` 流式回传。
 ///
-/// TS 引擎的 `execute_command` 原先走 `plugin-shell` 匿名管道（无沙盒 / 无 ANSI / 无交互）。
-/// 这里把「执行」下沉到 Rust 原生运行器（`run_command_native`：沙盒优先 + ConPTY +
-/// 超时/取消/接管），输出经调用方提供的 `EventSink` 流式回传。
-///
-/// 与 `execute_native_tool(ctx, "execute_command", args)` 的**唯一区别**：
-/// **不做风险分类与审批** —— 审批（权限三态 / `sandbox:"off"` 强制审批）
-/// 由 TS 侧的 `execute_command` 工具负责，本入口只负责「执行一条已获批准的命令」。
-///
-/// `bypass` 为脱壳原因（`None` / `Requested` / `Rule`）—— 用枚举而非两个 `bool`，
-/// 既避免 `(true, true)` 这种无法表达优先级的非法组合，也把参数个数控制在 7 个以内。
+/// 与 `execute_native_tool` 的**唯一区别**：**不做风险分类与审批**（那由 TS 侧负责），
+/// 本入口只执行一条已获批准的命令。`bypass` 用枚举而非两个 `bool`，避免非法组合。
 pub async fn run_command_for_ts_engine(
     sink: &dyn EventSink,
     session_id: &str,
@@ -340,9 +279,8 @@ pub async fn run_command_for_ts_engine(
     timeout_secs: i64,
     bypass: execute::SandboxBypass,
 ) -> Result<NativeToolOutcome, String> {
-    // 取消：TS 引擎的「终止」按钮走 `agent_kill_command`（运行中命令注册表），
-    // 不依赖这个 token；这里用一个不会被触发的 token 即可
-    // （`run_command_native` 内部另有独立的 kill 通道）。
+    // TS 引擎的「终止」走 `agent_kill_command`（运行中命令注册表），不依赖这个 token，
+    // 故用一个永不触发的 token（`run_command_native` 内部另有独立 kill 通道）。
     let cancel = CancellationToken::new();
     let bridge = AgentBridgeState::default();
     let ctx = NativeToolCtx {
@@ -354,8 +292,8 @@ pub async fn run_command_for_ts_engine(
         security,
         repo: noop_repo(),
         skills: None,
-        // 本入口不经过 AgentEngine（TS 引擎路径），拿不到构造期注入的宿主；
-        // `execute_command` 也不用宿主信息，故用进程级默认宿主。
+        // TS 引擎路径不经过 AgentEngine，拿不到构造期注入的宿主；execute_command 也不用
+        // 宿主信息，故用进程级默认宿主。
         host: crate::host::default_host().as_ref(),
         settings: crate::agent::native_tools::noop_settings(),
         memory: crate::agent::native_tools::noop_memory(),

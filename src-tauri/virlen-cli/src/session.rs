@@ -7,14 +7,10 @@
 //! virlen-cli session purge [--yes]
 //! ```
 //!
-//! 存在的理由：CLI 此前只能「列会话」与「续跑会话」，既删不掉、也看不见一条会话里到底有什么 ——
-//! 桌面端能做的这两件事在 headless 下没有替代品（只能手改 SQLite）。
+//! 为什么存在：CLI 此前只能「列会话 / 续跑会话」，既删不掉也看不见会话内容（只能手改 SQLite）。
 //!
-//! ## 与 `list-session --search` 的分工
-//!
-//! 名字像、语义不同，所以两处帮助文本都写死了这件事（不写，用户一定会以为是一个东西）：
-//! - `list-session --search`：**只看会话元数据**（标题 / 工作目录 / 模型 / Agent 名），不碰正文；
-//! - `session search`：**检索消息正文**（可跨会话，走 `SessionRepo::search_messages`），返回命中片段。
+//! `list-session --search`（只看会话元数据：标题 / 工作目录 / 模型 / Agent 名）vs `session search`
+//! （检索消息正文，可跨会话，走 `SessionRepo::search_messages`，返回命中片段）—— 名字像、语义不同。
 //!
 //! ## 两条与桌面端一致的口径（写在这里，免得各处再解释一遍）
 //!

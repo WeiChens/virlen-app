@@ -1,12 +1,8 @@
 /**
- * FileChip — 文件附件标签（输入框 / 消息气泡共用）
+ * FileChip — 文件附件标签（输入框 / 消息气泡共用）：[类型图标] 文件名 体积 [×]
  *
- * 只承载「文件绝对路径」，不拷贝文件内容：
- *   [类型图标] 文件名 体积 [×]
- *
- * - hover 显示完整路径（路径才是这条数据的本体，必须可核对）
- * - 文件名过长时只省略主干，扩展名始终可见
- * - 传入 onClick 时主体可点击（消息气泡里用于打开文件）；传入 onRemove 时显示移除按钮
+ * 只承载「文件绝对路径」，不拷贝内容；hover 显示完整路径（路径才是本体，必须可核对）；
+ * 文件名过长时只省略主干、扩展名始终可见。
  */
 import FileTypeIcon from '@/ui/components/icons/FileTypeIcon'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
@@ -31,7 +27,7 @@ interface Props {
   className?: string
 }
 
-/** 从路径取文件名（兼容 / 与 \） */
+/** 取路径末段作文件名（兼容 / 与 \） */
 export function fileNameOf(path: string): string {
   const parts = path.replace(/\\/g, '/').split('/')
   return parts[parts.length - 1] || path

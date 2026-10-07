@@ -1,13 +1,10 @@
 /**
- * Rust 引擎适配器 — 实现与 TS AgentEngine 相同的 AgentEnginePort 接口
+ * Rust 引擎适配器 — 实现 AgentEnginePort（与已移除的 TS AgentEngine 同接口）。
  *
- * 平滑过渡的关键：
- * - chat-service 无感知调用（`getEngine()` 恒返回本适配器；TS 引擎已移除）
- * - 事件契约与 Rust 引擎 emit 的 `agent:event` 一致
- * - 工具执行 / 用户交互 / Gemini Provider 通过双向桥回 JS
- * - 原生 OpenAI / Anthropic 由 Rust 直接 HTTP 调用
+ * chat-service 无感知调用（getEngine() 恒返回本适配器）；事件契约与 Rust emit 的 agent:event 一致；
+ * 工具执行 / 用户交互 / Gemini Provider 走双向桥回 JS，原生 OpenAI / Anthropic 由 Rust 直接 HTTP 调用。
  *
- * 桥协议（与 src-tauri/virlen-core/src/agent/bridge.rs 对应）：
+ * 桥协议（对应 src-tauri/virlen-core/src/agent/bridge.rs）：
  * - Rust → JS: agent:tool-request / agent:user-interaction-request / agent:provider-request
  * - JS → Rust: agent_tool_response / agent_user_interaction_response /
  *              agent_provider_stream_event / agent_provider_stream_done
@@ -40,10 +37,8 @@ type InteractionHandler = (
 type RoundBoundaryHandler = (sessionId: string) => Message[]
 
 /**
- * 会话级交互处理器。
- *
- * 值里带一个**归属令牌**：注册方（每个 run 一次）持有它，注销时回传 —— 用于防止
- * 交错的 run 互删处理器（见 `unregisterSessionToolHandler`）。
+ * 会话级交互处理器。值里带**归属令牌**：注册方（每个 run 一次）持有它，注销时回传 ——
+ * 防止交错的 run 互删处理器（见 `unregisterSessionToolHandler`）。
  */
 const sessionHandlers = new Map<
   string,
@@ -52,10 +47,8 @@ const sessionHandlers = new Map<
 let roundBoundaryHandler: RoundBoundaryHandler | null = null
 
 /**
- * 注册轮次边界处理器。
- *
- * 用注册而不是直接 import `services/todo-service`：本模块已被 todo-service 引用
- * （`isTauriAvailable`），反向 import 会形成循环依赖。
+ * 注册轮次边界处理器。用注册而非直接 import services/todo-service：本模块已被 todo-service 引用
+ *（isTauriAvailable），反向 import 会形成循环依赖。
  */
 export function setRoundBoundaryHandler(
   handler: RoundBoundaryHandler | null,
@@ -74,10 +67,9 @@ export function registerSessionToolHandler(
 /**
  * 注销会话的交互处理器，返回的**归属令牌**必须原样回传。
  *
- * ⚠️ 为什么要令牌（2026-10）：原先只按 `sessionId` 注销，交错的 run（同一会话重发、
- * 手机端与桌面端几乎同时发、暂停恢复）会互相删表 —— 先结束的那个把后一个的处理器删掉，
- * 后一个的 `user_choice` / 授权请求就落到「无处理器」分支：用户什么都没看到，AI 却收到「用户取消」。
- * 传令牌时做归属校验（已被顶替 → 什么都不做）；不传 = 无条件注销（兼容旧调用 / 测试清理）。
+ * ⚠️ 为什么用令牌：原先只按 sessionId 注销，交错的 run（同会话重发、手机与桌面几乎同时发、暂停恢复）
+ * 会互相删表 —— 先结束的把后一个的处理器删掉，后一个的 user_choice / 授权落到「无处理器」分支：
+ * 用户什么都没看到，AI 却收到「用户取消」。传令牌做归属校验（已被顶替 → 不动作）；不传 = 无条件注销。
  */
 export function unregisterSessionToolHandler(
   sessionId: string,
@@ -94,11 +86,9 @@ let bridgeStartPromise: Promise<void> | null = null
 /**
  * 当前命令的实时输出是否来自 PTY（伪控制台）。
  *
- * 后端在 Windows 上已把 `execute_command` 的 stdio 换成 ConPTY（docs/pty-research.md §8 Step 1），
- * 输出是带光标控制的 VT 流，必须交给 xterm；其他平台仍是匿名管道，继续走 `<pre>`。
- *
- * 这里只能做到「运行中」的预判（平台），完成态以后端权威字段 `uiData.pty` 为准。
- * 若伪控制台创建失败，后端会降级回管道并下发 `pty: false`，UI 会在结束瞬间切回 `<pre>`。
+ * Windows 后端已把 execute_command 的 stdio 换成 ConPTY（docs/pty-research.md §8 Step 1），输出是带光标
+ * 控制的 VT 流，须交给 xterm；其余平台仍走匿名管道 <pre>。这里只做「运行中」的平台预判，完成态以后端
+ * 权威字段 uiData.pty 为准（伪控制台创建失败会降级回管道并下发 pty:false，UI 结束瞬间切回 <pre>）。
  */
 function ptyLiveEnabled(): boolean {
   return platformSnapshot() === 'windows'
@@ -166,7 +156,7 @@ function ensureBridgeStarted(): Promise<void> {
   return bridgeStartPromise
 }
 
-// ==================== 桥接处理 ====================
+// 桥接处理
 
 async function handleToolRequest(payload: {
   requestId: string
@@ -271,9 +261,8 @@ async function handleRoundBoundary(payload: {
   }
   await invoke('agent_round_boundary_response', {
     requestId,
-    // 孤立代理（被截断的半个 emoji）经 JSON.stringify 会变成 `\ud83d`，
-    // 而 Rust 侧 serde_json 要求代理对成对 → 整个 invoke 直接失败（然后走 5s 超时）。
-    // 注入内容含用户手写的任务正文，必须与发送消息同一条防线。
+    // 孤立代理（被截断的半个 emoji）经 JSON.stringify 会变成 `\ud83d`，Rust serde_json 要求代理对成对
+    // → 整个 invoke 直接失败（然后走 5s 超时）。注入内容含用户手写的任务正文，必须与发送消息同一条防线。
     payload: { messages: sanitizeLoneSurrogates(messages) },
   }).catch(() => {})
 }
@@ -424,9 +413,9 @@ async function handleProviderRequest(payload: {
   }
 }
 
-// ==================== Rust 引擎适配器 ====================
+// Rust 引擎适配器
 
-/** 是否在 Tauri 环境（不在则回退 TS 引擎） */
+/** 是否在 Tauri 环境（非 Tauri：浏览器 dev / vitest）。 */
 export function isTauriAvailable(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
@@ -566,11 +555,8 @@ export const rustEngine: AgentEnginePort = {
 
     try {
       await ensureBridgeStarted()
-      // 兜底防线：孤立代理（被截断的半个 emoji）经 JSON.stringify 会变成 `\ud83d`，
-      // 而 Rust 侧 serde_json 要求代理对成对 → 整次 invoke 直接失败（报错只有列号，
-      // 形如 "unexpected end of hex escape at line 1 column N"，极难定位）。
-      // 源头已统一改用 utils/text 的安全截断；这里再兜一层：
-      // 未命中时零开销（只做一次线性扫描，不复制任何对象）。
+      // 兜底防线：孤立代理（半 emoji）经 JSON.stringify 变 \ud83d，Rust serde_json 要求代理对成对
+      // → 整次 invoke 直接失败（报错只有列号，极难定位）。源头已改用 utils/text 安全截断，这里再兜一层（未命中零开销）。
       const safeSession = sanitizeLoneSurrogates(session)
       const safeMessages = sanitizeLoneSurrogates(messages)
       if (safeMessages !== messages || safeSession !== session) {
@@ -646,14 +632,11 @@ export const rustEngine: AgentEnginePort = {
     allMessages: Message[],
     mode?: CompressMode,
   ): Promise<{ summary?: string; messages: Message[] }> {
-    // 统一到 core：与 CLI 共用 `virlen_core::agent::compress`（命令 `cmd_compress_context`）。
-    // - `raw` 纯本地渲染；`ai` 用原生 Provider（openai / anthropic）或桥接
-    //   （gemini 经 `agent:provider-request`，与正常聊天同一条路）。
-    // - ⚠️ `ai` 模式的请求形状由 core 决定（`tool_choice=auto` + 照常下发 tools、`stream=false`）：
-    //   服务端对 `tool_choice=none` 不渲染 tools 段落，前缀缓存会**整段失效**（详见
-    //   `docs/AGENTS.md` §11.30）；模型违约时 core 会自己回退 `raw`（前端无需处理）。
-    // - **记账在后端完成**（与 CLI 同一入口 `agent::usage::record_usage`，kind = "compress"）；
-    //   落库仍由 chat-service 负责（`cmd_replace_session_messages`），与压缩前后一致。
+    // 统一到 core：与 CLI 共用 virlen_core::agent::compress（cmd_compress_context）。
+    // raw 纯本地渲染；ai 用原生 Provider（openai/anthropic）或桥接（gemini 经 agent:provider-request）。
+    // ⚠️ ai 模式请求形状由 core 决定（tool_choice=auto + 照常下发 tools、stream=false）：服务端对
+    // tool_choice=none 不渲染 tools 段落，前缀缓存会整段失效（详见 docs/AGENTS.md §11.30）；模型违约时 core 自回退 raw。
+    // 记账在后端（agent::usage::record_usage，kind="compress"）；落库（cmd_replace_session_messages）仍由 chat-service 负责。
     const result = await invoke<{ summary: string; message: Message }>(
       'cmd_compress_context',
       {
@@ -674,10 +657,9 @@ export const rustEngine: AgentEnginePort = {
     session: Session,
     messages: Message[],
   ): Promise<string> {
-    // 统一到 core：与 CLI 共用 `virlen_core::agent::title`（命令 `cmd_generate_title`）。
-    // - 记账在后端完成（同一入口 `agent::usage::record_usage`，kind = "title"）；
-    //   落库（写回会话标题）仍由 chat-service 负责（与压缩前后一致）。
-    // - 与正常聊天同一条 provider 通道（openai/anthropic 原生、gemini 经双向桥）。
+    // 统一到 core：与 CLI 共用 virlen_core::agent::title（cmd_generate_title）。
+    // 记账在后端（agent::usage::record_usage，kind="title"）；落库（写回会话标题）仍由 chat-service 负责。
+    // 与正常聊天同一条 provider 通道（openai/anthropic 原生、gemini 经双向桥）。
     const provider = resolveProviderConnection(session)
     if (!provider) {
       throw new Error('会话没有可用的 Provider，无法生成标题')

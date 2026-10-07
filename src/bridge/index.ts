@@ -1,21 +1,14 @@
 /**
  * 电脑侧 bridge —— 手机控制的「接口层」装配入口（唯一）。
  *
- * 在一条已建立的 `Endpoint`（M2 用 BroadcastChannel / memory；M3 换 WebRTC）之上，
- * 装配出「真实数据源 + 分发胶水 + store 旁路推送」三件套：
+ * 在已建立的 Endpoint（M2 用 BroadcastChannel / memory；M3 换 WebRTC）之上装配「真实数据源 +
+ * 分发胶水 + store 旁路推送」：
+ *   Endpoint ─ registerHostHandlers(source) → host.* RPC（ACL / 审计 / 白名单 DTO）
+ *            └ createStoreBridge(emit)     → host.event.* 推送（mobx reaction 旁路）
+ * 用法：const bridge = startPhoneBridge(endpoint, { deviceName }); ... bridge.dispose()。
  *
- *   Endpoint ── registerHostHandlers(source) ──▶ host.* RPC（ACL / 审计 / 白名单 DTO）
- *            └─ createStoreBridge(emit) ──────▶ host.event.* 推送（mobx reaction 旁路）
- *
- * 用法（M2 联调 / M3 桌面端）：
- * ```ts
- * const bridge = startPhoneBridge(endpoint, { deviceName: '我的电脑' })
- * // ... 结束时 bridge.dispose()
- * ```
- *
- * ⚠️ M2 尚未接入真实传输（WebRTC 属 M3），故本模块**不在 main.ts 里自启** ——
- * 只导出工厂，由 M3 的传输层在连接建立后调用；M2 通过 vitest（memory transport）验证。
- * 数据源与 mock（`virlen-remote/testing`）共用同一份分发胶水，故此处逻辑已被 mock 路径覆盖。
+ * ⚠️ 不在 main.ts 里自启：只导出工厂，由传输层在连接建立后调用；数据源与 mock（virlen-remote/testing）
+ * 共用同一份分发胶水，故此逻辑已被 mock 路径覆盖。
  */
 import {
   BridgeError,

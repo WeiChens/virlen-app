@@ -1,16 +1,12 @@
 /**
  * InteractionEnded —— 「交互随**运行结束**被收敛」的标志错误（F4）。
  *
- * 与 `InteractionShelved`（用户点了暂存）同族，但语义不同：这次交互**没有被任何人回答**，
- * 而是运行结束了 —— 桌面点「停止」、手机取消 / 删除会话、引擎放弃这次交互请求。
+ * 与 `InteractionShelved`（用户点了暂存）同族但语义不同：这次交互**没被任何人回答**，
+ * 而是运行结束了（桌面停止 / 手机取消或删除会话 / 引擎放弃请求）。
  *
- * ⚠️ **为什么不直接复用 `'cancelled'`**：那等于告诉 AI「用户点了取消」，而真相是
- * 「这次提问从未被回答」。同 `services/rust-engine.ts` 里那条「桥接层不许静默消费」的纪律 ——
- * 让模型与排查者看到的是事实，而不是一个方便的近似。
- *
- * ⚠️ 判定按 `error.name`（与既有的 `InteractionShelved` 同一套做法）：桥接层在
- * `services/rust-engine.ts` 里**不需要 import 本模块**，也就不会产生
- * `services → services/tool-service` 的反向依赖。
+ * ⚠️ 不复用 `'cancelled'`：那等于谎称「用户点了取消」，而真相是「这次提问从未被回答」——
+ * 让模型与排查者看到事实，而不是方便的近似。
+ * ⚠️ 判定按 `error.name`，桥接层（services/rust-engine.ts）无需 import 本模块，避免反向依赖。
  */
 export class InteractionEnded extends Error {
   constructor(

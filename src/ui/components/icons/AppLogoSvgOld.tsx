@@ -1,12 +1,7 @@
 /**
- * AppLogoSvg — "微"主题品牌 Logo
+ * AppLogoSvg — "微"主题品牌 Logo（静态版，无入场动画）
  *
- * 设计理念：
- * - 中心是圆润的「W」字母，代表"微"（Wei）
- * - 左侧蓝色弧线代表 AI 智能流
- * - 右侧绿色弧线代表自然的对话交互
- * - 整体呈现一个抽象的对话气泡 + 大脑轮廓
- * - 配色：渐变的靛蓝 + 翠绿，现代科技感
+ * 圆润的「W」= 微（Wei）；左蓝弧 = AI 智能流，右绿弧 = 自然对话；整体是抽象对话气泡 + 大脑轮廓。
  */
 export default ({ size = 48, className }: { size?: number; className?: string }) => {
   return (
@@ -18,7 +13,6 @@ export default ({ size = 48, className }: { size?: number; className?: string })
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
     >
-      {/* 渐变定义 */}
       <defs>
         <linearGradient id="wg-main" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0%" stopColor="#6366F1" />
@@ -34,7 +28,6 @@ export default ({ size = 48, className }: { size?: number; className?: string })
         </linearGradient>
       </defs>
 
-      {/* 背景圆 — 柔和渐变 */}
       <circle cx="60" cy="60" r="55" fill="url(#wg-bg)" opacity="0.7" />
 
       {/* 外圈装饰弧线 — 左侧智能流 */}
@@ -59,7 +52,6 @@ export default ({ size = 48, className }: { size?: number; className?: string })
       />
       <circle cx="70" cy="100" r="3" fill="url(#wg-accent)" opacity="0.6" />
 
-      {/* W 字母主体 */}
       <path
         d="M38 78 V42 L50 60 L60 44 L70 60 L82 42 V78"
         stroke="url(#wg-main)"
@@ -83,7 +75,6 @@ export default ({ size = 48, className }: { size?: number; className?: string })
         opacity="0.5"
       />
 
-      {/* 中心亮点 */}
       <circle cx="60" cy="58" r="2" fill="url(#wg-main)" opacity="0.3" />
     </svg>
   )

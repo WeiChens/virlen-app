@@ -4,9 +4,8 @@
 //! - `TerminalDecoder`：跨 8KB 分块流式解码，保留跨块的多字节序列尾部。
 //! - `push_bounded` / `push_bytes_bounded`：内存有界，超限丢早期内容并插一次提示。
 
-/// 将输出字节流解码为字符串：优先 UTF-8；失败时按 Windows ANSI 代码页兜底。
-/// 中文 Windows 上 Windows PowerShell 5.1 通过管道输出时默认使用 GBK/CP936，
-/// 若一律按 UTF-8 硬解会出现 `�` 乱码（如中文文件名显示为 ��������.wav）。
+/// 将输出字节流解码为字符串：优先 UTF-8，失败时按 Windows ANSI 代码页兜底（中文 Windows 上
+/// PowerShell 5.1 管道输出默认 GBK/CP936，硬解 UTF-8 会出乱码）。
 pub(super) fn decode_output(bytes: &[u8]) -> String {
     if bytes.is_empty() {
         return String::new();
@@ -29,11 +28,8 @@ pub(super) fn decode_output(bytes: &[u8]) -> String {
     }
 }
 
-/// 单条流的内存上限（1 MB）与截断后保留的末尾长度（256 KB）。
-///
-/// 目的：让 `yes` / `cat 大文件` 这类命令打不爆内存（`docs/pty-research.md` §6.2）。
-/// 「会话日志 append-only 落盘 + 内存只留有界 tail cache」的完整方案属于后续阶段，
-/// 这里先做「有界 + 提示」这一步。
+/// 单条流的内存上限（1 MB）与截断后保留的末尾长度（256 KB）—— 让 `yes` / `cat 大文件` 打不爆
+/// 内存（§6.2）。
 const STREAM_CAP: usize = 1024 * 1024;
 const STREAM_KEEP: usize = 256 * 1024;
 /// 发生截断时插在输出开头的提示。

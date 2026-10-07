@@ -11,8 +11,6 @@ import { editorService } from '@/services/editor-service'
 import { openPath } from '@tauri-apps/plugin-opener'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
 
-// ==================== 类型与工具函数 ====================
-
 /** uiData.edits 中单个编辑记录 */
 type EditUiRecord = {
   oldStartLine: number
@@ -105,8 +103,6 @@ function mergeEditRows(edits: EditUiRecord[]): SideBySideRow[] {
   }
   return result
 }
-
-// ==================== 主类 ====================
 
 class EditFileMessage implements IToolCallMessage {
   getToolName(): string {
@@ -236,7 +232,6 @@ class EditFileMessage implements IToolCallMessage {
       return <div className="error">{props.message?.content as string}</div>
     }
 
-    // ===== 编辑模式：uiData.edits 数组（单/多编辑统一结构） =====
     if (Array.isArray(uiData?.edits) && uiData.edits.length > 0) {
       const filePath = uiData?.fullPath || path
       const edits = uiData.edits
@@ -295,7 +290,6 @@ class EditFileMessage implements IToolCallMessage {
       )
     }
 
-    // ===== 旧版单编辑模式 uiData（无 edits 数组） =====
     if (uiData?.oldStartLine) {
       const filePath = uiData?.fullPath || path
       return (
@@ -379,8 +373,6 @@ class EditFileMessage implements IToolCallMessage {
     return true
   }
 }
-
-// ==================== 后备：unified diff（无行号数据时用） ====================
 
 function generateFallbackDiff(oldStr: string, newStr: string): string {
   const oldLines = oldStr.split('\n')

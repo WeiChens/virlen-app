@@ -2,11 +2,8 @@ import QUICK_ACTIONS_POOL_DATA from './QUICK_ACTIONS_POOL.json'
 /**
  * quick-actions 数据配置
  *
- * 每个 quick-action 包含：
- *  - name:      按钮显示的文本
- *  - textList:  点击按钮时循环使用的文本列表（每次点击取下一个）
- *
- * 每天随机取 5 个展示，基于日期确定性选取，确保同一天看到的是同一组。
+ * 每个 quick-action：name（按钮文本）+ textList（点击时循环使用的文本列表）。每天基于日期 + 设备种子确定性随机取 5 个，
+ * 确保同人同天看到同一组。
  */
 
 export interface QuickAction {
@@ -18,9 +15,7 @@ export interface QuickAction {
  * 完整 quick-actions 池 —— 50 个类别，每个 20 条文本
  */
 const QUICK_ACTIONS_POOL: QuickAction[] = QUICK_ACTIONS_POOL_DATA
-/**
- * 生成一个简单的数值哈希
- */
+/** 生成一个简单的数值哈希。 */
 function simpleHash(input: string): number {
   let hash = 0
   for (let i = 0; i < input.length; i++) {
@@ -31,9 +26,7 @@ function simpleHash(input: string): number {
   return Math.abs(hash)
 }
 
-/**
- * 获取今天的日期字符串 YYYY-MM-DD
- */
+/** 今天的日期字符串 YYYY-MM-DD。 */
 function getTodayDateStr(): string {
   const d = new Date()
   const y = d.getFullYear()
@@ -43,8 +36,7 @@ function getTodayDateStr(): string {
 }
 
 /**
- * 获取设备种子 —— 每个设备首次调用时随机生成并持久化到 localStorage
- * 确保不同用户/设备每天看到的 quick-actions 不同
+ * 设备种子 —— 首次调用时随机生成并持久化到 localStorage，保证不同用户 / 设备每天看到的 quick-actions 不同。
  */
 function getDeviceSeed(): string {
   const KEY = 'quick_action_seed'
@@ -62,9 +54,7 @@ function getDeviceSeed(): string {
 }
 
 /**
- * 从池中随机选取 count 个 quick-action（每人每天确定性选取）
- *
- * 每人每天不同（结合设备种子 + 日期），同人同天刷新不变。
+ * 从池中选 count 个 quick-action（设备种子 + 日期确定性选取：同人同天刷新不变，不同人 / 天不同）。
  */
 export function getDailyQuickActions(count: number = 5): QuickAction[] {
   const dateStr = getTodayDateStr()

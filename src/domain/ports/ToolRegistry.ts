@@ -5,12 +5,8 @@ import {
 } from '../tools/types'
 
 /**
- * 工具注册中心端口
- *
- * **机制 C**：工具定义不在前端编写，而是来自权威源
- * （Rust 侧 `src-tauri/virlen-core/src/agent/tool_defs/definitions.json`），
- * 由 `ToolDefinitionsLoader` 注入（Tauri 走命令、其它环境读同一份 JSON）。
- * 因此 `register` 只接收执行器与 UI 文案，且**所有读取接口都是异步的**。
+ * 工具注册中心端口。定义不在前端编写，来自权威源 `agent/tool_defs/definitions.json`（经
+ * `ToolDefinitionsLoader` 注入）；`register` 只接收执行器与 UI 文案，所有读取接口都是异步的。
  */
 export interface ToolRegistry {
   /** 载入权威定义（幂等）。启动时预热可让失败早暴露；不调用则首次读取时懒加载 */
@@ -26,8 +22,7 @@ export interface ToolRegistry {
   get(name: string): Promise<ResolvedRegisteredTool | undefined>
 
   /**
-   * 列出可用工具定义（= 契约 ∩ 已注册执行器，顺序以契约为准）。
-   * 这是发送给 LLM 的工具列表，也是设置页展示的数据源（含 i18n `label`）。
+   * 列出可用工具定义（= 契约 ∩ 已注册执行器，顺序以契约为准）。即发给 LLM 的工具列表，也是设置页数据源。
    */
   listDefinitions(): Promise<ResolvedToolDefinition[]>
 

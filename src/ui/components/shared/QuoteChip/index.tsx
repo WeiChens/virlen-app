@@ -1,12 +1,8 @@
 /**
- * QuoteChip — 引用消息标签（输入框 / 消息气泡共用）
+ * QuoteChip — 引用消息标签（输入框 / 消息气泡共用）：[发送方图标] 发送方 [正文摘要] [×]
  *
- * 只承载「被引用消息的元数据 + 正文快照」：
- *   [发送方图标] 发送方 [正文摘要] [×]
- *
- * - hover 显示完整正文 + 消息 id（正文快照与 id 才是这条数据的本体，必须可核对）
- * - 传入 onClick 时主体可点击（跳转定位到被引用的原消息）；传入 onRemove 时显示移除按钮
- * - 正文快照可能来自已被删除 / 已被上下文压缩的原消息，所以整块不依赖原消息是否还在
+ * 只承载「被引用消息的元数据 + 正文快照」；hover 显示完整正文与消息 id（快照与 id 才是本体，
+ * 必须可核对）。快照可能来自已被删除 / 已被上下文压缩的原消息，因此整块不依赖原消息是否还在。
  */
 import UserSvg from '@/ui/components/icons/UserSvg'
 import { t, tpl } from '@/ui/i18n'
@@ -36,7 +32,7 @@ function QuoteChip({
   className,
 }: Props) {
   const senderLabel = role === 'user' ? t('你') : t('AI')
-  // title 里给全文 + id：正文可能被 UI 省略，但模型看到的与用户核对到的必须是同一份
+  // title 给全文 + id：正文被 UI 省略，但用户核对到的必须是模型看到的那一份
   const title = [
     tpl('引用 $__sender__ 的消息', { sender: senderLabel }),
     text,
@@ -51,7 +47,6 @@ function QuoteChip({
       <span className="quote-chip-icon">
         {role === 'user' ? <UserSvg /> : <AgentSvg />}
       </span>
-      {/* <span className="quote-chip-sender">{senderLabel}</span> */}
       <span className="quote-chip-text">{text}</span>
     </>
   )

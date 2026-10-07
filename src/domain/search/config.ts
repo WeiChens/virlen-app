@@ -1,13 +1,8 @@
 /**
- * 搜索供应商配置模板和类型定义
- *
- * 类比 domain/provider/catalog.ts（LLM 供应商配置模板；数据本体已在 virlen-core），
- * 定义了内置搜索供应商的元信息和可持久化的配置结构。
+ * 搜索供应商配置模板与类型定义（类比 domain/provider/catalog.ts）。
  */
 
-// ============================================================
-// 可持久化的搜索供应商配置（存 Rust 侧 `app_settings` 表，见 docs/config-sink-plan.md）
-// ============================================================
+// ============ 可持久化的搜索供应商配置（存 Rust `app_settings` 表，见 docs/config-sink-plan.md） ============
 
 /** 搜索供应商类型标识 */
 export type SearchProviderType =
@@ -45,9 +40,7 @@ export interface SearchProviderConfig {
   updatedAt: number
 }
 
-// ============================================================
-// 内置搜索供应商模板
-// ============================================================
+// ============ 内置搜索供应商模板 ============
 
 export interface SearchProviderTemplate {
   type: SearchProviderType

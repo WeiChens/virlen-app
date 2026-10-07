@@ -1,16 +1,13 @@
-//! 运行中命令注册表 —— 支持前端「终止」按钮（ToolOutput.kill）。
-//!
-//! `tool_call_id` → [`RunningCommand`]（子进程 pid + kill 请求标志 + 终止器），
-//! 前端点击「终止」时经 [`kill_running_command`] 一键杀整棵进程树。
+//! 运行中命令注册表 —— 支持前端「终止」按钮：`tool_call_id` → `RunningCommand`（pid + kill 标志
+//! + 终止器），点击终止时经 [`kill_running_command`] 一键杀整棵进程树。
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
-/// 跨平台强杀进程树（进程 + 全部后代）。
-/// 委托给 `process_tree` 模块：Windows 递归 Toolhelp32 枚举后代逐个 taskkill，
-/// Unix 递归 `ps` 枚举后代逐个 kill，不依赖进程树关系 / 进程组。
+/// 跨平台强杀进程树（进程 + 全部后代），委托 `process_tree` 模块（Windows 用 Toolhelp32、
+/// Unix 用 `ps` 递归枚举，不依赖进程树关系 / 进程组）。
 pub(super) fn kill_process_tree(pid: u32) {
     crate::agent::process_tree::kill_process_tree(pid);
 }

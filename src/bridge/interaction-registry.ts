@@ -1,23 +1,15 @@
 /**
  * interaction-registry —— 电脑侧的**待应答交互注册表**（M4）。
  *
- * 解决的问题：手机要能「知道现在有哪些交互在等我」并「精确应答其中一个」。
- * 改造前手机只能收到「事件流里出现过一个 showChoice」这种一次性信息，无法：
- *  1. 中途连上来时补看（重连 / 冷启动 → 手机只看到会话卡在 working，不知为何）；
- *  2. 判断这次批准是否需要二次确认（分级）；
- *  3. 应答后收到**终态**（是电脑先处理了，还是自己批成了）。
+ * 解决的问题：手机要能「知道现在有哪些交互在等我」并「精确应答其中一个」。改造前手机只收到一次性
+ * 的 showChoice，无法：① 中途连上来时补看；② 判断是否需要二次确认（分级）；③ 应答后收到终态。
  *
- * ⚠️ **本类不直接碰 `toolInteractEvent`**：应答落点通过 `InteractionSink` 注入。
- * 这样：
- *  - 单测可以注入假 sink，断言「手机点允许 → 电脑侧收到的载荷与桌面点击**完全同形**」；
- *  - 未来把交互搬到别处（如 Rust 侧审批）只需换一个 sink 实现，本类的校验逻辑不动。
- *
- * ⚠️ **终态必须通知两端**（2026-10）：`emit` 把 `interaction.resolved` 推给**手机**，
- * `notifyLocalSettled` 通知**本机**（收起桌面上那张弹窗）。缺任一端都会留下
- * 「用户看得见、却点不动」的僵尸弹窗。
- *
- * ⚠️ **高风险批准必须带 `confirmed: true`**：校验在这里做（服务端权威），
- * 手机 UI 的二次确认只是「第一道摩擦」——§16.2 明确要求两侧独立成立。
+ * ⚠️ 本类**不直接碰 toolInteractEvent**：应答落点通过 InteractionSink 注入 —— 单测可注入假 sink 断言
+ *「手机点允许 → 电脑收到的载荷与桌面点击完全同形」；未来换落点（如 Rust 审批）只需换 sink。
+ * ⚠️ **终态必须通知两端**：emit 推给手机、notifyLocalSettled 通知本机（收起桌面弹窗）。缺任一端会留下
+ *「用户看得见、却点不动」的僵尸弹窗。
+ * ⚠️ **高风险批准必须带 confirmed: true**（服务端权威校验；手机 UI 的二次确认只是第一道摩擦，
+ * §16.2 要求两侧独立成立）。
  */
 import type { AnswerParams, AnswerResult, HostEmit, InteractionDTO, InteractionOutcome } from 'virlen-remote'
 import { answerActionError, normalizeChoiceAnswer, type ChoiceAnswer } from 'virlen-remote'
@@ -26,8 +18,8 @@ import type { AuditLog } from './audit'
 import { previewOf } from './audit'
 import { PHONE_EVENTS, previewOf as telemetryPreviewOf } from './telemetry'
 
-// 选择答案的规范化实现在共享包（`virlen-remote`）—— 手机侧、电脑侧桥接层、mock 宿主共用一份，
-// 避免三处各写一遍导致「AI 收到内容但消息渲染不出（uiData 缺失）」。这里转身导出，保持既有 import 面。
+// 选择答案的规范化实现在共享包（virlen-remote）：手机侧、电脑侧桥接层、mock 宿主共用一份，
+// 避免三处各写一遍导致「AI 收到内容但消息渲染不出（uiData 缺失）」。此处转身导出，保持既有 import 面。
 export { normalizeChoiceAnswer }
 export type { ChoiceAnswer }
 
@@ -96,7 +88,7 @@ export class InteractionRegistry {
     this.now = deps.now ?? (() => Date.now())
   }
 
-  // ───────────────────────────── 登记 / 终态 ─────────────────────────────
+  // 登记 / 终态
 
   /** 登记一个待应答交互并推给手机（重复登记同一 id 视为更新，不重复推送）。 */
   register(dto: InteractionDTO): void {
@@ -205,7 +197,7 @@ export class InteractionRegistry {
     return [...this.pending.values()]
   }
 
-  // ───────────────────────────── 应答 ─────────────────────────────
+  // 应答
 
   /**
    * 处理一次手机应答。

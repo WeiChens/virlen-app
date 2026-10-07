@@ -1,23 +1,9 @@
 /**
- * 在 buildRequest 中处理 vision_analyze 优化逻辑
+ * 在 buildRequest 中处理 vision_analyze 优化逻辑：当 Message 标记 imageVisionAnalyzeOptimize=true 时，
+ * 移除 image_url 块（不把原始 base64 发给 LLM）并追加分析结果文本块；否则原样发送。
  *
- * 当 Message 标记了 imageVisionAnalyzeOptimize=true 时：
- *   - 移除 image_url 块（不把原始 base64 图片发给 LLM）
- *   - 追加 vision_analyze 分析结果文本块
- * 否则：不做任何处理，content 原样发送
- *
- * 注：file（文件附件，只有路径）、quote（引用消息）与 skill（技能引用）不属于「图片内容」，
- * 这里原样保留，交由各 Provider 的 buildRequest 降级为文本。
- *
- * imageVisionAnalyzeResult 格式（由 doSend 构建）：
- *   用户上传了{N}张图片
- *
- *   第1张图片
- *   [分析结果]
- *
- *   第2张图片
- *   [分析结果]
- *   ...
+ * 注：file / quote / skill 不属于「图片内容」，原样保留，交由各 Provider 的 buildRequest 降级为文本。
+ * imageVisionAnalyzeResult 格式（由 doSend 构建）：`用户上传了{N}张图片\n\n第1张图片\n[分析结果]\n...`
  */
 import type {
   Message,
@@ -36,9 +22,7 @@ type ContentBlock =
   | SkillContent
 
 /**
- * 处理消息的 content，返回适合发送给 LLM 的 blocks
- *
- * @returns 处理后的 blocks，或 null 表示无需变更
+ * 处理消息 content，返回适合发给 LLM 的 blocks；返回 null 表示无需变更。
  */
 export function processVisionContent(
   msg: Message,

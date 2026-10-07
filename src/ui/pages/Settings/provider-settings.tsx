@@ -1,6 +1,6 @@
 /**
- * provider-settings — 模型服务配置
- * 从 settingsState 读取/写入，通过 providerRegistry 注册运行时 provider
+ * provider-settings — 模型服务配置：从 settingsState 读写，并通过 providerRegistry 注册运行时
+ * provider。
  */
 import { useState, useEffect, useRef } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -50,10 +50,6 @@ function ProviderSettings() {
   useEffect(() => {
     for (const p of providers) {
       if (p.enabled) {
-        // const provider = createProviderInstance(p)
-        // if (provider) {
-        //   providerPort.register(p.id, provider)
-        // }
         providerService.register(p)
       }
     }
@@ -99,7 +95,6 @@ function ProviderSettings() {
       provider.models = models
       settingsState.setValue('providers', [...settingsState.value.providers])
     } catch (e: any) {
-      // showToast('获取模型失败: ' + (e.message ? e.message : e.toString()))
       throw e
     } finally {
       setFetchingModels((prev) => ({ ...prev, [providerId]: false }))
@@ -127,7 +122,6 @@ function ProviderSettings() {
   }
 
   async function handleDelete(providerId: string) {
-    // 弹窗确认删除？（删除后无法恢复，慎重）
     const flag = await MessageBox.warn(
       t('删除服务商'),
       t('确定要删除这个服务商吗？此操作无法撤销'),

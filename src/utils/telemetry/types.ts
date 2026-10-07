@@ -1,8 +1,5 @@
 /**
- * telemetry/types — 埋点 SDK 类型定义
- *
- * 注解里的 §N 是本目录的分节号（§3 数据分层 / §4 公共字段 / §8 上报机制 / §10 数据结构）。
- * 本模块不依赖任何 UI / domain 代码，保持底层纯净，避免循环依赖。
+ * telemetry/types — 埋点 SDK 类型定义。注解里的 §N 是本目录分节号。本模块不依赖任何 UI / domain 代码，保持底层纯净。
  */
 
 /** 埋点 SDK 版本 */
@@ -12,8 +9,7 @@ export const SDK_VERSION = '1.0.0'
 export type TelemetryEngineKind = 'rust' | 'ts'
 
 /**
- * 运行时上下文（由 UI 层在启动时注入）
- * 用于补齐「需要读取设置」的公共字段，避免 utils → ui 的循环依赖。
+ * 运行时上下文（由 UI 层在启动时注入）：补齐「需要读取设置」的公共字段，避免 utils → ui 的循环依赖。
  */
 export interface TelemetryRuntimeContext {
   engine?: TelemetryEngineKind

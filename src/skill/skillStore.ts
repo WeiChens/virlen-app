@@ -1,12 +1,9 @@
 /**
- * skillStore — Skill 注册与存储
+ * skillStore — Skill 注册与存储：把已注册 Skill 元信息（RegisteredSkill[]）存 localStorage；SKILL.md 文件夹固定为
+ * Tauri appDataDir/skills，文件内容经文件系统只读。
  *
- * 存储已注册的 Skill 元信息（`RegisteredSkill[]`）到 localStorage；SKILL.md 文件夹路径固定为 Tauri
- * `appDataDir/skills`。Skill 的实际文件内容通过文件系统读取（只读）。
- *
- * ⚠️ 自 Step 2 起 Rust 原生路径不再读这个注册表（`native_tools/skill/` 直接扫盘解析 SKILL.md；CLI 没有
- * localStorage）：本文件的 `parseSkillMeta` / `scanAndRegisterSkills` / `getSkillFileTree` 与
- * `native_tools/skill/common.rs` 是两份镜像，改一边必须同步另一边（铁律 1）。
+ * ⚠️ 自 Step 2 起 Rust 原生路径不再读这个注册表（native_tools/skill/ 直接扫盘解析 SKILL.md）：本文件的
+ * parseSkillMeta / scanAndRegisterSkills / getSkillFileTree 与 native_tools/skill/common.rs 是两份镜像，改一边同步另一边（铁律 1）。
  */
 import StorageState from '@/utils/storageState'
 import type {
@@ -19,7 +16,7 @@ import { normalizeSkillName } from './types'
 import { parseSkillMdMeta } from '@/utils/mdYamlFrontmatter'
 import { readDir, readTextFile, stat } from '@tauri-apps/plugin-fs'
 
-// ==================== 常量 ====================
+// 常量
 
 /** localStorage key */
 const STORAGE_KEY = 'virlen-skills'
@@ -29,20 +26,19 @@ const defaultData: SkillStoreData = {
   skills: [],
 }
 
-// ==================== Store 实例 ====================
+// Store 实例
 
 export const skillStore = new StorageState(STORAGE_KEY, defaultData, 1000)
 
-// ==================== 内部缓存 ====================
+// 内部缓存
 
 /** 缓存 appDataDir/skills 路径，避免重复异步调用 */
 let _skillsDirPath: string | null = null
 
-// ==================== 工具函数 ====================
+// 工具函数
 
 /**
- * 获取 SKILLs 文件夹绝对路径
- * 固定为 appDataDir/skills
+ * 获取 SKILLs 文件夹绝对路径（固定 appDataDir/skills）。
  */
 async function getSkillsDir(): Promise<string> {
   if (_skillsDirPath) return _skillsDirPath

@@ -1,13 +1,9 @@
 /**
- * user_choice — 用户选择弹窗（user_choice tool）的交互逻辑
- *
- * 负责创建 user_choice 的 Promise 化交互 handles，供 tool-service/index 调度。
+ * user_choice — 用户选择弹窗（user_choice tool）的交互逻辑，供 tool-service/index 调度。
  * 通过 toolInteractEvent 事件总线与 UI 层（tool-ui.tsx）通讯。
  *
- * ⚠️ **路由依据是 `interactionId`**（见 `events/toolInteractEvent.ts` 文件头）：
- * 每次 handler 调用生成一个新 id 并随 `showChoice` 下发，应答事件必须原样回传，
- * 不匹配的一律忽略。否则两个会话同时提问时，一次应答会把两个都 resolve 掉
- * （改造前的既存串扰）。
+ * ⚠️ **路由依据是 interactionId**：每次 handler 调用生成新 id 随 showChoice 下发，应答事件必须
+ * 原样回传，不匹配的忽略 —— 否则两个会话同时提问时，一次应答会把两个都 resolve。
  */
 import toolInteractEvent from '@/events/toolInteractEvent'
 import { track, getSessionTrace } from '@/utils/telemetry'
@@ -16,8 +12,7 @@ import { v4 } from '@/utils/uuid'
 import { InteractionEnded } from './interaction-end'
 
 /**
- * 用户暂存交互 — 不通知 AI，直接中断当前 tool 循环，
- * 保留会话状态让用户稍后恢复。
+ * 用户暂存交互 — 不通知 AI，直接中断当前 tool 循环，保留会话状态让用户稍后恢复。
  */
 class InteractionShelved extends Error {
   shelveMessage: string
@@ -100,14 +95,12 @@ export function createUserChoiceHandles(
   /**
    * 运行结束时的收尾：把**还没被回答**的那次交互收敛掉（F4）。
    *
-   * 为何必须在 `cleanup()` 里做：`cleanup()` 一跑监听器就拆了，此后任何应答事件都到不了这里
-   * —— 而「运行结束」≠「用户答过了」：桌面点停止、手机取消 / 删除会话、引擎放弃这次交互请求，
-   * 这四条路上这次交互都还没被回答。不收敛的两个后果：
-   *  ① 这个 Promise 永不 settle → `handleUserInteractionRequest` 的 `await` 永远挂着、闭包被一直引用；
-   *  ② 手机侧那张卡片永远不消失（没人告诉它“这条已经结束了”）→ 点一下得「已在电脑上处理」。
+   * 为何必须在 cleanup() 里做：一跑监听器就拆了，此后任何应答事件都到不了这里 ——
+   * 而「运行结束」≠「用户答过了」（停止 / 取消 / 删会话 / 引擎放弃，这四条路都还没被回答）。
+   * 不收敛的后果：① Promise 永不 settle，await 永远挂着、闭包被一直引用；② 手机侧卡片永不消失。
    *
-   * ⚠️ 顺序与取值：**先广播终态、再 reject**（桌面弹窗与手机侧注册表都靠那条事件收 UI），
-   * 且广播用 `'expired'`（**没人回答**）而不是 `'reject'`（用户拒绝）—— 两者在手机端与埋点里含义不同。
+   * ⚠️ 先广播终态再 reject（桌面弹窗与手机注册表都靠那条事件收 UI），且广播用 'expired'
+   *（**没人回答**）而非 'reject'（用户拒绝）—— 两者在手机端与埋点里含义不同。
    */
   function endPending(): void {
     const interactionId = pendingInteractionId

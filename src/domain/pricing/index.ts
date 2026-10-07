@@ -1,15 +1,12 @@
 /**
- * 定价与费用估算 — 纯函数领域模块
+ * 定价与费用估算 — 纯函数领域模块。
  *
- * 职责边界（重要）：**Rust 只返回 token 数，费用一律在前端算**。
- * 单价是用户可编辑的设置项，若把乘法写进 SQL，用户改一次单价就要回填整张账本表。
+ * 职责边界：**Rust 只返回 token 数，费用一律在前端算** —— 单价是用户可编辑项，
+ * 若把乘法写进 SQL，改一次单价就要回填整张账本表。
  *
- * 口径说明：
- * - 单价单位统一为「每 1,000,000 tokens 的金额」，币种由设置里的 `currency` 决定；
- * - 账本里的 `promptTokens` 是**非缓存输入**（Anthropic 语义），缓存**命中（读取）**记在 `cachedTokens`、
- *   缓存**写入**记在 `cacheWriteTokens`，三档单价分开算 —— 混在一起会算错钱：
- *   Anthropic 的写入价（1.25x 输入）是命中价（0.1x 输入）的 12.5 倍；
- * - 内置价目表仅作**默认填充**用途，价格随时会变 —— UI 必须提示用户核对（见 §价目表注释）。
+ * 口径：单价单位为「每 1,000,000 tokens 的金额」；`promptTokens` 是**非缓存输入**，
+ * 缓存**命中/读取**记 `cachedTokens`、缓存**写入**记 `cacheWriteTokens`，三档单价分开算
+ * （Anthropic 写入价 1.25x ≠ 命中价 0.1x，混算会错 12.5 倍）。
  */
 
 /** 单个模型的单价（每 1M tokens） */
@@ -20,12 +17,7 @@ export interface ModelPrice {
   output: number
   /** 缓存**命中（读取）**输入价（未填/为 0 时按输入价计） */
   cachedInput?: number
-  /**
-   * 缓存**写入**输入价。
-   *
-   * 目前只有 Anthropic 有这个概念（5 分钟 TTL = **1.25 × 输入价**）。
-   * 缺省时按**输入价**计（缺省高估 20%，也好过按命中价低估 92%）。
-   */
+  /** 缓存**写入**输入价（5 分钟 TTL，仅 Anthropic；缺省按输入价计，宁高估不低估） */
   cacheWrite?: number
 }
 
@@ -55,20 +47,10 @@ export interface BillableTokens {
 /** 每 1M tokens 的换算基数 */
 const PER_TOKENS = 1_000_000
 
-/**
- * 固定汇率：1 USD = 7.2 CNY。
- *
- * 内置价目表（`DEFAULT_MODEL_PRICES`）固定按 USD 存储，切人民币时按此折算，不联网、
- * 不随时间更新（只求量级正确）；用户可在单价页覆写为实际签约价。
- */
+/** 固定汇率 1 USD = 7.2 CNY。内置价目表固定按 USD 存，切人民币时按此折算（不联网、只求量级正确）。 */
 export const USD_TO_CNY = 7.2
 
-/**
- * 计算费用。
- *
- * 任何字段缺失（无限价 / 全 0）都返回 0，不抛错 —— 统计面板里「没填单价」
- * 应当是显示 0 而不是让整个页面挂掉。
- */
+/** 计算费用。字段缺失（无限价 / 全 0）一律返回 0，不抛错（面板显示 0 而非整页崩）。 */
 export function computeCost(
   tokens: BillableTokens,
   price: ModelPrice | null | undefined,
@@ -77,11 +59,10 @@ export function computeCost(
   const input = ((tokens.promptTokens || 0) * (price.input || 0)) / PER_TOKENS
   const output =
     ((tokens.completionTokens || 0) * (price.output || 0)) / PER_TOKENS
-  // 缓存价缺省时按输入价计（大多数服务商都低于输入价，但缺省宁可高估不高漏）
+  // 缓存价缺省按输入价计（宁可高估不高漏）
   const cachedRate = price.cachedInput || price.input || 0
   const cached = ((tokens.cachedTokens || 0) * cachedRate) / PER_TOKENS
-  // 缓存写入同样缺省按输入价计：Anthropic 实际是 1.25x（高估 20%），
-  // 但若错按命中价（0.1x）会低估 92% —— 宁可高估
+  // 缓存写入缺省按输入价计：Anthropic 实际 1.25x（高估 20%），错按命中价 0.1x 会低估 92%
   const writeRate = price.cacheWrite ?? price.input
   const cacheWrite = ((tokens.cacheWriteTokens || 0) * writeRate) / PER_TOKENS
   return {
@@ -108,28 +89,19 @@ export interface DefaultPriceEntry {
 }
 
 /**
- * 内置价目表（**预估值，务必提示用户核对**）。
+ * 内置价目表（**预估值，UI 务必提示用户核对**：非账单，用户可覆盖任意模型）。
  *
- * 这些数字来自公开定价的粗略整理，服务商随时调价或按量阶梯计价，故本表只用于「开箱时
- * 有个大致量级」；UI 必须醒目提示「费用为按你填写的单价估算，非账单」，用户可覆盖任意模型。
+ * 单位统一 USD / 1M tokens，切人民币时按 `USD_TO_CNY` 折算。匹配自上而下、先命中先用，
+ * 同一厂商内**越具体的 match 越靠前**（如 `gpt-5.6-luna` 必须排在 `gpt-5.6` 之前）。
  *
- * 币种统一为 USD / 1M tokens（DeepSeek 官方定价为人民币，此处按量级折算）。
- * 切到人民币时按 `USD_TO_CNY` 折算（见 `convertFromUsd`）；用户自填单价按其币种原样使用。
- * 匹配顺序自上而下，先命中先用；同一厂商内**越具体的 match 越靠前**
- * （如 `gpt-5.6-luna` 必须排在泛化的 `gpt-5.6` 之前）。
+ * Anthropic 按官方规则填 `cacheWrite = 1.25 × input`（命中价 `cachedInput = 0.1 × input`）。
+ * OpenAI 虽在 GPT-5.6+ 对写入收 1.25x，但**用量接口不回报写入 token 数**，没量可乘，
+ * 故不填 `cacheWrite`（后果：费用略偏低，见 `docs/token-usage-stats.md`）。
  *
- * Anthropic 的 `cacheWrite` 统一按官方规则填 **1.25 × input**（5 分钟 TTL 的写入价；
- * 命中价 `cachedInput` 则为 0.1 × input）。OpenAI 官方也在 GPT-5.6+ 对写入收 1.25x，
- * 但**用量接口不回报写入 token 数**（写入量含在 `prompt_tokens` 里），没量可乘，
- * 故不在此填 `cacheWrite`（后果：这类模型的费用会略偏低，见 `docs/token-usage-stats.md`）。
- *
- * 最近一次核对：2026-09-21。来源：Anthropic 官方定价页（anthropic.com/pricing）、
- * DeepSeek 官方文档（api-docs.deepseek.com）、OpenRouter 模型 API（结构化）及公开报道；
- * 各条目的口径与存疑点见其上方注释。GLM / 千问为人民币计价，暂未并入本表。
+ * 最近核对：2026-09-21（Anthropic / DeepSeek 官方定价、OpenRouter API）；各条目存疑点见其上方注释。
  */
 export const DEFAULT_MODEL_PRICES: DefaultPriceEntry[] = [
   // ---- OpenAI（当前代，核对于 2026-09-21）----
-  // 来源：OpenRouter 模型 API（结构化）+ 公开报道。
   {
     match: ['gpt-6-astra', 'gpt-astra'],
     label: 'GPT-6 Astra',
@@ -294,13 +266,10 @@ export const DEFAULT_MODEL_PRICES: DefaultPriceEntry[] = [
 ]
 
 /**
- * 按模型 id 查内置默认价**条目**（找不到返回 null）。
+ * 按模型 id 查内置默认价条目（找不到返回 null）。
  *
- * 用子串匹配而不是精确匹配：模型 id 常带日期/版本后缀
- * （`gpt-4o-2024-08-06`、`claude-3-5-sonnet-20241022`），精确匹配会几乎全落空。
- *
- * UI 需要「价 + 展示名」两样东西（单价页要把内置价回显到输入框里），
- * 因此这里返回整条而不是只返回 price；`findDefaultPrice` 是它的薄封装。
+ * 用子串匹配：模型 id 常带日期/版本后缀（`gpt-4o-2024-08-06`），精确匹配会几乎全落空。
+ * 返回整条（含 label）供单价页回显；`findDefaultPrice` 是只取 price 的薄封装。
  */
 export function findDefaultPriceEntry(modelId: string): DefaultPriceEntry | null {
   const id = (modelId || '').toLowerCase()
@@ -311,30 +280,19 @@ export function findDefaultPriceEntry(modelId: string): DefaultPriceEntry | null
   return null
 }
 
-/**
- * 按模型 id 查内置默认价（找不到返回 null，UI 显示"未配置单价"）。
- *
- * 注意：返回的是**原始 USD 价**；需要展示币种时请用 `findDefaultPriceInCurrency`。
- */
+/** 按模型 id 查内置默认价（找不到返回 null）；返回**原始 USD 价**，要展示币种用 `findDefaultPriceInCurrency`。 */
 export function findDefaultPrice(modelId: string): ModelPrice | null {
   return findDefaultPriceEntry(modelId)?.price ?? null
 }
 
-/**
- * 价格取整：× 汇率后浮点会出尾巴（`0.66 × 7.2 = 4.752000000000001`），
- * 直接灌进单价输入框很难看。按 6 位小数四舍五入 —— 最低档价（如 $0.003/1M）也足够精度。
- */
+/** 价格取整：× 汇率后浮点会出尾巴（`0.66 × 7.2 = 4.752000000000001`），按 6 位小数四舍五入。 */
 function roundPrice(n: number): number {
   return Math.round(n * 1e6) / 1e6
 }
 
 /**
- * 把「以 USD 标价」的单价折算到目标币种。
- *
- * 只用于**内置价目表**：它固定存 USD，切币种时按 `USD_TO_CNY` 折算；
- * 用户自填的单价一律按当前币种存/算，不走这里（避免二次折算）。
- *
- * 折算后做一次小数清理，避免 `4.752000000000001` 这类浮点尾巴泄漏到 UI。
+ * 把「以 USD 标价」的单价折算到目标币种。**只用于内置价目表**（固定存 USD）；
+ * 用户自填单价不走这里（避免二次折算）。
  */
 export function convertFromUsd(price: ModelPrice, currency: string): ModelPrice {
   if (currency !== 'CNY') return price

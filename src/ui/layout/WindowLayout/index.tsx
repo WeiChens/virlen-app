@@ -7,16 +7,16 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Window } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
 import { appLogo, appName } from '@/ui/constants'
-// 同名两个东西：`useMessageBox()` 给的是**组件**（下面 `<MessageBox />` 渲染用）；
-// 这里额外取模块级的**命令式** API，`MessagePrompt.propt()` 返回 boolean 的确认框
-// import useLoading from '@/utils/loading'
-import { useToast, showToast } from '@/ui/components/shared/Toast'
+import { phoneToggleView } from './phone-toggle'
 import SplitScreenSvg from '@/ui/components/icons/SplitScreenSvg'
 import AboutSvg from '@/ui/components/icons/AboutSvg'
 import AboutModal from './view/AboutModal'
 import UpdateModal from '@/ui/components/shared/UpdateModal/UpdateModal'
 import menuEvent from '@/events/menuEvent'
 import updateEvent from '@/events/updateEvent'
+import { useToast, showToast } from '@/ui/components/shared/Toast'
+// useMessageBox() 给的是组件（下面 <MessageBox /> 渲染用）；MessageBox as MessagePrompt 是
+// 模块级命令式 API，`MessagePrompt.propt()` 返回 boolean 确认框
 import {
   useMessageBox,
   MessageBox as MessagePrompt,
@@ -26,8 +26,6 @@ import { observer } from 'mobx-react-lite'
 import PhoneSvg from '@/ui/components/icons/PhoneSvg'
 import { phoneControlStore } from '@/ui/store/phoneControlStore'
 import { t } from '@/ui/i18n'
-import { phoneToggleView } from './phone-toggle'
-// import windowEvent from '@/events/windowEvent'
 
 interface Props {
   children?: ReactNode
@@ -38,10 +36,9 @@ const { MessageBox } = useMessageBox()
 const { Toast } = useToast()
 
 /**
- * 过渡态兜底时长（毫秒）。
- *
- * 「点了开启」到 `enabled` 翻转之间要初始化设备身份 + 解析 ICE；异常且服务又没上报 error 时，
- * 兜一个超时把按钮放回可点状态，避免它永远停在「正在启用…」。
+ * 过渡态兜底时长（ms）。
+ * 「点了开启」到 `enabled` 翻转之间要初始化设备身份 + 解析 ICE，异常且服务又没上报 error 时，
+ * 靠它把按钮放回可点状态，避免永远停在「正在启用…」。
  */
 const PHONE_START_TIMEOUT_MS = 20_000
 
@@ -93,7 +90,6 @@ const WindowLayout = ({ children, padding = 0, className }: Props) => {
     }
   }, [])
 
-  // ===== 更新管理 =====
   const [updateShow, setUpdateShow] = useState(false)
   const [updateInfo, setUpdateInfo] = useState<ICheckUpdateResponse | null>(null)
 
@@ -106,9 +102,8 @@ const WindowLayout = ({ children, padding = 0, className }: Props) => {
   }, [])
 
   async function handleUpdateForceCancel() {
-    // 强制更新被取消 → 真正退出应用。
-    // 不能再用 close()：托盘开启后关闭窗口只是隐藏（AI 继续在后台跑），
-    // 那样更新包永远装不上 —— 所以走托盘模块的退出入口。
+    // 强制更新被取消 → 真正退出应用。不能再用 close()：托盘开启后关闭窗口只是隐藏
+    // （AI 继续在后台跑），更新包永远装不上 —— 所以走托盘模块的退出入口。
     try {
       await invoke('tray_quit')
     } catch {
@@ -117,8 +112,7 @@ const WindowLayout = ({ children, padding = 0, className }: Props) => {
     }
   }
 
-  // ===== 手机控制快捷开关（标题栏） =====
-  /** 「点了开启、服务还没起来」的过渡态（为什么需要它见 phone-toggle.ts） */
+  /** 「点了开启、服务还没起来」的过渡态（缘由见 phone-toggle.ts） */
   const [phoneStarting, setPhoneStarting] = useState(false)
   const phoneEnabled = phoneControlStore.enabled
   const phone = phoneToggleView({
@@ -129,12 +123,10 @@ const WindowLayout = ({ children, padding = 0, className }: Props) => {
 
   useEffect(() => {
     if (!phoneStarting) return
-    // 服务起来了 → 退出过渡态
     if (phoneEnabled) {
       setPhoneStarting(false)
       return
     }
-    // 否则兜一个超时（见 PHONE_START_TIMEOUT_MS）
     const timer = setTimeout(() => setPhoneStarting(false), PHONE_START_TIMEOUT_MS)
     return () => clearTimeout(timer)
   }, [phoneStarting, phoneEnabled])
@@ -147,7 +139,7 @@ const WindowLayout = ({ children, padding = 0, className }: Props) => {
       phoneControlStore.setEnabled(true)
       return
     }
-    // 关掉会立即断开正在操作的手机 —— 连着的时候先确认，其余情况一键关
+    // 关掉会立即断开正在操作的手机：连着时先确认，其余一键关
     if (phoneControlStore.status === 'connected') {
       const ok = await MessagePrompt.propt(
         t('关闭手机控制？'),
@@ -179,10 +171,8 @@ const WindowLayout = ({ children, padding = 0, className }: Props) => {
           <div data-tauri-drag-region>{title}</div>
         </div>
         <div className="window-controls">
-          {/*
-            手机控制快捷开关：点一下开、再点一下关（**不做页面跳转**；扫码配对仍在设置页）。
-            图标用 PhoneSvg 的 `currentColor`，所以亮 / 暗与状态点颜色都走 CSS 的 `color`。
-          */}
+          {/* 手机控制快捷开关：点一下开、再点一下关（不做跳转；扫码配对在设置页）。
+              图标用 PhoneSvg 的 `currentColor`，亮 / 暗与状态点颜色都走 CSS 的 `color`。 */}
           <div
             className={`control phone${phone.active ? ' on' : ''}`}
             title={phone.hint}
@@ -199,9 +189,7 @@ const WindowLayout = ({ children, padding = 0, className }: Props) => {
             <WinMinSvg />
           </div>
           <div className="control maximize" onClick={() => maxHandle()}>
-            {/* <WinMaxSvg /> */}
             {isMax ? <SplitScreenSvg /> : <WinMaxSvg />}
-            {/* <SplitScreenSvg /> */}
           </div>
           <div className="control close" onClick={() => closeHandle()}>
             <CloseSvg />
@@ -224,10 +212,8 @@ const WindowLayout = ({ children, padding = 0, className }: Props) => {
         onHide={() => setUpdateShow(false)}
         onForceCancel={handleUpdateForceCancel}
       />
-      {/* <Loading /> */}
       <MessageBox />
       <Toast />
-      {/* <ContextMenu /> */}
     </div>
   )
 }

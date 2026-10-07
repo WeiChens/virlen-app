@@ -1,13 +1,9 @@
 /**
- * message-list 控制器 — 汇总状态 / 虚拟滚动 / 滚动行为 / 跳转行为
+ * message-list 控制器 — 汇总状态 / 虚拟滚动 / 滚动行为 / 跳转行为。
  *
- * 组件（message-list.tsx）只负责渲染；全部副作用、事件监听、定时器都在这里，
- * 并拆到三个子模块：
- *   - useVirtualList       虚拟滚动核心 + 派生数据
- *   - useScrollController  回补历史 / 贴底稳定 / 滚动监听
- *   - useJumpController    锚点定位 / 检索跳转高亮
- *
- * 三者通过本文件里创建的「共享 ref / state」协作，子模块自身不含跨模块私有状态。
+ * 组件（message-list.tsx）只负责渲染，全部副作用、事件监听、定时器都在这里，拆到三个子模块：
+ * useVirtualList（虚拟滚动 + 派生数据）/ useScrollController（回补历史 / 贴底稳定 / 滚动监听）/
+ * useJumpController（锚点定位 / 检索跳转高亮）。三者靠本文件创建的「共享 ref / state」协作。
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Message } from '@/types'
@@ -39,17 +35,16 @@ export function useChatMessageList({
   onQuote,
   jumpTarget,
 }: ChatMessageListProps) {
-  // ==================== 共享 ref / state ====================
   const containerRef = useRef<HTMLDivElement>(null)
   /** 供「只注册一次」的回调读取最新的 messages */
   const messagesRef = useRef(messages)
   messagesRef.current = messages
 
-  /** 待执行的「锚点跳转」目标消息 id（滚动控制器消费，跳转控制器写入） */
+  /** 待执行的锚点跳转目标 id（跳转控制器写入，滚动控制器消费） */
   const pendingJumpIdRef = useRef<string | null>(null)
-  /** 切会话后需要「先滚到底部 + 布局稳定后再显示」 */
+  /** 切会话后需「先滚到底 + 布局稳定后再显示」 */
   const needInitialBottomRef = useRef(false)
-  /** 切会话/首开的「贴底稳定」轮询定时器 */
+  /** 切会话 / 首开的「贴底稳定」轮询定时器 */
   const settleTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   /** 「定位中」提示的延迟显示定时器 */
   const jumpLoadingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -65,15 +60,9 @@ export function useChatMessageList({
   /** 检索跳转后临时高亮的目标消息 id（到时自动清除） */
   const [highlightMsgId, setHighlightMsgId] = useState<string | null>(null)
   const [activeUserMsgId, setActiveUserMsgId] = useState<string | null>(null)
-  /**
-   * 工具组折叠态：行 key → 是否展开。
-   *
-   * ⚠️ 必须住在列表层：组行会随虚拟化卸载，存在行组件内部（或行内 state）会「滚回来就复原」。
-   * 仅当设置项 `hideToolCallThink` 开启（启用分组）时才有意义。
-   */
+  /** 工具组折叠态（行 key → 是否展开）。⚠️ 必须住在列表层：组行随虚拟化卸载，存在行内会「滚回来就复原」 */
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
 
-  // ==================== 会话派生 ====================
   const sessionId = chatState.value.currentSessionId
   const hasMoreInDb = sessionId
     ? sessionStore.hasMoreMessages(sessionId)
@@ -81,13 +70,9 @@ export function useChatMessageList({
   const currentRt = sessionId ? getSessionRuntime(sessionId) : null
   const isCurrentPaused = currentRt?.paused ?? false
   const error = chatState.value.error
-  /**
-   * 是否启用工具组折叠：仅当「隐藏工具调用的思考过程消息」开启时可折叠（用户诉求）。
-   * 关闭时行模型退化为「一条消息 = 一行」，与改动前一致。
-   */
+  // 是否启用工具组折叠（= 设置项 hideToolCallThink）；关闭时行模型退化为「一条消息 = 一行」
   const groupTools = settingsState.value.hideToolCallThink
 
-  // ==================== 虚拟滚动核心 ====================
   const virtual = useVirtualList({
     messages,
     messagesRef,
@@ -98,10 +83,9 @@ export function useChatMessageList({
     toolResultsCacheRef,
   })
 
-  // ==================== 命中工具组：自动展开 ====================
-  // 检索（Ctrl+P）/ 引用跳转会命中工具宿主 assistant，经 resolveJumpAnchorId 后置入
-  // highlightMsgId。若命中落在某个折叠组里，不展开的话用户只看到一行折叠头、看不到内容 ——
-  // 这里把该组自动打开（不自动收起：留给用户自己折）。
+  // 命中工具组 → 自动展开（不自动收起，留给用户折）：检索 / 引用跳转会命中工具宿主
+  // assistant，经 resolveJumpAnchorId 后置入 highlightMsgId；若它落在折叠组里，
+  // 不展开就只看到一行折叠头、看不到内容。
   useEffect(() => {
     if (!highlightMsgId) return
     const row = virtual.rows.find(
@@ -114,14 +98,12 @@ export function useChatMessageList({
     setOpenGroups((prev) => (prev[key] ? prev : { ...prev, [key]: true }))
   }, [highlightMsgId, virtual.rows, messages])
 
-  // ==================== 切会话：清缓存 + 标记「需要贴底」 ====================
-  // 声明在滚动控制器之前：必须在「消息变化 effect」之前运行，
-  // 以便后者读到最新的 needInitialBottomRef。
+  // 切会话：清缓存 + 标记「需要贴底」
+  // 必须在下方「消息变化 effect」之前运行，后者要读到最新的 needInitialBottomRef。
   useLayoutEffect(() => {
     if (!sessionId) return
-    // 只有「高度静止」的会话才需要先隐藏、等布局稳定后再显示（避免估算高度→实测
-    // 高度跳变）。正在流式回复的会话高度一直在变，永远达不到稳定条件，若照常隐藏
-    // 会整片空白直到流式暂停（工具调用/结束）——此时直接显示，靠贴底跟随。
+    // 只有高度静止的会话才需先隐藏、等布局稳定后再显示（避免估算→实测高度跳变）；
+    // 流式回复中高度一直在变，永远达不到稳定条件，照常隐藏会整片空白到流式暂停 —— 直接显示。
     setHide(!isStreamingSession(sessionId))
     needInitialBottomRef.current = true
     toolResultsCacheRef.current.clear()
@@ -129,18 +111,17 @@ export function useChatMessageList({
       clearInterval(settleTimerRef.current)
       settleTimerRef.current = null
     }
-    // 切会话：清掉上一次检索跳转残留的命中高亮
+    // 清掉上一次检索跳转残留的命中高亮
     if (highlightTimerRef.current) {
       clearTimeout(highlightTimerRef.current)
       highlightTimerRef.current = null
     }
     setHighlightMsgId(null)
-    // 切会话：清掉组折叠态（新会话的组 key 与旧会话无关）
+    // 清掉组折叠态（新会话的组 key 与旧会话无关）
     setOpenGroups({})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
 
-  // ==================== 滚动行为 ====================
   const scroll = useScrollController({
     messages,
     messagesRef,
@@ -161,7 +142,6 @@ export function useChatMessageList({
     setActiveUserMsgId,
   })
 
-  // ==================== 跳转 / 锚点 ====================
   const jump = useJumpController({
     messages,
     messagesRef,
@@ -185,7 +165,6 @@ export function useChatMessageList({
     jumpTarget,
   })
 
-  // ==================== 卸载时清理定时器 ====================
   useEffect(() => {
     return () => {
       if (settleTimerRef.current) {
@@ -203,8 +182,7 @@ export function useChatMessageList({
     }
   }, [])
 
-  // ==================== 消息气泡 / 暂停条回调 ====================
-  /** 从 store 同步某会话的消息到 UI（用于删除消息 / 恢复 / 取消后的刷新） */
+  /** 从 store 同步某会话的消息到 UI（删除 / 恢复 / 取消后刷新） */
   const syncMessagesToUI = useCallback(
     (sid: string) => {
       if (sid !== chatState.value.currentSessionId) return

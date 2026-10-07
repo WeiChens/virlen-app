@@ -17,10 +17,8 @@ class RuntimeState<T extends object> {
     this.value = this.defaultValue
   }
   /**
-   *
-   * @param key 缓存密钥
    * @param defaultValue 默认值
-   * @param persistenceDelay 持久化延迟
+   * @param option.shallow 是否用 observable.shallow
    */
   constructor(
     defaultValue: T,
@@ -29,7 +27,7 @@ class RuntimeState<T extends object> {
     },
   ) {
     if (defaultValue === null) {
-      throw new Error('new StorageState param defaultValue cannot be null')
+      throw new Error('new RuntimeState param defaultValue cannot be null')
     }
     this.value = defaultValue
     this.defaultValue = defaultValue
@@ -45,10 +43,7 @@ class RuntimeState<T extends object> {
   }
 
   /**
-   * 扩展实例方法
-   *
-   * 将 obj 中的属性复制到当前实例上，返回类型为 RuntimeState<T> & M，
-   * 调用方可直接访问 mixin 方法。
+   * 扩展实例方法：将 obj 属性复制到当前实例，返回 RuntimeState<T> & M（调用方直接访问 mixin 方法）。
    */
   mixins<M extends Record<string, any>>(
     obj: M,

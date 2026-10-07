@@ -1,15 +1,12 @@
 /**
  * security-sandbox-rules — 安全菜单 · 「忽略沙盒命令」Tab
  *
- * 维护一组「命中即强制以『不使用沙盒』方式执行」的命令规则：沙盒开启时，命中规则的命令免去「沙盒脱壳」
- * 授权，并被引擎直接改为无沙盒执行（AI 不必显式传 `sandbox:"off"`）。匹配逻辑只有一份，在
- * `@/domain/security/sandbox-ignore-rules`；Rust 与 CLI 的判定在 `virlen-core/src/security/`
- *（同一份 golden 契约收敛）。
+ * 维护一组「命中即强制以『不使用沙盒』方式执行」的命令规则：命中后免去「沙盒脱壳」授权，引擎直接
+ * 把命令改为无沙盒执行（AI 不必显式传 `sandbox:"off"`）。匹配逻辑只有一份，在
+ * `@/domain/security/sandbox-ignore-rules`（Rust 与 CLI 的判定在同一份 golden 契约下收敛）。
  *
- * ⚠️ 规则只免除「沙盒脱壳」授权：命令本身的风险审批（终端正常/安装/危险命令、脚本执行）仍按「权限
- * 管理」里的三态设置走；`deny` 与只读沙盒不受规则影响。
- *
- * 列表顺序即优先级：从上到下取第一条命中的启用规则，故列表提供上移 / 下移。
+ * ⚠️ 规则只免除「沙盒脱壳」授权：命令本身的风险审批仍按「权限管理」的三态设置走；`deny` 与只读
+ * 沙盒不受规则影响。列表顺序即优先级，从上到下取第一条命中的启用规则，故提供上移 / 下移。
  */
 import { useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -59,11 +56,9 @@ const TEXT_MODE_LABELS: Record<SandboxTextMode, string> = {
 }
 
 /**
- * 列表徽标用的短标签。
- *
- * 列表行可用宽度只有 ~450px：按全称渲染「文本匹配 + 前缀匹配 + 区分大小写」三个徽标时，
- * 规则名会被挤到只剩两三个字。列表里合并成一个「文本 · 前缀」徽标，
- * 完整选项名只在空间充足的编辑弹窗出现。
+ * 列表徽标的短标签。
+ * 列表行可用宽度只有 ~450px，按全称渲染三个徽标会把规则名挤到只剩两三个字 —— 列表里合并成一个
+ * 「文本 · 前缀」徽标，完整选项名只在空间充足的编辑弹窗出现。
  */
 const KIND_SHORT_LABELS: Record<SandboxRuleKind, string> = {
   text: '文本',
@@ -79,7 +74,6 @@ const TEXT_MODE_SHORT_LABELS: Record<SandboxTextMode, string> = {
 
 /**
  * 列表徽标文案：文本规则带上比较方式（如「文本 · 前缀」），其余只显示类型。
- *
  * 拼成一个字符串再渲染（而不是相邻文本节点）—— SSR / 测试拿到的 markup 更干净。
  */
 function kindBadgeLabel(rule: SandboxIgnoreRule): string {
@@ -95,9 +89,8 @@ const DRAG_THRESHOLD = 4
 
 /**
  * 拖拽会话（不参与渲染的部分）。
- *
- * 行几何在按下时测一次就缓存：行高不固定（匹配内容是 1~2 行裁剪），
- * 拖拽期间又禁止滚动，所以缓存值整个会话都有效。
+ * 行几何在按下时测一次就缓存：行高不固定（匹配内容是 1~2 行裁剪），拖拽期间又禁止滚动，
+ * 所以缓存值整个会话都有效。
  */
 interface DragSession {
   id: string
@@ -174,10 +167,8 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
   }
 
   /**
-   * 删除规则：必须二次确认。
-   *
-   * 被删的可能是一条写了十几行的 JS 规则，而设置项没有草稿 / 撤销 / 回溯，
-   * 误点一下内容就永久丢了 —— 与「打开编辑器」等其它设置页保持同一套危险操作口径。
+   * 删除规则必须二次确认：被删的可能是一条写了十几行的 JS 规则，而设置项没有草稿 / 撤销 /
+   * 回溯，误点一下内容就永久丢了 —— 与其它设置页的危险操作同一口径。
    */
   async function removeRule(rule: SandboxIgnoreRule) {
     const ok = await MessageBox.warn(
@@ -193,17 +184,16 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
   /**
    * 开始拖拽排序。
    *
-   * 用 **pointer 事件**而不是 HTML5 drag & drop：窗口开了原生拖放（`dragDropEnabled: true`，
-   * AGENTS §11.8），页面收不到 drop / dragover —— 与 `chat/.../use-tree-drag.ts` 同一原因。
-   * 与那份实现的差别：规则列表通常只有几条（不是虚拟列表），
-   * 拖动过程直接走 React state 渲染（被拖行 transform + 落点指示线），不做 DOM 直改。
+   * 用 **pointer 事件**而非 HTML5 drag & drop：窗口开了原生拖放（`dragDropEnabled: true`，
+   * AGENTS §11.8），页面收不到 drop / dragover —— 同 `chat/.../use-tree-drag.ts`。差别：规则列表
+   * 通常只有几条（非虚拟列表），拖动过程直接走 React state，不做 DOM 直改。
    */
   function handleGripPointerDown(
     e: React.PointerEvent<HTMLElement>,
     id: string,
     index: number,
   ) {
-    if (e.button !== 0) return // 只响应主键（右 / 中键不拖）
+    if (e.button !== 0) return // 只响应主键，右 / 中键不拖
     const list = listRef.current
     if (!list) return
     const listRect = list.getBoundingClientRect()
@@ -297,10 +287,9 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
   /**
    * 切换匹配方式：**匹配内容回归该方式的默认值**。
    *
-   * 文本 / 正则的写法塞进 JS 规则（反之亦然）只会得到一条永远报错或永远不命中的规则，
-   * 与其让用户自己清空，不如切换时直接换成新方式的起点（JS 预填带注释的函数模板）。
-   * 点当前已选中的方式不重置，避免手滑清掉已写好的内容；
-   * 「比较方式」（完全 / 前缀 / 后缀）只改变比较口径，不动匹配内容。
+   * 文本 / 正则的写法塞进 JS 规则（反之亦然）只会得到一条永远报错或永远不命中的规则，与其让
+   * 用户自己清空，不如切换时换成新方式的起点（JS 预填带注释的函数模板）。点当前已选中的方式
+   * 不重置，避免手滑清掉已写内容；「比较方式」（完全 / 前缀 / 后缀）只改比较口径，不动匹配内容。
    */
   function changeKind(kind: SandboxRuleKind) {
     if (!draft || draft.kind === kind) return

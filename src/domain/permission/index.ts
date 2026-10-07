@@ -1,14 +1,11 @@
 /**
- * permission — 权限注册表与三态决策（领域层，纯逻辑）
+ * permission — 权限注册表与三态决策（领域层，纯逻辑）。
  *
- * 把「需要用户授权的操作」抽象成带命名空间的权限 name，每种权限有 允许(allow) / 每次弹窗(ask) /
- * 禁止(deny) 三态。终端命令按风险分类映射到 `terminal.*`，脚本执行映射到 `script.execute`；
- * 「沙盒脱壳」（AI 申请 `sandbox:"off"`）另有独立门禁 `sandbox.command.execute` /
- * `sandbox.script.execute`，与命令风险权限**取更严格者**。取代了旧的全局枚举 `commandApprovalMode`
- *（过粗，无法单独控制某类操作）。
+ * 权限以带命名空间的 name 表示，每种有三态：允许(allow) / 每次弹窗(ask) / 禁止(deny)。
+ * 终端命令按风险映射到 `terminal.*`、脚本映射到 `script.execute`；「沙盒脱壳」另有独立门禁
+ * `sandbox.command.execute` / `sandbox.script.execute`，与命令风险权限**取更严格者**。
  *
- * ⚠️ 本文件的常量与决策语义与 Rust 侧
- * `native_tools/execute/common/classify.rs` 逐字对齐（铁律 1），改一边必须同步改另一边。
+ * ⚠️ 常量与决策语义与 Rust `native_tools/execute/common/classify.rs` 逐字对齐，改一边必须同步另一边。
  */
 
 /** 三态权限决策 */
@@ -136,12 +133,9 @@ export function permissionLabel(name: string): string {
 
 /**
  * 最终决策（严格度递进）：
- * - `deny` 永远优先（任何理由都不能放宽）；
- * - 申请绕过沙盒（`escapeDecision` 为「沙盒脱壳」权限决策）→ 与基础决策**取更严格者**
- *   （脱壳权限默认 `ask`；用户可设为 `allow` 静默脱壳、`deny` 直接禁止）；
- * - 终端内确认（`confirmTerminal`）→ 强制至少 `ask`（安全底线，不被 `allow` 静默放行）。
- *
- * `escapeDecision` 为 `undefined` 表示本次未申请绕过沙盒（不参与合并）。
+ * - `deny` 永远优先；
+ * - `escapeDecision`（沙盒脱壳权限）与基础决策**取更严格者**；`undefined` = 本次未申请脱壳，不参与合并；
+ * - `confirmTerminal` → 强制至少 `ask`（安全底线，不被 `allow` 静默放行）。
  */
 export function resolveCommandDecision(
   base: PermissionDecision,
@@ -159,10 +153,7 @@ export function resolveCommandDecision(
   return d
 }
 
-/**
- * 旧 `commandApprovalMode`（全局枚举）→ 新权限表（一次性迁移用）。
- * 返回 `null` 表示没有可迁移的旧值（新用户 → 直接用注册表默认）。
- */
+/** 旧 `commandApprovalMode` → 新权限表（一次性迁移）。返回 `null` = 无旧值可迁移（新用户走注册表默认）。 */
 export function migrateApprovalMode(
   mode: string | undefined,
 ): PermissionMap | null {

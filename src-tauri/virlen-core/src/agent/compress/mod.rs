@@ -1,29 +1,22 @@
-//! 上下文压缩 —— 把早期对话历史替换成一条 `summary` 消息（本模块是唯一实现）
+//! 上下文压缩 —— 把早期对话历史替换成一条 `summary` 消息（本模块是唯一实现）。
 //!
 //! ## 两种模式
+//! - `Ai`：一次非流式模型调用，最省 token 但慢且要花钱。⚠️ 请求须与聊天请求**同构**（`tool_choice=auto` +
+//!   同样下发 `tools`），否则前缀缓存接不上；模型违约（工具调用 / 空正文）时回退 `Raw`。
+//! - `Raw`：纯本地渲染，毫秒级零消耗；正文一字不删，只丢深度思考并省略超长工具输出。
 //!
-//! - [`CompressMode::Ai`]：一次非流式模型调用（提示词 `prompts::COMPRESS_CONTEXT`），最省 token，但慢、且本身要花钱；
-//!   ⚠️ 请求必须与聊天请求**同构**（`tool_choice = auto` + 同样下发 `tools`），否则前缀缓存接不上（见 `ai` 模块头）；
-//!   模型违约（工具调用 / 空正文）时**回退 `raw`**（见 [`CompressMode::Ai`] 分支）。
-//! - [`CompressMode::Raw`]：正文压缩，纯本地渲染（[`raw::build_raw_summary`]），毫秒级零消耗；正文一字不
-//!   删，只丢深度思考并省略超长工具输出。
-//!
-//! 产物只有一条 `role = "summary"` 消息，由调用方追加到会话末尾；生效机制不在本模块：请求组装时
-//! `provider::blocks::slice_messages` 会丢掉最后一个 summary 之前的全部消息，所以 summary 正文必须自包含。
-//! ⚠️ 旧消息仍留在库里 —— `list_messages` / `read_messages` 靠它们检索「已压缩区间」，删掉那两个工具就
-//! 失去意义。
+//! 产物只有一条 `role="summary"` 消息，追加到会话末尾；生效机制不在本模块：请求组装时
+//! `provider::blocks::slice_messages` 会丢掉最后一个 summary 之前的全部消息，故 summary 正文必须自包含。
+//! ⚠️ 旧消息仍留在库里（`list_messages` / `read_messages` 靠它们检索「已压缩区间」）。
 //!
 //! ## 清单保活
-//!
-//! 活跃清单若落在压缩区间内，模型此后就看不到它（表现：压缩后 AI 忘记清单）。对策：把清单原文
-//! （[`render_todo_content`]）补在 summary 正文末尾（[`todo_recap`]）。
-//! ⚠️ 不能把清单快照的 `tool` 消息原样搬到 summary 之后：`tool` 消息必须紧跟带 `tool_calls` 的
-//! assistant 消息，否则 OpenAI / Anthropic 直接报错。
+//! 活跃清单若落在压缩区间内，模型此后看不到它。对策：把清单原文补在 summary 正文末尾（`todo_recap`）。
+//! ⚠️ 不能把清单快照的 `tool` 消息搬到 summary 之后：`tool` 消息必须紧跟带 `tool_calls` 的 assistant
+//! 消息，否则 OpenAI / Anthropic 直接报错。
 //!
 //! ## 已知差异与坑
-//!
-//! - token 计数：本模块只有 [`estimate_tokens`] 的 CJK 感知粗估，所以 `ui_data.contextTokens` 是估算值
-//!   （`ai` 模式下 `usage.totalTokens` 仍是 provider 回报的真实值）；
+//! token 计数只有 CJK 感知粗估，故 `ui_data.contextTokens` 是估算值（`ai` 模式的 `usage.totalTokens`
+//! 仍是 provider 回报的真实值）；
 //! - 截断单位：按字符（码点），阈值附近与 TS 的 UTF-16 口径可能差 ±1 字符；
 //! - `max_tokens` 必须钳到 [`DEFAULT_SUMMARY_MAX_TOKENS`]：GUI 会话默认的 `2000000`（语义是「不限制
 //!   输出」）会被模型以 400 `Invalid max_tokens value` 拒掉（见 `ai::summary_max_tokens`）。

@@ -1,23 +1,14 @@
 /**
- * CodePreview —— 基于 Monaco Editor（VS Code 编辑核心）的“代码预览”组件
+ * CodePreview —— 基于 Monaco（VS Code 编辑核心）的只读代码预览：带语法高亮，类似 VS Code 阅读模式。
  *
- * 用途：只读地展示带语法高亮的代码（类似 VS Code 阅读模式）。
+ * 相比完整编辑器做了简化：Monaco 走「精简构建」（只加载编辑器本体 + 各语言 Monarch 词法高亮，
+ * 无语言服务 → 没有 Web Worker 与诊断）；编辑器完全只读（domReadOnly，屏蔽输入 / 光标 / 编辑）；
+ * 无光标、无右键菜单、无悬浮。
  *
- * 相比完整编辑器，它是精简版：
- *   1. Monaco 采用“精简构建”（见 src/monaco/setupMonaco.ts）：
- *      只加载编辑器本体 + 各语言 Monarch 词法高亮，
- *      不打包 TS/JS/CSS/HTML/JSON 语言服务，因此没有任何 Web Worker、
- *      也没有“爆红”诊断。
- *   2. 编辑器配置为完全只读：禁用输入 / 光标 / 编辑（domReadOnly）。
- *   3. 更清爽：隐藏光标、无右键菜单、无悬浮，专注展示代码。
+ * 聊天流式列表适配：`height` 让容器内容等高或受控；scrollbar.alwaysConsumeMouseWheel=false
+ * 使自身无纵向溢出时滚轮冒泡给外层消息列表；startLineNumber 用于展示文件片段的行号。
  *
- * 针对聊天流式列表的适配：
- *   - 传 height 让容器“内容等高”或受控高度；配 scrollbar.alwaysConsumeMouseWheel=false，
- *     当编辑器自身无纵向溢出时滚轮会冒泡给外层消息列表，不吞滚动。
- *   - startLineNumber 用于行号从指定行显示（读文件片段）。
- *
- * 用法：
- *   <CodePreview code={code} language="typescript" height={320} />
+ * 用法：`<CodePreview code={code} language="typescript" height={320} />`
  */
 import type { OnMount } from '@monaco-editor/react'
 import Editor from '@monaco-editor/react'
@@ -30,15 +21,11 @@ import '@/monaco/setupMonaco'
 import './code-preview.scss'
 
 /**
- * 行号列与代码正文之间的横向间距（px）—— 即 Monaco 的 lineDecorationsWidth。
+ * 行号列与正文之间的横向间距（px），即 Monaco 的 lineDecorationsWidth。
  *
- * 注意：它属于「行号区」(.margin) 的宽度（layoutInfo: contentLeft = 行号列宽 + lineDecorationsWidth），
- * 如果不做处理，行号区底色（editorGutter.background）会一直铺到正文第一列，
- * 于是这段留白看上去只是“行号区变宽了”，正文依旧紧贴着行号区的色块边界。
- * 因此把它拆成两段：
- *   - 贴着行号的一小段（GUTTER_INNER_PAD）仍留在行号区底色内，避免数字贴着色块边界；
- *   - 剩下的一段由 CSS 把行号区底色“挖掉”（见 code-preview.scss 的 .margin 规则），
- *     露出编辑器底色 —— 视觉上就成了正文自己的左侧留白。
+ * 它属于行号区（.margin）宽度，不处理的话行号区底色会一直铺到正文第一列，看着只是「行号区变宽」。
+ * 故拆两段：贴着行号的一小段仍留行号区底色（GUTTER_INNER_PAD），其余由 CSS 把行号区底色挖掉
+ *（见 code-preview.scss 的 .margin 规则）露出编辑器底色，视觉上就成了正文自己的左侧留白。
  */
 const GUTTER_TO_CONTENT_GAP = 14
 /** 上述间距中仍然保留行号区底色的一小段（px） */
@@ -46,10 +33,7 @@ const GUTTER_INNER_PAD = 5
 /** 需要挖掉行号区底色、改由编辑器底色绘制的宽度（px） */
 const GUTTER_BG_CUTOUT = GUTTER_TO_CONTENT_GAP - GUTTER_INNER_PAD
 
-/**
- * CodePreview 对外暴露的命令式 API（挂载后经 `onApiReady` 下发，卸载时下发 null）。
- * 仅提供给外层做「全选 → 复制」这类需要操动编辑器的动作。
- */
+/** 对外暴露的命令式 API（挂载后经 onApiReady 下发，卸载时下发 null），供外层做「全选 → 复制」 */
 export interface CodePreviewApi {
   /** 全选编辑器内容（并把焦点移入编辑器，选区会经 onSelectionChange 上报） */
   selectAll: () => void
@@ -79,18 +63,13 @@ export interface CodePreviewProps {
   /** 传入扩展名/路径可让 Monaco 推断语言 */
   path?: string
   /**
-   * 选区文本变化回调（含空串）。
-   *
-   * 为什么需要：Monaco 的选区**不进 `window.getSelection()`**，外层（如 `CodeBlock`
-   * 的右键菜单/复制）想拿到「用户选中的代码」只能靠它上报。
-   * 只读预览：onDidChangeCursorSelection 触发时取 `model.getValueInRange(selection)`。
+   * 选区文本变化回调（含空串）。Monaco 的选区不进 `window.getSelection()`，外层（CodeBlock 的
+   * 右键菜单 / 复制）拿「用户选中的代码」只能靠它上报（只读预览取 getValueInRange(selection)）。
    */
   onSelectionChange?: (selectedText: string) => void
   /**
-   * 编辑器挂载完毕下发命令式 API（卸载时回调 null）。
-   *
-   * 为什么不用 ref：本组件在聊天里被大量只读预览复用，forwardRef 会扩大改动面；
-   * 用回调下发 API 更轻，且卸载时能顺带清空，避免外层拿到已 dispose 的编辑器。
+   * 挂载完毕下发命令式 API（卸载时回调 null）。不用 forwardRef：本组件被大量只读预览复用，
+   * 回调下发更轻，且卸载时能顺带清空，避免外层拿到已 dispose 的编辑器。
    */
   onApiReady?: (api: CodePreviewApi | null) => void
 }
@@ -128,10 +107,8 @@ function buildPreviewOptions(
     suggest: { showWords: false },
     colorDecorators: false,
 
-    // ── 不把括号当“错误”处理 ──
-    // 读文件/搜索常展示“片段”，起始/结尾可能处于代码结构中间（多余的 } ) ] 或 >），
-    // 若开启 bracket 高亮，Monaco 会把“配不上的括号”画成红色（unexpected bracket），
-    // 看起来就像语法报错。这里彻底关掉括号染色与匹配提示。
+    // 展示的常是「片段」（起始 / 结尾可能处于代码结构中间，多出 } ) ] 或 >），开启 bracket 高亮会把
+    // 配不上的括号画成红色（unexpected bracket），看着像语法报错，故彻底关掉染色与匹配提示。
     bracketPairColorization: { enabled: false },
     matchBrackets: 'never',
 
@@ -140,9 +117,8 @@ function buildPreviewOptions(
     lineNumbers: showLineNumbers
       ? (line: number) => String(line + startLineNumber - 1)
       : 'off',
-    // 行号列与正文之间的横向留白：Monaco 默认只有 10px，正文几乎贴着行号列。
-    // 这是布局里唯一夹在“行号列”和“正文”之间的间距（padding 选项只支持 top/bottom），
-    // 所以只能靠它撑开；其中“露出编辑器底色”的那段由 CSS 处理，见 code-preview.scss。
+    // 行号列与正文间的唯一可用间距（padding 选项只支持 top/bottom）；其中「露出编辑器底色」的
+    // 那段由 CSS 处理，见 code-preview.scss。
     lineDecorationsWidth: showLineNumbers ? GUTTER_TO_CONTENT_GAP : GUTTER_INNER_PAD,
     fontSize,
     fontFamily: `${fontFamily}, 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', Consolas, 'Courier New', monospace`,
@@ -160,14 +136,12 @@ function buildPreviewOptions(
     overviewRulerBorder: false,
     roundedSelection: false,
     scrollbar: {
-      // 垂直滚动完全交给外层 .code-block-wrapper（maxHeight 场景）/ 消息列表：
-      // Monaco 内置垂直滚动条在“内容高度≈可视高度”时会变成拖不动的幽灵滚动条，
-      // 和外层滚动条重复，因此直接隐藏，避免出现两根垂直滚动条。
+      // 垂直滚动交给外层 .code-block-wrapper（maxHeight 场景）/ 消息列表：内置垂直滚动条在
+      //「内容高度≈可视高度」时会变成拖不动的幽灵滚动条，与外层重复。
       vertical: 'hidden',
       horizontal: 'auto',
       useShadows: false,
-      // 关键：编辑器自身没有可滚动的方向时不要吞掉滚轮事件，
-      // 让外层消息列表能正常滚动（聊天流场景必须）。
+      // 自身无可滚方向时不要吞掉滚轮，让外层消息列表能正常滚动（聊天流场景必须）。
       alwaysConsumeMouseWheel: false,
       verticalScrollbarSize: 10,
       horizontalScrollbarSize: 10,
@@ -208,8 +182,8 @@ export default function CodePreview(props: CodePreviewProps) {
     })
   }
 
-  // 卸载时清空 API：避免外层持有一个已 dispose 的编辑器。
-  // 用 ref 取最新的 onApiReady（它在父组件里通常是内联箭头，每次渲染都会变）。
+  // 卸载时清空 API，避免外层持有已 dispose 的编辑器。用 ref 取最新的 onApiReady
+  //（它在父组件里通常是内联箭头，每次渲染都会变）。
   const onApiReadyRef = useRef(props.onApiReady)
   onApiReadyRef.current = props.onApiReady
   useEffect(() => {
@@ -221,7 +195,7 @@ export default function CodePreview(props: CodePreviewProps) {
       className={`code-preview ${className}`}
       style={
         {
-          // 让 lineDecorationsWidth 撑出的留白落在“正文底色”上，而不是把行号区画宽。
+          // 让 lineDecorationsWidth 撑出的留白落在「正文底色」上，而不是把行号区画宽
           '--code-preview-gutter-cutout': `${GUTTER_BG_CUTOUT}px`,
         } as CSSProperties
       }>

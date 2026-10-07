@@ -1,20 +1,15 @@
 /**
- * securityRepo — 安全配置的持久化 Repository
+ * securityRepo — 安全配置的持久化 Repository（配置下沉 D3，见 docs/config-sink-plan.md）。
  *
- * 存储分工（配置下沉 D3，见 `docs/config-sink-plan.md`）：
- * - 「忽略沙盒命令」规则：**唯一权威源是 Rust 侧 `app_settings` 表**（GUI 默认引擎与 CLI 读写同一份，
- *   判定在 `virlen-core/src/security/`）；localStorage 不保存该字段，只在浏览器 dev / 非 Tauri 降级用。
- * - 路径配置（whitelist / blacklist / skipEachDirs）：仍存 localStorage（同步读 → 首帧不闪空）。
+ * 存储分工：「忽略沙盒命令」规则**唯一权威源是 Rust app_settings 表**（GUI / CLI 读写同一份，判定在
+ * virlen-core/src/security/）；localStorage 不保存该字段。路径配置（whitelist / blacklist / skipEachDirs）
+ * 仍存 localStorage（同步读 → 首帧不闪空）。启动同步 hydrateSecurity（幂等）：表里有该键 → 读进内存快照
+ *（rulesSnapshot）；没有 → 一次性把 localStorage 历史副本迁进表。两分支都会清掉 localStorage 里的规则字段
+ *（「删表里的行」= 真正清空，不会被下次启动迁回）。
  *
- * 启动同步（`hydrateSecurity`，幂等，`main.ts` 在窗口显示前调用）：表里有该键 → 读进内存快照
- * （`rulesSnapshot`）；没有 → 一次性把 localStorage 的历史副本迁进表。两条分支都会清掉 localStorage
- * 里的规则字段 —— 因此「删掉表里的行」= 真正清空规则，不会被下次启动迁回。
- *
- * ⚠️ 规则匹配有两份实现，由 golden 契约收敛（`src/tests/fixtures/sandbox-rules.golden.json`）：
- * `virlen-core/src/security/rules.rs`（text / regex 原生 + js 内嵌 QuickJS）↔ 浏览器 dev / 设置页
- * 「测试」用的 `@/domain/security/sandbox-ignore-rules`。
- *
- * 非 Tauri 环境（浏览器 dev / vitest）没有表可写 → 整体降级为 localStorage 持久化。
+ * ⚠️ 规则匹配有两份实现，由 golden 契约（tests/fixtures/sandbox-rules.golden.json）收敛：
+ * virlen-core/src/security/rules.rs ↔ @/domain/security/sandbox-ignore-rules（浏览器 dev / 设置页「测试」）。
+ * 非 Tauri 环境整体降级为 localStorage 持久化。
  */
 import { getLocal, setLocal } from '@/utils/localStorage'
 import type { SimpleRepo } from '@/infrastructure/repo'
@@ -29,9 +24,8 @@ export interface SecurityConfig {
   /**
    * 「忽略沙盒命令」规则：命中的命令免除「沙盒脱壳」审批（匹配逻辑见上）。
    *
-   * 权威源是 `app_settings` 的 `sandboxIgnoreRules` 键（**不在 localStorage**）；
-   * 由 `hydrateSecurity()` 在启动时读进内存快照，改动 debounce 回写
-   * （退出前 `flushSecurityPersist()` 补一次）。
+   * 权威源是 app_settings 的 sandboxIgnoreRules 键（**不在 localStorage**）；由 hydrateSecurity() 启动时读进
+   * 内存快照，改动 debounce 回写（退出前 flushSecurityPersist() 补一次）。
    */
   sandboxIgnoreRules: SandboxIgnoreRule[]
 }

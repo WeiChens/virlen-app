@@ -1,9 +1,4 @@
-/**
- * chat-service 的对外回调事件契约
- *
- * 独立成文件，供事件处理器（event-handler）与编排层（flow）共用，
- * 避免二者互相 import 形成环。
- */
+/** chat-service 的对外回调事件契约（供 event-handler 与 flow 共用，避免互相 import 成环）。 */
 
 export interface ChatServiceEvents {
   /** 会话工作状态变更 */

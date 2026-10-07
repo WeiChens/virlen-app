@@ -1,16 +1,13 @@
 /**
- * plazaService — 技能广场远程 API 服务
- *
- * 调用 virlen-api 的公开接口获取技能列表、分类、详情、SKILL.md 预览。
- * 使用浏览器原生 fetch。
- * 导入流程：获取 download_url → 下载 ZIP → 调用 importSkillFromZip 安装。
+ * plazaService — 技能广场远程 API 服务：调 virlen-api 公开接口取技能列表 / 分类 / 详情 / SKILL.md 预览（浏览器原生
+ * fetch）。导入流程：取 download_url → 下载 ZIP → importSkillFromZip 安装。
  */
 import { importSkillFromZip } from './importService'
 import { getRegisteredSkill } from './skillStore'
 import { domain } from '@/ui/constants'
 import { t, tpl } from '@/ui/i18n'
 
-// ==================== 类型定义 ====================
+// 类型定义
 
 /** 远程技能信息（来自 API） */
 export interface RemoteSkill {

@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 
-
 const getDomLayout = (ref: React.RefObject<HTMLElement>) => {
     if (!ref.current) return null;
     const rect = ref.current.getBoundingClientRect();

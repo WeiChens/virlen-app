@@ -1,10 +1,6 @@
 /**
- * skill-settings — 技能管理页面
- *
- * 功能：
- *  - Tab 切换：本地技能 / 技能广场
- *  - 本地技能：查看、导入 ZIP、删除、刷新
- *  - 技能广场：从远程 API 浏览、预览、导入
+ * skill-settings — 技能管理页：Tab 切换「本地技能 / 技能广场」。本地支持查看、导入 ZIP、
+ * 扫描 / 刷新元信息、删除；广场见 `skill-plaza`。
  */
 import { useState, useEffect, useMemo } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -45,7 +41,7 @@ function SkillSettings() {
   const [previewContent, setPreviewContent] = useState('')
   const [previewLoading, setPreviewLoading] = useState(false)
 
-  // 模糊搜索：匹配 name 或 description
+  // 匹配 name 或 description
   const filteredSkills = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
     if (!q) return skills
@@ -56,7 +52,6 @@ function SkillSettings() {
     )
   }, [skills, searchQuery])
 
-  // 加载数据
   useEffect(() => {
     loadSkills()
     getSkillsDirPath()
@@ -68,7 +63,6 @@ function SkillSettings() {
     setSkills(listRegisteredSkills())
   }
 
-  // 导入 ZIP
   async function handleImport() {
     setImporting(true)
     try {
@@ -95,7 +89,6 @@ function SkillSettings() {
     }
   }
 
-  // 扫描注册
   async function handleScan() {
     setRefreshing(true)
     try {
@@ -119,7 +112,6 @@ function SkillSettings() {
     }
   }
 
-  // 刷新元信息
   async function handleRefresh() {
     setRefreshing(true)
     try {
@@ -136,7 +128,6 @@ function SkillSettings() {
     }
   }
 
-  // 删除技能
   async function handleDelete(skill: RegisteredSkill) {
     const confirmed = await MessageBox.propt(
       t('删除技能'),
@@ -153,7 +144,6 @@ function SkillSettings() {
     }
   }
 
-  // 预览 SKILL.md
   async function handlePreview(skill: RegisteredSkill) {
     setPreviewSkill(skill)
     setPreviewContent('')
@@ -173,7 +163,6 @@ function SkillSettings() {
     setPreviewContent('')
   }
 
-  // 打开技能目录
   async function openSkillsDir() {
     try {
       await openPath(skillsDirPath)
@@ -184,7 +173,6 @@ function SkillSettings() {
 
   return (
     <div className="skill-settings">
-      {/* Tab 切换 */}
       <div className="skill-tab-bar">
         <button
           className={`skill-tab ${tab === 'local' ? 'active' : ''}`}
@@ -198,7 +186,6 @@ function SkillSettings() {
         </button>
       </div>
 
-      {/* Tab 内容 */}
       {tab === 'plaza' ? (
         <SkillPlaza />
       ) : (
@@ -240,7 +227,6 @@ function SkillSettings() {
             </div>
           </div>
 
-          {/* 搜索 & 计数 */}
           <div className="skill-search-row">
             <span className="skill-count">
               {tpl('共 $__count__ 个技能', { count: skills.length })}
@@ -328,7 +314,6 @@ function SkillSettings() {
             )}
           </div>
 
-          {/* SKILL.md 预览弹窗 */}
           <Modal
             visible={!!previewSkill}
             title={previewSkill ? `SKILL.md — ${previewSkill.meta.name}` : ''}

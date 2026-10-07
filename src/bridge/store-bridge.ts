@@ -1,42 +1,25 @@
 /**
- * store-bridge —— 用 mobx `reaction` **旁路订阅**本机 store，把变化推给手机。
+ * store-bridge —— 用 mobx reaction **旁路订阅**本机 store，把变化推给手机。
  *
- * ⚠️ **为什么不用「在 flow / event-handler 里逐点上报」**（见 docs/phone-control-bridge.md §4.1）：
- * `chat-service` 里「消息变化」有多个变更点（addSessionMessage / updateSessionMessage / 批量替换 /
- * 修复回填…），`working` 也有 5+ 处（发送 / 恢复 / 取消 / finishWorking…）——
- * **逐点上报必然漏**（tray-service.ts 的注释已经因此改用 reaction）。
- * 手机推送面更大，同样结论：**在 store 侧做 diff，是唯一不漏的姿势**。
+ * ⚠️ 为什么不在 flow / event-handler 逐点上报：消息变化 / working 都有多个变更点，逐点上报必然漏
+ *（tray-service 已因此改用 reaction），在 store 侧做 diff 是唯一不漏的姿势。
  *
- * 三条推送通道：
- * 1. `session.list.changed` —— **恒推**（拍板：全部会话推手机）；
- * 2. `message.added/updated` + `message.stream` + `messages.reset` —— **仅推「已订阅」会话**（手机打开过的）；
- * 3. `session.runtime.changed` + `session.context.changed` —— 仅推「已订阅」会话。
+ * 三条推送通道：① session.list.changed 恒推；② message.added/updated + message.stream + messages.reset
+ * 仅推「已订阅」会话；③ session.runtime.changed + session.context.changed 仅推「已订阅」会话。
  *
- * ⚠️ **变化之外还得有一次「现值」**：本模块全部靠 reaction 推变化，而订阅本身不触发 reaction
- * （`SubscriptionRegistry` 是普通 Set）—— 所以「订阅那一刻的运行时状态」必须由调用方
- * （`host-source` 的 subscribe / create 路径）显式补一次 `pushRuntime(sessionId)`。
- * 少了这一帧，手机打开一个「在它没看的时候出过错」的会话时，错误原因根本不会出现。
+ * ⚠️ 订阅本身不触发 reaction（SubscriptionRegistry 是普通 Set），故「订阅那一刻的现值」必须由调用方
+ *（host-source 的 subscribe / create）显式补一次 pushRuntime —— 否则手机打开一个「它没看时出过错」的
+ * 会话时，错误原因根本不会出现。
  *
- * 流式策略（§3.6 / §32）：正在生成的那条消息**只走 `message.stream`**，
- * 定稿后再作为 `message.added` 补发一条完整消息 —— 于是消息通道天然幂等，不必处理中间态。
+ * 流式：正在生成的消息**只走 message.stream**，定稿后再作为 message.added 补发完整消息（消息通道天然幂等）。
+ * 一期每帧发整段（O(n²)）；二期按客户端 hello 声明的 streamMode:'delta' 且「新正文以已发正文为前缀」时发增量
+ *（首帧 / 正文被改写 / final 收尾帧仍发整段，报文多一个 offset 供客户端对齐）。
  *
- * **一期每帧发整段正文（O(n²) 字节）；二期（2026-09-30）改为按客户端声明发增量。**
- * 何时发增量：客户端在 `hello` 里声明 `streamMode:'delta'`（`createStoreBridge` 的 `streamMode` 读它），
- * 且「新正文以**已发出的正文**为前缀」—— 首帧、正文被改写、`final` 收尾帧一律发整段。
- * 带宽差一个量级（一条 n 字回复：O(n²) → O(n)），而报文形状多了一个 `offset` 用于客户端对齐。
+ * §33 传输档位：精简档下 role:'tool' 的输出正文不下发（带 MessageDTO.detail='omitted'），只留工具名（手机上
+ * 最大的一笔流量）；档位从 transferTier() 读，且**只影响下一次发什么**（快照存与档位无关的完整投影）。
  *
- * **§33 传输档位**：精简档（TURN 中继 / 链路类型未判定）下，`role:'tool'` 的**输出正文**不下发
- * （带 `MessageDTO.detail='omitted'`），只保留工具名 —— 工具输出是手机上最大的一笔流量。
- * 档位从 `transferTier()` 读（调用方已把「对端能不能渲染省略标记」合进去了），
- * 且**只影响下一次发什么**：快照存的是与档位无关的完整投影，所以档位变化本身不发任何事件
- * （拍板的「不补发」，也让「切档位」不会把手机上已有的正文抹掉）。
- *
- * ⚠️ 流式的**数据源是 store 里那条 `streaming === true` 的消息**，不是
- * `sessionRuntimeState.streamingMessageId`（2026-09-28 真机缺陷根因，§22.4）：Rust 引擎的
- * `stream_event` 只带 `{delta}`（不带 `messageId`，见 `agent/llm_round.rs::flush_stream_state`），
- * 而 `event-handler` 过去会据此把 `streamingMessageId` 写成 `null` → 流式帧一帧都发不出去，
- * 手机端只剩「工作中…」的加载态。现在改读 store 里正在流式的那条消息
- * （与桌面 UI 同一个真相），谁忘了维护运行时字段都影响不到这条通道。
+ * ⚠️ 流式的数据源是 store 里那条 streaming===true 的消息，**不是** sessionRuntimeState.streamingMessageId：
+ * Rust stream_event 只带 {delta}（无 messageId），过去据此把该字段写成 null → 流式帧一帧都发不出去（§22.4）。
  */
 import { reaction, type IReactionDisposer } from 'mobx'
 import type { HostEmit, StreamMode, TransferTier } from 'virlen-remote'

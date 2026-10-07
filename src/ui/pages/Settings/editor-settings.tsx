@@ -1,10 +1,7 @@
 /**
- * editor-settings — 打开编辑器配置页面
- *
- * 布局：预设列表（EDITOR_PRESETS，不可修改）显示在前面，
- * 自定义编辑器（用户保存的数据）显示在后面、可编辑。
- * 点击卡片 = 选中（设为默认编辑器），自定义卡片右上角 Edit 图标才进入编辑。
- * 支持 ${filePath} ${line} ${column} 占位符。
+ * editor-settings — 打开编辑器配置页：预设（EDITOR_PRESETS，不可修改）在前，自定义在后且可编辑。
+ * 点卡片 = 选中为默认编辑器，自定义卡片右上角的编辑图标才进编辑。
+ * 命令支持 ${filePath} ${line} ${column} 占位符。
  */
 import { useState } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -36,8 +33,6 @@ function EditorSettings() {
   // 自定义配置 = 非预设名称的配置（预设不可修改，单独展示在前）
   const customConfigs = configs.filter((c) => !PRESET_NAMES.includes(c.name))
 
-  // ==================== 新增（自定义）====================
-
   function handleSaveNew(config: { name: string; command: string }) {
     const now = Date.now()
     const newConfig: EditorOpenConfig = {
@@ -57,8 +52,6 @@ function EditorSettings() {
     showToast(tpl('已添加：$__name__', { name: newConfig.name }))
   }
 
-  // ==================== 编辑保存 ====================
-
   function handleSaveEdit(config: { name: string; command: string }) {
     if (!modalState || modalState.mode !== 'edit') return
     const updated = configs.map((c) =>
@@ -75,8 +68,6 @@ function EditorSettings() {
     setModalState(null)
     showToast(t('已保存'))
   }
-
-  // ==================== 点击预设 = 选中（预设命令不可修改）====================
 
   function handleSelectPreset(preset: EditorPreset) {
     const existing = configs.find((c) => c.name === preset.name)
@@ -99,15 +90,11 @@ function EditorSettings() {
     }
   }
 
-  // ==================== 点击自定义 = 选中 ====================
-
   function handleSelectCustom(config: EditorOpenConfig) {
     if (config.id === defaultId) return
     settingsState.setValue('editorOpenDefaultId', config.id)
     showToast(tpl('已切换默认编辑器：$__name__', { name: config.name }))
   }
-
-  // ==================== 删除自定义 ====================
 
   async function handleDeleteCustom(config: EditorOpenConfig) {
     const flag = await MessageBox.warn(
@@ -130,8 +117,6 @@ function EditorSettings() {
     showToast(t('已删除'))
   }
 
-  // ==================== 渲染 ====================
-
   return (
     <div className="editor-settings">
       <div className="add-section">
@@ -147,7 +132,6 @@ function EditorSettings() {
               <div
                 key={preset.name}
                 className={`template-card ${isActive ? 'is-active' : ''}`}>
-                {/* 主体：点击 = 选中 */}
                 <button
                   className="template-main"
                   onClick={() => handleSelectPreset(preset)}>
@@ -157,7 +141,6 @@ function EditorSettings() {
                     </span>
                     <span className="template-label">{preset.name}</span>
                   </div>
-                  {/* <code className="template-desc">{preset.command}</code> */}
                 </button>
               </div>
             )
@@ -167,7 +150,6 @@ function EditorSettings() {
         {/* 自定义（保存的数据，显示在后面，与预设留白分隔） */}
         <div className="custom-section">
           <div className="template-grid">
-            {/* 已保存的自定义 */}
             {customConfigs.map((config) => {
               const isActive = config.id === defaultId
               return (
@@ -176,7 +158,6 @@ function EditorSettings() {
                   key={config.id}
                   className={`template-card custom-item has-actions ${isActive ? 'is-active' : ''
                     }`}>
-                  {/* 主体：点击 = 选中 */}
                   <div
                     className="template-main"
                   >
@@ -184,7 +165,6 @@ function EditorSettings() {
                       <span className="template-icon">⚙️</span>
                       <span className="template-label">{config.name}</span>
                     </div>
-                    {/* <code className="template-desc">{config.command}</code> */}
                   </div>
                   <div className='actions-list'>
                     <button
@@ -197,7 +177,6 @@ function EditorSettings() {
                       <EditSvg />
                       {t('编辑')}
                     </button>
-                    {/* 右上角 Delete 图标：点击 = 删除 */}
                     <button
                       className="template-btn"
                       onClick={(e) => {
@@ -213,7 +192,6 @@ function EditorSettings() {
               )
             })}
 
-            {/* 新增自定义（显示在最最后面） */}
             <div className="template-card custom">
               <button
                 className="template-main"
@@ -231,7 +209,6 @@ function EditorSettings() {
         </div>
       </div >
 
-      {/* 弹窗 */}
       < EditorEditModal
         visible={!!modalState
         }

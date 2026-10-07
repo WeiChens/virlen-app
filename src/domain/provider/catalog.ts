@@ -1,14 +1,10 @@
 /**
- * 供应商目录（模板表 + 推理强度档位表）的**前端侧快照**（纯模块，零 I/O）
+ * 供应商目录（模板表 + 推理强度档位表）的前端侧快照（零 I/O）。
  *
- * 数据本体在 Rust `virlen-core/src/agent/provider/provider_catalog.json`；前端不再自带副本：组合根
- * （`src/main.ts`）启动时经 `loadProviderCatalog()` 水合一次，此后所有消费者同步读取。
+ * 数据本体在 Rust `agent/provider/provider_catalog.json`，启动时经 `loadProviderCatalog()` 水合一次，
+ * 此后同步读取（`sortReasoningEfforts()` / `providerTemplates()` 都在渲染期同步调用，改 async 会传染整条 UI 链）。
  *
- * 为什么是「启动水合 + 同步读」：`sortReasoningEfforts()` 与 `providerTemplates()` 都在渲染期被同步
- * 调用（`provider-edit-modal` / `reasoning-effort-slider` / `provider-service`），改成 async 会把它
- * 传染给整条 UI 链。接线与提示词（`domain/agent/prompt-texts.ts`）同构。
- *
- * ⚠️ 未水合时抛错，不返回空表：空模板表会让「添加服务商」页面静默变空，比直接报错难排查得多。
+ * ⚠️ 未水合时抛错而非返回空表：空模板表会让「添加服务商」页静默变空，更难排查。
  */
 import type { ProviderConfigTemplate } from '@/types'
 
@@ -26,11 +22,8 @@ export interface ProviderCatalog {
 let snapshot: ProviderCatalog | null = null
 
 /**
- * 水合（启动时调用一次；测试 setup 里也调一次）。
- *
- * 对数组做浅拷贝：目录是**共享常量**，谁（误）改了不该影响别处。
- *
- * `null` = 重置为「未水合」状态（单测用；与 `setPromptTexts(null)` 同款语义）。
+ * 水合（启动时调一次，测试 setup 也调）。对数组做浅拷贝（目录是共享常量，谁误改不应影响别处）；
+ * `null` = 重置为未水合（单测用）。
  */
 export function setProviderCatalog(catalog: ProviderCatalog | null): void {
   if (catalog === null) {
@@ -83,10 +76,7 @@ function effortRank(val: string): number {
 }
 
 /**
- * 按并集顺序重排档位列表
- *
- * 拖动条要求档位单调（none → minimal → low → … → max），而用户勾选的先后顺序是任意的，
- * 因此落库前统一按并集顺序归一化。
+ * 按并集顺序重排档位列表：拖动条要求档位单调，而用户勾选顺序任意，故落库前统一归一化。
  */
 export function sortReasoningEfforts(list: string[]): string[] {
   return [...list].sort((a, b) => effortRank(a) - effortRank(b))

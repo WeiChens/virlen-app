@@ -1,16 +1,9 @@
 /**
- * chat-message-list — 聊天消息列表组件（虚拟滚动版）
+ * 聊天消息列表（虚拟滚动版）：只渲染视口附近的若干行，向上翻阅上万条也不累积 DOM；
+ * 向上从 SQLite 回补历史（前插）时保持滚动锚定；贴底时新消息 / 流式增长自动跟随，用户上滑后不打扰。
  *
- * 从 chat-view 分离，管理消息列表的渲染、滚动行为、暂停/错误提示。
- *
- * 使用 @tanstack/react-virtual 做「动态高度」虚拟滚动：
- *  - DOM 恒定：仅渲染视口附近的若干条消息，向上翻阅上万条也不会累积 DOM。
- *  - 滚动锚定：向上从 SQLite 回补更早历史（前插）时保持视口不跳动。
- *  - 贴底跟随：位于底部时，新消息 / 流式增长自动跟随；用户上滑后不打扰。
- *
- * 拆分说明：全部状态 / 副作用 / 事件已抽到 `./message-list/*`
- *（use-message-list 编排 + use-virtual-list / use-scroll-controller / use-jump-controller），
- * 本文件只负责把控制器返回的渲染模型拼成 JSX，并保持既有对外 API 不变。
+ * 状态 / 副作用 / 事件都在 `./message-list/*`（`use-message-list` 编排 + use-virtual-list /
+ * use-scroll-controller / use-jump-controller），本文件只把渲染模型拼成 JSX，并保持对外 API 不变。
  */
 import { useCallback } from 'react'
 import { observer } from 'mobx-react-lite'

@@ -1,28 +1,17 @@
-//! 宿主环境抽象 — 引擎核心与「宿主」之间的唯一接口
+//! 宿主环境抽象 — 引擎核心与「宿主」之间的唯一接口。
 //!
-//! 引擎核心（`agent/**`）必须零 `tauri::`（headless / CLI 的前提），但有两类信息只有宿主知道：只读
-//! 资源在哪（如 `quasivision_models`，打包后随安装目录走）、可写数据根在哪（会话库 / 日志 / 配置）。
-//! 二者收敛成这个极小 trait，由宿主在构造期注入（`Arc<dyn HostEnv>`），与 `NativeToolCtx` 上的
-//! `security` / `repo` 同风格。
+//! 引擎核心（`agent/**`）须零 `tauri::`，但「只读资源在哪」「可写数据根在哪」只有宿主知道 —— 收敛成
+//! 这个极小 trait，由宿主构造期注入（`Arc<dyn HostEnv>`）。
 //!
-//! 约定（防止抽象面积蔓延）：只往里加「引擎自己拿不到的信息」—— 通知 / 托盘 / 窗口 / 剪贴板等纯 GUI
-//! 能力不进这里，能由配置表达的东西也不进这里。
-//!
-//! 实现：GUI 用 `crate::host::TauriHost`，CLI / 单测用 `crate::host::CliHost`。
-//! ⚠️ 本文件（以及 `crate::host` 之外的调用方）不得引入 `tauri::`。设计草案见
-//! `docs/host-abstraction-draft.md`。
+//! 约定：只加「引擎自己拿不到的信息」；纯 GUI 能力（通知 / 托盘 / 窗口 / 剪贴板）与能由配置表达的
+//! 东西不进这里。GUI 实现 `TauriHost`，CLI / 单测用 `CliHost`。⚠️ 本文件不得引入 `tauri::`。
 
 use std::path::PathBuf;
 
 /// 宿主提供的最小环境能力。
 pub trait HostEnv: Send + Sync {
-    /// 只读资源的候选根目录（按优先级，由调用方逐个探测存在性）。
-    ///
-    /// 返回候选而非唯一答案：资源探测本就是「多候选 + 看谁存在」，把存在性判断留给调用方能
-    /// 逐字保留既有错误文案（含 `Searched:` 列表）。两侧都以编译期资源根打头，让开发期 /
-    /// `cargo test` 与现状一致（`resolve_models_dir` 就先探测它，见
-    /// [`compile_time_resource_root`]）。
-    ///
+    /// 只读资源的候选根目录（按优先级，由调用方逐个探测存在性）—— 返回候选而非唯一答案，
+    /// 好让调用方逐字保留既有错误文案（含 `Searched:` 列表）。两侧都以编译期资源根打头。
     /// - GUI：`[<src-tauri>/resources, <resource_dir>, <resource_dir>/resources]`
     /// - CLI：`[<src-tauri>/resources, $VIRLEN_RESOURCE_DIR, <exe_dir>/resources, <exe_dir>]`
     fn resource_candidates(&self) -> Vec<PathBuf>;

@@ -1,29 +1,19 @@
 /**
- * interaction-source —— 把**本机真实交互来源**接到 `InteractionRegistry`（M4）。
+ * interaction-source —— 把**本机真实交互来源**接到 InteractionRegistry（M4）。
  *
- * 三个来源（缺一就会出现「手机看不到的授权」）：
- *  1. `toolInteractEvent.showChoice`        → AI 提问（`user_choice`）
- *  2. `toolInteractEvent.showAuthorization` → 授权弹窗（命令 / 脚本 / 沙盒脱壳）
- *  3. `toolOutputStore.pendingConfirm`      → **终端内确认**（不弹 modal，故不触发 showAuthorization）
+ * 三个来源（缺一就会出现「手机看不到的授权」）：① toolInteractEvent.showChoice（AI 提问）；
+ * ② showAuthorization（命令 / 脚本 / 沙盒脱壳）；③ toolOutputStore.pendingConfirm（终端内确认，不弹 modal）。
  *
- * 终态**双向**同步（两个方向缺一边就会出现「点不动的僵尸弹窗」）：
- *  - 本机 → 手机：`toolInteractEvent.interactionSettled` → `registry.settleByLocal`（见 `offSettled`）；
- *  - 手机 → 本机：`registry.settle` → `notifyLocalSettled` → 本机 `interactionSettled`
- *    （手机批完、或交互被收敛掉时，收起桌面上那张弹窗）。
+ * 终态**双向**同步（缺一边就有「点不动的僵尸弹窗」）：本机 → interactionSettled → registry.settleByLocal；
+ * 手机 → registry.settle → notifyLocalSettled → 本机收起弹窗。
  *
- * ⚠️ 职责边界：本文件只做「事件 ↔ 注册表」的搬运 + 分级判定，**不做任何执行决策**。
- * 真正的执行仍然全部发生在电脑侧原有路径（§16.2：手机不引入第二条执行路径）。
- *
- * ⚠️ **建表与接线是两个函数**（2026-10 真机缺陷「手机上看不到 user_choice」）：
- *  - `createInteractionRegistry` —— 只建表，推送出口由**持有者**给；
- *  - `wireInteractionSources`    —— 把上面三个来源接到一个**已存在**的表上。
- *
- * 为什么要拆开：待应答交互是**电脑侧的事实**，生命周期属于「手机控制服务」，不属于某一条链路。
- * 电脑侧换链路（`closed` 自愈 / 握手超时 / 移除设备 / 改 ICE）会换 `Endpoint` 与
- * `PhoneBridge` —— 注册表若跟着链路走，排队中的交互就会被静默清掉：手机侧的卡片变成点不动的
- * 僵尸（点一下得到「该请求已在电脑上处理」），而电脑侧弹窗与引擎仍在等。谁都没答过，
- * 问题却被「消费」了。故生产路径由 `PhoneControlService` 持表、只接一次线，
- * 再把表注进每条新链路（见 `PhoneBridgeOptions.interactions`）。
+ * ⚠️ 职责边界：本文件只做「事件 ↔ 注册表」的搬运 + 分级判定，**不做任何执行决策**（执行仍全在电脑侧原有
+ * 路径，§16.2：手机不引入第二条执行路径）。
+ * ⚠️ **建表与接线是两个函数**：createInteractionRegistry 只建表（推送出口由持有者给）；
+ * wireInteractionSources 把来源接到一个**已存在**的表上。拆开是因为待应答交互是电脑侧的事实、生命周期属于
+ *「手机控制服务」而非某条链路 —— 换链路（closed 自愈 / 握手超时 / 移除设备 / 改 ICE）若让注册表跟着链路走，
+ * 排队中的交互会被静默清掉（手机卡片变僵尸、电脑弹窗与引擎仍在等）。故生产路径由 PhoneControlService 持表、
+ * 只接一次线，再注进每条新链路。
  */
 import type { HostEmit, InteractionDTO, InteractionOutcome } from 'virlen-remote'
 import toolInteractEvent, {

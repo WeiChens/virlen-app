@@ -1,14 +1,9 @@
 // @ts-nocheck
 /**
- * CodeBlock — 代码块组件（Monaco 只读预览 + 复制按钮 + actions）
+ * CodeBlock — 代码块（Monaco 只读预览 + 复制按钮 + actions）。
  *
- * ## 渲染策略
- * - 正常显示 → Monaco Editor 只读预览（VSCode 阅读模式；精简构建见 src/monaco/setupMonaco.ts）
- * - streaming / 超大文件(>100K 字符) → <pre> 纯文本 fallback（避免流式闪烁与长任务阻塞）
- *
- * ## 设计原则
- * - 复用 MarkdownRenderer / 工具消息传入的 props 结构，外层 UI（header/复制/actions）保持不变
- * - 仅替换“代码正文 view”：由 Prism→Canvas 渲染换成 Monaco；配色沿用 One Dark（virlen-dark 主题）
+ * 正常 → Monaco 只读预览（virlen-dark 主题）；streaming / 超大文件(>100K 字符) → `<pre>` 纯文本
+ * fallback，避免流式闪烁与长任务阻塞。
  */
 import {
   useState,
@@ -36,8 +31,6 @@ import ContextMenu, {
   useContextMenu,
 } from '@/ui/components/shared/ContextMenu'
 import { textMenuItems } from '@/ui/components/shared/ContextMenu/menus'
-
-// ==================== 工具函数 ====================
 
 /** 获取语言显示名称 */
 function getLanguageDisplay(lang: string | undefined): string {
@@ -182,13 +175,8 @@ const KNOWN_EXTENSIONS = new Set([
 ])
 
 /**
- * 判断字符串是否看起来像一个有效文件路径（仅格式检测，不查磁盘）。
- * 匹配以下模式：
- *  - Windows 绝对路径:  C:\...  C:/...
- *  - Unix 绝对路径:     /home/...
- *  - 相对路径:          ./xxx  ../xxx
- *  - 含路径分隔符:      src/main.ts  folder\file.txt
- *  - 纯文件名（已知扩展名）:  package.json  index.ts
+ * 字符串是否看起来像文件路径（仅格式检测，不查磁盘）：绝对 / 相对路径、含分隔符的路径、
+ * 或带已知扩展名的纯文件名。
  */
 function isValidPath(str: string): boolean {
   const s = String(str).trim()
@@ -227,19 +215,16 @@ function isValidPath(str: string): boolean {
   return false
 }
 
-// ==================== Monaco 代码预览 ====================
+// Monaco 代码预览
 
-/**
- * 代码字号档位（默认 medium）。
- * 比 UI 正文 --font-size-md 大 1~3px，保证代码块在聊天里更清晰可读。
- */
+/** 代码字号档位（默认 medium），比 UI 正文 --font-size-md 大 1~3px */
 const CODE_FONT_PX: Record<'small' | 'medium' | 'large', number> = {
   small: 12,
   medium: 13,
   large: 14,
 }
 
-/** 读取 CSS 变量 --font-size-md 的像素值（正文/行内代码用，跟随用户字号设置） */
+/** 读 CSS 变量 --font-size-md 的像素值（行内代码用，跟随用户字号设置） */
 function getUiMdFontPx(): number {
   if (typeof document === 'undefined') return 13
   const val = getComputedStyle(document.documentElement)
@@ -249,21 +234,14 @@ function getUiMdFontPx(): number {
   return isNaN(parsed) ? 13 : parsed
 }
 
-/**
- * 代码块默认字号：读取全局「字体大小」设置（small/medium/large）。
- * 读取的是 observable（settingsState），组件用 observer 包裹后改动会即时生效。
- */
+/** 代码块默认字号：读全局「字体大小」设置（small/medium/large）；settingsState 是 observable，
+ * observer 包裹后改动即时生效。 */
 function getDefaultCodeFontSize(): number {
   const level = settingsState.value.fontSize ?? 'medium'
   return CODE_FONT_PX[level] ?? CODE_FONT_PX.medium
 }
 
-/**
- * 解析代码块字号。
- * - 未显式传入：取当前字号档位的代码字号（15 / 13 / 17）；
- * - 显式传入 px：当作「medium 基线」设计值，等比缩放到当前档位，
- *   保证紧凑视图（如工具消息）也随设置联动：如 11 → small 10 / medium 11 / large 12。
- */
+/** 字号：explicit 目前不影响结果，一律取当前档位值（见 CODE_FONT_PX） */
 function resolveCodeFontPx(explicit?: number): number {
   const base = getDefaultCodeFontSize()
   if (explicit == null || explicit <= 0) return base
@@ -271,10 +249,8 @@ function resolveCodeFontPx(explicit?: number): number {
 }
 
 /**
- * 语言别名 → Monaco 语言 id。
- * monaco 0.56 精简构建只注册了 src/monaco/setupMonaco.ts 里的语言；
- * 未覆盖的语言返回 undefined（按纯文本显示）。
- * 注：monaco 没有独立 C/TOML tokenizer，C 复用 cpp，TOML 走 ini。
+ * 语言别名 → Monaco 语言 id。monaco 0.56 精简构建只注册了 src/monaco/setupMonaco.ts 里的语言，
+ * 未覆盖的返回 undefined（按纯文本显示）。注：C 复用 cpp、TOML 走 ini（monaco 无独立 tokenizer）。
  */
 const MONACO_LANG: Record<string, string> = {
   ts: 'typescript',
@@ -342,16 +318,13 @@ export function toMonacoLang(lang: string | undefined): string | undefined {
   if (!lang) return undefined
   return MONACO_LANG[lang.toLowerCase()]
 }
-
 /** 大文件保护：超过该字符数改为纯文本 fallback，避免 Monaco 长任务阻塞 */
 const LARGE_CODE_LIMIT = 100 * 1000
 
 /**
- * MonacoCodeView — 用 CodePreview(Monaco) 渲染“代码正文”。
- *
- * 高度 = 内容行数 * lineHeight + padding（与编辑器 options 里的 lineHeight 一致）；
- * 外层 .code-block-wrapper 负责纵向滚动（maxHeight 场景），因此 Monaco 自身无纵向溢出，
- * 配合 scrollbar.alwaysConsumeMouseWheel=false，滚轮不会吞掉外层消息列表的滚动。
+ * MonacoCodeView — 用 CodePreview(Monaco) 渲染「代码正文」。高度 = 行数 * lineHeight + padding
+ * （与编辑器 options 的 lineHeight 一致）；纵向滚动交给外层 .code-block-wrapper，Monaco
+ * 自身不溢出，配合 scrollbar.alwaysConsumeMouseWheel=false 才不会吞掉消息列表的滚轮。
  */
 function MonacoCodeView({
   language,
@@ -390,7 +363,7 @@ function MonacoCodeView({
   )
 }
 
-// ==================== CodeBlock ====================
+// CodeBlock
 
 async function tryOpen(path: string) {
   if (await tryCanonicalize(path)) {
@@ -414,12 +387,11 @@ export interface Action {
 }
 
 /**
- * CodeBlock 组件 Props。
- * 继承 HTMLAttributes<HTMLElement>：其余原生属性（如 react-markdown 的 node、内联代码属性）
- * 会通过 ...props 透传到内联 <code> 元素。
+ * CodeBlock 组件 Props。继承 HTMLAttributes<HTMLElement>：其余原生属性（react-markdown
+ * 的 node 等）会经 ...props 透传到内联 <code>。
  */
 export interface CodeBlockProps extends HTMLAttributes<HTMLElement> {
-  /** 代码语言 class（react-markdown 约定，如 `language-ts`） */
+  /** 语言 class（react-markdown 约定，如 `language-ts`） */
   className?: string
   /** 代码内容 */
   children: ReactNode
@@ -427,7 +399,7 @@ export interface CodeBlockProps extends HTMLAttributes<HTMLElement> {
   maxHeight?: number | string
   /** 代码块宽度 */
   width?: number | string
-  /** 字体大小（px，作为 medium 基线），默认按当前「字体大小」设置取档位值：small 13 / medium 15 / large 17 */
+  /** 字体大小（px）；当前实现按「字体大小」设置取档位值：small 12 / medium 13 / large 14 */
   fontSize?: number
   /** 文件名，用于推断代码语言 */
   fileName?: string
@@ -439,17 +411,12 @@ export interface CodeBlockProps extends HTMLAttributes<HTMLElement> {
   streaming?: boolean
   /** 自定义操作按钮 */
   actions?: Action[]
-  /**
-   * 是否自动居中
-   */
+  /** 是否自动居中 */
   autoCenter?: boolean
-  /**
-   * 是否有行内代码
-   */
+  /** 是否有行内代码 */
   inlineCode?: boolean
 }
 
-/** 代码块组件 */
 function CodeBlock({
   className,
   children,
@@ -465,49 +432,35 @@ function CodeBlock({
   inlineCode = false,
   ...props
 }: CodeBlockProps) {
-  // 复制态放在最前面：行内/块状代码两条渲染路径共用同一组 hooks（规则一致性）
+  // 复制态：行内 / 块状两条渲染路径共用同一组 hooks，必须都在提前 return 之前
   const [copied, setCopied] = useState(false)
-  // 全屏态：同样必须在行内代码的提前 return 之前声明
+  // 全屏态：同理
   const [fullscreen, setFullscreen] = useState(false)
-  // 「打开即居中」：同理，**必须**在下面行内代码的提前 return 之前调用。
-  // 行内/块状共用一个 fiber（react-markdown 的 `code` 覆盖组件会把它俩渲染在同一位置，
-  // 而流式「前缀冻结」会让尾部首块在两种形态间切换），一旦某次渲染少调一个 hook，
-  // React 就会抛 #300「Rendered fewer hooks than expected. This may be caused by an
-  // accidental early return statement.」（行内路径 autoCenter=false，effect 自身不做任何事）
+  // 「打开即居中」同理必须在提前 return 之前调用：行内 / 块状共用一个 fiber（react-markdown
+  // 的 `code` 覆盖组件把它们渲染在同一位置，流式「前缀冻结」还会让尾部首块在两种形态间切换），
+  // 某次渲染少调一个 hook 就会抛 React #300（行内路径 autoCenter=false，effect 本身不做任何事）。
   const rootRef = useAutoCenter(autoCenter)
   /**
-   * 代码块自己的右键菜单。
-   *
-   * 必要性：代码块常嵌在消息气泡（`.message-body`）里，而气泡本身也有右键菜单
-   * （复制 / 引用 / 编辑 / 删除），其「复制」取的是**整条气泡正文**。
-   * 又因 Monaco 的选区不进 `window.getSelection()`，气泡菜单的「选区优先」拿不到代码选区，
-   * 于是右键代码块再「复制」会复制整条气泡 —— 这里补一个代码块专属菜单拦下事件
+   * 代码块专属右键菜单：气泡菜单的「复制」取的是整条气泡正文，而 Monaco 的选区不进
+   * `window.getSelection()`，右键代码块再复制会拿到整条气泡 —— 这里拦下事件
    * （`openAt` 会 preventDefault + stopPropagation，气泡不再接管）。
-   *
-   * 同样必须在行内代码的提前 return 之前调用：行内/块状共用同一 fiber（见下方注释）。
+   * 同样必须在提前 return 之前调用（行内 / 块状共用同一 fiber）。
    */
   const menu = useContextMenu()
   /**
-   * Monaco 当前选区文本（由 CodePreview 的 onSelectionChange 上报）。
-   *
-   * 用 ref 而非 state：菜单项在渲染时现算，读取时无需触发重渲染。
-   * Monaco 右键**不改选区**（选中逻辑只响应左/中键，见 monaco mouseHandler），
-   * 因此右键那一刻读取即为用户框选的内容；无选区时为空串（菜单回退到整段代码）。
-   * 流式/超大文件的 <pre> 回退路径不经过 Monaco，此项恒为空串，由 window 选区接管。
+   * Monaco 当前选区文本（onSelectionChange 上报）。用 ref 而非 state：菜单项渲染时现算，读取无需重渲染。
+   * Monaco 右键不改选区，故右键那一刻读到的就是用户框选内容；无选区为空串（菜单回退整段代码）。
+   * <pre> 回退路径不经过 Monaco，恒为空串，由 window 选区接管。
    */
   const monacoSelectionRef = useRef('')
-  /**
-   * 命令式 API（Monaco 全选）：分「原位 / 全屏」两份。
-   * 全屏时原位那份仍挂载（保列表高度），若不区分，菜单可能把全选作用到看不见的那一份上。
-   * 取用优先全屏，其次原位；未挂载/已卸载时为 null。
-   */
+  /** 命令式 API（Monaco 全选）分原位 / 全屏两份：全屏时原位仍挂载，不区分会把全选作用到看不见那份 */
   const monacoApiNormalRef = useRef<CodePreviewApi | null>(null)
   const monacoApiFullRef = useRef<CodePreviewApi | null>(null)
   /** 流式/超大文件的 <pre> 回退节点（全选时用其 DOM 选区），同样分原位 / 全屏 */
   const preNormalRef = useRef<HTMLPreElement | null>(null)
   const preFullRef = useRef<HTMLPreElement | null>(null)
 
-  // Esc 退出全屏（与 ImagePreview 等浮层保持一致的操作习惯）
+  // Esc 退出全屏（与 ImagePreview 等浮层一致）
   useEffect(() => {
     if (!fullscreen) return
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -518,7 +471,7 @@ function CodeBlock({
   }, [fullscreen])
 
   let match = /language-(\w+)/.exec(className || '')
-  // fileName 可能携带路径（如 "src/foo.ts"），语言推断仅取最后一段
+  // fileName 可能带路径（如 "src/foo.ts"），语言推断只取最后一段
   let language = match
     ? match[1]
     : fileName?.split(/[\\/]/).pop()?.split('.').pop()
@@ -568,13 +521,8 @@ function CodeBlock({
   }
 
   /**
-   * 全选代码（菜单项）。
-   *
-   * 两条渲染路径分别处理：
-   * - Monaco：走命令式 API（`setSelection(fullRange)`），选区会经 onSelectionChange 上报，
-   *   紧接着的「复制代码」才能拿到；
-   * - <pre> 回退：用 DOM Range 选中节点内容（与深思考「全选」同法）。
-   * 优先取全屏那份（若开着全屏）。
+   * 全选代码（菜单项）：Monaco 走命令式 API（选区经 onSelectionChange 上报，紧接着的
+   * 「复制代码」才拿得到）；<pre> 回退用 DOM Range 选中节点内容。优先取全屏那份。
    */
   function selectAllCode() {
     const api = monacoApiFullRef.current ?? monacoApiNormalRef.current
@@ -591,12 +539,7 @@ function CodeBlock({
     selection?.addRange(range)
   }
 
-  /**
-   * 渲染代码块本体。
-   *
-   * `isFull` 时用于全屏浮层：不禁 maxHeight/width（改由 CSS 铺满可用区域），
-   * 其余结构完全一致 —— 两处走同一个函数，避免全屏里和原位长出两套样式。
-   */
+  /** 渲染代码块本体：`isFull` 用于全屏浮层（不限 maxHeight/width，由 CSS 铺满），其余结构与原位一致 */
   function renderBlock(isFull: boolean) {
     return (
       <div
@@ -688,14 +631,14 @@ function CodeBlock({
 
   return (
     <>
-      {/* 原位代码块：全屏时也照常渲染（否则虚拟列表条目会变矮 → 重测量 → 锚点/滚动位置跳动） */}
+      {/* 原位代码块全屏时也照常渲染：卸载会让虚拟列表条目变矮 → 重测量 → 锚点跳动 */}
       {renderBlock(false)}
       {fullscreen &&
         createPortal(
           <div className="code-block-fullscreen-layer">{renderBlock(true)}</div>,
           document.body,
         )}
-      {/* 代码块右键菜单：复制代码 / 全选（选区优先，无选区则整段）。挂 body，浮层亦可用 */}
+      {/* 代码块右键菜单：复制代码 / 全选（选区优先）；挂 body，浮层里也能用 */}
       {menu.state && (
         <ContextMenu
           position={menu.state.position}

@@ -1,15 +1,10 @@
-//! 手机控制 —— 审计落盘（M4）
+//! 手机控制 —— 审计落盘（M4，见 docs/phone-control-bridge.md §16.3-1）。
 //!
-//! 为什么需要它：审批分级取的是「宽松档」（手机可批全部授权，含沙箱脱壳 / 危险命令），
-//! 若审计只在内存，**重启即失** → 高风险操作无痕（见 `docs/phone-control-bridge.md` §16.3-1）。
+//! 手机可批全部授权（含沙箱脱壳 / 危险命令），审计若只在内存会重启即失、高风险操作无痕。
+//! 形态：`<data_dir>/phone-audit.jsonl`，一行一条 JSON（append-only）；追加是旁路（写失败不影响功能），
+//! 不做压缩 / 轮转（条目小、是安全账本，丢历史代价更大）。
 //!
-//! 形态：`<data_dir>/phone-audit.jsonl` —— **一行一条 JSON**（append-only）。
-//! - 追加是**旁路**：TS 侧 fire-and-forget，写失败不影响功能（只影响"事后可回溯"）；
-//! - 不做压缩 / 轮转：条目很小（预览已截断到 200 字符），且这是安全账本，
-//!   丢历史比占空间的代价大得多。需要轮转时再单独加。
-//!
-//! ⚠️ 本文件只做「行式追加 + 读回最后 N 行」，**不解析 JSON**：
-//! 结构与语义的单一真源在 TS（`virlen-app/src/bridge/audit.ts`），Rust 只当字节搬运工。
+//! ⚠️ 只做「行式追加 + 读回最后 N 行」，不解析 JSON：结构与语义真源在 TS `bridge/audit.ts`。
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;

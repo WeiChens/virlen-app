@@ -1,9 +1,4 @@
-/**
- * 知识库端口 — 定义知识库 CRUD 和检索的抽象接口
- *
- * 遵循六边形架构，由基础设施层（infrastructure/rag）实现，
- * 通过 Tauri invoke 调用 Rust 后端的 RAG 命令。
- */
+/** 知识库端口 — 知识库 CRUD 与检索的抽象接口（由 infrastructure/rag 实现，经 Tauri invoke 调 Rust RAG 命令）。 */
 
 /** 知识库元数据 */
 export interface KnowledgeBase {

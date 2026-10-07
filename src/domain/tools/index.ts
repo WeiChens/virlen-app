@@ -1,17 +1,11 @@
 /**
- * Tool 注册中心 — 「工具定义权威源」与「执行器」的汇合点
+ * Tool 注册中心 — 「工具定义权威源」与「执行器」的汇合点。
  *
- * **机制 C 带来的职责变化**：
- * - 前端**不再编写定义**：定义来自权威源（Rust 侧 `agent/tool_defs/definitions.json`），
- *   经 `ToolDefinitionsLoader` 注入 —— Tauri 走 `cmd_list_tool_definitions`，
- *   浏览器 dev / vitest 直读同一份 JSON（见 `infrastructure/tools/definitions-source.ts`）；
- * - 注册中心只保存**执行器**（+ UI 文案 `label`，走 i18n）；
- * - `listDefinitions()` 返回「契约 ∩ 已注册执行器」，**顺序以契约为准** ——
- *   模型既不会看到没有实现的工具，也不会漏掉契约里新加的工具；
- * - 所有读取接口都是**异步**的（定义可能在首次读取时才从 Rust / 内嵌 JSON 载入）。
- *
- * 惰性描述（`ResolvableString`）机制已随定义移出前端：平台相关描述现由契约的三平台变体
- * 承载（`execute_command` / `execute_script`），不需要运行时求值。
+ * - 定义不在前端编写：来自权威源（Rust `agent/tool_defs/definitions.json`），经
+ *   `ToolDefinitionsLoader` 注入；本注册中心只保存**执行器**（+ i18n 文案 `label`）；
+ * - `listDefinitions()` 返回「契约 ∩ 已注册执行器」，**顺序以契约为准**（模型既不会看到没实现的工具，
+ *   也不会漏掉契约新增的）；
+ * - 所有读取接口都是异步的（首次读取时才载入定义）。
  */
 import { ToolRegistry } from '../ports/ToolRegistry'
 import type {
@@ -26,12 +20,7 @@ import type { ToolDefinitionsLoader } from './definitions'
 
 let definitionsLoader: ToolDefinitionsLoader | null = null
 
-/**
- * 注入定义加载器。
- *
- * 组合根（`src/main.ts`）在启动时接上 infrastructure 的实现；测试可注入假数据。
- * 换加载器会**清掉定义缓存**，避免测试之间或热更之后沿用旧定义。
- */
+/** 注入定义加载器（组合根启动时接上；测试可注入假数据）。换加载器会清掉定义缓存。 */
 export function setToolDefinitionsLoader(
   loader: ToolDefinitionsLoader | null,
 ): void {

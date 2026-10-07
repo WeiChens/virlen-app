@@ -1,19 +1,8 @@
 /**
- * tool-service — 工具交互服务统一入口（抽象层）
+ * tool-service — 工具交互服务统一入口（抽象层）。
  *
- * 为 chat-service 提供统一的工具交互调度接口，隐藏各 tool 的具体实现细节。
- * chat-service 只需调用 createToolHandles(sessionId)，不感知内部路由。
- *
- * 根据 type 分发给子模块：
- *   - user_choice          → user_choice.ts
- *   - confirm_command      → confirm_command.ts
- *
- * 一个 session 在一次 tool 循环中可能先后触发多种交互类型
- *   （如先 confirm_command 再 user_choice），因此不能只缓存一种 handler。
- *
- * 注：曾经的 `sandbox_rule_check`（Rust 问 JS「这条命令命中「忽略沙盒命令」规则了吗」）
- * 已随 S7 删除 —— 规则匹配下沉到 Rust（`src-tauri/virlen-core/src/security/`），不再需要 JS 宿主。
- * 剩下两种类型都**是真的在问用户**（弹窗），不存在「无 UI 的内部查询」。
+ * chat-service 只调 createToolHandles(sessionId)，内部按 type 路由到子模块（user_choice / confirm_command）。
+ * 一个 session 的一次 tool 循环可能先后触发多种交互，故按类型各缓存一个 handler。
  */
 import { createUserChoiceHandles } from './user_choice'
 import type { UserChoiceHandles } from './user_choice'

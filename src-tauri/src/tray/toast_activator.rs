@@ -1,19 +1,14 @@
-//! Toast 点击的 COM 激活器 —— 「进程内收不到点击」那条路的正解
+//! Toast 点击的 COM 激活器 —— 「进程内收不到点击」那条路的正解。
 //!
-//! Windows 的 toast 点击有两条互不排斥的投递路径（另见 `notify.rs` 模块头）：
-//! ① 进程内事件：`notify::show_owned` 自持 `NotificationHandle`，点击在进程内到达，能精确知道是哪
-//!    个会话（dev / 免安装 exe 走这条）；
-//! ② COM 激活：系统按清单里的 `ToastActivatorCLSID` 唤起激活器 —— 应用没在跑时由它拉起进程
-//!    （`com:ExeServer@Arguments` 带 `-ToastActivated`），正在跑时把调用投递进已注册的类对象。
+//! Windows toast 点击有两条互斥投递路径（另见 `notify.rs`）：① 进程内事件（`notify::show_owned` 自持
+//! handle，能精确到会话，dev / 免安装走这条）；② COM 激活（系统按清单 `ToastActivatorCLSID` 唤起，
+//! 应用没跑时拉起进程、正在跑时投递给已注册类对象）。
 //!
-//! 本模块实现 ②。拿不到会话 id（toast 的 `launch` 参数一路没有来源），所以语义与「托盘左键」一致：
-//! 唤醒窗口 + 切到最早那条未读。只有打包安装版才有清单，dev / 免安装 exe 注册了也没人来调，但注册
-//! 本身无副作用（类对象只在本进程可见）→ 不做环境判断，一律注册。
+//! 本模块实现 ②，拿不到会话 id，语义等同「托盘左键」：唤醒窗口 + 切最早未读。只有打包安装版才有清单，
+//! dev / 免安装 exe 注册了也没人来调，但注册无副作用 → 不做环境判断，一律注册。
 //!
-//! ⚠️ 三处必须一起改（CLSID / 启动参数名）：MSIX 清单的 `ToastActivatorCLSID` +
-//! `com:ExeServer@Arguments`（模板只在打包分支 `store-version`，故本分支没有读清单的单测）、本文件的
-//! `TOAST_ACTIVATOR_CLSID` / `TOAST_ACTIVATED_ARG`、`lib.rs` 的单实例回调（argv 带
-//! `-ToastActivated` ⇒ 按「点击通知」处理）。
+//! ⚠️ 三处须一起改（CLSID / 启动参数名）：MSIX 清单的 `ToastActivatorCLSID` + `com:ExeServer@Arguments`、
+//! 本文件的常量、`lib.rs` 的单实例回调。
 
 use serde_json::json;
 use tauri::AppHandle;
@@ -28,11 +23,8 @@ pub const TOAST_ACTIVATOR_CLSID: &str = "bfadf116-f14e-4ede-b4b6-8fe2968e534f";
 /// MSIX 清单 `com:ExeServer@Arguments`：系统按 CLSID 拉起本进程时带上的标记
 pub const TOAST_ACTIVATED_ARG: &str = "-ToastActivated";
 
-/// 「进程内刚处理过点击」的去重窗口（毫秒）
-///
-/// 一次点击可能同时走进程内事件与 COM 激活。若两边都切会话，就会出现
-/// 「先精确切到 A，又被切到最早未读 B」——用户看到的是明明点了这条、却停在另一条。
-/// 窗口内的 COM 激活因此只负责把窗口拎到前台，不再动会话。
+/// 「进程内刚处理过点击」的去重窗口（毫秒）：窗口内的 COM 激活只把窗口拎到前台，不再动会话，
+/// 避免「先精确切到 A，又被切到最早未读 B」。
 #[cfg(target_os = "windows")]
 const CLICK_DEDUP_MS: i64 = 3_000;
 

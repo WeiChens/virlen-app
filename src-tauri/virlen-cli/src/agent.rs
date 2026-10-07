@@ -7,16 +7,12 @@
 //! virlen-cli agent list [--json]      等同 `list-agent`（同一份实现）
 //! ```
 //!
-//! 三个枚举源都来自权威处，不在这里另抄一份：工具名 31 个取自
-//! `virlen_core::agent::tool_defs::list_tool_definitions()`（机制 C）、技能名取 `<data_dir>/skills`
-//! 的子目录（与 `skillStore` 同一规则）、供应商 + 模型取 `app_settings.providers`（只取 `enabled`）。
+//! 枚举源都取自权威处（不另抄）：工具名取 `tool_defs::list_tool_definitions()`、技能名取 `<data_dir>/skills`
+//! 子目录、供应商 + 模型取 `app_settings.providers`（只取 `enabled`）。
 //!
-//! 校验口径对齐桌面端：`name` / `description` 必填（同 `agent-edit-modal.tsx::validate`）；
-//! `projectRulesFile` 为空 = 不注入，非空必须是工作目录内相对路径（与
-//! `domain/agent/project-rules.ts::normalizeProjectRulesPath` 同一批规则 —— 规则文件全文会逐字进
-//! 系统提示词，所以两边都拦）。
-//! ⚠️ 默认 Agent（`__default__`）不可删除：桌面端 `initDefaultAgent` 会把它重新建出来，两侧写入互相
-//! 覆盖，所以这里直接拒绝。
+//! 校验对齐桌面端：`name` / `description` 必填；`projectRulesFile` 空 = 不注入，非空须是工作目录内相对
+//! 路径（与 `project-rules.ts::normalizeProjectRulesPath` 同一批规则 —— 规则文件全文逐字进提示词）。
+//! ⚠️ 默认 Agent（`__default__`）不可删：桌面端 `initDefaultAgent` 会重建它，两侧写入互相覆盖。
 
 use serde_json::{json, Map, Value};
 use std::io::{BufRead, IsTerminal, Write};

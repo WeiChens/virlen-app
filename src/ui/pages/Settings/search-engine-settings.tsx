@@ -1,11 +1,6 @@
 /**
- * search-engine-settings — 搜索引擎供应商配置页面
- *
- * 设计原则：
- *   - 点击模板卡片 → 弹出配置弹窗 → 配置 → 自动验证连接 → 通过后添加
- *   - 不支持手动/自定义搜索引擎
- *   - 已配置列表为单选 items，点击选中设为默认
- *   - 每个 item 右侧有 more 图标，点击展开/收起详情
+ * search-engine-settings — 搜索引擎供应商配置页：点模板卡片 → 配置弹窗 → 自动验证连接 → 通过后
+ * 添加（不支持手动 / 自定义）；已配置列表为单选，点选设为默认，每项右侧 more 展开详情。
  */
 import { useState } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -29,7 +24,7 @@ import { rowKeyHandler } from '@/utils/a11y'
 import './search-engine-settings.scss'
 
 function SearchEngineSettings() {
-  // 弹窗状态：null=关闭, 'add-{type}'=新建某类型, 对象=编辑已有
+  // null = 关闭；mode 'add' = 新建某类型；mode 'edit' = 编辑已有
   const [modalState, setModalState] = useState<
     | { mode: 'add'; type: SearchProviderType }
     | { mode: 'edit'; config: SearchProviderConfig }
@@ -51,12 +46,9 @@ function SearchEngineSettings() {
     (t) => !addedTypes.has(t.type),
   )
 
-  /** 获取供应商类型的显示标签 */
   function getTypeLabel(type: SearchProviderType): string {
     return SEARCH_PROVIDER_TEMPLATES.find((t) => t.type === type)?.label ?? type
   }
-
-  // ==================== 测试连接 ====================
 
   async function handleTest(id: string) {
     setTestingMap((prev) => ({ ...prev, [id]: true }))
@@ -76,8 +68,6 @@ function SearchEngineSettings() {
       setTestingMap((prev) => ({ ...prev, [id]: false }))
     }
   }
-
-  // ==================== 添加（自动验证后加入）====================
 
   async function handleSaveNew(config: {
     name: string
@@ -122,8 +112,6 @@ function SearchEngineSettings() {
     showToast(t('✅ 已添加') + `: ${config.name}`)
   }
 
-  // ==================== 编辑（修改后验证）====================
-
   async function handleSaveEdit(config: {
     name: string
     type: SearchProviderType
@@ -160,8 +148,6 @@ function SearchEngineSettings() {
     showToast(t('✅ 已保存'))
   }
 
-  // ==================== 点击选择（设为默认）====================
-
   async function handleSelect(id: string) {
     if (id === defaultId) return // 已经是启用的，无需操作
     settingsState.setValue('defaultSearchProviderId', id)
@@ -171,14 +157,10 @@ function SearchEngineSettings() {
     )
   }
 
-  // ==================== 切换更多详情展开/收起 ====================
-
   function handleToggleMore(id: string, e: React.MouseEvent) {
     e.stopPropagation() // 阻止事件冒泡，避免触发选中
     setExpandedId(expandedId === id ? null : id)
   }
-
-  // ==================== 删除 ====================
 
   async function handleDelete(id: string) {
     const flag = await MessageBox.warn(
@@ -205,11 +187,8 @@ function SearchEngineSettings() {
     }
   }
 
-  // ==================== 渲染 ====================
-
   return (
     <div className="search-engine-settings">
-      {/* ===== 添加入口 ===== */}
       <div className="add-section">
         <h3>{t('添加搜索引擎')}</h3>
         <p className="add-hint">
@@ -236,7 +215,6 @@ function SearchEngineSettings() {
         </div>
       </div>
 
-      {/* ===== 已配置列表 ===== */}
       {searchProviders.length > 0 && (
         <>
           <div className="section-header">
@@ -252,11 +230,9 @@ function SearchEngineSettings() {
                 <div
                   key={provider.id}
                   className={`provider-item ${isActive ? 'is-active' : ''} ${isExpanded ? 'is-expanded' : ''}`}>
-                  {/* 主行：单选点击区域 */}
                   <div
                     className="provider-item-row"
                     onClick={() => handleSelect(provider.id)}>
-                    {/* 单选指示器 */}
                     <div
                       className={`radio-indicator ${isActive ? 'checked' : ''}`}>
                       {isActive && <div className="radio-dot" />}
@@ -277,12 +253,10 @@ function SearchEngineSettings() {
                       </span>
                     </div>
 
-                    {/* 状态标签 */}
                     {isActive && (
                       <span className="active-badge">{t('启用')}</span>
                     )}
 
-                    {/* More 图标 */}
                     <button
                       className="more-btn"
                       onClick={(e) => handleToggleMore(provider.id, e)}
@@ -291,7 +265,6 @@ function SearchEngineSettings() {
                     </button>
                   </div>
 
-                  {/* 展开详情（点击 More 后显示） */}
                   {isExpanded && (
                     <div className="provider-item-body">
                       <div className="detail-row">
@@ -342,7 +315,6 @@ function SearchEngineSettings() {
         </>
       )}
 
-      {/* 空状态 */}
       {searchProviders.length === 0 && (
         <div className="empty-state">
           <div className="empty-icon">🔍</div>
@@ -353,7 +325,6 @@ function SearchEngineSettings() {
         </div>
       )}
 
-      {/* ===== 新建弹窗 ===== */}
       {modalState?.mode === 'add' && (
         <SearchEngineEditModal
           visible
@@ -363,7 +334,6 @@ function SearchEngineSettings() {
         />
       )}
 
-      {/* ===== 编辑弹窗 ===== */}
       {modalState?.mode === 'edit' && (
         <SearchEngineEditModal
           visible

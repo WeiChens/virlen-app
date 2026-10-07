@@ -200,10 +200,7 @@ pub struct PathStat {
     pub size: u64,
 }
 
-/// 探测路径是否存在、是否文件、多大。
-///
-/// 给「先探测再读取」的场景用：会话创建时读取项目规则文件（`AGENTS.md` 等），
-/// 需要先判断体积是否超限 —— 有了它就不必把超大文件整个读进内存才发现该拒绝。
+/// 探测路径是否存在 / 是文件 / 多大。供「先探测再读取」用（如读项目规则前先判体积是否超限，避免整个读进内存才发现该拒）。
 #[tauri::command]
 async fn stat_path(path: String) -> Result<Option<PathStat>, String> {
     let expanded = virlen_core::sandbox::paths::expand_user_path(&path);
@@ -309,9 +306,6 @@ pub fn run() {
             if let Err(e) = commands::rag::init_rag_service(app.handle()) {
                 eprintln!("[RAG] 初始化失败: {}", e);
             } 
-            // else {
-            //     println!("[RAG] 知识库服务初始化成功");
-            // }
 
             // 视觉模型按需懒加载（`vision::analyze*` 内部管引用计数），启动期无需初始化
 

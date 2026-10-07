@@ -1,15 +1,10 @@
 /**
- * TokenStatsPanel — 用量统计面板（token 统计功能的主界面）
+ * TokenStatsPanel — 用量统计面板（入口：侧边栏「新对话」下方）。
  *
- * 入口：侧边栏「新对话」按钮下方（见 `sidebar/index.tsx`）。
+ * 三个 Tab：图表（时间范围 + 分桶维度切换，趋势折线 / 构成堆叠柱 + 饼图 + 合计卡片）、
+ * 明细（每条 LLM 调用一行，客户端筛选 / 排序 / 分页，可导出 CSV）、单价（按 Provider, 模型 配置）。
  *
- * 三个 Tab：
- *  - 图表：时间范围 + 分桶维度切换，堆叠柱（输入/输出/缓存）+ 调用类型饼图 + 合计卡片
- *  - 明细：每条 LLM 调用一行的表格（客户端筛选 / 排序 / 分页），可导出 CSV
- *  - 单价：按 (Provider, 模型) 配置单价，供费用估算使用
- *
- * 数据来源：Rust SQLite `usage_ledger`（Rust 引擎直落 + TS 侧 `cmd_append_usage`），
- * 与 `messages.usage` 无关 —— 账本独立于会话生命周期，删会话不清账。
+ * 数据源是 Rust SQLite 的 `usage_ledger`（与 `messages.usage` 无关）：账本独立于会话生命周期，删会话不清账。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -161,7 +156,6 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
   const [onlyCurrentSession, setOnlyCurrentSession] = useState(false)
   const [stats, setStats] = useState<UsageStatsView>(EMPTY_VIEW)
   const [kindStats, setKindStats] = useState<CostedBucket[]>([])
-  /** 饼图归类维度：调用类型 / 模型 / token 类型 / 费用 */
   const [pieDim, setPieDim] = useState<PieDim>('cost')
   const [records, setRecords] = useState<CostedRecord[]>([])
   const [recordTotal, setRecordTotal] = useState(0)
@@ -191,10 +185,7 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
     return from <= to ? { from, to } : { from: to, to: from }
   }, [range, customFrom, customTo])
 
-  /**
-   * 范围是否落在同一天（今日 / 昨天 / 自定义单日）：
-   * 按天分桶只会出一根柱子，需要切到小时粒度看趋势。
-   */
+  /** 范围是否落在同一天（今日 / 昨天 / 自定义单日）：按天分桶只会出一根柱子，需切到小时粒度看趋势 */
   const singleDay = useMemo(() => {
     if (range === 'today' || range === 'yesterday') return true
     if (range === 'custom' && customRange) {
@@ -248,9 +239,8 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
     }
   }, [range, groupBy, scopeSessionId, resolveSessionModel, customRange])
 
-  // 打开面板 / 切范围 / 切维度 / 切会话范围时重新拉数；从「单价」页切回来也重拉：
-  // 费用是**取数时**按当时单价算的（Rust 只回 token），改完单价必须重新取数，
-  // 否则图表与明细会一直显示改价前的旧费用。
+  // 打开 / 切范围 / 切维度 / 切会话范围都重新拉数；从「单价」页切回来也要重拉 —— 费用是取数时
+  // 按当时单价算的（Rust 只回 token），改完单价不重取会一直显示改价前的旧费用。
   useEffect(() => {
     // 自定义区间尚未填完整时不查询（否则会退化成「全部」）
     if (range === 'custom' && !customRange) return
@@ -264,9 +254,8 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
     setCustomTo((v) => v || toLocalInputValue(Date.now()))
   }, [range])
 
-  // 单日范围（今日 / 昨天 / 自定义单日）按天分桶只会出一根柱子 → 自动切到小时粒度；
-  // 离开单日范围时若还停在小时粒度，退回按天（否则多天范围柱子会过密）。
-  // 依赖只有 `singleDay`：用户手动切过的维度不受影响。
+  // 单日范围自动切小时粒度（按天只有一根柱子）；离开时若还停在小时则退回按天（多天柱子会过密）。
+  // 依赖只有 singleDay，用户手动切过的维度不受影响。
   useEffect(() => {
     if (singleDay) {
       setGroupBy((g) =>
@@ -301,9 +290,8 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
     [sortKey],
   )
 
-  // 一律用 `stats.groupBy`（实际生效的粒度），而不是用户点的 `groupBy`：跨度太大时服务层
-  // 会自动降级（如「全部 + 按小时」→ 按天/周），若这里仍按用户所选切标签，
-  // 降级后坐标轴文字会整排错位。
+  // 一律用 stats.groupBy（实际生效的粒度）而不是用户点的 groupBy：跨度太大时服务层会自动降级
+  //（如「全部 + 按小时」→ 按天/周），按用户所选切标签会让降级后坐标轴文字整排错位。
   const activeGroup = stats.groupBy
 
   /** 分桶 key → 展示文案（按**实际生效**的粒度切，见 activeGroup 注释） */
@@ -333,7 +321,6 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
   const currency = currentCurrency()
   const totals = stats.totals
 
-  /** 时间维度（小时 / 天 / 周 / 月）用平滑折线看趋势，其余维度用堆叠柱看构成 */
   const isTimeDim = TIME_GROUPS.includes(activeGroup)
   const distributionOption = useMemo(
     () =>
@@ -343,10 +330,8 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
     [isTimeDim, stats, labelOf],
   )
 
-  // 饼图四种维度共用同一套渲染，只是「扇区来源 + 数值口径」不同：
-  //  - kind/model：按调用类型 / 按模型，数值 = token 总量
-  //  - tokens：输入 / 输出 / 缓存 三类，数值 = 各自 token 量
-  //  - cost：按模型，数值 = 该模型费用（钱花在哪）
+  // 饼图四种维度共用一套渲染，只是扇区来源与数值口径不同：kind / model = token 总量，
+  // tokens = 各类型 token 量，cost = 各模型费用（钱花在哪）。
   const pieSlices = useMemo<PieSlice[]>(() => {
     const cost = totals.cost
     if (pieDim === 'tokens') {
@@ -402,9 +387,8 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
   /** 有任意扇区 > 0 才画饼（避免全 0 时画出一团空图） */
   const hasPieData = pieSlices.some((s) => s.value > 0)
 
-  // ===== 明细：客户端筛选 / 排序 / 分页 =====
-  // 一次拉取上限内（RECORDS_LOAD_CAP）的全部匹配流水，之后全在内存里过滤与排序。
-  // 必须客户端做：会话 / 模型关键字是子串搜索，账本表的过滤是精确匹配，下沉不到 SQL。
+  // 一次拉取上限内（RECORDS_LOAD_CAP）的全部匹配流水，之后全在内存过滤排序：会话 / 模型关键字
+  // 是子串搜索，账本表的过滤是精确匹配，下沉不到 SQL。
   const filteredRecords = useMemo(
     () =>
       filterAndSortRecords(
@@ -432,8 +416,8 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
   )
 
   /**
-   * 汇总全部筛选结果（**非当前页**）。数据已在内存（一次拉取上限内的全部匹配行），
-   * 计算为 O(n)；仍异步让出一帧，保证 loading 先渲染 —— 这也是做成「点按钮才汇总」的原因。
+   * 汇总全部筛选结果（非当前页）。数据已在内存、计算是 O(n)，仍让出一帧保证 loading 先渲染，
+   * 这也是做成「点按钮才汇总」的原因。
    */
   const handleSummarize = useCallback(async () => {
     if (summarizing) return
@@ -485,8 +469,7 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
 
   if (!open) return null
 
-  // 用 portal 挂到 body：侧边栏有 transform/动画，fixed 定位在它内部会被当成
-  // 包含块（位置/层叠都不对），挂到 body 最稳。
+  // portal 挂 body：侧边栏有 transform / 动画，fixed 在它内部会被当成包含块（位置 / 层叠都不对）。
   return createPortal(
     <div
       className="token-stats-overlay"

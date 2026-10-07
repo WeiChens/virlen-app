@@ -1,11 +1,9 @@
 /**
- * memoryRepo — 长期记忆的持久化入口（记忆功能 P0）
+ * memoryRepo — 长期记忆的持久化入口（记忆功能 P0）。
  *
- * 权威实现在 Rust（`virlen-core/src/session_db/memory.rs` + `agent/memory/`）：本文件只做三件事 ——
- * 调命令、按环境降级、把失败变成**可解释的空结果**。
- *
- * 降级口径与 `settingsRepo` 同款：非 Tauri（浏览器 dev / vitest）没有后端 → 读回空、写入静默丢弃；
- * Tauri 下命令失败 → 打日志 + 返回空（记忆是**增强**，读不到不该让建会话失败）。
+ * 权威实现在 Rust（virlen-core/src/session_db/memory.rs + agent/memory/）：本文件只做三件事 —— 调命令、
+ * 按环境降级、把失败变成**可解释的空结果**。降级口径同 settingsRepo：非 Tauri（浏览器 dev / vitest）读回空、
+ * 写入静默丢弃；Tauri 下命令失败打日志 + 返回空（记忆是**增强**，读不到不该让建会话失败）。
  */
 import { invoke } from '@tauri-apps/api/core'
 import {
@@ -31,16 +29,12 @@ const EMPTY_SECTION: MemoryPromptSection = {
 }
 
 /**
- * 取建会话用的注入段（带工作目录与预览标记）。
+ * 取建会话用的注入段（带工作目录与预览标记）。失败 / 非 Tauri → 空段（= 不注入），**不抛错**。
  *
- * 失败 / 非 Tauri → 空段（= 不注入）。**不抛错**：记忆读不到时对话应当照常进行。
- *
- * `workspace`：本次会话的**生效工作目录**（会话指定 > Agent 默认）。Rust 侧据此筛掉
- * 「属于别的项目」的项目记忆；空 / 不传 = 只注入不限定项目的记忆。
- *
- * `forPreview`：面板查看预览 / 预算行时为 `true` —— 埋点据此区分「真实建会话时的截断告警」
- * 与「用户在看面板」，否则每次打开面板都会抬高告警计数（指标就废了）。面板传的是设置里的
- * **默认工作目录**：预览与真实会话走同一套规则，只是工作目录不同。
+ * workspace：本次会话的**生效工作目录**（会话指定 > Agent 默认），Rust 据此筛掉属于别的项目的项目记忆；
+ * 空 / 不传 = 只注入不限定项目的记忆。
+ * forPreview：面板查看预览 / 预算行时为 true —— 埋点据此区分「真实建会话的截断告警」与「用户在看面板」，
+ * 否则每次打开面板都会抬高告警计数。面板传的是设置里的**默认工作目录**。
  */
 export async function loadMemorySection(
   forPreview = false,
@@ -106,7 +100,7 @@ export function touchMemories(ids: string[]): void {
   })
 }
 
-// ==================== 整理 / 蒸馏（P2） ====================
+// 整理 / 蒸馏（P2）
 
 /**
  * 整理长期记忆（把某一天各会话的摘要 / 正文摘录蒸馏成记忆）。
@@ -159,7 +153,7 @@ export async function exportMemories(): Promise<string | null> {
   }
 }
 
-// ==================== 工具等价调用（P1） ====================
+// 工具等价调用（P1）
 //
 // 三个 `memory_*` 工具的 GUI 入口：**语义在 Rust**（`agent::memory::tools`，与原生工具同一份实现），
 // 这里只是把命令结果原样交给调用方 —— 因此回退路径的执行器（`infrastructure/tools/memory/`）

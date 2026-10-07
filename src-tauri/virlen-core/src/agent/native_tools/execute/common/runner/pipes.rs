@@ -17,9 +17,7 @@ use super::{
     SandboxMode,
 };
 
-/// 匿名管道运行器（改造前的实现）。
-///
-/// 保留为**两条用途**：非 Windows 平台的主路径、Windows 上伪控制台不可用时的降级兜底。
+/// 匿名管道运行器（改造前的实现）—— 非 Windows 主路径，Windows 上伪控制台不可用时的降级兜底。
 pub(super) async fn run_command_native_pipes(
     ctx: &NativeToolCtx<'_>,
     cmd_str: &str,

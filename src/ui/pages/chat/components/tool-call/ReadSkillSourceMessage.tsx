@@ -1,21 +1,14 @@
 /**
- * ReadSkillSourceMessage — read_skill_source 工具调用的消息展示组件
+ * ReadSkillSourceMessage — read_skill_source 的消息展示。
  *
- * 一行：技能名（+ 结果里解析出的技能路径，灰色省略）
- * 展开：技能源码卡片（对齐 message/code-block 的视觉语言）
- *   · 标题条（sticky）：技能名 + 「打开技能目录」图标按钮
- *   · 元信息行：技能路径（等宽、省略）
- *   · 分区：目录结构（等宽 <pre>）、SKILL.md（Markdown 渲染）
- *   · 展开时「打开即居中」（useAutoCenter，与 read_file / edit_file 一致）
+ * 一行：技能名 + 解析出的技能路径（灰色省略）；展开：技能源码卡片（标题条 / 路径元信息 /
+ * 目录结构 `<pre>` / SKILL.md Markdown），并「打开即居中」（与 read_file / edit_file 一致）。
  *
- * 「打开即居中」的 hook 只能在组件顶层无条件调用（见 useAutoCenter 文档与
- * `tests/ui/tool-call-autocenter.test.tsx`）：写在类方法里属条件调用，会让 React 记账错乱，
- * 故展开视图拆成 `SkillSourceView` 函数组件承载 hook。
+ * 「打开即居中」的 hook 只能在顶层无条件调用（见 useAutoCenter 与 tool-call-autocenter 测试），
+ * 故展开视图拆成 `SkillSourceView` 函数组件承载。
  *
- * 结果由 `infrastructure/tools/skill/read-skill-source.ts` 生成：新数据走结构化 `uiData`
- * （`{ skillPath, tree, md }`，语言无关）；旧数据只有文本，这里回退解析 `content` 的
- * 中文分段标记。两条路都取不到时不做猜测、整段回退为 `<pre>` 原文，否则会把 SKILL.md
- * 正文错当成目录树渲染。
+ * 新数据走结构化 `uiData`（`{ skillPath, tree, md }`，语言无关），旧数据回退解析 `content` 的
+ * 中文分段标记；两条路都取不到时不做猜测、整段回退 `<pre>` 原文，以免把 SKILL.md 正文错当目录树。
  */
 import { t } from '@/ui/i18n'
 import { toShortPath } from '@/utils/common'
@@ -43,9 +36,7 @@ export interface SkillSourceParts {
   skillMd: string
 }
 
-/**
- * 优先用结构化 `uiData`（新数据）。三段都为空视为「没有可用结构」，交由调用方回退。
- */
+/** 优先用结构化 uiData（新数据）；三段都为空视为没有可用结构，交由调用方回退 */
 function partsFromUiData(ui: unknown): SkillSourceParts | null {
   if (!ui || typeof ui !== 'object') return null
   const d = ui as Record<string, unknown>
@@ -57,10 +48,8 @@ function partsFromUiData(ui: unknown): SkillSourceParts | null {
 }
 
 /**
- * 目录结构段的行级修剪：只去掉首尾的空行与 `---` 分隔线。
- *
- * 为什么不整段 replace 所有 `---`：SKILL.md 的 YAML frontmatter 也用 `---` 包起来，
- * 一刀切会把正文改坏；而目录树段只可能在首尾出现分隔线。
+ * 目录结构段的行级修剪：只去掉首尾的空行与 `---` 分隔线 —— 不能整段 replace，
+ * SKILL.md 的 YAML frontmatter 也用 `---`，一刀切会把正文改坏。
  */
 function trimTreeSection(raw: string): string {
   const lines = raw.split('\n')
@@ -71,11 +60,7 @@ function trimTreeSection(raw: string): string {
   return lines.join('\n')
 }
 
-/**
- * 解析 read_skill_source 的结果文本。
- *
- * @returns 三段都拿不到时返回 null（调用方回退为原文展示）
- */
+/** 解析 read_skill_source 的结果文本；三段都拿不到时返回 null（调用方回退为原文展示） */
 export function parseSkillSourceContent(
   content: string,
 ): SkillSourceParts | null {
@@ -102,7 +87,7 @@ export function parseSkillSourceContent(
   return { skillPath, tree, skillMd }
 }
 
-/** 取当前会话工作目录（与 TerminalBlock / securityService 一致） */
+/** 当前会话工作目录（与 TerminalBlock / securityService 一致） */
 function currentWorkspace(): string {
   return (
     sessionStore.getSession(chatState.value.currentSessionId)?.workspace ||
@@ -112,9 +97,7 @@ function currentWorkspace(): string {
 }
 
 /**
- * 展开视图根组件。
- *
- * 只承载「需要 hook / 需要 workspace」的渲染：类方法里不能调 hook，
+ * 展开视图根组件：只承载需要 hook / workspace 的渲染 —— 类方法里不能调 hook，
  * 而 workspace 每次渲染都要取最新值（会话可能已切换）。
  */
 function SkillSourceView({
@@ -126,8 +109,8 @@ function SkillSourceView({
   parts: SkillSourceParts | null
   raw: string
 }) {
-  // 顶层无条件调用：本组件只在用户展开时挂载（折叠时 getExpandView 返回 null），
-  // 所以「挂载」本身等价于一次用户手势，不会被动的消息到达 / 列表重挂载触发。
+  // 顶层无条件调用：本组件只在展开时挂载（折叠时 getExpandView 返回 null），
+  // 挂载本身等价于一次用户手势，不会被动的消息到达 / 列表重挂载触发。
   const rootRef = useAutoCenter()
   const skillPath = parts?.skillPath || ''
 
@@ -234,8 +217,8 @@ class ReadSkillSourceMessage implements IToolCallMessage {
   }
 
   getExpandView(props: ToolMessageProps): React.ReactNode {
-    // diyWrapper() 为 true：外层不再帮我们判 expand，这里必须自己早退，
-    // 否则折叠状态也会把整张卡片渲染出来（顺带会让 autoCenter 失效/误触发）。
+    // diyWrapper() 为 true：外层不再帮我们判 expand，必须自己早退，否则折叠时也会整卡渲染
+    //（顺带会让 autoCenter 误触发）。
     if (!props.expand) return null
 
     const content =

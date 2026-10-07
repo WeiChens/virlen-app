@@ -1,12 +1,9 @@
 /**
- * sessionRepo — 会话持久化 Repository（Rust SQLite 直落）
+ * sessionRepo — 会话持久化 Repository（Rust SQLite 直落）。
  *
- * 数据源从 IndexedDB 迁移到 Rust 侧 SQLite（src-tauri/virlen-core/src/session_db/）：
- * - 消息落库由 Rust 引擎在聊天循环内完成（用户消息发送即写、assistant/tool 完成时写）
- * - 前端只负责：启动时从 Rust 读全部会话、会话元数据变更（标题/pin/参数）写 Rust
- * - 即使 JS 卡住/崩溃，Rust 引擎照常落库，数据不丢
- *
- * 非 Tauri 环境（vitest）下 invoke 会抛错，全部 catch 兜底为空操作。
+ * 数据源从 IndexedDB 迁到 Rust 侧 SQLite（src-tauri/virlen-core/src/session_db/）：消息落库由 Rust 引擎在聊天
+ * 循环内完成（用户消息发送即写、assistant/tool 完成时写）；前端只负责启动时读全部会话、会话元数据变更写 Rust。
+ * 即使 JS 卡住 / 崩溃，Rust 引擎照常落库，数据不丢。非 Tauri（vitest）invoke 抛错，全部 catch 兜底为空操作。
  */
 import { invoke } from '@tauri-apps/api/core'
 import type { Session, Message } from '@/types'
@@ -157,7 +154,7 @@ export interface MessageSearchOptions {
   cursor?: SearchCursor | null
 }
 
-// ==================== 消息查询（query messages 工具）====================
+// 消息查询（query messages 工具）
 
 /** 工具调用的精简描述（只告诉模型「调用了什么工具 + 关键参数」） */
 export interface ToolCallBrief {
@@ -544,7 +541,7 @@ class SessionRepoImpl implements SessionRepo {
 
 export const sessionRepo: SessionRepo = new SessionRepoImpl()
 
-// ==================== 库维护 DTO（与 Rust `session_db::maintenance` 一一对应） ====================
+// 库维护 DTO（与 Rust session_db::maintenance 一一对应）
 
 /** 数据库体积快照（字节；字段名对应 Rust 侧的 camelCase 序列化） */
 export interface DbStats {

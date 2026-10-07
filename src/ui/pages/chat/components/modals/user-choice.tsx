@@ -1,19 +1,14 @@
 /**
- * user-choice-modal — AI 向用户发起选择的弹窗
+ * user-choice-modal — AI 调用 user_choice 工具时向用户发起的选择弹窗（内联实现 Modal）。
  *
- * 当 AI 调用 user_choice tool 时弹出，用户选择后继续 AI 的回复。
- * 内联实现 Modal，不依赖组件库中的 Modal 组件。
+ * 键盘操作（与 `modals/authorization` 同一套约定）：
+ *  - Tab / Shift+Tab / ↑↓←→  在「选项 → 自定义输入框 → 暂存 → 自定义 → 取消 → 确认」之间循环；
+ *  - Space  选中 / 取消选中当前选项（选项上唯一的切换方式）；
+ *  - Enter  有选中项（或填了自定义回复）时提交，没选则忽略；
+ *  - Ctrl / Cmd + Enter  任意位置直接提交；Esc 取消。
  *
- * 键盘操作（只用键盘也能完成选择，与 `modals/authorization` 同一套约定）：
- *  - Tab / Shift+Tab / ↑ ↓ ← →   在「选项 → 自定义输入框 → 暂存 → 自定义 → 取消 → 确认」之间循环切换；
- *  - Space                       选中 / 取消选中当前选项（选项上唯一的切换方式）；
- *  - Enter                       **有选中项（或填了自定义回复）时提交，没选时忽略**；
- *                                焦点在「暂存 / 自定义 / 取消 / 确认」按钮上时则等同于点击该按钮；
- *  - Ctrl / Cmd + Enter          任意位置直接提交（同样要求有选中项）；
- *  - Esc                         取消。
- *
- * 为什么打开时不把焦点放在「确认」上：Enter 是两段式的（先空格选中、再回车提交），
- * 而一项未选时「确认」是 disabled、不可聚焦，焦点因此落在弹窗容器上（永远可聚焦）。
+ * 打开时不聚焦「确认」：Enter 是两段式的（先空格选中、再回车提交），而一项未选时「确认」
+ * 是 disabled、不可聚焦，故焦点落在永远可聚焦的弹窗容器上。
  */
 import { useState, useEffect, useRef } from 'react'
 import { sessionStore } from '@/ui/store'
@@ -33,7 +28,7 @@ interface Props {
   onShelve?: () => void
 }
 
-/** 用户选择的结渠：选中的选项 + 自定义补充回复 */
+/** 用户选择的结果：选中的选项 + 自定义补充回复 */
 export interface UserChoiceResult {
   /** 选中的选项文本列表（可能为空） */
   selected: string[]
@@ -70,8 +65,8 @@ export default function UserChoiceModal({
       setSelected(new Set())
       setShowCustom(false)
       setCustomReply('')
-      // 焦点落在弹窗容器上（永远可聚焦）。
-      // 不抢「确认」：一项未选时它是 disabled、不可聚焦；而 Enter 本身就是「有选才提交」。
+      // 焦点落容器（永远可聚焦）：一项未选时「确认」是 disabled、不可聚焦，
+      // 而 Enter 本身就是「有选才提交」。
       modalRef.current?.focus()
     }
   }, [visible])
@@ -111,9 +106,8 @@ export default function UserChoiceModal({
   const canConfirm = selected.size > 0 || customReply.trim().length > 0
 
   /**
-   * 弹窗里可键盘导航的项（按 DOM 顺序）—— 由各元素上的 data-nav 标记，条件渲染自动增删。
-   * 跳过 disabled（一项未选时「确认」不可用）：与浏览器 tab 顺序一致，
-   * 否则 .focus() 静默失败、高亮会「卡」在相邻项上。
+   * 可键盘导航的项（按 DOM 顺序，由各元素 data-nav 标记）。跳过 disabled（一项未选时
+   * 「确认」不可用）：与浏览器 tab 顺序一致，否则 .focus() 静默失败、高亮会「卡」在相邻项上。
    */
   function navNodes(): HTMLElement[] {
     return Array.from(
@@ -131,14 +125,12 @@ export default function UserChoiceModal({
   }
 
   /**
-   * 弹窗级键盘处理。
-   * 挂在**遮罩层**（而不是内层弹窗）上：内层弹窗的事件会冒泡到这里，
-   * 点遮罩空白处时焦点也落在遮罩上（tabIndex={-1}）—— 两条路径都能收到按键。
-   * Esc 不在这里接 —— 上面已有 document 监听，两处同时处理会 reject 两次。
+   * 弹窗级键盘处理，挂在遮罩层：内层弹窗的事件会冒泡上来，点遮罩空白处焦点也落在遮罩
+   *（tabIndex={-1}），两条路径都能收到按键。Esc 不在这里接（已有 document 监听，会处理两次）。
    */
   function handleModalKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
-    // 中文输入法正在选字：Enter / 方向键都属于输入法，不能当成弹窗操作。
-    // （自定义回复框里「回车选词」曾经会被当成确认弹窗。）
+    // 输入法正在选字：Enter / 方向键都属于输入法，不能当成弹窗操作
+    //（自定义回复框的「回车选词」曾误触发确认）
     const native = e.nativeEvent
     if (native.isComposing || native.keyCode === 229) return
 
@@ -177,8 +169,7 @@ export default function UserChoiceModal({
     // 焦点在按钮上：交给浏览器原生的「Enter = click」，避免同一次按键触发两次
     if (active?.tagName === 'BUTTON') return
     e.preventDefault()
-    // 「有选才提交，没选忽略」—— 选项上也是这套：
-    // 选中/取消一律走空格，因此这里既不切换选中，也不做任何「引导」动作
+    // 「有选才提交，没选忽略」：选项上也是这套，选中 / 取消一律走空格
     if (!canConfirm) return
     handleConfirm()
   }

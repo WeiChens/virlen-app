@@ -1,13 +1,8 @@
 /**
- * execute — 代码执行分类公共函数（分类 id: execute）
- *
- * 供 execute_command / execute_script 复用，按职责分五节：
- *   1. 平台探测        — Rust `os_platform` 权威值 + UA 兜底（进程内缓存）
- *   2. 命令解析与风险分类 — 引号感知切分、cmd/powershell 套壳剥离、safe/install/dangerous
- *   3. 风险提示文案     — getRiskInfo
- *   4. 命令审批注册表   — approvalId 精确分发（多命令并发待确认时不会互相消费事件）
- *   5. 终端输出处理     — \r 回车覆盖 / ANSI 光标移动 → 纯文本
- *   6. 命令执行核心     — runCommand（spawn + 超时/取消杀进程树 + 输出截断）
+ * execute — 代码执行分类公共函数（id: execute），供 execute_command / execute_script 复用：
+ * ① 平台探测（Rust os_platform 权威 + UA 兜底，进程内缓存）；② 命令解析与风险分类（引号感知切分、
+ * cmd/powershell 套壳剥离、safe/install/dangerous）；③ 风险提示文案；④ 命令审批注册表（approvalId 精确分发）；
+ * ⑤ 终端输出处理（\r 回车覆盖 / ANSI 光标移动 → 纯文本）；⑥ 命令执行核心 runCommand（spawn + 超时/取消杀进程树 + 截断）。
  */
 import { invoke, Channel } from '@tauri-apps/api/core'
 import { Command, Child } from '@tauri-apps/plugin-shell'
@@ -25,15 +20,11 @@ import {
 import { getSkillsDirPath } from '@/skill/skillStore'
 import { toolOutputStore } from '../output-store'
 
-// ══════════════════════════════════════════════════════════════════
 // 1. 平台探测
-// ══════════════════════════════════════════════════════════════════
 
 /**
- * ===== 平台探测（权威来源优先）=====
- * 主来源：Rust os_platform（std::env::consts::OS）。
- * UA 只是兜底：仅当 os_platform 尚未解析完成时才临时使用。
- * 权威值缓存进 _platform 后，描述与执行路径统一读同一缓存，不再依赖两套探测。
+ * 平台探测（权威来源优先）：主来源是 Rust os_platform（std::env::consts::OS，权威）；UA 只是 os_platform
+ * 尚未就绪时的临时兜底。权威值缓存进 _platform 后，描述与执行路径统一读同一缓存，不再依赖两套探测。
  */
 
 /** UA 启发式兜底（navigator.userAgent 可被 WebView 覆盖，仅作临时兜底）。 */
@@ -66,9 +57,7 @@ export function platformSnapshot(): string {
 // 模块加载后立即预热权威平台，让首轮 listDefinitions() 生成描述时即可拿到 os_platform 结果
 void detectPlatform()
 
-// ══════════════════════════════════════════════════════════════════
 // 2. 命令解析与风险分类
-// ══════════════════════════════════════════════════════════════════
 
 /**
  * 引号感知：提取命令段第一个 token。
@@ -299,9 +288,7 @@ export function classifyCommand(
   return 'safe'
 }
 
-// ══════════════════════════════════════════════════════════════════
 // 3. 风险提示文案
-// ══════════════════════════════════════════════════════════════════
 
 /** 风险等级对应的用户提示 */
 const RISK_LABELS: Record<string, { label: string; hint: string }> = {
@@ -345,9 +332,7 @@ export const SANDBOX_RULE_BYPASS_HINT =
   '⚠️ 该命令命中「忽略沙盒命令」规则「$__rule__」，将以「不使用沙盒」方式执行：' +
   '不受写隔离与受限令牌限制，可写入任意路径。'
 
-// ══════════════════════════════════════════════════════════════════
 // 4. 命令审批注册表
-// ══════════════════════════════════════════════════════════════════
 
 /**
  * 命令审批注册表 — 负责工具与 command_confirm 交互层之间的审批协调。
@@ -412,31 +397,16 @@ function installListener(): void {
   )
 }
 
-// ══════════════════════════════════════════════════════════════════
 // 5. 终端输出处理
-// ══════════════════════════════════════════════════════════════════
 
 /**
  * 处理终端输出中的 `\r`（回车覆盖）与光标移动 / 清屏转义序列，返回纯文本（不含颜色 / 样式 ANSI 码）。
  *
- * 用行缓冲区模拟虚拟终端，支持：
- * - \r        → 回到当前行首，后续字符覆盖
- * - \n        → 换行（光标移到下一行行首）
- * - \b        → 光标左移一格（退格）
- * - \x1b[nA   → 光标上移 n 行
- * - \x1b[nB   → 光标下移 n 行
- * - \x1b[nC   → 光标右移 n 列
- * - \x1b[nD   → 光标左移 n 列
- * - \x1b[nK   → 清除从光标到行尾
- * - \x1b[nJ   → 清屏（2/3 为全屏）
- * - \x1b[r;cH/f → 光标定位
- * - \x1b[?25l / \x1b[?25h → 私有模式（DECSET/DECRST），整条忽略但必须吞完
- * - \x1b]... BEL/ST → OSC（如改窗口标题），整条忽略
- * - 其他 \x1b[... 序列（颜色、样式、ECH 擦除字符等）→ 忽略
+ * 用行缓冲区模拟虚拟终端：支持 \r 覆盖、\n、\b、\x1b[nA/B/C/D 光标移动、\x1b[nK 清行尾、\x1b[nJ 清屏、
+ * \x1b[r;cH/f 定位；\x1b[?25l/h（DECSET/DECRST）与 \x1b]…OSC 整条忽略但必须吞完；其余 \x1b[… 序列忽略。
  *
- * ⚠️ 必须完整吞掉转义序列：旧实现只认 `ESC [` 且只吃 `0-9;`，`\x1b[?25l` 会把 "25l" 漏成正文
- * （PTY / ConPTY 路径下这类序列极密集）。与 Rust
- * `native_tools/execute/common.rs::process_terminal_output` 逐条对齐（铁律 1），改一边必须同步另一边。
+ * ⚠️ 必须完整吞掉转义序列：旧实现只认 `ESC [` 且只吃 `0-9;`，`\x1b[?25l` 会把 "25l" 漏成正文（PTY / ConPTY
+ * 路径下这类序列极密集）。与 Rust native_tools/execute/common.rs::process_terminal_output 逐条对齐（铁律 1）。
  */
 export function processTerminalOutput(raw: string): string {
   if (!raw) return ''
@@ -598,13 +568,10 @@ export function processTerminalOutput(raw: string): string {
   return buffer.join('\n')
 }
 
-// ══════════════════════════════════════════════════════════════════
 // 6. 命令执行核心
-// ══════════════════════════════════════════════════════════════════
 
 /**
- * Cross-platform process tree killer via Rust `kill_process_tree` command.
- * Uses OS-native kill semantics from the Rust side (no shell permission needed).
+ * 跨平台进程树杀手（走 Rust kill_process_tree，用 OS 原生 kill 语义，无需 shell 权限）；失败回退 child.kill()。
  */
 async function killProcessTree(
   _shellName: string,
@@ -738,12 +705,10 @@ export async function runCommand(
   const isWin = platform === 'windows'
   const isLinux = platform === 'linux'
 
-  // ===== SKILL_ROOT 进程级只读保护 =====
-  // 注入 SKILL_ROOT 环境变量
+  // SKILL_ROOT 进程级只读保护：注入 SKILL_ROOT 环境变量
   const skillsDir = await getSkillsDirPath()
 
-  // ===== 首选：Rust 原生执行（沙盒 + ConPTY），见 docs/pty-research.md §7 #14 =====
-  // 不可用时返回 null → 继续下方 plugin-shell 管道路径（跨平台兜底）。
+  // 首选：Rust 原生执行（沙盒 + ConPTY，见 docs/pty-research.md §7 #14）；不可用时返回 null → 走下方 plugin-shell 管道路径。
   const native = await tryRunCommandNativePty(
     cmdStr,
     cwd,

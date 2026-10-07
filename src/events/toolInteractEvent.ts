@@ -1,50 +1,21 @@
 /**
- * toolInteractEvent — 工具交互事件总线
+ * toolInteractEvent — 工具交互事件总线：连接 chat-service（工具调用层）与 tool-ui（UI 层），取代所有 window.* 全局挂载。
  *
- * 连接 chat-service（工具调用层）与 tool-ui（UI 层），取代所有 window.* 全局挂载。
+ * ⚠️ **核心不变量：每次「提问 / 授权」都有唯一 interactionId，应答方必须原样回传。** 一次 run 内可并发挂起多个
+ * 交互（不同会话 / tool call）；改造前应答事件只带值不带标识、所有 handles 监听同一个全局事件 → 两个交互同时挂起时
+ * 一次应答会同时 resolve 两者（串扰），且手机端无从知道自己应答的是哪一个。
  *
- * ⚠️ **核心不变量（手机控制前置改造，2026-09）：每次「提问 / 授权」都有唯一的 `interactionId`，
- * 应答方必须原样回传它。**
- *
- * 为什么必须这样：一次 run 内可以并发挂起多个交互（不同会话 / 不同 tool call）。
- * 改造前应答事件**只带值不带标识**，而所有 handles 实例都监听同一个全局事件 —— 两个交互
- * 同时挂起时，一次应答会同时 resolve 两者（串扰）。手机端作为第二个应答源更是**无从知道**
- * 自己在应答哪一个（见 `docs/phone-control-bridge.md` §7-①）。
- *
- * 事件清单：
- *   user_choice 系列：
- *     showChoice  → chat-service 触发，tool-ui 监听打开选择弹窗
- *     resolve     → tool-ui 触发确认结果（带 interactionId），chat-service 收到后 resolve Promise
- *     reject      → tool-ui 触发取消/暂存（带 interactionId），chat-service 收到后 reject Promise
- *
- *   授权（authorization）系列 —— 通用的「授权确认」弹窗（不限于命令/脚本）：
- *     showAuthorization → tool 层触发，tool-ui 监听打开授权确认弹窗
- *     commandResolve    → tool-ui 触发“允许”（带 interactionId），tool 层收到后 resolve
- *     commandReject     → tool-ui 触发拒绝/暂存（带 interactionId），tool 层收到后 reject
- *
- *   终态广播：
- *     interactionSettled → 某个交互已结束（允许 / 拒绝 / 暂存 / `expired` = 没人回答）。
- *       用途：**第二个应答端**（手机 / 另一个弹窗）据此收起自己的 UI，避免重复应答。
- *       应答的发起端自己已经收起，收到该事件应为幂等无操作。
- *
- *       ⚠️ 手机控制侧的注册表（`bridge/interaction-source.ts`）**也发**这个事件：手机批完、
- *       或交互被收敛（会话被取消 / 被删除）时，靠它收起桌面上的弹窗。
- *       那种情况下会把共享包的 `expired` 映射成 `reject`（本机监听方只看 id，不看 outcome）。
- *
- *   终端内确认（Step 2 ①）—— **按 toolCallId 路由**（组件本来就按 toolCallId 渲染）：
- *     terminalConfirmSubmit / terminalConfirmCancel
- *
- *   原始审批注册表（`infrastructure/tools/execute/common.ts`，**按 approvalId 路由**）：
- *     userAllowCmd / userCmdRejected
+ * 事件：user_choice 系列（showChoice / resolve / reject）；授权系列（showAuthorization / commandResolve /
+ * commandReject）；终态广播 interactionSettled（allow / reject / shelve / expired）—— **第二个应答端**（手机 / 另一个
+ * 弹窗）据此收起自己的 UI，应答发起端收到应为幂等无操作；终端内确认（**按 toolCallId 路由**）
+ * terminalConfirmSubmit / terminalConfirmCancel；原始审批注册表（**按 approvalId 路由**）userAllowCmd / userCmdRejected。
  */
 import { ToolExecutorResponse, ToolResult } from '@/domain/tools/types'
 import EventEmitter from '@/utils/EventEmitter'
 
 /**
- * 一次交互（提问 / 授权）的公共标识。
- *
- * 应答方（桌面 UI / 手机端）必须把 `interactionId` 原样回传 —— 这是工具侧
- * 「多交互并发时精确路由」的唯一依据。
+ * 一次交互（提问 / 授权）的公共标识。应答方（桌面 UI / 手机端）必须把 interactionId 原样回传 —— 这是
+ * 工具侧「多交互并发时精确路由」的唯一依据。
  */
 export interface InteractionRef {
   /** 本次交互的唯一 id（每弹一次生成一个） */
@@ -91,18 +62,17 @@ export interface AuthorizationRequest extends InteractionRef {
   /**
    * AI 申请「不使用沙盒」执行本次操作。
    *
-   * 供手机控制侧**审批分级**使用（§16.2）—— 脱壳是高危面，手机批准前必须二次确认。
-   * 不参与弹窗渲染（警告文案已在 `hint` 里），故不影响既有 UI。
+   * 供手机控制侧**审批分级**使用（§16.2）—— 脱壳是高危面，手机批准前必须二次确认。不参与弹窗渲染
+   *（警告文案已在 `hint` 里），故不影响既有 UI。
    */
   sandboxBypass?: boolean
 }
 
 /**
- * 一次交互的最终归宿（`interactionSettled` 的载荷）。
+ * 一次交互的最终归宿（interactionSettled 的载荷）。
  *
- * `expired` = **没人回答**：交互随运行结束被收敛（桌面点停止 / 手机取消或删除会话 / 引擎放弃）。
- * 与共享包 `virlen-remote` 的 `InteractionOutcome` 里那个 `expired` 同名同义（1:1 透传，不再近似）。
- * 它和 `reject`（用户点了拒绝）是两件事 —— 手机端与埋点都靠这个区别判断「谁答的 / 有没有人答」。
+ * expired = **没人回答**：交互随运行结束被收敛（停止 / 取消 / 删会话 / 引擎放弃），与 reject（用户点了拒绝）是
+ * 两件事 —— 手机端与埋点靠这个区别判断「谁答的 / 有没有人答」。
  */
 export type InteractionOutcome = 'allow' | 'reject' | 'shelve' | 'expired'
 
@@ -131,13 +101,7 @@ type ToolInteractEvents = {
   /** Step 2 ①：用户在终端块里取消（Esc / Ctrl+C）。 */
   terminalConfirmCancel: (toolCallId: string) => void
 
-  /**
-   * 用户同意执行命令
-   * @param approvalId  本次审批的唯一标识（由 execute_command 生成并随弹窗数据下发）
-   * @param sessionId
-   * @param toolCallId
-   * @param callback
-   */
+  /** 用户同意执行命令 */
   userAllowCmd: (
     approvalId: string,
     sessionId: string,
@@ -146,10 +110,7 @@ type ToolInteractEvents = {
   ) => void
 
   /**
-   * 用户拒绝执行命令 — 通知 execute_command 侧清理待审批注册表，避免内存泄漏
-   * @param approvalId
-   * @param sessionId
-   * @param toolCallId
+   * 用户拒绝执行命令 —— 通知 execute_command 侧清理待审批注册表，避免内存泄漏。
    */
   userCmdRejected: (
     approvalId: string,

@@ -1,21 +1,13 @@
 /**
- * agentRepo — Agent 配置的持久化 Repository（**配置下沉 D3 的延伸**）
+ * agentRepo — Agent 配置的持久化 Repository（配置下沉 D3 的延伸，见 docs/config-sink-plan.md）。
  *
- * 存储分工（与 `securityRepo` 的沙盒规则**同款**，见 `docs/config-sink-plan.md`）：
- * - **权威源 = Rust 侧 `app_settings` 表的 `agents` 键**（同一个 `virlen.db`）——
- *   GUI 与 headless CLI 读写同一份，因此 `virlen-cli list-agent` / `list-session -g agent`
- *   能看到同一批 Agent（名称、描述、默认工作目录、默认模型…）；
- * - localStorage（`virlen-store`）**只在非 Tauri**（浏览器 dev / vitest）保留，
- *   作为降级存储，保证 `pnpm dev` 下该功能仍可用；
- * - 启动水合（`hydrateAgents`，`main.ts` 的 `agents` 步骤）：表里**有**该键 → 读进内存快照；
- *   表里**没有** → 一次性迁移 localStorage 的历史副本，然后清掉本地副本
- *   （避免出现第二份权威，也就不会「删了表里的行又被迁回」）。
+ * 存储分工（与 securityRepo 沙盒规则同款）：**权威源 = Rust app_settings 表的 agents 键**（GUI 与 headless
+ * CLI 读写同一份）；localStorage（virlen-store）只在非 Tauri（浏览器 dev / vitest）保留作降级。启动水合
+ *（hydrateAgents）时：表里有该键 → 读进内存快照；没有 → 一次性迁移 localStorage 历史副本并清掉本地副本
+ *（避免出现第二份权威）。
  *
- * 「内存快照 + 同步 `load()`」的原因：`getAgent()` 在渲染期被同步调用（如侧边栏分组
- * `groupSessionsByAgent`），而 `SimpleRepo` 不能是异步接口 —— 与 `securityRepo` 的
- * `rulesSnapshot` 同一招：异步读表 → 落内存快照 → 同步读快照。
- *
- * 写入是 debounce 的（连续编辑只写一次），退出前由 `flushAgentsPersist()` 补一次。
+ * 「内存快照 + 同步 load()」的原因：getAgent() 在渲染期同步调用，而 SimpleRepo 不能是异步接口 —— 异步读表 →
+ * 落内存快照 → 同步读快照。写入 debounce，退出前由 flushAgentsPersist() 补一次。
  */
 import { getLocal, setLocal } from '@/utils/localStorage'
 import type { SimpleRepo } from '@/infrastructure/repo'
@@ -39,10 +31,10 @@ export const AGENTS_SETTINGS_KEY = 'agents'
 const AGENTS_SAVE_DEBOUNCE_MS = 400
 
 /**
- * 内存权威快照（仅 Tauri 环境使用）。
+ * 内存权威快照（仅 Tauri 环境）。
  *
  * `null` = 尚未从表里读过；`{agents: []}` = 表里就是空的（**不是**「还没读」）。
- * `load()` 是同步接口（渲染期要用），所以表的异步读取结果落在这里。
+ * `load()` 是同步接口，故表的异步读取结果落在这里。
  */
 let agentsSnapshot: AgentStoreData | null = null
 

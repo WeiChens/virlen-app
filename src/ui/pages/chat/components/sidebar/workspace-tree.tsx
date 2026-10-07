@@ -1,28 +1,19 @@
 /**
- * workspace-tree —— 侧边栏「工作目录」页签
+ * 侧边栏「工作目录」页签 —— 以资源管理器的方式展示当前工作目录的文件树。
  *
- * 以 VS Code 资源管理器的方式展示当前工作目录的文件树：
- *  - 树根 = 当前会话的 workspace；无会话（新对话）时用已选择的工作目录，
- *    再兜底到全局默认工作目录
- *  - 懒加载：展开某个目录时才调 `list_directory` 读它的直接子项（recursive=false, maxDepth=1）
- *  - 虚拟列表：只渲染视口内的行（`@tanstack/react-virtual`），
- *    十几万条目的目录也不会卡（行高固定，见 tree-rows.ts 的扁平化）
- *  - 行交互（对齐资源管理器）：
- *      · 单击 = 选中（Ctrl/Cmd 加减、Shift 连选）；无修饰键时目录顺带展开/折叠
- *      · 左侧箭头单击 = 只切展开/折叠，不动选择
- *      · 双击 = 引用到输入框；右键菜单 = 打开 / 编辑器打开 / 复制 / 粘贴 /
- *        重命名 / 删除 / 在文件管理器中显示…
- *      · 拖到输入框 = 引用成附件；拖到目录行 = 移动到该目录（整份选择集一起）
- *  - 搜索（页签顶部搜索框，见 search-box.tsx）：关键词非空 → invoke('search_files_by_name')
- *    递归搜**整个工作目录**（懒加载的树里未展开的目录也能搜到），以扁平结果列表替换树视图；
- *    遍历时跳过点项与依赖 / 构建目录（node_modules / dist / target …，见 SEARCH_SKIP_DIR_NAMES），
- *    **除非用户已在树里展开过它**（展开了就是要看里面）；结果只含**文件**（不含目录），上限 60 条。
- *    点结果 → 逐级加载祖先目录并展开、选中、滚动定位，随后自动清空关键词回到树视图。
- *    防抖 250ms，新关键词会 stop_task 掉上一次遍历（大目录不做防抖会拖住整个线程）。
+ * 树根 = 当前会话的 workspace；无会话（新对话）时用已选工作目录，再兜底全局默认。
+ * 懒加载：展开目录才调 `list_directory`（recursive=false, maxDepth=1）；虚拟列表只渲染视口内的行。
+ * 行交互：单击 = 选中（Ctrl/Cmd 加减选、Shift 连选；无修饰键时目录顺带展开）、箭头 = 只切展开、
+ * 双击 / 拖到输入框 = 引用为附件、拖到目录 = 移动整份选择集，右键 = 打开 / 编辑器打开 / 复制 / 粘贴 /
+ * 重命名 / 删除 / 在文件管理器中显示。
  *
- * 与输入框的 `@` 路径补全同源，都是**不经安全校验的只读目录浏览**
- * （树根本身就是用户自己选定/配置的工作目录），仅隐藏点文件；不落盘、不缓存。
- * 但**写操作**（粘贴 / 移动 / 重命名 / 删除）一律经 file-transfer-service 过安全校验（铁律 6）。
+ * 搜索：关键词非空 → `search_files_by_name` 递归搜**整个工作目录**（懒加载树里没展开的也能搜到），
+ * 以扁平结果列表替换树视图；跳过点项与 `SEARCH_SKIP_DIR_NAMES`（用户在树里展开过的那份除外），
+ * 只含文件、上限 60 条，防抖 250ms 且新关键词会停掉上一次遍历。点结果 → 逐级加载祖先并定位。
+ *
+ * 与输入框 `@` 补全同源：都是**不经安全校验的只读目录浏览**（树根本身就是用户选定的工作目录），
+ * 仅隐藏点文件、不落盘不缓存；但**写操作**（粘贴 / 移动 / 重命名 / 删除）一律经
+ * file-transfer-service 过安全校验（铁律 6）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -63,10 +54,7 @@ import SidebarSearch from './search-box'
 interface Props {
   /** 把路径作为附件挂到聊天输入框（右键「引用」/ 拖拽到输入框都走它） */
   onAttachPaths: (paths: string[]) => void
-  /**
-   * 搜索关键词与写回。**值由父组件持有**：本组件在切页签时会卸载
-   * （`{activeTab === 'workspace' && ...}`），关键词放本地就丢了。
-   */
+  /** 搜索关键词与写回（**值由父组件持有**）：本组件切页签时会卸载，关键词放本地就丢了。 */
   searchQuery: string
   onSearchQueryChange: (value: string) => void
 }
@@ -81,16 +69,10 @@ const TREE_OVERSCAN = 16
 const INDENT_STEP = 12
 const BASE_INDENT = 6
 
-/**
- * 显示文件大小的最小容器宽度（px）。
- * 窄侧边栏下名字本身就不够显示，再挤一个大小进去只会两边都看不全 → 只在够宽时显示。
- */
+/** 显示文件大小的最小容器宽度（px）：窄侧边栏下名字本身就不够显示，再挤一个大小只会两边都看不全。 */
 const SIZE_MIN_CONTAINER_WIDTH = 220
 
-/**
- * 磁盘搜索的命中上限（Rust 侧截断）。
- * 结果是一次全盘遍历的产物，条数不设上限会把侧边栏变成结果列表页。
- */
+/** 磁盘搜索的命中上限（Rust 侧截断）：结果是一次全盘遍历的产物，不设上限会把侧边栏变成结果列表页。 */
 const SEARCH_MAX_RESULTS = 60
 
 /** 搜索防抖：每敲一个字都全盘遍历一次磁盘代价太大 */
@@ -99,14 +81,10 @@ const SEARCH_DEBOUNCE_MS = 250
 /**
  * 磁盘搜索默认**整棵剪掉**的目录名（依赖 / 缓存 / 构建产物）。
  *
- * 为何要剪：这些目录动辄几万文件，搜进去又慢又全是噪音（node_modules 里同名文件一堆），
- * 用户要的一般是自己的代码。剪枝在 Rust 侧做（`filter_entry`，**不下钻**），不是拿回结果再过滤
- * —— 否则遍历成本照样付了，且上限 60 条可能被依赖目录先占满。
- *
- * 例外：用户**在目录树里展开过**的那一份不剪（见 searchKeepDirs）、——展开了就是确实要看里面；
- * 点目录（`.git` / `.idea` …）则靠 `includeHidden: false` 整棵跳过，它们在树里本来就不可见。
- *
- * 只作用于侧边栏搜索框，不改变模型工具 `search_files_by_name` 的行为（见 Rust 侧注释）。
+ * 它们动辄几万文件，搜进去又慢又全是噪音。剪枝在 Rust 侧做（`filter_entry`，**不下钻**），不是拿回
+ * 结果再过滤 —— 否则遍历成本照付，且 60 条上限可能被依赖目录先占满。
+ * 例外：用户**在树里展开过**的那份不剪（见 `searchKeepDirs`）；点目录靠 `includeHidden: false` 整棵跳过。
+ * 只作用于侧边栏搜索框，不改变模型工具 `search_files_by_name` 的行为。
  */
 const SEARCH_SKIP_DIR_NAMES = [
   'node_modules',
@@ -163,11 +141,7 @@ function WorkspaceTree({
   } | null>(null)
   /** 容器够宽时才在行右侧显示文件大小 */
   const [isWide, setIsWide] = useState(false)
-  /**
-   * 选中项：key = 绝对路径，value 带上 name / isDir。
-   * 存 Map 而不是 Set —— 拖拽 / 菜单需要 name 与 isDir，而选中的路径可能
-   * 因为折叠已不在可见行里（那时从 rows 里查不到）。
-   */
+  /** 选中项（key = 绝对路径）。存 Map 而非 Set：拖拽 / 菜单要 name 与 isDir，而选中项可能因折叠已不在可见行里。 */
   const [selected, setSelected] = useState<Map<string, TreeMenuTarget>>(
     new Map(),
   )
@@ -184,11 +158,7 @@ function WorkspaceTree({
   /** Shift 连选的锚点（最近一次单击的行） */
   const anchorRef = useRef<string | null>(null)
   const menu = useContextMenu<TreeMenuTarget>()
-  /**
-   * 行内重命名的待提交值。
-   * 与 state 同步维护，但提交读的是这个 ref —— Enter 与随后的 blur 可能
-   * 在同一帧内先后触发，只读 state 会拿到旧值，于是同一次重命名被提交两遍。
-   */
+  /** 重命名的待提交值（与 state 同步维护，但提交读 ref）：Enter 与随后的 blur 可能同帧先后触发，读 state 会拿到旧值 → 同一命名提交两遍。 */
   const renamingRef = useRef<{
     path: string
     original: string
@@ -213,8 +183,8 @@ function WorkspaceTree({
   )
 
   /**
-   * 读取某个目录的直接子项（覆盖写缓存）
-   * @param silent 静默刷新：不置 loading、失败也不写 error，用于文件操作后的刷新（避免闪一下「加载中」）
+   * 读取目录的直接子项（覆盖写缓存）。
+   * @param silent 静默刷新：不置 loading、失败也不写 error（文件操作后刷新用，避免闪一下「加载中」）
    */
   const loadDir = useCallback(async (path: string, silent = false) => {
     if (!silent) {
@@ -278,10 +248,7 @@ function WorkspaceTree({
     return () => observer.disconnect()
   }, [rootPath])
 
-  /**
-   * 「默认剪掉、但用户已展开」的目录路径：不再剪枝（展开了就是要看里面）。
-   * 搜索期间树不可见 → 这个列表在搜索过程中是稳定的。
-   */
+  /** 「默认剪掉、但用户已展开」的目录：不再剪枝（展开了就是要看里面）。搜索期间树不可见 → 这列表在搜索过程中稳定。 */
   const searchKeepDirs = useMemo(
     () =>
       Object.keys(expanded).filter(
@@ -292,12 +259,10 @@ function WorkspaceTree({
   )
 
   /**
-   * 关键词 → 磁盘递归搜索（防抖 + 可取消）。
-   *
-   * 两条容易踩的坑：
-   *   1. 新关键词到达时要 `stop_task` 上一次遍历，否则旧结果可能后到并覆盖新结果；
-   *   2. Windows 下 `ignore` 遍历出的路径是 `C:/root\sub\file`（根保留 /，子级用 \），
-   *      而用户习惯按 `/` 输入路径片段 → 查询串在 Windows 上先换成 \，否则「src/ui」永远搜不到。
+   * 关键词 → 磁盘递归搜索（防抖 + 可取消）。两个容易踩的坑：
+   * 1. 新关键词到达时要 `stop_task` 上一次遍历，否则旧结果可能后到并覆盖新结果；
+   * 2. Windows 下 walk 出的路径是 `C:/root\sub\file`（根保留 /，子级用 \），而用户习惯按 `/`
+   *    输入片段 → 查询串在 Windows 上先换成 \，否则「src/ui」永远搜不到。
    */
   useEffect(() => {
     const q = query.trim()
@@ -334,8 +299,7 @@ function WorkspaceTree({
         })
         if (cancelled) return
         const rawList: any[] = raw ?? []
-        // 结果里的路径统一归一化成 / 分隔（Windows 下 walk 出来的是 C:/root\sub\file）：
-        // 展示、排序、以及点结果后的祖先目录定位都按归一化后的路径走
+        // 路径统一归一化为 / 分隔：展示、排序与点结果后的祖先定位都按归一化后的路径走
         const paths = rawList
           .map((item) => normalizeTreePath(String(item?.path ?? '')))
           .filter(Boolean)
@@ -405,9 +369,8 @@ function WorkspaceTree({
   }, [])
 
   /**
-   * 点搜索结果 → 在树里定位到它：
-   * 逐级加载祖先目录（懒加载的树里它们可能从没被展开过）→ 展开 → 选中 → 滚动到该行，
-   * 最后清空关键词回到树视图（否则结果列表一直盖着树，定位等于没看见）。
+   * 点搜索结果 → 在树里定位到它：逐级加载祖先目录（懒加载的树里它们可能从没展开过）→ 展开 → 选中
+   * → 滚动到该行，最后清空关键词回到树视图（否则结果列表一直盖着树，定位等于没看见）。
    */
   const locateSearchResult = useCallback(
     async (filePath: string) => {
@@ -441,11 +404,8 @@ function WorkspaceTree({
   )
 
   /**
-   * 单击 = 选中：
-   *  - Ctrl/Cmd：加选 / 减选
-   *  - Shift：从锚点连选到本行（只按可见行算，见 selectRangePaths）
-   *  - 无修饰键：单选 +（目录）顺带展开 / 折叠
-   * 带修饰键时**不**展开目录 —— 连选过程中可见行数一变，后续 Shift 范围就错位了。
+   * 单击 = 选中：Ctrl/Cmd 加选 / 减选、Shift 从锚点连选到本行（只按可见行算，见 `selectRangePaths`）、
+   * 无修饰键则单选 +（目录）顺带展开 / 折叠。带修饰键时**不**展开 —— 可见行数一变，后续 Shift 范围就错位。
    */
   const handleRowClick = useCallback(
     (
@@ -497,13 +457,12 @@ function WorkspaceTree({
   )
 
   /**
-   * 拖到另一个目录 = 移动（整份选择集一起搬）。
-   * 松手后**先确认再落盘**：移动真的会改磁盘位置，一次可能搬很多项，误拖的代价不小。
+   * 拖到另一个目录 = 移动（整份选择集一起搬）。松手后**先确认再落盘**：移动真的会改磁盘位置，
+   * 一次可能搬很多项，误拖的代价不小。
    */
   const handleMove = useCallback(
     async (items: TreeDragItem[], targetDir: string) => {
-      // 已在目标目录里的条目不算「要搬的」（多选时才可能出现）：
-      // 只对真正会发生位移的条目确认，否则弹窗里的条数与成功提示的条数对不上
+      // 已在目标目录里的条目不算「要搬的」：只对真会发生位移的条目确认，否则弹窗里的条数与成功提示对不上
       const pending = items.filter(
         (item) => parentDirOf(item.path) !== targetDir,
       )
@@ -588,10 +547,8 @@ function WorkspaceTree({
   })
 
   /**
-   * 按下：算出本次要拖的项交给 hook。
-   *  - 命中的行已在选择集里 → 拖整份选择集
-   *  - 不在 → 只拖它自己，并立即选上（等 click 再选的话，拖拽过程中就没有选中反馈）
-   * 树根不参与移动（工作目录不能被搬进自己的子目录）。
+   * 按下：算出本次要拖的项交给 hook。命中的行已在选择集里 → 拖整份选择集；不在 → 只拖它自己
+   * 并立即选上（等 click 再选的话，拖拽过程中就没有选中反馈）。树根不参与移动（工作目录不能搬进自己的子目录）。
    */
   const handleRowPointerDown = useCallback(
     (e: React.PointerEvent, row: TreeMenuTarget) => {
@@ -608,10 +565,7 @@ function WorkspaceTree({
     [selected, rootPath, setSelection, startDrag],
   )
 
-  /**
-   * 双击 = 引用到输入框（打开类动作只留在右键菜单，避免误触）。
-   * 命中的行在选择集里时，引用整份选择集。
-   */
+  /** 双击 = 引用到输入框（打开类动作只留在右键菜单，避免误触）；命中的行在选择集里时引用整份选择集。 */
   const handleRowDoubleClick = useCallback(
     (row: TreeMenuTarget) => {
       if (draggedRef.current) {
@@ -1013,9 +967,9 @@ function WorkspaceTree({
   }
 
   // 菜单项必须在渲染时就把 target / 选择集捕获进闭包：ContextMenu 点击时会先 onClose
-  // （state 归 null）再执行 onClick，回调里再读 menu.state 会拿到 null。
+  // （state 归 null）再执行 onClick，回调里再读 menu.state 只会拿到 null。
   const menuTarget = menu.state?.target
-  // 右键命中未选中的行时，上一行 onContextMenu 已把选择收敛到它，这里自然就是单选
+  // 右键命中未选中的行时，onContextMenu 已把选择收敛到它，这里自然就是单选
   const menuTargets = menuTarget
     ? selected.has(menuTarget.path)
       ? [...selected.values()]
@@ -1049,8 +1003,7 @@ function WorkspaceTree({
         onChange={setQuery}
         placeholder={t('搜索文件或文件夹…')}
       />
-      {/* 滚动容器（virtualizer 的 getScrollElement）必须常驻：
-          搜索时只换里面的子节点，不能把 .tree-scroll 一起卸载掉 */}
+      {/* 滚动容器（virtualizer 的 getScrollElement）必须常驻：搜索时只换里面的子节点，不能把 .tree-scroll 一起卸载 */}
       <div className="tree-scroll" ref={scrollRef}>
         {isSearching ? (
           renderSearchResults()
@@ -1087,8 +1040,7 @@ function WorkspaceTree({
 
 /**
  * 移动确认弹窗的正文：目标目录 + 将被搬走的条目。
- * MessageBox 的 text 支持传渲染函数（字符串会被 pre-wrap 直接铺开），
- * 路径要单独着色 / 折行，所以走 JSX。
+ * MessageBox 的 text 支持传渲染函数，而路径要单独着色 / 折行，所以走 JSX 而不是字符串。
  */
 function MoveConfirmBody({
   targetDir,

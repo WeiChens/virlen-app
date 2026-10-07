@@ -1,10 +1,8 @@
 /**
- * token-ring — Token 使用量环形进度条
+ * token-ring — Token 使用量环形进度条。
  *
- * 展示当前会话的 token 使用比例；左键（或聚焦后回车/空格）按**设置里的压缩方式**
- * 触发上下文压缩，**右键**在按钮左上方弹出菜单，临时指定本次压缩方式
- * （AI 摘要 / 正文压缩）。
- * 进度用 stroke-dashoffset 表达（本身就能过渡），不需要额外动画循环。
+ * 左键（或聚焦后回车 / 空格）按**设置里的压缩方式**触发上下文压缩；右键在按钮左上方弹菜单，
+ * 临时指定本次压缩方式。进度用 stroke-dashoffset 表达，无需额外动画循环。
  */
 import { useEffect } from 'react'
 import { Observer } from 'mobx-react-lite'
@@ -25,10 +23,7 @@ import ContextMenu, {
 } from '@/ui/components/shared/ContextMenu'
 import { t } from '@/ui/i18n'
 
-// ==================== 几何常量（提到模块级，不在渲染里重算） ====================
-
-// 「100%」对应的上下文窗口缺省值、占用阈值、占用口径本身均在
-// `@/domain/usage/context-occupancy`（单一真源：手机控制接口层读同一份）
+// 窗口缺省值 / 占用阈值 / 占用口径都在 @/domain/usage/context-occupancy（单一真源，手机接口层读同一份）
 /** 环形尺寸 / 线宽 / 半径 / 周长 */
 const RING_SIZE = 30
 const RING_STROKE = 4
@@ -64,9 +59,7 @@ function modeLabel(mode: CompressMode) {
   return mode === 'ai' ? t('AI 摘要') : t('正文压缩')
 }
 
-/**
- * 取「当前上下文占用」（口径见 `@/domain/usage/context-occupancy`）。
- */
+/** 当前上下文占用（口径见 @/domain/usage/context-occupancy） */
 function findContextTokens(sessionId: string): number | null {
   const msgs = sessionStore.getSession(sessionId)?.messages
   if (!msgs) return null
@@ -77,10 +70,7 @@ interface Props {
   sessionId?: string
   compacting: boolean
   loading?: boolean
-  /**
-   * 压缩会整体替换消息列表，而列表数据源是 chat-view 的本地 state，
-   * 压缩完成后必须回调通知它重新同步（否则要切会话才看到压缩结果）
-   */
+  /** 压缩会整体替换消息列表，而列表数据源是 chat-view 的本地 state，完成后必须回调让它重新同步 */
   onMessagesUpdate?: (sessionId: string) => void
 }
 
@@ -94,8 +84,8 @@ export default function TokenRing({
   const menu = useContextMenu()
   const { close: closeMenu } = menu
 
-  // 切会话时关掉菜单：Observer 里若因「无 token 数据」提前 return，菜单会直接消失，
-  // 但 React state 还留着 —— 回到有数据的会话时会按旧坐标凭空弹出来
+  // 切会话关菜单：Observer 因「无 token 数据」提前 return 时菜单会消失但 state 还在，
+  // 回到有数据的会话会按旧坐标凭空弹出
   useEffect(() => {
     closeMenu()
   }, [sessionId, closeMenu])
@@ -107,14 +97,14 @@ export default function TokenRing({
         const totalTokens = findContextTokens(sessionId)
         if (totalTokens == null) return null
 
-        // 「100%」对应多少来自设置（全局；CLI 与手机控制接口层读同一份）——只展示、不在此编辑
+        // 「100%」对应多少来自设置（全局，CLI / 手机接口层读同一份）；这里只展示、不编辑
         const contextWindow = contextWindowOf(settingsState.value.contextWindowTokens)
 
         const ratio = Math.min(totalTokens / contextWindow, 1)
         const settingMode = settingsState.value.contextCompressMode ?? 'ai'
 
-        // 圆头端帽会各向外扩半个线宽（合起来一个线宽）：
-        // 除极小进度外，少画一个线宽的弧长，这样满环时首尾刚好接上、不会被端帽叠粗。
+        // 圆头端帽各向外扩半个线宽（合起来一个线宽）：除极小进度外少画一个线宽的弧长，
+        // 满环时首尾刚好接上、不被端帽叠粗
         const rawGap = RING_CIRCUMFERENCE * (1 - ratio)
         const dashOffset =
           rawGap + RING_STROKE <= RING_CIRCUMFERENCE
@@ -125,11 +115,7 @@ export default function TokenRing({
           ? t('正在压缩上下文...')
           : `${formatTokens(totalTokens)} / ${formatTokens(contextWindow)} tokens（${Math.round(ratio * 100)}%）\n${t('点击压缩')}`
 
-        /**
-         * 触发压缩（`mode` 省略 = 用设置里的方式）。
-         *
-         * 三道闸：正在压缩 → 上下文充裕 → 正在发消息
-         */
+        /** 触发压缩（`mode` 省略 = 用设置里的方式）；三道闸：正在压缩 / 上下文充裕 / 正在发消息 */
         async function runCompress(mode?: CompressMode) {
           if (compacting) {
             showToast(t('正在压缩上下文，请稍候...'))
@@ -171,8 +157,8 @@ export default function TokenRing({
                   if (compacting) return
                   e.preventDefault()
                   e.stopPropagation()
-                  // 菜单贴在**按钮左上方**（输入区在窗口右下角，向右下展开会被钳回来、盖住按钮）：
-                  // 以按钮左上角往外退 6px 作为锚点，配合 placement="top-left" 即成为菜单的右下角
+                  // 菜单贴按钮左上方：输入区在窗口右下角，向右下展开会被视口钳回来盖住按钮；
+                  // 以按钮左上角往外退 6px 为锚点，配合 placement="top-left" 即成为菜单右下角
                   const rect = e.currentTarget.getBoundingClientRect()
                   menu.openAtPoint(
                     { x: rect.left + 12, y: rect.top + 6 },
@@ -193,7 +179,7 @@ export default function TokenRing({
                   focusable="false"
                   style={{ '--ring-color': ringColor(ratio) } as CSSProperties}>
                   <defs>
-                    {/* 渐变描边：两端同色、只差透明度 —— 颜色仍由用量决定，只是多一层光泽 */}
+                    {/* 渐变描边：两端同色只差透明度，颜色仍由用量决定，只多一层光泽 */}
                     <linearGradient id={RING_GRAD_ID} x1="0" y1="1" x2="1" y2="0">
                       <stop
                         className="ring-grad-stop"

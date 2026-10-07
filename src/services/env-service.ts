@@ -1,8 +1,4 @@
-/**
- * env-service — 获取系统环境信息并格式化为提示词文本
- *
- * 底层调用 Rust 命令 get_env_info，返回 OS、CWD、工具版本等信息。
- */
+/** env-service — 获取系统环境信息（Rust get_env_info）并格式化为提示词文本。 */
 
 import { invoke } from '@tauri-apps/api/core'
 
@@ -16,14 +12,11 @@ interface EnvInfo {
 
 let _envInfo: EnvInfo | undefined = undefined
 /**
- * 获取系统环境提示词
- *
- * 输出格式：
+ * 获取系统环境提示词。输出形如：
  * # Current Environment
- * - OS: {OS name} {version}
- * - Current working directory: {absolute path}
- * - {工具名称}:{版本}
- * ...
+ * - OS: {name} {version}
+ * - Current working directory: {path}
+ * - {工具名}:{版本}
  */
 export async function getEnvPrompt(workingDirectory?: string): Promise<string> {
   try {
@@ -42,14 +35,11 @@ export async function getEnvPrompt(workingDirectory?: string): Promise<string> {
 function formatEnvInfo(info: EnvInfo, workingDirectory?: string): string {
   const lines: string[] = ['# Current Environment']
 
-  // OS
   const osDisplay = info.os_version ? `${info.os} ${info.os_version}` : info.os
   lines.push(`- OS: ${osDisplay}`)
 
-  // 工作目录
   lines.push(`- Current working directory: ${workingDirectory || info.cwd}`)
 
-  // 工具版本
   for (const tool of info.tools) {
     lines.push(`- ${tool.name}:${tool.version}`)
   }
@@ -61,7 +51,6 @@ function formatEnvInfo(info: EnvInfo, workingDirectory?: string): string {
 function formatFallbackEnv(): string {
   const lines: string[] = ['# Current Environment']
 
-  // 通过 userAgent 判断
   const ua = navigator.userAgent
   if (ua.includes('Windows')) lines.push('- OS: Windows (browser)')
   else if (ua.includes('Macintosh')) lines.push('- OS: macOS (browser)')

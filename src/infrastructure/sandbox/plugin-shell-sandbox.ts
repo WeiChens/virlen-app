@@ -1,11 +1,7 @@
 /**
- * PluginShellSandbox — 基于 @tauri-apps/plugin-shell 的沙盒实现
- *
- * 使用 Tauri 的 shell 插件执行命令，是跨平台兜底方案。
+ * PluginShellSandbox — 基于 @tauri-apps/plugin-shell 的沙盒实现（跨平台兜底）。
  * 不提供额外的 OS 级隔离（如受限令牌、ACL），安全依赖上层风险分类。
- *
- * 🔄 可替换性：当 Windows 切换到 wsbx 时，只需新建一个实现 SandboxPort 的类，
- *    在工厂函数中按平台返回对应实例即可。
+ * 可替换：切到 wsbx 时新建一个实现 SandboxPort 的类，在工厂里按平台返回即可。
  */
 
 import { Command, Child } from '@tauri-apps/plugin-shell'
@@ -17,11 +13,9 @@ import type {
   CommandOptions,
 } from '@/domain/ports/SandboxPort'
 
-// ─── 辅助函数 ──────────────────────────────────────────────
+// 辅助函数
 
-/**
- * 同步猜测平台（基于 UA，构造函数中用）
- */
+/** 同步猜测平台（基于 UA，构造函数中用）。 */
 function guessPlatformSync(): 'windows' | 'macos' | 'linux' {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
   if (/Windows/i.test(ua)) return 'windows'
@@ -29,9 +23,7 @@ function guessPlatformSync(): 'windows' | 'macos' | 'linux' {
   return 'linux'
 }
 
-/**
- * 跨平台杀进程树
- */
+/** 跨平台杀进程树。 */
 async function killProcessTree(shellName: string, child: Child): Promise<void> {
   try {
     await invoke('kill_process_tree', { pid: child.pid })
@@ -41,7 +33,7 @@ async function killProcessTree(shellName: string, child: Child): Promise<void> {
   }
 }
 
-// ─── 实现 ──────────────────────────────────────────────────
+// 实现
 
 export class PluginShellSandbox implements SandboxPort {
   readonly platform: 'windows' | 'macos' | 'linux'

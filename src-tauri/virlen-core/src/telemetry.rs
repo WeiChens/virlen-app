@@ -1,19 +1,11 @@
-//! Rust 侧埋点出口（§5.13 / §12.13）—— **sink 可插拔，本文件零 `tauri::`**
+//! Rust 侧埋点出口 — **sink 可插拔，本文件零 `tauri::`**。
 //!
-//! GUI 与 CLI 共用同一套 `track()` 调用点（core 内约百处，全部不动），出口由宿主注册：
-//! - **GUI**：`virlen-app` 的 `TauriTelemetrySink` → `app.emit("agent:telemetry", …)`，
-//!   由前端 `src/utils/telemetry` 补齐公共字段、打码、写入本地缓冲
-//!   （前端 `track()` 在开关关闭时 no-op，因此 Rust 侧无需感知开关）；
-//! - **CLI / 单测**：不注册 sink → `track()` 静默丢弃（与原「APP 未登记」行为一致）。
+//! GUI 与 CLI 共用同一套 `track()` 调用点（core 内约百处），出口由宿主注册：
+//! GUI → `TauriTelemetrySink`（前端补公共字段 / 打码 / 落本地缓冲）；CLI / 单测 → 不注册，静默丢弃。
 //!
-//! 约定：
-//! - event_name 沿用既有埋点命名（`域.动作`）；props 只放「事件私有字段」，公共字段由前端补齐。
-//! - `session_id` 一律使用 `hash_id`（与前端 `hashText` 完全一致，SHA 前 16 位语义），
-//!   保证与前端事件可关联且不泄漏原始 ID。
-//! - panic 经 panic hook：实时回传 + 落盘（`<数据目录>/telemetry_panics.log`）；
-//!   崩溃后下次启动由前端调用 `telemetry_drain_panics` 拉取回放（Rust setup 阶段
-//!   emit 会早于前端监听注册而丢失，故不在此处回放）；正常退出时清理落盘文件。
-//! - 未注册 sink / 发送失败一律静默，绝不 panic。
+//! 约定：event_name 沿用 `域.动作`，props 只放事件私有字段；`session_id` 用 `hash_id`（与前端 `hashText`
+//! 一致，不泄原始 ID）；panic 经 hook 实时回传 + 落盘，下次启动由前端 `telemetry_drain_panics` 拉取回放
+//! （setup 阶段 emit 会早于监听注册而丢失）；未注册 sink / 发送失败一律静默，绝不 panic。
 
 use serde_json::{json, Value};
 use std::collections::HashMap;

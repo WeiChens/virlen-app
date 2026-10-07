@@ -1,13 +1,9 @@
-//! execute — 代码执行分类（分类 id: execute）
+//! execute — 代码执行分类（分类 id: execute）：`execute_command`（风险分类 → 审批 → 原生
+//! spawn + 超时/取消）、`execute_script`（写脚本并执行，可选执行后删除）。
 //!
-//! 一个工具一个文件：
-//! - `execute_command`：shell 命令执行（风险分类 → 审批 → 原生 spawn + 超时/取消）
-//! - `execute_script`：写脚本文件并执行（可选执行后删除）
-//!
-//! - `common/` 为分类内公共（按职责拆分为子模块）：终端输出解码 / 命令解析与风险分类 /
-//!   运行中命令注册表 / 终端输出处理 / 统一运行器 `run_command_native`（沙盒 + 裸跑两条路径）。
-//! - `pty_session.rs` 为 PTY 会话注册表：`tool_call_id` → 伪控制台输入通道，
-//!   支撑前端 `pty_write` / `pty_resize`（用户中途插键盘）。
+//! `common/` 按职责拆子模块：终端输出解码 / 命令解析与风险分类 / 运行中命令注册表 / 终端输出处理 /
+//! 统一运行器 `run_command_native`（沙盒 + 裸跑两条路径）。`pty_session.rs` 为 PTY 会话注册表
+//! （`tool_call_id` → 伪控制台输入通道），支撑前端 `pty_write` / `pty_resize`。
 
 mod common;
 mod execute_command;

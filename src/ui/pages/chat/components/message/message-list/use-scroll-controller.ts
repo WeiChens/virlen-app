@@ -1,11 +1,8 @@
 /**
- * message-list「滚动行为」控制器
- *
- * 负责：回补更早历史（loadOlder）、切会话后的「贴底稳定」、滚动到底部按钮、
+ * message-list「滚动行为」控制器：回补更早历史（loadOlder）、切会话后的贴底稳定、滚动到底部按钮、
  * 内容不足一屏自动补足、滚动事件监听（活跃锚点 / 预取更早）。
  *
- * 与「跳转控制器」共享若干 ref / state（由 message-list 控制器创建后注入），
- * 因此这里的回调仍保持原有的依赖数组，只是把定义位置搬了出来。
+ * 与「跳转控制器」共享若干 ref / state（由 message-list 控制器创建后注入）。
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Virtualizer } from '@tanstack/react-virtual'
@@ -74,7 +71,6 @@ export function useScrollController({
   /** 上一次的条目数（用于判断「条目数变化」而非流式内容更新） */
   const lastMsgCountRef = useRef(0)
 
-  // ==================== 回补更早历史（前插） ====================
   const loadOlder = useCallback(async () => {
     const sid = chatState.value.currentSessionId
     if (!sid || loadingOlderRef.current) return
@@ -94,13 +90,9 @@ export function useScrollController({
   }, [setMessages])
 
   /**
-   * 滚到底部并等待布局稳定后显示。
-   * markdown / canvas / 图片在首帧后仍可能异步改变高度（虚拟列表还会经历
-   * 估算→实测），若立即显示会看到跳动。这里每 50ms 轮询 scrollHeight：
-   *   - 高度还在变 → 继续计数
-   *   - 连续 3 次（~150ms）无变化 → 视为稳定，滚到底部后 setHide(false) 显示
-   *   - 目标会话正在流式回复 → 高度不可能稳定，直接显示（否则会一直空白）
-   *   - 轮询超过 MAX_SETTLE_POLLS → 兜底显示，绝不无限隐藏
+   * 滚到底部并等布局稳定后显示：markdown / canvas / 图片首帧后仍会异步改高度（虚拟列表还有
+   * 估算→实测），立即显示会看到跳动。每 50ms 轮询 scrollHeight：连续 3 次（~150ms）无变化
+   * 视为稳定；流式回复中高度不可能稳定 → 直接显示；超过 MAX_SETTLE_POLLS 兜底显示，绝不无限隐藏。
    */
   const settleToBottom = useCallback(() => {
     const el = containerRef.current
@@ -156,13 +148,11 @@ export function useScrollController({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rowVirtualizer])
 
-  // ==================== 消息变化：贴底 / 稳定显示 ====================
   useLayoutEffect(() => {
     const count = messages.length
     if (count === 0) {
-      // 空会话（还没消息 / 懒加载未完成或失败 / 刚被清空）：没有高度要等稳定，
-      // 直接取消隐藏 —— 否则 `hide` 会停在切会话时置的 true（容器 opacity:0），
-      // 看起来就是「消息列表空的」，与「加载失败」无法区分。
+      // 空会话（没消息 / 懒加载未完成或失败 / 刚被清空）：没有高度要等稳定，直接取消隐藏 ——
+      // 否则 hide 会停在切会话时置的 true（opacity:0），看起来像「列表是空的」，与加载失败无法区分。
       setHide(false)
       return
     }
@@ -199,7 +189,6 @@ export function useScrollController({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages])
 
-  // ==================== 滚动事件：加载更早 + 活跃锚点 + 到底部按钮 ====================
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
@@ -212,16 +201,13 @@ export function useScrollController({
       root
         .querySelectorAll<HTMLElement>('.message-item-wrap')
         .forEach((node) => rowVirtualizer.measureElement(node))
-      // 测量结果刚更新，顺便刷新「未测量条目」的估算高度，供后续挂载使用
+      // 顺带刷新未测量条目的估算高度
       refreshEstimatedItemHeight()
     }
 
     /**
-     * 计算当前活跃的用户消息锚点。
-     *
-     * 虚拟滚动下只有视口附近的条目被渲染：若仍遍历 DOM，视口内没有任何 user 消息时
-     * 会找不到元素，高亮就会消失。这里改用「滚动偏移 → 消息实测起始位置」的几何计算，
-     * 与 DOM 是否渲染无关。
+     * 当前活跃的用户消息锚点。虚拟滚动下只有视口附近条目被渲染，遍历 DOM 会在视口内没有 user
+     * 消息时找不到元素；改用「滚动偏移 → 消息实测起始位置」的几何计算，与 DOM 是否渲染无关。
      */
     function updateActiveDot() {
       const el = containerRef.current
@@ -259,7 +245,7 @@ export function useScrollController({
 
       updateActiveDot()
 
-      // ---- 滚动到底部按钮显隐（距底部 > 80% 视口高度时显示）----
+      // 滚动到底部按钮：距底部 > 80% 视口高时显示
       const btnShouldShow = distFromBottom > clientHeight * 0.8
       if (btnShouldShow !== showScrollBtnRef.current) {
         showScrollBtnRef.current = btnShouldShow
@@ -267,7 +253,7 @@ export function useScrollController({
       }
       lastScrollTopRef.current = scrollTop
 
-      // ---- 向上滚动 → 预取更早历史 ----
+      // 向上滚动 → 预取更早历史
       const sid = chatState.value.currentSessionId
       if (
         scrollTop < SCROLL_TOP_THRESHOLD &&
@@ -277,8 +263,8 @@ export function useScrollController({
         void loadOlder()
       }
 
-      // 滚动停止后重新测量：平滑跳转时虚拟库会跳过「途经」条目的测量，
-      // 它们会按估算高度摆放而与相邻条目重叠；静止后统一校正一次。
+      // 滚动停止后重新测量：平滑跳转时虚拟库跳过「途经」条目的测量，它们会按估算高度
+      // 摆放而与相邻条目重叠；静止后统一校正一次。
       if (remeasureTimer) clearTimeout(remeasureTimer)
       remeasureTimer = setTimeout(remeasureRenderedItems, 180)
     }
@@ -291,7 +277,6 @@ export function useScrollController({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ==================== 内容不足一屏时自动补足（避免无滚动条卡住） ====================
   useLayoutEffect(() => {
     if (!hasMoreInDb || loadingOlderRef.current) return
     const el = containerRef.current
@@ -302,7 +287,6 @@ export function useScrollController({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages.length, hasMoreInDb])
 
-  // ==================== 贴底状态变化：请求滚到底部事件 ====================
   useEffect(() => {
     const uninstall = commentEvent.on('requestScrollToBottom', () => {
       if (rowVirtualizer.isAtEnd(AT_BOTTOM_THRESHOLD)) {
@@ -316,9 +300,8 @@ export function useScrollController({
   const handleScrollToBottom = useCallback(() => {
     const count = rowsRef.current.length
     if (count === 0) return
-    // 流式回复中底部高度每个 token 都在增长：虚拟库会每帧重算目标偏移，
-    // 距离超过一屏时反复以 smooth 重发 scrollTo 会不断重启平滑动画（抽搐）。
-    // 目标在移动时只能用瞬时滚动；落到底部后由贴底跟随（anchorTo: 'end'）接管。
+    // 流式回复中底部高度每个 token 都在增长，距离超过一屏时反复以 smooth 重发 scrollTo
+    // 会不断重启平滑动画（抽搐）；故目标移动时只能用瞬时滚动，落到底后由贴底跟随接管。
     const sid = chatState.value.currentSessionId
     rowVirtualizer.scrollToIndex(count - 1, {
       align: 'end',

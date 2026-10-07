@@ -1,10 +1,4 @@
-/**
- * editor — 打开编辑器预设模板
- *
- * 用户在设置页可一键选用这些常用编辑器的命令模板，
- * 也可选择「自定义」手动输入任意命令。
- * 图标文件位于 public/ide/，通过 /ide/xxx.svg 引用。
- */
+/** editor — 编辑器预设模板（设置页一键选用；图标在 public/ide/，经 /ide/xxx.svg 引用）。 */
 import type { EditorPreset } from './types'
 
 export const EDITOR_PRESETS: EditorPreset[] = [

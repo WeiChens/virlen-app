@@ -1,13 +1,8 @@
 /**
  * AppLogoSvg — "微"主题品牌 Logo（入场带动画）
  *
- * 设计理念：
- * - 中心是圆润的「W」字母，代表"微"（Wei）
- * - 左侧蓝色弧线代表 AI 智能流
- * - 右侧绿色弧线代表自然的对话交互
- * - 整体呈现一个抽象的对话气泡 + 大脑轮廓
- * - 配色：渐变的靛蓝 + 翠绿，现代科技感
- * - 入场动画：弹性缩放 + 路径绘制 + 渐入
+ * 圆润的「W」= 微（Wei）；左蓝弧 = AI 智能流，右绿弧 = 自然对话；整体是抽象的对话气泡 + 大脑
+ * 轮廓，配靛蓝到翠绿的渐变。动画：弹性缩放 + 路径绘制 + 渐入。
  */
 export default ({
   size = 48,
@@ -39,7 +34,6 @@ export default ({
         </linearGradient>
       </defs>
 
-      {/* 整体容器：淡入 + 弹性缩放 */}
       <g>
         <animateTransform
           attributeName="transform"
@@ -60,7 +54,6 @@ export default ({
           fill="freeze"
         />
 
-        {/* 背景圆 */}
         <circle cx="60" cy="60" r="55" fill="url(#wg-bg)" opacity="1">
           <animate
             attributeName="opacity"
@@ -71,7 +64,6 @@ export default ({
           />
         </circle>
 
-        {/* 左上弧线 */}
         <path
           d="M20 70 Q15 55 25 40 Q35 25 50 20"
           stroke="url(#wg-main)"
@@ -90,7 +82,6 @@ export default ({
           />
         </path>
 
-        {/* 左上圆点 */}
         <circle cx="50" cy="20" r="3" fill="url(#wg-main)" opacity="0">
           <animate
             attributeName="opacity"
@@ -111,7 +102,6 @@ export default ({
           />
         </circle>
 
-        {/* 右下弧线 */}
         <path
           d="M100 50 Q105 65 95 80 Q85 95 70 100"
           stroke="url(#wg-accent)"
@@ -130,7 +120,6 @@ export default ({
           />
         </path>
 
-        {/* 右下圆点 */}
         <circle cx="70" cy="100" r="3" fill="url(#wg-accent)" opacity="0">
           <animate
             attributeName="opacity"
@@ -151,7 +140,7 @@ export default ({
           />
         </circle>
 
-        {/* 屋顶主路径（W 字母主体） */}
+        {/* W 字母主体 */}
         <path
           d="M38 78 V42 L50 60 L60 44 L70 60 L82 42 V78"
           stroke="url(#wg-main)"
@@ -170,7 +159,6 @@ export default ({
           />
         </path>
 
-        {/* 左装饰点 */}
         <circle cx="42" cy="36" r="2.5" fill="url(#wg-accent)" opacity="0">
           <animate
             attributeName="opacity"
@@ -191,7 +179,6 @@ export default ({
           />
         </circle>
 
-        {/* 右装饰点 */}
         <circle cx="78" cy="36" r="2.5" fill="url(#wg-accent)" opacity="0">
           <animate
             attributeName="opacity"
@@ -212,7 +199,6 @@ export default ({
           />
         </circle>
 
-        {/* 底部微笑弧线 */}
         <path
           d="M45 88 Q60 96 75 88"
           stroke="url(#wg-accent)"
@@ -238,7 +224,6 @@ export default ({
           />
         </path>
 
-        {/* 中心小圆点 */}
         <circle cx="60" cy="58" r="2" fill="url(#wg-main)" opacity="0">
           <animate
             attributeName="opacity"

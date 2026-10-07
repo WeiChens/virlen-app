@@ -10,16 +10,11 @@
 //! virlen-cli memory <list|consolidate>          长期记忆（列出 / 蒸馏整理）
 //! ```
 //!
-//! 命令实现住在本 crate 的 lib（不是 bin）：bin 目标（`src/main.rs`）无法被单测引用，`main.rs` 只做
-//! 三行转发。三方分工是「core / cli / tauri」各自只依赖内层：`virlen-core`（引擎 / 持久化 / 沙盒 /
-//! 安全 / RAG / 视觉，零 `tauri::`）、本 crate（headless 命令 + TUI，只依赖 core）、`virlen-app`
-//! （GUI 壳，唯一 Tauri 侧）。
+//! 命令实现住 lib 而非 bin：bin 目标无法被单测引用。三方分工（各只依赖内层）：`virlen-core`（引擎 /
+//! 持久化 / 沙盒 / 安全 / RAG / 视觉，零 `tauri::`）← 本 crate（headless 命令 + TUI）← `virlen-app`（GUI 壳）。
 //!
-//! 与 GUI 同一份数据：库路径完全由 `HostEnv::data_dir()` 决定（`CliHost` 默认值与 Tauri
-//! `app_data_dir()` 同形 → 同一个 `virlen.db`），所以 `config set` 改的就是桌面端读的那份配置
-//! （`app_settings` 表，见 `docs/config-sink-plan.md`）。
-//!
-//! 输出文案用中文（与 crate 内其它用户可见消息一致），JSON 输出保持原样，脚本可直接解析。
+//! 与 GUI 同一份数据：库路径由 `HostEnv::data_dir()` 决定（`CliHost` 默认值与 Tauri `app_data_dir()` 同形），
+//! 故 `config set` 改的就是桌面端读的那份 `app_settings`。输出文案用中文，JSON 输出保持原样可直接解析。
 
 mod config;
 mod list;

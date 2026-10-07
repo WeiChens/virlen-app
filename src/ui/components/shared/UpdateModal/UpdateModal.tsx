@@ -16,7 +16,7 @@ interface Props {
   onForceCancel?: () => void
 }
 
-/** 格式化文件大小 */
+/** 格式化字节数 */
 function formatSize(bytes: number): string {
   if (bytes === 0) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB']
@@ -28,7 +28,6 @@ const UpdateModal = ({ show, updateInfo, onHide, onForceCancel }: Props) => {
   const [visible, setVisible] = useState(false)
   const [currentVersion, setCurrentVersion] = useState('')
 
-  // 下载状态
   const [downloading, setDownloading] = useState(false)
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress>({
     status: 'idle',
@@ -112,13 +111,13 @@ const UpdateModal = ({ show, updateInfo, onHide, onForceCancel }: Props) => {
     }
   }
 
-  /** 忽略当前版本，关闭弹窗，后续不再提示该版本 */
+  /** 忽略当前版本（后续不再提示）并关闭弹窗 */
   function handleIgnoreVersion() {
     setIgnoredVersion(latest_version.version)
     onHide()
   }
 
-  /** 7 日内不再提示，关闭弹窗 */
+  /** 7 日内不再提示并关闭弹窗 */
   function handleSnooze() {
     setSnooze()
     onHide()
@@ -139,7 +138,6 @@ const UpdateModal = ({ show, updateInfo, onHide, onForceCancel }: Props) => {
         </div>
 
         {isDownloading || isDone ? (
-          // ===== 下载进度界面 =====
           <div className="download-section">
             <div className="download-title">
               {isDone ? t('下载完成') : t('正在下载更新...')}
@@ -167,7 +165,6 @@ const UpdateModal = ({ show, updateInfo, onHide, onForceCancel }: Props) => {
             )}
           </div>
         ) : isError ? (
-          // ===== 下载错误界面 =====
           <div className="download-section">
             <div className="download-error-title">{t('下载失败')}</div>
             <div className="download-error-msg">{downloadProgress.error}</div>
@@ -181,7 +178,6 @@ const UpdateModal = ({ show, updateInfo, onHide, onForceCancel }: Props) => {
             </div>
           </div>
         ) : (
-          // ===== 更新提示界面 =====
           <>
             <div className="header">
               <div className="new-version-badge">
@@ -190,8 +186,8 @@ const UpdateModal = ({ show, updateInfo, onHide, onForceCancel }: Props) => {
               <div className="version-label">
                 {t('当前版本')}: v{currentVersion || '...'}
               </div>
-              {/* 策略提示的颜色与字号都在 UpdateModal.scss 的 .policy-hint 里：
-                  内联 px 用不了 CSS 变量，用户切大字号时这两行不会跟着变 */}
+              {/* 颜色与字号都在 UpdateModal.scss 的 .policy-hint 里：内联 px 用不了 CSS 变量，
+                  用户切大字号时不会跟着变 */}
               {isForceUpdate && (
                 <div className="policy-hint is-force">
                   {t('此版本为强制更新，请升级后继续使用')}

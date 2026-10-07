@@ -1,12 +1,11 @@
-//! 终端按键读取与映射
+//! 终端按键读取与映射。
 //!
-//! **偏离原计划的一处**（`docs/cli-tui-plan.md` §5 里写的是"输入线程 + 通道"）：这里没有单独
-//! 起线程，而是由 TUI 线程自己 `poll(60ms)` 读键。理由：状态与绘制都在 TUI 线程，键位处理
-//! 又是纯逻辑（`state`），多一个线程只会多一个同步点 —— 而 `poll` 带超时，不会把线程钉死。
-//! 唯一的代价是「term 里的退避重试」期间（每次 ≤250ms）按键会晚一拍，可接受。
+//! 偏离原计划（`cli-tui-plan.md` §5 的「输入线程 + 通道」）：不起单独线程，由 TUI 线程自己
+//! `poll(60ms)` 读键 —— 状态与绘制都在 TUI 线程、键位处理是纯逻辑，多线程只多一个同步点；代价是
+//! 「退避重试」期间（≤250ms）按键晚一拍，可接受。
 //!
-//! 本模块只做两件事：把 crossterm 的 `KeyEvent` **归一化**成 `state::Key`（纯函数，可单测），
-//! 以及把一批待处理事件读出来（含 resize 通知）。
+//! 只做两件事：把 crossterm `KeyEvent` 归一化成 `state::Key`（纯函数，可单测），以及读一批待处理
+//! 事件（含 resize 通知）。
 
 use crate::tui::state::Key;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -37,10 +36,8 @@ pub(crate) fn map_key(k: &KeyEvent) -> Option<Key> {
     })
 }
 
-/// 读一批待处理事件，最多阻塞 `timeout`。返回**收到的 resize 尺寸**（`None` = 没收到）。
-///
-/// 调用方据此进入去抖窗口（窗口内不碰终端，见 `term.rs` 措施 #1），并把尺寸记进日志 ——
-/// 「resize 到底有没有送到」正是排查那类「拖一下就没了」问题时的第一个问号。
+/// 读一批待处理事件，最多阻塞 `timeout`；返回收到的 resize 尺寸（`None` = 没收到）。调用方据此进入
+/// 去抖窗口（见 `term.rs` 措施 #1）并记日志 —— 「resize 有没有送到底」是排查那类问题的第一个问号。
 pub(crate) fn drain(
     timeout: Duration,
     keys: &mut Vec<Key>,

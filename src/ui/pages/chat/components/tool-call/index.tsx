@@ -15,10 +15,7 @@ import ContextMenu, {
 import { fileMenuItems } from '@/ui/components/shared/ContextMenu/menus'
 import { primaryPathOf } from './primary-path'
 
-/**
- * 展开视图渲染错误兜底。
- * 单条工具消息渲染异常时只展示错误占位，避免异常冒泡导致整棵组件树崩溃白屏。
- */
+/** 展开视图渲染错误兜底：单条工具消息渲染异常时只展示错误占位，避免异常冒泡导致整棵组件树白屏 */
 class ExpandErrorBoundary extends Component<
   { children: ReactNode },
   { hasError: boolean }
@@ -42,9 +39,8 @@ class ExpandErrorBoundary extends Component<
 }
 
 /**
- * 把 getExpandView 放到子组件里执行，再套上 ExpandErrorBoundary：
- * 若直接在 ToolCallMessage 自身的渲染流程中调用 getExpandView 并抛出异常，
- * 异常会从 ToolCallMessage 的 render 中冒泡出去，无法被子级错误边界捕获。
+ * 把 getExpandView 放到子组件里执行再套错误边界：直接在 ToolCallMessage 的 render 里调用，
+ * 异常会从它自身的 render 冒泡出去，子级错误边界捕获不到。
  */
 function ToolCallExpandView({
   toolCallMessage,
@@ -86,9 +82,8 @@ export function ToolCallMessage({ message, result }: Props) {
   /** 主路径（取不到就不开菜单 —— 宁可不响应，也不要打开一个打不开的路径） */
   const primaryPath = primaryPathOf(message.input)
   /**
-   * 当前会话工作目录。工具入参里的路径可能是**相对**的（LLM 常写 `src/a.ts`），
-   * 而 openPath / revealItemInDir 只认绝对路径，故将 workspace 交给 fileMenuItems 补齐。
-   * 取值与 TerminalBlock / securityService.getWorkspace 一致。
+   * 当前会话工作目录。工具入参里的路径可能是相对的（LLM 常写 `src/a.ts`），而 openPath /
+   * revealItemInDir 只认绝对路径，故把 workspace 交给 fileMenuItems 补齐（取值同 securityService）。
    */
   const workspace =
     sessionStore.getSession(chatState.value.currentSessionId)?.workspace ||

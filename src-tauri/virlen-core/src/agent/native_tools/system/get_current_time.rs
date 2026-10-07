@@ -1,11 +1,9 @@
 //! `get_current_time` 工具（原生）— 返回当前时间（支持 IANA 时区参数）。
 //!
-//! ⚠️ 与 TS 侧 `infrastructure/tools/system/get-current-time.ts` 逐字对齐（铁律 1）：模型侧 `content`
-//! 固定英文，形状取自 `Intl.DateTimeFormat('en-US', {...})` 的实测输出（`Thursday, 09/25/2025,
-//! 10:03:04 AM`）；`uiData` 只下发语言无关的 `{ timestamp, timezone }`，由 UI 按界面语言重建（D2）。
-//!
-//! 时区数据用 `chrono-tz`（内置 IANA 数据库），与 TS 的 `Intl` 同为 IANA，同一时刻 / 时区名输出一致。
-//! 为什么必须引依赖：无 JS 的纯 Rust CLI 里没有 `Intl`，用固定偏移近似会在 DST 切换日出错。
+//! ⚠️ 与 TS 侧 `get-current-time.ts` 逐字对齐（铁律 1）：`content` 固定英文，形状取自
+//! `Intl.DateTimeFormat('en-US', …)` 实测输出；`uiData` 只下发 `{ timestamp, timezone }`（D2）。
+//! 时区用 `chrono-tz`（内置 IANA，与 `Intl` 同源）—— 纯 Rust CLI 没有 `Intl`，固定偏移会在
+//! DST 切换日出错。
 
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
 use chrono::{DateTime, Utc};
@@ -16,12 +14,9 @@ use std::str::FromStr;
 /// 默认时区（与 TS `(args.timezone as string) || 'Asia/Shanghai'` 一致）
 const DEFAULT_TIMEZONE: &str = "Asia/Shanghai";
 
-/// 模型侧时间格式：`%A, %m/%d/%Y, %I:%M:%S %p` ↔ `Intl` 的 `en-US` 组合输出。
-///
-/// ⚠️ 与 `Intl` 的对应关系（改一处必须改另一处）：`weekday:'long'`→`%A`、`month:'2-digit'`→`%m`、
-/// `day:'2-digit'`→`%d`、`year:'numeric'`→`%Y`、`hour:'2-digit'`→`%I`（12 小时制补零）、
-/// `minute`/`second`→`%M`/`%S`、AM/PM→`%p`。chrono 的 `%A` / `%p` 是无本地化的英文常量，与 `en-US`
-/// 一致。
+/// 模型侧时间格式：`%A, %m/%d/%Y, %I:%M:%S %p` ↔ `Intl` en-US 组合输出。
+/// ⚠️ 与 `Intl` 一一对应（改一处必须改另一处）：`weekday:'long'`→`%A`、`month/day`→`%m/%d`、
+/// `year`→`%Y`、`hour`→`%I`（12 小时制补零）、`minute/second`→`%M/%S`、AM/PM→`%p`。
 const TIME_FORMAT: &str = "%A, %m/%d/%Y, %I:%M:%S %p";
 
 pub(crate) async fn get_current_time_tool(

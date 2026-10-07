@@ -1,13 +1,6 @@
 /**
- * SearchProviderPort — 搜索供应商注册中心的抽象接口
- *
- * 遵循 Port/Adapter 模式：
- *   - Port（本接口）：定义「搜索供应商管理」的抽象操作
- *   - Adapter：domain/search/index.ts 中的 SearchProviderRegistry 实现
- *
- * 本接口与 ProviderPort 类似，但职责不同：
- *   - ProviderPort → 管理 LLM 聊天供应商
- *   - SearchProviderPort → 管理搜索引擎供应商
+ * SearchProviderPort — 搜索供应商注册中心端口（Adapter 为 domain/search 的 SearchProviderRegistry）。
+ * 与 ProviderPort 平行：后者管 LLM 供应商，本接口管搜索引擎供应商。
  */
 import type { ISearchProvider, SearchProviderSummary } from '../search/types'
 

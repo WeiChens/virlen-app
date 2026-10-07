@@ -37,7 +37,6 @@ const LazyImage: React.FC<LazyImageProps> = ({
   const [isLoaded, setIsLoaded] = useState<boolean>(false)
   const [hasError, setHasError] = useState<boolean>(false)
 
-  // 处理图片加载成功
   const handleLoad = useCallback(
     (event: React.SyntheticEvent<HTMLImageElement, Event>) => {
       setIsLoaded(true)
@@ -46,7 +45,6 @@ const LazyImage: React.FC<LazyImageProps> = ({
     [onLoad]
   )
 
-  // 处理图片加载失败
   const handleError = useCallback(
     (event: React.SyntheticEvent<HTMLImageElement, Event>) => {
       setHasError(true)
@@ -55,7 +53,6 @@ const LazyImage: React.FC<LazyImageProps> = ({
     [onError]
   )
 
-  // IntersectionObserver 回调
   const intersectionCallback = useCallback(
     (entries: IntersectionObserverEntry[]) => {
       entries.forEach((entry) => {
@@ -72,7 +69,6 @@ const LazyImage: React.FC<LazyImageProps> = ({
   )
 
   useEffect(() => {
-    // 如果已经可见，不需要再创建观察者
     if (isVisible || !imgRef.current) return
 
     const options: IntersectionObserverInit = {
@@ -94,7 +90,6 @@ const LazyImage: React.FC<LazyImageProps> = ({
     }
   }, [root, rootMargin, threshold, intersectionCallback, isVisible])
 
-  // 如果不可见，显示占位符或空容器
   if (!isVisible) {
     return (
       <div
@@ -107,7 +102,6 @@ const LazyImage: React.FC<LazyImageProps> = ({
     )
   }
 
-  // 如果可见但加载失败且提供了占位符，显示占位符
   if (hasError && placeholder) {
     return (
       <div
@@ -119,7 +113,6 @@ const LazyImage: React.FC<LazyImageProps> = ({
     )
   }
 
-  // 可见时渲染真实图片
   return (
     <img
       draggable={draggable}

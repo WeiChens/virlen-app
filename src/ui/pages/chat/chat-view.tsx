@@ -1,9 +1,4 @@
-/**
- * chat-view — 聊天主视图
- *
- * 只负责 UI 状态管理，数据操作委托给 chat-service。
- * 状态来源：chatState / settingsState / sessionStorage / sessionRuntimeState
- */
+/** 聊天主视图：只管 UI 状态，数据操作委托给 chat-service。 */
 import {
   useEffect,
   useRef,
@@ -239,12 +234,9 @@ function ChatView() {
   /** 检索结果跳转目标（滚动定位 + 临时高亮），下发给消息列表 */
   const [searchJump, setSearchJump] = useState<MessageJumpTarget | null>(null)
   const searchJumpNonceRef = useRef(0)
-  // const [pendingContent, setPendingContent] = useState<string | null>(null)
   /**
-   * 输入框当前引用的技能名（侧边栏技能卡片据此高亮）
-   *
-   * 真相在 ChatInput 里（它持有 SKILL.md 全文），这里只存一份名字镜像：
-   * 输入框每次变化都回传，发完消息自动清空 → 高亮也跟着消失。
+   * 输入框当前引用的技能名（侧边栏技能卡片据此高亮）。
+   * 真相在 ChatInput 里（它持有 SKILL.md 全文），这里只存名字镜像：输入框每次变化回传，发完消息自动清空。
    */
   const [referencedSkills, setReferencedSkills] = useState<string[]>([])
   const { ToolUI } = useToolUI()
@@ -277,8 +269,7 @@ function ChatView() {
       // 用 code 兼容非拉丁键盘布局（俄语等布局下 e.key 不是 'n'）
       if (e.key?.toLowerCase() !== 'n' && e.code !== 'KeyN') return
       // 焦点在终端内时让路：终端里 Ctrl+N 是发给 PTY 的控制字符（readline 的「下一行」），
-      // xterm 不阻止事件冒泡（会照常把控制字符发出去），只能在这里按事件目标跳过，
-      // 否则会「一边发控制字符、一边新建对话」。
+      // 而 xterm 不阻止冒泡 → 只能按事件目标跳过，否则会「一边发控制字符、一边新建对话」。
       if ((e.target as HTMLElement | null)?.closest?.('.xterm')) return
       e.preventDefault()
       chatState.set({ currentSessionId: null, error: null })
@@ -372,10 +363,8 @@ function ChatView() {
   }, [sessions.length])
 
   /**
-   * 稳定的 setText 回调。
-   * 不要写成内联箭头（`setText={(t) => ref.current?.setText(t)}`）：message-list 会把它
-   * 包进 useCallback 作为 MessageBubble 的 onEdit props，引用一变就绕过 memo，
-   * 流式期间所有可见气泡都会跟着重渲染。
+   * 稳定的 setText 回调。不要写成内联箭头：message-list 会把它包进 useCallback 作为
+   * MessageBubble 的 onEdit，引用一变就绕过 memo → 流式期间所有可见气泡跟着重渲染。
    */
   const handleSetText = useCallback((text: string) => {
     chatInputRef.current?.setText(text)
@@ -402,19 +391,14 @@ function ChatView() {
     [referencedSkills],
   )
 
-  /**
-   * 引用消息：把消息 id / 发送方 / 正文快照交给输入框挂成引用 chip。
-   * 同「编辑」一样必须是稳定引用，否则会绕过 MessageBubble 的 memo。
-   */
+  /** 引用消息：把消息 id / 发送方 / 正文快照交给输入框挂成引用 chip。同「编辑」一样必须是稳定引用，否则会绕过 MessageBubble 的 memo。 */
   const handleQuote = useCallback((quote: QuoteAttachment) => {
     chatInputRef.current?.addQuote(quote)
   }, [])
 
   /**
-   * 点击引用 chip：跳转定位到被引用的原消息。
-   *
-   * 直接复用 Ctrl+P 检索的跳转通道（同一 session 内滚动定位 + 临时高亮，
-   * 目标消息尚未加载时会逐页回补）。原消息已被删除时找不到目标，静默不动。
+   * 点击引用 chip：跳转定位到被引用的原消息。复用 Ctrl+P 检索的跳转通道（同一会话内滚动定位 +
+   * 临时高亮，目标消息尚未加载时逐页回补）；原消息已被删除时找不到目标，静默不动。
    */
   const handleQuoteJump = useCallback((messageId: string) => {
     const sid = chatState.value.currentSessionId
@@ -435,10 +419,8 @@ function ChatView() {
     if (s) setMessages([...s.messages])
   }, [])
   /**
-   * 帧合批（流式性能关键）：
-   * 流式期间 onMessagesUpdate 按 chunk 触发（每秒上百次），每次都 setMessages 会把
-   * 「消息列表 + 气泡」的重渲染次数拉到与 chunk 同量级。合并到每帧一次后，渲染
-   * 次数上限被钉在帧率，视觉上无差别。
+   * 帧合批（流式性能关键）：流式期间 onMessagesUpdate 按 chunk 触发（每秒上百次），逐次 setMessages
+   * 会把「消息列表 + 气泡」的重渲染次数拉到与 chunk 同量级；合并到每帧一次后上限被钉在帧率，视觉无差别。
    */
   const messagesBatchRef = useRef<ReturnType<
     typeof createFrameBatcher<[string]>
@@ -461,17 +443,11 @@ function ChatView() {
     [applyMessagesUpdate],
   )
   /**
-   * 消息镜像的**兜底同步**（2026-09-27 手机控制真机反馈修复）。
-   *
-   * 背景：`messages` 是本地 state 镜像，过去只由「发起方传 events.onMessagesUpdate」
-   * 驱动 —— 手机 bridge 的 `host.session.send` 拿不到组件回调闭包，改了 store 也刷不到
-   * 视图，表现为「手机发消息，电脑端侧栏 / working 都变了，但消息要切会话才出现」。
-   * 同类先例已有一次（`compressContext` 注释：不通知就「要切会话才刷新」）。
-   *
-   * 订 store 的 `messagesChanged`（全部消息 CRUD 的唯一收口点）后，**任何**来源
-   * （手机 / 托盘 / 压缩回填 / 未来新增路径）的消息变更都会到达这里；
-   * 走 `syncMessagesToUI`（rAF 合批）：同帧内与 `onMessagesUpdate` 的 schedule
-   * 自动去重，流式性能不受影响（重复 schedule 取最后一次参数）。
+   * 消息镜像的**兜底同步**。`messages` 是本地 state 镜像，过去只由「发起方传 events.onMessagesUpdate」
+   * 驱动 —— 手机 bridge 的 `host.session.send` 拿不到组件回调闭包，改了 store 也刷不到视图
+   * （「手机发消息，电脑端要切会话才看到」）。
+   * 订 store 的 `messagesChanged`（消息 CRUD 的唯一收口点）后任何来源都会到达这里；走 rAF 合批，
+   * 同帧内与 `onMessagesUpdate` 自动去重，流式性能不受影响。
    */
   useEffect(
     () => sessionStore.onMessagesChanged(syncMessagesToUI),
@@ -492,21 +468,14 @@ function ChatView() {
     }
   }, [chatState.value.currentSessionId])
 
-  /**
-   * 最近一次「已由本组件处理」的会话切换目标。
-   * 用于让下面的兜底 effect 区分「自己人切的」与「外面直接改 store 切的」。
-   */
+  /** 最近一次「已由本组件处理」的会话切换目标 —— 让下面的兜底 effect 区分「自己人切的」与「外面直接改 store 切的」。 */
   const handledSessionRef = useRef<string | null>(null)
 
   /**
-   * 会话切换的「外部入口」兜底。
-   *
-   * 托盘唤起（`tray-service`）这类外部路径只会改 `chatState.currentSessionId`，
-   * 拿不到本组件里的 `handleSelectSession` —— 只切 store 不补齐后续动作，就会出现
-   * 「窗口打开了、也确实跳到了那个会话，但消息列表是空的」：
-   * 既没触发 SQLite 懒加载（store 里 sessions[i].messages 仍是空数组），
-   * 也没同步组件的 React 镜像（`messages` 仍是上一个会话的内容）。
-   * 所以这里统一收口：只要发现「当前会话不是本组件切的」，就走同一条切换逻辑。
+   * 会话切换的「外部入口」兜底：托盘唤起（`tray-service`）这类路径只会改 `chatState.currentSessionId`，
+   * 拿不到本组件的 `handleSelectSession` → 表现为「窗口打开了、也确实跳到了那个会话，但消息列表是空的」
+   * （既没触发 SQLite 懒加载，也没同步组件的 React 镜像）。统一收口：发现当前会话不是本组件切的，
+   * 就走同一条切换逻辑。
    */
   useEffect(() => {
     const sid = chatState.value.currentSessionId
@@ -517,15 +486,13 @@ function ChatView() {
   async function handleSelectSession(sessionId: string) {
     const session = sessionStore.getSession(sessionId)
     if (!session) return
-    // 先登记再干活：本函数内部会再次写同值 currentSessionId，
-    // 早登记可避免兜底 effect 与自身重入（重入会把刚装载的消息又刷一遍）
+    // 先登记再干活：函数内部会再次写同值 currentSessionId，早登记可避免兜底 effect 与自身重入
     handledSessionRef.current = sessionId
     const fromSessionId = chatState.value.currentSessionId
     const switchStart =
       typeof performance !== 'undefined' ? performance.now() : Date.now()
-    // 数据侧准备（清未读 / 懒加载 / 修复悬空 tool_calls / 锚点索引）——
-    // 与手机接口层共用同一个入口（`services/chat/session.ts::activateSession`），
-    // 否则两份必然分叉。
+    // 数据侧准备（清未读 / 懒加载 / 修复悬空 tool_calls / 锚点索引）与手机接口层共用同一入口
+    // （`services/chat/session.ts::activateSession`），否则两份必然分叉。
     // ⚠️ 不 await：其中的「清未读」在首个 await 之前同步完成，时序与原实现一致
     const prep = activateSession(sessionId)
     chatState.setValue('currentSessionId', sessionId)
@@ -579,7 +546,6 @@ function ChatView() {
       (skills?.length ?? 0) > 0
 
     if (!hasEnabledProvider) {
-      // setPendingContent(content || (hasAttachment ? t('(附件)') : ''))
       setShowProviderPrompt(true)
       return
     }
@@ -599,7 +565,6 @@ function ChatView() {
         (p) => p.enabled && p.models.length > 0,
       )
       if (!firstEnabled) {
-        // setPendingContent(content || (hasAttachment ? t('(附件)') : ''))
         setShowProviderPrompt(true)
         return
       }
@@ -625,12 +590,11 @@ function ChatView() {
     quotes?: QuoteAttachment[],
     skills?: SkillAttachment[],
   ) {
-    // ── 立即显示 loading ──
+    // 立即显示 loading
     chatState.setValue('loading', true)
 
-    // ── 始终存原始数据：content = [{quote}, {text}, {image_url}, {file}, ...] ──
-    // 图片带 base64 内容，文件只有路径（不拷贝文件，交给 AI 按需读），
-    // 引用带发送方 + 消息 id + 正文快照（原消息可能被删除 / 压缩）
+    // 始终存原始数据：content = [{quote}, {text}, {image_url}, {file}, ...]
+    // 图片带 base64；文件只存路径（不拷文件，交给 AI 按需读）；引用带发送方 + 消息 id + 正文快照
     const finalContent: MessageContent = buildUserContent(
       content,
       images ?? [],
@@ -639,7 +603,7 @@ function ChatView() {
       skills ?? [],
     )
 
-    // ── 先保证有 session（无 session → 立即创建），让 UI 切换到聊天视图 ──
+    // 先保证有 session（无 session → 立即创建），让 UI 切换到聊天视图
     let sid = sessionId
     if (!sid) {
       const selectedAgentId = chatState.value.selectedAgentId
@@ -676,14 +640,13 @@ function ChatView() {
         })
       }
       chatState.setValue('currentSessionId', sid)
-      // 新建会话由本函数自己接管（消息随后由 addSessionMessage 逐个加入，
-      // 内存即真相）；登记一下，避免兜底 effect 去数据库重新加载，
-      // 把刚加进去的消息按数据库旧内容覆盖回去
+      // 新建会话由本函数自己接管（消息随后由 addSessionMessage 逐个加入，内存即真相）；
+      // 登记一下，避免兜底 effect 去数据库重新加载、把刚加的消息按旧内容覆盖回去
       handledSessionRef.current = sid
       setMessages([])
     }
 
-    // ── 立即添加用户消息到会话，让 UI 立刻显示（含图片，不含分析结果） ──
+    // 立即添加用户消息到会话，让 UI 立刻显示（含图片，不含分析结果）
     const userMsgId = v4()
     const userMessage: Message = {
       id: userMsgId,
@@ -694,7 +657,7 @@ function ChatView() {
     addSessionMessage(sid, userMessage)
     syncMessagesToUINow(sid)
 
-    // ── 视觉分析（此时用户已看到消息，后台分析不阻塞界面） ──
+    // 视觉分析（此时用户已看到消息，后台分析不阻塞界面）
     let imageOptimize = false
     let imageAnalyzeResult: string | undefined
 
@@ -703,12 +666,10 @@ function ChatView() {
       images.length > 0 &&
       settingsState.value.imageVisionAnalyzeOptimize
     ) {
-      // 本地逐张识别图片期间点亮输入区指示器（「视觉分析中...」）。
+      // 本地逐张识别期间点亮输入区指示器（「视觉分析中...」）。
       //
-      // ⚠️ 用 `preparing` 而不是 `working`：后者是**并发锁**（`chat/flow.ts::isSessionBusy`），
-      //    写成它之后，本函数识别结束时紧接着的 `sendMessage` 会被自己的锁判成
-      //    「该会话正在回复中，请等待完成或先取消」——用户消息已经显示出来，
-      //    却永远等不到回复。语义差异见 `sessionRuntimeStore.preparing`。
+      // ⚠️ 用 `preparing` 而不是 `working`：后者是**并发锁**（`isSessionBusy`），写成它之后紧接着的
+      //    `sendMessage` 会被自己的锁判成「该会话正在回复中」—— 用户消息已显示，却永远等不到回复。
       updateSessionRuntime(sid, { preparing: true })
       chatState.setValue('loadingText', t('视觉分析中...'))
 
@@ -724,15 +685,8 @@ function ChatView() {
         )
         const validResults = analyses.filter(Boolean) as VisionAnalyzeResult[]
         if (validResults.length > 0) {
-          // 按序号组装多图分析结果，让 AI 知道每张图片对应哪个分析
-          // 格式：
-          //   用户上传了{N}张图片
-          //
-          //   第1张图片
-          //   [分析结果]
-          //
-          //   第2张图片
-          //   [分析结果]
+          // 按序号组装多图分析结果（让 AI 知道每张图对应哪段分析）：
+          //   「用户上传了N张图片」+ 每张一节「第i张图片\n[分析结果]」
           const parts = validResults.map(
             (r, i) => tpl('第$__n__张图片\n$__text__', { n: i + 1, text: r.combined_text }),
           )
@@ -742,12 +696,12 @@ function ChatView() {
         if (!imageAnalyzeResult) imageOptimize = false
       } finally {
         // 本地准备阶段到此为止：识别成功 / 失败 / 抛错都必须解除，
-        // 否则该会话会一直停在「忙碌」上（输入区再也发不出消息）。
+        // 否则该会话会一直停在「忙碌」上（输入区再也发不出消息）
         updateSessionRuntime(sid, { preparing: false })
       }
     }
 
-    // ── 分析完成后，更新已显示的消息，补上分析结果字段 ──
+    // 分析完成后，更新已显示的消息，补上分析结果字段
     if (imageOptimize) {
       updateSessionMessage(sid, userMsgId, {
         imageVisionAnalyzeOptimize: true,
@@ -756,10 +710,10 @@ function ChatView() {
       syncMessagesToUINow(sid)
     }
 
-    // ── 清除分析中的状态文本，sendMessage 会通过 onWorkingChange 自动设置 ──
+    // 清除分析中的状态文本（sendMessage 会通过 onWorkingChange 自动设置）
     chatState.setValue('loadingText', '')
 
-    // ── 公共事件回调 ──
+    // 公共事件回调
     const events = {
       onWorkingChange: (sid: string, working: boolean) => {
         chatState.setValue('loading', working)
@@ -799,7 +753,7 @@ function ChatView() {
     }
 
     if (goal) {
-      // ── 迭代模式：执行→验证→修复 ──
+      // 迭代模式：执行→验证→修复
       await sendMessageWithGoal(sid, finalContent, goal, events, {
         imageVisionAnalyzeOptimize: imageOptimize || undefined,
         imageVisionAnalyzeResult: imageAnalyzeResult,
@@ -807,7 +761,7 @@ function ChatView() {
         skipUserMessage: true,
       })
     } else {
-      // ── 普通模式 ──
+      // 普通模式
       await sendMessage(
         sid,
         finalContent,
@@ -825,13 +779,11 @@ function ChatView() {
 
   function handleGoToSettings() {
     setShowProviderPrompt(false)
-    // setPendingContent(null)
     settingsEvent.emit('openSettings', 'provider')
   }
 
   function handleClosePrompt() {
     setShowProviderPrompt(false)
-    // setPendingContent(null)
   }
 
   function handleCancel() {
@@ -841,9 +793,9 @@ function ChatView() {
   }
 
   /**
-   * 检索结果点击：关闭弹窗，切到目标会话，并滚动定位 + 临时高亮该消息。
-   * 必须等会话消息分页加载完成后再下发跳转目标，否则目标消息所在分页尚未就绪
-   * （消息列表的 scrollToMessage 依赖 messagePaging 才能逐页回补历史）。
+   * 检索结果点击：关弹窗、切到目标会话，再滚动定位 + 临时高亮该消息。
+   * 必须等消息分页加载完成后再下发跳转目标，否则目标所在分页尚未就绪（scrollToMessage 靠
+   * messagePaging 逐页回补）。
    */
   async function handleSearchSelect(item: MessageSearchItem) {
     setShowSearch(false)
@@ -866,8 +818,6 @@ function ChatView() {
   function toggleSidebar() {
     chatState.setValue('sidebarOpen', !chatState.value.sidebarOpen)
   }
-
-  // ==================== 工作目录展示 ====================
 
   useEffect(() => {
     // 新对话
@@ -1007,9 +957,7 @@ function ChatView() {
 
       <ToolUI />
 
-      {/* 消息检索弹窗（Ctrl / Cmd + P 唤起）
-          - 有会话：只搜当前会话；
-          - 无会话：搜所有会话（条目展示工作目录 + Agent 名称） */}
+      {/* 消息检索弹窗（Ctrl / Cmd + P 唤起）：有会话只搜当前会话；无会话搜所有会话（条目带工作目录 + Agent 名） */}
       <SearchDialog
         visible={showSearch}
         scope={chatState.value.currentSessionId ? 'session' : 'global'}

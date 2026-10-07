@@ -1,8 +1,6 @@
 /**
- * provider-service — Provider 初始化服务层
- *
- * 将已持久化的 provider 配置注册到运行时注册中心。
- * 属于 Store 与 Engine 之间的编排逻辑，不应在 Store 层处理。
+ * provider-service — Provider 初始化服务层：把已持久化的 provider 配置注册到运行时注册中心
+ *（Store 与 Engine 之间的编排逻辑，不应在 Store 层处理）。
  */
 import { providerPort } from '@/domain'
 import { providerTemplates } from '@/domain/provider/catalog'

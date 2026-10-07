@@ -1,9 +1,8 @@
 /**
- * storage-svg — 存储图标（数据库柱体）
+ * storage-svg — 存储图标（数据库柱体），设置侧栏「存储」用。
  *
- * 设置侧栏「存储」用。柱体由「矩形 + 上下两个椭圆」拼成，
- * 再用 mask 挖掉两条窄带，形成「多层盘片」的数据库观感。
- * mask 的 id 是固定的：同页面渲染多个实例时它们共用同一份 mask（形状完全一致，结果不变）。
+ * 柱体由「矩形 + 上下两个椭圆」拼成，再用 mask 挖掉两条窄带形成「多层盘片」观感。
+ * mask id 固定：多处渲染共用同一份（形状一致，结果不变）。
  */
 export default ({ fill, className }: { fill?: string; className?: string }) => {
   return (

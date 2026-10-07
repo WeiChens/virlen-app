@@ -1,6 +1,4 @@
-/**
- * 知识库基础设施实现 — 通过 Tauri invoke 调用 Rust 后端的 RAG 命令
- */
+/** 知识库基础设施实现 —— 通过 Tauri invoke 调用 Rust 后端的 RAG 命令。 */
 
 import { invoke } from '@tauri-apps/api/core'
 import type {
@@ -11,10 +9,7 @@ import type {
 } from '@/domain/ports'
 
 /**
- * 知识库存储 — 实现 KnowledgeBasePort 接口
- *
- * 所有方法通过 Tauri IPC 调用 Rust 端实现的 RAG 命令，
- * 使用 spawn_blocking 异步执行，不会阻塞 UI。
+ * 知识库存储 —— 实现 KnowledgeBasePort：所有方法经 Tauri IPC 调 Rust RAG 命令（spawn_blocking，不阻塞 UI）。
  */
 class KnowledgeBaseStore implements KnowledgeBasePort {
   /** 创建知识库 */

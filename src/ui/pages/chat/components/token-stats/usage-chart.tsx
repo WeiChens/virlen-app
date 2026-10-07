@@ -1,10 +1,6 @@
 /**
- * usage-chart — 用量统计图表（echarts 按需引入）
- *
- * 只注册用到的图表与组件（BarChart / LineChart / PieChart / Grid / Tooltip / Legend），
- * 避免整包 echarts 进打包体积。
- *
- * 颜色与文字颜色从主题 CSS 变量读取，跟随亮/暗色主题。
+ * usage-chart — 用量统计图表（echarts 按需引入，只注册用到的图表 / 组件以控体积）；
+ * 颜色与文字色读主题 CSS 变量，跟随亮 / 暗色主题。
  */
 import { useEffect, useMemo, useRef } from 'react'
 import * as echarts from 'echarts/core'
@@ -164,7 +160,7 @@ export function buildTokenBarOption(
         data: buckets.map((b) => b.cachedTokens),
       },
       {
-        // 缓存写入（仅 Anthropic）：不计入这列的话，堆叠柱的高度会小于「合计」
+        // 缓存写入不计入这列的话，堆叠柱高度会小于「合计」
         name: t('缓存写入'),
         type: 'bar',
         stack: 'tokens',
@@ -177,10 +173,8 @@ export function buildTokenBarOption(
 }
 
 /**
- * 用量趋势：平滑折线（输入 / 输出 / 缓存三条），用于小时 / 天 / 周 / 月等时间维度。
- *
- * 时间维度的本质是「趋势」，折线比堆叠柱直观。三条线**各自独立不堆叠** —— 堆叠的
- * 折线会被误读成累计量。配色与 tooltip 与柱状图完全一致，切换维度时不跳色。
+ * 用量趋势：平滑折线，用于小时 / 天 / 周 / 月等时间维度。三条线各自独立不堆叠 —— 堆叠的折线
+ * 会被误读成累计量；配色与 tooltip 与柱状图一致，切换维度不跳色。
  */
 export function buildTokenLineOption(
   buckets: CostedBucket[],
@@ -250,12 +244,7 @@ export interface PieSlice {
   lines: string[]
 }
 
-/**
- * 占比饼图（调用类型 / 模型用量 / token 类型 / 费用四种维度共用）。
- *
- * 数值口径由调用方决定（token 总量 / 单模型费用 / 各类型 token），
- * 这里只负责把 `slices` 画成扇区并渲染 tooltip。
- */
+/** 占比饼图（四种维度共用）：数值口径由调用方决定，这里只把 slices 画成扇区并渲染 tooltip */
 export function buildPieOption(slices: PieSlice[]): EChartsCoreOption {
   const c = themeColors()
   const palette = [c.input, c.output, c.cached, '#8b5cf6', '#06b6d4', '#ef4444']

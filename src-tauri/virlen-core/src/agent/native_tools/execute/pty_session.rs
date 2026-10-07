@@ -1,22 +1,15 @@
 //! PTY 会话注册表 —— `tool_call_id` → 伪控制台输入通道。
 //!
-//! 用途：让用户在命令执行中「插键盘」（`docs/pty-research.md` §6.3）。运行器建好伪控制台后把输入写端
-//! 登记到本表，前端 `invoke('pty_write', { toolCallId, data })` 直接写进去 —— 走 Tauri 命令而不是引擎
-//! 事件总线，不污染 `AgentEventType` 四方契约（铁律 2）。命令结束（或超时 / 取消）时注销，避免写到已
-//! 关闭的句柄。key 直接复用 `toolCallId`（前端 `TerminalView` 已持有它），无需新增映射事件。
+//! 运行器建好伪控制台后把输入写端登记到本表，前端 `invoke('pty_write', …)` 直接写入（走 Tauri 命令
+//! 而非引擎事件总线，不污染 `AgentEventType` 四方契约）。命令结束 / 超时 / 取消时注销。key 复用
+//! `toolCallId`，无需新增映射事件。
 //!
-//! 中断语义（实测，§5.6）：`\x03` 只能影响「正在读 stdin 的进程」（shell 提示符 / REPL / `y/n`
-//! 提示）—— Windows 的控制台控制事件在有人读输入缓冲时才生成，`ping` 这类从不读 stdin 的前台程序不会
-//! 被 `\x03` 打断。因此中断主通道仍然是 Job Object / `agent_kill_command`，本模块只是补充手段。
+//! 中断语义（实测 §5.6）：`\x03` 只能影响正在读 stdin 的进程；`ping` 这类不读 stdin 的前台程序不会
+//! 被打断。故中断主通道仍是 Job Object / `agent_kill_command`，本模块只是补充。
 
-// 非 Windows 平台上本模块有一部分 API 没有调用者 —— 这不是死代码，而是「本模块一半的服务
-// 对象（ConPTY 运行器 `common/runner/pty.rs`）是 Windows 专属」的必然：`PtySession::new` /
-// `register` / `unregister` / `initial_size` / `is_held` / `interventions` / `close_input` 只被
-// 那条路径（及其同样 Windows 门禁的测试）调用，而注册表本身必须留在所有平台（`pty_write` /
-// `pty_resize` / `pty_key` / `pty_set_held` 命令各平台都会注册，非 Windows 下按「无会话」
-// 返回 false）。这里按文件级 allow 而不是逐项 `#[cfg(target_os = "windows")]`：后者会连锁到
-// 结构体字段（`held` / `keys` / `enters` / `ctrl_c` 的读取者正是被门禁掉的那几个方法，字段
-// 立刻变成「只写不读」→ 新的 dead_code），`Duration` / `Instant` 也会变成未使用导入。
+// 非 Windows 下调 allow：部分 API 只被 Windows 专属的 ConPTY 路径调用，而注册表本身必须留在所有
+// 平台（各平台的 `pty_*` 命令都会注册，非 Windows 下按「无会话」返回 false）。不用逐项
+// `#[cfg(windows)]` 是因为会连锁到结构体字段，反而制造新的 dead_code。
 #![cfg_attr(not(target_os = "windows"), allow(dead_code))]
 
 use std::collections::HashMap;
@@ -26,10 +19,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-/// ② 用户干预摘要（Step 2 ②）。
-///
-/// ⚠️ 只记计数、不记内容：PTY 里用户敲的往往是密码 / token，正文一旦进工具结果就会进模型上下文 + 落
-/// SQLite，直接踩 §9 密钥红线（决策点 D4）。
+/// 用户干预摘要（Step 2 ②）。⚠️ 只记计数不记内容：PTY 里敲的常是密码 / token，正文进工具结果即
+/// 进模型上下文 + 落 SQLite，踩 §9 密钥红线。
 #[derive(Default, Clone, Copy)]
 pub struct InterventionCounts {
     /// 写入次数（键击 / 粘贴各算一次）
@@ -42,11 +33,8 @@ pub struct InterventionCounts {
     pub held_seconds: u64,
 }
 
-/// 伪控制台尺寸去重器。
-///
-/// ConPTY 在「屏幕已有内容」后收到 `ResizePseudoConsole` 会整屏重绘、并按新行数在内容下方
-/// 补空行（实测：空行数 = 新行数 − 内容行数，见 `docs/pty-research.md` §5.7）；前端
-/// `ResizeObserver` 会重复上报同一尺寸，每次都真 resize 就会白刷一堆空行。
+/// 伪控制台尺寸去重器：ConPTY 在屏幕已有内容后收到 `ResizePseudoConsole` 会整屏重绘并按新行数
+/// 补空行（§5.7）；前端 `ResizeObserver` 会重复上报同一尺寸，每次都真 resize 就白刷空行。
 #[derive(Default)]
 pub struct SizeTracker {
     current: Option<(i16, i16)>,

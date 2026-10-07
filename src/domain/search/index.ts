@@ -1,8 +1,5 @@
 /**
- * SearchProviderRegistry — 搜索供应商注册中心
- *
- * 实现 SearchProviderPort 接口，管理所有已注册的搜索供应商实例。
- * 对应 ProviderRegistry（LLM 供应商注册中心）的模式。
+ * SearchProviderRegistry — 搜索供应商注册中心（实现 SearchProviderPort；对应 LLM 侧的 ProviderRegistry）。
  */
 import type { SearchProviderPort } from '../ports/SearchProviderPort'
 import type { ISearchProvider, SearchProviderSummary } from './types'

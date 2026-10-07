@@ -1,17 +1,9 @@
 /**
- * agent-edit-modal — Agent 编辑/添加弹窗
+ * agent-edit-modal — Agent 编辑 / 添加弹窗。多 Tab 表单：基础信息 / 身份设定 / 性格设定 /
+ * 模型与工作目录 / 工具选择 / 技能选择。
  *
- * 多 Tab 表单：
- *   1. 基础信息 — 名称、简介
- *   2. 身份设定 — Markdown
- *   3. 性格设定 — Markdown
- *   4. 模型与工作目录 — 默认模型、工作目录
- *   5. 工具选择 — 多选允许的工具列表（按分类分组）
- *   6. 技能选择 — 多选已注册的技能列表
- *
- * 校验与定位：字段校验在提交时统一做（`validate`），失败会**切到出错字段所在的 Tab
- * 并把焦点移进去**（该 Tab 同时打红点）；关闭时有未保存修改会二次确认。
- * 此前只有 Toast 一闪，用户得自己猜哪个字段错了、再自己切回那个 Tab。
+ * 校验在提交时统一做（`validate`），失败会**切到出错字段所在的 Tab 并把焦点移进去**（该 Tab
+ * 同时打红点）；关闭时有未保存修改会二次确认。此前只有 Toast 一闪，用户得自己猜哪里错了。
  */
 import { useState, useEffect, useMemo, useRef } from 'react'
 import Modal, { ModalFooterButtons } from '@/ui/components/shared/Modal'
@@ -92,7 +84,7 @@ const FIELD_TAB: Record<FormField, number> = {
 /** 校验顺序 = 定位顺序：取第一个出错的字段 */
 const FIELD_ORDER: FormField[] = ['name', 'description', 'projectRulesFile']
 
-/** 表单可比较快照所包含的字段（不含 id / 时间戳，专用于「有未保存修改」判定） */
+/** 表单快照字段（不含 id / 时间戳，专用于「有未保存修改」判定） */
 interface FormValues {
   name: string
   description: string
@@ -152,7 +144,6 @@ export default function AgentEditModal({
 }: Props) {
   const isEdit = !!agent
 
-  // ===== Form state =====
   const [tab, setTab] = useState(0)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -174,8 +165,8 @@ export default function AgentEditModal({
   const [temperature, setTemperature] = useState(0.7)
   const [topP, setTopP] = useState(1.0)
   const [saving, setSaving] = useState(false)
-  /** 提交失败后要把焦点送进的字段（可能跨 Tab：内容是按 Tab 条件渲染的，
-   *  切过去之前 ref 还是 null，所以只存字段名、到 effect 里再取节点） */
+  /** 提交失败后要送焦点的字段（可能跨 Tab：内容按 Tab 条件渲染，切过去前 ref 还是 null，
+   *  故只存字段名，到 effect 里再取节点） */
   const pendingFocus = useRef<FormField | null>(null)
   const [focusTick, setFocusTick] = useState(0)
   /** 表单初值快照（JSON），用于判断「有未保存修改」 */
@@ -188,7 +179,7 @@ export default function AgentEditModal({
     projectRulesFile: useRef<HTMLInputElement>(null),
   }
 
-  /** 当前表单值（与初值快照同构）—— 用于「有未保存修改」判定 */
+  /** 当前表单值（与初值快照同构），用于「有未保存修改」判定 */
   const currentValues: FormValues = {
     name,
     description,
@@ -204,7 +195,6 @@ export default function AgentEditModal({
     topP,
   }
 
-  // ===== 可用模型列表 =====
   const providers = settingsState.value.providers.filter((p) => p.enabled)
   const models = useMemo(() => {
     const p = providers.find((p) => p.id === providerConfigId)
@@ -228,7 +218,6 @@ export default function AgentEditModal({
     })()
   }, [visible])
 
-  // ===== 显隐时初始化 =====
   useEffect(() => {
     if (!visible) return
     const init = initialValues(agent)
@@ -261,8 +250,8 @@ export default function AgentEditModal({
       setReady(true)
       return
     }
-    // 新建 Agent：默认全选所有工具（异步）。补齐后要把基线快照一起刷新，
-    // 否则工具一到位就变成「有未保存修改」，点取消会被无谓地拦一次。
+    // 新建 Agent：默认全选所有工具（异步）。补齐后要一并刷新基线快照，否则工具一到位
+    // 就变成「有未保存修改」，点取消会被无谓地拦一次。
     toolRegistry.listAll().then((res) => {
       const names = res.map((t) => t.definition.name)
       setAllowTools(names)
@@ -279,16 +268,10 @@ export default function AgentEditModal({
     if (field) fieldRefs[field].current?.focus()
   }, [focusTick, visible])
 
-  // ===== 项目规则文件：输入端驳回非法路径 =====
-
   /**
-   * 校验并应用规则文件路径。
-   *
-   * **非法输入直接驳回（不写入 state，界面保持上一个合法值）**，同时给出内联错误：
-   * 不这样做的话，用户可以用绝对路径把任意文件（如 `~/.ssh/id_rsa`）读进系统提示词，
-   * 再随每一次请求原样发给模型服务商。
-   *
-   * 留空 = 不注入（合法，「清空」是关闭该特性的唯一方式）。
+   * 校验并应用规则文件路径：**非法输入直接驳回**（不写入 state，界面保持上一个合法值）并给内联
+   * 错误。否则用户能用绝对路径把任意文件（如 `~/.ssh/id_rsa`）读进系统提示词，再随每次请求
+   * 原样发给模型服务商。留空 = 不注入，合法（「清空」是关闭该特性的唯一方式）。
    */
   function applyProjectRulesFile(value: string) {
     if (!value.trim()) {
@@ -322,9 +305,8 @@ export default function AgentEditModal({
     const errors: Partial<Record<FormField, string>> = {}
     if (!name.trim()) errors.name = t('请输入名称')
     if (!description.trim()) errors.description = t('请输入描述')
-    // 两件事都要卡住：① 存量脏配置（手改过 localStorage）绕过输入驳回；
-    // ② 用户刚被驳回的输入 —— 不做错的话保存会用「旧值」静默成功，
-    //    用户以为改成了别的文件，实际什么都没变
+    // 两件事都要卡住：① 存量脏配置绕过输入驳回；② 用户刚被驳回的输入 —— 否则保存会用
+    // 「旧值」静默成功，用户以为改成了别的文件，实际什么都没变
     if (projectRulesFile.trim() && !isSafeProjectRulesPath(projectRulesFile)) {
       errors.projectRulesFile = t(RULES_FILE_PATH_ERROR)
     } else if (fieldErrors.projectRulesFile) {
@@ -334,10 +316,8 @@ export default function AgentEditModal({
   }
 
   /**
-   * 关闭前拦截未保存的修改。
-   *
-   * 六个 Tab 的表单一次丢弃本就是高代价操作，而此前点「取消」/ ESC / ✕ 是**静默丢弃**：
-   * 身份、性格、27 个工具、技能选完了，一个手滑就全没，且无任何挽回入口。
+   * 关闭前拦截未保存的修改：六个 Tab 的表单一次丢弃本就是高代价操作，而此前点「取消」/ ESC / ✕
+   * 是**静默丢弃** —— 身份、性格、27 个工具、技能选完了，一个手滑全没且无挽回入口。
    */
   async function handleClose() {
     if (saving) return
@@ -356,7 +336,6 @@ export default function AgentEditModal({
     onClose()
   }
 
-  // ===== 保存 =====
   function handleSave() {
     const errors = validate()
     if (Object.keys(errors).length > 0) {
@@ -403,7 +382,6 @@ export default function AgentEditModal({
     }, 0)
   }
 
-  // ===== 工具选择切换 =====
   function toggleTool(toolName: string) {
     setAllowTools((prev) =>
       prev.includes(toolName)
@@ -412,7 +390,6 @@ export default function AgentEditModal({
     )
   }
 
-  // ===== 工具全选/取消（只作用于当前筛选结果：先搜再全选才是真实意图）=====
   function toggleAllTools() {
     const names = filteredTools.map((t) => t.name)
     if (names.length === 0) return
@@ -424,7 +401,6 @@ export default function AgentEditModal({
     )
   }
 
-  // ===== 按分类全选/取消 =====
   function toggleCategory(categoryToolNames: string[], currentlySelected: string[]) {
     const categorySelected = categoryToolNames.filter((name) =>
       currentlySelected.includes(name),
@@ -444,7 +420,7 @@ export default function AgentEditModal({
     }
   }
 
-  /** 将工具按分类分组，未匹配到分类的工具归入"其他" —— 只分组**过滤后**的列表 */
+  /** 按分类分组，未匹配分类的归入「其他」——只分组**过滤后**的列表 */
   const groupedTools = useMemo(() => {
     const grouped: Array<{
       category: (typeof TOOL_CATEGORIES)[0]
@@ -461,7 +437,6 @@ export default function AgentEditModal({
       }
     }
 
-    // 未匹配分类的工具
     const uncategorized = filteredTools.filter((t) => !usedNames.has(t.name))
     if (uncategorized.length > 0) {
       grouped.push({
@@ -473,7 +448,6 @@ export default function AgentEditModal({
     return grouped
   }, [filteredTools])
 
-  // ===== 已注册技能列表 =====
   const allSkills = useMemo(
     () => listRegisteredSkills(),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -489,7 +463,6 @@ export default function AgentEditModal({
     )
   }, [allSkills, skillQuery])
 
-  // ===== 技能选择切换 =====
   function toggleSkill(skillName: string) {
     setSkills((prev) =>
       prev.includes(skillName)
@@ -498,7 +471,6 @@ export default function AgentEditModal({
     )
   }
 
-  // ===== 技能全选/取消（同工具：只作用于当前筛选结果）=====
   function toggleAllSkills() {
     const names = filteredSkills.map((s) => s.meta.name)
     if (names.length === 0) return
@@ -511,10 +483,8 @@ export default function AgentEditModal({
   }
 
   /**
-   * 应用身份 / 性格预设模板。
-   *
-   * 原实现点一下就把 textarea 整体冲掉，已写的段落找不回来 —— 非空且与预设不同时
-   * 先确认一次（空字段则直接填入，不给多余摩擦）。
+   * 应用身份 / 性格预设模板：非空且与预设不同时先确认 —— 原实现点一下就整体冲掉，已写的段落
+   * 找不回来（空字段则直接填入，不给多余摩擦）。
    */
   async function applyPreset(
     text: string,
@@ -536,7 +506,6 @@ export default function AgentEditModal({
     apply(text)
   }
 
-  // ===== Tab 键盘导航（ARIA tabs 标准模式：左右方向键 + Home/End）=====
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
 
   function onTabKeyDown(e: React.KeyboardEvent) {
@@ -552,7 +521,6 @@ export default function AgentEditModal({
     tabRefs.current[next]?.focus()
   }
 
-  // ===== 文件夹选择 =====
   async function pickFolder() {
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
@@ -614,13 +582,11 @@ export default function AgentEditModal({
         })}
       </div>
 
-      {/* Tab 内容 */}
       <div
         className="aem-body"
         role="tabpanel"
         id={`aem-panel-${tab}`}
         aria-labelledby={`aem-tab-${tab}`}>
-        {/* ===== Tab 1: 基础信息 ===== */}
         {tab === 0 && (
           <div className="aem-form">
             <div className="form-group">
@@ -714,7 +680,6 @@ export default function AgentEditModal({
           </div>
         )}
 
-        {/* ===== Tab 2: 身份设定 ===== */}
         {tab === 1 && (
           <div className="aem-form" style={{
             height: '100%'
@@ -783,7 +748,6 @@ export default function AgentEditModal({
           </div>
         )}
 
-        {/* ===== Tab 3: 性格设定 ===== */}
         {tab === 2 && (
           <div className="aem-form" style={{
             height: '100%',
@@ -864,7 +828,6 @@ export default function AgentEditModal({
           </div>
         )}
 
-        {/* ===== Tab 4: 模型与目录 ===== */}
         {tab === 3 && (
           <div className="aem-form">
             <div className="form-group">
@@ -954,7 +917,6 @@ export default function AgentEditModal({
           </div>
         )}
 
-        {/* ===== Tab 5: 工具选择（按分类分组） ===== */}
         {tab === 4 && (
           <div className="aem-form">
             <div className="form-group">
@@ -1063,7 +1025,6 @@ export default function AgentEditModal({
           </div>
         )}
 
-        {/* ===== Tab 6: 技能选择 ===== */}
         {tab === 5 && (
           <div className="aem-form">
             <div className="form-group">
@@ -1138,7 +1099,6 @@ export default function AgentEditModal({
         )}
       </div>
 
-      {/* 底部按钮 */}
       <div className="aem-footer">
         <ModalFooterButtons
           onCancel={handleClose}

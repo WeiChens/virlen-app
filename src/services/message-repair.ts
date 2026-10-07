@@ -1,28 +1,15 @@
 /**
- * 消息格式修复 — 检测并修补「assistant 声明了 tool_calls，却缺少对应 tool 返回」的异常历史
+ * 消息格式修复 — 检测并修补「assistant 声明了 tool_calls，却缺少对应 tool 返回」的异常历史。
  *
- * 背景（线上实际故障）：
- *   应用在「LLM 已产出 tool_calls、工具尚未返回结果」的瞬间被中断（崩溃 / 强杀 / 断电 /
- *   系统更新），此时 assistant(tool_calls) 消息**已经落库**（引擎刻意先落库再执行工具，
- *   保证「agent 调用工具」的记录不丢），但对应的 tool 结果消息还没来得及写入，
- *   历史里就留下了一组「悬空 tool_calls」。下次请求会被服务端直接拒绝：
+ * 背景（线上故障）：应用在「LLM 已产出 tool_calls、工具还没返回」时被中断（崩溃/强杀），
+ * assistant(tool_calls) 已落库（引擎刻意先落库再执行工具）但 tool 结果未写入，留下悬空 tool_calls，
+ * 下次请求被服务端 400 拒绝：「An assistant message with 'tool_calls' must be followed by tool messages...」。
  *
- *     API Error (400): An assistant message with 'tool_calls' must be followed by
- *     tool messages responding to each 'tool_call_id'. (insufficient tool messages
- *     following tool_calls message)
+ * 修复：为悬空 tool_call_id 补一条占位 tool 消息（内容「程序中断」，isError=true）；
+ * 位置错乱的返回则归位，不重复补入。
  *
- * 修复方式：
- *   为悬空的 tool_call_id 补一条占位 tool 消息（内容「程序中断」，isError=true），
- *   让历史重新满足「assistant(tool_calls) → 紧随其后的同批 tool 消息」这条协议约束。
- *   历史中已被放错位置的返回（旧版本落库顺序错乱）则归位，而不是重复补入。
- *
- * 为什么只扫窗口（性能）：
- *   会话历史动辄上千条，全量校验成本高；而中断残留只可能出现在「消息尾部」
- *   （崩溃时最后写入的就是这条 assistant 消息，之后不可能再有新消息落库），
- *   因此默认只检测首/尾各 REPAIR_SCAN_WINDOW 条：
- *   - 尾窗：中断残留的必然位置（主场景）
- *   - 首窗：兜底「会话很早就被中断、之后一直没发消息」的极端情况
- *   只有确实需要补占位时，才会额外用 toolCallId 全量查重一次（避免补成重复项）。
+ * 只扫首/尾窗口（各 REPAIR_SCAN_WINDOW 条）：中断残留只可能出现在消息尾部（尾窗=主场景），
+ * 首窗兜底「会话很早被中断、之后一直没发消息」。仅当确实要补占位时才按 toolCallId 全量查重。
  */
 
 import { v4 } from '@/utils/uuid'
@@ -91,9 +78,8 @@ function collectScanIndexes(
 }
 
 /**
- * 检测并修复「悬空 tool_calls」（纯函数，不产生副作用）
- *
- * @param messages 会话消息列表（通常来自内存态 session.messages）
+ * 检测并修复「悬空 tool_calls」（纯函数，无副作用）。
+ * @param messages 会话消息列表
  * @param options  检测窗口配置
  */
 export function repairToolCallMessages(

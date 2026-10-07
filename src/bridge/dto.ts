@@ -1,18 +1,13 @@
 /**
  * DTO 投影（**白名单**）—— 手机控制「电脑侧接口层」的出参构造。
  *
- * 铁律（见 docs/phone-control-bridge.md §7-⑥/⑦）：**绝不 `{...session}` 再删字段**。
- * `Session` 含 `systemPrompt`（可达数十 KB）、`workspace`（本地绝对路径）、
- * `providerConfigId` / `allowedTools` / `params`，直接下行是数据泄露 + 流量事故。
- * 这里**只挑显式字段**，新增字段必须手动加入，杜绝"不小心多带"。
+ * 铁律（见 docs/phone-control-bridge.md §7-⑥/⑦）：**绝不 `{...session}` 再删字段**。Session 含
+ * systemPrompt（可达数十 KB）、workspace（本地绝对路径）、providerConfigId / allowedTools / params，
+ * 直接下行是数据泄露 + 流量事故。这里**只挑显式字段**，新增字段必须手动加入，杜绝「不小心多带」。
+ * 图片 / 文件等富内容一律降级为占位符（ImageContent 可能内嵌大段 base64）。
  *
- * 图片 / 文件等富内容一律降级为占位符（§7-⑦）：`ImageContent` 可能内嵌大段 base64，
- * 下行就是流量事故。图片引用（ref）留到二期。
- *
- * ⚠️ **一个例外：引用（`quote`）**。自 §36 起它以结构化字段 `MessageDTO.quotes` 下行
- * （手机端要把它渲染成引用条），**不再**展平进 `text` —— 两条路同时走就会显示两遍。
- * §37 的**文件引用**同理（`MessageDTO.files`）：展平后的 `[文件] <名字>` 只有名字没有路径，
- * 同一目录下的两个 `index.ts` 在手机上长得一模一样。
+ * ⚠️ 一个例外：引用（quote）自 §36 起以结构化字段 MessageDTO.quotes 下行（手机渲染成引用条），
+ * **不再**展平进 text（两条路同时走会显示两遍）；§37 的**文件引用**同理（MessageDTO.files）。
  */
 import type { Message, MessageContent, Session } from '@/types'
 import { agentStore, sessionRuntimeState, sessionStore, settingsState } from '@/ui/store'
@@ -42,17 +37,11 @@ const ROLE_MAP: Record<Message['role'], MessageDTO['role']> = {
 }
 
 /**
- * 把消息内容投影为纯文本（剥离 base64 / 富内容）。
+ * 把消息内容投影为纯文本（剥离 base64 / 富内容）。同时被 store-bridge 用作「消息指纹」的一部分。
  *
- * 同时被 store-bridge 用作「消息指纹」的一部分 —— 见 store-bridge 的下行 diff。
- *
- * `options.skipQuotes` / `options.skipFiles`：**跳过引用块 / 文件块**
- * （它们已结构化地下行到 `MessageDTO.quotes` / `MessageDTO.files`）。
- * 不跳的话手机端会把同一段引文 / 同一个附件显示两遍（引用条 + 正文里的 `[引用] …`），
- * 而「正文里本来就写着 `[引用]`」这种巧合无法用字符串判断去重。
- *
- * ⚠️ 两个开关都默认**不跳**（旧行为）：指纹仍把它们算进去，否则改了引用块 / 换了附件
- * 不会触发任何下行更新。
+ * options.skipQuotes / skipFiles：**跳过引用块 / 文件块**（它们已结构化下行到 MessageDTO.quotes /
+ * files）。不跳的话手机端会把同一段引文 / 附件显示两遍（引用条 + 正文里的 `[引用] …`）。
+ * ⚠️ 两开关默认**不跳**（旧行为）：指纹仍把它们算进去，否则改引用块 / 换附件不会触发任何下行更新。
  */
 export function projectContentToText(
   content: MessageContent,

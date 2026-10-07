@@ -1,8 +1,6 @@
 /**
- * message-list 浮层 / 提示条（纯展示，状态与回调由父组件注入）
- *
- * 抽出的目的是把大段 JSX 从 message-list.tsx 移出，
- * 这些组件不含任何 hook 状态，行为与内联 JSX 等价。
+ * message-list 浮层 / 提示条（纯展示，状态与回调由父组件注入）。
+ * 抽出来是为了把大段 JSX 从 message-list.tsx 移出 —— 这里不含任何 hook 状态，行为与内联 JSX 等价。
  */
 import { t } from '@/ui/i18n'
 import DropDownSvg from '@/ui/components/icons/DropDownSvg'

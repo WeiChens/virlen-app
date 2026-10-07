@@ -1,14 +1,8 @@
 /**
- * tree-rows — 目录树「可见行」的扁平化（纯函数，无 React / DOM 依赖）
+ * 目录树「可见行」的扁平化（纯函数，无 React / DOM 依赖）。
  *
- * 虚拟列表只接受一维数组，所以先按展开状态把树压平：
- *   根节点 → 逐层子项 → 加载中 / 空目录 / 读取失败 也各占一行。
- * 行高固定（用于虚拟滚动的 estimateSize），因此所有行都是「单行」语义。
- *
- * 另外提供 selectRangePaths（Shift 连选），它同样只能基于「可见行」计算，
- * 放在这里可以单测。
- *
- * 刻意不依赖 service / tauri：保持纯函数，便于单测与在任意环境复用。
+ * 虚拟列表只接受一维数组，故按展开状态压平：根节点 → 逐层子项，「加载中 / 空目录 / 读取失败」也各占一行。
+ * Shift 连选（`selectRangePaths`）同样只能基于可见行算，放这里可单测。
  */
 
 /** 目录项（`list_directory` 返回值的最小投影） */
@@ -75,14 +69,12 @@ export function pasteDirFor(row: { path: string; isDir: boolean }): string {
 }
 
 /**
- * 文件名搜索的结果排序（工作目录页签的搜索框用）。
+ * 文件名搜索结果的排序（工作目录页签搜索结果用）。
  *
- * Rust 侧（search_files_by_name → search.rs）是「按目录遍历顺序、拿整条路径做子串匹配」，
- * 结果直接展示会让最相关的那条散落在中间，所以这里按三条规则重排：
- *   1. **末级名称**命中 优先于 仅父路径命中（搜 `session` 时 `sessionStore.ts`
- *      应排在 `src/session-utils/helper.ts` 前面）；
- *   2. 路径短者优先（层级更浅，通常就是用户要找的那个）；
- *   3. 路径字典序（保证同分结果顺序稳定，不会每次搜索都跳）。
+ * Rust 侧是「按遍历顺序、整条路径子串匹配」，直接展示会让最相关的那条散落中间，故重排：
+ * 1. **末级名称**命中优先于仅父路径命中（搜 `session` 时 `sessionStore.ts` 应排在 `src/session-utils/helper.ts` 前）；
+ * 2. 路径短者优先（层级更浅，通常就是用户要找的）；
+ * 3. 路径字典序（同分顺序稳定，不会每次搜索都跳）。
  */
 export function rankFilePaths(paths: string[], query: string): string[] {
   const q = query.trim().toLowerCase()
@@ -100,9 +92,7 @@ export function rankFilePaths(paths: string[], query: string): string[] {
 
 /**
  * Shift 连选：取可见行里 anchor → focus 之间的**节点行**路径（含两端，按可见顺序）。
- *
- * 为什么以「可见行」为序：树是一维展开视图，折叠起来的节点不在 rows 里，
- * 用户看不到它们被选中，就不能静默把它们加进选择集。
+ * 以可见行为序是因为折叠的节点不在 rows 里 —— 用户看不到它们被选中，就不能静默加进选择集。
  * 锚点找不到时（换过工作目录 / 节点已折叠）退回只选 focus 自身。
  */
 export function selectRangePaths(
@@ -120,10 +110,7 @@ export function selectRangePaths(
 
 /**
  * 按展开状态把树压平成可见行。
- *
- * @param args.rootPath 树根（工作目录绝对路径，空串表示无工作目录）
- * @param args.dirs     已加载目录的缓存
- * @param args.expanded 展开状态（key 为目录绝对路径）
+ * @param args.rootPath 树根（工作目录绝对路径，空串 = 无工作目录）
  */
 export function buildTreeRows(args: {
   rootPath: string

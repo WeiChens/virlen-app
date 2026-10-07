@@ -1,6 +1,4 @@
-/**
- * Skill 系统类型定义
- */
+/** Skill 系统类型定义。 */
 
 /** Skill 元信息 */
 export interface SkillMeta {
@@ -15,10 +13,7 @@ export interface SkillMeta {
 }
 
 /**
- * 校验并归一化技能名称
- * - 转小写
- * - 只允许 [a-z0-9-]
- * - 禁止为空
+ * 校验并归一化技能名称：转小写、只允许 [a-z0-9-]、禁止为空。
  */
 export function normalizeSkillName(raw: string): string {
   const name = raw.replace(/"/g, '').toLowerCase().trim()

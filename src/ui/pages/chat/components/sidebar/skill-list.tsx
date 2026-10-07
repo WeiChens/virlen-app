@@ -1,20 +1,13 @@
 /**
- * skill-list —— 侧边栏「技能」页签
+ * skill-list —— 侧边栏「技能」页签：列出已安装技能（skillStore 里已注册的 SKILL.md 元信息），
+ * 与「设置 → 技能」同源，导入 / 删除后自动同步（store 是 observable）。
  *
- * 列出已安装技能（skillStore 里已注册的 SKILL.md 元信息），与
- * 「设置 → 技能」同源：导入 / 删除后此处自动同步（skillStore 是 observable）。
+ * 交互（与目录树同一套指针拖拽，见 use-tree-drag.ts）：单击卡片 / 拖到输入框 = 开关式引用，已引用
+ * 的卡片高亮（+「已引用」角标）并与输入框里的 chip 一一对应；右键菜单 = 引用 / 打开技能目录 /
+ * 在文件管理器中显示 / 复制路径；顶栏搜索按 名称 / 描述 / 标签 筛。
  *
- * 交互（与目录树同一套指针拖拽，见 use-tree-drag.ts）：
- *   - 顶部搜索框：按 名称 / 描述 / 标签 筛卡片（关键词由父组件持有，切页签回来还在）
- *   - 单击卡片 / 拖到输入框 → **开关式**引用：未引用则引用，已引用则取消
- *   - 已引用的卡片高亮（+「已引用」角标），与输入框里的技能 chip 一一对应
- *   - 右键菜单              → 引用 / 取消引用 / 打开技能目录 / 在文件管理器中显示 / 复制路径
- *
- * 「打开技能目录」已从单击挪到右键菜单：单击现在是引用开关（原来点一下就把目录弹到
- * 资源管理器，与「引用」放在同一个手势上必然二选一）。
- *
- * 引用状态的**唯一真相在输入框**（它持有 SKILL.md 全文，见 input/hooks.ts）：
- * 这里只是拿 chat-view 传下来的名字镜像来判断高亮，点击时回给输入框执行。
+ * 引用状态的唯一真相在输入框（它持有 SKILL.md 全文，见 input/hooks.ts）：这里只拿父组件传下来的
+ * 名字镜像判高亮，点击时回给输入框执行。
  */
 import { observer } from 'mobx-react-lite'
 import { openPath } from '@tauri-apps/plugin-opener'
@@ -37,10 +30,7 @@ interface Props {
   referencedSkills: string[]
   /** 单击卡片：未引用则引用，已引用则取消 */
   onToggleSkill: (name: string) => void
-  /**
-   * 搜索关键词与写回。**值由父组件持有**：本组件在切页签时会卸载
-   * （`{activeTab === 'skills' && ...}`），关键词放本地就丢了。
-   */
+  /** 搜索关键词与写回；值由父组件持有 —— 本组件切页签会卸载（`{activeTab === 'skills' && ...}`），放本地就丢 */
   searchQuery: string
   onSearchQueryChange: (value: string) => void
 }
@@ -100,8 +90,7 @@ function SkillList({
           openPath(target.path).catch(() => showToast(t('打开失败')))
         },
       },
-      // 「打开文件夹」与本菜单的「打开技能目录」是同一件事，去掉避免两个重复项；
-      // 保留「在文件管理器中显示 / 复制路径」（复用既有实现，不重写）
+      // 「打开文件夹」与本菜单的「打开技能目录」重复，过滤掉；保留「在文件管理器中显示 / 复制路径」
       ...fileMenuItems(target.path, { isDir: true }).filter(
         (item) => item.key !== 'open',
       ),

@@ -1,14 +1,13 @@
 /**
- * storage-settings — 存储维护（设置 → 存储）
+ * storage-settings — 存储维护（设置 → 存储）：展示 `virlen.db` 的体积构成，并手动触发维护动作。
  *
- * 只做两件事：展示 `virlen.db` 的体积构成，以及手动触发维护动作。
- * 两个动作分别对应「廉价、无需确认」与「需独占、必须确认」两档：
+ * 两个动作对应「廉价、无需确认」与「需独占、必须确认」两档：
  * - 截断 WAL 日志：`wal_checkpoint(TRUNCATE)`，把 `-wal` 里已提交的页搬回主库并截断文件；
  * - 重建数据库：`VACUUM`，归还已删除数据留下的空闲页，并把 `auto_vacuum` 切为 INCREMENTAL。
  *
- * 都不自动执行：`VACUUM` 期间独占数据库连接（数百 MB 库约 10–60 秒），还需约 2 倍库大小的
- * 临时磁盘空间（详见 `virlen-core/src/session_db/maintenance.rs`）。唯一自动发生的是
- * 「退出应用时截断一次 WAL」，它拿不到连接锁会直接跳过。
+ * 都不自动执行：`VACUUM` 期间独占数据库连接（数百 MB 库约 10–60 秒），还需约 2 倍库大小的临时
+ * 磁盘空间（详见 `virlen-core/src/session_db/maintenance.rs`）。唯一自动发生的是「退出应用时
+ * 截断一次 WAL」，它拿不到连接锁会直接跳过。
  */
 import { useCallback, useEffect, useState } from 'react'
 import { sessionRepo } from '@/infrastructure/sessionRepo'

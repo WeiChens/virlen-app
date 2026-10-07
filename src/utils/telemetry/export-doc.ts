@@ -38,7 +38,7 @@ const MODULE_PREFIXES: Array<[string, string]> = [
   ['telemetry.', '埋点自身操作（开关 / 上传 / 导出 / 清理）'],
 ]
 
-// ==================== 小工具 ====================
+// 小工具
 
 /** 转义 Markdown 表格单元格（管道符 / 换行） */
 function cell(v: unknown): string {
@@ -106,7 +106,7 @@ function moduleOf(eventName: string): string {
   return '其他'
 }
 
-// ==================== 统计 ====================
+// 统计
 
 interface KeyStat {
   count: number
@@ -242,7 +242,7 @@ function analyze(events: TelemetryEvent[], bundle: TelemetryBundle): BundleStats
   return stats
 }
 
-// ==================== 渲染 ====================
+// 渲染
 
 /** 构建面向 AI 的导出说明文档（Markdown） */
 export function buildBundleDoc(bundle: TelemetryBundle): string {
@@ -251,7 +251,7 @@ export function buildBundleDoc(bundle: TelemetryBundle): string {
   const span = s.firstTime && s.lastTime ? s.lastTime - s.firstTime : 0
   const L: string[] = []
 
-  // ---------- 抬头 ----------
+  // 抬头
   L.push('# Virlen 埋点导出包 — 数据结构说明（供 AI 解析）')
   L.push('')
   L.push(
@@ -270,7 +270,7 @@ export function buildBundleDoc(bundle: TelemetryBundle): string {
   )
   L.push('')
 
-  // ---------- 1. 包内文件 ----------
+  // 1. 包内文件
   L.push('## 1. 包内文件')
   L.push('')
   L.push(
@@ -285,7 +285,7 @@ export function buildBundleDoc(bundle: TelemetryBundle): string {
   )
   L.push('')
 
-  // ---------- 2. 数据总览 ----------
+  // 2. 数据总览
   L.push('## 2. 数据总览（Statistics）')
   L.push('')
   L.push(
@@ -318,7 +318,7 @@ export function buildBundleDoc(bundle: TelemetryBundle): string {
   )
   L.push('')
 
-  // ---------- 3. telemetry.json 顶层结构 ----------
+  // 3. telemetry.json 顶层结构
   L.push('## 3. `telemetry.json` 顶层结构')
   L.push('')
   L.push('```jsonc')
@@ -351,7 +351,7 @@ export function buildBundleDoc(bundle: TelemetryBundle): string {
   )
   L.push('')
 
-  // ---------- 4. 事件通用字段 ----------
+  // 4. 事件通用字段
   L.push('## 4. 事件通用字段（TelemetryEvent）')
   L.push('')
   L.push('每条 `events[]` 元素的固定字段：')
@@ -402,7 +402,7 @@ export function buildBundleDoc(bundle: TelemetryBundle): string {
   L.push('> 统一 `status` 取值：`success` / `fail` / `cancel` / `timeout` / `pause`。')
   L.push('')
 
-  // ---------- 5. 事件分布 ----------
+  // 5. 事件分布
   L.push('## 5. 事件分布（按 event_name）')
   L.push('')
   if (s.byName.length === 0) {
@@ -424,7 +424,7 @@ export function buildBundleDoc(bundle: TelemetryBundle): string {
   }
   L.push('')
 
-  // ---------- 5.1 命名模块 ----------
+  // 5.1 命名模块
   L.push('### 5.1 事件名前缀含义')
   L.push('')
   L.push(
@@ -435,7 +435,7 @@ export function buildBundleDoc(bundle: TelemetryBundle): string {
   )
   L.push('')
 
-  // ---------- 6. 各事件字段 ----------
+  // 6. 各事件字段
   L.push('## 6. 各事件 props 字段（本包实际出现过）')
   L.push('')
   L.push(
@@ -466,7 +466,7 @@ export function buildBundleDoc(bundle: TelemetryBundle): string {
     }
   }
 
-  // ---------- 7. 错误与失败 ----------
+  // 7. 错误与失败
   L.push('## 7. 错误与失败事件')
   L.push('')
   if (s.errorEvents === 0 && s.failEvents === 0) {
@@ -494,7 +494,7 @@ export function buildBundleDoc(bundle: TelemetryBundle): string {
   }
   L.push('')
 
-  // ---------- 8. 链路与时间线 ----------
+  // 8. 链路与时间线
   L.push('## 8. 链路（trace_id）与时间线')
   L.push('')
   L.push(
@@ -516,7 +516,7 @@ export function buildBundleDoc(bundle: TelemetryBundle): string {
   }
   L.push('')
 
-  // ---------- 9. 脱敏与截断 ----------
+  // 9. 脱敏与截断
   L.push('## 9. 脱敏与截断说明')
   L.push('')
   L.push('- **密钥打码**：所有正文与密钥在**采集与导出时双重**打码。')
@@ -527,7 +527,7 @@ export function buildBundleDoc(bundle: TelemetryBundle): string {
   L.push('- 因此看到 `[REDACTED]` / `***` / `[truncated ...]` 属**预期行为**，非数据损坏。')
   L.push('')
 
-  // ---------- 10. 读取方式 ----------
+  // 10. 读取方式
   L.push('## 10. 建议的读取方式')
   L.push('')
   L.push('用 `jq` 精准取数，避免载入全部事件：')

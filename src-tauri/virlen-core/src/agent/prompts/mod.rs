@@ -1,17 +1,11 @@
-//! 系统提示词 —— md 文本的唯一存放地 + 组装 / 取值出口
+//! 系统提示词 —— md 文本的唯一存放地 + 组装 / 取值出口。
 //!
-//! 本目录存放全部模型侧提示词文本：前端（GUI）不再自带副本，需要时经 Tauri 命令 `cmd_agent_prompts`
-//! 取；浏览器 dev / vitest 则直读本目录同一份文件（`?raw`，见 `src/infrastructure/prompts/prompt-source.ts`）。
+//! 前端不再自带副本：Tauri 经 `cmd_agent_prompts` 取，浏览器 dev / vitest 直读本目录同一份 md（`?raw`）。
+//! 这么搬是为了去掉 `include_str!("../../../../../src/domain/agent/prompts/…")` 那种「Rust 编译依赖前端
+//! 目录布局」—— 现在每个提示词只有一个物理源，依赖方向单向（与工具定义「机制 C」同构）。
 //!
-//! 搬过来的原因：以前是 `include_str!("../../../../../src/domain/agent/prompts/…")` —— Rust 的编译
-//! 依赖前端目录布局，前端挪一个文件夹就构建失败。改成「Rust 持有文本、前端经命令取」后：每个提示词
-//! 只有一个物理源，依赖方向单向（Rust 不认前端路径，与工具定义「机制 C」同构）。
-//!
-//! 两份职责：[`assemble`] 负责组装（顺序 / 分隔符，与 TS `domain/agent/compose-prompt.ts` 对齐）；
-//! 本模块负责提示词资源（文本本体 + [`all_prompt_texts`] 注册表）。
-//!
-//! ⚠️ 行尾差异：md 在工作区是 CRLF（Windows）/ LF（Linux CI），`include_str!` 原样嵌入。因此与 TS
-//! 的比对必须先归一化行尾（见 `assemble` 测试里的 `normalize`），比的是「文本内容」而非字节。
+//! [`assemble`] 负责组装（顺序 / 分隔符，与 TS `domain/agent/compose-prompt.ts` 对齐）；本模块负责提示词
+//! 资源本身。⚠️ md 在工作区是 CRLF / LF，`include_str!` 原样嵌入，与 TS 比对须先归一化行尾。
 
 pub mod assemble;
 

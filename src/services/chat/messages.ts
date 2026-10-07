@@ -1,9 +1,7 @@
 /**
- * 会话消息 CRUD（原 chat-service 内联，合并自 messages.ts）
- *
- * 全部操作作用于 sessionStore 的内存消息列表，并按宿主决定是否由本层落库：
- * - Tauri（有 Rust 后端）：引擎内部直落 SQLite，本层跳过（见 persistMessagesIfNeeded 的守卫）
- * - 非 Tauri（vitest）：本层负责调用 cmd_append_messages 等命令落库（invoke 为桩）
+ * 会话消息 CRUD（作用于 sessionStore 内存消息列表，按宿主决定是否由本层落库）：
+ * - Tauri：引擎内部直落 SQLite，本层跳过（见 persistMessagesIfNeeded 的守卫）
+ * - 非 Tauri（vitest）：本层负责调 cmd_append_messages 等命令落库（invoke 为桩）
  */
 import { runInAction } from 'mobx'
 import { sessionStore } from '@/ui/store'
@@ -14,8 +12,7 @@ import { isTauriAvailable } from '@/services/rust-engine'
 import { sanitizeLoneSurrogates } from '@/utils/text'
 
 /**
- * TS 引擎路径消息落库（Tauri 下由引擎内部直落 SQLite，跳过）。
- * fire-and-forget：不 await，落库不阻塞 UI。
+ * TS 引擎路径消息落库（Tauri 下由引擎内部直落 SQLite，跳过）。fire-and-forget：不 await，不阻塞 UI。
  */
 export function persistMessagesIfNeeded(
   sessionId: string,
@@ -24,8 +21,7 @@ export function persistMessagesIfNeeded(
   if (isTauriAvailable()) return
   if (!messages.length) return
   try {
-    // 兜底：孤立代理（半个 emoji）经 JSON.stringify → Rust serde_json 会报
-    // "unexpected end of hex escape"；命中时才复制，未命中零开销
+    // 兜底：孤立代理（半个 emoji）会被 Rust serde_json 拒（unexpected end of hex escape）；命中才复制
     void invoke('cmd_append_messages', {
       sessionId,
       messages: sanitizeLoneSurrogates(messages),
@@ -108,10 +104,8 @@ export function getSessionMessages(sessionId: string): Message[] {
 }
 
 /**
- * 按 id 取单条消息（不复制整表）
- *
- * 用于流式增量拼接：每个增量补丁都要读一次「当前正文」，
- * 走 getSessionMessages 会把整个消息列表复制一遍（高频路径上无必要）。
+ * 按 id 取单条消息（不复制整表）—— 流式增量拼接高频路径：每个增量都读一次「当前正文」，
+ * 走 getSessionMessages 会把整个列表复制一遍，此处避免。
  */
 export function getSessionMessage(
   sessionId: string,
@@ -135,23 +129,18 @@ export function deleteSessionMessage(
     const msgIdx = session.messages.findIndex((m) => m.id === messageId)
     if (msgIdx === -1) return false
 
-    // 不允许手动删除 tool 消息
     if (session.messages[msgIdx].role === 'tool') return false
 
-    // 删除该消息及之后所有消息
     const removed = session.messages.slice(msgIdx)
     session.messages = session.messages.slice(0, msgIdx)
-    // 同步「全量用户消息索引」：剔除本次被删掉的用户消息，
-    // 否则右侧锚点列表会残留已删除用户消息的圆点
-    // （索引为一次性拉取的缓存，不会随 messages 变化自动更新）。
+    // 同步「全量用户消息索引」：剔除被删的用户消息，否则右侧锚点列表会残留圆点
+    //（索引是一次性拉取的缓存，不随 messages 变化自动更新）。
     sessionStore.dropUserMessagesFromIndex(
       sessionId,
       removed.filter((m) => m.role === 'user').map((m) => m.id),
     )
-    // 落库：从 SQLite 删除该消息及其之后的所有消息，使内存与 DB 保持一致。
-    // 注意 messagesChanged 只触发会话元数据落库（cmd_upsert_session 不写 messages 表），
-    // 必须显式调用截断命令，否则重启后已删除消息会从 DB「复活」。
-    // fire-and-forget：失败不阻塞 UI，非 Tauri 环境静默忽略。
+    // 落库：从 SQLite 删除该消息及其之后的所有消息。注意 messagesChanged 只触发会话元数据落库
+    //（cmd_upsert_session 不写 messages 表），必须显式截断，否则重启后已删消息会从 DB「复活」。
     try {
       void invoke('cmd_truncate_session_messages', {
         sessionId,
@@ -181,8 +170,7 @@ export function clearSessionMessages(sessionId: string): boolean {
       sessionId,
       prevRefs.map((r) => r.id),
     )
-    // 落库：清空 SQLite 中该会话的全部消息（复用整批替换命令，传空列表）。
-    // 同样不能只靠 messagesChanged（只写会话元数据）。
+    // 落库：清空 SQLite 中该会话的全部消息（复用整批替换命令，传空列表）；同样不能只靠 messagesChanged。
     try {
       void invoke('cmd_replace_session_messages', {
         sessionId,
@@ -205,10 +193,8 @@ export function replaceSessionMessages(
   sessionId: string,
   messages: Message[],
 ): boolean {
-  // 压缩会丢弃部分历史（含用户消息）：同步剔除索引中已不存在的用户消息，
-  // 否则右侧锚点列表会残留已被压缩掉的圆点。
-  // messages 为完整历史（调用方已 ensureAllMessagesLoaded），故「不在新列表中的
-  // 索引项」即为被压缩掉的消息。
+  // 压缩会丢弃部分历史（含用户消息）：同步剔除索引中已不存在的用户消息，否则右侧锚点会残留圆点。
+  // messages 为完整历史（调用方已 ensureAllMessagesLoaded），故「不在新列表中的索引项」即被压缩的消息。
   const keepIds = new Set(messages.map((m) => m.id))
   const staleIds = sessionStore
     .getUserMessageIndex(sessionId)

@@ -37,30 +37,27 @@ function ImagePreview() {
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
   const imageRef = useRef<HTMLImageElement>(null)
   /**
-   * 大图右键菜单（复制图片 / 另存为）。
-   *
-   * 菜单必须渲染在 overlay 的兄弟位置（而不是内部）：`image-preview-overlay` 根节点上挂了
-   * 「点击任意处关闭预览」，而 React 事件按 React 树（而非 DOM 树）冒泡 —— 菜单虽经 portal
-   * 挂到 body，只要它在 React 树里是 overlay 的子节点，点菜单项就会连着把预览一起关掉。
+   * 大图右键菜单（复制图片 / 另存为），必须渲染在 overlay 的**兄弟**位置：
+   * `image-preview-overlay` 根节点挂了「点击任意处关闭预览」，而 React 事件按 React 树
+   * （而非 DOM 树）冒泡 —— 菜单虽经 portal 挂到 body，只要在 React 树里是 overlay 的子节点，
+   * 点菜单项就会连预览一起关掉。
    */
   const menu = useContextMenu<string>()
 
-  // 图片列表（如果没有提供previewSrcList，则使用src）
+  // 未提供列表时退化为单张
   const imageList = previewSrcList.length > 0 ? previewSrcList : [src]
 
-  // 关闭预览
   const handleClose = () => {
     menu.close()
     setShowPreview(false)
   }
 
-  // 切图 / 开关预览时关掉右键菜单（否则菜单里图的是上一张）
+  // 切图 / 开关预览时关掉菜单，否则菜单里操作的是上一张
   useEffect(() => {
     menu.close()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentIndex, showPreview])
 
-  // 上一张
   const handlePrev = (e?: any) => {
     e?.stopPropagation()
     setCurrentIndex((prev) => (prev > 0 ? prev - 1 : imageList.length - 1))
@@ -69,7 +66,6 @@ function ImagePreview() {
     setPosition({ x: 0, y: 0 })
   }
 
-  // 下一张
   const handleNext = (e?: any) => {
     e?.stopPropagation()
     setCurrentIndex((prev) => (prev < imageList.length - 1 ? prev + 1 : 0))
@@ -78,29 +74,24 @@ function ImagePreview() {
     setPosition({ x: 0, y: 0 })
   }
 
-  // 放大
   const handleZoomIn = () => {
     setScale((prev) => Math.min(prev + 0.2, 5))
   }
 
-  // 缩小
   const handleZoomOut = () => {
     setScale((prev) => Math.max(prev - 0.2, 0.2))
   }
 
-  // 旋转
   const handleRotate = () => {
     setRotate((prev) => (prev + 90) % 360)
   }
 
-  // 重置
   const handleReset = () => {
     setScale(1)
     setRotate(0)
     setPosition({ x: 0, y: 0 })
   }
 
-  // 鼠标按下开始拖动
   const handleMouseDown = (e: React.MouseEvent<HTMLImageElement>) => {
     e.preventDefault()
     setIsDragging(true)
@@ -110,7 +101,6 @@ function ImagePreview() {
     })
   }
 
-  // 鼠标移动
   const handleMouseMove = (e: MouseEvent) => {
     if (!isDragging) return
 
@@ -120,12 +110,10 @@ function ImagePreview() {
     })
   }
 
-  // 鼠标释放
   const handleMouseUp = () => {
     setIsDragging(false)
   }
 
-  // ESC键关闭
   useEffect(() => {
     if (!showPreview) return
 
@@ -149,7 +137,6 @@ function ImagePreview() {
     }
   }, [showPreview])
 
-  // 阻止body滚动
   useEffect(() => {
     if (showPreview) {
       document.body.style.overflow = 'hidden'
@@ -161,7 +148,6 @@ function ImagePreview() {
     }
   }, [showPreview])
 
-  // 鼠标滚轮缩放
   useEffect(() => {
     if (!showPreview) return
 
@@ -169,17 +155,15 @@ function ImagePreview() {
       e.preventDefault()
       e.stopPropagation()
 
-      // deltaY > 0 表示向下滚动（缩小），< 0 表示向上滚动（放大）
+      // deltaY < 0（向上滚）放大
       if (e.deltaY < 0) {
-        // 放大
         setScale((prev) => Math.min(prev + 0.1, 5))
       } else {
-        // 缩小
         setScale((prev) => Math.max(prev - 0.1, 0.2))
       }
     }
 
-    // 添加事件监听，使用 passive: false 以便可以 preventDefault
+    // 必须 passive: false，否则 preventDefault 拦不住页面滚动
     document.addEventListener('wheel', handleWheel, {
       passive: false,
       capture: true,
@@ -191,7 +175,6 @@ function ImagePreview() {
     }
   }, [showPreview])
 
-  // 鼠标拖动事件监听
   useEffect(() => {
     if (!showPreview) return
 
@@ -204,18 +187,13 @@ function ImagePreview() {
     }
   }, [showPreview, isDragging, dragStart, position])
 
-  // const [_, setLoadingError] = useState(false)
-  // useEffect(() => {
-  //   setLoadingError(false)
-  // }, [src])
-
   useEffect(() => {
     const uninstall = imagePreviewEvent.on('show', (e, consumption) => {
       if (consumption.value) return
       setPreviewSrcList(e.previewSrcList ?? [])
       setReferrerPolicy(e.referrerPolicy ?? 'no-referrer')
       setSrc(e.src)
-      // 根据点击的图片定位到对应索引
+      // 定位到被点击的那一张
       const idx = e.previewSrcList?.indexOf(e.src) ?? 0
       setCurrentIndex(idx >= 0 ? idx : 0)
       setShowPreview(true)
@@ -227,7 +205,6 @@ function ImagePreview() {
   }, [])
   return (
     <>
-      {/* 预览层 */}
       {showPreview && (
         <ImagePreviewOverlay
           alt=""
@@ -250,7 +227,7 @@ function ImagePreview() {
           onImageContextMenu={(ev, src) => menu.openAt(ev, src)}
         />
       )}
-      {/* 右键菜单：与 overlay 平级（见 menu 的注释，不能被 overlay 的「点击关闭」吃掉） */}
+      {/* 与 overlay 平级：不能被它的「点击关闭」吃掉，见上 */}
       {showPreview && menu.state && (
         <ContextMenu
           position={menu.state.position}
@@ -280,7 +257,6 @@ interface ImagePreviewOverlayProps {
   handlePrev: () => void
   handleNext: () => void
   referrerPolicy?: HTMLAttributeReferrerPolicy
-  /** 图片上右键（回调里携带当前图的 src） */
   onImageContextMenu: (ev: React.MouseEvent, src: string) => void
 }
 function ImagePreviewOverlay(props: ImagePreviewOverlayProps) {
@@ -306,7 +282,6 @@ function ImagePreviewOverlay(props: ImagePreviewOverlayProps) {
   } = props
   return ReactDOM.createPortal(
     <div className="image-preview-overlay" onClick={handleClose}>
-      {/* 工具栏 */}
       <div
         className="image-preview-toolbar"
         onClick={(e) => e.stopPropagation()}>
@@ -354,7 +329,6 @@ function ImagePreviewOverlay(props: ImagePreviewOverlayProps) {
         </button>
       </div>
 
-      {/* 图片容器 */}
       <div
         className="image-preview-container"
         onClick={(e) => e.stopPropagation()}>
@@ -375,7 +349,6 @@ function ImagePreviewOverlay(props: ImagePreviewOverlayProps) {
         />
       </div>
 
-      {/* 左右切换按钮 */}
       {imageList.length > 1 && (
         <>
           <button className="preview-arrow prev" onClick={handlePrev}>
@@ -395,7 +368,6 @@ function ImagePreviewOverlay(props: ImagePreviewOverlayProps) {
         </>
       )}
 
-      {/* 图片索引 */}
       {imageList.length > 1 && (
         <div className="image-preview-index">
           {currentIndex + 1} / {imageList.length}

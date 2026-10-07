@@ -1,13 +1,11 @@
 /**
- * todo/state — 任务清单纯函数（无状态、无 IO、可单测）
+ * todo/state — 任务清单纯函数（无状态、无 IO、可单测）。
  *
- * ⚠️ 自 Step 2 起工具已原生化，两侧是两份实现（铁律 1 同步义务）：工具执行真正用到的几个函数
- * （`sanitizeTodos` / `computeStats` / `validateTodos` / `checkTodoLimit` / `renderTodoContent`）在
- * Rust 侧有逐字镜像（`native_tools/plan/`），改一边必须改另一边；`diffTodos` / `pickCurrentTodos` /
- * `shouldShowTodoEntry` 等只服务「用户编辑清单」的 UI 与注入逻辑，无 Rust 镜像。
+ * ⚠️ 工具已原生化，两侧两份实现：工具执行用到的 `sanitizeTodos` / `computeStats` / `validateTodos` /
+ * `checkTodoLimit` / `renderTodoContent` 在 Rust `native_tools/plan/` 有逐字镜像，改一边必须改另一边；
+ * `diffTodos` / `pickCurrentTodos` / `shouldShowTodoEntry` 只服务 UI 与注入，无 Rust 镜像。
  *
- * UI 侧（标题栏按钮 / 徽章 / 浮层 / 消息流一行胶囊）也只从这里取数据 ——「唯一的那份清单」靠
- * `pickCurrentTodos` 从消息历史派生，不引入任何额外状态字段。
+ * 「唯一的那份清单」由 `pickCurrentTodos` 从消息历史派生，不引入额外状态字段。
  */
 import type { Message } from '@/types'
 import type {
@@ -36,12 +34,8 @@ function clip(v: unknown, max: number): string {
 }
 
 /**
- * 把模型给的原始数组归一化成 TodoItem[]。
- *
- * - 非数组 → 空（调用方负责决定这是「清空」还是「非法」）
- * - 丢弃 content 为空的项
- * - status 非法 → pending
- * - id 缺失/重复 → 自动补 `t{n}`（保证合并时按 id 匹配的唯一性）
+ * 把模型给的原始数组归一化成 TodoItem[]：非数组 → 空；丢弃 content 为空的项；status 非法 → pending；
+ * id 缺失/重复 → 自动补 `t{n}`（保证按 id 合并的唯一性）。
  */
 export function sanitizeTodos(raw: unknown): TodoItem[] {
   if (!Array.isArray(raw)) return []
@@ -87,10 +81,8 @@ export function computeStats(todos: TodoItem[]): TodoStats {
 }
 
 /**
- * 软规则校验 —— 只报警、不改数据。
- *
- * 「最多一个 in_progress」是给模型的约定，而不是要静默篡改模型写入的内容：
- * 数据一旦被悄悄改动，模型下一轮看到的清单就和它以为的不一样了。
+ * 软规则校验 —— 只报警、不改数据。「最多一个 in_progress」是给模型的约定：
+ * 悄悄改数据会让模型下一轮看到的清单和它以为的不一样。
  */
 export function validateTodos(todos: TodoItem[]): string[] {
   const warnings: string[] = []
@@ -142,8 +134,8 @@ export function renderTodoContent(
 }
 
 /**
- * 变更摘要（**英文**，仅用于「用户改了清单」的 feedback 消息正文，即模型侧）。
- * 界面文案另有一份走 i18n 的实现：`ui/pages/chat/components/todo/brief.ts`（铁律 1/7）。
+ * 变更摘要（**英文**，用于「用户改了清单」的 feedback 消息正文，即模型侧）；
+ * 界面文案另有走 i18n 的实现：`ui/pages/chat/components/todo/brief.ts`。
  */
 export function renderChangeBrief(changes: TodoChange[]): string {
   if (!changes || changes.length === 0) return 'updated'
@@ -169,12 +161,8 @@ export function renderChangeBrief(changes: TodoChange[]): string {
 }
 
 /**
- * 用户修改后注入给模型的文本（role='feedback' 消息的正文）。
- *
- * 三个要点：
- * 1. 全量清单 —— 模型按它继续干活；
- * 2. 明确「这是用户改的」—— 否则模型会以为是自己写的；
- * 3. 显式禁止复原被移除的项 —— 否则模型很容易「好心」加回来。
+ * 用户修改后注入给模型的文本（feedback 消息正文）：给全量清单、标明是用户改的、
+ * 并显式禁止复原被移除的项（否则模型易「好心」加回来）。
  */
 export function renderUserTodoContent(
   todos: TodoItem[],
@@ -198,10 +186,7 @@ export function renderUserTodoContent(
 
 /**
  * 两份清单是否「实质相同」（按 id 逐项比用户可改字段 + 顺序）。
- *
- * 用途：判断用户编辑期间清单权威有没有被换过 —— `draft.base`（用户开始编辑那一刻的
- * 清单）与当前生效清单不一致 = AI 又写了一版，编辑器据此提示「AI 已更新」，
- * 并把两个出口摆明：放弃编辑并同步 / 覆盖更新。
+ * 用途：编辑期间判断清单是否被 AI 换过，据此提示「AI 已更新」。
  */
 export function sameTodoList(a: TodoItem[], b: TodoItem[]): boolean {
   if (!Array.isArray(a) || !Array.isArray(b)) return false
@@ -245,7 +230,7 @@ export function diffTodos(base: TodoItem[], next: TodoItem[]): TodoChange[] {
     if (b.content !== n.content) {
       changes.push({ type: 'edit', to: n.content })
     }
-    // 备注也是用户可编辑字段：只改备注同样是一次修改（否则会被误判成「清单没有变化」）
+    // 只改备注也算一次修改（否则会被误判成「清单无变化」）
     if ((b.note || '') !== (n.note || '')) {
       changes.push({ type: 'note', content: n.content, to: n.note || '' })
     }
@@ -279,11 +264,8 @@ export interface CurrentTodos {
 }
 
 /**
- * 「唯一的那份清单」—— 从消息列表尾部倒序找第一条带清单快照的消息。
- *
- * 刻意不区分 role：模型写的（tool 消息）和用户改的（feedback 消息）是同一种权威载体，
- * 谁最新谁生效 —— 这是「用户层面任务只有一份」的实现方式：消息里可以有 N 份快照，
- * 界面永远只呈现最后一份。
+ * 「唯一的那份清单」—— 从消息尾部倒序找第一条带清单快照的消息。
+ * 刻意不分 role：模型写的与用户改的是同一种权威载体，谁最新谁生效（消息里可有 N 份快照，界面只呈现最后一份）。
  */
 export function pickCurrentTodos(messages: Message[]): CurrentTodos | null {
   if (!Array.isArray(messages)) return null
@@ -297,10 +279,8 @@ export function pickCurrentTodos(messages: Message[]): CurrentTodos | null {
 }
 
 /**
- * 清单快照之后是否又出现了用户消息（= 用户已经开了新的一轮对话）。
- *
- * 只认 `role === 'user'`：用户对清单的编辑落的是 `feedback` 消息 ——
- * 那是「在改这份清单」，不是「开始新一轮」。
+ * 清单快照之后是否又出现用户消息（= 已开新一轮）。
+ * 只认 `role === 'user'`：用户编辑清单落的是 `feedback` 消息，不算新一轮。
  */
 export function hasUserMessageAfterTodos(messages: Message[]): boolean {
   if (!Array.isArray(messages)) return false
@@ -313,13 +293,8 @@ export function hasUserMessageAfterTodos(messages: Message[]): boolean {
 }
 
 /**
- * 标题栏「任务清单」入口是否该出现。
- *
- * 两种情况不显示（纯界面降噪，不动数据 —— 清单本身仍完整地躺在消息里）：
- * 1. 从来没有清单，或清单被清空（0 项）—— 没东西可看；
- * 2. 全部完成 + 用户已经开了新一轮 —— 这份清单已经交付，属于历史。
- *
- * 其余一律显示：还有未完成项，或全都完成但这轮就是它（用户还没说话）。
+ * 标题栏「任务清单」入口是否该出现（纯界面降噪，不动数据）。
+ * 不显示两种：无清单或被清空（0 项）；全部完成且已开新一轮（已交付，属历史）。其余一律显示。
  */
 export function shouldShowTodoEntry(messages: Message[]): boolean {
   const cur = pickCurrentTodos(messages)

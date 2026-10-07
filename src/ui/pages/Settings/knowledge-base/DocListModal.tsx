@@ -1,8 +1,6 @@
 /**
- * 文档列表弹窗
- *
- * 自持文档列表 / 搜索 / 分页 / 检索测试的全部 state，并托管三个子弹窗
- * （预览 / 新建 / 编辑）。知识库维度的刷新通过 onChanged 回调父级。
+ * 文档列表弹窗：自持文档列表 / 搜索 / 分页 / 检索测试的全部 state，并托管三个子弹窗
+ *（预览 / 新建 / 编辑）；知识库维度的刷新通过 `onChanged` 回调父级。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -69,7 +67,7 @@ function DocListModal({
   } | null>(null)
   const [showNewDoc, setShowNewDoc] = useState(false)
 
-  /** 刷新文档列表（当前打开的知识库） */
+  /** 刷新当前知识库的文档列表 */
   const refreshDocList = useCallback(async () => {
     if (!kbId) return
     setLoading(true)
@@ -140,7 +138,6 @@ function DocListModal({
     }, 300)
   }, [docSearchQuery, kbId, docSearchMode])
 
-  /** 删除文档 */
   const handleRemoveDoc = async (docId: string, docName: string) => {
     const confirmed = await MessageBox.propt(
       t('删除文档'),
@@ -158,7 +155,6 @@ function DocListModal({
     }
   }
 
-  /** 清空知识库所有文档 */
   const handleClearAllDocs = async () => {
     if (!kbId || docs.length === 0) return
     const confirmed = await MessageBox.propt(
@@ -194,7 +190,6 @@ function DocListModal({
     await onChanged?.()
   }
 
-  /** 导出知识库为 ZIP */
   const handleExportKb = async () => {
     if (!kbId || docs.length === 0) return
     await exportKnowledgeBaseZip(kbId, kbName)
@@ -209,7 +204,6 @@ function DocListModal({
   const handleUpload = () => pickUploadFiles(kbId, afterImport)
   const handleUploadFolder = () => pickUploadFolder(kbId, afterImport)
 
-  /** 检索测试 */
   const handleSearch = async () => {
     const targetKbId = kbId || s.ragDefaultKnowledgeBaseId
     if (!targetKbId) {
@@ -373,7 +367,7 @@ function DocListModal({
                   </div>
                 )}
 
-                {/* scroll-view: 只有文档列表滚动，搜索栏保持固定 */}
+                {/* 搜索栏在 scroll-view 外面，始终可见；这里只有列表滚动 */}
                 <div className="kb-doclist-scroll">
                   {docs.length === 0 ? (
                     <div className="kb-empty">{t('暂无文档')}</div>
@@ -420,14 +414,6 @@ function DocListModal({
                                     </div>
                                     <div className="doc-item-bottom-row">
                                       <div className="doc-item-left">
-                                        {/* <span
-                                          className={`doc-item-status status-${doc.status}`}>
-                                          {doc.status === 'ready'
-                                            ? t('就绪')
-                                            : doc.status === 'processing'
-                                              ? t('处理中')
-                                              : t('错误')}
-                                        </span> */}
                                         <span className="doc-item-meta">
                                           {doc.chunk_count} {t('个片段')}
                                         </span>
@@ -472,7 +458,6 @@ function DocListModal({
                               </div>
                             )}
 
-                            {/* 重复的搜索结果提示已在上方，这里删除 */}
                           </>
                         )
                       })()}
@@ -512,7 +497,6 @@ function DocListModal({
         </div>
       </Modal>
 
-      {/* 文档预览弹窗 */}
       <PreviewDocModal
         visible={!!previewTarget}
         kbId={kbId}
@@ -521,7 +505,6 @@ function DocListModal({
         onClose={() => setPreviewTarget(null)}
       />
 
-      {/* 新建文档弹窗 */}
       <NewDocModal
         visible={showNewDoc}
         kbId={kbId}
@@ -532,7 +515,6 @@ function DocListModal({
         }}
       />
 
-      {/* 文档编辑弹窗 */}
       <EditDocModal
         visible={!!editTarget}
         kbId={kbId}

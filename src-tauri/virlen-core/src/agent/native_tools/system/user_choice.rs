@@ -1,11 +1,8 @@
 //! `user_choice` 工具（原生）— 让 AI 向用户提供选择（单选 / 多选）。
 //!
-//! 本工具没有自己的执行逻辑：它就是一个「用户交互请求」。原生路径返回
-//! [`NativeToolOutcome::Interaction`]，由 `tool_executor::handle_user_interaction` 经
-//! `agent:user-interaction-request` 交给 UI —— 与前端 `UserInteractionRequired` 走同一条通道（前端按
-//! `type === 'user_choice'` 分派到同一个弹窗处理器），因此两侧行为天然一致。
-//!
-//! ⚠️ 交互类型与载荷字段必须与 TS 侧 `src/infrastructure/tools/system/user-choice.ts` 一致（铁律 1）。
+//! 没有自身执行逻辑：只返回 [`NativeToolOutcome::Interaction`]，经 `agent:user-interaction-request`
+//! 交给 UI（与前端 `UserInteractionRequired` 同一通道，故两侧行为天然一致）。
+//! ⚠️ 交互类型与载荷字段必须与 TS `system/user-choice.ts` 一致（铁律 1）。
 
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
 use serde_json::{Map, Value};
@@ -14,9 +11,8 @@ pub(crate) async fn user_choice_tool(
     _ctx: &NativeToolCtx<'_>,
     args: &Value,
 ) -> Result<NativeToolOutcome, String> {
-    // 与 TS `{ question: args.question, options: args.options, multi: args.multi ?? false }` 等价：
-    // 缺失 / `null` 的字段**不下发**（JS 里 `undefined` 会被 JSON 序列化直接丢弃），
-    // `multi` 缺省为 `false`（但显式传入的值原样透传 —— 不替模型做类型纠正）。
+    // 等价 TS `{ question, options, multi: args.multi ?? false }`：缺失 / null 字段不下发
+    // （JS 的 undefined 序列化即丢弃），multi 缺省 false 但显式值原样透传。
     let mut data = Map::new();
     if let Some(q) = args.get("question") {
         if !q.is_null() {

@@ -1,19 +1,14 @@
-//! 会话持久化 — SQLite 直落（不经过 JS/IndexedDB）
+//! 会话持久化 — SQLite 直落（不经过 JS/IndexedDB），即使前端 WebView 卡住 / 崩溃也能落库。
 //!
-//! 目标：即使前端 WebView JS 卡住 / 崩溃，会话与消息也能由 Rust 侧直接落库。
+//! 模块划分（原单文件 4200+ 行）：`types`（IPC DTO）、`repo`（`SessionRepo` + `NoopSessionRepo`）、
+//! `schema`（DDL + 初始化 + 迁移）、`row`（JSON 辅助 + 行映射）、`message_query`、`usage`（用量账本）、
+//! `settings`（`app_settings` + `SettingsRepo`）、`memory`（`memories` / `memory_runs` + `MemoryRepo`）、
+//! `sqlite`（rusqlite：WAL + Mutex 单写连接 + `spawn_blocking`）、`maintenance`、`open`。
 //!
-//! 模块划分（原单文件 `session_db.rs` 4200+ 行）：`types`（IPC DTO）、`repo`（`SessionRepo` trait +
-//! `NoopSessionRepo`）、`schema`（DDL + schema 初始化 + 历史数据迁移）、`row`（JSON 辅助 + 行映射）、
-//! `message_query`（消息查询 / 检索辅助 / 蒸馏素材）、`usage`（用量账本）、`settings`（`app_settings`
-//! 表 + `SettingsRepo`）、`memory`（`memories` / `memory_runs` + `MemoryRepo`）、`sqlite`（rusqlite
-//! 实现：WAL + Mutex 单写连接 + `spawn_blocking`）、`maintenance`（体积统计 / WAL 截断 / VACUUM）、
-//! `open`（`open_session_db`，零 `tauri::`）。
+//! ⚠️ 全部 `cmd_*` 与 `init_session_db` / `manage_noop_settings` 需要 `tauri::AppHandle`，住在
+//! `virlen-app` 的 `src/commands/session_db.rs`。
 //!
-//! ⚠️ 全部 `#[tauri::command]`（`cmd_*`）与 `init_session_db` / `manage_noop_settings` 不在本 crate：
-//! 它们需要 `tauri::AppHandle`，住在 `virlen-app` 的 `src/commands/session_db.rs`。
-//!
-//! 表结构：`sessions`（会话元数据）+ `messages`（消息，rowid 排序）拆表；复杂字段（params / tags /
-//! content / tool_calls / ui_data 等）以 JSON 列存储。
+//! `sessions` + `messages`（rowid 排序）拆表；复杂字段（params / tags / content / tool_calls / ui_data 等）以 JSON 列存储。
 
 pub(crate) mod open;
 pub(crate) mod maintenance;

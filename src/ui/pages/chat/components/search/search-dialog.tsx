@@ -1,22 +1,14 @@
 /**
- * search-dialog — 消息检索弹窗（会话内 / 跨会话）
+ * search-dialog — 消息检索弹窗（会话内 / 跨会话），Ctrl / Cmd + P 唤起（见 chat-view 的全局快捷键）。
  *
- * 由 Ctrl / Cmd + P 唤起（见 chat-view.tsx 的全局快捷键）。两种检索范围：
- *   - scope='session'：已选中会话 → 只搜当前会话，条目为单行「角色图标 + 命中片段 + 时间」；
- *   - scope='global' ：未选中会话 → 搜所有会话，条目 meta 额外展示「工作目录 + Agent 名称 + 会话标题」。
+ * scope='session'（已选中会话）= 只搜当前会话，条目为「角色图标 + 命中片段 + 时间」；
+ * scope='global'（未选中会话）= 搜所有会话，条目 meta 额外展示「工作目录 + Agent 名称 + 会话标题」。
  *
- * 筛选分类：全部（user + assistant）/ 我的消息 / AI 回复 / 工具调用（role='tool' 的工具结果）。
- * 「工具调用」命中 tool 消息本身，而 tool 消息在消息列表里不渲染气泡（结果挂在发起调用的
- * assistant 气泡下方），因此点击后的定位由消息列表把 tool 消息解析到其宿主 assistant 消息（见 message-list）。
+ * 筛选分类：全部 / 我的消息 / AI 回复 / 工具调用。「工具调用」命中 tool 消息本身，而 tool 消息在列表里
+ * 不渲染气泡（结果挂在发起调用的 assistant 气泡下），故点击后的定位由消息列表解析到宿主 assistant。
  *
- * 数据来自 SQLite（`sessionRepo.searchMessages` → Rust `cmd_search_messages`），
- * 分页加载：列表滚到接近底部时自动取下一页（见 useMessageSearch）。
- *
- * 默认（空关键词）不做关键词过滤，直接展示最新对话（见 useMessageSearch）；
- * 输入关键词后进入检索模式。
- *
- * 属于工具型浮层（命令面板风格）：键盘优先、高信息密度、低装饰；
- * ↑↓ 选择、Enter 跳转、Esc 关闭。
+ * 数据来自 SQLite（`sessionRepo.searchMessages` → Rust `cmd_search_messages`），滚到接近底部自动取下一页；
+ * 空关键词不做过滤，直接展示最新对话。工具型浮层（命令面板风格）：键盘优先、高信息密度、低装饰。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -213,13 +205,6 @@ function SearchDialog({
               <CloseSvg />
             </button>
           )}
-          {/* <button
-            className="search-input-close"
-            onClick={onClose}
-            title={t('关闭')}
-            tabIndex={-1}>
-            <CloseSvg />
-          </button> */}
         </div>
 
         {/* 筛选（下划线标签）+ 计数 */}

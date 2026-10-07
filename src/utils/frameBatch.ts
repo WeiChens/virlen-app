@@ -1,17 +1,11 @@
 /**
- * frameBatch — 把「一帧内的高频调用」合并成一次（requestAnimationFrame 合批）
+ * frameBatch — 把「一帧内的高频调用」合并成一次（requestAnimationFrame 合批）。
  *
- * 场景：流式回复期间每个 chunk 都通知 UI 更新。若每次都 setState，React 的
- * 渲染次数就等于 chunk 次数（每秒可达上百次）；合并到每帧一次后，渲染上限被
- * 钉在帧率（~60fps），视觉上无差别，但 CPU 曲线是数量级的差别。
+ * 场景：流式回复期间每个 chunk 都通知 UI 更新，若每次都 setState，React 渲染次数 = chunk 次数（每秒上百次）；
+ * 合并到每帧一次后上限被钉在帧率（~60fps），视觉无差别但 CPU 曲线相差数量级。
  *
- * 语义：
- *  - schedule(...)：记录最新一次参数；若本帧还没排队，就排一个 rAF
- *  - 一帧内多次 schedule → 只执行一次，且用「最后一次」的参数
- *  - flushNow()：立刻执行待处理调用（同步路径需要马上生效时用）
- *  - cancel()：丢弃待处理调用（不执行）
- *
- * 非浏览器环境（无 requestAnimationFrame，如 SSR/部分测试环境）退化为 16ms 定时器。
+ * 语义：schedule(...) 记录最新参数、本帧未排队则排一个 rAF；一帧内多次 schedule 只执行一次且用最后一次参数；
+ * flushNow() 立刻执行待处理调用；cancel() 丢弃待处理调用。非浏览器环境（无 rAF）退化为 16ms 定时器。
  */
 
 /** 无 rAF 时的兜底帧间隔 */

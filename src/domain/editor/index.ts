@@ -1,13 +1,8 @@
 /**
- * editor — 打开编辑器领域层
+ * editor — 打开编辑器领域层：模板占位符替换 + 跨平台命令启动
+ * （选哪个编辑器由 services/editor-service.ts 负责）。
  *
- * 提供命令模板占位符替换与跨平台命令启动能力，不关心「选哪个编辑器」——
- * 配置解析与编排由 services/editor-service.ts 负责。
- *
- * 模板示例：
- *   code -g "${filePath}:${line}"          // VS Code 定位到文件行
- *   code --reuse-window "${filePath}"      // VS Code 复用窗口打开
- *   webstorm64.exe --line ${line} "${filePath}"
+ * 模板示例：`code -g "${filePath}:${line}"`。
  */
 import { Command } from '@tauri-apps/plugin-shell'
 import type { EditorCommandParams, SpawnResult } from './types'
@@ -23,15 +18,9 @@ export { EDITOR_PRESETS } from './config'
 
 
 /**
- * 将命令模板中的 ${xxx} 占位符替换为实际参数。
- * 未提供的 line / column 默认补 0（便于定位到文件首行）。
- *
- * @example
- * buildEditorCommand('code -g "${filePath}:${line}"', {
- *   filePath: 'C:/a/b.ts',
- *   line: 42,
- * })
- * // → 'code -g "C:/a/b.ts:42"'
+ * 将模板中的 ${xxx} 占位符替换为实际参数；line / column 缺省补 0（定位到首行）。
+ * @example buildEditorCommand('code -g "${filePath}:${line}"', { filePath: 'C:/a/b.ts', line: 42 })
+ *          // → 'code -g "C:/a/b.ts:42"'
  */
 export function buildEditorCommand(
   template: string,
@@ -49,13 +38,7 @@ export function buildEditorCommand(
   })
 }
 
-/**
- * 使用 shell 启动打开编辑器命令（fire-and-forget，不等待进程退出）。
- * 适用于 GUI 编辑器场景（进程常驻，不能阻塞等待）。
- *
- * - Windows：PowerShell
- * - macOS/Linux：bash -c
- */
+/** 用 shell 启动编辑器命令（fire-and-forget，不等待退出）：Windows → PowerShell，macOS/Linux → bash -c。 */
 export async function spawnEditorCommand(
   template: string,
   params: EditorCommandParams,

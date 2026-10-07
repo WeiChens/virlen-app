@@ -1,21 +1,17 @@
 /**
- * ContextMenu — 通用右键菜单（全应用唯一一份实现）
+ * ContextMenu — 通用右键菜单（全应用唯一一份实现）。
  *
- * 为什么要有它：本项目是自绘窗口，`WindowLayout` 在生产环境把 contextmenu
- * 全局 preventDefault（见 layout/WindowLayout/index.tsx），浏览器原生右键菜单不出现；
- * 而各处（消息正文 / 图片 / 文件 chip / 深度思考 / 终端 …）又都需要右键操作。
+ * 本项目的自绘窗口在生产环境全局 preventDefault 了 contextmenu（见 layout/WindowLayout），
+ * 原生右键菜单不出现；而消息正文 / 图片 / 文件 chip / 深度思考 / 终端等又都需要右键操作，
  * 于是把「位置钳制 + 点外部关闭 + Esc 关闭 + 层级」这些容易做错的细节收在一处。
  *
- * 层级约定（与项目其他浮层对齐）：
- *   全屏浮层 500 < 本菜单 600 < Modal 800 < Toast 3012
+ * 层级：全屏浮层 500 < 本菜单 600 < Modal 800 < Toast 3012。
  *
- * 两个必须挂捕获阶段的监听（踩过的坑）：
- *   - mousedown 捕获：抢在菜单项自身的 click 之前判定「是否点在外面」，不会误伤菜单项，
- *     也避免被兄弟节点的 stopPropagation 吃掉；
- *   - keydown 捕获 + stopPropagation：Esc 只关菜单，不再连带触发外层的 Esc（终端全屏、
- *     图片预览等都在 document 上听了 Esc，两处同时消费会「一按两动作」）。
+ * 两个必须挂捕获阶段的监听（踩过的坑）：mousedown 捕获抢在菜单项 click 之前判定「点在外面」，
+ * 也不会被兄弟节点的 stopPropagation 吃掉；keydown 捕获 + stopPropagation 让 Esc 只关菜单，
+ * 不连带触发外层（终端全屏 / 图片预览也在 document 上听 Esc，同时消费会「一按两动作」）。
  *
- * 展开方向由 `placement` 决定（默认右下）；需要「贴在按钮左上方」时传 `placement="top-left"`。
+ * 展开方向由 `placement` 决定（默认右下）；要「贴在按钮左上方」时传 `placement="top-left"`。
  */
 import {
   ReactNode,
@@ -40,10 +36,7 @@ export interface ContextMenuItem {
   disabled?: boolean
   /** 危险动作（删除等）→ 危险色 */
   danger?: boolean
-  /**
-   * 点击后**不关闭**菜单。
-   * 用于「选择类」动作（如终端里的「全选」→ 紧接着还要点「复制」）。
-   */
+  /** 点击后不关闭菜单（选择类动作，如终端「全选」→ 紧接着还要点「复制」） */
   keepOpen?: boolean
   /** 在本项之前画一条分隔线（用于把「危险动作」与常规动作分开） */
   divider?: boolean
@@ -56,10 +49,8 @@ export interface ContextMenuPosition {
 }
 
 /**
- * 菜单相对锚点的展开方向：
- * - `bottom-right`（默认）：锚点就是鼠标位置，菜单向右下展开 —— 右键菜单的通用手感；
- * - `top-left`：**锚点 = 菜单的右下角**，菜单向左上展开 —— 用于「贴在按钮左上方」
- *   这类贴边场景（按钮本身就在视口边上，向右下展开会被钳回来、盖住按钮）。
+ * 菜单展开方向：bottom-right（默认）= 锚点是鼠标位置、向右下展开；top-left = 锚点就是菜单的
+ * 右下角、向左上展开（用于「贴在按钮左上方」这类贴边场景，右下展开会被钳回来盖住按钮）。
  */
 export type ContextMenuPlacement = 'bottom-right' | 'top-left'
 
@@ -75,9 +66,8 @@ interface Props {
 }
 
 /**
- * 右键菜单本体。**只在需要时渲染**（由 position 状态控制），
- * 经 createPortal 挂到 document.body —— 消息列表祖先带 transform/overflow，
- * fixed 定位会被牵连（与终端全屏浮层、代码块全屏同一理由）。
+ * 菜单本体（只在需要时渲染）。经 createPortal 挂 document.body —— 消息列表祖先带
+ * transform/overflow，fixed 定位会被牵连（同终端 / 代码块全屏浮层）。
  */
 export default function ContextMenu({
   position,
@@ -107,8 +97,7 @@ export default function ContextMenu({
     }
   }, [onClose])
 
-  // 定位：先按展开方向放（`top-left` 时锚点是菜单右下角），
-  // 再按**实际尺寸**钳进视口（贴右/下边时往回缩）
+  // 定位：先按展开方向放（top-left 时锚点是菜单右下角），再按实际尺寸钳进视口
   useLayoutEffect(() => {
     const el = menuRef.current
     if (!el) return
@@ -153,11 +142,8 @@ export default function ContextMenu({
 }
 
 /**
- * 右键菜单状态管理。
- *
- * 只记「在哪儿点的」+ 一个由调用方定义的 `target`（点什么），**菜单项在渲染时现算**：
- * 例如终端菜单的「复制」要跟随选区变化、消息菜单要区分正文 / 图片 / 文件，
- * 若在打开那一刻就把 items 定死，拿到的是过期状态。
+ * 右键菜单状态管理：只记「在哪儿点的」+ 调用方定义的 `target`（点什么），**菜单项渲染时现算**
+ * —— 终端菜单的「复制」要跟随选区、消息菜单要区分正文 / 图片 / 文件，打开那一刻定死 items 会拿到过期状态。
  *
  * 用法：
  * ```tsx
@@ -166,20 +152,14 @@ export default function ContextMenu({
  *   <>
  *     <img onContextMenu={(e) => menu.openAt(e, { kind: 'image', src })} />
  *     {menu.state && (
- *       <ContextMenu
- *         position={menu.state.position}
- *         items={buildItems(menu.state.target)}
- *         onClose={menu.close}
- *       />
+ *       <ContextMenu position={menu.state.position} items={buildItems(menu.state.target)} onClose={menu.close} />
  *     )}
  *   </>
  * )
  * ```
- * `openAt` 会顺手 preventDefault + stopPropagation：拦下浏览器默认菜单，
- * 并阻止外层容器的右键处理（例如图片缩略图在消息气泡内部，两者菜单不该同时开）。
- *
- * 需要**指定锚点**而不是鼠标位置时（如「贴在按钮左上方」）用 `openAtPoint` +
- * `ContextMenu` 的 `placement="top-left"`：锚点会被当成菜单的右下角。
+ * `openAt` 顺手 preventDefault + stopPropagation：拦下浏览器默认菜单，并阻止外层容器的右键处理
+ *（图片缩略图嵌在气泡里，两者菜单不该同时开）。需指定锚点而非鼠标位置时用 `openAtPoint` +
+ * `placement="top-left"`（锚点会当成菜单右下角）。
  */
 export function useContextMenu<T = void>() {
   const [state, setState] = useState<{

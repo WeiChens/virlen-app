@@ -1,31 +1,16 @@
 /**
  * 电脑端「手机控制」服务 —— 设置页 QR 入口背后的常驻服务。
  *
- * 职责：启用后**常驻信令房间**（角色 host），等手机扫码加入 → 建 RTC 链路 →
- * 挂上 `startPhoneBridge`（复用 M2 的 host.* 接口层 / ACL / 审计 / store 推送）。
+ * 启用后**常驻信令房间**（角色 host），等手机扫码加入 → 建 RTC 链路 → 挂上 startPhoneBridge
+ *（复用 M2 的 host.* 接口层 / ACL / 审计 / store 推送）。角色（§8）：**电脑发起 offer**。
  *
- * 角色（§8 拍板）：**电脑发起 offer**；手机加入后由电脑发 offer。
+ * 状态机（设置页那颗胶囊的真相）：disabled ─enable→ waiting ─有人接入→ verifying ─hello ok→ connected；
+ * 对端离开回 waiting，hello 被拒 → rejected（并踢链路）。三者分开说：「没人在连 / 有人在连但未证明身份 /
+ * 刚拒了一台」。error（链路已关闭）**不是终点**：过 LINK_CLOSED_RECOVER_MS 仍没恢复就原地重开。
  *
- * 状态机（设置页那颗胶囊的全部真相）：
- *
- * ```
- * disabled ──enable──▶ waiting ──有人接入──▶ verifying ──hello ok──▶ connected
- *                          ▲                    │
- *                          └──── 对端离开 ───────┤
- *                                               └──hello 被拒──▶ rejected（并踢掉那条链路）
- * ```
- *
- * 关键是 `waiting` / `verifying` / `rejected` **三件事分开说**：
- * 「没人在连」、「有人在连但还没证明它是谁」、「刚拒了一台」——原实现把它们挤进
- * 「等待手机连接…（链路已建立，等待手机握手…）」，用户读到的就成了「我在等它连上」。
- *
- * `error`（链路已关闭）**不是终点**：`closed` 是终态（PC 已 failed / closed），停在原地只意味着
- * 手机再也连不回来 —— 过 `LINK_CLOSED_RECOVER_MS` 仍未恢复就原地重开，回到「等待手机连接…」。
- *
- * 还有一件事在状态机之外：**本机到底还在不在信令房间里**。房间里那份「在线」完全取决于 SSE
- * 事件流活着，而它可能静默死掉（代理超时 / 服务重启 / 换链那一刻网络未就绪）—— 本机收不到任何
- * 事件，于是停在「等待手机连接…」这句假话上，而手机上看到的已是「电脑不在线」。
- * 故服务按 `ROOM_PRESENCE_CHECK_MS` 拿手机端那份事实反查自己（`verifyRoomPresence`）。
+ * 状态机之外还有一件事：**本机到底还在不在信令房间里**。房间「在线」完全取决于 SSE 事件流活着，而它可能
+ * 静默死掉 —— 本机收不到任何事件、停在「等待手机连接…」的假话上，手机侧却显示「电脑不在线」。故按
+ * ROOM_PRESENCE_CHECK_MS 拿手机端的事实反查自己（verifyRoomPresence）。
  *
  * ⚠️ 真机蜂窝网联调需人工完成（无法在此环境跑真实 WebRTC）。
  */
@@ -90,46 +75,29 @@ export interface PhoneControlOptions {
   /** 信令基址，如 `https://virlen.cn/api/rtc/`。 */
   signalUrl: string
   deviceName: string
-  /**
-   * 电脑设备 key（`dk-…`）。**必须持久化**（见 `device-identity.ts`）——
-   * 房间号由它派生，手机列表也记它；变了就等于换了一台电脑。
-   */
+  /** 电脑设备 key（dk-…）。**必须持久化**（见 device-identity.ts）：房间号由它派生，变了就等于换了一台电脑。 */
   deviceKey: string
   appVersion?: string
   /**
-   * ICE 服务器列表 —— **由调用方解析后传入**（M7，§31）。
-   *
-   * 服务本身不再内置任何默认值，更不会内置 TURN 凭证：默认值来自信令服务下发
-   * （`GET <信令基址>/ice`），解析与降级都在共享包的 `resolveIceServers()` 里（两端同一份）。
-   * 不传 = 只用本机候选（局域网可用，跨网多半连不上）—— 不再是「偷偷用某个内置服务器」。
+   * ICE 服务器列表 —— **由调用方解析后传入**（M7，§31）。服务不自内置默认值 / TURN 凭证：默认值来自信令
+   * 服务下发（GET <信令基址>/ice），解析与降级在共享包 resolveIceServers()。不传 = 只用本机候选
+   *（局域网可用，跨网多半连不上）。
    */
   iceServers?: IceServerInit[]
   /** 本次 ICE 的来源（`custom` / `remote` / `cache` / `stale-cache` / `none`），只进埋点。 */
   iceSource?: string
-  /**
-   * 首次绑定确认（桌面弹窗）；返回 false 则拒绝。生产必须传。
-   *
-   * `mobileName` = 请求方（手机）的名字（已归一 + 兜底，可直接显示）。
-   */
+  /** 首次绑定确认（桌面弹窗）；返回 false 则拒绝。生产必须传。mobileName = 请求方（手机）的名字（已归一，可直接显示）。 */
   confirmPair?: (ctx: { token: string; mobileName: string }) => Promise<boolean>
-  /**
-   * 审计日志实例（M4）：由调用方（设置页 store）持有，使设置页能读到与 bridge **同一份**记录。
-   * 不传则内部新建（仅内存）。
-   */
+  /** 审计日志实例（M4）：由设置页 store 持有，使设置页能读到与 bridge **同一份**记录；不传则内部新建（仅内存）。 */
   audit?: AuditLog
   /**
    * 复用调用方持有的**待应答交互注册表**（设置页 store 传入）。
    *
-   * 为什么必须能注入（2026-10 真机缺陷）：注册表原先归**服务实例**所有，而服务实例会在
-   * 「改 ICE」时被换掉（`RTCPeerConnection` 的 `iceServers` 只能构造时给，见
-   * `phoneControlStore.rebuildService`）—— 换一次就把排队中的交互连表一起丢掉：
-   * 手机上那张卡片变成点不动的僵尸（点一下得 `not-found`），而电脑侧弹窗与引擎仍在等。
-   * 把表交给 store 持有（与配对表、审计同一套做法），启停 / 改 ICE 换的只是「谁在用这张表」。
-   *
-   * ⚠️ 注入时**推送出口由调用方给**（表的 `emit` 必须指向「当前那个服务实例」，
-   * 见 `emitToLink`）；本类只负责接线，且生命周期 **= 启用**（`enable()` 挂 / `disable()` 解，
-   * 见 `attachInteractions` / `detachInteractions`）—— 停用时不再登记、也不再有
-   * `phone.interaction.*` 埋点，而表里的条目**不动**（远端下线 ≠ 交互结束）。
+   * 为什么要能注入：注册表原先归**服务实例**所有，而服务实例会在「改 ICE」时被换掉（iceServers 只能构造时给）
+   * —— 换一次就把排队中的交互连表一起丢掉（手机卡片变僵尸、电脑弹窗与引擎仍在等）。把表交给 store 持有，
+   * 启停 / 改 ICE 换的只是「谁在用这张表」。
+   * ⚠️ 注入时**推送出口由调用方给**（表的 emit 指向「当前那个服务实例」，见 emitToLink）；本类只接线，
+   * 生命周期 **= 启用**（enable 挂 / disable 解）—— 停用时不再登记、也不再埋点，表里的条目**不动**。
    */
   interactions?: InteractionRegistry
   /** 审计落盘（旁路）。Tauri 下接 Rust JSONL 追加。 */
@@ -139,10 +107,8 @@ export interface PhoneControlOptions {
   /** 状态变化回调（UI 订阅）。 */
   onStatusChange?: (status: PhoneControlStatus, detail?: string) => void
   /**
-   * 通讯类型变化回调（设置页「已连接」旁边那枚 `P2P 直连 / TURN 中继` 胶囊）。
-   *
-   * 独立于 `onStatusChange`：两者正交 —— 状态是「连没连上」，类型是「怎么连上的」。
-   * 链路断开 / 停用时回调 `unknown`（UI 据此把胶囊收起来，而不是留着上一次的结论）。
+   * 通讯类型变化回调（设置页「已连接」旁那枚 P2P 直连 / TURN 中继 胶囊）。
+   * 独立于 onStatusChange：两者正交（状态 = 连没连上，类型 = 怎么连上的）。断开 / 停用时回调 unknown。
    */
   onLinkKindChange?: (kind: LinkKind) => void
   /** 测试注入：按房间建传输（默认建 host 角色的 RtcTransport）。 */

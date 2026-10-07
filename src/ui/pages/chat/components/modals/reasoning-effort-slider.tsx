@@ -1,10 +1,9 @@
 /**
- * reasoning-effort-slider — 推理强度（会话级）
+ * reasoning-effort-slider — 推理强度（会话级）。
  *
- * 收起态只显示当前档位（如 medium / 默认），点击后在上方弹出横向拖动条。
- * 档位来自服务商配置的 reasoningEffortList（用户在设置里多选的并集子集），
- * 按并集顺序排列保证单调；最左一档是「默认（不设置）」，此时回退到服务商默认值。
- * 有会话 → 写入 session.params.reasoningEffort；无会话 → 暂存 chatState，创建会话时带入。
+ * 收起态只显示当前档位（如 medium / 默认），点击后在上方弹出横向拖动条。档位来自服务商配置的
+ * reasoningEffortList，按并集顺序排列保证单调；第 0 档是「默认（不设置）」，回退到服务商默认值。
+ * 有会话 → 写 session.params.reasoningEffort；无会话 → 暂存 chatState，创建会话时带入。
  */
 import {
   useState,
@@ -23,11 +22,8 @@ import { t, tpl } from '@/ui/i18n'
 import Tooltip from '@/ui/components/shared/Tooltip'
 
 /**
- * 圆球液面图标
- *
- * 液面高度 = 档位进度：默认档是空球，档位越高越满（最高档接近满球）。
- * 液面用两层反向、不同速度的波纹错位叠加，形成「荡漾」感；
- * 外层组用行内 transform 控制液面高度（CSS 过渡，松手吸附时会滑过去）。
+ * 圆球液面图标：液面高度 = 档位进度（默认档空球、最高档近满球）；两层反向不同速度的波纹错位叠加
+ * 出「荡漾」感，外层组的行内 transform 控制液面高度（CSS 过渡，松手吸附时会滑过去）。
  */
 function EffortBall({ level, dragging }: { level: number; dragging: boolean }) {
   const filled = Math.min(1, Math.max(0, level))
@@ -85,8 +81,8 @@ function ReasoningEffortSlider() {
     (p) => p.id === providerId,
   )
 
-  // 候选项：服务商勾选出的集合；
-  // 未配置过时，仅 OpenAI 兼容类型用默认基础档位兜底（其余类型不支持 reasoning_effort，不显示该控件）
+  // 候选项 = 服务商勾选出的集合；未配置过时仅 openai 类型用默认基础档位兜底
+  //（其余类型不支持 reasoning_effort，不显示该控件）
   const configured =
     provider?.reasoningEffortList && provider.reasoningEffortList.length > 0
       ? provider.reasoningEffortList
@@ -137,9 +133,8 @@ function ReasoningEffortSlider() {
   }
 
   /**
-   * 松手：把连续位置吸附到最近档位后落库。
-   * 只有这里才写 store —— 拖动过程中每动一下都写会话会触发 persist()
-   * 与 updatedAt 变化（会话列表重排），那正是拖动卡顿的主因。
+   * 松手：把连续位置吸附到最近档位后落库。只有这里写 store —— 拖动中每动一下都写会话会触发
+   * persist() 与 updatedAt 变化（会话列表重排），那正是拖动卡顿的主因。
    */
   function commitSnap() {
     if (!dragging) return
@@ -189,8 +184,8 @@ function ReasoningEffortSlider() {
     return () => document.removeEventListener('keydown', handleEsc)
   }, [open])
 
-  // 兜底：鼠标在窗口外松开、或拖动被系统打断（弹窗 / 触摸手势）时，同样吸附落库。
-  // 用 useLayoutEffect：拖动一开始就把监听挂上，避免「按下即松」时错过 pointerup。
+  // 兜底吸附落库：鼠标在窗口外松开 / 拖动被系统打断时也生效。用 useLayoutEffect，拖动一开始就
+  // 挂监听，避免「按下即松」错过 pointerup。
   useLayoutEffect(() => {
     if (!dragging) return
     const finish = () => commitSnap()
@@ -218,9 +213,7 @@ function ReasoningEffortSlider() {
             }
             const v = steps[index] ?? ''
             handleChange(v)
-            // setOpen(!open)
           }}
-          // title={effortTitle}
           aria-label={effortTitle}
           aria-expanded={open}
           type="button">
@@ -233,8 +226,8 @@ function ReasoningEffortSlider() {
         <div className="slider-popover">
           <div className="popover-row">
             <span className="slider-key">{t('强度')}</span>
-            {/* step="any" → 拖动时值是连续的（不跳档），松手时才在 commitSnap 里吸附到最近档位。
-                React 的 onChange 对 range 就是原生 input 事件：每次移动只更新本地状态，不写 store。 */}
+            {/* step="any" → 拖动时值连续（不跳档），松手才在 commitSnap 吸附；range 的 onChange
+                每次移动只更新本地状态，不写 store */}
             <input
               ref={inputRef}
               className="slider-input"

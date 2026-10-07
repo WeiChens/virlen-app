@@ -1,14 +1,10 @@
 /**
- * 工具定义契约 — 权威源的形状与选取规则（纯逻辑，无任何 I/O）
+ * 工具定义契约 — 权威源的形状与按平台选取规则（纯逻辑，无 I/O）。
  *
- * **权威源只有一份**：`src-tauri/virlen-core/src/agent/tool_defs/definitions.json`（Rust 侧经
- * `include_str!` 内嵌；前端 Tauri 运行时走命令 `cmd_list_tool_definitions`，浏览器 dev / vitest 直读同
- * 一份 JSON）。因为是同一个物理文件，所以不存在「快照与源码漂移」，也不需要 CI 差异检查。
+ * 权威源只有一份：`virlen-core/src/agent/tool_defs/definitions.json`（Rust `include_str!` 内嵌；
+ * 前端 Tauri 走 `cmd_list_tool_definitions`，浏览器 dev / vitest 直读同一文件，故无副本漂移）。
  *
- * 本模块只回答两件事：这份文件的形状是什么、怎么按平台取。
- *
- * ⚠️ 契约里不含 `label`：它是 UI 文案（走 i18n `t()`）；若固定进契约，英文界面会退化成中文
- *（Rust 不做翻译）。
+ * ⚠️ 契约不含 `label`（UI 文案走 i18n）；若固定进契约，英文界面会退化成中文。
  */
 import type { ResolvedToolDefinition } from './types'
 
@@ -41,7 +37,7 @@ export function definitionsForPlatform(
 ): ResolvedToolDefinition[] {
   const variants = file?.variants ?? {}
   const picked = variants[platform] ?? variants.linux ?? []
-  // 防御性剔除 label：万一契约里带了 UI 文案，也不能让它在界面里顶掉 i18n 的结果
+  // 防御性剔除 label：契约即便带了 UI 文案，也不能顶掉 i18n 结果
   return picked.map(({ label, ...rest }) => rest as ResolvedToolDefinition)
 }
 

@@ -37,11 +37,9 @@ pub struct SqliteSessionRepo {
 }
 
 impl SqliteSessionRepo {
-    /// 打开（或创建）数据库并初始化表结构（**不做耗时迁移**）
-    ///
-    /// 快速的 schema 初始化（建表 / 补列 / 建 FTS 表 / 空库建检索索引）同步完成；
-    /// 历史数据的大批量回填与索引重建由 `migrate()` 在后台执行，
-    /// 避免超大库首次启动时卡住。
+    /// 打开（或创建）数据库并初始化表结构（**不做耗时迁移**）：快速 schema 初始化（建表 /
+    /// 补列 / 建 FTS 表 / 空库建索引）同步完成，大批量回填与索引重建交给后台 `migrate()`，
+    /// 避免超大库首次启动卡住。
     pub fn open(db_path: &std::path::Path) -> Result<Self, String> {
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("创建数据目录失败: {}", e))?;
@@ -64,11 +62,9 @@ impl SqliteSessionRepo {
         self.migration_done.load(Ordering::Acquire)
     }
 
-    /// 执行历史数据迁移：回填 `text_plain` 并重建 FTS 索引（幂等、可重入）。
-    ///
-    /// 由 `init_session_db` 在后台任务里调用。耗时的回填按批进行并在批间释放连接锁，
-    /// 不会长时间阻塞其它 DB 操作；「建检索索引 + 重建 FTS + 建触发器 + 落版本号」放在
-    /// 同一把锁内原子完成，避免新写入漏建索引。
+    /// 执行历史数据迁移：回填 `text_plain` 并重建 FTS 索引（幂等、可重入），由 `init_session_db`
+    /// 后台调用。耗时回填按批进行、批间释放连接锁；「建索引 + 重建 FTS + 建触发器 + 落版本号」
+    /// 在同一把锁内原子完成，避免新写入漏建索引。
     pub async fn migrate(&self) -> Result<(), String> {
         if self.migration_done() {
             return Ok(());
@@ -299,11 +295,9 @@ INSERT INTO messages (
         .map_err(|e| format!("DB task join error: {}", e))?
     }
 
-    /// 批量统计：消息条数（`GROUP BY`）+ 上下文占用（每会话**最新一条**带用量的消息）。
-    ///
-    /// 为什么不是「逐会话 `get_messages`」：大库上那会把每个会话的**全部正文**读进内存。
-    /// 占用口径见 [`crate::agent::compress::context_tokens`] —— 这里只负责挑出候选行，
-    /// 判定走同一份实现（口径不出现第二份）。
+    /// 批量统计：消息条数（`GROUP BY`）+ 上下文占用（每会话最新一条带用量的消息）。不逐会话
+    /// `get_messages`（大库会把每个会话的全部正文读进内存）；占用口径交给
+    /// [`crate::agent::compress::context_tokens`]，这里只挑候选行。
     async fn session_stats(&self) -> Result<Vec<SessionStat>, String> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || -> Result<Vec<SessionStat>, String> {
@@ -326,9 +320,8 @@ INSERT INTO messages (
                 }
             }
 
-            // ② 上下文占用：选择谓词 = 「TS `findContextTokens` 会在此行 return」的两个条件
-            //    （`usage` 有值 / `contextTokens > 0`），再按会话取 rowid 最大的那一行。
-            //    ⚠️ 只取候选行、口径交给 Rust 侧同一份实现：SQL 里不重复写「哪个字段优先」。
+            // ② 上下文占用：谓词 = TS `findContextTokens` 会 return 的两个条件（usage 有值 /
+            //    contextTokens > 0），按会话取 rowid 最大行；口径交给 Rust 同一份实现，SQL 不重复。
             let mut ctx: HashMap<String, i64> = HashMap::new();
             {
                 let mut stmt = conn
@@ -419,11 +412,9 @@ INSERT INTO messages (
         let session_id = session_id.to_string();
         tokio::task::spawn_blocking(move || -> Result<Vec<Message>, String> {
             let conn = conn.lock().unwrap();
-            // 只读「最后一个 summary 及其之后」这一段：请求组装时 `provider::blocks::slice_messages`
-            // 本就丢掉 summary 之前的全部消息，因此把已被压缩的旧历史读进内存 / 反序列化是纯浪费
-            //（大历史下正是「继续」等恢复要等好几秒的主因之一）。
-            // 无 summary → `IFNULL(...)=0`，`rowid >= 0` 恒真，等价于取全部。
-            // 旧消息仍留在库里供 `list_messages` / `read_messages` 检索，本查询不删任何行。
+            // 只读「最后一个 summary 及其之后」：请求组装本就丢掉 summary 之前的消息，读进内存是
+            // 纯浪费（大历史下是恢复慢的主因之一）。无 summary → `rowid >= 0` 恒真 = 取全部。
+            // 旧消息仍留库供 `list_messages` / `read_messages` 检索，本查询不删行。
             let mut stmt = conn
                 .prepare(
                     "SELECT * FROM messages WHERE session_id=?1 \
@@ -616,8 +607,8 @@ INSERT INTO messages (
             .map_err(|e| format!("删除消息失败: {}", e))?;
             tx.execute("DELETE FROM sessions WHERE id=?1", params![session_id])
                 .map_err(|e| format!("删除会话失败: {}", e))?;
-            // ⚠️ 刻意不删除 usage_ledger 中该会话的流水：用量是「已发生过的消费」的事实记录，删会话只删对话
-            // 内容。标题在明细里 JOIN 不到时显示为「已删除会话」，总量不会缩水。
+            // ⚠️ 刻意不删 usage_ledger 里该会话的流水：用量是「已发生过的消费」的事实记录，删会话
+            // 只删对话内容。明细里 JOIN 不到标题时显示「已删除会话」，总量不缩水。
             tx.commit().map_err(|e| format!("提交事务失败: {}", e))?;
             Ok(())
         })
@@ -629,9 +620,8 @@ INSERT INTO messages (
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || -> Result<usize, String> {
             let conn = conn.lock().unwrap();
-            // 反连接删除：sessions.id 是 NOT NULL 主键、messages.session_id 也是 NOT NULL，
-            // 不存在 NULL 使 `NOT IN` 整体为 NULL 的陷阱。
-            // 删除会触发 FTS 外部内容表的 AD 触发器，索引不会残留。
+            // 反连接删除：两侧列均 NOT NULL，无 `NOT IN` 遇 NULL 的陷阱；删除触发 FTS 的 AD
+            // 触发器，索引不残留。
             let removed = conn
                 .execute(
                     "DELETE FROM messages \
@@ -706,10 +696,8 @@ INSERT INTO messages (
 }
 
 impl SqliteSessionRepo {
-    /// `append_messages` / `append_messages_if_alive` 的共用实现
-    ///
-    /// 唯一差别是 `require_alive`：为 `true` 时会话不存在则不写任何行、返回 `Ok(false)`
-    /// （引擎落库专用，见 `SessionRepo::append_messages_if_alive`）。
+    /// `append_messages` / `append_messages_if_alive` 的共用实现，差别只在 `require_alive`：
+    /// 为 `true` 时会话不存在则不写任何行、返回 `Ok(false)`（引擎落库专用）。
     async fn append_messages_inner(
         &self,
         session_id: &str,
@@ -724,8 +712,7 @@ impl SqliteSessionRepo {
             let tx = conn
                 .unchecked_transaction()
                 .map_err(|e| format!("开启事务失败: {}", e))?;
-            // 会话存活校验必须与写入落在**同一把连接锁 + 同一事务内**：
-            // 否则「校验通过 → 会话被删 → 写入」这个小窗口仍会漏出孤儿消息。
+            // 存活校验必须与写入同锁同事务：否则「校验通过 → 会话被删 → 写入」的窗口会漏出孤儿消息。
             if require_alive {
                 let alive: i64 = tx
                     .query_row(
@@ -735,8 +722,8 @@ impl SqliteSessionRepo {
                     )
                     .map_err(|e| format!("校验会话是否存在失败: {}", e))?;
                 if alive == 0 {
-                    // 会话已被删除：不写任何行（事务未提交，drop 即回滚），
-                    // 否则会留下永远查不到也清不掉的孤儿消息（库文件只增不减）
+                    // 会话已删：不写任何行（事务未提交，drop 即回滚），否则留下查不到也清不掉的
+                    // 孤儿消息（库文件只增不减）。
                     return Ok(false);
                 }
             }

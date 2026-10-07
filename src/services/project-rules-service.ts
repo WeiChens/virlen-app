@@ -1,16 +1,11 @@
 /**
- * project-rules-service — 读取工作目录下的「项目规则 / 记忆文件」（AGENTS.md 等）
+ * project-rules-service — 读取工作目录下的「项目规则 / 记忆文件」（AGENTS.md 等）。
  *
- * 唯一使用点：会话创建时组装系统提示词（`agent-service.assembleAgentPrompt`）。
- * 读取结果只在创建那一刻做一次快照，写进 `session.systemPrompt`，之后不再刷新 ——
- * 与 env prompt 同一语义（会话中途改文件不影响已建会话，避免系统提示词在对话中
- * 悄悄变化导致缓存命中率骤降与行为漂移）。
+ * 唯一使用点：建会话时组装系统提示词（agent-service.assembleAgentPrompt），只快照一次写入
+ * session.systemPrompt，之后不再刷新（与 env prompt 同语义：避免提示词在对话中变化）。
  *
- * 所有失败一律**静默降级**（返回空串，不抛出、不阻断建会话）：
- *   - 未配置文件名 / 无工作目录 / 路径不安全 → 不注入
- *   - 文件不存在 → 不注入（正常情况，不算错误）
- *   - 超过 `MAX_PROJECT_RULES_BYTES` → 不注入（console.warn + 埋点）
- *   - 二进制、编码无法识别、读取失败 → 不注入（console.warn + 埋点）
+ * ⚠️ 所有失败一律**静默降级**（返回空串，不抛出、不阻断建会话）：未配置文件名 / 无工作目录 /
+ * 路径不安全 / 文件不存在 / 超 MAX_PROJECT_RULES_BYTES / 二进制 / 编码识别失败 → 均不注入。
  */
 import { invoke } from '@tauri-apps/api/core'
 import {

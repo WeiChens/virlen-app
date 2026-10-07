@@ -1,25 +1,16 @@
 /**
- * TodoEditor — 任务清单编辑器（标题栏浮层内）
+ * TodoEditor — 任务清单编辑器（标题栏浮层内）。
  *
- * 所有编辑都只写进**本地草稿**（`ui/store/todoDraftStore`），**点「应用变更」才算修改**：
- * - 编辑中（未应用）：只是草稿，清单权威不变，本轮结束 / 取消都不会带上它；
- * - AI 空闲 + 应用 → 立即落地（追加一条 feedback 消息，模型下一轮可见）；
- * - AI 回复中 + 应用 → 标记为「已应用」，等这一轮 stream_end（非 paused）或用户
- *   取消本轮时再落地（见 `services/todo-service.flushTodoDraft`）。
+ * 编辑只写**本地草稿**（`ui/store/todoDraftStore`），点「应用变更」才算修改：AI 空闲 → 立即落地
+ * （追加 feedback 消息）；AI 回复中 → 标记「已应用」，等本轮 stream_end 或用户取消时落地
+ * （见 `services/todo-service.flushTodoDraft`）。
  *
- * **编辑期间 AI 又写了一版清单怎么办（重点）**：
- * 不自动合并、也不静默覆盖用户的编辑，而是提示「AI 已更新」（用 base → 最新清单的差异
- * 说清它改了什么），并把两个出口摆明：
- * - 「放弃编辑并同步」= 丢弃我的编辑，跟随 AI 的最新清单；
- * - 「覆盖更新」= 我这份**整体覆盖** AI 的更新（逐字落地，所见即所得）。
- * 判定靠 `sameTodoList(effective, draft.base)`：两者不一致就是「权威被换过」。
+ * **编辑期间 AI 又写了一版清单**：不自动合并、也不静默覆盖，而是提示「AI 已更新」（附 base → 最新
+ * 清单的差异）并摆明两个出口：「放弃编辑并同步」跟随 AI，「覆盖更新」用我这份整体覆盖。
+ * 判定靠 `sameTodoList(effective, draft.base)`。
  *
- * 数据流单向：读「草稿（优先）/ 生效清单」→ 生成新数组 → 写回 store。
- * 不原地改数组、不在组件里存副本 —— 浮层与标题栏徽章因此永远一致。
- *
- * 两项交互约定：
- * - **排序靠拖拽**（左端手柄），不用 ↑ / ↓ 按钮 —— 按钮一次只能挪一格，长清单很费手；
- * - **任务名超长时鼠标移入才横向滚动**（展示态跑马灯），不点进输入框也能读全；不悬停不动。
+ * 数据流单向：读「草稿（优先）/ 生效清单」→ 生成新数组 → 写回 store，不在组件里存副本；
+ * 排序靠拖拽手柄（不用 ↑↓ 按钮），超长任务名鼠标移入才横向滚动。
  */
 import {
   useEffect,
@@ -51,13 +42,8 @@ const STATUS_ICON: Record<TodoStatus, string> = {
 }
 
 /**
- * TodoTitle — 任务名控件（展示态 / 编辑态二选一）
- *
- * 之前只有一个输入框：浮层偏窄 + 右侧还要放「备注」列，长任务名会被直接裁掉，
- * 用户得点进去、再按方向键才能看全。现在：
- * - 展示态占据任务名列（浮层里固定 420px），超宽时**鼠标移入**才用 `translateX`
- *   来回滚动（跑马灯）—— 溢出多少像素就滚多少，不悬停保持静止；
- * - 点击即切到真正的 `<input>`（回车 / Esc / 失焦回到展示态）。
+ * TodoTitle — 任务名控件（展示态 / 编辑态二选一）：展示态超宽时鼠标移入才用 translateX
+ * 来回滚动（溢出多少滚多少，不悬停保持静止），点击切到 `<input>`（回车 / Esc / 失焦回展示态）。
  * 两态共用同一套 padding / 边框 / 高度，切换不跳版。
  */
 const TodoTitle = observer(function TodoTitle({
@@ -74,9 +60,8 @@ const TodoTitle = observer(function TodoTitle({
   const inputRef = useRef<HTMLInputElement>(null)
 
   /**
-   * 量溢出：`scrollWidth - clientWidth` = 需要滚动的距离；末尾多留 12px 便于看清结尾。
-   * 同时取文本项自身宽度 —— 它 `flex: 0 0 auto` 不收缩，拿到的就是真实文本宽度，
-   * 比只信容器的 scrollWidth 更稳（不同 WebView 对溢出区的上报不完全一致）。
+   * 量溢出：`scrollWidth - clientWidth` = 需滚距离，末尾多留 12px 便于看清结尾。同时取文本项
+   * 自身宽度（`flex: 0 0 auto` 不收缩，即真实文本宽）：不同 WebView 对容器溢出区的上报不一致。
    */
   const measure = () => {
     const el = wrapRef.current
@@ -165,12 +150,9 @@ export const TodoEditor = observer(function TodoEditor({
   /** 用户已点「应用」、等本轮结束生效（仅 AI 回复期间会出现） */
   const committed = !!draft?.committed
   /**
-   * 编辑期间清单权威被换过（AI 又写了一版清单）。
-   *
-   * 判定 = 当前生效清单 ≠ 草稿创建时的 `base`（字段 / 顺序任意差异都算）。
-   * 此时**不静默处理**：既不趁乱把 AI 的改动静默回灌进用户的编辑，
-   * 也不默默丢掉 AI 的进度 —— 只提示 + 把两个出口摆明，让用户选。
-   * 已应用（committed）但还没落地的草稿同样要提示，用户才有机会改成「同步」。
+   * 编辑期间清单权威被换过（AI 又写了一版清单）：判定 = 生效清单 ≠ 草稿创建时的 `base`。
+   * 此时**不静默处理** —— 既不把 AI 的改动静默灌进用户的编辑，也不默默丢掉 AI 的进度，
+   * 只提示 + 把两个出口摆明。已应用但还未落地的草稿同样提示，用户才有机会改成「同步」。
    */
   const aiUpdated = !!draft && !sameTodoList(effective, draft.base)
   /** AI 这段时间改了什么（base → 最新清单），用 UI 文案展示 */
@@ -211,11 +193,9 @@ export const TodoEditor = observer(function TodoEditor({
     ])
 
   /**
-   * 拖拽排序（取代原来的 ↑ / ↓ 按钮）
-   *
-   * 用**指针事件**而不是 HTML5 拖放：本项目 `dragDropEnabled: true`（原生拖放取文件真实
-   * 路径，见 AGENTS.md §11.8），Windows 上页面收不到 HTML5 drag 事件，只有 pointer 可靠。
-   * 每越过一行就立即写草稿 —— 数据流仍是单向的，组件里不存副本。
+   * 拖拽排序（取代 ↑ / ↓ 按钮）：必须用指针事件而非 HTML5 拖放 —— 本项目 `dragDropEnabled: true`
+   *（原生拖放取文件真实路径），Windows 上页面收不到 HTML5 drag 事件，只有 pointer 可靠。
+   * 每越过一行就立即写草稿，数据流仍是单向的，组件里不存副本。
    */
   const [dragId, setDragId] = useState<string | null>(null)
   const rowsRef = useRef<HTMLDivElement>(null)
@@ -260,12 +240,9 @@ export const TodoEditor = observer(function TodoEditor({
   }, [dragId, list])
 
   /**
-   * 应用变更 / 覆盖更新 —— 「草稿」变「修改」的唯一入口。
-   *
-   * AI 空闲：立即落地（追加 feedback 消息）。
-   * AI 回复中：只标记「已应用」，等轮次边界 / 本轮真正结束（stream_end / 取消）时落地。
-   * 两种情况都是**用户这份逐字生效**：AI 在这期间的改动由用户在这里显式选择
-   * （放弃编辑并同步 / 覆盖更新），不在落地时隐式混合。
+   * 应用变更 / 覆盖更新 —— 「草稿」变「修改」的唯一入口。AI 空闲立即落地（追加 feedback）；
+   * AI 回复中只标记「已应用」，等本轮 stream_end / 取消时落地。两者都是**用户这份逐字生效**，
+   * AI 在这期间的改动由用户在此显式选择，不在落地时隐式混合。
    */
   const onApply = () => {
     // 先剔除空正文项（用户可能点了「添加任务」还没写内容）
@@ -320,7 +297,7 @@ export const TodoEditor = observer(function TodoEditor({
         </span>
       </div>
 
-      {/* 编辑期间 AI 又写了一版清单：提示 + 把两个出口摆明（不静默混合） */}
+      {/* 编辑期间 AI 又写了一版：提示 + 摆明两个出口（不静默混合） */}
       {aiUpdated && (
         <div className="todo-ai-updated">
           <div className="todo-ai-updated-head">

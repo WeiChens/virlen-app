@@ -1,7 +1,4 @@
-/**
- * message-bubble — 消息气泡
- * 区分 user/assistant/tool 角色，渲染 Markdown、图片、tool calls、底部操作栏（复制/时间/编辑）
- */
+/** message-bubble — 消息气泡：Markdown / 图片 / tool calls / 底部操作栏（复制 / 编辑 / 删除） */
 import { t, tpl } from '@/ui/i18n'
 import { type Message } from '@/types'
 import CopySvg from '@/ui/components/icons/CopySvg'
@@ -42,16 +39,9 @@ interface Props {
   message: Message
   onEdit?: (message: string) => void
   onDelete?: (messageId: string) => void
-  /**
-   * 右键「上下文压缩摘要」→「转移到新对话」：以当前会话为模板新建会话，
-   * 把该摘要作为新会话的首条消息并切换过去。不传则不展示该项。
-   */
+  /** 右键摘要「转移到新对话」：以当前会话为模板新建会话，把该摘要作为首条消息并切过去；不传则不展示该项 */
   onTransferSummary?: (messageId: string) => void
-  /**
-   * 引用该消息（仅“有正文”的消息可引用）：把消息 id / 发送方 / 正文快照交给输入框
-   *
-   * 深思考 / 纯工具调用消息没有正文，不提供引用入口（气泡容器已隐藏操作栏）
-   */
+  /** 引用该消息（仅「有正文」的可引用）：把消息 id / 发送方 / 正文快照交给输入框 */
   onQuote?: (quote: {
     messageId: string
     role: 'user' | 'assistant'
@@ -64,11 +54,8 @@ interface Props {
 }
 
 /**
- * 右键菜单指向的对象。
- *
- * 同一个气泡里有多类可右键对象（正文 / 图片 / 文件 chip / 深度思考），
- * 同一时刻只允许开一个菜单，所以用 target 区分「这次点的是什么」，
- * 菜单项在渲染时按 target 现算（见 useContextMenu 的说明）。
+ * 右键目标：同一气泡里有多类可右键对象（正文 / 摘要 / 图片 / 文件 / 技能 / 深度思考），
+ * 同一时刻只开一个菜单，故用 target 区分；菜单项在渲染时按 target 现算。
  */
 type MenuTarget =
   | { kind: 'text' }
@@ -90,7 +77,7 @@ function MessageBubble({
   const mkdRef = useRef<HTMLDivElement | null>(null)
   /** 深度思考文本容器（右键「全选」要选在这上面） */
   const reasoningRef = useRef<HTMLDivElement | null>(null)
-  /** 右键菜单（正文 / 图片 / 文件 / 深度思考共用一套） */
+  /** 右键菜单：各类目标共用一套 */
   const menu = useContextMenu<MenuTarget>()
 
   const isUser = message.role === 'user'
@@ -128,9 +115,9 @@ function MessageBubble({
 
   /** 文件附件（只存路径，点击用系统默认程序打开） */
   const files = getFileBlocks(message.content)
-  /** 引用消息（本条消息引用了哪些历史消息的正文） */
+  /** 本条消息引用的历史消息正文 */
   const quotes = getQuoteBlocks(message.content)
-  /** 技能引用（本条消息携带了哪些技能的 SKILL.md 全文） */
+  /** 本条消息携带的技能（SKILL.md 全文） */
   const skills = getSkillBlocks(message.content)
 
   function handleCopy() {
@@ -150,9 +137,7 @@ function MessageBubble({
       })
   }
 
-  /**
-   * 「删除」的实际动作（底部操作栏按钮与右键菜单共用：二次确认 → 删本条及后续）。
-   */
+  /** 删除：二次确认后删本条及后续（操作栏按钮与右键菜单共用） */
   async function confirmDeleteMessage() {
     const confirmed = await MessageBox.warn(
       t('删除消息'),
@@ -163,7 +148,7 @@ function MessageBubble({
     }
   }
 
-  /** 深度思考正文「全选」：把选区铺满整个思考内容（随后即可「复制」） */
+  /** 深度思考「全选」：把选区铺满思考内容（随后即可复制） */
   function selectAllReasoning() {
     const el = reasoningRef.current
     if (!el) return
@@ -174,12 +159,7 @@ function MessageBubble({
     selection?.addRange(range)
   }
 
-  /**
-   * 按右键对象组装菜单项。
-   *
-   * 正文菜单与气泡底部操作栏**同源**：引用 / 编辑 / 删除的可见条件、
-   * 删除的二次确认都复用同一批逻辑，避免两个入口行为分叉。
-   */
+  /** 按右键对象组装菜单项；正文菜单与底部操作栏同源（同一批可见条件与二次确认），避免两个入口行为分叉 */
   function buildMenuItems(target: MenuTarget): ContextMenuItem[] {
     switch (target.kind) {
       case 'image':
@@ -187,8 +167,7 @@ function MessageBubble({
       case 'file':
         return fileMenuItems(target.path, { isDir: target.isDir })
       case 'skill':
-        // 技能引用：打开 / 编辑器打开直接指向 SKILL.md（引用的就是这份说明），
-        // 再补一个目录入口（isDir 菜单会自动隐掉「编辑器打开」）
+        // 技能引用：打开 / 编辑器打开都指向 SKILL.md（引用的就是这份说明），另补一个目录入口
         return [
           ...fileMenuItems(`${target.path}/SKILL.md`),
           {
@@ -206,11 +185,8 @@ function MessageBubble({
           selectAll: selectAllReasoning,
         })
       case 'summary': {
-        // 压缩摘要：「复制 / 转移到新对话 / 删除」三项。
-        // 它不是模型产出的一条对话，没有引用 / 编辑的语义；
-        // 「转移到新对话」= 把摘要拷进一个新会话当开头，方便在干净上下文里继续；
-        // 删除同样是「本条及之后全部删除」（删掉 summary = 放弃这次压缩，
-        // 其后的对话也一并清掉），与其它气泡的删除语义保持一致。
+        // 摘要不是模型产出的一条对话，没有引用 / 编辑语义，只留「复制 / 转移到新对话 / 删除」。
+        // 删除 summary = 放弃这次压缩，其后的对话一并清掉（与其它气泡同一条删除路径）。
         const items: ContextMenuItem[] = [
           ...textMenuItems(() => getContent(false)),
         ]
@@ -263,9 +239,8 @@ function MessageBubble({
     }
   }
 
-  // assistant 只有 tool_calls、且没有任何「可见内容」（正文 / 引用 / 图片 / 文件 / 技能）时，
-  // 显示为紧凑的 tool-call 卡片。判据走共享的 messageHasVisibleContent，
-  // 与列表行模型的工具组判据同源 —— 两者一旦漂移就会「非文本内容被一起藏掉」。
+  // assistant 只有 tool_calls 且无任何可见内容（正文 / 引用 / 图片 / 文件 / 技能）→ 紧凑 tool-call 卡片。
+  // 判据走共享的 messageHasVisibleContent：与列表行模型同源，一旦漂移就会「非文本内容被一起藏掉」。
   const hasVisibleContent = messageHasVisibleContent(message)
   const showAsToolCall =
     isAssistant && !!message.toolCalls?.length && !hasVisibleContent
@@ -287,10 +262,9 @@ function MessageBubble({
     !hasVisibleContent &&
     hideToolCallThink
 
-  // 上下文压缩产物（role='summary'）：正文可能极长，不在消息流里铺开，
-  // 只渲染可点击的提示条，摘要全文放弹窗（详见 summary-message.tsx）。
-  // 摘要也必须能右键：否则用户压缩错了就没办法回退 —— 删除 summary 即「放弃压缩」，
-  // 本条及之后的消息一并删除（与其它气泡同一条删除路径）。
+  // 压缩摘要（role='summary'）：正文可能极长，不在消息流里铺开，只渲染可点击的提示条，
+  // 全文放弹窗（见 summary-message.tsx）。必须能右键 —— 否则压缩错了没法回退
+  //（删除 summary 即放弃压缩，本条及之后一并删除）。
   if (isSummary) {
     return (
       <>
@@ -309,9 +283,8 @@ function MessageBubble({
     )
   }
 
-  // 任务清单变更（feedback 消息）：消息流只留一行 ——
-  // 清单内容统一在标题栏的「任务清单」浮层里看（用户层面任务只有一份，见 components/todo/）。
-  // 注意：正文（content）里仍是全量清单文本，给模型读，右键复制/删除照旧可用。
+  // 任务清单变更（feedback）：消息流只留一行，清单统一在标题栏「任务清单」浮层里看（见 components/todo/）。
+  // content 里仍是全量清单文本（给模型读），右键复制 / 删除照旧可用。
   if (isFeedback && message.uiData?.type === 'todo') {
     return (
       <div className="message-todo-notice">
@@ -422,14 +395,14 @@ function MessageBubble({
                       {skills.map((s, i) => (
                         <SkillChip
                           key={`${i}-${s.name}`}
-                          // 气泡里用卡片形态：header 之外还能看到技能描述（最多三行）
+                          // 卡片形态：header 之外还能看到技能描述（最多三行）
                           variant="card"
                           name={s.name}
                           path={s.path}
                           description={s.description}
                           chars={s.content.length}
                           onContextMenu={
-                            // 没有目录就不给菜单（fileMenuItems 需要一个能用的绝对路径）
+                            // 无目录就不给菜单（fileMenuItems 需要一个能用的绝对路径）
                             s.path
                               ? (e) =>
                                 menu.openAt(e, { kind: 'skill', path: s.path! })
@@ -575,7 +548,7 @@ function MessageBubble({
           />
         ))
       )}
-      {/* 右键菜单：正文 / 摘要 / 图片 / 文件 / 深度思考共用一套（同一时刻只开一个） */}
+      {/* 右键菜单：各类目标共用一套（同一时刻只开一个） */}
       {menu.state && (
         <ContextMenu
           position={menu.state.position}

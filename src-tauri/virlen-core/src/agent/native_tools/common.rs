@@ -1,10 +1,6 @@
-//! native_tools — 跨分类公共模块
-//!
-//! 不属于任何单一工具分类、被多个分类共同使用的函数：
-//! - 参数取值辅助 `arg_str` / `arg_i64` / `arg_bool` / `arg_str_array`
-//!   （execute / file / search / knowledge_base 四个分类都在用）
-//! - 安全路径解析 `resolve_safe_path` / `is_path_allowed`
-//!   （对齐前端 `securityService.resolveSafePath` / `securityPort.isPathAllowed`）
+//! native_tools — 跨分类公共模块：参数取值辅助 `arg_*`（execute / file / search /
+//! knowledge_base 共用）与安全路径解析 `resolve_safe_path` / `is_path_allowed`
+//! （对齐前端 `securityService.resolveSafePath` / `securityPort.isPathAllowed`）。
 
 use crate::agent::types::NativeToolSecurity;
 use serde_json::Value;

@@ -1,17 +1,12 @@
 /**
- * 引擎契约类型 —— chat-service 与引擎适配器共用的共享类型
- *
- * 原位于 `src/domain/engine/types.ts`（TS 引擎内部类型）。TS 引擎已移除，但这些类型仍是
- * `AgentEnginePort` 与 `services/rust-engine.ts` 之间的接口契约，因此迁到 ports 层保留。
+ * 引擎契约类型 —— `AgentEnginePort` 与 `services/rust-engine.ts` 之间的共享契约
+ * （TS 引擎已移除，这些类型从 `domain/engine/types.ts` 迁来保留）。
  */
 import type { Message, Session } from '@/types'
 import type { AgentEventCallback, ToolUseContent } from '@/types'
 import type { ToolExecutorResponse } from '@/domain/tools/types'
 
-/**
- * 上下文压缩方式 —— 与 Rust `CompressMode`（`'ai' | 'raw'`）取值一致，
- * 也与 `app_settings.contextCompressMode` 同值。
- */
+/** 上下文压缩方式 —— 与 Rust `CompressMode` 及 `app_settings.contextCompressMode` 同值。 */
 export type CompressMode = 'ai' | 'raw'
 
 /** 发送一次消息（一个 run）的入参 —— `AgentEnginePort.sendMessage` 的选项 */
@@ -51,19 +46,15 @@ export interface SendMessageOptions {
   /** 迭代模式最大重试次数，默认 5（仅在 iterationGoal 设置时生效） */
   maxIterations?: number
   /**
-   * **轮次边界钩子**：上一批工具的 tool_result 已合并、下一次 LLM 请求尚未发出时调用。返回值会被追加进本
-   * 轮消息列表；抛错 / 返回空数组都视为「无可注入」。
-   *
-   * ⚠️ Rust 引擎不用这个回调（消息列表在 Rust 内存里，前端改不了），走桥接 `agent:round-boundary` →
-   * `agent_round_boundary_response`：语义对齐、通道不同（铁律 1，§5.1）。
+   * **轮次边界钩子**：上一批工具结果已合并、下次 LLM 请求未发出时调用，返回值追加进本轮消息列表；
+   * 抛错 / 返回空数组视为「无可注入」。
+   * ⚠️ Rust 引擎不用此回调，走桥接 `agent:round-boundary` → `agent_round_boundary_response`（语义对齐、通道不同）。
    */
   onRoundBoundary?: (sessionId: string) => Message[] | Promise<Message[]>
 }
 
 /**
- * 每次 LLM 一轮对话产生的临时上下文（引擎内部使用）。
- *
- * ⚠️ 保留本类型只因 Rust 侧 `agent::types::ToolCallContext` 有同名对应物（前端已无消费方）。
+ * 每轮对话的临时上下文（引擎内部）。⚠️ 前端已无消费方，保留只因 Rust `agent::types::ToolCallContext` 有同名对应物。
  */
 export interface ToolCallContext {
   assistantMessage: Message
@@ -73,15 +64,10 @@ export interface ToolCallContext {
 }
 
 /**
- * Run（执行批次）状态管理
+ * Run（执行批次）：一次 sendMessage 中 LLM 产出的一个工具调用批次。
  *
- * 一个 Run 表示一次 sendMessage 调用中 LLM 产出的一个工具调用批次，
- * 包括该批次中每个 tool 的执行进度和结果。
- *
- * 语义：
- * - 每次 LLM 流结束（产生 tool_calls）→ 创建一个 Run
- * - Run 包含多个 ToolStep（每个 tool call 一个 step）
- * - 可暂停/恢复：检查当前是第几个 step，前面的结果已存储
+ * 每次 LLM 流结束（产生 tool_calls）创建一个 Run，含多个 ToolStep（每个 tool call 一步）；
+ * 可暂停/恢复（检查当前 step，前面的结果已存储）。
  */
 export type ToolStepStatus = 'pending' | 'running' | 'completed' | 'failed'
 
@@ -120,9 +106,8 @@ export interface Run {
 }
 
 /**
- * Run 快照 —— 断点恢复用（只存引擎侧内存 / Rust 侧内存 Map，页面刷新后即失效）。
- *
- * ⚠️ 由 Rust 引擎权威产出：`agent_get_run_snapshot` 的返回值即此形状（camelCase）。
+ * Run 快照 —— 断点恢复用（只存内存，刷新即失效）。
+ * ⚠️ 由 Rust 引擎产出：`agent_get_run_snapshot` 的返回值即此形状。
  */
 export interface RunSnapshot {
   assistantMessageId: string

@@ -247,10 +247,9 @@ export function createEventHandler(
             pendingContent: '',
             streamingMessageId: null,
           })
-          // 本轮真正结束（非 paused）→ 落地用户在回复期间「已应用」的任务清单草稿：
-          // 只落地已应用的（用户还在编辑的改动不算修改），paused 分支刻意不落地（本轮未结束，
-          // 草稿留到恢复后再合并）。放在下面整批落库之前，追加的 feedback 消息会一并落库；
-          // 落地结果不用单独广播 —— 紧随其后的 onMessagesUpdate 已带上这条新消息。
+          // 本轮真正结束（非 paused）→ 落地用户回复期间「已应用」的任务清单草稿；paused 分支刻意不落地
+          //（本轮未结束，草稿留到恢复后再合并）。放在下面整批落库之前，追加的 feedback 消息会一并落库，
+          // 紧随其后的 onMessagesUpdate 已带上它，无需单独广播。
           flushTodoDraft(sessionId, 'stream_end')
           events?.onStreamEnd?.(sessionId)
           events?.onMessagesUpdate?.(sessionId)
@@ -285,14 +284,11 @@ export function createEventHandler(
 }
 
 /**
- * 还原 assistant 消息补丁：把流式增量补丁（`patch.contentDelta`）拼成完整正文。
+ * 还原 assistant 消息补丁：把流式增量补丁（patch.contentDelta）拼成完整正文。
  *
- * 引擎流式期间只回传增量（全量正文会让 IPC 载荷变成 O(n²)，见
- * `agent/llm_round.rs::flush_stream_state`），
- * 结束帧仍回传全量 `patch.content`。
- *
- * 拼不上（消息未加载 / 正文非字符串）时退化为「只应用其余字段」，
- * 内容交给结束帧的全量补丁纠正 —— 不做猜测式兜底。
+ * 引擎流式期间只回传增量（见 agent/llm_round.rs::flush_stream_state，全量会让 IPC 载荷 O(n²)），
+ * 结束帧仍回传全量 patch.content。拼不上（消息未加载 / 正文非字符串）时退化为「只应用其余字段」，
+ * 交给结束帧的全量补丁纠正 —— 不做猜测式兜底。
  */
 function resolveAssistantPatch(
   sessionId: string,
@@ -322,7 +318,7 @@ function lastAssistantPreview(sessionId: string): string {
   return ''
 }
 
-/** 完成工作（清理 runtime state on non-pause） */
+/** 收尾：清理本轮运行的 runtime state（暂停态则保留 working/paused）。 */
 export async function finishWorking(
   sessionId: string,
   sessionRt: ReturnType<typeof getSessionRuntime>,
@@ -375,9 +371,8 @@ export async function finishWorking(
     })
   }
 
-  // 自动设置标题（仅 session 标题仍为默认值时触发一次）
-  // 优先让 AI 生成标题（可在「设置 → 聊天设置 → AI 生成标题」关闭），
-  // 关闭或失败则回退到用户消息截取
+  // 自动设置标题（仅 session 标题仍为默认值「新对话」时触发一次）：
+  // 优先 AI 生成（可在「设置 → 聊天设置 → AI 生成标题」关闭）；关闭或失败则回退到用户消息截取
   if (!isPaused && content) {
     const updatedSession = sessionStore.getSession(sessionId)
     if (updatedSession && updatedSession.title === '新对话') {

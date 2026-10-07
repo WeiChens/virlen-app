@@ -1,9 +1,4 @@
-/**
- * export-service — 会话导出服务层
- *
- * 将会话导出为 Markdown 文件。
- * 包含格式转换、文件保存等业务逻辑，不依赖持久层以外的底层模块。
- */
+/** export-service — 会话导出服务层：把会话转换为 Markdown 并保存文件。 */
 import { t, tpl, getCurrentLanguage } from '@/ui/i18n'
 import type {
   Session,
@@ -18,8 +13,6 @@ import type {
 import { sessionStore } from '@/ui/store'
 import { agentRepo } from '@/infrastructure/agentRepo'
 
-// ==================== 导出选项 ====================
-
 export interface ExportOptions {
   /** 是否省略工具调用信息（tool_use + tool_result） */
   omitToolCalls: boolean
@@ -31,8 +24,6 @@ const DEFAULT_OPTIONS: ExportOptions = {
   omitToolCalls: false,
   omitThinking: false,
 }
-
-// ==================== 文本提取辅助 ====================
 
 /** 从 MessageContent 中提取纯文本 */
 function extractText(content: MessageContent): string {
@@ -47,9 +38,7 @@ function extractText(content: MessageContent): string {
     .join('\n\n')
 }
 
-/**
- * 从 MessageContent 中提取文件附件（只有路径）
- */
+/** 从 MessageContent 中提取文件附件（只有路径） */
 function extractFiles(content: MessageContent): FileContent[] {
   if (typeof content === 'string') return []
   return content.filter((c): c is FileContent => c.type === 'file')
@@ -73,10 +62,8 @@ function extractSkills(content: MessageContent): SkillContent[] {
   return content.filter((c): c is SkillContent => c.type === 'skill')
 }
 
-// ==================== Markdown 转换 ====================
-
 /**
- * 将会话转换为 Markdown 字符串
+ * 将会话转换为 Markdown 字符串。
  */
 export function sessionToMarkdown(
   session: Session,
@@ -84,7 +71,6 @@ export function sessionToMarkdown(
 ): string {
   const lines: string[] = []
 
-  // ---------- 文件头部 ----------
   lines.push(`# ${session.title}`)
   lines.push('')
   const dateStr = new Date().toLocaleString(getCurrentLanguage(), {
@@ -101,7 +87,6 @@ export function sessionToMarkdown(
   lines.push('---')
   lines.push('')
 
-  // ---------- 逐条消息 ----------
   for (const msg of session.messages) {
     const roleLabel =
       msg.role === 'user'
@@ -159,8 +144,7 @@ export function sessionToMarkdown(
       lines.push('')
     }
 
-    // 3.6) 技能引用（只记「引用了哪个技能」；SKILL.md 全文不进导出，
-    //      否则一份导出里会重复铺开几万字技能说明，体积爆炸）
+    // 3.6) 技能引用（只记「引用了哪个技能」；SKILL.md 全文不进导出，否则体积爆炸）
     const skills = extractSkills(msg.content)
     for (const s of skills) {
       lines.push(
@@ -209,35 +193,23 @@ export function sessionToMarkdown(
   return lines.join('\n')
 }
 
-// ==================== 文件写入 ====================
-
 /**
- * 导出会话到 Markdown 文件
- *
- * 流程：
- *  1. 获取会话数据
- *  2. 转为 Markdown
- *  3. 弹出 Tauri 保存对话框
- *  4. 写入 .md 文件
- *
- * @param sessionId  会话 ID
- * @param options    导出选项
+ * 导出会话到 Markdown 文件。
  * @returns 保存的文件路径，取消返回 null
  */
 export async function exportSessionToFile(
   sessionId: string,
   options: ExportOptions = DEFAULT_OPTIONS,
 ): Promise<string | null> {
-  // 分页加载下，导出前确保完整历史都在内存（否则只会导出已加载的尾部）
+  // 分页加载下必须先确保完整历史在内存，否则只会导出已加载的尾部
   await sessionStore.ensureAllMessagesLoaded(sessionId)
   const session = sessionStore.getSession(sessionId)
   if (!session) return null
 
-  // 转为 Markdown
   const markdown = sessionToMarkdown(session, options)
 
   try {
-    // 动态导入 Tauri API（非 Tauri 环境优雅降级）
+    // 动态导入 Tauri API（非 Tauri 环境走 catch 降级）
     const { save } = await import('@tauri-apps/plugin-dialog')
     const { writeTextFile } = await import('@tauri-apps/plugin-fs')
 
@@ -259,20 +231,17 @@ export async function exportSessionToFile(
 
     if (!filePath) return null // 用户取消
 
-    // 写入文件（UTF-8）
     await writeTextFile(filePath, markdown)
     return filePath
   } catch (e) {
-    // 非 Tauri 环境：降级为下载
+    // 非 Tauri 环境：降级为浏览器下载
     console.warn('Tauri API 不可用，使用浏览器下载方式', e)
     downloadAsFile(markdown, session.title)
     return null
   }
 }
 
-/**
- * 浏览器降级方案：创建 Blob 下载
- */
+/** 浏览器降级方案：创建 Blob 下载。 */
 function downloadAsFile(content: string, title: string): void {
   const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
   const url = URL.createObjectURL(blob)

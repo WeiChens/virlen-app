@@ -1,20 +1,12 @@
-//! DeepSeek V3 字节级 BPE tokenizer — 快速 token 计数
+//! DeepSeek V3 字节级 BPE tokenizer — 快速 token 计数。
 //!
-//! 参考 HuggingFace `tokenizers` / DeepSeek V3 `tokenizer.json`（LlamaTokenizerFast，
-//! byte-level BPE，vocab 128000 + 127741 merges）。用于在 API 不返回 usage 时，
-//! 由前端 compressContext 调用本命令估算 prompt/completion tokens，
-//! 替换原来「字符数 / 4」的粗略估算。
+//! 对齐 HuggingFace DeepSeek V3 `tokenizer.json`（LlamaTokenizerFast，byte-level BPE，
+//! vocab 128000 + 127741 merges），供前端 compressContext 在 API 不返回 usage 时估算
+//! prompt/completion tokens，替代「字符数 / 4」的粗略估算。
 //!
-//! 实现范围（与 DeepSeek tokenizer.json 对齐）：
-//! - GPT-2 字节表（bytes_to_unicode）：UTF-8 字节 → 映射字符（空格→Ġ, 换行→Ċ）
-//! - pretokenizer：3 个 Split（1-3 位数字 / CJK+假名 / GPT-2 风格）+ ByteLevel
-//! - BPE merges（127741 条，`"Ġ t"` → pair("Ġ","t") rank=index）
-//!
-//! 已知限制（估算用途可接受）：
-//! - 未模拟 chat template（`<｜begin▁of▁sentence｜>` / `<｜User｜>` 等特殊 token）
-//! - 未处理 added_tokens（普通文本几乎不出现）
-//! - GPT-2 风格正则中的 `\s+(?!\S)` 负向前瞻 Rust regex 不支持，已用等价 `\s+` 替代
-//!   （`\s+(?!\S)` ∪ `\s+` = `\s+`）
+//! 实现范围：GPT-2 字节表（bytes_to_unicode）、pretokenizer（3 个 Split + ByteLevel）、BPE merges。
+//! 已知限制（估算用途可接受）：未模拟 chat template 与 added_tokens；GPT-2 正则的 `\s+(?!\S)`
+//! 前瞻 Rust 不支持，用等价 `\s+` 替代。
 
 use once_cell::sync::OnceCell;
 use regex::Regex;

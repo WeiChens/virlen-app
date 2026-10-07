@@ -1,39 +1,18 @@
 /*!
  * clipboard_files — 读系统剪贴板里的「文件路径」
  *
- * 为什么必须走原生：
- *   页面的 paste 事件只能拿到 File 对象（有文件名，没有磁盘路径），
- *   而本项目的文件附件只存路径（不拷贝内容），所以路径只能问系统要。
- *   资源管理器 / 编辑器里「复制文件」放进剪贴板的是文件列表，这条信息只存在于原生层。
+ * 为什么走原生：页面 paste 事件只能拿到 File（有名字无磁盘路径），而本项目附件只存路径，
+ * 故路径只能问系统要 —— 该信息只存在于原生层。
  *
- * 目前认识的两种 Windows 剪贴板格式：
- *   1. CF_HDROP（二进制）—— 资源管理器里「复制文件」，逐个 DragQueryFileW 取路径；
- *   2. code/file-list（文本）—— VS Code 里「复制文件」，负载是「换行分隔的 URI 列表」。
+ * Windows 两种格式：`CF_HDROP`（资源管理器「复制文件」，二进制）、`code/file-list`（VS Code，文本）。
+ * 文件结构：本文件 = 命令入口 + 文本格式注册表 + 平台编排；`windows.rs` = 原语；`vscode.rs` = 文本→路径解析。
+ * 新增「文本型」格式：在 vscode.rs 旁加同构文件，再往 `text_formats()` 加一行即可。
  *
- * 文件结构（按职责拆开，新增一种格式改动面很小）：
- *   clipboard_files.rs          命令入口 + 文本格式注册表 + 平台编排（本文件）
- *   clipboard_files/windows.rs  Windows 剪贴板原语（打开 / 关闭 / 读原始字节 / CF_HDROP）
- *   clipboard_files/vscode.rs   code/file-list 的「文本 → 路径」解析
+ * 平台：Windows 支持上述格式；macOS / Linux 暂未实现（返回空，前端退回从剪贴板文本解析）。
+ * 语义：读不到 / 不支持 / 被占用一律返回空（不报错）—— 粘贴不该因读剪贴板失败而中断。
  *
- * 新增一种「文本型」自定义格式：在 vscode.rs 旁边加一个同构文件，
- * 再往 text_formats() 里加一行即可，其余无需改动。
- *
- * 平台覆盖：
- *   - Windows：CF_HDROP 与注册的各文本格式
- *   - macOS / Linux：暂未实现，返回空数组；前端会退回「从剪贴板文本里解析路径」的兜底
- *     （macOS 的 Finder 复制一般带 text/uri-list）
- *
- * 语义约定：读不到 / 平台不支持 / 剪贴板被占用，一律返回空（不报错），
- *           由前端决定是提示还是静默——粘贴这件事不该因为读剪贴板失败而中断。
- *
- * 除文件路径外，还提供：
- *   - 「读纯文本」：终端右键「粘贴」用（见 read_clipboard_text）。
- *     为什么不走 `navigator.clipboard.readText()`：WebView2 的剪贴板读权限默认
- *     不放行（NotAllowedError），而这里已有现成的 Windows 剪贴板原语。
- *   - 「写图片」：消息 / 预览里右键「复制图片」用（见 write_clipboard_image）。
- *     为什么不走 `navigator.clipboard.write(ClipboardItem)`：WebView2 下是否放行
- *     取决于运行时权限，不可靠；原生写 CF_DIB 是确定的（DIB 组装见 dib.rs）。
- *     前端仍保留浏览器 API 作兼容层（macOS / Linux 暂未实现原生写入）。
+ * 另有：「读纯文本」（终端右键粘贴；WebView2 读剪贴板权限默认不放行，故走原生）、
+ * 「写图片」（右键复制图片；WebView2 的 write API 不可靠，原生写 CF_DIB 确定）。
  */
 
 // 解析逻辑与平台无关，drag_drop 也复用它；非 Windows 构建下暂无使用者

@@ -1,11 +1,6 @@
 /**
- * skill-plaza — 技能广场页面
- *
- * 功能：
- *  - 从远程 API 拉取已发布的技能列表
- *  - 分类筛选 + 关键词搜索 + 分页
- *  - 点击技能卡片 → 预览 SKILL.md
- *  - 导入技能到本地（下载 ZIP → 安装）
+ * skill-plaza — 技能广场：从远程 API 拉取已发布的技能，分类筛选 + 关键词搜索 + 分页；
+ * 点卡片预览 SKILL.md，可导入到本地（下载 ZIP → 安装）。
  */
 import { useState, useEffect, useMemo } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -27,7 +22,6 @@ import { t, tpl } from '@/ui/i18n'
 import './skill-plaza.scss'
 
 function SkillPlaza() {
-  // ==================== 数据 ====================
   const [skills, setSkills] = useState<RemoteSkill[]>([])
   const [categories, setCategories] = useState<RemoteCategory[]>([])
   const [loading, setLoading] = useState(false)
@@ -47,13 +41,11 @@ function SkillPlaza() {
   // 导入状态
   const [importingSkillId, setImportingSkillId] = useState<number | null>(null)
 
-  // ==================== 初始化 ====================
   useEffect(() => {
     fetchCategories()
     fetchSkills()
   }, [])
 
-  // ==================== 数据获取 ====================
   async function fetchCategories() {
     try {
       const cats = await fetchPlazaCategories()
@@ -89,7 +81,6 @@ function SkillPlaza() {
     }
   }
 
-  // ==================== 搜索 & 筛选 ====================
   function doSearch() {
     setSearchKeyword(keyword)
     setPagination(prev => ({ ...prev, page: 1 }))
@@ -109,7 +100,6 @@ function SkillPlaza() {
     fetchSkills()
   }
 
-  // ==================== 分页 ====================
   function goToPage(p: number) {
     if (p < 1 || p > pagination.total_pages) return
     setPagination(prev => ({ ...prev, page: p }))
@@ -130,7 +120,6 @@ function SkillPlaza() {
     return pages
   }, [pagination.total_pages, pagination.page])
 
-  // ==================== 预览 ====================
   async function handlePreview(skill: RemoteSkill) {
     setPreviewSkill(skill)
     setPreviewContent('')
@@ -150,7 +139,6 @@ function SkillPlaza() {
     setPreviewContent('')
   }
 
-  // ==================== 导入 ====================
   async function handleImport(skill: RemoteSkill) {
     setImportingSkillId(skill.id)
     try {
@@ -163,7 +151,6 @@ function SkillPlaza() {
     }
   }
 
-  // ==================== 辅助 ====================
   function fmtDownloads(count: number): string {
     if (count >= 10000) return (count / 10000).toFixed(1) + 'w'
     if (count >= 1000) return (count / 1000).toFixed(1) + 'k'
@@ -177,10 +164,8 @@ function SkillPlaza() {
     return bytes + 'B'
   }
 
-  // ==================== 渲染 ====================
   return (
     <div className="skill-plaza">
-      {/* 搜索栏 */}
       <div className="plaza-search-row">
         <div className="plaza-search-box">
           <SearchSvg fill="var(--text-secondary)" />
@@ -201,7 +186,6 @@ function SkillPlaza() {
         </button>
       </div>
 
-      {/* 分类筛选 */}
       {categories.length > 0 && (
         <div className="plaza-categories">
           <button
@@ -221,9 +205,7 @@ function SkillPlaza() {
         </div>
       )}
 
-      {/* 内容区 */}
       <div className="plaza-content">
-        {/* 加载中 */}
         {loading && (
           <div className="plaza-state">
             <div className="plaza-spinner" />
@@ -231,7 +213,6 @@ function SkillPlaza() {
           </div>
         )}
 
-        {/* 错误 */}
         {!loading && errorMsg && (
           <div className="plaza-state plaza-state-error">
             <p>{errorMsg}</p>
@@ -241,10 +222,8 @@ function SkillPlaza() {
           </div>
         )}
 
-        {/* 有数据 */}
         {!loading && !errorMsg && skills.length > 0 && (
           <>
-            {/* 统计 */}
             <div className="plaza-result-info">
               <span>
                 {tpl('共 $__count__ 个技能', { count: pagination.total })}
@@ -261,7 +240,6 @@ function SkillPlaza() {
               </span>
             </div>
 
-            {/* 技能卡片列表 */}
             <div className="plaza-card-list">
               {skills.map((skill) => {
                 const installed = isSkillInstalled(skill.name)
@@ -347,7 +325,6 @@ function SkillPlaza() {
               })}
             </div>
 
-            {/* 分页 */}
             {pagination.total_pages > 1 && (
               <div className="plaza-pagination">
                 <button
@@ -379,7 +356,6 @@ function SkillPlaza() {
           </>
         )}
 
-        {/* 空状态 */}
         {!loading && !errorMsg && skills.length === 0 && (
           <div className="plaza-state">
             <FolderSvg fill="var(--text-secondary, #ccc)" />
@@ -388,7 +364,6 @@ function SkillPlaza() {
         )}
       </div>
 
-      {/* SKILL.md 预览弹窗 */}
       <Modal
         visible={!!previewSkill}
         title={previewSkill ? `${previewSkill.name} — SKILL.md` : ''}

@@ -1,11 +1,10 @@
 /**
  * MemoryEditModal — 新增 / 编辑一条记忆（子弹窗）
  *
- * 为什么是独立弹窗而不是列表里的内联表单：列表现在是一张**表格**（每页 20 条，一眼扫一片），
- * 内联表单会把表格往下推、挤掉「一屏看更多」这个目标；点行弹子弹窗既不动列表布局，
- * 也与项目其它列表弹窗（知识库文档的预览 / 新建 / 编辑）保持同一范式。
+ * 独立弹窗而非列表内联表单：列表是一张**表格**（每页 20 条，一眼扫一片），内联表单会把表格往下
+ * 推、挤掉「一屏看更多」这个目标；点行弹子弹窗既不动布局，也与知识库文档弹窗同一范式。
  *
- * 嵌套弹窗的键盘行为由 `Modal` 自己处理：Esc 只关**最上层**那个（见 `Modal/index.tsx`）。
+ * 嵌套弹窗的键盘行为由 `Modal` 处理：Esc 只关**最上层**那个（见 `Modal/index.tsx`）。
  */
 import { useEffect, useState } from 'react'
 import Modal from '@/ui/components/shared/Modal'
@@ -43,8 +42,7 @@ interface MemoryDraft {
   level: MemoryLevel
   disabled: boolean
   /**
-   * 项目路径 —— **只有分类是「项目」时才编辑它**（其它分类一律空串）。
-   *
+   * 项目路径 —— **只有分类是「项目」时**才编辑它（其它分类一律空串）。
    * 空串 = 不限定项目（跨项目通用）；服务端还会再守一道（非 project 带路径会被清掉）。
    */
   projectPath: string
@@ -140,8 +138,7 @@ function MemoryEditModal({ visible, item, onClose, onSaved }: Props) {
         <div className="memory-form-row">
           <label>
             <span>{t('分类')}</span>
-            {/* 走共享 `Select` 而不是原生 <select>：下拉面板 Portal 到 body，不会被弹窗的
-                滚动容器裁剪，视觉 / 键位也与其它设置页一致 */}
+            {/* 用共享 `Select`：下拉面板 Portal 到 body，不会被弹窗的滚动容器裁剪 */}
             <Select
               value={draft.kind}
               // 改成非项目时顺手把路径清掉：不给「非项目却带路径」的半状态留机会
@@ -162,8 +159,8 @@ function MemoryEditModal({ visible, item, onClose, onSaved }: Props) {
             />
           </label>
         </div>
-        {/* 项目路径：**只有「项目」分类**才显示 —— 它是这条记忆的可见范围，不能藏起来；
-            空 = 所有项目可见（不限定），填了 = 只在该路径（或其子目录）的会话里注入 */}
+        {/* 项目路径只对「项目」分类显示 —— 它是这条记忆的可见范围，不能藏起来；
+            空 = 所有项目可见，填了 = 只在该路径（或其子目录）的会话里注入 */}
         {isProject && (
           <div className="memory-form-row memory-form-scope">
             <label>

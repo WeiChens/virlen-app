@@ -1,11 +1,8 @@
 /**
- * telemetry/common — 公共字段（§4）采集
+ * telemetry/common — 公共字段（§4）采集。
  *
- * base 部分（平台/版本/OS）在启动时异步初始化一次；
- * 运行时部分（engine/theme/font_size/locale）通过 UI 注入的 provider 实时读取；
- * 窗口尺寸每次事件实时读取。
- *
- * 本模块不 import UI / domain，保持底层纯净。
+ * base（平台 / 版本 / OS）启动时异步初始化一次；运行时（engine / theme / font_size / locale）经 UI 注入的
+ * provider 实时读取；窗口尺寸每次事件实时读取。本模块不 import UI / domain，保持底层纯净。
  */
 import { invoke } from '@tauri-apps/api/core'
 import type { TelemetryCommonProps, TelemetryRuntimeContext } from './types'

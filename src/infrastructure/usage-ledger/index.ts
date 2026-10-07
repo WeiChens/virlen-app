@@ -1,11 +1,8 @@
 /**
- * usage-ledger — 用量账本的基础设施实现（Tauri → Rust SQLite）
+ * usage-ledger — 用量账本的基础设施实现（Tauri → Rust SQLite）。
  *
- * 领域侧只认识 `domain/usage` 的端口；这里把流水经 `cmd_append_usage`
- * 写到 Rust 侧的 `usage_ledger` 表（与 Rust 引擎写的同一张表）。
- *
- * 非 Tauri 环境（vitest / 浏览器 dev）invoke 会抛错 —— 全部吞掉：
- * 记账是旁路能力，绝不能因为它失败而影响聊天。
+ * 领域侧只认识 domain/usage 的端口；这里把流水经 cmd_append_usage 写到 Rust 的 usage_ledger 表
+ *（与 Rust 引擎写的同一张表）。记账是旁路能力，失败一律吞掉，绝不影响聊天。
  */
 import { invoke } from '@tauri-apps/api/core'
 import { trackError } from '@/utils/telemetry'

@@ -1,28 +1,18 @@
-//! `js` 类沙盒规则的**内嵌求值**（D4）
+//! `js` 类沙盒规则的**内嵌求值**（D4）：用户在设置里写的 JS（参数 `command`，返回真值即命中）由进程内
+//! QuickJS 求值 —— GUI（Rust 引擎）与 CLI 是同一个实现。
 //!
-//! 用户可在「设置 → 安全 → 忽略沙盒命令」写一段 JS（参数 `command`，返回真值即命中）。纯 Rust CLI
-//! 没有 JS 进程，规则体由**进程内** QuickJS（`quickjs_runtime`，`quickjs-ng` 特性）求值；GUI 默认
-//! 引擎（Rust 引擎）同样走这里 —— 因此 GUI 与 CLI 是**同一个实现**。
+//! ## 安全边界（规则体是用户代码，进程内执行）
+//! 不注入任何 host 函数（不注册 fs / 网络 / 定时器 / 模块加载器）、内存上限 16 MB、栈 512 KB、单次求值
+//! 超时、每次新建 runtime；**异常 / 超时 / OOM 一律 `Err` → 上层按未命中（fail-closed，绝不放行）**。
 //!
-//! ## 安全边界（规则体是用户代码，在进程内执行）
-//!
-//! 不注入任何 host 函数（只 `QuickJsRuntimeBuilder::new()`，不注册 fs / 网络 / 定时器 / 模块加载器）、
-//! 内存上限 16 MB、栈上限 512 KB（防深递归）、单次求值有超时、每次求值新建 runtime（无跨命令状态
-//! 污染）；**异常 / 超时 / OOM 一律 `Err` → 上层按未命中（fail-closed，绝不放行）**。
-//!
-//! ⚠️ 中断处理器必须总是设置：`quickjs_runtime` 创建 runtime 时无条件把 C 回调注册进 QuickJS，而该
-//! 回调会 `unwrap()` 这个字段 —— 不设置的话任何一次 JS 执行都可能 panic（跨 FFI，后果不可控）。我们
-//! 用它实现超时，正好也满足了这个前置。
+//! ⚠️ 中断处理器必须总是设置：`quickjs_runtime` 创建 runtime 时无条件注册 C 回调，该回调会 `unwrap()`
+//! 此字段 —— 不设置则任何 JS 执行都可能跨 FFI panic。我们用它实现超时，正好满足这个前置。
 //!
 //! ## 与 TS `buildJsFunction` 的写法宽容度对齐
-//!
-//! 与 `src/domain/security/sandbox-ignore-rules.ts` 的 5 级优先级逐条对应：`async` 开头 → 报错（返回
-//! Promise 恒为真值，会放行一切）；`function (command) {...}` 声明 → 包成立即调用；`const match = ...`
-//! 赋值式函数 → 末尾补 `return match(command)`；含 `return` → 原样当函数体；其他 → 先当单表达式
-//! （补 `return (...)`），编译不过再回退为原样语句体。
-//! ⚠️ 第 5 级的回退条件与 TS 有一处实现细节差异：TS 用 `new Function` 只编译不执行，所以只在编译
-//! 失败时回退；这里 `eval_sync` 无法只编译，故任何错误都回退一次。结论等价 —— 运行期抛错的写法两种
-//! 都抛错，最终都是「未命中」，不会因此放行。
+//! 5 级优先级逐条对应：`async` → 报错；`function (command){...}` 声明 → 包成立即调用；`const match=...`
+//! → 补 `return match(command)`；含 `return` → 原样；其他 → 先当单表达式，编译不过回退为原样语句体。
+//! ⚠️ 第 5 级回退条件与 TS 有实现细节差异：TS 的 `new Function` 只编译不执行，故仅编译失败回退；这里
+//! `eval_sync` 无法只编译，任何错误都回退一次。结论等价（最终都是「未命中」，不会放行）。
 
 use once_cell::sync::Lazy;
 use quickjs_runtime::builder::QuickJsRuntimeBuilder;

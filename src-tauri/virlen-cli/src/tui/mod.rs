@@ -1,30 +1,22 @@
-//! `virlen-cli chat` —— 交互式会话：默认是**内联视口 TUI**，另有**顺序输出模式**兜底
+//! `virlen-cli chat` —— 交互式会话：默认内联视口 TUI，另有顺序输出模式兜底。
 //!
 //! ```text
 //! virlen-cli chat [--session <id>] [--workspace <path>] [--no-tui]
 //! ```
 //!
-//! 与桌面端共用同一份会话库（`virlen.db`）；`--session <id>` 续连时开头先显示最近 5 条历史
-//! （见 `history.rs`），退出时打印完整会话 id 与续连命令。
+//! 与桌面端共用同一份会话库（`virlen.db`）；`--session <id>` 续连时先显示最近 5 条历史（见
+//! `history.rs`），退出时打印完整会话 id 与续连命令。
 //!
 //! 两条路径（TUI / 顺序输出）共用 `SessionRuntime` 与 `EventSink` 的应答约定，差别只在「事件怎么
-//! 呈现」与「输入从哪来」—— 非终端（管道 / CI）或终端连续失败超 5s 时降级为顺序输出，不重实现
-//! 任何判定（安全 / 工具 / 会话）。
-//!
-//! ## 线程与任务
+//! 呈现」「输入从哪来」—— 非终端（管道 / CI）或终端连续失败超 5s 时降级为顺序输出，不重实现任何
+//! 判定（安全 / 工具 / 会话）。
 //!
 //! 主任务（tokio 当前线程）只 `select!` 两条无条件分支：用户动作 ← TUI 线程、回合结果 ← spawned
-//! 任务。回合必须 spawn 出去（`send_message` 是长 future，主任务同时还要处理按键），用 channel 收
-//! 结果，`select!` 才不需要「有回合才启用某分支」那种借来借去的写法。
+//! 任务（回合必须 spawn，`send_message` 是长 future）。
 //!
-//! ## 交互（异步审批）
-//!
-//! `run` 同步阻塞读 stdin，TUI 不能这么做（会和输入框抢同一个 stdin）：事件出口把交互请求送进
-//! UI → 按键产生 `Action::Reply` → 主任务用 `bridge::handle_user_interaction_response` 回执。
-//!
-//! ⚠️ 未知交互类型也必须应答，否则引擎一直等回执；授权是显式二选一（←/→ + Enter，默认「拒绝」），
-//! 不能像 `run` 那样把空白输入当「允许」—— 用户此刻可能正在打字，一次误触 Enter 就放行了危险命令
-//! （fail-open，见 `state/mod.rs::ConfirmChoice`）。
+//! ⚠️ TUI 不能同步阻塞读 stdin（会和输入框抢）：交互请求送进 UI → 按键产生 `Action::Reply` → 主任务
+//! 用 `bridge::handle_user_interaction_response` 回执。未知交互类型也必须应答，否则引擎一直等；
+//! 授权是显式二选一（←/→ + Enter，默认「拒绝」），不能像 `run` 那样把空白当「允许」（fail-open）。
 
 
 pub(crate) mod commands;

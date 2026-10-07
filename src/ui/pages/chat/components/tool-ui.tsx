@@ -1,16 +1,10 @@
 /**
- * tool-ui — 工具调用相关的 UI 状态与弹窗
+ * 工具调用相关的 UI 状态与弹窗（封装 ChatView 里的这部分逻辑；新增交互类型在此扩展 `useToolUI`）。
  *
- * 封装 ChatView 中与 tool 调用相关的 UI 逻辑。
- * 新增交互类型时在此扩展 useToolUI 即可。
+ * ⚠️ **多交互并发**：每种弹窗各维护一个**待应答队列**，一次只展示队首，应答后自动轮到下一个。改造前是
+ * 单对象 state —— 后到的请求直接覆盖前一个，而前一个既没被应答、也无法再展示，引擎只能挂死在等回执上。
  *
- * ⚠️ **多交互并发**（2026-09 手机控制前置改造）：
- * 每种弹窗各维护一个**待应答队列**，一次只展示队首，应答后自动轮到下一个。
- * 改造前是单对象的 state —— 后到的 `showChoice` / `showAuthorization` 会直接覆盖前一个，
- * 而前一个既没被应答、也无法再展示，引擎只能挂死在等待回执上（多会话同时跑工具时必现）。
- *
- * 应答一律带上 `interactionId`，工具侧据此精确路由，不匹配的应答一律忽略
- * （见 `events/toolInteractEvent.ts` 文件头）。
+ * 应答一律带 `interactionId`，工具侧据此精确路由，不匹配的应答一律忽略（见 `events/toolInteractEvent.ts`）。
  */
 import { useState, useEffect, useCallback } from 'react'
 import UserChoiceModal from './modals/user-choice'
@@ -25,7 +19,7 @@ import { requestAttentionIfUnfocused } from '@/utils/windowAttention'
 import { settingsState } from '@/ui/store/settingStore'
 import { t } from '@/ui/i18n'
 
-// ====== UserChoice ======
+// UserChoice
 
 type ChoiceModalState = { visible: boolean } & ChoiceRequest
 
@@ -39,7 +33,7 @@ const defaultChoice: ChoiceModalState = {
   multi: false,
 }
 
-// ====== Authorization（通用授权确认，弹窗见 modals/authorization）======
+// Authorization（通用授权确认，弹窗见 modals/authorization）
 
 type AuthorizationState = { visible: boolean } & AuthorizationRequest
 
@@ -82,8 +76,8 @@ export function useToolUI() {
   useEffect(() => {
     const off = toolInteractEvent.on('showChoice', (payload) => {
       setChoiceQueue((q) => [...q, { ...payload, visible: true }])
-      // AI 调用 user_choice（用户选择）→ 窗口未激活时闪烁提醒；
-      // 窗口被隐藏到托盘时必须先显示出来（否则弹窗没人看见，引擎会因等回执而挂死）
+      // AI 调用 user_choice → 窗口未激活时闪烁提醒；隐藏到托盘时必须先显示出来
+      // （否则弹窗没人看见，引擎会因等回执而挂死）
       void requestAttentionIfUnfocused(
         undefined,
         settingsState.value.forceWindowActive,
@@ -97,8 +91,7 @@ export function useToolUI() {
   useEffect(() => {
     const off = toolInteractEvent.on('showAuthorization', (payload) => {
       setAuthQueue((q) => [...q, { ...payload, visible: true }])
-      // 授权确认弹窗出现 → 窗口未激活时闪烁提醒
-      // （与 user_choice / AI 回复结束保持一致：都要用户立刻注意）
+      // 授权确认弹窗 → 窗口未激活时闪烁提醒（与 user_choice 一致）
       // ensureVisible：隐藏到托盘时先显示窗口，否则确认弹窗无人应答 → 引擎挂死
       void requestAttentionIfUnfocused(
         undefined,
@@ -110,10 +103,8 @@ export function useToolUI() {
   }, [])
 
   /**
-   * 交互已被应答 —— 从队列里摘掉它。
-   *
-   * 自己应答时已经出队（这里是幂等空操作）；**另一个应答端**（手机 / 另一个窗口）
-   * 应答时，靠这里把桌面上的弹窗收掉，否则用户会看到「已经批过的弹窗还挂着」，
+   * 交互已被应答 —— 从队列里摘掉它（自己应答时已出队，这里是幂等空操作）。
+   * **另一个应答端**（手机 / 另一个窗口）应答时靠这里收掉桌面上的弹窗，否则会看到「已经批过的弹窗还挂着」，
    * 再点一次就是对同一个交互重复应答。
    */
   useEffect(() => {
@@ -124,7 +115,7 @@ export function useToolUI() {
     return off
   }, [])
 
-  // ====== UserChoice 回调 ======
+  // UserChoice 回调
   const handleChoiceConfirm = useCallback(
     (result: UserChoiceResult) => {
       const current = choiceQueue[0]

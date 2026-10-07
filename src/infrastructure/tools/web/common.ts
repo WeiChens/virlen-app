@@ -1,8 +1,4 @@
-/**
- * web — 网络分类公共函数（分类 id: web）
- *
- * 供 web_fetch / web_search 复用的纯函数与常量。
- */
+/** web — 网络分类公共函数（id: web），供 web_fetch / web_search 复用的纯函数与常量。 */
 import type { SearchResultItem } from '@/domain/search/types'
 import { sliceHead } from '@/utils/text'
 
@@ -54,7 +50,7 @@ export function isHtml(content: string, contentType?: string): boolean {
 }
 
 /**
- * 格式化搜索结果供 LLM 阅读
+ * 格式化搜索结果供 LLM 阅读。
  */
 export function formatSearchResults(
   items: SearchResultItem[],

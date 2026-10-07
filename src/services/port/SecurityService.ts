@@ -10,12 +10,7 @@ export interface SecurityService {
     sessionId?: string,
   ): Promise<{ allowed: boolean; reason: string }>
 
-  /**
-   * 校验路径是否有指定权限
-   * @param inputPath 解析并校验路径
-   * @param mode
-   * @param sessionId
-   */
+  /** 解析并校验路径是否有指定权限 */
   resolveSafePath(
     inputPath: string,
     mode: 'r' | 'w' | 'all',
@@ -25,12 +20,8 @@ export interface SecurityService {
   getPermissionDecision(name: string): Promise<PermissionDecision>
 
   /**
-   * 「忽略沙盒命令」规则匹配（设置 → 安全 → 忽略沙盒命令）。
-   *
-   * 命中 → 该命令**免除「沙盒脱壳」审批**并**强制以「不使用沙盒」方式执行**（AI 不必显式传
-   * `sandbox:"off"`）。
-   * ⚠️ TS 侧匹配实现只有一份（`@/domain/security/sandbox-ignore-rules`）：回退路径与设置页「测试」都走它，
-   * 不重实现（规则含用户自写的 `js` 函数）。
+   * 「忽略沙盒命令」规则匹配（设置 → 安全）：命中 → 免除「沙盒脱壳」审批，并强制以不使用沙盒方式执行。
+   * ⚠️ TS 侧匹配实现只有一份（@/domain/security/sandbox-ignore-rules）：回退路径与设置页「测试」都走它，不重实现。
    */
   matchSandboxIgnoreRule(command: string): Promise<SandboxIgnoreRule | null>
 

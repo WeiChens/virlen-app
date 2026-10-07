@@ -1,14 +1,9 @@
 /**
- * telemetry/index — 埋点 SDK 统一入口
+ * telemetry/index — 埋点 SDK 统一入口。
  *
- * 交互模型（§8，已定稿）：
- *   - 默认「关」；开关打开后 track() 写入本地缓冲，不自动外发
- *   - 「导出本地」生成 zip 不上传
- *   - 「清理数据」清空本地缓冲并归零计数
- *   - 采集与导出「均」经过 §7.1 密钥打码
- *
- * 业务层只调用：track / trackError / startSpan / newTraceId / newSpanId。
- * 用 MobX observable 暴露 bufferedCount，供设置页实时展示条数。
+ * 交互模型（§8）：默认「关」；开开关后 track() 写入本地缓冲、不自动外发；「导出本地」生成 zip 不上传；
+ *「清理数据」清空本地缓冲并归零计数；采集与导出「均」经 §7.1 密钥打码。
+ * 业务层只调 track / trackError / startSpan / newTraceId / newSpanId；用 MobX observable 暴露 bufferedCount 供设置页实时显示条数。
  */
 import { makeObservable, observable, runInAction } from 'mobx'
 import { v4 } from '@/utils/uuid'
@@ -53,7 +48,7 @@ export {
 export { SDK_VERSION as TELEMETRY_SDK_VERSION }
 export { buildBundleDoc, BUNDLE_DOC_NAME } from './export-doc'
 
-// ==================== 常量 ====================
+// 常量
 
 /** 构建期彻底关闭：VITE_TELEMETRY=off */
 const BUILD_DISABLED: boolean =
@@ -65,7 +60,7 @@ export const PERF_SAMPLE_RATE = 0.1
 /** 本地缓冲的条数上限（与 buffer 保持一致，用于提示） */
 export const BUFFER_MAX_EVENTS = 5000
 
-// ==================== 开关与状态 ====================
+// 开关与状态
 
 /** 开关读取器（由 UI 层注入，读取 settingsState.telemetryEnabled） */
 let enabledProvider: (() => boolean) | null = null
@@ -84,7 +79,7 @@ class TelemetryStoreState {
 }
 export const telemetryState = new TelemetryStoreState()
 
-// ==================== 标识与序号 ====================
+// 标识与序号
 
 const DEVICE_ID_KEY = 'virlen_telemetry_device_id'
 const SEQ_KEY = 'virlen_telemetry_seq'
@@ -135,7 +130,7 @@ function nextSeq(): number {
   return seq
 }
 
-// ==================== ID 生成 ====================
+// ID 生成
 
 /** 生成链路追踪 ID */
 export function newTraceId(): string {
@@ -147,7 +142,7 @@ export function newSpanId(): string {
   return 's-' + randomBase36(8)
 }
 
-// ==================== 会话级链路上下文 ====================
+// 会话级链路上下文
 // chat-service 在发送时登记，引擎/工具执行读取，避免 domain → service 的反向依赖。
 
 const sessionTraces = new Map<string, string>()
@@ -167,7 +162,7 @@ export function clearSessionTrace(sessionId: string): void {
   sessionTraces.delete(sessionId)
 }
 
-// ==================== 错误信息抽取 ====================
+// 错误信息抽取
 
 function safeStringify(value: unknown): string {
   try {
@@ -198,7 +193,7 @@ export function toErrorInfo(error: unknown): TelemetryErrorInfo {
   return { message: redactString(String(error)) }
 }
 
-// ==================== 核心：track ====================
+// 核心：track
 
 /** 开关当前是否开启 */
 function isEnabled(): boolean {
@@ -336,7 +331,7 @@ export function trackPerf(
   track(eventName, props, { ...opts, sampleRate: opts?.sampleRate ?? PERF_SAMPLE_RATE })
 }
 
-// ==================== 跨度（Span） ====================
+// 跨度（Span）
 
 export interface TelemetrySpan {
   spanId: string
@@ -375,7 +370,7 @@ export function startSpan(
   }
 }
 
-// ==================== 埋点自身事件（§12.15） ====================
+// 埋点自身事件（§12.15）
 
 /** 记录开关切换（无论开关状态都记录） */
 export function recordTelemetryToggle(enabled: boolean): void {
@@ -386,7 +381,7 @@ export function recordTelemetryToggle(enabled: boolean): void {
   )
 }
 
-// ==================== 导出 / 上报 / 清理 ====================
+// 导出 / 上报 / 清理
 
 const EXPORT_README = [
   'Virlen Telemetry Bundle',
@@ -479,7 +474,7 @@ export function flushTelemetry(): void {
   telemetryBuffer.flush()
 }
 
-// ==================== 安装（应用启动时调用一次） ====================
+// 安装（应用启动时调用一次）
 
 /**
  * 安装 Rust 侧埋点回传桥：监听 `agent:telemetry` 事件。

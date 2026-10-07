@@ -1,14 +1,12 @@
 /**
  * labels — 记忆「分类 / 级别」的展示文案与下拉选项
  *
- * 抽出来一份：表格里的列值（分类 / 级别）、筛选栏的下拉、编辑弹窗的下拉**必须同一套中文名**，
- * 各写一份迟早会分叉（表格显示「决策」而下拉里叫「决定」）。
+ * 抽一份的原因：表格列值、筛选栏下拉、编辑弹窗下拉**必须同一套中文名**，各写一份迟早分叉
+ *（表格显示「决策」而下拉里叫「决定」）。
  *
- * ⚠️ 文案一律**调用时**取 `t()`，不预先算成模块级常量：常量在 `initI18n()` 完成之前就被求值，
- * 会永久冻在中文 —— 英文环境下表格的分类列仍是中文（且只在切语言后才发现）。
- *
- * ⚠️ `value` 永远是存储用的英文枚举（`user` / `project` / `decision` / `fact`、`normal` / `permanent`），
- * 中文只出现在展示层。
+ * ⚠️ 文案一律**调用时**取 `t()`，不预先算成模块级常量 —— 常量在 `initI18n()` 之前就被求值，会
+ * 永久冻在中文（英文环境下分类列仍是中文，且只在切语言后才发现）。
+ * ⚠️ `value` 永远是存储用的英文枚举（`user` / `project` / …），中文只出现在展示层。
  */
 import { t } from '@/ui/i18n'
 import { MEMORY_KINDS, type MemoryKind } from '@/domain/memory'
@@ -27,9 +25,8 @@ export const FILTER_ALL = 'all'
 
 /**
  * 分类下拉选项。
- *
- * @param withAll 带一条「全部」（筛选栏用）—— 编辑表单**不能**带：`all` 不是合法的存储值，
- *                真让用户选到就会把库里写进一个不存在的分类。
+ * @param withAll 带一条「全部」（筛选栏用）—— 编辑表单**不能**带：`all` 不是合法存储值，
+ *                真让用户选到就会往库里写一个不存在的分类。
  */
 export function kindOptions(withAll = false): SelectOption[] {
   const opts: SelectOption[] = MEMORY_KINDS.map((k) => ({ value: k, label: t(KIND_KEYS[k]) }))

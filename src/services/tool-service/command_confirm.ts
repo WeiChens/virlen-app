@@ -1,17 +1,15 @@
 /**
- * command_confirm — 授权确认弹窗的交互逻辑（命令 / 脚本 / 沙盒脱壳等，通用）
+ * command_confirm — 授权确认弹窗的交互逻辑（命令 / 脚本 / 沙盒脱壳等，通用）。
  *
  * handler 收到 confirm_command 后：① 弹「授权确认」弹窗（展示权限唯一 key + title / sub-title / desc）；
- * ② 用户点「允许」→ 自己调 runCommand 执行并 resolve；③ 「拒绝」→ reject 'cancelled'；
- * ④ 「暂存」→ throw InteractionShelved。
+ * ② 「允许」→ 自己调 runCommand 执行并 resolve；③ 「拒绝」→ reject 'cancelled'；④ 「暂存」→ throw InteractionShelved。
  *
- * ⚠️ handler 只负责「问用户」与「放行 / 拒绝」，不做任何脱壳决策：「忽略沙盒命令」规则（设置 → 安全）
- * 在审批之前就定了是否强制无沙盒执行，匹配完全在 Rust 侧（`virlen-core/src/security/`；回退路径在
- * `tools/execute/*.ts`）—— 命中规则时根本走不到这里，不要在本文里再加规则匹配（两处匹配会分叉）。
+ * ⚠️ 只负责「问用户」与「放行 / 拒绝」，不做任何脱壳决策：「忽略沙盒命令」规则在审批之前就定了是否强制
+ * 无沙盒执行，匹配完全在 Rust 侧（virlen-core/src/security/；回退路径在 tools/execute/*.ts）—— 命中规则时
+ * 根本走不到这里，不要在本文再加规则匹配（两处匹配会分叉）。
  *
- * ⚠️ **路由依据：弹窗分支用 `interactionId`、终端分支用 `toolCallId`**（见 `events/toolInteractEvent.ts`
- * 文件头）。两个 handles 实例各自持有单槽状态，不匹配的应答一律忽略 —— 否则多会话同时授权时
- * 一次应答会同时放行两条命令（改造前的既存串扰）。
+ * ⚠️ **路由依据：弹窗分支用 interactionId、终端分支用 toolCallId**。两个 handles 实例各持单槽状态，
+ * 不匹配的应答一律忽略 —— 否则多会话同时授权时一次应答会同时放行两条命令。
  */
 import { ToolExecutorResponse } from '@/domain/tools/types'
 import toolInteractEvent from '@/events/toolInteractEvent'
@@ -50,8 +48,7 @@ export function createCommandConfirmHandles(
   let showTime = 0
 
   /**
-   * 放行：执行待审批命令并把结果 resolve 回去。
-   * 用户点「允许」（commandResolve 事件）与规则自动放行共用同一条路径，
+   * 放行：执行待审批命令并把结果 resolve 回去。用户点「允许」与规则自动放行共用同一条路径，
    * 保证两种入口的执行语义完全一致。
    */
   async function doAllow() {
@@ -223,12 +220,10 @@ export function createCommandConfirmHandles(
 }
 
 /**
- * 原生命令审批 handles — Rust 原生 execute_command 的审批交互
+ * 原生命令审批 handles — Rust 原生 execute_command 的审批交互。
  *
- * 与 createCommandConfirmHandles 的差异：
- * - 不注册 JS 侧审批（approvalId），命令由 Rust 原生执行
- * - 用户「允许」→ resolve('approved')，Rust 收到后直接执行命令
- * - 用户「拒绝/暂存」→ reject，Rust 收到 cancelled / shelved
+ * 与 createCommandConfirmHandles 的差异：不注册 JS 侧审批（approvalId），命令由 Rust 原生执行：
+ * 用户「允许」→ resolve('approved')；「拒绝 / 暂存」→ reject cancelled / shelved。
  */
 export function createNativeCommandConfirmHandles(
   sessionId: string,

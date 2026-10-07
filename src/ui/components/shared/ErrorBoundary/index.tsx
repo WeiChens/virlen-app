@@ -14,7 +14,6 @@ interface State {
 
 /**
  * 顶层错误边界（§5.9 error.react.boundary）
- *
  * 捕获 React 渲染期异常 → 上报埋点 → 展示兜底 UI，避免整树白屏。
  */
 export default class ErrorBoundary extends Component<Props, State> {

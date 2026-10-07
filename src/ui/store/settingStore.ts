@@ -71,11 +71,8 @@ export interface SettingsStore {
   /** 会话侧边栏分组方式 */
   sessionGroupType: SessionGroupType
   /**
-   * 已置顶的**分组** key（按分组维度分开存）。
-   *
-   * 分组是**虚拟**的（按 Agent / 工作目录现算出来，没有实体可挂字段），所以置顶状态只能
-   * 住在设置里。两个维度必须分开：`UNGROUPED_KEY`（未分组 / 未设置工作目录）在两个维度
-   * 里是同一个字面量，混在一份列表里会互相串。
+   * 已置顶的**分组** key（按维度分开存）。分组是虚拟的（按 Agent / 工作目录现算，无实体可挂字段），
+   * 置顶状态只能住在设置里；`UNGROUPED_KEY` 在两个维度里是同一个字面量，混一份列表会互相串。
    */
   pinnedSessionGroups: Record<SessionGroupType, string[]>
   /** 是否对上传的图片自动执行 vision_analyze 提取结构化数据 */
@@ -86,38 +83,18 @@ export interface SettingsStore {
   ragDefaultKnowledgeBaseId: string
   /** 默认检索数量 */
   ragDefaultTopK: number
-  /**
-   * 长期记忆开关（默认**开**）。
-   *
-   * 与 Rust 侧 `agent::memory::prompt::MEMORY_ENABLED_KEY` 同名：真源在 `app_settings`，
-   * 关掉后建会话不再注入 `# Memory` 段（蒸馏调用属 P2，同样受它控制）。
-   */
+  /** 长期记忆开关（默认**开**）。真源在 Rust 侧 `app_settings`（同名 `MEMORY_ENABLED_KEY`）；关掉后建会话不再注入 `# Memory` 段。 */
   memoryEnabled: boolean
-  /**
-   * 普通记忆注入条数（默认 20）。
-   *
-   * 上限固定为 `MEMORY_NORMAL_TOP_K_MAX`（20）——方案语义就是「普通记忆注入 top20」，
-   * 永久记忆不受它影响。
-   */
+  /** 普通记忆注入条数（默认 20，上限 `MEMORY_NORMAL_TOP_K_MAX`）；永久记忆不受它影响。 */
   memoryNormalTopK: number
-  /**
-   * 是否用 AI 生成会话标题（默认开启）。
-   * 关闭后不再发起标题生成的 LLM 调用，直接截取首条用户消息作为标题。
-   */
+  /** 是否用 AI 生成会话标题（默认开）：关掉后不发标题 LLM 调用，直接截取首条用户消息当标题。 */
   aiGenerateTitle: boolean
   /**
-   * 上下文压缩方式（点击 token 环时使用）
-   *
-   * - `ai`：AI 摘要，一次 LLM 调用把历史总结成一段（最省 token，但慢、要花钱）；
-   * - `raw`：正文压缩，本地渲染（毫秒级、零消耗，但保留全部正文、只去掉思考过程并省略超长工具输出）
+   * 上下文压缩方式（点 token 环时用）：`ai` = 一次 LLM 调用把历史总结成一段（最省 token，但慢、花钱）；
+   * `raw` = 本地渲染（毫秒级零消耗，保留全部正文，只去掉思考过程并省略超长工具输出）。
    */
   contextCompressMode: CompressMode
-  /**
-   * 上下文窗口（token）—— token 环 / 压缩百分比里「100%」对应的窗口大小。
-   *
-   * 全局设置：桌面端与 CLI 读**同一份**（`app_settings.contextWindowTokens`）。
-   * 桌面端设置页可编辑；CLI 只读取展示（状态行 / list-session 的百分比口径）。
-   */
+  /** 上下文窗口（token），即 token 环 / 压缩百分比里「100%」的口径。桌面端与 CLI 读**同一份**（`app_settings.contextWindowTokens`）：桌面端可编辑，CLI 只读展示。 */
   contextWindowTokens: number
   /** 是否启用「打开编辑器」功能 */
   editorOpenEnabled: boolean
@@ -127,20 +104,15 @@ export interface SettingsStore {
   editorOpenDefaultId: string
   /** 是否在 AI 回复完成或需要用户选择时，若窗口未激活则强制置为活动窗口 */
   forceWindowActive: boolean
-  /**
-   * 关闭窗口时是否隐藏到托盘（默认开）。
-   * 开启：点关闭只隐藏，AI 继续在后台跑，从托盘菜单可真正退出；
-   * 关闭：点关闭 = 直接退出进程（托盘不可用时也会自动回退成这个行为）。
-   */
+  /** 关闭窗口时是否隐藏到托盘（默认开）：开 = 点关闭只隐藏、AI 继续后台跑，从托盘菜单真正退出；关 = 直接退进程（托盘不可用时也自动回退成这个行为）。 */
   closeToTray: boolean
   /** AI 回复完成且窗口未显示/未激活时是否提醒（默认开；任务栏闪烁 + 托盘提示 + 未读计数） */
   notifyOnComplete: boolean
   /** 诊断埋点开关（默认关；开启后仅本地采集，不会自动外发） */
   telemetryEnabled: boolean
   /**
-   * 模型单价表（用于用量统计的费用估算），键为 `priceKey(providerConfigId, modelId)`，
-   * 即 `${providerConfigId}::${modelId}`；未配置的模型回退到内置价目表（`domain/pricing`）。
-   * 单位：每 1,000,000 tokens 的金额（币种见 currency）。
+   * 模型单价表（用量统计的费用估算），键为 `priceKey(providerConfigId, modelId)` =
+   * `${providerConfigId}::${modelId}`；未配置的模型回退到内置价目表（`domain/pricing`）。单位：每 1,000,000 tokens 的金额。
    */
   modelPricing: Record<string, ModelPrice>
   /** 费用币种（仅影响展示，与服务商无关；**默认人民币**，可在单价页切换） */
@@ -193,13 +165,9 @@ const defaultSettings: SettingsStore = {
 }
 
 /**
- * 写给 `StorageState` 的**只读** localStorage 适配器（S3 收尾）。
- *
- * 配置下沉（D3）后权威源是 Rust 侧 `app_settings` 表，localStorage **不再保存设置副本**：
- * - `getItem` 仍读真 localStorage → 兼容老版本遗留的副本（同步初值，水合前不空窗）；
- * - `setItem`：**Tauri 下丢弃**（设置只落 `app_settings` 表）/ 非 Tauri 下照写
- *   （浏览器 dev / vitest 没有表可写，仍靠 localStorage 持久化，保证 `pnpm dev` 可用）；
- * - `removeItem` 透传 → 供水合后清理历史副本（见 `dropLegacyLocalSnapshot`）。
+ * 写给 `StorageState` 的**只读** localStorage 适配器：权威源是 Rust 侧 `app_settings` 表，
+ * localStorage 不再保存设置副本。`getItem` 仍读真 localStorage（同步初值 + 兼容老版本遗留副本）；
+ * `setItem` 在 Tauri 下有意丢弃，非 Tauri（浏览器 dev / vitest 无表可写）照写；`removeItem` 透传供清理。
  */
 const settingsLocalStorage: Storage = {
   get length() {
@@ -210,7 +178,7 @@ const settingsLocalStorage: Storage = {
   key: (index: number) => localStorage.key(index),
   removeItem: (key: string) => localStorage.removeItem(key),
   setItem: (key: string, value: string) => {
-    // Tauri（有表）：有意丢弃 —— 不再产生第二份权威源，也不再把 apiKey 写进 localStorage
+    // Tauri（有表）：有意丢弃 —— 不产生第二份权威源，也不把 apiKey 写进 localStorage
     if (settingsRepo.isAvailable()) return
     localStorage.setItem(key, value)
   },
@@ -222,11 +190,7 @@ export const settingsState = new StorageState(
   1000,
   settingsLocalStorage,
 ).mixins({
-  /**
-   * 是否可使用的模型
-   * @param model
-   * @returns
-   */
+  /** 该模型是否可用（供应商已启用、且模型在它的列表里） */
   availableModel(model: { providerConfigId: string; modelId: string } | null) {
     if (!model) return false
     if (!model.providerConfigId || !model.modelId) return false
@@ -257,11 +221,9 @@ export const settingsState = new StorageState(
   },
 })
 
-// ── 埋点：任意设置项变更（§12.11 settings.change） ──
-// 敏感键整段打码；provider / searchProvider 列表只上报数量，避免 baseUrl/apiKey 泄漏。
+// 埋点：任意设置项变更（§12.11 settings.change）。敏感键整段打码；provider / searchProvider 列表只上报数量，避免 baseUrl / apiKey 泄漏。
 settingsState.onChange = (key, oldValue, newValue) => {
-  // telemetryEnabled 由 telemetry.toggle 事件记录，此处跳过，避免
-  // 「开启时记录 / 关闭时不记录」的不对称（track 在开关关闭时本就是 no-op）。
+  // telemetryEnabled 由 telemetry.toggle 记录，此处跳过 —— 避免「开时记录 / 关时不记录」的不对称
   if ((key as string) === 'telemetryEnabled') return
   track('settings.change', {
     key,
@@ -285,9 +247,7 @@ function settingChangeValue(key: string, value: unknown): unknown {
   return value
 }
 
-// ── 打开编辑器：旧版单命令 → 新版多配置 一次性迁移 ──
-// 早期版本 editorOpenCommand 为单个命令字符串，现改为 editorOpenConfigs 列表。
-// 若已有旧命令且列表为空，将其迁移为默认配置「VS Code」，并设为默认。
+// ── 打开编辑器：一次性迁移旧版单命令 `editorOpenCommand` → `editorOpenConfigs` 列表（旧命令转为默认配置「VS Code」） ──
 try {
   const old = (settingsState.value as any).editorOpenCommand
   if (
@@ -305,9 +265,9 @@ try {
     }
     settingsState.value.editorOpenConfigs = [migrated]
     settingsState.value.editorOpenDefaultId = migrated.id
-    // S3 收尾后不再写回 localStorage（迁移结果随首启 import 进表）
+    // 迁移结果随首启 import 进表，不再写回 localStorage
   }
-  // 清理旧字段（非枚举属类型定义字段，直接删除避免污染）
+  // 清掉旧字段（类型未声明，直接删以免污染）
   const raw = settingsState.value as any
   if ('editorOpenCommand' in raw) {
     delete raw.editorOpenCommand
@@ -316,10 +276,8 @@ try {
   // 非浏览器环境忽略
 }
 
-// ── 权限模块迁移：旧 commandApprovalMode（全局枚举）→ 新 permissions（按权限三态） ──
-// 旧值过粗（一个开关管所有命令），现拆成 terminal.normal / install / dangerous +
-// script.execute 四类，每类 允许 / 每次弹窗 / 禁止 三态。
-// 迁移后删除旧字段，避免与新模型并存造成困惑（新用户无旧值 → 用注册表默认）。
+// ── 权限迁移：旧 commandApprovalMode（全局枚举）→ 新 permissions（terminal.normal / install / dangerous + script.execute 各三态） ──
+// 旧值过粗（一个开关管所有命令）；迁移后删旧字段，避免与新模型并存造成困惑（新用户无旧值 → 用注册表默认）。
 try {
   const raw = settingsState.value as any
   const legacy = raw.commandApprovalMode as string | undefined
@@ -330,7 +288,7 @@ try {
       ...withDefaultPermissions(settingsState.value.permissions),
       ...migrated,
     }
-    // S3 收尾后不再写回 localStorage（迁移结果随首启 import 进表）
+    // 迁移结果随首启 import 进表，不再写回 localStorage
     localStorage.setItem('virlen-permissions-migrated', '1')
   }
   if ('commandApprovalMode' in raw) {
@@ -340,11 +298,7 @@ try {
   // 非浏览器环境忽略
 }
 
-/**
- * 解析默认工作目录
- * Tauri 环境下返回用户的文档目录，否则返回空字符串。
- * 结果缓存，只解析一次。
- */
+/** 解析默认工作目录：Tauri 下取用户文档目录，否则空串。结果缓存，只解析一次。 */
 let _resolvedWorkspace: string | null = null
 
 export async function resolveDefaultWorkspace(): Promise<string> {
@@ -366,8 +320,7 @@ export async function initDefaultWorkspace(): Promise<void> {
   }
 }
 
-// ── 配置下沉（D3）：设置 → Rust 侧 `app_settings` 表（同一个 `virlen.db`） ──
-// 权威源是表；localStorage 只作同步初值 + 回滚信道（详见 `docs/config-sink-plan.md`）。
+// 配置下沉：设置 → Rust 侧 `app_settings` 表（同一个 `virlen.db`）。权威源是表，localStorage 只作同步初值 + 回滚信道；
 // 键名与 `SettingsStore` 字段同名同层，两侧不建映射表（避免字段漂移）。
 export const SETTINGS_STORAGE_KEY = '_storage_state_virlen-settings'
 
@@ -430,9 +383,8 @@ function installSettingsPersist(): void {
 /**
  * 从 Rust 侧水合设置（幂等；非 Tauri 环境直接返回）。
  *
- * 1. 表**非空** → 以表为准覆盖到 `settingsState`（只认已知键）；
- * 2. 表**为空** → 把当前设置（localStorage + 上面的一次性迁移之后）整份导入 —— 老用户升级无感。
- *
+ * 表**非空** → 以表为准覆盖 `settingsState`（只认已知键）；表**为空** → 把当前设置
+ * （localStorage + 上面的一次性迁移之后）整份导入 —— 老用户升级无感。
  * 必须在 `init()` 里早于 i18n / 工作目录 / 会话加载执行：它们都依赖设置。
  */
 export async function hydrateSettings(): Promise<void> {
@@ -462,18 +414,17 @@ export async function hydrateSettings(): Promise<void> {
     console.warn('[settings] 读取 Rust 侧 app_settings 失败，继续使用本地设置:', e)
     return
   }
-  // 表已就绪 → 清掉老版本遗留的设置副本（S3 收尾；表不可用时保留兜底）
+  // 表已就绪 → 清掉老版本遗留的设置副本（表不可用时保留兜底）
   if (authorityReady) dropLegacyLocalSnapshot()
   installSettingsPersist()
 }
 
 /**
- * 删掉老版本遗留在 localStorage 的设置副本（S3 收尾 —— “清理回滚信道”）。
+ * 删掉老版本遗留在 localStorage 的设置副本。
  *
  * ⚠️ 只在「表已就绪」时调用：表读不到 / 首次导入失败时保留副本，作为后端故障的兜底。
- *
- * 用户看不到未水合的首帧（`init()` 之后才 `render()`，窗口还要等一帧才 `show()`）。唯一退化情形是「上次已
- * 删副本 + 本次后端不可用」→ 设置回默认值（无权威源，已属异常）。幂等：副本不存在时是空操作。
+ * 用户看不到未水合的首帧（`init()` 后才 `render()`，窗口还等一帧才 `show()`），唯一退化情形是
+ * 「上次已删副本 + 本次后端不可用」→ 设置回默认值（无权威源，已属异常）。幂等。
  */
 function dropLegacyLocalSnapshot(): void {
   try {

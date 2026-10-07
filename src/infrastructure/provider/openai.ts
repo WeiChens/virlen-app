@@ -1,9 +1,6 @@
 /**
- * OpenAI 兼容 Provider — 支持所有 OpenAI 协议兼容的 API
- * (OpenAI, DeepSeek, Moonshot, Zhipu, Ollama, 自定义等)
- *
- * 与 Rust 侧 `provider.rs::NativeOpenAiProvider` 行为必须一致（铁律 1），
- * 包括用量字段的解析（见 `cachedTokensFromUsage`）。
+ * OpenAI 兼容 Provider —— 支持所有 OpenAI 协议兼容的 API（OpenAI / DeepSeek / Moonshot / Zhipu / Ollama / 自定义）。
+ * 与 Rust provider.rs::NativeOpenAiProvider 行为必须一致（铁律 1），包括用量字段解析。
  */
 import type { Message, ProviderConfig, StreamCallback, TokenUsage } from '@/types'
 import type { ChatRequest, IProvider } from './types'
@@ -19,11 +16,8 @@ import type { MessageContent } from '@/types'
 import { processVisionContent } from './visionInject'
 
 /**
- * content 块 → OpenAI 兼容块
- *
- * OpenAI 协议只有 text / image_url 两种块：file（附件）/ quote（引用）/ skill（技能引用）
- * 没有对应结构，统一降级为文本（文件只带路径、引用带发送方 + id + 正文、技能带 SKILL.md 全文）。
- * 与 Rust 侧 `provider.rs::openai_blocks` 行为必须一致（铁律 1）。
+ * content 块 → OpenAI 兼容块：OpenAI 只有 text / image_url 两种块，file / quote / skill 无对应结构，统一降级为文本
+ *（文件只带路径、引用带发送方 + id + 正文、技能带 SKILL.md 全文）。与 Rust provider.rs::openai_blocks 行为必须一致（铁律 1）。
  */
 function toOpenAiBlocks(
   blocks: Exclude<MessageContent, string>,

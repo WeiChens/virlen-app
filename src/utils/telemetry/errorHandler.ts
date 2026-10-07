@@ -16,7 +16,7 @@ function isRuntimeErrorEvent(e: ErrorEvent): boolean {
 }
 
 /**
- * 安装全局错误监听（仅一次）
+ * 安装全局错误监听（仅一次）。
  */
 export function installGlobalErrorHandlers(): void {
   if (installed) return

@@ -1,24 +1,16 @@
 /**
- * todoDraftStore — 任务清单「本地草稿」（按会话缓存）
+ * 任务清单「本地草稿」（按会话缓存）：让 AI 回复期间用户也能改清单 —— 改动先落草稿，既不打断本轮
+ * 引擎（引擎拿的是消息数组快照），也不会被本轮后续写入覆盖。
  *
- * 用途：AI 回复期间用户也能改清单。改动先落在草稿里 —— 既不打断本轮引擎
- * （引擎的消息数组是内存快照，追加消息也不影响本轮），也不会被 AI 本轮后续的
- * 写入覆盖。
+ * `committed` 是分界线：false = 编辑中，只是草稿、不落地；true = 已应用，等本轮流真正结束
+ * （stream_end 非 paused）或用户取消时，由 `todo-service.flushTodoDraft()` 逐字落地成一条
+ * `role='feedback'` 消息（用户这份为准，不做字段级合并）。AI 空闲时点「应用」则立即落地。
+ * 任何后续编辑都会把 `committed` 复位 —— 「编辑中」永远不等于「已修改」。
  *
- * 草稿分两态，**「应用」是唯一的分界线**：
- *   - `committed = false`（编辑中）：只是草稿，清单权威不变，**不会被自动落地**；
- *   - `committed = true`（已应用）：用户已确认，等本轮回复流真正结束（stream_end
- *     非 paused）或用户取消本轮时，由 `services/todo-service.flushTodoDraft()`
- *     逐字落地成一条 `role='feedback'` 消息（用户这份为准，不做字段级合并）。
- *   AI 空闲时点「应用」则立即落地（`applyTodoDraft`），不经过 committed 阶段。
- *   任何后续编辑都会把 `committed` 复位 —— 「编辑中」永远不等于「已修改」。
+ * `base` 不只是备份：`sameTodoList(最新清单, base)` 不相等 = 编辑期间 AI 又写了一版，
+ * 编辑器据此提示「AI 已更新」（见 `TodoEditor`）。
  *
- * `base` 不只是备份：**编辑期间 AI 又写了一版清单**就靠它识别 ——
- * `sameTodoList(最新清单, base)` 不相等 = 权威被换过，编辑器提示「AI 已更新」，
- * 并把「放弃编辑并同步 / 覆盖更新」两个出口摆明（见 `TodoEditor`）。
- *
- * 与 Run Snapshot 同级：**只在内存**，刷新即失效；不进消息流、不落库。
- * 会话删除时由 `dropTodoDrafts()` 一并清理（避免内存泄漏）。
+ * 只在内存（与 Run Snapshot 同级），刷新即失效；不进消息流、不落库；会话删除由 `dropTodoDrafts()` 清理。
  */
 import { runInAction } from 'mobx'
 import RuntimeState from '@/utils/runtimeState'
@@ -30,10 +22,7 @@ export interface TodoDraft {
   base: TodoItem[]
   /** 用户编辑后的清单 */
   todos: TodoItem[]
-  /**
-   * 用户是否已点「应用变更」。
-   * false = 还在编辑，不生效；true = 已应用，等本轮结束 / 取消时合并落地。
-   */
+  /** 是否已点「应用变更」：false = 还在编辑不生效；true = 已应用，等本轮结束 / 取消时落地。 */
   committed: boolean
 }
 
@@ -72,12 +61,7 @@ export function hasTodoDraft(sessionId: string): boolean {
   return !!getTodoDraft(sessionId)
 }
 
-/**
- * 取（必要时创建）草稿。
- *
- * `effective` 是「用户开始编辑那一刻生效的清单」，作为 `base` 存下来 ——
- * 之后不会再重新采样 base（否则用户编辑期间 AI 的写入会被当成用户意图）。
- */
+/** 取（必要时创建）草稿。`effective` = 用户开始编辑那一刻生效的清单，存为 `base` 后不再重新采样（否则编辑期间 AI 的写入会被当成用户意图）。 */
 export function ensureTodoDraft(
   sessionId: string,
   effective: TodoItem[],
@@ -93,12 +77,7 @@ export function ensureTodoDraft(
   return draft
 }
 
-/**
- * 用新的清单内容替换草稿内容（base 保持不变）。
- *
- * 任何编辑都会把 `committed` 复位 —— 用户改完还没再点「应用」，这份改动就只是草稿，
- * 本轮结束 / 取消都不会带上它。
- */
+/** 替换草稿内容（`base` 不变）。任何编辑都复位 `committed`：没再点「应用」的改动只是草稿，本轮结束 / 取消都不会带上它。 */
 export function updateTodoDraftItems(
   sessionId: string,
   todos: TodoItem[],
@@ -110,9 +89,7 @@ export function updateTodoDraftItems(
 
 /**
  * 标记草稿「已应用」（AI 回复期间用户点「应用变更」时调用）。
- *
- * @returns 是否存在草稿 —— 无草稿（用户什么都没改）时返回 false，
- *          调用方据此提示「清单没有变化」。
+ * @returns 是否存在草稿；false（用户什么都没改）时调用方提示「清单没有变化」
  */
 export function markTodoDraftCommitted(sessionId: string): boolean {
   const draft = getTodoDraft(sessionId)
@@ -134,12 +111,9 @@ export function clearTodoDraft(sessionId: string): void {
 }
 
 /**
- * 丢弃「还没应用」的草稿（**浮层关闭时**调用）。
- *
- * 约定：草稿只活在浮层里 —— 关掉浮层 = 放弃这次编辑（与主流内联编辑面板一致）：没点「应用变更 / 覆盖
- * 更新」就不算修改，不应该悄悄留在内存里、下次开窗又冒出来。
- * ⚠️ 「已应用」（committed）的草稿是「用户已确认、等本轮生效」，关窗时绝不能丢。
- *
+ * 丢弃「还没应用」的草稿（**浮层关闭时**调用）：草稿只活在浮层里，关窗 = 放弃这次编辑，
+ * 不能让没点「应用变更 / 覆盖更新」的改动悄悄留在内存里、下次开窗又冒出来。
+ * ⚠️ committed 的草稿是「用户已确认、等本轮生效」，关窗时绝不能丢。
  * @returns 是否真的丢了东西（调用方据此决定要不要提示）
  */
 export function dropUnappliedTodoDraft(sessionId: string): boolean {

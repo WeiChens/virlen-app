@@ -1,8 +1,6 @@
 /**
  * 可惰性求值的文本：静态字符串，或「序列化给 LLM 前才调用」的函数。
- * 用于注册时无法确定、但到真正使用时已确定的动态描述（如平台信息）。
- * 注册用定义（ToolDefinition）允许惰性函数；对外返回的 ResolvedToolDefinition
- * 中惰性函数已被求值为纯字符串，可直接渲染/JSON 序列化。
+ * 注册用 ToolDefinition 允许惰性函数；对外的 ResolvedToolDefinition 已求值为纯字符串。
  */
 export type ResolvableString = string | (() => string)
 
@@ -66,14 +64,10 @@ export class UserInteractionRequired {
 }
 
 /**
- * 工具级失败（模型侧 `message` 固定英文，与 Rust 侧同形）。
+ * 工具级失败（模型侧 `message` 固定英文，与 Rust 同形）。
  *
- * `uiData` 是 **D2 的失败侧**：与成功结果同一套语义 —— 模型看英文 `message`，
- * UI 看语言无关的结构化字段、按界面语言重建文案。
- *
- * 为什么要专门一个类型：引擎与桥都靠「是不是 `Error` 实例」判定工具失败
- * （`services/rust-engine.ts` 的桥接层 / Rust `NativeToolOutcome::Error`），
- * 而裸 `Error` 带不了结构化字段 → 失败文案在中文界面下只能直显英文（遗留项 L6）。
+ * `uiData` 是与成功结果同一套语义的结构化字段：模型看英文 `message`，UI 按界面语言重建文案。
+ * 单独一个类型是因为引擎/桥靠「是不是 `Error` 实例」判定失败，裸 `Error` 带不了结构化字段。
  */
 export class ToolError extends Error {
   uiData?: Record<string, any>

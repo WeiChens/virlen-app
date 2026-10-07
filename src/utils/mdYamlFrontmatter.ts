@@ -1,11 +1,5 @@
 /**
- * mdYamlFrontmatter — Markdown YAML frontmatter 解析工具
- *
- * 支持：
- *  - 简单 key: value
- *  - 字面量块 description: | （保留换行）
- *  - 折叠块 description: >- （空格连接）
- *  - Windows \r\n / Unix \n 换行
+ * mdYamlFrontmatter — Markdown YAML frontmatter 解析工具。支持简单 key: value、字面量块 `|`、折叠块 `>-`、\r\n / \n 换行。
  */
 
 /** 解析结果 */
@@ -19,10 +13,7 @@ export interface FrontmatterResult {
 }
 
 /**
- * 从 Markdown 内容中提取并解析 YAML frontmatter
- *
- * @param mdContent - 完整 Markdown 文本
- * @returns 解析结果，含 fields 对象
+ * 从 Markdown 内容中提取并解析 YAML frontmatter。
  */
 export function parseMdFrontmatter(mdContent: string): FrontmatterResult {
   const frontmatterMatch = mdContent.match(/^---\r?\n([\s\S]*?)\r?\n---/)
@@ -100,8 +91,7 @@ export function parseMdFrontmatter(mdContent: string): FrontmatterResult {
 }
 
 /**
- * 从 frontmatter 提取 tags 字段（转为数组）
- * 支持 JSON 数组格式 [a, b, c] 或逗号分隔
+ * 从 frontmatter 提取 tags 字段并转为数组（JSON 数组格式或逗号分隔）。
  */
 export function parseFrontmatterTags(tagsRaw: string): string[] {
   if (!tagsRaw) return []
@@ -117,25 +107,8 @@ export function parseFrontmatterTags(tagsRaw: string): string[] {
 }
 
 /**
- * 统一的 SKILL.md 元信息解析
- * 兼容两种格式：
- *
- * 格式一：标准 YAML Frontmatter
- * ---
- * name: seedance
- * description: xxx
- * version: 1.0.0
- * tags: [a, b]
- * ---
- *
- * 格式二：纯 Markdown（无 frontmatter）
- * # 📝 Resume / CV Assistant
- * > AI-powered clawbot skill for resume & CV polishing...
- * **Version:** 1.0.0 · **License:** MIT
- *
- * @param mdContent - SKILL.md 全文
- * @param fallbackName - 文件夹名兜底
- * @returns 解析出的元信息
+ * 统一的 SKILL.md 元信息解析，兼容两种格式：① 标准 YAML frontmatter；② 纯 Markdown（无 frontmatter，从标题 / 正文提取）。
+ * @param fallbackName 文件夹名兜底
  */
 export interface ParsedSkillMeta {
   name: string
@@ -195,11 +168,8 @@ export function parseSkillMdMeta(
     }
   }
 
-  // 提取 version：兼容 `**Version:** X.X.X`（纯 Markdown 格式的文档写法，见 `docs/AGENTS.md` §9.2
-  // 与 `skill/importService.ts` 的错误提示示例）、`**Version**: X.X.X`、`Version: X.X.X`。
-  //
-  // 正则允许 `**` 落在冒号**外侧**（历史上不接受，与本节注释长期不符 —— 已修正）。
-  // Rust 原生镜像 `native_tools/skill/common.rs::RE_VERSION` 必须保持**同一结果**（铁律 1）。
+  // version：兼容 `**Version:** X.X.X` / `**Version**: X.X.X` / `Version: X.X.X`（正则允许 ** 落在冒号外侧）。
+  // Rust 原生镜像 native_tools/skill/common.rs::RE_VERSION 必须保持**同一结果**（铁律 1）。
   let version: string | undefined
   const versionMatch = body.match(/(?:\*\*)?[Vv]ersion(?:\*\*)?:?\s*(?:\*\*)?\s*(\d+\.\d+\.\d+)/)
   if (versionMatch) {

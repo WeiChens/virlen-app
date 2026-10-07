@@ -14,9 +14,9 @@ export interface ModalProps {
   closeOnClickOutside?: boolean
   showCloseButton?: boolean
   className?: string
-  /** 是否显示遮罩层，为 false 时不阻止用户点击外部 */
+  /** 是否显示遮罩层；false 时不阻止点击外部 */
   mask?: boolean
-  /** 是否允许拖动弹窗，以 modal-header 作为拖拽控件 */
+  /** 是否允许拖动（以 modal-header 作为拖拽控件） */
   move?: boolean
 }
 
@@ -41,7 +41,6 @@ function Modal({
   const isDragging = useRef(false)
   const dragStart = useRef({ x: 0, y: 0 })
 
-  // 点击外部关闭
   useEffect(() => {
     if (!closeOnClickOutside || !visible) return
 
@@ -81,7 +80,6 @@ function Modal({
     }
   }, [visible, onClose])
 
-  // 拖拽功能
   useEffect(() => {
     if (!move || !visible) return
 
@@ -89,7 +87,7 @@ function Modal({
     if (!header) return
 
     const handleMouseDown = (e: MouseEvent) => {
-      // 如果点击的是关闭按钮，不触发拖拽
+      // 点的是关闭按钮则不拖拽
       if ((e.target as HTMLElement).closest('.modal-close')) return
       e.preventDefault()
       isDragging.current = true
@@ -125,28 +123,26 @@ function Modal({
     }
   }, [move, visible, position.x, position.y])
 
-  // visible 变化时重置位置
   useEffect(() => {
     if (visible) {
       setPosition({ x: 0, y: 0 })
     }
   }, [visible])
 
-  // 焦点管理：打开时把焦点移入弹窗、Tab 圈定在弹窗内，关闭时归还焦点。
-  // 此前完全没有焦点约束 —— 弹窗打开后 Tab 可跑到背后的输入框，
-  // 此时 MessageBox 的「回车=确认」就会被误触发。
+  // 焦点管理：打开时焦点移入弹窗、Tab 圈定在内，关闭时归还。
+  // 此前无焦点约束时，弹窗打开后 Tab 能跑到背后的输入框，MessageBox 的「回车=确认」会被误触发。
   useEffect(() => {
     if (!visible) return
     const overlay = overlayRef.current
     const content = modalRef.current
     if (!overlay || !content) return
     const prev = document.activeElement as HTMLElement | null
-    // 弹窗内已有元素拿到焦点时（如 autoFocus 的输入框 / 重命名弹窗）不要抢走
+    // 弹窗内已有元素拿到焦点（autoFocus 的输入框 / 重命名弹窗）时不要抢走
     if (!content.contains(document.activeElement)) content.focus()
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Tab') return
-      // 只让最上层弹窗负责圈定
+      // 只由最上层弹窗圈定
       const overlays = document.querySelectorAll('.modal-overlay')
       if (
         overlays.length > 0 &&
@@ -196,7 +192,6 @@ function Modal({
             ? `translate(${position.x}px, ${position.y}px)`
             : undefined,
         }}>
-        {/* 头部 */}
         {(title || showCloseButton) && (
           <div
             className={`modal-header ${move ? 'draggable' : ''}`}
@@ -211,17 +206,14 @@ function Modal({
           </div>
         )}
 
-        {/* 内容 */}
         <div className="modal-body">{children}</div>
 
-        {/* 底部 */}
         {footer && <div className="modal-footer">{footer}</div>}
       </div>
     </div>
   )
 }
 
-// 默认底部按钮组件
 interface ModalFooterButtonsProps {
   onCancel: () => void
   onConfirm: () => void

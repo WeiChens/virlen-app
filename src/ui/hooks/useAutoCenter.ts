@@ -3,13 +3,11 @@ import { useEffect, useRef } from 'react'
 /**
  * 「打开即居中」—— 用户主动展开某块内容后，把它滚动到滚动容器的可视区中间。
  *
- * 触发语义（只对「用户主动打开」负责）：
- *   - `open` 由 false → true（用户点击展开）→ 居中一次；
- *   - 组件在 `open` 已为 true 时挂载 → 也居中一次。这批调用点的内容只有用户点开时才会挂载
- *     （折叠时 `getExpandView` 返回 null；虚拟列表重挂载会把 expand 重置为 false，不会带着 true 挂载）。
- *   - 禁止把被动时机接到这里（`!running`、消息到达、列表重挂载…）：用户可能正在别处阅读，
- *     把列表拽走比不居中更糟 —— 这正是上一版 `useAutoCenter(!running)` 的问题：
- *     命令结束时（用户并未点开）也会把列表滚到该终端块。
+ * 只对「用户主动打开」负责：`open` false → true（点击展开）居中一次；组件在 `open` 已为 true 时
+ * 挂载也居中一次（这些调用点只有点开才会挂载：折叠时 `getExpandView` 返回 null，虚拟列表重挂载
+ * 会把 expand 重置为 false）。禁止把被动时机接过来（`!running`、消息到达、重挂载…）：用户可能
+ * 正在别处阅读，把列表拽走比不居中更糟 —— 上一版 `useAutoCenter(!running)` 就会在命令结束时
+ * （用户并未点开）把列表滚到该终端块。
  *
  * @param open 打开信号（只应由用户手势产生）
  * @returns 挂到「要居中的那块内容」根节点上的 ref
@@ -45,7 +43,7 @@ function centerInScrollParent(el: HTMLElement) {
   try {
     scrollParent.scrollTo({ top: target, behavior: 'smooth' })
   } catch {
-    // 少数宿主（如 jsdom）会抛「scrollTo is not implemented」→ 放弃居中，不影响渲染
+    // jsdom 等宿主会抛「scrollTo is not implemented」→ 放弃居中，不影响渲染
   }
 }
 

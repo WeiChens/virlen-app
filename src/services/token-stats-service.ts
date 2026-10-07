@@ -1,18 +1,13 @@
 /**
- * token-stats-service — 用量统计的应用编排层
+ * token-stats-service — 用量统计的应用编排层。
  *
- * 职责：
- * 1. 把「时间范围 / 分桶维度」翻译成 Rust 查询参数（本地时区算边界）；
- * 2. 把 token 聚合结果 × 单价表 → 带费用的视图模型（**费用在前端算**，见 `domain/pricing`）；
- * 3. 明细的筛选 / 排序（**客户端执行**：会话 / 模型是子串搜索，而账本表的
- *    `session_id` / `model` 过滤是精确匹配，用不上）；
- * 4. 导出 CSV、清空账本。
+ * 职责：① 把「时间范围 / 分桶维度」翻译成 Rust 查询参数（本地时区算边界）；② token 聚合 × 单价表 →
+ * 带费用视图（**费用在前端算**，见 domain/pricing）；③ 明细筛选/排序（**客户端执行**：账本的
+ * session_id / model 过滤是精确匹配，用不上子串搜索）；④ 导出 CSV、清空账本。
  *
- * 单价优先级：用户在设置里配的（`settingsState.modelPricing`）> 内置价目表
- * （`DEFAULT_MODEL_PRICES`，仅作默认填充，UI 必须提示用户核对）。
- *
- * 币种：内置价目表固定存 USD，切到人民币时按 `USD_TO_CNY` 折算出费用；
- * 用户自填的单价按其币种原样使用（不二次折算）。**默认币种为人民币（CNY）**。
+ * 单价优先级：用户配置（settingsState.modelPricing）> 内置价目表（DEFAULT_MODEL_PRICES，仅默认填充，
+ * UI 须提示核对）。币种：内置表固定 USD，切人民币按 USD_TO_CNY 折算；用户自填按原币种使用（不二次折算）。
+ * **默认币种人民币（CNY）**。
  */
 import {
   computeCost,
@@ -42,9 +37,7 @@ export type {
 } from '@/infrastructure/statsRepo'
 
 /**
- * 时间范围预设。
- *  - `yesterday`：昨天 0 点 ~ 昨天 23:59:59.999；
- *  - `custom`：由用户指定的绝对时间区间（需同时传入 `customRange`）。
+ * 时间范围预设。`yesterday`：昨天 0 点 ~ 23:59:59.999；`custom`：用户指定的绝对区间（须同时传 customRange）。
  */
 export type UsageRange = 'today' | 'yesterday' | '7d' | '30d' | 'all' | 'custom'
 
@@ -80,9 +73,8 @@ export interface UsageStatsView {
   /** 当前分桶维度的桶（时间维度已补零 → 轴连续、无断档） */
   buckets: CostedBucket[]
   /**
-   * **实际生效**的分桶维度。时间维度上可能比用户所选更粗（跨度过大自动降级，
-   * 见 `MAX_TIME_BUCKETS`）—— UI 必须用它来判断轴标签与图表类型，
-   * 否则降级后标签会按旧粒度切（如按天数据切成小时样式）。
+   * **实际生效**的分桶维度。时间维度上可能比用户所选更粗（跨度过大自动降级，见 MAX_TIME_BUCKETS）——
+   * UI 必须用它判断轴标签与图表类型，否则降级后标签会按旧粒度切。
    */
   groupBy: UsageGroupBy
   /** 是否因数据跨度过大而自动降级了粒度（UI 需告知用户实际粒度） */
@@ -127,11 +119,9 @@ export interface RecordFilter {
 }
 
 /**
- * 明细一次拉取的条数上限。
- *
- * 明细页不再服务端分页，而是「一次拉一批 + 内存里筛选/排序/分页」—— 因为会话 / 模型的
- * 关键字搜索是子串匹配，而账本表的 `session_id` / `model` 过滤是精确匹配，下沉不到 SQL；
- * 若只拉当前页，搜索与排序就只会作用于单页（错误）。超过上限时 UI 提示缩小时间范围。
+ * 明细一次拉取条数上限。明细页不做服务端分页，而是「一次拉一批 + 内存里筛选/排序/分页」——
+ * 会话 / 模型关键字是子串匹配，下沉不到 SQL；只拉当前页会让搜索/排序只作用于单页（错误）。
+ * 超过上限时 UI 提示缩小时间范围。
  */
 export const RECORDS_LOAD_CAP = 5000
 
@@ -143,12 +133,9 @@ export interface RateInput {
 }
 
 /**
- * 输出速度（Completion token / 秒）。
- *
- * 口径：`completionTokens ÷ (durationMs / 1000)`，**含首字延迟与思考时间**
- * （服务商面板那种「纯生成阶段」速度需要 TTFT，账本没存，不能凭空假设）。
- * 返回 `null` 表示算不出来（旧流水没记耗时 / 耗时非正 / 没有输出 token）→ UI 显示 `-`，
- * **绝不能当成 0 tok/s**（会把「没数据」误读成「很慢」）。
+ * 输出速度（Completion token / 秒）= completionTokens ÷ (durationMs/1000)，**含首字延迟与思考时间**
+ *（服务商面板那种「纯生成阶段」速度需要 TTFT，账本没存）。返回 null 表示算不出（旧流水没记耗时 /
+ * 耗时非正 / 无输出 token）→ UI 显示 `-`，**绝不能当成 0 tok/s**（会把「没数据」误读成「很慢」）。
  */
 export function outputTokPerSec(r: RateInput): number | null {
   const ms = r.durationMs ?? 0
@@ -157,9 +144,7 @@ export function outputTokPerSec(r: RateInput): number | null {
 }
 
 /**
- * 明细的筛选 + 排序（纯函数）。
- *
- * 排序稳定：数值相等时按时间倒序兜底，否则翻页时同值行顺序会抖动。
+ * 明细的筛选 + 排序（纯函数）。排序稳定：数值相等时按时间倒序兜底，否则翻页时同值行顺序会抖动。
  * `tokPerSec` 排序把算不出速度的行当最小值（默认降序时沉底）。
  */
 export function filterAndSortRecords(
@@ -206,10 +191,7 @@ export function filterAndSortRecords(
 }
 
 /**
- * 明细汇总结果。
- *
- * 注意：`summarizeRecords` 对**传入的全部记录**汇总，调用方应传「全部筛选结果」而非当前页 ——
- * 这正是「汇总不是只算当前分页」的关键。
+ * 明细汇总结果。summarizeRecords 对**传入的全部记录**汇总，调用方应传「全部筛选结果」而非当前页。
  */
 export interface RecordsSummary {
   /** 参与汇总的记录条数（= 全部筛选结果条数） */
@@ -229,11 +211,8 @@ export interface RecordsSummary {
 
 /**
  * 明细汇总（Prompt / Completion / Cached / 合计 / 费用 / tok·s）。
- *
- * tok/s 采用**加权口径**：可测行的 Completion 之和 ÷ 可测行耗时之和 —— 相当于把所有可测调用
- * 当成一次连续生成来看，避免「逐行速度再求平均」被大量极小请求拉偏。可测行须同时满足
- * `durationMs > 0` 与 `completionTokens > 0`（旧流水未记耗时 → 不参与，与 `outputTokPerSec` 一致）；
- * 无可测行时返回 null，UI 显示 `-`（不能当 0）。
+ * tok/s 用**加权口径**：可测行 Completion 之和 ÷ 可测行耗时之和，避免逐行速度再平均被大量极小请求拉偏。
+ * 可测行须 durationMs>0 且 completionTokens>0（旧流水未记耗时不参与）；无可测行返回 null，UI 显示 `-`。
  */
 export function summarizeRecords(records: CostedRecord[]): RecordsSummary {
   let promptTokens = 0
@@ -286,11 +265,8 @@ export function startOfToday(now = Date.now()): number {
 }
 
 /**
- * 时间范围 → 查询边界（Unix ms）。`fromTs` / `toTs` 为 undefined 表示该端不过滤。
- *
- * 预设范围（今日 / 近 7 天 / 近 30 天 / 全部）只有「起始」边界，结束端隐含为调用时刻；
- * 而「昨天」与「自定义」必须显式给出结束边界 —— 否则「昨天」会把今天一并算进来。
- * Rust 侧过滤为闭区间（`ts >= fromTs AND ts <= toTs`）。
+ * 时间范围 → 查询边界（Unix ms）；undefined 表示该端不过滤。预设范围只有「起始」边界，结束端隐含为调用
+ * 时刻；「昨天」「自定义」必须显式给结束边界（否则「昨天」会把今天一并算进来）。Rust 侧过滤为闭区间。
  */
 export function rangeToBounds(
   range: UsageRange,
@@ -323,21 +299,16 @@ export function rangeToBounds(
 }
 
 /**
- * 时间范围 → 起始时间戳（Unix ms）；无下界返回 undefined。
- * 保留此函数以兼容既有调用 / 测试；需要上界时请改用 `rangeToBounds`。
+ * 时间范围 → 起始时间戳（Unix ms）；无下界返回 undefined。保留以兼容既有调用 / 测试；需要上界时用 rangeToBounds。
  */
 export function rangeToFromTs(range: UsageRange, now = Date.now()): number | undefined {
   return rangeToBounds(range, now).fromTs
 }
 
-// ==================== 时间桶补零（修「断轴」） ====================
-//
-// Rust 侧聚合是 `GROUP BY bucket_key`：**没有流水的时段压根不产生桶**。
-// 照原样画图就会出现「今日只在 7、8 点用过 → 图上只剩两根柱子」，看起来像数据错了。
-//
-// 补零放在**前端**做：SQL 一次不变（只回有数据的桶），这里按范围生成完整连续的
-// 桶 key 序列，把有数据的桶铺上去、缺的补 0。计算量 O(列数)（≤ `MAX_TIME_BUCKETS`），
-// 毫秒级 —— 因此**不需要**再建一张表缓存聚合结果，账本表也不留任何冗余列。
+// 时间桶补零（修「断轴」）：
+// Rust 聚合是 GROUP BY bucket_key，没有流水的时段不产生桶 → 照原样画图会「断轴」。
+// 补零放**前端**做：按范围生成连续的桶 key 序列，把有数据的桶铺上去、缺的补 0。
+// O(列数)（≤ MAX_TIME_BUCKETS），毫秒级 —— 不需要缓存聚合结果的表，账本表也不留冗余列。
 
 /** 时间粒度（与 Rust `usage_group_expr` 的白名单一致） */
 export type TimeUnit = 'hour' | 'day' | 'week' | 'month'
@@ -348,9 +319,8 @@ const TIME_UNITS: TimeUnit[] = ['hour', 'day', 'week', 'month']
 /**
  * 时间轴列数上限。超过就自动降一级粒度（小时→天→周→月）。
  *
- * 1000 列以内 echarts 配 `hideOverlap` 仍可读（约 = 41 天的小时 / 2.7 年的天），
- * 再多只会糊成一片。降级只发生在「全部 + 按小时」这类超长跨度上，
- * 且 `loadStats` 会回传 `degraded`，UI 会标注实际粒度。
+ * 1000 列以内 echarts 配 hideOverlap 仍可读（≈ 41 天的小时 / 2.7 年的天），再多只会糊成一片。
+ * 降级只发生在「全部 + 按小时」这类超长跨度，且 loadStats 会回传 degraded 供 UI 标注实际粒度。
  */
 export const MAX_TIME_BUCKETS = 1000
 
@@ -565,14 +535,12 @@ function addCost(a: TokenCost, b: TokenCost): TokenCost {
 /**
  * 查询聚合统计（含费用）。
  *
- * 合计费用只能按「模型」拆开算（见 `loadStats` 的第二次聚合）：时间 / 类型 / provider 的
- * 一个桶里往往混着多个模型、单价各不相同，用单一单价乘桶内总量会算错，而桶里根本没有
- * 模型信息、连单价都取不到。同理单位价也只能按模型取，而按会话分桶时 key 是 sessionId ——
- * 调用方需用 `resolveSessionModel` 映射回 provider/model，否则单价只能退到内置价目表（或 0）。
+ * 合计费用只能按「模型」拆开算（见下面第二次聚合）：时间 / 类型 / provider 的一个桶里混着多个模型、
+ * 单价各异，用单一单价乘桶内总量会算错，且桶里根本没有模型信息。按会话分桶时 key 是 sessionId，调用方
+ * 需用 resolveSessionModel 映射回 provider/model，否则单价只能退到内置价目表（或 0）。
  *
- * 时间维度（hour/day/week/month）额外做两件事：
- *  1. 补零：把范围内缺失的时段补成 0 桶，修「只在 7、8 点用过 → 图上只剩两根柱子」的断轴；
- *  2. 降级：列数超 `MAX_TIME_BUCKETS` 时自动放粗粒度（小时→天→周→月），回传实际的 `groupBy`。
+ * 时间维度额外做两件事：① 补零（缺失时段补 0 桶，修断轴）；② 列数超 MAX_TIME_BUCKETS 时自动放粗粒度
+ *（小时→天→周→月），回传实际的 groupBy。
  */
 export async function loadStats(
   range: UsageRange,
@@ -597,7 +565,7 @@ export async function loadStats(
       : statsRepo.stats({ ...query, groupBy: 'model' }),
   ])
 
-  // ===== 时间维度：补零（修断轴）+ 跨度过大时自动降级粒度 =====
+  // 时间维度：补零（修断轴）+ 跨度过大时自动降级粒度
   // SQL 只回「有流水的时段」，所以补零只能在前端做（见上方 densify 注释）。
   let stats = initial
   let unit: UsageGroupBy = groupBy
@@ -672,26 +640,20 @@ export interface RecordsContext {
   sessionId?: string
   limit?: number
   offset?: number
-  /** 自定义时间区间：仅当 `range === 'custom'` 时生效（见 `rangeToBounds`） */
+  /** 自定义时间区间：仅当 range === 'custom' 时生效（见 rangeToBounds） */
   custom?: CustomRange | null
 }
 
 /** 统计查询上下文 */
 export interface StatsContext {
   sessionId?: string
-  /** 自定义时间区间：仅当 `range === 'custom'` 时生效（见 `rangeToBounds`） */
+  /** 自定义时间区间：仅当 range === 'custom' 时生效（见 rangeToBounds） */
   custom?: CustomRange | null
-  /**
-   * 按会话分桶时，把 sessionId 映射回它当前的 provider/model（用于取准单价）。
-   * 由 UI 从 `sessionStore` 提供 —— 服务层不去 import store 之外的东西。
-   */
+  /** 按会话分桶时把 sessionId 映射回当前 provider/model（取准单价）；由 UI 从 sessionStore 提供。 */
   resolveSessionModel?: (
     sessionId: string,
   ) => { providerConfigId?: string; modelId?: string } | undefined
-  /**
-   * 当前时刻（默认 `Date.now()`）。补零的轴终点 / 范围边界都按它算；
-   * 测试注入固定时间用，生产不要传。
-   */
+  /** 当前时刻（默认 Date.now()）：补零轴终点 / 范围边界都按它算；测试注入固定时间用，生产不要传。 */
   now?: number
 }
 

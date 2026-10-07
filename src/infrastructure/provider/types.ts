@@ -9,9 +9,8 @@ export interface IProvider {
   /**
    * Provider 协议类型（openai / anthropic / gemini）。
    *
-   * 仅用于用量统计（`usage_ledger.provider_type`）—— `name` 存的是配置 id，
-   * 而协议类型是「这笔钱花在哪种计费口径上」的必要信息（如 Anthropic 的 cache 计价）。
-   * 可选：测试里的 mock provider 不需实现。
+   * 仅用于用量统计（usage_ledger.provider_type）—— name 存的是配置 id，协议类型才是「这笔钱花在哪种计费口径上」
+   * 的必要信息（如 Anthropic 的 cache 计价）。可选：测试里的 mock provider 不需实现。
    */
   readonly providerType?: ProviderType
 
@@ -48,9 +47,8 @@ export interface ChatRequest {
   /** 推理努力程度（如 OpenAI o 系列模型的 reasoning_effort） */
   reasoningEffort?: string
   /**
-   * 是否启用思考/推理模式（DeepSeek reasoner / OpenAI o 系列 / Anthropic extended thinking / Gemini thinking）。
-   * 默认 true（不传或 true 保持模型默认行为）；false 时在请求中显式禁用，
-   * 避免 maxTokens 被思考内容（reasoning_content）消耗殆尽、正文无输出。
+   * 是否启用思考 / 推理模式（DeepSeek reasoner / OpenAI o / Anthropic extended thinking / Gemini thinking）。
+   * 默认 true；false 时在请求中显式禁用，避免 maxTokens 被思考内容消耗殆尽、正文无输出。
    */
   thinking?: boolean
   /** 链路 ID（透传自会话 trace，用于 provider.* / provider.sse.interrupt 埋点关联） */

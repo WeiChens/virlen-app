@@ -1,16 +1,11 @@
 /**
- * 用量账本（token 统计）— 领域侧写入端口
+ * 用量账本（token 统计）— 领域侧写入端口。
  *
- * 与 Rust 侧 `src-tauri/virlen-core/src/agent/usage.rs::record_usage` 语义一致（铁律 1）：
- * **一次 LLM 调用记一条流水**，`kind` 区分调用类型。
+ * 与 Rust `agent/usage.rs::record_usage` 语义一致：**一次 LLM 调用记一条流水**，`kind` 区分类型。
+ * 为何不复用 `messages.usage`：标题生成/校验这类调用不产生消息，且账本独立于会话生命周期（删会话不清账）。
  *
- * 为什么要单独记账而不复用 `messages.usage`：
- *   1. 标题生成 / 迭代校验这类调用**不产生消息**，usage 若只挂在消息上就会丢失；
- *   2. 账本独立于会话生命周期 —— 删除会话不清账，历史总量不会缩水。
- *
- * 依赖方向：`domain/` 不能依赖 `infrastructure/`（不能直接 invoke Tauri），
- * 因此这里只定义「写入口 + 注入点」；真正的 SQLite 实现由 `services` 层在启动时
- * 通过 `bindUsageLedger()` 注入（未注入时静默丢弃，不阻塞主流程）。
+ * `domain/` 不能依赖 `infrastructure/`，故这里只定义「写入口 + 注入点」，SQLite 实现由 `services`
+ * 启动时经 `bindUsageLedger()` 注入（未注入则静默丢弃）。
  */
 
 /** 一次 LLM 调用的用量流水（领域侧形状，字段名与 Rust `UsageEntry` 一致） */
@@ -19,10 +14,7 @@ export interface UsageLedgerRecord {
   ts: number
   /** 归属会话（无会话上下文的调用可不传） */
   sessionId?: string
-  /**
-   * `chat_round` 的幂等键（assistant 消息 id）。
-   * 其余类型不传 —— 它们每次调用都是独立消费，必须各记一条。
-   */
+  /** `chat_round` 的幂等键（assistant 消息 id）；其余类型不传（每次调用独立消费，各记一条） */
   messageId?: string
   model: string
   providerType?: string
@@ -35,21 +27,17 @@ export interface UsageLedgerRecord {
   /** 缓存**命中（读取）**量：账本口径见 `ledgerTokensOf` */
   cachedTokens: number
   /**
-   * 缓存**写入**量（Anthropic 的 `cache_creation_input_tokens`，1.25x 输入价）；其余 provider 恒 0。
-   *
-   * ⚠️ 与 `cachedTokens` 必须分列：两者计价差 12.5 倍（0.1x ↔ 1.25x）。
-   * 口径：`prompt + cached + cacheWrite + completion = total`
+   * 缓存**写入**量（Anthropic `cache_creation_input_tokens`，1.25x 输入价）；其余 provider 恒 0。
+   * ⚠️ 必须与 `cachedTokens` 分列（计价差 12.5 倍）。口径：`prompt + cached + cacheWrite + completion = total`
    */
   cacheWriteTokens: number
   totalTokens: number
   /** 是否为本地估算值（非 API 返回），如上下文压缩用 tokenizer 估算 */
   estimated?: boolean
   /**
-   * 本次 LLM 请求的墙钟耗时（ms，**含首字延迟 / 思考时间**）。
-   *
-   * UI 用它算输出速度 `completionTokens ÷ (durationMs / 1000)`。
-   * 与 Rust `UsageEntry.duration_ms` 对称（铁律 1）；未测量就不传（落库 0，UI 显示 `-`）。
-   * 只存耗时而不存 tok/s：换算与口径（是否含首字延迟）变一次不用回填历史数据。
+   * 本次 LLM 请求的墙钟耗时（ms，**含首字延迟 / 思考时间**），UI 据此算输出速度。
+   * 与 Rust `UsageEntry.duration_ms` 对称；未测量就不传（落库 0，UI 显示 `-`）。
+   * 只存耗时而非 tok/s：口径变动时不必回填历史。
    */
   durationMs?: number
 }
@@ -79,10 +67,8 @@ export function bindUsageLedger(port: UsageLedgerPort): void {
 }
 
 /**
- * 记录一条用量流水。
- *
- * 刻意是同步的「发射即忘」接口：记账失败绝不能影响聊天 / 校验主流程，
- * 因此这里不返回 Promise、不做 await、异常全部吞掉（出错在实现内部打日志）。
+ * 记录一条用量流水。刻意是同步「发射即忘」接口：记账失败不得影响主流程，故不返回 Promise、
+ * 异常全部吞掉（出错在实现内部打日志）。
  */
 export function recordUsage(record: UsageLedgerRecord): void {
   if (!impl) return
@@ -116,11 +102,8 @@ export interface LedgerTokens {
 }
 
 /**
- * 该 provider 的 `promptTokens` 是否**已经包含**缓存命中量。
- *
- * - `openai`（含 DeepSeek 等兼容实现）：`prompt_tokens` 是全部输入，缓存命中算在里面；
- * - `gemini`：`cachedContentTokenCount` 是 `promptTokenCount` 的子集；
- * - `anthropic`：`input_tokens` **不含** cache 读写，缓存单独在 `cache_*` 字段里。
+ * 该 provider 的 `promptTokens` 是否**已包含**缓存命中量。
+ * `openai` / `gemini` 含（gemini 的 cached 是 prompt 子集）；`anthropic` 不含（cache 单独在 `cache_*`）。
  */
 export function cacheIncludedInPrompt(providerType?: string | null): boolean {
   return providerType !== 'anthropic'
@@ -128,10 +111,7 @@ export function cacheIncludedInPrompt(providerType?: string | null): boolean {
 
 /**
  * 由 token 三元组推导缓存量：`total - prompt - completion`（下限 0）。
- *
- * Anthropic 把 `cache_read_input_tokens + cache_creation_input_tokens` 计入 `totalTokens`
- * （`promptTokens` 只算非缓存输入），差值即**缓存总量（读 + 写）**；OpenAI 口径下恒为 0。
- * 仅在 provider 没有明确回报缓存时作为兜底；调用方需自行扣掉已回报的写入量。
+ * Anthropic 的差值是**缓存总量（读 + 写）**；OpenAI 口径恒为 0。仅作兜底，调用方需自行扣掉已回报的写入量。
  */
 export function cachedTokensOf(
   totalTokens: number,
@@ -144,12 +124,12 @@ export function cachedTokensOf(
 /**
  * 把 provider 回报的 usage 归一化成**账本口径**。
  *
- * 为什么要归一化：账本里 `promptTokens` 是**非缓存输入**，缓存读数与缓存**写入**各占一列，
- * 计费三档单价分开算。两种错法都会算错钱：
- * - OpenAI 兼容 / Gemini 把缓存算在 `promptTokens` 里，直接照抄会让那部分按输入价**重复计一次**；
- * - Anthropic 的缓存写入若混进「命中」档，就会被按 0.1x 计（实际 1.25x，低估 12.5 倍）。
+ * 账本口径：`promptTokens` 为非缓存输入，缓存读/写各占一列、三档单价分开算。
+ * 不归一化的两种错法都会算错钱：
+ * - OpenAI 兼容 / Gemini 把缓存算在 `promptTokens` 里，直接照抄会按输入价重复计一次；
+ * - Anthropic 的缓存写入若混进命中档会被按 0.1x 计（实际 1.25x）。
  *
- * ⚠️ 无 provider 归属信息时按 OpenAI 口径处理（更常见）；归一化后不变式：
+ * ⚠️ 无 provider 归属信息时按 OpenAI 口径处理；不变式：
  * `prompt + cached + cacheWrite + completion === total`。
  */
 export function ledgerTokensOf(

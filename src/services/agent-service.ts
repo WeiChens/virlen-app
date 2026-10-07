@@ -1,9 +1,4 @@
-/**
- * agent-service — Application 层 Agent 服务
- *
- * 包含 Agent 相关的业务流程。
- * 系统提示词模板从外部 .md 文件导入，便于与文档同步维护。
- */
+/** agent-service — Application 层 Agent 服务（系统提示词模板从外部 .md 导入，便于与文档同步）。 */
 import { settingsState } from '@/ui/store'
 import { agentRepo } from '@/infrastructure/agentRepo'
 import type { Agent } from '@/types'
@@ -22,8 +17,7 @@ import { composeSystemPrompt } from '@/domain/agent/compose-prompt'
 import type { SkillMetaLike } from '@/domain/agent/compose-prompt'
 
 /**
- * 组装 Agent 系统提示词
- * 在创建会话时调用，结果快照到 session.systemPrompt
+ * 组装 Agent 系统提示词；建会话时调用，结果快照到 session.systemPrompt。
  */
 export async function assembleAgentPrompt(
   agent: Agent,
@@ -37,17 +31,15 @@ export async function assembleAgentPrompt(
     : undefined
 
   // 项目规则 / 记忆文件（默认 AGENTS.md）：与工作目录强相关，紧跟环境信息之后。
-  // 无工作目录时回退到默认工作目录（与文件工具的 cwd 口径一致），读不到就不注入。
+  // 无工作目录时回退默认工作目录（与文件工具 cwd 口径一致），读不到就不注入。
   const projectRules = await loadProjectRulesPrompt(
     effectiveWorkspace || settingsState.value.defaultWorkspace,
     resolveProjectRulesFile(agent),
   )
 
-  // 长期记忆（记忆功能 P0）：**每个新会话**都注入「不限定项目 + 命中本次工作目录的项目记忆」
-  // （永久全量 + 普通 top20）。段文本由 Rust 侧唯一渲染（选取 / 预算裁剪 / 项目作用域只有一份实现）；
-  // 取不到就不注入（与项目规则同语义）。
-  // 与项目规则一样，注入只发生在**建会话那一刻**：会话中途新增的记忆不影响已建会话的
-  // systemPrompt（保持 prompt cache 命中率），需要时靠工具召回（P1）。
+  // 长期记忆（P0）：每个新会话注入「不限定项目 + 命中本次工作目录的项目记忆」（永久全量 + 普通 top20）。
+  // 段文本由 Rust 侧唯一渲染；取不到就不注入。注入只在建会话那一刻：中途新增的记忆不影响已建会话
+  // 的 systemPrompt（保 prompt cache 命中率），需要时靠工具召回（P1）。
   const memorySection = await loadMemorySection(false, effectiveWorkspace)
   // 计入「被使用」（hits 是 top20 的排序输入）；fire-and-forget，不阻塞建会话
   touchMemories(memorySection.ids)
@@ -74,11 +66,10 @@ export async function assembleAgentPrompt(
   })
 }
 
-// ==================== 默认 Agent 初始化 ====================
+// 默认 Agent 初始化
 
 /**
- * 构建默认 Agent（所有已注册工具）
- * 无副作用；定义读取是异步的（定义来自权威源，机制 C）
+ * 构建默认 Agent（含所有已注册工具）。无副作用；工具定义读取是异步的（来自权威源，机制 C）。
  */
 async function _buildDefaultAgent(): Promise<Agent> {
   const allTools = (await toolRegistry.listDefinitions()).map((t) => t.name)
@@ -103,13 +94,8 @@ async function _buildDefaultAgent(): Promise<Agent> {
 }
 
 /**
- * 应用启动时调用：确保默认 Agent 存在，并把新增的内置工具补入其白名单
- * 必须在 toolsInit() + toolRegistry.init() 之后调用
- * （依赖 toolRegistry.listDefinitions()：定义来自权威源，机制 C）
- *
- * 默认 Agent 的 allowTools 是「首次创建时的快照」，新版本上线的工具不会自动出现。这里只
- * 「补入缺失的工具」（不删除、不覆盖用户已有选择）—— 默认 Agent 的定位就是「全能助手」，
- * 与 _buildDefaultAgent() 语义一致；自定义 Agent 不在此处理。
+ * 启动时确保默认 Agent 存在，并把新增内置工具补入其白名单（须在 toolsInit() + toolRegistry.init() 之后）。
+ * allowTools 是「首次创建时的快照」，这里只补入缺失工具（不删除、不覆盖用户选择）；自定义 Agent 不处理。
  */
 export async function initDefaultAgent(): Promise<void> {
   const data = agentRepo.load()
@@ -136,10 +122,7 @@ export async function initDefaultAgent(): Promise<void> {
   agentRepo.save(data)
 }
 
-/**
- * 获取默认 Agent
- * 纯查询，无副作用。必须在 initDefaultAgent() 之后调用。
- */
+/** 获取默认 Agent（纯查询）。必须在 initDefaultAgent() 之后调用。 */
 export function getDefaultAgent(): Agent {
   const data = agentRepo.load()
   const agent = data.agents.find((a) => a.id === DEFAULT_AGENT_ID)

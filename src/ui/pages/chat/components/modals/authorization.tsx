@@ -1,20 +1,12 @@
 /**
- * AuthorizationModal — 通用「授权确认」弹窗
+ * AuthorizationModal — 通用「授权确认」弹窗，统一承载所有需用户授权的操作
+ *（命令执行 / 脚本执行 / 沙盒脱壳）。新增权限只需构造 `AuthorizationRequest` 即可复用。
  *
- * 统一承载所有需要用户授权的操作（当前：命令执行 / 脚本执行 / 沙盒脱壳）。
- * 后续新增授权权限时，只需构造 `AuthorizationRequest`（permName/title/subTitle/desc）即可复用，
- * 不必再新增弹窗。
+ * 布局与 `AuthorizationRequest` 一一对应：标题栏 = 「授权确认」+ 权限 key（让用户明确为哪个权限
+ * 授权）；正文三段 = title / subTitle / desc；hint = 风险 / 绕过沙盒警告，有则显示。
  *
- * 布局约定（与 `AuthorizationRequest` 一一对应）：
- *  - 标题栏：`授权确认` + 权限唯一 key（如 terminal.normal.execute）→ 让用户明确「为哪个权限授权」；
- *  - 正文三段：title（权限名称）/ sub-title（AI 说明）/ desc（命令等内容）；
- *  - hint：风险 / 警告提示（风险提示 + 绕过沙盒警告），有则显示。
- *
- * 键盘操作（只用键盘也能完成授权，与 `modals/user-choice` 同一套约定）：
- *  - 打开即聚焦「允许执行」→ **Enter = 确定**；
- *  - Esc = 拒绝（由共享 Modal 负责）；
- *  - Tab / Shift+Tab 在标题栏 ✕ 与三个按钮之间圈定循环（共享 Modal 负责）；
- *  - ↑ ↓ ← → 在「暂存 / 拒绝 / 允许执行」之间循环切换，再 Enter 即执行该项。
+ * 键盘（与 `modals/user-choice` 同一套约定）：打开即聚焦「允许执行」（Enter = 确定）；Esc = 拒绝，
+ * Tab 圈定循环（均由共享 Modal 负责）；↑↓←→ 在「暂存 / 拒绝 / 允许执行」之间循环，再 Enter 执行。
  */
 import { useEffect, useRef } from 'react'
 import Modal from '@/ui/components/shared/Modal'
@@ -87,8 +79,7 @@ export default function AuthorizationModal({
       const overlays = document.querySelectorAll('.modal-overlay')
       if (overlays[overlays.length - 1] !== overlay) return
       const active = document.activeElement as HTMLElement | null
-      // 焦点可能掉到 body（点过弹窗内的非聚焦区域，如正文 / 标题）——
-      // 弹窗是模态的：只要它是最上层，这一下键盘就归它
+      // 焦点可能掉到 body（点过弹窗内非聚焦区域）—— 弹窗是模态的，只要它最上层，这一下键盘就归它
       if (active && active !== document.body && !overlay.contains(active)) return
       if (e.key === 'Tab') return
 

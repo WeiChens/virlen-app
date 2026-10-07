@@ -1,37 +1,20 @@
 /**
  * bridge/telemetry —— 电脑侧「通讯层」埋点（§25）。
  *
- * ## 为什么单独一个模块
+ * 通讯层埋点散落在 6 个文件（index / phone-control / subscription / pairing / host-source /
+ * interaction-registry），各写各的会让**事件名、字段口径、正文截断长度**漂移 —— 而漂移的事件名等于没法
+ * 聚合。故：事件名只在 PHONE_EVENTS 出现一次（与 trace 字典一一对应）；载荷摘要（参数白名单 / 正文预览 /
+ * 截断长度）只在本文件实现一次；计数器（RPC / 推送 / 丢弃）也只在这里维护。
  *
- * 通讯层的埋点散落在 6 个文件（`index.ts` / `phone-control.ts` / `subscription.ts` /
- * `pairing.ts` / `host-source.ts` / `interaction-registry.ts`）里，若各写各的，
- * **事件名、字段口径、正文截断长度**必然漂移 —— 而「漂移的事件名」等于没法聚合。
- * 所以：
- *   - 事件名只在 `PHONE_EVENTS` 里出现一次（26 条，与 trace 字典一一对应）；
- *   - 载荷摘要（参数白名单 / 正文预览 / 截断长度）只在本文件实现一次；
- *   - 计数器（RPC 次数 / 推送条数 / 丢弃数）也只在这里维护，供 `phone.link.disable`
- *     与 `phone.push.stats` 复用。
+ * 全部走 utils/telemetry 的 track / trackPerf：默认关闭（settingsState.telemetryEnabled），关闭时 track
+ * 直接 return；采集时自动 redactDeep（密钥模式 + isSensitiveKey + 用户名路径 → `~`）；本地环形缓冲
+ *（5000 条）手动导出 zip，**不上传**。
  *
- * ## 与既有设施的关系（不新造轮子）
+ * 载荷口径（用户拍板）：**元数据 + 路径 + 正文截断 80 字**。正文/命令/提问以 80 字预览进本地埋点包
+ *（便于排查「手机显示的和电脑上的不一致」），但一律截断 + 单行化 + redactString；**绝不**记录
+ * systemPrompt / apiKey / 令牌原文（令牌只记 hashText）。
  *
- * 全部走 `utils/telemetry` 的 `track` / `trackPerf`：
- *   - **默认关闭**（`settingsState.telemetryEnabled`），关闭时 `track` 直接 return；
- *   - 采集时自动 `redactDeep`（密钥模式 + `isSensitiveKey` + 用户名路径 → `~`）；
- *   - 本地环形缓冲（5000 条）→ 手动导出 zip，**不上传**。
- *
- * ## 载荷口径（用户 2026-09-29 拍板）
- *
- * **元数据 + 路径 + 正文截断 80 字**。即：正文/命令/提问**会**以 80 字预览进入本地埋点包
- * （便于排查「手机显示的和电脑上的不一致」这类问题），但：
- *   - 一律截断 + 单行化（`previewOf`）；
- *   - 一律经 `redactString`（密钥模式 + 路径脱敏），`track` 采集时还会再兜一层；
- *   - **绝不**记录 `systemPrompt` / `apiKey` / 令牌原文（令牌只记 `hashText`）。
- *
- * ## 关闭时的开销
- *
- * `track()` 本身在关闭时是一次函数调用即返回，但**构造 props 的成本仍在调用方**。
- * 故高频节点（流式帧、ICE 信令、消息推送）都先 `isTelemetryEnabled()` 判断再构造载荷 ——
- * 这是 AGENTS.md §5.8「关闭时零开销」的落地方式。
+ * 关闭时零开销：高频节点（流式帧、ICE 信令、消息推送）先 isTelemetryEnabled() 判断再构造载荷。
  */
 import {
   BridgeError,
@@ -49,7 +32,7 @@ import {
   trackPerf,
 } from '@/utils/telemetry'
 
-// ==================== 事件名（唯一真源） ====================
+// 事件名（唯一真源）
 
 /**
  * 通讯层事件名 —— 命名遵循 AGENTS.md §5.8 的 `域.动作`，域取 `phone`（手机控制通道）。
@@ -95,7 +78,7 @@ export const PHONE_EVENTS = {
 /** 全部事件名（用例 / 文档对齐用）。 */
 export const PHONE_EVENT_NAMES: string[] = Object.values(PHONE_EVENTS)
 
-// ==================== 载荷口径 ====================
+// 载荷口径
 
 /** 正文 / 命令 / 提问的预览长度（用户拍板：80 字）。 */
 export const PREVIEW_LEN = 80
@@ -209,7 +192,7 @@ export function summarizeParams(method: string, params: unknown): Record<string,
   }
 }
 
-// ==================== 计数器（跨节点共享） ====================
+// 计数器（跨节点共享）
 
 interface PhoneCounters {
   rpcTotal: number
@@ -248,7 +231,7 @@ export function resetPhoneCounters(): void {
   counters.pushDropped = 0
 }
 
-// ==================== 节点①：RPC 入站 ====================
+// 节点①：RPC 入站
 
 export interface PhoneInstrument {
   dispose(): void
@@ -322,7 +305,7 @@ export function instrumentPhoneRpc(endpoint: Endpoint): PhoneInstrument {
   }
 }
 
-// ==================== 节点②：事件推送 ====================
+// 节点②：事件推送
 
 /** 从事件载荷里取会话 id（各 topic 的形状不同，取不到就留空）。 */
 function sessionIdOf(payload: unknown): string | undefined {
@@ -505,7 +488,7 @@ function summarizePush(topic: string, payload: unknown): Record<string, unknown>
   }
 }
 
-// ==================== 节点③：链路 / 信令 ====================
+// 节点③：链路 / 信令
 
 /**
  * 链路状态与错误。

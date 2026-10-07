@@ -1,12 +1,10 @@
 /**
- * chat — 会话消息分类公共函数（分类 id: chat）
+ * chat — 会话消息分类公共函数（id: chat），供 list_messages / read_messages 复用：硬上限常量（与 Rust
+ * MSG_QUERY_* 对齐，服务端另有 clamp 兜底）、面向模型的英文文本格式化（非 UI 文案、不进 i18n）、
+ * 单会话字符预算（滑窗，防模型反复查询刷爆上下文）。
  *
- * 供 `list_messages` / `read_messages` 复用：硬上限常量（与 Rust 侧 `MSG_QUERY_*` 对齐，服务端另有一份
- * clamp 兜底）、面向模型的英文文本格式化（不是 UI 文案、不进 i18n）、单会话字符预算（滑窗，防止模型反复
- * 查询把上下文刷爆）。
- *
- * ⚠️ Step 2 起两个工具已在 Rust 侧原生化（`native_tools/chat/`）—— 本文件的格式化 / 上限 / 预算逻辑有了
- * 第二份实现，改一边必须同步另一边（铁律 1）。
+ * ⚠️ Step 2 起两个工具已在 Rust 侧原生化（native_tools/chat/）—— 格式化 / 上限 / 预算逻辑有了第二份实现，
+ * 改一边必须同步另一边（铁律 1）。
  */
 import type {
   MessageTimelinePage,
@@ -30,7 +28,7 @@ export const CALL_OUTPUT_MAX_CHARS = 30000
 export const BUDGET_WINDOW_MS = 60_000
 export const BUDGET_MAX_CHARS = 60_000
 
-// ==================== 单会话字符预算（滑窗） ====================
+// 单会话字符预算（滑窗）
 
 interface BudgetEntry {
   windowStart: number
@@ -42,8 +40,8 @@ const budgets = new Map<string, BudgetEntry>()
 /**
  * 判断本次还能否返回 `chars` 个字符，并从预算中扣除。
  *
- * StormBreaker 只能拦「同名 + 同参」的重复调用，模型换个锚点 id 就能绕开；
- * 因此这里再加一道按会话的滑窗预算，做到「不能把历史一次性刷出来」。
+ * StormBreaker 只能拦「同名 + 同参」的重复调用，模型换个锚点 id 就能绕开；因此这里再加一道按会话的滑窗
+ * 预算，做到「不能把历史一次性刷出来」。
  */
 export function consumeBudget(sessionId: string, chars: number): boolean {
   const now = Date.now()
@@ -71,7 +69,7 @@ function pruneBudgets(now: number): void {
   }
 }
 
-// ==================== 文本上限 ====================
+// 文本上限
 
 /** 全量输出截断（超出追加提示，引导模型缩小窗口） */
 export function capOutput(text: string): { text: string; truncated: boolean } {
@@ -95,7 +93,7 @@ function timelineHeader(page: MessageTimelinePage): string[] {
   ]
 }
 
-// ==================== 格式化 ====================
+// 格式化
 
 function formatTime(ts: number): string {
   const d = new Date(ts)

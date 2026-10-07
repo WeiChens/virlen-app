@@ -1,19 +1,17 @@
-//! 长期记忆（记忆功能 P0）——`memories` / `memory_runs` 两张表 + `MemoryRepo`
+//! 长期记忆（P0）—— `memories` / `memory_runs` 两张表 + `MemoryRepo`。
 //!
-//! 与会话 / 配置**共用同一个 `virlen.db` 与同一把连接锁**（不引入第二个写连接 → 不会 `SQLITE_BUSY`），
-//! 因此 GUI 与 CLI 只要 `HostEnv::data_dir()` 指向同一目录，读写的就是同一份记忆。
+//! 与会话 / 配置共用同一个 `virlen.db` 与同一把连接锁（不引入第二个写连接 → 不会 `SQLITE_BUSY`），
+//! GUI 与 CLI 只要 `HostEnv::data_dir()` 同目录即读写同一份记忆。
 //!
-//! 两条硬约束（改这里时别丢）：
-//! - **建表放 `init_schema` 快速路径，不占 `SCHEMA_VERSION`**：纯新增表、无历史数据要回填；
-//!   递增版本会让 `migrate()` 对全库跑一次 `messages_fts` rebuild（大库分钟级），白付代价。
-//! - **表里只存提炼后的短句**（`summary` ≤ `MEMORY_SUMMARY_MAX_CHARS`）：详情正文在专用知识库里，
-//!   这里只留 `detail_kb_id` / `detail_doc_id` 两个链接字段 —— 记忆表要能整体塞进系统提示词。
+//! 两条硬约束（改这里别丢）：
+//! - **建表放 `init_schema` 快速路径，不占 `SCHEMA_VERSION`**：纯新增表无回填；递增版本会让 `migrate()`
+//!   对全库跑一次 `messages_fts` rebuild（大库分钟级）。
+//! - **表里只存提炼后的短句**（`summary` ≤ `MEMORY_SUMMARY_MAX_CHARS`）：详情正文在专用知识库里，这里只留
+//!   `detail_kb_id` / `detail_doc_id` 两个链接字段 —— 记忆表要能整体塞进系统提示词。
 //!
-//! `memory_runs`（按天幂等 / 可观测）：表结构在 P0 建好，**P2 开始写入** —— 编排逻辑在
-//! `agent::memory::consolidate`，这里只提供「取 / 列表 / 上次完成的日 / 抢锁 / 落终态 / 按天清理」。
-//!
-//! 检索（`search`，P1）与 `messages_fts` 同口径：trigram 分词 → 中文子串可命中；
-//! 查询短于 3 字符时回退 `LIKE`（trigram 无法命中短查询）。
+//! `memory_runs`：表在 P0 建好、**P2 开始写入**；编排在 `agent::memory::consolidate`，这里只做
+//! 「取 / 列表 / 上次完成的日 / 抢锁 / 落终态 / 按天清理」。检索与 `messages_fts` 同口径（trigram 分词，
+//! 短于 3 字符回退 `LIKE`）。
 
 use async_trait::async_trait;
 use rusqlite::{params, Connection, OptionalExtension};

@@ -1,22 +1,16 @@
-//! `chat` 的**纯状态机** —— 按键与引擎事件进，UI 状态与待执行动作出
+//! `chat` 的纯状态机 —— 按键与引擎事件进，UI 状态与待执行动作出。
 //!
-//! 为什么单独一个纯模块：可测路径上不能出现真终端，也不能依赖 `bin`（bin 目标不被单测引用）。
-//! 本模块**没有任何 I/O**：`view` 读它画帧、`mod` 取它的动作去驱动引擎、`term` 才去碰终端。
-//!
-//! 收进来的一条约定：**引擎事件的语义解释只在这里做一次**（比如「同一 tool_call 的两帧开始
-//! 事件要去重」），`view` / `mod` 都不再各自解释一遍。
+//! 无 I/O（可测路径不能出现真终端，也不能依赖 bin）：`view` 读它画帧、`mod` 取它的动作驱动引擎、
+//! `term` 才碰终端。约定：引擎事件的语义解释只在这里做一次，`view` / `mod` 不再各自解释。
 
 
 pub(crate) mod event;
 pub(crate) mod key;
 pub(crate) mod line;
 
-// 行模型（`LineKind` / `OutLine` / `expand` / `sanitize`）搬去 `line.rs`，但**路径不变**：
-// `crate::tui::state::{OutLine, expand, LineKind}`（`term` / `view` 在用）仍照旧可用。
-//
-// `impl UiState` 被拆成三段（本文件=构造与访问器 / `event.rs`=引擎事件 / `key.rs`=按键）。
-// 同一个类型的多个 `impl` 块分散在不同文件是合法的 —— 而且它们都是 `state` 的**子模块**，
-// 因此能直接读写 `UiState` 的私有字段（无需把字段放宽到 `pub(crate)`）。
+// 行模型（`LineKind` / `OutLine` / `expand` / `sanitize`）搬去 `line.rs` 但路径不变。
+// `impl UiState` 拆三段（本文件 = 构造与访问器 / `event.rs` = 引擎事件 / `key.rs` = 按键）：多个
+// `impl` 块分散在不同文件合法，且都是 `state` 子模块 → 能直接读写 `UiState` 私有字段。
 pub(crate) use self::line::*;
 
 use crate::tui::commands::Slash;

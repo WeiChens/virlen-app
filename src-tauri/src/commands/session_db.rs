@@ -1,16 +1,8 @@
-//! `session_db` 的 **Tauri 命令层**（GUI 壳）
+//! `session_db` 的 Tauri 命令层（GUI 壳）。实现全在 `virlen-core::session_db`（零 `tauri::`），本文件只做：
+//! `init_session_db`（打开库 + 注册状态）、`manage_noop_settings`（库打不开时的 Noop 兜底）、
+//! 以及全部 `cmd_*`（参数兜底 + 调 repo + 埋点）。
 //!
-//! 库的打开、会话与配置的读写实现全在 `virlen-core::session_db`（零 `tauri::`）。本文件只有三件事：
-//! 1. `init_session_db`：构造 `TauriHost` → 打开库 → 注册 Tauri 状态；
-//! 2. `manage_noop_settings`：库打不开时的 Noop 兜底（否则设置 / **记忆**命令会因「状态未注册」失败）；
-//! 3. 全部 `cmd_*`：只做「参数兜底 + 调用 repo + 埋点」，业务语义都在 `SessionRepo` 实现里。
-//!
-//! ```text
-//! GUI：TauriHost::data_dir() ─┐
-//! CLI：CliHost::data_dir()    ├─→ virlen_core::session_db::open_session_db
-//! ```
-//!
-//! 两条路径的 `data_dir()` 指向同一目录 → 读写同一份 `virlen.db`（配置下沉 D3 的落点）。
+//! GUI 的 `TauriHost::data_dir()` 与 CLI 的 `CliHost::data_dir()` 同目录 → 读写同一份 `virlen.db`。
 
 use std::sync::Arc;
 

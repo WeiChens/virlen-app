@@ -1,11 +1,7 @@
 /**
- * telemetry/redact — 脱敏（§7.1 正文上报安全兜底）
- *
- * 强制项：采集与上传前都必须经过密钥模式打码。
- * - 密钥模式扫描（OpenAI / Anthropic / Gemini / Bearer / 私钥块）
- * - 敏感字段名打码（apiKey / token / secret / password / authorization）
- * - 系统用户名路径前缀替换为 ~
- * - 稳定短哈希（用于 path_hash 等去重，非加密用途）
+ * telemetry/redact — 脱敏（§7.1 正文上报安全兜底）：采集与上传前都必须经密钥模式打码 ——
+ * 密钥模式扫描（OpenAI / Anthropic / Gemini / Bearer / 私钥块）、敏感字段名打码、系统用户名路径 → ~、
+ * 稳定短哈希（path_hash 等去重，非加密用途）。
  */
 import { sliceHead } from '../text'
 
@@ -28,12 +24,11 @@ const GENERIC_FIELD_PATTERN =
   /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|secret|password|passwd|authorization)\s*["']?\s*[:=]\s*["']?)([^\s"',;}\]]+)/gi
 
 /**
- * 命中则整体打码的字段名模式（用于对象键名）
+ * 命中则整体打码的字段名模式（用于对象键名）。
  *
- * 注意：不要匹配裸 `token` 子串。否则 `first_token_ms` / `tokens` / `max_tokens` /
- * `token_count` 等「度量」字段也会被整段打码成 `***`（曾导致 chat.stream.first_token
- * 的 first_token_ms 上报为 "***"）。仅当键「以 token 结尾」（token / access_token /
- * refreshToken …）或命中明确的鉴权限定词时才视为敏感。
+ * ⚠️ 不要匹配裸 `token` 子串：否则 first_token_ms / tokens / max_tokens / token_count 等「度量」字段也会被
+ * 整段打码成 ***（曾导致 chat.stream.first_token 的 first_token_ms 上报为 "***"）。仅当键「以 token 结尾」
+ * 或命中明确的鉴权限定词时才视为敏感。
  */
 const SENSITIVE_KEY_PATTERN =
   /(api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|auth[_-]?token|id[_-]?token|bearer[_-]?token|session[_-]?token|token$|secret|password|passwd|authorization|credential|private[_-]?key)/i
@@ -42,7 +37,7 @@ const SENSITIVE_KEY_PATTERN =
 export const REDACTED = '[REDACTED]'
 
 /**
- * 对字符串做密钥模式打码
+ * 对字符串做密钥模式打码。
  */
 export function redactString(input: string): string {
   if (!input) return input
@@ -51,9 +46,8 @@ export function redactString(input: string): string {
     out = out.replace(re, REDACTED)
   }
   out = out.replace(GENERIC_FIELD_PATTERN, `$1${REDACTED}`)
-  // §7.1：系统用户名路径前缀替换为 ~。
-  // 并入采集链统一兜底，保证 error stack / 工具入参 / 命令 / backtrace 等
-  // 任意字符串都经过路径脱敏，而非仅导出时处理。
+  // §7.1：系统用户名路径前缀替换为 ~。并入采集链统一兜底，保证 error stack / 工具入参 / 命令 / backtrace
+  // 等任意字符串都经过路径脱敏，而非仅导出时处理。
   out = redactPath(out)
   return out
 }
@@ -86,12 +80,7 @@ export function redactDeep<T>(value: T, depth = 0): T {
   return out as unknown as T
 }
 
-/**
- * 系统用户名路径前缀脱敏：
- *   C:\Users\alice\proj  → ~\proj
- *   /Users/alice/proj    → ~/proj
- *   /home/alice/proj     → ~/proj
- */
+/** 系统用户名路径前缀脱敏：C:\Users\alice\proj / /Users/alice/proj / /home/alice/proj → ~/proj。 */
 export function redactPath(path: string): string {
   if (!path || typeof path !== 'string') return path
   return path
@@ -115,7 +104,7 @@ export function urlHost(url: string): string {
 }
 
 /**
- * 截断过长文本（用于工具输出等，§12.6 截断上限）
+ * 截断过长文本（工具输出等，§12.6 截断上限）。
  */
 export function truncateText(input: string, max = 16384): string {
   if (typeof input !== 'string') return input

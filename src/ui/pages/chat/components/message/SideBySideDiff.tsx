@@ -11,11 +11,10 @@ import { useAutoCenter } from '@/ui/hooks/useAutoCenter'
 import './SideBySideDiff.scss'
 
 /**
- * SideBySideDiff —— edit_file 的「原文件 / 新文件」左右对比视图。
+ * SideBySideDiff —— edit_file 的「原文件 / 新文件」左右对比视图（含词法着色与全屏）。
  *
- * 从 tool-call/EditFileMessage.tsx 抽出为独立组件（含词法着色与全屏）。
- * 数据准备（把多处编辑合并成行）仍留在 EditFileMessage：那是 edit_file 工具的
- * uiData 结构知识，本组件只负责“给什么行就画什么行”。
+ * 行数据由 EditFileMessage 准备（多处编辑合并成行是 edit_file 的 uiData 结构知识），
+ * 本组件只负责「给什么行就画什么行」。
  */
 
 /** SideBySideDiff 可渲染的行：普通 diff 行 + 多处编辑之间的省略间隔行 */
@@ -25,11 +24,8 @@ export type SideBySideRow =
       type: 'gap'
     }
 
-// ==================== Monaco 行内词法着色（左右对比的代码行） ====================
-//
-// diff 是“左右栏 + 逐行红/绿底 + 行号”的自定义布局，无法整段塞进 Monaco 编辑器。
-// 因此这里用 Monaco 的 Monarch 词法器对每一行单独切词，再按 virlen-dark 主题规则
-// 上色，视觉上和 CodePreview（Monaco 代码块）保持一致。
+// diff 是「左右栏 + 逐行红/绿底 + 行号」的自定义布局，无法整段塞进 Monaco 编辑器，
+// 故用 Monaco 的 Monarch 词法器逐行切词，再按 virlen-dark 主题规则上色，视觉上与 CodePreview 一致。
 
 type DiffToken = { offset: number; type: string }
 
@@ -124,14 +120,9 @@ function diffLanguageFromName(fileName: string | null): string | undefined {
   return toMonacoLang(ext)
 }
 
-// ==================== 左右对比面板 ====================
-
 /**
- * 一行里的其中一半（左半=原文件 / 右半=新文件）。
- *
- * 两半是**同一个 grid 行的两个格子**（都由 .diff-body 承载），所以：
- * - 两侧列宽天然各占一半（不需要再量宽、写 --diff-col-w）；
- * - 行高由 grid 行决定 → 一侧折行时另一侧那一格跟着变高，左右不会逐行错位。
+ * 一行里的其中一半（左半=原文件 / 右半=新文件）：两半是**同一个 grid 行的两个格子**，所以
+ * 两侧列宽天然各占一半（不必量宽），且一侧折行时另一侧跟着变高，左右不会逐行错位。
  */
 function DiffHalf({
   side,
@@ -174,10 +165,8 @@ function DiffHalf({
 }
 
 /**
- * diff 正文（文件头 / 双栏表头 / 每一行的左右两半）。
- *
- * 「原位」与「全屏」各渲染一份：两边可用宽度不同（全屏铺满窗口），所以列宽不能写死 ——
- * 交给 CSS 的 grid 1fr 1fr 按各自容器算，这也是不再需要 JS 量宽的原因。
+ * diff 正文（文件头 / 双栏表头 / 每一行的左右两半）。「原位」与「全屏」各渲染一份：
+ * 两边可用宽度不同，列宽交给 CSS grid 1fr 1fr 按各自容器算（故无需 JS 量宽）；
  * `isFull` 只切换类名，结构完全一致。
  */
 function DiffContent({
@@ -234,20 +223,6 @@ function DiffContent({
       {/* 文件头（固定，不随内容滚动） */}
       <div className="diff-header">
         <span className="diff-header-name">{fileName}</span>
-        {/* {stat && (stat.delCount > 0 || stat.insCount > 0) && (
-          <span className="diff-stat">
-            {stat.delCount > 0 && (
-              <span className="diff-stat--del">
-                {tpl('减少 $__count__行', { count: stat.delCount })}
-              </span>
-            )}
-            {stat.insCount > 0 && (
-              <span className="diff-stat--ins">
-                {tpl('新增 $__count__行', { count: stat.insCount })}
-              </span>
-            )}
-          </span>
-        )} */}
         <div className="diff-actions">
           {/* 内置全屏按钮：与调用方的 actions 同级，始终可用 */}
           <button
@@ -268,8 +243,7 @@ function DiffContent({
         </div>
       </div>
 
-      {/* 唯一的滚动容器（只纵向滚动）：双栏表头 + 每一行的左右两半都在里面。
-          横向不再需要滚动 —— 超长行会在各自那一半里折行。 */}
+      {/* 唯一的滚动容器（只纵向）：双栏表头 + 每一行的左右两半都在里面；超长行在各自那半折行，故横向不滚 */}
       <div className="diff-body">
         {/* 双栏表头（吸顶：纵向钉住、横向跟着两列走） */}
         <div className="diff-column-headers">
@@ -308,13 +282,9 @@ function DiffContent({
   )
 }
 
-// ==================== 对外组件 ====================
-
 /**
- * 左右对比 diff，内置「全屏」动作。
- *
- * 全屏与 CodeBlock / 终端块同构：原位照常渲染（不能卸载，否则虚拟列表条目会变矮、
- * 触发重测量把滚动锚点带偏），另用 createPortal 把「铺满」形态挂到 body 上，
+ * 左右对比 diff，内置「全屏」动作：与 CodeBlock / 终端块同构 —— 原位照常渲染（不能卸载，
+ * 否则虚拟列表条目变矮、重测量把滚动锚点带偏），另用 createPortal 把铺满形态挂到 body，
  * 靠 position:fixed 逃出消息条目祖先的 transform / overflow。
  */
 export function SideBySideDiff({
@@ -333,12 +303,12 @@ export function SideBySideDiff({
   /** 用户展开该 diff 时是否滚动到视口中间（见 useAutoCenter） */
   autoCenter?: boolean
 }) {
-  // 全屏态：与 CodeBlock 一致，由组件自身管理，按钮放在文件头右侧
+  // 全屏态由组件自身管理，按钮在文件头右侧（与 CodeBlock 一致）
   const [fullscreen, setFullscreen] = useState(false)
-  // 「打开即居中」：hook 只能在组件顶层无条件调用（不能放进 EditFileMessage 的类方法里，见 §11）
+  // 「打开即居中」的 hook 只能在顶层无条件调用，不能放进 EditFileMessage 的类方法里
   const rootRef = useAutoCenter(autoCenter)
 
-  // Esc 退出全屏（与 CodeBlock / TerminalBlock 保持一致的操作习惯）
+  // Esc 退出全屏（与 CodeBlock / TerminalBlock 一致）
   useEffect(() => {
     if (!fullscreen) return
     const handleKeyDown = (e: KeyboardEvent) => {

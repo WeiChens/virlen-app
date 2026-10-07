@@ -1,10 +1,5 @@
-//! search — 搜索分类（分类 id: search）
-//!
-//! 一个工具一个文件：
-//! - `search_files_by_name`：按文件名（纯文本 / 正则 / glob）搜索
-//! - `search_text_in_files`：按文件内容（正则）搜索
-//!
-//! `common.rs` 为分类内公共：glob 模式 → 正则转换。
+//! search — 搜索分类（分类 id: search）：`search_files_by_name`（按文件名：文本 / 正则 / glob）、
+//! `search_text_in_files`（按内容正则）；`common.rs` 为 glob 模式 → 正则转换。
 
 mod common;
 mod search_files_by_name;

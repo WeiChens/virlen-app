@@ -1,21 +1,13 @@
 /**
- * search — 搜索分类公共函数（分类 id: search）
- *
- * 供 search_files_by_name / search_text_in_files 复用：
- * glob 转换、搜索根目录安全解析、可取消任务（taskId + Rust 端 stop_task）。
+ * search — 搜索分类公共函数（id: search），供 search_files_by_name / search_text_in_files 复用：
+ * glob 转换、搜索根目录安全解析、可取消任务（taskId + Rust stop_task）。
  */
 import { invoke } from '@tauri-apps/api/core'
 import { securityService } from '@/services/security-service'
 
 /**
- * 将 Glob 模式转换为正则表达式
- *
- * 支持的语法：
- *   - `*`   匹配单层路径中的任意字符（不含 `/`）
- *   - `**`  匹配任意层级路径
- *   - `?`   匹配单层路径中的单个字符（不含 `/`）
- *   - `{a,b}` 备选模式（匹配 a 或 b）
- *   其他特殊字符自动转义
+ * Glob 模式 → 正则：`*` 匹配单层任意字符（不含 `/`）、`**` 匹配任意层级、`?` 匹配单层单个字符、
+ * `{a,b}` 备选；其他特殊字符自动转义。
  */
 export function globToRegex(pattern: string): string {
   if (!pattern) return '^$'
@@ -55,9 +47,7 @@ export function globToRegex(pattern: string): string {
   return '^' + re + '$'
 }
 
-/**
- * 解析搜索根目录（安全校验；path 缺省时用 "."，由 securityService 回退到工作目录）
- */
+/** 解析搜索根目录（安全校验；path 缺省时用 "."，由 securityService 回退到工作目录）。 */
 export async function resolveSearchRoot(
   path: string | undefined,
   sessionId: string,
@@ -66,10 +56,7 @@ export async function resolveSearchRoot(
 }
 
 /**
- * 创建可取消的搜索任务
- *
- * 生成 taskId 并在 abortSignal 触发时通知 Rust 端停止遍历。
- * 返回的 stop() 可重复调用（内部吞掉错误），供 invoke 回退分支与取消分支复用。
+ * 创建可取消的搜索任务：生成 taskId，abortSignal 触发时通知 Rust 停止遍历；返回的 stop() 可重复调用（内部吞错）。
  */
 export function createSearchTask(
   prefix: string,

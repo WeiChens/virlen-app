@@ -1,21 +1,6 @@
 /**
- * 注册工具 — 按分类聚合
- *
- * 目录结构与 src/domain/tools/category.ts 的 TOOL_CATEGORIES 一一对应：
- *   file/          → file（文件操作，8 个工具）
- *   search/        → search（搜索，2 个）
- *   execute/       → execute（代码执行，2 个）
- *   knowledge-base/→ knowledge_base（知识库，6 个）
- *   web/           → web（网络，2 个）
- *   vision/        → vision（视觉，1 个）
- *   skill/         → skill（技能，2 个）
- *   system/        → system（系统，2 个）
- *   plan/          → plan（任务规划，1 个）
- *   chat/          → chat（会话消息，2 个）
- *   memory/        → memory（长期记忆，3 个）
- *
- * 每个分类目录内：一个工具一个文件 + common.ts（分类内公共函数）；
- * 分类 index.ts 负责 import 各工具文件（注册副作用）。
+ * 注册工具 —— 按分类聚合（目录与 src/domain/tools/category.ts 的 TOOL_CATEGORIES 一一对应）。
+ * 每分类目录内：一个工具一个文件 + common.ts；分类 index.ts import 各工具文件（注册副作用）。
  */
 export const toolsInit = async () => {
   await import('@/infrastructure/tools/file')

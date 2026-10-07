@@ -1,15 +1,8 @@
-//! Agent 引擎的 **Tauri 命令层**（GUI 壳）
+//! Agent 引擎的 Tauri 命令层（GUI 壳）。引擎本体在 `virlen-core`（零 `tauri::`），本文件只做：
+//! 注入 `TauriEventSink` / `TauriHost`、暴露 `agent_*` / `pty_*` / `cmd_*` 命令、把 JS 回执转交引擎。
 //!
-//! 引擎本体在 `virlen-core`（零 `tauri::`）；本文件只做三件事：
-//! 1. 把 [`TauriEventSink`] / `TauriHost` 注入引擎（[`init_agent_engine`]）；
-//! 2. 暴露命令：`agent_send_message` / `agent_cancel` / `agent_kill_command` / `pty_*`
-//!    / `agent_get_run_snapshot` / `agent_clear_run_snapshot` / `agent_dispose`
-//!    / `cmd_list_tool_definitions` / `cmd_agent_prompts` / `cmd_provider_catalog`；
-//! 3. 把 JS 侧回执转交引擎：`agent_tool_response` / `agent_user_interaction_response`
-//!    / `agent_round_boundary_response` / `agent_provider_stream_event` / `agent_provider_stream_done`。
-//!
-//! 事件名与载荷形态**不得改动**（铁律 2：`AgentEventType` 是 TS emit / Rust emit /
-//! `chat-service` / `rust-engine.ts` 四方共享契约）。
+//! ⚠️ 事件名与载荷形态不得改动（`AgentEventType` 是 TS emit / Rust emit / `chat-service` /
+//! `rust-engine.ts` 四方共享契约）。
 
 use std::sync::Arc;
 use tauri::Emitter;

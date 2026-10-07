@@ -1,5 +1,5 @@
 /**
- * Provider 抽象层 — 定义 LLM Provider 接口
+ * Provider 抽象层 — LLM 供应商注册中心与全局单例
  */
 import { IProvider } from '@/infrastructure/provider/types'
 import { ProviderPort } from '../ports'
@@ -28,11 +28,6 @@ export class ProviderRegistry implements ProviderPort {
     this.providers.set(id, provider)
     if (!this.defaultProvider) this.defaultProvider = id
   }
-  // async registerByConfig(id: string, providerConfig: ProviderConfig) {
-  //   const provider = createProviderInstance(providerConfig)
-  //   this.providers.set(id, provider)
-  //   if (!this.defaultProvider) this.defaultProvider = id
-  // }
 
   async unregister(id: string) {
     if (this.defaultProvider === id) this.defaultProvider = null

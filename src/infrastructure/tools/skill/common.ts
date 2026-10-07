@@ -1,16 +1,9 @@
-/**
- * skill — 技能分类公共函数（分类 id: skill）
- *
- * 供 list_skills / read_skill_source 复用。
- */
+/** skill — 技能分类公共函数（id: skill），供 list_skills / read_skill_source 复用。 */
 import type { SkillFileEntry } from '@/skill'
 
 /**
  * 把技能目录树渲染成 ├── / └── 风格的文本行，追加到 lines 后返回。
- *
- * @param entries 目录条目（getSkillFileTree 的结果）
- * @param prefix  当前层级前缀（根层级传 '  '）
- * @param lines   结果累积数组（便于调用方先写入标题行）
+ * @param prefix 当前层级前缀（根层级传 '  '）；@param lines 结果累积数组（便于调用方先写入标题行）
  */
 export function renderFileTree(
   entries: SkillFileEntry[],

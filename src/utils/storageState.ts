@@ -1,12 +1,7 @@
 import { debounce } from '@/utils/common'
 import { action, makeObservable, observable } from 'mobx'
 
-/**
- * 获取缓存值
- * @param defaultValue 获取失败的返回默认值
- * @param key 密钥
- * @returns
- */
+/** 获取缓存值（失败返回 defaultValue）。 */
 const getLocal = <T>(
   defaultValue: T,
   key: string,
@@ -62,10 +57,7 @@ class StorageState<T extends object> {
     this.saveLocal(this.value)
   }
   /**
-   *
-   * @param key 缓存密钥
-   * @param defaultValue 默认值
-   * @param persistenceDelay 持久化延迟
+   * @param key 缓存密钥；@param defaultValue 默认值；@param persistenceDelay 持久化延迟（<=0 立即写）。
    */
   constructor(
     key: string,
@@ -105,16 +97,7 @@ class StorageState<T extends object> {
   }
 
   /**
-   * 扩展实例方法
-   *
-   * 将 obj 中的属性复制到当前实例上，返回类型为 StorageState<T> & M，
-   * 调用方可直接访问 mixin 方法。
-   *
-   * @example
-   * const state = new StorageState('key', defaultValue).mixins({
-   *   getFoo() { return this.value.foo }
-   * })
-   * state.getFoo() // √ 类型安全
+   * 扩展实例方法：将 obj 属性复制到当前实例，返回 StorageState<T> & M（调用方直接访问 mixin 方法）。
    */
   mixins<M extends Record<string, any>>(
     obj: M,

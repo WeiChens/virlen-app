@@ -1,15 +1,10 @@
 /**
- * 工具定义来源适配器（infrastructure）—— 实现 domain 的 `ToolDefinitionsLoader`
+ * 工具定义来源适配器（infrastructure）—— 实现 domain 的 ToolDefinitionsLoader。
  *
- * 两条路径读的是**同一份物理文件** `src-tauri/virlen-core/src/agent/tool_defs/definitions.json`：
- *
- * | 环境 | 取值方式 | 说明 |
- * |---|---|---|
- * | Tauri 运行时 | `cmd_list_tool_definitions` | Rust 按当前平台返回；权威且只有一份 |
- * | 浏览器 dev / vitest | 动态 `import(...json?raw)` | 同一份文件，按平台快照选变体 |
- *
- * Rust 命令失败时**降级到内嵌契约**并打印警告（版本错配时不至于整个聊天不可用）。
- * 因为两条路径同源，这里不需要任何「差异检查」逻辑。
+ * 两条路径读**同一份物理文件** src-tauri/virlen-core/src/agent/tool_defs/definitions.json：
+ * Tauri 运行时走 cmd_list_tool_definitions（Rust 按当前平台返回，权威且只有一份）；浏览器 dev / vitest 走
+ * 动态 import(...json?raw)（同一份，按平台快照选变体）。Rust 命令失败时降级到内嵌契约并告警
+ *（版本错配时不至于整个聊天不可用）。因两路径同源，无需差异检查。
  */
 import { invoke } from '@tauri-apps/api/core'
 import type { ResolvedToolDefinition } from '@/domain/tools/types'
@@ -26,9 +21,8 @@ function isTauriEnv(): boolean {
 }
 
 /**
- * 读取内嵌的权威源文件（浏览器 / 测试路径）。
- * 用动态 import：Tauri 构建里这条分支不执行，JSON 会被单独打成按需 chunk，
- * 不会把 100+ KB 的契约塞进主包。
+ * 读取内嵌的权威源文件（浏览器 / 测试路径）。用动态 import：Tauri 构建里这条分支不执行，JSON 会被单独打成
+ * 按需 chunk，不会把 100+ KB 的契约塞进主包。
  */
 export async function loadDefinitionsFile(): Promise<ToolDefinitionsFile> {
   // 动态 import 必须让 Vite 处理 `?raw`（不能加 @vite-ignore，否则运行时拿不到内容）

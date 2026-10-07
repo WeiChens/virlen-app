@@ -1,13 +1,11 @@
 /**
- * Provider HTTP 工具 — 统一 fetch 调用、SSE 流解析
- *
- * 三个 provider (OpenAI/Anthropic/Gemini) 在 chat/chatStream 中
- * 大量重复的 fetch → 错误处理 → SSE 解析逻辑，统一封装至此。
+ * Provider HTTP 工具 —— 统一 fetch 调用与 SSE 流解析。三个 provider（OpenAI/Anthropic/Gemini）在
+ * chat/chatStream 中大量重复的「fetch → 错误处理 → SSE 解析」逻辑，统一封装至此。
  */
 import { track, urlHost } from '@/utils/telemetry'
 import { sliceHead } from '@/utils/text'
 
-// ==================== 埋点辅助（§5.7 provider.*） ====================
+// 埋点辅助（§5.7 provider.*）
 
 /** 将 providerName 归一化为 provider_type */
 function mapProviderType(name: string): string {
@@ -70,7 +68,7 @@ function parseRequestBody(body: string | undefined): {
   }
 }
 
-// ==================== Fetch 工具 ====================
+// Fetch 工具
 
 export interface ApiFetchOptions {
   url: string
@@ -155,7 +153,7 @@ export async function apiFetch(options: ApiFetchOptions): Promise<Response> {
   }
 }
 
-// ==================== SSE 流解析 ====================
+// SSE 流解析
 
 export type SSELineHandler = (line: string) => void
 
@@ -259,7 +257,7 @@ export function parseSSELine(
   return null
 }
 
-// ==================== 响应体读取 ====================
+// 响应体读取
 
 /**
  * 从 Response 获取 reader，如果为空则抛异常。

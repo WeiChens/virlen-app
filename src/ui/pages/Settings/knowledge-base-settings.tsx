@@ -1,13 +1,8 @@
 /**
- * knowledge-base-settings — 知识库管理页面
+ * knowledge-base-settings — 知识库管理页：RAG 开关 / 默认知识库、知识库创建 / 删除 / 列表；
+ * 文档的上传 / 删除 / 编辑 / 预览与检索测试都在 `DocListModal` 内托管。
  *
- * 功能：
- * - RAG 开关 / 默认知识库设置
- * - 知识库创建（弹窗）/ 删除 / 列表
- * - 文档上传 / 删除 / 编辑 / 预览、检索测试（均在 DocListModal 内托管）
- *
- * 拆分说明：弹窗组件与文件导入 / 导出工具已抽到 `./knowledge-base/*`，
- * 本文件只保留 RAG 开关 + 知识库列表 + 两个弹窗的挂载。
+ * 弹窗组件与导入 / 导出工具已抽到 `./knowledge-base/*`，本文件只留开关 + 列表 + 弹窗挂载。
  */
 
 import { useEffect, useState, useCallback } from 'react'
@@ -31,7 +26,6 @@ function KnowledgeBaseSettings() {
   const [kbs, setKbs] = useState<KnowledgeBase[]>([])
   const [loading, setLoading] = useState(true)
 
-  // 创建知识库弹窗
   const [showCreateModal, setShowCreateModal] = useState(false)
 
   // 文档列表弹窗（文档 / 搜索 / 分页等 state 由 DocListModal 自持）
@@ -39,13 +33,11 @@ function KnowledgeBaseSettings() {
   const [docListKbId, setDocListKbId] = useState('')
   const [docListKbName, setDocListKbName] = useState('')
 
-  /** 默认知识库选项（供 Select 组件使用） */
   const kbSelectOptions = [
     { value: '', label: t('未选择') },
     ...kbs.map((kb) => ({ value: kb.id, label: kb.name })),
   ]
 
-  /** 加载知识库列表 */
   const loadKbs = useCallback(async () => {
     setLoading(true)
     try {
@@ -64,12 +56,10 @@ function KnowledgeBaseSettings() {
     loadKbs()
   }, [loadKbs])
 
-  /** 打开创建知识库弹窗 */
   const openCreateModal = () => {
     setShowCreateModal(true)
   }
 
-  /** 删除知识库 */
   const handleDelete = async (kbId: string, name: string) => {
     const confirmed = await MessageBox.propt(
       t('删除知识库'),
@@ -87,7 +77,6 @@ function KnowledgeBaseSettings() {
     }
   }
 
-  /** 打开文档列表弹窗 */
   const openDocListModal = (kbId: string, kbName: string) => {
     setDocListKbId(kbId)
     setDocListKbName(kbName)
@@ -215,7 +204,6 @@ function KnowledgeBaseSettings() {
         )}
       </div>
 
-      {/* 创建知识库弹窗 */}
       <CreateKbModal
         visible={showCreateModal}
         onClose={() => setShowCreateModal(false)}

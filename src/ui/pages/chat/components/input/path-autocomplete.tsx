@@ -1,10 +1,6 @@
 /**
- * path-autocomplete — 路径自动补全组件
- *
- * 在输入框中输入 "/" 时触发，列出当前工作目录的文件/文件夹选项，
- * 支持键盘导航（↑↓）、Enter 选中、Esc 关闭。
- *
- * 数据来源：Tauri invoke('list_directory', ...)
+ * path-autocomplete — 路径自动补全：输入 `@` 触发，列出工作目录下的文件 / 文件夹；
+ * ↑↓ 导航、Enter 选中、Esc 关闭。数据来自 invoke('list_directory')。
  */
 import {
   useState,
@@ -17,8 +13,6 @@ import FolderSvg from '@/ui/components/icons/FolderSvg'
 import FileTypeIcon from '@/ui/components/icons/FileTypeIcon'
 import { t } from '@/ui/i18n'
 
-// ==================== 工具类型 ====================
-
 interface DirEntry {
   name: string
   type: 'file' | 'dir'
@@ -26,23 +20,17 @@ interface DirEntry {
 }
 
 interface AutocompleteState {
-  /** 是否显示下拉 */
   visible: boolean
-  /** 匹配的条目 */
   items: DirEntry[]
-  /** 目录前缀（用于展示路径上下文，如 "C:/code/project/src/"） */
+  /** 展示用的目录路径上下文（如 "C:/code/project/src/"） */
   dirLabel: string
-  /** 当前目录相对工作区的路径（如 "src/"，用于构建选中项的相对路径） */
+  /** 当前目录相对工作区的路径前缀（如 "src/"），用于构建选中项 */
   relativePrefix: string
-  /** 正在加载 */
   loading: boolean
-  /** 错误信息 */
   error: string | null
-  /** 当前目录是否为空（没有任何文件和子目录） */
+  /** 当前目录下无任何条目（仍显示下拉，让用户能确认路径） */
   isEmptyDir: boolean
 }
-
-// ==================== 工具函数 ====================
 
 const KB = 1024
 const MB = KB * 1024
@@ -62,16 +50,7 @@ function mapDirEntryType(ty: string): 'file' | 'dir' {
   return 'file'
 }
 
-// ==================== Hook ====================
-
-/**
- * 路径自动补全 hook
- *
- * @param text       当前输入框文本
- * @param cursorPos  光标位置（selectionStart）
- * @param workspace  当前工作区根目录
- * @returns          自动补全状态和控制方法
- */
+/** 路径自动补全 hook；cursorPos = 光标位置（selectionStart），workspace = 工作区根目录 */
 export function usePathAutocomplete(
   text: string,
   cursorPos: number,
@@ -87,17 +66,12 @@ export function usePathAutocomplete(
     isEmptyDir: false,
   })
 
-  // 最近一次自动补全请求的标识，用于丢弃过期结果
+  // 请求标识，用于丢弃过期结果
   const requestIdRef = useRef(0)
 
   /**
-   * 解析文本，提取路径片段
-   * 以 @ 触发，@ 后面跟随路径（用 / 分隔）
-   *
-   * 例如 "读取 @src/main" → { dirPath: "src/", prefix: "main", dirLabel: "@src/" }
-   * 例如 "读取 @src/"     → { dirPath: "src/", prefix: "",    dirLabel: "@src/" }
-   * 例如 "读取 @"         → { dirPath: "",     prefix: "",    dirLabel: "@" }
-   * 返回 null 表示未检测到 @ 输入
+   * 从光标前的片段里提取 `@` 路径：`@src/main` → { dirPath: 'src/', prefix: 'main', dirLabel: '@src/' }；
+   * 未检测到 `@` 返回 null。
    */
   const parsePathFragment = useCallback((): {
     dirPath: string
@@ -118,7 +92,6 @@ export function usePathAutocomplete(
     const atIdx = fragment.lastIndexOf('@')
     if (atIdx < 0) return null
 
-    // @ 后面的部分才是路径
     const afterAt = fragment.slice(atIdx + 1)
     const slashIdx = afterAt.lastIndexOf('/')
 
@@ -129,18 +102,14 @@ export function usePathAutocomplete(
     return { dirPath, prefix, dirLabel }
   }, [text, cursorPos])
 
-  /**
-   * 判断是否为绝对路径（Unix / 开头，Windows 盘符如 C:/ 开头）
-   */
+  /** 是否绝对路径（Unix `/` 开头或 Windows 盘符） */
   const isAbsolutePath = (p: string): boolean =>
     p.startsWith('/') || /^[A-Za-z]:[/\\]/.test(p)
 
-  /**
-   * 读取目录内容（实时从文件系统读取，不缓存，确保与磁盘状态同步）
-   */
+  /** 读目录内容（实时读盘、不缓存，保证与磁盘同步） */
   const readDirectory = useCallback(
     async (dirPath: string, signal: AbortSignal): Promise<DirEntry[]> => {
-      // triggerAutocomplete 已解析为完整路径，直接使用
+      // 调用方已解析为完整路径
       let fullDir: string
       if (isAbsolutePath(dirPath)) {
         fullDir = dirPath
@@ -152,7 +121,6 @@ export function usePathAutocomplete(
         fullDir = workspace || ''
       }
 
-      // 标准化路径分隔符
       fullDir = fullDir.replace(/\\/g, '/')
 
       try {
@@ -181,9 +149,7 @@ export function usePathAutocomplete(
     [workspace],
   )
 
-  /**
-   * 触发自动补全
-   */
+  /** 触发自动补全 */
   const triggerAutocomplete = useCallback(async () => {
     if (!workspace) {
       setState((s) => ({ ...s, visible: false }))
@@ -221,11 +187,10 @@ export function usePathAutocomplete(
         (e) => !prefix || e.name.toLowerCase().startsWith(prefix.toLowerCase()),
       )
 
-      // 显示实际目录路径（如 "C:/code/project" 或 "C:/code/project/src/"）
+      // 展示实际目录路径（如 "C:/code/project" 或 "C:/code/project/src/"）
       const displayLabel = dirPath ? parentDir + '/' : workspace
 
-      // 如果已经进入了子目录（dirPath 非空）但没有任何条目，说明是个空目录
-      // 此时仍然显示下拉，让用户可以通过"空目录"选项来确认路径并删除 @
+      // 进了子目录却无任何条目 = 空目录：仍显示下拉，让用户能通过「空目录」项确认路径并删掉 @
       const isEmptyDir = matched.length === 0 && dirPath !== ''
 
       setState({
@@ -244,16 +209,12 @@ export function usePathAutocomplete(
     }
   }, [workspace, parsePathFragment, readDirectory])
 
-  /**
-   * 关闭自动补全
-   */
+  /** 关闭自动补全 */
   const closeAutocomplete = useCallback(() => {
     setState((s) => ({ ...s, visible: false, items: [] }))
   }, [])
 
-  /**
-   * 路径变化时重新触发自动补全
-   */
+  /** 文本 / 光标 / 工作区变化 → 重新触发或关闭补全 */
   useEffect(() => {
     if (!text || !workspace) {
       closeAutocomplete()
@@ -284,32 +245,25 @@ function makeEmptyDirItem(): DirEntry {
   }
 }
 
-// ==================== 组件 ====================
-
 interface PathAutocompleteProps {
   /** 匹配的条目 */
   items: DirEntry[]
   /** 目录标签（如 "C:/code/project/src/"） */
   dirLabel: string
-  /** 当前目录相对工作区的路径前缀（如 "src/"），用于构建目录项的显示路径 */
+  /** 当前目录相对工作区的路径前缀（如 "src/"） */
   relativePrefix: string
-  /** 当前目录是否为空（没有任何文件和子目录） */
   isEmptyDir: boolean
   /** 选中后的回调：传入完整路径 */
   onSelect: (fullPath: string) => void
-  /** 关闭 */
   onClose: () => void
-  /** 选中的索引（键盘导航用） */
+  /** 键盘导航的选中索引 */
   selectedIndex: number
-  /** 设置选中索引 */
   setSelectedIndex: (idx: number) => void
   /** 距离底部的偏移 px（避免遮挡 textarea） */
   bottomOffset?: number
 }
 
-/**
- * 路径自动补全下拉菜单
- */
+/** 路径自动补全下拉菜单 */
 export function PathAutocomplete({
   items,
   dirLabel,

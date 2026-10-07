@@ -3,14 +3,9 @@
 use crate::agent::memory::tools::{MemoryToolDeps, MemoryToolOutput};
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
 
-/// 从工具上下文取出记忆操作依赖。
-///
-/// - `repo`：记忆仓储（库打不开时是 `NoopMemoryRepo` → 工具如实回「本地存储不可用」）；
-/// - `rag`：RAG 服务未初始化（无库环境 / 浏览器 dev）→ `None`，工具降级为
-///   「详情落不了库 / 读不到详情」，**不影响**记忆条目本身；
-/// - `session_id`：写入时记进 `source_session_id`，让每条记忆都能溯源到会话；
-/// - `workspace`：会话工作目录（`security.workspace`）—— `memory_write` 靠它给项目记忆定作用域，
-///   `memory_search` 靠它筛掉别的项目的记忆。
+/// 从工具上下文取出记忆操作依赖：`repo`（库打不开时 Noop → 工具如实回
+/// 「本地存储不可用」）、`rag`（未初始化 → `None`，仅降级「详情落不了库」，不影响记忆条目）、
+/// `session_id`（溯源）、`workspace`（给项目记忆定作用域 / 筛掉别的项目）。
 pub(super) fn deps<'a>(ctx: &'a NativeToolCtx<'_>) -> MemoryToolDeps<'a> {
     MemoryToolDeps {
         repo: ctx.memory,
@@ -22,8 +17,8 @@ pub(super) fn deps<'a>(ctx: &'a NativeToolCtx<'_>) -> MemoryToolDeps<'a> {
     }
 }
 
-/// 工具结果 → 统一出口（记忆工具的失败都是「业务级结论」，因此一律走 `Value`：
-/// 与 `search_knowledge_base` 同款 —— 模型看到 `No memories found` 才知道下一步该换关键词）
+/// 工具结果 → 统一出口。记忆工具的失败都是「业务级结论」，一律走 `Value`（模型看到
+/// `No memories found` 才知道换关键词）。
 pub(super) fn to_outcome(out: MemoryToolOutput) -> NativeToolOutcome {
     NativeToolOutcome::Value {
         content: out.content,

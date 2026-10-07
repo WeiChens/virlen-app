@@ -1,8 +1,6 @@
 /**
- * 知识库文件导入工具
- *
- * 全部是「传参进、结果出」的纯工具（多编码读取 / 目录扫描 / 批量导入），
- * 不含组件状态；需要刷新列表时通过 `afterImport` 回调注入，避免反向依赖组件。
+ * 知识库文件导入工具 —— 全是「传参进、结果出」的纯工具（多编码读取 / 目录扫描 / 批量导入），
+ * 不含组件状态；刷新列表通过 `afterImport` 回调注入，避免反向依赖组件。
  */
 import { t, tpl } from '@/ui/i18n'
 import { ragService } from '@/services/rag-service'
@@ -11,13 +9,13 @@ import { showToastMsg } from './toast'
 /** 支持的文件扩展名列表 */
 export const SUPPORTED_EXTENSIONS = ['pdf', 'md', 'markdown', 'txt'] as const
 
-/** 判断文件是否为受支持的文本文件（可根据扩展名判断是否可用 readTextFile 读取） */
+/** 是否为可用 readTextFile 直接读取的文本类型 */
 export function isTextExtension(filePath: string): boolean {
   const ext = filePath.split('.').pop()?.toLowerCase()
   return ext === 'md' || ext === 'markdown' || ext === 'txt'
 }
 
-/** 从文件路径中提取文件名 */
+/** 取路径末段的文件名 */
 export function extractFileName(filePath: string): string {
   return filePath.replace(/\\/g, '/').split('/').pop() || filePath
 }
@@ -38,7 +36,7 @@ export async function tryDecodeTextFile(
   // 2. 读取原始二进制数据，用 TextDecoder 尝试多种编码
   try {
     const { readFile } = await import('@tauri-apps/plugin-fs')
-    const data = await readFile(filePath) // returns Uint8Array
+    const data = await readFile(filePath)
 
     // 按优先级尝试的编码列表
     const encodings = [
@@ -132,7 +130,7 @@ export async function scanDirForTextFiles(
  * @param kbId       知识库 ID
  * @param filePaths  文件路径列表
  * @param baseDir    可选，指定后使用相对路径作为文档名称（用于文件夹导入）
- * @param afterImport 可选，导入完成后回调（用于刷新文档列表 / 知识库列表）
+ * @param afterImport 导入完成后回调（刷新文档 / 知识库列表）
  */
 export async function uploadFiles(
   kbId: string,

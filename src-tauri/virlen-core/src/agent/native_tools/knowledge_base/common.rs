@@ -1,6 +1,4 @@
-//! knowledge_base — 知识库分类公共函数（分类 id: knowledge_base）
-//!
-//! 供本分类下的 6 个工具复用。
+//! knowledge_base — 知识库分类公共函数（分类 id: knowledge_base），供本分类 6 个工具复用。
 
 /// 调用 RAG 服务的阻塞任务包装
 pub(super) fn rag_service() -> Result<&'static crate::rag::rag_service::RagService, String> {

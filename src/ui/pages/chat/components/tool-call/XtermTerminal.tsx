@@ -26,18 +26,13 @@ import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
 import { SandboxBadge } from './SandboxBadge'
 
 /**
- * PTY 终端块 —— 用 xterm.js 渲染伪控制台（ConPTY）的原始 VT 流。
+ * PTY 终端块：用 xterm.js 渲染伪控制台（ConPTY）的原始 VT 流。
  *
- * 为什么需要它：`execute_command` 在 Windows 上已把 stdio 换成 ConPTY
- * （`docs/pty-research.md` §8 Step 1），输出是**带光标控制的 VT 流**
- * （`\x1b[87X` 擦除字符、`\x1b]0;…\x07` 改窗口标题、`\x1b[?25l` 光标可见性…）。
- * `<pre>` 表达不了这些语义：进度条会花屏、TUI 会错位。xterm.js 是真正的终端模拟器，
- * 同时天然实现「用户可干预」——键击经 `onData` 直接写入后端伪控制台。
- * 复制/粘贴：Ctrl+C 在有选区时智能复制（无选区仍发 SIGINT），右键弹自定义菜单
- * （复制/粘贴/全选）；粘贴读剪贴板走 Tauri 原生命令 `read_clipboard_text`。
+ * `execute_command` 在 Windows 上已把 stdio 换成 ConPTY，输出是带光标控制的 VT 流（擦除字符、
+ * 改窗口标题、光标可见性…）。`<pre>` 表达不了这些语义：进度条花屏、TUI 错位。xterm 是真终端模拟器，
+ * 也天然支持「用户可干预」—— 键击经 `onData` 直接写进后端伪控制台。
  *
- * 与管道（非 PTY）路径的分工：非 PTY 仍走 `TerminalBlock` 的 `<pre>` 渲染，
- * 两条路径互不影响（见 `TerminalView` 的路由）。
+ * 非 PTY（管道）路径仍走 `TerminalBlock` 的 `<pre>`，两条路径互不影响（见 `TerminalView` 的路由）。
  */
 
 /** 从主题变量取色（xterm 只接受具体颜色值，不能直接用 CSS 变量）。 */
@@ -73,22 +68,14 @@ function terminalTheme() {
 }
 
 /**
- * 终端字体栈 —— 必须是真等宽（取法对齐桌面上那份 xterm-demo）。
- *
- * 不能用 `AlimamaAgileVF-Thin`（`<pre>` 版终端的字体）：它是比例字体（实测 'W'=0.672em、
- * 'i'=0.147em、'1'=0.300em、空格 0.240em），而 xterm 把每个字符塞进同宽格子（按 'W' 量出），
- * 窄字符两侧被撑空、列数算小、硬折行提前 —— 比例排版在 `<pre>` 下看不出，换成网格渲染就暴露。
+ * 终端字体栈 —— 必须是真等宽。
+ * 不能用 `AlimamaAgileVF-Thin`（`<pre>` 版终端用的那个）：它是比例字体，而 xterm 把每个字符塞进
+ * 同宽格子（按 'W' 量出）→ 窄字符两侧留空、列数算小、硬折行提前。
  */
 const PTY_FONT =
   "'JetBrains Mono', 'Cascadia Code', Consolas, 'Courier New', monospace"
 
-/**
- * 终端字号档位 → px（对应「设置 → 通用 → 字体大小」的 small / medium / large）。
- *
- * 取法对齐聊天区代码块（`message/code-block.tsx` 的 `CODE_FONT_PX`）：medium 保持
- * xterm 原有基线 13px，small / large 各 ±1px。同档同值，避免同一屏里终端与代码块
- * 字号不一致（用户调大字号后，两者一起变大才自然）。
- */
+/** 终端字号档位 → px（对应「设置 → 通用 → 字体大小」）。取值与聊天区代码块 `CODE_FONT_PX` 一致：medium 13px，small / large 各 ±1px。 */
 export const PTY_FONT_PX: Record<'small' | 'medium' | 'large', number> = {
   small: 12,
   medium: 13,
@@ -104,10 +91,8 @@ export function getPtyFontPx(): number {
 /**
  * 拆出文本**末尾连续的 `\r`**：`[可直接写入的部分, 需挂起并入下次写入的 `\r`]`。
  *
- * 为什么单独挂起尾部 `\r`：ConPTY 的「行重绘」会先把光标 `\r` 回行首、**下一帧**才发整行
- * 内容（末尾再用 `\e[<row>;<col>H` 把光标放回原位）。若把那半截 `\r` 单独渲染一帧，光标块
- * 会瞬移到行首再弹回。挂起它本身不产生任何可见像素，合入下一次写入即可消除中间帧。
- * 纯函数，便于单测。
+ * ConPTY 的「行重绘」先发一个 `\r`（光标回行首）、下一帧才发整行内容。若把这半截 `\r` 单独
+ * 渲染一帧，光标块会瞬移到行首再弹回；挂起它不产生任何可见像素，合入下次写入即可消除中间帧。
  */
 export function splitTrailingCr(text: string): [string, string] {
   let holdLen = 0
@@ -121,28 +106,19 @@ export function splitTrailingCr(text: string): [string, string] {
 }
 
 /**
- * 挂起尾部 `\r` 的兜底写入延时。
- *
- * 必须大于输出节流窗口（`NOTIFY_INTERVAL_MS`）：PTY 分片是按节流后的通知交给 xterm 的，
- * 相邻两次通知的间隔约等于一个节流窗口；兜底延时 ≤ 该窗口时，「先导 `\r`」会赶在重绘
- * 到达之前写出，又渲染出「光标闪到行首」的中间帧。故取「节流窗口 + 70ms」。
+ * 挂起尾部 `\r` 的兜底写入延时，必须大于输出节流窗口（`NOTIFY_INTERVAL_MS`）：PTY 分片按
+ * 节流后的通知交给 xterm，相邻两次通知间隔约一个节流窗口；延时 ≤ 窗口时那个「先导 `\r`」会
+ * 赶在重绘到达前写出，又出现「光标闪到行首」。
  */
 export const CR_HOLD_FLUSH_MS = NOTIFY_INTERVAL_MS + 70
 
 /**
  * 写入缓冲：**合并 ConPTY 行重绘的先导 `\r`，绝不在一帧里以 `\r` 收尾**。
  *
- * ConPTY 的「行重绘」分两次写：先单独发一个 `\r`（光标回行首），约 10~25ms 后才发整行
- * 内容（末尾用 `\e[<row>;<col>H` 把光标放回原位）。若把那个 `\r` 单独渲染一帧，就会看到
- * **光标块瞬移到当前行最前面**再弹回 —— 即「删除时光标闪到行首」。
- *
- * 策略（`push`）：
- *   1. 增量中**不含末尾 `\r`** 的部分 → **立即写入**（不引入额外延迟）；
- *   2. 末尾连续的 `\r` → 挂起，等下一段增量合并后一起写；
- *   3. **兜底防抖**（`flushDelayMs`）：若窗口内始终没有后续增量，就把挂起的 `\r` 补写掉，
- *      避免极少数「只有一个孤立 `\r` 且再无输出」时，光标长期停在错误列。
- *
- * 抽成类是为了**可测**：`write` 回调可注入，定时器可用 fake timers 驱动。
+ * 单独渲染先导 `\r` = 光标块瞬移到行首再弹回（「删除时光标闪到行首」）。策略（`push`）：
+ * 不含末尾 `\r` 的部分立即写入；末尾连续 `\r` 挂起等下一段合并；`flushDelayMs` 兜底，
+ * 避免孤立 `\r` 后再无输出时光标长期停在错误列。
+ * 抽成类是为了可测：`write` 可注入、定时器可用 fake timers 驱动。
  */
 export class PendingCrWriter {
   private hold = ''
@@ -165,7 +141,7 @@ export class PendingCrWriter {
     }
   }
 
-  /** 把挂起的 `\r` 立即写掉（兜底：窗口内没有后续增量）。 */
+  /** 把挂起的 `\r` 立即写掉（兜底：窗口内无后续增量）。 */
   flush(): void {
     this.cancelTimer()
     const held = this.hold
@@ -187,11 +163,7 @@ export class PendingCrWriter {
   }
 }
 
-/**
- * 剪贴板读写（复制 / 粘贴）统一走 `utils/clipboard`：
- * 同一套逻辑（写入退 `execCommand` 兜底、读取优先 Tauri 原生命令从而绕开
- * WebView2 的「剪贴板读」权限）现在被终端与输入框共用，不再各写一份。
- */
+// 复制 / 粘贴统一走 `utils/clipboard`（与输入框共用同一套兜底，不再各写一份）
 
 export function XtermTerminal({
   stream,
@@ -207,12 +179,8 @@ export function XtermTerminal({
   /** PTY 会话 key：与后端「运行中命令」注册表一致，直接用 toolCallId */
   toolCallId: string
   /**
-   * 是否把尺寸同步给后端伪控制台。
-   *
-   * 全屏态是「双实例同时渲染」（见 `XtermTerminalBlock`），两份的列宽/行数不同；
-   * 若两份都调 `pty_resize` 会互相覆盖后端尺寸 → 同一时刻**只让一份独占同步**：
-   * 全屏期间由全屏实例同步、原位实例暂停；退出全屏同步权交回原位实例
-   * （见下方「尺寸同步权交接」effect，会强制重发一次）。
+   * 是否把尺寸同步给后端伪控制台。全屏态是「双实例同时渲染」且两份列宽不同，都调 `pty_resize`
+   * 会互相覆盖 → 同一时刻只让一份独占同步（见下方「尺寸同步权交接」effect）。
    */
   syncResize?: boolean
   /** 尺寸变化回调（列×行），供外层状态栏展示；用 ref 持有避免 effect 依赖抖动 */
@@ -220,12 +188,9 @@ export function XtermTerminal({
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
-  /** 已写入终端的内容（用于增量写入；见下方注释） */
+  /** 已写入终端的内容（增量写入的基准） */
   const writtenRef = useRef('')
-  /**
-   * 「先导 `\r`」合并写入缓冲（见 `writeDelta` / `PendingCrWriter`）。
-   * 跨 effect 共享：创建时的整段写入与后续增量写入都走同一套「不以 `\r` 收尾」逻辑。
-   */
+  /** 「先导 `\r`」合并缓冲（见 `PendingCrWriter`）；创建时的整段写入与后续增量共用同一套逻辑。 */
   const crWriterRef = useRef<PendingCrWriter | null>(null)
   // 用 ref 持有 running，避免把 running 放进创建 effect 的依赖里频繁重建终端
   const runningRef = useRef(running)
@@ -236,45 +201,20 @@ export function XtermTerminal({
   // 同上：尺寸回调每次渲染都是新引用，用 ref 持有，避免进 effect 依赖导致终端重建
   const onResizeRef = useRef(onResize)
   onResizeRef.current = onResize
-  /**
-   * 上次已上报的尺寸。
-   *
-   * 用于去重：ResizeObserver 会反复回调，即使尺寸没变也会调 `syncSize`；
-   * 每次真去 `pty_resize` 都会让 ConPTY 整屏重绘并补出空行（见 docs/pty-research.md §5.7）。
-   */
+  /** 上次已上报的尺寸（用于去重）：ResizeObserver 会反复回调，而每次真 `pty_resize` 都让 ConPTY 整屏重绘并补空行。 */
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null)
-  /**
-   * `pty_resize` 重试令牌。
-   *
-   * 前端 `fit()` 与后端 `create` 是竞态的（实测 fit 常早 ~0.9s 到达，此时会话尚未注册
-   * → 后端返回 false）。每次上报生成一个新令牌，旧令牌的待重试任务自动作废，
-   * 避免发出过期尺寸。
-   */
+  /** `pty_resize` 重试令牌：每次上报换新令牌，旧令牌的待重试任务自动作废，避免发出过期尺寸。 */
   const resizeGenRef = useRef(0)
   const resizeRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  /**
-   * 当前实例的 `syncSize`（在创建终端的 layout effect 内定义）。
-   *
-   * 供「尺寸同步权交接」effect 在**重新拿回同步权**时强制重发一次尺寸 ——
-   * 退出全屏后原位实例尺寸未变，`lastSizeRef` 的去重会让它跳过上报。
-   */
+  /** 当前实例的 `syncSize`（在创建 effect 内定义）：「尺寸同步权交接」effect 收尾时要强制重发一次尺寸。 */
   const syncSizeRef = useRef<(() => void) | null>(null)
 
-  /**
-   * 右键菜单（共享组件；浅色皮肤不适用于终端，故传 dark）。
-   * 关闭行为（点外部 / Esc）、贴边钳制、层级都由 ContextMenu 统一处理。
-   */
+  /** 右键菜单（关闭行为 / 贴边钳制 / 层级都由 ContextMenu 处理；终端用 dark 皮肤）。 */
   const menu = useContextMenu<void>()
-  /**
-   * 强制重渲染用（「全选」后要重新读 `hasSelection()` 才解除「复制」的禁用）。
-   * xterm 的选区不是 React 状态，只能手动推一下。
-   */
+  /** 强制重渲染用：「全选」后要重读 `hasSelection()` 才解除「复制」禁用（xterm 的选区不是 React 状态）。 */
   const [, forceMenuRender] = useState(0)
 
-  /**
-   * 把一段增量交给 xterm —— 经 `PendingCrWriter` 合并「先导 `\r`」，
-   * 绝不在一帧里以 `\r` 收尾（否则光标会闪到行首，见 `PendingCrWriter` 注释）。
-   */
+  /** 把一段增量交给 xterm（经 `PendingCrWriter` 合并「先导 `\r`」，绝不在一帧里以 `\r` 收尾）。 */
   const writeDelta = useCallback((delta: string) => {
     if (!delta) return
     let writer = crWriterRef.current
@@ -298,11 +238,11 @@ export function XtermTerminal({
       // 外观对齐 demo：光标闪烁 + 块状光标 + 行高 1.25
       cursorBlink: true,
       cursorStyle: 'block',
-      // 字号跟随「设置 → 字体大小」（不是写死的 13 —— 见下方「字号跟随」effect）
+      // 字号跟随设置（见下方「字号跟随」effect）
       fontSize: getPtyFontPx(),
       lineHeight: 1.25,
       fontFamily: PTY_FONT,
-      // 有界滚动缓冲：内存有界（§6.2，避免 cat 大文件把内存打爆）
+      // 有界 scrollback：避免 cat 大文件把内存打爆
       scrollback: 2000,
       theme: terminalTheme(),
     })
@@ -312,20 +252,11 @@ export function XtermTerminal({
     termRef.current = term
 
     /**
-     * 把终端尺寸同步给后端伪控制台。
-     *
-     * 两条硬约束（否则「第一次运行会多出很多空行」）：
-     *   1. 容器还没布局（宽高为 0）时绝不 resize —— `fit()` 量不出尺寸，`term.cols/rows`
-     *      还是默认 80×24，把它推给后端等于用错行数调 `ResizePseudoConsole`；ConPTY 在
-     *      「屏幕已有内容」后 resize 会整屏重绘并按新行数补空行（实测：空行数 = 新行数 − 内容行数）。
-     *   2. 尺寸没变就不重复上报 —— ResizeObserver 会反复回调，重复 resize 同样白刷空行。
-     */
-    /**
      * 把尺寸发给后端伪控制台；未命中会话时短重试。
      *
-     * 重试的原因：前端 `fit()` 与后端 `create` 有竞态（实测 fit 常早 ~0.9s 到达，此时
-     * PTY 会话还没注册、返回 false）；只发一次则尺寸永远同步不过去，伪控制台停在 240×50，
-     * ConPTY 每次重绘都补一堆空行。后端同时把尺寸写进缓存（`pty_session::pty_resize`）兜底。
+     * 重试的原因：前端 `fit()` 与后端 `create` 有竞态（实测 fit 常早 ~0.9s 到达，此时 PTY 会话
+     * 还没注册、返回 false）；只发一次则尺寸永远同步不过去，伪控制台停在 240×50，ConPTY 每次
+     * 重绘都补一堆空行。后端也把尺寸写进缓存（`pty_session::pty_resize`）兜底。
      */
     function sendResize(cols: number, rows: number) {
       resizeGenRef.current += 1
@@ -334,7 +265,7 @@ export function XtermTerminal({
         if (gen !== resizeGenRef.current || !termRef.current) return
         invoke<boolean>('pty_resize', { toolCallId, cols, rows })
           .then((ok) => {
-            // 未命中会话（后端 PTY 尚未注册，见上方说明）→ 稍后重试
+            // 未命中会话（后端 PTY 尚未注册）→ 稍后重试
             if (!ok && n < 8) {
               resizeRetryRef.current = setTimeout(() => attempt(n + 1), 120)
             }
@@ -344,6 +275,13 @@ export function XtermTerminal({
       attempt(0)
     }
 
+    /**
+     * fit + 上报尺寸。两条硬约束（否则「第一次运行会多出很多空行」）：
+     * 1. 容器还没布局（宽高 0）时绝不 resize —— `fit()` 量不出尺寸，`term.cols/rows` 还是默认
+     *    80×24，推给后端等于用错行数调 `ResizePseudoConsole`；ConPTY 在「屏幕已有内容」后
+     *    resize 会整屏重绘并按新行数补空行（实测空行数 = 新行数 − 内容行数）；
+     * 2. 尺寸没变就不重复上报 —— ResizeObserver 会反复回调，重复 resize 同样白刷空行。
+     */
     const syncSize = () => {
       const hostEl = hostRef.current
       if (!hostEl || hostEl.clientWidth <= 0 || hostEl.clientHeight <= 0) return
@@ -366,18 +304,15 @@ export function XtermTerminal({
     syncSizeRef.current = syncSize
     syncSize()
 
-    // 键击/粘贴直送伪控制台 —— 用户「插键盘」的核心通道。
-    // 走 Tauri 命令而不是引擎事件总线，因此不污染 AgentEventType 四方契约（§6.3）。
+    // 键击直送伪控制台 —— 用户「插键盘」的核心通道。走 Tauri 命令而非引擎事件总线，不污染 AgentEventType 契约。
     const inputSub = term.onData((data) => {
       if (!runningRef.current) return
       invoke('pty_write', { toolCallId, data }).catch(() => { })
     })
 
-    // Ctrl+C / Cmd+C 智能复制：有选区 → 复制并拦下（\x03 不再发给伪控制台）；无选区 → 放行，
-    // 维持「Ctrl+C 发送 SIGINT」的原语义。这是 Windows Terminal / VS Code 的通用约定，
-    // 否则终端里永远无法用键盘复制（xterm 默认把 Ctrl+C 转成 \x03 发给 PTY）。
-    // handler 对 keydown / keypress / keyup 都会被调用，只拦 keydown；用 ev.code（物理键位）
-    // 兼容非拉丁键盘布局（俄语等布局下 e.key 不是 'c'）。
+    // Ctrl+C / Cmd+C 智能复制（Windows Terminal / VS Code 的通用约定）：有选区 → 复制并拦下（\x03
+    // 不再发给伪控制台）；无选区 → 放行，维持「Ctrl+C 发送 SIGINT」。handler 对 keydown / keypress /
+    // keyup 都会被调用，只拦 keydown；用 ev.code 兼容非拉丁键盘布局（俄语布局下 e.key 不是 'c'）。
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== 'keydown') return true
       const isCopyCombo =
@@ -395,26 +330,17 @@ export function XtermTerminal({
     })
 
     /**
-     * 滚轮：终端滚到顶/底后**截断滚动链**，别把外层消息列表一起滚走。
+     * 滚轮：终端滚到顶 / 底后**截断滚动链**，别把外层消息列表一起滚走。
      *
-     * 现象：终端里长输出（npm install…）往上翻到头、或往下翻到底之后再多滚一下，
-     * 外面整页消息列表就跟着滚 —— 想细看输出时非常容易「跑偏」。
+     * 根因：xterm 6 的回滚是 VS Code `SmoothScrollableElement` 的 JS 实现，其 wheel 处理器只在
+     * **真的滚动成功**时 `preventDefault() + stopPropagation()`；「已到边界、滚不动」的那一下两者
+     * 都不做 → 浏览器把滚轮顺着滚动链交给外层 `.chat-messages-container`。
      *
-     * 根因（xterm 6 的实现细节）：终端回滚**已不是** `.xterm-viewport` 的原生滚动，
-     * 而是 VS Code `SmoothScrollableElement` 的 JS 实现。它的 wheel 处理器只在
-     * **真的滚动成功**时才 `preventDefault() + stopPropagation()`
-     * （见其 `AbstractScrollableElement._onMouseWheel`：`consumeMouseWheel = didScroll`）；
-     * 「已经到边界、滚不动」的那一下既不取消默认动作、也不阻止冒泡 → 浏览器把这颗滚轮
-     * 顺着滚动链交给了外层 `.chat-messages-container`。
+     * 对策：在**外层、冒泡阶段**补监听 —— 能收到事件就说明 xterm 没消费（消费时会 stopPropagation），
+     * 即终端已到边界；此时只 `preventDefault()` 取消滚动链传导，不碰 xterm 自己的 JS 滚动。
      *
-     * 对策：在**外层、冒泡阶段**补一颗监听 —— 能收到事件本身就说明「xterm 没有消费这次
-     * 滚轮」（消费时它会 stopPropagation），即终端已到边界；此时只 `preventDefault()`
-     * 取消「浏览器滚动链传导」，不碰 xterm 自己的 JS 滚动。
-     *
-     * 两条红线：
-     *   1. 绝不能用捕获阶段：xterm 的处理器一看到 `defaultPrevented === true` 就整体退出
-     *      （`_onMouseWheel` 首行），抢先拦会把终端滚轮彻底打死；
-     *   2. 输出一屏装得下时（`baseY === 0`，无回滚缓冲）不拦 —— 否则成「滚轮死区」。
+     * 两条红线：① 绝不能用捕获阶段（xterm 的处理器看到 `defaultPrevented` 就整体退出，抢先拦会把
+     * 终端滚轮彻底打死）；② 输出一屏装得下时（`baseY === 0`）不拦，否则成「滚轮死区」。
      */
     const onWheel = (ev: WheelEvent) => {
       if (ev.defaultPrevented) return
@@ -453,15 +379,11 @@ export function XtermTerminal({
   }, [toolCallId])
 
   /**
-   * 字号跟随「设置 → 通用 → 字体大小」。
+   * 字号跟随「设置 → 字体大小」。用 `reaction` 而不是加进创建 effect 的依赖：实例只随 `toolCallId`
+   * 重建（重建会丢 scrollback / 滚动位置 / 已输入内容），而字号是命令式写在实例上的。
    *
-   * 用 `reaction` 而不是把字号加进创建 effect 的依赖：终端实例只随 `toolCallId` 重建
-   * （重建会丢 scrollback / 滚动位置 / 已输入内容），而字号是命令式写在实例上的
-   * （`term.options.fontSize`）—— 监听 observable 原地改选项即可，不重建终端。
-   *
-   * 字号变 → 字符格宽高变 → 必须重算列×行并同步给后端伪控制台，否则折行位置与用户看到
-   * 的不一致（容器高度固定时行数也会变）。直接复用 `syncSize()`：它自带「未布局不上报」
-   * 「尺寸未变不上报」两道保护，并按 `syncResize` 决定是否真的 `pty_resize`。
+   * 字号变 → 字符格宽高变 → 必须重算列×行并同步给后端，否则折行位置与用户看到的不一致。
+   * 直接复用 `syncSize()`：它自带「未布局不上报」「尺寸未变不上报」两道保护。
    */
   useEffect(() => {
     const applyFontPx = () => {
@@ -480,15 +402,11 @@ export function XtermTerminal({
   }, [])
 
   /**
-   * 尺寸同步权交接（全屏独占同步 / 退出还原）。
-   *
-   * 全屏是「双实例同时渲染」：同一时刻只允许一份调 `pty_resize`（否则互相覆盖后端尺寸）。
-   * `XtermTerminalBlock` 通过 `syncResize` 在切换全屏时把同步权在两份实例间移交：
-   *   - **拿回同步权**（退出全屏，`syncResize` false → true）：此时原位尺寸**没变**，
-   *     `lastSizeRef` 的去重会让它跳过上报 → 后端就永远停在「全屏那次」的大尺寸上。
-   *     故这里清空去重缓存并强制重发一次（也顺带重跑 `fit()`，保证行数正确）。
-   *   - **交出同步权**（进入全屏，true → false）：作废挂在**本实例**上的 `pty_resize`
-   *     重试链，避免它在全屏实例已经上报后又用旧尺寸覆盖回去。
+   * 尺寸同步权交接。同一时刻只允许一份实例调 `pty_resize`（否则互相覆盖后端尺寸）：
+   * - 拿回同步权（退出全屏，false → true）：原位尺寸没变，`lastSizeRef` 去重会让它跳过上报 →
+   *   后端永远停在「全屏那次」的大尺寸上，故清空去重缓存并强制重发（顺带重跑 `fit()`）；
+   * - 交出同步权（进入全屏，true → false）：作废本实例的 `pty_resize` 重试链，
+   *   免得它在全屏实例上报后又用旧尺寸覆盖回去。
    */
   const prevSyncResizeRef = useRef(syncResize)
   useEffect(() => {
@@ -508,12 +426,8 @@ export function XtermTerminal({
   }, [syncResize])
 
   /**
-   * 增量写入。
-   *
-   * PTY 输出刷新极快（进度条、`npm install`），改造前 `<pre>` 版每次通知都重跑
-   * **整个累积字符串**（O(n²)，会烧 CPU 并卡 UI，见 §6.2）。这里只写增量：
-   * 常态下 `stream` 只是尾部变长，直接 `slice` 出新增部分交给 xterm；
-   * 只有前缀对不上（运行态→完成态换数据源、流被重置）才整体重放一次。
+   * 增量写入。PTY 输出刷新极快，过去 `<pre>` 版每次通知都重跑整个累积串（O(n²)，烧 CPU 卡 UI）；
+   * 这里常态只 `slice` 出新增部分交给 xterm，只有前缀对不上（换数据源 / 流被重置）才整体重放。
    */
   useEffect(() => {
     const term = termRef.current
@@ -543,12 +457,9 @@ export function XtermTerminal({
   }
 
   /**
-   * 菜单动作：读剪贴板 → 送进伪控制台。
-   *
-   * 走 `term.paste` 而不是直接 `pty_write`：xterm 会做 CRLF→CR 规整，且在
-   * bracketed paste 模式（PowerShell/PSReadLine 默认开启）下把整段文本包成
-   * `\x1b[200~…\x1b[201~` —— 多行粘贴不会被当成「逐行回车」执行。
-   * 随后经 onData → pty_write（running=false 时会被那里拦下，这里也先禁用按钮）。
+   * 菜单动作：读剪贴板 → 送进伪控制台。走 `term.paste` 而非直接 `pty_write`：xterm 会做
+   * CRLF→CR 规整，并在 bracketed paste 模式（PSReadLine 默认开）下把整段包成
+   * `\x1b[200~…\x1b[201~`，多行粘贴不会被当成「逐行回车」执行。
    */
   async function pasteFromClipboard() {
     const term = termRef.current
@@ -569,12 +480,7 @@ export function XtermTerminal({
     term.focus()
   }
 
-  /**
-   * 菜单项：复制 / 粘贴 / 全选。
-   *
-   * 渲染时现算（不过「打开那一刻定死」）：「复制」要跟着选区状态、
-   * 「粘贴」要跟着命令是否还在运行（已结束则伪控制台会话没了，无处可贴）。
-   */
+  /** 菜单项：复制 / 粘贴 / 全选。两个 disabled 都渲染时现算（选区状态、命令是否还在运行）。 */
   const menuItems: ContextMenuItem[] = [
     {
       key: 'copy',
@@ -596,16 +502,13 @@ export function XtermTerminal({
     },
   ]
 
-  // 滚轮的拦截落在终端创建 effect 里（`onWheel`）：xterm 6 的回滚是 VS Code
-  // `SmoothScrollableElement` 的 JS 实现，既不能在捕获阶段抢跑（它看到 defaultPrevented
-  // 就整体退出 → 滚轮彻底失效），也不必手动改 `scrollTop`。
+  // 滚轮拦截在创建 effect 里（`onWheel`），此处不重复处理
   return (
     <div
       className="pty-terminal-body-wrapper"
       onContextMenu={(e) => menu.openAt(e, undefined)}>
       <div className="pty-terminal-body" ref={hostRef} />
-      {/* 菜单由 ContextMenu 统一经 createPortal 挂 body（消息列表祖先带 transform/
-          overflow，fixed 定位会被牵连），dark 皮肤对齐终端配色。 */}
+      {/* ContextMenu 经 createPortal 挂 body（消息列表祖先带 transform/overflow，fixed 会被牵连） */}
       {menu.state && (
         <ContextMenu
           position={menu.state.position}
@@ -618,11 +521,7 @@ export function XtermTerminal({
   )
 }
 
-/**
- * 命名控制键按钮表（Step 2 ③）。
- *
- * 只发键名，字节映射统一在 Rust 侧（`pty_session::key_sequence`）—— 命名→字节只有一份实现。
- */
+/** 命名控制键按钮表：只发键名，字节映射统一在 Rust 侧（`pty_session::key_sequence`）。 */
 const PTY_KEY_BUTTONS: Array<{ key: string; label: string; title: string }> = [
   { key: 'ctrl+d', label: 'Ctrl+D', title: '发送 Ctrl+D（EOF）' },
 ]
@@ -647,20 +546,16 @@ function PtyKeyBar({ toolCallId }: { toolCallId: string }) {
 }
 
 /**
- * PTY 终端块（完整形态：header + 终端 + 提示）。
- *
- * `status` 由调用方传入：既复用 `TerminalStatus`（退出码徽标），
+ * PTY 终端块（header + 终端 + 提示）。`status` 由调用方传入：既复用 `TerminalStatus`（退出码徽标），
  * 又避免 `TerminalBlock.tsx ⇄ XtermTerminal.tsx` 的循环依赖。
  *
- * 全屏（Step 2 ⑤）与 `<pre>` 版 `TerminalBlock` 同构：原位 + `createPortal` 到 body
- * 两份同时渲染。xterm 的写入是**自包含**的（首帧整段 `write(stream)`），因此全屏那份
- * 在首帧就拿到完整 scrollback，**不需要** serialize/restore，原位那份也保持挂载
- * （避免虚拟列表条目变矮触发重测量 / 滚动跳动）。代价是全屏期间同一条流被解析两遍
- * （≈2× CPU），属短时交互态，可接受（docs/pty-research.md §7 #19）。
+ * 全屏与 `<pre>` 版 `TerminalBlock` 同构：原位 + `createPortal` 到 body 两份同时渲染。xterm 写入是
+ * 自包含的（首帧整段 `write(stream)`），全屏那份首帧就有完整 scrollback，**不需要** serialize/restore；
+ * 原位那份保持挂载，避免虚拟列表条目变矮触发重测量 / 滚动跳动。代价是全屏期间同一条流解析两遍
+ * （≈2× CPU），短时交互态，可接受。
  *
- * 尺寸同步（`pty_resize`）：「双实例」不能同时上报（会互相覆盖后端尺寸），故同一时刻
- * 只让一份**独占** —— **全屏期间由全屏实例同步，退出后同步权交回原位实例并强制重发一次**
- * （原位尺寸未变，否则会被去重逻辑跳过）。见 `XtermTerminal` 的 `syncResize` 与交接 effect。
+ * 尺寸同步：双实例不能同时上报（会互相覆盖后端尺寸），同一时刻只让一份**独占** —— 见 `syncResize`
+ * 与上方交接 effect。
  */
 export function XtermTerminalBlock({
   title,
@@ -695,7 +590,7 @@ export function XtermTerminalBlock({
   killing?: boolean
 }) {
   const [fullscreen, setFullscreen] = useState(false)
-  // ② 接管状态：本地镜像后端会话（命令已结束时后端返回 false → 复位）
+  // 接管状态：本地镜像后端会话（命令已结束 → 后端返回 false → 复位）
   const [held, setHeld] = useState(false)
   // 终端列×行（底部状态栏展示；由 XtermTerminal 的 fit() 回传）
   const [size, setSize] = useState<{ cols: number; rows: number } | null>(null)
@@ -787,8 +682,7 @@ export function XtermTerminalBlock({
             <span className="pty-prompt">$</span> {cmd}
           </div>
         )}
-        {/* 尺寸同步权：全屏期间只由全屏实例上报（原位实例暂停）；退出全屏后原位实例夺回，
-            并由 XtermTerminal 内的交接 effect 强制重发一次（原尺寸未变会跳过）。 */}
+        {/* 尺寸同步权：全屏期间只由全屏实例上报，退出后原位实例夺回（交接 effect 强制重发一次） */}
         <XtermTerminal
           stream={stream}
           running={running}
@@ -812,8 +706,7 @@ export function XtermTerminalBlock({
           </div>,
           document.body,
         )}
-      {/* 顶部命令行的右键菜单：dark 皮肤对齐终端配色。渲染在 renderBlock 之外，
-          避免全屏时原位/全屏两份各弹一个菜单（menu 状态由本组件独占）。 */}
+      {/* 渲染在 renderBlock 之外：避免全屏时两份各弹一个菜单（menu 状态由本组件独占） */}
       {cmdMenu.state && cmd && (
         <ContextMenu
           position={cmdMenu.state.position}

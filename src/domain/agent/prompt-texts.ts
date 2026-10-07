@@ -1,14 +1,9 @@
 /**
- * 提示词文本的**前端侧快照**（纯模块，零 I/O）
+ * 提示词文本的前端侧快照（零 I/O）。文本本体在 Rust `prompts/*.md`，启动时经
+ * `loadPromptTexts()` 水合一次，此后同步读取。
  *
- * 文本本体在 Rust —— `src-tauri/virlen-core/src/agent/prompts/*.md`。前端**不再自带副本**：
- * 组合根（`src/main.ts`）启动时经 `loadPromptTexts()` 水合一次，此后所有消费者**同步**读取。
- *
- * 为什么是「启动水合 + 同步读」而不是「每次异步去取」：
- * `baseSystemPrompt()` 是**同步**函数（`composeSystemPrompt`、golden 测试都直接调它），
- * 改成 async 会把它传染给整条组装链和所有调用方 —— 代价远大于「启动时等一次 IPC」。
- *
- * 接线与工具定义（机制 C）同构：`src/main.ts` 接真实加载器、`src/tests/setup.ts` 接内嵌文本。
+ * 之所以「启动水合 + 同步读」而非每次异步取：`baseSystemPrompt()` 是同步函数（组装链与 golden 测试
+ * 直接调），改 async 会传染整条链，代价远大于启动时等一次 IPC。
  */
 
 /** 提示词的键 —— 与 Rust `prompts::PromptTexts` 的 camelCase 字段一一对应 */
@@ -25,11 +20,7 @@ export type PromptTexts = Record<PromptKey, string>
 
 let snapshot: PromptTexts | null = null
 
-/**
- * 注入提示词快照。
- *
- * 传 `null` 清除（测试之间需要隔离时用；与 `setToolDefinitionsLoader(null)` 同义）。
- */
+/** 注入提示词快照；传 `null` 清除（测试隔离用）。 */
 export function setPromptTexts(texts: PromptTexts | null): void {
   snapshot = texts
 }
@@ -42,8 +33,7 @@ export function hasPromptTexts(): boolean {
 /**
  * 读取一条提示词（同步）。
  *
- * ⚠️ 未水合时抛错而不是返回空串：空提示词会静默改变模型行为（丢掉工具规范 / 验证要求，模型照样能跑、只是
- * 变笨），而「启动少接了一步线」应当立刻炸出来（取舍与 `toolRegistry` 的「加载器未注入」一致）。
+ * ⚠️ 未水合时抛错而非返回空串：空提示词会静默改变模型行为（模型照样能跑、只是变笨）。
  */
 export function promptText(key: PromptKey): string {
   if (!snapshot) {

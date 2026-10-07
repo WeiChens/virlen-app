@@ -1,13 +1,9 @@
-//! `read_skill_source` 工具（原生）— 读取技能源码目录结构 + SKILL.md 全文
+//! `read_skill_source` 工具（原生）— 读取技能源码目录结构 + SKILL.md 全文（只读）；同时返回技能文件夹
+//! 绝对路径，AI 可据此用 `read_file` 读其他文件。
 //!
-//! 同时返回技能文件夹的绝对路径，AI 可据此用 `read_file` 读取其他文件。只读操作，不提供写能力。
-//!
-//! ⚠️ 与 TS 侧 `src/infrastructure/tools/skill/read-skill-source.ts` 逐字对齐（铁律 1）：`content` 固定
-//! 英文（模型侧）；`uiData: { skillPath, tree, md }` 为语言无关的结构化数据（UI 侧据此渲染卡片）。
-//!
-//! 语义（与 TS 一致）：必须给 `name`；`ctx.skills` 非空时才校验「该技能是否已启用」（为空 = 不限制，历
-//! 史行为）；技能未注册（扫不到）→ 明确报错；结果分段先过滤空串再 `\n` 拼接 —— 复刻 TS 的
-//! `.filter(Boolean)`（它把原意是空行的 `''` 也丢掉了）。
+//! ⚠️ 与 TS `read-skill-source.ts` 逐字对齐（铁律 1）：`content` 固定英文，`uiData: { skillPath, tree,
+//! md }` 为语言无关的结构化数据。语义：必须给 `name`；`ctx.skills` 非空时才校验「是否已启用」（空 = 不
+//! 限制）；未注册 → 报错；结果分段先过滤空串再拼接（复刻 TS `.filter(Boolean)`）。
 
 use super::common::{read_file_tree, render_file_tree, scan_skills};
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};

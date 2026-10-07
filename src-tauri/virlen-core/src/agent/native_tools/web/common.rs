@@ -1,13 +1,9 @@
-//! web — 网络分类公共函数（分类 id: web）
+//! web — 网络分类公共函数（分类 id: web），供 `web_fetch` / `web_search` 复用的纯函数与常量。
 //!
-//! 供 `web_fetch` / `web_search` 复用的纯函数与常量。
-//!
-//! ⚠️ 与 TS 侧 `src/infrastructure/tools/web/common.ts` 逐字对齐（铁律 1）：`format_search_results` 的
-//! 输出会直接进模型上下文，任何一字之差都造成「默认引擎与回退引擎给模型的搜索结果格式不同」。收敛靠两
-//! 侧共读的 golden `src/tests/fixtures/web-search-format.golden.json`。
-//!
-//! 字符计数口径差异：TS 的 `String.length` 是 UTF-16 码元数，Rust 的 `chars().count()` 是 Unicode 标
-//! 量数（emoji 在 TS 里算 2、Rust 里算 1）—— 只影响截断阈值附近；两侧都按字符边界切，不产生非法字节。
+//! ⚠️ 与 TS `web/common.ts` 逐字对齐（铁律 1）：`format_search_results` 输出直接进模型上下文，
+//! 一字之差即「默认引擎与回退引擎格式不同」；收敛靠两侧共读 golden `web-search-format.golden.json`。
+//! 字符计数差异：TS `String.length` 是 UTF-16 码元数，Rust `chars().count()` 是 Unicode 标量数
+//! （emoji 在 TS 算 2、Rust 算 1）—— 只影响截断阈值附近，两侧都按字符边界切。
 
 use serde_json::Value;
 
@@ -28,22 +24,17 @@ pub(crate) struct SearchItem {
     pub score: Option<f64>,
 }
 
-/// `is_html` 用的 ASCII 空白集合（**显式列出**，与 TS 侧同一集合）。
-///
-/// 不用 `char::is_whitespace`：Rust 的空白属性含 `U+0085`、JS 的 `\s` 含 `U+FEFF`，
-/// 两侧 Unicode 空白定义并不等价，显式枚举才能保证逐字一致。
+/// `is_html` 用的 ASCII 空白集合（显式列出，与 TS 同一集合）。不用 `char::is_whitespace`：Rust 含
+/// `U+0085`、JS 的 `\s` 含 `U+FEFF`，两侧定义不等价，显式枚举才能逐字一致。
 const ASCII_WHITESPACE: [char; 6] = [' ', '\t', '\n', '\r', '\x0B', '\x0C'];
 
-/// 剥掉首尾 BOM（`U+FEFF`）。
-///
-/// JS 的 `trim()` 把 `U+FEFF` 当空白、Rust 的 `trim()` **不**当 —— 两侧都显式剥，避免分叉。
+/// 剥掉首尾 BOM（`U+FEFF`）：JS 的 `trim()` 视其为空白、Rust 不视，两侧都显式剥以避免分叉。
 fn strip_bom(s: &str) -> &str {
     s.trim_matches('\u{FEFF}')
 }
 
-/// `lower` 是否以 `prefix` 开头，且其后是**标签边界**（结尾 / `>` / ASCII 空白）。
-///
-/// 用于避免 `<htmlfoo` 这类假前缀被误判成 HTML 根标签。
+/// `lower` 是否以 `prefix` 开头且其后是标签边界（结尾 / `>` / ASCII 空白）—— 避免 `<htmlfoo`
+/// 这类假前缀被误判成 HTML 根标签。
 fn starts_with_tag_boundary(lower: &str, prefix: &str) -> bool {
     match lower.strip_prefix(prefix) {
         None => false,
@@ -54,15 +45,11 @@ fn starts_with_tag_boundary(lower: &str, prefix: &str) -> bool {
     }
 }
 
-/// 判断响应体是否应按 HTML 处理（即调用方的 `htmlToMd` 是否生效）。
-///
-/// 判定顺序（⚠️ 与 TS `isHtml` 逐字对齐，契约见 `src/tests/fixtures/web-html-detect.golden.json`，两侧
-/// 共读）：① Content-Type 优先：媒体类型为 `text/html` / `application/xhtml+xml` 时直接认定；② 否则
-/// 回退形状判定（大小写不敏感）：剥 BOM + `trim()` 后，要求以 `<!doctype html…` 或 `<html…` 开头（后接
-/// 标签边界）且以 `</html>` 结尾。
-///
-/// 为什么要有 Content-Type 这一层：真实站点普遍返回小写 `<!doctype html>`，旧实现只认大写 → 大量网页被
-/// 判成「非 HTML」，`htmlToMd` 形同虚设。
+/// 判断响应体是否应按 HTML 处理（调用方的 `htmlToMd` 是否生效）。
+/// ⚠️ 与 TS `isHtml` 逐字对齐（契约 golden `web-html-detect.golden.json`）：① Content-Type 优先
+/// （`text/html` / `application/xhtml+xml`）；② 否则形状判定：剥 BOM + `trim()` 后以 `<!doctype html…`
+/// 或 `<html…`（后接标签边界）开头且以 `</html>` 结尾。加 Content-Type 这层是因为真实站点普遍返回小写
+/// `<!doctype html>`，旧实现只认大写会让 `htmlToMd` 形同虚设。
 pub(crate) fn is_html(content: &str, content_type: &str) -> bool {
     // ① Content-Type 优先：媒体类型大小写不敏感，参数（`; charset=…`）不参与判定
     let media_type = content_type

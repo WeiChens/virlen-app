@@ -1,10 +1,6 @@
 /**
- * price-editor — 模型单价编辑
- *
- * 费用估算必须有单价，而单价「服务商随时会调、各家口径也不同」，
- * 所以这里让用户按 (Provider, 模型) 逐个填；未填的模型回退到内置价目表。
- *
- * 内置价目表是预估值，UI 必须提示用户核对（见 DEFAULT_MODEL_PRICES 注释）。
+ * price-editor — 模型单价编辑：单价各家口径不同、服务商随时会调，故按 (Provider, 模型) 让用户
+ * 逐个填，未填的回退内置价目表（仅预估值，UI 必须提示核对）。
  */
 import { observer } from 'mobx-react-lite'
 import { settingsState } from '@/ui/store'
@@ -28,10 +24,8 @@ const PriceEditor = observer(function PriceEditor() {
   const currency = settingsState.value.usageCurrency
 
   /**
-   * 写入一行单价。
-   *
-   * `base` 必须传「当前生效的单价」而不是全 0：用户只改输出价时，输入价要保持生效值
-   * （可能是内置预估价），否则会被悄悄归零、费用算少。
+   * 写入一行单价。`base` 必须传「当前生效的单价」而非全 0：用户只改输出价时，
+   * 输入价要保持生效值（可能是内置预估价），否则会被悄悄归零、费用算少。
    */
   const setPrice = (
     key: string,
@@ -116,9 +110,8 @@ const PriceEditor = observer(function PriceEditor() {
           <tbody>
             {rows.map((row) => {
               const custom = pricing[row.key]
-              // 生效单价 = 自定义 > 内置预估 > 0。
-              // 输入框必须回显**生效值**：否则点「全部恢复内置价」后整表都是 0，
-              // 看起来像单价丢了（实际费仍按内置价算，只有未收录的模型才是真 0）。
+              // 生效单价 = 自定义 > 内置预估 > 0。输入框必须回显生效值，否则点「全部恢复内置价」后
+              // 整表都是 0，看起来像单价丢了（费用其实仍按内置价算，只有未收录的模型才真是 0）。
               const effective: ModelPrice =
                 custom ?? row.builtin?.price ?? ZERO_PRICE
               return (

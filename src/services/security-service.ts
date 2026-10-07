@@ -1,11 +1,7 @@
 /**
- * security-service — Application 层安全策略服务
- *
- * 职责：
- *  - 编排安全相关业务流程（工作区解析、权限校验、默认安全配置初始化）
- *  - 协调 Domain（securityPort）与 Infrastructure（securityRepo）
- *
- * 不直接访问 UI Store（securityStore），通过 Repo 读写持久化数据。
+ * security-service — Application 层安全策略服务。
+ * 编排安全业务流程（工作区解析 / 权限校验 / 默认配置初始化），协调 Domain(securityPort) 与
+ * Infrastructure(securityRepo)；不直接访问 UI Store（securityStore）。
  */
 import {
   sessionStore,
@@ -34,13 +30,10 @@ class SecurityServiceImpl implements SecurityService {
   }
 
   /**
-   * 「忽略沙盒命令」规则匹配（设置 → 安全 → 忽略沙盒命令）。
+   * 「忽略沙盒命令」规则匹配（设置 → 安全）：命中 → 免除「沙盒脱壳」审批，并强制以不使用沙盒方式执行。
    *
-   * 命中 → 该命令**免除「沙盒脱壳」审批**且**强制以「不使用沙盒」方式执行**。
-   *
-   * ⚠️ 消费方只剩没有 Rust 可用的路径（`tools/execute/*.ts`、设置页「测试」、保存期的
-   * `compileSandboxRule`）；Rust 与 CLI 的判定在 `virlen-core/src/security/`（同一份 golden 契约收敛）。
-   * 匹配异常一律返回 null（不脱壳），由匹配器内部保证。
+   * ⚠️ 消费方只剩没有 Rust 可用的路径（tools/execute/*.ts、设置页「测试」、保存期的 compileSandboxRule）；
+   * Rust 与 CLI 的判定在 virlen-core/src/security/（同一份 golden 契约）。匹配异常一律返 null（不脱壳）。
    */
   async matchSandboxIgnoreRule(command: string): Promise<SandboxIgnoreRule | null> {
     if (!command || !command.trim()) return null
@@ -78,13 +71,7 @@ class SecurityServiceImpl implements SecurityService {
       config.whitelist,
     )
   }
-  /**
-   * 相对路径相对 workspace，绝对路径走安全校验。
-   * @param inputPath
-   * @param mode
-   * @param sessionId
-   * @returns
-   */
+  /** 相对路径相对 workspace 拼接；绝对路径直接走安全校验。 */
   async resolveSafePath(
     inputPath: string,
     mode: 'r' | 'w' | 'all',
@@ -125,9 +112,7 @@ class SecurityServiceImpl implements SecurityService {
     return absolute
   }
 
-  /**
-   * 初始化默认安全配置（仅首次运行时生效）
-   */
+  /** 初始化默认安全配置（仅首次运行时生效）。 */
   async initDefaultSecurity(): Promise<void> {
     const config = securityRepo.load()
     if (config.whitelist.length > 0 || config.blacklist.length > 0) {

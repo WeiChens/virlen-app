@@ -1,21 +1,7 @@
 /**
- * tool-category — 工具分类定义
+ * tool-category — 工具分类定义，用于 Agent 编辑器中按组批量勾选/取消。
  *
- * 将工具按功能分组，方便用户在 Agent 编辑器中按组批量选择/取消。
- *
- * 分类 id 与工具实现目录一一对应（`src/infrastructure/tools/<目录>/`）：
- *   file         → tools/file/
- *   search       → tools/search/
- *   execute      → tools/execute/
- *   knowledge_base → tools/knowledge-base/
- *   web          → tools/web/
- *   vision       → tools/vision/
- *   skill        → tools/skill/
- *   system       → tools/system/
- *   plan         → tools/plan/
- *   chat         → tools/chat/
- *   memory       → tools/memory/
- * 新增工具时请同时更新此处分类与对应的实现目录。
+ * 分类 id 与实现目录一一对应（`infrastructure/tools/<id>/`）；新增工具时同步更新此处与实现目录。
  */
 
 /** 工具分类 */

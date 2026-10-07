@@ -1,13 +1,10 @@
 /**
- * tray-service — 托盘 / 后台化集成（前端的唯一出口）
+ * tray-service — 托盘 / 后台化集成（前端唯一出口）。
  *
- * 只做两件事，都不碰窗口控制（窗口显隐与退出的权威在 Rust 侧的 `tray` 模块）：
- * 1. 把「谁在工作」推给 Rust —— 真源是 `sessionRuntimeState`，TS 与 Rust 两种引擎都经过它；
- * 2. 一次运行结束时通知 Rust（由 `chat/event-handler.ts::finishWorking` 调用），
- *    由 Rust 决定是否打扰用户、走哪条提醒通道。
- *
- * 「关闭窗口 = 隐藏到托盘」不在这里：Rust 拦 `WindowEvent::CloseRequested` 直接 `hide()`，
- * 前端标题栏关闭按钮无需改动。
+ * 只做两件事，都不碰窗口控制（窗口显隐与退出的权威在 Rust 的 tray 模块）：
+ * ① 把「谁在工作」推给 Rust（真源 sessionRuntimeState，两种引擎都经过它）；
+ * ② 运行结束通知 Rust（由 chat/event-handler.ts::finishWorking 调用），由 Rust 决定是否提醒。
+ *「关闭窗口 = 隐藏到托盘」不在这里：Rust 拦 CloseRequested 直接 hide()。
  */
 import { reaction } from 'mobx'
 import { invoke } from '@tauri-apps/api/core'
@@ -30,10 +27,8 @@ let inited = false
 let prevWorking = new Set<string>()
 
 /**
- * 托盘命令统一入口。
- *
- * 托盘是**增强能力**：非 Tauri 环境（浏览器 dev / vitest）、命令不存在、调用失败
- * 一律静默 —— 绝不能影响聊天主流程。
+ * 托盘命令统一入口。托盘是**增强能力**：非 Tauri 环境（浏览器 dev / vitest）、命令不存在、
+ * 调用失败一律静默 —— 绝不能影响聊天主流程。
  */
 function inv(cmd: string, args?: Record<string, unknown>): void {
   if (!inited) return
@@ -50,25 +45,19 @@ function hasWebviewFocus(): boolean {
 }
 
 /**
- * 「用户此刻正看着这个会话」—— 只有前端能算出来。
- *
- * 两个条件缺一不可：窗口在前台（`document.hasFocus()`）+ 当前会话就是它。
- * 少了它会怎样：用户盯着屏幕看它回复完，Rust 只知道「窗口可见」（而它还会因
- * 焦点缓存读不准而判成未聚焦），于是照常推未读 ⇒ 屏幕上多出一个**清不掉**的红点
- * （用户已在看，不会再触发任何清除动作）。
- *
- * 用 DOM 焦点而不是 `getCurrentWindow().isFocused()`：后者走原生侧缓存的窗口事件，
- * 与 Rust 端 `window_focus()` 是同一份数据；这里要的是「webview 真的被激活」这个独立信号。
+ * 「用户此刻正看着这个会话」—— 只有前端能算出来（窗口在前台 + 当前会话就是它）。
+ * 少了它会推未读 ⇒ 屏幕上多出清不掉的红点（用户已在看，不会再触发清除）。
+ * 用 DOM 焦点而非 getCurrentWindow().isFocused()：后者与 Rust 端 window_focus() 同源，
+ * 这里要的是「webview 真被激活」的独立信号。
  */
 function isViewingSession(sessionId?: string | null): boolean {
   return !!sessionId && chatState.value.currentSessionId === sessionId && hasWebviewFocus()
 }
 
 /**
- * 托盘**原生菜单 / tooltip**的文案。
- *
- * ⚠️ 托盘菜单是原生菜单，Rust 侧没有语言资源 —— i18n 必须由前端推（铁律 7）。带数量的文案保留
- * `$__count__` 占位符（同 `tpl()` 约定）由 Rust 替换：`t()` 只翻译、不替换。
+ * 托盘原生菜单 / tooltip 文案。
+ * ⚠️ 原生菜单 Rust 侧无语言资源，i18n 必须由前端推（铁律 7）。带数量的文案用 `$__count__`
+ * 占位符（同 tpl() 约定）由 Rust 替换：`t()` 只翻译、不替换。
  */
 function trayLabels() {
   return {
@@ -85,9 +74,8 @@ function trayLabels() {
 
 /**
  * 推送设置 + 托盘文案。
- *
- * 必须先 `await ensureLanguageReady()`：切语言的生效在 `useLanguage()` 的 reaction 里异步完成，
- * 而本 reaction 注册更早（`main.ts` 早于 App 渲染），不等待就会推旧语言（托盘菜单滞后一次）。
+ * 必须先 await ensureLanguageReady()：切语言生效在 useLanguage() 的 reaction 里异步完成，
+ * 而本 reaction 注册更早（main.ts 早于 App 渲染），不等待就会推旧语言（菜单滞后一次）。
  */
 async function pushSettings(): Promise<void> {
   await ensureLanguageReady()
@@ -106,9 +94,8 @@ export function initTrayService(): void {
   if (inited || !isTauriAvailable()) return
   inited = true
 
-  // ① 设置同步（启动推一次 + 变更时推送）。
-  //    Rust 侧默认值与此处一致；旧版本 localStorage 里没有这两个字段时，
-  //    `StorageState` 构造时会用默认值补齐（见 utils/storageState.ts），所以无需迁移代码。
+  // ① 设置同步（启动推一次 + 变更时推送）。旧 localStorage 缺这几个字段时 StorageState
+  //    构造会用默认值补齐（见 utils/storageState.ts），无需迁移代码。
   reaction(
     () =>
       [
@@ -125,12 +112,9 @@ export function initTrayService(): void {
     { fireImmediately: true },
   )
 
-  // ② 工作状态 → Rust。
-  //    用 reaction 而不是在 flow/engine 里逐点上报：`working` 有 5+ 处变更点
-  //    （flow.ts 发送/恢复/取消、finishWorking…），逐点上报必然会漏；
-  //    这里只观察 sessionRuntimeState，两种引擎通吃，且引擎层零改动（铁律 1/3）。
-  //    判据用 `isSessionRuntimeBusy`：图片本地识别期间也算「在途」（Rust 侧「退出会中断
-  //    它们」的二次确认要包含它），见 sessionRuntimeStore。
+  // ② 工作状态 → Rust。用 reaction 而非逐点上报：`working` 有 5+ 处变更点（发送/恢复/取消、finishWorking…），
+  //    逐点必漏；只观察 sessionRuntimeState，两种引擎通吃且引擎层零改动（铁律 1/3）。
+  //    判据 isSessionRuntimeBusy：图片本地识别期间也算「在途」。
   reaction(
     () =>
       Object.entries(sessionRuntimeState.value.sessions)
@@ -164,10 +148,10 @@ export function initTrayService(): void {
     },
   )
 
-  // ④ 托盘左键单击 → 切到「最早那条未读」的会话（Rust 侧已完成 show + focus）
+  // ④ 托盘左键单击 → 切到「最早那条未读」的会话（Rust 侧已完成 show + focus）。
   //
-  // 这里只改 store：懒加载与组件状态同步必须落在 `chat-view` 的会话切换逻辑里（React
-  // 镜像 state 只有组件能改，见 `handledSessionRef`），否则消息列表会是空的。
+  // 只改 store：懒加载与组件状态同步必须落在 chat-view 的会话切换逻辑里（React 镜像
+  // state 只有组件能改，见 handledSessionRef），否则消息列表会是空的。
   void listen<{ sessionId: string }>(EVENT_ACTIVATE, (event) => {
     const sessionId = event.payload?.sessionId
     if (!sessionId || !sessionStore.getSession(sessionId)) return
@@ -177,9 +161,9 @@ export function initTrayService(): void {
     // 非 Tauri 环境 / 事件系统不可用时忽略
   })
 
-  // ⑤ 窗口重新回到前台（点任务栏 / 直接点窗口）→ 当前会话刚看完，清它的未读。
-  //    没有这一步：「窗口失焦时跑完 → 推未读 → 用户点回来但没切会话」的红点会一直挂着。
-  //    用 DOM `focus` 而不是 tauri 的窗口焦点事件：要的是 webview 真被激活。
+  // ⑤ 窗口重回前台（点任务栏 / 直接点窗口）→ 清当前会话未读。
+  //    否则「失焦时跑完 → 推未读 → 点回来但没切会话」的红点会一直挂着。
+  //    用 DOM focus 而不是 tauri 窗口焦点事件：要的是 webview 真被激活。
   window.addEventListener('focus', () => {
     const sessionId = chatState.value.currentSessionId
     if (sessionId) inv('tray_clear_attention', { sessionId })
@@ -187,10 +171,8 @@ export function initTrayService(): void {
 }
 
 /**
- * 通知 Rust「一次运行结束了」。
- *
- * 由 `chat/event-handler.ts::finishWorking()` 调用（两种引擎共用的唯一收口）。
- * `preview` 在 Phase 1 只进埋点，Phase 2 用作系统通知正文。
+ * 通知 Rust「一次运行结束了」。由 chat/event-handler.ts::finishWorking() 调用（两种引擎共用的唯一收口）。
+ * preview 在 Phase 1 只进埋点，Phase 2 用作系统通知正文。
  */
 export function trayNotifyCompleted(
   sessionId: string,

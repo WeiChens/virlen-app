@@ -1,19 +1,16 @@
 /**
- * memory-settings — 长期记忆**设置**页（记忆功能 P0 / P2 / P3）
+ * memory-settings — 长期记忆设置页（记忆功能 P0 / P2 / P3）
  *
- * 本页只放设置项：开关、注入条数、注入预览、注入预算（常驻行 + 告警）、整理（立即整理昨天 +
- * 状态行 + 失败重跑）。
+ * 只放设置项：开关、注入条数、注入预览、注入预算（常驻行 + 告警）、整理（立即整理昨天 + 状态行 +
+ * 失败重跑）。
  *
- * ⚠️ 记忆**列表不在这里**：列表是逐日变长的数据（每行有悬停才显形的操作、复选框 + 批量栏、
- * 编辑表单），常驻会把上面这些设置项一路挤到视野之外 —— 而用户点进「记忆」要改的通常是设置，
- * 不是每次审一遍列表。列表挪到 `memory/MemoryListModal`，点「记忆列表（N 条）」打开。
- * 列表数据仍由本页持有（入口按钮要显示条数、预算行要显示「共 N 条」），弹窗通过 `onChanged` 回调
- * 让本页重取 —— 于是预算告警永远反映**当前**状态，而不是「打开弹窗那一刻的状态」。
+ * ⚠️ 记忆**列表不在这里** —— 列表是逐日变长的数据（悬停才显形的操作、复选框 + 批量栏、编辑
+ * 表单），常驻会把设置项一路挤到视野之外。列表挪到 `memory/MemoryListModal`；数据仍由本页持有
+ * （入口按钮要显示条数、预算行要显示「共 N 条」），弹窗通过 `onChanged` 让本页重取。
  *
- * 为什么「注入预览」要调后端渲染：`# Memory` 段的选取与预算裁剪只有 Rust 一份实现
- * （`agent::memory::select_for_inject` / `render_memory_section`），前端只展示它的产物 ——
- * 若在此处再算一遍，用户看到的将不是模型实际收到的内容。
- * 同理，「整理」的结果也**只**依据后端返回的报告（不在这里猜「应该产出了几条」）。
+ * 「注入预览」必须调后端渲染：`# Memory` 段的选取与预算裁剪只有 Rust 一份实现
+ * （`agent::memory::select_for_inject` / `render_memory_section`），前端再算一遍就会与模型
+ * 实际收到的内容不一致。同理「整理」的结果只依据后端返回的报告，不在这里猜「应该产出几条」。
  */
 import { useCallback, useEffect, useState } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -132,16 +129,15 @@ function MemorySettings() {
   const enabled = settingsState.value.memoryEnabled
   const topK = settingsState.value.memoryNormalTopK
 
-  // 挂载 / 任何写操作之后都重取注入段：预算告警必须是**当前**状态，
-  // 而不是「打开面板那一刻的状态」（用户删了十条还看到告警就是误导）。
-  // `true` = 这是一次「看面板」，后端据此不打截断告警埋点（否则指标会被面板刷高）。
+  // 挂载 / 任何写操作之后都重取注入段：预算告警必须是**当前**状态，而不是「打开面板那一刻」
+  // 的（用户删了十条还看到告警就是误导）。`true` = 这是一次「看面板」，后端据此不打截断告警埋点。
   const reload = useCallback(async () => {
     setLoading(true)
     const [list, runList, sec] = await Promise.all([
       listMemories(true),
       listMemoryRuns(10),
-      // 面板没有「会话工作目录」，用设置里的**默认工作目录**当基准：
-      // 预览与真实会话走同一套作用域规则，只是工作目录不同（下面会把它显示出来）。
+      // 面板没有「会话工作目录」，用设置里的**默认工作目录**当基准：预览与真实会话走同一套
+      // 作用域规则，只是工作目录不同（下面会把它显示出来）
       loadMemorySection(true, settingsState.value.defaultWorkspace),
     ])
     setItems(list)
@@ -155,10 +151,8 @@ function MemorySettings() {
   }, [reload])
 
   /**
-   * 打开记忆列表弹窗。
-   *
-   * **每次都重取**：记忆会被后台整理（启动时的非阻塞整理）/ 别的窗口改动，弹窗里看到的必须是
-   * 库里的当前状态（顺带让本页的预算行跟着刷新）。
+   * 打开记忆列表弹窗。**每次都重取**：记忆会被后台整理（启动时的非阻塞整理）/ 别的窗口改动，
+   * 弹窗里看到的必须是当前状态（顺带刷新本页预算行）。
    */
   function openList() {
     setShowList(true)

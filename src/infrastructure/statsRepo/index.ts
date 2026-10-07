@@ -1,11 +1,9 @@
 /**
- * statsRepo — 用量账本的读取 Repository（Rust SQLite）
+ * statsRepo — 用量账本的读取 Repository（Rust SQLite）。
  *
- * 数据由 Rust 侧 `session_db/usage.rs` 的 `usage_ledger` 表承载（表结构 DDL 见 `session_db/schema.rs`）：
- * 写入来自两处（Rust 引擎内部直落 + TS 侧 `cmd_append_usage`），读取只有这里。
- *
- * 非 Tauri 环境（vitest / 浏览器 dev）invoke 会抛错，统一兜底为空结果 ——
- * 统计面板在纯前端环境应当显示「无数据」而不是报错。
+ * 数据由 Rust 侧 session_db/usage.rs 的 usage_ledger 表承载（DDL 见 session_db/schema.rs）：写入来自两处
+ *（Rust 引擎内部直落 + TS 侧 cmd_append_usage），读取只有这里。非 Tauri（vitest / 浏览器 dev）invoke 抛错，
+ * 统一兜底为空结果 —— 统计面板在纯前端环境应当显示「无数据」而不是报错。
  */
 import { invoke } from '@tauri-apps/api/core'
 import { trackError } from '@/utils/telemetry'

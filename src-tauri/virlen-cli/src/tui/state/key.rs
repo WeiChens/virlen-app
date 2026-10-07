@@ -1,7 +1,5 @@
-//! 按键 → 动作（`impl UiState` 的按键处理段）
-//!
-//! 输入行编辑（按**字符**下标而非字节）、历史上下翻、交互应答的键位、以及 `Ctrl+C` 的两义性
-//! （运行中 = 取消，空闲 = 退出）都在这里；`input.rs` 只负责把 crossterm 的按键归一化成 `Key`。
+//! 按键 → 动作（`impl UiState` 的按键处理段）：输入行编辑（按字符下标）、历史上下翻、交互应答键位、
+//! `Ctrl+C` 两义性（运行中 = 取消，空闲 = 退出）；`input.rs` 只把 crossterm 按键归一化成 `Key`。
 
 use super::*;
 use crate::tui::commands::{CompressArg, Slash};

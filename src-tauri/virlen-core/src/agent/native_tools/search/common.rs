@@ -1,6 +1,5 @@
-//! search — 搜索分类公共函数（分类 id: search）
-//!
-//! 供本分类下的 `search_files_by_name` / `search_text_in_files` 复用。
+//! search — 搜索分类公共函数（分类 id: search），供 `search_files_by_name` /
+//! `search_text_in_files` 复用。
 
 /// 将 Glob 模式转换为正则表达式（与 JS globToRegex 对齐）
 pub(super) fn glob_to_regex(pattern: &str) -> String {

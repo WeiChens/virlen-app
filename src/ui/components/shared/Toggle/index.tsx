@@ -1,18 +1,15 @@
 /**
- * Toggle — 通用开关（滑动式 checkbox）
+ * Toggle — 通用开关（滑动式 checkbox），三档尺寸 sm / md / lg。
  *
- * 为什么要有这个组件：`<label class="toggle"> + <span class="toggle-slider">` 这套写法
- * 在本仓库被复制了 4~5 份（general / editor / provider / security 各自的 scss），
- * 没有尺寸档、也没法统一改。这里给出一份实现 + 三档尺寸（sm / md / lg）。
+ * 收口被复制了 4~5 份的 `<label class="toggle"> + <span class="toggle-slider">` 写法：
+ * 尺寸靠 CSS 变量驱动（宽 / 高 / 滑块直径），位移由 `calc()` 推导 —— 新增尺寸只加一组变量，
+ * 不用再手算 `translateX(20px)`。
  *
- * 尺寸靠 CSS 变量驱动（宽 / 高 / 滑块直径），位移量由 `calc()` 推导，
- * 因此新增尺寸只需要加一组变量，不用再手算 `translateX(20px)` 这类硬编码。
+ * 类名用 `virlen-toggle` 而非 `.toggle`：后者是全局约定类，甚至出现在
+ * `.settings-panel .toggle input:focus-visible + .toggle-slider` 这类跨层选择器里，沿用同名
+ * 会被意外命中（老页面的 `.toggle` 暂未迁移，二者并存）。
  *
- * 类名用 `virlen-toggle` 而不是 `.toggle`：既有页面里 `.toggle` 是全局约定类，甚至出现在
- * `.settings-panel .toggle input:focus-visible + .toggle-slider` 这种跨层选择器里，沿用同名类
- * 会被那些规则意外命中（改一处、别处跟着变）。老页面的 `.toggle` 暂未迁移，二者可以并存。
- *
- * 无障碍：`role="switch"` + `aria-checked`；没有可见文字标签时**必须**传 `ariaLabel`；
+ * 无障碍：`role="switch"` + `aria-checked`；无可见文字标签时**必须**传 `ariaLabel`，
  * 焦点环画在滑块上（checkbox 本体是零尺寸隐藏元素）。
  */
 import './style.scss'

@@ -1,18 +1,12 @@
 /**
- * clipboard — 剪贴板读写与「另存为」的公共实现
+ * clipboard — 剪贴板读写与「另存为」的公共实现。
  *
- * 为什么单独抽出来：正文复制、图片右键「复制图片 / 另存为」、文件 chip「复制路径」、
- * 终端与输入框右键「复制 / 粘贴」都要这套逻辑，各处自己写会分叉
- * （尤其图片字节的获取方式、以及 WebView2 下「读剪贴板」必须走原生这两件事）。
+ * 单独抽出：正文复制、图片右键「复制图片 / 另存为」、文件 chip「复制路径」、终端与输入框右键「复制 / 粘贴」都要
+ * 这套逻辑，各处自写会分叉（尤其图片字节的获取、WebView2 下「读剪贴板」必须走原生）。
  *
- * 本文件**不依赖 i18n / Toast / store**（utils 层不该反向依赖 ui）：
- * 返回值告诉调用方成功与否，提示文案由调用方决定。
- *
- * 图片字节的来源分三种：
- *   - `data:` —— 用户粘贴的图片（项目里图片附件就是 base64 dataURL），本地解码；
- *   - `blob:` —— 页面内生成的临时地址，直接 fetch；
- *   - 远端 `http(s):` —— 必须走 `plugin-http`：WebView 里直接 fetch 会被 CORS 拦，
- *     而 Rust 侧发请求没有同源限制（capabilities 已放行 http/https）。
+ * 本文件**不依赖 i18n / Toast / store**（utils 层不该反向依赖 ui）：返回值告诉调用方成功与否，提示由调用方决定。
+ * 图片字节来源三种：`data:`（本地解码）/ `blob:`（直接 fetch）/ 远端 `http(s):`（必须走 plugin-http —— WebView 里
+ * fetch 会被 CORS 拦，Rust 侧无同源限制）。
  */
 
 /** 复制纯文本；失败返回 false（调用方决定要不要提示） */
@@ -30,14 +24,10 @@ export async function copyText(text: string): Promise<boolean> {
 /**
  * 读系统剪贴板的纯文本（右键「粘贴」用）；读不到返回空串。
  *
- * **优先 Tauri 原生命令** `read_clipboard_text`：WebView2 里 `navigator.clipboard.readText()`
- * 受「剪贴板读」权限约束（默认 NotAllowedError），而 Rust 侧已有现成的 Windows 剪贴板原语
- * （CF_UNICODETEXT，与读 CF_HDROP 同一套路），不依赖 WebView 权限。
- * 命令不可用（浏览器 dev）/ 返回空（非 Windows 尚未实现，或剪贴板里确实不是文本）
- * → 退浏览器剪贴板 API。
+ * **优先 Tauri 原生命令** read_clipboard_text：WebView2 里 navigator.clipboard.readText() 受「剪贴板读」权限约束
+ *（默认 NotAllowedError），而 Rust 侧已有 Windows 剪贴板原语，不依赖 WebView 权限。命令不可用 / 返回空 → 退浏览器剪贴板 API。
  *
- * ⚠️ 空串是个「说不清」的答案：可能剪贴板为空、也可能只是拿不到。
- * 调用方**不要**据此弹「剪贴板是空的」提示，静默跳过即可。
+ * ⚠️ 空串是个「说不清」的答案：可能剪贴板为空、也可能只是拿不到。调用方**不要**据此弹「剪贴板是空的」，静默跳过即可。
  */
 export async function readClipboardText(): Promise<string> {
   try {
@@ -149,13 +139,9 @@ export async function readImageBytes(src: string): Promise<Uint8Array> {
 }
 
 /**
- * 把图片写进系统剪贴板。
- *
- * 两条路，先原生后浏览器：
- *   1. Tauri 命令 `write_clipboard_image`（Windows: 解码后写 CF_DIB）——
- *      不依赖 WebView 的剪贴板权限，行为确定；
- *   2. `navigator.clipboard.write(ClipboardItem)` —— 浏览器/未实现平台（macOS/Linux）
- *      的兜底，WebView2 下是否放行取决于运行时权限。
+ * 把图片写进系统剪贴板。两条路，先原生后浏览器：
+ *   1. Tauri 命令 write_clipboard_image（Windows 写 CF_DIB）—— 不依赖 WebView 剪贴板权限，行为确定；
+ *   2. navigator.clipboard.write(ClipboardItem) —— 浏览器 / 未实现平台（macOS / Linux）的兜底。
  *
  * @returns 是否复制成功（两条路都失败 → false，调用方给用户一个提示）
  */

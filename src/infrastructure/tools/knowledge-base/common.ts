@@ -1,16 +1,9 @@
-/**
- * knowledge-base — 知识库分类公共函数（分类 id: knowledge_base）
- *
- * 供本分类下的 6 个知识库工具复用。
- */
+/** knowledge-base — 知识库分类公共函数（id: knowledge_base），供本分类 6 个工具复用。 */
 import type { KnowledgeBaseChunk } from '@/domain/ports'
 
 /**
- * 构建包含 document_id 的搜索上下文（AI 可见的格式化文本）
- *
- * 相比 Rust 后端返回的 context（只有 document_name），
- * 此函数额外输出 document_id，使 AI 能识别每个 chunk 所属的文档，
- * 从而能够调用 delete_knowledge_base_document / edit_text_in_kb 等需要 document_id 的工具。
+ * 构建含 document_id 的搜索上下文（AI 可见文本）。相比 Rust 后端返回的 context（只有 document_name），
+ * 额外输出 document_id，使 AI 能识别每个 chunk 所属文档，从而调用需要 document_id 的工具。
  */
 export function buildSearchContext(
   results: KnowledgeBaseChunk[],

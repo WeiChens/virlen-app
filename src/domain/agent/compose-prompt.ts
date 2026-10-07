@@ -1,15 +1,11 @@
 /**
- * compose-prompt — 系统提示词「纯组装」策略
+ * compose-prompt — 系统提示词的纯组装策略（无 I/O，可被固定输入逐字节断言）。
  *
- * 只做一件事：把各来源的片段按固定顺序拼成一个字符串。**不做任何 I/O**（取数在 `agent-service.ts` +
- * `env-service` + `project-rules-service`），因此可以被固定输入驱动、逐字节断言。
+ * 存在意义：Rust `prompts/assemble.rs` 要组装**同一份**提示词并得到逐字节相同的结果，
+ * 本函数即 TS 侧的被比对对象（见 `tests/domain/compose-prompt-golden.test.ts`）。
  *
- * 抽成独立文件的原因：Rust 侧要组装**同一份**提示词（`virlen-core/src/agent/prompts/assemble.rs`），
- * 两侧用同一组输入必须得到逐字节相同的结果 —— 本函数就是 TS 侧的被比对对象，见
- * `src/tests/domain/compose-prompt-golden.test.ts`。
- *
- * ⚠️ 两个 md 资源（工具规范 / 核心原则）的唯一事实源在 Rust `virlen-core/src/agent/prompts/*.md`：
- * 前端经 `promptText()` 读已水合的快照。本模块只负责组装顺序与分隔符，不持有文本副本。
+ * ⚠️ 两个 md（工具规范 / 核心原则）的权威源在 Rust `prompts/*.md`：前端经 `promptText()` 读快照，
+ * 本模块只管组装顺序与分隔符，不持有文本副本。
  */
 import { promptText } from './prompt-texts'
 
@@ -25,11 +21,7 @@ export interface SystemPromptParts {
   envPrompt?: string
   /** 项目规则片段（`buildProjectRulesPrompt` 的产物）；空串/undefined 表示不注入 */
   projectRules?: string
-  /**
-   * 长期记忆片段（`# Memory`）—— 由 Rust 侧 `agent::memory::render_memory_section` 渲染好后传入。
-   * 前端**不复制**选取规则（top-k / 预算裁剪只有一份实现，见 `docs/memory-plan.md` §4.5）：
-   * 本模块只负责「把它插在项目规则之后、角色之前」。
-   */
+  /** 长期记忆片段（`# Memory`），由 Rust `agent::memory::render_memory_section` 渲染好传入；前端不复制选取规则（见 `docs/memory-plan.md` §4.5） */
   memory?: string
   agentName?: string
   agentDescription?: string
@@ -45,18 +37,16 @@ export function baseSystemPrompt(): string {
 }
 
 /**
- * 按固定顺序拼接系统提示词。
- *
- * 顺序即优先级：基础规范 → 环境 → 项目规则 → 记忆 → 角色/身份/性格 → 技能。
- * 片段之间用空行分隔；技能段内部用单换行（末尾保留一个换行）。
+ * 按固定顺序拼接：基础规范 → 环境 → 项目规则 → 记忆 → 角色/身份/性格 → 技能。
+ * 顺序即优先级；片段间空行分隔，技能段内部单换行。
  */
 export function composeSystemPrompt(parts: SystemPromptParts): string {
   const out: string[] = [baseSystemPrompt()]
 
-  // 注意：`undefined` 才代表「不注入」；空串是「注入了但内容为空」（与旧行为一致）
+  // `undefined` = 不注入；空串 = 注入了但内容为空（与旧行为一致）
   if (parts.envPrompt !== undefined) out.push(parts.envPrompt)
   if (parts.projectRules) out.push(parts.projectRules)
-  // 记忆：与项目规则同为「前置背景」，但优先级更低（项目规则是用户手写、本项目优先）
+  // 记忆优先级低于项目规则（后者是用户手写的本项目约定）
   if (parts.memory) out.push(parts.memory)
 
   const name = parts.agentName ?? ''

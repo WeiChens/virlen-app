@@ -1,13 +1,9 @@
 /**
- * message-list 虚拟滚动核心 + 派生数据
+ * message-list 虚拟滚动核心 + 派生数据：只依赖 messages / 容器 / 会话信息，不含滚动事件与
+ * 跳转逻辑，是可独立阅读的一层。
  *
- * 从 message-list 抽出：这里只依赖 messages / messagesRef / 容器 / 会话信息，
- * 不含滚动事件与跳转逻辑，是「可独立阅读」的一层。
- *
- * @tanstack/react-virtual 的「动态高度」虚拟滚动：
- *  - DOM 恒定：仅渲染视口附近的若干条消息。
- *  - 滚动锚定：前插历史时保持视口不跳动（getItemKey 用消息 id）。
- *  - 贴底跟随：anchorTo:'end' + followOnAppend。
+ * @tanstack/react-virtual 动态高度虚拟滚动：仅渲染视口附近若干条（DOM 恒定）；getItemKey 用
+ * 行 key 做滚动锚定（前插历史视口不跳动）；anchorTo:'end' 贴底跟随。
  */
 import { useCallback, useMemo, useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
@@ -37,8 +33,7 @@ interface Params {
   sessionId: string | null
   hasMoreInDb: boolean
   /**
-   * 是否启用工具组折叠（= 设置项 `hideToolCallThink`）。
-   * 为 false 时行模型退化为「一条消息 = 一行」，与改动前完全一致。
+   * 是否启用工具组折叠（= 设置项 `hideToolCallThink`）；false 时行模型退化为「一条消息 = 一行」。
    */
   groupTools: boolean
   /** 滚动容器（虚拟库的 getScrollElement） */
@@ -56,7 +51,6 @@ export function useVirtualList({
   containerRef,
   toolResultsCacheRef,
 }: Params) {
-  // ==================== tool 结果索引（一次遍历 + 引用稳定） ====================
   const toolResultById = useMemo(() => {
     const map = new Map<string, Message>()
     for (const m of messages) {
@@ -66,12 +60,11 @@ export function useVirtualList({
   }, [messages])
 
   /**
-   * 取某条消息 toolCalls 对应的结果数组（按索引对齐）。
-   * 结果消息引用未变时返回缓存数组 → MessageBubble / ToolCallGroup 不会因
-   *「messages 数组整体换新」而重渲染。
+   * 取某条消息 toolCalls 对应的结果数组（按索引对齐）。结果引用未变时返回缓存数组，
+   * MessageBubble / ToolCallGroup 就不会因「messages 数组整体换新」而重渲染。
    *
-   * ⚠️ 必须是 `useCallback`（依赖仅 toolResultById）：它作为 prop 传给 memo 化的
-   * 行组件，若每次渲染都换新引用，会直接击穿 `memo`（滚动/悬停也会带着全部可见行重渲染）。
+   * ⚠️ 必须是 useCallback（依赖仅 toolResultById）：它作为 prop 传给 memo 化行组件，
+   * 每次渲染换新引用会击穿 memo（滚动 / 悬停都会带着全部可见行重渲染）。
    */
   const toolResultsFor = useCallback(
     (msg: Message): (Message | undefined)[] => {
@@ -92,7 +85,6 @@ export function useVirtualList({
     [toolResultById],
   )
 
-  // ==================== 行模型（消息 → 虚拟行） ====================
   // 连续的工具调用合并成一行（见 rows.ts）；未启用折叠时退化为「一条消息 = 一行」。
   const rows = useMemo(() => buildRows(messages, groupTools), [messages, groupTools])
   /** 供「只注册一次」的回调读取最新的行模型 */
@@ -112,7 +104,6 @@ export function useVirtualList({
     [messages],
   )
 
-  // ==================== 锚点列表数据 ====================
   // 后端「全量用户消息索引」（id + 摘要）覆盖整个会话历史，不依赖消息分页；
   // 本会话中刚发送、尚未包含在索引里的消息由本地已加载消息补齐。
   const userMsgIndex = sessionId
@@ -143,7 +134,6 @@ export function useVirtualList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userMsgIndex, localUserSig])
 
-  // ==================== 虚拟滚动核心 ====================
   // getItemKey 用行 key（稳定）：`one` 行 = 消息 id，`tools` 行 = `tools:` + 首条 id。
   // 前插历史时测量缓存可跟随同一行，库据此把「视口锚点项」保持在原位置 → 上翻不跳动。
   const getItemKey = useCallback(
@@ -153,9 +143,8 @@ export function useVirtualList({
   )
 
   /**
-   * 未测量条目的估算高度（存 ref，避免重渲染；虚拟库重算测量值时读取）。
-   * 用「已测量条目的平均高度」动态逼近而不是固定常数：估算值与真实值越接近，
-   * 新条目挂载时虚拟库对 scrollTop 的高度补偿就越小。
+   * 未测量条目的估算高度（存 ref 避免重渲染）。用已测量条目的平均高度动态逼近而非固定常数：
+   * 估算越接近真实，新条目挂载时虚拟库对 scrollTop 的补偿越小。
    */
   const avgItemHeightRef = useRef(ESTIMATED_ITEM_HEIGHT)
   const estimateSize = useCallback(() => avgItemHeightRef.current, [])
@@ -166,8 +155,8 @@ export function useVirtualList({
   )
 
   /**
-   * 按「像素」而不是「条数」计算渲染范围：总渲染高度 ≈ RENDER_RANGE_SCREENS × 视口高，
-   * 视口上下各分一半（单侧 OVERSCAN_SCREENS 屏），给滚动（含快速 / 惯性滚动）留出反应空间。
+   * 按像素（而非条数）计算渲染范围：视口上下各留 OVERSCAN_SCREENS 屏，
+   * 给快速 / 惯性滚动留出反应空间。
    */
   const rangeExtractor = useCallback((range: Range) => {
     const { startIndex, endIndex, count } = range
@@ -176,7 +165,7 @@ export function useVirtualList({
     const virt = rowVirtualizerRef.current
     const m = virt?.measurementsCache
     if (!virt || !m || m.length < count) {
-      // 兜底（实例 / 测量值尚未就绪）：退回按条数扩展（同样用已按屏数放大的上限）
+      // 兜底（实例 / 测量值尚未就绪）：退回按条数扩展
       start = Math.max(startIndex - MAX_OVERSCAN_ITEMS, 0)
       end = Math.min(endIndex + MAX_OVERSCAN_ITEMS, count - 1)
     } else {
@@ -185,7 +174,7 @@ export function useVirtualList({
         OVERSCAN_PX,
         (virt.scrollRect?.height ?? 0) * OVERSCAN_SCREENS,
       )
-      // 向上扩展，直到覆盖顶部缓冲区或达到条数上限
+      // 向上扩展至覆盖顶部缓冲区或达到条数上限
       const topLimit = (m[startIndex]?.start ?? 0) - buffer
       while (
         start > 0 &&
@@ -194,7 +183,7 @@ export function useVirtualList({
       ) {
         start--
       }
-      // 向下扩展，直到覆盖底部缓冲区或达到条数上限
+      // 向下扩展至覆盖底部缓冲区或达到条数上限
       const bottomLimit = (m[endIndex]?.end ?? 0) + buffer
       while (
         end < count - 1 &&
@@ -214,18 +203,16 @@ export function useVirtualList({
     count: rows.length,
     getScrollElement: () => containerRef.current,
     estimateSize,
-    // 「条数 overscan」**不决定渲染范围**（渲染范围由 rangeExtractor 按像素给出，
-    // 见 RENDER_RANGE_SCREENS），只影响平滑滚动时允许重新测量的条目窗口。
+    // 条数 overscan 不决定渲染范围（范围由 rangeExtractor 按像素给出），只影响平滑滚动时
+    // 允许重新测量的条目窗口。
     overscan: OVERSCAN,
     getItemKey,
     rangeExtractor,
-    // ⚠️ 必须关掉库默认开启的 flushSync（否则 React 报
-    // “flushSync was called from inside a lifecycle method … message-list.tsx”）：
-    // 条目高度测量（measureElement 的 ref 回调 / ResizeObserver）发生在 React 的
-    // 提交 / 生命周期阶段，而库在「本次测量同步改写了 scrollTop」时会
-    // flushSync(rerender) 强制重渲染 —— 在渲染/提交中调 flushSync 是 React 明令禁止的。
-    // 关掉后改成普通 setState：提交阶段 / rAF 里调度的更新仍会在本帧绘制前处理，
-    // 观感一致，只是不再有这条告警。
+    // ⚠️ 必须关掉库默认开启的 flushSync（否则 React 报「flushSync was called from inside a
+    // lifecycle method … message-list.tsx」）：条目测量（measureElement 的 ref 回调 /
+    // ResizeObserver）发生在提交阶段，而库在「本次测量同步改写了 scrollTop」时会
+    // flushSync(rerender) —— 在渲染 / 提交中调 flushSync 是 React 明令禁止的。
+    // 关掉后改普通 setState，本帧绘制前照样处理，只是不再有告警。
     useFlushSync: false,
     // 以「底部」为锚：
     //  - 贴底时新消息 / 流式增长自动跟随（anchorTo=end + followOnAppend）
@@ -234,9 +221,8 @@ export function useVirtualList({
     anchorTo: 'end',
     followOnAppend: true,
     scrollEndThreshold: AT_BOTTOM_THRESHOLD,
-    // ---- 消除 Chromium「ResizeObserver loop completed with undelivered notifications」----
-    // 打开后库把 RO 回调体推迟到 rAF，布局写入落在本帧 RO 投递之后，
-    // 新通知顺延到下一帧，报错消失。代价：实测高度晚一帧生效（观感无差）。
+    // 消除 Chromium「ResizeObserver loop completed with undelivered notifications」：打开后
+    // 库把 RO 回调推迟到 rAF，布局写入落在本帧 RO 投递之后。代价：实测高度晚一帧生效（观感无差）。
     useAnimationFrameWithResizeObserver: true,
     paddingStart: LIST_PADDING + (hasMoreInDb ? LOAD_MORE_HINT_HEIGHT : 0),
     paddingEnd: LIST_PADDING,
@@ -244,10 +230,7 @@ export function useVirtualList({
   rowVirtualizerRef.current = rowVirtualizer
   const virtualItems = rowVirtualizer.getVirtualItems()
 
-  /**
-   * 用「已测量条目的平均高度」刷新未测量条目的估算高度（estimateSize）。
-   * 估算越准，新条目挂载时虚拟库对 scrollTop 的补偿越小，快速滚动越不抖。
-   */
+  /** 用已测量条目的平均高度刷新估算高度：估算越准，新条目挂载时的 scrollTop 补偿越小，快速滚动越不抖 */
   const refreshEstimatedItemHeight = useCallback(() => {
     const sizes = rowVirtualizer.itemSizeCache
     if (sizes.size === 0) return

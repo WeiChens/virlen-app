@@ -1,12 +1,11 @@
 //! `todo_write` 工具（原生）— 任务清单全量替换。
 //!
-//! 语义：模型每次必须传完整清单；空数组 = 清空（不做 merge/增量 —— 增量需要保存「上一版」状态，而状态
-//! 只在消息历史里，工具执行器读不到）。本工具不保存任何状态：清单随 tool_result 的 `content`（给模型）
-//! + `uiData`（给 UI）一起落库，UI 侧由 `pickCurrentTodos()` 派生「唯一的那份清单」。
+//! 模型每次必须传完整清单；空数组 = 清空（不做 merge —— 增量需要「上一版」状态，而状态只在消息
+//! 历史里，工具执行器读不到）。本工具不保存状态：清单随 tool_result 的 `content`（给模型）+
+//! `uiData`（给 UI）一起落库。
 //!
-//! ⚠️ 与 TS 侧 `src/infrastructure/tools/plan/todo-write.ts` 逐字对齐（铁律 1）：三条校验错误文本、
-//! `content` 渲染、`uiData` 结构两侧一致。错误一律走 `NativeToolOutcome::Error`（content = 原文，与桥的
-//! `BridgeToolResult::Error` 同形）；不要用 `Err()`（那会被前缀成 `error: …`）。
+//! ⚠️ 与 TS `plan/todo-write.ts` 逐字对齐（铁律 1）：三条校验错误文本 / `content` / `uiData` 两侧
+//! 一致。错误一律走 `NativeToolOutcome::Error`（原文），不要用 `Err()`（会被前缀成 `error: …`）。
 
 use crate::agent::native_tools::plan::common::{
     check_todo_limit, compute_stats, render_todo_content, sanitize_todos, validate_todos,

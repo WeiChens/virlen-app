@@ -37,9 +37,8 @@ pub(crate) async fn search_files_by_name_tool(
     let root_c = root.clone();
     let q = effective_query.clone();
     let task = tokio::task::spawn_blocking(move || {
-        // include_hidden=true + 空剪枝清单 = **保持工具原有行为**：
-        // 模型可以用显式路径 / glob 表达「就要搜 node_modules」，「默认剪掉依赖目录」
-        // 是侧边栏搜索框的取舍（无表达手段），不能拿来削弱工具能力。
+        // include_hidden=true + 空剪枝清单 = **保持工具原有行为**：模型可用显式路径 / glob 表达
+        // 「就要搜 node_modules」；「默认剪掉依赖目录」是侧边栏搜索框的取舍，不能削弱工具能力。
         crate::search::search_files_by_name(&root_c, &q, effective_use_regex, max_results, &flag, true, &[], &[])
     });
 

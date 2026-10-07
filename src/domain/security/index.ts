@@ -79,11 +79,7 @@ class SecurityPortImpl implements SecurityPort {
     }
     return { allowed: true, reason: '' }
   }
-  /**
-   * 各平台默认黑名单目录。
-   * Windows 保护系统目录 + %USERPROFILE% 下的敏感路径；
-   * macOS/Linux 保护系统目录 + ~ 下的敏感路径。
-   */
+  /** 各平台默认黑名单目录：系统目录 + 用户家目录下的敏感路径。 */
   getDefaultBlacklist(platform: 'windows' | 'macos' | 'linux'): string[] {
     const common = [
       '/etc/shadow',
@@ -202,11 +198,7 @@ class SecurityPortImpl implements SecurityPort {
     }
   }
 
-  /**
-   * 各平台默认黑名单目录。
-   * Windows 保护系统目录 + %USERPROFILE% 下的敏感路径；
-   * macOS/Linux 保护系统目录 + ~ 下的敏感路径。
-   */
+  /** 各平台默认白名单目录（临时目录等允许写入的位置）。 */
   getDefaultWhitelist(platform: 'windows' | 'macos' | 'linux'): string[] {
     switch (platform) {
       case 'windows':

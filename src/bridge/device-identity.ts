@@ -1,18 +1,13 @@
 /**
  * 电脑设备身份（M6，见 docs/phone-control-bridge.md §30.1）。
  *
- * 「重新获取还是同一个」在这里实现：**首次生成随机 key → 立刻持久化 → 之后只读不再生成**。
- * 为什么不取硬件指纹（用户曾提的备选）：拿不到可靠的 —— 浏览器/系统升级、隐私模式、
- * 清数据都会变，同型号机器还会撞；而这个 key 要用来派生房间号并长期记录在手机端，
- * 「偶发变化」的代价是**已配对的手机全部失联**。
+ * 「重新获取还是同一个」= **首次生成随机 key → 立刻持久化 → 之后只读不再生成**。
+ * 不用硬件指纹：浏览器/系统升级、隐私模式、清数据都会变，同型号还撞；此 key 要派生房间号并长期记在手机端，
+ *「偶发变化」的代价是已配对的手机全部失联。
  *
- * 三级来源，优先级从高到低（每一级命中后都会回写上一级）：
- *   1. Tauri 文件 `<data_dir>/phone-identity.json`（最稳，不受浏览器存储清理影响）；
- *   2. `localStorage['virlen.phone.identity']`（浏览器 harness / 开发联调）；
- *   3. **旧 `virlen.phone.hostId` 迁移**：直接沿用旧 id 作为 deviceKey ——
- *      `roomFor()` 对无前缀的旧 id 得到的房间名与旧实现**逐字一致**，
- *      于是「已用旧版配对的手机」不会因为这次升级而失效（§30.6）。
- *   4. 全新生成（`newDeviceKey('host')`，与手机端同一份生成实现）。
+ * 三级来源，优先级从高到低（命中后回写上一级）：① Tauri 文件 phone-identity.json（最稳）；
+ * ② localStorage['virlen.phone.identity']；③ 旧 virlen.phone.hostId 迁移（roomFor() 对无前缀旧 id
+ * 与旧实现逐字一致，已配对手机不失效，§30.6）；④ 全新生成 newDeviceKey('host')。
  */
 import { newDeviceKey } from 'virlen-remote'
 

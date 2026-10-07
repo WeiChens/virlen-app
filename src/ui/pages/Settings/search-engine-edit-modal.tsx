@@ -1,9 +1,6 @@
 /**
- * search-engine-edit-modal — 搜索供应商编辑/添加弹窗
- *
- * 两种模式：
- *   1. 添加模式：传入 templateType（如 'tavily'），锁定类型，预填名称和地址
- *   2. 编辑模式：传入 initialConfig，可修改所有字段
+ * search-engine-edit-modal — 搜索供应商编辑 / 添加弹窗：添加模式传 `templateType`（锁定类型、
+ * 预填名称与地址），编辑模式传 `initialConfig`（可改所有字段）。
  */
 import { useState, useEffect } from 'react'
 import Modal from '@/ui/components/shared/Modal'
@@ -51,7 +48,6 @@ export default function SearchEngineEditModal({
   const [showKey, setShowKey] = useState(false)
   const [validating, setValidating] = useState(false)
 
-  // 当前选中类型的模板信息
   const currentTemplate = SEARCH_PROVIDER_TEMPLATES.find((t) => t.type === type)
 
   useEffect(() => {
@@ -133,7 +129,6 @@ export default function SearchEngineEditModal({
         </>
       }>
       <div className="search-engine-edit-form">
-        {/* 名称 */}
         <div className="form-group">
           <label>{t('供应商')}</label>
           <input
@@ -158,43 +153,6 @@ export default function SearchEngineEditModal({
           </div>
         </div>
 
-        {/* 类型（添加模式锁定，编辑模式可改） */}
-        {/* <div className="form-group">
-          <label>{t('搜索引擎类型')}</label>
-          {isAdd ? (
-            // 添加模式：只读展示
-            <div className="type-readonly">
-              <span className="type-icon">
-                {currentTemplate?.requireApiKey ? '🔑' : '🔓'}
-              </span>
-              <div className="type-meta">
-                <span className="type-name">{currentTemplate?.label}</span>
-                <span className="type-desc">
-                  {currentTemplate?.description}
-                </span>
-              </div>
-            </div>
-          ) : (
-            // 编辑模式：可选
-            <div className="type-selector">
-              {SEARCH_PROVIDER_TEMPLATES.map((tmpl) => (
-                <button
-                  key={tmpl.type}
-                  className={`type-option ${type === tmpl.type ? 'active' : ''}`}
-                  onClick={() => {
-                    setType(tmpl.type)
-                    // 切换类型时自动更新地址
-                    setBaseUrl(tmpl.defaultBaseUrl)
-                  }}>
-                  <span className="type-name">{tmpl.label}</span>
-                  <span className="type-desc">{tmpl.description}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div> */}
-
-        {/* API Key — 仅对需要 Key 的供应商显示 */}
         {currentTemplate?.requireApiKey && (
           <div className="form-group">
             <label>{t('API Key')}</label>
@@ -217,7 +175,6 @@ export default function SearchEngineEditModal({
           </div>
         )}
 
-        {/* 无需 API Key 的提示 */}
         {currentTemplate && !currentTemplate.requireApiKey && (
           <div className="form-group">
             <div className="no-key-hint">
@@ -227,7 +184,6 @@ export default function SearchEngineEditModal({
           </div>
         )}
 
-        {/* Base URL */}
         <div className="form-group">
           <label>{t('API 地址')}</label>
           <input

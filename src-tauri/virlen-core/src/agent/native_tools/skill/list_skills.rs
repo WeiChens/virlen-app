@@ -1,11 +1,7 @@
-//! `list_skills` 工具（原生）— 列出本 agent 启用的技能（元信息）
+//! `list_skills` 工具（原生）— 列出本 agent 启用的技能元信息（只读）。
 //!
-//! 只读操作，不提供写能力。
-//! ⚠️ 与 TS 侧 `src/infrastructure/tools/skill/list-skills.ts` 逐字对齐（铁律 1）：`content` 固定英文
-//!（模型侧），`uiData.skills` 为语言无关的结构化数据（UI 侧本地化渲染）。
-//!
-//! 语义（与 TS 一致）：`ctx.skills` 为空 → 「本 agent 未启用任何技能」；技能目录不可用（`skills_dir` 为空 /
-//! 不存在）→ 视作「无技能」，不报错（TS 侧同样如此）。
+//! ⚠️ 与 TS `list-skills.ts` 逐字对齐（铁律 1）：`content` 固定英文，`uiData.skills` 为语言无关的结构化
+//! 数据。语义：`ctx.skills` 为空 → 「未启用任何技能」；技能目录不可用 → 视作「无技能」，不报错。
 
 use super::common::{SkillEntry, scan_skills};
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};

@@ -1,21 +1,12 @@
 /**
- * tool-call-group — 一段**连续**的工具调用合成一行（行模型见 `message-list/rows.ts`）。
+ * 一段**连续**的工具调用合成一行（行模型见 `message-list/rows.ts`）。
  *
- * 折叠态只说一件事：调了几次（外加工具名预览）。展开后是**各自仍可再展开**的卡片
- *（`ToolCallMessage` 自带 `expand`，本组件不改它）。
+ * 折叠态只说一件事：调了几次（外加工具名预览）；展开后是各自仍可再展开的卡片（本组件不改 `ToolCallMessage`）。
+ * **段首宿主的正文**若有，显示在组头之**上**、不随折叠隐藏（它是看得见的边界，分段规则见 `rows.ts::buildRows`）。
  *
- * **段首宿主的正文**（若有）显示在组头之**上**、不随折叠隐藏 —— 它是「看得见的边界」，
- * 用户要能读到那句过渡说明（分段规则见 `rows.ts::buildRows`：中段正文会收口，段首正文被允许）。
- * 它的 DOM 复用普通 assistant 消息的容器（`.message-bubble.assistant > .message-content-wrapper
- * > .message-content`），所以看起来就是一条普通消息、左缩进与其它消息一致。
- *
- * 折叠头是桌面自有的「聚合行」：状态点 + 调了几次 + 工具名预览 + 折叠箭头
- *（**不是**移动端那张描边卡片的翻版，见 `.scss` 顶部说明）。
- *
- * ⚠️ `open` 由父层**预先算好**并以布尔值传入：组件是 `memo` 的，若把折叠态留在
- * 内部读（或传一个每次渲染都换引用的 map），切换折叠会被 `memo` 挡掉（点了没反应）。
- * 同理，「成员消息数组」由 `messages + messageIndexes` 在内层 `useMemo` 派生（而非在父层
- * `map` 一个新数组传进来）—— 否则每次父渲染都换引用，`memo` 会被直接击穿。
+ * ⚠️ `open` 由父层**预先算好**并以布尔值传入：组件是 `memo` 的，若把折叠态留在内部读（或传一个每次渲染
+ * 都换引用的 map），切换折叠会被 `memo` 挡掉（点了没反应）。同理，「成员消息数组」由 `messages +
+ * messageIndexes` 在内层 `useMemo` 派生（而非父层 `map` 成新数组传进来）—— 否则 `memo` 被直接击穿。
  */
 import { memo, useMemo } from 'react'
 import type { Message } from '@/types'
@@ -50,8 +41,7 @@ function ToolCallGroup({
   open,
   onToggle,
 }: Props) {
-  // 成员数组由「全量 messages + 下标」派生：滚动 / 其它组切换时两者引用都不变，
-  // useMemo 便返回同一数组 → memo 生效，不会带着全部可见行一起重渲染。
+  // 成员数组由「全量 messages + 下标」派生：滚动 / 其它组切换时两者引用不变 → useMemo 返回同一数组 → memo 生效
   const members = useMemo(
     () =>
       messageIndexes
@@ -65,7 +55,7 @@ function ToolCallGroup({
   )
   // 段首宿主的过渡正文：恒显示在组头之上（不随折叠隐藏）
   const lead = members[0] ? messageBodyText(members[0].content) : ''
-  // 状态点只靠颜色表达，屏幕阅读器读不到 —— 给它一个可读的状态名
+  // 状态点只靠颜色表达，屏幕阅读器读不到 → 给它一个可读的状态名
   const statusLabel =
     view.status === 'error'
       ? t('失败')

@@ -1,6 +1,4 @@
-/**
- * 搜索供应商基础设施层 — 导出所有内置搜索供应商实现
- */
+/** 搜索供应商基础设施层 —— 导出所有内置实现。 */
 export { TavilySearchProvider } from './tavily'
 export type { TavilyConfig } from './tavily'
 

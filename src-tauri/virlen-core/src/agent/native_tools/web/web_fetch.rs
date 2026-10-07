@@ -1,23 +1,14 @@
 //! `web_fetch` 工具（原生）— 抓取 URL 并（可选）把 HTML 转成 Markdown。
 //!
-//! ## 与 TS 侧逐字对齐（铁律 1）
+//! ⚠️ 与 TS `web-fetch.ts` 逐字对齐（铁律 1）：参数默认值（`method=GET` / `htmlToMd=true` /
+//! `timeout=10s`）、二进制 Content-Type 清单、截断阈值 `MAX_LENGTH=20000` 与文案、HTML 判定
+//! （Content-Type 优先，否则形状判定；两侧共读 golden `web-html-detect.golden.json`）。
 //!
-//! 镜像 `src/infrastructure/tools/web/web-fetch.ts`：参数默认值（`method=GET` / `htmlToMd=true` /
-//! `timeout=10s`）、二进制 Content-Type 清单、截断阈值 `MAX_LENGTH = 20000` 与截断 / 失败文案、HTML
-//! 判定（Content-Type 优先，否则回退形状判定；两侧共读 golden `web-html-detect.golden.json`）都一致。
-//!
-//! ## 已知差异（HTML→Markdown 细节，已登记 `rust-engine.md`）
-//!
-//! Rust 用 `htmd`（turndown.js 的 Rust 移植），TS 用 `cheerio + turndown`：
-//! - ⚠️ htmd 不跳过 `script` / `style` 的文本内容（实测 0.5.5：`<script>alert(1)</script>` 的
-//!   `alert(1)` 照样进 Markdown，`skip_tags` 拦不住）→ 本模块在转换前用正则整块剥离 `script /
-//!   style / iframe / noscript / footer / header`，对齐 TS 的 cheerio `remove`；
-//! - 正则只能近似 DOM：未闭合标签、注释里的伪标签等边界情形可能不同（保守放行 —— 宁可多留，不吞正文）；
-//! - TS 还按 `class="hidden"` 移除节点，Rust 侧无法按类名判断 → 保留（差异）；其余 Markdown 细节
-//!   （空行数量、链接风格、列表缩进…）不保证逐字相同。
-//!
-//! 差异只影响「模型读到的网页正文格式」，不影响任何结构化字段或安全判定。HTML 解析 + Markdown 转换是
-//! 纯 CPU 工作（网页可达 MB 级），放 `spawn_blocking`，避免占住 tokio worker。
+//! 已知差异（HTML→Markdown 细节，见 `rust-engine.md`）：Rust 用 `htmd`，TS 用 `cheerio + turndown`。
+//! ⚠️ htmd 不跳过 `script`/`style` 的文本（`skip_tags` 拦不住）→ 转换前用正则整块剥离
+//! `script/style/iframe/noscript/footer/header`；正则只能近似 DOM，边界（未闭合标签 / 注释伪标签）
+//! 保守放行，宁可多留不吞正文；TS 按 `class="hidden"` 移除节点，Rust 无法按类名判断 → 保留。
+//! 差异只影响模型读到的正文格式，不影响结构化字段或安全判定。转换是纯 CPU 工作，放 `spawn_blocking`。
 
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
 use once_cell::sync::Lazy;

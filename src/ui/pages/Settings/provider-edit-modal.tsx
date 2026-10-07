@@ -1,9 +1,6 @@
 /**
- * provider-edit-modal — Provider 编辑/添加表单
- * 纯 UI 组件，不依赖 store，通过 props 传值
- *
- * 表单按「基础信息 / 模型 / 高级设置」三段分组，便于扫描；
- * 必填项、禁用原因与校验错误均就近提示。
+ * provider-edit-modal — Provider 编辑 / 添加表单。纯 UI 组件，不依赖 store，通过 props 传值。
+ * 表单按「基础信息 / 模型 / 高级设置」三段分组；必填项、禁用原因与校验错误均就近提示。
  */
 import { useState, useEffect } from 'react'
 import Modal from '@/ui/components/shared/Modal'
@@ -289,7 +286,6 @@ export default function ProviderEditModal({
         </div>
       }>
       <div className="provider-edit-form">
-        {/* ===== 基础信息 ===== */}
         <section className="form-section">
           <h4 className="form-section-title">{t('基础信息')}</h4>
 
@@ -418,7 +414,6 @@ export default function ProviderEditModal({
           </div>
         </section>
 
-        {/* ===== 模型 ===== */}
         <section className="form-section">
           <div className="form-group">
             <div className="row">
@@ -480,7 +475,6 @@ export default function ProviderEditModal({
           </div>
         </section>
 
-        {/* ===== 高级设置 ===== */}
         <section className="form-section">
           <div className="form-group">
             <label>{t('推理强度候选项')}</label>
