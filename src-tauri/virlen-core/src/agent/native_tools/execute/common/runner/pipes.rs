@@ -229,7 +229,13 @@ pub(super) async fn run_command_native_pipes(
                 }
             }
             code = done_rx.recv() => {
-                exit_code = code;
+                // `recv` 返回 `Some(code)` 才是真正的退出码；返回 `None` 只代表发送端已关。
+                // done_tx 只 send 一次随即 drop，循环里会**再次** recv 到 `None`；
+                // 若无条件覆盖，会把先前拿到的退出码冲成 `None`（Linux/macOS 管道路径
+                // 才会暴露：Windows 走 PTY）。故仅在 `Some` 时更新。
+                if let Some(code) = code {
+                    exit_code = Some(code);
+                }
                 got_exit = true;
                 // kill 请求已置位：进程退出是 kill 的结果，按用户取消处理，
                 // 避免与 done_rx 竞态导致返回「退出码」而非「已取消」。

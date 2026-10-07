@@ -822,13 +822,31 @@ mod tests {
             ),
             Some("C:/code/app".to_string())
         );
-        // 大小写 / 分隔符不同也算同一处，但存的是素材里的原样字符串
+        // 分隔符 / 尾部斜杠不同 → 归一化后同一处，但存的是素材里的原样字符串（全平台一致）
         assert_eq!(
             resolve_project_path(
-                &distilled("app 的构建命令", MEMORY_LEVEL_NORMAL, "project", Some("c:/code/app/")),
+                &distilled("app 的构建命令", MEMORY_LEVEL_NORMAL, "project", Some("C:/code/app/")),
                 &many
             ),
             Some("C:/code/app".to_string())
+        );
+        // 大小写口径按平台（见 `scope::path_key`）：Windows / macOS 不敏感（`c:/` 与 `C:/` 同一处）；
+        // Linux 敏感（两个不同目录）。
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        assert_eq!(
+            resolve_project_path(
+                &distilled("app 的构建命令", MEMORY_LEVEL_NORMAL, "project", Some("c:/code/app")),
+                &many
+            ),
+            Some("C:/code/app".to_string())
+        );
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            resolve_project_path(
+                &distilled("app 的构建命令", MEMORY_LEVEL_NORMAL, "project", Some("c:/code/app")),
+                &many
+            ),
+            None
         );
         // 模型凭空造了个路径 → 丢弃（= 全局记忆），绝不让它凭空消失
         assert_eq!(
