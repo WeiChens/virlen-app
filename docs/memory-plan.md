@@ -342,14 +342,17 @@ Rust：`virlen-core/src/agent/memory/mod.rs`；TS（UI 校验用）：`src/domai
   original conversations. Entries showing an id have a stored detail: read it with `memory_recall <id>`.
 
   ## Permanent
-  - [user] 用户偏好中文回复，讨厌啰嗦
+  - [user] (2026-09-25) 用户偏好中文回复，讨厌啰嗦
 
   ## Recent
-  - [project] 在 virlen-app 实现记忆功能：摘要蒸馏 + 两级注入
-  - [decision] 记忆不入云端，只存本机 virlen.db (id: m_3f9k2x8b1q)
+  - [project] (2026-10-05) 在 virlen-app 实现记忆功能：摘要蒸馏 + 两级注入
+  - [decision] (2026-10-05) 记忆不入云端，只存本机 virlen.db (id: m_3f9k2x8b1q)
   ```
 
-  三条渲染规则（刻意为之，别顺手改回去）：
+  四条渲染规则（刻意为之，别顺手改回去）：
+  0. **每条带记录日**（`- [kind] (YYYY-MM-DD) 正文`）：日期取自 `created_at` 的**本地日**
+     （与面板 `formatMemoryDay` / 整理口径 `source_day` 同为本地日），让模型能判断记忆的新旧；
+     `created_at` 无效（`<= 0`）时**不编造日期**（只渲染 `- [kind] 正文`，不出现空括号）；
   1. **id 只挂在「真有详情」的条目上** —— id 的唯一用途是 `memory_recall`，
      没详情的记忆召回来就是这一行本身（白烧一次工具调用）；
   2. **`kb_id` / `doc_id` 不进注入段**：`kb_id` 对所有记忆都是同一个「记忆详情」库（纯噪音）；

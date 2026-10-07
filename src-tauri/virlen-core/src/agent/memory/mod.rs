@@ -331,7 +331,8 @@ pub fn select_for_inject(all: &[MemoryRecord], now_ms: i64, top_k: usize) -> Mem
 
 /// 渲染 `# Memory` 段；没有可注入的记忆 → **空串**（= 不注入，与项目规则片段的空串语义一致）。
 ///
-/// 骨架英文（模型侧文案规则），记忆正文保持原语言。段末不留空行。
+/// 骨架英文（模型侧文案规则），记忆正文保持原语言。每条正文前带**记录日**（`created_at` 的本地日，
+/// 见 [`memory_created_day`]）—— 让模型能判断记忆的新旧。段末不留空行。
 pub fn render_memory_section(items: &[MemoryRecord]) -> String {
     let (permanent, normal): (Vec<&MemoryRecord>, Vec<&MemoryRecord>) =
         items.iter().partition(|m| is_permanent(m));
@@ -365,7 +366,12 @@ pub fn render_memory_section(items: &[MemoryRecord]) -> String {
     lines.join("\n")
 }
 
-/// 单条记忆的渲染行：`- [kind] 正文`，**有详情时**才追加 `(id: xxx)`。
+/// 单条记忆的渲染行：`- [kind] (YYYY-MM-DD) 正文`，**有详情时**才追加 `(id: xxx)`。
+///
+/// ⚠️ **日期是记录时间（`created_at`）的本地日**，它让模型能判断「这条记忆有多旧」——
+/// 长期记忆会逐日累积，一条没有时间的旧结论很容易被当成当前事实。日期与前端面板
+/// （`formatMemoryDay`）、整理口径（`source_day`）同为本地日，三处对齐。
+/// `created_at` 无效（`<= 0`，老数据 / 桩数据）时**不编造日期**：只渲染 `- [kind] 正文`。
 ///
 /// ⚠️ id 不是「顺手带上」，而是**只在真能派上用场时**才给：id 的唯一用途是 `memory_recall`，
 /// 而没有详情的记忆「摘要即全文」—— 召回它只会把上面这行正文原样回一遍，白烧一次工具调用。
@@ -375,10 +381,35 @@ pub fn render_memory_section(items: &[MemoryRecord]) -> String {
 /// `doc_id` 也只有 `memory_recall` 用得上，而它要的参数是**记忆 id**。「这行有 id」本身就是
 /// 「这条有详情」的标记（段首文案已说明），链接是内部实现细节。
 fn render_memory_line(m: &MemoryRecord) -> String {
-    if detail_link(m).is_some() {
-        format!("- [{}] {} (id: {})", m.kind, m.summary, m.id)
+    let day = memory_created_day(m.created_at);
+    let head = if day.is_empty() {
+        format!("- [{}]", m.kind)
     } else {
-        format!("- [{}] {}", m.kind, m.summary)
+        format!("- [{}] ({})", m.kind, day)
+    };
+    if detail_link(m).is_some() {
+        format!("{} {} (id: {})", head, m.summary, m.id)
+    } else {
+        format!("{} {}", head, m.summary)
+    }
+}
+
+/// `created_at`（epoch 毫秒）→ **本地**日期 `YYYY-MM-DD`；无有效值（`<= 0` / 越界）→ **空串**。
+///
+/// 为什么用本地日：与整理口径（`source_day` 是本地日）和前端面板（`formatMemoryDay`）一致 ——
+/// 用户（与模型）看到的日期与用户自己的日历对得上，比与服务端时区对得上重要。
+/// 为什么无值时给空串而不是编一个：注入段里的一个**假日期**会被模型当成真事实（记错了时间），
+/// 老数据 / 桩数据的 `created_at` 可能就是 0。
+pub fn memory_created_day(ms: i64) -> String {
+    if ms <= 0 {
+        return String::new();
+    }
+    match chrono::DateTime::from_timestamp_millis(ms) {
+        Some(dt) => dt
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d")
+            .to_string(),
+        None => String::new(),
     }
 }
 
@@ -617,9 +648,11 @@ mod tests {
 
     #[test]
     fn rendered_section_exact_shape() {
-        let mut perm = m("m_a1", MEMORY_LEVEL_PERMANENT, "用户偏好中文回复", 1);
+        let perm_ts = 1_700_000_000_000;
+        let recent_ts = 1_700_100_000_000;
+        let mut perm = m("m_a1", MEMORY_LEVEL_PERMANENT, "用户偏好中文回复", perm_ts);
         perm.kind = "user".into();
-        let mut recent = m("m_b7", MEMORY_LEVEL_NORMAL, "在 virlen-app 实现记忆功能", 2);
+        let mut recent = m("m_b7", MEMORY_LEVEL_NORMAL, "在 virlen-app 实现记忆功能", recent_ts);
         recent.detail_kb_id = Some("kb_1".into());
         recent.detail_doc_id = Some("doc_1".into());
 
@@ -631,29 +664,65 @@ mod tests {
             "original conversations. Entries showing an id have a stored detail: read it with `memory_recall <id>`.",
             "",
             "## Permanent",
-            // 没有详情 → 不挂 id（挂了也只能召回出一模一样的这一行）
-            "- [user] 用户偏好中文回复",
+            // 没有详情 → 不挂 id（挂了也只能召回出一模一样的这一行）；但**带本地日期**
+            "- [user] (PLACEHOLDER_PERM) 用户偏好中文回复",
             "",
             "## Recent",
-            "- [project] 在 virlen-app 实现记忆功能 (id: m_b7)",
+            "- [project] (PLACEHOLDER_RECENT) 在 virlen-app 实现记忆功能 (id: m_b7)",
         ]
-        .join("\n");
+        .join("\n")
+        .replace("PLACEHOLDER_PERM", &memory_created_day(perm_ts))
+        .replace("PLACEHOLDER_RECENT", &memory_created_day(recent_ts));
         assert_eq!(out, expected);
+    }
+
+    /// 注入行的日期：`created_at` → **本地** `YYYY-MM-DD`；无有效值 → 不编造（不渲染日期）
+    #[test]
+    fn memory_created_day_is_local_yyyy_mm_dd_and_empty_when_invalid() {
+        let ts = 1_700_000_000_000i64;
+        let expected = chrono::DateTime::from_timestamp_millis(ts)
+            .unwrap()
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d")
+            .to_string();
+        assert_eq!(memory_created_day(ts), expected);
+        // 形状：定长 10、第 5 个字符是分隔符（`YYYY-MM-DD`）
+        assert_eq!(memory_created_day(ts).chars().count(), 10);
+        assert_eq!(memory_created_day(ts).chars().nth(4), Some('-'));
+        // 无效时间戳一律空串（绝不编造日期）
+        assert_eq!(memory_created_day(0), "");
+        assert_eq!(memory_created_day(-1), "");
+
+        // 无有效 created_at → 行里只剩 `- [kind] 正文`，不出现空括号
+        let no_time = MemoryRecord {
+            id: "m_x".into(),
+            level: MEMORY_LEVEL_NORMAL.into(),
+            kind: "fact".into(),
+            summary: "没有时间的旧数据".into(),
+            created_at: 0,
+            ..Default::default()
+        };
+        let out = render_memory_section(&[no_time]);
+        assert!(out.contains("- [fact] 没有时间的旧数据"), "{out}");
+        assert!(!out.contains("()"), "无有效时间不得渲染空括号：{out}");
     }
 
     #[test]
     fn id_is_rendered_only_for_entries_with_a_detail() {
-        let plain = m("m_a1", MEMORY_LEVEL_NORMAL, "没有详情", 1);
+        let plain = m("m_a1", MEMORY_LEVEL_NORMAL, "没有详情", 1_700_000_000_000);
         let with_detail = {
-            let mut r = m("m_b7", MEMORY_LEVEL_NORMAL, "有详情", 2);
+            let mut r = m("m_b7", MEMORY_LEVEL_NORMAL, "有详情", 1_700_100_000_000);
             r.detail_kb_id = Some("kb_1".into());
             r.detail_doc_id = Some("doc_1".into());
             r
         };
         let out = render_memory_section(&[plain, with_detail]);
         assert!(!out.contains("m_a1"), "没详情的条目不得出现 id：{out}");
-        assert!(out.contains("- [project] 没有详情\n"), "没详情的条目只留正文：{out}");
-        assert!(out.contains("- [project] 有详情 (id: m_b7)"));
+        assert!(
+            out.contains("- [project] (") && out.contains(") 没有详情\n"),
+            "没详情的条目只留「日期 + 正文」：{out}"
+        );
+        assert!(out.contains("有详情 (id: m_b7)"));
         // 详情链接（kb / doc）不进注入段：模型拿到也用不上（召回只要记忆 id）
         assert!(!out.contains("kb_1") && !out.contains("doc_1"), "{out}");
         // 空串链接（历史上出现过缺一半的坏数据）同样不给 id

@@ -50,11 +50,11 @@ function fixtureMemory(): string {
     'original conversations. Entries showing an id have a stored detail: read it with `memory_recall <id>`.',
     '',
     '## Permanent',
-    '- [user] 用户偏好中文回复，讨厌啰嗦',
+    '- [user] (2026-09-25) 用户偏好中文回复，讨厌啰嗦',
     '',
     '## Recent',
-    '- [project] 在 virlen-app 实现记忆功能',
-    '- [decision] 记忆只存本机 virlen.db，不入云端 (id: m_3f9k2x8b1q)',
+    '- [project] (2026-10-01) 在 virlen-app 实现记忆功能',
+    '- [decision] (2026-10-05) 记忆只存本机 virlen.db，不入云端 (id: m_3f9k2x8b1q)',
   ].join('\n')
 }
 
