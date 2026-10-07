@@ -46,7 +46,7 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "turndown": "^7.2.4",
-    "virlen-remote": "0.6.1"
+    "virlen-remote": "0.8.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.5",

@@ -3,6 +3,10 @@
  *
  * 折叠态只说一件事：调了几次（外加工具名预览）；展开后是各自仍可再展开的卡片（本组件不改 `ToolCallMessage`）。
  * **段首宿主的正文**若有，显示在组头之**上**、不随折叠隐藏（它是看得见的边界，分段规则见 `rows.ts::buildRows`）。
+ * 头部**不显示**成功/失败的状态点。
+ *
+ * ⚠️ **运行中的组（pending）恒展开、不可折叠**：工具还在跑时折起来用户就看不到进展了；
+ * 跑完（done / error）后恢复成「按 `open` 折叠」（默认收起）。
  *
  * ⚠️ `open` 由父层**预先算好**并以布尔值传入：组件是 `memo` 的，若把折叠态留在内部读（或传一个每次渲染
  * 都换引用的 map），切换折叠会被 `memo` 挡掉（点了没反应）。同理，「成员消息数组」由 `messages +
@@ -55,13 +59,8 @@ function ToolCallGroup({
   )
   // 段首宿主的过渡正文：恒显示在组头之上（不随折叠隐藏）
   const lead = members[0] ? messageBodyText(members[0].content) : ''
-  // 状态点只靠颜色表达，屏幕阅读器读不到 → 给它一个可读的状态名
-  const statusLabel =
-    view.status === 'error'
-      ? t('失败')
-      : view.status === 'pending'
-        ? t('进行中')
-        : t('已完成')
+  // 运行中的组恒展开：工具还在跑时折起来，用户就看不到进展了
+  const expanded = open || view.status === 'pending'
   const bodyId = `${groupKey}__body`
   return (
     <>
@@ -77,19 +76,14 @@ function ToolCallGroup({
           </div>
         </div>
       )}
-      <div className={`tool-group${open ? ' is-open' : ''}`}>
+      <div className={`tool-group${expanded ? ' is-open' : ''}`}>
         <button
           type="button"
           className={`tool-group__head is-${view.status}`}
           onClick={() => onToggle(groupKey)}
-          aria-expanded={open}
-          aria-controls={open ? bodyId : undefined}
-          title={open ? t('收起工具调用') : t('展开工具调用')}>
-          <span
-            className="tool-group__point"
-            role="img"
-            aria-label={statusLabel}
-          />
+          aria-expanded={expanded}
+          aria-controls={expanded ? bodyId : undefined}
+          title={expanded ? t('收起工具调用') : t('展开工具调用')}>
           <span className="tool-group__label">{view.label}</span>
           {view.tools.length > 0 && (
             <span className="tool-group__tools" title={view.tools.join(', ')}>
@@ -98,10 +92,10 @@ function ToolCallGroup({
             </span>
           )}
           <CollapsedSvg
-            className={`tool-group__caret${open ? ' is-open' : ''}`}
+            className={`tool-group__caret${expanded ? ' is-open' : ''}`}
           />
         </button>
-        {open && (
+        {expanded && (
           <div className="tool-group__body" id={bodyId}>
             {members.map((message) => {
               const toolCalls = message.toolCalls ?? []

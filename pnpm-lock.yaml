@@ -87,8 +87,8 @@ importers:
         specifier: ^7.2.4
         version: 7.2.4
       virlen-remote:
-        specifier: 0.6.1
-        version: 0.6.1
+        specifier: 0.8.0
+        version: 0.8.0
     devDependencies:
       '@tauri-apps/cli':
         specifier: ^2.11.5
@@ -2300,8 +2300,8 @@ packages:
   vfile@6.0.3:
     resolution: {integrity: sha512-KzIbH/9tXat2u30jf+smMwFCsno4wHVdNmzFyL+T/L3UGqqk6JKfVqOFOZEpZSHADH1k40ab6NUIXZq422ov3Q==}
 
-  virlen-remote@0.6.1:
-    resolution: {integrity: sha512-8pEUgS9pXyqOHObXB0CenjL0XBfW+28FMUF2SNectBTqKypo9k3Bt7irnQkHdLGTL2kb+fpCHoOaUMn24ANNDw==}
+  virlen-remote@0.8.0:
+    resolution: {integrity: sha512-RR+X0aMeS3ctsOoR65R40dbfxStcGUmOcdBno1F0JQa+/IFO4CULkMtNAzKC3A/36cuUtRdWBF15ZwvwGyaabA==}
     engines: {node: '>=18'}
 
   vite@7.3.3:
@@ -4756,7 +4756,7 @@ snapshots:
       '@types/unist': 3.0.3
       vfile-message: 4.0.3
 
-  virlen-remote@0.6.1: {}
+  virlen-remote@0.8.0: {}
 
   vite@7.3.3(@types/node@26.6.3)(sass@1.99.0):
     dependencies:

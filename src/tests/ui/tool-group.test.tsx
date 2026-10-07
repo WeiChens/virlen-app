@@ -1,8 +1,9 @@
 /**
  * 工具调用组组件的接线冒烟用例（与 `tool-group-rows.test.ts` 同源）。
  *
- * 为什么必须挂真实组件：「组折叠着没有」「展开后组内是几张卡片」都是 DOM 里才可观测的行为 ——
- * 纯函数层只能钉住「折叠态该显示什么文案」（`toolGroupView`）与「哪些消息合成一行」（`buildRows`）。
+ * 为什么必须挂真实组件：「组折叠着没有」「展开后组内是几张卡片」「运行中的组会不会被折」
+ * 都是 DOM 里才可观测的行为 —— 纯函数层只能钉住「折叠态该显示什么文案」（`toolGroupView`）
+ * 与「哪些消息合成一行」（`buildRows`）。
  *
  * 这里把 `ToolCallMessage` 换成最小替身：本用例只验证「组的折叠结构」，
  * 不测单张卡片各自的渲染（那是 `tool-call-*.test.tsx` 的职责）。
@@ -54,14 +55,24 @@ const assistant = (
 const m1 = assistant('a1', [tc('t1', 'read_file'), tc('t2', 'grep')], '先看这里。')
 const m2 = assistant('a2', [tc('t3', 'write_file')])
 
-/** 结果数组：本用例只关心结构，不关心输出内容 */
-const resultsOf = (m: Message): (Message | undefined)[] =>
+/** 每个工具调用都配上结果 → 组状态 done（跑完了，可折叠） */
+const resultsDone = (m: Message): (Message | undefined)[] =>
+  (m.toolCalls ?? []).map(
+    (c): Message => ({ id: `r-${c.id}`, role: 'tool', content: '', timestamp: 0 }),
+  )
+
+/** 结果都还没回来 → 组状态 pending（运行中，恒展开） */
+const resultsPending = (m: Message): (Message | undefined)[] =>
   (m.toolCalls ?? []).map((): Message | undefined => undefined)
 
 let container: HTMLDivElement | null = null
 let root: Root | null = null
 
-function Harness() {
+function Harness({
+  resultsOf,
+}: {
+  resultsOf: (m: Message) => (Message | undefined)[]
+}) {
   const [open, setOpen] = useState(false)
   return (
     <ToolCallGroup
@@ -75,12 +86,14 @@ function Harness() {
   )
 }
 
-function mount(): void {
+function mount(
+  resultsOf: (m: Message) => (Message | undefined)[] = resultsDone,
+): void {
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
   act(() => {
-    root!.render(<Harness />)
+    root!.render(<Harness resultsOf={resultsOf} />)
   })
 }
 
@@ -105,17 +118,17 @@ afterEach(() => {
   container = null
 })
 
-describe('工具调用组：默认折叠，点头展开', () => {
-  it('折叠态只有组头（计数 + 规模），组内卡片不在 DOM', () => {
-    mount()
+describe('工具调用组：跑完默认折叠，点头展开', () => {
+  it('跑完的组：默认折叠，组内卡片不在 DOM，头部无状态点', () => {
+    mount(resultsDone)
     expect(container!.querySelectorAll('.tool-group').length).toBe(1)
     const h = head()
     expect(h.textContent).toContain('3 次工具调用')
     // 工具名预览（去重、按出现顺序）
     expect(h.textContent).toContain('read_file')
     expect(h.textContent).toContain('grep')
-    // 结果都还没回来 → 头部聚合状态为 pending
-    expect(h.className).toContain('is-pending')
+    // 头部不再显示成功/失败的状态点
+    expect(container!.querySelector('.tool-group__point')).toBeNull()
     // 折叠态组内卡片**不在 DOM**（不是 CSS 藏起来）
     expect(container!.querySelector('.tool-group__body')).toBeNull()
     expect(container!.querySelector('.tool-card')).toBeNull()
@@ -127,8 +140,8 @@ describe('工具调用组：默认折叠，点头展开', () => {
     expect(h.getAttribute('aria-expanded')).toBe('false')
   })
 
-  it('展开后组内是全部卡片；再点收回', () => {
-    mount()
+  it('单击组头展开后是全部卡片；再点收回', () => {
+    mount(resultsDone)
     click(head())
     const cards = container!.querySelectorAll('.tool-group__body .tool-card')
     expect(cards.length).toBe(3)
@@ -137,7 +150,7 @@ describe('工具调用组：默认折叠，点头展开', () => {
       'grep',
       'write_file',
     ])
-    // 段首正文恒显示在组头之上”（不随折叠隐藏）
+    // 段首正文恒显示在组头之上（不随折叠隐藏）
     expect(
       container!.querySelector('.message-bubble.assistant .message-content')
         ?.textContent,
@@ -146,5 +159,15 @@ describe('工具调用组：默认折叠，点头展开', () => {
     // 收回：折叠可逆
     click(head())
     expect(container!.querySelector('.tool-group__body')).toBeNull()
+  })
+
+  it('运行中的组（pending）：即使 open=false 也恒展开，点组头也折不起来', () => {
+    mount(resultsPending)
+    expect(head().getAttribute('aria-expanded')).toBe('true')
+    expect(container!.querySelector('.tool-group__body')).not.toBeNull()
+    expect(container!.querySelectorAll('.tool-card').length).toBe(3)
+    // 运行中不允许折叠：点组头后仍是展开
+    click(head())
+    expect(container!.querySelector('.tool-group__body')).not.toBeNull()
   })
 })

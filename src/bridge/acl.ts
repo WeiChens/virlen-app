@@ -17,6 +17,7 @@ import {
   MESSAGE_DETAIL_CAPABILITY,
   MESSAGE_FILE_CAPABILITY,
   MESSAGE_QUOTE_CAPABILITY,
+  MESSAGES_DETAIL_CAPABILITY,
   SESSION_AGENT_CAPABILITY,
 } from 'virlen-remote'
 
@@ -51,6 +52,11 @@ export type Capability =
   | typeof SESSION_AGENT_CAPABILITY
   /** §33：按链路类型裁剪下行正文 —— **功能标记**（手机据 hello 判断本机是否支持档位）。 */
   | typeof MESSAGE_DETAIL_CAPABILITY
+  /**
+   * 窗口两阶段加载 —— **功能标记**（非权限）：本机认识 `MsgPageParams.detail:'summary'`，
+   * 会按它省掉重字段并打 `MessageDTO.deferred`。手机端据此才走「先摘要后补细节」。
+   */
+  | typeof MESSAGES_DETAIL_CAPABILITY
   /** §36：删除单条消息（及其之后全部）—— 不可逆截断历史，是**权限**，handler 独立 assert。 */
   | typeof MESSAGE_DELETE_CAPABILITY
   /** §36：结构化引用（SendParams.quotes）—— **功能标记**（引用本是 session.send 的参数）。 */
@@ -91,6 +97,8 @@ export const DEFAULT_CAPABILITIES: Capability[] = [
   SESSION_AGENT_CAPABILITY,
   // §33：支持传输档位（裁剪 + 省略标记）—— 功能标记
   MESSAGE_DETAIL_CAPABILITY,
+  // 窗口两阶段加载（`detail:'summary'` + `deferred`）—— 功能标记
+  MESSAGES_DETAIL_CAPABILITY,
   // §36：删除是权限，引用是功能标记
   MESSAGE_DELETE_CAPABILITY,
   MESSAGE_QUOTE_CAPABILITY,

@@ -1,23 +1,19 @@
 // tool-call-group — 连续工具调用合一的折叠组（行模型见 message-list/rows.ts）
 //
 // 折叠头**不是**移动端那张描边卡片的翻版。桌面这里走「聚合行」：
-// 状态点 + 计数 + 工具名预览 + 折叠箭头，无描边、透明底、hover 高亮 ——
+// 计数 + 工具名预览 + 折叠箭头，无描边、透明底、hover 高亮 ——
 // 与桌面自己的单条 `.tool-call-message`、思考过程折叠头同一套语汇（它们在桌面都是「无框行」）。
-//
-// 段首宿主的正文不走这里：它由组件复用普通 assistant 消息的容器渲染（见 .tsx）。
-
+// 头部不显示成功/失败的状态点（状态不进头部视觉）。
 .tool-group {
-  // 左缘对齐消息正文：气泡水平内边距 20px + 内容包装左外边距 8px = 28px。
-  // 组头/组内卡片的**内容**左缘（而非盒左缘）也由下面的 padding-left 对到同一列。
   margin: 2px 8px 2px 28px;
-  max-width: 82%;
-  width: fit-content;
+  width: 90%;
 
+  // max-width: 82%;
+  // width: fit-content;
   &__head {
     display: flex;
     align-items: center;
     gap: 8px;
-    width: 100%;
     padding: 4px 10px;
     border: none;
     border-radius: 8px;
@@ -25,30 +21,11 @@
     color: var(--text-secondary, #6b7280);
     cursor: pointer;
     transition: background 0.15s ease;
+    width: fit-content;
+    max-width: 82%;
 
     &:hover {
       background: var(--hover-bg, #f3f4f6);
-    }
-  }
-
-  // 状态点：与单条 `.tool-call-point` 同一语汇（绿=完成 / 琥珀=进行中 / 红=失败），
-  // 折叠态也一眼看出这一组整体跑完没有。
-  &__point {
-    flex: none;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--color-success, #0fcd55);
-    transition: background 0.3s ease;
-
-    .tool-group__head.is-pending & {
-      background: var(--accent-warn, #f59e0b);
-      animation: pulse 1s infinite;
-    }
-
-    .tool-group__head.is-error & {
-      background: var(--color-error, #ef4444);
-      border-radius: 20%;
     }
   }
 
@@ -90,7 +67,7 @@
     flex-direction: column;
     gap: 2px;
     margin-top: 2px;
-    padding-left: 10px;
+    // padding-left: 10px;
     border-left: 1px solid var(--border-color, #e5e5e5);
   }
 

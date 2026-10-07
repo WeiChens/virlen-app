@@ -3,7 +3,10 @@
   align-items: center;
   gap: 8px;
   padding: 3px 12px;
-  margin: 0 8px 0px;
+  // 左缘对齐「消息正文列」（气泡水平内边距 20px + 内容包装左外边距 8px = 28px），
+  // 与折叠组 .tool-group 一致：单条工具调用与折叠后的工具组缩进相同，不显得谁更「重要」。
+  // （组内卡片由 .tool-group__body .tool-call-message 覆写成 0，左缘交给 .tool-group 统一给。）
+  margin: 0 8px 0 28px;
   border-radius: 6px;
   font-size: var(--font-size-sm);
   max-width: 80%;

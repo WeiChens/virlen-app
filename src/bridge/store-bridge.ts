@@ -60,9 +60,10 @@ function messageFingerprint(subscriptions: SubscriptionRegistry): string {
     const messages = s.messages // 始终读取（建立跟踪）
     for (const m of messages) {
       // 未订阅也要「轻触」消息字段，保证跟踪持续（内容读取较重，仅订阅时读）
-      // ⚠️ `toolCalls` / `toolCallId` 必须一起读：工具名与入参摘要靠它们解析（`buildToolCallIndex`），
-      // 两者都在调用后被回填（finalize 才带上 tool_calls），漏读就会出现「手机永远没有工具名 / 入参」。
-      const meta = `${s.id}\u0001${m.id}\u0001${m.streaming ? 1 : 0}\u0001${m.toolCalls?.length ?? 0}\u0001${m.toolCallId ?? ''}`
+      // ⚠️ `toolCalls` / `toolCallId` / `isError` 必须一起读：工具名与入参摘要靠它们解析（`buildToolCallIndex`），
+      // 两者都在调用后被回填（finalize 才带上 tool_calls），漏读就会出现「手机永远没有工具名 / 入参」；
+      // `isError` 变化也要能被察觉（工具卡片要跟着从 ✓ 变 ✗）。
+      const meta = `${s.id}\u0001${m.id}\u0001${m.streaming ? 1 : 0}\u0001${m.toolCalls?.length ?? 0}\u0001${m.toolCallId ?? ''}\u0001${m.isError ? 1 : 0}`
       if (!subscribed) continue
       parts.push(`${meta}\u0001${m.role}\u0001${projectContentToText(m.content)}`)
     }

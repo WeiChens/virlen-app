@@ -242,6 +242,22 @@ describe('toMessageDTO —— 展开区的完整入参', () => {
   })
 })
 
+// ───────────────────────── 投影：失败标记（isError） ─────────────────────────
+
+describe('toMessageDTO —— 失败标记', () => {
+  it('工具消息带 isError:true 时下发；缺席 = 没有失败标记（成功）', () => {
+    // 成功（或旧数据）：字段缺席——手机端据此按 ✓ 渲染，不假装「结果未知」
+    const ok = toMessageDTO(toolResult('t1', 'tc1', '用例全绿'))
+    expect('isError' in ok).toBe(false)
+
+    // 失败：`true` 才带（与桌面 `result.isError` 同一判据）
+    const failed = toMessageDTO({ ...toolResult('t2', 'tc2', '命令退出码 1'), isError: true })
+    expect(failed.isError).toBe(true)
+    // 正文照旧投影，不因为失败而变样（手机端不靠正文反推成败）
+    expect(failed.text).toBe('命令退出码 1')
+  })
+})
+
 // ───────────────────────── 端到端：手机真的收得到 ─────────────────────────
 
 /** `host.hello` 的最小合法载荷（与 `phone-bridge.test.ts` 同款）。 */
@@ -269,5 +285,55 @@ describe('host.session.messages —— 手机拿到的是带摘要的投影', ()
     expect(tool?.toolArgs).toBe('src/store/chat.ts')
     // 展开区那一份也在同一次投影里（手机上无需再拉一轮 RPC）
     expect(tool?.toolArgsFull).toContain('"path": "src/store/chat.ts"')
+  })
+
+  it('拉窗口时失败的工具消息带 isError（手机不靠正文反推成败）', async () => {
+    const h = setup()
+    await h.caller.call('host.hello', helloParams(h.token))
+
+    sessionStore.saveSession(makeSession('s-err', 'E:/code/demo'))
+    addSessionMessage('s-err', assistantWithCalls('a1', [call('tc1', 'execute_command', { command: 'npm test' })]))
+    addSessionMessage('s-err', { ...toolResult('t1', 'tc1', '退出码 1'), isError: true })
+
+    const page = await h.caller.call('host.session.messages', { sessionId: 's-err' })
+    const tool = page.messages.find((m) => m.role === 'tool')
+    expect(tool?.isError).toBe(true)
+    expect(tool?.toolName).toBe('execute_command')
+  })
+})
+
+// ───────────────────── 投影：两阶段加载（detail:'summary'） ─────────────────────
+
+describe('toMessageDTO —— 两阶段加载摘要', () => {
+  it('summary：省掉工具输出与完整入参，并打 deferred（不是 detail:omitted）', () => {
+    const index = buildToolCallIndex([
+      assistantWithCalls('a1', [call('tc1', 'write_file', { path: 'src/a.ts', content: 'x' })]),
+    ])
+    const dto = toMessageDTO(toolResult('t1', 'tc1', '已写入'), index, 'full', { summary: true })
+    // 两类重字段都省掉
+    expect(dto.text).toBe('')
+    expect('toolArgsFull' in dto).toBe(false)
+    // 摘要信息照常（工具名 + 一行入参摘要）
+    expect(dto.toolName).toBe('write_file')
+    expect(dto.toolArgs).toBe('src/a.ts · 写入 1 行')
+    // 打 deferred；且**不是** detail:'omitted'（那是「档位省略」，语义不同）
+    expect(dto.deferred).toBe(true)
+    expect('detail' in dto).toBe(false)
+  })
+
+  it('summary：没有重字段的工具消息不打 deferred（避免 UI 一直显示加载中）', () => {
+    const dto = toMessageDTO(toolResult('t1', 'tc1', ''), undefined, 'full', { summary: true })
+    expect(dto.deferred).toBeUndefined()
+  })
+
+  it('summary 不影响用户 / 助手正文（只省工具重字段）', () => {
+    const user = toMessageDTO(
+      { id: 'u1', role: 'user', content: '你好', timestamp: 0 },
+      undefined,
+      'full',
+      { summary: true },
+    )
+    expect(user.text).toBe('你好')
+    expect(user.deferred).toBeUndefined()
   })
 })

@@ -432,6 +432,9 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
       requireSession(params.sessionId)
       // §33：档位一次读到底（同一次应答不许一半精简一半完整）
       const tier = currentTier()
+      // 两阶段加载（`detail:'summary'`）：只发「摘要」投影（省掉工具输出 / 完整入参），
+      // 重字段由手机端随后再拉一次 full 按 id 补齐（见共享包 `MsgPageParams.detail`）
+      const summary = params.detail === 'summary'
       // ⚠️ 分页游标（M5）：
       //  - 首页（无 `fromRowid`）：返回**已加载窗口的全部消息**（= `MESSAGE_PAGE_SIZE`）而非再 `slice` ——
       //    游标（rowid）只对「已加载窗口的最旧一条」成立，若展示窗口更窄，游标会指向窗口**之外**
@@ -451,7 +454,10 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
            * 跨页工具调用拿不到名字与入参时，手机端只显示工具名（不猜）
            */
           messages: added.map((m) =>
-            toMessageDTO(m, buildToolCallIndex(after), tier, { sessionId: params.sessionId }),
+            toMessageDTO(m, buildToolCallIndex(after), tier, {
+              sessionId: params.sessionId,
+              ...(summary ? { summary: true } : {}),
+            }),
           ),
           hasMore: sessionStore.hasMoreMessages(params.sessionId),
           cursor: paging?.oldestRowid ?? null,
@@ -463,7 +469,12 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
       const paging = sessionStore.value.messagePaging[params.sessionId]
       auditOp('host.session.messages', params.sessionId)
       return {
-        messages: all.map((m) => toMessageDTO(m, toolCalls, tier, { sessionId: params.sessionId })),
+        messages: all.map((m) =>
+          toMessageDTO(m, toolCalls, tier, {
+            sessionId: params.sessionId,
+            ...(summary ? { summary: true } : {}),
+          }),
+        ),
         hasMore: sessionStore.hasMoreMessages(params.sessionId),
         cursor: paging?.oldestRowid ?? null,
       }

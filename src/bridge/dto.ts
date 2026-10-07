@@ -195,6 +195,15 @@ export interface MessageProjectionOptions {
    * （与桌面工具卡片同一口径，见 `workspaceOfSession`）。不传 = 路径原样。
    */
   sessionId?: string
+  /**
+   * `summary` 投影（两阶段加载的第一阶段，`MsgPageParams.detail:'summary'`）：
+   * 省掉两类**重字段**（工具执行输出 `text`、完整入参 `toolArgsFull`），
+   * 只在受影响的条目上打 `MessageDTO.deferred = true`。手机端先渲染这份、再拉一次 full 补细节。
+   *
+   * ⚠️ 与 `tier:'lean'` 不是一回事：`lean` 是「按链路档位不下发」（要重开会话才拿回），
+   * 这里是「马上补发」。两者同时命中时以 `deferred` 为准（不写 `detail:'omitted'`）。
+   */
+  summary?: boolean
 }
 
 /**
@@ -243,6 +252,7 @@ export function toMessageDTO(
     skipQuotes: quotes.length > 0,
     skipFiles: files.length > 0,
   })
+  const summary = options.summary === true
   /*
    * 工具输出与入参详情**同一条上限**（`TOOL_DETAIL_MAX` = 5000，超出中间省略）：
    * 手机上「拉开一看几千行」跟没有一样，而结论在两头（开头是命令，结尾是报错 / 汇总）。
@@ -258,17 +268,32 @@ export function toMessageDTO(
    * 判据用 `trim()`，与手机端 `hasBody()` 同一口径（它也是按 trim 判空）。
    */
   const omit = tier === 'lean' && message.role === 'tool' && rawText.trim().length > 0
+  /*
+   * 两阶段加载（`MsgPageParams.detail:'summary'`，见 `MessageProjectionOptions.summary`）：
+   * 把两类**重字段**（工具输出正文 + 完整入参）延后下发，只在受影响的条目上打 `deferred`。
+   * 与 `omit` **语义不同** —— 那个是「按链路档位不下发」（要重开会话才拿回），这个是「马上补发」；
+   * 手机端据此显示「正在加载详细内容…」，而不是「这次调用没有输出」或「已省略」。
+   */
+  const deferredToolText = summary && message.role === 'tool' && rawText.trim().length > 0
+  const deferredArgsFull = summary && toolArgsFull != null
+  const deferred = deferredToolText || deferredArgsFull
   return {
     id: message.id,
     role: ROLE_MAP[message.role] ?? 'system',
-    text: omit ? '' : text,
+    text: omit || deferredToolText ? '' : text,
     createdAt: message.timestamp,
-    ...(omit ? { detail: 'omitted' as const } : {}),
+    // summary 下用 `deferred` 表达「稍后补发」，不写 `omitted`（那是「档位省略、需重开会话」）
+    ...(omit && !deferredToolText ? { detail: 'omitted' as const } : {}),
     ...(toolName ? { toolName } : {}),
     // 拿不到就不带（旧电脑端 / 跨页工具调用）—— 手机端据此只显示工具名，不猜
     ...(toolArgs ? { toolArgs } : {}),
     // 展开区的完整入参（比摘要重得多）：只在用户点开卡片后才渲染，字段本身与摘要同源
-    ...(toolArgsFull ? { toolArgsFull } : {}),
+    ...(toolArgsFull && !deferredArgsFull ? { toolArgsFull } : {}),
+    // 详细内容被延后（summary）——手机端显示「正在加载详细内容…」
+    ...(deferred ? { deferred: true } : {}),
+    // 失败标记（与桌面工具卡片 `result.isError` 同一判据）：true 才带，缺席 = 没有失败标记
+    // （成功 / 本来就没这个字段）—— 手机端据此在工具卡打 ✓/✗，**不靠正文反推**
+    ...(message.isError ? { isError: true } : {}),
     // 无引用则整个字段不带（不为旧手机端凭空多出一个空数组）
     ...(quotes.length > 0 ? { quotes } : {}),
     // 文件引用同上：无则不带
