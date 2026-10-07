@@ -120,10 +120,23 @@ impl AgentEngine {
             crate::telemetry::set_session_trace(&session_id, t);
         }
         let cancel = CancellationToken::new();
-        self.active_cancels
-            .lock()
-            .unwrap()
-            .insert(session_id.clone(), cancel.clone());
+        // 同一会话同时只允许一个 run —— **原子 check-and-set**。
+        //
+        // 为什么必须在引擎侧也拦：前端 `resumePausedRun` 的忙判据
+        // （`isSessionActivelyWorking`）与随后的 `await getEngine().getRunSnapshot()`
+        // 之间存在 await 窗口（非原子），桌面 + 手机（或重复触发）可能**都**通过检查、
+        // 各拿同一份快照恢复一次。引擎侧原先只是 `insert`（覆盖）而非拒绝，两个 run 于是
+        // 并发跑同一步 → 同一 `tool_call_id` 产出两条 tool 结果 → 服务端 400：
+        // `Messages with role 'tool' must be a response to a preceding message with 'tool_calls'`。
+        // 前端那把锁只是第一道防线，引擎侧必须有权威闸（手机 / 托盘 / CLI 都经这里）。
+        {
+            let mut cancels = self.active_cancels.lock().unwrap();
+            if cancels.contains_key(&session_id) {
+                // 文案与前端 `MSG_SESSION_BUSY` 一致，保证两端提示同一句话（铁律 7）
+                return Err("该会话正在回复中，请等待完成或先取消".to_string());
+            }
+            cancels.insert(session_id.clone(), cancel.clone());
+        }
 
         let started = crate::telemetry::now_ms();
         crate::telemetry::track(

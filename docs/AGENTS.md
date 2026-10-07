@@ -855,6 +855,14 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 `sessions[0]` 的实现下会红 —— 已实测）。演示宿主 `?entry=pin` / `?entry=work`（`src/dev/host-harness.ts`）
 把「置顶但更旧」与「另一个会话正在工作」这两种真机形态造出来，真机/联调都能一眼看到标题换没换。
 
+**11.47 「user_choice 过一会再回答」报 400（`Messages with role 'tool' must be a response to a preceding message with 'tool_calls'`）（用户报回 → 已修）** —— 复现路径：**工具弹窗 → 点「暂存」→ 过一会点「继续」→ 再回答**。
+根因：**同一份 Run Snapshot 被并发恢复两次，导致同一步重跑、同一 `tool_call_id` 产出两条 tool 结果**（正是 §11.34 记的那个 400，但那条堵的是「残留快照重跑」，这条是**并发重入**）。两道缺口：
+1. 前端 `services/chat/flow.ts::resumePausedRun` 的忙判据非原子 —— `isSessionActivelyWorking()` 检查后，中间隔了 `await getEngine().getRunSnapshot()` 才设 `working:true`；桌面 + 手机（或重复触发）会**都**通过检查、各拿同一份快照跑一次。
+2. 引擎 `Engine::send_message` 对同一 `session_id` **没有并发闸** —— `active_cancels.insert` 是覆盖而非拒绝（`engine/tests.rs::concurrent_resume_of_same_snapshot_duplicates_tool_result` 实测：并发双恢复产出 `tc1` 两条 tool 结果）。
+改法（两侧配对）：① 引擎侧原子 check-and-set（`Mutex` 内 `contains_key` → 拒绝，文案同前端 `MSG_SESSION_BUSY`），任何来源（桌面 / 手机 / 托盘 / CLI）都经这里，是**权威闸**；② 前端 `resumePausedRun` 拆成「同步防重入薄封装（`resumingSessions` Set）+ `resumePausedRunImpl`」—— 防重入必须在**任何 await 之前**同步生效（顺带避免第二次 `createToolHandles` 顶替第一次的交互 handler，令其 `user_choice` 掉进「无处理器」分支）。
+⚠️ 不要踩：前端那把锁只是第一道防线（有 await 窗口），**不能**只修前端 —— 引擎侧必须也有闸；反之引擎侧有闸后，前端重复调用只会拿到「该会话正在回复中」，不会污染会话数据。
+回归：`virlen-core` 的 `concurrent_resume_of_same_snapshot_duplicates_tool_result` / `resume_request_messages_are_well_formed` / `resume_after_shelve_then_answer_writes_single_tool_result`；前端 `src/tests/services/chat-concurrency.test.ts`（并发两次「继续」只一次进入）。
+
 **托盘 / 关闭不退出 / 后台工作**：实现见 `src-tauri/src/tray/`（模块头即设计说明），无独立文档。
 
 ---

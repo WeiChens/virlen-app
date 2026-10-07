@@ -859,3 +859,316 @@ async fn resume_completing_steps_clears_snapshot() {
         "恢复跑完所有待办步骤后不应残留快照（否则 UI 误显示已暂停，再次继续会重跑并触发 400）"
     );
 }
+
+/// 复现用户报的「暂存 → 继续 → 回答」：断言同一 `tool_call_id` 只产生一条 tool 结果。
+#[tokio::test]
+async fn resume_after_shelve_then_answer_writes_single_tool_result() {
+    let bridge = Arc::new(AgentBridgeState::default());
+    let sink = Arc::new(SeqInteractionSink {
+        bridge: bridge.clone(),
+        events: std::sync::Mutex::new(Vec::new()),
+        tool_response: json!({
+            "__kind": "interaction",
+            "interactionType": "user_choice",
+            "interactionData": { "question": "q", "options": ["A", "B"] }
+        }),
+        interaction_responses: std::sync::Mutex::new(std::collections::VecDeque::from(vec![
+            json!({ "__kind": "shelved" }),
+            json!({ "__kind": "value", "value": "A" }),
+        ])),
+    });
+    let calls = Arc::new(AtomicUsize::new(0));
+    let engine = AgentEngine::with_provider_factory(
+        bridge.clone(),
+        sink.clone(),
+        Arc::new(SharedMockProviderFactory { calls: calls.clone() }),
+    );
+    let mut session = make_session();
+    session.id = "s_resume_answer".into();
+    let opts = |resume: Option<RunSnapshot>| SendMessageOptions {
+        session: session.clone(),
+        messages: vec![],
+        provider: Some(crate::agent::types::ProviderConnection {
+            provider_type: "openai".into(),
+            provider_id: "p1".into(),
+            api_key: "k".into(),
+            base_url: "http://localhost".into(),
+        }),
+        tool_defs: make_tool_defs(),
+        enable_tools: true,
+        max_tokens: None,
+        resume_from_snapshot: resume,
+        reasoning_effort: None,
+        max_tool_rounds: 10,
+        iteration_goal: None,
+        max_iterations: 5,
+        session_id: "s_resume_answer".into(),
+        security: None,
+        trace_id: None,
+    };
+
+    // ① 首次：工具返回 user_choice → 用户「暂存」→ 留下快照
+    engine.send_message(opts(None)).await.unwrap();
+    let snap = engine.get_run_snapshot("s_resume_answer");
+    assert!(snap.is_some(), "暂存后应留下快照");
+
+    // ② 「继续」→ 重跑该步；用户「回答」→ 完成
+    engine.send_message(opts(snap)).await.unwrap();
+
+    let tool_results: Vec<Value> = sink
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(n, v)| n == "event" && v["type"] == "tool_result_created")
+        .map(|(_, v)| v["data"]["message"]["toolCallId"].clone())
+        .collect();
+    assert_eq!(
+        tool_results.iter().filter(|t| **t == json!("tc_seq")).count(),
+        1,
+        "同一 tool_call_id 不应产生第二条 tool 结果（否则服务端 400）: {:?}",
+        tool_results
+    );
+}
+
+/// 场景 A（暂存 → 继续 → 回答）：用**真实 repo** 抓取「恢复后发给模型的消息」，
+/// 断言 assistant(tool_calls) 与其 tool 结果都在、且 tool 结果前驱正确（无孤立/重复）。
+#[tokio::test]
+async fn resume_request_messages_are_well_formed() {
+    use crate::session_db::tests::open_tmp;
+    use crate::session_db::SessionRepo;
+
+    let repo = open_tmp();
+    let mut session = make_session();
+    session.id = "s_resume_shape".into();
+    repo.upsert_session(&session).await.unwrap();
+
+    // 复刻「暂存」后的库状态：assistant(tool_calls) 已落库，工具结果尚未落库
+    repo.append_messages(
+        "s_resume_shape",
+        &[
+            Message {
+                id: "u1".into(),
+                role: "user".into(),
+                content: json!("hi"),
+                timestamp: 1,
+                ..Default::default()
+            },
+            Message {
+                id: "asst_tc".into(),
+                role: "assistant".into(),
+                content: json!(""),
+                tool_calls: Some(vec![ToolUseContent {
+                    type_: "tool_use".into(),
+                    id: "tc1".into(),
+                    name: "mock_tool".into(),
+                    input: json!({}),
+                }]),
+                timestamp: 2,
+                ..Default::default()
+            },
+        ],
+    )
+    .await
+    .unwrap();
+
+    let snapshot = RunSnapshot {
+        assistant_message_id: "asst_tc".into(),
+        steps: vec![ToolStep {
+            tool_call_id: "tc1".into(),
+            tool_name: "mock_tool".into(),
+            input: json!({}),
+            status: ToolStepStatus::Pending,
+            result: None,
+            error: None,
+            started_at: None,
+            ui_data: None,
+        }],
+        round: 1,
+        created_at: 0,
+        paused: true,
+    };
+
+    let bridge = Arc::new(AgentBridgeState::default());
+    let sink = Arc::new(AutoRespondSink::new(
+        bridge.clone(),
+        json!({ "__kind": "value", "value": "A" }),
+    ));
+    let seen: Arc<Mutex<Vec<Message>>> = Arc::new(Mutex::new(Vec::new()));
+    let engine = AgentEngine::with_deps(
+        bridge.clone(),
+        sink.clone(),
+        Arc::new(repo),
+        Arc::new(RecordingProviderFactory {
+            seen: seen.clone(),
+        }),
+        crate::host::default_host().clone(),
+        Arc::new(crate::session_db::NoopSettingsRepo),
+        Arc::new(crate::session_db::NoopMemoryRepo),
+    );
+
+    engine
+        .send_message(SendMessageOptions {
+            session: session.clone(),
+            messages: vec![],
+            provider: Some(crate::agent::types::ProviderConnection {
+                provider_type: "openai".into(),
+                provider_id: "p1".into(),
+                api_key: "k".into(),
+                base_url: "http://localhost".into(),
+            }),
+            tool_defs: make_tool_defs(),
+            enable_tools: true,
+            max_tokens: None,
+            resume_from_snapshot: Some(snapshot),
+            reasoning_effort: None,
+            max_tool_rounds: 10,
+            iteration_goal: None,
+            max_iterations: 5,
+            session_id: "s_resume_shape".into(),
+            security: None,
+            trace_id: None,
+        })
+        .await
+        .unwrap();
+
+    let msgs = seen.lock().unwrap().clone();
+    assert!(
+        msgs.iter().any(|m| m.role == "assistant"
+            && m.tool_calls.as_ref().map(|t| !t.is_empty()).unwrap_or(false)),
+        "请求里必须含带 tool_calls 的 assistant"
+    );
+    for (i, m) in msgs.iter().enumerate() {
+        if m.role == "tool" {
+            let prev = &msgs[i - 1];
+            assert!(
+                prev.role == "assistant"
+                    && prev.tool_calls.as_ref().map(|t| !t.is_empty()).unwrap_or(false),
+                "tool 消息 {} 的前驱不是带 tool_calls 的 assistant: prev role={}",
+                m.id,
+                prev.role
+            );
+        }
+    }
+}
+
+/// 验证「同一份快照被并发恢复两次」会产出重复的 tool 结果。
+///
+/// 对应竞态：`services/chat/flow.ts::resumePausedRun` 的忙判据
+/// `isSessionActivelyWorking()` 与后面的 `await getEngine().getRunSnapshot()`
+/// 之间存在 await —— 两个并发恢复（桌面 + 手机 / 重复触发）会**都通过**检查、
+/// 都拿到同一快照，各自跑一次。引擎侧对同一 sessionId **无并发闸**，
+/// 于是同一步被重跑 → 同一 tool_call_id 产出两条 tool 结果 → 服务端 400。
+#[tokio::test]
+async fn concurrent_resume_of_same_snapshot_duplicates_tool_result() {
+    use crate::session_db::tests::open_tmp;
+    use crate::session_db::SessionRepo;
+
+    let repo = open_tmp();
+    let mut session = make_session();
+    session.id = "s_double_resume".into();
+    repo.upsert_session(&session).await.unwrap();
+    repo.append_messages(
+        "s_double_resume",
+        &[Message {
+            id: "asst_tc".into(),
+            role: "assistant".into(),
+            content: json!(""),
+            tool_calls: Some(vec![ToolUseContent {
+                type_: "tool_use".into(),
+                id: "tc1".into(),
+                name: "mock_tool".into(),
+                input: json!({}),
+            }]),
+            timestamp: 1,
+            ..Default::default()
+        }],
+    )
+    .await
+    .unwrap();
+
+    let snapshot = RunSnapshot {
+        assistant_message_id: "asst_tc".into(),
+        steps: vec![ToolStep {
+            tool_call_id: "tc1".into(),
+            tool_name: "mock_tool".into(),
+            input: json!({}),
+            status: ToolStepStatus::Running,
+            result: None,
+            error: None,
+            started_at: None,
+            ui_data: None,
+        }],
+        round: 1,
+        created_at: 0,
+        paused: true,
+    };
+
+    let bridge = Arc::new(AgentBridgeState::default());
+    let sink = Arc::new(AutoRespondSink::new(
+        bridge.clone(),
+        json!({ "__kind": "value", "value": "A" }),
+    ));
+    let engine = Arc::new(AgentEngine::with_deps(
+        bridge.clone(),
+        sink.clone(),
+        Arc::new(repo),
+        Arc::new(RecordingProviderFactory {
+            seen: Arc::new(Mutex::new(Vec::new())),
+        }),
+        crate::host::default_host().clone(),
+        Arc::new(crate::session_db::NoopSettingsRepo),
+        Arc::new(crate::session_db::NoopMemoryRepo),
+    ));
+
+    let mk = |snap: RunSnapshot| SendMessageOptions {
+        session: session.clone(),
+        messages: vec![],
+        provider: Some(crate::agent::types::ProviderConnection {
+            provider_type: "openai".into(),
+            provider_id: "p1".into(),
+            api_key: "k".into(),
+            base_url: "http://localhost".into(),
+        }),
+        tool_defs: make_tool_defs(),
+        enable_tools: true,
+        max_tokens: None,
+        resume_from_snapshot: Some(snap),
+        reasoning_effort: None,
+        max_tool_rounds: 10,
+        iteration_goal: None,
+        max_iterations: 5,
+        session_id: "s_double_resume".into(),
+        security: None,
+        trace_id: None,
+    };
+
+    // 两个并发恢复，各拿同一份快照（对应前端非原子忙判据下的双恢复）
+    let e1 = engine.clone();
+    let e2 = engine.clone();
+    let s1 = snapshot.clone();
+    let s2 = snapshot.clone();
+    let (r1, r2) = tokio::join!(
+        async move { e1.send_message(mk(s1)).await },
+        async move { e2.send_message(mk(s2)).await }
+    );
+
+    // 引擎侧权威闸：只能有一个进入，另一个被拒（不是两个都跑）
+    let oks = [&r1, &r2].iter().filter(|r| r.is_ok()).count();
+    let errs = [&r1, &r2].iter().filter(|r| r.is_err()).count();
+    assert_eq!(oks, 1, "仅一个恢复能进入：{:?} / {:?}", r1, r2);
+    assert_eq!(errs, 1, "另一个应被并发闸拒绝：{:?} / {:?}", r1, r2);
+
+    let count = sink
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(n, v)| {
+            n == "event"
+                && v["type"] == "tool_result_created"
+                && v["data"]["message"]["toolCallId"] == json!("tc1")
+        })
+        .count();
+    assert_eq!(count, 1, "同一 tool_call_id 只能有一条 tool 结果（否则服务端 400）");
+}

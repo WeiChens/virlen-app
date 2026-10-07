@@ -83,6 +83,20 @@ function isSessionActivelyWorking(sessionId: string): boolean {
 const MSG_SESSION_BUSY = '该会话正在回复中，请等待完成或先取消'
 
 /**
+ * 正在恢复中的会话（**同步**防重入闸）。
+ *
+ * 为什么必须是同步的、且在任何 `await` 之前生效：`resumePausedRun` 原先用运行时
+ * `isSessionActivelyWorking` 判忙，但它与随后的 `await getEngine().getRunSnapshot()`
+ * 之间存在 await 窗口 —— 桌面 + 手机（或重复触发）会**都**通过检查、各拿同一份快照恢复一次：
+ *  ① 引擎侧同一步被跑两次 → 同一 `tool_call_id` 产出两条 tool 结果 → 服务端 400
+ *     （`Messages with role 'tool' must be a response to a preceding message with 'tool_calls'`）；
+ *  ② 第二次 `createToolHandles` 会**顶替**第一次注册的交互 handler，令第一次 run 的
+ *     `user_choice` / 授权请求掉进「无处理器」分支。
+ * 引擎侧另有权威并发闸（同一 sessionId 同时只允许一个 run），这里是第一道防线。
+ */
+const resumingSessions = new Set<string>()
+
+/**
  * 轮次边界处理器（工具回复后、下一次 LLM 请求前）。
  *
  * 落地「AI 回复期间用户已应用」的清单变更并返回消息：
@@ -391,13 +405,32 @@ export async function sendMessage(
 }
 
 /**
- * 恢复被暂停的 tool run
+ * 恢复被暂停的 tool run（**唯一恢复入口**）
  *
  * 当 tool 链中途被 shelve（用户暂存）后，用户可调用此函数恢复执行。
  * 引擎会读取保存的 run snapshot，从断点继续执行未完成的 tool steps。
- * 这是「暂停→恢复」唯一的恢复入口。
+ *
+ * ⚠️ **本函数是一次「同步防重入 + try/finally」的薄封装**：真正的逻辑在
+ * `resumePausedRunImpl`。拆开的唯一原因是让防重入在**任何 await 之前**同步生效。
  */
 export async function resumePausedRun(
+  sessionId: string,
+  events?: ChatServiceEvents,
+): Promise<void> {
+  if (resumingSessions.has(sessionId)) {
+    events?.onError?.(sessionId, MSG_SESSION_BUSY)
+    return
+  }
+  resumingSessions.add(sessionId)
+  try {
+    await resumePausedRunImpl(sessionId, events)
+  } finally {
+    resumingSessions.delete(sessionId)
+  }
+}
+
+/** `resumePausedRun` 的实际实现（不自带防重入 —— 由上面的薄封装负责）。 */
+async function resumePausedRunImpl(
   sessionId: string,
   events?: ChatServiceEvents,
 ): Promise<void> {

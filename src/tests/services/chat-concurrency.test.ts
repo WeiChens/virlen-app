@@ -196,3 +196,33 @@ describe('activateSession（进入会话的数据侧准备）', () => {
     expect(second?.id).toBe(id)
   })
 })
+
+describe('resumePausedRun 同步防重入（并发恢复回归）', () => {
+  it('同一会话并发两次「继续」：只有一次进入，另一个报「忙」', async () => {
+    /*
+     * 回归：暂存后点「继续」，若两次恢复都通过检查（原忙判据与随后的
+     * `await getRunSnapshot` 之间有 await 窗口）→ 各拿同一份快照跑一次 →
+     * 同一步重跑 → 同一 tool_call_id 两条 tool 结果 → 服务端 400。
+     * 现在防重入在**任何 await 之前**同步占位，第二次直接报「忙」。
+     */
+    const id = seed()
+    updateSessionRuntime(id, { working: true, paused: true })
+    const e1: string[] = []
+    const e2: string[] = []
+    const p1 = resumePausedRun(id, { onError: (_s, m) => e1.push(m) })
+    const p2 = resumePausedRun(id, { onError: (_s, m) => e2.push(m) })
+    await Promise.all([p1, p2])
+    // 第一个进入实现（测试环境无 Tauri 引擎 → 「无快照」），第二个被防重入闸拦下
+    expect(e1).toEqual(['没有可恢复的暂停任务'])
+    expect(e2).toEqual([BUSY_MSG])
+  })
+
+  it('恢复结束后闸门释放（后续「继续」不再被误报「忙」）', async () => {
+    const id = seed()
+    updateSessionRuntime(id, { working: true, paused: true })
+    await resumePausedRun(id, { onError: () => {} })
+    const again: string[] = []
+    await resumePausedRun(id, { onError: (_s, m) => again.push(m) })
+    expect(again).toEqual(['没有可恢复的暂停任务'])
+  })
+})
