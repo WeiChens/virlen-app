@@ -116,6 +116,15 @@
   }
 }
 
+// 'content' 宽度模式（面板由选项文案撑开，见 Select 的 dropdownWidth）：
+// 选项一律单行 —— 折行会让面板里行高不齐（同一份路径列表有的两行有的一行）；
+// 宽度由内联的 `width: max-content` + min/max-width 定，放不下时打省略号。
+.custom-select__dropdown.is-content-width .custom-select__option {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 @keyframes selectFadeIn {
   from {
     opacity: 0;

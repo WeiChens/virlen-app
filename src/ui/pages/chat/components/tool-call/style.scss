@@ -1178,3 +1178,79 @@
     line-height: 1.6;
   }
 }
+
+/* ==================== read_file（多文件：文件名即切换入口） ====================
+   触发器長在 CodeBlock 的**深色头部**里（--code-header-bg），而 shared 的 Select 是浅色皮肤，
+   故在调用方这一层覆盖成 ghost：透明底 + 头部文字色，字号降一档与 .code-language 对齐，
+   高度用 em 挂在字号上（与同排的 26px 动作按钮齐平）。 */
+.custom-select.code-file-switcher {
+  /* 宽度跟着文件名走（不加宽：短名旁留一大块空框很难看），但要封顶：
+     再长的路径也不该把头部的头部区撑满（完整路径在面板里看，那里有 500px 的展开空间） */
+  flex: 0 1 auto;
+  min-width: 18em;
+  max-width: min(420px, 60%);
+  /* 与前面的语言标签留一口气（.code-block-header-info 的 gap 为 0） */
+  margin-left: 10px;
+  padding: 0 2px;
+  min-height: 2.4em;
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: var(--font-size-xs);
+
+  .custom-select__trigger {
+    padding: 2px 22px 2px 8px;
+  }
+
+  .custom-select__value {
+    font-size: var(--font-size-xs);
+    color: var(--code-header-color, #abb2bf);
+  }
+
+  .custom-select__arrow {
+    right: 7px;
+    color: var(--code-header-color, #abb2bf);
+  }
+
+  &:hover {
+    border-color: transparent;
+    background: rgba(255, 255, 255, 0.14);
+  }
+
+  &:focus-visible,
+  &.is-open {
+    border-color: transparent;
+    /* 默认那圈 focus-shadow 是给浅底的，深色头部里直接用高亮底色代替 */
+    box-shadow: none;
+    background: rgba(255, 255, 255, 0.16);
+  }
+}
+
+/* 下拉面板：代码块通体深色（.code-block-wrapper 写死的 #292c33），面板要是仍旧跟应用主题走
+   （浅色皮肤），就是在深色头部下面裂开一块白。面板经 Portal 挂在 body 上、不在
+   .code-file-switcher 的子树里，所以皮肤靠 Select 的 dropdownClassName —— ReadFileMessage
+   传的 code-file-panel 就是这个抓手。颜色复用代码块自己的令牌，亮 / 暗主题各自跟随。 */
+.custom-select__dropdown.code-file-panel {
+  background: var(--code-header-bg, #323844);
+  border-color: rgba(255, 255, 255, 0.12);
+  /* 浮层要压过深色正文：默认那圈浅阴影在深底上几乎看不见 */
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+
+  .custom-select__option {
+    /* 与触发器同档字号：面板是触发器的展开，字大一号会像换了控件 */
+    font-size: var(--font-size-xs);
+    color: var(--code-header-color, #abb2bf);
+
+    &:hover,
+    &.is-active {
+      background: rgba(255, 255, 255, 0.08);
+      color: #e9edf5;
+    }
+
+    /* 选中项用「更亮一档的底 + 更亮的字」而不是品牌色：深色底上的品牌色随用户选的主题色明暗飘，
+       浅色主题色（亮黄这类）在深底上几乎看不见；白度分层则恒可见 */
+    &.is-selected {
+      background: rgba(255, 255, 255, 0.16);
+      color: #e9edf5;
+    }
+  }
+}

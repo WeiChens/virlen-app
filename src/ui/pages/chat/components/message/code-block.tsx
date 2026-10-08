@@ -403,6 +403,16 @@ export interface CodeBlockProps extends HTMLAttributes<HTMLElement> {
   fontSize?: number
   /** 文件名，用于推断代码语言 */
   fileName?: string
+  /**
+   * 自定义「文件名区域」渲染（提供后替代默认的纯文本文件名）。
+   * 文件名由 CodeBlock 自己画在头部，调用方换不掉（多文件切换要在这里塞一个下拉），故留这个插槽。
+   */
+  fileNameRender?: (fileName?: string) => ReactNode
+  /**
+   * 内容标识（如「当前展示哪个文件」）。变化时把滚动位置归零 —— 内容是原地替换的
+   * （DOM 与 Monaco 实例都复用），不归零会停在新内容的同一像素偏移上，看着像没切换。
+   */
+  contentKey?: string | number
   /** 是否显示行号（默认 true） */
   showLineNumbers?: boolean
   /** 起始行号（默认 1） */
@@ -424,6 +434,8 @@ function CodeBlock({
   width,
   fontSize,
   fileName,
+  fileNameRender,
+  contentKey,
   showLineNumbers = true,
   startLineNumber = 1,
   streaming,
@@ -459,6 +471,17 @@ function CodeBlock({
   /** 流式/超大文件的 <pre> 回退节点（全选时用其 DOM 选区），同样分原位 / 全屏 */
   const preNormalRef = useRef<HTMLPreElement | null>(null)
   const preFullRef = useRef<HTMLPreElement | null>(null)
+
+  /**
+   * 内容换人（多文件切换）→ 滚回顶部。与 autoCenter / 右键菜单同理写在提前 return 之前：
+   * 行内与块状两条路径共用同一 fiber，少调一个 hook 就是 React #300（见 code-block-hooks.test.tsx）。
+   * `contentKey === undefined`（多数调用点不传）时全程不动滚动。
+   */
+  useEffect(() => {
+    if (contentKey === undefined) return
+    const el = rootRef.current
+    if (el) el.scrollTop = 0
+  }, [contentKey])
 
   // Esc 退出全屏（与 ImagePreview 等浮层一致）
   useEffect(() => {
@@ -554,11 +577,13 @@ function CodeBlock({
         <div className="code-block-header">
           <div className="code-block-header-info">
             <span className="code-language">{displayLang}</span>
-            {fileName && (
-              <span className="code-file-name" title={fileName}>
-                {fileName}
-              </span>
-            )}
+            {fileNameRender
+              ? fileNameRender(fileName)
+              : fileName && (
+                  <span className="code-file-name" title={fileName}>
+                    {fileName}
+                  </span>
+                )}
           </div>
           <div className="actions-list">
             {
