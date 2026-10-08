@@ -21,6 +21,7 @@ mod settings;
 mod sqlite;
 mod types;
 mod usage;
+mod visible;
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -48,3 +49,5 @@ pub use types::{
 #[cfg(test)]
 pub(crate) use types::{MessageBrief, MessageTimelineItem, ToolCallBrief};
 pub use usage::{UsageEntry, UsageQuery, UsageRecordPage, UsageStats};
+// 分页补足：GUI 的 `cmd_get_message_page` 按「可见行数」一次取够（见模块注释）
+pub use visible::{get_message_page_filled, MESSAGE_FILL_MAX_CHUNKS};

@@ -15,6 +15,7 @@ mod search;
 mod sessions;
 mod stats;
 mod usage;
+mod visible;
 
 pub(crate) fn test_session(id: &str, title: &str, updated_at: i64) -> Session {
     Session {

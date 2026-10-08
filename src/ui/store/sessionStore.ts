@@ -7,9 +7,18 @@ import type { Session } from '@/types'
 import type { SessionRepo, UserMessageRef } from '@/infrastructure/sessionRepo'
 import { sessionRepo } from '@/infrastructure/sessionRepo'
 import { track, trackError, hashText } from '@/utils/telemetry'
+import { settingsState } from './settingStore'
 
-/** 每次加载的消息条数（尾部窗口大小 / 向上回补步长） */
+/** 每次 SQL 取的原始消息条数（尾部窗口大小 / 向上回补步长） */
 export const MESSAGE_PAGE_SIZE = 60
+
+/**
+ * 每页「可见行」下限（交给 Rust 跳页取数用，见 `cmd_get_message_page`）：不足则继续向更早取。
+ *
+ * 取 50（略小于原始步长 60）：普通会话一页即达标（仍是一次 IPC）；
+ * 工具调用密集的页里，原始 60 条可能折成一两行，只有按可见行补足才不会「滚到顶部却看不到新内容」。
+ */
+export const MESSAGE_MIN_VISIBLE = 50
 
 /** 单会话的消息分页状态 */
 export interface MessagePaging {
@@ -102,6 +111,9 @@ class SessionStore {
       // 只拉尾部窗口，避免一次性把数千条消息经 IPC 搬到前端
       const page = await this.repo.getMessagePage(sessionId, {
         limit: MESSAGE_PAGE_SIZE,
+        // 按「可见行」补足：工具调用被折叠后，原始条数并不代表屏幕上真正多出来的高度
+        minVisible: MESSAGE_MIN_VISIBLE,
+        fold: settingsState.value.hideToolCallThink,
       })
       runInAction(() => {
         const i = this.value.sessions.findIndex((s) => s.id === sessionId)
@@ -225,6 +237,8 @@ class SessionStore {
       const page = await this.repo.getMessagePage(sessionId, {
         limit: MESSAGE_PAGE_SIZE,
         beforeRowid: paging.oldestRowid,
+        minVisible: MESSAGE_MIN_VISIBLE,
+        fold: settingsState.value.hideToolCallThink,
       })
       if (page.messages.length === 0) {
         // 游标失效或数据被删：标记无更多，避免反复请求

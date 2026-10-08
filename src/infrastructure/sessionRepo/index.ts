@@ -88,10 +88,18 @@ export interface MessagePage {
 
 /** 消息分页参数 */
 export interface MessagePageOptions {
-  /** 每页条数 */
+  /** 每次 SQL 取的原始条数 */
   limit?: number
   /** 取该 rowid 之前（更早）的消息；不传则取尾部窗口 */
   beforeRowid?: number | null
+  /**
+   * 「可见行」下限（> 0 时生效）：不足则由 Rust 继续向更早取，直到达标 / 到底 / 触上限。
+   * 用「会渲染出高度的行数」而非原始条数 —— 一页若大半是工具调用、被折成一行，
+   * 按原始条数给页面会让用户滚到顶部却几乎看不到新内容。
+   */
+  minVisible?: number
+  /** 折叠开关（= 设置项 `hideToolCallThink`），决定工具调用是否折成一行（影响可见行计数） */
+  fold?: boolean
 }
 
 /**
@@ -347,6 +355,8 @@ class SessionRepoImpl implements SessionRepo {
         sessionId,
         limit: opts?.limit ?? null,
         beforeRowid: opts?.beforeRowid ?? null,
+        minVisible: opts?.minVisible ?? null,
+        fold: opts?.fold ?? null,
       })
     } catch {
       return { messages: [], hasMore: false, oldestRowid: null }

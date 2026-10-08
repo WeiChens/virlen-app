@@ -436,7 +436,8 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
       // 重字段由手机端随后再拉一次 full 按 id 补齐（见共享包 `MsgPageParams.detail`）
       const summary = params.detail === 'summary'
       // ⚠️ 分页游标（M5）：
-      //  - 首页（无 `fromRowid`）：返回**已加载窗口的全部消息**（= `MESSAGE_PAGE_SIZE`）而非再 `slice` ——
+      //  - 首页（无 `fromRowid`）：返回**已加载窗口的全部消息**（通常 = `MESSAGE_PAGE_SIZE`，工具调用密集时
+      //    会按「可见行」补足而更大）而非再 `slice` ——
       //    游标（rowid）只对「已加载窗口的最旧一条」成立，若展示窗口更窄，游标会指向窗口**之外**
       //    → 续页时漏掉中间消息（§20.2-A）。
       //  - 续页（有 `fromRowid`）：走桌面既有的「向上回补一页」唯一入口 `loadOlderMessages`。

@@ -8,11 +8,10 @@ use std::sync::Arc;
 
 use virlen_core::agent::types::{Message, Session};
 use virlen_core::session_db::{
-    open_session_db, 
-    total_bytes, CheckpointResult, DbMaintenance, DbStats, MaintainResult, MemoryRepo,
-    MessagePage, MessageSearchPage, MessageTimelinePage, MessageWindow, NoopMemoryRepo,
-    NoopSettingsRepo, SearchCursor, SessionRepo, SettingsRepo, UsageEntry, UsageQuery,
-    UsageRecordPage, UsageStats, UserMessageRef, MSG_QUERY_MAX_LIMIT,
+    get_message_page_filled, open_session_db, total_bytes, CheckpointResult, DbMaintenance, DbStats,
+    MaintainResult, MemoryRepo, MessagePage, MessageSearchPage, MessageTimelinePage, MessageWindow,
+    NoopMemoryRepo, NoopSettingsRepo, SearchCursor, SessionRepo, SettingsRepo, UsageEntry,
+    UsageQuery, UsageRecordPage, UsageStats, UserMessageRef, MSG_QUERY_MAX_LIMIT,
 };
 
 /// **GUI 入口**（薄壳）：构造 Tauri 宿主 → 打开会话库 → 注册 Tauri 状态。
@@ -134,16 +133,28 @@ pub async fn cmd_get_messages(
 }
 
 /// 分页获取会话消息（尾部窗口加载：只取最近 N 条，向上滚动时按 before_rowid 回补）
+///
+/// `min_visible` > 0 时按「可见行数」补足：一次 IPC 就取到足够 UI 渲染的高度，避免「一页大半是
+/// 工具调用、折成一行后屏幕几乎没变化」造成反复上滑（见 `get_message_page_filled`）。
+/// `fold` = 前端「隐藏工具调用的思考过程消息」设置，决定工具调用是否折成一行（影响可见行计数）。
 #[tauri::command]
 pub async fn cmd_get_message_page(
     state: tauri::State<'_, Arc<dyn SessionRepo>>,
     session_id: String,
     limit: Option<usize>,
     before_rowid: Option<i64>,
+    min_visible: Option<usize>,
+    fold: Option<bool>,
 ) -> Result<MessagePage, String> {
     let started = crate::telemetry::now_ms();
     let limit = limit.unwrap_or(60).clamp(1, 1000);
-    let result = state.get_message_page(&session_id, limit, before_rowid).await;
+    let min_visible = min_visible.unwrap_or(0);
+    let fold = fold.unwrap_or(true);
+    let result = if min_visible == 0 {
+        state.get_message_page(&session_id, limit, before_rowid).await
+    } else {
+        get_message_page_filled(&**state, &session_id, limit, before_rowid, min_visible, fold).await
+    };
     track_db(
         "get_messages_page",
         Some(&session_id),
