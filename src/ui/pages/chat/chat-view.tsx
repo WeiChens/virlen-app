@@ -239,7 +239,9 @@ function ChatView() {
    * 真相在 ChatInput 里（它持有 SKILL.md 全文），这里只存名字镜像：输入框每次变化回传，发完消息自动清空。
    */
   const [referencedSkills, setReferencedSkills] = useState<string[]>([])
-  const { ToolUI } = useToolUI()
+  // 工具交互弹窗（AI 提问 / 授权确认）：声明的是**元素**而不是组件类型 ——
+  // 内联组件每次渲染都换类型会让待应答弹窗整体卸载重挂（草稿与输入焦点一起丢，见 tool-ui.tsx）
+  const { toolUI } = useToolUI()
   const [sidebarWidth, setSidebarWidth] = useState(getStoredWidth())
   const resizingRef = useRef(false)
   const currentWidthRef = useRef(sidebarWidth)
@@ -955,7 +957,7 @@ function ChatView() {
         )}
       </div>
 
-      <ToolUI />
+      {toolUI}
 
       {/* 消息检索弹窗（Ctrl / Cmd + P 唤起）：有会话只搜当前会话；无会话搜所有会话（条目带工作目录 + Agent 名） */}
       <SearchDialog

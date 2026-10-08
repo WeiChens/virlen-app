@@ -404,3 +404,160 @@ describe('运行结束时收敛未答的交互（F4）', () => {
     offShow()
   })
 })
+
+/**
+ * **同一会话内并发**（多槽，而非「后到覆盖」）。
+ *
+ * 场景：AI 一次并行调两次 `user_choice`、或并行执行两条都要审批的命令 —— 同一个 handles 实例上同时
+ * 挂起多个交互。改造前是单槽：新交互把上一条的 resolve/reject 直接顶掉，上一条的 Promise 永久挂起，
+ * 而用户在待处理切换条上**回答它时弹窗关掉了、引擎那边却什么也没发生**（静默失败）。
+ * 跨会话并发由前面「两个会话同时提问 / 同时授权」两条用例守；这里专守同一实例内的多槽。
+ */
+describe('同一会话内并发交互：多槽（不再是后到覆盖）', () => {
+  it('user_choice：并发两个提问，先答较早的那个也生效', async () => {
+    const handles = createUserChoiceHandles('s1')
+    const shows: any[] = []
+    const off = toolInteractEvent.on('showChoice', (p) => {
+      shows.push(p)
+    })
+
+    const pA = handles.handler('user_choice', {
+      question: 'q-A',
+      options: ['a'],
+      multi: false,
+      toolCallId: 'tc-A',
+    })
+    const pB = handles.handler('user_choice', {
+      question: 'q-B',
+      options: ['b'],
+      multi: false,
+      toolCallId: 'tc-B',
+    })
+    expect(shows.length).toBe(2)
+
+    // ⚠️ 先答**早**的那一个（用户在切换条上切回去答它）—— 单槽实现下这一步会被静默忽略
+    toolInteractEvent.emit('resolve', shows[0].interactionId, { content: 'A' })
+    await expect(pA).resolves.toEqual({ content: 'A' })
+    // B 仍应挂着（没被 A 的应答串扰掉）
+    let bSettled = false
+    void pB.then(
+      () => {
+        bSettled = true
+      },
+      () => {
+        bSettled = true
+      },
+    )
+    await new Promise((r) => setTimeout(r, 0))
+    expect(bSettled).toBe(false)
+
+    toolInteractEvent.emit('resolve', shows[1].interactionId, { content: 'B' })
+    await expect(pB).resolves.toEqual({ content: 'B' })
+
+    off()
+    handles.cleanup()
+  })
+
+  it('授权：并发两条待审批命令，各自应答都生效', async () => {
+    const handles = createNativeCommandConfirmHandles('s1')
+    const shows: any[] = []
+    const off = toolInteractEvent.on('showAuthorization', (p) => {
+      shows.push(p)
+    })
+
+    const pA = handles.handler('confirm_command_native', {
+      desc: 'ls',
+      toolCallId: 'tc-A',
+    })
+    const pB = handles.handler('confirm_command_native', {
+      desc: 'pwd',
+      toolCallId: 'tc-B',
+    })
+    expect(shows.length).toBe(2)
+
+    // 先批准 A（较早那条），再拒绝 B —— 两条命令各走各的槽位
+    toolInteractEvent.emit('commandResolve', shows[0].interactionId, '')
+    await expect(pA).resolves.toBe('approved')
+    toolInteractEvent.emit('commandReject', shows[1].interactionId, 'cancelled')
+    await expect(pB).rejects.toBe('cancelled')
+
+    off()
+    handles.cleanup()
+  })
+
+  it('cleanup 收敛**全部**未答交互（逐个 expired、每个 Promise 都收掉）', async () => {
+    const handles = createUserChoiceHandles('s1')
+    const shows: any[] = []
+    const off = toolInteractEvent.on('showChoice', (p) => {
+      shows.push(p)
+    })
+    const settled: Array<[string, string]> = []
+    const offSettled = toolInteractEvent.on(
+      'interactionSettled',
+      (interactionId, outcome) => {
+        settled.push([interactionId, outcome])
+      },
+    )
+
+    const pA = handles.handler('user_choice', {
+      question: 'q-A',
+      options: [],
+      multi: false,
+      toolCallId: 'tc-A',
+    })
+    pA.catch(() => {})
+    const pB = handles.handler('user_choice', {
+      question: 'q-B',
+      options: [],
+      multi: false,
+      toolCallId: 'tc-B',
+    })
+    pB.catch(() => {})
+    expect(shows.length).toBe(2)
+
+    handles.cleanup()
+
+    // 逐个收敛：只收敛最后一个的话，另一个仍然挂死
+    expect(settled).toEqual([
+      [shows[0].interactionId, 'expired'],
+      [shows[1].interactionId, 'expired'],
+    ])
+    await expect(pA).rejects.toMatchObject({ name: 'InteractionEnded' })
+    await expect(pB).rejects.toMatchObject({ name: 'InteractionEnded' })
+
+    off()
+    offSettled()
+  })
+
+  it('已应答 / 未知的 interactionId：重复应答被忽略（幂等，不影响别的槽）', async () => {
+    const handles = createUserChoiceHandles('s1')
+    const shows: any[] = []
+    const off = toolInteractEvent.on('showChoice', (p) => {
+      shows.push(p)
+    })
+    const pA = handles.handler('user_choice', {
+      question: 'q-A',
+      options: [],
+      multi: false,
+      toolCallId: 'tc-A',
+    })
+    const pB = handles.handler('user_choice', {
+      question: 'q-B',
+      options: [],
+      multi: false,
+      toolCallId: 'tc-B',
+    })
+    expect(shows.length).toBe(2)
+
+    toolInteractEvent.emit('resolve', shows[0].interactionId, { content: 'A' })
+    await expect(pA).resolves.toEqual({ content: 'A' })
+    // 对已应答的那条再答一次 / 用不存在的 id 答：忽略，且 B 仍能正常应答
+    toolInteractEvent.emit('resolve', shows[0].interactionId, { content: 'A2' })
+    toolInteractEvent.emit('resolve', 'not-the-id', { content: 'X' })
+    toolInteractEvent.emit('resolve', shows[1].interactionId, { content: 'B' })
+    await expect(pB).resolves.toEqual({ content: 'B' })
+
+    off()
+    handles.cleanup()
+  })
+})

@@ -16,6 +16,7 @@ import './user-choice.scss'
 import MarkdownRenderer from '../message/markdown-renderer'
 import { navDelta, wrapIndex } from '@/ui/components/shared/keyboardNav'
 import { t, tpl } from '@/ui/i18n'
+import type { ChoiceDraft } from './choice-drafts'
 
 interface Props {
   visible: boolean
@@ -26,6 +27,13 @@ interface Props {
   onConfirm: (result: UserChoiceResult) => void
   onCancel: () => void
   onShelve?: () => void
+  /**
+   * 预填草稿（暂存 → 恢复：同一个 `toolCallId` 上一次填的内容，见 `choice-drafts.ts`）。
+   * ⚠️ 只在**挂载时**当初始值用：切走再切回来（可见性切换）不能重置表单，也不该被新草稿覆盖。
+   */
+  initialDraft?: ChoiceDraft
+  /** 用户每次改动都上报（外部按 `sessionId|toolCallId` 缓存，恢复时再作为 `initialDraft` 传回） */
+  onDraftChange?: (draft: ChoiceDraft) => void
 }
 
 /** 用户选择的结果：选中的选项 + 自定义补充回复 */
@@ -45,13 +53,18 @@ export default function UserChoiceModal({
   onConfirm,
   onCancel,
   onShelve,
+  initialDraft,
+  onDraftChange,
 }: Props) {
   // AI 可能不传 options，兜底为空数组
   const safeOptions = Array.isArray(options) ? options : []
 
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [showCustom, setShowCustom] = useState(false)
-  const [customReply, setCustomReply] = useState('')
+  // 初始值取草稿：暂存 → 恢复（新 interactionId、新实例、同一个 toolCallId）时把上次填的带回来
+  const [selected, setSelected] = useState<Set<string>>(
+    () => new Set(initialDraft?.selected ?? []),
+  )
+  const [showCustom, setShowCustom] = useState(!!initialDraft?.showCustom)
+  const [customReply, setCustomReply] = useState(initialDraft?.customReply ?? '')
   const backdropRef = useRef<HTMLDivElement>(null)
   const modalRef = useRef<HTMLDivElement>(null)
   const customInputRef = useRef<HTMLInputElement>(null)
@@ -60,16 +73,27 @@ export default function UserChoiceModal({
   const sessionTitle =
     visible && sessionId ? sessionStore.getSession(sessionId)?.title || '' : ''
 
+  // 每次被推到前台（含从别的待处理交互切回来）时，焦点落容器（永远可聚焦）：一项未选时「确认」
+  // 是 disabled、不可聚焦，而 Enter 本身就是「有选才提交」。
+  //
+  // ⚠️ 这里**不再清空表单**（勾选的选项 / 自定义回复）：多个交互并发时用户可以切走再切回来接着答
+  //（待应答队列见 tool-ui.tsx），清掉等于让他重填一遍。每个交互一个组件实例（key = interactionId），
+  // 草稿天然按交互隔离；交互被应答出队后整个实例卸载。
   useEffect(() => {
-    if (visible) {
-      setSelected(new Set())
-      setShowCustom(false)
-      setCustomReply('')
-      // 焦点落容器（永远可聚焦）：一项未选时「确认」是 disabled、不可聚焦，
-      // 而 Enter 本身就是「有选才提交」。
-      modalRef.current?.focus()
-    }
+    if (visible) modalRef.current?.focus()
   }, [visible])
+
+  // 每次改动都上报草稿（供「暂存 → 恢复」带回来）。
+  // ⚠️ 回调用 ref 持有：它每次渲染都是新引用，进依赖会让这个 effect 退化成「每次渲染都上报」。
+  const draftChangeRef = useRef(onDraftChange)
+  draftChangeRef.current = onDraftChange
+  useEffect(() => {
+    draftChangeRef.current?.({
+      selected: [...selected],
+      customReply,
+      showCustom,
+    })
+  }, [selected, customReply, showCustom])
 
   // ESC 关闭
   useEffect(() => {
@@ -143,6 +167,10 @@ export default function UserChoiceModal({
       if (canConfirm) handleConfirm()
       return
     }
+
+    // 带修饰键的组合属于应用 / 系统级快捷键（Alt+←/→ 在待处理交互间切换、Ctrl+Tab…）：
+    // 弹窗不认，直接放行 —— 否则会被当成「弹窗内导航」抢掉
+    if (e.altKey || e.ctrlKey || e.metaKey) return
 
     // 空格：切换选项（按钮上的空格是浏览器原生行为，不拦）
     if (e.key === ' ' && isOption) {

@@ -83,6 +83,10 @@ export default function AuthorizationModal({
       if (active && active !== document.body && !overlay.contains(active)) return
       if (e.key === 'Tab') return
 
+      // 带修饰键的组合属于应用 / 系统级快捷键（Alt+←/→ 在待处理交互间切换，见 tool-ui）：
+      // 弹窗不认，直接放行
+      if (e.altKey || e.ctrlKey || e.metaKey) return
+
       const delta = navDelta(e.key, e.shiftKey)
       if (delta !== 0) {
         e.preventDefault() // 顺手拦下 ↑↓ 带动正文滚动

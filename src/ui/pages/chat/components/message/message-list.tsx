@@ -91,7 +91,9 @@ function ChatMessageList(props: ChatMessageListProps) {
                     messages={messages}
                     messageIndexes={row.messageIndexes}
                     toolResultsFor={m.toolResultsFor}
-                    open={m.openGroups[row.key] === true}
+                    // 用户点过就按用户的（openGroups）；没点过按默认 —— 尾部段（后面再没有
+                    // 正文气泡的那组）默认展开，其余默认收起（见 rows.ts::buildRows 的 tail）
+                    open={m.openGroups[row.key] ?? row.tail}
                     onToggle={m.toggleGroup}
                   />
                 </div>

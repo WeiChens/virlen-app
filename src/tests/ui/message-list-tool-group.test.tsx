@@ -140,14 +140,14 @@ function makeSession(): Session {
 let container: HTMLDivElement | null = null
 let root: Root | null = null
 
-function mount(): void {
+function mount(msgs: Message[] = messages): void {
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
   act(() => {
     root!.render(
       <ChatMessageList
-        messages={messages}
+        messages={msgs}
         setMessages={() => {}}
         setText={() => {}}
       />,
@@ -228,5 +228,75 @@ describe('ChatMessageList：工具组接线', () => {
     expect(
       container!.querySelector('.message-item-wrap.highlighted'),
     ).not.toBeNull()
+  })
+
+  it('尾部工具组（后面没有正文气泡）→ 默认展开；点组头可收起（用户表态优先）', async () => {
+    // 消息流末尾就是工具段：agent 还在干活（或刚跑完、还没答话）—— 折起来就看不到进展了
+    const tailMessages: Message[] = [
+      { id: 'u1', role: 'user', content: '跑两个工具', timestamp: 0 },
+      assistantTool('a1', [tc('t1', 'list_files')]),
+      toolResult('r1', 't1', 'a\nb'),
+      assistantTool('a2', [tc('t2', 'read_file')]),
+      toolResult('r2', 't2', 'c'),
+    ]
+    mount(tailMessages)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+    })
+
+    expect(container!.querySelectorAll('.tool-group').length).toBe(1)
+    // 默认展开：组内卡片直接可见（结果都回来了 → status=done，展开不是 pending 顺带给的）
+    expect(
+      container!.querySelector('.tool-group__head')?.getAttribute('aria-expanded'),
+    ).toBe('true')
+    expect(
+      container!.querySelectorAll('.tool-group__body .tool-card').length,
+    ).toBe(2)
+
+    // 点一下组头 → 收起（默认展开不代表不可折叠）
+    act(() => {
+      container!
+        .querySelector('.tool-group__head')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(container!.querySelector('.tool-group__body')).toBeNull()
+    expect(
+      container!.querySelector('.tool-group__head')?.getAttribute('aria-expanded'),
+    ).toBe('false')
+  })
+
+  it('尾部组后面来了正文回答 → 恢复默认折叠（不再占着展开）', async () => {
+    const tailMessages: Message[] = [
+      { id: 'u1', role: 'user', content: '跑两个工具', timestamp: 0 },
+      assistantTool('a1', [tc('t1', 'list_files')]),
+      toolResult('r1', 't1', 'a\nb'),
+      assistantTool('a2', [tc('t2', 'read_file')]),
+      toolResult('r2', 't2', 'c'),
+    ]
+    mount(tailMessages)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+    })
+    expect(container!.querySelector('.tool-group__body')).not.toBeNull()
+
+    // agent 答话：正文气泡落到组后面 → 组不再是尾部段，回到默认收起
+    act(() => {
+      root!.render(
+        <ChatMessageList
+          messages={[
+            ...tailMessages,
+            { id: 'a3', role: 'assistant', content: '看完了。', timestamp: 0 },
+          ]}
+          setMessages={() => {}}
+          setText={() => {}}
+        />,
+      )
+    })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+    })
+
+    expect(container!.querySelector('.tool-group__body')).toBeNull()
+    expect(container!.textContent ?? '').toContain('看完了。')
   })
 })

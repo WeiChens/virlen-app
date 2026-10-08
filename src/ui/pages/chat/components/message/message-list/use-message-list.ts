@@ -60,8 +60,13 @@ export function useChatMessageList({
   /** 检索跳转后临时高亮的目标消息 id（到时自动清除） */
   const [highlightMsgId, setHighlightMsgId] = useState<string | null>(null)
   const [activeUserMsgId, setActiveUserMsgId] = useState<string | null>(null)
-  /** 工具组折叠态（行 key → 是否展开）。⚠️ 必须住在列表层：组行随虚拟化卸载，存在行内会「滚回来就复原」 */
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
+  /**
+   * 工具组折叠态（行 key → 是否展开）。⚠️ 必须住在列表层：组行随虚拟化卸载，存在行内会「滚回来就复原」。
+   * ⚠️ 存的是**用户的明确表态**：没有 key = 没点过 → 展开态取行的默认值（`tail`，尾部段默认展开）。
+   */
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean | undefined>>(
+    {},
+  )
 
   const sessionId = chatState.value.currentSessionId
   const hasMoreInDb = sessionId
@@ -266,9 +271,22 @@ export function useChatMessageList({
     chatState.setValue('error', null)
   }, [])
 
-  /** 切换某个工具组的折叠态（按行 key 记账） */
+  /**
+   * 切换某个工具组的折叠态（按行 key 记账）。
+   *
+   * `openGroups` 里存的是**用户的明确表态**（没表态就不写）；没表态时展开态走默认值 ——
+   * **尾部段默认展开**（后面再没有正文气泡的那组，见 `rows.ts::buildRows` 的 `tail`），
+   * 其余默认收起。所以这里取反的是「**当前实际展开态**」：对默认就展开的尾部段，
+   * 若直接写 `!prev[key]` 会写入 true 而看上去「点了没反应」。
+   */
   const toggleGroup = useCallback((key: string) => {
-    setOpenGroups((prev) => ({ ...prev, [key]: !prev[key] }))
+    const row = virtual.rowsRef.current.find(
+      (r) => r.kind === 'tools' && r.key === key,
+    )
+    const fallback = row?.kind === 'tools' ? row.tail : false
+    setOpenGroups((prev) => ({ ...prev, [key]: !(prev[key] ?? fallback) }))
+    // rowsRef 是随渲染更新的稳定 ref（行模型总是最新），无需进依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   return {

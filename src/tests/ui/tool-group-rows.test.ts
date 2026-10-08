@@ -154,6 +154,100 @@ describe('buildRows', () => {
   })
 })
 
+/**
+ * 尾部段（`tail`）= 这组工具调用之后再没有**看得见的气泡** → 组件默认展开（用户要看得到正在跑的进展）。
+ * 判错的两个方向都很难看：误判成尾段 → 历史里的组全部自动撑开；漏判 → 干活中又把进展折起来。
+ */
+describe('buildRows：尾部段（tail）标记', () => {
+  it('末尾就是工具段 → tail=true；后面出现正文回答 / 下一条用户消息 → false', () => {
+    const head = [
+      user('u1', '帮我看看'),
+      assistant('a1', [tc('t1')]),
+      toolResult('r1', 't1', 'a\nb'),
+      assistant('a2', [tc('t2')]),
+      toolResult('r2', 't2', 'c'),
+    ]
+    // 末尾只有 tool 结果（还没答话）→ 尾部段
+    const openEnded = buildRows(head, true)
+    expect(openEnded.map((r) => r.kind)).toEqual(['one', 'tools'])
+    expect(openEnded[1]).toMatchObject({ kind: 'tools', tail: true })
+
+    // 后面来了最终回答（正文气泡）→ 不再是尾部段
+    const answered = buildRows(
+      [...head, assistant('a3', undefined, '看完了。')],
+      true,
+    )
+    expect(answered[1]).toMatchObject({ kind: 'tools', tail: false })
+
+    // 后面是用户的下一条消息（下一轮）→ 同上
+    const nextTurn = buildRows([...head, user('u2', '再改改')], true)
+    expect(nextTurn[1]).toMatchObject({ kind: 'tools', tail: false })
+  })
+
+  it('多段工具调用：只有最后一段是尾部段（前一段后面的正文 = 后一段的段首正文）', () => {
+    const messages = [
+      user('u1', 'hi'),
+      assistant('a1', [tc('t1')], '先读一下。'),
+      toolResult('r1', 't1', 'x'),
+      assistant('a2', [tc('t2')]),
+      toolResult('r2', 't2', 'y'),
+      assistant('a3', [tc('t3')], '再看这里。'), // 中段带正文 → 收口，另起一段
+      toolResult('r3', 't3', 'z'),
+      assistant('a4', [tc('t4')]),
+    ]
+    const rows = buildRows(messages, true)
+    expect(rows.map((r) => r.kind)).toEqual(['one', 'tools', 'tools'])
+    // 段首正文渲染在后一段组头之上（见 tool-call-group.tsx），对前一段同样是「后面看得见的气泡」
+    expect(rows[1]).toMatchObject({ kind: 'tools', tail: false })
+    expect(rows[2]).toMatchObject({ kind: 'tools', tail: true })
+  })
+
+  it('可见性判据与气泡同源：空壳 assistant 不算，引用块算', () => {
+    const head = [
+      user('u1', 'hi'),
+      assistant('a1', [tc('t1')]),
+      toolResult('r1', 't1', 'x'),
+      assistant('a2', [tc('t2')]),
+    ]
+    expect(buildRows(head, true)[1]).toMatchObject({ tail: true })
+
+    // 引擎每轮先落的空壳 assistant（无正文 / 无附件 / 无 toolCalls）：不算可见气泡 ——
+    // 否则工具调用之间会因这个瞬态空行闪一下折叠
+    const withShell = buildRows([...head, assistant('a3', undefined, '  ')], true)
+    expect(withShell[1]).toMatchObject({ tail: true })
+
+    // 带引用块的 assistant（气泡里另有渲染）→ 可见 → 打断
+    const withQuote = buildRows(
+      [
+        ...head,
+        assistant('a3', undefined, [
+          { type: 'quote', messageId: 'u1', role: 'user', text: 'hi' },
+        ] as any),
+      ],
+      true,
+    )
+    expect(withQuote[1]).toMatchObject({ tail: false })
+  })
+
+  it('中间只隔一个空壳 assistant 的两段：都算尾部段（不把内容藏起来）', () => {
+    const messages = [
+      user('u1', 'hi'),
+      assistant('a1', [tc('t1')]),
+      toolResult('r1', 't1', 'x'),
+      assistant('a2', [tc('t2')]),
+      toolResult('r2', 't2', 'y'),
+      assistant('a3', undefined), // 空壳 → 收口，但不构成「看得见的气泡」
+      assistant('a4', [tc('t3')]),
+      toolResult('r3', 't3', 'z'),
+      assistant('a5', [tc('t4')]),
+    ]
+    const rows = buildRows(messages, true)
+    expect(rows.map((r) => r.kind)).toEqual(['one', 'tools', 'one', 'tools'])
+    expect(rows[1]).toMatchObject({ tail: true })
+    expect(rows[3]).toMatchObject({ tail: true })
+  })
+})
+
 describe('buildRowIndexMap（消息下标 → 行下标）', () => {
   it('组内成员与 tool 结果都映射到组行；未映射向前填充', () => {
     const messages = [

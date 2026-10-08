@@ -15,18 +15,32 @@
  * （正文是看得见的边界，另起一段，不把前后两截强行并组）。故组的边界 = 中段带正文的 assistant +
  * 不带工具调用的消息（`user` / `system` / 最终回答）。
  *
+ * **尾部段**（`tools` 行的 `tail`）：一组工具调用之后**再没有看得见的气泡**时，它是整个消息流（已加载部分）
+ * 的最后一段工具调用 —— 默认**展开**显示全部卡片（agent 还在干活 / 刚跑完还没答话，折起来用户就看不到
+ * 进展）；后面一出现可见气泡（正文回答 / 引用 / 图片 / 文件 / 技能块 / 下一条用户消息）就恢复默认收起。
+ * 判定在 `buildRows` 文末。
+ *
  * 纯函数：可单测（`tests/ui/tool-group-rows.test.ts`），组件只负责摆 HTML。
  */
 import type { Message } from '@/types'
-import { messageHasAttachmentBlocks, messageHasBody } from '@/utils/messageContent'
+import {
+  messageHasAttachmentBlocks,
+  messageHasBody,
+  messageHasVisibleContent,
+} from '@/utils/messageContent'
 import { tpl } from '@/ui/i18n'
 
 /** 列表的一行。 */
 export type ListRow =
   /** 一条自己成行的消息。`key` 直接用消息 id。`messageIndex` = 它在 messages 里的下标。 */
   | { kind: 'one'; key: string; messageIndex: number }
-  /** 一段连续的工具调用（≥2 条才成组，见 `buildRows`）。成员是 messages 的下标数组。 */
-  | { kind: 'tools'; key: string; messageIndexes: number[] }
+  /**
+   * 一段连续的工具调用（≥2 条才成组，见 `buildRows`）。成员是 messages 的下标数组。
+   *
+   * `tail` = **尾部段**：它后面再没有可见气泡（判据与气泡同源，见 `buildRows` 的说明）——
+   * 折叠态**默认展开**（用户点过则以用户的选择为准，见 `use-message-list` 的 `toggleGroup`）。
+   */
+  | { kind: 'tools'; key: string; messageIndexes: number[]; tail: boolean }
 
 /**
  * 组行的 `key` 前缀。组没有「一条消息的 id」可用（成员会往后长），但折叠态需要稳定 key：
@@ -74,6 +88,7 @@ export function buildRows(
         kind: 'tools',
         key: TOOL_GROUP_PREFIX + messages[run[0]].id,
         messageIndexes: run,
+        tail: false, // 占位：尾部段判定要等行全部切完，见文末反向扫描
       })
     } else {
       // 只有一次工具调用：保持原来那张单卡（不套一层折叠头）。
@@ -100,6 +115,24 @@ export function buildRows(
     rows.push({ kind: 'one', key: message.id, messageIndex: index })
   }
   flush()
+
+  // 尾部段（`tail`）：从后往前扫，每行之后有没有「看得见的气泡」决定它是否尾段。
+  // ⚠️ 只有**可见**的才打断扫描：`role:'tool'` 的结果文本（启用折叠时不占行，见上）与
+  // 无正文无附件的**空壳 assistant**（引擎每轮先落一条、随后才填 toolCalls / 正文）都不算 ——
+  // 否则工具调用之间会因瞬态空行闪一下折叠，且「最后一段工具调用」会被误判成已收尾。
+  // ⚠️ 组自己的**段首正文**（渲染在组头之上，见 tool-call-group.tsx）对**前面**的行同样算可见气泡，
+  // 否则中段带正文切开的两段会双双被当成尾段。
+  let visibleAfter = false
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i]
+    if (row.kind === 'tools') {
+      row.tail = !visibleAfter
+      const lead = messages[row.messageIndexes[0]]
+      if (lead && messageHasVisibleContent(lead)) visibleAfter = true
+    } else if (messageHasVisibleContent(messages[row.messageIndex])) {
+      visibleAfter = true
+    }
+  }
   return rows
 }
 

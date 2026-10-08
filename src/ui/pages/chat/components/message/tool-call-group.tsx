@@ -6,7 +6,10 @@
  * 头部**不显示**成功/失败的状态点。
  *
  * ⚠️ **运行中的组（pending）恒展开、不可折叠**：工具还在跑时折起来用户就看不到进展了；
- * 跑完（done / error）后恢复成「按 `open` 折叠」（默认收起）。
+ * 跑完（done / error）后恢复成「按 `open` 折叠」。
+ * ⚠️ **尾部段**（后面再没有可见气泡的那组，`rows.ts::buildRows` 的 `tail`）**默认展开**：
+ * 这段工具调用还没被正文收尾（agent 还在干活 / 刚跑完还没答话），折起来同样看不到进展。
+ * 该默认值由列表层**算进 `open`**（用户点过则以用户的选择为准），本组件不重复判定。
  *
  * ⚠️ `open` 由父层**预先算好**并以布尔值传入：组件是 `memo` 的，若把折叠态留在内部读（或传一个每次渲染
  * 都换引用的 map），切换折叠会被 `memo` 挡掉（点了没反应）。同理，「成员消息数组」由 `messages +
@@ -31,7 +34,7 @@ interface Props {
   messageIndexes: number[]
   /** 取某条消息 toolCalls 对应的结果数组（与列表共用 `toolResultsFor`） */
   toolResultsFor: (message: Message) => (Message | undefined)[]
-  /** 是否展开（由列表层按行 key 记账） */
+  /** 是否展开（列表层算好的：用户的表态 ?? 尾部段的默认展开，见 `rows.ts` 的 `tail`） */
   open: boolean
   /** 切换展开 / 收起（传 key 而非闭包，保证引用稳定以命中 memo） */
   onToggle: (key: string) => void
