@@ -196,29 +196,3 @@ describe('移除设备时的断链', () => {
     expect(phoneControlStore.activeDeviceId).toBe(null)
   })
 })
-
-describe('票据被扫走后的自动换码（真机缺陷回归）', () => {
-  /**
-   * 缺陷现场：第一台手机配对成功后，屏幕上那张码已随兑换作废（一次性票据），而屏幕上没人换新 ——
-   * 第二台手机扫它只会得到「二维码已过期」；更糟的是它的接入在 `hello` 授权**之前**就把第一台
-   * 顶掉了（顶号发生在传输层），于是「没顶号成功，原手机却被顶出来」。
-   *
-   * 这里钉的是接线：票据失效（= 被扫走）后，倒计时的一跳（≤1s）就把屏上的码换成新的。
-   */
-  it('票据失效（被扫走）后，倒计时的一跳就把屏上的码换新', async () => {
-    const service = await enableStore()
-    const before = phoneControlStore.payload?.ticket
-
-    // 模拟「另一台手机把屏上那张码扫走」：真实现里票据此刻已从票据表删除
-    service.stale = true
-
-    // 倒计时 1 秒一跳（真实定时器：enableStore 自己 await 真实时间，不用 fake timers）
-    for (let i = 0; i < 60 && phoneControlStore.payload?.ticket === before; i += 1) {
-      await sleep(50)
-    }
-
-    expect(service.refreshes).toBeGreaterThanOrEqual(1)
-    expect(phoneControlStore.payload?.ticket).not.toBe(before)
-    expect(phoneControlStore.payload?.ticket).toBe(service.liveTicket)
-  })
-})

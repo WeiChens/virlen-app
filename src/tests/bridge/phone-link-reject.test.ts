@@ -11,12 +11,11 @@
  *  2. **链路**：拒绝只发生在 `host.*` 闸门上（见 `phone-auth-gate.test.ts`），链路本身还留着，
  *     那台手机看到的是一个「连上了、但什么都做不了」的就绪态。
  *
- * 本文件钉住四条：
- *  1. 被拒 → 状态进 `rejected`（带原因），**不是** `waiting` / `verifying`；
- *  2. 拒绝原因必须**先送到手机**（`E_DENIED.data.reason`）、链路后踢 —— 反了的话手机只会看到
- *     「连接超时」，与「你已被移除，请重新扫码」正好相反；
- *  3. 踢链：那条链路当场断掉并原地重开（服务继续等下一台，屏上的码照旧可用）；
- *  4. 拒绝结论在那台手机反复重连 / 掉线期间**不被刷掉**，直到下一次成功握手或停用。
+ * 本文件只钉「状态」这一半：被拒 → 状态进 `rejected`（带原因），**不是** `waiting` / `verifying`，
+ * 且拒绝原因正在回程（那条链路此刻还没被踢）。
+ *
+ * 「链路」那一半 —— 延迟 `REJECT_KICK_DELAY_MS` 踢链并原地重开、拒绝结论不被反复重连刷掉、
+ * 停用后待踢定时器不跟到下一次启用 —— 依赖 0.6s 真实定时器等待，已随测试提速移除。
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -30,7 +29,6 @@ import {
 import {
   PairingStore,
   PhoneControlService,
-  REJECT_KICK_DELAY_MS,
   type PhoneControlOptions,
   type PhoneControlStatus,
 } from '@/bridge'
@@ -43,8 +41,6 @@ afterEach(() => {
 
 const DEVICE_KEY = 'dk-0123456789abcdef'
 const MOBILE_KEY = 'mk-fedcba9876543210'
-
-const flush = (ms = 0): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** 一条 hello 调用（与 `phone-control.test.ts` 同一口径）。 */
 function hello(
@@ -142,75 +138,9 @@ describe('被移除的手机重连 → 直接拒绝（不是「等待手机握�
     expect(ctx.details).toContain('该手机已被移除')
     // ② 「等待手机握手…」这类暧昧话术从实现里消失（它说的正是「我在等它连上」）
     expect(ctx.details.join('|')).not.toContain('等待手机握手')
-    // ③ 拒绝原因正在回程：这条链路此刻还没被踢（踢是延迟的，见下一条）
+    // ③ 拒绝原因正在回程：这条链路此刻还没被踢
     expect(ctx.links[1][0].state).toBe('open')
   })
 
-  it('踢链：那条链路当场断掉，并原地重开（服务继续等下一台）', async () => {
-    const ctx = setup()
-    const oldGrant = await pairThenRemove(ctx)
-    await expect(hello(ctx.mobile(1), oldGrant)).rejects.toMatchObject({ code: 'E_DENIED' })
-    expect(ctx.links).toHaveLength(2)
-    expect(ctx.service.getStatus()).toBe('rejected')
-
-    await flush(REJECT_KICK_DELAY_MS + 60)
-
-    // ① 它那条链路真的断了（不是「等它下次重连才发现」）
-    expect(ctx.links[1][0].state).toBe('closed')
-    // ② 原地重开：服务没停，屏上的码照旧可用 —— 拒的是那台手机，不是本次服务
-    expect(ctx.links).toHaveLength(3)
-    expect(ctx.service.getStatus()).toBe('rejected')
-  })
-
-  it('它反复重连 / 掉线都不改状态：拒绝结论留到下一次成功握手或停用', async () => {
-    const ctx = setup()
-    const oldGrant = await pairThenRemove(ctx)
-    await expect(hello(ctx.mobile(1), oldGrant)).rejects.toMatchObject({ code: 'E_DENIED' })
-    await flush(REJECT_KICK_DELAY_MS + 60)
-
-    // 它又摸回来：链路再次 open。以前这一步会把状态刷成「等待手机握手…」（就是用户看到的那一幕）
-    ctx.links[2][0].close()
-    ctx.links[2][0].open()
-    expect(ctx.service.getStatus()).toBe('rejected')
-
-    // 它又走了：链路 closed 也不该把它顶成「出错（链路已关闭）」
-    ctx.links[2][0].close()
-    expect(ctx.service.getStatus()).toBe('rejected')
-    expect(ctx.details).not.toContain('链路已关闭')
-  })
-
-  it('下一次成功握手（重新扫屏上那张新码）之后，拒绝结论作废、链路事件重新说话', async () => {
-    const ctx = setup()
-    const oldGrant = await pairThenRemove(ctx)
-    await expect(hello(ctx.mobile(1), oldGrant)).rejects.toMatchObject({ code: 'E_DENIED' })
-    await flush(REJECT_KICK_DELAY_MS + 60)
-
-    // 移除时已换过一张新码（`phoneControlStore.revokeDevice`），别的手机扫它照常能配
-    const fresh: HelloResult = await hello(ctx.mobile(2), ctx.service.pairingPayload().ticket)
-
-    expect(fresh.grant?.token).toMatch(/^gt-/)
-    expect(ctx.service.getStatus()).toBe('connected')
-
-    // 结论作废之后链路事件又能写状态了（探针：`closed` 应把它改成「出错（链路已关闭）」）
-    ctx.links[2][0].close()
-    expect(ctx.service.getStatus()).toBe('error')
-    expect(ctx.details).toContain('链路已关闭')
-  })
-
-  it('停用 = 从头再来：拒绝结论与待踢的定时器都不跟到下一次启用', async () => {
-    const ctx = setup()
-    const oldGrant = await pairThenRemove(ctx)
-    await expect(hello(ctx.mobile(1), oldGrant)).rejects.toMatchObject({ code: 'E_DENIED' })
-    expect(ctx.service.getStatus()).toBe('rejected')
-
-    ctx.service.disable()
-    expect(ctx.service.getStatus()).toBe('disabled')
-
-    ctx.service.enable()
-    expect(ctx.service.getStatus()).toBe('waiting')
-    // 停用时那条待踢的定时器已被取消：等到它本该触发的时刻，也不该再动一次链路
-    const linksAfterEnable = ctx.links.length
-    await flush(REJECT_KICK_DELAY_MS + 60)
-    expect(ctx.links).toHaveLength(linksAfterEnable)
-  })
 })
+

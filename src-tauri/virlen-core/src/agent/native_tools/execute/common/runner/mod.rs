@@ -47,23 +47,10 @@ const TICK: Duration = Duration::from_millis(250);
 const PTY_HOLD_MAX: Duration = Duration::from_secs(30 * 60);
 
 #[cfg(target_os = "windows")]
-/// ② 取接管上限。单测用 `HOLD_MAX_OVERRIDE_SECS` 缩短，避免真等 30 分钟。
+/// ② 取接管上限。
 fn pty_hold_max() -> Duration {
-    #[cfg(test)]
-    {
-        let secs = HOLD_MAX_OVERRIDE_SECS.load(std::sync::atomic::Ordering::SeqCst);
-        if secs > 0 {
-            return Duration::from_secs(secs);
-        }
-    }
     PTY_HOLD_MAX
 }
-
-#[cfg(target_os = "windows")]
-/// 仅测试用：可注入的接管上限（秒；0 = 用默认 `PTY_HOLD_MAX`）。
-#[cfg(test)]
-static HOLD_MAX_OVERRIDE_SECS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
 
 /// 伪控制台当前是否可用（Step 2 ①：决定「终端内确认」是否走终端呈现）。
 ///

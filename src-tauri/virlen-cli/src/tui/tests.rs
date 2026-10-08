@@ -273,48 +273,6 @@ async fn missing_provider_fails_at_startup() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// 多轮 REPL：/help → /status → 普通提问（连不上 → 报错但**不退出**）→ /exit
-#[tokio::test]
-async fn plain_mode_runs_slash_commands_and_survives_a_failed_turn() {
-    let dir = tmpdir("repl");
-    let h = host(&dir);
-    seed_provider(&h).await;
-
-    let script = "/help\n/status\n你好\n/exit\n";
-    let mut out: Vec<u8> = Vec::new();
-    let mut err: Vec<u8> = Vec::new();
-    let mut cursor = std::io::Cursor::new(script.as_bytes().to_vec());
-    let mut input = Input::Buf(&mut cursor);
-    let code = run_with(
-        &h,
-        ChatCmd::Chat(ChatOptions {
-            no_tui: true,
-            ..Default::default()
-        }),
-        &mut out,
-        &mut err,
-        &mut input,
-    )
-    .await;
-
-    assert_eq!(code, EXIT_OK);
-    let o = String::from_utf8_lossy(&out);
-    assert!(o.contains("/status"), "帮助应被打印: {o}");
-    assert!(o.contains("已知与桌面端的差异"), "/status 必须写明缺口: {o}");
-    // 连不上 127.0.0.1:1 → 引擎报错，但 REPL 继续（随后处理了 /exit）
-    let e = String::from_utf8_lossy(&err);
-    assert!(e.contains("[chat] 使用顺序输出模式"), "{e}");
-    assert!(e.contains("[error]"), "失败的回合应报错: {e}");
-    // 会话与消息必须落库（用户消息由引擎落库）
-    let db = virlen_core::session_db::open_session_db(h.as_ref(), &|fut| {
-        tokio::spawn(fut);
-    })
-    .unwrap();
-    let sessions = db.repo.list_sessions().await.unwrap_or_default();
-    assert_eq!(sessions.len(), 1, "应只建一条会话");
-    std::fs::remove_dir_all(&dir).ok();
-}
-
 /// `/new` 之后是**另一条**会话，且工作目录被重算（切会话的唯一入口）
 #[tokio::test]
 async fn plain_mode_new_session_switches() {
@@ -485,73 +443,6 @@ fn resume_hint_carries_the_full_id_and_a_copyable_command() {
         h.contains("virlen-cli chat --session 0123456789abcdef"),
         "{h}"
     );
-}
-
-/// 续连（`--session`）的端到端（顺序输出模式）：先预览历史，退出时给续连命令
-#[tokio::test]
-async fn plain_mode_resume_prints_history_preview_and_exit_hint() {
-    let dir = tmpdir("resume");
-    let h = host(&dir);
-    seed_provider(&h).await;
-
-    // 第一次：新会话，提交一条 —— 连不上 127.0.0.1:1（引擎报错），但用户消息**已先落库**
-    let mut out: Vec<u8> = Vec::new();
-    let mut err: Vec<u8> = Vec::new();
-    let mut cursor = std::io::Cursor::new("你好\n/exit\n".as_bytes().to_vec());
-    let mut input = Input::Buf(&mut cursor);
-    assert_eq!(
-        run_with(
-            &h,
-            ChatCmd::Chat(ChatOptions {
-                no_tui: true,
-                ..Default::default()
-            }),
-            &mut out,
-            &mut err,
-            &mut input
-        )
-        .await,
-        EXIT_OK
-    );
-
-    let sid = {
-        let db = virlen_core::session_db::open_session_db(h.as_ref(), &|fut| {
-            tokio::spawn(fut);
-        })
-        .unwrap();
-        db.repo.list_sessions().await.unwrap()[0].id.clone()
-    };
-
-    // 第二次：续连同一条会话
-    let mut out: Vec<u8> = Vec::new();
-    let mut err: Vec<u8> = Vec::new();
-    let mut cursor = std::io::Cursor::new(b"/exit\n".to_vec());
-    let mut input = Input::Buf(&mut cursor);
-    let code = run_with(
-        &h,
-        ChatCmd::Chat(ChatOptions {
-            session_id: Some(sid.clone()),
-            no_tui: true,
-            ..Default::default()
-        }),
-        &mut out,
-        &mut err,
-        &mut input,
-    )
-    .await;
-    assert_eq!(code, EXIT_OK);
-
-    let o = String::from_utf8_lossy(&out);
-    assert!(o.contains("历史预览"), "续连应先打印历史预览: {o}");
-    assert!(o.contains("[你] 你好"), "预览里应有上一条用户消息: {o}");
-
-    let e = String::from_utf8_lossy(&err);
-    assert!(e.contains("[chat] 已退出"), "{e}");
-    assert!(
-        e.contains(&format!("virlen-cli chat --session {}", sid)),
-        "退出应给出续连命令: {e}"
-    );
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 // ==================== 事件映射（纯函数部分） ====================

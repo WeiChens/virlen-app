@@ -28,33 +28,4 @@ pub(crate) fn test_security_bare(workspace: &str) -> NativeToolSecurity {
     sec
 }
 
-/// 检查进程是否存活（Windows 用 Get-Process，其他平台用 kill -0）。
-/// 当前只有 Windows 用例在调用 → 非 Windows 分支暂无调用者，故平台级 allow（给今后
-/// Linux 用例留的探针，非死代码）。
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-pub(crate) fn is_process_alive(pid: u32) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        let out = std::process::Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-Command",
-                &format!(
-                    "if (Get-Process -Id {} -ErrorAction SilentlyContinue) {{ 'ALIVE' }} else {{ 'DEAD' }}",
-                    pid
-                ),
-            ])
-            .output()
-            .unwrap();
-        let s = String::from_utf8_lossy(&out.stdout);
-        s.contains("ALIVE")
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let out = std::process::Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .output()
-            .unwrap();
-        out.status.success()
-    }
-}
+
