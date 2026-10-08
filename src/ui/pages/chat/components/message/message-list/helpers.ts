@@ -51,3 +51,47 @@ export function resolveJumpAnchorId(
   }
   return null
 }
+
+/**
+ * 在消息窗口里找「可定位的跳转目标」：命中返回最终要定位的消息 id，否则 `null`。
+ *
+ * 与 `resolveJumpAnchorId` 的分工：那个只做「tool → 宿主 assistant」的解析（消息不在窗口里时
+ * 原样返回 id，即「还没加载到」），本函数把「到底在不在窗口里」补上 —— 回补循环要的判据正是
+ * 这个：`tool` 消息自身零高度、且宿主可能还在更早的分页里，两者都已加载才算命中。
+ */
+export function findJumpTarget(list: Message[], msgId: string): string | null {
+  const resolved = resolveJumpAnchorId(list, msgId)
+  if (!resolved || !list.some((m) => m.id === resolved)) return null
+  return resolved
+}
+
+/**
+ * 视口里「正在读的那条用户消息」= **已经进入视口的最后一条**用户消息（`null` = 一条用户消息都没有）。
+ *
+ * 为什么不取「离视口顶部最近的」：视口里同时有两条用户消息时（上一条已滚过顶部、下一条刚露头），
+ * 离顶部探针近的往往是**上面那条** —— 高亮就落在已经读过的旧提问上。按「可见的最后一条」判定，
+ * 两条都可见时指向下面那条（当前正在读的）；只有一条可见时结论与旧口径一致。
+ *
+ * @param messages 已加载消息（会话顺序）
+ * @param topOf 该条消息在内容坐标系里的顶部（未测量的条目给 `undefined`，跳过）
+ * @param viewportBottom 视口底边在内容坐标系里的位置（`scrollTop + clientHeight`）
+ */
+export function pickActiveAnchorUser(
+  messages: readonly Message[],
+  topOf: (messageIndex: number) => number | undefined,
+  viewportBottom: number,
+): string | null {
+  let active: string | null = null
+  let firstUserId: string | null = null
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].role !== 'user') continue
+    if (firstUserId === null) firstUserId = messages[i].id
+    const top = topOf(i)
+    if (top === undefined) continue
+    // 顶部偏移随顺序单调递增：一旦落到视口底边之下，后面的只会更靠下
+    if (top > viewportBottom) break
+    active = messages[i].id
+  }
+  // 视口整体停在第一条用户消息之上（一条都没进入视口）→ 仍指向第一条，避免高亮整个消失
+  return active ?? firstUserId
+}

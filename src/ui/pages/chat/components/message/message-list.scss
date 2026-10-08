@@ -161,6 +161,10 @@
       background: transparent;
       box-shadow: none;
       animation: msg-jump-spin 0.7s linear infinite;
+      // 提升为独立合成层：定位要回补历史时主线程正忙（IPC 解析 / React 提交），
+      // 不提升的话转圈会跟着卡住 ——「显示了 loading，但看起来像卡死」的一半就是它。
+      // 只在 loading 期间提升（圆点可能有上千个，不能常驻）。
+      will-change: transform;
     }
   }
 }
@@ -194,6 +198,8 @@
     border-top-color: var(--accent-color, #4f46e5);
     border-radius: 50%;
     animation: msg-jump-spin 0.7s linear infinite;
+    // 同上：回补历史期间主线程忙，转圈要能独立于主线程跑
+    will-change: transform;
   }
 }
 

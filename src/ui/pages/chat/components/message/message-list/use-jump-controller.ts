@@ -8,8 +8,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Virtualizer } from '@tanstack/react-virtual'
 import type { Message } from '@/types'
 import { chatState, sessionStore } from '@/ui/store'
-import { resolveJumpAnchorId } from './helpers'
-import { AT_BOTTOM_THRESHOLD } from './constants'
+import { findJumpTarget, resolveJumpAnchorId } from './helpers'
+import { AT_BOTTOM_THRESHOLD, JUMP_LOAD_MAX_PAGES } from './constants'
 import type { MessageJumpTarget } from './types'
 
 interface Params {
@@ -93,7 +93,8 @@ export function useJumpController({
         return
       }
 
-      // ② 尚未回补到内存：逐页从 SQLite 拉取，直到找到该消息
+      // ② 尚未回补到内存：交给数据层**批量回补**，一次拿到目标（详见 `loadOlderMessagesUntil`）——
+      //    逐页 await 会把「重渲染 + 虚拟列表重排」重复很多轮，长会话下界面会卡住且 loading 转圈停住。
       setIsLoadingOlder(true)
       // 显示「定位中」提示；延迟 150ms，避免极短加载时 loading 一闪而过
       if (jumpLoadingTimerRef.current) clearTimeout(jumpLoadingTimerRef.current)
@@ -102,28 +103,20 @@ export function useJumpController({
         setJumpLoadingId(msgId)
       }, 150)
       try {
-        let idx = -1
-        let guard = 0
-        /** 实际定位的消息 id（tool 命中会解析到宿主 assistant） */
-        let anchorId = msgId
-        while (idx < 0 && sessionStore.hasMoreMessages(sid) && guard++ < 1000) {
-          const ok = await sessionStore.loadOlderMessages(sid)
-          if (sid !== chatState.value.currentSessionId) return
-          const s = sessionStore.getSession(sid)
-          if (!s) return
-          // tool 消息自身零高度：改为定位宿主 assistant；宿主还没回来时继续回补
-          const resolved = resolveJumpAnchorId(s.messages, msgId)
-          anchorId = resolved ?? msgId
-          idx = resolved ? s.messages.findIndex((m) => m.id === resolved) : -1
-          // 没有进展（失败 / 已到最旧）→ 停止，避免死循环
-          if (!ok && idx < 0) break
-        }
-        const s = sessionStore.getSession(sid)
-        if (!s) return
-        setMessages([...s.messages])
-        const finalIdx = s.messages.findIndex((m) => m.id === anchorId)
+        const all = await sessionStore.loadOlderMessagesUntil(
+          sid,
+          (window) => findJumpTarget(window, msgId) !== null,
+          JUMP_LOAD_MAX_PAGES,
+          // 用户已切走会话 → 不必把整段历史取完（切走后也取不完了）
+          () => sid !== chatState.value.currentSessionId,
+        )
+        if (sid !== chatState.value.currentSessionId) return
+        if (!all) return
+        setMessages(all)
+        // tool 消息自身零高度：命中时定位到宿主 assistant（见 findJumpTarget）
+        const anchorId = findJumpTarget(all, msgId)
         // 等 messages 提交后（layout effect）再跳，确保 count 已更新
-        if (finalIdx >= 0) {
+        if (anchorId) {
           pendingJumpIdRef.current = anchorId
           if (highlight) flashHighlight(anchorId)
         }

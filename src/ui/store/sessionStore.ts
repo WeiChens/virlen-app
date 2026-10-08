@@ -3,7 +3,7 @@
  * 不含业务编排（创建会话 / 发消息 → Application Service），也不含 diff / debounce（→ SessionRepo）。
  */
 import { action, makeObservable, observable, runInAction } from 'mobx'
-import type { Session } from '@/types'
+import type { Message, Session } from '@/types'
 import type { SessionRepo, UserMessageRef } from '@/infrastructure/sessionRepo'
 import { sessionRepo } from '@/infrastructure/sessionRepo'
 import { track, trackError, hashText } from '@/utils/telemetry'
@@ -212,12 +212,48 @@ class SessionStore {
 
   /**
    * 向上回补一页更早的消息（前插到列表头部）；同会话并发调用复用同一请求，避免同页重复前插。
-   * @returns 是否实际加载到了更早的消息
+   * @returns 本次是否加载到了更早的消息（复用了并发中的「批量回补」时，窗口长过就是 true）
    */
-  loadOlderMessages(sessionId: string): Promise<boolean> {
+  async loadOlderMessages(sessionId: string): Promise<boolean> {
+    const before = this.getSession(sessionId)?.messages.length ?? 0
+    const after = await this.loadOlderMessagesUntil(sessionId, undefined, 1)
+    return (after?.length ?? 0) > before
+  }
+
+  /** 正在回补更早消息的请求（按会话去重，见 `loadOlderMessagesUntil`） */
+  private olderLoads = new Map<string, Promise<Message[] | null>>()
+
+  /**
+   * 向更早回补消息，直到 `until` 命中 / 没有更多 / 触 `maxPages` 上限；**只在末尾提交一次**。
+   *
+   * 为何必须「一次提交」：每回补一页都会换掉 `sessions[i].messages` 的引用，而读它的 observer 远不止
+   * 消息列表（侧栏 / 锚点列表 / token 环 / 待办入口…）—— 逐页提交就是让它们每页重渲染一轮。点最上面
+   * 的锚点要回补上百页时，主线程被这些重渲染（及随之而来的虚拟列表重排）占满，表现就是「界面卡死、
+   * loading 转圈停住」。攒到最后一次性写入，中途不给 UI 任何中间态（也顺带消掉了列表的多次抖动）。
+   *
+   * 同会话并发调用复用同一个请求：既省一次 IPC，也是**不出现重复消息**的前提 —— 两次并发若各取一页，
+   * 游标相同就会把同一段消息前插两次（列表里出现两份）。
+   *
+   * @param until 对「本页取完后将成为消息列表的内容」（升序，含已在内存的部分）求值，为真即停；
+   *   不传 = 一直取到没有更早的或触页数上限
+   * @param maxPages 页数上限（兜底：`has_more` 异常时不能死循环）
+   * @param shouldStop 每页取完后询问是否放弃（如用户已切走会话）；为真则停止回补，已取到的部分照常提交
+   * @returns 提交后的消息数组（升序）；会话不存在返回 null
+   */
+  loadOlderMessagesUntil(
+    sessionId: string,
+    until?: (messages: Message[]) => boolean,
+    maxPages = 1,
+    shouldStop?: () => boolean,
+  ): Promise<Message[] | null> {
     const inflight = this.olderLoads.get(sessionId)
     if (inflight) return inflight
-    const task = this.loadOlderMessagesInner(sessionId).finally(() => {
+    const task = this.loadOlderMessagesCore(
+      sessionId,
+      until,
+      maxPages,
+      shouldStop,
+    ).finally(() => {
       if (this.olderLoads.get(sessionId) === task) {
         this.olderLoads.delete(sessionId)
       }
@@ -226,59 +262,80 @@ class SessionStore {
     return task
   }
 
-  /** 正在回补更早消息的请求（按会话去重） */
-  private olderLoads = new Map<string, Promise<boolean>>()
-
-  private async loadOlderMessagesInner(sessionId: string): Promise<boolean> {
+  private async loadOlderMessagesCore(
+    sessionId: string,
+    until: ((messages: Message[]) => boolean) | undefined,
+    maxPages: number,
+    shouldStop?: () => boolean,
+  ): Promise<Message[] | null> {
+    const session = this.getSession(sessionId)
+    if (!session) return null
     const paging = this.value.messagePaging[sessionId]
-    if (!paging || !paging.hasMoreOlder) return false
+    // 没有更早的了（新建会话 / 已全量加载 / 上次已到底）：内存即权威，原样返回
+    if (!paging || !paging.hasMoreOlder) return session.messages
+
     const started = Date.now()
+    /** 本页起点游标 */
+    let cursor = paging.oldestRowid
+    /** 本次新取到的更早消息（升序）；每取一页补到它前面 */
+    let window: Message[] = []
+    let hasMore = false
+    let oldestRowid = cursor
+    let loaded = 0
+    /**
+     * 内存里当前的消息列表。每页都重新取，**不用回补开始时的快照**：回补可能持续数秒，期间
+     * 流式回答 / 工具结果会往尾部追加，用旧快照拼接会把它们丢掉。
+     */
+    const inMemory = (): Message[] => this.getSession(sessionId)?.messages ?? []
     try {
-      const page = await this.repo.getMessagePage(sessionId, {
-        limit: MESSAGE_PAGE_SIZE,
-        beforeRowid: paging.oldestRowid,
-        minVisible: MESSAGE_MIN_VISIBLE,
-        fold: settingsState.value.hideToolCallThink,
-      })
-      if (page.messages.length === 0) {
-        // 游标失效或数据被删：标记无更多，避免反复请求
-        runInAction(() => {
-          this.value.messagePaging = {
-            ...this.value.messagePaging,
-            [sessionId]: {
-              hasMoreOlder: false,
-              oldestRowid: paging.oldestRowid,
-            },
-          }
+      for (let page = 0; page < maxPages; page++) {
+        const res = await this.repo.getMessagePage(sessionId, {
+          limit: MESSAGE_PAGE_SIZE,
+          beforeRowid: cursor,
+          minVisible: MESSAGE_MIN_VISIBLE,
+          fold: settingsState.value.hideToolCallThink,
         })
-        return false
-      }
-      runInAction(() => {
-        const i = this.value.sessions.findIndex((s) => s.id === sessionId)
-        if (i === -1) return
-        const sessions = [...this.value.sessions]
-        sessions[i] = {
-          ...sessions[i],
-          messages: [...page.messages, ...sessions[i].messages],
+        // 空页 = 游标失效 / 数据被删：当作到底，免得反复请求
+        if (res.messages.length === 0) {
+          hasMore = false
+          break
         }
+        window = res.messages.concat(window)
+        loaded += res.messages.length
+        hasMore = res.hasMore
+        oldestRowid = res.oldestRowid ?? oldestRowid
+        if (!hasMore) break
+        // `until` 收到的是「这页取完后会成为消息列表的内容」（升序）
+        if (until?.(window.concat(inMemory()))) break
+        if (shouldStop?.()) break
+        if (oldestRowid === null) break
+        cursor = oldestRowid
+      }
+      const committed = runInAction(() => {
+        const i = this.value.sessions.findIndex((s) => s.id === sessionId)
+        if (i === -1) return null
+        const sessions = [...this.value.sessions]
+        const messages =
+          window.length === 0
+            ? sessions[i].messages
+            : window.concat(sessions[i].messages)
+        sessions[i] = { ...sessions[i], messages }
         this.value.sessions = sessions
         this.value.messagePaging = {
           ...this.value.messagePaging,
-          [sessionId]: {
-            hasMoreOlder: page.hasMore,
-            oldestRowid: page.oldestRowid ?? paging.oldestRowid,
-          },
+          [sessionId]: { hasMoreOlder: hasMore, oldestRowid },
         }
+        return messages
       })
       track('session.messages.lazyload', {
         session_id: hashText(sessionId),
-        message_count: page.messages.length,
+        message_count: loaded,
         duration_ms: Date.now() - started,
         status: 'success',
-        has_more: page.hasMore,
+        has_more: hasMore,
         mode: 'older',
       })
-      return true
+      return committed
     } catch {
       track('session.messages.lazyload', {
         session_id: hashText(sessionId),
@@ -287,7 +344,7 @@ class SessionStore {
         status: 'fail',
         mode: 'older',
       })
-      return false
+      return null
     }
   }
 

@@ -9,7 +9,7 @@ import type { Virtualizer } from '@tanstack/react-virtual'
 import type { Message } from '@/types'
 import { chatState, sessionStore } from '@/ui/store'
 import commentEvent from '@/events/commentEvent'
-import { isStreamingSession } from './helpers'
+import { isStreamingSession, pickActiveAnchorUser } from './helpers'
 import type { ListRow } from './rows'
 import {
   AT_BOTTOM_THRESHOLD,
@@ -207,7 +207,8 @@ export function useScrollController({
 
     /**
      * 当前活跃的用户消息锚点。虚拟滚动下只有视口附近条目被渲染，遍历 DOM 会在视口内没有 user
-     * 消息时找不到元素；改用「滚动偏移 → 消息实测起始位置」的几何计算，与 DOM 是否渲染无关。
+     * 消息时找不到元素；改用「滚动偏移 → 消息实测起始位置」的几何计算，与 DOM 是否渲染无关
+     *（取哪一条见 `pickActiveAnchorUser`）。
      */
     function updateActiveDot() {
       const el = containerRef.current
@@ -216,25 +217,14 @@ export function useScrollController({
       if (list.length === 0) return
       // measurements[i].start 即第 i 条消息在内容坐标系中的顶部，与渲染无关
       const measurements = rowVirtualizer.measurementsCache
-      const probe = el.scrollTop + 80 // 视口顶部偏下 80px
-      let closestId: string | null = null
-      let closestDist = Infinity
-      for (let i = 0; i < list.length; i++) {
-        if (list[i].role !== 'user') continue
-        const start = measurements[rowIndexOfMessageRef.current[i]]?.start
-        if (start === undefined) continue
-        const dist = Math.abs(start - probe)
-        if (dist < closestDist) {
-          closestDist = dist
-          closestId = list[i].id
-        } else if (start > probe) {
-          // 起始偏移随索引单调递增：已越过探针且不再更近，后续只会更远
-          break
-        }
-      }
-      if (closestId !== activeMsgIdRef.current) {
-        activeMsgIdRef.current = closestId
-        setActiveUserMsgId(closestId)
+      const next = pickActiveAnchorUser(
+        list,
+        (i) => measurements[rowIndexOfMessageRef.current[i]]?.start,
+        el.scrollTop + el.clientHeight,
+      )
+      if (next !== activeMsgIdRef.current) {
+        activeMsgIdRef.current = next
+        setActiveUserMsgId(next)
       }
     }
 

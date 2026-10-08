@@ -36,6 +36,11 @@ export const LOAD_MORE_HINT_HEIGHT = 36
 export const MAX_SETTLE_POLLS = 20
 /** 锚点列表最多渲染的圆点数（安全上限）；正常会话（数千消息）全部渲染，超出部分靠滚动条查看。 */
 export const MAX_ANCHOR_DOTS = 2000
+/**
+ * 锚点定位时最多向上回补的页数（兜底：目标已被删除等情况下不能无限取）。
+ * 每页已按「可见行」在 Rust 侧补足（≥ `MESSAGE_MIN_VISIBLE` 行），1000 页足以覆盖任何真实会话。
+ */
+export const JUMP_LOAD_MAX_PAGES = 1000
 
 /** 稳定的空 tool 结果数组（无 toolCalls 的消息共用，保证 memo 命中） */
 export const EMPTY_TOOL_RESULTS: (Message | undefined)[] = []
