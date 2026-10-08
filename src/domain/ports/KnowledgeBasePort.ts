@@ -9,6 +9,11 @@ export interface KnowledgeBase {
   chunk_count: number
   created_at: string
   updated_at: string
+  /**
+   * 系统自建（默认知识库 / 记忆详情）：由功能自己创建与维护，**不能删除**。
+   * Rust 侧一定会返回它（升级前建的老库读出来是 false）；这里可选只是为了不让测试桩逐个补字段。
+   */
+  builtin?: boolean
 }
 
 /** 知识库中的文档信息 */

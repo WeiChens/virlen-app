@@ -37,10 +37,10 @@ vi.mock('@/infrastructure/memoryRepo', () => ({
   setMemoryDisabled: vi.fn(),
   loadMemorySection: vi.fn(),
   touchMemories: vi.fn(),
-  // P2：蒸馏整理（面板的「立即整理昨天」+ 状态行）
+  // P2：蒸馏整理（面板的「整理昨天的对话」+ 状态行）
   consolidateMemories: vi.fn(),
   listMemoryRuns: vi.fn(),
-  // P3：导出 JSON（Rust 给文本，面板负责选路径写文件）
+  // P3：导出备份（Rust 给文本，面板负责选路径写文件）
   exportMemories: vi.fn(),
 }))
 
@@ -126,13 +126,18 @@ async function render(options: { openList?: boolean } = {}) {
   return { host, root }
 }
 
-/** 「记忆列表（N 条）」入口按钮 —— 设置页上列表的**唯一**入口 */
+/** 「全部记忆（N 条）」入口（页尾的一行卡片）—— 设置页上列表的**唯一**入口 */
 function listButton(): HTMLButtonElement {
-  const found = Array.from(document.querySelectorAll('button')).find((b) =>
-    b.textContent?.trim().startsWith('记忆列表'),
+  const found = document.querySelector<HTMLButtonElement>('.memory-list-entry')
+  if (!found) throw new Error('找不到「全部记忆」入口卡片')
+  return found
+}
+
+/** 入口上的条数文案（卡片里还有一句说明与箭头，所以按元素取而不是拿整块文本） */
+function listButtonTitle(): string {
+  return (
+    listButton().querySelector('.memory-list-entry-title')?.textContent?.trim() ?? ''
   )
-  if (!found) throw new Error('找不到「记忆列表」入口按钮')
-  return found as HTMLButtonElement
 }
 
 /** 按文本找按钮（面板里按钮很多，按文案定位最贴近用户行为） */
@@ -340,7 +345,7 @@ it('列表不常驻设置页：默认没有任何条目，点「记忆列表」�
   const { root } = await render({ openList: false })
 
   // 设置项还在（列表搬走 ≠ 面板空了）
-  expect(document.querySelector('.memory-switch-row')).not.toBeNull()
+  expect(document.querySelector('.memory-option-row')).not.toBeNull()
   expect(document.querySelector('.memory-run-row')).not.toBeNull()
   expect(document.querySelector('.memory-budget-row')).not.toBeNull()
 
@@ -349,8 +354,8 @@ it('列表不常驻设置页：默认没有任何条目，点「记忆列表」�
   expect(document.querySelector('.memory-pager')).toBeNull()
   expect(document.querySelector('.modal-overlay')).toBeNull()
 
-  // 入口按钮带条数（用户不打开弹窗也能知道库里有多少条）
-  expect(listButton().textContent?.trim()).toBe('记忆列表（2 条）')
+  // 入口带条数（用户不打开弹窗也能知道库里有多少条）
+  expect(listButtonTitle()).toBe('全部记忆（2 条）')
 
   await click(listButton())
   expect(document.querySelector('.modal-overlay')).not.toBeNull()
@@ -544,7 +549,7 @@ it('项目列：项目记忆显示路径（悬停看全文），非项目留空�
 it('注入预览展示后端渲染的段文本（前端不自己拼）', async () => {
   const { root } = await render()
 
-  await click(buttonByText('查看注入预览'))
+  await click(buttonByText('查看 AI 会读到什么'))
   const body = document.querySelector('.memory-preview-body')!
   expect(body.textContent).toContain('# Memory')
   expect(body.textContent).toContain('- [user] 用户偏好中文回复 (id: m_p1)')
@@ -552,17 +557,12 @@ it('注入预览展示后端渲染的段文本（前端不自己拼）', async (
   await act(async () => root.unmount())
 })
 
-it('开关与注入条数写进设置（键名与 Rust 侧同名）', async () => {
+it('记忆固定启用：页面上没有开关；每次带上的条数写进设置（键名与 Rust 侧同名）', async () => {
   const { root } = await render()
 
-  const toggle = document.querySelector<HTMLInputElement>(
-    '.virlen-toggle input[type="checkbox"]',
-  )!
-  const before = settingsState.value.memoryEnabled
-  expect(toggle.checked).toBe(before)
-
-  await click(toggle)
-  expect(settingsState.value.memoryEnabled).toBe(!before)
+  // 不再有「启用记忆」开关：关掉它既不会释放什么，也会让人以为记忆丢了
+  expect(document.querySelector('.virlen-toggle')).toBeNull()
+  expect(settingsState.value.memoryEnabled).toBe(true)
 
   const numberInput = document.querySelector<HTMLInputElement>(
     '.memory-num input[type="number"]',
@@ -588,10 +588,10 @@ function yesterday(): string {
   ).padStart(2, '0')}`
 }
 
-it('尚未整理过时给出状态行；点「立即整理昨天」按昨天触发并刷新列表', async () => {
+it('尚未整理过时给出状态行；点「整理昨天的对话」按昨天触发并刷新列表', async () => {
   const { root } = await render()
 
-  expect(document.querySelector('.memory-run-status')!.textContent).toContain('尚未整理过')
+  expect(document.querySelector('.memory-run-status')!.textContent).toContain('还没整理过')
 
   vi.mocked(consolidateMemories).mockResolvedValue({
     status: 'ok',
@@ -610,7 +610,7 @@ it('尚未整理过时给出状态行；点「立即整理昨天」按昨天触�
     calls: 1,
   })
 
-  await click(buttonByText('立即整理昨天'))
+  await click(buttonByText('整理昨天的对话'))
 
   // 传的是「昨天」且不强制（幂等：同一天只整理一次）
   expect(consolidateMemories).toHaveBeenCalledWith(yesterday(), false)
@@ -641,12 +641,12 @@ it('状态行展示最近一次整理的结果；失败时可「重新整理这�
   const { root } = await render()
 
   expect(document.querySelector('.memory-run-status')!.textContent).toContain('2026-10-04')
-  expect(document.querySelector('.memory-run-status')!.textContent).toContain('失败')
+  expect(document.querySelector('.memory-run-status')!.textContent).toContain('没成功')
   expect(document.querySelector('.memory-preview-warn')!.textContent).toContain(
     '模型返回非 JSON',
   )
 
-  await click(buttonByText('重新整理这一天'))
+  await click(buttonByText('再试一次'))
   expect(consolidateMemories).toHaveBeenCalledWith('2026-10-04', true)
 
   await act(async () => root.unmount())
@@ -684,9 +684,9 @@ it('整理被关掉 / 没有模型时给出可读提示，而不是静默', asyn
   })
   const { root } = await render()
 
-  await click(buttonByText('立即整理昨天'))
+  await click(buttonByText('整理昨天的对话'))
   expect(showToast).toHaveBeenCalledWith(
-    expect.stringContaining('记忆功能已关闭'),
+    expect.stringContaining('记忆功能当前不可用'),
     expect.any(Number),
   )
 
@@ -697,9 +697,9 @@ it('整理被关掉 / 没有模型时给出可读提示，而不是静默', asyn
     details: 0,
     calls: 0,
   })
-  await click(buttonByText('立即整理昨天'))
+  await click(buttonByText('整理昨天的对话'))
   expect(showToast).toHaveBeenCalledWith(
-    expect.stringContaining('没有可用的模型配置'),
+    expect.stringContaining('还没有可用的模型'),
     expect.any(Number),
   )
 
@@ -714,7 +714,7 @@ it('常驻预算行展示后端算出的字符数与预算（不用点预览）'
   const row = document.querySelector('.memory-budget-row')!
   expect(row.textContent).toContain('120')
   expect(row.textContent).toContain('4000')
-  expect(row.textContent).toContain('已注入 1 条 / 共 2 条')
+  expect(row.textContent).toContain('本次对话会带上 1 条记忆（共 2 条）')
   // 没被裁 → 不告警（告警必须是真的有事）
   expect(row.classList.contains('is-warn')).toBe(false)
   expect(document.querySelectorAll('.memory-preview-warn')).toHaveLength(0)
@@ -738,7 +738,7 @@ it('超出预算时常驻行变告警并给出可操作建议', async () => {
   expect(warn.textContent).toContain('永久 2 条')
   expect(warn.textContent).toContain('普通 5 条')
   // 光说「超了」没用，得告诉用户怎么改
-  expect(warn.textContent).toContain('建议降级为普通、停用或删除')
+  expect(warn.textContent).toContain('建议删掉用不到的')
 
   await act(async () => root.unmount())
 })
@@ -758,9 +758,9 @@ it('写操作后重新取注入段：告警必须是当前状态', async () => {
   await act(async () => root.unmount())
 })
 
-// ==================== 导出 JSON（P3） ====================
+// ==================== 导出备份（P3） ====================
 
-it('导出 JSON：Rust 给文本，面板选路径写文件', async () => {
+it('导出备份：Rust 给文本，面板选路径写文件', async () => {
   vi.mocked(exportMemories).mockResolvedValue(
     JSON.stringify({
       format: 'virlen.memory',
@@ -772,7 +772,7 @@ it('导出 JSON：Rust 给文本，面板选路径写文件', async () => {
   )
   const { root } = await render()
 
-  await click(buttonByText('导出 JSON'))
+  await click(buttonByText('导出备份'))
 
   expect(exportMemories).toHaveBeenCalledTimes(1)
   expect(vi.mocked(save)).toHaveBeenCalled()
@@ -794,12 +794,12 @@ it('导出：用户取消保存 / 后端无文本时都不静默', async () => {
   vi.mocked(save).mockResolvedValueOnce(null)
   const { root } = await render()
 
-  await click(buttonByText('导出 JSON'))
+  await click(buttonByText('导出备份'))
   expect(vi.mocked(writeTextFile)).not.toHaveBeenCalled()
 
   // 后端给不出文本（非 Tauri / 读取失败）→ 明确提示，不当作成功
   vi.mocked(exportMemories).mockResolvedValue(null)
-  await click(buttonByText('导出 JSON'))
+  await click(buttonByText('导出备份'))
   expect(showToast).toHaveBeenCalledWith(
     expect.stringContaining('导出失败'),
     expect.any(Number),
@@ -1092,17 +1092,15 @@ it('批量操作失败不静默：成功与失败条数分开报', async () => {
   await act(async () => root.unmount())
 })
 
-it('刷新后选中集收敛：已不存在的条目不会留在计数里', async () => {
-  // ⚠️ 上一条「开关」用例会把全局开关翻到 false，而「刷新」按钮在记忆关闭时是禁用的 ——
-  // 这里显式打开，让本用例不依赖执行顺序
-  settingsState.setValue('memoryEnabled', true)
+it('重新读取后选中集收敛：已不存在的条目不会留在计数里', async () => {
   const { root } = await render()
 
   await click(itemChecks()[0])
   expect(batchText()).toContain('已选 1 条')
 
   vi.mocked(listMemories).mockResolvedValue([]) // 模拟「在别处被删掉 / 整理覆盖了」
-  await click(buttonByText('刷新'))
+  // 入口按钮每次都会重取（列表会被后台整理改动）：用它触发一次重新读取
+  await click(listButton())
   // 收敛后回到「什么都没选」，批量栏仍在但按钮全禁用
   expect(batchText()).toContain('已选 0 条')
   expect(batchButton('删除').disabled).toBe(true)

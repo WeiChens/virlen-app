@@ -1,19 +1,24 @@
 /**
- * knowledge-base-settings — 知识库管理页：RAG 开关 / 默认知识库、知识库创建 / 删除 / 列表；
- * 文档的上传 / 删除 / 编辑 / 预览与检索测试都在 `DocListModal` 内托管。
+ * knowledge-base-settings — 知识库（设置 → 知识库）：新建 / 删除知识库、把文档加进来、导出备份；
+ * 文档级的查看 / 编辑 / 在该库内试搜都在 `DocListModal` 内托管。
  *
- * 弹窗组件与导入 / 导出工具已抽到 `./knowledge-base/*`，本文件只留开关 + 列表 + 弹窗挂载。
+ * 三处口径，都是为了「不用先配好才能用」：
+ * - 知识库**固定启用**：它自己不占资源、不后台跑东西，文档只在你提问时才被查找，所以没有总开关；
+ * - **没有「默认知识库」**：查哪个库由当下的场景决定（导入会话时选库、在这个库里搜的就是这个库），
+ *   少一个「配错了会静默查错地方」的设置；
+ * - 文案说人话：不出现 RAG / 分块 / chunk / 向量这类实现词 —— 用户放进去的是**文档**，
+ *   AI 会「先在这里查一遍」。
+ *
+ * 还有一件事：**系统自建的库（默认知识库 / 记忆详情）不给删**。它们由功能自己创建与维护，
+ * 删掉只会让对应功能静默失效（记忆条目指向的详情库就没了）—— 所以卡片上不画删除按钮，
+ * 改成一句说明；后端也会拒（见 `rag::vector_store::delete_knowledge_base`）。
  */
-
 import { useEffect, useState, useCallback } from 'react'
 import { observer } from 'mobx-react-lite'
-import { settingsState } from '@/ui/store'
 import { t, tpl } from '@/ui/i18n'
 import { ragService } from '@/services/rag-service'
-import Select from '@/ui/components/shared/Select'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 import type { KnowledgeBase } from '@/domain/ports'
-import { rowKeyHandler } from '@/utils/a11y'
 import './knowledge-base-settings.scss'
 import { showToastMsg } from './knowledge-base/toast'
 import { pickUploadFiles, pickUploadFolder } from './knowledge-base/file-import'
@@ -22,7 +27,6 @@ import CreateKbModal from './knowledge-base/CreateKbModal'
 import DocListModal from './knowledge-base/DocListModal'
 
 function KnowledgeBaseSettings() {
-  const s = settingsState.value
   const [kbs, setKbs] = useState<KnowledgeBase[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -33,11 +37,6 @@ function KnowledgeBaseSettings() {
   const [docListKbId, setDocListKbId] = useState('')
   const [docListKbName, setDocListKbName] = useState('')
 
-  const kbSelectOptions = [
-    { value: '', label: t('未选择') },
-    ...kbs.map((kb) => ({ value: kb.id, label: kb.name })),
-  ]
-
   const loadKbs = useCallback(async () => {
     setLoading(true)
     try {
@@ -45,7 +44,7 @@ function KnowledgeBaseSettings() {
       setKbs(list)
     } catch (err: any) {
       showToastMsg(
-        tpl('加载知识库失败: $__error__', { error: err.message }),
+        tpl('读不到知识库列表：$__error__', { error: err.message }),
         'error',
       )
     }
@@ -56,15 +55,23 @@ function KnowledgeBaseSettings() {
     loadKbs()
   }, [loadKbs])
 
-  const openCreateModal = () => {
-    setShowCreateModal(true)
-  }
+  const totalDocs = kbs.reduce((n, kb) => n + (kb.document_count || 0), 0)
+  const totalChunks = kbs.reduce((n, kb) => n + (kb.chunk_count || 0), 0)
+
+  const openDocListModal = useCallback((kbId: string, kbName: string) => {
+    setDocListKbId(kbId)
+    setDocListKbName(kbName)
+    setShowDocListModal(true)
+  }, [])
 
   const handleDelete = async (kbId: string, name: string) => {
     const confirmed = await MessageBox.propt(
       t('删除知识库'),
-      tpl('确定要删除知识库「$__name__」吗？此操作不可撤销。', { name }),
-      { danger: true },
+      tpl(
+        '删除「$__name__」后，它里面的文档和已建立的内容都会一起删除，无法恢复。',
+        { name },
+      ),
+      { danger: true, confirmText: t('删除') },
     )
     if (!confirmed) return
     try {
@@ -73,136 +80,134 @@ function KnowledgeBaseSettings() {
       if (showDocListModal && docListKbId === kbId) setShowDocListModal(false)
       await loadKbs()
     } catch (err: any) {
-      showToastMsg(tpl('删除失败: $__error__', { error: err.message }), 'error')
+      showToastMsg(tpl('删除失败：$__error__', { error: err.message }), 'error')
     }
-  }
-
-  const openDocListModal = (kbId: string, kbName: string) => {
-    setDocListKbId(kbId)
-    setDocListKbName(kbName)
-    setShowDocListModal(true)
   }
 
   return (
     <div className="knowledge-base-settings">
-      {/* RAG 开关设置 */}
-      <div className="kb-section">
-        <h3>{t('知识库')}</h3>
-        <div className="kb-toggle-row">
+      <header className="kb-page-header">
+        <div className="kb-page-header-text">
+          <h2 className="section-title">{t('知识库')}</h2>
+          <p className="kb-page-desc">
+            {t(
+              '把常用的文档、笔记放进来，AI 回答时会先在这里查一遍。内容只保存在这台电脑上。',
+            )}
+          </p>
+        </div>
+        <button
+          className="kb-btn kb-btn-primary"
+          onClick={() => setShowCreateModal(true)}>
+          {t('新建知识库')}
+        </button>
+      </header>
+
+      {loading && kbs.length === 0 ? (
+        <div className="kb-skeleton" aria-busy="true" aria-label={t('加载中…')}>
+          <div className="kb-skeleton-card" />
+          <div className="kb-skeleton-card" />
+        </div>
+      ) : kbs.length === 0 ? (
+        <div className="kb-empty">
+          <div className="kb-empty-title">{t('还没有知识库')}</div>
+          <p className="kb-empty-desc">
+            {t(
+              '新建一个，把项目文档、规范或资料放进去 —— 之后问 AI 时，它会先翻这些内容再回答。',
+            )}
+          </p>
           <button
-            className={`kb-toggle ${s.ragEnabled ? 'active' : ''}`}
-            role="switch"
-            aria-checked={s.ragEnabled}
-            aria-label={t('知识库检索')}
-            onClick={() => {
-              const next = !settingsState.value.ragEnabled
-              settingsState.setValue('ragEnabled', next)
-              ragService.setConfig({ enabled: next })
-            }}
-            title={s.ragEnabled ? t('关闭 RAG') : t('开启 RAG')}>
-            <span className="kb-toggle-knob" />
+            className="kb-btn kb-btn-primary"
+            onClick={() => setShowCreateModal(true)}>
+            {t('新建知识库')}
           </button>
-          <span>{s.ragEnabled ? t('已启用') : t('已禁用')}</span>
         </div>
-
-        <div className="kb-default-kb-row">
-          <label className="kb-label">{t('默认知识库')}</label>
-          <Select
-            value={s.ragDefaultKnowledgeBaseId}
-            onChange={(v) => {
-              settingsState.setValue('ragDefaultKnowledgeBaseId', v)
-              ragService.setConfig({ defaultKnowledgeBaseId: v })
-            }}
-            options={kbSelectOptions}
-            placeholder={t('未选择')}
-            width={220}
-          />
-        </div>
-      </div>
-
-      {/* 知识库列表 */}
-      <div className="kb-section">
-        <div className="kb-header-row">
-          <div className="kb-header-title">
-            <h3 style={{ marginBottom: 0 }}>{t('知识库列表')}</h3>
-            <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-              ({kbs.length})
-            </span>
+      ) : (
+        <>
+          <div className="kb-list-summary">
+            {tpl('$__kb__ 个知识库 · 共 $__docs__ 份文档', {
+              kb: kbs.length,
+              docs: totalDocs,
+            })}
+            {totalChunks > 0 &&
+              ` · ${tpl('$__chunks__ 段内容可被查找', { chunks: totalChunks })}`}
           </div>
-          <div className="kb-header-actions">
-            <button
-              className="kb-btn kb-btn-primary kb-btn-sm"
-              onClick={openCreateModal}>
-              {t('创建知识库')}
-            </button>
-            <button
-              className="kb-btn kb-btn-sm"
-              onClick={loadKbs}
-              disabled={loading}>
-              {t('刷新')}
-            </button>
-          </div>
-        </div>
 
-        {loading ? (
-          <div className="kb-loading">{t('加载中...')}</div>
-        ) : kbs.length === 0 ? (
-          <div className="kb-empty">{t('暂无知识库，请先创建')}</div>
-        ) : (
           <div className="kb-list">
             {kbs.map((kb) => (
-              <div key={kb.id}>
-                <div className="kb-card">
-                  <div
-                    className="kb-card-info"
-                    role="button"
-                    tabIndex={0}
-                    aria-label={kb.name}
-                    onClick={() => openDocListModal(kb.id, kb.name)}
-                    onKeyDown={rowKeyHandler(() =>
-                      openDocListModal(kb.id, kb.name),
+              <article className="kb-card" key={kb.id}>
+                <button
+                  type="button"
+                  className="kb-card-main"
+                  onClick={() => openDocListModal(kb.id, kb.name)}
+                  title={t('查看和管理这个知识库里的文档')}>
+                  <span className="kb-card-name">
+                    {kb.name}
+                    {kb.builtin && (
+                      <span
+                        className="kb-card-badge"
+                        title={t('由 Virlen 自动创建并维护，不能删除')}>
+                        {t('自动创建')}
+                      </span>
                     )}
-                    style={{ cursor: 'pointer' }}>
-                    <div className="kb-card-name">{kb.name}</div>
-                    {kb.description && (
-                      <div className="kb-card-desc">{kb.description}</div>
-                    )}
-                    <div className="kb-card-meta">
-                      {kb.document_count} {t('个文档')} · {kb.chunk_count}{' '}
-                      {t('个片段')}
-                    </div>
-                  </div>
-                  <div className="kb-card-actions">
-                    <button
-                      className="kb-btn kb-btn-sm kb-btn-primary"
-                      onClick={() => pickUploadFiles(kb.id, loadKbs)}
-                      title={t('上传文档到该知识库（支持多选）')}>
-                      {t('上传文档')}
-                    </button>
-                    <button
-                      className="kb-btn kb-btn-sm"
-                      onClick={() => pickUploadFolder(kb.id, loadKbs)}
-                      title={t('上传文件夹，自动导入所有文本文件')}>
-                      {t('上传文件夹')}
-                    </button>
-                    <button
-                      className="kb-btn kb-btn-sm"
-                      onClick={() => exportKnowledgeBaseZip(kb.id, kb.name)}
-                      title={t('导出知识库所有文档为 ZIP')}>
-                      {t('导出')}
-                    </button>
+                  </span>
+                  {kb.description && (
+                    <span className="kb-card-desc">{kb.description}</span>
+                  )}
+                  <span className="kb-card-meta">
+                    <span>
+                      {tpl('$__docs__ 份文档 · $__chunks__ 段内容', {
+                        docs: kb.document_count || 0,
+                        chunks: kb.chunk_count || 0,
+                      })}
+                    </span>
+                    <span className="kb-card-open">
+                      {t('查看文档')} <span aria-hidden="true">›</span>
+                    </span>
+                  </span>
+                </button>
+                <div className="kb-card-actions">
+                  <button
+                    className="kb-btn kb-btn-sm kb-btn-primary"
+                    onClick={() => pickUploadFiles(kb.id, loadKbs)}
+                    title={t('从电脑里选文档加进来，可一次选多个')}>
+                    {t('添加文档')}
+                  </button>
+                  <button
+                    className="kb-btn kb-btn-sm"
+                    onClick={() => pickUploadFolder(kb.id, loadKbs)}
+                    title={t(
+                      '把整个文件夹加进来，里面的 Markdown / TXT 会自动读入',
+                    )}>
+                    {t('添加文件夹')}
+                  </button>
+                  <button
+                    className="kb-btn kb-btn-sm"
+                    onClick={() => exportKnowledgeBaseZip(kb.id, kb.name)}
+                    title={t('导出成压缩包，方便备份或换到别的电脑')}>
+                    {t('导出')}
+                  </button>
+                  {kb.builtin ? (
+                    // 系统自建库：删除按钮的位置留给一句说明 —— 否则用户会先找「为什么没有删除」
+                    // （悬停也给同一句原因，不必先去猜那个「自动创建」小标）
+                    <span
+                      className="kb-card-locked"
+                      title={t('由 Virlen 自动创建并维护，不能删除')}>
+                      {t('不能删除')}
+                    </span>
+                  ) : (
                     <button
                       className="kb-btn kb-btn-sm kb-btn-danger"
-                      onClick={() => handleDelete(kb.id, kb.name)}>
+                      onClick={() => handleDelete(kb.id, kb.name)}
+                      title={t('删除这个知识库和里面的全部文档')}>
                       {t('删除')}
                     </button>
-                  </div>
+                  )}
                 </div>
-              </div>
+              </article>
             ))}
           </div>
-        )}
-      </div>
+        </>
+      )}
 
       <CreateKbModal
         visible={showCreateModal}
@@ -210,7 +215,7 @@ function KnowledgeBaseSettings() {
         onCreated={loadKbs}
       />
 
-      {/* 文档列表弹窗（含预览 / 新建 / 编辑子弹窗、检索测试） */}
+      {/* 文档列表弹窗（含预览 / 新建 / 编辑子弹窗、在当前库内试搜） */}
       <DocListModal
         visible={showDocListModal}
         kbId={docListKbId}

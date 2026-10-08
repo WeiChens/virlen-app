@@ -60,22 +60,22 @@ export default function EditDocModal({
   /** 保存文档编辑（名称 + 内容文本） */
   const handleSave = async () => {
     if (!name.trim()) {
-      showToastMsg(t('文档名称不能为空'), 'error')
+      showToastMsg(t('文档名字不能为空'), 'error')
       return
     }
     setSaving(true)
     try {
       await ragService.editTextDocument(kbId, docId, name.trim(), content)
-      showToastMsg(tpl('文档已更新为「$__name__」', { name: name.trim() }), 'success')
+      showToastMsg(tpl('已保存「$__name__」', { name: name.trim() }), 'success')
       onClose()
       await onSaved?.()
     } catch (err: any) {
-      showToastMsg(tpl('编辑保存失败: $__error__', { error: err.message }), 'error')
+      showToastMsg(tpl('保存失败：$__error__', { error: err.message }), 'error')
     }
     setSaving(false)
   }
 
-  /** 重新上传文件，读取内容后填充到输入框，不直接保存 */
+  /** 用电脑上的一个文件代替内容 — 只填进输入框，还要点保存才生效 */
   const handleReupload = async () => {
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
@@ -111,7 +111,7 @@ export default function EditDocModal({
         // 所有编码都失败
         setName(fileName)
         showToastMsg(
-          t('无法读取文本内容（文件编码不受支持），文件名称已更新。请手动输入内容。'),
+          t('这个文件的编码读不出来，名字已经改了，内容请手动粘贴'),
           'info',
         )
       }
@@ -134,8 +134,8 @@ export default function EditDocModal({
           <button
             className="kb-btn kb-btn-sm"
             onClick={handleReupload}
-            title={t('选择文件，读取内容后覆盖到输入框中')}>
-            {t('重新上传文件')}
+            title={t('选一个文件，把里面的文字读进下面的输入框（还没保存）')}>
+            {t('用文件替换内容')}
           </button>
           <ModalFooterButtons
             cancelText={t('取消')}
@@ -154,19 +154,19 @@ export default function EditDocModal({
         ) : (
           <>
             <div className="kb-edit-field">
-              <label className="kb-edit-label">{t('文档名称')}</label>
+              <label className="kb-edit-label">{t('文档名字')}</label>
               <input
                 className="kb-edit-input"
-                placeholder={t('请输入文档名称')}
+                placeholder={t('给这份文档起个名字')}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
             </div>
             <div className="kb-edit-field">
-              <label className="kb-edit-label">{t('文档内容')}</label>
+              <label className="kb-edit-label">{t('内容')}</label>
               <textarea
                 className="kb-edit-textarea"
-                placeholder={t('请输入文档内容')}
+                placeholder={t('把内容粘贴或写在这里')}
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
                 rows={12}

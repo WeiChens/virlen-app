@@ -37,7 +37,7 @@ export default function PreviewDocModal({
         if (!cancelled) setContent(text)
       } catch (err: any) {
         if (!cancelled) {
-          setContent(tpl('加载文档内容失败: $__error__', { error: err.message }))
+          setContent(tpl('打不开这份文档：$__error__', { error: err.message }))
         }
       }
       if (!cancelled) setLoading(false)
@@ -52,13 +52,13 @@ export default function PreviewDocModal({
   return (
     <Modal
       visible={visible}
-      title={docName || t('文档预览')}
+      title={docName || t('文档内容')}
       onClose={onClose}
       width={700}
       height={500}>
       <div className="kb-preview-body">
         {loading ? (
-          <div className="kb-preview-loading">{t('加载中...')}</div>
+          <div className="kb-preview-loading">{t('加载中…')}</div>
         ) : (
           <pre className="kb-preview-content">{content}</pre>
         )}

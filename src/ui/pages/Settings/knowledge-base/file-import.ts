@@ -77,7 +77,7 @@ export async function uploadTextContent(
   encoding: string,
 ) {
   showToastMsg(
-    tpl('正在导入「$__fileName__」($__encoding__)...', { fileName, encoding }),
+    tpl('正在读入「$__fileName__」（$__encoding__）…', { fileName, encoding }),
     'info',
   )
   await ragService.writeText(kbId, fileName, content)
@@ -158,7 +158,7 @@ export async function uploadFiles(
           continue
         } catch (err: any) {
           showToastMsg(
-            tpl('「$__name__」导入失败: $__error__', {
+            tpl('「$__name__」没能加进来：$__error__', {
               name: docName,
               error: err?.message || err,
             }),
@@ -169,7 +169,7 @@ export async function uploadFiles(
         }
       } else {
         showToastMsg(
-          tpl('已跳过「$__name__」：无法识别的文件编码', { name: docName }),
+          tpl('跳过「$__name__」：这个文件的编码读不出来', { name: docName }),
           'error',
         )
         failCount++
@@ -188,7 +188,7 @@ export async function uploadFiles(
             continue
           } catch (err: any) {
             showToastMsg(
-              tpl('「$__name__」导入失败: $__error__', {
+              tpl('「$__name__」没能加进来：$__error__', {
                 name: docName,
                 error: err?.message || err,
               }),
@@ -200,9 +200,7 @@ export async function uploadFiles(
         }
       } else {
         showToastMsg(
-          tpl('已跳过「$__name__」：无法识别的文件编码（非 UTF-8/GBK 等常见编码）', {
-            name: docName,
-          }),
+          tpl('跳过「$__name__」：这个文件的编码读不出来', { name: docName }),
           'error',
         )
         failCount++
@@ -232,12 +230,12 @@ export async function uploadFiles(
           }
         }
         showToastMsg(
-          tpl('已跳过「$__name__」：无法识别的文件编码', { name: docName }),
+          tpl('跳过「$__name__」：这个文件的编码读不出来', { name: docName }),
           'error',
         )
       } else {
         showToastMsg(
-          tpl('「$__name__」导入失败: $__error__', { name: docName, error: errMsg }),
+          tpl('「$__name__」没能加进来：$__error__', { name: docName, error: errMsg }),
           'error',
         )
       }
@@ -250,12 +248,12 @@ export async function uploadFiles(
 
   if (failCount === 0) {
     showToastMsg(
-      tpl('成功导入 $__count__ 个文档', { count: successCount }),
+      tpl('已加入 $__count__ 份文档', { count: successCount }),
       'success',
     )
   } else {
     showToastMsg(
-      tpl('导入完成：$__success__ 成功，$__fail__ 失败', {
+      tpl('加入了 $__success__ 份文档，$__fail__ 份没成功', {
         success: successCount,
         fail: failCount,
       }),
@@ -275,7 +273,7 @@ export async function pickUploadFiles(
       multiple: true,
       filters: [
         {
-          name: t('文档'),
+          name: t('可读文档'),
           extensions: [...SUPPORTED_EXTENSIONS],
         },
       ],
@@ -286,7 +284,7 @@ export async function pickUploadFiles(
     if (paths.length === 0) return
     await uploadFiles(kbId, paths as string[], undefined, afterImport)
   } catch (err: any) {
-    showToastMsg(tpl('上传失败: $__error__', { error: err.message }), 'error')
+    showToastMsg(tpl('添加失败：$__error__', { error: err.message }), 'error')
   }
 }
 
@@ -304,20 +302,23 @@ export async function pickUploadFolder(
     if (!selected) return
 
     const dirPath = selected as string
-    showToastMsg(t('正在扫描文件夹中的文本文件...'), 'info')
+    showToastMsg(t('正在看这个文件夹里有哪些文档…'), 'info')
     const textFiles = await scanDirForTextFiles(dirPath)
 
     if (textFiles.length === 0) {
-      showToastMsg(t('文件夹中未找到支持的文本文件（.md / .txt）'), 'info')
+      showToastMsg(
+        t('这个文件夹里没有能读的文档（支持 .md / .markdown / .txt / .pdf）'),
+        'info',
+      )
       return
     }
 
     showToastMsg(
-      tpl('找到 $__count__ 个文本文件，正在导入...', { count: textFiles.length }),
+      tpl('找到 $__count__ 份文档，正在加入…', { count: textFiles.length }),
       'info',
     )
     await uploadFiles(kbId, textFiles, dirPath, afterImport)
   } catch (err: any) {
-    showToastMsg(tpl('文件夹导入失败: $__error__', { error: err.message }), 'error')
+    showToastMsg(tpl('文件夹没能加进来：$__error__', { error: err.message }), 'error')
   }
 }

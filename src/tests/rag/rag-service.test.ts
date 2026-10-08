@@ -2,12 +2,13 @@
  * rag-service 测试 — 知识库服务编排层
  *
  * 覆盖场景：
- * - 配置实时读取/写入 settingsState
- * - isReady() 逻辑
+ * - getConfig 实时读取 settingsState
  * - query/writeText 委托到 store
- * - queryDefault 回退
  * - queryWithOptions 多库聚合
  * - buildContextText 格式化
+ *
+ * ⚠️ 已无 `isReady` / `queryDefault` / `setConfig`：知识库常开（没有总开关）、检索目标一律由
+ * 调用方给出 `kbId`（没有全局默认库），所以这三条 API 也随之删掉了。
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 import { ragService } from '@/services/rag-service'
@@ -20,82 +21,37 @@ const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>
 beforeEach(() => {
   mockInvoke.mockReset()
   // 重置 settingsState 到默认值
-  settingsState.setValue('ragEnabled', false)
-  settingsState.setValue('ragDefaultKnowledgeBaseId', '')
   settingsState.setValue('ragDefaultTopK', 5)
 })
 
 describe('RagService', () => {
-  // ==================== getConfig / setConfig ====================
+  // ==================== getConfig ====================
 
   describe('getConfig', () => {
     it('未配置时返回默认值', () => {
       const cfg = ragService.getConfig()
-      expect(cfg.enabled).toBe(false)
-      expect(cfg.defaultKnowledgeBaseId).toBe('')
       expect(cfg.defaultTopK).toBe(5)
       expect(cfg.maxContextChars).toBe(8000)
     })
 
     it('配置后应实时反映 settingsState 变化', () => {
-      settingsState.setValue('ragEnabled', true)
-      settingsState.setValue('ragDefaultKnowledgeBaseId', 'kb-123')
       settingsState.setValue('ragDefaultTopK', 10)
 
       const cfg = ragService.getConfig()
-      expect(cfg.enabled).toBe(true)
-      expect(cfg.defaultKnowledgeBaseId).toBe('kb-123')
       expect(cfg.defaultTopK).toBe(10)
     })
 
     it('getConfig 不应缓存，每次实时读取', () => {
       // 第一次读取
       const cfg1 = ragService.getConfig()
-      expect(cfg1.enabled).toBe(false)
+      expect(cfg1.defaultTopK).toBe(5)
 
       // 修改 settingsState
-      settingsState.setValue('ragEnabled', true)
+      settingsState.setValue('ragDefaultTopK', 7)
 
       // 第二次读取应看到变化
       const cfg2 = ragService.getConfig()
-      expect(cfg2.enabled).toBe(true)
-    })
-  })
-
-  describe('setConfig', () => {
-    it('应写入 settingsState 持久化', () => {
-      ragService.setConfig({ enabled: true, defaultKnowledgeBaseId: 'kb-456', defaultTopK: 8 })
-
-      expect(settingsState.value.ragEnabled).toBe(true)
-      expect(settingsState.value.ragDefaultKnowledgeBaseId).toBe('kb-456')
-      expect(settingsState.value.ragDefaultTopK).toBe(8)
-    })
-
-    it('部分更新不应影响未设置的字段', () => {
-      settingsState.setValue('ragEnabled', true)
-      ragService.setConfig({ defaultTopK: 3 })
-
-      expect(settingsState.value.ragEnabled).toBe(true) // 不变
-      expect(settingsState.value.ragDefaultTopK).toBe(3) // 更新
-    })
-  })
-
-  // ==================== isReady ====================
-
-  describe('isReady', () => {
-    it('enabled=false 时返回 false', () => {
-      expect(ragService.isReady()).toBe(false)
-    })
-
-    it('enabled=true 但无 defaultKnowledgeBaseId 时返回 false', () => {
-      settingsState.setValue('ragEnabled', true)
-      expect(ragService.isReady()).toBe(false)
-    })
-
-    it('enabled=true 且有 defaultKnowledgeBaseId 时返回 true', () => {
-      settingsState.setValue('ragEnabled', true)
-      settingsState.setValue('ragDefaultKnowledgeBaseId', 'kb-1')
-      expect(ragService.isReady()).toBe(true)
+      expect(cfg2.defaultTopK).toBe(7)
     })
   })
 
@@ -120,22 +76,17 @@ describe('RagService', () => {
       expect(result).toEqual([])
     })
 
-    it('deleteKnowledgeBase 应清除对应的默认配置', async () => {
+    it('deleteKnowledgeBase 只删库，不再顺带改设置', async () => {
       mockInvoke.mockResolvedValue(undefined)
-      settingsState.setValue('ragDefaultKnowledgeBaseId', 'kb-to-delete')
+      settingsState.setValue('ragDefaultTopK', 7)
 
       await ragService.deleteKnowledgeBase('kb-to-delete')
 
-      expect(settingsState.value.ragDefaultKnowledgeBaseId).toBe('')
-    })
-
-    it('deleteKnowledgeBase 不应清除不相关的默认配置', async () => {
-      mockInvoke.mockResolvedValue(undefined)
-      settingsState.setValue('ragDefaultKnowledgeBaseId', 'kb-keep')
-
-      await ragService.deleteKnowledgeBase('kb-other')
-
-      expect(settingsState.value.ragDefaultKnowledgeBaseId).toBe('kb-keep')
+      // 没有「默认知识库」这个设置项可清 —— 删库就是删库
+      expect(settingsState.value.ragDefaultTopK).toBe(7)
+      expect(mockInvoke).toHaveBeenCalledWith('delete_knowledge_base', {
+        kbId: 'kb-to-delete',
+      })
     })
   })
 
@@ -225,17 +176,6 @@ describe('RagService', () => {
       settingsState.setValue('ragDefaultTopK', 10)
       const result = await ragService.query('kb-1', 'Rust')
       expect(result).toEqual(mockResult)
-    })
-
-    it('queryDefault 使用默认知识库', async () => {
-      settingsState.setValue('ragDefaultKnowledgeBaseId', 'kb-default')
-      const result = await ragService.queryDefault('Rust')
-      expect(result).toEqual(mockResult)
-    })
-
-    it('queryDefault 无默认知识库时返回 null', async () => {
-      const result = await ragService.queryDefault('Rust')
-      expect(result).toBeNull()
     })
   })
 

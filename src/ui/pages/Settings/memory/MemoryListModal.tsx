@@ -188,7 +188,7 @@ function MemoryListModal({
   async function handleExport() {
     const json = await exportMemories()
     if (!json) {
-      showToast(t('导出失败（读取记忆失败或不在桌面环境）'), 2500)
+      showToast(t('导出失败：读不到记忆数据'), 2500)
       return
     }
     let count = items.length
@@ -202,7 +202,7 @@ function MemoryListModal({
       const { save } = await import('@tauri-apps/plugin-dialog')
       const { writeTextFile } = await import('@tauri-apps/plugin-fs')
       const filePath = await save({
-        title: t('导出记忆为 JSON'),
+        title: t('导出记忆备份'),
         defaultPath: `virlen-memory-${new Date().toISOString().slice(0, 10)}.json`,
         filters: [
           { name: 'JSON', extensions: ['json'] },
@@ -263,7 +263,7 @@ function MemoryListModal({
     if (op === 'delete') {
       const confirmed = await MessageBox.propt(
         t('删除记忆'),
-        tpl('确定删除选中的 $__count__ 条记忆？如有详情正文会一并删除，此操作不可撤销。', {
+        tpl('删除选中的 $__count__ 条记忆？存进知识库的长内容也会一起删掉，无法恢复。', {
           count: targets.length,
         }),
         { confirmText: t('删除'), cancelText: t('取消'), danger: true },
@@ -353,7 +353,7 @@ function MemoryListModal({
     <>
       <Modal
         visible={visible}
-        title={t('记忆列表')}
+        title={t('全部记忆')}
         onClose={onClose}
         width={920}
         height={640}
@@ -426,7 +426,7 @@ function MemoryListModal({
             </span>
             <div className="memory-toolbar-actions">
               <button className="memory-action-btn" onClick={() => void handleExport()}>
-                {t('导出 JSON')}
+                {t('导出备份')}
               </button>
               <button className="memory-add-btn" onClick={() => openEdit(null)}>
                 {t('新增记忆')}
@@ -517,7 +517,7 @@ function MemoryListModal({
           </div>
 
           <p className="memory-list-hint">
-            {t('点击整行可编辑；升级 / 降级 / 停用 / 删除请先勾选，再用右侧的批量操作。')}
+            {t('点一行就能改内容；要停用或删除，先勾选，再用右边的批量操作。')}
           </p>
         </div>
 
@@ -570,7 +570,7 @@ function MemoryListModal({
               {loading && items.length === 0
                 ? t('加载中…')
                 : items.length === 0
-                  ? t('还没有任何记忆（打开新会话时可以让 AI 记，也可以点「新增记忆」手写）')
+                  ? t('还没有记忆 —— 你可以自己加一条，也可以在对话里直接告诉 AI 什么值得记住')
                   : t('没有匹配的记忆（试试清空搜索或筛选）')}
             </div>
           )}

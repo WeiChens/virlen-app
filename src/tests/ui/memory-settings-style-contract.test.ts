@@ -97,8 +97,9 @@ describe('memory 列表弹窗 —— 表格 / 筛选 / 分页的样式契约', (
     expect(listTsx).not.toContain('memory-item-actions')
     expect(listTsx).not.toContain('handleToggleLevel')
     expect(listTsx).not.toContain('handleDelete')
-    // 编辑入口改成了「点整行」
-    expect(listTsx).toContain('点击整行可编辑')
+    // 编辑入口改成了「点整行」（提示文案得把这一点告诉用户）
+    expect(listTsx).toContain('openEdit(item)')
+    expect(listTsx).toContain('点一行就能改内容')
   })
 
   it('表格紧凑：小字号 + 单行省略（一屏看更多的关键）', () => {

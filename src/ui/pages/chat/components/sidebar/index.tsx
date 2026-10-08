@@ -286,11 +286,8 @@ function ChatSidebar({
       try {
         const list = await ragService.listKnowledgeBases()
         setKbList(list)
-        // 如果有默认知识库，自动选中
-        const cfg = ragService.getConfig()
-        if (cfg.defaultKnowledgeBaseId && list.some(kb => kb.id === cfg.defaultKnowledgeBaseId)) {
-          setSelectedKbId(cfg.defaultKnowledgeBaseId)
-        }
+        // 只有一个知识库时直接选中：用户的意图没有歧义（多个时才需要他挑一个）
+        if (list.length === 1) setSelectedKbId(list[0].id)
       } catch (err: any) {
         showToast(
           tpl('获取知识库列表失败：$__error__', {

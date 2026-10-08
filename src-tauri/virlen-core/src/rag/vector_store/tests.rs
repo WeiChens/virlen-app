@@ -222,3 +222,83 @@ fn test_remove_document_updates_metadata() {
     assert_eq!(meta.document_count, 0, "after removing all docs, count should be 0");
     assert_eq!(meta.chunk_count, 0, "after removing all chunks, count should be 0");
 }
+
+// ===== 系统自建库（默认知识库 / 记忆详情）不允许删除 =====
+
+#[test]
+fn test_builtin_kb_is_marked_and_cannot_be_deleted() {
+    let mut mgr = create_test_manager();
+
+    let system_kb = mgr
+        .create_builtin_knowledge_base("默认知识库", "系统自建")
+        .unwrap();
+    assert!(system_kb.builtin, "系统自建库要带 builtin 标记");
+    assert!(
+        mgr.get_knowledge_base(&system_kb.id).unwrap().builtin,
+        "标记要能落盘回读"
+    );
+
+    // 删除被拒绝，而且库必须**原样还在**（不能删一半）
+    let err = mgr.delete_knowledge_base(&system_kb.id).unwrap_err();
+    assert!(
+        err.contains("不能删除"),
+        "错误信息要说清原因，实际：{}",
+        err
+    );
+    assert!(
+        mgr.list_knowledge_bases()
+            .unwrap()
+            .iter()
+            .any(|k| k.id == system_kb.id),
+        "被拒绝后库应当还在"
+    );
+
+    // 手建的库不受影响：标记为 false，照常能删
+    let my_kb = mgr.create_knowledge_base("我的资料", "").unwrap();
+    assert!(!my_kb.builtin, "用户手建的库不带系统标记");
+    mgr.delete_knowledge_base(&my_kb.id).unwrap();
+    assert!(!mgr.list_knowledge_bases()
+        .unwrap()
+        .iter()
+        .any(|k| k.id == my_kb.id));
+}
+
+#[test]
+fn test_mark_builtin_migrates_legacy_kb() {
+    let mut mgr = create_test_manager();
+
+    // 老数据：名字是系统库的名字，但没有 builtin 标记（那时还删得掉）
+    let legacy = mgr.create_knowledge_base("记忆详情", "老数据").unwrap();
+    assert!(!legacy.builtin);
+
+    assert!(
+        mgr.mark_knowledge_base_builtin(&legacy.id).unwrap(),
+        "第一次补标记应真的改动了数据"
+    );
+    assert!(mgr.get_knowledge_base(&legacy.id).unwrap().builtin);
+    assert!(
+        !mgr.mark_knowledge_base_builtin(&legacy.id).unwrap(),
+        "已标记 = 空操作"
+    );
+
+    let err = mgr.delete_knowledge_base(&legacy.id).unwrap_err();
+    assert!(err.contains("不能删除"), "实际：{}", err);
+}
+
+#[test]
+fn test_legacy_metadata_without_builtin_field_still_loads() {
+    let mgr = create_test_manager();
+    let kb = mgr.create_knowledge_base("老版本建的库", "升级前的数据").unwrap();
+
+    // 老版本的 `_metadata.json` 里没有 builtin 字段（模拟：写回前手动去掉）
+    let path = mgr.kb_meta_path(&kb.id);
+    let json = std::fs::read_to_string(&path).unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    value.as_object_mut().unwrap().remove("builtin");
+    std::fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+
+    // 关键：缺字段不能让老库解析失败（否则升级后整个库都读不出来）
+    let loaded = mgr.get_knowledge_base(&kb.id).unwrap();
+    assert_eq!(loaded.name, "老版本建的库");
+    assert!(!loaded.builtin, "缺字段 = false，需要靠归属模块按名字认领");
+}

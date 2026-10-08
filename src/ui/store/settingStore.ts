@@ -83,13 +83,16 @@ export interface SettingsStore {
   pinnedSessionGroups: Record<SessionGroupType, string[]>
   /** 是否对上传的图片自动执行 vision_analyze 提取结构化数据 */
   imageVisionAnalyzeOptimize: boolean
-  /** RAG 知识库配置 */
-  ragEnabled: boolean
-  /** 默认知识库 ID */
-  ragDefaultKnowledgeBaseId: string
-  /** 默认检索数量 */
+  /** 知识库默认检索数量（检索目标不在这里：一律由调用方给出具体知识库） */
   ragDefaultTopK: number
-  /** 长期记忆开关（默认**开**）。真源在 Rust 侧 `app_settings`（同名 `MEMORY_ENABLED_KEY`）；关掉后建会话不再注入 `# Memory` 段。 */
+  /**
+   * 长期记忆开关 —— **固定启用**（界面上已无开关，不留「关掉记忆」这个让人误以为
+   * 记忆会消失的选项）。
+   *
+   * 为何还留着这个键：Rust 侧 `agent::memory::prompt::MEMORY_ENABLED_KEY` 按同名键读取，
+   * 老版本可能往表里写过 `false` —— 水合时会被纠正为 `true`（见 `hydrateSettings`），
+   * 否则后台读到的仍是「关」，记忆会静默失效。
+   */
   memoryEnabled: boolean
   /** 普通记忆注入条数（默认 20，上限 `MEMORY_NORMAL_TOP_K_MAX`）；永久记忆不受它影响。 */
   memoryNormalTopK: number
@@ -152,8 +155,6 @@ const defaultSettings: SettingsStore = {
   sessionGroupType: 'workspace',
   pinnedSessionGroups: { agent: [], workspace: [] },
   imageVisionAnalyzeOptimize: true,
-  ragEnabled: false,
-  ragDefaultKnowledgeBaseId: '',
   ragDefaultTopK: 5,
   memoryEnabled: true,
   memoryNormalTopK: 20,
@@ -409,6 +410,11 @@ export async function hydrateSettings(): Promise<void> {
       })
     } else {
       const known = pickKnownSettings(stored, SETTINGS_KNOWN_KEYS)
+      // 记忆固定启用：老版本可能往表里写过 `memoryEnabled: false`，这里纠正为 true 并**落库**
+      // —— Rust 侧按同名键判定，只改内存不改表等于下次启动又被关回去。
+      const fixups: Record<string, unknown> = {}
+      if (known.memoryEnabled === false) fixups.memoryEnabled = true
+      if (Object.keys(fixups).length > 0) Object.assign(known, fixups)
       hydrating = true
       try {
         settingsState.set(known as Partial<SettingsStore>)
@@ -416,6 +422,11 @@ export async function hydrateSettings(): Promise<void> {
         hydrating = false
       }
       authorityReady = true
+      if (Object.keys(fixups).length > 0) {
+        settingsRepo
+          .save(fixups)
+          .catch((e) => console.warn('[settings] 纠正记忆开关失败:', e))
+      }
     }
   } catch (e) {
     console.warn('[settings] 读取 Rust 侧 app_settings 失败，继续使用本地设置:', e)

@@ -3,13 +3,18 @@
 //! 设计要点（沿用 `docs/memory-plan.md` §4.4 / §4.6）：
 //! - 库**自动创建**（名 [`MEMORY_KB_NAME`]），用户不需要先手工建库；`kb_id` 缓存在保留设置键
 //!   [`MEMORY_KB_SETTING_KEY`]（`__` 前缀 = 保留键，前端 `pickKnownSettings` 会原样带过，不会被当未知键丢掉）。
-//! - **缓存失效要能自愈**：用户可能在知识库页里把它删了 —— 此时重新创建（先按名字认领同名库，避免残留数据变成孤儿）。
+//! - 库以**系统自建**（`builtin`）身份创建：知识库页不显示删除入口，后端也会拒绝删除 ——
+//!   删掉它，所有记忆条目就都指向一个不存在的库。老数据（升级前建的库）没有这个标记，
+//!   这里按名字认领时顺带补上（[`mark_builtin_if_needed`]）。
+//! - **缓存失效要能自愈**：换机 / 恢复备份 / 手动改数据目录都可能让缓存的 `kb_id` 失效 ——
+//!   此时重新创建（先按名字认领同名库，避免残留数据变成孤儿）。
 //! - **RAG 不可用不牵连记忆条目**：详情写不进去时记忆照写，只是没有 link（工具返回里会说明）。
 //!
 //! ⚠️ 本模块的 `RagService` 调用是**阻塞 I/O**（文件 + 向量索引），因此一律经 `spawn_blocking`
 //! 包装后再 await —— 否则会卡住 tokio worker。
 
 use crate::rag::rag_service::RagService;
+use crate::rag::vector_store::KnowledgeBaseMeta;
 use crate::session_db::SettingsRepo;
 use serde_json::{Map, Value};
 
@@ -36,8 +41,10 @@ pub fn cached_kb_id(settings: &Map<String, Value>) -> Option<String> {
 ///
 /// 三种情形：
 /// 1. 缓存命中且库还在 → 直接用；
-/// 2. 缓存失效（用户删了库）或未缓存 → 先按名字找同名库（复用，别把已有详情变成孤儿），找到就补缓存；
+/// 2. 缓存失效或未缓存 → 先按名字找同名库（复用，别把已有详情变成孤儿），找到就补缓存；
 /// 3. 都没有 → 建库并缓存。
+///
+/// 前两种情形都顺带补一次「系统自建」标记（老数据迁移，见 [`mark_builtin_if_needed`]）。
 pub async fn ensure_memory_kb(
     settings: &dyn SettingsRepo,
     rag: &'static RagService,
@@ -53,24 +60,43 @@ pub async fn ensure_memory_kb(
         .map_err(|e| format!("Task join error: {}", e))?
         .map_err(|e| format!("列出知识库失败: {}", e))?;
 
-    if let Some(id) = cached.as_deref() {
-        if kbs.iter().any(|k| k.id == id) {
-            return Ok(id.to_string());
-        }
+    if let Some(found) = cached
+        .as_deref()
+        .and_then(|id| kbs.iter().find(|k| k.id == id))
+    {
+        mark_builtin_if_needed(rag, found).await;
+        return Ok(found.id.clone());
     }
     if let Some(found) = kbs.iter().find(|k| k.name == MEMORY_KB_NAME) {
+        mark_builtin_if_needed(rag, found).await;
         cache_kb_id(settings, &found.id).await;
         return Ok(found.id.clone());
     }
 
     let kb = tokio::task::spawn_blocking(move || {
-        rag.create_knowledge_base(MEMORY_KB_NAME, MEMORY_KB_DESCRIPTION)
+        rag.create_builtin_knowledge_base(MEMORY_KB_NAME, MEMORY_KB_DESCRIPTION)
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
     .map_err(|e| format!("创建记忆详情知识库失败: {}", e))?;
     cache_kb_id(settings, &kb.id).await;
     Ok(kb.id)
+}
+
+/// 老数据迁移：升级前建的记忆详情库没有 `builtin` 标记（那时在知识库页还删得掉）→ 补上，
+/// 否则用户升级后依然能把这个库删掉，而所有记忆条目都指向它。
+///
+/// 失败**不算错误**：下次进这里还会再试一遍（知识库本身照常用）。
+async fn mark_builtin_if_needed(rag: &'static RagService, kb: &KnowledgeBaseMeta) {
+    if kb.builtin {
+        return;
+    }
+    let kb_id = kb.id.clone();
+    match tokio::task::spawn_blocking(move || rag.mark_knowledge_base_builtin(&kb_id)).await {
+        Ok(Ok(true)) => eprintln!("[memory] 已把「{}」补记为系统自建知识库（老数据迁移）", MEMORY_KB_NAME),
+        Ok(_) => {}
+        Err(e) => eprintln!("[memory] 补记记忆详情库的系统标记失败（不影响功能）: {}", e),
+    }
 }
 
 /// 补写 `kb_id` 缓存 —— 失败**不算错误**（下次照样能按名字认领，功能不受影响）

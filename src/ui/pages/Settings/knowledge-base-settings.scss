@@ -1,89 +1,47 @@
 .knowledge-base-settings {
-  padding: 20px;
-  max-width: 800px;
+  padding: 24px;
+  max-width: 880px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 
-  h3 {
-    margin: 0 0 16px;
-    font-size: var(--font-size-xl);
-    font-weight: 600;
-  }
-
-  .kb-section {
-    margin-bottom: 28px;
-    padding-bottom: 24px;
+  // ==================== 页头：标题 + 一句「这是干什么的」 ====================
+  //
+  // 设置页里不再有总开关与默认库：这个页面只剩「你的库」与「往里放东西」两件事。
+  .kb-page-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding-bottom: 12px;
     border-bottom: 1px solid var(--border-color, #e5e5e5);
 
-    &:last-child {
-      border-bottom: none;
-    }
-  }
-
-  .kb-header-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 12px;
-
-    .kb-header-title {
+    .kb-page-header-text {
       display: flex;
-      align-items: center;
-      gap: 8px;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
     }
 
-    .kb-header-actions {
-      display: flex;
-      gap: 8px;
-    }
-  }
-
-  .kb-toggle-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 16px;
-  }
-
-  .kb-toggle {
-    position: relative;
-    width: 44px;
-    height: 24px;
-    border: none;
-    border-radius: 12px;
-    cursor: pointer;
-    transition: background-color 0.2s;
-    /* 原用 --border-color：把内容色当控件底色，且与另两种开关不一致 */
-    background-color: var(--toggle-off-bg, #ccc);
-
-    &.active {
-      background-color: var(--accent-color);
+    .section-title {
+      font-size: var(--font-size-xl);
+      font-weight: 600;
+      margin: 0;
+      color: var(--text-primary, #1a1a1a);
     }
 
-    .kb-toggle-knob {
-      position: absolute;
-      top: 2px;
-      left: 2px;
-      width: 20px;
-      height: 20px;
-      border-radius: 50%;
-      background: white;
-      transition: transform 0.2s;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-    }
-
-    &.active .kb-toggle-knob {
-      transform: translateX(20px);
+    .kb-page-desc {
+      margin: 0;
+      font-size: var(--font-size-sm);
+      line-height: 1.6;
+      color: var(--text-secondary, #888);
     }
   }
 
-  .kb-default-kb-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .kb-label {
-    font-size: var(--font-size-md);
-    white-space: nowrap;
+  // 列表上方的总量行：先给「一共多少」，再看下面的卡片
+  .kb-list-summary {
+    font-size: var(--font-size-xs);
+    color: var(--text-secondary, #888);
   }
 
   .kb-btn {
@@ -134,6 +92,10 @@
     }
   }
 
+  // ==================== 知识库卡片 ====================
+  //
+  // 一行一个库（而非等宽卡片网格）：库通常只有几个，但名字 / 描述 / 计数 / 动作要一眼扫完，
+  // 一行式（左信息、右动作）更能容纳长名字与中文描述。
   .kb-list {
     display: flex;
     flex-direction: column;
@@ -141,51 +103,107 @@
 
     .kb-card {
       display: flex;
-      flex-direction: column;
-      // align-items: center;
-      gap: 6px;
-      justify-content: space-between;
-      padding: 12px 16px;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px 10px 14px;
       border: 1px solid var(--border-color, #e5e5e5);
-      border-radius: 8px;
+      border-radius: 10px;
       background: var(--card-bg, #fafafa);
-      transition: border-color 0.15s;
+      transition:
+        border-color 0.15s,
+        background-color 0.15s;
 
       &:hover {
         border-color: var(--accent-color);
       }
 
-      .kb-card-info {
+      // 主体区是**真按钮**（不是 div + role=button）：Tab 能到达、Enter 能触发
+      .kb-card-main {
         flex: 1;
         min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        padding: 2px 0;
+        border: none;
+        background: transparent;
+        text-align: left;
+        font-family: inherit;
+        cursor: pointer;
 
-        .kb-card-name {
-          font-weight: 600;
-          font-size: var(--font-size-base);
-          margin-bottom: 4px;
+        &:focus-visible {
+          outline: 2px solid var(--primary, #4f46e5);
+          outline-offset: 3px;
+          border-radius: 4px;
         }
+      }
 
-        .kb-card-desc {
-          font-size: var(--font-size-sm);
-          color: var(--text-secondary, #888);
-          margin-bottom: 4px;
+      .kb-card-name {
+        font-weight: 600;
+        font-size: var(--font-size-base);
+        color: var(--text-primary, #1a1a1a);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        transition: color 0.15s;
+      }
+
+      &:hover .kb-card-name {
+        color: var(--accent-color);
+      }
+
+      // 「自动创建」小标：系统库（默认知识库 / 记忆详情）和手建的库要在列表里一眼分得开 ——
+      // 它同时解释了「为什么这一行没有删除按钮」
+      .kb-card-badge {
+        display: inline-block;
+        margin-left: 6px;
+        padding: 1px 5px;
+        border-radius: 4px;
+        background: var(--hover-bg, #f0f0f0);
+        color: var(--text-secondary, #888);
+        font-size: var(--font-size-xs);
+        font-weight: 400;
+        vertical-align: middle;
+        cursor: default;
+      }
+
+      .kb-card-desc {
+        font-size: var(--font-size-sm);
+        color: var(--text-secondary, #888);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .kb-card-meta {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: var(--font-size-xs);
+        color: var(--text-tertiary, var(--text-secondary, #999));
+
+        // 「查看文档 ›」贴右：一眼看出点这一块会进哪里
+        .kb-card-open {
+          margin-left: auto;
+          color: var(--accent-color);
           white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-
-        .kb-card-meta {
-          font-size: var(--font-size-xs);
-          color: var(--text-secondary, #aaa);
         }
       }
 
       .kb-card-actions {
         display: flex;
+        align-items: center;
         gap: 6px;
         flex-shrink: 0;
-        margin-right: 12px;
-        margin-left: auto;
+
+        // 系统自建库：删除按钮的位置留给一句说明
+        //（按钮直接拿掉而不置灰：置灰的删除按钮只会诱发点击，而它永远不会生效）
+        .kb-card-locked {
+          padding: 4px 2px;
+          font-size: var(--font-size-xs);
+          color: var(--text-tertiary, var(--text-secondary, #999));
+          white-space: nowrap;
+        }
       }
     }
   }
@@ -195,7 +213,7 @@
     padding: 8px 16px 12px;
   }
 
-  /* 检索测试区域 */
+  /* 试搜区域 */
   .kb-search-section {
     margin-top: 12px;
 
@@ -203,7 +221,15 @@
       font-size: var(--font-size-sm);
       font-weight: 600;
       display: block;
-      margin-bottom: 6px;
+      margin-bottom: 4px;
+    }
+
+    // 一句「怎么用」：只写「在这里搜一下」而不说清输入什么，用户会不知道该搜什么
+    .kb-search-hint {
+      margin: 0 0 8px;
+      font-size: var(--font-size-xs);
+      line-height: 1.6;
+      color: var(--text-secondary, #888);
     }
   }
 
@@ -425,17 +451,57 @@
     }
   }
 
+  // 空状态：说清「这里是什么、下一步做什么」，并就地给一个入口（而不是一句「暂无知识库」）
   .kb-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 48px 20px;
+    border: 1px dashed var(--border-color, #e5e5e5);
+    border-radius: 10px;
     text-align: center;
-    padding: 40px 20px;
-    color: var(--text-secondary);
-    font-size: var(--font-size-md);
+
+    .kb-empty-title {
+      font-size: var(--font-size-base);
+      font-weight: 600;
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    .kb-empty-desc {
+      margin: 0 0 6px;
+      max-width: 420px;
+      font-size: var(--font-size-sm);
+      line-height: 1.6;
+      color: var(--text-secondary, #888);
+    }
   }
 
   .kb-loading {
     text-align: center;
     padding: 20px;
     color: var(--text-secondary, #999);
+  }
+
+  // 加载骨架：比一行「加载中…」更能预告「这里会出现几张卡片」，也不会让页面高度跳一下
+  .kb-skeleton {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+
+    .kb-skeleton-card {
+      height: 74px;
+      border: 1px solid var(--border-color, #e5e5e5);
+      border-radius: 10px;
+      background: linear-gradient(
+        90deg,
+        var(--hover-bg, #f5f5f5) 25%,
+        var(--bg-tertiary, #ececec) 37%,
+        var(--hover-bg, #f5f5f5) 63%
+      );
+      background-size: 400% 100%;
+      animation: kb-skeleton-shimmer 1.4s ease infinite;
+    }
   }
 
   /* 文档列表弹窗 */
@@ -649,5 +715,22 @@
     justify-content: flex-end;
     width: 100%;
     gap: 8px;
+  }
+}
+
+// 骨架的流动动画（写在外层：keyframes 不能嵌套在选择器里）
+@keyframes kb-skeleton-shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+// 动效敏感用户：骨架块保留形状，只是不再流动
+@media (prefers-reduced-motion: reduce) {
+  .knowledge-base-settings .kb-skeleton .kb-skeleton-card {
+    animation: none;
   }
 }

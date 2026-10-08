@@ -12,6 +12,15 @@ use std::sync::RwLock;
 /// 最大单个文档大小（50MB），超过此大小则拒绝处理，防止嵌入过久导致超时
 const MAX_DOC_SIZE_BYTES: u64 = 50 * 1024 * 1024;
 
+/// 自动创建的默认知识库名
+///
+/// 它同时是**老数据迁移的锚点**：升级前的默认知识库没有 `builtin` 标记，升级后按这个名字
+/// 认领并补上标记（见 `init_default_knowledge_base`）。
+pub const DEFAULT_KB_NAME: &str = "默认知识库";
+
+/// 默认知识库的说明 —— 用户在知识库列表里能看出它不是手建的
+pub const DEFAULT_KB_DESCRIPTION: &str = "由 Virlen 自动创建：放常用的文档和资料，问 AI 时会先在这里查一遍。";
+
 /// RAG 服务
 pub struct RagService {
     store_manager: RwLock<VectorStoreManager>,
@@ -38,6 +47,24 @@ impl RagService {
     ) -> Result<KnowledgeBaseMeta, String> {
         let mgr = self.store_manager.write().map_err(|e| format!("获取写锁失败: {}", e))?;
         mgr.create_knowledge_base(name, description)
+    }
+
+    /// 创建**系统自建**知识库（默认知识库 / 记忆详情）
+    ///
+    /// 与 `create_knowledge_base` 的区别只有一个：带 `builtin` 标记，用户删不掉。
+    pub fn create_builtin_knowledge_base(
+        &self,
+        name: &str,
+        description: &str,
+    ) -> Result<KnowledgeBaseMeta, String> {
+        let mgr = self.store_manager.write().map_err(|e| format!("获取写锁失败: {}", e))?;
+        mgr.create_builtin_knowledge_base(name, description)
+    }
+
+    /// 把已有知识库补记为「系统自建」（老数据迁移用；返回这次是否真的改了）
+    pub fn mark_knowledge_base_builtin(&self, kb_id: &str) -> Result<bool, String> {
+        let mgr = self.store_manager.read().map_err(|e| format!("获取读锁失败: {}", e))?;
+        mgr.mark_knowledge_base_builtin(kb_id)
     }
 
     /// 列出所有知识库（读操作，可并发）
@@ -170,14 +197,31 @@ impl RagService {
     /// 初始化知识库 — 如果没有任何知识库，自动创建一个默认知识库
     ///
     /// 返回默认知识库的 ID（已存在时返回第一个知识库的 ID）。
+    ///
+    /// 顺带做一次**老数据迁移**：升级前的默认知识库没有「系统自建」标记（那时还删得掉），
+    /// 这里按名字认领并补上 —— 否则老用户升上来，默认知识库依然删得掉。
     pub fn init_default_knowledge_base(&self) -> Result<String, String> {
         let kbs = self.list_knowledge_bases()?;
         if kbs.is_empty() {
-            let kb = self.create_knowledge_base("默认知识库", "自动创建的默认知识库，用于存储常用文档")?;
-            Ok(kb.id)
-        } else {
-            Ok(kbs[0].id.clone())
+            let kb = self.create_builtin_knowledge_base(DEFAULT_KB_NAME, DEFAULT_KB_DESCRIPTION)?;
+            return Ok(kb.id);
         }
+
+        if let Some(default_kb) = kbs.iter().find(|k| k.name == DEFAULT_KB_NAME) {
+            if !default_kb.builtin {
+                // 迁移失败不是致命错误（库照样能用，只是这次没加上标记）：不打断启动流程
+                match self.mark_knowledge_base_builtin(&default_kb.id) {
+                    Ok(true) => eprintln!(
+                        "[rag] 已把「{}」补记为系统自建知识库（老数据迁移）",
+                        DEFAULT_KB_NAME
+                    ),
+                    Ok(false) => {}
+                    Err(e) => eprintln!("[rag] 补记系统自建标记失败（不影响使用）: {}", e),
+                }
+            }
+        }
+
+        Ok(kbs[0].id.clone())
     }
 
     /// 列出知识库中的文档（读操作，可并发）
@@ -492,5 +536,54 @@ mod tests {
         assert_eq!(docs.len(), 2);
 
         service.delete_knowledge_base(&kb.id).unwrap();
+    }
+
+    // ===== 系统自建库（默认知识库 / 记忆详情）不允许删除 =====
+
+    #[test]
+    fn test_default_kb_is_builtin_and_undeletable() {
+        let service = create_test_service();
+
+        let kb_id = service.init_default_knowledge_base().unwrap();
+        let kb = service.get_knowledge_base(&kb_id).unwrap();
+        assert_eq!(kb.name, DEFAULT_KB_NAME);
+        assert!(kb.builtin, "默认知识库要带上系统标记");
+
+        // 再调一次不会重复建库（幂等）
+        let before = service.list_knowledge_bases().unwrap().len();
+        service.init_default_knowledge_base().unwrap();
+        assert_eq!(service.list_knowledge_bases().unwrap().len(), before);
+
+        // 系统自建库删不掉，且库必须还在
+        let err = service.delete_knowledge_base(&kb_id).unwrap_err();
+        assert!(err.contains("不能删除"), "实际：{}", err);
+        assert!(service
+            .list_knowledge_bases()
+            .unwrap()
+            .iter()
+            .any(|k| k.id == kb_id));
+
+        // 用户手建的库不受影响，照常能删
+        let mine = service.create_knowledge_base("我的资料", "").unwrap();
+        assert!(!mine.builtin);
+        service.delete_knowledge_base(&mine.id).unwrap();
+    }
+
+    #[test]
+    fn test_init_migrates_legacy_default_kb() {
+        let service = create_test_service();
+
+        // 老版本的默认知识库：名字对得上，但没有 builtin 标记
+        let legacy = service.create_knowledge_base(DEFAULT_KB_NAME, "老数据").unwrap();
+        assert!(!legacy.builtin);
+
+        service.init_default_knowledge_base().unwrap();
+
+        assert!(
+            service.get_knowledge_base(&legacy.id).unwrap().builtin,
+            "升级后要按名字认领并补上系统标记"
+        );
+        let err = service.delete_knowledge_base(&legacy.id).unwrap_err();
+        assert!(err.contains("不能删除"), "实际：{}", err);
     }
 }

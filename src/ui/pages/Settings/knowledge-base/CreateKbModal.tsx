@@ -32,19 +32,22 @@ export default function CreateKbModal({ visible, onClose, onCreated }: Props) {
   /** 创建知识库 */
   const handleCreate = async () => {
     if (!name.trim()) {
-      showToastMsg(t('请输入知识库名称'), 'error')
+      showToastMsg(t('先给知识库起个名字'), 'error')
       return
     }
     setCreating(true)
     try {
       await ragService.createKnowledgeBase(name.trim(), desc.trim())
-      showToastMsg(t('知识库创建成功'), 'success')
+      showToastMsg(
+        tpl('已新建知识库「$__name__」，接下来把文档加进去', { name: name.trim() }),
+        'success',
+      )
       onClose()
       setName('')
       setDesc('')
       await onCreated?.()
     } catch (err: any) {
-      showToastMsg(tpl('创建失败: $__error__', { error: err.message }), 'error')
+      showToastMsg(tpl('创建失败：$__error__', { error: err.message }), 'error')
     }
     setCreating(false)
   }
@@ -52,13 +55,13 @@ export default function CreateKbModal({ visible, onClose, onCreated }: Props) {
   return (
     <Modal
       visible={visible}
-      title={t('创建知识库')}
+      title={t('新建知识库')}
       onClose={onClose}
       width={460}
       footer={
         <ModalFooterButtons
           cancelText={t('取消')}
-          confirmText={creating ? t('创建中...') : t('创建')}
+          confirmText={creating ? t('创建中…') : t('创建')}
           onCancel={() => {
             if (!creating) onClose()
           }}
@@ -68,10 +71,10 @@ export default function CreateKbModal({ visible, onClose, onCreated }: Props) {
       }>
       <div className="kb-create-modal-body">
         <div className="kb-create-field">
-          <label className="kb-create-label">{t('知识库名称')} *</label>
+          <label className="kb-create-label">{t('名称')} *</label>
           <input
             className="kb-create-input"
-            placeholder={t('请输入知识库名称')}
+            placeholder={t('例如：项目文档')}
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) =>
@@ -81,10 +84,10 @@ export default function CreateKbModal({ visible, onClose, onCreated }: Props) {
           />
         </div>
         <div className="kb-create-field">
-          <label className="kb-create-label">{t('描述（可选）')}</label>
+          <label className="kb-create-label">{t('一句话说明（可选）')}</label>
           <textarea
             className="kb-create-textarea"
-            placeholder={t('请输入知识库描述')}
+            placeholder={t('例如：这个项目的架构、规范和常见问题')}
             value={desc}
             onChange={(e) => setDesc(e.target.value)}
             rows={3}

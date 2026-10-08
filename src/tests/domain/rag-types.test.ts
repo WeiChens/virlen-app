@@ -4,8 +4,8 @@
  * 覆盖场景：
  * - RAGContext 类型结构
  * - RAGQueryOptions 类型结构
- * - RAGConfig 默认值的正确性
- * - defaultRAGConfig 字段值
+ * - RAGConfig 字段与 defaultRAGConfig 默认值（**不含** `enabled` / `defaultKnowledgeBaseId`：
+ *   知识库常开，检索目标由调用方给 `kbId`）
  * - embeddingModel 可选配置
  */
 import { describe, it, expect } from 'vitest'
@@ -91,12 +91,9 @@ describe('RAGQueryOptions 类型结构', () => {
 })
 
 describe('defaultRAGConfig', () => {
-  it('RAG 功能默认应禁用', () => {
-    expect(defaultRAGConfig.enabled).toBe(false)
-  })
-
-  it('默认知识库 ID 应为空字符串', () => {
-    expect(defaultRAGConfig.defaultKnowledgeBaseId).toBe('')
+  it('不再有「开关」与「默认知识库」两个字段', () => {
+    expect('enabled' in defaultRAGConfig).toBe(false)
+    expect('defaultKnowledgeBaseId' in defaultRAGConfig).toBe(false)
   })
 
   it('默认 topK 应为 5', () => {
@@ -113,8 +110,6 @@ describe('defaultRAGConfig', () => {
 
   it('应能覆盖默认配置创建自定义配置', () => {
     const customConfig: RAGConfig = {
-      enabled: true,
-      defaultKnowledgeBaseId: 'kb-custom',
       defaultTopK: 10,
       maxContextChars: 16000,
       embeddingModel: {
@@ -124,7 +119,6 @@ describe('defaultRAGConfig', () => {
       },
     }
 
-    expect(customConfig.enabled).toBe(true)
     expect(customConfig.defaultTopK).toBe(10)
     expect(customConfig.embeddingModel!.dimensions).toBe(1536)
   })

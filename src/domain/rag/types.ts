@@ -25,12 +25,14 @@ export interface RAGQueryOptions {
   minScore?: number
 }
 
-/** RAG 配置 */
+/**
+ * RAG 配置 —— 只留「怎么取」的参数（知识库固定启用、检索目标由调用方显式给 kbId）。
+ *
+ * 为什么没有 `enabled` / `defaultKnowledgeBaseId`：知识库已经是常开能力，检索目标由
+ * 「用户当前在哪个知识库」决定（会话导入选库、文档页测试检索都在所在知识库内），
+ * 不再有「全局默认库」这一层需要用户配置。
+ */
 export interface RAGConfig {
-  /** 是否启用 RAG 自动检索 */
-  enabled: boolean
-  /** 默认检索的知识库 ID */
-  defaultKnowledgeBaseId: string
   /** 默认检索数量 */
   defaultTopK: number
   /** 注入上下文的最大字符数 */
@@ -45,8 +47,6 @@ export interface RAGConfig {
 
 /** 默认 RAG 配置 */
 export const defaultRAGConfig: RAGConfig = {
-  enabled: false,
-  defaultKnowledgeBaseId: '',
   defaultTopK: 5,
   maxContextChars: 8000,
 }

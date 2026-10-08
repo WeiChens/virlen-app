@@ -1,10 +1,11 @@
 /**
- * 文档列表弹窗：自持文档列表 / 搜索 / 分页 / 检索测试的全部 state，并托管三个子弹窗
+ * 文档列表弹窗：自持文档列表 / 搜索 / 分页 / 试搜的全部 state，并托管三个子弹窗
  *（预览 / 新建 / 编辑）；知识库维度的刷新通过 `onChanged` 回调父级。
+ *
+ * 文案口径：说「文档 / 内容 / 搜一下」，不说「片段 / chunk / 向量检索」。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
-import { settingsState } from '@/ui/store'
 import { t, tpl } from '@/ui/i18n'
 import { ragService } from '@/services/rag-service'
 import Modal from '@/ui/components/shared/Modal'
@@ -35,8 +36,6 @@ function DocListModal({
   onClose,
   onChanged,
 }: Props) {
-  const s = settingsState.value
-
   const [docs, setDocs] = useState<KnowledgeBaseDocument[]>([])
   const [loading, setLoading] = useState(false)
   const [page, setPage] = useState(1)
@@ -131,7 +130,7 @@ function DocListModal({
         setDocSearchResultIds(matchedIds)
         setPage(1)
       } catch (err: any) {
-        showToastMsg(tpl('搜索失败: $__error__', { error: err.message }), 'error')
+        showToastMsg(tpl('搜索失败：$__error__', { error: err.message }), 'error')
       }
       setDocSearching(false)
       docSearchTimerRef.current = null
@@ -141,8 +140,8 @@ function DocListModal({
   const handleRemoveDoc = async (docId: string, docName: string) => {
     const confirmed = await MessageBox.propt(
       t('删除文档'),
-      tpl('确定要删除文档「$__name__」吗？', { name: docName }),
-      { danger: true },
+      tpl('删除「$__name__」后，AI 就查不到它的内容了。', { name: docName }),
+      { danger: true, confirmText: t('删除') },
     )
     if (!confirmed) return
     try {
@@ -151,21 +150,19 @@ function DocListModal({
       await refreshDocList()
       await onChanged?.()
     } catch (err: any) {
-      showToastMsg(tpl('删除失败: $__error__', { error: err.message }), 'error')
+      showToastMsg(tpl('删除失败：$__error__', { error: err.message }), 'error')
     }
   }
 
   const handleClearAllDocs = async () => {
     if (!kbId || docs.length === 0) return
     const confirmed = await MessageBox.propt(
-      t('清空所有文档'),
-      t(
-        tpl('确定要清空「$__name__」中的所有文档吗？（共 $__count__ 个）此操作不可撤销。', {
-          name: kbName,
-          count: docs.length,
-        }),
-      ),
-      { danger: true },
+      t('清空文档'),
+      tpl('「$__name__」里的 $__count__ 份文档会被全部删除，无法恢复。', {
+        name: kbName,
+        count: docs.length,
+      }),
+      { danger: true, confirmText: t('全部删除') },
     )
     if (!confirmed) return
 
@@ -180,7 +177,7 @@ function DocListModal({
       }
     }
     showToastMsg(
-      tpl('清空完成：$__success__ 成功，$__fail__ 失败', {
+      tpl('已删除 $__success__ 份文档，$__fail__ 份没删掉', {
         success: successCount,
         fail: failCount,
       }),
@@ -205,26 +202,23 @@ function DocListModal({
   const handleUploadFolder = () => pickUploadFolder(kbId, afterImport)
 
   const handleSearch = async () => {
-    const targetKbId = kbId || s.ragDefaultKnowledgeBaseId
-    if (!targetKbId) {
-      showToastMsg(t('请先选择一个知识库'), 'error')
-      return
-    }
+    // 检索目标就是当前这个知识库（弹窗是「从某个库进来的」，没有全局默认库这一层）
+    if (!kbId) return
     if (!searchQuery.trim()) {
-      showToastMsg(t('请输入搜索内容'), 'error')
+      showToastMsg(t('请输入要搜索的内容'), 'error')
       return
     }
     setSearching(true)
     setSearchResults(null)
     try {
-      const result = await ragService.query(targetKbId, searchQuery.trim(), 5)
+      const result = await ragService.query(kbId, searchQuery.trim(), 5)
       if (result.results.length === 0) {
-        setSearchResults(t('未找到相关结果'))
+        setSearchResults(t('没找到相关内容，换个说法再试试'))
       } else {
         setSearchResults(result.context)
       }
     } catch (err: any) {
-      setSearchResults(tpl('检索失败: $__error__', { error: err.message }))
+      setSearchResults(tpl('搜索失败：$__error__', { error: err.message }))
     }
     setSearching(false)
   }
@@ -233,7 +227,7 @@ function DocListModal({
     <>
       <Modal
         visible={visible}
-        title={`${kbName} - ${t('文档列表')}`}
+        title={`${kbName} · ${t('文档')}`}
         onClose={onClose}
         width={880}
         height={580}
@@ -280,9 +274,9 @@ function DocListModal({
                         </div>
                       )}
                       <span className="kb-pagination-total">
-                        {t('共')} {docs.length} {t('个文档')}
+                        {tpl('共 $__count__ 份文档', { count: docs.length })}
                         {docSearchQuery.trim() &&
-                          `，${t('筛选')} ${totalFiltered} ${t('个')}`}
+                          `，${tpl('筛选出 $__count__ 份', { count: totalFiltered })}`}
                       </span>
                     </div>
                   )
@@ -292,28 +286,28 @@ function DocListModal({
               <button
                 className="kb-btn kb-btn-sm"
                 onClick={handleUpload}
-                title={t('上传文档到该知识库（支持多选）')}>
-                {t('上传文档')}
+                title={t('从电脑里选文档加进来，可一次选多个')}>
+                {t('添加文档')}
               </button>
               <button
                 className="kb-btn kb-btn-sm"
                 onClick={handleUploadFolder}
-                title={t('上传文件夹，自动导入所有文本文件')}>
-                {t('上传文件夹')}
+                title={t('把整个文件夹加进来，里面的 Markdown / TXT 会自动读入')}>
+                {t('添加文件夹')}
               </button>
               <button
                 className="kb-btn kb-btn-sm"
                 onClick={handleExportKb}
                 disabled={docs.length === 0}
-                title={t('导出知识库所有文档为 ZIP')}>
+                title={t('导出成压缩包，方便备份或换到别的电脑')}>
                 {t('导出')}
               </button>
               <button
                 className="kb-btn kb-btn-sm kb-btn-danger"
                 onClick={handleClearAllDocs}
                 disabled={docs.length === 0}
-                title={t('清空该知识库中的所有文档')}>
-                {t('清空所有文档')}
+                title={t('删除这个知识库里的全部文档（不可恢复）')}>
+                {t('清空文档')}
               </button>
             </div>
           </div>
@@ -330,7 +324,7 @@ function DocListModal({
                   <div className="kb-doc-search-bar">
                     <input
                       className="kb-search-input"
-                      placeholder={t('搜索文档...')}
+                      placeholder={t('搜索文档…')}
                       value={docSearchQuery}
                       onChange={(e) => setDocSearchQuery(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && handleDocSearch()}
@@ -341,8 +335,9 @@ function DocListModal({
                         setDocSearchMode('title')
                         setDocSearchResultIds(null)
                         setPage(1)
-                      }}>
-                      {t('搜索标题')}
+                      }}
+                      title={t('按文档名找')}>
+                      {t('按名称')}
                     </button>
                     <button
                       className={`kb-btn kb-btn-sm ${docSearchMode === 'content' ? 'kb-btn-primary' : ''}`}
@@ -354,14 +349,15 @@ function DocListModal({
                           setDocSearchResultIds(null)
                         }
                       }}
-                      disabled={docSearching}>
-                      {docSearching ? t('搜索中...') : t('搜索内容')}
+                      disabled={docSearching}
+                      title={t('在文档正文里找（能找出正文包含这两个字的文档）')}>
+                      {docSearching ? t('搜索中…') : t('按内容')}
                     </button>
                     <span className="kb-doc-search-sep" />
                     <button
                       className="kb-btn kb-btn-sm kb-btn-primary"
                       onClick={() => setShowNewDoc(true)}
-                      title={t('手动输入名称和内容创建新文档')}>
+                      title={t('直接写一段内容存进来，不用先建文件')}>
                       + {t('新建文档')}
                     </button>
                   </div>
@@ -370,7 +366,19 @@ function DocListModal({
                 {/* 搜索栏在 scroll-view 外面，始终可见；这里只有列表滚动 */}
                 <div className="kb-doclist-scroll">
                   {docs.length === 0 ? (
-                    <div className="kb-empty">{t('暂无文档')}</div>
+                    <div className="kb-empty">
+                      <div className="kb-empty-title">{t('还没有文档')}</div>
+                      <p className="kb-empty-desc">
+                        {t(
+                          '把 PDF、Markdown 或 TXT 加进来，AI 回答你的问题时就能查到这些内容。',
+                        )}
+                      </p>
+                      <button
+                        className="kb-btn kb-btn-primary"
+                        onClick={handleUpload}>
+                        {t('添加文档')}
+                      </button>
+                    </div>
                   ) : (
                     <>
                       {(() => {
@@ -403,7 +411,12 @@ function DocListModal({
                           <>
                             {pageDocs.length === 0 ? (
                               <div className="kb-empty">
-                                {t('未找到匹配的文档')}
+                                <div className="kb-empty-title">
+                                  {t('没有匹配的文档')}
+                                </div>
+                                <p className="kb-empty-desc">
+                                  {t('换个关键词，或把上面的搜索框清空')}
+                                </p>
                               </div>
                             ) : (
                               <div className="doc-list">
@@ -415,7 +428,9 @@ function DocListModal({
                                     <div className="doc-item-bottom-row">
                                       <div className="doc-item-left">
                                         <span className="doc-item-meta">
-                                          {doc.chunk_count} {t('个片段')}
+                                          {tpl('$__count__ 段内容', {
+                                            count: doc.chunk_count,
+                                          })}
                                         </span>
                                       </div>
                                       <div className="doc-item-actions">
@@ -427,7 +442,7 @@ function DocListModal({
                                               docName: doc.file_name,
                                             })
                                           }
-                                          title={t('预览文档内容')}>
+                                          title={t('看看这份文档里的内容')}>
                                           {t('预览')}
                                         </button>
                                         <button
@@ -438,7 +453,7 @@ function DocListModal({
                                               docName: doc.file_name,
                                             })
                                           }
-                                          title={t('编辑文档名称和内容')}>
+                                          title={t('改名字，或直接改里面的内容')}>
                                           {t('编辑')}
                                         </button>
                                         <button
@@ -466,14 +481,17 @@ function DocListModal({
                 </div>
               </div>
 
-              {/* 右侧：检索测试（1/3） */}
+              {/* 右侧：在当前知识库里试搜一下（“能不能搜到”是用户最直接的验证方式） */}
               <div className="kb-doclist-right">
                 <div className="kb-search-section">
-                  <label className="kb-search-label">{t('检索测试')}</label>
+                  <label className="kb-search-label">{t('在这里搜一下')}</label>
+                  <p className="kb-search-hint">
+                    {t('输入一句话，看看能从这些文档里找到什么。')}
+                  </p>
                   <div className="kb-search-test">
                     <input
                       className="kb-search-input"
-                      placeholder={t('输入搜索内容...')}
+                      placeholder={t('例如：怎么启动开发环境')}
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       onKeyDown={(e) =>
@@ -484,7 +502,7 @@ function DocListModal({
                       className="kb-btn kb-btn-primary kb-btn-sm"
                       onClick={handleSearch}
                       disabled={searching || !searchQuery.trim()}>
-                      {searching ? t('搜索中...') : t('搜索')}
+                      {searching ? t('搜索中…') : t('搜索')}
                     </button>
                   </div>
                   {searchResults && (

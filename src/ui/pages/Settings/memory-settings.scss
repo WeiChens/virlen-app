@@ -10,14 +10,31 @@
 
   // ==================== 设置页标题行 ====================
   //
-  // 设置页上只有设置项 + 一个「记忆列表（N 条）」入口；列表本体（含筛选栏、批量栏）在弹窗里。
+  // 设置页上只有设置项；「全部记忆（N 条）」的入口在**页尾**（见 `.memory-list-entry`），
+  // 列表本体（含筛选栏、批量栏）在弹窗里。
   .memory-header {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
-    margin-bottom: 12px;
-    padding-bottom: 10px;
+    gap: 16px;
+    margin-bottom: 14px;
+    padding-bottom: 12px;
     border-bottom: 1px solid var(--border-color, #e5e5e5);
+
+    .memory-header-text {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    // 一句「记忆是干什么的」：没有总开关之后，这行字是用户理解这个页面的唯一入口
+    .memory-page-desc {
+      margin: 0;
+      font-size: var(--font-size-sm);
+      line-height: 1.6;
+      color: var(--text-secondary, #888);
+    }
   }
 
   // ==================== 批量操作栏（**常驻**；未选中时整排禁用） ====================
@@ -59,11 +76,60 @@
     }
   }
 
-  // 标题右侧的动作区（导出 JSON / 新增记忆）—— 导出是次要动作，放左边
-  .memory-header-actions {
+  // ==================== 全部记忆的入口（页尾一行卡片） ====================
+  //
+  // 为什么在页尾：设置页的第一屏该先回答「这个页面管什么」（带上多少 / 怎么整理），列表是数据
+  // 而不是设置；页面从上到下读完，最后一行才通向列表。
+  //
+  // 为什么是一行式卡片（整行是按钮）：一眼看出「点它进下一层」，也不再与「新建 / 保存」那种
+  // 主色按钮混在一起（它通向的是看数据，不是提交动作）。
+  .memory-list-entry {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 12px;
+    width: 100%;
+    padding: 10px 12px 10px 14px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 10px;
+    background: var(--card-bg, #fafafa);
+    text-align: left;
+    font-family: inherit;
+    cursor: pointer;
+    transition: border-color 0.15s;
+
+    &:hover {
+      border-color: var(--accent-color, #4f46e5);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--primary, #4f46e5);
+      outline-offset: 2px;
+    }
+
+    .memory-list-entry-main {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .memory-list-entry-title {
+      font-size: var(--font-size-sm);
+      font-weight: 600;
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    .memory-list-entry-hint {
+      font-size: var(--font-size-xs);
+      color: var(--text-secondary, #888);
+    }
+
+    .memory-list-entry-arrow {
+      flex-shrink: 0;
+      color: var(--accent-color, #4f46e5);
+      font-size: var(--font-size-lg);
+    }
   }
 
   .section-title {
@@ -83,7 +149,7 @@
     font-weight: 500;
     cursor: pointer;
     transition: opacity 0.15s;
-
+    white-space: nowrap;
     &:hover {
       opacity: 0.85;
     }
@@ -96,26 +162,47 @@
     line-height: 1.6;
   }
 
-  .memory-switch-row {
+  // ==================== 分组（一块一件事：带上多少 / 整理） ====================
+  //
+  // 设置项只有两三个，但它们是两类事 —— 用细边框分组，比靠空白间隔更能让人分清「哪些是同一件」。
+  .memory-group {
     display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    padding: 8px 0 12px;
-    border-bottom: 1px solid var(--border-color, #e5e5e5);
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 10px;
+    background: var(--card-bg, #fafafa);
 
-    .memory-switch-label {
-      font-size: var(--font-size-base);
+    .memory-group-title {
+      font-size: var(--font-size-sm);
+      font-weight: 600;
       color: var(--text-primary, #1a1a1a);
     }
+
+    // 分组里的说明文字贴着上面那行，不再自带外边距（间距由 flex gap 统一给）
+    .memory-hint {
+      margin: 0 0 4px;
+    }
+
+    .memory-preview {
+      margin: 6px 0 0;
+    }
+  }
+
+  .memory-option-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
 
     .memory-num {
       display: flex;
       align-items: center;
       gap: 6px;
-      font-size: var(--font-size-xs);
-      color: var(--text-secondary, #888);
-      margin-left: auto;
+      font-size: var(--font-size-sm);
+      color: var(--text-primary, #1a1a1a);
 
       input {
         width: 64px;
@@ -125,7 +212,47 @@
         background: var(--bg-primary, #fff);
         color: var(--text-primary, #1a1a1a);
         font-size: var(--font-size-sm);
+
+        &:focus {
+          outline: none;
+          border-color: var(--accent-color, #4f46e5);
+        }
       }
+    }
+
+    .memory-option-hint {
+      font-size: var(--font-size-xs);
+      color: var(--text-secondary, #888);
+    }
+  }
+
+  // 「本次会带上 N 条」+ 预览入口：同一行（预览就是这条事实的展开）
+  .memory-inject-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .memory-option-link {
+    border: none;
+    background: transparent;
+    padding: 2px 0;
+    color: var(--accent-color, #4f46e5);
+    font-size: var(--font-size-xs);
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+
+    &:hover {
+      text-decoration: underline;
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--primary, #4f46e5);
+      outline-offset: 2px;
+      border-radius: 3px;
     }
   }
 
@@ -143,6 +270,45 @@
       color: var(--color-warning-text, #b45309);
       font-weight: 500;
     }
+
+    // 字符数是二次信息（用户先看条数，再决定要不要清理），所以比主句更淡
+    .memory-budget-chars {
+      margin-left: 6px;
+      color: var(--text-secondary, #888);
+      font-weight: 400;
+    }
+  }
+
+  // 超预算的告警条：说清「少了什么」+「怎么改」，并且是可视醒目的块（而不是一行灰字）
+  .memory-preview-warn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 4px 0 6px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--color-warning-bg, #fff7e6);
+    color: var(--color-warning-text, #b45309);
+    font-size: var(--font-size-xs);
+    line-height: 1.6;
+
+    .memory-preview-warn-hint {
+      flex: 1;
+      min-width: 200px;
+    }
+
+    .memory-action-btn {
+      margin-left: auto;
+      background: var(--bg-primary, #fff);
+    }
+  }
+
+  // 项目作用域的说明行（不是设置项，是解释，所以用淡字且不进分组框）
+  .memory-scope-note {
+    font-size: var(--font-size-xs);
+    line-height: 1.6;
+    color: var(--text-secondary, #888);
   }
 
   .memory-preview-warn-hint {
@@ -180,12 +346,6 @@
       font-size: var(--font-size-sm);
       font-weight: 600;
       color: var(--text-primary, #1a1a1a);
-      margin-bottom: 6px;
-    }
-
-    .memory-preview-warn {
-      font-size: var(--font-size-xs);
-      color: var(--color-danger, #e53e3e);
       margin-bottom: 6px;
     }
 

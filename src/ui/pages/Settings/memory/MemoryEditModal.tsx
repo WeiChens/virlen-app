@@ -126,11 +126,11 @@ function MemoryEditModal({ visible, item, onClose, onSaved }: Props) {
           // 自动聚焦：进来的动作就是「写内容」，不该再让用户点一下输入框
           autoFocus
           maxLength={MEMORY_SUMMARY_MAX_CHARS}
-          placeholder={t('记忆内容')}
+          placeholder={t('例如：这个项目用 pnpm build 构建')}
           onChange={(e) => setDraft({ ...draft, summary: e.target.value })}
         />
         <div className="memory-form-hint">
-          {tpl('建议不超过 $__hint__ 字符，最多 $__max__ 字符（超出会被截断）', {
+          {tpl('写短一点更好记：建议 $__hint__ 字以内，最多 $__max__ 字。', {
             hint: MEMORY_SUMMARY_HINT_CHARS,
             max: MEMORY_SUMMARY_MAX_CHARS,
           })}
@@ -164,13 +164,13 @@ function MemoryEditModal({ visible, item, onClose, onSaved }: Props) {
         {isProject && (
           <div className="memory-form-row memory-form-scope">
             <label>
-              <span>{t('项目路径')}</span>
+              <span>{t('只在这个项目里带上')}</span>
               <input
                 className="memory-form-path"
                 type="text"
                 value={draft.projectPath}
                 maxLength={MEMORY_PROJECT_PATH_MAX_CHARS}
-                placeholder={t('留空 = 所有项目都可见')}
+                placeholder={t('留空 = 所有项目都带上')}
                 onChange={(e) => setDraft({ ...draft, projectPath: e.target.value })}
               />
             </label>

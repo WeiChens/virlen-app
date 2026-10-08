@@ -40,6 +40,15 @@ pub struct KnowledgeBaseMeta {
     pub updated_at: String,
     pub document_count: usize,
     pub chunk_count: usize,
+    /// 系统自建（由功能自己创建与维护：默认知识库 / 记忆详情）—— **用户不能删除**。
+    ///
+    /// 为什么落进元数据而不是「按名字判断」：名字是给用户看的文本，改文案不该顺带改变
+    /// 「能不能删」；而删掉这两个库会让对应功能静默失效（记忆条目指向的详情库就没了）。
+    ///
+    /// `#[serde(default)]`：升级前的 `_metadata.json` 里没有这个字段 —— 读出来是 `false`，
+    /// 不能因为新增字段就让老库解析失败（补标记见 `init_default_knowledge_base` / `memory::kb`）。
+    #[serde(default)]
+    pub builtin: bool,
 }
 
 /// 文档信息
@@ -121,7 +130,17 @@ impl VectorStoreManager {
 
     // ===== 知识库管理 =====
 
+    /// 创建知识库（用户在界面上新建的：可以删除）
     pub fn create_knowledge_base(&self, name: &str, description: &str) -> Result<KnowledgeBaseMeta, String> {
+        self.create_knowledge_base_with(name, description, false)
+    }
+
+    /// 创建**系统自建**知识库（默认知识库 / 记忆详情）：带 `builtin` 标记，用户删不掉
+    pub fn create_builtin_knowledge_base(&self, name: &str, description: &str) -> Result<KnowledgeBaseMeta, String> {
+        self.create_knowledge_base_with(name, description, true)
+    }
+
+    fn create_knowledge_base_with(&self, name: &str, description: &str, builtin: bool) -> Result<KnowledgeBaseMeta, String> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
 
@@ -133,6 +152,7 @@ impl VectorStoreManager {
             updated_at: now,
             document_count: 0,
             chunk_count: 0,
+            builtin,
         };
 
         // 创建目录和元数据文件
@@ -172,6 +192,26 @@ impl VectorStoreManager {
             .ok_or_else(|| format!("知识库不存在: {}", kb_id))
     }
 
+    /// 把已有知识库补记为「系统自建」
+    ///
+    /// 升级前的数据没有 `builtin` 字段（那时默认知识库 / 记忆详情还能被删掉），由各自的
+    /// 归属模块按名字认领后调用这里补标记。已经标记过 = 空操作。
+    ///
+    /// 返回「这次是否真的改了」，便于调用方只记一次日志。
+    pub fn mark_knowledge_base_builtin(&self, kb_id: &str) -> Result<bool, String> {
+        let mut meta = match self.load_kb_metadata(kb_id)? {
+            Some(m) => m,
+            None => return Ok(false),
+        };
+        if meta.builtin {
+            return Ok(false);
+        }
+        meta.builtin = true;
+        meta.updated_at = chrono::Utc::now().to_rfc3339();
+        self.save_kb_metadata(kb_id, &meta)?;
+        Ok(true)
+    }
+
     pub fn delete_knowledge_base(&mut self, kb_id: &str) -> Result<(), String> {
         // 检查知识库（内存索引 或 磁盘目录）是否存在
         let exists_in_memory = self.indices.contains_key(kb_id);
@@ -180,6 +220,18 @@ impl VectorStoreManager {
 
         if !exists_in_memory && !exists_on_disk {
             return Err(format!("知识库不存在: {}", kb_id));
+        }
+
+        // 系统自建库（默认知识库 / 记忆详情）不给删：删掉之后对应功能只会静默失效
+        //（记忆条目会指向一个不存在的库）。界面上已经不显示删除入口，这一道是**兜底** ——
+        // 删除只有这一个出口，AI 工具 / 命令行走同一个入口也绕不过去。
+        if let Some(meta) = self.load_kb_metadata(kb_id)? {
+            if meta.builtin {
+                return Err(format!(
+                    "「{}」是 Virlen 自动创建的知识库，不能删除。",
+                    meta.name
+                ));
+            }
         }
 
         if exists_on_disk {

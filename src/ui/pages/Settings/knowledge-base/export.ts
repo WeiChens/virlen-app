@@ -13,17 +13,17 @@ export async function exportKnowledgeBaseZip(kbId: string, kbName: string) {
       defaultPath: `${kbName}.zip`,
       filters: [
         {
-          name: t('ZIP 文件'),
+          name: t('压缩包'),
           extensions: ['zip'],
         },
       ],
     })
     if (!savePath) return
 
-    showToastMsg(tpl('正在导出「$__name__」...', { name: kbName }), 'info')
+    showToastMsg(tpl('正在打包「$__name__」…', { name: kbName }), 'info')
     await ragService.exportKnowledgeBase(kbId, savePath)
-    showToastMsg(tpl('导出成功：$__path__', { path: savePath }), 'success')
+    showToastMsg(tpl('已导出到 $__path__', { path: savePath }), 'success')
   } catch (err: any) {
-    showToastMsg(tpl('导出失败: $__error__', { error: err.message }), 'error')
+    showToastMsg(tpl('导出失败：$__error__', { error: err.message }), 'error')
   }
 }

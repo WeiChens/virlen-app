@@ -1,6 +1,9 @@
 /**
  * RAG 服务 — 编排知识库检索流程：知识库 CRUD、文档管理（上传/删除）、检索并格式化注入 Agent 上下文。
  *
+ * 知识库是**常开能力**（没有全局开关，也不再有「默认知识库」这一层）：检索目标一律由调用方
+ * 显式给出 `kbId`（会话导入时选库、文档页测试检索用当前所在的知识库）。
+ *
  * 配置直接从 settingsState 实时读取、不维护本地缓存副本，保证页面刷新或设置页修改后 getConfig() 始终最新。
  */
 
@@ -21,47 +24,18 @@ class RagService {
   // 配置管理
 
   /**
-   * 获取当前 RAG 配置（实时从 settingsState 读取，不缓存，保证引擎和工具永远读到最新值）。
+   * 获取当前 RAG 参数（实时从 settingsState 读取，不缓存，保证引擎和工具永远读到最新值）。
    */
   getConfig(): RAGConfig {
     try {
       const s = settingsState.value
       return {
-        enabled: s.ragEnabled ?? false,
-        defaultKnowledgeBaseId: s.ragDefaultKnowledgeBaseId ?? '',
         defaultTopK: s.ragDefaultTopK ?? 5,
         maxContextChars: this.maxContextChars,
       }
     } catch {
       return { ...defaultRAGConfig, maxContextChars: this.maxContextChars }
     }
-  }
-
-  /**
-   * 更新 RAG 配置（同时写入 settingsState 持久化）
-   *
-   * UI 设置页面调用此方法，修改会持久化到 localStorage。
-   */
-  setConfig(config: Partial<RAGConfig>): void {
-    try {
-      if (config.enabled !== undefined) {
-        settingsState.setValue('ragEnabled', config.enabled)
-      }
-      if (config.defaultKnowledgeBaseId !== undefined) {
-        settingsState.setValue('ragDefaultKnowledgeBaseId', config.defaultKnowledgeBaseId)
-      }
-      if (config.defaultTopK !== undefined) {
-        settingsState.setValue('ragDefaultTopK', config.defaultTopK)
-      }
-    } catch {
-      // settingsState 尚未初始化，忽略
-    }
-  }
-
-  /** 检查 RAG 是否已启用且有默认知识库 */
-  isReady(): boolean {
-    const cfg = this.getConfig()
-    return cfg.enabled && cfg.defaultKnowledgeBaseId.length > 0
   }
 
   // 知识库管理
@@ -82,11 +56,6 @@ class RagService {
   /** 删除知识库 */
   async deleteKnowledgeBase(kbId: string): Promise<void> {
     await knowledgeBaseStore.delete(kbId)
-    // 如果删除的是默认知识库，清除默认配置
-    const cfg = this.getConfig()
-    if (cfg.defaultKnowledgeBaseId === kbId) {
-      this.setConfig({ defaultKnowledgeBaseId: '' })
-    }
   }
 
   // 文档管理
@@ -181,15 +150,6 @@ class RagService {
       topK ?? cfg.defaultTopK,
     )
     return result
-  }
-
-  /** 使用默认知识库进行检索（基于当前配置） */
-  async queryDefault(query: string): Promise<KnowledgeBaseQueryResult | null> {
-    const cfg = this.getConfig()
-    if (!cfg.defaultKnowledgeBaseId) {
-      return null
-    }
-    return this.query(cfg.defaultKnowledgeBaseId, query)
   }
 
   /** 使用完整 RAG 选项检索 */

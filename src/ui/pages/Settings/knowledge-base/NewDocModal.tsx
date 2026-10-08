@@ -32,22 +32,22 @@ export default function NewDocModal({
     }
   }, [visible])
 
-  /** 新建文档 — 手动输入名称和内容 */
+  /** 新建文档 — 直接写名字和内容（不必先在电脑上建一个文件） */
   const handleNewDoc = async () => {
     if (!name.trim()) {
-      showToastMsg(t('请输入文档名称'), 'error')
+      showToastMsg(t('先给这份文档起个名字'), 'error')
       return
     }
     setCreating(true)
     try {
       await ragService.writeText(kbId, name.trim(), content)
-      showToastMsg(tpl('文档「$__name__」创建成功', { name: name.trim() }), 'success')
+      showToastMsg(tpl('已保存「$__name__」', { name: name.trim() }), 'success')
       onClose()
       setName('')
       setContent('')
       await onCreated?.()
     } catch (err: any) {
-      showToastMsg(tpl('创建失败: $__error__', { error: err.message }), 'error')
+      showToastMsg(tpl('保存失败：$__error__', { error: err.message }), 'error')
     }
     setCreating(false)
   }
@@ -65,7 +65,7 @@ export default function NewDocModal({
         <div className="kb-edit-footer">
           <ModalFooterButtons
             cancelText={t('取消')}
-            confirmText={creating ? t('创建中...') : t('创建')}
+            confirmText={creating ? t('保存中…') : t('保存')}
             onCancel={() => {
               if (!creating) onClose()
             }}
@@ -76,10 +76,10 @@ export default function NewDocModal({
       }>
       <div className="kb-edit-modal-body">
         <div className="kb-edit-field">
-          <label className="kb-edit-label">{t('文档名称')} *</label>
+          <label className="kb-edit-label">{t('文档名字')} *</label>
           <input
             className="kb-edit-input"
-            placeholder={t('请输入文档名称（如 readme.md）')}
+            placeholder={t('例如：常见问题.md')}
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) =>
@@ -89,10 +89,10 @@ export default function NewDocModal({
           />
         </div>
         <div className="kb-edit-field">
-          <label className="kb-edit-label">{t('文档内容')}</label>
+          <label className="kb-edit-label">{t('内容')}</label>
           <textarea
             className="kb-edit-textarea"
-            placeholder={t('请输入文档内容')}
+            placeholder={t('把内容粘贴或写在这里')}
             value={content}
             onChange={(e) => setContent(e.target.value)}
             rows={14}
