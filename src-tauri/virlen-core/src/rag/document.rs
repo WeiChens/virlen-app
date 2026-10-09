@@ -1,7 +1,7 @@
 //! 文档解析与分块
 //!
 //! 支持格式：
-//! - PDF（通过 pdf-extract）
+//! - PDF（`pdf-extract`；⚠️ 调用点在 `crate::doc_parse::pdf`，与 `parse_document` 工具同一份实现）
 //! - Markdown（.md）
 //! - 纯文本（.txt）
 
@@ -96,9 +96,12 @@ pub fn parse_text(text: &str, doc_name: &str) -> ParsedDocument {
 }
 
 /// 解析 PDF 文件
+///
+/// ⚠️ 抽文字的实现在 `crate::doc_parse::pdf`（工具 `parse_document` 与知识库导入共用一份，
+/// 不许另写一份 `pdf-extract` 调用）。
 fn parse_pdf(file_path: &str) -> Result<(String, Option<u32>), String> {
     let bytes = std::fs::read(file_path).map_err(|e| format!("读取 PDF 失败: {}", e))?;
-    let text = pdf_extract::extract_text_from_mem(&bytes)
+    let text = crate::doc_parse::pdf::extract_text(&bytes)
         .map_err(|e| format!("PDF 解析失败: {}", e))?;
     Ok((text, None))
 }

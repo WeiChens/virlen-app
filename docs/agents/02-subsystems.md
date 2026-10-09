@@ -29,7 +29,7 @@
 | JS → Rust | `agent_send_message` / `agent_cancel` / `agent_get_run_snapshot` / `agent_clear_run_snapshot` / `agent_dispose` / `agent_kill_command` / `pty_*` | 生命周期、取消、终端交互 |
 
 **未原生化的部分**（仍委托 TS）：Gemini Provider（`agent:provider-request` 桥）。
-> **35 个工具已全部原生化**（S5 补齐 `web_fetch` / `web_search`，P1 补齐 `memory_*`，后台服务补齐 `service` 四件套）——`is_native_tool` 就是全集，**没有工具再走 JS 桥**。
+> **36 个工具已全部原生化**（S5 补齐 `web_fetch` / `web_search`，P1 补齐 `memory_*`，后台服务补齐 `service` 四件套，文档解析补齐 `parse_document`）——`is_native_tool` 就是全集，**没有工具再走 JS 桥**。
 Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你是一个有用的 AI 助手。"`）。完整清单见 `docs/rust-engine.md`。
 
 > ⚠️ **改引擎语义（LLM 轮次 / 工具执行 / 暂停恢复 / 迭代验证 / 撤销）只需改 Rust**（`virlen-core`）；但**被 Rust 回调的 TS 部分**（工具执行器 / Gemini provider / 提示词组装 / 事件契约）仍须与 Rust 同语义（铁律 1）。
@@ -38,11 +38,11 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 
 - **注册制**：`toolRegistry.register(name, executor, label?)`；不写全局函数表。
 - **定义与执行器分离，且定义只有一份（机制 C）**：工具定义在 **Rust 侧权威源** `src-tauri/virlen-core/src/agent/tool_defs/definitions.json`（35 工具 × 三平台变体 `windows`/`macos`/`linux`，键名与 `std::env::consts::OS` 同词表）；前端只注册执行器 + UI 文案（`label` 走 i18n，**不进契约**）。读取一律 `await toolRegistry.listDefinitions()`（**异步**接口），返回「契约 ∩ 已注册执行器」。详见 `docs/rust-engine.md` §12。
-- **12 大分类 / 35 个工具**（`src/domain/tools/category.ts` ↔ `src/infrastructure/tools/<分类>/`）：
+- **12 大分类 / 36 个工具**（`src/domain/tools/category.ts` ↔ `src/infrastructure/tools/<分类>/`）：
 
   | 分类 id | 目录 | 工具数 | 代表工具 |
   |---|---|:--:|---|
-  | `file` | `tools/file/` | 8 | read_file / write_file / edit_file / delete_file / copy_move_file / list_files / file_info / mkdir |
+  | `file` | `tools/file/` | 9 | read_file / write_file / edit_file / delete_file / copy_move_file / list_files / file_info / mkdir / parse_document（**文档解析**：PDF / Office / CSV，实现在 `doc_parse`） |
   | `search` | `tools/search/` | 2 | search_files_by_name / search_text_in_files |
   | `execute` | `tools/execute/` | 2 | execute_command / execute_script |
   | `service` | `tools/service/` | 4 | start_background_service / get_background_service / kill_background_service / list_background_services（后台服务：**工具返回后进程继续活着**，见 §11.47） |
@@ -55,7 +55,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
   | `chat` | `tools/chat/` | 2 | list_messages / read_messages |
   | `memory` | `tools/memory/` | 3 | memory_search / memory_recall / memory_write（长期记忆） |
 
-- **原生化（35 个 = 全部）**：`file`(8) + `search`(2) + `execute`(2) + `service`(4) + `knowledge_base`(6) + `plan`(1：`todo_write`) + `system`(2：`user_choice` / `get_current_time`) + `chat`(2：`list_messages` / `read_messages`) + `memory`(3：`memory_search` / `memory_recall` / `memory_write`) + `skill`(2：`list_skills` / `read_skill_source`) + `vision`(1：`vision_analyze`) + `web`(2：`web_fetch` / `web_search`)，分发在 `src-tauri/virlen-core/src/agent/native_tools/mod.rs::is_native_tool / execute_native_tool`。**无任何工具走 JS 桥**。
+- **原生化（36 个 = 全部）**：`file`(9) + `search`(2) + `execute`(2) + `service`(4) + `knowledge_base`(6) + `plan`(1：`todo_write`) + `system`(2：`user_choice` / `get_current_time`) + `chat`(2：`list_messages` / `read_messages`) + `memory`(3：`memory_search` / `memory_recall` / `memory_write`) + `skill`(2：`list_skills` / `read_skill_source`) + `vision`(1：`vision_analyze`) + `web`(2：`web_fetch` / `web_search`)，分发在 `src-tauri/virlen-core/src/agent/native_tools/mod.rs::is_native_tool / execute_native_tool`。**无任何工具走 JS 桥**。
   - `web_search` 的搜索源配置由引擎经 `NativeToolCtx::settings` **直读 `app_settings`**（与「忽略沙盒命令」规则同一份来源）→ CLI 同样可用；
   - `web_fetch` 的 HTML→Markdown 用 `htmd`（TS 侧是 `turndown`）——**Markdown 细节两侧不完全一致**（已知差异，见 `docs/rust-engine.md` §3）。
   - `memory_*` 的语义实现在 `agent::memory::tools`（**与 GUI 命令 `cmd_memory_*` 共用一份**），详情正文落专用知识库（`记忆详情`，`kb_id` 缓存在保留设置键 `__memoryKbId`）。

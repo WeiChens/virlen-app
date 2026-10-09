@@ -15,7 +15,8 @@
 //! `main.py` 这些明明能读的纯文本一份都进不来。现在的口径按**内容**判断：
 //! - **PDF**（按扩展名识别，二进制）→ 收，交给后端 `document::parse_document` 抽文字；
 //! - **其余一切文件** → 读前 [`SNIFF_BYTES`] 字节看「像不像纯文本」（无 NUL、控制字符少、UTF-8 或
-//!   GBK / Big5 / Shift_JIS 能干净解码）→ 像就收，不像（图片 / 压缩包 / 可执行文件）就跳过并计数；
+//!   GBK 系能干净解码）→ 像就收，不像（图片 / 压缩包 / 可执行文件）就跳过并计数；
+//!   ⚠️ **判据的实现在 `crate::doc_parse::text`**（与文档解析共用一份，见那里的模块头）
 //! - **大小上限**：纯文本 2 MB（[`MAX_TEXT_FILE_BYTES`]），PDF 50 MB（[`MAX_PARSE_DOC_BYTES`]，
 //!   与后端 `rag_service::MAX_DOC_SIZE_BYTES` 同源）。超限的计入 `*_too_large`，在导入弹窗里说清。
 //!
@@ -30,7 +31,6 @@
 //!   ⚠️ 只在**子目录**上判：用户自己选中的那个目录就算是 `dist/`，也照常扫（他要的就是它）；
 //! - 藏在点目录里的其它文档（如 `.github/`）不主动排除。
 
-use encoding_rs::{BIG5, GB18030, SHIFT_JIS};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use serde::Serialize;
 use std::io::Read;
@@ -51,8 +51,10 @@ pub const MAX_TEXT_FILE_BYTES: u64 = 2 * 1024 * 1024;
 /// （50 MB）。这里提前挡一道，是为了在导入弹窗里**说清是哪一份超了**，而不是等后端逐个报错。
 pub const MAX_PARSE_DOC_BYTES: u64 = crate::rag::rag_service::MAX_DOC_SIZE_BYTES;
 
-/// 嗅探「是不是纯文本」时最多读多少字节：前 8 KB 足以给一个文件定性。
-pub const SNIFF_BYTES: usize = 8 * 1024;
+// 嗅探「是不是纯文本」时最多读多少字节（前 8 KB 足以定性）—— 实现已上移到 `crate::doc_parse::text`：
+// 文档解析与导入筛选必须同一套判据（否则会出现「导入时收了、解析时读不出」）。
+// 这里按原路径重导出，调用点（含本文件单测）一行不改。
+pub use crate::doc_parse::text::{sniff_is_text, SNIFF_BYTES};
 
 /// 整棵跳过的目录名（小写比较）—— 依赖与构建产物，里面没有「文档」。
 ///
@@ -103,64 +105,6 @@ pub fn is_parseable_doc(name: &str) -> bool {
         }
         None => false,
     }
-}
-
-/// 采样字节看着像纯文本吗。
-///
-/// 与前端 `looksLikeText` 同一套口径（那边是权威判定，这边只是**先筛一遍**，好让弹窗里的
-/// 份数、总数与真实结果一致）：
-/// 1. 空 / 含 `NUL` → 不是（图片、压缩包、可执行文件、UTF-16 都带 NUL）；
-/// 2. 控制字符占比 ≥ 5% → 不是（二进制里常见，正常文本里几乎没有）；
-/// 3. UTF-8 能解（只在末尾被采样截断也算）→ 是；
-/// 4. 否则用 GBK / Big5 / Shift_JIS 试干净解码（中文、日文的常见编码）→ 能解就是文本；
-/// 5. 都不行 → 不是。
-pub fn sniff_is_text(sample: &[u8]) -> bool {
-    if sample.is_empty() {
-        return false;
-    }
-    if sample.contains(&0) {
-        return false;
-    }
-    let bad = sample
-        .iter()
-        .filter(|b| **b < 0x20 && !matches!(**b, 0x09 | 0x0a | 0x0c | 0x0d))
-        .count();
-    if bad * 20 >= sample.len() {
-        return false;
-    }
-    if is_valid_utf8_prefix(sample) {
-        return true;
-    }
-    [GB18030, BIG5, SHIFT_JIS]
-        .iter()
-        .any(|enc| decodes_cleanly(enc, sample))
-}
-
-/// 这段字节是不是「（可能被截断的）合法 UTF-8」
-fn is_valid_utf8_prefix(bytes: &[u8]) -> bool {
-    match std::str::from_utf8(bytes) {
-        Ok(_) => true,
-        // 只有在**末尾**被截断（采样切在多字节字符中间）才算合法
-        Err(e) => e.error_len().is_none() && e.valid_up_to() > 0,
-    }
-}
-
-/// 用某个编码解这段字节，且**没有出现替换字符**。
-///
-/// 末尾最多放宽 2 个字节：采样常常正好切在一个多字节字符中间，那不算「解不出来」。
-fn decodes_cleanly(enc: &'static encoding_rs::Encoding, bytes: &[u8]) -> bool {
-    for trim in 0..=2usize {
-        let Some(end) = bytes.len().checked_sub(trim) else {
-            continue;
-        };
-        if end == 0 {
-            continue;
-        }
-        if !enc.decode(&bytes[..end]).2 {
-            return true;
-        }
-    }
-    false
 }
 
 /// 不能被导入的三种原因（`None` = 可以导入）

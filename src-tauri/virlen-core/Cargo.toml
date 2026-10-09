@@ -67,6 +67,13 @@ htmd = "0.5"
 rusqlite = { version = "0.32", features = ["bundled"] }
 pdf-extract = "0.7" # PDF 文本提取
 
+# ── 文档解析（`doc_parse`：parse_document 工具 + 知识库导入共用唯一一份实现）──
+# office_oxide：DOCX / XLSX / PPTX + 旧二进制 DOC / XLS / PPT 的**纯 Rust** 读取
+# （无 JVM、无外部二进制、无可信输入风险低）。⚠️ 它是 0.1.x，**只允许 `doc_parse/office.rs` 引用**，
+# 换实现（calamine + 自研 docx 读取）时改动面就是一个文件。CLI 也要解析文档，故必须放 core。
+office_oxide = "0.1.13"
+csv = "1" # CSV / TSV（RFC 4180：引号内换行、转义引号，自己写容易留坑）
+
 # ── quasivision 全能视觉引擎 ──
 quasivision = "0.2.1"
 

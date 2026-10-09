@@ -373,6 +373,8 @@ pub fn run() {
             list_directory,
             stop_task,
             read_file_with_hash,
+            // 文档解析（PDF / Office / CSV；与原生工具 `parse_document` 同一条组装链）
+            commands::document::cmd_parse_document,
             stat_path,
             edit_file_multi_in_place,
             kill_process_tree,

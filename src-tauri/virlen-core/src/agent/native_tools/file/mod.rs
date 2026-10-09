@@ -1,8 +1,8 @@
 //! file — 文件操作分类（分类 id: file）
 //!
-//! 一个工具一个文件（8 个）：
+//! 一个工具一个文件（9 个）：
 //! `read_file` / `write_file` / `edit_file` / `delete_file`
-//! / `copy_move_file` / `list_files` / `file_info` / `mkdir`
+//! / `copy_move_file` / `list_files` / `file_info` / `mkdir` / `parse_document`
 //!
 //! `common.rs` 为分类内公共：`format_size` / `ensure_parent_dir` / `format_system_time`。
 
@@ -13,6 +13,7 @@ mod edit_file;
 mod file_info;
 mod list_files;
 mod mkdir;
+mod parse_document;
 mod read_file;
 mod write_file;
 
@@ -22,6 +23,10 @@ pub(crate) use edit_file::edit_file_tool;
 pub(crate) use file_info::file_info_tool;
 pub(crate) use list_files::list_files_tool;
 pub(crate) use mkdir::mkdir_tool;
+// 文档解析：GUI 命令 `cmd_parse_document` 与原生工具共用同一个组装入口 + 默认值兜底
+// （见该文件模块头；`default_max_chars` 必须两边共用，否则默认预览长度会分叉）
+pub use parse_document::{default_max_chars, parse_targets, ParseAggregate, ParseTarget};
+pub(crate) use parse_document::parse_document_tool;
 pub(crate) use read_file::read_file_tool;
 pub(crate) use write_file::write_file_tool;
 

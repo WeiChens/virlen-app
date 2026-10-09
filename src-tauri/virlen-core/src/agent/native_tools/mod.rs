@@ -27,10 +27,11 @@
 //! │   ├── pty.rs            服务的交互控制台句柄（键击 / 尺寸 / 关停；P3 终端弹窗的底座）
 //! │   ├── panel.rs          **面板**（聊天页右上角）用的公开 API：快照 + 显式终止 + 终端读写（只读、不摘条目）
 //! │   └── common.rs         常量 / 文本辅助（环形窗口、字符安全切片、截断）/ 模型侧文案与 uiData
-//! ├── file/                  文件操作（8）
+//! ├── file/                  文件操作（9）
 //! │   ├── common.rs          format_size / ensure_parent_dir / format_system_time
 //! │   ├── read_file.rs       write_file.rs   edit_file.rs    delete_file.rs
-//! │   └── copy_move_file.rs  list_files.rs   file_info.rs    mkdir.rs
+//! │   ├── copy_move_file.rs  list_files.rs   file_info.rs    mkdir.rs
+//! │   └── parse_document.rs  **文档解析**（PDF / Office / CSV / 纯文本；实现唯一源在 `doc_parse`）+ `outTxtFile` 全文落盘
 //! ├── search/                搜索（2）
 //! │   ├── common.rs          glob_to_regex / escape_regex
 //! │   ├── search_files_by_name.rs
@@ -67,7 +68,7 @@
 //! │   └── web_search.rs      经已配置搜索源检索（tavily / bocha；直读 `app_settings`）
 //! ```
 //!
-//! **35 个工具全部有 Rust 原生实现**（不再有走 JS 桥的工具）。安全策略与前端
+//! **36 个工具全部有 Rust 原生实现**（不再有走 JS 桥的工具）。安全策略与前端
 //! `securityService.resolveSafePath` / `securityPort.isPathAllowed` 对齐；各工具的模型侧
 //! `content` / `uiData` 与 TS 回退路径逐字对齐（铁律 1）。
 
@@ -91,6 +92,10 @@ pub(crate) mod test_util;
 // 保持原有公开路径不变：crate::agent::native_tools::{is_path_allowed, resolve_safe_path}
 #[allow(unused_imports)]
 pub use common::{is_path_allowed, resolve_safe_path};
+// 文档解析（`parse_document` 工具）：组装入口导出给 GUI 命令 `cmd_parse_document` ——
+// 工具与命令必须走同一条链（含 `outTxtFile` 的落盘与默认预览长度），
+// 否则两条路径的版式 / 失败语义会静默分叉。
+pub use file::{default_max_chars, parse_targets, ParseAggregate, ParseTarget};
 pub use execute::kill_running_command;
 // 后台服务的生命周期清理（会话删除 / 应用退出 / 引擎销毁 / CLI 结束）。
 pub use service::{kill_all_services, kill_session_services};
@@ -206,47 +211,59 @@ pub fn noop_memory() -> &'static NoopMemoryRepo {
     &MEMORY
 }
 
-/// 是否由原生 Rust 直接执行（否则走 JS 桥）
+/// 全部原生工具名（**36 个**）—— `is_native_tool` 与契约守卫测试（本模块的
+/// `native_tool_list_matches_the_contract`）都取自这一份，新增工具必须同时改这里与
+/// `execute_native_tool` 的分发（否则契约测试会红）。
+const NATIVE_TOOL_NAMES: [&str; 36] = [
+    // file（9）
+    "read_file",
+    "write_file",
+    "edit_file",
+    "delete_file",
+    "copy_move_file",
+    "list_files",
+    "file_info",
+    "mkdir",
+    "parse_document",
+    // search（2）
+    "search_files_by_name",
+    "search_text_in_files",
+    // execute（2）
+    "execute_command",
+    "execute_script",
+    // knowledge_base（6）
+    "search_knowledge_base",
+    "list_knowledge_bases",
+    "list_knowledge_base_documents",
+    "get_knowledge_base_document",
+    "write_to_knowledge_base",
+    "delete_knowledge_base_document",
+    // plan / system / chat / skill / vision / memory / web
+    "todo_write",
+    "user_choice",
+    "list_messages",
+    "read_messages",
+    "list_skills",
+    "read_skill_source",
+    "get_current_time",
+    "vision_analyze",
+    "web_fetch",
+    "web_search",
+    "memory_search",
+    "memory_recall",
+    "memory_write",
+    // service（4，常驻进程：起 / 看 / 杀 / 列）
+    "start_background_service",
+    "get_background_service",
+    "kill_background_service",
+    "list_background_services",
+];
+
+/// 是否由原生 Rust 直接执行
+///
+/// JS 桥虽仍保留（未原生化的工具才走），但当前 36 个工具**全部**已原生实现。
 pub fn is_native_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "execute_command"
-            | "execute_script"
-            | "read_file"
-            | "edit_file"
-            | "write_file"
-            | "list_files"
-            | "delete_file"
-            | "file_info"
-            | "copy_move_file"
-            | "mkdir"
-            | "search_files_by_name"
-            | "search_text_in_files"
-            | "search_knowledge_base"
-            | "list_knowledge_bases"
-            | "list_knowledge_base_documents"
-            | "get_knowledge_base_document"
-            | "delete_knowledge_base_document"
-            | "write_to_knowledge_base"
-            | "todo_write"
-            | "user_choice"
-            | "list_messages"
-            | "read_messages"
-            | "list_skills"
-            | "read_skill_source"
-            | "get_current_time"
-            | "vision_analyze"
-            | "web_fetch"
-            | "web_search"
-            | "memory_search"
-            | "memory_recall"
-            | "memory_write"
-            // 后台服务（常驻进程：起 / 看 / 杀 / 列）
-            | "start_background_service"
-            | "get_background_service"
-            | "kill_background_service"
-            | "list_background_services"
-    )
+    NATIVE_TOOL_NAMES.contains(&name)
 }
 
 /// 执行原生工具
@@ -266,6 +283,7 @@ pub async fn execute_native_tool(
         "file_info" => file::file_info_tool(ctx, args).await,
         "copy_move_file" => file::copy_move_file_tool(ctx, args).await,
         "mkdir" => file::mkdir_tool(ctx, args).await,
+        "parse_document" => file::parse_document_tool(ctx, args).await,
         "search_files_by_name" => search::search_files_by_name_tool(ctx, args).await,
         "search_text_in_files" => search::search_text_in_files_tool(ctx, args).await,
         "search_knowledge_base" => knowledge_base::search_knowledge_base_tool(ctx, args).await,
@@ -340,6 +358,36 @@ pub async fn run_command_for_ts_engine(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 契约 ↔ 原生实现必须一一对应（Rust 侧对应的 `tool-defs-contract.test.ts`）
+    ///
+    /// ⚠️ 只需在 `definitions.json` 里加一条而忘了 `is_native_tool` / `execute_native_tool`，
+    /// 模型就能「看见」但调不动工具（运行期才报 not implemented）—— 这个用例把它变成编译期后的第一条红灯。
+    #[test]
+    fn native_tool_list_matches_the_contract() {
+        let defined: Vec<String> = crate::agent::tool_defs::list_tool_definitions()
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+
+        for name in NATIVE_TOOL_NAMES {
+            assert!(
+                defined.iter().any(|d| d == name),
+                "原生表里的 {name} 不在契约（definitions.json）里"
+            );
+        }
+        for name in &defined {
+            assert!(
+                is_native_tool(name),
+                "契约里的 {name} 没有原生实现（is_native_tool 漏了它）"
+            );
+        }
+        assert_eq!(
+            NATIVE_TOOL_NAMES.len(),
+            defined.len(),
+            "原生工具数与契约工具数必须一致"
+        );
+    }
 
     #[tokio::test]
     async fn test_native_dispatcher_write_read_search() {
@@ -448,6 +496,54 @@ mod tests {
                     Some("no_sandbox_disabled"),
                     "uiData 应带 sandbox 标记: {ui}"
                 );
+            }
+            other => panic!("expected Value, got {other:?}"),
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `parse_document` 走的是与其它工具同一条分发（字符串 → 原生函数），
+    /// 顺带盖住「相对路径按工作目录展开」这一步：契约里有定义、分发漏了就会在这里红。
+    #[tokio::test]
+    async fn test_native_dispatcher_parse_document() {
+        use super::test_util::test_security;
+        use crate::agent::bridge::AgentBridgeState;
+        use crate::agent::cancellation::CancellationToken;
+        use crate::agent::event_sink::TestEventSink;
+        use serde_json::json;
+
+        let dir = std::env::temp_dir().join(format!("virlen_native_parse_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("报表.csv"), "姓名,分数\n张三,90\n").unwrap();
+
+        let sec = test_security(&dir.to_string_lossy());
+        let sink = TestEventSink::new();
+        let bridge = AgentBridgeState::default();
+        let cancel = CancellationToken::new();
+        let ctx = NativeToolCtx {
+            session_id: "s_parse",
+            tool_call_id: "tc_parse",
+            cancel: &cancel,
+            sink: &sink,
+            bridge: &bridge,
+            security: &sec,
+            repo: noop_repo(),
+            memory: noop_memory(),
+            skills: None,
+            host: crate::host::default_host().as_ref(),
+            settings: noop_settings(),
+        };
+
+        let outcome = execute_native_tool(&ctx, "parse_document", &json!({ "path": "报表.csv" }))
+            .await
+            .expect("原生分发不应报错");
+        match outcome {
+            NativeToolOutcome::Value { content, ui_data } => {
+                assert!(content.contains("张三,90"), "content: {content}");
+                let ui = ui_data.expect("应下发 uiData");
+                assert_eq!(ui.get("fileType").and_then(|v| v.as_str()), Some("csv"));
+                assert_eq!(ui.get("ok").and_then(|v| v.as_bool()), Some(true));
             }
             other => panic!("expected Value, got {other:?}"),
         }

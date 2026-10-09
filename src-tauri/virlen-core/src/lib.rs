@@ -13,6 +13,7 @@
 //! 即 GUI 与 CLI 的差异只允许来自宿主注入，不允许来自两份实现。headless CLI 入口在 `virlen-cli`。
 
 pub mod agent;
+pub mod doc_parse;
 pub mod file_ops;
 pub mod host;
 pub mod rag;

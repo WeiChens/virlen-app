@@ -10,7 +10,7 @@
 >
 > **动手前必读**：下面「铁律」与「安全红线」两节（全文照旧留在本文件）。
 
-**一句话**：**Virlen（未霖）**是基于 **Tauri v2** 的跨平台 **AI Agent 桌面客户端** —— 不是聊天壳，而是「**可扩展的 Agent 运行平台**」：多模型接入、可插拔工具（35 个，**已全部 Rust 原生**）、本地视觉 / RAG / Skill、多层安全，以及一套 **Rust 实现的 Agent 引擎**（`virlen-core`，GUI 与 headless CLI 共用）。
+**一句话**：**Virlen（未霖）**是基于 **Tauri v2** 的跨平台 **AI Agent 桌面客户端** —— 不是聊天壳，而是「**可扩展的 Agent 运行平台**」：多模型接入、可插拔工具（36 个，**已全部 Rust 原生**）、本地视觉 / RAG / Skill、多层安全，以及一套 **Rust 实现的 Agent 引擎**（`virlen-core`，GUI 与 headless CLI 共用）。
 抓住四条主线即可：**内核是「Agent 循环」**（§4）· **能力靠「工具」扩展**（§5.2）· **安全贯穿全文**（§5.4 / §8）· **引擎只有一份（Rust）**（§5.1 / §11.37）。
 
 ## 分册地图（按主题找）
@@ -94,3 +94,4 @@
 > - `docs/host-abstraction-draft.md` —— 宿主抽象（**方案 A 已实施**）：GUI / CLI 资源与数据目录的唯一接口
 > - `docs/config-sink-plan.md` —— 配置下沉（**落 SQLite，与 GUI 共用同一份 `virlen.db`**）+ `js` 沙盒规则内嵌求值
 > - `docs/cli-tui-plan.md` —— CLI 交互式 TUI（`virlen-cli chat`）与配置向导、上下文压缩、会话管理（`session`）/ 用量账本（`usage`）的方案 / 实测
+> - `docs/doc-parse-plan.md` —— 文档解析工具 `parse_document`（pdf/doc/docx/xls/xlsx/ppt/pptx/csv）的实施方案（**已实施**）：`doc_parse` 解析层为唯一源，RAG 的 PDF 解析与它同源；全文落盘参数 `outTxtFile` 见其 §12

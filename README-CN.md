@@ -207,7 +207,7 @@ src/
 
 - **聊天循环**：LLM 轮次 → 工具执行 → 结果合并，支持 Run Snapshot 暂停/恢复、取消处理
 - **SQLite 会话持久化**：会话与消息由 Rust 直接写入 `virlen.db`（WAL + 单写连接 + `spawn_blocking`）——不再使用 IndexedDB，不依赖 JS 线程
-- **原生工具**：全部 35 个工具（文件操作、命令执行、后台服务、搜索、知识库、长期记忆、任务清单、用户选择、消息查询、技能、当前时间、端侧视觉、网页抓取/搜索）在 Rust 端原生执行——工具层已无 JS 桥
+- **原生工具**：全部 36 个工具（文件操作、**文档解析**、命令执行、后台服务、搜索、知识库、长期记忆、任务清单、用户选择、消息查询、技能、当前时间、端侧视觉、网页抓取/搜索）在 Rust 端原生执行——工具层已无 JS 桥
 - **DeepSeek V3 tokenizer**：字节级 BPE token 计数（`cmd_count_tokens`），为上下文压缩提供精确 usage 估算
 - **图片伪视觉分析**：纯文本模型场景下，图片块在 Rust 端原生替换为本地视觉分析文本
 
@@ -243,6 +243,7 @@ Virlen 未霖 内置了丰富的工具供 AI Agent 调用：
 |              | `copy_move_file`       | 复制或移动文件/目录                                             |
 |              | `list_files`           | 列出目录内容（支持递归、最大深度、隐藏文件）                    |
 |              | `mkdir`                | 创建目录（支持单个/批量、递归、幂等）                           |
+|              | `parse_document`       | 解析文档为纯文本（PDF / Word / Excel / PowerPoint / CSV）       |
 |              | `search_files_by_name` | 按文件名搜索（支持纯文本、正则、Glob 三种模式）                 |
 |              | `search_text_in_files` | 按文本内容搜索（基于 Rust ripgrep，自动跳过二进制文件）         |
 | **命令执行** | `execute_command`      | 执行 Shell 命令（支持超时、沙盒安全执行）                       |
@@ -488,7 +489,7 @@ pnpm cli list-agent --json
 行为边界（`pnpm cli run --help` 也写了）：
 
 - 消息由 Rust 引擎**直落 SQLite**（与桌面端同一个 `virlen.db`）；
-- 35 个工具全部原生执行，不需要前端；**Gemini 等未原生化的 Provider 不支持**（需前端 JS 桥，装配阶段直接报错）；
+- 36 个工具全部原生执行，不需要前端；**Gemini 等未原生化的 Provider 不支持**（需前端 JS 桥，装配阶段直接报错）；
 - 权限为 `ask` 的命令授权与 `user_choice` 在终端提示并读 stdin（`y`/`yes` = 放行）；**stdin 不是 TTY（管道 / CI）时一律拒绝**（fail-closed）。⚠️ 只重定向 stdout/stderr 时 stdin 仍是终端 → 会等待输入（看起来像卡住），不需要交互请同时重定向 stdin（`< NUL` / `< /dev/null`）或把权限改为 allow/deny；
 - 桌面端存 localStorage 的白/黑名单与跳过目录 CLI 读不到（按空处理），路径安全仍由工作目录 + 沙盒 + 权限三态兜底；
 - 续用 `--session` 时**工作目录只认会话记录**（创建后不可变更）：`--workspace` 与之冲突会直接报错；记录为空时才回退「设置里的默认工作目录 → 当前目录」，且**不写回会话**。

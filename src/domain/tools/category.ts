@@ -25,6 +25,7 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
       'list_files',
       'file_info',
       'mkdir',
+      'parse_document',
     ],
   },
   {

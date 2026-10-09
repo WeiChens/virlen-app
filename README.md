@@ -120,7 +120,7 @@ src/
 │   ├── securityRepo/ # Security configuration persistence
 │   ├── sessionRepo/  # Session persistence
 │   ├── tools/        # Tool implementations — one file per tool, grouped by category
-│   │   ├── file/          # File ops (read, write, edit, delete, copy/move, list, info, mkdir)
+│   │   ├── file/          # File ops (read, write, edit, delete, copy/move, list, info, mkdir, parse_document)
 │   │   ├── search/        # Filename & content search
 │   │   ├── execute/       # Command / script execution (+ approval & risk classification)
 │   │   ├── knowledge-base/# Knowledge base tools
@@ -208,7 +208,7 @@ Since P1–P3, the core engine has been progressively ported to Rust (`src-tauri
 
 - **Chat loop**: LLM round → tool execution → result merge, pause/resume via Run Snapshot, cancellation handling
 - **SQLite session persistence**: sessions & messages are written directly to `virlen.db` by Rust (WAL + single-writer + `spawn_blocking`) — no IndexedDB, no dependency on the JS thread
-- **Native tools**: all 35 tools (file ops, command execution, background services, search, knowledge base, long-term memory, task list, user choice, message history, skills, current time, on-device vision, web fetch/search) execute natively in Rust — there is no JS bridge for tools anymore
+- **Native tools**: all 36 tools (file ops, document parsing, command execution, background services, search, knowledge base, long-term memory, task list, user choice, message history, skills, current time, on-device vision, web fetch/search) execute natively in Rust — there is no JS bridge for tools anymore
 - **DeepSeek V3 tokenizer**: byte-level BPE token counting (`cmd_count_tokens`) powers accurate usage estimation in context compression
 - **Pseudo-vision analysis**: for text-only models, image blocks are replaced with local vision-analysis text natively in Rust
 
@@ -244,6 +244,7 @@ Virlen comes with a rich set of tools for the AI Agent:
 |                 | `copy_move_file`       | Copy or move files/directories                                    |
 |                 | `list_files`           | List directory contents (recursive, max depth, hidden files)      |
 |                 | `mkdir`                | Create directory (single or batch, recursive, idempotent)         |
+|                 | `parse_document`       | Parse a document into plain text (PDF / Word / Excel / PowerPoint / CSV) |
 |                 | `search_files_by_name` | Search by filename (plain text, regex, glob patterns)             |
 |                 | `search_text_in_files` | Search file contents (Rust ripgrep-based, auto-skip binary files) |
 | **Command Exec**| `execute_command`      | Execute shell commands (timeout, sandbox-safe execution)          |
@@ -490,7 +491,7 @@ from the `agents` key in the database — **launching the new desktop build once
 Boundaries (also documented in `pnpm cli run --help`):
 
 - messages are persisted to SQLite by the Rust engine itself (the same `virlen.db` as the desktop app);
-- all 35 tools run natively, no frontend needed; **providers without a native implementation (Gemini) are not supported** (they need the JS bridge — rejected at setup time);
+- all 36 tools run natively, no frontend needed; **providers without a native implementation (Gemini) are not supported** (they need the JS bridge — rejected at setup time);
 - pending approvals (`ask` permissions) and `user_choice` prompt on the terminal and read stdin (`y`/`yes` = allow); when stdin is **not** a TTY (pipe / CI) they are **always denied** (fail-closed). ⚠️ Redirecting only stdout/stderr leaves stdin attached to the terminal, so the CLI will wait for input (looks stuck) — redirect stdin too (`< NUL` / `< /dev/null`) or switch the permission to allow/deny;
 - allow/deny path lists and skipped dirs live in the desktop app's localStorage and are invisible to the CLI (treated as empty); path safety still relies on workspace + sandbox + the three-state permission table;
 - when resuming with `--session`, the **working directory comes from the session record** (immutable after creation): a conflicting `--workspace` is rejected; only when the record is empty does it fall back to the default workspace → cwd, without writing back to the session.
