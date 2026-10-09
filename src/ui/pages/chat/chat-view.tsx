@@ -36,6 +36,8 @@ import ChatInput, {
 } from './components/input'
 import ProviderPrompt from './components/modals/provider-prompt'
 import TodoEntry from './components/todo/TodoEntry'
+// 后台服务：标题栏入口 + 面板（与本会话的 service 工具同一张注册表）
+import ServiceEntry from './components/service/ServiceEntry'
 import SearchDialog from './components/search'
 
 import { useToolUI } from './components/tool-ui'
@@ -900,6 +902,8 @@ function ChatView() {
             {chatState.value.currentSessionId && (
               <TodoEntry sessionId={chatState.value.currentSessionId} />
             )}
+            {/* 后台服务：有会话时 = 本会话（徽标 = 运行中数量）；新对话页 = 全部会话（每行标归属） */}
+            <ServiceEntry sessionId={chatState.value.currentSessionId ?? null} />
             <WorkspaceDisplay
               value={
                 chatState.value.currentSessionId

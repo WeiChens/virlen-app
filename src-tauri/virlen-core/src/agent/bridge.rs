@@ -19,11 +19,16 @@
 //!   `agent_provider_stream_done(requestId, result?, error?)`
 //! - 非流式 result = Message JSON；流式 result = null（事件已逐条送达）
 //!
-//! ## 轮次边界注入（Rust → JS）
-//! - 「上一批工具已回复、下一次 LLM 请求尚未发出」时发出 `agent:round-boundary` { requestId, sessionId }
-//!   → JS 回 `agent_round_boundary_response(requestId, payload)`，payload: { messages: Message[] }
-//! - 用途：用户在 AI 回复期间「应用」的清单变更必须在下一次请求之前进入消息列表，模型才能在这一轮
-//!   里看到；否则要等整个循环结束、用户再说一句话才生效。
+//! ## 轮次边界注入（工具回复后、下一次 LLM 请求发出前调用）
+//!
+//! 两个来源，同一时机（都在 [`inject_round_boundary_messages`] 里，调用方不必分别记得）：
+//!
+//! 1. **本地队列**（后台服务结束通知，见 `native_tools/service/notice.rs`）：在跑的时候发生的「服务已结束」
+//!    存本地队列，在这里追加进本次请求并落库 —— 不依赖 JS（CLI / 手机没有桌面端的 JS 队列）；
+//! 2. **JS 回执**（下部协议）：Rust → JS 发 `agent:round-boundary` { requestId, sessionId }，
+//!    JS 回 `agent_round_boundary_response(requestId, payload)`，payload: { messages: Message[] }。
+//!    用途：用户在 AI 回复期间「应用」的清单变更必须在下一次请求之前进入消息列表，模型才能在这一轮
+//!    里看到；否则要等整个循环结束、用户再说一句话才生效。
 
 use crate::agent::event_sink::EventSink;
 use crate::agent::types::Message;
@@ -336,8 +341,11 @@ pub async fn handle_round_boundary_response(
 
 // ==================== 轮次边界注入 ====================
 
-/// 轮次边界注入（工具回复后、下一次 LLM 请求发出前调用）：向 JS 索取「AI 回复期间用户已应用的
-/// 任务清单变更」等消息，追加进 `messages`，让紧接着的那次请求就能看到。
+/// 轮次边界注入（工具回复后、下一次 LLM 请求发出前调用）。
+///
+/// 两个来源（详见模块头）：
+/// 1. **本地队列** —— 本轮里结束的后台服务（不依赖 JS；CLI / 手机也靠它）；
+/// 2. **JS 索取** —— 「AI 回复期间用户已应用的任务清单变更」等消息。
 ///
 /// ⚠️ 任何失败（超时 / 解析失败 / 写库失败）都降级为「不注入」：只丢一次提前生效的机会，绝不影响
 /// 本轮执行。与前端监听回调同语义（铁律 1），只是 Rust 侧多一次 IPC 往返（消息列表在 Rust 内存里，
@@ -349,6 +357,9 @@ pub async fn inject_round_boundary_messages(
     session_id: &str,
     messages: &mut Vec<Message>,
 ) {
+    // ① 本地队列（与服务结束事件同一线程之外，队列在 `notice.rs`）：先补环境事实
+    crate::agent::native_tools::inject_service_notices(repo, session_id, messages).await;
+    // ② JS 索取：再取用户意图（它带 5s 超时，放前面会拖住本地这条）
     let payload = match state.request_round_boundary(sink, session_id).await {
         Ok(p) => p,
         Err(_) => return,

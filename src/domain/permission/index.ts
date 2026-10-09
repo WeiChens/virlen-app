@@ -31,6 +31,14 @@ export const PERM_TERMINAL_INSTALL = 'terminal.install.execute'
 export const PERM_TERMINAL_DANGEROUS = 'terminal.dangerous.execute'
 /** 脚本命令权限 name */
 export const PERM_SCRIPT = 'script.execute'
+/**
+ * 后台服务启动权限 name —— **单独一项**。
+ *
+ * 服务是常驻进程（看不住、寿命长），风险面与一次性命令不同，故不复用 `terminal.*`：
+ * 基础决策只看这一项；沙盒脱壳仍走 `PERM_SANDBOX_COMMAND`（取更严格者）。
+ * ⚠️ 与 Rust `native_tools/execute/common/classify.rs` 逐字对齐。
+ */
+export const PERM_TERMINAL_BACKGROUND = 'terminal.background.execute'
 /** 沙盒脱壳（申请不使用沙盒执行）权限 name —— 命令执行 */
 export const PERM_SANDBOX_COMMAND = 'sandbox.command.execute'
 /** 沙盒脱壳（申请不使用沙盒执行）权限 name —— 脚本执行 */
@@ -60,6 +68,14 @@ export const PERMISSIONS: PermissionDef[] = [
     name: PERM_SCRIPT,
     label: '脚本命令执行',
     description: '创建并执行脚本文件前是否需要确认',
+    default: 'ask',
+  },
+  {
+    name: PERM_TERMINAL_BACKGROUND,
+    label: '后台服务启动',
+    description:
+      '后台服务（常驻进程，如 npm run dev / vite / 文件监听）启动前是否需要确认；' +
+      '服务会一直留在会话里，直到 AI 或你终止它',
     default: 'ask',
   },
   {

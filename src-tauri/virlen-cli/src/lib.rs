@@ -134,7 +134,21 @@ pub(crate) fn parse_args(args: &[String]) -> Result<Command, String> {
 /// `args` 为 `std::env::args()` 去掉程序名后的部分；输出走注入的 `out` / `err`
 /// （不直接读全局流 → 单测可以用 `Vec<u8>` 断言输出）。
 /// 返回进程退出码，由 bin 的 `main` 交给 `std::process::exit`。
+///
+/// ⚠️ **退出前收掉本进程起的后台服务**：`start_background_service` 起的进程寿命长于一次命令，
+/// 若不管它们，`virlen-cli run` 结束后会留下孤儿 dev server（Job 的 KILL_ON_JOB_CLOSE 只是进程被
+/// 强杀时的兜底，正常情况下应当显式终止并给个交代）。
 pub async fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    let code = run_dispatch(args, out, err).await;
+    let stopped = virlen_core::agent::native_tools::kill_all_services();
+    if stopped > 0 {
+        let _ = writeln!(err, "已终止 {stopped} 个后台服务");
+    }
+    code
+}
+
+/// 子命令分发（退出码由 [`run`] 收尾后返回）。
+async fn run_dispatch(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     match parse_args(args) {
         Err(e) => {
             let _ = writeln!(err, "错误: {}\n\n{}", e, USAGE);

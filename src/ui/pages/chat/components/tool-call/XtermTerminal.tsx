@@ -165,24 +165,44 @@ export class PendingCrWriter {
 
 // 复制 / 粘贴统一走 `utils/clipboard`（与输入框共用同一套兜底，不再各写一份）
 
+/**
+ * 伪控制台的**传输层**：键击出去、尺寸进去。
+ *
+ * 默认实现就是 `execute_command` 那套 Tauri 命令（`pty_write` / `pty_resize`，以 `toolCallId` 为键）；
+ * 后台服务的终端弹窗（P3）传自己的实现（`cmd_service_console_*`，以服务 id 为键）——
+ * 这样终端组件本体只有一份，「怎么跟后端说话」留给调用方（铁律 1）。
+ */
+export interface PtyTransport {
+  /** 写入键击 / 粘贴内容（fire-and-forget；失败不该影响终端渲染） */
+  write(data: string): void | Promise<unknown>
+  /** 上报尺寸；返回 `false` = 会话还没准备好（调用方会短重试） */
+  resize(cols: number, rows: number): Promise<boolean>
+}
+
 export function XtermTerminal({
   stream,
   running,
   toolCallId,
   syncResize = true,
+  transport,
+  autoFocus = false,
   onResize,
 }: {
   /** 伪控制台原始输出（累积串，含 ANSI/VT 控制序列） */
   stream: string
   /** 是否仍在运行（运行中允许键击输入） */
   running: boolean
-  /** PTY 会话 key：与后端「运行中命令」注册表一致，直接用 toolCallId */
+  /** PTY 会话 key：默认传输层的命令参数，也是实例重建的依据 */
   toolCallId: string
   /**
    * 是否把尺寸同步给后端伪控制台。全屏态是「双实例同时渲染」且两份列宽不同，都调 `pty_resize`
    * 会互相覆盖 → 同一时刻只让一份独占同步（见下方「尺寸同步权交接」effect）。
    */
   syncResize?: boolean
+  /** 自定义传输层（默认：`pty_write` / `pty_resize`）；后台服务弹窗用它接自己的命令 */
+  transport?: PtyTransport
+  /** 挂载后是否立即把键盘焦点给终端（弹窗场景：打开就能敲） */
+  autoFocus?: boolean
   /** 尺寸变化回调（列×行），供外层状态栏展示；用 ref 持有避免 effect 依赖抖动 */
   onResize?: (size: { cols: number; rows: number }) => void
 }) {
@@ -201,6 +221,20 @@ export function XtermTerminal({
   // 同上：尺寸回调每次渲染都是新引用，用 ref 持有，避免进 effect 依赖导致终端重建
   const onResizeRef = useRef(onResize)
   onResizeRef.current = onResize
+  // 同上：传输层 / 自动聚焦用 ref 持有（它们不该把终端重建掉 —— 重建会丢 scrollback 与已输入内容）
+  // ⚠️ 默认实现必须**每次渲染都重新赋值**：它闭包捕获 `toolCallId`，而终端实例会随 `toolCallId`
+  // 变化重建（创建 effect 的依赖）—— 若只在首次渲染建闭包，重建后键击 / 尺寸会打到**上一个** PTY 会话键。
+  const defaultWrite = (data: string) => invoke('pty_write', { toolCallId, data })
+  const defaultResize = (cols: number, rows: number) =>
+    invoke<boolean>('pty_resize', { toolCallId, cols, rows })
+  const writeRef = useRef<(data: string) => void | Promise<unknown>>(defaultWrite)
+  const resizeRef = useRef<(cols: number, rows: number) => Promise<boolean>>(
+    defaultResize,
+  )
+  writeRef.current = transport?.write ?? defaultWrite
+  resizeRef.current = transport?.resize ?? defaultResize
+  const autoFocusRef = useRef(autoFocus)
+  autoFocusRef.current = autoFocus
   /** 上次已上报的尺寸（用于去重）：ResizeObserver 会反复回调，而每次真 `pty_resize` 都让 ConPTY 整屏重绘并补空行。 */
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null)
   /** `pty_resize` 重试令牌：每次上报换新令牌，旧令牌的待重试任务自动作废，避免发出过期尺寸。 */
@@ -250,6 +284,8 @@ export function XtermTerminal({
     term.loadAddon(fit)
     term.open(host)
     termRef.current = term
+    // 弹窗场景（P3）：打开就把焦点给终端 —— 用户直接敲键盘就能输入，不必先点一下
+    if (autoFocusRef.current) term.focus()
 
     /**
      * 把尺寸发给后端伪控制台；未命中会话时短重试。
@@ -263,9 +299,9 @@ export function XtermTerminal({
       const gen = resizeGenRef.current
       const attempt = (n: number) => {
         if (gen !== resizeGenRef.current || !termRef.current) return
-        invoke<boolean>('pty_resize', { toolCallId, cols, rows })
+        resizeRef.current(cols, rows)
           .then((ok) => {
-            // 未命中会话（后端 PTY 尚未注册）→ 稍后重试
+            // 未命中会话（后端 PTY 尚未注册 / 服务已结束）→ 稍后重试
             if (!ok && n < 8) {
               resizeRetryRef.current = setTimeout(() => attempt(n + 1), 120)
             }
@@ -307,7 +343,8 @@ export function XtermTerminal({
     // 键击直送伪控制台 —— 用户「插键盘」的核心通道。走 Tauri 命令而非引擎事件总线，不污染 AgentEventType 契约。
     const inputSub = term.onData((data) => {
       if (!runningRef.current) return
-      invoke('pty_write', { toolCallId, data }).catch(() => { })
+      // 传输层可能是 async（Tauri 命令）—— 统一吃掉拒绝，键击丢失不该弹错 / 报未处理拒绝
+      void Promise.resolve(writeRef.current(data)).catch(() => { })
     })
 
     // Ctrl+C / Cmd+C 智能复制（Windows Terminal / VS Code 的通用约定）：有选区 → 复制并拦下（\x03

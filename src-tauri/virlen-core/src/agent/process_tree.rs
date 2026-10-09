@@ -33,16 +33,54 @@ unsafe impl Sync for ProcessTreeGuard {}
 #[cfg(target_os = "windows")]
 impl ProcessTreeGuard {
     /// 创建 Job Object。失败返回 None（调用方回退到递归 taskkill）。
+    ///
+    /// ⚠️ **不设置** KILL_ON_JOB_CLOSE：命令正常结束时若残留后台进程（start /b、nohup），
+    /// 保留现有语义让其继续，只有显式 kill（超时/终止/取消）才 TerminateJobObject。
+    /// 需要「句柄一关就连带杀光」的场景（后台服务）用 [`Self::create_kill_on_close`]。
     pub fn create() -> Option<ProcessTreeGuard> {
-        use windows_sys::Win32::System::JobObjects::CreateJobObjectW;
+        Self::create_with(false)
+    }
+
+    /// 创建带 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job Object —— **后台服务专用**。
+    ///
+    /// 语义：关闭最后一个 Job 句柄时（含本进程崩溃/被强杀，内核代关）Job 内所有进程一并终止。
+    /// 后台服务正是这种场景：应用退出 / 崩溃都不该留下孤儿 dev server，而不能指望退出钩子一定跑完
+    ///（沙盒路径的 Job 本来就带这个限制）。
+    pub fn create_kill_on_close() -> Option<ProcessTreeGuard> {
+        Self::create_with(true)
+    }
+
+    /// `kill_on_close = true` → 额外设置 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`（见上）。
+    fn create_with(kill_on_close: bool) -> Option<ProcessTreeGuard> {
+        use windows_sys::Win32::System::JobObjects::{
+            CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
         unsafe {
             let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
             if job.is_null() {
                 return None;
             }
-            // 不设置 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE：
-            // 命令正常结束时若残留后台进程（start /b、nohup），保留现有语义让其继续，
-            // 只有显式 kill（超时/终止/取消）才 TerminateJobObject。
+            if kill_on_close {
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                let ok = SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    &mut info as *mut _ as *mut std::ffi::c_void,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                );
+                if ok == 0 {
+                    // 设置失败：宁可退化成「无 KILL_ON_CLOSE 的 Job」（仍能 TerminateJobObject
+                    // 一键杀树），也不返回 None —— 否则连落组能力都没有。
+                    let _ = windows_sys::Win32::Foundation::CloseHandle(job);
+                    let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                    if job.is_null() {
+                        return None;
+                    }
+                    return Some(ProcessTreeGuard { job });
+                }
+            }
             Some(ProcessTreeGuard { job })
         }
     }
@@ -94,6 +132,11 @@ pub struct ProcessTreeGuard;
 #[cfg(not(target_os = "windows"))]
 impl ProcessTreeGuard {
     pub fn create() -> Option<ProcessTreeGuard> {
+        None
+    }
+    /// 非 Windows 无 Job Object：与 [`Self::create`] 同语义（进程树强杀一律走
+    /// `kill_process_tree`），故同样返回 `None`。
+    pub fn create_kill_on_close() -> Option<ProcessTreeGuard> {
         None
     }
     pub fn assign_pid(&self, _pid: u32) -> bool {

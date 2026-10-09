@@ -16,6 +16,17 @@
 //! │   │   └── runner/       统一运行器（pipes / pty / sandbox）
 //! │   ├── execute_command.rs
 //! │   └── execute_script.rs
+//! ├── service/              后台服务（4）—— **工具返回后进程继续活着**
+//! │   ├── registry.rs       会话隔离的服务注册表（状态 / 输出窗口 / 容量 / 生命周期）
+//! │   ├── runner.rs         spawn（沙盒 / 裸跑，与 execute 同源）+ 常驻读任务 + 等待窗口
+//! │   ├── notice.rs         **服务结束通知**（空闲→立刻上屏 / 在跑→下一次请求前注入；启动窗口与自 kill 不发）
+//! │   ├── start.rs          起服务（审批链同 execute_command，基础权限用 terminal.background.execute）
+//! │   ├── get.rs            读状态 / 增量输出 / 退出码（waitMs / waitFor）
+//! │   ├── kill.rs           杀整棵进程树（幂等；已结束则只回报现状）
+//! │   ├── list.rs           列本会话的服务
+//! │   ├── pty.rs            服务的交互控制台句柄（键击 / 尺寸 / 关停；P3 终端弹窗的底座）
+//! │   ├── panel.rs          **面板**（聊天页右上角）用的公开 API：快照 + 显式终止 + 终端读写（只读、不摘条目）
+//! │   └── common.rs         常量 / 文本辅助（环形窗口、字符安全切片、截断）/ 模型侧文案与 uiData
 //! ├── file/                  文件操作（8）
 //! │   ├── common.rs          format_size / ensure_parent_dir / format_system_time
 //! │   ├── read_file.rs       write_file.rs   edit_file.rs    delete_file.rs
@@ -56,18 +67,19 @@
 //! │   └── web_search.rs      经已配置搜索源检索（tavily / bocha；直读 `app_settings`）
 //! ```
 //!
-//! **31 个工具全部有 Rust 原生实现**（不再有走 JS 桥的工具）。安全策略与前端
+//! **35 个工具全部有 Rust 原生实现**（不再有走 JS 桥的工具）。安全策略与前端
 //! `securityService.resolveSafePath` / `securityPort.isPathAllowed` 对齐；各工具的模型侧
 //! `content` / `uiData` 与 TS 回退路径逐字对齐（铁律 1）。
 
 mod chat;
 mod common;
-mod execute;
+pub(crate) mod execute;
 mod file;
 mod knowledge_base;
 mod memory;
 pub(crate) mod plan;
 mod search;
+mod service;
 mod skill;
 mod system;
 mod vision;
@@ -80,6 +92,21 @@ pub(crate) mod test_util;
 #[allow(unused_imports)]
 pub use common::{is_path_allowed, resolve_safe_path};
 pub use execute::kill_running_command;
+// 后台服务的生命周期清理（会话删除 / 应用退出 / 引擎销毁 / CLI 结束）。
+pub use service::{kill_all_services, kill_session_services};
+// 后台服务面板（聊天页右上角）的数据出口 —— Tauri 命令层调用（同一张注册表，见 §11.48）。
+// P3：另含终端弹窗的读 / 写 / 改尺寸三条（合并流读取 + 键击 + 尺寸）。
+// P4：`list_all_service_snapshots` = 新对话页的跨会话全局视图（每行带 `sessionId` 归属）。
+pub use service::{
+    kill_service_snapshot, list_all_service_snapshots, list_service_snapshots, read_service_console,
+    resize_service_console, write_service_console,
+};
+// 后台服务「结束通知」（见 `service/notice.rs`）：宿主（GUI）挂事件出口；引擎维护「会话是否在跑」；
+// 轮次边界注入本地排队的那几条（不依赖 JS 是否在场 —— CLI / 手机走同一条路）。
+pub use service::{
+    attach_service_notice_host, inject_service_notices, mark_session_active, mark_session_idle,
+    ServiceNoticeHost,
+};
 // `SandboxBypass`：TS 引擎入口 `run_command_for_ts_engine` 的脱壳原因入参（跨 crate）。
 pub use execute::SandboxBypass;
 // PTY 会话交互：前端中途插键盘 / 改窗口尺寸 / 命名控制键 / 接管交还（Step 1 + Step 2 ③②）
@@ -214,6 +241,11 @@ pub fn is_native_tool(name: &str) -> bool {
             | "memory_search"
             | "memory_recall"
             | "memory_write"
+            // 后台服务（常驻进程：起 / 看 / 杀 / 列）
+            | "start_background_service"
+            | "get_background_service"
+            | "kill_background_service"
+            | "list_background_services"
     )
 }
 
@@ -261,6 +293,10 @@ pub async fn execute_native_tool(
         "memory_search" => memory::memory_search_tool(ctx, args).await,
         "memory_recall" => memory::memory_recall_tool(ctx, args).await,
         "memory_write" => memory::memory_write_tool(ctx, args).await,
+        "start_background_service" => service::start_background_service_tool(ctx, args).await,
+        "get_background_service" => service::get_background_service_tool(ctx, args).await,
+        "kill_background_service" => service::kill_background_service_tool(ctx, args).await,
+        "list_background_services" => service::list_background_services_tool(ctx, args).await,
         _ => Err(format!("Tool \"{}\" not implemented natively", tool_name)),
     }
 }

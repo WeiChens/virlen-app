@@ -298,6 +298,29 @@ function MessageBubble({
     )
   }
 
+  // 后台服务结束（feedback，Rust 组装）：消息流只留一行 —— 正文是给模型的英文报告，
+  // 界面按 uiData 用界面语言重建（铁律 1）。服务详情（命令 / 输出 / 终端）在标题栏面板
+  // 与工具卡片里看，这里只告诉用户「它已经不在了」。
+  if (isFeedback && message.uiData?.type === 'service') {
+    const ui = message.uiData
+    const name = String(ui.name ?? '')
+    const text =
+      ui.killed === true
+        ? tpl('后台服务「$__name__」已被终止', { name })
+        : ui.returnCode != null
+          ? tpl('后台服务「$__name__」已结束（退出码 $__code__）', {
+            name,
+            code: String(ui.returnCode),
+          })
+          : tpl('后台服务「$__name__」已结束', { name })
+    return (
+      <div className="message-service-notice">
+        <span className="ico">◼</span>
+        <span>{text}</span>
+      </div>
+    )
+  }
+
   // 反馈消息：居中系统通知样式
   if (isFeedback) {
     return (

@@ -6,7 +6,7 @@
  *   - 前端：Tauri 走 `cmd_list_tool_definitions`；浏览器 dev / vitest 直读本文件
  *
  * 步骤 ④（摘除 TS 定义体）之后，`toolRegistry` 只剩执行器，因此这里守三条线：
- *   1. 契约本身完整（三平台各 31 个、schema 结构齐全、平台描述确实区分、不含 label）；
+ *   1. 契约本身完整（三平台各 35 个、schema 结构齐全、平台描述确实区分、不含 label）；
  *   2. **契约 ↔ 执行器一一对应**（契约里有定义就必须有执行器；注册了执行器就必须在契约里）；
  *   3. 前端真能取到契约（走 infrastructure 的真实适配器，而不是把 JSON 直接塞进去）。
  *
@@ -23,7 +23,7 @@ import {
 } from '@/domain/tools/definitions'
 
 const FILE = JSON.parse(DEFINITIONS_RAW) as ToolDefinitionsFile
-const EXPECTED_TOOLS = 31
+const EXPECTED_TOOLS = 35
 
 /** 用真实适配器（走内嵌契约分支）+ 真实 toolsInit 组装一个干净的注册中心 */
 async function freshRegistry() {
@@ -39,7 +39,7 @@ async function freshRegistry() {
 }
 
 describe('工具契约（权威源结构）', () => {
-  it('文件可用，且三平台各 31 个工具', () => {
+  it('文件可用，且三平台各 35 个工具', () => {
     expect(isUsableDefinitionsFile(FILE)).toBe(true)
     for (const platform of PLATFORM_KEYS) {
       expect(FILE.variants[platform], `缺少平台 ${platform}`).toHaveLength(
@@ -96,7 +96,7 @@ describe('契约 ↔ 执行器一一对应（真实适配器 + 真实 toolsInit�
   it('所有契约定义都有执行器，且没有多余执行器', async () => {
     const registry = await freshRegistry()
 
-    // 走真实适配器：非 Tauri 环境下应能取到内嵌契约（并给出 31 个工具）
+    // 走真实适配器：非 Tauri 环境下应能取到内嵌契约（并给出 35 个工具）
     const defs = await registry.listDefinitions()
     expect(defs).toHaveLength(EXPECTED_TOOLS)
 
@@ -114,6 +114,8 @@ describe('契约 ↔ 执行器一一对应（真实适配器 + 真实 toolsInit�
     expect(first).toContain('execute_command')
     expect(first).toContain('todo_write')
     expect(first).toContain('memory_search')
+    expect(first).toContain('start_background_service')
+    expect(first).toContain('list_background_services')
   })
 
   it('label 来自注册（i18n），且每个工具都有', async () => {

@@ -1,0 +1,426 @@
+/**
+ * 后台服务面板样式 — 标题栏入口 + 浮层（运行中 / 已结束两页）
+ *
+ * 类名统一 `service-*`；与工具卡片（tool-call/style.scss）共用的只有 `.service-status`（状态徽标，
+ * 定义在那边的最外层）。颜色优先用主题变量（`ui/styles/theme.css`），未定义的语义色带 fallback。
+ */
+.service-entry {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+
+  .service-entry-btn {
+    position: relative;
+
+    &.active {
+      color: var(--primary-color, #3b6ef6);
+      background: var(--hover-bg, #f0f0f0);
+    }
+  }
+}
+
+/* 运行中数量徽标（口径：还有东西在跑吗）；已结束的条目不算 */
+.service-badge {
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--success-color, #16a34a);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  border: 1.5px solid var(--bg-primary, #fff);
+  pointer-events: none;
+}
+
+.service-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60;
+  width: 460px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 10px;
+  background: var(--bg-primary, #fff);
+  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.14);
+  text-align: left;
+}
+
+.service-popover-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+
+  .service-popover-title {
+    font-size: var(--font-size-md, 14px);
+    font-weight: 600;
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  /* 「仅本会话」：面板的可见范围提示（会话隔离是这套工具的核心口径） */
+  .service-scope {
+    padding: 1px 8px;
+    border-radius: 999px;
+    border: 1px dashed var(--border-color, #e5e5e5);
+    font-size: var(--font-size-xs, 11px);
+    color: var(--text-secondary, #888);
+    white-space: nowrap;
+  }
+
+  .service-close {
+    border: none;
+    background: transparent;
+    color: var(--text-secondary, #888);
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+
+    &:hover {
+      background: var(--hover-bg, #f0f0f0);
+      color: var(--text-primary, #1a1a1a);
+    }
+  }
+}
+
+/* 占位推进器（标题行 / 行头用） */
+.service-spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+.service-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-color, #e5e5e5);
+
+  .service-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-secondary, #888);
+    font: inherit;
+    font-size: var(--font-size-sm, 12.5px);
+    cursor: pointer;
+
+    &:hover {
+      background: var(--hover-bg, #f2f4f7);
+    }
+
+    &.active {
+      border-color: var(--primary-color, #3b6ef6);
+      color: var(--primary-color, #3b6ef6);
+      background: color-mix(in srgb,
+          var(--primary-color, #3b6ef6) 8%,
+          transparent);
+    }
+
+    /* 条数直接挂在页签上：另一页有没有东西一眼可见，不必点过去看 */
+    .service-tab-count {
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
+      border-radius: 999px;
+      background: var(--border-color-light, #eceff3);
+      color: var(--text-secondary, #888);
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 16px;
+      text-align: center;
+    }
+
+    &.active .service-tab-count {
+      background: var(--primary-color, #3b6ef6);
+      color: var(--primary-fg, #fff);
+    }
+  }
+}
+
+.service-rows {
+  max-height: 44vh;
+  overflow-y: auto;
+}
+
+.service-row {
+  padding: 8px 6px;
+  border-radius: 8px;
+
+  & + .service-row {
+    border-top: 1px solid var(--border-color-light, #eceff3);
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+  }
+
+  &:hover {
+    background: var(--hover-bg, #fafbfc);
+  }
+
+  .service-row-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    .service-row-name {
+      min-width: 0;
+      font-weight: 600;
+      font-size: var(--font-size-sm, 13px);
+      color: var(--text-primary, #1a1a1a);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* 归属会话（只在「新对话页」的全局视图里出现）：用户必须一眼看出这条是谁的 */
+    .service-row-session {
+      flex: 0 1 auto;
+      min-width: 0;
+      max-width: 45%;
+      padding: 0 6px;
+      border-radius: 4px;
+      background: var(--hover-bg, #f2f4f7);
+      font-size: var(--font-size-xs, 11px);
+      line-height: 16px;
+      color: var(--text-secondary, #888);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  .service-row-cmd {
+    margin-top: 3px;
+    font-family: var(--font-mono, monospace);
+    font-size: 12px;
+    color: var(--accent-color, #4f46e5);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .service-row-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 3px 12px;
+    margin-top: 3px;
+    font-size: var(--font-size-xs, 11px);
+    color: var(--text-tertiary, #999);
+  }
+
+  /* 行内终止：悬停 / 聚焦才显形（与记忆面板的行内操作同一口径），常驻会吵 */
+  .service-kill-btn {
+    flex: 0 0 auto;
+    padding: 2px 9px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 6px;
+    background: var(--bg-primary, #fff);
+    color: var(--text-secondary, #888);
+    font: inherit;
+    font-size: var(--font-size-xs, 11.5px);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s;
+
+    &:hover:not(:disabled) {
+      border-color: var(--error-color, #dc2626);
+      color: var(--error-color, #dc2626);
+    }
+
+    &:disabled {
+      cursor: default;
+      color: var(--text-tertiary, #999);
+    }
+  }
+
+  &:hover .service-kill-btn,
+  &:focus-within .service-kill-btn,
+  .service-kill-btn:disabled {
+    opacity: 1;
+  }
+
+  /* 整行可点（P3：打开终端弹窗）—— 键盘也能进（Enter / 空格） */
+  &.is-clickable {
+    cursor: pointer;
+
+    &:focus-visible {
+      outline: 2px solid var(--primary-color, #3b6ef6);
+      outline-offset: -2px;
+    }
+  }
+}
+
+.service-panel-empty {
+  padding: 12px 6px;
+  font-size: var(--font-size-sm, 13px);
+  color: var(--text-secondary, #888);
+}
+
+.service-foot {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-color, #e5e5e5);
+  font-size: var(--font-size-xs, 11.5px);
+  line-height: 1.5;
+  color: var(--text-tertiary, #999);
+}
+
+/* ==================== 终端弹窗（P3） ====================
+ *
+ * 布局与「终端全屏」（tool-call/style.scss 的 .terminal-fullscreen-layer）同构：
+ * 终端块身处消息列表 / 浮层里，只有挂到 body 上（portal）才能不受祖先
+ *（transform/filter/overflow）影响地铺开；只让开顶部 30px 的窗口状态栏。
+ * 配色沿用终端令牌（--terminal-*），保证与命令终端、卡片里那份观感一致。
+ */
+.service-console-layer {
+  position: fixed;
+  top: var(--window-top-bar-height, 30px);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  /* 与 shared/Modal 同级（低于 Toast 3012 / Select 9000）；高于聊天区内部层级 */
+  z-index: 1300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--modal-overlay, rgba(0, 0, 0, 0.5));
+}
+
+.service-console-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  width: min(1100px, 92vw);
+  height: min(680px, 86vh);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--terminal-bg, #191a1b);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+
+  /* 终端主体占满剩余高度（解除原位 240px 定高；同 .terminal-fullscreen-layer 的注释：
+     要落在 wrapper 上，内层 .pty-terminal-body 保持 height:100% 去填满它） */
+  .pty-terminal-body-wrapper {
+    flex: 1 1 0;
+    min-height: 0;
+    height: auto;
+    padding: 8px 10px;
+  }
+
+  .pty-terminal-body {
+    height: 100%;
+  }
+}
+
+.service-console-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--terminal-header-bg, #242f3a);
+  color: var(--terminal-text, #fff);
+
+  .service-console-name {
+    min-width: 0;
+    font-size: var(--font-size-sm, 13px);
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .service-console-kill {
+    flex: 0 0 auto;
+    padding: 2px 9px;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--terminal-text, #fff);
+    font: inherit;
+    font-size: var(--font-size-xs, 11.5px);
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      border-color: rgba(255, 255, 255, 0.6);
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    &:disabled {
+      cursor: default;
+      opacity: 0.6;
+    }
+  }
+
+  .service-console-close {
+    flex: 0 0 auto;
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: var(--terminal-text, #fff);
+    }
+  }
+}
+
+/* 命令行 + 元信息行：与执行命令的终端卡（.pty-cmd-line）同一套观感 */
+.service-console-cmd {
+  flex-shrink: 0;
+  padding: 4px 12px 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.service-console-meta {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 12px;
+  padding: 4px 12px 6px;
+  font-size: var(--font-size-xs, 11px);
+  color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
+
+  /* 归属会话（只有从新对话页的全局视图打开时才渲染）—— 深色头部下用 chip 提亮 */
+  .service-console-session {
+    padding: 0 6px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--terminal-text, #fff);
+  }
+}
+
+/* 底部提示：只显示「为什么不能输入 / 输出有没有被截断」这类需要用户知道的事 */
+.service-console-foot {
+  flex-shrink: 0;
+  padding: 5px 12px 7px;
+  font-size: var(--font-size-xs, 11px);
+  line-height: 1.5;
+  color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
+  user-select: none;
+}

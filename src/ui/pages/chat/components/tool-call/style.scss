@@ -1254,3 +1254,170 @@
     }
   }
 }
+
+/* ==================== 后台服务卡片（BackgroundServiceMessage） ====================
+   四个工具（start / get / kill / list）共用：展示「启动的命令」+「等待窗口里收到的输出」。
+   卡片语系与 execute-command-wrapper / code-block 对齐（相同的边距、边框、圆角）。 */
+.service-view {
+  margin: 4px 20px 20px 28px;
+  width: min(880px, 92%);
+  max-height: 70vh;
+  overflow-y: auto;
+  text-align: left;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 8px;
+  background: var(--bg-primary, #fff);
+  font-size: var(--font-size-sm);
+
+  .service-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--bg-secondary, #f9fafb);
+    border-bottom: 1px solid var(--border-color, #e5e5e5);
+
+    .service-name {
+      flex: 1;
+      min-width: 0;
+      font-weight: 600;
+      color: var(--text-primary, #1a1a1a);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  .service-cmd {
+    padding: 6px 10px 0;
+    font-family: var(--font-mono, monospace);
+    font-size: 12px;
+    color: var(--accent-color, #4f46e5);
+    word-break: break-all;
+  }
+
+  .service-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    padding: 4px 10px 0;
+    font-size: var(--font-size-xs);
+    color: var(--text-tertiary, #999);
+  }
+
+  .service-output {
+    margin: 6px 10px 10px;
+    padding: 8px;
+    max-height: 45vh;
+    overflow: auto;
+    border-radius: 6px;
+    background: var(--bg-secondary, #f9fafb);
+    font-family: var(--font-mono, monospace);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-secondary, #666);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+}
+
+/* 状态徽标：颜色直接表达「还活着 / 已结束 / 没起来」，不靠读文字。
+   放在最外层（而非嵌在 .service-view 里）：工具卡片与标题栏面板（components/service/）共用
+   —— 它原本只管卡片详情块，列表块里的同名徽标就一直是「没样式的裸文字」。 */
+.service-status {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: 3px;
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border-color, #e5e5e5);
+  color: var(--text-secondary, #666);
+
+  &.is-running {
+    color: var(--color-success, #0fcd55);
+    border-color: rgba(15, 205, 85, 0.45);
+    background: rgba(15, 205, 85, 0.12);
+  }
+
+  &.is-exited,
+  &.is-killed {
+    color: var(--text-tertiary, #999);
+  }
+
+  &.is-failed {
+    color: var(--color-error, #ef4444);
+    border-color: rgba(239, 68, 68, 0.45);
+    background: rgba(239, 68, 68, 0.12);
+  }
+
+  &.is-pending {
+    color: var(--accent-warn, #f59e0b);
+    border-color: rgba(245, 158, 11, 0.45);
+    background: rgba(245, 158, 11, 0.12);
+  }
+}
+
+.service-empty,
+.service-pending {
+  margin: 4px 20px 20px 28px;
+  padding: 8px 10px;
+  width: min(880px, 92%);
+  border: 1px dashed var(--border-color, #e5e5e5);
+  border-radius: 8px;
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary, #999);
+}
+
+.service-list {
+  /* 与 service-view 同一条卡片边距语系（列表没有自己的输出块） */
+  margin: 4px 20px 20px 28px;
+  width: min(880px, 92%);
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 8px;
+  background: var(--bg-primary, #fff);
+  font-size: var(--font-size-sm);
+  overflow: hidden;
+
+  .service-list-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+
+    & + .service-list-row {
+      border-top: 1px solid var(--border-color, #e5e5e5);
+    }
+
+    .service-list-name {
+      flex-shrink: 0;
+      font-weight: 500;
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    .service-list-cmd {
+      flex: 1;
+      min-width: 0;
+      font-family: var(--font-mono, monospace);
+      font-size: 12px;
+      color: var(--accent-color, #4f46e5);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .service-list-meta {
+      flex-shrink: 0;
+      font-size: var(--font-size-xs);
+      color: var(--text-tertiary, #999);
+    }
+  }
+}
+
+.service-id-short {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--accent-color, #4f46e5);
+}

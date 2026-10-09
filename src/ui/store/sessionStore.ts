@@ -150,6 +150,17 @@ class SessionStore {
     }
   }
 
+  /**
+   * 该会话的**尾部消息窗口**是否已在内存（= 表格尾部就是最新的，可以直接往列表尾部追加）。
+   *
+   * 与 `isMessagesFullyLoaded`（连更早的分页都拉完了）不是一回事：外部推来一条新消息时，
+   * 只要尾部在内存就接得上；还没加载过则**只该落库** —— 往空列表里追加会让界面只看到
+   * 「孤零零一条通知」（更早的历史还没拉）。
+   */
+  isMessagesLoaded(sessionId: string): boolean {
+    return this.loadedMessageIds.has(sessionId)
+  }
+
   /** 该会话是否还有更早的消息未加载 */
   hasMoreMessages(sessionId: string): boolean {
     return this.value.messagePaging[sessionId]?.hasMoreOlder ?? false

@@ -5,10 +5,13 @@
 //! 统一运行器 `run_command_native`（沙盒 + 裸跑两条路径）。`pty_session.rs` 为 PTY 会话注册表
 //! （`tool_call_id` → 伪控制台输入通道），支撑前端 `pty_write` / `pty_resize`。
 
-mod common;
+// `common`：命令执行的公共设施（沙盒会话准备 / 风险分类 / 输出解码 / 运行中命令注册表）。
+// `pub(crate)` 是因为**后台服务分类**（`native_tools/service`）要复用同一份实现（铁律 1）。
+pub(crate) mod common;
 mod execute_command;
 mod execute_script;
-mod pty_session;
+// `pub(crate)`：service（后台服务）的交互控制台要复用这里的 `SizeTracker`（尺寸去重，铁律 1）。
+pub(crate) mod pty_session;
 
 pub use common::kill_running_command;
 // `run_command_native`：供 TS 引擎路径经 `pty_run_command` Tauri 命令复用

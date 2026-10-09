@@ -17,8 +17,8 @@ import {
 } from '@/domain/tools/category'
 
 describe('TOOL_CATEGORIES', () => {
-  it('应该包含 11 个分类', () => {
-    expect(TOOL_CATEGORIES).toHaveLength(11)
+  it('应该包含 12 个分类', () => {
+    expect(TOOL_CATEGORIES).toHaveLength(12)
   })
 
   it('每个分类都应该有 id、label 和 toolNames', () => {
@@ -94,6 +94,18 @@ describe('TOOL_CATEGORIES', () => {
     expect(chatCat!.toolNames).toContain('read_messages')
   })
 
+  it('后台服务分类应包含四个 service 工具', () => {
+    const serviceCat = TOOL_CATEGORIES.find((c) => c.id === 'service')
+    expect(serviceCat).toBeDefined()
+    expect(serviceCat!.label).toBe('后台服务')
+    expect(serviceCat!.toolNames).toEqual([
+      'start_background_service',
+      'get_background_service',
+      'kill_background_service',
+      'list_background_services',
+    ])
+  })
+
   it('长期记忆分类应包含三个 memory_* 工具', () => {
     const memoryCat = TOOL_CATEGORIES.find((c) => c.id === 'memory')
     expect(memoryCat).toBeDefined()
@@ -123,6 +135,10 @@ describe('getCategoryId', () => {
     expect(getCategoryId('memory_search')).toBe('memory')
     expect(getCategoryId('memory_recall')).toBe('memory')
     expect(getCategoryId('memory_write')).toBe('memory')
+    expect(getCategoryId('start_background_service')).toBe('service')
+    expect(getCategoryId('get_background_service')).toBe('service')
+    expect(getCategoryId('kill_background_service')).toBe('service')
+    expect(getCategoryId('list_background_services')).toBe('service')
   })
 
   it('未知工具应返回 undefined', () => {

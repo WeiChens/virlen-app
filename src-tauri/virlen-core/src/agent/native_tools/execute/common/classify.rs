@@ -266,6 +266,11 @@ pub(crate) const PERM_SCRIPT: &str = "script.execute";
 pub(crate) const PERM_SANDBOX_COMMAND: &str = "sandbox.command.execute";
 /// 沙盒脱壳（申请不使用沙盒执行）权限 name —— 脚本执行
 pub(crate) const PERM_SANDBOX_SCRIPT: &str = "sandbox.script.execute";
+/// 后台服务启动权限 name —— 单独一项（用户可只放行服务，而不放行普通安装类命令）。
+///
+/// 服务是**常驻**进程（看不住、寿命长），风险面与一次性命令不同，故不复用 `terminal.*`：
+/// 基础决策只看这一项，沙盒脱壳仍走 `PERM_SANDBOX_COMMAND`（取更严格者）。
+pub(crate) const PERM_TERMINAL_BACKGROUND: &str = "terminal.background.execute";
 
 /// 权限三态
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -311,7 +316,6 @@ fn default_decision(name: &str) -> PermissionDecision {
         _ => PermissionDecision::Ask,
     }
 }
-
 /// 旧 `commandApprovalMode` → 决策（仅在 permissions 表缺失时兜底，兼容老客户端 / 测试）
 fn legacy_decision(mode: &str, risk: &str) -> PermissionDecision {
     match mode {
@@ -387,6 +391,7 @@ pub(crate) fn permission_label(name: &str) -> &'static str {
         PERM_TERMINAL_INSTALL => "终端安装命令执行",
         PERM_TERMINAL_DANGEROUS => "终端危险命令执行",
         PERM_SCRIPT => "脚本命令执行",
+        PERM_TERMINAL_BACKGROUND => "后台服务启动",
         PERM_SANDBOX_COMMAND => "沙盒脱壳·命令执行",
         PERM_SANDBOX_SCRIPT => "沙盒脱壳·脚本执行",
         _ => "该操作",

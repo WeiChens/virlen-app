@@ -23,6 +23,7 @@ import MkdirMessage from './MkdirMessage'
 import QueryMessagesMessage from './QueryMessagesMessage'
 import TodoWriteMessage from './TodoWriteMessage'
 import MemoryMessage from './MemoryMessage'
+import BackgroundServiceMessage from './BackgroundServiceMessage'
 
 export interface IToolCallMessage {
   getToolName(): string
@@ -87,6 +88,15 @@ registerMulti(
 registerMulti(
   ['memory_search', 'memory_recall', 'memory_write'],
   () => new MemoryMessage(),
+)
+registerMulti(
+  [
+    'start_background_service',
+    'get_background_service',
+    'kill_background_service',
+    'list_background_services',
+  ],
+  () => new BackgroundServiceMessage(),
 )
 
 export const getToolCallMessage = (type: string) => {

@@ -471,6 +471,15 @@ pub fn run() {
             commands::memory::cmd_memory_runs,
             // 长期记忆（P3：导出 JSON —— 前端选路径写文件，Rust 只给文本）
             commands::memory::cmd_memory_export,
+            // 后台服务面板（聊天页右上角：与四个 service 工具同一张注册表）
+            commands::service::cmd_list_background_services,
+            commands::service::cmd_kill_background_service,
+            // 全局面板（新对话页：跨会话列表，每行带 sessionId 归属）
+            commands::service::cmd_list_all_background_services,
+            // 后台服务终端弹窗（P3：读合并流 / 写键击 / 改尺寸）
+            commands::service::cmd_service_console_read,
+            commands::service::cmd_service_console_write,
+            commands::service::cmd_service_console_resize,
             // 用量账本（token 统计）
             commands::session_db::cmd_append_usage,
             commands::session_db::cmd_usage_stats,
@@ -536,6 +545,16 @@ pub fn run() {
                     tray::destroy(app);
                     // COM 类对象显式撤销（进程退出本来也会清，这里让「注册/撤销」对称）
                     tray::toast_activator::shutdown();
+                }
+                // 后台服务（dev server / watch 等）不跨应用生命周期存活：退出前全杀。
+                // ⚠️ 不能只靠 Job 的 KILL_ON_JOB_CLOSE —— 那是崩溃/被强杀时的兜底；
+                // 正常退出要把服务进程树干干净净地收掉（否则它们会带着断掉的管道继续跑）。
+                let stopped = virlen_core::agent::native_tools::kill_all_services();
+                if stopped > 0 {
+                    telemetry::track(
+                        "tool.service.exit_cleanup",
+                        serde_json::json!({ "count": stopped }),
+                    );
                 }
                 // 退出前把 WAL 截断回零（实测 `-wal` 长期停在 99 MB 以上，比库碎片大得多）。
                 // 幂等；拿不到连接锁就跳过，**绝不等待、绝不拖住退出**。

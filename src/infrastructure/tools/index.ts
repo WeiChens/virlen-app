@@ -6,6 +6,7 @@ export const toolsInit = async () => {
   await import('@/infrastructure/tools/file')
   await import('@/infrastructure/tools/search')
   await import('@/infrastructure/tools/execute')
+  await import('@/infrastructure/tools/service')
   await import('@/infrastructure/tools/knowledge-base')
   await import('@/infrastructure/tools/web')
   await import('@/infrastructure/tools/vision')

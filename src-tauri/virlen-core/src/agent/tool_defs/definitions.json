@@ -839,7 +839,7 @@
           "properties": {
             "summary": {
               "type": "string",
-              "description": "The distilled memory, under 120 characters (hard limit 150; longer input is truncated). One clear sentence, e.g. \"用户偏好中文回复\" or \"virlen-app 有 31 个原生工具\"."
+              "description": "The distilled memory, under 120 characters (hard limit 150; longer input is truncated). One clear sentence, e.g. \"用户偏好中文回复\" or \"virlen-app 有 35 个原生工具\"."
             },
             "kind": {
               "type": "string",
@@ -869,6 +869,121 @@
             "summary",
             "kind"
           ]
+        }
+      },
+      {
+        "name": "start_background_service",
+        "description": "Start a long-running command in the background (dev server / watcher / anything that must keep running) and return as soon as it has printed some startup output. UNLIKE execute_command — which waits for the command to exit and kills it on timeout — the process KEEPS RUNNING after this tool returns. Use this when the command is not supposed to exit (npm run dev, vite, a file watcher, a long-running worker); use execute_command when it finishes by itself. The result reports status (running | exited | failed), the exit code if it already exited, and the output captured during defaultWaitTime. The service exists only inside this conversation and never stops on its own: stop it with kill_background_service as soon as it is no longer needed (it also dies with the conversation or the app). If it exits on its own — or the user stops it from the GUI — a message starting with \"[Background service ended]\" is added to the conversation automatically (before your next request), so you do not need to poll for that; read its final output only if you actually need it. Dev servers usually need sandbox:\"off\" (their child processes spawn grandchildren with piped stdio, which the sandbox's restricted token rejects with EPERM); that request goes through the \"sandbox bypass\" permission (ask by default) and is rejected outright in read-only sandbox mode.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "A short label for this service (shown to the user; used by list/get; starting a second service with the same name while the first is still running is rejected)."
+            },
+            "cmd": {
+              "type": "string",
+              "description": "The shell command to run — Windows PowerShell 5.1 syntax (the command runs through powershell.exe, in the conversation workspace), e.g. \"npm run dev\", \"pnpm dev\", \"node server.js\"."
+            },
+            "defaultWaitTime": {
+              "type": "number",
+              "description": "How long to wait for startup output before returning, in milliseconds (0-60000). Default: 1000. The process is NOT killed when the window ends — it keeps running in the background.",
+              "default": 1000
+            },
+            "tips": {
+              "type": "string",
+              "description": "A brief explanation of what this service does and why it is being started (use the user's language). It is shown in the UI to help the user understand the purpose."
+            },
+            "sandbox": {
+              "type": "string",
+              "enum": [
+                "off"
+              ],
+              "description": "Omit by default (inherits the sandbox mode from settings). Passing \"off\" requests execution WITHOUT the sandbox. Dev servers almost always need it: the command's children spawn grandchildren with piped stdio (vite / next / webpack / jest / node-gyp) and the sandbox's restricted token makes that spawn fail immediately with EPERM. The request goes through the \"sandbox bypass\" permission (a confirmation dialog by default); in read-only sandbox mode it is rejected outright."
+            }
+          },
+          "required": [
+            "name",
+            "cmd"
+          ]
+        }
+      },
+      {
+        "name": "get_background_service",
+        "description": "Read a background service started by start_background_service: status (running | exited), exit code, process id, uptime and output. By default only the output produced SINCE THE LAST READ is returned, so polling it repeatedly is cheap. Use waitMs to wait before reading (up to 60s — e.g. to let a build finish) and waitFor to wait until the output contains a marker (e.g. \"ready in\" / \"Local:\") instead of guessing a delay. Mode \"tail\"/\"all\" re-reads the buffered output without consuming the new-output cursor. Services are per-conversation: an id belonging to another conversation is reported as not found.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "The service id returned by start_background_service (or listed by list_background_services)."
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "new",
+                "tail",
+                "all"
+              ],
+              "description": "Which output to return: \"new\" (default) = output since the last read; \"tail\" = the last tailLines lines (does not consume the cursor); \"all\" = the whole buffered window (does not consume the cursor)."
+            },
+            "tailLines": {
+              "type": "number",
+              "description": "How many trailing lines mode \"tail\" returns. Default: 200.",
+              "default": 200
+            },
+            "waitMs": {
+              "type": "number",
+              "description": "Wait up to this many milliseconds (0-60000) before reading — the wait ends early if the process exits. Default: 0 (read immediately).",
+              "default": 0
+            },
+            "waitFor": {
+              "type": "string",
+              "description": "Wait until the output contains this text (case-insensitive; e.g. \"ready in\" / \"Local:\"), or until waitMs elapses. Implies a wait even when waitMs is 0 (up to 60s)."
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "kill_background_service",
+        "description": "Stop a background service started by start_background_service: terminates the whole process tree (the command and every child it spawned) and returns the tail of its output plus the exit code. Call it as soon as the service is no longer needed — running services keep ports busy and keep writing output. It is safe on a service that already exited: nothing is killed and the current state is reported.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "The service id to stop."
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "new",
+                "tail",
+                "all"
+              ],
+              "description": "Which output to return with the result: \"new\" (default) = output since the last read; \"tail\" = the last tailLines lines; \"all\" = the whole buffered window."
+            },
+            "tailLines": {
+              "type": "number",
+              "description": "How many trailing lines mode \"tail\" returns. Default: 200.",
+              "default": 200
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "list_background_services",
+        "description": "List the background services of the current conversation (id, name, command, status, exit code, uptime and how much unread output each one has). Start here when you need to know what is still running before starting or stopping something. Services belonging to other conversations are not listed.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
         }
       }
     ],
@@ -1709,7 +1824,7 @@
           "properties": {
             "summary": {
               "type": "string",
-              "description": "The distilled memory, under 120 characters (hard limit 150; longer input is truncated). One clear sentence, e.g. \"用户偏好中文回复\" or \"virlen-app 有 31 个原生工具\"."
+              "description": "The distilled memory, under 120 characters (hard limit 150; longer input is truncated). One clear sentence, e.g. \"用户偏好中文回复\" or \"virlen-app 有 35 个原生工具\"."
             },
             "kind": {
               "type": "string",
@@ -1739,6 +1854,121 @@
             "summary",
             "kind"
           ]
+        }
+      },
+      {
+        "name": "start_background_service",
+        "description": "Start a long-running command in the background (dev server / watcher / anything that must keep running) and return as soon as it has printed some startup output. UNLIKE execute_command — which waits for the command to exit and kills it on timeout — the process KEEPS RUNNING after this tool returns. Use this when the command is not supposed to exit (npm run dev, vite, a file watcher, a long-running worker); use execute_command when it finishes by itself. The result reports status (running | exited | failed), the exit code if it already exited, and the output captured during defaultWaitTime. The service exists only inside this conversation and never stops on its own: stop it with kill_background_service as soon as it is no longer needed (it also dies with the conversation or the app). If it exits on its own — or the user stops it from the GUI — a message starting with \"[Background service ended]\" is added to the conversation automatically (before your next request), so you do not need to poll for that; read its final output only if you actually need it. Dev servers usually need sandbox:\"off\" (their child processes spawn grandchildren with piped stdio, which the sandbox's restricted token rejects with EPERM); that request goes through the \"sandbox bypass\" permission (ask by default) and is rejected outright in read-only sandbox mode.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "A short label for this service (shown to the user; used by list/get; starting a second service with the same name while the first is still running is rejected)."
+            },
+            "cmd": {
+              "type": "string",
+              "description": "The shell command to run — zsh syntax (the command runs through zsh -c, in the conversation workspace), e.g. \"npm run dev\", \"pnpm dev\", \"node server.js\"."
+            },
+            "defaultWaitTime": {
+              "type": "number",
+              "description": "How long to wait for startup output before returning, in milliseconds (0-60000). Default: 1000. The process is NOT killed when the window ends — it keeps running in the background.",
+              "default": 1000
+            },
+            "tips": {
+              "type": "string",
+              "description": "A brief explanation of what this service does and why it is being started (use the user's language). It is shown in the UI to help the user understand the purpose."
+            },
+            "sandbox": {
+              "type": "string",
+              "enum": [
+                "off"
+              ],
+              "description": "Omit by default (inherits the sandbox mode from settings). Passing \"off\" requests execution WITHOUT the sandbox. Dev servers almost always need it: the command's children spawn grandchildren with piped stdio (vite / next / webpack / jest / node-gyp) and the sandbox's restricted token makes that spawn fail immediately with EPERM. The request goes through the \"sandbox bypass\" permission (a confirmation dialog by default); in read-only sandbox mode it is rejected outright."
+            }
+          },
+          "required": [
+            "name",
+            "cmd"
+          ]
+        }
+      },
+      {
+        "name": "get_background_service",
+        "description": "Read a background service started by start_background_service: status (running | exited), exit code, process id, uptime and output. By default only the output produced SINCE THE LAST READ is returned, so polling it repeatedly is cheap. Use waitMs to wait before reading (up to 60s — e.g. to let a build finish) and waitFor to wait until the output contains a marker (e.g. \"ready in\" / \"Local:\") instead of guessing a delay. Mode \"tail\"/\"all\" re-reads the buffered output without consuming the new-output cursor. Services are per-conversation: an id belonging to another conversation is reported as not found.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "The service id returned by start_background_service (or listed by list_background_services)."
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "new",
+                "tail",
+                "all"
+              ],
+              "description": "Which output to return: \"new\" (default) = output since the last read; \"tail\" = the last tailLines lines (does not consume the cursor); \"all\" = the whole buffered window (does not consume the cursor)."
+            },
+            "tailLines": {
+              "type": "number",
+              "description": "How many trailing lines mode \"tail\" returns. Default: 200.",
+              "default": 200
+            },
+            "waitMs": {
+              "type": "number",
+              "description": "Wait up to this many milliseconds (0-60000) before reading — the wait ends early if the process exits. Default: 0 (read immediately).",
+              "default": 0
+            },
+            "waitFor": {
+              "type": "string",
+              "description": "Wait until the output contains this text (case-insensitive; e.g. \"ready in\" / \"Local:\"), or until waitMs elapses. Implies a wait even when waitMs is 0 (up to 60s)."
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "kill_background_service",
+        "description": "Stop a background service started by start_background_service: terminates the whole process tree (the command and every child it spawned) and returns the tail of its output plus the exit code. Call it as soon as the service is no longer needed — running services keep ports busy and keep writing output. It is safe on a service that already exited: nothing is killed and the current state is reported.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "The service id to stop."
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "new",
+                "tail",
+                "all"
+              ],
+              "description": "Which output to return with the result: \"new\" (default) = output since the last read; \"tail\" = the last tailLines lines; \"all\" = the whole buffered window."
+            },
+            "tailLines": {
+              "type": "number",
+              "description": "How many trailing lines mode \"tail\" returns. Default: 200.",
+              "default": 200
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "list_background_services",
+        "description": "List the background services of the current conversation (id, name, command, status, exit code, uptime and how much unread output each one has). Start here when you need to know what is still running before starting or stopping something. Services belonging to other conversations are not listed.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
         }
       }
     ],
@@ -2579,7 +2809,7 @@
           "properties": {
             "summary": {
               "type": "string",
-              "description": "The distilled memory, under 120 characters (hard limit 150; longer input is truncated). One clear sentence, e.g. \"用户偏好中文回复\" or \"virlen-app 有 31 个原生工具\"."
+              "description": "The distilled memory, under 120 characters (hard limit 150; longer input is truncated). One clear sentence, e.g. \"用户偏好中文回复\" or \"virlen-app 有 35 个原生工具\"."
             },
             "kind": {
               "type": "string",
@@ -2609,6 +2839,121 @@
             "summary",
             "kind"
           ]
+        }
+      },
+      {
+        "name": "start_background_service",
+        "description": "Start a long-running command in the background (dev server / watcher / anything that must keep running) and return as soon as it has printed some startup output. UNLIKE execute_command — which waits for the command to exit and kills it on timeout — the process KEEPS RUNNING after this tool returns. Use this when the command is not supposed to exit (npm run dev, vite, a file watcher, a long-running worker); use execute_command when it finishes by itself. The result reports status (running | exited | failed), the exit code if it already exited, and the output captured during defaultWaitTime. The service exists only inside this conversation and never stops on its own: stop it with kill_background_service as soon as it is no longer needed (it also dies with the conversation or the app). If it exits on its own — or the user stops it from the GUI — a message starting with \"[Background service ended]\" is added to the conversation automatically (before your next request), so you do not need to poll for that; read its final output only if you actually need it. Dev servers usually need sandbox:\"off\" (their child processes spawn grandchildren with piped stdio, which the sandbox's restricted token rejects with EPERM); that request goes through the \"sandbox bypass\" permission (ask by default) and is rejected outright in read-only sandbox mode.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "A short label for this service (shown to the user; used by list/get; starting a second service with the same name while the first is still running is rejected)."
+            },
+            "cmd": {
+              "type": "string",
+              "description": "The shell command to run — sh syntax (the command runs through sh -c, in the conversation workspace), e.g. \"npm run dev\", \"pnpm dev\", \"node server.js\"."
+            },
+            "defaultWaitTime": {
+              "type": "number",
+              "description": "How long to wait for startup output before returning, in milliseconds (0-60000). Default: 1000. The process is NOT killed when the window ends — it keeps running in the background.",
+              "default": 1000
+            },
+            "tips": {
+              "type": "string",
+              "description": "A brief explanation of what this service does and why it is being started (use the user's language). It is shown in the UI to help the user understand the purpose."
+            },
+            "sandbox": {
+              "type": "string",
+              "enum": [
+                "off"
+              ],
+              "description": "Omit by default (inherits the sandbox mode from settings). Passing \"off\" requests execution WITHOUT the sandbox. Dev servers almost always need it: the command's children spawn grandchildren with piped stdio (vite / next / webpack / jest / node-gyp) and the sandbox's restricted token makes that spawn fail immediately with EPERM. The request goes through the \"sandbox bypass\" permission (a confirmation dialog by default); in read-only sandbox mode it is rejected outright."
+            }
+          },
+          "required": [
+            "name",
+            "cmd"
+          ]
+        }
+      },
+      {
+        "name": "get_background_service",
+        "description": "Read a background service started by start_background_service: status (running | exited), exit code, process id, uptime and output. By default only the output produced SINCE THE LAST READ is returned, so polling it repeatedly is cheap. Use waitMs to wait before reading (up to 60s — e.g. to let a build finish) and waitFor to wait until the output contains a marker (e.g. \"ready in\" / \"Local:\") instead of guessing a delay. Mode \"tail\"/\"all\" re-reads the buffered output without consuming the new-output cursor. Services are per-conversation: an id belonging to another conversation is reported as not found.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "The service id returned by start_background_service (or listed by list_background_services)."
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "new",
+                "tail",
+                "all"
+              ],
+              "description": "Which output to return: \"new\" (default) = output since the last read; \"tail\" = the last tailLines lines (does not consume the cursor); \"all\" = the whole buffered window (does not consume the cursor)."
+            },
+            "tailLines": {
+              "type": "number",
+              "description": "How many trailing lines mode \"tail\" returns. Default: 200.",
+              "default": 200
+            },
+            "waitMs": {
+              "type": "number",
+              "description": "Wait up to this many milliseconds (0-60000) before reading — the wait ends early if the process exits. Default: 0 (read immediately).",
+              "default": 0
+            },
+            "waitFor": {
+              "type": "string",
+              "description": "Wait until the output contains this text (case-insensitive; e.g. \"ready in\" / \"Local:\"), or until waitMs elapses. Implies a wait even when waitMs is 0 (up to 60s)."
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "kill_background_service",
+        "description": "Stop a background service started by start_background_service: terminates the whole process tree (the command and every child it spawned) and returns the tail of its output plus the exit code. Call it as soon as the service is no longer needed — running services keep ports busy and keep writing output. It is safe on a service that already exited: nothing is killed and the current state is reported.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "The service id to stop."
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "new",
+                "tail",
+                "all"
+              ],
+              "description": "Which output to return with the result: \"new\" (default) = output since the last read; \"tail\" = the last tailLines lines; \"all\" = the whole buffered window."
+            },
+            "tailLines": {
+              "type": "number",
+              "description": "How many trailing lines mode \"tail\" returns. Default: 200.",
+              "default": 200
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "list_background_services",
+        "description": "List the background services of the current conversation (id, name, command, status, exit code, uptime and how much unread output each one has). Start here when you need to know what is still running before starting or stopping something. Services belonging to other conversations are not listed.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
         }
       }
     ]

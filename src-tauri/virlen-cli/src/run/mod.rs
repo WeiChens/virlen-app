@@ -7,7 +7,7 @@
 //! - 一次性：发一条用户消息，跑完整个 agent 循环（含工具调用）后退出，没有 REPL。
 //! - 与桌面端同一份数据：库路径 = `host.data_dir()/virlen.db`；消息由引擎先落库再 emit，因此
 //!   `--session <id>` 续跑读到的就是桌面端那份历史。
-//! - 无 JS：31 个工具全部原生化（`is_native_tool` 是全集）。⚠️ 但必须下发 `security`（`Some(..)`）——
+//! - 无 JS：35 个工具全部原生化（`is_native_tool` 是全集）。⚠️ 但必须下发 `security`（`Some(..)`）——
 //!   `tool_executor` 用 `security.is_some()` 决定走原生还是走 JS 桥，缺了它 CLI 会去请求一个不存在的
 //!   JS 宿主而挂起；未原生化能力（`BridgedProvider`，目前只有 Gemini）在装配阶段直接拒绝，给可读错误。
 //!

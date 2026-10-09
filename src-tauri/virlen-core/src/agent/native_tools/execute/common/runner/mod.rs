@@ -19,6 +19,9 @@ mod sandbox;
 #[cfg(test)]
 mod tests;
 
+// 后台服务（`native_tools/service`）复用同一份沙盒会话准备（算可写根 → 应用 ACL → 建受限令牌）。
+pub(crate) use sandbox::prepare_sandbox_session;
+
 /// 判定「超时前全程几乎无输出」的输出上限（trim 后字符数）：低于此值即认为命令卡在等输入
 /// （密码 / `y/n` / REPL），在结果里显式引导模型。
 const TIMEOUT_IDLE_HINT_MAX_OUTPUT: usize = 16;
@@ -274,7 +277,8 @@ pub(super) fn attach_sandbox(mut outcome: NativeToolOutcome, sandbox: &str) -> N
 ///
 /// 「运行中」阶段尚无 `uiData`（结果要等结束才组装），但用户需要**立刻**知道终端以何种
 /// 沙盒模式运行，故单开一个原始事件（与 `agent:tool-output` 同层，不进 `AgentEventType`）。
-pub(super) fn emit_sandbox_env(ctx: &NativeToolCtx<'_>, sandbox: &str) {
+/// `pub(crate)`：后台服务（`native_tools/service`）启动时复用同一事件。
+pub(crate) fn emit_sandbox_env(ctx: &NativeToolCtx<'_>, sandbox: &str) {
     ctx.sink.emit_raw(
         "agent:tool-env",
         json!({

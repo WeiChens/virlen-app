@@ -137,6 +137,10 @@ impl AgentEngine {
             }
             cancels.insert(session_id.clone(), cancel.clone());
         }
+        // 「AI 正在工作」的权威标记（后台服务结束通知的时机判据）：在跑时结束的服务存队列，
+        // 到下一次请求前注入；空闲时结束的立刻上屏（见 `native_tools::service::notice`）。
+        // 与并发闸同一处下笔：CLI / 手机 / 托盘都经这里，前端那份 `working` 不是权威。
+        crate::agent::native_tools::mark_session_active(&session_id);
 
         let started = crate::telemetry::now_ms();
         crate::telemetry::track(
@@ -151,6 +155,9 @@ impl AgentEngine {
 
         self.active_cancels.lock().unwrap().remove(&session_id);
         clear_tool_call_history(&session_id);
+        // 本轮结束 → 回到空闲：把这一轮里攒下的「服务结束」通知交给宿主（界面立刻上屏）；
+        // 没接管（CLI / headless）的留回队列，下一次请求前注入。
+        crate::agent::native_tools::mark_session_idle(&session_id);
 
         let mut finish = json!({
             "session_id": crate::telemetry::hash_id(&session_id),
@@ -524,6 +531,8 @@ impl AgentEngine {
         }
         self.active_cancels.lock().unwrap().clear();
         clear_all_tool_call_histories();
+        // 后台服务不跨生命周期存活：引擎销毁即收掉（GUI 退出另有 `RunEvent::Exit` 兜底，CLI 另有收尾）。
+        crate::agent::native_tools::kill_all_services();
     }
 }
 

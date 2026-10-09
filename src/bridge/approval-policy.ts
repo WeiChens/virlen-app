@@ -9,12 +9,15 @@
  */
 import type { ApprovalTier } from 'virlen-remote'
 
-/** 已知权限集合（与 `domain/permission/index.ts` 的注册表对齐）。 */
+/** 已知权限集合（与 `domain/permission/index.ts` 的注册表**一一对应**；漏登记 = 该权限在手机侧被静默判为「未知」→ 从严）。 */
 export const KNOWN_PERMS: ReadonlySet<string> = new Set([
   'terminal.normal.execute',
   'terminal.install.execute',
   'terminal.dangerous.execute',
   'script.execute',
+  // 后台服务（常驻进程）：与普通终端命令同档（低摩擦）——它已由桌面端权限（默认 ask）拦截，
+  // 手机侧要防的只是「AI 自作主张要求脱壳 / 跑了危险命令」，那两条各自已判 high。
+  'terminal.background.execute',
   'sandbox.command.execute',
   'sandbox.script.execute',
 ])

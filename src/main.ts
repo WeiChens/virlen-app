@@ -36,6 +36,8 @@ import { installGlobalErrorHandlers } from '@/utils/telemetry/errorHandler'
 import { bindUsageLedger } from '@/domain/usage'
 import { tauriUsageLedger } from '@/infrastructure/usage-ledger'
 import { initTrayService } from '@/services/tray-service'
+// 后台服务「结束通知」：AI 空闲时服务结束了 → Rust 发 `agent:service-exit`，前端落进消息列表
+import { initServiceNotice } from '@/services/service-notice'
 // 安全配置：规则以 Rust 侧 `app_settings` 为唯一源（localStorage 不保存），
 // 启动同步由 store 的 hydrate 负责（它同时刷新 observable，设置页立即展示表里的值）。
 import { flushSecurityPersist } from '@/infrastructure/securityRepo'
@@ -192,6 +194,10 @@ async function init() {
 
   // 托盘/后台化集成：把「谁在工作」推给 Rust、接管托盘点击（非 Tauri 环境自动跳过）
   await step('tray', () => initTrayService())
+
+  // 后台服务结束通知（P5）：AI 空闲时服务结束 → 落一条 feedback 消息（用户可见，AI 下次请求带上）。
+  // 必须在窗口显示前挂好：服务是应用运行中才有的东西，启动即挂最省心（AI 在跑时那条路不经过前端）。
+  await step('serviceNotice', () => initServiceNotice())
 
   providerService.initProviders()
   searchProviderService.initSearchProviders()

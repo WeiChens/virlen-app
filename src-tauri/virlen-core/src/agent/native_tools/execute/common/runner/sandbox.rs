@@ -88,7 +88,7 @@ pub(super) fn collect_extra_roots(
 ///
 /// 与「怎么跑」解耦，便于 PTY 路径（`run_command_native_pty`）与管道路径
 /// （`run_command_sandboxed`）共用：两条路径的 spawn 方式不同，prepare 完全一致。
-pub(super) async fn prepare_sandbox_session(
+pub(crate) async fn prepare_sandbox_session(
     ctx: &NativeToolCtx<'_>,
 ) -> Result<crate::sandbox::SandboxSession, String> {
     // 写根 = workspace + whitelist 中「存在且是目录」的可写目录（排除 skills_dir）；

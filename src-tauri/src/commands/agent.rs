@@ -50,6 +50,33 @@ impl EventSink for TauriEventSink {
     }
 }
 
+/// 后台服务「**结束通知**」的 GUI 出口（`virlen_core::agent::native_tools::ServiceNoticeHost`）。
+///
+/// Rust 在「AI 空闲但某个服务结束了」时把**已经组装好的那条消息**（模型侧英文正文 + `uiData`）
+/// 交到这里 → 这里原样发给前端；前端只负责把它落进消息列表（不做文案决策，铁律 1）。
+/// 返回 `false`（事件系统不可用）时通知留在 Rust 队列里，下一次 LLM 请求之前注入——不会丢。
+/// 事件名不进 `AgentEventType` 契约（与 `agent:tool-output` / `tray:*` 同一类 raw 事件）。
+pub struct TauriServiceNoticeHost {
+    app: tauri::AppHandle,
+}
+
+impl TauriServiceNoticeHost {
+    pub fn new(app: tauri::AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+impl native_tools::ServiceNoticeHost for TauriServiceNoticeHost {
+    fn present_service_notice(&self, session_id: &str, message: serde_json::Value) -> bool {
+        self.app
+            .emit(
+                "agent:service-exit",
+                serde_json::json!({ "sessionId": session_id, "message": message }),
+            )
+            .is_ok()
+    }
+}
+
 /// 初始化 Agent 引擎（在应用启动时调用）
 pub fn init_agent_engine(app: &tauri::AppHandle) {
     let bridge = Arc::new(AgentBridgeState::default());
@@ -93,6 +120,10 @@ pub fn init_agent_engine(app: &tauri::AppHandle) {
     app.manage(bridge);
     app.manage(engine);
     app.manage(repo);
+    // 后台服务「结束通知」的界面出口（核心侧不依赖 tauri，宿主在这里接上）：
+    // 空闲时服务结束 → 前端收到 `agent:service-exit` → 落进消息列表（用户与 AI 下一次请求都看得到）。
+    // ⚠️ 必须在引擎能起服务之前完成（服务只能由一次 run 起，而 run 要用户先发消息）。
+    native_tools::attach_service_notice_host(Arc::new(TauriServiceNoticeHost::new(app.clone())));
 }
 
 // ==================== Tauri 命令 ====================

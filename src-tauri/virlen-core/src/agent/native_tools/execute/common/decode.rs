@@ -67,7 +67,8 @@ pub(super) fn push_bytes_bounded(buf: &mut Vec<u8>, chunk: &[u8]) -> bool {
 }
 
 /// 解码读线程的原始字节缓冲；被截断过时在开头插入提示。
-pub(super) fn decode_tail(buf: &[u8], truncated: bool) -> String {
+/// `pub(crate)`：后台服务读任务在流结束收尾时复用。
+pub(crate) fn decode_tail(buf: &[u8], truncated: bool) -> String {
     let text = decode_output(buf);
     if truncated {
         format!("{STREAM_TRUNCATED_NOTE}{text}")
@@ -78,7 +79,10 @@ pub(super) fn decode_tail(buf: &[u8], truncated: bool) -> String {
 
 /// 流式解码器：跨 8KB 分块保留多字节序列尾部，避免字符在块边界被切断成乱码。
 /// 内部区分三态：全部合法 UTF-8 / 尾部是跨块的不完整 UTF-8 序列 / 出现非 UTF-8 字节（GBK 等）。
-pub(super) struct TerminalDecoder {
+///
+/// `pub(crate)`：后台服务（`native_tools/service`）的常驻读任务复用同一份解码，
+/// 不另写一份增量解码（铁律 1）。
+pub(crate) struct TerminalDecoder {
     pending: Vec<u8>,
 }
 
@@ -92,12 +96,13 @@ enum Utf8Status {
 }
 
 impl TerminalDecoder {
-    pub(super) fn new() -> Self {
+    /// 新建解码器（`pub(crate)`：后台服务的常驻读任务复用）
+    pub(crate) fn new() -> Self {
         Self { pending: Vec::new() }
     }
 
     /// 追加一段原始字节，返回本次可安全解码出的文本
-    pub(super) fn push(&mut self, bytes: &[u8]) -> String {
+    pub(crate) fn push(&mut self, bytes: &[u8]) -> String {
         self.pending.extend_from_slice(bytes);
         match self.utf8_status() {
             Utf8Status::Complete => {
@@ -138,7 +143,7 @@ impl TerminalDecoder {
     }
 
     /// 流结束时解码剩余字节
-    pub(super) fn finish(&mut self) -> String {
+    pub(crate) fn finish(&mut self) -> String {
         let text = decode_output(&self.pending);
         self.pending.clear();
         text

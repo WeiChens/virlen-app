@@ -17,7 +17,7 @@ mod terminal;
 pub(crate) use classify::{
     classify_command, command_decision, permission_for_risk, permission_label, resolve_decision,
     risk_info, with_bypass_hint, PermissionDecision, PERM_SANDBOX_COMMAND, PERM_SANDBOX_SCRIPT,
-    PERM_SCRIPT,
+    PERM_SCRIPT, PERM_TERMINAL_BACKGROUND,
 };
 // 以下两项仅在测试里使用 → 非测试构建显式 allow(unused_imports)。
 #[allow(unused_imports)]
@@ -25,6 +25,16 @@ pub(crate) use classify::SANDBOX_BYPASS_HINT;
 #[allow(unused_imports)]
 pub(crate) use classify::{PERM_TERMINAL_DANGEROUS, PERM_TERMINAL_INSTALL, PERM_TERMINAL_NORMAL};
 pub(crate) use runner::{pty_available, sandbox_mode, SandboxMode};
+
+// 后台服务（`native_tools/service`）复用项：沙盒会话准备 / 实际沙盒模式下发 / 终端输出处理 /
+// 流式解码器 / 运行中命令注册（前端「终止」按钮）/ 进程树强杀 / 终止器。
+// 服务与命令走**同一份**实现，避免「两套沙盒 / 两套 ANSI 处理 / 两套解码」（铁律 1）。
+pub(crate) use decode::TerminalDecoder;
+pub(crate) use registry::{
+    kill_process_tree, register_running_command, unregister_running_command, Terminator,
+};
+pub(crate) use runner::{emit_sandbox_env, prepare_sandbox_session};
+pub(crate) use terminal::process_terminal_output;
 
 // 「忽略沙盒命令」规则（随 security 快照下发，Rust 本地判定；原「问 JS」路径已删除）。
 pub(crate) use rules::{apply_rule_clearance, match_sandbox_ignore_rule, with_rule_hint};

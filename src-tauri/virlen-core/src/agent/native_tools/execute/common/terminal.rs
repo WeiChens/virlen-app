@@ -11,7 +11,7 @@ fn ensure_row(buffer: &mut Vec<Vec<char>>, row: usize) {
 }
 
 /// 模拟虚拟终端处理输出（与 JS processTerminalOutput 对齐，UTF-8 安全）
-pub(super) fn process_terminal_output(raw: &str) -> String {
+pub(crate) fn process_terminal_output(raw: &str) -> String {
     if raw.is_empty() {
         return String::new();
     }

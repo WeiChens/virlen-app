@@ -10,6 +10,7 @@ import {
   PERM_SANDBOX_COMMAND,
   PERM_SANDBOX_SCRIPT,
   PERM_SCRIPT,
+  PERM_TERMINAL_BACKGROUND,
   PERM_TERMINAL_DANGEROUS,
   PERM_TERMINAL_INSTALL,
   PERM_TERMINAL_NORMAL,
@@ -30,6 +31,7 @@ describe('permission 注册表', () => {
       'terminal.install.execute',
       'terminal.dangerous.execute',
       'script.execute',
+      'terminal.background.execute',
       'sandbox.command.execute',
       'sandbox.script.execute',
     ])
@@ -48,6 +50,7 @@ describe('getPermissionDecision / withDefaultPermissions', () => {
     expect(getPermissionDecision({}, PERM_TERMINAL_INSTALL)).toBe('ask')
     expect(getPermissionDecision({}, PERM_TERMINAL_DANGEROUS)).toBe('ask')
     expect(getPermissionDecision({}, PERM_SCRIPT)).toBe('ask')
+    expect(getPermissionDecision({}, PERM_TERMINAL_BACKGROUND)).toBe('ask')
     expect(getPermissionDecision({}, PERM_SANDBOX_COMMAND)).toBe('ask')
     expect(getPermissionDecision({}, PERM_SANDBOX_SCRIPT)).toBe('ask')
   })

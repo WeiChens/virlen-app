@@ -8,12 +8,13 @@ use std::time::Duration;
 
 /// 跨平台强杀进程树（进程 + 全部后代），委托 `process_tree` 模块（Windows 用 Toolhelp32、
 /// Unix 用 `ps` 递归枚举，不依赖进程树关系 / 进程组）。
-pub(super) fn kill_process_tree(pid: u32) {
+/// `pub(crate)`：后台服务（`native_tools/service`）的终止路径复用。
+pub(crate) fn kill_process_tree(pid: u32) {
     crate::agent::process_tree::kill_process_tree(pid);
 }
 
 /// 终止器：一键杀整棵进程树（闭包捕获 Job Object / 沙盒 Job 等）。
-pub(super) type Terminator = Arc<dyn Fn() + Send + Sync>;
+pub(crate) type Terminator = Arc<dyn Fn() + Send + Sync>;
 
 /// 运行中命令条目：记录子进程 pid、kill 请求标志和终止器
 struct RunningCommand {
@@ -29,7 +30,7 @@ static RUNNING_COMMANDS: LazyLock<Mutex<HashMap<String, RunningCommand>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// 注册一个运行中的命令（run_command_native 内部调用）
-pub(super) fn register_running_command(
+pub(crate) fn register_running_command(
     tool_call_id: &str,
     pid: u32,
     terminator: Option<Terminator>,
@@ -47,7 +48,7 @@ pub(super) fn register_running_command(
 }
 
 /// 移除已结束的命令
-pub(super) fn unregister_running_command(tool_call_id: &str) {
+pub(crate) fn unregister_running_command(tool_call_id: &str) {
     RUNNING_COMMANDS.lock().unwrap().remove(tool_call_id);
 }
 

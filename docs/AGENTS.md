@@ -34,7 +34,7 @@
 | 能力域 | 说明 |
 |---|---|
 | **多 Provider** | OpenAI 兼容 / Anthropic / Gemini；支持自定义 Base URL、自定义 Header、`reasoningEffort` |
-| **Function Calling** | 文件读写、命令执行、网页抓取、搜索、视觉分析、知识库、长期记忆（检索/召回/写入）、会话消息检索、任务规划共 11 大类 31 个工具 |
+| **Function Calling** | 文件读写、命令执行、**后台服务**（常驻进程：起/看/杀/列）、网页抓取、搜索、视觉分析、知识库、长期记忆（检索/召回/写入）、会话消息检索、任务规划共 12 大类 35 个工具 |
 | **端侧视觉引擎** | `quasivision` ONNX 纯本地推理：UI 元素检测 / PP-OCR v5 / YOLOE-26n 物体检测 / 图标分类（图片不出本机） |
 | **Skill 机制** | `SKILL.md` 领域知识包，注入系统提示词 + 源码目录只读可查 |
 | **多层安全** | 路径黑白名单、权限三态、跨平台 Shell 沙盒、工具风暴防护（StormBreaker） |
@@ -131,7 +131,7 @@
    │      └─ 有 tool_calls ──► 工具执行  tool-executor             │
    │                              │                                │
    │         ┌────────────────────┴────────────────────┐          │
-   │         ▼ 原生工具（31 个）                          ▼ JS 桥   │
+   │         ▼ 原生工具（35 个）                          ▼ JS 桥   │
    │ Rust 直接执行                              Rust→JS→Rust 往返    │
    │ （先过安全校验）                            toolRegistry 执行    │
    │         └────────────────────┬────────────────────┘          │
@@ -193,7 +193,7 @@ iteration_verify_pass / iteration_verify_fail / iteration_max_exceeded / iterati
 | JS → Rust | `agent_send_message` / `agent_cancel` / `agent_get_run_snapshot` / `agent_clear_run_snapshot` / `agent_dispose` / `agent_kill_command` / `pty_*` | 生命周期、取消、终端交互 |
 
 **未原生化的部分**（仍委托 TS）：Gemini Provider（`agent:provider-request` 桥）。
-> **31 个工具已全部原生化**（S5 补齐 `web_fetch` / `web_search`，P1 补齐 `memory_*`）——`is_native_tool` 就是全集，**没有工具再走 JS 桥**。
+> **35 个工具已全部原生化**（S5 补齐 `web_fetch` / `web_search`，P1 补齐 `memory_*`，后台服务补齐 `service` 四件套）——`is_native_tool` 就是全集，**没有工具再走 JS 桥**。
 Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你是一个有用的 AI 助手。"`）。完整清单见 `docs/rust-engine.md`。
 
 > ⚠️ **改引擎语义（LLM 轮次 / 工具执行 / 暂停恢复 / 迭代验证 / 撤销）只需改 Rust**（`virlen-core`）；但**被 Rust 回调的 TS 部分**（工具执行器 / Gemini provider / 提示词组装 / 事件契约）仍须与 Rust 同语义（铁律 1）。
@@ -201,14 +201,15 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 ### 5.2 工具系统——能力扩展的唯一入口
 
 - **注册制**：`toolRegistry.register(name, executor, label?)`；不写全局函数表。
-- **定义与执行器分离，且定义只有一份（机制 C）**：工具定义在 **Rust 侧权威源** `src-tauri/virlen-core/src/agent/tool_defs/definitions.json`（31 工具 × 三平台变体 `windows`/`macos`/`linux`，键名与 `std::env::consts::OS` 同词表）；前端只注册执行器 + UI 文案（`label` 走 i18n，**不进契约**）。读取一律 `await toolRegistry.listDefinitions()`（**异步**接口），返回「契约 ∩ 已注册执行器」。详见 `docs/rust-engine.md` §12。
-- **11 大分类 / 31 个工具**（`src/domain/tools/category.ts` ↔ `src/infrastructure/tools/<分类>/`）：
+- **定义与执行器分离，且定义只有一份（机制 C）**：工具定义在 **Rust 侧权威源** `src-tauri/virlen-core/src/agent/tool_defs/definitions.json`（35 工具 × 三平台变体 `windows`/`macos`/`linux`，键名与 `std::env::consts::OS` 同词表）；前端只注册执行器 + UI 文案（`label` 走 i18n，**不进契约**）。读取一律 `await toolRegistry.listDefinitions()`（**异步**接口），返回「契约 ∩ 已注册执行器」。详见 `docs/rust-engine.md` §12。
+- **12 大分类 / 35 个工具**（`src/domain/tools/category.ts` ↔ `src/infrastructure/tools/<分类>/`）：
 
   | 分类 id | 目录 | 工具数 | 代表工具 |
   |---|---|:--:|---|
   | `file` | `tools/file/` | 8 | read_file / write_file / edit_file / delete_file / copy_move_file / list_files / file_info / mkdir |
   | `search` | `tools/search/` | 2 | search_files_by_name / search_text_in_files |
   | `execute` | `tools/execute/` | 2 | execute_command / execute_script |
+  | `service` | `tools/service/` | 4 | start_background_service / get_background_service / kill_background_service / list_background_services（后台服务：**工具返回后进程继续活着**，见 §11.47） |
   | `knowledge_base` | `tools/knowledge-base/` | 6 | search / list / get / write / delete … |
   | `web` | `tools/web/` | 2 | web_search / web_fetch |
   | `vision` | `tools/vision/` | 1 | vision_analyze（✅ 已原生化） |
@@ -218,7 +219,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
   | `chat` | `tools/chat/` | 2 | list_messages / read_messages |
   | `memory` | `tools/memory/` | 3 | memory_search / memory_recall / memory_write（长期记忆） |
 
-- **原生化（31 个 = 全部）**：`file`(8) + `search`(2) + `execute`(2) + `knowledge_base`(6) + `plan`(1：`todo_write`) + `system`(2：`user_choice` / `get_current_time`) + `chat`(2：`list_messages` / `read_messages`) + `memory`(3：`memory_search` / `memory_recall` / `memory_write`) + `skill`(2：`list_skills` / `read_skill_source`) + `vision`(1：`vision_analyze`) + `web`(2：`web_fetch` / `web_search`)，分发在 `src-tauri/virlen-core/src/agent/native_tools/mod.rs::is_native_tool / execute_native_tool`。**无任何工具走 JS 桥**。
+- **原生化（35 个 = 全部）**：`file`(8) + `search`(2) + `execute`(2) + `service`(4) + `knowledge_base`(6) + `plan`(1：`todo_write`) + `system`(2：`user_choice` / `get_current_time`) + `chat`(2：`list_messages` / `read_messages`) + `memory`(3：`memory_search` / `memory_recall` / `memory_write`) + `skill`(2：`list_skills` / `read_skill_source`) + `vision`(1：`vision_analyze`) + `web`(2：`web_fetch` / `web_search`)，分发在 `src-tauri/virlen-core/src/agent/native_tools/mod.rs::is_native_tool / execute_native_tool`。**无任何工具走 JS 桥**。
   - `web_search` 的搜索源配置由引擎经 `NativeToolCtx::settings` **直读 `app_settings`**（与「忽略沙盒命令」规则同一份来源）→ CLI 同样可用；
   - `web_fetch` 的 HTML→Markdown 用 `htmd`（TS 侧是 `turndown`）——**Markdown 细节两侧不完全一致**（已知差异，见 `docs/rust-engine.md` §3）。
   - `memory_*` 的语义实现在 `agent::memory::tools`（**与 GUI 命令 `cmd_memory_*` 共用一份**），详情正文落专用知识库（`记忆详情`，`kb_id` 缓存在保留设置键 `__memoryKbId`）。
@@ -667,7 +668,7 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 自检：`cargo tree -p virlen-cli` 不含 tauri / wry / tao（实测 CLI 少 94 个依赖 crate，但二进制只小约 5% —— linker 本来就会死代码消除）；`[package] default-run = "virlen-app"` 是防御性声明（缺它曾报 `failed to find main binary`）。
 
 **11.15 headless CLI `run` 的四条边界（都是有意设计，不是缺陷）**
-1. **无前端 = 无 JS 桥** —— 31 个工具全部原生，但 `security` **必须**下发 `Some(..)`（`tool_executor` 靠它决定原生 or 走桥，缺了会去等一个不存在的 JS 宿主而**永久挂起**）；`BridgedProvider`（Gemini 等）在**装配阶段**直接报错。
+1. **无前端 = 无 JS 桥** —— 35 个工具全部原生，但 `security` **必须**下发 `Some(..)`（`tool_executor` 靠它决定原生 or 走桥，缺了会去等一个不存在的 JS 宿主而**永久挂起**）；`BridgedProvider`（Gemini 等）在**装配阶段**直接报错。
 2. **交互一律 fail-closed** —— `run.rs::ask_user` 只在 stdin 是 TTY 时提示并读一行（`y`/`yes` 放行），否则回 `{__kind:"cancelled"}`（一行命令都不跑）。⚠️ **只重定向 stdout/stderr 时 stdin 仍是终端** → 会按交互模式等输入（看着像卡住）——要么连 stdin 一起重定向，要么把权限改成 allow/deny。
 3. **桌面端存 localStorage 的白/黑名单、跳过目录 CLI 读不到**（按空处理）—— 路径安全只由「工作目录 + 沙盒 + 权限三态」兜底；反过来 `permissions` / `sandboxMode` / `sandboxIgnoreRules` 都在 `app_settings`，CLI 与桌面端天然一致。
 4. **会话的工作目录创建后不可变更** —— 续跑只认会话记录，`--workspace` 与之不同直接报错；记录为空才按 `--workspace` → `defaultWorkspace` → cwd 回退，且**不写回会话**（`resources.rs::resolve_workspace`，纯函数有单测）。⚠️ 它同时决定工具 cwd / 沙箱可写根 / 提示词里的工作目录 / `AGENTS.md` 注入点 —— 曾经取 cwd 并写回会话 = 模型在另一个项目里读写（真实 bug；「同一目录的两种写法」判定见 §11.31）。
@@ -872,6 +873,38 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 ⚠️ 不要踩：前端那把锁只是第一道防线（有 await 窗口），**不能**只修前端 —— 引擎侧必须也有闸；反之引擎侧有闸后，前端重复调用只会拿到「该会话正在回复中」，不会污染会话数据。
 回归：`virlen-core` 的 `concurrent_resume_of_same_snapshot_duplicates_tool_result` / `resume_request_messages_are_well_formed` / `resume_after_shelve_then_answer_writes_single_tool_result`；前端 `src/tests/services/chat-concurrency.test.ts`（并发两次「继续」只一次进入）。
 
+**11.48 后台服务工具（`service` 分类，2026-10-09）：让命令活过工具调用** —— 起因：`execute_command` 的语义就是「等到退出，超时就杀」，而 `npm run dev` / `vite` 这类**根本不会退出**；用 `execute_command` 起 dev server 只能得到一次超时，模型拿不到「服务在跑」的任何后续信息。新增 4 个原生工具（`start_background_service` / `get_background_service` / `kill_background_service` / `list_background_services`，契约见 `definitions.json`）。
+- **实现位置**：`virlen-core/src/agent/native_tools/service/`（`registry.rs` 会话隔离的注册表 + 输出窗口、`runner.rs` spawn 与常驻任务、`start/get/kill/list.rs` 四个工具、`common.rs` 常量与文本）。**执行器只有 Rust 一份**（前端 4 个执行器是占位，真被调用会如实报错）：服务的状态（进程 / 输出 / 寿命）无处安放第二份（铁律 1）。
+- **寿命反过来**：`execute` 分类的收尾是「工具返回即杀进程」，本分类**必须不杀**。spawn 后立刻交给三条常驻任务（stdout / stderr 读任务 + 进程退出等待任务）——工具只等「状态变化 / `defaultWaitTime` 到点 / 用户取消」，到点就把 `Arc` 交回注册表走人。⚠️ **任何「工具结束就清场」的收尾都不能带进来**（只 `unregister_running_command`，那只是让前端终止按钮失效）。
+- **会话隔离**：条目带 `session_id`，四个工具只在本会话内按 id 查 —— 跨会话的 id 一律报「in this conversation 没有它」（不泄露其它会话是否存在）。清理三处接线：会话删除 `cmd_delete_session` → `kill_session_services`；应用退出 `RunEvent::Exit` + `Engine::dispose` → `kill_all_services`；CLI `run()` 收尾 → `kill_all_services`。另有 `ProcessTreeGuard::create_kill_on_close()`（新增）给裸跑服务挂 Job：**应用崩溃也不留孤儿 dev server**（沙盒路径的 Job 本来就带这个限制）。
+- **沙盒与审批与 `execute_command` 完全一致**（同一个设置项、同一份 `prepare_sandbox_session`）：默认走沙盒；`sandbox:"off"` 才脱壳（过 `sandbox.command.execute` 权限 + 忽略规则，readonly 直接拒）；沙盒 prepare/spawn 失败降级裸跑并如实标 `no_sandbox_degraded`。差别只有**基础决策用新权限 `terminal.background.execute`（默认 ask，设置页可单独放行后台服务）** —— 新权限没有 legacy 对应项，故 `command_decision` 的 `approval_mode` 传空串（否则老客户端的 `approvalMode` 会顶掉它）。审批复用 `confirm_command_native` 交互（弹窗 / 手机控制 / 终端内确认三条路零改动，只多带 `backgroundService: true`）。
+- **模型侧契约（英文）**：`status` = `running` / `exited` / `failed`；等待窗口内就退出且退出码非 0（或被终止）→ 按 `Error` 回报（与 `execute_command` 的「退出码 ≥ 2 → Error」同口径），避免模型以为它还在跑。`uiData` 给 UI（`stdout` / `stderr` / `status` / `returnCode` / `pid` / `uptime` / `unreadChars` / `sandbox`）。
+- **输出**：每个流一个环形窗口（20 万字符，丢最旧）+ **已读游标**（`get` 默认只回「上次读取以来」的新内容，`tail` / `all` 不消费游标）；游标落到窗口外时如实标注「早期输出已丢弃」。单次回给模型上限 2 万字符（**保尾部** —— 诊断信息在最后几行）。
+- **额度**：单会话 8 个、全局 32 个（超出报错让模型先 kill）；同名**存活**服务直接拒绝（防 AI 反复起同一个 dev server 抢端口）；条目在「已确认终止」后清出注册表。
+- ⚠️ 不要踩：① 前端终止按钮走的是**运行中命令注册表**的终止器（只杀进程、不再置位服务侧的 `kill_requested`）—— start 工具因此把注册表的终止器包了一层（先置位再杀），否则等待任务会把「被终止」误报成「自己退出」；② 等待窗口的 `select!` 里 `Notify` 只唤醒**已注册**的等待方 → 必须配一个 `STATUS_TICK` 轮询兜住「通知发在注册前」的竞态（否则进程已退出也会等到超时）；③ 测试用例必须把 `terminal.background.execute` 置 `allow`（新权限默认 ask，没人来回执 → 挂住，真挂）；④ **新增权限要登记三处**：Rust `execute/common/classify.rs`（+ `permission_label`）、TS `domain/permission/index.ts`（label / description / default）、以及 `src/bridge/approval-policy.ts::KNOWN_PERMS`（**手机侧分级**，漏登记不会报错 —— 只会被当成「未知权限」静默从严 + 审计理由写成「未知权限」，已有契约测试 `tests/bridge/approval-policy.test.ts` 守住两向对齐）。
+- **面板（P2，与上面同一天）**：聊天页右上角「后台服务」入口 + 浮层。**core 出口**：`service/panel.rs`（`list_service_snapshots` / `kill_service_snapshot`）；**命令**：`src-tauri/src/commands/service.rs`（`cmd_list_background_services` / `cmd_kill_background_service`，⤳ 铁律 4）；**前端**：`src/infrastructure/backgroundService/`（invoke 包装）+ `ui/pages/chat/components/service/`（`ServiceEntry` 入口浮层 + `use-service-list` 轮询）+ `tool-call/service-status.ts`（状态映射：卡片与面板共用；`.service-status` 样式上提到最外层 —— 它原先嵌在 `.service-view` 里，列表块那排徽标一直是没样式的裸文字）。
+- **面板口径**：入口只在「有服务」时出现（与任务清单入口同一口径）——已选中会话看**本会话**，新对话页看**全部会话**（P4，见下）；徽标 = **运行中**数量（已结束的不算）；浮层分「运行中 / 已结束」两页（默认运行中，条数挂在页签上）；终止 = 直接杀（不弹二次确认），已结束的行不给按钮。
+- **面板与工具的三条差异**（必须守住）：① **只读**：不消费已读游标 —— 用户刷一眼、或在面板里杀服务之后，AI 仍要能读到那段输出（回归 `panel_kill_leaves_the_models_unread_output_intact`）；② **终止不摘条目**：工具 kill 确认退出后会把条目清出注册表（收尾输出已随结果交给模型），面板必须把它留在「已结束」页 —— 容量交给 `ensure_capacity` 在下次 start 时清；③ **同形**：快照复用 `base_ui` + `unreadChars`，与 `list_background_services` 的 `uiData.services` 字段一致（回归 `panel_snapshot_is_session_scoped_and_survives_kill`），前端因此只认一套字段名。
+- **刷新用轮询而非事件**：服务的变化点分散在读任务 / 等待任务 / 工具 / 面板四处，其中「进程自己退出」发生在常驻任务里（那里拿不到工具上下文的 sink）—— 为它拉一条跨 crate 的事件通道不划算；面板打开 1s、只留入口 5s、窗口不可见（托盘 / 最小化）时不发请求。
+- **终端弹窗（P3，与上面同一天）：点面板里的服务行 → 弹出真终端（`XtermTerminal`）** —— 「用户亲自接管这个服务」：运行中可敲键盘 / 粘贴 / 改窗口尺寸，已结束只读回放，管道模式如实说明不能输入。
+  - **服务改在伪控制台（ConPTY）里跑**（Windows）：`runner.rs` 新增 PTY 路径（`spawn_service_pty`：沙盒 `spawn_pty` / 裸跑 `create_bare_process_pty`；伪控制台建不起来或 spawn 失败 → **降级回匿名管道**，只是不能交互）。语义因此有两处变化：① **stdout / stderr 合并成一条流**（PTY 下 `stderr` 窗口恒空，模型侧文本不变 —— 仍经 `process_terminal_output` 清洗）；② 程序会检测到 TTY（颜色 / 进度条 / 可能停下来等输入 —— 正好能在弹窗里回答）。非 Windows 仍是管道（Unix PTY 未接入）。
+  - **句柄挂在条目上**（`service/pty.rs::ServicePty`：输入写端 + `HPCON` + 尺寸去重器）：⚠️ `ClosePseudoConsole` 会终止仍附着的进程树 —— 它**绝不能**在工具返回时被顺手 drop；关停顺序定死为「进程退出 → 落终态 → 关伪控制台」（`runner::supervise` 的常驻等待任务；关掉之后读任务才自然收到 EOF）。`resize` 与 `close` 共用一把锁：`HPCON` 是裸句柄，两者不能并发。
+  - **界面出口三条**（`panel.rs` ⤳ `commands/service.rs`）：`cmd_service_console_read`（读**合并流**：独立缓冲区 `ServiceState::console`，带绝对偏移 `next`；`reset=true` = 整段重放，环形已丢掉客户端持有的开头时必需）、`cmd_service_console_write`（键击；只对「跑在伪控制台里且仍在运行」的服务生效，空串是 no-op 的成功）、`cmd_service_console_resize`（同尺寸由 Rust 去重 —— `ResizePseudoConsole` 在屏幕已有内容时会整屏重绘并补空行）。三条与 P2 同一口径：**不消费已读游标 / 会话隔离 / 拒绝时如实回 `false`**（前端据此决定「能不能输入」，不弹错）。
+  - **前端**：`ui/pages/chat/components/service/{ServiceTerminal.tsx,use-service-console.ts}`；行点击打开（行内「终止」按钮 `stopPropagation`，否则一点两件事）；弹窗内也有「终止」（复用面板那一套 toast + 对账）。`XtermTerminal` 抽出 `transport`（默认仍是 `pty_write` / `pty_resize`，服务弹窗换成 `cmd_service_console_*`）+ `autoFocus` —— 终端本体只有一份，键击 / 粘贴 / 右键菜单 / Ctrl+C 智能复制与命令终端完全一致（铁律 1）。
+  - **刷新仍是轮询**：弹窗打开时 350ms（运行中）/ 1500ms（已结束 / 管道模式），窗口不可见时不发请求；读到 `null` = 已被摘出注册表 → 提示「已不在列表中」并停止轮询；读失败（IPC 异常）**不算**「服务没了」（保留上一帧继续轮询）。
+  - ⚠️ **坑（尺寸上报）**：弹窗的尺寸上报**不能**用「`interactive` 才发」当门槛 —— 终端实例的创建 `useLayoutEffect`（第一次上报就发生在这里）早于第一帧轮询应答，那时 `info === null`；拦下会回 `true`（「成功」），而 `XtermTerminal` 既有「同尺寸不重复上报」又有「成功即不重试」→ 这次上报**永远补不回来**，服务的伪控制台一直停在创建时的默认 240×50（折行位置与服务端不一致，全屏程序更明显），要拖一下窗口才同步。正确口径（`ServiceTerminal` 的 `canResizeRef`）：`info === null`（还不知道）**放行**，「明确知道不能输入」（管道模式 / 已结束）才拦；放行由 Rust 如实回答（真在跑 → 同步到位；没有控制台 → `false` 走短重试）。回归：`ui/service-terminal.test.tsx` 的两条尺寸用例（jsdom 需给元素伪 `clientWidth/Height` 才走得到这条路径）。
+  - `base_ui` 因此多了两个语言无关字段（**问的是两个不同的问题**）：`terminal` = 该服务**（曾）跑在伪控制台里**（`ServiceState::pty_capable`，**进程退出后仍为 `true`**）、`interactive` = **现在就能输入**（仍在运行 **且** 控制台还活着）—— 面板 / 弹窗据此把两种「不能输入」分开：`terminal && !running` → 「服务已结束，只能查看输出」，`!terminal` → 「管道模式，无法输入」。
+    - ⚠️ **坑（P3 实测）**：`terminal` 若按「当前有没有活控制台」算（`has_pty`），用 Ctrl+C 结束服务后 `close_pty()` 会把它翻成 `false`，弹窗立刻误报「该服务运行在管道模式下（当前平台不支持交互终端）」——「它曾是终端服务」是**持久事实**，`pty_capable` 不复位；`has_pty` 只回答「现在写不写得进去」（`interactive` 与 `write`/`resize` 的判定用它）。
+- **全局面板（P4，同一天）：新对话页（没有选中会话）也保留入口** —— 服务是活进程，切到新对话页不能「找不到它」。`sessionId=null` 时同一套 `ServiceEntry` 切到**全局视图**：`registry::list_all` ⤳ `panel::list_all_service_snapshots`（每条快照多一个语言无关字段 `sessionId` 归属）⤳ `cmd_list_all_background_services`；行头标归属会话（**标题优先**，`sessionStore.getSession(id)?.title` 查不到退回 id —— 新对话页没有「当前会话」可当参照），scope 徽章由「仅本会话」变「全部会话」。
+  - **跨会话操作必须带行自己的会话 id**：终止 / 终端弹窗的 `sessionId` 一律取 `svc.sessionId ?? 入口的`（弹窗在打开那一刻把会话 id **固定**下来 —— 行可能被清出列表，弹窗还要继续轮询报「已不在表中」）；行 / 弹窗都显示归属（`会话：xxx`）。
+  - ⚠️ **边界**：只放开**界面**的可见范围，模型侧四个工具仍严格会话隔离；本会话视图的字段集合**不变**（与工具 uiData 同形，回归 `all_sessions_snapshot_marks_ownership_and_keeps_the_scoped_view_in_shape`）。
+- **结束通知（P5，同一天）：服务一结束就告诉 AI（用户从面板手动终止也算）** —— 起因：`start_background_service` 返回后模型只知道自己起过它，「它自己崩了 / 用户把它终止了」要等下一次 `get` 才知道（而模型可能整轮都不再 get，于是它一直以为 dev server 还在跑）。实现 `service/notice.rs`（**一条消息、两个落点**）：
+  - **时机**：AI 正在这一轮（该会话有活跃 run）→ 进本地队列，**下一次 LLM 请求之前**追加进消息列表（`bridge::inject_round_boundary_messages` 的第一个来源 —— 与「用户改了任务清单」同一时机；**不依赖 JS**，CLI / 手机走同一条路）；AI 空闲 → 宿主出口（GUI `TauriServiceNoticeHost` → `agent:service-exit`）→ 前端 `services/service-notice.ts` 落一条 `role='feedback'` 消息（消息流里立刻可见，AI 下一次请求天然带上）。
+  - **载体就是那条消息**（`common.rs::exit_notice`：模型侧固定英文正文 + `uiData.type='service'`）：队列里存的就是将来要注入 / 落库的那条，因此「注入」与「上屏」各自只写一次、不会出现两套措辞；界面按 `uiData` 用界面语言重建（`message-bubble.tsx` 的胶囊分支；铁律 1）。
+  - **四种不发**：① **启动等待窗口内**退出（`ServiceState::startup_window` —— start 工具的结果已经写清「已退出 + 退出码 + 窗口内输出」，否则同一件事说两遍）；② **AI 自己 kill**（`kill_background_service` 先 `mute_notice()` —— 工具结果里已有收尾状态与输出）；③ 会话删除 / 应用退出 / 引擎销毁（`kill_session_services` / `kill_all_services` 一并抑制 + `drop_session` / `clear_all`）；④ ⚠️ 用户从**面板终止要发**（那正是「AI 以为它在跑」的场景，`panel::kill_service_snapshot` 不做任何抑制）。
+  - ⚠️ **坑（出口只有全局那一处）**：`runner::supervise` 的等待任务是 `spawn_blocking`（进程退出的时刻与工具返回无关），那里**拿不到**工具上下文的 `sink` —— 所以出口必须是「全局队列 + 宿主端口」（`attach_service_notice_host`）；为此 `supervise` 的入参从 `Arc<ServiceState>` 换成 `Arc<ServiceEntry>`（start.rs 因此**先 `registry::insert` 再 `supervise`**，否则通知读不到 name / id / cmd）。判「AI 是否在跑」同理用进程级全局（引擎 `send_message` 进出各打一次标记）—— CLI / 手机 / 托盘都经引擎，前端那份 `working` 只是界面态。
+- 回归：`virlen-core` 的 `agent::native_tools::service::*` 30 例（原生路径跑真进程：立刻退出 / 常驻 / `waitFor` / 会话隔离 / 容量与同名 / 前端终止 / spawn 失败 / readonly 拒脱壳 + 注册表不变量 6 例 + P2 面板 API 2 例 + P3 伪控制台端到端 1 例：交互 → 终止 → 关停后只读回放（`terminal` 保持 `true`、`interactive` 落 `false`）+ P4 全局快照 1 例：跨会话可见 + `sessionId` 归属 + 本会话视图不加字段 + P5 结束通知 6 例：只入队不上屏 / 空闲优先交界面、没人接管留队列 / 启动窗口与抑制位静默 / 通知本体（模型侧正文 + uiData）/ 注入一次不重复 + 端到端 1 例：工具返回后退出 → 攒通知 → 轮次边界注入）；TS 侧 `tool-defs-contract`（35）、`tools-category`（12 分类）、`permission`（name 列表与默认值）、`ui/service-entry.test.tsx`（9 例：徽标口径 / 两页 / 终止对账 / 幂等提示 / 行点击开弹窗且终止按钮不顺手开 + 全局视图 3 例：跨会话+归属+行自己的会话 id / 弹窗带行的会话 id 且弹窗标归属 / 无服务不渲染）、`ui/service-terminal.test.tsx`（8 例：增量续接 / `reset` 整段重放 / 已结束只读 / 管道模式提示 / 摘出表后停轮询 / Esc 与 ✕ + 尺寸上报 2 例：首帧未知也上报、知道不能输入后不再上报）、`tests/bridge/approval-policy.test.ts`（8 例：`KNOWN_PERMS` 与权限注册表两向对齐 + 分级口径：后台服务低摩擦、脱壳 / 危险 / 终端内确认 / 未知权限从严）、`tests/services/service-notice.test.ts`（5 例：非 Tauri 不挂监听 / 落 store + 落库 / 未加载会话只落库 / 载荷不全忽略 / 只挂一次）、`tests/ui/service-notice-message.test.tsx`（3 例：自行退出带退出码、被终止单独一条说法、取不到退出码不编造 —— 且一律不贴模型侧英文）。
+
 **托盘 / 关闭不退出 / 后台工作**：实现见 `src-tauri/src/tray/`（模块头即设计说明），无独立文档。
 
 ---
@@ -885,9 +918,10 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 | 改上下文压缩 / 标题生成 | **压缩（权威、CLI 在用）** `src-tauri/virlen-core/src/agent/compress/`（`mod` 模式/常量/口径/切片 · `raw` 正文压缩渲染 · `ai` 非流式摘要）+ CLI 执行链 `src-tauri/virlen-cli/src/session_rt/compress.rs`（落库/记账/快照）+ TUI 入口 `src-tauri/virlen-cli/src/tui/{commands,state,view,app}.rs`（`/compress` 面板与状态行百分比）+ `list-session` 两列 `src-tauri/virlen-cli/src/list/{render,sessions}.rs` + `SessionRepo::session_stats`；**GUI（Tauri）也走 Rust**（命令 `cmd_compress_context` → 同一份 `agent/compress`，见 §11.36）；**标题生成** `src-tauri/virlen-core/src/agent/title.rs`（命令 `cmd_generate_title`；CLI 在 `chat` 首回合后调用，失败回退 `title_from_prompt` 首行截取）；产物在消息列表里的呈现：`ui/pages/chat/components/message/summary-message.tsx` |
 | 改会话持久化 | `src-tauri/virlen-core/src/session_db/`（`sqlite.rs` / `schema.rs` / `open.rs`）+ 命令壳 `src-tauri/src/commands/session_db.rs` + `src/infrastructure/sessionRepo/` + `src/ui/store/sessionStore.ts` |
 | 改长期记忆（memory） | **方案**：`docs/memory-plan.md`（P0：`docs/memory-p0-plan.md`；P2 蒸馏：`docs/memory-p2-plan.md`；P3 去重合并/导出/预算告警：`docs/memory-p3-plan.md`）；**纯逻辑（选取/渲染/近重复判定，唯一实现）**：`src-tauri/virlen-core/src/agent/memory/mod.rs`；**取数编排**：同目录 `prompt.rs`；**三工具语义（与 GUI 命令共用）**：同目录 `tools.rs`（`memory_search` / `memory_recall` / `memory_write`）+ **详情知识库胶水** `kb.rs`（`记忆详情`、`__memoryKbId`）；**P2 蒸馏**：同目录 `distill.rs`（提示词组装 / JSON 解析 / 一次调用）+ `models.rs`（候选排序：`memoryModel` → 压缩频次 → 默认模型，上限 3）+ `store.rs`（两道去重 / 落库 / 详情入 KB / 按天清理 / **删条目连带删详情** `forget_memory`）+ `consolidate.rs`（逐日编排 / 抢锁 / 降级链 / 记账）；**P3 导出**：同目录 `export.rs`（版本化信封 + 全序排序）；**提示词**：`agent/prompts/memory-distill.md`（占位符 `{{existing}}` / `{{material}}`）；**原生工具壳**：`agent/native_tools/memory/`；**存取**：`session_db/memory.rs`（`memories` / `memory_runs` + `MemoryRepo`：`list`/`get`/`search`/`upsert`/`delete`/`set_level`/`set_disabled`/`touch`/`get_run`/`list_runs`/`last_done_day`/`claim_run`/`finish_run`/`delete_distilled_day`，DDL 走 `init_schema` 快速路径、**不占 `SCHEMA_VERSION`**；老库补 `memory_runs.merged` 列走 `schema.rs::ensure_memory_run_merged_column`）；**命令**：`src-tauri/src/commands/memory.rs`（含 `cmd_memory_consolidate` / `cmd_memory_runs` / `cmd_memory_export`，⤳ 铁律 4 注册）；**触发点**：`src/main.ts`（启动非阻塞）+ `ui/pages/Settings/memory-settings.tsx`（「立即整理昨天」/「导出 JSON」）+ `src-tauri/virlen-cli/src/memory.rs`（`memory list` / `memory consolidate` / `memory export`）；**注入接线**：`src/services/agent-service.ts` + `src/domain/agent/compose-prompt.ts` ↔ `agent/prompts/assemble.rs`（golden 守）；**前端**：`src/infrastructure/memoryRepo/` + `src/domain/memory/` + `src/infrastructure/tools/memory/` + `ui/pages/Settings/memory-settings.{tsx,scss}`（列表：行内操作**悬停 / 聚焦才显形** + 每行复选框多选 + 吸顶批量栏；样式契约由 `tests/ui/memory-settings-style-contract.test.ts` 守） + `tool-call/MemoryMessage.tsx` |
-| 加 / 改工具 | **定义**：`src-tauri/virlen-core/src/agent/tool_defs/definitions.json`（权威源，三平台变体）；**执行器**：`src/infrastructure/tools/<分类>/<工具>.ts`（+ 分类 `common.ts`、分类 `index.ts`）；契约/注册中心：`src/domain/tools/{definitions,index,types}.ts` + `src/domain/ports/ToolRegistry.ts`；`src/domain/tools/category.ts`、`src-tauri/virlen-core/src/agent/native_tools/<分类>/<工具>.rs`（+ `mod.rs` 分发）、`src/ui/pages/chat/components/tool-call/` |
+| 加 / 改工具 | **定义**：`src-tauri/virlen-core/src/agent/tool_defs/definitions.json`（权威源，三平台变体）；**执行器**：`src/infrastructure/tools/<分类>/<工具>.ts`（+ 分类 `common.ts`、分类 `index.ts`）；契约/注册中心：`src/domain/tools/{definitions,index,types}.ts` + `src/domain/ports/ToolRegistry.ts`；`src/domain/tools/category.ts`、`src-tauri/virlen-core/src/agent/native_tools/<分类>/<工具>.rs`（+ `mod.rs` 分发）、`src/ui/pages/chat/components/tool-call/`。⚠️ **有跨调用状态**的工具（如后台服务 `service/`）**只写 Rust 一份**，TS 执行器只登记占位（见 §11.48） |
 | 改工具返回给模型的文案 / 增删 `uiData` | TS 执行器 `src/infrastructure/tools/<分类>/<工具>.ts` ↔ Rust 原生 `src-tauri/virlen-core/src/agent/native_tools/<分类>/<工具>.rs`（**逐字对齐**，模型侧固定英文）；界面侧只读 `uiData`，在 `src/ui/pages/chat/components/tool-call/<Tool>Message.tsx` / `TerminalBlock.tsx` 按界面语言重建 |
 | 改任务清单 / todo_write | `src/domain/todo/*`（纯函数）、`src/infrastructure/tools/plan/todo-write.ts`、`src/services/todo-service.ts`（落地，用户清单逐字生效）、`src/ui/store/todoDraftStore.ts`（回复期间的本地草稿；**关浮层丢弃未应用的草稿**）、`src/ui/pages/chat/components/todo/*`（标题栏入口 + 浮层；编辑期间 AI 又写清单 → 「放弃编辑并同步 / 覆盖更新」二选一） |
+| 改后台服务（`service` 四个工具 / 标题栏面板 / 终端弹窗 / 新对话页全局视图 / 结束通知） | **唯一实现**：`src-tauri/virlen-core/src/agent/native_tools/service/`（`registry.rs` 会话隔离的注册表 + 输出窗口（含终端用的合并流） · `runner.rs` spawn（管道 / 伪控制台两条路径）与三条常驻任务 · `pty.rs` 交互控制台句柄 · `start/get/kill/list.rs` 四个工具 · `panel.rs` 面板 / 终端 / 全局视图出口 · `notice.rs` 结束通知（队列 / 宿主出口 / 轮次边界注入） · `common.rs` 常量与 uiData）；**命令**：`src-tauri/src/commands/service.rs`（结束通知的 GUI 出口在 `src-tauri/src/commands/agent.rs::TauriServiceNoticeHost`）；**前端**：`src/infrastructure/backgroundService/` + `src/ui/pages/chat/components/service/`（`ServiceEntry` 入口 + 浮层 · `ServiceTerminal` 终端弹窗 · `use-service-list` / `use-service-console` 两个轮询）+ `src/ui/pages/chat/components/tool-call/{BackgroundServiceMessage.tsx,service-status.ts}`（`XtermTerminal` 的 `transport` 插槽供弹窗复用）+ `src/services/service-notice.ts`（结束通知落到消息列表）；设计口径 / 坑 / 回归清单见 §11.48 |
 | 改原生工具路径校验 / 参数取值 | `src-tauri/virlen-core/src/agent/native_tools/common.rs`（`resolve_safe_path` / `is_path_allowed` / `arg_*`）；路径展开共用 `src-tauri/virlen-core/src/sandbox/paths.rs::expand_user_path` |
 | 改文件读写底层 | `src-tauri/virlen-core/src/file_ops.rs` + `src/utils/diff.ts` |
 | 改文件搜索 | `src-tauri/virlen-core/src/search.rs`（`search_files_by_name` / `search_text_in_files` 原生） |

@@ -44,6 +44,16 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     ],
   },
   {
+    id: 'service',
+    label: '后台服务',
+    toolNames: [
+      'start_background_service',
+      'get_background_service',
+      'kill_background_service',
+      'list_background_services',
+    ],
+  },
+  {
     id: 'knowledge_base',
     label: '知识库',
     toolNames: [

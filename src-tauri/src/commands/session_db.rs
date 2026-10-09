@@ -291,6 +291,17 @@ pub async fn cmd_delete_session(
         None,
         result.as_ref().err().map(|s| s.as_str()),
     );
+    if result.is_ok() {
+        // 会话没了 → 它的后台服务也不该继续跑（服务的可见性与会话同生命周期）。
+        // ⚠️ 即使删除失败也不动服务（用户看到的会话还在，服务就该还在）。
+        let stopped = virlen_core::agent::native_tools::kill_session_services(&session_id);
+        if stopped > 0 {
+            crate::telemetry::track(
+                "tool.service.session_cleanup",
+                serde_json::json!({ "count": stopped }),
+            );
+        }
+    }
     result
 }
 
