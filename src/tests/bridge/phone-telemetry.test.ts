@@ -259,6 +259,15 @@ describe('§25 —— 事件推送（event / stream / dropped / reset / stats）
     })
     await flush(10)
 
+    /**
+     * ⚠️ 必须清缓冲再量：「流式消息刚建立、正文还是空串」本身就会成帧走**同一条通道**，
+     * 而那一帧用的是**真实** `Math.random()`（打桩在下面）—— 10% 概率被采样命中，
+     * 于是「第一条 pushStream」成了 `text_len: 0 / text: undefined` 的空帧
+     *（`previewOf('')` 按口径无值），断言 `text: '你'` 就会偶发失败（macOS CI 上挂过一次）。
+     * 清掉它，让本用例只面对「打桩之后」发出的帧 —— `firstProps` 才是确定的。
+     */
+    telemetryBuffer.clear()
+
     // 采样命中（`trackPerf` 的采样判据是 `Math.random() >= 0.1`）
     const rand = vi.spyOn(Math, 'random').mockReturnValue(0)
     updateSessionMessage('t-stream-1', 'a1', { content: '你' })
@@ -267,6 +276,7 @@ describe('§25 —— 事件推送（event / stream / dropped / reset / stats）
       session_id: 't-stream-1',
       message_id: 'a1',
       text: '你',
+      text_len: 1,
       // §32：本帧载荷形态 —— 本例客户端未声明 delta（未走过 hello 的偏好声明）→ 整帧
       mode: 'full',
       final: false,
