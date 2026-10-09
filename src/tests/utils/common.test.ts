@@ -179,6 +179,69 @@ describe('toShortPath', () => {
   it('无工作目录应返回原路径', () => {
     expect(toShortPath('/some/path')).toBe('/some/path')
   })
+
+  // 以下为「缩短不成功」的回归：两侧来源不同（系统选择器 / 模型入参 / Rust canonicalize），
+  // 盘符与目录名的大小写、分隔符、扩展长度前缀都可能不一致，但指的是同一条路径。
+  it('盘符大小写不同也应截取（模型常写成小写盘符）', () => {
+    expect(toShortPath('c:\\code\\app\\src\\a.ts', 'C:\\code\\app')).toBe(
+      'src/a.ts',
+    )
+    expect(toShortPath('C:\\code\\app\\src\\a.ts', 'c:/code/app')).toBe(
+      'src/a.ts',
+    )
+  })
+
+  it('目录名大小写不同也应截取（Windows 路径大小写不敏感）', () => {
+    expect(toShortPath('C:\\Code\\App\\Src\\a.ts', 'C:\\code\\app')).toBe(
+      'Src/a.ts',
+    )
+    expect(toShortPath('C:\\code\\app', 'C:\\Code\\App')).toBe('.')
+  })
+
+  it('Windows 扩展长度前缀（\\\\?\\）应剥掉后再比较', () => {
+    expect(toShortPath('\\\\?\\C:\\code\\app\\src\\a.ts', 'C:/code/app')).toBe(
+      'src/a.ts',
+    )
+    // canonicalize_path 会先把反斜杠换成正斜杠，`\\?\` 就变成 `//?/`
+    expect(toShortPath('//?/C:/code/app/src/a.ts', 'C:\\code\\app')).toBe(
+      'src/a.ts',
+    )
+  })
+
+  it('工作目录带尾部斜杠 / 两侧混用分隔符也应截取', () => {
+    expect(toShortPath('C:\\code\\app\\src\\a.ts\\', 'C:/code/app/')).toBe(
+      'src/a.ts',
+    )
+    expect(toShortPath('C:/code/app/src/ui/a.tsx', 'C:\\code\\app')).toBe(
+      'src/ui/a.tsx',
+    )
+  })
+
+  it('已是相对路径时只统一分隔符', () => {
+    expect(toShortPath('src\\ui\\a.tsx', 'C:/code/app')).toBe('src/ui/a.tsx')
+    expect(toShortPath('./src/a.ts', '/ws')).toBe('./src/a.ts')
+  })
+
+  it('同前缀的兄弟目录不应误截', () => {
+    expect(toShortPath('C:/code/app2/a.ts', 'C:/code/app')).toBe(
+      'C:/code/app2/a.ts',
+    )
+    expect(toShortPath('/project-other/a.ts', '/project')).toBe(
+      '/project-other/a.ts',
+    )
+  })
+
+  it('POSIX 路径保持大小写敏感（不同大小写视为不同目录）', () => {
+    expect(toShortPath('/Project/a.ts', '/project')).toBe('/Project/a.ts')
+  })
+
+  it('工作目录为根目录时应截掉开头的斜杠', () => {
+    expect(toShortPath('/home/a.ts', '/')).toBe('home/a.ts')
+  })
+
+  it('UNC 路径同样忽略大小写', () => {
+    expect(toShortPath('//Server/Share/a.ts', '//server/share')).toBe('a.ts')
+  })
 })
 
 describe('toAbsolutePath', () => {

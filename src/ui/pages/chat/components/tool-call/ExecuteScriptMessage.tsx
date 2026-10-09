@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { t } from '@/ui/i18n'
 import { IToolCallMessage, ToolMessageProps } from './IToolCallMessage'
-import { getUrlFileName, toShortPath } from '@/utils/common'
+import { toShortPath } from '@/utils/common'
 import { chatState, sessionStore, settingsState } from '@/ui/store'
 import { TerminalView } from './TerminalBlock'
 import { Message } from '@/types'
@@ -88,11 +88,13 @@ class ExecuteScriptMessage implements IToolCallMessage {
   getShortText(props: ToolMessageProps): string | React.ReactNode {
     try {
       const { command, tips, file_path } = props.useContent.input
+      // 没有 command 时显示脚本文件路径 —— 与其它文件类工具同口径：工作目录下只显示相对路径
+      const scriptLabel = file_path ? shortPath(file_path) : ''
       return (
         <span className="execute-command-short">
           {tips && <span className="execute-command-tips">{tips}</span>}
           <span style={{ color: 'var(--accent-color)', fontWeight: 500 }}>
-            {command || file_path || getUrlFileName(file_path || '', '')}
+            {command || scriptLabel}
           </span>
         </span>
       )

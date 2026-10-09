@@ -469,20 +469,54 @@ export function getUrlFileName(url: string, defaultName = 'download') {
 }
 
 /**
- * 将绝对路径转为相对路径（相对于工作目录）：在工作目录下返回相对路径，否则返回原路径。
+ * 路径字符串归一化（**纯字符串处理，不碰文件系统**）。
+ *
+ * 为什么必须归一：同一条路径在两侧来源不同 —— 工作目录来自系统目录选择器（`C:\code\app`），
+ * 工具入参里的绝对路径来自模型（可能写成 `c:/code/app/src/a.ts`），Rust 侧 `canonicalize` 出来的
+ * 还带 Windows 扩展长度前缀（`\\?\C:\…`）。逐字符比较必然对不上，相对路径就截不出来。
+ *
+ * 归一内容：反斜杠 → 正斜杠、剥掉扩展长度前缀、折叠路径中部的重复斜杠（开头 UNC 的 `//` 保留）、
+ * 去掉末尾斜杠。
+ */
+function normalizePathString(path: string): string {
+  let p = path.replace(/\\/g, '/')
+  // `\\?\C:/x` / `\\.\C:/x` → `C:/x`
+  p = p.replace(/^\/\/[?.]\//, '')
+  // 折叠重复斜杠：开头的 `//` 是 UNC（`//server/share`），必须留着
+  p = p.startsWith('//')
+    ? '//' + p.slice(2).replace(/\/{2,}/g, '/')
+    : p.replace(/\/{2,}/g, '/')
+  return p.replace(/\/+$/, '')
+}
+
+/** 是否形如 Windows 绝对路径（盘符 `C:/…` 或 UNC `//server/share`）—— 决定比较时是否忽略大小写 */
+function isWindowsAbsolutePath(p: string): boolean {
+  return /^[a-zA-Z]:(\/|$)/.test(p) || p.startsWith('//')
+}
+
+/**
+ * 将绝对路径转为相对路径（相对于工作目录）：在工作目录下返回相对路径，否则返回归一化后的原路径。
+ *
+ * 比较规则：Windows 路径**大小写不敏感**（`c:` 与 `C:` 指向同一条路径，文件系统本身也不区分），
+ * 其余（POSIX）保持大小写敏感。返回值里保留原路径的大小写 —— 只截掉前缀，不改写路径本身。
+ * 返回的一定是正斜杠形式（卡片/终端只做展示，统一分隔符更好扫读）。
  */
 export function toShortPath(absolutePath: string, workspace?: string): string {
   if (!absolutePath) return absolutePath
-  const base = workspace
-  if (!base) return absolutePath
-  // 统一正斜杠
-  const normalizedPath = absolutePath.replace(/\\/g, '/').replace(/\/+$/, '')
-  const normalizedBase = base.replace(/\\/g, '/').replace(/\/+$/, '')
-  if (normalizedPath === normalizedBase) return '.'
-  if (normalizedPath.startsWith(normalizedBase + '/')) {
-    return normalizedPath.slice(normalizedBase.length + 1)
+  const path = normalizePathString(absolutePath)
+  const base = workspace ? normalizePathString(workspace) : ''
+  // 没有工作目录就无从截取；`base` 归一后为空串但确实给了工作目录（如 `/`）时继续参与比较
+  if (!base && !workspace) return path
+
+  const foldCase = isWindowsAbsolutePath(path) && isWindowsAbsolutePath(base)
+  const cmpPath = foldCase ? path.toLowerCase() : path
+  const cmpBase = foldCase ? base.toLowerCase() : base
+
+  if (cmpPath === cmpBase) return '.'
+  if (cmpPath.startsWith(cmpBase + '/')) {
+    return path.slice(cmpBase.length + 1)
   }
-  return absolutePath
+  return path
 }
 
 /**
