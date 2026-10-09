@@ -10,9 +10,11 @@
 import { knowledgeBaseStore } from '@/infrastructure/rag/knowledge-base-store'
 import { settingsState } from '@/ui/store/settingStore'
 import type {
+  FolderScan,
   KnowledgeBase,
   KnowledgeBaseDocument,
   KnowledgeBaseQueryResult,
+  ZipPreview,
 } from '@/domain/ports'
 import type { RAGConfig, RAGContext, RAGQueryOptions } from '@/domain/rag/types'
 import { defaultRAGConfig } from '@/domain/rag/types'
@@ -53,6 +55,15 @@ class RagService {
     return knowledgeBaseStore.list()
   }
 
+  /** 改知识库的名称 / 说明（`undefined` = 不动这一项） */
+  async updateKnowledgeBase(
+    kbId: string,
+    name?: string,
+    description?: string,
+  ): Promise<KnowledgeBase> {
+    return knowledgeBaseStore.update(kbId, name, description)
+  }
+
   /** 删除知识库 */
   async deleteKnowledgeBase(kbId: string): Promise<void> {
     await knowledgeBaseStore.delete(kbId)
@@ -60,12 +71,13 @@ class RagService {
 
   // 文档管理
 
-  /** 添加文档到知识库 */
+  /** 添加文档到知识库（`docName` 可选：从文件夹导入时传相对路径，避免同名相撞） */
   async addDocument(
     kbId: string,
     filePath: string,
+    docName?: string,
   ): Promise<KnowledgeBaseDocument> {
-    return knowledgeBaseStore.addDocument(kbId, filePath)
+    return knowledgeBaseStore.addDocument(kbId, filePath, docName)
   }
 
   /** 从知识库删除文档 */
@@ -92,8 +104,9 @@ class RagService {
     kbId: string,
     docId: string,
     filePath: string,
+    docName?: string,
   ): Promise<KnowledgeBaseDocument> {
-    return knowledgeBaseStore.editDocument(kbId, docId, filePath)
+    return knowledgeBaseStore.editDocument(kbId, docId, filePath, docName)
   }
 
   /** 编辑知识库中的文本文档 — 用新内容替换（AI Tool 使用） */
@@ -130,6 +143,24 @@ class RagService {
     await knowledgeBaseStore.exportKnowledgeBase(kbId, outputPath)
   }
 
+  /** 扫描文件夹（按 .gitignore 过滤后列出可导入文档） */
+  async scanImportFolder(dirPath: string): Promise<FolderScan> {
+    return knowledgeBaseStore.scanImportFolder(dirPath)
+  }
+
+  /** 列出压缩包里会导入的文档名（不解压） */
+  async previewKnowledgeBaseZip(zipPath: string): Promise<ZipPreview> {
+    return knowledgeBaseStore.previewKnowledgeBaseZip(zipPath)
+  }
+
+  /** 读压缩包里一个条目的正文（逐条导入用） */
+  async readKnowledgeBaseZipEntry(
+    zipPath: string,
+    entryName: string,
+  ): Promise<string> {
+    return knowledgeBaseStore.readKnowledgeBaseZipEntry(zipPath, entryName)
+  }
+
   /** 初始化知识库 — 无知识库时自动创建默认知识库 */
   async initKnowledgeBases(): Promise<string> {
     return knowledgeBaseStore.initKnowledgeBases()
@@ -152,7 +183,14 @@ class RagService {
     return result
   }
 
-  /** 使用完整 RAG 选项检索 */
+  /** 使用完整 RAG 选项检索（多库合并）
+   *
+   * ⚠️ **当前生产代码没有调用方**（只有单测）：会话与 AI 工具都是「一个库一次 query」，
+   * 跨库检索要等工具层支持多 `knowledge_base_id` 时才会接上（Rust 侧 `query_multi` 同状态，
+   * 同样标着 `#[allow(dead_code)]`）。
+   * 保留而不是删掉的原因：它是**已经写对且被测试盖住的**多库合并语义（排序 / 去重 / 截断），
+   * 删了下次再写一遍很容易漏掉其中一条。
+   */
   async queryWithOptions(
     options: RAGQueryOptions,
     query: string,
@@ -207,8 +245,9 @@ class RagService {
 
   /** 构建注入到 LLM 的上下文文本
    *
-   * ⚠️ 与 Rust `rag_service.rs::format_context()` 是两份实现（Rust 版服务 UI 搜索测试，前端版服务
-   * `queryWithOptions` 多库组合检索），修改时需同步两处。 */
+   * ⚠️ 与 Rust `rag_service.rs::format_context()` 是两份实现（Rust 版服务 UI 搜索测试与 AI 工具，
+   * 本版服务 `queryWithOptions` 多库组合检索），改文案时需同步两处。
+   * 本版目前只被单测覆盖（见 `queryWithOptions` 上的说明）。 */
   private buildContextText(
     chunks: Array<{
       id: string

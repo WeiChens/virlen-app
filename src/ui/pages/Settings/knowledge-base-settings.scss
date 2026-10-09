@@ -90,6 +90,25 @@
       opacity: 0.5;
       cursor: not-allowed;
     }
+
+    /* 「删除中…」这类等待态：按钮是被禁用的（防重复点击），但看起来要先「在干活」而不是
+       「不可用」—— 转圈 + 不提淡（所以这一段要写在 :disabled 之后，靠源顺序胜出） */
+    &.kb-btn-busy {
+      opacity: 1;
+      cursor: wait;
+
+      &::before {
+        content: '';
+        width: 10px;
+        height: 10px;
+        border: 2px solid currentColor;
+        border-top-color: transparent;
+        border-radius: 50%;
+        /* 复用 App.css 里的全局 spin 关键帧 */
+        animation: spin 0.9s linear infinite;
+        flex-shrink: 0;
+      }
+    }
   }
 
   // ==================== 知识库卡片 ====================
@@ -117,13 +136,15 @@
         border-color: var(--accent-color);
       }
 
-      // 主体区是**真按钮**（不是 div + role=button）：Tab 能到达、Enter 能触发
+      // 主体区是**真按钮**（不是 div + role=button）：Tab 能到达、Enter 能触发。
+      // 横排 = 「信息列」+「行尾箭头」：箭头在按钮内部右端、整行垂直居中，
+      // 比塞在信息行尾更像「入口」，也不会和竖线右侧的删除挤在同一处。
       .kb-card-main {
         flex: 1;
         min-width: 0;
         display: flex;
-        flex-direction: column;
-        gap: 3px;
+        align-items: center;
+        gap: 10px;
         padding: 2px 0;
         border: none;
         background: transparent;
@@ -136,13 +157,36 @@
           outline-offset: 3px;
           border-radius: 4px;
         }
+
+        /* 这个库正在被删：「进下一层」的入口先关上（点进去只会看到一份正在消失的文档列表） */
+        &:disabled {
+          cursor: wait;
+          opacity: 0.6;
+        }
+      }
+
+      /* 信息列：名称 / 描述 / 计数三行，宽度交给主体按钮 */
+      .kb-card-info {
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        gap: 3px;
+        min-width: 0;
+      }
+
+      /* 名称 + 「自动创建」小标同在标题行：名称自己吃剩余宽度并省略，小标不压缩 */
+      .kb-card-title {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
       }
 
       .kb-card-name {
+        overflow: hidden;
         font-weight: 600;
         font-size: var(--font-size-base);
         color: var(--text-primary, #1a1a1a);
-        overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
         transition: color 0.15s;
@@ -155,15 +199,13 @@
       // 「自动创建」小标：系统库（默认知识库 / 记忆详情）和手建的库要在列表里一眼分得开 ——
       // 它同时解释了「为什么这一行没有删除按钮」
       .kb-card-badge {
-        display: inline-block;
-        margin-left: 6px;
+        flex-shrink: 0;
         padding: 1px 5px;
         border-radius: 4px;
         background: var(--hover-bg, #f0f0f0);
         color: var(--text-secondary, #888);
         font-size: var(--font-size-xs);
         font-weight: 400;
-        vertical-align: middle;
         cursor: default;
       }
 
@@ -176,25 +218,29 @@
       }
 
       .kb-card-meta {
-        display: flex;
-        align-items: center;
-        gap: 10px;
         font-size: var(--font-size-xs);
         color: var(--text-tertiary, var(--text-secondary, #999));
-
-        // 「查看文档 ›」贴右：一眼看出点这一块会进哪里
-        .kb-card-open {
-          margin-left: auto;
-          color: var(--accent-color);
-          white-space: nowrap;
-        }
       }
 
+      /* 「点这块进下一层」的提示：只画一个箭头 —— 与记忆页的入口卡同一套语言，
+         同时把「哪块可点」的边界画在按钮里面 */
+      .kb-card-arrow {
+        flex-shrink: 0;
+        color: var(--accent-color);
+        font-size: var(--font-size-lg);
+        line-height: 1;
+      }
+
+      /* 动作区：竖线分组（与主体分开），整列撑满卡片高 —— 一行只剩「进」与「删」时，
+         靠分组线比靠间距更能说清「右边这块不是卡片的入口」 */
       .kb-card-actions {
         display: flex;
         align-items: center;
-        gap: 6px;
+        align-self: stretch;
         flex-shrink: 0;
+        gap: 6px;
+        padding-left: 12px;
+        border-left: 1px solid var(--border-color, #e5e5e5);
 
         // 系统自建库：删除按钮的位置留给一句说明
         //（按钮直接拿掉而不置灰：置灰的删除按钮只会诱发点击，而它永远不会生效）
@@ -405,6 +451,16 @@
           display: flex;
           gap: 4px;
           flex-shrink: 0;
+          align-items: center;
+        }
+
+        /* 记忆详情正文：删除 / 编辑的位置留给一句说明（后端也会拒，不让用户白点） */
+        .doc-item-locked {
+          padding: 4px 2px;
+          font-size: var(--font-size-xs);
+          color: var(--text-tertiary, var(--text-secondary, #999));
+          white-space: nowrap;
+          cursor: default;
         }
       }
     }

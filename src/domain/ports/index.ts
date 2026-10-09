@@ -17,4 +17,6 @@ export {
   type KnowledgeBaseDocument,
   type KnowledgeBaseChunk,
   type KnowledgeBaseQueryResult,
+  type FolderScan,
+  type ZipPreview,
 } from './KnowledgeBasePort'

@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react'
 import { t, tpl } from '@/ui/i18n'
 import { ragService } from '@/services/rag-service'
 import Modal, { ModalFooterButtons } from '@/ui/components/shared/Modal'
-import { showToastMsg } from './toast'
+import { showToast } from '@/ui/components/shared/Toast'
 
 interface Props {
   visible: boolean
@@ -32,22 +32,21 @@ export default function CreateKbModal({ visible, onClose, onCreated }: Props) {
   /** 创建知识库 */
   const handleCreate = async () => {
     if (!name.trim()) {
-      showToastMsg(t('先给知识库起个名字'), 'error')
+      showToast(t('先给知识库起个名字'), 3000)
       return
     }
     setCreating(true)
     try {
       await ragService.createKnowledgeBase(name.trim(), desc.trim())
-      showToastMsg(
+      showToast(
         tpl('已新建知识库「$__name__」，接下来把文档加进去', { name: name.trim() }),
-        'success',
       )
       onClose()
       setName('')
       setDesc('')
       await onCreated?.()
     } catch (err: any) {
-      showToastMsg(tpl('创建失败：$__error__', { error: err.message }), 'error')
+      showToast(tpl('创建失败：$__error__', { error: err.message }), 3000)
     }
     setCreating(false)
   }

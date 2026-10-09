@@ -419,6 +419,32 @@ pub fn detail_link(m: &MemoryRecord) -> Option<(&str, &str)> {
     }
 }
 
+/// 某个知识库里「被记忆的详情链接指着」的文档：`doc_id` → 记忆 id
+///
+/// 用途：知识库界面与命令层据此拦下「删 / 改记忆详情正文」的操作。
+///
+/// 为什么这条规则住在记忆域而不是知识库域：只有这里知道 link 的两半怎么算有效
+///（见 [`detail_link`]）；知识库侧看到的只是一个普通文档。
+///
+/// 口径与 [`detail_link`] **完全一致**（两半都非空才算），不复用会漏判 —— 漏判的后果是
+/// 用户能在知识库页把某条记忆的正文删掉，而那条记忆只剩摘要。
+///
+/// 禁用中的记忆也算：它照样持有 link，正文删了就是真的丢了。
+pub fn detail_docs_in_kb(
+    records: &[MemoryRecord],
+    kb_id: &str,
+) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for record in records {
+        if let Some((link_kb, link_doc)) = detail_link(record) {
+            if link_kb == kb_id {
+                out.insert(link_doc.to_string(), record.id.clone());
+            }
+        }
+    }
+    out
+}
+
 // ==================== 记忆 id ====================
 //
 // 形如 `m_3f9k2x8b1q`：2 字符前缀 + 10 位 base36（48 bit 随机）。
@@ -728,6 +754,44 @@ mod tests {
     }
 
     // ── 记忆 id ──
+
+    /// 知识库侧「这份文档是不是某条记忆的详情正文」的判定（删/改它的护栏靠它）
+    #[test]
+    fn detail_docs_in_kb_matches_only_the_right_kb_and_complete_links() {
+        let mut a = m("m_a1", MEMORY_LEVEL_NORMAL, "库里的详情", 1);
+        a.detail_kb_id = Some("kb_1".into());
+        a.detail_doc_id = Some("doc_1".into());
+
+        // 别的库的详情：不算这个库的
+        let mut other = m("m_b2", MEMORY_LEVEL_NORMAL, "别的库", 2);
+        other.detail_kb_id = Some("kb_2".into());
+        other.detail_doc_id = Some("doc_9".into());
+
+        // 没有详情：不算
+        let plain = m("m_c3", MEMORY_LEVEL_NORMAL, "没详情", 3);
+
+        // 缺一半的坏数据：不算（与 `detail_link` 同口径；判宽了会让用户删不掉一份普通文档）
+        let mut half = m("m_d4", MEMORY_LEVEL_NORMAL, "半截链接", 4);
+        half.detail_kb_id = Some("".into());
+        half.detail_doc_id = Some("doc_1".into());
+
+        // 停用的记忆也算（它照样持有 link，正文删了那只记忆就只剩摘要）
+        let mut disabled = m("m_e5", MEMORY_LEVEL_NORMAL, "已停用", 5);
+        disabled.detail_kb_id = Some("kb_1".into());
+        disabled.detail_doc_id = Some("doc_5".into());
+        disabled.disabled = true;
+
+        let all = [a, other, plain, half, disabled];
+        let hit = detail_docs_in_kb(&all, "kb_1");
+        assert_eq!(hit.len(), 2, "实际：{hit:?}");
+        assert_eq!(hit.get("doc_1").map(String::as_str), Some("m_a1"));
+        assert_eq!(hit.get("doc_5").map(String::as_str), Some("m_e5"));
+
+        // 另一个库各算各的
+        let hit2 = detail_docs_in_kb(&all, "kb_2");
+        assert_eq!(hit2.len(), 1);
+        assert!(hit2.contains_key("doc_9"));
+    }
 
     #[test]
     fn memory_id_is_short_and_well_formed() {

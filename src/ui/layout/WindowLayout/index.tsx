@@ -12,6 +12,8 @@ import SplitScreenSvg from '@/ui/components/icons/SplitScreenSvg'
 import AboutSvg from '@/ui/components/icons/AboutSvg'
 import AboutModal from './view/AboutModal'
 import UpdateModal from '@/ui/components/shared/UpdateModal/UpdateModal'
+// 导入进度弹窗（文件夹 / 压缩包导入）：与 Toast / MessageBox 同样是模块级单例，全局挂一次
+import TaskProgress from '@/ui/components/shared/TaskProgress'
 import menuEvent from '@/events/menuEvent'
 import updateEvent from '@/events/updateEvent'
 import { useToast, showToast } from '@/ui/components/shared/Toast'
@@ -214,6 +216,7 @@ const WindowLayout = ({ children, padding = 0, className }: Props) => {
       />
       <MessageBox />
       <Toast />
+      <TaskProgress />
     </div>
   )
 }

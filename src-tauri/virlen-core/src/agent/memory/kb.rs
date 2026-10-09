@@ -2,7 +2,10 @@
 //!
 //! 设计要点（沿用 `docs/memory-plan.md` §4.4 / §4.6）：
 //! - 库**自动创建**（名 [`MEMORY_KB_NAME`]），用户不需要先手工建库；`kb_id` 缓存在保留设置键
-//!   [`MEMORY_KB_SETTING_KEY`]（`__` 前缀 = 保留键，前端 `pickKnownSettings` 会原样带过，不会被当未知键丢掉）。
+//!   [`MEMORY_KB_SETTING_KEY`]（`__` 前缀 = 保留键）。
+//!   ⚠️ 缓存只存在于**后端设置表**：前端 `pickKnownSettings` 会把 `__` 前缀的键**过滤掉**
+//!   （不污染 store），所以「这个知识库是不是记忆详情库」这件事前端只能靠别的手段知道
+//!   （目前靠 `list_knowledge_base_documents` 返回的 `memory_detail_of` / `builtin` 标记）。
 //! - 库以**系统自建**（`builtin`）身份创建：知识库页不显示删除入口，后端也会拒绝删除 ——
 //!   删掉它，所有记忆条目就都指向一个不存在的库。老数据（升级前建的库）没有这个标记，
 //!   这里按名字认领时顺带补上（[`mark_builtin_if_needed`]）。

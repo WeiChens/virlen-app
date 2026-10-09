@@ -387,6 +387,7 @@ pub fn run() {
             // RAG 知识库命令
             commands::rag::create_knowledge_base,
             commands::rag::list_knowledge_bases,
+            commands::rag::update_knowledge_base,
             commands::rag::delete_knowledge_base,
             commands::rag::add_document_to_knowledge_base,
             commands::rag::remove_document_from_knowledge_base,
@@ -399,6 +400,9 @@ pub fn run() {
             commands::rag::init_knowledge_bases,
             commands::rag::search_documents_content,
             commands::rag::export_knowledge_base,
+            commands::rag::preview_knowledge_base_zip,
+            commands::rag::read_knowledge_base_zip_entry,
+            commands::rag::scan_import_folder,
             // Agent 引擎（Rust 聊天循环）
             commands::agent::agent_send_message,
             commands::agent::agent_cancel,

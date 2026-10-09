@@ -16,6 +16,10 @@
   width: var(--toggle-w);
   height: var(--toggle-h);
   cursor: pointer;
+  /* 本区域不参与文本选择：label 里没有文字，mousedown 落在这里时浏览器会把选区锚点
+     丢到「最近的文本节点」（旁边的表单标签 / 行内规则名），鼠标只要在 mouseup 前抖动
+     1~2px 就真框选出来了。禁掉后这里的按下不再起选区（与仓库其它控件一致）。 */
+  user-select: none;
   vertical-align: middle;
 
   &.size-sm {

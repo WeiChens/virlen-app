@@ -1,0 +1,65 @@
+/* 批量任务进度弹窗（shared/TaskProgress）—— 只用主题令牌，亮 / 暗与字号档位都跟着走 */
+
+.task-progress-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 6px;
+
+  .task-progress-source {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+    /* 来源可能很长（「知识库」· 从文件夹 D:/…）：单行省略，不把弹窗撑宽 */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .task-progress-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: var(--font-size-sm);
+    color: var(--text-primary);
+
+    .task-progress-summary {
+      color: var(--text-secondary);
+    }
+  }
+
+  .task-progress-bar {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--bg-secondary);
+    overflow: hidden;
+
+    .task-progress-bar-fill {
+      display: block;
+      height: 100%;
+      background: var(--accent-color);
+      transition: width 0.2s ease;
+    }
+  }
+
+  .task-progress-latest {
+    /* 最新一条文案：可能很长（带文件名与原因），换行显示，最多两行高度 */
+    font-size: var(--font-size-sm);
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 4.2em;
+    overflow-y: auto;
+  }
+
+  .task-progress-hint {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+  }
+}
+
+.task-progress-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}

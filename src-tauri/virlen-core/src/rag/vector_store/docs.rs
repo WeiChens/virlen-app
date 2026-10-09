@@ -89,6 +89,7 @@ impl VectorStoreManager {
                     content: chunk.content.clone(),
                     chunk_index: chunk.chunk_index,
                     file_type: file_type.clone(),
+                    overlap_prefix_chars: overlap_prefix_of(chunk),
                 },
             );
         }
@@ -287,6 +288,7 @@ impl VectorStoreManager {
                         content: chunk.content.clone(),
                         chunk_index: chunk.chunk_index,
                         file_type: file_type.clone(),
+                        overlap_prefix_chars: overlap_prefix_of(chunk),
                     },
                 );
             }
@@ -344,9 +346,14 @@ impl VectorStoreManager {
         Ok(docs)
     }
 
-    /// 获取文档的完整内容（所有 chunk 按顺序拼接）
+    /// 获取文档的完整内容（所有 chunk 按顺序拼接成**原文**）
     ///
-    /// 通过 document_id 查找所有属于该文档的 chunk，按 chunk_index 排序后拼接。
+    /// ⚠️ 不能只把各块 `join` 起来：块之间带 `overlap_prefix_chars`（默认 48 字符）重叠，
+    /// 是给检索用的；直接拼会把重复内容也吐给调用方，而调用方有三家都是「当正文读」——
+    /// 预览、编辑（改完写回去 ⇒ 重复被固化，每改一次长一成）、导出。
+    /// 所以拼接时按每块记下的重叠长度把开头那段裁掉。
+    ///
+    /// 老数据（块里没有这个字段）用 [`VectorStoreManager::legacy_overlap_prefix`] 回推。
     pub fn get_document_content(&self, kb_id: &str, doc_id: &str) -> Result<String, String> {
         let state = self
             .indices
@@ -366,8 +373,59 @@ impl VectorStoreManager {
 
         chunks.sort_by_key(|c| c.chunk_index);
 
-        // 按顺序拼接
-        let content: String = chunks.iter().map(|c| c.content.as_str()).collect::<Vec<_>>().join("\n\n");
+        // 按顺序拼接：首块整块留，后续块裁掉与上一块重复的开头
+        let mut content = String::with_capacity(chunks.iter().map(|c| c.content.len()).sum());
+        for (i, chunk) in chunks.iter().enumerate() {
+            if i == 0 {
+                content.push_str(&chunk.content);
+                continue;
+            }
+            let prev = chunks[i - 1];
+            let overlap = chunk
+                .overlap_prefix_chars
+                .unwrap_or_else(|| Self::legacy_overlap_prefix(&prev.content, &chunk.content));
+            content.push_str(Self::skip_chars(&chunk.content, overlap));
+        }
         Ok(content)
+    }
+
+    /// 裁掉 `s` 开头的 `n` 个**字符**（不是字节），返回剩余部分
+    ///
+    /// `n` 超出实际长度时返回空串（可能出现在数据异常或老数据上 —— 不 panic）。
+    pub(crate) fn skip_chars(s: &str, n: usize) -> &str {
+        if n == 0 {
+            return s;
+        }
+        match s.char_indices().nth(n) {
+            Some((byte_idx, _)) => &s[byte_idx..],
+            None => "",
+        }
+    }
+
+    /// 老数据（块里没存重叠长度）回推本块开头重复了多少字符
+    ///
+    /// 做法：在**当前默认重叠** [`crate::rag::document::CHUNK_OVERLAP_CHARS`] 的上限内，找
+    /// 「上一块结尾以本块开头结尾」的最大长度。上限卡在真实重叠量上，所以即使文本高度重复
+    /// （比如表格里逐行相同的字段）也**不会多裁** —— 最多裁掉本该保留的那几十个字符。
+    /// 老文档被重新导入 / 编辑一次后会带上精确值，从此不再走这条推理路径。
+    pub(crate) fn legacy_overlap_prefix(prev_content: &str, content: &str) -> usize {
+        let cap = crate::rag::document::CHUNK_OVERLAP_CHARS;
+        let max = cap
+            .min(content.chars().count())
+            .min(prev_content.chars().count());
+        for n in (1..=max).rev() {
+            if prev_content.ends_with(Self::take_chars(content, n)) {
+                return n;
+            }
+        }
+        0
+    }
+
+    /// 取 `s` 开头的 `n` 个**字符**（UTF-8 安全；`n` 超出长度时返回整个 `s`）
+    pub(crate) fn take_chars(s: &str, n: usize) -> &str {
+        match s.char_indices().nth(n) {
+            Some((byte_idx, _)) => &s[..byte_idx],
+            None => s,
+        }
     }
 }

@@ -4,13 +4,18 @@
 
 use crate::rag::document::{self};
 use crate::rag::embedding::EmbeddingProvider;
-use crate::rag::vector_store::{ChunkResult, DocumentInfo, KnowledgeBaseMeta, VectorStoreManager};
+use crate::rag::import_scan::FolderScan;
+use crate::rag::vector_store::{
+    ChunkResult, DocumentInfo, KnowledgeBaseMeta, VectorStoreManager, ZipPreview,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 
 /// 最大单个文档大小（50MB），超过此大小则拒绝处理，防止嵌入过久导致超时
-const MAX_DOC_SIZE_BYTES: u64 = 50 * 1024 * 1024;
+///
+/// `pub(crate)`：zip 导入也要用它卡单档上限（同一个限制，不另写一份）。
+pub(crate) const MAX_DOC_SIZE_BYTES: u64 = 50 * 1024 * 1024;
 
 /// 自动创建的默认知识库名
 ///
@@ -20,6 +25,17 @@ pub const DEFAULT_KB_NAME: &str = "默认知识库";
 
 /// 默认知识库的说明 —— 用户在知识库列表里能看出它不是手建的
 pub const DEFAULT_KB_DESCRIPTION: &str = "由 Virlen 自动创建：放常用的文档和资料，问 AI 时会先在这里查一遍。";
+
+/// 把解析结果里的文档名换成调用方指定的那个（空 / 没给 → 保持解析出来的基础名）
+///
+/// 为什么在**分块之前**改：块的 `document_name` 与文档元数据都取自 `parsed.meta.file_name`，
+/// 定下来之后再改就得逐个块回填。
+fn override_doc_name(parsed: &mut document::ParsedDocument, doc_name: Option<&str>) {
+    let Some(name) = doc_name.map(str::trim).filter(|n| !n.is_empty()) else {
+        return;
+    };
+    parsed.meta.file_name = name.to_string();
+}
 
 /// RAG 服务
 pub struct RagService {
@@ -87,12 +103,38 @@ impl RagService {
         mgr.delete_knowledge_base(kb_id)
     }
 
+    /// 改知识库的名称 / 说明（`None` = 不动这一项；写操作）
+    pub fn update_knowledge_base(
+        &self,
+        kb_id: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+    ) -> Result<KnowledgeBaseMeta, String> {
+        let mgr = self.store_manager.read().map_err(|e| format!("获取读锁失败: {}", e))?;
+        mgr.update_knowledge_base(kb_id, name, description)
+    }
+
     // ===== 文档管理 =====
 
     /// 添加文档到知识库（流程：解析文件 → 分块 → 嵌入 → 存储）
     ///
     /// ⚠️ 单个文档超过 50MB 时拒绝处理，防止嵌入耗时过长导致超时。
     pub fn add_document(&self, kb_id: &str, file_path: &str) -> Result<DocumentInfo, String> {
+        self.add_document_named(kb_id, file_path, None)
+    }
+
+    /// 同 [`Self::add_document`]，但可以指定入库的文档名。
+    ///
+    /// 为什么需要它：从**文件夹**导入时，文档名要保留相对路径（`子目录/手册.md`），这样同一棵
+    /// 目录树里两个同名文件不会撞在一起。纯文本那条路是前端解码后自己带名字写入的
+    ///（`add_text_document`），而 PDF 是二进制、只能由后端解析 —— 名字得在这里传进来，
+    /// 否则每个 PDF 都只剩下基础名。
+    pub fn add_document_named(
+        &self,
+        kb_id: &str,
+        file_path: &str,
+        doc_name: Option<&str>,
+    ) -> Result<DocumentInfo, String> {
         // 1. 提前检查文件大小（避免解析大文件浪费资源）
         let metadata = std::fs::metadata(file_path)
             .map_err(|e| format!("读取文件元信息失败: {}", e))?;
@@ -104,11 +146,17 @@ impl RagService {
         }
 
         // 2. 解析文档
-        let parsed = document::parse_document(file_path)?;
+        let mut parsed = document::parse_document(file_path)?;
+        override_doc_name(&mut parsed, doc_name);
         let doc_id = parsed.meta.id.clone();
 
         // 3. 分块
-        let chunks = document::chunk_document(&parsed, &doc_id, 512, 48);
+        let chunks = document::chunk_document(
+            &parsed,
+            &doc_id,
+            document::CHUNK_MAX_CHARS,
+            document::CHUNK_OVERLAP_CHARS,
+        );
 
         if chunks.is_empty() {
             return Err("文档解析后无有效文本内容".to_string());
@@ -137,7 +185,12 @@ impl RagService {
         let doc_id = parsed.meta.id.clone();
 
         // 2. 分块（使用较小的块大小，AI 生成的内容通常比较紧凑）
-        let chunks = document::chunk_document(&parsed, &doc_id, 512, 48);
+        let chunks = document::chunk_document(
+            &parsed,
+            &doc_id,
+            document::CHUNK_MAX_CHARS,
+            document::CHUNK_OVERLAP_CHARS,
+        );
 
         if chunks.is_empty() {
             return Err("文本内容为空".to_string());
@@ -160,12 +213,32 @@ impl RagService {
     ///
     /// 流程：解析新文件 → 分块 → 替换原有 chunks → 更新元数据
     pub fn edit_document(&self, kb_id: &str, doc_id: &str, new_file_path: &str) -> Result<DocumentInfo, String> {
+        self.edit_document_named(kb_id, doc_id, new_file_path, None)
+    }
+
+    /// 同 [`Self::edit_document`]，但可以指定替换后的文档名
+    ///
+    /// （与 [`Self::add_document_named`] 同一个理由：文件夹导入的 PDF 要保留相对路径，
+    /// 否则 `子目录/手册.pdf` 覆盖一次就变成了 `手册.pdf`。）
+    pub fn edit_document_named(
+        &self,
+        kb_id: &str,
+        doc_id: &str,
+        new_file_path: &str,
+        doc_name: Option<&str>,
+    ) -> Result<DocumentInfo, String> {
         // 1. 解析新文档
-        let parsed = document::parse_document(new_file_path)?;
+        let mut parsed = document::parse_document(new_file_path)?;
+        override_doc_name(&mut parsed, doc_name);
         let new_doc_id = parsed.meta.id.clone();
 
         // 2. 分块
-        let chunks = document::chunk_document(&parsed, &new_doc_id, 512, 48);
+        let chunks = document::chunk_document(
+            &parsed,
+            &new_doc_id,
+            document::CHUNK_MAX_CHARS,
+            document::CHUNK_OVERLAP_CHARS,
+        );
         if chunks.is_empty() {
             return Err("文档解析后无有效文本内容".to_string());
         }
@@ -184,7 +257,12 @@ impl RagService {
         let new_doc_id = parsed.meta.id.clone();
 
         // 2. 分块
-        let chunks = document::chunk_document(&parsed, &new_doc_id, 512, 48);
+        let chunks = document::chunk_document(
+            &parsed,
+            &new_doc_id,
+            document::CHUNK_MAX_CHARS,
+            document::CHUNK_OVERLAP_CHARS,
+        );
         if chunks.is_empty() {
             return Err("文本内容为空".to_string());
         }
@@ -254,6 +332,24 @@ impl RagService {
     pub fn export_to_zip(&self, kb_id: &str, output_path: &str) -> Result<(), String> {
         let mgr = self.store_manager.read().map_err(|e| format!("获取读锁失败: {}", e))?;
         mgr.export_to_zip(kb_id, output_path)
+    }
+
+    /// 列出压缩包里的文档名（纯函数，不与任何库关联）—— 导入前的「会进来什么」预览
+    pub fn zip_entry_names(zip_path: &str) -> Result<ZipPreview, String> {
+        VectorStoreManager::zip_entry_names(zip_path)
+    }
+
+    /// 读压缩包里一个条目的正文（纯函数，不与任何库关联）
+    ///
+    /// 逐条导入靠它：读一条 → 调 [`Self::write_text_document`] / [`Self::edit_text_document`] 存一条，
+    /// 界面于是能显示进度、随时取消（一次性整包导入做不到这两件事）。
+    pub fn read_zip_entry(zip_path: &str, entry_name: &str) -> Result<String, String> {
+        VectorStoreManager::read_zip_entry(zip_path, entry_name)
+    }
+
+    /// 扫描文件夹：按 `.gitignore` 过滤后列出可导入的文档（纯函数，不与任何库关联）
+    pub fn scan_import_folder(dir: &str) -> Result<FolderScan, String> {
+        crate::rag::import_scan::scan_folder_for_import(dir)
     }
 
     /// 检索知识库（读操作，可并发）
@@ -585,5 +681,44 @@ mod tests {
         );
         let err = service.delete_knowledge_base(&legacy.id).unwrap_err();
         assert!(err.contains("不能删除"), "实际：{}", err);
+    }
+
+    /// 从文件夹导入 PDF 时，文档名要能显式指定（保留相对路径）
+    ///
+    /// PDF 是二进制、只能由后端解析，名字只好从外面传进来；不传就是文件的基础名。
+    /// 这条守的是「同一个目录树里两个同名 PDF 不会撞在一起」与「覆盖一次不会丢掉目录信息」。
+    #[test]
+    fn test_add_and_edit_document_with_explicit_name() {
+        let service = create_test_service();
+        let kb = service.create_knowledge_base("KB", "").unwrap();
+
+        let dir = std::env::temp_dir().join(format!("virlen_rag_named_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("子")).unwrap();
+        let file = dir.join("子").join("手册.txt");
+        std::fs::write(&file, "第一版内容：Rust 与内存安全。").unwrap();
+        let path = file.to_string_lossy().to_string();
+
+        let doc = service
+            .add_document_named(&kb.id, &path, Some("子/手册.txt"))
+            .unwrap();
+        assert_eq!(doc.file_name, "子/手册.txt", "文件夹导入要保留相对路径");
+
+        // 不指定名字 → 退回文件的基础名（单个文件导入的行为，保持不变）
+        let plain = service.add_document(&kb.id, &path).unwrap();
+        assert_eq!(plain.file_name, "手册.txt");
+        // 空白名字不算「指定」
+        let blank = service
+            .add_document_named(&kb.id, &path, Some("   "))
+            .unwrap();
+        assert_eq!(blank.file_name, "手册.txt");
+
+        // 覆盖（同名替换）时也能指定名字：默认会退回基础名，把目录信息丢掉
+        std::fs::write(&file, "第二版内容：分块与嵌入都换了。").unwrap();
+        let edited = service
+            .edit_document_named(&kb.id, &doc.id, &path, Some("子/手册.txt"))
+            .unwrap();
+        assert_eq!(edited.file_name, "子/手册.txt", "覆盖不该把相对路径抹掉");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

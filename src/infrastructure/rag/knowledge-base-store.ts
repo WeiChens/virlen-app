@@ -2,10 +2,12 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import type {
+  FolderScan,
   KnowledgeBase,
   KnowledgeBaseDocument,
   KnowledgeBasePort,
   KnowledgeBaseQueryResult,
+  ZipPreview,
 } from '@/domain/ports'
 
 /**
@@ -26,19 +28,34 @@ class KnowledgeBaseStore implements KnowledgeBasePort {
     return result as KnowledgeBase[]
   }
 
+  /** 改知识库的名称 / 说明（`undefined` = 不动这一项） */
+  async update(
+    kbId: string,
+    name?: string,
+    description?: string,
+  ): Promise<KnowledgeBase> {
+    return invoke<KnowledgeBase>('update_knowledge_base', {
+      kbId,
+      name: name ?? null,
+      description: description ?? null,
+    })
+  }
+
   /** 删除知识库 */
   async delete(kbId: string): Promise<void> {
     await invoke('delete_knowledge_base', { kbId })
   }
 
-  /** 添加文档到知识库 */
+  /** 添加文档到知识库（`docName` 可选：从文件夹导入时传相对路径，避免同名相撞） */
   async addDocument(
     kbId: string,
     filePath: string,
+    docName?: string,
   ): Promise<KnowledgeBaseDocument> {
     return invoke<KnowledgeBaseDocument>('add_document_to_knowledge_base', {
       kbId,
       filePath,
+      docName,
     })
   }
 
@@ -84,11 +101,13 @@ class KnowledgeBaseStore implements KnowledgeBasePort {
     kbId: string,
     docId: string,
     filePath: string,
+    docName?: string,
   ): Promise<KnowledgeBaseDocument> {
     return invoke<KnowledgeBaseDocument>('edit_document_in_knowledge_base', {
       kbId,
       docId,
       filePath,
+      docName,
     })
   }
 
@@ -137,6 +156,27 @@ class KnowledgeBaseStore implements KnowledgeBasePort {
     await invoke('export_knowledge_base', {
       kbId,
       outputPath,
+    })
+  }
+
+  /** 扫描文件夹（按 .gitignore 过滤）—— 导入前的预览 */
+  async scanImportFolder(dirPath: string): Promise<FolderScan> {
+    return invoke<FolderScan>('scan_import_folder', { dirPath })
+  }
+
+  /** 列出压缩包里会导入的文档名（不解压，含包内 .gitignore 的过滤结果） */
+  async previewKnowledgeBaseZip(zipPath: string): Promise<ZipPreview> {
+    return invoke<ZipPreview>('preview_knowledge_base_zip', { zipPath })
+  }
+
+  /** 读压缩包里一个条目的正文（逐条导入：一条一次调用，界面因此能报进度、能取消） */
+  async readKnowledgeBaseZipEntry(
+    zipPath: string,
+    entryName: string,
+  ): Promise<string> {
+    return invoke<string>('read_knowledge_base_zip_entry', {
+      zipPath,
+      entryName,
     })
   }
 

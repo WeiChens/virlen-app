@@ -51,6 +51,20 @@ pub struct KnowledgeBaseMeta {
     pub builtin: bool,
 }
 
+/// 压缩包预览（给界面两步走：先把「会进来什么 / 有多少被排除」说清，再逐条导入）
+///
+/// 逐条导入由命令层驱动（每读一条报一次进度，用户可随时取消），所以这里不再是「导入结果」，
+/// 而是导入前的**名单**。
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct ZipPreview {
+    /// 会入库的条目名（已按包内 .gitignore 过滤、已排除超过 2 MB 的条目）
+    pub names: Vec<String>,
+    /// 被 .gitignore 排除的条目数（含被排除目录里的条目 —— 条目是一张名单，不涉及「进不进得去」）
+    pub ignored: usize,
+    /// 超过 [`crate::rag::import_scan::MAX_TEXT_FILE_BYTES`]（2 MB）而没收的条目数
+    pub too_large: usize,
+}
+
 /// 文档信息
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DocumentInfo {
@@ -84,6 +98,14 @@ struct ChunkInfo {
     content: String,
     chunk_index: usize,
     file_type: String,
+    /// 本块开头有多少**字符**是上一块结尾的重复（分块时记下，见
+    /// [`crate::rag::document::META_OVERLAP_PREFIX`]）。
+    ///
+    /// 读全文时按它裁掉重叠，否则预览 / 编辑 / 导出会看到重复内容。
+    /// `None` = 升级前写的块（那时没这个字段）—— 此时由
+    /// [`VectorStoreManager::legacy_overlap_prefix`] 按默认重叠量回推。
+    #[serde(default)]
+    overlap_prefix_chars: Option<usize>,
 }
 
 /// 单个知识库的索引状态
@@ -212,6 +234,46 @@ impl VectorStoreManager {
         Ok(true)
     }
 
+    /// 删除知识库（写操作）
+    /// 改知识库的名称 / 说明（`None` = 不动这一项）
+    ///
+    /// 为什么要它：卡片上原本只有「进」与「删」—— 名字写错只能删了重建（里面的文档一起没）。
+    ///
+    /// 两个约束：
+    /// - 名称不能改成空白：列表、搜索、导入时的认领都拿它当标识；
+    /// - **系统自建库不给改名**：默认知识库与记忆详情都以**名字**当「缓存失效后认领」的锚
+    ///   （`init_default_knowledge_base` / `memory::kb::ensure_memory_kb`），改名会让锚点失效、
+    ///   旧的详情文档变孤儿。与「不能删除」同源。
+    pub fn update_knowledge_base(
+        &self,
+        kb_id: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+    ) -> Result<KnowledgeBaseMeta, String> {
+        let mut meta = self
+            .load_kb_metadata(kb_id)?
+            .ok_or_else(|| format!("知识库不存在: {}", kb_id))?;
+
+        if meta.builtin && name.is_some() {
+            return Err(format!("「{}」是 Virlen 自动创建的知识库，不能改名。", meta.name));
+        }
+
+        if let Some(raw) = name {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err("知识库名称不能为空".to_string());
+            }
+            meta.name = trimmed.to_string();
+        }
+        if let Some(raw) = description {
+            meta.description = raw.trim().to_string();
+        }
+
+        meta.updated_at = chrono::Utc::now().to_rfc3339();
+        self.save_kb_metadata(kb_id, &meta)?;
+        Ok(meta)
+    }
+
     pub fn delete_knowledge_base(&mut self, kb_id: &str) -> Result<(), String> {
         // 检查知识库（内存索引 或 磁盘目录）是否存在
         let exists_in_memory = self.indices.contains_key(kb_id);
@@ -243,6 +305,14 @@ impl VectorStoreManager {
         }
         Ok(())
     }
+}
+
+/// 从块元数据取「开头重复了多少字符」（缺字段 / 解析不了 → `None` = 老数据）
+fn overlap_prefix_of(chunk: &crate::rag::document::DocumentChunk) -> Option<usize> {
+    chunk
+        .metadata
+        .get(crate::rag::document::META_OVERLAP_PREFIX)
+        .and_then(|s| s.parse().ok())
 }
 
 /// 格式化知识库数据目录大小（当前未被使用，保留供后续 UI 展示用）

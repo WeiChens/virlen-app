@@ -7,6 +7,7 @@
 
 pub mod document;
 pub mod embedding;
+pub mod import_scan;
 pub mod rag_service;
 pub mod vector_store;
 

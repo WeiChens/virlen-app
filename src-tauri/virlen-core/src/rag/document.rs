@@ -103,10 +103,28 @@ fn parse_pdf(file_path: &str) -> Result<(String, Option<u32>), String> {
     Ok((text, None))
 }
 
+/// 默认块大小（**字符**数）—— 知识库所有写入路径都传这一对常量，改就一起改
+pub const CHUNK_MAX_CHARS: usize = 512;
+
+/// 相邻块的默认重叠（**字符**数）—— 跨块的问题要能搜到，所以才需要重叠
+pub const CHUNK_OVERLAP_CHARS: usize = 48;
+
+/// 块元数据键：本块**开头**有多少字符是上一块结尾的重复（值是可解析为 `usize` 的字符串）
+///
+/// 为什么必须记下来：重叠是**检索**的需要，但「把整篇读出来」时必须能把它精确裁掉 ——
+/// 读全文的三条出口（预览 / 编辑 / 导出）都基于 `get_document_content`。精确重叠长度只在
+/// 分块这一刻才自然可得（`next_start = chunk_end - overlap`），事后再拿两块内容去比对前缀
+/// 只能靠猜（重复文本上会多裁，正常文本上又可能少裁）。
+pub const META_OVERLAP_PREFIX: &str = "overlap_prefix_chars";
+
 /// 将文档文本分割成块
 ///
-/// 使用 text-splitter 进行智能分块，基于 token 数而非字符数。
-/// 块大小默认 512 tokens，块重叠 48 tokens。
+/// ⚠️ 是**字符**级分块，不是 token 级：每块最多 `max_chunk_size` 个字符，相邻块重叠
+/// `chunk_overlap` 个字符（实现见 `split_text_slices`）。默认值见 [`CHUNK_MAX_CHARS`] /
+/// [`CHUNK_OVERLAP_CHARS`]。
+///
+/// 每块都会在 `metadata` 里记下 [`META_OVERLAP_PREFIX`]（开头重复了多少字符），
+/// `get_document_content` 据此把全文拼回来。
 pub fn chunk_document(
     doc: &ParsedDocument,
     doc_id: &str,
@@ -118,15 +136,14 @@ pub fn chunk_document(
         return Vec::new();
     }
 
-    // 使用简单的字符级分块（避免引入 tokenizer 依赖）
-    let chunks = split_text_by_chars(text, max_chunk_size, chunk_overlap);
+    let chunks = split_text_slices(text, max_chunk_size, chunk_overlap);
 
     let doc_name = doc.meta.file_name.clone();
 
     chunks
         .into_iter()
         .enumerate()
-        .map(|(i, content)| DocumentChunk {
+        .map(|(i, (content, overlap_prefix_chars))| DocumentChunk {
             id: format!("{}_{}", doc_id, i),
             document_id: doc_id.to_string(),
             document_name: doc_name.clone(),
@@ -136,17 +153,36 @@ pub fn chunk_document(
                 let mut m = std::collections::HashMap::new();
                 m.insert("file_type".into(), doc.meta.file_type.clone());
                 m.insert("file_size".into(), doc.meta.file_size.to_string());
+                m.insert(META_OVERLAP_PREFIX.into(), overlap_prefix_chars.to_string());
                 m
             },
         })
         .collect()
 }
 
-/// 基于字符数的文本分块（UTF-8 安全）
+/// 基于字符数的文本分块（UTF-8 安全）—— 只要文本，重叠信息丢弃
+///
+/// ⚠️ 只给测试用：生产路径（`chunk_document`）要的是带重叠标记的块，走 `split_text_slices`。
 ///
 /// `max_chunk_size` — 每块的最大**字符数**（不是字节数）
 /// `overlap` — 相邻块的**字符**重叠数
+#[cfg(test)]
 fn split_text_by_chars(text: &str, max_chunk_size: usize, overlap: usize) -> Vec<String> {
+    split_text_slices(text, max_chunk_size, overlap)
+        .into_iter()
+        .map(|(content, _)| content)
+        .collect()
+}
+
+/// 基于字符数的文本分块，**并带出「本块开头与上一块重复了多少字符」**（UTF-8 安全）
+///
+/// `max_chunk_size` — 每块的最大**字符数**（不是字节数）
+/// `overlap` — 相邻块的**字符**重叠数
+///
+/// 返回值第二项：本块开头与**上一块结尾**重复的字符数；首块恒为 0（没有上一块）。
+/// 注意它与传入的 `overlap` 可能不同：分割点会向前贴到换行/句末，而「至少前进 1 个字符」
+/// 的兜底也会把它压小 —— 所以调用方要的是这个**实际值**，不是参数值。
+fn split_text_slices(text: &str, max_chunk_size: usize, overlap: usize) -> Vec<(String, usize)> {
     // 收集所有字符的字节偏移 [byte_start, byte_end, ...]
     let char_boundaries: Vec<(usize, usize)> = text
         .char_indices()
@@ -156,11 +192,12 @@ fn split_text_by_chars(text: &str, max_chunk_size: usize, overlap: usize) -> Vec
     let char_count = char_boundaries.len();
 
     if char_count <= max_chunk_size {
-        return vec![text.to_string()];
+        return vec![(text.to_string(), 0)];
     }
 
-    let mut chunks = Vec::new();
+    let mut chunks: Vec<(String, usize)> = Vec::new();
     let mut start_char_idx = 0; // 当前块的起始字符索引
+    let mut prev_end_char_idx: usize = 0; // 上一块的结束字符索引（= 本块起点的「无缝位置」）
 
     while start_char_idx < char_count {
         let end_char_idx = (start_char_idx + max_chunk_size).min(char_count);
@@ -208,7 +245,10 @@ fn split_text_by_chars(text: &str, max_chunk_size: usize, overlap: usize) -> Vec
             text.len()
         };
 
-        chunks.push(text[byte_start..byte_end].to_string());
+        // 本块开头有多少字符是上一块结尾的重复：上一块的终点 - 本块起点（首块为 0）
+        let overlap_prefix = prev_end_char_idx.saturating_sub(start_char_idx);
+        chunks.push((text[byte_start..byte_end].to_string(), overlap_prefix));
+        prev_end_char_idx = chunk_end;
 
         // 下一块起点
         if chunk_end >= char_count {
@@ -231,6 +271,54 @@ fn split_text_by_chars(text: &str, max_chunk_size: usize, overlap: usize) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ============ 分块重叠标记（读全文时据此裁掉重复） ============
+
+    /// 完整还原的证明：按每块报出的重叠长度裁掉开头，拼回去必须**逐字**等于原文
+    ///
+    /// ⚠️ 这就昰「分块重叠被当成正文读出来」那个 bug 的回归锁 —— 当初
+    /// `get_document_content` 只是把块 `join` 起来，文本里会多出每处交界的 48 字符重复。
+    #[test]
+    fn test_overlap_prefix_allows_exact_reconstruction() {
+        let text: String = (0..80)
+            .map(|i| format!("第{}句：这是一段用于验证还原的文本。\n", i))
+            .collect();
+        let chunks = split_text_slices(&text, 50, 10);
+        assert!(chunks.len() > 2, "样本要能切出多块，实际 {}", chunks.len());
+        assert_eq!(chunks[0].1, 0, "首块没有上一块，重叠必须是 0");
+
+        let mut rebuilt = String::new();
+        for (i, (content, overlap)) in chunks.iter().enumerate() {
+            if i == 0 {
+                rebuilt.push_str(content);
+                continue;
+            }
+            assert!(*overlap > 0, "第 {} 块应该有重叠", i);
+            let rest: String = content.chars().skip(*overlap).collect();
+            rebuilt.push_str(&rest);
+        }
+        assert_eq!(rebuilt, text, "裁掉重叠后必须还原原文");
+    }
+
+    /// 报出的重叠不能超过请求值（它只可能更小：分割点贴到换行/句末）
+    #[test]
+    fn test_overlap_prefix_never_exceeds_requested() {
+        let text = "abcdefghij".repeat(40); // 高度重复的文本
+        let chunks = split_text_slices(&text, 30, 5);
+        assert!(chunks.len() > 2);
+        for (content, overlap) in &chunks {
+            assert!(*overlap <= 5, "实际 {}（块长 {}）", overlap, content.chars().count());
+        }
+    }
+
+    /// 不分块的小文档：整体一块，重叠 0（不能因为加了标记就多出个空块）
+    #[test]
+    fn test_short_text_single_chunk_has_no_overlap() {
+        let chunks = split_text_slices("短文本", 100, 10);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].0, "短文本");
+        assert_eq!(chunks[0].1, 0);
+    }
 
     // ==================== split_text_by_chars ====================
 
