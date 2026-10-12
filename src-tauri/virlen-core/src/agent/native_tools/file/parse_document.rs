@@ -15,10 +15,15 @@
 //! `outTxtFile`（选填）：文档太大时把**全文**落成一份文本文件，本次只回短预览 —— 模型随后用
 //! `read_file` / `search_text_in_files` 按需取用。落盘走 `resolve_safe_path(.., "w", ..)`（写模式：
 //! 白名单 + 工作目录，黑名单优先）；**被拒就直接失败**，不悄悄降级成「只回正文」。
+//!
+//! `ocrImages`（选填，PDF）：扫描件没有文字层，字全在图片里 —— 端侧 OCR（quasivision，**图片不出本机**）
+//! 把图里的字读出来当正文。三态语义见 [`ocr_options`]，口径与 GUI 命令共用同一条链。
 
-use crate::agent::native_tools::common::{arg_i64, arg_str, arg_str_array, resolve_safe_path};
+use crate::agent::host::HostEnv;
+use crate::agent::native_tools::common::{arg_bool, arg_i64, arg_str, arg_str_array, resolve_safe_path};
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
-use crate::doc_parse::{self, DocText, ParseError, ParseOptions};
+use crate::doc_parse::{self, DocText, OcrOptions, OcrSummary, ParseError, ParseOptions};
+use crate::agent::cancellation::CancellationToken;
 use serde_json::{json, Value};
 
 use super::common::format_size;
@@ -50,6 +55,30 @@ pub fn default_max_chars(out_txt_file: Option<&str>) -> usize {
     } else {
         doc_parse::DEFAULT_MAX_CHARS
     }
+}
+
+/// `ocrImages` 的**三态**语义（工具与 GUI 命令共用；两侧各解一次就会分叉）：
+///
+/// | 入参 | 行为 |
+/// |---|---|
+/// | 没传 | **自动兜底**：只有抽不到文字层的 PDF（扫描件）才跑 OCR |
+/// | `true` | 有文字层也跑：图片里的字（截图 / 表格图）也读 |
+/// | `false` | 完全不跑（显式关掉兜底，扫描件直接报「没有文字」） |
+///
+/// 模型目录只在这里解析：只有调用方拿得到宿主（工具 → `ctx.host`，GUI 命令 → `TauriHost`）。
+pub fn ocr_options(
+    host: &dyn HostEnv,
+    requested: Option<bool>,
+    cancel: Option<CancellationToken>,
+) -> Option<OcrOptions> {
+    if requested == Some(false) {
+        return None;
+    }
+    Some(OcrOptions {
+        models_dir: crate::vision::models_dir(host),
+        always: requested == Some(true),
+        cancel,
+    })
 }
 
 /// `outTxtFile` 的落盘结果 —— 模型侧提示行与 `uiData` 共用同一份事实
@@ -301,6 +330,8 @@ pub(crate) async fn parse_document_tool(
         offset: arg_i64(args, "offset").unwrap_or(0).max(0) as usize,
         // 全文开关由 `parse_targets` 按 `outTxtFile` 统一推导（这里不设，避免两份真相）
         full_text: false,
+        // OCR 开关：没传 = 扫描件兜底；`true` = 图片里的字也读；`false` = 关闭
+        ocr: ocr_options(ctx.host, arg_bool(args, "ocrImages"), Some(ctx.cancel.clone())),
     };
 
     // 支持 paths 数组（一次解析多份）
@@ -343,14 +374,17 @@ fn render_block(full_path: &str, byte_size: u64, opts: &ParseOptions, doc: &DocT
         (None, false) => format!(" · sheets: {}", doc.sheets.join(", ")),
         (None, true) => String::new(),
     };
+    let ocr_part = match &doc.ocr {
+        Some(ocr) if ocr.images > 0 => format!(" · ocr: {} image(s)", ocr.images),
+        _ => String::new(),
+    };
     let mut header = vec![
         format!("📄 {full_path}"),
         format!(
-            "🔢 {} · {} · {} chars{}",
+            "🔢 {} · {} · {} chars{sheet_part}{ocr_part}",
             doc.kind,
             format_size(byte_size as usize),
             doc.char_count,
-            sheet_part
         ),
     ];
     if let Some(note) = &doc.note {
@@ -369,7 +403,7 @@ fn render_block(full_path: &str, byte_size: u64, opts: &ParseOptions, doc: &DocT
 
 /// 界面侧结构化数据（D2-A：界面按 `uiData` 重建文案，不解析模型侧英文）
 fn ui_data(full_path: &str, byte_size: u64, opts: &ParseOptions, doc: &DocText) -> Value {
-    json!({
+    let mut ui = json!({
         "file": full_path,
         "ok": true,
         "fileType": doc.kind,
@@ -382,6 +416,40 @@ fn ui_data(full_path: &str, byte_size: u64, opts: &ParseOptions, doc: &DocText) 
         "sheet": doc.sheet,
         "note": doc.note,
         "text": doc.text,
+    });
+    // OCR 事实（没跑 OCR 时不出现 —— 界面据此决定要不要出它那块）
+    if let (Some(summary), Some(obj)) = (&doc.ocr, ui.as_object_mut()) {
+        obj.insert("ocr".into(), ocr_ui(summary));
+    }
+    ui
+}
+
+/// OCR 摘要 → 界面侧结构化数据（逐图事实；**不带正文** —— 正文已在 `text` / 正文块里）
+fn ocr_ui(summary: &OcrSummary) -> Value {
+    json!({
+        "available": summary.available,
+        "unavailableKind": summary.unavailable.map(|kind| kind.kind()),
+        "unavailableReason": summary.unavailable_reason,
+        "images": summary.images,
+        "chars": summary.chars,
+        "skipped": summary.skipped,
+        "empty": summary.empty,
+        "errors": summary.errors,
+        "total": summary.total,
+        "truncated": summary.truncated,
+        "sections": summary
+            .sections
+            .iter()
+            .map(|s| json!({
+                "index": s.index,
+                "page": s.page,
+                "pages": s.pages,
+                "width": s.width,
+                "height": s.height,
+                "objectId": s.object_id,
+                "chars": s.chars,
+            }))
+            .collect::<Vec<_>>(),
     })
 }
 
@@ -413,7 +481,7 @@ fn error_ui_data(full_path: &str, byte_size: u64, err: &ParseError) -> Value {
             ParseError::Backend { format, .. } => {
                 obj.insert("fileType".into(), json!(format));
             }
-            ParseError::NoText => {
+            ParseError::NoText { .. } => {
                 obj.insert("fileType".into(), json!(doc_parse::extension_of(full_path)));
                 obj.insert("charCount".into(), json!(0));
             }
@@ -431,6 +499,7 @@ mod tests {
     use crate::agent::native_tools::noop_repo;
     use crate::agent::native_tools::test_util::test_security;
     use crate::agent::types::NativeToolSecurity;
+    use crate::doc_parse::OcrSection;
 
     fn fixture(name: &str) -> String {
         format!("{}/tests/fixtures/office/{name}", env!("CARGO_MANIFEST_DIR"))
@@ -791,5 +860,188 @@ mod tests {
         assert!(ui_of(&outcome).get("outTxtFile").is_none());
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // OCR（扫描件）：不需要真模型的那些分支（真跑推理的用例见 ocr.rs 的 `#[ignore]` 用例）
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /// 一个「没有资源目录」的宿主：模型必然找不到 → OCR 分支可确定地测（不依赖开发机上的模型）
+    struct EmptyHost {
+        dir: std::path::PathBuf,
+    }
+    impl crate::agent::host::HostEnv for EmptyHost {
+        fn resource_candidates(&self) -> Vec<std::path::PathBuf> {
+            vec![self.dir.join("no-such-resources")]
+        }
+        fn data_dir(&self) -> std::path::PathBuf {
+            self.dir.clone()
+        }
+    }
+
+    /// 与 [`call`] 相同，但用指定宿主（OCR 的模型定位走宿主，见 [`ocr_options`]）
+    async fn call_with_host(
+        host: &dyn crate::agent::host::HostEnv,
+        sec: NativeToolSecurity,
+        args: Value,
+    ) -> Result<NativeToolOutcome, String> {
+        let sink = TestEventSink::new();
+        let cancel = CancellationToken::new();
+        let bridge = AgentBridgeState::default();
+        let ctx = NativeToolCtx {
+            session_id: "s_parse",
+            tool_call_id: "tc_parse",
+            cancel: &cancel,
+            sink: &sink,
+            bridge: &bridge,
+            security: &sec,
+            repo: noop_repo(),
+            skills: None,
+            host,
+            settings: crate::agent::native_tools::noop_settings(),
+            memory: crate::agent::native_tools::noop_memory(),
+        };
+        parse_document_tool(&ctx, &args).await
+    }
+
+    /// 一份没有文字层的「扫描件」PDF（图是纯灰块，真 OCR 也读不出字）
+    fn scanned_pdf_file(dir: &std::path::Path) -> String {
+        let bytes = crate::doc_parse::test_pdf::scanned_pdf(1, 200);
+        let file = dir.join("scan.pdf");
+        std::fs::write(&file, bytes).unwrap();
+        "scan.pdf".to_string()
+    }
+
+    /// 没传 `ocrImages` = **自动兜底**：扫描件会去跑 OCR；这里宿主没有模型目录，故如实报「不可用」
+    #[tokio::test]
+    async fn a_scanned_pdf_triggers_the_oc_fallback_and_reports_missing_models() {
+        let dir = tmp_dir("ocr_auto");
+        let path = scanned_pdf_file(&dir);
+        let host = EmptyHost { dir: dir.clone() };
+
+        let outcome = call_with_host(
+            &host,
+            test_security(dir.to_str().unwrap()),
+            json!({ "path": path }),
+        )
+        .await
+        .expect("工具不应返回协议级错误");
+        assert!(matches!(outcome, NativeToolOutcome::Error { .. }));
+        let content = content_of(&outcome);
+        assert!(
+            content.contains("on-device OCR is unavailable: quasivision models directory not found"),
+            "{content}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `ocrImages: false` = 显式关掉兜底：OCR 一步也不跑，直接报「没有文字」并指出开关在哪
+    #[tokio::test]
+    async fn ocr_images_false_turns_the_fallback_off() {
+        let dir = tmp_dir("ocr_false");
+        let path = scanned_pdf_file(&dir);
+        let host = EmptyHost { dir: dir.clone() };
+
+        let outcome = call_with_host(
+            &host,
+            test_security(dir.to_str().unwrap()),
+            json!({ "path": path, "ocrImages": false }),
+        )
+        .await
+        .expect("工具不应返回协议级错误");
+        assert!(matches!(outcome, NativeToolOutcome::Error { .. }));
+        let content = content_of(&outcome);
+        assert!(content.contains("No text could be extracted"), "{content}");
+        assert!(content.contains("pass ocrImages: true"), "要给出下一步动作：{content}");
+        assert_eq!(
+            ui_of(&outcome).get("errorKind").and_then(|v| v.as_str()),
+            Some("no_text")
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 模型不在（这里直接把原因喂给解析链）：报「OCR 不可用 + 原因」，不冒充「图里没字」
+    #[tokio::test]
+    async fn unavailable_ocr_is_reported_with_its_reason() {
+        let dir = tmp_dir("ocr_nomodels");
+        let file = dir.join("scan.pdf");
+        std::fs::write(&file, crate::doc_parse::test_pdf::scanned_pdf(1, 200)).unwrap();
+
+        let opts = ParseOptions {
+            ocr: Some(OcrOptions {
+                models_dir: Err("quasivision models directory not found".to_string()),
+                always: true,
+                cancel: None,
+            }),
+            ..Default::default()
+        };
+        let targets = vec![ParseTarget::Path(file.to_string_lossy().replace('\\', "/"))];
+        let agg = parse_targets(&targets, &opts, None).await;
+
+        assert!(agg.failed);
+        assert!(
+            agg.content.contains("on-device OCR is unavailable: quasivision models directory not found"),
+            "{}",
+            agg.content
+        );
+        assert_eq!(
+            agg.ui_data.get("errorKind").and_then(|v| v.as_str()),
+            Some("no_text")
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// OCR 走通时两侧的呈现：模型侧头部加 `ocr: N image(s)`，界面侧 `uiData.ocr` 结构化
+    #[test]
+    fn ocr_facts_reach_both_the_model_text_and_the_ui_data() {
+        let summary = OcrSummary {
+            available: true,
+            images: 2,
+            chars: 42,
+            skipped: 1,
+            total: 3,
+            sections: vec![OcrSection {
+                index: 1,
+                page: 3,
+                pages: vec![3, 4],
+                width: 1240,
+                height: 1754,
+                object_id: 27,
+                chars: 40,
+                text: "…".to_string(),
+            }],
+            ..Default::default()
+        };
+        let doc = DocText {
+            kind: "pdf".to_string(),
+            text: "[OCR] Image 1 · pages 3, 4 · 1240×1754".to_string(),
+            char_count: 40,
+            truncated: false,
+            next_offset: None,
+            sheets: Vec::new(),
+            sheet: None,
+            note: Some("no text layer — …".to_string()),
+            full_text: None,
+            ocr: Some(summary),
+        };
+        let opts = ParseOptions::default();
+
+        let rendered = render_block("C:/ws/scan.pdf", 1024, &opts, &doc);
+        assert!(rendered.contains("🔢 pdf · 1.0 KB · 40 chars · ocr: 2 image(s)"), "{rendered}");
+        assert!(rendered.contains("💡 no text layer"), "{rendered}");
+
+        let ui = ui_data("C:/ws/scan.pdf", 1024, &opts, &doc);
+        assert_eq!(ui.pointer("/ocr/images"), Some(&json!(2)));
+        assert_eq!(ui.pointer("/ocr/available"), Some(&json!(true)));
+        assert_eq!(ui.pointer("/ocr/sections/0/index"), Some(&json!(1)));
+        assert_eq!(ui.pointer("/ocr/sections/0/objectId"), Some(&json!(27)));
+        assert_eq!(
+            ui.pointer("/ocr/sections/0/pages"),
+            Some(&json!([3, 4]))
+        );
+        assert_eq!(ui.pointer("/ocr/skipped"), Some(&json!(1)));
     }
 }

@@ -67,6 +67,13 @@ htmd = "0.5"
 rusqlite = { version = "0.32", features = ["bundled"] }
 pdf-extract = "0.7" # PDF 文本提取
 
+# PDF 内嵌图片（`doc_parse::pdf::extract_images`，给端侧 OCR 用）：与 pdf-extract 用**同一个版本**，
+# 不新增编译单元（0.34 已在锁文件里）。`nom_parser` 由 pdf-extract 打开，故这里不再重复声明。
+# CLI 也要解析扫描件，故必须在 core。
+lopdf = "0.34"
+# 图片流解压（PDF 的 `FlateDecode`）：lopdf 已依赖它，加进来只是把它变成直接依赖。
+flate2 = "1"
+
 # ── 文档解析（`doc_parse`：parse_document 工具 + 知识库导入共用唯一一份实现）──
 # office_oxide：DOCX / XLSX / PPTX + 旧二进制 DOC / XLS / PPT 的**纯 Rust** 读取
 # （无 JVM、无外部二进制、无可信输入风险低）。⚠️ 它是 0.1.x，**只允许 `doc_parse/office.rs` 引用**，

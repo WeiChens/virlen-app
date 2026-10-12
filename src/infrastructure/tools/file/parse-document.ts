@@ -9,6 +9,8 @@
  * 相对路径按会话工作目录展开），命令只认已经校验过的绝对路径。
  * `outTxtFile`（选填）同样先校验，但用**写模式**（`'w'`，与原生工具 `resolve_safe_path(.., "w", ..)`
  * 等价）：白名单 + 工作目录，黑名单优先。
+ * `ocrImages`（选填，PDF）：三态语义由 Rust 侧 `ocr_options` 实现，这里只负责**原样转发**布尔值
+ * （不传 != false，别在 TS 侧"顺手补默认值"）。
  */
 import { invoke } from '@tauri-apps/api/core'
 import { toolRegistry } from '@/domain/tools'
@@ -65,6 +67,8 @@ toolRegistry.register(
       maxChars: typeof args.max_chars === 'number' ? args.max_chars : undefined,
       offset: typeof args.offset === 'number' ? args.offset : undefined,
       outTxtFile,
+      // 三态（未传 / true / false）在 Rust 侧解释，这里只透传：TS 侧补默认值 = 两侧语义分叉
+      ocrImages: typeof args.ocrImages === 'boolean' ? args.ocrImages : undefined,
     })
 
     // 全部失败 → 按失败抛出（与原生工具 `NativeToolOutcome::Error` 同语义）

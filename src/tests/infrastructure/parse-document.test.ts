@@ -75,7 +75,27 @@ describe('parse_document（TS 回退执行器）', () => {
       maxChars: 500,
       offset: 20,
       outTxtFile: undefined,
+      ocrImages: undefined,
     })
+  })
+
+  it('ocrImages：布尔值原样转发；没传就是没传（不在 TS 侧补默认值）', async () => {
+    vi.mocked(invoke).mockResolvedValue({ content: 'ok', uiData: { ok: true }, ok: true })
+
+    await run({ path: 'scan.pdf', ocrImages: true })
+    let [, payload] = vi.mocked(invoke).mock.calls[0] as [string, any]
+    expect(payload.ocrImages).toBe(true)
+
+    vi.mocked(invoke).mockClear()
+    await run({ path: 'scan.pdf', ocrImages: false })
+    ;[, payload] = vi.mocked(invoke).mock.calls[0] as [string, any]
+    expect(payload.ocrImages).toBe(false)
+
+    // 非布尔（模型有时把布尔写成字符串）→ 当没传，交给 Rust 侧默认口径
+    vi.mocked(invoke).mockClear()
+    await run({ path: 'scan.pdf', ocrImages: 'yes' })
+    ;[, payload] = vi.mocked(invoke).mock.calls[0] as [string, any]
+    expect(payload.ocrImages).toBeUndefined()
   })
 
   it('outTxtFile：以**写模式**过安全校验，并作为 outTxtFile 下发', async () => {

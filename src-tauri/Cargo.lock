@@ -4036,6 +4036,7 @@ version = "0.34.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c5c8ecfc6c72051981c0459f75ccc585e7ff67c70829560cda8e647882a9abff"
 dependencies = [
+ "chrono",
  "encoding_rs",
  "flate2",
  "indexmap 2.14.0",
@@ -4044,6 +4045,7 @@ dependencies = [
  "md-5",
  "nom 7.1.3",
  "rangemap",
+ "rayon",
  "time",
  "weezl",
 ]
@@ -8838,6 +8840,7 @@ dependencies = [
  "csv",
  "dunce",
  "encoding_rs",
+ "flate2",
  "grep",
  "grep-regex",
  "grep-searcher",
@@ -8847,6 +8850,7 @@ dependencies = [
  "image",
  "landlock",
  "libc",
+ "lopdf",
  "office_oxide",
  "once_cell",
  "pdf-extract",

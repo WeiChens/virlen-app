@@ -93,9 +93,9 @@ pub(crate) mod test_util;
 #[allow(unused_imports)]
 pub use common::{is_path_allowed, resolve_safe_path};
 // 文档解析（`parse_document` 工具）：组装入口导出给 GUI 命令 `cmd_parse_document` ——
-// 工具与命令必须走同一条链（含 `outTxtFile` 的落盘与默认预览长度），
+// 工具与命令必须走同一条链（含 `outTxtFile` 的落盘、默认预览长度与 `ocrImages` 三态语义），
 // 否则两条路径的版式 / 失败语义会静默分叉。
-pub use file::{default_max_chars, parse_targets, ParseAggregate, ParseTarget};
+pub use file::{default_max_chars, ocr_options, parse_targets, ParseAggregate, ParseTarget};
 pub use execute::kill_running_command;
 // 后台服务的生命周期清理（会话删除 / 应用退出 / 引擎销毁 / CLI 结束）。
 pub use service::{kill_all_services, kill_session_services};

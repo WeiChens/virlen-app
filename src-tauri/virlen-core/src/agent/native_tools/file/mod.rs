@@ -24,8 +24,10 @@ pub(crate) use file_info::file_info_tool;
 pub(crate) use list_files::list_files_tool;
 pub(crate) use mkdir::mkdir_tool;
 // 文档解析：GUI 命令 `cmd_parse_document` 与原生工具共用同一个组装入口 + 默认值兜底
-// （见该文件模块头；`default_max_chars` 必须两边共用，否则默认预览长度会分叉）
-pub use parse_document::{default_max_chars, parse_targets, ParseAggregate, ParseTarget};
+// （见该文件模块头；`default_max_chars` / `ocr_options` 必须两边共用，否则默认预览长度 / OCR 三态语义会分叉）
+pub use parse_document::{
+    default_max_chars, ocr_options, parse_targets, ParseAggregate, ParseTarget,
+};
 pub(crate) use parse_document::parse_document_tool;
 pub(crate) use read_file::read_file_tool;
 pub(crate) use write_file::write_file_tool;

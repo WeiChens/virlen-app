@@ -258,7 +258,7 @@
       },
       {
         "name": "parse_document",
-        "description": "Extract text from a document file (PDF / Word / Excel / PowerPoint / CSV / plain text). Use this instead of read_file for binary documents — read_file returns garbled or empty content for PDF, Office and other container formats. Output is Markdown for Word/PowerPoint (headings, lists and tables preserved) and tab-separated rows for Excel sheets; long documents are truncated with a tip line showing how many characters remain and the offset to continue from; for a very long document pass outTxtFile to write the full text to a file and get only a short preview back, then use read_file / search_text_in_files on that file. Scanned or image-only PDFs have no text layer: the tool says so instead of returning empty content (OCR is not supported). Supported: .pdf, .docx, .doc, .xlsx, .xls, .pptx, .ppt, .csv, .tsv, .txt, .md, .json, .yaml, .toml, .ini, .log.",
+        "description": "Extract text from a document file (PDF / Word / Excel / PowerPoint / CSV / plain text). Use this instead of read_file for binary documents — read_file returns garbled or empty content for PDF, Office and other container formats. Output is Markdown for Word/PowerPoint (headings, lists and tables preserved) and tab-separated rows for Excel sheets; long documents are truncated with a tip line showing how many characters remain and the offset to continue from; for a very long document pass outTxtFile to write the full text to a file and get only a short preview back, then use read_file / search_text_in_files on that file. Scanned or image-only PDFs have no text layer: the tool reads the text inside their embedded images with on-device OCR (nothing is uploaded); pass ocrImages: true to also read the images of a PDF that does have a text layer (screenshots, tables stored as pictures). Supported: .pdf, .docx, .doc, .xlsx, .xls, .pptx, .ppt, .csv, .tsv, .txt, .md, .json, .yaml, .toml, .ini, .log.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -290,6 +290,10 @@
             "outTxtFile": {
               "type": "string",
               "description": "Optional output file path (relative to the workspace or absolute): the FULL extracted text is written there as UTF-8 — it is not limited by offset / max_chars, and several parsed files are joined with a --- separator. Use it when the document is too large to read in the context, then use read_file / search_text_in_files on that file. When set, only a 2000-character preview is returned unless max_chars says otherwise. The path must be inside the workspace or a whitelisted directory."
+            },
+            "ocrImages": {
+              "type": "boolean",
+              "description": "PDF only. Read the text inside the document's embedded images with on-device OCR — it runs locally, the images never leave this machine. Omit it to OCR only when the PDF has no text layer (scanned documents); true to also OCR a PDF that already has a text layer; false to turn OCR off. Each recognized image comes back as a section marked [OCR] Image N · page P."
             }
           },
           "oneOf": [
@@ -1294,7 +1298,7 @@
       },
       {
         "name": "parse_document",
-        "description": "Extract text from a document file (PDF / Word / Excel / PowerPoint / CSV / plain text). Use this instead of read_file for binary documents — read_file returns garbled or empty content for PDF, Office and other container formats. Output is Markdown for Word/PowerPoint (headings, lists and tables preserved) and tab-separated rows for Excel sheets; long documents are truncated with a tip line showing how many characters remain and the offset to continue from; for a very long document pass outTxtFile to write the full text to a file and get only a short preview back, then use read_file / search_text_in_files on that file. Scanned or image-only PDFs have no text layer: the tool says so instead of returning empty content (OCR is not supported). Supported: .pdf, .docx, .doc, .xlsx, .xls, .pptx, .ppt, .csv, .tsv, .txt, .md, .json, .yaml, .toml, .ini, .log.",
+        "description": "Extract text from a document file (PDF / Word / Excel / PowerPoint / CSV / plain text). Use this instead of read_file for binary documents — read_file returns garbled or empty content for PDF, Office and other container formats. Output is Markdown for Word/PowerPoint (headings, lists and tables preserved) and tab-separated rows for Excel sheets; long documents are truncated with a tip line showing how many characters remain and the offset to continue from; for a very long document pass outTxtFile to write the full text to a file and get only a short preview back, then use read_file / search_text_in_files on that file. Scanned or image-only PDFs have no text layer: the tool reads the text inside their embedded images with on-device OCR (nothing is uploaded); pass ocrImages: true to also read the images of a PDF that does have a text layer (screenshots, tables stored as pictures). Supported: .pdf, .docx, .doc, .xlsx, .xls, .pptx, .ppt, .csv, .tsv, .txt, .md, .json, .yaml, .toml, .ini, .log.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1326,6 +1330,10 @@
             "outTxtFile": {
               "type": "string",
               "description": "Optional output file path (relative to the workspace or absolute): the FULL extracted text is written there as UTF-8 — it is not limited by offset / max_chars, and several parsed files are joined with a --- separator. Use it when the document is too large to read in the context, then use read_file / search_text_in_files on that file. When set, only a 2000-character preview is returned unless max_chars says otherwise. The path must be inside the workspace or a whitelisted directory."
+            },
+            "ocrImages": {
+              "type": "boolean",
+              "description": "PDF only. Read the text inside the document's embedded images with on-device OCR — it runs locally, the images never leave this machine. Omit it to OCR only when the PDF has no text layer (scanned documents); true to also OCR a PDF that already has a text layer; false to turn OCR off. Each recognized image comes back as a section marked [OCR] Image N · page P."
             }
           },
           "oneOf": [
@@ -2330,7 +2338,7 @@
       },
       {
         "name": "parse_document",
-        "description": "Extract text from a document file (PDF / Word / Excel / PowerPoint / CSV / plain text). Use this instead of read_file for binary documents — read_file returns garbled or empty content for PDF, Office and other container formats. Output is Markdown for Word/PowerPoint (headings, lists and tables preserved) and tab-separated rows for Excel sheets; long documents are truncated with a tip line showing how many characters remain and the offset to continue from; for a very long document pass outTxtFile to write the full text to a file and get only a short preview back, then use read_file / search_text_in_files on that file. Scanned or image-only PDFs have no text layer: the tool says so instead of returning empty content (OCR is not supported). Supported: .pdf, .docx, .doc, .xlsx, .xls, .pptx, .ppt, .csv, .tsv, .txt, .md, .json, .yaml, .toml, .ini, .log.",
+        "description": "Extract text from a document file (PDF / Word / Excel / PowerPoint / CSV / plain text). Use this instead of read_file for binary documents — read_file returns garbled or empty content for PDF, Office and other container formats. Output is Markdown for Word/PowerPoint (headings, lists and tables preserved) and tab-separated rows for Excel sheets; long documents are truncated with a tip line showing how many characters remain and the offset to continue from; for a very long document pass outTxtFile to write the full text to a file and get only a short preview back, then use read_file / search_text_in_files on that file. Scanned or image-only PDFs have no text layer: the tool reads the text inside their embedded images with on-device OCR (nothing is uploaded); pass ocrImages: true to also read the images of a PDF that does have a text layer (screenshots, tables stored as pictures). Supported: .pdf, .docx, .doc, .xlsx, .xls, .pptx, .ppt, .csv, .tsv, .txt, .md, .json, .yaml, .toml, .ini, .log.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2362,6 +2370,10 @@
             "outTxtFile": {
               "type": "string",
               "description": "Optional output file path (relative to the workspace or absolute): the FULL extracted text is written there as UTF-8 — it is not limited by offset / max_chars, and several parsed files are joined with a --- separator. Use it when the document is too large to read in the context, then use read_file / search_text_in_files on that file. When set, only a 2000-character preview is returned unless max_chars says otherwise. The path must be inside the workspace or a whitelisted directory."
+            },
+            "ocrImages": {
+              "type": "boolean",
+              "description": "PDF only. Read the text inside the document's embedded images with on-device OCR — it runs locally, the images never leave this machine. Omit it to OCR only when the PDF has no text layer (scanned documents); true to also OCR a PDF that already has a text layer; false to turn OCR off. Each recognized image comes back as a section marked [OCR] Image N · page P."
             }
           },
           "oneOf": [

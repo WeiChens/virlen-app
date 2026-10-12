@@ -14,16 +14,22 @@
 //!
 //! | 扩展名 | 实现 | 文本形态 |
 //! |---|---|---|
-//! | `pdf` | [`pdf`]（`pdf-extract`） | 抽取的纯文本；**扫描版无文字层 → [`ParseError::NoText`]**，不做 OCR |
+//! | `pdf` | [`pdf`]（`pdf-extract`）+ [`ocr`]（内嵌图片） | 文字层；**扫描件没有文字层时走端侧 OCR**（`ParseOptions::ocr`） |
 //! | `docx` `doc` `pptx` `ppt` | [`office`]（`office_oxide`） | Markdown（保留标题 / 列表 / 表格） |
 //! | `xlsx` `xls` | [`office`]（`office_oxide`） | 工作表名 + 制表符分隔的行（表格用 Markdown 太费 token） |
 //! | `csv` `tsv` | [`delimited`]（`csv`） | 规范化的 CSV（分隔符嗅探 → 统一逗号；解析失败回退原文） |
 //! | `txt` `md` `json` … | [`text`] | 解码后的原文（BOM / UTF-16 / GB18030 / BIG5 / Shift_JIS 兜底） |
 
 pub mod delimited;
+pub mod ocr;
 pub mod office;
 pub mod pdf;
 pub mod text;
+
+#[cfg(test)]
+pub(crate) mod test_pdf;
+
+pub use ocr::{OcrOptions, OcrSection, OcrSummary, TextLayer};
 
 use std::path::Path;
 
@@ -91,8 +97,11 @@ pub enum ParseError {
     Unsupported { ext: String },
     /// 超过 [`MAX_DOC_BYTES`]
     TooLarge { size: u64, limit: u64 },
-    /// 抽不出文本（扫描版 PDF / 纯图文档）—— **不做 OCR**，如实报错而不是回一个空串
-    NoText,
+    /// 抽不出文本（扫描版 PDF / 纯图文档）—— **不编内容**：为什么没文字如实附在后面
+    NoText {
+        /// 英文短句（PDF 会说清是「OCR 没认出来」还是「没开 OCR」；界面按 `errorKind` 重建）
+        detail: String,
+    },
     /// `sheet` 指定的工作表不存在
     SheetNotFound {
         requested: String,
@@ -112,7 +121,9 @@ impl ParseError {
                 *size as f64 / (1024.0 * 1024.0),
                 *limit as f64 / (1024.0 * 1024.0)
             ),
-            Self::NoText => "No text could be extracted from this document (it may be image-only; OCR is not supported)".to_string(),
+            Self::NoText { detail } => format!(
+                "No text could be extracted from this document (it may be image-only) — {detail}"
+            ),
             Self::SheetNotFound {
                 requested,
                 available,
@@ -135,7 +146,7 @@ impl ParseError {
         match self {
             Self::Unsupported { .. } => "unsupported",
             Self::TooLarge { .. } => "too_large",
-            Self::NoText => "no_text",
+            Self::NoText { .. } => "no_text",
             Self::SheetNotFound { .. } => "sheet_not_found",
             Self::Backend { .. } => "backend",
         }
@@ -157,6 +168,8 @@ pub struct ParseOptions {
     ///
     /// 默认 `false`：切片之外的文本当场释放，不在引擎里多留一份大字符串。
     pub full_text: bool,
+    /// 端侧 OCR（扫描件 / 图片型 PDF 取字）；`None` = 不碰 OCR（含 `ocrImages: false` 的显式关闭）
+    pub ocr: Option<OcrOptions>,
 }
 
 impl Default for ParseOptions {
@@ -166,6 +179,7 @@ impl Default for ParseOptions {
             max_chars: DEFAULT_MAX_CHARS,
             offset: 0,
             full_text: false,
+            ocr: None,
         }
     }
 }
@@ -192,6 +206,8 @@ pub struct DocText {
     /// **全文**（仅 `ParseOptions::full_text` 为 true 时是 `Some`）—— 落盘 / 二次检索用，
     /// **不受 `offset` / `max_chars` 影响**
     pub full_text: Option<String>,
+    /// 端侧 OCR 的结果摘要（`None` = 这条解析链没碰 OCR）
+    pub ocr: Option<OcrSummary>,
 }
 
 /// 解析一个文档文件。
@@ -228,13 +244,43 @@ pub fn parse(path: &str, opts: &ParseOptions) -> Result<DocText, ParseError> {
     let mut note: Option<String> = None;
     let mut sheets: Vec<String> = Vec::new();
     let mut used_sheet: Option<String> = None;
+    let mut ocr_summary: Option<OcrSummary> = None;
     let raw: String = match ext.as_str() {
         "pdf" => {
             let bytes = read_bytes(file, &ext)?;
-            pdf::extract_text(&bytes).map_err(|e| ParseError::Backend {
-                format: ext.clone(),
-                message: e,
-            })?
+            // 文字层抽失败不算致命：扫描件本来就抽不出文字（图片里オ是正文），OCR 可能就是唯一取字路径
+            let layer = pdf::extract_text(&bytes);
+            let mut text = layer.clone().unwrap_or_default();
+            let has_layer = !text.trim().is_empty();
+            // 要不要 OCR：模型显式要（`ocrImages`）或**抽不到文字层**（扫描件兜底）
+            if opts.ocr.as_ref().is_some_and(|o| o.always || !has_layer) {
+                let ocr_opts = opts.ocr.as_ref().expect("上面的判断保证是 Some");
+                let outcome = ocr::run_pdf_ocr(&bytes, ocr_opts);
+                if !outcome.text.is_empty() {
+                    if has_layer {
+                        // 有文字层：OCR 作为**追加块**（模型能分清哪段字来自图）
+                        text.push_str("\n\n[OCR] On-device OCR of the embedded images:\n\n");
+                    }
+                    text.push_str(&outcome.text);
+                }
+                let layer_state = match &layer {
+                    _ if has_layer => TextLayer::Present,
+                    Err(e) => TextLayer::Failed(e.clone()),
+                    Ok(_) => TextLayer::Empty,
+                };
+                note = ocr::summary_note(&outcome.summary, layer_state);
+                ocr_summary = Some(outcome.summary);
+            }
+            // 文字层与 OCR 都没给出东西：库报的错比「没文字」更能解释为什么
+            if text.trim().is_empty() {
+                if let Err(e) = layer {
+                    return Err(ParseError::Backend {
+                        format: ext.clone(),
+                        message: e,
+                    });
+                }
+            }
+            text
         }
         "docx" | "doc" | "xlsx" | "xls" | "pptx" | "ppt" => {
             let out = office::extract_text(path, opts.sheet.as_deref(), &ext)?;
@@ -267,7 +313,16 @@ pub fn parse(path: &str, opts: &ParseOptions) -> Result<DocText, ParseError> {
     };
 
     if raw.trim().is_empty() {
-        return Err(ParseError::NoText);
+        // 为什么没文字：跑过 OCR 的说 OCR 的结论；PDF 没跑的提醒开关（否则模型会以为这格式读不了）
+        let detail = match &ocr_summary {
+            Some(summary) => ocr::no_text_detail(summary),
+            None if ext == "pdf" => {
+                "pass ocrImages: true to read the text inside its embedded images with on-device OCR"
+                    .to_string()
+            }
+            None => "OCR is not supported for this format".to_string(),
+        };
+        return Err(ParseError::NoText { detail });
     }
 
     // 按**字符**分页（不是字节：中文一个字 3 字节，按字节切会把字切碎）
@@ -290,6 +345,7 @@ pub fn parse(path: &str, opts: &ParseOptions) -> Result<DocText, ParseError> {
         sheet: used_sheet,
         note,
         full_text,
+        ocr: ocr_summary,
     })
 }
 
@@ -381,6 +437,7 @@ mod tests {
             max_chars: 20,
             offset: 0,
             full_text: false,
+            ocr: None,
         };
         let first = parse(file.to_str().unwrap(), &opts).unwrap();
         assert_eq!(first.kind, "txt");

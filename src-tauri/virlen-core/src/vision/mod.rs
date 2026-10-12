@@ -205,6 +205,109 @@ pub fn analyze_at(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// OCR（只要文字）—— 文档内嵌图片抽字用
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// 只要 OCR 文本：**跳过** UI 组件检测 / 图标识别 / 物体检测。
+///
+/// 为什么单独一条入口：文档里的扫描页不是界面截图，那三步既不必要又慢，还会把无关的树结构
+/// 塞进正文（`docs/doc-parse-plan.md` §13）。推理同样在本机完成（图片不出本机），与
+/// [`analyze_at`] 共用模型生命周期管理。
+pub fn ocr_image_at(models_dir: &Path, img: &image::DynamicImage) -> Result<OcrText, String> {
+    let _guard = load_models(models_dir)?;
+    let cfg = PipelineConfig::new(&models_dir.to_string_lossy());
+    let result = cfg
+        .run_ocr(img)
+        .map_err(|e| format!("OCR failed: {}", e))?;
+    Ok(OcrText {
+        text: text_of_ocr_boxes(&result.texts),
+        sideways: sideways_ratio(&result.texts),
+    })
+}
+
+/// 一段 OCR 结果
+#[derive(Debug, Clone)]
+pub struct OcrText {
+    /// 按阅读顺序拼好的文本
+    pub text: String,
+    /// 文本框中「竖着」的占比（框高 > 框宽）—— 横过来存的扫描页认出来接近 1，正常页面接近 0
+    ///
+    /// 调用方靠它决定要不要换方向重试（`doc_parse::ocr`）：
+    /// PP-OCR 对旋转文字只能认出一部分，硬读会得到残缺的文本。
+    pub sideways: f32,
+}
+
+/// 「竖着」的文本框占比（没有文本框 → 0）
+fn sideways_ratio(elements: &[quasivision::Element]) -> f32 {
+    let boxes: Vec<&quasivision::Element> = elements
+        .iter()
+        .filter(|e| e.text_content.as_deref().map(str::trim).is_some_and(|t| !t.is_empty()))
+        .collect();
+    if boxes.is_empty() {
+        return 0.0;
+    }
+    let vertical = boxes.iter().filter(|e| e.height > e.width).count();
+    vertical as f32 / boxes.len() as f32
+}
+
+/// 一「行」：纵向区间（`row_min`..`row_max`）+ 该行的文本片段 `(column_min, 文本)`
+type TextLine<'a> = (i32, i32, Vec<(i32, &'a str)>);
+
+/// OCR 文本框 → 阅读顺序的纯文本。
+///
+/// 判据：按 `row_min` 排序；与已有行**垂直重叠超过较短者一半**的算同一行（表格的一行不会被
+/// 拆成多行）；行内按 `column_min` 排序、用空格连起来，行间用 `\n`。
+fn text_of_ocr_boxes(elements: &[quasivision::Element]) -> String {
+    let mut lines: Vec<TextLine> = Vec::new();
+    let mut boxes: Vec<(i32, i32, i32, &str)> = elements
+        .iter()
+        .filter_map(|e| {
+            let text = e.text_content.as_deref().map(str::trim)?;
+            if text.is_empty() {
+                return None;
+            }
+            let p = &e.position;
+            Some((p.row_min, p.row_max, p.column_min, text))
+        })
+        .collect();
+    boxes.sort_by_key(|(row_min, _, col_min, _)| (*row_min, *col_min));
+
+    for (row_min, row_max, col_min, text) in boxes {
+        match lines
+            .iter_mut()
+            .find(|(min, max, _)| rows_overlap(*min, *max, row_min, row_max))
+        {
+            Some((min, max, fragments)) => {
+                *min = (*min).min(row_min);
+                *max = (*max).max(row_max);
+                fragments.push((col_min, text));
+            }
+            None => lines.push((row_min, row_max, vec![(col_min, text)])),
+        }
+    }
+
+    lines
+        .iter_mut()
+        .map(|(_, _, fragments)| {
+            fragments.sort_by_key(|(col_min, _)| *col_min);
+            fragments
+                .iter()
+                .map(|(_, text)| *text)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 两个纵向区间是否属于同一行（重叠超过较短区间的一半）
+fn rows_overlap(a_min: i32, a_max: i32, b_min: i32, b_max: i32) -> bool {
+    let overlap = a_max.min(b_max) - a_min.max(b_min);
+    let shortest = (a_max - a_min).min(b_max - b_min).max(1);
+    overlap * 2 > shortest
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // 核心分析逻辑（从内存字节执行完整 pipeline）
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -423,6 +526,55 @@ mod tests {
         }
         let plain = PathBuf::from("/a/b");
         assert_eq!(strip_verbatim_prefix(plain.clone()), plain);
+    }
+
+    /// 造一个 OCR 文本框（`Text` 类，带文本）
+    fn ocr_box(id: usize, col: (i32, i32), row: (i32, i32), text: &str) -> quasivision::Element {
+        let mut e = quasivision::Element::from_parts(id, col.0, row.0, col.1, row.1, "Text");
+        e.text_content = Some(text.to_string());
+        e
+    }
+
+    /// 同一行的框用空格连成一行，不同行换行；入参乱序也要按阅读顺序输出
+    #[test]
+    fn ocr_boxes_merge_into_reading_order_lines() {
+        let boxes = vec![
+            ocr_box(3, (120, 200), (50, 70), "30"),
+            ocr_box(1, (0, 100), (10, 30), "Name"),
+            ocr_box(4, (0, 100), (50, 70), "Alice"),
+            ocr_box(2, (120, 200), (10, 30), "Age"),
+        ];
+        assert_eq!(text_of_ocr_boxes(&boxes), "Name Age\nAlice 30");
+    }
+
+    /// 空文本 / 无文本的框直接丢掉；垂直只有一点交叠的不算同一行
+    #[test]
+    fn ocr_boxes_without_text_are_dropped_and_rows_do_not_merge_loosely() {
+        let mut empty = ocr_box(1, (0, 10), (0, 10), "   ");
+        empty.text_content = None;
+        let boxes = vec![
+            empty,
+            ocr_box(2, (0, 100), (10, 30), "first"),
+            // 与上一行只交叠 2px（远小于较短高度 20px 的一半）→ 必须是新的一行
+            ocr_box(3, (0, 100), (28, 48), "second"),
+        ];
+        assert_eq!(text_of_ocr_boxes(&boxes), "first\nsecond");
+    }
+
+    /// 「竖着的框占比」：正常横排 ≈ 0，躺着的扫描页（框高 > 框宽）≈ 1
+    #[test]
+    fn sideways_ratio_tells_upright_text_from_rotated_text() {
+        assert_eq!(sideways_ratio(&[]), 0.0, "没有文本框时不该报「躺着」");
+        let upright = vec![
+            ocr_box(1, (0, 200), (10, 40), "horizontal"),
+            ocr_box(2, (0, 300), (50, 80), "also horizontal"),
+        ];
+        assert_eq!(sideways_ratio(&upright), 0.0);
+        let sideways = vec![
+            ocr_box(1, (10, 40), (0, 200), "rotated"),
+            ocr_box(2, (50, 80), (0, 300), "also rotated"),
+        ];
+        assert_eq!(sideways_ratio(&sideways), 1.0);
     }
 
     #[test]
