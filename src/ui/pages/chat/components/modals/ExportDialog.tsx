@@ -47,30 +47,36 @@ export default function ExportDialog({
         <p className="export-dialog-hint">
           {t('将会话「')}
           <strong>{sessionTitle}</strong>
-          {t('」导出为 Markdown 文件')}
+          {t('」导出为 HTML 文件')}
         </p>
 
         <label className="export-option">
           <input
             type="checkbox"
+            className="export-option-check"
             checked={omitToolCalls}
             onChange={(e) => setOmitToolCalls(e.target.checked)}
           />
-          <span className="export-option-text">{t('省略工具调用信息')}</span>
-          <span className="export-option-desc">
-            {t('不包含工具调用参数和返回结果')}
+          <span className="export-option-main">
+            <span className="export-option-text">{t('省略工具调用信息')}</span>
+            <span className="export-option-desc">
+              {t('不包含工具调用参数和返回结果')}
+            </span>
           </span>
         </label>
 
         <label className="export-option">
           <input
             type="checkbox"
+            className="export-option-check"
             checked={omitThinking}
             onChange={(e) => setOmitThinking(e.target.checked)}
           />
-          <span className="export-option-text">{t('省略思考文本')}</span>
-          <span className="export-option-desc">
-            {t('不包含模型的思考过程（reasoning content）')}
+          <span className="export-option-main">
+            <span className="export-option-text">{t('省略思考文本')}</span>
+            <span className="export-option-desc">
+              {t('不包含模型的思考过程（reasoning content）')}
+            </span>
           </span>
         </label>
       </div>
