@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import EditFileMessage from '@/ui/pages/chat/components/tool-call/EditFileMessage'
+import { AUTO_CENTER_DELAY_MS } from '@/ui/hooks/useAutoCenter'
 
 /**
  * edit_file 展开视图的「打开即居中」回归。
@@ -59,6 +60,29 @@ function Harness({ expand }: { expand: boolean }) {
   )
 }
 
+/**
+ * 等「打开即居中」落地：hook 里有一次 [`AUTO_CENTER_DELAY_MS`] 的延迟（等布局稳定 —— 展开瞬间
+ * 量到的高度是过渡中的，就是那个「展开后自己往上跳一下」的抖动在修的东西），所以断言前必须让
+ * 那个定时器真的跑完。曾经这里在 `act()` 之后同步断言「已经居中」，实现改成延迟后就必然假红
+ * （CI 三个平台一起红就是这么来的）。
+ */
+async function flushAutoCenter(expected?: number) {
+  await act(async () => {
+    // 先让 hook 里那段延迟到点（+ 余量：慢机器上定时器会被拖后）
+    await new Promise((resolve) => setTimeout(resolve, AUTO_CENTER_DELAY_MS + 60))
+    // 期望「确实居中了几次」时再轮询一小会儿，别把慢机器拖成假红；
+    // 不传 expected = 只证明「到点了也没人再来滚」（钉「收起后不许再跳」）
+    const deadline = Date.now() + 1000
+    while (
+      expected != null &&
+      scrollCalls.length < expected &&
+      Date.now() < deadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 15))
+    }
+  })
+}
+
 describe('edit_file 展开视图：打开即居中', () => {
   let container: HTMLDivElement
   let root: ReturnType<typeof createRoot>
@@ -87,20 +111,32 @@ describe('edit_file 展开视图：打开即居中', () => {
     ;(Element.prototype as any).scrollTo = origScrollTo
   })
 
-  it('每次展开居中一次，且不触发 React 内部报错', () => {
+  it('每次展开居中一次，且不触发 React 内部报错', async () => {
     act(() => root.render(<Harness expand={false} />))
     expect(scrollCalls.length).toBe(0) // 折叠时不挂载 → 不居中
 
     act(() => root.render(<Harness expand={true} />))
+    await flushAutoCenter(1)
     expect(scrollCalls.length).toBe(1)
 
     act(() => root.render(<Harness expand={false} />))
+    await flushAutoCenter()
     expect(scrollCalls.length).toBe(1) // 收起不居中
 
     act(() => root.render(<Harness expand={true} />))
+    await flushAutoCenter(2)
     expect(scrollCalls.length).toBe(2) // 再次展开 → 再居中一次
 
     // hook 被条件调用会让 React 打出内部错误（见文件头注释）
+    expect(errors).toEqual([])
+  })
+
+  it('展开后立刻收起 → 延迟窗口里的那次居中作废（不许自己跳一下）', async () => {
+    act(() => root.render(<Harness expand={true} />))
+    // 延迟还没到就折起来：用户看到的是「刚点开又收起」，此时再滚一下纯属捣乱
+    act(() => root.render(<Harness expand={false} />))
+    await flushAutoCenter()
+    expect(scrollCalls.length).toBe(0)
     expect(errors).toEqual([])
   })
 })

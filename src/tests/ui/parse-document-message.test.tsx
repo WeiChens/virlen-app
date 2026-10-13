@@ -16,6 +16,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import ParseDocumentMessage from '@/ui/pages/chat/components/tool-call/ParseDocumentMessage'
 import { getCurrentLanguage } from '@/ui/i18n'
 import { settingsState } from '@/ui/store'
+import { AUTO_CENTER_DELAY_MS } from '@/ui/hooks/useAutoCenter'
 
 /** Toast / 打开路径不进断言：替身化，避免 jsdom 之外的副作用 */
 vi.mock('@/ui/components/shared/Toast', () => ({ showToast: vi.fn() }))
@@ -523,20 +524,48 @@ describe('展开视图：交互与「打开即居中」', () => {
     ;(Element.prototype as any).scrollTo = origScrollTo
   })
 
-  it('折叠不挂载，每次展开居中一次，且无 React 内部报错', () => {
+  /**
+   * 等「打开即居中」落地：hook 里有一次 [`AUTO_CENTER_DELAY_MS`] 的延迟（等布局稳定 —— 展开瞬间
+   * 量到的高度是过渡中的，就是那个「展开后自己往上跳一下」的抖动在修的东西），所以断言前必须让
+   * 那个定时器真的跑完。曾经这里在 `act()` 之后同步断言「已经居中」，实现改成延迟后就必然假红。
+   */
+  async function flushAutoCenter(expected?: number) {
+    await act(async () => {
+      // 先让 hook 里那段延迟到点（+ 余量：慢机器上定时器会被拖后）
+      await new Promise((resolve) =>
+        setTimeout(resolve, AUTO_CENTER_DELAY_MS + 60),
+      )
+      // 期望「确实居中了几次」时再轮询一小会儿，别把慢机器拖成假红；
+      // 不传 expected = 只证明「到点了也没人再来滚」（钉「收起后不许再跳」）
+      const deadline = Date.now() + 1000
+      while (
+        expected != null &&
+        scrollCalls.length < expected &&
+        Date.now() < deadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 15))
+      }
+    })
+  }
+
+  it('折叠不挂载，每次展开居中一次，且无 React 内部报错', async () => {
     act(() => root.render(<Harness expanded={false} />))
     expect(container.querySelector('.doc-view')).toBeNull()
     expect(scrollCalls.length).toBe(0)
 
     act(() => root.render(<Harness expanded />))
     expect(container.querySelector('.doc-view')).toBeTruthy()
+    await flushAutoCenter(1)
     expect(scrollCalls.length).toBe(1)
 
     act(() => root.render(<Harness expanded={false} />))
     expect(container.querySelector('.doc-view')).toBeNull()
+    await flushAutoCenter()
+    expect(scrollCalls.length).toBe(1) // 收起不居中
 
     act(() => root.render(<Harness expanded />))
-    expect(scrollCalls.length).toBe(2)
+    await flushAutoCenter(2)
+    expect(scrollCalls.length).toBe(2) // 再次展开 → 再居中一次
 
     expect(errors).toEqual([])
   })

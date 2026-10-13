@@ -2,6 +2,14 @@ import { sleep } from '@/utils/common'
 import { useEffect, useRef } from 'react'
 
 /**
+ * 「打开即居中」的延迟（ms）：展开瞬间量到的高度还是**过渡中**的，直接量会把内容滚到偏上的位置
+ * （表现就是「展开后自己往上跳一下」）——等布局稳定再量。
+ *
+ * 导出给用例：断言「居中了一次」必须等这段延迟真的跑完，测试里再硬编一份数字必然与它漂。
+ */
+export const AUTO_CENTER_DELAY_MS = 50
+
+/**
  * 「打开即居中」—— 用户主动展开某块内容后，把它滚动到滚动容器的可视区中间。
  *
  * 只对「用户主动打开」负责：`open` false → true（点击展开）居中一次；组件在 `open` 已为 true 时
@@ -20,7 +28,16 @@ export function useAutoCenter(open = true) {
     if (!open) return
     const el = rootRef.current
     if (!el) return
-    sleep(50).then(() => centerInScrollParent(el))
+    // 收起 / 卸载后不许再动列表：延迟窗口里用户完全可能又把它折起来（或在虚拟列表里滚走了），
+    // 那时这一跳就是「莫名其妙的抖动」——所以清理时把这次居中作废。
+    // （同一个道理也管着用例：上一个用例卸载后残留的那一跳不会再算进下一个用例）
+    let cancelled = false
+    sleep(AUTO_CENTER_DELAY_MS).then(() => {
+      if (!cancelled) centerInScrollParent(el)
+    })
+    return () => {
+      cancelled = true
+    }
   }, [open])
 
   return rootRef
