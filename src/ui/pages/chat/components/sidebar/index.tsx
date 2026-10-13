@@ -30,6 +30,7 @@ import { deleteSessions, renameSession } from '@/services/chat-service'
 import { showToast } from '@/ui/components/shared/Toast'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 import Modal, { ModalFooterButtons } from '@/ui/components/shared/Modal'
+import Select from '@/ui/components/shared/Select'
 import ContextMenu, {
   useContextMenu,
   type ContextMenuItem,
@@ -48,6 +49,8 @@ import type { KnowledgeBase } from '@/domain/ports'
 import WorkspaceTree from './workspace-tree'
 import SkillList from './skill-list'
 import SidebarSearch from './search-box'
+import ImportMessageList from './import-message-list'
+import { extractPlainText } from './session-text'
 import { filterSessionGroups } from './session-filter'
 import {
   groupSessions,
@@ -310,6 +313,7 @@ function ChatSidebar({
   }, [])
 
   const handleConfirmImport = useCallback(async () => {
+    // 按钮在前置条件不满足时就已禁用（见 confirmDisabled），走到这里只剩兜底
     if (!importSessionId || !selectedKbId) return
     // 分页加载下，导入前补齐完整历史
     await sessionStore.ensureAllMessagesLoaded(importSessionId)
@@ -404,6 +408,36 @@ function ChatSidebar({
   const handleDeselectAllMessages = useCallback(() => {
     setSelectedMsgIds(new Set())
   }, [])
+
+  /**
+   * 消息列表右键菜单「前面全选 / 后面全选」：**追加**语义 —— 只往选中集合里加，不取消已选的。
+   * （「全选」若做成覆盖，用户先前逐条挑出来的那些会被默默丢掉。）
+   */
+  const handleAppendMessages = useCallback((ids: string[]) => {
+    setSelectedMsgIds((prev) => {
+      const next = new Set(prev)
+      for (const id of ids) next.add(id)
+      return next
+    })
+  }, [])
+
+  /**
+   * 目标知识库下拉项：Select 的选项只有单行文案，原来的「文档数」徽标塞不进去，
+   * 于是并进标签（`名称（N 个文档）`）—— 计数是选库时的关键判断依据，不能只留在悬停提示里。
+   * dropdownWidth="content" 下长库名会被省略，故把完整库名挂到 title。
+   */
+  const kbOptions = useMemo(
+    () =>
+      kbList.map((kb) => ({
+        value: kb.id,
+        label: tpl('$__name__（$__count__ 个文档）', {
+          name: kb.name,
+          count: kb.document_count,
+        }),
+        title: kb.name,
+      })),
+    [kbList],
+  )
 
   useTime(1000 * 60)
 
@@ -603,6 +637,8 @@ function ChatSidebar({
             onConfirm={handleConfirmImport}
             confirmText={t('导入')}
             confirmLoading={importLoading}
+            /* 没选库 / 一条消息都没选时点下去只会静默 return，不如直接禁用 —— 前置条件在「选择消息（n/m）」上可对照 */
+            confirmDisabled={!selectedKbId || selectedMsgIds.size === 0}
           />
         }>
         {importKbLoading ? (
@@ -613,22 +649,17 @@ function ChatSidebar({
           </div>
         ) : (
           <>
-            {/* 知识库选择 */}
+            {/* 知识库选择：库多时用下拉面板兜住（原列表会把弹窗撑得很高） */}
             <div className="import-kb-section">
               <div className="import-kb-section-title">{t('选择目标知识库')}</div>
-              <div className="import-kb-list">
-                {kbList.map((kb) => (
-                  <div
-                    key={kb.id}
-                    className={`import-kb-item ${selectedKbId === kb.id ? 'selected' : ''}`}
-                    onClick={() => setSelectedKbId(kb.id)}>
-                    <span className="import-kb-item-name">{kb.name}</span>
-                    <span className="import-kb-item-count">
-                      {tpl('$__count__ 个文档', { count: kb.document_count })}
-                    </span>
-                  </div>
-                ))}
-              </div>
+              <Select
+                className="import-kb-select"
+                dropdownWidth="content"
+                value={selectedKbId}
+                onChange={(v) => setSelectedKbId(String(v))}
+                placeholder={t('请选择知识库')}
+                options={kbOptions}
+              />
             </div>
 
             {/* 消息选择 */}
@@ -657,29 +688,12 @@ function ChatSidebar({
                       </button>
                     </div>
                   </div>
-                  <div className="import-kb-msg-list">
-                    {session.messages.map((msg, idx) => {
-                      const preview = extractPlainText(msg.content).slice(0, 60)
-                      return (
-                        <div
-                          key={msg.id}
-                          className={`import-kb-msg-item ${selectedMsgIds.has(msg.id) ? 'checked' : ''}`}
-                          onClick={() => handleToggleMessage(msg.id)}>
-                          <input
-                            type="checkbox"
-                            className="import-kb-msg-checkbox"
-                            checked={selectedMsgIds.has(msg.id)}
-                            onChange={() => handleToggleMessage(msg.id)}
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                          <span className={`import-kb-msg-role role-${msg.role}`}>
-                            {msg.role === 'user' ? '👤' : msg.role === 'assistant' ? '🤖' : msg.role === 'tool' ? '🔧' : msg.role === 'summary' ? '📋' : msg.role === 'feedback' ? '🔄' : '⚙️'}
-                          </span>
-                          <span className="import-kb-msg-preview">{preview || `[${msg.role}]`}</span>
-                        </div>
-                      )
-                    })}
-                  </div>
+                  <ImportMessageList
+                    messages={session.messages}
+                    selectedIds={selectedMsgIds}
+                    onToggle={handleToggleMessage}
+                    onSelectMessages={handleAppendMessages}
+                  />
                 </div>
               )
             })()}
@@ -750,19 +764,6 @@ function formatSessionForKB(session: Session, messages?: Message[]): string {
   }
 
   return lines.join('\n')
-}
-
-/** 从 MessageContent 中提取纯文本 */
-function extractPlainText(content: any): string {
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return ''
-  return content
-    .filter(
-      (c: any) =>
-        c.type === 'text' || (c.type === 'tool_result' && typeof c.content === 'string'),
-    )
-    .map((c: any) => (c.type === 'text' ? c.text : c.content))
-    .join('\n\n')
 }
 
 interface SessionGroupViewProps {

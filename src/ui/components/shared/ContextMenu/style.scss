@@ -2,12 +2,14 @@
    见 ContextMenu/index.tsx：自绘窗口下原生右键菜单被全局禁用，
    各处（正文 / 图片 / 文件 / 终端 …）共用这一份样式。
 
-   层级 600：高于全屏浮层(500)，低于 Modal(800)。
+   层级 2000：高于全屏浮层(500) / 抽屉(1200) / Modal(1300) / 服务面板(1300)，
+   低于 Toast(3012) / Select 下拉(9000) / Tooltip(9999)。
+   ⚠️ 必须高于 Modal —— 弹窗里的右键菜单（如「导入知识库」的消息列表）否则整个被遮罩盖住。
    配色只用主题令牌，亮/暗主题自动跟随；终端块等深色底场景用 --dark 皮肤。 */
 
 .context-menu {
   position: fixed;
-  z-index: 600;
+  z-index: 2000;
   min-width: 132px;
   padding: 4px;
   display: flex;

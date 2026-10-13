@@ -34,7 +34,7 @@ class MemoryMessage implements IToolCallMessage {
 
       // 无本地存储（库打不开 / 浏览器环境）：如实说明，而不是显示「0 条结果」
       if (ui?.available === false) {
-        return <span style={{ color: '#999' }}>{t('记忆功能不可用')}</span>
+        return <span className="tool-short-muted">{t('记忆功能不可用')}</span>
       }
 
       if (type === 'memory_search') {
@@ -70,17 +70,7 @@ class MemoryMessage implements IToolCallMessage {
       return <div className="error">{content}</div>
     }
     if (!content) return null
-    return (
-      <pre
-        style={{
-          whiteSpace: 'pre-wrap',
-          margin: 0,
-          fontSize: 'var(--font-size-sm)',
-          lineHeight: 1.6,
-        }}>
-        {content}
-      </pre>
-    )
+    return <pre className="tool-plain-text">{content}</pre>
   }
 
   diyWrapper(): boolean {

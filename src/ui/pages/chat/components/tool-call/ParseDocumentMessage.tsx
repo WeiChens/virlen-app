@@ -162,12 +162,14 @@ function DocCard({ ui, nameSlot }: { ui: DocUi; nameSlot?: React.ReactNode }) {
       <div className="doc-card is-failed">
         <div className="doc-head">
           {/* 多份文档时文件名位置留给下拉（失败项也要能切走）；单份照旧是文件名本身 */}
-          {nameSlot ??
-            (name && (
-              <span className="doc-name" title={fullPath}>
-                {name}
-              </span>
-            ))}
+          <div className='doc-name-wrapper'>
+            {nameSlot ??
+              (name && (
+                <span className="doc-name" title={fullPath}>
+                  {name}
+                </span>
+              ))}
+          </div>
           {fileType && <span className="doc-badge">{fileType}</span>}
           {byteSize != null && (
             <span className="doc-badge">{formatSize(byteSize)}</span>
@@ -195,12 +197,15 @@ function DocCard({ ui, nameSlot }: { ui: DocUi; nameSlot?: React.ReactNode }) {
     <div className="doc-card">
       <div className="doc-head">
         {/* 多份文档时文件名位置留给下拉；单份照旧是文件名本身 */}
-        {nameSlot ??
-          (name && (
-            <span className="doc-name" title={fullPath}>
-              {name}
-            </span>
-          ))}
+        <div className='doc-name-wrapper'>
+          {nameSlot ??
+            (name && (
+              <span className="doc-name" title={fullPath}>
+                {name}
+              </span>
+            ))}
+        </div>
+
         {fileType && <span className="doc-badge">{fileType}</span>}
         {byteSize != null && (
           <span className="doc-badge">{formatSize(byteSize)}</span>
@@ -315,19 +320,18 @@ function DocView({
         <div className={`doc-outfile${outFile.ok === false ? ' is-failed' : ''}`}>
           {outFile.ok === false
             ? `⚠️ ${tpl('全文保存失败：$__error__', {
-                error: asString(outFile.error),
-              })}`
+              error: asString(outFile.error),
+            })}`
             : `💾 ${tpl('全文已保存到 $__path__（$__count__ 字符 · $__size__）', {
-                path: asString(outFile.path),
-                count: asNumber(outFile.charCount) ?? 0,
-                size: formatSize(asNumber(outFile.byteSize) ?? 0),
-              })}`}
+              path: asString(outFile.path),
+              count: asNumber(outFile.charCount) ?? 0,
+              size: formatSize(asNumber(outFile.byteSize) ?? 0),
+            })}`}
         </div>
       )}
     </div>
   )
 }
-
 class ParseDocumentMessage implements IToolCallMessage {
   getToolName(): string {
     return 'parse_document'

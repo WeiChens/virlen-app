@@ -26,6 +26,7 @@ class WebFetchMessage implements IToolCallMessage {
       if (!body)
         return (
           <div
+            className="web-fetch-link"
             onClick={async () => {
               const flag = await MessageBox.propt(
                 t('外部浏览器打开'),
@@ -35,27 +36,14 @@ class WebFetchMessage implements IToolCallMessage {
               )
               if (!flag) return
               openUrl(props.useContent.input.url)
-            }}
-            style={{
-              textDecoration: 'underline',
-              color: 'var(--accent-color)',
-              cursor: 'pointer',
-              wordBreak: 'break-all',
             }}>
             {props.useContent.input.url}
           </div>
         )
       return (
         <div>
-          <div
-            style={{
-              color: '#5b5eff',
-              fontWeight: '500',
-              marginBottom: '8px',
-            }}>
-            {t('请求体')}
-          </div>
-          <pre className="body-content">
+          <div className="web-fetch-body-title">{t('请求体')}</div>
+          <pre className="tool-plain-text">
             {typeof body === 'string' ? body : JSON.stringify(body, null, 2)}
           </pre>
         </div>

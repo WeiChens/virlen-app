@@ -263,7 +263,9 @@ describe('展开视图：落盘', () => {
     })
     expect(html.match(/doc-card/g)?.length).toBe(1) // 只渲当前选中那张
     expect(html).toContain('doc-file-switcher')
-    expect(html).not.toContain('doc-name') // 文件名改由下拉显示
+    // 只断言「文件名本身不再由 .doc-name 显示」（外层还有 .doc-name-wrapper 容器，
+    // 这里不能用子串 'doc-name'：它会被容器名误伤 —— 该容器是后来加的）
+    expect(html).not.toContain('class="doc-name"') // 文件名改由下拉显示
     expect(html).toContain('报告.docx') // 下拉当前的标签
     expect(html).toContain('季度报告')
     expect(html).not.toContain('b.zip') // 未选中的那份不渲染（在下拉里）

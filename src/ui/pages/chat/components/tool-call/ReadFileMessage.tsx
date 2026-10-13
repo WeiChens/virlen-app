@@ -138,14 +138,10 @@ class ReadFileMessage implements IToolCallMessage {
         const paths = input.paths as string[]
         const first = toShortPath(paths[0], workspace)
         return (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-            <span style={{ color: 'var(--accent-color)', fontWeight: 500 }}>
-              {first}
-            </span>
+          <div className="tool-short-row">
+            <span className="tool-short-em">{first}</span>
             {paths.length > 1 && (
-              <span style={{ color: '#999', fontSize: 12 }}>
-                +{paths.length - 1}
-              </span>
+              <span className="tool-short-muted">+{paths.length - 1}</span>
             )}
           </div>
         )
@@ -153,19 +149,13 @@ class ReadFileMessage implements IToolCallMessage {
 
       // 单文件模式
       const { path } = input
-      let content = toShortPath(path, workspace)
+      const content = toShortPath(path, workspace)
       return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <span
-            style={{
-              color: 'var(--accent-color)',
-              fontWeight: 500,
-            }}>
-            {content}
-          </span>
+        <div className="tool-short-row">
+          <span className="tool-short-em">{content}</span>
           {props.message?.uiData?.startLine &&
             props.message?.uiData?.endLine && (
-              <span style={{ color: '#999', fontSize: 12 }}>
+              <span className="tool-short-muted">
                 {`${props.message.uiData.startLine}-${props.message.uiData.endLine}`}
               </span>
             )}
@@ -189,11 +179,7 @@ class ReadFileMessage implements IToolCallMessage {
     const files = props.message?.uiData?.files
     if (Array.isArray(files) && files.length > 0) {
       return (
-        <div
-          style={{
-            padding: '0 10px',
-            margin: '0px 20px',
-          }}>
+        <div className="code-block-shell">
           <MultiFileCodeView files={files} workspace={workspace} />
         </div>
       )
@@ -204,11 +190,7 @@ class ReadFileMessage implements IToolCallMessage {
     const name = getUrlFileName(props.message?.uiData?.fullPath)
     const startLine = props.message?.uiData?.startLine || 1
     return (
-      <div
-        style={{
-          padding: '0 10px',
-          margin: '0px 20px',
-        }}>
+      <div className="code-block-shell">
         <CodeBlock
           autoCenter
           maxHeight={"55vh"}

@@ -1052,49 +1052,9 @@
     line-height: 1.6;
   }
 
-  .import-kb-list {
-    max-height: 320px;
-    overflow-y: auto;
-    padding: 4px 0;
-  }
-
-  .import-kb-item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 14px;
-    border-radius: 8px;
-    cursor: pointer;
-    transition: background 0.12s;
-    margin-bottom: 2px;
-
-    &:hover {
-      background: var(--hover-bg, #f0f0f0);
-    }
-
-    &.selected {
-      background: var(--active-bg, #e8e8ed);
-      border: 1px solid var(--accent-color, #4f46e5);
-    }
-
-    .import-kb-item-name {
-      flex: 1;
-      font-size: var(--font-size-base);
-      font-weight: 500;
-      color: var(--text-primary, #1a1a1a);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .import-kb-item-count {
-      flex-shrink: 0;
-      font-size: var(--font-size-xs);
-      color: var(--text-secondary, #999);
-      background: var(--hover-bg, #e8e8e8);
-      border-radius: 10px;
-      padding: 2px 8px;
-    }
+  /* 目标知识库下拉：撑满弹窗宽度（Select 本体是 inline-flex，不给宽度就按内容缩） */
+  .import-kb-select {
+    width: 100%;
   }
 
   // ===== 知识库区域分组 =====
@@ -1152,6 +1112,7 @@
     font-size: var(--font-size-xs);
   }
 
+  /* 虚拟滚动的滚动容器（import-message-list.tsx）：固定可视高，子元素绝对定位 */
   .import-kb-msg-list {
     max-height: 240px;
     overflow-y: auto;
@@ -1160,7 +1121,18 @@
     padding: 4px;
   }
 
+  /* 撑总高 + 作为行的定位参照（不能只有 overflow 容器，否则 absolute 行会以视口为参照） */
+  .import-kb-msg-inner {
+    position: relative;
+    width: 100%;
+  }
+
   .import-kb-msg-item {
+    /* 行高由虚拟库实测（字号可调，写死会错位）—— 因此不能留 margin-bottom：
+       measureElement 量的是 border-box，margin 不进测量值，行会两两重叠 2px。 */
+    position: absolute;
+    left: 0;
+    width: 100%;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -1168,7 +1140,6 @@
     border-radius: 6px;
     cursor: pointer;
     transition: background 0.12s;
-    margin-bottom: 2px;
 
     &:hover {
       background: var(--hover-bg, #f0f0f0);
@@ -1188,7 +1159,8 @@
 
     .import-kb-msg-role {
       flex-shrink: 0;
-      font-size: 14px;
+      /* base 令牌 medium 档正好 14px（原值），小/大档跟随设置 */
+      font-size: var(--font-size-base);
       line-height: 1;
     }
 
@@ -1201,6 +1173,89 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+  }
+}
+
+/* ==================== 消息详情弹窗（导入知识库 → 右键「查看详情」） ====================
+   Portal 挂在 body，不在 .import-kb-modal 子树里，所以写成顶层选择器。
+   滚动交给 Modal 自带的 .modal-body（overflow-y: auto），这里不再套一层 max-height +
+   overflow（套了会出现内外两条滚动条）。 */
+.msg-detail-modal {
+  .msg-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .msg-detail-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+  }
+
+  .msg-detail-role {
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  .msg-detail-text {
+    margin: 0;
+    font-size: var(--font-size-md);
+    line-height: 1.6;
+    color: var(--text-primary);
+    /* 正文原样展示（唯一不截断的地方）：保留换行 / 连续空格 */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  /* 非文本块的占位标记（[image] / [file] …） */
+  .msg-detail-parts {
+    font-size: var(--font-size-sm);
+    color: var(--text-tertiary);
+  }
+
+  .msg-detail-section {
+    border-top: 1px solid var(--border-color);
+    padding-top: 8px;
+  }
+
+  .msg-detail-title {
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+  }
+
+  .msg-detail-call {
+    margin-bottom: 8px;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+
+    /* 工具入参是 JSON：等宽 + 嵌套面色块（项目没有等宽字体令牌，栈同 tool-call-group） */
+    .msg-detail-text {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: var(--font-size-sm);
+      background: var(--input-bg);
+      border-radius: 6px;
+      padding: 8px;
+    }
+  }
+
+  .msg-detail-call-name {
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    color: var(--accent-color);
+    margin-bottom: 2px;
+  }
+
+  .msg-detail-id {
+    font-size: var(--font-size-xs);
+    color: var(--text-tertiary);
+    overflow-wrap: anywhere;
   }
 }
 

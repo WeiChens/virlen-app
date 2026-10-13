@@ -107,6 +107,73 @@
   width: fit-content;
 }
 
+/* ==================== 折叠态短文本 / 展开态纯文本的通用片段 ====================
+   折叠行本身是 `.tool-call-short-text`（2xs + --text-secondary），下面三个片段只补语义：
+   强调（路径 / 关键词）、弱化（计数 / 行数 / 状态）、危险（将被删除的对象）。
+   各工具族的短文本都由「flex 行 + 这三个片段」拼成，不再各写一份内联样式 ——
+   内联 px 字号 / 裸色值都跟不动「设置 → 字体大小 / 主题色」（口径见 theme.scss「字号等级」）。 */
+.tool-short-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.tool-short-em {
+  color: var(--accent-color);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-short-muted {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.tool-short-danger {
+  color: var(--color-danger);
+}
+
+/* 展开态：与下发给模型的文本同构的纯文本
+   （保留换行；长路径 / 长 ID 就地折行，不撑出横向滚动） */
+.tool-plain-text {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tool-plain-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tool-plain-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-sm);
+}
+
+.tool-plain-row-icon {
+  flex-shrink: 0;
+  color: var(--accent-color);
+}
+
+.tool-plain-row-text {
+  overflow-wrap: anywhere;
+}
+
+/* 代码块外面的那层壳：只负责与消息列的左右留白（CodeBlock 自己不管外边距） */
+.code-block-shell {
+  padding: 0 10px;
+  margin: 0 20px;
+}
+
 .tool-cmd-running {
   display: flex;
   flex-direction: column;
@@ -331,7 +398,7 @@
     border-radius: 5px;
     background: rgba(255, 255, 255, 0.05);
     font-family: $pty-mono;
-    font-size: 11px;
+    font-size: var(--font-size-xs);
     color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
     white-space: nowrap;
     user-select: none;
@@ -441,9 +508,19 @@
     display: inline-block;
     padding: 3px 8px;
     margin: 4px 4px 4px 0px;
+    border: 1px solid var(--border-color);
     border-radius: 4px;
     cursor: pointer;
-    background-color: var(--bg-primary, #fff);
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+
+    /* 选中 = 品牌底；底上的字与描边都走 --primary-fg
+       （浅色主题色下自动转黑字，见 accent-color-contract 的守卫） */
+    &.is-selected {
+      border-color: var(--primary-fg);
+      background-color: var(--accent-color);
+      color: var(--primary-fg);
+    }
   }
 
   .UserChoiceMessage-customReply {
@@ -452,7 +529,7 @@
     border-radius: 6px;
     background: var(--bg-secondary, #f9fafb);
     border-left: 3px solid var(--accent-color, #6366f1);
-    font-size: 13px;
+    font-size: var(--font-size-md);
     line-height: 1.5;
 
     .customReply-label {
@@ -750,6 +827,13 @@
 
 
 // ==================== Web Search Results ====================
+/* 兜底分支（无 uiData）的原始文本：与结构化渲染同宽，超高自滚
+   —— 排版走 .tool-plain-text，这里只管滚动区 */
+.web-search-raw {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
 .web-search-results {
   display: flex;
   flex-direction: column;
@@ -790,7 +874,7 @@
     border-radius: 50%;
     background: var(--accent-color, #4f46e5);
     color: var(--primary-fg);
-    font-size: 10px;
+    font-size: var(--font-size-2xs);
     font-weight: 600;
     margin-top: 2px;
   }
@@ -803,7 +887,7 @@
     gap: 4px;
 
     .web-search-item-title {
-      font-size: var(--font-size-sm, 13px);
+      font-size: var(--font-size-sm);
       font-weight: 600;
       color: var(--accent-color, #4f46e5);
       cursor: pointer;
@@ -817,7 +901,7 @@
     }
 
     .web-search-item-snippet {
-      font-size: var(--font-size-xs, 12px);
+      font-size: var(--font-size-xs);
       color: var(--text-secondary, #666);
       line-height: 1.5;
       display: -webkit-box;
@@ -829,7 +913,7 @@
     }
 
     .web-search-item-url {
-      font-size: 11px;
+      font-size: var(--font-size-xs);
       color: var(--text-tertiary, #999);
       word-break: break-all;
       overflow: hidden;
@@ -839,7 +923,31 @@
   }
 }
 
+// ==================== web_fetch（网络请求） ====================
+/* 可点链接（受控拉起外部浏览器，见 WebFetchMessage）+ 请求体标题 */
+.web-fetch-link {
+  cursor: pointer;
+  color: var(--accent-color);
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+
+.web-fetch-body-title {
+  margin-bottom: 8px;
+  font-weight: 500;
+  color: var(--accent-color);
+}
+
 // ==================== Knowledge Base Tool Results ====================
+/* 字号一律走 `--font-size-*` 令牌、颜色一律走主题令牌（口径见 theme.scss「字号等级」一节）：
+   内联 px 字号用不了 `var()`，写死一次就永远不跟「设置 → 字体大小 / 主题色」变；
+   `var(--x, #旧值)` 的兜底同理 —— 主题里这些令牌都有定义，兜底只会盖住「变量没生效」这个错。
+   折叠态那一行用的是共用的 `.tool-short-*` 片段（见上方），这里只管展开卡片。 */
+.kb-empty-state {
+  padding: 2px 0;
+  color: var(--text-secondary);
+}
+
 .kb-search-results-list {
   display: flex;
   flex-direction: column;
@@ -852,8 +960,8 @@
 .kb-search-result-item {
   padding: 8px 10px;
   border-radius: 6px;
-  background: var(--bg-primary, #fff);
-  border: 1px solid var(--border-color, #e5e5e5);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
 
   .kb-search-result-header {
     display: flex;
@@ -864,21 +972,22 @@
 
   .kb-search-result-index {
     flex-shrink: 0;
-    width: 20px;
-    height: 20px;
-    line-height: 20px;
+    /* 方框挂在自身字号上（2em = 20px @ medium）：字号调大时数字不被挤住 */
+    width: 2em;
+    height: 2em;
+    line-height: 2em;
     text-align: center;
     border-radius: 50%;
-    background: var(--accent-color, #4f46e5);
+    background: var(--accent-color);
     color: var(--primary-fg);
-    font-size: 10px;
+    font-size: var(--font-size-2xs);
     font-weight: 600;
   }
 
   .kb-search-result-doc {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     font-weight: 600;
-    color: var(--text-primary, #333);
+    color: var(--text-primary);
     flex: 1;
     white-space: nowrap;
     overflow: hidden;
@@ -886,14 +995,14 @@
   }
 
   .kb-search-result-score {
-    font-size: 11px;
-    color: var(--accent-color, #4f46e5);
+    font-size: var(--font-size-xs);
+    color: var(--accent-color);
     flex-shrink: 0;
   }
 
   .kb-search-result-snippet {
-    font-size: 12px;
-    color: var(--text-secondary, #888);
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
     line-height: 1.5;
     display: -webkit-box;
     -webkit-line-clamp: 3;
@@ -901,6 +1010,13 @@
     -webkit-box-orient: vertical;
     overflow: hidden;
     word-break: break-word;
+  }
+
+  /* 文档 ID：机器标识，比正文弱一档（与列表项的 .kb-list-item-id 同口径） */
+  .kb-search-result-id {
+    margin-bottom: 4px;
+    font-size: var(--font-size-xs);
+    color: var(--text-secondary);
   }
 }
 
@@ -916,8 +1032,8 @@
 .kb-list-item {
   padding: 8px 10px;
   border-radius: 6px;
-  background: var(--bg-primary, #fff);
-  border: 1px solid var(--border-color, #e5e5e5);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
 
   .kb-list-item-header {
     display: flex;
@@ -927,21 +1043,38 @@
 
   .kb-list-item-index {
     flex-shrink: 0;
-    width: 20px;
-    height: 20px;
-    line-height: 20px;
+    width: 2em;
+    height: 2em;
+    line-height: 2em;
     text-align: center;
     border-radius: 50%;
-    background: var(--accent-color, #4f46e5);
+    background: var(--accent-color);
     color: var(--primary-fg);
-    font-size: 10px;
+    font-size: var(--font-size-2xs);
     font-weight: 600;
   }
 
   .kb-list-item-name {
-    font-size: 13px;
+    font-size: var(--font-size-md);
     font-weight: 600;
-    color: var(--text-primary, #333);
+    color: var(--text-primary);
+  }
+
+  .kb-list-item-id {
+    font-size: var(--font-size-xs);
+    color: var(--text-secondary);
+  }
+
+  .kb-list-item-desc {
+    margin-top: 2px;
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+  }
+
+  .kb-list-item-meta {
+    margin-top: 2px;
+    font-size: var(--font-size-xs);
+    color: var(--text-secondary);
   }
 }
 
@@ -957,8 +1090,8 @@
 .kb-doc-item {
   padding: 8px 10px;
   border-radius: 6px;
-  background: var(--bg-primary, #fff);
-  border: 1px solid var(--border-color, #e5e5e5);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
 
   .kb-doc-item-header {
     display: flex;
@@ -969,46 +1102,52 @@
 
   .kb-doc-item-index {
     flex-shrink: 0;
-    width: 20px;
-    height: 20px;
-    line-height: 20px;
+    width: 2em;
+    height: 2em;
+    line-height: 2em;
     text-align: center;
     border-radius: 50%;
-    background: var(--accent-color, #4f46e5);
+    background: var(--accent-color);
     color: var(--primary-fg);
-    font-size: 10px;
+    font-size: var(--font-size-2xs);
     font-weight: 600;
   }
 
   .kb-doc-item-name {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     font-weight: 600;
-    color: var(--text-primary, #333);
+    color: var(--text-primary);
     flex: 1;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
+  .kb-doc-item-id {
+    font-size: var(--font-size-xs);
+    color: var(--text-secondary);
+  }
+
+  /* 状态徽标：底色 / 字色都走状态令牌，亮暗两套各自成对（theme.scss 已算好对比度） */
   .kb-doc-item-status {
-    font-size: 10px;
+    font-size: var(--font-size-2xs);
     padding: 1px 6px;
     border-radius: 4px;
     flex-shrink: 0;
 
     &.status-ready {
-      background: #e8f5e9;
-      color: #2e7d32;
+      background: var(--color-success-bg);
+      color: var(--color-success-text);
     }
 
     &.status-processing {
-      background: #fff3e0;
-      color: #e65100;
+      background: var(--color-warning-bg);
+      color: var(--color-warning-text);
     }
 
     &.status-error {
-      background: #fce4ec;
-      color: #c62828;
+      background: var(--color-error-bg);
+      color: var(--color-error-text);
     }
   }
 }
@@ -1031,7 +1170,7 @@
 
   .skill-source-short-path {
     color: var(--text-tertiary, #999);
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1110,7 +1249,7 @@
 
     .skill-source-meta-label {
       flex-shrink: 0;
-      font-size: 11px;
+      font-size: var(--font-size-xs);
       color: var(--text-tertiary, #999);
     }
 
@@ -1118,7 +1257,7 @@
       flex: 1;
       min-width: 0;
       font-family: 'JetBrains Mono', Consolas, monospace;
-      font-size: 11px;
+      font-size: var(--font-size-xs);
       color: var(--text-secondary, #888);
       overflow: hidden;
       text-overflow: ellipsis;
@@ -1135,7 +1274,7 @@
       align-items: center;
       gap: 6px;
       margin-bottom: 6px;
-      font-size: 11px;
+      font-size: var(--font-size-xs);
       font-weight: 600;
       letter-spacing: 0.4px;
       color: var(--text-secondary, #888);
@@ -1157,7 +1296,7 @@
     /* 与下方的 Markdown 正文底区分：让两层信息有各自的“容器” */
     background: var(--bg-secondary, #f9fafb);
     font-family: 'JetBrains Mono', Consolas, monospace;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     line-height: 1.6;
     white-space: pre;
     /* 只做横向滚动：纵向交给整张卡，避免嵌套滚动 */
@@ -1291,7 +1430,7 @@
   .service-cmd {
     padding: 6px 10px 0;
     font-family: var(--font-mono, monospace);
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     color: var(--accent-color, #4f46e5);
     word-break: break-all;
   }
@@ -1313,7 +1452,7 @@
     border-radius: 6px;
     background: var(--bg-secondary, #f9fafb);
     font-family: var(--font-mono, monospace);
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     line-height: 1.5;
     color: var(--text-secondary, #666);
     white-space: pre-wrap;
@@ -1387,7 +1526,7 @@
     gap: 8px;
     padding: 6px 10px;
 
-    & + .service-list-row {
+    &+.service-list-row {
       border-top: 1px solid var(--border-color, #e5e5e5);
     }
 
@@ -1401,7 +1540,7 @@
       flex: 1;
       min-width: 0;
       font-family: var(--font-mono, monospace);
-      font-size: 12px;
+      font-size: var(--font-size-sm);
       color: var(--accent-color, #4f46e5);
       overflow: hidden;
       text-overflow: ellipsis;
@@ -1418,7 +1557,7 @@
 
 .service-id-short {
   font-family: var(--font-mono, monospace);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--accent-color, #4f46e5);
 }
 
@@ -1458,7 +1597,6 @@
 
     /* 文件名是这张卡的视觉焦点：占满左侧剩余空间，长路径省略 */
     .doc-name {
-      flex: 1 1 auto;
       min-width: 0;
       font-weight: 600;
       color: var(--text-primary, #1a1a1a);
@@ -1546,7 +1684,12 @@
     word-break: break-word;
     user-select: text;
   }
+
+  .doc-name-wrapper {
+    flex: 1 1 auto;
+  }
 }
+
 
 /* 多份文档：文件名位置换成下拉（切换入口，与 read_file 的多文件同款）——
    卡片头部是**浅色**，所以沿用 Select 自己的浅色皮肤，只把它压扁：默认 2.6em（medium 34px）
@@ -1642,7 +1785,7 @@
 
   .doc-short-extra {
     flex-shrink: 0;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     color: var(--text-tertiary, #999);
   }
 }

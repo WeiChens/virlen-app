@@ -145,17 +145,9 @@ class EditFileMessage implements IToolCallMessage {
           parts.push(tpl('新增 $__count__行', { count: insCount }))
         if (parts.length === 0) parts.push(t('无变更'))
         return (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-            <span
-              style={{
-                color: 'var(--accent-color)',
-                fontWeight: 500,
-              }}>
-              {shortPath}
-            </span>
-            <span style={{ color: '#999', fontSize: 12 }}>
-              {parts.join(',')}
-            </span>
+          <div className="tool-short-row">
+            <span className="tool-short-em">{shortPath}</span>
+            <span className="tool-short-muted">{parts.join(',')}</span>
           </div>
         )
       }

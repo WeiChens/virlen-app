@@ -23,17 +23,11 @@ class SearchFileByNameMessage implements IToolCallMessage {
         path: shortRoot,
       })
       return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+        <div className="tool-short-row">
           <span>{findStr}</span>
-          <span
-            style={{
-              color: 'var(--accent-color)',
-              fontWeight: 500,
-            }}>
-            {query}
-          </span>
+          <span className="tool-short-em">{query}</span>
           {length !== null && (
-            <span style={{ color: '#999', fontSize: 12 }}>
+            <span className="tool-short-muted">
               {tpl(' 找到 $__count__ 项', { count: length })}
             </span>
           )}
@@ -48,7 +42,7 @@ class SearchFileByNameMessage implements IToolCallMessage {
       return <div className="error">{props.message.content as string}</div>
     }
     return (
-      <CodeBlock showLineNumbers={false}>
+      <CodeBlock showLineNumbers={false} width={'80%'}>
         {props.message?.content as string}
       </CodeBlock>
     )

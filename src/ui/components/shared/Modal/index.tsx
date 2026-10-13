@@ -220,6 +220,11 @@ interface ModalFooterButtonsProps {
   cancelText?: string
   confirmText?: string
   confirmLoading?: boolean
+  /**
+   * 确认按钮的禁用态。与 confirmLoading 是两回事：loading = 「已提交、正在跑」，
+   * disabled = 「前置条件还没满足」。原先调用方只能靠回调里 return 实现后者，点击毫无反馈。
+   */
+  confirmDisabled?: boolean
 }
 
 export function ModalFooterButtons({
@@ -228,6 +233,7 @@ export function ModalFooterButtons({
   cancelText = t('取消'),
   confirmText = t('确认'),
   confirmLoading = false,
+  confirmDisabled = false,
 }: ModalFooterButtonsProps) {
   return (
     <>
@@ -240,7 +246,7 @@ export function ModalFooterButtons({
       <button
         className="btn-confirm"
         onClick={onConfirm}
-        disabled={confirmLoading}>
+        disabled={confirmLoading || confirmDisabled}>
         {confirmLoading ? t('处理中...') : confirmText}
       </button>
     </>

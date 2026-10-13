@@ -2,7 +2,7 @@
  * Tooltip — 气泡提示
  *
  * 重点覆盖 `disabled` 这个开关：右键菜单弹出时鼠标还停在元素上（不会触发
- * mouseleave），若不禁用，气泡会以 z-index 9999 盖在菜单（600）上面。
+ * mouseleave），若不禁用，气泡会以 z-index 9999 盖在菜单（2000）上面。
  */
 import { expect, it } from 'vitest'
 import { act } from 'react'

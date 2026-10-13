@@ -35,13 +35,6 @@ function renderSkills(skills: SkillBrief[]): string {
   return lines.join('\n')
 }
 
-const preStyle = {
-  whiteSpace: 'pre-wrap' as const,
-  margin: 0,
-  fontSize: 'var(--font-size-sm)',
-  lineHeight: 1.6,
-}
-
 class ListSkillsMessage implements IToolCallMessage {
   getToolName(): string {
     return 'list_skills'
@@ -58,7 +51,7 @@ class ListSkillsMessage implements IToolCallMessage {
         | undefined
       if (Array.isArray(skills)) {
         if (skills.length === 0) {
-          return <span style={{ color: '#999' }}>{t('暂无技能')}</span>
+          return <span className="tool-short-muted">{t('暂无技能')}</span>
         }
         return <span>{tpl('$__count__ 个技能', { count: skills.length })}</span>
       }
@@ -70,7 +63,7 @@ class ListSkillsMessage implements IToolCallMessage {
           return <span>{tpl('$__count__ 个技能', { count: match[1] })}</span>
         }
         if (content.includes('没有启用的技能') || content.includes('0 个')) {
-          return <span style={{ color: '#999' }}>{t('暂无技能')}</span>
+          return <span className="tool-short-muted">{t('暂无技能')}</span>
         }
       }
       return t('查看技能列表')
@@ -87,10 +80,14 @@ class ListSkillsMessage implements IToolCallMessage {
       | SkillBrief[]
       | undefined
     if (Array.isArray(skills) && skills.length > 0) {
-      return <pre style={preStyle}>{renderSkills(skills)}</pre>
+      return <pre className="tool-plain-text">{renderSkills(skills)}</pre>
     }
     if (props.message?.content) {
-      return <pre style={preStyle}>{props.message.content as string}</pre>
+      return (
+        <pre className="tool-plain-text">
+          {props.message.content as string}
+        </pre>
+      )
     }
     return null
   }

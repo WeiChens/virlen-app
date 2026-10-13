@@ -61,16 +61,10 @@ class ListFilesMessage implements IToolCallMessage {
       const shortPath = toShortPath(`${input}`, workspace)
       const count = props.message?.uiData?.count || 0
       return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <span
-            style={{
-              color: 'var(--accent-color)',
-              fontWeight: 500,
-            }}>
-            {shortPath}
-          </span>
+        <div className="tool-short-row">
+          <span className="tool-short-em">{shortPath}</span>
           {count !== null && (
-            <span style={{ color: '#999', fontSize: 12 }}>
+            <span className="tool-short-muted">
               {tpl('找到 $__count__ 项', { count })}
             </span>
           )}
@@ -93,7 +87,7 @@ class ListFilesMessage implements IToolCallMessage {
           : (props.message?.content as string)
       return (
         <CodeBlock
-          width={400}
+          width={'100%'}
           maxHeight={600}
           showLineNumbers={false}>
           {text as unknown as React.ReactNode}

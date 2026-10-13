@@ -72,14 +72,7 @@ class UserChoiceMessage implements IToolCallMessage {
                 return (
                   <div
                     key={option}
-                    className="UserChoiceMessageOption"
-                    style={{
-                      border: selected ? '1px solid' : '1px solid #d9d9d9',
-                      backgroundColor: selected
-                        ? 'var(--accent-color)'
-                        : 'var(--bg-secondary, #f9fafb)',
-                      color: selected ? '#fff' : 'var(--text-primary, #1a1a1a)',
-                    }}>
+                    className={`UserChoiceMessageOption${selected ? ' is-selected' : ''}`}>
                     {option}
                   </div>
                 )

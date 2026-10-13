@@ -24,13 +24,13 @@ class QueryMessagesMessage implements IToolCallMessage {
       const ui = props.message?.uiData as any
       const status = ui?.status
       if (status === 'not_compressed') {
-        return <span style={{ color: '#999' }}>{t('未压缩，无需查询')}</span>
+        return <span className="tool-short-muted">{t('未压缩，无需查询')}</span>
       }
       if (status === 'in_context') {
-        return <span style={{ color: '#999' }}>{t('已在上下文中')}</span>
+        return <span className="tool-short-muted">{t('已在上下文中')}</span>
       }
       if (status === 'not_found') {
-        return <span style={{ color: '#999' }}>{t('未找到该消息')}</span>
+        return <span className="tool-short-muted">{t('未找到该消息')}</span>
       }
       if (!ui) {
         return t('查询历史消息')
@@ -46,7 +46,7 @@ class QueryMessagesMessage implements IToolCallMessage {
       }
       const items = (ui.items as any[]) || []
       if (items.length === 0) {
-        return <span style={{ color: '#999' }}>{t('暂无结果')}</span>
+        return <span className="tool-short-muted">{t('暂无结果')}</span>
       }
       const first = items[0].seq
       const last = items[items.length - 1].seq
@@ -70,15 +70,7 @@ class QueryMessagesMessage implements IToolCallMessage {
     }
     if (!content) return null
     return (
-      <pre
-        style={{
-          whiteSpace: 'pre-wrap',
-          margin: 0,
-          fontSize: 'var(--font-size-sm)',
-          lineHeight: 1.6,
-        }}>
-        {content}
-      </pre>
+      <pre className="tool-plain-text">{content}</pre>
     )
   }
 

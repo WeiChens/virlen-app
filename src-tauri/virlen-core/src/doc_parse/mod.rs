@@ -14,7 +14,7 @@
 //!
 //! | 扩展名 | 实现 | 文本形态 |
 //! |---|---|---|
-//! | `pdf` | [`pdf`]（`pdf-extract`）+ [`ocr`]（内嵌图片） | 文字层；**扫描件没有文字层时走端侧 OCR**（`ParseOptions::ocr`） |
+//! | `pdf` | [`pdf`]（`pdf-extract` + 按版面坐标重排）+ [`ocr`]（内嵌图片） | 文字层（行序按版面重排）；**扫描件没有文字层时走端侧 OCR**（`ParseOptions::ocr`） |
 //! | `docx` `doc` `pptx` `ppt` | [`office`]（`office_oxide`） | Markdown（保留标题 / 列表 / 表格） |
 //! | `xlsx` `xls` | [`office`]（`office_oxide`） | 工作表名 + 制表符分隔的行（表格用 Markdown 太费 token） |
 //! | `csv` `tsv` | [`delimited`]（`csv`） | 规范化的 CSV（分隔符嗅探 → 统一逗号；解析失败回退原文） |
@@ -250,8 +250,16 @@ pub fn parse(path: &str, opts: &ParseOptions) -> Result<DocText, ParseError> {
             let bytes = read_bytes(file, &ext)?;
             // 文字层抽失败不算致命：扫描件本来就抽不出文字（图片里オ是正文），OCR 可能就是唯一取字路径
             let layer = pdf::extract_text(&bytes);
-            let mut text = layer.clone().unwrap_or_default();
+            let mut text = layer
+                .as_ref()
+                .map(|out| out.text.clone())
+                .unwrap_or_default();
             let has_layer = !text.trim().is_empty();
+            // 行序退回原样（上游库在某个字体上 panic、或重排一个字都没拿到）：如实说一句，
+            // 否则模型会把「行」当成版面上的行去理解（看 `docs/doc-parse-plan.md` §19）
+            if has_layer && !layer.as_ref().is_ok_and(|out| out.laid_out) {
+                note = Some(pdf::RAW_ORDER_NOTE.to_string());
+            }
             // 要不要 OCR：模型显式要（`ocrImages`）或**抽不到文字层**（扫描件兜底）
             if opts.ocr.as_ref().is_some_and(|o| o.always || !has_layer) {
                 let ocr_opts = opts.ocr.as_ref().expect("上面的判断保证是 Some");

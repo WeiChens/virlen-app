@@ -98,15 +98,7 @@ class DeleteFileMessage implements IToolCallMessage {
     if (ui && (deleted.length > 0 || failed.length > 0)) {
       return (
         <div className="tool-call-expand-view">
-          <pre
-            style={{
-              margin: 0,
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-all',
-              fontSize: 12,
-            }}>
-            {renderResult(ui)}
-          </pre>
+          <pre className="tool-plain-text">{renderResult(ui)}</pre>
         </div>
       )
     }
@@ -120,28 +112,13 @@ class DeleteFileMessage implements IToolCallMessage {
     return (
       <div className="tool-call-expand-view">
         {content ? (
-          <pre
-            style={{
-              margin: 0,
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-all',
-              fontSize: 12,
-            }}>
-            {content}
-          </pre>
+          <pre className="tool-plain-text">{content}</pre>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div className="tool-plain-list">
             {paths.map((p, i) => (
-              <div
-                key={`${i}-${p}`}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  fontSize: 12,
-                }}>
-                <span style={{ color: 'var(--accent-color)' }}>🗑</span>
-                <span style={{ wordBreak: 'break-all' }}>
+              <div key={`${i}-${p}`} className="tool-plain-row">
+                <span className="tool-plain-row-icon">🗑</span>
+                <span className="tool-plain-row-text">
                   {toShortPath(p, workspace)}
                 </span>
               </div>

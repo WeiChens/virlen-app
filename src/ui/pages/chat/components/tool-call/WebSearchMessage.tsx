@@ -34,16 +34,10 @@ class WebSearchMessage implements IToolCallMessage {
         | undefined
       const length = uiData?.length
       return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <span
-            style={{
-              color: 'var(--accent-color)',
-              fontWeight: 500,
-            }}>
-            {query}
-          </span>
+        <div className="tool-short-row">
+          <span className="tool-short-em">{query}</span>
           {length !== undefined && length !== null && (
-            <span style={{ color: '#999', fontSize: 12 }}>
+            <span className="tool-short-muted">
               {tpl(' — $__count__项结果', { count: length })}
             </span>
           )}
@@ -110,17 +104,7 @@ class WebSearchMessage implements IToolCallMessage {
         )
         if (resultLines.length > 0) {
           return (
-            <div
-              style={{
-                maxHeight: '400px',
-                overflowY: 'auto',
-                fontSize: 'var(--font-size-sm)',
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-all',
-                lineHeight: 1.6,
-              }}>
-              {content}
-            </div>
+            <div className="tool-plain-text web-search-raw">{content}</div>
           )
         }
       }

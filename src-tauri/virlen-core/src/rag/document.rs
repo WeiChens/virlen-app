@@ -98,10 +98,11 @@ pub fn parse_text(text: &str, doc_name: &str) -> ParsedDocument {
 /// 解析 PDF 文件
 ///
 /// ⚠️ 抽文字的实现在 `crate::doc_parse::pdf`（工具 `parse_document` 与知识库导入共用一份，
-/// 不许另写一份 `pdf-extract` 调用）。
+/// 不许另写一份 `pdf-extract` 调用）；返回的是**按版面坐标重排**过的文字。
 fn parse_pdf(file_path: &str) -> Result<(String, Option<u32>), String> {
     let bytes = std::fs::read(file_path).map_err(|e| format!("读取 PDF 失败: {}", e))?;
     let text = crate::doc_parse::pdf::extract_text(&bytes)
+        .map(|out| out.text)
         .map_err(|e| format!("PDF 解析失败: {}", e))?;
     Ok((text, None))
 }

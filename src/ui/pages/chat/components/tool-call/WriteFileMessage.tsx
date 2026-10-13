@@ -25,15 +25,9 @@ class WriteFileMessage implements IToolCallMessage {
       const lineCount = content.split('\n').length
 
       return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <span
-            style={{
-              color: 'var(--accent-color)',
-              fontWeight: 500,
-            }}>
-            {shortPath}
-          </span>
-          <span style={{ color: '#999', fontSize: 12 }}>
+        <div className="tool-short-row">
+          <span className="tool-short-em">{shortPath}</span>
+          <span className="tool-short-muted">
             {`${lineCount}`} {t('行')}
           </span>
         </div>
@@ -51,11 +45,7 @@ class WriteFileMessage implements IToolCallMessage {
     const name = getUrlFileName(props.useContent.input.path)
 
     return (
-      <div
-        style={{
-          padding: '0 10px',
-          margin: '0px 20px',
-        }}>
+      <div className="code-block-shell">
         <CodeBlock
           autoCenter
           maxHeight={450}
