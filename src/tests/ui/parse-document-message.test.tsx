@@ -40,7 +40,7 @@ function msg(over: Record<string, any> = {}) {
   } as any
 }
 
-/** 单文件成功时的 uiData（字段与 Rust `parse_document.rs::ui_data` 对齐） */
+/** 单文件成功时的 uiData（字段与 Rust `parse_document/mod.rs::ui_data` 对齐） */
 const OK_UI = {
   file: FILE,
   ok: true,

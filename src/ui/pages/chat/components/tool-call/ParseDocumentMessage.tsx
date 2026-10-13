@@ -25,7 +25,7 @@ import { chatState, sessionStore, settingsState } from '@/ui/store'
 import { openPath } from '@tauri-apps/plugin-opener'
 import { IToolCallMessage, ToolMessageProps } from './IToolCallMessage'
 
-/** `uiData.outTxtFile`（全文落盘结果，字段见 Rust `parse_document.rs::OutFile::ui`） */
+/** `uiData.outTxtFile`（全文落盘结果，字段见 Rust `parse_document/mod.rs::OutFile::ui`） */
 interface OutFileUi {
   path?: string
   ok?: boolean

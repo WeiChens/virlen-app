@@ -32,7 +32,7 @@
 //! │   ├── common.rs          format_size / ensure_parent_dir / format_system_time
 //! │   ├── read_file.rs       write_file.rs   edit_file.rs    delete_file.rs
 //! │   ├── copy_move_file.rs  list_files.rs   file_info.rs    mkdir.rs
-//! │   └── parse_document.rs  **文档解析**（PDF / Office / CSV / 纯文本；实现唯一源在 `doc_parse`）+ `outTxtFile` 全文落盘
+//! │   └── parse_document/    **文档解析**（PDF / Office / CSV / 纯文本；实现唯一源在 `doc_parse`）+ `outTxtFile` 全文落盘
 //! ├── search/                搜索（2）
 //! │   ├── common.rs          glob_to_regex / escape_regex
 //! │   ├── search_files_by_name.rs

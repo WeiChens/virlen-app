@@ -1,7 +1,7 @@
 /**
  * parse_document — 文档解析（PDF / Word / Excel / PowerPoint / CSV / 纯文本）
  *
- * ⚠️ 已原生化：Rust 引擎走 `native_tools/file/parse_document.rs`（默认路径，自己走
+ * ⚠️ 已原生化：Rust 引擎走 `native_tools/file/parse_document/`（默认路径，自己走
  * `resolve_safe_path`），本文件只是**回退 / 浏览器 dev 路径**。解析的唯一实现在 core `doc_parse`，
  * 组装版式在 core 的 `parse_targets`（与工具同一条链）→ 这里**只做转发**，不存在第二份文案（铁律 1）。
  *

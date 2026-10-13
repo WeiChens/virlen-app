@@ -58,6 +58,11 @@ pub const OFFICE_EXTENSIONS: [&str; 6] = ["docx", "doc", "xlsx", "xls", "pptx", 
 /// 分隔符文本（[`delimited`] 处理）
 pub const DELIMITED_EXTENSIONS: [&str; 2] = ["csv", "tsv"];
 
+/// `ocrImages` 用在非 PDF 上时给模型的一句说明（固定英文；与 `sheet` 在 Word 上的口径一致）
+///
+/// ⚠️ 不进 i18n：模型侧文案必须只有一份（铁律 1），界面侧按 `uiData` 重建自己的话。
+const OCR_ONLY_PDF_NOTE: &str = "Parameter \"ocrImages\" only applies to .pdf — ignored";
+
 /// 全部可解析扩展名（错误文案与白名单都取自这里）
 pub fn supported_extensions() -> Vec<&'static str> {
     let mut out = vec!["pdf"];
@@ -276,7 +281,10 @@ pub fn parse(path: &str, opts: &ParseOptions) -> Result<DocText, ParseError> {
                     Err(e) => TextLayer::Failed(e.clone()),
                     Ok(_) => TextLayer::Empty,
                 };
-                note = ocr::summary_note(&outcome.summary, layer_state);
+                note = join_notes([
+                    note.take(),
+                    ocr::summary_note(&outcome.summary, layer_state),
+                ]);
                 ocr_summary = Some(outcome.summary);
             }
             // 文字层与 OCR 都没给出东西：库报的错比「没文字」更能解释为什么
@@ -319,6 +327,13 @@ pub fn parse(path: &str, opts: &ParseOptions) -> Result<DocText, ParseError> {
             })?
         }
     };
+
+    // OCR 只对 PDF 有意义：其它格式收到了要**如实说一句**（与 `sheet` 在 Word 上被忽略同口径）——
+    // 静默忽略会让模型以为「我明明让它读了图里的字」。
+    // `None` = 调用方显式关掉了 OCR（`ocrImages: false`），那本来就没期待，不必啰嗦。
+    if ext != "pdf" && opts.ocr.is_some() {
+        note = join_notes([note.take(), Some(OCR_ONLY_PDF_NOTE.to_string())]);
+    }
 
     if raw.trim().is_empty() {
         // 为什么没文字：跑过 OCR 的说 OCR 的结论；PDF 没跑的提醒开关（否则模型会以为这格式读不了）
@@ -363,6 +378,21 @@ fn read_bytes(file: &Path, ext: &str) -> Result<Vec<u8>, ParseError> {
         format: ext.to_string(),
         message: e.to_string(),
     })
+}
+
+/// 两句说明拼成一句（` · ` 相连，与 `office` 同口径）；只有一句就原样返回，都没话 → `None`
+///
+/// ⚠️ 为什么是「拼」而不是「赋值」：`note` 承载的是**各自独立的事实**（行序退回原样 / OCR 摘要 /
+/// 非 PDF 的 `ocrImages` 被忽略），后写的把先写的覆盖掉 = 静默丢一句。
+fn join_notes(parts: [Option<String>; 2]) -> Option<String> {
+    let mut out = String::new();
+    for part in parts.into_iter().flatten() {
+        if !out.is_empty() {
+            out.push_str(" · ");
+        }
+        out.push_str(&part);
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// 取 `[start, end)` 这段**字符**（字节索引经 UTF-8 边界换算，绝不切碎多字节字符）
@@ -552,6 +582,56 @@ mod tests {
             "{}",
             err.message()
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 两句说明**都要留住**：`layout_text` 失败退回原样 + `ocrImages: true` 会同时命中，
+    /// 早先这里是「赋值」，OCR 摘要把「行序可能不是版面顺序」那句整句顶掉了。
+    #[test]
+    fn layout_caveat_and_ocr_note_are_both_kept() {
+        let merged = join_notes([
+            Some(pdf::RAW_ORDER_NOTE.to_string()),
+            Some("2 embedded image(s) were additionally read with on-device OCR".to_string()),
+        ])
+        .unwrap();
+        assert!(merged.contains("the layout pass could not be used"), "{merged}");
+        assert!(merged.contains("2 embedded image(s)"), "{merged}");
+        assert_eq!(merged.matches(" · ").count(), 1, "两句只拼一次：{merged}");
+
+        assert_eq!(
+            join_notes([Some("only one".to_string()), None]).as_deref(),
+            Some("only one")
+        );
+        assert_eq!(join_notes([None, None]), None);
+    }
+
+    /// 非 PDF 收到 `ocrImages`（未显式关掉）要如实说一句 —— 静默忽略等于骗模型「图里的字读过了」
+    #[test]
+    fn ocr_images_on_a_non_pdf_format_is_reported_as_ignored() {
+        let dir = tmp_dir("ocr_nonpdf");
+        let file = dir.join("notes.txt");
+        std::fs::write(&file, "hello\n").unwrap();
+
+        let requested = ParseOptions {
+            ocr: Some(OcrOptions {
+                models_dir: Err("not needed".to_string()),
+                always: true,
+                cancel: None,
+            }),
+            ..Default::default()
+        };
+        let out = parse(file.to_str().unwrap(), &requested).unwrap();
+        let note = out.note.expect("非 PDF 收到 ocrImages 必须给一句说明");
+        assert!(note.contains("only applies to .pdf"), "{note}");
+        assert!(out.ocr.is_none(), "非 PDF 链根本不碰 OCR");
+
+        // 显式 `false`（`ocr` 为 `None`）= 调用方本来就期待不跑，不必再解释一遍
+        let off = ParseOptions {
+            ocr: None,
+            ..Default::default()
+        };
+        assert_eq!(parse(file.to_str().unwrap(), &off).unwrap().note, None);
 
         std::fs::remove_dir_all(&dir).ok();
     }
