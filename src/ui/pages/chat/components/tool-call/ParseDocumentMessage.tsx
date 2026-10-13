@@ -2,18 +2,22 @@
  * ParseDocumentMessage — parse_document（文档解析）的消息展示。
  *
  * 折叠态一行：文件短路径（多文件带 `+N`），结果回来后再补「字符数」；
- * 展开态每份文档一张卡片：类型 / 大小 / 字符数 / 工作表 + 解析出的**正文**（等宽、超高自滚），
+ * 展开态一张卡片：类型 / 大小 / 字符数 / 工作表 + 解析出的**正文**（等宽、超高自滚），
  * 失败项按 `errorKind` 用界面语言重建原因（`denied` / `backend` 这类带技术原文的原样给）。
+ * **多份文档只渲染一张卡**（当前选中的那份），文件名位置换成下拉切换 —— 与 read_file 的多文件同款：
+ * 一份份堆卡会把消息拉成几十屏，而且要知道看的是哪一份得挨个读卡头。
  *
  * 数据来源只有一处：工具结果的 `uiData`（Rust 组装，语言无关）。`note`（合并区域说明等）
  * 是解析器产出的**事实**（含工作表名、单元格区域等动态内容），随卡片原样展示、不做翻译；
  * OCR 场景下 `note` 与结构化 `ocr` 说明重复，此时只渲染后者（界面语言）。
  * 没有 `uiData` 的旧消息 / 浏览器回退路径整段回落 `message.content`，不做猜测解析。
  */
+import { useState } from 'react'
 import { t, tpl } from '@/ui/i18n'
 import { getFileParentDir, toShortPath } from '@/utils/common'
 import { formatSize } from '@/infrastructure/tools/file/common'
 import { showToast } from '@/ui/components/shared/Toast'
+import Select from '@/ui/components/shared/Select'
 import CopySvg from '@/ui/components/icons/CopySvg'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
 import { useAutoCenter } from '@/ui/hooks/useAutoCenter'
@@ -140,8 +144,12 @@ function ocrText(ocr: OcrUi): string | null {
   return null
 }
 
-/** 一份文档卡片（成功 = 元信息 + 正文；失败 = 原因 + 可用工作表） */
-function DocCard({ ui }: { ui: DocUi }) {
+/**
+ * 一份文档卡片（成功 = 元信息 + 正文；失败 = 原因 + 可用工作表）
+ *
+ * `nameSlot` 是多份文档时的文件名位置（下拉切换）—— 单份不给，照旧显示文件名本身。
+ */
+function DocCard({ ui, nameSlot }: { ui: DocUi; nameSlot?: React.ReactNode }) {
   const fullPath = asString(ui.file)
   const name = fullPath ? toShortPath(fullPath, currentWorkspace()) : ''
   const fileType = asString(ui.fileType)
@@ -153,11 +161,13 @@ function DocCard({ ui }: { ui: DocUi }) {
     return (
       <div className="doc-card is-failed">
         <div className="doc-head">
-          {name && (
-            <span className="doc-name" title={fullPath}>
-              {name}
-            </span>
-          )}
+          {/* 多份文档时文件名位置留给下拉（失败项也要能切走）；单份照旧是文件名本身 */}
+          {nameSlot ??
+            (name && (
+              <span className="doc-name" title={fullPath}>
+                {name}
+              </span>
+            ))}
           {fileType && <span className="doc-badge">{fileType}</span>}
           {byteSize != null && (
             <span className="doc-badge">{formatSize(byteSize)}</span>
@@ -184,11 +194,13 @@ function DocCard({ ui }: { ui: DocUi }) {
   return (
     <div className="doc-card">
       <div className="doc-head">
-        {name && (
-          <span className="doc-name" title={fullPath}>
-            {name}
-          </span>
-        )}
+        {/* 多份文档时文件名位置留给下拉；单份照旧是文件名本身 */}
+        {nameSlot ??
+          (name && (
+            <span className="doc-name" title={fullPath}>
+              {name}
+            </span>
+          ))}
         {fileType && <span className="doc-badge">{fileType}</span>}
         {byteSize != null && (
           <span className="doc-badge">{formatSize(byteSize)}</span>
@@ -257,6 +269,8 @@ function DocCard({ ui }: { ui: DocUi }) {
 /**
  * 展开视图根组件：只承载需要 hook 的渲染 —— 类方法里不能调 hook，
  * 且 workspace 每次渲染都要取最新值（会话可能已切换）。
+ *
+ * 多份文档只渲染**一张**卡（当前选中的那份），文件名位置换成下拉切换（与 read_file 的多文件同款）。
  */
 function DocView({
   files,
@@ -268,11 +282,35 @@ function DocView({
   // 顶层无条件调用：本组件只在展开时挂载（折叠时 getExpandView 返回 null），
   // 挂载本身等价于一次用户手势，不会被被动的消息到达 / 列表重挂载触发
   const rootRef = useAutoCenter()
+  const [active, setActive] = useState(0)
+  // 越界兜底：uiData 来自历史消息，一个脏索引不该让整张卡片崩掉
+  const index = active < files.length ? active : files.length - 1
+  const file = files[index]
+  const workspace = currentWorkspace()
   return (
     <div className="doc-view" ref={rootRef}>
-      {files.map((f, i) => (
-        <DocCard key={`${asString(f.file)}#${i}`} ui={f} />
-      ))}
+      <DocCard
+        /* 换文件换 key：正文重挂载，滚动位置随之归零（否则停在上一个文档的偏移上） */
+        key={`${asString(file.file)}#${index}`}
+        ui={file}
+        nameSlot={
+          files.length > 1 ? (
+            <Select
+              className="doc-file-switcher"
+              /* 长路径在面板里按内容撑开（上限 500px），不靠触发器那点宽度折行 */
+              dropdownWidth="content"
+              value={index}
+              onChange={(v) => setActive(Number(v))}
+              options={files.map((f, i) => ({
+                value: i,
+                // 短路径（相对工作区）区分同名文件；title 里挂全路径，hover 可见
+                label: toShortPath(asString(f.file), workspace),
+                title: asString(f.file),
+              }))}
+            />
+          ) : undefined
+        }
+      />
       {outFile && (
         <div className={`doc-outfile${outFile.ok === false ? ' is-failed' : ''}`}>
           {outFile.ok === false

@@ -1425,6 +1425,7 @@
 /* ==================== parse_document（文档解析） ====================
    展开卡片：头部 = 文件元信息（类型 / 大小 / 字符数 / 工作表）+ 复制 / 打开动作，
    下面依次是 note（合并区域说明）/ OCR 摘要 / 截断提示与解析出的正文。
+   多份文档只渲染一张卡：文件名位置是下拉切换（.doc-file-switcher，见下）。
    正文是等宽 `<pre>`（保留换行与原空格，TSV / 表格的列对齐靠它），超高自滚 ——
    与 read_file 的代码块同一策略，不允许整条消息被一份文档撑成几十屏。 */
 .doc-view {
@@ -1544,6 +1545,47 @@
     white-space: pre-wrap;
     word-break: break-word;
     user-select: text;
+  }
+}
+
+/* 多份文档：文件名位置换成下拉（切换入口，与 read_file 的多文件同款）——
+   卡片头部是**浅色**，所以沿用 Select 自己的浅色皮肤，只把它压扁：默认 2.6em（medium 34px）
+   会把头部条撑高一档，而这里要与同排的徽标齐平。触发器做成 ghost（无边框、透明底，
+   hover / 展开时才浮一层底色），文件名仍是这张卡的视觉焦点（加粗 + 省略号）。 */
+.custom-select.doc-file-switcher {
+  /* 宽度跟着文件名走（短名旁留一大块空框很难看），但要封顶：
+     再长的路径也不该把同排的徽标挤到换行（完整路径在面板里看，那里有 500px 的展开空间） */
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(420px, 60%);
+  min-height: 1.9em;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  font-size: var(--font-size-sm);
+
+  .custom-select__trigger {
+    padding: 1px 18px 1px 3px;
+  }
+
+  .custom-select__value {
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  .custom-select__arrow {
+    right: 3px;
+    color: var(--text-secondary, #888);
+  }
+
+  &:hover,
+  &:focus-visible,
+  &.is-open {
+    border-color: transparent;
+    /* 默认那圈 focus-shadow 会把紧凑的头部条顶出一道边，用底色代替 */
+    box-shadow: none;
+    background: var(--hover-bg, #f0f0f0);
   }
 }
 

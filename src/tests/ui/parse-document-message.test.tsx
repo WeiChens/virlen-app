@@ -3,7 +3,8 @@
  *
  * 覆盖：
  * - 短文本：短路径 + 「+N」/ 字符数
- * - 展开：每份文档一张卡（类型 / 大小 / 字符数 / 工作表徽标 + 正文），失败项按 errorKind 本地化
+ * - 展开：一张卡（类型 / 大小 / 字符数 / 工作表徽标 + 正文），失败项按 errorKind 本地化
+ * - 多份文档只渲染一张卡，文件名位置是下拉切换（与 read_file 的多文件同款）
  * - note / OCR / 截断 / 全文落盘行的呈现（OCR 与 note 说法重复时只留一处）
  * - 无 uiData（旧消息 / 浏览器回退路径）整段回落 content；结果未回来时占位
  * - 折叠不挂载 + 展开「打开即居中」一次
@@ -243,10 +244,10 @@ describe('展开视图：失败', () => {
   })
 })
 
-describe('展开视图：多文件与落盘', () => {
+describe('展开视图：落盘', () => {
   beforeEach(() => settingsState.setValue('defaultWorkspace', WORKSPACE))
 
-  it('files 数组逐份成卡（成功 + 失败并存，顺序不丢）', () => {
+  it('多份文档只渲染一张卡：文件名位置是下拉（不再逐份堆卡）', () => {
     const html = expand({
       uiData: {
         files: [
@@ -260,10 +261,12 @@ describe('展开视图：多文件与落盘', () => {
         ],
       },
     })
-    expect(html.match(/doc-card/g)?.length).toBe(2) // 成功卡 + 失败卡各一张
-    expect(html).toContain('报告.docx')
-    expect(html).toContain('b.zip')
+    expect(html.match(/doc-card/g)?.length).toBe(1) // 只渲当前选中那张
+    expect(html).toContain('doc-file-switcher')
+    expect(html).not.toContain('doc-name') // 文件名改由下拉显示
+    expect(html).toContain('报告.docx') // 下拉当前的标签
     expect(html).toContain('季度报告')
+    expect(html).not.toContain('b.zip') // 未选中的那份不渲染（在下拉里）
   })
 
   it('outTxtFile：已保存 / 失败两种说法', () => {
@@ -285,6 +288,164 @@ describe('展开视图：多文件与落盘', () => {
     })
     expect(bad).toContain('Permission denied')
     expect(bad).toContain('doc-outfile is-failed')
+  })
+})
+
+describe('展开视图：多文档下拉切换', () => {
+  const MULTI = {
+    files: [
+      { ...OK_UI },
+      {
+        file: `${WORKSPACE}/b.xlsx`,
+        ok: true,
+        fileType: 'xlsx',
+        byteSize: 2048,
+        charCount: 42,
+        sheet: '销售',
+        text: 'SHEET_B_TEXT',
+      },
+      {
+        file: `${WORKSPACE}/c.zip`,
+        ok: false,
+        errorKind: 'unsupported',
+        error: 'Document parsing is not supported for .zip',
+        fileType: 'zip',
+      },
+    ],
+  }
+
+  const switcher = (host: HTMLElement) =>
+    host.querySelector('.doc-file-switcher') as HTMLElement | null
+  const options = () =>
+    [...document.querySelectorAll('.custom-select__option')] as HTMLElement[]
+
+  let host: HTMLDivElement
+  let root: ReturnType<typeof createRoot>
+  let errors: string[]
+  let origConsoleError: typeof console.error
+
+  function Harness({ uiData = MULTI }: { uiData?: any }) {
+    return (
+      <div className="host">
+        {inst.getExpandView({
+          useContent,
+          message: msg({ uiData }),
+          expand: true,
+        }) as any}
+      </div>
+    )
+  }
+
+  beforeEach(() => {
+    ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
+    settingsState.setValue('defaultWorkspace', WORKSPACE)
+    errors = []
+    origConsoleError = console.error
+    console.error = (...args: any[]) => {
+      errors.push(args.map((a) => (a && a.message) || String(a)).join(' '))
+    }
+    document.body.innerHTML = ''
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    root = createRoot(host)
+  })
+
+  afterEach(() => {
+    console.error = origConsoleError
+    act(() => root.unmount())
+    host.remove()
+  })
+
+  it('只渲染一张卡；下拉列出全部文档，选中后卡内容跟着换', async () => {
+    await act(async () => {
+      root.render(<Harness />)
+    })
+
+    expect(host.querySelectorAll('.doc-card').length).toBe(1)
+    expect(switcher(host)?.textContent).toBe('报告.docx')
+    expect(switcher(host)?.getAttribute('title')).toBe(FILE)
+    expect(host.querySelector('.doc-text')?.textContent).toContain('季度报告')
+
+    await act(async () => {
+      switcher(host)!.click()
+    })
+    const list = options()
+    expect(list.map((o) => o.textContent)).toEqual(['报告.docx', 'b.xlsx', 'c.zip'])
+    expect(list.map((o) => o.getAttribute('title'))).toEqual([
+      FILE,
+      `${WORKSPACE}/b.xlsx`,
+      `${WORKSPACE}/c.zip`,
+    ])
+
+    await act(async () => {
+      list[1].click()
+    })
+
+    // 仍只有一张卡，且换成了第二份的内容与元信息
+    expect(host.querySelectorAll('.doc-card').length).toBe(1)
+    expect(switcher(host)?.textContent).toBe('b.xlsx')
+    expect(host.querySelector('.doc-text')?.textContent).toContain('SHEET_B_TEXT')
+    expect(host.querySelector('.doc-head')?.textContent).toContain('销售')
+    // 下拉已收起
+    expect(options().length).toBe(0)
+    expect(errors).toEqual([])
+  })
+
+  it('失败项也能被选中：同一位置的下拉，卡片自己报原因', async () => {
+    await act(async () => {
+      root.render(<Harness />)
+    })
+    await act(async () => {
+      switcher(host)!.click()
+    })
+    await act(async () => {
+      options()[2].click()
+    })
+
+    expect(switcher(host)?.textContent).toBe('c.zip')
+    expect(host.querySelector('.doc-card')?.className).toContain('is-failed')
+    expect(host.querySelector('.doc-error')?.textContent).toContain(
+      zh() ? '不支持的文档格式' : 'Unsupported document format',
+    )
+    expect(host.textContent).not.toContain('Document parsing is not supported')
+    // 失败卡没有正文区
+    expect(host.querySelector('.doc-text')).toBeNull()
+    expect(errors).toEqual([])
+  })
+
+  it('切文档换掉正文节点（滚动位置随之归零，不留在上一个文档的偏移上）', async () => {
+    await act(async () => {
+      root.render(<Harness />)
+    })
+
+    const before = host.querySelector('.doc-text') as HTMLElement
+    // jsdom 没有布局，scrollTop 恒为 0：盖一个可写值，模拟「用户已经滚下去了」
+    Object.defineProperty(before, 'scrollTop', {
+      value: 300,
+      writable: true,
+      configurable: true,
+    })
+
+    await act(async () => {
+      switcher(host)!.click()
+    })
+    await act(async () => {
+      options()[1].click()
+    })
+
+    const after = host.querySelector('.doc-text') as HTMLElement
+    expect(after).not.toBe(before)
+    expect(after.scrollTop).toBe(0)
+    expect(errors).toEqual([])
+  })
+
+  it('单份文档不出现下拉，文件名仍是静态文本', async () => {
+    await act(async () => {
+      root.render(<Harness uiData={{ ...OK_UI }} />)
+    })
+    expect(switcher(host)).toBeNull()
+    expect(host.querySelector('.doc-name')?.textContent).toBe('报告.docx')
+    expect(errors).toEqual([])
   })
 })
 

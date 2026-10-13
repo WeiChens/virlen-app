@@ -24,8 +24,18 @@
 //!   「备注」本该在第 3 列）。IR 路径把 span 摊成网格，锚点落左上角、被覆盖位留空，列对齐才是对的。
 //!
 //! **合并单元格**（`MERGEDCELLS` / `gridSpan` / `vMerge`）在网格里只体现为「某个位置是空的」，
-//! 「合并」与「真空」分不出来，而 GFM 表格也没有 span 语法 —— 所以 [`Mentions`] 把合并区域
-//! 作为**一句说明**放进 `DocText::note`（模型与界面都看得到，且不占正文、不影响分页计数）。
+//! 「合并」与「真空」分不出来，而 GFM 表格也没有 span 语法 —— 所以合并区域总得单独讲一句
+//! （[`Mentions`]）。讲在**哪儿**按「模型能不能对上号」分两种：
+//! - **表格**（`xlsx` / `xls`）：正文是「表名一行 + 制表符分列的行」，一句总说明里用 Excel 自己的
+//!   `表名!A1:D1` 就定位得到（`sheet` 选单张表时连前缀都省），所以照旧放进 `DocText::note`
+//!   —— 模型与界面都看得到，且不占正文、不影响分页计数。
+//! - **文稿 / 演示**（`docx` / `doc` / `pptx` / `ppt`）：正文里**没有**任何「第 N 张表」的坐标，
+//!   而一张报告动辄几十张表带合并（实测那份审核报告 39 张）—— 总说明写成「table 7 r1c1-r1c2 …」
+//!   模型根本对不上号。所以改为**就地**在**那张表前面**插一句段落（[`inject_table_notes`]），
+//!   由库自己的渲染器排出位置，坐标与正文同源。
+//!   ⚠️ 完整解释（括号那句）只在**第一张**带合并的表前讲一次 —— 同一份文件里带合并的表能有
+//!   几十张，同一句解释重复几十遍纯是噪音；后面的表只留 `merged cells:` 短开头，条目仍然
+//!   各归自己那张表。
 //!
 //! **图片**是同一类问题里更彻底的一种：渲染器只画文字 —— `xlsx` 的 `<xdr:pic>`（含 Excel 365
 //! 「放在单元格里的图片」）与 `.xls` 的 `MsoDrawingGroup` 里的 BLIP **一个字都不会进正文**，
@@ -39,7 +49,7 @@
 
 use std::borrow::Cow;
 
-use office_oxide::ir::{DocumentIR, Element, Table};
+use office_oxide::ir::{DocumentIR, Element, InlineContent, List, Paragraph, Table, TextSpan};
 use office_oxide::xls::{Sheet, XlsDocument, XlsImage};
 use office_oxide::xlsx::worksheet::WorksheetPicture;
 use office_oxide::xlsx::{Cell, CellRef, CellValue, SharedStringTable, Worksheet, XlsxDocument};
@@ -58,6 +68,16 @@ const MAX_MENTIONS: usize = 8;
 /// 合并说明的开头 —— 先讲清「为什么被覆盖的位置是空的」，后面接区域清单
 const MERGE_LEAD: &str =
     "merged cells show a value only in the region's top-left cell, the rest of its grid positions are empty";
+
+/// 文稿 / 演示的合并说明开头 —— 贴在**同一份文件里第一张**带合并的表前，把「为什么被覆盖的
+/// 位置是空的」这一层一次讲清（此后各表只留 [`TABLE_MERGE_LEAD_SHORT`]）。
+const TABLE_MERGE_LEAD: &str =
+    "merged cells (only the region's top-left cell shows its value, the rest is empty)";
+
+/// 后面各张表的合并说明开头 —— 解释**只讲一次**：同一份文件里带合并的表能有几十张
+/// （实测那份审核报告 39 张），同一句解释重复几十遍纯是噪音；但「这些一个字都没有的空位是合并
+/// 留下的」这层意思每张表都得留一句，否则紧接着的表格还是会被读成「本来就是空的」。
+const TABLE_MERGE_LEAD_SHORT: &str = "merged cells";
 
 /// 说明里引用「被覆盖格里另存的值」时最多显示多少字符
 const MAX_HIDDEN_VALUE_CHARS: usize = 40;
@@ -136,8 +156,8 @@ impl MergeRegion {
 
 /// 一句说明的收集器（合并区域 / 图片共用）：只留前 [`MAX_MENTIONS`] 条的文本，但要数得清总数
 ///
-/// 为什么不是「直接拼一句 String」：整册工作簿的表要能分辨区域属于哪张表（用 Excel 自己的
-/// `表名!A1` 记法），文稿的表要能分辨是第几张表 —— 所以每个来源各自渲染好一句话再交进来。
+/// 为什么不是「直接拼一句 String」：整册工作簿的说明要把多张表的区域混在一句里，得能分辨区域
+/// 属于哪张表（用 Excel 自己的 `表名!A1` 记法），所以每个来源各自渲染好一句话再交进来。
 #[derive(Default)]
 struct Mentions {
     /// 前几条的说明（多出来的只计数）
@@ -338,46 +358,111 @@ fn xls_hidden_value(sheet: &Sheet, region: &MergeRegion) -> Option<String> {
     None
 }
 
-/// 文稿 / 演示里的合并区域 —— 走 IR。
+/// 文稿 / 演示的合并说明：**就地**插到每张表前面 —— 正文、单元格里的嵌套表、文本框、脚注 /
+/// 尾注、列表项、页眉页脚、演讲备注，表能藏的地方都走到。
 ///
-/// ⚠️ 合并信息本身在 IR 里是 `TableCell::col_span` / `row_span`，但**没有**「第几行第几列」，
-/// 所以这里按与库渲染器同一套规则把 span 摊回网格，反推每个区域的坐标。
-fn collect_ir_merges(doc: &DocumentIR, out: &mut Mentions) {
-    let mut tables: Vec<&Table> = Vec::new();
-    for section in &doc.sections {
-        collect_tables(&section.elements, &mut tables);
-    }
-    for (index, table) in tables.iter().enumerate() {
-        for region in table_regions(table) {
-            out.add(region_text(
-                &format!("table {} ", index + 1),
-                &region.rc(),
-                region.spans(),
-                None,
-            ));
+/// 为什么不是一句总说明：总说明只能用 `table N` 指认表，而正文里**没有**「第 N 张表」这个坐标
+/// （实测那份审核报告 39 张表都带合并，一句「table 1 …; and 31 more」全堆在文件最前面，模型对不上号）。
+/// 就地插一句段落则天然贴着那张表，位置由库自己的渲染器排 —— 与正文同源，不会错位。
+///
+/// `explained` 由本函数持有、跨节带着走：**完整解释只讲一次**（第一张带合并的表），
+/// 之后的表一律只留 [`TABLE_MERGE_LEAD_SHORT`]。
+fn inject_table_notes(ir: &mut DocumentIR) {
+    let mut explained = false;
+    for section in &mut ir.sections {
+        inject_notes_in_blocks(&mut section.elements, &mut explained);
+        // 演讲备注（PPTX 讲稿）也是会渲染进正文的块序列
+        if let Some(notes) = &mut section.speaker_notes {
+            inject_notes_in_blocks(notes, &mut explained);
+        }
+        // 页眉页脚要单独走：它们不在 `elements` 里，但渲染时同样在正文中
+        for header in [
+            section.first_page_header.as_mut(),
+            section.header.as_mut(),
+            section.even_page_header.as_mut(),
+            section.first_page_footer.as_mut(),
+            section.footer.as_mut(),
+            section.even_page_footer.as_mut(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            inject_notes_in_blocks(&mut header.content, &mut explained);
         }
     }
 }
 
-/// 按文档顺序收齐所有表格（含单元格里的嵌套表、文本框与脚注里的表）
-fn collect_tables<'a>(elements: &'a [Element], out: &mut Vec<&'a Table>) {
-    for element in elements {
-        match element {
+/// 一批块元素：[`inject_table_notes`] 的递归主体
+///
+/// 顺序：**先算这张表自己那句**再往里走 —— 说明在渲染时排在这张表前面，先算它，
+/// [`TABLE_MERGE_LEAD`] 才会落在渲染顺序上的第一张表（嵌套表在渲染时排在它外层表之后）。
+fn inject_notes_in_blocks(elements: &mut Vec<Element>, explained: &mut bool) {
+    let mut index = 0;
+    while index < elements.len() {
+        // 先只读地把句子算出来，算完才动 `elements`
+        let note = match &elements[index] {
+            Element::Table(table) => table_merge_note(table, *explained),
+            _ => None,
+        };
+        if let Some(text) = note {
+            elements.insert(index, note_paragraph(text));
+            *explained = true;
+            // 说明插在这张表前，表本身挪到了下一个位置
+            index += 1;
+        }
+        // 再处理容器里层的表（嵌套表各自在自己那张表前面补说明）
+        match &mut elements[index] {
             Element::Table(table) => {
-                out.push(table);
-                for row in &table.rows {
-                    for cell in &row.cells {
-                        collect_tables(&cell.content, out);
+                for row in &mut table.rows {
+                    for cell in &mut row.cells {
+                        inject_notes_in_blocks(&mut cell.content, explained);
                     }
                 }
             }
-            Element::TextBox(text_box) => collect_tables(&text_box.content, out),
-            Element::Footnote(note) | Element::Endnote(note) => {
-                collect_tables(&note.content, out)
+            Element::TextBox(text_box) => inject_notes_in_blocks(&mut text_box.content, explained),
+            Element::Footnote(footnote) | Element::Endnote(footnote) => {
+                inject_notes_in_blocks(&mut footnote.content, explained)
             }
+            Element::List(list) => inject_notes_in_list(list, explained),
             _ => {}
         }
+        index += 1;
     }
+}
+
+/// 列表项里的表（Word 允许列表项里嵌表）—— 与 [`inject_notes_in_blocks`] 同一套走法
+fn inject_notes_in_list(list: &mut List, explained: &mut bool) {
+    for item in &mut list.items {
+        inject_notes_in_blocks(&mut item.content, explained);
+        if let Some(nested) = &mut item.nested {
+            inject_notes_in_list(nested, explained);
+        }
+    }
+}
+
+/// 一张表的合并说明（没有合并 → `None`）：`merged cells (…): r1c1-r2c1 spans 2 rows; and 3 more`
+///
+/// 上限是**每张表**各 [`MAX_MENTIONS`] 条（不再是全文件共 8 条）—— 说明贴在表上，就只讲这张表的事。
+/// `explained` = 这份文件里完整解释已经讲过了 → 只留 [`TABLE_MERGE_LEAD_SHORT`]。
+fn table_merge_note(table: &Table, explained: bool) -> Option<String> {
+    let mut mentions = Mentions::default();
+    for region in table_regions(table) {
+        mentions.add(region_text("", &region.rc(), region.spans(), None));
+    }
+    let lead = if explained {
+        TABLE_MERGE_LEAD_SHORT
+    } else {
+        TABLE_MERGE_LEAD
+    };
+    mentions.note(lead)
+}
+
+/// 一句事实 → IR 里的一个普通段落（库自己的渲染器会把它排在表前、独占一行）
+fn note_paragraph(text: String) -> Element {
+    Element::Paragraph(Paragraph {
+        content: vec![InlineContent::Text(TextSpan::plain(text))],
+        ..Default::default()
+    })
 }
 
 /// 一张表的合并区域（`table_regions` 的坐标是**表内** 0-based）。
@@ -797,18 +882,19 @@ fn xls_text(book: &XlsDocument, sheet: Option<&str>) -> Result<OfficeText, Parse
 
 /// 文稿 / 演示（`docx` / `doc` / `pptx` / `ppt`）的文本
 fn doc_text(doc: &Document, sheet: Option<&str>) -> OfficeText {
-    let mut merges = Mentions::default();
     // 文稿 / 演示：Markdown 必须由 **IR** 渲染 —— 库自带的 `to_markdown()` 不看
     // `gridSpan`，行中间的横向合并会让右边的单元格整体左移（见模块头）
-    let ir = doc.to_ir();
-    collect_ir_merges(&ir, &mut merges);
+    let mut ir = doc.to_ir();
+    // 合并说明**就地**插到每张表前面（写进 `note` 的话只能写「table 7 …」，
+    // 而正文里没有这个坐标，模型对不上号 —— 见模块头）
+    inject_table_notes(&mut ir);
     // Word / PowerPoint 没有「工作表」这个概念 —— 不静默吞掉参数，而是要说明
     let ignored =
         sheet.map(|_| "Parameter \"sheet\" only applies to .xlsx/.xls — ignored".to_string());
     OfficeText {
         text: ir.to_markdown(),
         sheets: Vec::new(),
-        note: join_notes(&[ignored, merges.note(MERGE_LEAD)]),
+        note: ignored,
         sheet: None,
     }
 }
@@ -1068,8 +1154,17 @@ mod tests {
             "「备注」必须留在第 3 列：{}",
             out.text
         );
-        let note = out.note.expect("横向合并必须给出一句说明");
-        assert!(note.contains("table 1 r1c1-r1c2 spans 2 columns"), "{note}");
+        // 说明**就地**落在这张表前面（不再堆到文件最前面 —— 模型看不到「table 1」这种坐标）
+        assert_eq!(out.note, None, "文稿的合并说明不再进 note：{:?}", out.note);
+        let lines: Vec<&str> = out.text.lines().collect();
+        let marker = merge_marker(&lines);
+        assert_eq!(
+            lines[marker],
+            "merged cells (only the region's top-left cell shows its value, the rest is empty): \
+             r1c1-r1c2 spans 2 columns"
+        );
+        assert_eq!(lines[marker + 1], "", "说明与表格之间隔一个空行");
+        assert_eq!(lines[marker + 2], "| 合计 |  | 备注 |", "说明要贴着它那张表");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1085,9 +1180,216 @@ mod tests {
             "纵向合并的续格位置要留空：{}",
             out.text
         );
-        let note = out.note.expect("纵向合并必须给出一句说明");
-        assert!(note.contains("table 1 r2c1-r3c1 spans 2 rows"), "{note}");
+        let lines: Vec<&str> = out.text.lines().collect();
+        let marker = merge_marker(&lines);
+        assert!(
+            lines[marker].ends_with(": r2c1-r3c1 spans 2 rows"),
+            "{}",
+            lines[marker]
+        );
+        assert_eq!(lines[marker + 2], "| 地区 | 销量 |", "说明要贴着它那张表");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 三张表，只有**中间**那张带横向合并：说明必须出现在那张表前面，
+    /// 而不是像以前那样全部堆到文件最前面（总说明只能写「table 2 r1c1-r1c2」，
+    /// 而正文里没有这个坐标，模型对不上号）
+    const DOCX_THREE_TABLES_ONE_MERGED: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>第一张表</w:t></w:r></w:p>
+    <w:tbl>
+      <w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>甲</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>乙</w:t></w:r></w:p></w:tc>
+      </w:tr>
+    </w:tbl>
+    <w:p><w:r><w:t>第二张表</w:t></w:r></w:p>
+    <w:tbl>
+      <w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>
+      <w:tr>
+        <w:tc>
+          <w:tcPr><w:gridSpan w:val="2"/></w:tcPr>
+          <w:p><w:r><w:t>合并表头</w:t></w:r></w:p>
+        </w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>丙</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>丁</w:t></w:r></w:p></w:tc>
+      </w:tr>
+    </w:tbl>
+    <w:p><w:r><w:t>第三张表</w:t></w:r></w:p>
+    <w:tbl>
+      <w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>戊</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>己</w:t></w:r></w:p></w:tc>
+      </w:tr>
+    </w:tbl>
+  </w:body>
+</w:document>"#;
+
+    /// 找一个行号：说明应该是正文里**独占一行**的一句
+    fn merge_marker(lines: &[&str]) -> usize {
+        lines
+            .iter()
+            .position(|line| line.starts_with("merged cells"))
+            .expect("应该有一句合并说明")
+    }
+
+    #[test]
+    fn each_table_carries_its_own_merge_note() {
+        let dir = tmp_dir("merge_per_table");
+        let path = write_docx(&dir, DOCX_THREE_TABLES_ONE_MERGED);
+        let out = extract_text(&path, None, "docx").unwrap();
+
+        assert_eq!(out.note, None, "文稿的合并说明不再进 note：{:?}", out.note);
+        let lines: Vec<&str> = out.text.lines().collect();
+        assert_eq!(
+            lines.iter().filter(|l| l.starts_with("merged cells")).count(),
+            1,
+            "只有中间那张表带合并：{:#?}",
+            out.text
+        );
+        let marker = merge_marker(&lines);
+        assert_eq!(lines[marker + 1], "", "说明与表之间隔一个空行");
+        assert_eq!(
+            lines[marker + 2],
+            "| 合并表头 |  |",
+            "说明要贴着它那张表：{}",
+            out.text
+        );
+        // 前面那张表（以及后面的段落）都不该被这句说明带上
+        let before = lines[..marker].join("\n");
+        assert!(before.contains("| 甲 | 乙 |"), "{before}");
+        assert!(!before.contains("merged cells"), "{before}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 完整解释**只讲一次**：第一张带合并的表拿到括号那句，后面的表只留 `merged cells:`；
+    /// 没合并的表一张说明都不给（说明仍然各自贴在自己那张表前）
+    #[test]
+    fn the_explanation_is_given_only_once() {
+        use office_oxide::ir::{Section, TableCell, TableRow};
+
+        let table = |merged: bool| {
+            let cells = if merged {
+                vec![TableCell {
+                    col_span: 2,
+                    ..Default::default()
+                }]
+            } else {
+                vec![TableCell::default()]
+            };
+            Table {
+                rows: vec![TableRow {
+                    cells,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }
+        };
+        let mut ir = DocumentIR {
+            sections: vec![Section {
+                elements: vec![
+                    Element::Table(table(true)),
+                    Element::Table(table(false)),
+                    Element::Table(table(true)),
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        inject_table_notes(&mut ir);
+
+        let elements = &ir.sections[0].elements;
+        let shape: Vec<&str> = elements
+            .iter()
+            .map(|element| match element {
+                Element::Paragraph(_) => "note",
+                Element::Table(_) => "table",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            vec!["note", "table", "table", "note", "table"],
+            "说明各自贴在自己那张表前，没合并的表不给说明"
+        );
+
+        let notes: Vec<String> = elements
+            .iter()
+            .filter_map(|element| match element {
+                Element::Paragraph(paragraph) => {
+                    paragraph.content.iter().find_map(|inline| match inline {
+                        InlineContent::Text(span) => Some(span.text.clone()),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            notes,
+            vec![
+                format!("{TABLE_MERGE_LEAD}: r1c1-r1c2 spans 2 columns"),
+                format!("{TABLE_MERGE_LEAD_SHORT}: r1c1-r1c2 spans 2 columns"),
+            ],
+            "解释只在第一句里，第二句只留短开头且条目一字不少：{notes:?}"
+        );
+        assert_eq!(
+            notes
+                .iter()
+                .filter(|note| note.starts_with(TABLE_MERGE_LEAD))
+                .count(),
+            1,
+            "同一句解释不能讲两遍：{notes:?}"
+        );
+    }
+
+    /// 上限是**每张表**各 [`MAX_MENTIONS`] 条（不再是全文件共 8 条）：
+    /// 说明贴在表上，就只讲这张表的事
+    #[test]
+    fn every_table_has_its_own_mention_cap() {
+        use office_oxide::ir::{TableCell, TableRow};
+
+        let spanned = |rows: usize| Table {
+            rows: (0..rows)
+                .map(|_| TableRow {
+                    cells: vec![TableCell {
+                        col_span: 2,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+
+        let note = table_merge_note(&spanned(MAX_MENTIONS + 4), false).unwrap();
+        assert!(note.starts_with(TABLE_MERGE_LEAD), "{note}");
+        assert!(
+            note.contains(&format!("r{MAX_MENTIONS}c1-r{MAX_MENTIONS}c2 spans 2 columns")),
+            "{note}"
+        );
+        assert!(
+            !note.contains(&format!("r{}c1", MAX_MENTIONS + 1)),
+            "第 9 条只计数、不展开：{note}"
+        );
+        assert!(note.contains("and 4 more"), "{note}");
+
+        // 另一张表各算各的：两张表合起来也不串
+        let other = table_merge_note(&spanned(2), false).unwrap();
+        assert!(other.contains("r1c1-r1c2") && other.contains("r2c1-r2c2"), "{other}");
+        assert!(!other.contains("more"), "{other}");
+        assert!(table_merge_note(&spanned(0), false).is_none(), "没有行就没有说明");
+
+        // 完整解释已经在这个文件里讲过了 → 只留短开头
+        assert_eq!(
+            table_merge_note(&spanned(2), true).unwrap(),
+            format!("{TABLE_MERGE_LEAD_SHORT}: r1c1-r1c2 spans 2 columns; r2c1-r2c2 spans 2 columns")
+        );
     }
 
     /// 没有合并 → 一个字的说明都不加（这句话只该在真有时出现）
@@ -1095,6 +1397,11 @@ mod tests {
     fn documents_without_merges_carry_no_note() {
         let out = extract_text(&fixture("SampleDoc.docx"), None, "docx").unwrap();
         assert_eq!(out.note, None, "实际：{:?}", out.note);
+        assert!(
+            !out.text.contains("merged cells"),
+            "没有合并就不该有说明：{}",
+            out.text
+        );
     }
 
     /// `.xlsx`：区域直接来自 `MERGEDCELLS`（A1 记法），被覆盖格里另存的值得说明
