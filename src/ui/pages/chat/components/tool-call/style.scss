@@ -1421,3 +1421,186 @@
   font-size: 12px;
   color: var(--accent-color, #4f46e5);
 }
+
+/* ==================== parse_document（文档解析） ====================
+   展开卡片：头部 = 文件元信息（类型 / 大小 / 字符数 / 工作表）+ 复制 / 打开动作，
+   下面依次是 note（合并区域说明）/ OCR 摘要 / 截断提示与解析出的正文。
+   正文是等宽 `<pre>`（保留换行与原空格，TSV / 表格的列对齐靠它），超高自滚 ——
+   与 read_file 的代码块同一策略，不允许整条消息被一份文档撑成几十屏。 */
+.doc-view {
+  margin: 4px 20px 20px 28px;
+  width: min(880px, 92%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+  font-size: var(--font-size-sm);
+}
+
+.doc-card {
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 8px;
+  background: var(--bg-primary, #fff);
+  overflow: hidden;
+
+  &.is-failed {
+    border-color: var(--color-error-border, #fecaca);
+  }
+
+  .doc-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: var(--bg-secondary, #f9fafb);
+    border-bottom: 1px solid var(--border-color, #e5e5e5);
+
+    /* 文件名是这张卡的视觉焦点：占满左侧剩余空间，长路径省略 */
+    .doc-name {
+      flex: 1 1 auto;
+      min-width: 0;
+      font-weight: 600;
+      color: var(--text-primary, #1a1a1a);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* 元信息徽标（类型 / 大小 / 字符数 / 工作表）：比标题弱一档，横向不换行 */
+    .doc-badge {
+      flex-shrink: 0;
+      padding: 0 6px;
+      border-radius: 3px;
+      background: var(--tag-bg, #e8e8ed);
+      color: var(--text-secondary, #666);
+      font-size: var(--font-size-xs);
+      line-height: 17px;
+      white-space: nowrap;
+    }
+
+    .doc-head-actions {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-left: 4px;
+    }
+
+    /* 图标按钮（复制文本 / 文件资源管理器打开）：与 skill-source-icon-btn 同款 */
+    .doc-icon-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--text-secondary, #888);
+      cursor: pointer;
+
+      svg {
+        width: 13px;
+        height: 13px;
+      }
+
+      &:hover {
+        background: var(--hover-bg, #f0f0f0);
+        color: var(--accent-color, #4f46e5);
+      }
+    }
+  }
+
+  /* note（合并区域说明）/ OCR 摘要 / 截断提示：弱化的说明行 */
+  .doc-line {
+    padding: 6px 10px 0;
+    font-size: var(--font-size-xs);
+    line-height: 1.6;
+    color: var(--text-secondary, #666);
+    word-break: break-word;
+  }
+
+  /* 失败原因：通栏横幅，颜色一眼可分 */
+  .doc-error {
+    padding: 8px 10px;
+    font-size: var(--font-size-sm);
+    color: var(--color-error-text, #991b1b);
+    background: var(--color-error-bg, #ffebe9);
+    word-break: break-word;
+  }
+
+  /* 解析出的正文：等宽 + 保留换行与原空格；超高只滚它自己 */
+  .doc-text {
+    margin: 6px 0 0;
+    padding: 10px;
+    max-height: 45vh;
+    overflow: auto;
+    background: var(--bg-secondary, #f7f7f8);
+    font-family: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+    font-size: var(--font-size-xs);
+    line-height: 1.6;
+    color: var(--text-primary, #1a1a1a);
+    white-space: pre-wrap;
+    word-break: break-word;
+    user-select: text;
+  }
+}
+
+/* 全文落盘提示（outTxtFile）：与卡片同宽的独立一行（多文件时不属于任何一张卡） */
+.doc-outfile {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary, #666);
+  word-break: break-all;
+
+  &.is-failed {
+    color: var(--color-error-text, #991b1b);
+  }
+}
+
+/* 没有结构化 uiData 的旧消息 / 浏览器回退路径：整段原文 */
+.doc-raw {
+  margin: 4px 20px 20px 28px;
+  padding: 10px;
+  width: min(880px, 92%);
+  max-height: 55vh;
+  overflow: auto;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 8px;
+  background: var(--bg-secondary, #f9fafb);
+  font-size: var(--font-size-xs);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 结果还没回来时的占位卡 */
+.doc-pending {
+  padding: 8px 10px;
+  border: 1px dashed var(--border-color, #e5e5e5);
+  border-radius: 8px;
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary, #999);
+}
+
+/* 折叠态短文本：路径（accent）+ 附加信息（字符数 / +N） */
+.doc-short {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+
+  .doc-short-path {
+    color: var(--accent-color, #4f46e5);
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .doc-short-extra {
+    flex-shrink: 0;
+    font-size: 12px;
+    color: var(--text-tertiary, #999);
+  }
+}
