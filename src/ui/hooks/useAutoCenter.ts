@@ -1,3 +1,4 @@
+import { sleep } from '@/utils/common'
 import { useEffect, useRef } from 'react'
 
 /**
@@ -19,7 +20,7 @@ export function useAutoCenter(open = true) {
     if (!open) return
     const el = rootRef.current
     if (!el) return
-    centerInScrollParent(el)
+    sleep(50).then(() => centerInScrollParent(el))
   }, [open])
 
   return rootRef
