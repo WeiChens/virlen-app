@@ -23,6 +23,7 @@ import {
   splitTrailingCr,
   XtermTerminalBlock,
 } from '@/ui/pages/chat/components/tool-call/XtermTerminal'
+import { showToast } from '@/ui/components/shared/Toast'
 
 /**
  * CodeBlock 依赖 Monaco（jsdom 里无法渲染编辑器），这里换成结构等价的最小替身：
@@ -36,6 +37,9 @@ vi.mock('@/ui/pages/chat/components/message/code-block', () => ({
     </div>
   ),
 }))
+
+/** 终止失败要弹 toast；这里只断言调用，不需要渲染 Toast 本体。 */
+vi.mock('@/ui/components/shared/Toast', () => ({ showToast: vi.fn() }))
 
 /**
  * xterm 在 jsdom 里没有量度/画布，`term.open()` 没有意义；
@@ -1260,5 +1264,89 @@ describe('PendingCrWriter（先导 CR 合并 + 兜底防抖）', () => {
     writer.reset()
     vi.advanceTimersByTime(1000)
     expect(out).toEqual([])
+  })
+})
+
+/**
+ * 终止按钮的**失败反馈**（2026-10 真机缺陷：点「终止」毫无反应、程序照旧）。
+ *
+ * `kill` 回调返回 `false` = 命令不在运行中（还没 spawn / 已结束）—— 引擎侧此时已退化为取消本次运行。
+ * 按钮必须复位（否则永远停在「终止中」，与「点了没反应」是同一个观感）并如实提示。
+ */
+describe('终止按钮：杀不到运行中的命令时不得静默', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+    vi.mocked(showToast).mockClear()
+  })
+  afterEach(() => {
+    toolOutputStore.remove('tc-kill-miss')
+  })
+
+  it('kill 返回 false → 复位为「终止」并提示已改为停止本次运行', async () => {
+    const kill = vi.fn(async () => false)
+    toolOutputStore.register('tc-kill-miss', {
+      toolName: 'execute_script',
+      output: '',
+      kill,
+    })
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(
+        <TerminalView
+          toolCallId="tc-kill-miss"
+          title="Terminal"
+          cmd="node run.js"
+        />,
+      )
+    })
+
+    const btn = host.querySelector('.tool-cmd-kill-btn') as HTMLButtonElement
+    expect(btn).toBeTruthy()
+
+    await act(async () => {
+      btn.click()
+    })
+
+    expect(kill).toHaveBeenCalledTimes(1)
+    expect(showToast).toHaveBeenCalledWith(
+      '这条命令不在运行中，已改为停止本次运行',
+      3000,
+    )
+    // 复位：不得停留在「终止中」
+    expect(host.innerHTML).not.toContain('终止中')
+
+    await act(async () => root.unmount())
+  })
+
+  it('kill 命中（返回 true）→ 保持「终止中」，不弹提示', async () => {
+    const kill = vi.fn(async () => true)
+    toolOutputStore.register('tc-kill-miss', {
+      toolName: 'execute_script',
+      output: '',
+      kill,
+    })
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(
+        <TerminalView
+          toolCallId="tc-kill-miss"
+          title="Terminal"
+          cmd="node run.js"
+        />,
+      )
+    })
+
+    await act(async () => {
+      ;(host.querySelector('.tool-cmd-kill-btn') as HTMLButtonElement).click()
+    })
+
+    expect(host.innerHTML).toContain('终止中')
+    expect(showToast).not.toHaveBeenCalled()
+
+    await act(async () => root.unmount())
   })
 })

@@ -76,6 +76,11 @@ pub async fn do_llm_round(
         .cloned()
         .collect();
 
+    // ⚠️ 每次请求组装前清洗工具协议：同 `tool_call_id` 重复的 tool 返回、无 id 的孤儿 tool 消息
+    // 都会让服务端直接 400（`tool must be a response to a preceding message with 'tool_calls'`）。
+    // 这是**唯一收口**（GUI / CLI / 桥接 Provider 同一条路），只修请求副本、不回写库。
+    let (messages, repair) = super::message_protocol::repair_tool_protocol(messages);
+
     let request = ChatRequest {
         model: model.clone(),
         messages,
@@ -92,6 +97,19 @@ pub async fn do_llm_round(
     };
 
     let trace_id = crate::telemetry::get_session_trace(session_id).unwrap_or_default();
+    if repair.changed() {
+        crate::telemetry::track(
+            "engine.protocol.repair",
+            json!({
+                "trace_id": trace_id,
+                "round": round,
+                "removed_duplicate": repair.removed_duplicate,
+                "removed_orphan": repair.removed_orphan,
+                "moved": repair.moved,
+                "filled": repair.filled,
+            }),
+        );
+    }
     let round_started = now_ms();
     crate::telemetry::track(
         "engine.round.start",

@@ -166,6 +166,7 @@ pub(crate) async fn start_background_service_tool(
                 ctx.session_id,
                 "confirm_command_native",
                 data,
+                ctx.cancel,
             )
             .await
             .map_err(|e| format!("error: {e}"))?;

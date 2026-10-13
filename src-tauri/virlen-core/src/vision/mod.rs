@@ -19,6 +19,7 @@ use once_cell::sync::Lazy;
 use quasivision::pipeline::PipelineConfig;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 /// 模型就位判据：探测 `quasivision_models/ocr-models/<该文件>` 是否存在。
@@ -193,15 +194,50 @@ pub fn analyze(
     analyze_at(&dir, img_bytes, is_web)
 }
 
+/// 取消时的统一错误文案。
+///
+/// 调用方（原生工具）据此把结果改写成取消口径，**不要**带成 `Vision Error: …` 前缀 ——
+/// 取消不是推理失败。
+pub const CANCELLED_MSG: &str = "Cancelled by the user";
+
+/// 「调用方没有取消诉求」时传它的哨兵（命令壳 `vision_analyze` / `analyze_path` 走这条）。
+static NEVER_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+/// 协作式取消检查：阻塞线程在每个推理阶段之间查一次，命中即退出。
+fn ensure_not_cancelled(cancel: &AtomicBool) -> Result<(), String> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(CANCELLED_MSG.to_string());
+    }
+    Ok(())
+}
+
 /// 已解析出模型目录后的推理入口（`spawn_blocking` 友好：只吃 `&Path` 与字节）。
 pub fn analyze_at(
     models_dir: &Path,
     img_bytes: &[u8],
     is_web: bool,
 ) -> Result<VisionAnalyzeResult, String> {
+    analyze_at_cancellable(models_dir, img_bytes, is_web, &NEVER_CANCELLED)
+}
+
+/// 可取消的推理入口。
+///
+/// ⚠️ 取消为什么是**两层**（缺一层都是「点了停止没反应」）：
+/// - 本函数的 `cancel` 标志：ONNX 单次推理内部不可中断，只能在**阶段之间**退出 ——
+///   它保证取消后阻塞线程尽快收尾、不白烧 CPU；
+/// - 调用方（`native_tools/vision/vision_analyze.rs`）的 `tokio::select!`：让工具**立刻**返回结果，
+///   引擎马上收敛、UI 立刻有反馈（否则要等当前阶段跑完，OCR 阶段是秒级到十几秒）。
+pub fn analyze_at_cancellable(
+    models_dir: &Path,
+    img_bytes: &[u8],
+    is_web: bool,
+    cancel: &AtomicBool,
+) -> Result<VisionAnalyzeResult, String> {
+    // 首次加载模型本身可能很慢（数秒）→ 先查一次，避免「刚点停止又在加载模型」
+    ensure_not_cancelled(cancel)?;
     // 用 Drop guard 保证「无论成功 / 失败 / panic 展开」都归还引用计数
     let _guard = load_models(models_dir)?;
-    run_analysis(models_dir, img_bytes, is_web)
+    run_analysis(models_dir, img_bytes, is_web, cancel)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -315,6 +351,7 @@ fn run_analysis(
     models_dir: &Path,
     img_bytes: &[u8],
     is_web: bool,
+    cancel: &AtomicBool,
 ) -> Result<VisionAnalyzeResult, String> {
     let models_dir_str = models_dir.to_string_lossy().to_string();
 
@@ -338,16 +375,19 @@ fn run_analysis(
             e
         ))?;
     let (img_h, img_w) = (img.height(), img.width());
+    ensure_not_cancelled(cancel)?;
 
     // ── UI 组件检测 ──
     let comps = cfg
         .detect_components(&img)
         .map_err(|e| format!("UI detection failed: {}", e))?;
+    ensure_not_cancelled(cancel)?;
 
     // ── OCR ──
     let text_result = cfg
         .run_ocr(&img)
         .map_err(|e| format!("OCR failed: {}", e))?;
+    ensure_not_cancelled(cancel)?;
 
     // ── 合并 ──
     let mut elements = cfg
@@ -357,6 +397,7 @@ fn run_analysis(
     // ── 图标识别 ──
     cfg.classify_icons(&img, &mut elements)
         .map_err(|e| format!("Icon classification failed: {}", e))?;
+    ensure_not_cancelled(cancel)?;
 
     quasivision::compute_prominence(&mut elements);
 
@@ -398,7 +439,8 @@ fn run_analysis(
     let img_shape = (img_h, img_w);
     let ui_tree_text = quasivision::to_tree_text_string(&elements, img_shape);
 
-    // ── 物体检测 ──
+    // ── 物体检测 ──（本函数里最慢的一步，调用前再查一次）
+    ensure_not_cancelled(cancel)?;
     let detections = cfg.detect_objects(&img);
     let roots = quasivision::build_detection_tree(&detections);
 
@@ -585,5 +627,16 @@ mod tests {
         assert!(!is_web_hint("shot.png"));
         // 大小写不敏感（原实现先 to_lowercase）
         assert!(is_web_hint("MyPage.PNG"));
+    }
+
+    /// 取消预检必须在 `load_models` **之前**：模型目录故意指向不存在的路径，
+    /// 若预检失效这里会拿到 "Failed to load models: …" 而不是取消文案。
+    #[test]
+    fn cancellable_entry_honours_pre_set_cancel_flag() {
+        let cancel = AtomicBool::new(true);
+        match analyze_at_cancellable(Path::new("/nonexistent/models"), b"x", false, &cancel) {
+            Err(e) => assert_eq!(e, CANCELLED_MSG),
+            Ok(_) => panic!("取消标志已置位时必须直接返回取消错误"),
+        }
     }
 }

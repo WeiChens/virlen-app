@@ -7,6 +7,7 @@
 //! native_tools/
 //! ├── mod.rs                 统一结果 NativeToolOutcome / 上下文 NativeToolCtx / 分发 execute_native_tool
 //! ├── common.rs              跨分类公共：参数取值辅助 arg_*、安全路径解析 resolve_safe_path / is_path_allowed
+//! ├── heavy.rs               端侧「重活」统一入口：并发闸 + 线程降优先级 + 两层取消（vision / 文档解析共用）
 //! ├── execute/               代码执行（2）
 //! │   ├── common/           终端输出解码 / 命令解析与风险分类 / 运行中命令注册表 / run_command_native
 //! │   │   ├── decode.rs     终端输出解码（UTF-8 优先 / GBK 兜底 / 有界缓冲）
@@ -74,6 +75,7 @@
 
 mod chat;
 mod common;
+mod heavy;
 pub(crate) mod execute;
 mod file;
 mod knowledge_base;

@@ -178,7 +178,7 @@ pub(crate) async fn execute_command_tool(
 
         let payload = ctx
             .bridge
-            .request_user_interaction(ctx.sink, ctx.session_id, "confirm_command_native", data)
+            .request_user_interaction(ctx.sink, ctx.session_id, "confirm_command_native", data, ctx.cancel)
             .await
             .map_err(|e| format!("error: {}", e))?;
 
@@ -216,7 +216,8 @@ pub(crate) async fn execute_command_tool(
                 Ok(NativeToolOutcome::Error { content, ui_data })
             }
             BridgeInteractionResult::Shelved => Ok(NativeToolOutcome::Shelved),
-            // 用户拒绝授权 / Esc 取消 → 未执行任何命令。
+            // 用户拒绝授权 / Esc 取消 / **本次运行被取消**（用户在等待期间点了「停止」，见
+            // `bridge::request_user_interaction` 的取消分支）→ 未执行任何命令。
             // ⚠️ 同样走 Error 通道（status=failed），与 JS 桥路径（`tool_executor.rs::handle_user_interaction`）
             // 和前端回退路径保持一致 —— 避免「拒绝授权」被渲染成绿色成功。
             BridgeInteractionResult::Cancelled => {

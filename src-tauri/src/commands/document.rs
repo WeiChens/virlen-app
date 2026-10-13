@@ -76,7 +76,7 @@ pub async fn cmd_parse_document(
     };
 
     let targets: Vec<ParseTarget> = inputs.into_iter().map(ParseTarget::Path).collect();
-    let agg = parse_targets(&targets, &opts, out_txt_file.as_deref()).await;
+    let agg = parse_targets(&targets, &opts, out_txt_file.as_deref(), None).await;
     Ok(ParsedDocumentResult {
         content: agg.content,
         ui_data: agg.ui_data,

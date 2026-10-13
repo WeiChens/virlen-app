@@ -729,6 +729,7 @@
   "终止执行": "Kill Process",
   "终止": "Kill",
   "终止中": "Stopping…",
+  "这条命令不在运行中，已改为停止本次运行": "This command is not running; the current run was stopped instead",
   "沙盒·写隔离": "Sandbox · write isolation",
   "沙盒·只读": "Sandbox · read-only",
   "无沙盒·已授权": "No sandbox · approved",

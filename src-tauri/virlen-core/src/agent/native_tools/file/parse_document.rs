@@ -19,11 +19,12 @@
 //! `ocrImages`（选填，PDF）：扫描件没有文字层，字全在图片里 —— 端侧 OCR（quasivision，**图片不出本机**）
 //! 把图里的字读出来当正文。三态语义见 [`ocr_options`]，口径与 GUI 命令共用同一条链。
 
+use crate::agent::cancellation::CancellationToken;
 use crate::agent::host::HostEnv;
 use crate::agent::native_tools::common::{arg_bool, arg_i64, arg_str, arg_str_array, resolve_safe_path};
+use crate::agent::native_tools::heavy;
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
 use crate::doc_parse::{self, DocText, OcrOptions, OcrSummary, ParseError, ParseOptions};
-use crate::agent::cancellation::CancellationToken;
 use serde_json::{json, Value};
 
 use super::common::format_size;
@@ -151,8 +152,12 @@ pub async fn parse_targets(
     targets: &[ParseTarget],
     opts: &ParseOptions,
     out_txt_file: Option<&str>,
+    cancel: Option<&CancellationToken>,
 ) -> ParseAggregate {
     let single = targets.len() == 1;
+    // 没有取消诉求的调用方（GUI 命令）用「永不取消」的令牌，避免下面到处 `Option` 分支
+    let no_cancel: CancellationToken = (*heavy::NEVER_CANCELLED).clone();
+    let cancel = cancel.unwrap_or(&no_cancel);
     // 要落盘才把全文带回来 —— 全文开关只在这里推导（调用方不要自己设 `full_text`）
     let parse_opts = ParseOptions {
         full_text: out_txt_file.is_some(),
@@ -174,19 +179,25 @@ pub async fn parse_targets(
                     "error": message,
                 }));
             }
-            ParseTarget::Path(full_path) => match parse_one(full_path, &parse_opts).await {
-                Ok(parsed) => {
-                    if let Some(full) = parsed.full_text {
-                        fulls.push(full);
+            ParseTarget::Path(full_path) => {
+                // 多份文档之间也要能取消：外层 select 已能立刻返回，这里避免再白启动后续解析
+                if cancel.is_cancelled() {
+                    break;
+                }
+                match parse_one(full_path, &parse_opts, cancel).await {
+                    Ok(parsed) => {
+                        if let Some(full) = parsed.full_text {
+                            fulls.push(full);
+                        }
+                        blocks.push(parsed.content);
+                        uis.push(parsed.ui);
                     }
-                    blocks.push(parsed.content);
-                    uis.push(parsed.ui);
+                    Err((message, ui)) => {
+                        errors.push(message);
+                        uis.push(ui);
+                    }
                 }
-                Err((message, ui)) => {
-                    errors.push(message);
-                    uis.push(ui);
-                }
-            },
+            }
         }
     }
 
@@ -270,15 +281,61 @@ async fn write_full_text(out: &str, fulls: Vec<String>) -> OutFile {
     }
 }
 
-/// 解析一份：读元信息 → `spawn_blocking` 跑解析（同步 CPU 活，别占住异步运行时）→ 组装
-async fn parse_one(full_path: &str, opts: &ParseOptions) -> Result<ParsedOne, (String, Value)> {
+/// 取消时的统一结果（文案与 `web_fetch` / `vision_analyze` 同口径）。
+///
+/// ⚠️ 取消为什么只能在**工具层**兜：解析走第三方同步库（`pdf-extract` / `office_oxide`），内部没有
+/// 检查点，`spawn_blocking` 的 JoinHandle 丢掉也不会停掉已开跑的任务。这里 select 的价值是
+/// **让工具立刻返回、引擎立刻收敛**（用户点「停止」立即有反应），而不是省 CPU；能协作退出的
+/// 内层只有 OCR 的逐图循环（见 `ocr_options` 收到的 `ctx.cancel`）。
+fn cancelled(targets: &[ParseTarget]) -> Result<NativeToolOutcome, String> {
+    let what = match targets {
+        [ParseTarget::Path(p)] => p.clone(),
+        other => format!("{} file(s)", other.len()),
+    };
+    Ok(NativeToolOutcome::error(format!(
+        "parse_document was cancelled: {}",
+        what
+    )))
+}
+
+/// 解析一份：读元信息 → 重活入口跑解析（同步 CPU 活，别占住异步运行时）→ 组装
+async fn parse_one(
+    full_path: &str,
+    opts: &ParseOptions,
+    cancel: &CancellationToken,
+) -> Result<ParsedOne, (String, Value)> {
     let byte_size = std::fs::metadata(full_path).map(|m| m.len()).unwrap_or(0);
     let target = full_path.to_string();
     let opts_owned = opts.clone();
-    let parsed = tokio::task::spawn_blocking(move || doc_parse::parse(&target, &opts_owned)).await;
+    // ⚠️ 解析走第三方同步库（`pdf-extract` / `office_oxide` 内部没有检查点），所以取消靠两层：
+    // ① `run_heavy` 立刻返回、丢弃结果（引擎马上收敛）；② OCR 逐图循环里的取消标志
+    //    （`ocr_options` 已把 `ctx.cancel` 传进 `doc_parse`，这是唯一能协作退出的内层）。
+    let heavy_outcome =
+        heavy::run_heavy(cancel, move |_flag| doc_parse::parse(&target, &opts_owned)).await;
+    let parsed = match heavy_outcome {
+        // 被取消：不算解析失败，但要让调用链知道这一份没结果
+        heavy::Heavy::Cancelled => {
+            return Err((
+                format!("{full_path} — cancelled by the user"),
+                json!({
+                    "file": full_path,
+                    "ok": false,
+                    "errorKind": "cancelled",
+                    "error": "cancelled by the user",
+                }),
+            ))
+        }
+        heavy::Heavy::Panicked(e) => {
+            return Err((
+                format!("{full_path} — internal error: {e}"),
+                json!({ "file": full_path, "ok": false, "errorKind": "internal", "error": e }),
+            ))
+        }
+        heavy::Heavy::Done(v) => v,
+    };
 
     match parsed {
-        Ok(Ok(doc)) => {
+        Ok(doc) => {
             let content = render_block(full_path, byte_size, opts, &doc);
             let ui = ui_data(full_path, byte_size, opts, &doc);
             Ok(ParsedOne {
@@ -287,24 +344,20 @@ async fn parse_one(full_path: &str, opts: &ParseOptions) -> Result<ParsedOne, (S
                 full_text: doc.full_text,
             })
         }
-        Ok(Err(err)) => {
+        Err(err) => {
             let message = err.message();
             Err((
                 format!("{full_path} — {message}"),
                 error_ui_data(full_path, byte_size, &err),
             ))
         }
-        Err(join_err) => {
-            let message = format!("internal error: {join_err}");
-            Err((
-                format!("{full_path} — {message}"),
-                json!({ "file": full_path, "ok": false, "errorKind": "internal", "error": message }),
-            ))
-        }
     }
 }
 
 /// 工具入口：安全校验（黑名单 > 白名单 > 工作目录）→ 组装
+///
+/// 可取消：预检在最前（已点停止就不再启动解析），解析过程整体包在 `tokio::select!` 里
+/// （取消时立刻返回，见 [`cancelled`] 的说明）。
 pub(crate) async fn parse_document_tool(
     ctx: &NativeToolCtx<'_>,
     args: &Value,
@@ -346,7 +399,15 @@ pub(crate) async fn parse_document_tool(
         paths.iter().map(|p| resolve_target(ctx, p)).collect()
     };
 
-    let agg = parse_targets(&targets, &opts, out_txt_file.as_deref()).await;
+    // 取消预检：已经点了停止就不该再启动一次（可能几十秒的）文档解析
+    if ctx.cancel.is_cancelled() {
+        return cancelled(&targets);
+    }
+
+    let agg = tokio::select! {
+        _ = ctx.cancel.cancelled() => return cancelled(&targets),
+        agg = parse_targets(&targets, &opts, out_txt_file.as_deref(), Some(ctx.cancel)) => agg,
+    };
     if agg.failed {
         return Ok(NativeToolOutcome::error_with_ui(agg.content, agg.ui_data));
     }
@@ -516,13 +577,21 @@ mod tests {
 
     /// 真正跑一次工具（唯一的上下文组装点）
     async fn call(sec: NativeToolSecurity, args: Value) -> Result<NativeToolOutcome, String> {
+        call_with_cancel(sec, args, &CancellationToken::new()).await
+    }
+
+    /// 同上，但用调用方给的令牌（取消行为要被测到）
+    async fn call_with_cancel(
+        sec: NativeToolSecurity,
+        args: Value,
+        cancel: &CancellationToken,
+    ) -> Result<NativeToolOutcome, String> {
         let sink = TestEventSink::new();
-        let cancel = CancellationToken::new();
         let bridge = AgentBridgeState::default();
         let ctx = NativeToolCtx {
             session_id: "s_parse",
             tool_call_id: "tc_parse",
-            cancel: &cancel,
+            cancel,
             sink: &sink,
             bridge: &bridge,
             security: &sec,
@@ -733,7 +802,7 @@ mod tests {
         std::fs::write(&file, "x,y\n").unwrap();
 
         let targets = vec![ParseTarget::Path(file.to_string_lossy().replace('\\', "/"))];
-        let agg = parse_targets(&targets, &ParseOptions::default(), None).await;
+        let agg = parse_targets(&targets, &ParseOptions::default(), None, None).await;
         assert!(!agg.failed);
         assert!(agg.content.contains("x,y"), "{}", agg.content);
         assert_eq!(agg.ui_data.get("ok").and_then(|v| v.as_bool()), Some(true));
@@ -978,7 +1047,7 @@ mod tests {
             ..Default::default()
         };
         let targets = vec![ParseTarget::Path(file.to_string_lossy().replace('\\', "/"))];
-        let agg = parse_targets(&targets, &opts, None).await;
+        let agg = parse_targets(&targets, &opts, None, None).await;
 
         assert!(agg.failed);
         assert!(
@@ -1043,5 +1112,30 @@ mod tests {
             Some(&json!([3, 4]))
         );
         assert_eq!(ui.pointer("/ocr/skipped"), Some(&json!(1)));
+    }
+
+    /// 取消预检：已取消时不解析，直接回取消口径（与 `web_fetch` / `vision_analyze` 同形）
+    #[tokio::test]
+    async fn cancelled_before_start_returns_cancel_text() {
+        let dir = tmp_dir("cancelled");
+        std::fs::write(dir.join("数据.csv"), "姓名,年龄\n张三,30\n").unwrap();
+        let sec = test_security(dir.to_str().unwrap());
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        let outcome = call_with_cancel(sec, json!({ "path": "数据.csv" }), &cancel)
+            .await
+            .expect("取消不是协议级错误");
+        match outcome {
+            NativeToolOutcome::Error { content, .. } => {
+                assert!(
+                    content.starts_with("parse_document was cancelled:"),
+                    "content: {content}"
+                );
+                assert!(!content.contains("姓名"), "取消时不该带回正文：{content}");
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

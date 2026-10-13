@@ -186,9 +186,7 @@ INSERT INTO messages (
                     )
                     .map_err(|e| format!("准备消息写入失败: {}", e))?;
                 for m in &messages {
-                    let params = message_insert_params(&session_id, m)?;
-                    stmt.execute(rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())))
-                        .map_err(|e| format!("写入消息失败: {}", e))?;
+                    write_message(&tx, &mut stmt, &session_id, m)?;
                 }
             }
             tx.commit().map_err(|e| format!("提交事务失败: {}", e))?;
@@ -266,9 +264,7 @@ INSERT INTO messages (
                     )
                     .map_err(|e| format!("准备消息写入失败: {}", e))?;
                 for m in &messages {
-                    let params = message_insert_params(&session_id, m)?;
-                    stmt.execute(rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())))
-                        .map_err(|e| format!("写入消息失败: {}", e))?;
+                    write_message(&tx, &mut stmt, &session_id, m)?;
                 }
             }
             tx.commit().map_err(|e| format!("提交事务失败: {}", e))?;
@@ -757,9 +753,7 @@ ON CONFLICT(id) DO UPDATE SET
                     )
                     .map_err(|e| format!("准备消息写入失败: {}", e))?;
                 for m in &messages {
-                    let params = message_insert_params(&session_id, m)?;
-                    stmt.execute(rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())))
-                        .map_err(|e| format!("写入消息失败: {}", e))?;
+                    write_message(&tx, &mut stmt, &session_id, m)?;
                 }
             }
             tx.commit().map_err(|e| format!("提交事务失败: {}", e))?;
@@ -768,4 +762,57 @@ ON CONFLICT(id) DO UPDATE SET
         .await
         .map_err(|e| format!("DB task join error: {}", e))?
     }
+}
+
+/// 写入单条消息；**同一 `tool_call_id` 的 tool 返回在库里只允许一条**。
+///
+/// ⚠️ 为什么必须堵在写入侧：同一条 `assistant(tool_calls)` 的 tool 返回可能被写两次 —— 前端补的
+/// 「程序中断」占位先落库、引擎随后才落真实结果，两者 **id 不同**，`ON CONFLICT(id)` 的 upsert
+/// 拦不住 → 同一 `tool_call_id` 两条 tool 消息 → 下次请求必 400
+/// （`Messages with role 'tool' must be a response to a preceding message with 'tool_calls'`，见 §11.50）。
+///
+/// 后写覆盖先写（真实结果晚于占位，语义正确），且**保留原行的 id / rowid**：前端事件路径
+/// （`messages.ts::addSessionMessage`）按 toolCallId 覆盖时同样保留既有 id，两边口径一致；
+/// 被重写的消息也不会因此被挪到列表末尾（与 `reappend_keeps_message_order` 同一条约定）。
+///
+/// `text_plain` 也在覆盖列内，`messages_fts_au` 触发器会把 FTS 索引一并同步。
+fn write_message(
+    tx: &rusqlite::Transaction<'_>,
+    stmt: &mut rusqlite::Statement<'_>,
+    session_id: &str,
+    message: &Message,
+) -> Result<(), String> {
+    if message.role == "tool" {
+        if let Some(tcid) = message.tool_call_id.as_deref().filter(|s| !s.is_empty()) {
+            let params = message_insert_params(session_id, message)?;
+            // 覆盖列 = insert 的全部可变列（id / session_id / tool_call_id 是身份，不动）
+            let mut vals: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(16);
+            for i in [3usize, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17] {
+                vals.push(params[i].as_ref());
+            }
+            let sid = session_id.to_string();
+            let tcid = tcid.to_string();
+            vals.push(&sid);
+            vals.push(&tcid);
+            let overwritten = tx
+                .execute(
+                    "UPDATE messages SET \
+                       content=?1, tool_calls=?2, reasoning_content=?3, is_error=?4, \
+                       elapsed_ms=?5, reasoning_elapsed_ms=?6, ui_data=?7, timestamp=?8, \
+                       streaming=?9, model=?10, usage=?11, \
+                       image_vision_analyze_optimize=?12, image_vision_analyze_result=?13, \
+                       text_plain=?14 \
+                     WHERE session_id=?15 AND role='tool' AND tool_call_id=?16",
+                    rusqlite::params_from_iter(vals.iter().copied()),
+                )
+                .map_err(|e| format!("覆盖消息失败: {}", e))?;
+            if overwritten > 0 {
+                return Ok(());
+            }
+        }
+    }
+    let params = message_insert_params(session_id, message)?;
+    stmt.execute(rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())))
+        .map_err(|e| format!("写入消息失败: {}", e))?;
+    Ok(())
 }

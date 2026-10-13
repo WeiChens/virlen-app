@@ -16,6 +16,7 @@ pub mod iteration;
 pub mod llm_loop;
 pub mod llm_round;
 pub mod memory;
+pub mod message_protocol;
 pub mod native_tools;
 pub mod process_tree;
 pub mod prompts;

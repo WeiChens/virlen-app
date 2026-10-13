@@ -409,6 +409,7 @@ async fn execute_single_step(
                         interaction_data,
                         sink,
                         bridge,
+                        cancel,
                     )
                     .await
                 }
@@ -464,6 +465,7 @@ async fn execute_single_step(
                 interaction_data,
                 sink,
                 bridge,
+                cancel,
             )
             .await
         }
@@ -471,6 +473,9 @@ async fn execute_single_step(
 }
 
 /// 处理用户交互（等待 / 暂存 / 取消）— 通过 JS 桥弹窗
+///
+/// `cancel`：本次运行的取消令牌 —— 用户点「停止」时交互等待要能结束（否则 run 永久挂在这一步，
+/// 见 `bridge::request_user_interaction`）。
 async fn handle_user_interaction(
     session_id: &str,
     step: &mut ToolStep,
@@ -478,6 +483,7 @@ async fn handle_user_interaction(
     interaction_data: Value,
     sink: &dyn EventSink,
     bridge: &AgentBridgeState,
+    cancel: &CancellationToken,
 ) -> String {
     let mut data = interaction_data.clone();
     if let Value::Object(map) = &mut data {
@@ -485,7 +491,7 @@ async fn handle_user_interaction(
     }
 
     match bridge
-        .request_user_interaction(sink, session_id, interaction_type, data)
+        .request_user_interaction(sink, session_id, interaction_type, data, cancel)
         .await
     {
         Ok(payload) => match BridgeInteractionResult::parse(&payload) {

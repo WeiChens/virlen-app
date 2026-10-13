@@ -12,6 +12,7 @@ import { XtermTerminalBlock } from './XtermTerminal'
 import { TerminalConfirmBlock } from './TerminalConfirmBlock'
 import { SandboxBadge } from './SandboxBadge'
 import { useAutoCenter } from '@/ui/hooks/useAutoCenter'
+import { showToast } from '@/ui/components/shared/Toast'
 
 /**
  * 终端输出块 —— execute_command / execute_script 的运行态与完成态共用，
@@ -333,10 +334,20 @@ export function TerminalView({
     commentEvent.emit('requestScrollToBottom')
   }, [running])
 
-  const handleKill = () => {
+  const handleKill = async () => {
     if (!entry?.kill || killing) return
     setKilling(true)
-    entry.kill()
+    try {
+      // 回调返回 `false` = 命令不在运行中（还没 spawn / 已结束）—— 引擎侧已退化为取消本次运行。
+      // 不复位的话按钮会永远停在「终止中」，与「点了没反应」是同一个观感。
+      const hit = await entry.kill()
+      if (hit === false) {
+        setKilling(false)
+        showToast(t('这条命令不在运行中，已改为停止本次运行'), 3000)
+      }
+    } catch {
+      setKilling(false)
+    }
   }
 
   // Step 2 ①：终端内确认 —— 命令尚未执行，渲染可编辑命令行而非 xterm。

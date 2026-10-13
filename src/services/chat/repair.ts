@@ -64,15 +64,19 @@ export async function prepareMessagesForSend(
 }
 
 /**
- * 检测并修复消息格式异常：为悬空 tool_call_id 补一条占位 tool 消息（内容「程序中断」），
- * 让历史重新满足协议约束；错位的返回消息则归位。
+ * 检测并修复消息格式异常：
+ * - 为悬空 tool_call_id 补一条占位 tool 消息（内容「程序中断」）；
+ * - 同一 tool_call_id 的重复 tool 返回只留真实结果；
+ * - 没有 tool_call_id 的孤儿 tool 消息丢弃；
+ * - 错位的返回消息归位。
  *
- * 只扫首/尾窗口（各 REPAIR_SCAN_WINDOW 条，见 message-repair.ts），不扫全量历史；
+ * 补占位/归位只扫首/尾窗口（各 REPAIR_SCAN_WINDOW 条，见 message-repair.ts），不扫全量历史；
+ * 去重/丢孤儿是全量线性扫描（重复项就在尾部，但与窗口无关）。
  * 结果先落内存（UI 立即可见）再按后缀替换回写 SQLite（只动已加载的连续后缀窗口）。
  *
  * @param isWorking 会话回复中则跳过（不打断进行中的 tool 循环）
  * @param phase     埋点：switch=切换会话触发，send=发送前触发
- * @returns 本次补入 + 归位的消息条数
+ * @returns 本次修复（补入 + 归位 + 去重 + 丢孤儿）的消息条数
  */
 export function checkAndRepairMessageList(
   sessionId: string,
@@ -90,12 +94,18 @@ export function checkAndRepairMessageList(
   setSessionMessagesInPlace(sessionId, result.messages)
   flushRepairedMessages(sessionId)
 
-  const repairedCount = result.inserted + result.moved
+  const repairedCount =
+    result.inserted +
+    result.moved +
+    result.removedDuplicates +
+    result.removedOrphans
   track('session.repair', {
     session_id: hashText(sessionId),
     repaired_count: repairedCount,
     inserted_count: result.inserted,
     moved_count: result.moved,
+    removed_duplicate_count: result.removedDuplicates,
+    removed_orphan_count: result.removedOrphans,
     scan_window: REPAIR_SCAN_WINDOW,
     phase,
   })

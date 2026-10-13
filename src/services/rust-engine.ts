@@ -94,6 +94,40 @@ function ptyLiveEnabled(): boolean {
   return platformSnapshot() === 'windows'
 }
 
+/**
+ * 注册「终止」入口：先按 toolCallId 杀运行中的命令，杀不到再退化为取消本次运行。
+ *
+ * ⚠️ `agent_kill_command` 只认「已经 spawn 并登记在运行中命令表」的命令：命令还卡在审批 / 沙盒准备
+ * 阶段时它返回 `false`。前端原先静默吞掉 → 用户看到的就是「点了终止毫无反应、程序照旧」，而那种
+ * 情况下唯一的出路本来就是取消 run（run 正卡在等交互，见 `bridge::request_user_interaction` 的取消
+ * 分支）。因此 `false` 时补一次 `agent_cancel`，并把命中结果返回给调用方（按钮据此复位，不再骗人）。
+ *
+ * @returns `true` = 已请求杀进程；`false` = 命令不在运行中，已退化为取消本次运行
+ */
+function registerToolKill(
+  toolCallId: string,
+  toolName: string,
+  sessionId: string,
+): void {
+  toolOutputStore.register(toolCallId, {
+    toolName,
+    output: '',
+    pty: ptyLiveEnabled(),
+    kill: async () => {
+      let hit = false
+      try {
+        hit = await invoke<boolean>('agent_kill_command', { toolCallId })
+      } catch {
+        // IPC 异常也走兜底：用户已经点了终止，不能让这一下白点
+      }
+      if (!hit && sessionId) {
+        await invoke('agent_cancel', { sessionId }).catch(() => {})
+      }
+      return hit
+    },
+  })
+}
+
 /** 确保双向桥监听器已安装（只安装一次） */
 function ensureBridgeStarted(): Promise<void> {
   if (bridgeStarted) return Promise.resolve()
@@ -128,15 +162,11 @@ function ensureBridgeStarted(): Promise<void> {
       // Rust 引擎下前端没有走 JS executor，不会 register entry；
       // 首次收到输出时注册带 kill 回调的 entry（对齐 JS 端 toolOutputStore.register）
       if (!toolOutputStore.get(payload.toolCallId)) {
-        const toolCallId = payload.toolCallId
-        toolOutputStore.register(toolCallId, {
-          toolName: 'execute_command',
-          output: '',
-          pty: ptyLiveEnabled(),
-          kill: () => {
-            invoke('agent_kill_command', { toolCallId }).catch(() => {})
-          },
-        })
+        registerToolKill(
+          payload.toolCallId,
+          'execute_command',
+          payload.sessionId,
+        )
       }
       toolOutputStore.append(payload.toolCallId, chunk)
     })
@@ -535,15 +565,7 @@ export const rustEngine: AgentEnginePort = {
               // 工具刚宣布/即将执行：立即注册 kill 入口。
               // Rust 原生 execute_command / execute_script 若长时间无输出（如 sleep、慢启动），
               // 等第一条 agent:tool-output 才注册的话会一直没有「终止」按钮。
-              const toolCallId = id
-              toolOutputStore.register(toolCallId, {
-                toolName: data.name,
-                output: '',
-                pty: ptyLiveEnabled(),
-                kill: () => {
-                  invoke('agent_kill_command', { toolCallId }).catch(() => {})
-                },
-              })
+              registerToolKill(id, data.name, sessionId)
             }
           }
           onEvent?.(payload.event)

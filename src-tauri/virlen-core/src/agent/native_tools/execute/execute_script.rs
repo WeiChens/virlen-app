@@ -197,7 +197,13 @@ pub(crate) async fn execute_script_tool(
 
     let payload = ctx
         .bridge
-        .request_user_interaction(ctx.sink, ctx.session_id, "confirm_command_native", data)
+        .request_user_interaction(
+            ctx.sink,
+            ctx.session_id,
+            "confirm_command_native",
+            data,
+            ctx.cancel,
+        )
         .await
         .map_err(|e| format!("error: {}", e))?;
 
@@ -228,7 +234,7 @@ pub(crate) async fn execute_script_tool(
             Ok(NativeToolOutcome::Error { content, ui_data })
         }
         BridgeInteractionResult::Shelved => Ok(NativeToolOutcome::Shelved),
-        // 用户拒绝授权 / Esc 取消 → 脚本未落盘、未执行 → 同样按失败回报
+        // 用户拒绝授权 / Esc 取消 / 等待期间本次运行被取消 → 脚本未落盘、未执行 → 同样按失败回报
         // （与 execute_command 原生路径、JS 桥路径、TS 引擎保持一致）
         BridgeInteractionResult::Cancelled => {
             Ok(NativeToolOutcome::error("[User cancelled]"))

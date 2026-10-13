@@ -558,3 +558,86 @@ async fn context_messages_isolated_per_session() {
         .collect();
     assert_eq!(ids, vec!["m1", "m2"], "其它会话的 summary 不影响本会话");
 }
+
+/// §11.50：同一 `tool_call_id` 的 tool 返回在库里只允许一条 —— 后写的真实结果覆盖先落的「程序中断」占位。
+///
+/// 两者 **id 不同**（占位由前端生成、真实结果由引擎生成），只靠 `ON CONFLICT(id)` 的 upsert 拦不住；
+/// 库里留下两条同 id 的 tool 消息后，下次请求必被服务端 400 拒绝
+/// （`Messages with role 'tool' must be a response to a preceding message with 'tool_calls'`）。
+#[tokio::test]
+async fn same_tool_call_id_overwrites_instead_of_duplicating() {
+    let repo = open_tmp();
+    repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+    repo.append_messages("s1", &[test_message("m1", "user")]).await.unwrap();
+
+    // 前端补的「程序中断」占位先落库
+    let mut placeholder = test_message("ph1", "tool");
+    placeholder.tool_call_id = Some("call_c1".into());
+    placeholder.content = json!("程序中断");
+    placeholder.is_error = Some(true);
+    repo.append_messages("s1", &[placeholder]).await.unwrap();
+
+    // 引擎随后才落真实结果（id 与占位不同）
+    let mut real = test_message("real1", "tool");
+    real.tool_call_id = Some("call_c1".into());
+    real.content = json!("Command cancelled by the user");
+    repo.append_messages("s1", &[real]).await.unwrap();
+
+    let msgs = repo.get_messages("s1").await.unwrap();
+    let ids: Vec<&str> = msgs.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, vec!["m1", "ph1"], "同 tool_call_id 只留一行，且不被挪到末尾");
+    assert_eq!(
+        msgs[1].content,
+        json!("Command cancelled by the user"),
+        "后写的真实结果覆盖占位"
+    );
+    assert_eq!(
+        msgs[1].is_error, None,
+        "整行被覆盖：占位原先的 is_error=true 不应残留"
+    );
+}
+
+/// 不同 `tool_call_id` 的返回照常各占一行（覆盖逻辑不得误伤）
+#[tokio::test]
+async fn distinct_tool_call_ids_are_appended() {
+    let repo = open_tmp();
+    repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+    let mut t1 = test_message("t1", "tool");
+    t1.tool_call_id = Some("call_a".into());
+    let mut t2 = test_message("t2", "tool");
+    t2.tool_call_id = Some("call_b".into());
+    repo.append_messages("s1", &[t1, t2]).await.unwrap();
+
+    let msgs = repo.get_messages("s1").await.unwrap();
+    assert_eq!(msgs.len(), 2);
+    assert_eq!(msgs[0].tool_call_id.as_deref(), Some("call_a"));
+    assert_eq!(msgs[1].tool_call_id.as_deref(), Some("call_b"));
+}
+
+/// 同一批写入里含同 id 的两条 tool 返回（前端回写窗口 / 整表替换）→ 只落一行，后写的胜出
+#[tokio::test]
+async fn replace_messages_from_keeps_single_result_per_call() {
+    let repo = open_tmp();
+    repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
+    repo.append_messages(
+        "s1",
+        &[test_message("m1", "user"), test_message("m2", "assistant")],
+    )
+    .await
+    .unwrap();
+
+    let mut placeholder = test_message("ph1", "tool");
+    placeholder.tool_call_id = Some("call_c1".into());
+    placeholder.content = json!("程序中断");
+    let mut real = test_message("real1", "tool");
+    real.tool_call_id = Some("call_c1".into());
+    real.content = json!("真实结果");
+    repo.replace_messages_from("s1", "m2", &[test_message("m2", "assistant"), placeholder, real])
+        .await
+        .unwrap();
+
+    let msgs = repo.get_messages("s1").await.unwrap();
+    let ids: Vec<&str> = msgs.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, vec!["m1", "m2", "ph1"], "同 id 的两条 tool 返回只落一行");
+    assert_eq!(msgs[2].content, json!("真实结果"));
+}

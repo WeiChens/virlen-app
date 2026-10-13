@@ -30,6 +30,7 @@
 //!    用途：用户在 AI 回复期间「应用」的清单变更必须在下一次请求之前进入消息列表，模型才能在这一轮
 //!    里看到；否则要等整个循环结束、用户再说一句话才生效。
 
+use crate::agent::cancellation::CancellationToken;
 use crate::agent::event_sink::EventSink;
 use crate::agent::types::Message;
 use crate::session_db::SessionRepo;
@@ -155,12 +156,19 @@ impl AgentBridgeState {
     }
 
     /// 请求 JS 处理用户交互，等待回执
+    ///
+    /// ⚠️ **必须同时监听取消令牌**（2026-10 真机缺陷）：交互是「等用户点按钮」，本身没有时间上限；
+    /// 只 await 回执的话，一旦回执没人发（弹窗被收起却没人应答 / 前端没装上监听器 / 用户直接走开），
+    /// 整个 run 就永久卡在这一步 —— 此时用户点「停止」也没用（token 置位了，可没人接），表现为
+    /// 「终止与停止两个入口都没反应，程序停不下来」。取消时**摘掉槽位**并按 `__kind:"cancelled"`
+    /// 回报（与 JS 回执同形），各调用方既有分支统一产出 `[User cancelled]`。
     pub async fn request_user_interaction(
         &self,
         sink: &dyn EventSink,
         session_id: &str,
         type_: &str,
         data: serde_json::Value,
+        cancel: &CancellationToken,
     ) -> Result<serde_json::Value, String> {
         let request_id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel();
@@ -185,17 +193,32 @@ impl AgentBridgeState {
             "rust.bridge.request",
             serde_json::json!({ "kind": "user-interaction", "request_id": request_id.as_str() }),
         );
-        let outcome = rx.await;
+        let mut cancelled_by_user = false;
+        let outcome = tokio::select! {
+            r = rx => r.map_err(|_| format!("User-interaction request was dropped: {}", type_)),
+            _ = cancel.cancelled() => {
+                // 主动摘槽位：前端迟到的回执不再写进已无人接收的通道（幂等）
+                self.pending_interactions.lock().await.remove(&request_id);
+                cancelled_by_user = true;
+                Ok(serde_json::json!({ "__kind": "cancelled" }))
+            }
+        };
         crate::telemetry::track(
             "rust.bridge.response",
             serde_json::json!({
                 "kind": "user-interaction",
                 "request_id": request_id.as_str(),
                 "duration_ms": crate::telemetry::now_ms() - started,
-                "status": if outcome.is_ok() { "success" } else { "fail" },
+                "status": if cancelled_by_user {
+                    "cancelled"
+                } else if outcome.is_ok() {
+                    "success"
+                } else {
+                    "fail"
+                },
             }),
         );
-        outcome.map_err(|_| format!("User-interaction request was dropped: {}", type_))
+        outcome
     }
 
     /// 打开一个 Provider 流通道（BridgedProvider 使用）
@@ -545,5 +568,78 @@ mod tests {
             }
             other => panic!("expected Error, got {other:?}"),
         }
+    }
+
+    /// 回归（2026-10 真机缺陷「两个终止入口都无响应，程序停不下来」）：交互等待**必须能被取消解开**。
+    ///
+    /// 原先只 `rx.await`：回执不来（没人应答 / 前端没装监听器）时整个 run 永久挂在这一步，
+    /// 用户点「停止」也无效（token 置位了，可没人接）。
+    #[tokio::test]
+    async fn interaction_wait_is_released_by_cancel() {
+        let state = AgentBridgeState::default();
+        let sink = crate::agent::event_sink::TestEventSink::new();
+        let cancel = CancellationToken::new();
+        let trigger = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            trigger.cancel();
+        });
+
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            state.request_user_interaction(
+                &sink,
+                "s1",
+                "confirm_command_native",
+                json!({ "toolCallId": "tc1" }),
+                &cancel,
+            ),
+        )
+        .await
+        .expect("取消后应立即返回，而不是一直等回执");
+
+        let payload = out.expect("取消按正常回执（__kind=cancelled）返回");
+        assert_eq!(payload["__kind"], json!("cancelled"));
+        // 槽位必须摘掉：迟到的回执不得再写进已无人接收的通道
+        assert!(state.pending_interactions.lock().await.is_empty());
+    }
+
+    /// 正常应答路径不受影响（防「为了能取消而把回执吃掉」的回归）
+    #[tokio::test]
+    async fn interaction_wait_still_returns_js_reply() {
+        let state = std::sync::Arc::new(AgentBridgeState::default());
+        let cancel = CancellationToken::new();
+        let requester = state.clone();
+        let waiting = tokio::spawn(async move {
+            let sink = crate::agent::event_sink::TestEventSink::new();
+            requester
+                .request_user_interaction(&sink, "s1", "confirm_command_native", json!({}), &cancel)
+                .await
+        });
+        // 等请求登记进表（即 `agent:user-interaction-request` 已推给 JS）
+        for _ in 0..200 {
+            if !state.pending_interactions.lock().await.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        let request_id = state
+            .pending_interactions
+            .lock()
+            .await
+            .keys()
+            .next()
+            .cloned()
+            .expect("交互请求应已登记");
+
+        handle_user_interaction_response(
+            &state,
+            &request_id,
+            json!({ "__kind": "value", "value": "approved" }),
+        )
+        .await;
+
+        let payload = waiting.await.unwrap().expect("回执到达即返回");
+        assert_eq!(payload["value"], json!("approved"));
     }
 }

@@ -36,8 +36,13 @@ export interface ToolOutput {
   toolName: string
   /** 当前累积的输出 */
   output: string
-  /** 终止回调（kill 子进程、取消请求等） */
-  kill?: () => void
+  /**
+   * 终止回调（kill 子进程、取消请求等）。
+   *
+   * 返回值为 `Promise<boolean>` 时可告知「是否真的命中了运行中的命令」：`false` 表示命令不在
+   * 运行中（还没 spawn / 已结束），调用方据此复位按钮而不是永远停在「终止中」。
+   */
+  kill?: () => void | Promise<boolean | void>
   /**
    * 输出是否为 PTY（伪控制台）原始流。true 表示 output 是带 ANSI/VT 控制序列的终端流（stdout/stderr 已合并），
    * 须交给 xterm 而非 `<pre>`。后端权威标记是完成态 uiData.pty，这里用于运行中提前定渲染方式。

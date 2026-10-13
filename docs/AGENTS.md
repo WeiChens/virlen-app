@@ -25,7 +25,7 @@
 | [`agents/06-pitfalls-toolchain.md`](agents/06-pitfalls-toolchain.md) | §11.1–§11.13：中文编码 / 本机沙盒限制 / 版本号 / README / 前端工程 / ConPTY / 拖拽 / 粘贴 / 输入框高度 / comctl32 清单 / 单实例 / 切会话入口 | 环境和桌面端集成踩坑 |
 | [`agents/07-pitfalls-cli.md`](agents/07-pitfalls-cli.md) | §11.14–§11.27：workspace 拆包四条硬约束 / CLI 三条边界 / 配置下沉进度 / TUI 坑 / 大文件拆分口径 / TUI 渲染三坑 / 续连 / 评审四项 / 提示词解耦 / 配置向导 | 动 `src-tauri/virlen-cli`、core 目录结构或 TUI |
 | [`agents/08-pitfalls-quality.md`](agents/08-pitfalls-quality.md) | §11.28–§11.36：clippy 与 CI 门禁 / CLI 打包 · 三类 CI 失败 / 启动即崩 / 暂停恢复慢 / 残留快照 400 / 只加载到最后 summary / GUI 压缩切 Rust | 改 CI、打包、启动链、压缩与恢复 |
-| [`agents/09-pitfalls-engine.md`](agents/09-pitfalls-engine.md) | §11.37–§11.41：移除 TS 引擎 / 输入框右键菜单 / CLI 会话与用量 / 提示词缓存断点 / 账本缓存写入列 | 改引擎、Provider 请求体、账本与费用 |
+| [`agents/09-pitfalls-engine.md`](agents/09-pitfalls-engine.md) | §11.37–§11.41：移除 TS 引擎 / 输入框右键菜单 / CLI 会话与用量 / 提示词缓存断点 / 账本缓存写入列 · §11.50–§11.51：请求组装前的工具协议清洗 / 等待用户交互的 await、长耗时工具与同步推理都必须可取消 | 改引擎、Provider 请求体、账本与费用、消息协议与取消 |
 | [`agents/10-pitfalls-phone.md`](agents/10-pitfalls-phone.md) | §11.42–§11.47：手机端文件面板两坑 / 编辑文件的三个坑 / 共享包契约四坑 / 默认会话 / 并发恢复 400 | 改手机端 UI 或共享包 `virlen-remote` |
 | [`agents/11-background-service.md`](agents/11-background-service.md) | §11.48 后台服务（工具 / 面板 / 终端弹窗 / 全局视图 / 结束通知）· §11.49 埋点采样用例 · 托盘与后台工作 | 改 `service` 分类、标题栏面板或托盘 |
 | [`agents/12-commands.md`](agents/12-commands.md) | §7 常用命令与验证基线 · §9 手册速查（新增工具 / Provider / 搜索源 / Skill）· §10 前端约定 · §13 提交与协作（含提交前自查清单） | 每次动手前查命令、口径与提交要求 |
@@ -46,7 +46,7 @@
 | §11.1–§11.13 | [`agents/06-pitfalls-toolchain.md`](agents/06-pitfalls-toolchain.md) |
 | §11.14–§11.27 | [`agents/07-pitfalls-cli.md`](agents/07-pitfalls-cli.md) |
 | §11.28–§11.36 | [`agents/08-pitfalls-quality.md`](agents/08-pitfalls-quality.md) |
-| §11.37–§11.41 | [`agents/09-pitfalls-engine.md`](agents/09-pitfalls-engine.md) |
+| §11.37–§11.41 · §11.50–§11.51 | [`agents/09-pitfalls-engine.md`](agents/09-pitfalls-engine.md) |
 | §11.42–§11.47 | [`agents/10-pitfalls-phone.md`](agents/10-pitfalls-phone.md) |
 | §11.48–§11.49（含托盘说明） | [`agents/11-background-service.md`](agents/11-background-service.md) |
 

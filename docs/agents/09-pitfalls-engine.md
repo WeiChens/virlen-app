@@ -1,4 +1,4 @@
-# 常见坑 · 引擎统一 / 提示词缓存 / 账本（§11.37–§11.41）
+# 常见坑 · 引擎统一 / 提示词缓存 / 账本（§11.37–§11.41 + §11.50–§11.51）
 
 > 本册是 [`docs/AGENTS.md`](../AGENTS.md) 的分册：**原 §号保持不变**（源码注释与文档里的 §-引用照旧有效）。总入口 / 铁律 / 安全红线见 [`../AGENTS.md`](../AGENTS.md)。
 
@@ -42,3 +42,29 @@
 - **CLI**：`usage` 的聚合表加 `cacheW` 列（四段之和才等于 `total`；明细仍靠 `--json` 看全字段）。
 - ⚠️ **仍未覆盖**：OpenAI 系（GPT-5.6+）官方对缓存写入也收 1.25x，但**用量接口不回报写入 token 数**（含在 `prompt_tokens` 里）→ 没量可乘，这类模型费用略偏低（写入那段少算 25%）；Anthropic 的 1 小时 TTL 写入价是 2x，本项目只打 5 分钟断点、也只填 1.25x。详见 `docs/token-usage-stats.md` §10。
 - **测试**：`agent::usage` 3 条（读 / 写拆分、推导分支扣写入、非 Anthropic 恒 0）、`session_db::tests::usage` 1 条（分列落库 + 分列聚合 + 不变式）、`pricing.test.ts` 4 条（写入价 / 缺省回退 / 12.5 倍关系 / 内置价 = 1.25×input）、`usage-ledger.test.ts` 2 条（Anthropic 读 / 写分列、推导扣写入）。
+
+**11.50 请求组装前必须清洗工具协议（2026-10-12）** —— 起因：会话「检测结果UI标注审核」（`C:/code`）一发消息就 400 `Messages with role 'tool' must be a response to a preceding message with 'tool_calls'`；库内实证：同一 `tool_call_id` 有两条 tool 消息 —— 「程序中断」占位（10:54:32）与真实结果「Command cancelled by the user」（10:55:33）。
+- **根因（跨层写冲突，不是单纯的 id 重复）**：① 引擎按铁律「先落库再执行工具」写入 `assistant(tool_calls)`；② 命令取消后运行标记已非 working，前端 `message-repair` 判为「悬空 tool_calls」→ 补占位并**回写 SQLite**（`cmd_replace_session_messages_from`）；③ 引擎随后才把真实结果落库 → 追加成第二条同 id 的 tool 消息。⚠️ **当时前端内存与库在这一点上行为相反**：`messages.ts::addSessionMessage` 遇到同 `toolCallId` 会**替换**，而库只会**追加**（现已由改法①统一为覆盖）。
+- **改法①：写入侧根治（堵住产生重复的源头）**：`session_db/sqlite.rs::write_message` —— 写入 `role='tool'` 且 `tool_call_id` 非空的消息时，先按 `(session_id, role='tool', tool_call_id)` 覆盖已有行（后写胜出，「真实结果」自然盖掉「程序中断」占位），命中则不新增第二行。⚠️ **必须是写入侧**：两条记录 id 不同，`ON CONFLICT(id)` 的 upsert 拦不住。覆盖时**保留原行的 id / rowid**：前端事件路径 `messages.ts::addSessionMessage` 按 toolCallId 覆盖时也保留既有 id（两边口径一致），消息也不会因此被挪到列表末尾（与 `reappend_keeps_message_order` 同一条约定）；`text_plain` 在覆盖列内，`messages_fts_au` 触发器会同步 FTS。三条写入路径（`append_messages*` / `replace_messages` / `replace_messages_from`）共用它，所以前端回写窗口也无法把重复写回库里。
+- **改法②：请求组装前的兜底**：新增 `agent/message_protocol.rs::repair_tool_protocol`（纯函数，**只修请求副本、不回写库**），在 `llm_round.rs::do_llm_round` 组装 `ChatRequest` **之前**调用 —— GUI / CLI / 桥接 Provider（Gemini）同一条路，四条规则：**去重**（真实结果 > 「程序中断」占位，同类留最新）、**丢孤儿**（`tool_call_id` 为空、或本次请求里没有任何 assistant 声明过它）、**归位**（错位返回搬回 assistant 之后）、**补占位**（悬空调用补一条，否则服务端仍要求 tool 紧随其后）。命中时埋点 `engine.protocol.repair`（去重 / 孤儿 / 归位 / 补占位 4 个计数）。两层职责：写入侧保证「以后不再产生」，请求侧保证「已有的脏数据不再上屏（服务端）」。
+- **前端同步清库**：`services/message-repair.ts` 增同类规则（`removedDuplicates` / `removedOrphans`，**全量线性扫描** —— 合法性只取决于 tool 消息自身；补占位 / 归位仍只扫首尾窗口），`chat/repair.ts` 埋点加 `removed_duplicate_count` / `removed_orphan_count`：发消息 / 切会话时把脏数据一并清掉。
+- ⚠️ **占位文案是跨实现镜像**：TS `INTERRUPTED_TOOL_RESULT` 与 Rust `message_protocol::INTERRUPTED_TOOL_RESULT` 必须逐字一致（铁律 1）—— 同一条悬空调用可能被两侧各补一次，文案不同就是两种措辞。
+- ⚠️ **不要在 provider 里另写一份清洗**：`openai.rs` / `anthropic.rs` 的 `build_request` 拿到的已是干净的 `request.messages`；在各自 `build_request` 里再洗一遍，桥接协议那份就漏了。
+- ⚠️ **清洗不能自己制造违规**：同一 assistant 重复声明同一 id（LLM 异常输出）时只应答一次，否则清洗本身会把同一条 tool 返回输出两遍。另：`tool_call_id` 在列表里找不到声明者就**只能丢**（请求窗口被裁在 tool 段中间时留着必 400）。
+- **存量**：库里还有另一类 400 隐患 —— 无 `tool_call_id` 的 tool 消息（全库扫描 247 条 / 6 个老会话），请求前清洗会直接丢掉它们；这 6 个会话只要被打开或发送过，前端修复就会把库里的残留一并清掉。
+- **回归用例**：Rust `agent::message_protocol` 11 例（其中 `replays_real_production_payload` 逐字复刻该会话尾部序列，`repaired_output_is_protocol_legal` 断言清洗结果满足「每条 tool 都能对上前置且未重复应答的 tool_call」）、`session_db::tests::sessions` 3 例（同 id 覆盖且不挪位置 / 不同 id 照常各占一行 / `replace_messages_from` 只落一行）；TS `src/tests/services/message-repair.test.ts` +7 例（含「占位在前、真实结果后到」现场回放）。
+
+**11.51 等待用户交互（及 JS 回执）的 await 必须可取消（2026-10-12，追加「长耗时工具 / 同步推理 / 文档解析」同类项）** —— 起因：真机报障「执行脚本太慢想终止，点『终止』『停止』都没反应」：命令还卡在审批 / 沙盒准备阶段时，界面像是正在执行，但两个终止入口全都无效。
+- **根因**：`agent/bridge.rs::request_user_interaction` 是裸 `rx.await` —— **既不监听取消令牌、也没有超时**（同文件 `request_round_boundary` 早写着「必须带超时……不兜底会让整个 agent 循环卡在这一步」，唯独交互这一路没兜底）。后果：① `agent_kill_command` 在命令尚未 spawn 时注册表查不到 id → 返回 `false` → 前端 `.catch(()=>{})` **静默吞掉** =「点击无响应」；② `agent_cancel` 置了 token 却没人 await → 前端等不到收敛 =「停止」也无效。
+- **改法**：`request_user_interaction` 增 `cancel: &CancellationToken` 参数 + `tokio::select!`；取消时**摘掉 pending 槽位**并按 `{__kind:"cancelled"}` 回报（与 JS 回执同形，调用方无需分叉），埋点 `rust.bridge.response` 增 `status: "cancelled"`；5 个调用点（`execute_command` / `execute_script` / `service/start` / `tool_executor` ×2）传 `ctx.cancel`。
+- **前端兜底**：`services/rust-engine.ts::registerToolKill` —— `agent_kill_command` 返回 `false` 时**退化为会话级 `agent_cancel`**；`TerminalBlock.handleKill` 按返回值复位 `killing` 状态并提示「这条命令不在运行中，已改为停止本次运行」（否则按钮永远停在「终止中」被 `disabled` 锁死）。
+- ⚠️ **窗口期一定存在，别指望「杀」总能命中**：`notify_step_start` 会在工具执行**之前** emit `tool_call`（无 result），前端据此先渲染出「终止」按钮，而命令可能还没 spawn —— 任何「杀不到就静默失败」的写法在这里都会变成假死。
+- **验证口径**：`cargo test -p virlen-core --lib` 会稳定失败 9 例 `sandbox::windows::tests::e2e_*` / `readonly_mode_denies_write_in_cwd`（本机 `CreateRestrictedToken failed: 87` / `SetNamedSecurityInfoW failed: WRITE_DAC`），是**沙盒环境受限**、与业务改动无关；沙盒关闭后该模块 11 passed / 1 ignored。
+- **回归用例**：`agent::bridge` 的 `interaction_wait_is_released_by_cancel` / `interaction_wait_still_returns_js_reply`；`src/tests/ui/tool-call-terminal.test.tsx` 的「终止按钮：杀不到运行中的命令时不得静默」2 例。
+- **同类第二处 · 长耗时原生工具的推理（2026-10-12）**：`vision_analyze` 的推理在 `spawn_blocking` 里同步跑、**全程零取消检查**（`execute_tool_steps` 只在工具返回后才查 token）→ 点「停止」要等整张图分析完（OCR / 物体检测各是秒级）才收敛，观感同样是「无法终止」。改法也两层：① `vision::analyze_at_cancellable` 在推理**阶段边界**查 `AtomicBool`（ONNX 单次推理内部不可中断，只能整段退出）；② `vision_analyze_tool` 外层 `tokio::select!` 让工具**立刻**返回 `vision_analyze was cancelled: <path>`（与 `web_fetch` 同口径）。⚠️ **新增任何「可能跑十几秒」的原生工具都必须照此两层做**（外层管「立刻有反馈」、内层管「别白烧 CPU」），只做一层仍会复现本条缺陷。
+- **回归用例（视觉）**：`vision::tests::cancellable_entry_honours_pre_set_cancel_flag`（取消预检必须在 `load_models` 之前）、`agent::native_tools::vision::vision_analyze::tests::cancelled_before_start_returns_cancel_text`；实测口径：真实模型 + `tests/fixtures/ocr/page.png`，50ms 后置位取消标志 → 727ms 返回 `Cancelled by the user`（完整分析为秒级）。
+- **同类第三处 · 文档解析与命令壳（2026-10-12）**：① `parse_document` 的解析走第三方同步库（`pdf-extract` / `office_oxide`），**内部没有检查点**，`spawn_blocking` 的 JoinHandle 丢掉也停不掉已开跑的任务 —— 只能兜在工具层：预检 + `tokio::select!`（取消文案 `parse_document was cancelled: <path>`，同 `web_fetch` 口径）；能协作退出的内层**只有** OCR 的逐图循环（`ocr_options` 早已收到 `ctx.cancel`）。② `src-tauri/src/vision_service.rs` 的两个命令原先在 `async fn` 里**同步**跑推理，占住 tokio worker —— 连「停止」要发的 `agent_cancel` 都排在它后面，观感同样是「点了没反应」；已统一走 `spawn_blocking`。
+- **回归用例（解析）**：`agent::native_tools::file::parse_document::tests::cancelled_before_start_returns_cancel_text`；实测口径：`SampleDoc.docx` 完整解析 8.98ms → 解析开始后取消 **98.5µs** 返回取消口径（select 分支确实抢先）。
+- **收敛为公共执行器（2026-10-12）**：上面三处各写过一遍 `spawn_blocking + select`，现统一到 `native_tools/heavy.rs::run_heavy` —— 重活只从这里进（并发闸 / 线程优先级 / 两层取消一次做完）。⚠️ **新增长耗时工具一律用它**，别再手写半套。
+- ⚠️ **实测边界：线程降优先级管不到 ONNX（2026-10-12，Windows）**：`run_heavy` 把阻塞线程降到 `BELOW_NORMAL`，但 quasivision 在**模型加载时**自建 ORT 线程池并自行设优先级（`object_detector.rs` 的 `min(核数,4)`、`text_detection.rs` 的 `intra=4/inter=2`，均不对外暴露配置）—— 线程优先级探针实测：降优先级后本线程为 `-1`，而同进程那 16 个常驻推理线程**全程是 `NORMAL`**。**结论**：该手段只覆盖纯 Rust 段（图片解码 / 文档解析 / 文本组装）；要让整段推理不与 UI 抢 CPU，只有**进程隔离**（子进程 + 低优先级）一条路（未做）。这条路上真正生效的那一半是**并发闸**（同时只放一个重活，避免多份推理各开 4 线程互抢）。
+- **回归用例（重活执行器）**：`agent::native_tools::heavy` 4 例 —— 未取消返回值 / 预取消不启动任务 / 中途取消丢弃结果并置标志 / 并发闸把两个重活串行化。

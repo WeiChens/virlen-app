@@ -7,6 +7,8 @@
  * - 一次多个悬空 tool_call → 按 tool_calls 顺序补入
  * - 部分缺失 → 只补缺失的那条
  * - 返回消息被放错位置（旧数据落库顺序错乱）→ 归位而不是重复补入
+ * - 同一 toolCallId 两条 tool 返回（占位先落库、真实结果后到）→ 只留真实结果
+ * - 没有 toolCallId 的孤儿 tool 消息 → 丢弃
  * - 只扫首/尾窗口：窗口外的异常不动（不扫全量历史）
  * - 幂等：修复结果再跑一次无变化
  */
@@ -196,6 +198,143 @@ describe('repairToolCallMessages', () => {
     const second = repairToolCallMessages(first.messages)
     expect(second.inserted).toBe(0)
     expect(second.moved).toBe(0)
+    expect(second.messages).toBe(first.messages)
+  })
+})
+
+/**
+ * 重复 / 孤儿 tool 返回（都会让服务端 400：
+ * `Messages with role 'tool' must be a response to a preceding message with 'tool_calls'`）
+ */
+describe('repairToolCallMessages — 去重与丢孤儿', () => {
+  it('同一 toolCallId 的「程序中断」占位与真实结果：只留真实结果（线上现场回放）', () => {
+    const messages = [
+      msg({ role: 'user', content: '执行脚本' }),
+      msg({ role: 'assistant', content: '', toolCalls: [toolUse('call_script')] }),
+      // 命令取消：前端先补占位落库，引擎随后落真实结果 → 库里两条同 id
+      msg({
+        role: 'tool',
+        content: INTERRUPTED_TOOL_RESULT,
+        toolCallId: 'call_script',
+        isError: true,
+      }),
+      msg({
+        role: 'tool',
+        content: 'Command cancelled by the user',
+        toolCallId: 'call_script',
+      }),
+    ]
+    const result = repairToolCallMessages(messages)
+
+    expect(result.removedDuplicates).toBe(1)
+    expect(result.removedOrphans).toBe(0)
+    expect(result.inserted).toBe(0)
+    const tools = result.messages.filter((m) => m.role === 'tool')
+    expect(tools).toHaveLength(1)
+    expect(tools[0].content).toBe('Command cancelled by the user')
+  })
+
+  it('真实结果在前、占位在后：同样只留真实结果', () => {
+    const messages = [
+      msg({ role: 'assistant', content: '', toolCalls: [toolUse('call_a')] }),
+      msg({ role: 'tool', content: 'real', toolCallId: 'call_a' }),
+      msg({ role: 'tool', content: INTERRUPTED_TOOL_RESULT, toolCallId: 'call_a' }),
+    ]
+    const result = repairToolCallMessages(messages)
+
+    expect(result.removedDuplicates).toBe(1)
+    expect(result.messages).toHaveLength(2)
+    expect(result.messages[1].content).toBe('real')
+  })
+
+  it('两条真实结果：保留最新一条', () => {
+    const messages = [
+      msg({ role: 'assistant', content: '', toolCalls: [toolUse('call_a')] }),
+      msg({ role: 'tool', content: 'first', toolCallId: 'call_a' }),
+      msg({ role: 'tool', content: 'second', toolCallId: 'call_a' }),
+    ]
+    const result = repairToolCallMessages(messages)
+
+    expect(result.removedDuplicates).toBe(1)
+    expect(result.messages[1].content).toBe('second')
+  })
+
+  it('没有 toolCallId 的孤儿 tool 消息被丢弃，其余消息顺序不变', () => {
+    const messages = [
+      msg({ role: 'user', content: 'hi' }),
+      msg({ role: 'assistant', content: '', toolCalls: [toolUse('call_a')] }),
+      msg({ role: 'tool', content: 'ok', toolCallId: 'call_a' }),
+      // 老版本残留：tool 消息没有 tool_call_id
+      msg({ role: 'tool', content: '旧数据：无 tool_call_id' }),
+      msg({ role: 'assistant', content: 'done' }),
+    ]
+    const result = repairToolCallMessages(messages)
+
+    expect(result.removedOrphans).toBe(1)
+    expect(result.removedDuplicates).toBe(0)
+    expect(result.messages.map((m) => m.role)).toEqual([
+      'user',
+      'assistant',
+      'tool',
+      'assistant',
+    ])
+    expect(result.messages[2].content).toBe('ok')
+  })
+
+  it('去重后仍能补出悬空调用的占位（两条规则互不干扰）', () => {
+    const messages = [
+      msg({
+        role: 'assistant',
+        content: '',
+        toolCalls: [toolUse('call_a'), toolUse('call_b')],
+      }),
+      msg({ role: 'tool', content: 'a-real', toolCallId: 'call_a' }),
+      msg({ role: 'tool', content: INTERRUPTED_TOOL_RESULT, toolCallId: 'call_a' }),
+      // call_b 没有任何返回 → 补占位
+    ]
+    const result = repairToolCallMessages(messages)
+
+    expect(result.removedDuplicates).toBe(1)
+    expect(result.inserted).toBe(1)
+    expect(result.messages.slice(1).map((m) => m.toolCallId)).toEqual([
+      'call_a',
+      'call_b',
+    ])
+    expect(result.messages[1].content).toBe('a-real')
+    expect(result.messages[2].content).toBe(INTERRUPTED_TOOL_RESULT)
+  })
+
+  it('去重/丢孤儿是全量的：窗口之外也会清理', () => {
+    const filler: Message[] = Array.from({ length: 40 }, (_, i) =>
+      msg({ role: 'user', content: `filler ${i}` }),
+    )
+    const messages: Message[] = [
+      msg({ role: 'assistant', content: '', toolCalls: [toolUse('call_old')] }),
+      msg({ role: 'tool', content: INTERRUPTED_TOOL_RESULT, toolCallId: 'call_old' }),
+      msg({ role: 'tool', content: 'real', toolCallId: 'call_old' }),
+      msg({ role: 'tool', content: '无 id 的旧数据' }),
+      ...filler,
+    ]
+    const result = repairToolCallMessages(messages, { window: 5 })
+
+    expect(result.removedDuplicates).toBe(1)
+    expect(result.removedOrphans).toBe(1)
+    // 补占位受窗口限制：这里本来就没有悬空调用，故 inserted 为 0
+    expect(result.inserted).toBe(0)
+  })
+
+  it('幂等：去重结果再跑一次无变化', () => {
+    const messages = [
+      msg({ role: 'assistant', content: '', toolCalls: [toolUse('call_a')] }),
+      msg({ role: 'tool', content: INTERRUPTED_TOOL_RESULT, toolCallId: 'call_a' }),
+      msg({ role: 'tool', content: 'real', toolCallId: 'call_a' }),
+    ]
+    const first = repairToolCallMessages(messages)
+    expect(first.removedDuplicates).toBe(1)
+
+    const second = repairToolCallMessages(first.messages)
+    expect(second.removedDuplicates).toBe(0)
+    expect(second.removedOrphans).toBe(0)
     expect(second.messages).toBe(first.messages)
   })
 })
