@@ -1,5 +1,5 @@
 /**
- * ContextMenu — 通用右键菜单（全应用唯一一份实现）。
+ * ContextMenu — 通用菜单（右键 / 点「更多」都走这一份，全应用唯一实现）。
  *
  * 本项目的自绘窗口在生产环境全局 preventDefault 了 contextmenu（见 layout/WindowLayout），
  * 原生右键菜单不出现；而消息正文 / 图片 / 文件 chip / 深度思考 / 终端等又都需要右键操作，
@@ -12,7 +12,13 @@
  * 也不会被兄弟节点的 stopPropagation 吃掉；keydown 捕获 + stopPropagation 让 Esc 只关菜单，
  * 不连带触发外层（终端全屏 / 图片预览也在 document 上听 Esc，同时消费会「一按两动作」）。
  *
- * 展开方向由 `placement` 决定（默认右下）；要「贴在按钮左上方」时传 `placement="top-left"`。
+ * 展开方向由 `placement` 决定（默认右下）；
+ * - `top-left`：贴在按钮左上方（锚点 = 菜单右下角）；
+ * - `bottom-left`：贴在按钮左下方（锚点 = 菜单右上角，用于行尾的「更多」按钮 —— 菜单右边缘
+ *   与按钮右边缘对齐，不会往列表右边越出去）。
+ *
+ * 触发这个菜单的按钮请一并传 `anchorElement`：否则「再点一次那个按钮就关掉」永远不生效 ——
+ * mousedown 的「点在外面」先把菜单关了，紧接着的 click 又把它打开，看起来像点不动。
  */
 import {
   ReactNode,
@@ -50,10 +56,12 @@ export interface ContextMenuPosition {
 }
 
 /**
- * 菜单展开方向：bottom-right（默认）= 锚点是鼠标位置、向右下展开；top-left = 锚点就是菜单的
- * 右下角、向左上展开（用于「贴在按钮左上方」这类贴边场景，右下展开会被钳回来盖住按钮）。
+ * 菜单展开方向（锚点 = 菜单的哪个角）：
+ * - `bottom-right`（默认）：锚点落在菜单左上角 → 向右下展开（鼠标位置开菜单用这个）；
+ * - `bottom-left`：锚点落在菜单右上角 → 向左下展开（行尾的「更多」按钮）；
+ * - `top-left`：锚点落在菜单右下角 → 向左上展开（贴边按钮，右下展开会被钳回来盖住按钮）。
  */
-export type ContextMenuPlacement = 'bottom-right' | 'top-left'
+export type ContextMenuPlacement = 'bottom-right' | 'bottom-left' | 'top-left'
 
 interface Props {
   position: ContextMenuPosition
@@ -64,6 +72,12 @@ interface Props {
   dark?: boolean
   /** 展开方向（默认 `bottom-right`，即鼠标点向右下） */
   placement?: ContextMenuPlacement
+  /**
+   * 打开这个菜单的按钮（触发元素）：点它不算「点在外面」，好让按钮自己的 onClick 去关菜单
+   *（否则第二次点击永远是「先关再开」，用户以为什么都没发生）。点**别的**元素仍算外面 ——
+   * 换一行再点「更多」就是「先关旧的、再开新的」。
+   */
+  anchorElement?: HTMLElement | null
 }
 
 /**
@@ -76,13 +90,16 @@ export default function ContextMenu({
   onClose,
   dark,
   placement = 'bottom-right',
+  anchorElement,
 }: Props) {
   const menuRef = useRef<HTMLDivElement>(null)
 
   // 关闭行为：点菜单外 / Esc
   useEffect(() => {
     const onDocMouseDown = (e: MouseEvent) => {
-      if (menuRef.current?.contains(e.target as Node)) return
+      const target = e.target as Node
+      if (menuRef.current?.contains(target)) return
+      if (anchorElement?.contains(target)) return
       onClose()
     }
     const onDocKeyDown = (e: KeyboardEvent) => {
@@ -96,15 +113,17 @@ export default function ContextMenu({
       document.removeEventListener('mousedown', onDocMouseDown, true)
       document.removeEventListener('keydown', onDocKeyDown, true)
     }
-  }, [onClose])
+  }, [onClose, anchorElement])
 
-  // 定位：先按展开方向放（top-left 时锚点是菜单右下角），再按实际尺寸钳进视口
+  // 定位：先按展开方向放（锚点是菜单的某个角），再按实际尺寸钳进视口
   useLayoutEffect(() => {
     const el = menuRef.current
     if (!el) return
     const w = el.offsetWidth
     const h = el.offsetHeight
-    const rawX = placement === 'top-left' ? position.x - w : position.x
+    // 只有 bottom-right 是「锚点 = 菜单左上角」（向右展开），其余都以锚点为菜单右边界
+    const rawX = placement === 'bottom-right' ? position.x : position.x - w
+    // 只有 top-left 是「锚点 = 菜单右下角」（向上展开）
     const rawY = placement === 'top-left' ? position.y - h : position.y
     const x = Math.max(8, Math.min(rawX, window.innerWidth - w - 8))
     const y = Math.max(8, Math.min(rawY, window.innerHeight - h - 8))

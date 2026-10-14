@@ -8,7 +8,7 @@ import MarkdownRenderer from './markdown-renderer'
 import './message-bubble.scss'
 import { showToast } from '@/ui/components/shared/Toast'
 import { timeFormat, formatDuration } from '@/utils/time'
-import { memo, useRef, useState } from 'react'
+import { memo, useLayoutEffect, useRef, useState } from 'react'
 import CollapsedSvg from '@/ui/components/icons/CollapsedSvg'
 import ThinkSvg from '@/ui/components/icons/ThinkSvg'
 import { ToolCallMessage } from '../tool-call'
@@ -51,6 +51,12 @@ interface Props {
   onQuoteJump?: (messageId: string) => void
   /** 与 message.toolCalls 一一对应的工具结果（未完成处为 undefined） */
   toolResults?: (Message | undefined)[]
+  /**
+   * 「按住滚动偏移」：行内展开 / 收起超长正文会改这一行的高度，列表的跟底补偿会把它算成
+   * 「你还在底部」，于是把阅读位置甩到消息末尾。调它 = 请列表把当前偏移按住一会儿
+   *（见 message-list/scroll-hold.ts）。不传 = 不按住（单测 / 独立渲染气泡时不需要）。
+   */
+  onHoldScrollOffset?: () => void
 }
 
 /**
@@ -65,6 +71,12 @@ type MenuTarget =
   | { kind: 'file'; path: string; isDir?: boolean }
   | { kind: 'skill'; path: string }
 
+/**
+ * 用户气泡正文的折叠线（视口倍数）：自然高度 > 70vh 才折叠，折叠后只留 40vh（高度写在 message-bubble.scss）。
+ * 折叠态量到的高度仍是**全文高度**（`scrollHeight` 含被 `max-height` 裁掉的部分），所以阈值比较可以反复做。
+ */
+const COLLAPSE_TRIGGER_RATIO = 0.7
+
 function MessageBubble({
   message,
   onEdit,
@@ -73,6 +85,7 @@ function MessageBubble({
   onQuote,
   onQuoteJump,
   toolResults,
+  onHoldScrollOffset,
 }: Props) {
   const mkdRef = useRef<HTMLDivElement | null>(null)
   /** 深度思考文本容器（右键「全选」要选在这上面） */
@@ -262,6 +275,63 @@ function MessageBubble({
     !hasVisibleContent &&
     hideToolCallThink
 
+  // 超长正文折叠（只针对用户气泡：用户贴长文进来时，一条消息就吃掉整屏）。
+  // 折叠只影响展示 —— 复制 / 编辑 / 引用仍拿全文（getContent 读的是 message.content）。
+  const [contentOverflow, setContentOverflow] = useState(false)
+  const [contentExpanded, setContentExpanded] = useState(false)
+  const collapsible = isUser && !!showContent
+  const contentCollapsed = collapsible && contentOverflow && !contentExpanded
+  /** 气泡根节点：收起后要把顶拉回视野（见下面那个 effect） */
+  const bubbleRef = useRef<HTMLDivElement | null>(null)
+  const wasExpandedRef = useRef(false)
+
+  useLayoutEffect(() => {
+    if (!collapsible || contentExpanded) return
+    const el = mkdRef.current
+    if (!el) return
+    const measure = () => {
+      const over = el.scrollHeight > window.innerHeight * COLLAPSE_TRIGGER_RATIO
+      // 只在结论变化时落 state：ResizeObserver 会反复回调，反复 setState 会白刷几帧
+      setContentOverflow((prev) => (prev === over ? prev : over))
+    }
+    measure()
+    // 折叠后自身高度被 max-height 钉死，光盯自己尺寸不再变化 → 收不到回调；
+    // 连带盯住子元素（正文渲染出的节点），内容长出来 / 图片加载完才有信号。
+    const ro =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(() => measure())
+    if (ro) {
+      ro.observe(el)
+      for (const child of Array.from(el.children)) ro.observe(child)
+    }
+    // 视口高度本身就是阈值，窗口缩放必须复量
+    window.addEventListener('resize', measure)
+    return () => {
+      ro?.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+  }, [collapsible, contentExpanded, showContent])
+
+  /**
+   * 收起时把气泡拉回视野：正文一下矮掉一大截，视口很可能不再落在气泡上（尤其它后面还有消息时）。
+   * 拉住之后要**重新按住**偏移 —— 刚才那一下是我们自己主动滚的，不该被库的补偿又推回去。
+   * 只认「展开 → 收起」这一跳：首次判定出折叠 / 无关重渲染都不许动列表（用户可能正在别处阅读）；
+   * 展开方向不用管 —— 内容向下长，气泡顶原地不动，本来就不跳（偏移由 onHoldScrollOffset 按住）。
+   */
+  useLayoutEffect(() => {
+    const el = bubbleRef.current
+    if (wasExpandedRef.current && !contentExpanded && el) {
+      if (typeof el.scrollIntoView === 'function') {
+        el.scrollIntoView({ block: 'nearest' })
+      }
+      onHoldScrollOffset?.()
+    }
+    wasExpandedRef.current = contentExpanded
+    // onHoldScrollOffset 是稳定引用（列表层 useCallback），不进依赖也不会读到旧值
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contentExpanded])
+
   // 压缩摘要（role='summary'）：正文可能极长，不在消息流里铺开，只渲染可点击的提示条，
   // 全文放弹窗（见 summary-message.tsx）。必须能右键 —— 否则压缩错了没法回退
   //（删除 summary 即放弃压缩，本条及之后一并删除）。
@@ -340,6 +410,7 @@ function MessageBubble({
     <>
       {!hideMessageBubble && (
         <div
+          ref={bubbleRef}
           className={`message-bubble ${isUser ? 'user' : isTool ? 'tool' : 'assistant'} ${showAsToolCall ? 'toolcall-only' : ''}`}>
           <div
             className="message-body"
@@ -443,13 +514,27 @@ function MessageBubble({
                     </div>
                   )}
                   {showContent && (
-                    <div className="message-content" ref={mkdRef}>
+                    <div
+                      className={`message-content${contentCollapsed ? ' is-collapsed' : ''}`}
+                      ref={mkdRef}>
                       <MarkdownRenderer
                         content={showContent}
                         isUser={isUser}
                         streaming={message.streaming}
                       />
                     </div>
+                  )}
+                  {collapsible && contentOverflow && (
+                    <button
+                      className={`message-content-more${contentExpanded ? ' is-expanded' : ''}`}
+                      onClick={() => {
+                        // 行高会变：先按住当前偏移，否则库的跟底补偿会把阅读位置甩到消息末尾
+                        onHoldScrollOffset?.()
+                        setContentExpanded((v) => !v)
+                      }}>
+                      <span>{contentExpanded ? t('收起') : t('显示更多')}</span>
+                      <CollapsedSvg className="more-icon" />
+                    </button>
                   )}
                   {hasImages() && (
                     <div className="message-images">

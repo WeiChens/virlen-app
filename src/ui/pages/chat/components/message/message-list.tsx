@@ -120,6 +120,7 @@ function ChatMessageList(props: ChatMessageListProps) {
                   onTransferSummary={m.handleTransferSummary}
                   onQuote={m.handleQuoteBubble}
                   onQuoteJump={onQuoteJump}
+                  onHoldScrollOffset={m.holdScrollOffset}
                   message={msg}
                   toolResults={m.toolResultsFor(msg)}
                 />

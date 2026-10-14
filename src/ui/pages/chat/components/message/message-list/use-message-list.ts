@@ -308,6 +308,8 @@ export function useChatMessageList({
     toggleGroup,
     toolResultsFor: virtual.toolResultsFor,
     anchorUsers: virtual.anchorUsers,
+    /** 行内展开/收起超长正文时按住滚动偏移（见 message-list/scroll-hold.ts） */
+    holdScrollOffset: virtual.holdScrollOffset,
     // 滚动
     loadOlder: scroll.loadOlder,
     isLoadingOlder: scroll.isLoadingOlder,

@@ -6,12 +6,13 @@
  * 行 key 做滚动锚定（前插历史视口不跳动）；anchorTo:'end' 贴底跟随。
  */
 import { useCallback, useMemo, useRef } from 'react'
-import { useVirtualizer } from '@tanstack/react-virtual'
+import { elementScroll, useVirtualizer } from '@tanstack/react-virtual'
 import type { Range, Virtualizer } from '@tanstack/react-virtual'
 import type { Message } from '@/types'
 import { sessionStore } from '@/ui/store'
 import { previewOfMessage } from './helpers'
 import { buildRows, buildRowIndexMap, type ListRow } from './rows'
+import { createScrollHold } from './scroll-hold'
 import {
   AT_BOTTOM_THRESHOLD,
   EMPTY_TOOL_RESULTS,
@@ -199,6 +200,9 @@ export function useVirtualList({
     return indexes
   }, [])
 
+  /** 行内改高的「按住滚动偏移」（见 scroll-hold.ts）：气泡的「显示更多 / 收起」调 holdScrollOffset */
+  const scrollHold = useMemo(() => createScrollHold(), [])
+
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => containerRef.current,
@@ -226,6 +230,22 @@ export function useVirtualList({
     useAnimationFrameWithResizeObserver: true,
     paddingStart: LIST_PADDING + (hasMoreInDb ? LOAD_MORE_HINT_HEIGHT : 0),
     paddingEnd: LIST_PADDING,
+    // 行内改高（气泡的「显示更多 / 收起」）时按住滚动偏移，见 scroll-hold.ts。
+    // 拦的只是「尺寸补偿」那一类写入：跳转 / 平滑滚动 / 贴底按钮照旧走 elementScroll。
+    scrollToFn: (offset, opts, instance) => {
+      const held = scrollHold.intercept(opts.adjustments)
+      if (held !== null) {
+        elementScroll(held, {}, instance)
+        return
+      }
+      elementScroll(offset, opts, instance)
+    },
+    onChange: (instance) => {
+      // 补偿被拦下后，库的内部偏移还是加过那笔量的（applyScrollAdjustment 在 scrollToFn 之后改它）
+      // → 按回去；否则下一帧会按错的偏移算渲染范围（视口空一块 / 渲染错行）
+      const held = scrollHold.consumeIntercepted()
+      if (held !== null) instance.scrollOffset = held
+    },
   })
   rowVirtualizerRef.current = rowVirtualizer
   const virtualItems = rowVirtualizer.getVirtualItems()
@@ -263,6 +283,16 @@ export function useVirtualList({
     [rowVirtualizer],
   )
 
+  /**
+   * 「按住当前滚动偏移」（见 scroll-hold.ts）：行内展开/收起超长正文会改这一行的高度，
+   * 库的贴底补偿会把阅读位置甩到消息底部 —— 这里把偏移按住，并短时自愈。
+   * ⚠️ 必须是稳定引用：它作为 prop 传给 memo 化的气泡，引用一变全部气泡重渲染。
+   */
+  const holdScrollOffset = useCallback(() => {
+    const el = containerRef.current
+    if (el) scrollHold.arm(el.scrollTop)
+  }, [scrollHold])
+
   return {
     rowVirtualizer,
     virtualItems,
@@ -274,5 +304,6 @@ export function useVirtualList({
     toolResultsFor,
     userMessages,
     anchorUsers,
+    holdScrollOffset,
   }
 }

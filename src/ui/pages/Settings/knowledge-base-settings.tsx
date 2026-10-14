@@ -1,10 +1,11 @@
 /**
- * knowledge-base-settings — 知识库（设置 → 知识库）：列表里的库只做「新建 / 改名 / 删除」三件事，
+ * knowledge-base-settings — 知识库（设置 → 知识库）：列表里的库只做「新建 / 重命名 / 删除」三件事，
  * 点卡片进 `DocListModal`，文档的查看 / 新建 / 编辑 / 删除与该库内的试搜、导出、导入全在里面。
  *
  * 卡片上不摆文档级动作（添加文档 / 添加文件夹 / 导入压缩包 / 导出那些），是为了让一行只剩
- * 「进」「改名」「删」三种意图：左边一块（信息 + 行尾箭头）负责进，竖线右边一块只放库级动作，
- * 不混在一起。
+ * 「进」与「库级动作」两种意图：左边一块（信息）负责进，竖线右边一块只放库级动作，不混在一起。
+ * 库级动作（重命名 / 删除）再收进一个「更多」图标里（`ContextMenu`）：它们都很低频、删除还
+ * 不可逆，平铺成两个按钮等于让每一行都在喊「点我」。
  *
  * 三处口径，都是为了「不用先配好才能用」：
  * - 知识库**固定启用**：它自己不占资源、不后台跑东西，文档只在你提问时才被查找，所以没有总开关；
@@ -13,13 +14,15 @@
  * - 文案说人话：不出现 RAG / 分块 / chunk / 向量这类实现词 —— 用户放进去的是**文档**，
  *   AI 会「先在这里查一遍」。
  *
- * 还有一件事：**系统自建的库（默认知识库 / 记忆详情）不给改名也不给删**。它们由功能自己创建
+ * 还有一件事：**系统自建的库（默认知识库 / 记忆详情）不给重命名也不给删**。它们由功能自己创建
  * 与维护，名字是这两个功能的「认领锚点」（缓存失效后按名字找回自己的库），删掉只会让对应
- * 功能静默失效（记忆条目指向的详情库就没了）—— 所以卡片上不画这两个按钮，改成一句说明；
+ * 功能静默失效（记忆条目指向的详情库就没了）—— 所以这类卡片上**没有「更多」按钮**（按钮直接
+ * 拿掉而不置灰：置灰的删除按钮只会诱发点击，而它永远不会生效），只用「自动创建」小标解释。
  * 后端也会拒（见 `rag::vector_store::delete_knowledge_base` / `update_knowledge_base`）。
  *
- * 删库要等一会儿（整个库连同里面的文档 / 内容一起清掉，比删一份文档慢得多），所以卡片上的
- * 删除按钮会切「删除中…」并禁用整张卡片的动作（`deletingKbId`）：不然用户会以为没点上。
+ * 删库要等一会儿（整个库连同里面的文档 / 内容一起清掉，比删一份文档慢得多），所以确认之后
+ * 「更多」按钮会换成一个转圈并禁用整张卡片的动作（`deletingKbId`）：不然用户会以为没点上
+ *（菜单点到「删除」就关掉了，光靠菜单里的文案用户看不到「在干活」）。
  */
 import { useEffect, useState, useCallback } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -27,6 +30,8 @@ import { t, tpl } from '@/ui/i18n'
 import { ragService } from '@/services/rag-service'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 import { showToast } from '@/ui/components/shared/Toast'
+import ContextMenu from '@/ui/components/shared/ContextMenu'
+import MoreSvg from '@/ui/components/icons/MoreSvg'
 import type { KnowledgeBase } from '@/domain/ports'
 import './knowledge-base-settings.scss'
 // 文档级的动作（选择文件 / 选文件夹 / 导入压缩包 / 导出）都在 DocListModal 里，本页不再直接用它们
@@ -40,11 +45,21 @@ function KnowledgeBaseSettings() {
 
   const [showCreateModal, setShowCreateModal] = useState(false)
 
-  // 改名弹窗的目标（null = 关闭）
+  // 重命名弹窗的目标（null = 关闭）
   const [renameTarget, setRenameTarget] = useState<KnowledgeBase | null>(null)
 
-  // 正在删的库（卡片上的删除按钮切「删除中…」并禁用整张卡片的动作；删除要花时间，不能没反馈）
+  // 正在删的库（卡片上的「更多」按钮换成转圈并禁用整张卡片的动作；删除要花时间，不能没反馈）
   const [deletingKbId, setDeletingKbId] = useState<string | null>(null)
+
+  // 卡片右侧的「更多」菜单（一次只开一个）：目标库 + 锚点位置 + 触发按钮。
+  // 按钮元素要留着：菜单靠它区分「点的是这个按钮」（不算点在外面）与「点在别处」，
+  // 这样「再点一次就关掉」才成立（详见 `ContextMenu` 的 `anchorElement`）。
+  const [cardMenu, setCardMenu] = useState<{
+    kb: KnowledgeBase
+    x: number
+    y: number
+    anchor: HTMLButtonElement
+  } | null>(null)
 
   // 文档列表弹窗（文档 / 搜索 / 分页等 state 由 DocListModal 自持）
   const [showDocListModal, setShowDocListModal] = useState(false)
@@ -55,6 +70,9 @@ function KnowledgeBaseSettings() {
     setLoading(true)
     try {
       const list = await ragService.listKnowledgeBases()
+      list.sort((a, b) => {
+        return a.builtin ? -1 : b.builtin ? 1 : a.name.localeCompare(b.name)
+      })
       setKbs(list)
     } catch (err: any) {
       showToast(
@@ -77,6 +95,29 @@ function KnowledgeBaseSettings() {
     setDocListKbName(kbName)
     setShowDocListModal(true)
   }, [])
+
+  /**
+   * 点卡片上的「更多」：同一个按钮再点一次 = 关掉，换一个库点 = 换成那一个的菜单。
+   *
+   * 锚点取按钮的右下角，配合 `placement="bottom-left"` 让菜单右边缘贴着按钮（也就贴着卡片
+   * 右边缘）向左下展开 —— 往右下展开会越出列表，往左上展开会盖住自己要操作的那一行。
+   */
+  const toggleCardMenu = (
+    kb: KnowledgeBase,
+    ev: React.MouseEvent<HTMLButtonElement>,
+  ) => {
+    if (cardMenu?.kb.id === kb.id) {
+      setCardMenu(null)
+      return
+    }
+    const rect = ev.currentTarget.getBoundingClientRect()
+    setCardMenu({
+      kb,
+      x: rect.right,
+      y: rect.bottom + 4,
+      anchor: ev.currentTarget,
+    })
+  }
 
   const handleDelete = async (kbId: string, name: string) => {
     if (deletingKbId) return
@@ -109,7 +150,7 @@ function KnowledgeBaseSettings() {
           <h2 className="section-title">{t('知识库')}</h2>
           <p className="kb-page-desc">
             {t(
-              '把常用的文档、笔记放进来，AI 回答时会先在这里查一遍。内容只保存在这台电脑上。',
+              '把常用的文档、笔记放进来，内容只保存在这台电脑上。',
             )}
           </p>
         </div>
@@ -154,9 +195,7 @@ function KnowledgeBaseSettings() {
             {kbs.map((kb) => (
               <article className="kb-card" key={kb.id}>
                 {/* 主体区是**真按钮**（不是 div + role=button）：Tab 能到达、Enter 能触发。
-                    横排「信息列 + 行尾箭头」：箭头在按钮内部右端、整行垂直居中，比把
-                    「查看文档 ›」塞在信息行尾更像「从这里进下一层」（与记忆页的入口卡同一套语言），
-                    也不会和右边的删除挤在同一处行尾。 */}
+                    整块信息列都属于它，点哪儿都进下一层（右边的竖线分组把库级动作划在外面）。 */}
                 <button
                   type="button"
                   className="kb-card-main"
@@ -170,7 +209,7 @@ function KnowledgeBaseSettings() {
                       {kb.builtin && (
                         <span
                           className="kb-card-badge"
-                          title={t('由 Virlen 自动创建并维护，不能改名或删除')}>
+                          title={t('由 Virlen 自动创建并维护，不能重命名或删除')}>
                           {t('自动创建')}
                         </span>
                       )}
@@ -185,40 +224,30 @@ function KnowledgeBaseSettings() {
                       })}
                     </span>
                   </span>
-                  <span className="kb-card-arrow" aria-hidden="true">
-                    ›
-                  </span>
                 </button>
-                <div className="kb-card-actions">
-                  {kb.builtin ? (
-                    // 系统自建库：改名 / 删除按钮的位置留给一句说明 —— 否则用户会先找
-                    //「为什么这一行没有改名和删除」（悬停也给同一句原因，不必先猜那个「自动创建」小标）
-                    <span
-                      className="kb-card-locked"
-                      title={t('由 Virlen 自动创建并维护，不能改名或删除')}>
-                      {t('不能改')}
-                    </span>
-                  ) : (
-                    <>
-                      <button
-                        className="kb-btn kb-btn-sm"
-                        disabled={!!deletingKbId}
-                        onClick={() => setRenameTarget(kb)}
-                        title={t('改个名字，或补一句说明')}>
-                        {t('改名')}
-                      </button>
-                      <button
-                        className={`kb-btn kb-btn-sm kb-btn-danger ${
-                          deletingKbId === kb.id ? 'kb-btn-busy' : ''
-                        }`}
-                        disabled={!!deletingKbId}
-                        onClick={() => handleDelete(kb.id, kb.name)}
-                        title={t('删除这个知识库和里面的全部文档')}>
-                        {deletingKbId === kb.id ? t('删除中…') : t('删除')}
-                      </button>
-                    </>
-                  )}
-                </div>
+                {/* 库级动作收在「更多」里：竖线右边只有一个图标按钮，一行不会跳出两个按钮。
+                    系统自建库没有动作，连这块（连同分组线）都不画。 */}
+                {!kb.builtin && (
+                  <div className="kb-card-actions">
+                    <button
+                      type="button"
+                      className="kb-card-more"
+                      disabled={!!deletingKbId}
+                      aria-haspopup="menu"
+                      aria-expanded={cardMenu?.kb.id === kb.id}
+                      onClick={(e) => toggleCardMenu(kb, e)}
+                      title={
+                        deletingKbId === kb.id ? t('删除中…') : t('更多操作')
+                      }>
+                      {deletingKbId === kb.id ? (
+                        // 「删除中…」：图标换成转圈 + 禁用整张卡片（删一个库要清掉里面所有内容，慢）
+                        <span className="kb-card-more-spinner" />
+                      ) : (
+                        <MoreSvg />
+                      )}
+                    </button>
+                  </div>
+                )}
               </article>
             ))}
           </div>
@@ -231,7 +260,31 @@ function KnowledgeBaseSettings() {
         onCreated={loadKbs}
       />
 
-      {/* 改名弹窗：只对手建的库开放（builtin 的卡片上根本不画这个入口） */}
+      {/* 重命名 / 删除（库级动作）：只有手建的库才有「更多」按钮，所以这里拿到的必定可操作 */}
+      {cardMenu && (
+        <ContextMenu
+          position={{ x: cardMenu.x, y: cardMenu.y }}
+          placement="bottom-left"
+          anchorElement={cardMenu.anchor}
+          onClose={() => setCardMenu(null)}
+          items={[
+            {
+              key: 'rename',
+              label: t('重命名'),
+              onClick: () => setRenameTarget(cardMenu.kb),
+            },
+            {
+              key: 'delete',
+              label: t('删除'),
+              danger: true,
+              divider: true,
+              onClick: () => handleDelete(cardMenu.kb.id, cardMenu.kb.name),
+            },
+          ]}
+        />
+      )}
+
+      {/* 重命名弹窗：只对手建的库开放（builtin 的卡片上根本没有「更多」入口） */}
       <EditKbModal
         visible={!!renameTarget}
         kbId={renameTarget?.id ?? ''}

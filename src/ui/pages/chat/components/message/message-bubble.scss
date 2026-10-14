@@ -30,6 +30,65 @@
         &::selection {
           background-color: var(--usermsg-selected-bg);
         }
+
+        /* 超长正文折叠态：只给 40vh（判据 = 自然高度 > 70vh，见 message-bubble.tsx）。
+           裁在行中间会很生硬，底部压一层与气泡同色的渐隐，让「后面还有」看得见 */
+        &.is-collapsed {
+          position: relative;
+          max-height: 40vh;
+          overflow: hidden;
+
+          &::after {
+            content: '';
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            height: 100px;
+            pointer-events: none;
+            background: linear-gradient(to bottom,
+                transparent, transparent,
+                var(--btn-bg-primary, #4f46e5), var(--btn-bg-primary, #4f46e5));
+          }
+        }
+      }
+
+      /* 折叠态的开关（「显示更多」/「收起」）：贴在气泡下方右对齐（气泡是右对齐的，按钮跟着走）。
+         `width: fit-content` 不能省：块级盒 + 自身的 auto 宽会撑满 wrapper，
+         于是 `margin-left: auto` 归零，标签会贴在气泡左边 */
+      .message-content-more {
+        display: flex;
+        align-items: center;
+        gap: 3px;
+        width: fit-content;
+        margin: 2px 2px 0 auto;
+        padding: 1px 6px;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--text-secondary, #666);
+        font-size: var(--font-size-sm, 12.5px);
+        cursor: pointer;
+        transition:
+          color 0.15s,
+          background 0.15s;
+
+        .more-icon {
+          width: 12px;
+          height: 12px;
+          fill: currentColor;
+          transition: transform 0.15s;
+        }
+
+        /* 展开态：同一个下箭头转上去表示「收起」，不另做一个图标 */
+        &.is-expanded .more-icon {
+          transform: rotate(180deg);
+        }
+
+        &:hover {
+          color: var(--accent-color, #4f46e5);
+          background: var(--hover-bg, #f0f0f0);
+        }
       }
     }
   }
@@ -250,6 +309,7 @@
       flex-wrap: wrap;
       justify-content: flex-end;
     }
+
     .message-actions {
       display: flex;
       align-items: center;

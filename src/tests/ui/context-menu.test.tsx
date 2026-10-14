@@ -281,6 +281,68 @@ describe('ContextMenu 组件', () => {
 
     await act(async () => root.unmount())
   })
+
+  it('placement="bottom-left"：菜单以右上角贴锚点（行尾「更多」按钮：往右下展开会越出列表）', async () => {
+    const items = [{ key: 'a', label: 'A', onClick: vi.fn() }]
+    const { root } = await render(
+      <ContextMenu
+        position={{ x: 500, y: 300 }}
+        placement="bottom-left"
+        onClose={vi.fn()}
+        items={items}
+      />,
+    )
+
+    const el = document.querySelector('.context-menu') as HTMLElement
+    Object.defineProperty(el, 'offsetWidth', { value: 120, configurable: true })
+    Object.defineProperty(el, 'offsetHeight', { value: 80, configurable: true })
+    await act(async () => {
+      root.render(
+        <ContextMenu
+          position={{ x: 501, y: 301 }}
+          placement="bottom-left"
+          onClose={vi.fn()}
+          items={items}
+        />,
+      )
+    })
+
+    // 锚点 = 菜单右上角 ⇒ 右边缘贴住按钮、向下展开（左边缘往左退一个菜单宽）
+    expect(el.style.left).toBe(`${501 - 120}px`)
+    expect(el.style.top).toBe('301px')
+
+    await act(async () => root.unmount())
+  })
+
+  it('anchorElement：点触发按钮不算「点在外面」（否则「再点一次关掉」永远不生效）', async () => {
+    const onClose = vi.fn()
+    // 触发这个菜单的按钮：调用方下一个 click 就是「关掉」，所以 mousedown 阶段先别关它
+    const anchor = document.createElement('button')
+    document.body.appendChild(anchor)
+
+    const { root } = await render(
+      <ContextMenu
+        position={{ x: 10, y: 10 }}
+        anchorElement={anchor}
+        onClose={onClose}
+        items={[{ key: 'a', label: 'A', onClick: vi.fn() }]}
+      />,
+    )
+
+    await act(async () => {
+      anchor.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    })
+    expect(onClose).not.toHaveBeenCalled()
+
+    // 别处仍算「点在外面」（换另一个按钮点 = 先关旧的、再开新的）
+    await act(async () => {
+      document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    })
+    expect(onClose).toHaveBeenCalledTimes(1)
+
+    await act(async () => root.unmount())
+    anchor.remove()
+  })
 })
 
 describe('菜单项工厂', () => {
