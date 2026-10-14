@@ -34,9 +34,9 @@ function renderTree(ui: any): string {
   lines.push(
     ui.truncated
       ? tpl('⚠️ 文件数量超过限制，仅显示前 $__max__ 项（共 $__total__ 项）', {
-          max: ui.maxItems ?? 0,
-          total: ui.totalItems ?? 0,
-        })
+        max: ui.maxItems ?? 0,
+        total: ui.totalItems ?? 0,
+      })
       : tpl('总计 $__count__ 项', { count: ui.totalItems ?? 0 }),
   )
   return lines.join('\n')
@@ -75,6 +75,9 @@ class ListFilesMessage implements IToolCallMessage {
     }
   }
   getExpandView(props: ToolMessageProps): React.ReactNode {
+    if (!props.expand) {
+      return <></>
+    }
     if (props.message?.isError) {
       return <div className="error">{props.message.content as string}</div>
     }
@@ -87,7 +90,8 @@ class ListFilesMessage implements IToolCallMessage {
           : (props.message?.content as string)
       return (
         <CodeBlock
-          width={'100%'}
+          style={{ marginLeft: 30 }}
+          width={'80%'}
           maxHeight={600}
           showLineNumbers={false}>
           {text as unknown as React.ReactNode}
@@ -98,7 +102,7 @@ class ListFilesMessage implements IToolCallMessage {
     }
   }
   diyWrapper(): boolean {
-    return false
+    return true
   }
 }
 

@@ -567,11 +567,12 @@ function CodeBlock({
     return (
       <div
         ref={rootRef}
-        className={`code-block-wrapper${isFull ? ' is-fullscreen' : ''}`}
+        className={`code-block-wrapper${isFull ? ' is-fullscreen' : ''} ${props.className || ''}}`}
         style={{
           maxHeight: !isFull && maxHeight ? maxHeight : undefined,
           width: !isFull && width ? width : undefined,
           overflow: isFull || maxHeight ? 'auto' : 'visible',
+          ...(props?.style || {})
         }}
         onContextMenu={(e) => menu.openAt(e, undefined)}>
         <div className="code-block-header">
@@ -580,10 +581,10 @@ function CodeBlock({
             {fileNameRender
               ? fileNameRender(fileName)
               : fileName && (
-                  <span className="code-file-name" title={fileName}>
-                    {fileName}
-                  </span>
-                )}
+                <span className="code-file-name" title={fileName}>
+                  {fileName}
+                </span>
+              )}
           </div>
           <div className="actions-list">
             {

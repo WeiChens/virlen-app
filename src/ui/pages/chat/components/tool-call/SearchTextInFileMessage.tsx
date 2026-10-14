@@ -6,7 +6,7 @@ import { IToolCallMessage, ToolMessageProps } from './IToolCallMessage'
 
 class SearchTextInFileMessage implements IToolCallMessage {
   diyWrapper(): boolean {
-    return false
+    return true
   }
   getToolName(): string {
     return 'search_text_in_files'
@@ -38,11 +38,14 @@ class SearchTextInFileMessage implements IToolCallMessage {
     }
   }
   getExpandView(props: ToolMessageProps): React.ReactNode {
+    if (!props.expand) {
+      return <></>
+    }
     if (props.message?.isError) {
       return <div className="error">{props.message.content as string}</div>
     }
     return (
-      <CodeBlock showLineNumbers={false} width={'100%'}>
+      <CodeBlock showLineNumbers={false} width={'80%'} style={{ marginLeft: 30 }}>
         {props.message?.content as string}
       </CodeBlock>
     )

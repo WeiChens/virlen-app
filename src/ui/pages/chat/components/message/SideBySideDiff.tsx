@@ -1,7 +1,13 @@
-import { Fragment, useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { t } from '@/ui/i18n'
 import type { DiffRow } from '@/utils/diff'
+import { copyText } from '@/utils/clipboard'
+import { showToast } from '@/ui/components/shared/Toast'
+import ContextMenu, {
+  useContextMenu,
+  type ContextMenuItem,
+} from '@/ui/components/shared/ContextMenu'
 import type { Action } from './code-block'
 import { toMonacoLang } from './code-block'
 import { monaco, virlenDarkTheme } from '@/monaco/setupMonaco'
@@ -120,25 +126,82 @@ function diffLanguageFromName(fileName: string | null): string | undefined {
   return toMonacoLang(ext)
 }
 
+/** diff 的一栏：左=原文件 / 右=新文件 */
+type DiffSide = 'old' | 'new'
+
+/**
+ * 某一栏的纯文本（左栏不含新增行、右栏不含删除行，与 DiffHalf 的取值口径一致）。
+ * 菜单的「全选 → 复制」用它，而不是把 DOM 选区序列化一遍 —— 后者会把行号一起拼进去
+ *（`Range.toString()` 不认 `user-select: none`）。
+ */
+function diffSideText(rows: SideBySideRow[], side: DiffSide): string {
+  const key = side === 'old' ? 'oldLine' : 'newLine'
+  const lines: string[] = []
+  for (const row of rows) {
+    if (row.type === 'gap') continue
+    if (side === 'old' && row.type === 'insert') continue
+    if (side === 'new' && row.type === 'delete') continue
+    lines.push(row[key] ?? '')
+  }
+  return lines.join('\n')
+}
+
+/**
+ * 节点落在哪一栏（右键落点、选区起点都可能在其中）；两栏之外（文件头等）返回 null。
+ * 双栏表头的两个格子也带 --old / --new，右键表头一样能看出意图。
+ */
+function diffSideOf(node: Node | null): DiffSide | null {
+  let el = node instanceof Element ? node : (node?.parentElement ?? null)
+  while (el) {
+    if (
+      el.classList.contains('diff-line--old') ||
+      el.classList.contains('diff-col-header--old')
+    ) {
+      return 'old'
+    }
+    if (
+      el.classList.contains('diff-line--new') ||
+      el.classList.contains('diff-col-header--new')
+    ) {
+      return 'new'
+    }
+    el = el.parentElement
+  }
+  return null
+}
+
 /**
  * 一行里的其中一半（左半=原文件 / 右半=新文件）：两半是**同一个 grid 行的两个格子**，所以
  * 两侧列宽天然各占一半（不必量宽），且一侧折行时另一侧跟着变高，左右不会逐行错位。
+ *
+ * 格子位置一律靠内联 grid-column / grid-row 指定，不吃 DOM 顺序（理由见 DiffContent 的渲染注释）。
  */
 function DiffHalf({
   side,
   row,
+  rowIndex,
   language,
 }: {
   side: 'old' | 'new'
   row: SideBySideRow
+  /** 该行在 diffRows 里的下标：决定落在第几个 grid 行（表头占第 1 行，故 +2） */
+  rowIndex: number
   language?: string
 }) {
   const isOld = side === 'old'
 
+  // 左半恒第 1 列、右半恒第 2 列；同一 rowIndex 的两半落在同一 grid 行
+  const place: React.CSSProperties = {
+    gridColumn: isOld ? 1 : 2,
+    gridRow: rowIndex + 2,
+  }
+
   // 多处编辑之间的省略间隔行：两侧各画一个 ⋯（与整行底色一起连成一条横带）
   if (row.type === 'gap') {
     return (
-      <div className={`diff-line diff-line--${side} diff-line--gap`}>
+      <div
+        className={`diff-line diff-line--${side} diff-line--gap`}
+        style={place}>
         <span className="diff-linenum"></span>
         <span className="diff-code">⋯</span>
       </div>
@@ -155,7 +218,9 @@ function DiffHalf({
     : ''
 
   return (
-    <div className={`diff-line diff-line--${side}${highlightClass}`}>
+    <div
+      className={`diff-line diff-line--${side}${highlightClass}`}
+      style={place}>
       <span className="diff-linenum">{lineNum ?? ''}</span>
       <span className="diff-code">
         <DiffCode text={line != null ? line || ' ' : ''} language={language} />
@@ -178,6 +243,7 @@ function DiffContent({
   onToggleFullscreen,
   isFull,
   blockRef,
+  onContextMenu,
 }: {
   diffRows: SideBySideRow[]
   fileName: string | null
@@ -192,6 +258,8 @@ function DiffContent({
   isFull: boolean
   /** 原位那份的根节点 ref（居中用；全屏副本不接，避免 ref 被覆盖） */
   blockRef?: React.Ref<HTMLDivElement>
+  /** 右键（挂在根上）：原位 / 全屏两份实例共用一个菜单状态，故回传事件给 SideBySideDiff */
+  onContextMenu: (e: React.MouseEvent<HTMLDivElement>) => void
 }) {
   // 有汇总统计时说明是多处编辑合并展示，行号区间不再连续，隐藏区间
   const showStat = stat != null
@@ -219,7 +287,8 @@ function DiffContent({
   return (
     <div
       className={`diff-side-by-side${isFull ? ' is-fullscreen' : ''}`}
-      ref={isFull ? undefined : blockRef}>
+      ref={isFull ? undefined : blockRef}
+      onContextMenu={onContextMenu}>
       {/* 文件头（固定，不随内容滚动） */}
       <div className="diff-header">
         <span className="diff-header-name">{fileName}</span>
@@ -270,12 +339,29 @@ function DiffContent({
           </div>
         </div>
 
-        {/* 每一行：左半、右半成对落进同一个 grid 行 */}
+        {/*
+         * 每一行：左半、右半靠内联 grid-column / grid-row 落进同一个 grid 行（不是靠 DOM 顺序排布）。
+         * 因此这里按「左栏全部 → 右栏全部」两段渲染：浏览器选区是**文档顺序上的连续区间**，
+         * 若交错渲染（old1,new1,old2,new2…），从左边第 1 行拖到第 5 行的选区会连中间那几段右半
+         * 一起框住 —— 看着是「选左边带出了右边」，Ctrl+C 拿到的也是两栏交错的内容。
+         */}
         {diffRows.map((row, i) => (
-          <Fragment key={i}>
-            <DiffHalf side="old" row={row} language={codeLang} />
-            <DiffHalf side="new" row={row} language={codeLang} />
-          </Fragment>
+          <DiffHalf
+            key={`old-${i}`}
+            side="old"
+            row={row}
+            rowIndex={i}
+            language={codeLang}
+          />
+        ))}
+        {diffRows.map((row, i) => (
+          <DiffHalf
+            key={`new-${i}`}
+            side="new"
+            row={row}
+            rowIndex={i}
+            language={codeLang}
+          />
         ))}
       </div>
     </div>
@@ -307,6 +393,21 @@ export function SideBySideDiff({
   const [fullscreen, setFullscreen] = useState(false)
   // 「打开即居中」的 hook 只能在顶层无条件调用，不能放进 EditFileMessage 的类方法里
   const rootRef = useAutoCenter(autoCenter)
+  /**
+   * diff 专属右键菜单：自绘窗口全局 preventDefault 了原生 contextmenu（见 ContextMenu 头注释），
+   * 而 diff 是普通 DOM、内容又最常被拖选复制 —— 只能自补「复制 / 全选」。挂根上（文件头 /
+   * 双栏表头 / 代码区都能右键），openAt 顺手拦下事件，外层消息行不再接管。
+   * target 记「右键落在哪一栏」（菜单项渲染时现算标签与作用对象）。
+   */
+  const menu = useContextMenu<DiffSide>()
+  /** 右键那一刻的那一份实例（原位 / 全屏是两棵子树）：「全选」只在这一份里选 */
+  const menuRootRef = useRef<HTMLDivElement | null>(null)
+  /**
+   * 本次菜单要复制的文本，开菜单那一刻就快照好：菜单项是 `<button>`，mousedown 会把 window
+   * 选区一起弄丢（同 §11.38 输入框右键菜单的坑），菜单项点击时再读选区就只剩空的了。
+   * 「全选」把它换成该栏文本 —— 用户看到选中的，就是「复制」会拿到的东西。
+   */
+  const menuTextRef = useRef('')
 
   // Esc 退出全屏（与 CodeBlock / TerminalBlock 一致）
   useEffect(() => {
@@ -318,6 +419,65 @@ export function SideBySideDiff({
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [fullscreen])
 
+  /** 开菜单：先定「作用哪一栏」并快照选区文本（理由见 menuTextRef） */
+  function openMenu(e: React.MouseEvent<HTMLDivElement>) {
+    menuRootRef.current = e.currentTarget
+    // 右键落点优先；落在两栏之外（文件头 / 间隔行）就看选区在哪一栏；都没有则按原文件
+    const side =
+      diffSideOf(e.target as Node) ??
+      diffSideOf(window.getSelection()?.anchorNode ?? null) ??
+      'old'
+    menuTextRef.current = window.getSelection?.()?.toString() ?? ''
+    menu.openAt(e, side)
+  }
+
+  /**
+   * 全选（菜单项）：只选一侧 —— 从该栏第一个 `.diff-code` 选到最后一个（双栏表头在它们之前）。
+   * 行号虽被这一区间罩住，但不会进文本：待复制文本由 diffSideText 生成、不序列化 DOM 选区。
+   */
+  function selectAllDiff(side: DiffSide) {
+    const codes = menuRootRef.current?.querySelectorAll(
+      `.diff-line--${side} .diff-code`,
+    )
+    if (codes && codes.length > 0) {
+      const range = document.createRange()
+      range.setStartBefore(codes[0])
+      range.setEndAfter(codes[codes.length - 1])
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+    }
+    menuTextRef.current = diffSideText(diffRows, side)
+  }
+
+  /** 菜单项在渲染时现算（与项目其它右键菜单一致）：复制读快照，全选只作用于右键那一侧 */
+  function diffMenuItems(side: DiffSide): ContextMenuItem[] {
+    return [
+      {
+        key: 'copy',
+        label: t('复制'),
+        onClick: async () => {
+          const text = menuTextRef.current
+          if (!text) {
+            showToast(t('请先选择要复制的内容'))
+            return
+          }
+          showToast(
+            (await copyText(text)) ? t('已复制到剪贴板') : t('复制失败'),
+          )
+        },
+      },
+      {
+        key: 'select-all',
+        // 标签写明会选哪一栏：菜单只有两项，用户不该靠猜
+        label: side === 'old' ? t('全选原文件') : t('全选新文件'),
+        onClick: () => selectAllDiff(side),
+        // 全选后通常紧接着「复制」，菜单保持打开（与代码块 / 终端同一约定）
+        keepOpen: true,
+      },
+    ]
+  }
+
   const renderContent = (isFull: boolean) => (
     <DiffContent
       diffRows={diffRows}
@@ -328,6 +488,7 @@ export function SideBySideDiff({
       onToggleFullscreen={() => setFullscreen(!fullscreen)}
       isFull={isFull}
       blockRef={rootRef}
+      onContextMenu={openMenu}
     />
   )
 
@@ -340,6 +501,14 @@ export function SideBySideDiff({
           <div className="diff-fullscreen-layer">{renderContent(true)}</div>,
           document.body,
         )}
+      {/* 右键菜单：复制（选区优先，无选区时提示先选）/ 全选（只选右键那一侧）；挂 body，全屏浮层里也能用 */}
+      {menu.state && (
+        <ContextMenu
+          position={menu.state.position}
+          items={diffMenuItems(menu.state.target)}
+          onClose={menu.close}
+        />
+      )}
     </>
   )
 }
