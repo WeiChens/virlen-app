@@ -48,7 +48,8 @@ export type UsageKind =
   | 'title'
   | 'verify'
   | 'embedding'
-  /** 长期记忆的蒸馏整理（记忆功能 P2）：一次整理调用记一条，`messageId` 为 `memory:<day>` */
+  /** 长期记忆的整理调用（再蒸馏：一批一条，`messageId` 为 `memory:redistill:<指纹>`；
+   * 历史数据里还有旧「按天蒸馏」的 `memory:<day>`） */
   | 'memory'
   | 'legacy'
 

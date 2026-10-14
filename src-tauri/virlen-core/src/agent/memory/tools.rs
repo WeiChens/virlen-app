@@ -364,6 +364,11 @@ pub async fn run_write(
 
     deps.repo.upsert(&record).await?;
 
+    // 写入成功 → 顺手问一次「该不该后台整理」（§3.3 的写路径闸门）。
+    // ⚠️ 只做「本地计数 + 入队」：**绝不在这里等 LLM**；任何错误只打日志（返回值一字不改）。
+    // 返回 `false` 是常态（没越线 / 刚整理过 / 没有宿主），所以这里不看返回值。
+    crate::agent::memory::redistill::sched::request(deps.repo, deps.settings, deps.now_ms).await;
+
     let mut content = format!(
         "Saved memory (id: {}, level: {}, kind: {}): {}",
         record.id, record.level, record.kind, record.summary
@@ -549,35 +554,6 @@ mod tests {
         async fn touch(&self, ids: &[String], _now: i64) -> Result<(), String> {
             self.touched.lock().unwrap().extend_from_slice(ids);
             Ok(())
-        }
-        // 整理流水（P2）：工具用例不涉及蒸馏
-        async fn get_run(&self, _day: &str) -> Result<Option<crate::session_db::MemoryRun>, String> {
-            Ok(None)
-        }
-        async fn list_runs(
-            &self,
-            _limit: usize,
-        ) -> Result<Vec<crate::session_db::MemoryRun>, String> {
-            Ok(Vec::new())
-        }
-        async fn last_done_day(&self) -> Result<Option<String>, String> {
-            Ok(None)
-        }
-        async fn claim_run(
-            &self,
-            _day: &str,
-            _opts: crate::session_db::ClaimOptions,
-        ) -> Result<Option<crate::session_db::MemoryRun>, String> {
-            Ok(None)
-        }
-        async fn finish_run(&self, _run: &crate::session_db::MemoryRun) -> Result<(), String> {
-            Ok(())
-        }
-        async fn delete_distilled_day(
-            &self,
-            _day: &str,
-        ) -> Result<Vec<MemoryRecord>, String> {
-            Ok(Vec::new())
         }
     }
 

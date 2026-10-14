@@ -7,15 +7,13 @@
  * 2. **写操作真的落到仓储**：新增 / 编辑 / 删除 / 升级 / 停用都是「调仓储 + 重新拉列表」，
  *    少了 reload 会出现「界面上改了、实际没生效」；
  * 3. **注入预览展示的是后端渲染结果**：前端不自己拼 `# Memory` 段（否则用户看到的不是模型收到的）；
- * 4. **蒸馏整理（P2）**：按钮按「昨天」触发、状态行如实展示上次结果、失败可重跑 ——
- *    整理是**花了钱的动作**，界面绝不能让它显得「点了没反应」；
- * 5. **列表只在弹窗里**：设置页 content 只留设置项 + 一个「记忆列表（N 条）」入口。
+ * 4. **列表只在弹窗里**：设置页 content 只留设置项 + 一个「记忆列表（N 条）」入口。
  *    因此本文件里除入口与设置项外，断言列表的用例都先打开弹窗（`render()` 默认就开，
  *    要测「默认不开」的用例传 `{ openList: false }`）；
- * 6. **记录日期**：每条要标出「什么时候记下的」（`createdAt`，缺失时不编日期）；
- * 7. **筛选与分页**：内容模糊搜索、分类 / 级别两个下拉筛选、分页 —— 三者的组合最容易出
+ * 5. **记录日期**：每条要标出「什么时候记下的」（`createdAt`，缺失时不编日期）；
+ * 6. **筛选与分页**：内容模糊搜索、分类 / 级别两个下拉筛选、分页 —— 三者的组合最容易出
  *    「看起来空了」这类假象（页码停在越界处、筛选后不重置页），所以逐条守着；
- * 8. **多选与批量**：行内已无操作按钮，停用 / 删除 / 升降级全走「勾选 + 批量栏」，
+ * 7. **多选与批量**：行内已无操作按钮，停用 / 删除 / 升降级全走「勾选 + 批量栏」，
  *    因此「勾选真的生效、条数与事实一致」比过去更关键；批量栏**常驻**（未选中时全禁用），
  *    所以不再断言「没选中时它不存在」，而是断言「它在、但不可点」。
  *
@@ -37,9 +35,6 @@ vi.mock('@/infrastructure/memoryRepo', () => ({
   setMemoryDisabled: vi.fn(),
   loadMemorySection: vi.fn(),
   touchMemories: vi.fn(),
-  // P2：蒸馏整理（面板的「整理昨天的对话」+ 状态行）
-  consolidateMemories: vi.fn(),
-  listMemoryRuns: vi.fn(),
   // P3：导出备份（Rust 给文本，面板负责选路径写文件）
   exportMemories: vi.fn(),
 }))
@@ -57,11 +52,9 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 vi.mock('@tauri-apps/plugin-fs', () => ({ writeTextFile: vi.fn(() => Promise.resolve()) }))
 
 import {
-  consolidateMemories,
   deleteMemory,
   exportMemories,
   listMemories,
-  listMemoryRuns,
   loadMemorySection,
   setMemoryDisabled,
   setMemoryLevel,
@@ -286,11 +279,7 @@ beforeEach(() => {
   vi.mocked(setMemoryLevel).mockReset()
   vi.mocked(setMemoryDisabled).mockReset()
   vi.mocked(loadMemorySection).mockReset()
-  vi.mocked(consolidateMemories).mockReset()
-  vi.mocked(listMemoryRuns).mockReset()
   vi.mocked(listMemories).mockResolvedValue([permanentMemory, normalMemory])
-  vi.mocked(listMemoryRuns).mockResolvedValue([])
-  vi.mocked(consolidateMemories).mockResolvedValue(null)
   vi.mocked(upsertMemory).mockResolvedValue(undefined)
   vi.mocked(deleteMemory).mockResolvedValue(true)
   vi.mocked(setMemoryLevel).mockResolvedValue(true)
@@ -346,7 +335,7 @@ it('列表不常驻设置页：默认没有任何条目，点「记忆列表」�
 
   // 设置项还在（列表搬走 ≠ 面板空了）
   expect(document.querySelector('.memory-option-row')).not.toBeNull()
-  expect(document.querySelector('.memory-run-row')).not.toBeNull()
+  expect(document.querySelector('.memory-scope-note')).not.toBeNull()
   expect(document.querySelector('.memory-budget-row')).not.toBeNull()
 
   // 列表本体（表格 / 分页 / 批量栏）一个都不在设置页里
@@ -376,7 +365,7 @@ it('每条记忆标出记录日期；来源日单独标出；缺失时不编日�
   const created = new Date(2026, 9, 5, 14, 20).getTime()
   const updated = new Date(2026, 9, 6, 9, 2).getTime()
   vi.mocked(listMemories).mockResolvedValue([
-    // 蒸馏产出：记录日（刚整理完的今天）与来源日（被整理的那一天）本来就可以不同天
+    // 记录日与来源日**本来就可以不同天**（来源日是从它提炼出来的那一天；老数据里往往是前一天）
     { ...permanentMemory, createdAt: created, updatedAt: updated, sourceDay: '2026-10-04' },
     // 既无 createdAt 也无来源日：两列都显示占位符，不编日期
     { ...normalMemory, createdAt: undefined, sourceDay: undefined },
@@ -573,135 +562,6 @@ it('记忆固定启用：页面上没有开关；每次带上的条数写进设�
     numberInput.dispatchEvent(new Event('input', { bubbles: true }))
   })
   expect(settingsState.value.memoryNormalTopK).toBe(7)
-
-  await act(async () => root.unmount())
-})
-
-// ==================== 蒸馏整理（P2） ====================
-
-/** 本地「昨天」（`YYYY-MM-DD`）—— 与组件里的算法一致 */
-function yesterday(): string {
-  const d = new Date()
-  d.setDate(d.getDate() - 1)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
-    d.getDate(),
-  ).padStart(2, '0')}`
-}
-
-it('尚未整理过时给出状态行；点「整理昨天的对话」按昨天触发并刷新列表', async () => {
-  const { root } = await render()
-
-  expect(document.querySelector('.memory-run-status')!.textContent).toContain('还没整理过')
-
-  vi.mocked(consolidateMemories).mockResolvedValue({
-    status: 'ok',
-    days: [
-      {
-        day: yesterday(),
-        status: 'done',
-        items: 2,
-        details: 1,
-        sourceSessions: 3,
-        model: 'p1/m1',
-      },
-    ],
-    items: 2,
-    details: 1,
-    calls: 1,
-  })
-
-  await click(buttonByText('整理昨天的对话'))
-
-  // 传的是「昨天」且不强制（幂等：同一天只整理一次）
-  expect(consolidateMemories).toHaveBeenCalledWith(yesterday(), false)
-  expect(showToast).toHaveBeenCalledWith(
-    expect.stringContaining('已整理'),
-    expect.any(Number),
-  )
-  // 整理后重新拉列表与流水（否则用户看不到刚产的条目）
-  expect(vi.mocked(listMemories)).toHaveBeenCalledTimes(3)
-  expect(vi.mocked(listMemoryRuns)).toHaveBeenCalledTimes(3)
-
-  await act(async () => root.unmount())
-})
-
-it('状态行展示最近一次整理的结果；失败时可「重新整理这一天」', async () => {
-  vi.mocked(listMemoryRuns).mockResolvedValue([
-    {
-      day: '2026-10-04',
-      status: 'failed',
-      items: 0,
-      details: 0,
-      sourceSessions: 0,
-      error: '模型返回非 JSON',
-      attempts: 1,
-      startedAt: 1,
-    },
-  ])
-  const { root } = await render()
-
-  expect(document.querySelector('.memory-run-status')!.textContent).toContain('2026-10-04')
-  expect(document.querySelector('.memory-run-status')!.textContent).toContain('没成功')
-  expect(document.querySelector('.memory-preview-warn')!.textContent).toContain(
-    '模型返回非 JSON',
-  )
-
-  await click(buttonByText('再试一次'))
-  expect(consolidateMemories).toHaveBeenCalledWith('2026-10-04', true)
-
-  await act(async () => root.unmount())
-})
-
-it('成功整理后状态行显示条数与详情数', async () => {
-  vi.mocked(listMemoryRuns).mockResolvedValue([
-    {
-      day: '2026-10-04',
-      status: 'done',
-      items: 3,
-      details: 1,
-      sourceSessions: 2,
-      attempts: 1,
-      startedAt: 1,
-    },
-  ])
-  const { root } = await render()
-
-  const text = document.querySelector('.memory-run-status')!.textContent!
-  expect(text).toContain('2026-10-04')
-  expect(text).toContain('3')
-  expect(text).toContain('1')
-
-  await act(async () => root.unmount())
-})
-
-it('整理被关掉 / 没有模型时给出可读提示，而不是静默', async () => {
-  vi.mocked(consolidateMemories).mockResolvedValue({
-    status: 'disabled',
-    days: [],
-    items: 0,
-    details: 0,
-    calls: 0,
-  })
-  const { root } = await render()
-
-  await click(buttonByText('整理昨天的对话'))
-  expect(showToast).toHaveBeenCalledWith(
-    expect.stringContaining('记忆功能当前不可用'),
-    expect.any(Number),
-  )
-
-  vi.mocked(consolidateMemories).mockResolvedValue({
-    status: 'no-model',
-    days: [],
-    items: 0,
-    details: 0,
-    calls: 0,
-  })
-  await click(buttonByText('整理昨天的对话'))
-  expect(showToast).toHaveBeenCalledWith(
-    expect.stringContaining('还没有可用的模型'),
-    expect.any(Number),
-  )
 
   await act(async () => root.unmount())
 })

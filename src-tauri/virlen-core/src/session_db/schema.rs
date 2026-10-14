@@ -179,10 +179,10 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<bool, String> {
     // `migrate()` 对全库执行一次 `messages_fts` rebuild（大库分钟级），白付代价。
     conn.execute_batch(MEMORY_DDL)
         .map_err(|e| format!("初始化记忆表失败: {}", e))?;
-    // 记忆整理流水补 `merged` 列（记忆功能 P3）：同样是元数据级 ALTER，不占 SCHEMA_VERSION
-    ensure_memory_run_merged_column(conn)?;
     // 记忆补 `project_path` 列（项目作用域）：同样是元数据级 ALTER，不占 SCHEMA_VERSION
     ensure_memories_project_path_column(conn)?;
+    // 记忆补 `superseded_by` 列（再蒸馏的软删标记）：同上，纯新增列
+    ensure_memories_superseded_by_column(conn)?;
 
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -257,40 +257,6 @@ fn ensure_usage_duration_column(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-/// 老库给 `memory_runs` 补 `merged` 列（记忆功能 P3；新库由 DDL 直接建出，这里检测后跳过）。
-///
-/// 与 `ensure_usage_duration_column` 同一策略：元数据级 `ALTER`（带默认值，不重写表），
-/// 放在 `init_schema` 快速路径里，**不占 `SCHEMA_VERSION`**。
-/// 旧流水补出来恒为 0：那时候还没有近重复合并，0 正是事实。
-fn ensure_memory_run_merged_column(conn: &Connection) -> Result<(), String> {
-    let exists = {
-        let mut stmt = conn
-            .prepare("PRAGMA table_info(memory_runs)")
-            .map_err(|e| format!("读取 memory_runs 表结构失败: {}", e))?;
-        let mut has = false;
-        {
-            let rows = stmt
-                .query_map([], |row| row.get::<_, String>(1))
-                .map_err(|e| e.to_string())?;
-            for name in rows.flatten() {
-                if name == "merged" {
-                    has = true;
-                    break;
-                }
-            }
-        }
-        has
-    };
-    if !exists {
-        conn.execute(
-            "ALTER TABLE memory_runs ADD COLUMN merged INTEGER NOT NULL DEFAULT 0",
-            [],
-        )
-        .map_err(|e| format!("添加 memory_runs.merged 列失败: {}", e))?;
-    }
-    Ok(())
-}
-
 /// 老库给 `memories` 补 `project_path` 列（项目作用域；新库由 DDL 直接建出，这里检测后跳过）。
 ///
 /// 与 `ensure_usage_duration_column` 同一策略：元数据级 `ALTER`（可空、无默认值，不重写表），
@@ -323,6 +289,39 @@ fn ensure_memories_project_path_column(conn: &Connection) -> Result<(), String> 
     if !exists {
         conn.execute("ALTER TABLE memories ADD COLUMN project_path TEXT", [])
             .map_err(|e| format!("添加 memories.project_path 列失败: {}", e))?;
+    }
+    Ok(())
+}
+
+/// 老库给 `memories` 补 `superseded_by` 列（再蒸馏的软删标记；新库由 DDL 直接建出，这里检测后跳过）。
+///
+/// 与 `ensure_memories_project_path_column` 同一策略：元数据级 `ALTER`（可空、无默认值，不重写表），
+/// 放在 `init_schema` 快速路径里，**不占 `SCHEMA_VERSION`**。
+///
+/// 旧记忆补出来是 **NULL = 没被顶替** —— 这也正是归档清理（GC）的护栏之一：
+/// 只有「我们顶替过的」（有 `superseded_by`）才可能被自动硬删，用户自己停用的永不清理。
+fn ensure_memories_superseded_by_column(conn: &Connection) -> Result<(), String> {
+    let exists = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(memories)")
+            .map_err(|e| format!("读取 memories 表结构失败: {}", e))?;
+        let mut has = false;
+        {
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(|e| e.to_string())?;
+            for name in rows.flatten() {
+                if name == "superseded_by" {
+                    has = true;
+                    break;
+                }
+            }
+        }
+        has
+    };
+    if !exists {
+        conn.execute("ALTER TABLE memories ADD COLUMN superseded_by TEXT", [])
+            .map_err(|e| format!("添加 memories.superseded_by 列失败: {}", e))?;
     }
     Ok(())
 }

@@ -25,7 +25,7 @@
 | **端侧视觉引擎** | `quasivision` ONNX 纯本地推理：UI 元素检测 / PP-OCR v5 / YOLOE-26n 物体检测 / 图标分类（图片不出本机） |
 | **Skill 机制** | `SKILL.md` 领域知识包，注入系统提示词 + 源码目录只读可查 |
 | **多层安全** | 路径黑白名单、权限三态、跨平台 Shell 沙盒、工具风暴防护（StormBreaker） |
-| **会话与记忆** | 暂停/恢复（Run Snapshot）、LLM 上下文压缩、本地 RAG（turbovec 向量索引）、用量账本、**长期记忆**（`memories` 表 + 建会话注入 `# Memory` 段 + 设置页面板 + `memory_search` / `memory_recall` / `memory_write` 三个原生工具 + **P2 蒸馏**：启动/面板/CLI 触发把前一天各会话摘要提炼成记忆 + **P3 去重合并 / 导出 JSON / 预算告警 / 列表多选批量操作**，详见 `docs/memory-plan.md` / `docs/memory-p0-plan.md` / `docs/memory-p2-plan.md` / `docs/memory-p3-plan.md`） |
+| **会话与记忆** | 暂停/恢复（Run Snapshot）、LLM 上下文压缩、本地 RAG（turbovec 向量索引）、用量账本、**长期记忆**（`memories` 表 + 建会话注入 `# Memory` 段 + 设置页面板 + `memory_search` / `memory_recall` / `memory_write` 三个原生工具 + 导出 JSON / 预算告警 / 列表多选批量操作，详见 `docs/memory-plan.md` / `docs/memory-p0-plan.md` / `docs/memory-p3-plan.md`） |
 | **Agent 引擎** | 仅 Rust（`src-tauri/virlen-core/src/agent/`，GUI 与 CLI 共用）；原 TS 引擎 `src/domain/engine/` 已移除（见 §11.37） |
 | **手机控制** | 手机扫码配对后远程操作本机（会话 / 发消息 / 应答工具审批）：电脑侧接口层在 `src/bridge/`，传输用自维护 npm 包 `virlen-remote`（WebRTC + SSE 信令，见 §5.9） |
 

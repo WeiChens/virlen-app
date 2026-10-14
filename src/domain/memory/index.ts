@@ -4,7 +4,7 @@
  * 为何保留一份：设置页要显示上限、面板要给出枚举下拉，从 Rust 现取一次 IPC 不划算。
  *
  * ⚠️ 与 Rust 一次改两边：`agent/memory/mod.rs`（各常量值）、`prompt.rs`（`memoryEnabled` /
- * `memoryNormalTopK` 键名）、`models.rs`（`memoryModel` 键名）。
+ * `memoryNormalTopK` 键名）、`redistill/mod.rs`（`memoryRedistillEnabled` 键名）。
  * ⚠️ `# Memory` 段由 Rust 经 `cmd_memory_prompt_section` 渲染下发，前端只负责插入。
  */
 
@@ -44,64 +44,12 @@ export const MEMORY_PROJECT_PATH_MAX_CHARS = 500
 export const MEMORY_ENABLED_KEY = 'memoryEnabled'
 export const MEMORY_NORMAL_TOP_K_KEY = 'memoryNormalTopK'
 /**
- * 蒸馏模型首选（可选，置顶降级链）；空 = 按「压缩会话时用得最多的模型」自动选。
- * 与 Rust `MEMORY_MODEL_KEY` 同名同层；目前只能用 CLI
- * （`virlen-cli config set memoryModel '{"providerConfigId":"…","modelId":"…"}'`）设。
+ * 再蒸馏的**逃生开关**（与 Rust `MEMORY_REDISTILL_ENABLED_KEY` 同值，缺键 = 开）。
+ *
+ * ⚠️ 它**不进 UI**（用户无感的后台能力，D5）：想关掉就改库一行，见 `docs/memory-redistill-plan.md` §6.11。
+ * 也**不要**做「纠正为 true」的 fixup —— 那会让这个开关键失去意义。
  */
-export const MEMORY_MODEL_KEY = 'memoryModel'
-
-/** 详情正文的最小长度（低于它只存摘要）—— 与 Rust `MEMORY_DETAIL_MIN_CHARS` 同值 */
-export const MEMORY_DETAIL_MIN_CHARS = 200
-
-export const MEMORY_ORIGIN_DISTILL = 'distill'
-
-/** 整理流水的状态（与 Rust `session_db::memory::MEMORY_RUN_*` 同名） */
-export const MEMORY_RUN_STATUSES = ['running', 'done', 'skipped', 'partial', 'failed'] as const
-export type MemoryRunStatus = (typeof MEMORY_RUN_STATUSES)[number]
-
-/** 一天的整理流水（与 Rust `session_db::memory::MemoryRun` 同形） */
-export interface MemoryRun {
-  /** `YYYY-MM-DD`（本地日） */
-  day: string
-  status: MemoryRunStatus | string
-  items: number
-  details: number
-  /** 被近重复合并掉、没有新增的条数（P3） */
-  merged?: number
-  sourceSessions: number
-  /** 实际使用的模型（`providerConfigId/modelId`） */
-  model?: string | null
-  /** 失败 / 降级原因（给用户看；不含记忆正文） */
-  error?: string | null
-  attempts: number
-  startedAt: number
-  finishedAt?: number | null
-  promptTokens?: number | null
-  completionTokens?: number | null
-}
-
-/** 一次整理的总体结果（`cmd_memory_consolidate` 的返回，与 Rust `ConsolidateReport` 同形） */
-export interface ConsolidateReport {
-  /** `ok` | `disabled` | `unavailable` | `no-model` | `nothing` */
-  status: string
-  days: Array<{
-    day: string
-    status: string
-    items: number
-    details: number
-    /** 被近重复合并掉、没有新增的条数（P3） */
-    merged?: number
-    sourceSessions: number
-    model?: string | null
-    error?: string | null
-  }>
-  items: number
-  details: number
-  /** 本次被近重复合并掉的条数（P3） */
-  merged?: number
-  /** 实际发生的模型调用次数 */
-  calls: number
-}
+export const MEMORY_REDISTILL_ENABLED_KEY = 'memoryRedistillEnabled'
 
 /** 记忆条目（与 Rust `session_db::memory::MemoryRecord` 同形） */
 export interface MemoryRecord {
@@ -120,13 +68,20 @@ export interface MemoryRecord {
   tags?: string[]
   sourceDay?: string
   sourceSessionId?: string | null
-  /** `distill` | `model` | `user` */
+  /** `model` | `user`（历史数据里还可能有产物标记 `distill`） */
   origin?: string
   hits?: number
   lastUsedAt?: number
   createdAt?: number
   updatedAt?: number
   disabled?: boolean
+  /**
+   * 被哪个新条目顶替的（再蒸馏的软删标记）：非空 + `disabled` = 已归档。
+   *
+   * `null` = 没被顶替（用户手写的 / 从未参与过合并）—— 也是**自动清理的护栏字段**：
+   * 没有它 = 用户自己停用的，永不清理。被顶替的条目保留 30 天后由后台按四条护栏硬删。
+   */
+  supersededBy?: string | null
 }
 
 /** 注入段（`cmd_memory_prompt_section` 的返回） */

@@ -254,35 +254,6 @@ mod tests {
         async fn touch(&self, _ids: &[String], _now_ms: i64) -> Result<(), String> {
             Ok(())
         }
-        // 整理流水（P2）：注入链的用例不需要它，按「没有流水 / 不能跑」实现
-        async fn get_run(&self, _day: &str) -> Result<Option<crate::session_db::MemoryRun>, String> {
-            Ok(None)
-        }
-        async fn list_runs(
-            &self,
-            _limit: usize,
-        ) -> Result<Vec<crate::session_db::MemoryRun>, String> {
-            Ok(Vec::new())
-        }
-        async fn last_done_day(&self) -> Result<Option<String>, String> {
-            Ok(None)
-        }
-        async fn claim_run(
-            &self,
-            _day: &str,
-            _opts: crate::session_db::ClaimOptions,
-        ) -> Result<Option<crate::session_db::MemoryRun>, String> {
-            Ok(None)
-        }
-        async fn finish_run(&self, _run: &crate::session_db::MemoryRun) -> Result<(), String> {
-            Ok(())
-        }
-        async fn delete_distilled_day(
-            &self,
-            _day: &str,
-        ) -> Result<Vec<MemoryRecord>, String> {
-            Ok(Vec::new())
-        }
     }
 
     /// 桩：设置仓储（返回固定的一份 app_settings）

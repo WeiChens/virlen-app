@@ -6,12 +6,10 @@
 //! 长度口径：提示词要求 AI 写 ≤ `MEMORY_SUMMARY_HINT_CHARS`（120）；落库强制
 //! `MEMORY_SUMMARY_MAX_CHARS`（150）—— 超出按码点截断（半截仍比没有有用，但不能挤掉上下文）。
 
-pub mod consolidate;
-pub mod distill;
 pub mod export;
 pub mod kb;
-pub mod models;
 pub mod prompt;
+pub mod redistill;
 pub mod scope;
 pub mod store;
 pub mod tools;
@@ -20,7 +18,7 @@ pub mod tools;
 // 引用 `session_db` DTO 的既有方向一致；这里不重复定义，避免两处漂移。
 use crate::session_db::{MemoryRecord, MEMORY_LEVEL_NORMAL, MEMORY_LEVEL_PERMANENT};
 
-/// 给 AI 的**软上限**（提示词里的要求，P2 蒸馏提示词引用它）
+/// 给 AI 的**软上限**（工具定义 `memory_write` 与面板提示里的要求）
 pub const MEMORY_SUMMARY_HINT_CHARS: usize = 120;
 
 /// 落库**硬上限**：超过即按码点截断
@@ -35,175 +33,20 @@ pub const MEMORY_NORMAL_TOP_K_MAX: usize = 20;
 /// `# Memory` 段的总字符预算（超出先裁普通、再裁最旧的永久）
 pub const MEMORY_PROMPT_MAX_CHARS: usize = 4000;
 
+/// 记忆详情正文的单条字符上限
+///
+/// 详情正文落在专用知识库（不占注入预算），但仍要有个上限：再蒸馏的**归档正文**必须装得下
+/// 一批来源的原文（否则就不能停用它们），这个数就是那条预算的出处。
+pub const MEMORY_DETAIL_MAX_CHARS: usize = 8_000;
+
+/// 标签数上限（工具层 / 命令层 / 再蒸馏共用一份）
+pub const MEMORY_MAX_TAGS: usize = 3;
+
 /// 排序权重：`score = hits * 权重 + 新近度加分`
 pub const MEMORY_SCORE_HITS_WEIGHT: i64 = 3;
 
 /// 新近度加分的窗口（天）：`max(0, 窗口 - 已过天数)`
 pub const MEMORY_RECENCY_WINDOW_DAYS: i64 = 30;
-
-// ==================== 蒸馏（P2） ====================
-
-/// 详情正文的**最小**长度：低于它塞进 `summary` 就够，不值得再落一次知识库（省一次嵌入调用）
-pub const MEMORY_DETAIL_MIN_CHARS: usize = 200;
-
-/// 详情正文的**最大**长度（超出截断：详情是「重要且庞大」，但不能无界）
-pub const MEMORY_DETAIL_MAX_CHARS: usize = 8000;
-
-/// 详情文档标题的长度上限
-pub const MEMORY_DETAIL_TITLE_MAX_CHARS: usize = 80;
-
-/// 单次蒸馏的素材字符上限（超出按**会话活动时间从旧到新**裁：新内容最值钱）
-pub const MEMORY_DISTILL_MAX_INPUT_CHARS: usize = 40_000;
-
-/// 提示词里「现有记忆」参照块的字符上限（只用于去重对照，不值得多烧 token）
-pub const MEMORY_EXISTING_MAX_CHARS: usize = 6_000;
-
-/// 「现有记忆」参照块最多列多少条（按新建时间倒序取）
-pub const MEMORY_EXISTING_MAX_ITEMS: usize = 100;
-
-/// 单日产出条数上限（模型跑飞时的兜底；提示词里要求的是 ≤10 条）
-pub const MEMORY_MAX_ITEMS_PER_DAY: usize = 20;
-
-/// 单次触发最多处理几天（补跑有界：连续多天没开应用不会一次烧完）
-pub const MEMORY_MAX_DAYS_PER_RUN: usize = 7;
-
-/// 同一天最多尝试几次（之后只能人工重试：否则每次启动都会再烧一次调用）
-pub const MEMORY_MAX_ATTEMPTS_PER_DAY: i64 = 2;
-
-/// `running` 超过它就视为崩溃残留，可被抢占（避免那一天永远卡在 running）
-pub const MEMORY_RUN_STALE_MS: i64 = 600_000;
-
-/// 单条记忆的标签数上限
-pub const MEMORY_MAX_TAGS: usize = 3;
-
-// ==================== 近重复合并（P3 去重第二道） ====================
-
-/// 近重复判定：包含率阈值（「今天这条是昨天那条长长了」）
-///
-/// 口径是**结构性的**：短的那条的 bigram 几乎全部出现在长的那条里 —— 满足它时
-/// 「保留更长的那条」是**信息不丢失**的（短句的内容逐字包含在长句里）。
-pub const MEMORY_MERGE_CONTAIN_MIN: f32 = 0.98;
-
-/// 近重复判定的最小 gram 数（≈ 短的那条至少 7 个字符）
-///
-/// 太短的碎片（「中文」「测试全绿」）被长句「包含」是家常便饭，那种合并只会让记忆变得莫名其妙。
-pub const MEMORY_MERGE_MIN_GRAMS: usize = 6;
-
-/// 文本的**字符 bigram** 集合（少于 2 个字符时退回单字符集）。
-///
-/// 为什么是字符而不是词：中文没有词边界，分词要先引一份词典（还不一定准）；
-/// bigram 免依赖，且能标出「这段文本里哪几个字是逐字相同的」。
-pub fn char_bigrams(text: &str) -> std::collections::HashSet<(char, char)> {
-    let chars: Vec<char> = text.chars().collect();
-    let mut set = std::collections::HashSet::with_capacity(chars.len());
-    if chars.len() < 2 {
-        // 单字符文本：给它一个（永远过不了最小 gram 数的）gram，保证后续分支不需要特殊化
-        if let Some(&c) = chars.first() {
-            set.insert((c, c));
-        }
-        return set;
-    }
-    for pair in chars.windows(2) {
-        set.insert((pair[0], pair[1]));
-    }
-    set
-}
-
-/// 近重复的**证据**（`None` = 不合并）
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct NearDuplicate {
-    /// 短的那条有多少 gram 出现在长的那条里（1.0 = 完全被包含）
-    pub containment: f32,
-    /// 共享 gram 数（绝对证据量：短句本身的长度）
-    pub overlap: usize,
-}
-
-/// 近重复判定：**只抓「包含」型**（一条是另一条的扩展），命中则返回证据。
-///
-/// 为什么不抓「改写」型（同义换词）：词形相似度区分不开「共享前缀但结论不同」与
-/// 「同一句话换了个说法」—— 【在 virlen-app 实现记忆功能】vs【在 virlen-app 实现记忆面板】
-/// 的 Dice = 0.89，而「插了一个词的同一句话」也只有 0.84~0.9：阈值放哪儿都会误并或漏并。
-/// 而改写本来就有**更合适的一道**：蒸馏提示词里带着「现有记忆」参照块，模型在生成阶段就在避重。
-/// 词形判定是第二道防线，只负责它擅长的那个形态（长长了）。
-///
-/// 因此判定故意偏保守：宁可多留一条，也不要吃掉一条独立事实。
-pub fn near_duplicate(a: &str, b: &str) -> Option<NearDuplicate> {
-    let (x, y) = (normalize_summary(a), normalize_summary(b));
-    if x.is_empty() || y.is_empty() {
-        return None;
-    }
-    let (ga, gb) = (char_bigrams(&x), char_bigrams(&y));
-    let overlap = ga.intersection(&gb).count();
-    let shorter = ga.len().min(gb.len());
-    if x == y {
-        // 完全相同：第一道去重已经处理 —— 这里给同一个结论，保证本函数可独立使用
-        return Some(NearDuplicate {
-            containment: 1.0,
-            overlap,
-        });
-    }
-    if shorter < MEMORY_MERGE_MIN_GRAMS {
-        return None;
-    }
-    let containment = overlap as f32 / shorter as f32;
-    if containment >= MEMORY_MERGE_CONTAIN_MIN {
-        Some(NearDuplicate {
-            containment,
-            overlap,
-        })
-    } else {
-        None
-    }
-}
-
-/// 是不是「近重复」（该合并而不是新增）；证据见 [`near_duplicate`]。
-pub fn is_near_duplicate(a: &str, b: &str) -> bool {
-    near_duplicate(a, b).is_some()
-}
-
-/// 记忆**去重**用的规范化文本（**不改变落库正文**，只用于比较）。
-///
-/// 为什么要归一化：同一句话的两种写法（全角 / 半角标点、多空格、大小写、句尾句号）在语义上是同一条记忆，
-/// 不去重就会一天一天地把同一件事写十遍 —— 而永久记忆是**全量注入**的，重复会直接拾高每个会话的成本。
-///
-/// 步骤：全角标点 → 半角；压缩连续空白；去首尾空白与句尾标点；ASCII 小写。
-pub fn normalize_summary(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    let mut prev_space = false;
-    for ch in raw.chars() {
-        let mapped = match ch {
-            '，' => ',',
-            '。' => '.',
-            '：' => ':',
-            '；' => ';',
-            '！' => '!',
-            '？' => '?',
-            '（' => '(',
-            '）' => ')',
-            '【' => '[',
-            '】' => ']',
-            '「' => '"',
-            '」' => '"',
-            '、' => ',',
-            '　' => ' ',
-            other => other,
-        };
-        if mapped.is_whitespace() {
-            if !prev_space && !out.is_empty() {
-                out.push(' ');
-                prev_space = true;
-            }
-            continue;
-        }
-        prev_space = false;
-        out.extend(mapped.to_lowercase());
-    }
-    out.trim()
-        .trim_end_matches(['.', ',', ';', ':', '!', '?', '"'])
-        .trim()
-        .to_string()
-}
-
 const MS_PER_DAY: i64 = 86_400_000;
 
 /// 选取结果（带裁剪计数，供调用方埋点告警）
@@ -531,7 +374,7 @@ mod tests {
 
     #[test]
     fn clamp_summary_keeps_short_text_untouched() {
-        let s = "在 virlen-app 实现记忆功能：摘要蒸馏 + 两级注入";
+        let s = "在 virlen-app 实现记忆功能：两级注入 + 预算裁剪";
         assert_eq!(clamp_summary(s), s);
         // 两侧空白去掉，避免「看不见的差异」让去重失效
         assert_eq!(clamp_summary("  x  "), "x");
@@ -859,97 +702,6 @@ mod tests {
         assert!(!is_valid_kind(""));
         assert!(!is_valid_kind("User"), "大小写敏感：宁可让模型重试，也不静默改写");
         assert!(!is_valid_kind("note"));
-    }
-
-    // ── 去重用的规范化 ──
-
-    #[test]
-    fn normalize_ignores_case_spacing_and_punctuation_style() {
-        let base = normalize_summary("在 virlen-app 实现记忆功能");
-        assert_eq!(base, normalize_summary("  在 virlen-app  实现记忆功能  "));
-        assert_eq!(base, normalize_summary("在 virlen-app 实现记忆功能。"));
-        assert_eq!(base, normalize_summary("在 virlen-app 实现记忆功能，"));
-        // 全角标点归一：同一句话的两种写法必须视为同一条
-        assert_eq!(
-            normalize_summary("记忆（P2）已上线"),
-            normalize_summary("记忆(P2)已上线")
-        );
-        // 大小写不敏感（英文技术词很常见）
-        assert_eq!(normalize_summary("Use Vite"), normalize_summary("use vite"));
-        // 不同内容仍然不同（不能归一化到「全都一样」）
-        assert_ne!(base, normalize_summary("在 virlen-app 实现检索功能"));
-        assert_eq!(normalize_summary("   "), "");
-    }
-
-    // ── 近重复判定（P3 去重第二道） ──
-
-    const A: &str = "在 virlen-app 实现记忆功能";
-    const A2: &str = "在 virlen-app 实现记忆面板";
-
-    #[test]
-    fn identical_text_is_always_near_duplicate() {
-        let ev = near_duplicate(A, "在 virlen-app 实现记忆功能。").unwrap();
-        assert_eq!(ev.containment, 1.0);
-        // 标点 / 大小写 / 空白差异不算差异（先规范化）
-        assert!(is_near_duplicate(A, "在 VIRLEN-APP 实现记忆功能"));
-        // 与长度无关：短句完全相同也算（第一道去重同结论）
-        assert!(is_near_duplicate("中文", "中文。"));
-        // 空串不参与比较
-        assert!(near_duplicate("", A).is_none());
-        assert!(near_duplicate("   ", A).is_none());
-    }
-
-    #[test]
-    fn different_tails_are_not_near_duplicates() {
-        // ⚠️ 本阈值定的最重要的一个断言：共享前缀但结论不同的两条**绝不能**被合并
-        //（否则「做了功能」与「做了面板」会被吃成一条，用户还无从发现）
-        let ev = near_duplicate(A, A2);
-        assert!(ev.is_none(), "共享前缀但结论不同 → 不合并（实际证据 {ev:?}）");
-        assert!(!is_near_duplicate(A, A2));
-    }
-
-    #[test]
-    fn rewrites_are_left_alone_by_design() {
-        // 已知能力边界（故意为之，不是 bug）：插词的改写**不合并**。
-        // 抓它需要把词形相似度阈值压低，而那样会连【记忆功能 / 记忆面板】一起误并
-        //（两者各为 0.89 / 0.84 —— 怎么定阈值都会错一边）。
-        // 改写有更合适的一道：蒸馏提示词里的「现有记忆」参照块（模型生成阶段就在避重）。
-        assert!(!is_near_duplicate(
-            "记忆功能 P3 已实现：词形近重复合并",
-            "记忆功能 P3 已实现，包括词形近重复合并"
-        ));
-    }
-
-    #[test]
-    fn longer_version_of_the_same_fact_is_near_duplicate() {
-        // 「今天这条比昨天那条长」——包含型（这才是词形判定擅长的形态）
-        let short = "用户要求中文回复";
-        let long = "用户要求中文回复，并且代码注释也用中文";
-        let ev = near_duplicate(short, long).expect("短句被长句完全包含 → 该合并");
-        assert_eq!(ev.containment, 1.0);
-        assert_eq!(ev.overlap, 7, "证据 = 短句本身的 7 个 bigram");
-        // 方向无关
-        assert!(is_near_duplicate(long, short));
-
-        // 前缀扩展、项目名长全了也算包含
-        assert!(is_near_duplicate("在 virlen", "在 virlen-app 实现记忆功能"));
-    }
-
-    #[test]
-    fn short_fragments_are_never_merged() {
-        // 太短的碎片被长句「包含」是家常便饭：没有 6 个 bigram（≈7 字符）就不参与判定
-        assert!(!is_near_duplicate("中文", "中文回复"));
-        assert!(!is_near_duplicate("测试全绿", "测试全绿之后要发布"));
-        assert!(!is_near_duplicate("a", "b"));
-        assert!(!is_near_duplicate("", ""));
-    }
-
-    #[test]
-    fn bigrams_handle_tiny_and_multibyte_text() {
-        assert_eq!(char_bigrams("a").len(), 1);
-        assert!(char_bigrams("").is_empty());
-        assert_eq!(char_bigrams("记忆").len(), 1);
-        assert_eq!(char_bigrams("记忆功能").len(), 3);
     }
 
     #[test]

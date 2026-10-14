@@ -8,11 +8,6 @@
 
 use std::sync::Arc;
 
-use virlen_core::agent::cancellation::CancellationToken;
-use virlen_core::agent::memory::consolidate::{
-    consolidate_now, ConsolidateDeps, ConsolidateOptions, ConsolidateReport,
-};
-use virlen_core::agent::memory::models::DistillProviderBuilder;
 use virlen_core::agent::memory::prompt::{load_memory_section, MemoryPromptSection};
 use virlen_core::agent::memory::tools::{
     run_recall, run_search, run_write, MemoryToolDeps, MemoryToolOutput, WriteRequest,
@@ -44,6 +39,7 @@ pub async fn cmd_memory_list(
 #[tauri::command]
 pub async fn cmd_memory_upsert(
     state: tauri::State<'_, Arc<dyn MemoryRepo>>,
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
     mut record: MemoryRecord,
 ) -> Result<(), String> {
     let summary = clamp_summary(&record.summary);
@@ -88,6 +84,14 @@ pub async fn cmd_memory_upsert(
     record.project_path = path;
 
     state.upsert(&record).await?;
+    // 面板新增 / 编辑保存后走**同一条闸门**（§3.3）：只在本地判定 + 入队，绝不等 LLM；
+    // 任何失败只打日志（记忆已经写好了，统计不该牵连它）。
+    virlen_core::agent::memory::redistill::sched::request(
+        state.inner().as_ref(),
+        settings.inner().as_ref(),
+        crate::telemetry::now_ms(),
+    )
+    .await;
     crate::telemetry::track(
         "memory.upsert",
         serde_json::json!({
@@ -237,93 +241,6 @@ pub async fn cmd_memory_export(
     Ok(json)
 }
 
-// ==================== 蒸馏整理（P2） ====================
-
-/// GUI 侧的 Provider 构建器：走与聊天**同一个** `DefaultProviderFactory`
-///
-/// 因此 gemini 等「桥接协议」也能用作蒸馏模型（GUI 有 JS 宿主）—— 与压缩 / 标题生成同一条路；
-/// CLI（headless）没有 JS 宿主，改用 `create_native_provider`（见 `virlen-cli/src/memory.rs`）。
-struct GuiProviderBuilder {
-    bridge: Arc<virlen_core::agent::bridge::AgentBridgeState>,
-    app: tauri::AppHandle,
-}
-
-impl DistillProviderBuilder for GuiProviderBuilder {
-    fn build(
-        &self,
-        conn: &virlen_core::agent::types::ProviderConnection,
-    ) -> Result<Box<dyn virlen_core::agent::provider::Provider>, String> {
-        // `ProviderFactory::create` 不是固有方法（trait 方法），必须把 trait 带进来
-        use virlen_core::agent::provider::ProviderFactory;
-        let factory = virlen_core::agent::provider::DefaultProviderFactory {
-            bridge: self.bridge.clone(),
-            sink: Arc::new(crate::commands::agent::TauriEventSink::new(self.app.clone())),
-        };
-        Ok(factory.create(conn))
-    }
-}
-
-/// 整理长期记忆（「第二天」蒸馏）—— **幂等**，可重复调用。
-///
-/// 前端三个调用点：启动时（`src/main.ts` 的 `step('memory', ...)`）、面板「立即整理昨天」、
-/// CLI（同一份 core 实现）。`only_day` 指定单日；`force` = 「重新整理」（覆盖该天旧的蒸馏产出）。
-///
-/// ⚠️ 不返回任何记忆正文以外的敏感信息：报告里只有日期 / 条数 / 状态 / 错误原因（供 UI 展示）。
-#[tauri::command]
-pub async fn cmd_memory_consolidate(
-    app: tauri::AppHandle,
-    bridge: tauri::State<'_, Arc<virlen_core::agent::bridge::AgentBridgeState>>,
-    memory: tauri::State<'_, Arc<dyn MemoryRepo>>,
-    repo: tauri::State<'_, Arc<dyn virlen_core::session_db::SessionRepo>>,
-    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
-    only_day: Option<String>,
-    force: Option<bool>,
-) -> Result<ConsolidateReport, String> {
-    let builder = GuiProviderBuilder {
-        bridge: bridge.inner().clone(),
-        app: app.clone(),
-    };
-    let cancel = CancellationToken::new();
-    let deps = ConsolidateDeps {
-        memory: memory.inner().as_ref(),
-        sessions: repo.inner().as_ref(),
-        settings: settings.inner().as_ref(),
-        rag: virlen_core::rag::get_service().ok(),
-        builder: &builder,
-        cancel: &cancel,
-    };
-    let report = consolidate_now(
-        deps,
-        ConsolidateOptions {
-            only_day: only_day.filter(|d| !d.trim().is_empty()),
-            force: force.unwrap_or(false),
-        },
-    )
-    .await?;
-    // 埋点只报计数与状态（记忆正文是用户内容，绝不进埋点）
-    crate::telemetry::track(
-        "memory.consolidate",
-        serde_json::json!({
-            "status": report.status,
-            "days": report.days.len(),
-            "items": report.items,
-            "details": report.details,
-            "merged": report.merged,
-            "calls": report.calls,
-        }),
-    );
-    Ok(report)
-}
-
-/// 整理流水（面板状态行：「上次整理：哪天 / 几条 / 失败原因」）
-#[tauri::command]
-pub async fn cmd_memory_runs(
-    state: tauri::State<'_, Arc<dyn MemoryRepo>>,
-    limit: Option<usize>,
-) -> Result<Vec<virlen_core::session_db::MemoryRun>, String> {
-    state.list_runs(limit.unwrap_or(20)).await
-}
-
 // ==================== 工具等价命令（P1） ====================
 //
 // 三个 `memory_*` 工具的 GUI 孪生：语义实现在 `agent::memory::tools`（与原生工具**同一份**），
@@ -461,4 +378,189 @@ pub async fn cmd_memory_write(
         }),
     );
     Ok(out)
+}
+
+// ==================== 再蒸馏（P2′） ====================
+
+/// GUI 侧的 Provider 构建器：走与聊天**同一个** `DefaultProviderFactory`
+///
+/// 因此 gemini 等「桥接协议」也能用作再蒸馏模型（GUI 有 JS 宿主）—— 与压缩 / 标题生成同一条路；
+/// CLI（headless）没有 JS 宿主，改用 `create_native_provider`。
+struct GuiRedistillBuilder {
+    bridge: Arc<virlen_core::agent::bridge::AgentBridgeState>,
+    app: tauri::AppHandle,
+}
+
+impl virlen_core::agent::memory::redistill::models::MemoryProviderBuilder for GuiRedistillBuilder {
+    fn build(
+        &self,
+        conn: &virlen_core::agent::types::ProviderConnection,
+    ) -> Result<Box<dyn virlen_core::agent::provider::Provider>, String> {
+        // `ProviderFactory::create` 不是固有方法（trait 方法），必须把 trait 带进来
+        use virlen_core::agent::provider::ProviderFactory;
+        let factory = virlen_core::agent::provider::DefaultProviderFactory {
+            bridge: self.bridge.clone(),
+            sink: Arc::new(crate::commands::agent::TauriEventSink::new(self.app.clone())),
+        };
+        Ok(factory.create(conn))
+    }
+}
+
+/// GUI 侧的调度宿主：把一次后台整理派发到 tauri 的异步运行时。
+///
+/// 句柄（记忆 / 会话 / 配置仓储）从 `State` 取（core 不认识 tauri，装配全在宿主侧）；
+/// 取不到（库没打开 / 正在启动）就返回 `false` —— 请求留在队列里，下次触发或下次启动再来。
+pub struct GuiRedistillRuntime {
+    app: tauri::AppHandle,
+}
+
+impl GuiRedistillRuntime {
+    pub fn new(app: tauri::AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+impl virlen_core::agent::memory::redistill::sched::MemoryRedistillRuntime for GuiRedistillRuntime {
+    fn spawn_redistill(&self, cancel: virlen_core::agent::cancellation::CancellationToken) -> bool {
+        use tauri::Manager;
+        let app = self.app.clone();
+        let bridge = match app.try_state::<Arc<virlen_core::agent::bridge::AgentBridgeState>>() {
+            Some(s) => s.inner().clone(),
+            None => return false,
+        };
+        let memory = match app.try_state::<Arc<dyn MemoryRepo>>() {
+            Some(s) => s.inner().clone(),
+            None => return false,
+        };
+        let repo = match app.try_state::<Arc<dyn virlen_core::session_db::SessionRepo>>() {
+            Some(s) => s.inner().clone(),
+            None => return false,
+        };
+        let settings = match app.try_state::<Arc<dyn SettingsRepo>>() {
+            Some(s) => s.inner().clone(),
+            None => return false,
+        };
+
+        tauri::async_runtime::spawn(async move {
+            // 取消令牌由 core 创建（`pump`）并交到宿主再带回来：退出时 `shutdown()` 取消它
+            let builder = GuiRedistillBuilder {
+                bridge,
+                app: app.clone(),
+            };
+            let rag = virlen_core::rag::get_service().ok();
+            let outcome = virlen_core::agent::memory::redistill::sched::execute_pending(
+                memory.as_ref(),
+                repo.as_ref(),
+                settings.as_ref(),
+                rag,
+                &builder,
+                cancel,
+            )
+            .await;
+            if let Some(result) = outcome {
+                match result {
+                    Ok(report) => track_redistill(&report, "auto"),
+                    // 失败只打日志 / 埋点：这是后台增强能力，不该打扰用户
+                    Err(e) => eprintln!("[memory] 再蒸馏失败: {}", e),
+                }
+            }
+        });
+        true
+    }
+
+    fn shutdown(&self) {
+        virlen_core::agent::memory::redistill::sched::shutdown();
+    }
+}
+
+/// 启动时判定一次（补跑上次退出没跑完 / 本次启动就已越线的库）—— **不引入定时器**。
+///
+/// 异步、非阻塞：`.setup()` 不等它；判定失败只打日志（后台增强能力不该拖慢启动）。
+pub fn request_redistill_on_startup(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let memory = app
+            .try_state::<Arc<dyn MemoryRepo>>()
+            .map(|s| s.inner().clone());
+        let settings = app
+            .try_state::<Arc<dyn SettingsRepo>>()
+            .map(|s| s.inner().clone());
+        if let (Some(memory), Some(settings)) = (memory, settings) {
+            virlen_core::agent::memory::redistill::sched::request(
+                memory.as_ref(),
+                settings.as_ref(),
+                crate::telemetry::now_ms(),
+            )
+            .await;
+        }
+    });
+}
+
+/// 手动触发一次（面板 / 排障用；`force` = 忽略冷却与幂等判定）
+#[tauri::command]
+pub async fn cmd_memory_redistill(
+    app: tauri::AppHandle,
+    bridge: tauri::State<'_, Arc<virlen_core::agent::bridge::AgentBridgeState>>,
+    memory: tauri::State<'_, Arc<dyn MemoryRepo>>,
+    repo: tauri::State<'_, Arc<dyn virlen_core::session_db::SessionRepo>>,
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    task: Option<String>,
+    force: Option<bool>,
+) -> Result<virlen_core::agent::memory::redistill::RedistillReport, String> {
+    use virlen_core::agent::memory::redistill::{RedistillTask, sched::run_direct};
+    let builder = GuiRedistillBuilder {
+        bridge: bridge.inner().clone(),
+        app: app.clone(),
+    };
+    let task = match task.as_deref().map(str::trim) {
+        Some("purge") => RedistillTask::PurgeOnly,
+        _ => RedistillTask::Full,
+    };
+    let report = run_direct(
+        memory.inner().as_ref(),
+        repo.inner().as_ref(),
+        settings.inner().as_ref(),
+        virlen_core::rag::get_service().ok(),
+        &builder,
+        task,
+        force.unwrap_or(false),
+    )
+    .await?;
+    track_redistill(&report, "manual");
+    Ok(report)
+}
+
+/// 整理流水（排障 / 未来的面板「整理记录」区）
+#[tauri::command]
+pub async fn cmd_memory_redistill_runs(
+    state: tauri::State<'_, Arc<dyn MemoryRepo>>,
+    limit: Option<usize>,
+) -> Result<Vec<virlen_core::session_db::MemoryRedistillRun>, String> {
+    state.list_redistill_runs(limit.unwrap_or(20)).await
+}
+
+/// 埋点：**只报计数与状态** —— 记忆正文是用户内容，绝不进埋点（安全红线）。
+fn track_redistill(report: &virlen_core::agent::memory::redistill::RedistillReport, trigger: &str) {
+    let first = report.batches.first();
+    crate::telemetry::track(
+        "memory.redistill",
+        serde_json::json!({
+            "trigger": trigger,
+            "status": report.status,
+            "task": report.task,
+            "batches": report.batches.len(),
+            "items_in": report.items_in,
+            "items_out": report.items_out,
+            "calls": report.calls,
+            "purged": report.purged,
+            "purged_failed": report.purged_failed,
+            // 第一个批次的细节（一次触发最多 3 批，报第一批就够定位问题）
+            "batch_status": first.map(|b| b.status.clone()),
+            "drifted": first.map(|b| b.drifted).unwrap_or(0),
+            "unarchived": first.map(|b| b.unarchived).unwrap_or(0),
+            "reason": first.and_then(|b| b.reason.clone()),
+            "model": first.and_then(|b| b.model.clone()),
+        }),
+    );
 }

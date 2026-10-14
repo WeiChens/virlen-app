@@ -96,6 +96,16 @@ export interface SettingsStore {
   memoryEnabled: boolean
   /** 普通记忆注入条数（默认 20，上限 `MEMORY_NORMAL_TOP_K_MAX`）；永久记忆不受它影响。 */
   memoryNormalTopK: number
+  /**
+   * 长期记忆**再蒸馏**的逃生开关（默认开，**界面上无控件**）。
+   *
+   * 语义：AI 写下的候选条数越线（≥ 100）时，后台把同一作用域内的若干条记忆合并成更少的条目
+   *（旧条目停用不删除，原文归档进新条目的详情；保留 30 天后自动清理）。全程用户无感。
+   *
+   * ⚠️ 它**不是** `memoryEnabled` 那种「固定启用、水合时纠正为 true」的键：
+   * 用户想关就是真关（改库一行即可），这里**不做**任何 fixup。
+   */
+  memoryRedistillEnabled: boolean
   /** 是否用 AI 生成会话标题（默认开）：关掉后不发标题 LLM 调用，直接截取首条用户消息当标题。 */
   aiGenerateTitle: boolean
   /**
@@ -158,6 +168,8 @@ const defaultSettings: SettingsStore = {
   ragDefaultTopK: 5,
   memoryEnabled: true,
   memoryNormalTopK: 20,
+  // 再蒸馏：默认开、不进 UI（见 `memoryRedistillEnabled` 的注释）
+  memoryRedistillEnabled: true,
   aiGenerateTitle: true,
   contextCompressMode: 'ai',
   contextWindowTokens: 200000,

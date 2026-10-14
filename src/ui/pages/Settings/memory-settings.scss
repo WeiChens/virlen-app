@@ -155,16 +155,9 @@
     }
   }
 
-  .memory-hint {
-    margin: 0 0 10px;
-    font-size: var(--font-size-xs);
-    color: var(--text-secondary, #888);
-    line-height: 1.6;
-  }
-
-  // ==================== 分组（一块一件事：带上多少 / 整理） ====================
+  // ==================== 分组（一块一件事） ====================
   //
-  // 设置项只有两三个，但它们是两类事 —— 用细边框分组，比靠空白间隔更能让人分清「哪些是同一件」。
+  // 设置项只有两三个，但用细边框分组比靠空白间隔更能让人分清「哪些是同一件」。
   .memory-group {
     display: flex;
     flex-direction: column;
@@ -179,11 +172,6 @@
       font-size: var(--font-size-sm);
       font-weight: 600;
       color: var(--text-primary, #1a1a1a);
-    }
-
-    // 分组里的说明文字贴着上面那行，不再自带外边距（间距由 flex gap 统一给）
-    .memory-hint {
-      margin: 0 0 4px;
     }
 
     .memory-preview {
@@ -304,7 +292,7 @@
     }
   }
 
-  // 项目作用域的说明行（不是设置项，是解释，所以用淡字且不进分组框）
+  // 项目作用域的说明行（不是设置项，是解释，所以用淡字）
   .memory-scope-note {
     font-size: var(--font-size-xs);
     line-height: 1.6;
@@ -315,22 +303,6 @@
     margin-left: 6px;
     color: var(--text-secondary, #888);
     font-weight: 400;
-  }
-
-  // ==================== 记忆整理（P2） ====================
-
-  .memory-run-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    padding: 4px 0 8px;
-
-    .memory-run-status {
-      font-size: var(--font-size-xs);
-      color: var(--text-secondary, #888);
-      word-break: break-word;
-    }
   }
 
   // ==================== 注入预览 ====================

@@ -8,7 +8,6 @@ use crate::session_db::sqlite::SqliteSessionRepo;
 use serde_json::json;
 
 mod bootstrap;
-mod materials;
 mod message_query;
 mod migration;
 mod search;

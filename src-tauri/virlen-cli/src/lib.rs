@@ -7,7 +7,7 @@
 //! virlen-cli list-session | list-agent          列出会话 / Agent
 //! virlen-cli provider <add|edit|rm|list|test>   交互式管理供应商配置
 //! virlen-cli agent <add|edit|rm|list>           交互式管理 Agent 配置
-//! virlen-cli memory <list|consolidate>          长期记忆（列出 / 蒸馏整理）
+//! virlen-cli memory <list|redistill|runs|export>  长期记忆（列出 / 再蒸馏 / 整理流水 / 导出 JSON）
 //! ```
 //!
 //! 命令实现住 lib 而非 bin：bin 目标无法被单测引用。三方分工（各只依赖内层）：`virlen-core`（引擎 /
@@ -54,7 +54,7 @@ pub(crate) enum Command {
     ListSessions(list::SessionsCmd),
     ListAgents(list::AgentsCmd),
     Session(session::SessionCmd),
-    /// 长期记忆（记忆功能 P2：查看 / 蒸馏整理）
+    /// 长期记忆（查看 / 导出 JSON）
     Memory(memory::MemoryCmd),
     Usage(usage::UsageCmd),
     Provider(provider::ProvCmd),
@@ -84,9 +84,10 @@ Virlen CLI（headless）—— 与桌面端读写同一份配置（app_settings 
   virlen-cli session <show|search|rm|purge>
                                          会话管理：查看一条会话 / 检索历史正文 /
                                          删除会话 / 回收孤儿消息（`session --help` 看说明）
-  virlen-cli memory <list|consolidate>
-                                         长期记忆：列出记忆 / 整理（把某天的会话素材蒸馏成记忆；
-                                         与桌面端同一份库与同一套逻辑，`memory --help` 看说明）
+  virlen-cli memory <list|redistill|runs|export>
+                                         长期记忆：列出记忆 / 再蒸馏（把 AI 写下的合并成更少条目）/
+                                         看整理流水 / 导出 JSON
+                                         （与桌面端同一份库与同一份 core 实现，`memory --help` 看说明）
   virlen-cli usage [选项]                用量账本（token 统计；`usage --help` 看选项）
                                          只统计 token，不显示费用（价目表在前端 TS）
   virlen-cli provider <add|edit|rm|list|test>
@@ -192,7 +193,7 @@ async fn run_dispatch(args: &[String], out: &mut dyn Write, err: &mut dyn Write)
             let host: Arc<dyn HostEnv> = Arc::new(CliHost::from_env());
             session::run(&host, cmd, out, err).await
         }
-        // 长期记忆（列表 / 整理）：需要宿主（库路径 + 知识库目录）
+        // 长期记忆（列表 / 导出）：需要宿主（库路径）
         Ok(Command::Memory(cmd)) => {
             let host: Arc<dyn HostEnv> = Arc::new(CliHost::from_env());
             memory::run(&host, cmd, out, err).await

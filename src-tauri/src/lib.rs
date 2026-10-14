@@ -468,11 +468,11 @@ pub fn run() {
             commands::memory::cmd_memory_search,
             commands::memory::cmd_memory_recall,
             commands::memory::cmd_memory_write,
-            // 长期记忆（P2：蒸馏整理 —— 同一份 core 实现，CLI 也走它）
-            commands::memory::cmd_memory_consolidate,
-            commands::memory::cmd_memory_runs,
-            // 长期记忆（P3：导出 JSON —— 前端选路径写文件，Rust 只给文本）
+            // 长期记忆（导出 JSON —— 前端选路径写文件，Rust 只给文本）
             commands::memory::cmd_memory_export,
+            // 长期记忆再蒸馏（P2′：100 条以上时后台合并；命令给排障 / 未来的面板用）
+            commands::memory::cmd_memory_redistill,
+            commands::memory::cmd_memory_redistill_runs,
             // 后台服务面板（聊天页右上角：与四个 service 工具同一张注册表）
             commands::service::cmd_list_background_services,
             commands::service::cmd_kill_background_service,
@@ -558,6 +558,9 @@ pub fn run() {
                         serde_json::json!({ "count": stopped }),
                     );
                 }
+                // 再蒸馏：取消失败 / 在跑的任务并清空待办 —— 它属于另一个生命周期，
+                // 不能跨进程存活（下一轮写入或下次启动会重新判定）
+                virlen_core::agent::memory::redistill::sched::shutdown();
                 // 退出前把 WAL 截断回零（实测 `-wal` 长期停在 99 MB 以上，比库碎片大得多）。
                 // 幂等；拿不到连接锁就跳过，**绝不等待、绝不拖住退出**。
                 if let Some(m) = app.try_state::<std::sync::Arc<virlen_core::session_db::DbMaintenance>>() {

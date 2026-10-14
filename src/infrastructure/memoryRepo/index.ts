@@ -8,10 +8,8 @@
 import { invoke } from '@tauri-apps/api/core'
 import {
   MEMORY_PROMPT_MAX_CHARS,
-  type ConsolidateReport,
   type MemoryPromptSection,
   type MemoryRecord,
-  type MemoryRun,
 } from '@/domain/memory'
 
 /** Tauri 环境判定（与 `services/rust-engine.ts::isTauriAvailable` 同一口径） */
@@ -98,43 +96,6 @@ export function touchMemories(ids: string[]): void {
   invoke('cmd_memory_touch', { ids }).catch((e) => {
     console.warn(`[memory] 记录记忆使用失败：${e?.message || String(e)}`)
   })
-}
-
-// 整理 / 蒸馏（P2）
-
-/**
- * 整理长期记忆（把某一天各会话的摘要 / 正文摘录蒸馏成记忆）。
- *
- * - `onlyDay` 为空 → 按「上次整理成功的次日 → 昨天」逐日补跑（幂等，可重复调用）；
- * - `force` → 重新整理（覆盖该天旧的蒸馏产出，用户手写的记忆不动）。
- *
- * 与 CLI / GUI 启动触发走**同一份** Rust 实现；失败 → `null`（调用方按「没跑」处理）。
- */
-export async function consolidateMemories(
-  onlyDay?: string | null,
-  force?: boolean,
-): Promise<ConsolidateReport | null> {
-  if (!isTauri()) return null
-  try {
-    return await invoke<ConsolidateReport>('cmd_memory_consolidate', {
-      onlyDay: onlyDay ?? null,
-      force: force ?? false,
-    })
-  } catch (e: any) {
-    console.warn(`[memory] 整理失败：${e?.message || String(e)}`)
-    return null
-  }
-}
-
-/** 整理流水（面板状态行：上次整理哪天、产出几条、失败原因）。失败 → 空列表 */
-export async function listMemoryRuns(limit = 10): Promise<MemoryRun[]> {
-  if (!isTauri()) return []
-  try {
-    return (await invoke<MemoryRun[]>('cmd_memory_runs', { limit })) ?? []
-  } catch (e: any) {
-    console.warn(`[memory] 读取整理流水失败：${e?.message || String(e)}`)
-    return []
-  }
 }
 
 /**

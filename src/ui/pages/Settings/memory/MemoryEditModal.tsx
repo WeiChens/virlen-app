@@ -46,7 +46,7 @@ interface MemoryDraft {
    * 空串 = 不限定项目（跨项目通用）；服务端还会再守一道（非 project 带路径会被清掉）。
    */
   projectPath: string
-  /** 详情链接（不在表单里编辑，但要**原样回传** —— 否则编辑摘要会把蒸馏写的详情链静默清空） */
+  /** 详情链接（不在表单里编辑，但要**原样回传** —— 否则编辑摘要会把详情链静默清空） */
   detailKbId?: string | null
   detailDocId?: string | null
 }

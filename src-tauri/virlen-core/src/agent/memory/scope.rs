@@ -108,7 +108,7 @@ pub fn declared_project(m: &MemoryRecord) -> Option<&str> {
 
 /// 写入时该给这条记忆定什么作用域：只有 `project` 才带路径，工作目录为空则不带（= 通用）。
 ///
-/// 唯一实现：命令层（面板保存）、工具层（`memory_write`）、蒸馏落库都调它 ——
+/// 唯一实现：命令层（面板保存）、工具层（`memory_write`）都调它 ——
 /// 否则「非 project 也带路径」这类脏数据会在某一条写入路径上偷偷溜进库。
 pub fn scope_for_write(kind: &str, workspace: &str) -> Option<String> {
     if kind.trim() != MEMORY_KIND_PROJECT {

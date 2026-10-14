@@ -95,3 +95,4 @@
 > - `docs/config-sink-plan.md` —— 配置下沉（**落 SQLite，与 GUI 共用同一份 `virlen.db`**）+ `js` 沙盒规则内嵌求值
 > - `docs/cli-tui-plan.md` —— CLI 交互式 TUI（`virlen-cli chat`）与配置向导、上下文压缩、会话管理（`session`）/ 用量账本（`usage`）的方案 / 实测
 > - `docs/doc-parse-plan.md` —— 文档解析工具 `parse_document`（pdf/doc/docx/xls/xlsx/ppt/pptx/csv）的实施方案（**已实施**）：`doc_parse` 解析层为唯一源，RAG 的 PDF 解析与它同源；全文落盘参数 `outTxtFile` 见其 §12
+> - `docs/memory-redistill-plan.md` —— 记忆再蒸馏（P2′，**待实施**）：AI 写下的记忆 ≥ 100 条时由宿主后台合并成更少条目（软删 + 归档，用户无感）的触发 / 调度 / 校验 / 落库口径；被移除的 P2 蒸馏链怎么从 git 取回见其 §2.2

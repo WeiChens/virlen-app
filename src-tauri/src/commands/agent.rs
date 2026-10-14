@@ -124,6 +124,14 @@ pub fn init_agent_engine(app: &tauri::AppHandle) {
     // 空闲时服务结束 → 前端收到 `agent:service-exit` → 落进消息列表（用户与 AI 下一次请求都看得到）。
     // ⚠️ 必须在引擎能起服务之前完成（服务只能由一次 run 起，而 run 要用户先发消息）。
     native_tools::attach_service_notice_host(Arc::new(TauriServiceNoticeHost::new(app.clone())));
+    // 记忆再蒸馏（P2′）的调度宿主：挂上后立刻尝试排空一次（补跑上次退出没跑完 / 本次启动就已越线的库），
+    // 之后由写路径闸门（`memory_write` / 面板保存）唤醒（`sched::request`）。
+    // 全程用户无感：没有弹窗、没有审批、没有 UI 文案；失败只落日志 / 埋点 / 账本。
+    virlen_core::agent::memory::redistill::sched::attach_host(Arc::new(
+        crate::commands::memory::GuiRedistillRuntime::new(app.clone()),
+    ));
+    // 启动补跑：此刻队列是空的，先判定一次（「上次退出没跑完 / 本次启动就已越线」都在这条路上）
+    crate::commands::memory::request_redistill_on_startup(app);
 }
 
 // ==================== Tauri 命令 ====================

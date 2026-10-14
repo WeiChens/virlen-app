@@ -13,7 +13,9 @@ export type PromptKey =
   | 'compressContext'
   | 'generateTitle'
   | 'verifyPrompt'
-  | 'memoryDistill'
+  /** 记忆再蒸馏（把一批已有记忆合并成更少的条目）。⚠️ **前端运行时不消费** —— 它全在 Rust 侧跑，
+   *  进注册表只为「每个提示词只有一个物理源」这条纪律（契约测试按同一份清单断言）。 */
+  | 'memoryRedistill'
 
 /** 全量提示词文本 */
 export type PromptTexts = Record<PromptKey, string>

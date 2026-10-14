@@ -5,7 +5,6 @@
 //!
 //! 具体实现都在这里，`sqlite::SqliteSessionRepo` 只做转发。
 
-use crate::session_db::types::ModelUsageCount;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -511,40 +510,4 @@ pub(crate) async fn clear(conn: Arc<Mutex<Connection>>) -> Result<i64, String> {
     })
     .await
     .map_err(|e| format!("DB task join error: {}", e))?
-}
-
-/// 某类调用按模型的频次（倒序）—— **记忆蒸馏选模型**的依据（方案 §4.3：
-/// 「压缩会话时用得最多的模型」排首位）。
-///
-/// 只统计 `model` 非空的流水（历史流水可能为空串 —— 补不回来的那部分不参与排序）；
-/// `provider_config_id` 可能为 `NULL`（早期流水）→ 归一成空串（调用方会跳过它）。
-pub(crate) fn model_counts_in_conn(
-    conn: &Connection,
-    kind: &str,
-    limit: usize,
-) -> Result<Vec<ModelUsageCount>, String> {
-    let limit = limit.clamp(1, 100) as i64;
-    let mut stmt = conn
-        .prepare(
-            "SELECT COALESCE(provider_config_id, '') AS pid, model AS model, COUNT(*) AS calls \
-               FROM usage_ledger \
-              WHERE kind = ?1 AND COALESCE(model, '') != '' \
-              GROUP BY pid, model \
-              ORDER BY calls DESC, model ASC LIMIT ?2",
-        )
-        .map_err(|e| format!("准备模型频次查询失败: {}", e))?;
-    let rows = stmt
-        .query_map(params![kind, limit], |row| {
-            Ok(ModelUsageCount {
-                provider_config_id: row.get("pid")?,
-                model: row.get("model")?,
-                calls: row.get("calls")?,
-            })
-        })
-        .map_err(|e| format!("查询模型频次失败: {}", e))?;
-    let mut out = Vec::new();
-    for row in rows {
-        out.push(row.map_err(|e| e.to_string())?);
-    }
-    Ok(out)
 }

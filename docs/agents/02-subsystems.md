@@ -59,6 +59,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
   - `web_search` 的搜索源配置由引擎经 `NativeToolCtx::settings` **直读 `app_settings`**（与「忽略沙盒命令」规则同一份来源）→ CLI 同样可用；
   - `web_fetch` 的 HTML→Markdown 用 `htmd`（TS 侧是 `turndown`）——**Markdown 细节两侧不完全一致**（已知差异，见 `docs/rust-engine.md` §3）。
   - `memory_*` 的语义实现在 `agent::memory::tools`（**与 GUI 命令 `cmd_memory_*` 共用一份**），详情正文落专用知识库（`记忆详情`，`kb_id` 缓存在保留设置键 `__memoryKbId`）。
+  - **再蒸馏（P2′，已实施）**：AI 写下的候选 ≥ 100 条时，宿主在**后台**把同一项目作用域内的若干条记忆交给模型合并成更少的条目（用户无感：无 UI / 无审批；逃生开关 `memoryRedistillEnabled` 默认开、不进 UI）。旧条目**只停用不删除**（`disabled` + `superseded_by`），原文（含它自己的详情正文）进新条目的**归档详情**；保留 30 天后由归档清理按**四条护栏**硬删（缺一不删，最关键的一条：它指向的新条目仍在且有归档详情）。落点：`agent/memory/redistill/`（`plan` 纯逻辑 / `parse` 模型输出 / `apply` 落库 · 归档 · CAS 停用 · 清理 / `sched` 队列 + 宿主 trait / `models` 候选链）、提示词 `prompts/memory-redistill.md`、流水表 `memory_redistill_runs`（主键 = 批次指纹，**不占 `SCHEMA_VERSION`**）。触发点 = 写路径闸门（`memory_write` / 面板保存）+ 宿主启动一次，**不引入定时器**；方案与口径见 `docs/memory-redistill-plan.md`。
 - **原生工具的会话库依赖**：需要读写会话库的工具（消息查询）从 `ctx.repo: &dyn SessionRepo` 取（由引擎注入；`repo.is_available()` 为 false 时如实回「本地存储不可用」）—— 与 `ctx.security` 同一种显式注入。
 - **原生工具的长期记忆依赖**：`memory_*` 从 `ctx.memory: &dyn MemoryRepo` 取（同样由引擎注入，与会话库**共用同一把连接锁**；`is_available()` 为 false 时如实回「本地存储不可用」）；详情知识库经 `ctx.settings`（`__memoryKbId` 缓存）+ 进程级 RAG 服务，RAG 未初始化时降级为「不落详情 / 读不到详情」，不牵连记忆条目本身。
 - **原生工具的技能依赖**：技能工具从 `ctx.skills`（本 agent 启用的技能名）+ `ctx.security.skills_dir` 取数，**自行扫盘解析 SKILL.md**（不依赖前端 localStorage 注册表，CLI 同样可用）。
@@ -70,7 +71,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 ### 5.3 持久化与数据
 
 - **会话消息**：Rust 侧 `src-tauri/virlen-core/src/session_db/`（已从单文件拆分为 16 文件目录）。
-  分层：`types.rs`（IPC DTO）/ `repo.rs`（trait + Noop）/ `schema.rs`（DDL + 迁移）/ `row.rs`（行映射）/ `message_query.rs`（检索 + 蒸馏素材 `day_materials`）/ `usage.rs`（用量账本 + 模型频次）/ `settings.rs`（应用设置）/ `memory.rs`（长期记忆 + `MemoryRepo` + 整理流水）/ `sqlite.rs`（实现）/ `commands.rs`（20 个 `cmd_*`）/ `tests/`。
+  分层：`types.rs`（IPC DTO）/ `repo.rs`（trait + Noop）/ `schema.rs`（DDL + 迁移）/ `row.rs`（行映射）/ `message_query.rs`（消息检索与查询）/ `usage.rs`（用量账本）/ `settings.rs`（应用设置）/ `memory.rs`（长期记忆 + `MemoryRepo`）/ `sqlite.rs`（实现）/ `commands.rs`（20 个 `cmd_*`）/ `tests/`。
   SQLite + WAL + 单写连接 + `spawn_blocking`；**先落库再 emit**。
   ⚠️ 打开库的入口分两层（配置下沉 D3 的前置）：**零 `tauri::`** 的 `commands::open_session_db(host, spawn)`（库路径 = `host.data_dir()/virlen.db`，返回 `SessionDb { repo, settings, memory, maintenance }`，后台任务由宿主传入的 `spawn` 派发）+ GUI 薄壳 `init_session_db(app)`（构造 `TauriHost` + `app.manage(...)`）。
   ⇒ 「会话库 / 配置在哪」只由 `HostEnv::data_dir()` 决定 —— CLI 传 `$VIRLEN_DATA_DIR` 就与 GUI 共用**同一份** `virlen.db`。
