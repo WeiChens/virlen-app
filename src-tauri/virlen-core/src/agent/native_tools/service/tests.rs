@@ -27,6 +27,8 @@ struct TestEnv {
     sink: TestEventSink,
     bridge: AgentBridgeState,
     cancel: CancellationToken,
+    /// 本用例用过的会话 id（`ctx` 逐个登记，`Drop` 时统一收掉它们的常驻服务）。
+    sessions: std::cell::RefCell<Vec<String>>,
 }
 
 /// 服务测试用的 security：裸跑 + 后台服务权限放开（见上）。
@@ -49,6 +51,7 @@ impl TestEnv {
             sink: TestEventSink::new(),
             bridge: AgentBridgeState::default(),
             cancel: CancellationToken::new(),
+            sessions: std::cell::RefCell::new(Vec::new()),
         }
     }
 
@@ -58,6 +61,7 @@ impl TestEnv {
         tool_call_id: &'a str,
         security: &'a crate::agent::types::NativeToolSecurity,
     ) -> NativeToolCtx<'a> {
+        self.sessions.borrow_mut().push(session_id.to_string());
         NativeToolCtx {
             session_id,
             tool_call_id,
@@ -82,6 +86,12 @@ impl TestEnv {
 
 impl Drop for TestEnv {
     fn drop(&mut self) {
+        // 先收掉常驻服务再删目录：读任务是 `spawn_blocking`，运行时析构会等它们跑完 ——
+        // 失败（panic 展开）时若不收，读任务会阻塞到 `CMD_READY` 的 600s 睡眠结束，
+        // 一次失败把测试进程拖住十分钟（CI 日志里的「running for over 60 seconds」即由此而来）。
+        for session_id in self.sessions.borrow().iter() {
+            registry::kill_session_services(session_id);
+        }
         std::fs::remove_dir_all(&self.dir).ok();
     }
 }
@@ -100,6 +110,26 @@ fn ui_of(outcome: &NativeToolOutcome) -> &serde_json::Value {
             ui_data.as_ref().expect("应有 uiData")
         }
         other => panic!("expected ui/value with uiData, got {other:?}"),
+    }
+}
+
+/// 端到端用例等「真实进程产出 / 状态变化」的通用上限。
+///
+/// CI 上近 800 个用例并行跑、runner 只有 2 核，PowerShell 冷启动 + ConPTY 握手的耗时远超本地
+///（本地亚秒级，CI 上 3s 才走到启动横幅的一半）—— 按固定次数写死的小循环会在满载机器上偶发失败。
+const WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// 轮询到 `cond` 为真或超时；返回是否命中。
+async fn wait_until(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if cond() {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -440,16 +470,12 @@ async fn service_exit_after_the_tool_returned_is_notified_at_the_next_boundary()
         "工具返回后启动窗口必须已关闭"
     );
 
-    // 等进程自己退出（最多 5s）—— 退出后通知应已入队
-    let mut queued = 0;
-    for _ in 0..100 {
-        queued = super::notice::pending_count("s_notice_e2e");
-        if queued > 0 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    assert_eq!(queued, 1, "进程自行退出后应攒下一条通知");
+    // 等进程自己退出 —— 退出后通知应已入队
+    assert!(
+        wait_until(WAIT_TIMEOUT, || super::notice::pending_count("s_notice_e2e") > 0).await,
+        "进程自行退出后应攒下一条通知"
+    );
+    assert_eq!(super::notice::pending_count("s_notice_e2e"), 1);
 
     // 轮次边界：注入进本次请求的消息列表（role=feedback，正文带 id 与退出码）
     let mut messages: Vec<crate::agent::types::Message> = Vec::new();
@@ -602,14 +628,11 @@ async fn panel_kill_leaves_the_models_unread_output_intact() {
     let entry = registry::get("s_panel_read", &id).unwrap();
     assert_eq!(entry.unread(), 0, "start 工具返回时应已把自己的等待窗口读干净");
 
-    // 等那行新输出落进窗口（最多 3s）
-    for _ in 0..60 {
-        if entry.unread() > 0 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    assert!(entry.unread() > 0, "应已收到 `ready on 3000`（之后一直没人读）");
+    // 等那行新输出落进窗口
+    assert!(
+        wait_until(WAIT_TIMEOUT, || entry.unread() > 0).await,
+        "应已收到 `ready on 3000`（之后一直没人读）"
+    );
 
     // 面板刷一遍 + 在面板里终止（两者都是只读快照，不得消费游标）
     let rows = super::panel::list_service_snapshots("s_panel_read");
@@ -683,23 +706,18 @@ async fn console_is_interactive_while_running_and_closed_after_exit() {
     ));
     assert!(super::panel::read_service_console("s_console_other", &id, 0).is_none());
 
-    // 等 `ready on 3000` 落进合并流（最多 3s）：读到的就是服务的控制台输出
+    // 等 `ready on 3000` 落进合并流：读到的就是服务的控制台输出
     let mut offset = 0u64;
     let mut all = String::new();
-    for _ in 0..60 {
+    let ready = wait_until(WAIT_TIMEOUT, || {
         let chunk = super::panel::read_service_console("s_console", &id, offset)
             .expect("本会话应可见");
         offset = chunk["next"].as_u64().unwrap();
         all.push_str(chunk["text"].as_str().unwrap());
-        if all.contains("ready on 3000") {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    assert!(
-        all.contains("booting") && all.contains("ready on 3000"),
-        "console stream: {all:?}"
-    );
+        all.contains("ready on 3000")
+    })
+    .await;
+    assert!(ready && all.contains("booting"), "console stream: {all:?}");
     // 偏移续接：同一偏移再读 → 空增量；且不消费模型的未读游标
     let again = super::panel::read_service_console("s_console", &id, offset).unwrap();
     assert_eq!(again["text"], "");
@@ -720,14 +738,10 @@ async fn console_is_interactive_while_running_and_closed_after_exit() {
     super::panel::kill_service_snapshot("s_console", &id)
         .await
         .unwrap();
-    let mut closed = false;
-    for _ in 0..40 {
-        if !registry::get("s_console", &id).unwrap().state.has_pty() {
-            closed = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    let closed = wait_until(WAIT_TIMEOUT, || {
+        !registry::get("s_console", &id).unwrap().state.has_pty()
+    })
+    .await;
     assert!(closed, "进程退出后控制台应被关闭（读线程随后 EOF）");
     assert!(!super::panel::write_service_console("s_console", &id, "x"));
     assert!(!super::panel::resize_service_console("s_console", &id, 120, 40));
