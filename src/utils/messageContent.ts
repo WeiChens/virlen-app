@@ -103,7 +103,7 @@ export function buildUserContent(
           : t('分析这张图片'),
     })
   } else if (files.length > 0) {
-    blocks.push({ type: 'text', text: t('看看这些文件') })
+    blocks.push({ type: 'text', text: t('解析文件') })
   }
 
   // 图片块（保持原有结构，Provider 需要真实图片内容）

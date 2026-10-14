@@ -138,17 +138,17 @@ describe('toMessageDTO —— 文件引用走结构化字段', () => {
     expect('files' in dto).toBe(false)
   })
 
-  it('只带文件不写正文：正文是电脑侧补的「看看这些文件」，文件照常结构化', () => {
+  it('只带文件不写正文：正文是电脑侧补的「解析文件」，文件照常结构化', () => {
     const dto = toMessageDTO({
       id: 'u3',
       role: 'user',
       content: [
-        { type: 'text', text: '看看这些文件' },
+        { type: 'text', text: '解析文件' },
         { type: 'file', path: 'C:/w/a.ts', name: 'a.ts' },
       ],
       timestamp: 0,
     })
-    expect(dto.text).toBe('看看这些文件')
+    expect(dto.text).toBe('解析文件')
     expect(dto.files).toHaveLength(1)
   })
 
@@ -228,7 +228,7 @@ describe('host.session.send —— 手机发的文件引用与桌面走同一条
     ])
   })
 
-  it('只带文件不写正文也能发（电脑侧补「看看这些文件」，与桌面的兜底句一致）', async () => {
+  it('只带文件不写正文也能发（电脑侧补「解析文件」，与桌面的兜底句一致）', async () => {
     sessionStore.saveSession(makeSession('s-file-2', '引用文件'))
     const h = setup()
     await h.caller.call('host.hello', helloParams(h.deviceToken))
@@ -241,7 +241,7 @@ describe('host.session.send —— 手机发的文件引用与桌面走同一条
 
     const user = getSessionMessages('s-file-2').find((m) => m.role === 'user')
     expect(user!.content).toEqual([
-      { type: 'text', text: '看看这些文件' },
+      { type: 'text', text: '解析文件' },
       { type: 'file', path: 'C:/secret/workspace/src', name: 'src', isDir: true, size: undefined },
     ])
   })

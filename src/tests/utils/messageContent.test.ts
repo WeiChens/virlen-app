@@ -67,9 +67,9 @@ describe('buildUserContent', () => {
     expect(two[0]).toEqual({ type: 'text', text: '分析这2张图片' })
   })
 
-  it('无文本但有文件：补一句「看看这些文件」，文件块仍只有路径', () => {
+  it('无文本但有文件：补一句「解析文件」，文件块仍只有路径', () => {
     const content = buildUserContent('', [], [{ path: '/tmp/a.txt' }]) as any[]
-    expect(content[0]).toEqual({ type: 'text', text: '看看这些文件' })
+    expect(content[0]).toEqual({ type: 'text', text: '解析文件' })
     expect(content[1].type).toBe('file')
     expect(content[1].path).toBe('/tmp/a.txt')
   })

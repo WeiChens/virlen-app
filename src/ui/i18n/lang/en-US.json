@@ -7,7 +7,7 @@
   "对话": "Chat",
   "分析这张图片": "Analyze this image",
   "分析这$__num__张图片": "Analyze these $__num__ images",
-  "看看这些文件": "Take a look at these files",
+  "解析文件": "parse file",
   "你": "You",
   "引用": "Quote",
   "引用 $__sender__ 的消息": "Quoted message from $__sender__",

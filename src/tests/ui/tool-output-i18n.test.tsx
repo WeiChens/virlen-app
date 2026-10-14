@@ -247,11 +247,21 @@ describe('DeleteFileMessage（file 组）', () => {
 describe('ListFilesMessage（file 组）', () => {
   const useContent: any = { id: '1', name: 'list_files', input: { path: '/r' } }
 
+  /**
+   * ⚠️ 这两条都必须带 `expand: true`。
+   *
+   * `ListFilesMessage` 的 `diyWrapper()` 是 true（自 6ac2dbe 起改成自己管展开视图），
+   * 外包的 `ToolCallExpandView` 就不会先替它拦「收起」——收起时由组件自己开头那句
+   * `if (!props.expand) return <></>` 返回空。不传 expand 的断言拿到的是空字符串，
+   * 会变成“期望包含某段文字却什么也没渲染”的失败（同文件另几组不带 expand
+   * 是因为那些实现不自己管展开/收起）。
+   */
   it('有 uiData.nodes → 由语言无关目录树渲染，不渲染模型侧英文原文', () => {
     const cmp = new ListFilesMessage()
     const html = render(
       cmp.getExpandView({
         useContent,
+        expand: true,
         message: msg({
           content: 'RAW_MODEL_TREE',
           uiData: {
@@ -274,9 +284,30 @@ describe('ListFilesMessage（file 组）', () => {
     const html = render(
       cmp.getExpandView({
         useContent,
+        expand: true,
         message: msg({ content: 'LEGACY_TREE_TEXT' }),
       }),
     )
     expect(html).toContain('LEGACY_TREE_TEXT')
+  })
+
+  it('收起（没有 expand）→ 什么都不渲染（收起时由组件自己拦，外包不替它拦）', () => {
+    const cmp = new ListFilesMessage()
+    const html = render(
+      cmp.getExpandView({
+        useContent,
+        message: msg({
+          content: 'RAW_MODEL_TREE',
+          uiData: {
+            rootPath: '/r',
+            nodes: [{ name: 'a.ts', isDir: false, size: 2048 }],
+            totalItems: 1,
+            maxItems: 600,
+            truncated: false,
+          },
+        }),
+      }),
+    )
+    expect(html).toBe('')
   })
 })
