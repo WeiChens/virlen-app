@@ -99,17 +99,14 @@ export default function TokenRing({
 
         // 「100%」对应多少来自设置（全局，CLI / 手机接口层读同一份）；这里只展示、不编辑
         const contextWindow = contextWindowOf(settingsState.value.contextWindowTokens)
-
+        //  Math.min(totalTokens / contextWindow, 1)
         const ratio = Math.min(totalTokens / contextWindow, 1)
         const settingMode = settingsState.value.contextCompressMode ?? 'ai'
 
         // 圆头端帽各向外扩半个线宽（合起来一个线宽）：除极小进度外少画一个线宽的弧长，
         // 满环时首尾刚好接上、不被端帽叠粗
         const rawGap = RING_CIRCUMFERENCE * (1 - ratio)
-        const dashOffset =
-          rawGap + RING_STROKE <= RING_CIRCUMFERENCE
-            ? rawGap + RING_STROKE
-            : rawGap
+        const dashOffset = rawGap == 0 ? 0 : rawGap + RING_STROKE
 
         const tip = compacting
           ? t('正在压缩上下文...')
@@ -213,7 +210,7 @@ export default function TokenRing({
                     strokeWidth={RING_STROKE}
                     strokeDasharray={RING_CIRCUMFERENCE}
                     strokeDashoffset={dashOffset}
-                    strokeLinecap="round"
+                    strokeLinecap={ratio == 1 ? 'butt' : 'round'}
                     transform={`rotate(-90 ${RING_CENTER} ${RING_CENTER})`}
                   />
                 </svg>
