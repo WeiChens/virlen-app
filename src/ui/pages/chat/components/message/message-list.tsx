@@ -95,6 +95,8 @@ function ChatMessageList(props: ChatMessageListProps) {
                     // 正文气泡的那组）默认展开，其余默认收起（见 rows.ts::buildRows 的 tail）
                     open={m.openGroups[row.key] ?? row.tail}
                     onToggle={m.toggleGroup}
+                    // 组头展开 / 收起会改这一行的高度：请列表按住滚动偏移（见 useRowToggleHold）
+                    onHoldScrollOffset={m.holdScrollOffset}
                   />
                 </div>
               )

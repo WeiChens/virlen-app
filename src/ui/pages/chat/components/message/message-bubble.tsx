@@ -1,5 +1,6 @@
 /** message-bubble — 消息气泡：Markdown / 图片 / tool calls / 底部操作栏（复制 / 编辑 / 删除） */
 import { t, tpl } from '@/ui/i18n'
+import { useRowToggleHold } from '@/ui/hooks/useRowToggleHold'
 import { type Message } from '@/types'
 import CopySvg from '@/ui/components/icons/CopySvg'
 import EditSvg from '@/ui/components/icons/EditSvg'
@@ -281,9 +282,11 @@ function MessageBubble({
   const [contentExpanded, setContentExpanded] = useState(false)
   const collapsible = isUser && !!showContent
   const contentCollapsed = collapsible && contentOverflow && !contentExpanded
-  /** 气泡根节点：收起后要把顶拉回视野（见下面那个 effect） */
-  const bubbleRef = useRef<HTMLDivElement | null>(null)
-  const wasExpandedRef = useRef(false)
+  /** 气泡根节点：收起后要把顶拉回视野（见 useRowToggleHold） */
+  const { anchorRef: bubbleRef, beforeToggle } = useRowToggleHold<HTMLDivElement>(
+    contentExpanded,
+    onHoldScrollOffset,
+  )
 
   useLayoutEffect(() => {
     if (!collapsible || contentExpanded) return
@@ -312,25 +315,6 @@ function MessageBubble({
       window.removeEventListener('resize', measure)
     }
   }, [collapsible, contentExpanded, showContent])
-
-  /**
-   * 收起时把气泡拉回视野：正文一下矮掉一大截，视口很可能不再落在气泡上（尤其它后面还有消息时）。
-   * 拉住之后要**重新按住**偏移 —— 刚才那一下是我们自己主动滚的，不该被库的补偿又推回去。
-   * 只认「展开 → 收起」这一跳：首次判定出折叠 / 无关重渲染都不许动列表（用户可能正在别处阅读）；
-   * 展开方向不用管 —— 内容向下长，气泡顶原地不动，本来就不跳（偏移由 onHoldScrollOffset 按住）。
-   */
-  useLayoutEffect(() => {
-    const el = bubbleRef.current
-    if (wasExpandedRef.current && !contentExpanded && el) {
-      if (typeof el.scrollIntoView === 'function') {
-        el.scrollIntoView({ block: 'nearest' })
-      }
-      onHoldScrollOffset?.()
-    }
-    wasExpandedRef.current = contentExpanded
-    // onHoldScrollOffset 是稳定引用（列表层 useCallback），不进依赖也不会读到旧值
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contentExpanded])
 
   // 压缩摘要（role='summary'）：正文可能极长，不在消息流里铺开，只渲染可点击的提示条，
   // 全文放弹窗（见 summary-message.tsx）。必须能右键 —— 否则压缩错了没法回退
@@ -529,7 +513,8 @@ function MessageBubble({
                       className={`message-content-more${contentExpanded ? ' is-expanded' : ''}`}
                       onClick={() => {
                         // 行高会变：先按住当前偏移，否则库的跟底补偿会把阅读位置甩到消息末尾
-                        onHoldScrollOffset?.()
+                        //（收起那一步还会把气泡拉回视野，见 useRowToggleHold）
+                        beforeToggle(!contentExpanded)
                         setContentExpanded((v) => !v)
                       }}>
                       <span>{contentExpanded ? t('收起') : t('显示更多')}</span>
@@ -653,6 +638,7 @@ function MessageBubble({
             key={tc.id}
             message={tc}
             result={toolResults?.[i]}
+            onHoldScrollOffset={onHoldScrollOffset}
           />
         ))
       )}

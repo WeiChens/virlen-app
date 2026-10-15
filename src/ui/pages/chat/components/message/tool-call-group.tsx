@@ -1,7 +1,8 @@
 /**
  * 一段**连续**的工具调用合成一行（行模型见 `message-list/rows.ts`）。
  *
- * 折叠态只说一件事：调了几次（外加工具名预览）；展开后是各自仍可再展开的卡片（本组件不改 `ToolCallMessage`）。
+ * 折叠态只说一件事：调了几次（外加工具名预览）；展开后是各自仍可再展开的卡片（卡片的折叠态由
+ * `ToolCallMessage` 自己管，本组件只把「按住滚动偏移」透传下去）。
  * **段首宿主的正文**若有，显示在组头之**上**、不随折叠隐藏（它是看得见的边界，分段规则见 `rows.ts::buildRows`）。
  * 头部**不显示**成功/失败的状态点。
  *
@@ -14,10 +15,14 @@
  * ⚠️ `open` 由父层**预先算好**并以布尔值传入：组件是 `memo` 的，若把折叠态留在内部读（或传一个每次渲染
  * 都换引用的 map），切换折叠会被 `memo` 挡掉（点了没反应）。同理，「成员消息数组」由 `messages +
  * messageIndexes` 在内层 `useMemo` 派生（而非父层 `map` 成新数组传进来）—— 否则 `memo` 被直接击穿。
+ *
+ * ⚠️ 点组头会改**这一行的高度** → 先请列表按住滚动偏移（`useRowToggleHold`）：贴底状态下库的跟底
+ * 补偿会把阅读位置甩到组内容后面（与气泡的「显示更多 / 收起」同一类问题）。
  */
 import { memo, useMemo } from 'react'
 import type { Message } from '@/types'
 import { t } from '@/ui/i18n'
+import { useRowToggleHold } from '@/ui/hooks/useRowToggleHold'
 import { ToolCallMessage } from '../tool-call'
 import { toolGroupView } from './message-list/rows'
 import MarkdownRenderer from './markdown-renderer'
@@ -38,6 +43,8 @@ interface Props {
   open: boolean
   /** 切换展开 / 收起（传 key 而非闭包，保证引用稳定以命中 memo） */
   onToggle: (key: string) => void
+  /** 行内展开 / 收起会改这一行的高度 → 请列表按住滚动偏移（见 `useRowToggleHold`） */
+  onHoldScrollOffset?: () => void
 }
 
 function ToolCallGroup({
@@ -47,6 +54,7 @@ function ToolCallGroup({
   toolResultsFor,
   open,
   onToggle,
+  onHoldScrollOffset,
 }: Props) {
   // 成员数组由「全量 messages + 下标」派生：滚动 / 其它组切换时两者引用不变 → useMemo 返回同一数组 → memo 生效
   const members = useMemo(
@@ -65,6 +73,11 @@ function ToolCallGroup({
   // 运行中的组恒展开：工具还在跑时折起来，用户就看不到进展了
   const expanded = open || view.status === 'pending'
   const bodyId = `${groupKey}__body`
+  // 组头就是「要保持可见」的锚点：收起后组内容一下矮掉（可能整屏），视口很可能已不在这一行上
+  const { anchorRef: headRef, beforeToggle } = useRowToggleHold<HTMLButtonElement>(
+    expanded,
+    onHoldScrollOffset,
+  )
   return (
     <>
       {lead && (
@@ -82,8 +95,14 @@ function ToolCallGroup({
       <div className={`tool-group${expanded ? ' is-open' : ''}`}>
         <button
           type="button"
+          ref={headRef}
           className={`tool-group__head is-${view.status}`}
-          onClick={() => onToggle(groupKey)}
+          onClick={() => {
+            // 运行中的组恒展开：点它不会改高度（折不起来），别白按住一窗偏移
+            if (!expanded) beforeToggle(true)
+            else if (view.status !== 'pending') beforeToggle(false)
+            onToggle(groupKey)
+          }}
           aria-expanded={expanded}
           aria-controls={expanded ? bodyId : undefined}
           title={expanded ? t('收起工具调用') : t('展开工具调用')}>
@@ -110,6 +129,7 @@ function ToolCallGroup({
                       key={tc.id}
                       message={tc}
                       result={results[i]}
+                      onHoldScrollOffset={onHoldScrollOffset}
                     />
                   ))}
                 </div>

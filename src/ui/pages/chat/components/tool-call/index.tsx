@@ -14,6 +14,7 @@ import ContextMenu, {
 } from '@/ui/components/shared/ContextMenu'
 import { fileMenuItems } from '@/ui/components/shared/ContextMenu/menus'
 import { primaryPathOf } from './primary-path'
+import { useRowToggleHold } from '@/ui/hooks/useRowToggleHold'
 
 /** 展开视图渲染错误兜底：单条工具消息渲染异常时只展示错误占位，避免异常冒泡导致整棵组件树白屏 */
 class ExpandErrorBoundary extends Component<
@@ -72,13 +73,23 @@ interface Props {
   message: ToolUseContent
   /** 该工具调用的结果消息（未完成时为 undefined） */
   result?: Message
+  /**
+   * 展开 / 收起会改**这一行的高度**（展开视图撑在卡片下方）→ 请列表按住滚动偏移，
+   * 否则贴底状态下库的跟底补偿会把阅读位置甩到卡片末尾（见 `useRowToggleHold`）。
+   */
+  onHoldScrollOffset?: () => void
 }
 
-export function ToolCallMessage({ message, result }: Props) {
+export function ToolCallMessage({ message, result, onHoldScrollOffset }: Props) {
   const type = message.name
   const [expand, setExpand] = useState(false)
   /** 卡片右键菜单：只针对「本工具操作的那个路径」 */
   const menu = useContextMenu<string>()
+  /** 展开 / 收起时按住滚动偏移（卡片头是「收起后要保持可见」的锚点） */
+  const { anchorRef: cardRef, beforeToggle } = useRowToggleHold<HTMLDivElement>(
+    expand,
+    onHoldScrollOffset,
+  )
   /** 主路径（取不到就不开菜单 —— 宁可不响应，也不要打开一个打不开的路径） */
   const primaryPath = primaryPathOf(message.input)
   /**
@@ -108,7 +119,11 @@ export function ToolCallMessage({ message, result }: Props) {
   return (
     <>
       <div
-        onClick={() => setExpand(!expand)}
+        ref={cardRef}
+        onClick={() => {
+          beforeToggle(!expand)
+          setExpand(!expand)
+        }}
         onContextMenu={
           primaryPath ? (e) => menu.openAt(e, primaryPath) : undefined
         }
