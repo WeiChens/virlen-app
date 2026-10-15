@@ -53,12 +53,27 @@ interface Props {
   /** 与 message.toolCalls 一一对应的工具结果（未完成处为 undefined） */
   toolResults?: (Message | undefined)[]
   /**
+   * 不渲染 `message.toolCalls` 的工具卡片。
+   * ⚠️ 只在「卡片由**别处**统一渲染」时才传（工具组的段首正文，见 `tool-call-group.tsx`）——
+   * 否则同一批卡片会渲染两遍。
+   */
+  omitToolCalls?: boolean
+  /**
    * 「按住滚动偏移」：行内展开 / 收起超长正文会改这一行的高度，列表的跟底补偿会把它算成
    * 「你还在底部」，于是把阅读位置甩到消息末尾。调它 = 请列表把当前偏移按住一会儿
    *（见 message-list/scroll-hold.ts）。不传 = 不按住（单测 / 独立渲染气泡时不需要）。
    */
   onHoldScrollOffset?: () => void
 }
+
+/**
+ * 气泡对外的事件回调。抽出来是为了让「别处托管渲染同一颗气泡」的地方（工具组的段首正文）
+ * 直接复用这份签名 —— 各写一份迟早会漏掉后加的回调。
+ */
+export type MessageBubbleHandlers = Pick<
+  Props,
+  'onEdit' | 'onDelete' | 'onTransferSummary' | 'onQuote' | 'onQuoteJump'
+>
 
 /**
  * 右键目标：同一气泡里有多类可右键对象（正文 / 摘要 / 图片 / 文件 / 技能 / 深度思考），
@@ -86,6 +101,7 @@ function MessageBubble({
   onQuote,
   onQuoteJump,
   toolResults,
+  omitToolCalls,
   onHoldScrollOffset,
 }: Props) {
   const mkdRef = useRef<HTMLDivElement | null>(null)
@@ -632,7 +648,9 @@ function MessageBubble({
           </div>
         </div>
       )}
-      {message.toolCalls && message.toolCalls.length > 0 && (
+      {/* 工具卡片：`omitToolCalls` 时由别处渲染（工具组），这里不再重复输出 */}
+      {!omitToolCalls &&
+        !!message.toolCalls?.length &&
         message.toolCalls.map((tc, i) => (
           <ToolCallMessage
             key={tc.id}
@@ -640,8 +658,7 @@ function MessageBubble({
             result={toolResults?.[i]}
             onHoldScrollOffset={onHoldScrollOffset}
           />
-        ))
-      )}
+        ))}
       {/* 右键菜单：各类目标共用一套（同一时刻只开一个） */}
       {menu.state && (
         <ContextMenu

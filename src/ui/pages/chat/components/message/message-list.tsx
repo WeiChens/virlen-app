@@ -97,6 +97,13 @@ function ChatMessageList(props: ChatMessageListProps) {
                     onToggle={m.toggleGroup}
                     // 组头展开 / 收起会改这一行的高度：请列表按住滚动偏移（见 useRowToggleHold）
                     onHoldScrollOffset={m.holdScrollOffset}
+                    // 段首宿主的正文由 ToolCallGroup 内的真气泡渲染（只带 omitToolCalls），
+                    // 故气泡的回调照常透传 —— 否则那条消息的操作栏 / 右键菜单会变成死的
+                    onEdit={m.handleEditBubble}
+                    onDelete={m.handleDeleteBubble}
+                    onTransferSummary={m.handleTransferSummary}
+                    onQuote={m.handleQuoteBubble}
+                    onQuoteJump={onQuoteJump}
                   />
                 </div>
               )

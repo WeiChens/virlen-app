@@ -299,4 +299,47 @@ describe('ChatMessageList：工具组接线', () => {
     expect(container!.querySelector('.tool-group__body')).toBeNull()
     expect(container!.textContent ?? '').toContain('看完了。')
   })
+
+  it('段首宿主带正文 + 思考过程 → 正文与思考过程块照常显示，卡片不重复', async () => {
+    // 回归：进组的成员不会走列表的气泡分支，若组首正文靠手搓一份精简气泡渲染，
+    // 这条「有正文」的宿主的思考过程折叠块会被连带藏掉（设置项只该隐藏「工具调用的思考过程」）。
+    mount([
+      { id: 'u1', role: 'user', content: '跑两个工具', timestamp: 0 },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: '先看这里。',
+        reasoningContent: '我应该先读文件',
+        toolCalls: [tc('t1', 'list_files')],
+        timestamp: 0,
+      },
+      toolResult('r1', 't1', 'a\nb'),
+      assistantTool('a2', [tc('t2', 'read_file')]),
+      toolResult('r2', 't2', 'c'),
+      { id: 'a3', role: 'assistant', content: '看完了。', timestamp: 0 },
+    ])
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+    })
+
+    // 组首那条的正文照常渲染在组头之上，并带齐外围能力（操作栏）
+    expect(container!.textContent ?? '').toContain('先看这里。')
+    expect(
+      container!.querySelector('.message-bubble.assistant .message-actions'),
+    ).not.toBeNull()
+    // ⚠️ 回归点：组首宿主的思考过程折叠块必须还在
+    expect(container!.querySelectorAll('.reasoning-block').length).toBe(1)
+    expect(container!.textContent ?? '').toContain('思考过程')
+
+    // 展开组：卡片只在组内渲染一遍（气泡侧传了 omitToolCalls，不重复输出）
+    act(() => {
+      container!
+        .querySelector('.tool-group__head')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(container!.querySelectorAll('.tool-card').length).toBe(2)
+    expect(
+      container!.querySelectorAll('.tool-group__body .tool-card').length,
+    ).toBe(2)
+  })
 })

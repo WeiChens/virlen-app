@@ -6,6 +6,13 @@
  * **段首宿主的正文**若有，显示在组头之**上**、不随折叠隐藏（它是看得见的边界，分段规则见 `rows.ts::buildRows`）。
  * 头部**不显示**成功/失败的状态点。
  *
+ * ⚠️ 段首宿主交给**真的 `MessageBubble`** 渲染（只传 `omitToolCalls`：卡片由本组渲染）：
+ * 成员消息进了组就不会再走列表的气泡分支，若这里手搓一份精简气泡，段首那条的
+ * **思考过程折叠块**（`.reasoning-block`）、底部操作栏、右键菜单就会一起丢掉
+ * —— 而「有正文的宿主」是允许进组的（见 `rows.ts::isToolCallMessage`），于是
+ * 「正文输出的思考过程」被连带藏掉，与设置项「隐藏工具调用的思考过程」的语义不符。
+ * 走真气泡 = 这些外围能力全部同源，不给第二个渲染口径。
+ *
  * ⚠️ **运行中的组（pending）恒展开、不可折叠**：工具还在跑时折起来用户就看不到进展了；
  * 跑完（done / error）后恢复成「按 `open` 折叠」。
  * ⚠️ **尾部段**（后面再没有可见气泡的那组，`rows.ts::buildRows` 的 `tail`）**默认展开**：
@@ -25,12 +32,11 @@ import { t } from '@/ui/i18n'
 import { useRowToggleHold } from '@/ui/hooks/useRowToggleHold'
 import { ToolCallMessage } from '../tool-call'
 import { toolGroupView } from './message-list/rows'
-import MarkdownRenderer from './markdown-renderer'
-import { messageBodyText } from '@/utils/messageContent'
+import MessageBubble, { type MessageBubbleHandlers } from './message-bubble'
 import CollapsedSvg from '@/ui/components/icons/CollapsedSvg'
 import './tool-call-group.scss'
 
-interface Props {
+interface Props extends MessageBubbleHandlers {
   /** 组行 key（折叠态就按它记账） */
   groupKey: string
   /** 全量消息数组（按下标取成员；传全量 + 下标，让内层 useMemo 稳定以命中 memo） */
@@ -55,6 +61,11 @@ function ToolCallGroup({
   open,
   onToggle,
   onHoldScrollOffset,
+  onEdit,
+  onDelete,
+  onTransferSummary,
+  onQuote,
+  onQuoteJump,
 }: Props) {
   // 成员数组由「全量 messages + 下标」派生：滚动 / 其它组切换时两者引用不变 → useMemo 返回同一数组 → memo 生效
   const members = useMemo(
@@ -68,8 +79,9 @@ function ToolCallGroup({
     () => toolGroupView(members, toolResultsFor),
     [members, toolResultsFor],
   )
-  // 段首宿主的过渡正文：恒显示在组头之上（不随折叠隐藏）
-  const lead = members[0] ? messageBodyText(members[0].content) : ''
+  // 段首宿主（带工具调用的 assistant，可能带正文）交给真气泡渲染：正文 / 思考过程块 / 操作栏 /
+  // 右键菜单一次性拿全，与列表里的普通消息同源（卡片由本组渲染，故传 omitToolCalls）
+  const lead = members[0]
   // 运行中的组恒展开：工具还在跑时折起来，用户就看不到进展了
   const expanded = open || view.status === 'pending'
   const bodyId = `${groupKey}__body`
@@ -81,16 +93,16 @@ function ToolCallGroup({
   return (
     <>
       {lead && (
-        // 复用普通 assistant 消息的容器，让它和别的消息长得一样（灰底气泡 + 一致缩进）
-        <div className="message-bubble assistant">
-          <div className="message-body">
-            <div className="message-content-wrapper">
-              <div className="message-content">
-                <MarkdownRenderer content={lead} isUser={false} streaming={false} />
-              </div>
-            </div>
-          </div>
-        </div>
+        <MessageBubble
+          message={lead}
+          omitToolCalls
+          onEdit={onEdit}
+          onDelete={onDelete}
+          onTransferSummary={onTransferSummary}
+          onQuote={onQuote}
+          onQuoteJump={onQuoteJump}
+          onHoldScrollOffset={onHoldScrollOffset}
+        />
       )}
       <div className={`tool-group${expanded ? ' is-open' : ''}`}>
         <button
