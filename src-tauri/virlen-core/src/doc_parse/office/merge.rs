@@ -7,11 +7,11 @@
 //! - 文稿 / 演示（`docx` / `doc` / `pptx` / `ppt`）：正文里没有「第 N 张表」这个坐标，所以
 //!   **就地**插一句段落（`inject_table_notes`），位置由库自己的渲染器排，与正文同源。
 
-use office_oxide::ir::{DocumentIR, Element, InlineContent, List, Paragraph, Table, TextSpan};
+use office_oxide::ir::{DocumentIR, Element, List, Table};
 use office_oxide::xls::Sheet;
 use office_oxide::xlsx::{Cell, CellRef, CellValue, SharedStringTable, Worksheet};
 
-use super::notes::{shrink, Mentions};
+use super::notes::{fact_paragraph, shrink, Mentions};
 
 /// 合并说明的开头 —— 先讲清「为什么被覆盖的位置是空的」，后面接区域清单
 pub(super) const MERGE_LEAD: &str =
@@ -299,7 +299,7 @@ fn inject_notes_in_blocks(elements: &mut Vec<Element>, explained: &mut bool) {
             _ => None,
         };
         if let Some(text) = note {
-            elements.insert(index, note_paragraph(text));
+            elements.insert(index, fact_paragraph(text));
             *explained = true;
             // 说明插在这张表前，表本身挪到了下一个位置
             index += 1;
@@ -349,14 +349,6 @@ pub(super) fn table_merge_note(table: &Table, explained: bool) -> Option<String>
         TABLE_MERGE_LEAD
     };
     mentions.note(lead)
-}
-
-/// 一句事实 → IR 里的一个普通段落（库自己的渲染器会把它排在表前、独占一行）
-fn note_paragraph(text: String) -> Element {
-    Element::Paragraph(Paragraph {
-        content: vec![InlineContent::Text(TextSpan::plain(text))],
-        ..Default::default()
-    })
 }
 
 /// 一张表的合并区域（`table_regions` 的坐标是**表内** 0-based）。

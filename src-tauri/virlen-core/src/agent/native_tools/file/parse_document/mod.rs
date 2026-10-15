@@ -16,8 +16,11 @@
 //! `read_file` / `search_text_in_files` 按需取用。落盘走 `resolve_safe_path(.., "w", ..)`（写模式：
 //! 白名单 + 工作目录，黑名单优先）；**被拒就直接失败**，不悄悄降级成「只回正文」。
 //!
-//! `ocrImages`（选填，PDF）：扫描件没有文字层，字全在图片里 —— 端侧 OCR（quasivision，**图片不出本机**）
-//! 把图里的字读出来当正文。三态语义见 [`ocr_options`]，口径与 GUI 命令共用同一条链。
+//! `ocrImages`（选填）：字在图片里的文档（扫描件 PDF、整篇截图、报表里的图）—— 端侧 OCR（quasivision，
+//! **图片不出本机**）把图里的字读出来当正文。`pdf` 与 Office 六种都支持，一份文档最多
+//! `doc_parse::ocr::MAX_IMAGES` 张（超出的如实报「没读」）；太小 / 太扁的图不读
+//! （`ocr::MIN_IMAGE_SIDE` / `ocr::MAX_ASPECT_RATIO`，长边 > 短边 × 3 的横幅、单行截图那类）。
+//! 三态语义见 [`ocr_options`]，口径与 GUI 命令共用同一条链。
 
 use crate::agent::cancellation::CancellationToken;
 use crate::agent::host::HostEnv;
@@ -62,9 +65,9 @@ pub fn default_max_chars(out_txt_file: Option<&str>) -> usize {
 ///
 /// | 入参 | 行为 |
 /// |---|---|
-/// | 没传 | **自动兜底**：只有抽不到文字层的 PDF（扫描件）才跑 OCR |
-/// | `true` | 有文字层也跑：图片里的字（截图 / 表格图）也读 |
-/// | `false` | 完全不跑（显式关掉兜底，扫描件直接报「没有文字」） |
+/// | 没传 | **自动兜底**：只有「除图片外没有文字」的文档才跑（扫描件 PDF / 整篇截图） |
+/// | `true` | 有正文也跑：图片里的字（截图 / 表格图）也读 |
+/// | `false` | 完全不跑（显式关掉兜底，纯图文档直接报「没有文字」） |
 ///
 /// 模型目录只在这里解析：只有调用方拿得到宿主（工具 → `ctx.host`，GUI 命令 → `TauriHost`）。
 pub fn ocr_options(
@@ -503,8 +506,7 @@ fn ocr_ui(summary: &OcrSummary) -> Value {
             .iter()
             .map(|s| json!({
                 "index": s.index,
-                "page": s.page,
-                "pages": s.pages,
+                "place": s.place,
                 "width": s.width,
                 "height": s.height,
                 "objectId": s.object_id,

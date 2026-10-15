@@ -524,11 +524,10 @@ fn ocr_facts_reach_both_the_model_text_and_the_ui_data() {
         total: 3,
         sections: vec![OcrSection {
             index: 1,
-            page: 3,
-            pages: vec![3, 4],
+            place: "pages 3, 4".to_string(),
             width: 1240,
             height: 1754,
-            object_id: 27,
+            object_id: Some(27),
             chars: 40,
             text: "…".to_string(),
         }],
@@ -558,8 +557,8 @@ fn ocr_facts_reach_both_the_model_text_and_the_ui_data() {
     assert_eq!(ui.pointer("/ocr/sections/0/index"), Some(&json!(1)));
     assert_eq!(ui.pointer("/ocr/sections/0/objectId"), Some(&json!(27)));
     assert_eq!(
-        ui.pointer("/ocr/sections/0/pages"),
-        Some(&json!([3, 4]))
+        ui.pointer("/ocr/sections/0/place"),
+        Some(&json!("pages 3, 4"))
     );
     assert_eq!(ui.pointer("/ocr/skipped"), Some(&json!(1)));
 }

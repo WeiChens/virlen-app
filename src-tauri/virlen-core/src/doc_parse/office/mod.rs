@@ -37,12 +37,16 @@
 //!   几十张，同一句解释重复几十遍纯是噪音；后面的表只留 `merged cells:` 短开头，条目仍然
 //!   各归自己那张表。
 //!
-//! **图片**是同一类问题里更彻底的一种：渲染器只画文字 —— `xlsx` 的 `<xdr:pic>`（含 Excel 365
-//! 「放在单元格里的图片」）与 `.xls` 的 `MsoDrawingGroup` 里的 BLIP **一个字都不会进正文**，
-//! 模型看到的就是「这里本来就没东西」；而中文报表里的图片经常盛的正是数据。所以图片也进那句
-//! 说明：**只报存在**（哪张表、第几张、格式、显示尺寸、字节数、alt 文本），**不读图的内容**
-//! （读图是 PDF 那条路的事，见 `doc_parse::ocr`）。库没有解析出「图片名」（`<xdr:cNvPr>` 的
-//! `name` 不在它的模型里）—— 不编这个名字，用「`表名!image 序号` + 格式 + 尺寸 + alt」定位。
+//! **图片**是同一类问题里更彻底的一种：渲染器只画文字 —— `docx` / `pptx` 的 `<w:drawing>` /
+//! `<p:pic>`、`xlsx` 的 `<xdr:pic>`（含 Excel 365「放在单元格里的图片」）与 `.xls` 的
+//! `MsoDrawingGroup` 里的 BLIP **一个字都不会进正文**，模型看到的就是「这里本来就没东西」；
+//! 而中文报表 / 截图里的图片经常盛的正是数据。所以图片必须报：
+//! - **文稿 / 演示**：图片在正文流里本来就有位置 → **就地**换成一句标记
+//!   （`image 3 · png · 640×480 px · 24.6 KB`），位置由库自己的渲染器排、与正文同源；
+//! - **表格**：正文是「表名一行 + 制表符分列的行」，插不进「位置」→ 走 `DocText::note` 的一句
+//!   说明（`销售!image 2 (png, 1412x844 px, 224.4 KB)`）。
+//! - 被要求（`ocrImages: true`，或整份文档除图片外没有文字）时，端侧 OCR 把图里的字读出来：
+//!   文稿 / 演示贴在标记后面，表格追加在正文后面（见 `doc_parse::ocr`）。
 //!
 //! 未做（如实报错，不猜）：加密（口令保护）文档、扫描件、`.doc` 里的嵌入对象、Word 纵向合并
 //! **续格**里的内容（IR 按 Word 的显示语义把它丢掉，要恢复得再走一遍原始 docx 模型，收益极低）。
@@ -50,7 +54,7 @@
 //! **分册**（本文件只留入口与对外名字；`extract_text` / `OfficeText` 的路径一字未变）：
 //! - `notes`：说明的公共词汇（`Mentions` / `shrink` / `join_notes`）；
 //! - `merge`：合并单元格（`merge::inject_table_notes` 等）；
-//! - `images`：表格里的图片（只报存在）；
+//! - `images`：文档里的图片（标记 / 说明 + 待读的字节）；
 //! - `cells`：格内换行 / 制表符压平（`cells::flatten_breaks`）；
 //! - `render`：把文档变成给模型看的文本 + `note`。
 //!
@@ -60,6 +64,7 @@ use office_oxide::xls::XlsDocument;
 use office_oxide::xlsx::XlsxDocument;
 use office_oxide::{Document, DocumentFormat};
 
+use super::ocr::{OcrOptions, OcrSummary};
 use super::ParseError;
 use self::cells::{flatten_xls_breaks, flatten_xlsx_breaks};
 use self::render::{backend_error, doc_text, xls_text, xlsx_text};
@@ -84,17 +89,31 @@ pub struct OfficeText {
     pub sheet: Option<String>,
     /// 需要让模型知道的说明（英文）
     pub note: Option<String>,
+    /// 端侧 OCR 的摘要（`None` = 这条链接根本没碰 OCR）
+    pub ocr: Option<OcrSummary>,
 }
 
-/// 抽一个 Office 文档的文本。
+/// 抽一个 Office 文档的文本（**不碰 OCR**）—— 等价于 [`extract_text_with_ocr`] 传 `None`。
+///
+/// 实测：19 处用例只关心正文，不必每处多写一个 `None`；实现只有一份（下面那个）。
+pub fn extract_text(path: &str, sheet: Option<&str>, ext: &str) -> Result<OfficeText, ParseError> {
+    extract_text_with_ocr(path, sheet, ext, None)
+}
+
+/// 抽一个 Office 文档的文本，并可选地把内嵌图片里的字读出来（`ocr`）。
 ///
 /// `ext` 既用于错误文案，也用于**先按哪种类型打开**：表格（`xlsx` / `xls`）要压平格内换行
 /// （`cells::flatten_breaks`），那是在**值**这一层改、需要可变所有权 —— 所以表格自己开、自己持有
 /// （[`Spreadsheet`]）；开不出来才落到 `Document::open` 那条路（扩展名骗人 / 加密包 / 损坏），
 /// 容器嗅探与错误文案都归库。
-pub fn extract_text(path: &str, sheet: Option<&str>, ext: &str) -> Result<OfficeText, ParseError> {
+pub fn extract_text_with_ocr(
+    path: &str,
+    sheet: Option<&str>,
+    ext: &str,
+    ocr: Option<&OcrOptions>,
+) -> Result<OfficeText, ParseError> {
     if let Some(book) = Spreadsheet::open(path, ext) {
-        return book.flattened_text(sheet);
+        return book.flattened_text(sheet, ocr);
     }
 
     // 文稿 / 演示，或**按扩展名开不出来的表格**
@@ -103,9 +122,9 @@ pub fn extract_text(path: &str, sheet: Option<&str>, ext: &str) -> Result<Office
         // 扩展名与容器不符的表格（比如 `.xls` 里装的其实是 `.xlsx`）：库刚确认了真格式，
         // 按真格式开一份可变的再净化 —— 同一份文件刚解析成功过，这次必开得出来
         DocumentFormat::Xlsx | DocumentFormat::Xls => {
-            Spreadsheet::open_as(path, doc.format(), ext)?.flattened_text(sheet)
+            Spreadsheet::open_as(path, doc.format(), ext)?.flattened_text(sheet, ocr)
         }
-        _ => Ok(doc_text(&doc, sheet)),
+        _ => Ok(doc_text(&doc, sheet, ocr)),
     }
 }
 
@@ -144,16 +163,20 @@ impl Spreadsheet {
         }
     }
 
-    /// 压平格内换行 / 制表符，再渲染
-    fn flattened_text(self, sheet: Option<&str>) -> Result<OfficeText, ParseError> {
+    /// 压平格内换行 / 制表符，再渲染（`ocr` = 要不要顺带把图里的字读出来）
+    fn flattened_text(
+        self,
+        sheet: Option<&str>,
+        ocr: Option<&OcrOptions>,
+    ) -> Result<OfficeText, ParseError> {
         match self {
             Self::Xlsx(mut book) => {
                 flatten_xlsx_breaks(&mut book);
-                xlsx_text(&book, sheet)
+                xlsx_text(&book, sheet, ocr)
             }
             Self::Xls(mut book) => {
                 flatten_xls_breaks(&mut book);
-                xls_text(&book, sheet)
+                xls_text(&book, sheet, ocr)
             }
         }
     }

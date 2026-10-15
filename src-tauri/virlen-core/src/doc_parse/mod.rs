@@ -15,10 +15,15 @@
 //! | 扩展名 | 实现 | 文本形态 |
 //! |---|---|---|
 //! | `pdf` | [`pdf`]（`pdf-extract` + 按版面坐标重排）+ [`ocr`]（内嵌图片） | 文字层（行序按版面重排）；**扫描件没有文字层时走端侧 OCR**（`ParseOptions::ocr`） |
-//! | `docx` `doc` `pptx` `ppt` | [`office`]（`office_oxide`） | Markdown（保留标题 / 列表 / 表格） |
-//! | `xlsx` `xls` | [`office`]（`office_oxide`） | 工作表名 + 制表符分隔的行（表格用 Markdown 太费 token） |
+//! | `docx` `doc` `pptx` `ppt` | [`office`]（`office_oxide`） | Markdown（保留标题 / 列表 / 表格）；内嵌图片**就地**标一句 `image N · …`（见 §20） |
+//! | `xlsx` `xls` | [`office`]（`office_oxide`） | 工作表名 + 制表符分隔的行（表格用 Markdown 太费 token）；图片进 `note` 的一句说明 |
 //! | `csv` `tsv` | [`delimited`]（`csv`） | 规范化的 CSV（分隔符嗅探 → 统一逗号；解析失败回退原文） |
 //! | `txt` `md` `json` … | [`text`] | 解码后的原文（BOM / UTF-16 / GB18030 / BIG5 / Shift_JIS 兜底） |
+//!
+//! **内嵌图片**（`pdf` + Office 六种）默认只**报存在与位置** —— 渲染器一个字都不画，不讲的话
+//! 模型只能当那里本来就没东西；[`ParseOptions::ocr`] 有值时按同一套口径把图里的字读出来
+//! （太小 / 太扁的图不读：[`ocr::MIN_IMAGE_SIDE`] / [`ocr::MAX_ASPECT_RATIO`]；上限
+//! [`ocr::MAX_IMAGES`] 张；**图片不出本机**，两块共用一个 [`ocr`] 模块）。
 
 pub mod delimited;
 pub mod ocr;
@@ -58,10 +63,18 @@ pub const OFFICE_EXTENSIONS: [&str; 6] = ["docx", "doc", "xlsx", "xls", "pptx", 
 /// 分隔符文本（[`delimited`] 处理）
 pub const DELIMITED_EXTENSIONS: [&str; 2] = ["csv", "tsv"];
 
-/// `ocrImages` 用在非 PDF 上时给模型的一句说明（固定英文；与 `sheet` 在 Word 上的口径一致）
+/// `ocrImages` 用在**没有内嵌图片的格式**（纯文本 / CSV）上时给模型的一句说明（固定英文）
 ///
 /// ⚠️ 不进 i18n：模型侧文案必须只有一份（铁律 1），界面侧按 `uiData` 重建自己的话。
-const OCR_ONLY_PDF_NOTE: &str = "Parameter \"ocrImages\" only applies to .pdf — ignored";
+const OCR_NO_IMAGES_NOTE: &str =
+    "Parameter \"ocrImages\" is ignored: this format has no embedded images";
+
+/// 这个格式的内嵌图片能不能读（`ocrImages` 只对有图的格式有意义）
+///
+/// `pdf` 与 Office 六种都有图（渲染器不画，但图就在包里）；`csv` / 纯文本没有「内嵌图片」这个概念。
+pub fn has_embedded_images(ext: &str) -> bool {
+    ext == "pdf" || OFFICE_EXTENSIONS.contains(&ext)
+}
 
 /// 全部可解析扩展名（错误文案与白名单都取自这里）
 pub fn supported_extensions() -> Vec<&'static str> {
@@ -173,7 +186,8 @@ pub struct ParseOptions {
     ///
     /// 默认 `false`：切片之外的文本当场释放，不在引擎里多留一份大字符串。
     pub full_text: bool,
-    /// 端侧 OCR（扫描件 / 图片型 PDF 取字）；`None` = 不碰 OCR（含 `ocrImages: false` 的显式关闭）
+    /// 端侧 OCR（扫描件 / 图片型 PDF 的文字层取字，以及 PDF 与 Office 的**内嵌图片**取字）；
+    /// `None` = 不碰 OCR（含 `ocrImages: false` 的显式关闭）
     pub ocr: Option<OcrOptions>,
 }
 
@@ -272,7 +286,7 @@ pub fn parse(path: &str, opts: &ParseOptions) -> Result<DocText, ParseError> {
                 if !outcome.text.is_empty() {
                     if has_layer {
                         // 有文字层：OCR 作为**追加块**（模型能分清哪段字来自图）
-                        text.push_str("\n\n[OCR] On-device OCR of the embedded images:\n\n");
+                        text.push_str(&format!("\n\n{}\n\n", ocr::BLOCK_LEAD));
                     }
                     text.push_str(&outcome.text);
                 }
@@ -299,12 +313,20 @@ pub fn parse(path: &str, opts: &ParseOptions) -> Result<DocText, ParseError> {
             text
         }
         "docx" | "doc" | "xlsx" | "xls" | "pptx" | "ppt" => {
-            let out = office::extract_text(path, opts.sheet.as_deref(), &ext)?;
+            // 图片：Markdown / 表格渲染器都不画它 —— 就地标一句（文稿）或进 `note`（表格）；
+            // `ocrImages` 有值时顺带把图里的字读出来（要不要跑由 `office::render` 按同一套口径决定）
+            let out = office::extract_text_with_ocr(
+                path,
+                opts.sheet.as_deref(),
+                &ext,
+                opts.ocr.as_ref(),
+            )?;
             sheets = out.sheets;
             used_sheet = out.sheet;
             if let Some(n) = out.note {
                 note = Some(n);
             }
+            ocr_summary = out.ocr;
             out.text
         }
         "csv" | "tsv" => {
@@ -328,18 +350,19 @@ pub fn parse(path: &str, opts: &ParseOptions) -> Result<DocText, ParseError> {
         }
     };
 
-    // OCR 只对 PDF 有意义：其它格式收到了要**如实说一句**（与 `sheet` 在 Word 上被忽略同口径）——
-    // 静默忽略会让模型以为「我明明让它读了图里的字」。
+    // OCR 只对**有内嵌图片的格式**有意义：纯文本 / CSV 收到了要**如实说一句**（与 `sheet` 在 Word 上
+    // 被忽略同口径）—— 静默忽略会让模型以为「我明明让它读了图里的字」。
     // `None` = 调用方显式关掉了 OCR（`ocrImages: false`），那本来就没期待，不必啰嗦。
-    if ext != "pdf" && opts.ocr.is_some() {
-        note = join_notes([note.take(), Some(OCR_ONLY_PDF_NOTE.to_string())]);
+    if !has_embedded_images(&ext) && opts.ocr.is_some() {
+        note = join_notes([note.take(), Some(OCR_NO_IMAGES_NOTE.to_string())]);
     }
 
     if raw.trim().is_empty() {
-        // 为什么没文字：跑过 OCR 的说 OCR 的结论；PDF 没跑的提醒开关（否则模型会以为这格式读不了）
+        // 为什么没文字：跑过 OCR 的说 OCR 的结论；有图但没跑的提醒开关（否则模型会以为这格式读不了）
+        let subject = if ext == "pdf" { "the PDF" } else { "the document" };
         let detail = match &ocr_summary {
-            Some(summary) => ocr::no_text_detail(summary),
-            None if ext == "pdf" => {
+            Some(summary) => ocr::no_text_detail(summary, subject),
+            None if has_embedded_images(&ext) => {
                 "pass ocrImages: true to read the text inside its embedded images with on-device OCR"
                     .to_string()
             }
@@ -606,9 +629,10 @@ mod tests {
         assert_eq!(join_notes([None, None]), None);
     }
 
-    /// 非 PDF 收到 `ocrImages`（未显式关掉）要如实说一句 —— 静默忽略等于骗模型「图里的字读过了」
+    /// 没有内嵌图片的格式（纯文本 / CSV）收到 `ocrImages` 要如实说一句 ——
+    /// 静默忽略等于骗模型「图里的字读过了」（Office 六种是**有**图的格式，不再进这一档）
     #[test]
-    fn ocr_images_on_a_non_pdf_format_is_reported_as_ignored() {
+    fn ocr_images_on_a_format_without_images_is_reported_as_ignored() {
         let dir = tmp_dir("ocr_nonpdf");
         let file = dir.join("notes.txt");
         std::fs::write(&file, "hello\n").unwrap();
@@ -622,9 +646,11 @@ mod tests {
             ..Default::default()
         };
         let out = parse(file.to_str().unwrap(), &requested).unwrap();
-        let note = out.note.expect("非 PDF 收到 ocrImages 必须给一句说明");
-        assert!(note.contains("only applies to .pdf"), "{note}");
-        assert!(out.ocr.is_none(), "非 PDF 链根本不碰 OCR");
+        let note = out
+            .note
+            .expect("没图的格式收到 ocrImages 必须给一句说明");
+        assert!(note.contains("this format has no embedded images"), "{note}");
+        assert!(out.ocr.is_none(), "没图的格式根本不碰 OCR");
 
         // 显式 `false`（`ocr` 为 `None`）= 调用方本来就期待不跑，不必再解释一遍
         let off = ParseOptions {
@@ -634,5 +660,16 @@ mod tests {
         assert_eq!(parse(file.to_str().unwrap(), &off).unwrap().note, None);
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `ocrImages` 只对有内嵌图片的格式有意义：`pdf` 与 Office 六种都算，其余不算
+    #[test]
+    fn embedded_image_capable_formats_are_the_pdf_and_office_ones() {
+        for ext in ["pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt"] {
+            assert!(has_embedded_images(ext), "{ext} 应该有图");
+        }
+        for ext in ["txt", "md", "json", "csv", "tsv"] {
+            assert!(!has_embedded_images(ext), "{ext} 没有「内嵌图片」这个概念");
+        }
     }
 }

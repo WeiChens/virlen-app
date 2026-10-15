@@ -1,7 +1,11 @@
 //! 说明的公共词汇 —— 合并区域与图片共用的一份「只列前 N 条、其余只计数」的收集器。
 //!
-//! 三个分册都用到它（`merge` / `images` 各自往里塞句子，`render` 负责把收集到的句子交给调用方），
+//! 两个分册都用到它（`merge` / `images` 各自往里塞句子，`render` 负责把收集到的句子交给调用方），
 //! 所以单独成册：不然它只能挂在某一个分册里、别的分册反向依赖。
+//! 还有一个共同的出口：[`fact_paragraph`]（把一句事实变成 IR 里的普通段落 —— 合并说明与图片标记
+//! 都是这么“就地”贴进正文的）。
+
+use office_oxide::ir::{Element, InlineContent, Paragraph, TextSpan};
 
 /// 一句说明里最多列几条（合并区域 / 图片各自计数）—— 一张满是合并或满是图的表
 /// 不该把说明写成一篇长文
@@ -59,6 +63,16 @@ pub(super) fn shrink(text: &str) -> Option<String> {
     }
     let head: String = trimmed.chars().take(MAX_HIDDEN_VALUE_CHARS).collect();
     Some(format!("{head}…"))
+}
+
+/// 一句事实 → IR 里的一个普通段落（库自己的渲染器会把它排在原来那个位置、独占一行）
+///
+/// 合并说明与图片标记共用：两者都是“在原本什么都没有（或什么都没有讲）的位置插一句”。
+pub(super) fn fact_paragraph(text: String) -> Element {
+    Element::Paragraph(Paragraph {
+        content: vec![InlineContent::Text(TextSpan::plain(text))],
+        ..Default::default()
+    })
 }
 
 /// 多句说明 → `DocText::note`（都没话 → `None`；句子之间用 ` · `，

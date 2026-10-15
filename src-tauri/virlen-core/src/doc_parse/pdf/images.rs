@@ -1,6 +1,6 @@
 //! 内嵌图片 —— 抽图交给端侧 OCR（本仓唯一一份 `lopdf` + `image` 的图片解码 / 渲染实现）。
 //!
-//! 只负责「把可读的图交出去」：筛选口径（多大才算值得读、最多几张）由调用方给
+//! 只负责「把可读的图交出去」：筛选口径（多大、什么形状才算值得读，最多几张）由调用方给
 //! （[`ImageScanOptions`]，见 `crate::doc_parse::ocr`）；抽不出来的如实记进 `ImageScan::skipped`。
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -14,6 +14,13 @@ use std::io::Read;
 /// 文案就会让那个判断静默失效。
 pub const OVER_LIMIT_REASON: &str = "over the image limit";
 
+/// 「形状太扁 / 太瘦」这条跳过原因（横幅、分区标题条、单行截图，以及反过来极瘦的长条 ——
+/// 见 `crate::doc_parse::ocr::MAX_ASPECT_RATIO`）。
+///
+/// 与 [`OVER_LIMIT_REASON`] 不同，这条**不是**跨分册判据（调用方只看跳过总数），所以不参与
+/// `truncated` 的判定 —— 也正因如此，形状筛选必须排在张数上限**之后**。
+pub const EXTREME_ASPECT_REASON: &str = "too wide or too tall to read";
+
 /// Form XObject 的展开深度上限：图片常被包在表单里，但递归没有尽头
 const MAX_FORM_DEPTH: usize = 4;
 
@@ -22,6 +29,8 @@ const MAX_FORM_DEPTH: usize = 4;
 pub struct ImageScanOptions {
     /// 宽或高小于它的图跳过（图标 / 分隔线 / 装饰背景：OCR 出来只有噪声）
     pub min_side: u32,
+    /// 长边 / 短边超过它的图跳过（扁平横幅 / 极瘦长条：OCR 基本只出噪声）；`0` = 不限
+    pub max_aspect_ratio: f64,
     /// 最多取几张（按绘制顺序取前 N 张）；`0` = 不限
     pub max_images: usize,
 }
@@ -30,6 +39,7 @@ impl Default for ImageScanOptions {
     fn default() -> Self {
         Self {
             min_side: 1,
+            max_aspect_ratio: 0.0,
             max_images: 0,
         }
     }
@@ -302,6 +312,11 @@ fn load_image(
     if width < opts.min_side || height < opts.min_side {
         return Err("too small to read".to_string());
     }
+    // 形状判据放在**张数上限之后**：超上限的图必须记成 [`OVER_LIMIT_REASON`]（`truncated` 靠它，
+    // 而形状这条不参与）；跳过都不占名额，所以两者谁先不影响取哪几张
+    if opts.max_aspect_ratio > 0.0 && too_wide_or_tall(width, height, opts.max_aspect_ratio) {
+        return Err(EXTREME_ASPECT_REASON.to_string());
+    }
     // DCTDecode 的位深写在 JPEG 里，图片字典里的 BitsPerComponent 只对原始采样有意义
     let bits = dict_i64(dict, b"BitsPerComponent").unwrap_or(8);
     let pixels = match decode_pixels(stream, width, bits)? {
@@ -326,6 +341,13 @@ fn load_image(
         height,
         pixels,
     })
+}
+
+/// 长边 / 短边是否超过 `max_ratio`（两个方向都算：横幅与竖长条都不读）
+fn too_wide_or_tall(width: u32, height: u32, max_ratio: f64) -> bool {
+    let long = width.max(height).max(1);
+    let short = width.min(height).max(1);
+    f64::from(long) / f64::from(short) > max_ratio
 }
 
 /// 解压后的内容：要么是 JPEG，要么是原始采样

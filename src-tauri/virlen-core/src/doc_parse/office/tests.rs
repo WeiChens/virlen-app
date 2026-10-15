@@ -4,7 +4,7 @@
 //! 造 fixture 的样板在本文件里（最小 docx 靠 `zip` 手拼、`.xls` 没法造只能手工拼 `Sheet`）。
 use super::*;
 use super::cells::{flatten_breaks, flatten_shared_strings, flatten_sheet_breaks};
-use super::images::{image_text, images_lead, xls_image_facts};
+use super::images::{image_text, images_lead, ir_image_text, mark_ir_images, xls_image_facts};
 use super::merge::{
     collect_xls_merges, inject_table_notes, parse_a1_range, table_merge_note, MergeRegion,
     MERGE_LEAD, TABLE_MERGE_LEAD, TABLE_MERGE_LEAD_SHORT,
@@ -14,7 +14,7 @@ use super::render::{render_xls_sheet, resolve_sheet};
 // `Cow` / IR 与表格类型原先靠 `office` 顶层的 `use` 生效；拆分后要在这里显式引
 use std::borrow::Cow;
 
-use office_oxide::ir::{DocumentIR, Element, InlineContent, Table};
+use office_oxide::ir::{DocumentIR, Element, InlineContent, Paragraph, Section, Table};
 use office_oxide::xls::{Sheet, XlsImage};
 use office_oxide::xlsx::SharedStringTable;
 
@@ -775,12 +775,345 @@ fn xls_images_are_reported_without_sheet_attribution() {
     let mut images = Mentions::default();
     images.add(image_text("", 1, &xls_image_facts(&pic)));
     let note = images
-        .note(&images_lead("the workbook (sheet unknown)", images.total))
+        .note(&images_lead("the workbook (sheet unknown)", images.total, false))
         .unwrap();
 
     assert!(note.contains("image contents are not extracted"), "{note}");
     assert!(note.contains("sheet unknown"), "{note}");
     assert!(note.contains("image 1 (png, 2.0 KB)"), "{note}");
-    assert!(images_lead("the workbook", 1).contains("holds 1 image"));
-    assert!(images_lead("the workbook", 2).contains("holds 2 images"));
+    assert!(images_lead("the workbook", 1, false).contains("holds 1 image"));
+    assert!(images_lead("the workbook", 2, false).contains("holds 2 images"));
+    // 读出来了就不能再说「不读内容」—— 两句话互斥，防止自相矛盾
+    let read = images_lead("the workbook", 2, true);
+    assert!(read.contains("holds 2 images; the text inside them follows"), "{read}");
+    assert!(!read.contains("not extracted"), "{read}");
+}
+
+// ══════════════════ 文稿 / 演示的图片（就地标记 + 读图） ══════════════════
+
+/// 一张纯色 PNG（真编码：`Reading` 要先看头部拿尺寸、再解码）
+fn png_bytes(width: u32, height: u32) -> Vec<u8> {
+    let img = image::RgbImage::from_pixel(width, height, image::Rgb([0, 128, 255]));
+    let mut bytes = Vec::new();
+    image::DynamicImage::ImageRgb8(img)
+        .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+        .unwrap();
+    bytes
+}
+
+/// 一份含一张图片的 IR：`with_text` = false 时除图片外一个字都没有（整篇截图那种）
+fn image_ir(with_text: bool, image: Vec<u8>) -> DocumentIR {
+    use office_oxide::ir::{Image, ImageFormat, TextSpan};
+    let para = |text: &str| {
+        Element::Paragraph(Paragraph {
+            content: vec![InlineContent::Text(TextSpan::plain(text))],
+            ..Default::default()
+        })
+    };
+    let mut elements = vec![Element::Image(Image {
+        alt_text: Some("公司 logo".to_string()),
+        data: Some(image),
+        format: Some(ImageFormat::Png),
+        display_width_emu: Some(914_400),
+        display_height_emu: Some(685_800),
+        ..Default::default()
+    })];
+    if with_text {
+        elements.insert(0, para("第一段"));
+        elements.push(para("第二段"));
+    }
+    DocumentIR {
+        sections: vec![Section {
+            elements,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// 造一份真文档（图片包 / 关系 / content-types 都走库自己的 create API，比手拼 OOXML 可靠）
+fn write_office(
+    dir: &std::path::Path,
+    format: office_oxide::format::DocumentFormat,
+    name: &str,
+    with_text: bool,
+) -> String {
+    let path = dir.join(name);
+    office_oxide::create::create_from_ir(&image_ir(with_text, png_bytes(96, 72)), format, &path)
+        .unwrap();
+    path.to_str().unwrap().to_string()
+}
+
+/// 一份 OCR 开关（`models_dir` 给定；`always` = 模型显式要读）
+fn ocr_opts(models: Result<std::path::PathBuf, String>, always: bool) -> OcrOptions {
+    OcrOptions {
+        models_dir: models,
+        always,
+        cancel: None,
+    }
+}
+
+/// 文稿 / 演示：图片**就地**换成一句标记（`image 1 · …`）—— 位置就夹在那两段之间
+/// （渲染器原来对没 alt 的图一个字都不输出，模型只能当那里本来就没东西）
+#[test]
+fn docx_images_are_marked_where_they_are() {
+    let dir = tmp_dir("docx_image_mark");
+    let path = write_office(
+        &dir,
+        office_oxide::format::DocumentFormat::Docx,
+        "t.docx",
+        true,
+    );
+
+    let out = extract_text(&path, None, "docx").unwrap();
+    let lines: Vec<&str> = out
+        .text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    assert_eq!(lines.len(), 3, "三段：正文 / 标记 / 正文 —— 实际：{}", out.text);
+    assert_eq!(lines[0], "第一段", "{}", out.text);
+    assert_eq!(lines[2], "第二段", "{}", out.text);
+    assert!(
+        lines[1].starts_with("image 1 · png · 96x72 px · ") && lines[1].ends_with("alt \"公司 logo\""),
+        "标记要带格式 / 显示尺寸 / 字节数 / alt：{}",
+        lines[1]
+    );
+    assert_eq!(out.note, None, "没要求读图就不该多啰嗦");
+    assert!(out.ocr.is_none(), "没要求读图就不碰 OCR");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// 没被要求读图（有正文）时：一张都不去读，连模型目录都不碰
+#[test]
+fn docx_with_text_does_not_read_images_unless_asked() {
+    let dir = tmp_dir("docx_image_quiet");
+    let path = write_office(
+        &dir,
+        office_oxide::format::DocumentFormat::Docx,
+        "t.docx",
+        true,
+    );
+    // 没传 `ocrImages` = `always: false`；模型目录给个不存在的路径（读了就会报错，能看出碰没碰）
+    let opts = ocr_opts(Ok(dir.join("no-models-here")), false);
+    let out = extract_text_with_ocr(&path, None, "docx", Some(&opts)).unwrap();
+    assert!(out.ocr.is_none(), "有正文 + 没显式要 = 不碰 OCR");
+    assert!(out.text.contains("image 1 · png"), "标记照旧在：{}", out.text);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// 被要求（或整份文档除图片外没有文字）时才读；模型不在就如实说「读不了」，图数照数
+#[test]
+fn docx_ocr_runs_when_asked_or_when_there_is_no_text() {
+    let dir = tmp_dir("docx_image_ocr");
+    let path = write_office(
+        &dir,
+        office_oxide::format::DocumentFormat::Docx,
+        "t.docx",
+        true,
+    );
+    let missing = "quasivision models directory not found".to_string();
+
+    let asked = extract_text_with_ocr(
+        &path,
+        None,
+        "docx",
+        Some(&ocr_opts(Err(missing.clone()), true)),
+    )
+    .unwrap();
+    let summary = asked.ocr.expect("要过 OCR 就必须给摘要");
+    assert_eq!(summary.total, 1, "图数得数出来");
+    assert_eq!(summary.images, 0, "模型不在就不能有 section");
+    assert!(!summary.available);
+    let note = asked.note.expect("模型不在要给一句说明");
+    assert_eq!(
+        note,
+        "On-device OCR is unavailable (quasivision models directory not found)."
+    );
+    assert!(asked.text.contains("image 1 · png"), "标记照旧在：{}", asked.text);
+
+    // 整份文档除图片外没有文字（整篇截图）：没显式要也要兜底去读
+    let only_image = write_office(
+        &dir,
+        office_oxide::format::DocumentFormat::Docx,
+        "only.docx",
+        false,
+    );
+    let quiet = extract_text_with_ocr(
+        &only_image,
+        None,
+        "docx",
+        Some(&ocr_opts(Err(missing.clone()), false)),
+    )
+    .unwrap();
+    assert!(
+        quiet.ocr.is_some_and(|summary| summary.total == 1),
+        "除图片外没文字时要兜底去读"
+    );
+    assert!(!quiet.text.contains("OCR text of image"), "读不出来就不能贴：{}", quiet.text);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// 表格一侧：被要求读图，但一个字都没读出来时**不能**追一个 OCR 块（更不能说「读出来了」）
+#[test]
+fn xlsx_ocr_appends_a_block_only_when_it_read_something() {
+    let dir = tmp_dir("xlsx_image_ocr");
+    let path = dir.join("images.xlsx");
+    write_xlsx_with_images(&path);
+
+    let out = extract_text_with_ocr(
+        path.to_str().unwrap(),
+        None,
+        "xlsx",
+        Some(&ocr_opts(
+            Err("quasivision models directory not found".to_string()),
+            true,
+        )),
+    )
+    .unwrap();
+    let summary = out.ocr.expect("要过 OCR 就必须给摘要");
+    assert_eq!(summary.total, 2, "两张图都要数到");
+    assert_eq!(summary.images, 0);
+    assert!(!out.text.contains("[OCR]"), "一个块也不能追：{}", out.text);
+    let note = out.note.expect("有图就得有说明");
+    assert!(
+        note.contains("image contents are not extracted"),
+        "读不出来时照旧说「不读内容」：{note}"
+    );
+    assert!(note.contains("On-device OCR is unavailable"), "{note}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// 图片事实只报库真给了的：有字节报字节、外链图报外链、没字节就说没字节 —— 不编「图里有什么」。
+///
+/// 这个用例直接跑 [`mark_ir_images`]：库的**写入器会把没字节的图丢掉**，写文件来回验不出那一档
+/// （而读真文件时会遇到 —— `.doc` 的 OLE 对象、pptx 的形状占位都是没字节的 `Element::Image`）。
+#[test]
+fn data_less_images_are_marked_without_pretending() {
+    use office_oxide::ir::{Image, ImageFormat, TextSpan};
+
+    let with_data = Image {
+        alt_text: Some("架构图".to_string()),
+        data: Some(png_bytes(96, 72)),
+        format: Some(ImageFormat::Png),
+        display_width_emu: Some(914_400),
+        display_height_emu: Some(685_800),
+        ..Default::default()
+    };
+    let marked = ir_image_text(1, &with_data);
+    assert!(marked.starts_with("image 1 · png · 96x72 px · "), "{marked}");
+    assert!(marked.ends_with("alt \"架构图\""), "{marked}");
+
+    let linked = Image {
+        alt_text: Some("架构图".to_string()),
+        source_url: Some("https://example.com/a.png".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(
+        ir_image_text(2, &linked),
+        "image 2 · linked image, not embedded: https://example.com/a.png · alt \"架构图\""
+    );
+
+    // 没字节也没链接（`.doc` 的 OLE 对象 / pptx 的形状占位）：说清「没字节」，不问「图里有什么」
+    let placeholder = Image {
+        alt_text: Some("Rectangle 5".to_string()),
+        ..Default::default()
+    };
+    let text = ir_image_text(3, &placeholder);
+    assert!(text.starts_with("image 3 · no embedded image data"), "{text}");
+    assert!(text.ends_with("alt \"Rectangle 5\""), "{text}");
+
+    // 就地换标记：图在正文里的位置不动（编号按文档顺序；能进读图那条路的只有带字节的那张）
+    let paragraph = |text: &str| {
+        Element::Paragraph(Paragraph {
+            content: vec![InlineContent::Text(TextSpan::plain(text))],
+            ..Default::default()
+        })
+    };
+    let mut ir = DocumentIR {
+        sections: vec![Section {
+            elements: vec![
+                paragraph("前"),
+                Element::Image(linked),
+                Element::Image(with_data),
+                paragraph("后"),
+            ],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let opts = ocr_opts(
+        Err("quasivision models directory not found".to_string()),
+        true,
+    );
+    let mut reading = Some(crate::doc_parse::ocr::Reading::new(&opts));
+    mark_ir_images(&mut ir, &mut reading);
+    let summary = reading
+        .map(crate::doc_parse::ocr::Reading::finish)
+        .expect("要过 OCR 就必须给摘要");
+    assert_eq!(summary.total, 1, "只有带字节的那张进得了读图这条路");
+
+    let texts: Vec<String> = ir.sections[0]
+        .elements
+        .iter()
+        .filter_map(|element| match element {
+            Element::Paragraph(p) => Some(
+                p.content
+                    .iter()
+                    .filter_map(|c| match c {
+                        InlineContent::Text(t) => Some(t.text.clone()),
+                        _ => None,
+                    })
+                    .collect::<String>(),
+            ),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts.len(), 4, "两段正文 + 两条标记：{texts:?}");
+    assert_eq!(texts[0], "前", "{texts:?}");
+    assert!(texts[1].starts_with("image 1 · linked image"), "{texts:?}");
+    assert!(texts[2].starts_with("image 2 · png · 96x72 px"), "{texts:?}");
+    assert_eq!(texts[3], "后", "{texts:?}");
+}
+
+/// 本机模型目录（下面那个 `#[ignore]` 的端到端用例用它）
+fn local_models() -> std::path::PathBuf {
+    crate::vision::models_dir(crate::host::default_host().as_ref())
+        .expect("本机应有 quasivision 模型")
+}
+
+/// 端到端：docx 里嵌一张带字的截图 → 识别出的字要**就地**贴在那句标记后面
+#[test]
+#[ignore = "需要端侧视觉模型（src-tauri/resources/quasivision_models）"]
+fn ocr_reads_an_image_embedded_in_a_docx() {
+    let dir = tmp_dir("docx_image_e2e");
+    let page = std::fs::read(format!(
+        "{}/tests/fixtures/ocr/page.png",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("缺少测试图片");
+    let path = dir.join("t.docx");
+    office_oxide::create::create_from_ir(
+        &image_ir(true, page),
+        office_oxide::format::DocumentFormat::Docx,
+        &path,
+    )
+    .unwrap();
+
+    let out = extract_text_with_ocr(
+        path.to_str().unwrap(),
+        None,
+        "docx",
+        Some(&ocr_opts(Ok(local_models()), true)),
+    )
+    .unwrap();
+    assert!(
+        out.text.contains("OCR text of image 1:"),
+        "读出来了就要贴在同一张图的标记后面：{}",
+        out.text
+    );
+    assert!(out.text.contains("VIRLEN"), "{}", out.text);
+    assert_eq!(out.ocr.map(|s| s.images), Some(1));
+    std::fs::remove_dir_all(&dir).ok();
 }

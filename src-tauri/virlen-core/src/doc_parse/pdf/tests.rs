@@ -41,6 +41,8 @@ fn garbage_input_fails_instead_of_returning_junk() {
 
 // 造 PDF 的样板在 `test_pdf`（与本模块同源，见其模块头）
 use crate::doc_parse::test_pdf::{gray_stream, pdf};
+// 形状筛选的比例值只有 `ocr` 一份（本模块只负责「按调用方给的值筛」）
+use crate::doc_parse::ocr::MAX_ASPECT_RATIO;
 // ⚠️ 必须 `use` 进来：`dictionary!` 的「尾逗号」分支内部调的是**未限定**的 `dictionary!`，
 // 在调用点无此名字时报 `cannot find macro`
 use lopdf::dictionary;
@@ -78,6 +80,7 @@ fn skips_images_below_the_minimum_side() {
         &bytes,
         &ImageScanOptions {
             min_side: 64,
+            max_aspect_ratio: 0.0,
             max_images: 0,
         },
     )
@@ -120,6 +123,7 @@ fn stops_at_the_image_limit_and_says_so() {
         &bytes,
         &ImageScanOptions {
             min_side: 1,
+            max_aspect_ratio: 0.0,
             max_images: 2,
         },
     )
@@ -130,6 +134,58 @@ fn stops_at_the_image_limit_and_says_so() {
     assert_eq!(scan.skipped[0].reason, OVER_LIMIT_REASON, "原因只有一份（ocr 靠它判截断）");
     // 文案本身也是契约：它会随跳过数进提示行，别顺手改
     assert_eq!(OVER_LIMIT_REASON, "over the image limit");
+}
+
+/// 扁平横幅 / 极瘦长条（`553×81` 那种界面截条）不读：OCR 基本只出噪声，还占掉一个读图名额。
+///
+/// 口径是 **长边 > 短边 × [`MAX_ASPECT_RATIO`]**（只看形状，不看内容）—— 数字只有 `ocr` 那份，
+/// 这里只验「传进来的比例有效」+ 边界（正好 3:1 不跳）。
+#[test]
+fn skips_images_of_an_extreme_shape() {
+    let banner = gray_stream(500, 100, vec![0; 500 * 100]); // 5:1
+    let tall = gray_stream(80, 600, vec![0; 80 * 600]); // 1:7.5（两个方向都算）
+    let boundary = gray_stream(300, 100, vec![0; 300 * 100]); // 正好 3:1
+    let page = gray_stream(160, 100, vec![0; 160 * 100]);
+    let bytes = pdf(
+        &[vec!["Im0", "Im1", "Im2", "Im3"]],
+        &[
+            ("Im0", banner),
+            ("Im1", tall),
+            ("Im2", boundary),
+            ("Im3", page),
+        ],
+    );
+
+    let scan = extract_images(
+        &bytes,
+        &ImageScanOptions {
+            min_side: 64,
+            max_aspect_ratio: MAX_ASPECT_RATIO,
+            max_images: 0,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        scan.images.iter().map(|i| i.width).collect::<Vec<_>>(),
+        vec![300, 160],
+        "太扁 / 太瘦的不读，正好 3:1 仍读"
+    );
+    assert_eq!(scan.total, 4, "跳过的也要计入总数（否则「还有几张没读」就说不清）");
+    assert_eq!(scan.skipped.len(), 2);
+    assert_eq!(scan.skipped[0].reason, EXTREME_ASPECT_REASON);
+    // 文案也是契约：它会随跳过数进提示行，别顺手改
+    assert_eq!(EXTREME_ASPECT_REASON, "too wide or too tall to read");
+    // `0` = 不限（默认值）：同一批图在旧口径下四张全留
+    let unlimited = extract_images(
+        &bytes,
+        &ImageScanOptions {
+            min_side: 64,
+            max_aspect_ratio: 0.0,
+            max_images: 0,
+        },
+    )
+    .unwrap();
+    assert_eq!(unlimited.images.len(), 4);
 }
 
 /// DCTDecode（JPEG，扫描件最常见）：字节原样取出，交给 `image` 解码
