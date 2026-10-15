@@ -24,7 +24,13 @@
 //! 模型只能当那里本来就没东西；[`ParseOptions::ocr`] 有值时按同一套口径把图里的字读出来
 //! （太小 / 太扁的图不读：[`ocr::MIN_IMAGE_SIDE`] / [`ocr::MAX_ASPECT_RATIO`]；上限
 //! [`ocr::MAX_IMAGES`] 张；**图片不出本机**，两块共用一个 [`ocr`] 模块）。
+//!
+//! **缓存**（[`cache`]，见 `docs/doc-parse-plan.md` §22）：同一份文件在 **60 秒**内再解析
+//! （`offset` 续读、换个 `max_chars`、又把同一份文档打开一遍）**不会再抽一遍** —— `parse` 先算
+//! 文件指纹（SHA-256 前 16 位 hex），指纹没变就命中缓存、直接切片返回（**OCR 也不重跑**）；
+//! 文件变了或过了 60 秒 → 重新抽取。过期是**懒**的：没有定时器，下一次调用时顺手清。
 
+mod cache;
 pub mod delimited;
 pub mod ocr;
 pub mod office;
@@ -260,6 +266,24 @@ pub fn parse(path: &str, opts: &ParseOptions) -> Result<DocText, ParseError> {
         });
     }
 
+    // ── 缓存（§22）──
+    // 先算文件指纹（要读一遍文件：流式，不占内存）再查缓存；命中就**跳过下面全部抽取**
+    //（含 OCR —— 一份扫描件是十几秒）。指纹算不出来（文件读不到）→ 不缓存、照旧往下走，
+    // 让下面的错误路径给出真正的失败原因。
+    // 键里带上 `sheet` 与 OCR 模式：它们会**改变抽取结果**；`offset` / `max_chars` 不在键里，
+    // 正是为了「同一份全文换个切片」也命中。
+    let key = cache::Key::new(
+        path,
+        opts.sheet.as_deref(),
+        cache::OcrMode::of(opts.ocr.as_ref()),
+    );
+    let fingerprint = cache::fingerprint(file).ok();
+    if let Some(seen) = fingerprint.as_deref() {
+        if let Some(cached) = cache::lookup(&key, seen) {
+            return Ok(into_doc_text(ext, cached, opts));
+        }
+    }
+
     let mut note: Option<String> = None;
     let mut sheets: Vec<String> = Vec::new();
     let mut used_sheet: Option<String> = None;
@@ -371,28 +395,46 @@ pub fn parse(path: &str, opts: &ParseOptions) -> Result<DocText, ParseError> {
         return Err(ParseError::NoText { detail });
     }
 
-    // 按**字符**分页（不是字节：中文一个字 3 字节，按字节切会把字切碎）
-    let total = raw.chars().count();
-    let max_chars = opts.max_chars.clamp(1, MAX_MAX_CHARS);
-    let start = opts.offset.min(total);
-    let end = start.saturating_add(max_chars).min(total);
-    let slice = slice_chars(&raw, start, end);
-    let truncated = end < total;
-    // 全文只在被要求时留下（此时 `raw` 是最后一次使用，直接移进来，不复制）
-    let full_text = if opts.full_text { Some(raw) } else { None };
-
-    Ok(DocText {
-        kind: ext,
-        text: slice,
-        char_count: total,
-        truncated,
-        next_offset: truncated.then_some(end),
+    // 抽完了：先入缓存（下次同文件同参数直接命中），再切片。
+    // ⚠️ 只缓存**成功的正文**：失败 / 没文字上面已经 `return`，不会走到这里。
+    let extracted = cache::ExtractedDoc {
+        raw,
         sheets,
         sheet: used_sheet,
         note,
-        full_text,
         ocr: ocr_summary,
-    })
+    };
+    if let Some(seen) = fingerprint {
+        cache::store(key, seen, &extracted);
+    }
+    Ok(into_doc_text(ext, extracted, opts))
+}
+
+/// 切片 + 组装 [`DocText`] —— **命中缓存与现场抽取共用这一份**
+///（两条路各切一遍，迟早会在「字符 vs 字节 / 越界起点 / next_offset」上分叉）
+fn into_doc_text(kind: String, doc: cache::ExtractedDoc, opts: &ParseOptions) -> DocText {
+    // 按**字符**分页（不是字节：中文一个字 3 字节，按字节切会把字切碎）
+    let total = doc.raw.chars().count();
+    let max_chars = opts.max_chars.clamp(1, MAX_MAX_CHARS);
+    let start = opts.offset.min(total);
+    let end = start.saturating_add(max_chars).min(total);
+    let text = slice_chars(&doc.raw, start, end);
+    let truncated = end < total;
+    // 全文只在被要求时留下（此时 `raw` 是最后一次使用，直接移进来，不复制）
+    let full_text = if opts.full_text { Some(doc.raw) } else { None };
+
+    DocText {
+        kind,
+        text,
+        char_count: total,
+        truncated,
+        next_offset: truncated.then_some(end),
+        sheets: doc.sheets,
+        sheet: doc.sheet,
+        note: doc.note,
+        full_text,
+        ocr: doc.ocr,
+    }
 }
 
 /// 读文件（失败 → `Backend`）
@@ -671,5 +713,101 @@ mod tests {
         for ext in ["txt", "md", "json", "csv", "tsv"] {
             assert!(!has_embedded_images(ext), "{ext} 没有「内嵌图片」这个概念");
         }
+    }
+
+    /// 60 秒缓存（§22）：同一份文件第二次解析**不再抽取**（用命中计数证明，而不是看时间），
+    /// 换 `offset` / `full_text` 还能命中同一份全文；文件一改（指纹变了）必须重新抽取。
+    #[test]
+    fn the_cache_serves_a_second_parse_and_follows_the_file_content() {
+        let dir = tmp_dir("cache");
+        let file = dir.join("a.txt");
+        let first_version = "第一版内容\n";
+        std::fs::write(&file, first_version).unwrap();
+        let path = file.to_str().unwrap();
+        let opts = ParseOptions {
+            max_chars: 5,
+            ..Default::default()
+        };
+
+        let first = parse(path, &opts).unwrap();
+        assert_eq!(first.text, "第一版内容");
+        assert!(first.truncated);
+
+        let before = cache::hits();
+        let second = parse(path, &opts).unwrap();
+        assert!(cache::hits() > before, "同一份文件第二次解析必须命中缓存");
+        assert_eq!(second.text, first.text);
+        assert_eq!(second.char_count, first.char_count);
+        assert_eq!(second.truncated, first.truncated);
+
+        // 命中缓存也要能换切片参数：`offset` 续读与 `full_text`（落盘）都接同一份全文
+        let paged = parse(
+            path,
+            &ParseOptions {
+                max_chars: 5,
+                offset: 5,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(paged.text, slice_chars(first_version, 5, 10));
+        assert!(!paged.truncated, "到尾巴了不该再说「还有字数」");
+        let whole = parse(
+            path,
+            &ParseOptions {
+                max_chars: 5,
+                full_text: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(whole.full_text.as_deref(), Some(first_version));
+        assert_eq!(whole.text.chars().count(), 5, "全文在手也不许超过 max_chars");
+
+        // 文件改了（内容与长度都变）→ 指纹不同 → 重新抽取，不能把旧正文端上来
+        let second_version = "改过的第二版内容\n";
+        std::fs::write(&file, second_version).unwrap();
+        let third = parse(path, &opts).unwrap();
+        assert_eq!(third.text, "改过的第二", "max_chars=5 → 前五个字符");
+        assert_eq!(third.char_count, second_version.chars().count());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 失败 / 没文字**不进缓存**：把文件修好之后必须能真读出内容，
+    /// 而不是从缓存里拿一个「这份文档没有文字」的旧结论
+    #[test]
+    fn failed_parses_are_not_cached() {
+        let dir = tmp_dir("cache_err");
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "   \n\t\n").unwrap();
+        let path = file.to_str().unwrap();
+
+        let err = parse(path, &ParseOptions::default()).unwrap_err();
+        assert_eq!(err.kind(), "no_text");
+
+        std::fs::write(&file, "现在有字了\n").unwrap();
+        let out = parse(path, &ParseOptions::default()).unwrap();
+        assert_eq!(out.text, "现在有字了\n");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 缓存不会把「不存在 / 被删掉」的文件变成能读：指纹算不出来就走正常错误路径
+    #[test]
+    fn a_deleted_file_is_still_an_error() {
+        let dir = tmp_dir("cache_gone");
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "内容\n").unwrap();
+        let path = file.to_str().unwrap();
+        let first = parse(path, &ParseOptions::default()).unwrap();
+        assert_eq!(first.text, "内容\n");
+
+        std::fs::remove_file(&file).unwrap();
+        let err = parse(path, &ParseOptions::default()).unwrap_err();
+        assert_eq!(err.kind(), "backend");
+        assert!(err.message().contains("does not exist"), "{}", err.message());
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
