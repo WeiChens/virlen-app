@@ -61,6 +61,18 @@ impl SandboxSession {
             push(canon);
         }
 
+        // 平台临时目录：默认模式（写隔离）下恒定可写（见 `temp_write_roots`；cwd 在临时
+        // 目录里时不授予该目录）。best-effort：目录缺失 / 规范化失败只是跳过，不拖垮整个沙盒。
+        if !req.readonly {
+            for t in crate::sandbox::temp_write_roots(&cwd) {
+                if let Ok(canon) = dunce::canonicalize(&t) {
+                    if canon.is_dir() {
+                        push(canon);
+                    }
+                }
+            }
+        }
+
         // readonly 模式：不授予任何写根，所有写被 Landlock 拒绝。
         let write_roots = if req.readonly { Vec::new() } else { roots };
 

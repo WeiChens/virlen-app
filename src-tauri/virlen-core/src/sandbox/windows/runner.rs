@@ -222,6 +222,19 @@ fn prepare_paths(req: &SandboxRequest, state: &SandboxState) -> Result<Prepared>
         push_root(canon);
     }
 
+    // 2.1) 平台临时目录：默认模式（写隔离）下恒定可写（见 `temp_write_roots`；cwd 在临时
+    //      目录里时不授予该目录）。best-effort：目录缺失 / 规范化失败只是跳过，绝不因此
+    //      让 prepare 失败 → 降级裸跑。追加在 cwd 之后，在下面的 ACE 循环里走 extra root 分支。
+    if !req.readonly {
+        for t in crate::sandbox::temp_write_roots(&cwd) {
+            if let Ok(canon) = dunce::canonicalize(&t) {
+                if canon.is_dir() {
+                    push_root(canon);
+                }
+            }
+        }
+    }
+
     // 3) deny-write 集合
     let mut deny_paths: BTreeSet<PathBuf> = BTreeSet::new();
     for root in &roots {

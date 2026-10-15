@@ -16,6 +16,10 @@
 //!
 //! ConPTY 回归（`conpty_with_restricted_token`：受限令牌 + Job Object + 伪控制台三者共存）
 //! 要真起控制台并等数秒，已随 2026-10 的测试提速移除。
+//!
+//! 注：TestEnv 的 base 就在 `%TEMP%` 下，而默认模式的临时目录写根遇「cwd 落在临时目录内」
+//! 时会被排除（见 `sandbox::temp_write_roots`），所以本文件的 e2e 仍按纯写隔离语义断言
+//! （`outside` 这类兄弟目录必须不可写）。
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -383,6 +387,110 @@ fn e2e_extra_root_acl_failure_skips_gracefully() {
     assert!(
         !env.outside.join("outside.txt").exists(),
         "cwd 外写应被拒（写隔离失效）"
+    );
+    assert!(code != Some(0), "cwd 外写应失败");
+}
+
+/// 独立于 TestEnv 的临时环境：base 放在 `%LOCALAPPDATA%` 下而不是 `%TEMP%` 下。
+///
+/// 原因：TestEnv 的 base 就在 `%TEMP%` 里，那种布局下临时目录写根会被主动排除
+/// （见 `sandbox::temp_write_roots`），验不了「临时目录可写」这条新保证。
+/// `%TEMP%` 通常是 `%LOCALAPPDATA%\Temp`，两者互不包含。
+struct ProfileTestEnv {
+    base: PathBuf,
+    cwd: PathBuf,
+    outside: PathBuf,
+    temp_probe: PathBuf,
+    state: SandboxState,
+}
+
+impl ProfileTestEnv {
+    fn new(tag: &str) -> Option<Self> {
+        let local = std::env::var_os("LOCALAPPDATA")?;
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = PathBuf::from(local).join(format!(
+            "virlen-sb-profile-{}-{}-{}",
+            std::process::id(),
+            tag,
+            nanos
+        ));
+        let cwd = base.join("workspace");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&cwd).expect("create cwd");
+        std::fs::create_dir_all(&outside).expect("create outside");
+        let temp_probe = std::env::temp_dir().join(format!(
+            "virlen-sb-tempgrant-{}-{}-{}",
+            std::process::id(),
+            tag,
+            nanos
+        ));
+        std::fs::create_dir_all(&temp_probe).expect("create temp probe");
+        let state = SandboxState::new(base.join("state")).expect("create state dir");
+        Some(Self {
+            base,
+            cwd,
+            outside,
+            temp_probe,
+            state,
+        })
+    }
+}
+
+impl Drop for ProfileTestEnv {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.base);
+        let _ = std::fs::remove_dir_all(&self.temp_probe);
+    }
+}
+
+#[test]
+fn e2e_platform_temp_dir_writable_in_default_mode() {
+    // 默认模式（写隔离）：临时目录恒定可写（编译器 / 包管理器要往 `%TEMP%` 写），
+    // 但 cwd 的兄弟目录仍必须被拒（不能顺带把隔离打开）。
+    let Some(env) = ProfileTestEnv::new("temp-root") else {
+        eprintln!("[skip] 无 LOCALAPPDATA，跳过临时目录写根用例");
+        return;
+    };
+    let session = SandboxSession::prepare(
+        &SandboxRequest {
+            cwd: env.cwd.clone(),
+            extra_roots: vec![],
+            protect: vec![],
+            readonly: false,
+        },
+        &env.state,
+    )
+    .expect("prepare");
+
+    // ① 临时目录内写：应成功
+    let temp_target = env.temp_probe.join("temp.txt");
+    let raw_temp = format!("cmd.exe /s /c echo hello > \"{}\"", temp_target.display());
+    let (_o, err, code) = run(
+        &session,
+        &["cmd", "/s", "/c", "echo hello > temp.txt"],
+        Some(&raw_temp),
+    );
+    assert_eq!(
+        code,
+        Some(0),
+        "临时目录写应成功；stderr={}",
+        String::from_utf8_lossy(&err)
+    );
+    assert!(temp_target.exists(), "%TEMP% 内 temp.txt 应被创建");
+
+    // ② cwd 的兄弟目录：仍不可写
+    let raw_outside = r"cmd.exe /s /c echo hello > ..\outside\outside.txt";
+    let (_o, _e, code) = run(
+        &session,
+        &["cmd", "/s", "/c", r"echo hello > ..\outside\outside.txt"],
+        Some(raw_outside),
+    );
+    assert!(
+        !env.outside.join("outside.txt").exists(),
+        "写隔离仍须生效：cwd 外写应被拒"
     );
     assert!(code != Some(0), "cwd 外写应失败");
 }

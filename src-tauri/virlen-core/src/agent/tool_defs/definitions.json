@@ -375,7 +375,7 @@
       },
       {
         "name": "execute_command",
-        "description": "Execute an arbitrary shell command. The current terminal is Windows PowerShell 5.1 (powershell.exe), so use PowerShell syntax (not cmd). Use this tool only when no dedicated tool exists (git, npm, builds, etc.). Prefer the dedicated tools (read_file, edit_file, write_file, search_*, ...) for file/text operations. The first line of the result is a \"terminal environment\" notice reporting the sandbox mode — \"write isolation\" (writes are allowed only inside the workspace/whitelisted writable roots; writes outside are rejected), \"read-only\" (no writes), or \"no sandbox\" (full permissions). An exit code >= 2 means the command failed.",
+        "description": "Execute an arbitrary shell command. The current terminal is Windows PowerShell 5.1 (powershell.exe), so use PowerShell syntax (not cmd). Use this tool only when no dedicated tool exists (git, npm, builds, etc.). Prefer the dedicated tools (read_file, edit_file, write_file, search_*, ...) for file/text operations. The first line of the result is a \"terminal environment\" notice reporting the sandbox mode — \"write isolation\" (writes are allowed only inside the workspace/whitelisted writable roots plus the system temp directory; writes outside are rejected), \"read-only\" (no writes), or \"no sandbox\" (full permissions). An exit code >= 2 means the command failed.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1415,7 +1415,7 @@
       },
       {
         "name": "execute_command",
-        "description": "Execute an arbitrary shell command. The current terminal is zsh (macOS). Use this tool only when no dedicated tool exists (git, npm, builds, etc.). Prefer the dedicated tools (read_file, edit_file, write_file, search_*, ...) for file/text operations. The first line of the result is a \"terminal environment\" notice reporting the sandbox mode — \"write isolation\" (writes are allowed only inside the workspace/whitelisted writable roots; writes outside are rejected), \"read-only\" (no writes), or \"no sandbox\" (full permissions). An exit code >= 2 means the command failed.",
+        "description": "Execute an arbitrary shell command. The current terminal is zsh (macOS). Use this tool only when no dedicated tool exists (git, npm, builds, etc.). Prefer the dedicated tools (read_file, edit_file, write_file, search_*, ...) for file/text operations. The first line of the result is a \"terminal environment\" notice reporting the sandbox mode — \"write isolation\" (writes are allowed only inside the workspace/whitelisted writable roots plus the system temp directory; writes outside are rejected), \"read-only\" (no writes), or \"no sandbox\" (full permissions). An exit code >= 2 means the command failed.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2455,7 +2455,7 @@
       },
       {
         "name": "execute_command",
-        "description": "Execute an arbitrary shell command. The current terminal is sh (Linux/POSIX). Use this tool only when no dedicated tool exists (git, npm, builds, etc.). Prefer the dedicated tools (read_file, edit_file, write_file, search_*, ...) for file/text operations. The first line of the result is a \"terminal environment\" notice reporting the sandbox mode — \"write isolation\" (writes are allowed only inside the workspace/whitelisted writable roots; writes outside are rejected), \"read-only\" (no writes), or \"no sandbox\" (full permissions). An exit code >= 2 means the command failed.",
+        "description": "Execute an arbitrary shell command. The current terminal is sh (Linux/POSIX). Use this tool only when no dedicated tool exists (git, npm, builds, etc.). Prefer the dedicated tools (read_file, edit_file, write_file, search_*, ...) for file/text operations. The first line of the result is a \"terminal environment\" notice reporting the sandbox mode — \"write isolation\" (writes are allowed only inside the workspace/whitelisted writable roots plus the system temp directory; writes outside are rejected), \"read-only\" (no writes), or \"no sandbox\" (full permissions). An exit code >= 2 means the command failed.",
         "parameters": {
           "type": "object",
           "properties": {

@@ -19,7 +19,7 @@ const SANDBOX_LABELS: Record<
 > = {
   write_isolation: {
     label: '沙盒·写隔离',
-    title: '命令在沙盒内运行：仅工作目录与白名单目录可写（写隔离）。',
+    title: '命令在沙盒内运行：仅工作目录、白名单目录与系统临时目录可写（写隔离）。',
   },
   readonly: {
     label: '沙盒·只读',

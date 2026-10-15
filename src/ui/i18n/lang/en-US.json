@@ -737,7 +737,7 @@
   "无沙盒·已授权": "No sandbox · approved",
   "无沙盒·已降级": "No sandbox · downgraded",
   "无沙盒": "No sandbox",
-  "命令在沙盒内运行：仅工作目录与白名单目录可写（写隔离）。": "Command runs inside the sandbox: only the workspace and allow-listed roots are writable (write isolation).",
+  "命令在沙盒内运行：仅工作目录、白名单目录与系统临时目录可写（写隔离）。": "Command runs inside the sandbox: only the workspace, allow-listed roots and the system temp directory are writable (write isolation).",
   "命令在沙盒内以只读方式运行：无法写入任何文件。": "Command runs inside the sandbox in read-only mode: it cannot write any file.",
   "命令未使用沙盒运行（已批准脱壳）：不受写隔离与受限令牌限制，可写入任意路径。": "Command runs WITHOUT the sandbox (escape approved): no write isolation or restricted token — it can write anywhere.",
   "命令未使用沙盒运行（设置中已关闭沙盒）：可写入任意路径。": "Command runs WITHOUT the sandbox (disabled in settings): it can write anywhere.",

@@ -13,6 +13,9 @@
 //!
 //! 注意：readonly 模式下仍保留 `/private/tmp`、`/var/folders` 的写权限（编译器/包管理器
 //! 需要临时目录），因此不是严格意义上的「整个系统只读」，只是「不授予任何业务写根」。
+//! 这一点与 Windows / Linux 的 readonly（两者都不授予任何写根，含临时目录）不同，
+//! 属 macOS 既有行为；默认模式（写隔离）下三平台都给临时目录写权限（Windows / Linux 的
+//! 那份表见 `sandbox::temp_write_roots`，profile 这里恒放行、不看 cwd 在哪）。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

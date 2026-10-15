@@ -103,8 +103,9 @@ pub(crate) async fn prepare_sandbox_session(
     } else {
         collect_extra_roots(&ctx.security.whitelist, &ctx.security.workspace, skills_dir.as_deref())
     };
-    // 注：沙盒可写根只来自 workspace + whitelist。需要让区外目录（如包管理器缓存）
-    // 可写时，由用户在白名单里显式配置，或用「忽略沙盒命令」规则让该命令不走沙盒。
+    // 注：沙盒可写根 = workspace + whitelist + **平台临时目录**（后者由各平台 prepare
+    // 恒定授予，见 `sandbox::temp_write_roots`，不经过这里）。需要让其它区外目录
+    // （如包管理器缓存）可写时，由用户在白名单里显式配置，或用「忽略沙盒命令」规则让该命令不走沙盒。
     let mut protect: Vec<PathBuf> = Vec::new();
     if let Some(sd) = &skills_dir {
         let sp = PathBuf::from(sd);
