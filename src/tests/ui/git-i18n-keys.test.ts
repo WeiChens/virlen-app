@@ -1,0 +1,40 @@
+/**
+ * 源代码管理的 UI 文案契约（铁律 7：新增 UI 文案必须同步 `en-US.json`）。
+ *
+ * **扫源码，而不是维护一份硬编码清单** —— 清单会随新文案一起漂移，而恰恰是「新加了一句 t() 但忘了
+ * 翻译」这件事要守。这里把 `src/ui/.../git/` 与 `services/git-service.ts` 里出现的所有
+ * `t('…')` / `tpl('…')` 首参收集出来，逐个查 `en-US.json`。
+ *
+ * 只覆盖本次新增的 git 域（全仓扫描会引出一堆历史遗留缺键，超出本功能范围）。
+ */
+import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
+const ROOT = process.cwd()
+const DICT = JSON.parse(
+  readFileSync(resolve(ROOT, 'src/ui/i18n/lang/en-US.json'), 'utf8'),
+) as Record<string, string>
+
+const FILES = [
+  'src/services/git-service.ts',
+  'src/ui/pages/chat/components/git/GitEntry.tsx',
+  'src/ui/pages/chat/components/git/GitPanel.tsx',
+  'src/ui/pages/chat/components/git/GitChangeRow.tsx',
+  'src/ui/pages/chat/components/git/GitBranchMenu.tsx',
+  'src/ui/pages/chat/components/git/GitDiffModal.tsx',
+  'src/ui/pages/chat/components/git/sections.ts',
+]
+
+describe('源代码管理文案', () => {
+  for (const file of FILES) {
+    it(`${file} 的文案都在 en-US.json 里`, () => {
+      const src = readFileSync(resolve(ROOT, file), 'utf8')
+      const missing = new Set<string>()
+      for (const m of src.matchAll(/\bt(?:pl)?\(\s*'([^']+)'/g)) {
+        if (!(m[1] in DICT)) missing.add(m[1])
+      }
+      expect([...missing]).toEqual([])
+    })
+  }
+})

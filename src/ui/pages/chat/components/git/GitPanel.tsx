@@ -1,0 +1,307 @@
+/**
+ * GitPanel — 面板主体：仓库头（分支 / ahead-behind / 刷新）+ 提交区 + 三段变更列表。
+ *
+ * 提交区**只在暂存区非空时出现**（空着的时候它只是一行占地方的噪声）；主按钮靠右 ——
+ * 与全项目「主操作落在右下」一致，左侧留给状态提示。
+ *
+ * 三段的顺序 / 标题 / 批量入口收在 `sections.ts`（差异弹窗的左侧清单共用同一份口径；未跟踪并进
+ * 「更改」段—— git 的分组仍是四组，合并只发生在展示层）。
+ * ⚠️ 冲突段**不给批量入口**：冲突文件的「暂存」在 git 里是「标记已解决」，与普通暂存不是一回事
+ * （真正的解决要动文件内容，属于 P3，见方案 §8.3）。
+ *
+ * 选中模式（与资源管理器同口径）：单击 = 选中这一行、Ctrl/Cmd 点击 = 加 / 减、Shift 点击 = 选一段范围；
+ * **双击**才打开差异（单击就弹窗会让「多选几个一起暂存」这件事做不了）。
+ * 行内「暂存 / 取消暂存 / 丢弃」在这一行**属于选中集**时作用于同侧选中的全部（批量），此时按钮文案
+ * 会变成「… N 个文件」（点之前就知道它带走几个），否则只作用于它自己。
+ *
+ * 只读沙盒模式下所有写入口禁用（`sandboxMode === 'readonly'`）—— Rust 侧同样会拒，这里是双保险。
+ */
+import { useRef, useState } from 'react'
+import { observer } from 'mobx-react-lite'
+import { runInAction } from 'mobx'
+import { t, tpl } from '@/ui/i18n'
+import { settingsState } from '@/ui/store'
+import { gitStore } from '@/ui/store/gitStore'
+import { groupChanges } from '@/domain/git'
+import {
+  commit,
+  discard,
+  refreshBranches,
+  refreshStatus,
+  stage,
+  unstage,
+} from '@/services/git-service'
+import RefreshSvg from '@/ui/components/icons/RefreshSvg'
+import GitChangeRow, { type GitRowTarget } from './GitChangeRow'
+import GitBranchMenu from './GitBranchMenu'
+import GitDiffModal from './GitDiffModal'
+import { changeSections, rowKey, splitRowKey } from './sections'
+
+interface Props {
+  onClose: () => void
+}
+
+export const GitPanel = observer(function GitPanel({ onClose }: Props) {
+  const [branchMenuOpen, setBranchMenuOpen] = useState(false)
+  const [diffTarget, setDiffTarget] = useState<GitRowTarget | null>(null)
+  /** 选中集（键 = `rowKey`，保持点击先后）；`anchorRef` 是 Shift 范围选择的起点 */
+  const [selected, setSelected] = useState<string[]>([])
+  const anchorRef = useRef<string | null>(null)
+
+  const snapshot = gitStore.snapshot
+  const groups = groupChanges(snapshot)
+  const readonly = settingsState.value.sandboxMode === 'readonly'
+  const busy = gitStore.busy !== null
+  const disabled = readonly || busy
+  const head = snapshot?.head
+
+  const sections = changeSections(groups, {
+    stage: (paths) => void stage(paths),
+    unstage: (paths) => void unstage(paths),
+  })
+
+  /**
+   * 列表顺序的行键（= 当前快照里还存在的行）：Shift 范围选择按它取区间，选中集也按它对账。
+   * 对账是必要的 —— 写操作之后行会换段（暂存 → 已暂存段）甚至消失，旧键不该继续算数。
+   */
+  const flatKeys = sections.flatMap((section) =>
+    section.entries.map((entry) => rowKey(section.side, entry.path)),
+  )
+  const selectedLive = selected.filter((key) => flatKeys.includes(key))
+  const selectedSet = new Set(selectedLive)
+
+  /**
+   * 单击选中 / Ctrl-Cmd 加减 / Shift 取一段。
+   * 锚点：单击与 Ctrl 点击会挪到刚点的这一行（与资源管理器一致），Shift 不挪 —— 于是连续 Shift
+   * 都是从同一个锚点重新扩，而不是逐次叠加。
+   */
+  function selectRow(key: string, mod: { shift: boolean; toggle: boolean }): void {
+    if (mod.shift && anchorRef.current) {
+      const from = flatKeys.indexOf(anchorRef.current)
+      const to = flatKeys.indexOf(key)
+      if (from >= 0 && to >= 0) {
+        const range = flatKeys.slice(Math.min(from, to), Math.max(from, to) + 1)
+        setSelected(mod.toggle ? [...new Set([...selectedLive, ...range])] : range)
+        return
+      }
+    }
+    if (mod.toggle) {
+      setSelected(
+        selectedLive.includes(key)
+          ? selectedLive.filter((k) => k !== key)
+          : [...selectedLive, key],
+      )
+    } else {
+      setSelected([key])
+    }
+    anchorRef.current = key
+  }
+
+  /**
+   * 一次行内操作真正作用的对象：这一行在选中集里 → **同侧**选中的全部（批量），否则只有它自己。
+   * 只取同侧 —— 批量「暂存」不该顺手把已暂存的行也走一遍（那是另一个动作，diff 基准也不同）。
+   */
+  function actionPaths(key: string, side: 'staged' | 'unstaged'): string[] {
+    const keys = selectedSet.has(key) ? selectedLive : [key]
+    const paths = keys
+      .map(splitRowKey)
+      .filter((row) => row.side === side)
+      .map((row) => row.path)
+    return [...new Set(paths)]
+  }
+
+  const nothingToShow =
+    !!snapshot &&
+    groups.staged.length === 0 &&
+    groups.unstaged.length === 0 &&
+    groups.untracked.length === 0 &&
+    groups.conflicts.length === 0
+
+  return (
+    <>
+      <div className="git-head">
+        <span className="git-head-title">{t('源代码管理')}</span>
+        {readonly && (
+          <span className="git-section-count">{t('只读沙盒模式')}</span>
+        )}
+        <span className="git-spacer" />
+        <button
+          type="button"
+          className="git-close"
+          onClick={onClose}
+          title={t('关闭')}>
+          ✕
+        </button>
+      </div>
+
+      {!gitStore.probed && <div className="git-empty">{t('加载中…')}</div>}
+
+      {gitStore.probed && gitStore.unavailable && (
+        <div className="git-empty">{gitStore.unavailable}</div>
+      )}
+
+      {gitStore.repo && (
+        <>
+          {/* 面板覆盖的是**整个仓库**（不是只有当前工作目录）：路径一律仓库根相对，悬停可看仓库在哪 */}
+          <div
+            className="git-repo-bar"
+            title={tpl('仓库：$__path__', { path: gitStore.repo.root })}>
+            {head?.branch ? (
+              <button
+                type="button"
+                className="git-branch-btn"
+                disabled={disabled}
+                onClick={() => {
+                  if (!branchMenuOpen) void refreshBranches()
+                  setBranchMenuOpen((v) => !v)
+                }}
+                title={t('切换分支')}>
+                <span className="git-branch-name">{head.branch}</span>
+              </button>
+            ) : (
+              // 游离 HEAD / 空仓库：没有分支名可点，改给一个明确的状态
+              <span className="git-detached">
+                {head ? t('游离 HEAD') : t('读取中…')}
+              </span>
+            )}
+            {head && (head.ahead > 0 || head.behind > 0) && (
+              <span className="git-track">
+                {head.upstream ? `${head.upstream} ` : ''}↑{head.ahead} ↓
+                {head.behind}
+              </span>
+            )}
+            <span className="git-spacer" />
+            <button
+              type="button"
+              className="git-icon-btn"
+              title={t('刷新')}
+              disabled={busy}
+              onClick={() => void refreshStatus()}>
+              <RefreshSvg />
+            </button>
+          </div>
+
+          {groups.staged.length > 0 && (
+            <div className="git-commit">
+              <textarea
+                value={gitStore.commitDraft}
+                placeholder={
+                  readonly
+                    ? t('只读沙盒模式下无法提交')
+                    : t('提交信息（Ctrl+Enter 提交）')
+                }
+                disabled={disabled}
+                onChange={(e) =>
+                  runInAction(() => {
+                    gitStore.commitDraft = e.target.value
+                  })
+                }
+                onKeyDown={(e) => {
+                  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                    e.preventDefault()
+                    void commit(gitStore.commitDraft)
+                  }
+                }}
+              />
+              <div className="git-commit-row">
+                <span className="git-hint">
+                  {gitStore.busy
+                    ? tpl('执行中：$__op__', { op: gitStore.busy })
+                    : tpl('已暂存 $__count__ 个文件', {
+                        count: groups.staged.length,
+                      })}
+                </span>
+                <span className="git-spacer" />
+                <button
+                  type="button"
+                  className="git-primary-btn"
+                  disabled={disabled || !gitStore.commitDraft.trim()}
+                  onClick={() => void commit(gitStore.commitDraft)}>
+                  {t('提交')}
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {gitStore.error && <div className="git-empty error">{gitStore.error}</div>}
+
+      {gitStore.repo && (
+        <div className="git-list">
+          {nothingToShow && <div className="git-empty">{t('没有更改')}</div>}
+
+          {sections.map((section) => {
+            if (section.entries.length === 0) return null
+            return (
+              <div className="git-section" key={section.key}>
+                <div className="git-section-title">
+                  <span>{section.title}</span>
+                  <span className="git-section-count">
+                    {section.entries.length}
+                  </span>
+                  <span className="git-spacer" />
+                  {/* 一段只有一条时没有「全部」可言 */}
+                  {section.bulk && section.entries.length > 1 && (
+                    <button
+                      type="button"
+                      className="git-row-btn"
+                      title={section.bulk.label}
+                      disabled={disabled}
+                      onClick={section.bulk.run}>
+                      {section.bulk.label}
+                    </button>
+                  )}
+                </div>
+                {section.entries.map((entry) => {
+                  const key = rowKey(section.side, entry.path)
+                  // 批量目标在这里算一次：行只负责「按钮被点了」，不重复一遍选中集口径
+                  const paths = actionPaths(key, section.side)
+                  return (
+                    <GitChangeRow
+                      key={`${section.key}:${entry.path}`}
+                      entry={entry}
+                      side={section.side}
+                      disabled={disabled}
+                      selected={selectedSet.has(key)}
+                      batch={paths.length}
+                      onSelect={(mod) => selectRow(key, mod)}
+                      onStage={() => void stage(paths)}
+                      onUnstage={() => void unstage(paths)}
+                      onDiscard={() => void discard(paths)}
+                      onOpenDiff={setDiffTarget}
+                    />
+                  )
+                })}
+              </div>
+            )
+          })}
+
+          {snapshot?.truncated && (
+            <div className="git-notice">
+              {t('变更过多，仅显示前 5000 条（请先处理未跟踪目录或补 .gitignore）')}
+            </div>
+          )}
+        </div>
+      )}
+
+      {branchMenuOpen && (
+        <GitBranchMenu
+          disabled={disabled}
+          onClose={() => setBranchMenuOpen(false)}
+        />
+      )}
+
+      {diffTarget && (
+        <GitDiffModal
+          target={diffTarget}
+          sections={sections}
+          disabled={disabled}
+          onClose={() => setDiffTarget(null)}
+        />
+      )}
+    </>
+  )
+})
+
+export default GitPanel

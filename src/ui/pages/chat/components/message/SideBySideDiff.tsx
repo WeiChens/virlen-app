@@ -17,10 +17,13 @@ import { useAutoCenter } from '@/ui/hooks/useAutoCenter'
 import './SideBySideDiff.scss'
 
 /**
- * SideBySideDiff —— edit_file 的「原文件 / 新文件」左右对比视图（含词法着色与全屏）。
+ * SideBySideDiff —— 「原文件 / 新文件」左右对比视图（含词法着色与全屏）。
  *
- * 行数据由 EditFileMessage 准备（多处编辑合并成行是 edit_file 的 uiData 结构知识），
- * 本组件只负责「给什么行就画什么行」。
+ * 行数据由调用方准备（edit_file 把多处编辑合并成行是它的 uiData 结构知识；git 差异弹窗用
+ * `domain/git/diff-rows`），本组件只负责「给什么行就画什么行」。
+ *
+ * `showHeader={false}` 用于调用方**自己已经有标题栏**的场景（git 差异弹窗）：文件头（文件名 +
+ * 全屏按钮 + 自定义动作）整块不画 —— 同一句路径不该在弹窗里出现两次，而且那条布局里也不该再套全屏。
  */
 
 /** SideBySideDiff 可渲染的行：普通 diff 行 + 多处编辑之间的省略间隔行 */
@@ -241,6 +244,7 @@ function DiffContent({
   actions,
   fullscreen,
   onToggleFullscreen,
+  showHeader,
   isFull,
   blockRef,
   onContextMenu,
@@ -254,6 +258,8 @@ function DiffContent({
   /** 当前是否全屏（决定全屏按钮的图标/提示） */
   fullscreen: boolean
   onToggleFullscreen: () => void
+  /** 是否画文件头（标题 + 动作按钮）；调用方自己已经写了路径时关掉它 */
+  showHeader: boolean
   /** 是否渲染为全屏形态 */
   isFull: boolean
   /** 原位那份的根节点 ref（居中用；全屏副本不接，避免 ref 被覆盖） */
@@ -289,28 +295,30 @@ function DiffContent({
       className={`diff-side-by-side${isFull ? ' is-fullscreen' : ''}`}
       ref={isFull ? undefined : blockRef}
       onContextMenu={onContextMenu}>
-      {/* 文件头（固定，不随内容滚动） */}
-      <div className="diff-header">
-        <span className="diff-header-name">{fileName}</span>
-        <div className="diff-actions">
-          {/* 内置全屏按钮：与调用方的 actions 同级，始终可用 */}
-          <button
-            className="diff-action-btn diff-fullscreen-btn"
-            onClick={onToggleFullscreen}
-            title={fullscreen ? t('退出全屏') : t('全屏')}>
-            {fullscreen ? <ExitFullScreenSvg /> : <FullScreenSvg />}
-          </button>
-          {actions.map((action) => (
+      {/* 文件头（固定，不随内容滚动）—— 调用方已经有了自己的标题栏时才画 */}
+      {showHeader && (
+        <div className="diff-header">
+          <span className="diff-header-name">{fileName}</span>
+          <div className="diff-actions">
+            {/* 内置全屏按钮：与调用方的 actions 同级，始终可用 */}
             <button
-              key={action.title}
-              className="diff-action-btn"
-              onClick={action.onClick}
-              title={action.title}>
-              {action.iconRender ? action.iconRender() : null}
+              className="diff-action-btn diff-fullscreen-btn"
+              onClick={onToggleFullscreen}
+              title={fullscreen ? t('退出全屏') : t('全屏')}>
+              {fullscreen ? <ExitFullScreenSvg /> : <FullScreenSvg />}
             </button>
-          ))}
+            {actions.map((action) => (
+              <button
+                key={action.title}
+                className="diff-action-btn"
+                onClick={action.onClick}
+                title={action.title}>
+                {action.iconRender ? action.iconRender() : null}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* 唯一的滚动容器（只纵向）：双栏表头 + 每一行的左右两半都在里面；超长行在各自那半折行，故横向不滚 */}
       <div className="diff-body">
@@ -379,6 +387,7 @@ export function SideBySideDiff({
   stat,
   actions = [] as Action[],
   autoCenter = false,
+  showHeader = true,
 }: {
   diffRows: SideBySideRow[]
   fileName: string | null
@@ -388,6 +397,11 @@ export function SideBySideDiff({
   actions?: Action[]
   /** 用户展开该 diff 时是否滚动到视口中间（见 useAutoCenter） */
   autoCenter?: boolean
+  /**
+   * 是否画文件头（文件名 + 全屏 + 自定义动作）；默认画。
+   * 关掉的场景：调用方自己的标题栏已经写了路径（git 差异弹窗），再画一遍就是同一句话出现两次。
+   */
+  showHeader?: boolean
 }) {
   // 全屏态由组件自身管理，按钮在文件头右侧（与 CodeBlock 一致）
   const [fullscreen, setFullscreen] = useState(false)
@@ -486,6 +500,7 @@ export function SideBySideDiff({
       actions={actions}
       fullscreen={fullscreen}
       onToggleFullscreen={() => setFullscreen(!fullscreen)}
+      showHeader={showHeader}
       isFull={isFull}
       blockRef={rootRef}
       onContextMenu={openMenu}

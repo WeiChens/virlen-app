@@ -30,6 +30,7 @@
 | [`agents/11-background-service.md`](agents/11-background-service.md) | §11.48 后台服务（工具 / 面板 / 终端弹窗 / 全局视图 / 结束通知）· §11.49 埋点采样用例 · 托盘与后台工作 | 改 `service` 分类、标题栏面板或托盘 |
 | [`agents/12-commands.md`](agents/12-commands.md) | §7 常用命令与验证基线 · §9 手册速查（新增工具 / Provider / 搜索源 / Skill）· §10 前端约定 · §13 提交与协作（含提交前自查清单） | 每次动手前查命令、口径与提交要求 |
 | [`agents/13-locate-table.md`](agents/13-locate-table.md) | §12 快速定位表（「我要做的事 → 去哪里」，按功能域列出落点） | 知道要改什么、不知道文件在哪 |
+| [`agents/14-git-management.md`](agents/14-git-management.md) | §5.10 源代码管理（图形化 Git）分层落点表 · §11.53 实施期的十个坑 | 改 Git 入口 / 变更列表 / 差异视图 |
 
 ## 章节 → 分册
 
@@ -40,6 +41,7 @@
 | §5.9 链路 / 配对 / 推送 | [`agents/03-phone-core.md`](agents/03-phone-core.md) | §8 安全红线 | 本文件 |
 | §5.9 交互 / 审批 / 下行投影 | [`agents/04-phone-interactions.md`](agents/04-phone-interactions.md) | §9 手册速查 · §10 前端约定 | [`agents/12-commands.md`](agents/12-commands.md) |
 | §5.9 文件域 / 引用 / 压缩 / 字号 | [`agents/05-phone-files.md`](agents/05-phone-files.md) | §12 快速定位表 | [`agents/13-locate-table.md`](agents/13-locate-table.md) |
+| §5.10 源代码管理（git）· §11.53 实施坑 | [`agents/14-git-management.md`](agents/14-git-management.md) | | |
 
 | §11.x（常见坑） | 分册 |
 |---|---|
@@ -49,6 +51,7 @@
 | §11.37–§11.41 · §11.50–§11.52 | [`agents/09-pitfalls-engine.md`](agents/09-pitfalls-engine.md) |
 | §11.42–§11.47 | [`agents/10-pitfalls-phone.md`](agents/10-pitfalls-phone.md) |
 | §11.48–§11.49（含托盘说明） | [`agents/11-background-service.md`](agents/11-background-service.md) |
+| §11.53（图形化 Git） | [`agents/14-git-management.md`](agents/14-git-management.md) |
 
 ## 铁律（§6）—— 改代码前必读，违反将导致行为分叉 / 静默失效
 
@@ -96,3 +99,4 @@
 > - `docs/cli-tui-plan.md` —— CLI 交互式 TUI（`virlen-cli chat`）与配置向导、上下文压缩、会话管理（`session`）/ 用量账本（`usage`）的方案 / 实测
 > - `docs/doc-parse-plan.md` —— 文档解析工具 `parse_document`（pdf/doc/docx/xls/xlsx/ppt/pptx/csv）的实施方案（**已实施**）：`doc_parse` 解析层为唯一源，RAG 的 PDF 解析与它同源；全文落盘参数 `outTxtFile` 见其 §12
 > - `docs/memory-redistill-plan.md` —— 记忆再蒸馏（P2′，**待实施**）：AI 写下的记忆 ≥ 100 条时由宿主后台合并成更少条目（软删 + 归档，用户无感）的触发 / 调度 / 校验 / 落库口径；被移除的 P2 蒸馏链怎么从 git 取回见其 §2.2
+> - `docs/git-management-plan.md` —— Git 管理（源代码管理，**P1 已实施**）：聊天页标题栏入口（图标 + 变更数徽标 + 弹窗）与变更 / 暂存 / 提交 / 分支切换的方案与坑；后端定为 **`git` 子进程**（否决 `gix` / `git2` 的查证证据见其 §2.1）；分层落点与实施坑见 [`agents/14-git-management.md`](agents/14-git-management.md)

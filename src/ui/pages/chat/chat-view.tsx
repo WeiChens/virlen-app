@@ -38,6 +38,7 @@ import ProviderPrompt from './components/modals/provider-prompt'
 import TodoEntry from './components/todo/TodoEntry'
 // 后台服务：标题栏入口 + 面板（与本会话的 service 工具同一张注册表）
 import ServiceEntry from './components/service/ServiceEntry'
+import GitEntry from './components/git/GitEntry'
 import SearchDialog from './components/search'
 
 import { useToolUI } from './components/tool-ui'
@@ -904,6 +905,8 @@ function ChatView() {
             )}
             {/* 后台服务：有会话时 = 本会话（徽标 = 运行中数量）；新对话页 = 全部会话（每行标归属） */}
             <ServiceEntry sessionId={chatState.value.currentSessionId ?? null} />
+            {/* 源代码管理：徽标 = 未提交的变更文件数（按路径去重）；不是 Git 仓库时入口不出现 */}
+            <GitEntry sessionId={chatState.value.currentSessionId ?? null} />
             <WorkspaceDisplay
               value={
                 chatState.value.currentSessionId

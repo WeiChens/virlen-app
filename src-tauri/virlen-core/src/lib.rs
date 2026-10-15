@@ -15,6 +15,8 @@
 pub mod agent;
 pub mod doc_parse;
 pub mod file_ops;
+/// 源代码管理（图形化 Git）：`git` 子进程驱动 + porcelain 解析 —— 零新增依赖，GUI / CLI 共用
+pub mod git;
 pub mod host;
 pub mod rag;
 pub mod sandbox;

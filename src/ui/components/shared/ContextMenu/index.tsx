@@ -98,7 +98,14 @@ export default function ContextMenu({
   useEffect(() => {
     const onDocMouseDown = (e: MouseEvent) => {
       const target = e.target as Node
-      if (menuRef.current?.contains(target)) return
+      if (menuRef.current?.contains(target)) {
+        // 菜单内的 mousedown 不再往外传：「点浮层外关闭」型的宿主（源代码管理面板、Modal）在
+        // document 上按 DOM 包含关系判定，而菜单是 portal 到 body 的 —— 不拦住就成了
+        // 「点一下菜单项，宿主浮层先关了」，菜单连同它那颗按钮的 click 一起被卸载。
+        // 本监听挂在捕获阶段，document 是事件下行的第一个节点：拦在这里即终止整条传播。
+        e.stopPropagation()
+        return
+      }
       if (anchorElement?.contains(target)) return
       onClose()
     }

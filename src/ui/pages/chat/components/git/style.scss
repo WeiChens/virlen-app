@@ -1,0 +1,812 @@
+/**
+ * 源代码管理面板样式 — 标题栏入口 + 浮层（变更列表 / 提交框 / 分支浮层）+ 差异弹窗。
+ *
+ * 类名统一 `git-*`；颜色优先用主题变量（`ui/styles/theme.scss`），未定义的语义色带 fallback。
+ * 尺寸沿用「后台服务面板」那一套（同一排入口，宽度 / 圆角 / 阴影必须一致，否则并排看像两个应用）。
+ */
+
+.git-entry {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+
+  .git-entry-btn {
+    position: relative;
+
+    &.active {
+      color: var(--primary-color, #3b6ef6);
+      background: var(--hover-bg, #f0f0f0);
+    }
+  }
+}
+
+/* 未提交的变更文件数（按路径去重）；0 时不显示 */
+.git-badge {
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--primary-color, #3b6ef6);
+  /* ⚠️ 品牌底上的前景必须走 --primary-fg：主题色可能是浅色，那时要自动转黑字（契约测试守着这条） */
+  color: var(--primary-fg, #fff);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  border: 1.5px solid var(--bg-primary, #fff);
+  pointer-events: none;
+}
+
+.git-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60;
+  width: 520px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 10px;
+  background: var(--bg-primary, #fff);
+  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.14);
+  text-align: left;
+}
+
+.git-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+
+  .git-head-title {
+    font-size: var(--font-size-md, 13px);
+    font-weight: 600;
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  .git-close {
+    border: none;
+    background: transparent;
+    color: var(--text-secondary, #666);
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+
+    &:hover {
+      background: var(--hover-bg, #f0f0f0);
+      color: var(--text-primary, #1a1a1a);
+    }
+  }
+}
+
+.git-spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 头部：分支按钮 + ahead/behind + 刷新 */
+.git-repo-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0 8px;
+
+  .git-branch-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 260px;
+    padding: 3px 8px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 6px;
+    background: var(--bg-secondary, #f7f7f8);
+    color: var(--text-primary, #1a1a1a);
+    font: inherit;
+    font-size: var(--font-size-sm, 12px);
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      border-color: var(--primary-color, #3b6ef6);
+    }
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .git-branch-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  .git-track {
+    font-size: var(--font-size-xs, 11px);
+    color: var(--text-secondary, #666);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 游离 HEAD：不显示分支名，改用一个明确的提示徽标 */
+  .git-detached {
+    padding: 1px 8px;
+    border-radius: 999px;
+    border: 1px dashed var(--color-warning-text, #b45309);
+    color: var(--color-warning-text, #b45309);
+    font-size: var(--font-size-xs, 11px);
+  }
+
+  .git-icon-btn {
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-secondary, #666);
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      background: var(--hover-bg, #f0f0f0);
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    svg {
+      width: 14px;
+      height: 14px;
+      fill: currentColor;
+    }
+  }
+}
+
+/* 提交框 */
+.git-commit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-color, #e5e5e5);
+
+  textarea {
+    width: 100%;
+    min-height: 46px;
+    max-height: 140px;
+    resize: vertical;
+    padding: 6px 8px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 6px;
+    background: var(--bg-primary, #fff);
+    color: var(--text-primary, #1a1a1a);
+    font: inherit;
+    font-size: var(--font-size-sm, 12px);
+    line-height: 1.5;
+    box-sizing: border-box;
+
+    &:focus {
+      outline: none;
+      border-color: var(--primary-color, #3b6ef6);
+    }
+
+    &:disabled {
+      background: var(--bg-secondary, #f7f7f8);
+      color: var(--text-secondary, #666);
+    }
+  }
+
+  .git-commit-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    /* 提示在左、主按钮在右（由 JSX 里的 .git-spacer 推开）：提示可以很长，但永远不许把按钮挤走 */
+    .git-hint {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: var(--font-size-xs, 11px);
+      color: var(--text-secondary, #666);
+    }
+  }
+
+  .git-primary-btn {
+    flex: none;
+    padding: 4px 14px;
+    border: none;
+    border-radius: 6px;
+    background: var(--primary-color, #3b6ef6);
+    /* 同上：品牌底上的前景走 --primary-fg */
+    color: var(--primary-fg, #fff);
+    font: inherit;
+    font-size: var(--font-size-sm, 12px);
+    font-weight: 600;
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      filter: brightness(1.08);
+    }
+
+    /* 落在品牌底上，默认焦点光晕看不清 —— 用统一的主题焦点环（与列表里的小按钮一致） */
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 2px;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+}
+
+/* 变更列表 */
+.git-list {
+  max-height: 46vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+
+  /* 提交区只在暂存区非空时出现（见 GitPanel）：它不在时列表自己顶上一条分隔线，
+     否则仓库条与第一段标题会粘在一起 */
+  .git-repo-bar + & {
+    border-top: 1px solid var(--border-color, #e5e5e5);
+  }
+
+  .git-section {
+    margin-top: 8px;
+
+    .git-section-title {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 2px;
+      background: var(--bg-primary, #fff);
+      font-size: var(--font-size-xs, 11px);
+      font-weight: 600;
+      color: var(--text-secondary, #666);
+      letter-spacing: 0.02em;
+
+      /* 「全部暂存 / 全部取消暂存」是同一颗 .git-row-btn 的**文字**形态 */
+      .git-row-btn {
+        width: auto;
+        padding: 0 7px;
+        font-size: var(--font-size-xs, 11px);
+        /* hover 整段才显形（与行内操作同一口径）：常驻会把列表画成一堵按钮墙 */
+        opacity: 0;
+        transition: opacity 0.12s ease;
+
+        /* 禁用态（只读沙盒 / 有操作在跑）**常显**：告诉用户「这颗按钮在这儿，只是此刻点不了」，
+           比整颗消失好懂（与后台服务面板的终止按钮同一取舍） */
+        &:disabled {
+          opacity: 0.5;
+        }
+
+        /* 段标题是白底（sticky），hover 底不能沿用行内那颗的 --bg-primary（白底上看不出来） */
+        &:hover:not(:disabled) {
+          background: var(--hover-bg, #f0f0f0);
+          box-shadow: none;
+        }
+      }
+    }
+
+    .git-section-count {
+      font-weight: 400;
+      color: var(--text-secondary, #666);
+    }
+
+    &:hover .git-section-title .git-row-btn:not(:disabled),
+    .git-section-title .git-row-btn:focus-visible {
+      opacity: 1;
+    }
+  }
+}
+
+/* 列表里的小按钮（行内「暂存 / 取消暂存 / 丢弃」与段标题的「全部…」共用的**唯一样式源**）
+   ⚠️ 必须挂在顶层：段标题那颗不在 `.git-row` 内，写进 `.git-row` 作用域它就掉回浏览器默认按钮样式
+   （方角、被系统主题撑大、hover 没反馈），实测反馈「按钮没有样式」正是这一处。 */
+.git-row-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--bg-primary, #fff);
+    color: var(--primary-color, #3b6ef6);
+    box-shadow: 0 1px 3px rgba(16, 24, 40, 0.14);
+  }
+
+  &:focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: 1px;
+  }
+
+  &.danger:hover:not(:disabled) {
+    color: var(--color-danger, #dc2626);
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  svg {
+    width: 13px;
+    height: 13px;
+    fill: currentColor;
+  }
+}
+
+/* 文件类型图标（变更行与差异弹窗左侧清单**共用**）—— 与 `.git-row-letter` 同理挂顶层：写进 `.git-row`
+   作用域，弹窗清单里那份就掉回默认尺寸/颜色。图标是 `currentColor` 的单色字形（`FileTypeIcon`），
+   尺寸与颜色只在这一处定。 */
+.git-row-icon,
+.git-diff-side-icon {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  fill: var(--text-secondary, #666);
+  color: var(--text-secondary, #666);
+}
+
+/* 状态字母（变更行与差异弹窗左侧清单**共用**）—— 与 `.git-row-btn` 同理：两个语境就得挂顶层，
+   写进 `.git-row` 作用域，弹窗清单那份就掉回默认文字色。
+   位置在行**最右**（图标在左，见 `GitChangeRow` 头注释）：它右侧只剩 hover 才显形的动作排，
+   平时那颗字母就是行尾。
+   VS Code 同款语义色：改=橙、增=绿、删=红、冲突=红、未跟踪=绿。
+   颜色一律走主题里**真实定义**了的「文字档」令牌（亮 #b45309 / 暗 #f9e2af …）——
+   原先写的 `--warning-color` / `--success-color` / `--danger-color` 三个名字全项目从未定义，
+   fallback 永远生效 = 暗色主题照着的还是亮色档（在深底上几乎不可读）。
+   ⚠️ 未跟踪的状态字母就是 `?`，它进选择器必须转义成 `\?` —— 写 `&.s-?` 会让 Sass 直接
+   报 `expected selector`（整份样式编译失败）。 */
+.git-row-letter {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  font-size: var(--font-size-sm, 12px);
+  font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  &.s-M { color: var(--color-warning-text, #b45309); }
+  &.s-A { color: var(--color-success-text, #2e7d32); }
+  &.s-\? { color: var(--color-success-text, #2e7d32); }
+  &.s-C { color: var(--color-success-text, #2e7d32); }
+  &.s-D { color: var(--color-error-text, #991b1b); }
+  &.s-R { color: var(--color-warning-text, #b45309); }
+  &.s-T { color: var(--color-warning-text, #b45309); }
+  &.s-U { color: var(--color-error-text, #991b1b); }
+}
+
+.git-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px;
+  border-radius: 5px;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--hover-bg, #f0f0f0);
+
+    .git-row-actions {
+      opacity: 1;
+    }
+  }
+
+  /* 键盘用户：Tab 走到行内按钮时动作排也得出来，否则能聚焦的东西反而「看不见」 */
+  &:focus-within .git-row-actions {
+    opacity: 1;
+  }
+
+  /* 选中态（Ctrl / Shift 多选）：淡品牌底 + 左侧一道主色竖条 ——
+     只靠底色在暗色主题里不够显眼，选中 / 未选中要一眼分得开 */
+  &.selected {
+    background: color-mix(in srgb, var(--primary-color, #3b6ef6) 14%, transparent);
+    box-shadow: inset 2px 0 0 var(--primary-color, #3b6ef6);
+  }
+
+  .git-row-name {
+    flex: none;
+    max-width: 46%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--font-size-sm, 12px);
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  .git-row-dir {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;
+    text-align: left;
+    font-size: var(--font-size-xs, 11px);
+    color: var(--text-secondary, #666);
+  }
+
+  /* 行内操作默认隐形（与资源管理器一致：不把列表画成按钮墙），hover （或键盘聚焦）才出现 */
+  .git-row-actions {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+}
+
+/* 空态 / 提示 / 错误 */
+.git-empty {
+  padding: 18px 4px;
+  text-align: center;
+  font-size: var(--font-size-sm, 12px);
+  color: var(--text-secondary, #666);
+
+  &.error {
+    color: var(--color-error, #dc2626);
+    text-align: left;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+}
+
+.git-notice {
+  margin-top: 6px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  background: var(--bg-secondary, #f7f7f8);
+  font-size: var(--font-size-xs, 11px);
+  color: var(--text-secondary, #666);
+}
+
+/* 分支浮层（挂在头部下方） */
+.git-branch-menu {
+  position: absolute;
+  top: 74px;
+  left: 12px;
+  z-index: 70;
+  width: 320px;
+  max-width: calc(100vw - 40px);
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 10px;
+  background: var(--bg-primary, #fff);
+  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.18);
+
+  input {
+    width: 100%;
+    padding: 5px 8px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 6px;
+    background: var(--bg-primary, #fff);
+    color: var(--text-primary, #1a1a1a);
+    font: inherit;
+    font-size: var(--font-size-sm, 12px);
+    box-sizing: border-box;
+
+    &:focus {
+      outline: none;
+      border-color: var(--primary-color, #3b6ef6);
+    }
+  }
+
+  .git-branch-list {
+    margin-top: 6px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .git-branch-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 4px 6px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-primary, #1a1a1a);
+    font: inherit;
+    font-size: var(--font-size-sm, 12px);
+    text-align: left;
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      background: var(--hover-bg, #f0f0f0);
+    }
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    &.current {
+      font-weight: 600;
+      color: var(--primary-color, #3b6ef6);
+    }
+
+    &.create {
+      color: var(--primary-color, #3b6ef6);
+      border: 1px dashed var(--border-color, #e5e5e5);
+    }
+
+    .git-branch-label {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .git-branch-tag {
+      flex: none;
+      font-size: var(--font-size-xs, 11px);
+      color: var(--text-secondary, #666);
+
+      &.gone {
+        color: var(--color-error, #dc2626);
+      }
+    }
+  }
+}
+
+/* 差异弹窗（portal 到 body，故不挂在 .git-entry 下）
+   遮罩从自绘标题栏（--window-top-bar-height）**下方**开始：压住窗口状态栏会让「拖窗口 / 点窗口按钮」
+   在弹窗开着时失效（与全局 Modal / 搜索弹窗同一口径）。 */
+.git-diff-backdrop {
+  position: fixed;
+  top: var(--window-top-bar-height, 30px);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 32px;
+  background: var(--modal-overlay, rgba(16, 24, 40, 0.42));
+}
+
+.git-diff-modal {
+  display: flex;
+  flex-direction: column;
+  /* 比原先宽一档：左侧清单（240px）从差异里让出位置，不然两栏代码区会明显变窄 */
+  width: min(1360px, 100%);
+  height: min(780px, 100%);
+  border-radius: 12px;
+  background: var(--bg-primary, #fff);
+  overflow: hidden;
+  box-shadow: 0 24px 64px rgba(16, 24, 40, 0.3);
+
+  /* 打开时会被 .focus()（↑↓ 立刻可用），容器自己不要那一圈焦点环 */
+  &:focus {
+    outline: none;
+  }
+
+  .git-diff-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color, #e5e5e5);
+
+    .git-diff-path {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: var(--font-size-sm, 12px);
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    .git-diff-scope {
+      flex: none;
+      padding: 1px 8px;
+      border-radius: 999px;
+      background: var(--bg-secondary, #f7f7f8);
+      font-size: var(--font-size-xs, 11px);
+      color: var(--text-secondary, #666);
+    }
+
+    /* 「暂存更改 / 取消暂存」：看完差异顺手处理是最常见的下一步，弹窗里就地给入口 */
+    .git-diff-action {
+      flex: none;
+      padding: 3px 10px;
+      border: 1px solid var(--border-color, #e5e5e5);
+      border-radius: 6px;
+      background: var(--bg-secondary, #f7f7f8);
+      color: var(--text-primary, #1a1a1a);
+      font: inherit;
+      font-size: var(--font-size-xs, 11px);
+      cursor: pointer;
+
+      &:hover:not(:disabled) {
+        border-color: var(--primary-color, #3b6ef6);
+        color: var(--primary-color, #3b6ef6);
+      }
+
+      &:focus-visible {
+        outline: var(--focus-ring);
+        outline-offset: 1px;
+      }
+
+      &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+    }
+
+    .git-close {
+      border: none;
+      background: transparent;
+      color: var(--text-secondary, #666);
+      cursor: pointer;
+      font-size: 13px;
+      line-height: 1;
+      width: 24px;
+      height: 24px;
+      border-radius: 5px;
+
+      &:hover {
+        background: var(--hover-bg, #f0f0f0);
+        color: var(--text-primary, #1a1a1a);
+      }
+    }
+  }
+
+  /* 主体：左清单固定宽 + 右差异吃剩余（两边各自滚，互不带着跑） */
+  .git-diff-main {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+  }
+
+  .git-diff-side {
+    flex: none;
+    /* 260：行里多了文件类型图标（15）与状态字母（14），不留宽就全从文件名里扣 */
+    width: 260px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 6px;
+    border-right: 1px solid var(--border-color, #e5e5e5);
+    background: var(--bg-secondary, #f7f7f8);
+
+    .git-diff-side-group {
+      margin-bottom: 4px;
+    }
+
+    .git-diff-side-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 6px;
+      font-size: var(--font-size-xs, 11px);
+      font-weight: 600;
+      color: var(--text-secondary, #666);
+
+      .git-diff-side-count {
+        font-weight: 400;
+      }
+    }
+
+    .git-diff-side-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+      padding: 3px 6px;
+      border: none;
+      border-radius: 5px;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      font-size: var(--font-size-sm, 12px);
+      text-align: left;
+      cursor: pointer;
+
+      &:hover {
+        background: var(--hover-bg, #f0f0f0);
+      }
+
+      &:focus-visible {
+        outline: var(--focus-ring);
+        outline-offset: -1px;
+      }
+
+      /* 正在看的那个（与列表选中态同一口径：淡品牌底 + 主色文字） */
+      &.active {
+        background: color-mix(in srgb, var(--primary-color, #3b6ef6) 16%, transparent);
+        color: var(--primary-color, #3b6ef6);
+      }
+
+      .git-diff-side-name {
+        flex: none;
+        /* 同一行还有图标与状态字母，文件名占比相应收一点（长名靠 title 看全） */
+        max-width: 52%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .git-diff-side-dir {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: var(--font-size-xs, 11px);
+        color: var(--text-secondary, #666);
+      }
+    }
+  }
+
+  /* 正文容器：SideBySideDiff 自己管滚动，这里只负责占满剩余高度 */
+  .git-diff-body {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+
+    /* 弹窗里不画文件头（路径已在弹窗头、全屏按钮也没意义，见 GitDiffModal），差异本体直接铺满 ——
+       否则 780px 高的弹窗里只有 450px（.diff-body 的 max-height）在显示内容 */
+    > .diff-side-by-side {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      border: none;
+      border-radius: 0;
+
+      > .diff-body {
+        flex: 1;
+        min-height: 0;
+        max-height: none;
+      }
+    }
+  }
+
+  .git-diff-message {
+    padding: 28px 16px;
+    text-align: center;
+    font-size: var(--font-size-sm, 12px);
+    color: var(--text-secondary, #666);
+
+    &.error {
+      color: var(--color-error, #dc2626);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+  }
+}

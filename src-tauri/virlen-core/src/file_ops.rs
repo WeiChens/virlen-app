@@ -144,7 +144,11 @@ pub fn read_file(path: &str) -> Result<FileReadResult, String> {
 /// 然后计算 hash 供外部使用（不会实际改文件）。
 /// `read_file` 返回的 hash 是归一化后的 hash，这样 AI 构造的 old_string
 /// 使用 `\n` 就能匹配，无需关注文件实际是 CRLF 还是 LF。
-fn normalize_content(content: &str) -> String {
+///
+/// ⚠️ 这是全项目的**唯一换行归一化口径**（前端镜像：`infrastructure/tools/file/common.ts`
+/// 的 `content.replace(/\r\n/g, '\n')`）；git 差异的两侧内容也复用它（见 `git::diff`：
+/// 旧侧来自对象库、新侧来自工作区磁盘，不归一化就会「每行都不同」）。
+pub(crate) fn normalize_content(content: &str) -> String {
     content.replace("\r\n", "\n")
 }
 

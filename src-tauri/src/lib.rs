@@ -482,6 +482,19 @@ pub fn run() {
             commands::service::cmd_service_console_read,
             commands::service::cmd_service_console_write,
             commands::service::cmd_service_console_resize,
+            // 源代码管理（图形化 Git）—— 语义全在 `virlen-core::git`：
+            // 全程 `git` 子进程（选型与否决 `gix` / `git2` 的证据见 docs/git-management-plan.md §2.1）
+            commands::git::git_repo_info,
+            commands::git::git_status,
+            commands::git::git_branches,
+            commands::git::git_diff_sides,
+            commands::git::git_check_ref_format,
+            // 写操作（Rust 侧过只读沙盒门禁，fail-closed）
+            commands::git::git_stage,
+            commands::git::git_unstage,
+            commands::git::git_discard,
+            commands::git::git_commit,
+            commands::git::git_branch_switch,
             // 用量账本（token 统计）
             commands::session_db::cmd_append_usage,
             commands::session_db::cmd_usage_stats,
