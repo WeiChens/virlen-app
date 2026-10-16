@@ -1,0 +1,96 @@
+// ==================== Monaco 差异正文（列头 + 差异编辑器） ====================
+//
+// 类名沿用 `git-mono-*`（历史：它是从 git 差异弹窗试点出来的，见 `docs/agents/14-git-management.md`
+// §11.53 ㉖）。组件现在住在 `message/`：弹窗与聊天里的 `edit_file` 消息共用这一份 ——
+// **两处的结构规则都在这里**，调用方只负责「高度从哪来」：
+//   - git 弹窗：`git/style.scss` 里给 `.git-diff-body > .git-mono-diff { height: 100% }`（铺满弹窗）；
+//   - 聊天：组件传 `autoHeight`，高度按行数算（`--mono-diff-h` 内联写死），上限 `--mono-diff-max-h`。
+//
+// ⚠️ 下面这几条 overflow / 最小尺寸是「外层滚动条疯狂闪动」的解药，别删（㉗ 有完整推演）：
+// Monaco 的编辑器 DOM 是**内容尺寸**（宽度 = 最长行），而 `1fr` 的下限是 `auto`（会被它顶宽）——
+// 一旦外层所以能滚的容器看见溢出，就会与 Monaco 的 `automaticLayout` 互相追着闪。
+// 这里让每个直接子节点自己裁（`overflow: hidden`）+ 行列不许被内容顶开（`minmax(0, …)`），
+// 外层就永远看不到溢出，回路在结构上不可能成立。
+.git-mono-diff {
+  /* 聊天内联那份的高度上限（`autoHeight` 时生效）：与 `.diff-side-by-side` 的 `--diff-max-h` 同值，
+     两者都是「差异正文最多这么高，再长就内部滚」 */
+  --mono-diff-max-h: 450px;
+  display: grid;
+  /* 不能写 1fr：1fr = minmax(auto, 1fr)，auto 下限会让 Monaco 的 min-content 把列顶宽 */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  /* 列头 + 编辑器两行；有文件头时三行（见下面的 .has-header） */
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+  background: #282c34;
+
+  /* 文件头（可选的，聊天里有：文件名 + 动作按钮）横跨两列；多了它就得加一行 */
+  &.has-header {
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  > .diff-header {
+    grid-column: 1 / -1;
+  }
+
+  > .diff-col-header {
+    /* 列头不在滚动容器里（滚动的在 Monaco 内部），吸顶无从生效，直接置为静态 */
+    position: static;
+    /* 网格项的最小尺寸默认是 min-content：窄窗口下不许把列顶宽，宁可裁（见上面的 ⚠️） */
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  /* 单栏形态（新增 / 删除 / 未跟踪，`.diff-col-header--single`）：那一个列头横跨两列
+     —— 只占左半的话，右半空着、与下面铺满的单栏正文对不上（Monaco 的单栏编辑器就是满宽）。 */
+  > .diff-col-header--single {
+    grid-column: 1 / -1;
+  }
+
+  > .git-mono-diff-editor {
+    grid-column: 1 / -1;
+    min-height: 0;
+    /* Monaco 按容器尺寸写自己的像素高宽，它慢一拍时不许把外层顶出滚动条 */
+    overflow: hidden;
+  }
+
+  /* `autoHeight`：高度 = 行数 × 行高 + 上下 padding，由组件算好写在 `--mono-diff-h` 上；
+     超过 `--mono-diff-max-h` 就封顶，超出部分由 Monaco 自己滚。 */
+  &.is-autoheight > .git-mono-diff-editor {
+    height: var(--mono-diff-h);
+    max-height: var(--mono-diff-max-h);
+  }
+}
+
+/* 聊天里的外壳：与 DOM 版（`.diff-side-by-side`）同一套边框 / 圆角。
+   ⚠️ 宽度必须是**确定值**：Monaco 的 `automaticLayout` 会按容器量出像素宽再写回自己，
+   而 `.diff-wrapper` 那条 `width: fit-content` 想反过来按内容定宽 —— 两者会互相追（同 ㉗ 那类回路）。 */
+.diff-mono-wrapper {
+  padding: 0 10px;
+  margin: 4px 20px;
+  min-width: 0;
+  max-width: 90%;
+
+  > .git-mono-diff {
+    border: 1px solid #181a1f;
+    border-radius: 8px;
+  }
+}
+
+/* 差异视图里的选区调亮一档（只在本组件的容器内，全局的代码预览 / 编辑器不动）。
+   ⚠️ 两条耦合都得记在这里：
+   1. Monaco 把选区画在改动底色**下面**（0.56 `view.js`：`.lines-content` 先 append 选区所在的
+      `contentViewOverlays`、再 append 承载改动底色的 `viewLines`），而改动底色是半透明的
+      （见 `setupMonaco.ts` 的差异配色），所以选区的对比度被削掉一半 —— 用全局那支 `#3e4451`
+      只剩「勉勉强强看得出有块别色」。
+   2. `--vscode-*` 是 Monaco 的内部变量名（主题色是 `standaloneThemeService._updateThemeOrColorMap`
+      写成 `.monaco-editor, .monaco-diff-editor, .monaco-component { --vscode-*: … }` 一条规则），
+      它改名 = 这条覆盖**静默失效**（症状回到「改动行里选区偏淡」），不会报错。 */
+.git-mono-diff {
+  .monaco-editor,
+  .monaco-diff-editor,
+  .monaco-component {
+    --vscode-editor-selectionBackground: #505868;
+    --vscode-editor-inactiveSelectionBackground: #505868d9;
+  }
+}

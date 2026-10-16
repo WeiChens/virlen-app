@@ -23,6 +23,7 @@ pub mod cli;
 pub mod commit;
 pub mod diff;
 pub mod lock;
+pub mod log;
 pub mod repo;
 pub mod stage;
 pub mod status;
@@ -138,6 +139,22 @@ pub struct CommitResult {
     pub summary: String,
     /// git 的原始输出（含 hooks 的 stdout）—— 界面要能看见它，见方案 §7 第 6 条
     pub output: String,
+}
+
+/// 一条提交记录（`git log` 的忠实映射，见 [`log`]）。
+///
+/// 字段名与 git 的 pretty 占位符一一对应：`oid`=`%H`、`short_oid`=`%h`、`author_name`=`%an`、
+/// `author_email`=`%ae`、`author_time`=`%aI`（ISO 8601 strict，带时区）、`subject`=`%s`（单行）。
+/// ⚠️ **只回标题不回正文**：列表要的不是整段信息，正文要看时再单独取（见 [`log`] 模块头）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommitLogEntry {
+    pub oid: String,
+    pub short_oid: String,
+    pub author_name: String,
+    pub author_email: String,
+    /// `%aI`：`2026-10-16T10:29:46+08:00`（**原始时区**，展示时的本地化是前端的口径）
+    pub author_time: String,
+    pub subject: String,
 }
 
 /// 一个分支（本地 / 远程）。

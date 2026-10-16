@@ -1,5 +1,5 @@
 /**
- * GitPanel — 面板主体：仓库头（分支 / ahead-behind / 刷新）+ 提交区 + 三段变更列表。
+ * GitPanel — 面板主体：仓库头（分支 / ahead-behind / **提交记录** / 刷新）+ 提交区 + 三段变更列表。
  *
  * 提交区**只在暂存区非空时出现**（空着的时候它只是一行占地方的噪声）；主按钮靠右 ——
  * 与全项目「主操作落在右下」一致，左侧留给状态提示。
@@ -32,9 +32,11 @@ import {
   unstage,
 } from '@/services/git-service'
 import RefreshSvg from '@/ui/components/icons/RefreshSvg'
+import HistorySvg from '@/ui/components/icons/HistorySvg'
 import GitChangeRow, { type GitRowTarget } from './GitChangeRow'
 import GitBranchMenu from './GitBranchMenu'
 import GitDiffModal from './GitDiffModal'
+import GitLogModal from './GitLogModal'
 import { changeSections, rowKey, splitRowKey } from './sections'
 
 interface Props {
@@ -44,6 +46,7 @@ interface Props {
 export const GitPanel = observer(function GitPanel({ onClose }: Props) {
   const [branchMenuOpen, setBranchMenuOpen] = useState(false)
   const [diffTarget, setDiffTarget] = useState<GitRowTarget | null>(null)
+  const [logOpen, setLogOpen] = useState(false)
   /** 选中集（键 = `rowKey`，保持点击先后）；`anchorRef` 是 Shift 范围选择的起点 */
   const [selected, setSelected] = useState<string[]>([])
   const anchorRef = useRef<string | null>(null)
@@ -171,6 +174,15 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
               </span>
             )}
             <span className="git-spacer" />
+            {/* 仓库级入口：提交记录（读操作，不受只读沙盒与 busy 影响） */}
+            <button
+              type="button"
+              className="git-icon-btn"
+              title={t('提交记录')}
+              aria-label={t('提交记录')}
+              onClick={() => setLogOpen(true)}>
+              <HistorySvg />
+            </button>
             <button
               type="button"
               className="git-icon-btn"
@@ -300,6 +312,8 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
           onClose={() => setDiffTarget(null)}
         />
       )}
+
+      {logOpen && <GitLogModal onClose={() => setLogOpen(false)} />}
     </>
   )
 })

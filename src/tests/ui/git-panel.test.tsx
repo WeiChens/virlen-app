@@ -208,11 +208,12 @@ it('未跟踪就在「更改」段里（不再单列），行内排布 = 图标�
     rows.map((r) => r.querySelector('.git-row-letter')?.textContent),
   ).toEqual(['M', '?'])
 
-  // DOM 顺序 = 文件类型图标 → 文件名 → 目录 → 状态字母 → 动作排（字母贴左会抢文件名的位置）
+  // DOM 顺序 = 文件类型图标 → 文件名 → 目录 → 动作排 → **状态字母**（字母贴左会抢文件名的位置，
+  // 所以它贴最右；动作排在其**左**，平时 `opacity: 0` 不显形 —— 位置不随 hover 变）
   expect(
     [...rows[0].children].map((el) => el.getAttribute('class')?.split(' ')[0]),
   ).toEqual(
-    ['git-row-icon', 'git-row-name', 'git-row-dir', 'git-row-letter', 'git-row-actions'],
+    ['git-row-icon', 'git-row-name', 'git-row-dir', 'git-row-actions', 'git-row-letter'],
   )
   // 图标按扩展名分档（FileTypeIcon 的默认档也不为空 = 这一列不会时有时无）
   expect(rows[0].querySelector('.git-row-icon')).not.toBeNull()

@@ -1,18 +1,21 @@
 /**
- * GitDiffModal — 差异弹窗的四条界面口径（都是 P1.3 实测反馈里点出来的）。
+ * GitDiffModal — 差异弹窗的五条界面口径（都是 P1.3 / P1.4 实测反馈里点出来的）。
  *
  * 1. **左侧清单**：列出全部更改文件、当前文件高亮，点一下即切换（↑↓ 也能切）；同一个文件可以同时
  *    出现在两段（git 的真实语义），所以「当前行」按 **侧 + 路径** 认，不只看路径；
- * 2. **路径只出现一次**：路径已在弹窗头，`SideBySideDiff` 的文件头整块不画 —— 连带它内置的
- *    「全屏」按钮一起消失（弹窗本身就是放大形态）；
+ * 2. **路径只出现一次**：路径已在弹窗头，正文的文件头整块不画 —— 连带内置的「全屏」按钮一起
+ *    消失（弹窗本身就是放大形态）；
  * 3. **弹窗里能暂存 / 取消暂存**：成功后视图翻到另一侧（暂存 → 看 index↔HEAD；取消暂存 → 看工作区↔index），
  *    失败则留在原地；
  * 4. **弹窗内的 mousedown 不冒泡到 document**：入口的「点浮层外关闭」按 DOM 包含关系判定，而弹窗
  *    portal 到 body —— 不拦住就是「点一下弹窗，连面板一起关掉」。
  * 5. **空的那一侧整栏不画**（实测反馈：被删除的文件不必再显示「新文件」）：判定按**内容**
- *    （`domain/git::singleSideOf`），而不是列表上的状态字母。
+ *    （`domain/git::singleSideOf`），而不是列表上的状态字母；正文一律走 `MonacoDiffView`，
+ *    单侧时交给它的就是那一份单栏形态（`singleSide`）—— 空侧那栏连列头一起不画。
  *
- * 差异正文由 `side-by-side-diff.test.tsx` 守，这里只验弹窗自己的骨架与流转。
+ * 正文一律走 Monaco（`MonacoDiffView`，§11.53 ㉖ / ㉙）：本用例把它换成本文件关心的最小替身
+ * —— 只验「弹窗把两侧全文与单侧判定交下去了」与「没有再去跑一遍差异算法」，Monaco 那份契约由
+ * `monaco-diff-view.test.tsx` 守（两栏 / 单栏 / 右键菜单），DOM 版正文由 `side-by-side-diff.test.tsx` 守。
  */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act } from 'react'
@@ -24,7 +27,7 @@ import {
   rowKey,
   type GitChangeSection,
 } from '@/ui/pages/chat/components/git/sections'
-import { groupChanges } from '@/domain/git'
+import { groupChanges, gitDiffRows } from '@/domain/git'
 import type { GitChangeEntry, GitStatusSnapshot } from '@/domain/git'
 import { loadDiffSides, stage, unstage } from '@/services/git-service'
 
@@ -34,8 +37,42 @@ vi.mock('@/services/git-service', () => ({
   unstage: vi.fn(),
 }))
 
-// 引用链会经 SideBySideDiff 拉到 monaco，而 monaco 在 jsdom 里导入即崩（缺 `CSS.escape`）。
-// 本用例不看词法着色，换结构等价的最小替身（与其它 UI 用例同款）。
+// 正文走 Monaco（MonacoDiffView）：它内部要真的起 Monaco（jsdom 里导入即崩），
+// 这里只留「弹窗交了什么下去」这个接口（两栏 = 两侧全文，单栏 = `singleSide`）。
+vi.mock('@/ui/pages/chat/components/message/MonacoDiffView', () => {
+  function MonacoDiffView({
+    oldText,
+    newText,
+    fileName,
+    singleSide,
+  }: {
+    oldText: string
+    newText: string
+    fileName: string
+    singleSide?: 'old' | 'new'
+  }) {
+    return (
+      <div
+        className="mono-diff-stub"
+        data-old={oldText}
+        data-new={newText}
+        data-file={fileName}
+        data-side={singleSide ?? ''}
+      />
+    )
+  }
+  return { MonacoDiffView, default: MonacoDiffView }
+})
+
+// 「正文里不再跑一遍差异算法」是本轮的口径（切文件要省掉的那一段），把 gitDiffRows 换成间谍；
+// 正文换成 Monaco 后单侧也不再调它（DOM 版双栏已退出 git 弹窗）。
+vi.mock('@/domain/git', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/domain/git')>()
+  return { ...actual, gitDiffRows: vi.fn(actual.gitDiffRows) }
+})
+
+// 正文已被替身顶掉，本用例的引用链今天不拉 monaco；留着这条 mock 防引用链变化
+//（monaco 在 jsdom 里导入即崩，缺 `CSS.escape`）。
 vi.mock('@/monaco/setupMonaco', () => ({
   monaco: { editor: { tokenize: (): unknown[] => [] } },
   virlenDarkTheme: {},
@@ -108,7 +145,7 @@ async function mount(targetPath = 'a.txt', side: 'staged' | 'unstaged' = 'unstag
 }
 
 const pathLabel = () => document.querySelector('.git-diff-path')?.textContent
-const scopeLabel = () => document.querySelector('.git-diff-scope')?.textContent
+/** 弹窗头**没有**「基准」胶囊（口径 6）：在看哪一侧由那颗动作按钮说 —— `暂存更改` = 工作区侧、`取消暂存` = index 侧 */
 const actionBtn = () =>
   document.querySelector('.git-diff-action') as HTMLButtonElement | null
 const sideRow = (path: string) =>
@@ -125,6 +162,7 @@ beforeEach(() => {
   vi.mocked(loadDiffSides).mockReset()
   vi.mocked(stage).mockReset()
   vi.mocked(unstage).mockReset()
+  vi.mocked(gitDiffRows).mockClear()
   vi.mocked(loadDiffSides).mockResolvedValue({
     old_text: 'a',
     new_text: 'b',
@@ -153,24 +191,34 @@ it('左侧清单：列出各段文件、当前文件高亮，点另一个即切�
   // 当前行高亮（打开时定位到双击的那一行）
   expect(activeRow()?.title).toBe('a.txt')
   expect(pathLabel()).toBe('a.txt')
-  expect(scopeLabel()).toBe('更改')
+  expect(actionBtn()?.textContent).toBe('暂存更改')
 
   await act(async () => sideRow('s.txt')!.click())
 
   expect(pathLabel()).toBe('s.txt')
-  expect(scopeLabel()).toBe('已暂存的更改')
+  expect(actionBtn()?.textContent).toBe('取消暂存')
   expect(loadDiffSides).toHaveBeenLastCalledWith('s.txt', 'index', null)
   expect(activeRow()?.title).toBe('s.txt')
 })
 
-it('路径只出现一次：不画 SideBySideDiff 的文件头，全屏按钮随之消失', async () => {
+it('两侧都有内容时：正文走 Monaco 两栏（没传 singleSide），交下去的是两侧全文，且不再跑差异算法', async () => {
   await mount()
 
-  expect(document.querySelector('.diff-side-by-side')).not.toBeNull()
+  const stub = document.querySelector('.mono-diff-stub') as HTMLElement
+  expect(stub).not.toBeNull()
+  // beforeEach 里 mock 的两侧是 'a' / 'b'：原样交下去（Monaco 自己算差异）
+  expect(stub.dataset.old).toBe('a')
+  expect(stub.dataset.new).toBe('b')
+  expect(stub.dataset.file).toBe('a.txt')
+  // 两栏形态：不传 singleSide
+  expect(stub.dataset.side).toBe('')
+  // 路径只在弹窗头：正文既没有文件头、也没有内置的全屏按钮，更不是 DOM 版双栏
+  expect(pathLabel()).toBe('a.txt')
   expect(document.querySelector('.diff-header')).toBeNull()
   expect(document.querySelector('.diff-fullscreen-btn')).toBeNull()
-  // 双栏表头还在 —— 那是「原文件 / 新文件」的列标题，不是重复的路径
-  expect(document.querySelectorAll('.diff-col-header').length).toBe(2)
+  expect(document.querySelector('.diff-side-by-side')).toBeNull()
+  // 切文件要省掉的那一段：jsdiff 不再跑
+  expect(gitDiffRows).not.toHaveBeenCalled()
 })
 
 it('弹窗里能暂存：成功后翻到已暂存侧（scope 跟着换）；失败则留在原地', async () => {
@@ -181,7 +229,6 @@ it('弹窗里能暂存：成功后翻到已暂存侧（scope 跟着换）；失�
   await act(async () => actionBtn()!.click())
 
   expect(stage).toHaveBeenCalledWith(['a.txt'])
-  expect(scopeLabel()).toBe('已暂存的更改')
   expect(actionBtn()?.textContent).toBe('取消暂存')
   expect(loadDiffSides).toHaveBeenLastCalledWith('a.txt', 'index', null)
 
@@ -189,13 +236,31 @@ it('弹窗里能暂存：成功后翻到已暂存侧（scope 跟着换）；失�
   vi.mocked(unstage).mockResolvedValue(true)
   await act(async () => actionBtn()!.click())
   expect(unstage).toHaveBeenCalledWith(['a.txt'])
-  expect(scopeLabel()).toBe('更改')
   expect(actionBtn()?.textContent).toBe('暂存更改')
 
   // 失败（只读沙盒 / 有操作在跑）不翻面：界面上写的仍然是「你正在看的这一侧」
   vi.mocked(stage).mockResolvedValue(false)
   await act(async () => actionBtn()!.click())
-  expect(scopeLabel()).toBe('更改')
+  expect(actionBtn()?.textContent).toBe('暂存更改')
+})
+
+it('截断提示在弹窗头（原来那颗「基准」胶囊的位置），不进正文', async () => {
+  vi.mocked(loadDiffSides).mockResolvedValue({
+    old_text: 'a',
+    new_text: 'b',
+    old_label: 'INDEX',
+    new_label: '工作区',
+    binary: false,
+    truncated: true,
+  })
+  await mount()
+
+  // ⚠️ 必须在头部：正文那条 `.git-mono-diff` 是 `height: 100%`，压在它上面的兄弟块会把内容
+  //    顶出容器（实测反馈的「超出滚动」），所以这条提示占头部腾出来的位置
+  const note = document.querySelector('.git-diff-note')
+  expect(note?.textContent).toBe('文件过大，仅显示前 524288 个字符')
+  expect(note?.closest('.git-diff-head')).not.toBeNull()
+  expect(document.querySelector('.git-diff-body .git-diff-message')).toBeNull()
 })
 
 it('只读沙盒下写入口禁用（Rust 侧同样会拒，这里是体验层的双保险）', async () => {
@@ -278,19 +343,18 @@ it('左侧清单的一行：图标在左、状态字母在最右（与面板同�
   // 未跟踪就是普通的一行：差异基准同样是「工作区 ↔ index」（左空右全文）
   await act(async () => row.click())
   expect(loadDiffSides).toHaveBeenLastCalledWith('n.ts', 'worktree', null)
-  expect(scopeLabel()).toBe('更改')
 })
 
 it('同一个文件在两段各有一行时，「当前行」按侧认（暂存段与更改段都能定位）', async () => {
   await mount('s.txt', 'staged')
   expect(activeRow()?.title).toBe('s.txt')
-  expect(scopeLabel()).toBe('已暂存的更改')
+  expect(actionBtn()?.textContent).toBe('取消暂存')
 
   // 键也按侧拼：暂存段的 s.txt 与更改段若有同名文件不会互相点亮
   expect(rowKey('staged', 's.txt')).not.toBe(rowKey('unstaged', 's.txt'))
 })
 
-it('空的那一侧整栏不画：删除的文件只画「原文件」，未跟踪只画「新文件」', async () => {
+it('空的那一侧整栏不画：删除的文件只把旧侧交给 Monaco 的单栏形态，未跟踪反之', async () => {
   await mount()
 
   // 删除（未暂存侧：旧 = index 有内容、新 = 工作区里已经没了）
@@ -306,18 +370,16 @@ it('空的那一侧整栏不画：删除的文件只画「原文件」，未跟�
   // 让「取两侧内容」的 promise 落地（上面的 click 只保证切了文件）
   await act(async () => {})
 
-  expect(document.querySelector('.diff-side-by-side')?.className).toContain(
-    'is-single',
-  )
-  expect(document.querySelectorAll('.diff-col-header').length).toBe(1)
-  expect(
-    document.querySelector('.diff-col-header--old')?.textContent,
-  ).toContain('原文件')
-  expect(document.querySelector('.diff-col-header--new')).toBeNull()
-  expect(document.querySelector('.diff-line--new')).toBeNull()
-  expect(document.querySelectorAll('.diff-line--old').length).toBe(2)
+  const stub = document.querySelector('.mono-diff-stub') as HTMLElement
+  // 交给正文的是「只留旧侧」的单栏形态：空侧那栏连列头一起不画（DOM 版双栏不再参与）
+  expect(stub.dataset.side).toBe('old')
+  expect(stub.dataset.old).toBe('a\nb\n')
+  expect(stub.dataset.new).toBe('')
+  expect(document.querySelector('.diff-side-by-side')).toBeNull()
+  // 单侧也不再走 jsdiff：Monaco 那条整行装饰按「整份全删除」上色，不必先算出行
+  expect(gitDiffRows).not.toHaveBeenCalled()
 
-  // 未跟踪（旧侧为空）—— 反过来只画「新文件」
+  // 未跟踪（旧侧为空）—— 反过来只留「新侧」
   vi.mocked(loadDiffSides).mockResolvedValue({
     old_text: null,
     new_text: 'c\n',
@@ -329,10 +391,12 @@ it('空的那一侧整栏不画：删除的文件只画「原文件」，未跟�
   await act(async () => sideRow('n.ts')!.click())
   await act(async () => {})
 
-  expect(document.querySelector('.diff-col-header--old')).toBeNull()
-  expect(
-    document.querySelector('.diff-col-header--new')?.textContent,
-  ).toContain('新文件')
-  expect(document.querySelector('.diff-line--old')).toBeNull()
-  expect(document.querySelectorAll('.diff-line--new').length).toBe(1)
+  // ⚠️ 必须重新取节点：`loading` 期间正文整块不渲染（`!loading && !error && sides` 那一段），
+  // 所以上面那个 `.mono-diff-stub` 已经脱离文档（属性永远停在上一份）—— 切一次文件就是
+  // 卸载再重建（与「切文件只 setValue」的口径相左，见 §11.53 ㉜ 的待定项）。
+  const next = document.querySelector('.mono-diff-stub') as HTMLElement
+  expect(stub.isConnected).toBe(false)
+  expect(next.dataset.side).toBe('new')
+  expect(next.dataset.old).toBe('')
+  expect(next.dataset.new).toBe('c\n')
 })

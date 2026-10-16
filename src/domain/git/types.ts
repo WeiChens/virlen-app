@@ -83,6 +83,20 @@ export interface GitCommitResult {
   output: string
 }
 
+/** 一条提交记录（`git log` 的忠实映射，与 Rust `git::CommitLogEntry` **逐字对应**） */
+export interface GitCommitLogEntry {
+  /** 完整 oid（40 位）—— 悬停提示与后续「复制 hash」用它 */
+  oid: string
+  /** 短 oid（git 自己按仓库规模定的长度，前端**不自己截**） */
+  short_oid: string
+  author_name: string
+  author_email: string
+  /** `%aI` = ISO 8601 strict，带**作者当时**的时区偏移（展示成什么时间是前端的口径） */
+  author_time: string
+  /** `%s` = 提交标题（**单行**：git 已把信息首段的换行折成空格） */
+  subject: string
+}
+
 /** 一个分支（本地 / 远程） */
 export interface GitBranchInfo {
   name: string

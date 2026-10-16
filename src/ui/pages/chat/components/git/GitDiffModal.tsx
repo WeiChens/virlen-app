@@ -1,9 +1,9 @@
 /**
  * GitDiffModal — 变更文件的左右对比（模态）：**左侧是全部更改文件的清单，右侧是当前文件的差异**。
  *
- * 四条界面口径（P1.3 / P1.4 实测反馈）：
- * 1. **路径只出现一次** —— 弹窗头已经写了它，`SideBySideDiff` 的文件头不再画（`showHeader={false}`），
- *    顺带去掉它内置的「全屏」按钮：弹窗本身就是放大形态，再套一层全屏没有意义；
+ * 六条界面口径（P1.3 / P1.4 / 实测反馈）：
+ * 1. **路径只出现一次** —— 弹窗头已经写了它，正文（`MonacoDiffView`）不画文件头（它本来也不画），
+ *    也就没有 `SideBySideDiff` 那个内置「全屏」按钮：弹窗本身就是放大形态，再套一层全屏没有意义；
  * 2. **暂存 / 取消暂存就在弹窗里** —— 看完差异顺手处理是最常见的下一步，逼用户关掉弹窗回列表再点一次不合理。
  *    操作成功后视图自动翻到另一侧（暂存 → 看 index↔HEAD，取消暂存 → 看工作区↔index），因为
  *    原来那一侧的差异此刻已经空了；
@@ -12,8 +12,15 @@
  * 4. **空的那一侧整栏不画**（实测反馈：被删除的文件不必再显示「新文件」）—— 判定按**内容**
  *    （`domain/git::singleSideOf`）：删除只有旧侧、新增 / 未跟踪只有新侧、未合并取不到的那侧为空。
  *    留半栏空白既占宽度，又让人以为「另一侧是空的」是内容问题；
- * 5. **整文件、不省略**（实测反馈：不要用 … 省略相同的部分）：差异行由 `gitDiffRows` 从两侧全文
- *    直接算出来，改动行前后的未改动行照常显示（改了多少字由行内字符级片段标出）。
+ * 5. **整文件、不省略**（实测反馈：不要用 … 省略相同的部分）：改动行前后的未改动行照常显示
+ *    （改了哪几个字由行内字符级片段标出）。正文一律走 Monaco（`MonacoDiffView`：真虚拟化，
+ *    切文件不重建 DOM）：两侧都有内容是左右两栏，只有一侧有内容（新增 / 删除 / 未跟踪）是单栏
+ *    —— 空侧那一栏连列头一起不画（口径 4）；后一种形态单栏里的整份内容按「全新增 / 全删除」染色。
+ * 6. **头部只剩路径 + 动作**（实测反馈）：原来那颗「基准」胶囊（更改 / 已暂存的更改）取消 ——
+ *    它在说的事那颗按钮已经在说（`暂存更改` = 在看工作区侧、`取消暂存` = 在看 index 侧）；
+ *    腾出来的位置给「文件过大，仅显示前 N 个字符」那条提示，因为**提示放正文里会顶出滚动条**
+ *    （`.git-diff-body > .git-mono-diff` 是 `height: 100%`，上面再压一个兄弟块，内容就比容器高
+ *    一截：正文被挤下去 + 多出一条滚动条）。
  *
  * ⚠️ 内容**不缓存**：关掉即弃。缓存正文会让「切了分支却还在显示旧内容」这种问题悄悄出现。
  * ⚠️ 弹窗内的 mousedown 必须 `stopPropagation`（`.git-diff-modal` 上那一行）：入口的「点浮层外关闭」
@@ -26,13 +33,12 @@ import {
   baseName,
   dirName,
   displayPath,
-  gitDiffRows,
   singleSideOf,
   statusLetter,
 } from '@/domain/git'
 import type { GitDiffSides } from '@/domain/git'
 import FileTypeIcon from '@/ui/components/icons/FileTypeIcon'
-import { SideBySideDiff } from '../message/SideBySideDiff'
+import { MonacoDiffView } from '../message/MonacoDiffView'
 import { loadDiffSides, stage, unstage } from '@/services/git-service'
 import type { GitRowTarget } from './GitChangeRow'
 import { rowKey, type GitChangeSection } from './sections'
@@ -114,6 +120,9 @@ export function GitDiffModal({ target, sections, disabled, onClose }: Props) {
       if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
       // 只在焦点真的落在弹窗里时接管方向键（别的地方另有用途：输入历史、列表导航）
       if (!rootRef.current?.contains(document.activeElement)) return
+      // 焦点在差异正文里时把方向键让给它（Monaco 用方向键在正文里移动），
+      // 在清单 / 弹窗其它位置才是「上下切文件」（口径 3）
+      if (document.activeElement?.closest('.monaco-editor')) return
       e.preventDefault()
       e.stopPropagation()
       stepRef.current(e.key === 'ArrowDown' ? 1 : -1)
@@ -137,8 +146,11 @@ export function GitDiffModal({ target, sections, disabled, onClose }: Props) {
     }))
   }
 
-  const rows = useMemo(() => (sides ? gitDiffRows(sides) : []), [sides])
-  /** 只有一侧有内容（删除 / 新增 / 未跟踪）→ 另一栏整栏不画（口径 4） */
+  /**
+   * 只有一侧有内容（删除 / 新增 / 未跟踪）→ 另一栏整栏不画（口径 4）：交给 `MonacoDiffView` 的
+   * 单栏形态（单栏只读编辑器 + 整份内容按全新增 / 全删除染色），两栏形态则走它的差异编辑器。
+   * 判定按**内容**（`domain/git::singleSideOf`），不是列表上的状态字母。
+   */
   const singleSide = useMemo(() => (sides ? singleSideOf(sides) : null), [sides])
   const currentKey = rowKey(side, entry.path)
 
@@ -153,9 +165,14 @@ export function GitDiffModal({ target, sections, disabled, onClose }: Props) {
           <span className="git-diff-path" title={displayPath(entry)}>
             {displayPath(entry)}
           </span>
-          <span className="git-diff-scope">
-            {staged ? t('已暂存的更改') : t('更改')}
-          </span>
+          {/* 截断提示占原来那颗「基准」胶囊的位置（口径 6）：放正文里会把正文顶出滚动条 */}
+          {!loading && !error && sides?.truncated && (
+            <span className="git-diff-note">
+              {tpl('文件过大，仅显示前 $__chars__ 个字符', {
+                chars: 512 * 1024,
+              })}
+            </span>
+          )}
           <span className="git-spacer" />
           <button
             type="button"
@@ -231,19 +248,14 @@ export function GitDiffModal({ target, sections, disabled, onClose }: Props) {
             )}
             {!loading && !error && sides && !sides.binary && (
               <>
-                {sides.truncated && (
-                  <div className="git-diff-message">
-                    {tpl('文件过大，仅显示前 $__chars__ 个字符', {
-                      chars: 512 * 1024,
-                    })}
-                  </div>
-                )}
-                {/* showHeader={false}：路径在弹窗头，全屏按钮在这套「清单 + 差异」布局里也没有意义
-                    不传 stat：完整文件的行号是连续的，列头要显示 Ln 区间（口径 5） */}
-                <SideBySideDiff
-                  diffRows={rows}
+                {/* 正文一律走 Monaco：两侧都有内容是左右两栏，只有一侧有内容是单栏（口径 4：
+                    空侧那一栏连列头一起不画）。两份都不画文件头（showHeader 那套）——
+                    路径在弹窗头，内置的全屏按钮在「清单 + 差异」这套布局里也没有意义；
+                    列头照旧显示 Ln 区间（口径 5）。 */}
+                <MonacoDiffView
+                  oldText={sides.old_text ?? ''}
+                  newText={sides.new_text ?? ''}
                   fileName={entry.path}
-                  showHeader={false}
                   singleSide={singleSide ?? undefined}
                 />
               </>

@@ -823,6 +823,7 @@
   "刚刚": "Just now",
   "$__n__分钟前": "$__n__ min ago",
   "$__n__小时前": "$__n__ hours ago",
+  "$__n__天前": "$__n__ days ago",
   "昨天": "Yesterday",
   "= Missing Keys =": "= Missing Keys =",
   "暂无 Agent，点击上方按钮创建": "No agents yet. Click the button above to create one.",
@@ -1783,5 +1784,9 @@
   "当前环境不支持 Git 功能": "Git features are not available in this environment",
   "当前工作目录不是 Git 仓库": "The current workspace is not a Git repository",
   "已暂存的更改": "Staged Changes",
-  "仓库：$__path__": "Repository: $__path__"
+  "仓库：$__path__": "Repository: $__path__",
+  "提交记录": "Commit History",
+  "没有提交记录": "No commits yet",
+  "加载更多": "Load more",
+  "（无提交信息）": "(no commit message)"
 }

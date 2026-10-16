@@ -487,6 +487,7 @@ pub fn run() {
             commands::git::git_repo_info,
             commands::git::git_status,
             commands::git::git_branches,
+            commands::git::git_log,
             commands::git::git_diff_sides,
             commands::git::git_check_ref_format,
             // 写操作（Rust 侧过只读沙盒门禁，fail-closed）

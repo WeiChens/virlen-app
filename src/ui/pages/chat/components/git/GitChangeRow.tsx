@@ -8,8 +8,9 @@
  * ⚠️ 已暂存的行**不给「丢弃」**（与 VS Code 一致）：丢弃的对象是工作区内容，对已暂存的文件直接丢弃
  * 会留下一个「已暂存但工作区没了」的中间态，用户几乎总是想「先取消暂存再决定」。
  *
- * 行的排布（实测反馈）：**最左是文件类型图标**（`FileTypeIcon`，按扩展名分档），**状态字母到最右**
- * —— 字母贴左时抢的是文件名的位置（列表主要在扫文件名），居右则与那排操作按钮形成同一个「右侧栏」。
+ * 行的排布（实测反馈）：**最左是文件类型图标**（`FileTypeIcon`，按扩展名分档），**状态字母贴最右**
+ * —— 字母贴左会抢文件名的位置（列表主要在扫文件名）；动作排在字母**左侧**、平时 `opacity: 0`
+ * 不显形（占位不撤，所以 hover 时字母不左右跳）。
  *
  * 交互（与资源管理器同口径）：**单击 = 选中**（Ctrl 加减 / Shift 选一段，选中集在 `GitPanel`），
  * **双击才打开差异**。三个动作的 `paths` 由 `GitPanel` 解析好：点在选中集里的行上时它就是
@@ -135,8 +136,6 @@ export const GitChangeRow = observer(function GitChangeRow({
         <span className="git-row-dir">
           {entry.orig_path ? displayPath(entry) : dirName(entry.path)}
         </span>
-        {/* 状态字母居右（图标/文件名在左）—— 右侧与操作按钮同一侧栏，扫文件名时不被字母打断 */}
-        <span className={`git-row-letter s-${letter}`}>{letter}</span>
         {/* 动作排上双击不冒泡：双击「＋」不该顺手把差异弹窗也打开 */}
         <span
           className="git-row-actions"
@@ -183,6 +182,8 @@ export const GitChangeRow = observer(function GitChangeRow({
             </>
           )}
         </span>
+        {/* 状态字母贴最右（图标 / 文件名在左，动作排在其左）—— 扫文件名时不被字母打断 */}
+        <span className={`git-row-letter s-${letter}`}>{letter}</span>
       </div>
       {menu.state && (
         <ContextMenu

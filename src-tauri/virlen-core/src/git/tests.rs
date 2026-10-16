@@ -9,6 +9,7 @@
 
 use super::branch::{self, parse_refs};
 use super::cli::GitCmd;
+use super::log::parse_log;
 use super::status::parse_status;
 use super::{ChangeEntry, DiffScope, EntryKind, HeadInfo, StatusSnapshot, WriteGate};
 use std::path::PathBuf;
@@ -545,6 +546,103 @@ fn porcelain_v2_path_basis_depends_on_z() {
         super::status::status(&sub).unwrap().entries[0].path,
         "top.txt"
     );
+}
+
+// ==================== 三、提交记录（`git log`） ====================
+
+/// `git log -z` 的布局：**NUL 分隔记录**（末尾那个空段要丢掉）、**US 分隔字段**、subject 在末位。
+///
+/// ⚠️ 不带 `-z` 时 git 用换行分隔记录（实测：输出里一个 NUL 都没有）—— 这条用例钉住「必须按 NUL 切」。
+#[test]
+fn parse_log_pins_record_and_field_layout() {
+    let raw = concat!(
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u{1f}aaaaaaa\u{1f}张三\u{1f}z@example.com\u{1f}2026-10-16T10:29:46+08:00\u{1f}fix: 优化 diff\0",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\u{1f}bbbbbbb\u{1f}virlen test\u{1f}t@example.com\u{1f}2026-10-15T18:05:15+08:00\u{1f}feat: 标题里带 \u{1f} 的情况\0",
+    )
+    .as_bytes();
+
+    let list = parse_log(raw);
+    assert_eq!(list.len(), 2, "末尾的 NUL 不该多切出一条空记录");
+    assert_eq!(list[0].oid.len(), 40);
+    assert_eq!(list[0].short_oid, "aaaaaaa");
+    assert_eq!(list[0].author_name, "张三");
+    assert_eq!(list[0].author_email, "z@example.com");
+    assert_eq!(list[0].author_time, "2026-10-16T10:29:46+08:00");
+    assert_eq!(list[0].subject, "fix: 优化 diff");
+    // subject 是唯一的自由文本：里面含 US 也只会留在最后一段（不许把字段数切乱）
+    assert_eq!(list[1].subject, "feat: 标题里带 \u{1f} 的情况");
+    assert_eq!(list[1].author_name, "virlen test");
+
+    // 字段不够的残缺记录直接丢掉（不编造半条记录）
+    assert!(parse_log(b"only-one-field\0").is_empty());
+    assert!(parse_log(b"").is_empty());
+    // 记录首尾的换行要削掉（某些形态下 NUL 后会跟着一个换行），但**空格不许削**
+    // ⚠️ 字节串里只能用 `\x1f`（`\u{…}` 不能出现在字节串里）
+    let padded = b"\ncccccccccccccccccccccccccccccccccccccccc\x1fccccccc\x1fA\x1fa@b.c\x1f2026-01-01T00:00:00+08:00\x1f leading and trailing \r\n";
+    let one = parse_log(padded);
+    assert_eq!(one.len(), 1);
+    assert_eq!(one[0].oid.len(), 40, "记录前的换行必须被削掉");
+    assert_eq!(one[0].subject, " leading and trailing ", "标题首尾的空格是用户真写的");
+}
+
+/// 真仓库：HEAD 最新在前、作者 / 时间 / oid 齐备、分页（`--skip` / `--max-count`）与越界页。
+/// 空仓（unborn HEAD）必须回**空列表而不是错误**（`git log` 在这里以 128 退出）。
+#[test]
+fn log_end_to_end_on_real_repo() {
+    let Some(repo) = TempRepo::new() else { return };
+    let gate = WriteGate::new(true);
+
+    assert!(
+        super::log::log(&repo.path(), 0, 50, None)
+            .unwrap()
+            .is_empty(),
+        "还没有任何提交时应当是空列表（unborn HEAD 不是错误）"
+    );
+
+    for i in 1..=3 {
+        repo.write("a.txt", &format!("line {}\n", i));
+        super::stage::stage(&repo.path(), &gate, &["a.txt".to_string()]).unwrap();
+        super::commit::commit(&repo.path(), &gate, &format!("feat: 第 {} 次提交\n", i)).unwrap();
+    }
+
+    let all = super::log::log(&repo.path(), 0, 50, None).unwrap();
+    assert_eq!(all.len(), 3);
+    assert_eq!(all[0].subject, "feat: 第 3 次提交", "最新的提交必须排在最前");
+    assert_eq!(all[2].subject, "feat: 第 1 次提交");
+    assert_eq!(all[0].author_name, "virlen test");
+    assert_eq!(all[0].author_email, "test@example.com");
+    assert!(
+        all[0].author_time.starts_with("20") && all[0].author_time.contains('T'),
+        "作者时间应是 ISO 8601：{}",
+        all[0].author_time
+    );
+    assert_eq!(all[0].oid.len(), 40);
+    assert!(all[0].oid.starts_with(&all[0].short_oid));
+
+    // 分页：skip = 已经拿过多少条（界面「加载更多」就是把它往前推）
+    let page = super::log::log(&repo.path(), 1, 1, None).unwrap();
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0].subject, "feat: 第 2 次提交");
+
+    // 越界的一页 = 空列表（界面据此收掉「加载更多」），不是错误
+    assert!(super::log::log(&repo.path(), 10, 50, None).unwrap().is_empty());
+    // limit 传 0 也不许把 `--max-count` 变成 0（夹到 1）
+    assert_eq!(super::log::log(&repo.path(), 0, 0, None).unwrap().len(), 1);
+}
+
+/// 路径不变式对读操作同样成立：**仓库子目录**也能拿到同一份提交记录（cwd 统一到仓库根）
+#[test]
+fn log_accepts_subdirectory_workspace() {
+    let Some(repo) = TempRepo::new() else { return };
+    let gate = WriteGate::new(true);
+    repo.write("sub/inner.txt", "inner\n");
+    super::stage::stage(&repo.path(), &gate, &["sub/inner.txt".to_string()]).unwrap();
+    super::commit::commit(&repo.path(), &gate, "init").unwrap();
+
+    let sub = format!("{}/sub", repo.path());
+    let list = super::log::log(&sub, 0, 50, None).unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].subject, "init");
 }
 
 /// 路径不变式的谓词与自检：非仓库根相对路径必须被拒（fail-closed）。

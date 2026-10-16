@@ -21,6 +21,7 @@ import {
   diffSides as invokeDiffSides,
   discard as invokeDiscard,
   isGitEnvAvailable,
+  log as invokeLog,
   repoInfo,
   stage as invokeStage,
   status as fetchStatus,
@@ -28,7 +29,7 @@ import {
   switchBranch as invokeSwitchBranch,
   unstage as invokeUnstage,
 } from '@/infrastructure/git'
-import type { GitDiffScope, GitDiffSides } from '@/domain/git'
+import type { GitCommitLogEntry, GitDiffScope, GitDiffSides } from '@/domain/git'
 import { gitStore } from '@/ui/store/gitStore'
 import { MessageBox as MessagePrompt } from '@/ui/components/shared/MessageBox'
 import { showToast } from '@/ui/components/shared/Toast'
@@ -324,6 +325,26 @@ export function checkRefFormat(name: string): Promise<boolean> {
   const dir = gitStore.dir
   if (!dir) return Promise.resolve(false)
   return invokeCheckRefFormat(dir, name).catch(() => false)
+}
+
+// ==================== 提交记录 ====================
+
+/** 一页提交记录多少条（「加载更多」按它推进 skip；界面靠「拿回的是不是整页」判断还有没有） */
+export const LOG_PAGE_SIZE = 50
+
+/**
+ * 取一页提交记录（`skip` = 已经拿过多少条）。
+ *
+ * 三条口径：
+ * - **不进 `busy`**：读操作不拦写操作（看一眼历史不该把提交按钮锁住）；
+ * - **不写 store**：弹窗自己持有这份列表，关掉即弃 —— 缓存会让「刚提交完再打开」显示旧列表
+ *   （与差异正文同一取舍）；
+ * - **失败抛出**（不 toast）：弹窗自己有位置说清原因，弹窗还没开就给 toast 更没有落点。
+ */
+export async function loadCommits(skip: number): Promise<GitCommitLogEntry[]> {
+  const dir = gitStore.dir
+  if (!dir) throw new Error(t('当前工作目录不是 Git 仓库'))
+  return invokeLog(dir, skip, LOG_PAGE_SIZE, newTaskId('git_log'))
 }
 
 // ==================== 差异 ====================

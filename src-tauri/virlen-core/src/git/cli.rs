@@ -61,6 +61,7 @@ impl GitError {
 }
 
 /// 单次 git 调用的结果。
+#[derive(Debug)]
 pub struct GitOutput {
     pub code: i32,
     /// 原始 stdout 字节（porcelain 输出是 UTF-8；**别按平台代码页解**，§11.1 的坑）

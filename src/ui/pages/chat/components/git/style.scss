@@ -66,22 +66,25 @@
     font-weight: 600;
     color: var(--text-primary, #1a1a1a);
   }
+}
 
-  .git-close {
-    border: none;
-    background: transparent;
-    color: var(--text-secondary, #666);
-    cursor: pointer;
-    font-size: 12px;
-    line-height: 1;
-    width: 22px;
-    height: 22px;
-    border-radius: 5px;
+/* 面板头 / 差异弹窗头 / 提交记录弹窗头共用的关闭按钮 —— **唯一样式源**，挂顶层。
+   同 §11.53 ⑬：共用的小按钮写进某一个语境（如 `.git-head`）里，其它语境那份就掉回浏览器默认样式。 */
+.git-close {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
 
-    &:hover {
-      background: var(--hover-bg, #f0f0f0);
-      color: var(--text-primary, #1a1a1a);
-    }
+  &:hover {
+    background: var(--hover-bg, #f0f0f0);
+    color: var(--text-primary, #1a1a1a);
   }
 }
 
@@ -377,8 +380,8 @@
 
 /* 状态字母（变更行与差异弹窗左侧清单**共用**）—— 与 `.git-row-btn` 同理：两个语境就得挂顶层，
    写进 `.git-row` 作用域，弹窗清单那份就掉回默认文字色。
-   位置在行**最右**（图标在左，见 `GitChangeRow` 头注释）：它右侧只剩 hover 才显形的动作排，
-   平时那颗字母就是行尾。
+   位置在行**最右**（图标 / 文件名在左，见 `GitChangeRow` 头注释）：**动作排在其左**、平时
+   `opacity: 0` 不显形（占位不撤，所以字母不会随 hover 左右跳）—— 扫文件名时不被字母打断。
    VS Code 同款语义色：改=橙、增=绿、删=红、冲突=红、未跟踪=绿。
    颜色一律走主题里**真实定义**了的「文字档」令牌（亮 #b45309 / 暗 #f9e2af …）——
    原先写的 `--warning-color` / `--success-color` / `--danger-color` 三个名字全项目从未定义，
@@ -391,8 +394,6 @@
   text-align: center;
   font-size: var(--font-size-sm, 12px);
   font-weight: 700;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-
   &.s-M { color: var(--color-warning-text, #b45309); }
   &.s-A { color: var(--color-success-text, #2e7d32); }
   &.s-\? { color: var(--color-success-text, #2e7d32); }
@@ -407,9 +408,10 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 3px 4px;
-  border-radius: 5px;
+  padding: 1px 4px;
+  border-radius: 3px;
   cursor: pointer;
+  user-select: none;
 
   &:hover {
     background: var(--hover-bg, #f0f0f0);
@@ -428,7 +430,6 @@
      只靠底色在暗色主题里不够显眼，选中 / 未选中要一眼分得开 */
   &.selected {
     background: color-mix(in srgb, var(--primary-color, #3b6ef6) 14%, transparent);
-    box-shadow: inset 2px 0 0 var(--primary-color, #3b6ef6);
   }
 
   .git-row-name {
@@ -632,8 +633,16 @@
       color: var(--text-primary, #1a1a1a);
     }
 
-    .git-diff-scope {
-      flex: none;
+    /* 头部提示（今天只有「文件过大，仅显示前 N 个字符」那一条；原来这里那颗「基准」胶囊已取消 ——
+       见 GitDiffModal 口径 6）。
+       `flex: 0 1 auto` + `min-width: 0`：窄窗口下先让路径（`flex: 1` + 省略号）让位；
+       真挤到这条时也是省略号，而不是把整行顶出容器 */
+    .git-diff-note {
+      flex: 0 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
       padding: 1px 8px;
       border-radius: 999px;
       background: var(--bg-secondary, #f7f7f8);
@@ -666,23 +675,6 @@
       &:disabled {
         opacity: 0.5;
         cursor: not-allowed;
-      }
-    }
-
-    .git-close {
-      border: none;
-      background: transparent;
-      color: var(--text-secondary, #666);
-      cursor: pointer;
-      font-size: 13px;
-      line-height: 1;
-      width: 24px;
-      height: 24px;
-      border-radius: 5px;
-
-      &:hover {
-        background: var(--hover-bg, #f0f0f0);
-        color: var(--text-primary, #1a1a1a);
       }
     }
   }
@@ -773,12 +765,13 @@
     }
   }
 
-  /* 正文容器：SideBySideDiff 自己管滚动，这里只负责占满剩余高度 */
+  /* 正文容器：正文自己管滚动（SideBySideDiff / MonacoDiffView），这里只负责占满剩余高度 */
   .git-diff-body {
     flex: 1;
     min-width: 0;
     min-height: 0;
     overflow: auto;
+    position: relative;
 
     /* 弹窗里不画文件头（路径已在弹窗头、全屏按钮也没意义，见 GitDiffModal），差异本体直接铺满 ——
        高度由弹窗决定，所以栏不再受 450px 限制（否则 780px 高的弹窗里只有 450px 在显示内容），
@@ -800,9 +793,165 @@
         }
       }
     }
+
+    /* Monaco 正文（两侧都有内容 = 两栏；只有一侧有内容 = 单栏）。
+       ⚠️ 结构规则（grid / 列头跨列 / 那条「外层滚动条疯狂闪动」回路的解药）**只定义在一处**：
+       `message/MonacoDiffView.scss` —— 聊天里的 `edit_file` 消息也用同一份组件。
+       这里只负责「高度从哪来」：高度由弹窗给（铺满剩余高度），组件那边不传 `autoHeight`。 */
+    > .git-mono-diff {
+      height: 100%;
+    }
   }
 
   .git-diff-message {
+    padding: 28px 16px;
+    text-align: center;
+    font-size: var(--font-size-sm, 12px);
+    color: var(--text-secondary, #666);
+
+    &.error {
+      color: var(--color-error, #dc2626);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+  }
+}
+
+/* 提交记录弹窗（portal 到 body，与差异弹窗**共用那层遮罩** `.git-diff-backdrop`：
+   让开自绘标题栏那一条约束只有一处，别再写第二份）。
+   一行 = 一条提交：标题在左（可伸可缩），**时间 / 作者 / 短 hash** 在右（固定不缩）——
+   列表要能上下扫，右侧那三列就必须对齐。 */
+.git-log-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  height: min(560px, 100%);
+  border-radius: 12px;
+  background: var(--bg-primary, #fff);
+  overflow: hidden;
+  box-shadow: 0 24px 64px rgba(16, 24, 40, 0.3);
+
+  /* 打开时会被 .focus()（Tab / 读屏有个起点），容器自己不要那一圈焦点环 */
+  &:focus {
+    outline: none;
+  }
+
+  .git-log-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color, #e5e5e5);
+
+    .git-log-title {
+      font-size: var(--font-size-sm, 12px);
+      font-weight: 600;
+      color: var(--text-primary, #1a1a1a);
+    }
+  }
+
+  .git-log-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 4px 6px 8px;
+  }
+
+  .git-log-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 5px 6px;
+    border-radius: 5px;
+
+    &:hover {
+      background: var(--hover-bg, #f0f0f0);
+    }
+
+    .git-log-subject {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: var(--font-size-sm, 12px);
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    .git-log-meta {
+      flex: none;
+      display: inline-flex;
+      align-items: baseline;
+      gap: 10px;
+      font-size: var(--font-size-xs, 11px);
+      color: var(--text-secondary, #666);
+
+      .git-log-author {
+        /* 名字仍在用户自定宽区里：**右边界**被定宽的时间列挂住 → 名字整体右对齐到时间列，不逐行浮动。
+           过长的名字截断（悬停给「名字 <邮箱>」），不把提交信息挤没 */
+        max-width: 120px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      /* 定宽 + 右对齐 + 等宽数字：`刚刚` 与 `2026-10-09 00:53` 右端对齐，成为一列真列。
+         100px 要容下最长的那种文案（16 字符，11px 下约 85–95px；字号设置最大档 12px 也在内）。
+         ⚠️ 它不只是好看不好看：不定宽时相对 / 绝对两种文案的宽度差会让**行内右侧三列的左边界逐行浮动**
+         （用户名看上去参差不齐），定宽后用户名的右边界被时间列挂住、与 hash 列一起上下对齐。
+         ⚠️ 不引自定义属性（`--git-log-time-w`）：`git-panel-style-contract` 要求面板里引用的每个主题令牌
+         都在 `theme.scss` 里定义，而它是**按源码文本**扫的（连注释里举例写的令牌名也算一处引用）——
+         本宽度只用这一处，直接写字面量。 */
+      .git-log-time {
+        flex: none;
+        width: 100px;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+
+      /* hash 用等宽字体（字母数字容易被读错），颜色仍走次要文字色 —— 它是佐证，不是主角。
+         ⚠️ 字体栈写字面量：主题里**没有** --font-mono 这个令牌，引用一个不存在的令牌只会
+         让 fallback 永远生效（§11.53 ⑭）。 */
+      .git-log-hash {
+        flex: none;
+        font-family: Consolas, 'Courier New', monospace;
+        font-size: var(--font-size-xs, 11px);
+      }
+    }
+  }
+
+  /* 「加载更多」贴列表底部居中（它是这一页的边界，不是某一行的一部分） */
+  .git-log-more {
+    display: block;
+    margin: 6px auto 2px;
+    padding: 4px 14px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 6px;
+    background: var(--bg-secondary, #f7f7f8);
+    color: var(--text-primary, #1a1a1a);
+    font: inherit;
+    font-size: var(--font-size-xs, 11px);
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      border-color: var(--primary-color, #3b6ef6);
+      color: var(--primary-color, #3b6ef6);
+    }
+
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 1px;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+
+  .git-log-message {
     padding: 28px 16px;
     text-align: center;
     font-size: var(--font-size-sm, 12px);

@@ -10,6 +10,11 @@ export default defineConfig(async () => ({
   resolve: {
     alias: {
       '@': '/src',
+      // ⚠️ Monaco 的 codicon 图标字体（见 `src/monaco/setupMonaco.ts` 的文件头）：包的 `exports`
+      // 把**任意子路径**重写成 `esm/vs/*.js`，所以磁盘上那份 `.../codicon.css` 解析不到
+      // （实测直接引 = 构建期 failed to resolve），只能用别名落到这一份。
+      '@mono-codicon':
+        '/node_modules/monaco-editor/esm/vs/base/browser/ui/codicons/codicon',
     },
   },
   optimizeDeps: {

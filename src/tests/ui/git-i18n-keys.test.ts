@@ -23,6 +23,11 @@ const FILES = [
   'src/ui/pages/chat/components/git/GitChangeRow.tsx',
   'src/ui/pages/chat/components/git/GitBranchMenu.tsx',
   'src/ui/pages/chat/components/git/GitDiffModal.tsx',
+  'src/ui/pages/chat/components/git/GitLogModal.tsx',
+  // 差异正文（复制 / 全选那套菜单文案就在它里面；现在住在 message/ 下，两处共用）
+  'src/ui/pages/chat/components/message/MonacoDiffView.tsx',
+  // 聊天里 edit_file 的差异输入适配层（在它里面）
+  'src/ui/pages/chat/components/tool-call/EditFileMessage.tsx',
   'src/ui/pages/chat/components/git/sections.ts',
 ]
 

@@ -11,13 +11,25 @@ import { AUTO_CENTER_DELAY_MS } from '@/ui/hooks/useAutoCenter'
  *   - 曾经 `useAutoCenter()` 被写在 EditFileMessage 的**类方法** `renderExpandView` 里（且有早退分支），
  *     属于条件调用 hook。实测会让 React 内部记账错乱（console.error 打出
  *     `Internal React error: Expected static flag was missing`）并重复触发 effect；
- *   - 正确做法是 hook 只在**组件顶层**无条件调用（现在是 SideBySideDiff / CodeBlock 的 `autoCenter`），
+ *   - 正确做法是 hook 只在**组件顶层**无条件调用（现在是 `MonacoDiffView` / `CodeBlock` 的 `autoCenter`），
  *     由「用户展开」这一步驱动。
  * 因此这里同时断言：① 不出现任何 React 内部报错；② 每次展开只居中一次。
  */
 
 // Monaco 在 jsdom 里跑不起来（缺 CSS.escape 等浏览器 API）：本用例只关心「何时居中」，
-// 词法着色不在此测 —— 与 side-by-side-diff.test.tsx 同一套替身。
+// 词法着色 / 差异计算不在此测 —— 差异正文（`MonacoDiffView`）那两条路都换成替身。
+// ⚠️ 换成真组件的话，`@monaco-editor/react` 的 loader 会去加载 monaco（走 CDN）→ 控制台报错，
+// 而本用例恰好断言「控制台没有 React 内部报错」。
+vi.mock('@monaco-editor/react', () => {
+  const Stub = () => <div className="mono-stub" />
+  return {
+    default: Stub,
+    Editor: Stub,
+    DiffEditor: Stub,
+    loader: { config: () => {} },
+  }
+})
+
 vi.mock('@/monaco/setupMonaco', () => ({
   monaco: { editor: { tokenize: (): unknown[] => [] } },
   virlenDarkTheme: { rules: [] as unknown[] },

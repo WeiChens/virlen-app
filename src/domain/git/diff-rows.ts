@@ -10,7 +10,11 @@
  *    改动行前后到底有多少未改动行，用户自己看得到；
  * 3. **单侧判定**（[`singleSideOf`]）：只有一侧有内容时，另一栏整栏不画。
  *
- * ⚠️ 这与「取内容」那一侧是成对的契约：Rust `git/diff.rs::to_text` 的空侧必须是 `None`
+ * ⚠️ `gitDiffRows` 目前**没有生产调用方**：差异弹窗的正文已改成 Monaco（见 §11.53 ㉙）——
+ * 两栏形态直接拿两侧全文，单侧形态由 Monaco 的整行装饰上色，都不必先比成行。它与 `buildDiffRows`
+ * 一起由 `src/tests/domain/git-diff-rows.test.ts` 看着，留着是为了行模型本身（聊天内联 diff 仍在用）。
+ *
+ * ⚠️ 与「取内容」那一侧是成对的契约：Rust `git/diff.rs::to_text` 的空侧必须是 `None`
  * 而不是 `Some("")`，否则单侧判定失效（用例 `diff_sides_deleted_file_leaves_new_side_empty`）。
  */
 import { buildDiffRows, type DiffRow } from '@/utils/diff'
@@ -19,7 +23,8 @@ import type { GitDiffSides } from './types'
 /**
  * 两侧文本 → 可渲染的行（含行内字符级片段）。行号从 1 起，与 git 的行号口径一致。
  *
- * 复用既有视图（`SideBySideDiff`）：「左右对比」在本项目只有一份实现，git 差异不另起一套。
+ * 行模型是 `utils/diff` 的那一套（「左右对比」在本项目只有一份实现，`SideBySideDiff` 消费它）。
+ * ⚠️ git 差异弹窗已不再调用它（正文换成 Monaco，见 §11.53 ㉙）—— 保留的理由见文件头。
  */
 export function gitDiffRows(sides: GitDiffSides): DiffRow[] {
   return buildDiffRows(sides.old_text, sides.new_text, 1)

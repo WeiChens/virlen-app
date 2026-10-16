@@ -15,7 +15,8 @@ use serde_json::json;
 use std::sync::Arc;
 use virlen_core::git::cli::GitError;
 use virlen_core::git::{
-    BranchInfo, CommitResult, DiffScope, DiffSides, RepoInfo, StatusSnapshot, WriteGate,
+    BranchInfo, CommitLogEntry, CommitResult, DiffScope, DiffSides, RepoInfo, StatusSnapshot,
+    WriteGate,
 };
 use virlen_core::session_db::SettingsRepo;
 
@@ -73,6 +74,23 @@ pub async fn git_status(dir: String, task_id: String) -> Result<StatusSnapshot, 
 #[tauri::command]
 pub async fn git_branches(dir: String) -> Result<Vec<BranchInfo>, String> {
     blocking("branches", move || virlen_core::git::branch::list(&dir)).await
+}
+
+/// 提交记录（从 HEAD 往回；`skip` 由界面「加载更多」推进，Rust 侧不缓存）
+#[tauri::command]
+pub async fn git_log(
+    dir: String,
+    skip: u32,
+    limit: u32,
+    task_id: String,
+) -> Result<Vec<CommitLogEntry>, String> {
+    let cancel = crate::task_manager::register(&task_id);
+    let result = blocking("log", move || {
+        virlen_core::git::log::log(&dir, skip, limit, Some(&cancel))
+    })
+    .await;
+    crate::task_manager::unregister(&task_id);
+    result
 }
 
 /// 一条路径在某个对比基准下的两侧内容（差异视图的数据源）

@@ -5,12 +5,13 @@ import { IToolCallMessage, ToolMessageProps } from './IToolCallMessage'
 import {
   buildDiffRows,
   diffStats,
+  NL_MARK,
   normalizeDiffRows,
   type DiffRow,
 } from '@/utils/diff'
 import { diffLines } from 'diff'
 import CodeBlock from '../message/code-block'
-import { SideBySideDiff } from '../message/SideBySideDiff'
+import { MonacoDiffView } from '../message/MonacoDiffView'
 import type { SideBySideRow } from '../message/SideBySideDiff'
 import { editorService } from '@/services/editor-service'
 import { openPath } from '@tauri-apps/plugin-opener'
@@ -113,6 +114,86 @@ function mergeEditRows(edits: EditUiRecord[]): SideBySideRow[] {
     }
   }
   return result
+}
+
+/**
+ * 「工具根本没给那段内容」的占位行（DOM 版的 `⋯` 行）：**两侧都插** —— 两边相同才会被 Monaco
+ * 当成未改动行，既保住「不相邻的两段不伪装成连续」，也不会被算成一处差异。
+ */
+const GAP_PLACEHOLDER = '⋯'
+
+interface FoldedSide {
+  lines: string[]
+  /** 每一行的**文件绝对行号**（`null` = 占位行，不给行号） */
+  numbers: (number | null)[]
+}
+
+/**
+ * 把行模型折回「一侧的文本行 + 逐行行号」。
+ *
+ * ⚠️ 两处容易做错（都只能靠这里的代码表达，Monaco 看不到行模型）：
+ * 1. `lineNo == null` 的行是**续行**（`utils/diff::buildGroupRows` 的口径：上面那一行还没结束，因为
+ *    另一侧在那里断了行）—— 必须接在上一行后面、**不能换行**；当成新行会凭空多出一行，
+ *    Monaco 会把它显示成一处新增/删除；
+ * 2. 换行标记 `↵`（`NL_MARK`）是**展示标记**，不进文本 —— 去掉它就等于还原那个换行本身。
+ *    （这里比 `SideBySideDiff::diffSideText` 多一步续行处理，所以不复用那一份。）
+ */
+function foldSide(rows: SideBySideRow[], side: 'old' | 'new'): FoldedSide {
+  const lines: string[] = []
+  const numbers: (number | null)[] = []
+  for (const row of rows) {
+    if (row.type === 'gap') {
+      lines.push(GAP_PLACEHOLDER)
+      numbers.push(null)
+      continue
+    }
+    const parts = side === 'old' ? row.left : row.right
+    // 这一侧本来就没有这一行（新增行的左半 / 删除行的右半）
+    if (parts.length === 0) continue
+    const text = parts.map((p) => (p.value === NL_MARK ? '' : p.value)).join('')
+    const lineNo = side === 'old' ? row.leftLineNo : row.rightLineNo
+    if (lineNo == null && lines.length > 0) {
+      lines[lines.length - 1] += text
+      continue
+    }
+    lines.push(text)
+    numbers.push(lineNo)
+  }
+  return { lines, numbers }
+}
+
+/** 逐行行号映射：合成文本的第 N 行 → 文件里的绝对行号（占位行给空串，不编号） */
+function numberMapper(side: FoldedSide) {
+  return (line: number): string => {
+    const no = side.numbers[line - 1]
+    return no == null ? '' : String(no)
+  }
+}
+
+/**
+ * 行模型 → `MonacoDiffView` 的输入（字段名与它的 props 对齐，调用处直接展开）。
+ *
+ * 为什么需要这一层：Monaco 只接受**两份全文**，而 `edit_file` 手里只有每次编辑的片段（还可能有行号
+ * 跳跃）—— 折回文本后才能交给它算差异。
+ *
+ * `colHeaderNote` 只在行号**首尾连续**时给 `Ln a–b`：多处编辑合并后（或中间有省略行）行号会跳，
+ * 写一个区间反而误导（与 DOM 版「多编辑不显示区间」同口径）；不连续时给 `null` = 不显示。
+ */
+export function toMonacoDiffInput(rows: SideBySideRow[]) {
+  const old = foldSide(rows, 'old')
+  const nw = foldSide(rows, 'new')
+  const note = (side: FoldedSide): string | null => {
+    const known = side.numbers.filter((n): n is number => n != null)
+    if (known.length === 0) return null
+    const contiguous = known.every((n, i) => i === 0 || n === known[i - 1] + 1)
+    return contiguous ? `Ln ${known[0]}–${known[known.length - 1]}` : null
+  }
+  return {
+    oldText: old.lines.join('\n'),
+    newText: nw.lines.join('\n'),
+    lineNumbers: { old: numberMapper(old), new: numberMapper(nw) },
+    colHeaderNote: { old: note(old), new: note(nw) },
+  }
 }
 
 class EditFileMessage implements IToolCallMessage {
@@ -244,15 +325,15 @@ class EditFileMessage implements IToolCallMessage {
       const diffRows: SideBySideRow[] = multi
         ? mergeEditRows(edits)
         : resolveEditRows(edits[0])
-      const stat = multi ? sumEditStats(edits) : null
 
       return (
-        <div className="diff-wrapper">
-          <SideBySideDiff
+        <div className="diff-mono-wrapper">
+          <MonacoDiffView
             autoCenter
-            diffRows={diffRows}
+            autoHeight
+            showHeader
             fileName={name}
-            stat={stat ?? undefined}
+            {...toMonacoDiffInput(diffRows)}
             actions={[
               {
                 title: t('文件资源管理器打开'),
@@ -295,20 +376,22 @@ class EditFileMessage implements IToolCallMessage {
 
     if (uiData?.oldStartLine) {
       const filePath = uiData?.fullPath || path
+      // 同一份行模型：存过的按老口径归一，没存过才现场算
+      const rows = uiData.diffRows
+        ? normalizeDiffRows(uiData.diffRows)
+        : buildDiffRows(
+            uiData.oldString ?? old_string ?? '',
+            uiData.newString ?? new_string ?? '',
+            uiData.oldStartLine,
+          )
       return (
-        <div className="diff-wrapper">
-          <SideBySideDiff
+        <div className="diff-mono-wrapper">
+          <MonacoDiffView
             autoCenter
-            diffRows={
-              uiData.diffRows
-                ? normalizeDiffRows(uiData.diffRows)
-                : buildDiffRows(
-                    uiData.oldString ?? old_string ?? '',
-                    uiData.newString ?? new_string ?? '',
-                    uiData.oldStartLine,
-                  )
-            }
+            autoHeight
+            showHeader
             fileName={name}
+            {...toMonacoDiffInput(rows)}
             actions={[
               {
                 title: t('文件资源管理器打开'),

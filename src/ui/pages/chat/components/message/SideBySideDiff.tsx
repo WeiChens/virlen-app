@@ -19,8 +19,9 @@ import './SideBySideDiff.scss'
 /**
  * SideBySideDiff —— 「原文件 / 新文件」左右对比视图（含词法着色与全屏）。
  *
- * 行数据由调用方准备（edit_file 把多处编辑合并成行是它的 uiData 结构知识；git 差异弹窗用
- * `domain/git/gitDiffRows`），本组件只负责「给什么行就画什么行」。行模型见 `utils/diff`：
+ * 行数据由调用方准备（`edit_file` 把多处编辑合并成行是它的 uiData 结构知识；git 差异弹窗**曾经**用
+ * `domain/git/gitDiffRows`，现已改走 Monaco，见 §11.53 ㉙），本组件只负责「给什么行就画什么行」。
+ * 行模型见 `utils/diff`：
  * 每侧是一串**行内片段**（`equal` / `removed` / `added`），改动行因此有行内高亮而不是整行一色。
  *
  * `showHeader={false}` 用于调用方**自己已经有标题栏**的场景（git 差异弹窗）：文件头（文件名 +
@@ -28,6 +29,8 @@ import './SideBySideDiff.scss'
  *
  * `singleSide` 用于**只有一侧有内容**的场景（git 里的新增 / 删除 / 未合并）：只画有内容的那一栏，
  * 另一栏连表头一起不画（留半栏空白既占宽度，又让人以为「另一侧是空的」是内容问题）。
+ * ⚠️ 它今天**没有生产调用方**（git 差异弹窗的单栏形态也改由 `MonacoDiffView` 画，见 §11.53 ㉙）；
+ * 保留是因为这是一套已测的 DOM 形态，删它要同时动视图、`is-single` 样式与用例。
  */
 
 /** SideBySideDiff 可渲染的行：普通 diff 行 + 多处编辑之间的省略间隔行（`gap` 只由视图层插） */
@@ -139,8 +142,8 @@ function DiffCode({
   return <>{nodes}</>
 }
 
-/** 根据文件名推断 Monaco language id（复用 code-block 的语言映射） */
-function diffLanguageFromName(fileName: string | null): string | undefined {
+/** 根据文件名推断 Monaco language id（复用 code-block 的语言映射）；git 差异弹窗的 Monaco 视图也用它 */
+export function diffLanguageFromName(fileName: string | null): string | undefined {
   const base = (fileName || '').split(/[\\/]/).pop() || ''
   const dot = base.lastIndexOf('.')
   const ext = dot > 0 ? base.slice(dot + 1) : base

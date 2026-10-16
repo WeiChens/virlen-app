@@ -6,13 +6,29 @@
  * 产物里就会出现 ts.worker.js / css.worker.js 等文件。
  *
  * 而一个“只读预览”只需要：
- *   1. 编辑器本体：editor.api.js（standalone 编辑器，自带 CodeEditorWidget）
+ *   1. 编辑器本体：editor.api.js（standalone 编辑器，自带 CodeEditorWidget 与 DiffEditorWidget）
  *   2. 各语言的 Monarch tokenizer：纯正则“切词”着色，零语言服务、零 worker
+ *   3. 通用 editor worker：**只有**差异计算要它（git 差异弹窗的 diff 编辑器，见 MonacoDiffView）
+ *   4. codicon 图标字体：find 小组件的按钮、diff 的展开箭头都要它（一份 141 KB 的 ttf，**得自己引**）
  *
- * 因此产物中不再出现任何语言服务的 worker，体积也更小。
+ * 因此产物中不再出现任何**语言服务**的 worker（ts.worker.js / css.worker.js 之类），体积也更小。
  */
 import { loader } from '@monaco-editor/react'
 import * as monaco from 'monaco-editor/editor/editor.api.js'
+
+/**
+ * codicon 图标字体 —— **精简构建必须自己引这一份**，否则界面上是一个个豆腐块（实测反馈）。
+ *
+ * 图标本体是 Monaco 主题样式表按图标注册表生成的**字符**（`.codicon-history:before { content: '\ea82' }`，
+ * 一直会注入，所以看起来“图标规则都在”），而那些字符靠 `codicon.css` 里这两条才长得像图标：
+ * `@font-face { font-family: 'codicon' }` 与 `.codicon[class*='codicon-'] { font: 16px/1 codicon }`。
+ * ⚠️ 这两条只被**完整入口**（`editor.main.js` / `vs/index.js`）引，`editor.api.js` 这条链没有它
+ * —— 实测未引时产物里连 `codicon` 这个词都不存在（见 `docs/agents/14-git-management.md` §11.53 ㉞）。
+ */
+// ⚠️ 只能经别名引：包的 `exports` 把任意子路径重写成 `esm/vs/*.js`（别名见 `vite.config.ts`）
+import '@mono-codicon/codicon.css'
+// 通用 editor worker（差异计算用）；子入口写法与 editor.api.js 同理（见 monacoInternal.d.ts）
+import EditorWorker from 'monaco-editor/editor/editor.worker.js?worker'
 
 // ── Monarch 词法定义（conf=语言配置 / language=tokenizer，纯高亮）──
 import { conf as tsConf, language as tsLanguage } from 'monaco-editor/languages/definitions/typescript/typescript.js'
@@ -252,11 +268,44 @@ export const virlenDarkTheme: monaco.editor.IStandaloneThemeData = {
     'editorBracketHighlight.background4': '#00000000',
     'editorBracketHighlight.background5': '#00000000',
     'editorBracketHighlight.background6': '#00000000',
+
+    // 差异配色（git 差异弹窗 / 聊天里 `edit_file` 的 Monaco diff 编辑器）：与 DOM 版（`SideBySideDiff.scss`
+    // 与 `theme.scss` 的 `--diff-*`）是同一套色阶：行底 #2a1515 / #152a15、行号栏 #3a2020 / #203a20、
+    // 行内字符级 #5c2626 / #265c2a。
+    //
+    // ⚠️ 这六个值都是**半透明**（`#RRGGBBAA`，A=80 ≈ 50%），不是笔误：Monaco 把选区画在改动底色
+    // **下面**（0.56 `view.js`：`.lines-content` 先 append 选区所在的 `contentViewOverlays`、再 append
+    // 承载改动底色的 `viewLines`，两者都 z-auto → DOM 序就是绘制序），所以**不透明的改动底色会把
+    // 选区整个盖掉** —— 表现就是实测反馈的「在改动行里选中文本，看不到选中效果」。半透明让两层叠着走，
+    // 与浏览器里 DOM 版（`::selection` 画在底色之上）观感一致。
+    //
+    // 源色是按「合成后仍等于原来那个不透明色」反推的（底下那层：正文区 = `editor.background`、
+    // 行号栏 = `editorGutter.background`、字符级底下 = 自己那一行的行底色）：
+    //     源色 = (设计色 − (1 − A) × 底下那层) / A
+    // 改这几个底色（或改 editor.background / editorGutter.background）时要一起重算 ——
+    // `src/tests/ui/monaco-diff-theme.test.ts` 把这条不变式钉住了。
+    'diffEditor.removedLineBackground': '#2c000080', // 合成后 ≈ #2a1515
+    'diffEditor.insertedLineBackground': '#02280080', // 合成后 ≈ #152a15
+    'diffEditor.removedTextBackground': '#8e373280', // 合成后 ≈ #5c2626
+    'diffEditor.insertedTextBackground': '#378e3a80', // 合成后 ≈ #265c2a
+    'diffEditorGutter.removedLineBackground': '#531b1580', // 合成后 ≈ #3a2020
+    'diffEditorGutter.insertedLineBackground': '#1f4f1580', // 合成后 ≈ #203a20
+    'diffEditor.border': '#181a1f',
   },
 }
 
 // 注册 One Dark 主题（HMR 重复执行 defineTheme 也会安全覆盖，无需判重）
 monaco.editor.defineTheme('virlen-dark', virlenDarkTheme)
+
+// ── 通用 editor worker ──
+// diff 编辑器算差异走 `editorWorkerService.computeDiff`，默认要在 worker 里跑；不配这一段 monaco 会
+// **静默回退主线程**（`editorWorkerService.js::_createFallbackLocalWorker` + 一次性告警），大文件的
+// 差异计算会卡住 UI —— 那正是改用 Monaco 要避开的东西。
+// ⚠️ 与上面「精简构建」不冲突：只有通用 editor worker，语言服务（ts/css/html/json）的 worker 仍然
+// 不进产物。它单独成一个 chunk、真需要时才加载；加载失败也不会崩，monaco 自己会回退到主线程那一路。
+;(globalThis as unknown as { MonacoEnvironment?: unknown }).MonacoEnvironment = {
+  getWorker: () => new EditorWorker(),
+}
 
 // 让 @monaco-editor/react 使用这份精简版 monaco 实例
 loader.config({ monaco } as Parameters<typeof loader.config>[0])
