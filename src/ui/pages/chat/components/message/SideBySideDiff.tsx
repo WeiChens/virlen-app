@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { t } from '@/ui/i18n'
-import type { DiffRow } from '@/utils/diff'
+import { NL_MARK, maxDiffWidthCh, type DiffRow } from '@/utils/diff'
 import { copyText } from '@/utils/clipboard'
 import { showToast } from '@/ui/components/shared/Toast'
 import ContextMenu, {
@@ -20,13 +20,17 @@ import './SideBySideDiff.scss'
  * SideBySideDiff —— 「原文件 / 新文件」左右对比视图（含词法着色与全屏）。
  *
  * 行数据由调用方准备（edit_file 把多处编辑合并成行是它的 uiData 结构知识；git 差异弹窗用
- * `domain/git/diff-rows`），本组件只负责「给什么行就画什么行」。
+ * `domain/git/gitDiffRows`），本组件只负责「给什么行就画什么行」。行模型见 `utils/diff`：
+ * 每侧是一串**行内片段**（`equal` / `removed` / `added`），改动行因此有行内高亮而不是整行一色。
  *
  * `showHeader={false}` 用于调用方**自己已经有标题栏**的场景（git 差异弹窗）：文件头（文件名 +
  * 全屏按钮 + 自定义动作）整块不画 —— 同一句路径不该在弹窗里出现两次，而且那条布局里也不该再套全屏。
+ *
+ * `singleSide` 用于**只有一侧有内容**的场景（git 里的新增 / 删除 / 未合并）：只画有内容的那一栏，
+ * 另一栏连表头一起不画（留半栏空白既占宽度，又让人以为「另一侧是空的」是内容问题）。
  */
 
-/** SideBySideDiff 可渲染的行：普通 diff 行 + 多处编辑之间的省略间隔行 */
+/** SideBySideDiff 可渲染的行：普通 diff 行 + 多处编辑之间的省略间隔行（`gap` 只由视图层插） */
 export type SideBySideRow =
   | DiffRow
   | {
@@ -63,10 +67,22 @@ function tokenizeDiffLine(line: string, language: string): DiffToken[] {
   return tokens
 }
 
-/** 按主题规则匹配 token 颜色（越具体的规则优先级越高） */
+/**
+ * token 类型 → 颜色。**必须按类型记忆**：整个主题表有 40 条规则，逐个 token 线性扫一遍在
+ * 大文件上是一笔真开销（实测 10 万个 token：50ms → 1.3ms）。键是 Monarch 给出的 token 类型，
+ * 取值集合很小且封闭（几十个），不需要淘汰。
+ */
+const _tokenStyleCache = new Map<
+  string,
+  { color?: string; fontStyle?: string }
+>()
+
+/** 按主题规则匹配 token 颜色（越具体的规则优先级越高）；结果按 token 类型记忆 */
 function diffTokenStyle(
   tokenType: string,
 ): { color?: string; fontStyle?: string } {
+  const hit = _tokenStyleCache.get(tokenType)
+  if (hit) return hit
   let best: (typeof virlenDarkTheme.rules)[number] | undefined
   let bestDepth = -1
   for (const rule of virlenDarkTheme.rules) {
@@ -80,7 +96,9 @@ function diffTokenStyle(
       }
     }
   }
-  return { color: best?.foreground, fontStyle: best?.fontStyle }
+  const style = { color: best?.foreground, fontStyle: best?.fontStyle }
+  _tokenStyleCache.set(tokenType, style)
+  return style
 }
 
 /** 单行代码用 virlen-dark 主题上色（无语言时按纯文本输出） */
@@ -130,28 +148,32 @@ function diffLanguageFromName(fileName: string | null): string | undefined {
 }
 
 /** diff 的一栏：左=原文件 / 右=新文件 */
-type DiffSide = 'old' | 'new'
+export type DiffSide = 'old' | 'new'
 
 /**
- * 某一栏的纯文本（左栏不含新增行、右栏不含删除行，与 DiffHalf 的取值口径一致）。
+ * 某一栏的纯文本（这一侧没有内容的行不计入）。
  * 菜单的「全选 → 复制」用它，而不是把 DOM 选区序列化一遍 —— 后者会把行号一起拼进去
  *（`Range.toString()` 不认 `user-select: none`）。
+ *
+ * ⚠️ 换行标记 `↵` 是**展示标记**，不进剪贴板：复制出来的是真实内容。
  */
 function diffSideText(rows: SideBySideRow[], side: DiffSide): string {
-  const key = side === 'old' ? 'oldLine' : 'newLine'
   const lines: string[] = []
   for (const row of rows) {
     if (row.type === 'gap') continue
-    if (side === 'old' && row.type === 'insert') continue
-    if (side === 'new' && row.type === 'delete') continue
-    lines.push(row[key] ?? '')
+    const parts = side === 'old' ? row.left : row.right
+    // 单侧行：这一侧本来就没有这一行（新增行的左半 / 删除行的右半）
+    if (parts.length === 0) continue
+    lines.push(
+      parts.map((part) => (part.value === NL_MARK ? '' : part.value)).join(''),
+    )
   }
   return lines.join('\n')
 }
 
 /**
  * 节点落在哪一栏（右键落点、选区起点都可能在其中）；两栏之外（文件头等）返回 null。
- * 双栏表头的两个格子也带 --old / --new，右键表头一样能看出意图。
+ * 两栏各自的列头也带 --old / --new，右键表头一样能看出意图。
  */
 function diffSideOf(node: Node | null): DiffSide | null {
   let el = node instanceof Element ? node : (node?.parentElement ?? null)
@@ -174,46 +196,35 @@ function diffSideOf(node: Node | null): DiffSide | null {
 }
 
 /**
- * 一行里的其中一半（左半=原文件 / 右半=新文件）：两半是**同一个 grid 行的两个格子**，所以
- * 两侧列宽天然各占一半（不必量宽），且一侧折行时另一侧跟着变高，左右不会逐行错位。
- *
- * 格子位置一律靠内联 grid-column / grid-row 指定，不吃 DOM 顺序（理由见 DiffContent 的渲染注释）。
+ * 一行里的其中一半（左半进左栏 / 右半进右栏）。两栏的行按序号一一对应，行高由行盒决定
+ * （两栏同款样式 → 高度相等，见 SideBySideDiff.scss 的 .diff-line）。
  */
 function DiffHalf({
   side,
   row,
-  rowIndex,
   language,
 }: {
   side: 'old' | 'new'
   row: SideBySideRow
-  /** 该行在 diffRows 里的下标：决定落在第几个 grid 行（表头占第 1 行，故 +2） */
-  rowIndex: number
   language?: string
 }) {
   const isOld = side === 'old'
 
-  // 左半恒第 1 列、右半恒第 2 列；同一 rowIndex 的两半落在同一 grid 行
-  const place: React.CSSProperties = {
-    gridColumn: isOld ? 1 : 2,
-    gridRow: rowIndex + 2,
-  }
-
   // 多处编辑之间的省略间隔行：两侧各画一个 ⋯（与整行底色一起连成一条横带）
   if (row.type === 'gap') {
     return (
-      <div
-        className={`diff-line diff-line--${side} diff-line--gap`}
-        style={place}>
+      <div className={`diff-line diff-line--${side} diff-line--gap`}>
         <span className="diff-linenum"></span>
         <span className="diff-code">⋯</span>
       </div>
     )
   }
 
-  const lineNum = isOld ? row.oldLineNum : row.newLineNum
-  const line = isOld ? row.oldLine : row.newLine
-  const highlight = isOld ? row.type === 'delete' : row.type === 'insert'
+  const lineNum = isOld ? row.leftLineNo : row.rightLineNo
+  const parts = isOld ? row.left : row.right
+  // 高亮：这一侧的内容真的变了才高亮（`removed` 只影响左半、`added` 只影响右半、`modified` 两侧都有）
+  const highlight =
+    row.type === 'modified' || (isOld ? row.type === 'removed' : row.type === 'added')
   const highlightClass = highlight
     ? isOld
       ? ' diff-line--highlight-old'
@@ -221,21 +232,34 @@ function DiffHalf({
     : ''
 
   return (
-    <div
-      className={`diff-line diff-line--${side}${highlightClass}`}
-      style={place}>
+    <div className={`diff-line diff-line--${side}${highlightClass}`}>
       <span className="diff-linenum">{lineNum ?? ''}</span>
       <span className="diff-code">
-        <DiffCode text={line != null ? line || ' ' : ''} language={language} />
+        {parts.length === 0
+          ? ' '
+          : parts.map((part, i) =>
+              // 未改动片段不包节点（行内高亮的只有改动片段，节点数也少一截）
+              part.type === 'equal' ? (
+                <DiffCode key={i} text={part.value} language={language} />
+              ) : (
+                <span
+                  key={i}
+                  className={`diff-part diff-part--${part.type}${
+                    part.value === NL_MARK ? ' diff-part--nl' : ''
+                  }`}>
+                  <DiffCode text={part.value} language={language} />
+                </span>
+              ),
+            )}
       </span>
     </div>
   )
 }
 
 /**
- * diff 正文（文件头 / 双栏表头 / 每一行的左右两半）。「原位」与「全屏」各渲染一份：
- * 两边可用宽度不同，列宽交给 CSS grid 1fr 1fr 按各自容器算（故无需 JS 量宽）；
- * `isFull` 只切换类名，结构完全一致。
+ * diff 正文（文件头 / 两栏各自的列头与行）。「原位」与「全屏」各渲染一份：两边可用宽度不同，
+ * 但两栏的内容宽度是按**行数据**算出来的（`--diff-max-ch`，见 `utils/diff::maxDiffWidthCh`），
+ * 所以两份实例的内容宽天然一致；`isFull` 只切换类名，结构完全一致。
  */
 function DiffContent({
   diffRows,
@@ -245,6 +269,7 @@ function DiffContent({
   fullscreen,
   onToggleFullscreen,
   showHeader,
+  singleSide,
   isFull,
   blockRef,
   onContextMenu,
@@ -260,6 +285,8 @@ function DiffContent({
   onToggleFullscreen: () => void
   /** 是否画文件头（标题 + 动作按钮）；调用方自己已经写了路径时关掉它 */
   showHeader: boolean
+  /** 只有一侧有内容时只画这一栏（`domain/git::singleSideOf` 的产物）—— 空的那栏整栏不画 */
+  singleSide?: DiffSide
   /** 是否渲染为全屏形态 */
   isFull: boolean
   /** 原位那份的根节点 ref（居中用；全屏副本不接，避免 ref 被覆盖） */
@@ -273,26 +300,55 @@ function DiffContent({
   // diff 代码行用该语言做 Monaco 词法着色
   const codeLang = diffLanguageFromName(fileName)
 
+  // 单栏（新增 / 删除 / 未合并）：只画有内容的那一侧，另一栏连表头一起不画
+  const single = singleSide ?? null
+  const showOld = single === null || single === 'old'
+  const showNew = single === null || single === 'new'
+
   // 从 diffRows 推导起始行号和行数（仅单段 diff 时展示区间）
   const startLine = (() => {
     if (showStat) return null
     for (const row of diffRows) {
       if (row.type === 'gap') continue
-      if (row.oldLineNum != null) return row.oldLineNum
-      if (row.newLineNum != null) return row.newLineNum
+      if (row.leftLineNo != null) return row.leftLineNo
+      if (row.rightLineNo != null) return row.rightLineNo
     }
     return 1
   })()
-  const oldLineCount = showStat
-    ? 0
-    : diffRows.filter((r) => r.type !== 'insert' && r.type !== 'gap').length
-  const newLineCount = showStat
-    ? 0
-    : diffRows.filter((r) => r.type !== 'delete' && r.type !== 'gap').length
+  /** 行数按「这一侧有内容的行」数（单侧行的另一侧不计） */
+  const counted = showStat
+    ? []
+    : diffRows.filter((r): r is DiffRow => r.type !== 'gap')
+  const oldLineCount = counted.filter((r) => r.left.length > 0).length
+  const newLineCount = counted.filter((r) => r.right.length > 0).length
+
+  // 横向滚动的范围由最长一行决定（为什么不用 max-content 见 utils/diff::maxDiffWidthCh）
+  const maxWidthCh = maxDiffWidthCh(diffRows)
+
+  /** 左 / 右栏各自的滚动容器（同步滚动用；单栏时另一侧为 null） */
+  const paneOldRef = useRef<HTMLDivElement | null>(null)
+  const paneNewRef = useRef<HTMLDivElement | null>(null)
+
+  /**
+   * 一栏滚动 → 另一栏跟着走（同一帧内直接写对方的 scrollTop / scrollLeft）。
+   *
+   * 先比对再写：写下去会让对方也发一次 scroll 事件，值已经相等就直接返回 —— 不会来回弹；
+   * 对方滚不到那么远时（两栏内容同宽，理论上不会）也只是被浏览器夹住，不会互相拉扯。
+   */
+  function syncPanes(e: React.UIEvent<HTMLDivElement>) {
+    const src = e.currentTarget
+    const dst =
+      src === paneOldRef.current ? paneNewRef.current : paneOldRef.current
+    if (!dst) return
+    if (dst.scrollTop !== src.scrollTop) dst.scrollTop = src.scrollTop
+    if (dst.scrollLeft !== src.scrollLeft) dst.scrollLeft = src.scrollLeft
+  }
 
   return (
     <div
-      className={`diff-side-by-side${isFull ? ' is-fullscreen' : ''}`}
+      className={`diff-side-by-side${isFull ? ' is-fullscreen' : ''}${
+        single ? ' is-single' : ''
+      }`}
       ref={isFull ? undefined : blockRef}
       onContextMenu={onContextMenu}>
       {/* 文件头（固定，不随内容滚动）—— 调用方已经有了自己的标题栏时才画 */}
@@ -320,57 +376,72 @@ function DiffContent({
         </div>
       )}
 
-      {/* 唯一的滚动容器（只纵向）：双栏表头 + 每一行的左右两半都在里面；超长行在各自那半折行，故横向不滚 */}
-      <div className="diff-body">
-        {/* 双栏表头（吸顶：纵向钉住、横向跟着两列走） */}
-        <div className="diff-column-headers">
-          <div className="diff-col-header diff-col-header--old">
-            {/* 标签自己粘左边缘：横向滚到这一列时不会被推出视野 */}
-            <span className="diff-col-header-label">
-              {t('原文件')}
-              {!showStat && startLine != null && (
-                <span className="diff-col-range">
-                  Ln {startLine}–{startLine + oldLineCount - 1}
-                </span>
-              )}
-            </span>
-          </div>
-          <div className="diff-col-header diff-col-header--new">
-            <span className="diff-col-header-label">
-              {t('新文件')}
-              {!showStat && startLine != null && (
-                <span className="diff-col-range">
-                  Ln {startLine}–{startLine + newLineCount - 1}
-                </span>
-              )}
-            </span>
-          </div>
-        </div>
-
+      {/* 两栏各一个滚动容器（纵 + 横）：超长行不折行、一栏一条横向滚动条，滚动位置互相跟随
+          （见 syncPanes）；栏内内容的宽度由 --diff-max-ch 给出（两栏同宽，否则横向同步会互相顶住） */}
+      <div
+        className="diff-body"
+        style={{ '--diff-max-ch': String(maxWidthCh) } as React.CSSProperties}>
         {/*
-         * 每一行：左半、右半靠内联 grid-column / grid-row 落进同一个 grid 行（不是靠 DOM 顺序排布）。
-         * 因此这里按「左栏全部 → 右栏全部」两段渲染：浏览器选区是**文档顺序上的连续区间**，
+         * 左栏整栏在前、右栏整栏在后（DOM 顺序）：浏览器选区是**文档顺序上的连续区间**，
          * 若交错渲染（old1,new1,old2,new2…），从左边第 1 行拖到第 5 行的选区会连中间那几段右半
          * 一起框住 —— 看着是「选左边带出了右边」，Ctrl+C 拿到的也是两栏交错的内容。
          */}
-        {diffRows.map((row, i) => (
-          <DiffHalf
-            key={`old-${i}`}
-            side="old"
-            row={row}
-            rowIndex={i}
-            language={codeLang}
-          />
-        ))}
-        {diffRows.map((row, i) => (
-          <DiffHalf
-            key={`new-${i}`}
-            side="new"
-            row={row}
-            rowIndex={i}
-            language={codeLang}
-          />
-        ))}
+        {showOld && (
+          <div
+            className="diff-pane diff-pane--old"
+            ref={paneOldRef}
+            onScroll={syncPanes}>
+            <div className="diff-pane-inner">
+              {/* 列头长在这一栏的滚动容器里：纵向吸顶（滚长 diff 时始终看得出哪边是哪边），
+                  横向跟着这一栏的内容走、标签自己粘左边缘 */}
+              <div className="diff-col-header diff-col-header--old">
+                <span className="diff-col-header-label">
+                  {t('原文件')}
+                  {!showStat && startLine != null && (
+                    <span className="diff-col-range">
+                      Ln {startLine}–{startLine + oldLineCount - 1}
+                    </span>
+                  )}
+                </span>
+              </div>
+              {diffRows.map((row, i) => (
+                <DiffHalf
+                  key={`old-${i}`}
+                  side="old"
+                  row={row}
+                  language={codeLang}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+        {showNew && (
+          <div
+            className="diff-pane diff-pane--new"
+            ref={paneNewRef}
+            onScroll={syncPanes}>
+            <div className="diff-pane-inner">
+              <div className="diff-col-header diff-col-header--new">
+                <span className="diff-col-header-label">
+                  {t('新文件')}
+                  {!showStat && startLine != null && (
+                    <span className="diff-col-range">
+                      Ln {startLine}–{startLine + newLineCount - 1}
+                    </span>
+                  )}
+                </span>
+              </div>
+              {diffRows.map((row, i) => (
+                <DiffHalf
+                  key={`new-${i}`}
+                  side="new"
+                  row={row}
+                  language={codeLang}
+                />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -388,6 +459,7 @@ export function SideBySideDiff({
   actions = [] as Action[],
   autoCenter = false,
   showHeader = true,
+  singleSide,
 }: {
   diffRows: SideBySideRow[]
   fileName: string | null
@@ -402,6 +474,11 @@ export function SideBySideDiff({
    * 关掉的场景：调用方自己的标题栏已经写了路径（git 差异弹窗），再画一遍就是同一句话出现两次。
    */
   showHeader?: boolean
+  /**
+   * 只有一侧有内容时只画这一栏（另一栏连表头一起不画）；两栏都有内容则不传。
+   * 调用方按**内容**判（`domain/git::singleSideOf`）：git 的「删除」旧侧有内容、新侧为空。
+   */
+  singleSide?: DiffSide
 }) {
   // 全屏态由组件自身管理，按钮在文件头右侧（与 CodeBlock 一致）
   const [fullscreen, setFullscreen] = useState(false)
@@ -436,10 +513,12 @@ export function SideBySideDiff({
   /** 开菜单：先定「作用哪一栏」并快照选区文本（理由见 menuTextRef） */
   function openMenu(e: React.MouseEvent<HTMLDivElement>) {
     menuRootRef.current = e.currentTarget
-    // 右键落点优先；落在两栏之外（文件头 / 间隔行）就看选区在哪一栏；都没有则按原文件
+    // 右键落点优先；落在两栏之外（文件头 / 间隔行 / 单栏时的表头外侧）就看选区在哪一栏；
+    // 都没有则：单栏时按唯一那一栏、双栏时按原文件
     const side =
       diffSideOf(e.target as Node) ??
       diffSideOf(window.getSelection()?.anchorNode ?? null) ??
+      singleSide ??
       'old'
     menuTextRef.current = window.getSelection?.()?.toString() ?? ''
     menu.openAt(e, side)
@@ -501,6 +580,7 @@ export function SideBySideDiff({
       fullscreen={fullscreen}
       onToggleFullscreen={() => setFullscreen(!fullscreen)}
       showHeader={showHeader}
+      singleSide={singleSide}
       isFull={isFull}
       blockRef={rootRef}
       onContextMenu={openMenu}

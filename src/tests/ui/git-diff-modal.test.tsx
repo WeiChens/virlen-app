@@ -9,6 +9,8 @@
  *    失败则留在原地；
  * 4. **弹窗内的 mousedown 不冒泡到 document**：入口的「点浮层外关闭」按 DOM 包含关系判定，而弹窗
  *    portal 到 body —— 不拦住就是「点一下弹窗，连面板一起关掉」。
+ * 5. **空的那一侧整栏不画**（实测反馈：被删除的文件不必再显示「新文件」）：判定按**内容**
+ *    （`domain/git::singleSideOf`），而不是列表上的状态字母。
  *
  * 差异正文由 `side-by-side-diff.test.tsx` 守，这里只验弹窗自己的骨架与流转。
  */
@@ -286,4 +288,51 @@ it('同一个文件在两段各有一行时，「当前行」按侧认（暂存�
 
   // 键也按侧拼：暂存段的 s.txt 与更改段若有同名文件不会互相点亮
   expect(rowKey('staged', 's.txt')).not.toBe(rowKey('unstaged', 's.txt'))
+})
+
+it('空的那一侧整栏不画：删除的文件只画「原文件」，未跟踪只画「新文件」', async () => {
+  await mount()
+
+  // 删除（未暂存侧：旧 = index 有内容、新 = 工作区里已经没了）
+  vi.mocked(loadDiffSides).mockResolvedValue({
+    old_text: 'a\nb\n',
+    new_text: null,
+    old_label: 'INDEX',
+    new_label: '工作区',
+    binary: false,
+    truncated: false,
+  })
+  await act(async () => sideRow('b.txt')!.click())
+  // 让「取两侧内容」的 promise 落地（上面的 click 只保证切了文件）
+  await act(async () => {})
+
+  expect(document.querySelector('.diff-side-by-side')?.className).toContain(
+    'is-single',
+  )
+  expect(document.querySelectorAll('.diff-col-header').length).toBe(1)
+  expect(
+    document.querySelector('.diff-col-header--old')?.textContent,
+  ).toContain('原文件')
+  expect(document.querySelector('.diff-col-header--new')).toBeNull()
+  expect(document.querySelector('.diff-line--new')).toBeNull()
+  expect(document.querySelectorAll('.diff-line--old').length).toBe(2)
+
+  // 未跟踪（旧侧为空）—— 反过来只画「新文件」
+  vi.mocked(loadDiffSides).mockResolvedValue({
+    old_text: null,
+    new_text: 'c\n',
+    old_label: 'INDEX',
+    new_label: '工作区',
+    binary: false,
+    truncated: false,
+  })
+  await act(async () => sideRow('n.ts')!.click())
+  await act(async () => {})
+
+  expect(document.querySelector('.diff-col-header--old')).toBeNull()
+  expect(
+    document.querySelector('.diff-col-header--new')?.textContent,
+  ).toContain('新文件')
+  expect(document.querySelector('.diff-line--old')).toBeNull()
+  expect(document.querySelectorAll('.diff-line--new').length).toBe(1)
 })

@@ -781,18 +781,23 @@
     overflow: auto;
 
     /* 弹窗里不画文件头（路径已在弹窗头、全屏按钮也没意义，见 GitDiffModal），差异本体直接铺满 ——
-       否则 780px 高的弹窗里只有 450px（.diff-body 的 max-height）在显示内容 */
+       高度由弹窗决定，所以栏不再受 450px 限制（否则 780px 高的弹窗里只有 450px 在显示内容），
+       由 .diff-pane 的 height: 100% 填满，纵向滚动落在栏里 */
     > .diff-side-by-side {
       height: 100%;
       display: flex;
       flex-direction: column;
       border: none;
       border-radius: 0;
+      --diff-max-h: none;
 
       > .diff-body {
         flex: 1;
         min-height: 0;
-        max-height: none;
+
+        > .diff-pane {
+          height: 100%;
+        }
       }
     }
   }

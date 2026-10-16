@@ -1,14 +1,19 @@
 /**
  * GitDiffModal — 变更文件的左右对比（模态）：**左侧是全部更改文件的清单，右侧是当前文件的差异**。
  *
- * 三条界面口径（P1.3 实测反馈）：
+ * 四条界面口径（P1.3 / P1.4 实测反馈）：
  * 1. **路径只出现一次** —— 弹窗头已经写了它，`SideBySideDiff` 的文件头不再画（`showHeader={false}`），
  *    顺带去掉它内置的「全屏」按钮：弹窗本身就是放大形态，再套一层全屏没有意义；
  * 2. **暂存 / 取消暂存就在弹窗里** —— 看完差异顺手处理是最常见的下一步，逼用户关掉弹窗回列表再点一次不合理。
  *    操作成功后视图自动翻到另一侧（暂存 → 看 index↔HEAD，取消暂存 → 看工作区↔index），因为
  *    原来那一侧的差异此刻已经空了；
  * 3. **左侧清单随时切换**（↑↓ 键也行）—— 连着看几个文件的差异不必反复开关弹窗。
- *    清单里的一行与面板的行同一套排布：**图标在左、状态字母在右**（两处列的是同一份清单）。
+ *    清单里的一行与面板的行同一套排布：**图标在左、状态字母在右**（两处列的是同一份清单）；
+ * 4. **空的那一侧整栏不画**（实测反馈：被删除的文件不必再显示「新文件」）—— 判定按**内容**
+ *    （`domain/git::singleSideOf`）：删除只有旧侧、新增 / 未跟踪只有新侧、未合并取不到的那侧为空。
+ *    留半栏空白既占宽度，又让人以为「另一侧是空的」是内容问题；
+ * 5. **整文件、不省略**（实测反馈：不要用 … 省略相同的部分）：差异行由 `gitDiffRows` 从两侧全文
+ *    直接算出来，改动行前后的未改动行照常显示（改了多少字由行内字符级片段标出）。
  *
  * ⚠️ 内容**不缓存**：关掉即弃。缓存正文会让「切了分支却还在显示旧内容」这种问题悄悄出现。
  * ⚠️ 弹窗内的 mousedown 必须 `stopPropagation`（`.git-diff-modal` 上那一行）：入口的「点浮层外关闭」
@@ -19,10 +24,10 @@ import { createPortal } from 'react-dom'
 import { t, tpl } from '@/ui/i18n'
 import {
   baseName,
-  buildDiffRows,
-  diffStat,
   dirName,
   displayPath,
+  gitDiffRows,
+  singleSideOf,
   statusLetter,
 } from '@/domain/git'
 import type { GitDiffSides } from '@/domain/git'
@@ -132,8 +137,9 @@ export function GitDiffModal({ target, sections, disabled, onClose }: Props) {
     }))
   }
 
-  const rows = useMemo(() => (sides ? buildDiffRows(sides) : []), [sides])
-  const stat = useMemo(() => diffStat(rows), [rows])
+  const rows = useMemo(() => (sides ? gitDiffRows(sides) : []), [sides])
+  /** 只有一侧有内容（删除 / 新增 / 未跟踪）→ 另一栏整栏不画（口径 4） */
+  const singleSide = useMemo(() => (sides ? singleSideOf(sides) : null), [sides])
   const currentKey = rowKey(side, entry.path)
 
   return createPortal(
@@ -232,12 +238,13 @@ export function GitDiffModal({ target, sections, disabled, onClose }: Props) {
                     })}
                   </div>
                 )}
-                {/* showHeader={false}：路径在弹窗头，全屏按钮在这套「清单 + 差异」布局里也没有意义 */}
+                {/* showHeader={false}：路径在弹窗头，全屏按钮在这套「清单 + 差异」布局里也没有意义
+                    不传 stat：完整文件的行号是连续的，列头要显示 Ln 区间（口径 5） */}
                 <SideBySideDiff
                   diffRows={rows}
                   fileName={entry.path}
-                  stat={stat}
                   showHeader={false}
+                  singleSide={singleSide ?? undefined}
                 />
               </>
             )}

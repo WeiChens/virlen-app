@@ -1,8 +1,8 @@
-//! 差异的两侧内容 —— **不解析 patch 文本**，而是取「旧 / 新」两份内容交给前端已有的 LCS diff。
+//! 差异的两侧内容 —— **不解析 patch 文本**，而是取「旧 / 新」两份内容交给前端已有的 diff 内核。
 //!
-//! 为什么这么做：本项目「左右对比」的唯一实现是 `src/utils/diff.ts::computeDiff` +
-//! `SideBySideDiff`（`edit_file` 在用，见方案 §2.3）。再写一个 patch 解析器 = 第二份 diff 实现，
-//! 显示口径迟早与 `edit_file` 分叉。
+//! 为什么这么做：本项目「左右对比」的唯一实现是 `src/utils/diff.ts::buildDiffRows`（jsdiff 的
+//! `diffLines` + 组内 `diffChars`）+ `SideBySideDiff`（`edit_file` 在用，见方案 §2.3）。
+//! 再写一个 patch 解析器 = 第二份 diff 实现，显示口径迟早与 `edit_file` 分叉。
 //!
 //! 代价（**已接受，见方案 §5.3 / §11.3**）：拿到的是文件原始字节，没走 `.gitattributes` 的
 //! filter / textconv —— LFS 指针文件会显示成指针文本。

@@ -5,7 +5,7 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { withCancelResult } from '@/utils/withCancel'
-import { computeDiff, countDiffRows } from '@/utils/diff'
+import { buildDiffRows, diffStats } from '@/utils/diff'
 import { t } from '@/ui/i18n'
 import { toolRegistry } from '@/domain/tools'
 import type {
@@ -77,16 +77,16 @@ toolRegistry.register(
         },
       )
 
-      // 为每个编辑计算 diff
+      // 为每个编辑计算 diff（行号用文件里的**绝对**行号：old_start_line 由 Rust 给出）
       const uiEdits = result.edits.map((e: SingleEditResult) => {
         const oldLineCount = e.old_string_context.split('\n').length
         const newLineCount = e.new_string_context.split('\n').length
-        const diffRows = computeDiff(
-          e.old_string_context.split('\n'),
-          e.new_string_context.split('\n'),
+        const diffRows = buildDiffRows(
+          e.old_string_context,
+          e.new_string_context,
           e.old_start_line,
         )
-        const { delCount, insCount } = countDiffRows(diffRows)
+        const { delCount, insCount } = diffStats(diffRows)
         return {
           oldStartLine: e.old_start_line,
           oldEndLine: e.old_start_line + oldLineCount - 1,

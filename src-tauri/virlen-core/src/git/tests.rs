@@ -365,6 +365,29 @@ fn diff_sides_normalizes_line_endings() {
     assert_eq!(staged.new_text.as_deref(), Some("one\ntwo\nthree\n"));
 }
 
+/// ⚠️ **删除的文件没有「新侧」** —— 界面据此整栏不画「新文件」（`domain/git::singleSideOf`）。
+/// 契约点：删除时新侧必须是 `None`（**不是空串**）；写成 `Some("")` 界面就会画出一栏空白。
+#[test]
+fn diff_sides_deleted_file_leaves_new_side_empty() {
+    let Some(repo) = TempRepo::new() else { return };
+    let gate = WriteGate::new(true);
+    repo.write("a.txt", "one\ntwo\n");
+    super::stage::stage(&repo.path(), &gate, &["a.txt".to_string()]).unwrap();
+    super::commit::commit(&repo.path(), &gate, "init").unwrap();
+
+    // 工作区删除（未暂存侧）：旧 = index，新 = 没了
+    std::fs::remove_file(repo.dir.join("a.txt")).unwrap();
+    let work = super::diff::sides(&repo.path(), "a.txt", DiffScope::Worktree, None).unwrap();
+    assert_eq!(work.old_text.as_deref(), Some("one\ntwo\n"));
+    assert!(work.new_text.is_none(), "工作区已删的文件不该有「新侧」内容");
+
+    // 暂存删除（已暂存侧）：旧 = HEAD，新 = index 里也没了
+    super::stage::stage(&repo.path(), &gate, &["a.txt".to_string()]).unwrap();
+    let staged = super::diff::sides(&repo.path(), "a.txt", DiffScope::Index, None).unwrap();
+    assert_eq!(staged.old_text.as_deref(), Some("one\ntwo\n"));
+    assert!(staged.new_text.is_none(), "已暂存的删除同样只有旧侧");
+}
+
 /// 二进制文件不拉正文
 #[test]
 fn diff_sides_flags_binary() {

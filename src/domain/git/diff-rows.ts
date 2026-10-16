@@ -1,79 +1,42 @@
 /**
- * git 差异行模型 —— 把 git 给的**两侧文本**变成左右对比可渲染的行（纯函数）。
+ * git 差异的**视图模型** —— 把 Rust 给的「两侧文本」变成左右对比可渲染的行。
  *
- * 复用既有的 LCS 实现（`src/utils/diff.ts::computeDiff`）与既有的视图（`SideBySideDiff`）：
- * 「左右对比」在本项目只有一份实现，git 差异不另起一套（见方案 §2.3）。
+ * 算法与行模型都来自唯一实现 `utils/diff.ts`（jsdiff 的 diffLines + 组内 diffChars，
+ * 与 xwjc-app 的 `VersionCompareDetailPage/diff.js` 同一套）；本模块只做三件 git 特有的事：
  *
- * 两件本模块独有的事：
- * 1. **空侧**（新增 / 删除）用零行表示，不能拿空串去 `split('\n')` —— 那会得到 `['']`，
- *    在界面上表现为凭空多出一行空白；
- * 2. **折叠连续未改动行**：大文件里只改一行时，全文照渲染会铺出几千行。按「改动前后各留 N 行」
- *    折叠成一条 `gap` 行 —— `SideBySideDiff` 本来就认这种行。
+ * 1. **空侧**：`null` 表示「这一侧没有内容」（新增 / 未跟踪的旧侧、删除的新侧、未合并取不到的那侧），
+ *    换成空串交给内核（`""` 与 `null` 在 diff 里是同一件事）；
+ * 2. **不折叠未改动行**（实测反馈：不要用 … 省略相同的部分）：差异弹窗给的是**整个文件**，
+ *    改动行前后到底有多少未改动行，用户自己看得到；
+ * 3. **单侧判定**（[`singleSideOf`]）：只有一侧有内容时，另一栏整栏不画。
+ *
+ * ⚠️ 这与「取内容」那一侧是成对的契约：Rust `git/diff.rs::to_text` 的空侧必须是 `None`
+ * 而不是 `Some("")`，否则单侧判定失效（用例 `diff_sides_deleted_file_leaves_new_side_empty`）。
  */
-import { computeDiff, countDiffRows, type DiffRow } from '@/utils/diff'
+import { buildDiffRows, type DiffRow } from '@/utils/diff'
 import type { GitDiffSides } from './types'
 
-/** 可渲染的行：普通 diff 行 + 折叠间隔行（结构与 `SideBySideDiff` 的 `SideBySideRow` 一致） */
-export type GitDiffRow = DiffRow | { type: 'gap' }
-
-/** 折叠时保留的上下文行数（改动前后各留这么多） */
-export const DIFF_CONTEXT_LINES = 3
-
-/** 文本 → 行数组；`null`（空侧）与空串都得到零行 */
-function toLines(text: string | null): string[] {
-  if (text === null || text === '') return []
-  const lines = text.split('\n')
-  // ⚠️ `"a\nb\n"` 只有 **2** 行：末尾换行是第 2 行的终止符，不是第 3 行空行。
-  //    不丢它的话，每个文件末尾都会多出一行空白 —— 在左右对比里非常显眼（末尾多一行）。
-  if (lines[lines.length - 1] === '') lines.pop()
-  return lines
-}
-
-/** 两侧文本 → 可渲染的行（含折叠） */
-export function buildDiffRows(
-  sides: GitDiffSides,
-  context: number = DIFF_CONTEXT_LINES,
-): GitDiffRow[] {
-  const rows = computeDiff(toLines(sides.old_text), toLines(sides.new_text), 1)
-  return collapseEqualRuns(rows, context)
+/**
+ * 两侧文本 → 可渲染的行（含行内字符级片段）。行号从 1 起，与 git 的行号口径一致。
+ *
+ * 复用既有视图（`SideBySideDiff`）：「左右对比」在本项目只有一份实现，git 差异不另起一套。
+ */
+export function gitDiffRows(sides: GitDiffSides): DiffRow[] {
+  return buildDiffRows(sides.old_text, sides.new_text, 1)
 }
 
 /**
- * 把连续的 `equal` 行折叠成「首尾各留 context 行、中间一条 gap」。
+ * 「这一份差异只有一侧」时返回**要保留的那一侧**；两侧都有内容返回 `null`。
  *
- * 不折叠时行数 = 文件行数；折叠后 ≈ 改动行数 + 2×context。超过一整段的短省略**不插 gap**
- *（留 4 行以内的空档反而更难读）。
+ * 依据是**内容**而不是状态字母：`null` 是 Rust `git/diff.rs::to_text` 的「空侧」口径（新增 / 未跟踪的
+ * 旧侧、删除的新侧、未合并取不到的那一侧）。要回答的是「这份差异里有没有另一侧」，而状态字母是列表的
+ * 展示口径 —— 两者不该互相假设（同一条路径在两段的字母还不一样）。
+ *
+ * ⚠️ `binary` 时两侧都是 `null`（正文压根没拉），此时不适用 —— 二进制另走「无法显示差异」提示。
  */
-export function collapseEqualRuns(
-  rows: DiffRow[],
-  context: number,
-): GitDiffRow[] {
-  const out: GitDiffRow[] = []
-  let i = 0
-  while (i < rows.length) {
-    if (rows[i].type !== 'equal') {
-      out.push(rows[i])
-      i += 1
-      continue
-    }
-    // 找出一整段 equal
-    let end = i
-    while (end < rows.length && rows[end].type === 'equal') end += 1
-    const runLength = end - i
-    // 短段不折：省略 1–4 行的收益还不如它带来的视觉断裂
-    if (runLength <= context * 2 + 1) {
-      for (let k = i; k < end; k++) out.push(rows[k])
-    } else {
-      for (let k = i; k < i + context; k++) out.push(rows[k])
-      out.push({ type: 'gap' })
-      for (let k = end - context; k < end; k++) out.push(rows[k])
-    }
-    i = end
-  }
-  return out
-}
-
-/** 新增 / 删除行数（给视图的 `stat`） */
-export function diffStat(rows: GitDiffRow[]): { delCount: number; insCount: number } {
-  return countDiffRows(rows.filter((r): r is DiffRow => r.type !== 'gap'))
+export function singleSideOf(sides: GitDiffSides): 'old' | 'new' | null {
+  if (sides.binary) return null
+  if (sides.new_text === null) return sides.old_text === null ? null : 'old'
+  if (sides.old_text === null) return 'new'
+  return null
 }

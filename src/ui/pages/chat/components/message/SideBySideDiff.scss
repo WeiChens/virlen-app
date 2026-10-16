@@ -12,6 +12,12 @@
   /* 行高倍率：这里是唯一定义处，.diff-code 的空行占位（min-height）也复用这个值，
      改行高时两边自动同步（见 .diff-code 的注释） */
   --diff-line-height: 1.55;
+  /* 行号栏 + 代码内边距的宽度余量：.diff-linenum(36 起 + 12 padding + 1 边框) + .diff-code(16)
+     ≈ 65px，这里给 80px 留余量（栏内内容的宽度 = 最长行的 ch 宽度 + 它，见 .diff-pane-inner） */
+  --diff-gutter-w: 80px;
+  /* 差异区最大高度：栏与容器共用同一个值（改一处两个都动）。全屏浮层 / git 差异弹窗里改成
+     `none` —— 那两种形态的高度由父级决定，由 .diff-pane 的 height: 100% 填满。 */
+  --diff-max-h: 450px;
   border: 1px solid #181a1f;
   border-radius: 8px;
   overflow: hidden;
@@ -80,23 +86,9 @@
   }
 }
 
-// 双栏表头：长在滚动容器里并吸顶（滚长 diff 时左右两侧的标题始终看得见）。
-// 它跨两列（第一行整行），内部两个标题各占一半 —— 与下面 grid 的 1fr 1fr 列宽一致。
-.diff-column-headers {
-  /* 占满第一行（跨两列）→ 每一行的左右两半自然从第二行起往下排 */
-  grid-area: 1 / 1 / 2 / -1;
-  display: flex;
-  position: sticky;
-  top: 0;
-  /* 盖住下面滚过去的代码行与行号 */
-  z-index: 2;
-  border-bottom: 1px solid #181a1f;
-}
-
+// 列头：长在**自己那一栏**的滚动容器里 —— 纵向吸顶（滚长 diff 时始终看得出哪边是哪边），
+// 横向跟着这一栏的内容走；宽度是栏内内容的宽度（≥ 一栏的可视宽），所以横滚时它始终盖住可视区。
 .diff-col-header {
-  /* 各占一半：与下面两列同宽，列边界必然对齐 */
-  flex: 1 1 0;
-  min-width: 0;
   box-sizing: border-box;
   padding: 5px 10px;
   font-size: var(--font-size-xs);
@@ -104,18 +96,26 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  position: sticky;
+  top: 0;
+  /* 盖住下面滚过去的代码行与行号 */
+  z-index: 2;
+  border-bottom: 1px solid #181a1f;
 }
 
+/* 标题自己粘左边缘（包含块是它所在的列头）：横向滚到这一栏时不会被推出视野 */
 .diff-col-header-label {
   display: flex;
   align-items: center;
   gap: 6px;
+  position: sticky;
+  left: 0;
+  z-index: 1;
 }
 
 .diff-col-header--old {
   background: #3a2020;
   color: #f38ba8;
-  border-right: 1px solid #181a1f;
 }
 
 .diff-col-header--new {
@@ -129,30 +129,37 @@
   opacity: 0.7;
 }
 
-// ==================== 唯一的滚动容器（只纵向） ====================
+// ==================== 两栏各一个滚动容器（纵 + 横），滚动位置互相跟随 ====================
 //
-// 双栏表头 + 每一行的左右两半全在这一个容器里，而且左右两半是**同一个 grid 行
-// 的两个格子**。于是：
-//   - 列宽交给 grid 的 1fr 1fr：永远各占一半，不再需要 JS 量宽（那套 --diff-col-w
-//     已删掉 —— 量错一次就会变成「左宽右窄」，而且一行很长时会把两栏都撑宽，
-//     右侧被挤出可见区）；
-//   - 行高由 grid 行决定：一侧折行时另一侧那一格跟着变高，左右不会逐行错位；
-//   - 格子位置**不吃 DOM 顺序**：每个 .diff-line 用内联 grid-column / grid-row 落位
-//     （行数为隐式行，故这里不写 grid-template-rows），DOM 才能按「左栏全部 → 右栏全部」
-//     两段渲染 —— 交错渲染时拖选左栏的选区会跨过中间那些右半（选区是文档顺序上的连续区间）；
-//   - 只有纵向滚动条。横向不滚动（超长行在各自那一半里折行），也就不会再有
-//     「另一半慢一帧」—— 那是「两个滚动容器 + scroll 事件里写另一栏 scrollTop」
-//     的固有代价：源栏的原生滚动跑在合成器线程，主线程永远晚一步。
+// 为什么不是「一个容器带着两栏一起滚」：那样两栏的宽度只能由**内容**决定（谁最长听谁的），
+// 超长行一来「两栏各占一半」就没了 —— 一栏铺满可视区、另一栏被挤到只剩一条缝（实测反馈
+// 「一边大一边小」）。现在两栏各占一半、各滚各的（横向滚动条一栏一条），滚动位置在两栏之间
+// 同步（DiffContent 的 syncPanes）：
+//   - 纵向：两栏的行必须始终对齐（各行一个行盒，没有 grid 行兜底，同步少一帧就错行）；
+//   - 横向：两栏看的是同一段字符。
+// ⚠️ 两栏的内容宽度必须一样（`--diff-max-ch` 取**两侧**最长行，见 utils/diff::maxDiffWidthCh）：
+// 宽度不一致时窄的那栏会顶住宽的那栏（它的 scrollLeft 上限更小，同步写回去就把对方拽回来），
+// 横向永远滚不到长行的尾部。
 .diff-body {
-  display: grid;
-  /* minmax(0, 1fr)：允许格子窄于内容（配合 .diff-code 折行），两列恒为一半一半 */
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  /* 内容不够高时不要把行拉开 */
-  align-content: start;
-  overflow: auto;
-  max-height: 450px;
+  display: flex;
+  /* 自己不再滚：纵向 + 横向都交给两栏（见 .diff-pane） */
+  overflow: hidden;
+  max-height: var(--diff-max-h);
   background: #282c34;
   color: #abb2bf;
+}
+
+/* 一栏 = 一个滚动容器（纵 + 横）。两栏各占一半：宽度只跟可视区有关，与内容多长无关
+   （内容更宽时在这一栏里横向滚，超长行不折行）。
+   用 flex: 0 0 50% 而不是 flex: 1 1 0 —— 百分比基数是容器的内容宽，两栏必然等宽；而
+   「容器宽由内容撑」的调用方（.diff-wrapper 的 width: fit-content）下，窄 diff 依然贴近内容宽，
+   两栏永远是它的一半。 */
+.diff-pane {
+  flex: 0 0 50%;
+  /* overflow: auto 已让「自动最小尺寸」为 0，写出来是给读的人看：内容再宽也不撑开这一栏 */
+  min-width: 0;
+  overflow: auto;
+  max-height: var(--diff-max-h);
 
   &::-webkit-scrollbar {
     width: 12px;
@@ -169,20 +176,63 @@
   }
 }
 
+/* 两栏之间的列界线：画在左栏的右边缘（不随内容横向滚，永远落在栏边界上） */
+.diff-pane--old {
+  border-right: 1px solid #181a1f;
+}
+
+/* 左栏的纵向滚动条只留位置、不留形：可视区里只该有一条纵滚动条（最右那一栏的右边缘），
+   中间再冒一条看着像界面坏了。
+   ⚠️ 用「透明」而不是 `width: 0` 收掉它：位置留着，两栏的可视宽度才一样（横向滚动范围一致，
+   同步滚到最右不会差一截），而且滚动条实体还在 —— 滚轮 / 拖拽照常；`width: 0` 会不会连带
+   收掉滚轮滚动是不必去赌的事。 */
+.diff-side-by-side:not(.is-single) .diff-pane--old {
+  &::-webkit-scrollbar-thumb:vertical,
+  &::-webkit-scrollbar-thumb:vertical:hover {
+    background-color: transparent;
+  }
+}
+
+/* 栏内内容：宽度至少铺满这一栏，最长行更长时被 --diff-max-ch 撑开（横向滚动范围）。
+   ⚠️ 不能用 max-content 让 CSS 自己按内容撑：`content-visibility: auto`（见 .diff-line）会跳过
+   屏外行，**被跳过的内容不参与尺寸计算** —— 宽度会随滚动位置忽宽忽窄、横向滚动条时有时无
+   （实测：最长的那一行在屏外时滚动区直接消失）。宽度只能由**行数据**算出来当固定值用。 */
+.diff-pane-inner {
+  min-width: max(
+    100%,
+    calc(var(--diff-max-ch, 0) * 1ch + var(--diff-gutter-w))
+  );
+}
+
+// 单栏（新增 / 删除 / 未合并）：只画有内容的那一侧（见 SideBySideDiff 的 singleSide）。
+// 那一栏铺满整宽（双栏的 50% 要改掉），左栏的列界线也不再画（对面没有东西了）；此时左栏就是
+// 唯一那一栏，它的纵向滚动条照常显形（见上面 :not(.is-single) 那段）。
+.diff-side-by-side.is-single {
+  .diff-pane {
+    flex-basis: 100%;
+  }
+
+  .diff-pane--old {
+    border-right: none;
+  }
+}
+
 .diff-line {
-  /* 一行的其中一半：左半 / 右半各是一个 grid 格子（.diff-line--old / --new）。
-     两半同属一个 grid 行 → 行高始终相等，一侧折行不会把左右错位。
-     （列 / 行由内联 grid-column / grid-row 指定，见上方 .diff-body 的注释） */
+  /* 一行里的其中一半：左半在左栏、右半在右栏，两栏的行按序号一一对应。
+     ⚠️ 两栏的行高必须逐行相等（它们现在各自在自己那一栏里滚，没有 grid 行兜底）：只要有一行
+     差 1px，下面所有行在两栏之间就整体错位。行高只来自这一行的行盒（.diff-code 只有一行、
+     .diff-linenum 被 stretch 拉平），两栏同款样式与字体 → 高度天然相等，改行高时两侧一起改。 */
   box-sizing: border-box;
   display: flex;
   align-items: stretch;
   min-height: 18px;
   color: #abb2bf;
-}
-
-/* 两栏之间的列界线画在左半格上（每行画一段，相邻行连成一条竖线） */
-.diff-line--old {
-  border-right: 1px solid #181a1f;
+  /* 屏外行整个跳过样式 / 布局 / 绘制：整文件不折叠时行数上万（两栏合计 2×N），实测 6000 行
+     ×2 栏首次布局 0.80s → 0.11s、12000 行 1.55s → 0.28s。行高恒为一行（.diff-code 不折行），
+     内在尺寸给得准（与 .diff-code 的 min-height 同一个表达式）；
+     ⚠️ 宽度不能靠内容算 —— 宽度一律由 --diff-max-ch 显式给出，理由见 .diff-pane-inner。 */
+  content-visibility: auto;
+  contain-intrinsic-height: auto calc(var(--diff-line-height) * 1em);
 }
 
 .diff-line--highlight-old {
@@ -193,8 +243,32 @@
   background: #152a15;
 }
 
+/* 行内改动片段（字符级）：整行底色之上，**真正改动的那几个字**再深一档 ——
+   一行里改了哪几个字，扫一眼就能看到。颜色与行底色、行号底色同一套色阶。 */
+.diff-part--removed {
+  background: #5c2626;
+  color: #f8b4c0;
+  border-radius: 2px;
+}
+
+.diff-part--added {
+  background: #265c2a;
+  color: #b6f0b6;
+  border-radius: 2px;
+}
+
+/* 换行标记 `↵`：改的是「这里的换行」而不是一个可见字符 —— 底色随归属，但别再给它加重语气 */
+.diff-part--nl {
+  opacity: 0.8;
+}
+
 .diff-linenum {
   background-color: #21252b;
+  /* 横向滚动时行号跟着钉在栏的左边（否则滚到长行尾部就看不出这是第几行）；
+     包含块是它所在的 .diff-line（宽度 = 栏内内容宽），所以最多只走到那一行内容的右边缘。 */
+  position: sticky;
+  left: 0;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
@@ -219,18 +293,20 @@
 
 .diff-code {
   padding: 0 8px;
-  /* 超长行在各自那一半里折行（anywhere 允许任意字符处断开，长 token 也不会撑破
-     列宽）→ 横向不滚动：两栏永远同时可见，也不会出现「左宽右窄」。 */
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  /* 不折行：超长行交给这一栏横向滚（行号栏 sticky 钉在栏的左边）。
+     overflow: clip 是**兜底** —— 宽度由数据估算（一律往宽了估），万一估窄了宁可裁掉尾巴，
+     也不让这一行的文字盖到旁边去。
+     ⚠️ 只能用 clip 不能用 hidden：hidden 会把这一格变成滚动容器，里面的 sticky 就再也不跟容器滚了。 */
+  white-space: pre;
+  overflow: clip;
   flex: 1;
   min-width: 0;
   /*
-   * 空行占位：一行只在一侧有内容时（新增/删除行），另一侧的 .diff-code 是空的、
-   * 没有行盒，行高会退回 .diff-line 的 min-height(18px)；而有内容的行是
-   * 1.55 × --font-size-sm（默认 12px → 18.59px）。每出现一个单侧行就积 0.59px，
-   * 于是两侧总高不同、行还会逐行错位。这里用行高倍率把空格也撑成一整行，
-   * 两侧行高恒等（small 档 11px 时行高低于 18px，两侧同样都落在 min-height 上）。
+   * 行高的下限：单侧行（新增 / 删除）的另一侧 .diff-code 是空的、没有行盒，不撑住这一侧就会
+   * 退到 .diff-line 的 min-height(18px)。行高本身由这一行的行盒统一（两栏的行按序号一一对应，
+   * 高度必须逐行相等，见 .diff-line），这里只保证「空行也占一整行」。
+   * ⚠️ 与 .diff-line 的 contain-intrinsic-height 必须是同一个表达式（屏外行按它估算高度），
+   * 否则屏外 / 屏内行高不一致，滚动时行位置会跳。
    */
   min-height: calc(var(--diff-line-height) * 1em);
 }
@@ -283,7 +359,7 @@
   background: #282c34;
   display: flex;
 
-  /* 全屏态：去掉边框/圆角直接铺满；文件头固定，滚动交给 .diff-body（填满剩余高度） */
+  /* 全屏态：去掉边框/圆角直接铺满；文件头固定，滚动交给两栏（填满剩余高度） */
   .diff-side-by-side.is-fullscreen {
     border: none;
     border-radius: 0;
@@ -297,10 +373,16 @@
       flex-shrink: 0;
     }
 
+    /* 高度由这个 100% 高的列容器决定（不再有 450px 上限）：栏用 height: 100% 填满，
+       纵向滚动落在栏里 —— 横向滚动条才会贴在可视区底部，而不是内容底部 */
     .diff-body {
       flex: 1;
       min-height: 0;
-      max-height: none;
+      --diff-max-h: none;
+    }
+
+    .diff-pane {
+      height: 100%;
     }
   }
 }

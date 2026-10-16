@@ -6,15 +6,22 @@
  * - 点击后通过 createPortal 把「铺满」形态挂到 body
  * - 原位 diff 照常保留（搬走/卸载会让虚拟列表条目高度变化、带偏滚动锚点）
  * - 再点一次 / 按 Esc 均可退出
- * - 只有一个滚动容器（纵向）：双栏表头与每一行的左右两半都在 .diff-body 内
- * - 行结构是「每行左右两半共用一个 grid 行」→ 列宽恒为一半一半、行高左右一致
- * - DOM 顺序按列连续（左半全部在前），两半靠内联 grid-column / grid-row 落位
- *   → 拖选左栏的选区不会跨过右半（选区是文档顺序上的连续区间）
- * - 右键菜单（复制 / 全选）：选区在开菜单那一刻快照；全选只选右键那一侧
+ * - 两栏各是一个滚动容器（纵 + 横）：列头与这一栏的行都在同一个 .diff-pane 里，文件头留在外面
+ * - 两栏各占可视宽的一半（不是按内容宽）→ 不会出现「一边大一边小」；一栏滚动另一栏跟着走
+ *   （横向 + 纵向，见 syncPanes）
+ * - 超长行**不折行**：栏内内容宽 = max(100%, 最长一行) 写进 --diff-max-ch（两栏同宽）；
+ *   行号 / 列头标签 sticky 钉在栏的左边（这几条只靠 CSS，样式契约测试守着）
+ * - DOM 顺序按栏连续（左栏整栏在前）→ 拖选左栏的选区不会跨过右栏（选区是文档顺序上的连续区间）
+ * - **行内片段**：改动的字符包成 `.diff-part--removed / --added`（整行底色之外再深一档）
+ * - 右键菜单（复制 / 全选）：选区在开菜单那一刻快照；全选只选右键那一侧；复制不含换行标记
+ * - **单栏**（`singleSide`）：只有一侧有内容时只画那一栏，另一栏连表头一起不画
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import * as sass from 'sass'
 
 // Monaco 在 jsdom 里跑不起来：只验证浮层的 DOM 结构，词法着色不在此测
 vi.mock('@/monaco/setupMonaco', () => ({
@@ -44,6 +51,7 @@ vi.mock('@/ui/components/shared/Toast', () => ({
 
 import { copyText } from '@/utils/clipboard'
 import { showToast } from '@/ui/components/shared/Toast'
+import { NL_MARK } from '@/utils/diff'
 import {
   SideBySideDiff,
   type SideBySideRow,
@@ -51,36 +59,66 @@ import {
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
+/** 编译真实的 diff 样式（样式契约测试用）：注释要去掉，否则注释里的字会被断言误命中 */
+function diffCss(): string {
+  return sass
+    .compileString(
+      readFileSync(
+        resolve(
+          process.cwd(),
+          'src/ui/pages/chat/components/message/SideBySideDiff.scss',
+        ),
+        'utf8',
+      ),
+    )
+    .css.replace(/\/\*[\s\S]*?\*\//g, '')
+}
+
 const ROWS: SideBySideRow[] = [
   {
     type: 'equal',
-    oldLine: 'const a = 1',
-    newLine: 'const a = 1',
-    oldLineNum: 1,
-    newLineNum: 1,
+    leftLineNo: 1,
+    rightLineNo: 1,
+    left: [{ type: 'equal', value: 'const a = 1' }],
+    right: [{ type: 'equal', value: 'const a = 1' }],
   },
   {
-    type: 'delete',
-    oldLine: 'const b = 2',
-    newLine: null,
-    oldLineNum: 2,
-    newLineNum: null,
+    type: 'modified',
+    leftLineNo: 2,
+    rightLineNo: 2,
+    left: [
+      { type: 'equal', value: 'const b = ' },
+      { type: 'removed', value: '2' },
+    ],
+    right: [
+      { type: 'equal', value: 'const b = ' },
+      { type: 'added', value: '3' },
+    ],
   },
   {
-    type: 'insert',
-    oldLine: null,
-    newLine: 'const b = 3',
-    oldLineNum: null,
-    newLineNum: 2,
+    type: 'added',
+    leftLineNo: null,
+    rightLineNo: 3,
+    left: [],
+    right: [{ type: 'added', value: 'const c = 4' }],
   },
 ]
 
-async function mount(rows: SideBySideRow[] = ROWS) {
+async function mount(
+  rows: SideBySideRow[] = ROWS,
+  singleSide?: 'old' | 'new',
+) {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
   await act(async () => {
-    root.render(<SideBySideDiff diffRows={rows} fileName="demo.ts" />)
+    root.render(
+      <SideBySideDiff
+        diffRows={rows}
+        fileName="demo.ts"
+        singleSide={singleSide}
+      />,
+    )
   })
   return { host, root }
 }
@@ -142,32 +180,46 @@ describe('SideBySideDiff 全屏', () => {
     await act(async () => root.unmount())
   })
 
-  it('节点类名保留：变更行左右高亮、省略行渲染为 ⋯（双栏各一份）', async () => {
+  it('节点类名保留：改动行左右高亮、行内片段、省略行渲染为 ⋯（双栏各一份）', async () => {
     const { host, root } = await mount([...ROWS, { type: 'gap' }])
 
+    // modified 行两侧都算改动；added 行只有右半算 —— 左半不该被整行染红
     expect(host.querySelectorAll('.diff-line--highlight-old').length).toBe(1)
-    expect(host.querySelectorAll('.diff-line--highlight-new').length).toBe(1)
+    expect(host.querySelectorAll('.diff-line--highlight-new').length).toBe(2)
+    // 行内片段：改了哪几个字（这是换掉手写 LCS 的主要收益）
+    expect(host.querySelectorAll('.diff-part--removed').length).toBe(1)
+    expect(host.querySelectorAll('.diff-part--added').length).toBe(1)
+    expect(host.querySelector('.diff-part--removed')?.textContent).toBe('2')
+    // 省略行（只有 edit_file 的多处编辑之间才会出现）
     expect(host.querySelectorAll('.diff-line--gap').length).toBe(2)
 
     await act(async () => root.unmount())
   })
 })
 
-describe('SideBySideDiff 单一滚动容器', () => {
+describe('SideBySideDiff 两栏各自的滚动容器', () => {
   beforeEach(() => {
     document.body.innerHTML = ''
   })
 
-  it('双栏表头与每一行的左右两半都在 .diff-body 内，文件头留在滚动区外', async () => {
+  it('列头与这一栏的行都在同一个 .diff-pane 里，文件头留在滚动区外', async () => {
     const { host, root } = await mount()
 
     const body = host.querySelector('.diff-body') as HTMLElement
+    const oldPane = host.querySelector('.diff-pane--old') as HTMLElement
+    const newPane = host.querySelector('.diff-pane--new') as HTMLElement
     expect(body).toBeTruthy()
-    // 表头进了滚动区：纵向吸顶，且跨两列（内部两个标题各占一半）
-    expect(body.querySelector('.diff-column-headers')).toBeTruthy()
-    expect(body.querySelectorAll('.diff-col-header').length).toBe(2)
-    // 内容都在同一个滚动容器里 → 滚动位置天然一致，不存在「另一半慢一帧」
+    expect(oldPane.parentElement).toBe(body)
+    expect(newPane.parentElement).toBe(body)
+    // 列头长在自己那一栏的滚动容器里（纵向吸顶、横向跟着这一栏滚）
+    expect(oldPane.querySelector('.diff-col-header--old')).toBeTruthy()
+    expect(newPane.querySelector('.diff-col-header--new')).toBeTruthy()
+    // 行也各自在自己那一栏里，两栏行数相同（两栏的行按序号一一对应，行高由行盒决定）
+    expect(oldPane.querySelectorAll('.diff-line--old').length).toBe(ROWS.length)
+    expect(newPane.querySelectorAll('.diff-line--new').length).toBe(ROWS.length)
     expect(body.querySelectorAll('.diff-line').length).toBe(ROWS.length * 2)
+    // 栏内内容容器：宽度由 --diff-max-ch 撑开（横向滚动范围就在它身上）
+    expect(oldPane.querySelectorAll('.diff-pane-inner').length).toBe(1)
     // 文件头留在滚动区外：不随内容滚动
     expect(body.querySelector('.diff-header')).toBeNull()
     expect(host.querySelectorAll('.diff-header').length).toBe(1)
@@ -175,31 +227,95 @@ describe('SideBySideDiff 单一滚动容器', () => {
     await act(async () => root.unmount())
   })
 
-  it('左半全部在前、右半全部在后，两半由内联 grid 落位（同一 grid 行）', async () => {
+  it('横向滚动的宽度写进 .diff-body 的 --diff-max-ch（取最长一行）', async () => {
+    const rows: SideBySideRow[] = [
+      ...ROWS,
+      {
+        type: 'modified',
+        leftLineNo: 4,
+        rightLineNo: 4,
+        left: [{ type: 'equal', value: 'x'.repeat(123) }],
+        right: [{ type: 'equal', value: '短' }],
+      },
+    ]
+    const { host, root } = await mount(rows)
+
+    // 列宽（CSS）读这个变量：不写 / 写错时超长行会被裁掉或被折行，编译期不报
+    const body = host.querySelector('.diff-body') as HTMLElement
+    expect(body.style.getPropertyValue('--diff-max-ch')).toBe('123')
+
+    await act(async () => root.unmount())
+  })
+
+  it('左栏整栏在前、右栏整栏在后（选区是文档顺序上的连续区间）', async () => {
     const { host, root } = await mount()
 
-    // 同一 grid 行 = 两半同宽（各占一半）、行高一致（一侧折行另一侧跟着变高）
-    const body = host.querySelector('.diff-body') as HTMLElement
-    const halves = [...body.querySelectorAll<HTMLElement>('.diff-line')]
-    expect(halves.length).toBe(ROWS.length * 2)
-    halves.forEach((el, i) => {
-      expect(el.parentElement).toBe(body)
-      // DOM 顺序按列连续：拖选左栏时选区不会跨过中间那些右半
-      const isOld = i < ROWS.length
-      expect(el.classList.contains(isOld ? 'diff-line--old' : 'diff-line--new')).toBe(
-        true,
-      )
-      // 位置不靠 DOM 顺序：左半恒第 1 列、右半恒第 2 列，同一行号共用第 rowIndex+2 行
-      const rowIndex = isOld ? i : i - ROWS.length
-      expect(el.style.gridColumn).toBe(isOld ? '1' : '2')
-      expect(el.style.gridRow).toBe(String(rowIndex + 2))
-    })
+    const panes = [...host.querySelectorAll<HTMLElement>('.diff-pane')]
+    expect(panes.length).toBe(2)
+    // 栏顺序 = DOM 顺序：拖选左栏时选区不会跨过中间那些右半
+    expect(panes[0].classList.contains('diff-pane--old')).toBe(true)
+    expect(panes[1].classList.contains('diff-pane--new')).toBe(true)
+    // 每一栏里只有自己那一侧的行，行序与 diffRows 一致（两栏行数相同才能逐行对齐）
+    const oldRows = [...panes[0].querySelectorAll<HTMLElement>('.diff-line')]
+    const newRows = [...panes[1].querySelectorAll<HTMLElement>('.diff-line')]
+    expect(oldRows.every((el) => el.classList.contains('diff-line--old'))).toBe(true)
+    expect(newRows.every((el) => el.classList.contains('diff-line--new'))).toBe(true)
+    expect(oldRows.length).toBe(ROWS.length)
+    expect(newRows.length).toBe(ROWS.length)
+    // 行不再靠内联 grid 落位（那是「一个容器两栏」时代的做法）：栏宽 / 栏位一律由 CSS 给
+    expect(oldRows[0].style.gridRow).toBe('')
+    expect(oldRows[0].style.gridColumn).toBe('')
 
-    // 不再有独立的两栏容器，也不再有任何 JS 量宽（--diff-col-w 已删）：
-    // 列宽由 CSS 的 1fr 1fr 给出，量错一次就会变成「左宽右窄」的那类 bug 不复存在
-    expect(body.querySelector('.diff-panel')).toBeNull()
-    const rootEl = host.querySelector('.diff-side-by-side') as HTMLElement
-    expect(rootEl.style.getPropertyValue('--diff-col-w')).toBe('')
+    await act(async () => root.unmount())
+  })
+
+  /**
+   * jsdom 不做布局：scrollLeft / scrollTop 的赋值会被夹成 0，所以用访问器替身记「写到了哪个元素、
+   * 写了多少」，直接验证同步逻辑本身（两栏内容同宽时浏览器不会夹，这一点由样式契约守着）。
+   */
+  function mockScrollBox(el: HTMLElement) {
+    const state = { left: 0, top: 0 }
+    Object.defineProperty(el, 'scrollLeft', {
+      configurable: true,
+      get: () => state.left,
+      set: (v: number) => {
+        state.left = v
+      },
+    })
+    Object.defineProperty(el, 'scrollTop', {
+      configurable: true,
+      get: () => state.top,
+      set: (v: number) => {
+        state.top = v
+      },
+    })
+    return state
+  }
+
+  it('一栏滚动，另一栏跟着走（横向 + 纵向）', async () => {
+    const { host, root } = await mount()
+
+    const oldPane = host.querySelector('.diff-pane--old') as HTMLElement
+    const newPane = host.querySelector('.diff-pane--new') as HTMLElement
+    const oldState = mockScrollBox(oldPane)
+    const newState = mockScrollBox(newPane)
+
+    // 右栏滚到某处 → 左栏跟上（两个方向都得通：用户可能滚任意一栏）
+    newState.left = 420
+    newState.top = 800
+    await act(async () => {
+      newPane.dispatchEvent(new Event('scroll'))
+    })
+    expect(oldState.left).toBe(420)
+    expect(oldState.top).toBe(800)
+
+    oldState.left = 40
+    oldState.top = 100
+    await act(async () => {
+      oldPane.dispatchEvent(new Event('scroll'))
+    })
+    expect(newState.left).toBe(40)
+    expect(newState.top).toBe(100)
 
     await act(async () => root.unmount())
   })
@@ -207,9 +323,27 @@ describe('SideBySideDiff 单一滚动容器', () => {
 
 /** 行号刻意取 11/22/33：与正文不同，好断言「复制出来的东西里没有行号」 */
 const MENU_ROWS: SideBySideRow[] = [
-  { type: 'equal', oldLine: 'AAA', newLine: 'AAA', oldLineNum: 11, newLineNum: 11 },
-  { type: 'delete', oldLine: 'BBB', newLine: null, oldLineNum: 22, newLineNum: null },
-  { type: 'insert', oldLine: null, newLine: 'CCC', oldLineNum: null, newLineNum: 33 },
+  {
+    type: 'equal',
+    leftLineNo: 11,
+    rightLineNo: 11,
+    left: [{ type: 'equal', value: 'AAA' }],
+    right: [{ type: 'equal', value: 'AAA' }],
+  },
+  {
+    type: 'removed',
+    leftLineNo: 22,
+    rightLineNo: null,
+    left: [{ type: 'removed', value: 'BBB' }],
+    right: [],
+  },
+  {
+    type: 'added',
+    leftLineNo: null,
+    rightLineNo: 33,
+    left: [],
+    right: [{ type: 'added', value: 'CCC' }],
+  },
 ]
 const OLD_TEXT = 'AAA\nBBB'
 const NEW_TEXT = 'AAA\nCCC'
@@ -355,6 +489,44 @@ describe('SideBySideDiff 右键菜单', () => {
     await act(async () => root.unmount())
   })
 
+  it('复制出来的是真实内容：行内换行标记 ↵ 不进剪贴板', async () => {
+    const rows: SideBySideRow[] = [
+      {
+        type: 'modified',
+        leftLineNo: 1,
+        rightLineNo: 1,
+        left: [{ type: 'equal', value: 'ab' }],
+        right: [
+          { type: 'equal', value: 'a' },
+          { type: 'added', value: NL_MARK },
+        ],
+      },
+      {
+        type: 'equal',
+        leftLineNo: null,
+        rightLineNo: 2,
+        left: [{ type: 'equal', value: 'b' }],
+        right: [{ type: 'equal', value: 'b' }],
+      },
+    ]
+    const { host, root } = await mount(rows)
+    expect(host.querySelector('.diff-part--nl')).toBeTruthy()
+
+    await rightClick(host.querySelector('.diff-line--new')!)
+    await act(async () => {
+      menuButtons()[1].click()
+    })
+    await act(async () => {
+      menuButtons()[0].click()
+    })
+
+    // 右栏两行：第 1 行是 `a` + ↵ 标记、第 2 行是 `b`
+    expect(copyText).toHaveBeenCalledWith('a\nb')
+    expect(vi.mocked(copyText).mock.calls[0][0]).not.toContain(NL_MARK)
+
+    await act(async () => root.unmount())
+  })
+
   it('全屏里右键：全选作用在被点的那一份实例与那一栏', async () => {
     const { host, root } = await mount(MENU_ROWS)
 
@@ -381,5 +553,114 @@ describe('SideBySideDiff 右键菜单', () => {
 
     window.getSelection()!.removeAllRanges()
     await act(async () => root.unmount())
+  })
+})
+
+/**
+ * 单栏（`singleSide`）—— 只有一侧有内容时（git 里的删除 / 新增 / 未合并）只画那一栏。
+ *
+ * 错了也看不出来的那条：留着另一栏的表头，是同一句「新文件」对着空白。
+ */
+describe('SideBySideDiff 单栏', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+    window.getSelection()?.removeAllRanges()
+    vi.mocked(copyText).mockClear()
+  })
+
+  it('singleSide="old"（删除）：只画原文件那一栏，新文件那一栏连表头一起不画', async () => {
+    const { host, root } = await mount(ROWS, 'old')
+
+    const rootEl = host.querySelector('.diff-side-by-side') as HTMLElement
+    expect(rootEl.classList.contains('is-single')).toBe(true)
+    expect(host.querySelectorAll('.diff-col-header').length).toBe(1)
+    expect(host.querySelector('.diff-col-header--old')).toBeTruthy()
+    expect(host.querySelector('.diff-col-header--new')).toBeNull()
+
+    // 只剩左栏这一栏（铺满整宽靠 .is-single 的 flex-basis: 100%，见样式契约）
+    const panes = [...host.querySelectorAll<HTMLElement>('.diff-pane')]
+    expect(panes.length).toBe(1)
+    expect(panes[0].classList.contains('diff-pane--old')).toBe(true)
+    const halves = [...host.querySelectorAll<HTMLElement>('.diff-line')]
+    expect(halves.length).toBe(ROWS.length)
+    expect(host.querySelector('.diff-line--new')).toBeNull()
+    expect(halves.every((el) => el.classList.contains('diff-line--old'))).toBe(true)
+
+    await act(async () => root.unmount())
+  })
+
+  it('singleSide="new"（新增 / 未跟踪）：只画新文件那一栏', async () => {
+    const { host, root } = await mount(ROWS, 'new')
+
+    expect(host.querySelector('.diff-col-header--old')).toBeNull()
+    expect(host.querySelector('.diff-col-header--new')).toBeTruthy()
+    expect(host.querySelector('.diff-line--old')).toBeNull()
+
+    const panes = [...host.querySelectorAll<HTMLElement>('.diff-pane')]
+    expect(panes.length).toBe(1)
+    expect(panes[0].classList.contains('diff-pane--new')).toBe(true)
+    const halves = [...host.querySelectorAll<HTMLElement>('.diff-line')]
+    expect(halves.length).toBe(ROWS.length)
+    expect(halves.every((el) => el.classList.contains('diff-line--new'))).toBe(true)
+
+    await act(async () => root.unmount())
+  })
+
+  it('右键落在单栏外（根节点 / 空白）时「全选」指向唯一那一栏，而不是写死的原文件', async () => {
+    const { host, root } = await mount(MENU_ROWS, 'new')
+
+    await rightClick(host.querySelector('.diff-side-by-side')!)
+    expect(menuLabels()).toEqual(['复制', '全选新文件'])
+
+    await act(async () => {
+      menuButtons()[1].click()
+    })
+    await act(async () => {
+      menuButtons()[0].click()
+    })
+    expect(copyText).toHaveBeenCalledWith(NEW_TEXT)
+
+    await act(async () => root.unmount())
+  })
+
+  it('样式契约：单栏那一栏铺满整宽，且不再画左栏的列界线', () => {
+    // 单栏只靠这个类名生效；规则被写错 / 被覆盖时那栏只会占半边（编译期、tsc 都不报）
+    const css = diffCss()
+    expect(css).toMatch(
+      /\.diff-side-by-side\.is-single\s+\.diff-pane\s*\{[^}]*flex-basis:\s*100%/, 
+    )
+    expect(css).toMatch(
+      /\.diff-side-by-side\.is-single\s+\.diff-pane--old\s*\{[^}]*border-right:\s*none/,
+    )
+  })
+
+  it('样式契约：两栏各占一半、各带一条横向滚动条，栏内宽度由 --diff-max-ch 给出', () => {
+    // 这几条是「两栏等宽 + 各滚各的」的全部依据，改错任何一条都不会报错、但界面完全不是那么回事：
+    // - 两栏各占一半（flex: 0 0 50%）而不是「各按内容宽」：否则超长行一来就一栏铺满、另一栏一条缝；
+    // - 滚动落到栏里（.diff-body 自己不再滚）：外层再叠一层 overflow: auto 会把两栏的滚动条废掉；
+    // - 栏内内容宽度 = max(100%, 最长行)：宽度给不出时超长行会被裁掉；
+    // - .diff-code 不折行（pre）：折行会把超长行挤在同一栏的几行里，看着像与下面几行互相覆盖；
+    // - 兜底用 clip 不能用 hidden：hidden 会把这一格变成滚动容器，sticky 行号就再也不滚了；
+    // - 屏外行靠 content-visibility 跳过布局（大文件的关键），**必须**同时给
+    //   contain-intrinsic-height，否则行高塌成 min-height（实测 18.6px → 18px），总高跟着错。
+    const css = diffCss()
+    expect(css).toMatch(
+      /\.diff-body\s*\{[^}]*display:\s*flex[^}]*overflow:\s*hidden/,
+    )
+    expect(css).toMatch(/\.diff-pane\s*\{[^}]*flex:\s*0\s+0\s+50%[^}]*overflow:\s*auto/)
+    expect(css).toMatch(/\.diff-pane-inner\s*\{[^}]*min-width:\s*max\(\s*100%/)
+    // 左栏的纵向滚动条只留位置不留形（可视区里只该有一条纵滚动条）
+    expect(css).toMatch(
+      /\.diff-pane--old::-webkit-scrollbar-thumb:vertical[^{]*\{[^}]*background-color:\s*transparent/,
+    )
+    expect(css).toMatch(/\.diff-code\s*\{[^}]*white-space:\s*pre;/)
+    expect(css).toMatch(/\.diff-code\s*\{[^}]*overflow:\s*clip;/)
+    expect(css).not.toMatch(/\.diff-code\s*\{[^}]*overflow:\s*hidden/)
+    expect(css).toMatch(
+      /\.diff-line\s*\{[^}]*content-visibility:\s*auto[^}]*contain-intrinsic-height:\s*auto\s*calc\(/,
+    )
+    // 横向滚时行号 / 列头标签钉在栏的左边
+    expect(css).toMatch(/\.diff-linenum\s*\{[^}]*position:\s*sticky/)
+    expect(css).toMatch(/\.diff-col-header-label\s*\{[^}]*position:\s*sticky/)
   })
 })

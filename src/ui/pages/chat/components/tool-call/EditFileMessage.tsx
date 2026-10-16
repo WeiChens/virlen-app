@@ -2,8 +2,13 @@ import { t, tpl } from '@/ui/i18n'
 import { getFileParentDir, getUrlFileName, toShortPath } from '@/utils/common'
 import { chatState, sessionStore, settingsState } from '@/ui/store'
 import { IToolCallMessage, ToolMessageProps } from './IToolCallMessage'
-import type { DiffRow } from '@/utils/diff'
-import { computeDiff } from '@/utils/diff'
+import {
+  buildDiffRows,
+  diffStats,
+  normalizeDiffRows,
+  type DiffRow,
+} from '@/utils/diff'
+import { diffLines } from 'diff'
 import CodeBlock from '../message/code-block'
 import { SideBySideDiff } from '../message/SideBySideDiff'
 import type { SideBySideRow } from '../message/SideBySideDiff'
@@ -18,7 +23,7 @@ type EditUiRecord = {
   newEndLine: number
   oldString: string
   newString: string
-  diffRows?: DiffRow[]
+  diffRows?: unknown
   delCount?: number
   insCount?: number
 }
@@ -41,22 +46,27 @@ function sumEditStats(
   if (needCount) {
     for (const e of edits) {
       if (e.delCount == null || e.insCount == null) {
-        for (const row of resolveEditRows(e)) {
-          if (row.type === 'delete') delCount++
-          else if (row.type === 'insert') insCount++
-        }
+        const s = diffStats(resolveEditRows(e))
+        delCount += s.delCount
+        insCount += s.insCount
       }
     }
   }
   return { delCount, insCount }
 }
 
-/** 获取单个编辑的 diffRows（缺省时现场计算） */
+/**
+ * 获取单个编辑的 diffRows。
+ *
+ * ⚠️ 落库的行是**历史数据**：老会话里存的是老行模型（`equal` / `delete` / `insert` + 左右整行文本），
+ * 交给 `normalizeDiffRows` 按老口径归一；只有完全没存过时才用当前算法现场算 —— 行号从
+ * `oldStartLine` 起，界面上显示的是文件里的**绝对**行号。
+ */
 function resolveEditRows(edit: EditUiRecord): DiffRow[] {
-  if (edit.diffRows) return edit.diffRows
-  return computeDiff(
-    (edit.oldString ?? '').split('\n'),
-    (edit.newString ?? '').split('\n'),
+  if (edit.diffRows) return normalizeDiffRows(edit.diffRows)
+  return buildDiffRows(
+    edit.oldString ?? '',
+    edit.newString ?? '',
     edit.oldStartLine,
   )
 }
@@ -64,10 +74,11 @@ function resolveEditRows(edit: EditUiRecord): DiffRow[] {
 /**
  * 把同一文件里的多处编辑合并成一行行的展示数据。
  *
- * 保留每处编辑里的未改动行（equal，即 old/new 共有的上下文/中间相同行），
- * 让用户能看到“中间一样的部分”，而不是全部折叠成 ⋯。
+ * 保留每处编辑里的未改动行（`equal`，即 old/new 共有的上下文与中间相同行），
+ * 让用户能看到「中间一样的部分」，而不是全部折叠成 ⋯。
  * 仅在工具返回的数据里确实没有中间内容（行号跳跃、无法展示相同行）时，
- * 才插入一行省略分隔，避免把互不相连的两段代码伪造成连续。
+ * 才插入一行省略分隔 —— 那省略的是**我们手里根本没有的**东西，不补一行反而会把
+ * 互不相连的两段代码伪造成连续。
  */
 function mergeEditRows(edits: EditUiRecord[]): SideBySideRow[] {
   const sorted = [...edits].sort((a, b) => a.oldStartLine - b.oldStartLine)
@@ -82,8 +93,8 @@ function mergeEditRows(edits: EditUiRecord[]): SideBySideRow[] {
     let firstOld: number | null = null
     let firstNew: number | null = null
     for (const row of rows) {
-      if (firstOld == null && row.oldLineNum != null) firstOld = row.oldLineNum
-      if (firstNew == null && row.newLineNum != null) firstNew = row.newLineNum
+      if (firstOld == null && row.leftLineNo != null) firstOld = row.leftLineNo
+      if (firstNew == null && row.rightLineNo != null) firstNew = row.rightLineNo
       if (firstOld != null && firstNew != null) break
     }
     const missingMiddle =
@@ -97,8 +108,8 @@ function mergeEditRows(edits: EditUiRecord[]): SideBySideRow[] {
 
     for (const row of rows) {
       result.push(row)
-      if (row.oldLineNum != null) prevOldEnd = row.oldLineNum
-      if (row.newLineNum != null) prevNewEnd = row.newLineNum
+      if (row.leftLineNo != null) prevOldEnd = row.leftLineNo
+      if (row.rightLineNo != null) prevNewEnd = row.rightLineNo
     }
   }
   return result
@@ -213,7 +224,7 @@ class EditFileMessage implements IToolCallMessage {
         newEndLine?: number
         oldString?: string
         newString?: string
-        diffRows?: DiffRow[]
+        diffRows?: unknown
         edits?: EditUiRecord[]
       }
       | undefined
@@ -289,12 +300,13 @@ class EditFileMessage implements IToolCallMessage {
           <SideBySideDiff
             autoCenter
             diffRows={
-              uiData.diffRows ??
-              computeDiff(
-                (uiData.oldString ?? old_string ?? '').split('\n'),
-                (uiData.newString ?? new_string ?? '').split('\n'),
-                uiData.oldStartLine,
-              )
+              uiData.diffRows
+                ? normalizeDiffRows(uiData.diffRows)
+                : buildDiffRows(
+                    uiData.oldString ?? old_string ?? '',
+                    uiData.newString ?? new_string ?? '',
+                    uiData.oldStartLine,
+                  )
             }
             fileName={name}
             actions={[
@@ -366,46 +378,43 @@ class EditFileMessage implements IToolCallMessage {
   }
 }
 
+const FALLBACK_CONTEXT = 3
+
+/** 把 diff 片段的 value 拆成行（末尾换行不算一行，与内核同一口径） */
+function partLines(value: string): string[] {
+  const v = value.replace(/\r\n/g, '\n')
+  if (v === '') return []
+  const lines = v.split('\n')
+  if (v.endsWith('\n')) lines.pop()
+  return lines
+}
+
+/**
+ * 老消息（完全没有 uiData）的兜底：把两侧文本折成「统一 diff 文本」交给 CodeBlock 渲染。
+ *
+ * 差异**同样由 `utils/diff` 的唯一内核**（jsdiff）算出来 —— 项目里不该有第二份 diff 实现；
+ * 这里只负责排版成 `+` / `-` / 空格的文本，并给首尾的未改动块各留 3 行上下文。
+ */
 function generateFallbackDiff(oldStr: string, newStr: string): string {
-  const oldLines = oldStr.split('\n')
-  const newLines = newStr.split('\n')
-
-  let prefixLen = 0
-  while (
-    prefixLen < oldLines.length &&
-    prefixLen < newLines.length &&
-    oldLines[prefixLen] === newLines[prefixLen]
-  ) {
-    prefixLen++
-  }
-
-  let suffixLen = 0
-  while (
-    suffixLen < oldLines.length - prefixLen &&
-    suffixLen < newLines.length - prefixLen &&
-    oldLines[oldLines.length - 1 - suffixLen] ===
-    newLines[newLines.length - 1 - suffixLen]
-  ) {
-    suffixLen++
-  }
-
-  const result: string[] = []
-
-  const ctxBefore = Math.min(prefixLen, 3)
-  for (let i = prefixLen - ctxBefore; i < prefixLen; i++) {
-    result.push(' ' + oldLines[i])
-  }
-  for (let i = prefixLen; i < oldLines.length - suffixLen; i++) {
-    result.push('-' + oldLines[i])
-  }
-  for (let i = prefixLen; i < newLines.length - suffixLen; i++) {
-    result.push('+' + newLines[i])
-  }
-  for (let i = oldLines.length - suffixLen; i < oldLines.length; i++) {
-    result.push(' ' + oldLines[i])
-  }
-
-  return result.join('\n')
+  const parts = diffLines(oldStr, newStr)
+  const out: string[] = []
+  parts.forEach((part, i) => {
+    const lines = partLines(part.value)
+    if (part.added) out.push(...lines.map((line) => `+${line}`))
+    else if (part.removed) out.push(...lines.map((line) => `-${line}`))
+    else {
+      // 首块只留末尾 3 行、末块只留开头 3 行（夹在中间的未改动块照常整段保留）
+      const first = i === 0 && parts.length > 1
+      const last = i === parts.length - 1 && parts.length > 1
+      const kept = first
+        ? lines.slice(-FALLBACK_CONTEXT)
+        : last
+          ? lines.slice(0, FALLBACK_CONTEXT)
+          : lines
+      out.push(...kept.map((line) => ` ${line}`))
+    }
+  })
+  return out.join('\n')
 }
 
 export default EditFileMessage
