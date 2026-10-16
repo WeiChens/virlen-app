@@ -964,3 +964,106 @@
     }
   }
 }
+
+/* ============================================================================
+ * 提交图（GitGraphModal + GraphCanvas）
+ *
+ * 结构：`.git-graph-body` 里只有一个滚动列表，canvas **绝对定位垫在它上层**（`pointer-events: none`，
+ * 所以悬停 / 点选 / 滚轮都穿过去落到行上）。图不会随列表滚出屏幕（它只重画可视区）；
+ * 行里只留**本行**的左空位（`.git-graph-gutter`，宽度由 `rowExtent` 逐行算）。
+ * 两边的对齐全靠「**同一个固定行高**」：
+ * canvas 的行坐标是 `行号 × --git-graph-row-h`，行高一变就是整张图与文字逐行错开。
+ * ⚠️ 所以图形态里的行高用 `--git-graph-row-h`（`theme.scss` 的 `:root`，30px），
+ *    **不跟界面字号缩放**（与 P1.16「车道宽度是硬编码像素」同一条取舍）。
+ *
+ * ⚠️ 本块的规则与上面 `.git-log-modal` 里那几条**同特异性**（都是 0,2,0），靠**源码顺序**生效 ——
+ *    改写时别把本块挪到 `.git-log-modal` 前面，否则列表的上内边距/行高会静默回退（图逐行错位）。
+ * ========================================================================= */
+.git-graph-modal {
+  /* ⚠️ canvas **不占列表的宽度**：它绝对定位垫在列表上层（`pointer-events: none`，悬停 / 点选穿过去），
+     列表占满整宽；每行只按**本行**画到的列留一段左空位（`.git-graph-gutter` 的内联宽度，逐行不同）。
+     早先把 canvas 当兄弟节点占一整列时，行里只能按「整窗口最宽那一行」留位 ——
+     只用一列的行也会白白空出几百像素（用户看到的「图与文字之间一大片留白」）。 */
+  .git-graph-body {
+    position: relative;
+    display: flex;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .git-graph-canvas {
+    position: absolute;
+    left: 0;
+    top: 0;
+    display: block;
+    height: 100%;
+    pointer-events: none;
+    /* 画在行之上：行的悬停底色不许把图盖掉（文字永远在让位宽度之外，所以不会压到线上） */
+    z-index: 1;
+  }
+
+  /* ⚠️ 上内边距必须是 0：canvas 的第 0 行从内容盒顶边开始算（与列表内容盒同顶），多出的 padding 会让整张图下移 */
+  .git-graph-list {
+    flex: 1;
+    min-width: 0;
+    padding-top: 0;
+  }
+
+  .git-log-row {
+    height: var(--git-graph-row-h, 30px);
+    align-items: center;
+  }
+
+  .git-graph-count {
+    font-size: var(--font-size-2xs, 10px);
+    color: var(--text-tertiary, #767676);
+  }
+}
+
+/* 行里的图列空位：只有宽度有意义（宽度 = `graphWidth(rowExtent(本行))`，逐行不同 ——
+   「本行只用到第一列」的行就不该空出整窗口最宽那一行的位置） */
+.git-graph-gutter {
+  flex: none;
+  align-self: stretch;
+}
+
+/* 引用标签（分支 / 远程分支 / 标签 / 当前分支）—— `GitCommitRow` 渲染，两个弹窗共用，所以挂顶层
+   （§11.53 ⑬：写进某个弹窗作用域里，另一处就没样式了）。
+   颜色不能当身份标识（无交集的分支允许同色），所以名字是主体，颜色只做「哪一类」的弱提示。 */
+.git-log-ref {
+  flex: none;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 6px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 999px;
+  background: var(--bg-secondary, #f7f7f8);
+  color: var(--text-secondary, #666);
+  font-size: var(--font-size-2xs, 10px);
+
+  /* 当前分支：品牌色作底 —— 前景必须是 `--primary-fg`（浅色主题色才能自动转黑字），
+     硬编码 #fff 会被 `tests/ui/accent-color-contract.test.ts` 拦下（§11.53 ⑩） */
+  &.is-head {
+    border-color: transparent;
+    background: var(--primary-color);
+    color: var(--primary-fg);
+  }
+
+  /* 远程跟踪分支：虚线框（与同名本地分支的区别，光看名字分不出来） */
+  &.is-remote {
+    border-style: dashed;
+    color: var(--color-info);
+  }
+
+  /* 标签：不常跟着分支动，用弱一档的文字色区分 */
+  &.is-tag {
+    color: var(--color-warning-text, #b45309);
+  }
+
+  /* `+N`：被省略的引用条数（悬停有完整数字） */
+  &.is-more {
+    color: var(--text-tertiary, #767676);
+  }
+}

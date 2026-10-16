@@ -24,6 +24,12 @@ const FILES = [
   'src/ui/pages/chat/components/git/GitBranchMenu.tsx',
   'src/ui/pages/chat/components/git/GitDiffModal.tsx',
   'src/ui/pages/chat/components/git/GitLogModal.tsx',
+  // 提交图（弹窗 + 行 + canvas + 分页 hook）：新组件都必须登记，否则「新加了一句 t() 忘了翻译」
+  // 在这一块就是无人守的（本用例扫的是这份清单，不是目录）
+  'src/ui/pages/chat/components/git/GitGraphModal.tsx',
+  'src/ui/pages/chat/components/git/GitCommitRow.tsx',
+  'src/ui/pages/chat/components/git/GraphCanvas.tsx',
+  'src/ui/pages/chat/components/git/useCommitPages.ts',
   // 差异正文（复制 / 全选那套菜单文案就在它里面；现在住在 message/ 下，两处共用）
   'src/ui/pages/chat/components/message/MonacoDiffView.tsx',
   // 聊天里 edit_file 的差异输入适配层（在它里面）

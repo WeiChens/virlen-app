@@ -15,8 +15,8 @@ use serde_json::json;
 use std::sync::Arc;
 use virlen_core::git::cli::GitError;
 use virlen_core::git::{
-    BranchInfo, CommitLogEntry, CommitResult, DiffScope, DiffSides, RepoInfo, StatusSnapshot,
-    WriteGate,
+    BranchInfo, CommitLogEntry, CommitResult, DiffScope, DiffSides, LogScope, RepoInfo,
+    StatusSnapshot, WriteGate,
 };
 use virlen_core::session_db::SettingsRepo;
 
@@ -76,17 +76,24 @@ pub async fn git_branches(dir: String) -> Result<Vec<BranchInfo>, String> {
     blocking("branches", move || virlen_core::git::branch::list(&dir)).await
 }
 
-/// 提交记录（从 HEAD 往回；`skip` 由界面「加载更多」推进，Rust 侧不缓存）
+/// 提交记录（从 HEAD 或全部分支往回；`skip` 由界面「加载更多」推进，Rust 侧不缓存）。
+///
+/// `scope` = `head`（默认，只有 HEAD 可达 —— 「提交记录」弹窗）/ `all`（全部分支 + 标签 ——
+/// 「提交图」弹窗，见 [`virlen_core::git::LogScope`]）。两个入口给两个不同的 `op` 名，只为了在
+/// 埋点里分得开用量 —— ⚠️ 依旧**不报分支名、不报仓库路径**。
 #[tauri::command]
 pub async fn git_log(
     dir: String,
     skip: u32,
     limit: u32,
+    scope: Option<LogScope>,
     task_id: String,
 ) -> Result<Vec<CommitLogEntry>, String> {
     let cancel = crate::task_manager::register(&task_id);
-    let result = blocking("log", move || {
-        virlen_core::git::log::log(&dir, skip, limit, Some(&cancel))
+    let scope = scope.unwrap_or(LogScope::Head);
+    let op = if scope == LogScope::All { "log_graph" } else { "log" };
+    let result = blocking(op, move || {
+        virlen_core::git::log::log(&dir, skip, limit, scope, Some(&cancel))
     })
     .await;
     crate::task_manager::unregister(&task_id);

@@ -11,7 +11,7 @@ use super::branch::{self, parse_refs};
 use super::cli::GitCmd;
 use super::log::parse_log;
 use super::status::parse_status;
-use super::{ChangeEntry, DiffScope, EntryKind, HeadInfo, StatusSnapshot, WriteGate};
+use super::{ChangeEntry, DiffScope, EntryKind, HeadInfo, LogScope, StatusSnapshot, WriteGate};
 use std::path::PathBuf;
 
 // ==================== 一、固定字节（纯函数） ====================
@@ -556,8 +556,8 @@ fn porcelain_v2_path_basis_depends_on_z() {
 #[test]
 fn parse_log_pins_record_and_field_layout() {
     let raw = concat!(
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u{1f}aaaaaaa\u{1f}张三\u{1f}z@example.com\u{1f}2026-10-16T10:29:46+08:00\u{1f}fix: 优化 diff\0",
-        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\u{1f}bbbbbbb\u{1f}virlen test\u{1f}t@example.com\u{1f}2026-10-15T18:05:15+08:00\u{1f}feat: 标题里带 \u{1f} 的情况\0",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u{1f}aaaaaaa\u{1f}张三\u{1f}z@example.com\u{1f}2026-10-16T10:29:46+08:00\u{1f}\u{1f}\u{1f}fix: 优化 diff\0",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\u{1f}bbbbbbb\u{1f}virlen test\u{1f}t@example.com\u{1f}2026-10-15T18:05:15+08:00\u{1f}1111111111111111111111111111111111111111 2222222222222222222222222222222222222222\u{1f}HEAD -> refs/heads/master, refs/remotes/origin/master\u{1f}feat: 标题里带 \u{1f} 的情况\0",
     )
     .as_bytes();
 
@@ -569,6 +569,19 @@ fn parse_log_pins_record_and_field_layout() {
     assert_eq!(list[0].author_email, "z@example.com");
     assert_eq!(list[0].author_time, "2026-10-16T10:29:46+08:00");
     assert_eq!(list[0].subject, "fix: 优化 diff");
+    // root 提交的 `%P` / `%D` 都是空串 → **空数组**，不许切出一个空元素（否则图会给它连一条空线）
+    assert!(list[0].parents.is_empty());
+    assert!(list[0].refs.is_empty());
+    // merge 的父是**空格分隔**的两个 oid；`%D` 是 `, ` 分隔，`HEAD -> …` 原样保留（拆解在前端）
+    assert_eq!(list[1].parents.len(), 2);
+    assert_eq!(list[1].parents[0].len(), 40);
+    assert_eq!(
+        list[1].refs,
+        vec![
+            "HEAD -> refs/heads/master".to_string(),
+            "refs/remotes/origin/master".to_string()
+        ]
+    );
     // subject 是唯一的自由文本：里面含 US 也只会留在最后一段（不许把字段数切乱）
     assert_eq!(list[1].subject, "feat: 标题里带 \u{1f} 的情况");
     assert_eq!(list[1].author_name, "virlen test");
@@ -578,7 +591,7 @@ fn parse_log_pins_record_and_field_layout() {
     assert!(parse_log(b"").is_empty());
     // 记录首尾的换行要削掉（某些形态下 NUL 后会跟着一个换行），但**空格不许削**
     // ⚠️ 字节串里只能用 `\x1f`（`\u{…}` 不能出现在字节串里）
-    let padded = b"\ncccccccccccccccccccccccccccccccccccccccc\x1fccccccc\x1fA\x1fa@b.c\x1f2026-01-01T00:00:00+08:00\x1f leading and trailing \r\n";
+    let padded = b"\ncccccccccccccccccccccccccccccccccccccccc\x1fccccccc\x1fA\x1fa@b.c\x1f2026-01-01T00:00:00+08:00\x1f\x1f\x1f leading and trailing \r\n";
     let one = parse_log(padded);
     assert_eq!(one.len(), 1);
     assert_eq!(one[0].oid.len(), 40, "记录前的换行必须被削掉");
@@ -593,7 +606,7 @@ fn log_end_to_end_on_real_repo() {
     let gate = WriteGate::new(true);
 
     assert!(
-        super::log::log(&repo.path(), 0, 50, None)
+        super::log::log(&repo.path(), 0, 50, LogScope::Head, None)
             .unwrap()
             .is_empty(),
         "还没有任何提交时应当是空列表（unborn HEAD 不是错误）"
@@ -605,7 +618,7 @@ fn log_end_to_end_on_real_repo() {
         super::commit::commit(&repo.path(), &gate, &format!("feat: 第 {} 次提交\n", i)).unwrap();
     }
 
-    let all = super::log::log(&repo.path(), 0, 50, None).unwrap();
+    let all = super::log::log(&repo.path(), 0, 50, LogScope::Head, None).unwrap();
     assert_eq!(all.len(), 3);
     assert_eq!(all[0].subject, "feat: 第 3 次提交", "最新的提交必须排在最前");
     assert_eq!(all[2].subject, "feat: 第 1 次提交");
@@ -620,14 +633,21 @@ fn log_end_to_end_on_real_repo() {
     assert!(all[0].oid.starts_with(&all[0].short_oid));
 
     // 分页：skip = 已经拿过多少条（界面「加载更多」就是把它往前推）
-    let page = super::log::log(&repo.path(), 1, 1, None).unwrap();
+    let page = super::log::log(&repo.path(), 1, 1, LogScope::Head, None).unwrap();
     assert_eq!(page.len(), 1);
     assert_eq!(page[0].subject, "feat: 第 2 次提交");
 
     // 越界的一页 = 空列表（界面据此收掉「加载更多」），不是错误
-    assert!(super::log::log(&repo.path(), 10, 50, None).unwrap().is_empty());
+    assert!(super::log::log(&repo.path(), 10, 50, LogScope::Head, None)
+        .unwrap()
+        .is_empty());
     // limit 传 0 也不许把 `--max-count` 变成 0（夹到 1）
-    assert_eq!(super::log::log(&repo.path(), 0, 0, None).unwrap().len(), 1);
+    assert_eq!(
+        super::log::log(&repo.path(), 0, 0, LogScope::Head, None)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 /// 路径不变式对读操作同样成立：**仓库子目录**也能拿到同一份提交记录（cwd 统一到仓库根）
@@ -640,9 +660,107 @@ fn log_accepts_subdirectory_workspace() {
     super::commit::commit(&repo.path(), &gate, "init").unwrap();
 
     let sub = format!("{}/sub", repo.path());
-    let list = super::log::log(&sub, 0, 50, None).unwrap();
+    let list = super::log::log(&sub, 0, 50, LogScope::Head, None).unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].subject, "init");
+}
+
+/// 提交图（`LogScope::All`）在真仓库上的形状 —— 四条都是**实测出来**的差别，少一条图就不对：
+///
+/// 1. **merge 的父有两个**且都在同一份列表里（否则线是断的）；root 的父是空数组；
+/// 2. **引用取全名**（`--decorate=full`）：`HEAD -> refs/heads/x` / `refs/tags/x`；
+///    短名分不出本地与远程（本地分支名可以含 `/`）；
+/// 3. **别的分支的提交只在 All 里**（`Head` 范围与「提交记录」弹窗行为完全一致）；
+/// 4. **stash 的 WIP 提交不进图** —— 不是「我们没搜到」而是「有意排除」：`git log --all` 确实会带上它
+///    （用例先断言这个前提），而它有两个父、画出来是一团乱麻。
+#[test]
+fn log_all_graph_shape_on_real_repo() {
+    let Some(repo) = TempRepo::new() else { return };
+    repo.write("a.txt", "1\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "A"]);
+    // 默认分支名交给 git 自己报（master / main 都行）
+    let main = repo.git(&["rev-parse", "--abbrev-ref", "HEAD"]).trim().to_string();
+
+    // 一条分叉出去、又合回来的历史（图上的一个菱形）
+    repo.git(&["checkout", "-q", "-b", "feat/x"]);
+    repo.write("b.txt", "2\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "B"]);
+    repo.git(&["checkout", "-q", &main]);
+    repo.write("c.txt", "3\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "C"]);
+    repo.git(&["merge", "-q", "--no-ff", "-m", "M", "feat/x"]);
+    repo.git(&["tag", "v1.0"]);
+
+    // 另一条**没有合进来**的分支：它是「All 与 Head 有差别」的判据
+    repo.git(&["checkout", "-q", "-b", "side", "HEAD~1"]);
+    repo.write("d.txt", "4\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "D"]);
+    let side_oid = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
+    repo.git(&["checkout", "-q", &main]);
+
+    let all = super::log::log(&repo.path(), 0, 50, LogScope::All, None).unwrap();
+    // ⚠️ 不按「第 0 条」找 merge：另一条没合进来的分支 D 比它新，`--date-order` 会把 D 排在最前
+    // （这本身也是「All 范围真的把并行分支放进来了」的旁证）
+    let merge = all
+        .iter()
+        .find(|e| e.subject == "M")
+        .expect("merge 提交要在列表里");
+    assert_eq!(merge.parents.len(), 2, "merge 提交有两个父（连线靠它）");
+    let oids: Vec<&str> = all.iter().map(|e| e.oid.as_str()).collect();
+    for p in &merge.parents {
+        assert!(
+            oids.contains(&p.as_str()),
+            "父 {} 必须也在同一份列表里，否则线是断的",
+            p
+        );
+    }
+    assert_eq!(merge.refs.len(), 2, "HEAD 那条 + 标签那条：{:?}", merge.refs);
+    assert!(merge
+        .refs
+        .contains(&format!("HEAD -> refs/heads/{}", main)));
+    // ⚠️ 标签带 `tag: ` 前缀（轻量标签也一样）—— 实测：`tag: refs/tags/v1.0`（不带 --decorate=full 时
+    // 是 `tag: v1.0`）。前端的引用解析必须这个前缀当「标签」的判据，不能只看 `refs/tags/`
+    assert!(merge.refs.contains(&"tag: refs/tags/v1.0".to_string()));
+
+    // root 提交的父是空数组（不是 `[""]`）
+    let root = all
+        .iter()
+        .find(|e| e.subject == "A")
+        .expect("root 提交要在列表里");
+    assert!(root.parents.is_empty(), "root 没有父");
+
+    // 没合进来的分支：All 里有、Head 里没有
+    assert!(oids.contains(&side_oid.as_str()), "All 范围要包含别的分支");
+    let head_only = super::log::log(&repo.path(), 0, 50, LogScope::Head, None).unwrap();
+    assert!(!head_only.iter().any(|e| e.oid == side_oid));
+
+    // 布局前提：父必须排在子之后（`--date-order` 的保证，见模块头第 6 条）
+    for (i, e) in all.iter().enumerate() {
+        for p in &e.parents {
+            if let Some(j) = all.iter().position(|x| &x.oid == p) {
+                assert!(j > i, "父 {} 排在了子 {} 之前（第 {} 行）", p, e.oid, i);
+            }
+        }
+    }
+
+    // stash 的 WIP 提交：`--all` 会带上（先钉住这个前提），我们有意排除
+    repo.write("dirty.txt", "dirty\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["stash", "-q"]);
+    let stash_oid = repo.git(&["rev-parse", "refs/stash"]).trim().to_string();
+    assert!(
+        repo.git(&["log", "--all", "--format=%H"]).contains(&stash_oid),
+        "前提：`git log --all` 确实会带上 stash（否则这条断言没有意义）"
+    );
+    let with_stash = super::log::log(&repo.path(), 0, 50, LogScope::All, None).unwrap();
+    assert!(
+        !with_stash.iter().any(|e| e.oid == stash_oid),
+        "stash 的 WIP 提交不该画进提交图"
+    );
 }
 
 /// 路径不变式的谓词与自检：非仓库根相对路径必须被拒（fail-closed）。

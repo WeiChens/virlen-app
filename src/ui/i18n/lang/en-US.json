@@ -1788,5 +1788,13 @@
   "提交记录": "Commit History",
   "没有提交记录": "No commits yet",
   "加载更多": "Load more",
-  "（无提交信息）": "(no commit message)"
+  "（无提交信息）": "(no commit message)",
+  "提交图": "Commit Graph",
+  "提交图：一个点是一次提交，一条线是父子关系": "Commit graph: each dot is a commit, each line is a parent/child relation",
+  "已加载 $__count__ 条提交": "$__count__ commit(s) loaded",
+  "当前分支：$__name__": "Current branch: $__name__",
+  "分支：$__name__": "Branch: $__name__",
+  "远程分支：$__name__": "Remote branch: $__name__",
+  "标签：$__name__": "Tag: $__name__",
+  "另有 $__count__ 个引用：$__list__": "$__count__ more ref(s): $__list__"
 }

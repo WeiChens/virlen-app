@@ -48,6 +48,9 @@ function entry(over: Partial<GitCommitLogEntry>): GitCommitLogEntry {
     author_name: '张三',
     author_email: 'zhangsan@example.com',
     author_time: '2026-10-16T10:29:46+08:00',
+    // 提交记录列表用不到这两个（提交图才用）—— 但类型是**必填**的（与 Rust 逐字对应）
+    parents: [],
+    refs: [],
     subject: 'fix: 优化 diff',
     ...over,
   }
@@ -210,7 +213,12 @@ it('拿回整页才显示「加载更多」；点了按 skip = 已加载条数�
   vi.mocked(loadCommits).mockResolvedValueOnce(page(3, LOG_PAGE_SIZE))
   await act(async () => moreBtn()!.click())
 
-  expect(vi.mocked(loadCommits).mock.calls).toEqual([[0], [LOG_PAGE_SIZE]])
+  // ⚠️ 第二个参数是范围：不带它时 `loadCommits` 默认 `head`，但弹窗是**显式**传 `'head'` 的
+  //（页大小由它决定 —— 断言里不能只写 skip，否则「哪来的页大小」这件事没人守）
+  expect(vi.mocked(loadCommits).mock.calls).toEqual([
+    [0, 'head'],
+    [LOG_PAGE_SIZE, 'head'],
+  ])
   expect(rows().length).toBe(LOG_PAGE_SIZE + 3)
   // 不足一页 = 到底了：那颗按钮收掉（不给一个点下去没反应的入口）
   expect(moreBtn()).toBeNull()

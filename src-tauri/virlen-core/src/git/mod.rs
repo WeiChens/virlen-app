@@ -116,6 +116,20 @@ pub enum DiffScope {
     Index,
 }
 
+/// 提交记录的取数范围。
+///
+/// ⚠️ 这里的 `All` **不是** `git log --all`：那个按文档口径会带上 `refs/` 下的**全部**引用，
+/// 其中包含 `refs/stash` —— stash 的 WIP 提交有 2–3 个父，画进提交图不是「分支」而是一团乱麻。
+/// 我们用 `--branches --tags --remotes HEAD`（= 本地分支 + 远程跟踪分支 + 标签 + HEAD）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogScope {
+    /// 只有 HEAD 可达的提交（「提交记录」弹窗）
+    Head,
+    /// 全部分支 / 标签（「提交图」弹窗，见 [`log`]）
+    All,
+}
+
 /// 差异的两侧内容（`None` = 空侧：新增 / 未跟踪的左侧、删除的右侧）。
 ///
 /// ⚠️ 这是**文件原始字节**，没走 `.gitattributes` 的 filter / textconv（见方案 §5.3 / §11.3）：
@@ -144,7 +158,8 @@ pub struct CommitResult {
 /// 一条提交记录（`git log` 的忠实映射，见 [`log`]）。
 ///
 /// 字段名与 git 的 pretty 占位符一一对应：`oid`=`%H`、`short_oid`=`%h`、`author_name`=`%an`、
-/// `author_email`=`%ae`、`author_time`=`%aI`（ISO 8601 strict，带时区）、`subject`=`%s`（单行）。
+/// `author_email`=`%ae`、`author_time`=`%aI`（ISO 8601 strict，带时区）、`parents`=`%P`、
+/// `refs`=`%D`、`subject`=`%s`（单行）。
 /// ⚠️ **只回标题不回正文**：列表要的不是整段信息，正文要看时再单独取（见 [`log`] 模块头）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommitLogEntry {
@@ -154,6 +169,14 @@ pub struct CommitLogEntry {
     pub author_email: String,
     /// `%aI`：`2026-10-16T10:29:46+08:00`（**原始时区**，展示时的本地化是前端的口径）
     pub author_time: String,
+    /// `%P`：父提交 oid（**空格分隔**，merge 有多个、root 为空数组）。提交图的连线只认它。
+    pub parents: Vec<String>,
+    /// `%D`（配 `--decorate=full`）：指向本提交的引用**全名**，如 `refs/heads/master` /
+    /// `refs/remotes/origin/master` / `refs/tags/v1.1.55`；指向 HEAD 的那条形如
+    /// `HEAD -> refs/heads/master`（拆解与展示口径在前端，Rust 只忠实回传）。
+    /// ⚠️ 取全名而不是短名：短名有歧义 —— 本地分支名**可以**含 `/`（本仓库就有
+    /// `feat/0914-responses-api`），光看 `origin/master` 分不出本地分支还是远程跟踪分支。
+    pub refs: Vec<String>,
     pub subject: String,
 }
 

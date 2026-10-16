@@ -29,7 +29,7 @@ import {
   switchBranch as invokeSwitchBranch,
   unstage as invokeUnstage,
 } from '@/infrastructure/git'
-import type { GitCommitLogEntry, GitDiffScope, GitDiffSides } from '@/domain/git'
+import type { GitCommitLogEntry, GitDiffScope, GitDiffSides, GitLogScope } from '@/domain/git'
 import { gitStore } from '@/ui/store/gitStore'
 import { MessageBox as MessagePrompt } from '@/ui/components/shared/MessageBox'
 import { showToast } from '@/ui/components/shared/Toast'
@@ -333,18 +333,32 @@ export function checkRefFormat(name: string): Promise<boolean> {
 export const LOG_PAGE_SIZE = 50
 
 /**
- * 取一页提交记录（`skip` = 已经拿过多少条）。
+ * 提交图一页多少条 —— 比列表大得多。
  *
- * 三条口径：
+ * 「提交图」首页要装得下**各分支头**：50 条往往只覆盖当前分支最近的一串，看上去就是一条直线
+ * （那正是用户要看的「分支关系」不出现的原因）。200 仍远低于 Rust 侧 `MAX_LIMIT = 500`。
+ */
+export const GRAPH_PAGE_SIZE = 200
+
+/**
+ * 取一页提交记录（`skip` = 已经拿过多少条；`scope` = head / all）。
+ *
+ * 四条口径：
  * - **不进 `busy`**：读操作不拦写操作（看一眼历史不该把提交按钮锁住）；
  * - **不写 store**：弹窗自己持有这份列表，关掉即弃 —— 缓存会让「刚提交完再打开」显示旧列表
  *   （与差异正文同一取舍）；
- * - **失败抛出**（不 toast）：弹窗自己有位置说清原因，弹窗还没开就给 toast 更没有落点。
+ * - **失败抛出**（不 toast）：弹窗自己有位置说清原因，弹窗还没开就给 toast 更没有落点；
+ * - **分页大小按范围给**（列表 50 / 提交图 200）—— ⚠️ 「还有没有下一页」的判据是
+ *   「拿回的是不是整页」，所以页大小必须与 `scope` 一一对应，不能用当前列表长度去推。
  */
-export async function loadCommits(skip: number): Promise<GitCommitLogEntry[]> {
+export async function loadCommits(
+  skip: number,
+  scope: GitLogScope = 'head',
+): Promise<GitCommitLogEntry[]> {
   const dir = gitStore.dir
   if (!dir) throw new Error(t('当前工作目录不是 Git 仓库'))
-  return invokeLog(dir, skip, LOG_PAGE_SIZE, newTaskId('git_log'))
+  const limit = scope === 'all' ? GRAPH_PAGE_SIZE : LOG_PAGE_SIZE
+  return invokeLog(dir, skip, limit, scope, newTaskId(`git_log_${scope}`))
 }
 
 // ==================== 差异 ====================

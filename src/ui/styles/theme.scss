@@ -304,6 +304,19 @@ $accent-mix-usermsg-dark-brand: 45%; // mix(brand, #fff, 45%)
   --diff-new-linenum-color: #166534;
   --diff-linenum-color: #6b7280;
 
+  /* ===== 提交图调色板（8 色；canvas 不认 CSS 变量，由 GraphCanvas 读进 JS 再涂）=====
+     色号 = 列（lane）创建时的顺序号，取值范围 [0, 8)：同一连通分量内不重复、
+     毫无交集的分量之间从头复用 —— 即可见区並排的线永远不同色（口径见 domain/git/graph.ts）。
+     ⚠️ 这 8 个值与 `GRAPH_PALETTE_FALLBACK`（暗色那份）的相等由用例扫文本钉住。 */
+  --git-graph-1: #0969da;
+  --git-graph-2: #8250df;
+  --git-graph-3: #bc4c00;
+  --git-graph-4: #1a7f37;
+  --git-graph-5: #1b7c83;
+  --git-graph-6: #bf3989;
+  --git-graph-7: #9a6700;
+  --git-graph-8: #57606a;
+
   --bg-primary-t: #ffffff37;
   --inline-code-hover-bg: #dbdbdb;
   --accent-bg: var(--primary-soft);
@@ -411,6 +424,16 @@ $accent-mix-usermsg-dark-brand: 45%; // mix(brand, #fff, 45%)
   --diff-new-linenum-bg: #203a20;
   --diff-new-linenum-color: #a6e3a1;
   --diff-linenum-color: #6b7080;
+
+  /* 提交图调色板（暗色档）—— ⚠️ 与 `domain/git/graph.ts::GRAPH_PALETTE_FALLBACK` 逐个相等（用例钉住） */
+  --git-graph-1: #6cb6ff;
+  --git-graph-2: #c9a0ff;
+  --git-graph-3: #ffb86b;
+  --git-graph-4: #7ee787;
+  --git-graph-5: #56d4dd;
+  --git-graph-6: #ff8fb1;
+  --git-graph-7: #e3d05a;
+  --git-graph-8: #9aa4b2;
   --bg-primary-t: #00000037;
   --inline-code-hover-bg: #313244;
 
@@ -442,6 +465,14 @@ $accent-mix-usermsg-dark-brand: 45%; // mix(brand, #fff, 45%)
   /* 自绘窗口状态栏高度：WindowLayout.scss 的 .window-top-bar 与全屏浮层
      （code-block.scss 的 .code-block-fullscreen-layer）共用这一份，避免两边各写一个 30px */
   --window-top-bar-height: 30px;
+
+  /* ===== 提交图（与主题无关；颜色在上面两个主题块里） =====
+     ⚠️ 行高是**硬编码像素**、不跟界面字号缩放：canvas 的行坐标（`~ 行号 × 行高`）全靠它，
+     一缩放就整张图与文字逐行错开（与 P1.16「车道宽度是硬编码像素」同一条取舍）。
+     30px = 行内 padding 5+5 + 最大档字号 13px × 1.5 的行高（19.5px ≤ 20px）。
+     ⚠️ 这两个值必须与 `domain/git/graph.ts` 的 `GRAPH_ROW_H` / `LANE_W` 一致（用例扫文本钉住）。 */
+  --git-graph-row-h: 30px;
+  --git-graph-lane-w: 14px;
 
   /* ===== 字号等级（medium 默认） =====
      单一事实来源：组件里不许再写 px 字号，一律 font-size: var(--font-size-*)；

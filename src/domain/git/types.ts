@@ -63,6 +63,13 @@ export interface GitStatusSnapshot {
 export type GitDiffScope = 'worktree' | 'index'
 
 /**
+ * 提交记录的取数范围（与 Rust `git::LogScope` 逐字对应）。
+ *
+ * ⚠️ `all` **不是** `git log --all`：那个会把 `refs/stash` 的 WIP 提交也带上（见 Rust `LogScope`）。
+ */
+export type GitLogScope = 'head' | 'all'
+
+/**
  * 差异的两侧内容（`null` = 空侧：新增 / 未跟踪的左侧、删除的右侧）。
  * ⚠️ 是文件原始字节，未经 `.gitattributes` 的 filter / textconv（见方案 §5.3 / §11.3）。
  */
@@ -93,6 +100,18 @@ export interface GitCommitLogEntry {
   author_email: string
   /** `%aI` = ISO 8601 strict，带**作者当时**的时区偏移（展示成什么时间是前端的口径） */
   author_time: string
+  /**
+   * `%P`：父提交 oid（merge 有多个、root 为空数组）。
+   * 提交图的连线只认它 —— 没有它就只能画一排孤立的点。
+   */
+  parents: string[]
+  /**
+   * `%D`（`--decorate=full`）：指向本提交的引用**全名**。实测形态：
+   * `refs/heads/master` · `refs/remotes/origin/master` · `tag: refs/tags/v1.1.55`（标签带 `tag: ` 前缀，
+   * 轻量标签也一样）· 指向 HEAD 的那条是 `HEAD -> refs/heads/master`。
+   * 拆解与展示口径在 `domain/git/graph.ts::parseCommitRefs`。
+   */
+  refs: string[]
   /** `%s` = 提交标题（**单行**：git 已把信息首段的换行折成空格） */
   subject: string
 }

@@ -21,6 +21,7 @@ import type {
   GitCommitResult,
   GitDiffScope,
   GitDiffSides,
+  GitLogScope,
   GitRepoInfo,
   GitStatusSnapshot,
 } from '@/domain/git'
@@ -45,14 +46,15 @@ export function branches(dir: string): Promise<GitBranchInfo[]> {
   return invoke<GitBranchInfo[]>('git_branches', { dir })
 }
 
-/** 一页提交记录（`skip` = 已经拿过多少条；`taskId` 供超大仓库取消） */
+/** 一页提交记录（`skip` = 已经拿过多少条；`scope` = head / all；`taskId` 供超大仓库取消） */
 export function log(
   dir: string,
   skip: number,
   limit: number,
+  scope: GitLogScope,
   taskId: string,
 ): Promise<GitCommitLogEntry[]> {
-  return invoke<GitCommitLogEntry[]>('git_log', { dir, skip, limit, taskId })
+  return invoke<GitCommitLogEntry[]>('git_log', { dir, skip, limit, scope, taskId })
 }
 
 /** 差异的两侧内容 */
