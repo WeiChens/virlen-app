@@ -57,11 +57,8 @@ function sumEditStats(
 }
 
 /**
- * 获取单个编辑的 diffRows。
- *
- * ⚠️ 落库的行是**历史数据**：老会话里存的是老行模型（`equal` / `delete` / `insert` + 左右整行文本），
- * 交给 `normalizeDiffRows` 按老口径归一；只有完全没存过时才用当前算法现场算 —— 行号从
- * `oldStartLine` 起，界面上显示的是文件里的**绝对**行号。
+ * 单个编辑的 diffRows。⚠️ 落库的是历史数据，老行模型交给 `normalizeDiffRows` 归一；
+ * 完全没存过才现算（行号从 `oldStartLine` 起，显示绝对行号）。
  */
 function resolveEditRows(edit: EditUiRecord): DiffRow[] {
   if (edit.diffRows) return normalizeDiffRows(edit.diffRows)
@@ -73,13 +70,8 @@ function resolveEditRows(edit: EditUiRecord): DiffRow[] {
 }
 
 /**
- * 把同一文件里的多处编辑合并成一行行的展示数据。
- *
- * 保留每处编辑里的未改动行（`equal`，即 old/new 共有的上下文与中间相同行），
- * 让用户能看到「中间一样的部分」，而不是全部折叠成 ⋯。
- * 仅在工具返回的数据里确实没有中间内容（行号跳跃、无法展示相同行）时，
- * 才插入一行省略分隔 —— 那省略的是**我们手里根本没有的**东西，不补一行反而会把
- * 互不相连的两段代码伪造成连续。
+ * 同一文件多处编辑 → 逐行展示数据。保留各处编辑里的未改动行，让用户看得到中间相同部分；
+ * 仅当行号跳跃、手里确实没有中间内容时才插入省略行（否则会把不相连的两段伪造成连续）。
  */
 function mergeEditRows(edits: EditUiRecord[]): SideBySideRow[] {
   const sorted = [...edits].sort((a, b) => a.oldStartLine - b.oldStartLine)
@@ -117,8 +109,8 @@ function mergeEditRows(edits: EditUiRecord[]): SideBySideRow[] {
 }
 
 /**
- * 「工具根本没给那段内容」的占位行（DOM 版的 `⋯` 行）：**两侧都插** —— 两边相同才会被 Monaco
- * 当成未改动行，既保住「不相邻的两段不伪装成连续」，也不会被算成一处差异。
+ * 「工具没给那段内容」的占位行：**两侧都插** —— 两边相同才被 Monaco 当未改动行，
+ * 既保住「不相邻的两段不伪装成连续」，也不会被算成一处差异。
  */
 const GAP_PLACEHOLDER = '⋯'
 
@@ -129,14 +121,8 @@ interface FoldedSide {
 }
 
 /**
- * 把行模型折回「一侧的文本行 + 逐行行号」。
- *
- * ⚠️ 两处容易做错（都只能靠这里的代码表达，Monaco 看不到行模型）：
- * 1. `lineNo == null` 的行是**续行**（`utils/diff::buildGroupRows` 的口径：上面那一行还没结束，因为
- *    另一侧在那里断了行）—— 必须接在上一行后面、**不能换行**；当成新行会凭空多出一行，
- *    Monaco 会把它显示成一处新增/删除；
- * 2. 换行标记 `↵`（`NL_MARK`）是**展示标记**，不进文本 —— 去掉它就等于还原那个换行本身。
- *    （这里比 `SideBySideDiff::diffSideText` 多一步续行处理，所以不复用那一份。）
+ * 行模型折回「一侧的文本行 + 逐行行号」。⚠️ `lineNo == null` 是**续行**（另一侧在那里断行），
+ * 必须接在上一行后面不能换行；`↵` 是展示标记，不进文本。
  */
 function foldSide(rows: SideBySideRow[], side: 'old' | 'new'): FoldedSide {
   const lines: string[] = []
@@ -171,13 +157,8 @@ function numberMapper(side: FoldedSide) {
 }
 
 /**
- * 行模型 → `MonacoDiffView` 的输入（字段名与它的 props 对齐，调用处直接展开）。
- *
- * 为什么需要这一层：Monaco 只接受**两份全文**，而 `edit_file` 手里只有每次编辑的片段（还可能有行号
- * 跳跃）—— 折回文本后才能交给它算差异。
- *
- * `colHeaderNote` 只在行号**首尾连续**时给 `Ln a–b`：多处编辑合并后（或中间有省略行）行号会跳，
- * 写一个区间反而误导（与 DOM 版「多编辑不显示区间」同口径）；不连续时给 `null` = 不显示。
+ * 行模型 → `MonacoDiffView` 输入：Monaco 只吃两份全文，必须把片段折回文本。
+ * `colHeaderNote` 仅行号首尾连续时给，否则为 null（与 DOM 版同口径）。
  */
 export function toMonacoDiffInput(rows: SideBySideRow[]) {
   const old = foldSide(rows, 'old')
@@ -473,10 +454,8 @@ function partLines(value: string): string[] {
 }
 
 /**
- * 老消息（完全没有 uiData）的兜底：把两侧文本折成「统一 diff 文本」交给 CodeBlock 渲染。
- *
- * 差异**同样由 `utils/diff` 的唯一内核**（jsdiff）算出来 —— 项目里不该有第二份 diff 实现；
- * 这里只负责排版成 `+` / `-` / 空格的文本，并给首尾的未改动块各留 3 行上下文。
+ * 无 uiData 的老消息兜底：两侧文本折成统一 diff 文本交给 CodeBlock（差异仍由 `utils/diff` 内核算），
+ * 首尾未改动块各留 3 行上下文。
  */
 function generateFallbackDiff(oldStr: string, newStr: string): string {
   const parts = diffLines(oldStr, newStr)

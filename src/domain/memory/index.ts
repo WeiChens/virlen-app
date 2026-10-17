@@ -1,11 +1,6 @@
 /**
- * 记忆领域常量（**前端只做镜像**，权威实现全在 Rust）。
- *
- * 为何保留一份：设置页要显示上限、面板要给出枚举下拉，从 Rust 现取一次 IPC 不划算。
- *
- * ⚠️ 与 Rust 一次改两边：`agent/memory/mod.rs`（各常量值）、`prompt.rs`（`memoryEnabled` /
- * `memoryNormalTopK` 键名）、`redistill/mod.rs`（`memoryRedistillEnabled` 键名）。
- * ⚠️ `# Memory` 段由 Rust 经 `cmd_memory_prompt_section` 渲染下发，前端只负责插入。
+ * 记忆领域常量（**前端只做镜像**，权威全在 Rust）：设置页与面板要静默显示，不值得每次都走 IPC。
+ * ⚠️ 改值必须同步 `agent/memory/mod.rs` / `prompt.rs` / `redistill/mod.rs`；`# Memory` 段由 Rust 渲染下发。
  */
 
 /** 给 AI 的软上限（提示词里的要求） */
@@ -33,7 +28,7 @@ export type MemoryKind = (typeof MEMORY_KINDS)[number]
 
 /**
  * 项目分类（只有它才允许带 `projectPath`），与 Rust `MEMORY_KIND_PROJECT` 同值。
- * 不变量：非 `project` 的记忆带路径会被服务端清掉（否则它只在某目录可见、用户别处找不到）。
+ * 非 `project` 带路径会被服务端清掉。
  */
 export const MEMORY_KIND_PROJECT = 'project'
 
@@ -44,10 +39,8 @@ export const MEMORY_PROJECT_PATH_MAX_CHARS = 500
 export const MEMORY_ENABLED_KEY = 'memoryEnabled'
 export const MEMORY_NORMAL_TOP_K_KEY = 'memoryNormalTopK'
 /**
- * 再蒸馏的**逃生开关**（与 Rust `MEMORY_REDISTILL_ENABLED_KEY` 同值，缺键 = 开）。
- *
- * ⚠️ 它**不进 UI**（用户无感的后台能力，D5）：想关掉就改库一行，见 `docs/memory-redistill-plan.md` §6.11。
- * 也**不要**做「纠正为 true」的 fixup —— 那会让这个开关键失去意义。
+ * 再蒸馏逃生开关（与 Rust `MEMORY_REDISTILL_ENABLED_KEY` 同值，缺键 = 开）。
+ * ⚠️ 不进 UI，故意不做「纠正为 true」的 fixup —— 那会让开关失去意义。
  */
 export const MEMORY_REDISTILL_ENABLED_KEY = 'memoryRedistillEnabled'
 
@@ -58,9 +51,8 @@ export interface MemoryRecord {
   kind: MemoryKind | string
   summary: string
   /**
-   * 项目路径（仅 `kind === 'project'` 有意义）：该记忆只在「会话工作目录 = 它或其子目录」时注入与召回；
-   * `null` / 空 = 跨项目通用。
-   * ⚠️ 匹配在 Rust（`agent::memory::scope`），前端只负责把工作目录传下去。
+   * 项目路径（仅 `project` 有意义）：只在「工作目录 = 它或子目录」时注入与召回；`null` = 跨项目通用。
+   * ⚠️ 匹配在 Rust（`agent::memory::scope`），前端只传工作目录。
    */
   projectPath?: string | null
   detailKbId?: string | null
@@ -76,10 +68,8 @@ export interface MemoryRecord {
   updatedAt?: number
   disabled?: boolean
   /**
-   * 被哪个新条目顶替的（再蒸馏的软删标记）：非空 + `disabled` = 已归档。
-   *
-   * `null` = 没被顶替（用户手写的 / 从未参与过合并）—— 也是**自动清理的护栏字段**：
-   * 没有它 = 用户自己停用的，永不清理。被顶替的条目保留 30 天后由后台按四条护栏硬删。
+   * 被哪个新条目顶替（再蒸馏的软删标记）：非空 + `disabled` = 已归档。
+   * `null` = 从未参与合并（用户手写的 / 被用户停用）—— 自动清理的护栏字段。
    */
   supersededBy?: string | null
 }
@@ -109,8 +99,8 @@ export const MEMORY_EXPORT_FORMAT = 'virlen.memory'
 export const MEMORY_EXPORT_SCHEMA_VERSION = 1
 
 /**
- * 导出信封（与 Rust `MemoryExport` 同形）。⚠️ 不含详情正文（正文在知识库「记忆详情」里，
- * 要连正文一起备份用知识库页的导出 zip）。
+ * 导出信封（与 Rust `MemoryExport` 同形）。⚠️ 不含详情正文（正文在知识库），
+ * 要连正文备份请用知识库页的导出 zip。
  */
 export interface MemoryExportFile {
   format: string

@@ -1,29 +1,13 @@
 /*!
- * clipboard_files::vscode — 解析 VS Code 的 `code/file-list`
- *
- * VS Code 在资源管理器面板里「复制文件」时，会把文件列表写进一个自定义剪贴板格式
- * `code/file-list`，负载是一段 UTF-8 文本：
- *
- * ```text
- * resources.map(r => r.toString()).join('\n')
- * ```
- *
- * 即「换行分隔的 URI 列表」。出处（VS Code 源码）：
- *   src/vs/workbench/services/clipboard/electron-browser/clipboardService.ts
- *   → NativeClipboardService.FILE_FORMAT = 'code/file-list'
- *   → resourcesToBuffer() = VSBuffer.fromString(resources.map(r => r.toString()).join('\n'))
- *
- * 本文件只做「文本 → 本机路径」的纯解析，不碰系统剪贴板，因此与平台解耦：
- * 之后要接 macOS / 新增别的编辑器格式，照抄本文件的结构即可。
+ * 解析 VS Code 的 `code/file-list`：资源管理器面板里「复制文件」时，VS Code 把
+ * `resources.map(r => r.toString()).join('\n')`（换行分隔的 URI 列表）写进这个自定义格式。
+ * 本文件只做「文本 → 本机路径」的纯解析，不碰系统剪贴板；新增编辑器格式照抄本文件结构即可。
  */
 
 /// 注册型剪贴板格式名（Windows 上交给 RegisterClipboardFormat；macOS/Linux 亦同名字符串）
 pub const FORMAT_NAME: &str = "code/file-list";
 
-/// 把 code/file-list 的文本负载解析成一组本机路径。
-///
-/// 逐行解析，跳过空行；解析不出的行（远程 / WSL 等本机没有对应路径的 URI）直接丢弃。
-/// 返回的路径分隔符统一为 `/`，由前端（normalizeFsPath）再按需归一。
+/// 把 code/file-list 负载解析为路径：逐行、跳空行，解析不出的（远程 / WSL）丢弃；分隔符统一为 `/`。
 pub fn parse(payload: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in payload.split('\n') {

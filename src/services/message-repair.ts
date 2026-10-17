@@ -1,19 +1,9 @@
 /**
- * 消息格式修复 — 检测并修补「assistant 声明了 tool_calls，却缺少对应 tool 返回」的异常历史。
- *
- * 背景（线上故障）：应用在「LLM 已产出 tool_calls、工具还没返回」时被中断（崩溃/强杀），
- * assistant(tool_calls) 已落库（引擎刻意先落库再执行工具）但 tool 结果未写入，留下悬空 tool_calls，
- * 下次请求被服务端 400 拒绝：「An assistant message with 'tool_calls' must be followed by tool messages...」。
- *
- * 修复：
- * 1. 为悬空 tool_call_id 补一条占位 tool 消息（内容「程序中断」，isError=true）；
- * 2. 同一 tool_call_id 写了两条 tool 消息（占位先落库、真实结果后到，见去重函数）→ 只留真实结果；
- * 3. 没有 tool_call_id 的孤儿 tool 消息（老版本残留）→ 丢弃；
- * 4. 位置错乱的返回则归位，不重复补入。
- *
- * 窗口策略：②③ 全量线性扫描（合法性只取决于消息自身，且重复项可能是「占位在前、真实结果后到」）；
- * ①④ 只扫首/尾窗口（各 REPAIR_SCAN_WINDOW 条）—— 中断残留只可能出现在消息尾部（尾窗=主场景），
- * 首窗兜底「会话很早被中断、之后一直没发消息」。仅当确实要补占位时才按 toolCallId 全量查重。
+ * 消息格式修复：补上「assistant 声明了 tool_calls 却没有 tool 返回」的悬空项，否则服务端 400。
+ * ① 悬空 tool_call_id → 补一条「程序中断」占位（isError）；② 同 id 重复返回 → 只留真实结果；
+ * ③ 无 toolCallId 的孤儿 → 丢弃；④ 位置错乱的返回 → 归位而不重复补。
+ * 窗口策略：②③ 全量扫描（合法性只看消息自身）；①④ 只扫首/尾各 REPAIR_SCAN_WINDOW 条
+ * （中断残留只可能在尾部，首窗兜底）。
  */
 
 import { v4 } from '@/utils/uuid'
@@ -69,11 +59,7 @@ export function makeInterruptedToolResult(toolCallId: string): Message {
   }
 }
 
-/**
- * 收集需要检测的消息下标（首窗 + 尾窗，去重后**降序**）。
- *
- * 降序是必需的：修复会在 assistant 之后插入消息，若按升序遍历，后面的下标会整体偏移。
- */
+/** 待检下标（首窗 + 尾窗去重后**降序**：修复会插消息，升序遍历下标会偏移）。 */
 function collectScanIndexes(
   length: number,
   window: number,
@@ -101,13 +87,8 @@ function isBetterToolResult(candidate: Message, kept: Message): boolean {
 }
 
 /**
- * 去重 + 丢孤儿（全量线性扫描，不改动无关消息的顺序）。
- *
- * 两类脏数据都会让服务端直接 400（「tool 消息必须应答前置的 tool_calls」）：
- * - 同一 toolCallId 有两条 tool 返回 —— 占位先落库、真实结果后到（线上现场），第二条无可应答的调用；
- * - tool 消息没有 toolCallId（老版本残留）—— 无从应答。
- *
- * 不做窗口裁剪：一条 tool 消息是否合法只取决于它自己，与服务端报错的位置无关。
+ * 去重 + 丢孤儿（全量扫描，不改无关消息顺序）。两类脏数据都会让服务端 400：同 id 重复返回
+ * （占位先落库、真实结果后到）、无 toolCallId 的孤儿。不做窗口裁剪：合法性只看自身。
  */
 function dedupeToolResults(messages: Message[]): {
   messages: Message[]
@@ -149,11 +130,7 @@ function dedupeToolResults(messages: Message[]): {
   }
 }
 
-/**
- * 检测并修复「悬空 tool_calls」（纯函数，无副作用）。
- * @param messages 会话消息列表
- * @param options  检测窗口配置
- */
+/** 检测并修复悬空 tool_calls（纯函数，无副作用；无异常时返回入参同一引用）。 */
 export function repairToolCallMessages(
   messages: Message[],
   options: RepairToolCallOptions = {},

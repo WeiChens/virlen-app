@@ -28,9 +28,8 @@ fn service_for(app: &AppHandle) -> Result<&'static RagService, String> {
 }
 
 // ===== 记忆详情正文的底线保护 =====
-// 记忆条目只存摘要 + 一条指向「记忆详情」知识库的 link。库删不掉，但库里的文档原本谁都能删 ——
-// 删掉一份详情正文 = 静默丢掉那条记忆的正文。按**引用**判定而不是「builtin 库一律不许删」：
-// 默认库也是 builtin，用户自己放的文档当然能删；只有「还被记忆引用着」才算碰不得。
+// 记忆条目只存摘要 + 指向「详情」知识库的 link，删掉正文 = 静默丢掉那条记忆的正文。
+// 按**引用**判定而不是「builtin 库一律不许删」：默认库也是 builtin，用户自己放的文档当然能删。
 
 /// 该库里被某条记忆引用着的文档：doc_id → 记忆 id（判定口径在 agent::memory::detail_docs_in_kb）。
 async fn memory_linked_docs(

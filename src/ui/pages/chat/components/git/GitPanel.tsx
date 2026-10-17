@@ -1,20 +1,10 @@
 /**
- * GitPanel — 面板主体：仓库头（分支 / ahead-behind / **提交记录 / 提交图** / 刷新）+ 提交区 + 三段变更列表。
+ * GitPanel — 仓库头（分支 / ahead-behind / 提交记录 / 提交图 / 刷新）+ 提交区 + 三段变更列表。
  *
- * 提交区**只在暂存区非空时出现**（空着的时候它只是一行占地方的噪声）；主按钮靠右 ——
- * 与全项目「主操作落在右下」一致，左侧留给状态提示。
- *
- * 三段的顺序 / 标题 / 批量入口收在 `sections.ts`（差异弹窗的左侧清单共用同一份口径；未跟踪并进
- * 「更改」段—— git 的分组仍是四组，合并只发生在展示层）。
- * ⚠️ 冲突段**不给批量入口**：冲突文件的「暂存」在 git 里是「标记已解决」，与普通暂存不是一回事
- * （真正的解决要动文件内容，属于 P3，见方案 §8.3）。
- *
- * 选中模式（与资源管理器同口径）：单击 = 选中这一行、Ctrl/Cmd 点击 = 加 / 减、Shift 点击 = 选一段范围；
- * **双击**才打开差异（单击就弹窗会让「多选几个一起暂存」这件事做不了）。
- * 行内「暂存 / 取消暂存 / 丢弃」在这一行**属于选中集**时作用于同侧选中的全部（批量），此时按钮文案
- * 会变成「… N 个文件」（点之前就知道它带走几个），否则只作用于它自己。
- *
- * 只读沙盒模式下所有写入口禁用（`sandboxMode === 'readonly'`）—— Rust 侧同样会拒，这里是双保险。
+ * 提交区只在暂存区非空时出现；三段口径与差异弹窗共用 `sections.ts`（冲突段无批量入口）。
+ * 选中模式同资源管理器：单击选中、Ctrl 加减、Shift 范围，**双击**才开差异。
+ * 行内操作在该行属于选中集时作用于同侧全部（按钮文案带数量）。
+ * 只读沙盒下所有写入口禁用（Rust 侧同样会拒，这里是双保险）。
  */
 import { useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -51,11 +41,7 @@ interface Props {
   onClose: () => void
 }
 
-/**
- * 输出块（提交的 hooks / 警告、网络操作的进度与摘要）—— 两处共用同一个样式。
- *
- * 正文用 `pre` + 等宽字体（hook 输出与 git 进度都有对齐与缩进），限高滚动、不把下面的列表顶出去。
- */
+/** 输出块（hooks / 网络进度）：`pre` 等宽、限高滚动，两处共用。 */
 function OutputBlock({
   title,
   text,
@@ -104,21 +90,14 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
     unstage: (paths) => void unstage(paths),
   })
 
-  /**
-   * 列表顺序的行键（= 当前快照里还存在的行）：Shift 范围选择按它取区间，选中集也按它对账。
-   * 对账是必要的 —— 写操作之后行会换段（暂存 → 已暂存段）甚至消失，旧键不该继续算数。
-   */
+  /** 当前快照的行键（顺序即列表顺序）；写操作后行会换段/消失，选中集要按它对账。 */
   const flatKeys = sections.flatMap((section) =>
     section.entries.map((entry) => rowKey(section.side, entry.path)),
   )
   const selectedLive = selected.filter((key) => flatKeys.includes(key))
   const selectedSet = new Set(selectedLive)
 
-  /**
-   * 单击选中 / Ctrl-Cmd 加减 / Shift 取一段。
-   * 锚点：单击与 Ctrl 点击会挪到刚点的这一行（与资源管理器一致），Shift 不挪 —— 于是连续 Shift
-   * 都是从同一个锚点重新扩，而不是逐次叠加。
-   */
+  /** 单击选中 / Ctrl-Cmd 加减 / Shift 取一段；锚点只在单击与 Ctrl 时挪动。 */
   function selectRow(key: string, mod: { shift: boolean; toggle: boolean }): void {
     if (mod.shift && anchorRef.current) {
       const from = flatKeys.indexOf(anchorRef.current)
@@ -141,10 +120,7 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
     anchorRef.current = key
   }
 
-  /**
-   * 一次行内操作真正作用的对象：这一行在选中集里 → **同侧**选中的全部（批量），否则只有它自己。
-   * 只取同侧 —— 批量「暂存」不该顺手把已暂存的行也走一遍（那是另一个动作，diff 基准也不同）。
-   */
+  /** 行内操作的作用对象：该行在选中集 → 同侧选中的全部，否则只它自己。 */
   function actionPaths(key: string, side: 'staged' | 'unstaged'): string[] {
     const keys = selectedSet.has(key) ? selectedLive : [key]
     const paths = keys
@@ -155,19 +131,15 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
   }
 
   /**
-   * 分支浮层的开关 —— 分支按钮与「游离 HEAD」徽标共用。
-   * ⚠️ 两个入口缺一不可：切到**远程分支**会 detach，那时分支名就没了（`head.branch === null`），
-   * 只剩这个徽标能把浮层打开、切回本地分支。
+   * 分支浮层开关，分支按钮与「游离 HEAD」徽标共用。
+   * ⚠️ 切到远程分支会 detach（`branch === null`），那时只有徽标能打开浮层切回本地。
    */
   function toggleBranchMenu(): void {
     if (!branchMenuOpen) void refreshBranches()
     setBranchMenuOpen((v) => !v)
   }
 
-  /**
-   * 切「修改上一次提交」：打开时若草稿还空着，用上一条的**完整信息**回填 ——
-   * amend 最常见的用途就是改信息，让人重新敲一遍不合理。
-   */
+  /** 切 amend：打开时草稿为空则回填上一条提交信息（amend 最常见的用途就是改信息）。 */
   async function toggleAmend(next: boolean): Promise<void> {
     setAmend(next)
     const oid = head?.oid
@@ -273,9 +245,7 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
               title={t('获取 / 拉取 / 推送（凭据策略 = SSH）')}>
               {t('同步')}
             </button>
-            {/* 撤销上次提交：只在有提交时出现（空仓库里它没有意义）。
-                图标按钮而不是文字：头部已有 4 个图标 + 分支名 + 上游徽标，再摆一个六字文字按钮
-                会把分支名（最该看清的那个）挤到只剩几个字 */}
+            {/* 撤销上次提交：用图标按钮，六字文字按钮会挤掉分支名 */}
             {head?.oid && (
               <button
                 type="button"
@@ -378,8 +348,7 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
 
       {gitStore.error && <div className="git-empty error">{gitStore.error}</div>}
 
-      {/* 提交时 git 的 stderr（hooks 的输出 / 警告）：正常提交为空，所以它一出现就是「有事要告诉你」
-          —— 之前这份输出被丢掉，用户只知道「提交了」，不知道 hook 改过文件 / 报了什么 */}
+      {/* 提交时 git 的 stderr（hooks / 警告）：正常为空，出现即有事要说 */}
       {gitStore.hookOutput && (
         <OutputBlock
           title={t('提交输出（hooks / 警告）')}

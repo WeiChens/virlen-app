@@ -73,30 +73,9 @@
    纯实现细节（`#[allow]` 的理由、`cfg` 门禁取舍、估算 / 计数口径、字段可见性、性能取舍）不加标记；已失效的表述（所描述的实现已被移除）直接删掉，不要留着「当时的理由」。
 10. **不用 `git push --force`、不重写历史、不动 `dist/`、不删别人的文件**。
 
-## 安全红线（§8）—— 写涉及文件 / 命令 / 网络的代码前必读
-
-- **路径**：优先级 **黑名单 > 白名单 > 工作目录**；写模式仅允许白名单 + 工作目录；黑名单按平台给默认值。
-- **沙盒**：`settings.sandboxMode`（`on`/`off`/`readonly`）。**禁止绕过沙盒直接 spawn**；唯一例外是 `execute_command` / `execute_script` 的 `sandbox:"off"`（须按「沙盒脱壳」权限决策、`readonly` 直接拒绝、埋点 `tool.sandbox.bypass`）。
-  另：命中「忽略沙盒命令」规则（§5.4）的命令**免脱壳审批并强制无沙盒执行**（AI 未申请也生效，埋点 `status: auto_rule`）；`off` / `readonly` 下规则不生效，`deny` 优先。
-- **权限三态**：命令 / 脚本 / 沙盒脱壳（`allow`/`ask`/`deny`）；`deny` 永远优先；脱壳与命令/脚本权限**取更严格者**。UI 在「设置 → 安全 → 权限管理」。
-- **工具风暴**：滑窗检测重复 `(toolName, args)`，命中即中断。
-- **密钥**：埋点/日志**不得**输出 apiKey、token、密钥文件内容；`providers` / `searchProviders` 只上报数量。
-- **端侧视觉**：图片不出本机，**不要**改成上传。
-
 **AI 代理自我约束**：
 
 - 不读取 `.env`、`*.key`、`~/.ssh/` 等敏感文件；
 - 文件写入限制在工作区；
 - 删除文件用**回收站语义**（`trash`）而非硬删；
 - 破坏性操作（删库、清空会话、批量重命名）先向用户确认。
-
-## 深读入口（细节已下沉，不在本分册里展开）
-
-> - `docs/rust-engine.md` —— 引擎 Rust 化清单与已知差异
-> - `docs/pty-research.md` —— Windows ConPTY / 终端交互完整设计
-> - `docs/host-abstraction-draft.md` —— 宿主抽象（**方案 A 已实施**）：GUI / CLI 资源与数据目录的唯一接口
-> - `docs/config-sink-plan.md` —— 配置下沉（**落 SQLite，与 GUI 共用同一份 `virlen.db`**）+ `js` 沙盒规则内嵌求值
-> - `docs/cli-tui-plan.md` —— CLI 交互式 TUI（`virlen-cli chat`）与配置向导、上下文压缩、会话管理（`session`）/ 用量账本（`usage`）的方案 / 实测
-> - `docs/doc-parse-plan.md` —— 文档解析工具 `parse_document`（pdf/doc/docx/xls/xlsx/ppt/pptx/csv）的实施方案（**已实施**）：`doc_parse` 解析层为唯一源，RAG 的 PDF 解析与它同源；全文落盘参数 `outTxtFile` 见其 §12
-> - `docs/memory-redistill-plan.md` —— 记忆再蒸馏（P2′，**待实施**）：AI 写下的记忆 ≥ 100 条时由宿主后台合并成更少条目（软删 + 归档，用户无感）的触发 / 调度 / 校验 / 落库口径；被移除的 P2 蒸馏链怎么从 git 取回见其 §2.2
-> - `docs/git-management-plan.md` —— Git 管理（源代码管理，**P1 已实施**）：聊天页标题栏入口（图标 + 变更数徽标 + 弹窗）与变更 / 暂存 / 提交 / 分支切换的方案与坑；后端定为 **`git` 子进程**（否决 `gix` / `git2` 的查证证据见其 §2.1）；分层落点与实施坑见 [`agents/14-git-management.md`](agents/14-git-management.md)

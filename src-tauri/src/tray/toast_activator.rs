@@ -1,36 +1,24 @@
-//! Toast 点击的 COM 激活器 —— 「进程内收不到点击」那条路的正解。
-//!
-//! Windows toast 点击有两条互斥投递路径（另见 `notify.rs`）：① 进程内事件（`notify::show_owned` 自持
-//! handle，能精确到会话，dev / 免安装走这条）；② COM 激活（系统按清单 `ToastActivatorCLSID` 唤起，
-//! 应用没跑时拉起进程、正在跑时投递给已注册类对象）。
-//!
-//! 本模块实现 ②，拿不到会话 id，语义等同「托盘左键」：唤醒窗口 + 切最早未读。只有打包安装版才有清单，
-//! dev / 免安装 exe 注册了也没人来调，但注册无副作用 → 不做环境判断，一律注册。
-//!
-//! ⚠️ 三处须一起改（CLSID / 启动参数名）：MSIX 清单的 `ToastActivatorCLSID` + `com:ExeServer@Arguments`、
-//! 本文件的常量、`lib.rs` 的单实例回调。
+//! Toast 点击的 COM 激活器：`notify.rs` 的进程内事件拿不到点击时（应用没跑 / dev 免安装），
+//! 由系统按清单 `ToastActivatorCLSID` 唤起，这里注册类对象接住它。
+//! 拿不到会话 id，语义等同「托盘左键」：唤醒窗口 + 切最早未读。
+//! ⚠️ 三处须一起改：MSIX 清单的 `ToastActivatorCLSID` + `com:ExeServer@Arguments`、本文件常量、`lib.rs` 单实例回调。
 
 use serde_json::json;
 use tauri::AppHandle;
 
 use crate::telemetry;
 
-/// Toast 激活器 CLSID —— **唯一真源是 MSIX 清单**，此处必须逐字一致。
-///
-/// 清单 schema 要求 GUID **不带花括号**（`{...}` 会被 MakeAppx 报 `error C00CE169`）。
+/// Toast 激活器 CLSID —— **唯一真源是 MSIX 清单**，此处必须逐字一致（GUID 不带花括号，否则 MakeAppx 报 C00CE169）。
 pub const TOAST_ACTIVATOR_CLSID: &str = "bfadf116-f14e-4ede-b4b6-8fe2968e534f";
 
 /// MSIX 清单 `com:ExeServer@Arguments`：系统按 CLSID 拉起本进程时带上的标记
 pub const TOAST_ACTIVATED_ARG: &str = "-ToastActivated";
 
-/// 「进程内刚处理过点击」的去重窗口（毫秒）：窗口内的 COM 激活只把窗口拎到前台，不再动会话，
-/// 避免「先精确切到 A，又被切到最早未读 B」。
+/// 「进程内刚处理过点击」的去重窗口（ms）：窗口内的 COM 激活只把窗口拎到前台，不动会话。
 #[cfg(target_os = "windows")]
 const CLICK_DEDUP_MS: i64 = 3_000;
 
-/// argv 里是否带了「被点击通知拉起」的标记（纯函数，便于单测）
-///
-/// 大小写不敏感：清单里写的是 `-ToastActivated`，但真到运行时没人保证大小写。
+/// argv 里是否带了「被点击通知拉起」的标记（纯函数）：大小写不敏感，只认完整 token。
 pub fn is_toast_activated(argv: &[String]) -> bool {
     argv.iter()
         .any(|arg| arg.eq_ignore_ascii_case(TOAST_ACTIVATED_ARG))
@@ -67,10 +55,7 @@ pub fn init(app: &AppHandle) {
     let _ = app;
 }
 
-/// 撤销注册（退出前调用；幂等，非 Windows 是空操作）
-///
-/// 不做也不会错（进程退出时 COM 自己清），但显式撤销能让「注册 → 撤销」对称，
-/// 也方便将来在同一进程里重启注册。
+/// 撤销注册（退出前调用，幂等）。不做也不会错，但显式撤销让「注册 → 撤销」对称，便于将来重注册。
 pub fn shutdown() {
     #[cfg(target_os = "windows")]
     windows_impl::revoke();
@@ -170,12 +155,8 @@ mod windows_impl {
         }
     }
 
-    /// 在一条**常驻线程**上注册类对象
-    ///
-    /// 线程必须常驻：`CoRegisterClassObject` 的注册挂在注册线程的 apartment 上，线程一退（隐式
-    /// `CoUninitialize`）注册就没了，而系统给「点击拉起进程」的窗口只有几秒。
-    /// 用 MTA（`COINIT_MULTITHREADED`）：不需要消息泵，激活由 RPC 线程投递；放 tauri 主线程（STA）
-    /// 则要依赖它的消息循环，还得和 WebView2 的 OLE 初始化抢地盘。
+    /// 在一条**常驻线程**上注册类对象并睡到进程结束。线程必须常驻：`CoRegisterClassObject` 挂在注册线程的
+    /// apartment 上，线程一退注册就没了；用 MTA（`COINIT_MULTITHREADED`）因为不需要消息泵。
     pub(super) fn register(app: AppHandle) {
         unsafe {
             let hr = CoInitializeEx(None, COINIT_MULTITHREADED);

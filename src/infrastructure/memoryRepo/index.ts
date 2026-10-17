@@ -1,9 +1,6 @@
 /**
- * memoryRepo — 长期记忆的持久化入口（记忆功能 P0）。
- *
- * 权威实现在 Rust（virlen-core/src/session_db/memory.rs + agent/memory/）：本文件只做三件事 —— 调命令、
- * 按环境降级、把失败变成**可解释的空结果**。降级口径同 settingsRepo：非 Tauri（浏览器 dev / vitest）读回空、
- * 写入静默丢弃；Tauri 下命令失败打日志 + 返回空（记忆是**增强**，读不到不该让建会话失败）。
+ * 长期记忆的持久化入口；权威实现在 Rust（`session_db/memory.rs` + `agent/memory/`），
+ * 本文件只调命令 + 按环境降级 + 把失败变成可解释的空结果（记忆是增强，读不到不该阻塞建会话）。
  */
 import { invoke } from '@tauri-apps/api/core'
 import {
@@ -27,12 +24,9 @@ const EMPTY_SECTION: MemoryPromptSection = {
 }
 
 /**
- * 取建会话用的注入段（带工作目录与预览标记）。失败 / 非 Tauri → 空段（= 不注入），**不抛错**。
- *
- * workspace：本次会话的**生效工作目录**（会话指定 > Agent 默认），Rust 据此筛掉属于别的项目的项目记忆；
- * 空 / 不传 = 只注入不限定项目的记忆。
- * forPreview：面板查看预览 / 预算行时为 true —— 埋点据此区分「真实建会话的截断告警」与「用户在看面板」，
- * 否则每次打开面板都会抬高告警计数。面板传的是设置里的**默认工作目录**。
+ * 取建会话用的注入段。失败 / 非 Tauri → 空段（不注入），不抛错。
+ * `workspace`：生效工作目录（会话指定 > Agent 默认），Rust 据此筛掉别的项目的项目记忆；
+ * `forPreview`：埋点据此区分「真实建会话的截断告警」与「用户在看面板」（否则每次开面板都抬高告警计数）。
  */
 export async function loadMemorySection(
   forPreview = false,
@@ -87,9 +81,8 @@ export async function setMemoryDisabled(id: string, disabled: boolean): Promise<
 }
 
 /**
- * 记录「这些记忆被注入了」（`hits += 1` / `last_used_at`）。
- *
- * 调用方**不能 await** 它：统计失败不该拖住建会话，也不该让建会话报错。
+ * 记录「这些记忆被注入了」（`hits += 1` / `last_used_at`）。调用方**不能 await**：
+ * 统计失败不该拖着建会话。
  */
 export function touchMemories(ids: string[]): void {
   if (!isTauri() || ids.length === 0) return
@@ -99,10 +92,7 @@ export function touchMemories(ids: string[]): void {
 }
 
 /**
- * 导出全部记忆为 JSON 文本（P3）。
- *
- * 只取文本、不写文件：路径要由用户在保存对话框里选（`plugin-dialog`），见面板的「导出 JSON」。
- * 失败 / 非 Tauri → `null`（调用方提示用户，不静默）。
+ * 导出全部记忆为 JSON 文本。只取文本不写文件（路径由保存对话框定）；失败 / 非 Tauri → `null`。
  */
 export async function exportMemories(): Promise<string | null> {
   if (!isTauri()) return null
@@ -114,11 +104,8 @@ export async function exportMemories(): Promise<string | null> {
   }
 }
 
-// 工具等价调用（P1）
-//
-// 三个 `memory_*` 工具的 GUI 入口：**语义在 Rust**（`agent::memory::tools`，与原生工具同一份实现），
-// 这里只是把命令结果原样交给调用方 —— 因此回退路径的执行器（`infrastructure/tools/memory/`）
-// 与 Rust 引擎下模型看到的行为完全一致（包括「参数缺失」「非法枚举」这些文案）。
+// 三个 `memory_*` 工具的 GUI 入口：语义全在 Rust（`agent::memory::tools`），这里只转交结果，
+// 使回退路径执行器与 Rust 引擎下模型看到的行为逐字一致。
 
 /** 工具 / 命令共用的返回形状（与 Rust `MemoryToolOutput` 同构） */
 export interface MemoryToolOutput {
@@ -135,10 +122,8 @@ const UNAVAILABLE: MemoryToolOutput = {
   uiData: { available: false },
 }
 
-/** `memory_search`：关键词检索（`level` / `kind` / `limit` 可省略）
- *
- * `workspace`：会话工作目录 —— 与注入同一套项目作用域，别的项目的记忆不会返回
- * （`uiData.hiddenByScope` 说明有多少条被藏起来）。
+/**
+ * `memory_search`：关键词检索。`workspace` 与注入同一套项目作用域（`uiData.hiddenByScope` 说明藏了几条）。
  */
 export async function searchMemories(
   query: string,
@@ -171,10 +156,9 @@ export async function recallMemory(memoryId: string): Promise<MemoryToolOutput> 
   }
 }
 
-/** `memory_write`：写入一条记忆（`detail` 非空 → 详情落专用知识库）
- *
- * `workspace`：会话工作目录 —— `kind = 'project'` 时它成为这条记忆的项目作用域
- * （与 Rust 原生工具同口径：模型不必猜路径）。
+/**
+ * `memory_write`：写入一条记忆（`detail` 非空则详情落专用知识库）。
+ * `workspace`：`kind = 'project'` 时成为这条记忆的项目作用域（与 Rust 原生工具同口径，模型不必猜路径）。
  */
 export async function writeMemory(params: {
   summary: string

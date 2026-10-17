@@ -1,18 +1,10 @@
 /*!
- * clipboard_files — 读系统剪贴板里的「文件路径」
- *
- * 为什么走原生：页面 paste 事件只能拿到 File（有名字无磁盘路径），而本项目附件只存路径，
- * 故路径只能问系统要 —— 该信息只存在于原生层。
- *
- * Windows 两种格式：`CF_HDROP`（资源管理器「复制文件」，二进制）、`code/file-list`（VS Code，文本）。
- * 文件结构：本文件 = 命令入口 + 文本格式注册表 + 平台编排；`windows.rs` = 原语；`vscode.rs` = 文本→路径解析。
- * 新增「文本型」格式：在 vscode.rs 旁加同构文件，再往 `text_formats()` 加一行即可。
- *
- * 平台：Windows 支持上述格式；macOS / Linux 暂未实现（返回空，前端退回从剪贴板文本解析）。
+ * 读系统剪贴板里的「文件路径」：页面 paste 只能拿到 File（无磁盘路径），而附件只存路径。
+ * Windows 两种格式：`CF_HDROP`（资源管理器，二进制）、`code/file-list`（VS Code，文本）。
+ * 结构：本文件 = 命令入口 + 文本格式注册表 + 平台编排；`windows.rs` = 原语；`vscode.rs` = 文本→路径解析。
+ * 新增文本型格式：在 `vscode.rs` 旁加同构文件，再往 `text_formats()` 加一行。
  * 语义：读不到 / 不支持 / 被占用一律返回空（不报错）—— 粘贴不该因读剪贴板失败而中断。
- *
- * 另有：「读纯文本」（终端右键粘贴；WebView2 读剪贴板权限默认不放行，故走原生）、
- * 「写图片」（右键复制图片；WebView2 的 write API 不可靠，原生写 CF_DIB 确定）。
+ * 另有「读纯文本」（终端右键粘贴）与「写图片」（CF_DIB；WebView2 的 write API 不可靠）。
  */
 
 // 解析逻辑与平台无关，drag_drop 也复用它；非 Windows 构建下暂无使用者
@@ -27,10 +19,7 @@ pub(crate) mod dib;
 #[cfg(target_os = "windows")]
 mod windows;
 
-/// 一个「文本型」自定义剪贴板格式。
-///
-/// 别家（VS Code 等）把文件列表以纯文本写进自定义格式，这里只声明
-/// 「格式名 + 文本 → 本机路径」，与具体平台/系统调用解耦。
+/// 一个「文本型」自定义剪贴板格式：格式名 + 「文本 → 本机路径」，与平台/系统调用解耦。
 #[cfg(target_os = "windows")]
 struct TextFormat {
     /// 注册型格式名（Windows 上交给 RegisterClipboardFormat）
@@ -66,11 +55,8 @@ pub async fn read_clipboard_text() -> String {
         .unwrap_or_default()
 }
 
-/// 把图片写进系统剪贴板（右键「复制图片」用；Windows: CF_DIB）。
-///
-/// 前端传 base64（不强求 dataURL 前缀，已在外层剥掉）；具体格式由
-/// `image` crate 从字节头部自行判定，因此不需要额外的 mime 参数。
-/// 失败时返回 Err，前端会退到 `navigator.clipboard.write(ClipboardItem)`。
+/// 把图片写进系统剪贴板（Windows: CF_DIB）。前端传 base64（前缀已在外层剥），
+/// 格式由 `image` crate 按字节头部判定；失败时前端退 `navigator.clipboard.write`。
 #[tauri::command]
 pub async fn write_clipboard_image(base64: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || platform::write_image(&base64))
@@ -140,10 +126,7 @@ mod platform {
         text
     }
 
-    /// 图片（base64）→ CF_DIB 写进剪贴板。
-    ///
-    /// 步骤：解 base64 → 解码图片 → 组装 DIB（见 dib.rs）→ 写 CF_DIB。
-    /// 任一步失败都返回 Err（前端退浏览器剪贴板 API，不是致命错误）。
+    /// 图片（base64）→ CF_DIB 写入。任一步失败都返回 Err（前端退浏览器剪贴板 API，不致命）。
     pub fn write_image(base64: &str) -> Result<(), String> {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(base64)

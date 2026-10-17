@@ -92,9 +92,7 @@ pub fn notify_completed(
     );
 }
 
-/// 是否需要提醒（纯函数，便于单测）
-///
-/// 推送条件：!enabled / viewing / (visible && focused) 任一不推；force_active 且窗口还在也不推。
+/// 是否需要提醒（纯函数）：!enabled / viewing / (visible && focused) 任一不推；force_active 且窗口还在不推。
 /// viewing 只有前端能给（它才知道 currentSessionId），与 visible && focused 是两回事。
 pub(crate) fn decide_remind(
     enabled: bool,
@@ -151,9 +149,8 @@ fn show_via_plugin(app: &AppHandle, title: Option<&str>, preview: Option<&str>) 
 #[cfg(target_os = "windows")]
 const PACKAGE_APP_ID: &str = "App";
 
-/// 传给 CreateToastNotifierWithId 的应用标识：打包版传裸 AppId（平台会补 <PFN>!），
-/// 未打包版传 identifier（安装器已写进快捷方式的 System.AppUserModel.ID）。
-/// 打包版传 identifier 会被补成 <PFN>!identifier，系统没这个入口 —— 投递成功但永不显示。
+/// 传给 CreateToastNotifierWithId 的应用标识：打包版传裸 AppId（平台会补 `<PFN>!`），未打包传 identifier。
+/// 打包版若传 identifier 会被补成 `<PFN>!identifier` —— 投递成功但永不显示。
 #[cfg(target_os = "windows")]
 pub fn toast_app_id(app: &AppHandle) -> String {
     #[cfg(target_os = "windows")]
@@ -169,7 +166,7 @@ pub fn is_packaged() -> bool {
     package_family_name().is_some()
 }
 
-/// 当前进程所属包的 PackageFamilyName；未打包返回 None。
+/// 当前包的 PackageFamilyName；未打包返回 None。
 /// 用 GetCurrentPackageFamilyName 而非 GetCurrentApplicationUserModelId：后者可能被显式覆盖。
 #[cfg(target_os = "windows")]
 fn package_family_name() -> Option<String> {
@@ -193,7 +190,7 @@ fn package_family_name() -> Option<String> {
     }
 }
 
-/// 声明进程的 AUMID（Windows，启动时调一次；仅未打包场景）。
+/// 声明进程的 AUMID（Windows，启动时一次；仅未打包场景）。
 /// 打包版跳过：包清单已决定进程身份，再覆盖会让进程 AUMID 与通知 AUMID 分叉。
 pub fn init_app_identity(app: &AppHandle) {
     #[cfg(target_os = "windows")]
@@ -224,7 +221,7 @@ pub fn init_app_identity(app: &AppHandle) {
     let _ = app;
 }
 
-/// Windows：自己发通知 + 自己收点击（None = 本通道不可用，回退插件）。
+/// Windows：自己发通知 + 自己收点击（`None` = 本通道不可用，回退插件）。
 /// 不用插件发：它丢弃 handle，而 Windows 的点击是进程内投递，handle 一丢就收不到。
 #[cfg(target_os = "windows")]
 fn show_owned(

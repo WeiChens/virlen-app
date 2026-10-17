@@ -1,14 +1,7 @@
 /*!
- * clipboard_files::windows — Windows 剪贴板原语
- *
- * 只做「系统调用」，不掺杂业务解析，供上层（clipboard_files.rs）组合：
- *   - 打开 / 关闭剪贴板（被占用时重试）
- *   - CF_HDROP：资源管理器里「复制文件」写入的二进制路径列表
- *   - CF_UNICODETEXT：标准「复制文本」写入的 UTF-16 文本（终端右键粘贴用）
- *   - CF_DIB：写入图片（右键「复制图片」用，DIB 字节由 dib.rs 组装）
- *   - 注册型自定义格式：探测是否存在、读取原始字节（GlobalLock / GlobalSize）
- *
- * 上层只负责决定「读哪些格式、怎么解析」，具体怎么跟系统打交道都在这里。
+ * Windows 剪贴板原语（只做系统调用，不涉及业务解析）：开关剪贴板（被占用时重试）、
+ * CF_HDROP / CF_UNICODETEXT / CF_DIB 读写、注册型自定义格式探测与原始字节读取。
+ * 「读哪些格式、怎么解析」由上层 `clipboard_files.rs` 决定。
  */
 
 use windows_sys::Win32::Foundation::{GlobalFree, HGLOBAL};
@@ -74,9 +67,7 @@ pub fn close() {
 }
 
 /// 读取指定格式的原始字节（调用前必须已 open_with_retry）。
-///
-/// GlobalSize 给的是内存块大小，可能比实际数据大（尾部是填充），
-/// 这里按第一个 NUL 截断后返回。
+/// GlobalSize 可能大于实际数据（尾部填充），按第一个 NUL 截断。
 pub fn read_format_bytes(id: u32) -> Option<Vec<u8>> {
     if id == 0 {
         return None;
@@ -99,9 +90,7 @@ pub fn read_format_bytes(id: u32) -> Option<Vec<u8>> {
 }
 
 /// 读取剪贴板文本（CF_UNICODETEXT；调用前必须已 open_with_retry）。
-///
-/// 不能复用 `read_format_bytes`：它按「第一个 0 字节」截断，而 UTF-16 里 ASCII 的第二个字节就是 0，会把
-/// 文本砍成一个字符。这里按 u16 逐个读到 NUL 或块尾，再 `from_utf16_lossy`。
+/// 不能复用 `read_format_bytes`：后者按第一个 0 字节截断，而 UTF-16 的 ASCII 第二字节就是 0。
 pub fn read_unicode_text() -> String {
     let handle = unsafe { GetClipboardData(CF_UNICODETEXT) };
     if handle.is_null() {
@@ -127,16 +116,9 @@ pub fn read_unicode_text() -> String {
     text
 }
 
-/// 把一段 DIB（BITMAPINFOHEADER + 像素，见 dib.rs）写进剪贴板（CF_DIB）。
-///
-/// 调用前必须已 open_with_retry；成功返回 true。
-///
-/// 三类易错点：
-///   1. 必须先 EmptyClipboard —— SetClipboardData 要求剪贴板已归我们所有，
-///      否则直接失败（这是写剪贴板与读剪贴板最大的区别）；
-///   2. GMEM_MOVEABLE —— 剪贴板要求可移动内存块，不能用固定块；
-///   3. **成功后句柄所有权归系统**，不能再 GlobalFree（只有失败分支才释放，
-///      否则就是释放了系统手上的那块内存）。
+/// 把一段 DIB 写进剪贴板（CF_DIB；调用前必须已 open_with_retry）。三类易错点：
+/// ① 必须先 EmptyClipboard（否则 SetClipboardData 直接失败）；② 要 GMEM_MOVEABLE；
+/// ③ **成功后句柄归系统**，不能再 GlobalFree（只有失败分支才释放）。
 pub fn write_dib(dib: &[u8]) -> bool {
     if dib.is_empty() {
         return false;

@@ -1,7 +1,4 @@
-/**
- * 引擎契约类型 —— `AgentEnginePort` 与 `services/rust-engine.ts` 之间的共享契约
- * （TS 引擎已移除，这些类型从 `domain/engine/types.ts` 迁来保留）。
- */
+/** 引擎契约类型：`AgentEnginePort` 与 `services/rust-engine.ts` 的共享契约（TS 引擎已移除）。 */
 import type { Message, Session } from '@/types'
 import type { AgentEventCallback, ToolUseContent } from '@/types'
 import type { ToolExecutorResponse } from '@/domain/tools/types'
@@ -17,10 +14,7 @@ export interface SendMessageOptions {
   messages: Message[]
   /** 流式事件回调 */
   onEvent?: AgentEventCallback
-  /**
-   * 当 tool 执行需要用户交互时调用。
-   * 返回一个 Promise，在用户完成交互后 resolve 并携带用户输入。
-   */
+  /** 需要用户交互时调用，Promise 在用户完成后 resolve 并携带输入。 */
   onUserInteraction?: (
     type: string,
     data: Record<string, any>,
@@ -30,32 +24,25 @@ export interface SendMessageOptions {
   /** 覆盖 maxTokens（不传则使用 session.params.maxTokens） */
   maxTokens?: number
   /**
-   * 断点恢复：从指定的 snapshot 恢复工具调用执行。
-   * 设置此选项时 engine 不会再次调用 LLM，而是直接执行未完成的 tool steps。
+   * 断点恢复：设置后引擎不再调 LLM，直接执行未完成的 tool steps。
    */
   resumeFromSnapshot?: RunSnapshot
   /** 来自 provider 配置的 reasoningEffort（如 o 系列模型的 low/medium/high） */
   reasoningEffort?: string
   /** 读取最大工具调用轮数，默认 30 */
   maxToolRounds?: number
-  /**
-   * 迭代目标 — 设置后启用「执行→验证→修复」自主迭代模式。
-   * engine 会在每轮 tool 执行后自动验证结果，未达标则注入反馈并重试。
-   */
+  /** 迭代目标：启用「执行→验证→修复」自主迭代（每轮 tool 后验证，不达标则注入反馈重试）。 */
   iterationGoal?: string
   /** 迭代模式最大重试次数，默认 5（仅在 iterationGoal 设置时生效） */
   maxIterations?: number
   /**
-   * **轮次边界钩子**：上一批工具结果已合并、下次 LLM 请求未发出时调用，返回值追加进本轮消息列表；
-   * 抛错 / 返回空数组视为「无可注入」。
-   * ⚠️ Rust 引擎不用此回调，走桥接 `agent:round-boundary` → `agent_round_boundary_response`（语义对齐、通道不同）。
+   * **轮次边界钩子**：工具结果已合并、下次 LLM 请求未发出时调用，返回值追加进本轮消息。
+   * ⚠️ Rust 引擎走桥接 `agent:round-boundary`（语义对齐、通道不同）。
    */
   onRoundBoundary?: (sessionId: string) => Message[] | Promise<Message[]>
 }
 
-/**
- * 每轮对话的临时上下文（引擎内部）。⚠️ 前端已无消费方，保留只因 Rust `agent::types::ToolCallContext` 有同名对应物。
- */
+/** 每轮对话的临时上下文（引擎内部）；前端无消费方，仅为与 Rust `ToolCallContext` 对齐。 */
 export interface ToolCallContext {
   assistantMessage: Message
   toolUses: ToolUseContent[]
@@ -64,10 +51,8 @@ export interface ToolCallContext {
 }
 
 /**
- * Run（执行批次）：一次 sendMessage 中 LLM 产出的一个工具调用批次。
- *
- * 每次 LLM 流结束（产生 tool_calls）创建一个 Run，含多个 ToolStep（每个 tool call 一步）；
- * 可暂停/恢复（检查当前 step，前面的结果已存储）。
+ * Run（执行批次）：一次 sendMessage 中 LLM 产出的一个工具调用批次，含多个 ToolStep。
+ * 可暂停/恢复（恢复时跳过已完成的 step）。
  */
 export type ToolStepStatus = 'pending' | 'running' | 'completed' | 'failed'
 
@@ -105,10 +90,7 @@ export interface Run {
   round: number
 }
 
-/**
- * Run 快照 —— 断点恢复用（只存内存，刷新即失效）。
- * ⚠️ 由 Rust 引擎产出：`agent_get_run_snapshot` 的返回值即此形状。
- */
+/** Run 快照（仅内存，刷新即失效）；⚠️ 由 Rust 产出，`agent_get_run_snapshot` 即此形状。 */
 export interface RunSnapshot {
   assistantMessageId: string
   steps: ToolStep[]

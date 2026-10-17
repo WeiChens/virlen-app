@@ -1,11 +1,7 @@
 /**
- * todo/state — 任务清单纯函数（无状态、无 IO、可单测）。
- *
- * ⚠️ 工具已原生化，两侧两份实现：工具执行用到的 `sanitizeTodos` / `computeStats` / `validateTodos` /
- * `checkTodoLimit` / `renderTodoContent` 在 Rust `native_tools/plan/` 有逐字镜像，改一边必须改另一边；
- * `diffTodos` / `pickCurrentTodos` / `shouldShowTodoEntry` 只服务 UI 与注入，无 Rust 镜像。
- *
- * 「唯一的那份清单」由 `pickCurrentTodos` 从消息历史派生，不引入额外状态字段。
+ * 任务清单纯函数（无状态、无 IO、可单测）。⚠️ 部分函数在 Rust `native_tools/plan/` 有逐字镜像
+ * （`sanitizeTodos` / `computeStats` / `validateTodos` / `checkTodoLimit` / `renderTodoContent`），
+ * 改一边必须改另一边；`diffTodos` / `pickCurrentTodos` / `shouldShowTodoEntry` 无镜像。
  */
 import type { Message } from '@/types'
 import type {
@@ -34,8 +30,7 @@ function clip(v: unknown, max: number): string {
 }
 
 /**
- * 把模型给的原始数组归一化成 TodoItem[]：非数组 → 空；丢弃 content 为空的项；status 非法 → pending；
- * id 缺失/重复 → 自动补 `t{n}`（保证按 id 合并的唯一性）。
+ * 归一化模型给的数组：非数组→空，空 content 丢弃，status 非法→pending，缺失/重复 id 补 `t{n}`。
  */
 export function sanitizeTodos(raw: unknown): TodoItem[] {
   if (!Array.isArray(raw)) return []
@@ -80,10 +75,7 @@ export function computeStats(todos: TodoItem[]): TodoStats {
   return stats
 }
 
-/**
- * 软规则校验 —— 只报警、不改数据。「最多一个 in_progress」是给模型的约定：
- * 悄悄改数据会让模型下一轮看到的清单和它以为的不一样。
- */
+/** 软校验，只报警不改数据（静默改数据会让模型下一轮看到的不一致）。 */
 export function validateTodos(todos: TodoItem[]): string[] {
   const warnings: string[] = []
   const inProgress = todos.filter((t) => t.status === 'in_progress')
@@ -133,10 +125,7 @@ export function renderTodoContent(
   return parts.join('\n')
 }
 
-/**
- * 变更摘要（**英文**，用于「用户改了清单」的 feedback 消息正文，即模型侧）；
- * 界面文案另有走 i18n 的实现：`ui/pages/chat/components/todo/brief.ts`。
- */
+/** 变更摘要（**英文**，模型侧）；界面文案走 i18n：`todo/brief.ts`。 */
 export function renderChangeBrief(changes: TodoChange[]): string {
   if (!changes || changes.length === 0) return 'updated'
   const parts = changes.map((c) => {
@@ -160,10 +149,7 @@ export function renderChangeBrief(changes: TodoChange[]): string {
   return parts.join(' · ')
 }
 
-/**
- * 用户修改后注入给模型的文本（feedback 消息正文）：给全量清单、标明是用户改的、
- * 并显式禁止复原被移除的项（否则模型易「好心」加回来）。
- */
+/** 用户改清单后注入给模型的文本：全量清单 + 显式禁复原（否则模型会「好心」加回来）。 */
 export function renderUserTodoContent(
   todos: TodoItem[],
   changes: TodoChange[],
@@ -184,10 +170,7 @@ export function renderUserTodoContent(
 
 // ==================== 比对 / 派生 ====================
 
-/**
- * 两份清单是否「实质相同」（按 id 逐项比用户可改字段 + 顺序）。
- * 用途：编辑期间判断清单是否被 AI 换过，据此提示「AI 已更新」。
- */
+/** 按 id 逐项比可改字段 + 顺序；用于判断编辑期间清单是否被 AI 换过。 */
 export function sameTodoList(a: TodoItem[], b: TodoItem[]): boolean {
   if (!Array.isArray(a) || !Array.isArray(b)) return false
   if (a.length !== b.length) return false
@@ -263,10 +246,7 @@ export interface CurrentTodos {
   data: TodoUiData
 }
 
-/**
- * 「唯一的那份清单」—— 从消息尾部倒序找第一条带清单快照的消息。
- * 刻意不分 role：模型写的与用户改的是同一种权威载体，谁最新谁生效（消息里可有 N 份快照，界面只呈现最后一份）。
- */
+/** 唯一的那份清单：从消息尾部倒序找第一条快照，不分 role（模型写与用户改同等权威，最新者生效）。 */
 export function pickCurrentTodos(messages: Message[]): CurrentTodos | null {
   if (!Array.isArray(messages)) return null
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -278,10 +258,7 @@ export function pickCurrentTodos(messages: Message[]): CurrentTodos | null {
   return null
 }
 
-/**
- * 清单快照之后是否又出现用户消息（= 已开新一轮）。
- * 只认 `role === 'user'`：用户编辑清单落的是 `feedback` 消息，不算新一轮。
- */
+/** 快照之后是否又出现用户消息（= 已开新一轮）。只认 `role === 'user'`，用户编辑清单落的是 feedback。 */
 export function hasUserMessageAfterTodos(messages: Message[]): boolean {
   if (!Array.isArray(messages)) return false
   const cur = pickCurrentTodos(messages)
@@ -292,10 +269,7 @@ export function hasUserMessageAfterTodos(messages: Message[]): boolean {
   return false
 }
 
-/**
- * 标题栏「任务清单」入口是否该出现（纯界面降噪，不动数据）。
- * 不显示两种：无清单或被清空（0 项）；全部完成且已开新一轮（已交付，属历史）。其余一律显示。
- */
+/** 标题栏入口是否显示：无清单/已清空不显示，全部完成且已开新一轮不显示，其余显示。 */
 export function shouldShowTodoEntry(messages: Message[]): boolean {
   const cur = pickCurrentTodos(messages)
   if (!cur) return false

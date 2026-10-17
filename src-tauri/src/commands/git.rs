@@ -1,15 +1,7 @@
-//! git —— 源代码管理（GUI 壳）。
-//!
-//! 这里只做三件事：**参数兜底**、**写操作准入判定**（只读沙盒模式 fail-closed，见
-//! `virlen_core::git::WriteGate`）、**转交 `virlen_core::git`**。业务语义一行都不在这层。
-//!
-//! ⚠️ 新增命令必须登记到 `lib.rs` 的 `tauri::generate_handler![...]`（铁律 4），否则 `invoke` 静默 404。
-//! ⚠️ 各命令的 `dir` 参数语义 = **工作目录**（可以是仓库的任意子目录）：路径基准由
-//!    `virlen_core::git::repo::root_of` 统一到仓库根，**本层不做任何路径拼接**（§11.53 ⑫）。
-//! ⚠️ 埋点只报「动作 / 结果 / 退出码 / 耗时」：**不报仓库路径、分支名、提交信息正文**
-//!    （remote URL 与提交信息都可能是敏感数据，见 `docs/git-management-plan.md` §6）。
-//!
-//! 方案与全部坑：`docs/git-management-plan.md`。
+//! git 源代码管理（GUI 壳）：只做参数兜底、写操作准入（只读沙盒 fail-closed）与转交 `virlen_core::git`。
+//! ⚠️ 新增命令必须登记到 `lib.rs` 的 `generate_handler![...]`，否则 `invoke` 静默 404。
+//! ⚠️ `dir` = 工作目录（可为仓库任意子目录），路径基准由 `repo::root_of` 统一，本层不做路径拼接。
+//! ⚠️ 埋点只报动作 / 结果 / 退出码 / 耗时：**不报仓库路径、分支名、提交信息正文**（可能是敏感数据）。
 
 use serde_json::json;
 use std::sync::Arc;
@@ -20,9 +12,8 @@ use virlen_core::git::{
 };
 use virlen_core::session_db::SettingsRepo;
 
-/// 把阻塞的 git 调用挪到阻塞线程池 —— git 是「子进程 + 阻塞读管道」，不许占着 async 线程。
-///
-/// 埋点收口在这里：一次命令一条 `git.op`，只带动作名 / 是否成功 / 退出码 / 耗时。
+/// 把阻塞的 git 调用挪到阻塞线程池（子进程 + 阻塞读管道不许占 async 线程），
+/// 埋点也收口在这里：一次命令一条 `git.op`（动作 / 成败 / 退出码 / 耗时）。
 async fn blocking<T, F>(op: &'static str, f: F) -> Result<T, String>
 where
     F: FnOnce() -> Result<T, GitError> + Send + 'static,
@@ -86,11 +77,8 @@ pub async fn git_branches(dir: String) -> Result<Vec<BranchInfo>, String> {
     blocking("branches", move || virlen_core::git::branch::list(&dir)).await
 }
 
-/// 提交记录（从 HEAD 或全部分支往回；`skip` 由界面「加载更多」推进，Rust 侧不缓存）。
-///
-/// `scope` = `head`（默认，只有 HEAD 可达 —— 「提交记录」弹窗）/ `all`（全部分支 + 标签 ——
-/// 「提交图」弹窗，见 [`virlen_core::git::LogScope`]）。两个入口给两个不同的 `op` 名，只为了在
-/// 埋点里分得开用量 —— ⚠️ 依旧**不报分支名、不报仓库路径**。
+/// 提交记录；`skip` 由「加载更多」推进，Rust 侧不缓存。
+/// `scope` = `head`（提交记录弹窗）/ `all`（全部 + 标签，提交图弹窗）；两个 op 名只为埋点里分得开用量。
 #[tauri::command]
 pub async fn git_log(
     dir: String,
@@ -143,9 +131,8 @@ pub async fn git_check_ref_format(dir: String, name: String) -> Result<bool, Str
     .await
 }
 
-/// 单个提交的详情（头信息 + **完整**提交信息 + 变更文件清单）。
-///
-/// 清单是**相对第一个父提交**的（merge 提交相对谁看没有唯一答案，见 `virlen_core::git::show`）。
+/// 单个提交的详情（头信息 + 完整信息 + 变更清单）。清单是**相对第一个父提交**的
+/// （merge 提交相对谁看没有唯一答案）。
 #[tauri::command]
 pub async fn git_commit_detail(dir: String, oid: String) -> Result<CommitDetail, String> {
     blocking("commit_detail", move || {
@@ -154,9 +141,7 @@ pub async fn git_commit_detail(dir: String, oid: String) -> Result<CommitDetail,
     .await
 }
 
-/// 某条路径**在那个提交里**的两侧内容（旧 = `<oid>^`，新 = `<oid>`）。
-///
-/// 按需取（与 `git_diff_sides` 同一取舍）：一次拉整个提交的 diff，大提交上是几十 MB。
+/// 某路径在指定提交里的两侧内容（旧 = `<oid>^`，新 = `<oid>`）。按需取：一次拉整个 diff 在大提交上几十 MB。
 #[tauri::command]
 pub async fn git_commit_file_sides(
     dir: String,

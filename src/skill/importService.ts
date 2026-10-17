@@ -1,8 +1,6 @@
 /**
- * importService — Skill ZIP 导入。
- *
- * 流程：选 ZIP → 读其中 SKILL.md 解析 frontmatter 取 name → 校验（须有 frontmatter 且含 name）→
- * 解压到 appDataDir/skills/{name}/ → 自动注册。
+ * Skill ZIP 导入：选 ZIP → 读 SKILL.md 解析 frontmatter 取 name → 校验（须有 frontmatter 且含 name）
+ * → 解压到 `appDataDir/skills/{name}/` → 自动注册。
  */
 import {
   getSkillsDirPath,
@@ -22,10 +20,7 @@ export interface ParsedSkillMeta {
   tags?: string[]
 }
 
-/**
- * 解析 SKILL.md 内容，提取元信息。兼容标准 YAML frontmatter 与纯 Markdown（# 标题 + > 描述 + **Version:**）；
- * name 经 normalizeSkillName 归一化。
- */
+/** 解析 SKILL.md 元信息：兼容 YAML frontmatter 与纯 Markdown；name 经 normalizeSkillName 归一化。 */
 function parseSkillMetaFromContent(
   _folderName: string,
   mdContent: string,
@@ -53,10 +48,7 @@ function parseSkillMetaFromContent(
   }
 }
 
-/**
- * 在 ZIP 中查找 SKILL.md 文件
- * 优先根目录，其次任意子目录
- */
+/** 在 ZIP 中找 SKILL.md：优先根目录，其次任意子目录 */
 function findSkillMdFile(
   files: Record<string, { dir: boolean; name: string }>,
 ): string | null {
@@ -77,10 +69,7 @@ function findSkillMdFile(
 
 // ==================== 对外接口 ====================
 
-/**
- * 打开文件对话框选择 ZIP 并导入
- * @returns 导入成功的 skill 名称列表
- */
+/** 打开文件对话框选 ZIP 并导入；@returns 成功的 skill 名称列表 */
 export async function importSkillFromZipDialog(): Promise<string[]> {
   try {
     const { open } = await import('@tauri-apps/plugin-dialog')
@@ -99,15 +88,7 @@ export async function importSkillFromZipDialog(): Promise<string[]> {
 }
 
 /**
- * 从指定路径的 ZIP 文件导入 skill
- *
- * 流程：
- * 1. 读取 ZIP 找到 SKILL.md，解析 name
- * 2. 校验 frontmatter 合法性
- * 3. 解压到 skills/{name}/
- * 4. 注册 skill
- *
- * @param zipPath ZIP 文件绝对路径
+ * 从指定路径的 ZIP 导入：读 ZIP → 找 SKILL.md 解析 name → 解压到 `skills/{name}/` → 注册。
  * @returns 导入成功的 skill 名称列表
  */
 export async function importSkillFromZip(zipPath: string): Promise<string[]> {
@@ -195,10 +176,7 @@ export async function importSkillFromZip(zipPath: string): Promise<string[]> {
   }
 }
 
-/**
- * 校验 SKILL.md 文件内容
- * @returns 解析后的技能元信息
- */
+/** 校验 SKILL.md 并解析元信息（`fallbackName` 为目录名兜底）。 */
 export function validateSkillMd(
   mdContent: string,
   fallbackName: string = '',

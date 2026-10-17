@@ -3,17 +3,8 @@ use tauri::AppHandle;
 use tauri::Manager;
 
 /**
- * 授予麦克风和摄像头权限（启动时调用）
- *
- * ## 平台策略
- * - **Windows**: 通过 WebView2 COM API (`ICoreWebView2Profile4`) 将权限预设为 ALLOW
- * - **macOS**: 由 WKWebView 原生权限弹窗处理，需在 Info.plist 配置描述文案
- * - **Linux**: 由 WebKitGTK 权限弹窗处理
- *
- * ## macOS Info.plist 必需配置
- * 需要在 src-tauri/Info.plist 或 tauri.conf.json 中添加：
- * - `NSCameraUsageDescription` — 使用摄像头的目的说明
- * - `NSMicrophoneUsageDescription` — 使用麦克风的目的说明
+ * 授予麦克风 / 摄像头权限（启动时调用）。Windows 走 WebView2 `ICoreWebView2Profile4` 预设 ALLOW，
+ * macOS / Linux 由系统权限弹窗处理，但 macOS 需在 Info.plist 配 `NSCameraUsageDescription` / `NSMicrophoneUsageDescription`。
  */
 #[tauri::command]
 pub fn grant_permissions(app: AppHandle) {

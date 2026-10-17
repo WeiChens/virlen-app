@@ -1,18 +1,7 @@
 /**
- * Tauri 版文件系统端口（§37 的生产实现）—— FileSystemPort 的真身。
- *
- * 与 file-source.ts 分工：那一层管纪律（带宽上限、临时文件、越权路径规整、ACL），本文件只管「本机文件
- * 系统怎么读写」。于是 file-source 的全部纪律都能在无 Tauri 环境被单测，这里只剩 API 形状的适配。
- *
- * 读取用 open + seek + read 而非 readFile：readFile 会把**整个文件**读进内存（点开 500MB 视频先 OOM），
- * 而我们只要前 256KB。故 capabilities 里开了 fs:allow-open / fs:allow-seek，边界由 fs:scope 与本层传入的
- * **已过安全校验的绝对路径**共同决定。
- *
- * 写入用 append: true 而非自己维护偏移：临时文件只追加，让系统调用负责定位，顺序性由 file-source 校验
- *（offset 必须等于已接收字节数），两层合起来才等于「写进去的字节就是传出去的字节」。
- *
- * 覆写用 rename 覆盖而非「删了再写」：rename 覆盖是**原子**动作，而「先删目标、再把临时文件改过去」会在
- * 两次调用之间留下一个「文件不存在」的窗口（用户的编辑器 / 构建工具可能正好读到 404）。
+ * Tauri 版文件系统端口（FileSystemPort 的生产实现）：只管「本机读写」，纪律（带宽上限、临时文件、
+ * 越权路径、ACL）全在 `file-source.ts`，故那边可无 Tauri 单测。
+ * 读取用 open + seek + read 而不用 readFile（后者把整个文件读进内存）；复写用 rename（原子）而非先删再写。
  */
 import { invoke } from '@tauri-apps/api/core'
 import * as tauriFs from '@tauri-apps/plugin-fs'
@@ -31,10 +20,7 @@ let listSeq = 0
 export function createTauriFileSystem(): FileSystemPort {
   return {
     /**
-     * 列目录（非递归）。
-     *
-     * 走 Rust `list_directory`（与桌面文件树 / `list_files` 工具**同一个实现**）：一次调用
-     * 就能拿到「名字 + 是否目录 + 大小」，比 `readDir` 之后逐个 `stat` 少一圈 IPC。
+     * 列目录（非递归）。走 Rust `list_directory`（与文件树 / `list_files` 同一实现），一次拿全字段。
      */
     async listDir(dir: string, options: { includeHidden: boolean }): Promise<FileSysEntry[]> {
       const raw: RustDirEntry[] = await invoke('list_directory', {
@@ -61,10 +47,8 @@ export function createTauriFileSystem(): FileSystemPort {
     },
 
     /**
-     * 大小 + 修改时刻；不存在或不是文件 → `null`（调用方据此给 `E_NOT_FOUND` / `E_BAD_REQUEST`）。
-     *
-     * `mtime` 是**编辑保存的版本凭据**（见 `file-source.ts` 的纪律 6）：`plugin-fs` 的 `stat` 给的是
-     * `Date | null`，这里统一成 ms 时间戳；拿不到就给 `null`，调用方会 fail-closed（不改）。
+     * 大小 + mtime；不存在或不是文件 → `null`。`mtime` 是编辑保存的版本凭据（`file-source` 纪律 6），
+     * 拿不到传 `null`，调用方 fail-closed。
      */
     async statFile(path: string): Promise<{ size: number; mtimeMs: number | null } | null> {
       try {
@@ -96,10 +80,7 @@ export function createTauriFileSystem(): FileSystemPort {
     },
 
     /**
-     * 读一段字节。
-     *
-     * `read()` 在文件尾返回 `null`（不是 0），且**允许少于请求长度**（短读），
-     * 所以这里循环到填满或遇到 EOF —— 少读一次就是「文件末尾少了几个字节」这种查不出来的坏文件。
+     * 读一段字节。`read()` 到文件尾返回 `null` 且**允许短读**，故必须循环到填满或 EOF。
      */
     async readRange(path: string, offset: number, length: number): Promise<Uint8Array> {
       const handle = await tauriFs.open(path, { read: true })
@@ -127,12 +108,8 @@ export function createTauriFileSystem(): FileSystemPort {
     },
 
     /**
-     * 替换目标（目标已存在则覆盖）。
-     *
-     * 与 `rename` 是**同一个系统调用**，但契约不同（见 `FileSystemPort`）：`rename` 的调用方已经
-     * 挑好了一个空位，而这里的调用方明确要覆盖一个已存在的文件。Windows 上 `fs::rename` 走
-     * `MoveFileExW(MOVEFILE_REPLACE_EXISTING)`，**目标正被其它进程占着时仍会失败** —— 那就报错，
-     * 由上层清掉临时文件（目标保持原样，这正是「先写临时文件」的意义）。
+     * 覆写目标。与 `rename` 同一系统调用，但契约是「目标已存在」：Windows 上目标被占仍会失败，
+     * 那就报错、由上层清临时文件（目标保持原样 —— 这正是「先写临时文件」的意义）。
      */
     async replaceFile(from: string, to: string): Promise<void> {
       await tauriFs.rename(from, to)

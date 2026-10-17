@@ -1,6 +1,6 @@
 /**
- * plazaService — 技能广场远程 API 服务：调 virlen-api 公开接口取技能列表 / 分类 / 详情 / SKILL.md 预览（浏览器原生
- * fetch）。导入流程：取 download_url → 下载 ZIP → importSkillFromZip 安装。
+ * 技能广场远程 API（virlen-api 公开接口）：列表 / 分类 / 详情 / SKILL.md 预览。
+ * 导入流程：取 download_url → 下载 ZIP → importSkillFromZip 安装。
  */
 import { importSkillFromZip } from './importService'
 import { getRegisteredSkill } from './skillStore'
@@ -81,9 +81,7 @@ async function apiPost(path: string): Promise<void> {
 
 // ==================== 公开接口 ====================
 
-/**
- * 获取已发布的技能列表（分页）
- */
+/** 已发布的技能列表（分页） */
 export async function fetchPlazaSkills(params?: {
   page?: number
   page_size?: number
@@ -99,24 +97,17 @@ export async function fetchPlazaSkills(params?: {
   return apiGet<PaginatedData<RemoteSkill>>(`/skills${qs ? '?' + qs : ''}`)
 }
 
-/**
- * 获取技能分类列表
- */
+/** 技能分类列表 */
 export async function fetchPlazaCategories(): Promise<RemoteCategory[]> {
   return apiGet<RemoteCategory[]>('/skills/categories')
 }
 
-/**
- * 获取技能详情（含 download_url）
- */
+/** 技能详情（含 download_url） */
 export async function fetchPlazaSkillDetail(id: number): Promise<RemoteSkillDetail> {
   return apiGet<RemoteSkillDetail>(`/skills/${id}`)
 }
 
-/**
- * 获取技能 SKILL.md 内容（预览）
- * 直接请求静态文件 URL: {domain}/uploads/skills/{name}/SKILL.md
- */
+/** SKILL.md 预览：直接请求静态文件 `{domain}/uploads/skills/{name}/SKILL.md` */
 export async function fetchPlazaSkillReadme(id: number): Promise<string> {
   // 先获取技能详情得到 name
   const detail = await fetchPlazaSkillDetail(id)
@@ -128,9 +119,7 @@ export async function fetchPlazaSkillReadme(id: number): Promise<string> {
   return res.text()
 }
 
-/**
- * 上报下载计数
- */
+/** 上报下载计数（静默失败，不影响用户体验） */
 export async function reportPlazaDownload(id: number): Promise<void> {
   try {
     await apiPost(`/skills/${id}/download-count`)
@@ -142,15 +131,7 @@ export async function reportPlazaDownload(id: number): Promise<void> {
 // ==================== 导入逻辑 ====================
 
 /**
- * 从技能广场导入技能到本地
- *
- * 流程：
- * 1. 获取技能详情 → 得到 download_url
- * 2. 上报下载计数
- * 3. 下载 ZIP 到临时目录
- * 4. 调用 importSkillFromZip 安装
- * 5. 清理临时文件
- *
+ * 从技能广场导入：取详情 → 报下载计数 → 下载 ZIP 到临时目录 → `importSkillFromZip` 安装 → 清理临时文件。
  * @returns 导入成功的 skill 名称
  */
 export async function importSkillFromPlaza(skillId: number): Promise<string> {
@@ -210,9 +191,7 @@ export async function importSkillFromPlaza(skillId: number): Promise<string> {
   }
 }
 
-/**
- * 检查远程技能是否已本地安装
- */
+/** 远程技能是否已本地安装 */
 export function isSkillInstalled(name: string): boolean {
   return !!getRegisteredSkill(name)
 }

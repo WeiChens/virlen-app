@@ -1,17 +1,7 @@
 /*!
- * clipboard_files::dib — 图片字节 → Windows DIB（CF_DIB）
- *
- * 为什么需要它：把图片放进系统剪贴板，Windows 上标准做法是写 CF_DIB
- * （BITMAPINFOHEADER + 像素阵列）。WebView 里的 `navigator.clipboard.write`
- * 是否放行取决于运行时权限，不可靠；原生这条路是确定的。
- *
- * 与平台无关（纯字节组装），所以单独成文件、可跨平台单测；
- * 真正写剪贴板的系统调用在 windows.rs，非 Windows 构建下本模块无使用者。
- *
- * 格式约定（兼容性最好的那一档）：
- *   - 32 位 BI_RGB（不带位掩码），像素 BGRA —— 资源管理器 / Office / 微信等都能读；
- *   - biHeight 为正 → **自下而上**存储（Windows DIB 的历史约定）；
- *   - 不做行对齐填充：32 位像素天然 4 字节对齐，不需要补 padding。
+ * 图片字节 → Windows DIB（CF_DIB）：WebView 的 `navigator.clipboard.write` 取决于运行时权限、不可靠，
+ * 原生写 CF_DIB 是确定的。与平台无关（纯字节组装），可跨平台单测；写剪贴板在 `windows.rs`。
+ * 格式：32 位 BI_RGB、像素 BGRA、biHeight 为正（**自下而上**存储）、无需行对齐填充。
  */
 
 /// BITMAPINFOHEADER 固定 40 字节（不含调色板；32 位 BI_RGB 不需要调色板）
@@ -19,11 +9,7 @@ const BITMAPINFOHEADER_SIZE: u32 = 40;
 /// 每像素 4 字节（BGRA）
 const BYTES_PER_PIXEL: u32 = 4;
 
-/**
- * 把任意可解码的图片字节（PNG/JPEG/GIF/BMP/WEBP…）转成 CF_DIB 数据。
- *
- * @param bytes 原始图片字节（前端给的是 base64 解码后的结果）
- */
+/// 任意可解码图片字节（PNG/JPEG/GIF/BMP/WEBP…）→ CF_DIB 数据
 pub fn image_to_dib(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let image = image::load_from_memory(bytes)
         .map_err(|e| format!("图片解码失败（支持 PNG/JPEG/GIF/BMP/WEBP 等）：{e}"))?;
@@ -33,11 +19,8 @@ pub fn image_to_dib(bytes: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 /**
- * RGBA8（自上而下，行间无 padding）→ 32 位 DIB。
- *
- * 拆成独立函数是为了可单测：头部字段与「自下而上 + BGRA」的顺序
- * 一旦写错，剪贴板里会得到上下颠倒或红蓝互换的图，而这类错误
- * 只能靠人眼看出来，必须由单测兜住。
+ * RGBA8（自上而下，无 padding）→ 32 位 DIB。拆成独立函数为了可单测：头部字段与「自下而上 + BGRA」
+ * 写错只会得到上下颠倒 / 红蓝互换的图，只能靠单测兜住。
  */
 pub fn rgba_to_dib(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
     let mut dib = Vec::with_capacity(

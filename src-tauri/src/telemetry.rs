@@ -1,9 +1,5 @@
-//! GUI 侧埋点出口（Tauri）—— 实现全在 `virlen-core::telemetry`
-//!
-//! 本模块只做两件事：① 把 Tauri emit 注册成 core 的 `TelemetrySink`（core 内约百处 `track()` 调用点因此
-//! 完全不用改）；② 提供前端就绪后主动拉取 panic 的命令（Tauri 事件不缓冲，setup 阶段 emit 会丢）。
-//!
-//! 这里同时重导出 core 的埋点工具函数，让 GUI 内部沿用既有的 `crate::telemetry::track(...)` 写法。
+//! GUI 侧埋点出口：① 把 Tauri emit 注册成 core 的 `TelemetrySink`；② 提供前端就绪后拉取 panic 的命令
+//! （Tauri 事件不缓冲，setup 阶段 emit 会丢）。这里重导出 core 的工具函数以沿用 `crate::telemetry::track` 写法。
 
 use serde_json::Value;
 use std::sync::Arc;
@@ -11,10 +7,8 @@ use tauri::{AppHandle, Emitter, Manager};
 
 pub use virlen_core::telemetry::{drain_panics, hash_id, now_ms, on_exit, track, TelemetrySink};
 
-/// Tauri 埋点出口：`agent:telemetry` 事件
-///
-/// 载荷与重构前逐字一致（`event_name` / `props` / `event_time`），
-/// 由前端 `src/utils/telemetry` 补齐公共字段、打码、写入本地缓冲。
+/// Tauri 埋点出口（`agent:telemetry`）：载荷字段固定 `event_name` / `props` / `event_time`，
+/// 公共字段补齐、打码与本地缓冲都在前端 `src/utils/telemetry`。
 struct TauriTelemetrySink {
     app: AppHandle,
 }
@@ -40,9 +34,7 @@ pub fn init(app: &AppHandle) {
     virlen_core::telemetry::install_panic_hook();
 }
 
-/// 读取并清空历史 panic 落盘，返回各条 props 列表。
-///
-/// 由前端在「`agent:telemetry` 监听注册完成且埋点开启」后调用。
+/// 读取并清空历史 panic 落盘（前端在事件监听注册完成、埋点开启后调用）。
 #[tauri::command]
 pub fn telemetry_drain_panics() -> Vec<Value> {
     drain_panics()

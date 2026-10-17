@@ -1,15 +1,7 @@
 /**
- * 文档删除 —— 单份删除与「清空文档」两条路径
- *
- * 两件事都和「时间」有关，也是这个文件存在的理由：
- * - **删一份不是瞬间完成的**（后端要把这份文档在向量库里的片段一起清掉，再回写元数据）。
- *   从前点了「删除」到列表刷新之间界面毫无变化，用户以为没点上、于是再点一次 ——
- *   行内的「删除中…」就是给这段等待一个交代（`DocListModal` 用 `deletingId` 画）；
- * - **清空是逐份删的**，几十份要花上几秒到十几秒。所以它走 `shared/TaskProgress` 那个
- *   批量进度弹窗：逐份显示「正在删除 xxx」，随时可取消，结束时给一句汇总 ——
- *   口径与导入一致（取消在**整份的边界**上生效，不会删到一半）。
- *
- * 记忆详情正文（`memory_detail_of`）不在这里删：后端会拒，入口在记忆那边（删记忆时才一起清）。
+ * 文档删除：单份与「清空」两条路径。删一份不是瞬完成（后端要清向量库片段），故行内给「删除中…」；
+ * 清空逐份删、走 `TaskProgress` 可取消进度弹窗，取消只在整份边界生效。
+ * 记忆详情正文由后端拒删（入口在记忆那边）。
  */
 import { t, tpl } from '@/ui/i18n'
 import { ragService } from '@/services/rag-service'
@@ -35,11 +27,8 @@ export function summarizeDelete(counts: DeleteCounts): string {
 }
 
 /**
- * 删单份的第一步：只弹确认框。
- *
- * 为什么拆成两步（确认 / 真删）：「删除中…」应该在**用户确认之后**才出现 ——
- * 确认框还弹着的时候按钮就变「删除中…」，用户又点了取消，那一幕是骗人的。
- * 所以调用方拿到 true 之后再切按钮、再调 [`removeDocumentNow`]。
+ * 删单份第一步：只弹确认框。拆两步是为了「删除中…」在用户确认之后才出现 ——
+ * 确认框还弹着时按钮就变，用户又点了取消，那一幕是骗人的。
  */
 export async function confirmRemoveDocument(docName: string): Promise<boolean> {
   return (
@@ -52,11 +41,8 @@ export async function confirmRemoveDocument(docName: string): Promise<boolean> {
 }
 
 /**
- * 删单份的第二步：真的删掉 + 一句 toast。
- *
- * @returns 是否真的删掉了 —— 调用方据此决定要不要刷新列表（没删成时刷新没有意义）。
- *          ⚠️ 调用方要先在按钮上切「删除中…」：这一句要等后端把这份文档在向量库里的
- *          片段一起清掉，不是瞬返回。
+ * 删单份第二步：真删 + toast。@returns 是否真删掉（没删成时刷新没意义）。
+ * ⚠️ 调用方需先在按钮上切「删除中…」：后端要清向量库片段，不是瞬返回。
  */
 export async function removeDocumentNow(
   kbId: string,
@@ -73,12 +59,8 @@ export async function removeDocumentNow(
 }
 
 /**
- * 清空知识库里的文档 —— 逐份删，全程一个可取消的进度弹窗。
- *
- * @param kbName 库名（确认框与进度弹窗里都要说清「清的是哪个库」）
- * @param docs   当前列表里的文档（调用方已经加载过，不再多查一次）
- * @returns      是否真的动过手（有一份被删掉了 / 试过但失败了）——
- *               一份都没轮到（被全部锁定、用户取消、直接拒绝确认）时返回 false，调用方不必刷新
+ * 清空文档：逐份删，全程一个可取消的进度弹窗。
+ * @returns 是否真的动过手（一份都没轮到：全被锁 / 用户取消 / 拒绝确认 → false，调用方不必刷新）
  */
 export async function clearAllDocuments(
   kbId: string,

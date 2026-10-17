@@ -1,16 +1,7 @@
-//! 文档解析（`parse_document` 工具）的 **Tauri 命令层**（GUI 壳）
-//!
-//! 只做「参数兜底 + 转交」：解析在 `virlen_core::doc_parse`，模型侧文本 / `uiData` 的版式在
-//! `virlen_core::agent::native_tools::file::parse_document::parse_targets`
-//! （**与原生工具同一条组装链**，否则两条路径的版式与失败语义会静默分叉）。
-//!
-//! ⚠️ 路径安全由**前端**先做完（`securityService.resolveSafePath`，与 `read_file_with_hash`
-//! 同一种约定：命令只认已经校验过的路径）。Rust 引擎的原生工具路径不经过这里，它自己走
-//! `resolve_safe_path`（黑名单 > 白名单 > 工作目录；`outTxtFile` 走**写模式**）。
-//! ⚠️ 新增命令必须登记到 `src/lib.rs` 的 `generate_handler![...]`（铁律 4），否则前端 invoke 静默 404。
-//!
-//! OCR（`ocrImages`）在 GUI 侧同样可用：模型目录由 `TauriHost` 定位（`AppHandle` 是这里的唯一来源），
-//! 三态语义与原生工具**共用** `ocr_options`（铁律 1：两条路径不许各解一次）。
+//! 文档解析（`parse_document` 工具）的命令层：只做参数兜底 + 转交，解析在 `virlen_core::doc_parse`，
+//! 版式与失败语义与原生工具同一条组装链（`parse_targets`）。
+//! ⚠️ 路径安全由**前端**先做（`securityService.resolveSafePath`）；Rust 原生工具路径自己走 `resolve_safe_path`。
+//! ⚠️ 新增命令必须登记到 `lib.rs` 的 `generate_handler![...]`，否则 `invoke` 静默 404。
 
 use crate::host::TauriHost;
 use tauri::AppHandle;
@@ -19,9 +10,8 @@ use virlen_core::agent::native_tools::{
 };
 use virlen_core::doc_parse::ParseOptions;
 
-/// 解析结果：模型侧文本（固定英文）+ 界面侧结构化数据 + 是否全部失败
-///
-/// `ok == false` 时前端执行器要把它当**失败**抛出（与原生工具 `NativeToolOutcome::Error` 同语义）。
+/// 解析结果：模型侧英文文本 + 界面结构化数据 + 是否全部失败。
+/// `ok == false` 要当**失败**抛出（与原生工具 `NativeToolError` 同语义）。
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParsedDocumentResult {
@@ -30,10 +20,8 @@ pub struct ParsedDocumentResult {
     pub ok: bool,
 }
 
-/// 解析一份或多份文档（TS 回退路径 / 浏览器 dev；默认引擎走原生工具，不经过这里）
-///
-/// `clippy::too_many_arguments`：参数就是前端 `invoke` 的载荷字段（Tauri 按名注入），
-/// 合并成结构体会同时改前端调用形状，得不偿失。
+/// 解析一份或多份文档（TS 回退路径 / 浏览器 dev；默认引擎走原生工具）。
+/// 参数即前端 `invoke` 的载荷字段，合结构体会同时改前端调用形状。
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn cmd_parse_document(

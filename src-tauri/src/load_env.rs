@@ -80,11 +80,8 @@ fn get_os_version() -> String {
     }
 }
 
-/// 执行命令并取第一行非空输出（先 stdout，失败则 stderr）
-///
-/// Windows 上的 npm、pnpm、yarn 等本质是 .cmd 批处理，不是 exe，
-/// 直接用 Command::new("npm") 可能找不到（PATH 里的是 npm.cmd）。
-/// 因此 Windows 下统一走 cmd /c 来确保 shell 环境变量生效。
+/// 执行命令并取第一行非空输出（先 stdout，失败则 stderr）。
+/// Windows 上 npm / pnpm / yarn 本质是 .cmd，`Command::new("npm")` 可能找不到 → 统一走 `cmd /c`。
 fn get_tool_version(cmd: &str, args: &[&str]) -> Option<String> {
     #[cfg(target_os = "windows")]
     {
@@ -106,12 +103,7 @@ fn get_tool_version(cmd: &str, args: &[&str]) -> Option<String> {
     }
 }
 
-/// 从 Command Output 中提取第一行版本号
-///
-/// 规则：
-/// - 只有命令成功退出（status.success()）才视为有效
-/// - 先读 stdout，如果为空再读 stderr（`java -version` 输出到 stderr）
-/// - 只取第一行
+/// 取版本号第一行：非零退出视为无效；stdout 为空再读 stderr（`java -version` 写 stderr）。
 fn capture_output(output: std::process::Output) -> Option<String> {
     // 命令执行失败（找不到命令、退出码非零），不纳入结果
     if !output.status.success() {

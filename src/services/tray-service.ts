@@ -1,10 +1,6 @@
 /**
- * tray-service — 托盘 / 后台化集成（前端唯一出口）。
- *
- * 只做两件事，都不碰窗口控制（窗口显隐与退出的权威在 Rust 的 tray 模块）：
- * ① 把「谁在工作」推给 Rust（真源 sessionRuntimeState，两种引擎都经过它）；
- * ② 运行结束通知 Rust（由 chat/event-handler.ts::finishWorking 调用），由 Rust 决定是否提醒。
- *「关闭窗口 = 隐藏到托盘」不在这里：Rust 拦 CloseRequested 直接 hide()。
+ * 托盘 / 后台化集成（前端唯一出口），不碰窗口控制（权威在 Rust）：
+ * ① 把「谁在工作」推给 Rust；② 运行结束通知 Rust，由它决定是否提醒。
  */
 import { reaction } from 'mobx'
 import { invoke } from '@tauri-apps/api/core'
@@ -27,8 +23,7 @@ let inited = false
 let prevWorking = new Set<string>()
 
 /**
- * 托盘命令统一入口。托盘是**增强能力**：非 Tauri 环境（浏览器 dev / vitest）、命令不存在、
- * 调用失败一律静默 —— 绝不能影响聊天主流程。
+ * 托盘命令统一入口。托盘是**增强能力**：非 Tauri / 命令不存在 / 失败一律静默，不影响聊天主流程。
  */
 function inv(cmd: string, args?: Record<string, unknown>): void {
   if (!inited) return
@@ -45,19 +40,16 @@ function hasWebviewFocus(): boolean {
 }
 
 /**
- * 「用户此刻正看着这个会话」—— 只有前端能算出来（窗口在前台 + 当前会话就是它）。
- * 少了它会推未读 ⇒ 屏幕上多出清不掉的红点（用户已在看，不会再触发清除）。
- * 用 DOM 焦点而非 getCurrentWindow().isFocused()：后者与 Rust 端 window_focus() 同源，
- * 这里要的是「webview 真被激活」的独立信号。
+ * 「用户此刻正看着这个会话」（窗口前台 + 当前会话是它）。少了它会推未读 ⇒ 屏幕上多出清不掉的红点。
+ * 用 DOM 焦点而非 isFocused()：后者与 Rust 同源，这里要的是 webview 真被激活的独立信号。
  */
 function isViewingSession(sessionId?: string | null): boolean {
   return !!sessionId && chatState.value.currentSessionId === sessionId && hasWebviewFocus()
 }
 
 /**
- * 托盘原生菜单 / tooltip 文案。
- * ⚠️ 原生菜单 Rust 侧无语言资源，i18n 必须由前端推（铁律 7）。带数量的文案用 `$__count__`
- * 占位符（同 tpl() 约定）由 Rust 替换：`t()` 只翻译、不替换。
+ * 托盘原生菜单 / tooltip 文案。⚠️ Rust 侧无语言资源，i18n 必须由前端推（铁律 7）；
+ * `$__count__` 占位符由 Rust 替换（`t()` 只翻译、不替换）。
  */
 function trayLabels() {
   return {
@@ -73,9 +65,8 @@ function trayLabels() {
 }
 
 /**
- * 推送设置 + 托盘文案。
- * 必须先 await ensureLanguageReady()：切语言生效在 useLanguage() 的 reaction 里异步完成，
- * 而本 reaction 注册更早（main.ts 早于 App 渲染），不等待就会推旧语言（菜单滞后一次）。
+ * 推送设置 + 托盘文案。必须先 await ensureLanguageReady()：切语言生效在 useLanguage 的
+ * reaction 里异步完成，不等待就会推旧语言（菜单滞后一次）。
  */
 async function pushSettings(): Promise<void> {
   await ensureLanguageReady()
@@ -171,8 +162,8 @@ export function initTrayService(): void {
 }
 
 /**
- * 通知 Rust「一次运行结束了」。由 chat/event-handler.ts::finishWorking() 调用（两种引擎共用的唯一收口）。
- * preview 在 Phase 1 只进埋点，Phase 2 用作系统通知正文。
+ * 通知 Rust「一次运行结束了」（由 chat/event-handler.ts::finishWorking 调用，两种引擎共用收口）。
+ * `viewing` 由前端判定（Rust 拿不到 currentSessionId），缺失就会「盯着看完却冒红点」。
  */
 export function trayNotifyCompleted(
   sessionId: string,
