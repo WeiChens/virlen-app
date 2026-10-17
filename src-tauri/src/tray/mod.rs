@@ -674,7 +674,7 @@ mod tests {
 
     #[test]
     fn close_action_truth_table() {
-        /// 只有「托盘可用 + 开关打开 + 不在退出」才隐藏
+        // 只有「托盘可用 + 开关打开 + 不在退出」才隐藏
         assert_eq!(decide_close(&state(true, true, false)), CloseAction::Hide);
         assert_eq!(decide_close(&state(true, true, true)), CloseAction::Exit);
         assert_eq!(decide_close(&state(true, false, false)), CloseAction::Exit);

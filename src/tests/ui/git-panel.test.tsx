@@ -1,13 +1,18 @@
 /**
  * GitPanel — 面板主体的界面行为（实测反馈里那几条，都是「看起来小事、错了很难受」的那种）。
  *
- * 1. **提交区只在暂存区非空时出现**：没有可提交的东西时，它是白占一行、还让人以为「该写点什么」；
+ * 1. **提交区只在暂存区非空时出现**（唯一例外：amend 模式下也出现 —— 只改提交信息也得有地方写）：
+ *    没有可提交的东西时，它是白占一行、还让人以为「该写点什么」；
  * 2. **提交按钮在行尾**：主操作落在右下（与全项目一致），左侧留给「已暂存 N 个文件」这类状态提示；
  * 3. **行内小按钮是图标按钮**：三个按钮都得有 `title` + `aria-label`（读屏别念出「＋」），
  *    「丢弃」用的是 `UndoSvg` 而不是字符 `↺`（后者与刷新图标同形，被读成「刷新一下」）；
  * 4. **段标题右侧的「全部暂存」一直存在**（它是批量入口，不能因为「没样式」而被当成裸文字）；
  * 5. **单击 = 选中、双击 = 打开差异**；Ctrl / Shift 多选后点行内按钮即作用于同侧选中的全部
- *    （按钮文案会写明「… N 个文件」，点之前就知道它带走几个）。
+ *    （按钮文案会写明「… N 个文件」，点之前就知道它带走几个）；
+ * 6. **不常用的三个动作收在「更多」里**（同步浮层 / 撤销上次提交 / 修改上一次提交），
+ *    落差数字则是**按钮**（点它 = 先拉取再推送）—— 头部宽度只够一件事一个入口。
+ * 7. **段顺序是「更改 → 暂存的更改」，提交区在列表最下面**（实测反馈）：文件暂存后在列表里往下走，
+ *    而不是跑到顶上；先看改了什么，再写提交信息。
  *
  * 数据与写操作全部 mock：这里只验界面，git 语义由 Rust 用例（`cargo test -p virlen-core git`）守。
  */
@@ -23,7 +28,6 @@ import {
   commit,
   checkRefFormat,
   discard,
-  initRepo,
   loadCommitDetail,
   loadDiffSides,
   refreshStatus,
@@ -32,6 +36,7 @@ import {
   removeBranch,
   stage,
   switchBranch,
+  syncNow,
   unstage,
   undoLastCommit,
 } from '@/services/git-service'
@@ -52,7 +57,6 @@ vi.mock('@/services/git-service', () => ({
   loadDiffSides: vi.fn(),
   // 本轮新增的四个入口（amend / 撤销 / 初始化 / 分支删改名）
   undoLastCommit: vi.fn(),
-  initRepo: vi.fn(),
   loadCommitDetail: vi.fn(),
   removeBranch: vi.fn(),
   renameBranch: vi.fn(),
@@ -61,6 +65,7 @@ vi.mock('@/services/git-service', () => ({
   fetchRemote: vi.fn(),
   pullRemote: vi.fn(),
   pushRemote: vi.fn(),
+  syncNow: vi.fn(),
   testRemote: vi.fn(),
   cancelSync: vi.fn(),
 }))
@@ -78,8 +83,8 @@ vi.mock('@tauri-apps/plugin-opener', () => ({
   revealItemInDir: vi.fn(() => Promise.resolve()),
 }))
 
-;(globalThis as never as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT =
-  true
+  ; (globalThis as never as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT =
+    true
 
 function entry(over: Partial<GitChangeEntry>): GitChangeEntry {
   return { path: 'a.txt', orig_path: null, x: '.', y: '.', kind: 'ordinary', ...over }
@@ -107,7 +112,7 @@ function mount() {
   const host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
-  act(() => root!.render(<GitPanel onClose={() => {}} />))
+  act(() => root!.render(<GitPanel onClose={() => { }} />))
 }
 
 function setStore(entries: GitChangeEntry[]) {
@@ -122,7 +127,6 @@ function setStore(entries: GitChangeEntry[]) {
       caps: { porcelain_v2: true, switch: true, restore: true },
     }
     gitStore.unavailable = null
-    gitStore.notRepo = false
     gitStore.error = null
     gitStore.busy = null
     gitStore.commitDraft = ''
@@ -130,6 +134,7 @@ function setStore(entries: GitChangeEntry[]) {
     gitStore.branches = []
     gitStore.remotes = []
     gitStore.syncOutput = null
+    gitStore.stats = null
     gitStore.snapshot = snapshot(entries)
   })
 }
@@ -168,7 +173,6 @@ beforeEach(() => {
     refreshStatus,
     loadDiffSides,
     undoLastCommit,
-    initRepo,
     removeBranch,
     renameBranch,
     checkRefFormat,
@@ -216,6 +220,25 @@ it('暂存区非空：提交区出现，提示在左、提交按钮在行尾', (
   expect(row!.firstElementChild?.textContent).toBe('已暂存 1 个文件')
   expect(row!.lastElementChild?.className).toBe('git-primary-btn')
   expect(row!.lastElementChild?.textContent).toBe('提交')
+})
+
+/** 段顺序与提交区位置（实测反馈）：暂存后在列表里往下走，提交区在列表之后 */
+it('段顺序是「更改 → 暂存的更改」，且提交区在列表之后', () => {
+  setStore([stagedEntry('s.txt'), unstagedEntry('a.txt')])
+  mount()
+
+  const titles = [...document.querySelectorAll('.git-section-title')].map(
+    (el) => el.firstElementChild?.textContent,
+  )
+  expect(titles).toEqual(['更改', '暂存的更改'])
+
+  // 提交区在**最后**：先看改了什么，再写提交信息
+  const list = document.querySelector('.git-list') as HTMLElement
+  const commitBox = document.querySelector('.git-commit') as HTMLElement
+  expect(commitBox).not.toBeNull()
+  expect(
+    list.compareDocumentPosition(commitBox) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy()
 })
 
 it('提交按钮：草稿为空时禁用，写入草稿后可点，并把草稿交给 commit()', () => {
@@ -361,18 +384,18 @@ it('批量：点选中行里的按钮作用于同侧选中的全部，文案写�
   ])
   mount()
 
-  // 列表顺序 = 段顺序：s.txt（暂存的更改）、a.txt、b.txt（更改）
+  // 列表顺序 = 段顺序：a.txt、b.txt（更改）、s.txt（暂存的更改）
   const rows = [...document.querySelectorAll('.git-row')]
-  click(rows[1])
-  clickWith(rows[2], { ctrlKey: true })
+  click(rows[0])
+  clickWith(rows[1], { ctrlKey: true })
 
-  const stageBtn = rowButtons(rows[2])[1]
+  const stageBtn = rowButtons(rows[1])[1]
   expect(stageBtn.getAttribute('aria-label')).toBe('暂存 2 个文件')
   click(stageBtn)
   expect(stage).toHaveBeenCalledWith(['a.txt', 'b.txt'])
 
   // 未选中的那一行：只作用于它自己（「取消暂存」不带数量）
-  const unstageBtn = rowButtons(rows[0])[0]
+  const unstageBtn = rowButtons(rows[2])[0]
   expect(unstageBtn.getAttribute('aria-label')).toBe('取消暂存')
   click(unstageBtn)
   expect(unstage).toHaveBeenCalledWith(['s.txt'])
@@ -382,11 +405,12 @@ it('批量只取同侧：选中集里混了已暂存的行，点「暂存更改�
   setStore([stagedEntry('s.txt'), unstagedEntry('a.txt')])
   mount()
 
+  // 段顺序：更改（a.txt）在前、暂存的更改（s.txt）在后
   const rows = [...document.querySelectorAll('.git-row')]
   click(rows[0])
   clickWith(rows[1], { ctrlKey: true })
 
-  const stageBtn = rowButtons(rows[1])[1]
+  const stageBtn = rowButtons(rows[0])[1]
   // 同侧只有它自己 → 单数文案（不是「暂存 2 个文件」）
   expect(stageBtn.getAttribute('aria-label')).toBe('暂存更改')
   click(stageBtn)
@@ -436,7 +460,7 @@ function setBranches(list: Partial<GitBranchInfo>[]): void {
 function openBranchMenu(): void {
   click(
     document.querySelector('.git-branch-btn') ??
-      document.querySelector('.git-detached'),
+    document.querySelector('.git-detached'),
   )
 }
 
@@ -533,7 +557,7 @@ it('变更行右键：「在文件管理器中显示」给的是绝对路径', a
   )
   expect(item).toBeTruthy()
   await act(async () => {
-    ;(item as HTMLElement).click()
+    ; (item as HTMLElement).click()
   })
   expect(revealItemInDir).toHaveBeenCalledWith('/tmp/repo/src/b.ts')
 })
@@ -566,8 +590,32 @@ function typeInto(input: HTMLInputElement, value: string) {
   input.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
-/** 勾上 amend：草稿空时用上一条的**完整信息**回填（改信息是 amend 最常见的用途） */
-it('「修改上一次提交」勾上后提交走 amend，并回填上一条的提交信息', async () => {
+/** 头部「更多」菜单：点按钮展开，返回可见项文案（菜单 portal 到 body） */
+async function openMoreMenu(): Promise<string[]> {
+  const btn = [...document.querySelectorAll('.git-icon-btn')].find(
+    (el) => el.getAttribute('aria-label') === '更多',
+  ) as HTMLElement | undefined
+  if (!btn) throw new Error('「更多」按钮不存在')
+  await act(async () => {
+    btn.click()
+  })
+  return [...document.querySelectorAll('.context-menu-item')].map(
+    (el) => el.textContent ?? '',
+  )
+}
+
+async function clickMoreItem(label: string): Promise<void> {
+  const item = [...document.querySelectorAll('.context-menu-item')].find(
+    (el) => el.textContent === label,
+  ) as HTMLElement | undefined
+  if (!item) throw new Error(`菜单项「${label}」不存在`)
+  await act(async () => {
+    item.click()
+  })
+}
+
+/** amend 走更多菜单（勾选模式已不在提交区里）：草稿空时回填上一条的**完整信息** */
+it('「修改上一次提交」在更多菜单里：提交走 amend，并回填上一条的提交信息', async () => {
   setStore([stagedEntry('a.txt')])
   vi.mocked(loadCommitDetail).mockResolvedValue({
     oid: 'abc123',
@@ -581,11 +629,8 @@ it('「修改上一次提交」勾上后提交走 amend，并回填上一条的�
   })
   mount()
 
-  const box = document.querySelector('.git-amend input') as HTMLInputElement
-  expect(box).toBeTruthy()
-  await act(async () => {
-    box.click()
-  })
+  expect(await openMoreMenu()).toContain('修改上一次提交')
+  await clickMoreItem('修改上一次提交')
   expect(gitStore.commitDraft).toBe('上一条提交\n\n正文')
 
   const primary = document.querySelector('.git-primary-btn') as HTMLElement
@@ -596,51 +641,39 @@ it('「修改上一次提交」勾上后提交走 amend，并回填上一条的�
   expect(commit).toHaveBeenCalledWith('上一条提交\n\n正文', true)
 })
 
-/** 撤销入口只在**有提交**时出现（空仓库里它没有意义）。
-    ⚠️ 它是图标按钮（头部已有一排图标，六字文字按钮会把分支名挤没），所以按 aria-label 找 */
-const undoBtn = () =>
-  [...document.querySelectorAll('.git-icon-btn')].find(
-    (el) => el.getAttribute('aria-label') === '撤销上次提交',
-  ) as HTMLElement | undefined
+/** amend 模式让提交区在暂存区为空时也出现 —— 只改提交信息不该被迫先暂存点东西 */
+it('暂存区为空时 amend 模式仍给提交区', async () => {
+  setStore([unstagedEntry('a.txt')])
+  mount()
+  expect(document.querySelector('.git-commit')).toBeNull()
 
-it('「撤销上次提交」只在有提交时出现', async () => {
+  await openMoreMenu()
+  await clickMoreItem('修改上一次提交')
+  expect(document.querySelector('.git-commit')).toBeTruthy()
+  expect(document.querySelector('.git-hint')?.textContent).toBe(
+    '修改提交信息（不改动文件内容）',
+  )
+})
+
+/** 撤销入口只在**有提交**时出现（空仓库里它没有意义）；它现在在更多菜单里 */
+const undoItem = '撤销上次提交'
+
+it('「撤销上次提交」只在有提交时出现在更多菜单里', async () => {
   setStore([unstagedEntry('a.txt')])
   runInAction(() => {
     if (gitStore.snapshot) gitStore.snapshot.head.oid = null
   })
   mount()
-  expect(undoBtn()).toBeUndefined()
+  expect(await openMoreMenu()).not.toContain(undoItem)
   act(() => root!.unmount())
   root = null
   document.body.innerHTML = ''
 
   setStore([unstagedEntry('a.txt')])
   mount()
-  const undo = undoBtn() as HTMLElement
-  expect(undo.getAttribute('title')).toContain('改动保留在暂存区')
-  await act(async () => {
-    undo.click()
-  })
+  expect(await openMoreMenu()).toContain(undoItem)
+  await clickMoreItem(undoItem)
   expect(undoLastCommit).toHaveBeenCalled()
-})
-
-/** 「不是仓库」是个可继续的状态：面板里必须有「初始化仓库」这个出口 */
-it('不是仓库时给「初始化仓库」入口', async () => {
-  setStore([])
-  runInAction(() => {
-    gitStore.repo = null
-    gitStore.snapshot = null
-    gitStore.notRepo = true
-    gitStore.unavailable = '当前工作目录不是 Git 仓库'
-  })
-  mount()
-
-  const btn = document.querySelector('.git-init-row button') as HTMLElement
-  expect(btn.textContent).toBe('初始化仓库')
-  await act(async () => {
-    btn.click()
-  })
-  expect(initRepo).toHaveBeenCalled()
 })
 
 // ==================== 分支右键：重命名 / 删除 ====================
@@ -728,19 +761,16 @@ const sshRemote = {
   kind: 'ssh' as const,
 }
 
-/** 同步入口在面板头上：点它才刷新远程列表（远程是用户随时会用终端改的，不缓存） */
-it('「同步」打开远程浮层：远程名 + 类型 + 三个动作', async () => {
+/** 同步入口在更多菜单里：点它才刷新远程列表（远程是用户随时会用终端改的，不缓存） */
+it('「同步远程」打开远程浮层：远程名 + 类型 + 三个动作', async () => {
   setStore([unstagedEntry('a.txt')])
   runInAction(() => {
     gitStore.remotes = [sshRemote]
   })
   mount()
 
-  const trigger = document.querySelector('.git-sync-trigger') as HTMLElement
-  expect(trigger.textContent).toBe('同步')
-  await act(async () => {
-    trigger.click()
-  })
+  expect(await openMoreMenu()).toContain('同步远程（获取 / 拉取 / 推送）')
+  await clickMoreItem('同步远程（获取 / 拉取 / 推送）')
   expect(refreshRemotes).toHaveBeenCalled()
 
   const menu = document.querySelector('.git-sync-menu') as HTMLElement
@@ -750,7 +780,35 @@ it('「同步」打开远程浮层：远程名 + 类型 + 三个动作', async (
   expect(menu.textContent).toContain('git@github.com:a/b.git')
   expect(
     [...menu.querySelectorAll('.git-sync-btn')].map((el) => el.textContent),
-  ).toEqual(['获取', '拉取（仅快进）', '推送'])
+  ).toEqual(['获取', '拉取', '推送'])
+})
+
+/** 落差数字是**状态按钮**：它告诉用户「有事」，并把下一步做成同一个控件 */
+it('落差数字是按钮：点它执行一次同步（先拉取再推送）', async () => {
+  setStore([unstagedEntry('a.txt')])
+  runInAction(() => {
+    if (!gitStore.snapshot) return
+    gitStore.snapshot.head.upstream = 'origin/main'
+    gitStore.snapshot.head.ahead = 2
+    gitStore.snapshot.head.behind = 1
+  })
+  mount()
+
+  const track = document.querySelector('.git-track') as HTMLElement
+  expect(track.tagName).toBe('BUTTON')
+  expect(track.textContent).toBe('↑2 ↓1')
+  expect(track.getAttribute('title')).toContain('origin/main')
+  await act(async () => {
+    track.click()
+  })
+  expect(syncNow).toHaveBeenCalled()
+})
+
+/** 没有落差就没有这一步动作 —— 一个 ↑0 ↓0 的按钮只是噪声 */
+it('没有落差时不显示同步按钮', () => {
+  setStore([unstagedEntry('a.txt')])
+  mount()
+  expect(document.querySelector('.git-track')).toBeNull()
 })
 
 /** 网络操作的输出进自己的块：它与「提交输出（hooks）」不是一回事，共用一块会互相覆盖 */
@@ -769,4 +827,114 @@ it('网络操作的输出落在「操作输出」块里，与提交输出来源�
   )
   expect(blocks[1].querySelector('.git-hook-head')?.textContent).toContain('操作输出')
   expect(blocks[1].querySelector('pre')?.textContent).toContain('main -> main')
+})
+
+/** 变更一多就必须走虚拟列表：几千个 `.git-row` 同时进 DOM 会直接卡在渲染上 */
+it('变更很多时列表走虚拟化（不真的铺几千个 .git-row）', () => {
+  // jsdom 不排版，clientHeight 恒为 0 —— 组件那时会退化成全量渲染（故意保留的兜底），
+  // 所以这里先给它一个“视口高度”
+  const desc = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    'clientHeight',
+  )
+  Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+    configurable: true,
+    get: () => 400,
+  })
+  try {
+    setStore(
+      Array.from({ length: 1000 }, (_, i) => unstagedEntry(`f${i}.txt`)),
+    )
+    mount()
+    const list = document.querySelector('.git-list') as HTMLElement
+    expect(list.dataset.virtualized).toBe('true')
+    expect(document.querySelectorAll('.git-row').length).toBeLessThan(80)
+    // 滚动高度仍由留白撑起来（滚动条不会变成“只有一屏”）；顶部在 scrollTop=0 时不需要留白
+    expect(
+      list.querySelectorAll(':scope > div[aria-hidden]').length,
+    ).toBeGreaterThanOrEqual(1)
+  } finally {
+    if (desc) Object.defineProperty(HTMLElement.prototype, 'clientHeight', desc)
+  }
+})
+
+/** 两段各一个滚动区：标题在各自的列表**之外**，滚一长段时标题与「全部暂存」不会跟着滚走 */
+it('更改与暂存的更改各有一个滚动列表，段标题在列表之外', () => {
+  setStore([
+    stagedEntry('s.txt'),
+    unstagedEntry('a.txt'),
+    unstagedEntry('b.txt'),
+  ])
+  mount()
+
+  const groups = [...document.querySelectorAll('.git-section')]
+  expect(
+    groups.map((el) => el.querySelector('.git-section-title > span')?.textContent),
+  ).toEqual(['更改', '暂存的更改'])
+
+  for (const group of groups) {
+    const lists = group.querySelectorAll('.git-list')
+    // 一段一个列表（两个滚动容器，不共用）
+    expect(lists.length).toBe(1)
+    // 标题不在列表里 —— 在里面就会随自己的列表一起滚走
+    expect(lists[0].querySelector('.git-section-title')).toBeNull()
+    expect(group.querySelectorAll('.git-row').length).toBeGreaterThan(0)
+  }
+
+  // 46vh 的高度上限只由外层容器给（两段加起来超过它时各自收缩、各自滚）
+  expect(document.querySelectorAll('.git-list-box').length).toBe(1)
+})
+
+// ==================== 行数统计（+增 −删） ====================
+/** 行内是「每文件」的数，摘要行是「总和」—— 两者同一个口径（都来自 `gitStore.stats`） */
+it('每个文件显示 +增 −删，顶部给合计', () => {
+  setStore([stagedEntry('a.txt'), unstagedEntry('b.txt')])
+  runInAction(() => {
+    gitStore.stats = {
+      staged: [{ path: 'a.txt', orig_path: null, added: 3, deleted: 1 }],
+      worktree: [{ path: 'b.txt', orig_path: null, added: 10, deleted: 0 }],
+    }
+  })
+  mount()
+
+  const rows = [...document.querySelectorAll('.git-row')]
+  expect(rows.map((r) => r.querySelector('.git-row-stat')?.textContent)).toEqual([
+    // 段顺序：更改（b.txt）在前、暂存的更改（a.txt）在后
+    '+10−0',
+    '+3−1',
+  ])
+
+  const summary = document.querySelector('.git-stats-summary')?.textContent
+  expect(summary).toContain('已编辑 2 个文件')
+  expect(summary).toContain('+13')
+  expect(summary).toContain('−1')
+  // 都算得出 → 不加省略号
+  expect(summary).not.toContain('…')
+})
+
+/** 二进制 / 冲突没有数字：行内不画（不写 0），合计加省略号说明「只是已知部分」 */
+it('算不出行数的文件不画数字，合计加省略号', () => {
+  setStore([unstagedEntry('bin.dat')])
+  runInAction(() => {
+    gitStore.stats = {
+      staged: [],
+      worktree: [{ path: 'bin.dat', orig_path: null, added: null, deleted: null }],
+    }
+  })
+  mount()
+
+  expect(document.querySelector('.git-row-stat')).toBeNull()
+  const summary = document.querySelector('.git-stats-summary')?.textContent
+  expect(summary).toContain('已编辑 1 个文件')
+  expect(summary).toContain('…')
+})
+
+/** 统计还没回来（面板刚开）：不摆一排 +0 −0，只给文件数 */
+it('统计未加载时不显示行数合计', () => {
+  setStore([unstagedEntry('a.txt')])
+  mount()
+
+  const summary = document.querySelector('.git-stats-summary')?.textContent
+  expect(summary).toContain('已编辑 1 个文件')
+  expect(summary).not.toContain('+')
 })

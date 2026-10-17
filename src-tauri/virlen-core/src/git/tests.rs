@@ -1274,3 +1274,100 @@ fn remote_refuses_detached_head_and_readonly_gate() {
     assert!(super::remote::fetch(&repo.path(), &readonly, None, None).is_err());
 }
 
+// ==================== 三、行数统计（numstat） ====================
+
+/// `--numstat -z` 的两种记录：普通改动 + rename（三列后紧跟旧 / 新路径）
+#[test]
+fn parse_numstat_pins_rename_and_binary_layout() {
+    let raw = concat!(
+        "12\t3\tsrc/a.rs\0",
+        // rename：第三列为空，旧路径与新路径各占一条 NUL 记录
+        "2\t0\t\0old name.txt\0new name.txt\0",
+        // 二进制：两个 `-` → None（不是 0 行）
+        "-\t-\tlogo.png\0",
+    )
+    .as_bytes();
+
+    let list = super::numstat::parse_numstat(raw);
+    assert_eq!(list.len(), 3, "rename 的旧 / 新路径不能被当成独立条目");
+
+    assert_eq!(list[0].path, "src/a.rs");
+    assert_eq!((list[0].added, list[0].deleted), (Some(12), Some(3)));
+    assert_eq!(list[0].orig_path, None);
+
+    assert_eq!(list[1].path, "new name.txt");
+    assert_eq!(list[1].orig_path.as_deref(), Some("old name.txt"));
+    assert_eq!((list[1].added, list[1].deleted), (Some(2), Some(0)));
+
+    assert_eq!(list[2].path, "logo.png");
+    assert_eq!((list[2].added, list[2].deleted), (None, None));
+}
+
+/// 真仓库：已暂存与未暂存分开统计；未跟踪按行数直接数；二进制不给数字
+#[test]
+fn numstat_end_to_end_splits_staged_and_worktree() {
+    let Some(repo) = TempRepo::new() else { return };
+    repo.write("tracked.txt", "one\ntwo\nthree\n");
+    repo.write("staged.txt", "a\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+
+    // 已暂存：+1
+    repo.write("staged.txt", "a\nb\n");
+    repo.git(&["add", "staged.txt"]);
+    // 未暂存：改 1 行（two → TWO）+ 加 1 行
+    repo.write("tracked.txt", "one\nTWO\nthree\nfour\n");
+    // 未跟踪：2 行（末尾没换行也算一行）
+    repo.write("untracked.txt", "x\ny");
+    // 二进制：NUL 字节
+    std::fs::write(repo.dir.join("bin.dat"), [0u8, 1, 2, 3]).unwrap();
+
+    let report = super::numstat::stats(&repo.path()).unwrap();
+
+    let staged = report
+        .staged
+        .iter()
+        .find(|s| s.path == "staged.txt")
+        .expect("已暂存的改动要在 staged 里");
+    assert_eq!((staged.added, staged.deleted), (Some(1), Some(0)));
+    assert!(
+        !report.staged.iter().any(|s| s.path == "tracked.txt"),
+        "未暂存的改动不能混进 staged"
+    );
+
+    let tracked = report
+        .worktree
+        .iter()
+        .find(|s| s.path == "tracked.txt")
+        .expect("未暂存的改动要在 worktree 里");
+    assert_eq!((tracked.added, tracked.deleted), (Some(2), Some(1)));
+
+    let untracked = report
+        .worktree
+        .iter()
+        .find(|s| s.path == "untracked.txt")
+        .expect("未跟踪文件也要有行数（它不在 diff 里，得自己数）");
+    assert_eq!((untracked.added, untracked.deleted), (Some(2), Some(0)));
+
+    let binary = report
+        .worktree
+        .iter()
+        .find(|s| s.path == "bin.dat")
+        .expect("二进制文件也要在列表里");
+    assert_eq!((binary.added, binary.deleted), (None, None));
+
+    // rename：`-z` 下是「三列 + 旧路径 + 新路径」，解析错了只会在改过名的文件上静默出错
+    repo.git(&["mv", "staged.txt", "renamed.txt"]);
+    let report = super::numstat::stats(&repo.path()).unwrap();
+    let renamed = report
+        .staged
+        .iter()
+        .find(|s| s.path == "renamed.txt")
+        .expect("改名后的新路径要在 staged 里");
+    assert_eq!(renamed.orig_path.as_deref(), Some("staged.txt"));
+    assert!(
+        !report.staged.iter().any(|s| s.path == "staged.txt"),
+        "旧路径不能单独成一条（否则界面会多出一个『凭空删除』的文件）"
+    );
+}
+

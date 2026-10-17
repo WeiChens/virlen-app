@@ -1,5 +1,5 @@
 /**
- * GitSyncMenu — 远程浮层：远程地址 + 获取 / 拉取（仅快进）/ 推送 + 测试连接。
+ * GitSyncMenu — 远程浮层：远程地址 + 获取 / 拉取/ 推送 + 测试连接。
  *
  * 六条口径（前四条来自设计评审，都是「用户点完不知道发生了什么」那一类）：
  * - **凭据策略 = SSH**（本机密钥 / ssh-agent；应用不保存任何密码）。所以「测试连接」不是可选装饰：
@@ -225,7 +225,7 @@ export const GitSyncMenu = observer(function GitSyncMenu({ readonly, onClose }: 
               disabled={disabled || !onBranch}
               title={t('只允许快进，快进不了会如实报错')}
               onClick={() => void runAction(pullRemote)}>
-              {t('拉取（仅快进）')}
+              {t('拉取')}
             </button>
             <button
               type="button"
@@ -261,10 +261,6 @@ export const GitSyncMenu = observer(function GitSyncMenu({ readonly, onClose }: 
               {testResult.text}
             </div>
           )}
-
-          <div className="git-sync-policy">
-            {t('凭据：SSH（使用本机密钥 / ssh-agent，不保存密码）')}
-          </div>
         </>
       )}
     </div>

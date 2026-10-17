@@ -41,14 +41,37 @@ describe('源代码管理 · 面板样式契约', () => {
   it('小按钮的样式挂在顶层 —— 段标题里的「全部…」也拿得到', () => {
     // 存在一条**选择器就是它自己**的规则；嵌在 .git-row 里就不可能有
     expect(selectors(panelCss)).toContain('.git-row-btn')
-    // 段标题那颗另有文字形态（宽度自适应、hover 才显形）
+    // 段标题那颗另有文字形态（宽度自适应、hover 才显形）；虚拟列表后标题是扁平条目，hover 判定落在它自己身上
     expect(panelCss).toMatch(/\.git-section-title\s+\.git-row-btn\s*\{/)
-    expect(panelCss).toMatch(/\.git-section:hover[^{]*\.git-row-btn/)
+    expect(panelCss).toMatch(/\.git-section-title:hover[^{]*\.git-row-btn/)
     // 状态字母同理：变更行与差异弹窗左侧清单共用一个顶层规则（写进 .git-row 弹窗那份就没色了）
     expect(selectors(panelCss)).toContain('.git-row-letter')
     expect(selectors(panelCss)).toContain('.git-row-letter.s-\\?')
     // 文件类型图标也共用一个顶层规则（列表行与弹窗清单两处渲染）
     expect(selectors(panelCss)).toContain('.git-row-icon, .git-diff-side-icon')
+    // 主按钮同理：同一个类名会在不同语境下渲染（曾经是提交区 + 空态「初始化仓库」），
+    // 写进 `.git-commit` 作用域里，另一处就掉回浏览器默认按钮（方角、系统色）—— 实测踩过
+    expect(selectors(panelCss)).toContain('.git-primary-btn')
+  })
+
+  it('变更行的固定行高与 GitPanel 的 ROW_H 一致，且容得下行内按钮', () => {
+    // 行高是虚拟列表的前缀和与「现在在第几行」的唯一依据；也靠它保证 22px 的行内按钮不被裁
+    const panelSrc = readProjectFile('src/ui/pages/chat/components/git/GitPanel.tsx')
+    const rowH = Number(/const ROW_H = (\d+)/.exec(panelSrc)?.[1])
+    expect(rowH).toBeGreaterThanOrEqual(24)
+    const rule = /\.git-list \.git-row\s*\{([^}]*)\}/.exec(panelCss)?.[1]
+    expect(rule).toBeTruthy()
+    expect(rule).toContain(`height: ${rowH}px`)
+  })
+
+  it('两段变更列表横着排（竖向空间不够就向横向要）', () => {
+    const box = /\.git-list-box\s*\{([^}]*)\}/.exec(panelCss)?.[1]
+    expect(box).toBeTruthy()
+    expect(box).toContain('flex-direction: row')
+    // 两列等宽：`min-width: 0` 防止长路径把某一列撑宽
+    const section = /\.git-section\s*\{([^}]*)\}/.exec(panelCss)?.[1]
+    expect(section).toBeTruthy()
+    expect(section).toContain('min-width: 0')
   })
 
   it('差异弹窗的遮罩从自绘标题栏下方开始（不压住窗口状态栏）', () => {

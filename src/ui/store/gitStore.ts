@@ -12,6 +12,7 @@ import type {
   GitBranchInfo,
   GitRemoteInfo,
   GitRepoInfo,
+  GitStatReport,
   GitStatusSnapshot,
 } from '@/domain/git'
 
@@ -26,15 +27,14 @@ class GitStore {
   /** 是否已对当前 dir 探测过 —— 区分「还没探」与「探过、不是 Git 仓库」 */
   probed = false
   repo: GitRepoInfo | null = null
-  /** 不可用原因（不是仓库 / 未检测到 git）—— `null` = 一切正常 */
+  /** 不可用原因（未检测到 git / 探测出错）—— `null` = 一切正常 */
   unavailable: string | null = null
-  /**
-   * 目录存在但**不是** Git 仓库 —— 面板据此提供「初始化仓库」入口。
-   *
-   * 单独一个布尔而不是从 `unavailable` 的文案反推：文案会跟着语言包变，而这是行为分支。
-   */
-  notRepo = false
   snapshot: GitStatusSnapshot | null = null
+  /**
+   * 逐文件行数统计（`+12 −3` 与顶部合计）—— **只在面板打开时取**：它比 `status` 贵（多了两次
+   * `git diff` + 一次 `ls-files`），面板关着时只有徒标数文件，不需要行数。
+   */
+  stats: GitStatReport | null = null
   branches: GitBranchInfo[] = []
   /** 远程仓库（`git remote -v`）—— 同步浮层据此显示地址 / 类型，也据此判断「有没有配远程」 */
   remotes: GitRemoteInfo[] = []
@@ -42,8 +42,15 @@ class GitStore {
   loading = false
   /** 正在进行的操作名（按钮禁用 + 文案）；`null` = 空闲 */
   busy: string | null = null
-  /** 最近一次错误（面板顶部展示；任何一次成功都会清空它） */
+  /** 最近一次错误（面板顶部一句话；任何一次成功都会清空它） */
   error: string | null = null
+  /**
+   * 失败弹窗的内容（`run()` 失败时填）—— **持久**，只能由用户关掉。
+   *
+   * 为什么不用 toast：git 的报错是多行 stderr，真正的下一步常写在 `hint:` 行上；
+   * 几秒就消失的提示既读不完、也不能复制，用户还没看清就没了。
+   */
+  errorBox: { op: string; text: string } | null = null
   /** 面板是否打开 —— 刷新时机由它决定（关闭时不做任何 IO） */
   open = false
   /** 提交信息草稿（面板重开后仍在：写一半切走不该丢） */
@@ -70,13 +77,14 @@ class GitStore {
       probed: observable,
       repo: observable,
       unavailable: observable,
-      notRepo: observable,
       snapshot: observable,
+      stats: observable,
       branches: observable,
       remotes: observable,
       loading: observable,
       busy: observable,
       error: observable,
+      errorBox: observable,
       open: observable,
       commitDraft: observable,
       hookOutput: observable,

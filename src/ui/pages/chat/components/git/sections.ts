@@ -31,7 +31,8 @@ export interface GitSectionActions {
 const paths = (list: GitChangeEntry[]): string[] => list.map((entry) => entry.path)
 
 /**
- * 三段：**暂存的更改 → 更改 → 冲突**（顺序 / 命名对齐 VS Code）。
+ * 三段：**更改（含未跟踪）→ 暂存的更改 → 冲突**（实测反馈：把一个文件暂存后它应该向下走，而不是
+ * 一跳就跑到列表顶上；「我现在还要改的」永远在上半屏）。
  *
  * ⚠️ **未跟踪不再单独成段**（实测反馈）：它就是「更改」的一项，只是没进过 index —— 与 VS Code 同口径。
  * 单列一段会让「我到底改了几个文件」被拆成两处看，也会让人以为未跟踪的文件不算「更改」。
@@ -49,6 +50,14 @@ export function changeSections(
   }
   return [
     {
+      key: 'unstaged',
+      title: t('更改'),
+      side: 'unstaged',
+      // 已跟踪的改动在前、未跟踪在后（与 VS Code 的排序一致：先「改过的」后「新来的」）
+      entries: [...groups.unstaged, ...groups.untracked],
+      bulk: { label: t('全部暂存'), run: stageAll },
+    },
+    {
       key: 'staged',
       title: t('暂存的更改'),
       side: 'staged',
@@ -57,14 +66,6 @@ export function changeSections(
         label: t('全部取消暂存'),
         run: () => actions.unstage(paths(groups.staged)),
       },
-    },
-    {
-      key: 'unstaged',
-      title: t('更改'),
-      side: 'unstaged',
-      // 已跟踪的改动在前、未跟踪在后（与 VS Code 的排序一致：先「改过的」后「新来的」）
-      entries: [...groups.unstaged, ...groups.untracked],
-      bulk: { label: t('全部暂存'), run: stageAll },
     },
     // 冲突段不给批量入口：冲突文件的「暂存」在 git 里是「标记已解决」，与普通暂存不是一回事
     //（方案 §5.2：P1 只展示），混进批量就把两件事做成一件事了

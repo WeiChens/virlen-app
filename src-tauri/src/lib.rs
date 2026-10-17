@@ -473,6 +473,7 @@ pub fn run() {
             commands::git::git_check_ref_format,
             commands::git::git_remotes,
             commands::git::git_remote_test,
+            commands::git::git_numstat,
             // 写操作（过只读沙盒门禁，fail-closed）
             commands::git::git_stage,
             commands::git::git_unstage,

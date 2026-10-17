@@ -25,6 +25,7 @@ import type {
   GitLogScope,
   GitRemoteInfo,
   GitRepoInfo,
+  GitStatReport,
   GitStatusSnapshot,
   GitSyncResult,
 } from '@/domain/git'
@@ -39,7 +40,7 @@ export function repoInfo(dir: string): Promise<GitRepoInfo | null> {
   return invoke<GitRepoInfo | null>('git_repo_info', { dir })
 }
 
-/** 在当前目录初始化仓库（面板在「不是仓库」时的唯一出口） */
+/** 在当前目录初始化仓库（**界面当前不提供入口**：图标只在已有 `.git` 时出现，见 `GitEntry`） */
 export function initRepo(dir: string): Promise<GitRepoInfo> {
   return invoke<GitRepoInfo>('git_init', { dir })
 }
@@ -52,6 +53,11 @@ export function status(dir: string, taskId: string): Promise<GitStatusSnapshot> 
 /** 分支列表（Rust 侧已排好序：当前分支 → 本地 → 远程） */
 export function branches(dir: string): Promise<GitBranchInfo[]> {
   return invoke<GitBranchInfo[]>('git_branches', { dir })
+}
+
+/** 逐文件行数统计（面板里的「+12 −3」与顶部合计；只在面板打开时取） */
+export function numstat(dir: string, taskId: string): Promise<GitStatReport> {
+  return invoke<GitStatReport>('git_numstat', { dir, taskId })
 }
 
 /** 一页提交记录（`skip` = 已经拿过多少条；`scope` = head / all；`taskId` 供超大仓库取消） */

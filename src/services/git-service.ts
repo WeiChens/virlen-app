@@ -21,6 +21,7 @@ import {
   initRepo as invokeInitRepo,
   isGitEnvAvailable,
   log as invokeLog,
+  numstat as invokeNumstat,
   pullRemote as invokePull,
   pushRemote as invokePush,
   remotes as fetchRemotes,
@@ -53,8 +54,10 @@ function newTaskId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID()}`
 }
 
-/** 上一次 status 的任务 id —— 起新的之前先把它停掉 */
+/** 进行中的 status 的任务 id —— 起新的之前先把它停掉 */
 let statusTaskId: string | null = null
+/** 进行中的行数统计的任务 id（同理：新的一次先停掉旧的） */
+let statsTaskId: string | null = null
 
 /** 进行中的网络操作任务 id：面板关掉时也停掉（网络超时 10 分钟） */
 let syncTaskId: string | null = null
@@ -65,11 +68,15 @@ function errorText(e: unknown): string {
   return raw.trim() || t('操作失败')
 }
 
-/** 统一收口：置 busy → 跑 → 清 busy → 失败落 error + toast */
+/** 统一收口：置 busy → 跑 → 清 busy → 失败落 error（+ 持久弹窗） */
 async function run<T>(
   label: string,
   fn: () => Promise<T>,
-  opts: { silent?: boolean } = {},
+  /**
+   * `dialog: false` = 调用方**自己就地展示**错误（如同步浮层），不再弹窗 ——
+   * 两层信息重复，而且弹窗会盖住那个浮层。
+   */
+  opts: { dialog?: boolean } = {},
 ): Promise<T | null> {
   if (gitStore.busy) return null
   const started = Date.now()
@@ -85,9 +92,10 @@ async function run<T>(
     const text = errorText(e)
     runInAction(() => {
       gitStore.error = text
+      // ⚠️ 不用 toast：git 的报错是多行 stderr，几秒就消失的提示读不完也复制不了
+      if (opts.dialog !== false) gitStore.errorBox = { op: label, text }
     })
     track('git.op', { op: label, ok: false, ms: Date.now() - started })
-    if (!opts.silent) showToast(text, 4000)
     // 失败后立刻回读：列表过期是写操作失败的头号原因（面板拿着旧快照，git 说 did not match）
     void refreshStatus()
     return null
@@ -116,12 +124,13 @@ export async function syncWorkspace(dir: string | null): Promise<void> {
     gitStore.probed = false
     gitStore.repo = null
     gitStore.unavailable = null
-    gitStore.notRepo = false
     gitStore.snapshot = null
     gitStore.branches = []
     gitStore.remotes = []
     gitStore.syncOutput = null
+    gitStore.stats = null
     gitStore.error = null
+    gitStore.errorBox = null
   })
   if (!dir) return
   if (!isGitEnvAvailable()) {
@@ -146,8 +155,7 @@ async function probe(): Promise<void> {
     runInAction(() => {
       gitStore.probed = true
       gitStore.repo = info
-      // 「不是仓库」是可用状态（面板会给「初始化仓库」），与「没装 git / 出错」不同
-      gitStore.notRepo = !info
+      // 不是仓库 / 没装 git / 出错：`repo` 为 null，入口自然不出现（见 GitEntry 显隐口径）
       gitStore.unavailable = info ? null : t('当前工作目录不是 Git 仓库')
       if (!info) gitStore.snapshot = null
     })
@@ -158,7 +166,6 @@ async function probe(): Promise<void> {
     runInAction(() => {
       gitStore.probed = true
       gitStore.repo = null
-      gitStore.notRepo = false
       gitStore.unavailable = errorText(e)
     })
   } finally {
@@ -169,7 +176,10 @@ async function probe(): Promise<void> {
 }
 
 /**
- * 在当前工作目录初始化仓库。成功后直接接上探测的入参，用户不必再看徽标为什么没出来。
+ * 在当前工作目录初始化仓库。
+ *
+ * 界面当前**不提供入口**（图标只在已有 `.git` 时出现，见 `GitEntry`），保留给命令面板 / 未来入口；
+ * 用户在终端里 `git init` 后由 [`reprobeIfMissing`] 自动接上。
  */
 export async function initRepo(): Promise<boolean> {
   const dir = gitStore.dir
@@ -178,7 +188,6 @@ export async function initRepo(): Promise<boolean> {
   if (!info) return false
   runInAction(() => {
     gitStore.repo = info
-    gitStore.notRepo = false
     gitStore.unavailable = null
     gitStore.probed = true
   })
@@ -198,13 +207,53 @@ export async function refreshStatus(): Promise<void> {
   try {
     const snapshot = await fetchStatus(dir, taskId)
     if (taskId !== statusTaskId) return // 已被更新的一次刷新取代，丢弃本次结果
-    acceptSnapshot(snapshot)
+    runInAction(() => {
+      // 只落快照，**不清 error**：状态回读是读操作，不该把「上一次写操作为什么失败」抹掉
+      //（`run()` 失败后会立刻回读一次，清掉就等于弹窗之外再也找不到原因）
+      gitStore.snapshot = snapshot
+    })
+    // 行数统计只在面板打开时才有用（徽标只数文件）：它比 status 贵，关着不跑
+    if (gitStore.open) void refreshStats()
   } catch (e) {
     runInAction(() => {
       gitStore.error = errorText(e)
     })
   } finally {
     if (taskId === statusTaskId) statusTaskId = null
+  }
+}
+
+/**
+ * 取一次逐文件行数统计（面板里的「+12 −3」与顶部合计）。
+ *
+ * **只在面板打开时跑**：它比 `status` 贵（两次 `git diff --numstat` + 一次 `ls-files`，未跟踪文件
+ * 还要逐个读来数行），而面板关着时徽标只需要文件数。失败不弹窗：行数是辅助信息，不该因为
+ * 它把面板打断（错误落在 `error` 上，与其它旁路读取一致）。
+ */
+export async function refreshStats(): Promise<void> {
+  const dir = gitStore.dir
+  if (!dir || !gitStore.repo) return
+  if (!gitStore.open) {
+    runInAction(() => {
+      gitStore.stats = null
+    })
+    return
+  }
+  if (statsTaskId) stopTask(statsTaskId)
+  const taskId = newTaskId('git_numstat')
+  statsTaskId = taskId
+  try {
+    const report = await invokeNumstat(dir, taskId)
+    if (taskId !== statsTaskId) return // 已被更新的一次取代，丢弃本次结果
+    runInAction(() => {
+      gitStore.stats = report
+    })
+  } catch (e) {
+    runInAction(() => {
+      gitStore.error = errorText(e)
+    })
+  } finally {
+    if (taskId === statsTaskId) statsTaskId = null
   }
 }
 
@@ -247,6 +296,10 @@ export function setPanelOpen(open: boolean): void {
     stopTask(statusTaskId)
     statusTaskId = null
   }
+  if (!open && statsTaskId) {
+    stopTask(statsTaskId)
+    statsTaskId = null
+  }
   // 网络操作不随面板关闭丢结果，但别让它在后台白等到超时
   if (!open) cancelSync()
 }
@@ -266,15 +319,37 @@ const FOCUS_REFRESH_MIN_INTERVAL_MS = 1500
 /** 上一次窗口激活刷新的时刻 */
 let lastFocusRefreshAt = 0
 
+/** 「还不是仓库」时重新探测的最小间隔：用户在终端里 `git init` 之后入口要能自己出现 */
+const REPROBE_MIN_INTERVAL_MS = 5000
+let lastReprobeAt = 0
+
+/**
+ * 重新探测「现在是不是仓库了」。
+ *
+ * 入口只在**已有 `.git`** 时出现（见 `GitEntry`），所以「从没有变有」必须靠这一步：
+ * 用户（或 AI）在终端里 `git init` 之后，下一次窗口激活 / 会话活动就能看到图标。
+ * 代价是没装 git / 一直不是仓库时也会反复问一次 —— 5s 节流把这笔开销压在一次次 `rev-parse`。
+ */
+async function reprobeIfMissing(): Promise<void> {
+  const now = Date.now()
+  if (now - lastReprobeAt < REPROBE_MIN_INTERVAL_MS) return
+  lastReprobeAt = now
+  await probe()
+}
+
 /**
  * 窗口重新激活时调：用户在编辑器 / 终端里动过文件，切回来要看得见。
  * 不要求面板打开（标题栏徽标关着也显示）。
  */
 export async function refreshOnFocus(): Promise<void> {
-  if (!gitStore.repo) return
+  if (!gitStore.dir) return
   const now = Date.now()
   if (now - lastFocusRefreshAt < FOCUS_REFRESH_MIN_INTERVAL_MS) return
   lastFocusRefreshAt = now
+  if (!gitStore.repo) {
+    await reprobeIfMissing()
+    return
+  }
   await refreshStatus()
 }
 
@@ -296,11 +371,16 @@ function isWindowActive(): boolean {
  * 到点前再判一次（2s 内窗口可能切走或换了目录）。
  */
 export function notifyWorkspaceActivity(dir: string | null): void {
-  if (!dir || gitStore.dir !== dir || !gitStore.repo || !isWindowActive()) return
+  if (!dir || gitStore.dir !== dir || !isWindowActive()) return
   if (activityTimer !== null) clearTimeout(activityTimer)
   activityTimer = setTimeout(() => {
     activityTimer = null
-    if (gitStore.dir !== dir || !gitStore.repo || !isWindowActive()) return
+    if (gitStore.dir !== dir || !isWindowActive()) return
+    // AI 可能刚在这个目录里 `git init` 了：没有仓库时改成重新探测，否则入口永远不会出现
+    if (!gitStore.repo) {
+      void reprobeIfMissing()
+      return
+    }
     void refreshStatus()
   }, ACTIVITY_DEBOUNCE_MS)
 }
@@ -495,12 +575,14 @@ export function checkRefFormat(name: string): Promise<boolean> {
 /**
  * 一次网络操作的公共流程：busy 串行 → 落输出 → toast → 刷新状态与分支。
  * remote 由调用方显式给出（两边都猜会出现「界面说 origin、实际跑了别的」）。
+ * 默认**不弹错误窗**：主调用方是同步浮层，它会把失败原文留在原地（见 `run` 的 `dialog`）。
  */
 async function syncAction(
   label: string,
   call: (dir: string, remote: string | null, taskId: string) => Promise<GitSyncResult>,
   remote: string | null,
   success: (result: GitSyncResult) => string,
+  dialog = false,
 ): Promise<boolean> {
   const dir = gitStore.dir
   if (!dir || !gitStore.repo) return false
@@ -508,7 +590,7 @@ async function syncAction(
   syncTaskId = taskId
   let result: GitSyncResult | null = null
   try {
-    result = await run(label, () => call(dir, remote, taskId))
+    result = await run(label, () => call(dir, remote, taskId), { dialog })
   } finally {
     if (syncTaskId === taskId) syncTaskId = null
   }
@@ -523,6 +605,12 @@ async function syncAction(
   return true
 }
 
+/** 成功文案（浮层与一键同步共用，避免两处文案跑偏） */
+const pullDone = (r: GitSyncResult): string =>
+  tpl('已从 $__remote__ 拉取', { remote: r.remote })
+const pushDone = (r: GitSyncResult): string =>
+  tpl('已推送到 $__remote__', { remote: r.remote })
+
 /** fetch：只更新远程跟踪分支，不动工作区 */
 export function fetchRemote(remote: string | null = null): Promise<boolean> {
   return syncAction('fetch', invokeFetch, remote, (r) =>
@@ -532,16 +620,54 @@ export function fetchRemote(remote: string | null = null): Promise<boolean> {
 
 /** pull --ff-only：快进不了就失败，不生成 merge 提交 */
 export function pullRemote(remote: string | null = null): Promise<boolean> {
-  return syncAction('pull', invokePull, remote, (r) =>
-    tpl('已从 $__remote__ 拉取', { remote: r.remote }),
-  )
+  return syncAction('pull', invokePull, remote, pullDone)
 }
 
 /** push（无上游时 Rust 侧自动 -u）；不做强推也不二次确认 */
 export function pushRemote(remote: string | null = null): Promise<boolean> {
-  return syncAction('push', invokePush, remote, (r) =>
-    tpl('已推送到 $__remote__', { remote: r.remote }),
+  return syncAction('push', invokePush, remote, pushDone)
+}
+
+/**
+ * 从 upstream（`origin/main`）反推远程名。
+ * ⚠️ 远程名本身允许含 `/`，所以先按已加载的远程列表取**最长前缀**，取不到才退回第一段。
+ */
+function remoteOf(upstream: string | null): string | null {
+  if (!upstream) return null
+  const names = gitStore.remotes
+    .map((r) => r.name)
+    .sort((a, b) => b.length - a.length)
+  const hit = names.find((n) => upstream.startsWith(`${n}/`))
+  if (hit) return hit
+  const slash = upstream.indexOf('/')
+  return slash > 0 ? upstream.slice(0, slash) : null
+}
+
+/**
+ * 一键同步（面板头部的落差按钮）：**先拉取（--ff-only）再推送**。
+ *
+ * 顺序不能反：分叉时先推会被远程拒（non-fast-forward），用户还得再点一次；
+ * 而 `--ff-only` 拉取在「本地已是最新」时只是无害的 no-op。任一步失败即停 ——
+ * 后面的动作是建立在前面成功的前提上的。
+ */
+export async function syncNow(): Promise<boolean> {
+  const head = gitStore.snapshot?.head
+  if (!head?.branch) return false
+  const remote = remoteOf(head.upstream)
+  // 面板头的一键同步没有「原地」可展示错误：失败必须弹窗（dialog = true）
+  if (
+    head.behind > 0 &&
+    !(await syncAction('pull', invokePull, remote, pullDone, true))
   )
+    return false
+  // 拉取后 ahead 可能变了（快进带进来的提交本来就在远程上）→ 以新快照为准
+  const after = gitStore.snapshot?.head
+  if (
+    (after?.ahead ?? 0) > 0 &&
+    !(await syncAction('push', invokePush, remote, pushDone, true))
+  )
+    return false
+  return true
 }
 
 /**

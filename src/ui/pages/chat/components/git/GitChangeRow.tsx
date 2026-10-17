@@ -28,7 +28,7 @@ import { toAbsolutePath } from '@/utils/common'
 import UndoSvg from '@/ui/components/icons/UndoSvg'
 import FileTypeIcon from '@/ui/components/icons/FileTypeIcon'
 import { baseName, dirName, displayPath, statusLetter } from '@/domain/git'
-import type { GitChangeEntry } from '@/domain/git'
+import type { GitChangeEntry, GitFileStat } from '@/domain/git'
 import ContextMenu, {
   useContextMenu,
   type ContextMenuItem,
@@ -46,6 +46,8 @@ interface Props {
   side: 'staged' | 'unstaged'
   /** 只读沙盒模式 / 有操作在跑 → 所有写入口禁用（Rust 侧同样会拒，这里是体验层的双保险） */
   disabled: boolean
+  /** 这一行的行数统计；`null` = 没算出来（二进制 / 冲突 / 统计还没到） → 不画数字 */
+  stat: GitFileStat | null
   /** 这一行是否在选中集里（决定选中态；批量与否也看它） */
   selected: boolean
   /** 这次操作会作用于几个文件（> 1 = 批量，按钮文案跟着写清范围） */
@@ -60,6 +62,7 @@ interface Props {
 export const GitChangeRow = observer(function GitChangeRow({
   entry,
   side,
+  stat,
   disabled,
   selected,
   batch,
@@ -202,6 +205,13 @@ export const GitChangeRow = observer(function GitChangeRow({
             </>
           )}
         </span>
+        {/* 行数：`+a −d`。二进制 / 冲突 / 未跟踪过大没有数字，就不占位（不写 0，0 是“没改行”的意思） */}
+        {stat && (stat.added !== null || stat.deleted !== null) && (
+          <span className="git-row-stat">
+            {stat.added !== null && <span className="add">+{stat.added}</span>}
+            {stat.deleted !== null && <span className="del">−{stat.deleted}</span>}
+          </span>
+        )}
         {/* 状态字母贴最右（图标 / 文件名在左，动作排在其左）—— 扫文件名时不被字母打断 */}
         <span className={`git-row-letter s-${letter}`}>{letter}</span>
       </div>

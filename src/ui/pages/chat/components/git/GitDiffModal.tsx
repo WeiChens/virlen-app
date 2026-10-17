@@ -2,8 +2,9 @@
  * GitDiffModal — 变更文件的左右对比（模态）：**左侧是全部更改文件的清单，右侧是当前文件的差异**。
  *
  * 六条界面口径（P1.3 / P1.4 / 实测反馈）：
- * 1. **路径只出现一次** —— 弹窗头已经写了它，正文（`MonacoDiffView`）不画文件头（它本来也不画），
- *    也就没有 `SideBySideDiff` 那个内置「全屏」按钮：弹窗本身就是放大形态，再套一层全屏没有意义；
+ * 1. **路径只出现一次** —— 弹窗头已经写了它，正文（`MonacoDiffView`）不画文件头；
+ *    正文**不内置**全屏按钮，全屏由弹窗头那颗 `全屏 / 退出全屏` 统一管（Esc 先退全屏，再一下才关弹窗），
+ *    否则两套全屏各管一半，谁在管看不清；
  * 2. **暂存 / 取消暂存就在弹窗里** —— 看完差异顺手处理是最常见的下一步，逼用户关掉弹窗回列表再点一次不合理。
  *    操作成功后视图自动翻到另一侧（暂存 → 看 index↔HEAD，取消暂存 → 看工作区↔index），因为
  *    原来那一侧的差异此刻已经空了；
@@ -21,6 +22,9 @@
  *    腾出来的位置给「文件过大，仅显示前 N 个字符」那条提示，因为**提示放正文里会顶出滚动条**
  *    （`.git-diff-body > .git-mono-diff` 是 `height: 100%`，上面再压一个兄弟块，内容就比容器高
  *    一截：正文被挤下去 + 多出一条滚动条）。
+ * 7. **全屏**（实测反馈）：`全屏 / 退出全屏` 把弹窗铺满遮罩（仍让开自绘标题栏那一条）——
+ *    弹窗本来有 `min(1360px, 100%) / min(780px, 100%)` 的上限，宽屏上是「本来就该铺满」，
+ *    窄屏上省下的那一圈跑形也归它。
  *
  * ⚠️ 内容**不缓存**：关掉即弃。缓存正文会让「切了分支却还在显示旧内容」这种问题悄悄出现。
  * ⚠️ 弹窗内的 mousedown 必须 `stopPropagation`（`.git-diff-modal` 上那一行）：入口的「点浮层外关闭」
@@ -36,12 +40,14 @@ import {
   singleSideOf,
   statusLetter,
 } from '@/domain/git'
-import type { GitDiffSides } from '@/domain/git'
+import type { GitChangeEntry, GitDiffSides } from '@/domain/git'
 import FileTypeIcon from '@/ui/components/icons/FileTypeIcon'
 import { MonacoDiffView } from '../message/MonacoDiffView'
 import { loadDiffSides, stage, unstage } from '@/services/git-service'
 import type { GitRowTarget } from './GitChangeRow'
 import { rowKey, type GitChangeSection } from './sections'
+import VirtualList from './VirtualList'
+import { SideResizer, useSideWidth } from './use-side-width'
 import './style.scss'
 
 interface Props {
@@ -54,13 +60,25 @@ interface Props {
   onClose: () => void
 }
 
+/** 左清单的扁平条目（虚拟列表按它切窗口）：段标题与文件行混排 */
+type SideItem =
+  | { kind: 'title'; key: string; section: GitChangeSection }
+  | { kind: 'row'; key: string; section: GitChangeSection; entry: GitChangeEntry }
+
+/** 左清单行高（px）—— 与 `.git-diff-side-title` / `.git-diff-side-row` 的固定高度一致 */
+const SIDE_ROW_H = 24
+
 export function GitDiffModal({ target, sections, disabled, onClose }: Props) {
   /** 当前展示的文件 + 它属于哪一侧（侧决定差异基准：更改 = 工作区↔index，已暂存 = index↔HEAD） */
   const [current, setCurrent] = useState<GitRowTarget>(target)
   const [sides, setSides] = useState<GitDiffSides | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  /** 全屏（铺满遮罩）：长文件 / 窄窗时左右对比容易被挤，看完差异再退回去 */
+  const [full, setFull] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
+  /** 左清单宽度（右侧分隔条可拖，记在 localStorage） */
+  const sideWidth = useSideWidth()
 
   const { entry, side } = current
   const scope = side === 'staged' ? 'index' : 'worktree'
@@ -92,6 +110,28 @@ export function GitDiffModal({ target, sections, disabled, onClose }: Props) {
     section.entries.map((row) => ({ entry: row, side: section.side })),
   )
 
+  /** 左清单的虚拟列表输入（段标题与文件行混排；行高相同，直接用常量） */
+  const sideItems = useMemo<SideItem[]>(() => {
+    const items: SideItem[] = []
+    for (const section of sections) {
+      if (section.entries.length === 0) continue
+      items.push({ kind: 'title', key: `t:${section.key}`, section })
+      for (const entry of section.entries) {
+        items.push({
+          kind: 'row',
+          key: `r:${section.key}:${entry.path}`,
+          section,
+          entry,
+        })
+      }
+    }
+    return items
+  }, [sections])
+  const sideHeights = useMemo(
+    () => sideItems.map(() => SIDE_ROW_H),
+    [sideItems],
+  )
+
   /**
    * 换到清单里的上一个 / 下一个文件；当前文件已不在清单里（刚被处理掉）则落到第一个。
    * 用**函数式更新**：连续按键（长按自动重复）可能在同一帧里来好几下，读写 outer 变量会按同一个
@@ -114,6 +154,11 @@ export function GitDiffModal({ target, sections, disabled, onClose }: Props) {
       if (e.key === 'Escape') {
         // 只关弹窗，不冒泡到别的 Esc 监听
         e.stopPropagation()
+        // 全屏状态下 Esc 先退全屏（一次性关掉两层状态会让人觉得「按错了一下就没了」）
+        if (full) {
+          setFull(false)
+          return
+        }
         onClose()
         return
       }
@@ -129,7 +174,7 @@ export function GitDiffModal({ target, sections, disabled, onClose }: Props) {
     }
     document.addEventListener('keydown', onKey, true)
     return () => document.removeEventListener('keydown', onKey, true)
-  }, [onClose])
+  }, [onClose, full])
 
   // 打开即把焦点收进弹窗：↑↓ 立刻可用（Esc 挂在 document 上，不依赖焦点）
   useEffect(() => {
@@ -155,9 +200,11 @@ export function GitDiffModal({ target, sections, disabled, onClose }: Props) {
   const currentKey = rowKey(side, entry.path)
 
   return createPortal(
-    <div className="git-diff-backdrop" onMouseDown={onClose}>
+    <div
+      className={`git-diff-backdrop${full ? ' is-fullscreen' : ''}`}
+      onMouseDown={onClose}>
       <div
-        className="git-diff-modal"
+        className={`git-diff-modal${sideWidth.resizing ? ' is-resizing' : ''}${full ? ' is-fullscreen' : ''}`}
         ref={rootRef}
         tabIndex={-1}
         onMouseDown={(e) => e.stopPropagation()}>
@@ -182,6 +229,15 @@ export function GitDiffModal({ target, sections, disabled, onClose }: Props) {
             onClick={() => void runAction()}>
             {actionLabel}
           </button>
+          {/* 全屏：只看差异时清单与正文都想要更大面积（Esc 先退全屏，再按一下才关弹窗） */}
+          <button
+            type="button"
+            className="git-diff-full"
+            title={full ? t('退出全屏') : t('全屏')}
+            aria-pressed={full}
+            onClick={() => setFull((v) => !v)}>
+            {full ? t('退出全屏') : t('全屏')}
+          </button>
           <button
             type="button"
             className="git-close"
@@ -191,51 +247,68 @@ export function GitDiffModal({ target, sections, disabled, onClose }: Props) {
           </button>
         </div>
         <div className="git-diff-main">
-          <aside className="git-diff-side">
-            {sections.map((section) =>
-              section.entries.length === 0 ? null : (
-                <div className="git-diff-side-group" key={section.key}>
-                  <div className="git-diff-side-title">
-                    <span>{section.title}</span>
+          {/* 左清单走虚拟列表：文件一多（几千条）不是滚动卡，而是首次渲染就卡在 DOM 数量上 */}
+          <VirtualList
+            className="git-diff-side"
+            style={{ width: sideWidth.width }}
+            items={sideItems}
+            heights={sideHeights}
+            render={(item) => {
+              if (item.kind === 'title') {
+                return (
+                  <div className="git-diff-side-title" key={item.key}>
+                    <span>{item.section.title}</span>
                     <span className="git-diff-side-count">
-                      {section.entries.length}
+                      {item.section.entries.length}
                     </span>
                   </div>
-                  {section.entries.map((row) => {
-                    const letter = statusLetter(row, section.side)
-                    const name = baseName(row.path)
-                    return (
-                      <button
-                        type="button"
-                        key={rowKey(section.side, row.path)}
-                        className={`git-diff-side-row${
-                          rowKey(section.side, row.path) === currentKey
-                            ? ' active'
-                            : ''
-                        }`}
-                        title={displayPath(row)}
-                        onClick={() =>
-                          setCurrent({ entry: row, side: section.side })
-                        }>
-                        {/* 与面板的行同一套排布（图标在左、状态字母在右）—— 两处列的是同一份清单 */}
-                        <FileTypeIcon
-                          filename={name}
-                          className="git-diff-side-icon"
-                        />
-                        <span className="git-diff-side-name">{name}</span>
-                        <span className="git-diff-side-dir">
-                          {dirName(row.path)}
-                        </span>
-                        <span className={`git-row-letter s-${letter}`}>
-                          {letter}
-                        </span>
-                      </button>
-                    )
-                  })}
+                )
+              }
+              const { section, entry: row } = item
+              const letter = statusLetter(row, section.side)
+              const name = baseName(row.path)
+              const rowStaged = section.side === 'staged'
+              const label = rowStaged ? t('取消暂存') : t('暂存更改')
+              const key = rowKey(section.side, row.path)
+              return (
+                // ⚠️ 行是 `div role=button` 而不是 `button`：里面有另一颗按钮（暂存 / 取消暂存），
+                //    button 套 button 是非法 HTML，浏览器会把内层拆出去
+                <div
+                  key={item.key}
+                  role="button"
+                  tabIndex={0}
+                  className={`git-diff-side-row${key === currentKey ? ' active' : ''}`}
+                  title={displayPath(row)}
+                  onClick={() => setCurrent({ entry: row, side: section.side })}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' && e.key !== ' ') return
+                    e.preventDefault()
+                    setCurrent({ entry: row, side: section.side })
+                  }}>
+                  {/* 与面板的行同一套排布（图标在左、状态字母在右）—— 两处列的是同一份清单 */}
+                  <FileTypeIcon filename={name} className="git-diff-side-icon" />
+                  <span className="git-diff-side-name">{name}</span>
+                  <span className="git-diff-side-dir">{dirName(row.path)}</span>
+                  {/* 看完差异顺手处理是最常见的下一步（与弹窗头那颗动作同一语义，只是作用于**这一行**） */}
+                  <button
+                    type="button"
+                    className="git-diff-side-act"
+                    title={label}
+                    aria-label={label}
+                    disabled={disabled}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void (rowStaged ? unstage([row.path]) : stage([row.path]))
+                    }}>
+                    {rowStaged ? '－' : '＋'}
+                  </button>
+                  <span className={`git-row-letter s-${letter}`}>{letter}</span>
                 </div>
-              ),
-            )}
-          </aside>
+              )
+            }}
+          />
+          {/* 右侧分隔条：拖它调清单宽度（键盘聚焦后 ← → 也行） */}
+          <SideResizer side={sideWidth} />
           <div className="git-diff-body">
             {loading && <div className="git-diff-message">{t('加载中…')}</div>}
             {!loading && error && (

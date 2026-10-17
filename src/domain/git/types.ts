@@ -155,6 +155,24 @@ export interface GitBranchInfo {
   updated_at: string | null
 }
 
+/** 一个文件的行数统计（`git diff --numstat`）。`added` / `deleted` 为 `null` = 数不出来（二进制 / 过大） */
+export interface GitFileStat {
+  /** 当前路径（rename / copy 用新路径，与变更条目的 `path` 对齐） */
+  path: string
+  /** rename / copy 的旧路径 */
+  orig_path: string | null
+  added: number | null
+  deleted: number | null
+}
+
+/** 一次行数统计：两个对比基准各一份（未跟踪文件在 `worktree` 里 = 全文新增） */
+export interface GitStatReport {
+  /** INDEX ↔ HEAD（已暂存段） */
+  staged: GitFileStat[]
+  /** 工作区 ↔ INDEX（未暂存段，含未跟踪） */
+  worktree: GitFileStat[]
+}
+
 /**
  * 远程地址的种类。只用于展示与提示，不参与任何认证决策 —— 凭据策略固定是 SSH。
  */
@@ -169,8 +187,7 @@ export interface GitRemoteInfo {
   kind: GitRemoteKind
 }
 
-/** 一次网络操作（fetch / pull / push / ls-remote）的结果 */
-export interface GitSyncResult {
+/** 一次网络操作（fetch / pull / push / ls-remote）的结果 */export interface GitSyncResult {
   remote: string
   /** 实际用的地址（同样已抹掉 userinfo） */
   url: string

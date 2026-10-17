@@ -185,7 +185,7 @@ it('左侧清单：列出各段文件、当前文件高亮，点另一个即切�
   const titles = [...document.querySelectorAll('.git-diff-side-title')].map(
     (el) => el.textContent,
   )
-  expect(titles).toEqual(['暂存的更改1', '更改3'])
+  expect(titles).toEqual(['更改3', '暂存的更改1'])
   expect(document.querySelectorAll('.git-diff-side-row').length).toBe(4)
 
   // 当前行高亮（打开时定位到双击的那一行）
@@ -318,14 +318,76 @@ it('↑↓ 在弹窗里上下切文件（打开即接管焦点）', async () => 
   })
   expect(pathLabel()).toBe('b.txt')
 
+  // 再往上两次：已经到头（第一行），不会越界
   await act(async () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp' }))
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp' }))
   })
-  expect(pathLabel()).toBe('s.txt')
+  expect(pathLabel()).toBe('a.txt')
 })
 
-it('左侧清单的一行：图标在左、状态字母在最右（与面板同一套排布）', async () => {
+it('行内的「暂存更改」只作用于那一行，不会顺手切走当前文件', async () => {
+  await mount('a.txt')
+  vi.mocked(stage).mockResolvedValue(true)
+
+  const row = sideRow('b.txt')!
+  const act1 = row.querySelector('.git-diff-side-act') as HTMLButtonElement
+  expect(act1.getAttribute('title')).toBe('暂存更改')
+  await act(async () => act1.click())
+
+  expect(stage).toHaveBeenCalledWith(['b.txt'])
+  // 点行内按钮不能把「当前看的文件」切走（stopPropagation 守的就是这件事）
+  expect(pathLabel()).toBe('a.txt')
+})
+
+it('已暂存段的行内动作是「取消暂存」', async () => {
+  await mount('s.txt', 'staged')
+  vi.mocked(unstage).mockResolvedValue(true)
+
+  const btn = sideRow('s.txt')!.querySelector('.git-diff-side-act') as HTMLButtonElement
+  expect(btn.getAttribute('title')).toBe('取消暂存')
+  await act(async () => btn.click())
+  expect(unstage).toHaveBeenCalledWith(['s.txt'])
+})
+
+it('右侧分隔条可以拖（宽度变成指针位置 − 清单左边界）', async () => {
+  await mount()
+  const aside = document.querySelector('.git-diff-side') as HTMLElement
+  const handle = document.querySelector('.git-diff-resizer') as HTMLElement
+  expect(handle).toBeTruthy()
+
+  await act(async () => {
+    handle.dispatchEvent(
+      new MouseEvent('mousedown', { bubbles: true, clientX: 260 }),
+    )
+  })
+  await act(async () => {
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: 360 }))
+  })
+  // jsdom 里清单 left = 0 → 宽度 = clientX
+  expect(aside.style.width).toBe('360px')
+  await act(async () => {
+    document.dispatchEvent(new MouseEvent('mouseup'))
+  })
+  // 拖完落盘（下次打开沿用）
+  expect(localStorage.getItem('virlen-git-side-width')).toBe('360')
+})
+
+it('分隔条用键盘也能调宽度（← →，每次 20px）', async () => {
+  await mount()
+  const aside = document.querySelector('.git-diff-side') as HTMLElement
+  const handle = document.querySelector('.git-diff-resizer') as HTMLElement
+  const before = parseFloat(aside.style.width)
+
+  await act(async () => {
+    handle.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }),
+    )
+  })
+  expect(parseFloat(aside.style.width)).toBe(before + 20)
+})
+
+it('左侧清单的一行：图标在左、行内动作与状态字母在右（与面板同一套排布）', async () => {
   await mount()
 
   const row = sideRow('n.ts')!
@@ -335,10 +397,16 @@ it('左侧清单的一行：图标在左、状态字母在最右（与面板同�
     'git-diff-side-icon',
     'git-diff-side-name',
     'git-diff-side-dir',
+    // 行内也有「暂存 / 取消暂存」——看差异时最常做的下一步
+    'git-diff-side-act',
     'git-row-letter',
   ])
   // 未跟踪的字母仍是 `?`（状态字母只按所在侧取字母）
   expect(row.querySelector('.git-row-letter')?.textContent).toBe('?')
+  // 未暂存侧的行内动作是「暂存更改」
+  expect(row.querySelector('.git-diff-side-act')?.getAttribute('title')).toBe(
+    '暂存更改',
+  )
 
   // 未跟踪就是普通的一行：差异基准同样是「工作区 ↔ index」（左空右全文）
   await act(async () => row.click())
@@ -399,4 +467,34 @@ it('空的那一侧整栏不画：删除的文件只把旧侧交给 Monaco 的�
   expect(next.dataset.side).toBe('new')
   expect(next.dataset.old).toBe('')
   expect(next.dataset.new).toBe('c\n')
+})
+
+/** 全屏：长文件 / 窄窗下只看差异；Esc 先退全屏，再按一下才关弹窗 */
+it('全屏按钮把弹窗铺满，Esc 先退全屏再关弹窗', async () => {
+  await mount()
+
+  const modal = () => document.querySelector('.git-diff-modal') as HTMLElement
+  const backdrop = () => document.querySelector('.git-diff-backdrop') as HTMLElement
+  const btn = () => document.querySelector('.git-diff-full') as HTMLButtonElement
+
+  expect(btn().textContent).toBe('全屏')
+  expect(modal().classList.contains('is-fullscreen')).toBe(false)
+
+  await act(async () => btn().click())
+  // 两层都标记（遮罩去掉内边距、弹窗铺满）—— 宽度上限由 `.git-diff-modal` 给，全屏时归零
+  expect(modal().classList.contains('is-fullscreen')).toBe(true)
+  expect(backdrop().classList.contains('is-fullscreen')).toBe(true)
+  expect(btn().textContent).toBe('退出全屏')
+
+  await act(async () => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+  })
+  // 一下 Esc 只退全屏（一次关掉两层状态会让人觉得「按错一下就没了」）
+  expect(closed).toBe(0)
+  expect(modal().classList.contains('is-fullscreen')).toBe(false)
+
+  await act(async () => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+  })
+  expect(closed).toBe(1)
 })

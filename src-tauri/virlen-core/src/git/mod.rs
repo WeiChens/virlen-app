@@ -24,6 +24,7 @@ pub mod commit;
 pub mod diff;
 pub mod lock;
 pub mod log;
+pub mod numstat;
 pub mod remote;
 pub mod repo;
 pub mod show;
@@ -146,6 +147,28 @@ pub struct DiffSides {
     pub binary: bool,
     /// 单侧内容超过 [`diff::MAX_SIDE_CHARS`] 被截断
     pub truncated: bool,
+}
+
+/// 一个文件的行数统计（`git diff --numstat`）。
+///
+/// `added` / `deleted` 为 `None` = 数不出来（二进制 / 未跟踪文件过大）—— 界面显示「—」，**不当时 0**。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileStat {
+    /// 当前路径（rename / copy 用新路径，与 [`ChangeEntry::path`] 对齐）
+    pub path: String,
+    /// rename / copy 的旧路径
+    pub orig_path: Option<String>,
+    pub added: Option<u32>,
+    pub deleted: Option<u32>,
+}
+
+/// 一次行数统计：两个对比基准各一份（含未跟踪文件，它们在 `worktree` 里）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StatReport {
+    /// INDEX ↔ HEAD
+    pub staged: Vec<FileStat>,
+    /// 工作区 ↔ INDEX（含未跟踪 = 全文新增）
+    pub worktree: Vec<FileStat>,
 }
 
 /// 一次提交的结果。

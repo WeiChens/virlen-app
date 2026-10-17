@@ -8,7 +8,7 @@ use std::sync::Arc;
 use virlen_core::git::cli::GitError;
 use virlen_core::git::{
     BranchInfo, CommitDetail, CommitLogEntry, CommitResult, DiffScope, DiffSides, LogScope,
-    RemoteInfo, RepoInfo, StatusSnapshot, SyncResult, WriteGate,
+    RemoteInfo, RepoInfo, StatReport, StatusSnapshot, SyncResult, WriteGate,
 };
 use virlen_core::session_db::SettingsRepo;
 
@@ -65,6 +65,19 @@ pub async fn git_status(dir: String, task_id: String) -> Result<StatusSnapshot, 
     let cancel = crate::task_manager::register(&task_id);
     let result = blocking("status", move || {
         virlen_core::git::status::status_with_cancel(&dir, Some(&cancel))
+    })
+    .await;
+    crate::task_manager::unregister(&task_id);
+    result
+}
+
+/// 逐文件行数统计（面板里的「+12 −3」与顶部合计）。只在面板打开时取 —— 它比 `status` 贵。
+/// `task_id` 供未跟踪文件逐个数行时中断。
+#[tauri::command]
+pub async fn git_numstat(dir: String, task_id: String) -> Result<StatReport, String> {
+    let cancel = crate::task_manager::register(&task_id);
+    let result = blocking("numstat", move || {
+        virlen_core::git::numstat::stats_with_cancel(&dir, Some(&cancel))
     })
     .await;
     crate::task_manager::unregister(&task_id);

@@ -45,7 +45,8 @@
   top: calc(100% + 8px);
   right: 0;
   z-index: 60;
-  width: 520px;
+  /* 两段横着排（更改 | 暂存的更改）要宽度：单行里的文件名 / 目录 / 动作 / 行数都靠它才不挤 */
+  width: 840px;
   max-width: calc(100vw - 32px);
   padding: 10px 12px 12px;
   border: 1px solid var(--border-color, #e5e5e5);
@@ -130,10 +131,34 @@
     }
   }
 
+  /* 落差状态按钮：↑超前 ↓落后，**点它就是一次同步**（先拉取快进、再推送）。
+     它是 button（不是 span）—— 摆在头部的数字若不能点，就只是「有事」而不给下一步。 */
   .git-track {
-    font-size: var(--font-size-xs, 11px);
+    flex: none;
+    padding: 1px 7px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: transparent;
     color: var(--text-secondary, #666);
+    font: inherit;
+    font-size: var(--font-size-xs, 11px);
     font-variant-numeric: tabular-nums;
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      border-color: var(--primary-color, #3b6ef6);
+      color: var(--primary-color, #3b6ef6);
+    }
+
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 1px;
+    }
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
   }
 
   /* 游离 HEAD：不显示分支名，改用一个明确的提示徽标。
@@ -181,6 +206,12 @@
       cursor: not-allowed;
     }
 
+    /* 菜单展开中的那个按钮（「更多」）：按下感比 hover 强一档，否则吃不住「它现在是开的」 */
+    &.is-active {
+      background: var(--hover-bg, #f0f0f0);
+      color: var(--text-primary, #1a1a1a);
+    }
+
     svg {
       width: 14px;
       height: 14px;
@@ -189,13 +220,13 @@
   }
 }
 
-/* 提交框 */
+/* 提交框（在**面板最下面**：先看改了什么再写信息） */
 .git-commit {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border-color, #e5e5e5);
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color, #e5e5e5);
 
   textarea {
     width: 100%;
@@ -238,98 +269,131 @@
       color: var(--text-secondary, #666);
     }
   }
+}
 
-  .git-primary-btn {
-    flex: none;
-    padding: 4px 14px;
-    border: none;
-    border-radius: 6px;
-    background: var(--primary-color, #3b6ef6);
-    /* 同上：品牌底上的前景走 --primary-fg */
-    color: var(--primary-fg, #fff);
-    font: inherit;
-    font-size: var(--font-size-sm, 12px);
-    font-weight: 600;
-    cursor: pointer;
+/* 主按钮（提交）—— **顶层规则**：与 `.git-row-btn` 同一口径。
+   ⚠️ 这类小按钮一旦写进某个父选择器（曾经在 `.git-commit` 里），换个语境渲染就掉回浏览器
+   默认按钮（方角、系统色）—— 已踩过两次（段标题的「全部暂存」、空态的「初始化仓库」）。 */
+.git-primary-btn {
+  flex: none;
+  padding: 4px 14px;
+  border: none;
+  border-radius: 6px;
+  background: var(--primary-color, #3b6ef6);
+  /* 品牌底上的前景走 --primary-fg（主题里深色档是黑字，写死 #fff 会看不清） */
+  color: var(--primary-fg, #fff);
+  font: inherit;
+  font-size: var(--font-size-sm, 12px);
+  font-weight: 600;
+  cursor: pointer;
 
-    &:hover:not(:disabled) {
-      filter: brightness(1.08);
-    }
+  &:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
 
-    /* 落在品牌底上，默认焦点光晕看不清 —— 用统一的主题焦点环（与列表里的小按钮一致） */
-    &:focus-visible {
-      outline: var(--focus-ring);
-      outline-offset: 2px;
-    }
+  /* 落在品牌底上，默认焦点光晕看不清 —— 用统一的主题焦点环（与列表里的小按钮一致） */
+  &:focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: 2px;
+  }
 
-    &:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 }
 
-/* 变更列表 */
-.git-list {
+/* 变更列表区：**每段一列、各自一个滚动容器**（标题在段自己身上，不随列表滚走） */
+.git-list-box {
+  display: flex;
+  /* 两段横着排：竖向空间不够时向横向要（而不是把两段堆起来各分一半高度） */
+  flex-direction: row;
+  gap: 12px;
   max-height: 46vh;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  overflow: hidden;
 
-  /* 提交区只在暂存区非空时出现（见 GitPanel）：它不在时列表自己顶上一条分隔线，
-     否则仓库条与第一段标题会粘在一起 */
+  /* 列表区直接跟在仓库条后面时（没有提交区 / 统计 / 输出块隔开）自己顶上一条分隔线 */
   .git-repo-bar + & {
     border-top: 1px solid var(--border-color, #e5e5e5);
   }
+}
 
-  .git-section {
-    margin-top: 8px;
+/* 一段 = 标题（固定）+ 自己的滚动列表，占一列。
+   ⚠️ 两列等宽（`flex: 1 1 0` + `min-width: 0`，否则长路径会把某一列撑宽）；
+   高度由 `.git-list-box` 的 46vh 拉伸决定，多出来的内容落在**各自的**列表里滚。 */
+.git-section {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
 
-    .git-section-title {
-      position: sticky;
-      top: 0;
-      z-index: 1;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 2px;
-      background: var(--bg-primary, #fff);
-      font-size: var(--font-size-xs, 11px);
-      font-weight: 600;
-      color: var(--text-secondary, #666);
-      letter-spacing: 0.02em;
+  /* 两列之间一道竖分隔线（与上方那条横分隔线同一套语义） */
+  & + & {
+    padding-left: 12px;
+    border-left: 1px solid var(--border-color, #e5e5e5);
+  }
+}
 
-      /* 「全部暂存 / 全部取消暂存」是同一颗 .git-row-btn 的**文字**形态 */
-      .git-row-btn {
-        width: auto;
-        padding: 0 7px;
-        font-size: var(--font-size-xs, 11px);
-        /* hover 整段才显形（与行内操作同一口径）：常驻会把列表画成一堵按钮墙 */
-        opacity: 0;
-        transition: opacity 0.12s ease;
+/* 段标题：在**本段自己的滚动列表之外**，所以不再需要 sticky（它本来就不会被滚走） */
+.git-section-title {
+  flex: none;
+  box-sizing: border-box;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+  font-size: var(--font-size-xs, 11px);
+  font-weight: 600;
+  color: var(--text-secondary, #666);
+  letter-spacing: 0.02em;
 
-        /* 禁用态（只读沙盒 / 有操作在跑）**常显**：告诉用户「这颗按钮在这儿，只是此刻点不了」，
-           比整颗消失好懂（与后台服务面板的终止按钮同一取舍） */
-        &:disabled {
-          opacity: 0.5;
-        }
+  .git-section-count {
+    font-weight: 400;
+  }
 
-        /* 段标题是白底（sticky），hover 底不能沿用行内那颗的 --bg-primary（白底上看不出来） */
-        &:hover:not(:disabled) {
-          background: var(--hover-bg, #f0f0f0);
-          box-shadow: none;
-        }
-      }
+  /* 「全部暂存 / 全部取消暂存」是同一颗 .git-row-btn 的**文字**形态 */
+  .git-row-btn {
+    width: auto;
+    padding: 0 7px;
+    font-size: var(--font-size-xs, 11px);
+    /* hover 整段才显形（与行内操作同一口径）：常驻会把标题画成一堵按钮墙 */
+    opacity: 0;
+    transition: opacity 0.12s ease;
+
+    /* 禁用态（只读沙盒 / 有操作在跑）**常显**：告诉用户「这颗按钮在这儿，只是此刻点不了」，
+       比整颗消失好懂（与后台服务面板的终止按钮同一取舍） */
+    &:disabled {
+      opacity: 0.5;
     }
 
-    .git-section-count {
-      font-weight: 400;
-      color: var(--text-secondary, #666);
+    /* 标题底下不是行（没有那层 hover 底），hover 底沿用行内那颗的 --bg-primary 就看不出来 */
+    &:hover:not(:disabled) {
+      background: var(--hover-bg, #f0f0f0);
+      box-shadow: none;
     }
+  }
 
-    &:hover .git-section-title .git-row-btn:not(:disabled),
-    .git-section-title .git-row-btn:focus-visible {
-      opacity: 1;
-    }
+  &:hover .git-row-btn:not(:disabled),
+  .git-row-btn:focus-visible {
+    opacity: 1;
+  }
+}
+
+/* 一段自己的滚动列表（行高必须固定，虚拟列表的前缀和靠它） */
+.git-list {
+  /* `flex: 1 1 auto`：占满本段除标题外的剩余高度（高度由外层 46vh 给），超出就自己滚 */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+
+  /* ⚠️ 行高固定 24px，与 `GitPanel` 的 `ROW_H` 一致：24 是行内那颗 22px 按钮的下限
+     —— 20px 时按钮被裁掉半截，看着像没对齐 */
+  .git-row {
+    box-sizing: border-box;
+    height: 24px;
   }
 }
 
@@ -418,6 +482,35 @@
   &.s-U { color: var(--color-error-text, #991b1b); }
 }
 
+.git-row-stat {
+  flex: none;
+  display: inline-flex;
+  gap: 4px;
+  font-size: var(--font-size-xs, 11px);
+  font-variant-numeric: tabular-nums;
+
+  /* 与状态字母同一套语义色（增=绿、删=红），暗色主题下也跟着变 */
+  .add { color: var(--color-success-text, #2e7d32); }
+  .del { color: var(--color-error-text, #991b1b); }
+}
+
+/* 顶部汇总（与变更行同一个口径）：文件数 + 总增删行数 */
+.git-stats-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 6px;
+  font-size: var(--font-size-xs, 11px);
+  color: var(--text-secondary, #666);
+  border-bottom: 1px solid var(--border-color, #e5e5e5);
+  font-variant-numeric: tabular-nums;
+
+  .git-stat-add { color: var(--color-success-text, #2e7d32); }
+  .git-stat-del { color: var(--color-error-text, #991b1b); }
+  /* 「还有没算出来的」：用中性色，别看着像又一个删行数 */
+  .git-stat-more { color: var(--text-secondary, #666); }
+}
+
 .git-row {
   display: flex;
   align-items: center;
@@ -479,62 +572,34 @@
   }
 }
 
-/* 面板里的文字按钮（「撤销上次提交」这类次要动作）：长得像链接，但真的可点、可聚焦 */
-.git-link-btn {
-  flex: none;
-  padding: 2px 6px;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--text-secondary, #666);
-  font: inherit;
-  font-size: var(--font-size-xs, 11px);
-  cursor: pointer;
+/* 失败弹窗（`GitErrorModal`）：等宽 + 可滚动 —— 报错是给人**照着做**的，不是一段说明文字。
+   `hint:` 行与前缀的对齐只有在等宽字体下才看得清，所以不走主题的正文栈。 */
+.git-error-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 
-  &:hover:not(:disabled) {
-    background: var(--hover-bg, #f0f0f0);
-    color: var(--primary-color, #3b6ef6);
+  .git-error-op {
+    font-size: var(--font-size-xs, 11px);
+    color: var(--text-secondary, #666);
   }
 
-  &:focus-visible {
-    outline: var(--focus-ring);
-    outline-offset: 1px;
-  }
-
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-}
-
-/* 「修改上一次提交」开关：与提交按钮同排，尺寸与左侧提示一档 */
-.git-amend {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--font-size-xs, 11px);
-  color: var(--text-secondary, #666);
-  cursor: pointer;
-  user-select: none;
-
-  input {
-    width: 12px;
-    height: 12px;
+  pre {
     margin: 0;
-    cursor: pointer;
+    max-height: 320px;
+    overflow: auto;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: var(--bg-secondary, #f7f7f8);
+    color: var(--text-primary, #1a1a1a);
+    /* ⚠️ 字体栈写字面量：主题里**没有** --font-mono 这个令牌（引用不存在的令牌只会永远走 fallback） */
+    font-family: Consolas, 'Courier New', monospace;
+    font-size: var(--font-size-xs, 11px);
+    line-height: 1.5;
+    white-space: pre-wrap;
+    /* 长路径 / URL 必须能断开，否则会把弹窗宽度撑破 */
+    overflow-wrap: anywhere;
   }
-
-  /* 禁用态（只读沙盒 / 无提交可改）跟着变灰，而不是只剩复选框自己变灰 */
-  &:has(input:disabled) {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-}
-
-/* 空态里的「初始化仓库」：`git-empty` 本身居中，这里只补一点间距 */
-.git-init-row {
-  margin-top: 10px;
 }
 
 /* 远程浮层（与分支浮层同一套外观，靠右挂）—— 获取 / 拉取 / 推送 + 测试连接。
@@ -942,6 +1007,11 @@
   justify-content: center;
   padding: 40px 32px;
   background: var(--modal-overlay, rgba(16, 24, 40, 0.42));
+
+  /* 全屏：去掉那圈留白，弹窗自己铺满（遮罩仍从自绘标题栏下方开始，那一条不因全屏而变） */
+  &.is-fullscreen {
+    padding: 0;
+  }
 }
 
 .git-diff-modal {
@@ -994,8 +1064,9 @@
       color: var(--text-secondary, #666);
     }
 
-    /* 「暂存更改 / 取消暂存」：看完差异顺手处理是最常见的下一步，弹窗里就地给入口 */
-    .git-diff-action {
+    /* 「暂存更改 / 取消暂存」与「全屏 / 退出全屏」：看完差异顺手处理是最常见的下一步，弹窗里就地给入口 */
+    .git-diff-action,
+    .git-diff-full {
       flex: none;
       padding: 3px 10px;
       border: 1px solid var(--border-color, #e5e5e5);
@@ -1032,7 +1103,7 @@
 
   .git-diff-side {
     flex: none;
-    /* 260：行里多了文件类型图标（15）与状态字母（14），不留宽就全从文件名里扣 */
+    /* 260 是**默认宽度**；拖分隔条后的宽度由行内布局覆盖（`useSideWidth`） */
     width: 260px;
     overflow-y: auto;
     overscroll-behavior: contain;
@@ -1040,15 +1111,15 @@
     border-right: 1px solid var(--border-color, #e5e5e5);
     background: var(--bg-secondary, #f7f7f8);
 
-    .git-diff-side-group {
-      margin-bottom: 4px;
-    }
-
+    /* ⚠️ 标题与行的**高度固定 24px**：虚拟列表的前缀和按它算（`SIDE_ROW_H`），
+       内容撑高一点就会越滚越偏。行里都是 nowrap，不会因此被裁。 */
     .git-diff-side-title {
+      box-sizing: border-box;
+      height: 24px;
       display: flex;
       align-items: center;
       gap: 6px;
-      padding: 4px 6px;
+      padding: 0 6px;
       font-size: var(--font-size-xs, 11px);
       font-weight: 600;
       color: var(--text-secondary, #666);
@@ -1059,11 +1130,13 @@
     }
 
     .git-diff-side-row {
+      box-sizing: border-box;
+      height: 24px;
       display: flex;
       align-items: center;
       gap: 6px;
       width: 100%;
-      padding: 3px 6px;
+      padding: 0 6px;
       border: none;
       border-radius: 5px;
       background: transparent;
@@ -1090,8 +1163,8 @@
 
       .git-diff-side-name {
         flex: none;
-        /* 同一行还有图标与状态字母，文件名占比相应收一点（长名靠 title 看全） */
-        max-width: 52%;
+        /* 同一行还有图标、动作按钮与状态字母，文件名占比相应收一点（长名靠 title 看全） */
+        max-width: 46%;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -1106,7 +1179,73 @@
         font-size: var(--font-size-xs, 11px);
         color: var(--text-secondary, #666);
       }
+
+      /* 行内「暂存 / 取消暂存」：平时不显形（与面板行内操作同一口径），hover / 聚焦才出来 */
+      .git-diff-side-act {
+        flex: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+        height: 18px;
+        padding: 0;
+        border: none;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--text-secondary, #666);
+        font: inherit;
+        font-size: 13px;
+        line-height: 1;
+        cursor: pointer;
+        opacity: 0;
+        transition: opacity 0.12s ease;
+
+        &:hover:not(:disabled) {
+          background: var(--bg-primary, #fff);
+          color: var(--primary-color, #3b6ef6);
+        }
+
+        &:focus-visible {
+          outline: var(--focus-ring);
+          outline-offset: 1px;
+        }
+
+        &:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+      }
+
+      &:hover .git-diff-side-act:not(:disabled),
+      &:focus-within .git-diff-side-act:not(:disabled) {
+        opacity: 1;
+      }
     }
+  }
+
+  /* 清单右侧的分隔条：拖它调宽度（键盘聚焦后 ← → 同样可以） */
+  .git-diff-resizer {
+    flex: none;
+    width: 5px;
+    cursor: col-resize;
+    background: transparent;
+    transition: background 0.12s ease;
+
+    &:hover,
+    &:focus-visible {
+      background: color-mix(in srgb, var(--primary-color, #3b6ef6) 28%, transparent);
+    }
+
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: -1px;
+    }
+  }
+
+  /* 拖动中：整个弹窗禁选中 + 光标不变（否则扫过文字会变成选区） */
+  &.is-resizing {
+    user-select: none;
+    cursor: col-resize;
   }
 
   /* 正文容器：正文自己管滚动（SideBySideDiff / MonacoDiffView），这里只负责占满剩余高度 */
@@ -1158,6 +1297,14 @@
       white-space: pre-wrap;
       word-break: break-word;
     }
+  }
+
+  /* 全屏：铺满遮罩（`width / height` 的上限收掉、圆角不再需要） */
+  &.is-fullscreen {
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+    box-shadow: none;
   }
 }
 

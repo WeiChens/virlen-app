@@ -9,11 +9,15 @@
  * - **打开面板**：刷一次；
  * - **窗口重新激活**：刷一次（面板关着也刷 —— 徽标要准；节流见 `refreshOnFocus`）。
  *
- * 入口的显隐：**探测完成且有工作目录**就出现（不要求是仓库）—— 不是仓库时面板里那个「初始化
- * 仓库」是唯一出口，藏掉入口等于把这条路封死；没装 git / 没选目录时不占工具栏。
+ * 入口的显隐：**只有已有仓库（目录里有 `.git`）才出现**。没 `.git` 的目录不常驻一个用不上的
+ * 图标；没装 git 时 `repo` 也不会是 `Some`，同样不出现。用户在终端 / 由 AI 跑了 `git init` 之后，
+ * `refreshOnFocus` / `notifyWorkspaceActivity` 会重新探测一次（节流见 `reprobeIfMissing`），
+ * 切一下窗口或继续对话，入口就自己出现。
  */
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { observer } from 'mobx-react-lite'
+import { runInAction } from 'mobx'
 import { t, tpl } from '@/ui/i18n'
 import GitSvg from '@/ui/components/icons/GitSvg'
 import { chatState } from '@/ui/store/chatState'
@@ -27,6 +31,7 @@ import {
   syncWorkspace,
 } from '@/services/git-service'
 import GitPanel from './GitPanel'
+import GitErrorModal from './GitErrorModal'
 import './style.scss'
 
 interface Props {
@@ -72,7 +77,11 @@ export const GitEntry = observer(function GitEntry({ sessionId }: Props) {
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) closeRef.current()
+      const target = e.target as HTMLElement | null
+      // 弹窗（portal 到 body）在 `.git-entry` 之外：点它不算「点在外面」，
+      // 否则「在错误弹窗里点复制」会把背后的面板一并关掉
+      if (target?.closest?.('.modal-overlay')) return
+      if (!wrapRef.current?.contains(target)) closeRef.current()
     }
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
@@ -84,6 +93,8 @@ export const GitEntry = observer(function GitEntry({ sessionId }: Props) {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      // 有弹窗（如错误弹窗）时 Esc 只属于它，不能顺带把面板也关了
+      if (document.querySelector('.modal-overlay')) return
       const active = document.activeElement as HTMLElement | null
       if (active?.tagName === 'TEXTAREA' || active?.tagName === 'INPUT') {
         active.blur()
@@ -95,8 +106,9 @@ export const GitEntry = observer(function GitEntry({ sessionId }: Props) {
     return () => document.removeEventListener('keydown', onKey)
   }, [open])
 
-  // 探测完成 + 有工作目录 → 显示；不是仓库也显示（面板里有「初始化仓库」）
-  if (!gitStore.probed || !gitStore.dir) return null
+  // 入口只在**已有仓库**时出现（工作目录里有 `.git`）：没 .git 的目录不该常驻一个用不上的图标。
+  // 没装 git 时 `repo` 同样不可能是 `Some` → 一起隐掉（不提示、不占位）。
+  if (!gitStore.probed || !gitStore.dir || !gitStore.repo) return null
 
   const repo = gitStore.repo
   const count = repo ? changedFileCount(gitStore.snapshot) : 0
@@ -123,6 +135,21 @@ export const GitEntry = observer(function GitEntry({ sessionId }: Props) {
           <GitPanel onClose={() => setOpen(false)} />
         </div>
       )}
+      {/* 错误弹窗挂在**面板外**：面板收起来 / 网络操作失败得更晚时，报错仍然看得到。
+          portal 到 body：标题栏这层有 overflow 与层叠上下文，不腾出去 fixed 遮罩会被裁掉 */}
+      {gitStore.errorBox &&
+        createPortal(
+          <GitErrorModal
+            op={gitStore.errorBox.op}
+            text={gitStore.errorBox.text}
+            onClose={() =>
+              runInAction(() => {
+                gitStore.errorBox = null
+              })
+            }
+          />,
+          document.body,
+        )}
     </div>
   )
 })
