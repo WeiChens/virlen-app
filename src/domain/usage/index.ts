@@ -1,20 +1,17 @@
 /**
- * 用量账本（token 统计）— 领域侧写入端口。
+ * 用量账本（token 统计）的领域侧写入端口。
  *
- * 与 Rust `agent/usage.rs::record_usage` 语义一致：**一次 LLM 调用记一条流水**，`kind` 区分类型。
- * 为何不复用 `messages.usage`：标题生成/校验这类调用不产生消息，且账本独立于会话生命周期（删会话不清账）。
- *
- * `domain/` 不能依赖 `infrastructure/`，故这里只定义「写入口 + 注入点」，SQLite 实现由 `services`
- * 启动时经 `bindUsageLedger()` 注入（未注入则静默丢弃）。
+ * 一次 LLM 调用记一条流水（标题生成 / 校验这类不产生消息的调用也要计），账本独立于会话生命周期。
+ * domain 不能依赖 infrastructure，故这里只定义入口 + 注入点（未注入则静默丢弃）。
  */
 
-/** 一次 LLM 调用的用量流水（领域侧形状，字段名与 Rust `UsageEntry` 一致） */
+/** 一次 LLM 调用的用量流水（字段名与 Rust UsageEntry 一致） */
 export interface UsageLedgerRecord {
   /** 调用完成时间（Unix ms） */
   ts: number
   /** 归属会话（无会话上下文的调用可不传） */
   sessionId?: string
-  /** `chat_round` 的幂等键（assistant 消息 id）；其余类型不传（每次调用独立消费，各记一条） */
+  /** chat_round 的幂等键（assistant 消息 id）；其余类型不传（各记一条） */
   messageId?: string
   model: string
   providerType?: string
@@ -24,19 +21,18 @@ export interface UsageLedgerRecord {
   round?: number
   promptTokens: number
   completionTokens: number
-  /** 缓存**命中（读取）**量：账本口径见 `ledgerTokensOf` */
+  /** 缓存命中（读取）量：账本口径见 ledgerTokensOf */
   cachedTokens: number
   /**
-   * 缓存**写入**量（Anthropic `cache_creation_input_tokens`，1.25x 输入价）；其余 provider 恒 0。
-   * ⚠️ 必须与 `cachedTokens` 分列（计价差 12.5 倍）。口径：`prompt + cached + cacheWrite + completion = total`
+   * 缓存写入量（Anthropic cache_creation_input_tokens，1.25x 输入价）；其余 provider 恒 0。
+   * ⚠️ 必须与 cachedTokens 分列（计价差 12.5 倍）。不变式：prompt + cached + cacheWrite + completion = total
    */
   cacheWriteTokens: number
   totalTokens: number
   /** 是否为本地估算值（非 API 返回），如上下文压缩用 tokenizer 估算 */
   estimated?: boolean
   /**
-   * 本次 LLM 请求的墙钟耗时（ms，**含首字延迟 / 思考时间**），UI 据此算输出速度。
-   * 与 Rust `UsageEntry.duration_ms` 对称；未测量就不传（落库 0，UI 显示 `-`）。
+   * 本次请求的墙钟耗时（ms，含首字延迟 / 思考时间），UI 据此算输出速度。未测量就不传。
    * 只存耗时而非 tok/s：口径变动时不必回填历史。
    */
   durationMs?: number
@@ -48,8 +44,7 @@ export type UsageKind =
   | 'title'
   | 'verify'
   | 'embedding'
-  /** 长期记忆的整理调用（再蒸馏：一批一条，`messageId` 为 `memory:redistill:<指纹>`；
-   * 历史数据里还有旧「按天蒸馏」的 `memory:<day>`） */
+  /** 长期记忆的整理调用（一批一条；历史数据里还有旧「按天蒸馏」的 memory:<day>） */
   | 'memory'
   | 'legacy'
 
@@ -68,8 +63,7 @@ export function bindUsageLedger(port: UsageLedgerPort): void {
 }
 
 /**
- * 记录一条用量流水。刻意是同步「发射即忘」接口：记账失败不得影响主流程，故不返回 Promise、
- * 异常全部吞掉（出错在实现内部打日志）。
+ * 记录一条用量流水。同步「发射即忘」：记账失败不得影响主流程，故不返回 Promise、异常全吞。
  */
 export function recordUsage(record: UsageLedgerRecord): void {
   if (!impl) return
@@ -80,39 +74,39 @@ export function recordUsage(record: UsageLedgerRecord): void {
   }
 }
 
-/** 参与记账的用量形状（各 provider 的 `TokenUsage` 都满足） */
+/** 参与记账的用量形状（各 provider 的 TokenUsage 都满足） */
 export interface UsageLike {
   promptTokens: number
   completionTokens: number
   totalTokens: number
   /** API 明确回报的缓存命中输入量（可能缺省） */
   cachedTokens?: number
-  /** API 明确回报的缓存**写入**量（只有 Anthropic 有，可能缺省） */
+  /** API 明确回报的缓存写入量（只有 Anthropic 有） */
   cacheWriteTokens?: number
 }
 
-/** 账本口径的用量：`promptTokens` 一律是「非缓存输入」 */
+/** 账本口径的用量：promptTokens 一律是「非缓存输入」 */
 export interface LedgerTokens {
   promptTokens: number
   completionTokens: number
-  /** 缓存**命中（读取）**量（Anthropic 0.1x 输入价） */
+  /** 缓存命中（读取）量（Anthropic 0.1x 输入价） */
   cachedTokens: number
-  /** 缓存**写入**量（只有 Anthropic 有，1.25x 输入价）；其余 provider 恒 0 */
+  /** 缓存写入量（只有 Anthropic 有，1.25x 输入价）；其余 provider 恒 0 */
   cacheWriteTokens: number
   totalTokens: number
 }
 
 /**
- * 该 provider 的 `promptTokens` 是否**已包含**缓存命中量。
- * `openai` / `gemini` 含（gemini 的 cached 是 prompt 子集）；`anthropic` 不含（cache 单独在 `cache_*`）。
+ * 该 provider 的 promptTokens 是否已包含缓存命中量。
+ * openai / gemini 含（gemini 的 cached 是 prompt 子集）；anthropic 不含。
  */
 export function cacheIncludedInPrompt(providerType?: string | null): boolean {
   return providerType !== 'anthropic'
 }
 
 /**
- * 由 token 三元组推导缓存量：`total - prompt - completion`（下限 0）。
- * Anthropic 的差值是**缓存总量（读 + 写）**；OpenAI 口径恒为 0。仅作兜底，调用方需自行扣掉已回报的写入量。
+ * 由 token 三元组推导缓存量：total - prompt - completion（下限 0）。
+ * Anthropic 的差值是缓存总量（读 + 写）；仅作兜底，调用方需自行扣掉已回报的写入量。
  */
 export function cachedTokensOf(
   totalTokens: number,
@@ -123,15 +117,11 @@ export function cachedTokensOf(
 }
 
 /**
- * 把 provider 回报的 usage 归一化成**账本口径**。
+ * 把 provider 回报的 usage 归一化成账本口径（promptTokens = 非缓存输入）。
  *
- * 账本口径：`promptTokens` 为非缓存输入，缓存读/写各占一列、三档单价分开算。
- * 不归一化的两种错法都会算错钱：
- * - OpenAI 兼容 / Gemini 把缓存算在 `promptTokens` 里，直接照抄会按输入价重复计一次；
- * - Anthropic 的缓存写入若混进命中档会被按 0.1x 计（实际 1.25x）。
- *
- * ⚠️ 无 provider 归属信息时按 OpenAI 口径处理；不变式：
- * `prompt + cached + cacheWrite + completion === total`。
+ * 不归一化两种错法都会算错钱：OpenAI / Gemini 的缓存本就在 promptTokens 里，照抄会重复计一次；
+ * Anthropic 的缓存写入若混进命中档会被按 0.1x 计（实际 1.25x）。
+ * ⚠️ 无 provider 归属时按 OpenAI 口径；不变式：prompt + cached + cacheWrite + completion === total。
  */
 export function ledgerTokensOf(
   u: UsageLike,
@@ -167,7 +157,7 @@ export function ledgerTokensOf(
     }
   }
 
-  // provider 没回报缓存（或确实无缓存）→ 退回推导；推导值是「缓存总量」，扣掉已回报的写入量
+  // provider 没回报缓存（或确实无缓存）→ 退回推导；推导值是缓存总量，扣掉已回报的写入量
   const derived = cachedTokensOf(totalTokens, promptTokens, completionTokens)
   return {
     promptTokens,

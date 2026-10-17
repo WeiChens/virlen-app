@@ -1,10 +1,5 @@
-//! 长期记忆（记忆功能 P0）的 **Tauri 命令层**（GUI 壳）
-//!
-//! 只做「参数兜底 + 转交 + 埋点」，业务语义全在 `virlen-core`：
-//! 选取与渲染在 `agent::memory`，存取在 `session_db::memory`。
-//!
-//! ⚠️ 新增命令必须登记到 `src/lib.rs` 的 `generate_handler![...]`（铁律 4）；
-//! 记忆正文是用户内容，**不得**进埋点（只上报条数 / 长度）。
+//! 长期记忆的 Tauri 命令层（GUI 壳）：只做参数兜底 + 转交 + 埋点，业务语义在 virlen-core。
+//! 记忆正文是用户内容，不得进埋点（只上报条数 / 长度）。
 
 use std::sync::Arc;
 
@@ -15,7 +10,7 @@ use virlen_core::agent::memory::tools::{
 use virlen_core::agent::memory::{
     clamp_summary, is_valid_kind, is_valid_level, MEMORY_SUMMARY_MAX_CHARS,
 };
-// 记忆 DTO / 级别常量只有一份（住在持久化层），命令层从这里取
+// 记忆 DTO / 级别常量住在持久化层，命令层从这里取
 use virlen_core::agent::memory::scope::MEMORY_PROJECT_PATH_MAX_CHARS;
 use virlen_core::session_db::{
     MemoryRecord, MemoryRepo, SettingsRepo, MEMORY_KIND_PROJECT, MEMORY_LEVEL_NORMAL,
@@ -30,12 +25,9 @@ pub async fn cmd_memory_list(
     state.list(None, include_disabled.unwrap_or(true)).await
 }
 
-/// 新增 / 编辑一条记忆（面板「保存」与 P1 的 `memory_write` 工具共用同一条路径）
+/// 新增 / 编辑一条记忆（面板保存与 `memory_write` 工具共用）。
 ///
-/// 项目路径的**服务端不变量**（UI 与工具都要守住，这里是最後一道）：
-/// - 只有 `kind = project` 才能带路径（别的分类带上就变成「只在某个目录下可见」，没人找得到）；
-/// - 空白串收敛为 `None`（= 不限定项目）；
-/// - 超长拒绝（路径是用户输入，不能无界落库）。
+/// 项目路径的服务端不变量：只有 kind = project 才能带；空白收敛为 None；超长拒绝。
 #[tauri::command]
 pub async fn cmd_memory_upsert(
     state: tauri::State<'_, Arc<dyn MemoryRepo>>,
@@ -53,7 +45,7 @@ pub async fn cmd_memory_upsert(
         record.kind = "fact".to_string();
     }
     if record.id.trim().is_empty() {
-        // 新条目的 id 由仓储发（它会查一遍主键，避免短 id 撞车时静默覆盖别的记忆）
+        // 新条目的 id 由仓储发（会查主键，避免短 id 撞车时静默覆盖）
         record.id = state.new_id().await;
     }
     if record.origin.trim().is_empty() {
@@ -61,8 +53,8 @@ pub async fn cmd_memory_upsert(
     }
     record.summary = summary;
 
-    // ⚠️ 不能直接用 `scope_for_write(kind, 传进来的路径)`（那个函数算的是「当前工作目录」）——
-    // 面板保存的是**用户显式指定**的路径，这里只做「仅 project 保留 + 空白收敛 + 长度校验」。
+    // ⚠️ 不能用 `scope_for_write(kind, 路径)`（那个算的是当前工作目录）：
+    // 面板保存的是用户显式指定的路径，这里只做「仅 project 保留 + 空白收敛 + 长度校验」。
     let path = if record.kind == MEMORY_KIND_PROJECT {
         record
             .project_path
@@ -84,8 +76,7 @@ pub async fn cmd_memory_upsert(
     record.project_path = path;
 
     state.upsert(&record).await?;
-    // 面板新增 / 编辑保存后走**同一条闸门**（§3.3）：只在本地判定 + 入队，绝不等 LLM；
-    // 任何失败只打日志（记忆已经写好了，统计不该牵连它）。
+    // 保存后过同一条再蒸馏闸门：只本地判定 + 入队，不等 LLM；失败只打日志
     virlen_core::agent::memory::redistill::sched::request(
         state.inner().as_ref(),
         settings.inner().as_ref(),
@@ -98,7 +89,7 @@ pub async fn cmd_memory_upsert(
             "level": record.level,
             "kind": record.kind,
             "chars": record.summary.chars().count(),
-            // 只上报「有没有详情链接 / 有没有项目作用域」，不上报路径本身与内容
+            // 只上报「有没有详情链接 / 有没有项目作用域」，不上报路径与内容
             "has_detail": record.detail_doc_id.is_some(),
             "scoped": record.project_path.is_some(),
         }),
@@ -106,11 +97,10 @@ pub async fn cmd_memory_upsert(
     Ok(())
 }
 
-/// 删除一条记忆；返回是否真的删到。
+/// 删除一条记忆；返回是否真删到。
 ///
-/// ⚠️ **连带删掉它的详情文档**（详情正文在专用知识库「记忆详情」里，条目只是指向它的 link）——
-/// 只删条目会在知识库里留下一份永远不会被引用的正文，用户清理记忆时越积越多。
-/// 详情删失败不影响「记忆已删」这个事实（孤儿文档可在知识库页手动删），但会如实记进埋点。
+/// 连带删掉它的详情文档：只删条目会在知识库里留下永不引用的孤儿正文。
+/// 详情删失败不影响「记忆已删」，但会如实记进埋点。
 #[tauri::command]
 pub async fn cmd_memory_delete(
     state: tauri::State<'_, Arc<dyn MemoryRepo>>,
@@ -126,14 +116,14 @@ pub async fn cmd_memory_delete(
         "memory.delete",
         serde_json::json!({
             "removed": out.removed,
-            // null = 这条本来就没有详情；false = 详情没删掉（知识库里可能留下孤儿文档）
+            // null = 本来就没有详情；false = 详情没删掉（知识库可能留下孤儿文档）
             "detail_removed": out.detail_removed,
         }),
     );
     Ok(out.removed)
 }
 
-/// 改级别（普通 ↔ 永久）；非法级别直接拒绝（这是权限级字段：永久 = 全量注入）
+/// 改级别（普通 ↔ 永久）；永久 = 全量注入，非法值直接拒
 #[tauri::command]
 pub async fn cmd_memory_set_level(
     state: tauri::State<'_, Arc<dyn MemoryRepo>>,
@@ -158,9 +148,8 @@ pub async fn cmd_memory_set_disabled(
     state.set_disabled(&id, disabled).await
 }
 
-/// 注入后记一次使用（`hits += 1` / `last_used_at = now`）—— top-k 排序的输入。
-///
-/// 由前端在建会话之后**异步**调用（不阻塞建会话）；失败只丢统计，不影响对话。
+/// 注入后记一次使用（hits += 1 / last_used_at = now）—— top-k 排序的输入。
+/// 由前端建会话后异步调用；失败只丢统计。
 #[tauri::command]
 pub async fn cmd_memory_touch(
     state: tauri::State<'_, Arc<dyn MemoryRepo>>,
@@ -169,17 +158,10 @@ pub async fn cmd_memory_touch(
     state.touch(&ids, crate::telemetry::now_ms()).await
 }
 
-/// 取建会话用的注入段（`# Memory`）。
+/// 取建会话用的注入段（`# Memory`），返回渲染好的文本（选取规则只有 Rust 一份实现）。
 ///
-/// 前端拿到的是**渲染好的文本**：选取规则（top-k / 预算裁剪）只有 Rust 一份实现，
-/// 前端只负责把它插进系统提示词（见 `services/agent-service.ts`）。
-/// 段字符数与预算一并返回（面板常驻行的「字符数 / 预算」直接用它 —— 与裁剪判定同一个数）。
-///
-/// `for_preview`（设置页看预览 / 预算行）为 `true` 时**不打截断告警埋点**：
-/// 否则每次打开面板都会抬高告警计数，指标就废了。
-///
-/// `workspace`：本次会话的工作目录（会话指定 > Agent 默认）。面板预览传设置里的**默认工作目录**，
-/// 于是预览与真实会话用的是同一套作用域规则，只是工作目录不同。
+/// for_preview 为 true 时不打截断告警埋点，否则每次开面板都会抬高告警计数。
+/// workspace：会话工作目录（会话指定 > Agent 默认），预览传设置里的默认工作目录。
 #[tauri::command]
 pub async fn cmd_memory_prompt_section(
     memory: tauri::State<'_, Arc<dyn MemoryRepo>>,
@@ -197,7 +179,7 @@ pub async fn cmd_memory_prompt_section(
     if for_preview != Some(true)
         && (section.dropped_normal > 0 || section.dropped_permanent > 0)
     {
-        // 预算被撑满说明记忆总量已超过注入能力 —— 需要用户清理，不该静默
+        // 预算被撑满说明记忆已超过注入能力 —— 需要用户清理，不该静默
         crate::telemetry::track(
             "memory.inject.truncated",
             serde_json::json!({
@@ -212,21 +194,20 @@ pub async fn cmd_memory_prompt_section(
     Ok(section)
 }
 
-/// 记忆正文的硬上限（字符）—— 设置页用来提示「超出会被截断」
+/// 记忆正文硬上限（字符）—— 设置页用来提示「超出会被截断」
 #[tauri::command]
 pub fn cmd_memory_limits() -> serde_json::Value {
     serde_json::json!({
         "summaryMaxChars": MEMORY_SUMMARY_MAX_CHARS,
         "summaryHintChars": virlen_core::agent::memory::MEMORY_SUMMARY_HINT_CHARS,
-        // 注入段预算：设置页的常驻行显示「字符数 / 预算」，两侧同源
+        // 注入段预算：设置页常驻行显示「字符数 / 预算」，两侧同源
         "promptBudgetChars": virlen_core::agent::memory::MEMORY_PROMPT_MAX_CHARS,
     })
 }
 
 /// 导出全部记忆（含停用）为 JSON 文本。
 ///
-/// **返回文本、不写文件**：路径要由用户在对话框里选，而选路径只有前端有（Tauri dialog 插件）；
-/// Rust 侧写死一个路径等于替用户决定位置。CLI 侧的出口是 `--out`（它本来就有路径参数）。
+/// 返回文本、不写文件：路径要由用户在 Tauri dialog 里选。
 #[tauri::command]
 pub async fn cmd_memory_export(
     state: tauri::State<'_, Arc<dyn MemoryRepo>>,
@@ -241,17 +222,12 @@ pub async fn cmd_memory_export(
     Ok(json)
 }
 
-// ==================== 工具等价命令（P1） ====================
-//
-// 三个 `memory_*` 工具的 GUI 孪生：语义实现在 `agent::memory::tools`（与原生工具**同一份**），
-// 这里只把依赖装好、把结果原样交给前端。用途有二：
-// 1. 前端回退路径的执行器（`infrastructure/tools/memory/`）→ 与 Rust 引擎行为一致；
-// 2. 设置页 / 调试入口可以直接复用（不必新写一份查询逻辑）。
+// ==================== 工具等价命令 ====================
+// `memory_*` 工具的 GUI 孪生：语义在 agent::memory::tools（与原生工具同一份），
+// 这里只装依赖、把结果原样交给前端（前端回退路径与设置页调试复用）。
 
-/// 组装记忆操作依赖（与原生工具的 `native_tools/memory/common.rs::deps` 同口径：
-/// RAG 未初始化 → `None`，工具降级为「详情不可读写」，不影响记忆条目本身）。
-///
-/// `workspace`：会话工作目录 —— 写入时给 `kind = project` 定作用域，检索时筛掉别的项目的记忆。
+/// 组装记忆操作依赖（RAG 未初始化则降级为「详情不可读写」）。
+/// workspace：写入时给 kind = project 定作用域，检索时筛掉别的项目的记忆。
 fn memory_deps<'a>(
     memory: &'a dyn MemoryRepo,
     settings: &'a dyn SettingsRepo,
@@ -268,10 +244,9 @@ fn memory_deps<'a>(
     }
 }
 
-/// `memory_search` 的等价命令（关键词检索长期记忆）
+/// `memory_search` 等价命令（关键词检索）
 ///
-/// `workspace`：会话工作目录 —— 与注入同一套项目作用域，别的项目的记忆不会返回
-/// （结果里的 `hiddenByScope` 说明有多少条被藏起来）。
+/// workspace 与注入同一套项目作用域；结果里的 hiddenByScope 说明藏了多少条。
 #[tauri::command]
 pub async fn cmd_memory_search(
     memory: tauri::State<'_, Arc<dyn MemoryRepo>>,
@@ -307,7 +282,7 @@ pub async fn cmd_memory_search(
     Ok(out)
 }
 
-/// `memory_recall` 的等价命令（按 id 取一条记忆的详情正文）
+/// `memory_recall` 等价命令（按 id 取详情正文）
 #[tauri::command]
 pub async fn cmd_memory_recall(
     memory: tauri::State<'_, Arc<dyn MemoryRepo>>,
@@ -331,13 +306,10 @@ pub async fn cmd_memory_recall(
     Ok(out)
 }
 
-/// `memory_write` 的等价命令（`session_id` 由前端传入，写入时记进 `source_session_id`）
+/// `memory_write` 等价命令（session_id 写进 source_session_id）。
+/// workspace：kind = project 时作为项目作用域。
 ///
-/// `workspace`：会话工作目录 —— `kind = project` 时作为这条记忆的项目作用域
-/// （与原生工具同口径：模型不必猜路径）。
-///
-/// `#[allow(too_many_arguments)]`：Tauri 命令参数逐个从 JS `invoke` 传入，
-/// 收成结构体会要求前端改调用形状（与 `commands/agent.rs` 同口径）。
+/// `#[allow(too_many_arguments)]`：Tauri 命令逐个从 JS 传参，收结构体会要求前端改形状。
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn cmd_memory_write(
@@ -380,12 +352,9 @@ pub async fn cmd_memory_write(
     Ok(out)
 }
 
-// ==================== 再蒸馏（P2′） ====================
+// ==================== 再蒸馏 ====================
 
-/// GUI 侧的 Provider 构建器：走与聊天**同一个** `DefaultProviderFactory`
-///
-/// 因此 gemini 等「桥接协议」也能用作再蒸馏模型（GUI 有 JS 宿主）—— 与压缩 / 标题生成同一条路；
-/// CLI（headless）没有 JS 宿主，改用 `create_native_provider`。
+/// GUI 的 Provider 构建器：走与聊天同一个 DefaultProviderFactory（gemini 等桥接协议也能用）。
 struct GuiRedistillBuilder {
     bridge: Arc<virlen_core::agent::bridge::AgentBridgeState>,
     app: tauri::AppHandle,
@@ -396,7 +365,7 @@ impl virlen_core::agent::memory::redistill::models::MemoryProviderBuilder for Gu
         &self,
         conn: &virlen_core::agent::types::ProviderConnection,
     ) -> Result<Box<dyn virlen_core::agent::provider::Provider>, String> {
-        // `ProviderFactory::create` 不是固有方法（trait 方法），必须把 trait 带进来
+        // trait 方法，必须把 ProviderFactory 带进来
         use virlen_core::agent::provider::ProviderFactory;
         let factory = virlen_core::agent::provider::DefaultProviderFactory {
             bridge: self.bridge.clone(),
@@ -406,10 +375,8 @@ impl virlen_core::agent::memory::redistill::models::MemoryProviderBuilder for Gu
     }
 }
 
-/// GUI 侧的调度宿主：把一次后台整理派发到 tauri 的异步运行时。
-///
-/// 句柄（记忆 / 会话 / 配置仓储）从 `State` 取（core 不认识 tauri，装配全在宿主侧）；
-/// 取不到（库没打开 / 正在启动）就返回 `false` —— 请求留在队列里，下次触发或下次启动再来。
+/// GUI 的调度宿主：把后台整理派发到 tauri 异步运行时。
+/// 仓储从 State 取；取不到就返回 false，请求留在队列里等下次触发。
 pub struct GuiRedistillRuntime {
     app: tauri::AppHandle,
 }
@@ -442,7 +409,7 @@ impl virlen_core::agent::memory::redistill::sched::MemoryRedistillRuntime for Gu
         };
 
         tauri::async_runtime::spawn(async move {
-            // 取消令牌由 core 创建（`pump`）并交到宿主再带回来：退出时 `shutdown()` 取消它
+            // 取消令牌由 core 创建并交回宿主：退出时 shutdown() 取消它
             let builder = GuiRedistillBuilder {
                 bridge,
                 app: app.clone(),
@@ -460,7 +427,7 @@ impl virlen_core::agent::memory::redistill::sched::MemoryRedistillRuntime for Gu
             if let Some(result) = outcome {
                 match result {
                     Ok(report) => track_redistill(&report, "auto"),
-                    // 失败只打日志 / 埋点：这是后台增强能力，不该打扰用户
+                    // 失败只打日志 / 埋点：后台增强能力不该打扰用户
                     Err(e) => eprintln!("[memory] 再蒸馏失败: {}", e),
                 }
             }
@@ -473,9 +440,7 @@ impl virlen_core::agent::memory::redistill::sched::MemoryRedistillRuntime for Gu
     }
 }
 
-/// 启动时判定一次（补跑上次退出没跑完 / 本次启动就已越线的库）—— **不引入定时器**。
-///
-/// 异步、非阻塞：`.setup()` 不等它；判定失败只打日志（后台增强能力不该拖慢启动）。
+/// 启动时判定一次（补跑上次未完成 / 已越线的库），不引入定时器。异步、非阻塞，失败只打日志。
 pub fn request_redistill_on_startup(app: &tauri::AppHandle) {
     use tauri::Manager;
     let app = app.clone();
@@ -497,7 +462,7 @@ pub fn request_redistill_on_startup(app: &tauri::AppHandle) {
     });
 }
 
-/// 手动触发一次（面板 / 排障用；`force` = 忽略冷却与幂等判定）
+/// 手动触发一次（排障用；force = 忽略冷却与幂等判定）
 #[tauri::command]
 pub async fn cmd_memory_redistill(
     app: tauri::AppHandle,
@@ -531,7 +496,7 @@ pub async fn cmd_memory_redistill(
     Ok(report)
 }
 
-/// 整理流水（排障 / 未来的面板「整理记录」区）
+/// 整理流水（排障用）
 #[tauri::command]
 pub async fn cmd_memory_redistill_runs(
     state: tauri::State<'_, Arc<dyn MemoryRepo>>,
@@ -540,7 +505,7 @@ pub async fn cmd_memory_redistill_runs(
     state.list_redistill_runs(limit.unwrap_or(20)).await
 }
 
-/// 埋点：**只报计数与状态** —— 记忆正文是用户内容，绝不进埋点（安全红线）。
+/// 埋点只报计数与状态，记忆正文绝不进埋点。
 fn track_redistill(report: &virlen_core::agent::memory::redistill::RedistillReport, trigger: &str) {
     let first = report.batches.first();
     crate::telemetry::track(

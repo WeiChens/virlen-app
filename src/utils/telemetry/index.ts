@@ -1,9 +1,7 @@
 /**
- * telemetry/index — 埋点 SDK 统一入口。
- *
- * 交互模型（§8）：默认「关」；开开关后 track() 写入本地缓冲、不自动外发；「导出本地」生成 zip 不上传；
- *「清理数据」清空本地缓冲并归零计数；采集与导出「均」经 §7.1 密钥打码。
- * 业务层只调 track / trackError / startSpan / newTraceId / newSpanId；用 MobX observable 暴露 bufferedCount 供设置页实时显示条数。
+ * 埋点 SDK 统一入口。
+ * 默认关；开启后 track() 只写本地缓冲，不上传。导出 zip 与采集都经密钥打码。
+ * 业务层只调 track / trackError / startSpan / newTraceId / newSpanId。
  */
 import { makeObservable, observable, runInAction } from 'mobx'
 import { v4 } from '@/utils/uuid'
@@ -54,21 +52,18 @@ export { buildBundleDoc, BUNDLE_DOC_NAME } from './export-doc'
 const BUILD_DISABLED: boolean =
   (import.meta as any)?.env?.VITE_TELEMETRY === 'off'
 
-/** 高频性能事件采样率（§11 决策 3） */
+/** 高频性能事件采样率 */
 export const PERF_SAMPLE_RATE = 0.1
 
-/** 本地缓冲的条数上限（与 buffer 保持一致，用于提示） */
+/** 本地缓冲条数上限（与 buffer 一致，用于提示） */
 export const BUFFER_MAX_EVENTS = 5000
 
 // 开关与状态
 
-/** 开关读取器（由 UI 层注入，读取 settingsState.telemetryEnabled） */
+/** 开关读取器（由 UI 层注入） */
 let enabledProvider: (() => boolean) | null = null
 
-/**
- * 可观测状态（设置页绑定）：
- * - bufferedCount：已采集条数（开关旁实时显示）
- */
+/** 可观测状态（设置页绑定）：已采集条数 */
 class TelemetryStoreState {
   bufferedCount = 0
   constructor() {
@@ -111,7 +106,7 @@ const appRunId = 'r-' + v4()
 
 const deviceId = resolveDeviceId()
 
-/** 本机单调递增序号（持久化，跨重启递增，用于检测丢包/乱序） */
+/** 本机单调递增序号（持久化，用于检测丢包 / 乱序） */
 let seq = (() => {
   try {
     return Number(localStorage.getItem(SEQ_KEY)) || 0
@@ -142,8 +137,7 @@ export function newSpanId(): string {
   return 's-' + randomBase36(8)
 }
 
-// 会话级链路上下文
-// chat-service 在发送时登记，引擎/工具执行读取，避免 domain → service 的反向依赖。
+// 会话级链路上下文：chat-service 发送时登记，引擎 / 工具执行读取，避免反向依赖。
 
 const sessionTraces = new Map<string, string>()
 
@@ -211,22 +205,15 @@ export function isTelemetryBuildDisabled(): boolean {
 }
 
 /**
- * 开关当前是否开启（**供高频路径提前返回**）。
- *
- * `track()` 关闭时确实是一次调用即返回，但**构造 props 的成本仍在调用方** ——
- * 流式帧 / ICE 信令这类每秒几十次的节点，必须先问这里再构造载荷（AGENTS.md §5.8「关闭时零开销」）。
+ * 开关当前是否开启（供高频路径提前返回）：流式帧 / ICE 信令这类节点必须先问再构造载荷。
  */
 export function isTelemetryEnabled(): boolean {
   return isEnabled()
 }
 
 /**
- * 解析「事件级」链路字段（顶层）。
- *
- * §4：trace_id / span_id 是事件级顶层字段。多数调用方为就近传参把它们放进了 props，
- * 这里统一「上提」到顶层，保证任何事件（含 Rust 回传）都带顶层链路字段，且
- * error.*（经 opts.traceId）与普通事件（经 props.trace_id）行为一致。
- * props 中的原值刻意保留，以兼容既有按 props 读取链路 ID 的消费方。
+ * 解析事件级链路字段（顶层）。多数调用方把 trace_id / span_id 放在 props 里，这里统一上提，
+ * 保证任何事件都带顶层链路字段；props 里的原值保留以兼容既有消费方。
  */
 export function resolveLinkage(
   props: Record<string, any> | undefined,
@@ -273,12 +260,7 @@ function pushEvent(event: TelemetryEvent): void {
 }
 
 /**
- * 记录一条埋点事件
- *
- * - 开关关闭时 no-op（opts.force=true 例外，用于 telemetry.* 自身事件）
- * - 采样：opts.sampleRate 默认 1；perf.* 用 PERF_SAMPLE_RATE
- * - 自动注入公共字段并做 §7.1 密钥打码
- * - 非阻塞、异常静默
+ * 记录一条埋点事件。开关关闭时 no-op（force 例外）；按 sampleRate 采样；自动打码；异常静默。
  */
 export function track(
   eventName: string,
@@ -297,9 +279,7 @@ export function track(
   }
 }
 
-/**
- * 记录一条错误事件（自动抽取 message/stack 并打码）
- */
+/** 记录一条错误事件（自动抽取 message / stack 并打码） */
 export function trackError(
   eventName: string,
   error: unknown,
@@ -339,14 +319,7 @@ export interface TelemetrySpan {
   end(extra?: Record<string, any>, opts?: TrackOptions): void
 }
 
-/**
- * 开始一个跨度：记录 {name}.start，返回可结束的对象
- *
- * @example
- * const span = startSpan('tool.call', { tool_name, category }, { traceId })
- * ...
- * span.end({ status: 'success', is_error: false })
- */
+/** 开始一个跨度：记录 {name}.start，返回可结束的对象 */
 export function startSpan(
   name: string,
   props?: Record<string, any>,
@@ -370,7 +343,7 @@ export function startSpan(
   }
 }
 
-// 埋点自身事件（§12.15）
+// 埋点自身事件
 
 /** 记录开关切换（无论开关状态都记录） */
 export function recordTelemetryToggle(enabled: boolean): void {
@@ -405,10 +378,7 @@ export interface ExportResult {
   path: string
 }
 
-/**
- * 导出本地埋点包（zip），不发起任何网络请求
- * @returns 成功返回结果；用户取消或失败返回 null
- */
+/** 导出本地埋点包（zip），不发任何网络请求；取消 / 失败返回 null */
 export async function exportTelemetryBundle(opts?: {
   redact?: boolean
 }): Promise<ExportResult | null> {
@@ -452,9 +422,7 @@ export async function exportTelemetryBundle(opts?: {
   }
 }
 
-/**
- * 清理本地埋点数据，返回被清理的条数
- */
+/** 清理本地埋点数据，返回被清理的条数 */
 export function clearTelemetry(): number {
   const count = telemetryBuffer.count()
   clearBufferInternal()
@@ -477,14 +445,7 @@ export function flushTelemetry(): void {
 // 安装（应用启动时调用一次）
 
 /**
- * 安装 Rust 侧埋点回传桥：监听 `agent:telemetry` 事件。
- *
- * Rust 侧事件（rust.panic / rust.db.op / rust.token.count / rust.tool.native /
- * rust.sandbox.spawn / rust.bridge.* / rust.engine.* / rust.command.kill）由
- * `src-tauri/src/telemetry.rs`（Tauri 出口：`TauriTelemetrySink` → `agent:telemetry`）与
- * `src-tauri/virlen-core/src/telemetry.rs`（`track` / `hash_id` / panic 钩子与落盘）
- * 两侧协同经该事件回传，此处路由进统一的 track()。
- * 仅 Tauri 环境生效；失败静默。
+ * 安装 Rust 侧埋点回传桥（监听 agent:telemetry），把 Rust 事件路由进 track()。仅 Tauri 生效。
  */
 export function installRustTelemetryBridge(): void {
   if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return
@@ -499,18 +460,13 @@ export function installRustTelemetryBridge(): void {
         if (!p || !p.event_name) return
         track(p.event_name, p.props || {}, { time: p.event_time })
       }).catch(() => {})
-      // 回放历史 panic：Rust setup 阶段 emit 的事件会早于此处监听注册而丢失
-      // （Tauri 事件不缓冲），故改为「前端就绪后主动拉取落盘」。回放走 invoke
-      // 命令通道而非事件，与上方监听的注册时序无关。
+      // 回放历史 panic：Rust setup 阶段 emit 的事件早于监听注册会丢，故就绪后主动拉取落盘
       drainRustPanics()
     })
     .catch(() => {})
 }
 
-/**
- * 拉取并回放 Rust 侧落盘的历史 panic（仅埋点开启时消费落盘，否则留待下次）。
- * 与实时 `agent:telemetry` 事件互补：崩溃前未及回传的 panic 由落盘兜底。
- */
+/** 拉取并回放落盘的历史 panic（仅埋点开启时消费） */
 function drainRustPanics(): void {
   if (!isEnabled()) return
   import('@tauri-apps/api/core')
@@ -527,10 +483,9 @@ function drainRustPanics(): void {
 }
 
 /**
- * 安装埋点 SDK
- *
- * @param options.isEnabled     读取开关状态（通常 () => settingsState.value.telemetryEnabled）
- * @param options.runtimeContext 读取运行时上下文（engine/theme/font_size/locale 等）
+ * 安装埋点 SDK。
+ * @param options.isEnabled 读取开关状态
+ * @param options.runtimeContext 读取运行时上下文
  */
 export function installTelemetry(options: {
   isEnabled: () => boolean

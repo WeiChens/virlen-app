@@ -1,10 +1,5 @@
-//! 提醒通道 — 系统通知 + 零依赖兜底（调用方只依赖 `notify_completed()`）。
-//!
-//! 三层是**叠加**而非互斥降级：① 系统通知（见 `show_owned`）；② 任务栏闪烁（仅窗口可见时）；
-//! ③ 托盘 tooltip + 图标红点（永不失败）。
-//!
-//! 之所以不「失败即降级」：插件把真正发送丢进 `spawn` 并丢弃错误，「是否真弹出卡片」Rust 侧拿不到
-//! 反馈 —— 无法判定就只能叠加（②③ 零成本）。
+//! 提醒通道：系统通知 + 任务栏闪烁 + tooltip / 红点，三层叠加而非降级。
+//! 不降级的原因：插件把发送丢进 spawn 并丢弃错误，Rust 侧拿不到「是否真弹了卡片」。
 
 use std::sync::atomic::Ordering;
 #[cfg(target_os = "windows")]
@@ -18,15 +13,15 @@ use tauri_plugin_notification::NotificationExt;
 use super::{push_attention, refresh_tray, window_focus, TrayState, MAIN_WINDOW};
 use crate::telemetry;
 
-/// 会话标题为空时的通知标题（品牌名，与语言无关，不走 i18n）
+/// 会话标题为空时的通知标题（品牌名，不跟语言）
 const FALLBACK_NOTIFY_TITLE: &str = "Virlen";
 
-/// 最近一次「进程内收到点击」的时间戳（ms；0 = 从未）。一次点击可能同时走进程内事件与 COM 激活
-/// （见 `toast_activator`）：进程内这条能精确切会话，COM 那条只能切最早未读 —— 用它让 COM 在窗口内退让。
+/// 最近一次进程内收到点击的时戳（ms；0 = 从未）。一次点击可能走进程内事件与 COM 激活两条路，
+/// 用它让 COM 在窗口内退让（见 toast_activator）。
 #[cfg(target_os = "windows")]
 static LAST_CLICK_MS: AtomicI64 = AtomicI64::new(0);
 
-/// 记一笔「进程内刚处理了这次点击」（`show_owned` 判定为用户点击后立即调用）
+/// 记一笔「进程内已处理这次点击」（show_owned 判定为用户点击后调）
 #[cfg(target_os = "windows")]
 pub(crate) fn mark_click_handled() {
     LAST_CLICK_MS.store(crate::telemetry::now_ms(), Ordering::SeqCst);
@@ -39,16 +34,9 @@ pub(crate) fn click_handled_within(window_ms: i64) -> bool {
     last != 0 && crate::telemetry::now_ms() - last < window_ms
 }
 
-/// 一次运行结束的提醒（由前端 `finishWorking()` 触发 —— 两种引擎共用的唯一收口）
-///
-/// `title` = 会话标题、`preview` = AI 回复正文截断：两者都是**前端**给的
-/// （前端在拿不到正文时用 i18n 文案兜底），Rust 这边只声明一个品牌名兜底标题，
-/// 避免在原生侧再养一套语言逻辑（铁律 7）。
-///
-/// `viewing` = **前端**上报的「用户此刻正看着这条回复」（当前会话就是它 + webview 有焦点）。
-/// Rust 自己只看得到窗口可见/聚焦，**不知道用户当前停在哪个会话** —— 少这一位，
-/// 「窗口激活 + 正好在这个会话里看它回复完」也会被判成需要提醒，
-/// 屏幕上就冒出一个**清不掉**的未读红点（用户已在看，不会再触发任何清除动作）。
+/// 一次运行结束的提醒（由前端 finishWorking 触发）。
+/// title / preview 由前端给（拿不到正文时前端用 i18n 兜底），这里只留品牌名兜底。
+/// viewing = 前端上报「用户正看着这条回复」：Rust 看不到当前会话，少这一位会冒出清不掉的未读红点。
 pub fn notify_completed(
     app: &AppHandle,
     session_id: &str,
@@ -62,8 +50,7 @@ pub fn notify_completed(
     let enabled = state.notify_on_complete.load(Ordering::SeqCst);
     let force_active = state.force_window_active.load(Ordering::SeqCst);
 
-    // 用户已经看到了（前端上报 / 窗口可见且聚焦）→ 不打扰，也不进未读队列；
-    // 「强制激活窗口」开着且窗口还在时，由前端把窗口拎到前台，这里不再重复推通知
+    // 用户已经看到（前端上报 / 可见且聚焦）就不打扰；强制激活开着且窗口还在时也不再重复推
     let (visible, focused) = window_focus(app);
     let should_remind = decide_remind(enabled, viewing, visible, focused, force_active);
 
@@ -73,10 +60,10 @@ pub fn notify_completed(
     if should_remind {
         push_attention(state.inner(), session_id);
 
-        // ① 系统通知（Windows 走自持 handle 的通道，点击能精确回到这条会话）
+        // ① 系统通知（Windows 走自持 handle，点击能精确回到这条会话）
         notification_ok = show_notification(app, session_id, title, preview);
 
-        // ② 任务栏闪烁：窗口已隐藏时 FlashWindow 无意义，直接跳过（此时只剩通知 + tooltip）
+        // ② 任务栏闪烁：窗口隐藏时 FlashWindow 无意义，跳过
         if visible {
             if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
                 attention_ok = window
@@ -96,7 +83,7 @@ pub fn notify_completed(
             "status": if is_error { "error" } else { "success" },
             "shown": should_remind,
             "force_active": force_active,
-            // notification 只代表「插件调用成功」，不代表系统真的弹了卡片（见模块头注释）
+            // notification 只代表插件调用成功，不代表系统真弹了卡片
             "notification": notification_ok,
             "attention": attention_ok,
             "has_title": title.map(|t| !t.is_empty()).unwrap_or(false),
@@ -107,14 +94,8 @@ pub fn notify_completed(
 
 /// 是否需要提醒（纯函数，便于单测）
 ///
-/// 推送条件：`!active && (force_active == false || 窗口已关闭)`，其中 `active = 窗口可见且聚焦`、
-/// `窗口已关闭 = !visible`（隐藏到托盘）。用户关掉「完成提醒」→ 一律不提醒；用户已经看到这条回复
-/// （`viewing`，或窗口可见且聚焦）→ 不打扰，也不进未读队列。
-///
-/// `viewing` 只有前端能给（只有它知道 `currentSessionId`），与 `visible && focused` 是两回事：
-/// 后者只能说「用户在看这个应用」。
-/// `force_active`（设置里的「强制激活窗口」）与窗口状态是两个独立来源，必须在这里合流，否则会
-/// 出现「已把窗口拉到前台、却又弹一条系统通知」的重复打扰。
+/// 推送条件：!enabled / viewing / (visible && focused) 任一不推；force_active 且窗口还在也不推。
+/// viewing 只有前端能给（它才知道 currentSessionId），与 visible && focused 是两回事。
 pub(crate) fn decide_remind(
     enabled: bool,
     viewing: bool,
@@ -130,15 +111,14 @@ pub(crate) fn decide_remind(
 
 /// 投递系统通知：标题优先用会话标题，正文优先用 AI 回复预览
 ///
-/// Windows 上优先走 `show_owned`（自持 handle，能收到点击）；该通道不可用（返回 `None`）
-/// 或非 Windows 时，回退 `tauri-plugin-notification`。
+/// Windows 优先 show_owned（自持 handle 能收到点击）；不可用或非 Windows 回退插件。
 fn show_notification(
     app: &AppHandle,
     session_id: &str,
     title: Option<&str>,
     preview: Option<&str>,
 ) -> bool {
-    // 非 Windows 只有插件通道，用不到会话 id（只有自持 handle 的那条通道才知道点击属于哪条会话）
+    // 非 Windows 用不到会话 id
     #[cfg(not(target_os = "windows"))]
     let _ = session_id;
     #[cfg(target_os = "windows")]
@@ -148,10 +128,7 @@ fn show_notification(
     show_via_plugin(app, title, preview)
 }
 
-/// 插件通道 — `tauri-plugin-notification`
-///
-/// 这条通道收不到点击（插件把 `show()` 丢进 spawn 并丢掉 `NotificationHandle`），只用于
-/// 「自持 handle 那条通道不可用」时兜底：非 Windows，以及 Windows 上没注册 AUMID 的 dev / 免安装 exe。
+/// 插件通道：收不到点击（handle 被丢弃），只用于兜底（非 Windows / 未注册 AUMID）。
 fn show_via_plugin(app: &AppHandle, title: Option<&str>, preview: Option<&str>) -> bool {
     let mut builder = app
         .notification()
@@ -161,36 +138,22 @@ fn show_via_plugin(app: &AppHandle, title: Option<&str>, preview: Option<&str>) 
                 .filter(|t| !t.is_empty())
                 .unwrap_or(FALLBACK_NOTIFY_TITLE),
         );
-    // 正文为空（模型只调了工具、没输出文本）时不设 body，通知退化成「只有标题」
+    // 正文为空（只调了工具没输出文本）时不设 body，退化成只有标题
     if let Some(body) = preview.filter(|p| !p.is_empty()) {
         builder = builder.body(body);
     }
-    // `is_ok()` 不代表用户看见了通知：插件内部把发送丢进 spawn 并丢弃错误
+    // is_ok() 不代表用户看见了：插件内部丢错误
     builder.show().is_ok()
 }
 
-/// MSIX 清单里 `<Application Id="...">` 的值
-///
-/// 打包进程里 `CreateToastNotifierWithId` 收到的字符串会被平台当成「包内的 AppId」，最终
-/// AUMID = `<PackageFamilyName>!<AppId>` —— 所以必须与清单的 `Application Id` 逐字一致。
-///
-/// 清单模板 `scripts/msix/AppxManifest.xml.template` 只在打包分支 `store-version`，本分支不参与
-/// 打包，故没有「直接读清单核对」的单测。只在 Windows 上有用：非 Windows 的 test 构建下没有使用者，
-/// 会被 ubuntu clippy 判成 dead-code。
+/// MSIX 清单里 `<Application Id>` 的值，必须逐字一致（AUMID = <PFN>!<AppId>）。
+/// 清单模板只在 store-version 分支，故无对应单测。
 #[cfg(target_os = "windows")]
 const PACKAGE_APP_ID: &str = "App";
 
-/// 传给 `CreateToastNotifierWithId` 的应用标识（通知归属的唯一真源）
-///
-/// - 打包（MSIX）安装版：传清单里的 `Application Id`（`"App"`）—— 平台会补全成
-///   `<PackageFamilyName>!App`，正是系统注册的入口；
-/// - 未打包（dev / NSIS·MSI 安装）：传 `identifier`，安装器把同一字符串写进快捷方式的
-///   `System.AppUserModel.ID`。
-///
-/// 打包版传 `identifier` 会被补成 `<PFN>!JianWeichen.virlen`，而系统里只注册了 `<PFN>!App` ——
-/// 通知「投递成功」却永远不显示（不报错、也不回退插件通道）。这里传裸 AppId 而不是拼好的
-/// `<PFN>!App`：平台对打包进程会自己补前缀，裸值在「无条件补」与「仅未限定才补」两种规则下结果
-/// 相同（更稳）。只在 Windows 使用。
+/// 传给 CreateToastNotifierWithId 的应用标识：打包版传裸 AppId（平台会补 <PFN>!），
+/// 未打包版传 identifier（安装器已写进快捷方式的 System.AppUserModel.ID）。
+/// 打包版传 identifier 会被补成 <PFN>!identifier，系统没这个入口 —— 投递成功但永不显示。
 #[cfg(target_os = "windows")]
 pub fn toast_app_id(app: &AppHandle) -> String {
     #[cfg(target_os = "windows")]
@@ -206,10 +169,8 @@ pub fn is_packaged() -> bool {
     package_family_name().is_some()
 }
 
-/// 当前进程所属包的 PackageFamilyName；未打包返回 `None`
-///
-/// 用 `GetCurrentPackageFamilyName` 而不是 `GetCurrentApplicationUserModelId`：
-/// 后者读的是**进程** AUMID，可能被 `SetCurrentProcessExplicitAppUserModelID` 改过。
+/// 当前进程所属包的 PackageFamilyName；未打包返回 None。
+/// 用 GetCurrentPackageFamilyName 而非 GetCurrentApplicationUserModelId：后者可能被显式覆盖。
 #[cfg(target_os = "windows")]
 fn package_family_name() -> Option<String> {
     use windows::core::PWSTR;
@@ -217,8 +178,7 @@ fn package_family_name() -> Option<String> {
     use windows::Win32::Storage::Packaging::Appx::GetCurrentPackageFamilyName;
 
     unsafe {
-        // 两次调用套路：第一次只要长度（必然 ERROR_INSUFFICIENT_BUFFER）；
-        // 未打包时返回 APPMODEL_ERROR_NO_PACKAGE(15700)，据此判定「不是打包版」
+        // 两次调用：第一次只要长度（必然 ERROR_INSUFFICIENT_BUFFER），未打包返回 15700
         let mut len = 0u32;
         if GetCurrentPackageFamilyName(&mut len, None) != ERROR_INSUFFICIENT_BUFFER || len == 0 {
             return None;
@@ -233,14 +193,8 @@ fn package_family_name() -> Option<String> {
     }
 }
 
-/// 声明进程的 AppUserModelID（Windows，启动时调一次；仅限未打包场景）
-///
-/// 通知的归属（名称 / 图标 / 点击后的激活路由）都按 AUMID 找应用：未打包安装版由安装器把 AUMID 写进
-/// 开始菜单快捷方式（`System.AppUserModel.ID`），这里把进程声明成同一个，让 Windows 认得「这条通知
-/// 属于 Virlen」。
-///
-/// 打包版直接跳过：包清单已决定进程身份（入口 `App`），再覆盖成 `identifier` 只会让「进程
-/// AUMID」与「通知 AUMID」分叉。
+/// 声明进程的 AUMID（Windows，启动时调一次；仅未打包场景）。
+/// 打包版跳过：包清单已决定进程身份，再覆盖会让进程 AUMID 与通知 AUMID 分叉。
 pub fn init_app_identity(app: &AppHandle) {
     #[cfg(target_os = "windows")]
     {
@@ -270,14 +224,8 @@ pub fn init_app_identity(app: &AppHandle) {
     let _ = app;
 }
 
-/// Windows：自己发通知 + 自己收点击（返回 `None` = 本通道不可用，请回退插件）
-///
-/// 不用插件发：插件把 `NotificationHandle` 丢掉（`spawn` + `let _ =`），而 Windows 的点击是
-/// 进程内投递 —— handle 一丢，事件到达后没人接收，点通知就没反应；非打包场景也没有 COM 激活器，
-/// 「靠新进程 + 单实例回调」那条路也兜不住。
-///
-/// 自持 handle 的额外收益：知道通知对应哪个会话 ⇒ 点击后精确切过去，不用像托盘左键那样猜「最早那条
-/// 未读」。
+/// Windows：自己发通知 + 自己收点击（None = 本通道不可用，回退插件）。
+/// 不用插件发：它丢弃 handle，而 Windows 的点击是进程内投递，handle 一丢就收不到。
 #[cfg(target_os = "windows")]
 fn show_owned(
     app: &AppHandle,
@@ -286,8 +234,7 @@ fn show_owned(
     preview: Option<&str>,
 ) -> Option<bool> {
     let mut notification = notify_rust::Notification::new();
-    // 必须走 `toast_app_id`（打包版 = 清单的 Application Id，平台会补成 `<PFN>!App`）：传
-    // identifier 会被补成 `<PFN>!identifier`，系统没这个入口 → 通知投递成功但永不显示
+    // 必须走 toast_app_id（打包版平台会补 <PFN>!App），否则投递成功但永不显示
     notification.app_id(&toast_app_id(app));
     notification.summary(
         title
@@ -303,12 +250,10 @@ fn show_owned(
         Ok(handle) => {
             let app = app.clone();
             let session_id = session_id.to_string();
-            // 单起线程等这一次交互：toast 活着期间一直阻塞，用户「点击 / 关闭 / 等它超时」
-            // 后线程自行结束，不会泄漏。
+            // 单起线程阻塞等这一次交互，用户点击 / 关闭 / 超时后线程自行结束
             std::thread::spawn(move || {
-                // 必须用 `wait_for_response`（而不是 `wait_for_action`）：后者把「点击正文」
-                // （`Default`）与「通知被关闭 / 超时」（`Closed`）都归一成 `"__closed"`，两者分不开
-                // —— 那会让「Toast 自己超时消失」也被当成点击，凭空把窗口抢到前台。
+                // 必须用 wait_for_response：wait_for_action 会把点击与超时都归一成 "__closed"，
+                // 那会让 toast 超时也被当成点击，凭空把窗口抢到前台
                 let mut clicked = false;
                 let _ = handle
                     .wait_for_response(|response: &notify_rust::NotificationResponse| {
@@ -317,8 +262,7 @@ fn show_owned(
                 if !clicked {
                     return;
                 }
-                // 记一笔「进程内已处理」：同一次点击若同时触发 COM 激活
-                // （打包版有清单），让 `toast_activator` 不要再切「最早未读」
+                // 记一笔「进程内已处理」：同一次点击若也触发 COM 激活，让它不要再切「最早未读」
                 mark_click_handled();
                 super::show_main_window(&app, true);
                 super::activate_session(&app, &session_id, "notification_click");
@@ -326,7 +270,7 @@ fn show_owned(
             Some(true)
         }
         Err(error) => {
-            // 没有注册 AUMID（dev / 免安装 exe）走这里 → 交给插件通道兜底
+            // 没注册 AUMID（dev / 免安装 exe）→ 交插件通道兜底
             crate::telemetry::track(
                 "tray.notify.error",
                 json!({ "channel": "owned", "error": error.to_string() }),
@@ -336,10 +280,7 @@ fn show_owned(
     }
 }
 
-/// 这次响应算不算「用户点了通知」
-///
-/// `Default` = 点了通知正文；`Action` = 点了按钮（当前不发按钮，留着不影响语义）。
-/// `Closed` 一律不算：通知超时消失、被系统清理都不该抢走用户焦点。
+/// 这次响应算不算用户点了通知。Closed（超时消失 / 被系统清理）一律不算，不该抢焦点。
 #[cfg(target_os = "windows")]
 fn is_user_click(response: &notify_rust::NotificationResponse) -> bool {
     use notify_rust::NotificationResponse as R;
@@ -350,10 +291,7 @@ fn is_user_click(response: &notify_rust::NotificationResponse) -> bool {
 mod tests {
     use super::decide_remind;
 
-    /// Windows 上「算不算用户点了通知」：只有激活算，关闭 / 超时都不算
-    ///
-    /// 这条判定直接决定「通知自己超时消失」会不会把窗口抢到前台，所以必须用 `wait_for_response`
-    /// （能区分）而不是 `wait_for_action`（分不出）。
+    /// 只有激活算点击；关闭 / 超时都不算（决定会不会把窗口抢到前台）
     #[cfg(target_os = "windows")]
     #[test]
     fn only_activation_counts_as_click() {
@@ -370,10 +308,7 @@ mod tests {
         )));
     }
 
-    /// 「进程内刚处理过点击」的去重窗口（`toast_activator` 依此退让）
-    ///
-    /// 没点过（时间戳 0）或窗口为 0 都不算「刚点过」—— 否则「通知超时消失」
-    /// 这类不该算点击的路径也会污染标记。
+    /// 「进程内刚处理过点击」的去重窗口：没点过或窗口为 0 都不算
     #[cfg(target_os = "windows")]
     #[test]
     fn click_dedup_window_marks_only_after_click() {
@@ -387,7 +322,7 @@ mod tests {
 
     #[test]
     fn remind_matrix() {
-        // 窗口隐藏（关到托盘后台跑完）→ 必须提醒：这是托盘功能的主场景
+        // 窗口隐藏（关到托盘后台跑完）→ 必须提醒，这是主场景
         assert!(decide_remind(true, false, false, false, false));
         // 可见但失焦（用户在别的应用里）→ 提醒
         assert!(decide_remind(true, false, true, false, false));
@@ -402,8 +337,7 @@ mod tests {
         assert!(!decide_remind(false, false, true, false, false));
     }
 
-    /// 「强制激活窗口」开着时：窗口还在（只是失焦）→ 交给前端强制激活，不推通知；
-    /// 窗口已关到托盘 → 仍要推（这也是托盘后台工作的主场景）
+    /// 强制激活开着时：窗口还在 → 交给前端强制激活；已关到托盘 → 仍要推
     #[test]
     fn force_active_skips_remind_only_when_window_still_open() {
         // 窗口可见但失焦 → 前端会强制激活，不再重复推

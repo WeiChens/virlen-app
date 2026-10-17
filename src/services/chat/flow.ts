@@ -1,8 +1,6 @@
 /**
- * chat-service 编排层 — 消息发送、暂停恢复、取消、上下文压缩、会话创建
- *
- * 负责：校验入参 → 创建/持久化用户消息 → 调引擎 → 通过事件处理器回写 store。
- * 引擎恒为 Rust（`getEngine()`）—— TS 引擎已移除。
+ * chat-service 编排层：发消息、暂停恢复、取消、压缩、建会话。
+ * 流程：校验入参 → 落用户消息 → 调引擎 → 事件处理器回写 store。引擎恒为 Rust。
  */
 import {
   getSessionRuntime,
@@ -53,51 +51,41 @@ import { dropTodoDrafts } from '@/ui/store/todoDraftStore'
 import { setRoundBoundaryHandler } from '@/services/rust-engine'
 
 /**
- * 会话是否正在跑 run（**并发保护的判据**）：手机端是第二个操作源，没有这层检查时两端同时发送
- * 会起两个引擎 run 写同一份 messages（消息交错 / 结构损坏），见 docs/phone-control-bridge.md §7-④。
- *
- * 一次同步检查就够：入口到 updateSessionRuntime({working:true}) 之间无 await —— JS 单线程下
- * 检查与占位是原子的，不存在「两个调用都通过检查」的窗口。
+ * 会话是否正在跑 run（并发保护的判据）：手机端是第二个操作源，没有这层会起两个 run 写同一份 messages。
+ * 入口到 updateSessionRuntime 之间无 await，检查与占位是原子的。
  */
 function isSessionBusy(sessionId: string): boolean {
   return sessionRuntimeState.value.sessions[sessionId]?.working === true
 }
 
 /**
- * 会话是否处于**活跃执行**（区别于「忙」）：暂停态（working && paused）是已挂起等待恢复的 run，
- * 保留 working 只为拦住「暂停期间发新消息」；恢复入口 resumePausedRun 恰在此状态下调用，
- * 若沿用 isSessionBusy 会把合法的「继续」一并拦死。
+ * 会话是否处于活跃执行（区别于忙）：暂停态 working && paused 是已挂起的 run，
+ * resumePausedRun 恰在此状态下调用，用 isSessionBusy 会把「继续」拦死。
  */
 function isSessionActivelyWorking(sessionId: string): boolean {
   const rt = sessionRuntimeState.value.sessions[sessionId]
   return rt?.working === true && rt.paused !== true
 }
 
-/** 会话忙时的统一提示（与既有错误文案同风格：短句、直接说明怎么办） */
+/** 会话忙时的统一提示 */
 const MSG_SESSION_BUSY = '该会话正在回复中，请等待完成或先取消'
 
 /**
- * 正在恢复中的会话（**同步**防重入闸）。
- *
- * resumePausedRun 原先用 isSessionActivelyWorking 判忙，但它与随后 await getRunSnapshot()
- * 之间有 await 窗口 —— 桌面 + 手机（或重复触发）会**都**通过检查、各拿同一份快照恢复一次：
- * ① 同一步跑两次 → 同一 tool_call_id 产出两条 tool 结果 → 服务端 400；
- * ② 第二次 createToolHandles **顶替**第一次注册的交互 handler，令第一次 run 的 user_choice / 授权掉进「无处理器」。
- * 引擎侧另有权威并发闸（同一 sessionId 同时只允许一个 run），这里是第一道防线。
+ * 正在恢复中的会话（同步防重入闸）。resumePausedRun 与随后的 await 之间有窗口，
+ * 重复触发会各拿同一份快照恢复一次（重复 tool 结果 / 交互 handler 被顶替）。
  */
 const resumingSessions = new Set<string>()
 
 /**
- * 轮次边界处理器（工具回复后、下一次 LLM 请求前）：落地「AI 回复期间用户已应用」的清单变更并返回消息。
- * 注册在此（而不是 rust-engine → todo-service 直接 import）避免循环依赖。
+ * 轮次边界处理器：落地「AI 回复期间用户已应用」的清单变更并返回消息。
+ * 注册在此（而非 rust-engine 直接 import todo-service）避免循环依赖。
  */
 setRoundBoundaryHandler((sessionId) =>
   flushTodoDraftMessages(sessionId, 'round_boundary'),
 )
 
 /**
- * 创建新会话。业务逻辑（组装 systemPrompt、合并 Agent 默认值）在 Service 层完成，
- * 持久化委托给 Store 层的纯函数 saveSession()。不传的字段回退 Agent 默认值。
+ * 创建新会话（systemPrompt / Agent 默认值在 Service 层组装，持久化委托 store）。
  */
 export async function createSession(
   title: string,
@@ -149,14 +137,9 @@ export async function createSession(
 }
 
 /**
- * 把某条「上下文压缩摘要」转移到新对话。
- *
- * 以源会话的 模型 / Agent / 工作目录 为模板新建会话，把摘要按值拷贝成新会话的**第一条消息**
- *（role='summary'），让用户带压缩后的历史在干净上下文里继续。不触碰源会话（是拷贝不是移动）。
- * 与「压缩上下文」的关键差别：本路径**不产生引擎 run**，故不会由 Rust 直落 SQLite，必须自己显式落库，
- * 否则摘要只活在内存里、重启后消失。
- *
- * @returns 新会话 id；源会话 / 摘要不存在时返回 null（调用方据此不切会话）
+ * 把一条压缩摘要转移到新对话（按值拷贝成新会话第一条消息，不动源会话）。
+ * 本路径不产生引擎 run，故不会由 Rust 落库，必须自己显式落库。
+ * @returns 新会话 id；源会话 / 摘要不存在时 null
  */
 export async function transferSummaryToNewSession(
   sourceSessionId: string,
@@ -165,7 +148,7 @@ export async function transferSummaryToNewSession(
   const source = sessionStore.getSession(sourceSessionId)
   if (!source) return null
 
-  // 摘要一定是「最后一个 summary」，但尾部窗口可能尚未加载（会话刚激活时），先补齐再找
+  // 尾部窗口可能未加载，先补齐再找
   await sessionStore.ensureMessagesLoaded(sourceSessionId)
   const summary = getSessionMessages(sourceSessionId).find(
     (m) => m.id === summaryMessageId && m.role === 'summary',
@@ -183,12 +166,11 @@ export async function transferSummaryToNewSession(
     source.workspace,
   )
 
-  // 摘要按值拷贝（重新分配 id，避免跨会话复用同一消息 id）：保留 role / content /
-  // uiData（compressMode + contextTokens，气泡副标题要用）/ timestamp
+  // 摘要按值拷贝（重新分配 id，避免跨会话复用 id），保留 role / content / uiData / timestamp
   const copy: Message = { ...summary, id: v4(), streaming: false }
   addSessionMessage(session.id, copy)
 
-  // 本路径无 run，必须显式落库（同 compressContext 的兜底思路）
+  // 本路径无 run，必须显式落库
   try {
     await invoke('cmd_replace_session_messages', {
       sessionId: session.id,
@@ -209,17 +191,14 @@ export async function transferSummaryToNewSession(
 }
 
 /**
- * 删除会话（**唯一入口**）—— 先断流，再删库。
- *
- * ⚠️ 顺序必须是「引擎侧取消运行 → 清运行快照 → 删会话」：Rust 在聊天循环内直落 SQLite，会话行已删
- * 而 run 仍跑时，后续 append 会写出孤儿消息（JOIN sessions 查不到，无清理逻辑，库文件只增不减）。
- *（Rust 侧 append_messages_if_alive 只是兜底，两边都不能省。）
+ * 删除会话（唯一入口）：先断流，再删库。顺序必须是取消 run → 清快照 → 删会话，
+ * 否则 run 仍在跑的 append 会写出孤儿消息。
  * @returns 实际删除的会话数
  */
 export async function deleteSessions(ids: string[]): Promise<number> {
   if (ids.length === 0) return 0
   for (const id of ids) {
-    // 对已结束的会话 cancel 是 no-op；此处不按 working 判断，宁可多调一次也不能漏
+    // 对已结束的会话 cancel 是 no-op；宁可多调一次也不能漏
     try {
       await getEngine().cancel(id)
       await getEngine().clearRunSnapshot(id)
@@ -228,15 +207,14 @@ export async function deleteSessions(ids: string[]): Promise<number> {
     }
   }
   const count = sessionStore.deleteSessions(ids)
-  // 同步丢弃运行时状态（working / 红点 / pendingContent）与任务清单草稿，否则这些条目会永久挂在已不存在的会话 id 上
+  // 同步丢弃运行时状态与清单草稿，否则它们会永久挂在已不存在的会话 id 上
   dropSessionRuntime(ids)
   dropTodoDrafts(ids)
   return count
 }
 
 /**
- * 发送消息 — 纯数据层操作：确保 session 存在 → 创建并持久化用户消息 → 调引擎并处理事件
- * → 维护 sessionRuntimeState / events 回调通知 UI。
+ * 发送消息：确保 session 存在 → 落用户消息 → 调引擎并处理事件 → 维护运行时状态与 UI 回调。
  */
 export async function sendMessage(
   sessionId: string,
@@ -265,12 +243,11 @@ export async function sendMessage(
     return
   }
 
-  // 会话时间 = 用户最后一次发言时间：只在这里刷新（AI 回复 / 工具消息 / 改标题都不刷新）。
-  // touchSession 是整对象替换，故重新取一次会话引用（保证传给引擎 / 落库的 updatedAt 是刷新后的值）。
+  // 会话时间 = 用户最后一次发言；touchSession 是整对象替换，故重新取引用
   sessionStore.touchSession(sessionId)
   session = sessionStore.getSession(sessionId) ?? session
 
-  // 埋点：开启本轮链路（§5.4 / §5.5）
+  // 埋点：开启本轮链路
   const traceId = newTraceId()
   activeTraces.set(sessionId, {
     traceId,
@@ -297,8 +274,7 @@ export async function sendMessage(
     provider_type: providerTypeOf(session),
   })
 
-  // 服务层负责创建并持久化用户消息
-  // skipUserMessage=true 时，调用方（doSend）已提前添加了用户消息并做了视觉分析
+  // 服务层负责落用户消息；skipUserMessage 时调用方已提前加过（并做了视觉分析）
   if (!options?.skipUserMessage) {
     const userMessage: Message = {
       id: v4(),
@@ -326,9 +302,9 @@ export async function sendMessage(
 
   const toolInteract = await toolService.createToolHandles(sessionId)
 
-  // 发送前：全量加载历史 + 检测并修复格式异常（悬空 tool_calls）
+  // 发送前：全量加载历史 + 修复悬空 tool_calls
   const currentMessages = await prepareMessagesForSend(sessionId)
-  // 收集 engine 需要的入参：当前消息列表 + reasoningEffort
+  // 收集引擎入参：消息列表 + reasoningEffort
   const providerCfg = settingsState.value.providers.find(
     (p) => p.id === session.providerConfigId,
   )
@@ -351,7 +327,7 @@ export async function sendMessage(
       onEvent: createEventHandler(sessionId, sessionRt, events, traceId),
       onUserInteraction: toolInteract.handler,
       maxToolRounds: settingsState.value.maxToolRounds,
-      // 轮次边界：工具回复后、下一次 LLM 请求前，把用户已应用的清单变更注入消息列表
+      // 轮次边界：工具回复后、下一次 LLM 请求前注入用户已应用的清单变更
       onRoundBoundary: (sid) => flushTodoDraftMessages(sid, 'round_boundary'),
     })
   } catch (e: any) {
@@ -365,10 +341,7 @@ export async function sendMessage(
 }
 
 /**
- * 恢复被暂停的 tool run（**唯一恢复入口**）：读 run snapshot，从断点继续未完成的 tool steps。
- *
- * ⚠️ 本函数是「同步防重入 + try/finally」的薄封装，真正逻辑在 resumePausedRunImpl —— 拆开只为让
- * 防重入在**任何 await 之前**同步生效。
+ * 恢复被暂停的 tool run（唯一恢复入口）。拆成薄封装只是为了让防重入在任何 await 之前生效。
  */
 export async function resumePausedRun(
   sessionId: string,
@@ -386,7 +359,7 @@ export async function resumePausedRun(
   }
 }
 
-/** `resumePausedRun` 的实际实现（不自带防重入 —— 由上面的薄封装负责）。 */
+/** resumePausedRun 的实现（不自带防重入） */
 async function resumePausedRunImpl(
   sessionId: string,
   events?: ChatServiceEvents,
@@ -397,9 +370,7 @@ async function resumePausedRunImpl(
     return
   }
 
-  // 并发保护：同一会话同时只能有一个**活跃执行**的 run。
-  // 用「活跃执行」而非 isSessionBusy：暂停态的 working 仍为 true（用于拦暂停期间发新消息），
-  // 但暂停态正是本函数的合法入口 —— 用「忙」判据会把「继续」按钮误拦（回归缺陷）。
+  // 用「活跃执行」而非 isSessionBusy：暂停态的 working 仍为 true，但正是本函数的合法入口
   if (isSessionActivelyWorking(sessionId)) {
     events?.onError?.(sessionId, MSG_SESSION_BUSY)
     return
@@ -423,11 +394,9 @@ async function resumePausedRunImpl(
 
   const toolInteract = await toolService.createToolHandles(sessionId)
 
-  // 恢复暂停任务时不传整份历史：引擎以本地库为权威读回（暂停时消息均已落库），省掉「序列化 → IPC →
-  // 反序列化」的 O(历史) 开销。⚠️ Rust 侧只读「最后一个 summary 及其之后」；此处不能补占位 tool 结果
-  //（悬空 tool_calls 正是本次要恢复执行的步骤）。
+  // 恢复时不传整份历史：引擎以本地库为权威读回，省掉 O(历史) 的 IPC 开销
   const currentMessages: Message[] = []
-  // 埋点用的消息条数：取会话内存条数（暂停发生在一次完整 run 内，该会话此前已被 run 全量加载）
+  // 埋点用的消息条数：取内存条数（暂停发生在一次完整 run 内，此前已全量加载）
   const messageCount = sessionStore.getSession(sessionId)?.messages.length ?? 0
   const providerCfg = settingsState.value.providers.find(
     (p) => p.id === session.providerConfigId,
@@ -480,8 +449,7 @@ async function resumePausedRunImpl(
     toolInteract.cleanup()
   }
 
-  // 恢复完成后，检查是否仍有未清除的快照（engine 成功完成所有工具后可能未清理）
-  // 若没有 pending 的工具步骤，则主动清除快照，避免 finishWorking 误判为暂停状态
+  // 恢复后若无待执行的工具步骤，主动清快照，避免 finishWorking 误判为暂停
   const remainingSnapshot = await getEngine().getRunSnapshot(sessionId)
   if (
     remainingSnapshot &&
@@ -490,13 +458,13 @@ async function resumePausedRunImpl(
     await getEngine().clearRunSnapshot(sessionId)
   }
 
-  // 传入 traceId，保证 engine.finish 事件被记录且链路上下文被回收
+  // 传 traceId，保证 engine.finish 事件被记录且链路上下文被回收
   finishWorking(sessionId, sessionRt, events, undefined, traceId)
 }
 
 /**
- * 发送带迭代目标的消息 — 启用「执行→验证→修复」自主迭代模式：引擎在每轮 tool 执行后自动验证是否
- * 达到 goal，未达标则注入反馈重试，直到达标或超出 maxIterations。
+ * 发送带迭代目标的消息：引擎每轮 tool 执行后自动验证 goal，未达标则注入反馈重试，
+ * 直到达标或超出 maxIterations。
  */
 export async function sendMessageWithGoal(
   sessionId: string,
@@ -517,7 +485,7 @@ export async function sendMessageWithGoal(
     return
   }
 
-  // 并发保护：同一会话同时只能有一个 run（与 sendMessage 同一判据）
+  // 并发保护：与 sendMessage 同一判据
   if (isSessionBusy(sessionId)) {
     events?.onError?.(sessionId, MSG_SESSION_BUSY)
     return
@@ -528,8 +496,7 @@ export async function sendMessageWithGoal(
     return
   }
 
-  // 会话时间刷新（与 sendMessage 同一语义）：迭代模式也是「用户发出一条消息」，务必刷一次；
-  // 后续执行→验证→修复产生的反馈 / 失败报告落库都不刷新时间。
+  // 会话时间刷新：迭代模式也是「用户发出一条消息」，务必刷一次
   sessionStore.touchSession(sessionId)
   session = sessionStore.getSession(sessionId) ?? session
 
@@ -589,7 +556,7 @@ export async function sendMessageWithGoal(
 
   const toolInteract = await toolService.createToolHandles(sessionId)
 
-  // 发送前：全量加载历史 + 检测并修复格式异常（悬空 tool_calls）
+  // 发送前：全量加载历史 + 修复悬空 tool_calls
   const currentMessages = await prepareMessagesForSend(sessionId)
   const providerCfg = settingsState.value.providers.find(
     (p) => p.id === session.providerConfigId,
@@ -629,9 +596,7 @@ export async function sendMessageWithGoal(
   finishWorking(sessionId, sessionRt, events, content, traceId)
 }
 
-/**
- * 取消当前正在处理的请求（非暂停状态）。
- */
+/** 取消当前正在处理的请求（非暂停状态） */
 export async function cancelMessage(sessionId: string): Promise<void> {
   if (sessionId) {
     track('chat.cancel', {
@@ -639,14 +604,13 @@ export async function cancelMessage(sessionId: string): Promise<void> {
       phase: 'streaming',
     })
     await getEngine().cancel(sessionId)
-    // 用户点「停止」= 本轮结束：落地 AI 回复期间用户「已应用」的清单草稿
+    // 用户点「停止」= 本轮结束：落地清单草稿
     flushTodoDraft(sessionId, 'cancel')
   }
 }
 
 /**
- * 取消暂停状态的 tool run（暂停下「取消」按钮的唯一入口）：给所有未完成 step 注入空 tool_result
- *（content='cancelled'）并清除快照。UI 调完直接更新自己的 loading 状态即可。
+ * 取消暂停态的 tool run：给未完成 step 注入空 tool_result（cancelled）并清快照。
  */
 export async function cancelPausedRun(sessionId: string): Promise<void> {
   const snapshot = await getEngine().getRunSnapshot(sessionId)
@@ -669,7 +633,7 @@ export async function cancelPausedRun(sessionId: string): Promise<void> {
   }
   await getEngine().clearRunSnapshot(sessionId)
   await getEngine().cancel(sessionId)
-  // 暂停态下用户主动取消：同样视为「本轮结束」，落地「已应用」的清单草稿
+  // 暂停态下用户主动取消：同样视为本轮结束
   flushTodoDraft(sessionId, 'cancel')
 }
 
@@ -679,9 +643,7 @@ export async function getRunSnapshot(sessionId: string) {
 
 /**
  * 压缩会话上下文。
- * @param events 事件回调。压缩会**整体替换**消息列表，而其数据源是 chat-view 的本地 state（不是 store），
- *   必须经 onMessagesUpdate 通知它重新同步 —— 否则列表仍显示压缩前的消息，要切会话才刷新。
- * @param modeOverride 本次压缩指定方式（token 环右键菜单用）；不传则用设置 contextCompressMode（左键走这条）。
+ * @param modeOverride 本次压缩方式（token 环右键菜单）；不传则用设置。
  */
 export async function compressContext(
   sessionId: string,
@@ -705,7 +667,7 @@ export async function compressContext(
       0,
     )
     const compressStart = Date.now()
-    // 压缩方式：调用方指定优先（右键菜单），否则用设置：ai = LLM 摘要 / raw = 正文压缩（本地渲染不发请求）
+    // 压缩方式：调用方指定优先，否则用设置
     const mode =
       modeOverride ?? settingsState.value.contextCompressMode ?? 'ai'
     // Tauri 下走 Rust（与 CLI 同一份实现）；非 Tauri 回退 TS 实现
@@ -714,7 +676,7 @@ export async function compressContext(
       allMessages,
       mode,
     )
-    // 兜底：summary / 历史里若含孤立代理，先清洗再写内存 + 落库（经 serde_json 会报 unexpected end of hex escape）
+    // 兜底：孤立代理经 serde_json 会报 unexpected end of hex escape，先清洗
     const safeMessages = sanitizeLoneSurrogates(result.messages)
     replaceSessionMessages(sessionId, safeMessages)
     // 通知 UI 重新同步消息列表（含分页补齐的历史 + 新的 summary 消息）
@@ -734,8 +696,7 @@ export async function compressContext(
         messages: safeMessages,
       })
     } catch (err) {
-      // 不能空 catch：内存已是压缩后的消息而 DB 还是旧的，静默失败会两边不一致
-      //（曾出现 summary 含孤立代理 → serde_json 报错 → 用户看到「压缩成功」，下次发消息才炸在 agent_send_message）。
+      // 不能空 catch：内存已是压缩后而 DB 还是旧的，两边会不一致
       console.error('[chat] 压缩结果落库失败:', err)
       trackError('session.save.error', err, {
         props: { session_id: hashText(sessionId), op: 'compress.persist' },

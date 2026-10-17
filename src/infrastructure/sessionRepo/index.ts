@@ -1,24 +1,19 @@
 /**
- * sessionRepo — 会话持久化 Repository（Rust SQLite 直落）。
- *
- * 数据源从 IndexedDB 迁到 Rust 侧 SQLite（src-tauri/virlen-core/src/session_db/）：消息落库由 Rust 引擎在聊天
- * 循环内完成（用户消息发送即写、assistant/tool 完成时写）；前端只负责启动时读全部会话、会话元数据变更写 Rust。
- * 即使 JS 卡住 / 崩溃，Rust 引擎照常落库，数据不丢。非 Tauri（vitest）invoke 抛错，全部 catch 兜底为空操作。
+ * 会话持久化 Repository（Rust SQLite）。消息落库由 Rust 引擎在聊天循环内完成，
+ * 前端只读会话元数据 / 消息，并负责元数据变更写入。非 Tauri 环境全部兜底为空操作。
  */
 import { invoke } from '@tauri-apps/api/core'
 import type { Session, Message } from '@/types'
 import { trackError, hashText } from '@/utils/telemetry'
 
 export interface SessionRepo {
-  /** 从 Rust SQLite 加载所有会话元数据（不含 messages，按 updatedAt 降序） */
+  /** 从 Rust 加载所有会话元数据（不含 messages，按 updatedAt 降序） */
   loadAll(): Promise<Session[]>
   /** 获取会话消息（懒加载：会话激活时调用） */
   getMessages(sessionId: string): Promise<Message[]>
   /**
-   * 用 `messages` 替换会话「指定消息及其之后」的后缀（同一事务）。
-   *
-   * 用于「内存里只有一段连续后缀窗口」时回写（修复）结果，不触碰更早的历史；
-   * 当窗口就是整份历史时与全量替换等价。目标消息不存在时不删除任何行。
+   * 用 messages 替换会话「指定消息及其之后」的后缀（同一事务），不碰更早的历史；
+   * 目标消息不存在时不删任何行。
    */
   replaceMessagesFrom(
     sessionId: string,
@@ -35,19 +30,14 @@ export interface SessionRepo {
   /** 检索消息（会话内 / 跨会话，分页；按时间倒序） */
   searchMessages(opts: MessageSearchOptions): Promise<MessageSearchPage>
   /**
-   * 「消息查询」工具：按锚点（id / seq）取前后 N 条的时序窗口。
-   *
-   * ⚠️ 只覆盖「已压缩区间」（时序 < 最后一个 summary）：之后的对话已在模型上下文中，重复下发只浪费 token。
-   * 失败（非 Tauri / DB 异常）返回 `null`，由调用方转成提示。
+   * 「消息查询」工具：按锚点取前后 N 条的时序窗口。只覆盖已压缩区间（之后的对话已在上下文里）。
+   * 失败返回 null。
    */
   getMessageWindow(
     sessionId: string,
     opts: MessageWindowOptions,
   ): Promise<MessageWindow | null>
-  /**
-   * 「消息查询」工具：列出「已压缩区间」的消息时序（升序）。
-   * 失败（非 Tauri 环境 / DB 异常）返回 `null`。
-   */
+  /** 「消息查询」工具：列出已压缩区间的消息时序（升序）；失败返回 null。 */
   getMessageTimeline(
     sessionId: string,
     opts?: MessageTimelineOptions,
@@ -55,23 +45,17 @@ export interface SessionRepo {
   /** 批量写入变化的会话，删除不存在的会话 */
   saveDiff(oldSessions: Session[], newSessions: Session[]): void
   /**
-   * 删除会话及其消息（**立即落库**，不经 800ms 防抖）。
-   *
-   * 删除是用户明确且不可撤销的动作，必须可靠：不能因为其后 800ms 内的任意一次
-   * 元数据变更（发消息 / 改标题 / AI 起标题完成 / 置顶…）而被合并丢批。
+   * 删除会话及其消息（立即落库，不经防抖）：不可撤销的动作不能被后续元数据变更合并丢批。
    */
   deleteSessions(ids: string[]): Promise<void>
   /** 直接持久化单个会话元数据 */
   persistSession(session: Session): Promise<void>
   /** 数据库体积快照（设置 → 存储；非 Tauri 环境返回 null） */
   dbStats(): Promise<DbStats | null>
-  /** 截断 WAL 日志（`wal_checkpoint(TRUNCATE)`；廉价，不动主库结构） */
+  /** WAL 截断（wal_checkpoint(TRUNCATE)，廉价） */
   dbCheckpoint(): Promise<DbCheckpointResult | null>
   /**
-   * 重建数据库（`VACUUM`：归还空闲页 + 切 `auto_vacuum=INCREMENTAL`）。
-   *
-   * 独占连接（数百 MB 库约 10–60 s）且需约 2 倍库大小的临时磁盘空间，只在用户显式点击时调用；
-   * 失败返回 `null`。
+   * 重建数据库（VACUUM）。独占连接、约 2 倍库大小的临时空间，只在用户显式点击时调。
    */
   dbMaintain(): Promise<DbMaintainResult | null>
 }
@@ -93,20 +77,16 @@ export interface MessagePageOptions {
   /** 取该 rowid 之前（更早）的消息；不传则取尾部窗口 */
   beforeRowid?: number | null
   /**
-   * 「可见行」下限（> 0 时生效）：不足则由 Rust 继续向更早取，直到达标 / 到底 / 触上限。
-   * 用「会渲染出高度的行数」而非原始条数 —— 一页若大半是工具调用、被折成一行，
-   * 按原始条数给页面会让用户滚到顶部却几乎看不到新内容。
+   * 「可见行」下限（> 0 时生效）：不足则继续向更早取。按可见行而非原始条数 ——
+   * 一页若大半是被折成一行的工具调用，用户滚到顶几乎看不到新内容。
    */
   minVisible?: number
-  /** 折叠开关（= 设置项 `hideToolCallThink`），决定工具调用是否折成一行（影响可见行计数） */
+  /** 折叠开关（设置项 hideToolCallThink），影响可见行计数 */
   fold?: boolean
 }
 
 /**
- * 用户消息轻量索引项（与 Rust 端 `UserMessageRef` 对应）
- *
- * 只含 id + 纯文本摘要，不含 assistant / tool 消息的正文，
- * 用于一次性拉回全量用户消息供右侧锚点列表渲染。
+ * 用户消息轻量索引项：只含 id + 摘要，不含 AI / 工具正文（右侧锚点列表一次拉全）。
  */
 export interface UserMessageRef {
   id: string
@@ -119,16 +99,14 @@ export interface MessageSearchItem {
   id: string
   sessionId: string
   role: string
-  /** 命中片段（后端已围绕命中位置截取，超长带省略号） */
+  /** 命中片段（后端已围绕命中位置截取） */
   text: string
   timestamp: number
   sessionTitle: string
   workspace?: string | null
   agentId?: string | null
   /**
-   * 工具名（仅 role='tool' 的消息有；如 `read_file` / `edit_file`）。
-   * 后端从「发起该调用的 assistant 消息」的 tool_calls 里反查得出，
-   * 前端用 `getToolCallMessage(name).getToolLabel(name)` 译成「查看文件」等标签。
+   * 工具名（仅 role='tool'）：后端从发起该调用的 assistant 消息反查得出，前端译成「查看文件」等标签。
    */
   toolName?: string | null
 }
@@ -143,7 +121,7 @@ export interface SearchCursor {
 export interface MessageSearchPage {
   items: MessageSearchItem[]
   hasMore: boolean
-  /** 下一页游标（hasMore 为 true 时给出，用于 keyset 分页） */
+  /** 下一页游标（hasMore 时给出，keyset 分页） */
   nextCursor: SearchCursor | null
 }
 
@@ -152,10 +130,7 @@ export interface MessageSearchOptions {
   query: string
   /** 限定会话；不传 = 跨会话检索 */
   sessionId?: string | null
-  /**
-   * 限定角色；不传 = user + assistant（聊天列表展示的两类）。
-   * `'tool'` = 工具调用结果消息（role='tool'）。
-   */
+  /** 限定角色；不传 = user + assistant */
   role?: string | null
   limit?: number
   /** keyset 分页游标（上一页返回的 nextCursor）；首页不传 */
@@ -174,22 +149,22 @@ export interface ToolCallBrief {
 
 /** 单条消息的骨架（已剔除深度思考，工具参数已截断） */
 export interface MessageBrief {
-  /** 1 基时序（会话内消息的插入顺序） */
+  /** 1 基时序（会话内插入顺序） */
   seq: number
   id: string
   role: string
   timestamp: number
-  /** 正文（仅 text 块拼接；≤ 4000 字符） */
+  /** 正文（仅 text 块拼接，≤ 4000 字符） */
   text: string
   textTruncated: boolean
-  /** 是否含图片 / 文件 / 引用 / 技能块（仅提示，不展开内容） */
+  /** 是否含图片 / 文件 / 引用 / 技能块 */
   hasAttachments: boolean
   /** assistant 消息调用的工具（参数 ≤ 100 字符） */
   toolCalls: ToolCallBrief[]
   /** tool 消息才有 */
   toolCallId: string | null
   isError: boolean | null
-  /** 是否含深度思考 —— 内容**永不返回**，只给这个标记 */
+  /** 是否含深度思考（内容永不返回，只给标记） */
   hasReasoning: boolean
 }
 
@@ -202,10 +177,7 @@ export interface MessageWindow {
   endSeq: number
   /** 会话消息总数 */
   total: number
-  /**
-   * 「已压缩区间」上界 = 最后一个 summary 的时序；
-   * `null` = 会话从未压缩（此时没有可查询的历史）
-   */
+  /** 已压缩区间上界 = 最后一个 summary 的时序；null = 从未压缩 */
   boundarySeq: number | null
   /** 窗口后沿因触及上界而被裁剪 */
   clampedByBoundary: boolean
@@ -228,7 +200,7 @@ export interface MessageTimelineItem {
 export interface MessageTimelinePage {
   items: MessageTimelineItem[]
   hasMore: boolean
-  /** 更早一页的游标（`hasMore` 时给出） */
+  /** 更早一页的游标 */
   nextCursor: number | null
   total: number
   boundarySeq: number | null
@@ -238,7 +210,7 @@ export interface MessageTimelinePage {
 export interface MessageWindowOptions {
   /** 锚点消息 id（优先） */
   anchorId?: string
-  /** 锚点时序（备选；锚点都不传时取区间最新一条） */
+  /** 锚点时序（备选；都不传时取区间最新一条） */
   anchorSeq?: number
   /** 锚点之前取多少条 */
   before?: number
@@ -248,7 +220,7 @@ export interface MessageWindowOptions {
 
 /** `getMessageTimeline` 参数 */
 export interface MessageTimelineOptions {
-  /** 关键词过滤（在纯文本正文字段上匹配） */
+  /** 关键词过滤（在纯文本正文上匹配） */
   keyword?: string
   /** 向前翻页游标（只返回更早的） */
   beforeSeq?: number
@@ -271,11 +243,7 @@ function stableJson(value: unknown): string {
 }
 
 /**
- * 会话「落库列」签名 —— 只覆盖 Rust 端 sessions 表实际写入的列
- * （见 src-tauri/virlen-core/src/session_db/row.rs 的 `session_insert_params`）。
- *
- * messages 不参与：消息落库由 Rust 引擎负责（append_messages），
- * 这里只判断会话元数据是否变化。
+ * 会话「落库列」签名 —— 只覆盖 Rust sessions 表实际写入的列，messages 不参与（由引擎 append）。
  */
 function persistedSignature(session: Session): string {
   return stableJson([
@@ -307,8 +275,7 @@ class SessionRepoImpl implements SessionRepo {
   async loadAll(): Promise<Session[]> {
     try {
       const sessions = await invoke<Session[]>('cmd_list_sessions')
-      // 懒加载：只加载元数据，消息在会话激活时再拉取
-      // （见 sessionStore.ensureMessagesLoaded，避免启动时 N+1 全量拉消息）
+      // 懒加载：只取元数据，消息在会话激活时再拉（避免启动 N+1）
       const metas = sessions.map((s) => ({ ...s, messages: [] as Message[] }))
       metas.sort((a, b) => b.updatedAt - a.updatedAt)
       return metas
@@ -326,7 +293,7 @@ class SessionRepoImpl implements SessionRepo {
     }
   }
 
-  /** 用 `messages` 替换会话「指定消息及其之后」的后缀（不触碰更早的历史） */
+  /** 用 messages 替换「指定消息及之后」的后缀（不碰更早的历史） */
   async replaceMessagesFrom(
     sessionId: string,
     fromMessageId: string,
@@ -363,7 +330,7 @@ class SessionRepoImpl implements SessionRepo {
     }
   }
 
-  /** 获取会话内全部用户消息的轻量索引（id + 摘要，不含 AI/工具正文） */
+  /** 获取会话内全部用户消息的轻量索引（id + 摘要） */
   async getUserMessageRefs(sessionId: string): Promise<UserMessageRef[]> {
     try {
       return await invoke<UserMessageRef[]>('cmd_get_user_message_refs', {
@@ -374,7 +341,7 @@ class SessionRepoImpl implements SessionRepo {
     }
   }
 
-  /** 检索消息（会话内 / 跨会话，keyset 游标分页） */
+  /** 检索消息（会话内 / 跨会话，keyset 分页） */
   async searchMessages(opts: MessageSearchOptions): Promise<MessageSearchPage> {
     try {
       return await invoke<MessageSearchPage>('cmd_search_messages', {
@@ -389,7 +356,7 @@ class SessionRepoImpl implements SessionRepo {
     }
   }
 
-  /** 「消息查询」工具：按锚点取时序窗口（只覆盖「已压缩区间」） */
+  /** 「消息查询」工具：按锚点取时序窗口 */
   async getMessageWindow(
     sessionId: string,
     opts: MessageWindowOptions,
@@ -407,7 +374,7 @@ class SessionRepoImpl implements SessionRepo {
     }
   }
 
-  /** 「消息查询」工具：列出「已压缩区间」的消息时序 */
+  /** 「消息查询」工具：列出已压缩区间的消息时序 */
   async getMessageTimeline(
     sessionId: string,
     opts: MessageTimelineOptions = {},
@@ -424,12 +391,12 @@ class SessionRepoImpl implements SessionRepo {
     }
   }
 
-  /** 直接持久化单个会话元数据（消息落库由 Rust 引擎负责） */
+  /** 直接持久化单个会话元数据 */
   async persistSession(session: Session): Promise<void> {
     try {
       await invoke('cmd_upsert_session', { session })
     } catch (err) {
-      // 非 Tauri 环境忽略（埋点开关关闭时为 no-op）
+      // 非 Tauri 环境忽略
       trackError('session.save.error', err, {
         props: { session_id: hashText(session.id) },
       })
@@ -437,13 +404,8 @@ class SessionRepoImpl implements SessionRepo {
   }
 
   /**
-   * 批量写入变化的会话，删除不存在的会话。
-   *
-   * 差集必须在调用时立即算完，只有「发送」被 800ms 合并：`debounce` 只保留最后一次调用的
-   * 实参，差集若放在回调里算，中间那次的差集会被整体丢弃，而 `sessionStore.persist()` 已
-   * 同步前移 `_lastSaved` 基线 —— 丢弃的删除再也不会被补发。实测后果：删除后 800ms 内只要
-   * 再来一次 persist（发消息 / 改标题 / AI 起标题完成 / 置顶…），该会话就不从 SQLite 删除，
-   * 重启后连同消息一起复活。
+   * 批量写入变化的会话，删除不存在的会话。差集必须当场算完，只有「发送」被 800ms 合并：
+   * 若把差集放在回调节省，中途那次的删除会永久丢失（store 已前移 _lastSaved 基线）。
    */
   saveDiff(oldSessions: Session[], newSessions: Session[]): void {
     const oldMap = new Map(oldSessions.map((s) => [s.id, s]))
@@ -451,10 +413,7 @@ class SessionRepoImpl implements SessionRepo {
 
     for (const [id, session] of newMap) {
       const old = oldMap.get(id)
-      // 只能比「值」：oldSessions 是 store 传入的浅拷贝快照（`map(s => ({ ...s }))`），
-      // 与活对象永远不是同一引用。早期用 `|| old !== session` 兜底 → 恒为 true →
-      // 每次 persist() 全量回写（实测 152 个会话：改 1 个标题写了 152 次 SQLite，
-      // 占 rust.db.op 的 85%、SQLite 耗时的 88.7%）。
+      // 只能比值：oldSessions 是浅拷贝快照，引用永远不等（早先用引用兜底 → 每次全量回写）
       if (!old || persistedSignature(old) !== persistedSignature(session)) {
         this.pendingPuts.set(id, session)
         // 同一 id 又被写回来（如删除后撤销）→ 不要再删
@@ -473,7 +432,7 @@ class SessionRepoImpl implements SessionRepo {
     this.scheduleFlush()
   }
 
-  /** 立即删除会话及其消息（不等防抖，见 `SessionRepo.deleteSessions`） */
+  /** 立即删除会话及其消息（不等防抖） */
   async deleteSessions(ids: string[]): Promise<void> {
     if (ids.length === 0) return
     for (const id of ids) {
@@ -488,12 +447,12 @@ class SessionRepoImpl implements SessionRepo {
     try {
       return await invoke<DbStats>('cmd_db_stats')
     } catch {
-      // 非 Tauri 环境（vitest / 浏览器 dev）没有库，静默返回 null
+      // 非 Tauri 环境没有库，静默返回 null
       return null
     }
   }
 
-  /** 截断 WAL 日志（把 `-wal` 里已提交的页搬回主库后截断文件） */
+  /** 截断 WAL（把已提交页搬回主库后截断 -wal） */
   async dbCheckpoint(): Promise<DbCheckpointResult | null> {
     try {
       return await invoke<DbCheckpointResult>('cmd_db_checkpoint')
@@ -503,7 +462,7 @@ class SessionRepoImpl implements SessionRepo {
     }
   }
 
-  /** 重建数据库（`VACUUM`；独占连接，见 `SessionRepo.dbMaintain`） */
+  /** 重建数据库（VACUUM，独占连接） */
   async dbMaintain(): Promise<DbMaintainResult | null> {
     try {
       return await invoke<DbMaintainResult>('cmd_db_maintain')
@@ -523,9 +482,7 @@ class SessionRepoImpl implements SessionRepo {
   }
 
   /**
-   * 立即发送全部待处理变更并清空队列。
-   *
-   * 失败不回滚队列（与旧行为一致：只记错误，等下一次变更重新带上）。
+   * 立即发送全部待处理变更并清空队列；失败不回滚队列（等下一次变更重新带上）。
    */
   private async flushNow(): Promise<void> {
     if (this.flushTimer) {
@@ -553,19 +510,19 @@ export const sessionRepo: SessionRepo = new SessionRepoImpl()
 
 // 库维护 DTO（与 Rust session_db::maintenance 一一对应）
 
-/** 数据库体积快照（字节；字段名对应 Rust 侧的 camelCase 序列化） */
+/** 数据库体积快照（字节，字段名对应 Rust 的 camelCase） */
 export interface DbStats {
-  /** 主库文件 `virlen.db` 的物理大小（`VACUUM` 后要等一次 checkpoint 才变小） */
+  /** 主库物理大小（VACUUM 后要等一次 checkpoint 才变小） */
   dbBytes: number
   /** `-wal` 的物理大小 */
   walBytes: number
-  /** `-shm` 的物理大小（固定 32 KB） */
+  /** shm 物理大小（固定 32 KB） */
   shmBytes: number
-  /** `pageCount * pageSize`：SQLite 视角的逻辑大小 */
+  /** pageCount * pageSize：SQLite 视角的逻辑大小 */
   pageBytes: number
   pageSize: number
   pageCount: number
-  /** 空闲页数（可被 `VACUUM` 回收） */
+  /** 空闲页数（可被 VACUUM 回收） */
   freelistPages: number
   /** auto_vacuum 模式：0=off 1=full 2=incremental */
   autoVacuum: number
@@ -577,7 +534,7 @@ export interface DbStats {
 
 /** 一次 WAL 截断的结果 */
 export interface DbCheckpointResult {
-  /** 有其它连接占用 WAL 时无法完成截断（此时文件不会变小） */
+  /** 有其它连接占用 WAL 时无法截断（文件不会变小） */
   busy: boolean
   beforeBytes: number
   afterBytes: number
@@ -586,7 +543,7 @@ export interface DbCheckpointResult {
 /** 「重建数据库」的结果（before / after 用于展示回收量） */
 export interface DbMaintainResult {
   checkpoint: DbCheckpointResult
-  /** `VACUUM` 本身的耗时（不含前后的 checkpoint） */
+  /** VACUUM 本身的耗时（不含前后 checkpoint） */
   vacuumMs: number
   before: DbStats
   after: DbStats

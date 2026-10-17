@@ -15,15 +15,13 @@ import { useAutoCenter } from '@/ui/hooks/useAutoCenter'
 import { showToast } from '@/ui/components/shared/Toast'
 
 /**
- * 终端输出块 —— execute_command / execute_script 的运行态与完成态共用，
- * 统一按「片段(segment)」渲染 stdout / stderr / live。
+ * 终端输出块（execute_command / execute_script 共用），按「片段」渲染 stdout / stderr / live。
  *
- * 运行态只能是单个 live 片段：后端把 stderr 以 `[stderr] ` 前缀混进同一条实时流，
- * 该标记只有起始、没有结束，拼成字符串后无法还原 stream 边界；
- * 只有完成态能拿 uiData 的结构化字段分色。
+ * 运行态只能是单个 live 片段：后端把 stderr 以 `[stderr] ` 前缀混进同一条流，拼成字符串后无法
+ * 还原边界；只有完成态能拿 uiData 的结构化字段分色。
  */
 
-/** 距底部 ≤ 该值视为「贴在底部」：只有此时才跟随新输出，避免打扰正在往上翻的人 */
+/** 距底部 ≤ 该值视为「贴在底部」：只有此时才跟随新输出 */
 export const AT_BOTTOM_THRESHOLD = 40
 
 export interface TerminalSegment {
@@ -31,7 +29,7 @@ export interface TerminalSegment {
   text: string
 }
 
-/** 运行中：整条流作为单个 live 片段；整体做 ANSI/回车处理，保证 \r 进度条跨 chunk 覆盖正确 */
+/** 运行中：整条流作为单个 live 片段；整体做 ANSI / 回车处理，保证 \r 进度条跨 chunk 覆盖正确 */
 export function buildLiveSegments(raw: string): TerminalSegment[] {
   const text = processTerminalOutput(raw)
   if (!text) return []
@@ -39,8 +37,8 @@ export function buildLiveSegments(raw: string): TerminalSegment[] {
 }
 
 /**
- * 完成后：优先用 `uiData` 的 stdout/stderr（成功与失败都下发，含退出码 >= 2 的失败）；
- * 流字段缺失时（旧消息 / 调用级异常）回退 `content` —— 它本身就是失败报告，整体按 stderr 渲染。
+ * 完成后：优先用 uiData 的 stdout / stderr；流字段缺失时（旧消息 / 调用级异常）回退 content，
+ * 整体按 stderr 渲染（它本身就是失败报告）。
  */
 export function buildFinishedSegments(
   ui: Record<string, any> | undefined,
@@ -62,11 +60,8 @@ export function buildFinishedSegments(
 }
 
 /**
- * 把已贴底的滚动容器跟随到最底部；未贴底返回 false（即「不打扰」用户翻看）。
- *
- * 必须传真正可滚动的 .code-pre-warpper（max-height + overflow:auto）：内层 .code-pre
- * 是 overflow:hidden 且无高度约束，scrollHeight === clientHeight，对它调 scroll()
- * 是空操作 —— 曾挂错元素，导致终端永远停在输出顶部。
+ * 把已贴底的滚动容器跟随到最底部；未贴底返回 false。
+ * 必须传真正可滚动的 .code-pre-warpper（max-height + overflow:auto）：内层 .code-pre 对它调 scroll() 是空操作。
  */
 export function followBottomIfPinned(
   el: { scrollHeight: number; scrollTop: number; clientHeight: number },
@@ -80,9 +75,7 @@ export function followBottomIfPinned(
 
 /**
  * 终端输出末尾的附加说明（目前只有 execute_script 的脚本删除提示）。
- *
- * 模型侧 `note` 固定英文，UI 侧改按界面语言渲染结构化字段（noteKind / notePath / noteError，
- * Rust 与 TS 两侧同构）；旧消息缺这些字段 → 回退 `note` 原文，不做语言猜测。
+ * 模型侧 note 固定英文，UI 侧按界面语言渲染结构化字段；旧消息缺这些字段 → 回退 note 原文。
  */
 export function displayNote(
   ui: Record<string, any> | undefined,
@@ -156,7 +149,7 @@ export function TerminalBlock({
   // 全屏态由块自身管理，按钮在 header 右侧（与 CodeBlock 一致）
   const [fullscreen, setFullscreen] = useState(false)
   const scrollerRef = useRef<HTMLDivElement>(null)
-  // 全屏副本自己的滚动容器 —— 原位与全屏是两个 DOM，各自独立跟随
+  /** 全屏副本自己的滚动容器 —— 原位与全屏是两个 DOM，各自独立跟随 */
   const fullScrollerRef = useRef<HTMLDivElement>(null)
 
   // ref 必须落在真正的滚动容器上（见 followBottomIfPinned）；未挂载的那份为 null，自然跳过
@@ -168,7 +161,7 @@ export function TerminalBlock({
     }
   }, [segments, followBottom])
 
-  // 进入全屏瞬间把新挂载的容器贴到底（它从 0 开始，原位那份早已贴底）
+  // 进入全屏瞬间把新挂载的容器贴到底
   useEffect(() => {
     if (!fullscreen) return
     const el = fullScrollerRef.current
@@ -185,7 +178,7 @@ export function TerminalBlock({
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [fullscreen])
 
-  /** 渲染终端本体：原位与全屏结构一致，`isFull` 只切换类名与滚动容器 ref */
+  /** 渲染终端本体：原位与全屏结构一致，isFull 只切换类名与滚动容器 ref */
   function renderBlock(isFull: boolean) {
     return (
       <div
@@ -228,7 +221,7 @@ export function TerminalBlock({
                 <code>{cmd + '\n'}</code>
               </>
             )}
-            {/* processTerminalOutput 会移除尾部的空行，所以片段之间需要显式补 \n */}
+            {/* processTerminalOutput 会移除尾部空行，所以片段之间需显式补 \n */}
             {segments.map((seg, i) => (
               <code key={i} className={`terminal-${seg.kind}`}>
                 {(i > 0 ? '\n' : '') + seg.text}
@@ -256,7 +249,7 @@ export function TerminalBlock({
   )
 }
 
-/** 订阅 toolOutputStore 的实时输出与 kill 句柄；entry 就地追加，回调同步进来即可，无需轮询 */
+/** 订阅 toolOutputStore 的实时输出与 kill 句柄；entry 就地追加，回调同步进来，无需轮询 */
 export function useToolLiveOutput(toolCallId: string) {
   const [output, setOutput] = useState<string>(
     () => toolOutputStore.get(toolCallId)?.output ?? '',
@@ -280,9 +273,8 @@ export function useToolLiveOutput(toolCallId: string) {
 }
 
 /**
- * 终端视图：运行中与完成后共用同一个组件实例 —— 两态渲染出的 DOM 结构相同
- * （.tool-cmd-running > .execute-command-wrapper > .code-pre-warpper），
- * React 复用同一批节点，切换时滚动位置天然保住，也不会整块重挂载把已贴底的视图弹回顶部。
+ * 终端视图：运行中与完成后共用同一个组件实例 —— 两态 DOM 结构相同，React 复用节点，
+ * 切换时滚动位置天然保住，不会把已贴底的视图弹回顶部。
  */
 export function TerminalView({
   toolCallId,
@@ -298,22 +290,21 @@ export function TerminalView({
   fileLabel?: string
   /** 结果消息；为空表示工具仍在运行中 */
   message?: Message
-  /** 用户是否展开了本条工具消息（驱动「打开即居中」，见 useAutoCenter） */
+  /** 用户是否展开了本条工具消息（驱动「打开即居中」） */
   expand?: boolean
 }) {
   const running = !message
   const { output, entry } = useToolLiveOutput(toolCallId)
-  // 实际沙盒模式：运行中取 `agent:tool-env` 写下的值，完成态以后端权威 `uiData.sandbox` 为准
-  // （`?? entry?.sandbox` 兜底旧消息路径 / 极端时序）
+  // 实际沙盒模式：运行中取 agent:tool-env 写下的值，完成态以后端权威 uiData.sandbox 为准
   const sandbox = running
     ? entry?.sandbox
     : (message?.uiData?.sandbox ?? entry?.sandbox)
   const [killing, setKilling] = useState(false)
-  // 「打开即居中」只在用户点开时触发（`expand` 的 false→true）；不能用 `!running` ——
+  // 「打开即居中」只在用户点开时触发（expand 的 false→true）；不能用 !running ——
   // 运行中的终端未展开也会挂载，命令结束时会把列表拽走
   const rootRef = useAutoCenter(!!expand)
-  // 工具实际执行目录：会话 workspace 优先，其次默认 workspace；归一化（反斜杠、尾部斜杠）
-  // 与 securityService.getWorkspace 一致，保证 `$` 提示符显示的 cwd 就是命令真正跑的目录
+  // 工具实际执行目录：会话 workspace 优先，其次默认 workspace；归一化口径与
+  // securityService.getWorkspace 一致，保证 `$` 提示符显示的 cwd 就是命令真正跑的目录
   const workspace =
     sessionStore.getSession(chatState.value.currentSessionId)?.workspace ||
     settingsState.value.defaultWorkspace
@@ -328,8 +319,7 @@ export function TerminalView({
     )
   }, [running, output, message])
 
-  // 只在低频节点（展开 / 命令结束）请外层确认一次贴底；外层虚拟列表已配 anchorTo:'end'，
-  // 条目长高时自动跟随，无需按输出频率反复 emit（原实现每 50ms 一次，且 isAtEnd 不成立时是空操作）
+  // 只在低频节点（展开 / 命令结束）请外层确认一次贴底；外层虚拟列表已配 anchorTo:'end'
   useEffect(() => {
     commentEvent.emit('requestScrollToBottom')
   }, [running])
@@ -338,8 +328,7 @@ export function TerminalView({
     if (!entry?.kill || killing) return
     setKilling(true)
     try {
-      // 回调返回 `false` = 命令不在运行中（还没 spawn / 已结束）—— 引擎侧已退化为取消本次运行。
-      // 不复位的话按钮会永远停在「终止中」，与「点了没反应」是同一个观感。
+      // 回调返回 false = 命令不在运行中 —— 不复位的话按钮会永远停在「终止中」
       const hit = await entry.kill()
       if (hit === false) {
         setKilling(false)
@@ -350,7 +339,7 @@ export function TerminalView({
     }
   }
 
-  // Step 2 ①：终端内确认 —— 命令尚未执行，渲染可编辑命令行而非 xterm。
+  // 终端内确认：命令尚未执行，渲染可编辑命令行而非 xterm。
   // 必须放在所有 hook 之后：pendingConfirm 的出现 / 消失不能改变 hook 调用数量。
   if (running && entry?.pendingConfirm) {
     return (
@@ -365,15 +354,12 @@ export function TerminalView({
   }
 
   /**
-   * PTY 路径走 xterm（见 XtermTerminal.tsx）：输出是带光标控制的原始 VT 流，`<pre>` 无法表达
-   * （进度条花屏、TUI 错位），也没法键击输入。
-   * 运行中用 `entry.pty` 预判（后端在 Windows 上总走 ConPTY）；完成态以后端权威字段
-   * `uiData.pty` 为准 —— 伪控制台不可用时后端降级回匿名管道并下发 `pty: false`，此时回到 `<pre>`。
+   * PTY 路径走 xterm：输出是带光标控制的原始 VT 流，<pre> 无法表达，也没法键击输入。
+   * 运行中用 entry.pty 预判；完成态以 uiData.pty 为准 —— 伪控制台不可用时后端降级回管道并下发 pty:false。
    */
   const isPty = running ? !!entry?.pty : !!(message?.uiData?.pty ?? entry?.pty)
   if (isPty) {
-    // 完成态优先用后端原样回传的 stdout（保留 ANSI，xterm 需要原始流）；
-    // 退出码 >= 2 的失败后端只下发 content（已剥 ANSI 的报告文本），用它兜底
+    // 完成态优先用后端原样回传的 stdout（xterm 需要原始流）；退出码 >= 2 的失败只有 content，用它兜底
     const stream = running
       ? output
       : ((message?.uiData?.stdout as string | undefined) ??

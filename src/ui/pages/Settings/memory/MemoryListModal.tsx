@@ -1,20 +1,9 @@
 /**
- * MemoryListModal — 长期记忆列表弹窗（记忆功能 P0 / P3）
+ * 长期记忆列表弹窗。
  *
- * 紧凑表格：每行一条（内容列小字号 + 悬停看全文），上方两行工具栏（搜索 / 计数 / 导出 / 新增；
- * 左筛选、右批量），下方分页。目标就一个：**一屏尽量多看几条** —— 用户来这儿多半是
- * 「扫一眼 + 清理一批」，不是逐条精读。
- *
- * 故行内不挂任何操作按钮：**点击整行 = 编辑**（`MemoryEditModal`），**勾选 + 批量栏 =
- * 升级 / 降级 / 停用 / 删除**。批量栏**常驻**（未选中时全禁用），勾选时不会有东西冒出来
- * 把表格上下顶动，也让人一眼看到「选中之后能做什么」。
- *
- * 筛选在前端做（不调 `cmd_memory_search`）：后端检索**排除已停用项**，而列表必须能筛出
- * 停用项才能管理它们；面板量级（几百条）下本地子串过滤是即时的。分页也在前端（列表本就
- * 整份在内存里），表头全选只作用于**本页**（避免「以为只选一屏，实际选了 200 条」），
- * 选中集跨页保留，批量栏如实报出有多少条不在当前页。
- *
- * 数据由父级持有，写操作后统一走 `onChanged` 让父级重取 —— 设置页的预算告警才是当前状态。
+ * 紧凑表格 + 常驻批量栏（未选中时全禁用）：行内不挂按钮，点整行 = 编辑，勾选 + 批量栏 = 批量操作。
+ * 筛选 / 分页在前端做（后端检索排除了停用项，而这里必须能筛出它们）；
+ * 表头全选只作用于本页，选中集跨页保留并如实报出不在当前页的条数。
  */
 import { useEffect, useMemo, useState } from 'react'
 import Modal from '@/ui/components/shared/Modal'
@@ -41,7 +30,7 @@ import MemoryEditModal from './MemoryEditModal'
 export interface MemoryListModalProps {
   visible: boolean
   onClose: () => void
-  /** 当前记忆列表（父级持有，勿在本组件里另取一份 —— 两份数据必然分叉） */
+  /** 当前记忆列表（父级持有，勿在本组件另取一份） */
   items: MemoryRecord[]
   loading: boolean
   /** 写操作后通知父级：重取列表 + 注入段 + 整理流水 */
@@ -57,16 +46,15 @@ const PAGE_SIZE_OPTIONS: SelectOption[] = [20, 50, 100].map((n) => ({
   label: String(n),
 }))
 
-/** 共享的空选中集（**只读**：每次改动都新建一份，绝不原地改） */
+/** 共享的空选中集（只读：每次改动都新建一份） */
 const EMPTY_SELECTION: ReadonlySet<string> = new Set<string>()
 
 /** 批量操作种类（与单条同语义，只是作用在一批上） */
 type BatchOp = 'permanent' | 'normal' | 'disable' | 'enable' | 'delete'
 
 /**
- * 这个操作会不会**真的改动**这条记忆：批量栏按钮可用性、提示里的条数都用它 ——
- * 选中 5 条里 3 条本来就是永久时，「升级为永久」只该动剩下 2 条，提示也必须报 2
- * （报 5 而列表只变 2 处，比不报还糟）。
+ * 这个操作会不会真的改动这条记忆：按钮可用性与提示条数都用它
+ *（选中 5 条里 3 条本就是永久时，升级只该动剩下 2 条）。
  */
 function needsOp(item: MemoryRecord, op: BatchOp): boolean {
   switch (op) {
@@ -83,7 +71,7 @@ function needsOp(item: MemoryRecord, op: BatchOp): boolean {
   }
 }
 
-/** 完成文案（`$__failed__` 只在真有失败时才用） */
+/** 完成文案（$__failed__ 只在真有失败时才用） */
 const BATCH_DONE_TEXT: Record<BatchOp, string> = {
   permanent: '已升级为永久 $__count__ 条记忆',
   normal: '已降级为普通 $__count__ 条记忆',
@@ -110,20 +98,19 @@ function MemoryListModal({
   const [busy, setBusy] = useState(false)
   /** 内容模糊搜索（本地子串，大小写不敏感） */
   const [query, setQuery] = useState('')
-  /** 级别（`all` = 不筛） */
+  /** 级别（all = 不筛） */
   const [levelFilter, setLevelFilter] = useState<'all' | 'permanent' | 'normal'>(FILTER_ALL)
-  /** 分类（`all` = 不筛）；与级别是两个独立维度，可叠加 */
+  /** 分类（all = 不筛）；与级别是两个独立维度，可叠加 */
   const [kindFilter, setKindFilter] = useState<string>(FILTER_ALL)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(PAGE_SIZE_DEFAULT)
   /** 选中的记忆 id（批量操作作用对象，跨页保留） */
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => EMPTY_SELECTION)
-  /** 编辑子弹窗：target 为 `null` = 新增 */
+  /** 编辑子弹窗：target 为 null = 新增 */
   const [editOpen, setEditOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<MemoryRecord | null>(null)
 
-  // 关闭时清掉所有临时视图状态：下次打开回到「全量、第 1 页、无选中、无表单」，
-  // 而不是带着上次的搜索词与半截勾选回来（那会让人以为是数据变了）
+  // 关闭时清掉临时视图状态：下次打开回到「全量、第 1 页、无选中」
   useEffect(() => {
     if (visible) return
     setSelected(EMPTY_SELECTION)
@@ -136,8 +123,7 @@ function MemoryListModal({
     setPageSize(PAGE_SIZE_DEFAULT)
   }, [visible])
 
-  // 列表变了（整理产出 / 删除 / 别处改动）后选中集必须收敛：已不存在的 id 要掉出去，
-  // 否则批量栏显示「已选 3 条」而实际只剩 1 条可操作 —— 计数就是在骗人。
+  // 列表变了后选中集必须收敛：已不存在的 id 要掉出去，否则批量栏计数就是在骗人
   useEffect(() => {
     setSelected((prev) => {
       if (prev.size === 0) return prev
@@ -147,17 +133,11 @@ function MemoryListModal({
     })
   }, [items])
 
-  /**
-   * 筛选下拉在渲染时建（语言切换后重建一次即可，不必进 state）。
-   * `true` = 带「全部」那条，筛选栏才有「不筛」的出口（编辑表单不能带，见 `labels.ts`）。
-   */
+  /** 筛选下拉在渲染时建（true = 带「全部」那条，编辑表单不能带） */
   const levelFilterOptions: SelectOption[] = levelOptions(true)
   const kindFilterOptions: SelectOption[] = kindOptions(true)
 
-  /**
-   * 筛选结果（顺序沿用后端：永久在前 → 新建在前）。
-   * 三个条件是**叠加**：分类 ∧ 级别 ∧ 内容子串，任一不匹配就出局（不是「任一命中」）。
-   */
+  /** 筛选结果（顺序沿用后端：永久在前 → 新建在前）。三个条件叠加，任一不匹配就出局。 */
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     return items.filter((m) => {
@@ -179,10 +159,7 @@ function MemoryListModal({
   const pageRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize)
   const pageIds = pageRows.map((m) => m.id)
 
-  /**
-   * 选中集里有多少条**不在当前页**（被筛掉的与在其它页的都算）。
-   * 必须如实报出来，否则「已选 20 条 → 删除」会删掉一片看不见的条目。
-   */
+  /** 选中集里有多少条不在当前页（必须如实报出，否则批量删除会删掉看不见的条目） */
   const selectedOffPage = selected.size - pageIds.filter((id) => selected.has(id)).length
 
   async function handleExport() {
@@ -227,7 +204,7 @@ function MemoryListModal({
     })
   }
 
-  /** 只作用于**本页**（半选态由 `indeterminate` 画） */
+  /** 只作用于本页（半选态由 indeterminate 画） */
   function togglePage(rows: MemoryRecord[], on: boolean) {
     setSelected((prev) => {
       const next = new Set(prev)
@@ -239,13 +216,12 @@ function MemoryListModal({
     })
   }
 
-  /** 选中里这个操作**真会改动**的条数（按钮可用性 + 提示数字都用它） */
+  /** 选中里这个操作真会改动的条数（按钮可用性与提示数字都用它） */
   const batchCount = (op: BatchOp): number =>
     items.filter((m) => selected.has(m.id) && needsOp(m, op)).length
 
   /**
-   * 批量按钮的禁用原因提示：没勾选时必须说清**怎么开始**，否则一排灰按钮看着就像坏了；
-   * 能点时不给 tip —— 浮层会挡视线。
+   * 批量按钮的禁用原因提示：没勾选时必须说清怎么开始，否则一排灰按钮看着像坏了；能点时不给 tip。
    */
   function batchTip(op: BatchOp, already: string): string | undefined {
     if (selected.size === 0) return t('先勾选要操作的记忆')
@@ -253,9 +229,8 @@ function MemoryListModal({
   }
 
   /**
-   * 逐条调既有仓储方法（一条一个 IPC），**单条失败不拖垮整批**，失败条数一并显示。
-   * 刻意不加 Rust 批量命令：面板量级（几十条）下这点 IPC 无感，而多一条批量命令就多一套
-   * 「部分失败 / 事务语义」口径要维护。
+   * 逐条调仓储方法（一条一个 IPC），单条失败不拖垮整批。
+   * 不加 Rust 批量命令：面板量级下这点 IPC 无感，而批量命令要多维护一套部分失败语义。
    */
   async function runBatch(op: BatchOp) {
     const targets = items.filter((m) => selected.has(m.id) && needsOp(m, op))
@@ -334,7 +309,7 @@ function MemoryListModal({
           {item.summary}
         </td>
         <td className="memory-cell-kind">{kindLabel(item.kind)}</td>
-        {/* 项目路径决定这条记忆在哪些会话可见；没限路径的项目记忆要明说「所有项目」，不能留空白 */}
+        {/* 项目路径决定这条记忆在哪些会话可见；没限路径的要明说「所有项目」，不能留空白 */}
         <td className="memory-cell-project" title={item.projectPath || undefined}>
           {item.projectPath || (item.kind === MEMORY_KIND_PROJECT ? t('所有项目') : '')}
         </td>
@@ -401,7 +376,7 @@ function MemoryListModal({
             </div>
           )
         }>
-        {/* 工具栏与表格滚动区分开：两行工具栏常驻不滚，表头在滚动区里自己吸顶 */}
+        {/* 工具栏与表格滚动区分开：工具栏常驻不滚，表头在滚动区里自己吸顶 */}
         <div className="memory-toolbar">
           <div className="memory-filter-row">
             <input
@@ -434,8 +409,7 @@ function MemoryListModal({
             </div>
           </div>
 
-          {/* 第二行：左筛选、右批量。批量栏**常驻**而非「选中才出现」：出现 / 消失会把表格
-              顶动一次，视线得重新找位置；左边管「看哪些」，右边管「动哪些」，位置固定才不混。 */}
+          {/* 第二行：左筛选、右批量。批量栏常驻而非「选中才出现」：否则会把表格顶动一次 */}
           <div className="memory-action-row">
             <div className="memory-filter-selects">
               <span className="memory-filter-label">{t('分类')}</span>
@@ -467,7 +441,7 @@ function MemoryListModal({
               aria-label={t('批量操作')}>
               <span className="memory-batch-count">
                 {tpl('已选 $__count__ 条', { count: selected.size })}
-                {/* 跨页保留：如实报出不在当前页的条数，否则批量删除会悄悄删掉看不见的 */}
+                {/* 跨页保留：如实报出不在当前页的条数 */}
                 {selectedOffPage > 0 &&
                   tpl('（其中 $__hidden__ 条不在当前页）', { hidden: selectedOffPage })}
               </span>
@@ -537,7 +511,7 @@ function MemoryListModal({
             <thead>
               <tr>
                 <th>
-                  {/* 全选只作用本页，逐页确认，避免「以为只选了一屏」 */}
+                  {/* 全选只作用本页 */}
                   <input
                     type="checkbox"
                     className="memory-check"
@@ -565,8 +539,7 @@ function MemoryListModal({
 
           {pageRows.length === 0 && (
             <div className="memory-empty">
-              {/* 顺序要紧：首次加载时 `loading` 与「没有记忆」长得一样，先判 loading，
-                  否则会闪一句「还没有任何记忆」吓人 */}
+              {/* 先判 loading：首次加载时它与「没有记忆」长得一样 */}
               {loading && items.length === 0
                 ? t('加载中…')
                 : items.length === 0

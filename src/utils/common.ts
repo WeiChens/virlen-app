@@ -1,7 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { isValidElement, ReactNode } from 'react'
 
-/** 判断是不是空字符串（null / undefined / "" / 空白串都会返回 true）。 */
 export const isEmpty = (str: string) => {
   if (!str) return true
   if (typeof str == 'number') return false
@@ -9,23 +8,19 @@ export const isEmpty = (str: string) => {
   return false
 }
 
-/** 是否全是中文。 */
 export function isAllChinaLanguage(str: string) {
   let reg = /^[\u4E00-\u9FFF]+$/
   return reg.test(str)
 }
 
-/** 是否是手机号码（中国大陆）。 */
 export function isPhone(phone: string) {
   return /^(13[0-9]|14[01456879]|15[0-35-9]|16[2567]|17[0-8]|18[0-9]|19[0-35-9])\d{8}$/.test(
     phone,
   )
 }
-/** 是否是手机号码（全球范围）。 */
 export function isGlobalPhone(phone: string) {
   return /(\d{1,4})\s?\d{1,4}-?\d{1,9}$/.test(phone)
 }
-/** 获取随机 ID。 */
 export const UUID = () => {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
     var r = (Math.random() * 16) | 0,
@@ -36,7 +31,7 @@ export const UUID = () => {
 
 export const ToJSON = (obj: any) => JSON.stringify(obj)
 
-/** 时间格式化（fmt 默认 yyyy-MM-dd hh:mm:ss）。 */
+/** fmt 默认 yyyy-MM-dd hh:mm:ss */
 export const dateFormat = (date: Date, fmt = 'yyyy-MM-dd hh:mm:ss') => {
   var o = {
     'M+': date.getMonth() + 1,
@@ -66,37 +61,34 @@ export const dateFormat = (date: Date, fmt = 'yyyy-MM-dd hh:mm:ss') => {
   return fmt
 }
 
-/** 深拷贝一个对象（注意：函数无法拷贝）。 */
 export const copyObject = <T>(o: T): T => JSON.parse(JSON.stringify(o))
 
-/** 睡眠函数（毫秒）。 */
 export const sleep = (time = 200): Promise<true> =>
   new Promise((r, _) => setTimeout(() => r(true), time))
 
-/** 密码加密（转 `\uXXXX` 序列）。 */
+/** 字符串各字符的码位转成 \uXXXX 序列（非加密）。 */
 export function decToHex(str: string) {
   var res = []
   for (var i = 0; i < str.length; i++)
     res[i] = ('00' + str.charCodeAt(i).toString(16)).slice(-4)
   return '\\u' + res.join('\\u')
 }
-/** 密码解密。 */
 export function hexToDec(str: string) {
   str = str.replace(/\\/g, '%')
   return unescape(str)
 }
 /** 是否是网址（含域名 / IP / localhost）。 */
 export function isURL(str: string) {
-  // 匹配域名（含 localhost）的 URL
+  // 域名（含 localhost）
   const urlRegex =
     /^(https?:\/\/)([\w.-]+(?:\.[a-zA-Z]{2,})?|localhost)(:\d{1,5})?(\/[\w\.-]*)*\/?$/i
-  // 匹配 IP 地址的 URL（含路径和端口）
+  // IP 地址
   const ipIP =
     /^(https?:\/\/)((25[0-5]|2[0-4]\d|[01]?\d{1,2})\.){3}(25[0-5]|2[0-4]\d|[01]?\d{1,2})(:\d{1,5})?(\/[\w\.-]*)*\/?$/
   return urlRegex.test(str.trim()) || ipIP.test(str.trim())
 }
 
-/** 创建 Date（解决苹果端无法用 yyyy-MM-dd 格式创建）。 */
+/** 苹果端不支持用 yyyy-MM-dd 创建 Date，这里换成分隔符。 */
 export const newDate = (res: any) => {
   if (typeof res == 'string') {
     return new Date(res.replace(/[-]/g, '/'))
@@ -104,7 +96,6 @@ export const newDate = (res: any) => {
   return new Date(res)
 }
 
-/** 第一个参数为 null / 0 / 空字符串时返回第二个参数。 */
 export function ifUnExists<T>(value: T, exists: T): T {
   if (typeof value == 'string' && value.trim() == '') {
     return exists
@@ -115,11 +106,9 @@ export function ifUnExists<T>(value: T, exists: T): T {
   return value
 }
 
-/** 是否是邮箱。 */
 export const isEmail = (email: string) =>
   /^[a-zA-Z0-9._%±]+@[a-zA-Z0-9.-]+.[a-zA-Z]{2,}$/.test(email)
 
-/** 解析网址参数，返回 { path, query }。 */
 export function parseUrl(url: string) {
   if (!url.includes('?')) {
     return {
@@ -139,7 +128,7 @@ export function parseUrl(url: string) {
     query,
   }
 }
-/** 根据年月获取当月天数。 */
+/** 闰年判定不能只靠 %4（整百年需 %400） */
 export const getMonthDates = (year: number, months: number) => {
   const arr = [1, 3, 5, 7, 8, 10, 12]
   if (arr.includes(months)) return 31
@@ -469,14 +458,8 @@ export function getUrlFileName(url: string, defaultName = 'download') {
 }
 
 /**
- * 路径字符串归一化（**纯字符串处理，不碰文件系统**）。
- *
- * 为什么必须归一：同一条路径在两侧来源不同 —— 工作目录来自系统目录选择器（`C:\code\app`），
- * 工具入参里的绝对路径来自模型（可能写成 `c:/code/app/src/a.ts`），Rust 侧 `canonicalize` 出来的
- * 还带 Windows 扩展长度前缀（`\\?\C:\…`）。逐字符比较必然对不上，相对路径就截不出来。
- *
- * 归一内容：反斜杠 → 正斜杠、剥掉扩展长度前缀、折叠路径中部的重复斜杠（开头 UNC 的 `//` 保留）、
- * 去掉末尾斜杠。
+ * 为何必须归一：同一路径在两侧来源不同 —— 工作目录来自系统目录选择器，工具入参来自模型，
+ * Rust 侧 canonicalize 还带扩展长度前缀，逐字符比较必然对不上。
  */
 function normalizePathString(path: string): string {
   let p = path.replace(/\\/g, '/')
@@ -489,23 +472,20 @@ function normalizePathString(path: string): string {
   return p.replace(/\/+$/, '')
 }
 
-/** 是否形如 Windows 绝对路径（盘符 `C:/…` 或 UNC `//server/share`）—— 决定比较时是否忽略大小写 */
+/** 形如 Windows 绝对路径（盘符或 UNC）—— 决定比较时是否忽略大小写 */
 function isWindowsAbsolutePath(p: string): boolean {
   return /^[a-zA-Z]:(\/|$)/.test(p) || p.startsWith('//')
 }
 
 /**
- * 将绝对路径转为相对路径（相对于工作目录）：在工作目录下返回相对路径，否则返回归一化后的原路径。
- *
- * 比较规则：Windows 路径**大小写不敏感**（`c:` 与 `C:` 指向同一条路径，文件系统本身也不区分），
- * 其余（POSIX）保持大小写敏感。返回值里保留原路径的大小写 —— 只截掉前缀，不改写路径本身。
- * 返回的一定是正斜杠形式（卡片/终端只做展示，统一分隔符更好扫读）。
+ * 绝对路径 → 相对工作目录的路径；不在工作目录下则返回归一化后的原路径。
+ * Windows 路径大小写不敏感，POSIX 敏感；返回值保留原大小写，统一用正斜杠。
  */
 export function toShortPath(absolutePath: string, workspace?: string): string {
   if (!absolutePath) return absolutePath
   const path = normalizePathString(absolutePath)
   const base = workspace ? normalizePathString(workspace) : ''
-  // 没有工作目录就无从截取；`base` 归一后为空串但确实给了工作目录（如 `/`）时继续参与比较
+  // 没有工作目录就无从截取；base 归一后为空串但确实给了工作目录（如 /）时继续比较
   if (!base && !workspace) return path
 
   const foldCase = isWindowsAbsolutePath(path) && isWindowsAbsolutePath(base)
@@ -520,12 +500,8 @@ export function toShortPath(absolutePath: string, workspace?: string): string {
 }
 
 /**
- * 把（可能是相对工作目录的）路径补成绝对路径 —— `toShortPath` 的逆操作。
- *
- * 为什么需要：工具卡片显示的是相对短路径，而 LLM 也常写相对路径；但交给系统的能力（`openPath` /
- * `revealItemInDir`）只认绝对路径，把 `src/a.ts` 直接交给「在文件管理器中显示」会定位到错误目录 / 失败。
- * 判定「已是绝对路径」（与 `resolveSafePath` 同款）：以 `/`、`\`（POSIX 根 / UNC / Windows 根）开头，或形如
- * `C:` 的盘符。`workspace` 为空时原样返回（宁可不改，也不拼出错误路径）。
+ * 相对路径 → 绝对路径（toShortPath 的逆操作）：openPath / revealItemInDir 只认绝对路径。
+ * workspace 为空时原样返回（宁可不改，也不拼出错误路径）。
  */
 export function toAbsolutePath(path: string, workspace?: string): string {
   if (!path) return path
@@ -535,12 +511,11 @@ export function toAbsolutePath(path: string, workspace?: string): string {
   if (!workspace) return path
   const base = workspace.replace(/\\/g, '/').replace(/\/+$/, '')
   if (!base) return path
-  // 去掉可能的前导 `./`，避免拼出 `E:/ws/./a.ts` 这种冗余段
+  // 去掉前导 ./，避免拼出 E:/ws/./a.ts 这种冗余段
   const rel = path.replace(/\\/g, '/').replace(/^\.\//, '')
   return `${base}/${rel}`
 }
 
-/** 获取文件父级路径。 */
 export function getFileParentDir(path: string) {
   path = path.replace(/\\/g, '/').replace(/\/+$/, '')
   return path.substring(0, path.lastIndexOf('/'))
@@ -564,27 +539,24 @@ export const disableNotNumber = (e: React.KeyboardEvent<HTMLDivElement>) => {
   }
 }
 
-/** 格式化时间为相对时间显示（如 X 秒前 / 今日 h:mm / 周一 h:mm）。 */
+/** 相对时间：X 秒前 / 今日 h:mm / 周一 h:mm / 3月5日。 */
 export function formatRelativeTime(date: Date): string {
   const now = new Date()
 
-  // 计算时间差（毫秒）
   const diffMs = date.getTime() - now.getTime()
   const diffSeconds = Math.floor(Math.abs(diffMs) / 1000)
   const diffMinutes = Math.floor(diffSeconds / 60)
   const diffHours = Math.floor(diffMinutes / 60)
   const diffDays = Math.floor(diffHours / 24)
 
-  // 判断是否同一年
+  // 同一年 / 同一天
   const isSameYear = date.getFullYear() === now.getFullYear()
 
-  // 判断是否同一天
   const isSameDay =
     date.getFullYear() === now.getFullYear() &&
     date.getMonth() === now.getMonth() &&
     date.getDate() === now.getDate()
 
-  // 判断是否在同一周（以周一为一周开始）
   const isSameWeek = (() => {
     if (!isSameYear) return false
 
@@ -603,12 +575,11 @@ export function formatRelativeTime(date: Date): string {
   const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
   const weekday = weekdays[date.getDay()]
 
-  // 获取小时和分钟
   const hours = date.getHours()
   const minutes = date.getMinutes().toString().padStart(2, '0')
   const timeStr = `${hours}:${minutes === '00' ? '' : minutes}`
 
-  // 如果是未来时间
+  // 未来时间
   if (diffMs > 0) {
     if (diffMinutes < 1) {
       return `${diffSeconds}秒后`
@@ -628,7 +599,7 @@ export function formatRelativeTime(date: Date): string {
     return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`
   }
 
-  // 如果是过去时间
+  // 过去时间
   if (diffMinutes < 1) {
     return `${diffSeconds}秒前`
   }
@@ -639,7 +610,7 @@ export function formatRelativeTime(date: Date): string {
     if (isSameDay) {
       return `今日 ${timeStr}`
     }
-    // 判断是否是昨天
+    // 昨天
     const yesterday = new Date(now)
     yesterday.setDate(now.getDate() - 1)
     if (
@@ -662,9 +633,9 @@ export function getCanvasMousePosition(
   canvas: HTMLCanvasElement,
   event: { clientX: number; clientY: number },
 ) {
-  const rect = canvas.getBoundingClientRect() // 获取元素在视口中的位置和尺寸
-  const scaleX = canvas.width / rect.width // 实际绘图宽度与CSS宽度的比例
-  const scaleY = canvas.height / rect.height // 实际绘图高度与CSS高度的比例
+  const rect = canvas.getBoundingClientRect()
+  const scaleX = canvas.width / rect.width // 实际绘图宽度 / CSS 宽度
+  const scaleY = canvas.height / rect.height
   return {
     x: (event.clientX - rect.left) * scaleX,
     y: (event.clientY - rect.top) * scaleY,
@@ -684,7 +655,7 @@ export function getMatch<T = any>(
 let _platform: 'windows' | 'macos' | 'linux' | null = null
 
 /**
- * 检测当前操作系统平台（Rust os_platform 权威，失败用 UA 兜底）。
+ * 当前系统平台（Rust os_platform 权威，失败用 UA 兜底），进程内缓存。
  */
 export async function getPlatform(): Promise<'windows' | 'macos' | 'linux'> {
   if (_platform) return _platform

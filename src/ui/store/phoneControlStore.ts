@@ -1,15 +1,9 @@
 /**
  * 「手机控制」设置页的状态 + 单例服务持有者。
+ * 配对表 / 审计 / 交互表三份跨服务实例的对象都归本 store（改 ICE 会重建服务，放服务里会连表一起丢）。
+ * 配对变更由本 store 订阅并落盘 + 刷新列表。
  *
- * 三份「跨服务实例存活」的对象都归本 store：`pairing`（配对表）、`audit`（审计）、
- * `interactions`（待应答交互表）。服务实例在改 ICE 时会被换掉（见 `rebuildService`），
- * 放服务里会连表一起丢 —— 手机上那张交互卡片变成点不动的僵尸。
- *
- * `confirmPair` 把「首次绑定确认」桥接成 UI：挂起 Promise + 打开设置页等用户点允许/拒绝。
- * 配对表变更由本 store 订阅（`pairing.onChange`）→ 冒泡刷列表 + 落盘；不能只在 enable /
- * 点允许那一刻拉一次，那时 hello 还没回来，必然是旧的。
- *
- * 不并入 `ui/store/index` barrel：它 import `@/bridge`，`@/bridge` 又依赖 `@/ui/store`，走 barrel 成环。
+ * 不并入 ui/store barrel：它 import @/bridge，@/bridge 又依赖 @/ui/store，会成环。
  */
 import { action, computed, makeObservable, observable, runInAction } from 'mobx'
 import { invoke } from '@tauri-apps/api/core'
@@ -44,7 +38,7 @@ import settingsEvent from '@/events/settingsEvent'
 
 interface PendingPair {
   token: string
-  /** 请求方（**手机**）的名字，bridge 侧已归一 + 兜底。别改回 `deviceName` —— 那是本机电脑的名字。 */
+  /** 请求方（手机）的名字（已归一）；不是本机名。 */
   mobileName: string
   resolve: (ok: boolean) => void
 }
@@ -53,7 +47,7 @@ const SIGNAL_STORAGE_KEY = 'virlen.phone.signal'
 const DEFAULT_SIGNAL_URL = 'https://virlen.cn/api/rtc/'
 const DEVICE_NAME = 'Virlen 电脑'
 
-/** ICE 自定义配置的存储端口（共享包 `resolveIceServers()` 要的就是它）。用 localStorage 与同页的 `virlen.phone.signal` 同口径；清掉只回服务端默认，不丢功能。 */
+/** ICE 自定义配置的存储端口（共享包 resolveIceServers 需要它，用 localStorage 同口径） */
 function iceStorage(): IceStoragePort | null {
   try {
     return typeof localStorage !== 'undefined' ? localStorage : null
@@ -78,7 +72,7 @@ function inTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
 
-/** Tauri 环境：配对表落盘到 `<data_dir>/phone-pairing.json`（表归本 store 持有，落盘也归它，服务不再管一份）。 */
+/** Tauri 环境：配对表落盘到 `<data_dir>/phone-pairing.json` */
 function buildPersistence(): PhonePairingPersistence | undefined {
   if (!inTauri()) return undefined
   return {
@@ -91,7 +85,7 @@ function buildPersistence(): PhonePairingPersistence | undefined {
   }
 }
 
-/** Tauri 环境：把设备身份落盘到 `<data_dir>/phone-identity.json`（Rust 命令）。 */
+/** Tauri 环境：设备身份落盘到 `<data_dir>/phone-identity.json` */
 function buildIdentityPersistence(): IdentityPersistence | undefined {
   if (!inTauri()) return undefined
   return {
@@ -104,12 +98,12 @@ function buildIdentityPersistence(): IdentityPersistence | undefined {
   }
 }
 
-/** 「操作记录」保留条数上限（再多没人看，也要控渲染成本）。 */
+/** 「操作记录」保留条数上限 */
 const AUDIT_VIEW_LIMIT = 100
-/** 二维码倒计时刷新间隔：只驱动一个文本，1 秒足够。 */
+/** 二维码倒计时刷新间隔 */
 const TICKET_TICK_MS = 1000
 
-/** 合并视图去重键（磁盘历史与内存条目的同一事件只出现一次）。 */
+/** 合并视图去重键 */
 function auditKey(e: AuditEntry): string {
   return `${e.at}|${e.method}|${e.interactionId ?? ''}|${e.detail ?? ''}|${e.allowed ? 1 : 0}`
 }
@@ -119,60 +113,53 @@ class PhoneControlStore {
   status: PhoneControlStatus = 'disabled'
   payload: PairingPayload | null = null
   devices: PairedDevice[] = []
-  /** 现在**正连着**本机的那台手机（设备 id；没连接时为 `null`）—— 列表据此高亮。 */
+  /** 现在正连着本机的手机（设备 id）—— 列表据此高亮 */
   activeDeviceId: string | null = null
-  /** 当前链路通讯类型（`direct` = P2P 直连 / `relay` = TURN 中继 / `unknown` = 没结论）。与 `status` 正交：一个说「连没连上」，一个说「怎么连上的」；断链即回 `unknown`。 */
+  /** 当前链路通讯类型，与 status 正交：一个说连没连上，一个说怎么连上的 */
   linkKind: LinkKind = 'unknown'
   pendingPair: PendingPair | null = null
   error: string | null = null
-  /** 本机设备身份（异步就绪；就绪前不允许启用服务，否则会用一个临时 key 建房间）。 */
+  /** 本机设备身份（异步就绪；就绪前不能启用服务，否则会用临时 key 建房间） */
   identity: HostIdentity | null = null
-  /** 本次连接实际使用的 ICE 服务器（`自定义 > 服务端下发 > 缓存 > 空`），解析在共享包 `resolveIceServers()`（与手机端同一份）。 */
+  /** 本次连接实际使用的 ICE 服务器（自定义 > 服务端下发 > 缓存 > 空） */
   iceServers: IceServerInit[] = []
-  /** ICE 来源（设置页文案 + 埋点 `ice_source`）。 */
+  /** ICE 来源（设置页文案 + 埋点） */
   iceSource: IceSource = 'none'
-  /** 来源的中文描述（由共享包给出，避免两端各说各话）。 */
+  /** 来源的中文描述（由共享包给出） */
   iceDetail = '尚未解析'
   /** 降级 / 异常时的补充说明（如「信令服务暂不可达」）。 */
   iceWarning: string | null = null
-  /** 自定义配置写了但非法时的原因（标红提示，**不阻断**连接）。 */
+  /** 自定义配置写了但非法时的原因（标红提示，不阻断连接） */
   iceCustomError: string | null = null
   /** ICE 配置文本框的内容（展开折叠区时回填）。 */
   iceText = ''
   iceLoading = false
-  /** 是否已解析过 ICE（首次启用时解析一次；之后只在用户改动 / 手动刷新时重解析）。 */
+  /** 是否已解析过 ICE（首次启用解析一次） */
   private iceResolved = false
-  /** 当前二维码剩余秒数（`null` = 未生成）。到期那一刻自动换新码。 */
+  /** 当前二维码剩余秒数；到期自动换新码 */
   ticketLeftSec: number | null = null
-  /** 本次会话发生的审计条目（倒序，最新在前）—— 浏览器 harness 下它就是唯一读取面。 */
+  /** 本次会话的审计条目（倒序）—— 浏览器 harness 下是唯一读取面 */
   liveEntries: AuditEntry[] = []
-  /** 从磁盘读回的历史审计（倒序）—— 仅 Tauri。 */
+  /** 从磁盘读回的历史审计（倒序，仅 Tauri） */
   diskEntries: AuditEntry[] = []
   auditLoaded = false
 
-  /** 审计日志（与 bridge **同一实例**，否则设置页读不到 bridge 写下的记录）。 */
+  /** 审计日志（与 bridge 同一实例，否则设置页读不到 bridge 写的记录） */
   readonly audit: AuditLog
 
-  /** 配对表（票据 / 已绑定设备），与 `PhoneControlService` **同一实例**。本 store 持有是为了「未启用也能看到已绑定的手机」；服务启停 / 重建都换不掉它（落盘与订阅见 `restorePairing()`）。 */
+  /** 配对表，与 PhoneControlService 同一实例（未启用也能看到已绑定的手机） */
   readonly pairing = new PairingStore()
 
   /**
-   * 待应答交互注册表（提问 / 授权），与配对表、审计同一套做法：**本 store 持有**。
-   *
-   * 留在服务实例上会被「改 ICE 重建」丢掉排队中的交互 —— 手机上的卡片变成点不动的僵尸
-   * （点一下得 `not-found`），而电脑侧弹窗与引擎仍在等。
-   * **懒建**：从未启用手机控制就不建表、不接线，也就没有 `phone.interaction.*` 埋点。
+   * 待应答交互注册表，同样归本 store 持有（改 ICE 重建会丢失排队中的交互）。
+   * 懒建：从未启用就不建表、不接线。
    */
   private interactions: InteractionRegistry | null = null
 
   private service: PhoneControlService | null = null
   private ticketTimer: ReturnType<typeof setInterval> | null = null
 
-  /**
-   * 测试注入：建服务时转交 `PhoneControlOptions.createTransport`（默认建 host 角色的 `RtcTransport`）。
-   * jsdom 没有 `RTCPeerConnection`，而「启用 → 连上 → 改 ICE 重建 → 重连」整条链路只有 store 能驱动，
-   * 单测靠 memory transport 验证 store 的胶水（见 `src/tests/ui/phone-control-relink.test.ts`）。**生产不设置。**
-   */
+  /** 测试注入（生产不设置）：把传输工厂转交给服务，jsdom 里用 memory transport 验证胶水 */
   createTransport?: (room: string) => Transport
 
   constructor() {
@@ -218,13 +205,12 @@ class PhoneControlStore {
   }
 
   /**
-   * 启动即读回配对表，并**订阅后续变更**。
-   * 订阅必须在构造时就挂好（不能等启用服务）：兑换票据发生在点「允许」**之后**的异步链路里，
-   * 那一刻去拉列表只会拉到空 —— 这是「绑定了但列表不新增」的根因。
+   * 启动即读回配对表并订阅后续变更。订阅必须在构造时挂好：兑换票据发生在点「允许」之后，
+   * 那时再拉列表只会拉到空。
    */
   private async restorePairing(): Promise<void> {
     const persistence = buildPersistence()
-    // 一变就落盘（旁路，失败不影响本次会话）+ 刷界面
+    // 一变就落盘（旁路）+ 刷界面
     this.pairing.onChange = (snap) => {
       persistence?.save(JSON.stringify(snap))
       this.syncDevices()
@@ -238,12 +224,12 @@ class PhoneControlStore {
         })
       }
     } catch {
-      /* 坏数据 / 读取失败：保持空配对表（下一次变更会覆盖落盘） */
+      /* 坏数据 / 读取失败：保持空配对表 */
     }
     this.syncDevices()
   }
 
-  /** 把配对表的最新状态搬进可观察字段（设备列表 + 在线标记）。 */
+  /** 把配对表最新状态搬进可观察字段 */
   private syncDevices(): void {
     const view = this.pairing.view()
     runInAction(() => {
@@ -252,7 +238,7 @@ class PhoneControlStore {
     })
   }
 
-  /** 设备 key 是房间号的来源，必须在任何房间 / 二维码之前就绪。 */
+  /** 设备 key 是房间号的来源，必须在任何房间 / 二维码之前就绪 */
   private async initIdentity(): Promise<void> {
     const identity = await loadHostIdentity(buildIdentityPersistence())
     runInAction(() => {
@@ -260,7 +246,7 @@ class PhoneControlStore {
     })
   }
 
-  /** 审计写入时更新内存镜像 + 旁路落盘（写盘失败只影响「重启后可回溯」）。 */
+  /** 审计写入时更新内存镜像 + 旁路落盘 */
   private onAudit(entry: AuditEntry): void {
     runInAction(() => {
       this.liveEntries = [entry, ...this.liveEntries].slice(0, AUDIT_VIEW_LIMIT)
@@ -271,7 +257,7 @@ class PhoneControlStore {
     })
   }
 
-  /** 合并视图（内存 + 磁盘，去重、倒序、限长）—— 设置页直接读它。 */
+  /** 合并视图（内存 + 磁盘，去重、倒序、限长） */
   get auditView(): AuditEntry[] {
     const seen = new Set<string>()
     const out: AuditEntry[] = []
@@ -284,7 +270,7 @@ class PhoneControlStore {
     return out.sort((a, b) => b.at - a.at).slice(0, AUDIT_VIEW_LIMIT)
   }
 
-  /** 读回磁盘历史（设置页打开时调一次即可）。浏览器 harness 下是空操作。 */
+  /** 读回磁盘历史（设置页打开时调一次）；浏览器 harness 下是空操作 */
   async loadAuditHistory(): Promise<void> {
     if (!inTauri() || this.auditLoaded) return
     try {
@@ -341,7 +327,7 @@ class PhoneControlStore {
 
   private async enableAsync(): Promise<void> {
     if (!this.identity) await this.initIdentity()
-    // ICE 必须在建链路**之前**拿到（`RTCPeerConnection` 构造后就改不了）；解析过一次就不再问服务端
+    // ICE 必须在建链路之前拿到（RTCPeerConnection 构造后就改不了）
     if (!this.iceResolved) await this.resolveIce()
     const service = this.ensureService()
     if (!service) return
@@ -354,8 +340,7 @@ class PhoneControlStore {
   }
 
   /**
-   * 解析本次要用的 ICE。永不抛错：拿不到配置就退化成「仅本机候选」，而不是让「启用手机控制」失败；
-   * 但来源与降级原因如实写进状态（设置页可见 + 埋点 `ice_source`）。
+   * 解析本次要用的 ICE。永不抛错：拿不到就退化成「仅本机候选」，来源与降级原因如实写进状态。
    */
   async resolveIce(): Promise<void> {
     runInAction(() => {
@@ -377,7 +362,7 @@ class PhoneControlStore {
     })
   }
 
-  /** 展开「ICE 服务器」折叠区时回填文本框（坏数据按「没填」处理，不让用户看到乱码）。 */
+  /** 展开 ICE 折叠区时回填文本框（坏数据按没填处理） */
   loadIceText(): void {
     this.iceText = readCustomIceText(iceStorage())
   }
@@ -386,10 +371,10 @@ class PhoneControlStore {
     this.iceText = text
   }
 
-  /** 保存自定义 ICE（留空 = 恢复服务端默认）。先校验再落盘：错误在保存那一刻暴露，而不是等某次连接失败才发现少了个引号。 */
+  /** 保存自定义 ICE（留空 = 恢复服务端默认）。先校验再落盘，错误当场暴露。 */
   async saveIceConfig(): Promise<boolean> {
     const result = writeCustomIceText(iceStorage(), this.iceText)
-    // ⚠️ `=== false` 而非 `!result.ok`：本 tsconfig 关了 strictNullChecks，真值判断不收敛联合类型
+    // 用 === false 而非 !result.ok：tsconfig 关了 strictNullChecks，真值判断不收敛联合类型
     if (result.ok === false) {
       runInAction(() => {
         this.iceCustomError = result.error
@@ -404,7 +389,7 @@ class PhoneControlStore {
     return true
   }
 
-  /** 恢复服务端默认（清掉本机自定义）。 */
+  /** 恢复服务端默认（清掉本机自定义） */
   async resetIceConfig(): Promise<void> {
     writeCustomIceText(iceStorage(), '')
     runInAction(() => {
@@ -414,7 +399,7 @@ class PhoneControlStore {
     await this.applyIceChange()
   }
 
-  /** 重新解析一次（用户点「重新获取」/ 排查连通性时用）。 */
+  /** 重新解析一次（排查连通性时用） */
   async refreshIce(): Promise<void> {
     await this.applyIceChange()
   }
@@ -425,13 +410,9 @@ class PhoneControlStore {
   }
 
   /**
-   * 换 ICE = 重建链路：`RTCPeerConnection.iceServers` 只在构造时生效，改不了。
-   * 做法是「停旧服务 + 丢引用 + 重新启用」；副作用是二维码换一张（与「重新启用」同一语义，用户看得见）。
-   *
-   * ⚠️ 这里是**唯一**换掉服务实例的路径（`setEnabled(false/true)` 复用同一个）。
-   * `dispose()` = 不再复用该实例（内部就是 `disable()`，全局监听器不会悬空）。
-   * ⚠️ 这条路径**不存在「接线断着」的窗口**：`dispose()` 后紧接着 `enableAsync()`，而 identity / ICE
-   * 都已解析时它整段**同步**执行（路径上没有 await 点），接线在同一个 tick 内挂回。
+   * 换 ICE = 重建链路（iceServers 只在构造时生效）。副作用是二维码换一张。
+   * 这里是唯一换掉服务实例的路径；identity / ICE 都已解析时 enableAsync 整段同步，
+   * 故不存在接线断着的窗口。
    */
   private rebuildService(): void {
     this.service?.dispose()
@@ -440,13 +421,8 @@ class PhoneControlStore {
   }
 
   /**
-   * 懒建 + 跨服务实例复用待应答交互注册表。
-   *
-   * ⚠️ 推送出口必须是**本 store 的方法引用**（`service?.emitToLink`），不能绑某个服务实例 ——
-   * 改 ICE 后实例会换。没服务 / 没链路时直接丢弃：条目仍在表里，手机连上后靠
-   * `host.interaction.list` 快照补齐。
-   * ⚠️ 接线（`toolInteractEvent` → 本表）**不在这里**，它随服务启停走（`attachInteractions`）：
-   * 关掉手机控制期间不登记、无埋点，但表本身**不清空** —— 本机弹窗与引擎还在等。
+   * 懒建 + 跨服务实例复用交互注册表。推送出口必须指向本 store 的方法（service?.emitToLink），
+   * 不能绑某个实例。接线随服务启停走，不在这里。
    */
   private ensureInteractions(): InteractionRegistry {
     if (this.interactions) return this.interactions
@@ -456,18 +432,16 @@ class PhoneControlStore {
       emit,
       // 与设置页共用同一份审计（否则手机侧的批准不进「操作记录」）
       audit: this.audit,
-      // 手机批准高风险操作时提醒电脑前的人（§16.3-2）
+      // 手机批准高风险操作时提醒电脑前的人
       notify: (text) => showToast(text, 6000),
     })
     return this.interactions
   }
 
   /**
-   * 设置页打开时调用：**换一张新码** + 开始倒计时（面板上那张码可能已放了几分钟，用户此刻才举起手机）。
-   *
-   * 顺手对一次「房间在线」的账：信令事件流静默死掉时那颗胶囊会说假话（电脑停在「等待手机连接…」，
-   * 手机已显示「电脑不在线」），而定时自检最长要等 `ROOM_PRESENCE_CHECK_MS`。
-   */
+ * 设置页打开时：换一张新码 + 开始倒计时（屏上那张可能已放了几分钟）。
+ * 顺手对一次房间在线的账（SSE 静默死掉时胶囊会说假话）。
+ */
   onPanelOpen(): void {
     if (!this.enabled) return
     const service = this.service
@@ -493,10 +467,8 @@ class PhoneControlStore {
   }
 
   /**
-   * 移除一台已配对手机（**不依赖服务是否启用**：配对表本来就归本 store 持有）。
-   *
-   * ⚠️ 移除的若是**此刻正连着**的那台，光删记录不够：已建好的 RPC 通道不看凭证，链路不会自己断
-   * → 让服务拆掉重开。判断用 `pairing.activeDeviceId`（配对表才是唯一真源），不用本 store 的镜像字段。
+   * 移除一台已配对手机（不依赖服务是否启用）。若移除的正是此刻连着的那台，
+   * 光删记录不够（已建好的 RPC 通道不看凭证）→ 让服务拆掉重开。
    */
   revokeDevice(deviceId: string): void {
     const connected = this.pairing.activeDeviceId === deviceId
@@ -504,24 +476,21 @@ class PhoneControlStore {
     this.pairing.revoke(deviceId)
     if (connected) this.service?.dropLink()
     /*
-     * 票已随移除一并作废（`PairingStore.revoke`）→ 屏幕上那张码已经扫不动了，
-     * 立即换一张新的：被移除的那台手机手上缓存的旧票不再有配对权，而别的手机照常可扫。
+     * 票已随移除作废 → 屏上那张码已扫不动，立即换新；别的手机照常可扫。
      */
     if (this.enabled) this.refreshTicket()
   }
 
   /**
-   * 给一台已配对手机**改名**（设置页行内编辑的唯一入口）。与「移除」同口径：不依赖服务是否启用；
-   * 名字不进授权判定，也不碰链路（在连着的那台不会掉线）。变更经 `pairing.onChange` 回到 `syncDevices()`。
-   *
-   * @returns 改成了 `true`；设备不在列表 / 名字非法 `false` —— 设置页据此提示，而不是静默无反应
+   * 给已配对手机改名（不依赖服务是否启用；名字不进授权判定，不掉线）。
+   * @returns 设备不在列表 / 名字非法时为 false
    */
   renameDevice(deviceId: string, name: string): boolean {
     const updated = this.pairing.rename(deviceId, name)
     return updated !== null
   }
 
-  /** 二维码倒计时（1 秒一跳）；票据一失效（到期 / **被扫走**）就立刻换新码，屏幕上永远是可用的。 */
+  /** 二维码倒计时；票据一失效（到期 / 被扫走）就换新码 */
   private startTicketTimer(): void {
     if (this.ticketTimer) return
     this.ticketTimer = setInterval(() => this.tickTicket(), TICKET_TICK_MS)
@@ -540,8 +509,7 @@ class PhoneControlStore {
       this.stopTicketTimer()
       return
     }
-    // 「不可用」三种都要换新：还没票 / 到期 / **被扫走**（兑换即从票据表删除）。只等到期才换会
-    // 留一张死码最长 5 分钟；兑换发生在点「允许」之后，屏上那张码必须跟着转才始终可扫。
+    // 三种「不可用」都要换新：还没票 / 到期 / 被扫走（兑换即从票据表删除）
     const rotated = service.rotateTicketIfStale()
     runInAction(() => {
       if (rotated) this.payload = service.pairingPayload()
@@ -557,10 +525,10 @@ class PhoneControlStore {
       signalUrl: readSignalUrl(),
       deviceName: DEVICE_NAME,
       deviceKey: identity.deviceKey,
-      // ICE 由本 store 解析后传入（默认值来自信令服务下发；源码里不再有任何 TURN 凭证）
+      // ICE 由本 store 解析后传入（源码里不再有任何 TURN 凭证）
       iceServers: this.iceServers,
       iceSource: this.iceSource,
-      // 三份表（pairing / audit / interactions）都与设置页共用，且都归本 store 持有（见类注释）
+      // 三份表都与设置页共用，且都归本 store 持有
       pairing: this.pairing,
       audit: this.audit,
       interactions: this.ensureInteractions(),
@@ -593,7 +561,7 @@ class PhoneControlStore {
     return service
   }
 
-  /** 刷新二维码载荷（服务启停 / 确认配对后调用）；设备列表由 `syncDevices` 负责。 */
+  /** 刷新二维码载荷（服务启停 / 确认配对后） */
   private sync(): void {
     const service = this.service
     if (!service) return
@@ -604,7 +572,7 @@ class PhoneControlStore {
   }
 }
 
-/** 剩余秒数（`null` = 没有票据）。 */
+/** 剩余秒数（null = 没有票据） */
 function remainingSec(deadline: number | null, now: number = Date.now()): number | null {
   if (deadline == null) return null
   return Math.max(0, Math.ceil((deadline - now) / 1000))

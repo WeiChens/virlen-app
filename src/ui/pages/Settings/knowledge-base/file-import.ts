@@ -1,25 +1,8 @@
 /**
- * 知识库文件导入工具 —— 全是「传参进、结果出」的工具（多编码读取 / 逐份入库），不含组件状态；
- * 刷新列表通过 `afterImport` 回调注入，避免反向依赖组件。
+ * 知识库文件导入工具（无组件状态）：多编码读取 + 逐份入库，刷新列表由 afterImport 回调注入。
  *
- * **哪些文件能进库：不再看扩展名，看内容**
- * - PDF → 交给后端抽文字（二进制，前端所有解码对它都只会得到乱码）；
- * - 其余一切文件（`.md` / `.json` / `.py` / 没扩展名的都算）→ 当纯文本试读：多编码解码 + 内容自检，
- *   能读出文字就入库，读不出就跳过并说清是哪一份；
- * - 大小：纯文本 2 MB（[`MAX_TEXT_FILE_BYTES`]）、PDF 50 MB（[`MAX_PARSE_DOC_BYTES`]）。
- *   文件夹那条路径的筛选在 Rust 侧（同一个口径），这里再卡一道是为了「选单个文件」也守得住。
- *
- * 两条**批量**路径（选文件夹 / 导入压缩包）都跑在同一个进度弹窗下（`shared/TaskProgress`）：
- * 每处理一份报一次进度、显示最新一条文案，用户随时可以取消 —— 取消在**下一份的边界**上生效
- * （每份之间查一次 `task.cancelled`），所以不会出现「半个文件进了库」。
- * 逐条的过程文案进弹窗，不再逐份弹 toast（几十份会把屏幕刷满）；「选文档」是多选几个文件、
- * 量小，仍旧走 toast（见 [`reportOrToast`]）。
- *
- * `.gitignore`、依赖与构建目录（`node_modules` 等）、以及内容/大小筛选，都在 Rust 侧按同一套规则做
- *（`rag::import_scan`）—— 这里只拿过滤后的清单，外加「各排除了几份」这些数，好给用户一句交代。
- *
- * 同名文档：调用方先扫一遍现有文档名（[`loadDocIdByName`]），扫到重名就用 [`confirmOverwrite`]
- * 问一次（覆盖 / 跳过同名）—— 不在循环里逐份问，导入一个文件夹弹十几次确认没法用。
+ * 能否入库看内容不看扩展名：PDF 交后端抽文字，其余当纯文本试读（多编码 + looksLikeText 自检）。
+ * 批量路径共用进度弹窗，取消在每份的边界生效；.gitignore / 依赖目录 / 大小筛选在 Rust 侧。
  */
 import { t, tpl } from '@/ui/i18n'
 import { ragService } from '@/services/rag-service'
@@ -28,10 +11,10 @@ import { showToast } from '@/ui/components/shared/Toast'
 import { beginTask } from '@/ui/components/shared/TaskProgress'
 import type { BatchTask } from '@/ui/components/shared/TaskProgress'
 
-/** 纯文本文件的大小上限（2 MB）—— 与 Rust 侧 `import_scan::MAX_TEXT_FILE_BYTES` 同一个值 */
+/** 纯文本上限（2 MB），与 Rust import_scan::MAX_TEXT_FILE_BYTES 同值 */
 export const MAX_TEXT_FILE_BYTES = 2 * 1024 * 1024
 
-/** 可解析文档（PDF）的大小上限（50 MB）—— 与后端 `rag_service::MAX_DOC_SIZE_BYTES` 同一个值 */
+/** PDF 上限（50 MB），与后端 MAX_DOC_SIZE_BYTES 同值 */
 export const MAX_PARSE_DOC_BYTES = 50 * 1024 * 1024
 
 /** 字节数 → 「x MB」（只用在提示文案里） */
@@ -40,18 +23,14 @@ export function mbOf(bytes: number): string {
 }
 
 /**
- * 这个文件交给**后端解析**吗（而不是当纯文本读）。
- *
- * 只有 PDF：它是二进制，前端所有的文本解码对它都只会得到乱码（`document::parse_document`
- * 负责抽文字）。其余一切文件 —— 不管是 `.md` / `.json` / `.py` 还是没扩展名的 —— 都走
- * 「当纯文本试读」这条路：能解码成文本就进库，读不出文字就跳过。
- * ⚠️ 后端将来支持新格式时，这里与 Rust `import_scan::PARSEABLE_EXTENSIONS` 要一起改。
+ * 是否交后端解析（只有 PDF）：前端对二进制只会解成乱码，其余一律当纯文本试读。
+ * 后端支持新格式时，这里与 Rust PARSEABLE_EXTENSIONS 要一起改。
  */
 export function isPdfFile(filePath: string): boolean {
   return filePath.split('.').pop()?.toLowerCase() === 'pdf'
 }
 
-/** 文件大小（拿不到就返回 null —— 例如测试环境或路径已失效） */
+/** 文件大小（拿不到返回 null） */
 async function fileSizeOf(filePath: string): Promise<number | null> {
   try {
     const { stat } = await import('@tauri-apps/plugin-fs')
@@ -61,22 +40,14 @@ async function fileSizeOf(filePath: string): Promise<number | null> {
   }
 }
 
-/**
- * 这个文件是否超过给定上限（拿不到大小 → 不算超过：真护栏在 Rust 侧）
- *
- * 给「读之前先挡一下」用（见 [`assertSize`] 与 `EditDocModal` 的从文件读入）。
- */
+/** 是否超过上限（拿不到大小 → 不算超过：真护栏在 Rust 侧） */
 export async function exceedsSize(filePath: string, limit: number): Promise<boolean> {
   const size = await fileSizeOf(filePath)
   return size !== null && size > limit
 }
 
 /**
- * 超过大小上限就抛错（抛出来的文案直接给用户看）。
- *
- * 为什么要在**读之前**判：几十 MB 的文件先整个读进内存再发现超限，白等白占内存。
- * 为什么拿不到大小就放行：真护栏在 Rust 侧（扫描时按大小筛、写库时另有上限），
- * 这里只是把「太大」这件事提前说清楚。
+ * 超限就抛错（文案直接给用户看）。在读之前判，避免几十 MB 先读进内存。
  */
 async function assertSize(filePath: string, limit: number) {
   if (await exceedsSize(filePath, limit)) {
@@ -85,12 +56,8 @@ async function assertSize(filePath: string, limit: number) {
 }
 
 /**
- * 解码结果看着像文本吗。
- *
- * 为什么必须有这道检查：下面的兼容编码里含 `iso-8859-1` / `windows-1252` ——
- * 它们把**每一个字节**都映射到一个字符，所以对任何二进制文件都「解码成功」、永不报错。
- * 没有这道过滤，函数就永远不会返回 null，「读不出来」那条分支实际上不可达，
- * 二进制内容会静默入库（PDF 被读成乱码填进编辑框就是这么来的）。
+ * 解码结果看着像文本吗。必要：兼容编码（iso-8859-1 / windows-1252）对任何字节都「解码成功」，
+ * 没这道过滤二进制会静默入库。
  */
 export function looksLikeText(text: string): boolean {
   if (text.includes('\u0000')) return false
@@ -99,7 +66,7 @@ export function looksLikeText(text: string): boolean {
   let bad = 0
   for (const ch of sample) {
     const code = ch.codePointAt(0) ?? 0
-    // 允许制表 / 换行 / 回车；其余 C0 控制字符与替换字符都算「不是文本」
+    // 允许制表 / 换行 / 回车；其余 C0 控制字符与替换字符都算不是文本
     const isControl =
       code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d
     if (isControl || code === 0xfffd) bad++
@@ -112,7 +79,7 @@ export function extractFileName(filePath: string): string {
   return filePath.replace(/\\/g, '/').split('/').pop() || filePath
 }
 
-/** 尝试用多种编码读取文件，返回解码后的 UTF-8 文本；读不出人类可读的内容时返回 null */
+/** 多编码读取：读不出可读内容返回 null */
 export async function tryDecodeTextFile(
   filePath: string,
 ): Promise<{ text: string; encoding: string } | null> {
@@ -120,7 +87,7 @@ export async function tryDecodeTextFile(
   try {
     const { readTextFile } = await import('@tauri-apps/plugin-fs')
     const text = await readTextFile(filePath)
-    // 看着不像文本（二进制被解成一堆替换字符）就继续往下试，别当结果直接返回
+    // 看着不像文本（二进制被解成一堆替换字符）就继续试下一种
     if (looksLikeText(text)) return { text, encoding: 'UTF-8' }
   } catch {
     // UTF-8 失败，继续尝试其他编码
@@ -131,7 +98,7 @@ export async function tryDecodeTextFile(
     const { readFile } = await import('@tauri-apps/plugin-fs')
     const data = await readFile(filePath)
 
-    // 按优先级尝试的编码列表（末两个是「永不失败」的兼容编码：靠 looksLikeText 兜底）
+    // 末两个是「永不失败」的兼容编码：靠 looksLikeText 兜底
     const encodings = [
       'gbk',
       'gb2312',
@@ -147,12 +114,12 @@ export async function tryDecodeTextFile(
       try {
         const decoder = new TextDecoder(enc, { fatal: true })
         const text = decoder.decode(data)
-        // 解码成功，且内容看着真的是文本
+        // 解码成功且内容看着真的是文本
         if (text && text.length > 0 && looksLikeText(text)) {
           return { text, encoding: enc.toUpperCase() }
         }
       } catch {
-        continue // 此编码失败，尝试下一个
+        continue // 此编码失败，试下一个
       }
     }
   } catch {
@@ -162,7 +129,7 @@ export async function tryDecodeTextFile(
   return null
 }
 
-/** 将文本内容直接写入知识库（绕过 Rust 端文件读取，用于非 UTF-8 文件 / 压缩包条目） */
+/** 将文本直接写入知识库（绕过 Rust 读文件，用于非 UTF-8 文件 / 压缩包条目） */
 export async function uploadTextContent(
   kbId: string,
   fileName: string,
@@ -171,7 +138,7 @@ export async function uploadTextContent(
   await ragService.writeText(kbId, fileName, content)
 }
 
-/** 计算文件相对于 baseDir 的路径（用于文件夹导入时保留目录结构） */
+/** 计算相对 baseDir 的路径（文件夹导入时保留目录结构） */
 export function getRelativePath(filePath: string, baseDir: string): string {
   const normalizedFile = filePath.replace(/\\/g, '/')
   const normalizedBase = baseDir.replace(/\\/g, '/').replace(/\/+$/, '')
@@ -181,17 +148,14 @@ export function getRelativePath(filePath: string, baseDir: string): string {
   return extractFileName(filePath)
 }
 
-/** 该库现有文档：文档名 → 文档 id（同名判定与「覆盖」都靠它） */
+/** 该库现有文档：文档名 → 文档 id */
 export async function loadDocIdByName(kbId: string): Promise<Map<string, string>> {
   const docs = await ragService.listDocuments(kbId)
   return new Map(docs.map((d) => [d.file_name, d.id]))
 }
 
 /**
- * 导入前把「会覆盖哪几份」说清，返回是否覆盖。
- *
- * `names` 为空 → 不弹窗、直接返回 false。
- * ⚠️ 取消 = 只跳过同名的那些，**其余照常导入** —— 文案里必须写明，否则用户会以为整次导入取消了。
+ * 导入前说清「会覆盖哪几份」，返回是否覆盖。取消 = 只跳过同名，其余照常导入。
  */
 export async function confirmOverwrite(names: string[]): Promise<boolean> {
   if (names.length === 0) return false
@@ -209,9 +173,9 @@ export async function confirmOverwrite(names: string[]): Promise<boolean> {
   )
 }
 
-/** 导入选项（三样都是可选的，不传 = 原行为） */
+/** 导入选项（都可选，不传 = 原行为） */
 export interface UploadOptions {
-  /** 该库现有文档：文档名 → 文档 id（同名判定与「覆盖」用；由调用方扫一次传入） */
+  /** 该库现有文档名 → id（由调用方扫一次传入） */
   existing?: Map<string, string>
   /** 同名文档是否覆盖（false = 跳过同名、只加新的） */
   overwrite?: boolean
@@ -232,10 +196,7 @@ export interface ImportCounts {
 }
 
 /**
- * 把导入的四个计数拼成一句用户能读的话。
- *
- * 三个导入入口（选文件 / 文件夹、导入压缩包）共用一套说法 —— 只说「加了几份」会把
- * 「覆盖了几份」「跳过了几份」藏掉，而这三件事对用户的意味完全不同。
+ * 四个计数 → 一句用户能读的话。三个导入入口共用：只报「新增」会把覆盖 / 跳过 / 失败藏掉。
  */
 export function summarizeImport(counts: ImportCounts): string {
   const parts: string[] = []
@@ -250,11 +211,7 @@ export function summarizeImport(counts: ImportCounts): string {
   return parts.length > 0 ? parts.join('，') : t('没有可导入的文件')
 }
 
-/**
- * 报一条过程文案：有进度弹窗就写进弹窗（只留最新一条），没有就走 toast。
- *
- * 「选文档」那条路径一次也就几个文件，弹窗反而碍事 —— 那时 `task` 为空，行为与从前一致。
- */
+/** 报过程文案：有进度弹窗就写进弹窗，否则 toast */
 function reportOrToast(
   task: BatchTask | undefined,
   index: number,
@@ -266,7 +223,7 @@ function reportOrToast(
   else showToast(text, duration)
 }
 
-/** 收尾报账：弹窗接过去显示（带「导入完成 / 已停止导入」），否则 toast 一句 */
+/** 收尾报账：弹窗接过去显示，否则 toast 一句 */
 function reportFinish(task: BatchTask | undefined, counts: ImportCounts) {
   const summary = summarizeImport(counts)
   if (task) task.finish(task.cancelled, summary)
@@ -274,13 +231,9 @@ function reportFinish(task: BatchTask | undefined, counts: ImportCounts) {
 }
 
 /**
- * 批量上传多个本地文件到知识库
- *
- * @param kbId       知识库 ID
- * @param filePaths  文件路径列表
- * @param options    同名策略 / 文件夹导入的文档名控制（见 [`UploadOptions`]）
- * @param afterImport 导入完成后回调（刷新文档 / 知识库列表）
- * @param task       进度弹窗手柄（文件夹导入传；「选文档」不传 = 走 toast）
+ * 批量上传本地文件到知识库。
+ * @param options 同名策略 / 文件夹导入的文档名控制
+ * @param task 进度弹窗手柄（选文档不传 = 走 toast）
  */
 export async function uploadFiles(
   kbId: string,
@@ -305,16 +258,16 @@ export async function uploadFiles(
 
   let index = 0
   for (const fp of filePaths) {
-    // 用户取消：停在**整份的边界**上（每一份要么整份进来，要么没进来）
+    // 取消停在整份的边界上（要么整份进来，要么没进来）
     if (task?.cancelled) break
     index++
 
     const name = extractFileName(fp)
-    // 文件夹导入时，用相对路径作为文档名（如 test/test.md）
+    // 文件夹导入用相对路径作为文档名
     const docName = baseDir ? getRelativePath(fp, baseDir) : name
     const existingId = existing.get(docName)
 
-    // 同名且不覆盖 → 跳过（这是用户选的，不算失败）
+    // 同名且不覆盖 → 跳过（用户选的，不算失败）
     if (existingId && !overwrite) {
       counts.skipped++
       reportOrToast(
@@ -328,9 +281,7 @@ export async function uploadFiles(
 
     try {
       if (isPdfFile(fp)) {
-        // PDF：二进制，只交给后端抽文字（前端任何解码都只会得到乱码）。
-        // ⚠️ PDF 的文档名必须由前端传下去（`docName`）：后端默认用文件的基础名，
-        // 文件夹导入会因此丢掉相对路径（`子/手册.pdf` 变成 `手册.pdf`，同名还会相撞）
+        // PDF 只交后端抽文字；文档名必须由前端传下去，否则文件夹导入会丢相对路径
         reportOrToast(
           task,
           index,
@@ -339,8 +290,7 @@ export async function uploadFiles(
         )
         await assertSize(fp, MAX_PARSE_DOC_BYTES)
         if (existingId) {
-          // 覆盖：`edit` 是「先删旧块再写新块」，中途失败不会把原来那份弄丢；
-          // 文档名要显式传：后端默认取文件的基础名，文件夹导入会因此丢掉相对路径
+          // edit 是先删旧块再写新块，中途失败不会弄丢原文档
           await ragService.editDocument(kbId, existingId, fp, docName)
           counts.overwritten++
         } else {
@@ -350,8 +300,7 @@ export async function uploadFiles(
         continue
       }
 
-      // 其余文件一律**当纯文本试读**（不再看扩展名）：
-      // 先看大小（几十 MB 的文件不该被整个读进内存），再解码 + 内容自检。
+      // 其余一律当纯文本试读：先卡大小（别整个读进内存），再解码 + 内容自检
       await assertSize(fp, MAX_TEXT_FILE_BYTES)
       const decoded = await tryDecodeTextFile(fp)
       if (!decoded) {
@@ -379,7 +328,7 @@ export async function uploadFiles(
             }),
       )
       if (existingId) {
-        // 覆盖已有文档：走文本命令，文档名沿用原来那份
+        // 覆盖：走文本命令，文档名沿用原来那份
         await ragService.editTextDocument(kbId, existingId, docName, decoded.text)
         counts.overwritten++
       } else {
@@ -401,25 +350,16 @@ export async function uploadFiles(
     }
   }
 
-  // 刷新文档列表和知识库列表（由调用方注入）
+  // 刷新文档 / 知识库列表（由调用方注入）
   if (afterImport) await afterImport()
-  // 一次导入可能有四种结局，拆开报账（只说「加了几份」会把「覆盖了几份」藏掉）
+  // 四种结局拆开报账
   reportFinish(task, counts)
   return counts
 }
 
 /**
- * 逐条导入压缩包里的条目（`names` 来自 `previewKnowledgeBaseZip`，已按包内 .gitignore 过滤）
- *
- * 为什么是一条一条读：整包一次性导入时界面既看不到进度也没法取消；逐条读（Rust 侧
- * `read_knowledge_base_zip_entry`）+ 逐条写库（现成的文本命令）两件都有了，
- * 而且顺带继承了那两条命令上的**记忆详情正文护栏**（某条是记忆正文 → 只失败那一条，不整批拒绝）。
- *
- * 同名看策略：覆盖走 `editTextDocument`（保留原文档名），不覆盖则计入 `skipped`。
- *
- * 大小：条目正文超过 [`MAX_TEXT_FILE_BYTES`]（2 MB）算这一条失败 —— 与文件夹导入同一把尺；
- * 正常走不到这里（Rust 预览名单里已经滤过一道，见 `zip_entry_names`），兜底是为了让「绕过预览
- * 直接调这条循环」也守得住。
+ * 逐条导入压缩包条目。逐条读 + 逐条写库：既能报进度 / 取消，也继承了记忆正文护栏。
+ * 同名按策略覆盖或跳过；条目超过 MAX_TEXT_FILE_BYTES 算这一条失败。
  */
 export async function importZipEntries(
   kbId: string,
@@ -490,7 +430,7 @@ export async function importZipEntries(
   return counts
 }
 
-/** 上传文档 — 支持多文件选择（量小，走 toast；文件夹 / 压缩包才用进度弹窗） */
+/** 上传文档（多选，量小走 toast） */
 export async function pickUploadFiles(
   kbId: string,
   afterImport?: () => Promise<void>,
@@ -499,7 +439,7 @@ export async function pickUploadFiles(
     const { open } = await import('@tauri-apps/plugin-dialog')
     const selected = await open({
       multiple: true,
-      // 不按扩展名筛：「能不能读」由导入时按内容判断（文本就能读，PDF 交给后端解析）
+      // 不按扩展名筛：能否读由导入时按内容判断
       filters: [{ name: t('所有文件'), extensions: ['*'] }],
     })
     if (!selected) return
@@ -507,7 +447,7 @@ export async function pickUploadFiles(
     const paths = Array.isArray(selected) ? selected : [selected]
     if (paths.length === 0) return
 
-    // 先扫一遍现有文档名：扫到同名就问一次「覆盖 / 跳过同名」（不在循环里逐份问）
+    // 先扫现有文档名，同名就问一次（不在循环里逐份问）
     const existing = await loadDocIdByName(kbId)
     const dup = (paths as string[])
       .map((p) => extractFileName(p))
@@ -521,10 +461,7 @@ export async function pickUploadFiles(
 }
 
 /**
- * 扫到了哪些「跳过的东西」——弹窗里用一句话说清「为什么少了这么多」
- *
- * 与 Rust `import_scan::FolderScan` 的字段一一对应。四条原因分开说，因为四件事对用户的意味
- * 不同：被 .gitignore 排除（你自己写的规则）、依赖 / 构建目录（我们替你认的）、不是文本、太大。
+ * 扫到了哪些跳过的东西 —— 弹窗里说清「为什么少了这么多」。字段与 Rust FolderScan 一一对应。
  */
 export function scanSkipNotes(scan: {
   ignored: number
@@ -562,11 +499,8 @@ export function scanSkipNotes(scan: {
 }
 
 /**
- * 上传文件夹 — 扫描（按内容 + .gitignore + 依赖目录过滤）后逐份导入，全程一个可取消的进度弹窗
- *
- * @param kbId       知识库 ID
- * @param kbName     知识库名（弹窗里让用户确认「导的是这个库」）
- * @param afterImport 导入完成后回调（刷新文档 / 知识库列表）
+ * 上传文件夹：扫描（按内容 + .gitignore + 依赖目录过滤）后逐份导入，全程可取消。
+ * @param kbName 弹窗里让用户确认「导的是这个库」
  */
 export async function pickUploadFolder(
   kbId: string,
@@ -583,7 +517,7 @@ export async function pickUploadFolder(
 
     const dirPath = selected as string
     showToast(t('正在看这个文件夹里有哪些文档…'))
-    // 扫描在 Rust 侧做：同一个目录，按 .gitignore 过滤的结果与「打成压缩包导入」一致
+    // 扫描在 Rust 侧做：与「打成压缩包导入」同一套 .gitignore 口径
     let scan
     try {
       scan = await ragService.scanImportFolder(dirPath)
@@ -603,7 +537,7 @@ export async function pickUploadFolder(
       return
     }
 
-    // 文件夹导入的文档名是「相对路径」，所以重名比对也要用相对路径（与 uploadFiles 同一算法）
+    // 文档名是相对路径，重名比对也要用相对路径
     const existing = await loadDocIdByName(kbId)
     const dup = scan.files
       .map((fp) => getRelativePath(fp, dirPath))
@@ -626,7 +560,7 @@ export async function pickUploadFolder(
     })
     const skipNotes = scanSkipNotes(scan)
     if (skipNotes.length > 0) {
-      // 先把「有些东西没进来、为什么」说清楚（弹窗里那条「最新文案」，下一份处理时会被替换）
+      // 先把「有些东西没进来、为什么」写进弹窗的最新文案
       task.step(0, skipNotes.join('\n'), '')
     }
     try {
@@ -638,7 +572,7 @@ export async function pickUploadFolder(
         task,
       )
     } catch (err: any) {
-      // 兜底：不该发生（uploadFiles 内部逐份兜错），但弹窗不能卡在「运行中」
+      // 兜底：不该发生（uploadFiles 内部逐份兜错），但弹窗不能卡在运行中
       showToast(tpl('导入没能完成：$__error__', { error: err?.message || err }), 3000)
       task.finish(true, t('导入没能完成'))
     }

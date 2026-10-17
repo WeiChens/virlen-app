@@ -1,4 +1,4 @@
-/** message-bubble — 消息气泡：Markdown / 图片 / tool calls / 底部操作栏（复制 / 编辑 / 删除） */
+/** 消息气泡：Markdown / 图片 / tool calls / 底部操作栏（复制 / 编辑 / 删除） */
 import { t, tpl } from '@/ui/i18n'
 import { useRowToggleHold } from '@/ui/hooks/useRowToggleHold'
 import { type Message } from '@/types'
@@ -40,9 +40,9 @@ interface Props {
   message: Message
   onEdit?: (message: string) => void
   onDelete?: (messageId: string) => void
-  /** 右键摘要「转移到新对话」：以当前会话为模板新建会话，把该摘要作为首条消息并切过去；不传则不展示该项 */
+  /** 右键摘要「转移到新对话」：以当前会话为模板新建会话并切过去；不传则不展示该项 */
   onTransferSummary?: (messageId: string) => void
-  /** 引用该消息（仅「有正文」的可引用）：把消息 id / 发送方 / 正文快照交给输入框 */
+  /** 引用该消息（仅「有正文」的可引用） */
   onQuote?: (quote: {
     messageId: string
     role: 'user' | 'assistant'
@@ -53,22 +53,19 @@ interface Props {
   /** 与 message.toolCalls 一一对应的工具结果（未完成处为 undefined） */
   toolResults?: (Message | undefined)[]
   /**
-   * 不渲染 `message.toolCalls` 的工具卡片。
-   * ⚠️ 只在「卡片由**别处**统一渲染」时才传（工具组的段首正文，见 `tool-call-group.tsx`）——
-   * 否则同一批卡片会渲染两遍。
+   * 不渲染 message.toolCalls 的工具卡片。
+   * ⚠️ 只在「卡片由别处统一渲染」时才传（工具组段首正文），否则同一批卡片会渲染两遍。
    */
   omitToolCalls?: boolean
   /**
-   * 「按住滚动偏移」：行内展开 / 收起超长正文会改这一行的高度，列表的跟底补偿会把它算成
-   * 「你还在底部」，于是把阅读位置甩到消息末尾。调它 = 请列表把当前偏移按住一会儿
-   *（见 message-list/scroll-hold.ts）。不传 = 不按住（单测 / 独立渲染气泡时不需要）。
+   * 「按住滚动偏移」：行内展开 / 收起超长正文会改行高，列表的跟底补偿会把阅读位置甩到消息末尾。
+   * 不传 = 不按住（单测 / 独立渲染气泡时不需要）。
    */
   onHoldScrollOffset?: () => void
 }
 
 /**
- * 气泡对外的事件回调。抽出来是为了让「别处托管渲染同一颗气泡」的地方（工具组的段首正文）
- * 直接复用这份签名 —— 各写一份迟早会漏掉后加的回调。
+ * 气泡对外的事件回调。抽出来是为了让「别处托管渲染同一颗气泡」的地方直接复用签名。
  */
 export type MessageBubbleHandlers = Pick<
   Props,
@@ -76,8 +73,7 @@ export type MessageBubbleHandlers = Pick<
 >
 
 /**
- * 右键目标：同一气泡里有多类可右键对象（正文 / 摘要 / 图片 / 文件 / 技能 / 深度思考），
- * 同一时刻只开一个菜单，故用 target 区分；菜单项在渲染时按 target 现算。
+ * 右键目标：同一气泡里有多类可右键对象，同一时刻只开一个菜单，故用 target 区分。
  */
 type MenuTarget =
   | { kind: 'text' }
@@ -88,8 +84,8 @@ type MenuTarget =
   | { kind: 'skill'; path: string }
 
 /**
- * 用户气泡正文的折叠线（视口倍数）：自然高度 > 70vh 才折叠，折叠后只留 40vh（高度写在 message-bubble.scss）。
- * 折叠态量到的高度仍是**全文高度**（`scrollHeight` 含被 `max-height` 裁掉的部分），所以阈值比较可以反复做。
+ * 用户气泡正文的折叠线（视口倍数）：自然高度 > 70vh 才折叠，折叠后只留 40vh（高度在 scss）。
+ * 折叠态量到的仍是全文高度（scrollHeight 含被裁掉的部分），所以阈值比较可以反复做。
  */
 const COLLAPSE_TRIGGER_RATIO = 0.7
 
@@ -189,7 +185,7 @@ function MessageBubble({
     selection?.addRange(range)
   }
 
-  /** 按右键对象组装菜单项；正文菜单与底部操作栏同源（同一批可见条件与二次确认），避免两个入口行为分叉 */
+  /** 按右键对象组装菜单项；正文菜单与底部操作栏同源，避免两个入口行为分叉 */
   function buildMenuItems(target: MenuTarget): ContextMenuItem[] {
     switch (target.kind) {
       case 'image':
@@ -197,7 +193,7 @@ function MessageBubble({
       case 'file':
         return fileMenuItems(target.path, { isDir: target.isDir })
       case 'skill':
-        // 技能引用：打开 / 编辑器打开都指向 SKILL.md（引用的就是这份说明），另补一个目录入口
+        // 技能引用：打开 / 编辑器打开都指向 SKILL.md，另补一个目录入口
         return [
           ...fileMenuItems(`${target.path}/SKILL.md`),
           {
@@ -215,8 +211,8 @@ function MessageBubble({
           selectAll: selectAllReasoning,
         })
       case 'summary': {
-        // 摘要不是模型产出的一条对话，没有引用 / 编辑语义，只留「复制 / 转移到新对话 / 删除」。
-        // 删除 summary = 放弃这次压缩，其后的对话一并清掉（与其它气泡同一条删除路径）。
+        // 摘要不是模型产出的一条对话，只留「复制 / 转移到新对话 / 删除」。
+        // 删除 summary = 放弃这次压缩，其后的对话一并清掉。
         const items: ContextMenuItem[] = [
           ...textMenuItems(() => getContent(false)),
         ]
@@ -269,8 +265,8 @@ function MessageBubble({
     }
   }
 
-  // assistant 只有 tool_calls 且无任何可见内容（正文 / 引用 / 图片 / 文件 / 技能）→ 紧凑 tool-call 卡片。
-  // 判据走共享的 messageHasVisibleContent：与列表行模型同源，一旦漂移就会「非文本内容被一起藏掉」。
+  // assistant 只有 tool_calls 且无任何可见内容 → 紧凑 tool-call 卡片。
+  // 判据走共享的 messageHasVisibleContent：与列表行模型同源，漂移会「非文本内容被一起藏掉」。
   const hasVisibleContent = messageHasVisibleContent(message)
   const showAsToolCall =
     isAssistant && !!message.toolCalls?.length && !hasVisibleContent
@@ -292,8 +288,7 @@ function MessageBubble({
     !hasVisibleContent &&
     hideToolCallThink
 
-  // 超长正文折叠（只针对用户气泡：用户贴长文进来时，一条消息就吃掉整屏）。
-  // 折叠只影响展示 —— 复制 / 编辑 / 引用仍拿全文（getContent 读的是 message.content）。
+  // 超长正文折叠（只针对用户气泡）。折叠只影响展示 —— 复制 / 编辑 / 引用仍拿全文。
   const [contentOverflow, setContentOverflow] = useState(false)
   const [contentExpanded, setContentExpanded] = useState(false)
   const collapsible = isUser && !!showContent
@@ -310,12 +305,11 @@ function MessageBubble({
     if (!el) return
     const measure = () => {
       const over = el.scrollHeight > window.innerHeight * COLLAPSE_TRIGGER_RATIO
-      // 只在结论变化时落 state：ResizeObserver 会反复回调，反复 setState 会白刷几帧
+      // 只在结论变化时落 state：ResizeObserver 会反复回调
       setContentOverflow((prev) => (prev === over ? prev : over))
     }
     measure()
-    // 折叠后自身高度被 max-height 钉死，光盯自己尺寸不再变化 → 收不到回调；
-    // 连带盯住子元素（正文渲染出的节点），内容长出来 / 图片加载完才有信号。
+    // 折叠后自身高度被 max-height 钉死，光盯自己收不到回调 → 连带盯住子元素
     const ro =
       typeof ResizeObserver === 'undefined'
         ? null
@@ -332,9 +326,7 @@ function MessageBubble({
     }
   }, [collapsible, contentExpanded, showContent])
 
-  // 压缩摘要（role='summary'）：正文可能极长，不在消息流里铺开，只渲染可点击的提示条，
-  // 全文放弹窗（见 summary-message.tsx）。必须能右键 —— 否则压缩错了没法回退
-  //（删除 summary 即放弃压缩，本条及之后一并删除）。
+  // 压缩摘要：正文可能极长，只渲染可点击的提示条，全文放弹窗。必须能右键（删除 summary 即放弃压缩）。
   if (isSummary) {
     return (
       <>
@@ -353,7 +345,7 @@ function MessageBubble({
     )
   }
 
-  // 任务清单变更（feedback）：消息流只留一行，清单统一在标题栏「任务清单」浮层里看（见 components/todo/）。
+  // 任务清单变更（feedback）：消息流只留一行，清单统一在标题栏浮层里看。
   // content 里仍是全量清单文本（给模型读），右键复制 / 删除照旧可用。
   if (isFeedback && message.uiData?.type === 'todo') {
     return (
@@ -368,9 +360,7 @@ function MessageBubble({
     )
   }
 
-  // 后台服务结束（feedback，Rust 组装）：消息流只留一行 —— 正文是给模型的英文报告，
-  // 界面按 uiData 用界面语言重建（铁律 1）。服务详情（命令 / 输出 / 终端）在标题栏面板
-  // 与工具卡片里看，这里只告诉用户「它已经不在了」。
+  // 后台服务结束（feedback）：正文是给模型的英文报告，界面按 uiData 用界面语言重建。
   if (isFeedback && message.uiData?.type === 'service') {
     const ui = message.uiData
     const name = String(ui.name ?? '')
@@ -528,8 +518,7 @@ function MessageBubble({
                     <button
                       className={`message-content-more${contentExpanded ? ' is-expanded' : ''}`}
                       onClick={() => {
-                        // 行高会变：先按住当前偏移，否则库的跟底补偿会把阅读位置甩到消息末尾
-                        //（收起那一步还会把气泡拉回视野，见 useRowToggleHold）
+                        // 行高会变：先按住当前偏移，否则跟底补偿会把阅读位置甩到末尾
                         beforeToggle(!contentExpanded)
                         setContentExpanded((v) => !v)
                       }}>
@@ -648,7 +637,7 @@ function MessageBubble({
           </div>
         </div>
       )}
-      {/* 工具卡片：`omitToolCalls` 时由别处渲染（工具组），这里不再重复输出 */}
+      {/* 工具卡片：omitToolCalls 时由工具组渲染，这里不重复输出 */}
       {!omitToolCalls &&
         !!message.toolCalls?.length &&
         message.toolCalls.map((tc, i) => (

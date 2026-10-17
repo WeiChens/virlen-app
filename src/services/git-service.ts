@@ -1,18 +1,10 @@
 /**
- * git-service — 「源代码管理」面板的编排层。
+ * 「源代码管理」面板的编排层：探测 / 刷新时机 / 操作串行 / 确认与提示 / 埋点。
+ * 数据经 @/infrastructure/git，口径判定用 @/domain/git 的纯函数。
  *
- * 职责：**探测 / 刷新时机 / 操作串行 / 确认与提示 / 埋点**。数据取用一律经
- * `@/infrastructure/git`（唯一入口），口径判定一律用 `@/domain/git` 的纯函数。
- *
- * 三条工程口径：
- * 1. **写操作一次只允许一个**（`busy` 非空时直接拒绝）—— git 自己的 index 锁在 Rust 侧已经串行，
- *    这里再挡一层是为了**不给用户产生「点了两次」的错觉**；
- * 2. **刷新时机**（P1 不做文件监听，见方案 §7 第 9 条）：探测时 / 打开面板时 / 每次操作后 /
- *    窗口重新激活时（面板关着也刷，见 `refreshOnFocus`）/ 会话活动后（工具调用结束 / 一轮对话
- *    结束，防抖 2s，见 `notifyWorkspaceActivity`）/ 用户点刷新；关闭面板本身不发请求；
- * 3. 读操作的取消走既有 `stop_task`：新的 status 起跑前先把上一次停掉（超大仓库连点刷新时有用）。
- *
- * ⚠️ 埋点红线：只报**动作 / 条数 / 结果**，不报仓库路径、分支名、提交信息正文（方案 §6）。
+ * 写操作一次只允许一个（busy 非空即拒）；读操作不进 busy。
+ * 刷新时机：探测 / 打开面板 / 操作后 / 窗口激活 / 会话活动后（防抖 2s）/ 用户手点。
+ * 埋点只报动作 / 条数 / 结果，不报路径、分支名、提交信息。
  */
 import { runInAction } from 'mobx'
 import {
@@ -56,7 +48,7 @@ import { showToast } from '@/ui/components/shared/Toast'
 import { t, tpl } from '@/ui/i18n'
 import { track } from '@/utils/telemetry'
 
-/** 新建一个带前缀的任务 id（与目录树 / 搜索框同一套写法） */
+/** 新建任务 id */
 function newTaskId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID()}`
 }
@@ -64,10 +56,10 @@ function newTaskId(prefix: string): string {
 /** 上一次 status 的任务 id —— 起新的之前先把它停掉 */
 let statusTaskId: string | null = null
 
-/** 进行中的网络操作任务 id —— 面板关掉时也把它停掉（网络超时是 10 分钟，用户不该等那么久） */
+/** 进行中的网络操作任务 id：面板关掉时也停掉（网络超时 10 分钟） */
 let syncTaskId: string | null = null
 
-/** 错误 → 一行可读文案（Rust 侧已经把 stderr 拼进来了） */
+/** 错误 → 一行文案（Rust 侧已拼好 stderr） */
 function errorText(e: unknown): string {
   const raw = e instanceof Error ? e.message : String(e)
   return raw.trim() || t('操作失败')
@@ -96,9 +88,7 @@ async function run<T>(
     })
     track('git.op', { op: label, ok: false, ms: Date.now() - started })
     if (!opts.silent) showToast(text, 4000)
-    // 失败后立刻回读一次：列表过期是写操作失败的头号原因（用户在磁盘上改了文件，面板还拿着旧快照
-    // —— 于是「界面上有这条路径、git 却说 did not match」，退出码 128）。让面板自己回到当前真相，
-    // 用户不必手点刷新，也不会对着一条已经不存在的路径反复重试。
+    // 失败后立刻回读：列表过期是写操作失败的头号原因（面板拿着旧快照，git 说 did not match）
     void refreshStatus()
     return null
   } finally {
@@ -108,7 +98,7 @@ async function run<T>(
   }
 }
 
-/** 快照落地（写操作与刷新共用同一条出口） */
+/** 快照落地（写操作与刷新共用） */
 function acceptSnapshot(snapshot: Awaited<ReturnType<typeof fetchStatus>>): void {
   runInAction(() => {
     gitStore.snapshot = snapshot
@@ -118,11 +108,7 @@ function acceptSnapshot(snapshot: Awaited<ReturnType<typeof fetchStatus>>): void
 
 // ==================== 探测与刷新 ====================
 
-/**
- * 切换工作目录（会话切换 / 新对话页选目录时由入口组件调用）。
- *
- * 目录没变则**不重复探测**（面板开关、窗口聚焦都会调到这里）。
- */
+/** 切换工作目录（会话切换 / 选目录时调）；目录没变则不重复探测。 */
 export async function syncWorkspace(dir: string | null): Promise<void> {
   if (gitStore.dir === dir && gitStore.probed) return
   runInAction(() => {
@@ -148,7 +134,7 @@ export async function syncWorkspace(dir: string | null): Promise<void> {
   await probe()
 }
 
-/** 探测仓库 + 首次加载（探测失败 = 不是仓库 / 没装 git，都落成一句可读的不可用原因） */
+/** 探测仓库 + 首次加载（探测失败 = 不是仓库 / 没装 git，都落成不可用原因） */
 async function probe(): Promise<void> {
   const dir = gitStore.dir
   if (!dir) return
@@ -160,7 +146,7 @@ async function probe(): Promise<void> {
     runInAction(() => {
       gitStore.probed = true
       gitStore.repo = info
-      // 「不是仓库」是个**可用状态**（面板会给出「初始化仓库」），与「没装 git / 出错了」不同
+      // 「不是仓库」是可用状态（面板会给「初始化仓库」），与「没装 git / 出错」不同
       gitStore.notRepo = !info
       gitStore.unavailable = info ? null : t('当前工作目录不是 Git 仓库')
       if (!info) gitStore.snapshot = null
@@ -168,7 +154,7 @@ async function probe(): Promise<void> {
     if (info) await refreshStatus()
     if (info) await refreshRemotes()
   } catch (e) {
-    // 这里最可能是「未检测到 git」（Rust 侧给的就是一句可读文案）
+    // 这里最可能是「未检测到 git」
     runInAction(() => {
       gitStore.probed = true
       gitStore.repo = null
@@ -183,9 +169,7 @@ async function probe(): Promise<void> {
 }
 
 /**
- * 在当前工作目录初始化仓库（`git init`）——「不是仓库」空态里唯一出口。
- *
- * 成功后**直接接上探测的那套入参**（repo / snapshot），用户不必再去看一眼「为什么徽标还没出来」。
+ * 在当前工作目录初始化仓库。成功后直接接上探测的入参，用户不必再看徽标为什么没出来。
  */
 export async function initRepo(): Promise<boolean> {
   const dir = gitStore.dir
@@ -240,7 +224,7 @@ export async function refreshBranches(): Promise<void> {
   }
 }
 
-/** 刷新远程列表。**旁路读取**：失败当「没有远程」（同步浮层会因此给一句说明，不打断面板） */
+/** 刷新远程列表。旁路读取：失败当「没有远程」，不打断面板 */
 export async function refreshRemotes(): Promise<void> {
   const dir = gitStore.dir
   if (!dir || !gitStore.repo) return
@@ -263,14 +247,12 @@ export function setPanelOpen(open: boolean): void {
     stopTask(statusTaskId)
     statusTaskId = null
   }
-  // 网络操作不跟随面板关闭而丢结果（用户可能只是想收起面板），但**别让它在后台白等到超时**
+  // 网络操作不随面板关闭丢结果，但别让它在后台白等到超时
   if (!open) cancelSync()
 }
 
 /**
- * 取消进行中的网络操作（面板关掉 / 用户在浮层里点取消）。
- *
- * 只是发起中断：命令壳会等子进程真正退出后才报「已取消」，所以调用方不要假定它是同步完成的。
+ * 取消进行中的网络操作。只是发起中断：命令壳会等子进程真正退出后才报「已取消」。
  */
 export function cancelSync(): void {
   if (!syncTaskId) return
@@ -278,17 +260,15 @@ export function cancelSync(): void {
   syncTaskId = null
 }
 
-/** 两次「窗口激活刷新」之间的最小间隔（毫秒）—— 频繁切窗时别反复叫醒 git */
+/** 两次窗口激活刷新的最小间隔（ms），频繁切窗时别反复叫醒 git */
 const FOCUS_REFRESH_MIN_INTERVAL_MS = 1500
 
 /** 上一次窗口激活刷新的时刻 */
 let lastFocusRefreshAt = 0
 
 /**
- * 窗口重新激活时调（点任务栏 / 直接点窗口）—— 用户在编辑器 / 终端里动过文件，切回来要看得见。
- *
- * **不要求面板打开**：标题栏上的变更数徽标在面板关着时照样显示，只看 `open` 就会出现
- * 「明明改了 3 个文件、徽标还是 0」。节流兜住频繁切窗（每次都会跑一次 git status）。
+ * 窗口重新激活时调：用户在编辑器 / 终端里动过文件，切回来要看得见。
+ * 不要求面板打开（标题栏徽标关着也显示）。
  */
 export async function refreshOnFocus(): Promise<void> {
   if (!gitStore.repo) return
@@ -300,25 +280,20 @@ export async function refreshOnFocus(): Promise<void> {
 
 // ==================== 会话活动触发的自动刷新 ====================
 
-/** 会话活动（工具调用结束 / 一轮对话结束）后的防抖窗口：把「连着调 10 个工具」压成一次刷新 */
+/** 会话活动后的防抖窗口：把「连着调 10 个工具」压成一次刷新 */
 const ACTIVITY_DEBOUNCE_MS = 2000
 
 /** 待执行的防抖定时器（`null` = 没有排期） */
 let activityTimer: ReturnType<typeof setTimeout> | null = null
 
-/** 窗口是否处于激活状态（与 `GitEntry` 的 `focus` 监听同一口径：要的是 webview 真被激活） */
+/** 窗口是否处于激活状态（要的是 webview 真被激活） */
 function isWindowActive(): boolean {
   return typeof document !== 'undefined' && document.hasFocus()
 }
 
 /**
- * 会话活动（每次工具调用结束 / 一轮对话结束）时调 —— 防抖 2s 后刷新一次该工作目录的状态。
- *
- * 三道前置（`dir` 必须是面板当前绑定的工作目录，且窗口处于激活状态）：后台会话 / 窗口在后台时
- * **不排期** —— 用户看不见徽标，白跑 git 没有意义（窗口切回来时 `refreshOnFocus` 会补一次）。
- * 调用方（`event-handler::scheduleGitRefresh`）已先按「当前选中的会话」过一道闸（见那里）。
- *
- * 到点前再判一次：2s 内用户可能把窗口切走 / 换了工作目录，那时这次刷新就该放弃。
+ * 会话活动后防抖 2s 刷新一次状态。工作目录不匹配 / 窗口在后台 / 不是仓库均不排期；
+ * 到点前再判一次（2s 内窗口可能切走或换了目录）。
  */
 export function notifyWorkspaceActivity(dir: string | null): void {
   if (!dir || gitStore.dir !== dir || !gitStore.repo || !isWindowActive()) return
@@ -351,13 +326,7 @@ export async function unstage(paths: string[]): Promise<boolean> {
 }
 
 /**
- * 丢弃改动 —— **界面上唯一会丢数据的入口**，必须二次确认。
- *
- * 文案要区分两类（用户才知道自己在丢什么）：
- * - 已跟踪文件：改动**不可恢复**（git 语义如此）；
- * - 未跟踪文件：移入回收站（可恢复）。
- *
- * 返回是否真的丢了（确认框取消 / 被 `busy` 拦下都是 `false`）—— 调用方据此决定后续动作。
+ * 丢弃改动 —— 界面上唯一会丢数据的入口，必须二次确认（已跟踪不可恢复，未跟踪进回收站）。
  */
 export async function discard(paths: string[]): Promise<boolean> {
   const dir = gitStore.dir
@@ -378,13 +347,7 @@ export async function discard(paths: string[]): Promise<boolean> {
 }
 
 /**
- * 提交。
- *
- * `amend = true` 时走 `--amend`（把暂存内容并入**上一条**提交，或只改提交信息）——
- * 那种情况**不**走「暂存区为空就问要不要全暂存」那一支：amend 本来就允许没有新内容。
- *
- * `allowEmptyStage = false` 时若无已暂存内容，先问「是否全部暂存并提交」——
- * 这是 VS Code 的老行为，也是新用户最常撞的一堵墙。
+ * 提交。amend 时走 --amend（不要求暂存区非空）；否则暂存区空时先问「全部暂存并提交」。
  */
 export async function commit(message: string, amend = false): Promise<boolean> {
   const dir = gitStore.dir
@@ -422,7 +385,7 @@ export async function commit(message: string, amend = false): Promise<boolean> {
   if (!result) return false
   runInAction(() => {
     gitStore.commitDraft = ''
-    // hooks / 警告只出现在 stderr（正常提交为空）—— 丢掉它等于把「hook 动过什么」藏起来
+    // hooks / 警告只在 stderr：丢掉它等于把「hook 动过什么」藏起来
     gitStore.hookOutput = result.stderr.trim() ? result.stderr.trim() : null
   })
   showToast(
@@ -436,11 +399,7 @@ export async function commit(message: string, amend = false): Promise<boolean> {
   return true
 }
 
-/**
- * 撤销最后一次提交（`reset --soft`）：**改动全部留在暂存区**，不丢代码。
- *
- * 仍然要二次确认：它改写的是提交历史（别人已经拉走的那条会被当成被丢弃的分支尖端）。
- */
+/** 撤销最后一次提交（reset --soft）：改动留在暂存区，但仍然二确（改写了提交历史）。 */
 export async function undoLastCommit(): Promise<boolean> {
   const dir = gitStore.dir
   if (!dir || !gitStore.repo) return false
@@ -459,11 +418,7 @@ export async function undoLastCommit(): Promise<boolean> {
 }
 
 /**
- * 切换 / 新建 / **游离（detach）到某个分支**（脏工作区与目标冲突时 git 自己会拒绝，错误原样展示）。
- *
- * `detach` 专给**远程分支**用：`git switch origin/x` 会直接 fatal（git 只收本地分支名，
- * 退出码 128），只有 `--detach` 能落到它的提交上。切完 HEAD 不在任何分支上 —— 面板上那个
- * 「游离 HEAD」入口就是回分支的路，别把它做成不可点。
+ * 切换 / 新建 / 游离到某个分支。detach 专给远程分支（git switch origin/x 会 fatal）。
  */
 export async function switchBranch(
   name: string,
@@ -489,10 +444,7 @@ export async function switchBranch(
   return true
 }
 
-/**
- * 删除本地分支。`force = false` 时 git 会拦住未合并的分支 —— **不自动改成 `-D`**：
- * 用户点「删除」时要知道自己在丢什么。
- */
+/** 删除本地分支；不一定自动改成 -D（用户要知道自己在丢什么） */
 export async function removeBranch(name: string, force = false): Promise<boolean> {
   const dir = gitStore.dir
   if (!dir || !gitStore.repo) return false
@@ -514,10 +466,7 @@ export async function removeBranch(name: string, force = false): Promise<boolean
 }
 
 /**
- * 重命名分支（含当前分支）。
- *
- * 重命名后额外刷一次**状态**：改的是当前分支时，`snapshot.head.branch` 也跟着变了
- *（不刷就会出现「浮层里叫新名字、面板头还写着旧名字」）。
+ * 重命名分支。额外刷状态：改的是当前分支时 snapshot.head.branch 也变了。
  */
 export async function renameBranch(from: string, to: string): Promise<boolean> {
   const dir = gitStore.dir
@@ -545,9 +494,7 @@ export function checkRefFormat(name: string): Promise<boolean> {
 
 /**
  * 一次网络操作的公共流程：busy 串行 → 落输出 → toast → 刷新状态与分支。
- *
- * `remote` 由调用方**显式给出**（同步浮层已经解析出要用的那个）—— Rust 端的「猜远程」只在未指定时
- * 生效，两边都猜一遍反而会出现「界面说 origin、实际跑了别的」的错位。
+ * remote 由调用方显式给出（两边都猜会出现「界面说 origin、实际跑了别的」）。
  */
 async function syncAction(
   label: string,
@@ -576,21 +523,21 @@ async function syncAction(
   return true
 }
 
-/** `git fetch`：只更新远程跟踪分支（不动工作区）—— 想先看看别人推了什么就用它 */
+/** fetch：只更新远程跟踪分支，不动工作区 */
 export function fetchRemote(remote: string | null = null): Promise<boolean> {
   return syncAction('fetch', invokeFetch, remote, (r) =>
     tpl('已从 $__remote__ 获取更新', { remote: r.remote }),
   )
 }
 
-/** `git pull --ff-only`：快进不了就失败（不生成 merge 提交，冲突留给用户自己处理） */
+/** pull --ff-only：快进不了就失败，不生成 merge 提交 */
 export function pullRemote(remote: string | null = null): Promise<boolean> {
   return syncAction('pull', invokePull, remote, (r) =>
     tpl('已从 $__remote__ 拉取', { remote: r.remote }),
   )
 }
 
-/** `git push`（无上游时 Rust 侧自动 `-u`）。⚠️ 不做强制推送，也不弹二次确认 —— 它就是用户点的那个动作 */
+/** push（无上游时 Rust 侧自动 -u）；不做强推也不二次确认 */
 export function pushRemote(remote: string | null = null): Promise<boolean> {
   return syncAction('push', invokePush, remote, (r) =>
     tpl('已推送到 $__remote__', { remote: r.remote }),
@@ -598,9 +545,7 @@ export function pushRemote(remote: string | null = null): Promise<boolean> {
 }
 
 /**
- * 测试远程连接（`git ls-remote`）。
- *
- * **不进 `busy`、不写 store**：它是诊断动作，失败时调用方要在原地显示错误（浮层里那行）。
+ * 测试远程连接（ls-remote）。不进 busy、不写 store：诊断失败由调用方原地显示。
  */
 export async function testRemote(remote: string | null = null): Promise<void> {
   const dir = gitStore.dir
@@ -610,27 +555,17 @@ export async function testRemote(remote: string | null = null): Promise<void> {
 
 // ==================== 提交记录 ====================
 
-/** 一页提交记录多少条（「加载更多」按它推进 skip；界面靠「拿回的是不是整页」判断还有没有） */
+/** 一页提交记录条数（加载更多按它推进 skip） */
 export const LOG_PAGE_SIZE = 50
 
 /**
- * 提交图一页多少条 —— 比列表大得多。
- *
- * 「提交图」首页要装得下**各分支头**：50 条往往只覆盖当前分支最近的一串，看上去就是一条直线
- * （那正是用户要看的「分支关系」不出现的原因）。200 仍远低于 Rust 侧 `MAX_LIMIT = 500`。
+ * 提交图一页条数（远大于列表）：首页要装得下各分支头，50 条往往只有一条直线。
  */
 export const GRAPH_PAGE_SIZE = 200
 
 /**
- * 取一页提交记录（`skip` = 已经拿过多少条；`scope` = head / all）。
- *
- * 四条口径：
- * - **不进 `busy`**：读操作不拦写操作（看一眼历史不该把提交按钮锁住）；
- * - **不写 store**：弹窗自己持有这份列表，关掉即弃 —— 缓存会让「刚提交完再打开」显示旧列表
- *   （与差异正文同一取舍）；
- * - **失败抛出**（不 toast）：弹窗自己有位置说清原因，弹窗还没开就给 toast 更没有落点；
- * - **分页大小按范围给**（列表 50 / 提交图 200）—— ⚠️ 「还有没有下一页」的判据是
- *   「拿回的是不是整页」，所以页大小必须与 `scope` 一一对应，不能用当前列表长度去推。
+ * 取一页提交记录。不进 busy、不写 store、失败抛出（弹窗自有位置说清原因）；
+ * 页大小按 scope 给，因为「还有没有下一页」靠「拿回的是不是整页」判定。
  */
 export async function loadCommits(
   skip: number,
@@ -645,8 +580,7 @@ export async function loadCommits(
 // ==================== 差异 ====================
 
 /**
- * 取差异的两侧内容。**不缓存**：差异视图自己持有，关掉即弃。
- * 失败抛出（调用方在弹窗里显示错误行），不做 toast —— 差异弹窗自己有位置说清原因。
+ * 取差异两侧内容。不缓存，失败抛出（弹窗里显示错误行）。
  */
 export async function loadDiffSides(
   path: string,
@@ -661,8 +595,7 @@ export async function loadDiffSides(
 // ==================== 提交详情 ====================
 
 /**
- * 取一个提交的详情。与差异正文同一取舍：**不缓存、不进 `busy`**（看一眼历史不该锁住写操作）；
- * 失败抛出 —— 弹窗自己有位置说清原因。
+ * 取提交详情。与差异正文同一取舍：不缓存、不进 busy，失败抛出。
  */
 export async function loadCommitDetail(oid: string): Promise<GitCommitDetail> {
   const dir = gitStore.dir
@@ -670,7 +603,7 @@ export async function loadCommitDetail(oid: string): Promise<GitCommitDetail> {
   return invokeCommitDetail(dir, oid)
 }
 
-/** 某个提交里一条路径的两侧内容（按需取：一次拉整个提交的 diff，大提交上是几十 MB） */
+/** 某提交里一条路径的两侧内容（按需取：整个提交的 diff 可能几十 MB） */
 export async function loadCommitFileSides(
   oid: string,
   path: string,

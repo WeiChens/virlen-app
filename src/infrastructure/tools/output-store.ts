@@ -1,18 +1,14 @@
 /**
- * ToolOutputStore —— 管理每个 tool call 的运行中输出与终止句柄（全局单例，key = toolCallId），
- * 用于 execute_command 等长耗时工具向 UI 推实时输出。
+ * 每个 tool call 的运行中输出与终止句柄（全局单例，key = toolCallId），
+ * 供 execute_command 等长耗时工具向 UI 推实时输出。
  */
 
 /**
- * Step 2 ①：「终端内确认」的待确认命令信息。
- *
- * 命令此时**尚未执行**：UI 在终端块里渲染成一行可编辑命令，用户按 Enter 才执行。
- * 字段与通用授权弹窗（`AuthorizationRequest`）对齐：permName/title/subTitle/desc/hint/risk。
+ * 「终端内确认」的待确认命令。命令此时尚未执行：UI 渲染成一行可编辑命令，用户按 Enter 才执行。
  */
 export interface PendingConfirmInfo {
   /**
-   * 本次交互的 id（M4）。终端内确认**不弹 modal**、不触发 showAuthorization —— 手机控制侧要把它登记成一张
-   * 可应答卡片，就必须拿到同一个 id（否则无法与 interactionSettled 对齐，§16.4）。
+   * 本次交互的 id：终端内确认不弹 modal，手机控制侧要靠它把卡片与 interactionSettled 对齐。
    */
   interactionId?: string
   /** 权限唯一 key（展示） */
@@ -38,32 +34,25 @@ export interface ToolOutput {
   output: string
   /**
    * 终止回调（kill 子进程、取消请求等）。
-   *
-   * 返回值为 `Promise<boolean>` 时可告知「是否真的命中了运行中的命令」：`false` 表示命令不在
-   * 运行中（还没 spawn / 已结束），调用方据此复位按钮而不是永远停在「终止中」。
+   * 返回 Promise<boolean> 时可告知「是否真的命中了运行中的命令」，false 用于复位按钮。
    */
   kill?: () => void | Promise<boolean | void>
   /**
-   * 输出是否为 PTY（伪控制台）原始流。true 表示 output 是带 ANSI/VT 控制序列的终端流（stdout/stderr 已合并），
-   * 须交给 xterm 而非 `<pre>`。后端权威标记是完成态 uiData.pty，这里用于运行中提前定渲染方式。
+   * 输出是否为 PTY 原始流（带 ANSI/VT 控制序列，须交给 xterm 而非 <pre>）。
+   * 后端权威标记是完成态 uiData.pty，这里用于运行中提前定渲染方式。
    */
   pty?: boolean
-  /**
-   * Step 2 ①：待确认命令（存在时 UI 渲染确认块，命令尚未执行）。
-   * 用户提交 / 取消后由 `clearPendingConfirm` 清空。
-   */
+  /** 待确认命令（存在时 UI 渲染确认块）；提交 / 取消后由 clearPendingConfirm 清空 */
   pendingConfirm?: PendingConfirmInfo
   /**
-   * 本次命令**实际**的沙盒模式（Rust 判定后下发）：write_isolation | readonly | no_sandbox_bypass |
-   * no_sandbox_disabled | no_sandbox_degraded | no_sandbox。运行中经 agent:tool-env 写入；
+   * 本次命令实际的沙盒模式（Rust 判定后下发），运行中经 agent:tool-env 写入；
    * 完成态以后端权威字段 uiData.sandbox 为准。
    */
   sandbox?: string
 }
 
 /**
- * 输出通知的节流窗口（ms）：高频 stdout 下最多每窗口通知一次 UI；窗口内后续分片由**尾沿补发**兜底
- *（见 ToolOutputStore.trailing），保证最后一片一定上屏。
+ * 输出通知的节流窗口（ms）：高频 stdout 下最多每窗口通知一次 UI；窗口内后续分片由尾沿补发兜底。
  */
 export const NOTIFY_INTERVAL_MS = 50
 
@@ -75,16 +64,14 @@ class ToolOutputStore {
   /** 节流用：每个 toolCallId 上次通知时间 */
   private lastNotify = new Map<string, number>()
   /**
-   * 尾沿补发定时器。只做前沿节流是错的：落在同一窗口内的后续分片只入缓冲、不通知，且永不补发 ——
-   * 交互式命令（`npm init`）的尾片（无换行的提示符）恰好落在窗口内就一直不上屏，要等用户敲键才被顺带刷出
-   *（「按了键提示符才出现」的根因）。故在命中间隔时挂定时器，窗口结束补通知一次，保证最后一片一定上屏。
+   * 尾沿补发定时器。只做前沿节流是错的：同一窗口内的后续分片只入缓冲、永不通知 ——
+   * 交互式命令（npm init）的尾片（无换行的提示符）落在窗口内就一直不上屏。
    */
   private trailing = new Map<string, ReturnType<typeof setTimeout>>()
 
   /** 注册一个 tool 输出状态 */
   register(toolCallId: string, output: ToolOutput) {
-    // 保留已由 `agent:tool-env` 写入的 sandbox：register 会替换 entry（清掉先前的
-    // 「> cmd」表头），但沙盒模式是权威信息，不能在替换中丢掉。
+    // 保留已由 agent:tool-env 写入的 sandbox：register 会替换 entry，但沙盒模式不能丢。
     const prev = this.map.get(toolCallId)
     const next: ToolOutput = prev?.sandbox
       ? { ...output, sandbox: prev.sandbox }
@@ -126,10 +113,9 @@ class ToolOutputStore {
     this.notify(toolCallId)
   }
 
-  /** Step 2 ①：写入「终端内确认」的待确认命令（此时命令尚未执行）。 */
+  /** 写入待确认命令（此时命令尚未执行）。 */
   setPendingConfirm(toolCallId: string, info: PendingConfirmInfo) {
-    // 必须替换为新对象：UI 侧 `useToolLiveOutput` 靠对象引用变化触发重渲染，
-    // 就地改字段（同一引用）→ React 不重渲染，「待确认命令行」永远不会出现。
+    // 必须替换为新对象：UI 的 useToolLiveOutput 靠引用变化重渲染，就地改字段永远不会出现。
     const existing = this.map.get(toolCallId) ?? {
       toolName: 'execute_command',
       output: '',
@@ -138,7 +124,7 @@ class ToolOutputStore {
     this.notify(toolCallId)
   }
 
-  /** Step 2 ①：清除待确认（用户提交 / 取消后）。 */
+  /** 清除待确认（用户提交 / 取消后）。 */
   clearPendingConfirm(toolCallId: string) {
     const entry = this.map.get(toolCallId)
     if (!entry?.pendingConfirm) return
@@ -149,8 +135,7 @@ class ToolOutputStore {
   }
 
   /**
-   * 写入某命令**实际**的沙盒模式（运行中经 `agent:tool-env` 下发）。同 `setPendingConfirm` 同理：必须替换为
-   * 新对象（UI 的 `useToolLiveOutput` 靠引用变化重渲染）；同值幂等（避免无谓重渲染）。
+   * 写入命令实际的沙盒模式（运行中经 agent:tool-env 下发）。同上必须替换为新对象；同值幂等。
    */
   setSandbox(toolCallId: string, sandbox: string) {
     const existing = this.map.get(toolCallId) ?? {
@@ -167,7 +152,7 @@ class ToolOutputStore {
     return this.map.get(toolCallId)
   }
 
-  /** 移除（tool 执行完毕后清理）；取消未触发的尾沿，避免补发已删除的 id */
+  /** 移除并取消未触发的尾沿（避免补发已删除的 id） */
   remove(toolCallId: string) {
     this.cancelTrailing(toolCallId)
     this.map.delete(toolCallId)

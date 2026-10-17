@@ -1,26 +1,25 @@
 ﻿use std::fs;
-// `Manager` 现在在所有平台都被用到（退出钩子里的 `try_state`），因此不再按 target 条件编译
 use tauri::Manager;
 
 mod clipboard_files;
-/// 全部 `#[tauri::command]`（GUI 壳）—— 业务语义在 `virlen-core`
+/// 全部 `#[tauri::command]`；业务语义在 `virlen-core`
 mod commands;
 #[cfg(target_os = "windows")]
 mod drag_drop;
 mod common_service;
 mod deepseek_tokenizer;
-/// GUI 宿主实现（`TauriHost`）；`HostEnv` trait 与 `CliHost` 在 `virlen-core::host`
+/// GUI 宿主实现；`HostEnv` 与 `CliHost` 在 `virlen-core::host`
 mod host;
 mod load_env;
 mod vision_service;
 mod speech_service;
 mod task_manager;
-/// GUI 侧埋点出口（Tauri emit + panic 拉取命令）；其余在 `virlen-core::telemetry`
+/// GUI 侧埋点出口；其余在 `virlen-core::telemetry`
 mod telemetry;
 #[cfg(desktop)]
 mod tray;
 
-/// 将文件或目录移动到系统回收站（跨平台）
+/// 移到系统回收站
 #[tauri::command]
 async fn move_to_trash(path: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
@@ -30,7 +29,7 @@ async fn move_to_trash(path: String) -> Result<(), String> {
     .map_err(|e| format!("Task join error: {}", e))?
 }
 
-/// 沙盒诊断：Windows 返回状态目录/能力 SID/环境变量覆盖；其它平台返回接入说明。
+/// 沙盒诊断：Windows 返回状态目录 / 能力 SID / 环境变量覆盖。
 #[tauri::command]
 fn sandbox_diagnostics() -> serde_json::Value {
     #[cfg(target_os = "windows")]
@@ -63,7 +62,7 @@ async fn save_file_to_path(buffer: Vec<u8>, path: String) -> Result<(), String> 
 }
 
 #[tauri::command]
-// `#[allow(too_many_arguments)]`：Tauri 命令参数逐个从 JS 传，收结构体会要求前端改调用形状。
+// Tauri 命令参数逐个从 JS 传，收结构体会要求前端改调用形状
 #[allow(clippy::too_many_arguments)]
 async fn search_files_by_name(
     root: String,
@@ -71,8 +70,7 @@ async fn search_files_by_name(
     use_regex: bool,
     max_results: usize,
     task_id: String,
-    // 遍历范围（侧边栏搜索框用）：跳过点项 / 依赖·构建目录，
-    // keep_dirs 是已展开的那份忽略目录（例外）。详见 virlen_core::search::search_files_by_name 注释。
+    // include_hidden / skip_dir_names 控制遍历范围；keep_dirs 是已展开的忽略目录（例外）
     include_hidden: bool,
     skip_dir_names: Vec<String>,
     keep_dirs: Vec<String>,
@@ -158,16 +156,13 @@ async fn list_directory(
     Ok(result)
 }
 
-/// 停止一个正在运行的任务
-/// 返回 true 表示任务已被标记取消；false 表示没有找到该任务
+/// 停止任务；返回是否找到了该任务
 #[tauri::command]
 fn stop_task(task_id: String) -> bool {
     task_manager::stop(&task_id)
 }
 
-/// 跨平台强制杀进程树（进程 + 所有子进程）
-/// - Windows: Job Object / 递归 Toolhelp32 枚举后代逐个 taskkill（不依赖树关系）
-/// - Linux/macOS: 递归 ps 枚举后代逐个 kill（不依赖进程组）
+/// 强制杀进程树：Windows 用 Job Object / Toolhelp32，Linux·macOS 递归 ps，均不依赖进程组。
 #[tauri::command]
 async fn kill_process_tree(pid: u32) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
@@ -200,7 +195,7 @@ pub struct PathStat {
     pub size: u64,
 }
 
-/// 探测路径是否存在 / 是文件 / 多大。供「先探测再读取」用（如读项目规则前先判体积是否超限，避免整个读进内存才发现该拒）。
+/// 探测路径是否存在 / 是文件 / 多大（先探测再读，避免整个读进内存才发现该拒）。
 #[tauri::command]
 async fn stat_path(path: String) -> Result<Option<PathStat>, String> {
     let expanded = virlen_core::sandbox::paths::expand_user_path(&path);
@@ -212,7 +207,7 @@ async fn stat_path(path: String) -> Result<Option<PathStat>, String> {
                 is_file: m.is_file(),
                 size: m.len(),
             })),
-            // 不存在（含父目录不存在）是「正常结果」，不是错误
+            // 不存在是正常结果，不是错误
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(format!("Cannot stat '{}': {}", expanded, e)),
         }
@@ -224,7 +219,6 @@ async fn stat_path(path: String) -> Result<Option<PathStat>, String> {
 /// 规范化路径：展开 ~/%USERPROFILE% → canonicalize → 返回绝对路径
 #[tauri::command]
 async fn canonicalize_path(path: String) -> Option<String> {
-    // 路径展开操作很快，但 canonicalize 可能涉及 I/O
     tokio::task::spawn_blocking(move || {
         let expanded = virlen_core::sandbox::paths::expand_user_path(&path);
         let p = std::path::Path::new(&expanded);
@@ -237,7 +231,7 @@ async fn canonicalize_path(path: String) -> Option<String> {
     .flatten()
 }
 
-/// 检查路径是否是一个有效的目录
+/// 检查是否为有效目录
 #[tauri::command]
 async fn check_is_directory(path: String) -> Result<bool, String> {
     tokio::task::spawn_blocking(move || {
@@ -269,17 +263,13 @@ async fn edit_file_multi_in_place(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 单实例插件必须第一个注册（其 setup 按注册顺序执行，早于窗口 / 托盘 / 数据库创建），
-    // 第二个实例才能在建资源前就退出。
-    // dev 下不启用（允许并存，否则会把上一个没关干净的 dev 实例顶掉）；判 dev 用
-    // `tauri::is_dev()`，不要写 `cfg!(feature = "custom-protocol")`（本包没声明该 feature）。
+    // 单实例插件必须第一个注册，第二个实例才能在建资源前退出。dev 下不启用（允许并存），
+    // 判 dev 用 `tauri::is_dev()`（本包没声明 custom-protocol feature）。
     let mut builder = tauri::Builder::default();
     if !tauri::is_dev() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            // 回调里拿到的是另一个进程的 argv/cwd。本应用不做文件关联，但有一条 argv
-            // 语义必须接住：MSIX 清单 `com:ExeServer@Arguments` 的 `-ToastActivated`
-            // —— 点击通知时系统按 CLSID 拉起**新**进程，而那个进程在把自己的 COM
-            // 类对象注册上之前就被本插件拦下，于是「点通知」退化成「只是聚焦窗口」。
+            // 点击通知时系统按 CLSID 拉起新进程，会被本插件拦下；必须接住 `-ToastActivated`，
+            // 否则「点通知」退化成「只是聚焦窗口」。
             #[cfg(desktop)]
             {
                 let reason = if tray::toast_activator::is_toast_activated(&argv) {
@@ -307,21 +297,18 @@ pub fn run() {
                 eprintln!("[RAG] 初始化失败: {}", e);
             } 
 
-            // 视觉模型按需懒加载（`vision::analyze*` 内部管引用计数），启动期无需初始化
+            // 视觉模型按需懒加载，启动期无需初始化
 
-            // 系统托盘：关闭窗口改为隐藏（AI 继续在后台跑），托盘菜单提供真正的退出入口
+            // 托盘：关闭窗口改为隐藏，托盘菜单提供真正的退出入口
             #[cfg(desktop)]
             {
                 app.manage(tray::TrayState::default());
-                // Windows：把**进程**声明成与开始菜单快捷方式相同的 AUMID
-                // （通知的归属/图标，以及点击激活都按它来，见 tray::notify）
+                // Windows：把进程声明成与开始菜单快捷方式相同的 AUMID（通知归属与点击激活）
                 tray::notify::init_app_identity(app.handle());
-                // 注册 toast 点击的 COM 激活器（CLSID 与 MSIX 清单一致，见 tray::toast_activator）：
-                // 放在托盘创建之前 —— 「被点击通知拉起」的进程要让类对象尽快挂上（系统有超时）
+                // 注册 toast 点击的 COM 激活器；放在托盘之前 —— 被通知拉起的进程有超时限制
                 tray::toast_activator::init(app.handle());
                 if let Err(e) = tray::init(app.handle()) {
-                    // 托盘不可用 → decide_close 会回退成「关闭即退出」，
-                    // 不会出现「窗口被隐藏、又没有托盘」的死局
+                    // 托盘不可用 → decide_close 回退成「关闭即退出」，不会出现隐藏后无托盘的死局
                     eprintln!("[tray] 托盘初始化失败，关闭窗口将直接退出: {}", e);
                 }
             }
@@ -333,13 +320,11 @@ pub fn run() {
             // 预热 DeepSeek tokenizer（后台线程解析，不阻塞启动；失败静默）
             deepseek_tokenizer::prewarm(app.handle());
 
-            // macOS: visible=false 会阻止 WKWebView 加载 JS，导致窗口永远无法通过 JS show()
-            // 因此 macOS 上不做白屏优化，直接显示窗口
+            // macOS: visible=false 会阻止 WKWebView 加载 JS，故不做白屏优化
             #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
-                // 窗口已显示 → 刷新一次托盘（否则 tooltip 会停留在
-                // 「已隐藏到托盘，右键可退出」，要等下一次工作/完成事件才纠正）
+                // 刷新托盘，否则 tooltip 停在「已隐藏到托盘」直到下一次事件
                 #[cfg(desktop)]
                 tray::refresh_tray(app.handle());
             }
@@ -350,9 +335,9 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        // 系统通知（Phase 2）：完成提醒的优先通道，降级链见 `tray::notify`
+        // 系统通知：完成提醒的优先通道
         .plugin(tauri_plugin_notification::init())
-        // 托盘的「关闭 ≠ 退出」在此收口：前端标题栏关闭按钮因此一行都不用改
+        // 「关闭 ≠ 退出」在此收口
         .on_window_event(|window, event| {
             #[cfg(desktop)]
             tray::handle_window_event(window, event);
@@ -373,7 +358,7 @@ pub fn run() {
             list_directory,
             stop_task,
             read_file_with_hash,
-            // 文档解析（PDF / Office / CSV；与原生工具 `parse_document` 同一条组装链）
+            // 文档解析（与原生工具 `parse_document` 同一条组装链）
             commands::document::cmd_parse_document,
             stat_path,
             edit_file_multi_in_place,
@@ -386,7 +371,7 @@ pub fn run() {
             common_service::grant_permissions,
             vision_service::vision_analyze,
             vision_service::vision_analyze_base64,
-            // RAG 知识库命令
+            // RAG 知识库
             commands::rag::create_knowledge_base,
             commands::rag::list_knowledge_bases,
             commands::rag::update_knowledge_base,
@@ -409,27 +394,22 @@ pub fn run() {
             commands::agent::agent_send_message,
             commands::agent::agent_cancel,
             commands::agent::agent_kill_command,
-            // PTY 会话交互（Step 1：execute_command 换 ConPTY）
+            // PTY 会话交互
             commands::agent::pty_write,
             commands::agent::pty_resize,
-            // 命名控制键（Step 2 ③）
             commands::agent::pty_key,
-            // 接管 / 交还（Step 2 ②）
             commands::agent::pty_set_held,
-            // TS 引擎路径的原生执行（沙盒 + ConPTY，§7 #14）
+            // TS 引擎路径的原生执行（沙盒 + ConPTY）
             commands::agent::pty_run_command,
             commands::agent::agent_get_run_snapshot,
             commands::agent::agent_clear_run_snapshot,
             commands::agent::agent_dispose,
-            // 工具定义权威源（机制 C：前端 toolRegistry 经此取值）
+            // 工具定义 / 提示词 / 供应商目录（前端经此取 core 的唯一真源）
             commands::agent::cmd_list_tool_definitions,
-            // 提示词权威源（同上：提示词 md 存在 core，前端经此取值）
             commands::agent::cmd_agent_prompts,
-            // 供应商目录（模板表 + 推理档位表；CLI 与 GUI 同一份 core 数据）
             commands::agent::cmd_provider_catalog,
-            // 上下文压缩（GUI）：与 CLI 共用 core 同一份实现
+            // 上下文压缩 / 标题生成（与 CLI 共用 core）
             commands::agent::cmd_compress_context,
-            // 会话标题生成（GUI）：与 CLI 共用 core 同一份实现
             commands::agent::cmd_generate_title,
             commands::agent::agent_tool_response,
             commands::agent::agent_user_interaction_response,
@@ -451,11 +431,11 @@ pub fn run() {
             commands::session_db::cmd_replace_session_messages_from,
             commands::session_db::cmd_append_messages,
             commands::session_db::cmd_truncate_session_messages,
-            // 应用设置（配置下沉 D3）
+            // 应用设置
             commands::session_db::cmd_settings_get_all,
             commands::session_db::cmd_settings_upsert,
             commands::session_db::cmd_settings_import,
-            // 长期记忆（记忆功能 P0：面板 CRUD + 建会话注入段）
+            // 长期记忆：面板 CRUD + 建会话注入段
             commands::memory::cmd_memory_list,
             commands::memory::cmd_memory_upsert,
             commands::memory::cmd_memory_delete,
@@ -464,26 +444,25 @@ pub fn run() {
             commands::memory::cmd_memory_prompt_section,
             commands::memory::cmd_memory_touch,
             commands::memory::cmd_memory_limits,
-            // 长期记忆（P1：三个 `memory_*` 工具的 GUI 孪生 —— 与原生工具共用 core 实现）
+            // 长期记忆：`memory_*` 工具的 GUI 孪生
             commands::memory::cmd_memory_search,
             commands::memory::cmd_memory_recall,
             commands::memory::cmd_memory_write,
-            // 长期记忆（导出 JSON —— 前端选路径写文件，Rust 只给文本）
+            // 长期记忆导出（Rust 只给文本，写文件由前端做）
             commands::memory::cmd_memory_export,
-            // 长期记忆再蒸馏（P2′：100 条以上时后台合并；命令给排障 / 未来的面板用）
+            // 长期记忆再蒸馏
             commands::memory::cmd_memory_redistill,
             commands::memory::cmd_memory_redistill_runs,
-            // 后台服务面板（聊天页右上角：与四个 service 工具同一张注册表）
+            // 后台服务面板
             commands::service::cmd_list_background_services,
             commands::service::cmd_kill_background_service,
-            // 全局面板（新对话页：跨会话列表，每行带 sessionId 归属）
+            // 全局面板（跨会话）
             commands::service::cmd_list_all_background_services,
-            // 后台服务终端弹窗（P3：读合并流 / 写键击 / 改尺寸）
+            // 后台服务终端
             commands::service::cmd_service_console_read,
             commands::service::cmd_service_console_write,
             commands::service::cmd_service_console_resize,
-            // 源代码管理（图形化 Git）—— 语义全在 `virlen-core::git`：
-            // 全程 `git` 子进程（选型与否决 `gix` / `git2` 的证据见 docs/git-management-plan.md §2.1）
+            // 源代码管理（语义在 `virlen-core::git`，全程 git 子进程）
             commands::git::git_repo_info,
             commands::git::git_status,
             commands::git::git_branches,
@@ -494,7 +473,7 @@ pub fn run() {
             commands::git::git_check_ref_format,
             commands::git::git_remotes,
             commands::git::git_remote_test,
-            // 写操作（Rust 侧过只读沙盒门禁，fail-closed）
+            // 写操作（过只读沙盒门禁，fail-closed）
             commands::git::git_stage,
             commands::git::git_unstage,
             commands::git::git_discard,
@@ -505,7 +484,7 @@ pub fn run() {
             commands::git::git_branch_delete,
             commands::git::git_branch_rename,
             commands::git::git_init,
-            // 远程（凭据策略 = SSH，见 `virlen-core::git::remote` 模块头）
+            // 远程（凭据走 SSH）
             commands::git::git_fetch,
             commands::git::git_pull,
             commands::git::git_push,
@@ -514,7 +493,7 @@ pub fn run() {
             commands::session_db::cmd_usage_stats,
             commands::session_db::cmd_usage_query,
             commands::session_db::cmd_usage_clear,
-            // 库维护（设置 → 存储：体积快照 / 截断 WAL / 重建数据库）
+            // 库维护（体积快照 / 截断 WAL / 重建）
             commands::session_db::cmd_db_stats,
             commands::session_db::cmd_db_checkpoint,
             commands::session_db::cmd_db_maintain,
@@ -522,7 +501,7 @@ pub fn run() {
             deepseek_tokenizer::cmd_count_tokens,
             // 埋点：前端就绪后拉取落盘的历史 panic
             telemetry::telemetry_drain_panics,
-            // 托盘命令（铁律 4：新增命令必须在此注册，否则前端 invoke 静默 404）
+            // 托盘命令（新增命令必须在此注册，否则 invoke 静默 404）
             #[cfg(desktop)]
             tray::commands::tray_set_working,
             #[cfg(desktop)]
@@ -538,13 +517,12 @@ pub fn run() {
             // macOS 离线语音识别（SFSpeechRecognizer）
             speech_service::macos_request_speech_authorization,
             speech_service::macos_transcribe_speech,
-            // 手机控制（配对表持久化）
+            // 手机控制：配对表 / 设备身份持久化
             commands::phone_pairing::cmd_phone_pairing_load,
             commands::phone_pairing::cmd_phone_pairing_save,
-            // 手机控制（电脑设备身份持久化 —— 「重新获取还是同一个」的落点）
             commands::phone_device::cmd_phone_identity_load,
             commands::phone_device::cmd_phone_identity_save,
-            // 手机控制（审计落盘：append-only JSONL）
+            // 手机控制：审计落盘（append-only JSONL）
             commands::phone_audit::cmd_phone_audit_append,
             commands::phone_audit::cmd_phone_audit_list,
             commands::phone_audit::cmd_phone_audit_clear,
@@ -553,14 +531,13 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| match event {
             tauri::RunEvent::ExitRequested { api, code, .. } => {
-                // 只有「所有窗口已关闭」触发的默认退出（code = None）才拦；
-                // code = Some（托盘退出 / 系统关机注销）一律放行，绝不拦住关机。
+                // 只拦「所有窗口已关闭」的默认退出（code = None）；托盘退出 / 关机一律放行
                 #[cfg(desktop)]
                 {
                     if tray::should_prevent_exit(app, code) {
                         api.prevent_exit();
                     } else {
-                        // 退出前显式销毁托盘图标
+                        // 退出前销毁托盘图标
                         tray::destroy(app);
                     }
                 }
@@ -568,16 +545,15 @@ pub fn run() {
                 let _ = (api, code);
             }
             tauri::RunEvent::Exit => {
-                // 兜底：任何走到 Exit 的退出路径都确保托盘已清理（幂等）
+                // 兜底：任何走到 Exit 的路径都确保托盘已清理（幂等）
                 #[cfg(desktop)]
                 {
                     tray::destroy(app);
-                    // COM 类对象显式撤销（进程退出本来也会清，这里让「注册/撤销」对称）
+                    // COM 类对象显式撤销，让「注册 / 撤销」对称
                     tray::toast_activator::shutdown();
                 }
-                // 后台服务（dev server / watch 等）不跨应用生命周期存活：退出前全杀。
-                // ⚠️ 不能只靠 Job 的 KILL_ON_JOB_CLOSE —— 那是崩溃/被强杀时的兜底；
-                // 正常退出要把服务进程树干干净净地收掉（否则它们会带着断掉的管道继续跑）。
+                // 后台服务不跨应用生命周期存活：不能只靠 Job 的 KILL_ON_JOB_CLOSE（那是崩溃兜底），
+                // 正常退出要把进程树收干净，否则它们会带着断掉的管道继续跑。
                 let stopped = virlen_core::agent::native_tools::kill_all_services();
                 if stopped > 0 {
                     telemetry::track(
@@ -585,18 +561,15 @@ pub fn run() {
                         serde_json::json!({ "count": stopped }),
                     );
                 }
-                // 再蒸馏：取消失败 / 在跑的任务并清空待办 —— 它属于另一个生命周期，
-                // 不能跨进程存活（下一轮写入或下次启动会重新判定）
+                // 再蒸馏任务不能跨进程存活
                 virlen_core::agent::memory::redistill::sched::shutdown();
-                // 退出前把 WAL 截断回零（实测 `-wal` 长期停在 99 MB 以上，比库碎片大得多）。
-                // 幂等；拿不到连接锁就跳过，**绝不等待、绝不拖住退出**。
+                // 退出前把 WAL 截断回零（幂等；拿不到锁就跳过，绝不拖住退出）
                 if let Some(m) = app.try_state::<std::sync::Arc<virlen_core::session_db::DbMaintenance>>() {
                     let _ = m.try_checkpoint_truncate();
                 }
                 telemetry::on_exit();
             }
-            // macOS 专属：点 Dock 图标 / 重新打开 app 时把窗口捞回来
-            // （关到托盘后窗口是隐藏的，不处理这个事件用户会觉得「点了没反应」）
+            // macOS：点 Dock 图标时把窗口捞回来（关到托盘后窗口是隐藏的）
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => tray::activate_main_window(app, "reopen"),
             _ => {}

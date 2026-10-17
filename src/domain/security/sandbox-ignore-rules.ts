@@ -1,16 +1,11 @@
 /**
- * sandbox-ignore-rules — 「忽略沙盒命令」规则（领域层，纯匹配逻辑）。
+ * 「忽略沙盒命令」规则的纯匹配逻辑（不依赖 store / UI / i18n）。
  *
- * 脱壳（`sandbox:"off"`）命令（vitest / vite / node-gyp 等）每次都要走审批，在「安装 / 测试」这类
- * 高频命令上很烦人。本模块提供「命令 → 是否命中忽略规则」纯函数（不依赖 store / UI / i18n）；
- * 命中的命令由 `command_confirm.ts` 在交互层直接放行。
+ * 三种 kind：text 字面量比较、regex 正则源码、js 用户自写函数体。
+ * 按列表顺序取第一条命中且启用的规则。
  *
- * 三种 kind：`text` 字面量比较（完全 / 前缀 / 后缀，默认忽略大小写）、`regex` 正则源码（`caseSensitive`
- * 决定是否加 `i`）、`js` 用户自写 JS（参数 `command`，返回真值即命中；写法见 `buildJsFunction`）。
- * 匹配按列表顺序取**第一条命中且已启用**的规则。
- *
- * ⚠️ 安全边界（改这里须连同 `command_confirm.ts` 的拦截条件一起看）：规则只免除脱壳审批，不改变命令
- * 本身的风险审批；`deny` 永远优先；JS 规则编译/运行抛错一律按「未命中」，绝不放行。
+ * 安全边界：规则只免除脱壳审批，不改变命令本身的风险审批；deny 永远优先；
+ * JS 编译 / 运行抛错一律按「未命中」，绝不放行。
  */
 import { v4 } from '@/utils/uuid'
 
@@ -30,7 +25,7 @@ export interface SandboxIgnoreRule {
   enabled: boolean
   /** 匹配类型 */
   kind: SandboxRuleKind
-  /** `kind === 'text'` 时的比较方式；其他类型忽略 */
+  /** text 时的比较方式；其他类型忽略 */
   textMode: SandboxTextMode
   /** 匹配内容：text=字面量，regex=正则源码，js=函数体 */
   pattern: string
@@ -46,8 +41,8 @@ export interface SandboxRuleTestResult {
 }
 
 /**
- * JS 规则的默认函数体（新建规则或切到 `js` 时预填）：带注释的函数声明 + `return false`，
- * 默认不命中（用户没改之前不会静默放行任何命令）。
+ * JS 规则的默认函数体（新建或切到 js 时预填）：带注释的函数声明 + return false，
+ * 用户没改之前不会静默放行任何命令。
  */
 export const SANDBOX_JS_DEFAULT_PATTERN = [
   'function matchCommand(command) {',
@@ -58,14 +53,14 @@ export const SANDBOX_JS_DEFAULT_PATTERN = [
   '}',
 ].join('\n')
 
-/** 各匹配方式的「匹配内容」默认值：切换 kind 时回填，避免把上一种写法带进来（如把正则塞进 JS 规则）。 */
+/** 各匹配方式的「匹配内容」默认值：切 kind 时回填，避免把上一种写法带进来。 */
 export function defaultSandboxRulePattern(kind: SandboxRuleKind): string {
   return kind === 'js' ? SANDBOX_JS_DEFAULT_PATTERN : ''
 }
 
 /**
- * 空列表「一键添加」的常用规则预设（名称即 i18n key）。一律用 `regex`：命令真实形态是
- * 「同族 + 不同参数」（`pnpm install` / `pnpm i` / `npm ci`），字面量前缀匹配撑不住。预设仅是起点。
+ * 空列表「一键添加」的常用规则预设（名称即 i18n key）。一律用 regex：命令真实形态是同族不同参数
+ *（pnpm install / pnpm i / npm ci），字面量前缀撑不住。预设仅是起点。
  */
 export interface SandboxRulePreset {
   /** 预设标识（稳定，供测试引用；不是规则 id） */
@@ -150,10 +145,10 @@ function params<T>(v: T | undefined, d: T): T {
 
 // ==================== 编译缓存 ====================
 
-/** 正则 / JS 编译缓存（按 pattern + 选项），避免每次命令都重新编译 */
+/** 正则 / JS 编译缓存（按 pattern + 选项），避免每条命令都重新编译。 */
 const regexCache = new Map<string, RegExp | Error>()
 const jsCache = new Map<string, ((command: string) => unknown) | Error>()
-/** 缓存上限：规则集很小，超限整体清空即可（不做 LRU，保持简单） */
+/** 缓存上限：规则集很小，超限整体清空即可（不做 LRU）。 */
 const CACHE_LIMIT = 200
 
 function buildRegExp(pattern: string, caseSensitive: boolean): RegExp {
@@ -176,25 +171,23 @@ function buildRegExp(pattern: string, caseSensitive: boolean): RegExp {
 }
 
 /**
- * 去掉开头的空白与注释（`//` / `/* *\/`），只看第一行是什么。
- * 默认模板本身就带注释，若不剥离，`function` 声明会被误判成语句体而静默不命中。
+ * 去掉开头的空白与注释，只看第一行是什么。
+ * 默认模板本身就带注释，不剥离会把 function 声明误判成语句体而静默不命中。
  */
 function stripLeadingComments(body: string): string {
   return body.replace(/^(?:\s+|\/\/[^\n]*|\/\*[\s\S]*?\*\/)+/, '')
 }
 
-/** 形如 `const match = (command) => ...` / `const match = function (command) {...}` 的赋值式函数 */
+/** 形如 const match = (command) => ... / const match = function (command) {...} 的赋值式函数 */
 const ASSIGNED_FN =
   /^(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:function\b|\(?[\w$,\s()]*\)?\s*=>)/
 
 /**
- * 编译用户写的 JS 为 `(command) => 真值` 函数。按优先级尝试，尽量让用户「写出来就能命中」：
- * 1. `async` 开头 → 报错（Promise 恒为真值，会放行一切）；2. `function (command) {...}` 声明 → 包成立即
- * 调用；3. `const match = (command) => ...` → 末尾补 `return match(command)`；4. 含 `return` → 原样；
- * 5. 其他 → 先当单表达式，编译不过再回退为原样语句体。
+ * 编译用户写的 JS 为 (command) => 真值。按优先级尝试：function 声明包成立即调用；
+ * 赋值式函数补 return；含 return 的原样；其余先当单表达式，编译不过再回退为语句体。
  */
 function compileJs(body: string): (command: string) => unknown {
-  // 用户自己的规则内容 → 等价于用户自己在应用里写代码（CSP 已允许 eval）
+  // 用户自己的规则内容 → 等价于用户自己写代码（CSP 已允许 eval）
   // eslint-disable-next-line no-new-func
   return new Function('command', body) as (command: string) => unknown
 }
@@ -242,7 +235,7 @@ function buildJsFunction(pattern: string): (command: string) => unknown {
 
 // ==================== 匹配 ====================
 
-/** 用单条规则测试一条命令（刻意不看 `enabled`：UI「测试」按钮要对禁用中的草稿也能试）。 */
+/** 用单条规则测试一条命令（刻意不看 enabled：UI「测试」按钮要对禁用中的草稿也能试）。 */
 export function testSandboxRule(
   rule: Pick<SandboxIgnoreRule, 'kind' | 'textMode' | 'pattern' | 'caseSensitive'>,
   command: string,
@@ -275,7 +268,7 @@ export function testSandboxRule(
   }
 }
 
-/** 找出第一条命中该命令的**已启用**规则（列表顺序即优先级）；无命中返回 `null`。 */
+/** 找出第一条命中该命令的已启用规则（列表顺序即优先级）；无命中返回 null。 */
 export function findMatchingSandboxRule(
   rules: SandboxIgnoreRule[] | undefined | null,
   command: string,
@@ -291,8 +284,8 @@ export function findMatchingSandboxRule(
 // ==================== 列表顺序（= 优先级） ====================
 
 /**
- * 把 `id` 对应规则上移 / 下移一位（`offset` < 0 上移，> 0 下移）。列表顺序即匹配优先级，是语义而非装饰。
- * 越界 / `offset` 为 0 / id 不存在时**原样返回入参数组引用**，调用方据此跳过落库与重渲染。
+ * 把 id 对应规则上移 / 下移一位。列表顺序即匹配优先级，是语义而非装饰。
+ * 越界 / offset 为 0 / id 不存在时原样返回入参引用，调用方据此跳过落库与重渲染。
  */
 export function moveSandboxIgnoreRule(
   rules: SandboxIgnoreRule[] | undefined | null,
@@ -313,9 +306,8 @@ export function moveSandboxIgnoreRule(
 }
 
 /**
- * 把 `id` 对应规则拖到第 `targetIndex` 个「间隙」（插入位置语义，0..length；见 `sandbox-rules-dnd.ts`）。
- * 拖到自己身上（`targetIndex === from` 或 `from + 1`）视为原地不动，与越界 / 未知 id / 非有限数一样
- * **原样返回入参数组引用**。
+ * 把 id 对应规则拖到第 targetIndex 个「间隙」（插入位置语义）。
+ * 拖到自己身上 / 越界 / 未知 id / 非有限数时原样返回入参引用。
  */
 export function reorderSandboxIgnoreRule(
   rules: SandboxIgnoreRule[] | undefined | null,
@@ -338,8 +330,8 @@ export function reorderSandboxIgnoreRule(
 // ==================== 编译校验 ====================
 
 /**
- * 只做编译期校验：正则能否编译、JS 能否解析（`new Function` 成功即通过），**不执行**规则体。
- * 运行期错误一律按「未命中」处理，不该据此拦住保存。返回 `null` = 通过；空内容不算错误（由调用方拦）。
+ * 只做编译期校验（正则能否编译、JS 能否解析），不执行规则体。
+ * 返回 null = 通过；空内容不算错误（由调用方拦）。
  */
 export function compileSandboxRule(
   rule: Pick<SandboxIgnoreRule, 'kind' | 'textMode' | 'pattern' | 'caseSensitive'>,

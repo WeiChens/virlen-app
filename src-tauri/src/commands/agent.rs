@@ -1,8 +1,7 @@
-//! Agent 引擎的 Tauri 命令层（GUI 壳）。引擎本体在 `virlen-core`（零 `tauri::`），本文件只做：
-//! 注入 `TauriEventSink` / `TauriHost`、暴露 `agent_*` / `pty_*` / `cmd_*` 命令、把 JS 回执转交引擎。
+//! Agent 引擎的 Tauri 命令层。引擎本体在 virlen-core（零 tauri::），本文件只做注入宿主、
+//! 暴露命令、转交回执。
 //!
-//! ⚠️ 事件名与载荷形态不得改动（`AgentEventType` 是 TS emit / Rust emit / `chat-service` /
-//! `rust-engine.ts` 四方共享契约）。
+//! ⚠️ 事件名与载荷形态不得改动（AgentEventType 是四方共享契约）。
 
 use std::sync::Arc;
 use tauri::Emitter;
@@ -23,9 +22,7 @@ use virlen_core::session_db::{
 
 use super::session_db::{init_session_db, manage_noop_settings};
 
-/// 事件出口（Tauri）：把引擎事件转发到前端窗口
-///
-/// core 侧只认 `EventSink` trait，本实现是**唯一**把事件绑到 Tauri emit 的地方。
+/// 事件出口（Tauri）：把引擎事件转发到前端窗口。core 只认 EventSink trait。
 pub struct TauriEventSink {
     app: tauri::AppHandle,
 }
@@ -50,12 +47,8 @@ impl EventSink for TauriEventSink {
     }
 }
 
-/// 后台服务「**结束通知**」的 GUI 出口（`virlen_core::agent::native_tools::ServiceNoticeHost`）。
-///
-/// Rust 在「AI 空闲但某个服务结束了」时把**已经组装好的那条消息**（模型侧英文正文 + `uiData`）
-/// 交到这里 → 这里原样发给前端；前端只负责把它落进消息列表（不做文案决策，铁律 1）。
-/// 返回 `false`（事件系统不可用）时通知留在 Rust 队列里，下一次 LLM 请求之前注入——不会丢。
-/// 事件名不进 `AgentEventType` 契约（与 `agent:tool-output` / `tray:*` 同一类 raw 事件）。
+/// 后台服务结束通知的 GUI 出口：Rust 把已组装好的消息交来，前端只负责落进消息列表。
+/// 返回 false 时通知留在 Rust 队列，下次请求前注入。事件名不进 AgentEventType。
 pub struct TauriServiceNoticeHost {
     app: tauri::AppHandle,
 }
@@ -91,14 +84,13 @@ pub fn init_agent_engine(app: &tauri::AppHandle) {
             Arc::new(NoopSessionRepo)
         }
     };
-    // 应用配置仓储（`app_settings`）：`init_session_db` 已注册（失败分支注册 Noop），
-    // 这里取同一个实例交给引擎 —— 原生工具 `web_search` 因此能读到与 CLI 相同的搜索源配置。
+    // 应用配置仓储（app_settings）：init_session_db 已注册（失败时 Noop），
+    // 把同一实例交给引擎，原生工具 web_search 才能读到与 CLI 相同的配置
     let settings: Arc<dyn SettingsRepo> = app
         .try_state::<Arc<dyn SettingsRepo>>()
         .map(|s| s.inner().clone())
         .unwrap_or_else(|| Arc::new(NoopSettingsRepo));
-    // 长期记忆仓储：同一把连接（`SessionDb.memory`）—— 三个 `memory_*` 原生工具直读它。
-    // 库打不开时退化为 Noop（工具如实回「本地存储不可用」，而不是把读不到说成没有记忆）。
+    // 长期记忆仓储：同一把连接；库打不开时退化为 Noop（工具如实说「本地存储不可用」）
     let memory: Arc<dyn MemoryRepo> = app
         .try_state::<Arc<dyn MemoryRepo>>()
         .map(|s| s.inner().clone())
@@ -111,8 +103,7 @@ pub fn init_agent_engine(app: &tauri::AppHandle) {
             bridge: bridge.clone(),
             sink: sink.clone(),
         }),
-        // 宿主环境（GUI）：资源目录（视觉模型）+ 数据目录（会话库）。
-        // 引擎核心只认 `HostEnv` trait，因此 headless / CLI 换 `CliHost` 即可。
+        // 宿主环境（GUI）：资源目录 + 数据目录；headless / CLI 换 CliHost 即可
         Arc::new(crate::host::TauriHost::new(app.clone())),
         settings,
         memory,
@@ -120,17 +111,13 @@ pub fn init_agent_engine(app: &tauri::AppHandle) {
     app.manage(bridge);
     app.manage(engine);
     app.manage(repo);
-    // 后台服务「结束通知」的界面出口（核心侧不依赖 tauri，宿主在这里接上）：
-    // 空闲时服务结束 → 前端收到 `agent:service-exit` → 落进消息列表（用户与 AI 下一次请求都看得到）。
-    // ⚠️ 必须在引擎能起服务之前完成（服务只能由一次 run 起，而 run 要用户先发消息）。
+    // 后台服务结束通知的界面出口（必须在引擎能起服务之前接上）
     native_tools::attach_service_notice_host(Arc::new(TauriServiceNoticeHost::new(app.clone())));
-    // 记忆再蒸馏（P2′）的调度宿主：挂上后立刻尝试排空一次（补跑上次退出没跑完 / 本次启动就已越线的库），
-    // 之后由写路径闸门（`memory_write` / 面板保存）唤醒（`sched::request`）。
-    // 全程用户无感：没有弹窗、没有审批、没有 UI 文案；失败只落日志 / 埋点 / 账本。
+    // 记忆再蒸馏调度宿主：挂上后立刻尝试排空一次，之后由写路径闸门唤醒
     virlen_core::agent::memory::redistill::sched::attach_host(Arc::new(
         crate::commands::memory::GuiRedistillRuntime::new(app.clone()),
     ));
-    // 启动补跑：此刻队列是空的，先判定一次（「上次退出没跑完 / 本次启动就已越线」都在这条路上）
+    // 启动补跑：此刻队列是空的，先判定一次
     crate::commands::memory::request_redistill_on_startup(app);
 }
 
@@ -159,12 +146,8 @@ pub fn agent_kill_command(tool_call_id: String) -> bool {
 
 /// 向正在运行的 PTY 会话写入数据（用户中途插键盘）。
 ///
-/// `data` 是原始文本：普通按键、粘贴内容，或控制字节（`\x03` = Ctrl+C）。`\x03` 只能影响「正在读
-/// stdin 的进程」（shell 提示符 / REPL / `y/n` 提示）；中断主通道仍是 `agent_kill_command`（Job
-/// Object 杀树），见 docs/pty-research.md §5.6。
-///
-/// 会话 key 直接用 `toolCallId`（前端 `TerminalView` 已持有）；走 Tauri 命令而不经过引擎事件总线，
-/// 不污染 `AgentEventType` 四方契约（铁律 2）。
+/// data 是原始文本：按键 / 粘贴 / 控制字节（\x03 = Ctrl+C，只影响正在读 stdin 的进程）。
+/// 中断主通道仍是 agent_kill_command。会话 key 直接用 toolCallId。
 #[tauri::command]
 pub fn pty_write(tool_call_id: String, data: String) -> bool {
     native_tools::pty_write(&tool_call_id, &data)
@@ -176,40 +159,22 @@ pub fn pty_resize(tool_call_id: String, cols: u16, rows: u16) -> bool {
     native_tools::pty_resize(&tool_call_id, cols, rows)
 }
 
-/// 向正在运行的 PTY 会话发送**命名控制键**（Step 2 ③）。
-///
-/// 前端只发键名（如 `["enter"]` / `["ctrl+c"]` / `["up"]`），映射表在 Rust 侧
-/// （`pty_session::key_sequence`）—— 命名→字节只有一份实现（铁律 1 的同类问题）。
-/// 未知键名逐个跳过；返回是否至少写入了一个有效键（会话不存在 / 全部无效 → false）。
+/// 向 PTY 发送命名控制键：前端只发键名，映射表在 Rust 侧（只有一份实现）。
 #[tauri::command]
 pub fn pty_key(tool_call_id: String, keys: Vec<String>) -> bool {
     native_tools::pty_key(&tool_call_id, &keys)
 }
 
-/// 设置 PTY 会话的「接管」状态（Step 2 ②）。
-///
-/// `held=true` 时运行器**冻结超时预算**（用户慢慢输密码 / 走 OAuth 跳转，不该被超时杀掉）；
-/// `held=false`（交还）恢复按剩余预算继续。接管**不等于**取消：
-/// `agent_kill_command` / `agent_cancel` 在接管期间仍可用。
+/// 设置 PTY 会话的接管状态。held=true 时冻结超时预算；接管不等于取消（kill / cancel 仍可用）。
 /// 返回是否命中会话（命令已结束 → false，前端据此复位按钮）。
 #[tauri::command]
 pub fn pty_set_held(tool_call_id: String, held: bool) -> bool {
     native_tools::pty_set_held(&tool_call_id, held)
 }
 
-/// 原生执行入口（前端回退路径用，`docs/pty-research.md` §7 #14）
-///
-/// 让前端回退路径的 `execute_command` 也能用上 Rust 侧原生能力：沙盒（受限令牌 + ACL）、ConPTY
-/// （ANSI / 交互 / 用户插键盘）、统一超时取消、`uiData.pty` 标记。输出经 `ipc::Channel` 流式回传
-/// （而非 `app.emit`）→ 不经过引擎事件总线，不污染 `AgentEventType`（铁律 2），也不会与 Rust 引擎路径
-/// 重复 append。
-///
-/// ⚠️ 审批不在这里做：前端 `execute_command` 已完成风险分类与审批，本命令只负责「执行一条已获批准
-/// 的命令」。返回 `{ content, uiData, isError }`：`isError = true` 表示工具级失败（如退出码 >= 2），
-/// `content` 是模型侧英文报告；真正的「调用级」异常（沙盒只读拒绝等）仍走 `Err(String)`。
-///
-/// `#[allow(too_many_arguments)]`：Tauri 命令参数逐个从 JS `invoke` 传入，
-/// 收结构体会要求前端改调用形状（与 `cmd_compress_context` 同一取舍）。
+/// 原生执行入口（前端回退路径用）：沙盒 + ConPTY + 统一超时取消。
+/// 输出经 ipc::Channel 流式回传，不经引擎事件总线。
+/// 审批不在这里做：调用方负责风险分类。isError = true 是工具级失败，调用级异常仍走 Err。
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn pty_run_command(
@@ -223,8 +188,7 @@ pub async fn pty_run_command(
     on_output: tauri::ipc::Channel<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
     let sink = ChannelEventSink { channel: on_output };
-    // 两个 bool 入参（来自前端：AI 申请 / 命中忽略规则）→ 脱壳原因枚举。
-    // 优先级与 Rust 侧一致：命中「忽略沙盒命令」规则优先于本轮审批。
+    // 两个 bool 入参 → 脱壳原因枚举；优先级与 Rust 侧一致（命中规则优先于本轮审批）
     let bypass = if bypass_by_rule {
         native_tools::SandboxBypass::Rule
     } else if bypass_sandbox {
@@ -271,8 +235,7 @@ struct ChannelEventSink {
 impl event_sink::EventSink for ChannelEventSink {
     fn emit_agent_event(&self, _session_id: &str, _event: &types::AgentEvent) {}
     fn emit_raw(&self, event_name: &str, payload: serde_json::Value) {
-        // 实时输出（`agent:tool-output`）与沙盒模式（`agent:tool-env`）都要送到发起方：
-        // 后者让 JS 回退路径的终端块在「运行中」也能显示沙盒徽标。其余事件忽略。
+        // 实时输出与沙盒模式都要送到发起方；其余事件忽略
         if event_name == "agent:tool-output" || event_name == "agent:tool-env" {
             let _ = self.channel.send(payload);
         }
@@ -303,13 +266,8 @@ pub fn agent_dispose(state: tauri::State<'_, Arc<AgentEngine>>) {
     state.dispose();
 }
 
-/// 列出工具定义（**机制 C**：Rust 侧 `agent/tool_defs/definitions.json` 是权威源）
-///
-/// 前端 `toolRegistry` 在 Tauri 环境经此取值；浏览器 dev / vitest 则直读同一份 JSON
-/// （零漂移，不需要「快照 + 差异检查」那套）。
-///
-/// `platform` 省略时用当前平台（`std::env::consts::OS`）；显式传入主要用于取其它平台
-/// 变体（测试、跨平台预览）。
+/// 列出工具定义（Rust 侧 definitions.json 是权威源；前端经此取值，浏览器 dev 直读同一份）。
+/// platform 省略时用当前平台，显式传入用于取其它平台变体。
 #[tauri::command]
 pub fn cmd_list_tool_definitions(platform: Option<String>) -> Vec<types::ToolDefinition> {
     match platform.as_deref() {
@@ -318,24 +276,14 @@ pub fn cmd_list_tool_definitions(platform: Option<String>) -> Vec<types::ToolDef
     }
 }
 
-/// 列出全部模型侧提示词文本（**提示词 md 的唯一源在 `virlen-core`**，前端经此取值）
-///
-/// 与 `cmd_list_tool_definitions` 同一模式：权威源在 Rust，前端不再自带副本；
-/// 浏览器 dev / vitest 直读 core 目录里的同一份 md（零漂移，不需要「快照 diff」那套）。
-///
-/// 提示词是**静态文本**（无平台变体、无运行期参数），因此没有入参、也无需预热缓存。
+/// 列出全部模型侧提示词文本（权威源在 core，与工具定义同一模式）。提示词是静态文本，无入参。
 #[tauri::command]
 pub fn cmd_agent_prompts() -> prompts::PromptTexts {
     prompts::all_prompt_texts()
 }
 
-/// 供应商目录（模板表 + 推理强度档位表）—— **权威源在 core**
-///（`virlen-core/src/agent/provider/provider_catalog.json`）
-///
-/// 与 `cmd_agent_prompts` 同一模式：CLI 与 GUI 读同一份数据；前端浏览器 dev / vitest
-/// 直读 core 目录里**同一份** json（`?raw`），因此两条路径不可能漂移。
-///
-/// 返回 `Result`：目录是**数据**，被改坏时应当给调用方一个可读错误，而不是 panic。
+/// 供应商目录（模板表 + 推理强度档位）—— 权威源在 core 的 provider_catalog.json。
+/// 返回 Result：目录是数据，被改坏时给可读错误而不是 panic。
 #[tauri::command]
 pub fn cmd_provider_catalog() -> Result<provider::catalog::ProviderCatalog, String> {
     provider::catalog::provider_catalog()
@@ -368,15 +316,9 @@ pub struct CompressLlmDto {
     pub duration_ms: i64,
 }
 
-/// 上下文压缩（GUI）—— 与 CLI 走**同一份** `virlen_core::agent::compress`
-///
-/// - `raw` 模式：纯本地渲染，不需要 provider；
-/// - `ai` 模式：用 [`DefaultProviderFactory`]（GUI 有 JS 宿主，Gemini 等桥接协议照常走双向桥）；
-///   headless / CLI 没有 JS 宿主，走 `create_native_provider`。
-///
-/// 落库由前端完成（`cmd_replace_session_messages`）；记账在此完成（与 CLI 同一入口
-/// `agent::usage::record_usage`，kind = `compress`，且不刷新会话时间）。
-/// `#[allow(too_many_arguments)]`：Tauri 命令参数逐个从 JS 传，收结构体会要求前端改调用形状。
+/// 上下文压缩（GUI）—— 与 CLI 走同一份实现。
+/// raw 模式纯本地渲染；ai 模式用 DefaultProviderFactory（有 JS 宿主）。
+/// 落库由前端完成，记账在此完成（与 CLI 同一入口，kind = compress）。
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn cmd_compress_context(
@@ -416,7 +358,7 @@ pub async fn cmd_compress_context(
         &CancellationToken::new(),
     )
     .await?;
-    // 记账：AI 摘要是一次真实消费（与 CLI 同一入口）；raw 没有模型调用 → `llm` 为 None → 不记账
+    // 记账：AI 摘要是一次真实消费；raw 没有模型调用 → 不记账
     if let Some(llm) = &out.llm {
         let (ptype, pid) = provider
             .as_ref()
@@ -463,15 +405,8 @@ pub struct TitleResultDto {
     pub duration_ms: i64,
 }
 
-/// 会话标题生成（GUI）—— 与 CLI 走**同一份** `virlen_core::agent::title`。
-///
-/// 为什么放后端：TS 侧原有一份 `generate-title.ts`，与 Rust 那份是「同语义两实现」；
-/// 统一到 core 后只有一份，不会再漂移。GUI 用 [`DefaultProviderFactory`]（有 JS 宿主，
-/// Gemini 等桥接协议照常走双向桥，与正常聊天完全同一条路）；headless / CLI 走
-/// `create_native_provider`（见 `virlen-cli/src/session_rt`）。
-///
-/// 落库（把标题写回会话）由调用方完成；**记账在此完成**（与 CLI 同一入口
-/// `agent::usage::record_usage`，kind = `title`；provider 未回报 usage 时不记）。
+/// 会话标题生成（GUI）—— 与 CLI 走同一份实现，避免 TS / Rust 两实现漂移。
+/// 落库由调用方完成；记账在此完成（kind = title）。
 #[tauri::command]
 pub async fn cmd_generate_title(
     app: tauri::AppHandle,

@@ -1,28 +1,14 @@
 /**
- * diff —— 「左右对比」的**唯一实现**（`SideBySideDiff` 的输入行模型）。
+ * 「左右对比」的唯一实现（SideBySideDiff 的输入行模型）。
+ * 用 jsdiff 的 diffLines + diffChars：先按行分组，每个改动组内部再做字符级 diff，
+ * 于是「一行改两个字」是行内片段，而换行变更以 ↵ 标出。
  *
- * 算法用 `diff` 库（jsdiff）的 `diffLines` + `diffChars`，与 xwjc-app 的
- * `VersionCompareDetailPage/diff.js` 同一套：
- *
- * 1. `diffLines` 先按行切出「未变化块」与「改动组」；
- * 2. **每个改动组内部**再做一次 `diffChars` —— 于是「一行里改了两个字」是**行内字符级**片段，
- *    而不是整行删除 + 整行新增；
- * 3. 组内整段字符级 diff 还能正确处理**行中插入 / 删除换行**：换行前后的文本被识别为相等，
- *    只有换行本身是变更，不会把换行后的内容误判成「整段删除 + 整段新增」；换行变更在行内以
- *    `↵`（[`NL_MARK`]）标出。
- *
- * 为什么换掉原先手写的 LCS：它的 DP 表是 `(m+1)×(n+1)` 个 number —— 5000 行的文件就是 2500 万项
- * （几百 MB 内存），大文件直接卡死；而且它只到行粒度，改一个字符也整行红绿。
- *
- * 两处刻意的取舍（与参照实现不同）：
- * - **不折叠未改动行**（参照实现也没有）：省略行只在「调用方手里根本没有那段内容」时才出现
- *   （`edit_file` 的多处编辑之间），由视图层自己插，内核不产生。
- * - **性能兜底**：组内字符级 diff 的规模与编辑距离都有上限，超限就退化成整行红绿（见常量注释）。
- *   参照实现没有这道闸，遇到「整个大文件重写」的改动组会卡死界面。
+ * 两处取舍：不折叠未改动行（省略行由视图层插）；组内字符级 diff 有规模 / 编辑距离上限，
+ * 超限降级成整行红绿，避免「整个文件重写」卡死界面。
  */
 import { diffChars, diffLines, type ChangeObject } from 'diff'
 
-/** 行内片段：一段文本 + 它在两侧的归属（`equal` = 两侧共有 / `removed` = 只在左侧 / `added` = 只在右侧） */
+/** 行内片段：一段文本 + 它在两侧的归属 */
 export interface WordPart {
   type: 'equal' | 'removed' | 'added'
   value: string
@@ -31,14 +17,12 @@ export interface WordPart {
 export type DiffRowType = 'equal' | 'removed' | 'added' | 'modified'
 
 /**
- * 一行对齐结果。两侧**成对**：
- * - `equal`：两侧内容相同（理论上只会出现在改动组内被字符级 diff 识别为相等的行上）；
- * - `removed` / `added`：单侧行（另一侧是空数组，渲染时留一个空行盒保持行高对齐）；
- * - `modified`：两侧都有、内容不同，各自带字符级片段（行内高亮的依据）。
+ * 一行对齐结果。两侧成对：equal 两侧相同；removed / added 是单侧行（另一侧空，占一个空行盒保持对齐）；
+ * modified 两侧都有且内容不同，各带字符级片段。
  */
 export interface DiffRow {
   type: DiffRowType
-  /** 左侧（旧）行号；续行与单侧行的另一侧为 `null`（界面上留空，不重复打号） */
+  /** 行号；续行与单侧行的另一侧为 null（留空，不重复打号） */
   leftLineNo: number | null
   /** 右侧（新）行号，语义同上 */
   rightLineNo: number | null
@@ -46,34 +30,21 @@ export interface DiffRow {
   right: WordPart[]
 }
 
-/** 换行标记：在行内可视化「这里新增 / 删除了一个换行」 */
+/** 换行标记：行内可视化「这里新增 / 删除了一个换行」 */
 export const NL_MARK = '\u21b5' // ↵
 
 /**
- * 性能兜底（参照实现没有这道闸，实测必须加）——三处上限都是**实测**调出来的：
- *
- * | 场景 | 无上限 | 加闸后 |
- * |---|---|---|
- * | 10000 行（419KB，在 git 的 512KB/侧上限内）全重写 | **20 s** | 0.33 s（中止）|
- * | 3000 行全重写 | 1.86 s | 0.59 s（中止）|
- * | 800 行全重写（组内 8k 字符） | 0.4 s | —（在闸内，保留字符级）|
- * | 5000 行 / 改 50 行（常见形态） | 10.6 ms | 同左 |
- *
- * 中止不是抛错，而是**降级**：拿不到精细对齐时退成「整行红绿」（组内）或
- * 「公共前后缀 + 中间整段」（整文），用户看到的仍然是差异，只是没有字符级高亮。
+ * 性能兜底（上限来自实测：10000 行全重写从 20s 降到 0.33s）。
+ * 中止不是抛错而是降级：退成整行红绿或「公共前后缀 + 中间整段」，用户仍看得到差异。
  */
 const MAX_GROUP_CHARS = 10_000
-/** 字符级 diff 的编辑距离上限（超出时 jsdiff 返回 `undefined`） */
+/** 字符级 diff 的编辑距离上限（超出时 jsdiff 返回 undefined） */
 const MAX_CHAR_EDITS = 2_000
-/** 行级 diff 的编辑距离上限（超出时 jsdiff 返回 `undefined`，见 [`coarseRows`]） */
+/** 行级 diff 的编辑距离上限（超出时 jsdiff 返回 undefined，见 coarseRows） */
 const MAX_LINE_EDITS = 2_000
 
 /**
- * 把 diff 片段的 value 按行拆开，并丢掉末尾换行带来的空元素。
- *
- * ⚠️ 与 `domain/git` 的行口径**同一件事**：`"a\nb\n"` 只有 **2** 行 —— 不丢末尾空元素，
- * 每个文件末尾都会凭空多一行空白（左右对比里非常显眼）。
- * 顺带把 CRLF 归一成 LF（内核只认 LF，见 git/diff.rs 的换行归一化）。
+ * 按行拆开并丢掉末尾换行带来的空元素（否则每个文件末尾多一行空白）；CRLF 归一成 LF。
  */
 function splitLines(value: string): string[] {
   const v = value.replace(/\r\n/g, '\n')
@@ -83,7 +54,7 @@ function splitLines(value: string): string[] {
   return arr
 }
 
-/** 追加片段；同类型相邻片段合并（减少渲染节点数） */
+/** 追加片段；同类型相邻片段合并（减少渲染节点） */
 function pushPart(buf: WordPart[], type: WordPart['type'], value: string): void {
   if (value === '') return
   const last = buf[buf.length - 1]
@@ -92,14 +63,9 @@ function pushPart(buf: WordPart[], type: WordPart['type'], value: string): void 
 }
 
 /**
- * 组内两侧文本 → 行对齐（整段字符级 diff + 按换行重建）。
- *
- * 重建规则：
- * - 遇到换行时按换行归属（equal / removed / added）推进对应侧行号；**只有一侧有换行**时，
- *   另一侧从这一行「续行」（行号不变、显示留空），这样行高与语义都不会错位；
- * - added / removed 的换行在对应侧追加一个 `↵`，让「换行本身变了」可见。
- *
- * @param startLeftNo 进入本组前左侧已输出的行号（本组内从它 +1 开始）
+ * 组内两侧文本 → 行对齐。换行时按归属推进对应侧行号；只有一侧有换行时另一侧续行（行号不变），
+ * added / removed 的换行在对应侧追加 ↵。
+ * @param startLeftNo 进入本组前左侧已输出的行号
  */
 function buildGroupRows(
   oldGroup: string,
@@ -114,7 +80,7 @@ function buildGroupRows(
         ? null
         : (diffChars(oldGroup, newGroup, { maxEditLength: MAX_CHAR_EDITS }) ??
           null)
-  // 超出规模 / 编辑距离上限：退化成「整行红绿」（不再做行内字符级对比）
+  // 超出规模 / 编辑距离上限：退化成整行红绿
   if (parts === null) return lineLevelRows(oldGroup, newGroup, startLeftNo, startRightNo)
 
   const rows: DiffRow[] = []
@@ -171,7 +137,7 @@ function buildGroupRows(
     const segments = part.value.split('\n')
     for (let s = 0; s < segments.length; s += 1) {
       if (s > 0) {
-        // 遇到一个换行：换行本身是 added / removed 时先在对应侧打上 ↵ 标记
+        // 换行本身是 added / removed 时先在对应侧打上 ↵
         if (status === 'added') pushPart(rightBuf, 'added', NL_MARK)
         else if (status === 'removed') pushPart(leftBuf, 'removed', NL_MARK)
         flush()
@@ -207,7 +173,7 @@ function buildGroupRows(
   return { rows, leftNo, rightNo }
 }
 
-/** 退化路径：不做字符级对比，删除行一段、新增行一段（与老的行模型观感一致） */
+/** 退化路径：不做字符级对比，删除行一段、新增行一段 */
 function lineLevelRows(
   oldGroup: string,
   newGroup: string,
@@ -242,11 +208,8 @@ function lineLevelRows(
 
 /**
  * 两段文本 → 行对齐的差异行（视图的唯一输入）。
- *
- * @param oldText 旧侧全文（`null` = 没有这一侧，例如新增文件的旧侧）
- * @param newText 新侧全文
- * @param startLine 首行行号（默认 1）。`edit_file` 传文件里的真实起始行号，
- *   这样左右两侧打出来的是**文件里的绝对行号**而不是片段内的相对行号。
+ * @param oldText 旧侧全文（null = 没有这一侧）
+ * @param startLine 首行行号；edit_file 传文件真实起始行号，打出来的是绝对行号
  */
 export function buildDiffRows(
   oldText: string | null,
@@ -255,7 +218,7 @@ export function buildDiffRows(
 ): DiffRow[] {
   const oldAll = oldText ?? ''
   const newAll = newText ?? ''
-  // 超大规模 / 改动量：不赌 jsdiff 能在合理时间内算完（见 MAX_LINE_EDITS 的实测表）
+  // 超大规模不赌 jsdiff 能算完（见 MAX_LINE_EDITS）
   const parts = diffLines(oldAll, newAll, { maxEditLength: MAX_LINE_EDITS })
   if (parts === undefined) return coarseRows(oldAll, newAll, startLine)
 
@@ -308,10 +271,8 @@ export function buildDiffRows(
 }
 
 /**
- * 行级 diff 中止时的降级：**公共前缀 / 后缀行照常对齐，中间整段「先删后增」**。
- *
- * 不是「随便给个结果」：前后缀是 O(n) 就能确定的真实相等行，中间那段本来也是改动区（只是不再
- * 逐行配对，「一大块被替换」这种最常见的大改动照样看得清）。
+ * 行级 diff 中止时的降级：公共前后缀照常对齐，中间整段先删后增。
+ * 前后缀是 O(n) 就能确定的真实相等行，中间本来就是改动区。
  */
 function coarseRows(
   oldText: string,
@@ -383,10 +344,7 @@ function coarseRows(
 }
 
 /**
- * 汇总差异行数。
- *
- * `modified`（两侧都有、内容不同）**两侧各算一行** —— 工具消息上那行「减少 N 行, 新增 M 行」
- * 要的就是「这份差异动了多少行」，把它排除掉会显示成「无变更」。
+ * 汇总差异行数。modified 两侧各算一行，否则「改了 N 行」会显示成无变更。
  */
 export function diffStats(rows: DiffRow[]): {
   delCount: number
@@ -411,9 +369,7 @@ export function diffStats(rows: DiffRow[]): {
 }
 
 /**
- * 全角 / 宽字符（表意文字、全角标点、emoji …）—— 只为一个目的服务：把宽度**往宽了估**。
- * 判定不需要精确（`ch` 是等宽字体的一个字符宽，宽字符大致是 2 倍；CJK 走回退字体时可能只有
- * 1.67 倍，估宽只是多滚一点）。
+ * 全角 / 宽字符判定：只为了把宽度往宽了估（估窄会裁掉行尾）。
  */
 function isWideCodePoint(cp: number): boolean {
   return (
@@ -433,8 +389,7 @@ function isWideCodePoint(cp: number): boolean {
   )
 }
 
-/** 一侧的片段宽度（ch）：制表符 8（`white-space: pre` 下 tab 走到下一个制表位）、
- * 宽字符 2、其余 1；换行标记 `↵` 是展示标记，算 1。 */
+/** 一侧的片段宽度（ch）：制表符 8、宽字符 2、其余 1 */
 function partsWidthCh(parts: WordPart[]): number {
   let n = 0
   for (const part of parts) {
@@ -447,17 +402,12 @@ function partsWidthCh(parts: WordPart[]): number {
   return n
 }
 
-/** 同一份行数据会被「原位 / 全屏」两份实例各问一次，算一次就够 */
+/** 同一份行数据会被原位 / 全屏各问一次，算一次就够 */
 const _widthChCache = new WeakMap<object, number>()
 
 /**
- * 最长一行值多少「等宽字符宽」（ch）—— 左右对比视图的**横向滚动宽度**由它决定。
- *
- * 为什么要算而不是让 CSS 按内容撑开（`max-content`）：`content-visibility: auto` 会把屏外行整个
- * 跳过，**被跳过的内容不参与尺寸计算** —— 列宽会随滚动位置忽宽忽窄、横向滚动条时有时无（实测）。
- * 所以宽度只能由**行数据**算出来，交给 CSS 当固定值用（`--diff-max-ch`）。
- *
- * 一律**往宽了估**：估宽只是多滚一点，估窄会把这一行的尾巴裁掉（列宽不够时的兜底见 .diff-code）。
+ * 最长一行的等宽字符宽（ch），决定横向滚动宽度（--diff-max-ch）。
+ * 不能用 CSS max-content：content-visibility 会跳过屏外行、不参与尺寸计算，列宽会忽宽忽窄。
  */
 export function maxDiffWidthCh(
   rows: ReadonlyArray<DiffRow | { type: 'gap' }>,
@@ -466,7 +416,7 @@ export function maxDiffWidthCh(
   if (hit !== undefined) return hit
   let max = 0
   for (const row of rows) {
-    // 省略间隔行不占宽度（它只画一个 ⋯）
+    // 省略间隔行不占宽度
     if (row.type === 'gap') continue
     const w = Math.max(partsWidthCh(row.left), partsWidthCh(row.right))
     if (w > max) max = w
@@ -475,7 +425,7 @@ export function maxDiffWidthCh(
   return max
 }
 
-/** 老行模型（`edit_file` 早期落库的形状）：`equal` / `delete` / `insert` + 左右整行文本 */
+/** 老行模型：equal / delete / insert + 左右整行文本 */
 interface LegacyDiffRow {
   type?: string
   oldLine?: string | null
@@ -485,14 +435,8 @@ interface LegacyDiffRow {
 }
 
 /**
- * 把**历史消息里落库的差异行**归一成当前模型。
- *
- * `edit_file` 的 diff 行是落库的（消息 uiData）：老会话里存的是老模型
- * （`{type: 'equal'|'delete'|'insert', oldLine, newLine, oldLineNum, newLineNum}`），
- * 按新模型直接渲染会读到一堆 `undefined`（表现为整片空白）。
- *
- * 按**老口径**归一（一行一段、不重算）：老消息当初显示什么样，现在还得是什么样 ——
- * 用新算法重算虽然更漂亮，但会与用户当时看到的、以及当初的增删统计对不上。
+ * 把历史消息里落库的差异行归一成当前模型。按老口径归一（不重算）：老消息当初显示什么样，
+ * 现在还得是什么样，否则会与当时看到的、以及增删统计对不上。
  */
 export function normalizeDiffRows(rows: unknown): DiffRow[] {
   if (!Array.isArray(rows)) return []
@@ -500,7 +444,7 @@ export function normalizeDiffRows(rows: unknown): DiffRow[] {
   for (const raw of rows) {
     if (!raw || typeof raw !== 'object') continue
     const r = raw as Record<string, unknown>
-    // 省略行是视图层自己插的展示行，不会落库；真出现了也直接跳过
+    // 省略行不会落库；真出现了也跳过
     if (r.type === 'gap') continue
     if (Array.isArray(r.left) || Array.isArray(r.right)) {
       out.push({

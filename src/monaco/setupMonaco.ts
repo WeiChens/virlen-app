@@ -1,36 +1,25 @@
 /**
- * Monaco 精简构建 —— 只做“代码预览 / 语法高亮”。
+ * Monaco 精简构建 —— 只做代码预览与语法高亮。
  *
- * 我们不引用 monaco-editor 根入口（esm/vs/index.js，等同 editor.main），因为它会
- * 把 TS/JS/CSS/HTML/JSON 的完整语言服务（LSP client + Web Worker）一起打进来，
- * 产物里就会出现 ts.worker.js / css.worker.js 等文件。
- *
- * 而一个“只读预览”只需要：
- *   1. 编辑器本体：editor.api.js（standalone 编辑器，自带 CodeEditorWidget 与 DiffEditorWidget）
- *   2. 各语言的 Monarch tokenizer：纯正则“切词”着色，零语言服务、零 worker
- *   3. 通用 editor worker：**只有**差异计算要它（git 差异弹窗的 diff 编辑器，见 MonacoDiffView）
- *   4. codicon 图标字体：find 小组件的按钮、diff 的展开箭头都要它（一份 141 KB 的 ttf，**得自己引**）
- *
- * 因此产物中不再出现任何**语言服务**的 worker（ts.worker.js / css.worker.js 之类），体积也更小。
+ * 不引 monaco-editor 根入口（会把 TS/JS/CSS/HTML/JSON 的完整语言服务与 worker 一起打进来）。
+ * 只读预览只需要：编辑器本体（editor.api.js）、各语言 Monarch tokenizer、
+ * 通用 editor worker（只有差异计算要它）、codicon 图标字体（得自己引）。
  */
 import { loader } from '@monaco-editor/react'
 import * as monaco from 'monaco-editor/editor/editor.api.js'
 
 /**
- * codicon 图标字体 —— **精简构建必须自己引这一份**，否则界面上是一个个豆腐块（实测反馈）。
+ * codicon 图标字体 —— 精简构建必须自己引，否则界面上全是豆腐块。
  *
- * 图标本体是 Monaco 主题样式表按图标注册表生成的**字符**（`.codicon-history:before { content: '\ea82' }`，
- * 一直会注入，所以看起来“图标规则都在”），而那些字符靠 `codicon.css` 里这两条才长得像图标：
- * `@font-face { font-family: 'codicon' }` 与 `.codicon[class*='codicon-'] { font: 16px/1 codicon }`。
- * ⚠️ 这两条只被**完整入口**（`editor.main.js` / `vs/index.js`）引，`editor.api.js` 这条链没有它
- * —— 实测未引时产物里连 `codicon` 这个词都不存在（见 `docs/agents/14-git-management.md` §11.53 ㉞）。
+ * 图标字符一直会注入，但只有当 codicon.css 里的 @font-face 与 .codicon 规则存在时才长得像图标；
+ * 这两条只被完整入口引，editor.api.js 这条链没有它。
  */
-// ⚠️ 只能经别名引：包的 `exports` 把任意子路径重写成 `esm/vs/*.js`（别名见 `vite.config.ts`）
+// ⚠️ 只能经别名引：包的 exports 把任意子路径重写成 esm/vs/*.js（别名见 vite.config.ts）
 import '@mono-codicon/codicon.css'
 // 通用 editor worker（差异计算用）；子入口写法与 editor.api.js 同理（见 monacoInternal.d.ts）
 import EditorWorker from 'monaco-editor/editor/editor.worker.js?worker'
 
-// ── Monarch 词法定义（conf=语言配置 / language=tokenizer，纯高亮）──
+// ── Monarch 词法定义（conf = 语言配置 / language = tokenizer，纯高亮）──
 import { conf as tsConf, language as tsLanguage } from 'monaco-editor/languages/definitions/typescript/typescript.js'
 import { conf as jsConf, language as jsLanguage } from 'monaco-editor/languages/definitions/javascript/javascript.js'
 import { conf as pyConf, language as pyLanguage } from 'monaco-editor/languages/definitions/python/python.js'
@@ -58,8 +47,7 @@ import { conf as swiftConf, language as swiftLanguage } from 'monaco-editor/lang
 import { conf as phpConf, language as phpLanguage } from 'monaco-editor/languages/definitions/php/php.js'
 import { conf as iniConf, language as iniLanguage } from 'monaco-editor/languages/definitions/ini/ini.js'
 
-// 0.56 的 npm 包内没有内置 JSON 的 monarch tokenizer（JSON 只由语言服务提供），
-// 这里手动注册一个轻量 tokenizer，保证 JSON 也能高亮。
+// 0.56 的 npm 包里没有内置 JSON 的 monarch tokenizer（JSON 只由语言服务提供），手注册一个轻量的。
 const jsonConf: monaco.languages.LanguageConfiguration = {
   brackets: [
     ['{', '}'],
@@ -103,8 +91,7 @@ const jsonLanguage: monaco.languages.IMonarchLanguage = {
   },
 }
 
-// Monaco 没有内置 diff 词法，聊天里 `diff` 代码块（EditFile diff 预览）很常见，
-// 注册一个简单的行首符号 tokenizer 实现 diff 着色。
+// Monaco 没有内置 diff 词法，聊天里 diff 代码块很常见，注册一个行首符号 tokenizer 实现着色。
 const diffConf: monaco.languages.LanguageConfiguration = {
   comments: { lineComment: '' },
   brackets: [],
@@ -127,7 +114,7 @@ const diffLanguage: monaco.languages.IMonarchLanguage = {
   },
 }
 
-/** 注册一个“仅高亮”的语言（带防重复注册，兼容 HMR） */
+/** 注册一个「仅高亮」的语言（带防重复注册，兼容 HMR） */
 function registerPreviewLanguage(
   id: string,
   extensions: string[],
@@ -185,14 +172,14 @@ monaco.languages.register({ id: 'diff', extensions: ['.diff', '.patch'], aliases
 monaco.languages.setMonarchTokensProvider('diff', diffLanguage)
 monaco.languages.setLanguageConfiguration('diff', diffConf)
 
-// ── One Dark 主题（与旧 Canvas 渲染配色一致：背景 #282c34 / 行号 #495162）──
+// ── One Dark 主题（背景 #282c34 / 行号 #495162）──
 export const virlenDarkTheme: monaco.editor.IStandaloneThemeData = {
   base: 'vs-dark',
   inherit: true,
   rules: [
     { token: '', foreground: 'abb2bf', background: '282c34' },
-    // 注释用 One Dark Pro 的 #7f848e（原版 #5c6370 更暗）：在改动行的绿 / 红底色上，后者只剩
-    // 1.3~2.5:1，注释在里面等于看不见 —— 这条对比度由 `src/tests/ui/monaco-diff-theme.test.ts` 守住。
+    // 注释用 One Dark Pro 的 #7f848e（原版更暗）：在改动行的绿 / 红底色上只剩 1.3~2.5:1，
+    // 等于看不见 —— 这条对比度由 src/tests/ui/monaco-diff-theme.test.ts 守住。
     { token: 'comment', foreground: '7f848e', fontStyle: 'italic' },
     { token: 'string', foreground: '98c379' },
     { token: 'string.escape', foreground: '98c379' },
@@ -256,7 +243,7 @@ export const virlenDarkTheme: monaco.editor.IStandaloneThemeData = {
     'minimap.background': '#21252b',
     'editorOverviewRuler.border': '#00000000',
     'focusBorder': '#00000000',
-    // 片段代码常有多余的右括号 } ) ]，保持与普通文本同色，避免“红色报错感”
+    // 片段代码常有多余的右括号，保持与普通文本同色，避免「红色报错感」
     'editorBracketHighlight.unexpectedBracket.foreground': '#abb2bf',
     'editorBracketHighlight.foreground1': '#abb2bf',
     'editorBracketHighlight.foreground2': '#abb2bf',
@@ -271,21 +258,11 @@ export const virlenDarkTheme: monaco.editor.IStandaloneThemeData = {
     'editorBracketHighlight.background5': '#00000000',
     'editorBracketHighlight.background6': '#00000000',
 
-    // 差异配色（git 差异弹窗 / 聊天里 `edit_file` 的 Monaco diff 编辑器）：与 DOM 版（`SideBySideDiff.scss`
-    // 与 `theme.scss` 的 `--diff-*`）是同一套色阶：行底 #2a1515 / #152a15、行号栏 #3a2020 / #203a20、
-    // 行内字符级 #5c2626 / #1c3d20。
+    // 差异配色：与 DOM 版（SideBySideDiff.scss / theme.scss 的 --diff-*）同一套色阶。
     //
-    // ⚠️ 这六个值都是**半透明**（`#RRGGBBAA`，A=80 ≈ 50%），不是笔误：Monaco 把选区画在改动底色
-    // **下面**（0.56 `view.js`：`.lines-content` 先 append 选区所在的 `contentViewOverlays`、再 append
-    // 承载改动底色的 `viewLines`，两者都 z-auto → DOM 序就是绘制序），所以**不透明的改动底色会把
-    // 选区整个盖掉** —— 表现就是实测反馈的「在改动行里选中文本，看不到选中效果」。半透明让两层叠着走，
-    // 与浏览器里 DOM 版（`::selection` 画在底色之上）观感一致。
-    //
-    // 源色是按「合成后仍等于原来那个不透明色」反推的（底下那层：正文区 = `editor.background`、
-    // 行号栏 = `editorGutter.background`、字符级底下 = 自己那一行的行底色）：
-    //     源色 = (设计色 − (1 − A) × 底下那层) / A
-    // 改这几个底色（或改 editor.background / editorGutter.background）时要一起重算 ——
-    // `src/tests/ui/monaco-diff-theme.test.ts` 把这条不变式钉住了。
+    // ⚠️ 六个值都是半透明（A≈50%），不是笔误：Monaco 把选区画在改动底色下面，不透明的底色会把
+    // 选区整个盖掉（「在改动行里选中文本看不到效果」）。半透明让两层叠着走。
+    // 源色按「合成后仍等于设计色」反推，改底色时要一起重算 —— monaco-diff-theme 用例钉住了这条不变式。
     'diffEditor.removedLineBackground': '#2c000080', // 合成后 ≈ #2a1515
     'diffEditor.insertedLineBackground': '#02280080', // 合成后 ≈ #152a15
     'diffEditor.removedTextBackground': '#8e373280', // 合成后 ≈ #5c2626
@@ -300,11 +277,8 @@ export const virlenDarkTheme: monaco.editor.IStandaloneThemeData = {
 monaco.editor.defineTheme('virlen-dark', virlenDarkTheme)
 
 // ── 通用 editor worker ──
-// diff 编辑器算差异走 `editorWorkerService.computeDiff`，默认要在 worker 里跑；不配这一段 monaco 会
-// **静默回退主线程**（`editorWorkerService.js::_createFallbackLocalWorker` + 一次性告警），大文件的
-// 差异计算会卡住 UI —— 那正是改用 Monaco 要避开的东西。
-// ⚠️ 与上面「精简构建」不冲突：只有通用 editor worker，语言服务（ts/css/html/json）的 worker 仍然
-// 不进产物。它单独成一个 chunk、真需要时才加载；加载失败也不会崩，monaco 自己会回退到主线程那一路。
+// diff 编辑器算差异走 editorWorkerService.computeDiff；不配这一段 monaco 会静默回退主线程，
+// 大文件会卡住 UI。只含通用 worker，语言服务的 worker 仍不进产物。
 ;(globalThis as unknown as { MonacoEnvironment?: unknown }).MonacoEnvironment = {
   getWorker: () => new EditorWorker(),
 }

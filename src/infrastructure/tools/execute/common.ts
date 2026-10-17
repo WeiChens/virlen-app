@@ -1,8 +1,6 @@
 /**
- * execute — 代码执行分类公共函数（id: execute），供 execute_command / execute_script 复用：
- * ① 平台探测（Rust os_platform 权威 + UA 兜底，进程内缓存）；② 命令解析与风险分类（引号感知切分、
- * cmd/powershell 套壳剥离、safe/install/dangerous）；③ 风险提示文案；④ 命令审批注册表（approvalId 精确分发）；
- * ⑤ 终端输出处理（\r 回车覆盖 / ANSI 光标移动 → 纯文本）；⑥ 命令执行核心 runCommand（spawn + 超时/取消杀进程树 + 截断）。
+ * 代码执行公共函数（execute_command / execute_script 共用）：平台探测、命令解析与风险分类、
+ * 审批注册表、终端输出处理、执行核心 runCommand。
  */
 import { invoke, Channel } from '@tauri-apps/api/core'
 import { Command, Child } from '@tauri-apps/plugin-shell'
@@ -22,12 +20,9 @@ import { toolOutputStore } from '../output-store'
 
 // 1. 平台探测
 
-/**
- * 平台探测（权威来源优先）：主来源是 Rust os_platform（std::env::consts::OS，权威）；UA 只是 os_platform
- * 尚未就绪时的临时兜底。权威值缓存进 _platform 后，描述与执行路径统一读同一缓存，不再依赖两套探测。
- */
+/** 平台探测：权威源是 Rust os_platform，UA 仅作未就绪时的兜底，结果缓存。 */
 
-/** UA 启发式兜底（navigator.userAgent 可被 WebView 覆盖，仅作临时兜底）。 */
+/** UA 启发式兜底（WebView 可改 UA，仅临时用）。 */
 function platformFromUA(): 'windows' | 'macos' | 'linux' {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
   if (/Windows/i.test(ua)) return 'windows'
@@ -38,7 +33,7 @@ function platformFromUA(): 'windows' | 'macos' | 'linux' {
 /** 缓存的平台字符串，来自 Rust os_platform（权威来源）。 */
 let _platform: string | undefined
 
-/** 权威平台探测（os_platform），失败时 UA 兜底；结果缓存，同一进程只解析一次。 */
+/** 权威平台探测（os_platform），失败退 UA；进程内只解析一次。 */
 export async function detectPlatform(): Promise<string> {
   if (_platform) return _platform
   try {
@@ -49,20 +44,17 @@ export async function detectPlatform(): Promise<string> {
   return _platform
 }
 
-/** 描述惰性求值用的同步快照：优先权威缓存，os_platform 未就绪时用 UA 兜底。 */
+/** 同步快照：优先权威缓存，未就绪时用 UA。 */
 export function platformSnapshot(): string {
   return _platform || platformFromUA()
 }
 
-// 模块加载后立即预热权威平台，让首轮 listDefinitions() 生成描述时即可拿到 os_platform 结果
+// 立即预热，让首轮 listDefinitions() 就能拿到 os_platform
 void detectPlatform()
 
 // 2. 命令解析与风险分类
 
-/**
- * 引号感知：提取命令段第一个 token。
- * 单引号/双引号内的空白和分隔符不参与切分（如 "C:\Program Files\app.exe" 视为一个整体）。
- */
+/** 引号感知：取命令段第一个 token（引号内的空白与分隔符不参与切分）。 */
 function extractFirstToken(raw: string): string {
   let token = ''
   let quote: '"' | "'" | null = null
@@ -94,9 +86,7 @@ function extractFirstToken(raw: string): string {
   return token
 }
 
-/**
- * 提取命令名（第一个 token，去路径/扩展名/引号）
- */
+/** 取命令名：第一个 token，去路径 / 扩展名 / 引号，小写。 */
 export function extractCommandName(raw: string): string {
   const trimmed = raw.trimStart()
   const firstToken = extractFirstToken(trimmed)
@@ -109,10 +99,7 @@ export function extractCommandName(raw: string): string {
     .replace(/\.(exe|bat|cmd|ps1|sh)$/, '') // 去扩展名
 }
 
-/**
- * 引号感知：按分隔符切分 shell 命令，引号内的分隔符不生效。
- * 例如 `echo "a;b"` 不会被 `;` 切开，`echo 'a&&b'` 不会被 `&&` 切开。
- */
+/** 按分隔符切分命令，引号内的分隔符不生效（`echo "a;b"` 不会被切开）。 */
 function splitCommandRespectingQuotes(
   cmd: string,
   separators: string[],
@@ -159,10 +146,7 @@ function splitCommandRespectingQuotes(
   return parts
 }
 
-/**
- * 剥掉外层 cmd /c "..." 、powershell -Command "..." 等包装，提取真正要跑的命令。
- * 递归剥壳，防止多次套壳（如 cmd /c "powershell -Command \"npm install\""），最大递归深度 5。
- */
+/** 剥掉 cmd /c、powershell -Command 等套壳，递归上限 5 层。 */
 function unwrapShellWrapper(cmdStr: string, depth: number = 5): string {
   if (depth <= 0) return cmdStr
   // cmd /c "..." 或 cmd /c ...
@@ -177,10 +161,7 @@ function unwrapShellWrapper(cmdStr: string, depth: number = 5): string {
   return cmdStr
 }
 
-/**
- * 提取命令中所有被 &&、||、; 分隔的命令名（去重）
- * 引号内的分隔符不切分（如 `echo "a;b"` 不会把 `b` 当命令名）
- */
+/** 提取被 && / || / ; 分隔的所有命令名（去重，引号内不切）。 */
 export function extractAllCommandNames(raw: string): string[] {
   const segments = splitCommandRespectingQuotes(raw, ['&&', '||', ';'])
   const names = new Set<string>()
@@ -191,9 +172,7 @@ export function extractAllCommandNames(raw: string): string[] {
   return [...names]
 }
 
-/**
- * 命令风险分类
- */
+/** 风险分类：任一条子命令命中 dangerous 即 dangerous，其次 install，否则 safe。 */
 export function classifyCommand(
   cmdStr: string,
 ): 'safe' | 'install' | 'dangerous' {
@@ -277,11 +256,11 @@ export function classifyCommand(
     'npx',
   ])
 
-  // 优先检查 dangerous：只要有一条子命令是危险的，整条命令就标为高危
+  // 优先查 dangerous：只要有一条子命令危险，整条就是高危
   for (const c of cmds) {
     if (dangerous.has(c)) return 'dangerous'
   }
-  // 再检查 install：只要有一条是安装命令，就标为安装命令
+  // 再查 install
   for (const c of cmds) {
     if (installers.has(c)) return 'install'
   }
@@ -321,12 +300,8 @@ export const SANDBOX_BYPASS_HINT =
   '仅当该命令确实需要管道 stdio（如 vitest / vite / jest / node-gyp）时允许。'
 
 /**
- * 命中「忽略沙盒命令」规则时追加到审批弹窗的警告（命令 / 脚本共用；中文即 i18n key）。
- *
- * `$__rule__` 为规则名。与 `SANDBOX_BYPASS_HINT` 的区别：AI 并未申请脱壳，是用户自己的规则把这条
- * 命令改成了无沙盒执行 —— 用户需要看懂「为什么会绕沙盒」（否则会被当成失控）。
- *
- * ⚠️ 与 Rust `rules.rs::with_rule_hint` 逐字一致（铁律 1）。
+ * 命中「忽略沙盒命令」规则的警告。与告上一条的区别：不是 AI 申请的，而是用户的规则把命令改成无沙盒。
+ * 与 Rust rules.rs::with_rule_hint 逐字一致。
  */
 export const SANDBOX_RULE_BYPASS_HINT =
   '⚠️ 该命令命中「忽略沙盒命令」规则「$__rule__」，将以「不使用沙盒」方式执行：' +
@@ -334,12 +309,7 @@ export const SANDBOX_RULE_BYPASS_HINT =
 
 // 4. 命令审批注册表
 
-/**
- * 命令审批注册表 — 负责工具与 command_confirm 交互层之间的审批协调。
- *
- * 按 approvalId 精确匹配，避免旧实现（全局 once 监听）在多个命令同时待确认时
- * 被第一个事件（即使不匹配）消费掉的问题。
- */
+/** 命令审批注册表：按 approvalId 精确分发（全局 once 监听会被不匹配的事件消费掉）。 */
 
 /** 一次待审批的命令 */
 export interface PendingApproval {
@@ -351,11 +321,7 @@ export interface PendingApproval {
 const pendingApprovals = new Map<string, PendingApproval>()
 let listenerInstalled = false
 
-/**
- * 注册一次待审批命令，返回唯一 approvalId。
- * 用户确认后，command_confirm 侧 emit userAllowCmd(approvalId, ...) 触发执行；
- * 用户拒绝后，emit userCmdRejected(approvalId, ...) 清理注册表。
- */
+/** 注册待审批命令，返回 approvalId；确认后由 userAllowCmd 触发执行。 */
 export function registerPendingApproval(entry: PendingApproval): string {
   installListener()
   const approvalId = v4()
@@ -400,13 +366,9 @@ function installListener(): void {
 // 5. 终端输出处理
 
 /**
- * 处理终端输出中的 `\r`（回车覆盖）与光标移动 / 清屏转义序列，返回纯文本（不含颜色 / 样式 ANSI 码）。
- *
- * 用行缓冲区模拟虚拟终端：支持 \r 覆盖、\n、\b、\x1b[nA/B/C/D 光标移动、\x1b[nK 清行尾、\x1b[nJ 清屏、
- * \x1b[r;cH/f 定位；\x1b[?25l/h（DECSET/DECRST）与 \x1b]…OSC 整条忽略但必须吞完；其余 \x1b[… 序列忽略。
- *
- * ⚠️ 必须完整吞掉转义序列：旧实现只认 `ESC [` 且只吃 `0-9;`，`\x1b[?25l` 会把 "25l" 漏成正文（PTY / ConPTY
- * 路径下这类序列极密集）。与 Rust native_tools/execute/common.rs::process_terminal_output 逐条对齐（铁律 1）。
+ * 把终端输出中的 \r 覆盖、光标移动与清屏序列解释成纯文本。
+ * 必须完整吞掉转义序列（旧实现只吃 `0-9;`，`\x1b[?25l` 会漏出 "25l"）。
+ * 与 Rust common.rs::process_terminal_output 逐条对齐。
  */
 export function processTerminalOutput(raw: string): string {
   if (!raw) return ''
@@ -591,19 +553,8 @@ function isTauriEnv(): boolean {
 }
 
 /**
- * TS 引擎路径的「原生执行」入口 —— 把执行下沉到 Rust（沙盒 + ConPTY）。
- *
- * 背景：TS 引擎路径的 `execute_command` 原先走 `plugin-shell` 匿名管道：无沙盒、
- * 无 ANSI 解析、无交互（见 docs/pty-research.md §7 #14）。这里改走 Rust 的
- * `pty_run_command`，与 Rust 引擎路径**共用同一套执行语义**（铁律 1）：
- *   - 沙盒优先（受限令牌 + ACL），失败才降级裸跑；
- *   - ConPTY → 输出是带光标控制的 VT 流，UI 走 xterm 渲染、用户可中途插键盘；
- *   - 超时 / 终止 / `waitReason` / 「等待输入」引导 均由 Rust 侧统一生成。
- *
- * 输出经 `on_output` **ipc::Channel** 流式回传（不经过引擎事件总线）：
- * 一步送到发起它的调用方，无需安装全局 `agent:tool-output` 监听。
- *
- * 不可用时（非 Tauri / 非 Windows）返回 `null`，由调用方回落到 plugin-shell 管道路径。
+ * 原生执行入口：把命令下沉到 Rust（沙盒 + ConPTY），与 Rust 引擎路径共用同一套语义。
+ * 输出经 ipc::Channel 流式回传。非 Tauri / 非 Windows 返 null，由调用方回落 plugin-shell。
  */
 async function tryRunCommandNativePty(
   cmdStr: string,
@@ -615,7 +566,7 @@ async function tryRunCommandNativePty(
   bypassSandbox: boolean,
   bypassByRule: boolean,
 ): Promise<ToolResult | null> {
-  // 仅 Windows 桌面端有 ConPTY；其他平台 / 浏览器 dev 继续走 plugin-shell。
+  // 仅 Windows 桌面端有 ConPTY
   if (platformSnapshot() !== 'windows' || !isTauriEnv()) return null
 
   const { toolCallId, sessionId, abortSignal } = ctx
@@ -635,9 +586,7 @@ async function tryRunCommandNativePty(
   const kill = () => {
     invoke('agent_kill_command', { toolCallId }).catch(() => {})
   }
-  // 注册带 kill 的 entry；pty=true → 运行中即用 xterm 渲染。
-  // register 会替换同 id 的 entry（清掉先前 `ctx.write` 写下的「> cmd」表头），
-  // 与 Rust 引擎路径观感一致（终端块本就单独渲染 `$ cmd` 那一行）。
+  // register 会替换同 id 的 entry（清掉先前 ctx.write 写的「> cmd」表头），与 Rust 路径观感一致
   toolOutputStore.register(toolCallId, {
     toolName,
     output: '',
@@ -670,15 +619,14 @@ async function tryRunCommandNativePty(
         onOutput: channel,
       },
     )
-    // Rust 侧成功与「退出码 >= 2 等工具级失败」都回 Ok，用 isError 区分：
-    // 失败时 uiData 同样存在（Tauri 的 Err 只能传一个字符串，结构化信息会丢 —— 遗留项 L6）
+    // Rust 侧成功与工具级失败都回 Ok，用 isError 区分（Tauri 的 Err 只能传字符串，结构会丢）
     if (res.isError) {
       throw new CmdError(res.content, res.uiData)
     }
     return { content: res.content, uiData: res.uiData }
   } catch (e: any) {
     if (e instanceof CmdError) throw e
-    // 真正的「调用级」异常（沙盒只读拒绝等）：没有结构化信息
+    // 真正的调用级异常（如沙盒只读拒绝）：没有结构化信息
     throw new CmdError(typeof e === 'string' ? e : (e?.message ?? String(e)))
   } finally {
     abortSignal?.removeEventListener('abort', onAbort)
@@ -686,12 +634,7 @@ async function tryRunCommandNativePty(
 }
 
 /**
- * 执行一条 shell 命令（execute_command / execute_script 共用）
- *
- * shell 选择策略：
- * - Windows: Windows PowerShell 5.1（powershell.exe，不再混用 cmd）
- * - macOS: zsh
- * - Linux: sh（可用时用 unshare -mr 把技能目录 bind 为只读）
+ * 执行一条 shell 命令。Windows 用 Windows PowerShell 5.1，macOS 用 zsh，Linux 用 sh。
  */
 export async function runCommand(
   cmdStr: string,
@@ -705,10 +648,10 @@ export async function runCommand(
   const isWin = platform === 'windows'
   const isLinux = platform === 'linux'
 
-  // SKILL_ROOT 进程级只读保护：注入 SKILL_ROOT 环境变量
+  // SKILL_ROOT 进程级只读保护
   const skillsDir = await getSkillsDirPath()
 
-  // 首选：Rust 原生执行（沙盒 + ConPTY，见 docs/pty-research.md §7 #14）；不可用时返回 null → 走下方 plugin-shell 管道路径。
+  // 首选 Rust 原生执行；不可用返回 null → 走下方 plugin-shell 管道
   const native = await tryRunCommandNativePty(
     cmdStr,
     cwd,
@@ -726,8 +669,7 @@ export async function runCommand(
   let shellArgs: string[]
 
   if (isWin) {
-    // Windows 统一走 Windows PowerShell 5.1（powershell.exe），不再混用 cmd。
-    // 先切到 UTF-8 输出，避免中文系统默认 GBK 使管道输出乱码（与 Rust 原生路径对齐）。
+    // 统一走 powershell.exe；先切 UTF-8，否则中文系统 GBK 会乱码（与 Rust 路径对齐）
     shellName = 'powershell'
     shellArgs = [
       '-NoProfile',
@@ -735,14 +677,11 @@ export async function runCommand(
       `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ${cmdStr}`,
     ]
   } else if (platform === 'macos') {
-    // macOS Catalina+ 默认 shell 为 zsh（/bin/sh 是 bash POSIX 模式，行为有差异）
+    // Catalina+ 默认 zsh（/bin/sh 是 bash POSIX 模式，行为有差异）
     shellName = 'zsh'
     shellArgs = ['-c', cmdStr]
   } else if (isLinux) {
-    // Linux: 优先使用 unshare -mr 创建独立 mount namespace
-    // 将 skillsDir bind-mount 为只读保护技能目录不被篡改
-    // 若 unshare 不可用（无 CAP_SYS_ADMIN 或内核未启用 user namespace），
-    // 静默降级为普通 sh 执行
+    // 优先 unshare -mr 建独立 mount namespace，把技能目录 bind 成只读；不可用时静默降级为普通 sh
     shellName = 'sh'
     shellArgs = [
       '-c',
@@ -758,7 +697,7 @@ fi`,
   }
 
   try {
-    // 注入通用编码环境变量，解决 Windows cmd (GBK) 无法输出 UTF-8 字符（如 emoji）的问题
+    // 注入编码环境变量，避免 Windows GBK 管道输出 UTF-8 字符（emoji）乱码
     const extraEnv: Record<string, string> = {
       SKILL_ROOT: skillsDir,
       PYTHONIOENCODING: 'utf-8',
@@ -767,10 +706,7 @@ fi`,
       cwd,
       env: extraEnv,
     })
-    /**
-     * exitCode 为 null 表示进程被信号终止，UI 侧按「失败」渲染
-     * （与 Rust 侧 uiData 的 exitCode 结构保持一致）
-     */
+    /** exitCode 为 null 表示被信号终止，UI 按失败渲染。 */
     const output: {
       stdout: string
       stderr: string
@@ -819,14 +755,14 @@ fi`,
 
       const timer = setTimeout(async () => {
         killedByTimeout = true
-        // 必须先等 kill 真正执行完（Rust 侧递归枚举后代逐个 taskkill），再等 close 事件,
-        // 不能发完信号立刻 resolve —— 否则工具返回「已终止」但 node/npm/python 子进程还活着。
+        // 必须先等 kill 真正执行完（Rust 递归枚举后代），再等 close ——
+        // 发完信号立刻 resolve 会让工具说「已终止」而子进程还活着
         try {
           await killProcessTree(shellName, child)
         } catch {
           // ignore — settle 由 close/兜底定时器接管
         }
-        // 若进程树没被杀干净（极端情况），最多再等 5s 兜底返回，避免工具卡死
+        // 进程树没杀干净时最多再等 5s，避免工具卡死
         const closeTimer = setTimeout(() => settle(null), 5000)
         cmd.on(
           'close',
@@ -837,8 +773,7 @@ fi`,
         )
       }, timeoutMs)
 
-      // 如果 abortSignal 已经 aborted，上面的监听已经杀了进程
-      // close 事件还是会触发，正常 resolve
+      // abortSignal 已 aborted 时进程已在上面被杀，close 事件照常 settle
       cmd.on(
         'close',
         (payload: { code: number | null; signal: number | null }) => {
@@ -848,9 +783,7 @@ fi`,
     })
     output.exitCode = exitCode
 
-    // ⚠️ 以下 5 条是模型侧文案：固定英文，与 Rust 侧 runner
-    // （native_tools/execute/common/runner/mod.rs）逐字对齐（铁律 1）；不进 i18n，否则两侧会产出
-    // 不同文本（界面语言由 UI 从结构化 uiData 重建，D2-A）。
+    // 以下 5 条是模型侧文案：固定英文，与 Rust runner 逐字对齐，不进 i18n
     let result = ''
     if (killedByUser) {
       result += 'Command cancelled by the user\n'
@@ -859,7 +792,7 @@ fi`,
         3,
       )}s and was terminated\n`
     } else {
-      // 被信号终止时没有退出码，输出 null（与 Rust 侧 runner 的文案保持一致）
+      // 被信号终止时没有退出码
       result += `Exit code: ${exitCode ?? 'null'}\n`
     }
     if (output.stdout) result += processTerminalOutput(output.stdout)
@@ -875,7 +808,7 @@ fi`,
         : result
 
     if (exitCode != null && exitCode >= 2) {
-      // 失败也带上结构化 uiData（stdout/stderr/exitCode），UI 才能按界面语言重建（L6）
+      // 失败也带结构化 uiData，UI 才能按界面语言重建
       throw new CmdError(out, { ...output })
     }
 
@@ -891,10 +824,8 @@ fi`,
 }
 
 /**
- * 命令以非 0/1 退出码结束（>= 2）时抛出，供工具层区分「命令失败」与「执行器异常」。
- *
- * 继承 `ToolError`：失败也携带结构化 `uiData`（stdout / stderr / exitCode），
- * UI 才能按界面语言重建，而不是把模型侧英文报告直接贴给用户（遗留项 L6）。
+ * 命令以 >= 2 的退出码结束时抛出，区别于「执行器异常」。继承 ToolError 以携带 uiData，
+ * 让 UI 按界面语言重建而不是直贴英文报告。
  */
 export class CmdError extends ToolError {
   constructor(message: string, uiData?: Record<string, any>) {

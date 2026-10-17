@@ -36,21 +36,20 @@ export interface SettingsStore {
   theme: 'light' | 'dark' | 'system'
   fontSize: 'small' | 'medium' | 'large'
   /**
-   * 主题色（品牌色）：`''` = 内置默认酭蓝（theme.scss 的 $brand-default）；
-   * `'#rrggbb'` = 用户在设置里选的色（预设色板或取色器，两者都存成同一个格式）。
-   * 亮 / 暗两档不由这里存 —— 由 theme.scss（预设）与 ui/theme/accentPalette.ts（任意色）派生。
+   * 主题色（品牌色）：'' = 内置默认；'#rrggbb' = 用户选的色。
+   * 亮 / 暗两档由 theme.scss 与 accentPalette.ts 派生。
    */
   accentColor: string
   /** 隐藏 toolCall 思考过程消息 */
   hideToolCallThink: boolean
-  /** 权限三态表：权限 name → allow | ask | deny（终端命令 / 脚本执行） */
+  /** 权限三态表：allow | ask | deny */
   permissions: PermissionMap
-  /** 终端命令执行沙盒模式：on 写隔离 / off 裸跑 / readonly 只读 */
+  /** 沙盒模式：on 写隔离 / off 裸跑 / readonly 只读 */
   sandboxMode: SandboxMode
   /** 是否在系统提示词中包含环境信息 */
   allowEnvPrompt: boolean
   providers: ProviderConfig[]
-  /** 搜索供应商配置列表（持久化到 `app_settings` 表；localStorage 不再保存） */
+  /** 搜索供应商（持久化在 app_settings，localStorage 不再保存） */
   searchProviders: SearchProviderConfig[]
   /** 默认搜索供应商 id */
   defaultSearchProviderId: string
@@ -64,77 +63,67 @@ export interface SettingsStore {
   maxTokens: number
   /** 默认工作目录 */
   defaultWorkspace: string
-  /** 最大工具调用轮数，防止无限循环 */
+  /** 最大工具调用轮数，防无限循环 */
   maxToolRounds: number
   /** 迭代模式最大重试次数（执行→验证→修复） */
   maxIterations: number
-  /** 是否预加载技能元数据（启动时拉取技能描述、参数等信息） */
+  /** 是否预加载技能元数据 */
   skillMetaPreload: boolean
   /** 快捷输入模板列表 */
   quickInputTemplates: QuickInputTemplate[]
-  /** 验证目标快捷输入模板列表（迭代模式 Goal） */
+  /** 验证目标快捷输入模板（迭代模式 Goal） */
   goalQuickInputTemplates: QuickInputTemplate[]
   /** 会话侧边栏分组方式 */
   sessionGroupType: SessionGroupType
   /**
-   * 已置顶的**分组** key（按维度分开存）。分组是虚拟的（按 Agent / 工作目录现算，无实体可挂字段），
-   * 置顶状态只能住在设置里；`UNGROUPED_KEY` 在两个维度里是同一个字面量，混一份列表会互相串。
+   * 已置顶的分组 key（按维度分开存）：分组是虚拟的，置顶只能住在设置里；
+   * UNGROUPED_KEY 两个维度共用同一个字面量，混一份会互相串。
    */
   pinnedSessionGroups: Record<SessionGroupType, string[]>
-  /** 是否对上传的图片自动执行 vision_analyze 提取结构化数据 */
+  /** 是否对上传图片自动执行 vision_analyze */
   imageVisionAnalyzeOptimize: boolean
-  /** 知识库默认检索数量（检索目标不在这里：一律由调用方给出具体知识库） */
+  /** 知识库默认检索数量 */
   ragDefaultTopK: number
   /**
-   * 长期记忆开关 —— **固定启用**（界面上已无开关，不留「关掉记忆」这个让人误以为
-   * 记忆会消失的选项）。
-   *
-   * 为何还留着这个键：Rust 侧 `agent::memory::prompt::MEMORY_ENABLED_KEY` 按同名键读取，
-   * 老版本可能往表里写过 `false` —— 水合时会被纠正为 `true`（见 `hydrateSettings`），
-   * 否则后台读到的仍是「关」，记忆会静默失效。
+   * 长期记忆开关 —— 固定启用（界面已无开关）。还留着这个键是因为 Rust 侧按同名键读取，
+   * 老版本可能写过 false，水合时会被纠正为 true。
    */
   memoryEnabled: boolean
-  /** 普通记忆注入条数（默认 20，上限 `MEMORY_NORMAL_TOP_K_MAX`）；永久记忆不受它影响。 */
+  /** 普通记忆注入条数；永久记忆不受它影响 */
   memoryNormalTopK: number
   /**
-   * 长期记忆**再蒸馏**的逃生开关（默认开，**界面上无控件**）。
-   *
-   * 语义：AI 写下的候选条数越线（≥ 100）时，后台把同一作用域内的若干条记忆合并成更少的条目
-   *（旧条目停用不删除，原文归档进新条目的详情；保留 30 天后自动清理）。全程用户无感。
-   *
-   * ⚠️ 它**不是** `memoryEnabled` 那种「固定启用、水合时纠正为 true」的键：
-   * 用户想关就是真关（改库一行即可），这里**不做**任何 fixup。
+   * 记忆再蒸馏的逃生开关（默认开，界面无控件）：候选条数越线时后台合并旧条目，旧条停用不删。
+   * 它不是 memoryEnabled 那种「水合时纠正」的键：用户想关就是真关，不做 fixup。
    */
   memoryRedistillEnabled: boolean
-  /** 是否用 AI 生成会话标题（默认开）：关掉后不发标题 LLM 调用，直接截取首条用户消息当标题。 */
+  /** 是否用 AI 生成会话标题；关掉后直接截取首条用户消息 */
   aiGenerateTitle: boolean
   /**
-   * 上下文压缩方式（点 token 环时用）：`ai` = 一次 LLM 调用把历史总结成一段（最省 token，但慢、花钱）；
-   * `raw` = 本地渲染（毫秒级零消耗，保留全部正文，只去掉思考过程并省略超长工具输出）。
+   * 上下文压缩方式：ai = LLM 总结（省 token 但慢、花钱）；raw = 本地渲染（零消耗，保留正文）。
    */
   contextCompressMode: CompressMode
-  /** 上下文窗口（token），即 token 环 / 压缩百分比里「100%」的口径。桌面端与 CLI 读**同一份**（`app_settings.contextWindowTokens`）：桌面端可编辑，CLI 只读展示。 */
+  /** 上下文窗口（token），即 token 环的 100% 口径；桌面端可编辑，CLI 只读 */
   contextWindowTokens: number
   /** 是否启用「打开编辑器」功能 */
   editorOpenEnabled: boolean
-  /** 编辑器配置列表（可配置多个，如 vscode、idea 等） */
+  /** 编辑器配置列表（可配多个，如 vscode、idea） */
   editorOpenConfigs: EditorOpenConfig[]
-  /** 默认使用的编辑器配置 id */
+  /** 默认编辑器配置 id */
   editorOpenDefaultId: string
-  /** 是否在 AI 回复完成或需要用户选择时，若窗口未激活则强制置为活动窗口 */
+  /** AI 回复完成或需用户选择时，窗口未激活则强制置前 */
   forceWindowActive: boolean
-  /** 关闭窗口时是否隐藏到托盘（默认开）：开 = 点关闭只隐藏、AI 继续后台跑，从托盘菜单真正退出；关 = 直接退进程（托盘不可用时也自动回退成这个行为）。 */
+  /** 关闭窗口时隐藏到托盘；关 = 直接退进程（托盘不可用也回退成这个） */
   closeToTray: boolean
-  /** AI 回复完成且窗口未显示/未激活时是否提醒（默认开；任务栏闪烁 + 托盘提示 + 未读计数） */
+  /** AI 回复完成且窗口未显示 / 未激活时是否提醒（任务栏闪烁 + 托盘提示） */
   notifyOnComplete: boolean
-  /** 诊断埋点开关（默认关；开启后仅本地采集，不会自动外发） */
+  /** 诊断埋点开关（默认关；仅本地采集，不外发） */
   telemetryEnabled: boolean
   /**
-   * 模型单价表（用量统计的费用估算），键为 `priceKey(providerConfigId, modelId)` =
-   * `${providerConfigId}::${modelId}`；未配置的模型回退到内置价目表（`domain/pricing`）。单位：每 1,000,000 tokens 的金额。
+   * 模型单价表，键为 priceKey(providerConfigId, modelId)；未配置的模型回退内置价目表。
+   * 单位：每 1,000,000 tokens 的金额。
    */
   modelPricing: Record<string, ModelPrice>
-  /** 费用币种（仅影响展示，与服务商无关；**默认人民币**，可在单价页切换） */
+  /** 费用币种（仅影响展示；默认人民币） */
   usageCurrency: 'USD' | 'CNY'
 }
 
@@ -168,7 +157,7 @@ const defaultSettings: SettingsStore = {
   ragDefaultTopK: 5,
   memoryEnabled: true,
   memoryNormalTopK: 20,
-  // 再蒸馏：默认开、不进 UI（见 `memoryRedistillEnabled` 的注释）
+  // 再蒸馏：默认开、不进 UI（见 memoryRedistillEnabled）
   memoryRedistillEnabled: true,
   aiGenerateTitle: true,
   contextCompressMode: 'ai',
@@ -185,9 +174,8 @@ const defaultSettings: SettingsStore = {
 }
 
 /**
- * 写给 `StorageState` 的**只读** localStorage 适配器：权威源是 Rust 侧 `app_settings` 表，
- * localStorage 不再保存设置副本。`getItem` 仍读真 localStorage（同步初值 + 兼容老版本遗留副本）；
- * `setItem` 在 Tauri 下有意丢弃，非 Tauri（浏览器 dev / vitest 无表可写）照写；`removeItem` 透传供清理。
+ * 写给 StorageState 的只读 localStorage 适配器：权威源是 app_settings 表。
+ * getItem 仍读真 localStorage（同步初值）；setItem 在 Tauri 下有意丢弃，非 Tauri 照写。
  */
 const settingsLocalStorage: Storage = {
   get length() {
@@ -198,7 +186,7 @@ const settingsLocalStorage: Storage = {
   key: (index: number) => localStorage.key(index),
   removeItem: (key: string) => localStorage.removeItem(key),
   setItem: (key: string, value: string) => {
-    // Tauri（有表）：有意丢弃 —— 不产生第二份权威源，也不把 apiKey 写进 localStorage
+    // Tauri（有表）：有意丢弃，不产生第二份权威源，也不把 apiKey 写进 localStorage
     if (settingsRepo.isAvailable()) return
     localStorage.setItem(key, value)
   },
@@ -210,7 +198,7 @@ export const settingsState = new StorageState(
   1000,
   settingsLocalStorage,
 ).mixins({
-  /** 该模型是否可用（供应商已启用、且模型在它的列表里） */
+  /** 该模型是否可用（供应商已启用且在它列表里） */
   availableModel(model: { providerConfigId: string; modelId: string } | null) {
     if (!model) return false
     if (!model.providerConfigId || !model.modelId) return false
@@ -241,9 +229,9 @@ export const settingsState = new StorageState(
   },
 })
 
-// 埋点：任意设置项变更（§12.11 settings.change）。敏感键整段打码；provider / searchProvider 列表只上报数量，避免 baseUrl / apiKey 泄漏。
+// 埋点：任意设置项变更。敏感键打码；provider / 单价表只报数量，避免泄漏。
 settingsState.onChange = (key, oldValue, newValue) => {
-  // telemetryEnabled 由 telemetry.toggle 记录，此处跳过 —— 避免「开时记录 / 关时不记录」的不对称
+  // telemetryEnabled 由 telemetry.toggle 记录，此处跳过避免不对称
   if ((key as string) === 'telemetryEnabled') return
   track('settings.change', {
     key,
@@ -257,7 +245,7 @@ function settingChangeValue(key: string, value: unknown): unknown {
   if (
     key === 'providers' ||
     key === 'searchProviders' ||
-    // 单价表只需要条数：整表上报会把埋点体积顶爆，且无诊断价值
+    // 单价表只需条数：整表上报会把埋点体积顶爆，且无诊断价值
     key === 'modelPricing'
   ) {
     return value && typeof value === 'object'
@@ -267,7 +255,7 @@ function settingChangeValue(key: string, value: unknown): unknown {
   return value
 }
 
-// ── 打开编辑器：一次性迁移旧版单命令 `editorOpenCommand` → `editorOpenConfigs` 列表（旧命令转为默认配置「VS Code」） ──
+// ── 打开编辑器：一次性迁移旧版单命令 editorOpenCommand → editorOpenConfigs ──
 try {
   const old = (settingsState.value as any).editorOpenCommand
   if (
@@ -287,7 +275,7 @@ try {
     settingsState.value.editorOpenDefaultId = migrated.id
     // 迁移结果随首启 import 进表，不再写回 localStorage
   }
-  // 清掉旧字段（类型未声明，直接删以免污染）
+  // 清掉旧字段（类型未声明）
   const raw = settingsState.value as any
   if ('editorOpenCommand' in raw) {
     delete raw.editorOpenCommand
@@ -296,14 +284,14 @@ try {
   // 非浏览器环境忽略
 }
 
-// ── 权限迁移：旧 commandApprovalMode（全局枚举）→ 新 permissions（terminal.normal / install / dangerous + script.execute 各三态） ──
-// 旧值过粗（一个开关管所有命令）；迁移后删旧字段，避免与新模型并存造成困惑（新用户无旧值 → 用注册表默认）。
+// ── 权限迁移：旧 commandApprovalMode（全局枚举）→ 新 permissions（各三态） ──
+// 迁移后删旧字段，避免与新模型并存（新用户无旧值 → 用注册表默认）。
 try {
   const raw = settingsState.value as any
   const legacy = raw.commandApprovalMode as string | undefined
   const migrated = migrateApprovalMode(legacy)
   if (migrated && !localStorage.getItem('virlen-permissions-migrated')) {
-    // 以旧枚举为准，其余项按注册表默认值补齐
+    // 以旧枚举为准，其余项按默认值补齐
     settingsState.value.permissions = {
       ...withDefaultPermissions(settingsState.value.permissions),
       ...migrated,
@@ -318,7 +306,7 @@ try {
   // 非浏览器环境忽略
 }
 
-/** 解析默认工作目录：Tauri 下取用户文档目录，否则空串。结果缓存，只解析一次。 */
+/** 解析默认工作目录（Tauri 取用户文档目录），结果缓存 */
 let _resolvedWorkspace: string | null = null
 
 export async function resolveDefaultWorkspace(): Promise<string> {
@@ -333,31 +321,31 @@ export async function resolveDefaultWorkspace(): Promise<string> {
   return _resolvedWorkspace
 }
 
-/** 应用启动时调用：解析默认工作目录 */
+/** 应用启动时：解析默认工作目录 */
 export async function initDefaultWorkspace(): Promise<void> {
   if (!settingsState.value.defaultWorkspace) {
     settingsState.setValue('defaultWorkspace', await resolveDefaultWorkspace())
   }
 }
 
-// 配置下沉：设置 → Rust 侧 `app_settings` 表（同一个 `virlen.db`）。权威源是表，localStorage 只作同步初值 + 回滚信道；
-// 键名与 `SettingsStore` 字段同名同层，两侧不建映射表（避免字段漂移）。
+// 配置下沉：设置 → Rust 侧 app_settings。权威源是表，localStorage 只作同步初值；
+// 键名与 SettingsStore 字段同名同层，不建映射表（避免字段漂移）。
 export const SETTINGS_STORAGE_KEY = '_storage_state_virlen-settings'
 
-/** `SettingsStore` 认识的键（用于过滤表里的历史遗留键） */
+/** SettingsStore 认识的键（用于过滤表里的遗留键） */
 const SETTINGS_KNOWN_KEYS: string[] = Object.keys(defaultSettings)
 
 /** 落库 debounce（连续拖动开关只写一次） */
 const SETTINGS_SAVE_DEBOUNCE_MS = 400
 
-/** 待落库的键值（只累积**用户改过的键**，不做整份覆盖） */
+/** 待落库的键值（只累积用户改过的键，不整份覆盖） */
 let pendingSettings: Record<string, unknown> = {}
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 let persistInstalled = false
-/** 水合期间不把「刚从表里读出来的值」再写回表 */
+/** 水合期间不把刚读出来的值再写回表 */
 let hydrating = false
 
-/** 当前设置的浅拷贝（只含已知键，用于首启导入） */
+/** 当前设置的浅拷贝（只含已知键） */
 function snapshotSettings(): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const key of SETTINGS_KNOWN_KEYS) {
@@ -366,7 +354,7 @@ function snapshotSettings(): Record<string, unknown> {
   return out
 }
 
-/** 落库待写设置（debounce 到期 / 退出前调用） */
+/** 落库待写设置（debounce 到期 / 退出前） */
 function flushPendingSettings(): void {
   if (saveTimer !== null) {
     clearTimeout(saveTimer)
@@ -380,12 +368,12 @@ function flushPendingSettings(): void {
   })
 }
 
-/** 退出前把待写设置立刻落库（否则 debounce 未触发会丢掉最后一次改动） */
+/** 退出前立刻落库（否则 debounce 未触发会丢最后一次改动） */
 export function flushSettingsPersist(): void {
   flushPendingSettings()
 }
 
-/** 挂上「设置变更 → 落库」：保留既有 `onChange`（埋点）并链式调用 */
+/** 挂上「设置变更 → 落库」：保留既有 onChange（埋点）并链式调用 */
 function installSettingsPersist(): void {
   if (persistInstalled) return
   persistInstalled = true
@@ -401,20 +389,18 @@ function installSettingsPersist(): void {
 }
 
 /**
- * 从 Rust 侧水合设置（幂等；非 Tauri 环境直接返回）。
- *
- * 表**非空** → 以表为准覆盖 `settingsState`（只认已知键）；表**为空** → 把当前设置
- * （localStorage + 上面的一次性迁移之后）整份导入 —— 老用户升级无感。
- * 必须在 `init()` 里早于 i18n / 工作目录 / 会话加载执行：它们都依赖设置。
+ * 从 app_settings 水合设置（幂等；非 Tauri 直接返回）。
+ * 表非空 → 以表为准覆盖；表为空 → 把当前设置整份导入（老用户升级无感）。
+ * 必须在 init() 里早于 i18n / 工作目录 / 会话加载执行。
  */
 export async function hydrateSettings(): Promise<void> {
   if (!settingsRepo.isAvailable()) return
-  /** 表已就绪（读到内容 / 首次导入成功）→ 才允许清理本地副本 */
+  /** 表已就绪才允许清理本地副本 */
   let authorityReady = false
   try {
     const stored = await settingsRepo.loadAll()
     if (Object.keys(stored).length === 0) {
-      // 首启（或本功能上线后的第一次启动）：把现有设置导入表
+      // 首启：把现有设置导入表
       authorityReady = await settingsRepo.importIfEmpty({
         ...snapshotSettings(),
         [SETTINGS_SCHEMA_VERSION_KEY]: SETTINGS_SCHEMA_VERSION,
@@ -422,8 +408,7 @@ export async function hydrateSettings(): Promise<void> {
       })
     } else {
       const known = pickKnownSettings(stored, SETTINGS_KNOWN_KEYS)
-      // 记忆固定启用：老版本可能往表里写过 `memoryEnabled: false`，这里纠正为 true 并**落库**
-      // —— Rust 侧按同名键判定，只改内存不改表等于下次启动又被关回去。
+      // 记忆固定启用：老版本可能写过 false，这里纠正为 true 并落库（Rust 按同名键判定）
       const fixups: Record<string, unknown> = {}
       if (known.memoryEnabled === false) fixups.memoryEnabled = true
       if (Object.keys(fixups).length > 0) Object.assign(known, fixups)
@@ -450,11 +435,7 @@ export async function hydrateSettings(): Promise<void> {
 }
 
 /**
- * 删掉老版本遗留在 localStorage 的设置副本。
- *
- * ⚠️ 只在「表已就绪」时调用：表读不到 / 首次导入失败时保留副本，作为后端故障的兜底。
- * 用户看不到未水合的首帧（`init()` 后才 `render()`，窗口还等一帧才 `show()`），唯一退化情形是
- * 「上次已删副本 + 本次后端不可用」→ 设置回默认值（无权威源，已属异常）。幂等。
+ * 删掉老版本遗留在 localStorage 的设置副本。只在表已就绪时调用：表不可用时保留副本作兜底。
  */
 function dropLegacyLocalSnapshot(): void {
   try {

@@ -1,9 +1,6 @@
 /**
- * phone-control-settings — 设置 → 手机控制
- *
- * 启用后展示配对二维码（含票据 / 信令基址 / 房间号），并在此确认手机的绑定请求。
- * 结构自上而下：开关卡片 → 扫码配对 → 高级（ICE 折叠）→ 已绑定手机 → 操作记录 → 配对确认弹窗；
- * 细节（配对链接、ICE 文本）一律收进折叠区，首屏只留「现在能不能连、怎么连」。
+ * 设置 → 手机控制：开关 → 扫码配对 → 高级（ICE）→ 已绑定手机 → 操作记录 → 配对确认。
+ * 细节一律收进折叠区，首屏只留「现在能不能连、怎么连」。
  */
 import { useEffect, useRef, useState } from 'react'
 import QRCode from 'qrcode'
@@ -19,19 +16,15 @@ import type { AuditEntry, PairedDevice } from '@/bridge'
 import { t, tpl } from '@/ui/i18n'
 import './phone-control-settings.scss'
 
-/** 二维码画布尺寸（px）。画布属性与 CSS 显示尺寸保持同一个值，否则模组会被重采样糊掉。 */
+/** 二维码画布尺寸（px）。画布属性与 CSS 显示尺寸必须同值，否则重采样糊掉。 */
 const QR_SIZE = 200
 
-/** 票据总时长（秒）：进度条按它换算比例，口径取自共享包，不写死一个 300 */
+/** 票据总时长（秒）：口径取自共享包，不写死一个 300 */
 const TICKET_TTL_SEC = PAIRING_TICKET_TTL_MS / 1000
 
 /**
- * 状态胶囊文案。
- *
- * ⚠️ `waiting` / `verifying` / `rejected` 三件事不能合成一句：「在等一台手机连上」（没人接入）、
- * 「有人接入了、正在验它是谁」（等着 `hello` 出结论）、以及**否定结论**（那台已不许可）对用户
- * 意义完全不同。此前共用一句「等待手机连接…」，用户读到的是「我在等它连上」，而事实往往是
- * 「刚被移除的那台又摸进来了」。
+ * 状态胶囊文案。waiting / verifying / rejected 不能合成一句：
+ * 「在等一台手机连上」、「有人接入正在验证」、以及「刚拒了一台」对用户意义完全不同。
  */
 const STATUS_TEXT: Record<PhoneControlStatus, string> = {
   disabled: '已停用',
@@ -43,9 +36,7 @@ const STATUS_TEXT: Record<PhoneControlStatus, string> = {
 }
 
 /**
- * 通讯类型文案（只在真的连上且有结论时显示）。
- * 中继 = 字节全部经 TURN 转发（更慢、吃带宽），是排查「手机操作很卡」要看的第一个结论；
- * `unknown` 不在表里 —— 没结论就不显示。
+ * 通讯类型文案（只在真连上且有结论时显示）。unknown 不在表里 —— 没结论就不显示。
  */
 const LINK_TEXT: Record<string, string> = {
   direct: 'P2P 直连',
@@ -53,12 +44,7 @@ const LINK_TEXT: Record<string, string> = {
 }
 
 /**
- * 通讯类型的悬停解释：胶囊上只给结论，原因放这里。
- *
- * §33：把**传输档位**一并写进来（档位由通讯类型决定，见共享包的 `transferTierOf`），用户就能
- * 知道「那条链路到底发不发工具输出」。中继那条多一句「旧手机端仍按完整下发」：档位生效还取决于
- * **对端能否渲染省略标记**（`MESSAGE_DETAIL_CAPABILITY`），而未在本页建模（不为一个「缓存没刷新的
- * 旧 PWA」多养一份状态）—— 与其说一句可能不成立的结论，不如把例外写清。
+ * 通讯类型的悬停解释。中继那条写明「旧手机端仍按完整下发」：档位生效取决于对端能否渲染省略标记。
  */
 const LINK_HINT: Record<string, string> = {
   direct: '两台设备已直接打通（局域网或 NAT 打洞），字节不经服务器转发。传输档位：完整（正文与工具输出全量下发）。',
@@ -69,39 +55,31 @@ const LINK_HINT: Record<string, string> = {
 }
 
 /**
- * 传输档位短文案（§33）：胶囊上跟在通讯类型后面。
- * 不与 `LINK_TEXT` 合成一张表 —— 档位是从通讯类型**推导**的（`transferTierOf`），合成即把
- * 「推导」抄成「枚举」，两处迟早对不上（试想将来直连也走精简的情形）。
+ * 传输档位短文案。不与 LINK_TEXT 合成一张表：档位是从通讯类型推导的，合成即把推导抄成枚举。
  */
 const TIER_TEXT: Record<TransferTier, string> = {
   full: '完整传输',
   lean: '精简传输',
 }
 
-/** 配对三步（放在二维码旁边，省掉用户「扫完该干嘛」的猜测）。 */
+/** 配对三步（省掉用户「扫完该干嘛」的猜测） */
 const PAIR_STEPS = ['用手机扫一扫二维码', '手机上确认连接', '本机弹窗点「允许」']
 
-/** 设备 key 缩略（列表里看全串没必要；排查时靠前几位就够定位）。 */
+/** 设备 key 缩略（排查时靠前几位就够定位） */
 function shortKey(key: string | null): string {
   if (!key) return '旧版手机（未上报 key）'
   return key.length > 14 ? `${key.slice(0, 10)}…${key.slice(-4)}` : key
 }
 
-/**
- * 自定义 ICE 的**填写示例**（占位文本），不是默认值 —— 默认值由服务端下发（`GET <信令基址>/ice`）。
- */
+/** 自定义 ICE 的填写示例（占位文本），不是默认值 —— 默认值由服务端下发（GET /ice）。 */
 const ICE_PLACEHOLDER = `[
   { "urls": "stun:your.server:3478" },
   { "urls": "turn:your.server:3478", "username": "user", "credential": "pass" }
 ]`
 
 /**
- * 一行描述一台已配对手机：头像 + 名字（+ 在线徽标）+ 三个信息胶囊（key / 凭证有效期 /
- * 上次连接）+ 行尾操作（改名 / 移除）。
- *
- * `online` = **此刻正连着本机**那台（`phoneControlStore.activeDeviceId`）：多台手机时，
- * 「哪台在用」比「有哪些」更值得一眼看到。改名用**行内编辑**而非弹窗 —— 改的只是一个标签，
- * 弹窗会把「哪一行被改」盖掉（多台时尤其容易点错行）。
+ * 一行描述一台已配对手机。online = 此刻正连着本机那台 —— 多台时「哪台在用」最值得一眼看到。
+ * 改名用行内编辑而非弹窗：弹窗会把「哪一行被改」盖掉。
  */
 function DeviceRow({
   device,
@@ -122,7 +100,7 @@ function DeviceRow({
   const [draft, setDraft] = useState(device.name)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // 进入编辑就聚焦并全选：用户想改整个名字时直接打字即可覆盖，想微调也仍可用方向键
+  // 进入编辑就聚焦并全选：想改整个名字直接打字即可覆盖
   useEffect(() => {
     if (!editing) return
     inputRef.current?.focus()
@@ -135,9 +113,8 @@ function DeviceRow({
   }
 
   /**
-   * 提交：空名 / 没改都算「取消」（保存按钮在空名时本就禁用）。
-   * ⚠️ Enter 与随后的 blur 可能同帧先后触发（与侧边栏行内重命名同一个坑），这里**不做一次性
-   * 守卫** —— `PairingStore.rename` 本身幂等：第二遍名字相同 → 不发通知、不落盘。
+   * 提交：空名 / 没改都算取消。Enter 与随后的 blur 可能同帧先后触发，这里不做一次性守卫 ——
+   * PairingStore.rename 本身幂等：第二遍名字相同 → 不发通知、不落盘。
    */
   const commit = () => {
     const name = draft.trim()
@@ -236,13 +213,12 @@ function auditTime(e: AuditEntry): string {
   return new Date(e.at).toLocaleTimeString()
 }
 
-/** 正文（保留 `by` / `tier`，便于「谁批了什么」一眼看清） */
+/** 正文（保留 by / tier，便于「谁批了什么」一眼看清） */
 function auditText(e: AuditEntry): string {
   if (e.kind === 'approval') {
     const who = e.by === 'mobile' ? t('手机') : t('电脑')
     const tier = e.tier === 'high' ? t('（高风险）') : ''
-    // 整句当模板，而不是拼「谁 + 动作」两个片段：中英文的语序与词间空格都不同，
-    // 片段拼接在英文里会拼出 “Phone Approved…” 这类缺空格的句子。
+    // 整句当模板，而不是拼「谁 + 动作」两个片段：中英语序与词间空格不同，拼接会缺空格
     const key =
       e.decision === 'allow'
         ? '$__who__批准$__tier__：$__detail__$__command__'
@@ -281,7 +257,7 @@ export default observer(function PhoneControlSettings() {
     s.onPanelOpen()
   }, [s])
 
-  /** 二维码剩余比例（0–100），驱动进度条。 */
+  /** 二维码剩余比例（0–100），驱动进度条 */
   const ticketPct =
     s.ticketLeftSec == null
       ? 0
@@ -301,7 +277,7 @@ export default observer(function PhoneControlSettings() {
         </div>
       </header>
 
-      {/* 主开关：开着还是关着，是本页唯一决定「下面还有没有内容」的东西，故给它一块卡片 */}
+      {/* 主开关：它是本页唯一决定「下面还有没有内容」的东西，故给它一块卡片 */}
       <section className="phone-control__switch">
         <div className="phone-control__switch-text">
           <span className="phone-control__switch-title">{t('启用手机控制')}</span>
@@ -316,8 +292,7 @@ export default observer(function PhoneControlSettings() {
               {t(STATUS_TEXT[s.status] ?? s.status)}
               {s.error ? tpl('（$__error__）', { error: s.error }) : ''}
             </span>
-            {/* 状态说「连没连上」，它说「怎么连上的」——并排看才完整。
-                没结论（`unknown`）时不占位、不猜，省得把「不知道」显示成「直连」。 */}
+            {/* 状态说「连没连上」，它说「怎么连上的」。没结论时不占位、不猜。 */}
             {s.status === 'connected' && LINK_TEXT[s.linkKind] && (
               <span
                 className={`phone-control__link phone-control__link--${s.linkKind}`}
@@ -373,8 +348,7 @@ export default observer(function PhoneControlSettings() {
             </span>
           </div>
 
-          {/* 配对链接：既是排查用的，也是「手动输入 / 分享」的复制源；数据本体是 `vrp1:` 混淆串
-              （不是明文 JSON），所以系统相机 / 微信扫开就能直接配对。 */}
+          {/* 配对链接：既是排查用的，也是「手动输入 / 分享」的复制源；数据本体是 vrp1: 混淆串。 */}
           <details className="phone-control__payload">
             <summary>{t('配对链接（排查 / 手动输入用）')}</summary>
             <textarea
@@ -405,7 +379,7 @@ export default observer(function PhoneControlSettings() {
             online={d.deviceId === s.activeDeviceId}
             onRemove={() => s.revokeDevice(d.deviceId)}
             onRename={(name) => {
-              // 失败的唯一现实原因是「那一行已不在」（比如刚在别处被移除）——如实告诉用户，不静默
+              // 失败的唯一现实原因是「那一行已不在」——如实告诉用户，不静默
               if (!s.renameDevice(d.deviceId, name)) {
                 showToast(t('改名失败：这台手机已不在列表里'), 3000)
               }
@@ -416,9 +390,8 @@ export default observer(function PhoneControlSettings() {
           {t('改名只改本机显示的标签（手机侧不知道本机给它起了什么名），不影响它的授权与连接。 移除后该手机立刻断开（若此刻正连着），它手上的授权与旧二维码一并作废 —— 想再连必须重新扫屏上的新码并由你确认；它自己重连上来的那几次会被直接拒掉（状态胶囊会写「已拒绝接入」）。授权凭证当月有效，每次连接自动续期，最长 90 天。')}
         </p>
       </section>
-      {/* ICE 配置（§31）：默认值由服务端下发，**客户端源码不含任何 TURN 凭证**。
-          ⚠️ 这里只显示「来源 + 数量」，**不渲染**服务端下发的凭证 —— 截图 / 录屏 / 反馈日志都会
-          外流，TURN 口令一旦公开就是中继带宽被白嫖。 */}
+      {/* ICE 配置：默认值由服务端下发，客户端源码不含任何 TURN 凭证。
+          这里只显示「来源 + 数量」，不渲染服务端下发的凭证 —— 截图 / 录屏 / 日志都会外流。 */}
       <details
         className="phone-control__ice"
         onToggle={(e) => {
@@ -464,8 +437,7 @@ export default observer(function PhoneControlSettings() {
         </p>
       </details>
 
-      {/* 操作记录（审计）：手机是「远程全权控制面」，审批取的是宽松档（可批含高风险在内的一切，
-          见 docs/phone-control-bridge.md §16.3）—— 「谁在什么时候批了什么」必须可见、可回溯。 */}
+      {/* 操作记录（审计）：手机是远程全权控制面，审批取宽松档 —— 「谁在什么时候批了什么」必须可回溯。 */}
       <section className="phone-control__audit">
         <div className="phone-control__audit-head">
           <h3 className="phone-control__card-title">{t('操作记录')}</h3>
@@ -509,7 +481,7 @@ export default observer(function PhoneControlSettings() {
             </span>
             <h4>{t('有手机请求配对')}</h4>
             <p>
-              {/* 名字是**手机**的（`mobileName`）；电脑自己的名字不在这里出现 */}
+              {/* 名字是手机的（mobileName）；电脑自己的名字不在这里出现 */}
               {tpl('「$__name__」请求连接并操作本机，是否允许？', {
                 name: s.pendingPair.mobileName,
               })}

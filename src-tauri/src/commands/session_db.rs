@@ -1,8 +1,5 @@
-//! `session_db` 的 Tauri 命令层（GUI 壳）。实现全在 `virlen-core::session_db`（零 `tauri::`），本文件只做：
-//! `init_session_db`（打开库 + 注册状态）、`manage_noop_settings`（库打不开时的 Noop 兜底）、
-//! 以及全部 `cmd_*`（参数兜底 + 调 repo + 埋点）。
-//!
-//! GUI 的 `TauriHost::data_dir()` 与 CLI 的 `CliHost::data_dir()` 同目录 → 读写同一份 `virlen.db`。
+//! session_db 的 Tauri 命令层（GUI 壳）。实现全在 virlen-core::session_db，本文件只做
+//! 打开库 / 注册状态、Noop 兜底、以及全部 cmd_*（参数兜底 + 调 repo + 埋点）。
 
 use std::sync::Arc;
 
@@ -14,15 +11,13 @@ use virlen_core::session_db::{
     UsageQuery, UsageRecordPage, UsageStats, UserMessageRef, MSG_QUERY_MAX_LIMIT,
 };
 
-/// **GUI 入口**（薄壳）：构造 Tauri 宿主 → 打开会话库 → 注册 Tauri 状态。
-///
-/// headless / CLI 走 [`open_session_db`] + `CliHost`，因此本文件里只有这里（以及
-/// 下面的 [`manage_noop_settings`]）允许出现 `tauri::`。
+/// GUI 入口（薄壳）：构造 Tauri 宿主 → 打开会话库 → 注册 Tauri 状态。
+/// CLI 走 open_session_db + CliHost，故本文件只有这里与 `manage_noop_settings` 允许出现 tauri::。
 pub fn init_session_db(app: &tauri::AppHandle) -> Result<Arc<dyn SessionRepo>, String> {
     use tauri::Manager;
     let db = open_session_db(
         &crate::host::TauriHost::new(app.clone()),
-        // `.setup()` 回调没有 tokio reactor 上下文 → 必须用 Tauri 自己的运行时派发
+        // `.setup()` 回调没有 tokio reactor 上下文，必须用 Tauri 自己的运行时派发
         &|fut| {
             tauri::async_runtime::spawn(fut);
         },
@@ -33,11 +28,9 @@ pub fn init_session_db(app: &tauri::AppHandle) -> Result<Arc<dyn SessionRepo>, S
     Ok(db.repo.clone())
 }
 
-/// **GUI 兜底**：库打不开时把配置 / 记忆仓储换成 Noop。
-///
-/// 不换的话 `cmd_settings_*` / `cmd_memory_*` 会因「状态未注册」报错；换成 Noop 后命令正常返回，
-/// 并由 `cmd_settings_get_all` 如实报「本地存储不可用」（而不是假装表是空的 ——
-/// 那会让前端误判为「空表 → 该导入」）。记忆同理：“没有记忆”才是那时的正确语义。
+/// GUI 兜底：库打不开时把配置 / 记忆仓储换成 Noop。
+/// 换成 Noop 后命令正常返回，并由 cmd_settings_get_all 如实报「本地存储不可用」——
+/// 假装的空表会让前端误判为「首启 → 该导入」。
 pub fn manage_noop_settings(app: &tauri::AppHandle) {
     use tauri::Manager;
     app.manage(Arc::new(NoopSettingsRepo) as Arc<dyn SettingsRepo>);
@@ -46,7 +39,7 @@ pub fn manage_noop_settings(app: &tauri::AppHandle) {
 
 // ==================== Tauri 命令 ====================
 
-/// 记录一次 SQLite 操作（§12.13 rust.db.op / rust.db.error）
+/// 记录一次 SQLite 操作（rust.db.op / rust.db.error）
 fn track_db(
     op: &str,
     session_id: Option<&str>,
@@ -132,11 +125,8 @@ pub async fn cmd_get_messages(
     result
 }
 
-/// 分页获取会话消息（尾部窗口加载：只取最近 N 条，向上滚动时按 before_rowid 回补）
-///
-/// `min_visible` > 0 时按「可见行数」补足：一次 IPC 就取到足够 UI 渲染的高度，避免「一页大半是
-/// 工具调用、折成一行后屏幕几乎没变化」造成反复上滑（见 `get_message_page_filled`）。
-/// `fold` = 前端「隐藏工具调用的思考过程消息」设置，决定工具调用是否折成一行（影响可见行计数）。
+/// 分页获取会话消息（尾部窗口：只取最近 N 条，向上滚动按 before_rowid 回补）。
+/// min_visible > 0 时按「可见行数」补足：一次 IPC 就取够 UI 高度，避免工具调用折成一行后反复上滑。
 #[tauri::command]
 pub async fn cmd_get_message_page(
     state: tauri::State<'_, Arc<dyn SessionRepo>>,
@@ -165,7 +155,7 @@ pub async fn cmd_get_message_page(
     result
 }
 
-/// 消息查询工具：按锚点（id / seq）取时序窗口（只覆盖「已压缩区间」）
+/// 按锚点取时序窗口（只覆盖已压缩区间）
 #[tauri::command]
 pub async fn cmd_get_message_window(
     state: tauri::State<'_, Arc<dyn SessionRepo>>,
@@ -191,7 +181,7 @@ pub async fn cmd_get_message_window(
     result
 }
 
-/// 消息查询工具：列出「已压缩区间」的消息时序（可按关键词过滤 / 向前翻页）
+/// 列出已压缩区间的消息时序（可关键词过滤 / 向前翻页）
 #[tauri::command]
 pub async fn cmd_get_message_timeline(
     state: tauri::State<'_, Arc<dyn SessionRepo>>,
@@ -215,7 +205,7 @@ pub async fn cmd_get_message_timeline(
     result
 }
 
-/// 获取会话内全部用户消息的轻量索引（右侧锚点列表用，不含 AI / 工具正文）
+/// 会话内全部用户消息的轻量索引（右侧锚点列表用）
 #[tauri::command]
 pub async fn cmd_get_user_message_refs(
     state: tauri::State<'_, Arc<dyn SessionRepo>>,
@@ -292,8 +282,7 @@ pub async fn cmd_delete_session(
         result.as_ref().err().map(|s| s.as_str()),
     );
     if result.is_ok() {
-        // 会话没了 → 它的后台服务也不该继续跑（服务的可见性与会话同生命周期）。
-        // ⚠️ 即使删除失败也不动服务（用户看到的会话还在，服务就该还在）。
+        // 会话没了 → 它的后台服务也不该继续跑；删除失败则不动（会话还在，服务就该还在）
         let stopped = virlen_core::agent::native_tools::kill_session_services(&session_id);
         if stopped > 0 {
             crate::telemetry::track(
@@ -305,8 +294,7 @@ pub async fn cmd_delete_session(
     result
 }
 
-/// 整批替换会话的全部消息（前端上下文压缩等全量替换场景）
-/// 不刷新会话时间（压缩不是用户发言）
+/// 整批替换会话全部消息（压缩等全量替换场景）；不刷新会话时间（压缩不是用户发言）
 #[tauri::command]
 pub async fn cmd_replace_session_messages(
     state: tauri::State<'_, Arc<dyn SessionRepo>>,
@@ -326,8 +314,7 @@ pub async fn cmd_replace_session_messages(
     result
 }
 
-/// 追加消息（前端落库用；Rust 引擎路径由引擎内部直落）
-/// 不刷新会话时间（AI 回复 / 工具结果 / 用户消息都由会话元数据的那次 upsert 定时间）
+/// 追加消息（前端落库用；Rust 引擎内部直落不经 IPC）。不刷新会话时间（时间由会话元数据那一次 upsert 定）。
 #[tauri::command]
 pub async fn cmd_append_messages(
     state: tauri::State<'_, Arc<dyn SessionRepo>>,
@@ -347,8 +334,7 @@ pub async fn cmd_append_messages(
     result
 }
 
-/// 删除会话中「指定消息及其之后」的全部消息（前端删除消息时同步落库）
-/// 不刷新会话时间（删除消息不是用户发言）
+/// 删除「指定消息及其之后」的全部消息；不刷新会话时间
 #[tauri::command]
 pub async fn cmd_truncate_session_messages(
     state: tauri::State<'_, Arc<dyn SessionRepo>>,
@@ -367,10 +353,8 @@ pub async fn cmd_truncate_session_messages(
     result
 }
 
-/// 替换会话「指定消息及其之后」的后缀（前端在只加载了尾部窗口时回写修复结果用）
-///
-/// 与 `cmd_replace_session_messages`（全量替换）的区别：只动后缀，前缀（更早、可能尚未加载的历史）原样保留。
-/// 不刷新会话时间（修复不是用户发言）。
+/// 替换「指定消息及其之后」的后缀（只加载了尾部窗口时回写修复结果用）。
+/// 与全量替换的区别：只动后缀，更早的历史若尚未加载则原样保留。不刷新会话时间。
 #[tauri::command]
 pub async fn cmd_replace_session_messages_from(
     state: tauri::State<'_, Arc<dyn SessionRepo>>,
@@ -393,9 +377,9 @@ pub async fn cmd_replace_session_messages_from(
     result
 }
 
-// ==================== 用量账本命令（token 统计） ====================
+// ==================== 用量账本命令 ====================
 
-/// 追加用量流水（TS 引擎 / 前端非消息型调用走此命令；Rust 引擎内部直落不经 IPC）
+/// 追加用量流水（前端非消息型调用走此命令；Rust 引擎内部直落）
 #[tauri::command]
 pub async fn cmd_append_usage(
     state: tauri::State<'_, Arc<dyn SessionRepo>>,
@@ -414,10 +398,8 @@ pub async fn cmd_append_usage(
     result
 }
 
-/// 聚合用量统计（按时间 / 模型 / 会话 / 调用类型分桶 + 合计）
-///
-/// 只返回 token 数，**不返回费用**：单价是用户可编辑的设置项，
-/// 算在 SQL 里会导致「改一次单价就要回填整张表」，因此费用一律由前端计算。
+/// 聚合用量统计（按时间 / 模型 / 会话 / 调用类型分桶）。
+/// 只返回 token 数，不返回费用：单价是用户可编辑项，算在 SQL 里改一次就要回填整张表。
 #[tauri::command]
 pub async fn cmd_usage_stats(
     state: tauri::State<'_, Arc<dyn SessionRepo>>,
@@ -472,15 +454,11 @@ pub async fn cmd_usage_clear(
     result
 }
 
-// ==================== 应用设置（配置下沉 D3） ====================
-//
-// 命令只做「参数兜底 + 调 repo + 埋点」，与上面的会话命令同风格。
-// 键名与前端 `SettingsStore` 字段同名同层（见 `settings.rs` 文件头）。
+// ==================== 应用设置 ====================
+// 键名与前端 SettingsStore 字段同名同层。
 
-/// 读取全部应用设置（GUI 启动水合 / CLI 读配置）
-///
-/// ⚠️ 无真实后端时如实报错（而不是返回空表）：前端 `hydrateSettings` 会捕获并继续用 localStorage；若返回空
-/// 表，前端会误判为「首启 → 该把 localStorage 导入」而反复调用 `cmd_settings_import`。
+/// 读取全部应用设置。
+/// ⚠️ 无真实后端时如实报错（不返回空表）：返回空表会让前端误判为「首启 → 该导入」。
 #[tauri::command]
 pub async fn cmd_settings_get_all(
     state: tauri::State<'_, Arc<dyn SettingsRepo>>,
@@ -519,7 +497,7 @@ pub async fn cmd_settings_upsert(
     result
 }
 
-/// 首启迁移：**仅当表为空**时导入（从 localStorage 带来的旧设置）；返回是否真的写入
+/// 首启迁移：仅当表为空时才导入；返回是否真的写入
 #[tauri::command]
 pub async fn cmd_settings_import(
     state: tauri::State<'_, Arc<dyn SettingsRepo>>,
@@ -538,11 +516,9 @@ pub async fn cmd_settings_import(
     result
 }
 
-// ==================== 库维护命令（设置 → 存储） ====================
+// ==================== 库维护命令 ====================
 
-/// 数据库体积快照（纯读，设置 → 存储 展示用）
-///
-/// 走 spawn_blocking：与引擎写入共用一把连接锁，锁被占用时不能卡住 runtime 线程。
+/// 数据库体积快照。走 spawn_blocking：与引擎写入共用连接锁，不能卡住 runtime 线程。
 #[tauri::command]
 pub async fn cmd_db_stats(m: tauri::State<'_, Arc<DbMaintenance>>) -> Result<DbStats, String> {
     let m = m.inner().clone();
@@ -551,10 +527,7 @@ pub async fn cmd_db_stats(m: tauri::State<'_, Arc<DbMaintenance>>) -> Result<DbS
         .map_err(|e| format!("DB task join error: {}", e))?
 }
 
-/// 只截断 WAL 日志（`wal_checkpoint(TRUNCATE)`）—— 廉价的「第一步整理」
-///
-/// 只把 `-wal` 里已提交的页搬回主库并截断文件（毫秒~秒级），不动主库结构，
-/// 因此不需要用户确认；重建主库（`VACUUM`）另见 `cmd_db_maintain`。
+/// 只截断 WAL（wal_checkpoint(TRUNCATE)）—— 廉价的「第一步整理」，不动主库结构，不需用户确认。
 #[tauri::command]
 pub async fn cmd_db_checkpoint(
     m: tauri::State<'_, Arc<DbMaintenance>>,
@@ -563,10 +536,8 @@ pub async fn cmd_db_checkpoint(
     m.checkpoint_truncate().await
 }
 
-/// 立即整理数据库：`wal_checkpoint(TRUNCATE)` 回收 `-wal`，再 `VACUUM` 归还空闲页
-///
-/// ⚠️ 只在用户显式点击时调用：`VACUUM` 期间独占连接（数百 MB 库约 10–60 s），且需要约 2 倍库大小的临时磁盘
-/// 空间（SQLite 放在系统临时目录）。
+/// 立即整理：先 wal_checkpoint(TRUNCATE) 回收 -wal，再 VACUUM 归还空闲页。
+/// ⚠️ 只在用户显式点击时调用：VACUUM 期间独占连接（数百 MB 库约 10–60 s），且需约 2 倍库大小的临时盘。
 #[tauri::command]
 pub async fn cmd_db_maintain(
     m: tauri::State<'_, Arc<DbMaintenance>>,

@@ -1,8 +1,4 @@
-/**
- * 全局类型定义
- *
- * 从 agent/types.ts 迁移至此，供全项目共享。
- */
+/** 全局共享类型。 */
 export type ProviderType = 'openai' | 'anthropic' | 'gemini'
 
 export interface ProviderConfig {
@@ -13,12 +9,9 @@ export interface ProviderConfig {
   apiKey: string
   baseUrl: string
   models: ModelInfo[]
-  /**
-   * 该服务商可选的推理强度档位（用户在服务商配置里从 REASONING_EFFORT_UNION 多选而来）
-   * 聊天界面只能从这些值里切换实际使用的档位
-   */
+  /** 该服务商可选的推理强度档位（聊天界面只能从这些值里选） */
   reasoningEffortList?: string[]
-  /** 默认推理强度：会话未单独选择时使用（会话级选择优先） */
+  /** 默认推理强度（会话级选择优先） */
   reasoningEffort?: string
   enabled: boolean
   createdAt: number
@@ -33,14 +26,9 @@ export interface ProviderConfigTemplate {
     type: ProviderType
     baseUrl: string
   }[]
-  /**
-   * 允许的 reasoningEffort 值列表（如 ['low', 'medium', 'high']），不设置则表示不支持
-   * @deprecated 已由用户多选（ProviderConfig.reasoningEffortList）取代，仅作参考数据保留
-   */
+  /** 允许的 reasoningEffort 值；不设置 = 不支持 */
   allowReasoningEffortList?: string[]
-  /**
-   * 官网地址
-   */
+  /** 官网地址 */
   officialLink?: string
 }
 
@@ -63,7 +51,7 @@ export interface ImageContent {
 
 export interface FileContent {
   type: 'file'
-  /** 文件绝对路径（只存路径，不拷贝文件内容） */
+  /** 文件绝对路径（不拷贝内容） */
   path: string
   /** 展示用文件名（不含目录） */
   name?: string
@@ -74,13 +62,9 @@ export interface FileContent {
 }
 
 /**
- * 引用消息块：把某条历史消息（用户 / AI 正文）作为本条消息的上下文
- *
- * 与 FileContent 同构——只存「引用来源 + 正文快照」，不做任何拷贝之外的加工：
- *   - messageId：被引用消息的 id（发给模型，供后续能力定位原消息）
- *   - text：正文快照。原消息可能被删除、被上下文压缩（summary）替换，或被
- *     分页懒加载移出内存，所以引用必须自包含，不能只存 id 让模型自己去查。
- * 各协议（openai / anthropic / gemini / Rust 原生引擎）统一降级为文本。
+ * 引用消息块：把某条历史消息作为上下文。
+ * text 是正文快照 —— 原消息可能被删除 / 压缩 / 移出内存，所以引用必须自包含。
+ * 各协议统一降级为文本。
  */
 export interface QuoteContent {
   type: 'quote'
@@ -93,26 +77,15 @@ export interface QuoteContent {
 }
 
 /**
- * 技能引用块：把某个 Skill 的 SKILL.md **全文**作为本条消息的上下文
- *
- * 与 FileContent（只存路径，让模型自己读）刻意不同：技能是「领域知识包」，
- * 用户引用它的意图就是让模型**立刻拿到**其中的规则/流程，所以内容随消息一起发送。
- * 与 QuoteContent 同构——引用即快照，发送后技能被改 / 被删都不影响本条消息的自包含性。
- * 各协议（openai / anthropic / gemini / Rust 原生引擎）统一降级为文本。
+ * 技能引用块：把 SKILL.md 全文作为上下文（与 FileContent 只存路径不同，技能要立刻可用）。
  */
 export interface SkillContent {
   type: 'skill'
-  /** 技能唯一标识（skillStore 的 meta.name） */
+  /** 技能标识（skillStore 的 meta.name） */
   name: string
-  /** 技能源码目录绝对路径（供模型定位 SKILL.md 之外的脚本 / 资源） */
+  /** 技能源码目录绝对路径（供模型定位 SKILL.md 之外的资源） */
   path?: string
-  /**
-   * 技能描述（来自 SKILL.md frontmatter）
-   *
-   * 只服务 UI（消息气泡的技能卡片正文），不参与降级文本：`skillBlockToText` 与 Rust
-   * `skill_block_to_text` 都只取 name / path / content（块以 `Value` 解析，多余字段忽略），所以加
-   * 这个字段不改变发给模型的内容，也不涉及两侧同步。
-   */
+  /** 技能描述：只给 UI 用，不参与降级文本（两侧都只取 name / path / content） */
   description?: string
   /** SKILL.md 全文快照 */
   content: string
@@ -145,20 +118,13 @@ export type MessageContent =
     )[]
 
 /**
- * 附件标签：文件附件块降级成文本时、打在路径前面的标记（模型可读，不是 UI 文案）
- *
- * 与 Rust 侧 `src-tauri/virlen-core/src/agent/provider.rs` 的同名常量必须逐字一致
- * （铁律 1：TS / Rust 双引擎同语义），改文案要两边一起改。
+ * 附件标签：文件块降级成文本时打在路径前。与 Rust provider.rs 的同名常量逐字一致。
  */
 export const ATTACHED_FILE_LABEL = '[User attached file]'
 export const ATTACHED_DIR_LABEL = '[User attached folder]'
 
 /**
- * 文件附件块 → 发给 LLM 的文本形式
- *
- * 各 Provider（openai / anthropic / gemini / Rust 原生引擎）共用此函数，
- * 保证同一条消息在所有协议下对模型呈现完全一致。
- * 语义：告诉模型「用户附带了这个文件」，具体内容由模型自行用工具按路径读取。
+ * 文件块 → 发给 LLM 的文本。各 Provider 共用，保证同一条消息在所有协议下呈现一致。
  */
 export function fileBlockToText(block: FileContent): string {
   const path = block.path || ''
@@ -167,30 +133,14 @@ export function fileBlockToText(block: FileContent): string {
     : `${ATTACHED_FILE_LABEL} ${path}`
 }
 
-/**
- * 引用块标签：降级成文本时给模型看的字段名（模型可读，不是 UI 文案）
- *
- * 与 Rust 侧 `src-tauri/virlen-core/src/agent/provider.rs` 的同名常量必须逐字一致
- * （铁律 1：TS / Rust 双引擎同语义），改文案要两边一起改。
- */
+/** 引用块标签：降级文本的字段名。与 Rust provider.rs 逐字一致。 */
 export const QUOTED_MESSAGE_LABEL = '[Quoted message]'
 export const QUOTE_SENDER_LABEL = 'Sender'
 export const QUOTE_MESSAGE_ID_LABEL = 'Message ID'
 export const QUOTE_CONTENT_LABEL = 'Content'
 
 /**
- * 引用块 → 发给 LLM 的文本形式
- *
- * 与 fileBlockToText 一样由所有 Provider 共用，保证同一条消息在所有协议下
- * 对模型呈现完全一致。格式固定为四行字段 + 正文，便于模型稳定解析：
- *
- * ```
- * [Quoted message]
- * Sender: user
- * Message ID: <id>
- * Content:
- * <正文>
- * ```
+ * 引用块 → 发给 LLM 的文本（四行固定字段 + 正文），各 Provider 共用。
  */
 export function quoteBlockToText(block: QuoteContent): string {
   return [
@@ -202,33 +152,15 @@ export function quoteBlockToText(block: QuoteContent): string {
   ].join('\n')
 }
 
-/**
- * 技能引用块标签：降级成文本时给模型看的字段名（模型可读，不是 UI 文案）
- *
- * 与 Rust 侧 `src-tauri/virlen-core/src/agent/provider.rs` 的同名常量必须逐字一致
- * （铁律 1：TS / Rust 双引擎同语义），改文案要两边一起改。
- */
+/** 技能块标签：降级文本的字段名。与 Rust provider.rs 逐字一致。 */
 export const SKILL_BLOCK_LABEL = '[Skill]'
 export const SKILL_NAME_LABEL = 'Name'
 export const SKILL_DIR_LABEL = 'Directory'
 export const SKILL_CONTENT_LABEL = 'SKILL.md'
 
 /**
- * 技能引用块 → 发给 LLM 的文本形式
- *
- * 与 `quoteBlockToText` 一样由所有 Provider 共用，保证同一条消息在所有协议下对模型呈现完全一致。
- * **SKILL.md 全文原样带出**（这正是「引用技能」的语义），目录行让模型能顺着 `Directory` 用文件工具
- * 读取脚本等其它资源。
- *
- * ```
- * [Skill]
- * Name: my-skill
- * Directory: <技能目录绝对路径>
- * SKILL.md:
- * <SKILL.md 全文>
- * ```
- *
- * ⚠️ 四个字段恒定输出（缺失留空），不做条件拼接 —— 条件分支最容易让两侧输出差一个换行。
+ * 技能块 → 发给 LLM 的文本：SKILL.md 全文原样带出，目录行供模型读其它资源。
+ * 四个字段恒定输出（缺失留空），不做条件拼接 —— 条件分支最容易让两侧差一个换行。
  */
 export function skillBlockToText(block: SkillContent): string {
   return [
@@ -249,7 +181,7 @@ export interface Message {
   toolCallId?: string
   isError?: boolean
   elapsedMs?: number
-  /** 深度思考（reasoning）消耗的毫秒数，思考结束开始输出正文时确定 */
+  /** 思考消耗的毫秒数，思考结束开始输出正文时确定 */
   reasoningElapsedMs?: number
   uiData?: Record<string, any>
   timestamp: number
@@ -267,18 +199,13 @@ export interface TokenUsage {
   completionTokens: number
   totalTokens: number
   /**
-   * 缓存命中的输入 token（API 明确回报时才有）。
-   *
-   * 各家口径不同：OpenAI 兼容（含 DeepSeek）把它含在 `promptTokens` 里，Gemini 的
-   * `cachedContentTokenCount` 是其子集，Anthropic 的 `input_tokens` 本就不含缓存。账本写入时按
-   * provider 拉平（`domain/usage::ledgerTokensOf`），这里保持 API 原样供展示。
+   * 缓存命中的输入 token（API 回报时才有）。各家口径不同（OpenAI 含在 promptTokens 里，
+   * Anthropic 的 input_tokens 本就不含），账本写入时按 provider 拉平，这里保持原样。
    */
   cachedTokens?: number
   /**
-   * 缓存**写入**的输入 token（Anthropic 的 `cache_creation_input_tokens`；其余 provider 恒缺省）。
-   *
-   * ⚠️ 必须与 `cachedTokens` 分开：Anthropic 的缓存**读**按 0.1x 输入价、**写**按 1.25x 计费，
-   * 合成一个数就没法分别计价（写入会被当读取，那部分低估约 12.5 倍）。
+   * 缓存写入的输入 token（Anthropic 的 cache_creation_input_tokens，其余 provider 恒缺省）。
+   * 必须与 cachedTokens 分开：读 0.1x、写 1.25x 计费，合成就没法分别计价。
    */
   cacheWriteTokens?: number
 }
@@ -291,11 +218,8 @@ export interface Agent {
   identity: string
   defaultWorkspace: string
   /**
-   * 项目规则 / 记忆文件（相对工作目录的路径，默认 `AGENTS.md`）。
-   *
-   * 会话创建时若该文件存在，其内容会被注入系统提示词（快照进 `session.systemPrompt`）。
-   * 空串 = 不注入；文件不存在 / 超过 64 KB / 二进制或编码无法识别时静默跳过。
-   * 老数据没有该字段时按默认值 `AGENTS.md` 处理（见 `domain/agent/project-rules`）。
+   * 项目规则文件（相对工作目录的路径，默认 AGENTS.md）。会话创建时若存在则注入系统提示词；
+   * 空串 = 不注入。老数据缺省时按默认值处理。
    */
   projectRulesFile?: string
   defaultModel: {
@@ -333,7 +257,7 @@ export interface SessionParams {
   topP: number
   maxTokens: number
   stream: boolean
-  /** 会话级推理强度（覆盖 Provider 默认值），不设置则回退 Provider 默认值 */
+  /** 会话级推理强度（覆盖 Provider 默认值） */
   reasoningEffort?: string
 }
 
@@ -372,11 +296,7 @@ export type AgentEventType =
   | 'stream_end'
   | 'tool_call'
   /**
-   * 工具参数生成进度（载荷 `{ index, name, chars }`）。
-   *
-   * 引擎在**累积 tool 参数**期间不发任何其它事件（provider 的分片只进本地累积器），
-   * 长参数（如 `write_file` 写一篇文章）意味着数秒到数十秒的静默 —— 消费方用它把
-   * 「工作中」说清楚（桌面 / 手机 / 托盘）。见 `docs/phone-control-bridge.md` §27。
+   * 工具参数生成进度：引擎累积参数期间不发其它事件，长参数意味着长时间静默，消费方用它说明「工作中」。
    */
   | 'tool_progress'
   | 'user_interaction'
@@ -419,7 +339,7 @@ export function getLastSummaryMessageIndex(list: Message[]): number {
   return index
 }
 
-// ===== 版本更新相关 =====
+// 版本更新
 
 /** 支持的操作系统平台 */
 export type UpdatePlatform = 'windows' | 'macos' | 'linux' | 'android' | 'ios'

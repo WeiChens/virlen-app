@@ -1,13 +1,8 @@
-//! 系统托盘 — 关闭不退出 · 后台持续工作 · 完成提醒
+//! 系统托盘：关闭不退出 · 后台持续工作 · 完成提醒。
 //!
-//! 本模块是「关闭窗口 / 真正退出」两个动作的唯一权威：前端不做任何拦截，标题栏关闭按钮走的还是
-//! `window.close()` → `CloseRequested` → 在这里改成 `hide()`。
-//!
-//! 状态归属：业务状态（谁在工作 / 谁刚跑完）真源在前端 `sessionRuntimeState`，经 `commands` 增量
-//! 推送（引擎层零改动）；平台状态（窗口隐藏 / 退出中 / 托盘可用）真源在本模块。
-//!
-//! ⚠️ 托盘创建失败（Linux 缺 appindicator 等）时 `available=false`，`decide_close` 必须回退成
-//! 「真退出」—— 否则窗口被隐藏又没有托盘 = 用户看不见也退不掉。
+//! 「关闭窗口 / 真正退出」的唯一权威：CloseRequested 在这里改成 hide()，前端不拦截。
+//! 业务状态真源在前端（经 commands 推来），平台状态（隐藏 / 退出中 / 托盘可用）在本模块。
+//! 托盘创建失败时 available=false，decide_close 必须回退成真退出。
 
 pub mod commands;
 pub mod notify;
@@ -38,9 +33,8 @@ pub const MENU_QUIT: &str = "tray-quit";
 /// 托盘点击后通知前端「切到某个会话」（raw 事件，不进 AgentEventType 契约 —— 铁律 2）
 pub const EVENT_ACTIVATE: &str = "tray:activate-session";
 
-// 托盘菜单是原生菜单，Rust 侧没有语言资源 —— 这里的默认值是中文兜底，
-// 前端启动后会立刻用 `tray_sync_settings` 把 i18n 后的文案推来覆盖（见 `TrayLabels`）。
-// 数量用 `$__count__` 占位符（与前端 `tpl()` 的模板约定一致），替换在 Rust 侧做。
+// 原生菜单没有语言资源：这里是中文兜底，前端启动后用 tray_sync_settings 推 i18n 文案覆盖。
+// 数量用 `$__count__`（与前端 tpl() 约定一致），替换在 Rust 侧做。
 const DEFAULT_SHOW_TEXT: &str = "显示主窗口";
 const DEFAULT_QUIT_TEXT: &str = "退出 Virlen";
 const DEFAULT_STATUS_IDLE: &str = "空闲";
@@ -66,8 +60,7 @@ pub struct TrayState {
     pub(crate) close_to_tray: AtomicBool,
     /// 完成时是否提醒（Phase 2 由前端设置项推送）
     pub(crate) notify_on_complete: AtomicBool,
-    /// 「强制激活窗口」开关（前端设置项推送）—— 打开时窗口只要还在（只是失焦），
-    /// 就交给「强制激活」通道，不再推系统通知（见 `notify::decide_remind`）
+    /// 「强制激活窗口」：打开时窗口只要还在（只失焦），就走强制激活而不推系统通知
     pub(crate) force_window_active: AtomicBool,
     /// 托盘是否创建成功 —— 失败时「关闭窗口」必须回退成真退出
     pub(crate) available: AtomicBool,
@@ -113,10 +106,7 @@ impl Default for TrayState {
     }
 }
 
-/// 托盘 UI 文案
-///
-/// i18n 由**前端**负责（托盘菜单是原生菜单，Rust 侧没有语言资源）：
-/// 前端用 `t()` 翻译后整包推来，Rust 只负责在数量变化时替换 `$__count__`。
+/// 托盘 UI 文案。i18n 由前端负责（原生菜单），Rust 只在数量变化时替换 `$__count__`。
 #[derive(Debug, Clone)]
 pub struct TrayLabels {
     /// 菜单项「显示主窗口」
@@ -204,10 +194,7 @@ pub fn decide_close(state: &TrayState) -> CloseAction {
     }
 }
 
-/// 收到 `RunEvent::ExitRequested` 的语义（纯函数，便于单测）
-///
-/// - `code = Some(..)`：`app.exit()` / 系统关机注销 → **一律放行**，绝不能拦住关机；
-/// - `code = None`：所有窗口关闭触发的默认退出 → 隐藏模式下拦下来。
+/// `ExitRequested` 的语义：code=Some（app.exit / 关机）一律放行；code=None 且隐藏模式下拦下。
 pub fn decide_exit(code: Option<i32>, state: &TrayState) -> ExitAction {
     if code.is_none() && state.hide_mode() {
         ExitAction::Prevent
@@ -221,9 +208,7 @@ pub fn should_hide_on_close(app: &AppHandle) -> bool {
     decide_close(app.state::<TrayState>().inner()) == CloseAction::Hide
 }
 
-/// 所有窗口都已关闭时，是否拦下退出
-///
-/// 窗口已被销毁（不是 hide）时放行：拦下来也打不开窗口，只会留下僵尸进程。
+/// 所有窗口已关闭时是否拦下退出；窗口已被销毁则放行（拦下也打不开，只剩僵尸进程）。
 pub fn should_prevent_exit(app: &AppHandle, code: Option<i32>) -> bool {
     if decide_exit(code, app.state::<TrayState>().inner()) != ExitAction::Prevent {
         return false;
@@ -283,9 +268,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// 窗口事件入口（lib.rs 只做转发）
-///
-/// 「关闭 ≠ 退出」的唯一落点：拦住 `CloseRequested` 并 `hide()`（前端标题栏不用改）。
+/// 窗口事件入口（lib.rs 只做转发）：「关闭 ≠ 退出」的唯一落点。
 pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
         let app = window.app_handle();
@@ -299,7 +282,7 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
 
 /// 窗口刚被隐藏到托盘
 pub fn on_window_hidden(app: &AppHandle, reason: &str) {
-    // tooltip / 状态菜单刷新（空闲时 tooltip 会变成「已隐藏到托盘」提示）
+    // tooltip / 状态菜单刷新（空闲时 tooltip 变「已隐藏到托盘」）
     refresh_tray(app);
     crate::telemetry::track("tray.hide", json!({ "reason": reason }));
 }
@@ -317,16 +300,8 @@ pub fn show_main_window(app: &AppHandle, focus: bool) {
     refresh_tray(app);
 }
 
-/// 从「应用外部」把主窗口捞回来并聚焦
-///
-/// 两个调用方（都意味着「用户想看到窗口」）：第二个实例被启动（单实例插件已杀掉那个进程，见
-/// `lib.rs`）、macOS 重新打开（`RunEvent::Reopen`）。
-///
-/// 窗口可能藏在托盘里、被最小化、被盖住 —— `show_main_window` 三种都覆盖，顺带 `refresh_tray`
-/// 纠正 tooltip。
-///
-/// ⚠️ 「点击系统通知」不靠这里：Windows 的 toast 点击是进程内投递，由 `notify::show_owned` 自持
-/// handle 精确切到那条回复（见 `notify.rs`）；`activate_next_unread` 只作兜底。
+/// 从应用外部把主窗口捞回来并聚焦（第二个实例 / macOS Reopen）。
+/// 点击系统通知不走这里：toast 由 notify::show_owned 精确切到那条回复。
 pub fn activate_main_window(app: &AppHandle, reason: &str) {
     if app.try_state::<TrayState>().is_none() {
         return;
@@ -377,7 +352,7 @@ pub fn clear_attention(app: &AppHandle, session_id: Option<&str>) {
     refresh_tray(app);
 }
 
-/// 请求退出：有任务在跑时先二次确认（D2 决策，2026-09）
+/// 请求退出：有任务在跑时先二次确认。
 pub fn request_quit(app: &AppHandle) {
     let state = app.state::<TrayState>();
     if state.quitting.load(Ordering::SeqCst) {
@@ -389,7 +364,7 @@ pub fn request_quit(app: &AppHandle) {
         return;
     }
 
-    // 非阻塞 show：回调不在主线程，绝不能阻塞事件循环
+    // 非阻塞 show：回调不在主线程，不能阻塞事件循环
     let app_cb = app.clone();
     app.dialog()
         .message(format!(
@@ -417,31 +392,25 @@ fn quit_now(app: &AppHandle) {
     }
     let working = state.working.lock().unwrap().len();
     crate::telemetry::track("tray.quit", json!({ "working_count": working }));
-    // 托盘图标的销毁不在这里做：`app.exit()` 会发 `ExitRequested`，
-    // 由 `lib.rs` 在那个分支统一调 `destroy()`（这样「直接关窗退出」也走同一条清理路径）
+    // 托盘销毁不在这里：app.exit() 会发 ExitRequested，由 lib.rs 统一调 destroy()
     app.exit(0);
 }
 
-/// 销毁托盘图标 —— 退出前必调（`lib.rs` 的 `ExitRequested` / `Exit` 两处）
-///
-/// 不调会在 Windows 通知区域留下「幽灵图标」：图标挂在自己的 message-only window 上，Shell 不会
-/// 随进程退出清掉它，必须显式发 `NIM_DELETE`（底层是引用计数，`TrayState.tray` 与 tauri 资源表两份
-/// 引用构成引用环，`cleanup_before_exit` 清不掉 —— 两份都要丢）。
-///
-/// 幂等。副作用：`available` 置 false → 之后关闭窗口一律真退出。
+/// 销毁托盘图标 —— 退出前必调，否则 Windows 通知区留下幽灵图标（需显式 NIM_DELETE）。
+/// 幂等。副作用：available 置 false → 之后关闭窗口一律真退出。
 pub fn destroy(app: &AppHandle) {
     let state = app.state::<TrayState>();
     if !mark_destroyed(state.inner()) {
         return;
     }
-    // ① 我们的克隆；② 资源表里的那份（`remove_tray_by_id` 顺带把它从 tauri 的图标表摘掉）
+    // ① 我们的克隆；② 资源表里的那份（remove_tray_by_id 顺带从图标表摘掉）
     let ours = state.tray.lock().unwrap().take();
     let from_table = app.remove_tray_by_id(TRAY_ID);
-    // 菜单项句柄一并释放（`MenuItem` 的 Drop 会自己切回主线程，见 tauri `menu/mod.rs`）
+    // 菜单项句柄一并释放（MenuItem 的 Drop 会自己切回主线程）
     *state.status_item.lock().unwrap() = None;
     *state.menu_show.lock().unwrap() = None;
     *state.menu_quit.lock().unwrap() = None;
-    // 最后两份 Rc 在这里归零 → 发 NIM_DELETE + DestroyWindow
+    // 最后两份 Rc 归零 → 发 NIM_DELETE + DestroyWindow
     drop(ours);
     drop(from_table);
     crate::telemetry::track("tray.destroy", json!({ "reason": "app_exit" }));
@@ -477,10 +446,7 @@ fn apply_labels(state: &TrayState, patch: TrayLabelsPatch) {
     set_label(&mut labels.tooltip_unread, patch.tooltip_unread);
 }
 
-/// 把文案模板里的 `$__count__` 换成数量
-///
-/// 用与前端 `tpl()` 相同的占位符约定（铁律 7）：英文文案可以自由调语序，
-/// Rust 侧只做替换 —— 不需要第二套语言逻辑。
+/// 把文案模板里的 `$__count__` 换成数量（与前端 tpl() 同一约定，英文可自由调语序）。
 fn fill_count(tpl: &str, n: usize) -> String {
     tpl.replace("$__count__", &n.to_string())
 }
@@ -539,9 +505,7 @@ fn clear_attention_in(state: &TrayState, session_id: Option<&str>) {
     }
 }
 
-/// 取出「最早那条未读」并从队列清掉（含合并窗口记录）
-///
-/// 先放掉 `attention` 的锁再动 `notify_log`：`Mutex` 不可重入，复用 `clear_attention_in` 会死锁。
+/// 取最早一条未读并从队列清掉。先放 attention 锁再动 notify_log：Mutex 不可重入。
 fn take_earliest_unread(state: &TrayState) -> Option<String> {
     let id = {
         let mut list = state.attention.lock().unwrap();
@@ -550,21 +514,13 @@ fn take_earliest_unread(state: &TrayState) -> Option<String> {
         }
         list.remove(0)
     };
-    // 用户马上就会看到它了，清掉去重记录 ⇒ 下次完成能重新提醒
+    // 用户马上就会看到，清掉去重记录 ⇒ 下次完成能重新提醒
     state.notify_log.lock().unwrap().remove(&id);
     Some(id)
 }
 
-/// 切到指定会话：清掉它的未读 → 刷新托盘 → 通知前端
-///
-/// 事件本身是 raw 事件（与 `pty_*` 同类），**不进 `AgentEventType`**（铁律 2）；
-/// 前端在 `tray-service` 里只改 `chatState.currentSessionId`，
-/// 消息懒加载由 `chat-view` 的外部入口兜底 effect 接住。
-///
-/// 两个调用方：
-/// - **点击系统通知**（`notify::show_owned`）—— 它知道自己对应哪个 `sessionId`，
-///   所以能**精确**回到那条回复；
-/// - 托盘左键 / 第二个实例 / macOS Reopen —— 拿不到会话 id，只能取「最早那条未读」。
+/// 切到指定会话：清未读 → 刷新托盘 → 发 raw 事件（不进 AgentEventType）。
+/// 前端在 tray-service 里只改 currentSessionId，消息懒加载由 chat-view 兜底。
 pub(crate) fn activate_session(app: &AppHandle, session_id: &str, reason: &str) {
     clear_attention_in(app.state::<TrayState>().inner(), Some(session_id));
     refresh_tray(app);
@@ -572,10 +528,7 @@ pub(crate) fn activate_session(app: &AppHandle, session_id: &str, reason: &str) 
     crate::telemetry::track("tray.activate_session", json!({ "reason": reason }));
 }
 
-/// 有未读就切到最早那条（返回是否切了）
-///
-/// 用于**拿不到会话 id** 的唤起入口：托盘左键单击、第二个实例被拦下、macOS 点 Dock。
-/// 「点击系统通知」不走这里（它精确知道是哪个会话）。
+/// 有未读就切到最早那条（返回是否切了）。用于拿不到会话 id 的唤起入口。
 fn activate_next_unread(app: &AppHandle, reason: &str) -> bool {
     let state = app.state::<TrayState>();
     let Some(session_id) = take_earliest_unread(state.inner()) else {
@@ -601,7 +554,7 @@ fn on_tray_left_click(app: &AppHandle) {
     let (visible, focused) = window_focus(app);
 
     if visible && focused {
-        // 已经在前台 → 最小化（托盘图标的常见 toggle 行为）
+        // 已经在前台 → 最小化（托盘图标的 toggle 行为）
         if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
             let _ = window.minimize();
         }
@@ -641,7 +594,7 @@ pub fn refresh_tray(app: &AppHandle) {
         labels.status_idle.clone()
     };
 
-    // 先取句柄、放锁，再调 UI：非主线程调 `set_tooltip` / `set_text` 会切主线程阻塞，持锁会互锁
+    // 先取句柄、放锁，再调 UI：非主线程调 set_tooltip / set_text 会切主线程阻塞，持锁会互锁
     let tray = state.tray.lock().unwrap().clone();
     let status_item = state.status_item.lock().unwrap().clone();
     let menu_show = state.menu_show.lock().unwrap().clone();
@@ -680,11 +633,8 @@ pub fn refresh_tray(app: &AppHandle) {
     }
 }
 
-/// 在工作区图标右下角叠一个红点 —— 托盘上「有新回复」的可见提示
-///
-/// Phase 1 零美术资源：直接改 RGBA 像素（Phase 3 再换正式的两态图标）。
-///
-/// 参数必须是 `&'a Image<'a>`：`Image::rgba()` 只对「引用与其 lifetime 参数一致」的值可调用。
+/// 在工作区图标右下角叠红点（直接改 RGBA 像素）。
+/// 参数必须是 &'a Image<'a>：Image::rgba() 只对「引用与 lifetime 参数一致」的值可调用。
 fn icon_with_dot<'a>(base: &'a Image<'a>) -> Image<'static> {
     let (w, h) = (base.width(), base.height());
     let mut rgba = base.rgba().to_vec();
@@ -705,7 +655,7 @@ fn icon_with_dot<'a>(base: &'a Image<'a>) -> Image<'static> {
     Image::new(&rgba, w, h).to_owned()
 }
 
-/// 复制一份像素，得到 `Image<'static>`（可长期存在 `TrayState` 里）
+/// 复制一份像素得到 Image<'static>（可长期存在 TrayState 里）
 fn snapshot_icon<'a>(icon: &'a Image<'a>) -> Image<'static> {
     Image::new(icon.rgba(), icon.width(), icon.height()).to_owned()
 }
@@ -724,7 +674,7 @@ mod tests {
 
     #[test]
     fn close_action_truth_table() {
-        // 只有「托盘可用 + 开关打开 + 不在退出」才隐藏
+        /// 只有「托盘可用 + 开关打开 + 不在退出」才隐藏
         assert_eq!(decide_close(&state(true, true, false)), CloseAction::Hide);
         assert_eq!(decide_close(&state(true, true, true)), CloseAction::Exit);
         assert_eq!(decide_close(&state(true, false, false)), CloseAction::Exit);

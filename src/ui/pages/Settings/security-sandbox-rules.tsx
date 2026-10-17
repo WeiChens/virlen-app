@@ -1,12 +1,9 @@
 /**
- * security-sandbox-rules — 安全菜单 · 「忽略沙盒命令」Tab
+ * 安全菜单 · 「忽略沙盒命令」页签。
  *
- * 维护一组「命中即强制以『不使用沙盒』方式执行」的命令规则：命中后免去「沙盒脱壳」授权，引擎直接
- * 把命令改为无沙盒执行（AI 不必显式传 `sandbox:"off"`）。匹配逻辑只有一份，在
- * `@/domain/security/sandbox-ignore-rules`（Rust 与 CLI 的判定在同一份 golden 契约下收敛）。
- *
- * ⚠️ 规则只免除「沙盒脱壳」授权：命令本身的风险审批仍按「权限管理」的三态设置走；`deny` 与只读
- * 沙盒不受规则影响。列表顺序即优先级，从上到下取第一条命中的启用规则，故提供上移 / 下移。
+ * 规则命中后免去「沙盒脱壳」授权，引擎直接改为无沙盒执行。匹配逻辑只有一份（domain/security/sandbox-ignore-rules）。
+ * ⚠️ 规则只免除脱壳授权：命令本身的风险审批仍按「权限管理」三态走，deny 与只读沙盒不受影响。
+ * 列表顺序即优先级，所以提供上移 / 下移与拖拽。
  */
 import { useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -56,9 +53,7 @@ const TEXT_MODE_LABELS: Record<SandboxTextMode, string> = {
 }
 
 /**
- * 列表徽标的短标签。
- * 列表行可用宽度只有 ~450px，按全称渲染三个徽标会把规则名挤到只剩两三个字 —— 列表里合并成一个
- * 「文本 · 前缀」徽标，完整选项名只在空间充足的编辑弹窗出现。
+ * 列表徽标的短标签。列表行可用宽度只有 ~450px，全称会把规则名挤没。
  */
 const KIND_SHORT_LABELS: Record<SandboxRuleKind, string> = {
   text: '文本',
@@ -73,8 +68,7 @@ const TEXT_MODE_SHORT_LABELS: Record<SandboxTextMode, string> = {
 }
 
 /**
- * 列表徽标文案：文本规则带上比较方式（如「文本 · 前缀」），其余只显示类型。
- * 拼成一个字符串再渲染（而不是相邻文本节点）—— SSR / 测试拿到的 markup 更干净。
+ * 列表徽标文案：文本规则带上比较方式，其余只显示类型。拼成一个字符串再渲染，markup 更干净。
  */
 function kindBadgeLabel(rule: SandboxIgnoreRule): string {
   const kind = t(KIND_SHORT_LABELS[rule.kind])
@@ -84,13 +78,11 @@ function kindBadgeLabel(rule: SandboxIgnoreRule): string {
   return `${kind} · ${t(mode)}`
 }
 
-/** 位移死区：小于它仍按点击处理（与 `chat/.../use-tree-drag.ts` 同一定值） */
+/** 位移死区：小于它仍按点击处理（与目录树拖拽同一定值） */
 const DRAG_THRESHOLD = 4
 
 /**
- * 拖拽会话（不参与渲染的部分）。
- * 行几何在按下时测一次就缓存：行高不固定（匹配内容是 1~2 行裁剪），拖拽期间又禁止滚动，
- * 所以缓存值整个会话都有效。
+ * 拖拽会话（不参与渲染）。行几何在按下时测一次就缓存：行高不固定，拖拽期间又禁止滚动。
  */
 interface DragSession {
   id: string
@@ -167,8 +159,7 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
   }
 
   /**
-   * 删除规则必须二次确认：被删的可能是一条写了十几行的 JS 规则，而设置项没有草稿 / 撤销 /
-   * 回溯，误点一下内容就永久丢了 —— 与其它设置页的危险操作同一口径。
+   * 删除规则必须二次确认：设置项没有草稿 / 撤销，误点一下写了十几行的 JS 规则就永久丢了。
    */
   async function removeRule(rule: SandboxIgnoreRule) {
     const ok = await MessageBox.warn(
@@ -182,11 +173,7 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
   }
 
   /**
-   * 开始拖拽排序。
-   *
-   * 用 **pointer 事件**而非 HTML5 drag & drop：窗口开了原生拖放（`dragDropEnabled: true`，
-   * AGENTS §11.8），页面收不到 drop / dragover —— 同 `chat/.../use-tree-drag.ts`。差别：规则列表
-   * 通常只有几条（非虚拟列表），拖动过程直接走 React state，不做 DOM 直改。
+   * 开始拖拽排序。用 pointer 事件而非 HTML5 drag & drop：窗口开了原生拖放，页面收不到 drop / dragover。
    */
   function handleGripPointerDown(
     e: React.PointerEvent<HTMLElement>,
@@ -216,7 +203,7 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
       moved: false,
       to: index,
     }
-    // 指针捕获：指针移出把手（甚至移出列表）后仍能收到 move / up
+    // 指针捕获：指针移出把手后仍能收到 move / up
     e.currentTarget.setPointerCapture(e.pointerId)
   }
 
@@ -285,11 +272,8 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
   }
 
   /**
-   * 切换匹配方式：**匹配内容回归该方式的默认值**。
-   *
-   * 文本 / 正则的写法塞进 JS 规则（反之亦然）只会得到一条永远报错或永远不命中的规则，与其让
-   * 用户自己清空，不如切换时换成新方式的起点（JS 预填带注释的函数模板）。点当前已选中的方式
-   * 不重置，避免手滑清掉已写内容；「比较方式」（完全 / 前缀 / 后缀）只改比较口径，不动匹配内容。
+   * 切换匹配方式：匹配内容回归该方式的默认值。
+   * 文本 / 正则的写法塞进 JS 规则只会得到永远报错或不命中的规则。点当前已选中的不重置。
    */
   function changeKind(kind: SandboxRuleKind) {
     if (!draft || draft.kind === kind) return
@@ -311,8 +295,7 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
       showToast(t('匹配内容不能为空'))
       return
     }
-    // 只校验能否「编译」（正则非法 / JS 语法错误）：规则体**不执行** ——
-    // 运行期报错在生产里按「未命中」处理，不应拦住保存（见 compileSandboxRule）
+    // 只校验能否编译（正则非法 / JS 语法错误）：规则体不执行，运行期报错按「未命中」处理
     const compileError = compileSandboxRule(draft)
     if (compileError) {
       showToast(
@@ -334,7 +317,7 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
           : t('命令结尾，例如：--version')
       : t('正则源码，例如：^npm (run )?(install|test)\\b')
 
-  /** 名称与匹配内容都非空才允许保存（置灰 + title 说明原因，比点完只弹 toast 更早一步） */
+  /** 名称与匹配内容都非空才允许保存（置灰 + title 说明原因） */
   const canSave = !!draft && !!draft.name.trim() && !!draft.pattern.trim()
 
   return (
@@ -436,8 +419,7 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
                   <DragSvg />
                 </span>
               ) : (
-                /* 只有一条规则时无从排序：留等宽占位保持左对齐，
-                   但不做成可拖 / 可聚焦的控件（否则多一个死的 Tab 停靠点） */
+                /* 只有一条规则时无从排序：留等宽占位保持左对齐，但不做成可聚焦的控件 */
                 <span className="rule-grip-spacer" aria-hidden="true" />
               )}
 
@@ -571,7 +553,7 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
                 <span className="form-label">
                   {draft.kind === 'js' ? t('JS 函数体') : t('匹配内容')}
                 </span>
-                {/* 默认模板已预填，改乱了想从头开始的退路（内容已变才出现） */}
+                {/* 默认模板已预填，改乱了想从头开始的退路 */}
                 {draft.kind === 'js' &&
                   draft.pattern !== SANDBOX_JS_DEFAULT_PATTERN && (
                     <button className="link-btn" onClick={resetJsPattern}>

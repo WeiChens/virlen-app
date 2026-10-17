@@ -1,13 +1,9 @@
 /**
- * Rust 引擎适配器 — 实现 AgentEnginePort（与已移除的 TS AgentEngine 同接口）。
+ * Rust 引擎适配器（实现 AgentEnginePort）。chat-service 无感知调用，事件契约与 agent:event 一致。
+ * 工具执行 / 用户交互 / Gemini 走双向桥回 JS；原生 OpenAI / Anthropic 由 Rust 直调 HTTP。
  *
- * chat-service 无感知调用（getEngine() 恒返回本适配器）；事件契约与 Rust emit 的 agent:event 一致；
- * 工具执行 / 用户交互 / Gemini Provider 走双向桥回 JS，原生 OpenAI / Anthropic 由 Rust 直接 HTTP 调用。
- *
- * 桥协议（对应 src-tauri/virlen-core/src/agent/bridge.rs）：
- * - Rust → JS: agent:tool-request / agent:user-interaction-request / agent:provider-request
- * - JS → Rust: agent_tool_response / agent_user_interaction_response /
- *              agent_provider_stream_event / agent_provider_stream_done
+ * 桥协议：Rust → JS: agent:tool-request / user-interaction-request / provider-request；
+ * JS → Rust: agent_tool_response / agent_user_interaction_response / provider_stream_*。
  */
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
@@ -27,18 +23,17 @@ import { trackError, getSessionTrace } from '@/utils/telemetry'
 import { sanitizeLoneSurrogates } from '@/utils/text'
 import type { Message, Session } from '@/types'
 
-/** 会话级用户交互处理器（chat-service 注册，桥接层使用） */
+/** 会话级交互处理器（chat-service 注册） */
 type InteractionHandler = (
   type: string,
   data: Record<string, any>,
 ) => Promise<any>
 
-/** 轮次边界处理器（chat-service 注册）—— 返回要注入下一次 LLM 请求的消息 */
+/** 轮次边界处理器：返回要注入下一次 LLM 请求的消息 */
 type RoundBoundaryHandler = (sessionId: string) => Message[]
 
 /**
- * 会话级交互处理器。值里带**归属令牌**：注册方（每个 run 一次）持有它，注销时回传 ——
- * 防止交错的 run 互删处理器（见 `unregisterSessionToolHandler`）。
+ * 会话级交互处理器。值里带归属令牌：注销时必须回传，防止交错的 run 互删处理器。
  */
 const sessionHandlers = new Map<
   string,
@@ -47,8 +42,7 @@ const sessionHandlers = new Map<
 let roundBoundaryHandler: RoundBoundaryHandler | null = null
 
 /**
- * 注册轮次边界处理器。用注册而非直接 import services/todo-service：本模块已被 todo-service 引用
- *（isTauriAvailable），反向 import 会形成循环依赖。
+ * 注册轮次边界处理器（用注册而非 import：本模块已被 todo-service 引用，反向 import 会成环）。
  */
 export function setRoundBoundaryHandler(
   handler: RoundBoundaryHandler | null,
@@ -65,11 +59,9 @@ export function registerSessionToolHandler(
   return token
 }
 /**
- * 注销会话的交互处理器，返回的**归属令牌**必须原样回传。
- *
- * ⚠️ 为什么用令牌：原先只按 sessionId 注销，交错的 run（同会话重发、手机与桌面几乎同时发、暂停恢复）
- * 会互相删表 —— 先结束的把后一个的处理器删掉，后一个的 user_choice / 授权落到「无处理器」分支：
- * 用户什么都没看到，AI 却收到「用户取消」。传令牌做归属校验（已被顶替 → 不动作）；不传 = 无条件注销。
+ * 注销会话的交互处理器，归属令牌必须原样回传。
+ * 不用令牌时交错的 run（重发 / 手机与桌面同时发 / 暂停恢复）会互相删表：
+ * 先结束的把后一个的处理器删掉，用户没看到问题却收到「用户取消」。
  */
 export function unregisterSessionToolHandler(
   sessionId: string,
@@ -84,25 +76,16 @@ let bridgeStarted = false
 let bridgeStartPromise: Promise<void> | null = null
 
 /**
- * 当前命令的实时输出是否来自 PTY（伪控制台）。
- *
- * Windows 后端已把 execute_command 的 stdio 换成 ConPTY（docs/pty-research.md §8 Step 1），输出是带光标
- * 控制的 VT 流，须交给 xterm；其余平台仍走匿名管道 <pre>。这里只做「运行中」的平台预判，完成态以后端
- * 权威字段 uiData.pty 为准（伪控制台创建失败会降级回管道并下发 pty:false，UI 结束瞬间切回 <pre>）。
+ * 当前命令的实时输出是否来自 PTY：Windows 后端已换 ConPTY，其余平台仍走管道。
+ * 这里只做运行中预判，完成态以后端权威字段 uiData.pty 为准。
  */
 function ptyLiveEnabled(): boolean {
   return platformSnapshot() === 'windows'
 }
 
 /**
- * 注册「终止」入口：先按 toolCallId 杀运行中的命令，杀不到再退化为取消本次运行。
- *
- * ⚠️ `agent_kill_command` 只认「已经 spawn 并登记在运行中命令表」的命令：命令还卡在审批 / 沙盒准备
- * 阶段时它返回 `false`。前端原先静默吞掉 → 用户看到的就是「点了终止毫无反应、程序照旧」，而那种
- * 情况下唯一的出路本来就是取消 run（run 正卡在等交互，见 `bridge::request_user_interaction` 的取消
- * 分支）。因此 `false` 时补一次 `agent_cancel`，并把命中结果返回给调用方（按钮据此复位，不再骗人）。
- *
- * @returns `true` = 已请求杀进程；`false` = 命令不在运行中，已退化为取消本次运行
+ * 注册终止入口：先按 toolCallId 杀命令，杀不到（还在审批 / 沙盒准备）再退化为取消 run。
+ * @returns true = 已请求杀进程；false = 不在运行中，已退化为取消本次运行
  */
 function registerToolKill(
   toolCallId: string,
@@ -139,8 +122,7 @@ function ensureBridgeStarted(): Promise<void> {
     await listen('agent:user-interaction-request', (e) => {
       handleUserInteractionRequest(e.payload as any).catch(() => {})
     })
-    // Rust 在「工具回复后、下一次 LLM 请求前」回问：有没有要注入本次请求的消息
-    // （AI 回复期间用户已应用的任务清单变更）
+    // Rust 回问：工具回复后、下一次 LLM 请求前有没有要注入的消息
     await listen('agent:round-boundary', (e) => {
       handleRoundBoundary(e.payload as any).catch(() => {})
     })
@@ -159,8 +141,7 @@ function ensureBridgeStarted(): Promise<void> {
       const chunk =
         payload.stream === 'stderr' ? `[stderr] ${payload.chunk}` : payload.chunk
 
-      // Rust 引擎下前端没有走 JS executor，不会 register entry；
-      // 首次收到输出时注册带 kill 回调的 entry（对齐 JS 端 toolOutputStore.register）
+      // Rust 引擎下前端没走 JS executor，首次收到输出时注册带 kill 回调的 entry
       if (!toolOutputStore.get(payload.toolCallId)) {
         registerToolKill(
           payload.toolCallId,
@@ -170,8 +151,7 @@ function ensureBridgeStarted(): Promise<void> {
       }
       toolOutputStore.append(payload.toolCallId, chunk)
     })
-    // 命令开始执行时，Rust 下发本条命令的**实际**沙盒模式（运行中即可在终端 header 显示徽标）。
-    // 完成态以后端权威字段 `uiData.sandbox` 为准（见 TerminalBlock / XtermTerminal）。
+    // 命令开始执行时下发本条命令的实际沙盒模式（运行中即可显示徽标）
     await listen('agent:tool-env', (e) => {
       const p = e.payload as {
         sessionId: string
@@ -212,7 +192,7 @@ async function handleToolRequest(payload: {
     const result = await tool.executor(args, {
       sessionId,
       toolCallId,
-      // 取消由 Rust 层控制（Rust 在步骤间检查取消）
+      // 取消由 Rust 层控制（在步骤间检查）
       abortSignal: new AbortController().signal,
       // 支持 execute_command 回退到 JS 桥执行时也能推送实时输出
       write: (chunk: string) => {
@@ -238,8 +218,7 @@ async function handleToolRequest(payload: {
       payload: {
         __kind: 'error',
         message: e?.message || String(e),
-        // 失败也把结构化 uiData 带回 Rust（D2 失败侧；L6）——
-        // 没有它，中文界面下只能把模型侧英文错误文本直接贴给用户。
+        // 失败也把结构化 uiData 带回 Rust，否则中文界面下只能贴英文错误
         uiData: e instanceof ToolError ? e.uiData : undefined,
       },
     })
@@ -268,9 +247,7 @@ function serializeToolResult(result: any): Record<string, any> {
 }
 
 /**
- * 轮次边界回执：Rust 在「工具回复后、下一次 LLM 请求前」回问有没有要注入的消息。
- *
- * 无论成败都立即回执（失败回空数组），让 Rust 不再等待 —— 超时兜底在 Rust 侧。
+ * 轮次边界回执：无论成败都立即回执（失败回空数组），超时兜底在 Rust 侧。
  */
 async function handleRoundBoundary(payload: {
   requestId: string
@@ -291,17 +268,13 @@ async function handleRoundBoundary(payload: {
   }
   await invoke('agent_round_boundary_response', {
     requestId,
-    // 孤立代理（被截断的半个 emoji）经 JSON.stringify 会变成 `\ud83d`，Rust serde_json 要求代理对成对
-    // → 整个 invoke 直接失败（然后走 5s 超时）。注入内容含用户手写的任务正文，必须与发送消息同一条防线。
+    // 孤立代理经 JSON.stringify 会变半个代理，serde_json 要求成对 → invoke 直接失败，必须清洗
     payload: { messages: sanitizeLoneSurrogates(messages) },
   }).catch(() => {})
 }
 
 /**
- * 处理 Rust 发来的用户交互请求（提问 / 授权）。
- *
- * 导出仅为**单测**能直接驱动这条回执路径；真正的调用方是 `agent:user-interaction-request`
- * 监听器，前端其余部分不应主动调用。
+ * 处理 Rust 发来的用户交互请求。导出仅为单测能直接驱动这条回执路径。
  */
 export async function handleUserInteractionRequest(payload: {
   requestId: string
@@ -313,10 +286,8 @@ export async function handleUserInteractionRequest(payload: {
   const entry = sessionHandlers.get(sessionId)
   if (!entry) {
     /*
-     * ⚠️ 这里**不能**静默回 `cancelled`（2026-10 真机缺陷）：那会把「没人能应答」伪装成「用户取消」——
-     * Rust 侧据此把工具结果写成 `[User cancelled]`，AI 顺势跳过这一步，界面上不留任何痕迹，
-     * 用户与排查者都无从知道**这个问题从未被展示过**。
-     * 故：留痕（控制台 + 埋点 `error.bridge`）+ 回 `error`（作工具失败结果，消息流里看得见）。
+     * 不能静默回 cancelled：那会把「没人能应答」伪装成「用户取消」，AI 顺势跳过这一步，
+     * 界面上不留痕迹。故留痕 + 回 error（作为工具失败结果，消息流里看得见）。
      */
     console.warn(
       '[rust-engine] 收到用户交互请求，但该会话没有注册处理器 —— ' +
@@ -334,7 +305,7 @@ export async function handleUserInteractionRequest(payload: {
     await invoke('agent_user_interaction_response', {
       requestId,
       payload: {
-        // 给模型的英文说明（工具结果文案与 TS 引擎同口径：模型侧英文、UI 侧结构化）
+        // 给模型的英文说明（模型侧英文、UI 侧结构化）
         __kind: 'error',
         message:
           'Failed to ask the user: no interaction handler is attached to this session, ' +
@@ -357,10 +328,8 @@ export async function handleUserInteractionRequest(payload: {
       })
     } else if (e?.name === 'InteractionEnded') {
       /*
-       * 运行结束时被收敛（桌面点停止 / 手机取消或删除会话 / 引擎放弃这次交互请求）：
-       * **不是**用户点了取消。同上面那条「不许静默消费」的纪律 —— 如实回一条工具级失败
-       *（`__kind:'error'` 在三条交互路径上都映射成失败的工具结果，不会中断 run），
-       * 而不是伪装成 `[User cancelled]`。
+       * 运行结束时被收敛（桌面点停止 / 手机取消 / 引擎放弃）：不是用户点了取消。
+       * 同上面那条纪律 —— 如实回一条工具级失败，而不是伪装成 [User cancelled]。
        */
       await invoke('agent_user_interaction_response', {
         requestId,
@@ -445,17 +414,12 @@ async function handleProviderRequest(payload: {
 
 // Rust 引擎适配器
 
-/** 是否在 Tauri 环境（非 Tauri：浏览器 dev / vitest）。 */
+/** 是否在 Tauri 环境（非 Tauri：浏览器 dev / vitest） */
 export function isTauriAvailable(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
 
-/**
- * 解析工具定义（对齐 TS `#resolveToolDefs`）
- *
- * 异步：定义来自权威源（机制 C）—— Tauri 下首次读取可能要走一次 IPC
- * `cmd_list_tool_definitions`，调用方必须 await。
- */
+/** 解析工具定义（异步：定义来自权威源，Tauri 下首次可能走 IPC） */
 export async function resolveToolDefs(
   enableTools: boolean,
   session: Session,
@@ -467,7 +431,7 @@ export async function resolveToolDefs(
   return allToolDefs.filter((t) => session.allowedTools!.includes(t.name))
 }
 
-/** 解析 Provider 连接信息（前端持有 apiKey/baseUrl，传给 Rust） */
+/** 解析 Provider 连接信息（前端持有 apiKey / baseUrl，传给 Rust） */
 export function resolveProviderConnection(session: Session) {
   const providerCfg = settingsState.value.providers.find(
     (p) => p.id === session.providerConfigId,
@@ -482,9 +446,7 @@ export function resolveProviderConnection(session: Session) {
 }
 
 /**
- * 解析原生工具所需的安全配置（Rust 侧 native_tools 使用）
- * 与 securityService.resolveSafePath / securityPort.isPathAllowed 对齐。
- * 解析失败时返回 null → Rust 侧自动回退到 JS 桥执行工具。
+ * 解析原生工具所需的安全配置；失败返回 null → Rust 回退到 JS 桥执行。
  */
 export async function resolveSecurityConfig(
   session: Session,
@@ -501,16 +463,14 @@ export async function resolveSecurityConfig(
     }
     return {
       workspace,
-      // 权限三态表（终端命令 / 脚本执行）——取代旧的单一 approvalMode
+      // 权限三态表（终端命令 / 脚本执行）
       permissions: settingsState.value.permissions,
       skipDirs,
       blacklist: config.blacklist ?? [],
       whitelist: config.whitelist ?? [],
       skillsDir,
       sandboxMode: settingsState.value.sandboxMode ?? 'on',
-      // 「忽略沙盒命令」规则**全量**下发（与 permissions / blacklist 同一套做法）。
-      // 判定完全在 Rust 侧：text / regex 原生求值，js 交内嵌 QuickJS（S7）——
-      // 不再有 `sandbox_rule_check` 内部交互，也没有 IPC 往返。
+      // 规则全量下发，判定完全在 Rust 侧（text / regex / 内嵌 QuickJS），无 IPC 往返
       sandboxIgnoreRules: config.sandboxIgnoreRules ?? [],
     }
   } catch {
@@ -536,8 +496,7 @@ export const rustEngine: AgentEnginePort = {
     } = options
     const sessionId = session.id
 
-    // 注册用户交互处理器（供桥接层使用），并留下**本次 run 的归属令牌** ——
-    // 注销时回传它，否则交错的 run 会互相删表（见 `unregisterSessionToolHandler`）
+    // 注册交互处理器，并留下本次 run 的归属令牌（注销时回传，否则交错的 run 会互相删表）
     const handlerToken = onUserInteraction
       ? registerSessionToolHandler(sessionId, onUserInteraction)
       : null
@@ -548,8 +507,7 @@ export const rustEngine: AgentEnginePort = {
       unlisten = await listen('agent:event', (e) => {
         const payload = e.payload as { sessionId: string; event: any }
         if (payload.sessionId === sessionId) {
-          // Rust 原生 execute_command 执行完毕（tool_call 事件携带 result）时
-          // 清理实时输出缓存，避免 RunningOutput 残留
+          // tool_call 携带 result = 执行完毕，清理实时输出缓存
           if (payload.event?.type === 'tool_call') {
             const data = payload.event.data ?? {}
             const id = data.id
@@ -562,9 +520,7 @@ export const rustEngine: AgentEnginePort = {
                 data.name === 'execute_script') &&
               !toolOutputStore.get(id)
             ) {
-              // 工具刚宣布/即将执行：立即注册 kill 入口。
-              // Rust 原生 execute_command / execute_script 若长时间无输出（如 sleep、慢启动），
-              // 等第一条 agent:tool-output 才注册的话会一直没有「终止」按钮。
+              // 工具刚宣布即注册 kill 入口：无输出的长命令也要有「终止」按钮
               registerToolKill(id, data.name, sessionId)
             }
           }
@@ -577,8 +533,7 @@ export const rustEngine: AgentEnginePort = {
 
     try {
       await ensureBridgeStarted()
-      // 兜底防线：孤立代理（半 emoji）经 JSON.stringify 变 \ud83d，Rust serde_json 要求代理对成对
-      // → 整次 invoke 直接失败（报错只有列号，极难定位）。源头已改用 utils/text 安全截断，这里再兜一层（未命中零开销）。
+      // 兜底防线：孤立代理会让 serde_json 报错（只有列号，极难定位），源头已安全截断，这里再兜一层
       const safeSession = sanitizeLoneSurrogates(session)
       const safeMessages = sanitizeLoneSurrogates(messages)
       if (safeMessages !== messages || safeSession !== session) {
@@ -606,7 +561,7 @@ export const rustEngine: AgentEnginePort = {
       })
     } catch (e: any) {
       const msg = e?.message || String(e)
-      // 用户取消是预期操作（Rust 侧已正常返回，此处兜底），不应弹 error-banner
+      // 用户取消是预期操作，不应弹 error-banner
       if (/cancelled/i.test(msg)) return
       trackError('error.rust.command', msg, {
         traceId: getSessionTrace(sessionId),
@@ -618,8 +573,7 @@ export const rustEngine: AgentEnginePort = {
       onEvent?.({ type: 'error', error: msg })
     } finally {
       unlisten?.()
-      // 只注销**自己注册的那一次**：本 run 没注册（无 onUserInteraction）就什么都不做，
-      // 且已被别人顶替时也删不掉别人的处理器
+      // 只注销自己注册的那一次；已被别人顶替时也删不掉别人的处理器
       if (handlerToken) unregisterSessionToolHandler(sessionId, handlerToken)
     }
   },
@@ -654,11 +608,7 @@ export const rustEngine: AgentEnginePort = {
     allMessages: Message[],
     mode?: CompressMode,
   ): Promise<{ summary?: string; messages: Message[] }> {
-    // 统一到 core：与 CLI 共用 virlen_core::agent::compress（cmd_compress_context）。
-    // raw 纯本地渲染；ai 用原生 Provider（openai/anthropic）或桥接（gemini 经 agent:provider-request）。
-    // ⚠️ ai 模式请求形状由 core 决定（tool_choice=auto + 照常下发 tools、stream=false）：服务端对
-    // tool_choice=none 不渲染 tools 段落，前缀缓存会整段失效（详见 docs/AGENTS.md §11.30）；模型违约时 core 自回退 raw。
-    // 记账在后端（agent::usage::record_usage，kind="compress"）；落库（cmd_replace_session_messages）仍由 chat-service 负责。
+    // 统一到 core：与 CLI 共用 compress。记账在后端，落库（cmd_replace_session_messages）由 chat-service 负责。
     const result = await invoke<{ summary: string; message: Message }>(
       'cmd_compress_context',
       {
@@ -679,9 +629,7 @@ export const rustEngine: AgentEnginePort = {
     session: Session,
     messages: Message[],
   ): Promise<string> {
-    // 统一到 core：与 CLI 共用 virlen_core::agent::title（cmd_generate_title）。
-    // 记账在后端（agent::usage::record_usage，kind="title"）；落库（写回会话标题）仍由 chat-service 负责。
-    // 与正常聊天同一条 provider 通道（openai/anthropic 原生、gemini 经双向桥）。
+    // 统一到 core：与 CLI 共用 title。记账在后端，落库（写回标题）由 chat-service 负责。
     const provider = resolveProviderConnection(session)
     if (!provider) {
       throw new Error('会话没有可用的 Provider，无法生成标题')

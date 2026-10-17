@@ -1,19 +1,11 @@
 /**
- * 聊天输入框：自动高度 textarea，Enter 发送 / Shift+Enter 换行。
- * loading（AI 工作中）仍可输入文字 / 上传图片 / 语音 / 拖拽粘贴附件，但 Enter 改为换行（只有「发送」被禁，
- * 按钮变停止）；支持图片、文件（只记路径）、技能引用（挂 SKILL.md **全文快照**）与语音输入。
+ * 聊天输入框：自动高度 textarea，Enter 发送 / Shift+Enter 换行。AI 工作中仍可输入与上传附件，
+ * 只是 Enter 改为换行、发送按钮变停止。
  *
- * 取路径说明（拖拽 / 粘贴都必须落到真实路径）：
- * - 拖拽：tauri.conf.json 里 dragDropEnabled=true，页面收不到 HTML5 drop 事件 → 由原生拖放上报真实路径
- *   （Rust drag_drop 模块的自定义 OLE 目标，经 virlen:drag-drop 事件下发，比 Tauri 自带的更认 VS Code 等来源）。
- * - 粘贴：paste 事件只给 File（无磁盘路径），而 WebView2 里复制的文件往往连文本都拿不到 → 路径统一问原生剪贴板
- *   （`read_clipboard_file_paths`）；「从 uri-list 文本解析」只作非 Windows 的兜底。
- * - 两者都汇到 `acceptPaths`：图片读字节回到图片链路，其余进文件附件（只有路径）。
+ * 拖拽与粘贴都必须落到真实路径：拖拽走原生 OLE 上报（dragDropEnabled=true，页面收不到 HTML5 drop）；
+ * 粘贴问原生剪贴板（paste 事件只给 File，无磁盘路径）。两者汇到 acceptPaths。
  *
- * 状态 / 事件在同目录小文件：use-input-height、use-attachments、use-clipboard-files、
- * use-input-session-state、use-path-autocomplete-state、use-native-drag-drop、use-input-handlers；
- * 展示组件：working-indicator / attachment-strips / goal-input-row / input-toolbar。
- * 本文件保留：文本 / 高度 / 附件状态编排、键盘分发（`handleKeyDown`）、ref API、整体 JSX 拼接。
+ * 具体逻辑在同目录小钩子里，本文件只管编排、键盘分发与 JSX 拼接。
  */
 import {
   useState,
@@ -91,9 +83,8 @@ function ChatInput(
   const wrapperRef = useRef<HTMLDivElement>(null)
 
   /**
-   * 输入框右键菜单（剪切 / 复制 / 粘贴 / 全选）：自绘窗口全局禁用了浏览器原生右键菜单
-   * （`WindowLayout` 的 onContextMenu），而原生菜单里全是常用操作，只能自补。
-   * 菜单项渲染时现算（`editableMenuItems` 按选区 / 只读状态决定禁用态），关闭行为与贴边钳制交给共享组件。
+   * 输入框右键菜单（剪切 / 复制 / 粘贴 / 全选）：自绘窗口全局禁用了浏览器原生右键菜单，
+   * 而原生菜单里全是常用操作，只能自补。菜单项渲染时现算。
    */
   const inputMenu = useContextMenu<void>()
 
@@ -129,9 +120,7 @@ function ChatInput(
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [isDragOver, setIsDragOver] = useState(false)
 
-  /**
-   * 统一入口：一批真实路径 → 按类型分发（图片走原有上传链路：读字节→压缩→预览；其余只留路径）。
-   */
+  /** 统一入口：一批真实路径 → 图片读字节回图片链路，其余只留路径。 */
   const acceptPaths = useCallback(
     async (rawPaths: string[]) => {
       if (rawPaths.length === 0) return
@@ -180,8 +169,8 @@ function ChatInput(
   })
 
   /**
-   * 把「当前引用了哪些技能」发布给上层（侧边栏卡片据此高亮 / 再点取消）。
-   * 回调存 ref：父组件每次渲染都传新函数，用 ref 后这个 effect 只在 skills 真正变化时跑。
+   * 把「当前引用了哪些技能」发布给上层（侧边栏卡片据此高亮）。
+   * 回调存 ref：否则父组件每次渲染都传新函数，effect 会反复跑。
    */
   const onSkillsChangeRef = useRef(onSkillsChange)
   onSkillsChangeRef.current = onSkillsChange
@@ -192,7 +181,7 @@ function ChatInput(
   // 语音输入：识别结果追加到文本输入框
   const handleSpeechResult = useCallback((text: string) => {
     setValue((prev) => {
-      // 如果前一次有中间结果（含 ⋯），需要先回退
+      // 前一次有中间结果（含 ⋯）时先回退
       const base = prev.includes('⋯') ? prev.split('⋯')[0] : prev
       return base + text
     })
@@ -265,8 +254,8 @@ function ChatInput(
       }
     },
     /**
-     * 添加一条引用（消息气泡的「引用」按钮调用）。与 setText 不同：**不**因 loading 而忽略 ——
-     * 引用不改草稿文本，AI 工作中也能先摆好引用条；真正的发送拦截在发送按钮 / handleSend。
+     * 添加一条引用。与 setText 不同：不因 loading 而忽略 —— 引用不改草稿文本；
+     * 真正的发送拦截在发送按钮 / handleSend。
      */
     addQuote: (quote: QuoteAttachment) => {
       if (disabled) return
@@ -277,16 +266,12 @@ function ChatInput(
         })
       }
     },
-    /**
-     * 按路径挂附件（侧边栏目录树 → 输入框）：复用 `acceptPaths`，与「从系统拖文件进来」完全同一条路。
-     */
+    /** 按路径挂附件：复用 acceptPaths，与「从系统拖文件进来」同一条路。 */
     attachPaths: (paths: string[]) => {
       if (disabled) return
       void acceptPaths(paths)
     },
-    /**
-     * 按技能名挂技能引用（侧边栏「技能」页签）：同 `attachPaths` 不受 loading 限制；读全文是异步的，失败由 hook 内部提示。
-     */
+    /** 按技能名挂技能引用；不受 loading 限制，读全文是异步的。 */
     attachSkills: (names: string[]) => {
       if (disabled) return
       void addSkills(names)
@@ -296,7 +281,7 @@ function ChatInput(
         })
       }
     },
-    /** 取消引用（同步操作，不需要聚焦也不受 disabled 限制） */
+    /** 取消引用（同步，不需要聚焦也不受 disabled 限制） */
     detachSkills: (names: string[]) => {
       removeSkillsByName(names)
     },
@@ -307,7 +292,7 @@ function ChatInput(
     if (!disabled) textareaRef.current?.focus()
   }, [disabled])
 
-  // 自动高度（仅增高不缩矮，保留用户手动拉伸）；有固定高度时由 flex 布局接管
+  // 自动高度（仅增高不缩矮，保留用户手动拉伸）；有固定高度时由 flex 接管
   useEffect(() => {
     if (wrapperHeight) return
     const el = textareaRef.current
@@ -351,7 +336,7 @@ function ChatInput(
       }
     }
 
-    // Ctrl+V / Cmd+V：只登记「这一轮要做原生兜底」，不拦默认粘贴（见 scheduleClipboardFileFallback）
+    // Ctrl+V：只登记「这一轮要做原生兜底」，不拦默认粘贴
     if (
       (e.ctrlKey || e.metaKey) &&
       !e.shiftKey &&
@@ -362,14 +347,14 @@ function ChatInput(
     }
 
     if (e.key === 'Enter' && !e.shiftKey) {
-      // AI 工作中 / 上下文压缩中：不拦截回车，交给默认行为插入换行（此时也禁止发送）
+      // AI 工作中 / 压缩中：不拦截回车，交给默认行为插换行
       if (loading || compacting) return
       e.preventDefault()
       handlers.handleSend()
       return
     }
 
-    // 输入框为空时，Backspace 依次撤销最后添加的附件（引用 → 文件 → 图片，与附件条视觉顺序一致）
+    // 输入框为空时，Backspace 依次撤销最后添加的附件（引用 → 文件 → 图片）
     if (e.key === 'Backspace' && !value) {
       if (quotes.length > 0) {
         e.preventDefault()
@@ -435,8 +420,7 @@ function ChatInput(
     return () => clearInterval(timer)
   }, [])
 
-  // 工作中指示器文案：压缩优先（它是一次明确的长任务），否则用业务侧写入的 loadingText；
-  // 单一文案来源 —— 两者同时为真时只展示一个状态
+  // 工作中指示器：压缩优先（明确的长任务），否则用业务侧写入的 loadingText（只展示一个状态）
   const workingText = compacting
     ? t('上下文压缩中')
     : chatState.value.loadingText || t('正在工作中')
@@ -448,12 +432,11 @@ function ChatInput(
         <WorkingIndicator workingText={workingText} compacting={compacting} />
       )}
 
-      {/* 输入区内容自上而下 = 附件条 / 目标行 / textarea / 工具条。盒子不写死高度，且「用户拖拽的高度」
-          只作用在 textarea + 工具条 → 附件再多也只会把盒子往上撑，不会从工具条抢空间。 */}
+      {/* 输入区自上而下 = 附件条 / 目标行 / textarea / 工具条。拖拽高度只作用于 textarea + 工具条。 */}
       <div
         ref={wrapperRef}
         className={`input-wrapper ${isDragOver ? 'drag-over' : ''} ${wrapperHeight ? 'has-fixed-height' : ''} ${isResizingState ? 'resizing' : ''}`}
-        // 侧边栏目录树按此标记找落点（见 sidebar/use-tree-drag.ts）：带它的元素才接收「拖进来的文件」
+        // 侧边栏目录树按此标记找落点：带它的元素才接收「拖进来的文件」
         data-file-drop-zone="true"
         onDragOver={handlers.handleDragOver}
         onDragLeave={handlers.handleDragLeave}
@@ -529,7 +512,7 @@ function ChatInput(
           ref={textareaRef}
           value={value}
           style={{
-            // 拖拽给的是「输入区」整体高度，textarea 拿走扣掉固定占用的部分
+            // 拖拽给的是输入区整体高度，textarea 拿走扣掉固定占用的部分
             height: wrapperHeight
               ? wrapperHeight - INPUT_CHROME_HEIGHT + 'px'
               : undefined,
@@ -562,8 +545,7 @@ function ChatInput(
           onKeyDown={handleKeyDown}
           onPaste={handlers.handlePaste}
           onContextMenu={(e) => {
-            // 硬禁用时不开菜单：控件已被 disabled，剪切 / 粘贴都无处落脚
-            // （AI 工作中不算硬禁用 —— 仍可继续打字，只是不能发送）
+            // 硬禁用时不开菜单：剪切 / 粘贴都无处落脚（AI 工作中不算硬禁用）
             if (disabled) return
             inputMenu.openAt(e, undefined)
           }}
@@ -576,7 +558,7 @@ function ChatInput(
               : placeholder
           }
           disabled={
-            // 仅“硬禁用”时才禁用输入框；AI 工作中（loading）仍可继续输入，只是不能发送
+            // 硬禁用时才禁用输入框；AI 工作中仍可继续输入，只是不能发送
             disabled
           }
         />
@@ -607,7 +589,7 @@ function ChatInput(
           onMessagesUpdate={onMessagesUpdate}
         />
 
-        {/* 输入框右键菜单：经 createPortal 挂 body（消息列表祖先带 transform/overflow，fixed 会被牵连） */}
+        {/* 输入框右键菜单（portal 挂 body） */}
         {inputMenu.state && (
           <ContextMenu
             position={inputMenu.state.position}

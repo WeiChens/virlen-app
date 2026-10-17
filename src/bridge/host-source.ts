@@ -1,9 +1,6 @@
 /**
- * 电脑侧真实 HostDataSource —— 把手机 RPC 落到本机 sessionStore / chat-service。
- *
- * 与 virlen-remote/testing 的 mock 宿主**共用同一份分发胶水**（registerHostHandlers），本文件只管
- *「数据从哪来」与「ACL / 审计」：读走 sessionStore + 白名单投影（dto.ts）；写转发 chat-service
- *（sendMessage 的**唯一入口**，杜绝旁路写 store）；事件不在本文件推 —— 由 store-bridge.ts 用 mobx reaction。
+ * 电脑侧真实 HostDataSource：把手机 RPC 落到 sessionStore / chat-service。
+ * 读走 sessionStore + 白名单投影；写一律走 chat-service；事件由 store-bridge 推。
  */
 import {
   BridgeError,
@@ -76,27 +73,14 @@ import type { InteractionRegistry } from './interaction-registry'
 import { DEFAULT_DEVICE_NAME, normalizeDeviceName, type PairingStore } from './pairing'
 import type { SubscriptionRegistry } from './subscription'
 
-/**
- * 一次 `host.hello` 的结论 —— **链路级的授权事实**。
- *
- * 谁关心它：
- *  - `startPhoneBridge` 的握手闸门（`requireAuthorization`）：`ok` 之前，`host.*` 一律拒；
- *  - `PhoneControlService`：`ok` 才算「手机已连上」（设置页的状态胶囊据此变色）。
- *
- * 为何单独上报而不是让服务自己看链路状态：**链路通 ≠ 授权通过** —— WebRTC 建起来只说明
- * 有人进了房间（房间号由设备 key 派生，被移除的手机也进得来），而真正的「这是谁、准不准」
- * 只发生在 `hello` 里。
- */
+/** 一次 host.hello 的结论，链路级的授权事实：ok 之前 host.* 一律拒。 */
 export type HelloOutcome =
   | { ok: true }
   | { ok: false; reason: CredentialRejectReason | 'denied' | 'ticket-expired' }
 
 /**
- * 会话域的 `HostDataSource` —— 就是移除「§37 文件六件套」后的那一份。
- *
- * 为何要单独一个类型（而不是继续返回完整的 `HostDataSource`）：文件接口层有自己的依赖
- * （磁盘 / 安全校验），装配点在 `bridge/index.ts`。让本函数**声明它不实现**文件方法，
- * 于是「漏拼一节」会在装配处直接报错，而不是等真机上手机点开文件面板才发现是空实现。
+ * 会话域的 HostDataSource（不含文件方法）；文件方法由 bridge/index.ts 装配。
+ * 用 Omit 声明是为了漏拼时在装配处报错，而不是真机上才发现是空实现。
  */
 export type DesktopHostSource = Omit<HostDataSource, keyof HostFiles>
 
@@ -105,70 +89,31 @@ export interface DesktopHostSourceDeps {
   acl: Acl
   audit: AuditLog
   subscriptions: SubscriptionRegistry
-  /** 待应答交互注册表（M4）—— 手机的回答由它校验并转发到电脑侧原有路径。 */
+  /** 待应答交互注册表：手机的回答由它校验并转发到电脑侧现有路径。 */
   interactions: InteractionRegistry
   deviceName: string
   deviceId: string
   /** 本机应用版本号（hello 应答用）。 */
   appVersion: string
   /**
-   * 首次绑定确认（拍板：扫码 → 尝试绑定 → **电脑弹窗确认**）。
-   * 票据首次兑换时调用；返回 false 则拒绝（`E_DENIED`）。
-   * 不传时默认放行（仅测试 / 无人值守场景；生产必须传）。
-   *
-   * ⚠️ `mobileName` 是**请求方（手机）**的名字（`host.hello` 的 `mobileName`），已按
-   * `normalizeDeviceName` 归一、缺省时回退 `DEFAULT_DEVICE_NAME` —— 与 `redeemTicket` 落进
-   * 配对表的那个名字**同源同规则**，于是「弹窗上显示的名字」与「随后列表里出现的名字」必然一致。
-   *
-   * 字段名**有意不叫 `deviceName`**：本文件的 `deps.deviceName` 是**本机（电脑）**的名字。
-   * 两个名字曾经同名，结果弹窗拿错了一个 —— 显示成「「Virlen 电脑」请求连接并操作本机」，
-   * 而事实是手机在请求。改名就是为了让这类错误在编译期不可能发生。
+   * 首次绑定确认（电脑弹窗）；返回 false 则拒绝。生产必须传，不传则默认放行。
+   * mobileName 是请求方（手机）的名字，与 redeemTicket 同一套归一规则。
    */
   confirmPair?: (ctx: { token: string; mobileName: string }) => Promise<boolean>
-  /**
-   * 手机在 `hello` 里声明的流式偏好（§32）；**只在握手成功的分支调**。
-   *
-   * 为何不在被拒时也调：拒绝不影响已经在链路上的那台手机（顶号前的旧连接），
-   * 而改掉它的流式偏好会让它莫名其妙地多收几帧整段正文。
-   */
+  /** 手机在 hello 里声明的流式偏好；只在握手成功时调。 */
   onStreamMode?: (mode: StreamMode) => void
   /**
-   * 当前**传输档位**（§33）：`lean` 时工具输出正文不下发（带 `detail:'omitted'` 标记）。
-   *
-   * 为何是函数：档位由链路类型决定，而链路类型会变（刚打通可能先走中继，打洞成功后换直连）——
-   * 每次拉取都重读，档位才能立刻跟上。不传 = `'full'`（旧行为，一个字节都不少发）。
+   * 当前传输档位：lean 时工具输出正文不下发。存为函数是因为链路类型会变，
+   * 每次拉取重读才能跟上。不传 = 'full'。
    */
   transferTier?: () => TransferTier
-  /**
-   * 手机在 `hello` 里是否声明了能渲染「正文被省略」的标记（`MESSAGE_DETAIL_CAPABILITY`）。
-   *
-   * 为何需要知道：**已部署的旧手机端不认 `detail` 字段**，会把被省略的正文显示成
-   * 「这次调用没有输出」—— 那是假话。所以对旧手机端必须继续全量发送（见 `startPhoneBridge`）。
-   *
-   * 与 `onStreamMode` 同理：**只在握手成功的分支调**（拒绝不该影响已经在链路上的那台手机）。
-   */
+  /** 手机是否声明了能渲染「正文被省略」标记；旧客户端不认，必须继续全量发。 */
   onDetailSupport?: (supported: boolean) => void
-  /**
-   * 某会话被加入订阅集合时回调（`subscribe` / `createSession` 两条路径）。
-   *
-   * store-bridge用它**重置该会话的流式基准**：新订阅者手上的正文从零开始，
-   * 沿用旧基准会发出 `offset` 对不上的增量（客户端得靠拉全文自纠）。
-   */
+  /** 会话被加入订阅集合时回调：store-bridge 据此重置该会话的流式基准。 */
   onSubscribe?: (sessionId: string) => void
-  /**
-   * 每次 `hello` 的结论（成功 / 因何被拒）。
-   *
-   * ⚠️ **三个分支都要报**（首次配对成功 / 用户拒绝 / 凭证或票据问题），缺一个就会出现
-   * 「链路已经建好、界面却说还在等待」或反之的状态谎报。
-   */
+  /** 每次 hello 的结论；三个分支（成功 / 用户拒 / 凭证或票据问题）都要报。 */
   onHelloResult?: (outcome: HelloOutcome) => void
-  /**
-   * 收到 `host.hello` **请求**的那一刻回调 —— 早于一切 `await`（首次配对的确认弹窗可能让人等几十秒）。
-   *
-   * 用途：电脑端据此**取消「链路已 open 却迟迟不握手」的兜底计时器**（见 `PhoneControlService`）——
-   * 只要对端发起了握手，就不该把它当成「开了链路却不说话的僵尸对端」踢掉；
-   * 与 `onHelloResult` 的区别是「收到」vs「出结论」，前者不能被确认弹窗的等待拖后。
-   */
+  /** 收到 hello 请求的那一刻回调，早于一切 await（确认弹窗可能等几十秒）。 */
   onHelloReceived?: () => void
 }
 
@@ -194,13 +139,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
     audit.record({ method, allowed: true, sessionId, detail })
   }
 
-  /**
-   * `host.session.send` 的审计说明：引用了多少条 / 附了几个文件（两者都为 0 = 普通一条，
-   * 不带 detail —— 与这行以前的行为一字不差）。
-   *
-   * 为何把两件事写成一句话：审计列表里要能一眼看出「这条消息带了什么」，
-   * 而不是翻两条记录去拼。
-   */
+  /** host.session.send 的审计说明：引用数 / 文件数，都为 0 则不带 detail。 */
   const sendAuditDetail = (quotes: number, files: number): string | undefined => {
     const parts: string[] = []
     if (quotes > 0) parts.push(`quotes=${quotes}`)
@@ -208,13 +147,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
     return parts.length ? parts.join(' ') : undefined
   }
 
-  /**
-   * 当前生效的传输档位（§33）。**每次拉取都读一次**，不缓存。
-   *
-   * 拉取（`host.session.messages` / `host.session.message.get`）必须与推送（`store-bridge`）
-   * 用同一个档位：否则会出现「推送省了、拉取又把全文补回来」的缝 —— 而重开会话（走拉取）
-   * 恰恰是本功能最常见的路径之一，缝一开就等于流量白省。
-   */
+  /** 当前生效的传输档位，不缓存：拉取必须与推送同档，否则会出现「推送省了、拉取补回来」。 */
   const currentTier = (): TransferTier => deps.transferTier?.() ?? 'full'
 
   /** 会话存在性检查（四个写操作共用，避免各写一份）。 */
@@ -224,20 +157,14 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
     }
   }
 
-  /**
-   * 新建会话可选的工作目录候选集（§22.3）。
-   *
-   * **全部来自电脑侧既有数据**（各会话的 workspace + 各 Agent 的 defaultWorkspace + 全局默认目录），
-   * 手机端只能从中选，不能构造新路径 —— 「不能让手机端创建没有过的目录」。
-   */
+  /** 新建会话可选的工作目录候选集：全部来自电脑侧现有数据，手机端只能选不能造。 */
   const collectWorkspaces = (): WorkspaceOptionDTO[] => {
     const counts = new Map<string, number>()
     for (const session of sessionStore.listSessions()) {
       const path = normalizeWorkspace(session.workspace)
       if (path) counts.set(path, (counts.get(path) ?? 0) + 1)
     }
-    // Agent 默认目录 / 全局默认目录也算「已有」——它们是电脑侧设置里的既有值
-    //（会话数为 0，恰好说明「有目录但还没建会话」，与「手机端凭空造目录」有本质区别）
+    // Agent 默认目录 / 全局默认目录也算「现有」（会话数 0 不代表没有）
     for (const agent of agentStore.listAgents()) {
       const path = normalizeWorkspace(agent.defaultWorkspace)
       if (path && !counts.has(path)) counts.set(path, 0)
@@ -282,12 +209,8 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
   }
 
   /**
-   * Agent 查找 + 校验（新建会话时手机指定归属 Agent）。
-   *
-   * ⚠️ **不看手机端显不显示选择器**（§7-⑪ 的教训）：候选集由 `host.agent.list` 给出，
-   * 这里再查一次表 —— 手机传一个不存在的 id（或本机已删掉的 Agent）一律拒。
-   * 权限也在这一层兜住：`session.agent` 是「换 systemPrompt / 工具白名单」的授权，
-   * 未授权的链路即便知道 id 也不能选。
+   * Agent 查找 + 校验。候选集由 host.agent.list 给出，这里再查一次表：
+   * 手机传不存在的 id 一律拒，权限（可换 systemPrompt / 工具白名单）也在这一层兜。
    */
   const requireAgent = (requested: string) => {
     acl.assert('session.agent')
@@ -305,41 +228,24 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
 
   return {
     async hello(params: HelloParams): Promise<HelloResult> {
-      // 先于一切 `await`：取消电脑端的「握手截止」兜底（首次配对可能弹窗等人）
+      // 先于一切 await：取消电脑端的握手截止兜底
       onHelloReceived?.()
       const token = params.token
       // 埋点参数摘要（与 `phone.rpc.call` 同一份口径）
       const helloProps = summarizeParams('host.hello', params)
       const verdict = pairing.authorize({ token, mobileKey: params.mobileKey })
-      // §32：手机声明的流式偏好（只在下面的成功分支落地生效）
+      // 手机声明的流式偏好（只在成功分支生效）
       const streamMode: StreamMode = params.streamMode === 'delta' ? 'delta' : 'full'
-      /*
-       * §33：手机是否声明了能渲染「正文被省略」的标记。
-       *
-       * 认的是一个**新名字**（`MESSAGE_DETAIL_CAPABILITY`）—— 旧版手机端的能力表里没有它，
-       * 这正是我们要的：老客户端自己说了「不懂这个」，电脑端就别裁剪（否则它的工具卡片会把
-       * 省略显示成「这次调用没有输出」）。
-       *
-       * 为何这里用能力名、而 §32 的流式偏好用的是参数：§32 避开能力名是因为旧客户端**声明了
-       * `stream.delta` 却没实现**（M3 就写进了能力表）—— 本能力名从未发布过，没有这种包袹，
-       * 而它表达的确是「我会什么」而不是「我这次要什么」。
-       */
+      /* 是否声明了能渲染 detail:'omitted'；新能力名，旧客户端不认就别裁剪。 */
       const detailSupported =
         Array.isArray(params.capabilities) && params.capabilities.includes(MESSAGE_DETAIL_CAPABILITY)
 
-      // ⚠️ 本工程 tsconfig 显式关了 `strictNullChecks`，于是**布尔判别字段的真值判断不收窄联合**
-      //（`if (verdict.ok)` 收窄不了，`if (verdict.ok === false)` 可以）—— 故这里一律写显式比较。
+      // tsconfig 关了 strictNullChecks：布尔判别字段的真值判断不收窄联合，一律显式比较
       if (verdict.ok === false) {
         // ── 首次配对：票据有效 → 桌面确认 → 签发凭证 ──
         if (verdict.reason === 'first-time') {
           const confirmStartedAt = Date.now()
-          /*
-           * 弹窗上要显示的是**手机**的名字 —— 手机在 `hello` 里自己报的那个（`mobileName`），
-           * 而不是本机的 `deviceName`。
-           *
-           * 归一 + 兜底必须与 `redeemTicket`（下面几行）**走同一套**：否则手机没报名字时
-           * （旧版手机），弹窗说「Virlen 手机」（兜底），列表里却是另一个名字。
-           */
+          /* 弹窗显示的是手机的名字，归一与兜底必须与 redeemTicket 同一套。 */
           const requesterName = normalizeDeviceName(params.mobileName) ?? DEFAULT_DEVICE_NAME
           const approved = confirmPair
             ? await confirmPair({ token: token as string, mobileName: requesterName })
@@ -364,13 +270,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
               name: params.mobileName,
             })
           } catch {
-            /*
-             * ⚠️ 票在**确认弹窗期间**失效了。两个真实场景：
-             *  - 用户对着弹窗想了超过 5 分钟（票的 TTL）；
-             *  - 期间用户到设置页把**另一台**手机移除了 —— `PairingStore.revoke` 会作废所有
-             *    未使用的票（被移除的那台可能正缓存着屏上那张票，不清就等于没移除）。
-             * 必须给手机「请重新扫码」，而不是把 `redeemTicket` 的裸 Error 漏成内部错误。
-             */
+            /* 票在确认弹窗期间失效：弹窗超过 TTL，或期间用户移除了另一台手机（revoke 会作废未使用的票）。 */
             onHelloResult?.({ ok: false, reason: 'ticket-expired' })
             audit.record({ method: 'host.hello', allowed: false, detail: '票据在确认期间失效' })
             track(PHONE_EVENTS.pairHello, { ...helloProps, ok: false, reason: 'ticket-expired' })
@@ -378,7 +278,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
               data: { reason: 'ticket-expired' },
             })
           }
-          // 票已兑换 + 凭证已签发 = 这台手机正式获权（闸门放行、界面显示「已连接」）
+          // 票已兑换 = 正式获权（闸门放行、界面显示「已连接」）
           onHelloResult?.({ ok: true })
           auditOp('host.hello', undefined, `platform=${params.client.platform} 首次配对：${device.name}`)
           track(PHONE_EVENTS.pairHello, {
@@ -395,7 +295,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
           return helloResult(params, { deviceName, deviceId, appVersion, acl, grant: grantOf(device) })
         }
 
-        // ── 拒绝：手机端据此给不同文案（重新扫码 / 已被移除 / 二维码过期）──
+        // ── 拒绝：手机端据此给不同文案 ──
         const message = describeReject(verdict.reason)
         audit.record({ method: 'host.hello', allowed: false, detail: message })
         track(PHONE_EVENTS.pairHello, { ...helloProps, ok: false, reason: verdict.reason })
@@ -430,17 +330,11 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
     async getMessages(params: MsgPageParams): Promise<MsgPageDTO> {
       acl.assert('session.list')
       requireSession(params.sessionId)
-      // §33：档位一次读到底（同一次应答不许一半精简一半完整）
+      // §33：档位一次读到底，同一次应答不许一半精简一半完整
       const tier = currentTier()
-      // 两阶段加载（`detail:'summary'`）：只发「摘要」投影（省掉工具输出 / 完整入参），
-      // 重字段由手机端随后再拉一次 full 按 id 补齐（见共享包 `MsgPageParams.detail`）
+      // 两阶段加载：summary 只发摘要投影，重字段由手机按 id 再拉 full
       const summary = params.detail === 'summary'
-      // ⚠️ 分页游标（M5）：
-      //  - 首页（无 `fromRowid`）：返回**已加载窗口的全部消息**（通常 = `MESSAGE_PAGE_SIZE`，工具调用密集时
-      //    会按「可见行」补足而更大）而非再 `slice` ——
-      //    游标（rowid）只对「已加载窗口的最旧一条」成立，若展示窗口更窄，游标会指向窗口**之外**
-      //    → 续页时漏掉中间消息（§20.2-A）。
-      //  - 续页（有 `fromRowid`）：走桌面既有的「向上回补一页」唯一入口 `loadOlderMessages`。
+      // 游标只对「已加载窗口最旧一条」成立；首页必须返回整个窗口，否则续页会漏消息
       if (params.fromRowid != null) {
         const before = getSessionMessages(params.sessionId)
         await sessionStore.loadOlderMessages(params.sessionId)
@@ -450,10 +344,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
         const paging = sessionStore.value.messagePaging[params.sessionId]
         auditOp('host.session.messages', params.sessionId, `older=${added.length}`)
         return {
-          /*
-           * 工具名 / 入参索引从**已加载窗口**构建：工具调用与它的结果总是相邻（同一轮对话），
-           * 跨页工具调用拿不到名字与入参时，手机端只显示工具名（不猜）
-           */
+          /* 工具名索引从整个已加载窗口建：跨页拿不到时手机端只显示工具名，不猜 */
           messages: added.map((m) =>
             toMessageDTO(m, buildToolCallIndex(after), tier, {
               sessionId: params.sessionId,
@@ -487,8 +378,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
       const found = loaded.find((m) => m.id === params.messageId)
       if (!found) throw new BridgeError('E_NOT_FOUND', `消息不存在：${params.messageId}`)
       auditOp('host.session.message.get', params.sessionId)
-      // 单条拉取与窗口拉取同档位：它在手机上只用于「流式接不上时拉全文对齐」
-      // （§32）——而那是 assistant 正文（不受精简影响），故此处裁到的只是工具消息
+      // 单条拉取与窗口拉取同档位；它只用于流式接不上时拉全文对齐
       return toMessageDTO(found, buildToolCallIndex(loaded), currentTier(), {
         sessionId: params.sessionId,
       })
@@ -498,22 +388,15 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
       acl.assert('session.send')
       requireSession(params.sessionId)
       // 并发保护：桌面端靠按钮禁用规避，手机是第二个操作源，必须由权威侧拦截。
-      // 判据含 `preparing`（见 sessionRuntimeStore）：桌面端刚点下发送、还在本地识别图片时，
-      // 这次发送**已经在途**，不能让手机插进来起第二个 run。只读不建条目。
+      // 判据含 preparing：桌面端刚点发送、还在本地识别图片时也算在途，不能让手机起第二个 run
       const busyRt = sessionRuntimeState.value.sessions[params.sessionId]
       if (busyRt && isSessionRuntimeBusy(busyRt)) {
         throw new BridgeError('E_BUSY', '该会话正在回复中，请稍后再试')
       }
       const before = new Set(getSessionMessages(params.sessionId).map((m) => m.id))
       /*
-       * 文件引用（§37）：手机端把文件面板里挑中的文件挂在消息上，这里把它组装成与**桌面输入框
-       * 同一条路径**的内容块（`buildUserContent` 的 files 位）—— 于是引擎 / 持久化 / 桌面渲染 /
-       * 导出全都与桌面拖一个文件进输入框完全一致（结构化 file 块）。
-       *
-       * 校验走**共享包**的 `sanitizeFileRefs`（与演示宿主同一份，不在这里另写一套）：
-       * ⚠️ 形状非法**拒整条**（不是丢掉那一条就照发）—— 丢一条时手机端 chip 还在、
-       * 用户会以为带上了，而 AI 从未看到（§36 引用那次踩过的坑）。被拒时**留痕**：
-       * 「发了但被拒」必须能在审计里查到原因。
+       * 文件引用：组装成与桌面输入框同一条路径的内容块（buildUserContent 的 files 位）。
+       * 校验走共享包的 sanitizeFileRefs；形状非法拒整条 —— 丢一条会让用户以为带上了。
        */
       const fileRefs = sanitizeFileRefs(params.files)
       if (!fileRefs.ok) {
@@ -526,39 +409,26 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
         throw new BridgeError('E_BAD_REQUEST', fileRefs.reason)
       }
       /*
-       * 引用（§36）与文件（§37）都走**结构化内容块**：手机端发 `quotes` / `files` 时，本条用户消息的
-       * content 不再是裸字符串，而是与桌面输入框同一条路径组装出来的内容块（`buildUserContent`）。
-       * 块顺序也由它定（quote → text → file），两端同构。
-       *
-       * ⚠️ 两者都没有时保持原来的 `params.text`（裸字符串）**不做任何变换**：
-       * 那条路径跑了几十个版本，没有理由因为本次改动把它换成 `[{type:'text'}]`。
+       * 引用与文件都走结构化内容块，顺序由 buildUserContent 定（quote → text → file）；
+       * 两者都没有时保持裸字符串，不做变换。
        */
       const content =
         params.quotes?.length || fileRefs.files.length
           ? buildUserContent(params.text, [], fileRefs.files, params.quotes)
           : params.text
       /*
-       * 与桌面「重新发送时清除当前会话的错误状态」（`chat-view.handleSend`）同构：
-       * 手机发新消息也是一次重试 —— 上一条错误必须在这里落下去。
-       *
-       * 为什么不能省：不清的话它会一直挂在会话运行时里，手机每次重开这个会话都会收到一份
-       * 带着旧错误的运行时快照（`storeBridge.pushRuntime`），用户看到一条永远关不掉的红条。
-       *
-       * ⚠️ 全局态只在「这条会话正是桌面当前会话」时才清 —— 否则会误清掉桌面上正在看的
-       * 另一个会话的错误条。
+       * 与桌面「重发时清除错误」同构：不清的话旧错误会随运行时快照反复推给手机。
+       * 全局态只在被操作的正是当前会话时清。
        */
       updateSessionRuntime(params.sessionId, { error: null })
       if (params.sessionId === chatState.value.currentSessionId) {
         chatState.setValue('error', null)
       }
-      // fire-and-forget：RPC 只回「投递确认」，过程由 store-bridge 经事件推（§3.3）
-      //
-      // ⚠️ 必须带最小 events（2026-09-27 真机反馈修复）：桌面端错误条由 `onError` 驱动，
-      //    缺省时手机触发的失败在电脑端**完全静默**（会话像「卡住」而无任何提示）。
-      //    消息镜像同步**不**依赖这里 —— 已由 `sessionStore.onMessagesChanged` 兜底。
+      // fire-and-forget：只回投递确认，过程由 store-bridge 推。
+      // 必须带 onError：桌面错误条由它驱动，缺省时手机触发的失败在电脑端完全静默
       void sendMessage(params.sessionId, content, {
         onError: (sid, error) => {
-          // 与桌面发送路径同构：写会话运行时（跨会话保留），当前会话再同步到全局态立即展示
+          // 与桌面发送同构：写会话运行时，当前会话再同步到全局态
           updateSessionRuntime(sid, { error })
           if (sid === chatState.value.currentSessionId) {
             chatState.setValue('error', error)
@@ -582,13 +452,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
       return { ok: true as const }
     },
 
-    /**
-     * 从暂停的 run 快照恢复执行（M5，与手机端「暂存」配对）。
-     *
-     * fire-and-forget：与 `send` 同理，RPC 只回投递确认，过程由 store-bridge 事件推。
-     * **不**在这里额外校验「是否暂停」—— 交给 `resumePausedRun` 自身（无快照时报「没有可恢复的暂停任务」），
-     * 避免出现第二条恢复路径（§3 原则）。
-     */
+    /** 从暂停快照恢复执行；fire-and-forget，是否暂停交给 resumePausedRun 自己判断。 */
     async resume(params: { sessionId: string }) {
       acl.assert('session.resume')
       requireSession(params.sessionId)
@@ -607,21 +471,21 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
     async subscribe(params: { sessionId: string }) {
       acl.assert('session.list')
       requireSession(params.sessionId)
-      // 复用「进入会话」的数据侧唯一入口（懒加载 / 修复 / 未读清除）
+      // 复用「进入会话」的唯一入口（懒加载 / 修复 / 未读清除）
       await activateSession(params.sessionId)
       subscriptions.add(params.sessionId, 'subscribe')
-      // §32：新订阅者的流式基准必须归零（它手上没有正文，旧基准对不上）
+      // 新订阅者手上没有正文，流式基准必须归零
       onSubscribe?.(params.sessionId)
       auditOp('host.session.subscribe', params.sessionId)
       return { ok: true as const }
     },
 
-    // M4 写操作（§16.1）
+    // M4 写操作
 
     async createSession(params: CreateSessionParams) {
       acl.assert('session.create')
       const title = (params.title ?? '').trim().slice(0, MAX_SESSION_TITLE_LEN)
-      // 工作目录：**候选集校验**（越权防线在电脑侧，不靠手机端不显示 —— §7-⑪ 的教训）
+      // 工作目录按候选集校验，不靠手机端不显示（越权防线在电脑侧）
       const workspace =
         params.workspace != null ? requireWorkspace(params.workspace) : undefined
       // 模型必须成对给出，且都在已启用服务的模型列表内
@@ -631,23 +495,11 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
         throw new BridgeError('E_BAD_REQUEST', '模型服务与模型 id 必须成对给出')
       }
       if (providerConfigId && modelId) requireModel(providerConfigId, modelId)
-      /*
-       * Agent：手机指定时才查表（不传 = 电脑侧默认 Agent，与桌面「直接新建」同构）。
-       * 校验放在接口层而不在 chat-service —— 候选集与权限都是「手机控制」这一层的事，
-       * 而 `chat-service.createSession` 还要服务桌面（桌面直接传 Agent 对象，本就无需查表）。
-       */
+      /* Agent 只在手机指定时查表（不传 = 电脑侧默认 Agent）；校验属于接口层，chat-service 还要服务桌面。 */
       const agent = params.agentId != null ? requireAgent(params.agentId) : undefined
-      // 走 chat-service 的 createSession（systemPrompt / Agent 默认值 / 工作目录的组装都在那里）
+      // 走 chat-service.createSession（systemPrompt / 默认值 / 工作目录的组装都在那里）
       const session = await createSession(title, providerConfigId, modelId, agent, workspace)
-      /**
-       * ⚠️ 手机自建的会话**立即纳入订阅集合**（2026-09-29 真机缺陷，§24）。
-       *
-       * 为什么必须在这里兜住：消息 / 流式 / 运行时 / 占用四条通道都只推「已订阅」的会话
-       * （见 `store-bridge` 的 `subscriptions.has(s.id)`），而**恒推**的只有会话列表 ——
-       * 于是「创建后没 subscribe」的客户端会出现最迷惑的现象：**标题更新了，消息永远空白**。
-       * 这条路径上手机端的意图是确定的（它创建会话就是为了马上发消息），
-       * 且旧版缓存 PWA 未必带得上手机侧的新逻辑 —— 订阅不该押在客户端记得调一次 RPC 上。
-       */
+      /** 手机自建的会话立即纳入订阅集合：否则会出现「标题更新了，消息永远空白」。 */
       subscriptions.add(session.id, 'create')
       onSubscribe?.(session.id)
       auditOp(
@@ -679,7 +531,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
 
     async deleteSession(params: DeleteSessionParams) {
       acl.assert('session.delete')
-      // ⚠️ 服务端**独立校验**（不依赖手机 UI 的二次确认）：不可逆操作，缺标记即拒（§16.3-3）
+      // 服务端独立校验，不依赖手机 UI 的二次确认
       if (params.confirm !== true) {
         audit.record({
           method: 'host.session.delete',
@@ -699,19 +551,8 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
     },
 
     /**
-     * 删除单条消息**及其之后的全部消息**（截断）—— 与桌面右键菜单的「删除」
-     * **同一条落点**（`chat-service` 的 `deleteSessionMessage`，§36）。
-     *
-     * 三道闸都在这里（**不依赖手机 UI**，§7-⑪）：
-     * 1. `confirm:true` —— 不可逆，缺则拒；
-     * 2. 会话**正忙**时拒（`E_BUSY`）—— 与 `send` 用**同一个** `isSessionRuntimeBusy`
-     *    （含 `preparing`）：删断正在跑的 run 会留下悬空工具调用，而电脑端自己发消息时
-     *    也会被同一条闸拦住，两个入口的后果必须一致；
-     * 3. 目标是工具消息时拒 —— 工具结果与发起它的 assistant 消息是一体两面
-     *    （桌面端同样不允许，`deleteSessionMessage` 内部也再拦一道）。
-     *
-     * 成功后**不在这里发快照**：store-bridge 的 diff 会发现消息减少，并推
-     * `host.event.session.messages.reset`（手机端重拉窗口，天然幂等）。
+     * 删除单条消息及其之后的全部消息，与桌面右键菜单同一条落点。
+     * 三道闸：confirm、会话不忙（与 send 同一判据）、不删工具消息。
      */
     deleteMessage(params: DeleteMessageParams) {
       acl.assert(MESSAGE_DELETE_CAPABILITY)
@@ -734,11 +575,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
       if (target.role === 'tool') {
         throw new BridgeError('E_BAD_REQUEST', '工具消息不能单独删除')
       }
-      /*
-       * ⚠️ 消息窗口可能只加载了一部分（§20.2 分页）：`deleteSessionMessage` 里的截断
-       * 会把「已加载窗口」中该条之后的部分删掉，而 DB 侧的截断命令按同一个 messageId 执行 ——
-       * 两边口径一致（都从该锚点往后截），不会出现「内存删了 DB 没删」。
-       */
+      /* 内存与 DB 都按同一锚点往后截，不会出现「内存删了 DB 没删」。 */
       if (!deleteSessionMessage(params.sessionId, params.messageId)) {
         throw new BridgeError('E_NOT_FOUND', `消息不存在或不允许删除：${params.messageId}`)
       }
@@ -750,7 +587,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
       acl.assert('interaction.answer')
       const result = interactions.answer(params)
       if (!result.accepted && result.reason === 'not-found') {
-        // 注册表里没有 → 它自己不会留痕，这里补一条（常见原因：电脑上已经处理过了）
+        // 注册表里没有 → 它不会自留痕，这里补一条（常见：电脑上已处理过）
         audit.record({
           method: 'host.interaction.answer',
           kind: 'approval',
@@ -763,20 +600,15 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
       return result
     },
 
-    /**
-     * 当前待应答交互（拉取式）。
-     *
-     * 与事件的关系：事件是「增量」，本方法是「快照」——两者都要，因为手机可能
-     * 在交互发起之后才连上（错过事件），也可能错过 `resolved`（本地残留僵尸卡片）。
-     */
+    /** 当前待应答交互（快照）。事件会给增量，但手机可能连上晚或错过 resolved。 */
     listInteractions() {
       acl.assert('interaction.answer')
       return interactions.list()
     },
 
-    // §22：模型 / Agent / 工作目录 / 上下文
+    // 模型 / Agent / 工作目录 / 上下文
 
-    /** 已启用的模型服务与模型（白名单：**不含** apiKey / baseUrl / params）。 */
+    /** 已启用的模型服务与模型（不含 apiKey / baseUrl / params）。 */
     listModels(): ModelProviderDTO[] {
       acl.assert('session.model')
       const providers = settingsState.value.providers
@@ -786,18 +618,12 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
       return providers
     },
 
-    /**
-     * 切换**已有会话**的模型（桌面 model-switcher 的等价操作）。
-     *
-     * 不校验 `working`：与桌面一致 —— 切换只改会话元数据（下一轮生效），
-     * 当前这轮用的是引擎启动时拿到的会话快照。
-     */
+    /** 切换已有会话的模型；不校验 working（与桌面一致，下一轮生效）。 */
     setModel(params: SetModelParams) {
       acl.assert('session.model')
       requireSession(params.sessionId)
       requireModel(params.providerConfigId, params.modelId)
-      // 唯一落点：与桌面 model-switcher 同一个 `updateSession`（不刷新 updatedAt ——
-      // 会话时间只由「用户发送消息」刷新，切模型属元数据编辑）
+      // 与桌面同一落点；不刷新 updatedAt，切模型属元数据编辑
       sessionStore.updateSession(params.sessionId, {
         providerConfigId: params.providerConfigId,
         modelId: params.modelId,
@@ -810,7 +636,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
       return { ok: true as const }
     },
 
-    /** 新建会话可选的工作目录（候选集；已有会话的工作目录不可改 —— 用户拍板）。 */
+    /** 新建会话可选的工作目录（已有会话的工作目录不可改）。 */
     listWorkspaces(): WorkspaceOptionDTO[] {
       acl.assert('session.workspace')
       const workspaces = collectWorkspaces()
@@ -819,12 +645,8 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
     },
 
     /**
-     * 新建会话可选的 Agent 候选集（手机端 Agent 选择器）。
-     *
-     * 白名单投影：只给 `id` / `name` / 默认模型 / 默认工作目录 —— **不含** `systemPrompt`
-     * （可达数十 KB）、`allowTools` / `skills` / `params`（§7-⑥ 同一条纪律）。
-     * 默认值只供手机端展示与联动；真正的组装仍在 `chat-service.createSession` 里做，
-     * 所以手机端传不传模型 / 目录都不影响最终结果。
+     * Agent 候选集：只给 id / name / 默认模型 / 默认工作目录，不含 systemPrompt、
+     * allowTools、skills、params。真正组装仍在 createSession 里。
      */
     listAgents(): AgentOptionDTO[] {
       acl.assert('session.agent')
@@ -833,7 +655,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
         return {
           id: agent.id,
           name: agent.name,
-          // 老数据可能缺默认模型 / 默认目录 → 缺了就不带字段（手机端按「未配置」显示）
+          // 老数据可能缺默认模型 / 目录 → 缺了就不带字段
           ...(agent.defaultModel ? { defaultModel: { ...agent.defaultModel } } : {}),
           ...(workspace ? { defaultWorkspace: workspace } : {}),
         }
@@ -842,12 +664,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
       return agents
     },
 
-    /**
-     * 上下文占用快照（与桌面 token 环同一口径，`domain/usage/context-occupancy`）。
-     *
-     * 消息未加载时先补拉尾部窗口（否则 `tokens` 恒为 null）；确实无法判定时如实给 null，
-     * 不编造 0（0 会被手机端误读成「上下文很空」）。
-     */
+    /** 上下文占用快照。无法判定时如实给 null，不编造 0。 */
     async getContext(params: ContextParams): Promise<ContextInfoDTO> {
       acl.assert('session.context')
       requireSession(params.sessionId)
@@ -860,17 +677,9 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
     },
 
     /**
-     * 压缩上下文（fire-and-forget）。
-     *
-     * 三道闸与桌面 token 环同构（不是另立标准）：
-     * 1. `confirm:true`（不可逆操作，手机 UI 的确认不算数）；
-     * 2. 正在回复 / 正在压缩 → `E_BUSY`；
-     * 3. 占用未达 `COMPRESS_MIN_RATIO` → 拒（与桌面「当前上下文很充裕，无需压缩」同判据）；
-     * 4. `mode` 传了就必须认得（未知取值 → `E_BAD_REQUEST`，**不落回缺省** ——
-     *    落回缺省等于把手机端的一个拼写错误变成一次要花钱的模型调用）。
-     *
-     * 过程不进本 RPC：进度走 `runtime.compacting`，结果走 `messages.reset`（手机重拉窗口）
-     * 与 `message.added`（摘要消息）—— 与 `send` / `resume` 同形（§3.3）。
+     * 压缩上下文（fire-and-forget）。闸门与桌面 token 环同构：confirm、不忙、已达压缩阈值、
+     * mode 必须可识别（未知取值直接拒，不落回缺省）。
+     * 进度走 runtime.compacting，结果走 messages.reset / message.added。
      */
     async compress(params: CompressParams) {
       acl.assert('session.compress')
@@ -883,10 +692,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
         })
         throw new BridgeError('E_CONFIRM_REQUIRED', '压缩上下文需二次确认（confirm:true）')
       }
-      /*
-       * 压缩方式：手机端只能在自己确认「电脑端声明了 `COMPRESS_MODE_CAPABILITY`」时才传，
-       * 本端仍独立校一遍取值 —— 不传（旧手机端）= 沿用桌面设置里的那一档（与改动前一字不变）。
-       */
+      /* 不传 mode（旧手机端）= 沿用桌面设置；传了则独立校验取值。 */
       const mode = params.mode == null ? undefined : compressModeOf(params.mode)
       if (params.mode != null && !mode) {
         throw new BridgeError('E_BAD_REQUEST', `未知的压缩方式：${String(params.mode)}`)
@@ -907,7 +713,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
       auditOp(
         'host.session.compress',
         params.sessionId,
-        // 如实记下本次生效的方式（含「沿用电脑侧设置」这一情形的来源）
+        // 如实记下本次生效的方式
         `tokens=${context.tokens}${mode ? ` mode=${mode}` : ' mode=host-setting'}`,
       )
       return { ok: true as const }
@@ -919,23 +725,16 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
 export { toRuntimeDTO }
 
 /**
- * 会话工作目录（§37 的文件接口层用它把相对路径落到盘上）。
- *
- * 为什么从这里出而不是让 `bridge/index.ts` 直接 import `@/ui/store`：本文件已经是
- * 「bridge 依赖 ui/store」的唯一入口，多一个入口就多一处模块初始化顺序的隐式约束。
+ * 会话工作目录。从这里出而不是让 bridge/index.ts 直接 import ui/store：
+ * 本文件已是「bridge 依赖 ui/store」的唯一入口。
  */
 export function sessionWorkspaceOf(sessionId: string): string | null {
   return sessionStore.getSession(sessionId)?.workspace ?? null
 }
 
-/* ───────────────────────── hello 应答的组装与拒绝文案（M6） ───────────────────────── */
+/* ───────────── hello 应答的组装与拒绝文案 ───────────── */
 
-/**
- * 组装 `host.hello` 应答。
- *
- * 首次配对与老设备直连**必须走同一个函数**：两条路径各拼一份密钥/字段，
- * 只会在「老设备能连、新设备连不上」这类真机现象里暴露（§26 的分叉缺陷就是这个形状）。
- */
+/** 首次配对与老设备直连必须走同一函数，各拼一份只会在真机上分叉。 */
 function helloResult(
   params: HelloParams,
   deps: { deviceName: string; deviceId: string; appVersion: string; acl: Acl; grant: GrantRecord },
@@ -951,7 +750,7 @@ function helloResult(
   }
 }
 
-/** 只投影**凭证本身**（不要把整条设备记录，尤其是设备名字与内部 id，发回去）。 */
+/** 只投影凭证本身，不回设备名与内部 id。 */
 function grantOf(device: GrantRecord): GrantRecord {
   return {
     token: device.token,
@@ -961,17 +760,12 @@ function grantOf(device: GrantRecord): GrantRecord {
   }
 }
 
-/** 剩余天数（埋点用；避免在埋点里塞毫秒时间戳这种看不了的东西）。 */
+/** 剩余天数（埋点用）。 */
 function daysLeft(expiresAt: number, now: number = Date.now()): number {
   return Math.max(0, Math.round((expiresAt - now) / (24 * 60 * 60 * 1000)))
 }
 
-/**
- * 拒绝原因 → 手机端可直接显示的文案（**电脑端给什么，手机就显示什么**）。
- *
- * 为什么不让手机端自己按 reason 拼文案：手机端的每条文案都得跟着电脑端的原因集合走，
- * 多一处映射就多一处漂移（且旧版 PWA 根本没有新原因的分支）。
- */
+/** 拒绝原因 → 手机端直接显示的文案（电脑给什么手机就显示什么，避免两处漂移）。 */
 function describeReject(reason: CredentialRejectReason | 'first-time' | 'ticket-expired'): string {
   switch (reason) {
     case 'expired':

@@ -1,8 +1,7 @@
 /**
- * Agent 事件处理器 + 收尾逻辑
+ * Agent 事件处理器 + 收尾逻辑。
  *
- * ⚠️ 这里是 AgentEventType 契约在 service 层的唯一落点（铁律 2）：新增 / 改名事件类型时必须三处同步
- * （TS 类型 → Rust emit → 本文件分支）。
+ * ⚠️ AgentEventType 契约在 service 层的唯一落点：新增 / 改名事件类型时三处同步（TS 类型 → Rust emit → 本文件）。
  */
 import {
   chatState,
@@ -69,8 +68,7 @@ export function createEventHandler(
         // engine 创建了 assistant 消息，需要持久化
         if (event.data?.message) {
           const trMsg = activeTraces.get(sessionId)
-          // 仅把 LLM 产出的 assistant 消息计为一次轮次：迭代模式下的
-          // 反馈消息（role=feedback）与失败报告无 streaming 标记，不计入 rounds。
+          // 只把 LLM 产出的 assistant 消息计为一次轮次：迭代反馈与失败报告无 streaming 标记，不计入
           if (
             trMsg &&
             event.data.message.role === 'assistant' &&
@@ -79,11 +77,8 @@ export function createEventHandler(
             trMsg.rounds += 1
           }
           addSessionMessage(sessionId, event.data.message)
-          // 记录「正在生成的那条消息」：
-          // ⚠️ Rust 引擎的 `stream_event` **不带 messageId**（`llm_round.rs::flush_stream_state`），
-          // 所以这个字段只能由本事件与下面的定稿补丁维护；手机控制 bridge 的流式通道
-          // 已改为直接读 store 里 `streaming===true` 的消息（不再依赖此字段），
-          // 这里保持它的语义正确，避免下一个消费者再被「永远为 null」坑一次。
+          // 记录「正在生成的那条消息」：Rust 的 stream_event 不带 messageId，只能由本事件与定稿补丁维护。
+          // 手机 bridge 的流式通道已直接读 store 里 streaming===true 的消息，这里保持语义正确即可。
           if (event.data.message.role === 'assistant' && event.data.message.streaming) {
             updateSessionRuntime(sessionId, { streamingMessageId: event.data.message.id })
           }
@@ -104,7 +99,7 @@ export function createEventHandler(
               event.data.patch,
             ),
           )
-          // 定稿补丁（`streaming:false`）→ 该条不再生成中
+          // 定稿补丁（streaming:false）→ 该条不再生成中
           if (event.data.patch.streaming === false) {
             updateSessionRuntime(sessionId, { streamingMessageId: null })
           }
@@ -118,14 +113,12 @@ export function createEventHandler(
           addSessionMessage(sessionId, event.data.message)
           events?.onMessagesUpdate?.(sessionId)
         }
-        // 这次工具可能改动了工作区文件 → 排期一次工作目录的 git 状态刷新（防抖 2s，见 git-service）
+        // 这次工具可能改了工作区文件 → 排期一次 git 状态刷新（防抖在 git-service）
         scheduleGitRefresh(sessionId)
         break
 
       case 'tool_progress': {
-        // 引擎在**累积工具参数**期间推送的进度（§27）：这段时间没有任何其它事件，
-        // 手机据此显示「正在写入 write_file · 1.2k 字符…」，而不是让用户看着
-        // 「正文停在半句话」以为卡死。
+        // 引擎在累积工具参数期间推送的进度：这段时间没有其它事件，用它显示「正在写入 · 1.2k 字符」。
         const tp = event.data ?? {}
         updateSessionRuntime(sessionId, {
           toolProgress: { name: String(tp.name ?? ''), chars: Number(tp.chars ?? 0) },
@@ -139,7 +132,7 @@ export function createEventHandler(
         if (trTc && typeof toolCallId === 'string') {
           trTc.toolCallIds.add(toolCallId)
         }
-        // 参数已生成完、工具开始执行 —— 进度该收了（否则会一直显示「正在生成…」）
+        // 参数已生成完、工具开始执行 —— 进度该收了
         updateSessionRuntime(sessionId, { toolProgress: null })
         events?.onMessagesUpdate?.(sessionId)
         break
@@ -155,7 +148,7 @@ export function createEventHandler(
 
       case 'iteration_verify_pass':
       case 'iteration_verify_fail': {
-        // §5.5 engine.iteration.verify / fix
+        // engine.iteration.verify / fix
         const v = event.data?.result
         const issues = Array.isArray(v?.issues) ? v.issues : []
         track('engine.iteration.verify', {
@@ -231,7 +224,7 @@ export function createEventHandler(
               tps: Math.round((tokens / (totalMs / 1000)) * 10) / 10,
             })
           }
-          // 埋点：AI 回复正文（§5.4）— 每轮 assistant 结束时发一次
+          // 埋点：AI 回复正文 —— 每轮 assistant 结束时发一次
           if (lastAssistant) {
             const replyReasoning = lastAssistant.reasoningContent ?? ''
             track('chat.message.received', {
@@ -251,9 +244,7 @@ export function createEventHandler(
             pendingContent: '',
             streamingMessageId: null,
           })
-          // 本轮真正结束（非 paused）→ 落地用户回复期间「已应用」的任务清单草稿；paused 分支刻意不落地
-          //（本轮未结束，草稿留到恢复后再合并）。放在下面整批落库之前，追加的 feedback 消息会一并落库，
-          // 紧随其后的 onMessagesUpdate 已带上它，无需单独广播。
+          // 本轮真正结束（非 paused）→ 落地任务清单草稿；paused 分支刻意不落地（草稿留到恢复后合并）
           flushTodoDraft(sessionId, 'stream_end')
           events?.onStreamEnd?.(sessionId)
           events?.onMessagesUpdate?.(sessionId)
@@ -288,11 +279,10 @@ export function createEventHandler(
 }
 
 /**
- * 还原 assistant 消息补丁：把流式增量补丁（patch.contentDelta）拼成完整正文。
+ * 还原 assistant 消息补丁：把流式增量补丁拼成完整正文。
  *
- * 引擎流式期间只回传增量（见 agent/llm_round.rs::flush_stream_state，全量会让 IPC 载荷 O(n²)），
- * 结束帧仍回传全量 patch.content。拼不上（消息未加载 / 正文非字符串）时退化为「只应用其余字段」，
- * 交给结束帧的全量补丁纠正 —— 不做猜测式兜底。
+ * 引擎流式期间只回传增量（全量会让 IPC 载荷 O(n²)），结束帧仍回传全量 patch.content。
+ * 拼不上时退化为「只应用其余字段」，交给结束帧纠正 —— 不做猜测式兜底。
  */
 function resolveAssistantPatch(
   sessionId: string,
@@ -312,12 +302,8 @@ function workspaceOf(sessionId: string): string | null {
 }
 
 /**
- * 会话有「活动」（工具调用结束 / 一轮对话结束）→ 排期一次工作目录的 git 刷新。
- *
- * ⚠️ **只认当前选中的会话**：会话 A 在后台跑工具、用户已经切到会话 B 时不该刷 —— 切过去的若是
- * 另一个工作目录，刷出来的就是那个目录的状态，与 A 的这次工具毫无关系（切目录本身已经由
- * `syncWorkspace` 探过一次，不该再叠一次）。剩下的「窗口激活 / 是 Git 仓库」两道闸在
- * `notifyWorkspaceActivity` 里。
+ * 会话有活动（工具调用结束 / 一轮对话结束）→ 排期一次工作目录的 git 刷新。
+ * ⚠️ 只认当前选中的会话：后台会话的活动与用户看到的目录无关。
  */
 function scheduleGitRefresh(sessionId: string): void {
   if (chatState.value.currentSessionId !== sessionId) return
@@ -325,9 +311,7 @@ function scheduleGitRefresh(sessionId: string): void {
 }
 
 /**
- * 取该会话最后一条有正文的助手消息，作为完成提醒的预览。
- *
- * 拿不到（空回复）时返回空串，交给 Rust 用会话标题兜底。
+ * 取该会话最后一条有正文的助手消息，作为完成提醒的预览。拿不到时返回空串，交给 Rust 用标题兜底。
  */
 function lastAssistantPreview(sessionId: string): string {
   const messages = getSessionMessages(sessionId)
@@ -362,8 +346,7 @@ export async function finishWorking(
       paused: isPaused,
     })
   }
-  // 无论是否带 traceId 都回收链路上下文：恢复暂停（resumePausedRun）等
-  // 未传 traceId 的路径也必须清理，否则 activeTraces / sessionTraces 持续残留。
+  // 无论是否带 traceId 都回收链路上下文，否则 activeTraces / sessionTraces 持续残留。
   activeTraces.delete(sessionId)
   clearSessionTrace(sessionId)
   updateSessionRuntime(sessionId, {
@@ -375,19 +358,19 @@ export async function finishWorking(
     updateSessionRuntime(sessionId, {
       pendingContent: '',
       streamingMessageId: null,
-      // 本轮结束：工具进度必须一起收（§27）—— 否则界面会一直挂着「正在生成…」
+      // 本轮结束：工具进度必须一起收，否则界面会一直挂着「正在生成…」
       toolProgress: null,
     })
     events?.onWorkingChange?.(sessionId, false)
     events?.onMessagesUpdate?.(sessionId)
-    // 一轮对话跑完：期间的工具调用很可能改过工作区文件 → 排期一次 git 状态刷新
+    // 一轮对话跑完：期间的工具调用很可能改过工作区文件 → 排期一次 git 刷新
     scheduleGitRefresh(sessionId)
     // 托盘提醒：真的跑完（含出错）才提醒；是否打扰、走哪条通道由 Rust 判断（窗口聚焦时不打扰）
     const errored = !!tr?.errored
     trayNotifyCompleted(sessionId, {
       title: sessionStore.getSession(sessionId)?.title ?? '',
-      // 空正文（模型只调了工具、没输出文本）用 i18n 文案兜底 —— 系统通知的正文不能是空的；
-      // 文案由前端给（原生侧不养第二套语言逻辑，铁律 7）
+      // 空正文（只调工具、没输出文本）用 i18n 文案兜底 —— 系统通知正文不能是空的；
+      // 文案由前端给（原生侧不养第二套语言逻辑）
       preview:
         lastAssistantPreview(sessionId) ||
         t(errored ? 'AI 回复出错' : 'AI 回复完成'),
@@ -395,8 +378,7 @@ export async function finishWorking(
     })
   }
 
-  // 自动设置标题（仅 session 标题仍为默认值「新对话」时触发一次）：
-  // 优先 AI 生成（可在「设置 → 聊天设置 → AI 生成标题」关闭）；关闭或失败则回退到用户消息截取
+  // 自动设置标题（仅标题仍为默认值「新对话」时触发一次）：优先生成，关闭或失败回退到用户消息截取
   if (!isPaused && content) {
     const updatedSession = sessionStore.getSession(sessionId)
     if (updatedSession && updatedSession.title === '新对话') {
@@ -407,7 +389,7 @@ export async function finishWorking(
       let titleStatus: 'ai' | 'fallback' | 'fail' | 'disabled' = 'fallback'
       let titleError: string | undefined
       try {
-        // 设置项关闭时不发起标题生成的 LLM 调用，直接用回退标题
+          // 设置项关闭时不发起标题生成的 LLM 调用
         if (!settingsState.value.aiGenerateTitle) {
           titleStatus = 'disabled'
         } else {

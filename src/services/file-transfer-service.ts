@@ -1,13 +1,8 @@
 /**
- * file-transfer-service — 侧边栏文件操作（复制 / 粘贴 / 重命名 / 删除）。
+ * 侧边栏文件操作（复制 / 粘贴 / 重命名 / 删除）：只答「成功没有 / 为什么失败」，文案留给调用方。
  *
- * 定位：安全校验 + 文件系统能力的编排，与 UI 无关；本层只回答「成功没有 / 为什么失败」，
- * 文案与弹窗留给调用方。
- *
- * 剪贴板语义（对齐资源管理器 / VS Code）：**应用内**文件剪贴板，复制只记路径，粘贴才落盘；
- * 刻意不碰系统剪贴板。另有「原位」操作 move（目录树拖到别的目录）：走 rename —— 原子、不产生副本、同名算失败。
- *
- * ⚠️ 铁律 6：所有写操作（粘贴目标 / 重命名 / 删除）必须先过 securityService.resolveSafePath(..., 'w')。
+ * 剪贴板是应用内的（只记路径，粘贴才落盘），不碰系统剪贴板。move 走 rename —— 原子、同名算失败。
+ * ⚠️ 所有写操作必须先过 securityService.resolveSafePath(..., 'w')。
  */
 import * as tauriFs from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
@@ -32,7 +27,7 @@ export interface FileOpResult {
 }
 
 /**
- * 同名冲突时自动添加的后缀（同资源管理器的「 - 副本」）。它会成为磁盘上的文件名，故不进 i18n。
+ * 同名冲突时自动添加的后缀（同资源管理器的「 - 副本」）。它会成为磁盘文件名，故不进 i18n。
  */
 const DUPLICATE_SUFFIX = ' - 副本'
 
@@ -63,8 +58,7 @@ export function baseNameOf(p: string): string {
 }
 
 /**
- * 路径是否位于某个目录内（含该目录自身）。
- * Windows 的盘符与文件名大小写不敏感 → 一律按小写比较，避免 C:/WS 与 c:/ws 被判成「不在里面」。
+ * 路径是否位于某个目录内（含该目录自身）。Windows 大小写不敏感 → 一律按小写比较。
  */
 function isInsideDir(dir: string, p: string): boolean {
   const d = normalizePath(dir).toLowerCase()
@@ -74,10 +68,8 @@ function isInsideDir(dir: string, p: string): boolean {
 }
 
 /**
- * 能否把这批条目移动到目标目录（纯函数，UI 用它决定拖拽落点是否高亮，move 内部再校验一次）。
- *
- * 拒绝两种落点：目标是源自身、目标在源目录内部（否则等于把目录搬进它自己里面）。
- * 「拖回原目录」不算违规 —— move 会把它当无操作跳过。
+ * 能否把这批条目移动到目标目录（UI 用它决定拖拽落点是否高亮，move 内部再校验一次）。
+ * 拒绝两种落点：目标是源自身、目标在源目录内部。「拖回原目录」不算违规。
  */
 export function canMoveInto(sources: string[], targetDir: string): boolean {
   if (!targetDir || sources.length === 0) return false
@@ -87,14 +79,14 @@ export function canMoveInto(sources: string[], targetDir: string): boolean {
   })
 }
 
-/** 拆分扩展名（`a.tar.gz` 只认最后一段，与资源管理器一致） */
+/** 拆分扩展名（a.tar.gz 只认最后一段） */
 function splitName(name: string): { base: string; ext: string } {
   const dot = name.lastIndexOf('.')
   if (dot <= 0) return { base: name, ext: '' }
   return { base: name.slice(0, dot), ext: name.slice(dot) }
 }
 
-/** 目标已存在时往后找一个可用名：`a.txt` → `a - 副本.txt` → `a - 副本 (2).txt` */
+/** 目标已存在时往后找一个可用名：a.txt → a - 副本.txt → a - 副本 (2).txt */
 async function resolveUniquePath(dir: string, name: string): Promise<string> {
   const candidate = `${dir}/${name}`
   if (!(await tauriFs.exists(candidate))) return candidate
@@ -126,8 +118,7 @@ async function copyRecursive(src: string, dest: string): Promise<void> {
 }
 
 /**
- * 应用内文件剪贴板（observable）。
- * UI 依赖 `hasItems` 决定「粘贴」菜单项是否可用，故必须是响应式状态。
+ * 应用内文件剪贴板（observable，UI 靠 hasItems 决定「粘贴」是否可用）。
  */
 class FileClipboard {
   /** 已复制的路径（绝对路径，分隔符为 /） */
@@ -159,16 +150,14 @@ function errorText(e: unknown): string {
 
 export const fileTransferService = {
   /**
-   * 复制到应用内剪贴板。
-   * 只记路径、不落盘，因此无需安全校验（真正的写发生在 paste）。
+   * 复制到应用内剪贴板。只记路径、不落盘，因此无需安全校验（真正的写发生在 paste）。
    */
   copy(paths: string[]): void {
     fileClipboard.set(paths)
   },
 
   /**
-   * 把剪贴板里的条目复制进目标目录。
-   * 同名冲突自动加「 - 副本」，不覆盖既有文件。
+   * 把剪贴板里的条目复制进目标目录。同名冲突自动加「 - 副本」，不覆盖既有文件。
    */
   async paste(
     targetDir: string,
@@ -204,11 +193,8 @@ export const fileTransferService = {
 
   /**
    * 把多个条目移动到目标目录（目录树拖拽落盘）。
-   *
-   * 走 `rename`：原子、不覆盖、不生成副本 —— 目标同名即算失败（与资源管理器一致）。
-   * 比 paste 多两道校验：
-   *  - 源所在目录也要写权限（移动会同时改源 / 目标两个目录的元数据）；
-   *  - 拒绝落到源自身或其子目录（见 canMoveInto）。
+   * 走 rename：原子、不覆盖、不生成副本 —— 目标同名即失败。
+   * 比 paste 多两道校验：源所在目录也要写权限；拒绝落到源自身或其子目录。
    */
   async move(
     paths: string[],

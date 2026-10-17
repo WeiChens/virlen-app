@@ -1,18 +1,10 @@
 /**
- * 文档列表弹窗：自持文档列表 / 搜索 / 分页 / 试搜的全部 state，并托管三个子弹窗
- *（预览 / 新建 / 编辑）；知识库维度的刷新通过 `onChanged` 回调父级。
+ * 文档列表弹窗：自持文档列表 / 搜索 / 分页 / 试搜，并托管三个子弹窗。
  *
- * 三个容易写错的点，都在下面注释里写明原因：
- * - 过滤与分页**只算一次**（`filterDocuments` + 组件级派生值）：以前 footer 和列表各算一遍，
- *   改一处漏一处；
- * - 搜索与刷新都带**序号护栏**：请求是异步的，旧结果落到新状态上会显示错的库/错的筛选结果；
- * - 记忆详情正文（`memory_detail_of`）不给删改：后端会拒，这里把按钮换成说明，不让用户白点。
+ * 三个易错点：过滤与分页只算一次（footer 与列表共用）；搜索与刷新带序号护栏（旧结果不落新状态）；
+ * 记忆详情正文不给删改（后端会拒，这里直接换成说明）。
  *
- * 导入（文件夹 / 压缩包）与「清空文档」都不在这里展开：前者跑在 `shared/TaskProgress`
- * 那个全局进度弹窗下（逐份报进度、随时可取消，见知识库的 `file-import.ts` / `export.ts`），
- * 后者同样走进度弹窗（见 `doc-delete.ts`）—— 本弹窗只负责刷新列表；
- * 单份删除则在行内按钮上显示「删除中…」并禁用（删一份要清向量库里的片段，不是瞬间返回）。
- *
+ * 导入与清空都不在这里展开（走全局进度弹窗，见 file-import / export / doc-delete），本弹窗只负责刷新列表。
  * 文案口径：说「文档 / 内容 / 搜一下」，不说「片段 / chunk / 向量检索」。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -69,11 +61,11 @@ function DocListModal({
     null,
   )
 
-  // 请求序号护栏（异步请求回来时可能已经「换库 / 换了搜索词」了）
+  // 请求序号护栏（异步返回时可能已经换库 / 换了搜索词）
   const docListSeqRef = useRef(0)
   const contentSearchSeqRef = useRef(0)
 
-  // 单份删除：正在删的那一份（行内按钮显示「删除中…」并禁用，删除期间不允许再点下一份）
+  // 单份删除：正在删的那一份（期间不允许再点下一份）
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
   // 子弹窗目标
@@ -89,10 +81,8 @@ function DocListModal({
 
   /**
    * 刷新当前知识库的文档列表。
-   *
    * ⚠️ 序号护栏：刷新是异步的，而弹窗关闭、换库、连续增删都会再发一次请求 ——
-   * 没有护栏时先发的那次后到，就会把另一个库（或者已被删掉的那份）的列表写进去。
-   * 同目录的 `PreviewDocModal` / `EditDocModal` 用的是 `cancelled` 标志，同一回事。
+   * 没有护栏时先发的那次后到，就会把另一个库的列表写进去。
    */
   const refreshDocList = useCallback(async () => {
     if (!kbId) return
@@ -133,11 +123,8 @@ function DocListModal({
   }, [])
 
   /**
-   * 「按内容」检索（关键词**作为参数**传入，不读 state）。
-   *
-   * ⚠️ 为什么不能在里面读 `docSearchMode`：切模式的按钮里刚 `setDocSearchMode('content')`，
-   * 同一 tick 内 state 还是旧值 —— 靠 state 判断会直接 return，点了「按内容」什么也不发生。
-   * 要不要搜由**调用方**（按钮 / 回车）决定。
+   * 「按内容」检索（关键词作为参数传入，不读 state）。
+   * ⚠️ 不能在里面读 docSearchMode：切模式的按钮里刚 set，同一 tick 内还是旧值 —— 会直接 return。
    */
   const runContentSearch = useCallback(
     async (keywordRaw: string) => {
@@ -161,10 +148,7 @@ function DocListModal({
   )
 
   /**
-   * 回车 = 搜索。
-   *
-   * 「按名称」是前端即时过滤（用不着回车，也不用请求后端），所以这里只处理「按内容」。
-   * 以前这里给一个回车触发的一次性请求加了 300ms 防抖 —— 没有连续输入，只是白等 300ms。
+   * 回车 = 搜索。「按名称」是前端即时过滤，所以这里只处理「按内容」。
    */
   const handleDocSearch = useCallback(() => {
     if (docSearchMode !== 'content') return
@@ -173,7 +157,7 @@ function DocListModal({
 
   const handleRemoveDoc = async (docId: string, docName: string) => {
     if (deletingId) return
-    // 先确认，再切「删除中…」：确认框还弹着就显示「删除中…」是骗人的（用户可能点取消）
+    // 先确认，再切「删除中…」：确认框还弹着就显示「删除中…」是骗人的
     if (!(await confirmRemoveDocument(docName))) return
     setDeletingId(docId)
     try {
@@ -186,7 +170,7 @@ function DocListModal({
     }
   }
 
-  /** 清空文档：逐份删、全程有进度弹窗（可取消），结束时汇总写在弹窗上 */
+  /** 清空文档：逐份删、全程有进度弹窗（可取消） */
   const handleClearAllDocs = async () => {
     if (deletingId) return
     const cleared = await clearAllDocuments(kbId, kbName, docs)
@@ -227,7 +211,7 @@ function DocListModal({
   const handleUploadFolder = () => pickUploadFolder(kbId, kbName, afterImport)
 
   const handleSearch = async () => {
-    // 检索目标就是当前这个知识库（弹窗是「从某个库进来的」，没有全局默认库这一层）
+    // 检索目标就是当前这个知识库（没有全局默认库这一层）
     if (!kbId) return
     if (!searchQuery.trim()) {
       showToast(t('请输入要搜索的内容'), 3000)
@@ -250,7 +234,6 @@ function DocListModal({
 
   /**
    * 过滤 + 分页：在组件级算一次，footer（页码 / 总数）与列表（当前页）共用同一份结果。
-   * 以前这段在两个地方各写一遍 —— 改一处漏一处，也正是「筛选不回第 1 页」那类 bug 的土壤。
    */
   const filteredDocs = filterDocuments(
     docs,
@@ -262,15 +245,13 @@ function DocListModal({
   const safePage = Math.min(page, totalPages)
   const pageDocs = pageSlice(filteredDocs, page, PAGE_SIZE)
 
-  // 关键词一变就回第 1 页（「按名称」是即时过滤，不回页会看到「筛选结果的第 3 页」）；
-  // 清空输入框等于取消筛选 —— 「按内容」的命中 id 也要一起清，否则列表永远恢复不了。
+  // 关键词一变就回第 1 页；清空输入框等于取消筛选（「按内容」的命中 id 也要一起清）
   useEffect(() => {
     setPage(1)
     if (!docSearchQuery.trim()) setDocSearchResultIds(null)
   }, [docSearchQuery])
 
-  // 删文档 / 换筛选后总页数会变小：把 page 收回合法范围（只把 safePage 用于显示的话，
-  // 状态会一直停在越界值，下次换个条件又跳到「第 3 页」）
+  // 删文档 / 换筛选后总页数变小：把 page 收回合法范围（只夹 safePage 的话状态会停在越界值）
   useEffect(() => {
     setPage((p) => Math.min(p, totalPages))
   }, [totalPages])
@@ -364,9 +345,9 @@ function DocListModal({
             <div className="kb-loading">{t('加载中...')}</div>
           ) : (
             <div className="kb-doclist-layout">
-              {/* 左侧：文档列表（2/3） */}
+              {/* 左侧：文档列表 */}
               <div className="kb-doclist-left">
-                {/* 文档搜索栏 — 放在 scroll-view 外面，始终可见 */}
+                {/* 文档搜索栏：放在 scroll-view 外面，始终可见 */}
                 {docs.length > 0 && (
                   <div className="kb-doc-search-bar">
                     <input
@@ -390,8 +371,7 @@ function DocListModal({
                       className={`kb-btn kb-btn-sm ${docSearchMode === 'content' ? 'kb-btn-primary' : ''}`}
                       onClick={() => {
                         setDocSearchMode('content')
-                        // 关键词已经填好了就直接搜（不能靠 handleDocSearch 读 state：
-                        // 这一 tick 里 docSearchMode 还是 'title'）
+                        // 关键词已填好就直接搜（不能靠 handleDocSearch 读 state：这一 tick 还是 title）
                         if (docSearchQuery.trim()) {
                           void runContentSearch(docSearchQuery)
                         } else {
@@ -412,7 +392,7 @@ function DocListModal({
                   </div>
                 )}
 
-                {/* 搜索栏在 scroll-view 外面，始终可见；这里只有列表滚动 */}
+                {/* 搜索栏在外面，这里只有列表滚动 */}
                 <div className="kb-doclist-scroll">
                   {docs.length === 0 ? (
                     <div className="kb-empty">
@@ -466,9 +446,8 @@ function DocListModal({
                                     {t('预览')}
                                   </button>
                                   {doc.memory_detail_of ? (
-                                    /* 记忆的详情正文：删它/改它都会让那条记忆的正文静默变样，
-                                       后端也会拒 —— 把按钮的位置留给一句说明，别让用户白点。
-                                       真正清理它的入口是「删掉那条记忆」（正文会一起清）。*/
+                                    /* 记忆详情正文：删改会让那条记忆的正文静默变样，后端也会拒 ——
+                                       把按钮换成一句说明；真正入口是「删掉那条记忆」。*/
                                     <span
                                       className="doc-item-locked"
                                       title={t(
@@ -515,7 +494,7 @@ function DocListModal({
                 </div>
               </div>
 
-              {/* 右侧：在当前知识库里试搜一下（“能不能搜到”是用户最直接的验证方式） */}
+              {/* 右侧：在当前知识库里试搜一下（最直接的验证方式） */}
               <div className="kb-doclist-right">
                 <div className="kb-search-section">
                   <label className="kb-search-label">{t('在这里搜一下')}</label>

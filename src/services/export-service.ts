@@ -1,26 +1,10 @@
 /**
- * export-service — 会话导出服务层：把会话转换为一份**独立完整的 HTML 文档**并保存文件。
+ * 会话导出：把会话转成一份独立完整的 HTML 文档并保存。
  *
- * 为什么是 HTML 而不是 Markdown：会话正文本身就是 Markdown，导出模板若也用 Markdown，模板与正文会互相
- * 干扰（角色标题、分隔线挤进正文大纲；正文里的标题/表格又和模板结构打架）。HTML 里模板结构是真实标签、
- * 正文由 Markdown 渲染器转成 HTML，两者互不混淆。
- *
- * 为什么是气泡：导出的文档要和聊天区（`message/message-list`）**是同一个东西**，而不是另造一套排版 ——
- *  - **行模型同源**（`message-list/rows.ts` 的移植）：连续的工具调用合成一组、`tool` 结果不占行、
- *    尾部段默认展开（见 `buildRows`）；
- *  - **气泡同源**（`message-bubble` 的移植）：用户消息右对齐品牌色气泡、助手消息左对齐灰底气泡，
- *    思考折叠头、引用 chip、技能卡片、文件 chip、时间行；**图片不导出**（`image_url` 块是 base64
- *    内嵌，一张截图就能让文档大好几 MB，而导出的用途是「读对话」不是「看图」）；
- *  - **文档头固定**：会话标题与元信息钉在顶部，只有消息区滚动（长会话里标题随时可见）。
- *  - **工具调用同源**（`tool-call` / `tool-call-group` 的移植）：行式卡片（状态点 + 工具名 + 摘要 + 耗时）
- *    + 折叠箭头，展开后是**通用详情视图**（参数 JSON / 返回内容）—— 聊天区每类工具各有自己的展开视图
- *    （EditFileMessage / TerminalBlock / …），那部分**不复刻**；详情视图高度超过 50vh 时内部滚动。
- *
- * **纯静态**：不使用任何 JS，折叠一律走原生 `<details>` / `<summary>`（双击就能看、拷走也能看、不依赖任何
- * 外部资源），所以所有「默认态」（哪个折叠块开、哪个关）都在渲染时算好写进 HTML。
- *
- * ⚠️ 行模型的三条判据（`isToolCallMessage` / `messageHasBody` / `messageHasVisibleContent`）与聊天区
- * 共用 `@/utils/messageContent` —— 判据一旦漂移，就会出现「导出里有内容被丢掉」或「段落边界和聊天区不一致」。
+ * 用 HTML 不用 Markdown：正文本身就是 Markdown，模板与正文会互相干扰。
+ * 行模型与气泡逐条移植自聊天区（rows.ts / message-bubble / tool-call），保证导出与聊天区同构；
+ * 纯静态（无 JS，折叠走 <details>），所以默认展开态在渲染时算好写进 HTML。
+ * 图片（image_url 块）不导出：base64 会馆文档体积。
  */
 import { createElement } from 'react'
 import { t, tpl, getCurrentLanguage } from '@/ui/i18n'
@@ -57,10 +41,10 @@ const DEFAULT_OPTIONS: ExportOptions = {
   omitThinking: false,
 }
 
-/** Markdown → HTML 片段的转换器（真实现见 `createMarkdownHtmlRenderer`；测试可注入桩） */
+/** Markdown → HTML 片段转换器（测试可注入桩）。 */
 export type MarkdownToHtml = (markdown: string) => string
 
-/** HTML 转义：所有来自会话数据的插值都要过一遍，正文里的标签一律只当文本 */
+/** HTML 转义：会话数据插值一律过一遍。 */
 function escapeHtml(value: unknown): string {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -70,10 +54,7 @@ function escapeHtml(value: unknown): string {
     .replace(/'/g, '&#39;')
 }
 
-/* ============================================================================
- * 图标：直接取自应用自己的 icon 组件（只留 path，`fill: currentColor` 由 CSS 给色）。
- * 单文件导出不能依赖任何外部资源，图标必须内联。
- * ========================================================================== */
+/* 图标直接取自应用自己的 icon 组件（只留 path，颜色交 currentColor）。 */
 
 /** 折叠箭头（`CollapsedSvg`）：收起朝右 / 展开朝下 */
 const CARET_PATH =
@@ -130,9 +111,7 @@ function thinkIcon(className: string): string {
   return svgIcon(className, '0 0 1024 1024', `<path d="${THINK_PATH}" fill="currentColor"/>`)
 }
 
-/* ============================================================================
- * 行模型（`message-list/rows.ts` 的移植）
- * ========================================================================== */
+/* 行模型（`message-list/rows.ts` 的移植） */
 
 /**
  * 列表的一行。
@@ -145,11 +124,8 @@ type Row =
   | { kind: 'tools'; messages: Message[]; open: boolean }
 
 /**
- * 一条消息是否属于「这段连续工具调用」= 带工具调用的 assistant。
- *
- * 与聊天区 `rows.ts::isToolCallMessage` **逐条同源**：带引用 / 文件 / 技能 / 图片块的不并入
- *（那些块在气泡里另有可见渲染，吞进折叠组会连带藏掉它们）。正文本身份不是排除项 ——
- * 段首宿主的正文显示在组头之上，中段再遇正文则收口。
+ * 一条消息是否属于这段连续工具调用 = 带工具调用的 assistant。
+ * 带引用 / 文件 / 技能 / 图片块的不并入（它们在气泡里另有可见渲染）。
  */
 function isToolCallMessage(message: Message): boolean {
   if (message.role !== 'assistant') return false
@@ -158,9 +134,7 @@ function isToolCallMessage(message: Message): boolean {
   return true
 }
 
-/**
- * 会话级索引（先扫一遍算好，切行 / 渲染时只查表）。
- */
+/** 会话级索引（先扫一遍，渲染时只查表）。 */
 interface SessionIndex {
   /** toolCallId → 工具返回消息（重复结果只认第一条，与聊天区 `toolResultsFor` 同口径） */
   resultsByCallId: Map<string, Message>
@@ -187,8 +161,8 @@ function indexSession(messages: readonly Message[]): SessionIndex {
 }
 
 /**
- * 是否是「孤儿工具结果」：宿主调用不存在，或同一个 id 出现了多条结果（只有第一条被回填）。
- * 这类结果在聊天区渲染 null（看不见），导出里必须单独成卡，否则内容就丢了。
+ * 是否是孤儿工具结果：宿主调用不存在，或同一 id 有多条结果（只回填第一条）。
+ * 聊天区渲染 null，导出必须单独成卡，否则内容就丢了。
  */
 function isOrphanToolResult(message: Message, index: SessionIndex): boolean {
   const id = message.toolCallId
@@ -197,24 +171,21 @@ function isOrphanToolResult(message: Message, index: SessionIndex): boolean {
 }
 
 /**
- * 切行：连续的工具调用合成一组，`tool` 结果消息不占行、不打断（它们的内容已回填到调用卡片里）。
- * 顺序保持原样（只做「合并 / 跳过」两种减法）。
- *
- * 与聊天区唯一的**加项**：孤儿工具结果单独成一行（见 `isOrphanToolResult`）。
+ * 切行：连续工具调用合成一组，tool 结果不占行；孤儿工具结果单独成行。
  */
 function buildRows(messages: readonly Message[], index: SessionIndex): Row[] {
   const rows: Row[] = []
-  /** 正在攒的工具调用段（遇到看得见的东西就收口） */
+  /** 正在攒的工具调用段（遇到可见内容就收口） */
   let run: Message[] = []
   const flush = () => {
     if (run.length === 0) return
-    // 阈值按「**工具调用总数**」而非消息条数：一次 assistant 并行发多个工具调用同样应合成一组
+    // 阈值按工具调用总数而非消息条数（一次 assistant 可并行多个）
     let calls = 0
     for (const m of run) calls += m.toolCalls?.length ?? 0
     if (calls >= 2) {
       rows.push({ kind: 'tools', messages: run, open: false }) // open 占位，文末反向扫描时定
     } else {
-      // 只有一次工具调用：保持原来那张单卡（不套一层折叠头）——与聊天区一致
+      // 只有一次工具调用：保持单卡，不套折叠头
       rows.push({ kind: 'one', message: run[0] })
     }
     run = []
@@ -222,7 +193,7 @@ function buildRows(messages: readonly Message[], index: SessionIndex): Row[] {
 
   for (const message of messages) {
     if (message.role === 'tool') {
-      // 被宿主引用过的结果已进调用卡片；只有孤儿结果才自己占一行（内容不丢）
+      // 被宿主引用过的结果已进调用卡片；只有孤儿结果才自己占行
       if (isOrphanToolResult(message, index)) {
         flush()
         rows.push({ kind: 'one', message })
@@ -230,7 +201,7 @@ function buildRows(messages: readonly Message[], index: SessionIndex): Row[] {
       continue
     }
     if (isToolCallMessage(message)) {
-      // 段首宿主可带正文（显示在组头之上）；但**中段**再遇带正文的宿主就收口 —— 正文是看得见的边界
+      // 段首宿主可带正文（显示在组头之上）；中段再遇带正文的就收口
       if (run.length > 0 && messageHasBody(message)) flush()
       run.push(message)
       continue
@@ -240,8 +211,7 @@ function buildRows(messages: readonly Message[], index: SessionIndex): Row[] {
   }
   flush()
 
-  // 尾部段（`open`）：从后往前扫，每行之后有没有「看得见的气泡」决定它是否尾段 —— 与聊天区同一口径。
-  // 只有**可见**的才打断扫描：无正文无附件的空壳 assistant（引擎每轮先落一条）不算。
+  // 尾部段（open）：从后往前扫，只有可见内容才打断扫描（空壳 assistant 不算）
   let visibleAfter = false
   for (let i = rows.length - 1; i >= 0; i--) {
     const row = rows[i]
@@ -256,16 +226,14 @@ function buildRows(messages: readonly Message[], index: SessionIndex): Row[] {
   return rows
 }
 
-/* ============================================================================
- * 渲染上下文与取值助手
- * ========================================================================== */
+/* 渲染上下文与取值助手 */
 
 interface RenderContext extends SessionIndex {
   options: ExportOptions
   renderMarkdown: MarkdownToHtml
 }
 
-/** 工具结果消息的纯文本（`role:'tool'` 的 content 正常是 string，数组块兜底取 text / tool_result） */
+/** 工具结果消息的纯文本（content 正常是 string，数组块兜底取 text / tool_result） */
 function toolResultText(message: Message): string {
   if (typeof message.content === 'string') return message.content
   return message.content
@@ -284,8 +252,8 @@ function formatToolArgs(input: unknown): string {
 }
 
 /**
- * 工具调用的行内摘要（`tool-call/DefaultMessage.tsx::getShortText` 的移植，不引组件）：
- * 多字段取 `path`（最常被工具当「对象」的那个）、多文件取首个路径 +`+N`、单字段直接取值、其余打 JSON。
+ * 工具调用的行内摘要（移植自 DefaultMessage.getShortText）：多文件取首路径 +N，
+ * 多字段优先 path，单字段直接取值，其余打 JSON。
  */
 function toolShortText(input: unknown): string {
   if (input == null || typeof input !== 'object') return String(input ?? '')
@@ -312,7 +280,7 @@ function fileNameOf(path: string): string {
   return parts[parts.length - 1] || path
 }
 
-/** 体积格式化（B/KB/MB/GB）—— 与 `shared/FileChip::formatFileSize` 同口径 */
+/** 体积格式化（B/KB/MB/GB），与 FileChip 同口径 */
 function formatFileSize(bytes?: number): string {
   if (bytes === undefined || bytes === null || Number.isNaN(bytes)) return ''
   if (bytes < 1024) return `${bytes} B`
@@ -326,14 +294,14 @@ function formatFileSize(bytes?: number): string {
   return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`
 }
 
-/** 12500 → 12.5k（token 量级显示，与聊天区 `summary-message::formatTokens` 同口径） */
+/** 12500 → 12.5k（token 量级显示） */
 function formatTokens(tokens: number): string {
   if (tokens < 1000) return String(tokens)
   const k = tokens / 1000
   return `${Number.isInteger(k) ? k.toFixed(0) : k.toFixed(1)}k`
 }
 
-/** 消息时间（绝对时间：导出文档会离开应用，相对时间「刚刚」在这里没有意义） */
+/** 消息时间（绝对时间：文档离开应用后「刚刚」没有意义） */
 function messageTime(message: Message): string {
   return new Date(message.timestamp).toLocaleString(getCurrentLanguage(), {
     hour12: false,
@@ -347,11 +315,9 @@ function errorMark(message: Message): string {
   return ` <span class="tool-call__error">⚠️ ${escapeHtml(t('执行失败'))}${id}</span>`
 }
 
-/* ============================================================================
- * 片段渲染
- * ========================================================================== */
+/* 片段渲染 */
 
-/** 思考过程折叠块（默认收起；折叠头与聊天区 `.reasoning-header` 同款：图标 + 标签 + 耗时 + 箭头） */
+/** 思考过程折叠块（默认收起，折叠头与聊天区 .reasoning-header 同款） */
 function thinkingFold(message: Message, ctx: RenderContext): string {
   if (ctx.options.omitThinking) return ''
   const text = message.reasoningContent
@@ -378,7 +344,7 @@ function thinkingFold(message: Message, ctx: RenderContext): string {
   ].join('\n')
 }
 
-/** 引用 chip（`shared/QuoteChip` 的静态版：色条 + 发送方图标 + 发送方 + 正文摘要，hover 看全文） */
+/** 引用 chip（QuoteChip 静态版：色条 + 发送方图标 + 发送方 + 摘要，hover 看全文） */
 function quoteChip(quote: QuoteContent): string {
   const who = quote.role === 'user' ? t('你') : 'AI'
   const icon = svgIcon(
@@ -405,7 +371,7 @@ function quoteChip(quote: QuoteContent): string {
   ].join('')
 }
 
-/** 技能卡片（`shared/SkillChip` 的 card 形态静态版：图标 + 名 + 字符数 + 描述三行） */
+/** 技能卡片（SkillChip card 形态静态版：图标 + 名 + 字符数 + 描述） */
 function skillCard(skill: SkillContent): string {
   const chars =
     typeof skill.content === 'string' && skill.content.length > 0
@@ -436,7 +402,7 @@ function skillCard(skill: SkillContent): string {
   ].join('')
 }
 
-/** 文件 chip（`shared/FileChip` 的静态版：图标 + 文件名（主干可省略）+ 体积 / 文件夹） */
+/** 文件 chip（FileChip 静态版：图标 + 文件名 + 体积 / 文件夹） */
 function fileChip(file: FileContent): string {
   const displayName = file.name || fileNameOf(file.path)
   const meta = file.isDir ? t('文件夹') : formatFileSize(file.size)
@@ -456,11 +422,8 @@ function fileChip(file: FileContent): string {
 }
 
 /**
- * 一次工具调用的卡片：**行**（状态点 + 工具名 + 摘要 + 耗时 + 箭头）+ **详情视图**（参数 / 返回）。
- *
- * 详情视图是「通用」的：聊天区每类工具都有专门的展开视图（文件 diff、终端、知识库卡片…），
- * 那部分体量太大且依赖运行时状态，导出不复刻 —— 这里只保证「参数 + 返回」都看得到，
- * 且**高度超过 50vh 时在视图内部滚动**（见 EXPORT_STYLE 的 `.tool-call__view`）。
+ * 一次工具调用的卡片：行（状态点 + 工具名 + 摘要 + 耗时 + 箭头）+ 通用详情（参数 / 返回）。
+ * 聊天区每类工具的专用展开视图不复刻；详情高度超 50vh 时内部滚动。
  */
 function toolCallCard(call: ToolUseContent, result: Message | undefined): string {
   const status: 'done' | 'pending' | 'error' = !result
@@ -499,7 +462,7 @@ function toolCallCard(call: ToolUseContent, result: Message | undefined): string
   ].join('\n')
 }
 
-/** 孤儿工具结果卡片（宿主调用不存在 / 结果重复）：没有调用参数可给，只输出返回内容 */
+/** 孤儿工具结果卡片：没有调用参数，只输出返回内容 */
 function orphanResultCard(message: Message): string {
   const output = toolResultText(message).trim()
   const firstLine = output.split('\n')[0]?.slice(0, 120) ?? ''
@@ -521,14 +484,11 @@ function orphanResultCard(message: Message): string {
   ].join('\n')
 }
 
-/** 工具组折叠头最多预览几个工具名（多出来的折成 `+N`），与聊天区 `TOOL_GROUP_PREVIEW_MAX` 同值 */
+/** 工具组折叠头最多预览几个工具名，与聊天区同值 */
 const TOOL_PREVIEW_MAX = 3
 
 /**
- * 一段连续的工具调用 → 一个折叠组。
- *
- * 折叠头只说一件事：调了几次（外加工具名预览）—— 与聊天区 `.tool-group__head` 同一套语汇
- *（无框行 + hover 高亮 + 箭头），头部**不显示**成功/失败状态点。
+ * 一段连续工具调用 → 一个折叠组。折叠头只说调了几次（加工具名预览），不显示成败状态点。
  */
 function toolGroup(members: Message[], open: boolean, ctx: RenderContext): string {
   const names: string[] = []
@@ -550,7 +510,7 @@ function toolGroup(members: Message[], open: boolean, ctx: RenderContext): strin
     : ''
   const cards: string[] = []
   members.forEach((member, index) => {
-    // 段首宿主的思考在它自己的气泡里（不随组折叠隐藏），组内只补中段成员的
+    // 段首宿主的思考在它自己的气泡里，组内只补中段成员的
     if (index > 0) {
       const fold = thinkingFold(member, ctx)
       if (fold) cards.push(fold)
@@ -575,15 +535,8 @@ function toolGroup(members: Message[], open: boolean, ctx: RenderContext): strin
 }
 
 /**
- * 一条消息 → 气泡（`message-bubble.tsx` 的静态版）。
- *
- * 结构与聊天区一致：引用 → 技能 → 正文 → 文件（各自一块），助手额外有思考折叠块；
- * 用户消息正文**不渲染 Markdown**（与聊天区一致：用户原话按纯文本 + `pre-wrap` 展示）。
- *
- * ⚠️ **图片（`image_url` 块）不导出**：它们是 base64 dataURL，内嵌进 HTML 会让文档体积爆炸
- *（实测一段带若干截图的会话能到 7MB+），而导出文档的用途是「读对话」而非「看图」；
- * 因此「只有图片、没有别的可见内容」的消息整条不产气泡（否则会剩一个只有时间的空壳）。
- * 反过来「完全没有可见内容」的消息也返回空串（不留空气泡）。
+ * 一条消息 → 气泡（message-bubble 静态版）：引用 → 技能 → 正文 → 文件。
+ * 用户正文不渲染 Markdown（与聊天区一致）；图片不导出，没有可见内容的消息不产气泡。
  */
 function messageBubble(message: Message, ctx: RenderContext): string {
   const isUser = message.role === 'user'
@@ -646,7 +599,7 @@ function messageBubble(message: Message, ctx: RenderContext): string {
     .join('\n')
 }
 
-/** 反馈消息（迭代验证 / 系统通知）：居中卡片（与聊天区 `.message-feedback` 同款） */
+/** 反馈消息：居中卡片（与聊天区 .message-feedback 同款） */
 function feedbackCard(message: Message, ctx: RenderContext): string {
   const body = messageBodyText(message.content)
   if (!body) return ''
@@ -659,7 +612,7 @@ function feedbackCard(message: Message, ctx: RenderContext): string {
   ].join('\n')
 }
 
-/** 上下文压缩摘要（`role:'summary'`）：聊天气泡里是一张紧凑卡片，导出里点开看全文 */
+/** 上下文压缩摘要（role:'summary'）：紧凑卡片，点开看全文 */
 function summaryCard(message: Message, ctx: RenderContext): string {
   const body = messageBodyText(message.content)
   const mode = message.uiData?.compressMode
@@ -730,9 +683,7 @@ function renderRow(row: Row, ctx: RenderContext): string {
   return [bubble, cards].filter(Boolean).join('\n')
 }
 
-/* ============================================================================
- * 内嵌样式（单文件、不依赖任何外部资源；随系统深浅色切换）
- * ========================================================================== */
+/* 内嵌样式（单文件、无外部资源；随系统深浅色切换） */
 
 const EXPORT_STYLE = `
 :root {
@@ -815,7 +766,7 @@ body {
 *::-webkit-scrollbar { width: 10px; height: 10px; }
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb {
-  /* 透明边框 + padding-box 裁剪：滑块视觉上只有 4px 宽，热区仍是 10px（好按、不占版面） */
+  /* 透明边框 + padding-box：视觉 4px，热区 10px */
   border: 3px solid transparent;
   border-radius: 999px;
   background: var(--scrollbar-thumb);
@@ -826,9 +777,7 @@ body {
   background-clip: padding-box;
 }
 *::-webkit-scrollbar-corner { background: transparent; }
-/* Firefox 不支持 ::-webkit-scrollbar，走标准属性；
-   ⚠️ 反过来不能在 Chromium 上设 scrollbar-width —— 一旦设了，::-webkit-scrollbar 整条失效
-   （应用里 search-dialog.scss 踩过同样的坑），所以用 @supports 隔开。 */
+/* Firefox 不支持 ::-webkit-scrollbar，走标准属性；Chromium 上不能设 scrollbar-width（会令 webkit 伪元素失效） */
 @supports not selector(::-webkit-scrollbar) {
   html { scrollbar-color: var(--scrollbar-thumb) transparent; scrollbar-width: thin; }
 }
@@ -983,8 +932,7 @@ details[open] > .reasoning-header .collapsed-icon { opacity: 1; transform: rotat
 .tool-call__timing { flex: none; color: var(--text-tertiary); font-size: var(--font-size-xs); }
 .tool-call__caret { flex: none; width: 12px; height: 12px; fill: var(--text-tertiary); transition: transform 0.2s ease; }
 details[open] > .tool-call__row .tool-call__caret { transform: rotate(180deg); }
-/* 工具调用的**展开视图**：参数 + 返回。超过 50vh 时在视图内部滚动（聊天区每类工具各有一套专门视图，
-   导出不复刻，只给这份通用详情）。 */
+/* 工具调用的展开视图：参数 + 返回，超 50vh 内部滚动 */
 .tool-call__view {
   margin: 4px 0 8px; padding: 8px 12px; border-left: 1px solid var(--border-color); border-radius: 0 8px 8px 0;
   background: var(--hover-bg);
@@ -1019,7 +967,7 @@ details[open] > .tool-call__row .tool-call__caret { transform: rotate(180deg); }
 .tool-group__caret { flex: none; width: 12px; height: 12px; fill: var(--text-tertiary); transition: transform 0.2s ease; }
 details[open] > .tool-group__head .tool-group__caret { transform: rotate(180deg); }
 .tool-group__body { display: flex; flex-direction: column; gap: 2px; margin-top: 2px; padding-left: 10px; border-left: 1px solid var(--border-color); }
-/* 组内卡片去掉自身左外边距：左缘由 .tool-group 统一给（否则会再右移 28px，与组头错位） */
+/* 组内卡片去掉左外边距：由 .tool-group 统一给，否则与组头错位 */
 .tool-group__body > .tool-call { margin-left: 0; }
 .tool-group__body .reasoning-block { margin-bottom: 2px; }
 
@@ -1089,7 +1037,7 @@ details[open] > .compress-summary-head .compress-summary-expand { transform: rot
 .table-wrapper tr:last-child td { border-bottom: none; }
 
 /* ==================== 打印 / 存 PDF ==================== */
-/* 折叠内容一律展开（浏览器对收起的详情块默认不打印），高度上限与滚动条也一并放开 */
+/* 打印：折叠内容一律展开，高度上限与滚动一并放开 */
 @media print {
   /* 回到普通文档流：固定头的 100vh 布局不能拿去打印（否则只会印出第一屏） */
   html, body { height: auto; }
@@ -1105,17 +1053,11 @@ details[open] > .compress-summary-head .compress-summary-expand { transform: rot
 }
 `.trim()
 
-/* ============================================================================
- * 文档组装
- * ========================================================================== */
+/* 文档组装 */
 
 /**
- * 将会话转换为一份**独立完整的 HTML 文档**（`<!DOCTYPE html>` 起、`</html>` 止）。
- *
- * 站内行为（行模型 / 气泡 / 折叠默认态）见文件头注释与 `buildRows`、`renderRow`。
- *
- * @param renderMarkdown 正文 Markdown → HTML 片段（由 `createMarkdownHtmlRenderer()` 提供）
- * @param options 省略选项（工具调用信息 / 思考文本）
+ * 会话 → 独立完整 HTML 文档。
+ * @param renderMarkdown 正文 Markdown → HTML 片段
  */
 export function sessionToHtml(
   session: Session,
@@ -1179,10 +1121,8 @@ export function sessionToHtml(
 }
 
 /**
- * 创建正文 Markdown → HTML 的转换器：复用应用自己的 react-markdown 渲染链，导出效果与气泡一致。
- *
- * react-dom/server 只在真的导出时才动态加载（独立 chunk）。渲染链不可用时退化为转义后的 `<pre>`
- * —— 正文永远只是文本，不会被当成 HTML 执行。
+ * 创建正文 Markdown → HTML 转换器：复用应用的 react-markdown 渲染链。
+ * 只在真导出时动态加载；不可用时退化为转义后的 <pre>。
  */
 export async function createMarkdownHtmlRenderer(): Promise<MarkdownToHtml> {
   try {
@@ -1196,7 +1136,7 @@ export async function createMarkdownHtmlRenderer(): Promise<MarkdownToHtml> {
 
     return (src: string) =>
       server.renderToStaticMarkup(
-        // 注：react-markdown 的 props 类型较严，这里只用到最基础的几个字段
+        // 注：react-markdown 的 props 类型较严，只用到最基础的几个字段
         createElement(
           ReactMarkdown as any,
           {
@@ -1209,8 +1149,8 @@ export async function createMarkdownHtmlRenderer(): Promise<MarkdownToHtml> {
                   { href: props.href, target: '_blank', rel: 'noopener noreferrer' },
                   props.children,
                 ),
-              // 表格套一层滚动容器（与聊天区 MarkdownRenderer 同款），窄屏下横向滚动而不是撑破气泡
-              // ⚠️ `node`（react-markdown 给的 AST）不能往 DOM 上传，否则会渲染成 node="[object Object]"
+              // 表格套一层滚动容器（与聊天区同款），窄屏横向滚动而不撑破气泡
+              // node（AST）不能往 DOM 上传，否则会渲染成 node="[object Object]"
               table: ({ node, children, ...rest }: any) =>
                 createElement(
                   'div',
@@ -1229,14 +1169,13 @@ export async function createMarkdownHtmlRenderer(): Promise<MarkdownToHtml> {
 }
 
 /**
- * 导出会话到 HTML 文件。
- * @returns 保存的文件路径，取消返回 null
+ * 导出会话到 HTML 文件；取消返回 null。
  */
 export async function exportSessionToFile(
   sessionId: string,
   options: ExportOptions = DEFAULT_OPTIONS,
 ): Promise<string | null> {
-  // 分页加载下必须先确保完整历史在内存，否则只会导出已加载的尾部
+  // 分页加载下必须先确保完整历史在内存，否则只导出已加载的尾部
   await sessionStore.ensureAllMessagesLoaded(sessionId)
   const session = sessionStore.getSession(sessionId)
   if (!session) return null
@@ -1245,7 +1184,7 @@ export async function exportSessionToFile(
   const html = sessionToHtml(session, renderMarkdown, options)
 
   try {
-    // 动态导入 Tauri API（非 Tauri 环境走 catch 降级）
+    // 动态导入 Tauri API（非 Tauri 环境降级）
     const { save } = await import('@tauri-apps/plugin-dialog')
     const { writeTextFile } = await import('@tauri-apps/plugin-fs')
 
@@ -1277,7 +1216,7 @@ export async function exportSessionToFile(
   }
 }
 
-/** 浏览器降级方案：创建 Blob 下载。 */
+/** 浏览器降级：Blob 下载。 */
 function downloadAsFile(content: string, title: string): void {
   const blob = new Blob([content], { type: 'text/html;charset=utf-8' })
   const url = URL.createObjectURL(blob)

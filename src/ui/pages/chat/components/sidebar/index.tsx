@@ -1,13 +1,6 @@
 /**
- * sidebar — 侧边栏，三个页签：会话 / 工作目录 / 技能。
- *
- * - 每个页签顶部都有搜索框（只搜当前页签）：会话 = 标题 / 分组名，工作目录 = 磁盘递归搜文件名，
- *   技能 = 名称 / 描述 / 标签；关键词挂在**此处**（侧边栏常驻），切页签回来仍在
- * - 会话：working 状态指示、按 Agent 或工作目录分组、导出 Markdown、置顶会话 / 分组、
- *   导入知识库；**置顶的分组排到列表最前**（状态存设置项 pinnedSessionGroups）；
- *   会话项与分组头的操作统一收拢到右键菜单（共享 ContextMenu）
- * - 工作目录：当前工作目录的文件树（只读，见 workspace-tree.tsx）
- * - 技能：已安装技能列表（见 skill-list.tsx）；单击 = 开关式引用 SKILL.md，已引用的卡片高亮
+ * 侧边栏，三个页签：会话 / 工作目录 / 技能。搜索关键词挂在侧边栏一级（否则切页签回来就丢）。
+ * 会话页签：working 指示、按 Agent 或工作目录分组、置顶、导出 Markdown、导入知识库。
  */
 import { useState, useMemo, useCallback, JSX } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -61,9 +54,9 @@ import {
 
 interface Props {
   onSelectSession: (sessionId: string) => void
-  /** 把路径作为附件挂到聊天输入框（目录树右键「引用」/ 拖拽到输入框） */
+  /** 把路径作为附件挂到聊天输入框 */
   onAttachPaths: (paths: string[]) => void
-  /** 把技能引用挂到聊天输入框（技能卡片单击 / 拖拽到输入框） */
+  /** 把技能引用挂到聊天输入框 */
   onAttachSkills: (names: string[]) => void
   /** 输入框当前已引用的技能名（技能卡片据此高亮） */
   referencedSkills: string[]
@@ -73,12 +66,12 @@ interface Props {
   className?: string
 }
 
-/** 分组始终装完整会话对象（分组规则与 Session 解耦，见 session-grouping） */
+/** 分组装完整会话对象（分组规则与 Session 解耦） */
 type SessionGroup = AnySessionGroup<Session>
 
 type SidebarTab = 'sessions' | 'workspace' | 'skills'
 
-/** 页签定义（label 以中文为 i18n key，渲染时再 t()） */
+/** 页签定义（label 即 i18n key） */
 const SIDEBAR_TABS: { key: SidebarTab; label: string }[] = [
   { key: 'sessions', label: '会话' },
   { key: 'workspace', label: '工作目录' },
@@ -100,17 +93,11 @@ function ChatSidebar({
   const [exportSessionId, setExportSessionId] = useState<string | null>(null)
   const [statsOpen, setStatsOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<SidebarTab>('sessions')
-  /**
-   * 三个页签各自的搜索关键词。放侧边栏一级（而非各页签组件里）：会话页签常驻 DOM、
-   * 另两个切走会卸载，关键词提上来才能「切回来还在」。
-   */
+  /** 三个页签各自的搜索关键词：提到侧边栏一级，切走卸载后回来还在。 */
   const [sessionQuery, setSessionQuery] = useState('')
   const [workspaceQuery, setWorkspaceQuery] = useState('')
   const [skillsQuery, setSkillsQuery] = useState('')
-  /**
-   * 会话项右键菜单。全应用唯一的 ContextMenu 实现：点外部关闭 / Esc 关闭 / 视口钳制
-   * 都由它负责，这里不再需要上一版的 activeMenuId + menuRef + mousedown 那套手工逻辑。
-   */
+  /** 会话项右键菜单（共享 ContextMenu 负责外部关闭 / Esc / 视口钳制） */
   const sessionMenu = useContextMenu<Session>()
 
   const [showImportModal, setShowImportModal] = useState(false)
@@ -126,13 +113,13 @@ function ChatSidebar({
   const sessionGroupType = settingsState.value.sessionGroupType
   // 在 observer 渲染中读取，确保切换会话时分组高亮能同步刷新
   const currentSessionId = chatState.value.currentSessionId
-  /** 会话搜索关键词（trim + 小写后交给 filterSessionGroups） */
+  /** 会话搜索关键词（trim + 小写） */
   const sessionKeyword = sessionQuery.trim().toLowerCase()
   // 已置顶的分组（只取当前维度那一份；缺键 / 旧数据时兜底为空）
   const pinnedGroupKeys =
     settingsState.value.pinnedSessionGroups?.[sessionGroupType] ?? []
   const groups = useMemo(() => {
-    // 分组规则（含分组置顶）在 session-grouping 里，这里只注入 Agent 查询与置顶 key
+    // 分组规则（含置顶）在 session-grouping，这里只注入 Agent 查询与置顶 key
     const all = groupSessions(sessions, {
       type: sessionGroupType,
       lookupAgent: (agentId) => agentStore.getAgent(agentId),
@@ -148,7 +135,7 @@ function ChatSidebar({
   const handleNewSessionInGroup = useCallback(
     (group: SessionGroup) => {
       if (sessionGroupType === 'workspace' && group.key !== UNGROUPED_KEY) {
-        // 先清空 agent 让 useEffect 取默认 agent，再用 setTimeout 在其后覆盖 workspace
+        // 先清空 agent 让 useEffect 取默认 agent，再在下一拍覆盖 workspace
         chatState.setValue('selectedAgentId', '')
         chatState.setValue('selectedWorkspace', group.key)
         chatState.set({ currentSessionId: null, error: null })
@@ -182,8 +169,7 @@ function ChatSidebar({
 
   const handleSelect = useCallback(
     (sessionId: string) => {
-      // 清除新回复红点由 `onSelectSession`（chat-view）统一负责，
-      // 托盘唤起 / 检索跳转等入口也走同一套，避免只在这里清、别处漏清
+      // 清红点由 onSelectSession 统一负责，托盘唤起 / 检索跳转等入口也走同一套
       chatState.setValue('currentSessionId', sessionId)
       onSelectSession(sessionId)
     },
@@ -193,8 +179,7 @@ function ChatSidebar({
   // 菜单项回调不接收 MouseEvent：ContextMenu 在调用 onClick 前已先 onClose
   // （见 ContextMenu/index.tsx::handleItemClick），故不再需要 stopPropagation
   const handleDelete = useCallback((sessionId: string) => {
-    // ⚠️ 必须走 chat-service 的 deleteSessions（先断流再删库）：直接 sessionStore.deleteSession
-    // 会在会话仍在生成时留下孤儿消息
+    // ⚠️ 必须走 deleteSessions（先断流再删库）：直接删会在会话仍在生成时留下孤儿消息
     void deleteSessions([sessionId])
     if (chatState.value.currentSessionId === sessionId) {
       chatState.set({ currentSessionId: null })
@@ -212,8 +197,7 @@ function ChatSidebar({
 
   const handleSaveEdit = useCallback(
     (sessionId: string) => {
-      // ⚠️ 走 chat-service 的 renameSession：空标题 / 超长标题校验只在服务层，
-      // 接口层（手机）与侧栏共用同一份规则，不得各写一份
+      // ⚠️ 走 renameSession：空标题 / 超长校验只在服务层，接口层与侧栏共用同一份规则
       renameSession(sessionId, editTitle)
       setEditingId(null)
     },
@@ -227,7 +211,7 @@ function ChatSidebar({
     }))
   }, [])
 
-  /** 置顶分组：分组是现算的虚拟分组（无实体可挂字段），状态存设置项 `pinnedSessionGroups`（按维度分开） */
+  /** 置顶分组：分组是现算的，状态存设置项 pinnedSessionGroups（按维度分开） */
   const handleToggleGroupPin = useCallback(
     (groupKey: string) => {
       const all = settingsState.value.pinnedSessionGroups ?? {
@@ -289,7 +273,7 @@ function ChatSidebar({
       try {
         const list = await ragService.listKnowledgeBases()
         setKbList(list)
-        // 只有一个知识库时直接选中：用户的意图没有歧义（多个时才需要他挑一个）
+        // 只有一个知识库时直接选中（意图无歧义）
         if (list.length === 1) setSelectedKbId(list[0].id)
       } catch (err: any) {
         showToast(
@@ -313,7 +297,7 @@ function ChatSidebar({
   }, [])
 
   const handleConfirmImport = useCallback(async () => {
-    // 按钮在前置条件不满足时就已禁用（见 confirmDisabled），走到这里只剩兜底
+    // 按钮在前置条件不满足时就已禁用，走到这里只剩兜底
     if (!importSessionId || !selectedKbId) return
     // 分页加载下，导入前补齐完整历史
     await sessionStore.ensureAllMessagesLoaded(importSessionId)
@@ -344,7 +328,7 @@ function ChatSidebar({
     setImportLoading(false)
   }, [importSessionId, selectedKbId, selectedMsgIds, handleCloseImport])
 
-  /** 会话项右键菜单项：渲染时按 target 现算，所以「置顶 / 取消置顶」这类文案不会是打开那一刻的过期值 */
+  /** 会话项右键菜单项：渲染时按 target 现算，文案不会是打开那一刻的过期值 */
   const buildSessionMenuItems = useCallback(
     (session: Session): ContextMenuItem[] => [
       {
@@ -410,8 +394,7 @@ function ChatSidebar({
   }, [])
 
   /**
-   * 消息列表右键菜单「前面全选 / 后面全选」：**追加**语义 —— 只往选中集合里加，不取消已选的。
-   * （「全选」若做成覆盖，用户先前逐条挑出来的那些会被默默丢掉。）
+   * 「前面全选 / 后面全选」是**追加**语义：全选若做成覆盖，用户先前逐条挑的会被默默丢掉。
    */
   const handleAppendMessages = useCallback((ids: string[]) => {
     setSelectedMsgIds((prev) => {
@@ -422,8 +405,7 @@ function ChatSidebar({
   }, [])
 
   /**
-   * 目标知识库下拉项：Select 的选项只有单行文案，原来的「文档数」徽标塞不进去，
-   * 于是并进标签（`名称（N 个文档）`）—— 计数是选库时的关键判断依据，不能只留在悬停提示里。
+   * 目标知识库下拉项：文档数并进标签（单行文案塞不进徽标），计数是选库的关键依据。
    * dropdownWidth="content" 下长库名会被省略，故把完整库名挂到 title。
    */
   const kbOptions = useMemo(
@@ -445,14 +427,14 @@ function ChatSidebar({
     const rt = getSessionRuntime(session.id)
     const isCurrent = session.id === chatState.value.currentSessionId
     const isEdit = editingId === session.id
-    // 「在忙」= 引擎 run 在跑 或 本地前置处理中（图片识别），见 sessionRuntimeStore
+    // 「在忙」= 引擎 run 在跑 或 本地前置处理中（图片识别）
     const isBusy = isSessionRuntimeBusy(rt)
     return (
       <div
         key={session.id}
         className={`session-item ${isCurrent ? 'active' : ''} ${isBusy ? 'working' : ''} ${session.pinned ? 'pinned' : ''}`}
         onClick={() => handleSelect(session.id)}
-        // 右键即菜单：openAt 会 preventDefault + stopPropagation，顺带拦掉浏览器默认菜单与外层处理
+        // 右键即菜单：openAt 会 preventDefault + stopPropagation，顺带拦掉默认菜单
         onContextMenu={(e) => sessionMenu.openAt(e, session)}>
         {/* 非当前会话有新回复 → 左侧红点提示 */}
         {rt.hasNewReply && !isCurrent && (
@@ -533,7 +515,7 @@ function ChatSidebar({
         ))}
       </div>
 
-      {/* 会话页签常驻 DOM（只切换显隐），避免切换页签时丢掉滚动位置与分组的展开态 */}
+      {/* 会话页签常驻 DOM（只切换显隐），保住滚动位置与展开态 */}
       <div
         className={`session-pane${activeTab === 'sessions' ? '' : ' tab-hidden'}`}>
         {/* 空列表不配搜索框：永远搜不到东西的输入框只会让人以为坏了 */}
@@ -770,7 +752,7 @@ interface SessionGroupViewProps {
   group: SessionGroup
   sessionGroupType: 'agent' | 'workspace'
   isCollapsed: boolean
-  /** 已置顶（排到最前 + 图钉 + 强调色） */
+  /** 已置顶（排到最前 + 图钉） */
   isPinned: boolean
   isUngrouped: boolean
   /** 组内含当前选中会话（用于分组高亮） */
@@ -798,7 +780,7 @@ function SessionGroupView({
   /** 分组头右键菜单：与「会话项」共用同一个 ContextMenu */
   const menu = useContextMenu<SessionGroup>()
 
-  // 组内有会话在忙（含本地前置处理：run 在跑 或 图片识别中）
+  // 组内有会话在忙（run 在跑 或 图片识别中）
   const hasWorkingSession = useMemo(
     () => group.sessions.some((s) => isSessionRuntimeBusy(getSessionRuntime(s.id))),
     [group.sessions],
@@ -824,7 +806,7 @@ function SessionGroupView({
     if (!confirmed) return
 
     const ids = group.sessions.map((s) => s.id)
-    // 同单项删除：先断流再删库（见 deleteSessions）
+    // 同单项删除：先断流再删库
     const deleted = await deleteSessions(ids)
     const currentId = chatState.value.currentSessionId
     if (currentId && ids.includes(currentId)) {
@@ -916,14 +898,14 @@ function SessionGroupView({
         {isCollapsed && hasNewReplySession && (
           <span className="new-reply-dot" title={t('有新的回复')} />
         )}
-        {/* 已置顶 → 只挂一枚图钉，不改图标 / 文字颜色（见 .group-pin-indicator） */}
+        {/* 已置顶 → 只挂一枚图钉，不改图标 / 文字颜色 */}
         {isPinned && (
           <span className="group-pin-indicator" title={t('已置顶分组')}>
             <PinSvg />
           </span>
         )}
         <span className="group-name">{group.name}</span>
-        {/* 会话数只是计数（点击行为交给整行 = 折叠/展开），操作全在右键菜单里 */}
+        {/* 会话数只是计数（点击交给整行），操作全在右键菜单里 */}
         <span className="group-count">{group.sessions.length}</span>
       </div>
 

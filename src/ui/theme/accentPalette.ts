@@ -1,19 +1,15 @@
 /**
- * accentPalette —— 主题色（品牌色）的**运行期**派生。
+ * 主题色的运行期派生。
  *
- * 为什么运行期还需要这一层：用户在「设置 → 通用 → 主题色」里用取色器选的是**任意颜色**，
- * 只有运行期才知道；`ui/styles/theme.scss` 的 SCSS 函数只能在**构建期**算预设色板。
- * 两条路必须算出**同一套值** —— `src/tests/ui/accent-color-contract.test.ts` 会把
- * theme.scss 编译出来，与本模块逐令牌对拍，漂了就是红的。
- *
- * ⚠️ 改这里 = 改观感：ACCENT_MIX 与 theme.scss 的 `$accent-mix-*` **一一对应**，
- *    派生关系（亮色压暗 / 暗色提亮 / 大色块再压暗 / 前景自动黑或白）的说明见 theme.scss 文件头。
+ * 取色器选的是任意颜色，只有运行期才知道，而 theme.scss 的 SCSS 函数只能在构建期算预设色板 ——
+ * 两边必须算出同一套值（accent-color-contract 用例会逐令牌对拍）。
+ * ⚠️ 改这里的 ACCENT_MIX = 改观感，必须同步 theme.scss 的 $accent-mix-*。
  */
 
 /** 亮 / 暗两档（与 <html data-theme> 的取值一致） */
 export type AccentTheme = 'light' | 'dark'
 
-/** 品牌令牌名（顺序与 theme.scss 的 accent-tokens() 返回的 map 一致，方便对拍与 diff） */
+/** 品牌令牌名（顺序与 theme.scss 的 accent-tokens() 一致，方便对拍与 diff） */
 export const ACCENT_TOKEN_NAMES = [
   '--primary',
   '--primary-hover',
@@ -30,15 +26,14 @@ export type AccentTokenName = (typeof ACCENT_TOKEN_NAMES)[number]
 export type AccentTokens = Record<AccentTokenName, string>
 
 /**
- * 派生系数（权重 = `mix(前者, 后者, 权重)` 里前者的占比）。
- * 与 theme.scss 的 `$accent-mix-*` 一一对应 —— 两边同时改才是改，改一边由用例拦下。
+ * 派生系数（权重 = mix(前者, 后者, 权重) 里前者的占比）。与 theme.scss 的 $accent-mix-* 一一对应。
  */
 export const ACCENT_MIX = {
-  /** 亮色：--primary-hover = mix(brand, #000, 87%) —— 压暗一档 */
+  /** 亮色：--primary-hover = mix(brand, #000, 87%) 压暗一档 */
   lightHoverBrand: 0.87,
-  /** 亮色：--primary-soft = mix(brand, #fff, 8%) —— 8% 品牌色薄涂 */
+  /** 亮色：--primary-soft = mix(brand, #fff, 8%) 薄涂 */
   lightSoftBrand: 0.08,
-  /** 暗色：--primary = mix(brand, #fff, 82%) —— 提亮一档（白底挑的深色在深底上不够跳） */
+  /** 暗色：--primary = mix(brand, #fff, 82%) 提亮一档（深底上深色不够跳） */
   darkPrimaryBrand: 0.82,
   /** 暗色：--primary-hover = mix(brand, #fff, 66%) */
   darkHoverBrand: 0.66,
@@ -57,12 +52,11 @@ export const ACCENT_MIX = {
 /** 暗色档 --bg-primary：--primary-soft 往这个底上薄涂（同 theme.scss 的 $dark-bg-primary） */
 export const DARK_BG_PRIMARY = '#1e1e2e'
 
-/** 默认品牌基色（同 theme.scss 的 $brand-default）；设置为空串 = 用它，不注入任何覆盖 */
+/** 默认品牌基色（同 $brand-default）；设置为空串 = 用它 */
 export const DEFAULT_ACCENT = '#4f46e5'
 
 /**
- * 预设色板（同 theme.scss 的 `$accent-presets`，含顺序）。
- * 全部是中深色 —— 前景判定后都是白字，观感统一；用户想要浅色可以自己取色（前景自动转黑）。
+ * 预设色板（同 theme.scss 的 $accent-presets，含顺序）。全部是中深色 —— 前景判定后都是白字。
  */
 export const ACCENT_PRESETS: ReadonlyArray<{ name: string; label: string; color: string }> = [
   { name: 'indigo', label: '靛蓝', color: '#4f46e5' },
@@ -90,8 +84,7 @@ const WHITE: Rgb = { r: 255, g: 255, b: 255 }
 const BLACK: Rgb = { r: 0, g: 0, b: 0 }
 
 /**
- * 规范化用户输入的颜色：支持 `#rgb` / `#rrggbb`（`#` 可省），大小写不敏感。
- * 不是合法颜色时返回 `null`（调用方据此回落到默认档，而不是把非法值写进 CSS）。
+ * 规范化用户输入的颜色：支持 #rgb / #rrggbb（# 可省）。不是合法颜色时返回 null。
  */
 export function normalizeHex(input: string): string | null {
   const raw = input.trim().replace(/^#/, '').toLowerCase()
@@ -113,19 +106,15 @@ function parseRgb(hex: string): Rgb | null {
   }
 }
 
-/** RGB → `#rrggbb` 小写（与 SCSS 侧 -hex() 一致：先取整再转） */
+/** RGB → #rrggbb 小写（与 SCSS 侧一致：先取整再转） */
 function toHex(c: Rgb): string {
   const pair = (n: number) => Math.round(n).toString(16).padStart(2, '0')
   return `#${pair(c.r)}${pair(c.g)}${pair(c.b)}`
 }
 
 /**
- * sRGB 空间线性混合（= SCSS 的 `color.mix(a, b, w)` / CSS 的 `color-mix(in srgb, a w%, b)`）：
- * 逐通道加权。
- *
- * ⚠️ 通道**不取整**（与 sass 的 color.mix 一致，它保留 68.73 这种小数）：
- *   中间值一旦取整，下一级派生（暗色档的 fill / bar / soft 都基于 --primary）就会把误差放大一档；
- *   取整只发生在 toHex() 输出那一步。
+ * sRGB 空间线性混合（= SCSS 的 color.mix / CSS 的 color-mix）：逐通道加权。
+ * ⚠️ 通道不取整：中间值取整会在下一级派生（基于 --primary 的 fill / bar / soft）上放大误差。
  */
 function mixSrgb(a: Rgb, b: Rgb, weightOfA: number): Rgb {
   const w = weightOfA
@@ -157,8 +146,8 @@ export function contrastRatio(a: Rgb, b: Rgb): number {
 }
 
 /**
- * 底色 → 前景色：黑 / 白里对比度**更高**的那一档（同 SCSS 的 -on-color）。
- * 判"哪个更高"而不是按亮度阈值：阈值在某一段颜色上必然选错，比对比度则恒 ≥ 4.58:1。
+ * 底色 → 前景色：黑 / 白里对比度更高的那一档。
+ * 按对比度而不是亮度阈值：阈值在某段颜色上必然选错，比对比度则恒 ≥ 4.58:1。
  */
 export function onColor(bg: Rgb): string {
   const white = contrastRatio(bg, WHITE)
@@ -167,8 +156,8 @@ export function onColor(bg: Rgb): string {
 }
 
 /**
- * 派生整套品牌令牌（与 theme.scss 的 `accent-tokens()` 逐值等价）。
- * @param baseHex 品牌基色（`#rrggbb`）；@param theme light / dark
+ * 派生整套品牌令牌（与 theme.scss 的 accent-tokens() 逐值等价）。
+ * @param baseHex 品牌基色（#rrggbb）；@param theme light / dark
  */
 export function accentTokens(baseHex: string, theme: AccentTheme): AccentTokens {
   const base = parseRgb(baseHex)
@@ -205,11 +194,9 @@ export function accentTokens(baseHex: string, theme: AccentTheme): AccentTokens 
 }
 
 /**
- * 生成注入用的样式文本：`--brand`（原始基色，便于排查/后续消费）+ 亮暗两档令牌。
- *
- * 选择器用 `:root[data-theme=…]`（特异性 0,2,0）而不是 `[data-theme=…]`（0,1,0）：
- * 这样既压过 theme.scss 里的默认块与 `[data-accent]` 预设块，也不受样表插入顺序影响
- * （dev 下 Vite 会在 HMR 时重插样式元素，靠顺序取胜的写法会被反超）。
+ * 生成注入用的样式文本：--brand + 亮暗两档令牌。
+ * 选择器用 :root[data-theme=…]（特异性 0,2,0）而不是 [data-theme=…]：既压过默认块与预设块，
+ * 也不受样式插入顺序影响（dev 下 Vite HMR 会重插样式元素，靠顺序取胜会被反超）。
  */
 export function accentStyleText(baseHex: string): string {
   const hex = normalizeHex(baseHex)
