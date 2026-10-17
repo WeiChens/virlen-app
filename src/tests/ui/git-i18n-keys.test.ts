@@ -22,6 +22,7 @@ const FILES = [
   'src/ui/pages/chat/components/git/GitPanel.tsx',
   'src/ui/pages/chat/components/git/GitChangeRow.tsx',
   'src/ui/pages/chat/components/git/GitBranchMenu.tsx',
+  'src/ui/pages/chat/components/git/GitSyncMenu.tsx',
   'src/ui/pages/chat/components/git/GitDiffModal.tsx',
   'src/ui/pages/chat/components/git/GitLogModal.tsx',
   // 提交图（弹窗 + 行 + canvas + 分页 hook）：新组件都必须登记，否则「新加了一句 t() 忘了翻译」

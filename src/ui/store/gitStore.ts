@@ -8,7 +8,12 @@
  * 方案：`docs/git-management-plan.md`。
  */
 import { makeObservable, observable } from 'mobx'
-import type { GitBranchInfo, GitRepoInfo, GitStatusSnapshot } from '@/domain/git'
+import type {
+  GitBranchInfo,
+  GitRemoteInfo,
+  GitRepoInfo,
+  GitStatusSnapshot,
+} from '@/domain/git'
 
 class GitStore {
   /**
@@ -31,6 +36,8 @@ class GitStore {
   notRepo = false
   snapshot: GitStatusSnapshot | null = null
   branches: GitBranchInfo[] = []
+  /** 远程仓库（`git remote -v`）—— 同步浮层据此显示地址 / 类型，也据此判断「有没有配远程」 */
+  remotes: GitRemoteInfo[] = []
   /** 首次加载（骨架屏） */
   loading = false
   /** 正在进行的操作名（按钮禁用 + 文案）；`null` = 空闲 */
@@ -49,6 +56,14 @@ class GitStore {
    */
   hookOutput: string | null = null
 
+  /**
+   * 最近一次**网络操作**（fetch / pull / push）的 git 输出 —— 非空才展示。
+   *
+   * 与 `hookOutput` 分开：两者来源不同、时机不同（提交不一定推送），共用一份字段会出现
+   * 「推了一下，提交输出块现在装的是 push 的进度」这种错位。
+   */
+  syncOutput: string | null = null
+
   constructor() {
     makeObservable(this, {
       dir: observable,
@@ -58,12 +73,14 @@ class GitStore {
       notRepo: observable,
       snapshot: observable,
       branches: observable,
+      remotes: observable,
       loading: observable,
       busy: observable,
       error: observable,
       open: observable,
       commitDraft: observable,
       hookOutput: observable,
+      syncOutput: observable,
     })
   }
 }

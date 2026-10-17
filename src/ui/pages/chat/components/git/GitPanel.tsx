@@ -29,6 +29,7 @@ import {
   initRepo,
   loadCommitDetail,
   refreshBranches,
+  refreshRemotes,
   refreshStatus,
   stage,
   undoLastCommit,
@@ -37,8 +38,10 @@ import {
 import RefreshSvg from '@/ui/components/icons/RefreshSvg'
 import HistorySvg from '@/ui/components/icons/HistorySvg'
 import GraphSvg from '@/ui/components/icons/GraphSvg'
+import UndoSvg from '@/ui/components/icons/UndoSvg'
 import GitChangeRow, { type GitRowTarget } from './GitChangeRow'
 import GitBranchMenu from './GitBranchMenu'
+import GitSyncMenu from './GitSyncMenu'
 import GitDiffModal from './GitDiffModal'
 import GitLogModal from './GitLogModal'
 import GitGraphModal from './GitGraphModal'
@@ -48,11 +51,41 @@ interface Props {
   onClose: () => void
 }
 
+/**
+ * 输出块（提交的 hooks / 警告、网络操作的进度与摘要）—— 两处共用同一个样式。
+ *
+ * 正文用 `pre` + 等宽字体（hook 输出与 git 进度都有对齐与缩进），限高滚动、不把下面的列表顶出去。
+ */
+function OutputBlock({
+  title,
+  text,
+  onClose,
+}: {
+  title: string
+  text: string
+  onClose: () => void
+}) {
+  return (
+    <div className="git-hook-output">
+      <div className="git-hook-head">
+        <span>{title}</span>
+        <span className="git-spacer" />
+        <button type="button" className="git-close" title={t('关闭')} onClick={onClose}>
+          ✕
+        </button>
+      </div>
+      <pre>{text}</pre>
+    </div>
+  )
+}
+
 export const GitPanel = observer(function GitPanel({ onClose }: Props) {
   const [branchMenuOpen, setBranchMenuOpen] = useState(false)
   const [diffTarget, setDiffTarget] = useState<GitRowTarget | null>(null)
   const [logOpen, setLogOpen] = useState(false)
   const [graphOpen, setGraphOpen] = useState(false)
+  /** 远程浮层（获取 / 拉取 / 推送 / 测试连接） */
+  const [syncMenuOpen, setSyncMenuOpen] = useState(false)
   /** 选中集（键 = `rowKey`，保持点击先后）；`anchorRef` 是 Shift 范围选择的起点 */
   const [selected, setSelected] = useState<string[]>([])
   const anchorRef = useRef<string | null>(null)
@@ -228,15 +261,30 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
               </span>
             )}
             <span className="git-spacer" />
-            {/* 撤销上次提交：只在有提交时出现（空仓库里它没有意义） */}
+            {/* 远程同步入口：一是刷新列表（用户在终端里改过远程很常见），二是才打开浮层 */}
+            <button
+              type="button"
+              className="git-link-btn git-sync-trigger"
+              disabled={disabled}
+              onClick={() => {
+                if (!syncMenuOpen) void refreshRemotes()
+                setSyncMenuOpen((v) => !v)
+              }}
+              title={t('获取 / 拉取 / 推送（凭据策略 = SSH）')}>
+              {t('同步')}
+            </button>
+            {/* 撤销上次提交：只在有提交时出现（空仓库里它没有意义）。
+                图标按钮而不是文字：头部已有 4 个图标 + 分支名 + 上游徽标，再摆一个六字文字按钮
+                会把分支名（最该看清的那个）挤到只剩几个字 */}
             {head?.oid && (
               <button
                 type="button"
-                className="git-link-btn"
+                className="git-icon-btn"
                 disabled={disabled}
-                onClick={() => void undoLastCommit()}
-                title={t('撤销上次提交（改动保留在暂存区）')}>
-                {t('撤销上次提交')}
+                title={t('撤销上次提交（改动保留在暂存区）')}
+                aria-label={t('撤销上次提交')}
+                onClick={() => void undoLastCommit()}>
+                <UndoSvg />
               </button>
             )}
             {/* 仓库级入口：提交记录 / 提交图（都是读操作，不受只读沙盒与 busy 影响） */}
@@ -333,24 +381,28 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
       {/* 提交时 git 的 stderr（hooks 的输出 / 警告）：正常提交为空，所以它一出现就是「有事要告诉你」
           —— 之前这份输出被丢掉，用户只知道「提交了」，不知道 hook 改过文件 / 报了什么 */}
       {gitStore.hookOutput && (
-        <div className="git-hook-output">
-          <div className="git-hook-head">
-            <span>{t('提交输出（hooks / 警告）')}</span>
-            <span className="git-spacer" />
-            <button
-              type="button"
-              className="git-close"
-              title={t('关闭')}
-              onClick={() =>
-                runInAction(() => {
-                  gitStore.hookOutput = null
-                })
-              }>
-              ✕
-            </button>
-          </div>
-          <pre>{gitStore.hookOutput}</pre>
-        </div>
+        <OutputBlock
+          title={t('提交输出（hooks / 警告）')}
+          text={gitStore.hookOutput}
+          onClose={() =>
+            runInAction(() => {
+              gitStore.hookOutput = null
+            })
+          }
+        />
+      )}
+
+      {/* 网络操作的输出（fetch / pull / push 的进度与摘要）—— 与上一条块同形，来源不同 */}
+      {gitStore.syncOutput && (
+        <OutputBlock
+          title={t('操作输出')}
+          text={gitStore.syncOutput}
+          onClose={() =>
+            runInAction(() => {
+              gitStore.syncOutput = null
+            })
+          }
+        />
       )}
 
       {gitStore.repo && (
@@ -416,6 +468,10 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
           disabled={disabled}
           onClose={() => setBranchMenuOpen(false)}
         />
+      )}
+
+      {syncMenuOpen && (
+        <GitSyncMenu readonly={readonly} onClose={() => setSyncMenuOpen(false)} />
       )}
 
       {diffTarget && (

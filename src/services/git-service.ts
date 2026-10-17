@@ -25,15 +25,20 @@ import {
   deleteBranch as invokeDeleteBranch,
   diffSides as invokeDiffSides,
   discard as invokeDiscard,
+  fetchRemote as invokeFetch,
   initRepo as invokeInitRepo,
   isGitEnvAvailable,
   log as invokeLog,
+  pullRemote as invokePull,
+  pushRemote as invokePush,
+  remotes as fetchRemotes,
   renameBranch as invokeRenameBranch,
   repoInfo,
   stage as invokeStage,
   status as fetchStatus,
   stopTask,
   switchBranch as invokeSwitchBranch,
+  testRemote as invokeTestRemote,
   undoLastCommit as invokeUndoLastCommit,
   unstage as invokeUnstage,
 } from '@/infrastructure/git'
@@ -43,6 +48,7 @@ import type {
   GitDiffScope,
   GitDiffSides,
   GitLogScope,
+  GitSyncResult,
 } from '@/domain/git'
 import { gitStore } from '@/ui/store/gitStore'
 import { MessageBox as MessagePrompt } from '@/ui/components/shared/MessageBox'
@@ -57,6 +63,9 @@ function newTaskId(prefix: string): string {
 
 /** 上一次 status 的任务 id —— 起新的之前先把它停掉 */
 let statusTaskId: string | null = null
+
+/** 进行中的网络操作任务 id —— 面板关掉时也把它停掉（网络超时是 10 分钟，用户不该等那么久） */
+let syncTaskId: string | null = null
 
 /** 错误 → 一行可读文案（Rust 侧已经把 stderr 拼进来了） */
 function errorText(e: unknown): string {
@@ -124,6 +133,8 @@ export async function syncWorkspace(dir: string | null): Promise<void> {
     gitStore.notRepo = false
     gitStore.snapshot = null
     gitStore.branches = []
+    gitStore.remotes = []
+    gitStore.syncOutput = null
     gitStore.error = null
   })
   if (!dir) return
@@ -155,6 +166,7 @@ async function probe(): Promise<void> {
       if (!info) gitStore.snapshot = null
     })
     if (info) await refreshStatus()
+    if (info) await refreshRemotes()
   } catch (e) {
     // 这里最可能是「未检测到 git」（Rust 侧给的就是一句可读文案）
     runInAction(() => {
@@ -228,7 +240,21 @@ export async function refreshBranches(): Promise<void> {
   }
 }
 
-/** 面板打开 / 关闭（关闭时停止未完成的读操作，不做任何 IO） */
+/** 刷新远程列表。**旁路读取**：失败当「没有远程」（同步浮层会因此给一句说明，不打断面板） */
+export async function refreshRemotes(): Promise<void> {
+  const dir = gitStore.dir
+  if (!dir || !gitStore.repo) return
+  let list: Awaited<ReturnType<typeof fetchRemotes>> = []
+  try {
+    list = await fetchRemotes(dir)
+  } catch {
+    list = []
+  }
+  runInAction(() => {
+    gitStore.remotes = list
+  })
+}
+
 export function setPanelOpen(open: boolean): void {
   runInAction(() => {
     gitStore.open = open
@@ -237,6 +263,19 @@ export function setPanelOpen(open: boolean): void {
     stopTask(statusTaskId)
     statusTaskId = null
   }
+  // 网络操作不跟随面板关闭而丢结果（用户可能只是想收起面板），但**别让它在后台白等到超时**
+  if (!open) cancelSync()
+}
+
+/**
+ * 取消进行中的网络操作（面板关掉 / 用户在浮层里点取消）。
+ *
+ * 只是发起中断：命令壳会等子进程真正退出后才报「已取消」，所以调用方不要假定它是同步完成的。
+ */
+export function cancelSync(): void {
+  if (!syncTaskId) return
+  stopTask(syncTaskId)
+  syncTaskId = null
 }
 
 /** 两次「窗口激活刷新」之间的最小间隔（毫秒）—— 频繁切窗时别反复叫醒 git */
@@ -500,6 +539,73 @@ export function checkRefFormat(name: string): Promise<boolean> {
   const dir = gitStore.dir
   if (!dir) return Promise.resolve(false)
   return invokeCheckRefFormat(dir, name).catch(() => false)
+}
+
+// ==================== 远程（凭据策略 = SSH） ====================
+
+/**
+ * 一次网络操作的公共流程：busy 串行 → 落输出 → toast → 刷新状态与分支。
+ *
+ * `remote` 由调用方**显式给出**（同步浮层已经解析出要用的那个）—— Rust 端的「猜远程」只在未指定时
+ * 生效，两边都猜一遍反而会出现「界面说 origin、实际跑了别的」的错位。
+ */
+async function syncAction(
+  label: string,
+  call: (dir: string, remote: string | null, taskId: string) => Promise<GitSyncResult>,
+  remote: string | null,
+  success: (result: GitSyncResult) => string,
+): Promise<boolean> {
+  const dir = gitStore.dir
+  if (!dir || !gitStore.repo) return false
+  const taskId = newTaskId(`git_${label}`)
+  syncTaskId = taskId
+  let result: GitSyncResult | null = null
+  try {
+    result = await run(label, () => call(dir, remote, taskId))
+  } finally {
+    if (syncTaskId === taskId) syncTaskId = null
+  }
+  if (!result) return false
+  const output = result.output.trim()
+  runInAction(() => {
+    gitStore.syncOutput = output || null
+  })
+  showToast(success(result))
+  await refreshStatus()
+  await refreshBranches()
+  return true
+}
+
+/** `git fetch`：只更新远程跟踪分支（不动工作区）—— 想先看看别人推了什么就用它 */
+export function fetchRemote(remote: string | null = null): Promise<boolean> {
+  return syncAction('fetch', invokeFetch, remote, (r) =>
+    tpl('已从 $__remote__ 获取更新', { remote: r.remote }),
+  )
+}
+
+/** `git pull --ff-only`：快进不了就失败（不生成 merge 提交，冲突留给用户自己处理） */
+export function pullRemote(remote: string | null = null): Promise<boolean> {
+  return syncAction('pull', invokePull, remote, (r) =>
+    tpl('已从 $__remote__ 拉取', { remote: r.remote }),
+  )
+}
+
+/** `git push`（无上游时 Rust 侧自动 `-u`）。⚠️ 不做强制推送，也不弹二次确认 —— 它就是用户点的那个动作 */
+export function pushRemote(remote: string | null = null): Promise<boolean> {
+  return syncAction('push', invokePush, remote, (r) =>
+    tpl('已推送到 $__remote__', { remote: r.remote }),
+  )
+}
+
+/**
+ * 测试远程连接（`git ls-remote`）。
+ *
+ * **不进 `busy`、不写 store**：它是诊断动作，失败时调用方要在原地显示错误（浮层里那行）。
+ */
+export async function testRemote(remote: string | null = null): Promise<void> {
+  const dir = gitStore.dir
+  if (!dir || !gitStore.repo) throw new Error(t('当前工作目录不是 Git 仓库'))
+  await invokeTestRemote(dir, remote, newTaskId('git_remote_test'))
 }
 
 // ==================== 提交记录 ====================

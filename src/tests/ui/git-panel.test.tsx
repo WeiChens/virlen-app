@@ -27,6 +27,7 @@ import {
   loadCommitDetail,
   loadDiffSides,
   refreshStatus,
+  refreshRemotes,
   renameBranch,
   removeBranch,
   stage,
@@ -55,6 +56,13 @@ vi.mock('@/services/git-service', () => ({
   loadCommitDetail: vi.fn(),
   removeBranch: vi.fn(),
   renameBranch: vi.fn(),
+  // 远程（凭据策略 = SSH）：同步浮层用
+  refreshRemotes: vi.fn(),
+  fetchRemote: vi.fn(),
+  pullRemote: vi.fn(),
+  pushRemote: vi.fn(),
+  testRemote: vi.fn(),
+  cancelSync: vi.fn(),
 }))
 
 // 面板的引用链会经 store 桶文件拉到 markdown / code-block → monaco，而 monaco 在 jsdom 里
@@ -120,6 +128,8 @@ function setStore(entries: GitChangeEntry[]) {
     gitStore.commitDraft = ''
     gitStore.hookOutput = null
     gitStore.branches = []
+    gitStore.remotes = []
+    gitStore.syncOutput = null
     gitStore.snapshot = snapshot(entries)
   })
 }
@@ -586,22 +596,28 @@ it('「修改上一次提交」勾上后提交走 amend，并回填上一条的�
   expect(commit).toHaveBeenCalledWith('上一条提交\n\n正文', true)
 })
 
-/** 撤销入口只在**有提交**时出现（空仓库里它没有意义） */
+/** 撤销入口只在**有提交**时出现（空仓库里它没有意义）。
+    ⚠️ 它是图标按钮（头部已有一排图标，六字文字按钮会把分支名挤没），所以按 aria-label 找 */
+const undoBtn = () =>
+  [...document.querySelectorAll('.git-icon-btn')].find(
+    (el) => el.getAttribute('aria-label') === '撤销上次提交',
+  ) as HTMLElement | undefined
+
 it('「撤销上次提交」只在有提交时出现', async () => {
   setStore([unstagedEntry('a.txt')])
   runInAction(() => {
     if (gitStore.snapshot) gitStore.snapshot.head.oid = null
   })
   mount()
-  expect(document.querySelector('.git-link-btn')).toBeNull()
+  expect(undoBtn()).toBeUndefined()
   act(() => root!.unmount())
   root = null
   document.body.innerHTML = ''
 
   setStore([unstagedEntry('a.txt')])
   mount()
-  const undo = document.querySelector('.git-link-btn') as HTMLElement
-  expect(undo.textContent).toBe('撤销上次提交')
+  const undo = undoBtn() as HTMLElement
+  expect(undo.getAttribute('title')).toContain('改动保留在暂存区')
   await act(async () => {
     undo.click()
   })
@@ -701,4 +717,56 @@ it('分支重命名：右键进重命名模式，输入框带旧名字，回车�
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
   })
   expect(renameBranch).toHaveBeenCalledWith('wip', 'wip2')
+})
+
+// ==================== 远程（凭据策略 = SSH） ====================
+
+const sshRemote = {
+  name: 'origin',
+  url: 'git@github.com:a/b.git',
+  push_url: 'git@github.com:a/b.git',
+  kind: 'ssh' as const,
+}
+
+/** 同步入口在面板头上：点它才刷新远程列表（远程是用户随时会用终端改的，不缓存） */
+it('「同步」打开远程浮层：远程名 + 类型 + 三个动作', async () => {
+  setStore([unstagedEntry('a.txt')])
+  runInAction(() => {
+    gitStore.remotes = [sshRemote]
+  })
+  mount()
+
+  const trigger = document.querySelector('.git-sync-trigger') as HTMLElement
+  expect(trigger.textContent).toBe('同步')
+  await act(async () => {
+    trigger.click()
+  })
+  expect(refreshRemotes).toHaveBeenCalled()
+
+  const menu = document.querySelector('.git-sync-menu') as HTMLElement
+  expect(menu).toBeTruthy()
+  expect(menu.querySelector('.git-sync-remote')?.textContent).toBe('origin')
+  expect(menu.querySelector('.git-sync-kind')?.textContent).toBe('SSH')
+  expect(menu.textContent).toContain('git@github.com:a/b.git')
+  expect(
+    [...menu.querySelectorAll('.git-sync-btn')].map((el) => el.textContent),
+  ).toEqual(['获取', '拉取（仅快进）', '推送'])
+})
+
+/** 网络操作的输出进自己的块：它与「提交输出（hooks）」不是一回事，共用一块会互相覆盖 */
+it('网络操作的输出落在「操作输出」块里，与提交输出来源分开', () => {
+  setStore([unstagedEntry('a.txt')])
+  runInAction(() => {
+    gitStore.hookOutput = 'pre-commit: 格式化过 1 个文件'
+    gitStore.syncOutput = 'To github.com:a/b.git\n   abc1234..def5678  main -> main'
+  })
+  mount()
+
+  const blocks = [...document.querySelectorAll('.git-hook-output')]
+  expect(blocks.length).toBe(2)
+  expect(blocks[0].querySelector('.git-hook-head')?.textContent).toContain(
+    '提交输出（hooks / 警告）',
+  )
+  expect(blocks[1].querySelector('.git-hook-head')?.textContent).toContain('操作输出')
+  expect(blocks[1].querySelector('pre')?.textContent).toContain('main -> main')
 })

@@ -24,6 +24,7 @@ pub mod commit;
 pub mod diff;
 pub mod lock;
 pub mod log;
+pub mod remote;
 pub mod repo;
 pub mod show;
 pub mod stage;
@@ -231,6 +232,48 @@ pub struct BranchInfo {
     pub subject: String,
     /// `committerdate:iso-strict`
     pub updated_at: Option<String>,
+}
+
+/// 远程地址的种类。
+///
+/// **只用于展示与给提示**（浮层里标一个「SSH」/「HTTPS」，以及 https 失败时改成 SSH 的指引），
+/// **不参与任何认证决策** —— 本应用的凭据策略固定是 SSH，见 [`remote`] 模块头。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RemoteKind {
+    /// `git@host:owner/repo.git` 或 `ssh://…`
+    Ssh,
+    Https,
+    Http,
+    /// `git://`（无认证、已被 git 弃用）
+    Git,
+    /// 本地路径 / `file://`（裸仓库、测试、局域网共享）
+    File,
+    Other,
+}
+
+/// 一个远程仓库（`git remote -v` 的忠实映射：同名 fetch / push 合并成一条）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoteInfo {
+    pub name: String,
+    /// fetch 地址。⚠️ **已抹掉 userinfo**（`https://user:token@host/…` → `https://host/…`）——
+    /// 它要显示在界面上，令牌绝不能跟着走（安全红线：界面 / 日志不得出现密钥）。
+    pub url: String,
+    pub push_url: String,
+    pub kind: RemoteKind,
+}
+
+/// 一次网络操作（fetch / pull / push / ls-remote）的结果。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncResult {
+    pub remote: String,
+    /// 实际使用的远程地址（同上，已抹掉 userinfo）
+    pub url: String,
+    /// 操作所在的分支（fetch 不要求分支 → `None`）
+    pub branch: Option<String>,
+    /// git 的原始输出（stdout + stderr 合并，过长时截断）—— 进度 / 摘要 / 警告都在这里，
+    /// **不解析它做分支判断**（与全模块同一口径）
+    pub output: String,
 }
 
 // ==================== 写操作准入（fail-closed） ====================

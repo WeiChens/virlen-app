@@ -11,6 +11,7 @@
 //! | 超时 + cancel flag + 进程树回收 | 卡住的 git 收不回来；hook / credential helper 等**子进程**会残留 |
 //! | 逐参数 `args([...])` + `--` 分隔 | 参数注入（分支名 / 路径以 `-` 开头会被当成选项） |
 //! | 写操作用 [`GitCmd::write`] | 同一仓库并发写 → `index.lock exists` |
+//! | 网络操作用 [`GitCmd::network`] | 等凭据的 `ssh` / `git` 会在无人可见处挂住；10 分钟超时才是它的量级 |
 //!
 //! 另外两条与「读输出」有关的口径：
 //! - stdout 保留**原始字节**（[`GitOutput::stdout`]），解码由调用方决定（[`GitOutput::stdout_str`]）；
@@ -27,6 +28,12 @@ pub const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 写命令的默认超时（`add` / `commit` / `switch` 在大仓库上会明显更慢；commit 还要跑 hooks）。
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// 网络命令（fetch / pull / push / ls-remote）的超时。
+///
+/// ⚠️ 网络延迟没有上界：大仓库首次 clone 级 fetch、或者一条慢链路，60s 会**误杀**正常运行的操作。
+/// 取 10 分钟 —— 它只防「永远等下去」，用户的真实退出手段是面板关闭时的 cancel（`task_manager`）。
+pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// 轮询间隔：等子进程退出时的检查粒度，也是 cancel / 超时的响应精度。
 const POLL_INTERVAL: Duration = Duration::from_millis(40);
@@ -109,6 +116,10 @@ pub struct GitCmd {
     write: bool,
     /// 要喂给 git 标准输入的内容（目前只有提交信息用它：走 stdin 避开 argv 的编码 / 换行差异）
     input: Option<Vec<u8>>,
+    /// 额外环境变量（目前只有网络操作设 `GIT_SSH_COMMAND`，见 [`super::remote`]）
+    envs: Vec<(String, String)>,
+    /// 网络操作 → 额外关掉一切「问凭据」的通道
+    network: bool,
 }
 impl GitCmd {
     /// 只读命令：带 `--no-optional-locks`（读的时候不去抢 index 锁，避免干扰用户在编辑器 / 终端里的 git）
@@ -124,6 +135,8 @@ impl GitCmd {
             cancel: None,
             write: false,
             input: None,
+            envs: Vec::new(),
+            network: false,
         }
     }
 
@@ -136,6 +149,8 @@ impl GitCmd {
             cancel: None,
             write: true,
             input: None,
+            envs: Vec::new(),
+            network: false,
         }
     }
     pub fn arg(mut self, a: impl Into<String>) -> Self {
@@ -180,6 +195,22 @@ impl GitCmd {
         self
     }
 
+    /// 追加一个环境变量（**只覆盖这一次调用**，不污染进程环境）
+    pub fn env(mut self, key: &str, value: impl Into<String>) -> Self {
+        self.envs.push((key.to_string(), value.into()));
+        self
+    }
+
+    /// 标记为**网络操作**：超时放宽到 [`NETWORK_TIMEOUT`]，并关掉一切「问凭据」的通道。
+    ///
+    /// ⚠️ 凭据策略是 SSH（见 [`super::remote`] 模块头）：应用内没有任何输入框，任何「等输入」
+    /// 在这里都等于永久卡住 —— 所以环境里的 askpass 通道会被移除（见 `run_inner`）。
+    pub fn network(mut self) -> Self {
+        self.timeout = NETWORK_TIMEOUT;
+        self.network = true;
+        self
+    }
+
     /// 喂标准输入（内容写完即关管道 —— 不能只写不关，git 会一直等 EOF）
     pub fn stdin_bytes(mut self, data: Vec<u8>) -> Self {
         self.input = Some(data);
@@ -199,6 +230,15 @@ impl GitCmd {
     fn run_inner(self) -> Result<GitOutput, GitError> {
         let mut cmd = Command::new("git");
         cmd.current_dir(&self.dir).args(&self.args);
+        for (k, v) in &self.envs {
+            cmd.env(k, v);
+        }
+        if self.network {
+            // ⚠️ 凭据策略 = SSH（见 `git::remote` 模块头）：任何「问凭据」的通道都关掉 ——
+            //    界面上没有地方能回答它，等下去就是永久卡住。环境里的 askpass 一律**移除**
+            //    （置空串比不置更坏：git 会去 exec 一个空命令，报出一个更难懂的错）。
+            cmd.env_remove("GIT_ASKPASS").env_remove("SSH_ASKPASS");
+        }
         exec(cmd, self.timeout, self.cancel.as_deref(), self.input)
     }
 }

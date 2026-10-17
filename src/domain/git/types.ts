@@ -159,3 +159,31 @@ export interface GitBranchInfo {
   subject: string
   updated_at: string | null
 }
+
+/**
+ * 远程地址的种类（与 Rust `git::RemoteKind` 逐字对应）。
+ *
+ * **只用于展示与提示**（浮层里标一个 SSH / HTTPS，以及 https 失败时改成 SSH 的指引），
+ * 不参与任何认证决策 —— 凭据策略固定是 SSH（本机密钥 / ssh-agent，应用不保存任何密码）。
+ */
+export type GitRemoteKind = 'ssh' | 'https' | 'http' | 'git' | 'file' | 'other'
+
+/** 一个远程仓库（`git remote -v`，同名 fetch / push 已合并） */
+export interface GitRemoteInfo {
+  name: string
+  /** fetch 地址。⚠️ 已抹掉 userinfo（令牌不会进界面） */
+  url: string
+  push_url: string
+  kind: GitRemoteKind
+}
+
+/** 一次网络操作（fetch / pull / push / ls-remote）的结果 */
+export interface GitSyncResult {
+  remote: string
+  /** 实际用的地址（同样已抹掉 userinfo） */
+  url: string
+  /** 操作所在的分支（fetch 不要求分支 → `null`） */
+  branch: string | null
+  /** git 的原始输出（stdout + stderr 合并，过长时由 Rust 截断） */
+  output: string
+}

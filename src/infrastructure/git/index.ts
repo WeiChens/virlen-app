@@ -23,8 +23,10 @@ import type {
   GitDiffScope,
   GitDiffSides,
   GitLogScope,
+  GitRemoteInfo,
   GitRepoInfo,
   GitStatusSnapshot,
+  GitSyncResult,
 } from '@/domain/git'
 
 /** 是否 Tauri 环境（浏览器 dev / vitest 下没有这些命令） */
@@ -105,6 +107,52 @@ export function commitFileSides(
 /** 分支名合法性 —— 权威判定在 Rust（`git check-ref-format`），前端不许自己写正则 */
 export function checkRefFormat(dir: string, name: string): Promise<boolean> {
   return invoke<boolean>('git_check_ref_format', { dir, name })
+}
+
+// ==================== 远程（凭据策略 = SSH） ====================
+
+/** 远程列表（`git remote -v`） */
+export function remotes(dir: string): Promise<GitRemoteInfo[]> {
+  return invoke<GitRemoteInfo[]>('git_remotes', { dir })
+}
+
+/**
+ * 测试远程连接（`git ls-remote`：只读、不动本地 refs）。
+ * SSH 方案下这是唯一能验证「密钥 / 主机指纹 / 网络」的入口。
+ */
+export function testRemote(
+  dir: string,
+  remote: string | null,
+  taskId: string,
+): Promise<GitSyncResult> {
+  return invoke<GitSyncResult>('git_remote_test', { dir, remote, taskId })
+}
+
+/** `git fetch`：只更新远程跟踪分支，不动工作区 */
+export function fetchRemote(
+  dir: string,
+  remote: string | null,
+  taskId: string,
+): Promise<GitSyncResult> {
+  return invoke<GitSyncResult>('git_fetch', { dir, remote, taskId })
+}
+
+/** `git pull --ff-only`：**只允许快进**，快进不了就失败（不许自动 merge） */
+export function pullRemote(
+  dir: string,
+  remote: string | null,
+  taskId: string,
+): Promise<GitSyncResult> {
+  return invoke<GitSyncResult>('git_pull', { dir, remote, taskId })
+}
+
+/** `git push`（无上游时 Rust 侧自动 `-u`）。⚠️ 不提供强制推送 */
+export function pushRemote(
+  dir: string,
+  remote: string | null,
+  taskId: string,
+): Promise<GitSyncResult> {
+  return invoke<GitSyncResult>('git_push', { dir, remote, taskId })
 }
 
 // ==================== 写操作（Rust 侧过只读沙盒门禁） ====================

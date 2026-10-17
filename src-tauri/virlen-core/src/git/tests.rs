@@ -11,7 +11,7 @@ use super::branch::{self, parse_refs};
 use super::cli::GitCmd;
 use super::log::parse_log;
 use super::status::parse_status;
-use super::{ChangeEntry, DiffScope, EntryKind, HeadInfo, LogScope, StatusSnapshot, WriteGate};
+use super::{ChangeEntry, DiffScope, EntryKind, HeadInfo, LogScope, RemoteKind, StatusSnapshot, WriteGate};
 use std::path::PathBuf;
 
 // ==================== 一、固定字节（纯函数） ====================
@@ -130,6 +130,15 @@ struct TempRepo {
 
 impl TempRepo {
     fn new() -> Option<Self> {
+        Self::new_with(&[])
+    }
+
+    /// 裸仓库（`--bare`，没有工作区）—— 远程用例的「服务器」：用**本机路径**当远程，不碰网络也不碰凭据
+    fn new_bare() -> Option<Self> {
+        Self::new_with(&["--bare"])
+    }
+
+    fn new_with(init_args: &[&str]) -> Option<Self> {
         if !git_available() {
             eprintln!("[git tests] 未检测到 git，跳过真仓库用例");
             return None;
@@ -137,7 +146,9 @@ impl TempRepo {
         let dir = std::env::temp_dir().join(format!("virlen_git_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).ok()?;
         let repo = Self { dir };
-        repo.git(&["init", "-q"]);
+        let mut init = vec!["init", "-q"];
+        init.extend_from_slice(init_args);
+        repo.git(&init);
         // 身份与签名都钉在**本仓库**上：不依赖开发机的全局配置，也不给用例留下「改了全局配置」的副作用
         repo.git(&["config", "user.email", "test@example.com"]);
         repo.git(&["config", "user.name", "virlen test"]);
@@ -1076,3 +1087,190 @@ fn root_relative_invariant_is_enforced() {
         "rename 的旧路径也要查"
     );
 }
+
+// ==================== 四、远程（凭据策略 = SSH） ====================
+
+/// 地址分类：SSH 的两种写法都得认，盘符不能被当成 scp 风格
+#[test]
+fn remote_kind_classification() {
+    assert_eq!(super::remote::remote_kind("git@github.com:a/b.git"), RemoteKind::Ssh);
+    assert_eq!(super::remote::remote_kind("ssh://git@host:22/a/b.git"), RemoteKind::Ssh);
+    assert_eq!(super::remote::remote_kind("https://github.com/a/b.git"), RemoteKind::Https);
+    assert_eq!(super::remote::remote_kind("http://host/a.git"), RemoteKind::Http);
+    assert_eq!(super::remote::remote_kind("git://host/a.git"), RemoteKind::Git);
+    assert_eq!(super::remote::remote_kind("file:///srv/a.git"), RemoteKind::File);
+    // 本地路径：Windows 盘符**不是** scp 地址（冒号前只有一个字母）
+    assert_eq!(super::remote::remote_kind("C:/repos/a.git"), RemoteKind::File);
+    assert_eq!(super::remote::remote_kind("D:\\repos\\a.git"), RemoteKind::File);
+    assert_eq!(super::remote::remote_kind("/srv/repos/a.git"), RemoteKind::File);
+    assert_eq!(super::remote::remote_kind("../bare.git"), RemoteKind::File);
+    assert_eq!(super::remote::remote_kind(""), RemoteKind::Other);
+}
+
+/// 界面 / 埋点里不允许出现令牌：userinfo 必须被抹掉，@ 之后的地址原样保留
+#[test]
+fn redact_url_strips_credentials() {
+    assert_eq!(
+        super::remote::redact_url("https://user:token@github.com/a/b.git"),
+        "https://github.com/a/b.git"
+    );
+    assert_eq!(
+        super::remote::redact_url("https://tok@host/a/b.git"),
+        "https://host/a/b.git"
+    );
+    // 没有 userinfo / 没有协议 → 原样
+    assert_eq!(
+        super::remote::redact_url("https://github.com/a/b.git"),
+        "https://github.com/a/b.git"
+    );
+    // `git@host:path` 里的 `git` 是用户名（不是密钥），保留
+    assert_eq!(
+        super::remote::redact_url("git@github.com:a/b.git"),
+        "git@github.com:a/b.git"
+    );
+}
+
+/// `git remote -v` 的 fetch / push 两行合并成一条；只有单边时另一个方向跟随
+#[test]
+fn parse_remotes_pairs_fetch_and_push() {
+    let text = concat!(
+        "origin\tgit@github.com:a/b.git (fetch)\n",
+        "origin\tgit@github.com:a/b.git (push)\n",
+        "backup\thttps://user:tok@host/b.git (fetch)\n",
+    );
+    let list = super::remote::parse_remotes(text);
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[0].name, "origin");
+    assert_eq!(list[0].kind, RemoteKind::Ssh);
+    assert_eq!(list[0].push_url, "git@github.com:a/b.git");
+    // 只有 fetch 行的远程：push_url 跟随 fetch
+    assert_eq!(list[1].name, "backup");
+    assert_eq!(list[1].push_url, "https://host/b.git");
+    assert_eq!(list[1].url, "https://host/b.git", "令牌不能进界面");
+}
+
+/// 选远程：显式 → origin → 唯一一个 → 其余情况**不猜**
+#[test]
+fn pick_remote_prefers_origin_and_refuses_to_guess() {
+    let one = super::remote::parse_remotes("origin\tgit@h:a/b.git (fetch)\n");
+    assert_eq!(super::remote::pick(&one, None).unwrap().name, "origin");
+
+    let two = super::remote::parse_remotes(concat!(
+        "a\tgit@h:a/x.git (fetch)\n",
+        "b\tgit@h:a/y.git (fetch)\n",
+    ));
+    assert!(
+        super::remote::pick(&two, None).is_err(),
+        "有多个远程又没指定时必须报错，不能猜"
+    );
+    assert_eq!(super::remote::pick(&two, Some("b")).unwrap().name, "b");
+    assert!(super::remote::pick(&two, Some("nope")).is_err());
+    assert!(super::remote::pick(&[], None).is_err());
+}
+
+/// 失败指引只对**明确模式**生效，其余原样透传（不猜原因）
+#[test]
+fn hint_for_maps_known_failures() {
+    let hint = |s: &str| super::remote::hint_for(s).unwrap_or("");
+    assert!(hint("git@github.com: Permission denied (publickey).").contains("ssh-agent"));
+    assert!(hint("Host key verification failed.").contains("ssh -T"));
+    assert!(hint("ssh: Could not resolve hostname github.com").contains("域名解析"));
+    assert!(hint("fatal: could not read Username for 'https://x': terminal prompts disabled")
+        .contains("SSH"));
+    assert_eq!(hint("fatal: something unexpected"), "", "没把握的错不补话");
+}
+
+/// 推送 → 获取 → 拉取（快进）→ 分叉后拉取必须被拒。远程用**本机裸仓库路径**，不碰网络与凭据。
+#[test]
+fn remote_push_fetch_pull_against_local_remote() {
+    let Some(up) = TempRepo::new_bare() else { return };
+    let Some(repo) = TempRepo::new() else { return };
+    let Some(other) = TempRepo::new() else { return };
+    let gate = WriteGate::new(true);
+    let url = up.path();
+
+    repo.git(&["symbolic-ref", "HEAD", "refs/heads/main"]);
+    repo.git(&["remote", "add", "origin", &url]);
+    repo.write("a.txt", "one\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+
+    let remotes = super::remote::list(&repo.path()).unwrap();
+    assert_eq!(remotes.len(), 1);
+    assert_eq!(remotes[0].name, "origin");
+    assert_eq!(remotes[0].kind, RemoteKind::File, "本机路径远程");
+
+    // 首次推送：自动 `-u`，跟踪关系随之建立（否则面板永远显示不了 ↑↓）
+    let pushed = super::remote::push(&repo.path(), &gate, None, None).unwrap();
+    assert_eq!(pushed.remote, "origin");
+    assert_eq!(pushed.branch.as_deref(), Some("main"));
+    let head = branch::list(&repo.path())
+        .unwrap()
+        .into_iter()
+        .find(|b| b.is_head)
+        .expect("缺当前分支");
+    assert_eq!(head.upstream.as_deref(), Some("origin/main"));
+
+    // 另一个仓库：fetch 只更新远程跟踪分支，**不动工作区**
+    other.git(&["symbolic-ref", "HEAD", "refs/heads/main"]);
+    other.git(&["remote", "add", "origin", &url]);
+    super::remote::fetch(&other.path(), &gate, None, None).unwrap();
+    assert!(
+        !other.dir.join("a.txt").exists(),
+        "fetch 不该碰工作区（那是 pull 的事）"
+    );
+    let tracked = other.git(&["rev-parse", "--verify", "refs/remotes/origin/main"]);
+    assert!(!tracked.trim().is_empty(), "fetch 应当写下 origin/main");
+
+    // pull（快进）把工作区带过来（比较前归一换行：Windows 上 `core.autocrlf=true` 会落 CRLF）
+    super::remote::pull(&other.path(), &gate, None, None).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(other.dir.join("a.txt"))
+            .unwrap()
+            .replace("\r\n", "\n"),
+        "one\n"
+    );
+
+    // 分叉：两边各提交一次 → 快进不了，`--ff-only` 必须失败（不许偷偷造一条 merge 提交）
+    repo.write("a.txt", "remote side\n");
+    repo.git(&["commit", "-q", "-am", "remote change"]);
+    super::remote::push(&repo.path(), &gate, None, None).unwrap();
+    other.write("b.txt", "local side\n");
+    other.git(&["add", "-A"]);
+    other.git(&["commit", "-q", "-m", "local change"]);
+    assert!(
+        super::remote::pull(&other.path(), &gate, None, None).is_err(),
+        "分叉时只允许快进失败，不许自动 merge"
+    );
+    assert_eq!(
+        other.git(&["rev-list", "--count", "HEAD"]).trim(),
+        "2",
+        "失败的 pull 不能在本地留下 merge 提交"
+    );
+
+    // 连接测试（SSH 方案下验证密钥 / 指纹 / 网络的那条命令）也能跑通
+    let test = super::remote::test_connection(&other.path(), None, None).unwrap();
+    assert!(test.output.contains("refs/heads/main"));
+}
+
+/// 游离 HEAD 上拉取 / 推送必须被拒（按名字操作，没有名字就没法干）；写门禁也守着它们
+#[test]
+fn remote_refuses_detached_head_and_readonly_gate() {
+    let Some(up) = TempRepo::new_bare() else { return };
+    let Some(repo) = TempRepo::new() else { return };
+    let gate = WriteGate::new(true);
+    repo.git(&["symbolic-ref", "HEAD", "refs/heads/main"]);
+    repo.git(&["remote", "add", "origin", &up.path()]);
+    repo.write("a.txt", "one\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+    repo.git(&["checkout", "-q", "--detach"]);
+
+    assert!(super::remote::push(&repo.path(), &gate, None, None).is_err());
+    assert!(super::remote::pull(&repo.path(), &gate, None, None).is_err());
+    // fetch 不要求分支，但**过只读门禁**：fetch 也会写 refs/remotes
+    assert!(super::remote::fetch(&repo.path(), &gate, None, None).is_ok());
+    let readonly = WriteGate::new(false);
+    assert!(super::remote::fetch(&repo.path(), &readonly, None, None).is_err());
+}
+

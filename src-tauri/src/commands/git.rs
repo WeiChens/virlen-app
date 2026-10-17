@@ -16,7 +16,7 @@ use std::sync::Arc;
 use virlen_core::git::cli::GitError;
 use virlen_core::git::{
     BranchInfo, CommitDetail, CommitLogEntry, CommitResult, DiffScope, DiffSides, LogScope,
-    RepoInfo, StatusSnapshot, WriteGate,
+    RemoteInfo, RepoInfo, StatusSnapshot, SyncResult, WriteGate,
 };
 use virlen_core::session_db::SettingsRepo;
 
@@ -180,7 +180,83 @@ pub async fn git_commit_file_sides(
     result
 }
 
+/// 远程仓库列表（`git remote -v`）—— 同步浮层据此显示地址与类型（SSH / HTTPS）
+#[tauri::command]
+pub async fn git_remotes(dir: String) -> Result<Vec<RemoteInfo>, String> {
+    blocking("remotes", move || virlen_core::git::remote::list(&dir)).await
+}
+
+/// 测试远程连接（`git ls-remote`：只读、不动本地 refs）—— 验证 SSH 密钥 / 主机指纹 / 网络
+#[tauri::command]
+pub async fn git_remote_test(
+    dir: String,
+    remote: Option<String>,
+    task_id: String,
+) -> Result<SyncResult, String> {
+    let cancel = crate::task_manager::register(&task_id);
+    let result = blocking("remote_test", move || {
+        virlen_core::git::remote::test_connection(&dir, remote.as_deref(), Some(&cancel))
+    })
+    .await;
+    crate::task_manager::unregister(&task_id);
+    result
+}
+
 // ==================== 写操作（一律先过 gate） ====================
+
+/// 获取（`git fetch`）：只更新远程跟踪分支，不动工作区
+#[tauri::command]
+pub async fn git_fetch(
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    dir: String,
+    remote: Option<String>,
+    task_id: String,
+) -> Result<SyncResult, String> {
+    let gate = gate(&settings).await;
+    let cancel = crate::task_manager::register(&task_id);
+    let result = blocking("fetch", move || {
+        virlen_core::git::remote::fetch(&dir, &gate, remote.as_deref(), Some(&cancel))
+    })
+    .await;
+    crate::task_manager::unregister(&task_id);
+    result
+}
+
+/// 拉取（`git pull --ff-only`）：**只允许快进**，快进不了就如实失败
+#[tauri::command]
+pub async fn git_pull(
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    dir: String,
+    remote: Option<String>,
+    task_id: String,
+) -> Result<SyncResult, String> {
+    let gate = gate(&settings).await;
+    let cancel = crate::task_manager::register(&task_id);
+    let result = blocking("pull", move || {
+        virlen_core::git::remote::pull(&dir, &gate, remote.as_deref(), Some(&cancel))
+    })
+    .await;
+    crate::task_manager::unregister(&task_id);
+    result
+}
+
+/// 推送（`git push`，无上游时自动 `-u`）。⚠️ 不提供强制推送
+#[tauri::command]
+pub async fn git_push(
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    dir: String,
+    remote: Option<String>,
+    task_id: String,
+) -> Result<SyncResult, String> {
+    let gate = gate(&settings).await;
+    let cancel = crate::task_manager::register(&task_id);
+    let result = blocking("push", move || {
+        virlen_core::git::remote::push(&dir, &gate, remote.as_deref(), Some(&cancel))
+    })
+    .await;
+    crate::task_manager::unregister(&task_id);
+    result
+}
 
 /// 暂存（含未跟踪文件）
 #[tauri::command]
