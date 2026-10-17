@@ -135,7 +135,12 @@ pub(crate) fn check_ref_format_at(root: &str, name: &str) -> Result<bool, GitErr
     Ok(out.ok())
 }
 
-/// 切换（或新建并切换）分支。
+/// 切换 / 新建并切换 / 游离（detach）到某个分支。
+///
+/// `detach = true` 是**远程分支的唯一走法**：`git switch origin/x` 会直接 fatal
+/// （`a branch is expected, got remote branch`，退出码 128）—— git 只收本地分支名。
+/// 不给远程分支「自动建本地跟踪分支」是**有意的**：那是另一个动作（会写进本地 refs），
+/// 而用户点它只是「切过去看看」，落在那笔提交上（游离 HEAD）才是字面意思。
 ///
 /// ⚠️ **不动 `-f`**：脏工作区与目标分支冲突时，git 自己会拒绝（安全）—— 我们如实把原因给用户，
 /// 绝不为了「看起来成功了」而强制切换。切换失败时工作区原样不动。
@@ -145,11 +150,15 @@ pub fn switch(
     name: &str,
     create: bool,
     start_point: Option<&str>,
+    detach: bool,
 ) -> Result<StatusSnapshot, GitError> {
     gate.ensure()?;
     let root = root_of(dir)?;
     if !check_ref_format_at(&root, name)? {
         return Err(GitError::new(format!("不是合法的分支名：{}", name)));
+    }
+    if create && detach {
+        return Err(GitError::new("不能同时「新建分支」与「游离 HEAD」"));
     }
     // 能力集只依赖 git 版本（进程级缓存），不必为一个开关再探测一次仓库
     let caps = super::repo::caps_for(&super::repo::version_string());
@@ -161,6 +170,12 @@ pub fn switch(
             cmd.arg("switch").arg("-c").arg(name)
         } else {
             cmd.arg("checkout").arg("-b").arg(name)
+        }
+    } else if detach {
+        if use_switch {
+            cmd.arg("switch").arg("--detach").arg(name)
+        } else {
+            cmd.arg("checkout").arg("--detach").arg(name)
         }
     } else if use_switch {
         cmd.arg("switch").arg(name)
@@ -179,4 +194,53 @@ pub fn switch(
 
     cmd.run()?.into_result("switch")?;
     snapshot_at_root(&root, None)
+}
+
+/// 删除本地分支。`force = false` 走 `-d`（**未合并的分支 git 会拒**，这是安全网）；
+/// `force = true` 走 `-D`。
+///
+/// 两个动作都**不让引擎自己决定**：删当前分支 git 会拒（`Cannot delete branch ... checked out`）
+/// —— 我们如实把原因给用户，不做“自动切走再删”。
+pub fn delete(dir: &str, gate: &WriteGate, name: &str, force: bool) -> Result<Vec<BranchInfo>, GitError> {
+    gate.ensure()?;
+    let root = root_of(dir)?;
+    if name.starts_with('-') {
+        return Err(GitError::new(format!("不是合法的分支名：{}", name)));
+    }
+    let flag = if force { "-D" } else { "-d" };
+    GitCmd::write(&root)
+        .arg("branch")
+        .arg(flag)
+        .arg(name)
+        .run()?
+        .into_result("branch -d")?;
+    list(&root)
+}
+
+/// 重命名分支（`git branch -m <from> <to>`）。
+///
+/// ⚠️ 新名字仍然要过 [`check_ref_format_at`]：`git branch -m` 自己也会校验，但那是一条
+/// **会报退出码的错误路径**；先在这里拦下才能给出「哪个名字不合法」这种可读原因。
+pub fn rename(
+    dir: &str,
+    gate: &WriteGate,
+    from: &str,
+    to: &str,
+) -> Result<Vec<BranchInfo>, GitError> {
+    gate.ensure()?;
+    let root = root_of(dir)?;
+    if from.starts_with('-') || to.starts_with('-') {
+        return Err(GitError::new(format!("不是合法的分支名：{}", to)));
+    }
+    if !check_ref_format_at(&root, to)? {
+        return Err(GitError::new(format!("不是合法的分支名：{}", to)));
+    }
+    GitCmd::write(&root)
+        .arg("branch")
+        .arg("-m")
+        .arg(from)
+        .arg(to)
+        .run()?
+        .into_result("branch -m")?;
+    list(&root)
 }

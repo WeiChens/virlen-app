@@ -86,8 +86,37 @@ export interface GitDiffSides {
 export interface GitCommitResult {
   oid: string
   summary: string
-  /** git 原始输出（含 hooks 的 stdout / stderr）—— 要能看见它 */
+  /** git 完整输出（stdout 的提交摘要 + stderr） */
   output: string
+  /**
+   * git 的 **stderr**（正常提交为空；hooks 与警告写在这里）—— 面板的「提交输出」块只看它：
+   * `output` 里还有「[main abc] msg / 1 file changed」这类每次提交都有的话，一律展示就是噪声。
+   */
+  stderr: string
+}
+
+/** 提交里的一条文件变更（Rust `git::CommitFile`，`--name-status` 的忠实映射） */
+export interface GitCommitFile {
+  path: string
+  /** rename / copy 的旧路径 */
+  orig_path: string | null
+  /** git 自己的状态字母：`A` 新增 / `M` 修改 / `D` 删除 / `R` 改名 / `C` 复制 / `T` 类型变更 */
+  status: string
+}
+
+/** 单个提交的详情（Rust `git::CommitDetail`） */
+export interface GitCommitDetail {
+  oid: string
+  short_oid: string
+  author_name: string
+  author_email: string
+  /** `%aI`（原始时区，展示成本地时间是前端的口径） */
+  author_time: string
+  /** **完整**提交信息（标题 + 正文），不是列表里的单行标题 */
+  message: string
+  parents: string[]
+  /** ⚠️ **相对第一个父提交**的变更（merge 提交相对谁看没有唯一答案） */
+  files: GitCommitFile[]
 }
 
 /** 一条提交记录（`git log` 的忠实映射，与 Rust `git::CommitLogEntry` **逐字对应**） */

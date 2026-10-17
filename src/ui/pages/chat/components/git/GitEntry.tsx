@@ -7,10 +7,10 @@
  * 三条时机口径（P1 不做文件监听，见方案 §7 第 9 条）：
  * - **工作目录变化**（切会话 / 换目录）：探测 + 刷一次 —— 徽标在面板关着时也必须准；
  * - **打开面板**：刷一次；
- * - **窗口重新聚焦**：面板开着才刷（用户在编辑器里改完切回来要看得见，关着就别打扰 git）。
+ * - **窗口重新激活**：刷一次（面板关着也刷 —— 徽标要准；节流见 `refreshOnFocus`）。
  *
- * 入口的显隐：**只有探测到仓库才出现**（不是仓库 / 没装 git 时不占工具栏；那两种情况的说明在
- * 面板里，见方案 §11.1 的待确认项）。
+ * 入口的显隐：**探测完成且有工作目录**就出现（不要求是仓库）—— 不是仓库时面板里那个「初始化
+ * 仓库」是唯一出口，藏掉入口等于把这条路封死；没装 git / 没选目录时不占工具栏。
  */
 import { useEffect, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -95,15 +95,18 @@ export const GitEntry = observer(function GitEntry({ sessionId }: Props) {
     return () => document.removeEventListener('keydown', onKey)
   }, [open])
 
-  const repo = gitStore.repo
-  if (!repo) return null
+  // 探测完成 + 有工作目录 → 显示；不是仓库也显示（面板里有「初始化仓库」）
+  if (!gitStore.probed || !gitStore.dir) return null
 
-  const count = changedFileCount(gitStore.snapshot)
-  const title = repo.bare
-    ? t('裸仓库（没有工作区文件）')
-    : count > 0
-      ? tpl('源代码管理 · $__count__ 个文件有更改', { count })
-      : t('源代码管理')
+  const repo = gitStore.repo
+  const count = repo ? changedFileCount(gitStore.snapshot) : 0
+  const title = !repo
+    ? t('源代码管理')
+    : repo.bare
+      ? t('裸仓库（没有工作区文件）')
+      : count > 0
+        ? tpl('源代码管理 · $__count__ 个文件有更改', { count })
+        : t('源代码管理')
 
   return (
     <div className="git-entry" ref={wrapRef}>

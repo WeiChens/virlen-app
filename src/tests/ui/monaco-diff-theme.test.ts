@@ -25,7 +25,8 @@ const DESIGN = {
   oldNum: '#3a2020',
   newNum: '#203a20',
   oldChar: '#5c2626',
-  newChar: '#265c2a',
+  // 字符级绿底比原设计（#265c2a）更暗：那个亮度上注释只有 1.31:1（实测反馈「完全看不出字」）
+  newChar: '#1c3d20',
 } as const
 
 type Rgb = [number, number, number]
@@ -56,6 +57,33 @@ function literalOf(source: string, key: string): string {
 }
 
 const themeSource = readFileSync(THEME_TS, 'utf8')
+
+/** 从主题源码的 `rules` 里取一个 token 的前景色（`{ token: 'comment', foreground: '7f848e', … }`） */
+function tokenColorOf(source: string, token: string): string {
+  const m = source.match(
+    new RegExp(`token:\\s*'${token}',\\s*foreground:\\s*'#?([0-9a-fA-F]{6})'`),
+  )
+  if (!m) throw new Error(`主题 rules 里找不到 token '${token}'（先看 ${THEME_TS}）`)
+  // rules 里的颜色**不带** `#`（`foreground: 'abb2bf'`），取出来补上
+  return `#${m[1]}`
+}
+
+/** WCAG 相对亮度（对比度用） */
+function luminance(hex: string): number {
+  const [r, g, b] = parseColor(hex)
+    .slice(0, 3)
+    .map((v) => v / 255)
+  const lin = (c: number): number =>
+    c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+}
+
+/** WCAG 对比度 */
+function contrast(fg: string, bg: string): number {
+  const [hi, lo] = [luminance(fg), luminance(bg)].sort((a, b) => b - a)
+  return (hi + 0.05) / (lo + 0.05)
+}
+
 const rgb = (hex: string): Rgb => parseColor(hex).slice(0, 3) as Rgb
 /** 正文底 / 行号栏底：差异底色就叠在它们上面（改它们就必须重算源色） */
 const editorBg = rgb(literalOf(themeSource, 'editor.background'))
@@ -109,6 +137,23 @@ describe('Monaco 差异底色', () => {
       })
     },
   )
+
+  it('注释色在每一档改动底色上都还看得见（≥ 3:1）', () => {
+    // 实测反馈：新增行的绿底上，注释（原 #5c6370）与底色只有 1.31:1 —— 完全看不出字。
+    // 底线是「底色可以亮，但主题里最暗的 token（注释）必须还读得出来」；
+    // 目标取 3:1（图形 / 高亮的最低线）而不是正文的 4.5:1：再压暗底色，改动高亮本身就看不见了。
+    const comment = tokenColorOf(themeSource, 'comment')
+    const textBackdrops = {
+      oldLine: DESIGN.oldLine,
+      newLine: DESIGN.newLine,
+      oldChar: DESIGN.oldChar,
+      newChar: DESIGN.newChar,
+    }
+    for (const [name, bg] of Object.entries(textBackdrops)) {
+      const ratio = Number(contrast(comment, bg).toFixed(2))
+      expect({ name, bg, ratio, ok: ratio >= 3 }).toMatchObject({ ok: true })
+    }
+  })
 
   it('设计色与 DOM 版的暗色那套变量一致（两套调色板不许分叉）', () => {
     const scss = readFileSync(THEME_SCSS, 'utf8')

@@ -25,6 +25,7 @@ pub mod diff;
 pub mod lock;
 pub mod log;
 pub mod repo;
+pub mod show;
 pub mod stage;
 pub mod status;
 
@@ -151,8 +152,14 @@ pub struct DiffSides {
 pub struct CommitResult {
     pub oid: String,
     pub summary: String,
-    /// git 的原始输出（含 hooks 的 stdout）—— 界面要能看见它，见方案 §7 第 6 条
+    /// git 的完整输出（stdout 的提交摘要 + stderr）—— 悬停 / 排查时可看
     pub output: String,
+    /// **git 的 stderr**（正常提交为空；hooks 与警告写在这里）。
+    ///
+    /// 单独回一个字段而不是让界面从 `output` 里猜：`output` 把两路合并了，正常提交也有「[main abc] msg
+    /// 1 file changed」这几行 —— 界面若一律展示就是每次提交都贴一段噪声，一律不展示则 hooks 的输出又
+    /// 永远看不见（§5.5：用户得看得见 hook 动了什么）。
+    pub stderr: String,
 }
 
 /// 一条提交记录（`git log` 的忠实映射，见 [`log`]）。
@@ -178,6 +185,36 @@ pub struct CommitLogEntry {
     /// `feat/0914-responses-api`），光看 `origin/master` 分不出本地分支还是远程跟踪分支。
     pub refs: Vec<String>,
     pub subject: String,
+}
+
+/// 提交里的一条文件变更（`--name-status` 的忠实映射）。
+///
+/// `status` 是 git 自己的字母（`A` 新增 / `M` 修改 / `D` 删除 / `R` 改名 / `C` 复制 / `T` 类型变更），
+/// **不做界面归类** —— 归类是前端的纯函数（与 status 的 `x` / `y` 同一取舍）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommitFile {
+    pub path: String,
+    /// rename / copy 的旧路径（只在这两种状态上有）
+    pub orig_path: Option<String>,
+    pub status: char,
+}
+
+/// 单个提交的详情（[`show::detail`]）。
+///
+/// ⚠️ `files` 是**相对第一个父提交**的差异 —— merge 提交相对谁看没有唯一答案，选第一个父是
+/// 界面上唯一能说清楚的口径（见 [`show`] 模块头口径 1）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitDetail {
+    pub oid: String,
+    pub short_oid: String,
+    pub author_name: String,
+    pub author_email: String,
+    /// `%aI`：与 [`CommitLogEntry::author_time`] 同口径（原始时区，本地化是前端的事）
+    pub author_time: String,
+    /// **完整**提交信息（`%B`，标题 + 正文），不是列表里的单行标题
+    pub message: String,
+    pub parents: Vec<String>,
+    pub files: Vec<CommitFile>,
 }
 
 /// 一个分支（本地 / 远程）。

@@ -51,6 +51,30 @@ pub fn discover(dir: &str) -> Result<Option<RepoInfo>, GitError> {
     }))
 }
 
+/// 在当前目录初始化一个仓库（`git init`），返回探测到的仓库信息。
+///
+/// 三条口径：
+/// - **目录必须已存在**：`git init` 会自己建目录，但那会让用户把「路径打错」当成初始化成功；
+/// - 已是仓库时 git 只会「Reinitialized existing Git repository」（退出码 0），**不破坏任何东西**，
+///   所以不必先探测再拒绝；
+/// - 初始化后**重新探测**而不是自己拼 `RepoInfo`：`git init` 在子目录 / 带 `init.defaultBranch`
+///   配置的机器上落点不一定等于入参，拼一份就可能给出错误的仓库根。
+pub fn init(dir: &str, gate: &super::WriteGate) -> Result<RepoInfo, GitError> {
+    // 与其它写操作同一个门禁：只读沙盒模式下不允许往磁盘上写 `.git`
+    gate.ensure()?;
+    if !std::path::Path::new(dir).is_dir() {
+        return Err(GitError::new(format!("目录不存在：{}", dir)));
+    }
+    GitCmd::write(dir)
+        .arg("init")
+        .run()?
+        .into_result("init")?;
+    match discover(dir)? {
+        Some(info) => Ok(info),
+        None => Err(GitError::new("初始化后仍未识别为 Git 仓库")),
+    }
+}
+
 /// 把「工作目录」解析成**仓库根** —— 每条按路径操作的 git 命令都以它作为 cwd。
 ///
 /// ⚠️ 这是本模块最重要的一条路径不变式（踩过的坑见 `docs/agents/14-git-management.md` §11.53 ⑫）：

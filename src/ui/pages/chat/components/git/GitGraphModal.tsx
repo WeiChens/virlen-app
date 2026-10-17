@@ -15,13 +15,14 @@
  * 5. **弹窗内的 mousedown 必须 `stopPropagation`、Esc 走捕获阶段**：本弹窗 portal 到 body，
  *    宿主（源代码管理面板）的「点浮层外关闭」与 Esc 监听都会把它当成自己该管的事（§11.53 ⑱ / ㉝）。
  */
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { t, tpl } from '@/ui/i18n'
 import { gitStore } from '@/ui/store/gitStore'
 import { GRAPH_PAD_X, graphGeometry, layoutGraph, parseCommitRefs } from '@/domain/git'
 import GraphCanvas from './GraphCanvas'
 import GitCommitRow from './GitCommitRow'
+import GitCommitModal from './GitCommitModal'
 import { useCommitPages } from './useCommitPages'
 
 interface Props {
@@ -32,6 +33,10 @@ export function GitGraphModal({ onClose }: Props) {
   const { commits, loading, loadingMore, hasMore, error, loadMore } = useCommitPages('all')
   const listRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
+  /** 打开的那条提交（`null` = 没开详情） */
+  const [detailOid, setDetailOid] = useState<string | null>(null)
+  const detailRef = useRef<string | null>(null)
+  detailRef.current = detailOid
 
   // 布局只跟「提交 + 父」有关：把整条记录折成最小子集交给纯函数（它也吃不到多余字段）
   const layout = useMemo(
@@ -47,6 +52,8 @@ export function GitGraphModal({ onClose }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      // 详情弹窗开着时 Esc 归它管（本监听先于它注册，抢先把这里关掉就是「Esc 关掉两层」）
+      if (detailRef.current) return
       e.stopPropagation()
       onClose()
     }
@@ -99,6 +106,7 @@ export function GitGraphModal({ onClose }: Props) {
               <GitCommitRow
                 key={c.oid}
                 entry={c}
+                onOpen={setDetailOid}
                 // 行与布局一一对应（`layoutGraph` 每条提交产一行）；万一取不到就按一列宽兜底，
                 // 不让它变成 0（宽度为 0 时**线会压在字上** —— canvas 在行之上，见 style.scss）
                 gutter={geometry.rowGutters[i] ?? GRAPH_PAD_X * 2 + geometry.laneWidth}
@@ -118,6 +126,11 @@ export function GitGraphModal({ onClose }: Props) {
           </div>
         </div>
       </div>
+
+      {/* 详情弹窗嵌在这层遮罩里：它自己的遮罩会 `stopPropagation`，所以点它不会把提交图一起关掉 */}
+      {detailOid && (
+        <GitCommitModal oid={detailOid} onClose={() => setDetailOid(null)} />
+      )}
     </div>,
     document.body,
   )

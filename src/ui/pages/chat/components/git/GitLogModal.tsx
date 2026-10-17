@@ -13,10 +13,11 @@
  *   「点浮层外关闭」按 DOM 包含关系判定、Esc 监听挂在 document 上（§11.53 ⑱ / ㉝）——
  *   少这两行就是「点一下提交记录，连面板一起关掉」。
  */
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { t } from '@/ui/i18n'
 import GitCommitRow from './GitCommitRow'
+import GitCommitModal from './GitCommitModal'
 import { useCommitPages } from './useCommitPages'
 
 interface Props {
@@ -26,11 +27,17 @@ interface Props {
 export function GitLogModal({ onClose }: Props) {
   const { commits, loading, loadingMore, hasMore, error, loadMore } = useCommitPages('head')
   const rootRef = useRef<HTMLDivElement>(null)
+  /** 打开的那条提交（`null` = 没开详情） */
+  const [detailOid, setDetailOid] = useState<string | null>(null)
+  const detailRef = useRef<string | null>(null)
+  detailRef.current = detailOid
 
   // Esc 只关弹窗：捕获阶段拦住，别让面板那颗 Esc 监听跟着把面板也关了
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      // 详情弹窗开着时 Esc 归它管：本监听先于它注册，抢先把这里关掉就是「Esc 关掉两层」
+      if (detailRef.current) return
       e.stopPropagation()
       onClose()
     }
@@ -71,7 +78,7 @@ export function GitLogModal({ onClose }: Props) {
           )}
 
           {commits.map((c) => (
-            <GitCommitRow key={c.oid} entry={c} />
+            <GitCommitRow key={c.oid} entry={c} onOpen={setDetailOid} />
           ))}
 
           {!loading && hasMore && (
@@ -85,6 +92,11 @@ export function GitLogModal({ onClose }: Props) {
           )}
         </div>
       </div>
+
+      {/* 详情弹窗嵌在这层遮罩里：它自己的遮罩会 `stopPropagation`，所以点它不会把提交记录一起关掉 */}
+      {detailOid && (
+        <GitCommitModal oid={detailOid} onClose={() => setDetailOid(null)} />
+      )}
     </div>,
     document.body,
   )

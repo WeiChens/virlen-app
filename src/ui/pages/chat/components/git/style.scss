@@ -136,13 +136,27 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* 游离 HEAD：不显示分支名，改用一个明确的提示徽标 */
+  /* 游离 HEAD：不显示分支名，改用一个明确的提示徽标。
+     ⚠️ 它是 `button`（不是 `span`）—— 回到分支的**唯一**入口：切远程分支会 detach，
+     那时分支名就没了，只剩这个徽标能打开分支浮层。 */
   .git-detached {
     padding: 1px 8px;
     border-radius: 999px;
     border: 1px dashed var(--color-warning-text, #b45309);
+    background: transparent;
     color: var(--color-warning-text, #b45309);
+    font: inherit;
     font-size: var(--font-size-xs, 11px);
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      border-style: solid;
+    }
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
   }
 
   .git-icon-btn {
@@ -465,6 +479,64 @@
   }
 }
 
+/* 面板里的文字按钮（「撤销上次提交」这类次要动作）：长得像链接，但真的可点、可聚焦 */
+.git-link-btn {
+  flex: none;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  font: inherit;
+  font-size: var(--font-size-xs, 11px);
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--hover-bg, #f0f0f0);
+    color: var(--primary-color, #3b6ef6);
+  }
+
+  &:focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: 1px;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+/* 「修改上一次提交」开关：与提交按钮同排，尺寸与左侧提示一档 */
+.git-amend {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-xs, 11px);
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+  user-select: none;
+
+  input {
+    width: 12px;
+    height: 12px;
+    margin: 0;
+    cursor: pointer;
+  }
+
+  /* 禁用态（只读沙盒 / 无提交可改）跟着变灰，而不是只剩复选框自己变灰 */
+  &:has(input:disabled) {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}
+
+/* 空态里的「初始化仓库」：`git-empty` 本身居中，这里只补一点间距 */
+.git-init-row {
+  margin-top: 10px;
+}
+
 /* 空态 / 提示 / 错误 */
 .git-empty {
   padding: 18px 4px;
@@ -487,6 +559,45 @@
   background: var(--bg-secondary, #f7f7f8);
   font-size: var(--font-size-xs, 11px);
   color: var(--text-secondary, #666);
+}
+
+/* 提交输出（git 的 stderr：hooks / 警告）。它是个横向满宽的块，夹在提交框与变更列表之间；
+   正文用 `pre` + 等宽字体（hook 输出有对齐与缩进，换成普通文本就看不出结构）+ 限高滚动，
+   不许把列表顶出面板。 */
+.git-hook-output {
+  margin-top: 6px;
+  padding: 4px 8px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  background: var(--bg-secondary, #f7f7f8);
+
+  .git-hook-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--font-size-xs, 11px);
+    font-weight: 600;
+    color: var(--text-secondary, #666);
+
+    .git-close {
+      width: 18px;
+      height: 18px;
+      font-size: 11px;
+    }
+  }
+
+  pre {
+    margin: 2px 0 0;
+    max-height: 120px;
+    overflow: auto;
+    overscroll-behavior: contain;
+    font-family: Consolas, 'Courier New', monospace;
+    font-size: var(--font-size-xs, 11px);
+    line-height: 1.45;
+    color: var(--text-primary, #1a1a1a);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
 }
 
 /* 分支浮层（挂在头部下方） */
@@ -527,6 +638,13 @@
     margin-top: 6px;
     overflow-y: auto;
     overscroll-behavior: contain;
+  }
+
+  /* 改名模式的提示行（复用搜索框，不另开弹窗） */
+  .git-branch-hint {
+    padding: 4px 6px;
+    font-size: var(--font-size-xs, 11px);
+    color: var(--text-secondary, #666);
   }
 
   .git-branch-item {
@@ -817,6 +935,52 @@
   }
 }
 
+/* 提交详情弹窗（GitCommitModal）：骨架直接用 `.git-diff-modal`（遮罩 / 头 / 左清单 / 右正文
+   都是同一套），这里只补它独有的三个零件 —— 短 hash、元信息行、完整提交信息。 */
+.git-commit-modal {
+  .git-commit-hash {
+    flex: none;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--bg-secondary, #f7f7f8);
+    font-family: Consolas, 'Courier New', monospace;
+    font-size: var(--font-size-xs, 11px);
+    color: var(--text-secondary, #666);
+  }
+
+  .git-commit-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px 0;
+    font-size: var(--font-size-xs, 11px);
+    color: var(--text-secondary, #666);
+
+    /* 定宽数字：`刚刚` 与 `2026-10-09 00:53` 混排时不抖 */
+    .git-commit-time {
+      font-variant-numeric: tabular-nums;
+    }
+  }
+
+  /* 完整提交信息：保留换行与缩进（`pre`），限高滚动 —— 它可能很长，不许把差异区挤没。
+     字体不走等宽：提交信息是散文，等宽只会更难读（与上方 hash 的取舍相反）。 */
+  .git-commit-message {
+    margin: 6px 12px 0;
+    padding: 6px 8px;
+    max-height: 96px;
+    overflow: auto;
+    overscroll-behavior: contain;
+    border-radius: 6px;
+    background: var(--bg-secondary, #f7f7f8);
+    font-family: inherit;
+    font-size: var(--font-size-sm, 12px);
+    line-height: 1.5;
+    color: var(--text-primary, #1a1a1a);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+}
+
 /* 提交记录弹窗（portal 到 body，与差异弹窗**共用那层遮罩** `.git-diff-backdrop`：
    让开自绘标题栏那一条约束只有一处，别再写第二份）。
    一行 = 一条提交：标题在左（可伸可缩），**时间 / 作者 / 短 hash** 在右（固定不缩）——
@@ -867,6 +1031,16 @@
 
     &:hover {
       background: var(--hover-bg, #f0f0f0);
+    }
+
+    /* 可点（打开提交详情）：鼠标与键盘都要能进 —— 只给鼠标做 hover 等于把信息藏起来一半 */
+    &.is-clickable {
+      cursor: pointer;
+
+      &:focus-visible {
+        outline: var(--focus-ring);
+        outline-offset: -2px;
+      }
     }
 
     .git-log-subject {

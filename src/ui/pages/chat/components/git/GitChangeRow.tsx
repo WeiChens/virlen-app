@@ -20,7 +20,11 @@
  * 「丢弃」用 `UndoSvg` 而不是字符 `↺` —— 后者与刷新图标同形，会被读成「刷新一下」（实测反馈）。
  */
 import { observer } from 'mobx-react-lite'
+import { revealItemInDir } from '@tauri-apps/plugin-opener'
 import { t, tpl } from '@/ui/i18n'
+import { gitStore } from '@/ui/store/gitStore'
+import { showToast } from '@/ui/components/shared/Toast'
+import { toAbsolutePath } from '@/utils/common'
 import UndoSvg from '@/ui/components/icons/UndoSvg'
 import FileTypeIcon from '@/ui/components/icons/FileTypeIcon'
 import { baseName, dirName, displayPath, statusLetter } from '@/domain/git'
@@ -102,6 +106,22 @@ export const GitChangeRow = observer(function GitChangeRow({
       label: t('查看差异'),
       onClick: () => onOpenDiff(target),
     })
+    // 删除的文件在工作区里已经不存在，「在文件管理器中显示」必然失败（打开的是不存在的路径）
+    // —— 直接不给这一项，比点一下报错好
+    const deleted = entry.x === 'D' || entry.y === 'D'
+    const repoRoot = gitStore.repo?.root
+    if (!deleted && repoRoot) {
+      items.push({
+        key: 'reveal',
+        label: t('在文件管理器中显示'),
+        onClick: () => {
+          // 路径是仓库根相对（Rust 的口径），而 plugin-opener 只认绝对路径
+          revealItemInDir(toAbsolutePath(entry.path, repoRoot)).catch(() =>
+            showToast(t('打开失败')),
+          )
+        },
+      })
+    }
     items.push({
       key: 'copy',
       label: t('复制路径'),

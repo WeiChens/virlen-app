@@ -191,7 +191,9 @@ export const virlenDarkTheme: monaco.editor.IStandaloneThemeData = {
   inherit: true,
   rules: [
     { token: '', foreground: 'abb2bf', background: '282c34' },
-    { token: 'comment', foreground: '5c6370', fontStyle: 'italic' },
+    // 注释用 One Dark Pro 的 #7f848e（原版 #5c6370 更暗）：在改动行的绿 / 红底色上，后者只剩
+    // 1.3~2.5:1，注释在里面等于看不见 —— 这条对比度由 `src/tests/ui/monaco-diff-theme.test.ts` 守住。
+    { token: 'comment', foreground: '7f848e', fontStyle: 'italic' },
     { token: 'string', foreground: '98c379' },
     { token: 'string.escape', foreground: '98c379' },
     { token: 'regexp', foreground: '98c379' },
@@ -271,7 +273,7 @@ export const virlenDarkTheme: monaco.editor.IStandaloneThemeData = {
 
     // 差异配色（git 差异弹窗 / 聊天里 `edit_file` 的 Monaco diff 编辑器）：与 DOM 版（`SideBySideDiff.scss`
     // 与 `theme.scss` 的 `--diff-*`）是同一套色阶：行底 #2a1515 / #152a15、行号栏 #3a2020 / #203a20、
-    // 行内字符级 #5c2626 / #265c2a。
+    // 行内字符级 #5c2626 / #1c3d20。
     //
     // ⚠️ 这六个值都是**半透明**（`#RRGGBBAA`，A=80 ≈ 50%），不是笔误：Monaco 把选区画在改动底色
     // **下面**（0.56 `view.js`：`.lines-content` 先 append 选区所在的 `contentViewOverlays`、再 append
@@ -287,7 +289,7 @@ export const virlenDarkTheme: monaco.editor.IStandaloneThemeData = {
     'diffEditor.removedLineBackground': '#2c000080', // 合成后 ≈ #2a1515
     'diffEditor.insertedLineBackground': '#02280080', // 合成后 ≈ #152a15
     'diffEditor.removedTextBackground': '#8e373280', // 合成后 ≈ #5c2626
-    'diffEditor.insertedTextBackground': '#378e3a80', // 合成后 ≈ #265c2a
+    'diffEditor.insertedTextBackground': '#23502b80', // 合成后 ≈ #1c3d20
     'diffEditorGutter.removedLineBackground': '#531b1580', // 合成后 ≈ #3a2020
     'diffEditorGutter.insertedLineBackground': '#1f4f1580', // 合成后 ≈ #203a20
     'diffEditor.border': '#181a1f',

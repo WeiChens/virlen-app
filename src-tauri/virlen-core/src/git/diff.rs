@@ -26,7 +26,8 @@ const BINARY_SNIFF_BYTES: usize = 8000;
 /// 取一条路径在某个对比基准下的两侧内容。
 ///
 /// - `dir`：**工作目录**（可以是仓库的任意子目录）—— 内部统一到仓库根；
-/// - `scope = Worktree`（未暂存）：旧 = index（`:<path>`），新 = 工作区文件
+/// - `scope = Worktree`（未暂存）：旧 = index（`:<path>`），新 = 工作区文件；
+///   ⚠️ 该路径若处于**冲突（未合并）**状态，改取 stage 2（ours）/ stage 3（theirs）—— 见 [`is_unmerged`]；
 /// - `scope = Index`（已暂存）：旧 = `HEAD:<path>`，新 = index
 pub fn sides(
     dir: &str,
@@ -50,12 +51,25 @@ pub fn sides_with_cancel(
     let root = super::repo::root_of(dir)?;
     // rename：旧侧要去旧路径取（否则会显示成「整文件新增 + 整文件删除」）
     let old_path = orig_path.unwrap_or(path);
-    let (old_rev, new_rev): (Option<String>, Option<String>) = match scope {
-        super::DiffScope::Worktree => (Some(format!(":{}", old_path)), None),
-        super::DiffScope::Index => (
-            Some(format!("HEAD:{}", old_path)),
-            Some(format!(":{}", path)),
-        ),
+    // ⚠️ 冲突路径在 index 里**没有 stage 0**，`:<path>` 会直接 128（`path 'x' is in the index,
+    //    but not at stage 0`），而 [`blob_bytes`] 把非 0 退出码当成「这一侧没有内容」—— 于是弹窗
+    //    里整份文件（连 `<<<<<<<` 冲突标记一起）被显示成「全新增」。要看的是两侧各自的内容：
+    //    stage 2 = ours（当前分支）、stage 3 = theirs（合入的那边）；某侧不存在（删除 / 新增）→ 空栏。
+    let unmerged = matches!(scope, super::DiffScope::Worktree)
+        && is_unmerged(&root, path, cancel)?;
+    let (old_rev, new_rev): (Option<String>, Option<String>) = if unmerged {
+        (
+            Some(format!(":2:{}", old_path)),
+            Some(format!(":3:{}", path)),
+        )
+    } else {
+        match scope {
+            super::DiffScope::Worktree => (Some(format!(":{}", old_path)), None),
+            super::DiffScope::Index => (
+                Some(format!("HEAD:{}", old_path)),
+                Some(format!(":{}", path)),
+            ),
+        }
     };
 
     let old_bytes = match old_rev {
@@ -67,24 +81,72 @@ pub fn sides_with_cancel(
         None => read_worktree(&root, path)?,
     };
 
+    let (old_label, new_label) = if unmerged {
+        ("ours（当前分支）", "theirs（合入的）")
+    } else {
+        match scope {
+            super::DiffScope::Worktree => ("INDEX", "工作区"),
+            super::DiffScope::Index => ("HEAD", "INDEX"),
+        }
+    };
+    Ok(assemble(old_bytes, new_bytes, old_label, new_label))
+}
+
+/// 两个任意 rev（`<rev>:<path>` 形态）之间的两侧内容 —— **提交详情**用它（旧 = `<oid>^`、新 = `<oid>`）。
+///
+/// 取不到的那一侧照例是 `None`（空侧）：root 提交没有 `<oid>^`、删除的文件在 `<oid>` 下不存在。
+pub fn sides_of_revs(
+    root: &str,
+    old_rev: &str,
+    new_rev: &str,
+    old_label: &str,
+    new_label: &str,
+    cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<DiffSides, GitError> {
+    let old_bytes = blob_bytes(root, old_rev, cancel)?;
+    let new_bytes = blob_bytes(root, new_rev, cancel)?;
+    Ok(assemble(old_bytes, new_bytes, old_label, new_label))
+}
+
+/// 两侧原始字节 → [`DiffSides`]（二进制嗅探 / 截断 / LF 归一化的**唯一出口**：
+/// 「工作区差异」与「提交间差异」必须同一套口径，分开写两份迟早会分叉）。
+fn assemble(
+    old_bytes: Option<Vec<u8>>,
+    new_bytes: Option<Vec<u8>>,
+    old_label: &str,
+    new_label: &str,
+) -> DiffSides {
     let binary = is_binary(&old_bytes) || is_binary(&new_bytes);
     let (old_text, mut truncated) = to_text(old_bytes, binary);
     let (new_text, new_truncated) = to_text(new_bytes, binary);
     truncated |= new_truncated;
-
-    let (old_label, new_label) = match scope {
-        super::DiffScope::Worktree => ("INDEX".to_string(), "工作区".to_string()),
-        super::DiffScope::Index => ("HEAD".to_string(), "INDEX".to_string()),
-    };
-
-    Ok(DiffSides {
+    DiffSides {
         old_text,
         new_text,
-        old_label,
-        new_label,
+        old_label: old_label.to_string(),
+        new_label: new_label.to_string(),
         binary,
         truncated,
-    })
+    }
+}
+
+/// 这条路径是否处于**冲突（未合并）**状态 —— `ls-files -u` 只列 stage 1/2/3，有输出即未合并。
+///
+/// 用一次显式探测而不是「取不到 `:path` 就猜是未合并」：后者与「新增 / 未跟踪」不可区分
+/// （两者都取不到 stage 0），猜错就会把新文件的差异也当成冲突的两栏。
+fn is_unmerged(
+    repo_root: &str,
+    path: &str,
+    cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<bool, GitError> {
+    let out = GitCmd::read(repo_root)
+        .arg("ls-files")
+        .arg("-u")
+        .arg("-z")
+        .paths([path])
+        .cancel_opt(cancel)
+        .run()?;
+    Ok(out.ok() && !out.stdout.is_empty())
 }
 
 /// `git show <rev>` 取 blob。**这不是错误**的两种情况（返回 `None`）：

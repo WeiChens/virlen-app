@@ -8,7 +8,8 @@
  * 1. **写操作一次只允许一个**（`busy` 非空时直接拒绝）—— git 自己的 index 锁在 Rust 侧已经串行，
  *    这里再挡一层是为了**不给用户产生「点了两次」的错觉**；
  * 2. **刷新时机**（P1 不做文件监听，见方案 §7 第 9 条）：探测时 / 打开面板时 / 每次操作后 /
- *    窗口重新聚焦时 / 用户点刷新。关闭面板时**不发任何请求**；
+ *    窗口重新激活时（面板关着也刷，见 `refreshOnFocus`）/ 会话活动后（工具调用结束 / 一轮对话
+ *    结束，防抖 2s，见 `notifyWorkspaceActivity`）/ 用户点刷新；关闭面板本身不发请求；
  * 3. 读操作的取消走既有 `stop_task`：新的 status 起跑前先把上一次停掉（超大仓库连点刷新时有用）。
  *
  * ⚠️ 埋点红线：只报**动作 / 条数 / 结果**，不报仓库路径、分支名、提交信息正文（方案 §6）。
@@ -18,18 +19,31 @@ import {
   branches as fetchBranches,
   checkRefFormat as invokeCheckRefFormat,
   commit as invokeCommit,
+  commitAmend as invokeCommitAmend,
+  commitDetail as invokeCommitDetail,
+  commitFileSides as invokeCommitFileSides,
+  deleteBranch as invokeDeleteBranch,
   diffSides as invokeDiffSides,
   discard as invokeDiscard,
+  initRepo as invokeInitRepo,
   isGitEnvAvailable,
   log as invokeLog,
+  renameBranch as invokeRenameBranch,
   repoInfo,
   stage as invokeStage,
   status as fetchStatus,
   stopTask,
   switchBranch as invokeSwitchBranch,
+  undoLastCommit as invokeUndoLastCommit,
   unstage as invokeUnstage,
 } from '@/infrastructure/git'
-import type { GitCommitLogEntry, GitDiffScope, GitDiffSides, GitLogScope } from '@/domain/git'
+import type {
+  GitCommitDetail,
+  GitCommitLogEntry,
+  GitDiffScope,
+  GitDiffSides,
+  GitLogScope,
+} from '@/domain/git'
 import { gitStore } from '@/ui/store/gitStore'
 import { MessageBox as MessagePrompt } from '@/ui/components/shared/MessageBox'
 import { showToast } from '@/ui/components/shared/Toast'
@@ -107,6 +121,7 @@ export async function syncWorkspace(dir: string | null): Promise<void> {
     gitStore.probed = false
     gitStore.repo = null
     gitStore.unavailable = null
+    gitStore.notRepo = false
     gitStore.snapshot = null
     gitStore.branches = []
     gitStore.error = null
@@ -134,6 +149,8 @@ async function probe(): Promise<void> {
     runInAction(() => {
       gitStore.probed = true
       gitStore.repo = info
+      // 「不是仓库」是个**可用状态**（面板会给出「初始化仓库」），与「没装 git / 出错了」不同
+      gitStore.notRepo = !info
       gitStore.unavailable = info ? null : t('当前工作目录不是 Git 仓库')
       if (!info) gitStore.snapshot = null
     })
@@ -143,6 +160,7 @@ async function probe(): Promise<void> {
     runInAction(() => {
       gitStore.probed = true
       gitStore.repo = null
+      gitStore.notRepo = false
       gitStore.unavailable = errorText(e)
     })
   } finally {
@@ -150,6 +168,28 @@ async function probe(): Promise<void> {
       gitStore.loading = false
     })
   }
+}
+
+/**
+ * 在当前工作目录初始化仓库（`git init`）——「不是仓库」空态里唯一出口。
+ *
+ * 成功后**直接接上探测的那套入参**（repo / snapshot），用户不必再去看一眼「为什么徽标还没出来」。
+ */
+export async function initRepo(): Promise<boolean> {
+  const dir = gitStore.dir
+  if (!dir) return false
+  const info = await run('init', () => invokeInitRepo(dir))
+  if (!info) return false
+  runInAction(() => {
+    gitStore.repo = info
+    gitStore.notRepo = false
+    gitStore.unavailable = null
+    gitStore.probed = true
+  })
+  showToast(t('已初始化仓库'))
+  await refreshStatus()
+  await refreshBranches()
+  return true
 }
 
 /** 只刷状态（分支列表单独刷 —— 大多数操作不会改分支） */
@@ -199,10 +239,56 @@ export function setPanelOpen(open: boolean): void {
   }
 }
 
-/** 窗口重新聚焦时调（用户在编辑器 / 终端里动过文件，切回来要看得见） */
+/** 两次「窗口激活刷新」之间的最小间隔（毫秒）—— 频繁切窗时别反复叫醒 git */
+const FOCUS_REFRESH_MIN_INTERVAL_MS = 1500
+
+/** 上一次窗口激活刷新的时刻 */
+let lastFocusRefreshAt = 0
+
+/**
+ * 窗口重新激活时调（点任务栏 / 直接点窗口）—— 用户在编辑器 / 终端里动过文件，切回来要看得见。
+ *
+ * **不要求面板打开**：标题栏上的变更数徽标在面板关着时照样显示，只看 `open` 就会出现
+ * 「明明改了 3 个文件、徽标还是 0」。节流兜住频繁切窗（每次都会跑一次 git status）。
+ */
 export async function refreshOnFocus(): Promise<void> {
-  if (!gitStore.open || !gitStore.repo) return
+  if (!gitStore.repo) return
+  const now = Date.now()
+  if (now - lastFocusRefreshAt < FOCUS_REFRESH_MIN_INTERVAL_MS) return
+  lastFocusRefreshAt = now
   await refreshStatus()
+}
+
+// ==================== 会话活动触发的自动刷新 ====================
+
+/** 会话活动（工具调用结束 / 一轮对话结束）后的防抖窗口：把「连着调 10 个工具」压成一次刷新 */
+const ACTIVITY_DEBOUNCE_MS = 2000
+
+/** 待执行的防抖定时器（`null` = 没有排期） */
+let activityTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 窗口是否处于激活状态（与 `GitEntry` 的 `focus` 监听同一口径：要的是 webview 真被激活） */
+function isWindowActive(): boolean {
+  return typeof document !== 'undefined' && document.hasFocus()
+}
+
+/**
+ * 会话活动（每次工具调用结束 / 一轮对话结束）时调 —— 防抖 2s 后刷新一次该工作目录的状态。
+ *
+ * 三道前置（`dir` 必须是面板当前绑定的工作目录，且窗口处于激活状态）：后台会话 / 窗口在后台时
+ * **不排期** —— 用户看不见徽标，白跑 git 没有意义（窗口切回来时 `refreshOnFocus` 会补一次）。
+ * 调用方（`event-handler::scheduleGitRefresh`）已先按「当前选中的会话」过一道闸（见那里）。
+ *
+ * 到点前再判一次：2s 内用户可能把窗口切走 / 换了工作目录，那时这次刷新就该放弃。
+ */
+export function notifyWorkspaceActivity(dir: string | null): void {
+  if (!dir || gitStore.dir !== dir || !gitStore.repo || !isWindowActive()) return
+  if (activityTimer !== null) clearTimeout(activityTimer)
+  activityTimer = setTimeout(() => {
+    activityTimer = null
+    if (gitStore.dir !== dir || !gitStore.repo || !isWindowActive()) return
+    void refreshStatus()
+  }, ACTIVITY_DEBOUNCE_MS)
 }
 
 // ==================== 写操作 ====================
@@ -255,10 +341,13 @@ export async function discard(paths: string[]): Promise<boolean> {
 /**
  * 提交。
  *
+ * `amend = true` 时走 `--amend`（把暂存内容并入**上一条**提交，或只改提交信息）——
+ * 那种情况**不**走「暂存区为空就问要不要全暂存」那一支：amend 本来就允许没有新内容。
+ *
  * `allowEmptyStage = false` 时若无已暂存内容，先问「是否全部暂存并提交」——
  * 这是 VS Code 的老行为，也是新用户最常撞的一堵墙。
  */
-export async function commit(message: string): Promise<boolean> {
+export async function commit(message: string, amend = false): Promise<boolean> {
   const dir = gitStore.dir
   if (!dir || !gitStore.repo) return false
   if (!message.trim()) {
@@ -269,7 +358,7 @@ export async function commit(message: string): Promise<boolean> {
   const stagedCount = (gitStore.snapshot?.entries ?? []).filter(
     (e) => e.kind !== 'untracked' && e.x !== '.' && e.x !== '?',
   ).length
-  if (stagedCount === 0) {
+  if (!amend && stagedCount === 0) {
     const all = (gitStore.snapshot?.entries ?? []).map((e) => e.path)
     if (all.length === 0) {
       showToast(t('没有可提交的更改'))
@@ -288,35 +377,121 @@ export async function commit(message: string): Promise<boolean> {
     acceptSnapshot(staged)
   }
 
-  const result = await run('commit', () => invokeCommit(dir, message))
+  const result = await run(amend ? 'commit_amend' : 'commit', () =>
+    amend ? invokeCommitAmend(dir, message) : invokeCommit(dir, message),
+  )
   if (!result) return false
   runInAction(() => {
     gitStore.commitDraft = ''
+    // hooks / 警告只出现在 stderr（正常提交为空）—— 丢掉它等于把「hook 动过什么」藏起来
+    gitStore.hookOutput = result.stderr.trim() ? result.stderr.trim() : null
   })
   showToast(
-    result.summary
-      ? tpl('已提交：$__summary__', { summary: result.summary })
-      : t('已提交'),
+    amend
+      ? tpl('已修改上次提交：$__summary__', { summary: result.summary })
+      : result.summary
+        ? tpl('已提交：$__summary__', { summary: result.summary })
+        : t('已提交'),
   )
   await refreshStatus()
   return true
 }
 
-/** 切换 / 新建分支（脏工作区与目标冲突时 git 自己会拒绝，错误原样展示） */
+/**
+ * 撤销最后一次提交（`reset --soft`）：**改动全部留在暂存区**，不丢代码。
+ *
+ * 仍然要二次确认：它改写的是提交历史（别人已经拉走的那条会被当成被丢弃的分支尖端）。
+ */
+export async function undoLastCommit(): Promise<boolean> {
+  const dir = gitStore.dir
+  if (!dir || !gitStore.repo) return false
+  const ok = await MessagePrompt.propt(
+    t('撤销上次提交？'),
+    t('这条提交会被撤掉，它的改动全部保留在暂存区（不会丢代码）。'),
+    { confirmText: t('撤销'), cancelText: t('取消'), danger: true },
+  )
+  if (!ok) return false
+  const snapshot = await run('commit_undo', () => invokeUndoLastCommit(dir))
+  if (!snapshot) return false
+  acceptSnapshot(snapshot)
+  await refreshBranches()
+  showToast(t('已撤销上次提交，改动保留在暂存区'))
+  return true
+}
+
+/**
+ * 切换 / 新建 / **游离（detach）到某个分支**（脏工作区与目标冲突时 git 自己会拒绝，错误原样展示）。
+ *
+ * `detach` 专给**远程分支**用：`git switch origin/x` 会直接 fatal（git 只收本地分支名，
+ * 退出码 128），只有 `--detach` 能落到它的提交上。切完 HEAD 不在任何分支上 —— 面板上那个
+ * 「游离 HEAD」入口就是回分支的路，别把它做成不可点。
+ */
 export async function switchBranch(
   name: string,
   create: boolean,
   startPoint: string | null = null,
+  detach = false,
 ): Promise<boolean> {
   const dir = gitStore.dir
   if (!dir || !gitStore.repo) return false
   const snapshot = await run('branch_switch', () =>
-    invokeSwitchBranch(dir, name, create, startPoint),
+    invokeSwitchBranch(dir, name, create, startPoint, detach),
   )
   if (!snapshot) return false
   acceptSnapshot(snapshot)
   await refreshBranches()
-  showToast(create ? tpl('已创建并切换到 $__name__', { name }) : tpl('已切换到 $__name__', { name }))
+  showToast(
+    create
+      ? tpl('已创建并切换到 $__name__', { name })
+      : detach
+        ? tpl('已游离到 $__name__（HEAD 不在任何分支上）', { name })
+        : tpl('已切换到 $__name__', { name }),
+  )
+  return true
+}
+
+/**
+ * 删除本地分支。`force = false` 时 git 会拦住未合并的分支 —— **不自动改成 `-D`**：
+ * 用户点「删除」时要知道自己在丢什么。
+ */
+export async function removeBranch(name: string, force = false): Promise<boolean> {
+  const dir = gitStore.dir
+  if (!dir || !gitStore.repo) return false
+  const ok = await MessagePrompt.propt(
+    force ? t('强制删除分支？') : t('删除分支？'),
+    force
+      ? tpl('$__name__ 会被强制删除：即使它上面有未合并的提交。', { name })
+      : tpl('$__name__ 会被删除；若它有未合并的提交，git 会拒绝。', { name }),
+    { confirmText: t('删除'), cancelText: t('取消'), danger: true },
+  )
+  if (!ok) return false
+  const list = await run('branch_delete', () => invokeDeleteBranch(dir, name, force))
+  if (!list) return false
+  runInAction(() => {
+    gitStore.branches = list
+  })
+  showToast(tpl('已删除分支 $__name__', { name }))
+  return true
+}
+
+/**
+ * 重命名分支（含当前分支）。
+ *
+ * 重命名后额外刷一次**状态**：改的是当前分支时，`snapshot.head.branch` 也跟着变了
+ *（不刷就会出现「浮层里叫新名字、面板头还写着旧名字」）。
+ */
+export async function renameBranch(from: string, to: string): Promise<boolean> {
+  const dir = gitStore.dir
+  if (!dir || !gitStore.repo) return false
+  const name = to.trim()
+  if (!name || name === from) return false
+  const list = await run('branch_rename', () => invokeRenameBranch(dir, from, name))
+  if (!list) return false
+  runInAction(() => {
+    gitStore.branches = list
+  })
+  await refreshStatus()
+  showToast(tpl('已重命名为 $__name__', { name }))
   return true
 }
 
@@ -375,4 +550,27 @@ export async function loadDiffSides(
   const dir = gitStore.dir
   if (!dir) throw new Error(t('当前工作目录不是 Git 仓库'))
   return invokeDiffSides(dir, path, scope, origPath, newTaskId('git_diff'))
+}
+
+// ==================== 提交详情 ====================
+
+/**
+ * 取一个提交的详情。与差异正文同一取舍：**不缓存、不进 `busy`**（看一眼历史不该锁住写操作）；
+ * 失败抛出 —— 弹窗自己有位置说清原因。
+ */
+export async function loadCommitDetail(oid: string): Promise<GitCommitDetail> {
+  const dir = gitStore.dir
+  if (!dir) throw new Error(t('当前工作目录不是 Git 仓库'))
+  return invokeCommitDetail(dir, oid)
+}
+
+/** 某个提交里一条路径的两侧内容（按需取：一次拉整个提交的 diff，大提交上是几十 MB） */
+export async function loadCommitFileSides(
+  oid: string,
+  path: string,
+  origPath: string | null,
+): Promise<GitDiffSides> {
+  const dir = gitStore.dir
+  if (!dir) throw new Error(t('当前工作目录不是 Git 仓库'))
+  return invokeCommitFileSides(dir, oid, path, origPath, newTaskId('git_commit_diff'))
 }

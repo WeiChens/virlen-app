@@ -233,6 +233,10 @@ function DiffHalf({
       ? ' diff-line--highlight-old'
       : ' diff-line--highlight-new'
     : ''
+  // 字符级底色（`.diff-part--*`）只给 **modified** 行：它要回答的是「一行里改了哪几个字」。
+  // 整行新增 / 删除的行没有「哪几个字」可言 —— 整行底色已经说明一切，再套一层字符级底色
+  // 会让它们比「改了几个字」的行深一档（同一份 diff 里两种绿），也让整行文字变成字符级前景色。
+  const charLevel = row.type === 'modified'
 
   return (
     <div className={`diff-line diff-line--${side}${highlightClass}`}>
@@ -242,7 +246,7 @@ function DiffHalf({
           ? ' '
           : parts.map((part, i) =>
               // 未改动片段不包节点（行内高亮的只有改动片段，节点数也少一截）
-              part.type === 'equal' ? (
+              part.type === 'equal' || !charLevel ? (
                 <DiffCode key={i} text={part.value} language={language} />
               ) : (
                 <span

@@ -5,6 +5,7 @@
  * （TS 类型 → Rust emit → 本文件分支）。
  */
 import {
+  chatState,
   getSessionRuntime,
   sessionStore,
   updateSessionRuntime,
@@ -22,6 +23,7 @@ import {
 } from './messages'
 import type { ChatServiceEvents } from './types'
 import { trayNotifyCompleted } from '@/services/tray-service'
+import { notifyWorkspaceActivity } from '@/services/git-service'
 import { flushTodoDraft } from '@/services/todo-service'
 import { t } from '@/ui/i18n'
 import {
@@ -116,6 +118,8 @@ export function createEventHandler(
           addSessionMessage(sessionId, event.data.message)
           events?.onMessagesUpdate?.(sessionId)
         }
+        // 这次工具可能改动了工作区文件 → 排期一次工作目录的 git 状态刷新（防抖 2s，见 git-service）
+        scheduleGitRefresh(sessionId)
         break
 
       case 'tool_progress': {
@@ -302,6 +306,24 @@ function resolveAssistantPatch(
   return { ...rest, content: current + contentDelta }
 }
 
+/** 会话的工作目录 —— 会话活动的 git 自动刷新用它定位要刷新的仓库 */
+function workspaceOf(sessionId: string): string | null {
+  return sessionStore.getSession(sessionId)?.workspace || null
+}
+
+/**
+ * 会话有「活动」（工具调用结束 / 一轮对话结束）→ 排期一次工作目录的 git 刷新。
+ *
+ * ⚠️ **只认当前选中的会话**：会话 A 在后台跑工具、用户已经切到会话 B 时不该刷 —— 切过去的若是
+ * 另一个工作目录，刷出来的就是那个目录的状态，与 A 的这次工具毫无关系（切目录本身已经由
+ * `syncWorkspace` 探过一次，不该再叠一次）。剩下的「窗口激活 / 是 Git 仓库」两道闸在
+ * `notifyWorkspaceActivity` 里。
+ */
+function scheduleGitRefresh(sessionId: string): void {
+  if (chatState.value.currentSessionId !== sessionId) return
+  notifyWorkspaceActivity(workspaceOf(sessionId))
+}
+
 /**
  * 取该会话最后一条有正文的助手消息，作为完成提醒的预览。
  *
@@ -358,6 +380,8 @@ export async function finishWorking(
     })
     events?.onWorkingChange?.(sessionId, false)
     events?.onMessagesUpdate?.(sessionId)
+    // 一轮对话跑完：期间的工具调用很可能改过工作区文件 → 排期一次 git 状态刷新
+    scheduleGitRefresh(sessionId)
     // 托盘提醒：真的跑完（含出错）才提醒；是否打扰、走哪条通道由 Rust 判断（窗口聚焦时不打扰）
     const errored = !!tr?.errored
     trayNotifyCompleted(sessionId, {

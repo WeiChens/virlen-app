@@ -187,6 +187,8 @@ describe('SideBySideDiff 全屏', () => {
     expect(host.querySelectorAll('.diff-line--highlight-old').length).toBe(1)
     expect(host.querySelectorAll('.diff-line--highlight-new').length).toBe(2)
     // 行内片段：改了哪几个字（这是换掉手写 LCS 的主要收益）
+    // ⚠️ 只算 **modified** 行：整行新增 / 删除的行没有「哪几个字」可言，只由行底色表达
+    //（早先实现给整行的 added 片段也包了字符级底色 —— 同一份 diff 里出现两种绿，这条用例守的就是它）
     expect(host.querySelectorAll('.diff-part--removed').length).toBe(1)
     expect(host.querySelectorAll('.diff-part--added').length).toBe(1)
     expect(host.querySelector('.diff-part--removed')?.textContent).toBe('2')

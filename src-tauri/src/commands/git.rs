@@ -15,8 +15,8 @@ use serde_json::json;
 use std::sync::Arc;
 use virlen_core::git::cli::GitError;
 use virlen_core::git::{
-    BranchInfo, CommitLogEntry, CommitResult, DiffScope, DiffSides, LogScope, RepoInfo,
-    StatusSnapshot, WriteGate,
+    BranchInfo, CommitDetail, CommitLogEntry, CommitResult, DiffScope, DiffSides, LogScope,
+    RepoInfo, StatusSnapshot, WriteGate,
 };
 use virlen_core::session_db::SettingsRepo;
 
@@ -56,6 +56,16 @@ async fn gate(settings: &tauri::State<'_, Arc<dyn SettingsRepo>>) -> WriteGate {
 #[tauri::command]
 pub async fn git_repo_info(dir: String) -> Result<Option<RepoInfo>, String> {
     blocking("repo_info", move || virlen_core::git::repo::discover(&dir)).await
+}
+
+/// 在当前目录初始化仓库（`git init`）—— 面板在「不是仓库」时给的唯一出口
+#[tauri::command]
+pub async fn git_init(
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    dir: String,
+) -> Result<RepoInfo, String> {
+    let gate = gate(&settings).await;
+    blocking("init", move || virlen_core::git::repo::init(&dir, &gate)).await
 }
 
 /// 状态快照（分支头 + 全部变更条目）。`task_id` 供超大仓库中途取消。
@@ -133,6 +143,43 @@ pub async fn git_check_ref_format(dir: String, name: String) -> Result<bool, Str
     .await
 }
 
+/// 单个提交的详情（头信息 + **完整**提交信息 + 变更文件清单）。
+///
+/// 清单是**相对第一个父提交**的（merge 提交相对谁看没有唯一答案，见 `virlen_core::git::show`）。
+#[tauri::command]
+pub async fn git_commit_detail(dir: String, oid: String) -> Result<CommitDetail, String> {
+    blocking("commit_detail", move || {
+        virlen_core::git::show::detail(&dir, &oid)
+    })
+    .await
+}
+
+/// 某条路径**在那个提交里**的两侧内容（旧 = `<oid>^`，新 = `<oid>`）。
+///
+/// 按需取（与 `git_diff_sides` 同一取舍）：一次拉整个提交的 diff，大提交上是几十 MB。
+#[tauri::command]
+pub async fn git_commit_file_sides(
+    dir: String,
+    oid: String,
+    path: String,
+    orig_path: Option<String>,
+    task_id: String,
+) -> Result<DiffSides, String> {
+    let cancel = crate::task_manager::register(&task_id);
+    let result = blocking("commit_diff", move || {
+        virlen_core::git::show::file_sides(
+            &dir,
+            &oid,
+            &path,
+            orig_path.as_deref(),
+            Some(&cancel),
+        )
+    })
+    .await;
+    crate::task_manager::unregister(&task_id);
+    result
+}
+
 // ==================== 写操作（一律先过 gate） ====================
 
 /// 暂存（含未跟踪文件）
@@ -191,7 +238,34 @@ pub async fn git_commit(
     .await
 }
 
-/// 切换 / 新建并切换分支（脏工作区与目标冲突时 git 会拒绝，我们如实回传原因）
+/// 修改上一次提交（`--amend`：把暂存内容并入上一条，或只改提交信息）
+#[tauri::command]
+pub async fn git_commit_amend(
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    dir: String,
+    message: String,
+) -> Result<CommitResult, String> {
+    let gate = gate(&settings).await;
+    blocking("commit_amend", move || {
+        virlen_core::git::commit::amend(&dir, &gate, &message)
+    })
+    .await
+}
+
+/// 撤销最后一次提交（`reset --soft`：**改动全留在暂存区**，不丢代码）
+#[tauri::command]
+pub async fn git_commit_undo_last(
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    dir: String,
+) -> Result<StatusSnapshot, String> {
+    let gate = gate(&settings).await;
+    blocking("commit_undo", move || {
+        virlen_core::git::commit::undo_last(&dir, &gate)
+    })
+    .await
+}
+
+/// 切换 / 新建并切换 / 游离到某个分支（脏工作区与目标冲突时 git 会拒绝，我们如实回传原因）
 #[tauri::command]
 pub async fn git_branch_switch(
     settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
@@ -199,6 +273,7 @@ pub async fn git_branch_switch(
     name: String,
     create: Option<bool>,
     start_point: Option<String>,
+    detach: Option<bool>,
 ) -> Result<StatusSnapshot, String> {
     let gate = gate(&settings).await;
     blocking("branch_switch", move || {
@@ -208,7 +283,38 @@ pub async fn git_branch_switch(
             &name,
             create.unwrap_or(false),
             start_point.as_deref(),
+            detach.unwrap_or(false),
         )
+    })
+    .await
+}
+
+/// 删除本地分支（`force = false` 时未合并的分支会被 git 拒 —— 这是安全网，不许默默改成强删）
+#[tauri::command]
+pub async fn git_branch_delete(
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    dir: String,
+    name: String,
+    force: Option<bool>,
+) -> Result<Vec<BranchInfo>, String> {
+    let gate = gate(&settings).await;
+    blocking("branch_delete", move || {
+        virlen_core::git::branch::delete(&dir, &gate, &name, force.unwrap_or(false))
+    })
+    .await
+}
+
+/// 重命名分支（新名字仍过 `check-ref-format`）
+#[tauri::command]
+pub async fn git_branch_rename(
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    dir: String,
+    from: String,
+    to: String,
+) -> Result<Vec<BranchInfo>, String> {
+    let gate = gate(&settings).await;
+    blocking("branch_rename", move || {
+        virlen_core::git::branch::rename(&dir, &gate, &from, &to)
     })
     .await
 }

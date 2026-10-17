@@ -23,6 +23,12 @@ class GitStore {
   repo: GitRepoInfo | null = null
   /** 不可用原因（不是仓库 / 未检测到 git）—— `null` = 一切正常 */
   unavailable: string | null = null
+  /**
+   * 目录存在但**不是** Git 仓库 —— 面板据此提供「初始化仓库」入口。
+   *
+   * 单独一个布尔而不是从 `unavailable` 的文案反推：文案会跟着语言包变，而这是行为分支。
+   */
+  notRepo = false
   snapshot: GitStatusSnapshot | null = null
   branches: GitBranchInfo[] = []
   /** 首次加载（骨架屏） */
@@ -35,6 +41,13 @@ class GitStore {
   open = false
   /** 提交信息草稿（面板重开后仍在：写一半切走不该丢） */
   commitDraft = ''
+  /**
+   * 最近一次提交里 git 的 stderr（hooks 的输出 / 警告）—— 非空才展示「提交输出」块。
+   *
+   * 正常提交为空，所以它不是「提交日志」，而是「这次提交有没有顺手动过什么」的告警。
+   * 只留最近一份：下一条提交覆盖它，用户手动关掉也清空。
+   */
+  hookOutput: string | null = null
 
   constructor() {
     makeObservable(this, {
@@ -42,6 +55,7 @@ class GitStore {
       probed: observable,
       repo: observable,
       unavailable: observable,
+      notRepo: observable,
       snapshot: observable,
       branches: observable,
       loading: observable,
@@ -49,6 +63,7 @@ class GitStore {
       error: observable,
       open: observable,
       commitDraft: observable,
+      hookOutput: observable,
     })
   }
 }

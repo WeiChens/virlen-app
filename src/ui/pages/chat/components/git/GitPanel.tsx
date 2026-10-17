@@ -26,9 +26,12 @@ import { groupChanges } from '@/domain/git'
 import {
   commit,
   discard,
+  initRepo,
+  loadCommitDetail,
   refreshBranches,
   refreshStatus,
   stage,
+  undoLastCommit,
   unstage,
 } from '@/services/git-service'
 import RefreshSvg from '@/ui/components/icons/RefreshSvg'
@@ -53,6 +56,8 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
   /** 选中集（键 = `rowKey`，保持点击先后）；`anchorRef` 是 Shift 范围选择的起点 */
   const [selected, setSelected] = useState<string[]>([])
   const anchorRef = useRef<string | null>(null)
+  /** 「修改上一次提交」：开着时提交走 `--amend`（把暂存内容并入上一条） */
+  const [amend, setAmend] = useState(false)
 
   const snapshot = gitStore.snapshot
   const groups = groupChanges(snapshot)
@@ -116,6 +121,35 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
     return [...new Set(paths)]
   }
 
+  /**
+   * 分支浮层的开关 —— 分支按钮与「游离 HEAD」徽标共用。
+   * ⚠️ 两个入口缺一不可：切到**远程分支**会 detach，那时分支名就没了（`head.branch === null`），
+   * 只剩这个徽标能把浮层打开、切回本地分支。
+   */
+  function toggleBranchMenu(): void {
+    if (!branchMenuOpen) void refreshBranches()
+    setBranchMenuOpen((v) => !v)
+  }
+
+  /**
+   * 切「修改上一次提交」：打开时若草稿还空着，用上一条的**完整信息**回填 ——
+   * amend 最常见的用途就是改信息，让人重新敲一遍不合理。
+   */
+  async function toggleAmend(next: boolean): Promise<void> {
+    setAmend(next)
+    const oid = head?.oid
+    if (!next || !oid || gitStore.commitDraft.trim()) return
+    try {
+      const detail = await loadCommitDetail(oid)
+      runInAction(() => {
+        // 期间用户可能已经开始写：只在仍为空时回填
+        if (!gitStore.commitDraft.trim()) gitStore.commitDraft = detail.message
+      })
+    } catch {
+      // 回填只是便利，取不到不必打断提交
+    }
+  }
+
   const nothingToShow =
     !!snapshot &&
     groups.staged.length === 0 &&
@@ -143,7 +177,21 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
       {!gitStore.probed && <div className="git-empty">{t('加载中…')}</div>}
 
       {gitStore.probed && gitStore.unavailable && (
-        <div className="git-empty">{gitStore.unavailable}</div>
+        <div className="git-empty">
+          {gitStore.unavailable}
+          {/* 不是仓库是个**可继续**的状态：给一个出口，而不是只告诉用户「不行」 */}
+          {gitStore.notRepo && (
+            <div className="git-init-row">
+              <button
+                type="button"
+                className="git-primary-btn"
+                disabled={readonly || busy}
+                onClick={() => void initRepo()}>
+                {t('初始化仓库')}
+              </button>
+            </div>
+          )}
+        </div>
       )}
 
       {gitStore.repo && (
@@ -157,18 +205,21 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
                 type="button"
                 className="git-branch-btn"
                 disabled={disabled}
-                onClick={() => {
-                  if (!branchMenuOpen) void refreshBranches()
-                  setBranchMenuOpen((v) => !v)
-                }}
+                onClick={toggleBranchMenu}
                 title={t('切换分支')}>
                 <span className="git-branch-name">{head.branch}</span>
               </button>
             ) : (
-              // 游离 HEAD / 空仓库：没有分支名可点，改给一个明确的状态
-              <span className="git-detached">
+              // 游离 HEAD / 空仓库：没有分支名可点，改用一个明确的状态徽标
+              // （它同样能点开分支浮层，见 `toggleBranchMenu`）
+              <button
+                type="button"
+                className="git-detached"
+                disabled={disabled}
+                onClick={toggleBranchMenu}
+                title={t('切换分支')}>
                 {head ? t('游离 HEAD') : t('读取中…')}
-              </span>
+              </button>
             )}
             {head && (head.ahead > 0 || head.behind > 0) && (
               <span className="git-track">
@@ -177,6 +228,17 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
               </span>
             )}
             <span className="git-spacer" />
+            {/* 撤销上次提交：只在有提交时出现（空仓库里它没有意义） */}
+            {head?.oid && (
+              <button
+                type="button"
+                className="git-link-btn"
+                disabled={disabled}
+                onClick={() => void undoLastCommit()}
+                title={t('撤销上次提交（改动保留在暂存区）')}>
+                {t('撤销上次提交')}
+              </button>
+            )}
             {/* 仓库级入口：提交记录 / 提交图（都是读操作，不受只读沙盒与 busy 影响） */}
             <button
               type="button"
@@ -222,7 +284,7 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
                 onKeyDown={(e) => {
                   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                     e.preventDefault()
-                    void commit(gitStore.commitDraft)
+                    void commit(gitStore.commitDraft, amend)
                   }
                 }}
               />
@@ -234,13 +296,31 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
                         count: groups.staged.length,
                       })}
                 </span>
+                {/* amend 开关：放在提交区里 —— 「能不能改上一条」与「有没有暂存内容」是同一件事的两个面 */}
+                <label
+                  className="git-amend"
+                  title={t('把当前暂存的改动并入上一条提交')}>
+                  <input
+                    type="checkbox"
+                    checked={amend}
+                    disabled={disabled || !head?.oid}
+                    onChange={(e) => void toggleAmend(e.target.checked)}
+                  />
+                  {t('修改上一次提交')}
+                </label>
                 <span className="git-spacer" />
                 <button
                   type="button"
                   className="git-primary-btn"
                   disabled={disabled || !gitStore.commitDraft.trim()}
-                  onClick={() => void commit(gitStore.commitDraft)}>
-                  {t('提交')}
+                  onClick={() => {
+                    void (async () => {
+                      const ok = await commit(gitStore.commitDraft, amend)
+                      // 改完就退出 amend 模式：下一次提交默认是新的
+                      if (ok) setAmend(false)
+                    })()
+                  }}>
+                  {amend ? t('修改提交') : t('提交')}
                 </button>
               </div>
             </div>
@@ -249,6 +329,29 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
       )}
 
       {gitStore.error && <div className="git-empty error">{gitStore.error}</div>}
+
+      {/* 提交时 git 的 stderr（hooks 的输出 / 警告）：正常提交为空，所以它一出现就是「有事要告诉你」
+          —— 之前这份输出被丢掉，用户只知道「提交了」，不知道 hook 改过文件 / 报了什么 */}
+      {gitStore.hookOutput && (
+        <div className="git-hook-output">
+          <div className="git-hook-head">
+            <span>{t('提交输出（hooks / 警告）')}</span>
+            <span className="git-spacer" />
+            <button
+              type="button"
+              className="git-close"
+              title={t('关闭')}
+              onClick={() =>
+                runInAction(() => {
+                  gitStore.hookOutput = null
+                })
+              }>
+              ✕
+            </button>
+          </div>
+          <pre>{gitStore.hookOutput}</pre>
+        </div>
+      )}
 
       {gitStore.repo && (
         <div className="git-list">

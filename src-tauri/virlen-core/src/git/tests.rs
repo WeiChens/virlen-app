@@ -303,7 +303,7 @@ fn write_gate_rejects_when_readonly() {
     assert!(staged.is_err(), "只读模式下暂存必须失败");
     let committed = super::commit::commit(&repo.path(), &gate, "x");
     assert!(committed.is_err(), "只读模式下提交必须失败");
-    let switched = branch::switch(&repo.path(), &gate, "feature", true, None);
+    let switched = branch::switch(&repo.path(), &gate, "feature", true, None, false);
     assert!(switched.is_err(), "只读模式下切分支必须失败");
     // 只读命令不受影响
     assert!(super::status::status(&repo.path()).is_ok());
@@ -416,7 +416,7 @@ fn branch_create_list_switch() {
 
     let first = super::status::status(&repo.path()).unwrap().head.branch.unwrap();
 
-    let after = branch::switch(&repo.path(), &gate, "feature/x", true, None).unwrap();
+    let after = branch::switch(&repo.path(), &gate, "feature/x", true, None, false).unwrap();
     assert_eq!(after.head.branch.as_deref(), Some("feature/x"));
 
     let list = branch::list(&repo.path()).unwrap();
@@ -426,8 +426,271 @@ fn branch_create_list_switch() {
     assert!(list[0].is_head, "当前分支必须排在最前");
     assert_eq!(list[0].name, "feature/x");
 
-    let back = branch::switch(&repo.path(), &gate, &first, false, None).unwrap();
+    let back = branch::switch(&repo.path(), &gate, &first, false, None, false).unwrap();
     assert_eq!(back.head.branch.as_deref(), Some(first.as_str()));
+}
+
+/// ⚠️ 切**远程分支**：`git switch origin/x` 会直接 fatal（「a branch is expected, got remote branch」，
+/// 退出码 128）—— git 的 switch 只收本地分支名。这就是线上那条报错（实测反馈）。
+/// 只有 `--detach` 能落到它的提交上；detach 之后必须还能切回本地分支（否则一去不返）。
+#[test]
+fn switch_remote_branch_detaches() {
+    let Some(repo) = TempRepo::new() else { return };
+    let gate = WriteGate::new(true);
+    repo.write("a.txt", "hello\n");
+    super::stage::stage(&repo.path(), &gate, &["a.txt".to_string()]).unwrap();
+    super::commit::commit(&repo.path(), &gate, "init").unwrap();
+
+    let snap = super::status::status(&repo.path()).unwrap();
+    let oid = snap.head.oid.clone().unwrap();
+    let local = snap.head.branch.clone().unwrap();
+
+    // 造一个「远程有、本地没有」的分支（`git fetch` 之后就是这个形态）
+    repo.git(&["update-ref", "refs/remotes/origin/feature-x", &oid]);
+    let list = branch::list(&repo.path()).unwrap();
+    assert!(
+        list.iter()
+            .any(|b| b.is_remote && b.name == "origin/feature-x"),
+        "远程分支必须在列表里 —— 界面就是从这里拿到名字的"
+    );
+
+    // 不 detach = 线上那条报错
+    let plain = branch::switch(&repo.path(), &gate, "origin/feature-x", false, None, false);
+    assert!(plain.is_err(), "git switch <远程分支> 必须失败");
+
+    // detach：落在那个提交上，且 HEAD 不在任何分支上
+    let detached =
+        branch::switch(&repo.path(), &gate, "origin/feature-x", false, None, true).unwrap();
+    assert_eq!(detached.head.branch, None, "detach 之后 HEAD 不在任何分支上");
+    assert_eq!(detached.head.oid.as_deref(), Some(oid.as_str()));
+
+    // 回得来：面板上那个「游离 HEAD」入口就靠这条
+    let back = branch::switch(&repo.path(), &gate, &local, false, None, false).unwrap();
+    assert_eq!(back.head.branch.as_deref(), Some(local.as_str()));
+
+    // 两个动作互斥（界面不会这么传，但闸门要拦住）
+    assert!(branch::switch(&repo.path(), &gate, "x", true, None, true).is_err());
+}
+
+/// ⚠️ 冲突路径在 index 里**没有 stage 0**：`git show :<path>` 直接 128，而取不到的一侧会被当成「空」
+/// —— 旧实现在界面上就是「整份文件（连 `<<<<<<<` 标记）显示成全新增」（实测反馈）。
+/// 两栏必须取 stage 2（ours）/ stage 3（theirs）。
+#[test]
+fn conflict_diff_shows_ours_and_theirs() {
+    let Some(repo) = TempRepo::new() else { return };
+    repo.write("a.txt", "base\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "base"]);
+    let base = repo.git(&["rev-parse", "--abbrev-ref", "HEAD"]).trim().to_string();
+
+    repo.git(&["checkout", "-q", "-b", "feature"]);
+    repo.write("a.txt", "feature\n");
+    repo.git(&["commit", "-q", "-am", "feature"]);
+
+    repo.git(&["checkout", "-q", &base]);
+    repo.write("a.txt", "main\n");
+    repo.git(&["commit", "-q", "-am", "main"]);
+
+    // 两边改同一行 → merge 必然冲突（退出码 1）：这里要一条**允许失败**的调用
+    //（`TempRepo::git` 断言成功，用不了）
+    let merged = super::cli::GitCmd::write(&repo.path())
+        .args(["merge", "feature"])
+        .run()
+        .expect("git 起不来");
+    assert!(!merged.ok(), "两边改同一行，merge 必须冲突");
+
+    let snap = super::status::status(&repo.path()).unwrap();
+    assert!(
+        snap.entries
+            .iter()
+            .any(|e| e.path == "a.txt" && e.kind == super::EntryKind::Unmerged),
+        "工作区必须处于未合并状态（否则这条用例测不到目标分支）"
+    );
+
+    let sides =
+        super::diff::sides(&repo.path(), "a.txt", super::DiffScope::Worktree, None).unwrap();
+    let old = sides.old_text.clone().unwrap_or_default();
+    let new = sides.new_text.clone().unwrap_or_default();
+    assert_eq!(old, "main\n", "旧侧 = ours（当前分支）");
+    assert_eq!(new, "feature\n", "新侧 = theirs（合入的那边）");
+    assert!(
+        !old.contains("<<<<<<<") && !new.contains("<<<<<<<"),
+        "不许把冲突标记当内容摆进差异"
+    );
+}
+
+/// 提交详情：清单**相对第一个父提交**，两侧内容取 `<oid>^` / `<oid>`。
+/// root 提交没有父 —— 旧侧为空、清单全是新增（这一支不写清，“点第一个提交”就崩）。
+#[test]
+fn commit_detail_and_file_sides() {
+    let Some(repo) = TempRepo::new() else { return };
+    repo.write("a.txt", "one\n");
+    repo.write("b.txt", "bye\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init\n\n正文第二段"]);
+
+    // 第二个提交：改 a.txt、删 b.txt、加 c.txt
+    repo.write("a.txt", "one\ntwo\n");
+    std::fs::remove_file(repo.dir.join("b.txt")).unwrap();
+    repo.write("c.txt", "new\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "second"]);
+
+    let snap = super::status::status(&repo.path()).unwrap();
+    let oid = snap.head.oid.clone().unwrap();
+    let detail = super::show::detail(&repo.path(), &oid).unwrap();
+    assert!(detail.short_oid.len() >= 7, "短 oid 由 git 自己给");
+    assert_eq!(detail.message, "second");
+    assert_eq!(detail.parents.len(), 1);
+    let mut statuses: Vec<(&str, char)> = detail
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.status))
+        .collect();
+    statuses.sort();
+    assert_eq!(
+        statuses,
+        vec![("a.txt", 'M'), ("b.txt", 'D'), ("c.txt", 'A')]
+    );
+
+    let sides = super::show::file_sides(&repo.path(), &oid, "a.txt", None, None).unwrap();
+    assert_eq!(sides.old_text.as_deref(), Some("one\n"));
+    assert_eq!(sides.new_text.as_deref(), Some("one\ntwo\n"));
+
+    // 删除的文件：新侧不存在 → 空侧（界面上就是单栏）
+    let gone = super::show::file_sides(&repo.path(), &oid, "b.txt", None, None).unwrap();
+    assert_eq!(gone.old_text.as_deref(), Some("bye\n"));
+    assert_eq!(gone.new_text, None);
+
+    // root 提交：没有 `<oid>^`，旧侧为空、清单全量新增
+    let root_oid = detail.parents[0].clone();
+    let root = super::show::detail(&repo.path(), &root_oid).unwrap();
+    assert!(root.parents.is_empty());
+    assert_eq!(root.files.len(), 2);
+    assert!(root.files.iter().all(|f| f.status == 'A'));
+    assert!(
+        root.message.starts_with("init"),
+        "详情要的是**完整**信息（含正文），不是列表里的单行标题"
+    );
+    let root_sides =
+        super::show::file_sides(&repo.path(), &root_oid, "a.txt", None, None).unwrap();
+    assert_eq!(root_sides.old_text, None, "root 提交没有父 → 旧侧空");
+    assert_eq!(root_sides.new_text.as_deref(), Some("one\n"));
+}
+
+/// amend：把暂存内容并入上一条（不多出一条提交）；undo：撤掉提交但**改动留在暂存区**。
+/// root 提交那一支单独守：`HEAD~1` 在只有一条提交时不存在，得走 `update-ref -d HEAD`。
+#[test]
+fn amend_and_undo_last_commit() {
+    let Some(repo) = TempRepo::new() else { return };
+    let gate = WriteGate::new(true);
+    repo.write("a.txt", "one\n");
+    super::stage::stage(&repo.path(), &gate, &["a.txt".to_string()]).unwrap();
+    super::commit::commit(&repo.path(), &gate, "init").unwrap();
+
+    // amend：改内容 + 改信息，仍然只有一条提交
+    repo.write("a.txt", "one\ntwo\n");
+    super::stage::stage(&repo.path(), &gate, &["a.txt".to_string()]).unwrap();
+    let amended = super::commit::amend(&repo.path(), &gate, "init (amended)").unwrap();
+    assert_eq!(amended.summary, "init (amended)");
+    let log = super::log::log(&repo.path(), 0, 10, super::LogScope::Head, None).unwrap();
+    assert_eq!(log.len(), 1, "amend 不许造出第二条提交");
+    let sides =
+        super::show::file_sides(&repo.path(), &log[0].oid, "a.txt", None, None).unwrap();
+    assert_eq!(sides.new_text.as_deref(), Some("one\ntwo\n"));
+
+    // undo（root 提交）：HEAD 回到 unborn，文件仍在 index 里（x = 'A'）
+    let snap = super::commit::undo_last(&repo.path(), &gate).unwrap();
+    assert_eq!(snap.head.oid, None, "唯一一条提交被撤掉 → unborn HEAD");
+    assert!(
+        snap.entries.iter().any(|e| e.path == "a.txt" && e.x == 'A'),
+        "改动必须留在暂存区（reset --soft 的语义）"
+    );
+    // 再撤一次：没有可撤的（不能把失败吞成「成功」）
+    assert!(super::commit::undo_last(&repo.path(), &gate).is_err());
+
+    // 两条提交时撤的是最后一条（普通分支）
+    super::commit::commit(&repo.path(), &gate, "first").unwrap();
+    repo.write("b.txt", "new\n");
+    super::stage::stage(&repo.path(), &gate, &["b.txt".to_string()]).unwrap();
+    super::commit::commit(&repo.path(), &gate, "second").unwrap();
+    let back = super::commit::undo_last(&repo.path(), &gate).unwrap();
+    assert!(
+        back.entries.iter().any(|e| e.path == "b.txt" && e.x == 'A'),
+        "被撤提交的内容要回到暂存区"
+    );
+    let log = super::log::log(&repo.path(), 0, 10, super::LogScope::Head, None).unwrap();
+    assert_eq!(log[0].subject, "first");
+}
+
+/// 删 / 改分支：`-d` 必须拦住未合并的分支（安全网），删当前分支必须被拒，新名字要过正法校验。
+#[test]
+fn branch_delete_and_rename() {
+    let Some(repo) = TempRepo::new() else { return };
+    let gate = WriteGate::new(true);
+    repo.write("a.txt", "hi\n");
+    super::stage::stage(&repo.path(), &gate, &["a.txt".to_string()]).unwrap();
+    super::commit::commit(&repo.path(), &gate, "init").unwrap();
+    let cur = super::status::status(&repo.path())
+        .unwrap()
+        .head
+        .branch
+        .unwrap();
+
+    // 造一个「未合并」的分支（有它自己的提交，且没合回当前分支）
+    branch::switch(&repo.path(), &gate, "wip", true, None, false).unwrap();
+    repo.write("a.txt", "wip\n");
+    repo.git(&["commit", "-qam", "wip"]);
+    branch::switch(&repo.path(), &gate, &cur, false, None, false).unwrap();
+
+    // `-d` 拦未合并（这层安全网不能被默默换成 `-D`）
+    assert!(branch::delete(&repo.path(), &gate, "wip", false).is_err());
+    let list = branch::delete(&repo.path(), &gate, "wip", true).unwrap();
+    assert!(!list.iter().any(|b| b.name == "wip"));
+
+    // 删当前分支：git 会拒，我们如实回传（不做「先切走再删」）
+    assert!(branch::delete(&repo.path(), &gate, &cur, false).is_err());
+
+    // 重命名（含当前分支）
+    branch::switch(&repo.path(), &gate, "topic", true, None, false).unwrap();
+    let list = branch::rename(&repo.path(), &gate, "topic", "topic2").unwrap();
+    assert!(list.iter().any(|b| b.name == "topic2"));
+    assert!(!list.iter().any(|b| b.name == "topic"));
+    // 新名字不合法直接拒（不用等 git 报 128）
+    assert!(branch::rename(&repo.path(), &gate, "topic2", "bad name").is_err());
+}
+
+/// `git init`：初始化后能探测到；只读沙盒模式直接拒（fail-closed，不往磁盘写 `.git`）
+#[test]
+fn init_makes_a_repository() {
+    if !git_available() {
+        return;
+    }
+    let mk = || {
+        let dir = std::env::temp_dir().join(format!("virlen_git_init_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        (dir.clone(), dir.to_string_lossy().replace('\\', "/"))
+    };
+
+    let (dir, path) = mk();
+    let info = super::repo::init(&path, &WriteGate::new(true)).unwrap();
+    assert_eq!(info.root, path);
+    assert!(!info.bare);
+    // 目录不存在 → 明确报错（而不是静默建一个新目录）
+    assert!(super::repo::init(
+        &format!("{}/nope", path),
+        &WriteGate::new(true)
+    )
+    .is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let (dir2, path2) = mk();
+    assert!(super::repo::init(&path2, &WriteGate::new(false)).is_err());
+    assert!(
+        !std::path::Path::new(&path2).join(".git").exists(),
+        "只读沙盒模式下不该建出 .git"
+    );
+    let _ = std::fs::remove_dir_all(&dir2);
 }
 
 #[test]
