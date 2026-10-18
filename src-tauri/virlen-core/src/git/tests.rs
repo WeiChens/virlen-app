@@ -196,6 +196,63 @@ fn git_available() -> bool {
         .unwrap_or(false)
 }
 
+/// 两条路径是否指向**同一个目录**。
+///
+/// ⚠️ 不能直接比字符串：`git rev-parse --show-toplevel` 回的是**规范路径**，而我们传进去的目录可能
+/// 是另一个写法——两种形态都在 CI 上真发生过：
+/// - macOS：`TEMP` 给 `/var/folders/...`，git 给 `/private/var/folders/...`（`/var` 是符号链接）；
+/// - Windows：`TEMP` 给 8.3 短名 `C:/Users/RUNNER~1/...`，git 给长名 `C:/Users/runneradmin/...`。
+///
+/// 这只是在用例层面抹平「同一目录的多种写法」，不是把断言放宽：符号链接 / 短名都靠
+/// `canonicalize` 解开，不同目录仍然不等。
+fn same_path(actual: &str, expected: &str) -> bool {
+    let normalize = |value: &str| {
+        std::fs::canonicalize(value)
+            .map(|path| {
+                let text = path
+                    .to_string_lossy()
+                    // `canonicalize` 在 Windows 上加的 verbatim 前缀，与 git 的输出对不上
+                    .trim_start_matches(r"\\?\")
+                    .replace('\\', "/");
+                // ⚠️ 只在 Windows 折大小写：macOS / Linux 可能是大小写敏感卷，
+                // 无条件折成小写会把两个真不同的目录判等。
+                if cfg!(target_os = "windows") {
+                    text.to_lowercase()
+                } else {
+                    text.to_string()
+                }
+            })
+            .unwrap_or_else(|_| value.replace('\\', "/"))
+    };
+    normalize(actual) == normalize(expected)
+}
+
+/// 符号链接的字面路径与目标路径必须判等（macOS / Linux 的临时目录就是这个形态：
+/// `/var/...` vs `/private/var/...`）。只在能**无特权**建符号链接的 unix 上跑：
+/// Windows 上建链接需要开发者模式 / 管理员，不能作为用例前提。
+#[cfg(unix)]
+#[test]
+fn same_path_resolves_symlinked_temp_root() {
+    let base = std::env::temp_dir().join(format!("virlen_same_path_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&base).unwrap();
+    let link = base.with_extension("link");
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(&base, &link).unwrap();
+
+    assert!(
+        same_path(&link.to_string_lossy(), &base.to_string_lossy()),
+        "符号链接与目标应判为同一目录"
+    );
+
+    // 不同目录（含父子关系）不能被抹平
+    let child = base.join("sub");
+    std::fs::create_dir_all(&child).unwrap();
+    assert!(!same_path(&child.to_string_lossy(), &base.to_string_lossy()));
+
+    let _ = std::fs::remove_file(&link);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// 一个仓库跑齐五类变更，断言与 git 自己的判定一致
 #[test]
 fn status_end_to_end_on_real_repo() {
@@ -685,7 +742,11 @@ fn init_makes_a_repository() {
 
     let (dir, path) = mk();
     let info = super::repo::init(&path, &WriteGate::new(true)).unwrap();
-    assert_eq!(info.root, path);
+    assert!(
+        same_path(&info.root, &path),
+        "init 后的仓库根应为 {path}，实际 {}",
+        info.root
+    );
     assert!(!info.bare);
     // 目录不存在 → 明确报错（而不是静默建一个新目录）
     assert!(super::repo::init(
