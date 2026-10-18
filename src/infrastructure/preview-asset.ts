@@ -19,11 +19,20 @@ function isWindowsLike(): boolean {
   return /Windows|Android/i.test(navigator.userAgent)
 }
 
-/** token → 协议基址（末尾带 `/`，`<base href>` 可直接拼相对路径） */
-export function previewBaseUrl(token: string): string {
-  return isWindowsLike()
-    ? `http://${PREVIEW_SCHEME}.localhost/${token}/`
-    : `${PREVIEW_SCHEME}://localhost/${token}/`
+/** token（+ 文件所在的子目录）→ 协议基址（末尾带 `/`，`<base href>` 可直接拼相对路径） */
+export function previewBaseUrl(token: string, relativeDir = ''): string {
+  // 逐段编码：目录名里可能有空格 / 中文，`?` `#` 不编码会被当成 query / fragment
+  // （协议侧 `decode_relative` 会先去掉 query，再逐段校验）
+  const dir = relativeDir
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter((segment) => segment !== '' && segment !== '.')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/')
+  const prefix = isWindowsLike()
+    ? `http://${PREVIEW_SCHEME}.localhost/`
+    : `${PREVIEW_SCHEME}://localhost/`
+  return `${prefix}${token}/${dir ? `${dir}/` : ''}`
 }
 
 /** 随机 token（只允许字母数字与 `-`；Rust 侧同样按这个形状校验） */

@@ -261,14 +261,20 @@ fn decode_relative(raw: &str) -> Option<PathBuf> {
     (!out.as_os_str().is_empty()).then_some(out)
 }
 
-/// 目标是否仍在根目录内（Windows 大小写不敏感；两边统一正斜杠后按前缀比）
+/// 目标是否仍在根目录内（两边统一正斜杠后按前缀比）。
+///
+/// ⚠️ 大小写归一化**只在 Windows 做**：Linux / macOS 的路径可能真的存在 `/data/Demo` 与
+/// `/data/demo` 两个目录，无条件折成小写会把「根外的同名变体」（典型是符号链接指向的兄弟目录）
+/// 判成「在根内」。与 `git::lock::normalize_key` 的取舍保持一致。
 fn inside(path: &Path, root: &Path) -> bool {
     let normalize = |value: &Path| {
-        value
-            .to_string_lossy()
-            .replace('\\', "/")
-            .trim_end_matches('/')
-            .to_lowercase()
+        let text = value.to_string_lossy().replace('\\', "/");
+        let text = text.trim_end_matches('/');
+        if cfg!(target_os = "windows") {
+            text.to_lowercase()
+        } else {
+            text.to_string()
+        }
     };
     let target = normalize(path);
     let base = normalize(root);
@@ -419,12 +425,17 @@ mod tests {
     }
 
     #[test]
-    fn inside_is_case_insensitive_on_windows_paths() {
+    fn inside_compares_prefix_with_platform_case_rules() {
         let root = Path::new("E:/Work/Demo");
         assert!(inside(Path::new("E:/Work/Demo/a.png"), root));
-        assert!(inside(Path::new("e:/work/demo/sub/a.png"), root));
         assert!(!inside(Path::new("E:/Work/Demo2/a.png"), root));
         assert!(!inside(Path::new("E:/Work/Other/a.png"), root));
+        // 大小写：Windows 不敏感；其它平台必须当两个不同目录（否则符号链接可跨大小写变体逃逸）
+        if cfg!(target_os = "windows") {
+            assert!(inside(Path::new("e:/work/demo/sub/a.png"), root));
+        } else {
+            assert!(!inside(Path::new("e:/work/demo/sub/a.png"), root));
+        }
     }
 
     #[test]

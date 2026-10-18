@@ -11,6 +11,7 @@ import {
   mimeOf,
   monacoLanguageOf,
   previewKindOf,
+  relativeDirOf,
   textPreviewKindOf,
 } from '@/domain/files/preview'
 
@@ -94,5 +95,31 @@ describe('Monaco 语言', () => {
   it('特殊文件名与未知类型', () => {
     expect(monacoLanguageOf('Dockerfile')).toBe('dockerfile')
     expect(monacoLanguageOf('LICENSE')).toBe('plaintext')
+  })
+})
+
+/**
+ * HTML 预览的基址要靠它补上「文件所在的子目录」：页面里的 `./app.css` 相对的是文件目录，
+ * 而协议登记的是工作区根 —— 漏了这段，子目录里的页面所有相对资源都 404。
+ */
+describe('相对工作区根的子目录', () => {
+  it('根目录下的文件没有子目录', () => {
+    expect(relativeDirOf('E:/repo/page.html', 'E:/repo')).toBe('')
+    expect(relativeDirOf('E:/repo/page.html', 'E:/repo/')).toBe('')
+  })
+
+  it('多级子目录按 POSIX 风格拼', () => {
+    expect(relativeDirOf('E:/repo/docs/demo/index.html', 'E:/repo')).toBe('docs/demo')
+    expect(relativeDirOf('E:\\repo\\docs\\demo\\index.html', 'E:/repo')).toBe('docs/demo')
+  })
+
+  it('大小写 / 末尾斜杠不影响判定', () => {
+    expect(relativeDirOf('e:/REPO/Docs/a.html', 'E:/repo')).toBe('Docs')
+    expect(relativeDirOf('E:/repo/a/b/c.html', 'E:\\repo\\')).toBe('a/b')
+  })
+
+  it('不在根内或与根同层时回空串（宁可不注入子目录）', () => {
+    expect(relativeDirOf('E:/other/docs/a.html', 'E:/repo')).toBe('')
+    expect(relativeDirOf('E:/repo', 'E:/repo')).toBe('')
   })
 })

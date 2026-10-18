@@ -236,3 +236,30 @@ export function monacoLanguageOf(name: string): string {
   if (LANGUAGE_BY_NAME[base]) return LANGUAGE_BY_NAME[base]
   return LANGUAGE_BY_EXT[extensionOf(name)] || 'plaintext'
 }
+
+/** 路径 → 段（去掉空段与 `.`；两种分隔符都认） */
+function pathSegments(value: string): string[] {
+  return value
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter((segment) => segment !== '' && segment !== '.')
+}
+
+/**
+ * 文件相对「根目录」的子目录（POSIX 风格、无首尾斜杠；不在根内返回空串）。
+ *
+ * 为什么需要它：HTML 预览把**工作区**登记为可读根（沙箱范围就是这么大），但页面里的
+ * `./app.css` 是相对**文件自身目录**的 —— 协议基址必须补上这一段，否则子目录里的页面
+ * 所有相对资源都 404（见 `workspace-file/index.tsx` 与 `preview-asset.ts`）。
+ */
+export function relativeDirOf(filePath: string, root: string): string {
+  const file = pathSegments(filePath)
+  const base = pathSegments(root)
+  // 文件与根同层（或更浅）= 没有子目录；`file.length - 1` 是文件名本身，不算目录
+  if (base.length === 0 || file.length <= base.length) return ''
+  // 大小写不敏感地比较（Windows 驱动盘符 / 目录名大小写会变）。这里只用来拼一个 URL，
+  // 猜错最多是 404 —— 真正的「是否在根内」由 Rust 侧 `inside()` 按平台判定。
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
+  if (!base.every((segment, index) => same(segment, file[index]))) return ''
+  return file.slice(base.length, -1).join('/')
+}

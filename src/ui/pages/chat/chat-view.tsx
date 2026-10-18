@@ -269,24 +269,39 @@ function ChatView() {
   }, [])
 
   /**
-   * 双击文件 → 右侧打开。已有未保存草稿时先确认：面板只有一个，换文件就是丢草稿，
-   * 不能静默发生（关闭 / 刷新按钮同理，见面板内部）。
+   * 有未保存草稿时先问一句（无草稿直接放行）。
+   *
+   * ⚠️ 面板只有一个：`closeFile()` 会让它卸载，草稿随之消失 —— 换文件 / 切会话 / 换工作目录
+   * 三条路径都必须先过这里。面板内部的关闭 / 重新加载按钮同样要确认（见 `workspace-file`）。
    */
-  const handleOpenFile = useCallback(async (path: string) => {
-    if (openFileRef.current === path) return
-    if (fileDirtyRef.current) {
-      const confirmed = await MessageBox.propt(
-        t('放弃未保存的修改？'),
+  const confirmDiscardDraft = useCallback(
+    (message: string, confirmText: string): Promise<boolean> => {
+      if (!fileDirtyRef.current) return Promise.resolve(true)
+      return MessageBox.propt(t('放弃未保存的修改？'), message, {
+        confirmText,
+        cancelText: t('取消'),
+        danger: true,
+      })
+    },
+    [],
+  )
+
+  /** 双击文件 → 右侧打开（换文件前先确认草稿） */
+  const handleOpenFile = useCallback(
+    async (path: string) => {
+      if (openFileRef.current === path) return
+      const confirmed = await confirmDiscardDraft(
         t('打开另一个文件会丢弃当前草稿。'),
-        { confirmText: t('放弃并打开'), cancelText: t('取消'), danger: true },
+        t('放弃并打开'),
       )
       if (!confirmed) return
-    }
-    openFileRef.current = path
-    openFileSessionRef.current = chatState.value.currentSessionId
-    fileDirtyRef.current = false
-    setOpenFile(path)
-  }, [])
+      openFileRef.current = path
+      openFileSessionRef.current = chatState.value.currentSessionId
+      fileDirtyRef.current = false
+      setOpenFile(path)
+    },
+    [confirmDiscardDraft],
+  )
 
   // 同步 ref 与 state
   useEffect(() => {
@@ -531,14 +546,11 @@ function ChatView() {
     const session = sessionStore.getSession(sessionId)
     if (!session) return
     // 切会话会关掉右侧文件；有未保存草稿先问一句（托盘等外部入口走下面的兜底 effect，不弹）
-    if (fileDirtyRef.current) {
-      const confirmed = await MessageBox.propt(
-        t('放弃未保存的修改？'),
-        t('切换会话会关闭当前文件，未保存的修改将丢失。'),
-        { confirmText: t('放弃并切换'), cancelText: t('取消'), danger: true },
-      )
-      if (!confirmed) return
-    }
+    const confirmed = await confirmDiscardDraft(
+      t('切换会话会关闭当前文件，未保存的修改将丢失。'),
+      t('放弃并切换'),
+    )
+    if (!confirmed) return
     // 先登记再干活：内部会再次写同值 currentSessionId，早登记避免兜底 effect 重入
     handledSessionRef.current = sessionId
     const fromSessionId = chatState.value.currentSessionId
@@ -956,9 +968,16 @@ function ChatView() {
                   : chatState.value.selectedWorkspace
               }
               setValue={(e) => {
-                // 换工作目录 = 右侧打开的文件已不属于当前目录，一并关掉
-                closeFile()
-                chatState.setValue('selectedWorkspace', e)
+                // 换工作目录 = 右侧打开的文件已不属于当前目录，一并关掉（先确认草稿）
+                void (async () => {
+                  const confirmed = await confirmDiscardDraft(
+                    t('切换工作目录会关闭当前文件，未保存的修改将丢失。'),
+                    t('放弃并切换'),
+                  )
+                  if (!confirmed) return
+                  closeFile()
+                  chatState.setValue('selectedWorkspace', e)
+                })()
               }}
               workspaces={historyWorkspaces}
             />

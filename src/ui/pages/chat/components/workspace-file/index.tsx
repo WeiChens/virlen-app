@@ -31,7 +31,7 @@ import RefreshSvg from '@/ui/components/icons/RefreshSvg'
 import ExportSvg from '@/ui/components/icons/ExportSvg'
 import MarkdownRenderer from '@/ui/pages/chat/components/message/markdown-renderer'
 import ImageViewer from './image-viewer'
-import { monacoLanguageOf, textPreviewKindOf } from '@/domain/files/preview'
+import { monacoLanguageOf, relativeDirOf, textPreviewKindOf } from '@/domain/files/preview'
 import { buildPreviewDocument, previewNeeds } from '@/domain/files/html-preview'
 import {
   allowPreviewRoot,
@@ -303,7 +303,8 @@ function WorkspaceFilePanel({
 
   const htmlPreviewActive = showPreview && previewKind === 'html'
 
-  // HTML 预览：把「当前工作区」登成一个可读根，拿一次性 token 的协议基址；关闭 / 切模式即撤销。
+  // HTML 预览：把「当前工作区」登成可读根（沙箱范围 = 工作区），基址再补上文件自己的子目录
+  // （页面里的 `./app.css` 是相对文件目录的）；关闭 / 切模式即撤销。
   // 登记失败（非 Tauri / 权限）不报错：不注入 base，预览仍然能显示，只是相对资源 404。
   useEffect(() => {
     if (!htmlPreviewActive) {
@@ -317,7 +318,7 @@ function WorkspaceFilePanel({
       try {
         const root = await securityService.getWorkspace(sessionId)
         await allowPreviewRoot(token, root, allowScripts)
-        if (!cancelled) setPreviewBase(previewBaseUrl(token))
+        if (!cancelled) setPreviewBase(previewBaseUrl(token, relativeDirOf(path, root)))
       } catch {
         if (!cancelled) setPreviewBase(null)
       }
@@ -326,7 +327,7 @@ function WorkspaceFilePanel({
       cancelled = true
       void revokePreviewRoot(token)
     }
-  }, [htmlPreviewActive, allowScripts, sessionId])
+  }, [htmlPreviewActive, allowScripts, sessionId, path])
 
   /** 注入 base / CSP 后的完整 HTML 文档（DOMParser 不执行脚本） */
   const htmlDoc = useMemo(

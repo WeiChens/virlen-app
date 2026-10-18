@@ -55,7 +55,8 @@ vi.mock('@tauri-apps/plugin-opener', () => ({ openPath: openPathMock }))
 vi.mock('@/infrastructure/preview-asset', () => ({
   allowPreviewRoot: allowPreviewRootMock,
   revokePreviewRoot: revokePreviewRootMock,
-  previewBaseUrl: (token: string) => `http://virlen-preview.localhost/${token}/`,
+  previewBaseUrl: (token: string, dir = '') =>
+    `http://virlen-preview.localhost/${token}/${dir ? `${dir}/` : ''}`,
   newPreviewToken: () => 'test-token-0001',
 }))
 vi.mock('@/services/security-service', () => ({
@@ -339,7 +340,7 @@ it('html：预览用沙箱 iframe；登记成功后注入 base（相对路径可
     ;[...document.querySelectorAll<HTMLButtonElement>('.wfp-tab')][1].click()
   })
 
-  // 登记的是「打开文件时的工作区」，不是文件所在目录（面板内的相对路径仍限定在工作区内）
+  // 登记的是「打开文件时的工作区」（沙箱范围），不是文件所在目录
   expect(allowPreviewRootMock).toHaveBeenCalledWith(
     'test-token-0001',
     'E:/repo',
@@ -353,6 +354,30 @@ it('html：预览用沙箱 iframe；登记成功后注入 base（相对路径可
     '<base href="http://virlen-preview.localhost/test-token-0001/">',
   )
   expect(frame!.getAttribute('srcdoc')).toContain('<h1>hi</h1>')
+})
+
+/**
+ * 子目录里的页面：`./app.css` 相对的是**文件目录**，基址必须补上这一段 ——
+ * 否则请求会落到工作区根的 app.css 上（必然 404）。
+ */
+it('html 在子目录：基址带上文件所在目录', async () => {
+  loadMock.mockResolvedValue(textFile('<link href="./app.css">'))
+  await mount('E:/repo/docs/demo/index.html')
+
+  await act(async () => {
+    ;[...document.querySelectorAll<HTMLButtonElement>('.wfp-tab')][1].click()
+  })
+
+  // 根仍是工作区（沙箱不缩小、`../` 也不会跑出工作区）
+  expect(allowPreviewRootMock).toHaveBeenCalledWith(
+    'test-token-0001',
+    'E:/repo',
+    false,
+  )
+  const frame = document.querySelector('iframe.wfp-frame')
+  expect(frame!.getAttribute('srcdoc')).toContain(
+    '<base href="http://virlen-preview.localhost/test-token-0001/docs/demo/">',
+  )
 })
 
 /**

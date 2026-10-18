@@ -1913,6 +1913,7 @@
   "打开另一个文件会丢弃当前草稿。": "Opening another file discards the current draft.",
   "放弃并切换": "Discard and switch",
   "切换会话会关闭当前文件，未保存的修改将丢失。": "Switching sessions closes the open file; unsaved changes will be lost.",
+  "切换工作目录会关闭当前文件，未保存的修改将丢失。": "Switching the working directory closes the open file; unsaved changes will be lost.",
   "正在准备预览…": "Preparing the preview…",
   "允许运行脚本": "Allow scripts",
   "脚本可读取本目录资源并通过自我导航外发，仅在信任此页面时开启": "Scripts can read files in this folder and leak them by navigating away — enable only for pages you trust",
