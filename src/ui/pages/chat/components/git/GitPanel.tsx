@@ -41,6 +41,7 @@ import GitSyncMenu from './GitSyncMenu'
 import GitDiffModal from './GitDiffModal'
 import GitLogModal from './GitLogModal'
 import GitGraphModal from './GitGraphModal'
+import GitStashModal from './GitStashModal'
 import { changeSections, rowKey, splitRowKey } from './sections'
 import VirtualList from './VirtualList'
 
@@ -86,6 +87,8 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
   const [graphOpen, setGraphOpen] = useState(false)
   /** 远程浮层（获取 / 拉取 / 推送 / 测试连接） */
   const [syncMenuOpen, setSyncMenuOpen] = useState(false)
+  /** 贮藏浮层（列表 + 新建）：面板里放不下第三块常驻区域，收进「更多」 */
+  const [stashOpen, setStashOpen] = useState(false)
   /** 选中集（键 = `rowKey`，保持点击先后）；`anchorRef` 是 Shift 范围选择的起点 */
   const [selected, setSelected] = useState<string[]>([])
   const anchorRef = useRef<string | null>(null)
@@ -201,7 +204,7 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
     more.openAtPoint({ x: rect.right, y: rect.bottom + 4 }, undefined)
   }
 
-  /** 头部菜单项：高频动作仍是分支 / 落差 / 记录 / 图 / 刷新，这里只放不常用的三个 */
+  /** 头部菜单项：高频动作仍是分支 / 落差 / 记录 / 图 / 刷新，这里只放不常用的（同步 / 贮藏 / 撤销提交 / amend） */
   function moreItems(): ContextMenuItem[] {
     const items: ContextMenuItem[] = [
       {
@@ -215,6 +218,13 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
         },
       },
     ]
+    items.push({
+      key: 'stash',
+      label: t('贮藏更改…'),
+      // 开浮层是读操作（只读沙盒下也能看列表）；浮层里的写入口自己再按只读 / busy 禁用
+      disabled: busy,
+      onClick: () => setStashOpen(true),
+    })
     // 撤销只在**有提交**时出现（空仓库里它没有意义）
     if (head?.oid) {
       items.push({
@@ -541,6 +551,10 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
 
       {syncMenuOpen && (
         <GitSyncMenu readonly={readonly} onClose={() => setSyncMenuOpen(false)} />
+      )}
+
+      {stashOpen && (
+        <GitStashModal readonly={readonly} onClose={() => setStashOpen(false)} />
       )}
 
       {diffTarget && (

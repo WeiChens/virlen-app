@@ -196,3 +196,31 @@ export interface GitRemoteInfo {
   /** git 的原始输出（stdout + stderr 合并，过长时由 Rust 截断） */
   output: string
 }
+
+/**
+ * 一条贮藏（Rust `git::StashEntry`）。
+ * ⚠️ 没有 `stash@{n}`：它是**列表位置**，会随外部 push / drop 漂移 —— 写操作只认 `oid`。
+ */
+export interface GitStashEntry {
+  oid: string
+  /**
+   * reflog 消息原文：`On main: <消息>` / `WIP on main: <短 oid> <提交标题>`。
+   * 拆成「分支 / 消息」是 `domain/git/stash.ts` 的纯函数。
+   */
+  message: string
+  /** %cI（ISO 8601 strict，带时区） */
+  time: string
+}
+
+/** 一次贮藏写操作：快照 + 新列表（两次 IPC 之间列表不会过期） */
+export interface GitStashResult {
+  snapshot: GitStatusSnapshot
+  stashes: GitStashEntry[]
+}
+
+/** 删除贮藏：被删的那条（供「撤销删除」）+ 新列表 */
+export interface GitStashDropResult {
+  oid: string
+  message: string
+  stashes: GitStashEntry[]
+}

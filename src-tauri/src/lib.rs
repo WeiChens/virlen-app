@@ -284,6 +284,11 @@ pub fn run() {
         }));
     }
 
+    builder = builder.register_asynchronous_uri_scheme_protocol(
+        commands::preview::SCHEME,
+        commands::preview::handle_uri_request,
+    );
+
     builder
         .setup(|app| {
             // 初始化 Rust 侧埋点（panic hook + 事件回传桥）
@@ -361,6 +366,9 @@ pub fn run() {
             // 文档解析（与原生工具 `parse_document` 同一条组装链）
             commands::document::cmd_parse_document,
             stat_path,
+            // HTML 预览的本地资源协议（token 登记 / 撤销）
+            commands::preview::preview_allow_root,
+            commands::preview::preview_revoke_root,
             edit_file_multi_in_place,
             kill_process_tree,
             canonicalize_path,
@@ -489,6 +497,12 @@ pub fn run() {
             commands::git::git_fetch,
             commands::git::git_pull,
             commands::git::git_push,
+            // 贮藏（stash）
+            commands::git::git_stash_list,
+            commands::git::git_stash_push,
+            commands::git::git_stash_apply,
+            commands::git::git_stash_drop,
+            commands::git::git_stash_restore,
             // 用量账本（token 统计）
             commands::session_db::cmd_append_usage,
             commands::session_db::cmd_usage_stats,

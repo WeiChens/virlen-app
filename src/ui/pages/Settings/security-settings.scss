@@ -13,11 +13,14 @@
 
     .security-tab {
       flex: 1;
-      padding: 8px 14px;
+      /* 四个 Tab 时（权限 / 沙盒规则 / 文件访问 / HTML 预览）宁可收窄内边距也不换行：
+         换行会让 Tab 高度不一，看着像两个控件 */
+      padding: 8px 10px;
       border: none;
       border-radius: 6px;
       background: transparent;
       font-size: var(--font-size-md);
+      white-space: nowrap;
       color: var(--text-secondary, #888);
       cursor: pointer;
       transition: all 0.15s;
@@ -190,5 +193,14 @@
       color: var(--tri-state-color, var(--text-primary, #1a1a1a));
       font-weight: 600;
     }
+  }
+}
+
+/* 「允许外部资源」依赖「允许运行脚本」：关着时整行弱化（开关本身也带 disabled 属性） */
+.security-settings .setting-row.is-disabled {
+  opacity: 0.55;
+
+  .toggle {
+    cursor: not-allowed;
   }
 }

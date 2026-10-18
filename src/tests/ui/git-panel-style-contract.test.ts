@@ -82,6 +82,20 @@ describe('源代码管理 · 面板样式契约', () => {
     expect(backdrop).not.toContain('inset: 0')
   })
 
+  it('git 弹窗的层级低于全局确认框（删除贮藏的确认框不能被盖住）', () => {
+    // 实测反馈：点「删除」后确认框看不见 —— git 弹窗遮罩原先 1400，而全局 `.modal-overlay` 是 1300。
+    // 确认框（MessageBox）用的是全局 Modal，所以 git 弹窗必须压在它下面。
+    const backdrop = /\.git-diff-backdrop\s*\{([^}]*)\}/.exec(panelCss)?.[1]
+    const z = Number(/z-index:\s*(\d+)/.exec(backdrop ?? '')?.[1])
+    const modalScss = stripComments(
+      readProjectFile('src/ui/components/shared/Modal/style.scss'),
+    )
+    const modalRule = /\.modal-overlay\s*\{([^}]*)\}/.exec(modalScss)?.[1]
+    const modalZ = Number(/z-index:\s*(\d+)/.exec(modalRule ?? '')?.[1])
+    expect(z).toBeGreaterThan(1200) // 高于用量抽屉（1200）：弹窗不能被抽屉压住
+    expect(z).toBeLessThan(modalZ) // 低于全局 Modal：确认框必须压在上面
+  })
+
   it('面板引用的每个主题令牌都在 theme.scss 里真实定义（否则 fallback 永远生效）', () => {
     const defined = new Set(
       [...themeCss.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]),

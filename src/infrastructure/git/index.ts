@@ -25,6 +25,9 @@ import type {
   GitLogScope,
   GitRemoteInfo,
   GitRepoInfo,
+  GitStashDropResult,
+  GitStashEntry,
+  GitStashResult,
   GitStatReport,
   GitStatusSnapshot,
   GitSyncResult,
@@ -222,6 +225,60 @@ export function renameBranch(
   to: string,
 ): Promise<GitBranchInfo[]> {
   return invoke<GitBranchInfo[]>('git_branch_rename', { dir, from, to })
+}
+
+// ==================== 贮藏（stash） ====================
+
+/** 贮藏列表（`refs/stash` 不存在 = 空数组，不是错误） */
+export function stashes(dir: string): Promise<GitStashEntry[]> {
+  return invoke<GitStashEntry[]>('git_stash_list', { dir })
+}
+
+/** 新建贮藏（空消息 = 用 git 自动生成的 WIP 描述） */
+export function stashPush(
+  dir: string,
+  message: string,
+  includeUntracked: boolean,
+  keepIndex: boolean,
+): Promise<GitStashResult> {
+  return invoke<GitStashResult>('git_stash_push', {
+    dir,
+    message,
+    includeUntracked,
+    keepIndex,
+  })
+}
+
+/** 应用 / 应用并删除（`pop`）。⚠️ 只传 oid：`stash@{n}` 的选择在 Rust 锁内完成 */
+export function stashApply(
+  dir: string,
+  oid: string,
+  restoreIndex: boolean,
+  pop: boolean,
+): Promise<GitStashResult> {
+  return invoke<GitStashResult>('git_stash_apply', {
+    dir,
+    oid,
+    restoreIndex,
+    pop,
+  })
+}
+
+/** 删除一条贮藏（⚠️ 破坏性，二次确认在界面层）；返回被删的那条供撤销 */
+export function stashDrop(
+  dir: string,
+  oid: string,
+): Promise<GitStashDropResult> {
+  return invoke<GitStashDropResult>('git_stash_drop', { dir, oid })
+}
+
+/** 把删掉的贮藏放回列表顶部（`git stash store`）—— 「撤销删除」 */
+export function stashRestore(
+  dir: string,
+  oid: string,
+  message: string,
+): Promise<GitStashEntry[]> {
+  return invoke<GitStashEntry[]>('git_stash_restore', { dir, oid, message })
 }
 
 /** 通知 Rust 中断一个还在跑的读操作（与既有搜索 / 目录树同一套 `task_manager`） */

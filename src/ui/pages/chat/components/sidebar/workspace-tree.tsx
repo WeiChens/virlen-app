@@ -44,6 +44,8 @@ import SidebarSearch from './search-box'
 interface Props {
   /** 把路径作为附件挂到输入框 */
   onAttachPaths: (paths: string[]) => void
+  /** 双击文件 → 在右侧面板打开（文本编辑 / 媒体预览） */
+  onOpenFile: (path: string) => void
   /** 搜索关键词与写回（值由父组件持有：切页签会卸载本组件） */
   searchQuery: string
   onSearchQueryChange: (value: string) => void
@@ -112,6 +114,7 @@ function highlightMatch(text: string, query: string): React.ReactNode {
 
 function WorkspaceTree({
   onAttachPaths,
+  onOpenFile,
   searchQuery: query,
   onSearchQueryChange: setQuery,
 }: Props) {
@@ -425,9 +428,9 @@ function WorkspaceTree({
     [rows, rowMeta, setSelection, toggleExpand],
   )
 
-  /** 目录 / 文件 → 输入框附件（双击、右键引用、拖到输入框共用） */
+  /** 目录 / 文件 → 输入框附件（右键引用、拖到输入框共用） */
   const attachTargets = useCallback(
-    (targets: TreeMenuTarget[], source: 'menu' | 'dblclick' | 'drag') => {
+    (targets: TreeMenuTarget[], source: 'menu' | 'drag') => {
       if (targets.length === 0) return
       onAttachPaths(targets.map((target) => target.path))
       track('sidebar.file.attach', {
@@ -547,19 +550,23 @@ function WorkspaceTree({
     [selected, rootPath, setSelection, startDrag],
   )
 
-  /** 双击 = 引用到输入框（打开类动作只留在右键菜单，避免误触）；命中行在选择集里则引用整份 */
+  /**
+   * 双击 = 打开：文件进右侧面板（文本编辑 / 图片 / 音视频预览），目录切展开。
+   * 引用到输入框只保留在右键菜单与拖拽上 —— 双击是最容易被误触的动作，不能既打开又引用。
+   */
   const handleRowDoubleClick = useCallback(
     (row: TreeMenuTarget) => {
       if (draggedRef.current) {
         draggedRef.current = false
         return
       }
-      attachTargets(
-        selected.has(row.path) ? [...selected.values()] : [row],
-        'dblclick',
-      )
+      if (row.isDir) {
+        toggleExpand(row.path)
+        return
+      }
+      onOpenFile(row.path)
     },
-    [selected, attachTargets, draggedRef],
+    [toggleExpand, onOpenFile, draggedRef],
   )
 
   /** 行点击：先看这一轮是否拖拽（拖拽松手后浏览器仍会补一次 click） */
@@ -791,7 +798,7 @@ function WorkspaceTree({
           onClick={(e) => onRowClick(target, e)}
           onDoubleClick={() => handleRowDoubleClick(target)}
           onKeyDown={(e) => {
-            // Enter 等价双击（引用），Space 等价单击（选中 / 展开）
+            // Enter 等价双击（文件打开 / 目录展开），Space 等价单击（选中 / 展开）
             if (e.key === 'Enter') {
               e.preventDefault()
               handleRowDoubleClick(target)

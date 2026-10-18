@@ -93,10 +93,12 @@ export function fileMenuItems(
  * 图片菜单：复制图片、另存为。
  * 复制走「原生 CF_DIB → ClipboardItem」两级兜底（见 utils/clipboard.ts）；
  * 另存为取消不算失败（不提示）。
+ *
+ * `opts.mime`：src 是 blob URL（工作目录面板）时必须传，否则扩展名与 ClipboardItem 的类型都无从得知。
  */
 export function imageMenuItems(
   src: string,
-  opts: { namePrefix?: string } = {},
+  opts: { namePrefix?: string; mime?: string } = {},
 ): ContextMenuItem[] {
   return [
     {
@@ -104,7 +106,11 @@ export function imageMenuItems(
       label: t('复制图片'),
       onClick: async () => {
         try {
-          const ok = await copyImageToClipboard(src)
+          // 没有 mime 时**不传第二个参数**：普通图片（dataURL / 带扩展名的路径）本就能自己判定，
+          // 多传一个 `{ mime: undefined }` 既没意义，也会让既有调用方的断言失真
+          const ok = opts.mime
+            ? await copyImageToClipboard(src, { mime: opts.mime })
+            : await copyImageToClipboard(src)
           showToast(ok ? t('已复制到剪贴板') : t('复制失败'))
         } catch {
           showToast(t('复制失败'))
@@ -116,10 +122,10 @@ export function imageMenuItems(
       label: t('另存为'),
       onClick: async () => {
         try {
-          const saved = await saveImageAs(
-            src,
-            defaultImageName(opts.namePrefix),
-          )
+          const name = defaultImageName(opts.namePrefix)
+          const saved = opts.mime
+            ? await saveImageAs(src, name, { mime: opts.mime })
+            : await saveImageAs(src, name)
           if (saved) showToast(tpl('已保存到 $__path__', { path: saved }))
         } catch {
           showToast(t('保存失败'))

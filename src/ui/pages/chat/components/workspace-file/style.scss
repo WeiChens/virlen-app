@@ -1,0 +1,409 @@
+/* 工作目录文件面板（右侧）：头部（文件名 / 保存 / 刷新 / 系统打开 / 关闭）+ 正文（编辑器或预览）。
+   宽度由组件内联给（可拖拽），这里只管纵向布局与配色。 */
+
+.workspace-file-panel {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  /* 窄窗口下不让面板把聊天区挤没（拖动时也按同一口径封顶） */
+  max-width: 72vw;
+  height: 100%;
+  border-left: 1px solid var(--border-color, #e5e5e5);
+  background: var(--bg-primary, #fff);
+  outline: none;
+
+  /* 拖动时整块面板（含编辑器）都不要选中文字，否则会拖出一片蓝 */
+  &.is-resizing {
+    user-select: none;
+    cursor: col-resize;
+  }
+}
+
+/* 拖拽手柄：压在左边缘上（宽 6px、只有 1px 画出来），hover 才显形 */
+.wfp-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  width: 6px;
+  z-index: 5;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s;
+
+  &:hover,
+  .workspace-file-panel.is-resizing & {
+    background: var(--accent-color, #4f46e5);
+    opacity: 0.35;
+  }
+}
+
+.wfp-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-color, #e5e5e5);
+}
+
+.wfp-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.wfp-name {
+  min-width: 0;
+  font-size: var(--font-size-md, 13px);
+  font-weight: 600;
+  color: var(--text-primary, #1a1a1a);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 未保存：一个点 + tooltip（文案在 title 里，不占头部宽度） */
+.wfp-dirty {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-color, #4f46e5);
+}
+
+.wfp-spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 头部动作：文字按钮（保存）与图标按钮（刷新 / 系统打开 / 关闭） */
+.wfp-action {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1a1a1a);
+  font-size: var(--font-size-sm, 12px);
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--hover-bg, #f0f0f0);
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  &.is-primary {
+    border-color: transparent;
+    background: var(--accent-color, #4f46e5);
+    color: var(--primary-fg, #fff);
+    font-weight: 600;
+
+    &:hover:not(:disabled) {
+      filter: brightness(1.08);
+      background: var(--accent-color, #4f46e5);
+    }
+  }
+}
+
+.wfp-icon-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+
+  &:hover {
+    background: var(--hover-bg, #f0f0f0);
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  svg {
+    width: 15px;
+    height: 15px;
+    fill: currentColor;
+  }
+}
+
+/* 完整路径：一行、次要色；真正的定位信息靠 title */
+.wfp-path {
+  flex: none;
+  padding: 3px 10px 6px;
+  font-size: var(--font-size-xs, 11px);
+  color: var(--text-secondary, #888);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wfp-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 编辑 / 预览：当前项用下划线 + 主色，未选项悬停才变色 */
+.wfp-tabs {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border-color, #e5e5e5);
+}
+
+.wfp-tab {
+  height: 28px;
+  padding: 0 10px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  font-size: var(--font-size-sm, 12px);
+  cursor: pointer;
+
+  &:hover {
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  &.is-active {
+    color: var(--accent-color, #4f46e5);
+    border-bottom-color: var(--accent-color, #4f46e5);
+    font-weight: 600;
+  }
+}
+
+/* 文本：Monaco 占满剩余高度；面板里不要它那圈边框与圆角（会多出两层边界） */
+.wfp-editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+
+  .code-editor {
+    flex: 1;
+    height: 100%;
+    border: none;
+    border-radius: 0;
+
+    &:focus-within {
+      border-color: transparent;
+      box-shadow: none;
+    }
+  }
+}
+
+/* Markdown 预览：滚动容器 + 比聊天区小一号的字（面板窄，正文跟着收） */
+.wfp-preview {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 14px;
+  overscroll-behavior: contain;
+
+  .markdown-renderer {
+    font-size: var(--font-size-md, 13px);
+  }
+}
+
+/* HTML 预览：沙箱 iframe 铺满正文（白底，因为很多页面默认浅色） */
+.wfp-frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: none;
+  background: #fff;
+}
+
+/* 安全默认把页面需要的能力挡住了：就地给一句话 + 把人送到设置（控制台里的英文报错没人看得到）。
+   开关本身只住在「设置 → 安全 → HTML 预览」，这里只提示 + 指路。 */
+.wfp-preview-note {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-color, #e5e5e5);
+  background: var(--color-warning-bg, #fffbeb);
+  color: var(--color-warning-text, #b45309);
+  font-size: var(--font-size-xs, 11px);
+
+  span {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .wfp-action {
+    height: 22px;
+    padding: 0 6px;
+    font-size: var(--font-size-xs, 11px);
+  }
+}
+
+.wfp-hint {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+  font-size: var(--font-size-md, 13px);
+  color: var(--text-secondary, #666);
+
+  p {
+    margin: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  &.is-error p {
+    color: var(--color-danger, #dc2626);
+  }
+}
+
+/* 音频 / 视频预览：居中、不铺满（图片有自己的查看器 `.wfp-image`） */
+.wfp-media {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  overflow: auto;
+  background: var(--bg-secondary, #f7f7f8);
+
+  &.is-audio,
+  &.is-video {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  audio {
+    width: 100%;
+    max-width: 420px;
+  }
+
+  video {
+    max-width: 100%;
+    max-height: 100%;
+    background: #000;
+    border-radius: 4px;
+  }
+}
+
+.wfp-media-hint {
+  margin: 0;
+  font-size: var(--font-size-xs, 11px);
+  color: var(--text-secondary, #888);
+}
+
+/* 图片查看器：缩放 / 平移全走 transform（布局尺寸不变，容器不会出滚动条）。
+   滚轮在组件里被非 passive 监听吃掉（只缩放），所以这里 overflow: hidden 而不是 auto。 */
+.wfp-image {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 12px;
+  background: var(--bg-secondary, #f7f7f8);
+  cursor: grab;
+  user-select: none;
+
+  &.is-dragging {
+    cursor: grabbing;
+  }
+
+  .wfp-image-content {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    border-radius: 4px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
+    /* 按钮缩放平滑一点；拖动中关掉，否则图会追不上指针 */
+    transition: transform 0.1s ease-out;
+    -webkit-user-drag: none;
+  }
+
+  &.is-dragging .wfp-image-content {
+    transition: none;
+  }
+}
+
+/* 浮动工具栏：压在图片右上角（图片本身要占满可见区，不能挤出一行给它） */
+.wfp-image-bar {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 2px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.14);
+}
+
+.wfp-image-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  font-size: var(--font-size-sm, 12px);
+  line-height: 1;
+  cursor: pointer;
+
+  /* 百分比比图标宽一点（三位数 + %），数字用等宽以免缩放时左右跳 */
+  &.is-percent {
+    min-width: 44px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  &:hover:not(:disabled) {
+    background: var(--hover-bg, #f0f0f0);
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  svg {
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
+  }
+}

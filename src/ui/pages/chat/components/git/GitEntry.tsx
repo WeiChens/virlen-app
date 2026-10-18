@@ -79,8 +79,10 @@ export const GitEntry = observer(function GitEntry({ sessionId }: Props) {
     const onDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null
       // 弹窗（portal 到 body）在 `.git-entry` 之外：点它不算「点在外面」，
-      // 否则「在错误弹窗里点复制」会把背后的面板一并关掉
-      if (target?.closest?.('.modal-overlay')) return
+      // 否则「在错误弹窗里点复制」或「在贮藏浮层里点一下」会把背后的面板一并关掉。
+      // 两类遮罩：全局 Modal 的 `.modal-overlay` 与 git 自己的 `.git-diff-backdrop`
+      // （差异 / 日志 / 提交图 / 贮藏共用同一层）。
+      if (target?.closest?.('.modal-overlay, .git-diff-backdrop')) return
       if (!wrapRef.current?.contains(target)) closeRef.current()
     }
     document.addEventListener('mousedown', onDown)

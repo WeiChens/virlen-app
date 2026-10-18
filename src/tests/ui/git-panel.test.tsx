@@ -32,6 +32,7 @@ import {
   loadDiffSides,
   refreshStatus,
   refreshRemotes,
+  refreshStashes,
   renameBranch,
   removeBranch,
   stage,
@@ -68,6 +69,12 @@ vi.mock('@/services/git-service', () => ({
   syncNow: vi.fn(),
   testRemote: vi.fn(),
   cancelSync: vi.fn(),
+  // 贮藏（stash）：入口在「更多」菜单，浮层打开时才取列表
+  refreshStashes: vi.fn(() => Promise.resolve()),
+  createStash: vi.fn(() => Promise.resolve(true)),
+  applyStash: vi.fn(() => Promise.resolve(true)),
+  dropStash: vi.fn(() => Promise.resolve(true)),
+  undoDropStash: vi.fn(() => Promise.resolve()),
 }))
 
 // 面板的引用链会经 store 桶文件拉到 markdown / code-block → monaco，而 monaco 在 jsdom 里
@@ -133,6 +140,8 @@ function setStore(entries: GitChangeEntry[]) {
     gitStore.hookOutput = null
     gitStore.branches = []
     gitStore.remotes = []
+    gitStore.stashes = []
+    gitStore.lastDropped = null
     gitStore.syncOutput = null
     gitStore.stats = null
     gitStore.snapshot = snapshot(entries)
@@ -781,6 +790,19 @@ it('「同步远程」打开远程浮层：远程名 + 类型 + 三个动作', a
   expect(
     [...menu.querySelectorAll('.git-sync-btn')].map((el) => el.textContent),
   ).toEqual(['获取', '拉取', '推送'])
+})
+
+/** 贮藏入口在更多菜单里：点开是独立浮层（面板已经两列 + 提交区，放不下第三块常驻区域） */
+it('「更多」里有贮藏入口，点开才取列表', async () => {
+  setStore([unstagedEntry('a.txt')])
+  mount()
+
+  expect(await openMoreMenu()).toContain('贮藏更改…')
+  await clickMoreItem('贮藏更改…')
+
+  expect(document.querySelector('.git-stash-modal')).not.toBeNull()
+  // 列表只在浮层打开时取（面板刷新不轮询 stash list）
+  expect(refreshStashes).toHaveBeenCalled()
 })
 
 /** 落差数字是**状态按钮**：它告诉用户「有事」，并把下一步做成同一个控件 */

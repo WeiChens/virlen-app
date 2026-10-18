@@ -1371,3 +1371,298 @@ fn numstat_end_to_end_splits_staged_and_worktree() {
     );
 }
 
+// ==================== 三、贮藏（stash） ====================
+
+/// `stash list --format` 的 NUL 布局：上一条的换行会粘在下一条 oid 前，消息里可以有空格
+#[test]
+fn parse_stash_entries_pins_nul_layout() {
+    let raw = concat!(
+        "1111111111111111111111111111111111111111\0stash@{0}\0On main: 第一行 第二行\0",
+        "2026-10-18T09:11:30+08:00\0\n",
+        "2222222222222222222222222222222222222222\0stash@{1}\0WIP on main: abc1234 初始提交\0",
+        "2026-10-18T09:11:29+08:00\0\n",
+    );
+    let list = super::stash::parse_entries(raw);
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[0].oid, "1111111111111111111111111111111111111111");
+    assert_eq!(list[0].selector, "stash@{0}");
+    assert_eq!(list[0].message, "On main: 第一行 第二行");
+    assert_eq!(list[0].time, "2026-10-18T09:11:30+08:00");
+    assert_eq!(list[1].oid, "2222222222222222222222222222222222222222");
+    assert_eq!(list[1].message, "WIP on main: abc1234 初始提交");
+}
+
+/// 空输出（`refs/stash` 不存在）= 空列表，不是错误
+#[test]
+fn parse_stash_entries_accepts_empty_output() {
+    assert!(super::stash::parse_entries("").is_empty());
+    assert!(super::stash::parse_entries("\n\n").is_empty());
+}
+
+/// 贮藏 → 应用（保留条目）→ 删除 → 恢复（`stash store` 放回栈顶）
+#[test]
+fn stash_push_apply_drop_restore_roundtrip() {
+    let Some(repo) = TempRepo::new() else { return };
+    repo.write("a.txt", "one\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+    let gate = WriteGate::new(true);
+
+    repo.write("a.txt", "one\ntwo\n");
+    let pushed = super::stash::push(&repo.path(), &gate, Some("第一条 贮藏"), false, false)
+        .expect("push 应成功");
+    assert_eq!(pushed.stashes.len(), 1);
+    assert!(pushed.stashes[0].message.contains("第一条 贮藏"));
+    assert!(
+        pushed.snapshot.entries.is_empty(),
+        "贮藏后工作区应当干净"
+    );
+    let oid = pushed.stashes[0].oid.clone();
+    assert_eq!(oid.len(), 40, "oid 应是完整的 40 位");
+
+    let applied = super::stash::apply(&repo.path(), &gate, &oid, false, false)
+        .expect("apply 应成功");
+    assert_eq!(applied.snapshot.entries.len(), 1, "应用后改动应回到工作区");
+    assert_eq!(applied.stashes.len(), 1, "apply 不删除条目");
+
+    let dropped = super::stash::drop(&repo.path(), &gate, &oid).expect("drop 应成功");
+    assert_eq!(dropped.oid, oid);
+    assert!(dropped.stashes.is_empty());
+
+    let restored = super::stash::restore(&repo.path(), &gate, &oid, &dropped.message)
+        .expect("restore 应成功");
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0].oid, oid, "stash store 恢复的应是同一条提交");
+}
+
+/// 未跟踪文件默认不进贮藏；只有未跟踪时给可读原因；勾 `-u` 后能应用回来
+#[test]
+fn stash_untracked_needs_explicit_flag() {
+    let Some(repo) = TempRepo::new() else { return };
+    repo.write("tracked.txt", "one\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+    let gate = WriteGate::new(true);
+
+    repo.write("u.txt", "u\n");
+    let denied = super::stash::push(&repo.path(), &gate, None, false, false);
+    assert!(
+        denied.is_err(),
+        "只有未跟踪文件且没勾「包含未跟踪」时必须拒绝（不能装作成功）"
+    );
+
+    let pushed = super::stash::push(&repo.path(), &gate, None, true, false)
+        .expect("带 -u 应成功");
+    assert_eq!(pushed.stashes.len(), 1);
+    assert!(
+        pushed.snapshot.entries.is_empty(),
+        "-u 要把未跟踪文件也收走"
+    );
+
+    let applied = super::stash::apply(
+        &repo.path(),
+        &gate,
+        &pushed.stashes[0].oid,
+        false,
+        true,
+    )
+    .expect("pop 应成功");
+    assert!(
+        applied
+            .snapshot
+            .entries
+            .iter()
+            .any(|entry| entry.path == "u.txt" && entry.kind == EntryKind::Untracked),
+        "应用后未跟踪文件要回到工作区"
+    );
+    assert!(applied.stashes.is_empty(), "pop 成功后条目应删除");
+}
+
+/// 干净工作区：`stash push` 退出码是 0，这里必须靠快照拒绝
+#[test]
+fn stash_rejects_when_nothing_to_save() {
+    let Some(repo) = TempRepo::new() else { return };
+    repo.write("a.txt", "one\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+
+    let err = super::stash::push(&repo.path(), &WriteGate::new(true), None, false, false)
+        .expect_err("干净工作区不能贮藏");
+    assert!(err.message.contains("没有可贮藏"), "错误要说清原因: {}", err.message);
+}
+
+/// 未诞生 HEAD：git 直接失败（`You do not have the initial commit yet`）
+#[test]
+fn stash_rejects_before_first_commit() {
+    let Some(repo) = TempRepo::new() else { return };
+    repo.write("a.txt", "one\n");
+
+    let err = super::stash::push(&repo.path(), &WriteGate::new(true), None, false, false)
+        .expect_err("没有提交时不能贮藏");
+    assert!(err.message.contains("还没有提交"), "错误要说清原因: {}", err.message);
+}
+
+/// 冲突状态下不能贮藏；`pop` 冲突时条目保留、工作区留下冲突标记
+#[test]
+fn stash_pop_conflict_keeps_entry_and_blocks_push() {
+    let Some(repo) = TempRepo::new() else { return };
+    repo.write("a.txt", "base\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+    let gate = WriteGate::new(true);
+
+    // 造冲突：先贮藏「stash 侧」，再把同一文件提交成另一个版本，最后 pop 回来
+    repo.write("a.txt", "stash-side\n");
+    let pushed = super::stash::push(&repo.path(), &gate, None, false, false).unwrap();
+    let oid = pushed.stashes[0].oid.clone();
+    repo.write("a.txt", "commit-side\n");
+    repo.git(&["commit", "-q", "-a", "-m", "B"]);
+
+    let err = super::stash::apply(&repo.path(), &gate, &oid, false, true)
+        .expect_err("内容冲突时 pop 必须失败");
+    assert!(err.code != 0);
+
+    let after = super::stash::list(&repo.path()).unwrap();
+    assert_eq!(after.len(), 1, "pop 冲突时条目必须保留（git 语义）");
+    assert_eq!(after[0].oid, oid);
+
+    let snap = super::status::status(&repo.path()).unwrap();
+    assert!(
+        snap.entries.iter().any(|entry| entry.kind == EntryKind::Unmerged),
+        "冲突时工作区会留下 UU 标记（前端要提示用户）"
+    );
+
+    let denied = super::stash::push(&repo.path(), &gate, None, false, false);
+    assert!(denied.is_err(), "有未解决冲突时 push 必须被拒");
+}
+
+/// 身份：三条里删中间那条，剩下的在新编号下仍能按 oid 精确定位
+#[test]
+fn stash_identity_survives_selector_renumbering() {
+    let Some(repo) = TempRepo::new() else { return };
+    repo.write("a.txt", "0\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+    let gate = WriteGate::new(true);
+
+    for i in 1..=3 {
+        repo.write("a.txt", &format!("{}\n", i));
+        super::stash::push(&repo.path(), &gate, Some(&format!("第 {} 条", i)), false, false)
+            .unwrap();
+    }
+    let list = super::stash::list(&repo.path()).unwrap();
+    assert_eq!(list.len(), 3);
+    // 列表是新 → 旧：第 3 条在 stash@{0}
+    let middle = list[1].oid.clone();
+    assert!(list[1].message.contains("第 2 条"));
+
+    let dropped = super::stash::drop(&repo.path(), &gate, &middle).unwrap();
+    assert!(dropped.message.contains("第 2 条"), "返回的消息要能用于撤销");
+
+    let after = super::stash::list(&repo.path()).unwrap();
+    assert_eq!(after.len(), 2);
+    assert!(
+        !after.iter().any(|entry| entry.oid == middle),
+        "删的必须是指定 oid 那一条（不能只看 stash@n）"
+    );
+    assert_eq!(after[0].selector, "stash@{0}");
+    assert_eq!(after[1].selector, "stash@{1}");
+
+    // 新编号下仍能按 oid 解析出正确的 selector
+    let applied = super::stash::apply(&repo.path(), &gate, &after[1].oid, false, false)
+        .expect("剩余条目应能应用");
+    assert!(!applied.snapshot.entries.is_empty());
+
+    // 不存在的 oid：给可读错误，而不是删错东西
+    let missing = super::stash::drop(&repo.path(), &gate, "deadbeefdeadbeef");
+    assert!(missing.is_err());
+}
+
+/// `--keep-index`：已暂存的内容**既进贮藏、又留在索引 / 工作区**
+#[test]
+fn stash_keep_index_keeps_staged_work() {
+    let Some(repo) = TempRepo::new() else { return };
+    repo.write("a.txt", "one\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+    let gate = WriteGate::new(true);
+
+    repo.write("a.txt", "one\nstaged\n");
+    repo.git(&["add", "a.txt"]);
+    repo.write("a.txt", "one\nstaged\nunstaged\n");
+
+    let pushed = super::stash::push(&repo.path(), &gate, None, false, true)
+        .expect("keep-index 应成功");
+    assert_eq!(pushed.stashes.len(), 1);
+    let entry = pushed
+        .snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.path == "a.txt")
+        .expect("已暂存内容应留在索引里");
+    assert_eq!(entry.x, 'M', "--keep-index 必须把已暂存内容留在索引里");
+    assert_eq!(entry.y, '.', "未暂存的那一层已被收进贮藏");
+}
+
+/// 消息含中文与换行（git 把换行折成空格）、路径含中文与空格
+#[test]
+fn stash_message_and_cjk_path_roundtrip() {
+    let Some(repo) = TempRepo::new() else { return };
+    repo.write("中文 文件.txt", "base\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+    let gate = WriteGate::new(true);
+
+    repo.write("中文 文件.txt", "base\n改过了\n");
+    let pushed = super::stash::push(&repo.path(), &gate, Some("第一行\n第二行"), false, false)
+        .expect("push 应成功");
+    assert!(
+        pushed.stashes[0].message.contains("第一行 第二行"),
+        "git 把消息里的换行折成空格（实测）: {}",
+        pushed.stashes[0].message
+    );
+
+    let applied = super::stash::apply(
+        &repo.path(),
+        &gate,
+        &pushed.stashes[0].oid,
+        false,
+        true,
+    )
+    .expect("pop 应成功");
+    assert!(
+        applied
+            .snapshot
+            .entries
+            .iter()
+            .any(|entry| entry.path == "中文 文件.txt"),
+        "改动要落回原来的中文路径"
+    );
+}
+
+/// 只读沙盒：贮藏的写操作全部拒绝，读不受影响
+#[test]
+fn stash_write_gate_rejects_when_readonly() {
+    let Some(repo) = TempRepo::new() else { return };
+    repo.write("a.txt", "one\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+
+    // 先用真 gate 造一条，供 apply / drop / restore 验证
+    repo.write("a.txt", "one\ntwo\n");
+    let pushed = super::stash::push(&repo.path(), &WriteGate::new(true), None, false, false)
+        .unwrap();
+    let oid = pushed.stashes[0].oid.clone();
+
+    let gate = WriteGate::new(false);
+    assert!(
+        super::stash::push(&repo.path(), &gate, None, false, false).is_err(),
+        "只读模式下贮藏必须失败"
+    );
+    assert!(super::stash::apply(&repo.path(), &gate, &oid, false, true).is_err());
+    assert!(super::stash::drop(&repo.path(), &gate, &oid).is_err());
+    assert!(super::stash::restore(&repo.path(), &gate, &oid, "x").is_err());
+    // 读不受影响
+    assert!(super::stash::list(&repo.path()).is_ok());
+}
+

@@ -7,7 +7,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import GeneralSettings from './general-settings'
 import ChatSettings from './chat-settings'
 import ProviderSettings from './provider-settings'
-import SecuritySettings from './security-settings'
+import SecuritySettings, { type SecurityTab } from './security-settings'
 import AgentSettings from './agent-settings'
 import SkillSettings from './skill-settings'
 import QuickInputSettings from './quickinput-settings'
@@ -53,6 +53,8 @@ export default function SettingsView() {
   const [open, setOpen] = useState(false)
   const [closing, setClosing] = useState(false)
   const [page, setPage] = useState<SettingsPage>('general')
+  /** 安全页的子 Tab：提到这一层，预览区的提示条才能直达「HTML 预览」 */
+  const [securityTab, setSecurityTab] = useState<SecurityTab>('permissions')
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   )
@@ -61,7 +63,13 @@ export default function SettingsView() {
   useEffect(() => {
     const unlisten = settingsEvent.on('openSettings', (targetPage) => {
       setClosing(false)
-      setPage(targetPage as SettingsPage)
+      if (targetPage === 'security-preview') {
+        // 语义上的 `security` + 子页：侧边栏仍高亮「安全」，落地直接是预览那一页
+        setPage('security')
+        setSecurityTab('preview')
+      } else {
+        setPage(targetPage as SettingsPage)
+      }
       setOpen(true)
     })
     return unlisten
@@ -246,7 +254,9 @@ export default function SettingsView() {
           {page === 'phone-control' && <PhoneControlSettings />}
           {page === 'agent' && <AgentSettings />}
           {page === 'provider' && <ProviderSettings />}
-          {page === 'security' && <SecuritySettings />}
+          {page === 'security' && (
+            <SecuritySettings tab={securityTab} onTabChange={setSecurityTab} />
+          )}
           {page === 'skill' && <SkillSettings />}
           {page === 'quickinput' && <QuickInputSettings />}
           {page === 'search-engine' && <SearchEngineSettings />}

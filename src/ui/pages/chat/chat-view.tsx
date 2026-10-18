@@ -40,6 +40,8 @@ import TodoEntry from './components/todo/TodoEntry'
 import ServiceEntry from './components/service/ServiceEntry'
 import GitEntry from './components/git/GitEntry'
 import SearchDialog from './components/search'
+import WorkspaceFilePanel from './components/workspace-file'
+import { MessageBox } from '@/ui/components/shared/MessageBox'
 
 import { useToolUI } from './components/tool-ui'
 import HideSideBarSvg from '@/ui/components/icons/HideSideBarSvg'
@@ -247,6 +249,44 @@ function ChatView() {
   const [sidebarWidth, setSidebarWidth] = useState(getStoredWidth())
   const resizingRef = useRef(false)
   const currentWidthRef = useRef(sidebarWidth)
+
+  /** 右侧文件面板：打开的文件 + 它属于哪个会话（切会话就要关） */
+  const [openFile, setOpenFile] = useState<string | null>(null)
+  const openFileRef = useRef<string | null>(null)
+  const fileDirtyRef = useRef(false)
+  const openFileSessionRef = useRef<string | null>(null)
+  openFileRef.current = openFile
+
+  const handleFileDirtyChange = useCallback((dirty: boolean) => {
+    fileDirtyRef.current = dirty
+  }, [])
+
+  const closeFile = useCallback(() => {
+    openFileRef.current = null
+    openFileSessionRef.current = null
+    fileDirtyRef.current = false
+    setOpenFile(null)
+  }, [])
+
+  /**
+   * 双击文件 → 右侧打开。已有未保存草稿时先确认：面板只有一个，换文件就是丢草稿，
+   * 不能静默发生（关闭 / 刷新按钮同理，见面板内部）。
+   */
+  const handleOpenFile = useCallback(async (path: string) => {
+    if (openFileRef.current === path) return
+    if (fileDirtyRef.current) {
+      const confirmed = await MessageBox.propt(
+        t('放弃未保存的修改？'),
+        t('打开另一个文件会丢弃当前草稿。'),
+        { confirmText: t('放弃并打开'), cancelText: t('取消'), danger: true },
+      )
+      if (!confirmed) return
+    }
+    openFileRef.current = path
+    openFileSessionRef.current = chatState.value.currentSessionId
+    fileDirtyRef.current = false
+    setOpenFile(path)
+  }, [])
 
   // 同步 ref 与 state
   useEffect(() => {
@@ -467,6 +507,13 @@ function ChatView() {
     }
   }, [chatState.value.currentSessionId])
 
+  // 切会话 / 新建对话 → 关掉右侧文件（它属于上一个会话的工作目录）
+  useEffect(() => {
+    if (!openFileRef.current) return
+    if (openFileSessionRef.current === chatState.value.currentSessionId) return
+    closeFile()
+  }, [chatState.value.currentSessionId, closeFile])
+
   /** 最近一次「已由本组件处理」的会话切换目标（用于区分自己切的与外部直接改 store 的） */
   const handledSessionRef = useRef<string | null>(null)
 
@@ -483,6 +530,15 @@ function ChatView() {
   async function handleSelectSession(sessionId: string) {
     const session = sessionStore.getSession(sessionId)
     if (!session) return
+    // 切会话会关掉右侧文件；有未保存草稿先问一句（托盘等外部入口走下面的兜底 effect，不弹）
+    if (fileDirtyRef.current) {
+      const confirmed = await MessageBox.propt(
+        t('放弃未保存的修改？'),
+        t('切换会话会关闭当前文件，未保存的修改将丢失。'),
+        { confirmText: t('放弃并切换'), cancelText: t('取消'), danger: true },
+      )
+      if (!confirmed) return
+    }
     // 先登记再干活：内部会再次写同值 currentSessionId，早登记避免兜底 effect 重入
     handledSessionRef.current = sessionId
     const fromSessionId = chatState.value.currentSessionId
@@ -854,6 +910,8 @@ function ChatView() {
         onSelectSession={handleSelectSession}
         // 目录树「引用 / 拖拽到输入框」→ 输入框附件（复用系统的文件链路）
         onAttachPaths={(paths) => chatInputRef.current?.attachPaths(paths)}
+        // 双击文件 → 右侧面板（文本编辑 / 媒体预览）
+        onOpenFile={(path) => void handleOpenFile(path)}
         // 技能卡片「引用 / 拖拽到输入框」→ 输入框技能附件（读 SKILL.md 全文）
         onAttachSkills={(names) => chatInputRef.current?.attachSkills(names)}
         // 已引用的技能卡片高亮 + 再点取消（引用状态由输入框回传）
@@ -898,6 +956,8 @@ function ChatView() {
                   : chatState.value.selectedWorkspace
               }
               setValue={(e) => {
+                // 换工作目录 = 右侧打开的文件已不属于当前目录，一并关掉
+                closeFile()
                 chatState.setValue('selectedWorkspace', e)
               }}
               workspaces={historyWorkspaces}
@@ -946,6 +1006,16 @@ function ChatView() {
           </div>
         )}
       </div>
+
+      {/* 右侧文件面板：文本可编辑（Ctrl+S 保存）/ 图片 / 音视频预览 */}
+      {openFile && (
+        <WorkspaceFilePanel
+          path={openFile}
+          sessionId={chatState.value.currentSessionId ?? undefined}
+          onDirtyChange={handleFileDirtyChange}
+          onClose={closeFile}
+        />
+      )}
 
       {toolUI}
 

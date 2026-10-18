@@ -1001,7 +1001,11 @@
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 1400;
+  /* 层级：**高于**用量抽屉（1200），**低于**全局 Modal（1300）。
+     贮藏 / 差异里会弹「删除这条贮藏？」这类确认框，而确认框是全局 Modal —— 它必须压在
+     git 弹窗上面（原先 1400 把确认框盖住了）。同一层的多个 git 弹窗（日志 → 提交详情）
+     靠 DOM 顺序决定先后。 */
+  z-index: 1250;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1612,5 +1616,263 @@
   /* `+N`：被省略的引用条数（悬停有完整数字） */
   &.is-more {
     color: var(--text-tertiary, #767676);
+  }
+}
+
+/* 贮藏浮层（portal 到 body，与差异 / 日志弹窗**共用那层遮罩** `.git-diff-backdrop`）。
+   新建区在上（动作入口贴近头部），列表在下（条目多时自己滚）。 */
+.git-stash-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  height: min(620px, 100%);
+  border-radius: 12px;
+  background: var(--bg-primary, #fff);
+  overflow: hidden;
+  box-shadow: 0 24px 64px rgba(16, 24, 40, 0.3);
+
+  /* 打开时会被 .focus()，容器自己不要那一圈焦点环 */
+  &:focus {
+    outline: none;
+  }
+
+  .git-stash-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color, #e5e5e5);
+
+    .git-stash-title {
+      font-size: var(--font-size-sm, 12px);
+      font-weight: 600;
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    .git-stash-note {
+      padding: 1px 8px;
+      border-radius: 999px;
+      background: var(--bg-secondary, #f7f7f8);
+      font-size: var(--font-size-xs, 11px);
+      color: var(--text-secondary, #666);
+    }
+  }
+
+  /* 新建区 */
+  .git-stash-create {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-color, #e5e5e5);
+
+    .git-stash-form {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .git-stash-msg {
+      flex: 1;
+      min-width: 0;
+      padding: 6px 8px;
+      border: 1px solid var(--border-color, #e5e5e5);
+      border-radius: 6px;
+      background: var(--bg-primary, #fff);
+      color: var(--text-primary, #1a1a1a);
+      font: inherit;
+      font-size: var(--font-size-sm, 12px);
+
+      &:focus {
+        outline: none;
+        border-color: var(--primary-color, #3b6ef6);
+      }
+
+      &:disabled {
+        background: var(--bg-secondary, #f7f7f8);
+        color: var(--text-secondary, #666);
+      }
+    }
+
+    .git-stash-opts {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .git-stash-opt {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: var(--font-size-xs, 11px);
+      color: var(--text-secondary, #666);
+      cursor: pointer;
+
+      input {
+        margin: 0;
+      }
+    }
+
+    /* 一句「将贮藏什么 / 为什么不能贮藏」：能力说明，不堆形容词 */
+    .git-stash-hint {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      font-size: var(--font-size-xs, 11px);
+      color: var(--text-secondary, #666);
+
+      &.is-blocked {
+        color: var(--color-warning-text, #b45309);
+      }
+
+      .git-stash-hint-extra {
+        color: var(--text-tertiary, #767676);
+      }
+    }
+  }
+
+  /* 列表 */
+  .git-stash-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 4px 6px 8px;
+  }
+
+  .git-stash-empty {
+    padding: 16px 8px;
+    text-align: center;
+    font-size: var(--font-size-xs, 11px);
+    color: var(--text-secondary, #666);
+  }
+
+  .git-stash-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px;
+    border-radius: 6px;
+
+    &:hover {
+      background: var(--hover-bg, #f0f0f0);
+    }
+
+    /* 三个动作**常驻可见**：它们就是这层浮层存在的理由，藏到 hover 里等于让用户
+       对着一行只显示消息的列表猜「怎么用」。 */
+    .git-stash-row-actions {
+      flex: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+  }
+
+  .git-stash-row-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    .git-stash-row-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: var(--font-size-sm, 12px);
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    .git-stash-row-meta {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 8px;
+      font-size: var(--font-size-xs, 11px);
+      color: var(--text-secondary, #666);
+    }
+
+    .git-stash-branch {
+      max-width: 180px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      padding: 0 6px;
+      border-radius: 999px;
+      background: var(--bg-secondary, #f7f7f8);
+      color: var(--text-secondary, #666);
+    }
+
+    /* 没写信息、由 git 自动生成的那一类（`WIP on …`） */
+    .git-stash-auto {
+      color: var(--text-tertiary, #767676);
+    }
+
+    .git-stash-time {
+      flex: none;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* 短 oid 用等宽字体（字母数字容易被读错）。
+       字体栈写字面量：主题里没有那个等宽令牌，引用不存在的令牌只会让 fallback 永远生效。 */
+    .git-stash-oid {
+      flex: none;
+      font-family: Consolas, 'Courier New', monospace;
+      font-size: var(--font-size-xs, 11px);
+      color: var(--text-tertiary, #767676);
+    }
+  }
+
+  /* 底部撤销条（本次会话内有效） */
+  .git-stash-undo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--border-color, #e5e5e5);
+    background: var(--bg-secondary, #f7f7f8);
+    font-size: var(--font-size-xs, 11px);
+    color: var(--text-secondary, #666);
+
+    .git-stash-undo-text {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+}
+
+/* 贮藏行 / 撤销条里的文字小按钮 —— **顶层规则**：与 `.git-row-btn` 同一口径。
+   ⚠️ 写进 `.git-stash-row` 作用域，换成撤销条里那颗就掉回浏览器默认按钮样式。 */
+.git-stash-act {
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1a1a1a);
+  font: inherit;
+  font-size: var(--font-size-xs, 11px);
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    border-color: var(--primary-color, #3b6ef6);
+    color: var(--primary-color, #3b6ef6);
+  }
+
+  &:focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: 1px;
+  }
+
+  &.danger:hover:not(:disabled) {
+    border-color: var(--color-danger, #dc2626);
+    color: var(--color-danger, #dc2626);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 }

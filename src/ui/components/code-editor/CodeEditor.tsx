@@ -13,9 +13,10 @@
 import type { OnMount } from '@monaco-editor/react'
 import Editor from '@monaco-editor/react'
 import type * as MonacoNs from 'monaco-editor'
+import { useRef } from 'react'
 
-// 必须最先引入：精简 monaco + 高亮注册 + One Dark 主题
-import '@/monaco/setupMonaco'
+// 必须最先引入：精简 monaco + 高亮注册 + One Dark 主题（monaco 命名空间也从这里拿）
+import { monaco } from '@/monaco/setupMonaco'
 import './style.scss'
 
 /** 编辑器固定主题（与聊天里的代码预览一致，亮暗主题下都是这套配色） */
@@ -38,6 +39,8 @@ export interface CodeEditorProps {
   ariaLabel?: string
   /** 样式覆盖用 class */
   className?: string
+  /** Ctrl/Cmd+S 保存（工作目录文件面板用；不传则不接管这个快捷键） */
+  onSave?: () => void
 }
 
 function buildEditorOptions(
@@ -110,9 +113,20 @@ export default function CodeEditor(props: CodeEditorProps) {
     className = '',
   } = props
 
+  // addCommand 注册后闭包不会更新：保存回调走 ref，始终指向最新一次渲染
+  const onSaveRef = useRef(props.onSave)
+  onSaveRef.current = props.onSave
+
   const handleMount: OnMount = (editor) => {
     // 挂载时按 props 兜底一次，避免复用实例残留上一次的只读态
     editor.updateOptions({ readOnly, domReadOnly: readOnly })
+
+    // Ctrl/Cmd+S：Monaco 自己接管并阻止浏览器默认（否则会弹「保存网页」）
+    if (onSaveRef.current) {
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () =>
+        onSaveRef.current?.(),
+      )
+    }
   }
 
   return (

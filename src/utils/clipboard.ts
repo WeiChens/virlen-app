@@ -101,16 +101,17 @@ export function imageMimeOf(src: string): string {
   return 'image/png'
 }
 
-/** 文件扩展名（另存为对话框用），与 `imageMimeOf` 同源判断 */
-export function imageExtOf(src: string): string {
-  const mime = imageMimeOf(src)
+/** 文件扩展名（另存为对话框用）—— `mime` 优先，缺省时按 `src` 猜（blob / data URL 没有扩展名，猜不到） */
+export function imageExtOf(src: string, mime?: string): string {
+  const type = mime ?? imageMimeOf(src)
   return (
     {
       'image/jpeg': 'jpg',
       'image/gif': 'gif',
       'image/webp': 'webp',
       'image/bmp': 'bmp',
-    }[mime] ?? 'png'
+      'image/svg+xml': 'svg',
+    }[type] ?? 'png'
   )
 }
 
@@ -143,11 +144,17 @@ export async function readImageBytes(src: string): Promise<Uint8Array> {
  *   1. Tauri 命令 write_clipboard_image（Windows 写 CF_DIB）—— 不依赖 WebView 剪贴板权限，行为确定；
  *   2. navigator.clipboard.write(ClipboardItem) —— 浏览器 / 未实现平台（macOS / Linux）的兜底。
  *
+ * `opts.mime`：blob URL 没有扩展名，调用方知道类型时必须传 —— 否则浏览器兜底会拿 `image/png`
+ * 去声明一段 JPG 字节，ClipboardItem 直接拒绝。
+ *
  * @returns 是否复制成功（两条路都失败 → false，调用方给用户一个提示）
  */
-export async function copyImageToClipboard(src: string): Promise<boolean> {
+export async function copyImageToClipboard(
+  src: string,
+  opts: { mime?: string } = {},
+): Promise<boolean> {
   const bytes = await readImageBytes(src)
-  const mime = imageMimeOf(src)
+  const mime = opts.mime ?? imageMimeOf(src)
 
   // 1) 原生：走 Rust 写 CF_DIB
   try {
@@ -180,14 +187,18 @@ async function invokeWriteImage(base64: string): Promise<void> {
 /**
  * 图片「另存为」：弹保存对话框 → 写盘。
  *
+ * `opts.mime` 同 `copyImageToClipboard`：blob URL 靠它决定扩展名（JPG 存成 .png 会被看图软件
+ * 按扩展名硬解，虽然多数能容错，但那不是「正确」）。
+ *
  * @returns 保存到的路径；用户取消返回 ''（非错误）
  */
 export async function saveImageAs(
   src: string,
   defaultName: string,
+  opts: { mime?: string } = {},
 ): Promise<string> {
   const bytes = await readImageBytes(src)
-  const ext = imageExtOf(src)
+  const ext = imageExtOf(src, opts.mime)
   const name = defaultName.endsWith(`.${ext}`)
     ? defaultName
     : `${defaultName}.${ext}`

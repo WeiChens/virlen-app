@@ -106,6 +106,16 @@ export interface SettingsStore {
   contextWindowTokens: number
   /** 是否启用「打开编辑器」功能 */
   editorOpenEnabled: boolean
+  /**
+   * HTML 预览：是否允许页面脚本执行（iframe sandbox 给 `allow-scripts`）。
+   * 全局设置而不是面板内开关：用户实测反馈——每次打开文件都要重新勾一遍不现实。
+   */
+  htmlPreviewAllowScripts: boolean
+  /**
+   * HTML 预览：是否允许外部脚本与网络请求（CDN 上的库 / fetch）。
+   * 依赖 `htmlPreviewAllowScripts`：脚本都不跑时它无意义。
+   */
+  htmlPreviewAllowRemote: boolean
   /** 编辑器配置列表（可配多个，如 vscode、idea） */
   editorOpenConfigs: EditorOpenConfig[]
   /** 默认编辑器配置 id */
@@ -163,6 +173,9 @@ const defaultSettings: SettingsStore = {
   contextCompressMode: 'ai',
   contextWindowTokens: 200000,
   editorOpenEnabled: true,
+  // ⚠️ 两个预览安全开关都必须默认 false：开脚本等于允许页面代码在本机执行
+  htmlPreviewAllowScripts: false,
+  htmlPreviewAllowRemote: false,
   editorOpenConfigs: [],
   editorOpenDefaultId: '',
   forceWindowActive: false,

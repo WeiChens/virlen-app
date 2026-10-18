@@ -12,6 +12,7 @@ import type {
   GitBranchInfo,
   GitRemoteInfo,
   GitRepoInfo,
+  GitStashEntry,
   GitStatReport,
   GitStatusSnapshot,
 } from '@/domain/git'
@@ -38,6 +39,18 @@ class GitStore {
   branches: GitBranchInfo[] = []
   /** 远程仓库（`git remote -v`）—— 同步浮层据此显示地址 / 类型，也据此判断「有没有配远程」 */
   remotes: GitRemoteInfo[] = []
+  /**
+   * 贮藏条目（新 → 旧）。
+   *
+   * **不随面板刷新轮询**：只在贮藏浮层打开 / 贮藏写操作后取（列表比 `status` 贵，而面板关着时
+   * 没有任何地方要展示它）。
+   */
+  stashes: GitStashEntry[] = []
+  /**
+   * 最近一次**删除**的贮藏（供「撤销删除」）：`stash store` 能把同一个 oid 放回栈顶。
+   * 只留最近一条 —— 撤销是「刚删错了」的兜底，不是历史记录。
+   */
+  lastDropped: { oid: string; message: string } | null = null
   /** 首次加载（骨架屏） */
   loading = false
   /** 正在进行的操作名（按钮禁用 + 文案）；`null` = 空闲 */
@@ -81,6 +94,8 @@ class GitStore {
       stats: observable,
       branches: observable,
       remotes: observable,
+      stashes: observable,
+      lastDropped: observable,
       loading: observable,
       busy: observable,
       error: observable,

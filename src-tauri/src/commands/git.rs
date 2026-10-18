@@ -8,7 +8,8 @@ use std::sync::Arc;
 use virlen_core::git::cli::GitError;
 use virlen_core::git::{
     BranchInfo, CommitDetail, CommitLogEntry, CommitResult, DiffScope, DiffSides, LogScope,
-    RemoteInfo, RepoInfo, StatReport, StatusSnapshot, SyncResult, WriteGate,
+    RemoteInfo, RepoInfo, StashDropResult, StashEntry, StashResult, StatReport, StatusSnapshot,
+    SyncResult, WriteGate,
 };
 use virlen_core::session_db::SettingsRepo;
 
@@ -389,6 +390,89 @@ pub async fn git_branch_rename(
     let gate = gate(&settings).await;
     blocking("branch_rename", move || {
         virlen_core::git::branch::rename(&dir, &gate, &from, &to)
+    })
+    .await
+}
+
+// ==================== 贮藏（stash） ====================
+
+/// 贮藏列表（读；`refs/stash` 不存在 = 空数组，不是错误）
+#[tauri::command]
+pub async fn git_stash_list(dir: String) -> Result<Vec<StashEntry>, String> {
+    blocking("stash_list", move || virlen_core::git::stash::list(&dir)).await
+}
+
+/// 新建贮藏。⚠️ 无改动 / 未诞生 HEAD / 有冲突时**在 Rust 侧就拒绝**：`git stash push` 在
+/// 「没东西可贮藏」时退出码是 0，靠退出码判断会得到「提示成功但没有条目」。
+#[tauri::command]
+pub async fn git_stash_push(
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    dir: String,
+    message: Option<String>,
+    include_untracked: Option<bool>,
+    keep_index: Option<bool>,
+) -> Result<StashResult, String> {
+    let gate = gate(&settings).await;
+    blocking("stash_push", move || {
+        virlen_core::git::stash::push(
+            &dir,
+            &gate,
+            message.as_deref(),
+            include_untracked.unwrap_or(false),
+            keep_index.unwrap_or(false),
+        )
+    })
+    .await
+}
+
+/// 应用 / 应用并删除（`pop`）。⚠️ 条目身份是 oid：`stash@{n}` 由 Rust 在**仓库锁内**解析，
+/// 前端不许传 selector（它是列表位置，会随外部操作漂移）。
+#[tauri::command]
+pub async fn git_stash_apply(
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    dir: String,
+    oid: String,
+    restore_index: Option<bool>,
+    pop: Option<bool>,
+) -> Result<StashResult, String> {
+    let gate = gate(&settings).await;
+    blocking("stash_apply", move || {
+        virlen_core::git::stash::apply(
+            &dir,
+            &gate,
+            &oid,
+            restore_index.unwrap_or(false),
+            pop.unwrap_or(false),
+        )
+    })
+    .await
+}
+
+/// 删除一条贮藏（⚠️ 破坏性：二次确认在界面层）。返回被删的那条供「撤销删除」。
+#[tauri::command]
+pub async fn git_stash_drop(
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    dir: String,
+    oid: String,
+) -> Result<StashDropResult, String> {
+    let gate = gate(&settings).await;
+    blocking("stash_drop", move || {
+        virlen_core::git::stash::drop(&dir, &gate, &oid)
+    })
+    .await
+}
+
+/// 把删掉的贮藏放回列表顶部（`git stash store`）—— 界面上的「撤销删除」
+#[tauri::command]
+pub async fn git_stash_restore(
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    dir: String,
+    oid: String,
+    message: String,
+) -> Result<Vec<StashEntry>, String> {
+    let gate = gate(&settings).await;
+    blocking("stash_restore", move || {
+        virlen_core::git::stash::restore(&dir, &gate, &oid, &message)
     })
     .await
 }

@@ -227,6 +227,14 @@ impl GitCmd {
         }
     }
 
+    /// 在**已持有仓库锁**的闭包里执行（跳过 [`with_repo_lock`]）。
+    ///
+    /// ⚠️ 只给「先读后写、必须原子」的复合操作（如 stash 先按 oid 解析 `stash@{n}` 再 drop）：
+    /// 锁是 `std::sync::Mutex`，**不可重入** —— 在 `with_repo_lock` 里再调 [`Self::run`] 会死锁。
+    pub(crate) fn run_in_lock(self) -> Result<GitOutput, GitError> {
+        self.run_inner()
+    }
+
     fn run_inner(self) -> Result<GitOutput, GitError> {
         let mut cmd = Command::new("git");
         cmd.current_dir(&self.dir).args(&self.args);

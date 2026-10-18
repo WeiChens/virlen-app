@@ -29,6 +29,8 @@ const FILES = [
   'src/ui/pages/chat/components/git/use-side-width.tsx',
   'src/ui/pages/chat/components/git/GitDiffModal.tsx',
   'src/ui/pages/chat/components/git/GitLogModal.tsx',
+  // 贮藏浮层（新建 / 应用 / 应用并删除 / 删除 / 撤销删除）
+  'src/ui/pages/chat/components/git/GitStashModal.tsx',
   // 提交图（弹窗 + 行 + canvas + 分页 hook）：新组件都必须登记，否则「新加了一句 t() 忘了翻译」
   // 在这一块就是无人守的（本用例扫的是这份清单，不是目录）
   'src/ui/pages/chat/components/git/GitGraphModal.tsx',

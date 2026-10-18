@@ -29,6 +29,7 @@ pub mod remote;
 pub mod repo;
 pub mod show;
 pub mod stage;
+pub mod stash;
 pub mod status;
 
 #[cfg(test)]
@@ -297,6 +298,37 @@ pub struct SyncResult {
     /// git 的原始输出（stdout + stderr 合并，过长时截断）—— 进度 / 摘要 / 警告都在这里，
     /// **不解析它做分支判断**（与全模块同一口径）
     pub output: String,
+}
+
+/// 一条贮藏（`git stash list` 的忠实映射，见 [`stash`]）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StashEntry {
+    /// 完整 oid —— **写操作只认它**
+    pub oid: String,
+    /// `stash@{n}`：仅 Rust 内部解析用，**不出去**（出去就会被当成身份，见 [`stash`] 模块头口径 1）
+    #[serde(skip)]
+    pub selector: String,
+    /// reflog 消息原文：`On main: <消息>` / `WIP on main: <短 oid> <标题>`。
+    /// 拆成「分支 / 消息」是前端的纯函数（`domain/git/stash.ts`），这里只忠实回传。
+    pub message: String,
+    /// `%cI`（ISO 8601 strict，带时区；本地化是前端的事）
+    pub time: String,
+}
+
+/// 一次贮藏写操作的结果：**快照 + 新列表一起回** —— 两次 IPC 之间列表不会过期。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StashResult {
+    pub snapshot: StatusSnapshot,
+    pub stashes: Vec<StashEntry>,
+}
+
+/// 删除贮藏的结果：被删的那条（供界面「撤销删除」）+ 新列表。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StashDropResult {
+    pub oid: String,
+    /// reflog 消息原文 —— 撤销时原样交给 `stash store -m`，恢复出来的条目与原来一致
+    pub message: String,
+    pub stashes: Vec<StashEntry>,
 }
 
 // ==================== 写操作准入（fail-closed） ====================

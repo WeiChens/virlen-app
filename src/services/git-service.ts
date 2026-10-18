@@ -29,19 +29,25 @@ import {
   repoInfo,
   stage as invokeStage,
   status as fetchStatus,
+  stashApply as invokeStashApply,
+  stashDrop as invokeStashDrop,
+  stashPush as invokeStashPush,
+  stashRestore as invokeStashRestore,
+  stashes as fetchStashes,
   stopTask,
   switchBranch as invokeSwitchBranch,
   testRemote as invokeTestRemote,
   undoLastCommit as invokeUndoLastCommit,
   unstage as invokeUnstage,
 } from '@/infrastructure/git'
-import type {
-  GitCommitDetail,
-  GitCommitLogEntry,
-  GitDiffScope,
-  GitDiffSides,
-  GitLogScope,
-  GitSyncResult,
+import {
+  stashSummary,
+  type GitCommitDetail,
+  type GitCommitLogEntry,
+  type GitDiffScope,
+  type GitDiffSides,
+  type GitLogScope,
+  type GitSyncResult,
 } from '@/domain/git'
 import { gitStore } from '@/ui/store/gitStore'
 import { MessageBox as MessagePrompt } from '@/ui/components/shared/MessageBox'
@@ -127,6 +133,8 @@ export async function syncWorkspace(dir: string | null): Promise<void> {
     gitStore.snapshot = null
     gitStore.branches = []
     gitStore.remotes = []
+    gitStore.stashes = []
+    gitStore.lastDropped = null
     gitStore.syncOutput = null
     gitStore.stats = null
     gitStore.error = null
@@ -738,4 +746,133 @@ export async function loadCommitFileSides(
   const dir = gitStore.dir
   if (!dir) throw new Error(t('当前工作目录不是 Git 仓库'))
   return invokeCommitFileSides(dir, oid, path, origPath, newTaskId('git_commit_diff'))
+}
+
+// ==================== 贮藏（stash） ====================
+
+/** 取贮藏列表（浮层打开时调）。失败落 error、不弹窗 —— 打开浮层就弹错误窗太吵 */
+export async function refreshStashes(): Promise<void> {
+  const dir = gitStore.dir
+  if (!dir || !gitStore.repo) return
+  try {
+    const list = await fetchStashes(dir)
+    runInAction(() => {
+      gitStore.stashes = list
+    })
+  } catch (e) {
+    runInAction(() => {
+      gitStore.error = errorText(e)
+    })
+  }
+}
+
+/**
+ * 新建贮藏。
+ *
+ * 无改动 / 无提交 / 有冲突三种情况都由 Rust 侧拒绝（`git stash push` 在「没东西可贮藏」时
+ * 退出码是 **0**，前端不能拿它当成功）；这里不重复判一遍，免得两处口径漂移。
+ */
+export async function createStash(
+  message: string,
+  includeUntracked: boolean,
+  keepIndex: boolean,
+): Promise<boolean> {
+  const dir = gitStore.dir
+  if (!dir || !gitStore.repo) return false
+  const result = await run('stash_push', () =>
+    invokeStashPush(dir, message, includeUntracked, keepIndex),
+  )
+  if (!result) return false
+  runInAction(() => {
+    gitStore.snapshot = result.snapshot
+    gitStore.stashes = result.stashes
+  })
+  // 工作区变了：行数统计（`+N −M`）跟着重取（面板关着时 `refreshStats` 自己会跳过）
+  void refreshStats()
+  showToast(t('已贮藏当前更改'))
+  return true
+}
+
+/**
+ * 应用（`pop = false`，条目保留）或应用并删除（`pop = true`）。
+ *
+ * ⚠️ 应用失败**不等于什么都没发生**：工作区有同类改动时 git 会 `Aborting`（工作区不动），
+ * 但内容真冲突时退出码 1 且**工作区已经留下冲突标记** —— 那种情况必须说清，否则用户以为
+ * 「什么都没变」，接着去提交，就把冲突标记一起提交了。
+ */
+export async function applyStash(oid: string, pop: boolean): Promise<boolean> {
+  const dir = gitStore.dir
+  if (!dir || !gitStore.repo) return false
+  const result = await run(pop ? 'stash_pop' : 'stash_apply', () =>
+    invokeStashApply(dir, oid, false, pop),
+  )
+  if (!result) {
+    // `run()` 已经刷过一次状态；再读一次，按「有没有冲突」决定要不要补那句话
+    await refreshStatus()
+    const conflicts = (gitStore.snapshot?.entries ?? []).filter(
+      (entry) => entry.kind === 'unmerged',
+    ).length
+    if (conflicts > 0) {
+      runInAction(() => {
+        if (!gitStore.errorBox) return
+        gitStore.errorBox = {
+          ...gitStore.errorBox,
+          text: `${gitStore.errorBox.text}\n\n${t(
+            '工作区已留下冲突标记：在编辑器里解决后暂存，或丢弃这些文件再重试。',
+          )}`,
+        }
+      })
+    }
+    return false
+  }
+  runInAction(() => {
+    gitStore.snapshot = result.snapshot
+    gitStore.stashes = result.stashes
+    // pop 把这条删了：它不再是「可撤销的删除」（再撤销等于凭空多出一条）
+    if (pop && gitStore.lastDropped?.oid === oid) gitStore.lastDropped = null
+  })
+  // 应用后工作区多了一批改动：行数统计必须重取（否则行内不显示 +N −M，看着像「没改动」）
+  void refreshStats()
+  showToast(pop ? t('已应用并删除贮藏') : t('已应用贮藏（条目保留）'))
+  return true
+}
+
+/** 删除贮藏（⚠️ 破坏性：二次确认；删掉的条目在本会话内可撤销） */
+export async function dropStash(oid: string): Promise<boolean> {
+  const dir = gitStore.dir
+  if (!dir || !gitStore.repo) return false
+  const entry = gitStore.stashes.find((item) => item.oid === oid)
+  const summary = entry
+    ? stashSummary(entry, t('（无贮藏信息）'))
+    : oid.slice(0, 7)
+  const ok = await MessagePrompt.propt(
+    t('删除这条贮藏？'),
+    `${summary}\n\n${t('删除后可以在本次会话里撤销；关闭应用之后只能靠 git reflog 找回。')}`,
+    { confirmText: t('删除'), cancelText: t('取消'), danger: true },
+  )
+  if (!ok) return false
+  const result = await run('stash_drop', () => invokeStashDrop(dir, oid))
+  if (!result) return false
+  runInAction(() => {
+    gitStore.stashes = result.stashes
+    gitStore.lastDropped = { oid: result.oid, message: result.message }
+  })
+  showToast(t('已删除贮藏'))
+  return true
+}
+
+/** 撤销删除：`stash store` 把同一个 oid 放回列表顶部 */
+export async function undoDropStash(): Promise<void> {
+  const dir = gitStore.dir
+  const dropped = gitStore.lastDropped
+  if (!dir || !gitStore.repo || !dropped) return
+  const list = await run('stash_restore', () =>
+    invokeStashRestore(dir, dropped.oid, dropped.message),
+  )
+  if (!list) return
+  runInAction(() => {
+    gitStore.stashes = list
+    gitStore.lastDropped = null
+  })
+  showToast(t('已恢复删除的贮藏'))
 }

@@ -56,6 +56,8 @@ interface Props {
   onSelectSession: (sessionId: string) => void
   /** 把路径作为附件挂到聊天输入框 */
   onAttachPaths: (paths: string[]) => void
+  /** 双击工作目录里的文件 → 在右侧面板打开 */
+  onOpenFile: (path: string) => void
   /** 把技能引用挂到聊天输入框 */
   onAttachSkills: (names: string[]) => void
   /** 输入框当前已引用的技能名（技能卡片据此高亮） */
@@ -81,6 +83,7 @@ const SIDEBAR_TABS: { key: SidebarTab; label: string }[] = [
 function ChatSidebar({
   onSelectSession,
   onAttachPaths,
+  onOpenFile,
   onAttachSkills,
   referencedSkills,
   onToggleSkill,
@@ -573,6 +576,7 @@ function ChatSidebar({
       {activeTab === 'workspace' && (
         <WorkspaceTree
           onAttachPaths={onAttachPaths}
+          onOpenFile={onOpenFile}
           searchQuery={workspaceQuery}
           onSearchQueryChange={setWorkspaceQuery}
         />
