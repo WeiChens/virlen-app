@@ -60,6 +60,7 @@ vi.mock('@monaco-editor/react', () => {
 import type { ComponentProps } from 'react'
 import {
   MonacoDiffView,
+  MONACO_DIFF_PADDING,
   monacoDiffHeight,
 } from '@/ui/pages/chat/components/message/MonacoDiffView'
 import { copyText } from '@/utils/clipboard'
@@ -92,6 +93,11 @@ type MonacoNsOptions = {
   lineHeight?: number
   fontFamily?: string
   lineNumbers?: (line: number) => string
+  padding?: { top?: number; bottom?: number }
+  scrollbar?: {
+    horizontalScrollbarSize?: number
+    ignoreHorizontalScrollbarInContentHeight?: boolean
+  }
 }
 
 ;(globalThis as never as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -278,6 +284,15 @@ it('选项契约：只读、不折行、不折叠未改动行、两栏恒等宽�
   expect(o.contextmenu).toBe(false)
   // 弹窗里的高度由布局决定，编辑器得自己跟着容器尺寸走
   expect(o.automaticLayout).toBe(true)
+  // ⚠️ 横向滚动条不许把自己那 10px 加进内容高度（0.56 viewLayout.js::_getContentHeight）：
+  // autoHeight 的容器是按「行数 × 行高 + padding」算死的，多出来的 10px 就是「不需要滚动
+  // 也能滚一点」，而且两栏会各冒出一条只能拖 10px 的幽灵纵向滚动条
+  expect(o.scrollbar?.ignoreHorizontalScrollbarInContentHeight).toBe(true)
+  // 滚动条浮在内容上 → 底 padding 必须盖得住它，否则最后一行被压住
+  expect(o.padding).toMatchObject(MONACO_DIFF_PADDING)
+  expect(o.padding!.bottom!).toBeGreaterThanOrEqual(
+    o.scrollbar?.horizontalScrollbarSize ?? 0,
+  )
   // 行高与字号走同一个解析函数（codeLineHeightPx），不是各处各乘一个倍率
   expect(o.lineHeight).toBe(codeLineHeightPx(o.fontSize!))
   expect(String(o.fontFamily)).toContain('JetBrains Mono')
@@ -426,7 +441,12 @@ it('聊天里那几个 props：文件头 + 动作按钮、autoHeight、行号映
   const rootEl = host.querySelector('.git-mono-diff')!
   expect(rootEl.className).toContain('is-autoheight')
   expect(rootEl.className).toContain('has-header')
-  expect(monacoDiffHeight(3, 12)).toBe(3 * codeLineHeightPx(12) + 12)
+  // 高度 = 行数 × 行高 + 上下 padding（顶 6 / 底 10），必须与 Monaco 的内容高度逐像素相等
+  expect(monacoDiffHeight(3, 12)).toBe(
+    3 * codeLineHeightPx(12) +
+      MONACO_DIFF_PADDING.top +
+      MONACO_DIFF_PADDING.bottom,
+  )
 
   // 列头说明：给了就用它，给 null 就不显示（多处编辑合并后行号不连续）
   const heads = [...host.querySelectorAll('.diff-col-header')]

@@ -24,7 +24,7 @@ import { openPath } from '@tauri-apps/plugin-opener'
 import { resolve } from '@tauri-apps/api/path'
 import { chatState, sessionStore } from '@/ui/store'
 import { useCodeDisplay } from '@/ui/hooks/useCodeDisplay'
-import { codeLineHeightPx } from '@/domain/code-display'
+import { codeLineHeightPx, codePreviewHeight } from '@/domain/code-display'
 import { t } from '@/ui/i18n'
 import { useAutoCenter } from '@/ui/hooks/useAutoCenter'
 import ContextMenu, {
@@ -308,6 +308,10 @@ const LARGE_CODE_LIMIT = 100 * 1000
  * 用 CodePreview(Monaco) 渲染代码正文。高度按行数算，纵向滚动交给外层，
  * Monaco 自身不溢出（配 alwaysConsumeMouseWheel=false 才不会吞滚轮）。
  *
+ * ⚠️ 高度必须走 `codePreviewHeight`（= Monaco 的内容高度：行数 × 行高 + 上下 padding）：
+ *    多 1px 是一截多余底色，少 1px Monaco 就多出 1px 可滚范围 ——
+ *    `scrollbar.vertical: 'hidden'` 下没有滚动条，但滚轮能把内容推开一点，
+ *    看着就是「明明不需要滚动，滚轮却动了」。
  * ⚠️ lineHeightPx 由调用方从同一份解析结果传入（不要在这里再乘一次倍率）：
  *    容器高度是按它算的，与 Monaco 的 lineHeight 必须同一个数。
  */
@@ -331,12 +335,15 @@ function MonacoCodeView({
   onApiReady?: (api: CodePreviewApi | null) => void
 }) {
   const lineCount = code ? code.split('\n').length : 1
-  const height = Math.max(lineHeightPx + 16, 5 + (lineCount + 1) * lineHeightPx)
+  const height = codePreviewHeight(lineCount, lineHeightPx)
 
   return (
     <CodePreview
       code={code}
       language={toMonacoLang(language)}
+      // 首帧用估算值，之后由编辑器自己报（Monaco 认 `\r\n` / `\r` / `\n` 三种行尾，
+      // 我们只能按 `split('\n')` 数 —— CRLF 末尾剩一个裸 `\r` 时会少算一行 = 16px 可滚范围）
+      fitContent
       height={height}
       showLineNumbers={showLineNumbers}
       startLineNumber={startLineNumber}
@@ -483,7 +490,9 @@ function CodeBlock({
   /* fence 里的 `showLineNumbers` 在 hooks 之后才解析出来，所以「最终值」放在这里：
      props 显式传了就以 props 为准，否则跟设置走 */
   const withLineNumbers = showLineNumbers ?? display.showLineNumbers
-  const code = String(children).replace(/\n$/, '')
+  /* ⚠️ 剥掉末尾那一个换行要认三种行尾：只写 `/\n$/` 的话，CRLF 文件（`…\r\n`）会剩下一个裸 `\r`，
+     Monaco 把它也当换行 → 模型多一行（最后一行空），高度算式少算一行 → 多出 16px 可滚范围 */
+  const code = String(children).replace(/(\r\n|\r|\n)$/, '')
 
   // 行内代码
   if (inlineCode && !match && !code.includes('\n')) {
@@ -544,7 +553,7 @@ function CodeBlock({
     return (
       <div
         ref={rootRef}
-        className={`code-block-wrapper${isFull ? ' is-fullscreen' : ''} ${props.className || ''}}`}
+        className={`code-block-wrapper${isFull ? ' is-fullscreen' : ''} ${props.className || ''}`}
         style={{
           maxHeight: !isFull && maxHeight ? maxHeight : undefined,
           width: !isFull && width ? width : undefined,

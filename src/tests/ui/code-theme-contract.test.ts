@@ -1,14 +1,16 @@
 /**
  * 代码主题契约：调色板（唯一色源）→ Monaco 主题 / CSS 变量。
  *
- * 守四件事：
+ * 守五件事：
  *  1. 每个主题都过可读性底线：正文 ≥ 4.5:1、注释 ≥ 3:1；暗色主题还要保证注释在**改动底色**上
  *     仍然看得见（历史缺陷：新增行的绿底上注释只有 1.31:1，等于没有字）；
  *  2. 差异底色必须是半透明源色（A=0x80）：Monaco 把选区画在改动底色下面，不透明就直接盖掉选区；
  *     差异选区的强化色只推一档 —— 它必须仍是“选区色”，而不是正文色（权重写反就成两姨）；
  *  3. 两个构建器（Monaco / CSS）必须从同一份调色板出值 —— 曾经的分叉表现为「流式 `<pre>` 底色
  *     #11111b、终态 Monaco #282c34」，消息结束时闪一下；
- *  4. 组件里不许再出现主题 id 字面量（`'virlen-dark'`）—— 一旦写死，设置页选了别的主题也不生效。
+ *  4. 组件里不许再出现主题 id 字面量（`'virlen-dark'`）—— 一旦写死，设置页选了别的主题也不生效；
+ *  5. 代码块容器高度 = Monaco 的内容高度（行数 × 行高 + 上下 padding）：多 1px 是一截多余底色，
+ *     少 1px 就多出 1px 可滚范围 —— 「不需要滚动的高度，滚轮却能推开一点」。
  *
  * 为什么能直接 import：改造后主题数据在 `src/domain/code-display`（不引 monaco 运行时），
  * 不像旧的 `setupMonaco.ts` 那样「一进 jsdom 就崩」而只能读源码文本。
@@ -22,11 +24,13 @@ import {
   CODE_FONT_STACKS,
   CODE_LINE_HEIGHT_MAX,
   CODE_LINE_HEIGHT_MIN,
+  CODE_PREVIEW_PADDING,
   CODE_THEMES,
   DEFAULT_CODE_DISPLAY_SETTINGS,
   buildCodeCssVars,
   buildMonacoThemeData,
   codeLineHeightPx,
+  codePreviewHeight,
   diffHeadersOf,
   diffOf,
   resolveCodeDisplay,
@@ -420,6 +424,37 @@ describe('解析层', () => {
     for (const [id, stack] of Object.entries(CODE_FONT_STACKS)) {
       expect({ id, ok: /monospace$/.test(stack) }).toMatchObject({ ok: true })
     }
+  })
+
+  /**
+   * 代码块容器高度契约（「不需要滚动的高度，滚轮却能推开一点」的回归）。
+   *
+   * Monaco 的内容高度 = 行数 × 行高 + 上下 padding（0.56 `linesLayout.js::getLinesTotalHeight`）；
+   * 容器彼它矮 1px 就多出 1px 可滚范围（`scrollbar.vertical: 'hidden'` 下没滚动条，滚轮照样能滚），
+   * 高出来则是多余底色。所以「容器高度 == 内容高度」是条等式，必须逐像素对得上。
+   */
+  it('代码块高度 = Monaco 内容高度（行数 × 行高 + 上下 padding）', () => {
+    expect(CODE_PREVIEW_PADDING).toMatchObject({ top: 12, bottom: 12 })
+    for (const lines of [1, 2, 12, 400]) {
+      for (const size of [CODE_FONT_SIZE_MIN, 13, CODE_FONT_SIZE_MAX]) {
+        for (const ratio of [CODE_LINE_HEIGHT_MIN, 1.5, CODE_LINE_HEIGHT_MAX]) {
+          const lh = codeLineHeightPx(size, ratio)
+          expect(codePreviewHeight(lines, lh)).toBe(
+            lines * lh + CODE_PREVIEW_PADDING.top + CODE_PREVIEW_PADDING.bottom,
+          )
+        }
+      }
+    }
+  })
+
+  it('旧的 `5 + (行数 + 1) × 行高` 估算在小行高下会矮几像素（那几像素就是「滚一点」）', () => {
+    const old = (lines: number, lh: number): number =>
+      Math.max(lh + 16, 5 + (lines + 1) * lh)
+    // 字号 11 + 行高 1.2 → 行高 13：旧公式矮 6px —— 容器少 6px，Monaco 就多出 6px 可滚范围
+    const small = codeLineHeightPx(CODE_FONT_SIZE_MIN, CODE_LINE_HEIGHT_MIN)
+    expect(old(10, small) - codePreviewHeight(10, small)).toBe(-6)
+    // 默认字号（行高 20）下它只是「多凑了 1px」（一截多余底色），所以这个坑改小字号 / 行高后才露出来
+    expect(old(10, 20) - codePreviewHeight(10, 20)).toBe(1)
   })
 })
 

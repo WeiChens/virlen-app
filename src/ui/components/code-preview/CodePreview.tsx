@@ -5,8 +5,10 @@
  * 无语言服务 → 没有 Web Worker 与诊断）；编辑器完全只读（domReadOnly，屏蔽输入 / 光标 / 编辑）；
  * 无光标、无右键菜单、无悬浮。
  *
- * 聊天流式列表适配：`height` 让容器内容等高或受控；scrollbar.alwaysConsumeMouseWheel=false
- * 使自身无纵向溢出时滚轮冒泡给外层消息列表；startLineNumber 用于展示文件片段的行号。
+ * 聊天流式列表适配：`height` 让容器内容等高（按行数算时用 `domain/code-display::codePreviewHeight`，
+ * 多 1px 是多余底色、少 1px 就多出 1px 可滚范围）；scrollbar.alwaysConsumeMouseWheel=false +
+ * ignoreHorizontalScrollbarInContentHeight=true 使自身无纵向溢出时滚轮冒泡给外层消息列表；
+ * startLineNumber 用于展示文件片段的行号。
  *
  * 用法：`<CodePreview code={code} language="typescript" height={320} />`
  */
@@ -14,12 +16,13 @@ import type { OnMount } from '@monaco-editor/react'
 import Editor from '@monaco-editor/react'
 import type * as MonacoNs from 'monaco-editor'
 import type { CSSProperties } from 'react'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 // 必须先引入：精简版 monaco + 语言高亮注册 + 代码主题注册（色源在 domain/code-display）
 import '@/monaco/setupMonaco'
 import { useCodeDisplay } from '@/ui/hooks/useCodeDisplay'
 import {
+  CODE_PREVIEW_PADDING,
   codeLineHeightPx,
   type ResolvedCodeDisplay,
 } from '@/domain/code-display'
@@ -80,6 +83,15 @@ export interface CodePreviewProps {
    * 回调下发更轻，且卸载时能顺带清空，避免外层拿到已 dispose 的编辑器。
    */
   onApiReady?: (api: CodePreviewApi | null) => void
+  /**
+   * 高度改由编辑器自己报（`getContentHeight()`），`height` 只当**首帧估计**。
+   *
+   * 给「高度本来就该等于内容高度」的只读预览用（聊天代码块）。为什么不能只靠外部算：
+   * Monaco 的行数认 `\r\n` / `\r` / `\n` 三种行尾，而我们只能按字符串数 —— CRLF 文件把末尾
+   * `\r\n` 剥成只剩 `\r` 时，我们数 16 行、模型是 17 行（最后一行空），容器就矮一行，
+   * 那几像素就是「不需要滚动也能滚一点」（实测 16px）。
+   */
+  fitContent?: boolean
 }
 
 /**
@@ -142,7 +154,9 @@ function buildPreviewOptions(
     scrollBeyondLastLine: false,
     smoothScrolling: true,
     automaticLayout: true,
-    padding: { top: 12, bottom: 12 },
+    // ⚠️ 上下 padding 与「代码块容器高度」共用一处（codePreviewHeight）：容器的目标值就是
+    // Monaco 的内容高度，两个数各写一份就会错开 1px → 多出 1px 可滚范围（滚轮能推开一点）。
+    padding: { top: CODE_PREVIEW_PADDING.top, bottom: CODE_PREVIEW_PADDING.bottom },
     tabSize: 2,
     folding: false,
     overviewRulerBorder: false,
@@ -155,6 +169,12 @@ function buildPreviewOptions(
       useShadows: false,
       // 自身无可滚方向时不要吞掉滚轮，让外层消息列表能正常滚动（聊天流场景必须）。
       alwaysConsumeMouseWheel: false,
+      // ⚠️ 横向滚动条是浮在内容上的（不占布局），但它默认还会把自己那 10px 加进**内容高度**
+      //（0.56 `viewLayout.js::_getContentHeight`：`linesTotalHeight + horizontalScrollbarSize`）——
+      // 于是「按行数算出来的等高容器」凭空多出 10px 可滚范围，滚轮一推内容就上移一小截
+      //（就是「不需要滚动的高度也会滚一点」）。置 true 关掉这一档。
+      // 前提：底 padding（12px）≥ 滚动条高度（10px），否则最后一行会被它压住。
+      ignoreHorizontalScrollbarInContentHeight: true,
       verticalScrollbarSize: 10,
       horizontalScrollbarSize: 10,
       arrowSize: 6,
@@ -172,6 +192,8 @@ export default function CodePreview(props: CodePreviewProps) {
     height = '100%',
     className = '',
   } = props
+  /** fitContent 时由编辑器报的内容高度（null = 还没量到，先用调用方给的 height） */
+  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null)
 
   // 预览固定只读；即使外层误改 props 也会被 updateOptions 兜底
   const handleMount: OnMount = (editor) => {
@@ -185,6 +207,17 @@ export default function CodePreview(props: CodePreviewProps) {
         selection && model ? model.getValueInRange(selection) : '',
       )
     })
+    // 高度以编辑器为准：行数只能由 Monaco 说了算（行尾 / 空行的算法与我们不同，见 fitContent 注释）
+    if (props.fitContent) {
+      const syncHeight = () => {
+        const next = editor.getContentHeight()
+        setMeasuredHeight((prev) => (prev === next ? prev : next))
+      }
+      syncHeight()
+      editor.onDidContentSizeChange((e) => {
+        if (e.contentHeightChanged) syncHeight()
+      })
+    }
     // 下发命令式 API（全选等）——卸载时由下面的 effect 回调 null
     props.onApiReady?.({
       selectAll: () => {
@@ -220,7 +253,7 @@ export default function CodePreview(props: CodePreviewProps) {
         {code}
       </div>
       <Editor
-        height={height}
+        height={props.fitContent ? (measuredHeight ?? height) : height}
         path={props.path}
         language={language ?? 'plaintext'}
         value={code}

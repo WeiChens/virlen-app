@@ -104,6 +104,34 @@ export function codeLineHeightPx(
 }
 
 /**
+ * 代码预览（`CodePreview`）的上下内边距（px）。
+ *
+ * ⚠️ 只有一份：Monaco 的 `padding` 选项与「代码块容器高度」都取这里 —— 容器的目标值就是
+ *    Monaco 的内容高度（行数 × 行高 + 上下 padding），两处各写一个数就必然错开。
+ */
+export const CODE_PREVIEW_PADDING = { top: 12, bottom: 12 } as const
+
+/**
+ * 代码预览容器应有的高度（px）= Monaco 的内容高度，不多不少。
+ *
+ * 「高度按行数算、纵向滚动交给外层」的前提是**容器不比内容矮**：矮 1px，Monaco 就多出 1px
+ * 的可滚范围 —— `scrollbar.vertical: 'hidden'` 时它没有滚动条，但滚轮照样能把内容推上去
+ *（`alwaysConsumeMouseWheel: false` 只在**滚不动**时才把滚轮让给外层），表现就是
+ * 「不需要滚动的高度，滚轮还是能动一点」。反过来，高出来的部分是一截多余底色。
+ *
+ * ⚠️ 横向滚动条那 10px 不算在这里：`CodePreview` 把 `ignoreHorizontalScrollbarInContentHeight`
+ *    置成了 true（内容高度里不再叠它），否则每块代码都会凭空多出 10px 可滚范围。
+ */
+export function codePreviewHeight(
+  lines: number,
+  lineHeightPx: number,
+): number {
+  return (
+    lines * lineHeightPx + CODE_PREVIEW_PADDING.top + CODE_PREVIEW_PADDING.bottom
+  )
+}
+
+/**
  * 解析当前应使用的主题 id。
  *
  * `follow` 只认亮 / 暗两档（不跟随用户挑的深色主题变体）：跟随模式下代码区要跟界面同明暗，

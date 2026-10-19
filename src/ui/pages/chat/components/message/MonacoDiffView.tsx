@@ -47,17 +47,33 @@ function lineCount(text: string): number {
 }
 
 /**
+ * 差异编辑器（两栏 / 单栏共用）的上下内边距（px）。
+ *
+ * 底部比顶部多 4px：横向滚动条是浮在内容上的（不占布局），而它一旦出现就压在正文最后
+ * 10px 上 —— 底 padding 不够高的话，最后一行会被它盖住一条。
+ * ⚠️ 与 `monacoDiffHeight` 同一处取值：autoHeight 的容器高度 = 行数 × 行高 + 这两个数。
+ */
+export const MONACO_DIFF_PADDING = { top: 6, bottom: 10 } as const
+
+/**
  * autoHeight 的高度 = 行数 × 行高 + 上下 padding。调用方取两侧行数较多的那一边（少算一行会顶出滚动区）。
  *
  * ⚠️ 行高必须走 codeLineHeightPx（与 Monaco 的 `lineHeight` 同一个函数）：两处各算一遍的话，
  *    设置里一调行高，算出来的格子高度就与真实排版对不上，末尾几行被裁掉。
+ * ⚠️ 高度必须与 Monaco 的内容高度**逐像素相等**（多出来的就是多余底色，少 1px 就多出 1px 可滚
+ *    范围 —— 滚轮能把内容推开一点，与代码块那条同源）；横向滚动条那 10px 也不许叠进来
+ *（`ignoreHorizontalScrollbarInContentHeight: true`，见下方选项）。
  */
 export function monacoDiffHeight(
   lines: number,
   fontSize: number,
   lineHeight: number = DEFAULT_CODE_DISPLAY_SETTINGS.codeLineHeight,
 ): number {
-  return lines * codeLineHeightPx(fontSize, lineHeight) + 12
+  return (
+    lines * codeLineHeightPx(fontSize, lineHeight) +
+    MONACO_DIFF_PADDING.top +
+    MONACO_DIFF_PADDING.bottom
+  )
 }
 
 /** 两种形态共用的只读预览选项（无语言服务，悬浮 / 补全 / 跳转一律关掉）。 */
@@ -89,13 +105,18 @@ function baseEditorOptions(
     lineHeight: display.lineHeightPx,
     fontFamily: display.fontFamily,
     fontLigatures: display.ligatures,
-    padding: { top: 6, bottom: 6 },
+    padding: { top: MONACO_DIFF_PADDING.top, bottom: MONACO_DIFF_PADDING.bottom },
     scrollbar: {
       vertical: 'auto',
       horizontal: 'auto',
       useShadows: false,
       // 编辑器自身滚到头时把滚轮让给外层（与 CodeEditor 一致）
       alwaysConsumeMouseWheel: false,
+      // ⚠️ 横向滚动条不许把自己那 10px 加进内容高度：autoHeight 的容器是按「行数 × 行高 + padding」
+      // 算死的，多出来的 10px 就成了「不需要滚动也能滚一点」，两栏还会各冒出一条只能拖 10px 的
+      // 幽灵纵向滚动条（0.56 `viewLayout.js::_getContentHeight`）。
+      // 代价是滚动条浮在内容上 —— 所以底 padding（10px）要够高，见 MONACO_DIFF_PADDING。
+      ignoreHorizontalScrollbarInContentHeight: true,
       verticalScrollbarSize: 10,
       horizontalScrollbarSize: 10,
       arrowSize: 6,
