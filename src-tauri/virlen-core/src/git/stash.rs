@@ -11,6 +11,8 @@
 //!    `<stash>:<未跟踪路径>` 取不到（差异视图要用 `<stash>^3`）。
 //! 5. **应用失败不等于「什么都没发生」**：工作区有同类改动时 git 会 `Aborting`（工作区不动），
 //!    但内容真冲突时退出码 1 且**工作区留下冲突标记** —— 这句提示在前端（`git-service.applyStash`）。
+//! 6. **部分贮藏靠 pathspec**（`stash push -- <路径>`）：只收这些路径的改动，其余留在工作区。
+//!    `paths` 为空 = 全部（不是「什么都不选」）；路径是**仓库根相对**（与 status 同口径）。
 //!
 //! ⚠️ `pop` / `drop` 的「解析 selector → 执行」必须在**同一把仓库锁内**完成（否则两次调用之间
 //! 列表被外部改动就会删错条目）。锁不可重入：锁内的 git 调用一律走 [`GitCmd::run_in_lock`]。
@@ -19,11 +21,31 @@ use super::cli::{GitCmd, GitError};
 use super::lock::with_repo_lock;
 use super::repo::root_of;
 use super::status::snapshot_at_root;
-use super::{EntryKind, StashDropResult, StashEntry, StashResult, WriteGate};
+use super::{ChangeEntry, EntryKind, StashDropResult, StashEntry, StashResult, WriteGate};
 
 /// 贮藏列表（新 → 旧，git 自己的顺序）。
 pub fn list(dir: &str) -> Result<Vec<StashEntry>, GitError> {
     list_at(&root_of(dir)?)
+}
+
+/// 校验调用方给的路径：仓库根相对、非空、不带 `..` / 盘符 / 前导分隔符。
+///
+/// ⚠️ 这只是「不许越界」的兜底：`GitCmd::paths` 已补 `--`，路径以 `-` 开头也不会被当成选项。
+fn check_paths(paths: &[String]) -> Result<(), GitError> {
+    for path in paths {
+        let text = path.trim();
+        if text.is_empty() {
+            return Err(GitError::new("贮藏路径不能为空"));
+        }
+        let bytes = text.as_bytes();
+        if bytes[0] == b'/' || bytes[0] == b'\\' || (bytes.len() > 1 && bytes[1] == b':') {
+            return Err(GitError::new("贮藏路径必须是仓库相对路径"));
+        }
+        if text.split(['/', '\\']).any(|segment| segment == "..") {
+            return Err(GitError::new("贮藏路径不能包含 .."));
+        }
+    }
+    Ok(())
 }
 
 fn list_at(root: &str) -> Result<Vec<StashEntry>, GitError> {
@@ -66,14 +88,18 @@ pub fn parse_entries(text: &str) -> Vec<StashEntry> {
 ///
 /// `keep_index` = `--keep-index`：已暂存的内容**既进贮藏、又留在索引 / 工作区**（实测如此）——
 /// 文案要说清，否则「只贮藏未暂存部分」的期待会落空。
+/// `paths` = 只贮藏这些路径的改动（`--` 之后的位置参数）；**空 = 全部**。rename 要把新旧路径
+/// 一起传，否则旧路径的删除会留在工作区。
 pub fn push(
     dir: &str,
     gate: &WriteGate,
     message: Option<&str>,
     include_untracked: bool,
     keep_index: bool,
+    paths: &[String],
 ) -> Result<StashResult, GitError> {
     gate.ensure()?;
+    check_paths(paths)?;
     let root = root_of(dir)?;
     let before = snapshot_at_root(&root, None)?;
 
@@ -89,12 +115,23 @@ pub fn push(
     {
         return Err(GitError::new("有未解决的冲突，解决后再贮藏"));
     }
+    // 判定只看**选中范围**：勾了子集时，没选中的那些改动不该让人以为「有东西可贮藏」
+    let in_scope = |entry: &ChangeEntry| {
+        paths.is_empty()
+            || paths.iter().any(|path| {
+                path == &entry.path || entry.orig_path.as_deref() == Some(path.as_str())
+            })
+    };
     let untracked = before
         .entries
         .iter()
-        .filter(|entry| entry.kind == EntryKind::Untracked)
+        .filter(|entry| entry.kind == EntryKind::Untracked && in_scope(entry))
         .count();
-    let tracked = before.entries.len() - untracked;
+    let tracked = before
+        .entries
+        .iter()
+        .filter(|entry| entry.kind != EntryKind::Untracked && in_scope(entry))
+        .count();
     // ③ 无改动：`stash push` 退出码是 **0** —— 这一条只能靠快照判
     if tracked == 0 {
         if untracked == 0 {
@@ -120,6 +157,10 @@ pub fn push(
     if let Some(text) = message.map(str::trim).filter(|text| !text.is_empty()) {
         // 消息作为**单个 argv** 传给 git（不拼 shell）：引号 / 分号 / `$` 都不会被解释
         cmd = cmd.arg("-m").arg(text);
+    }
+    if !paths.is_empty() {
+        // 空 = 全部：不带 pathspec 的 `stash push` 语义最完整（含 -u 的全部未跟踪文件）
+        cmd = cmd.paths(paths.iter().cloned());
     }
     cmd.run()?.into_result("stash push")?;
 

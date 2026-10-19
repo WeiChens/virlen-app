@@ -16,6 +16,12 @@
  * **双击才打开差异**。三个动作的 `paths` 由 `GitPanel` 解析好：点在选中集里的行上时它就是
  * 同侧选中的全部（批量），此刻文案会变成「… N 个文件」—— 用户点之前就知道它带走几个。
  *
+ * **拖到输入框 = 引用成附件**（与侧边栏目录树同一套指针拖拽，见 `../sidebar/use-tree-drag`）：
+ * 路径口径与行内按钮完全一致（`dragPaths` 就是 `actionPaths` 的结果），拖选中集里的行带走同侧整批。
+ * 拖拽松手后浏览器仍会补一次 click / dblclick，两者都要按 `draggedRef` 吞掉 —— 否则「拖到输入框」
+ * 会顺手把行选中、甚至弹出差异弹窗。右键菜单另给一项「引用到输入框」：拖拽没有可见入口，
+ * 面板高度压住输入框时（竖屏 / 小窗）它是唯一出路。
+ *
  * 三个行内按钮都是**纯图标**：所以除了 `title` 还给 `aria-label`（读屏只念得出一串符号）；
  * 「丢弃」用 `UndoSvg` 而不是字符 `↺` —— 后者与刷新图标同形，会被读成「刷新一下」（实测反馈）。
  */
@@ -34,6 +40,7 @@ import ContextMenu, {
   type ContextMenuItem,
 } from '@/ui/components/shared/ContextMenu'
 import { copyText } from '@/utils/clipboard'
+import { useTreeDrag } from '../sidebar/use-tree-drag'
 
 /** 一行指向的东西（差异弹窗按它决定取哪两侧内容） */
 export interface GitRowTarget {
@@ -52,6 +59,13 @@ interface Props {
   selected: boolean
   /** 这次操作会作用于几个文件（> 1 = 批量，按钮文案跟着写清范围） */
   batch: number
+  /**
+   * 拖到输入框时带走哪些路径（仓库根相对）——
+   * 与三个行内按钮同一口径（=`GitPanel.actionPaths`）：行在选中集里就是同侧选中的全部。
+   */
+  dragPaths: string[]
+  /** 引用到输入框（由 `GitPanel` 换成绝对路径并剔除已删除的文件） */
+  onAttach: (paths: string[]) => void
   onSelect: (mod: { shift: boolean; toggle: boolean }) => void
   onStage: () => void
   onUnstage: () => void
@@ -66,6 +80,8 @@ export const GitChangeRow = observer(function GitChangeRow({
   disabled,
   selected,
   batch,
+  dragPaths,
+  onAttach,
   onSelect,
   onStage,
   onUnstage,
@@ -86,6 +102,17 @@ export const GitChangeRow = observer(function GitChangeRow({
       : t('取消暂存')
   const discardLabel =
     batch > 1 ? tpl('丢弃 $__count__ 个文件', { count: batch }) : t('丢弃更改')
+  const attachLabel =
+    batch > 1
+      ? tpl('引用 $__count__ 项到输入框', { count: batch })
+      : t('引用到输入框')
+
+  // 拖到输入框 = 引用成附件（不用 HTML5 dnd：本项目 dragDropEnabled=true，页面收不到 drag/drop）
+  const { startDrag, draggedRef } = useTreeDrag({
+    onDropToInput: (items) => onAttach(items.map((item) => item.path)),
+    // 变更行没有「拖进目录」这种落点（面板里不存在 [data-tree-dir]），空实现即可
+    onDropIntoDir: () => {},
+  })
 
   function buildItems(): ContextMenuItem[] {
     const items: ContextMenuItem[] = []
@@ -108,6 +135,11 @@ export const GitChangeRow = observer(function GitChangeRow({
       key: 'diff',
       label: t('查看差异'),
       onClick: () => onOpenDiff(target),
+    })
+    items.push({
+      key: 'attach',
+      label: attachLabel,
+      onClick: () => onAttach(dragPaths),
     })
     // 删除的文件在工作区里已经不存在，「在文件管理器中显示」必然失败（打开的是不存在的路径）
     // —— 直接不给这一项，比点一下报错好
@@ -148,10 +180,33 @@ export const GitChangeRow = observer(function GitChangeRow({
       <div
         className={`git-row${selected ? ' selected' : ''}`}
         title={`${displayPath(entry)}\n${t('双击查看差异')}`}
-        onClick={(e) =>
+        // 按下即交给拖拽 hook；按在行内按钮上不算拖拽（否则点「暂存」会连带拖出一个 ghost）
+        onPointerDown={(e) => {
+          if ((e.target as HTMLElement).closest('button')) return
+          startDrag(
+            e,
+            dragPaths.map((path) => ({
+              path,
+              name: baseName(path),
+              isDir: false,
+            })),
+          )
+        }}
+        onClick={(e) => {
+          // 拖拽松手后浏览器仍会补一次 click：这一下不是「选中」，吞掉
+          if (draggedRef.current) {
+            draggedRef.current = false
+            return
+          }
           onSelect({ shift: e.shiftKey, toggle: e.ctrlKey || e.metaKey })
-        }
-        onDoubleClick={() => onOpenDiff(target)}
+        }}
+        onDoubleClick={() => {
+          if (draggedRef.current) {
+            draggedRef.current = false
+            return
+          }
+          onOpenDiff(target)
+        }}
         onContextMenu={(e) => menu.openAt(e, target)}>
         <FileTypeIcon filename={name} className="git-row-icon" />
         <span className="git-row-name">{name}</span>

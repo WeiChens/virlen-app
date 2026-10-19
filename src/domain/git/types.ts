@@ -224,3 +224,19 @@ export interface GitStashDropResult {
   message: string
   stashes: GitStashEntry[]
 }
+
+/**
+ * 一次合并（Rust `git::MergeResult`）。
+ *
+ * `up_to_date` / `fast_forward` 由 Rust **按 oid 判定**（不解析 git 输出文本）——
+ * 界面据它们说清「这次合并到底做了什么」。
+ */
+export interface GitMergeResult {
+  snapshot: GitStatusSnapshot
+  /** git 的原始输出（stdout + stderr 合并）：快进摘要 / `Already up to date` / 合并提交头 */
+  output: string
+  /** HEAD 没动 = 「已是最新」 */
+  up_to_date: boolean
+  /** 快进（没有生成合并提交） */
+  fast_forward: boolean
+}

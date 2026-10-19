@@ -37,9 +37,14 @@ import './style.scss'
 interface Props {
   /** 归属会话；`null` = 聊天页处于「新对话」→ 用全局选中的工作目录 */
   sessionId: string | null
+  /** 变更行拖到输入框 / 右键引用：挂成对话附件（聊天页接到 `ChatInput.attachPaths`） */
+  onAttachPaths: (paths: string[]) => void
 }
 
-export const GitEntry = observer(function GitEntry({ sessionId }: Props) {
+export const GitEntry = observer(function GitEntry({
+  sessionId,
+  onAttachPaths,
+}: Props) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
 
@@ -134,7 +139,10 @@ export const GitEntry = observer(function GitEntry({ sessionId }: Props) {
       </button>
       {open && (
         <div className="git-popover">
-          <GitPanel onClose={() => setOpen(false)} />
+          <GitPanel
+            onClose={() => setOpen(false)}
+            onAttachPaths={onAttachPaths}
+          />
         </div>
       )}
       {/* 错误弹窗挂在**面板外**：面板收起来 / 网络操作失败得更晚时，报错仍然看得到。

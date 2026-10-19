@@ -23,6 +23,7 @@ import type {
   GitDiffScope,
   GitDiffSides,
   GitLogScope,
+  GitMergeResult,
   GitRemoteInfo,
   GitRepoInfo,
   GitStashDropResult,
@@ -227,25 +228,51 @@ export function renameBranch(
   return invoke<GitBranchInfo[]>('git_branch_rename', { dir, from, to })
 }
 
+// ==================== 合并（merge） ====================
+
+/** 是否处于「合并中」（`.git/MERGE_HEAD` 存在） */
+export function mergeState(dir: string): Promise<boolean> {
+  return invoke<boolean>('git_merge_state', { dir })
+}
+
+/**
+ * 把 `reference`（本地分支 / 远程分支 / tag）合并到当前 HEAD。
+ * `noFf` = `--no-ff`：即使能快进也生成一个合并提交。
+ * ⚠️ 冲突时命令会抛：工作区**已留下冲突标记**，错误正文里带着 git 的 `CONFLICT` 清单。
+ */
+export function merge(
+  dir: string,
+  reference: string,
+  noFf: boolean,
+): Promise<GitMergeResult> {
+  return invoke<GitMergeResult>('git_merge', { dir, reference, noFf })
+}
+
+/** 中止进行中的合并（`merge --abort`）：工作区回到合并之前 */
+export function mergeAbort(dir: string): Promise<GitStatusSnapshot> {
+  return invoke<GitStatusSnapshot>('git_merge_abort', { dir })
+}
+
 // ==================== 贮藏（stash） ====================
 
-/** 贮藏列表（`refs/stash` 不存在 = 空数组，不是错误） */
-export function stashes(dir: string): Promise<GitStashEntry[]> {
+/** 贮藏列表（`refs/stash` 不存在 = 空数组，不是错误） */export function stashes(dir: string): Promise<GitStashEntry[]> {
   return invoke<GitStashEntry[]>('git_stash_list', { dir })
 }
 
-/** 新建贮藏（空消息 = 用 git 自动生成的 WIP 描述） */
+/** 新建贮藏（空消息 = 用 git 自动生成的 WIP 描述）。`paths` = 只贮藏这些路径（空 = 全部） */
 export function stashPush(
   dir: string,
   message: string,
   includeUntracked: boolean,
   keepIndex: boolean,
+  paths: string[] = [],
 ): Promise<GitStashResult> {
   return invoke<GitStashResult>('git_stash_push', {
     dir,
     message,
     includeUntracked,
     keepIndex,
+    paths,
   })
 }
 

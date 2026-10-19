@@ -6,7 +6,9 @@
  * 2. **未跟踪默认不进**：勾选后才计入「将贮藏 N 个文件」，并提示其余未跟踪文件会留在工作区；
  * 3. **动作只传 oid**：应用 / 应用并删除 / 删除都按 oid 调（`stash@{n}` 的选择在 Rust 锁内完成）；
  * 4. **删完给「撤销」条**：`stash store` 能把同一个 oid 放回栈顶（本次会话内）；
- * 5. **Esc 只关弹窗**：宿主面板也挂着一颗 document 级 Esc，这里必须在捕获阶段 stopPropagation。
+ * 5. **Esc 只关弹窗**：宿主面板也挂着一颗 document 级 Esc，这里必须在捕获阶段 stopPropagation；
+ * 6. **左侧文件列表决定贮藏范围**：默认全选，勾掉的路径不传给 git（`stash push -- <路径>`）；
+ *    「一个都不选」必须禁用按钮 —— 空数组在 IPC 层是「全部」。
  *
  * 数据与写操作全部 mock：git 语义由 Rust 用例守（`cargo test -p virlen-core git::tests::stash`）。
  */
@@ -209,8 +211,80 @@ it('贮藏：消息与两个开关原样交给 service，成功后清空输入',
 
   await act(async () => stashBtn()!.click())
 
-  expect(createStash).toHaveBeenCalledWith('修登录', true, true)
+  expect(createStash).toHaveBeenCalledWith('修登录', true, true, [])
   expect((document.querySelector('.git-stash-msg') as HTMLInputElement).value).toBe('')
+})
+
+it('左侧列出所有改动文件且默认全选；勾掉一个就只贮藏剩下的', async () => {
+  setStore({
+    entries: [stagedEntry('a.txt'), unstagedEntry('b.txt'), unstagedEntry('c.txt')],
+  })
+  await mount()
+
+  const boxes = () => [
+    ...document.querySelectorAll<HTMLInputElement>('.git-stash-file input'),
+  ]
+  expect(boxes().map((box) => box.checked)).toEqual([true, true, true])
+  expect(hint()).toContain('将贮藏 3 个文件的更改')
+
+  // 勾掉 b.txt：传给 git 的只有 a.txt / c.txt，提示也跟着变
+  act(() => boxes()[1].click())
+  expect(hint()).toContain('将贮藏 2 个文件的更改')
+  expect(hint()).toContain('未勾选的 1 个文件会留在工作区')
+
+  await act(async () => stashBtn()!.click())
+  expect(createStash).toHaveBeenCalledWith('', false, false, ['a.txt', 'c.txt'])
+})
+
+it('全选又全不选：一个都不选时禁用按钮（空数组在 IPC 层是「全部」）', async () => {
+  setStore({ entries: [unstagedEntry('a.txt'), unstagedEntry('b.txt')] })
+  await mount()
+
+  const selectAll = document.querySelector<HTMLInputElement>(
+    '.git-stash-files-head input',
+  )!
+  expect(selectAll.checked).toBe(true)
+
+  act(() => selectAll.click())
+  expect(selectAll.checked).toBe(false)
+  expect(stashBtn()!.disabled).toBe(true)
+  expect(hint()).toContain('左侧没有勾选任何文件')
+
+  act(() => selectAll.click())
+  expect(stashBtn()!.disabled).toBe(false)
+  expect(hint()).toContain('将贮藏 2 个文件的更改')
+})
+
+it('部分勾选时「全选」显示半选态', async () => {
+  setStore({ entries: [unstagedEntry('a.txt'), unstagedEntry('b.txt')] })
+  await mount()
+
+  const selectAll = document.querySelector<HTMLInputElement>(
+    '.git-stash-files-head input',
+  )!
+  act(() =>
+    document
+      .querySelectorAll<HTMLInputElement>('.git-stash-file input')[0]
+      .click(),
+  )
+  expect(selectAll.indeterminate).toBe(true)
+})
+
+it('未跟踪文件行默认不可勾（要「包含未跟踪文件」先打开）', async () => {
+  setStore({ entries: [unstagedEntry('a.txt'), untrackedEntry('u.txt')] })
+  await mount()
+
+  const boxes = [
+    ...document.querySelectorAll<HTMLInputElement>('.git-stash-file input'),
+  ]
+  expect(boxes.map((box) => box.disabled)).toEqual([false, true])
+
+  act(() => checkbox('包含未跟踪文件').click())
+  const after = [
+    ...document.querySelectorAll<HTMLInputElement>('.git-stash-file input'),
+  ]
+  expect(after.map((box) => box.disabled)).toEqual([false, false])
+  expect(after.every((box) => box.checked)).toBe(true)
 })
 
 it('列表：自动生成的消息拆出标题与分支，动作按 oid 调', async () => {

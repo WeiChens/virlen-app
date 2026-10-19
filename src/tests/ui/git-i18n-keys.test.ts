@@ -28,6 +28,8 @@ const FILES = [
   'src/ui/pages/chat/components/git/VirtualList.tsx',
   'src/ui/pages/chat/components/git/use-side-width.tsx',
   'src/ui/pages/chat/components/git/GitDiffModal.tsx',
+  // 提交详情（左栏提交信息折叠开关：`收起` / `展开`）
+  'src/ui/pages/chat/components/git/GitCommitModal.tsx',
   'src/ui/pages/chat/components/git/GitLogModal.tsx',
   // 贮藏浮层（新建 / 应用 / 应用并删除 / 删除 / 撤销删除）
   'src/ui/pages/chat/components/git/GitStashModal.tsx',

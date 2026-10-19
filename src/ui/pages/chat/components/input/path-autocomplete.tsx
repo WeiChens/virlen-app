@@ -127,7 +127,8 @@ export function usePathAutocomplete(
         const entries: any[] = await invoke('list_directory', {
           root: fullDir,
           recursive: false,
-          includeHidden: false,
+          // 与侧边栏树同口径：补全列表里也要能看到 `.env` 这类点项
+          includeHidden: true,
           maxDepth: 1,
           skipEachDirs: [],
           taskId: `path_auto_${Date.now()}`,

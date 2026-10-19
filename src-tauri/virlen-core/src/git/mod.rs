@@ -24,6 +24,7 @@ pub mod commit;
 pub mod diff;
 pub mod lock;
 pub mod log;
+pub mod merge;
 pub mod numstat;
 pub mod remote;
 pub mod repo;
@@ -298,6 +299,19 @@ pub struct SyncResult {
     /// git 的原始输出（stdout + stderr 合并，过长时截断）—— 进度 / 摘要 / 警告都在这里，
     /// **不解析它做分支判断**（与全模块同一口径）
     pub output: String,
+}
+
+/// 一次合并的结果（见 [`merge`]）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeResult {
+    /// 合并后（冲突时是「合并中」）的快照 —— 一次 IPC 拿全，界面不再回读
+    pub snapshot: StatusSnapshot,
+    /// git 的原始输出（stdout + stderr 合并）：快进摘要 / `Already up to date` / 合并提交头都在里面
+    pub output: String,
+    /// HEAD 没动 = 「已是最新」（`Already up to date`）；靠 oid 判，**不解析输出文本**
+    pub up_to_date: bool,
+    /// 快进（HEAD 直接落到被合并的那个提交，没有生成合并提交）
+    pub fast_forward: bool,
 }
 
 /// 一条贮藏（`git stash list` 的忠实映射，见 [`stash`]）。

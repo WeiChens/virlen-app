@@ -1470,7 +1470,7 @@ fn stash_push_apply_drop_restore_roundtrip() {
     let gate = WriteGate::new(true);
 
     repo.write("a.txt", "one\ntwo\n");
-    let pushed = super::stash::push(&repo.path(), &gate, Some("第一条 贮藏"), false, false)
+    let pushed = super::stash::push(&repo.path(), &gate, Some("第一条 贮藏"), false, false, &[])
         .expect("push 应成功");
     assert_eq!(pushed.stashes.len(), 1);
     assert!(pushed.stashes[0].message.contains("第一条 贮藏"));
@@ -1506,13 +1506,13 @@ fn stash_untracked_needs_explicit_flag() {
     let gate = WriteGate::new(true);
 
     repo.write("u.txt", "u\n");
-    let denied = super::stash::push(&repo.path(), &gate, None, false, false);
+    let denied = super::stash::push(&repo.path(), &gate, None, false, false, &[]);
     assert!(
         denied.is_err(),
         "只有未跟踪文件且没勾「包含未跟踪」时必须拒绝（不能装作成功）"
     );
 
-    let pushed = super::stash::push(&repo.path(), &gate, None, true, false)
+    let pushed = super::stash::push(&repo.path(), &gate, None, true, false, &[])
         .expect("带 -u 应成功");
     assert_eq!(pushed.stashes.len(), 1);
     assert!(
@@ -1539,6 +1539,198 @@ fn stash_untracked_needs_explicit_flag() {
     assert!(applied.stashes.is_empty(), "pop 成功后条目应删除");
 }
 
+/// 只贮藏选中的文件：其余改动留在工作区（pathspec）；应用回来后两边都在
+#[test]
+fn stash_push_restricts_to_selected_paths() {
+    let Some(repo) = TempRepo::new() else { return };
+    repo.write("a.txt", "one\n");
+    repo.write("b.txt", "one\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+    let gate = WriteGate::new(true);
+
+    repo.write("a.txt", "one\ntwo\n");
+    repo.write("b.txt", "one\ntwo\n");
+    let pushed = super::stash::push(
+        &repo.path(),
+        &gate,
+        None,
+        false,
+        false,
+        &["a.txt".to_string()],
+    )
+    .expect("按路径贮藏应成功");
+    assert_eq!(pushed.stashes.len(), 1);
+    let left: Vec<&str> = pushed
+        .snapshot
+        .entries
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .collect();
+    assert_eq!(left, vec!["b.txt"], "没选中的改动必须留在工作区: {:?}", left);
+
+    let applied = super::stash::apply(&repo.path(), &gate, &pushed.stashes[0].oid, false, true)
+        .expect("pop 应成功");
+    let mut back: Vec<&str> = applied
+        .snapshot
+        .entries
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .collect();
+    back.sort();
+    assert_eq!(back, vec!["a.txt", "b.txt"], "两个文件的改动都要在");
+}
+
+/// 越界路径直接拒绝：`..` / 绝对路径 / 盘符不许进 pathspec
+#[test]
+fn stash_rejects_out_of_root_paths() {
+    let Some(repo) = TempRepo::new() else { return };
+    repo.write("a.txt", "one\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+    repo.write("a.txt", "one\ntwo\n");
+
+    for bad in ["../outside.txt", "/etc/passwd", "C:/Windows/win.ini"] {
+        let err = super::stash::push(
+            &repo.path(),
+            &WriteGate::new(true),
+            None,
+            false,
+            false,
+            &[bad.to_string()],
+        )
+        .expect_err("越界路径必须拒绝");
+        assert!(
+            err.message.contains("仓库相对路径") || err.message.contains(".."),
+            "{} 的错误要说清原因: {}",
+            bad,
+            err.message
+        );
+    }
+}
+
+// ==================== 三·五、合并（merge） ====================
+
+/// 快进合并 → 再合一次就是「已是最新」；`--no-ff` 则强制生成合并提交
+#[test]
+fn merge_fast_forward_then_up_to_date_then_no_ff() {
+    let Some(repo) = TempRepo::new() else { return };
+    repo.write("a.txt", "one\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+    // 默认分支名按 git 版本 / 全局配置会变（master / main）—— 统一成 main，不依赖开发机配置
+    repo.git(&["branch", "-M", "main"]);
+    repo.git(&["checkout", "-q", "-b", "feat"]);
+    repo.write("b.txt", "feat\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "feat: b"]);
+    repo.git(&["checkout", "-q", "main"]);
+    let gate = WriteGate::new(true);
+
+    let ff = super::merge::merge(&repo.path(), &gate, "feat", false).expect("快进应成功");
+    assert!(ff.fast_forward, "线性历史应当快进：{}", ff.output);
+    assert!(!ff.up_to_date);
+    assert!(
+        ff.snapshot.entries.is_empty(),
+        "合并后工作区应当是干净的"
+    );
+
+    let again = super::merge::merge(&repo.path(), &gate, "feat", false).expect("重复合并不报错");
+    assert!(again.up_to_date, "已合过的分支再合就是 Already up to date");
+    assert!(!again.fast_forward);
+
+    // `--no-ff`：即使能快进也生成一个合并提交（HEAD 与 被合并提交 不同）
+    repo.git(&["checkout", "-q", "feat"]);
+    repo.write("c.txt", "feat2\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "feat: c"]);
+    repo.git(&["checkout", "-q", "main"]);
+    let merged = super::merge::merge(&repo.path(), &gate, "feat", true).expect("--no-ff 应成功");
+    assert!(!merged.fast_forward, "--no-ff 不应快进：{}", merged.output);
+    assert_eq!(
+        repo.git(&["rev-list", "--count", "HEAD"]).trim(),
+        "4",
+        "init / feat:b / feat:c / 合并提交 = 4 条（--no-ff 必须多出一条）"
+    );
+}
+
+/// 冲突：退出码 1 但**冲突清单在 stdout** —— 必须带回；且能用 `--abort` 回到合并前
+#[test]
+fn merge_conflict_reports_stdout_and_aborts() {
+    let Some(repo) = TempRepo::new() else { return };
+    repo.write("a.txt", "base\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+    repo.git(&["branch", "-M", "main"]);
+    let gate = WriteGate::new(true);
+
+    repo.git(&["checkout", "-q", "-b", "feat"]);
+    repo.write("a.txt", "feat-side\n");
+    repo.git(&["commit", "-q", "-am", "feat: 改 a"]);
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("a.txt", "main-side\n");
+    repo.git(&["commit", "-q", "-am", "main: 改 a"]);
+
+    let err = super::merge::merge(&repo.path(), &gate, "feat", false)
+        .expect_err("两边改同一文件必须冲突");
+    assert!(err.code != 0);
+    assert!(
+        err.message.contains("冲突"),
+        "错误要说清是冲突: {}",
+        err.message
+    );
+    assert!(
+        err.stderr.contains("CONFLICT"),
+        "冲突清单在 stdout，必须一起带回来: {}",
+        err.stderr
+    );
+
+    // 合并中：再合别的分支要被拒（提示下一步），state 为真
+    assert!(super::merge::state(&repo.path()).expect("state 应可读"));
+    let again = super::merge::merge(&repo.path(), &gate, "feat", false)
+        .expect_err("合并中不能再合");
+    assert!(
+        again.message.contains("还没有结束"),
+        "错误要给出下一步: {}",
+        again.message
+    );
+
+    let after = super::merge::abort(&repo.path(), &gate).expect("abort 应成功");
+    assert!(after.entries.is_empty(), "中止后工作区应当干净");
+    assert!(!super::merge::state(&repo.path()).expect("state 应可读"));
+    assert!(
+        std::fs::read_to_string(std::path::Path::new(&repo.path()).join("a.txt"))
+            .unwrap()
+            .contains("main-side"),
+        "中止后应回到 main 侧的内容"
+    );
+    // 没有合并中时再 abort：说清事实，而不是让 git 报一句难懂的话
+    let none = super::merge::abort(&repo.path(), &gate).expect_err("没有合并时应拒绝");
+    assert!(none.message.contains("没有进行中的合并"));
+}
+
+/// 不存在的分支 / 以 `-` 开头的「引用」一律在 Rust 侧拒掉
+#[test]
+fn merge_rejects_bad_references() {
+    let Some(repo) = TempRepo::new() else { return };
+    repo.write("a.txt", "one\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+    let gate = WriteGate::new(true);
+
+    let missing = super::merge::merge(&repo.path(), &gate, "no-such-branch", false)
+        .expect_err("不存在的分支必须拒");
+    assert!(missing.message.contains("找不到"));
+
+    let dashed = super::merge::merge(&repo.path(), &gate, "--abort", false)
+        .expect_err("以 - 开头的引用必须拒");
+    assert!(dashed.message.contains("- 开头"));
+
+    let empty = super::merge::merge(&repo.path(), &gate, "   ", false)
+        .expect_err("空引用必须拒");
+    assert!(empty.message.contains("没有指定"));
+}
+
 /// 干净工作区：`stash push` 退出码是 0，这里必须靠快照拒绝
 #[test]
 fn stash_rejects_when_nothing_to_save() {
@@ -1547,7 +1739,7 @@ fn stash_rejects_when_nothing_to_save() {
     repo.git(&["add", "-A"]);
     repo.git(&["commit", "-q", "-m", "init"]);
 
-    let err = super::stash::push(&repo.path(), &WriteGate::new(true), None, false, false)
+    let err = super::stash::push(&repo.path(), &WriteGate::new(true), None, false, false, &[])
         .expect_err("干净工作区不能贮藏");
     assert!(err.message.contains("没有可贮藏"), "错误要说清原因: {}", err.message);
 }
@@ -1558,7 +1750,7 @@ fn stash_rejects_before_first_commit() {
     let Some(repo) = TempRepo::new() else { return };
     repo.write("a.txt", "one\n");
 
-    let err = super::stash::push(&repo.path(), &WriteGate::new(true), None, false, false)
+    let err = super::stash::push(&repo.path(), &WriteGate::new(true), None, false, false, &[])
         .expect_err("没有提交时不能贮藏");
     assert!(err.message.contains("还没有提交"), "错误要说清原因: {}", err.message);
 }
@@ -1574,7 +1766,7 @@ fn stash_pop_conflict_keeps_entry_and_blocks_push() {
 
     // 造冲突：先贮藏「stash 侧」，再把同一文件提交成另一个版本，最后 pop 回来
     repo.write("a.txt", "stash-side\n");
-    let pushed = super::stash::push(&repo.path(), &gate, None, false, false).unwrap();
+    let pushed = super::stash::push(&repo.path(), &gate, None, false, false, &[]).unwrap();
     let oid = pushed.stashes[0].oid.clone();
     repo.write("a.txt", "commit-side\n");
     repo.git(&["commit", "-q", "-a", "-m", "B"]);
@@ -1593,7 +1785,7 @@ fn stash_pop_conflict_keeps_entry_and_blocks_push() {
         "冲突时工作区会留下 UU 标记（前端要提示用户）"
     );
 
-    let denied = super::stash::push(&repo.path(), &gate, None, false, false);
+    let denied = super::stash::push(&repo.path(), &gate, None, false, false, &[]);
     assert!(denied.is_err(), "有未解决冲突时 push 必须被拒");
 }
 
@@ -1608,7 +1800,7 @@ fn stash_identity_survives_selector_renumbering() {
 
     for i in 1..=3 {
         repo.write("a.txt", &format!("{}\n", i));
-        super::stash::push(&repo.path(), &gate, Some(&format!("第 {} 条", i)), false, false)
+        super::stash::push(&repo.path(), &gate, Some(&format!("第 {} 条", i)), false, false, &[])
             .unwrap();
     }
     let list = super::stash::list(&repo.path()).unwrap();
@@ -1652,7 +1844,7 @@ fn stash_keep_index_keeps_staged_work() {
     repo.git(&["add", "a.txt"]);
     repo.write("a.txt", "one\nstaged\nunstaged\n");
 
-    let pushed = super::stash::push(&repo.path(), &gate, None, false, true)
+    let pushed = super::stash::push(&repo.path(), &gate, None, false, true, &[])
         .expect("keep-index 应成功");
     assert_eq!(pushed.stashes.len(), 1);
     let entry = pushed
@@ -1675,7 +1867,7 @@ fn stash_message_and_cjk_path_roundtrip() {
     let gate = WriteGate::new(true);
 
     repo.write("中文 文件.txt", "base\n改过了\n");
-    let pushed = super::stash::push(&repo.path(), &gate, Some("第一行\n第二行"), false, false)
+    let pushed = super::stash::push(&repo.path(), &gate, Some("第一行\n第二行"), false, false, &[])
         .expect("push 应成功");
     assert!(
         pushed.stashes[0].message.contains("第一行 第二行"),
@@ -1711,13 +1903,13 @@ fn stash_write_gate_rejects_when_readonly() {
 
     // 先用真 gate 造一条，供 apply / drop / restore 验证
     repo.write("a.txt", "one\ntwo\n");
-    let pushed = super::stash::push(&repo.path(), &WriteGate::new(true), None, false, false)
+    let pushed = super::stash::push(&repo.path(), &WriteGate::new(true), None, false, false, &[])
         .unwrap();
     let oid = pushed.stashes[0].oid.clone();
 
     let gate = WriteGate::new(false);
     assert!(
-        super::stash::push(&repo.path(), &gate, None, false, false).is_err(),
+        super::stash::push(&repo.path(), &gate, None, false, false, &[]).is_err(),
         "只读模式下贮藏必须失败"
     );
     assert!(super::stash::apply(&repo.path(), &gate, &oid, false, true).is_err());

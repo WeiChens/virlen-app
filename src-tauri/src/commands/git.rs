@@ -8,8 +8,8 @@ use std::sync::Arc;
 use virlen_core::git::cli::GitError;
 use virlen_core::git::{
     BranchInfo, CommitDetail, CommitLogEntry, CommitResult, DiffScope, DiffSides, LogScope,
-    RemoteInfo, RepoInfo, StashDropResult, StashEntry, StashResult, StatReport, StatusSnapshot,
-    SyncResult, WriteGate,
+    MergeResult, RemoteInfo, RepoInfo, StashDropResult, StashEntry, StashResult, StatReport,
+    StatusSnapshot, SyncResult, WriteGate,
 };
 use virlen_core::session_db::SettingsRepo;
 
@@ -394,6 +394,43 @@ pub async fn git_branch_rename(
     .await
 }
 
+// ==================== 合并（merge） ====================
+
+/// 是否处于「合并中」（`.git/MERGE_HEAD` 存在）。读操作：不过写门禁
+#[tauri::command]
+pub async fn git_merge_state(dir: String) -> Result<bool, String> {
+    blocking("merge_state", move || virlen_core::git::merge::state(&dir)).await
+}
+
+/// 把某个分支合并到当前 HEAD。⚠️ 冲突时退出码 1 且工作区**已留下冲突标记**：
+/// 冲突清单在 git 的 stdout 里，由 Rust 合并两股输出后整段回传（只回 stderr 等于吞掉它）。
+#[tauri::command]
+pub async fn git_merge(
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    dir: String,
+    reference: String,
+    no_ff: Option<bool>,
+) -> Result<MergeResult, String> {
+    let gate = gate(&settings).await;
+    blocking("merge", move || {
+        virlen_core::git::merge::merge(&dir, &gate, &reference, no_ff.unwrap_or(false))
+    })
+    .await
+}
+
+/// 中止进行中的合并（`merge --abort`）：工作区回到合并之前（二次确认在界面层）
+#[tauri::command]
+pub async fn git_merge_abort(
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    dir: String,
+) -> Result<StatusSnapshot, String> {
+    let gate = gate(&settings).await;
+    blocking("merge_abort", move || {
+        virlen_core::git::merge::abort(&dir, &gate)
+    })
+    .await
+}
+
 // ==================== 贮藏（stash） ====================
 
 /// 贮藏列表（读；`refs/stash` 不存在 = 空数组，不是错误）
@@ -404,6 +441,7 @@ pub async fn git_stash_list(dir: String) -> Result<Vec<StashEntry>, String> {
 
 /// 新建贮藏。⚠️ 无改动 / 未诞生 HEAD / 有冲突时**在 Rust 侧就拒绝**：`git stash push` 在
 /// 「没东西可贮藏」时退出码是 0，靠退出码判断会得到「提示成功但没有条目」。
+/// `paths` = 只贮藏这些路径的改动（仓库根相对）；**缺省 / 空数组 = 全部**。
 #[tauri::command]
 pub async fn git_stash_push(
     settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
@@ -411,6 +449,7 @@ pub async fn git_stash_push(
     message: Option<String>,
     include_untracked: Option<bool>,
     keep_index: Option<bool>,
+    paths: Option<Vec<String>>,
 ) -> Result<StashResult, String> {
     let gate = gate(&settings).await;
     blocking("stash_push", move || {
@@ -420,6 +459,7 @@ pub async fn git_stash_push(
             message.as_deref(),
             include_untracked.unwrap_or(false),
             keep_index.unwrap_or(false),
+            paths.as_deref().unwrap_or(&[]),
         )
     })
     .await

@@ -232,7 +232,8 @@ export function createHostFiles(deps: HostFilesDeps): HostFiles {
       const relPath = normalizeRelPath(params.path ?? '')
       const absPath = await safePath(relPath, 'r', params.sessionId, 'host.file.list')
       await requireDirectory(absPath, relPath)
-      const raw = await files.listDir(absPath, { includeHidden: false }).catch((err) => {
+      // 与桌面侧边栏树同口径：手机端浏览也把点项列出来（`.env` / `.gitignore` 都是要看的正文）
+      const raw = await files.listDir(absPath, { includeHidden: true }).catch((err) => {
         throw toBridgeError(err)
       })
       /*

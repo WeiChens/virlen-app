@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 「源代码管理」面板的编排层：探测 / 刷新时机 / 操作串行 / 确认与提示 / 埋点。
  * 数据经 @/infrastructure/git，口径判定用 @/domain/git 的纯函数。
  *
@@ -21,6 +21,9 @@ import {
   initRepo as invokeInitRepo,
   isGitEnvAvailable,
   log as invokeLog,
+  merge as invokeMerge,
+  mergeAbort as invokeMergeAbort,
+  mergeState as invokeMergeState,
   numstat as invokeNumstat,
   pullRemote as invokePull,
   pushRemote as invokePush,
@@ -78,11 +81,19 @@ function errorText(e: unknown): string {
 async function run<T>(
   label: string,
   fn: () => Promise<T>,
-  /**
-   * `dialog: false` = 调用方**自己就地展示**错误（如同步浮层），不再弹窗 ——
-   * 两层信息重复，而且弹窗会盖住那个浮层。
-   */
-  opts: { dialog?: boolean } = {},
+  opts: {
+    /**
+     * `dialog: false` = 调用方**自己就地展示**错误（如同步浮层），不再弹窗 ——
+     * 两层信息重复，而且弹窗会盖住那个浮层。
+     */
+    dialog?: boolean
+    /**
+     * 这次调用是否已被取消 / 取代（取消是**我们主动 kill 的 git**，不是失败）。
+     * 在 catch 里判：为 `true` 时**不写 error、不弹窗、不回读** —— 否则面板会长期挂着
+     * 「git 操作已取消」（`refreshStatus` 成功时刻意不清 error，见那里的注释）。
+     */
+    stale?: () => boolean
+  } = {},
 ): Promise<T | null> {
   if (gitStore.busy) return null
   const started = Date.now()
@@ -95,6 +106,10 @@ async function run<T>(
     track('git.op', { op: label, ok: true, ms: Date.now() - started })
     return result
   } catch (e) {
+    if (opts.stale?.()) {
+      track('git.op', { op: label, ok: false, ms: Date.now() - started })
+      return null
+    }
     const text = errorText(e)
     runInAction(() => {
       gitStore.error = text
@@ -223,6 +238,9 @@ export async function refreshStatus(): Promise<void> {
     // 行数统计只在面板打开时才有用（徽标只数文件）：它比 status 贵，关着不跑
     if (gitStore.open) void refreshStats()
   } catch (e) {
+    // 被新的一次刷新取代 / 面板关掉：旧那次是被我们 `stopTask` 取消的（Rust 回
+    // 「git 操作已取消」），**不是错误**。成功路径有同一条对账，失败路径同样不能漏
+    if (taskId !== statusTaskId) return
     runInAction(() => {
       gitStore.error = errorText(e)
     })
@@ -257,6 +275,8 @@ export async function refreshStats(): Promise<void> {
       gitStore.stats = report
     })
   } catch (e) {
+    // 同 `refreshStatus`：被取代 / 面板关掉后的取消不算失败
+    if (taskId !== statsTaskId) return
     runInAction(() => {
       gitStore.error = errorText(e)
     })
@@ -578,6 +598,60 @@ export function checkRefFormat(name: string): Promise<boolean> {
   return invokeCheckRefFormat(dir, name).catch(() => false)
 }
 
+// ==================== 合并（merge） ====================
+
+/** 是否处于「合并中」（有未解决的冲突）。读操作：不进 busy */
+export async function loadMergeState(): Promise<boolean> {
+  const dir = gitStore.dir
+  if (!dir || !gitStore.repo) return false
+  return invokeMergeState(dir).catch(() => false)
+}
+
+/**
+ * 把某个分支合并到当前 HEAD。
+ *
+ * ⚠️ 冲突时 git 退出码 1，但**不是「什么都没发生」**：工作区已留下冲突标记、仓库进入
+ * 「合并中」状态。`run()` 默认弹错误窗，git 的 `CONFLICT` 清单会原样落在里面（读不完也能复制），
+ * 同时 `refreshStatus` 把它们列进面板的「冲突」段。
+ */
+export async function mergeBranch(name: string, noFf = false): Promise<boolean> {
+  const dir = gitStore.dir
+  if (!dir || !gitStore.repo) return false
+  const result = await run('merge', () => invokeMerge(dir, name, noFf))
+  // 成功或冲突：两种都可能有新提交 / 新冲突落进快照 —— 失败路径的 `run()` 已自己回读过状态
+  if (!result) return false
+  acceptSnapshot(result.snapshot)
+  // 合并会改写工作区（冲突时还多出标记）：行数统计必须重取，否则行内还挂着合并前的 +N −M
+  void refreshStats()
+  showToast(
+    result.up_to_date
+      ? tpl('$__name__ 已经在当前分支里了，无需合并', { name })
+      : result.fast_forward
+        ? tpl('已快进合并 $__name__', { name })
+        : tpl('已合并 $__name__（生成了合并提交）', { name }),
+  )
+  await refreshBranches()
+  return true
+}
+
+/** 中止进行中的合并（回到合并前）。⚠️ 会丢掉冲突解决到一半的编辑 → 二次确认 */
+export async function abortMerge(): Promise<boolean> {
+  const dir = gitStore.dir
+  if (!dir || !gitStore.repo) return false
+  const ok = await MessagePrompt.propt(
+    t('中止这次合并？'),
+    t('工作区会回到合并之前：合并带入的改动与冲突标记都会被撤掉。'),
+    { confirmText: t('中止合并'), cancelText: t('取消'), danger: true },
+  )
+  if (!ok) return false
+  const snapshot = await run('merge_abort', () => invokeMergeAbort(dir))
+  if (!snapshot) return false
+  acceptSnapshot(snapshot)
+  void refreshStats()
+  showToast(t('已中止合并'))
+  return true
+}
+
 // ==================== 远程（凭据策略 = SSH） ====================
 
 /**
@@ -598,7 +672,12 @@ async function syncAction(
   syncTaskId = taskId
   let result: GitSyncResult | null = null
   try {
-    result = await run(label, () => call(dir, remote, taskId), { dialog })
+    result = await run(label, () => call(dir, remote, taskId), {
+      dialog,
+      // `cancelSync()`（用户点取消 / 关面板）会把 `syncTaskId` 置空，再次发起会换成新 id：
+      // 两种都说明「这一次的失败是我自己叫停的」
+      stale: () => syncTaskId !== taskId,
+    })
   } finally {
     if (syncTaskId === taskId) syncTaskId = null
   }
@@ -771,16 +850,21 @@ export async function refreshStashes(): Promise<void> {
  *
  * 无改动 / 无提交 / 有冲突三种情况都由 Rust 侧拒绝（`git stash push` 在「没东西可贮藏」时
  * 退出码是 **0**，前端不能拿它当成功）；这里不重复判一遍，免得两处口径漂移。
+ *
+ * `paths` = 只贮藏选中的文件（空数组 = 全部）：`git stash push -- <路径>` 只收这些路径的改动，
+ * 其余留在工作区。⚠️ 空数组在这里是「全部」而不是「什么都没选」——「一个都没选」必须由界面
+ * 在调用前拦住（否则会变成「全选贮藏」）。
  */
 export async function createStash(
   message: string,
   includeUntracked: boolean,
   keepIndex: boolean,
+  paths: string[] = [],
 ): Promise<boolean> {
   const dir = gitStore.dir
   if (!dir || !gitStore.repo) return false
   const result = await run('stash_push', () =>
-    invokeStashPush(dir, message, includeUntracked, keepIndex),
+    invokeStashPush(dir, message, includeUntracked, keepIndex, paths),
   )
   if (!result) return false
   runInAction(() => {
@@ -789,7 +873,7 @@ export async function createStash(
   })
   // 工作区变了：行数统计（`+N −M`）跟着重取（面板关着时 `refreshStats` 自己会跳过）
   void refreshStats()
-  showToast(t('已贮藏当前更改'))
+  showToast(paths.length > 0 ? t('已贮藏选中的文件') : t('已贮藏当前更改'))
   return true
 }
 

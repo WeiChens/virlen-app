@@ -959,7 +959,11 @@ function ChatView() {
             {/* 后台服务：有会话 = 本会话；新对话页 = 全部会话 */}
             <ServiceEntry sessionId={chatState.value.currentSessionId ?? null} />
             {/* 源代码管理：徽标 = 未提交变更数；不是 Git 仓库时入口不出现 */}
-            <GitEntry sessionId={chatState.value.currentSessionId ?? null} />
+            <GitEntry
+              sessionId={chatState.value.currentSessionId ?? null}
+              // 变更行“拖到输入框 / 右键引用到输入框” → 输入框附件（与目录树同一条链路）
+              onAttachPaths={(paths) => chatInputRef.current?.attachPaths(paths)}
+            />
             <WorkspaceDisplay
               value={
                 chatState.value.currentSessionId

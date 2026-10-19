@@ -8,6 +8,9 @@
  * 2. **差异按文件按需取**（不缓存、关掉即弃）：一次拉整个提交的 diff，大提交上是几十 MB，
  *    而用户往往只看一两个文件（与 `GitDiffModal` 同一取舍）。
  * 3. **默认选中第一条**：点开提交总要先看到点什么；清单为空（空提交 / 纯合并）时给空态说明。
+ * 3b. **完整提交信息住左栏顶部**（可折叠、正文自己滚，且不再重画标题）：它原先趴在弹窗头下方，
+ *    一有正文就把左清单与差异区一起往下压 —— 而多行正文往往只是补充说明，位置该让给差异。
+ *    正文 == 标题（只有一行）时整块不画，与「不重复画一遍」同一条取舍。
  * 4. 弹窗内的 `mousedown` 必须 `stopPropagation`、Esc / ↑↓ 走**捕获阶段**：本弹窗 portal 到 body，
  *    宿主（提交记录 / 提交图弹窗、源代码管理面板）的关闭逻辑都按 DOM 包含关系或 document 监听判定
  *    —— 少这两行就是「关详情连整个弹窗一起关掉」（与 `GitLogModal` 同款坑）。
@@ -41,6 +44,8 @@ export function GitCommitModal({ oid, onClose }: Props) {
   const [sides, setSides] = useState<GitDiffSides | null>(null)
   const [sidesError, setSidesError] = useState<string | null>(null)
   const [sidesLoading, setSidesLoading] = useState(false)
+  /** 左栏「提交信息」块是否展开（默认展开：多行正文就是用户点开这条提交想看的东西之一） */
+  const [messageOpen, setMessageOpen] = useState(true)
   const rootRef = useRef<HTMLDivElement>(null)
   /** 左清单宽度（与差异弹窗共用一份偏好） */
   const sideWidth = useSideWidth()
@@ -124,8 +129,12 @@ export function GitCommitModal({ oid, onClose }: Props) {
   }, [])
 
   const singleSide = useMemo(() => (sides ? singleSideOf(sides) : null), [sides])
-  const subject = detail?.message.split('\n')[0] || t('（无提交信息）')
-  const body = detail?.message.trim() ?? ''
+  const message = detail?.message ?? ''
+  const subject = message.split('\n')[0] || t('（无提交信息）')
+  /** 正文 = 标题行之后的剩余：标题已在弹窗头里，左栏两三百像素宽再画一遍只是重复 */
+  const body = message.includes('\n')
+    ? message.slice(message.indexOf('\n') + 1).trim()
+    : ''
 
   return createPortal(
     <div
@@ -182,59 +191,77 @@ export function GitCommitModal({ oid, onClose }: Props) {
           )}
         </div>
 
-        {/* 完整提交信息（正文）：标题已经在头里，这里只在「有正文」时展开 */}
-        {detail && body !== subject.trim() && (
-          <pre className="git-commit-message">{body}</pre>
-        )}
-
         <div className="git-diff-main">
-          {error || !detail || files.length === 0 ? (
-            <aside className="git-diff-side" style={{ width: sideWidth.width }}>
-              {error && <div className="git-diff-message error">{error}</div>}
-              {!error && !detail && (
-                <div className="git-diff-message">{t('加载中…')}</div>
-              )}
-              {detail && files.length === 0 && (
-                <div className="git-diff-message">
-                  {t('这个提交没有文件变更')}
-                </div>
-              )}
-            </aside>
-          ) : (
-            // 大提交（上千文件）不能一次性铺 DOM：左清单同样走虚拟列表
-            <VirtualList
-              className="git-diff-side"
-              style={{ width: sideWidth.width }}
-              items={files}
-              heights={fileHeights}
-              render={(file) => {
-                const name = baseName(file.path)
-                return (
-                  <button
-                    type="button"
-                    key={`${file.status}:${file.path}`}
-                    className={`git-diff-side-row${
-                      file.path === current?.path ? ' active' : ''
-                    }`}
-                    title={fileTitle(file)}
-                    onClick={() => setCurrent(file)}>
-                    <FileTypeIcon
-                      filename={name}
-                      className="git-diff-side-icon"
-                    />
-                    <span className="git-diff-side-name">{name}</span>
-                    <span className="git-diff-side-dir">
-                      {/* 改名：旧路径也要看得见，否则以为「凭空多了个文件」 */}
-                      {file.orig_path ? fileTitle(file) : dirName(file.path)}
-                    </span>
-                    <span className={`git-row-letter s-${file.status}`}>
-                      {file.status}
-                    </span>
-                  </button>
-                )
-              }}
-            />
-          )}
+          {/* 左栏 = 提交信息（可折叠）+ 文件清单：信息块钉在顶部，滚动只发生在清单里 */}
+          <aside
+            className="git-diff-side git-commit-side"
+            style={{ width: sideWidth.width }}>
+            {body && (
+              <section
+                className={`git-commit-message${messageOpen ? '' : ' is-collapsed'}`}>
+                <button
+                  type="button"
+                  className="git-commit-message-head"
+                  aria-expanded={messageOpen}
+                  title={messageOpen ? t('收起') : t('展开')}
+                  onClick={() => setMessageOpen((v) => !v)}>
+                  <span className="git-commit-message-title">{subject}</span>
+                  <span className="git-commit-message-toggle">
+                    {messageOpen ? t('收起') : t('展开')}
+                  </span>
+                </button>
+                {messageOpen && (
+                  <pre className="git-commit-message-body">{body}</pre>
+                )}
+              </section>
+            )}
+            {error || !detail || files.length === 0 ? (
+              <div className="git-commit-side-empty">
+                {error && <div className="git-diff-message error">{error}</div>}
+                {!error && !detail && (
+                  <div className="git-diff-message">{t('加载中…')}</div>
+                )}
+                {detail && files.length === 0 && (
+                  <div className="git-diff-message">
+                    {t('这个提交没有文件变更')}
+                  </div>
+                )}
+              </div>
+            ) : (
+              // 大提交（上千文件）不能一次性铺 DOM：左清单同样走虚拟列表
+              <VirtualList
+                className="git-commit-files"
+                items={files}
+                heights={fileHeights}
+                render={(file) => {
+                  const name = baseName(file.path)
+                  return (
+                    <button
+                      type="button"
+                      key={`${file.status}:${file.path}`}
+                      className={`git-diff-side-row${
+                        file.path === current?.path ? ' active' : ''
+                      }`}
+                      title={fileTitle(file)}
+                      onClick={() => setCurrent(file)}>
+                      <FileTypeIcon
+                        filename={name}
+                        className="git-diff-side-icon"
+                      />
+                      <span className="git-diff-side-name">{name}</span>
+                      <span className="git-diff-side-dir">
+                        {/* 改名：旧路径也要看得见，否则以为「凭空多了个文件」 */}
+                        {file.orig_path ? fileTitle(file) : dirName(file.path)}
+                      </span>
+                      <span className={`git-row-letter s-${file.status}`}>
+                        {file.status}
+                      </span>
+                    </button>
+                  )
+                }}
+              />
+            )}
+          </aside>
           <SideResizer side={sideWidth} />
 
           <div className="git-diff-body">

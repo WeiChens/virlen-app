@@ -113,10 +113,21 @@ it('贮藏成功后落快照与新列表（写操作一次 IPC 拿全）', async
   vi.mocked(infra.stashPush).mockResolvedValue({ snapshot: after, stashes: [STASH] })
 
   expect(await createStash('修登录', true, false)).toBe(true)
-  expect(infra.stashPush).toHaveBeenCalledWith('/tmp/repo', '修登录', true, false)
+  expect(infra.stashPush).toHaveBeenCalledWith('/tmp/repo', '修登录', true, false, [])
   expect(gitStore.snapshot).toEqual(after)
   expect(gitStore.stashes).toEqual([STASH])
   expect(showToast).toHaveBeenCalled()
+})
+
+it('按路径贮藏：paths 原样交给 git，提示改为「已贮藏选中的文件」', async () => {
+  vi.mocked(infra.stashPush).mockResolvedValue({ snapshot: snap([]), stashes: [STASH] })
+
+  expect(await createStash('', false, false, ['a.txt', 'b.txt'])).toBe(true)
+  expect(infra.stashPush).toHaveBeenCalledWith('/tmp/repo', '', false, false, [
+    'a.txt',
+    'b.txt',
+  ])
+  expect(vi.mocked(showToast).mock.calls[0][0]).toContain('已贮藏选中的文件')
 })
 
 it('应用失败且工作区出现冲突：错误里补一句「已留下冲突标记」', async () => {

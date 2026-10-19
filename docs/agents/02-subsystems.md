@@ -152,6 +152,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
   ⚠️ 服务侧 `services/tool-service/{user_choice,command_confirm}.ts` 的待应答槽位是**多槽 Map（`pendings`，按 interactionId）**而不是单槽：AI 并行发两次提问 / 并行跑两条命令时，单槽会让上一条的 resolve/reject 被后到的顶掉（用户回答它时「弹窗关了、引擎没收到」）。别再改回单槽；回归在 `tests/infrastructure/command-approval.test.ts`。
   ⚠️ **暂存 → 恢复的草稿**：`modals/choice-drafts.ts`（键 `sessionId|toolCallId`）—— 暂存（shelve）保留草稿、恢复时预填（勾选 / 自定义输入 / 展开态）；应答 / 取消 / 收敛一律清掉。**别用 interactionId 当键**（每次都换，恢复后找不到），也别用 visible 重置表单（切走再切回也要保留）。
 - **组件事件**：跨层通信用 `src/events/*` 的 EventEmitter（**禁止 `window.*` 全局挂载**）。
+- **工作目录树**（`sidebar/workspace-tree.tsx`）：点项**不隐藏** —— `list_directory` 与 `search_files_by_name` 都传 `includeHidden: true`（`.env` / `.gitignore` / `.github` 是要编辑的正文，藏起来会让人以为目录里没有它）；搜索只额外剪掉 `.git` 内部（版本库对象海量，扫一遍是噪声），点开头的**文件**不受影响。路径补全（`input/path-autocomplete.tsx`）与手机端文件浏览（`bridge/file-source.ts` 的 `listFiles`）同口径，改一处要同步另两处。
 - **样式**：组件目录内 `style.scss`（或 `style.module.scss`），跟随 BEM 类名；主题变量在 `ui/styles/theme.css`。
 - **通用控件**：开关用 `ui/components/shared/Toggle`（`size: sm/md/lg` 三档，`virlen-toggle` 命名空间；`md` 与老 `.toggle` 视觉一致）。
   ⚠️ 老页面那套 `<label class="toggle"> + .toggle-slider` 是**全局约定类**，在 general / editor / provider / security 的 scss 里各拄了一份，尚未迁移；新代码请用组件，**别再用 `.toggle` 命名新样式**（会被 `.settings-panel .toggle ...` 这类跨层选择器意外命中）。

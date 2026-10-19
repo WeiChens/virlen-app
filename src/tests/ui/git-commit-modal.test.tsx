@@ -5,7 +5,8 @@
  * 1. **打开即取详情，默认选中第一个文件**：点开提交总要先看到点什么；
  * 2. **换文件才重取差异**，并把 `orig_path` 一起交下去（改名时旧侧在旧路径上，漏了就会显示成
  *    「整文件新增 + 整文件删除」）；
- * 3. **完整提交信息只在「有正文」时展示**（正文 == 标题时再画一遍只是重复）；
+ * 3. **完整提交信息只在「有正文」时展示**（只有一行 = 正文 == 标题，再画一遍只是重复）；
+ * 3b. **正文块住左栏顶部**（不再趴在头部下方把清单与差异一起往下压），可折叠。
  * 4. **空清单给空态**（空提交 / 纯合并），不留一块白板。
  *
  * 差异正文换成最小替身（只验交下去的接口），Monaco 那份契约由 `monaco-diff-view.test.tsx` 守。
@@ -164,9 +165,34 @@ it('完整提交信息只在有正文时展示（正文 == 标题时不重复画
   await act(async () => root!.unmount())
   root = null
   await mount()
-  expect(document.querySelector('.git-commit-message')?.textContent).toContain(
+  expect(document.querySelector('.git-commit-message-body')?.textContent).toContain(
     '这行是正文',
   )
+})
+
+it('正文块在左栏顶部（不在弹窗头下方）、默认展开、标题不重画，点一下可折叠', async () => {
+  vi.mocked(loadCommitDetail).mockResolvedValue(
+    detail({ message: '第二个提交\n\n这行是正文' }),
+  )
+  await mount()
+
+  // 位置：左栏（清单前）——它原先压在弹窗头下方，一有正文就把差异区往下顶
+  const side = document.querySelector('.git-commit-side')
+  const box = side?.firstElementChild as HTMLElement
+  expect(box.classList.contains('git-commit-message')).toBe(true)
+  expect(box.classList.contains('is-collapsed')).toBe(false)
+  expect(document.querySelector('.git-diff-head .git-commit-message')).toBeNull()
+  // 标题已在弹窗头里，正文块只放后续段落
+  expect(box.querySelector('.git-commit-message-body')?.textContent).toBe('这行是正文')
+  expect(box.querySelector('.git-commit-message-title')?.textContent).toBe('第二个提交')
+
+  await act(async () => {
+    ;(box.querySelector('.git-commit-message-head') as HTMLElement).click()
+  })
+  expect(box.classList.contains('is-collapsed')).toBe(true)
+  expect(box.querySelector('.git-commit-message-body')).toBeNull()
+  // 折叠态标题还在（它不是表示「没有正文」而是「收起来了」）
+  expect(box.querySelector('.git-commit-message-title')?.textContent).toBe('第二个提交')
 })
 
 it('清单为空（空提交 / 纯合并）给空态，不发差异请求', async () => {

@@ -891,13 +891,14 @@
   }
 }
 
-/* 分支浮层（挂在头部下方） */
-.git-branch-menu {
+/* 分支浮层 / 合并浮层：都挂在头部下方，内部结构相同（搜索框 + 行列表 + 提示行），
+   所以基础规则写在同一组里，**只有定位与宽度分开**（各自贴一边）——
+   写两份必然漂移（改了一边忘了另一边）。 */
+.git-branch-menu,
+.git-merge-menu {
   position: absolute;
   top: 74px;
-  left: 12px;
   z-index: 70;
-  width: 320px;
   max-width: calc(100vw - 40px);
   max-height: 320px;
   display: flex;
@@ -988,6 +989,83 @@
       &.gone {
         color: var(--color-error, #dc2626);
       }
+    }
+  }
+}
+
+/* 分支浮层贴左上（从「分支」按钮展开） */
+.git-branch-menu {
+  left: 12px;
+  width: 320px;
+}
+
+/* 合并浮层贴右上（从「更多」展开 —— 那颗按钮就在最右） */
+.git-merge-menu {
+  right: 12px;
+  width: 300px;
+
+  .git-merge-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 2px 6px;
+    font-size: var(--font-size-xs, 11px);
+    font-weight: 600;
+    color: var(--text-secondary, #666);
+
+    .git-merge-title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .git-close {
+      width: 18px;
+      height: 18px;
+      font-size: 11px;
+    }
+  }
+
+  /* 「合并中」提示条：冲突态下唯一要看的提示，右侧跟的就是那唯一出路 */
+  .git-merge-warn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+    padding: 4px 6px;
+    border-radius: 6px;
+    background: var(--bg-secondary, #f7f7f8);
+    font-size: var(--font-size-xs, 11px);
+    color: var(--color-warning-text, #b45309);
+
+    .git-merge-warn-text {
+      flex: 1;
+      min-width: 0;
+    }
+  }
+
+  .git-merge-foot {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border-color, #e5e5e5);
+  }
+
+  .git-merge-opt {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--font-size-xs, 11px);
+    color: var(--text-secondary, #666);
+    cursor: pointer;
+
+    /* 外层那条 `input` 规则是给搜索框的（宽度 100% + 边框）：勾选框得退回去，
+       否则它会被撑成一条通栏的竖线 */
+    input[type='checkbox'] {
+      width: auto;
+      padding: 0;
+      margin: 0;
+      border: none;
     }
   }
 }
@@ -1312,8 +1390,8 @@
   }
 }
 
-/* 提交详情弹窗（GitCommitModal）：骨架直接用 `.git-diff-modal`（遮罩 / 头 / 左清单 / 右正文
-   都是同一套），这里只补它独有的三个零件 —— 短 hash、元信息行、完整提交信息。 */
+/* 提交详情弹窗（GitCommitModal）：骨架直接用 `.git-diff-modal`（遮罩 / 头 / 右正文
+   都是同一套），这里只补它独有的零件 —— 短 hash、元信息行、左栏的提交信息块。 */
 .git-commit-modal {
   .git-commit-hash {
     flex: none;
@@ -1339,22 +1417,99 @@
     }
   }
 
-  /* 完整提交信息：保留换行与缩进（`pre`），限高滚动 —— 它可能很长，不许把差异区挤没。
+  /* 左栏 = 提交信息（可折叠）+ 文件清单：信息块钉在顶部，滚动只发生在清单里。
+     `.git-diff-side` 那套自带滚动与内边距（它平时自己就是那个滚动容器），这里给两个子块各自接管。 */
+  .git-commit-side {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  /* 完整提交信息：保留换行与缩进（`pre`），限高自己滚 —— 它可能很长，不许把文件清单挤没。
      字体不走等宽：提交信息是散文，等宽只会更难读（与上方 hash 的取舍相反）。 */
   .git-commit-message {
-    margin: 6px 12px 0;
-    padding: 6px 8px;
-    max-height: 96px;
-    overflow: auto;
-    overscroll-behavior: contain;
+    flex: 0 1 auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    /* 左栏高度的一半封顶：正文再长也要留得下清单 */
+    max-height: 45%;
+    margin: 6px 6px 0;
+    border: 1px solid var(--border-color, #e5e5e5);
     border-radius: 6px;
-    background: var(--bg-secondary, #f7f7f8);
-    font-family: inherit;
-    font-size: var(--font-size-sm, 12px);
-    line-height: 1.5;
-    color: var(--text-primary, #1a1a1a);
-    white-space: pre-wrap;
-    word-break: break-word;
+    background: var(--bg-primary, #fff);
+    overflow: hidden;
+
+    /* 折叠开关：整块只剩这一行（多行正文不该一直占着清单的地盘） */
+    .git-commit-message-head {
+      flex: none;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 8px;
+      border: none;
+      background: transparent;
+      font: inherit;
+      font-size: var(--font-size-xs, 11px);
+      color: var(--text-secondary, #666);
+      text-align: left;
+      cursor: pointer;
+
+      &:hover {
+        color: var(--text-primary, #1a1a1a);
+      }
+
+      &:focus-visible {
+        outline: var(--focus-ring);
+        outline-offset: -1px;
+      }
+
+      .git-commit-message-title {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 600;
+      }
+
+      .git-commit-message-toggle {
+        flex: none;
+      }
+    }
+
+    .git-commit-message-body {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      overscroll-behavior: contain;
+      margin: 0;
+      padding: 4px 8px 6px;
+      border-top: 1px solid var(--border-color, #e5e5e5);
+      font-family: inherit;
+      font-size: var(--font-size-sm, 12px);
+      line-height: 1.5;
+      color: var(--text-primary, #1a1a1a);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+  }
+
+  /* 文件清单（虚拟列表的滚动容器）：信息块之下的剩余高度全给它 */
+  .git-commit-files {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 6px;
+  }
+
+  /* 加载中 / 出错 / 空清单：与清单同一个容器角色（占满剩余高度，内部可滚） */
+  .git-commit-side-empty {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
   }
 }
 
@@ -1620,11 +1775,12 @@
 }
 
 /* 贮藏浮层（portal 到 body，与差异 / 日志弹窗**共用那层遮罩** `.git-diff-backdrop`）。
-   新建区在上（动作入口贴近头部），列表在下（条目多时自己滚）。 */
+   双栏：左侧「要贮藏哪些文件」（默认全选），右侧新建区 + 已有贮藏列表（条目多时自己滚）。
+   两侧都各自滚：文件可能上百，贮藏条目也可能很长。 */
 .git-stash-modal {
   display: flex;
   flex-direction: column;
-  width: min(760px, 100%);
+  width: min(880px, 100%);
   height: min(620px, 100%);
   border-radius: 12px;
   background: var(--bg-primary, #fff);
@@ -1655,6 +1811,115 @@
       background: var(--bg-secondary, #f7f7f8);
       font-size: var(--font-size-xs, 11px);
       color: var(--text-secondary, #666);
+    }
+  }
+
+  /* 新建区 + 已有贮藏（右栏） */
+  .git-stash-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* 勾选式标签（「全选」与两个开关共用）—— 挂在弹窗级：写进 `.git-stash-create` 作用域，
+     左栏那个「全选」就掉回默认排版 */
+  .git-stash-opt {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--font-size-xs, 11px);
+    color: var(--text-secondary, #666);
+    cursor: pointer;
+
+    input {
+      margin: 0;
+    }
+  }
+
+  /* 双栏主体：左文件列表（定宽）/ 右侧主区（自适应） */
+  .git-stash-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+  }
+
+  /* 左栏：要贮藏哪些文件 */
+  .git-stash-files {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    width: 260px;
+    min-height: 0;
+    border-right: 1px solid var(--border-color, #e5e5e5);
+
+    .git-stash-files-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--border-color, #e5e5e5);
+      font-size: var(--font-size-xs, 11px);
+      color: var(--text-secondary, #666);
+    }
+
+    .git-stash-files-count {
+      flex: none;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .git-stash-files-list {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding: 4px 6px 8px;
+    }
+  }
+
+  /* 一行 = 文件。整行可点（label）：勾选框只有十几像素，逼用户精确点它没道理 */
+  .git-stash-file {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 4px;
+    border-radius: 4px;
+    font-size: var(--font-size-xs, 11px);
+    color: var(--text-primary, #1a1a1a);
+    cursor: pointer;
+
+    &:hover {
+      background: var(--hover-bg, #f0f0f0);
+    }
+
+    input {
+      flex: none;
+      margin: 0;
+    }
+
+    /* 勾掉的 / 不可勾的（未跟踪且没开 -u）：整行减弱，但**不隐藏** ——
+       隐藏会让人以为「这个文件已经不在改动里了」 */
+    &.is-off,
+    &.is-untracked {
+      color: var(--text-tertiary, #767676);
+    }
+
+    .git-stash-file-name {
+      flex: none;
+      max-width: 55%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .git-stash-file-dir {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: var(--font-size-2xs, 10px);
+      color: var(--text-tertiary, #767676);
     }
   }
 
@@ -1699,19 +1964,6 @@
       align-items: center;
       gap: 14px;
       flex-wrap: wrap;
-    }
-
-    .git-stash-opt {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      font-size: var(--font-size-xs, 11px);
-      color: var(--text-secondary, #666);
-      cursor: pointer;
-
-      input {
-        margin: 0;
-      }
     }
 
     /* 一句「将贮藏什么 / 为什么不能贮藏」：能力说明，不堆形容词 */
@@ -1843,9 +2095,10 @@
   }
 }
 
-/* 贮藏行 / 撤销条里的文字小按钮 —— **顶层规则**：与 `.git-row-btn` 同一口径。
+/* 贮藏行 / 撤销条 / 合并「中止」里的文字小按钮 —— **顶层规则**：与 `.git-row-btn` 同一口径。
    ⚠️ 写进 `.git-stash-row` 作用域，换成撤销条里那颗就掉回浏览器默认按钮样式。 */
-.git-stash-act {
+.git-stash-act,
+.git-merge-act {
   flex: none;
   padding: 2px 8px;
   border: 1px solid var(--border-color, #e5e5e5);

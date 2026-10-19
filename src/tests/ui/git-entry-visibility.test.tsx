@@ -43,7 +43,7 @@ function mount() {
   const host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
-  act(() => root!.render(<GitEntry sessionId={null} />))
+  act(() => root!.render(<GitEntry sessionId={null} onAttachPaths={() => { }} />))
 }
 
 beforeEach(() => {

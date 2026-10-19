@@ -479,6 +479,7 @@ pub fn run() {
             commands::git::git_commit_detail,
             commands::git::git_commit_file_sides,
             commands::git::git_check_ref_format,
+            commands::git::git_merge_state,
             commands::git::git_remotes,
             commands::git::git_remote_test,
             commands::git::git_numstat,
@@ -492,6 +493,8 @@ pub fn run() {
             commands::git::git_branch_switch,
             commands::git::git_branch_delete,
             commands::git::git_branch_rename,
+            commands::git::git_merge,
+            commands::git::git_merge_abort,
             commands::git::git_init,
             // 远程（凭据走 SSH）
             commands::git::git_fetch,

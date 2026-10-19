@@ -7,6 +7,10 @@
  * 选中模式同资源管理器：单击选中、Ctrl 加减、Shift 范围，**双击**才开差异。
  * 行内操作在该行属于选中集时作用于同侧全部（按钮文案带数量）。
  * 只读沙盒下所有写入口禁用（Rust 侧同样会拒，这里是双保险）。
+ *
+ * 变更行“拖到输入框 / 右键引用到输入框” = 把文件挂成对话附件：路径在这里统一换成**绝对路径**
+ *（输入框只认真实路径），并剔除**已删除**的文件（磁盘上已不存在，挂上去只会换来一句
+ *「无法访问该路径」）。两者共用 `attachPaths`，口径只有一份。
  */
 import { useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -15,6 +19,8 @@ import { t, tpl } from '@/ui/i18n'
 import { settingsState } from '@/ui/store'
 import { gitStore } from '@/ui/store/gitStore'
 import { groupChanges, statOf, statTotals } from '@/domain/git'
+import { toAbsolutePath } from '@/utils/common'
+import { showToast } from '@/ui/components/shared/Toast'
 import {
   commit,
   discard,
@@ -37,6 +43,7 @@ import GraphSvg from '@/ui/components/icons/GraphSvg'
 import MoreSvg from '@/ui/components/icons/MoreSvg'
 import GitChangeRow, { type GitRowTarget } from './GitChangeRow'
 import GitBranchMenu from './GitBranchMenu'
+import GitMergeMenu from './GitMergeMenu'
 import GitSyncMenu from './GitSyncMenu'
 import GitDiffModal from './GitDiffModal'
 import GitLogModal from './GitLogModal'
@@ -47,6 +54,8 @@ import VirtualList from './VirtualList'
 
 interface Props {
   onClose: () => void
+  /** 把一批真实路径挂到输入框（聊天页把它接到 `ChatInput.attachPaths`） */
+  onAttachPaths: (paths: string[]) => void
 }
 
 /** 段标题与文件行**分开两个滚动容器**：标题挂在段自己的列表外（固定），只有文件行在 `.git-list` 里滚 ——
@@ -80,21 +89,29 @@ function OutputBlock({
   )
 }
 
-export const GitPanel = observer(function GitPanel({ onClose }: Props) {
+export const GitPanel = observer(function GitPanel({
+  onClose,
+  onAttachPaths,
+}: Props) {
   const [branchMenuOpen, setBranchMenuOpen] = useState(false)
   const [diffTarget, setDiffTarget] = useState<GitRowTarget | null>(null)
   const [logOpen, setLogOpen] = useState(false)
   const [graphOpen, setGraphOpen] = useState(false)
   /** 远程浮层（获取 / 拉取 / 推送 / 测试连接） */
   const [syncMenuOpen, setSyncMenuOpen] = useState(false)
-  /** 贮藏浮层（列表 + 新建）：面板里放不下第三块常驻区域，收进「更多」 */
+  /**
+   * 贮藏浮层（列表 + 新建）：面板里放不下第三块常驻区域，收进「更多」
+   */
   const [stashOpen, setStashOpen] = useState(false)
+  /** 合并浮层（选一个分支并进当前 HEAD） */
+  const [mergeOpen, setMergeOpen] = useState(false)
   /** 选中集（键 = `rowKey`，保持点击先后）；`anchorRef` 是 Shift 范围选择的起点 */
   const [selected, setSelected] = useState<string[]>([])
   const anchorRef = useRef<string | null>(null)
   /** 「修改上一次提交」：开着时提交走 `--amend`（改信息 / 把暂存内容并入上一条） */
   const [amend, setAmend] = useState(false)
-  /** 头部「更多」菜单：同步浮层 / 撤销上次提交 / 修改上一次提交 —— 三者都不常用，常驻会挤掉分支名 */
+  /** 头部「更多」菜单：同步浮层 / 合并浮层 / 贮藏浮层 / 撤销上次提交 / 修改上一次提交 ——
+   * 五项都不常用，常驻会挤掉分支名 */
   const more = useContextMenu()
   const moreBtnRef = useRef<HTMLButtonElement>(null)
 
@@ -166,6 +183,25 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
   }
 
   /**
+   * 引用到输入框：仓库根相对 → 绝对路径。
+   * 已删除的文件剔掉 —— 它们在磁盘上已不存在，输入框那边的 `stat` 只会失败。
+   */
+  function attachPaths(paths: string[]): void {
+    const root = gitStore.repo?.root
+    if (!root || paths.length === 0) return
+    const gone = new Set(
+      (snapshot?.entries ?? [])
+        .filter((row) => row.x === 'D' || row.y === 'D')
+        .map((row) => row.path),
+    )
+    const alive = paths.filter((path) => !gone.has(path))
+    if (alive.length < paths.length) showToast(t('已删除的文件无法引用'))
+    if (alive.length > 0) {
+      onAttachPaths(alive.map((path) => toAbsolutePath(path, root)))
+    }
+  }
+
+  /**
    * 分支浮层开关，分支按钮与「游离 HEAD」徽标共用。
    * ⚠️ 切到远程分支会 detach（`branch === null`），那时只有徽标能打开浮层切回本地。
    */
@@ -204,7 +240,7 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
     more.openAtPoint({ x: rect.right, y: rect.bottom + 4 }, undefined)
   }
 
-  /** 头部菜单项：高频动作仍是分支 / 落差 / 记录 / 图 / 刷新，这里只放不常用的（同步 / 贮藏 / 撤销提交 / amend） */
+  /** 头部菜单项：高频动作仍是分支 / 落差 / 记录 / 图 / 刷新，这里只放不常用的（同步 / 合并 / 贮藏 / 撤销提交 / amend） */
   function moreItems(): ContextMenuItem[] {
     const items: ContextMenuItem[] = [
       {
@@ -218,6 +254,17 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
         },
       },
     ]
+    items.push({
+      key: 'merge',
+      label: t('合并分支…'),
+      // 开浮层是读操作（只读沙盒下也能看分支列表）；真正合并的那一下在浮层里再按只读 / busy 禁用。
+      // 没有提交时合并无从谈起（HEAD 还没诞生）
+      disabled: busy || !head?.oid,
+      onClick: () => {
+        if (!mergeOpen) void refreshBranches()
+        setMergeOpen(true)
+      },
+    })
     items.push({
       key: 'stash',
       label: t('贮藏更改…'),
@@ -347,7 +394,7 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
               onClick={() => void refreshStatus()}>
               <RefreshSvg />
             </button>
-            {/* 更多：同步浮层 / 撤销上次提交 / 修改上一次提交 —— 不常用的动作收进来，
+            {/* 更多：同步 / 合并 / 贮藏 / 撤销上次提交 / 修改上一次提交 —— 不常用的动作收进来，
                 免得把分支名与落差数字挤掉（面板内容宽只有 496px）。 */}
             <button
               ref={moreBtnRef}
@@ -468,6 +515,8 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
                           disabled={disabled}
                           selected={selectedSet.has(key)}
                           batch={paths.length}
+                          dragPaths={paths}
+                          onAttach={attachPaths}
                           onSelect={(mod) => selectRow(key, mod)}
                           onStage={() => void stage(paths)}
                           onUnstage={() => void unstage(paths)}
@@ -555,6 +604,10 @@ export const GitPanel = observer(function GitPanel({ onClose }: Props) {
 
       {stashOpen && (
         <GitStashModal readonly={readonly} onClose={() => setStashOpen(false)} />
+      )}
+
+      {mergeOpen && (
+        <GitMergeMenu disabled={disabled} onClose={() => setMergeOpen(false)} />
       )}
 
       {diffTarget && (

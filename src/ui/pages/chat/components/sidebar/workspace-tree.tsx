@@ -4,6 +4,10 @@
  * 树根 = 当前会话 workspace → 已选目录 → 全局默认。懒加载（展开才 list_directory），虚拟列表只渲染视口行。
  * 搜索：关键词非空时整个工作目录递归搜，扁平结果替代树视图（防抖 250ms、可取消）。
  * 写操作一律走 file-transfer-service 过安全校验。
+ *
+ * 点项（`.` 开头）**不隐藏**：树与搜索都按 includeHidden: true 读盘 —— 工作目录里的 `.env` /
+ * `.gitignore` / `.github` 是要编辑的正文，不是该藏起来的实现细节。搜索只额外剪掉 `.git` 内部
+ * （版本库对象海量，扫一遍纯噪声），点"."开头的**文件**不受影响。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -73,8 +77,12 @@ const SEARCH_DEBOUNCE_MS = 250
 /**
  * 磁盘搜索默认整棵剪掉的目录名（依赖 / 缓存 / 构建产物）：剪枝在 Rust 侧做，不是拿回结果再过滤。
  * 用户在树里展开过的那份不剪；只作用于侧边栏搜索框。
+ *
+ * `.git` 独一个理由：点项本身要能搜到（`.env` / `.gitignore` 命中靠的是文件名，不受剪枝影响），
+ * 但版本库内部是成千上万个对象文件，扫一遍纯属噪声 + 拖慢搜索。
  */
 const SEARCH_SKIP_DIR_NAMES = [
+  '.git',
   'node_modules',
   'bower_components',
   'dist',
@@ -187,7 +195,9 @@ function WorkspaceTree({
       const raw: any[] = await invoke('list_directory', {
         root: path,
         recursive: false,
-        includeHidden: false,
+        // 点项照常显示：`.env` / `.gitignore` / `.github` 都是用户要编辑的真文件，
+        // 藏起来只会让人以为「目录里没有它」（Rust 侧 include_hidden 只跳过 `.` 开头，不做别的过滤）
+        includeHidden: true,
         maxDepth: 1,
         // 非递归模式下 Rust 不会下钻，skipEachDirs 无作用 → 传空
         skipEachDirs: [],
@@ -277,8 +287,8 @@ function WorkspaceTree({
           useRegex: false,
           maxResults: SEARCH_MAX_RESULTS,
           taskId,
-          // 点项整棵跳过：树里本来就不可见
-          includeHidden: false,
+          // 与树同口径：树上看得见的点项，搜索框也要搜得到
+          includeHidden: true,
           // 依赖 / 构建目录整棵剪掉（Rust 侧 filter_entry 不下钻）
           skipDirNames: SEARCH_SKIP_DIR_NAMES,
           // 例外：已在树里展开过的那份忽略目录

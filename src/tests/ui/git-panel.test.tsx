@@ -32,6 +32,7 @@ import {
   loadDiffSides,
   refreshStatus,
   refreshRemotes,
+  refreshBranches,
   refreshStashes,
   renameBranch,
   removeBranch,
@@ -75,6 +76,10 @@ vi.mock('@/services/git-service', () => ({
   applyStash: vi.fn(() => Promise.resolve(true)),
   dropStash: vi.fn(() => Promise.resolve(true)),
   undoDropStash: vi.fn(() => Promise.resolve()),
+  // 合并（merge）：入口同样在「更多」菜单，浮层打开时才取分支列表与合并状态
+  mergeBranch: vi.fn(() => Promise.resolve(true)),
+  abortMerge: vi.fn(() => Promise.resolve(true)),
+  loadMergeState: vi.fn(() => Promise.resolve(false)),
 }))
 
 // 面板的引用链会经 store 桶文件拉到 markdown / code-block → monaco，而 monaco 在 jsdom 里
@@ -119,7 +124,7 @@ function mount() {
   const host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
-  act(() => root!.render(<GitPanel onClose={() => { }} />))
+  act(() => root!.render(<GitPanel onClose={() => { }} onAttachPaths={() => { }} />))
 }
 
 function setStore(entries: GitChangeEntry[]) {
@@ -803,6 +808,18 @@ it('「更多」里有贮藏入口，点开才取列表', async () => {
   expect(document.querySelector('.git-stash-modal')).not.toBeNull()
   // 列表只在浮层打开时取（面板刷新不轮询 stash list）
   expect(refreshStashes).toHaveBeenCalled()
+})
+
+/** 合并入口也在更多菜单里：点开才刷新分支列表（分支名是用户随时会在终端里改的） */
+it('「更多」里有合并入口，点开才刷新分支列表', async () => {
+  setStore([unstagedEntry('a.txt')])
+  mount()
+
+  expect(await openMoreMenu()).toContain('合并分支…')
+  await clickMoreItem('合并分支…')
+
+  expect(refreshBranches).toHaveBeenCalled()
+  expect(document.querySelector('.git-merge-menu')).not.toBeNull()
 })
 
 /** 落差数字是**状态按钮**：它告诉用户「有事」，并把下一步做成同一个控件 */

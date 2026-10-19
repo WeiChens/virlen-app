@@ -1,14 +1,18 @@
 /**
- * GitStashModal — 贮藏（stash）：新建 + 列表（应用 / 应用并删除 / 删除 / 撤销删除）。
+ * GitStashModal — 贮藏（stash）：选文件 + 新建 + 列表（应用 / 应用并删除 / 删除 / 撤销删除）。
  *
- * 五条口径：
+ * 六条口径：
  * 1. **身份用 oid**：`stash@{n}` 是列表位置，外部一次 push / drop 就会整体重编号 —— 界面只传 oid，
  *    selector 的解析由 Rust 在仓库锁内完成（`pop` / `drop` 只认 stash ref，见 `git/stash.rs`）；
  * 2. **能不能贮藏由快照说了算**：无提交 / 有冲突 / 没改动时按钮禁用并写明原因 ——
  *    `git stash push` 在「没东西可贮藏」时退出码是 **0**，不能让用户看到「成功但没有条目」；
  * 3. **未跟踪文件默认不进贮藏**：勾选才走 `-u`（它会把所有未忽略的未跟踪文件写进对象库）；
  * 4. **`--keep-index` 是「留着也存一份」**：已暂存内容仍进贮藏，同时留在索引与工作区 —— 文案写明；
- * 5. **删除可撤销**：`stash store` 能把同一个 oid 放回栈顶，所以删完给一颗「撤销」（本次会话内）。
+ * 5. **删除可撤销**：`stash store` 能把同一个 oid 放回栈顶，所以删完给一颗「撤销」（本次会话内）；
+ * 6. **左侧文件列表决定贮藏范围**（默认全选）：勾掉的路径不传给 git（`stash push -- <路径>`），
+ *    它们的改动留在工作区。状态记「被勾掉的集合」而不是「选中的集合」—— 默认值不用同步，
+ *    快照刷新后新出现的文件自动落进「全选」。
+ *    ⚠️ 空数组在 IPC 层是「全部」，所以「一个都没选」必须在调用前就禁用按钮，不能靠传空。
  *
  * ⚠️ 弹窗 portal 到 body：宿主面板按 DOM 包含判定「点外面关闭」、Esc 监听挂在 document 上 ——
  * 所以 Esc 走**捕获阶段**并 stopPropagation，遮罩类名进 `GitEntry` 的忽略名单。
@@ -18,7 +22,15 @@ import { createPortal } from 'react-dom'
 import { observer } from 'mobx-react-lite'
 import { t, tpl } from '@/ui/i18n'
 import { gitStore } from '@/ui/store/gitStore'
-import { groupChanges, parseStashMessage } from '@/domain/git'
+import FileTypeIcon from '@/ui/components/icons/FileTypeIcon'
+import {
+  baseName,
+  dirName,
+  groupChanges,
+  parseStashMessage,
+  statusLetter,
+} from '@/domain/git'
+import type { GitChangeEntry, GitGroups } from '@/domain/git'
 import { formatCommitTime } from '@/utils/time'
 import {
   applyStash,
@@ -34,6 +46,42 @@ interface Props {
   onClose: () => void
 }
 
+/** 左侧文件行：**按路径去重**（暂存后又改工作区的文件会在两段各出现一次，但它仍是一个文件） */
+interface StashFileRow {
+  path: string
+  orig_path: string | null
+  /** 展示用状态字母：先取已暂存侧的 X，其次未暂存侧的 Y；未跟踪是 `?`（与面板同一口径） */
+  letter: string
+  untracked: boolean
+}
+
+/** 冲突段不进来：它 @ 的写操作由面板自己的分组管，贮藏这边一律先解决冲突 */
+function buildRows(groups: GitGroups): StashFileRow[] {
+  const rows: StashFileRow[] = []
+  const seen = new Set<string>()
+  const push = (entry: GitChangeEntry, side: 'staged' | 'unstaged') => {
+    if (seen.has(entry.path)) return
+    seen.add(entry.path)
+    rows.push({
+      path: entry.path,
+      orig_path: entry.orig_path,
+      letter: statusLetter(entry, side),
+      untracked: false,
+    })
+  }
+  for (const entry of groups.staged) push(entry, 'staged')
+  for (const entry of groups.unstaged) push(entry, 'unstaged')
+  for (const entry of groups.untracked) {
+    rows.push({
+      path: entry.path,
+      orig_path: entry.orig_path,
+      letter: '?',
+      untracked: true,
+    })
+  }
+  return rows
+}
+
 export const GitStashModal = observer(function GitStashModal({
   readonly,
   onClose,
@@ -42,7 +90,10 @@ export const GitStashModal = observer(function GitStashModal({
   const [includeUntracked, setIncludeUntracked] = useState(false)
   const [keepIndex, setKeepIndex] = useState(false)
   const [loading, setLoading] = useState(true)
+  /** 被勾掉的路径（空 = 全选）。见口径 6：记「排除集」才能让默认全选永不过期 */
+  const [excluded, setExcluded] = useState<Set<string>>(() => new Set())
   const msgRef = useRef<HTMLInputElement>(null)
+  const allRef = useRef<HTMLInputElement>(null)
 
   // 打开即取列表：stash list 比 status 贵，面板 / 浮层关着时没有任何地方要展示它
   useEffect(() => {
@@ -74,11 +125,59 @@ export const GitStashModal = observer(function GitStashModal({
   const disabled = readonly || busy
   const hasHead = !!snapshot?.head.oid
   const hasConflicts = groups.conflicts.length > 0
-  /** 已跟踪的改动按**路径**去重（同一个文件可能同时在「暂存的更改」与「更改」两段） */
-  const trackedPaths = new Set(
-    [...groups.staged, ...groups.unstaged].map((entry) => entry.path),
-  )
-  const stashCount = trackedPaths.size + (includeUntracked ? groups.untracked.length : 0)
+
+  const rows = buildRows(groups)
+  /** 可勾选 = 已跟踪的行，加上勾了「包含未跟踪文件」后的未跟踪行 */
+  const selectable = (row: StashFileRow) => !row.untracked || includeUntracked
+  const picked = rows.filter((row) => selectable(row) && !excluded.has(row.path))
+  const selectableCount = rows.filter(selectable).length
+  const unpickedCount = selectableCount - picked.length
+  const allPicked = unpickedCount === 0
+  const somePicked = picked.length > 0 && unpickedCount > 0
+
+  // 部分勾选画成「半选」：`indeterminate` 只能走 DOM 属性，React 没有对应 prop
+  useEffect(() => {
+    if (allRef.current) allRef.current.indeterminate = somePicked
+  }, [somePicked])
+
+  function toggleAll(next: boolean): void {
+    setExcluded((prev) => {
+      const draft = new Set(prev)
+      for (const row of rows) {
+        if (!selectable(row)) continue
+        if (next) draft.delete(row.path)
+        else draft.add(row.path)
+      }
+      return draft
+    })
+  }
+
+  function toggleRow(path: string, next: boolean): void {
+    setExcluded((prev) => {
+      const draft = new Set(prev)
+      if (next) draft.delete(path)
+      else draft.add(path)
+      return draft
+    })
+  }
+
+  /**
+   * 交给 git 的路径。全选时回**空数组**（= 全部，让 git 走最完整的原始语义）；
+   * rename 要把旧路径一起带上，否则旧路径的删除会留在工作区。
+   */
+  function pickedPaths(): string[] {
+    if (unpickedCount === 0) return []
+    const out: string[] = []
+    const seen = new Set<string>()
+    for (const row of picked) {
+      for (const path of row.orig_path ? [row.orig_path, row.path] : [row.path]) {
+        if (seen.has(path)) continue
+        seen.add(path)
+        out.push(path)
+      }
+    }
+    return out
+  }
 
   /** 不能贮藏的原因（空串 = 可以）；文案只说事实，不猜用户想干什么 */
   const blocked = !snapshot
@@ -87,17 +186,21 @@ export const GitStashModal = observer(function GitStashModal({
       ? t('仓库还没有提交，无法贮藏')
       : hasConflicts
         ? t('有未解决的冲突，解决后再贮藏')
-        : stashCount === 0
+        : rows.length === 0
           ? groups.untracked.length > 0
             ? t('只有未跟踪文件：勾选「包含未跟踪文件」后才能贮藏')
             : t('没有可贮藏的改动')
-          : ''
+          : selectableCount === 0
+            ? t('只有未跟踪文件：勾选「包含未跟踪文件」后才能贮藏')
+            : picked.length === 0
+              ? t('左侧没有勾选任何文件')
+              : ''
 
   const canStash = !disabled && blocked === ''
 
   async function submit(): Promise<void> {
     if (!canStash) return
-    const ok = await createStash(message, includeUntracked, keepIndex)
+    const ok = await createStash(message, includeUntracked, keepIndex, pickedPaths())
     if (!ok) return
     setMessage('')
     setIncludeUntracked(false)
@@ -123,140 +226,218 @@ export const GitStashModal = observer(function GitStashModal({
           </button>
         </div>
 
-        <div className="git-stash-create">
-          <div className="git-stash-form">
-            <input
-              ref={msgRef}
-              type="text"
-              className="git-stash-msg"
-              value={message}
-              placeholder={t('贮藏信息（留空则使用 git 自动描述）')}
-              disabled={disabled}
-              onChange={(event) => setMessage(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key !== 'Enter') return
-                event.preventDefault()
-                void submit()
-              }}
-            />
-            <button
-              type="button"
-              className="git-primary-btn"
-              disabled={!canStash}
-              onClick={() => void submit()}>
-              {t('贮藏更改')}
-            </button>
-          </div>
-
-          <div className="git-stash-opts">
-            <label className="git-stash-opt" title={t('未跟踪文件默认不进贮藏')}>
-              <input
-                type="checkbox"
-                checked={includeUntracked}
-                disabled={disabled}
-                onChange={(event) => setIncludeUntracked(event.target.checked)}
-              />
-              {t('包含未跟踪文件')}
-            </label>
-            {/* 没有已暂存内容时 `--keep-index` 没有作用对象，直接禁用（免得勾了看不出区别） */}
-            <label
-              className="git-stash-opt"
-              title={t('已暂存的内容仍会进贮藏，但保留在索引与工作区里')}>
-              <input
-                type="checkbox"
-                checked={keepIndex}
-                disabled={disabled || groups.staged.length === 0}
-                onChange={(event) => setKeepIndex(event.target.checked)}
-              />
-              {t('保留已暂存的内容')}
-            </label>
-          </div>
-
-          <div className={`git-stash-hint${blocked ? ' is-blocked' : ''}`}>
-            {blocked || tpl('将贮藏 $__count__ 个文件的更改', { count: stashCount })}
-            {!blocked && groups.untracked.length > 0 && !includeUntracked && (
-              <span className="git-stash-hint-extra">
-                {tpl('另有 $__count__ 个未跟踪文件会留在工作区', {
-                  count: groups.untracked.length,
+        <div className="git-stash-body">
+          {/* 左：要贮藏哪些文件（默认全选） */}
+          <div className="git-stash-files">
+            <div className="git-stash-files-head">
+              <label className="git-stash-opt" title={t('全选 / 全不选')}>
+                <input
+                  ref={allRef}
+                  type="checkbox"
+                  checked={rows.length > 0 && allPicked}
+                  disabled={disabled || selectableCount === 0}
+                  onChange={(event) => toggleAll(event.target.checked)}
+                />
+                {t('全选')}
+              </label>
+              <span className="git-spacer" />
+              <span className="git-stash-files-count">
+                {tpl('已选 $__done__/$__all__', {
+                  done: picked.length,
+                  all: selectableCount,
                 })}
               </span>
-            )}
-            {!blocked && keepIndex && groups.staged.length > 0 && (
-              <span className="git-stash-hint-extra">
-                {t('已暂存的内容会保留在工作区')}
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="git-stash-list">
-          {loading && gitStore.stashes.length === 0 && (
-            <div className="git-stash-empty">{t('加载中…')}</div>
-          )}
-          {!loading && gitStore.stashes.length === 0 && (
-            <div className="git-stash-empty">{t('没有贮藏')}</div>
-          )}
-          {gitStore.stashes.map((entry) => {
-            const label = parseStashMessage(entry.message)
-            const time = formatCommitTime(entry.time)
-            return (
-              <div className="git-stash-row" key={entry.oid} data-oid={entry.oid}>
-                <div className="git-stash-row-main">
-                  <span className="git-stash-row-title" title={entry.message}>
-                    {label.message || t('（无贮藏信息）')}
-                  </span>
-                  <span className="git-stash-row-meta">
-                    {label.branch && (
-                      <span
-                        className="git-stash-branch"
-                        title={tpl('贮藏时的分支：$__name__', { name: label.branch })}>
-                        {label.branch}
-                      </span>
-                    )}
-                    {label.auto && (
-                      <span
-                        className="git-stash-auto"
-                        title={t('由 git 自动生成的消息（贮藏时没写信息）')}>
-                        {t('自动')}
-                      </span>
-                    )}
-                    <span className="git-stash-time" title={entry.time}>
-                      {time || entry.time}
+            </div>
+            <div className="git-stash-files-list">
+              {rows.length === 0 && (
+                <div className="git-stash-empty">{t('没有变更文件')}</div>
+              )}
+              {rows.map((row) => {
+                const name = baseName(row.path)
+                const on = selectable(row) && !excluded.has(row.path)
+                return (
+                  <label
+                    key={row.path}
+                    className={`git-stash-file${row.untracked ? ' is-untracked' : ''}${
+                      on ? '' : ' is-off'
+                    }`}
+                    title={
+                      row.untracked
+                        ? `${row.path}\n${t('未跟踪文件需先勾选「包含未跟踪文件」')}`
+                        : row.orig_path
+                          ? `${row.orig_path} → ${row.path}`
+                          : row.path
+                    }>
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      disabled={disabled || !selectable(row)}
+                      onChange={(event) => toggleRow(row.path, event.target.checked)}
+                    />
+                    <FileTypeIcon filename={name} className="git-row-icon" />
+                    <span className="git-stash-file-name">{name}</span>
+                    <span className="git-stash-file-dir">
+                      {row.orig_path ?? dirName(row.path)}
                     </span>
-                    <code className="git-stash-oid" title={entry.oid}>
-                      {entry.oid.slice(0, 7)}
-                    </code>
-                  </span>
-                </div>
-                <div className="git-stash-row-actions">
-                  <button
-                    type="button"
-                    className="git-stash-act"
-                    title={t('应用这条贮藏（条目保留）')}
-                    disabled={disabled}
-                    onClick={() => void applyStash(entry.oid, false)}>
-                    {t('应用')}
-                  </button>
-                  <button
-                    type="button"
-                    className="git-stash-act"
-                    title={t('应用这条贮藏并把它从列表里删掉')}
-                    disabled={disabled}
-                    onClick={() => void applyStash(entry.oid, true)}>
-                    {t('应用并删除')}
-                  </button>
-                  <button
-                    type="button"
-                    className="git-stash-act danger"
-                    title={t('删除这条贮藏')}
-                    disabled={disabled}
-                    onClick={() => void dropStash(entry.oid)}>
-                    {t('删除')}
-                  </button>
-                </div>
+                    <span className={`git-row-letter s-${row.letter}`}>
+                      {row.letter}
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* 右：新建 + 已有贮藏 */}
+          <div className="git-stash-main">
+            <div className="git-stash-create">
+              <div className="git-stash-form">
+                <input
+                  ref={msgRef}
+                  type="text"
+                  className="git-stash-msg"
+                  value={message}
+                  placeholder={t('贮藏信息（留空则使用 git 自动描述）')}
+                  disabled={disabled}
+                  onChange={(event) => setMessage(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter') return
+                    event.preventDefault()
+                    void submit()
+                  }}
+                />
+                <button
+                  type="button"
+                  className="git-primary-btn"
+                  disabled={!canStash}
+                  onClick={() => void submit()}>
+                  {t('贮藏更改')}
+                </button>
               </div>
-            )
-          })}
+
+              <div className="git-stash-opts">
+                <label
+                  className="git-stash-opt"
+                  title={t('未跟踪文件默认不进贮藏')}>
+                  <input
+                    type="checkbox"
+                    checked={includeUntracked}
+                    disabled={disabled}
+                    onChange={(event) => setIncludeUntracked(event.target.checked)}
+                  />
+                  {t('包含未跟踪文件')}
+                </label>
+                {/* 没有已暂存内容时 `--keep-index` 没有作用对象，直接禁用（免得勾了看不出区别） */}
+                <label
+                  className="git-stash-opt"
+                  title={t('已暂存的内容仍会进贮藏，但保留在索引与工作区里')}>
+                  <input
+                    type="checkbox"
+                    checked={keepIndex}
+                    disabled={disabled || groups.staged.length === 0}
+                    onChange={(event) => setKeepIndex(event.target.checked)}
+                  />
+                  {t('保留已暂存的内容')}
+                </label>
+              </div>
+
+              <div className={`git-stash-hint${blocked ? ' is-blocked' : ''}`}>
+                {blocked ||
+                  tpl('将贮藏 $__count__ 个文件的更改', { count: picked.length })}
+                {!blocked && unpickedCount > 0 && (
+                  <span className="git-stash-hint-extra">
+                    {tpl('未勾选的 $__count__ 个文件会留在工作区', {
+                      count: unpickedCount,
+                    })}
+                  </span>
+                )}
+                {!blocked && groups.untracked.length > 0 && !includeUntracked && (
+                  <span className="git-stash-hint-extra">
+                    {tpl('另有 $__count__ 个未跟踪文件会留在工作区', {
+                      count: groups.untracked.length,
+                    })}
+                  </span>
+                )}
+                {!blocked && keepIndex && groups.staged.length > 0 && (
+                  <span className="git-stash-hint-extra">
+                    {t('已暂存的内容会保留在工作区')}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="git-stash-list">
+              {loading && gitStore.stashes.length === 0 && (
+                <div className="git-stash-empty">{t('加载中…')}</div>
+              )}
+              {!loading && gitStore.stashes.length === 0 && (
+                <div className="git-stash-empty">{t('没有贮藏')}</div>
+              )}
+              {gitStore.stashes.map((entry) => {
+                const label = parseStashMessage(entry.message)
+                const time = formatCommitTime(entry.time)
+                return (
+                  <div className="git-stash-row" key={entry.oid} data-oid={entry.oid}>
+                    <div className="git-stash-row-main">
+                      <span className="git-stash-row-title" title={entry.message}>
+                        {label.message || t('（无贮藏信息）')}
+                      </span>
+                      <span className="git-stash-row-meta">
+                        {label.branch && (
+                          <span
+                            className="git-stash-branch"
+                            title={tpl('贮藏时的分支：$__name__', {
+                              name: label.branch,
+                            })}>
+                            {label.branch}
+                          </span>
+                        )}
+                        {label.auto && (
+                          <span
+                            className="git-stash-auto"
+                            title={t('由 git 自动生成的消息（贮藏时没写信息）')}>
+                            {t('自动')}
+                          </span>
+                        )}
+                        <span className="git-stash-time" title={entry.time}>
+                          {time || entry.time}
+                        </span>
+                        <code className="git-stash-oid" title={entry.oid}>
+                          {entry.oid.slice(0, 7)}
+                        </code>
+                      </span>
+                    </div>
+                    <div className="git-stash-row-actions">
+                      <button
+                        type="button"
+                        className="git-stash-act"
+                        title={t('应用这条贮藏（条目保留）')}
+                        disabled={disabled}
+                        onClick={() => void applyStash(entry.oid, false)}>
+                        {t('应用')}
+                      </button>
+                      <button
+                        type="button"
+                        className="git-stash-act"
+                        title={t('应用这条贮藏并把它从列表里删掉')}
+                        disabled={disabled}
+                        onClick={() => void applyStash(entry.oid, true)}>
+                        {t('应用并删除')}
+                      </button>
+                      <button
+                        type="button"
+                        className="git-stash-act danger"
+                        title={t('删除这条贮藏')}
+                        disabled={disabled}
+                        onClick={() => void dropStash(entry.oid)}>
+                        {t('删除')}
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
         </div>
 
         {gitStore.lastDropped && (
