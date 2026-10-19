@@ -165,7 +165,41 @@ pub enum DirEntryType {
     LeaveDir,
 }
 
-/// 列出目录内容（递归/非递归），由 Rust 端完成遍历和 skipDir 过滤
+/// 是否为**操作系统标记的隐藏项**（只看属性位，不看 `.` 前缀）。
+///
+/// 三个平台的隐藏机制不同，各取属性语义：
+/// - Windows：`FILE_ATTRIBUTE_HIDDEN` —— `git init` 会给 `.git` 打上隐藏位，`.env` / `.gitignore` 不会；
+/// - macOS：`UF_HIDDEN`（Finder 的「隐藏」勾选）；
+/// - 其他（Linux…）：没有隐藏属性位 → `false`，`. 开头` 只是命名约定，由 `include_hidden` 决定。
+///
+/// ⚠️ 唯一判定依据：`search::walk_dir` 与前端「工作目录」树的可见性都靠它区分
+/// 「点文件（要能编辑）」与「系统隐藏项（如 `.git`）」；不要在别处另写一份判断。
+fn is_hidden_by_attr(meta: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        /// `FILE_ATTRIBUTE_HIDDEN`
+        const HIDDEN: u32 = 0x2;
+        meta.file_attributes() & HIDDEN != 0
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::macos::fs::MetadataExt;
+        /// `UF_HIDDEN`
+        const HIDDEN: u32 = 0x8000;
+        meta.st_flags() & HIDDEN != 0
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = meta;
+        false
+    }
+}
+
+/// 列出目录内容（递归/非递归），由 Rust 端完成遍历和 skipDir 过滤。
+///
+/// `include_hidden` 只放开「`. 开头」这条命名约定（`.env` / `.github`）；系统隐藏属性项
+/// （`.git`）始终不列。
 pub fn list_directory(
     root: &str,
     recursive: bool,
@@ -223,6 +257,13 @@ fn walk_dir(
                 None => continue,
             };
 
+            let meta = entry.metadata().ok();
+
+            // 系统隐藏项（如 `.git`）一律不列：它由 git 自己打隐藏位，不是用户要编辑的正文。
+            if meta.as_ref().is_some_and(is_hidden_by_attr) {
+                continue;
+            }
+
             if !include_hidden && name.starts_with('.') {
                 continue;
             }
@@ -230,11 +271,7 @@ fn walk_dir(
             let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
 
             // 获取文件大小（仅文件类型需要）
-            let file_size = if is_dir {
-                None
-            } else {
-                entry.metadata().ok().map(|m| m.len())
-            };
+            let file_size = if is_dir { None } else { meta.map(|m| m.len()) };
 
             if is_dir && skip_each_dirs.iter().any(|s| s == &name) {
                 entries.push(DirEntry {
@@ -429,6 +466,60 @@ mod tests {
         let all = run(&root, true, &skip, &[]);
         assert_eq!(all.len(), 2);
         assert!(all.iter().any(|p| p.ends_with(".git/needle.txt")));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn list_names(root: &std::path::Path, include_hidden: bool) -> Vec<String> {
+        let flag = AtomicBool::new(false);
+        list_directory(root.to_str().unwrap(), false, include_hidden, 1, &[], &flag)
+            .into_iter()
+            .map(|e| e.name)
+            .collect()
+    }
+
+    /// 树的口径：`include_hidden=true` 时点文件（`.env`）要列出来，不能连它一起藏。
+    #[test]
+    fn list_directory_shows_dot_files_when_include_hidden() {
+        let root = fixture("dotfiles");
+        fs::write(root.join(".env"), "").unwrap();
+
+        assert!(list_names(&root, true).contains(&".env".to_string()));
+        // 老口径（模型工具 / 路径补全）不受影响：false 仍跳过点项
+        assert!(!list_names(&root, false).contains(&".env".to_string()));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 系统隐藏属性项（Windows 上 `git init` 会给 `.git` 打隐藏位）不列 —— 即使 `include_hidden=true`。
+    #[cfg(windows)]
+    #[test]
+    fn list_directory_skips_os_hidden_entries() {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_NORMAL,
+        };
+
+        fn set_hidden(path: &std::path::Path, hidden: bool) {
+            let wide: Vec<u16> = path
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            let attrs = if hidden {
+                FILE_ATTRIBUTE_HIDDEN
+            } else {
+                FILE_ATTRIBUTE_NORMAL
+            };
+            unsafe { SetFileAttributesW(wide.as_ptr(), attrs) };
+        }
+
+        let root = fixture("oshidden");
+        let git = root.join(".git");
+        set_hidden(&git, true);
+
+        assert!(!list_names(&root, true).contains(&".git".to_string()));
+
+        // 复位属性后再删（隐藏位不影响删除，但别给回收站留隐形垃圾）
+        set_hidden(&git, false);
         let _ = fs::remove_dir_all(&root);
     }
 }

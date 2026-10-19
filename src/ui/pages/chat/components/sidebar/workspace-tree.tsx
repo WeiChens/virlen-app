@@ -5,9 +5,9 @@
  * 搜索：关键词非空时整个工作目录递归搜，扁平结果替代树视图（防抖 250ms、可取消）。
  * 写操作一律走 file-transfer-service 过安全校验。
  *
- * 点项（`.` 开头）**不隐藏**：树与搜索都按 includeHidden: true 读盘 —— 工作目录里的 `.env` /
- * `.gitignore` / `.github` 是要编辑的正文，不是该藏起来的实现细节。搜索只额外剪掉 `.git` 内部
- * （版本库对象海量，扫一遍纯噪声），点"."开头的**文件**不受影响。
+ * 点项（`.` 开头）**不隐藏**：树与搜索都按 includeHidden: true 读盘 —— `.env` / `.gitignore` /
+ * `.github` 是要编辑的正文。但**系统隐藏项**（如 `.git`：git 自己打上的隐藏属性）Rust 侧一律不列，
+ * 前端不做第二道过滤。搜索只额外剪掉 `.git` 内部（版本库对象海量，扫一遍纯噪声）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -196,7 +196,8 @@ function WorkspaceTree({
         root: path,
         recursive: false,
         // 点项照常显示：`.env` / `.gitignore` / `.github` 都是用户要编辑的真文件，
-        // 藏起来只会让人以为「目录里没有它」（Rust 侧 include_hidden 只跳过 `.` 开头，不做别的过滤）
+        // 藏起来只会让人以为「目录里没有它」。系统隐藏项（`.git`，靠 Windows 隐藏位 / macOS
+        // UF_HIDDEN 判定）已由 Rust 侧过滤，不依赖这个开关。
         includeHidden: true,
         maxDepth: 1,
         // 非递归模式下 Rust 不会下钻，skipEachDirs 无作用 → 传空
