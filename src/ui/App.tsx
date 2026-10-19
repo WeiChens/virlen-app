@@ -4,6 +4,7 @@ import './styles/theme.scss'
 import { useTheme } from './hooks/useTheme'
 import { useAccentColor } from './hooks/useAccentColor'
 import { useFontSize } from './hooks/useFontSize'
+import { useApplyCodeDisplay } from './hooks/useCodeDisplay'
 import { useLanguage } from './i18n'
 import { settingsState } from '@/ui/store/settingStore'
 import React from 'react'
@@ -17,6 +18,8 @@ function App() {
   useTheme()
   useAccentColor()
   useFontSize()
+  // 代码显示：把主题 / 字号落到 <html data-code-theme> 与一份 --code-* 样式表（DOM 侧消费）
+  useApplyCodeDisplay()
   useLanguage()
 
   // 首次启动且未配置模型 → 显示引导流程

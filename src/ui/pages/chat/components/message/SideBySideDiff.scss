@@ -37,12 +37,12 @@
   justify-content: space-between;
   gap: 8px;
   padding: 6px 12px;
-  /* 与普通 code-block 头部底色一致 */
-  background: #333843;
-  border-bottom: 1px solid #282c34;
+  /* 与 code-block 头部同一套令牌：代码主题换肤时文件头也跟着变（以前写死 #333843） */
+  background: var(--code-header-bg, #333843);
+  border-bottom: 1px solid var(--code-body-bg, #282c34);
   font-size: var(--font-size-sm);
   font-weight: 600;
-  color: #abb2bf;
+  color: var(--code-header-color, #abb2bf);
 
   .diff-header-name {
     flex: 1;
@@ -50,7 +50,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: #d7dae0;
+    color: var(--code-header-color, #d7dae0);
   }
 
   .diff-actions {
@@ -67,7 +67,8 @@
       height: 26px;
       border: none;
       border-radius: 4px;
-      background: rgba(255, 255, 255, 0.08);
+      /* 相对头部文字色的透明层：深 / 浅代码主题下都读得出“有个按钮” */
+      background: color-mix(in srgb, var(--code-header-color) 12%, transparent);
       color: var(--code-header-color, #abb2bf);
       cursor: pointer;
       transition: background 0.15s;
@@ -79,8 +80,7 @@
       }
 
       &:hover {
-        background: rgba(255, 255, 255, 0.18);
-        color: #fff;
+        background: color-mix(in srgb, var(--code-header-color) 24%, transparent);
       }
     }
   }
@@ -100,7 +100,8 @@
   top: 0;
   /* 盖住下面滚过去的代码行与行号 */
   z-index: 2;
-  border-bottom: 1px solid #181a1f;
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--code-body-color) 20%, var(--code-body-bg));
 }
 
 /* 标题自己粘左边缘（包含块是它所在的列头）：横向滚到这一栏时不会被推出视野 */
@@ -113,14 +114,16 @@
   z-index: 1;
 }
 
+/* ⚠️ 列头配色只许走 --diff-*-header-*（由代码主题注入）：这四个值以前写死在这里，
+   后果是「代码区切了浅色主题、列头还是深色」。 */
 .diff-col-header--old {
-  background: #3a2020;
-  color: #f38ba8;
+  background: var(--diff-old-header-bg, #3a2020);
+  color: var(--diff-old-header-color, #f38ba8);
 }
 
 .diff-col-header--new {
-  background: #1a3a1a;
-  color: #a6e3a1;
+  background: var(--diff-new-header-bg, #1a3a1a);
+  color: var(--diff-new-header-color, #a6e3a1);
 }
 
 .diff-col-range {
@@ -356,7 +359,8 @@
   bottom: 0;
   /* 与 .code-block-fullscreen-layer 同层级：高于聊天区内部（100~210），低于 Modal(800) */
   z-index: 500;
-  background: #282c34;
+  /* 跟代码主题：浮层铺满整块内容区，写死深色会让浅色主题下这一层像盖了块黑布 */
+  background: var(--code-body-bg, #282c34);
   display: flex;
 
   /* 全屏态：去掉边框/圆角直接铺满；文件头固定，滚动交给两栏（填满剩余高度） */

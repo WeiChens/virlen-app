@@ -22,7 +22,9 @@ import CodePreview, {
 import './code-block.scss'
 import { openPath } from '@tauri-apps/plugin-opener'
 import { resolve } from '@tauri-apps/api/path'
-import { chatState, sessionStore, settingsState } from '@/ui/store'
+import { chatState, sessionStore } from '@/ui/store'
+import { useCodeDisplay } from '@/ui/hooks/useCodeDisplay'
+import { codeLineHeightPx } from '@/domain/code-display'
 import { t } from '@/ui/i18n'
 import { useAutoCenter } from '@/ui/hooks/useAutoCenter'
 import ContextMenu, {
@@ -214,14 +216,12 @@ function isValidPath(str: string): boolean {
 
 // Monaco 代码预览
 
-/** 代码字号档位，比 UI 正文 --font-size-md 大 1~3px */
-const CODE_FONT_PX: Record<'small' | 'medium' | 'large', number> = {
-  small: 12,
-  medium: 13,
-  large: 14,
-}
-
-/** 读 CSS 变量 --font-size-md（行内代码用） */
+/**
+ * 读 CSS 变量 --font-size-md（**行内代码**用）。
+ *
+ * 行内代码嵌在正文里，跟的是界面字号；代码块（block）跟的是独立的「代码显示」字号，
+ * 两者不要混 —— 否则用户只想把代码调大时，正文里的 `inline code` 也跟着变。
+ */
 function getUiMdFontPx(): number {
   if (typeof document === 'undefined') return 13
   const val = getComputedStyle(document.documentElement)
@@ -229,19 +229,6 @@ function getUiMdFontPx(): number {
     .trim()
   const parsed = parseInt(val, 10)
   return isNaN(parsed) ? 13 : parsed
-}
-
-/** 代码块默认字号：读全局字体大小设置（observer 包裹后改动即时生效） */
-function getDefaultCodeFontSize(): number {
-  const level = settingsState.value.fontSize ?? 'medium'
-  return CODE_FONT_PX[level] ?? CODE_FONT_PX.medium
-}
-
-/** 字号：一律取当前档位值 */
-function resolveCodeFontPx(explicit?: number): number {
-  const base = getDefaultCodeFontSize()
-  if (explicit == null || explicit <= 0) return base
-  return base
 }
 
 /**
@@ -320,11 +307,15 @@ const LARGE_CODE_LIMIT = 100 * 1000
 /**
  * 用 CodePreview(Monaco) 渲染代码正文。高度按行数算，纵向滚动交给外层，
  * Monaco 自身不溢出（配 alwaysConsumeMouseWheel=false 才不会吞滚轮）。
+ *
+ * ⚠️ lineHeightPx 由调用方从同一份解析结果传入（不要在这里再乘一次倍率）：
+ *    容器高度是按它算的，与 Monaco 的 lineHeight 必须同一个数。
  */
 function MonacoCodeView({
   language,
   code,
   fontSize,
+  lineHeightPx,
   showLineNumbers,
   startLineNumber,
   onSelectionChange,
@@ -332,26 +323,24 @@ function MonacoCodeView({
 }: {
   language?: string
   code: string
-  fontSize?: number
+  fontSize: number
+  lineHeightPx: number
   showLineNumbers?: boolean
   startLineNumber?: number
   onSelectionChange?: (selectedText: string) => void
   onApiReady?: (api: CodePreviewApi | null) => void
 }) {
-  const fontPx = resolveCodeFontPx(fontSize)
-  const lineH = Math.max(16, Math.round(fontPx * 1.5))
   const lineCount = code ? code.split('\n').length : 1
-  const height = Math.max(lineH + 16, 5 + (lineCount + 1) * lineH)
+  const height = Math.max(lineHeightPx + 16, 5 + (lineCount + 1) * lineHeightPx)
 
   return (
     <CodePreview
       code={code}
       language={toMonacoLang(language)}
-      theme="virlen-dark"
       height={height}
       showLineNumbers={showLineNumbers}
       startLineNumber={startLineNumber}
-      fontSize={fontPx}
+      fontSize={fontSize}
       onSelectionChange={onSelectionChange}
       onApiReady={onApiReady}
     />
@@ -393,7 +382,7 @@ export interface CodeBlockProps extends HTMLAttributes<HTMLElement> {
   maxHeight?: number | string
   /** 代码块宽度 */
   width?: number | string
-  /** 字体大小（px）；当前按设置档位取值 */
+  /** 字体大小（px）；不传则用「设置 → 代码显示」的字号 */
   fontSize?: number
   /** 文件名，用于推断代码语言 */
   fileName?: string
@@ -426,7 +415,7 @@ function CodeBlock({
   fileName,
   fileNameRender,
   contentKey,
-  showLineNumbers = true,
+  showLineNumbers,
   startLineNumber = 1,
   streaming,
   actions = [] as Action[],
@@ -435,6 +424,10 @@ function CodeBlock({
   ...props
 }: CodeBlockProps) {
   // 以下 hooks 必须在提前 return 之前：行内 / 块状共用同一 fiber，少调一个就 React #300
+  /** 代码显示设置（字号 / 行高 / 字族 / 主题）：显式传 fontSize 时以 props 为准 */
+  const display = useCodeDisplay()
+  const fontPx = fontSize && fontSize > 0 ? fontSize : display.fontSize
+  const lineHeightPx = codeLineHeightPx(fontPx, display.lineHeight)
   const [copied, setCopied] = useState(false)
   // 全屏态：同理
   const [fullscreen, setFullscreen] = useState(false)
@@ -487,6 +480,9 @@ function CodeBlock({
       showLineNumbers = true
     }
   }
+  /* fence 里的 `showLineNumbers` 在 hooks 之后才解析出来，所以「最终值」放在这里：
+     props 显式传了就以 props 为准，否则跟设置走 */
+  const withLineNumbers = showLineNumbers ?? display.showLineNumbers
   const code = String(children).replace(/\n$/, '')
 
   // 行内代码
@@ -495,7 +491,7 @@ function CodeBlock({
     return (
       <code
         className={`inline-code${isPath ? ' clickable' : ''}`}
-        style={{ fontSize: `${fontSize || getUiMdFontPx()}px` }}
+        style={{ fontSize: `${getUiMdFontPx()}px` }}
         {...props}
         onClick={isPath ? () => tryOpen(code) : undefined}>
         {children}
@@ -612,16 +608,17 @@ function CodeBlock({
                 else preNormalRef.current = el
               }}
               className="code-fallback"
-              style={{ fontSize: `${resolveCodeFontPx(fontSize)}px` }}>
+              style={{ fontSize: `${fontPx}px`, lineHeight: display.lineHeight }}>
               <code>{code}</code>
             </pre>
           </div>
         ) : (
           <MonacoCodeView
-            fontSize={fontSize}
+            fontSize={fontPx}
+            lineHeightPx={lineHeightPx}
             language={language}
             code={code}
-            showLineNumbers={showLineNumbers}
+            showLineNumbers={withLineNumbers}
             startLineNumber={startLineNumber}
             onSelectionChange={(text) => {
               monacoSelectionRef.current = text

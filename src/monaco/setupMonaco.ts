@@ -7,6 +7,11 @@
  */
 import { loader } from '@monaco-editor/react'
 import * as monaco from 'monaco-editor/editor/editor.api.js'
+import {
+  CODE_THEMES,
+  DEFAULT_CODE_THEME_ID,
+  buildMonacoThemeData,
+} from '@/domain/code-display'
 
 /**
  * codicon 图标字体 —— 精简构建必须自己引，否则界面上全是豆腐块。
@@ -172,109 +177,21 @@ monaco.languages.register({ id: 'diff', extensions: ['.diff', '.patch'], aliases
 monaco.languages.setMonarchTokensProvider('diff', diffLanguage)
 monaco.languages.setLanguageConfiguration('diff', diffConf)
 
-// ── One Dark 主题（背景 #282c34 / 行号 #495162）──
-export const virlenDarkTheme: monaco.editor.IStandaloneThemeData = {
-  base: 'vs-dark',
-  inherit: true,
-  rules: [
-    { token: '', foreground: 'abb2bf', background: '282c34' },
-    // 注释用 One Dark Pro 的 #7f848e（原版更暗）：在改动行的绿 / 红底色上只剩 1.3~2.5:1，
-    // 等于看不见 —— 这条对比度由 src/tests/ui/monaco-diff-theme.test.ts 守住。
-    { token: 'comment', foreground: '7f848e', fontStyle: 'italic' },
-    { token: 'string', foreground: '98c379' },
-    { token: 'string.escape', foreground: '98c379' },
-    { token: 'regexp', foreground: '98c379' },
-    { token: 'number', foreground: 'd19a66' },
-    { token: 'keyword', foreground: 'c678dd' },
-    { token: 'keyword.control', foreground: 'c678dd' },
-    { token: 'keyword.operator', foreground: '56b6c2' },
-    { token: 'operator', foreground: '56b6c2' },
-    { token: 'delimiter', foreground: 'abb2bf' },
-    { token: 'delimiter.bracket', foreground: 'abb2bf' },
-    { token: 'delimiter.curly', foreground: 'abb2bf' },
-    { token: 'delimiter.square', foreground: 'abb2bf' },
-    { token: 'delimiter.parenthesis', foreground: 'abb2bf' },
-    { token: 'punctuation', foreground: 'abb2bf' },
-    { token: 'punctuation.definition', foreground: 'abb2bf' },
-    { token: 'type', foreground: 'e5c07b' },
-    { token: 'type.identifier', foreground: 'e5c07b' },
-    { token: 'class', foreground: 'e5c07b' },
-    { token: 'class.name', foreground: 'e5c07b' },
-    { token: 'function', foreground: '61afef' },
-    { token: 'entity.name.function', foreground: '61afef' },
-    { token: 'entity.name.type', foreground: 'e5c07b' },
-    { token: 'tag', foreground: 'e06c75' },
-    { token: 'attribute.name', foreground: '98c379' },
-    { token: 'attribute.value', foreground: '61afef' },
-    { token: 'variable', foreground: 'e06c75' },
-    { token: 'variable.name', foreground: 'e06c75' },
-    { token: 'constant', foreground: 'd19a66' },
-    { token: 'constant.language', foreground: 'd19a66' },
-    { token: 'parameter', foreground: 'abb2bf' },
-    { token: 'property', foreground: 'e06c75' },
-    { token: 'meta', foreground: 'abb2bf' },
-    { token: 'annotation', foreground: 'e5c07b' },
-    { token: 'string.key.json', foreground: 'e06c75' },
-    { token: 'diff.header', foreground: '61afef' },
-    { token: 'diff.hunk', foreground: '56b6c2' },
-    { token: 'diff.inserted', foreground: '98c379' },
-    { token: 'diff.deleted', foreground: 'e06c75' },
-    { token: 'diff.context', foreground: 'abb2bf' },
-  ],
-  colors: {
-    'editor.background': '#282c34',
-    'editor.foreground': '#abb2bf',
-    'editorLineNumber.foreground': '#495162',
-    'editorLineNumber.activeForeground': '#c8ccd4',
-    'editorGutter.background': '#21252b',
-    'editorCursor.foreground': '#528bff',
-    'editor.selectionBackground': '#3e4451',
-    'editor.inactiveSelectionBackground': '#3e445166',
-    'editor.lineHighlightBackground': '#2c313a',
-    'editorIndentGuide.background1': '#2c313a',
-    'editorIndentGuide.activeBackground1': '#3a3f4b',
-    'editorWhitespace.foreground': '#4b5263',
-    'editorWidget.background': '#21252b',
-    'editorWidget.border': '#181a1f',
-    'scrollbarSlider.background': '#4b526366',
-    'scrollbarSlider.hoverBackground': '#5a6274aa',
-    'scrollbarSlider.activeBackground': '#6a7286aa',
-    'scrollbar.shadow': '#00000000',
-    'minimap.background': '#21252b',
-    'editorOverviewRuler.border': '#00000000',
-    'focusBorder': '#00000000',
-    // 片段代码常有多余的右括号，保持与普通文本同色，避免「红色报错感」
-    'editorBracketHighlight.unexpectedBracket.foreground': '#abb2bf',
-    'editorBracketHighlight.foreground1': '#abb2bf',
-    'editorBracketHighlight.foreground2': '#abb2bf',
-    'editorBracketHighlight.foreground3': '#abb2bf',
-    'editorBracketHighlight.foreground4': '#abb2bf',
-    'editorBracketHighlight.foreground5': '#abb2bf',
-    'editorBracketHighlight.foreground6': '#abb2bf',
-    'editorBracketHighlight.background1': '#00000000',
-    'editorBracketHighlight.background2': '#00000000',
-    'editorBracketHighlight.background3': '#00000000',
-    'editorBracketHighlight.background4': '#00000000',
-    'editorBracketHighlight.background5': '#00000000',
-    'editorBracketHighlight.background6': '#00000000',
-
-    // 差异配色：与 DOM 版（SideBySideDiff.scss / theme.scss 的 --diff-*）同一套色阶。
-    //
-    // ⚠️ 六个值都是半透明（A≈50%），不是笔误：Monaco 把选区画在改动底色下面，不透明的底色会把
-    // 选区整个盖掉（「在改动行里选中文本看不到效果」）。半透明让两层叠着走。
-    // 源色按「合成后仍等于设计色」反推，改底色时要一起重算 —— monaco-diff-theme 用例钉住了这条不变式。
-    'diffEditor.removedLineBackground': '#2c000080', // 合成后 ≈ #2a1515
-    'diffEditor.insertedLineBackground': '#02280080', // 合成后 ≈ #152a15
-    'diffEditor.removedTextBackground': '#8e373280', // 合成后 ≈ #5c2626
-    'diffEditor.insertedTextBackground': '#23502b80', // 合成后 ≈ #1c3d20
-    'diffEditorGutter.removedLineBackground': '#531b1580', // 合成后 ≈ #3a2020
-    'diffEditorGutter.insertedLineBackground': '#1f4f1580', // 合成后 ≈ #203a20
-    'diffEditor.border': '#181a1f',
-  },
+// ── 代码主题（One Dark / One Light / GitHub / Monokai / Solarized）──
+//
+// ⚠️ 唯一色源在 src/domain/code-display/themes.ts：本文件只负责把每个调色板注册进 Monaco。
+//    加主题 = 往那张表里加一项，这里不用动；组件也禁止再写死主题名（见 code-theme-contract 用例）。
+for (const [themeId, palette] of Object.entries(CODE_THEMES)) {
+  monaco.editor.defineTheme(themeId, buildMonacoThemeData(palette))
 }
 
-// 注册 One Dark 主题（HMR 重复执行 defineTheme 也会安全覆盖，无需判重）
-monaco.editor.defineTheme('virlen-dark', virlenDarkTheme)
+/**
+ * 默认主题数据（兼容别名）。
+ * 仍有调用点按名字取 rules（SideBySideDiff 的逐 token 上色），故保留导出。
+ */
+export const virlenDarkTheme = buildMonacoThemeData(
+  CODE_THEMES[DEFAULT_CODE_THEME_ID],
+)
 
 // ── 通用 editor worker ──
 // diff 编辑器算差异走 editorWorkerService.computeDiff；不配这一段 monaco 会静默回退主线程，

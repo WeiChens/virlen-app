@@ -16,8 +16,13 @@ import type * as MonacoNs from 'monaco-editor'
 import type { CSSProperties } from 'react'
 import { useEffect, useRef } from 'react'
 
-// 必须先引入：精简版 monaco + 语言高亮注册 + One Dark 主题
+// 必须先引入：精简版 monaco + 语言高亮注册 + 代码主题注册（色源在 domain/code-display）
 import '@/monaco/setupMonaco'
+import { useCodeDisplay } from '@/ui/hooks/useCodeDisplay'
+import {
+  codeLineHeightPx,
+  type ResolvedCodeDisplay,
+} from '@/domain/code-display'
 import './code-preview.scss'
 
 /**
@@ -46,7 +51,10 @@ export interface CodePreviewProps {
   language?: string
   /** 预览高度（px 或 CSS 字符串）。默认 '100%'，由外部容器决定 */
   height?: number | string
-  /** Monaco 主题：'virlen-dark'（默认） | 'vs-dark' | 'light' | 'hc-black' */
+  /**
+   * 显式指定 Monaco 主题 id；不传则用「设置 → 代码显示」里的当前主题。
+   * 只在确实需要固定外观的特殊场景传值（普通调用点一律跟随设置）。
+   */
   theme?: string
   /** 是否显示小地图（默认 false，预览更干净） */
   showMinimap?: boolean
@@ -54,9 +62,9 @@ export interface CodePreviewProps {
   showLineNumbers?: boolean
   /** 起始行号（默认 1）。行号按 startLineNumber + i - 1 显示 */
   startLineNumber?: number
-  /** 字体大小（px，默认 15） */
+  /** 字体大小（px，默认取「代码显示」设置） */
   fontSize?: number
-  /** 代码字体（默认 Consolas） */
+  /** 完整 font stack（默认取「代码显示」设置；传值就得是整串，不只是字体名） */
   fontFamily?: string
   /** 样式覆盖用 class */
   className?: string
@@ -74,19 +82,23 @@ export interface CodePreviewProps {
   onApiReady?: (api: CodePreviewApi | null) => void
 }
 
-/** 预览固定选项：只读 + 关闭一切“编辑/输入”能力 */
+/**
+ * 预览固定选项：只读 + 关闭一切“编辑/输入”能力。
+ * 字号 / 字族 / 行高 / 连字 / 行号来自解析后的代码显示设置（props 显式传值时优先）。
+ */
 function buildPreviewOptions(
   props: CodePreviewProps,
+  display: ResolvedCodeDisplay,
 ): MonacoNs.editor.IStandaloneEditorConstructionOptions {
   const {
     showMinimap = false,
-    showLineNumbers = true,
+    showLineNumbers = display.showLineNumbers,
     startLineNumber = 1,
-    fontSize = 15,
-    fontFamily = 'Consolas',
+    fontSize = display.fontSize,
+    fontFamily = display.fontFamily,
   } = props
 
-  const lineHeight = Math.max(16, Math.round(fontSize * 1.5))
+  const lineHeight = codeLineHeightPx(fontSize, display.lineHeight)
 
   return {
     // ── 只读 / 无输入 ──
@@ -121,8 +133,8 @@ function buildPreviewOptions(
     // 那段由 CSS 处理，见 code-preview.scss。
     lineDecorationsWidth: showLineNumbers ? GUTTER_TO_CONTENT_GAP : GUTTER_INNER_PAD,
     fontSize,
-    fontFamily: `${fontFamily}, 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', Consolas, 'Courier New', monospace`,
-    fontLigatures: false,
+    fontFamily,
+    fontLigatures: display.ligatures,
     lineHeight,
     renderLineHighlight: 'none',
     renderWhitespace: 'none',
@@ -151,10 +163,12 @@ function buildPreviewOptions(
 }
 
 export default function CodePreview(props: CodePreviewProps) {
+  // 主题 / 字号 / 字族 / 行高 / 连字 / 行号统一从「代码显示」设置解析（props 显式传值时优先）
+  const display = useCodeDisplay()
   const {
     code,
     language,
-    theme = 'virlen-dark',
+    theme = display.themeId,
     height = '100%',
     className = '',
   } = props
@@ -202,7 +216,7 @@ export default function CodePreview(props: CodePreviewProps) {
       <div
         className="code-preview-measure"
         aria-hidden="true"
-        style={{ fontSize: props.fontSize ?? 15 }}>
+        style={{ fontSize: props.fontSize ?? display.fontSize }}>
         {code}
       </div>
       <Editor
@@ -212,7 +226,7 @@ export default function CodePreview(props: CodePreviewProps) {
         value={code}
         theme={theme}
         onMount={handleMount}
-        options={buildPreviewOptions(props)}
+        options={buildPreviewOptions(props, display)}
       />
     </div>
   )

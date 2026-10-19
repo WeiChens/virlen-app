@@ -7,9 +7,14 @@
  * 注意：
  * - 两栏各占一半，关掉分栏拖拽，否则列头与正文错位；
  * - 打开就落到第一处改动，否则满屏未改动行；
- * - 右键菜单自己画（Monaco 的会吃掉 React 的 onContextMenu）。
+ * - 右键菜单自己画（Monaco 的会吃掉 React 的 onContextMenu）；
+ * - **只有画文件头的形态（聊天里的 `edit_file`）才有内置全屏**：Monaco 实例不能搬家
+ *   （换容器 = 重建），全屏是**再建一个实例**挂在 body 上，原位那份照常留着 ——
+ *   卸载它会让虚拟列表条目变矮、锚点跳动（与 `CodeBlock` / `SideBySideDiff` 同口径）。
+ *   git 弹窗不画文件头，它自己就是放大形态（另有自己的放大开关），故不提供这个按钮。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { DiffEditor, Editor } from '@monaco-editor/react'
 import type * as MonacoNs from 'monaco-editor'
 import { t } from '@/ui/i18n'
@@ -20,8 +25,16 @@ import ContextMenu, {
   type ContextMenuItem,
 } from '@/ui/components/shared/ContextMenu'
 import { useAutoCenter } from '@/ui/hooks/useAutoCenter'
+import { useCodeDisplay } from '@/ui/hooks/useCodeDisplay'
+import {
+  DEFAULT_CODE_DISPLAY_SETTINGS,
+  codeLineHeightPx,
+  type ResolvedCodeDisplay,
+} from '@/domain/code-display'
 import { diffLanguageFromName, type DiffSide } from './SideBySideDiff'
 import type { Action } from './code-block'
+import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
+import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
 import '@/monaco/setupMonaco'
 // 共享的「差异外壳」样式（.diff-header* / .diff-col-header*）还在 SideBySideDiff.scss，必须自己引，
 // 否则列头与文件头会掉回浏览器默认样式。
@@ -33,29 +46,24 @@ function lineCount(text: string): number {
   return text === '' ? 1 : text.split('\n').length
 }
 
-/** 正文与界面字号对齐：只在挂载时量一次（弹窗短生命周期，不适合跟随热变更）。 */
-function initialFontSize(): number {
-  const raw = getComputedStyle(document.documentElement).getPropertyValue(
-    '--font-size-sm',
-  )
-  const size = Number.parseFloat(raw)
-  return Number.isFinite(size) && size > 0 ? size : 12
-}
-
-/** 行高倍率 1.55，与 .diff-side-by-side 的 --diff-line-height 一致。 */
-function lineHeightOf(fontSize: number): number {
-  return Math.round(fontSize * 1.55)
-}
-
 /**
  * autoHeight 的高度 = 行数 × 行高 + 上下 padding。调用方取两侧行数较多的那一边（少算一行会顶出滚动区）。
+ *
+ * ⚠️ 行高必须走 codeLineHeightPx（与 Monaco 的 `lineHeight` 同一个函数）：两处各算一遍的话，
+ *    设置里一调行高，算出来的格子高度就与真实排版对不上，末尾几行被裁掉。
  */
-export function monacoDiffHeight(lines: number, fontSize: number): number {
-  return lines * lineHeightOf(fontSize) + 12
+export function monacoDiffHeight(
+  lines: number,
+  fontSize: number,
+  lineHeight: number = DEFAULT_CODE_DISPLAY_SETTINGS.codeLineHeight,
+): number {
+  return lines * codeLineHeightPx(fontSize, lineHeight) + 12
 }
 
 /** 两种形态共用的只读预览选项（无语言服务，悬浮 / 补全 / 跳转一律关掉）。 */
-function baseEditorOptions(fontSize: number): MonacoNs.editor.IEditorOptions {
+function baseEditorOptions(
+  display: ResolvedCodeDisplay,
+): MonacoNs.editor.IEditorOptions {
   return {
     readOnly: true,
     // 长行横向滚动（与 DOM 版同口径：折行会把超长行挤成多行）
@@ -77,10 +85,10 @@ function baseEditorOptions(fontSize: number): MonacoNs.editor.IEditorOptions {
     // 右键菜单自己画：Monaco 那份是英文，还会吃掉 React 的 onContextMenu
     contextmenu: false,
 
-    fontSize,
-    lineHeight: lineHeightOf(fontSize),
-    fontFamily:
-      "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', Consolas, 'Courier New', monospace",
+    fontSize: display.fontSize,
+    lineHeight: display.lineHeightPx,
+    fontFamily: display.fontFamily,
+    fontLigatures: display.ligatures,
     padding: { top: 6, bottom: 6 },
     scrollbar: {
       vertical: 'auto',
@@ -95,18 +103,8 @@ function baseEditorOptions(fontSize: number): MonacoNs.editor.IEditorOptions {
   }
 }
 
-export function MonacoDiffView({
-  oldText,
-  newText,
-  fileName,
-  singleSide,
-  autoCenter,
-  showHeader,
-  actions,
-  autoHeight,
-  lineNumbers,
-  colHeaderNote,
-}: {
+/** `MonacoDiffView` 的全部入参（原位与全屏两份实例共用同一份）。 */
+type MonacoDiffViewProps = {
   /** 旧侧全文（Rust 已归一化成 LF） */
   oldText: string
   /** 新侧全文（同上） */
@@ -123,6 +121,7 @@ export function MonacoDiffView({
   actions?: Action[]
   /**
    * 高度按行数算（上限 --mono-diff-max-h = 450px）；不传 = 铺满父元素高度（git 弹窗）。
+   * 全屏那份不吃这一档：它铺满整块浮层。
    */
   autoHeight?: boolean
   /**
@@ -133,11 +132,41 @@ export function MonacoDiffView({
    * 列头右侧说明（代替默认 Ln 1–N）：undefined = 默认，null = 不显示。
    */
   colHeaderNote?: Partial<Record<DiffSide, React.ReactNode>>
-}) {
-  const [fontSize] = useState(initialFontSize)
+}
 
-  /** 展开即居中的根节点 ref（autoCenter 不传时 hook 内部早退） */
-  const rootRef = useAutoCenter(!!autoCenter)
+/**
+ * 正文（原位 / 全屏各一份实例）。
+ * ⚠️ refs（差异编辑器、单栏编辑器、装饰集合、行号映射）必须留在这一层：
+ * 提上去共用一份的话，全屏那份后挂载会把原位那份的引用顶掉，右键菜单与定位就作用到看不见的实例上。
+ */
+function DiffContent({
+  oldText,
+  newText,
+  fileName,
+  singleSide,
+  autoCenter,
+  showHeader,
+  actions,
+  autoHeight,
+  lineNumbers,
+  colHeaderNote,
+  isFull,
+  fullscreen,
+  onToggleFullscreen,
+}: MonacoDiffViewProps & {
+  /** 是否渲染在全屏浮层里（决定类名与高度口径：浮层里不吃 autoHeight 的封顶） */
+  isFull: boolean
+  /** 当前是否已处于全屏（只用来切按钮图标 / 提示；原位那份也读同一个值） */
+  fullscreen: boolean
+  onToggleFullscreen: () => void
+}) {
+  const display = useCodeDisplay()
+  const fontSize = display.fontSize
+  /** 浮层里高度由浮层决定，不许再按行数算 */
+  const isAutoHeight = !!autoHeight && !isFull
+
+  /** 展开即居中的根节点 ref（autoCenter 不传时 hook 内部早退；全屏那份不抢滚列表） */
+  const rootRef = useAutoCenter(!!autoCenter && !isFull)
 
   /** 差异编辑器实例：只为「打开 / 换文件就落到第一处改动」 */
   const diffRef = useRef<MonacoNs.editor.IStandaloneDiffEditor | null>(null)
@@ -165,7 +194,7 @@ export function MonacoDiffView({
   /** 把行号映射装到两栏（各栏各有自己的行号） */
   const applyLineNumbers = useCallback(
     (editor: MonacoNs.editor.IStandaloneDiffEditor): void => {
-      const fallback = 'on' as const
+      const fallback = display.showLineNumbers ? ('on' as const) : ('off' as const)
       editor.getOriginalEditor().updateOptions({
         lineNumbers: hasLineNumbers ? stableLineNumbers.old : fallback,
       })
@@ -173,7 +202,7 @@ export function MonacoDiffView({
         lineNumbers: hasLineNumbers ? stableLineNumbers.new : fallback,
       })
     },
-    [hasLineNumbers, stableLineNumbers],
+    [hasLineNumbers, stableLineNumbers, display.showLineNumbers],
   )
 
   useEffect(() => {
@@ -232,7 +261,7 @@ export function MonacoDiffView({
   /** 差异视图选项：两栏恒等宽 + 只读。 */
   const diffOptions = useMemo(
     (): MonacoNs.editor.IDiffEditorConstructionOptions => ({
-      ...baseEditorOptions(fontSize),
+      ...baseEditorOptions(display),
       // 「旧侧能不能改」是独立开关，只读视图要一起关
       originalEditable: false,
       // 两栏恒等宽：关掉分栏拖拽，列头才不会与下面两栏错位
@@ -255,28 +284,33 @@ export function MonacoDiffView({
       ignoreTrimWhitespace: false,
       diffWordWrap: 'off',
     }),
-    [fontSize],
+    // display 一变（字号 / 字族 / 行高 / 连字）就要重算：局部依赖 fontSize 会漏掉只改连字的情况
+    [display],
   )
 
   /** 单栏视图选项：只有一份内容，对比专属开关一概不传。 */
   const singleOptions = useMemo(
     (): MonacoNs.editor.IStandaloneEditorConstructionOptions => ({
-      ...baseEditorOptions(fontSize),
+      ...baseEditorOptions(display),
       // 行号映射（没给就是 Monaco 默认 1..N），回调身份稳定
       lineNumbers:
-        hasLineNumbers && singleSide ? stableLineNumbers[singleSide] : undefined,
+        hasLineNumbers && singleSide
+          ? stableLineNumbers[singleSide]
+          : display.showLineNumbers
+            ? undefined
+            : 'off',
     }),
-    [fontSize, hasLineNumbers, singleSide, stableLineNumbers],
+    [display, hasLineNumbers, singleSide, stableLineNumbers],
   )
 
   /** autoHeight 的高度，写到编辑器格子的 --mono-diff-h */
   const autoHeightStyle = useMemo((): React.CSSProperties | undefined => {
-    if (!autoHeight) return undefined
+    if (!isAutoHeight) return undefined
     const lines = Math.max(lineCount(oldText), lineCount(newText))
     return {
-      '--mono-diff-h': `${monacoDiffHeight(lines, fontSize)}px`,
+      '--mono-diff-h': `${monacoDiffHeight(lines, fontSize, display.lineHeight)}px`,
     } as React.CSSProperties
-  }, [autoHeight, oldText, newText, fontSize])
+  }, [isAutoHeight, oldText, newText, fontSize, display.lineHeight])
 
   /**
    * 右键菜单（复制 / 全选），与 SideBySideDiff 对齐：复制读开菜单那一刻的快照，
@@ -377,8 +411,8 @@ export function MonacoDiffView({
   return (
     <div
       className={`git-mono-diff${showHeader ? ' has-header' : ''}${
-        autoHeight ? ' is-autoheight' : ''
-      }`}
+        isAutoHeight ? ' is-autoheight' : ''
+      }${isFull ? ' is-fullscreen' : ''}`}
       ref={rootRef}
       onContextMenu={openMenu}>
       {/* 文件头（可选）：样式也在同一份 SCSS 里 */}
@@ -395,6 +429,13 @@ export function MonacoDiffView({
                 {action.iconRender ? action.iconRender() : null}
               </button>
             ))}
+            {/* 内置全屏（与 DOM 版同一个类名 / 图标）：排在调用方动作之后，与 CodeBlock 的头部同序 */}
+            <button
+              className="diff-action-btn diff-fullscreen-btn"
+              onClick={onToggleFullscreen}
+              title={fullscreen ? t('退出全屏') : t('全屏')}>
+              {fullscreen ? <ExitFullScreenSvg /> : <FullScreenSvg />}
+            </button>
           </div>
         </div>
       )}
@@ -437,7 +478,7 @@ export function MonacoDiffView({
           <Editor
             value={singleText}
             language={language}
-            theme="virlen-dark"
+            theme={display.themeId}
             options={singleOptions}
             onMount={(editor) => {
               singleRef.current = editor
@@ -450,7 +491,7 @@ export function MonacoDiffView({
             original={oldText}
             modified={newText}
             language={language}
-            theme="virlen-dark"
+            theme={display.themeId}
             options={diffOptions}
             keepCurrentOriginalModel={false}
             keepCurrentModifiedModel={false}
@@ -471,6 +512,56 @@ export function MonacoDiffView({
         />
       )}
     </div>
+  )
+}
+
+/**
+ * 差异正文入口：原位一份 + （仅画文件头的形态）全屏浮层里再加一份。
+ *
+ * 为什么不能只建一份：Monaco 实例不能搬家（换容器 = 重建），而原位那份又不能卸 ——
+ * 它身处虚拟列表的消息条目里，一卸条目就变矮、锚点跟着跳（与 `CodeBlock` / `SideBySideDiff` 同口径）。
+ */
+export function MonacoDiffView(props: MonacoDiffViewProps) {
+  const [fullscreen, setFullscreen] = useState(false)
+  /**
+   * 只有画文件头才提供全屏：git 弹窗本来就在自己那个放大形态里（且另有自己的放大开关），
+   * 再给它一个全屏按钮与弹窗头打架。
+   */
+  const open = fullscreen && !!props.showHeader
+  const toggleFullscreen = useCallback(() => setFullscreen((v) => !v), [])
+
+  // Esc 退出全屏（与 CodeBlock / SideBySideDiff 一致）
+  useEffect(() => {
+    if (!open) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setFullscreen(false)
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [open])
+
+  return (
+    <>
+      {/* 原位那份全屏时也照常渲染（理由见上面的组件注释） */}
+      <DiffContent
+        {...props}
+        isFull={false}
+        fullscreen={open}
+        onToggleFullscreen={toggleFullscreen}
+      />
+      {open &&
+        createPortal(
+          <div className="diff-fullscreen-layer">
+            <DiffContent
+              {...props}
+              isFull
+              fullscreen
+              onToggleFullscreen={toggleFullscreen}
+            />
+          </div>,
+          document.body,
+        )}
+    </>
   )
 }
 

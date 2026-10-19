@@ -1333,7 +1333,9 @@
   padding: 0 2px;
   min-height: 2.4em;
   border-color: transparent;
-  background: rgba(255, 255, 255, 0.06);
+  /* 分层一律用「相对头部文字色的透明层」而不是白度：代码主题可能是浅色的，
+     白度叠在浅底上等于没叠（参考 --code-header-color 的用法）。 */
+  background: color-mix(in srgb, var(--code-header-color) 10%, transparent);
   font-size: var(--font-size-xs);
 
   .custom-select__trigger {
@@ -1352,7 +1354,7 @@
 
   &:hover {
     border-color: transparent;
-    background: rgba(255, 255, 255, 0.14);
+    background: color-mix(in srgb, var(--code-header-color) 20%, transparent);
   }
 
   &:focus-visible,
@@ -1360,18 +1362,19 @@
     border-color: transparent;
     /* 默认那圈 focus-shadow 是给浅底的，深色头部里直接用高亮底色代替 */
     box-shadow: none;
-    background: rgba(255, 255, 255, 0.16);
+    background: color-mix(in srgb, var(--code-header-color) 24%, transparent);
   }
 }
 
-/* 下拉面板：代码块通体深色（.code-block-wrapper 写死的 #292c33），面板要是仍旧跟应用主题走
-   （浅色皮肤），就是在深色头部下面裂开一块白。面板经 Portal 挂在 body 上、不在
-   .code-file-switcher 的子树里，所以皮肤靠 Select 的 dropdownClassName —— ReadFileMessage
-   传的 code-file-panel 就是这个抓手。颜色复用代码块自己的令牌，亮 / 暗主题各自跟随。 */
+/* 下拉面板：跟代码块同一套令牌（--code-header-*），所以代码主题一换它就跟着换。
+   面板经 Portal 挂在 body 上、不在 .code-file-switcher 的子树里，皮肤靠 Select 的
+   dropdownClassName —— ReadFileMessage 传的 code-file-panel 就是这个抓手。
+   ⚠️ 分层不能用白度（rgba(255,255,255,x)）：浅色代码主题下白层叠白底 = 看不见，
+      文案色也不能写死 #e9edf5，否则深色字压在浅面板上读不出来。 */
 .custom-select__dropdown.code-file-panel {
   background: var(--code-header-bg, #323844);
-  border-color: rgba(255, 255, 255, 0.12);
-  /* 浮层要压过深色正文：默认那圈浅阴影在深底上几乎看不见 */
+  border-color: color-mix(in srgb, var(--code-header-color) 22%, transparent);
+  /* 浮层要压过正文：默认那圈浅阴影在深底上几乎看不见 */
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
 
   .custom-select__option {
@@ -1381,15 +1384,14 @@
 
     &:hover,
     &.is-active {
-      background: rgba(255, 255, 255, 0.08);
-      color: #e9edf5;
+      background: color-mix(in srgb, var(--code-header-color) 12%, transparent);
     }
 
-    /* 选中项用「更亮一档的底 + 更亮的字」而不是品牌色：深色底上的品牌色随用户选的主题色明暗飘，
-       浅色主题色（亮黄这类）在深底上几乎看不见；白度分层则恒可见 */
+    /* 选中项用「更浓一档的底」而不是品牌色：品牌色随用户选的主题色飘，
+       而相对头部文字色的透明层在任何代码主题下都能读出层级。 */
     &.is-selected {
-      background: rgba(255, 255, 255, 0.16);
-      color: #e9edf5;
+      background: color-mix(in srgb, var(--code-header-color) 22%, transparent);
+      font-weight: 600;
     }
   }
 }

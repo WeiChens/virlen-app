@@ -22,7 +22,8 @@
   grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
-  background: #282c34;
+  /* 底色跟代码主题（Monaco 自己会画正文底；这里是外壳 / 短内容时的空地） */
+  background: var(--code-body-bg, #282c34);
 
   /* 文件头（可选的，聊天里有：文件名 + 动作按钮）横跨两列；多了它就得加一行 */
   &.has-header {
@@ -72,9 +73,21 @@
   max-width: 90%;
 
   > .git-mono-diff {
-    border: 1px solid #181a1f;
+    border: 1px solid
+      color-mix(in srgb, var(--code-body-color) 16%, var(--code-body-bg));
     border-radius: 8px;
   }
+}
+
+/* 全屏浮层里的那一份（聊天里的 `edit_file` 文件头带全屏按钮）：铺满整块浮层。
+   浮层本体（`.diff-fullscreen-layer`，只让开窗口状态栏）在 `SideBySideDiff.scss`，与 DOM 版 / 代码块共用；
+   这里只补“高度从哪来”—— ⚠️ 结构规则（grid / 子节点自裁 / 列头跨列）一条都不能在这里重写：
+   两处一起长大后必然分叉（同 ㉗ 的教训）。 */
+.diff-fullscreen-layer .git-mono-diff.is-fullscreen {
+  /* 层是行方向的 flex：flex 给宽度，height: 100% 给高度（grid 的 1fr 行才有东西可分） */
+  flex: 1;
+  min-width: 0;
+  height: 100%;
 }
 
 /* 差异视图里的选区调亮一档（只在本组件的容器内，全局的代码预览 / 编辑器不动）。
@@ -90,7 +103,13 @@
   .monaco-editor,
   .monaco-diff-editor,
   .monaco-component {
-    --vscode-editor-selectionBackground: #505868;
-    --vscode-editor-inactiveSelectionBackground: #505868d9;
+    /* ⚠️ 取值必须来自代码主题（--code-selection-strong）：写死 #505868 时，
+       浅色代码主题下选区是一块深灰，与正文色几乎叠在一起。 */
+    --vscode-editor-selectionBackground: var(--code-selection-strong, #545a67);
+    --vscode-editor-inactiveSelectionBackground: color-mix(
+      in srgb,
+      var(--code-selection-strong, #545a67) 85%,
+      transparent
+    );
   }
 }

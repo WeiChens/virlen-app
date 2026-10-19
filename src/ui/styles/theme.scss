@@ -264,10 +264,7 @@ $accent-mix-usermsg-dark-brand: 45%; // mix(brand, #fff, 45%)
   /* 链接色：品牌色文本的唯一语义令牌（亮/暗分别取值，暗色档见下） */
   --link-color: var(--primary); /* 亮：--bg-primary(#fff) 底 6.29:1 ✓AA */
   --link-color-hover: var(--primary-hover); /* 亮：#fff 底 7.90:1 ✓AA */
-  --code-header-bg: #323844;
-  --code-header-color: #abb2bf;
-  --code-body-bg: #282c34;
-  --code-body-color: #abb2bf;
+  /* 代码配色不在这里定义：见文件末尾 :root 的「代码显示（兜底）」一节 */
   --modal-overlay: rgba(0, 0, 0, 0.5);
   --window-bg: #f0efef;
   --window-color: #222;
@@ -292,13 +289,9 @@ $accent-mix-usermsg-dark-brand: 45%; // mix(brand, #fff, 45%)
   --theme-color: #ffffff;
 
   /* side-by-side diff — 亮色 */
-  --diff-old-header-bg: #fef2f2;
-  --diff-old-header-color: #991b1b;
   --diff-old-line-bg: #fef2f2;
   --diff-old-linenum-bg: #fee2e2;
   --diff-old-linenum-color: #b91c1c;
-  --diff-new-header-bg: #f0fdf4;
-  --diff-new-header-color: #166534;
   --diff-new-line-bg: #f0fdf4;
   --diff-new-linenum-bg: #dcfce7;
   --diff-new-linenum-color: #166534;
@@ -388,10 +381,7 @@ $accent-mix-usermsg-dark-brand: 45%; // mix(brand, #fff, 45%)
      的做法会合成出 3.62:1，反而跌破 AA） */
   --link-color: var(--primary-hover); /* 暗：#1e1e2e 底 5.35:1 ✓AA */
   --link-color-hover: color-mix(in srgb, var(--primary-hover) 65%, #ffffff); /* 暗：8.23:1 ✓AA */
-  --code-header-bg: #181825;
-  --code-header-color: #a6adc8;
-  --code-body-bg: #11111b;
-  --code-body-color: #cdd6f4;
+  /* 代码配色不在这里定义：见文件末尾 :root 的「代码显示（兜底）」一节 */
   --modal-overlay: rgba(0, 0, 0, 0.7);
   --window-bg: #11111b;
   --window-color: #cdd6f4;
@@ -413,13 +403,9 @@ $accent-mix-usermsg-dark-brand: 45%; // mix(brand, #fff, 45%)
   --theme-color: #000000;
 
   /* side-by-side diff — 暗色 */
-  --diff-old-header-bg: #3a1a1a;
-  --diff-old-header-color: #f38ba8;
   --diff-old-line-bg: #2a1515;
   --diff-old-linenum-bg: #3a2020;
   --diff-old-linenum-color: #f38ba8;
-  --diff-new-header-bg: #1a3a1a;
-  --diff-new-header-color: #a6e3a1;
   --diff-new-line-bg: #152a15;
   --diff-new-linenum-bg: #203a20;
   --diff-new-linenum-color: #a6e3a1;
@@ -461,6 +447,31 @@ $accent-mix-usermsg-dark-brand: 45%; // mix(brand, #fff, 45%)
 }
 
 :root {
+  /* ===== 代码显示（兜底，不是色源）=====
+     唯一源在 src/domain/code-display/themes.ts：运行期 useApplyCodeDisplay 会往 <head> 注入
+     `:root[data-code-theme]{--code-*}`（特异性 0,2,0，稳定压过本文件），下面这些值只在
+     「首帧 / 脚本失效 / data-code-theme 还没挂上」时生效，等于默认主题 virlen-dark + 默认字号。
+     ⚠️ 不要再按亮暗各写一份 —— 那正是「流式 <pre> 与终态 Monaco 底色不一致」的由来。
+     头栏色保持改造前的 #323844：各组件里的 `var(--code-header-bg, #323844)` 兜底写在同一个数上，
+     没注入时不会换个色。 */
+  --code-body-bg: #282c34;
+  --code-body-color: #abb2bf;
+  --code-header-bg: #323844;
+  --code-header-color: #abb2bf;
+  --code-selection-bg: #3e4451;
+  /* 差异视图选区：Monaco 把选区画在改动底色下面，所以比普通选区往亮处推一档
+     （值与 buildCodeCssVars('virlen-dark') 算出来的一致，免得首帧与注入后差一档） */
+  --code-selection-strong: #545a67;
+  /* 差异列头：跟代码主题走（应用亮暗不再各写一套） */
+  --diff-old-header-bg: #3a2020;
+  --diff-old-header-color: #f38ba8;
+  --diff-new-header-bg: #1a3a1a;
+  --diff-new-header-color: #a6e3a1;
+  --code-font-size: 13px;
+  --code-line-height: 1.5;
+  --code-font-family: Consolas, 'JetBrains Mono', 'Fira Code', 'Cascadia Code',
+    'SF Mono', 'Courier New', monospace;
+
   /* ===== 布局尺寸（与主题无关，亮/暗共用） ===== */
   /* 自绘窗口状态栏高度：WindowLayout.scss 的 .window-top-bar 与全屏浮层
      （code-block.scss 的 .code-block-fullscreen-layer）共用这一份，避免两边各写一个 30px */

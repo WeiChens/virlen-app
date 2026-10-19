@@ -15,12 +15,14 @@ import Editor from '@monaco-editor/react'
 import type * as MonacoNs from 'monaco-editor'
 import { useRef } from 'react'
 
-// 必须最先引入：精简 monaco + 高亮注册 + One Dark 主题（monaco 命名空间也从这里拿）
+// 必须最先引入：精简 monaco + 高亮注册 + 代码主题注册（monaco 命名空间也从这里拿）
 import { monaco } from '@/monaco/setupMonaco'
+import { useCodeDisplay } from '@/ui/hooks/useCodeDisplay'
+import {
+  codeLineHeightPx,
+  type ResolvedCodeDisplay,
+} from '@/domain/code-display'
 import './style.scss'
-
-/** 编辑器固定主题（与聊天里的代码预览一致，亮暗主题下都是这套配色） */
-const CODE_EDITOR_THEME = 'virlen-dark'
 
 export interface CodeEditorProps {
   /** 代码文本（受控） */
@@ -31,7 +33,7 @@ export interface CodeEditorProps {
   language?: string
   /** 编辑器高度（px 或 CSS 字符串）。默认 180 */
   height?: number | string
-  /** 字号（px，默认 13） */
+  /** 字号（px，默认取「代码显示」设置） */
   fontSize?: number
   /** 只读（默认 false） */
   readOnly?: boolean
@@ -45,8 +47,13 @@ export interface CodeEditorProps {
 
 function buildEditorOptions(
   props: CodeEditorProps,
+  display: ResolvedCodeDisplay,
 ): MonacoNs.editor.IStandaloneEditorConstructionOptions {
-  const { fontSize = 13, readOnly = false, ariaLabel } = props
+  const {
+    fontSize = display.fontSize,
+    readOnly = false,
+    ariaLabel,
+  } = props
 
   return {
     readOnly,
@@ -73,9 +80,9 @@ function buildEditorOptions(
     guides: { indentation: false, bracketPairs: false },
 
     fontSize,
-    fontFamily:
-      "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', Consolas, 'Courier New', monospace",
-    lineHeight: Math.max(16, Math.round(fontSize * 1.55)),
+    fontFamily: display.fontFamily,
+    fontLigatures: display.ligatures,
+    lineHeight: codeLineHeightPx(fontSize, display.lineHeight),
     tabSize: 2,
     insertSpaces: true,
     wordWrap: 'off',
@@ -104,6 +111,8 @@ function buildEditorOptions(
 }
 
 export default function CodeEditor(props: CodeEditorProps) {
+  // 主题 / 字号 / 字族 / 行高 / 连字与代码预览共用同一套解析（设置 → 代码显示）
+  const display = useCodeDisplay()
   const {
     value,
     onChange,
@@ -135,10 +144,10 @@ export default function CodeEditor(props: CodeEditorProps) {
         height={height}
         language={language}
         value={value}
-        theme={CODE_EDITOR_THEME}
+        theme={display.themeId}
         onMount={handleMount}
         onChange={(v) => onChange(v ?? '')}
-        options={buildEditorOptions(props)}
+        options={buildEditorOptions(props, display)}
       />
     </div>
   )

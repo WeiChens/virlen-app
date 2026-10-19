@@ -37,17 +37,19 @@
   // 部分直接裁掉 → 滚动条存在但“拖到底也看不到全部内容”。
   // 普通块布局下子元素保持内容高度，由本容器的 overflow:auto 负责滚动。
   // overflow 由内联 style 控制：有 maxHeight → overflow: auto
-  background-color: #292c33;
+  // 底色 / 滚动条都取 --code-*（与 Monaco 正文同一个色源）：写死色值会让暗色主题下
+  // 外壳(#292c33)与正文(#282c34) 差一档，看着像两块拼起来的
+  background-color: var(--code-body-bg);
 
 
   &::-webkit-scrollbar{
     width: 12px;
   }
   &::-webkit-scrollbar-thumb{
-    background-color: #383b46;
+    background-color: color-mix(in srgb, var(--code-body-color) 18%, var(--code-body-bg));
     border-radius: 4px;
     &:hover{
-      background-color: #4b505e;
+      background-color: color-mix(in srgb, var(--code-body-color) 28%, var(--code-body-bg));
     }
   }
 
@@ -166,12 +168,12 @@
     padding: 14px 16px;
     background: var(--code-body-bg, #282c34);
     color: var(--code-body-color, #abb2bf);
-    font-size: var(--font-size-md);
-    line-height: 1.55;
+    /* ⚠️ 流式 / 超大文件的回退层必须与 Monaco 同一套字号、行高、字族：
+       两边差 1px，消息从「流式中」变成「已完成」（<pre> → Monaco）时就会跳一行。 */
+    font-size: var(--code-font-size);
+    line-height: var(--code-line-height);
     overflow-x: auto;
-    font-family:
-      'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, 'DengXian',
-      monospace;
+    font-family: var(--code-font-family);
 
     code {
       font-family: inherit;

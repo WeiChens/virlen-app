@@ -1,24 +1,30 @@
 /**
  * 差异底色的两条不变式（实测反馈：「在改动行里选中文本，看不到选中效果」）。
  *
- * ⚠️ 这条用例守的不是配色好看，是**层序上的硬约束**：Monaco 把选区画在改动底色**下面**
+ * ⚠️ 这里守的不是配色好看，是**层序上的硬约束**：Monaco 把选区画在改动底色**下面**
  * （0.56 `view.js`：`.lines-content` 先 append 选区所在的 `contentViewOverlays`、再 append 承载改动
  * 底色的 `viewLines`，两者都 z-auto → DOM 序就是绘制序），所以**改动底色一旦回到不透明，选区就会被
  * 整个盖住** —— 而这一点只会在「在改动行里选中文本」这一步被看见：编译期、tsc、别的用例都发现不了。
  *
- * 因此：六个差异底色必须是**半透明源色**（`#RRGGBBAA`），且「源色 over 底下那层」要仍等于 DOM 版
- * 那套设计色（`theme.scss` **暗色块**的 `--diff-*` + 字符级那两个）—— 也就是**观感没变**，变的只是
- * 「底下那一层能透出来」。
+ * 因此：六个差异底色必须是**半透明源色**（`#RRGGBBAA`），且「源色 over 底下那层」要仍等于设计色
+ * —— 也就是**观感没变**，变的只是「底下那一层能透出来」。
  *
- * 主题不能在 jsdom 里 import（monaco 一进 jsdom 就崩），所以按源码文本断言。
+ * 改造后色源搬到 `src/domain/code-display`（纯 TS，不引 monaco 运行时），所以这里可以直接 import
+ * 主题数据，不再靠读 `setupMonaco.ts` 的源码文本。
  */
-import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import {
+  CODE_FONT_STACKS,
+  CODE_THEMES,
+  buildCodeCssVars,
+  buildMonacoThemeData,
+} from '@/domain/code-display'
 
-const THEME_TS = 'src/monaco/setupMonaco.ts'
-const THEME_SCSS = 'src/ui/styles/theme.scss'
+/** 默认主题（Monaco 与 DOM 两套界面的共同基准） */
+const PALETTE = CODE_THEMES['virlen-dark']
+const THEME = buildMonacoThemeData(PALETTE)
 
-/** 设计色（不透明）—— DOM 版那套（Monaco 侧只是换成「半透明源色 + 底下那层」的等价写法） */
+/** 设计色（不透明）——「源色 + 底下那层」合成后应当得到的那一档 */
 const DESIGN = {
   oldLine: '#2a1515',
   newLine: '#152a15',
@@ -34,7 +40,8 @@ type Rgba = [number, number, number, number]
 
 function parseColor(hex: string): Rgba {
   const h = hex.slice(1)
-  const at = (i: number): number => Number.parseInt(h.slice(i * 2, i * 2 + 2), 16)
+  const at = (i: number): number =>
+    Number.parseInt(h.slice(i * 2, i * 2 + 2), 16)
   return [at(0), at(1), at(2), h.length === 8 ? at(3) / 255 : 1]
 }
 
@@ -47,25 +54,20 @@ function over([r, g, b, a]: Rgba, [br, bg, bb]: Rgb): Rgb {
   ]
 }
 
-/** 从主题源码里取一个字面量颜色（`'editor.background': '#282c34'`） */
-function literalOf(source: string, key: string): string {
-  const m = source.match(
-    new RegExp(`'${key}':\\s*'(#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?)'`),
-  )
-  if (!m) throw new Error(`主题里找不到 '${key}'（用例与主题漂了，先看 ${THEME_TS}）`)
-  return m[1]
+/** 主题里的一个色值（用例与主题漂了就给可读错误，而不是 undefined 引发的玄学失败） */
+function colorOf(key: string): string {
+  const value = THEME.colors[key]
+  if (!value) throw new Error(`主题里找不到 '${key}'（先看 domain/code-display/themes.ts）`)
+  return value
 }
 
-const themeSource = readFileSync(THEME_TS, 'utf8')
-
-/** 从主题源码的 `rules` 里取一个 token 的前景色（`{ token: 'comment', foreground: '7f848e', … }`） */
-function tokenColorOf(source: string, token: string): string {
-  const m = source.match(
-    new RegExp(`token:\\s*'${token}',\\s*foreground:\\s*'#?([0-9a-fA-F]{6})'`),
-  )
-  if (!m) throw new Error(`主题 rules 里找不到 token '${token}'（先看 ${THEME_TS}）`)
-  // rules 里的颜色**不带** `#`（`foreground: 'abb2bf'`），取出来补上
-  return `#${m[1]}`
+/** 主题 rules 里某个 token 的前景色（rules 里的值**不带** `#`，取出来补上） */
+function tokenColorOf(token: string): string {
+  const rule = THEME.rules.find((r) => r.token === token)
+  if (!rule?.foreground) {
+    throw new Error(`主题 rules 里找不到 token '${token}'`)
+  }
+  return `#${rule.foreground}`
 }
 
 /** WCAG 相对亮度（对比度用） */
@@ -86,8 +88,8 @@ function contrast(fg: string, bg: string): number {
 
 const rgb = (hex: string): Rgb => parseColor(hex).slice(0, 3) as Rgb
 /** 正文底 / 行号栏底：差异底色就叠在它们上面（改它们就必须重算源色） */
-const editorBg = rgb(literalOf(themeSource, 'editor.background'))
-const gutterBg = rgb(literalOf(themeSource, 'editorGutter.background'))
+const editorBg = rgb(colorOf('editor.background'))
+const gutterBg = rgb(colorOf('editorGutter.background'))
 
 const CASES: { key: string; design: string; backdrop: Rgb; where: string }[] = [
   { key: 'diffEditor.insertedLineBackground', design: DESIGN.newLine, backdrop: editorBg, where: '正文底' },
@@ -122,19 +124,23 @@ describe('Monaco 差异底色', () => {
   it.each(CASES)(
     '$key 是半透明源色，且合成后仍等于设计色（叠在$where上）',
     ({ key, design, backdrop }) => {
-      const source = literalOf(themeSource, key)
+      const source = colorOf(key)
       const rgba = parseColor(source)
       const target = rgb(design)
       const composed = over(rgba, backdrop)
 
       // ⚠️ 必须带 alpha：不透明就会把选区整个盖掉（见文件头）
-      expect({ key, alpha: rgba[3], opaque: rgba[3] === 1 }).toMatchObject({ opaque: false })
+      expect({ key, alpha: rgba[3], opaque: rgba[3] === 1 }).toMatchObject({
+        opaque: false,
+      })
 
       // 合成后 ≈ 设计色（容差 6：半透明带来的最小可见偏差，如蓝色通道触底）
-      const withinTolerance = composed.every((v, i) => Math.abs(v - target[i]) <= 6)
-      expect({ source, backdrop, composed, target, withinTolerance }).toMatchObject({
-        withinTolerance: true,
-      })
+      const withinTolerance = composed.every(
+        (v, i) => Math.abs(v - target[i]) <= 6,
+      )
+      expect({ source, backdrop, composed, target, withinTolerance }).toMatchObject(
+        { withinTolerance: true },
+      )
     },
   )
 
@@ -142,7 +148,7 @@ describe('Monaco 差异底色', () => {
     // 实测反馈：新增行的绿底上，注释（原 #5c6370）与底色只有 1.31:1 —— 完全看不出字。
     // 底线是「底色可以亮，但主题里最暗的 token（注释）必须还读得出来」；
     // 目标取 3:1（图形 / 高亮的最低线）而不是正文的 4.5:1：再压暗底色，改动高亮本身就看不见了。
-    const comment = tokenColorOf(themeSource, 'comment')
+    const comment = tokenColorOf('comment')
     const textBackdrops = {
       oldLine: DESIGN.oldLine,
       newLine: DESIGN.newLine,
@@ -155,29 +161,22 @@ describe('Monaco 差异底色', () => {
     }
   })
 
-  it('设计色与 DOM 版的暗色那套变量一致（两套调色板不许分叉）', () => {
-    const scss = readFileSync(THEME_SCSS, 'utf8')
-    // ⚠️ 只对 `[data-theme='dark']` 那一块：Monaco 侧只注册了暗色主题（`virlen-dark`），
-    // 而 theme.scss 里 `:root, [data-theme='light']` 是另一套亮色值（`#f0fdf4` 那种）。
-    const start = scss.indexOf("[data-theme='dark']")
-    const end = scss.indexOf('\n}', start)
-    if (start < 0 || end < 0) throw new Error(`在 ${THEME_SCSS} 里找不到 [data-theme='dark'] 块`)
-    const dark = scss.slice(start, end)
-    const variableOf = (name: string): string => {
-      const m = dark.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`))
-      if (!m) throw new Error(`暗色块里找不到 --${name}`)
-      return m[1]
-    }
+  it('DOM 侧 --diff-* 与 Monaco 的六个差异色同源（两套界面不许分叉）', () => {
+    const vars = buildCodeCssVars(PALETTE, {
+      fontSize: 13,
+      lineHeight: 1.5,
+      fontFamily: CODE_FONT_STACKS.consolas,
+    })
     expect({
-      'diff-new-line-bg': variableOf('diff-new-line-bg'),
-      'diff-old-line-bg': variableOf('diff-old-line-bg'),
-      'diff-new-linenum-bg': variableOf('diff-new-linenum-bg'),
-      'diff-old-linenum-bg': variableOf('diff-old-linenum-bg'),
+      oldLine: vars['--diff-old-line-bg'],
+      newLine: vars['--diff-new-line-bg'],
+      oldNum: vars['--diff-old-linenum-bg'],
+      newNum: vars['--diff-new-linenum-bg'],
     }).toEqual({
-      'diff-new-line-bg': DESIGN.newLine,
-      'diff-old-line-bg': DESIGN.oldLine,
-      'diff-new-linenum-bg': DESIGN.newNum,
-      'diff-old-linenum-bg': DESIGN.oldNum,
+      oldLine: colorOf('diffEditor.removedLineBackground'),
+      newLine: colorOf('diffEditor.insertedLineBackground'),
+      oldNum: colorOf('diffEditorGutter.removedLineBackground'),
+      newNum: colorOf('diffEditorGutter.insertedLineBackground'),
     })
   })
 })

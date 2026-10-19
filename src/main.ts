@@ -5,6 +5,7 @@ import {
   initDefaultWorkspace,
   settingsState,
   hydrateSettings,
+  migrateCodeDisplaySettings,
   flushSettingsPersist,
 } from '@/ui/store/settingStore'
 import { initSkillStore } from '@/skill/skillStore'
@@ -146,6 +147,9 @@ async function init() {
   // 配置下沉（D3）：先把 Rust 侧 `app_settings` 水合进设置（幂等；非 Tauri 环境自动跳过）——
   // 必须在最前面：i18n / 工作目录 / 会话加载 / 权限都直接依赖设置值。
   await step('settings', () => hydrateSettings())
+  // 代码显示：旧的「界面字号」三档 → 独立代码字号（一次性）。必须紧跟在设置水合之后：
+  // 字号档位的权威值在 app_settings 表里，早于水合会把默认的 medium 折成 13px。
+  await step('codeDisplay', () => migrateCodeDisplaySettings())
   // 「忽略沙盒命令」规则下沉（S7）：规则以 `app_settings` 为唯一源（localStorage 不保存）。
   // 走 store 的 hydrate 而非直接调 infra 的 hydrateSecurity —— 它还会刷新 observable，
   // 否则设置页读到的仍是模块加载瞬间的快照。

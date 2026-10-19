@@ -5,6 +5,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from 'react'
 import GeneralSettings from './general-settings'
+import CodeDisplaySettings from './code-display-settings'
 import ChatSettings from './chat-settings'
 import ProviderSettings from './provider-settings'
 import SecuritySettings, { type SecurityTab } from './security-settings'
@@ -36,6 +37,7 @@ import './settings-view.scss'
 
 export type SettingsPage =
   | 'general'
+  | 'code-display'
   | 'chat'
   | 'provider'
   | 'security'
@@ -174,6 +176,12 @@ export default function SettingsView() {
               <span>{t('通用')}</span>
             </button>
             <button
+              className={`nav-item ${page === 'code-display' ? 'active' : ''}`}
+              onClick={() => setPage('code-display')}>
+              <CodeSvg fill="var(--nav-item-color)" />
+              <span>{t('代码显示')}</span>
+            </button>
+            <button
               className={`nav-item ${page === 'chat' ? 'active' : ''}`}
               onClick={() => setPage('chat')}>
               <MessageSvg fill="var(--nav-item-color)" />
@@ -249,6 +257,7 @@ export default function SettingsView() {
         </div>
         <div className="settings-content">
           {page === 'general' && <GeneralSettings />}
+          {page === 'code-display' && <CodeDisplaySettings />}
           {page === 'chat' && <ChatSettings />}
           {page === 'storage' && <StorageSettings />}
           {page === 'phone-control' && <PhoneControlSettings />}

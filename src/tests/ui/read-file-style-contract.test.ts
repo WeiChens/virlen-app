@@ -26,6 +26,11 @@ import {
   clampDropdownLeft,
   dropdownContentMaxWidth,
 } from '@/ui/components/shared/Select'
+import {
+  CODE_FONT_STACKS,
+  CODE_THEMES,
+  buildCodeCssVars,
+} from '@/domain/code-display'
 
 /** 读项目内文件；cwd 不对时给出可读错误（而不是让下游拿到空串后"静默通过"） */
 function readProjectFile(rel: string): string {
@@ -144,13 +149,17 @@ describe('文件名下拉 —— 选项单行 + 面板按内容撑宽（上限 5
   })
 })
 
-describe('文件名下拉 —— 面板跟代码块一起走深色皮肤', () => {
-  it('面板与选项都取代码块自己的令牌（亮 / 暗主题各自跟随）', () => {
+describe('文件名下拉 —— 面板跟代码块一起走代码主题', () => {
+  it('面板与选项都取代码块自己的令牌（现在只有一份兜底，亮暗不再各写一遍）', () => {
     const headerBg = tokenValues('--code-header-bg')
-    expect(headerBg.length).toBeGreaterThanOrEqual(2)
-    // 兜底值 = 主题亮色档的同一个色：令牌万一没生效也不至于换一个色
+    // 色源搬到 domain/code-display 后由运行期注入（:root[data-code-theme]），
+    // theme.scss 只留一份首帧兜底 —— 所以这里恰好一个值
+    expect(headerBg).toHaveLength(1)
+    // 兜底值 = 主题里同一个色：令牌万一没生效也不至于换一个色
     expect(decl(toolCallCss, PANEL, 'background')).toBe(`var(--code-header-bg, ${headerBg[0]})`)
-    expect(decl(toolCallCss, PANEL, 'border-color')).toBe('rgba(255, 255, 255, 0.12)')
+    expect(decl(toolCallCss, PANEL, 'border-color')).toBe(
+      'color-mix(in srgb, var(--code-header-color) 22%, transparent)',
+    )
     expect(decl(toolCallCss, PANEL, 'box-shadow')).toBeTruthy()
     expect(decl(toolCallCss, `${PANEL} .custom-select__option`, 'color')).toBe(
       'var(--code-header-color, #abb2bf)',
@@ -160,42 +169,59 @@ describe('文件名下拉 —— 面板跟代码块一起走深色皮肤', () =>
     expect(decl(toolCallCss, SWITCHER, 'font-size')).toBe('var(--font-size-xs)')
   })
 
-  it('hover / 选中用白度分层，不用品牌色（品牌色随用户主题色飘，浅色在深底上几乎看不见）', () => {
+  it('hover / 选中用「相对头部文字色的透明层」分层，不用品牌色', () => {
+    // ⚠️ 不能用白度（rgba(255,255,255,x)）：代码主题可能是浅色的，白层叠白底 = 看不见
+    const LAYER = /^color-mix\(in srgb, var\(--code-header-color\) (\d+)%, transparent\)$/
     for (const sel of [
       `${PANEL} .custom-select__option:hover`,
       `${PANEL} .custom-select__option.is-active`,
       `${PANEL} .custom-select__option.is-selected`,
     ]) {
       const bg = decl(toolCallCss, sel, 'background')
-      expect(bg, `${sel} 缺少背景`).toMatch(/^rgba\(255, 255, 255, 0\.\d+\)$/)
+      expect(bg, `${sel} 缺少背景`).toBeTruthy()
+      expect(bg, `${sel} 仍在用白度分层`).toMatch(LAYER)
     }
-    // 选中比 hover 更亮一档（否则"当前展示的是谁"看不出来）
+    // 选中比 hover 更浓一档（否则"当前展示的是谁"看不出来）
+    const pct = (v: string): number => Number(LAYER.exec(v)![1])
     const selected = decl(toolCallCss, `${PANEL} .custom-select__option.is-selected`, 'background')!
     const hover = decl(toolCallCss, `${PANEL} .custom-select__option:hover`, 'background')!
-    expect(Number.parseFloat(selected.slice(selected.lastIndexOf(',') + 1))).toBeGreaterThan(
-      Number.parseFloat(hover.slice(hover.lastIndexOf(',') + 1)),
-    )
-    expect(decl(toolCallCss, `${PANEL} .custom-select__option.is-selected`, 'color')).toBe('#e9edf5')
+    expect(pct(selected)).toBeGreaterThan(pct(hover))
+    // 选中项只加重底色与字重，文案色仍是头部色（写死 #e9edf5 在浅色主题下会糊在白底上）
+    expect(decl(toolCallCss, `${PANEL} .custom-select__option.is-selected`, 'color')).toBeFalsy()
+    expect(decl(toolCallCss, `${PANEL} .custom-select__option.is-selected`, 'font-weight')).toBe('600')
   })
 
-  it('前提：代码块头部的深色令牌确实是深色，且面板文字在它上面过 AA', () => {
-    // 这条防的是「哪天代码块换浅底，面板还按深色取色」——那时白度分层会反过来糊掉
+  it('前提：每个代码主题的头部文字在头部底色上都过 AA（面板与列头共用这套令牌）', () => {
+    // 以前只查深色主题（面板是“深色皮肤”），现在浅色主题也会拿这套令牌，
+    // 所以改成「全部主题都过 AA」，否则浅色主题下面板文字会读不出来。
+    const cases = Object.entries(CODE_THEMES).map(([id, palette]) => {
+      const vars = buildCodeCssVars(palette, {
+        fontSize: 13,
+        lineHeight: 1.5,
+        fontFamily: CODE_FONT_STACKS.consolas,
+      })
+      return { id, bg: vars['--code-header-bg'], fg: vars['--code-header-color'] }
+    })
+
     const bgs = tokenValues('--code-header-bg')
     const fgs = tokenValues('--code-header-color')
-    expect(bgs.length).toBeGreaterThanOrEqual(2)
-    expect(fgs.length).toBe(bgs.length)
-    bgs.forEach((bg, i) => {
-      expect(luminance(bg), `--code-header-bg 第 ${i + 1} 档 ${bg} 不是深色`).toBeLessThan(0.15)
+    expect(bgs).toHaveLength(1)
+    expect(fgs).toHaveLength(1)
+    cases.push({ id: 'theme.scss 兜底', bg: bgs[0], fg: fgs[0] })
+
+    for (const { id, bg, fg } of cases) {
       expect(
-        contrastRatio(fgs[i], bg),
-        `面板文字 ${fgs[i]} 在 ${bg} 上只有 ${contrastRatio(fgs[i], bg).toFixed(2)}:1`,
+        contrastRatio(fg, bg),
+        `${id} 的面板文字 ${fg} 在 ${bg} 上只有 ${contrastRatio(fg, bg).toFixed(2)}:1`,
       ).toBeGreaterThanOrEqual(4.5)
-    })
+    }
   })
 
-  it('触发器仍是「深色头部里的 ghost」，没被这轮改动带跑', () => {
+  it('触发器仍是「头部里的 ghost」，没被这轮改动带跑', () => {
     expect(decl(toolCallCss, SWITCHER, 'border-color')).toBe('transparent')
-    expect(decl(toolCallCss, SWITCHER, 'background')).toBe('rgba(255, 255, 255, 0.06)')
+    expect(decl(toolCallCss, SWITCHER, 'background')).toBe(
+      'color-mix(in srgb, var(--code-header-color) 10%, transparent)',
+    )
     expect(decl(toolCallCss, `${SWITCHER} .custom-select__value`, 'color')).toBe(
       'var(--code-header-color, #abb2bf)',
     )

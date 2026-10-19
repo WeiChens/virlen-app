@@ -1,0 +1,129 @@
+/* code-display-settings —— 「代码显示」设置页的专属样式。
+ *
+ * 表单骨架（.section / .section-title / .setting-row / .segmented-control）复用
+ * general-settings.scss（其顶层作用域已含 .code-display-settings），这里只写本页独有的
+ * 主题卡片、滑杆与预览外框。
+ *
+ * 字号一律走 --font-size-* 令牌（字号放大时卡片与控件跟着长），
+ * 唯一的例外是主题卡片里的迷你代码行：它是配色样本，不跟代码字号走。 */
+
+.code-display-settings {
+  /* ===== 主题卡片 ===== */
+  .cd-themes {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 8px;
+    padding: 4px 0 10px;
+  }
+
+  .cd-theme {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 8px;
+    background: var(--bg-primary, #fff);
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s;
+
+    &:hover:not(:disabled) {
+      border-color: var(--accent-color);
+    }
+
+    &.active {
+      border-color: var(--accent-color);
+      box-shadow: var(--focus-shadow);
+    }
+
+    /* 跟随应用主题时由主题自动挑，卡片只是给人看配色 */
+    &:disabled {
+      opacity: 0.55;
+      cursor: default;
+    }
+
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 2px;
+    }
+  }
+
+  .cd-theme-swatch {
+    display: block;
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-family: var(--code-font-family);
+    font-size: var(--font-size-xs);
+    line-height: 1.5;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .cd-theme-name {
+    font-size: var(--font-size-sm);
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  .cd-hint {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+    padding: 2px 0 8px;
+  }
+
+  /* ===== 滑杆（字号 / 行高）===== */
+  .cd-range-control {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .cd-range {
+    width: 190px;
+    accent-color: var(--accent-color);
+    cursor: pointer;
+  }
+
+  /* 数值用等宽数字：拖动时宽度不跳，眼睛不用重新定位 */
+  .cd-range-value {
+    min-width: 4.2em;
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ===== 预览 ===== */
+  .cd-preview {
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 12px;
+  }
+
+  .cd-actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .cd-reset {
+    padding: 7px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--btn-bg, var(--hover-bg));
+    color: var(--text-primary);
+    font-size: var(--font-size-md);
+    cursor: pointer;
+    transition: background 0.15s;
+
+    &:hover {
+      background: var(--active-bg);
+    }
+
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 2px;
+    }
+  }
+}

@@ -10,16 +10,16 @@
 }
 
 /* 隐形“撑宽层”：给 fit-content 父容器提供最长代码行的固有宽度（同旧透明 pre），
- * 不占可见高度、不参与选中。字号默认 15，实际运行时会被 CodePreview 内联样式
- * 覆盖成与 Monaco 相同的值，保证撑宽估算准确。 */
+ * 不占可见高度、不参与选中。字号与字族跟 --code-*（= 当前代码主题 / 字号设置，
+ * 与 Monaco 同一份解析结果），保证撑宽估算不漂。内联的 fontSize 仅用于调用点显式
+ * 传了 fontSize 的情况（见 CodePreview 的 style）。 */
 .code-preview-measure {
   height: 0;
   overflow: hidden;
   visibility: hidden;
   white-space: pre;
-  font-family: Consolas, 'JetBrains Mono', 'Fira Code', 'Cascadia Code',
-    'SF Mono', 'Courier New', monospace;
-  font-size: 15px;
+  font-family: var(--code-font-family);
+  font-size: var(--code-font-size);
 }
 
 /* 纯预览：隐藏光标（只读时点击仍会产生光标） */

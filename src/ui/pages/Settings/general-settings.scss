@@ -1,5 +1,7 @@
 .general-settings,
-.chat-settings {
+.chat-settings,
+/* 代码显示页只借用表单骨架（section / setting-row / segmented-control） */
+.code-display-settings {
   padding: 24px;
   display: flex;
   flex-direction: column;

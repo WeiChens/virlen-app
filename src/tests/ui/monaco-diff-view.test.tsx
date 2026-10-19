@@ -64,6 +64,7 @@ import {
 } from '@/ui/pages/chat/components/message/MonacoDiffView'
 import { copyText } from '@/utils/clipboard'
 import { showToast } from '@/ui/components/shared/Toast'
+import { codeLineHeightPx } from '@/domain/code-display'
 
 /**
  * 上面几处断言用的选项形状（只取本用例碰到的键，避免把 Monaco 的整个类型搬进来）。
@@ -277,8 +278,8 @@ it('选项契约：只读、不折行、不折叠未改动行、两栏恒等宽�
   expect(o.contextmenu).toBe(false)
   // 弹窗里的高度由布局决定，编辑器得自己跟着容器尺寸走
   expect(o.automaticLayout).toBe(true)
-  // 行高与字号同一个倍率（1.55，与 .diff-side-by-side 的 --diff-line-height 一致）
-  expect(o.lineHeight).toBe(Math.round((o.fontSize ?? 12) * 1.55))
+  // 行高与字号走同一个解析函数（codeLineHeightPx），不是各处各乘一个倍率
+  expect(o.lineHeight).toBe(codeLineHeightPx(o.fontSize!))
   expect(String(o.fontFamily)).toContain('JetBrains Mono')
 })
 
@@ -425,7 +426,7 @@ it('聊天里那几个 props：文件头 + 动作按钮、autoHeight、行号映
   const rootEl = host.querySelector('.git-mono-diff')!
   expect(rootEl.className).toContain('is-autoheight')
   expect(rootEl.className).toContain('has-header')
-  expect(monacoDiffHeight(3, 12)).toBe(3 * Math.round(12 * 1.55) + 12)
+  expect(monacoDiffHeight(3, 12)).toBe(3 * codeLineHeightPx(12) + 12)
 
   // 列头说明：给了就用它，给 null 就不显示（多处编辑合并后行号不连续）
   const heads = [...host.querySelectorAll('.diff-col-header')]
@@ -466,6 +467,89 @@ it('聊天里那几个 props：文件头 + 动作按钮、autoHeight、行号映
   })
   const so = state.editorProps!.options as MonacoNsOptions
   expect(so.lineNumbers?.(1)).toBe('100')
+})
+
+describe('文件头内置全屏（聊天里的 edit_file）', () => {
+  const fullBtn = () =>
+    document.querySelector<HTMLButtonElement>('.diff-fullscreen-btn')
+  const layer = () =>
+    document.querySelector('.diff-fullscreen-layer') as HTMLElement | null
+
+  it('只有画文件头的形态有全屏按钮：git 弹窗（不画文件头）一个都没有', async () => {
+    // git 弹窗：它自己就是放大形态（另有自己的放大开关），再给一个按钮只会与弹窗头打架
+    await mount(OLD_TEXT, NEW_TEXT, 'a.txt')
+    expect(fullBtn()).toBeNull()
+    expect(layer()).toBeNull()
+
+    await act(async () => root!.unmount())
+    document.body.innerHTML = ''
+    await mount(OLD_TEXT, NEW_TEXT, 'a.txt', undefined, undefined, {
+      showHeader: true,
+    })
+    expect(fullBtn()?.title).toBe('全屏')
+  })
+
+  it('点开 = 浮层里再建一个实例（挂 body），原位那份照常留着且不吃全屏形态', async () => {
+    const host = await mount(
+      OLD_TEXT,
+      NEW_TEXT,
+      'src/a.ts',
+      undefined,
+      undefined,
+      {
+        showHeader: true,
+        autoHeight: true,
+        actions: [{ title: '打开文件', onClick: () => {} }],
+        colHeaderNote: { old: 'Ln 250–252' },
+      },
+    )
+
+    await act(async () => fullBtn()!.click())
+
+    const el = layer()
+    expect(el).toBeTruthy()
+    // 必须挂 body 下：消息条目祖先的 transform / overflow 会毁掉 fixed 的铺满
+    expect(el!.parentElement).toBe(document.body)
+    const full = el!.querySelector('.git-mono-diff')!
+    expect(full.className).toContain('is-fullscreen')
+    // ⚠️ 全屏那份不许再按行数算高：`--mono-diff-h` 那档上限 450px，会把浮层顶出一截空白
+    expect(full.className).not.toContain('is-autoheight')
+    // 文件头与两个列头一起搬过去（不是只有正文）
+    expect(el!.querySelector('.diff-header-name')?.textContent).toBe('src/a.ts')
+    expect(el!.querySelectorAll('.diff-col-header')).toHaveLength(2)
+    expect(
+      el!.querySelector<HTMLButtonElement>('.diff-fullscreen-btn')?.title,
+    ).toBe('退出全屏')
+    // 两个 Monaco 实例：原位 + 全屏（Monaco 实例不能搬家，只能再建一个）
+    expect(document.querySelectorAll('.diff-editor-stub')).toHaveLength(2)
+    expect(el!.querySelector('.diff-editor-stub')).toBeTruthy()
+    // 原位那份仍在，并且仍是「按行数算高」的内联形态（卸了它就是虚拟列表锚点跳动）
+    const inline = host.querySelector('.git-mono-diff') as HTMLElement
+    expect(inline).toBeTruthy()
+    expect(inline.className).toContain('is-autoheight')
+    expect(inline.className).not.toContain('is-fullscreen')
+  })
+
+  it('再点一次退出，Esc 也能退出', async () => {
+    await mount(OLD_TEXT, NEW_TEXT, 'src/a.ts', undefined, undefined, {
+      showHeader: true,
+    })
+
+    await act(async () => fullBtn()!.click())
+    expect(layer()).toBeTruthy()
+    // 浮层里的那个按钮是同一个开关
+    await act(async () =>
+      layer()!.querySelector<HTMLButtonElement>('.diff-fullscreen-btn')!.click(),
+    )
+    expect(layer()).toBeNull()
+
+    await act(async () => fullBtn()!.click())
+    expect(layer()).toBeTruthy()
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    })
+    expect(layer()).toBeNull()
+  })
 })
 
 it('两个列头（原文件 / 新文件 + Ln 区间）都在，行数按 Monaco 的行号口径算', async () => {
@@ -529,10 +613,14 @@ it('布局契约：两等宽列 + 一行列头，编辑器占满剩余高度，�
   expect(css).toMatch(
     /\.git-mono-diff\.is-autoheight\s*>\s*\.git-mono-diff-editor\s*\{[^}]*height:\s*var\(--mono-diff-h\)/,
   )
+  // 全屏浮层里的那一份：铺满（宽高都给），结构规则一律不在这里重写
+  expect(css).toMatch(
+    /\.diff-fullscreen-layer\s+\.git-mono-diff\.is-fullscreen\s*\{[^}]*height:\s*100%/,
+  )
   // 选区颜色局部调亮（改动底色半透明 → 选区的对比度被刨掉一半；见 SCSS 里那两条 ⚠️）：
   // 必须落在本组件的容器内（带 `.git-mono-diff ` 前缀），否则会把全局的代码预览一起改掉
   expect(css).toMatch(
-    /\.git-mono-diff\s+\.monaco-editor[^{]*\{[^}]*--vscode-editor-selectionBackground:\s*#505868/,
+    /\.git-mono-diff\s+\.monaco-editor[^{]*\{[^}]*--vscode-editor-selectionBackground:\s*var\(--code-selection-strong/,
   )
   expect(css).toMatch(
     /\.git-mono-diff\s+\.monaco-editor[^{]*\{[^}]*--vscode-editor-inactiveSelectionBackground:/,

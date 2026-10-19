@@ -18,6 +18,7 @@ import {
 } from '@/infrastructure/settingsRepo'
 import type { ModelPrice } from '@/domain/pricing'
 import type { CompressMode } from '@/domain/ports'
+import { DEFAULT_CODE_DISPLAY_SETTINGS } from '@/domain/code-display'
 
 export type { EditorOpenConfig }
 
@@ -35,6 +36,24 @@ export interface SettingsStore {
   language: 'zh-CN' | 'en-US'
   theme: 'light' | 'dark' | 'system'
   fontSize: 'small' | 'medium' | 'large'
+  /**
+   * 代码显示（代码块 / 可编辑编辑器 / 差异视图共用一套口径）：主题、字族、字号、行高、行号。
+   * 平铺存 app_settings：埋点里 key 就是字段名，比一个嵌套对象好诊断；默认值见
+   * src/domain/code-display/index.ts 的 DEFAULT_CODE_DISPLAY_SETTINGS（唯一源）。
+   */
+  codeThemeMode: 'fixed' | 'follow'
+  /** 固定主题 id（CODE_THEMES 的键；'fixed' 档才生效） */
+  codeThemeId: string
+  /** 代码字号（px，11–20），与界面字号 fontSize 解耦 */
+  codeFontSize: number
+  /** 字族 id（CODE_FONT_STACKS 的键） */
+  codeFontFamily: string
+  /** 行高倍率（1.2–2.0） */
+  codeLineHeight: number
+  /** 连字（JetBrains Mono / Fira Code 才有区别） */
+  codeFontLigatures: boolean
+  /** 代码块默认显示行号（调用点显式传值时以调用点为准） */
+  codeShowLineNumbers: boolean
   /**
    * 主题色（品牌色）：'' = 内置默认；'#rrggbb' = 用户选的色。
    * 亮 / 暗两档由 theme.scss 与 accentPalette.ts 派生。
@@ -141,6 +160,8 @@ const defaultSettings: SettingsStore = {
   language: 'zh-CN',
   theme: 'system',
   fontSize: 'medium',
+  // 代码显示：默认 = 改造前的外观（固定 virlen-dark、13px、Consolas 优先、无连字、带行号）
+  ...DEFAULT_CODE_DISPLAY_SETTINGS,
   accentColor: '',
   hideToolCallThink: true,
   permissions: withDefaultPermissions(undefined),
@@ -455,5 +476,32 @@ function dropLegacyLocalSnapshot(): void {
     localStorage.removeItem(SETTINGS_STORAGE_KEY)
   } catch {
     // 非浏览器环境忽略
+  }
+}
+
+/** 代码显示迁移的完成标记（与 virlen-permissions-migrated 同一套做法） */
+const CODE_DISPLAY_MIGRATED_KEY = 'virlen-code-display-migrated'
+
+/**
+ * 代码显示设置的首次迁移：把旧的「界面字号」三档折算成**独立**的代码字号。
+ *
+ * 为什么需要：改造前代码块字号是 fontSize 的派生值（small 12 / medium 13 / large 14）。
+ * 不迁移的话，原本选「小」的用户升级后会从 12px 变成默认 13px —— 纯视觉回归。
+ * 只折算一次；此后两者彻底解耦，用户再改界面字号不会动代码字号（这正是本次改造的目的）。
+ *
+ * 必须在 hydrateSettings() 之后调（见 src/main.ts）：字号档位的权威值在 app_settings 表里，
+ * 早于水合会把默认的 medium 当成用户选择、折成 13px 并打上完成标记。
+ */
+export function migrateCodeDisplaySettings(): void {
+  try {
+    if (localStorage.getItem(CODE_DISPLAY_MIGRATED_KEY)) return
+    const level = settingsState.value.fontSize
+    const px = level === 'small' ? 12 : level === 'large' ? 14 : 13
+    if (px !== settingsState.value.codeFontSize) {
+      settingsState.setValue('codeFontSize', px)
+    }
+    localStorage.setItem(CODE_DISPLAY_MIGRATED_KEY, '1')
+  } catch {
+    // 非浏览器环境忽略（不落标记，下次启动再试）
   }
 }
