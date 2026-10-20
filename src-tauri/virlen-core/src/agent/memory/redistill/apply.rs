@@ -134,12 +134,24 @@ pub async fn apply_batch(
                 )
             })
             .collect();
+        // ⚠️ 计数必须在 `pairs.is_empty()` **之前**累加：来源全部 `Unreadable` 时 `supersede` 为空，
+        //    但这一批**确实**写了新条目、也**确实**有来源没停用 —— 漏掉它就会把 degraded 判成
+        //    `done`（状态与事实不符）。
+        outcome.unarchived += p.unarchived;
         if pairs.is_empty() {
             continue;
         }
-        let hit = deps.memory.supersede(&pairs, now_ms).await?;
+        let hit = match deps.memory.supersede(&pairs, now_ms).await {
+            Ok(hit) => hit,
+            Err(e) => {
+                // ⚠️ 走到这里新条目已经落库了：不回滚就会留下「没人认领」的重复记忆，
+                //    与模块头「返回 Err = 整批未生效」的承诺相反。已 CAS 停用的来源无法复原
+                //    （软删 + 归档），所以只回滚新条目，并把原因如实说清。
+                rollback(deps, rag, &outcome.new_ids).await;
+                return Err(format!("停用来源失败，已回滚本批新条目：{}", e));
+            }
+        };
         outcome.drifted += pairs.len().saturating_sub(hit);
-        outcome.unarchived += p.unarchived;
     }
     Ok(outcome)
 }
@@ -171,8 +183,8 @@ async fn write_one(
             "" => None,
             s => Some(s.to_string()),
         },
-        detail_kb_id: Some(kb_id),
-        detail_doc_id: Some(doc_id),
+        detail_kb_id: Some(kb_id.clone()),
+        detail_doc_id: Some(doc_id.clone()),
         tags: p.tags.clone(),
         source_day: p
             .sources
@@ -196,7 +208,14 @@ async fn write_one(
         // 它是顶替别人的那个，不是被顶替的
         superseded_by: None,
     };
-    deps.memory.upsert(&record).await?;
+    if let Err(e) = deps.memory.upsert(&record).await {
+        // ⚠️ 详情文档已经写进知识库：条目落库失败时它就成了**永远不被引用的孤儿**
+        //    （所有清理路径都从 memory 表出发，找不到它）—— 就地删掉再上报。
+        if let Err(del) = kb::remove_detail(rag, kb_id, doc_id).await {
+            eprintln!("[memory] 清理孤儿详情文档失败: {}（条目落库错误：{}）", del, e);
+        }
+        return Err(e);
+    }
     Ok(true)
 }
 

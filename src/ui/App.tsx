@@ -4,6 +4,7 @@ import './styles/theme.scss'
 import { useTheme } from './hooks/useTheme'
 import { useAccentColor } from './hooks/useAccentColor'
 import { useFontSize } from './hooks/useFontSize'
+import { useZoom } from './hooks/useZoom'
 import { useApplyCodeDisplay } from './hooks/useCodeDisplay'
 import { useLanguage } from './i18n'
 import { settingsState } from '@/ui/store/settingStore'
@@ -18,6 +19,8 @@ function App() {
   useTheme()
   useAccentColor()
   useFontSize()
+  // 界面缩放：设置里的 zoomFactor → webview 原生缩放（启动那次由 main.ts 的 init 步骤负责）
+  useZoom()
   // 代码显示：把主题 / 字号落到 <html data-code-theme> 与一份 --code-* 样式表（DOM 侧消费）
   useApplyCodeDisplay()
   useLanguage()

@@ -172,7 +172,13 @@ fn blob_bytes(
 }
 
 /// 读工作区文件；不存在（已删除）→ `None`
+///
+/// ⚠️ `path` 来自 IPC（`git_diff_sides` 的参数），必须先确认是**仓库根相对**：
+/// 直接 `join` 会让 `../../x` / `C:/x` 读到仓库外的任意文件（读操作也不能越界）。
 fn read_worktree(repo_root: &str, path: &str) -> Result<Option<Vec<u8>>, GitError> {
+    if !super::status::is_repo_relative(path) {
+        return Err(GitError::new(format!("不是仓库内的路径：{}", path)));
+    }
     let full = Path::new(repo_root).join(path);
     match std::fs::read(&full) {
         Ok(v) => Ok(Some(v)),

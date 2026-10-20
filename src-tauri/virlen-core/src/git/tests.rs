@@ -691,6 +691,59 @@ fn amend_and_undo_last_commit() {
     assert_eq!(log[0].subject, "first");
 }
 
+/// ⚠️ 游离 HEAD + 只有一条提交时撤销**必须被拒**：`update-ref -d HEAD` 在游离态删的是
+/// `.git/HEAD` 文件本身 → 仓库直接不再是仓库（`git status` 报 `fatal: not a git repository`）。
+#[test]
+fn undo_last_refuses_on_detached_root_commit() {
+    let Some(repo) = TempRepo::new() else { return };
+    let gate = WriteGate::new(true);
+    repo.write("a.txt", "one\n");
+    super::stage::stage(&repo.path(), &gate, &["a.txt".to_string()]).unwrap();
+    let head = super::commit::commit(&repo.path(), &gate, "init").unwrap();
+
+    // 游离到这条唯一的提交上（面板里的「看看这个提交」就是这条路径）
+    branch::switch(&repo.path(), &gate, &head.oid, false, None, true).unwrap();
+
+    let err = super::commit::undo_last(&repo.path(), &gate).unwrap_err();
+    assert!(
+        err.message.contains("游离 HEAD"),
+        "错误信息要说明拒绝原因：{}",
+        err.message
+    );
+
+    // 关键断言：被拒之后仓库完好 —— HEAD 还在、提交还在、仍能识别为仓库
+    assert!(
+        super::repo::discover(&repo.path()).unwrap().is_some(),
+        "撤销被拒后仓库必须仍然可识别（.git/HEAD 不能被删）"
+    );
+    let log = super::log::log(&repo.path(), 0, 10, super::LogScope::Head, None).unwrap();
+    assert_eq!(log.len(), 1, "被拒的操作不该改动任何提交");
+    assert_eq!(log[0].oid, head.oid);
+}
+
+/// 外部传入的路径只能是仓库根相对：绝对路径 / 盘符 / 前导分隔符 / `..` 段一律拒。
+/// 这是 `diff::read_worktree` 与 `stash::check_paths` 共用的那道闸。
+#[test]
+fn repo_relative_path_rejects_escape_forms() {
+    use super::status::is_repo_relative;
+    for ok in ["a.txt", "dir/a.png", "中文/文件.txt", "-dash.txt", "dir\\x"] {
+        assert!(is_repo_relative(ok), "{ok:?} 应被接受（join 之后仍在仓库内）");
+    }
+    for bad in [
+        "",
+        "..",
+        "../x",
+        "a/../../x",
+        "a/..",
+        "/etc/passwd",
+        "C:/x",
+        "C:x",
+        r"\\server\share",
+    ] {
+        assert!(!is_repo_relative(bad), "{bad:?} 必须被拒绝");
+    }
+}
+
 /// 删 / 改分支：`-d` 必须拦住未合并的分支（安全网），删当前分支必须被拒，新名字要过正法校验。
 #[test]
 fn branch_delete_and_rename() {

@@ -83,6 +83,23 @@ pub(crate) fn is_root_relative(p: &str) -> bool {
         && !p.ends_with("/..")
 }
 
+/// 调用方（IPC / 模型 / 前端）给的路径是否**可安全 `join` 到仓库根**。
+///
+/// ⚠️ 比 [`is_root_relative`] 更严：那个校验的是 porcelain 输出（只可能出现 `..` 形态），
+/// 这个校验的是**外部输入** —— 绝对路径、盘符、前导分隔符都会让 `Path::join` 直接换根，
+/// 只挡 `..` 等于没挡（`git_diff_sides(dir, "C:/x")` 会读到仓库外）。
+pub(crate) fn is_repo_relative(path: &str) -> bool {
+    let text = path.trim();
+    if text.is_empty() {
+        return false;
+    }
+    let bytes = text.as_bytes();
+    if bytes[0] == b'/' || bytes[0] == b'\\' || (bytes.len() > 1 && bytes[1] == b':') {
+        return false;
+    }
+    !text.split(['/', '\\']).any(|segment| segment == "..")
+}
+
 /// 解析 porcelain=v2 的 `-z` 输出（纯函数，便于用固定字节 + 真仓库两种方式测）。
 ///
 /// 记录布局（`-z` 下每条记录以 NUL 结尾）：

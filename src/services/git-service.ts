@@ -465,20 +465,32 @@ export async function commit(message: string, amend = false): Promise<boolean> {
     return false
   }
 
-  const stagedCount = (gitStore.snapshot?.entries ?? []).filter(
+  const snapshotEntries = gitStore.snapshot?.entries ?? []
+  const stagedCount = snapshotEntries.filter(
     (e) => e.kind !== 'untracked' && e.x !== '.' && e.x !== '?',
   ).length
   if (!amend && stagedCount === 0) {
-    const all = (gitStore.snapshot?.entries ?? []).map((e) => e.path)
+    // ⚠️ rename / copy 的旧路径必须一起传：`git add <新路径>` 只记录新文件，旧路径的删除
+    //    还留在工作区 → 提交后「改名」会变成「新增 + 旧文件还在」（与 stash 的同一条口径）。
+    const all = [
+      ...new Set(
+        snapshotEntries.flatMap((e) => (e.orig_path ? [e.path, e.orig_path] : [e.path])),
+      ),
+    ]
     if (all.length === 0) {
       showToast(t('没有可提交的更改'))
       return false
     }
+    // 快照被截断时「全部暂存」只涵盖前 5000 条 —— 必须当场说清，不能让人以为提了全部
+    const truncatedHint =
+      gitStore.snapshot?.truncated === true
+        ? `\n${t('变更过多，仅显示前 5000 条（请先处理未跟踪目录或补 .gitignore）')}`
+        : ''
     const ok = await MessagePrompt.propt(
       t('暂存区为空'),
       tpl('当前没有已暂存的文件。是否把全部 $__count__ 个文件暂存后一起提交？', {
-        count: all.length,
-      }),
+        count: snapshotEntries.length,
+      }) + truncatedHint,
       { confirmText: t('全部暂存并提交'), cancelText: t('取消') },
     )
     if (!ok) return false

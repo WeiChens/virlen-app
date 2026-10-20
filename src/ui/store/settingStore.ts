@@ -19,6 +19,7 @@ import {
 import type { ModelPrice } from '@/domain/pricing'
 import type { CompressMode } from '@/domain/ports'
 import { DEFAULT_CODE_DISPLAY_SETTINGS } from '@/domain/code-display'
+import { DEFAULT_ZOOM } from '@/domain/zoom'
 
 export type { EditorOpenConfig }
 
@@ -36,6 +37,12 @@ export interface SettingsStore {
   language: 'zh-CN' | 'en-US'
   theme: 'light' | 'dark' | 'system'
   fontSize: 'small' | 'medium' | 'large'
+  /**
+   * 界面缩放倍率（1 = 100%，0.5–2.0）。
+   * 落到 webview 原生缩放（Tauri `setZoom`，见 ui/hooks/useZoom.ts），与 fontSize 相互独立：
+   * fontSize 只动字号令牌，缩放连图标、间距、窗口内边距一起放大。
+   */
+  zoomFactor: number
   /**
    * 代码显示（代码块 / 可编辑编辑器 / 差异视图共用一套口径）：主题、字族、字号、行高、行号。
    * 平铺存 app_settings：埋点里 key 就是字段名，比一个嵌套对象好诊断；默认值见
@@ -160,6 +167,7 @@ const defaultSettings: SettingsStore = {
   language: 'zh-CN',
   theme: 'system',
   fontSize: 'medium',
+  zoomFactor: DEFAULT_ZOOM,
   // 代码显示：默认 = 改造前的外观（固定 virlen-dark、13px、Consolas 优先、无连字、带行号）
   ...DEFAULT_CODE_DISPLAY_SETTINGS,
   accentColor: '',

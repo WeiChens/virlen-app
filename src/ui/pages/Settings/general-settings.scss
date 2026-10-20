@@ -579,4 +579,48 @@
       cursor: default;
     }
   }
+
+  // ==================== 界面缩放（滑杆 + 百分比 + 恢复默认） ====================
+  .zoom-control {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .zoom-range {
+    width: 190px;
+    accent-color: var(--accent-color);
+    cursor: pointer;
+  }
+
+  /* 等宽数字：拖滑杆时百分比宽度不跳，眼睛不用重新定位 */
+  .zoom-value {
+    min-width: 3.6em;
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .zoom-reset {
+    padding: 6px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: var(--font-size-md);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+
+    &:hover:not(:disabled) {
+      border-color: var(--accent-color);
+      color: var(--text-primary);
+    }
+
+    &:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+  }
 }

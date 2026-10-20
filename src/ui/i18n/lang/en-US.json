@@ -142,6 +142,8 @@
   "字体大小": "Font Size",
   "聊天消息字体大小": "Chat message font size",
   "界面与聊天消息字体大小": "UI and chat message font size",
+  "界面缩放": "Interface Zoom",
+  "恢复默认（Ctrl/Cmd + 0）": "Reset (Ctrl/Cmd + 0)",
   "知识库检索": "Knowledge base retrieval",
   "启用 $__name__": "Enable $__name__",
   "会话管理": "Session Management",

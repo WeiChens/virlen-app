@@ -160,6 +160,16 @@ describe('保存', () => {
     expect(result.byteSize).toBe(3)
   })
 
+  it('行数与 Rust lines() 同口径：尾部换行不多算一行', async () => {
+    invokeMock.mockResolvedValue(textRead('a\nb\n', 'base123456'))
+    writeTextFileMock.mockResolvedValue(undefined)
+
+    const result = await saveWorkspaceText('E:/repo/a.txt', 'a\nb\n', 'base123456')
+
+    // Rust 的 `"a\nb\n".lines().count()` = 2；`split('\n')` 会给出 3（尾部空段）
+    expect(result.lineCount).toBe(2)
+  })
+
   it('磁盘内容被改过：报冲突且**不写盘**', async () => {
     invokeMock.mockResolvedValue(textRead('changed by someone', 'other12345'))
 

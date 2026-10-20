@@ -30,19 +30,16 @@ pub fn list(dir: &str) -> Result<Vec<StashEntry>, GitError> {
 
 /// 校验调用方给的路径：仓库根相对、非空、不带 `..` / 盘符 / 前导分隔符。
 ///
-/// ⚠️ 这只是「不许越界」的兜底：`GitCmd::paths` 已补 `--`，路径以 `-` 开头也不会被当成选项。
+/// ⚠️ 判定与 `git::diff::read_worktree`、`status::ensure_root_relative` 共用
+/// [`super::status::is_repo_relative`]（唯一源）；`GitCmd::paths` 另已补 `--`，
+/// 路径以 `-` 开头也不会被当成选项。
 fn check_paths(paths: &[String]) -> Result<(), GitError> {
     for path in paths {
-        let text = path.trim();
-        if text.is_empty() {
-            return Err(GitError::new("贮藏路径不能为空"));
-        }
-        let bytes = text.as_bytes();
-        if bytes[0] == b'/' || bytes[0] == b'\\' || (bytes.len() > 1 && bytes[1] == b':') {
-            return Err(GitError::new("贮藏路径必须是仓库相对路径"));
-        }
-        if text.split(['/', '\\']).any(|segment| segment == "..") {
-            return Err(GitError::new("贮藏路径不能包含 .."));
+        if !super::status::is_repo_relative(path) {
+            return Err(GitError::new(format!(
+                "贮藏路径必须是仓库相对路径（且不能包含 ..）：{}",
+                path
+            )));
         }
     }
     Ok(())

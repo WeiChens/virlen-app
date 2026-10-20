@@ -27,6 +27,7 @@ import { loadPromptTexts } from '@/infrastructure/prompts/prompt-source'
 // 浏览器 dev / 测试读同一份 json。
 import { hydrateProviderCatalog } from '@/infrastructure/provider/catalog-source'
 import { securityService } from './services/security-service'
+import { applyWebviewZoom } from './ui/hooks/useZoom'
 import { checkUpdate, shouldShowUpdate } from './services/update-service'
 import updateEvent from './events/updateEvent'
 import { ragService } from './services/rag-service'
@@ -150,6 +151,9 @@ async function init() {
   // 代码显示：旧的「界面字号」三档 → 独立代码字号（一次性）。必须紧跟在设置水合之后：
   // 字号档位的权威值在 app_settings 表里，早于水合会把默认的 medium 折成 13px。
   await step('codeDisplay', () => migrateCodeDisplaySettings())
+  // 界面缩放：必须在 render() 之前落地（窗口在首帧后 shown），否则会先按 100% 画一帧再跳。
+  // 后续变更由 App.tsx 的 useZoom() 监听设置负责。
+  await step('zoom', () => applyWebviewZoom(settingsState.value.zoomFactor))
   // 「忽略沙盒命令」规则下沉（S7）：规则以 `app_settings` 为唯一源（localStorage 不保存）。
   // 走 store 的 hydrate 而非直接调 infra 的 hydrateSecurity —— 它还会刷新 observable，
   // 否则设置页读到的仍是模块加载瞬间的快照。

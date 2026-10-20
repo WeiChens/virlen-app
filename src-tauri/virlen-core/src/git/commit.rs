@@ -96,6 +96,9 @@ fn commit_with(
 /// - root 提交（仓库只有一条提交）→ `HEAD~1` 不存在，改走 `update-ref -d HEAD`（删除分支引用，
 ///   index 与工作区**原样保留**）—— 否则界面上「第一个提交撤不掉」。
 ///
+/// ⚠️ root 分支只对**符号引用**（在分支上）成立：游离 HEAD 时 HEAD 自己就是那个直接引用，
+/// `update-ref -d HEAD` 会把 `.git/HEAD` 删掉、仓库直接不再是仓库 → 必须拒绝（见下）。
+///
 /// ⚠️ 不提供 `--hard`：那会真丢数据，与「丢弃」一样必须是一次显式、单独的确认。
 pub fn undo_last(dir: &str, gate: &WriteGate) -> Result<StatusSnapshot, GitError> {
     gate.ensure()?;
@@ -111,6 +114,20 @@ pub fn undo_last(dir: &str, gate: &WriteGate) -> Result<StatusSnapshot, GitError
             .run()?
             .into_result("reset --soft HEAD~1")?;
     } else {
+        // ⚠️ fail-closed：`update-ref -d HEAD` 删的是 **HEAD 指向的那个 ref**。符号引用（在分支上）
+        //    时删分支、仓库变 unborn，这是「撤销根提交」的预期语义；而游离 HEAD 时 HEAD 本身
+        //    就是直接引用 → `.git/HEAD` 被删掉，`git status` 直接 `fatal: not a git repository`
+        //    （实测）。没有可删的 ref 就不许动。
+        let symbolic = GitCmd::read(&root)
+            .arg("symbolic-ref")
+            .arg("-q")
+            .arg("HEAD")
+            .run()?;
+        if !symbolic.ok() {
+            return Err(GitError::new(
+                "当前是游离 HEAD（不在任何分支上）且只有一条提交：撤销会破坏仓库引用，请先切回一个分支",
+            ));
+        }
         GitCmd::write(&root)
             .arg("update-ref")
             .arg("-d")

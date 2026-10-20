@@ -180,7 +180,9 @@ export async function saveWorkspaceText(
   const normalized = content.replace(/\r\n/g, '\n')
   return {
     hash10: await computeContentHash10(content),
-    lineCount: normalized.split('\n').length,
+    // 与 Rust `read_file` 的 `.lines().count()` 同口径（末尾换行不再多算一行）：
+    // `split('\n')` 会多出尾部空段 → 保存后行号 +1、刷新又变回去
+    lineCount: normalized === '' ? 0 : normalized.replace(/\n$/, '').split('\n').length,
     byteSize: new TextEncoder().encode(content).length,
   }
 }

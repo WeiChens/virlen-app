@@ -144,6 +144,9 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
   核心 store（`src/ui/store/`）：`settingStore`（全部设置 + 一次性迁移）、`sessionStore`（会话 CRUD + 消息懒加载）、`agentStore`、`securityStore`、`sessionRuntimeStore`（working / pendingContent / traceId）。
 - **页面**：`ui/pages/chat`（chat-view 31 KB）、`ui/pages/Settings`、`ui/pages/setupFlow`。
 - **窗口**：无边框自绘（`ui/layout/WindowLayout`），默认 `visible: false`，首帧后 `getCurrentWindow().show()`。
+- **外观落地**：`ui/hooks/` 下 `useTheme`（`<html data-theme>`）/ `useAccentColor`（`data-accent` 或注入样式表）/ `useFontSize`（`<html data-font-size>`，令牌在 `ui/styles/theme.scss`）都走「mount 时应用一次 + MobX `reaction` 跟随设置」；`useZoom` 不同 —— 它调 **webview 原生缩放**（`getCurrentWebviewWindow().setZoom`，口径 `domain/zoom`），启动那次由 `main.ts` 的 `step('zoom')` 在 `render()` 前落地（`useEffect` 在首帧之后才跑，否则会先按 100% 画一帧再跳）。
+  缩放键 Ctrl/⌘ + `=`（或 `+`）/ `-` / `0` 在 `domain/zoom::zoomCommandOf` 识别，**只写设置**（滑杆 / 落库 / 埋点读的是同一份 `zoomFactor`）；监听在 window **捕获阶段并吃掉事件** —— 焦点在输入框 / Monaco / 终端里也生效，且不把 Ctrl+_ 打进 PTY（readline 的 undo）。
+  ⚠️ 原生缩放依赖 capability `core:webview:allow-set-webview-zoom`（`src-tauri/capabilities/default.json`）：漏了不报编译错，只在运行期被 ACL 拒 → 「滑杆动、界面不动」。**缩放过大时 Ctrl+0 是唯一够得着的出路**，因此：范围硬夹紧在 0.5–2.0（`normalizeZoom`），且设置面板宽度是 `min(680px, 100%)` —— 写死 680px 时高缩放下左侧导航会被挤出屏外，那就只能键盘自救。
 - **性能**：消息列表 `@tanstack/react-virtual` 动态高度虚拟滚动 + 分页（改 `message-list.tsx` 注意 `measureElement`）。
 - **工具调用折叠**：行模型 `message-list/rows.ts` —— 连续工具调用合成一组；`tail` = **尾部段**（后面再没有可见气泡的那组）**默认展开**（agent 还在干活时折起来就看不到进展），用户点过则以用户的选择为准（`use-message-list` 的 `openGroups` 只存用户表态）。
   ⚠️ `tail` 判定只认**可见气泡**（`messageHasVisibleContent`）：`tool` 结果与空壳 assistant 不算（否则工具调用之间会闪折叠），而组的**段首正文**对**前面**的行算（否则中段正文切开的两段会双双误判成尾段）。

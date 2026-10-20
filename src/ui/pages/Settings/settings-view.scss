@@ -65,7 +65,9 @@
   top: 30px;
   right: 0;
   bottom: 0;
-  width: 680px;
+  /* 宽度跟视口收：高缩放（webview zoom）下视口 CSS 宽度会减半，
+     写死 680px 会把左侧导航挤出屏幕左边——那样「通用 → 界面缩放」就鼠标不可达了 */
+  width: min(680px, 100%);
   background: var(--bg-primary, #fff);
   border-left: 1px solid var(--border-color, #e5e5e5);
   display: flex;

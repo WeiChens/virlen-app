@@ -24,6 +24,7 @@
     "core:window:allow-request-user-attention",
     "core:webview:allow-create-webview-window",
     "core:webview:allow-webview-show",
+    "core:webview:allow-set-webview-zoom",
     "fs:allow-read",
     "fs:allow-read-text-file",
     "fs:allow-read-file",

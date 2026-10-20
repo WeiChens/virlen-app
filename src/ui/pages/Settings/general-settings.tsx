@@ -25,6 +25,14 @@ import {
 } from '@/utils/telemetry'
 import Select from '@/ui/components/shared/Select'
 import { t, tpl } from '@/ui/i18n'
+import {
+  DEFAULT_ZOOM,
+  ZOOM_MAX,
+  ZOOM_MIN,
+  ZOOM_STEP,
+  normalizeZoom,
+  zoomPercent,
+} from '@/domain/zoom'
 import './general-settings.scss'
 import { openUrl } from '@tauri-apps/plugin-opener'
 
@@ -126,6 +134,22 @@ function AccentColorField({
 function GeneralSettings() {
   const s = settingsState.value
   const [telemetryBusy, setTelemetryBusy] = useState(false)
+  /** 缩放滑杆草稿：拖动期间只改它，松手才落库（同代码显示页的字号滑杆） */
+  const [zoomDraft, setZoomDraft] = useState(() =>
+    normalizeZoom(settingsState.value.zoomFactor),
+  )
+
+  // 外部改了缩放（「恢复默认」）→ 草稿跟上
+  useEffect(() => {
+    setZoomDraft(normalizeZoom(s.zoomFactor))
+  }, [s.zoomFactor])
+
+  function commitZoom(next: number) {
+    const value = normalizeZoom(next)
+    setZoomDraft(value)
+    if (value === normalizeZoom(s.zoomFactor)) return
+    update('zoomFactor', value)
+  }
 
   const LANGUAGE_OPTIONS: {
     value: SettingsStore['language']
@@ -288,6 +312,40 @@ function GeneralSettings() {
                 </button>
               ))}
             </div>
+          </div>
+        </div>
+
+        {/* 缩放走 webview 原生 setZoom（ui/hooks/useZoom.ts）：文字、图标、间距一起变；
+            与上面的「字体大小」（只换字号令牌）是两条独立的路，所以各自一行 */}
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="label-text">{t('界面缩放')}</span>
+          </div>
+          <div className="setting-control zoom-control">
+            {/* 拖动只改草稿，松手 / 键盘抬起 / 失焦才落库：否则一次拖动就是几十次
+                settings.change 埋点、写表与 webview 缩放 */}
+            <input
+              type="range"
+              className="zoom-range"
+              min={ZOOM_MIN}
+              max={ZOOM_MAX}
+              step={ZOOM_STEP}
+              value={zoomDraft}
+              aria-label={t('界面缩放')}
+              onChange={(e) => setZoomDraft(Number(e.currentTarget.value))}
+              onPointerUp={(e) => commitZoom(Number(e.currentTarget.value))}
+              onKeyUp={(e) => commitZoom(Number(e.currentTarget.value))}
+              onBlur={(e) => commitZoom(Number(e.currentTarget.value))}
+            />
+            <span className="zoom-value">{zoomPercent(zoomDraft)}%</span>
+            <button
+              type="button"
+              className="zoom-reset"
+              disabled={normalizeZoom(s.zoomFactor) === DEFAULT_ZOOM}
+              title={t('恢复默认（Ctrl/Cmd + 0）')}
+              onClick={() => update('zoomFactor', DEFAULT_ZOOM)}>
+              {t('恢复默认')}
+            </button>
           </div>
         </div>
       </div>
