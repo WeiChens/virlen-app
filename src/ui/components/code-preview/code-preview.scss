@@ -50,7 +50,9 @@
   background-clip: content-box;
 }
 
-/* 聊天卡片内不允许垂直滚动条把高度撑破：内容等高时不应出现滚动条 */
+/* 内置垂直滚动条只在「内容高于代码区上限」时才出现（CodePreview 按需把 scrollbar.vertical
+ * 设成 auto，没超上限时是 hidden，见 maxContentHeight）。出现时它必须能拖：
+ * 外层是 overflow: hidden，别让别处的 pointer-events 规则把它禁掉。 */
 .code-preview .monaco-editor .scrollbar.vertical {
   pointer-events: auto;
 }

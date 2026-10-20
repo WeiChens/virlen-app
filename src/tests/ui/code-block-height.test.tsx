@@ -3,9 +3,8 @@
  * `codePreviewHeight(行数, 行高)` 原样交给 `CodePreview`。
  *
  * 为什么是条等式而不是「差不多就行」：Monaco 的内容高度 = `行数 × 行高 + 上下 padding`
- *（0.56 `linesLayout.js::getLinesTotalHeight`）。容器矮 1px，它就多出 1px 可滚范围 ——
- * `scrollbar.vertical: 'hidden'` 只藏了滚动条、没禁止滚动，滚轮照样能把内容推上去一点；
- * 容器高了，多出来的一截就是一块多余底色。
+ *（0.56 `linesLayout.js::getLinesTotalHeight`）。没超过代码区上限时高度就等于内容高度、
+ * 且不开滚动条，所以容器矮 1px 就把最后一行裁掉（没有滚动条可拖）；高出来那一截是多余底色。
  *
  * 曾经那版估算 `max(行高 + 16, 5 + (行数 + 1) × 行高)` 只是**在默认字号下**凑巧对上
  *（行高 20 → 比内容高 1px）：字号 / 行高一改就翻成负数（字号 11 + 行高 1.2 → 行高 13 → 矮 6px），
@@ -127,4 +126,39 @@ it('末尾换行不算一行；单行代码也按 1 行算（不能退化成固�
 
   await mount(LINE)
   expect(state.props?.height).toBe(codePreviewHeight(1, lh))
+})
+
+/**
+ * `maxHeight` 只限「代码区」，且必须**换成像素上限**交给 CodePreview：
+ * 纵向滚动从此在 Monaco 内部（带库自带滚动条），外层 wrapper 不再 `overflow: auto`——
+ * 外层滚动那版会把 Ctrl+F 的查找框一起滚出视野。
+ */
+it('maxHeight 换算成代码区像素上限交给 CodePreview（px 原样、vh 按视口）', async () => {
+  await act(async () =>
+    root.render(
+      <CodeBlock className="language-ts" maxHeight={450}>
+        {LINE}
+      </CodeBlock>,
+    ),
+  )
+  expect(state.props?.maxContentHeight).toBe(450)
+  // 外层不再自己滚：wrapper 上不该再有 max-height / overflow
+  const wrapper = container.querySelector('.code-block-wrapper') as HTMLElement
+  expect(wrapper.style.maxHeight).toBe('')
+  expect(wrapper.style.overflow).toBe('')
+
+  await act(async () =>
+    root.render(
+      <CodeBlock className="language-ts" maxHeight="55vh">
+        {LINE}
+      </CodeBlock>,
+    ),
+  )
+  // jsdom 的 innerHeight = 768 → 55vh；把 '55vh' 原样递给 Monaco 它是认不出来的
+  expect(state.props?.maxContentHeight).toBeCloseTo(window.innerHeight * 0.55, 5)
+})
+
+it('不传 maxHeight 时不夹紧（内容多高块就多高）', async () => {
+  await mount(LINE)
+  expect(state.props?.maxContentHeight).toBeUndefined()
 })

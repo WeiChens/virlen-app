@@ -23,3 +23,20 @@
   /* 编辑器自己会绘制 virlen-dark 的底色 / 行号区底色（与聊天里的代码预览同一套配色），
      这里不要再覆盖，否则会与外层兜底底色叠出两段不同深浅的色块 */
 }
+
+/*
+ * 关掉 Monaco 的悬浮提示气泡（查找框上那三个开关：区分大小写 / 全字匹配 / 正则）。
+ *
+ * 气泡走 `IHoverService`，宿主容器就是编辑器容器（`ILayoutService.getContainer()` 的 activeContainer），
+ * 而这个盒子是 `overflow: hidden`、查找框又贴在顶边，气泡没地方往下放，只能朝上被顶边切掉一半
+ *（露半个框，比没有更难看）。
+ *
+ * 真正生效的是 `src/monaco/findWidget.ts::tameFindWidget`（编辑器容器上捕获阶段吞掉 `mouseover`，
+ * 不依赖气泡挂在哪个节点）；这里的 CSS 只是第二道：万一气泡还是被造出来且落在这个容器里，也看不见。
+ * 文案在 `aria-label` 里还在，屏幕阅读器与 Tab 到按钮时的无障碍名照旧。
+ * ⚠️ 只关在 `.code-editor` 里：全局关会把差异视图 / 其它浮层的气泡一起带走。
+ */
+.code-editor .monaco-hover,
+.code-editor .workbench-hover-container {
+  display: none !important;
+}

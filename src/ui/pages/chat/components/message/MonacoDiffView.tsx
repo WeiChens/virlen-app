@@ -36,6 +36,8 @@ import type { Action } from './code-block'
 import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
 import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
 import '@/monaco/setupMonaco'
+// 查找框：气泡断源 + 夹进可见交集（contrib 是全局注册的，只读差异视图也吃得到 Ctrl+F）
+import { tameFindWidget } from '@/monaco/findWidget'
 // 共享的「差异外壳」样式（.diff-header* / .diff-col-header*）还在 SideBySideDiff.scss，必须自己引，
 // 否则列头与文件头会掉回浏览器默认样式。
 import './SideBySideDiff.scss'
@@ -97,6 +99,10 @@ function baseEditorOptions(
     lineDecorationsWidth: 6,
     lineNumbersMinChars: 3,
     scrollBeyondLastLine: false,
+    // autoHeight（行数 × 行高）与查找框的 view zone 是死敌：find contrib 是全局注册的
+    // （见 `CodeEditor.tsx` 顶层 import），只读差异视图里按 Ctrl+F 也会开查找框，
+    // 默认的 `addExtraSpaceOnTop` 会在首行前插 33px → 内容比容器高 33px，凭空多出一条滚动区。
+    find: { addExtraSpaceOnTop: false },
     automaticLayout: true,
     // 右键菜单自己画：Monaco 那份是英文，还会吃掉 React 的 onContextMenu
     contextmenu: false,
@@ -504,6 +510,8 @@ function DiffContent({
             onMount={(editor) => {
               singleRef.current = editor
               paintWholeTint(editor)
+              // 查找框：气泡断源 + 夹进可见交集（与 CodeEditor / CodePreview 同一份处理）
+              tameFindWidget(editor)
             }}
           />
         ) : (
@@ -520,6 +528,9 @@ function DiffContent({
               diffRef.current = editor
               applyLineNumbers(editor)
               editor.revealFirstDiff()
+              // 两侧各有一个查找框（各自的 overlayWidgets）；销毁钩子在 tameFindWidget 内部接
+              tameFindWidget(editor.getOriginalEditor())
+              tameFindWidget(editor.getModifiedEditor())
             }}
           />
         )}

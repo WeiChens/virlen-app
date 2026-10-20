@@ -2,7 +2,8 @@
  * CodeEditor —— 可编辑的精简版 Monaco（带语法高亮的小代码输入框）
  *
  * 与 `CodePreview`（只读：隐藏光标、关右键菜单、关输入）相对：本组件用于**真正输入**，
- * 保留编辑与右键菜单，只减掉噪音与体积（小地图 / 折叠 / 行高亮）。
+ * 保留编辑与右键菜单（含 Ctrl/Cmd+F 查找：右上角搜索框 + 全文命中高亮，就是 VS Code 那套控件），
+ * 只减掉噪音与体积（小地图 / 折叠 / 行高亮）。
  * 典型用途：设置 → 安全 → 忽略沙盒命令的 JS 规则。
  *
  * 精简构建只注册 Monarch 词法高亮（见 `src/monaco/setupMonaco.ts`），不打包语言服务（无 Worker），
@@ -17,6 +18,19 @@ import { useRef } from 'react'
 
 // 必须最先引入：精简 monaco + 高亮注册 + 代码主题注册（monaco 命名空间也从这里拿）
 import { monaco } from '@/monaco/setupMonaco'
+// 查找框的两处水土不服（气泡被裁 / 跟着滚动滚走）：统一在 `monaco/findWidget` 里收口
+import { tameFindWidget } from '@/monaco/findWidget'
+/**
+ * Ctrl/Cmd+F 的查找控件（右上角搜索框 + 命中高亮）在 Monaco 里是 **contrib**：
+ * 精简入口 `editor.api.js` 只导出 API、一个 contrib 都不带（完整入口 `editor.main.js` 里那行
+ * `import './contrib/find/browser/findController.js'` 才有它），所以得自己按需引一次。
+ *
+ * ⚠️ 必须在编辑器实例创建**之前**求值（模块顶层即可）：contrib 是构造编辑器时按注册表取的，
+ *    晚于构造引进来不生效 —— 表现是「Ctrl+F 没反应」，且不报任何错。
+ * 只有可编辑的编辑器需要它（`CodePreview` 只读预览不加）；代价实测 +82 kB / gzip +20 kB，
+ * 跟组件进同一份产物（不额外发请求）。
+ */
+import 'monaco-editor/editor/contrib/find/browser/findController.js'
 import { useCodeDisplay } from '@/ui/hooks/useCodeDisplay'
 import {
   codeLineHeightPx,
@@ -136,6 +150,13 @@ export default function CodeEditor(props: CodeEditorProps) {
         onSaveRef.current?.(),
       )
     }
+
+    /**
+     * 查找框（Ctrl/Cmd+F）的两个已知问题统一在 `monaco/findWidget` 里处理（销毁钩子也在那里接）：
+     * ① 三个开关的悬浮气泡被 `overflow: hidden` 切一半（源头断掉 `mouseover`）；
+     * ② 编辑器比可视区高时搜索框会被滚出视野（夹进可见交集）。
+     */
+    tameFindWidget(editor)
   }
 
   return (

@@ -6,9 +6,13 @@
  * 无光标、无右键菜单、无悬浮。
  *
  * 聊天流式列表适配：`height` 让容器内容等高（按行数算时用 `domain/code-display::codePreviewHeight`，
- * 多 1px 是多余底色、少 1px 就多出 1px 可滚范围）；scrollbar.alwaysConsumeMouseWheel=false +
- * ignoreHorizontalScrollbarInContentHeight=true 使自身无纵向溢出时滚轮冒泡给外层消息列表；
+ * 多 1px 是多余底色、少 1px 就多出 1px 可滚范围）；`alwaysConsumeMouseWheel=false` +
+ * `ignoreHorizontalScrollbarInContentHeight=true` 使滚动到边界后滚轮冒泡给外层消息列表；
  * startLineNumber 用于展示文件片段的行号。
+ *
+ * **纵向滚动归 Monaco 自己**（`maxContentHeight`）：内容高于上限时容器钉在上限、由内置滚动条滚，
+ * 外层（聊天代码块）不再套一层 `overflow: auto` —— 外层滚动那版里 Ctrl+F 的查找框会跟着滚出视野
+ *（机制见 `src/monaco/findWidget.ts`）。没超过上限时高度仍严格等于内容高度，滚动条不出现。
  *
  * 用法：`<CodePreview code={code} language="typescript" height={320} />`
  */
@@ -26,6 +30,8 @@ import {
   codeLineHeightPx,
   type ResolvedCodeDisplay,
 } from '@/domain/code-display'
+// 查找框的两处水土不服（气泡被裁 / 跟着滚动滚走）：只读预览同样吃得到 Ctrl+F（contrib 是全局注册的）
+import { tameFindWidget } from '@/monaco/findWidget'
 import './code-preview.scss'
 
 /**
@@ -45,6 +51,11 @@ const GUTTER_BG_CUTOUT = GUTTER_TO_CONTENT_GAP - GUTTER_INNER_PAD
 export interface CodePreviewApi {
   /** 全选编辑器内容（并把焦点移入编辑器，选区会经 onSelectionChange 上报） */
   selectAll: () => void
+  /**
+   * 滚回顶部。DOM 与 Monaco 实例都是复用的：内容换人时不归零，会停在上一个文件同一条滚动偏移上
+   *（`CodeBlock` 的 contentKey 用）。
+   */
+  scrollToTop: () => void
 }
 
 export interface CodePreviewProps {
@@ -88,10 +99,18 @@ export interface CodePreviewProps {
    *
    * 给「高度本来就该等于内容高度」的只读预览用（聊天代码块）。为什么不能只靠外部算：
    * Monaco 的行数认 `\r\n` / `\r` / `\n` 三种行尾，而我们只能按字符串数 —— CRLF 文件把末尾
-   * `\r\n` 剥成只剩 `\r` 时，我们数 16 行、模型是 17 行（最后一行空），容器就矮一行，
-   * 那几像素就是「不需要滚动也能滚一点」（实测 16px）。
+   * `\r\n` 剥成只剩 `\r` 时，我们数 16 行、模型是 17 行（最后一行空），容器就矮一行：
+   * 矮的那 16px 会把最后一行裁掉（没超 `maxContentHeight` 时不开滚动条，连滚都滚不到）。
    */
   fitContent?: boolean
+  /**
+   * 「代码区」的高度上限（px，仅 `fitContent` 时生效）：高度 = min(内容高度, 这里)。
+   *
+   * 超过上限就说明内容高于可视区 —— 此时高度钉在上限，**纵向滚动交给 Monaco 内置滚动条**
+   *（`scrollbar.vertical: 'auto'`），外层不需要（也不应该）再套一层滚动容器。
+   * 没超过时不显示滚动条：高度与内容高度差 1px 也不会冒出一条拖不动的幽灵滚动条。
+   */
+  maxContentHeight?: number
 }
 
 /**
@@ -101,6 +120,7 @@ export interface CodePreviewProps {
 function buildPreviewOptions(
   props: CodePreviewProps,
   display: ResolvedCodeDisplay,
+  scrollable: boolean,
 ): MonacoNs.editor.IStandaloneEditorConstructionOptions {
   const {
     showMinimap = false,
@@ -152,22 +172,28 @@ function buildPreviewOptions(
     renderWhitespace: 'none',
     renderControlCharacters: false,
     scrollBeyondLastLine: false,
+    // 查找控件是全局注册的（`CodeEditor.tsx` 顶层引了 find contrib，注册表不区分实例），
+    // 所以只读预览里按 Ctrl+F 也会开查找框。它默认 `addExtraSpaceOnTop: true` —— 会在第一行前
+    // 插一个 33px 的 view zone（编辑器内容变高），而本组件高度跟着 `getContentHeight()` 走，
+    // 于是「没超高上限」的代码块一按 Ctrl+F 就长高 33px。关掉它，查找框直接压在首行上
+    //（超高上限的那块本来就能往下滚，遮住首行不影响看后面的代码）。
+    find: { addExtraSpaceOnTop: false },
     smoothScrolling: true,
     automaticLayout: true,
-    // ⚠️ 上下 padding 与「代码块容器高度」共用一处（codePreviewHeight）：容器的目标值就是
-    // Monaco 的内容高度，两个数各写一份就会错开 1px → 多出 1px 可滚范围（滚轮能推开一点）。
+    // ⚠️ 上下 padding 与「代码块容器高度」共用一处（codePreviewHeight）：未超上限时容器的目标值
+    // 就是 Monaco 的内容高度，两个数各写一份就会错开 1px（多出 1px 可滚范围 / 裁掉最后一行）。
     padding: { top: CODE_PREVIEW_PADDING.top, bottom: CODE_PREVIEW_PADDING.bottom },
     tabSize: 2,
     folding: false,
     overviewRulerBorder: false,
     roundedSelection: false,
     scrollbar: {
-      // 垂直滚动交给外层 .code-block-wrapper（maxHeight 场景）/ 消息列表：内置垂直滚动条在
-      //「内容高度≈可视高度」时会变成拖不动的幽灵滚动条，与外层重复。
-      vertical: 'hidden',
+      // 纵向滚动归 Monaco：只在「内容高于上限」时开（见 maxContentHeight）。
+      // 不开的另一半同样重要 —— 高度 = 内容高度时若差 1px，'auto' 会冒出一条拖不动的幽灵滚动条。
+      vertical: scrollable ? 'auto' : 'hidden',
       horizontal: 'auto',
       useShadows: false,
-      // 自身无可滚方向时不要吞掉滚轮，让外层消息列表能正常滚动（聊天流场景必须）。
+      // 滚到边界后把滚轮让给外层消息列表（聊天流场景必须）；编辑器内部还有可滚距离时它自己吃。
       alwaysConsumeMouseWheel: false,
       // ⚠️ 横向滚动条是浮在内容上的（不占布局），但它默认还会把自己那 10px 加进**内容高度**
       //（0.56 `viewLayout.js::_getContentHeight`：`linesTotalHeight + horizontalScrollbarSize`）——
@@ -195,9 +221,25 @@ export default function CodePreview(props: CodePreviewProps) {
   /** fitContent 时由编辑器报的内容高度（null = 还没量到，先用调用方给的 height） */
   const [measuredHeight, setMeasuredHeight] = useState<number | null>(null)
 
+  /**
+   * 自然高度（= 内容高度）与最终渲染高度。
+   *
+   * `maxContentHeight` 只夹「已经量出来的数字高度」：字符串高度（'100%'）交给 CSS，不夹。
+   * `scrollable` 决定要不要开内置滚动条 —— 夹到了就是内容超了，让 Monaco 自己滚。
+   */
+  const naturalHeight = props.fitContent ? (measuredHeight ?? height) : height
+  const scrollable =
+    typeof naturalHeight === 'number' &&
+    typeof props.maxContentHeight === 'number' &&
+    naturalHeight > props.maxContentHeight
+  const renderedHeight = scrollable ? props.maxContentHeight : naturalHeight
+
   // 预览固定只读；即使外层误改 props 也会被 updateOptions 兜底
   const handleMount: OnMount = (editor) => {
     editor.updateOptions({ readOnly: true, domReadOnly: true })
+    // 查找框要夹进可见交集（超上限时纵向滚动已在 Monaco 内部，但编辑器被消息列表 / 弹窗
+    // 裁掉上半时仍需兜底）；顺带断掉三个开关的气泡（销毁钩子也在里面接）
+    tameFindWidget(editor)
     // 选区变化 → 上报文本（Monaco 选区不入 window.getSelection，外层菜单靠它）
     editor.onDidChangeCursorSelection(() => {
       if (!props.onSelectionChange) return
@@ -226,6 +268,7 @@ export default function CodePreview(props: CodePreviewProps) {
         editor.setSelection(model.getFullModelRange())
         editor.focus()
       },
+      scrollToTop: () => editor.setScrollTop(0),
     })
   }
 
@@ -253,13 +296,13 @@ export default function CodePreview(props: CodePreviewProps) {
         {code}
       </div>
       <Editor
-        height={props.fitContent ? (measuredHeight ?? height) : height}
+        height={renderedHeight}
         path={props.path}
         language={language ?? 'plaintext'}
         value={code}
         theme={theme}
         onMount={handleMount}
-        options={buildPreviewOptions(props, display)}
+        options={buildPreviewOptions(props, display, scrollable)}
       />
     </div>
   )

@@ -114,10 +114,10 @@ export const CODE_PREVIEW_PADDING = { top: 12, bottom: 12 } as const
 /**
  * 代码预览容器应有的高度（px）= Monaco 的内容高度，不多不少。
  *
- * 「高度按行数算、纵向滚动交给外层」的前提是**容器不比内容矮**：矮 1px，Monaco 就多出 1px
- * 的可滚范围 —— `scrollbar.vertical: 'hidden'` 时它没有滚动条，但滚轮照样能把内容推上去
- *（`alwaysConsumeMouseWheel: false` 只在**滚不动**时才把滚轮让给外层），表现就是
- * 「不需要滚动的高度，滚轮还是能动一点」。反过来，高出来的部分是一截多余底色。
+ * 这是「没超过代码区上限」时的高度：此时 CodePreview 不开纵向滚动条，所以**容器不能比内容矮** ——
+ * 矮 1px 就把最后一行裁掉（按设计没有滚动条可拖），高出来则是一截多余底色。
+ * 超过上限（`CodeBlock` 的 maxHeight / 全屏可用高度）时高度钉在上限，多出的内容由
+ * Monaco 内置滚动条承担（`scrollbar.vertical: 'auto'`）。
  *
  * ⚠️ 横向滚动条那 10px 不算在这里：`CodePreview` 把 `ignoreHorizontalScrollbarInContentHeight`
  *    置成了 true（内容高度里不再叠它），否则每块代码都会凭空多出 10px 可滚范围。

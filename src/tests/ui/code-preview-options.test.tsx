@@ -1,14 +1,9 @@
 /**
- * CodePreview → Monaco 的选项契约：「不需要滚动的高度，滚轮却能推开一点」那两个来源的另一半。
+ * CodePreview → Monaco 的选项契约：滚动归谁、高度怎么算。
  *
- * 症状有两个来源，一个在容器高度、一个在选项：
- *  1. 容器比 Monaco 的**内容高度**矮 1px → 多出 1px 可滚范围。`scrollbar.vertical: 'hidden'`
- *     只是「没有滚动条」，不是「不能滚」—— 滚轮照样能把内容推上去，而
- *     `alwaysConsumeMouseWheel: false` 只在**滚不动**时才把滚轮让给外层消息列表。
- *     容器高度由 `codePreviewHeight` 算（等式见 `code-theme-contract.test.ts`）。
- *  2. 横向滚动条默认还会把自己那 10px 加进**内容高度**
- *     （0.56 `viewLayout.js::_getContentHeight`：`linesTotalHeight + horizontalScrollbarSize`）
- *     → 「按行数算出来的等高容器」凭空多出 10px 可滚范围。
+ * 2026-10 重构后：纵向滚动由 **Monaco 内置滚动条**承担（`maxContentHeight` 夹紧时
+ * `scrollbar.vertical: 'auto'`），外层（聊天代码块）不再套 `overflow: auto` ——
+ * 外层滚动那版会把 Ctrl+F 的查找框一起滚出视野。没超上限时高度仍等于内容高度、不开滚动条。
  *
  * jsdom 没有布局（Monaco 连字号都量不出来），真实滚轮行为测不到；这里只钉住我们交下去的选项。
  *
@@ -139,7 +134,7 @@ it('横向滚动条不许把自己那 10px 加进内容高度（否则等高容�
   expect(o.scrollbar?.horizontal).toBe('auto')
 })
 
-it('自身没有纵向溢出时把滚轮让给外层（纵向滚动条藏形、且不吃滚轮）', async () => {
+it('未超上限时纵向滚动条藏形（差 1px 也不冒幽灵条），且不吃掉外层的滚轮', async () => {
   const o = await mount()
   expect(o.scrollbar?.vertical).toBe('hidden')
   expect(o.scrollbar?.alwaysConsumeMouseWheel).toBe(false)
@@ -184,4 +179,65 @@ it('不传 fitContent 时高度只用调用方给的值（固定高度的预览�
   })
   await act(async () => fake.setContentHeight(999))
   expect(state.props?.height).toBe(220)
+})
+
+/**
+ * 超过上限 → 高度钉上限 + 内置滚动条；不超过 → 与内容等高、不出现滚动条。
+ *
+ * 这是「外层自定义滚动条」退场的契约：滚动必须发生在 Monaco 里，`find-widget` 才不会被滚走。
+ */
+it('超过 maxContentHeight：高度钉在上限、内置纵向滚动条打开', async () => {
+  const estimate = codePreviewHeight(80, 16)
+  await act(async () =>
+    root.render(
+      <CodePreview
+        code={CODE}
+        language="typescript"
+        height={estimate}
+        fitContent
+        maxContentHeight={300}
+      />,
+    ),
+  )
+  expect(state.props?.height).toBe(300)
+  expect((state.props?.options as PreviewOptions).scrollbar?.vertical).toBe('auto')
+})
+
+it('未超 maxContentHeight：高度 = 内容高度，滚动条保持藏形', async () => {
+  const estimate = codePreviewHeight(2, 16)
+  await act(async () =>
+    root.render(
+      <CodePreview
+        code={CODE}
+        language="typescript"
+        height={estimate}
+        fitContent
+        maxContentHeight={400}
+      />,
+    ),
+  )
+  expect(state.props?.height).toBe(estimate)
+  expect((state.props?.options as PreviewOptions).scrollbar?.vertical).toBe('hidden')
+})
+
+it('编辑器后来报的内容高度超过上限：一样钉在上限并放出自带滚动条', async () => {
+  const estimate = codePreviewHeight(2, 16)
+  await act(async () =>
+    root.render(
+      <CodePreview
+        code={CODE}
+        language="typescript"
+        height={estimate}
+        fitContent
+        maxContentHeight={300}
+      />,
+    ),
+  )
+  const fake = makeFakeEditor(estimate)
+  await act(async () => {
+    state.props?.onMount?.(fake.editor as never, {} as never)
+  })
+  await act(async () => fake.setContentHeight(900))
+  expect(state.props?.height).toBe(300)
+  expect((state.props?.options as PreviewOptions).scrollbar?.vertical).toBe('auto')
 })

@@ -16,8 +16,10 @@
   // 状态栏自身 z-index:100，但本层从它下方开始，不重叠
   z-index: 500;
   background-color: var(--code-body-bg, #282c34);
+  // 溢出就裁：代码区高度按「视口 − 标题栏 − 头部」算好了，多出来的只能是 1px 取整误差
+  overflow: hidden;
 
-  // 全屏态：去掉外边距/圆角/边框，直接铺满；滚动仍由 wrapper 自己承担
+  // 全屏态：去掉外边距/圆角/边框，直接铺满（高度算错时宁可裁 1px 也不溢出到页面）
   .code-block-wrapper.is-fullscreen {
     margin: 0;
     border: none;
@@ -31,27 +33,12 @@
   margin: 10px 0;
   border-radius: 8px;
   border: 1px solid var(--border-color, #e5e5e5);
-  // 注意：必须是“普通块”而不是 flex 列容器。
-  // 若用 display:flex + max-height，Flex 会按 flex-shrink 把超高的 Monaco
-  // 内容压缩进 450px，而 .code-preview 自身 overflow:hidden 会把被压缩掉的
-  // 部分直接裁掉 → 滚动条存在但“拖到底也看不到全部内容”。
-  // 普通块布局下子元素保持内容高度，由本容器的 overflow:auto 负责滚动。
-  // overflow 由内联 style 控制：有 maxHeight → overflow: auto
+  // 本容器**不承担滚动**（也不再设 maxHeight）：高度上限由代码区（CodePreview 的
+  // maxContentHeight / 回退层的 max-height）自己管，纵向滚动交给 Monaco 内置滚动条。
+  // 外层滚动的旧版里，Ctrl+F 的查找框会跟着一起滚出视野（见 monaco/findWidget）。
   // 底色 / 滚动条都取 --code-*（与 Monaco 正文同一个色源）：写死色值会让暗色主题下
   // 外壳(#292c33)与正文(#282c34) 差一档，看着像两块拼起来的
   background-color: var(--code-body-bg);
-
-
-  &::-webkit-scrollbar{
-    width: 12px;
-  }
-  &::-webkit-scrollbar-thumb{
-    background-color: color-mix(in srgb, var(--code-body-color) 18%, var(--code-body-bg));
-    border-radius: 4px;
-    &:hover{
-      background-color: color-mix(in srgb, var(--code-body-color) 28%, var(--code-body-bg));
-    }
-  }
 
   .code-block-header {
     display: flex;
@@ -61,9 +48,7 @@
     background: var(--code-header-bg, #323844);
     color: var(--code-header-color, #abb2bf);
     font-size: var(--font-size-sm);
-    position: sticky;
-    top: 0px;
-    z-index: 1;
+    // 不吸附：本容器不滚了，sticky 会改成相对消息列表（最近的滚动祖先）粘住，反而跑出块外
 
     .code-block-header-info {
       flex: 1 1 auto;

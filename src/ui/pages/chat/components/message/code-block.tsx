@@ -6,6 +6,7 @@
 import {
   useState,
   useEffect,
+  useCallback,
   type HTMLAttributes,
   type ReactElement,
   type ReactNode,
@@ -304,14 +305,105 @@ export function toMonacoLang(lang: string | undefined): string | undefined {
 /** 超过该字符数改为纯文本，避免 Monaco 长任务阻塞 */
 const LARGE_CODE_LIMIT = 100 * 1000
 
+/** 代码块头部高度兜底（px）：与 code-block.scss 对齐（上下 padding 6×2 + 按钮 26），挂载后实测校正 */
+const HEADER_FALLBACK_PX = 38
+
+/** 代码区至少保留的高度（px）：窗口极小时也不至于给 Monaco 算出负数 */
+const MIN_BODY_HEIGHT_PX = 120
+
+/** 窗口自绘标题栏高度（`--window-top-bar-height`）：全屏代码块要从可用高度里让出它 */
+function topBarHeightPx(): number {
+  if (typeof document === 'undefined') return 30
+  const raw = getComputedStyle(document.documentElement)
+    .getPropertyValue('--window-top-bar-height')
+    .trim()
+  const parsed = parseFloat(raw)
+  return Number.isFinite(parsed) ? parsed : 30
+}
+
 /**
- * 用 CodePreview(Monaco) 渲染代码正文。高度按行数算，纵向滚动交给外层，
- * Monaco 自身不溢出（配 alwaysConsumeMouseWheel=false 才不会吞滚轮）。
+ * `maxHeight`（px 数或 CSS 长度）→ 像素。
+ *
+ * 只认 px / vh / vw（`450` / `600` / `'55vh'` 就是本项目全部调用点的写法）：其余写法算不准就返回
+ * null，表示「不限制」—— 宁可不夹，也不要拿一个错的数字把代码裁掉。
+ */
+function maxHeightToPx(
+  value: number | string | undefined,
+  viewport: { width: number; height: number },
+): number | null {
+  if (value === undefined || value === null || value === '') return null
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0 ? value : null
+  }
+  const matched = /^(-?\d*\.?\d+)\s*(px|vh|vw)$/i.exec(String(value).trim())
+  if (!matched) return null
+  const amount = Number(matched[1])
+  if (!Number.isFinite(amount) || amount <= 0) return null
+  const unit = matched[2].toLowerCase()
+  if (unit === 'vh') return (viewport.height * amount) / 100
+  if (unit === 'vw') return (viewport.width * amount) / 100
+  return amount
+}
+
+/** 视口尺寸 + 标题栏高度（resize 时重算：`55vh` 与全屏可用高度都随窗口变） */
+function useViewportMetrics(): { width: number; height: number; topBar: number } {
+  const [metrics, setMetrics] = useState(() => ({
+    width: typeof window === 'undefined' ? 0 : window.innerWidth,
+    height: typeof window === 'undefined' ? 0 : window.innerHeight,
+    topBar: topBarHeightPx(),
+  }))
+  useEffect(() => {
+    const handleResize = (): void =>
+      setMetrics({
+        width: window.innerWidth,
+        height: window.innerHeight,
+        topBar: topBarHeightPx(),
+      })
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+  return metrics
+}
+
+/**
+ * 代码块头部实测高度。
+ *
+ * 全屏要把它从可用高度里扣掉（否则最后一行会被容器裁掉）；CSS 里它是固定值，但不写死在这里 ——
+ * 改 padding / 按钮尺寸时不会静默错几像素。
+ */
+function useHeaderHeightPx(): {
+  headerRef: (el: HTMLDivElement | null) => void
+  headerHeight: number
+} {
+  const [headerHeight, setHeaderHeight] = useState(HEADER_FALLBACK_PX)
+  const observerRef = useRef<ResizeObserver | null>(null)
+
+  const headerRef = useCallback((el: HTMLDivElement | null): void => {
+    observerRef.current?.disconnect()
+    observerRef.current = null
+    if (!el) return
+    const sync = (): void => {
+      const next = el.offsetHeight
+      if (next > 0) setHeaderHeight((prev) => (prev === next ? prev : next))
+    }
+    sync()
+    if (typeof ResizeObserver === 'undefined') return
+    observerRef.current = new ResizeObserver(sync)
+    observerRef.current.observe(el)
+  }, [])
+
+  useEffect(() => () => observerRef.current?.disconnect(), [])
+
+  return { headerRef, headerHeight }
+}
+
+/**
+ * 用 CodePreview(Monaco) 渲染代码正文。高度按行数算（首帧估值），纵向滚动在 Monaco 内部：
+ * 内容超过 `maxContentHeight` 时容器钉在上限、由内置滚动条滚（外层不再套滚动容器）。
  *
  * ⚠️ 高度必须走 `codePreviewHeight`（= Monaco 的内容高度：行数 × 行高 + 上下 padding）：
- *    多 1px 是一截多余底色，少 1px Monaco 就多出 1px 可滚范围 ——
- *    `scrollbar.vertical: 'hidden'` 下没有滚动条，但滚轮能把内容推开一点，
- *    看着就是「明明不需要滚动，滚轮却动了」。
+ *    未超上限时它就是实际高度 —— 多 1px 是一截多余底色，少 1px 会把最后一行裁掉
+ *    （那时按设计不开滚动条，连拖都拖不到）。
  * ⚠️ lineHeightPx 由调用方从同一份解析结果传入（不要在这里再乘一次倍率）：
  *    容器高度是按它算的，与 Monaco 的 lineHeight 必须同一个数。
  */
@@ -322,6 +414,7 @@ function MonacoCodeView({
   lineHeightPx,
   showLineNumbers,
   startLineNumber,
+  maxContentHeight,
   onSelectionChange,
   onApiReady,
 }: {
@@ -331,6 +424,8 @@ function MonacoCodeView({
   lineHeightPx: number
   showLineNumbers?: boolean
   startLineNumber?: number
+  /** 代码区高度上限（px）：超出部分交给 Monaco 内置滚动条 */
+  maxContentHeight?: number
   onSelectionChange?: (selectedText: string) => void
   onApiReady?: (api: CodePreviewApi | null) => void
 }) {
@@ -342,9 +437,10 @@ function MonacoCodeView({
       code={code}
       language={toMonacoLang(language)}
       // 首帧用估算值，之后由编辑器自己报（Monaco 认 `\r\n` / `\r` / `\n` 三种行尾，
-      // 我们只能按 `split('\n')` 数 —— CRLF 末尾剩一个裸 `\r` 时会少算一行 = 16px 可滚范围）
+      // 我们只能按 `split('\n')` 数 —— CRLF 末尾剩一个裸 `\r` 时会少算一行）
       fitContent
       height={height}
+      maxContentHeight={maxContentHeight}
       showLineNumbers={showLineNumbers}
       startLineNumber={startLineNumber}
       fontSize={fontSize}
@@ -385,7 +481,7 @@ export interface CodeBlockProps extends HTMLAttributes<HTMLElement> {
   className?: string
   /** 代码内容 */
   children: ReactNode
-  /** 最大高度（px），超出自动滚动 */
+  /** 最大高度（CSS 长度），限的是**代码区**（不含头部）；超出部分由 Monaco 内置滚动条承担 */
   maxHeight?: number | string
   /** 代码块宽度 */
   width?: number | string
@@ -442,6 +538,9 @@ function CodeBlock({
   // 的 `code` 覆盖组件把它们渲染在同一位置，流式「前缀冻结」还会让尾部首块在两种形态间切换），
   // 某次渲染少调一个 hook 就会抛 React #300（行内路径 autoCenter=false，effect 本身不做任何事）。
   const rootRef = useAutoCenter(autoCenter)
+  /** 视口尺寸（`55vh` 换算 + 全屏可用高度）与头部实测高度 */
+  const metrics = useViewportMetrics()
+  const { headerRef, headerHeight } = useHeaderHeightPx()
   /**
    * 代码块专属右键菜单：Monaco 选区不进 window.getSelection()，气泡菜单的复制会拿到整条正文。
    */
@@ -460,8 +559,11 @@ function CodeBlock({
   /** 内容换人就滚回顶部（钩子必须写在提前 return 之前） */
   useEffect(() => {
     if (contentKey === undefined) return
+    // 纵向滚动现在在 Monaco 内部（超上限时），DOM 那行只是 fallback 路径的保险
     const el = rootRef.current
     if (el) el.scrollTop = 0
+    monacoApiNormalRef.current?.scrollToTop()
+    monacoApiFullRef.current?.scrollToTop()
   }, [contentKey])
 
   // Esc 退出全屏
@@ -548,20 +650,37 @@ function CodeBlock({
     selection?.addRange(range)
   }
 
-  /** 渲染代码块本体；isFull 用于全屏浮层（不限高度 / 宽度） */
+  /**
+   * 代码区（不含头部）的高度上限（px）：全屏 = 视口 − 标题栏 − 头部；普通 = `maxHeight`。
+   *
+   * null = 不限制（内容多高块就多高，没有滚动条），对应旧行为里没传 maxHeight 的普通代码块。
+   */
+  function bodyMaxHeightPx(isFull: boolean): number | null {
+    if (isFull) {
+      // −1：留 1px 余量，别让取整误差把最后一行顶出全屏层（那边溢出了就是被裁）
+      return Math.max(
+        Math.floor(metrics.height - metrics.topBar - headerHeight) - 1,
+        MIN_BODY_HEIGHT_PX,
+      )
+    }
+    return maxHeightToPx(maxHeight, metrics)
+  }
+
+  /** 渲染代码块本体；isFull 用于全屏浮层（不限宽度，高度按视口算） */
   function renderBlock(isFull: boolean) {
+    const bodyMax = bodyMaxHeightPx(isFull)
     return (
       <div
         ref={rootRef}
         className={`code-block-wrapper${isFull ? ' is-fullscreen' : ''} ${props.className || ''}`}
         style={{
-          maxHeight: !isFull && maxHeight ? maxHeight : undefined,
+          // 高度上限落在「代码区」上（见 bodyMax），**外层不再自己滚**：外层滚动那版会把
+          // Ctrl+F 的查找框一起滚出视野（见 monaco/findWidget），也给不出库自带的滚动条
           width: !isFull && width ? width : undefined,
-          overflow: isFull || maxHeight ? 'auto' : 'visible',
           ...(props?.style || {})
         }}
         onContextMenu={(e) => menu.openAt(e, undefined)}>
-        <div className="code-block-header">
+        <div className="code-block-header" ref={isFull ? undefined : headerRef}>
           <div className="code-block-header-info">
             <span className="code-language">{displayLang}</span>
             {fileNameRender
@@ -610,7 +729,13 @@ function CodeBlock({
         </div>
         {/* 流式输出 / 超大文件 → <pre> 纯文本 fallback */}
         {streaming || code.length > LARGE_CODE_LIMIT ? (
-          <div className="code-streaming-fallback">
+          <div
+            className="code-streaming-fallback"
+            style={{
+              // 回退层自己滚：外层不再承担滚动（内置滚动条只在 Monaco 路径里存在）
+              maxHeight: bodyMax ?? undefined,
+              overflow: bodyMax ? 'auto' : undefined,
+            }}>
             <pre
               ref={(el) => {
                 if (isFull) preFullRef.current = el
@@ -629,6 +754,7 @@ function CodeBlock({
             code={code}
             showLineNumbers={withLineNumbers}
             startLineNumber={startLineNumber}
+            maxContentHeight={bodyMax ?? undefined}
             onSelectionChange={(text) => {
               monacoSelectionRef.current = text
             }}

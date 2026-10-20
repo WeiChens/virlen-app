@@ -101,7 +101,19 @@ export const LIGHT_DIFF_HEADERS: CodeThemeDiffHeaders = {
   newFg: '#166534',
 }
 
-/** 主题表：键就是 `<html data-code-theme>` 与设置项 `codeThemeId` 的取值 */
+/**
+ * 「其余命中」的底色（当前命中另算，见 buildMonacoThemeData）。
+ *
+ * 固定值而不是从调色板派生：它是**功能色**（橙 = 搜索命中，与语法色无关），六套主题应该长一样。
+ * ⚠️ 必须半透明：Monaco 把命中底色画在选区**之上**（inline 装饰在 `viewLines` 里，选区在
+ *    `contentViewOverlays` 里，后者先 append），不透明就会把选区整个盖住 —— 与差异底色同一条约束
+ *    （见 types.ts 的 CodeThemeDiff）。
+ */
+const FIND_MATCH_HIGHLIGHT = '#ea5c0055'
+
+/**
+ * 主题表：键就是 `<html data-code-theme>` 与设置项 `codeThemeId` 的取值
+ */
 export const CODE_THEMES: Record<string, CodeThemePalette> = {
   /**
    * 默认主题（= 改造前写死的 `virlen-dark`）。
@@ -339,6 +351,22 @@ export function buildMonacoThemeData(
   const fg = bare(palette.fg)
   const diff = diffOf(palette)
   const widgetBg = palette.ui.widgetBg ?? palette.gutterBg
+  /** 浮层描边：暗色往黑压、亮色往白提 */
+  const widgetBorder = mix(
+    palette.bg,
+    palette.kind === 'dark' ? '#000000' : '#ffffff',
+    0.55,
+  )
+  /**
+   * 输入框面（查找浮层的搜索框）：在编辑器底色上抬一档才看得出是个输入框。
+   * 权重分两档是量出来的：暗色抬 6%（再多会把 solarized 的正文色压到 AA 以下 ——
+   * 它的底色本就深，提亮空间全给了正文对比度），亮色压 10%（6% 时与浮层底座只差 5，看不见）。
+   */
+  const inputBg = mix(
+    palette.kind === 'dark' ? '#ffffff' : '#000000',
+    palette.bg,
+    palette.kind === 'dark' ? 0.06 : 0.1,
+  )
 
   return {
     base: palette.kind === 'dark' ? 'vs-dark' : 'vs',
@@ -401,7 +429,21 @@ export function buildMonacoThemeData(
       'editorIndentGuide.activeBackground1': palette.ui.indentActive,
       'editorWhitespace.foreground': palette.ui.whitespace,
       'editorWidget.background': widgetBg,
-      'editorWidget.border': mix(palette.bg, palette.kind === 'dark' ? '#000000' : '#ffffff', 0.55),
+      'editorWidget.border': widgetBorder,
+      /*
+       * 查找控件（Ctrl/Cmd+F 的右上角浮层，见 ui/components/code-editor）：
+       * 底座 / 描边走 editorWidget.*，输入框与命中高亮必须自己给 —— 不给就落回 base 主题
+       *（vs / vs-dark）的通用灰蓝：六套主题里各显各的色，暗色主题里甚至会跳出一块
+       * #3C3C3C 的中灰输入框。
+       */
+      'editorWidget.foreground': palette.fg,
+      'input.background': inputBg,
+      'input.foreground': palette.fg,
+      'input.border': widgetBorder,
+      // 当前命中：不透明块（34% 正文字色 + 66% 底色），与 VS Code 的 #515C6A 同一观感
+      'editor.findMatchBackground': mix(palette.fg, palette.bg, 0.34),
+      // 其余命中：半透明淡橙，压得住字也遮不住选区
+      'editor.findMatchHighlightBackground': FIND_MATCH_HIGHLIGHT,
       'scrollbarSlider.background': `${palette.ui.slider}66`,
       'scrollbarSlider.hoverBackground': `${palette.ui.sliderHover}aa`,
       'scrollbarSlider.activeBackground': `${palette.ui.sliderActive}aa`,
@@ -430,7 +472,7 @@ export function buildMonacoThemeData(
       'diffEditor.insertedTextBackground': diff.newChar,
       'diffEditorGutter.removedLineBackground': diff.oldNum,
       'diffEditorGutter.insertedLineBackground': diff.newNum,
-      'diffEditor.border': mix(palette.bg, palette.kind === 'dark' ? '#000000' : '#ffffff', 0.55),
+      'diffEditor.border': widgetBorder,
     },
   }
 }
