@@ -25,6 +25,7 @@ import GitPanel from '@/ui/pages/chat/components/git/GitPanel'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
 import { gitStore } from '@/ui/store/gitStore'
 import {
+  abortPick,
   commit,
   checkRefFormat,
   discard,
@@ -36,6 +37,7 @@ import {
   refreshStashes,
   renameBranch,
   removeBranch,
+  resumePick,
   stage,
   switchBranch,
   syncNow,
@@ -80,6 +82,9 @@ vi.mock('@/services/git-service', () => ({
   mergeBranch: vi.fn(() => Promise.resolve(true)),
   abortMerge: vi.fn(() => Promise.resolve(true)),
   loadMergeState: vi.fn(() => Promise.resolve(false)),
+  // 挑选 / 还原（cherry-pick / revert）：进行中时面板顶部那两颗按钺
+  resumePick: vi.fn(() => Promise.resolve(true)),
+  abortPick: vi.fn(() => Promise.resolve(true)),
 }))
 
 // 面板的引用链会经 store 桶文件拉到 markdown / code-block → monaco，而 monaco 在 jsdom 里
@@ -149,6 +154,8 @@ function setStore(entries: GitChangeEntry[]) {
     gitStore.lastDropped = null
     gitStore.syncOutput = null
     gitStore.stats = null
+    // 进行中的挑选 / 还原：默认“没有”（个别用例单独置位）
+    gitStore.pick = null
     gitStore.snapshot = snapshot(entries)
   })
 }
@@ -191,6 +198,8 @@ beforeEach(() => {
     renameBranch,
     checkRefFormat,
     loadCommitDetail,
+    resumePick,
+    abortPick,
   ]) {
     vi.mocked(fn).mockReset()
   }
@@ -976,4 +985,54 @@ it('统计未加载时不显示行数合计', () => {
   const summary = document.querySelector('.git-stats-summary')?.textContent
   expect(summary).toContain('已编辑 1 个文件')
   expect(summary).not.toContain('+')
+})
+
+/**
+ * 挑选 / 还原进行中：面板顶部要有那两颗按钺 —— 冲突解决到一半时，界面上没有终端可用，
+ * 「继续」与「中止」就是全部出路（少一颗就是死路）。
+ */
+it('挑选进行中：顶部提示 + 「继续 / 中止」，kind 原样传下去', () => {
+  setStore([entry({ path: 'c.txt', x: 'U', y: 'U', kind: 'unmerged' })])
+  const PICK_OID = 'b'.repeat(40)
+  runInAction(() => {
+    gitStore.pick = { kind: 'cherry-pick', oid: PICK_OID }
+  })
+  mount()
+
+  const warn = document.querySelector('.git-pick-warn')
+  expect(warn).not.toBeNull()
+  const text = warn!.querySelector('.git-pick-warn-text')
+  expect(text?.textContent).toBe('正在挑选提交：解决冲突后暂存并继续')
+  // 完整 oid 进 title（不把 40 位撑在面板上）
+  expect(text?.getAttribute('title')).toBe(PICK_OID)
+
+  const [resume, abort] = [...warn!.querySelectorAll('button')]
+  expect(resume.textContent).toBe('继续')
+  expect(abort.textContent).toBe('中止')
+
+  click(resume)
+  expect(resumePick).toHaveBeenCalledWith('cherry-pick')
+  click(abort)
+  expect(abortPick).toHaveBeenCalledWith('cherry-pick')
+})
+
+/** 还原中：文案说得清现在是哪个动作（两个动作的出路一样，但不能让人分不清在干什么） */
+it('还原进行中：文案是「正在还原提交」', () => {
+  setStore([entry({ path: 'c.txt', x: 'U', y: 'U', kind: 'unmerged' })])
+  runInAction(() => {
+    gitStore.pick = { kind: 'revert', oid: null }
+  })
+  mount()
+
+  const text = document.querySelector('.git-pick-warn-text')
+  expect(text?.textContent).toBe('正在还原提交：解决冲突后暂存并继续')
+  // 拿不到 oid 就不给 title（不编一个）
+  expect(text?.getAttribute('title')).toBeNull()
+})
+
+/** 没有进行中的动作：那条提示不占位 */
+it('没有挑选 / 还原进行中：不出现提示条', () => {
+  setStore([unstagedEntry('a.txt')])
+  mount()
+  expect(document.querySelector('.git-pick-warn')).toBeNull()
 })

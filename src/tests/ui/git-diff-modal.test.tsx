@@ -16,6 +16,9 @@
  * 正文一律走 Monaco（`MonacoDiffView`，§11.53 ㉖ / ㉙）：本用例把它换成本文件关心的最小替身
  * —— 只验「弹窗把两侧全文与单侧判定交下去了」与「没有再去跑一遍差异算法」，Monaco 那份契约由
  * `monaco-diff-view.test.tsx` 守（两栏 / 单栏 / 右键菜单），DOM 版正文由 `side-by-side-diff.test.tsx` 守。
+ *
+ * 6. **左清单的行右键给基本操作**（暂存 / 引用到输入框 / 打开类），只作用于“被点的那一行”：
+ *    菜单项的组装口径（分组顺序 / 已删除文件摘掉打开类 / 路径补成绝对）由 `git-side-menu.test.ts` 守。
  */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act } from 'react'
@@ -30,11 +33,38 @@ import {
 import { groupChanges, gitDiffRows } from '@/domain/git'
 import type { GitChangeEntry, GitStatusSnapshot } from '@/domain/git'
 import { loadDiffSides, stage, unstage } from '@/services/git-service'
+import { openPath } from '@tauri-apps/plugin-opener'
+import { copyText } from '@/utils/clipboard'
 
 vi.mock('@/services/git-service', () => ({
   loadDiffSides: vi.fn(),
   stage: vi.fn(),
   unstage: vi.fn(),
+}))
+
+// 右键菜单的打开类动作走的是这三家原生能力（menus.ts）：不 mock 就变成「真去起进程 / 读剪贴板」
+vi.mock('@tauri-apps/plugin-opener', () => ({
+  openPath: vi.fn(() => Promise.resolve()),
+  revealItemInDir: vi.fn(() => Promise.resolve()),
+}))
+vi.mock('@/utils/clipboard', () => ({
+  copyText: vi.fn(() => Promise.resolve(true)),
+  copyImageToClipboard: vi.fn(() => Promise.resolve(true)),
+  saveImageAs: vi.fn(() => Promise.resolve('E:/tmp/a.png')),
+  defaultImageName: vi.fn(() => 'image-1'),
+}))
+vi.mock('@/ui/components/shared/Toast', () => ({
+  showToast: vi.fn(),
+  useToast: (): unknown => ({ Toast: (): null => null, showToast: vi.fn() }),
+}))
+vi.mock('@/services/editor-service', () => ({
+  editorService: {
+    isEnabled: vi.fn(() => true),
+    getSelectedConfig: vi.fn(() => undefined),
+    getSelectedCommand: vi.fn(() => ''),
+    openFile: vi.fn(() => Promise.resolve({ ok: true })),
+    openWithConfig: vi.fn(() => Promise.resolve({ ok: true })),
+  },
 }))
 
 // 正文走 Monaco（MonacoDiffView）：它内部要真的起 Monaco（jsdom 里导入即崩），
@@ -121,6 +151,8 @@ function sections(): GitChangeSection[] {
 
 let root: ReturnType<typeof createRoot> | null = null
 let closed = 0
+/** 「引用到输入框」交下去的路径（每批一次） */
+let attached: string[][] = []
 
 async function mount(targetPath = 'a.txt', side: 'staged' | 'unstaged' = 'unstaged') {
   const target = {
@@ -136,6 +168,7 @@ async function mount(targetPath = 'a.txt', side: 'staged' | 'unstaged' = 'unstag
         target={target}
         sections={sections()}
         disabled={false}
+        onAttach={(paths) => attached.push(paths)}
         onClose={() => {
           closed += 1
         }}
@@ -156,13 +189,40 @@ const sideRow = (path: string) =>
 const activeRow = () =>
   document.querySelector<HTMLElement>('.git-diff-side-row.active')
 
+/** 在某个元素上模拟右键（菜单挂在 document.body 上，不跟着被点元素走） */
+async function rightClick(el: Element): Promise<void> {
+  await act(async () => {
+    el.dispatchEvent(
+      new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 120,
+        clientY: 90,
+      }),
+    )
+  })
+}
+/** 当前菜单里的项文案（按 DOM 顺序） */
+const menuLabels = (): (string | null)[] =>
+  [...document.querySelectorAll('.context-menu-item')].map((el) => el.textContent)
+const menuItem = (label: string): HTMLButtonElement => {
+  const found = [...document.querySelectorAll<HTMLButtonElement>('.context-menu-item')].find(
+    (el) => el.textContent === label,
+  )
+  if (!found) throw new Error(`菜单里没有「${label}」`)
+  return found
+}
+
 beforeEach(() => {
   document.body.innerHTML = ''
   closed = 0
+  attached = []
   vi.mocked(loadDiffSides).mockReset()
   vi.mocked(stage).mockReset()
   vi.mocked(unstage).mockReset()
   vi.mocked(gitDiffRows).mockClear()
+  vi.mocked(openPath).mockClear()
+  vi.mocked(copyText).mockClear()
   vi.mocked(loadDiffSides).mockResolvedValue({
     old_text: 'a',
     new_text: 'b',
@@ -282,6 +342,9 @@ it('只读沙盒下写入口禁用（Rust 侧同样会拒，这里是体验层�
     )
   })
   expect(actionBtn()!.disabled).toBe(true)
+  // 右键菜单里的写入口同样置灰（不只行内那颗按钮）
+  await rightClick(sideRow('a.txt')!)
+  expect(menuItem('暂存更改').disabled).toBe(true)
 })
 
 it('弹窗内的 mousedown 不冒泡到 document（否则宿主浮层会被一起关掉）', async () => {
@@ -467,6 +530,51 @@ it('空的那一侧整栏不画：删除的文件只把旧侧交给 Monaco 的�
   expect(next.dataset.side).toBe('new')
   expect(next.dataset.old).toBe('')
   expect(next.dataset.new).toBe('c\n')
+})
+
+/** 口径 8：行右键「暂存 / 引用 / 打开类」，只作用于被点的那一行 */
+it('左清单行右键：暂存 / 引用到输入框 / 打开类都在，且只作用于被点的那一行', async () => {
+  await mount()
+  await rightClick(sideRow('b.txt')!)
+
+  expect(menuLabels()).toEqual([
+    '暂存更改',
+    '引用到输入框',
+    '打开',
+    '编辑器打开',
+    '在文件管理器中显示',
+    '复制路径',
+  ])
+  // 右键不切走「当前正在看的文件」（与行内那颗 ＋/－ 同口径）
+  expect(pathLabel()).toBe('a.txt')
+
+  vi.mocked(stage).mockResolvedValue(true)
+  await act(async () => menuItem('暂存更改').click())
+  expect(stage).toHaveBeenCalledWith(['b.txt'])
+  expect(pathLabel()).toBe('a.txt')
+
+  await rightClick(sideRow('b.txt')!)
+  await act(async () => menuItem('引用到输入框').click())
+  expect(attached).toEqual([['b.txt']])
+
+  // 打开 / 复制路径：仓库根未知时路径原样交出去（toAbsolutePath 不猜）
+  await rightClick(sideRow('b.txt')!)
+  await act(async () => menuItem('打开').click())
+  expect(openPath).toHaveBeenCalledWith('b.txt')
+
+  await rightClick(sideRow('b.txt')!)
+  await act(async () => menuItem('复制路径').click())
+  expect(copyText).toHaveBeenCalledWith('b.txt')
+})
+
+it('已暂存的行右键：第一项是「取消暂存」（写作用方向跟着侧走）', async () => {
+  await mount('s.txt', 'staged')
+  await rightClick(sideRow('s.txt')!)
+  expect(menuLabels()[0]).toBe('取消暂存')
+
+  vi.mocked(unstage).mockResolvedValue(true)
+  await act(async () => menuItem('取消暂存').click())
+  expect(unstage).toHaveBeenCalledWith(['s.txt'])
 })
 
 /** 全屏：长文件 / 窄窗下只看差异；Esc 先退全屏，再按一下才关弹窗 */

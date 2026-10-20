@@ -22,12 +22,14 @@ import { groupChanges, statOf, statTotals } from '@/domain/git'
 import { toAbsolutePath } from '@/utils/common'
 import { showToast } from '@/ui/components/shared/Toast'
 import {
+  abortPick,
   commit,
   discard,
   loadCommitDetail,
   refreshBranches,
   refreshRemotes,
   refreshStatus,
+  resumePick,
   stage,
   syncNow,
   undoLastCommit,
@@ -299,6 +301,9 @@ export const GitPanel = observer(function GitPanel({
     groups.untracked.length === 0 &&
     groups.conflicts.length === 0
 
+  // 进行中的挑选 / 还原：冲突解决到一半时，面板顶部必须给两条出路（界面上没有终端可用）
+  const pick = gitStore.pick
+
   return (
     <>
       <div className="git-head">
@@ -315,6 +320,32 @@ export const GitPanel = observer(function GitPanel({
           ✕
         </button>
       </div>
+
+      {/* 挑选 / 还原进行中：冲突后 `git commit` 也能了结它（与合并同一口径），
+          但「解不动」的人必须有地方可退 —— 这两颗按钺就是全部出路 */}
+      {pick && (
+        <div className="git-pick-warn">
+          <span className="git-pick-warn-text" title={pick.oid ?? undefined}>
+            {pick.kind === 'cherry-pick'
+              ? t('正在挑选提交：解决冲突后暂存并继续')
+              : t('正在还原提交：解决冲突后暂存并继续')}
+          </span>
+          <button
+            type="button"
+            disabled={disabled}
+            title={t('冲突已解决并已暂存时才能继续')}
+            onClick={() => void resumePick(pick.kind)}>
+            {t('继续')}
+          </button>
+          <button
+            type="button"
+            disabled={disabled}
+            title={t('工作区会回到动作之前')}
+            onClick={() => void abortPick(pick.kind)}>
+            {t('中止')}
+          </button>
+        </div>
+      )}
 
       {!gitStore.probed && <div className="git-empty">{t('加载中…')}</div>}
 
@@ -615,13 +646,18 @@ export const GitPanel = observer(function GitPanel({
           target={diffTarget}
           sections={sections}
           disabled={disabled}
+          onAttach={attachPaths}
           onClose={() => setDiffTarget(null)}
         />
       )}
 
-      {logOpen && <GitLogModal onClose={() => setLogOpen(false)} />}
+      {logOpen && (
+        <GitLogModal disabled={disabled} onClose={() => setLogOpen(false)} />
+      )}
 
-      {graphOpen && <GitGraphModal onClose={() => setGraphOpen(false)} />}
+      {graphOpen && (
+        <GitGraphModal disabled={disabled} onClose={() => setGraphOpen(false)} />
+      )}
     </>
   )
 })

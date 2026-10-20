@@ -26,6 +26,7 @@ pub mod lock;
 pub mod log;
 pub mod merge;
 pub mod numstat;
+pub mod pick;
 pub mod remote;
 pub mod repo;
 pub mod show;
@@ -314,6 +315,45 @@ pub struct MergeResult {
     pub fast_forward: bool,
 }
 
+/// 提交搬运类动作的种类：`git cherry-pick` 与 `git revert` 共用一整套
+/// 「进冲突态 → 中止 / 继续」的机制，只有子命令与文案不同（见 [`pick`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PickKind {
+    CherryPick,
+    Revert,
+}
+
+/// 进行中的挑选 / 还原（`None` = 没有）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PickState {
+    pub kind: PickKind,
+    /// `.git/CHERRY_PICK_HEAD` / `.git/REVERT_HEAD` 指向的提交（读不到时为 `None`）
+    pub oid: Option<String>,
+}
+
+/// 一次 cherry-pick / revert 的结果。
+///
+/// ⚠️ 冲突时不是这个结构 —— 那种情况走 `Err`（冲突清单必须原样带给用户，见 [`pick`] 口径 2）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PickResult {
+    /// 动作完成后的快照（一次 IPC 拿全，界面不再回读）
+    pub snapshot: StatusSnapshot,
+    /// git 的原始输出（stdout + stderr 合并）
+    pub output: String,
+    /// 动作产生的提交（= 新的 HEAD）
+    pub oid: String,
+}
+
+/// 「把当前分支重置到这笔提交」的前置判定（读；界面据它决定给不给这一项、确认文案写几条）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResetPreview {
+    /// 目标在 HEAD 的祖先链上 —— 只有它为真，「退到这笔提交」才有字面意义
+    pub ancestor: bool,
+    /// 会从当前分支上撤掉的提交条数（`git rev-list --count <oid>..HEAD`）；`0` = 已经在这笔上
+    pub commits: u32,
+}
+
 /// 一条贮藏（`git stash list` 的忠实映射，见 [`stash`]）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StashEntry {
@@ -343,6 +383,31 @@ pub struct StashDropResult {
     /// reflog 消息原文 —— 撤销时原样交给 `stash store -m`，恢复出来的条目与原来一致
     pub message: String,
     pub stashes: Vec<StashEntry>,
+}
+
+// ==================== 引用 → 提交（唯一实现） ====================
+
+/// 把一个引用解析成**完整提交 oid**（本地分支 / 远程分支 / tag / 40 位 oid 都行）。
+///
+/// ⚠️ 合并 / 重置 / 挑选 / 还原四条路都必须走这里：`git reset` / `cherry-pick` / `revert`
+/// 只收**提交**，把分支名或写错的名字直接拼进 argv 只会得到一句 `unknown revision`；
+/// 更危险的是以 `-` 开头的串会被 git 当成**选项**（`--hard` 之类）—— 因此在拼参数之前就拒掉。
+///
+/// `Ok(None)` = 解析不到（文案由调用方给：同一个 helper 服务四种动作，「找不到要合并的分支」
+/// 和「找不到要挑选的提交」是两句不同的话）。
+pub(crate) fn resolve_commit(root: &str, reference: &str) -> Result<Option<String>, cli::GitError> {
+    let text = reference.trim();
+    if text.is_empty() || text.starts_with('-') {
+        return Ok(None);
+    }
+    let out = cli::GitCmd::read(root)
+        .arg("rev-parse")
+        .arg("--verify")
+        .arg("--quiet")
+        .arg(format!("{}^{{commit}}", text))
+        .run()?;
+    let oid = out.stdout_str().trim().to_string();
+    Ok(if out.ok() && !oid.is_empty() { Some(oid) } else { None })
 }
 
 // ==================== 写操作准入（fail-closed） ====================

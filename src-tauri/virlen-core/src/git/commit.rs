@@ -11,7 +11,7 @@
 use super::cli::{GitCmd, GitError};
 use super::repo::root_of;
 use super::status::snapshot_at_root;
-use super::{CommitResult, StatusSnapshot, WriteGate};
+use super::{CommitResult, ResetPreview, StatusSnapshot, WriteGate};
 
 /// 提交已暂存的内容。**不做**「无暂存就自动全暂存」——那是界面的选择，不是引擎的。
 pub fn commit(dir: &str, gate: &WriteGate, message: &str) -> Result<CommitResult, GitError> {
@@ -148,4 +148,75 @@ fn has_commit(root: &str, rev: &str) -> bool {
         .run()
         .map(|o| o.ok())
         .unwrap_or(false)
+}
+
+// ==================== 重置到某笔提交（reset --soft） ====================
+
+/// 「重置到这笔提交」的前置判定（读；不过写门禁）。
+///
+/// 两条判据都给界面：
+/// - `ancestor`：目标在 HEAD 的祖先链上。为假时「退到这笔提交」不是字面意思 —— 那是把当前分支
+///   挪到一段无关历史上（另一种动作，必须在终端里显式做）；
+/// - `commits`：会从当前分支上撤掉的提交条数（`rev-list --count <oid>..HEAD`），确认文案要用
+///   它说清「会少几条提交」。`0` = 已经在这笔上（重置是空转）。
+pub fn reset_preview(dir: &str, oid: &str) -> Result<ResetPreview, GitError> {
+    let root = root_of(dir)?;
+    let target = super::resolve_commit(&root, oid)?
+        .ok_or_else(|| GitError::new(format!("找不到要重置到的提交：{}", oid.trim())))?;
+    preview_at(&root, &target)
+}
+
+fn preview_at(root: &str, target: &str) -> Result<ResetPreview, GitError> {
+    // `merge-base --is-ancestor`：退出码 0 = 是祖先，1 = 不是（**正常结论，不是错误**）
+    let ancestor = GitCmd::read(root)
+        .arg("merge-base")
+        .arg("--is-ancestor")
+        .arg(target)
+        .arg("HEAD")
+        .run()?
+        .ok();
+    // 不是祖先时这个数没有意义（“撤掉几条”只对祖先链成立）—— 给 0，不猜
+    let commits = if ancestor {
+        GitCmd::read(root)
+            .arg("rev-list")
+            .arg("--count")
+            .arg(format!("{}..HEAD", target))
+            .run()
+            .map(|o| o.stdout_str().trim().parse::<u32>().unwrap_or(0))
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    Ok(ResetPreview { ancestor, commits })
+}
+
+/// 把当前分支重置到某笔提交（`reset --soft`：**改动全部保留在暂存区**，不丢代码）。
+///
+/// ⚠️ 只接受 HEAD 祖先链上的提交，且不接受「已经在这笔上」—— 界面的预览判断（[`reset_preview`]）
+/// **不构成准入**：预览与执行之间用户可以切分支、拉到新提交，两条在这里再判一次（fail-closed）。
+///
+/// ⚠️ 不提供 `--mixed` / `--hard`：前者让改动从暂存区掉回工作区（用户以为什么都没丢，其实状态变了），
+/// 后者真丢数据 —— 丢数据的动作必须是另一个独立的、带自己确认的动作（与 [`undo_last`] 同一取舍）。
+pub fn reset_soft(dir: &str, gate: &WriteGate, oid: &str) -> Result<StatusSnapshot, GitError> {
+    gate.ensure()?;
+    let root = root_of(dir)?;
+    let target = super::resolve_commit(&root, oid)?
+        .ok_or_else(|| GitError::new(format!("找不到要重置到的提交：{}", oid.trim())))?;
+    super::pick::refuse_if_pending(&root)?;
+    let preview = preview_at(&root, &target)?;
+    if !preview.ancestor {
+        return Err(GitError::new(
+            "这笔提交不在当前分支的历史上：不能把当前分支重置到它",
+        ));
+    }
+    if preview.commits == 0 {
+        return Err(GitError::new("当前分支已经在这笔提交上，无需重置"));
+    }
+    GitCmd::write(&root)
+        .arg("reset")
+        .arg("--soft")
+        .arg(&target)
+        .run()?
+        .into_result("reset --soft")?;
+    snapshot_at_root(&root, None)
 }

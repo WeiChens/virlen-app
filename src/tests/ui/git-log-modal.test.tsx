@@ -23,6 +23,7 @@ import { createRoot } from 'react-dom/client'
 
 import GitLogModal from '@/ui/pages/chat/components/git/GitLogModal'
 import { LOG_PAGE_SIZE, loadCommits } from '@/services/git-service'
+import { copyText } from '@/utils/clipboard'
 import type { GitCommitLogEntry } from '@/domain/git'
 
 vi.mock('@/services/git-service', async (importOriginal) => {
@@ -30,6 +31,13 @@ vi.mock('@/services/git-service', async (importOriginal) => {
   // 页面大小用**真值**（分页口径是 `>= LOG_PAGE_SIZE`，写死一个数字只会让用例慢慢和实现脱节）
   return { ...actual, loadCommits: vi.fn() }
 })
+
+// 行右键菜单的复制项（`commit-menu.ts`）：不 mock 就变「真去读 WebView 剪贴板」
+vi.mock('@/utils/clipboard', () => ({ copyText: vi.fn(() => Promise.resolve(true)) }))
+vi.mock('@/ui/components/shared/Toast', () => ({
+  showToast: vi.fn(),
+  useToast: (): unknown => ({ Toast: (): null => null, showToast: vi.fn() }),
+}))
 
 // 引用链可能经 store 桶文件拉到 markdown / code-block → monaco，而 monaco 在 jsdom 里导入即崩
 // （缺 `CSS.escape`）。本用例不看代码块，换结构等价的最小替身（与其它 UI 用例同款）。
@@ -87,6 +95,7 @@ async function mount() {
   await act(async () => {
     root!.render(
       <GitLogModal
+        disabled={false}
         onClose={() => {
           closed += 1
         }}
@@ -99,11 +108,35 @@ const rows = () => [...document.querySelectorAll<HTMLElement>('.git-log-row')]
 const moreBtn = () =>
   document.querySelector<HTMLButtonElement>('.git-log-more')
 
+/** 在某个行上模拟右键（菜单挂在 body 上，不跟着行走） */
+async function rightClick(el: Element): Promise<void> {
+  await act(async () => {
+    el.dispatchEvent(
+      new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 120,
+        clientY: 90,
+      }),
+    )
+  })
+}
+const menuLabels = (): (string | null)[] =>
+  [...document.querySelectorAll('.context-menu-item')].map((el) => el.textContent)
+const menuItem = (label: string): HTMLButtonElement => {
+  const found = [...document.querySelectorAll<HTMLButtonElement>('.context-menu-item')].find(
+    (el) => el.textContent === label,
+  )
+  if (!found) throw new Error(`菜单里没有「${label}」`)
+  return found
+}
+
 beforeEach(() => {
   document.body.innerHTML = ''
   closed = 0
   vi.mocked(loadCommits).mockReset()
   vi.mocked(loadCommits).mockResolvedValue(page(2))
+  vi.mocked(copyText).mockClear()
 })
 
 afterEach(() => {
@@ -266,4 +299,66 @@ it('Esc 只关弹窗：捕获阶段拦住，宿主面板那颗「Esc 关面板�
   expect(panelListener).not.toHaveBeenCalled()
 
   document.removeEventListener('keydown', panelListener)
+})
+
+it('行右键：详情 / 历史三项 / 复制两项，复制拿的是**这一行**的完整 oid', async () => {
+  await mount()
+  await rightClick(rows()[1])
+
+  // 这一份提交没有引用、也不是 HEAD（快照里没有 head）—— 分支类与「撤销上次提交」一个都不出现；
+  // 「挑选」也不给：提交记录视图（scope = head）里每一行都是 HEAD 的祖先，挑了必是空提交
+  expect(menuLabels()).toEqual([
+    '查看提交详情',
+    '在此提交上新建分支…',
+    '还原这条提交（revert）',
+    '重置当前分支到这笔提交（保留改动）',
+    '复制提交 hash',
+    '复制提交标题',
+  ])
+
+  await act(async () => menuItem('复制提交 hash').click())
+  // 第二行（`page()` 的 oid = 下标补零到 40 位），不是第一行 —— 菜单认的是被点的那一行
+  expect(copyText).toHaveBeenCalledWith('1'.padStart(40, '0'))
+  // 动完就收起（菜单不留在屏上），弹窗也没被一起关掉
+  expect(menuLabels()).toEqual([])
+  expect(closed).toBe(0)
+})
+
+it('「在此提交上新建分支…」开输入框：Esc 先关输入框、再按一次才关弹窗', async () => {
+  await mount()
+  await rightClick(rows()[1])
+  await act(async () => menuItem('在此提交上新建分支…').click())
+
+  const input = document.querySelector<HTMLInputElement>('.git-new-branch-input')
+  expect(input).not.toBeNull()
+  // 说清「从哪一笔开始」：标题来自**被点那一行**
+  expect(document.querySelector('.git-new-branch-hint')?.textContent).toBe(
+    '新分支会从「feat: 第 1 次提交」开始，并立即切换过去。',
+  )
+
+  // 输入非法名字：合法性由 Rust 的 check-ref-format 回答（此处 dir 为空 → false），就地报错
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )!.set!
+    setter.call(input, 'bad name')
+    input!.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  expect(document.querySelector('.git-new-branch-error')?.textContent).toBe(
+    '不是合法的分支名',
+  )
+
+  // Esc 第一下只关输入框（内层弹窗让路，否则一次 Esc 关两层）
+  await act(async () => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+  })
+  expect(document.querySelector('.git-new-branch-input')).toBeNull()
+  expect(closed).toBe(0)
+
+  // 第二下才是关弹窗
+  await act(async () => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+  })
+  expect(closed).toBe(1)
 })

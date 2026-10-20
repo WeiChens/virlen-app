@@ -14,29 +14,48 @@
  *    两边的对齐靠「同一个行高常量」，见 `GraphCanvas` 的口径 1；
  * 5. **弹窗内的 mousedown 必须 `stopPropagation`、Esc 走捕获阶段**：本弹窗 portal 到 body，
  *    宿主（源代码管理面板）的「点浮层外关闭」与 Esc 监听都会把它当成自己该管的事（§11.53 ⑱ / ㉝）。
+ *
+ * 行的右键菜单：项由 `commit-menu.ts` 组装（与提交记录共用）—— 图形态里“点落在哪个分支上”能直接
+ * 变成「切到它 / 把它合进来」，这正是提交图存在的意义。菜单状态在本组件（一行一个会留在屏上）。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { t, tpl } from '@/ui/i18n'
 import { gitStore } from '@/ui/store/gitStore'
+import ContextMenu, { useContextMenu } from '@/ui/components/shared/ContextMenu'
+import { commitMenuItems } from './commit-menu'
 import { GRAPH_PAD_X, graphGeometry, layoutGraph, parseCommitRefs } from '@/domain/git'
+import type { GitCommitLogEntry } from '@/domain/git'
 import GraphCanvas from './GraphCanvas'
 import GitCommitRow from './GitCommitRow'
 import GitCommitModal from './GitCommitModal'
+import GitNewBranchPrompt from './GitNewBranchPrompt'
 import { useCommitPages } from './useCommitPages'
 
 interface Props {
+  /** 只读沙盒 / 有操作在跑 → 写入口禁用（Rust 侧同样会拒，这里是体验层） */
+  disabled: boolean
   onClose: () => void
 }
 
-export function GitGraphModal({ onClose }: Props) {
-  const { commits, loading, loadingMore, hasMore, error, loadMore } = useCommitPages('all')
+export function GitGraphModal({ disabled, onClose }: Props) {
+  /** 取数范围：全部分支 —— 右键的「挑选」只在这个范围里才有意义（见 `commit-menu`） */
+  const SCOPE = 'all' as const
+  const { commits, loading, loadingMore, hasMore, error, loadMore } = useCommitPages(SCOPE)
   const listRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   /** 打开的那条提交（`null` = 没开详情） */
   const [detailOid, setDetailOid] = useState<string | null>(null)
-  const detailRef = useRef<string | null>(null)
-  detailRef.current = detailOid
+  /** 「在此提交上新建分支」针对的提交（`null` = 没开输入框） */
+  const [newBranchAt, setNewBranchAt] = useState<GitCommitLogEntry | null>(null)
+  /**
+   * 内层弹窗（提交详情 / 新建分支）开着时 Esc 归它们管：本监听先于它们注册，
+   * 抢先把这里关掉就是「Esc 关掉两层」。
+   */
+  const innerRef = useRef(false)
+  innerRef.current = detailOid !== null || newBranchAt !== null
+  /** 行右键菜单（目标行 = 被点的提交） */
+  const menu = useContextMenu<GitCommitLogEntry>()
 
   // 布局只跟「提交 + 父」有关：把整条记录折成最小子集交给纯函数（它也吃不到多余字段）
   const layout = useMemo(
@@ -52,8 +71,8 @@ export function GitGraphModal({ onClose }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
-      // 详情弹窗开着时 Esc 归它管（本监听先于它注册，抢先把这里关掉就是「Esc 关掉两层」）
-      if (detailRef.current) return
+      // 内层弹窗开着时 Esc 归它们管（本监听先于它们注册，抢先把这里关掉就是「Esc 关掉两层」）
+      if (innerRef.current) return
       e.stopPropagation()
       onClose()
     }
@@ -65,6 +84,22 @@ export function GitGraphModal({ onClose }: Props) {
   useEffect(() => {
     rootRef.current?.focus()
   }, [])
+
+  /** 右键菜单项：引用已解析（与行上的标签同一份口径），当前分支 / HEAD 判定决定给哪几项 */
+  const menuTarget = menu.state?.target
+  const menuItems = menuTarget
+    ? commitMenuItems({
+        entry: menuTarget,
+        refs: parseCommitRefs(menuTarget.refs),
+        currentBranch: gitStore.snapshot?.head.branch ?? null,
+        isHead: gitStore.snapshot?.head.oid === menuTarget.oid,
+        scope: SCOPE,
+        disabled,
+        // 菜单项只回答「被点了」：具体开哪一条在这里钉住（目标行的 oid / 那条提交）
+        onOpen: () => setDetailOid(menuTarget.oid),
+        onCreateBranch: () => setNewBranchAt(menuTarget),
+      })
+    : []
 
   return createPortal(
     <div className="git-diff-backdrop" onMouseDown={onClose}>
@@ -107,6 +142,7 @@ export function GitGraphModal({ onClose }: Props) {
                 key={c.oid}
                 entry={c}
                 onOpen={setDetailOid}
+                onContextMenu={(e) => menu.openAt(e, c)}
                 // 行与布局一一对应（`layoutGraph` 每条提交产一行）；万一取不到就按一列宽兜底，
                 // 不让它变成 0（宽度为 0 时**线会压在字上** —— canvas 在行之上，见 style.scss）
                 gutter={geometry.rowGutters[i] ?? GRAPH_PAD_X * 2 + geometry.laneWidth}
@@ -127,9 +163,29 @@ export function GitGraphModal({ onClose }: Props) {
         </div>
       </div>
 
+      {/* 行右键菜单：与 `.git-log-modal` 平级（Menu 自己 portal 到 body），点菜单项被当成
+          「点弹窗外」的坑由 ContextMenu 在捕获阶段拦住 */}
+      {menu.state && (
+        <ContextMenu
+          position={menu.state.position}
+          items={menuItems}
+          onClose={menu.close}
+        />
+      )}
+
       {/* 详情弹窗嵌在这层遮罩里：它自己的遮罩会 `stopPropagation`，所以点它不会把提交图一起关掉 */}
       {detailOid && (
         <GitCommitModal oid={detailOid} onClose={() => setDetailOid(null)} />
+      )}
+
+      {/* 新建分支的输入框（自己 portal 到 body，同样不影响这层遮罩的关闭判定） */}
+      {newBranchAt && (
+        <GitNewBranchPrompt
+          oid={newBranchAt.oid}
+          subject={newBranchAt.subject}
+          disabled={disabled}
+          onClose={() => setNewBranchAt(null)}
+        />
       )}
     </div>,
     document.body,

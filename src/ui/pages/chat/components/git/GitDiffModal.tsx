@@ -25,6 +25,10 @@
  * 7. **全屏**（实测反馈）：`全屏 / 退出全屏` 把弹窗铺满遮罩（仍让开自绘标题栏那一条）——
  *    弹窗本来有 `min(1360px, 100%) / min(780px, 100%)` 的上限，宽屏上是「本来就该铺满」，
  *    窄屏上省下的那一圈跑形也归它。
+ * 8. **左清单的行右键给基本操作**（实测反馈）：暂存 / 取消暂存、引用到输入框，加上
+ *    「打开 / 编辑器打开 / 在文件管理器中显示 / 复制路径」（`./side-menu`）——
+ *    看差异时最常见的下一步不必关掉弹窗回列表再点一次。菜单只作用于**被点的那一行**
+ *    （与行内那颗 ＋/－ 同口径），不改变「当前正在看哪个文件」。
  *
  * ⚠️ 内容**不缓存**：关掉即弃。缓存正文会让「切了分支却还在显示旧内容」这种问题悄悄出现。
  * ⚠️ 弹窗内的 mousedown 必须 `stopPropagation`（`.git-diff-modal` 上那一行）：入口的「点浮层外关闭」
@@ -42,9 +46,12 @@ import {
 } from '@/domain/git'
 import type { GitChangeEntry, GitDiffSides } from '@/domain/git'
 import FileTypeIcon from '@/ui/components/icons/FileTypeIcon'
+import ContextMenu, { useContextMenu } from '@/ui/components/shared/ContextMenu'
+import { gitStore } from '@/ui/store/gitStore'
 import { MonacoDiffView } from '../message/MonacoDiffView'
 import { loadDiffSides, stage, unstage } from '@/services/git-service'
 import type { GitRowTarget } from './GitChangeRow'
+import { diffSideMenuItems } from './side-menu'
 import { rowKey, type GitChangeSection } from './sections'
 import VirtualList from './VirtualList'
 import { SideResizer, useSideWidth } from './use-side-width'
@@ -57,6 +64,8 @@ interface Props {
   sections: GitChangeSection[]
   /** 只读沙盒 / 有操作在跑：写入口禁用（Rust 侧同样会拒，这里是体验层） */
   disabled: boolean
+  /** 引用到输入框（仓库根相对 → 绝对路径由 `GitPanel` 换算）：不给则不出现这一项 */
+  onAttach?: (paths: string[]) => void
   onClose: () => void
 }
 
@@ -68,7 +77,13 @@ type SideItem =
 /** 左清单行高（px）—— 与 `.git-diff-side-title` / `.git-diff-side-row` 的固定高度一致 */
 const SIDE_ROW_H = 24
 
-export function GitDiffModal({ target, sections, disabled, onClose }: Props) {
+export function GitDiffModal({
+  target,
+  sections,
+  disabled,
+  onAttach,
+  onClose,
+}: Props) {
   /** 当前展示的文件 + 它属于哪一侧（侧决定差异基准：更改 = 工作区↔index，已暂存 = index↔HEAD） */
   const [current, setCurrent] = useState<GitRowTarget>(target)
   const [sides, setSides] = useState<GitDiffSides | null>(null)
@@ -79,6 +94,8 @@ export function GitDiffModal({ target, sections, disabled, onClose }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
   /** 左清单宽度（右侧分隔条可拖，记在 localStorage） */
   const sideWidth = useSideWidth()
+  /** 左清单的行右键菜单（目标行 = 被点的行） */
+  const menu = useContextMenu<GitRowTarget>()
 
   const { entry, side } = current
   const scope = side === 'staged' ? 'index' : 'worktree'
@@ -199,6 +216,30 @@ export function GitDiffModal({ target, sections, disabled, onClose }: Props) {
   const singleSide = useMemo(() => (sides ? singleSideOf(sides) : null), [sides])
   const currentKey = rowKey(side, entry.path)
 
+  /**
+   * 右键菜单项：现算（目标行决定动作方向、磁盘上还在不在、写入口是否可用）。
+   * 路径是仓库根相对，`workspace` 必须给 —— 打开 / 定位只认绝对路径。
+   */
+  const menuTarget = menu.state?.target
+  const menuItems = menuTarget
+    ? diffSideMenuItems({
+        path: menuTarget.entry.path,
+        workspace: gitStore.repo?.root,
+        // x / y 为 `D` = 工作区里已经没有这个文件了（打开 / 定位必然失败）
+        exists: menuTarget.entry.x !== 'D' && menuTarget.entry.y !== 'D',
+        staging: {
+          label: menuTarget.side === 'staged' ? t('取消暂存') : t('暂存更改'),
+          disabled,
+          run: () => {
+            void (menuTarget.side === 'staged'
+              ? unstage([menuTarget.entry.path])
+              : stage([menuTarget.entry.path]))
+          },
+        },
+        onAttach: onAttach ? () => onAttach([menuTarget.entry.path]) : undefined,
+      })
+    : []
+
   return createPortal(
     <div
       className={`git-diff-backdrop${full ? ' is-fullscreen' : ''}`}
@@ -280,6 +321,9 @@ export function GitDiffModal({ target, sections, disabled, onClose }: Props) {
                   className={`git-diff-side-row${key === currentKey ? ' active' : ''}`}
                   title={displayPath(row)}
                   onClick={() => setCurrent({ entry: row, side: section.side })}
+                  onContextMenu={(e) =>
+                    menu.openAt(e, { entry: row, side: section.side })
+                  }
                   onKeyDown={(e) => {
                     if (e.key !== 'Enter' && e.key !== ' ') return
                     e.preventDefault()
@@ -336,6 +380,15 @@ export function GitDiffModal({ target, sections, disabled, onClose }: Props) {
           </div>
         </div>
       </div>
+      {menu.state && (
+        // 挂在遮罩里、与 `.git-diff-modal` 平级（Menu 自己 portal 到 body）：点菜单项被当成
+        // 「点弹窗外」的坑由 ContextMenu 在捕获阶段拦住，这里不再各写一遍（与 image-viewer 同款）
+        <ContextMenu
+          position={menu.state.position}
+          items={menuItems}
+          onClose={menu.close}
+        />
+      )}
     </div>,
     document.body,
   )

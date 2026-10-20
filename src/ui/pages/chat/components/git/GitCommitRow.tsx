@@ -8,6 +8,9 @@
  * `onOpen`：点行打开**提交详情**（`GitCommitModal`）。有它才是可点的 —— 同时给 `role` / `tabIndex` /
  * 回车键，否则这条信息只给了鼠标用户（键盘用户在提交图里什么都打不开）。
  *
+ * `onContextMenu`：行的右键菜单。状态由**弹窗**持有（一屏几十行，每行各挂一个菜单只会各自为政），
+ * 这里只把事件交上去。
+ *
  * 两个可选零件（只有提交图传）：
  * - `gutter`：左侧图列的宽度 —— ⚠️ 这里只**留位置**（一个空盒子），线与点由 `GraphCanvas` 画在
  *   滚动容器之外的固定画布上；把 canvas 塞进每行的话，行数一多就是几千个 canvas；
@@ -17,6 +20,7 @@
  *   颜色不是身份标识（无交集的分支允许同色），所以名字必须显式写出来。
  */
 import { t, tpl } from '@/ui/i18n'
+import type { MouseEvent as ReactMouseEvent } from 'react'
 import { formatCommitTime } from '@/utils/time'
 import { pickRowRefs, type GitCommitLogEntry, type GraphRef } from '@/domain/git'
 
@@ -28,6 +32,8 @@ interface Props {
   refs?: GraphRef[]
   /** 点开这条提交的详情（不传 = 不可点：本组件在两处弹窗里都传，测试里可以只验渲染） */
   onOpen?: (oid: string) => void
+  /** 右键（菜单状态由弹窗持有，见 `commit-menu.ts`） */
+  onContextMenu?: (e: ReactMouseEvent) => void
 }
 
 /** 引用标签的悬停提示：把「这是哪一类引用」说清楚（`origin/master` 光看名字分不出本地还是远程） */
@@ -55,7 +61,7 @@ function hiddenTitle(hidden: GraphRef[]): string {
   })
 }
 
-export function GitCommitRow({ entry, gutter, refs, onOpen }: Props) {
+export function GitCommitRow({ entry, gutter, refs, onOpen, onContextMenu }: Props) {
   // 只展示一个（本地优先）+ 剩下的全部进徽标；详情（悬停）也是这里算出来的
   const picked = pickRowRefs(refs ?? [])
   const time = formatCommitTime(entry.author_time)
@@ -68,6 +74,7 @@ export function GitCommitRow({ entry, gutter, refs, onOpen }: Props) {
       tabIndex={onOpen ? 0 : undefined}
       title={onOpen ? t('查看这次提交改了什么') : undefined}
       onClick={onOpen ? () => onOpen(entry.oid) : undefined}
+      onContextMenu={onContextMenu}
       onKeyDown={
         onOpen
           ? (e) => {

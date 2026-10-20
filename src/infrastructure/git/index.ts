@@ -24,8 +24,12 @@ import type {
   GitDiffSides,
   GitLogScope,
   GitMergeResult,
+  GitPickKind,
+  GitPickResult,
+  GitPickState,
   GitRemoteInfo,
   GitRepoInfo,
+  GitResetPreview,
   GitStashDropResult,
   GitStashEntry,
   GitStashResult,
@@ -251,6 +255,57 @@ export function merge(
 /** 中止进行中的合并（`merge --abort`）：工作区回到合并之前 */
 export function mergeAbort(dir: string): Promise<GitStatusSnapshot> {
   return invoke<GitStatusSnapshot>('git_merge_abort', { dir })
+}
+
+// ==================== 重置 / 挑选 / 还原 ====================
+
+/** 「重置到这笔提交」的前置判定（读）—— `ancestor` / `commits` 决定界面给不给这一项、确认文案写几条 */
+export function resetPreview(
+  dir: string,
+  oid: string,
+): Promise<GitResetPreview> {
+  return invoke<GitResetPreview>('git_reset_preview', { dir, oid })
+}
+
+/** 把当前分支重置到某笔提交（`reset --soft`：改动全留在暂存区） */
+export function resetSoft(
+  dir: string,
+  oid: string,
+): Promise<GitStatusSnapshot> {
+  return invoke<GitStatusSnapshot>('git_commit_reset_soft', { dir, oid })
+}
+
+/** 是否有未了结的 cherry-pick / revert（读；`null` = 没有） */
+export function pickState(dir: string): Promise<GitPickState | null> {
+  return invoke<GitPickState | null>('git_pick_state', { dir })
+}
+
+/**
+ * 挑选（cherry-pick）/ 还原（revert）一条提交。
+ * ⚠️ 冲突时命令会抛：工作区**已留下冲突标记**，错误正文里带着 git 的 `CONFLICT` 清单。
+ */
+export function pick(
+  dir: string,
+  kind: GitPickKind,
+  oid: string,
+): Promise<GitPickResult> {
+  return invoke<GitPickResult>('git_pick', { dir, kind, oid })
+}
+
+/** 中止进行中的挑选 / 还原（回到动作之前） */
+export function pickAbort(
+  dir: string,
+  kind: GitPickKind,
+): Promise<GitStatusSnapshot> {
+  return invoke<GitStatusSnapshot>('git_pick_abort', { dir, kind })
+}
+
+/** 继续进行中的挑选 / 还原（冲突已解决并暂存） */
+export function pickResume(
+  dir: string,
+  kind: GitPickKind,
+): Promise<GitStatusSnapshot> {
+  return invoke<GitStatusSnapshot>('git_pick_resume', { dir, kind })
 }
 
 // ==================== 贮藏（stash） ====================

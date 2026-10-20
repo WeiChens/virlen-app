@@ -23,6 +23,7 @@ import { createRoot } from 'react-dom/client'
 
 import GitGraphModal from '@/ui/pages/chat/components/git/GitGraphModal'
 import { GRAPH_PAGE_SIZE, loadCommits } from '@/services/git-service'
+import { copyText } from '@/utils/clipboard'
 import { graphGeometry, layoutGraph } from '@/domain/git'
 import type { GitCommitLogEntry } from '@/domain/git'
 
@@ -31,6 +32,13 @@ vi.mock('@/services/git-service', async (importOriginal) => {
   // 页大小用**真值**（判据是 `>= GRAPH_PAGE_SIZE`，写死数字只会让用例和实现慢慢脱节）
   return { ...actual, loadCommits: vi.fn() }
 })
+
+// 行右键菜单的复制项（`commit-menu.ts`）：不 mock 就变「真去读 WebView 剪贴板」
+vi.mock('@/utils/clipboard', () => ({ copyText: vi.fn(() => Promise.resolve(true)) }))
+vi.mock('@/ui/components/shared/Toast', () => ({
+  showToast: vi.fn(),
+  useToast: (): unknown => ({ Toast: (): null => null, showToast: vi.fn() }),
+}))
 
 // 引用链可能经 store 桶文件拉到 markdown / code-block → monaco，而 monaco 在 jsdom 里导入即崩
 vi.mock('@/monaco/setupMonaco', () => ({
@@ -110,6 +118,7 @@ async function mount() {
   await act(async () => {
     root!.render(
       <GitGraphModal
+        disabled={false}
         onClose={() => {
           closed += 1
         }}
@@ -124,6 +133,29 @@ const refs = () => [...document.querySelectorAll<HTMLElement>('.git-log-ref')]
 const gutterWidths = (): string[] =>
   [...document.querySelectorAll<HTMLElement>('.git-graph-gutter')].map((el) => el.style.width)
 const moreBtn = () => document.querySelector<HTMLButtonElement>('.git-log-more')
+
+/** 在某个行上模拟右键（菜单挂在 body 上，不跟着行走） */
+async function rightClick(el: Element): Promise<void> {
+  await act(async () => {
+    el.dispatchEvent(
+      new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 120,
+        clientY: 90,
+      }),
+    )
+  })
+}
+const menuLabels = (): (string | null)[] =>
+  [...document.querySelectorAll('.context-menu-item')].map((el) => el.textContent)
+const menuItem = (label: string): HTMLButtonElement => {
+  const found = [...document.querySelectorAll<HTMLButtonElement>('.context-menu-item')].find(
+    (el) => el.textContent === label,
+  )
+  if (!found) throw new Error(`菜单里没有「${label}」`)
+  return found
+}
 
 /** 期望的每行空位宽度 = 纯函数对**同一份提交**算出来的 `rowGutters`（口径只有一处） */
 const expectGutters = (list: GitCommitLogEntry[]): string[] =>
@@ -140,6 +172,7 @@ beforeEach(() => {
   ) as unknown as HTMLCanvasElement['getContext']
   vi.mocked(loadCommits).mockReset()
   vi.mocked(loadCommits).mockResolvedValue(chain(3))
+  vi.mocked(copyText).mockClear()
 })
 
 afterEach(() => {
@@ -335,4 +368,43 @@ it('Esc 只关弹窗：捕获阶段拦住，宿主面板那颗「Esc 关面板�
   expect(panelListener).not.toHaveBeenCalled()
 
   document.removeEventListener('keydown', panelListener)
+})
+
+it('行右键：菜单项按**这一行**的引用给（切到分支 / 合并到当前分支），复制拿它的完整 oid', async () => {
+  // 第一行是当前分支头、第二行挂着一个本地分支 —— 右键第二行只能看到 feature 那两项
+  vi.mocked(loadCommits).mockResolvedValue([
+    commit({
+      oid: oid(1),
+      short_oid: 'c1',
+      parents: [oid(2)],
+      refs: ['HEAD -> refs/heads/master'],
+      subject: 'one',
+    }),
+    commit({
+      oid: oid(2),
+      short_oid: 'c2',
+      parents: [],
+      refs: ['refs/heads/feature'],
+      subject: 'two',
+    }),
+  ])
+  await mount()
+  await rightClick(rows()[1])
+
+  expect(menuLabels()).toEqual([
+    '查看提交详情',
+    '在此提交上新建分支…',
+    '挑选这条提交（cherry-pick）',
+    '还原这条提交（revert）',
+    '重置当前分支到这笔提交（保留改动）',
+    '切换到分支 feature',
+    '合并 feature 到当前分支',
+    '复制提交 hash',
+    '复制提交标题',
+  ])
+
+  await act(async () => menuItem('复制提交 hash').click())
+  expect(copyText).toHaveBeenCalledWith(oid(2))
+  expect(menuLabels()).toEqual([])
+  expect(closed).toBe(0)
 })

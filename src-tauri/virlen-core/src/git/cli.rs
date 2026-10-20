@@ -87,6 +87,22 @@ impl GitOutput {
         String::from_utf8_lossy(&self.stdout).into_owned()
     }
 
+    /// stdout + stderr 合成一段可直接给用户看的文本（**唯一实现**：合并 / 挑选 / 还原共用）。
+    ///
+    /// ⚠️ git 把**有用的话放在哪一路是不固定的**：`merge` / `cherry-pick` 的冲突清单在 **stdout**
+    ///（`CONFLICT (content): …`），警告与凭据提示在 stderr。只回一路就是「用户看不到唯一有用的信息」。
+    pub fn joined_text(&self) -> String {
+        let mut text = self.stdout_str();
+        let stderr = self.stderr.trim_end();
+        if !stderr.is_empty() {
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
+            text.push_str(stderr);
+        }
+        text.trim().to_string()
+    }
+
     /// 退出码非 0 时转成错误（stderr 原文带上）
     pub fn into_result(self, what: &str) -> Result<Self, GitError> {
         if self.ok() {

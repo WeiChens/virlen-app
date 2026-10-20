@@ -1972,3 +1972,256 @@ fn stash_write_gate_rejects_when_readonly() {
     assert!(super::stash::list(&repo.path()).is_ok());
 }
 
+// ==================== 提交搬运（reset --soft · cherry-pick · revert） ====================
+
+/// `reset --soft <oid>`：分支退回去、**改动全部留在暂存区**；空转在 Rust 侧就拒
+#[test]
+fn reset_soft_moves_head_and_keeps_changes_staged() {
+    let Some(repo) = TempRepo::new() else { return };
+    let gate = WriteGate::new(true);
+    repo.write("a.txt", "one\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+    repo.git(&["branch", "-M", "main"]);
+    let first = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
+    repo.write("b.txt", "b\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "second"]);
+    repo.write("c.txt", "c\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "third"]);
+
+    let preview = super::commit::reset_preview(&repo.path(), &first).expect("预览应可读");
+    assert!(preview.ancestor, "第一个提交是 HEAD 的祖先");
+    assert_eq!(preview.commits, 2, "要撤掉 second / third 两条");
+
+    let snapshot =
+        super::commit::reset_soft(&repo.path(), &gate, &first).expect("reset --soft 应成功");
+    assert_eq!(
+        snapshot.head.oid.as_deref(),
+        Some(first.as_str()),
+        "HEAD 要退回第一个提交"
+    );
+    assert_eq!(repo.git(&["rev-list", "--count", "HEAD"]).trim(), "1");
+    // 撤掉的两条提交带来的文件都成了**已暂存的新增**：改动没丢，也没掉回工作区
+    for path in ["b.txt", "c.txt"] {
+        let entry = snapshot
+            .entries
+            .iter()
+            .find(|e| e.path == path)
+            .unwrap_or_else(|| panic!("{} 应当在暂存区里", path));
+        assert_eq!(entry.x, 'A', "{} 应是已暂存的新增: {:?}", path, entry);
+        assert_eq!(entry.y, '.', "{} 不该同时出现在未暂存侧", path);
+    }
+
+    // 空转：已经在这笔提交上
+    let same =
+        super::commit::reset_soft(&repo.path(), &gate, &first).expect_err("已经在这笔上应拒绝");
+    assert!(
+        same.message.contains("已经在这笔提交上"),
+        "{}",
+        same.message
+    );
+}
+
+/// 非祖先 / 只读沙盒：重置一律拒绝（fail-closed，不依赖界面层的预览判断）
+#[test]
+fn reset_soft_rejects_unrelated_commit_and_readonly() {
+    let Some(repo) = TempRepo::new() else { return };
+    repo.write("a.txt", "one\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+    repo.git(&["branch", "-M", "main"]);
+    let main_head = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
+    // 另一条分支上的提交：不在 main 的祖先链上
+    repo.git(&["checkout", "-q", "-b", "side"]);
+    repo.write("s.txt", "s\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "side: add s"]);
+    let side = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
+    repo.git(&["checkout", "-q", "main"]);
+
+    let preview = super::commit::reset_preview(&repo.path(), &side).expect("预览应可读");
+    assert!(!preview.ancestor, "side 上的提交不是 main 的祖先");
+    assert_eq!(preview.commits, 0, "不是祖先时条数没有意义，给 0 而不猜");
+
+    let err = super::commit::reset_soft(&repo.path(), &WriteGate::new(true), &side)
+        .expect_err("非祖先提交必须拒");
+    assert!(
+        err.message.contains("不在当前分支的历史上"),
+        "{}",
+        err.message
+    );
+
+    let readonly = super::commit::reset_soft(&repo.path(), &WriteGate::new(false), &main_head)
+        .expect_err("只读沙盒必须拒");
+    assert!(readonly.message.contains("只读沙盒"), "{}", readonly.message);
+}
+
+/// cherry-pick 把别处的提交搬到当前分支（生成新 oid、沿用原标题），revert 把它反向撤销
+#[test]
+fn cherry_pick_brings_a_commit_and_revert_takes_it_back() {
+    use super::PickKind;
+    let Some(repo) = TempRepo::new() else { return };
+    let gate = WriteGate::new(true);
+    repo.write("a.txt", "one\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+    repo.git(&["branch", "-M", "main"]);
+    repo.git(&["checkout", "-q", "-b", "feat"]);
+    repo.write("b.txt", "feat\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "feat: add b"]);
+    let picked = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
+    repo.git(&["checkout", "-q", "main"]);
+
+    let file = std::path::Path::new(&repo.path()).join("b.txt");
+    assert!(!file.exists(), "main 上还没有 b.txt");
+    assert!(
+        super::pick::state(&repo.path()).expect("state 应可读").is_none(),
+        "一开始没有任何进行中的动作"
+    );
+
+    let result = super::pick::pick(&repo.path(), &gate, PickKind::CherryPick, &picked)
+        .expect("cherry-pick 应成功");
+    assert!(file.exists(), "被挑选的改动要落到当前分支");
+    assert_ne!(result.oid, picked, "cherry-pick 生成的是一条新提交");
+    assert_eq!(
+        repo.git(&["log", "-1", "--pretty=%s"]).trim(),
+        "feat: add b",
+        "提交信息沿用原提交"
+    );
+
+    let reverted = super::pick::pick(&repo.path(), &gate, PickKind::Revert, &result.oid)
+        .expect("revert 应成功");
+    assert!(!file.exists(), "还原后文件应当消失");
+    assert_ne!(reverted.oid, result.oid);
+    assert_eq!(
+        repo.git(&["log", "-1", "--pretty=%s"]).trim(),
+        "Revert \"feat: add b\"",
+        "revert 默认信息是 `Revert <原标题>`（证明 --no-edit 生效、没去等编辑器）"
+    );
+    assert!(
+        super::pick::state(&repo.path()).expect("state 应可读").is_none(),
+        "成功后不该留下进行中状态"
+    );
+}
+
+/// 冲突：退出码 1、清单在 stdout、仓库进入「挑选中」；`--abort` 回到动作前，`--continue` 了结它
+#[test]
+fn cherry_pick_conflict_reports_stdout_then_aborts_and_resumes() {
+    use super::PickKind;
+    let Some(repo) = TempRepo::new() else { return };
+    let gate = WriteGate::new(true);
+    repo.write("a.txt", "base\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+    repo.git(&["branch", "-M", "main"]);
+    repo.git(&["checkout", "-q", "-b", "feat"]);
+    repo.write("a.txt", "feat-side\n");
+    repo.git(&["commit", "-q", "-am", "feat: 改 a"]);
+    let feat_oid = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("a.txt", "main-side\n");
+    repo.git(&["commit", "-q", "-am", "main: 改 a"]);
+
+    let err = super::pick::pick(&repo.path(), &gate, PickKind::CherryPick, &feat_oid)
+        .expect_err("两边改同一文件必须冲突");
+    assert!(err.message.contains("冲突"), "错误要说清是冲突: {}", err.message);
+    assert!(
+        err.stderr.contains("CONFLICT"),
+        "冲突清单在 stdout，必须一起带回来: {}",
+        err.stderr
+    );
+    let state = super::pick::state(&repo.path())
+        .expect("state 应可读")
+        .expect("必须处于挑选中");
+    assert_eq!(state.kind, PickKind::CherryPick);
+    assert_eq!(state.oid.as_deref(), Some(feat_oid.as_str()));
+
+    // 挑选中再挑一条：拒，并说清下一步
+    let again = super::pick::pick(&repo.path(), &gate, PickKind::CherryPick, &feat_oid)
+        .expect_err("挑选中不能再挑");
+    assert!(again.message.contains("还没有结束"), "{}", again.message);
+
+    let after = super::pick::abort(&repo.path(), &gate, PickKind::CherryPick).expect("abort 应成功");
+    assert!(after.entries.is_empty(), "中止后工作区应当干净");
+    assert!(super::pick::state(&repo.path())
+        .expect("state 应可读")
+        .is_none());
+    assert!(
+        std::fs::read_to_string(std::path::Path::new(&repo.path()).join("a.txt"))
+            .unwrap()
+            .contains("main-side"),
+        "中止后应回到 main 侧的内容"
+    );
+
+    // 再来一次：这回解决冲突后 continue
+    super::pick::pick(&repo.path(), &gate, PickKind::CherryPick, &feat_oid)
+        .expect_err("仍然冲突");
+    repo.write("a.txt", "resolved\n");
+    repo.git(&["add", "a.txt"]);
+    let resumed =
+        super::pick::resume(&repo.path(), &gate, PickKind::CherryPick).expect("continue 应成功");
+    assert!(resumed.entries.is_empty(), "继续后工作区应当干净");
+    assert!(super::pick::state(&repo.path())
+        .expect("state 应可读")
+        .is_none());
+    assert_eq!(
+        repo.git(&["log", "-1", "--pretty=%s"]).trim(),
+        "feat: 改 a",
+        "继续要沿用原提交信息（证明没去等编辑器）"
+    );
+    assert_eq!(
+        std::fs::read_to_string(std::path::Path::new(&repo.path()).join("a.txt"))
+            .unwrap()
+            .trim(),
+        "resolved",
+        "解决冲突时写的内容要留下来"
+    );
+}
+
+/// 目标解析不到 / 以 `-` 开头 / 没有进行中的动作：一律在 Rust 侧拒，且文案说清是哪一种
+#[test]
+fn pick_rejects_bad_targets_and_idle_operations() {
+    use super::PickKind;
+    let Some(repo) = TempRepo::new() else { return };
+    let gate = WriteGate::new(true);
+    repo.write("a.txt", "one\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "init"]);
+
+    let missing = super::pick::pick(&repo.path(), &gate, PickKind::CherryPick, "no-such-rev")
+        .expect_err("不存在的引用必须拒");
+    assert!(
+        missing.message.contains("找不到要挑选的提交"),
+        "{}",
+        missing.message
+    );
+
+    // 以 `-` 开头：必须在拼进 argv 之前就拒（否则 git 会把它当选项）
+    let dashed = super::pick::pick(&repo.path(), &gate, PickKind::Revert, "--hard")
+        .expect_err("以 - 开头的引用必须拒");
+    assert!(
+        dashed.message.contains("找不到要还原的提交"),
+        "{}",
+        dashed.message
+    );
+
+    let idle_abort = super::pick::abort(&repo.path(), &gate, PickKind::CherryPick)
+        .expect_err("没有进行中的挑选时不能 abort");
+    assert!(
+        idle_abort.message.contains("当前没有进行中的挑选"),
+        "{}",
+        idle_abort.message
+    );
+
+    let idle_resume = super::pick::resume(&repo.path(), &gate, PickKind::Revert)
+        .expect_err("没有进行中的还原时不能 continue");
+    assert!(
+        idle_resume.message.contains("当前没有进行中的还原"),
+        "{}",
+        idle_resume.message
+    );
+}
+

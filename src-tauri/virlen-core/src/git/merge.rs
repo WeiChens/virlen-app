@@ -11,7 +11,7 @@
 //! 4. **「合并中」的唯一出路是 `merge --abort`**：界面上没有终端可用，中止必须是一条命令
 //!    （`reset --merge` 的语义：冲突标记与合并带入的改动一起撤掉）。
 
-use super::cli::{GitCmd, GitError, GitOutput};
+use super::cli::{GitCmd, GitError};
 use super::repo::root_of;
 use super::status::snapshot_at_root;
 use super::{MergeResult, StatusSnapshot, WriteGate};
@@ -59,7 +59,7 @@ pub fn merge(
     // 传**引用名**而不是 oid：合并提交的信息要用到它（`Merge branch 'feat'`）——
     // 换成 40 位 oid 之后那条信息就变成 `Merge commit '<oid>'`，人读不懂
     let out = cmd.arg(reference.trim()).run()?;
-    let output = joined_output(&out);
+    let output = out.joined_text();
     if !out.ok() {
         let conflicted =
             output.contains("CONFLICT") || output.contains("Automatic merge failed");
@@ -101,37 +101,17 @@ pub fn abort(dir: &str, gate: &WriteGate) -> Result<StatusSnapshot, GitError> {
 }
 
 /// 校验引用并解析成完整 oid（本地分支 / 远程分支 / tag / oid 都行，解析不到就拒）。
+///
+/// 空串与以 `-` 开头的两种输入在这里单独拦一下只是为了**文案**：真正防「被当成选项」的闸在
+/// [`super::resolve_commit`]（它对所有调用方 fail-closed），这里说的是「哪个引用不合法」。
 fn resolve_at(root: &str, reference: &str) -> Result<String, GitError> {
     let text = reference.trim();
     if text.is_empty() {
         return Err(GitError::new("没有指定要合并的分支"));
     }
-    // 以 `-` 开头会被 git 当成选项（位置参数也一样）—— 必须在拼进 argv 之前拦住
     if text.starts_with('-') {
         return Err(GitError::new("分支名不能以 - 开头"));
     }
-    let out = GitCmd::read(root)
-        .arg("rev-parse")
-        .arg("--verify")
-        .arg("--quiet")
-        .arg(format!("{}^{{commit}}", text))
-        .run()?;
-    let oid = out.stdout_str().trim().to_string();
-    if !out.ok() || oid.is_empty() {
-        return Err(GitError::new(format!("找不到要合并的分支：{}", text)));
-    }
-    Ok(oid)
-}
-
-/// stdout + stderr 合并（摘要 / 冲突清单在 stdout，警告在 stderr）。
-fn joined_output(out: &GitOutput) -> String {
-    let mut text = out.stdout_str();
-    let stderr = out.stderr.trim_end();
-    if !stderr.is_empty() {
-        if !text.is_empty() && !text.ends_with('\n') {
-            text.push('\n');
-        }
-        text.push_str(stderr);
-    }
-    text.trim().to_string()
+    super::resolve_commit(root, text)?
+        .ok_or_else(|| GitError::new(format!("找不到要合并的分支：{}", text)))
 }

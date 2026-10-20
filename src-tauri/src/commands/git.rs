@@ -8,8 +8,8 @@ use std::sync::Arc;
 use virlen_core::git::cli::GitError;
 use virlen_core::git::{
     BranchInfo, CommitDetail, CommitLogEntry, CommitResult, DiffScope, DiffSides, LogScope,
-    MergeResult, RemoteInfo, RepoInfo, StashDropResult, StashEntry, StashResult, StatReport,
-    StatusSnapshot, SyncResult, WriteGate,
+    MergeResult, PickKind, PickResult, PickState, RemoteInfo, RepoInfo, ResetPreview,
+    StashDropResult, StashEntry, StashResult, StatReport, StatusSnapshot, SyncResult, WriteGate,
 };
 use virlen_core::session_db::SettingsRepo;
 
@@ -427,6 +427,83 @@ pub async fn git_merge_abort(
     let gate = gate(&settings).await;
     blocking("merge_abort", move || {
         virlen_core::git::merge::abort(&dir, &gate)
+    })
+    .await
+}
+
+// ==================== 提交搬运（cherry-pick / revert）与重置 ====================
+
+/// 「重置到这笔提交」的前置判定（读：不过写门禁）
+#[tauri::command]
+pub async fn git_reset_preview(dir: String, oid: String) -> Result<ResetPreview, String> {
+    blocking("reset_preview", move || {
+        virlen_core::git::commit::reset_preview(&dir, &oid)
+    })
+    .await
+}
+
+/// 把当前分支重置到某笔提交（`reset --soft`：改动全留在暂存区，不丢代码）。
+/// ⚠️ 只接受 HEAD 祖先链上的提交，且不接受「已经在这笔上」—— 两条都在 Rust 侧 fail-closed 再判一次。
+#[tauri::command]
+pub async fn git_commit_reset_soft(
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    dir: String,
+    oid: String,
+) -> Result<StatusSnapshot, String> {
+    let gate = gate(&settings).await;
+    blocking("reset_soft", move || {
+        virlen_core::git::commit::reset_soft(&dir, &gate, &oid)
+    })
+    .await
+}
+
+/// 是否有未了结的 cherry-pick / revert（读；`None` = 没有）
+#[tauri::command]
+pub async fn git_pick_state(dir: String) -> Result<Option<PickState>, String> {
+    blocking("pick_state", move || virlen_core::git::pick::state(&dir)).await
+}
+
+/// 挑选（cherry-pick）/ 还原（revert）一条提交。
+/// ⚠️ 冲突时退出码 1 且工作区**已留下冲突标记**：冲突清单在 git 的 stdout 里，
+/// 由 Rust 合并两股输出后整段回传（只回 stderr 等于吞掉它）。
+#[tauri::command]
+pub async fn git_pick(
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    dir: String,
+    kind: PickKind,
+    oid: String,
+) -> Result<PickResult, String> {
+    let gate = gate(&settings).await;
+    blocking("pick", move || {
+        virlen_core::git::pick::pick(&dir, &gate, kind, &oid)
+    })
+    .await
+}
+
+/// 中止进行中的挑选 / 还原（二次确认在界面层）
+#[tauri::command]
+pub async fn git_pick_abort(
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    dir: String,
+    kind: PickKind,
+) -> Result<StatusSnapshot, String> {
+    let gate = gate(&settings).await;
+    blocking("pick_abort", move || {
+        virlen_core::git::pick::abort(&dir, &gate, kind)
+    })
+    .await
+}
+
+/// 继续进行中的挑选 / 还原（冲突已解决并暂存）
+#[tauri::command]
+pub async fn git_pick_resume(
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+    dir: String,
+    kind: PickKind,
+) -> Result<StatusSnapshot, String> {
+    let gate = gate(&settings).await;
+    blocking("pick_resume", move || {
+        virlen_core::git::pick::resume(&dir, &gate, kind)
     })
     .await
 }

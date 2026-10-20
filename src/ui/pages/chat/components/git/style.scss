@@ -1070,6 +1070,86 @@
   }
 }
 
+/* 「挑选中 / 还原中」提示条（面板顶部，不在浮层里）：冲突态下唯一要看的提示，
+   右边跟的是两条出路（继续 / 中止）。与 `.git-merge-warn` 同一观感，但**不共用选择器** ——
+   那一条嵌在 `.git-merge-menu` 下，搬出来会牵连浮层的排版。 */
+.git-pick-warn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 12px 0;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: var(--bg-secondary, #f7f7f8);
+  font-size: var(--font-size-xs, 11px);
+  color: var(--color-warning-text, #b45309);
+
+  .git-pick-warn-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  button {
+    flex: none;
+    padding: 1px 6px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 4px;
+    background: var(--bg-primary, #fff);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      background: var(--hover-bg, #f0f0f0);
+    }
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+  }
+}
+
+/* 「在此提交上新建分支」输入框（写在全局 Modal 里，不依赖 git 浮层） */
+.git-new-branch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+
+  .git-new-branch-hint {
+    font-size: var(--font-size-xs, 11px);
+    color: var(--text-secondary, #666);
+    word-break: break-word;
+  }
+
+  .git-new-branch-input {
+    width: 100%;
+    padding: 5px 8px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 6px;
+    background: var(--bg-primary, #fff);
+    color: var(--text-primary, #1a1a1a);
+    font: inherit;
+    font-size: var(--font-size-sm, 12px);
+    box-sizing: border-box;
+
+    &:focus {
+      outline: none;
+      border-color: var(--primary-color, #3b6ef6);
+    }
+  }
+
+  /* 错误提示常驻一行高度：校验中与合法时为空字符串，弹窗高度不跳 */
+  .git-new-branch-error {
+    min-height: 14px;
+    font-size: var(--font-size-xs, 11px);
+    color: var(--color-error, #dc2626);
+  }
+}
+
 /* 差异弹窗（portal 到 body，故不挂在 .git-entry 下）
    遮罩从自绘标题栏（--window-top-bar-height）**下方**开始：压住窗口状态栏会让「拖窗口 / 点窗口按钮」
    在弹窗开着时失效（与全局 Modal / 搜索弹窗同一口径）。 */

@@ -10,6 +10,9 @@
  * 4. **空清单给空态**（空提交 / 纯合并），不留一块白板。
  *
  * 差异正文换成最小替身（只验交下去的接口），Monaco 那份契约由 `monaco-diff-view.test.tsx` 守。
+ *
+ * 5. **左清单行右键给基本操作**（打开 / 编辑器打开 / 在文件管理器中显示 / 复制路径）：
+ *    历史提交不可暂存，所以**没有**写入口；菜单项组装口径由 `git-side-menu.test.ts` 守。
  */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act } from 'react'
@@ -18,10 +21,36 @@ import { createRoot } from 'react-dom/client'
 import GitCommitModal from '@/ui/pages/chat/components/git/GitCommitModal'
 import type { GitCommitDetail } from '@/domain/git'
 import { loadCommitDetail, loadCommitFileSides } from '@/services/git-service'
+import { copyText } from '@/utils/clipboard'
 
 vi.mock('@/services/git-service', () => ({
   loadCommitDetail: vi.fn(),
   loadCommitFileSides: vi.fn(),
+}))
+
+// 右键菜单的打开类动作（menus.ts）：mock 掉就不必拉真实的编辑器服务（它会拉整个 store barrel）
+vi.mock('@tauri-apps/plugin-opener', () => ({
+  openPath: vi.fn(() => Promise.resolve()),
+  revealItemInDir: vi.fn(() => Promise.resolve()),
+}))
+vi.mock('@/utils/clipboard', () => ({
+  copyText: vi.fn(() => Promise.resolve(true)),
+  copyImageToClipboard: vi.fn(() => Promise.resolve(true)),
+  saveImageAs: vi.fn(() => Promise.resolve('E:/tmp/a.png')),
+  defaultImageName: vi.fn(() => 'image-1'),
+}))
+vi.mock('@/ui/components/shared/Toast', () => ({
+  showToast: vi.fn(),
+  useToast: (): unknown => ({ Toast: (): null => null, showToast: vi.fn() }),
+}))
+vi.mock('@/services/editor-service', () => ({
+  editorService: {
+    isEnabled: vi.fn(() => true),
+    getSelectedConfig: vi.fn(() => undefined),
+    getSelectedCommand: vi.fn(() => ''),
+    openFile: vi.fn(() => Promise.resolve({ ok: true })),
+    openWithConfig: vi.fn(() => Promise.resolve({ ok: true })),
+  },
 }))
 
 vi.mock('@/ui/pages/chat/components/message/MonacoDiffView', () => {
@@ -91,11 +120,35 @@ async function mount(oid = OID) {
 
 const sideRows = () => [...document.querySelectorAll('.git-diff-side-row')]
 
+/** 在某个元素上模拟右键 */
+async function rightClick(el: Element): Promise<void> {
+  await act(async () => {
+    el.dispatchEvent(
+      new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 120,
+        clientY: 90,
+      }),
+    )
+  })
+}
+const menuLabels = (): (string | null)[] =>
+  [...document.querySelectorAll('.context-menu-item')].map((el) => el.textContent)
+const menuItem = (label: string): HTMLButtonElement => {
+  const found = [...document.querySelectorAll<HTMLButtonElement>('.context-menu-item')].find(
+    (el) => el.textContent === label,
+  )
+  if (!found) throw new Error(`菜单里没有「${label}」`)
+  return found
+}
+
 beforeEach(() => {
   document.body.innerHTML = ''
   closed = false
   vi.mocked(loadCommitDetail).mockReset()
   vi.mocked(loadCommitFileSides).mockReset()
+  vi.mocked(copyText).mockClear()
   vi.mocked(loadCommitDetail).mockResolvedValue(detail())
   vi.mocked(loadCommitFileSides).mockResolvedValue({
     old_text: 'old\n',
@@ -209,4 +262,22 @@ it('Esc 关掉详情', async () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
   })
   expect(closed).toBe(true)
+})
+
+it('左清单行右键：只有打开类四项（历史提交不可暂存），且不切走当前文件', async () => {
+  await mount()
+  await rightClick(sideRows()[1])
+
+  expect(menuLabels()).toEqual([
+    '打开',
+    '编辑器打开',
+    '在文件管理器中显示',
+    '复制路径',
+  ])
+  // 右键不改变「当前在看哪个文件」（与点一下切文件区分开）
+  expect(sideRows()[0].classList.contains('active')).toBe(true)
+
+  await act(async () => menuItem('复制路径').click())
+  // 仓库根未知时路径原样交出去（toAbsolutePath 不猜）
+  expect(copyText).toHaveBeenCalledWith('src/new.ts')
 })

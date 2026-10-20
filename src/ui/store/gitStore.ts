@@ -10,6 +10,7 @@
 import { makeObservable, observable } from 'mobx'
 import type {
   GitBranchInfo,
+  GitPickState,
   GitRemoteInfo,
   GitRepoInfo,
   GitStashEntry,
@@ -84,6 +85,16 @@ class GitStore {
    */
   syncOutput: string | null = null
 
+  /**
+   * 未了结的 cherry-pick / revert（`null` = 没有）—— 面板顶部据此给「继续 / 中止」两条出路。
+   *
+   * ⚠️ 与「合并中」分开存：一次只能有一个在进行，但用户点错时「现在到底在哪个状态里」
+   * 必须能说得出来（合并的提示在 `GitMergeMenu` 里，挑选 / 还原的没有单独浮层）。
+   * 刷新时机：面板打开 / 窗口激活 / 每次动作之后 —— 外部终端里的 git 造成的漂移，
+   * 下一次刷新时对齐（与 `loadMergeState` 同一口径）。
+   */
+  pick: GitPickState | null = null
+
   constructor() {
     makeObservable(this, {
       dir: observable,
@@ -104,6 +115,7 @@ class GitStore {
       commitDraft: observable,
       hookOutput: observable,
       syncOutput: observable,
+      pick: observable,
     })
   }
 }

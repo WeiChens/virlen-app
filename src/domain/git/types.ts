@@ -240,3 +240,35 @@ export interface GitMergeResult {
   /** 快进（没有生成合并提交） */
   fast_forward: boolean
 }
+
+/**
+ * 提交搬运类动作：`cherry-pick` 与 `revert` 共用一整套「进冲突态 → 中止 / 继续」的机制。
+ * 字符串与 Rust `git::PickKind` 的 serde（kebab-case）逐字一致。
+ */
+export type GitPickKind = 'cherry-pick' | 'revert'
+
+/** 进行中的挑选 / 还原（Rust `git::PickState`）；`null` = 没有 */
+export interface GitPickState {
+  kind: GitPickKind
+  /** `.git/CHERRY_PICK_HEAD` / `REVERT_HEAD` 指向的提交 */
+  oid: string | null
+}
+
+/** 一次 cherry-pick / revert 的结果（⚠️ 冲突时走异常，不是这个结构） */
+export interface GitPickResult {
+  snapshot: GitStatusSnapshot
+  output: string
+  /** 动作产生的提交（= 新的 HEAD） */
+  oid: string
+}
+
+/**
+ * 「把当前分支重置到这笔提交」的前置判定（Rust `git::ResetPreview`）。
+ *
+ * `ancestor=false` 时这一项不该做（那是「把分支挪到一段无关历史」）；
+ * `commits` 是确认文案要说清的「会少几条提交」。
+ */
+export interface GitResetPreview {
+  ancestor: boolean
+  commits: number
+}

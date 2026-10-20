@@ -14,6 +14,11 @@
  * 4. 弹窗内的 `mousedown` 必须 `stopPropagation`、Esc / ↑↓ 走**捕获阶段**：本弹窗 portal 到 body，
  *    宿主（提交记录 / 提交图弹窗、源代码管理面板）的关闭逻辑都按 DOM 包含关系或 document 监听判定
  *    —— 少这两行就是「关详情连整个弹窗一起关掉」（与 `GitLogModal` 同款坑）。
+ * 5. **左清单的文件行右键给基本操作**（与 `GitDiffModal` 共用 `./side-menu`）：打开 / 编辑器打开 /
+ *    在文件管理器中显示 / 复制路径。⚠️ 两处口径：打开的是**工作区里现在的那份**（不是这次提交
+ *    里的版本 —— 历史版本只在右侧差异里看得到）；提交里的文件工作区还有没有无从得知（同路径可能
+ *    早被删、也可能又被加回），所以**不按状态字母猜**，失败由 `fileMenuItems` 兜底提示。
+ *    也不给暂存类入口：历史提交不可改。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -22,8 +27,11 @@ import { baseName, dirName, singleSideOf } from '@/domain/git'
 import type { GitCommitDetail, GitCommitFile, GitDiffSides } from '@/domain/git'
 import { formatCommitTime } from '@/utils/time'
 import FileTypeIcon from '@/ui/components/icons/FileTypeIcon'
+import ContextMenu, { useContextMenu } from '@/ui/components/shared/ContextMenu'
+import { gitStore } from '@/ui/store/gitStore'
 import { MonacoDiffView } from '../message/MonacoDiffView'
 import { loadCommitDetail, loadCommitFileSides } from '@/services/git-service'
+import { diffSideMenuItems } from './side-menu'
 import VirtualList from './VirtualList'
 import { SideResizer, useSideWidth } from './use-side-width'
 
@@ -49,6 +57,8 @@ export function GitCommitModal({ oid, onClose }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
   /** 左清单宽度（与差异弹窗共用一份偏好） */
   const sideWidth = useSideWidth()
+  /** 左清单的行右键菜单（目标行 = 被点的行，不改变当前正在看的文件） */
+  const menu = useContextMenu<GitCommitFile>()
 
   // ① 详情（头 + 清单）：打开时取一次
   useEffect(() => {
@@ -129,6 +139,11 @@ export function GitCommitModal({ oid, onClose }: Props) {
   }, [])
 
   const singleSide = useMemo(() => (sides ? singleSideOf(sides) : null), [sides])
+  /** 右键菜单项：只有「把文件交给系统」那几项（历史提交不可暂存，见口径 5） */
+  const menuTarget = menu.state?.target
+  const menuItems = menuTarget
+    ? diffSideMenuItems({ path: menuTarget.path, workspace: gitStore.repo?.root })
+    : []
   const message = detail?.message ?? ''
   const subject = message.split('\n')[0] || t('（无提交信息）')
   /** 正文 = 标题行之后的剩余：标题已在弹窗头里，左栏两三百像素宽再画一遍只是重复 */
@@ -243,6 +258,7 @@ export function GitCommitModal({ oid, onClose }: Props) {
                         file.path === current?.path ? ' active' : ''
                       }`}
                       title={fileTitle(file)}
+                      onContextMenu={(e) => menu.openAt(e, file)}
                       onClick={() => setCurrent(file)}>
                       <FileTypeIcon
                         filename={name}
@@ -290,6 +306,15 @@ export function GitCommitModal({ oid, onClose }: Props) {
           </div>
         </div>
       </div>
+      {menu.state && (
+        // 与 `.git-diff-modal` 平级（Menu 自己 portal 到 body）：点菜单项被当成「点弹窗外」的坑
+        // 由 ContextMenu 在捕获阶段拦住；这里手动 stop 一层没有意义也不必重复
+        <ContextMenu
+          position={menu.state.position}
+          items={menuItems}
+          onClose={menu.close}
+        />
+      )}
     </div>,
     document.body,
   )

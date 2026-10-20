@@ -43,6 +43,12 @@ const FILES = [
   'src/ui/pages/chat/components/message/MonacoDiffView.tsx',
   // 聊天里 edit_file 的差异输入适配层（在它里面）
   'src/ui/pages/chat/components/tool-call/EditFileMessage.tsx',
+  // 差异弹窗左清单的行右键菜单（复用 fileMenuItems）：新文案同样要进字典
+  'src/ui/pages/chat/components/git/side-menu.ts',
+  // 提交行（提交记录 / 提交图共用）的右键菜单
+  'src/ui/pages/chat/components/git/commit-menu.ts',
+  // 右键菜单里「在此提交上新建分支」的输入框
+  'src/ui/pages/chat/components/git/GitNewBranchPrompt.tsx',
   'src/ui/pages/chat/components/git/sections.ts',
 ]
 

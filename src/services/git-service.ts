@@ -25,11 +25,17 @@ import {
   mergeAbort as invokeMergeAbort,
   mergeState as invokeMergeState,
   numstat as invokeNumstat,
+  pick as invokePick,
+  pickAbort as invokePickAbort,
+  pickResume as invokePickResume,
+  pickState as invokePickState,
   pullRemote as invokePull,
   pushRemote as invokePush,
   remotes as fetchRemotes,
   renameBranch as invokeRenameBranch,
   repoInfo,
+  resetPreview as invokeResetPreview,
+  resetSoft as invokeResetSoft,
   stage as invokeStage,
   status as fetchStatus,
   stashApply as invokeStashApply,
@@ -50,6 +56,8 @@ import {
   type GitDiffScope,
   type GitDiffSides,
   type GitLogScope,
+  type GitPickKind,
+  type GitPickState,
   type GitSyncResult,
 } from '@/domain/git'
 import { gitStore } from '@/ui/store/gitStore'
@@ -152,6 +160,8 @@ export async function syncWorkspace(dir: string | null): Promise<void> {
     gitStore.lastDropped = null
     gitStore.syncOutput = null
     gitStore.stats = null
+    // 换仓库了：上一个仓库的「挑选中 / 还原中」不能跟过来（下一次 refreshStatus 会重取）
+    gitStore.pick = null
     gitStore.error = null
     gitStore.errorBox = null
   })
@@ -237,6 +247,9 @@ export async function refreshStatus(): Promise<void> {
     })
     // 行数统计只在面板打开时才有用（徽标只数文件）：它比 status 贵，关着不跑
     if (gitStore.open) void refreshStats()
+    // 挑选 / 还原的进行中状态跟着快照一起刷：任意一次刷新之后，面板顶部的
+    // 「继续 / 中止」都不会拄着上一次动作的旧结论（代价是两条 rev-parse）
+    if (gitStore.open) void loadPickState()
   } catch (e) {
     // 被新的一次刷新取代 / 面板关掉：旧那次是被我们 `stopTask` 取消的（Rust 回
     // 「git 操作已取消」），**不是错误**。成功路径有同一条对账，失败路径同样不能漏
@@ -661,6 +674,153 @@ export async function abortMerge(): Promise<boolean> {
   acceptSnapshot(snapshot)
   void refreshStats()
   showToast(t('已中止合并'))
+  return true
+}
+
+// ==================== 重置 / 挑选 / 还原 ====================
+
+/**
+ * 未了结的 cherry-pick / revert（读）—— 结果落到 store，面板顶部据它给「继续 / 中止」两条出路。
+ *
+ * 刷新时机与 `loadMergeState` 同：面板打开 / 窗口激活 / 每次动作之后。外部终端里的 git
+ * 造成的漂移在下一次刷新时对齐（与合并中同一口径，不另起一套轮询）。
+ */
+export async function loadPickState(): Promise<GitPickState | null> {
+  const dir = gitStore.dir
+  if (!dir || !gitStore.repo) return null
+  const state = await invokePickState(dir).catch((): null => null)
+  runInAction(() => {
+    gitStore.pick = state
+  })
+  return state
+}
+
+/**
+ * 把当前分支重置到某笔提交（`reset --soft`：**改动全留在暂存区**）。
+ *
+ * 先预览再动手：不在 HEAD 祖先链上的提交**不给做** —— 那是「把当前分支挪到一段无关历史」，
+ * 只能在终端里显式操作。这一步拦在界面上（而非靠 git 报错）才能说清「为什么不能」。
+ */
+export async function resetToCommit(
+  oid: string,
+  subject: string,
+): Promise<boolean> {
+  const dir = gitStore.dir
+  if (!dir || !gitStore.repo) return false
+  const preview = await run('reset_preview', () =>
+    invokeResetPreview(dir, oid),
+  )
+  if (!preview) return false
+  if (!preview.ancestor) {
+    void MessagePrompt.info(
+      t('这笔提交不在当前分支的历史上'),
+      t(
+        '只有当前分支的祖先提交才能作为重置目标：否则等于把当前分支挪到一段无关历史上。',
+      ),
+    )
+    return false
+  }
+  if (preview.commits === 0) {
+    void MessagePrompt.info(
+      t('无需重置'),
+      t('当前分支已经在这笔提交上。'),
+    )
+    return false
+  }
+  const ok = await MessagePrompt.propt(
+    t('重置到这笔提交？'),
+    tpl(
+      '当前分支会退到「$__subject__」，之后的 $__count__ 条提交被撤掉；它们的改动全部保留在暂存区（不会丢代码）。',
+      { subject, count: preview.commits },
+    ),
+    { confirmText: t('重置'), cancelText: t('取消'), danger: true },
+  )
+  if (!ok) return false
+  const snapshot = await run('reset_soft', () => invokeResetSoft(dir, oid))
+  if (!snapshot) return false
+  acceptSnapshot(snapshot)
+  // 工作区被改写（撤掉的提交带来的改动进了暂存区）→ 行数统计必须重取
+  void refreshStats()
+  void refreshBranches()
+  showToast(tpl('已重置到「$__subject__」，改动保留在暂存区', { subject }))
+  return true
+}
+
+/**
+ * 挑选（cherry-pick）/ 还原（revert）一条提交。两种动作都**写历史**（生成新提交）→ 都先二确。
+ *
+ * ⚠️ 冲突时 `run()` 弹的错误窗里带着 git 的 `CONFLICT` 清单；此时仓库已进入「挑选中 / 还原中」，
+ * 必须**立刻回读状态**，面板顶部才会出现「继续 / 中止」两条出路（否则冲突解到一半的用户只剩终端）。
+ */
+export async function pickCommit(
+  kind: GitPickKind,
+  oid: string,
+  subject: string,
+): Promise<boolean> {
+  const dir = gitStore.dir
+  if (!dir || !gitStore.repo) return false
+  const isPick = kind === 'cherry-pick'
+  const ok = await MessagePrompt.propt(
+    isPick ? t('挑选这条提交到当前分支？') : t('还原这条提交？'),
+    isPick
+      ? tpl('会把「$__subject__」的改动作为一条新提交搬到当前分支。', {
+          subject,
+        })
+      : tpl('会生成一条新提交，把「$__subject__」的改动反向撤销。', {
+          subject,
+        }),
+    { confirmText: isPick ? t('挑选') : t('还原'), cancelText: t('取消') },
+  )
+  if (!ok) return false
+  const result = await run('pick', () => invokePick(dir, kind, oid))
+  // 冲突时 `run()` 失败分支会自己回读一次状态（→ refreshStatus → loadPickState），
+  // 面板顶部的「继续 / 中止」就是这么出现的；这里不重复发一次 IPC
+  if (!result) return false
+  acceptSnapshot(result.snapshot)
+  void refreshStats()
+  void refreshBranches()
+  showToast(
+    isPick
+      ? tpl('已挑选「$__subject__」', { subject })
+      : tpl('已还原「$__subject__」', { subject }),
+  )
+  return true
+}
+
+/** 继续进行中的挑选 / 还原（冲突已解决并**暂存**，否则 git 会拒并原样带回原因） */
+export async function resumePick(kind: GitPickKind): Promise<boolean> {
+  const dir = gitStore.dir
+  if (!dir || !gitStore.repo) return false
+  const snapshot = await run('pick_resume', () => invokePickResume(dir, kind))
+  if (!snapshot) return false
+  acceptSnapshot(snapshot)
+  runInAction(() => {
+    gitStore.pick = null
+  })
+  void refreshStats()
+  void refreshBranches()
+  showToast(kind === 'cherry-pick' ? t('已继续挑选') : t('已继续还原'))
+  return true
+}
+
+/** 中止进行中的挑选 / 还原。⚠️ 会丢掉冲突解决到一半的编辑 → 二确 */
+export async function abortPick(kind: GitPickKind): Promise<boolean> {
+  const dir = gitStore.dir
+  if (!dir || !gitStore.repo) return false
+  const ok = await MessagePrompt.propt(
+    kind === 'cherry-pick' ? t('中止这次挑选？') : t('中止这次还原？'),
+    t('工作区会回到动作之前：已解决的冲突与带入的改动都会被撤掉。'),
+    { confirmText: t('中止'), cancelText: t('取消'), danger: true },
+  )
+  if (!ok) return false
+  const snapshot = await run('pick_abort', () => invokePickAbort(dir, kind))
+  if (!snapshot) return false
+  acceptSnapshot(snapshot)
+  runInAction(() => {
+    gitStore.pick = null
+  })
+  void refreshStats()
+  showToast(kind === 'cherry-pick' ? t('已中止挑选') : t('已中止还原'))
   return true
 }
 
