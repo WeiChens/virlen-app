@@ -6,10 +6,390 @@
   <link rel="icon" type="image/svg+xml" href="/vite.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>virlen</title>
-  <script src="/script/ripple-button.js"></script>
+  <!--
+    启动屏（样式内联在这里，不经过 vite / React）。
+
+    为什么必须内联：窗口在 Rust 的 setup 里就 show（`src-tauri/src/lib.rs`），而首帧要等
+    JS bundle 下载解析 + `init()` 那串 IPC 全跑完 —— 中间是纯白画面。这段 HTML/CSS 只要
+    WebView 解析到就有动画可看，是那段空窗期唯一的填充物。
+
+    结构分两块，因为窗口是 `decorations: false` 的自绘标题栏：
+      ① #boot-titlebar —— 与 App 的 .window-top-bar 同高同款（高度取同一个 CSS 变量），
+         加载期间窗口照样能拖、能最小化 / 最大化 / 关闭；
+      ② #boot-splash   —— 内容区，**从标题栏下方开始**（项目里所有全屏遮罩都遵守这一条：
+         压住标题栏 = 把窗口按钮和拖拽区藏起来）。
+    文案 / 进度 / 失败重试由 `src/boot/splash.ts` 驱动；i18n 未就绪之前这里保持**无文字**，
+    避免英文用户看到一句中文 key。App 首帧落地后整块淡出并移除。
+  -->
+  <style>
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+    }
+
+    /*
+      启动期外观变量（只服务这块启动屏）：
+      · --boot-accent / --boot-bar / --boot-bar-fg 由 `src/ui/theme/bootAppearance.ts` 写进
+        localStorage 的缓存先给一份近似值（下面那段内联脚本，早于一切 bundle），
+        再由 `src/boot/splash.ts::applyAppearance` 用 `accentTokens()` 的精确值覆盖；
+      · --boot-bar-bg / --boot-page-bg 只在这里派生（系数与 theme.scss 同一套）。
+    */
+    :root {
+      --boot-accent: #4f46e5; /* = $brand-default / DEFAULT_ACCENT */
+      --boot-bar-fg: #fff;
+      --boot-bar-bg: var(--boot-accent); /* 亮色档：标题栏就是品牌基色 */
+      --boot-page-bg: #f2f3f6;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        /* 暗色档：标题栏压暗一档 —— 系数同 theme.scss 的 $accent-mix-dark-bar-primary（45%） */
+        --boot-bar-bg: color-mix(in srgb, var(--boot-accent) 45%, #000);
+        --boot-page-bg: #16161f;
+      }
+    }
+
+    /*
+      用户强制了深浅档（缓存里有）时覆盖系统深浅：属性选择器特指更高，
+      能压过上面的媒体查询。
+    */
+    html[data-boot-theme='light'] {
+      --boot-bar-bg: var(--boot-accent);
+      --boot-page-bg: #f2f3f6;
+    }
+
+    html[data-boot-theme='dark'] {
+      --boot-bar-bg: color-mix(in srgb, var(--boot-accent) 45%, #000);
+      --boot-page-bg: #16161f;
+    }
+
+    /* 兜底底色：启动屏移除后到 App 内容铺满之间也不露纯白（跟随系统深浅） */
+    body {
+      background: var(--boot-page-bg);
+    }
+
+    /* 遮罩容器：淡出与移除的单元（标题栏 + 内容区一起走） */
+    #boot-cover {
+      position: fixed;
+      inset: 0;
+      z-index: 2147483000; /* 高于应用内一切浮层：启动期间它就是唯一的脸 */
+      opacity: 1;
+      transition: opacity 200ms ease;
+      user-select: none;
+      -webkit-user-select: none;
+      font-family: 'Segoe UI', system-ui, -apple-system, 'PingFang SC',
+        'Microsoft YaHei', sans-serif;
+    }
+
+    #boot-cover[data-leaving='true'] {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /*
+      自绘标题栏：高度、留白、控件尺寸都与 App 的 .window-top-bar 对齐，
+      这样 App 首帧出现时不会看到标题栏「跳一下」。
+      兜底值 30px 与 .window-top-bar 的默认值一致 —— App 侧改了默认高度，这里要跟着改。
+      底色 / 前景走 `--boot-bar-bg` / `--boot-bar-fg`：用户自定义主题色在 bundle 加载后的
+      第一次 `applyAppearance` 里就变成了精确值。
+    */
+    #boot-titlebar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: var(--window-top-bar-height, 30px);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-left: 5px;
+      background: var(--boot-bar-bg);
+      color: var(--boot-bar-fg);
+      cursor: default;
+    }
+
+    .boot-titlebar__title {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 14px;
+    }
+
+    .boot-titlebar__title img {
+      width: 20px;
+      height: 20px;
+    }
+
+    .boot-titlebar__controls {
+      display: flex;
+      align-items: center;
+    }
+
+    /* 三枚窗口按钮：图形与 WinMinSvg / WinMaxSvg / CloseSvg 一致，尺寸取 App 的 30×30 + 16×16 图标 */
+    .boot-titlebar__control {
+      width: 30px;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      cursor: default;
+    }
+
+    .boot-titlebar__control svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .boot-titlebar__control:hover {
+      background: rgba(255, 255, 255, 0.16);
+    }
+
+    .boot-titlebar__control--close:hover {
+      background: #e81123;
+    }
+
+    /* 内容区：从标题栏下方开始，加载动画在剩余区域居中 */
+    #boot-splash {
+      position: absolute;
+      top: var(--window-top-bar-height, 30px);
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      background:
+        radial-gradient(
+          760px 420px at 50% -6%,
+          color-mix(in srgb, var(--boot-accent) 18%, transparent),
+          transparent 62%
+        ),
+        var(--boot-page-bg);
+      animation: boot-splash-in 180ms ease-out;
+      cursor: default;
+    }
+
+    .boot-splash__logo {
+      width: 84px;
+      height: 84px;
+      border-radius: 24px;
+      animation: boot-splash-breathe 2.6s ease-in-out infinite;
+      filter: drop-shadow(0 14px 30px color-mix(in srgb, var(--boot-accent) 32%, transparent));
+    }
+
+    .boot-splash__track {
+      width: 172px;
+      height: 3px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: color-mix(in srgb, var(--boot-accent) 16%, transparent);
+    }
+
+    .boot-splash__bar {
+      display: block;
+      width: 0;
+      height: 100%;
+      border-radius: 999px;
+      /* 中段提亮一档，跟主题色走（不再写死 #8b7bff） */
+      background: linear-gradient(
+        90deg,
+        var(--boot-accent),
+        color-mix(in srgb, var(--boot-accent) 60%, #fff) 45%,
+        var(--boot-accent)
+      );
+      background-size: 200% 100%;
+      animation: boot-splash-flow 1.3s linear infinite;
+      transition: width 240ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    }
+
+    .boot-splash__text {
+      min-height: 18px;
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.5;
+      letter-spacing: 0.02em;
+      color: #83848f;
+      text-align: center;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .boot-splash__text {
+        color: #9a9aae;
+      }
+    }
+
+    /* 启动失败：进度条让位给错误与重试入口（绝不停在「看起来还在加载」的状态）。
+       标题栏**不动**：这时候用户最需要能把窗口关掉 / 挪开。 */
+    #boot-splash[data-failed='true'] .boot-splash__track {
+      display: none;
+    }
+
+    .boot-splash__error {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      max-width: 480px;
+      padding: 0 24px;
+      text-align: center;
+    }
+
+    .boot-splash__error[hidden] {
+      display: none; /* 修掉 display:flex 覆盖 UA 的 [hidden]{display:none} */
+    }
+
+    .boot-splash__error-text {
+      margin: 0;
+      white-space: pre-line;
+      word-break: break-word;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #b42318;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .boot-splash__error-text {
+        color: #ff8f85;
+      }
+    }
+
+    .boot-splash__retry {
+      appearance: none;
+      border: 0;
+      border-radius: 8px;
+      padding: 7px 18px;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      color: #fff;
+      background: var(--boot-accent);
+      cursor: pointer;
+    }
+
+    .boot-splash__retry:hover {
+      background: #4338ca;
+    }
+
+    @keyframes boot-splash-in {
+      from {
+        opacity: 0;
+      }
+
+      to {
+        opacity: 1;
+      }
+    }
+
+    @keyframes boot-splash-breathe {
+      0%,
+      100% {
+        transform: scale(1);
+      }
+
+      50% {
+        transform: scale(1.04);
+      }
+    }
+
+    @keyframes boot-splash-flow {
+      from {
+        background-position: 0% 50%;
+      }
+
+      to {
+        background-position: -200% 50%;
+      }
+    }
+
+    /* 尊重系统「减弱动态效果」：只保留进度条的宽度变化（它是信息，不是装饰） */
+    @media (prefers-reduced-motion: reduce) {
+      #boot-cover,
+      #boot-splash,
+      .boot-splash__logo,
+      .boot-splash__bar {
+        animation: none;
+        transition: none;
+      }
+    }
+  </style>
+  <script>
+    /*
+      启动屏外观：把「上一次启动已知的」主题色 / 深浅档涂上去。
+      这是**唯一**早于 bundle 的时点（下面的 module 脚本要先下载解析），所以只能内联。
+      ⚠️ 键名 / 值的格式与 `src/ui/theme/bootAppearance.ts` 的 BOOT_ACCENT_KEY / BOOT_THEME_KEY
+         一字不差（那边不能反过来 import 这里）—— 改名必须两边同步，
+         `tests/boot/splash-style-contract.test.ts` 守这条。
+      权威值仍以 app_settings 为准：`main.ts` 的 settings 水合后会用 `accentTokens()` 的精确值覆盖。
+    */
+    try {
+      var bootAccent = localStorage.getItem('virlen-boot-accent')
+      if (/^#[0-9a-fA-F]{6}$/.test(bootAccent || '')) {
+        document.documentElement.style.setProperty('--boot-accent', bootAccent)
+      }
+      var bootTheme = localStorage.getItem('virlen-boot-theme')
+      if (bootTheme === 'light' || bootTheme === 'dark') {
+        document.documentElement.setAttribute('data-boot-theme', bootTheme)
+      }
+    } catch (e) {
+      /* localStorage 不可用（隐私模式等）：用内置靛蓝 + 系统深浅兜底 */
+    }
+  </script>
+  <script defer src="/script/ripple-button.js"></script>
 </head>
 
 <body>
+  <div id="boot-cover">
+    <!-- 标题栏：拖拽由 Tauri 处理（data-tauri-drag-region，不需要前端 JS），
+         按钮的点击处理器在 src/boot/splash.ts::bindWindowControls 里挂上 -->
+    <div id="boot-titlebar" data-tauri-drag-region>
+      <div class="boot-titlebar__title" data-tauri-drag-region>
+        <img src="/logo.png" alt="" draggable="false" data-tauri-drag-region />
+        <span data-tauri-drag-region>Virlen</span>
+      </div>
+      <div class="boot-titlebar__controls">
+        <button id="boot-min" class="boot-titlebar__control" type="button" title="最小化">
+          <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+            <path
+              d="M853.333333 554.666667H170.666667c-23.466667 0-42.666667-19.2-42.666667-42.666667s19.2-42.666667 42.666667-42.666667h682.666666c23.466667 0 42.666667 19.2 42.666667 42.666667s-19.2 42.666667-42.666667 42.666667z"
+              fill="currentColor"></path>
+          </svg>
+        </button>
+        <button id="boot-max" class="boot-titlebar__control" type="button" title="最大化">
+          <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+            <path
+              d="M802.16 191.78H222c-16.57 0-30 12.22-30 27.28v585.39c0 15.06 13.43 27.27 30 27.27h585.16a25 25 0 0 0 25-25V219.06c0-15.06-13.43-27.28-30-27.28zM256.05 773.61V250.13h512.1v523.48z"
+              fill="currentColor"></path>
+          </svg>
+        </button>
+        <button id="boot-close" class="boot-titlebar__control boot-titlebar__control--close" type="button" title="关闭">
+          <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+            <path
+              d="M544.448 499.2l284.576-284.576a32 32 0 0 0-45.248-45.248L499.2 453.952 214.624 169.376a32 32 0 0 0-45.248 45.248l284.576 284.576-284.576 284.576a32 32 0 0 0 45.248 45.248l284.576-284.576 284.576 284.576a31.904 31.904 0 0 0 45.248 0 32 32 0 0 0 0-45.248L544.448 499.2z"
+              fill="currentColor"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div id="boot-splash" role="status" aria-live="polite">
+      <img class="boot-splash__logo" src="/logo.png" alt="" draggable="false" />
+      <div class="boot-splash__track">
+        <div class="boot-splash__bar" id="boot-splash-bar"></div>
+      </div>
+      <p class="boot-splash__text" id="boot-splash-text"></p>
+      <div class="boot-splash__error" id="boot-splash-error" hidden>
+        <p class="boot-splash__error-text" id="boot-splash-error-text"></p>
+        <button class="boot-splash__retry" id="boot-splash-retry" type="button"></button>
+      </div>
+    </div>
+  </div>
   <div id="root"></div>
   <script type="module" src="/src/main.ts"></script>
 </body>

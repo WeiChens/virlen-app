@@ -6,6 +6,7 @@ import {
   accentStyleText,
   normalizeHex,
 } from '@/ui/theme/accentPalette'
+import { saveBootAppearance } from '@/ui/theme/bootAppearance'
 
 /**
  * 覆盖样式表的元素 id：同一个元素反复改内容，避免每次改色都往 <head> 里堆一份。
@@ -63,11 +64,15 @@ export function useAccentColor() {
     if (typeof window === 'undefined') return
 
     applyAccentColor(settingsState.value.accentColor)
+    // 顺带刷「启动期外观缓存」：下次启动屏（index.html 那块）按这个色直接涂标题栏。
+    // 只在这里写，不在 applyAccentColor 里写 —— 设置页拖动预览会高频调它，不该打 localStorage。
+    saveBootAppearance(settingsState.value.accentColor, settingsState.value.theme)
 
     const dispose = reaction(
       () => settingsState.value.accentColor,
       (color: string) => {
         applyAccentColor(color)
+        saveBootAppearance(color, settingsState.value.theme)
       },
     )
 
