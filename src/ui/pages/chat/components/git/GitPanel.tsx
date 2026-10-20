@@ -420,8 +420,8 @@ export const GitPanel = observer(function GitPanel({
           )}
         </>
       )}
-
-      {gitStore.error && <div className="git-empty error">{gitStore.error}</div>}
+      {/* 已有弹窗报错  */}
+      {/* {gitStore.error && <div className="git-empty error">{gitStore.error}</div>} */}
 
       {/* 提交时 git 的 stderr（hooks / 警告）：正常为空，出现即有事要说 */}
       {gitStore.hookOutput && (
