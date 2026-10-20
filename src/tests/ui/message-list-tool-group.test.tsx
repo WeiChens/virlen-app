@@ -82,10 +82,14 @@ Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
   configurable: true,
   get: () => 600,
 })
-// ⚠️ 虚拟库的 getRect 读的是 offsetWidth / offsetHeight（不是 getBoundingClientRect）
+// ⚠️ 虚拟库的 getRect 读的是 offsetWidth / offsetHeight（不是 getBoundingClientRect）。
+// 滚动容器给一个「高视口」：虚拟列表只渲染视口 ± 缓冲（`RENDER_RANGE_SCREENS`）内的行，
+// 视口只有 600px 时「所有行都该渲染」这类断言会跟着缓冲常量一起碎（与产品行为无关）。
 Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
   configurable: true,
-  get: () => 600,
+  get(this: HTMLElement) {
+    return this.classList?.contains('chat-messages-container') ? 4000 : 600
+  },
 })
 Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {
   configurable: true,

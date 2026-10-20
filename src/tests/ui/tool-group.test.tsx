@@ -77,9 +77,8 @@ function Harness({
   return (
     <ToolCallGroup
       groupKey="tools:a1"
-      messages={[m1, m2]}
-      messageIndexes={[0, 1]}
-      toolResultsFor={resultsOf}
+      members={[m1, m2]}
+      results={[resultsOf(m1), resultsOf(m2)]}
       open={open}
       onToggle={() => setOpen((v) => !v)}
     />

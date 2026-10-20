@@ -84,8 +84,13 @@ export function useScrollController({
         if (s) setMessages([...s.messages])
       }
     } finally {
-      loadingOlderRef.current = false
       setIsLoadingOlder(false)
+      // 不能「数据一回来就放开重入」：此时错点还没把 scrollTop 推离顶部（< SCROLL_TOP_THRESHOLD），
+      // 仍在持续上滑的滚动事件会立刻再拉一页 → 两页叠在同一帧提交，主线程直接多花一倍。
+      // 给一次提交留出窗口再放开（期间重复调用直接 return，不会丢数据）。
+      setTimeout(() => {
+        loadingOlderRef.current = false
+      }, 150)
     }
   }, [setMessages])
 
@@ -97,7 +102,6 @@ export function useScrollController({
   const settleToBottom = useCallback(() => {
     const el = containerRef.current
     if (!el) return
-
     if (settleTimerRef.current) clearInterval(settleTimerRef.current)
     settleTimerRef.current = null
     const scrollToEnd = () => {
@@ -198,9 +202,8 @@ export function useScrollController({
     function remeasureRenderedItems() {
       const root = containerRef.current
       if (!root) return
-      root
-        .querySelectorAll<HTMLElement>('.message-item-wrap')
-        .forEach((node) => rowVirtualizer.measureElement(node))
+      const nodes = root.querySelectorAll<HTMLElement>('.message-item-wrap')
+      nodes.forEach((node) => rowVirtualizer.measureElement(node))
       // 顺带刷新未测量条目的估算高度
       refreshEstimatedItemHeight()
     }

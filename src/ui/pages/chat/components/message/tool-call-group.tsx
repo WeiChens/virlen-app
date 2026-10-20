@@ -20,8 +20,9 @@
  * 该默认值由列表层**算进 `open`**（用户点过则以用户的选择为准），本组件不重复判定。
  *
  * ⚠️ `open` 由父层**预先算好**并以布尔值传入：组件是 `memo` 的，若把折叠态留在内部读（或传一个每次渲染
- * 都换引用的 map），切换折叠会被 `memo` 挡掉（点了没反应）。同理，「成员消息数组」由 `messages +
- * messageIndexes` 在内层 `useMemo` 派生（而非父层 `map` 成新数组传进来）—— 否则 `memo` 被直接击穿。
+ * 都换引用的 map），切换折叠会被 `memo` 挡掉（点了没反应）。同理，「成员消息」必须由父层按**成员身份**
+ * 缓存后传进来（`useVirtualList.membersFor`），而不是传「全量 messages + 下标」或者父层 map 出来的新数组
+ * —— 前者每次 setMessages 都换引用，后者每次渲染都换，两条都会把 `memo` 直接击穿。
  *
  * ⚠️ 点组头会改**这一行的高度** → 先请列表按住滚动偏移（`useRowToggleHold`）：贴底状态下库的跟底
  * 补偿会把阅读位置甩到组内容后面（与气泡的「显示更多 / 收起」同一类问题）。
@@ -32,6 +33,7 @@ import { t } from '@/ui/i18n'
 import { useRowToggleHold } from '@/ui/hooks/useRowToggleHold'
 import { ToolCallMessage } from '../tool-call'
 import { toolGroupView } from './message-list/rows'
+import { EMPTY_TOOL_RESULTS } from './message-list/constants'
 import MessageBubble, { type MessageBubbleHandlers } from './message-bubble'
 import CollapsedSvg from '@/ui/components/icons/CollapsedSvg'
 import './tool-call-group.scss'
@@ -39,12 +41,18 @@ import './tool-call-group.scss'
 interface Props extends MessageBubbleHandlers {
   /** 组行 key（折叠态就按它记账） */
   groupKey: string
-  /** 全量消息数组（按下标取成员；传全量 + 下标，让内层 useMemo 稳定以命中 memo） */
-  messages: Message[]
-  /** 组内成员消息下标（带工具调用的 assistant，按时间顺序） */
-  messageIndexes: number[]
-  /** 取某条消息 toolCalls 对应的结果数组（与列表共用 `toolResultsFor`） */
-  toolResultsFor: (message: Message) => (Message | undefined)[]
+  /**
+   * 组内成员消息（带工具调用的 assistant，按时间顺序）。
+   * ⚠️ 由列表层按行 key 缓存后传入（`useVirtualList.groupRowFor`）：成员没变就是同一个数组引用。
+   * 不能改成「全量 messages + 下标」—— 那样每次 setMessages 都会换引用，memo 必然失效。
+   */
+  members: Message[]
+  /**
+   * 与 `members` 一一对应：该成员每条 toolCall 的结果消息（按 toolCalls 顺序）。
+   * ⚠️ 同样必须由列表层缓存后传入：换「传函数」「每次渲染新建数组」都会击穿 memo
+   * （函数跟着 messages 换引用）。
+   */
+  results: (Message | undefined)[][]
   /** 是否展开（列表层算好的：用户的表态 ?? 尾部段的默认展开，见 `rows.ts` 的 `tail`） */
   open: boolean
   /** 切换展开 / 收起（传 key 而非闭包，保证引用稳定以命中 memo） */
@@ -55,9 +63,8 @@ interface Props extends MessageBubbleHandlers {
 
 function ToolCallGroup({
   groupKey,
-  messages,
-  messageIndexes,
-  toolResultsFor,
+  members,
+  results,
   open,
   onToggle,
   onHoldScrollOffset,
@@ -67,18 +74,15 @@ function ToolCallGroup({
   onQuote,
   onQuoteJump,
 }: Props) {
-  // 成员数组由「全量 messages + 下标」派生：滚动 / 其它组切换时两者引用不变 → useMemo 返回同一数组 → memo 生效
-  const members = useMemo(
-    () =>
-      messageIndexes
-        .map((i) => messages[i])
-        .filter((m): m is Message => !!m),
-    [messageIndexes, messages],
-  )
-  const view = useMemo(
-    () => toolGroupView(members, toolResultsFor),
-    [members, toolResultsFor],
-  )
+  // 结果按成员下标随身带；`toolGroupView` 仍按「成员 → 结果数组」取值，与折叠头口径一致
+  const view = useMemo(() => {
+    const byMember = new Map<Message, readonly (Message | undefined)[]>()
+    members.forEach((msg, i) => byMember.set(msg, results[i] ?? EMPTY_TOOL_RESULTS))
+    return toolGroupView(
+      members,
+      (msg) => byMember.get(msg) ?? EMPTY_TOOL_RESULTS,
+    )
+  }, [members, results])
   // 段首宿主（带工具调用的 assistant，可能带正文）交给真气泡渲染：正文 / 思考过程块 / 操作栏 /
   // 右键菜单一次性拿全，与列表里的普通消息同源（卡片由本组渲染，故传 omitToolCalls）
   const lead = members[0]
@@ -131,16 +135,16 @@ function ToolCallGroup({
         </button>
         {expanded && (
           <div className="tool-group__body" id={bodyId}>
-            {members.map((message) => {
+            {members.map((message, k) => {
               const toolCalls = message.toolCalls ?? []
-              const results = toolResultsFor(message)
+              const memberResults = results[k] ?? EMPTY_TOOL_RESULTS
               return (
                 <div className="tool-group__member" key={message.id}>
                   {toolCalls.map((tc, i) => (
                     <ToolCallMessage
                       key={tc.id}
                       message={tc}
-                      result={results[i]}
+                      result={memberResults[i]}
                       onHoldScrollOffset={onHoldScrollOffset}
                     />
                   ))}

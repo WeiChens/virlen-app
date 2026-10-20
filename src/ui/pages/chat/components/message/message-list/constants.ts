@@ -7,9 +7,14 @@ export const ESTIMATED_ITEM_HEIGHT = 120
 export const OVERSCAN = 32
 /**
  * 渲染范围相对视口高度的倍数（上下各分一半作缓冲，见 rangeExtractor）：值越大越不易露白，代价是 DOM 里消息越多。
- * 3 → 上下各 1 屏；10 → 上下各 4.5 屏。
+ * 4 → 上下各 1.5 屏（原值 10 = 上下各 4.5 屏）。
+ *
+ * 为何调小：回补历史时，缓冲会跟着盖到刚取回的新页上 —— 一页里几行（往往是展开着的工具组，
+ * 几十张卡片）在**同一帧**全部挂载，实测单次回补 50~70ms 全花在这里。行高普遍上千像素，
+ * 1.5 屏 ≈ 1~2 行，加上 `OVERSCAN_PX` 兜底仍盖得住一次滚轮爆发；
+ * 若在快速拖动时看到露白，把这个值调回 6（上下各 2.5 屏）或 10 即可。
  */
-export const RENDER_RANGE_SCREENS = 10
+export const RENDER_RANGE_SCREENS = 4
 /** 单侧像素缓冲的「屏数」= (总倍数 - 1) / 2（随 RENDER_RANGE_SCREENS 联动） */
 export const OVERSCAN_SCREENS = (RENDER_RANGE_SCREENS - 1) / 2
 /**
@@ -21,7 +26,7 @@ export const OVERSCAN_SCREENS = (RENDER_RANGE_SCREENS - 1) / 2
 export const OVERSCAN_PX = 800
 /**
  * 单侧最多额外渲染的条数（条目很矮时防止一次性挂载过多 DOM 的保险丝）。
- * 与单侧屏数等比放大：原值 32（= OVERSCAN）对应 1 屏，现单侧 4.5 屏 → 144；否则矮消息会先撞条数上限，像素倍数被压回去。
+ * 与单侧屏数等比放大：原值 32（= OVERSCAN）对应 1 屏，按单侧屏数联动；否则矮消息会先撞条数上限，像素倍数被压回去。
  */
 export const MAX_OVERSCAN_ITEMS = Math.max(20, OVERSCAN) * OVERSCAN_SCREENS
 /** 距底部 ≤ 该值视为「贴在底部」：新消息 / 流式增长时自动跟随 */

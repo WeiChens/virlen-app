@@ -74,11 +74,13 @@ function ChatMessageList(props: ChatMessageListProps) {
               const rowHighlighted = row.messageIndexes.some(
                 (i) => messages[i]?.id === m.highlightMsgId,
               )
+              // 成员 + 每张卡的结果都由列表层按行 key 缓存：两者引用稳定，组的 memo 才挡得住
+              const group = m.groupRowFor(row.key, row.messageIndexes)
               return (
                 <div
                   key={vi.key}
                   data-index={vi.index}
-                  ref={m.rowVirtualizer.measureElement}
+                  ref={m.measureRow}
                   className={`message-item-wrap${rowHighlighted ? ' highlighted' : ''}`}
                   style={{
                     position: 'absolute',
@@ -88,9 +90,8 @@ function ChatMessageList(props: ChatMessageListProps) {
                   }}>
                   <ToolCallGroup
                     groupKey={row.key}
-                    messages={messages}
-                    messageIndexes={row.messageIndexes}
-                    toolResultsFor={m.toolResultsFor}
+                    members={group.members}
+                    results={group.results}
                     // 用户点过就按用户的（openGroups）；没点过按默认 —— 尾部段（后面再没有
                     // 正文气泡的那组）默认展开，其余默认收起（见 rows.ts::buildRows 的 tail）
                     open={m.openGroups[row.key] ?? row.tail}
@@ -114,7 +115,7 @@ function ChatMessageList(props: ChatMessageListProps) {
               <div
                 key={vi.key}
                 data-index={vi.index}
-                ref={m.rowVirtualizer.measureElement}
+                ref={m.measureRow}
                 className={`message-item-wrap${msg.id === m.highlightMsgId ? ' highlighted' : ''}`}
                 data-msg-id={msg.role === 'user' ? msg.id : undefined}
                 style={{

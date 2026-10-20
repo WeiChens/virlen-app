@@ -240,6 +240,10 @@
   top: 0;
   left: 0;
   width: 100%;
+  // 每行都是一块独立内容（绝对定位、自带完整样式）：把布局 / 样式计算关在行内，
+  // 一次挂载就不会带着整张「十万像素高的画布」重算（挂载仍是浏览器侧大头）。
+  // 不写 paint：气泡阴影会越出行盒，contain: paint 会把它裁掉。
+  contain: layout style;
 }
 
 // ==================== 检索命中高亮 ====================
@@ -281,8 +285,12 @@
 // 虚拟滚动下条目会随滚动频繁挂载/卸载：若保留入场动画（fadeIn），
 // 每次重新挂载 / animation 属性被重新赋值都会重播，视觉上就是
 //「滚完最后一下、消息闪一下」。因此虚拟列表内统一关闭入场动画。
+// 后三类不在 .message-bubble 里（summary / 清单变更 / 服务通知），漏掉同样会闪。
 .chat-messages-container .message-bubble,
-.chat-messages-container .message-feedback {
+.chat-messages-container .message-feedback,
+.chat-messages-container .message-compress-summary,
+.chat-messages-container .message-todo-notice,
+.chat-messages-container .message-service-notice {
   animation: none;
 }
 

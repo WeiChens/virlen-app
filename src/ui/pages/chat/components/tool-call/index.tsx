@@ -1,5 +1,5 @@
 import './style.scss'
-import { Component, ReactNode, useState } from 'react'
+import { Component, ReactNode, memo, useState } from 'react'
 import { t } from '@/ui/i18n'
 import {
   getToolCallMessage,
@@ -80,7 +80,18 @@ interface Props {
   onHoldScrollOffset?: () => void
 }
 
-export function ToolCallMessage({ message, result, onHoldScrollOffset }: Props) {
+/**
+ * 单张工具卡片。
+ *
+ * memo 不能省：`ToolCallGroup` 收的是全量 `messages` 数组，messages 一变（每次前插 / 流式）
+ * 它就会整组重渲染；不 memo 的话组内每张卡片的 `getShortText`（可能解析大段输出）都要重跑
+ * —— 实测单次前插因此多花 40~50ms。卡片自身的 message / result 都是稳定对象引用。
+ */
+export const ToolCallMessage = memo(function ToolCallMessage({
+  message,
+  result,
+  onHoldScrollOffset,
+}: Props) {
   const type = message.name
   const [expand, setExpand] = useState(false)
   /** 卡片右键菜单：只针对「本工具操作的那个路径」 */
@@ -157,4 +168,4 @@ export function ToolCallMessage({ message, result, onHoldScrollOffset }: Props) 
       )}
     </>
   )
-}
+})

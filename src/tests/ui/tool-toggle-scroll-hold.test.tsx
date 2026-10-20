@@ -102,9 +102,8 @@ function GroupHarness({
   return (
     <ToolCallGroup
       groupKey="g1"
-      messages={members}
-      messageIndexes={[0]}
-      toolResultsFor={() => results}
+      members={members}
+      results={[results]}
       open={isOpen}
       onToggle={() => setIsOpen((v) => !v)}
       onHoldScrollOffset={onHoldScrollOffset}

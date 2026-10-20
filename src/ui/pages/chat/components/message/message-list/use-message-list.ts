@@ -82,7 +82,6 @@ export function useChatMessageList({
     messages,
     messagesRef,
     sessionId,
-    hasMoreInDb,
     groupTools,
     containerRef,
     toolResultsCacheRef,
@@ -112,6 +111,7 @@ export function useChatMessageList({
     setHide(!isStreamingSession(sessionId))
     needInitialBottomRef.current = true
     toolResultsCacheRef.current.clear()
+    virtual.clearRowCaches()
     if (settleTimerRef.current) {
       clearInterval(settleTimerRef.current)
       settleTimerRef.current = null
@@ -302,11 +302,13 @@ export function useChatMessageList({
     isCurrentPaused,
     // 虚拟滚动
     rowVirtualizer: virtual.rowVirtualizer,
+    measureRow: virtual.measureRow,
     virtualItems: virtual.virtualItems,
     rows: virtual.rows,
     openGroups,
     toggleGroup,
     toolResultsFor: virtual.toolResultsFor,
+    groupRowFor: virtual.groupRowFor,
     anchorUsers: virtual.anchorUsers,
     /** 行内展开/收起超长正文时按住滚动偏移（见 message-list/scroll-hold.ts） */
     holdScrollOffset: virtual.holdScrollOffset,

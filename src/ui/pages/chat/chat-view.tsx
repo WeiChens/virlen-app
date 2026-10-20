@@ -904,6 +904,24 @@ function ChatView() {
     }
   }, [chatState.value.selectModel])
 
+  /**
+   * 传给侧栏的三个回调必须引用稳定：`ChatSidebar` 是 observer（内部带 memo），内联箭头每次
+   * ChatView 渲染都换引用 → 整棵侧栏（会话列表 / 目录树）跟着重渲染，每次 setMessages、
+   * 每一个流式 token 都要多花十几毫秒。三者只用到 ref 与 handleOpenFile。
+   */
+  const handleAttachPaths = useCallback((paths: string[]) => {
+    chatInputRef.current?.attachPaths(paths)
+  }, [])
+  const handleOpenFileFromSidebar = useCallback(
+    (path: string): void => {
+      void handleOpenFile(path)
+    },
+    [handleOpenFile],
+  )
+  const handleAttachSkills = useCallback((names: string[]) => {
+    chatInputRef.current?.attachSkills(names)
+  }, [])
+
   const currentTitle = chatState.value.currentSessionId
     ? sessionStore.getSession(chatState.value.currentSessionId)?.title ||
     t('对话')
@@ -921,11 +939,11 @@ function ChatView() {
         style={{ '--width': `${sidebarWidth}px` }}
         onSelectSession={handleSelectSession}
         // 目录树「引用 / 拖拽到输入框」→ 输入框附件（复用系统的文件链路）
-        onAttachPaths={(paths) => chatInputRef.current?.attachPaths(paths)}
+        onAttachPaths={handleAttachPaths}
         // 双击文件 → 右侧面板（文本编辑 / 媒体预览）
-        onOpenFile={(path) => void handleOpenFile(path)}
+        onOpenFile={handleOpenFileFromSidebar}
         // 技能卡片「引用 / 拖拽到输入框」→ 输入框技能附件（读 SKILL.md 全文）
-        onAttachSkills={(names) => chatInputRef.current?.attachSkills(names)}
+        onAttachSkills={handleAttachSkills}
         // 已引用的技能卡片高亮 + 再点取消（引用状态由输入框回传）
         referencedSkills={referencedSkills}
         onToggleSkill={handleToggleSkill}
@@ -962,7 +980,7 @@ function ChatView() {
             <GitEntry
               sessionId={chatState.value.currentSessionId ?? null}
               // 变更行“拖到输入框 / 右键引用到输入框” → 输入框附件（与目录树同一条链路）
-              onAttachPaths={(paths) => chatInputRef.current?.attachPaths(paths)}
+              onAttachPaths={handleAttachPaths}
             />
             <WorkspaceDisplay
               value={

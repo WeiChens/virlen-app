@@ -26,12 +26,18 @@ import {
 import { EMPTY_ANCHOR_USERS } from './types'
 import type { AnchorUser } from './types'
 
+/** 工具组行模型：成员消息 + 与每个成员一一对应的结果数组（引用稳定，供行组件 memo 用） */
+export interface GroupRowModel {
+  members: Message[]
+  /** 与 members 一一对应：该成员每条 toolCall 的结果消息（按 toolCalls 顺序） */
+  results: (Message | undefined)[][]
+}
+
 interface Params {
   messages: Message[]
   /** 供「只注册一次」的回调读取最新的 messages */
   messagesRef: { current: Message[] }
   sessionId: string | null
-  hasMoreInDb: boolean
   /** 是否启用工具组折叠（= 设置项 hideToolCallThink） */
   groupTools: boolean
   /** 滚动容器（虚拟库的 getScrollElement） */
@@ -44,7 +50,6 @@ export function useVirtualList({
   messages,
   messagesRef,
   sessionId,
-  hasMoreInDb,
   groupTools,
   containerRef,
   toolResultsCacheRef,
@@ -58,10 +63,9 @@ export function useVirtualList({
   }, [messages])
 
   /**
-   * 取某条消息 toolCalls 对应的结果数组（按索引对齐）。引用未变时返回缓存，
-   * 行组件就不会因「messages 数组整体换新」而重渲染。
-   * ⚠️ 必须是 useCallback（依赖仅 toolResultById）：作为 prop 传给 memo 化行组件，
-   * 每帧换新引用会击穿 memo。
+   * 取某条消息 toolCalls 对应的结果数组（按索引对齐）。引用未变时返回缓存。
+   * ⚠️ 列表把它「取好值」传给气泡（而非把函数透传下去）：messages 一换新函数也换引用，
+   * memo 化的气泡就会被整片击穿。工具组那两个数组走 `groupRowFor`，同一条理由。
    */
   const toolResultsFor = useCallback(
     (msg: Message): (Message | undefined)[] => {
@@ -82,8 +86,73 @@ export function useVirtualList({
     [toolResultById],
   )
 
+  /** 渲染期总是最新的「toolCallId → 结果消息」（供只注册一次的缓存函数读取） */
+  const toolResultByIdRef = useRef(toolResultById)
+  toolResultByIdRef.current = toolResultById
+
+  /**
+   * 工具组的「行模型」：成员消息 + 与每个成员一一对应的结果数组，按行 key 缓存。
+   *
+   * ⚠️ 工具组行绝不能再收「全量 messages」或「每次渲染新建的函数 / 数组」：messages 每次
+   * setMessages 都换引用（前插历史 / 流式 token 都是），`toolResultsFor` 也跟着换引用 ——
+   * 任一条都能把 `memo` 击穿，展开着的工具组会把组内几十张卡片整片重渲染（实测单次前插 30~70ms）。
+   * 这里按**成员对象身份 + 每张卡的结果身份**逐项比对，没变就返回同一份模型。
+   */
+  const groupRowsCacheRef = useRef(new Map<string, GroupRowModel>())
+  const groupRowFor = useCallback(
+    (key: string, indexes: readonly number[]): GroupRowModel => {
+      const src = messagesRef.current
+      const byId = toolResultByIdRef.current
+      const prev = groupRowsCacheRef.current.get(key)
+      // 先无分配地比一遍（稳态：没变就直接返回上一份）
+      if (prev && prev.members.length === indexes.length) {
+        let same = true
+        for (let k = 0; k < indexes.length; k++) {
+          const msg = src[indexes[k]]
+          const pm = prev.members[k]
+          const pr = prev.results[k]
+          const tcs = msg?.toolCalls ?? []
+          if (!msg || pm !== msg || !pr || pr.length !== tcs.length) {
+            same = false
+            break
+          }
+          for (let i = 0; i < tcs.length; i++) {
+            if (pr[i] !== byId.get(tcs[i].id)) {
+              same = false
+              break
+            }
+          }
+          if (!same) break
+        }
+        if (same) return prev
+      }
+      const members: Message[] = []
+      const results: (Message | undefined)[][] = []
+      for (const index of indexes) {
+        const msg = src[index]
+        if (!msg) continue
+        members.push(msg)
+        results.push((msg.toolCalls ?? []).map((tc) => byId.get(tc.id)))
+      }
+      const model: GroupRowModel = { members, results }
+      groupRowsCacheRef.current.set(key, model)
+      return model
+    },
+    // messages / toolResultById 走 ref（渲染期总是最新）；换会话时由 clearRowCaches 显式清空
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
+
+  /** 清空按行缓存（切会话时调用，避免旧会话的消息对象被长期持有） */
+  const clearRowCaches = useCallback(() => {
+    groupRowsCacheRef.current.clear()
+  }, [])
+
   // 连续的工具调用合并成一行（见 rows.ts）；未启用折叠时退化为「一条消息 = 一行」。
-  const rows = useMemo(() => buildRows(messages, groupTools), [messages, groupTools])
+  const rows = useMemo(
+    () => buildRows(messages, groupTools),
+    [messages, groupTools],
+  )
   /** 供「只注册一次」的回调读取最新的行模型 */
   const rowsRef = useRef<readonly ListRow[]>(rows)
   rowsRef.current = rows
@@ -115,6 +184,12 @@ export function useVirtualList({
     return ids.join('\u0001')
   }, [messages])
 
+  /**
+   * 上一次的锚点数组：id 序列不变就复用同一引用。
+   * 不这么做的话，每次前插历史都会换一个新数组 → `AnchorDots` 的 memo 被击穿 → 几百个
+   * Tooltip + button 整片重渲染（实测单个 commit 可因此多花 25~50ms）。
+   */
+  const anchorUsersRef = useRef<AnchorUser[]>([])
   const anchorUsers = useMemo((): AnchorUser[] => {
     const out: AnchorUser[] = []
     const seen = new Set<string>()
@@ -126,6 +201,11 @@ export function useVirtualList({
       if (m.role !== 'user' || seen.has(m.id)) continue
       out.push({ id: m.id, preview: previewOfMessage(m) })
     }
+    const prev = anchorUsersRef.current
+    if (prev.length === out.length && prev.every((u, i) => u.id === out[i].id)) {
+      return prev
+    }
+    anchorUsersRef.current = out
     return out
     // messages 通过 messagesRef 读取；其 user 消息集合的变化已由 localUserSig 跟踪
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -217,7 +297,9 @@ export function useVirtualList({
     scrollEndThreshold: AT_BOTTOM_THRESHOLD,
     // 把 RO 回调推迟到 rAF，消除 Chromium 的「ResizeObserver loop」告警；代价是实测高度晚一帧生效。
     useAnimationFrameWithResizeObserver: true,
-    paddingStart: LIST_PADDING + (hasMoreInDb ? LOAD_MORE_HINT_HEIGHT : 0),
+    // 顶部提示条的高度**恒定预留**（不随 hasMoreInDb 变）：该值一变，库不会重做锚定
+    //（setOptions 只在 count / 首尾 key 变化时锚定 scrollTop），已读位置会整体跳一个提示条高。
+    paddingStart: LIST_PADDING + LOAD_MORE_HINT_HEIGHT,
     paddingEnd: LIST_PADDING,
     // 行内改高时按住滚动偏移（见 scroll-hold.ts）：只拦「尺寸补偿」，跳转 / 平滑滚动照旧。
     scrollToFn: (offset, opts, instance) => {
@@ -236,6 +318,26 @@ export function useVirtualList({
   })
   rowVirtualizerRef.current = rowVirtualizer
   const virtualItems = rowVirtualizer.getVirtualItems()
+
+  /**
+   * 行 ref：注册 RO + **挂载即同步实测**。库在 `isScrolling` 的 150ms 窗口里会跳过 ref 的同步测量
+   * （程序化写 scrollTop 也会把窗口点开），只等被 rAF 推迟的 RO —— 新挂载的行（前插历史 / 切会话）
+   * 会先按估算高度画一帧（位置错、互相重叠）再被纠正，这就是列表闪动的来源。
+   * 只补「测量缓存里没有」的 key：有缓存时与库行为一致，避免每次挂载都强制布局读。
+   * 引用必须稳定 —— 每帧换新会让 React 卸挂所有行并重跑上面的强制测量。
+   */
+  const measureRow = useCallback(
+    (node: HTMLDivElement | null) => {
+      rowVirtualizer.measureElement(node)
+      if (!node) return
+      const index = rowVirtualizer.indexFromElement(node)
+      if (index < 0) return
+      const key = rowVirtualizer.options.getItemKey(index)
+      if (rowVirtualizer.itemSizeCache.has(key)) return
+      rowVirtualizer.resizeItem(index, node.offsetHeight)
+    },
+    [rowVirtualizer],
+  )
 
   /** 用已测量条目的平均高度刷新估算高度 */
   const refreshEstimatedItemHeight = useCallback(() => {
@@ -280,6 +382,7 @@ export function useVirtualList({
 
   return {
     rowVirtualizer,
+    measureRow,
     virtualItems,
     rows,
     rowsRef,
@@ -287,6 +390,8 @@ export function useVirtualList({
     jumpTo,
     refreshEstimatedItemHeight,
     toolResultsFor,
+    groupRowFor,
+    clearRowCaches,
     userMessages,
     anchorUsers,
     holdScrollOffset,
