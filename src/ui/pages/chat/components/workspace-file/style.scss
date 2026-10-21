@@ -396,6 +396,12 @@
     color: var(--text-primary, #1a1a1a);
   }
 
+  /* 「识别文字」开关：**文字层展开时**才算激活（收起保持普通按钮外观） */
+  &.is-active {
+    background: var(--accent-bg, #e8f0fe);
+    color: var(--accent-color, #2563eb);
+  }
+
   &:disabled {
     opacity: 0.4;
     cursor: not-allowed;
@@ -405,5 +411,10 @@
     width: 14px;
     height: 14px;
     fill: currentColor;
+  }
+
+  /* 文字识别图标是线条造型（stroke），不能跟着 fill: currentColor 被填实 */
+  &.ocr-btn svg {
+    fill: none;
   }
 }

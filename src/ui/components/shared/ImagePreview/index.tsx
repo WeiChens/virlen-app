@@ -12,6 +12,13 @@ import ContextMenu, {
   useContextMenu,
 } from '@/ui/components/shared/ContextMenu'
 import { imageMenuItems } from '@/ui/components/shared/ContextMenu/menus'
+import ImageOcrLayer, {
+  canOcr,
+  ImageOcrIcon,
+  nextOcrAction,
+  ocrButtonTitle,
+} from '@/ui/components/shared/ImageOcr'
+import { useImageOcr } from '@/ui/hooks/useImageOcr'
 export interface ImagePreviewProps {
   src: string
   previewSrcList?: string[]
@@ -152,6 +159,8 @@ function ImagePreview() {
     if (!showPreview) return
 
     const handleWheel = (e: WheelEvent) => {
+      // 文字层自己可滚动：滚它不应该缩放图片（document 级监听拦在最外层，只能在这里放行）
+      if (e.target instanceof Element && e.target.closest('.image-ocr-layer')) return
       e.preventDefault()
       e.stopPropagation()
 
@@ -280,6 +289,22 @@ function ImagePreviewOverlay(props: ImagePreviewOverlayProps) {
     referrerPolicy,
     onImageContextMenu,
   } = props
+
+  // 当前这张图的 OCR（只做识别文字，不做视觉识别）：开关由设置 `imageOcrAutoPreview` 决定
+  const ocr = useImageOcr({ src: imageList[currentIndex] ?? '' })
+  /** 文字层**默认收起**：图先看得干净，要看文字再点工具栏（切图也回到收起） */
+  const [ocrVisible, setOcrVisible] = useState(false)
+  useEffect(() => {
+    setOcrVisible(false)
+  }, [currentIndex])
+
+  /** 工具栏「识别文字」：有字就收起/展开，没跑过就跑一次 */
+  const handleOcrClick = () => {
+    const next = nextOcrAction(ocr.state, ocrVisible)
+    setOcrVisible(next.visible)
+    if (next.run) ocr.start()
+  }
+
   return ReactDOM.createPortal(
     <div className="image-preview-overlay" onClick={handleClose}>
       <div
@@ -317,6 +342,14 @@ function ImagePreviewOverlay(props: ImagePreviewOverlayProps) {
           </svg>
         </button>
         <span className="toolbar-scale">{Math.round(scale * 100)}%</span>
+        {canOcr(ocr.state) && (
+          <button
+            className={`toolbar-btn ocr-btn${ocrVisible ? ' is-active' : ''}`}
+            onClick={handleOcrClick}
+            title={ocrButtonTitle(ocr.state, ocrVisible)}>
+            <ImageOcrIcon />
+          </button>
+        )}
         <button
           className="toolbar-btn close-btn"
           onClick={handleClose}
@@ -346,6 +379,11 @@ function ImagePreviewOverlay(props: ImagePreviewOverlayProps) {
           onContextMenu={(e) =>
             onImageContextMenu(e, imageList[currentIndex])
           }
+        />
+        <ImageOcrLayer
+          state={ocr.state}
+          visible={ocrVisible}
+          onRetry={ocr.retry}
         />
       </div>
 

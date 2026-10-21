@@ -1,0 +1,96 @@
+/* 图片预览的「识别文字」层（shared/ImageOcr）。
+   字号一律走 --font-size-* 令牌：写死 px 就不跟「设置 → 字体大小」了（见
+   tests/ui/shared-font-size-contract.test.ts）。 */
+
+.image-ocr-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  /* 半透明深底 + 白字：不论图片本身是亮是暗、不论应用是明是暗主题，文字都读得清 */
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: var(--font-size-base);
+  line-height: 1.6;
+  overflow: auto;
+  /* 「看图取字」是这个层存在的唯一理由：必须能选中、能复制 */
+  user-select: text;
+  cursor: text;
+}
+
+.image-ocr-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.image-ocr-title {
+  font-size: var(--font-size-sm);
+  letter-spacing: 0.04em;
+  opacity: 0.72;
+}
+
+.image-ocr-copy {
+  margin-left: auto;
+  padding: 2px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.16);
+  }
+}
+
+.image-ocr-text {
+  /* 保留 OCR 的换行（阅读顺序已由 Rust 侧拼好），长串也要能折行 */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 状态提示：压在图片下沿，不挡拖动（pointer-events: none，只有里面的按钮自己打开） */
+.image-ocr-status {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+  pointer-events: none;
+
+  &.is-error {
+    background: rgba(160, 30, 30, 0.72);
+  }
+}
+
+.image-ocr-retry {
+  padding: 1px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  pointer-events: auto;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.18);
+  }
+}

@@ -71,6 +71,11 @@
       background: rgba(255, 255, 255, 0.1);
     }
 
+    /* 「识别文字」开关：**文字层展开时**才算激活（收起不做任何染色） */
+    &.is-active {
+      background: rgba(255, 255, 255, 0.18);
+    }
+
     &.close-btn {
       margin-left: 8px;
 

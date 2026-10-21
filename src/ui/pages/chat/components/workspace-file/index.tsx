@@ -455,6 +455,7 @@ function WorkspaceFilePanel({
       return (
         <ImageViewer
           src={mediaUrl}
+          path={path}
           name={name}
           mime={file.mime}
           onOpenInSystem={openInSystem}

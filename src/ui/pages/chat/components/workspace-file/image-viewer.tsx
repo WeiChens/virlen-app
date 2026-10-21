@@ -10,6 +10,9 @@
  * 4. **旋转只影响查看**：它不改图片字节、也不产生「未保存」——用户要转的是「看」，不是「存」。
  * 5. **右键菜单与消息里的图片同源**：复制图片 / 另存为复用 `imageMenuItems`，只在本文件追加
  *    旋转与视图动作（blob URL 没有扩展名，所以把 `mime` 一并传下去）。
+ * 6. **识别文字默认不跑也不显示**：设置 → 「图片预览自动识别文字」打开时，打开预览就跑一次 OCR；
+ *    否则点工具栏「识别文字」才识别（只做 OCR，不做视觉识别）。文本以半透明文字层盖在图上，
+ *    默认收起，识别逻辑在 `hooks/useImageOcr` + `shared/ImageOcr`。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { t } from '@/ui/i18n'
@@ -18,6 +21,13 @@ import ContextMenu, {
   type ContextMenuItem,
 } from '@/ui/components/shared/ContextMenu'
 import { imageMenuItems } from '@/ui/components/shared/ContextMenu/menus'
+import ImageOcrLayer, {
+  canOcr,
+  ImageOcrIcon,
+  nextOcrAction,
+  ocrButtonTitle,
+} from '@/ui/components/shared/ImageOcr'
+import { useImageOcr } from '@/ui/hooks/useImageOcr'
 import {
   actualSizeScale,
   clampPan,
@@ -38,6 +48,11 @@ interface Props {
   name: string
   /** MIME：blob URL 没有扩展名，另存为 / 剪贴板要靠它 */
   mime: string
+  /**
+   * 本地绝对路径：**预览时的 OCR 走它**（Rust 直接读文件，不必把整张图 base64 传一遍）。
+   * 没有路径（如 SVG 预览）就不识别文字。
+   */
+  path?: string
   /** 「在系统程序中打开」（面板已有实现，这里只透传） */
   onOpenInSystem: () => void
 }
@@ -57,12 +72,27 @@ function RotateSvg({ flip }: { flip?: boolean }) {
   )
 }
 
-export default function ImageViewer({ src, name, mime, onOpenInSystem }: Props) {
+export default function ImageViewer({ src, name, mime, path, onOpenInSystem }: Props) {
   const [view, setView] = useState<ImageView>(IDENTITY_VIEW)
   const [dragging, setDragging] = useState(false)
   /** 图片自然尺寸与容器可视区：只用于算「100% 是多少真实像素」 */
   const [natural, setNatural] = useState({ width: 0, height: 0 })
   const [viewport, setViewport] = useState({ width: 0, height: 0 })
+
+  // 识别文字（**只做 OCR**）：开关由设置 `imageOcrAutoPreview` 决定，关着就等用户点按钮
+  const ocr = useImageOcr(path ? { src, path } : null)
+  /** 文字层**默认收起**；换图时回到收起 */
+  const [ocrVisible, setOcrVisible] = useState(false)
+  useEffect(() => {
+    setOcrVisible(false)
+  }, [src, path])
+
+  /** 工具栏「识别文字」：有字就收起/展开，没跑过就跑一次 */
+  const handleOcrClick = () => {
+    const next = nextOcrAction(ocr.state, ocrVisible)
+    setOcrVisible(next.visible)
+    if (next.run) ocr.start()
+  }
 
   const containerRef = useRef<HTMLDivElement>(null)
   const imageRef = useRef<HTMLImageElement>(null)
@@ -111,6 +141,8 @@ export default function ImageViewer({ src, name, mime, onOpenInSystem }: Props) 
     const container = containerRef.current
     if (!container) return
     const onWheel = (event: WheelEvent) => {
+      // 文字层自己可滚动：滚它不该缩放图片
+      if (event.target instanceof Element && event.target.closest('.image-ocr-layer')) return
       // 缩放只属于这张图：默认滚动挡掉，也不再冒泡给聊天列表（否则会连带滚消息）
       event.preventDefault()
       event.stopPropagation()
@@ -150,6 +182,8 @@ export default function ImageViewer({ src, name, mime, onOpenInSystem }: Props) 
 
   const startDrag = (event: React.MouseEvent) => {
     if (event.button !== 0) return
+    // 文字层里要能选中文字：按下不能开始平移图片
+    if (event.target instanceof Element && event.target.closest('.image-ocr-layer')) return
     event.preventDefault()
     dragStartRef.current = {
       x: event.clientX - viewRef.current.x,
@@ -208,7 +242,11 @@ export default function ImageViewer({ src, name, mime, onOpenInSystem }: Props) 
       ref={containerRef}
       className={`wfp-image${dragging ? ' is-dragging' : ''}`}
       onMouseDown={startDrag}
-      onContextMenu={(event) => menu.openAt(event, null)}>
+      onContextMenu={(event) => {
+        // 文字层里右键留给系统（选中 / 复制文字），不弹图片菜单
+        if (event.target instanceof Element && event.target.closest('.image-ocr-layer')) return
+        menu.openAt(event, null)
+      }}>
       {/* 工具栏：按下不能触发拖动（否则点一下图片就跟着跑） */}
       <div className="wfp-image-bar" onMouseDown={(event) => event.stopPropagation()}>
         <button
@@ -252,6 +290,16 @@ export default function ImageViewer({ src, name, mime, onOpenInSystem }: Props) 
           aria-label={t('向右旋转')}>
           <RotateSvg />
         </button>
+        {canOcr(ocr.state) && (
+          <button
+            type="button"
+            className={`wfp-image-btn ocr-btn${ocrVisible ? ' is-active' : ''}`}
+            onClick={handleOcrClick}
+            aria-label={ocrButtonTitle(ocr.state, ocrVisible)}
+            title={ocrButtonTitle(ocr.state, ocrVisible)}>
+            <ImageOcrIcon size={14} />
+          </button>
+        )}
       </div>
 
       <img
@@ -266,6 +314,12 @@ export default function ImageViewer({ src, name, mime, onOpenInSystem }: Props) 
         style={{
           transform: `translate(${view.x}px, ${view.y}px) rotate(${view.rotate}deg) scale(${view.scale})`,
         }}
+      />
+
+      <ImageOcrLayer
+        state={ocr.state}
+        visible={ocrVisible}
+        onRetry={ocr.retry}
       />
 
       {menu.state && (

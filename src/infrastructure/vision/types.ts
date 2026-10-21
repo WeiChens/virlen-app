@@ -9,3 +9,15 @@ export interface VisionAnalyzeResult {
   /** 图片尺寸 [width, height] */
   image_size: [number, number]
 }
+
+/**
+ * 只做 OCR 的结果（图片预览用）。
+ *
+ * 「没有文字」不是错误：`text` 是空串，且同样会进缓存 —— 否则每次打开这张图都要白跑一遍推理。
+ */
+export interface ImageOcrResult {
+  /** 按阅读顺序拼好的文本（没有文字 = 空串） */
+  text: string
+  /** 是否命中磁盘缓存（true = 这次没跑推理） */
+  cached: boolean
+}

@@ -135,6 +135,9 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 ### 5.6 视觉 / RAG / Skill
 
 - **视觉**：核心（模型定位 + 懒加载 + 推理）在 `src-tauri/virlen-core/src/vision/`（**零 `tauri::`**，GUI 与原生工具共用）；`src-tauri/src/vision_service.rs` 只是 Tauri 命令壳；前端 `infrastructure/vision/`；模型在 `resources/quasivision_models/`。**图片不出本机**，不要改成上传。
+- **图片预览 OCR（只识别文字）**：大图浮层 `shared/ImagePreview` 与工作目录 `workspace-file/image-viewer` 共用 `hooks/useImageOcr` + `shared/ImageOcr`，**不调 `vision_analyze`**（UI 组件 / 图标 / 物体检测一概不做）。两条行为口径：① **文字层默认收起**（"默认不显示识别文字"）；② **是否在打开预览时自动识别由设置 `imageOcrAutoPreview` 控制**（默认关：点工具栏「识别文字」才开始；开着则打开即跑一次）。工具栏按钮始终在（`ready` / `loading` / 无字 / 失败都能点：没跑过就跑、识别完就收起/展开）。结果按**内容指纹**（sha256）落盘到 `<data_dir>/image-ocr-cache.json`：同一张图（文件路径 / data URL / blob URL 三种身份）只算一次，命中时连模型都不加载。
+  ⚠️ **空结果不落盘**：quasivision 的 `detect_text` 会把「引擎未就绪 / predict 失败」吞成空文本（只往 stderr 打一行，GUI 看不见），与「图里真没字」无法区分 —— 写进缓存就把一次瞬时失败永久固化了（实测踩过）。读盘时也会丢掉历史遗留的空条目（自愈）；空结果额外自动重试一次（`OCR_RETRY_DELAY`），界面再给一颗带 `force`（绕缓存重算）的「重新识别」。
+  ⚠️ **预览 OCR 用「轻量常驻引擎」**（`vision::ocr_preview_at` + `ensure_ocr_engine`：只 `text_detection::init_ocr()` 加载 det+rec，不要 `init_models`）。走过一次全流水线生命周期的坑：`init_models` 会把图标分类器 + YOLO 也建一遍、用完再 `clean_models` 全拆 —— 预览每次都要为此付几秒，而重算一个内容指纹缓存未命中的图只需求 OCR。dev/release 实测（1389×725 截图 / 16 个文本区域）：整套重建每次 ~8–11s → 轻量常驻后首次 ~5.7s、之后 ~3.2s、缓存命中 0ms；DirectML 比纯 CPU 快一倍（2.7s vs 5.4s），`intra_threads` 与输入尺寸（1200 vs 960）几乎无影响，`region_batch_size` 8 略优于 16（但那是 quasivision 内部常量，外部改不了）。仍未动的 ~2.6s 是模型推理本身（16 个区域的识别），要再快只能换/自建 OCR 管线。
 - **RAG 知识库**：`src-tauri/virlen-core/src/rag/`（`document.rs` / `embedding.rs` / `vector_store.rs` / `rag_service.rs`）+ `services/rag-service.ts` + `infrastructure/rag/`。向量索引用 turbovec。
 - **Skill**：`src/skill/`（加载 / 注册 / 导入 / 广场）+ 内置包在 `src-tauri/resources/default-skills/<name>/SKILL.md`。
 

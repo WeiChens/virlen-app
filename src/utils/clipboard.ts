@@ -74,7 +74,7 @@ function base64ToBytes(base64: string): Uint8Array {
 }
 
 /** 字节 → base64（分块，避免大图触发参数上限） */
-function bytesToBase64(bytes: Uint8Array): string {
+export function bytesToBase64(bytes: Uint8Array): string {
   const CHUNK = 0x8000
   let binary = ''
   for (let i = 0; i < bytes.length; i += CHUNK) {

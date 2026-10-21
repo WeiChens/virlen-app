@@ -108,6 +108,13 @@ export interface SettingsStore {
   pinnedSessionGroups: Record<SessionGroupType, string[]>
   /** 是否对上传图片自动执行 vision_analyze */
   imageVisionAnalyzeOptimize: boolean
+  /**
+   * 图片预览是否**打开就识别文字**（只做 OCR，不做视觉识别）。
+   * false（默认）= 打开预览不跑推理，点工具栏「识别文字」才识别 —— OCR 是秒级 CPU 密集操作，
+   * 不该在用户只是「看一眼图」时自动扣掉。识别结果两层缓存（进程内 memo + Rust 内容指纹落盘），
+   * 同一张图只会真跑一次。
+   */
+  imageOcrAutoPreview: boolean
   /** 知识库默认检索数量 */
   ragDefaultTopK: number
   /**
@@ -193,6 +200,8 @@ const defaultSettings: SettingsStore = {
   sessionGroupType: 'workspace',
   pinnedSessionGroups: { agent: [], workspace: [] },
   imageVisionAnalyzeOptimize: true,
+  // 图片预览：默认不显示识别文字，也不自动识别（点工具栏「识别文字」才跑）
+  imageOcrAutoPreview: false,
   ragDefaultTopK: 5,
   memoryEnabled: true,
   memoryNormalTopK: 20,

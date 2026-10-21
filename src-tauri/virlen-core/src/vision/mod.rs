@@ -22,6 +22,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
+mod ocr_cache;
+
 /// 模型就位判据：探测 `quasivision_models/ocr-models/<该文件>` 是否存在。
 const DET_MODEL_FILE: &str = "ppocrv5_mobile_det.onnx";
 
@@ -261,6 +263,23 @@ pub fn ocr_image_at(models_dir: &Path, img: &image::DynamicImage) -> Result<OcrT
     })
 }
 
+/// 从内存字节只做 OCR（**走全流水线生命周期**：doc_parse 批量抽图用，与预览那条轻量路径分开）
+///
+/// 解码失败文案与 [`run_analysis`] 逐字一致 —— 同一条命令的两条分支不该给出两种说法。
+pub fn ocr_bytes_at(models_dir: &Path, img_bytes: &[u8]) -> Result<OcrText, String> {
+    ocr_image_at(models_dir, &decode_image(img_bytes)?)
+}
+
+/// 解码图片字节（统一文案；预览、分析、文档抽字共用）
+fn decode_image(img_bytes: &[u8]) -> Result<image::DynamicImage, String> {
+    image::load_from_memory(img_bytes).map_err(|e| {
+        format!(
+            "Failed to decode image.\nSupported formats: PNG, JPEG, GIF, BMP, WEBP, TIFF, etc.\nError: {}",
+            e
+        )
+    })
+}
+
 /// 一段 OCR 结果
 #[derive(Debug, Clone)]
 pub struct OcrText {
@@ -344,6 +363,131 @@ fn rows_overlap(a_min: i32, a_max: i32, b_min: i32, b_max: i32) -> bool {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// 预览入口：只要文字 + 按内容指纹缓存
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// 进程内串行闸：端侧模型只有一份，预览里快速切图会同时触发多张 OCR，
+/// 并行跑只会把 CPU 抢光（模型加载也彼此等锁）。阻塞线程上等锁是安全的。
+static OCR_SERIAL: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+/// 预览 OCR 的引擎是否已按某个模型目录预热过（免得每次调用都重写进程环境变量）
+static OCR_WARM: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
+
+/// 预热「只做 OCR」的轻量引擎：**只加载 det + rec**，不碰图标分类器与 YOLO。
+///
+/// 为什么不走 [`load_models`]：那套是全流水线的生命周期（会话建立 → 用完整个拆掉），
+/// 对「点开图看字」完全是浪费 —— 实测一次完整加载比 OCR 自身还贵，而且图标分类器 /
+/// YOLO 在预览里根本不用。引擎内部自带 lazy 单例，预热后常驻，后续调用只剩推理。
+fn ensure_ocr_engine(models_dir: &Path) -> Result<(), String> {
+    let mut warm = OCR_WARM.lock().map_err(|e| format!("Lock error: {}", e))?;
+    if warm.as_deref() == Some(models_dir) {
+        return Ok(());
+    }
+    // 与 `load_models` 同一份约定（quasivision 只认这个环境变量 + 若干保底目录）
+    std::env::set_var(
+        "QUASIVISION_MODELS_DIR",
+        models_dir.join("ocr-models").to_string_lossy().to_string(),
+    );
+    quasivision::text_detection::init_ocr()
+        .map_err(|e| format!("Failed to load OCR models: {}", e))?;
+    *warm = Some(models_dir.to_path_buf());
+    Ok(())
+}
+
+/// 预览用推理：只要文字，引擎常驻（不做 UI 组件 / 图标 / 物体检测）。
+pub fn ocr_preview_at(models_dir: &Path, img: &image::DynamicImage) -> Result<OcrText, String> {
+    ensure_ocr_engine(models_dir)?;
+    let result = quasivision::text_detection::detect_text(img);
+    Ok(OcrText {
+        text: text_of_ocr_boxes(&result.texts),
+        sideways: sideways_ratio(&result.texts),
+    })
+}
+
+/// 图片预览的 OCR 结果（`cached` = 命中磁盘缓存，本次没跑推理）
+#[derive(Debug, Clone, Serialize)]
+pub struct OcrCachedText {
+    pub text: String,
+    pub cached: bool,
+}
+
+/// 空结果重试前的等待：给刚抢过 CPU / 显存的并发视觉任务一点时间收尾
+const OCR_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// 预览入口：**只做 OCR**（不做 UI 组件 / 图标 / 物体检测），并按内容指纹走磁盘缓存。
+///
+/// 四条口径：
+/// 1. **命中缓存时连模型都不加载**；未命中时也只预热轻量 OCR 引擎（[`ensure_ocr_engine`]，常驻）——
+///    实测「整条流水线的加载/卸载」比 OCR 本身还贵；
+/// 2. **推理串行**（[`OCR_SERIAL`]），等锁后双检：等锁期间别的调用可能已经算完并写入；
+/// 3. **`force` = 用户点「重新识别」**：绕过缓存重算（用户自救，不必去手工删缓存文件）；
+/// 4. **空结果不写缓存**（[`ocr_cache`] 模块头）：quasivision 把「引擎没就绪 / predict 失败」
+///    吞成空文本，与「图里真的没字」无法区分 —— 落盘就会把一次瞬时失败永久固化。
+pub fn ocr_image_cached(
+    host: &dyn HostEnv,
+    img_bytes: &[u8],
+    force: bool,
+) -> Result<OcrCachedText, String> {
+    let key = ocr_cache::fingerprint(img_bytes);
+    if !force {
+        if let Some(text) = ocr_cache::get(host, &key) {
+            return Ok(OcrCachedText { text, cached: true });
+        }
+    }
+
+    let _serial = OCR_SERIAL.lock().map_err(|e| format!("Lock error: {}", e))?;
+    if !force {
+        if let Some(text) = ocr_cache::get(host, &key) {
+            return Ok(OcrCachedText { text, cached: true });
+        }
+    }
+
+    let dir = models_dir(host)?;
+    let text = ocr_text_with_retry(&dir, img_bytes)?;
+    if !text.trim().is_empty() {
+        ocr_cache::put(host, &key, &text);
+    }
+    Ok(OcrCachedText {
+        text,
+        cached: false,
+    })
+}
+
+/// 跑一次 OCR；**空结果再试一次**。
+///
+/// 为什么重试：`detect_text` 在「引擎刚被并发任务拆掉 / predict 失败」时返回空而不是报错
+/// （只往 stderr 记一行，GUI 里看不到）。这类失败几乎都是一次性的，第二次就能读出来；
+/// 解码失败这种真错误仍原样上报。
+fn ocr_text_with_retry(models_dir: &Path, img_bytes: &[u8]) -> Result<String, String> {
+    // 只解码一次：重试复用同一张 `DynamicImage`（解码一份 4K 截图不算便宜）
+    let img = decode_image(img_bytes)?;
+    let first = ocr_preview_at(models_dir, &img)?;
+    if !first.text.trim().is_empty() {
+        return Ok(first.text);
+    }
+    std::thread::sleep(OCR_RETRY_DELAY);
+    match ocr_preview_at(models_dir, &img) {
+        Ok(second) if !second.text.trim().is_empty() => Ok(second.text),
+        // 第二次也空 / 报错：如实回空，交给界面说「未识别到文字（可重试）」
+        _ => Ok(first.text),
+    }
+}
+
+/// 从文件路径只要 OCR 文本（工作目录预览走这条：不必把整张图 base64 传一遍 IPC）
+pub fn ocr_path_cached(
+    host: &dyn HostEnv,
+    image_path: &str,
+    force: bool,
+) -> Result<OcrCachedText, String> {
+    if !Path::new(image_path).exists() {
+        return Err(format!("Image file not found: {}", image_path));
+    }
+    let bytes = std::fs::read(image_path)
+        .map_err(|e| format!("Failed to read file '{}': {}", image_path, e))?;
+    ocr_image_cached(host, &bytes, force)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // 核心分析逻辑（从内存字节执行完整 pipeline）
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -369,11 +513,7 @@ fn run_analysis(
         .with_detect_conf(0.01);
 
     // ── 从内存解码图片（支持粘贴/拖拽无需落盘） ──
-    let img = image::load_from_memory(img_bytes)
-        .map_err(|e| format!(
-            "Failed to decode image.\nSupported formats: PNG, JPEG, GIF, BMP, WEBP, TIFF, etc.\nError: {}",
-            e
-        ))?;
+    let img = decode_image(img_bytes)?;
     let (img_h, img_w) = (img.height(), img.width());
     ensure_not_cancelled(cancel)?;
 
@@ -638,5 +778,42 @@ mod tests {
             Err(e) => assert_eq!(e, CANCELLED_MSG),
             Ok(_) => panic!("取消标志已置位时必须直接返回取消错误"),
         }
+    }
+
+    /// 命中缓存时**不碰模型**：宿主根本没模型目录，若走了推理这里会报 models not found。
+    #[test]
+    fn preview_entry_returns_cached_text_without_models() {
+        let dir = tmp_dir("preview-cache-hit");
+        let host = FixedHost {
+            roots: vec![dir.clone()],
+            data: dir.clone(),
+        };
+        let bytes = b"pretend-image-bytes";
+        ocr_cache::put(&host, &ocr_cache::fingerprint(bytes), "识别过的文字");
+
+        let r = ocr_image_cached(&host, bytes, false).unwrap();
+        assert_eq!(r.text, "识别过的文字");
+        assert!(r.cached, "命中缓存时 cached 应为 true");
+
+        // force = 用户的「重新识别」：必须绕过缓存（会真的去加载模型 → 没模型就报错）
+        let err = ocr_image_cached(&host, bytes, true).unwrap_err();
+        assert!(err.starts_with("quasivision models directory not found."), "err: {err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 没缓存且没模型 → 报模型目录缺失（不是解码失败：先报「环境不对」更好排查）
+    #[test]
+    fn preview_entry_reports_missing_models_when_uncached() {
+        let dir = tmp_dir("preview-no-models");
+        let host = FixedHost {
+            roots: vec![dir.clone()],
+            data: dir.clone(),
+        };
+        let err = ocr_image_cached(&host, b"unseen-bytes", false).unwrap_err();
+        assert!(
+            err.starts_with("quasivision models directory not found."),
+            "err: {err}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

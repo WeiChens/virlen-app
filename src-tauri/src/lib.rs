@@ -379,6 +379,9 @@ pub fn run() {
             common_service::grant_permissions,
             vision_service::vision_analyze,
             vision_service::vision_analyze_base64,
+            // 图片预览用：只做 OCR（不做视觉识别），结果按内容指纹缓存
+            vision_service::vision_ocr,
+            vision_service::vision_ocr_base64,
             // RAG 知识库
             commands::rag::create_knowledge_base,
             commands::rag::list_knowledge_bases,

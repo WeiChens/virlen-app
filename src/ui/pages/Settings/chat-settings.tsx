@@ -182,6 +182,29 @@ function ChatSettings() {
         </div>
         <div className="setting-row">
           <div className="setting-label">
+            <span className="label-text">{t('图片预览自动识别文字')}</span>
+            <span className="label-desc">
+              {t(
+                '打开图片预览时自动做一次 OCR（只识别文字，不做视觉识别）\n关闭时不自动识别，点预览工具栏的「识别文字」才开始\n识别结果按图片内容缓存，同一张图只识别一次',
+              )}
+            </span>
+          </div>
+          <div className="setting-control">
+            <label className="toggle">
+              <input
+                type="checkbox"
+                aria-label={t('图片预览自动识别文字')}
+                checked={s.imageOcrAutoPreview}
+                onChange={(e) =>
+                  update('imageOcrAutoPreview', e.target.checked)
+                }
+              />
+              <span className="toggle-slider" />
+            </label>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-label">
             <span className="label-text">{t('隐藏思考过程')}</span>
             <span className="label-desc">
               {t('隐藏工具调用的思考过程消息，让对话更简洁')}
