@@ -148,6 +148,23 @@ export interface ToolGroupView {
   moreTools: number
   /** 聚合状态：任一结果缺失 → pending；任一失败 → error；否则 done。 */
   status: ToolGroupStatus
+  /**
+   * 这段工具调用**实际占用**的时间跨度（ms）：AI 开始思考（组内第一轮 LLM 请求发出）→
+   * 最后一个工具执行结束。
+   *
+   * 不是各工具耗时之和：把「AI 思考 + 首 token 等待 + 工具参数生成」和各轮之间的停顿全算在内 ——
+   * 用户看到的「这段工具跑了那么久」本就是一个墙钟区间。
+   *
+   * 起点取组内最早的成员 `timestamp`：引擎是在发请求**之前**就把 timestamp 打在 assistant 消息上的
+   * （`llm_round.rs`），所以「模型思考到决定调这个工具」这段全落在起点之后 —— 只按工具自己的开始
+   * （`结果 timestamp - elapsedMs`）起算会把它整段漏掉，看着就像只加了几个工具的执行时间。
+   * 终点由结果消息反推：`result.timestamp` 是工具**结束**时刻，`result.elapsedMs` 是它自己的
+   * 执行耗时，故该工具的开始 = `timestamp - elapsedMs`（Rust `tool_executor` 就是这样记的），
+   * 取它与成员 timestamp 的更早者、以及所有结束时刻的更晚者。
+   * 没记耗时 / 没结果（还在跑）的一律不参与端点：宁可少算一个端点，也不要拿「补的占位结果」
+   * （取消、程序中断，timestamp 是补偿时刻）去把跨度撑成好几天。
+   */
+  spanMs: number
 }
 
 /**
@@ -160,9 +177,24 @@ export function toolGroupView(
   let calls = 0
   let hasPending = false
   let hasError = false
+  /**
+   * 起点：AI 开始思考的时刻（组内最早成员的 timestamp）/ 末端：最后一个工具结束的时刻（毫秒时间戳）
+   */
+  let spanStart: number | undefined
+  let spanEnd: number | undefined
   const tools: string[] = []
   const seen = new Set<string>()
   for (const message of messages) {
+    // 成员 = 一轮 LLM 请求的 assistant 消息，它的 timestamp 是发请求前打的时间戳：
+    // 「AI 思考 + 首 token 等待 + 生成工具参数」全在这之后，故它才是这段工具调用的真实起点
+    const roundStart = message.timestamp
+    if (
+      typeof roundStart === 'number' &&
+      roundStart > 0 &&
+      (spanStart === undefined || roundStart < spanStart)
+    ) {
+      spanStart = roundStart
+    }
     const toolCalls = message.toolCalls ?? []
     calls += toolCalls.length
     const results = resultsOf(message)
@@ -178,6 +210,18 @@ export function toolGroupView(
       } else if (result.isError) {
         hasError = true
       }
+      const ms = result?.elapsedMs
+      const end = result?.timestamp
+      if (
+        typeof ms === 'number' &&
+        ms > 0 &&
+        typeof end === 'number' &&
+        end > 0
+      ) {
+        const start = end - ms
+        if (spanStart === undefined || start < spanStart) spanStart = start
+        if (spanEnd === undefined || end > spanEnd) spanEnd = end
+      }
     }
   }
   return {
@@ -185,5 +229,9 @@ export function toolGroupView(
     tools,
     moreTools: Math.max(0, seen.size - tools.length),
     status: hasError ? 'error' : hasPending ? 'pending' : 'done',
+    spanMs:
+      spanStart !== undefined && spanEnd !== undefined
+        ? Math.max(0, spanEnd - spanStart)
+        : 0,
   }
 }

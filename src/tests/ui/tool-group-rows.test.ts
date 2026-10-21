@@ -311,4 +311,56 @@ describe('toolGroupView（折叠态文案）', () => {
     expect(view.moreTools).toBe(1) // 'd'
     expect(view.status).toBe('error') // 有失败优先于 pending
   })
+
+  it('时间跨度 = AI 开始思考（首轮请求）→ 最后一个工具结束（两头的思考都算）', () => {
+    // 成员 timestamp = 该轮 LLM 请求发出的时刻（引擎在发请求前就打在 assistant 消息上）
+    const m1 = { ...assistant('a1', [tc('t1'), tc('t2')]), timestamp: 200 }
+    const m2 = { ...assistant('a2', [tc('t3'), tc('t4')]), timestamp: 2100 }
+    // 每条结果：timestamp = 结束时刻，elapsedMs = 它自己跑的时长 → 开始 = 结束 - 耗时
+    // t1 700→1000、t2 1800→2000（1000→1800 之间是 AI 思考）、t3 4500→5000、t4 还在跑
+    const results = new Map<string, Message | undefined>([
+      ['t1', { ...toolResult('r1', 't1', ''), timestamp: 1000, elapsedMs: 300 } as Message],
+      ['t2', { ...toolResult('r2', 't2', ''), timestamp: 2000, elapsedMs: 200 } as Message],
+      ['t3', { ...toolResult('r3', 't3', ''), timestamp: 5000, elapsedMs: 500 } as Message],
+      ['t4', undefined],
+    ])
+    const resultsOf = (m: Message) =>
+      (m.toolCalls ?? []).map((c) => results.get(c.id))
+    // 200 → 5000：含「思考到决定调 t1」的 500ms 与各轮之间 1000 / 2500 的思考；
+    // 既不是 300 + 200 + 500（相加，不含思考），也不是 700 → 5000（只从工具开跑算，漏掉首轮思考）
+    expect(toolGroupView([m1, m2], resultsOf).spanMs).toBe(4800)
+  })
+
+  it('成员没带 timestamp（旧数据）时退回「首个工具开始 → 最后一个结束」', () => {
+    const m1 = assistant('a1', [tc('t1'), tc('t2')])
+    const m2 = assistant('a2', [tc('t3')])
+    const results = new Map<string, Message | undefined>([
+      ['t1', { ...toolResult('r1', 't1', ''), timestamp: 1000, elapsedMs: 300 } as Message],
+      ['t2', { ...toolResult('r2', 't2', ''), timestamp: 2000, elapsedMs: 200 } as Message],
+      ['t3', { ...toolResult('r3', 't3', ''), timestamp: 5000, elapsedMs: 500 } as Message],
+    ])
+    const resultsOf = (m: Message) =>
+      (m.toolCalls ?? []).map((c) => results.get(c.id))
+    expect(toolGroupView([m1, m2], resultsOf).spanMs).toBe(4300)
+  })
+
+  it('单个 / 没记耗时的结果：只算能反推出端点的，占位结果不参与', () => {
+    const m = assistant('a1', [tc('t1'), tc('t2')])
+    // 只有一个工具跑完（成员也没带 timestamp）→ 退化成它自己的耗时
+    expect(
+      toolGroupView([m], () => [
+        { ...toolResult('r1', 't1', ''), timestamp: 3000, elapsedMs: 1200 } as Message,
+        undefined,
+      ]).spanMs,
+    ).toBe(1200)
+
+    // 取消 / 程序中断的占位结果：timestamp 是「补写时刻」、没有 elapsedMs → 不参与，
+    // 否则跨度会被撑成从历史到现在（好几天）
+    expect(
+      toolGroupView([{ ...m, timestamp: 100 }], () => [
+        { ...toolResult('r1', 't1', '程序中断'), timestamp: 9_999_999 } as Message,
+        undefined,
+      ]).spanMs,
+    ).toBe(0)
+  })
 })

@@ -2,7 +2,9 @@
  * CodeEditor —— 可编辑的精简版 Monaco（带语法高亮的小代码输入框）
  *
  * 与 `CodePreview`（只读：隐藏光标、关右键菜单、关输入）相对：本组件用于**真正输入**，
- * 保留编辑与右键菜单（含 Ctrl/Cmd+F 查找：右上角搜索框 + 全文命中高亮，就是 VS Code 那套控件），
+ * 保留编辑与**自绘的右键菜单**（剪切 / 复制 / 粘贴 / 全选：Monaco 精简入口没带 `contrib/contextmenu`，
+ * 原生菜单又被自绘窗口全局拦掉了，不补就什么都弹不出来），
+ * 还有 Ctrl/Cmd+F 查找（右上角搜索框 + 全文命中高亮，就是 VS Code 那套控件），
  * 只减掉噪音与体积（小地图 / 折叠 / 行高亮）。
  * 典型用途：设置 → 安全 → 忽略沙盒命令的 JS 规则。
  *
@@ -14,7 +16,7 @@
 import type { OnMount } from '@monaco-editor/react'
 import Editor from '@monaco-editor/react'
 import type * as MonacoNs from 'monaco-editor'
-import { useRef } from 'react'
+import { useEffect, useReducer, useRef } from 'react'
 
 // 必须最先引入：精简 monaco + 高亮注册 + 代码主题注册（monaco 命名空间也从这里拿）
 import { monaco } from '@/monaco/setupMonaco'
@@ -36,6 +38,11 @@ import {
   codeLineHeightPx,
   type ResolvedCodeDisplay,
 } from '@/domain/code-display'
+import ContextMenu, { useContextMenu } from '@/ui/components/shared/ContextMenu'
+import type { ContextMenuItem } from '@/ui/components/shared/ContextMenu'
+import { t } from '@/ui/i18n'
+import { showToast } from '@/ui/components/shared/Toast'
+import { copyText, readClipboardText } from '@/utils/clipboard'
 import './style.scss'
 
 export interface CodeEditorProps {
@@ -110,7 +117,9 @@ function buildEditorOptions(
     overviewRulerBorder: false,
     hideCursorInOverviewRuler: true,
     roundedSelection: false,
-    contextmenu: true,
+    // 右键菜单自绘（见 `buildMenuItems`）：Monaco 自己的菜单 contrib 精简入口没带，
+    // 这里显式关掉，免得将来谁把它引进来时弹出两套菜单
+    contextmenu: false,
     scrollbar: {
       vertical: 'auto',
       horizontal: 'auto',
@@ -122,6 +131,105 @@ function buildEditorOptions(
       arrowSize: 6,
     },
   }
+}
+
+/**
+ * 右键菜单四项：剪切 / 复制 / 粘贴 / 全选。
+ *
+ * 走自己的剪贴板工具（`utils/clipboard`）而不是 Monaco 的 `clipboardCutAction` /
+ * `clipboardPasteAction`：精简入口 `editor.api.js` 同样不带 `contrib/clipboard`，那两个 action
+ * 根本不存在（与查找框同一类坑），而输入框右键菜单已经在用这套工具（见 `ContextMenu/editable.ts`）。
+ *
+ * 禁用态在**渲染时**现算：菜单开着时选区会变（「全选」→ 紧接着「复制」），由组件里那条
+ * `onDidChangeCursorSelection` 订阅排队重算。
+ */
+function buildMenuItems(
+  editor: MonacoNs.editor.ICodeEditor,
+  readOnly: boolean,
+): ContextMenuItem[] {
+  const model = editor.getModel()
+  const selection = editor.getSelections()?.[0] ?? null
+  const hasSelection = !!selection && !selection.isEmpty()
+  const selectedText = (): string =>
+    model && selection && !selection.isEmpty() ? model.getValueInRange(selection) : ''
+
+  /** 粘贴落点：有选区就替换选区，否则插在光标处 */
+  const pasteRange = (): MonacoNs.IRange | null => {
+    if (selection) return selection
+    const position = editor.getPosition()
+    if (!position) return null
+    return {
+      startLineNumber: position.lineNumber,
+      startColumn: position.column,
+      endLineNumber: position.lineNumber,
+      endColumn: position.column,
+    }
+  }
+
+  /** 落一次编辑：前后各一个 undo 停顿，Ctrl+Z 能单独拓回来 */
+  const applyEdit = (range: MonacoNs.IRange, text: string): void => {
+    editor.pushUndoStop()
+    editor.executeEdits('code-editor-context-menu', [
+      { range, text, forceMoveMarkers: true },
+    ])
+    editor.pushUndoStop()
+    editor.focus()
+  }
+
+  return [
+    {
+      key: 'cut',
+      label: t('剪切'),
+      disabled: readOnly || !hasSelection,
+      onClick: async () => {
+        const text = selectedText()
+        if (!text || !selection) return
+        // 先确认写进了剪贴板再删 —— 否则这段文字直接从用户眼前消失
+        if (!(await copyText(text))) {
+          showToast(t('复制失败'))
+          return
+        }
+        applyEdit(selection, '')
+      },
+    },
+    {
+      key: 'copy',
+      label: t('复制'),
+      disabled: !hasSelection,
+      onClick: async () => {
+        const text = selectedText()
+        if (!text) return
+        editor.focus()
+        showToast((await copyText(text)) ? t('已复制到剪贴板') : t('复制失败'))
+      },
+    },
+    {
+      key: 'paste',
+      label: t('粘贴'),
+      disabled: readOnly,
+      onClick: async () => {
+        const range = pasteRange()
+        if (!range) return
+        const text = await readClipboardText()
+        // 读不到文本（剪贴板为空 / 是图片 / 无权限）→ 静默不动，与输入框右键「粘贴」同一约定
+        if (!text) return
+        applyEdit(range, text)
+      },
+    },
+    {
+      key: 'select-all',
+      label: t('全选'),
+      divider: true,
+      disabled: !model || model.getValueLength() === 0,
+      // 全选后通常紧接着「复制」，菜单保持打开（与输入框 / 终端菜单同一约定）
+      keepOpen: true,
+      onClick: () => {
+        if (!model) return
+        editor.setSelection(model.getFullModelRange())
+        editor.focus()
+      },
+    },
+  ]
 }
 
 export default function CodeEditor(props: CodeEditorProps) {
@@ -140,6 +248,23 @@ export default function CodeEditor(props: CodeEditorProps) {
   const onSaveRef = useRef(props.onSave)
   onSaveRef.current = props.onSave
 
+  /**
+   * 右键菜单：自绘窗口全局 preventDefault 了原生菜单，Monaco 自己的菜单又没在精简构建里
+   *（`contrib/contextmenu` 没引）—— 两样都没有，右键就是「什么都不发生」。
+   * target = 在哪个编辑器实例上点的，菜单项渲染时按它的选区现算。
+   */
+  const menu = useContextMenu<MonacoNs.editor.ICodeEditor>()
+  /** 菜单开着时选区会变（「全选」→ 紧接着「复制」）：订一次选区变化，让禁用态跟着刷新 */
+  const [, bumpSelection] = useReducer((n: number) => n + 1, 0)
+
+  useEffect(() => {
+    if (!menu.state) return
+    const subscription = menu.state.target.onDidChangeCursorSelection(() =>
+      bumpSelection(),
+    )
+    return () => subscription.dispose()
+  }, [menu.state])
+
   const handleMount: OnMount = (editor) => {
     // 挂载时按 props 兜底一次，避免复用实例残留上一次的只读态
     editor.updateOptions({ readOnly, domReadOnly: readOnly })
@@ -157,6 +282,35 @@ export default function CodeEditor(props: CodeEditorProps) {
      * ② 编辑器比可视区高时搜索框会被滚出视野（夹进可见交集）。
      */
     tameFindWidget(editor)
+
+    /**
+     * 右键菜单：挂在编辑器容器上、**捕获阶段** —— 抢在 Monaco 内部的任何处理之前，
+     * 不会因为中间有东西 stopPropagation 就弹不出来；顺手拦掉浏览器原生菜单。
+     */
+    const node = editor.getDomNode()
+    const onContextMenu = (event: MouseEvent): void => {
+      // 查找框里是真正的 <input>：那里右键该走它自己的菜单，
+      // 不能把「粘贴」落到编辑器正文上（落点是错的，用户会莫名多出一段代码）
+      const clicked = event.target
+      if (clicked instanceof Element && clicked.closest('.find-widget')) return
+
+      event.preventDefault()
+      event.stopPropagation()
+      // 右键落在选区外：把光标挪过去 —— 之后的「粘贴」就落在右键处（与 VS Code 一致）
+      const target = editor.getTargetAtClientPoint(event.clientX, event.clientY)
+      const selection = editor.getSelection()
+      if (
+        target?.position &&
+        (!selection || !selection.containsPosition(target.position))
+      ) {
+        editor.setPosition(target.position)
+      }
+      menu.openAt(event, editor)
+    }
+    node?.addEventListener('contextmenu', onContextMenu, true)
+    editor.onDidDispose(() =>
+      node?.removeEventListener('contextmenu', onContextMenu, true),
+    )
   }
 
   return (
@@ -170,6 +324,14 @@ export default function CodeEditor(props: CodeEditorProps) {
         onChange={(v) => onChange(v ?? '')}
         options={buildEditorOptions(props, display)}
       />
+      {/* 右键菜单（portal 挂 body）：剪切 / 复制 / 粘贴 / 全选 */}
+      {menu.state && (
+        <ContextMenu
+          position={menu.state.position}
+          items={buildMenuItems(menu.state.target, readOnly)}
+          onClose={menu.close}
+        />
+      )}
     </div>
   )
 }

@@ -10,6 +10,7 @@ import type { Message } from '@/types'
 import { invoke } from '@tauri-apps/api/core'
 import { isTauriAvailable } from '@/services/rust-engine'
 import { sanitizeLoneSurrogates } from '@/utils/text'
+import { withAgentElapsedMs } from '@/utils/messageMeta'
 
 /**
  * TS 引擎路径消息落库（Tauri 下由引擎内部直落 SQLite，跳过）。fire-and-forget：不 await，不阻塞 UI。
@@ -101,6 +102,36 @@ export function updateSessionMessage(
 export function getSessionMessages(sessionId: string): Message[] {
   const session = sessionStore.value.sessions.find((s) => s.id === sessionId)
   return session ? [...session.messages] : []
+}
+
+/**
+ * 本轮 agent 循环总耗时 → 写到最后一条助手消息上并落库（界面在 message-actions 上显示）。
+ *
+ * 为什么必须**显式**落库：Rust 引擎只写它自己产出 / 更新的消息，事后由界面补的元数据它不会替我们写
+ *（`persistMessagesIfNeeded` 的 Tauri 守卫服务的是「引擎已直落」的常规消息，用不到这里）。
+ * 整行 upsert 幂等（id 是主键），与 todo feedback / 后台服务通知同一条通路。
+ */
+export function setAgentElapsedMs(
+  sessionId: string,
+  messageId: string,
+  elapsedMs: number,
+): void {
+  const current = getSessionMessage(sessionId, messageId)
+  if (!current) return
+  const updated = updateSessionMessage(
+    sessionId,
+    messageId,
+    withAgentElapsedMs(current, elapsedMs),
+  )
+  if (!updated || !isTauriAvailable()) return
+  try {
+    void invoke('cmd_append_messages', {
+      sessionId,
+      messages: sanitizeLoneSurrogates([updated]),
+    }).catch(() => {})
+  } catch {
+    // invoke 不可用：内存里已经写好了，界面照常显示
+  }
 }
 
 /**

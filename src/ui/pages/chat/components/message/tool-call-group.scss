@@ -49,6 +49,16 @@
     text-overflow: ellipsis;
   }
 
+  // 这段工具调用实际占用的时间跨度（AI 开始思考 → 末个工具结束，含中间的 AI 思考）：
+  // 与单张卡片的 .tool-call-timing 同一套字号 / 弱化色，
+  // 让「组头一行」与「展开后的每张卡片」读起来是同一列信息。
+  &__timing {
+    flex: none;
+    font-size: var(--font-size-xs);
+    color: var(--text-tertiary, #9ca3af);
+    white-space: nowrap;
+  }
+
   // 折叠箭头：折叠态朝下、展开态转上去
   &__caret {
     flex: none;

@@ -55,11 +55,30 @@ const assistant = (
 const m1 = assistant('a1', [tc('t1', 'read_file'), tc('t2', 'grep')], '先看这里。')
 const m2 = assistant('a2', [tc('t3', 'write_file')])
 
-/** 每个工具调用都配上结果 → 组状态 done（跑完了，可折叠） */
+/** 结果都回来了 → 组状态 done（跑完了，可折叠） */
 const resultsDone = (m: Message): (Message | undefined)[] =>
   (m.toolCalls ?? []).map(
     (c): Message => ({ id: `r-${c.id}`, role: 'tool', content: '', timestamp: 0 }),
   )
+
+/** 结果都回来了且带耗时（各条时间线与 `tool-group-rows` 的跨度用例一致）：
+ *  t1 700→1000、t2 1800→2000、t3 4500→5000 → 组头应显示 700→5000 的跨度「共 4.3s」*/
+const TIMED: Record<string, { start: number; elapsedMs: number }> = {
+  t1: { start: 700, elapsedMs: 300 },
+  t2: { start: 1800, elapsedMs: 200 },
+  t3: { start: 4500, elapsedMs: 500 },
+}
+const resultsTimed = (m: Message): (Message | undefined)[] =>
+  (m.toolCalls ?? []).map((c): Message => {
+    const t = TIMED[c.id] ?? { start: 0, elapsedMs: 0 }
+    return {
+      id: `r-${c.id}`,
+      role: 'tool',
+      content: '',
+      timestamp: t.start + t.elapsedMs,
+      elapsedMs: t.elapsedMs,
+    }
+  })
 
 /** 结果都还没回来 → 组状态 pending（运行中，恒展开） */
 const resultsPending = (m: Message): (Message | undefined)[] =>
@@ -70,15 +89,17 @@ let root: Root | null = null
 
 function Harness({
   resultsOf,
+  members = [m1, m2],
 }: {
   resultsOf: (m: Message) => (Message | undefined)[]
+  members?: Message[]
 }) {
   const [open, setOpen] = useState(false)
   return (
     <ToolCallGroup
       groupKey="tools:a1"
-      members={[m1, m2]}
-      results={[resultsOf(m1), resultsOf(m2)]}
+      members={members}
+      results={members.map((m) => resultsOf(m))}
       open={open}
       onToggle={() => setOpen((v) => !v)}
     />
@@ -87,12 +108,13 @@ function Harness({
 
 function mount(
   resultsOf: (m: Message) => (Message | undefined)[] = resultsDone,
+  members?: Message[],
 ): void {
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
   act(() => {
-    root!.render(<Harness resultsOf={resultsOf} />)
+    root!.render(<Harness resultsOf={resultsOf} members={members} />)
   })
 }
 
@@ -168,5 +190,31 @@ describe('工具调用组：跑完默认折叠，点头展开', () => {
     // 运行中不允许折叠：点组头后仍是展开
     click(head())
     expect(container!.querySelector('.tool-group__body')).not.toBeNull()
+  })
+
+  it('组头显示这段工具调用实际占用的时间跨度（折叠态也看得到）', () => {
+    mount(resultsTimed)
+    // 首开始 700 → 末结束 5000（= 4.3s），不是 300 + 200 + 500 的相加
+    expect(container!.querySelector('.tool-group__timing')?.textContent).toBe(
+      '共 4.3s',
+    )
+  })
+
+  it('跨度从 AI 开始思考算起：首轮思考也算进来，不是只加工具执行时间', () => {
+    mount(resultsTimed, [
+      // 200 就发出首轮请求（AI 思考到 700 才决定调 t1）→ 起点是 200 而不是 700
+      { ...m1, timestamp: 200 },
+      // t2 结束于 2000，下一轮请求 2100 发出 → 这段思考也在区间内
+      { ...m2, timestamp: 2100 },
+    ])
+    // 200 → 5000；只按「工具自己开始」起算会得到 4.3s
+    expect(container!.querySelector('.tool-group__timing')?.textContent).toBe(
+      '共 4.8s',
+    )
+  })
+
+  it('一条耗时都没记的组：不凭空多一个「共 0ms」', () => {
+    mount(resultsDone)
+    expect(container!.querySelector('.tool-group__timing')).toBeNull()
   })
 })

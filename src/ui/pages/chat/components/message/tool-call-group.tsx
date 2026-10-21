@@ -1,8 +1,9 @@
 /**
  * 一段**连续**的工具调用合成一行（行模型见 `message-list/rows.ts`）。
  *
- * 折叠态只说一件事：调了几次（外加工具名预览）；展开后是各自仍可再展开的卡片（卡片的折叠态由
- * `ToolCallMessage` 自己管，本组件只把「按住滚动偏移」透传下去）。
+ * 折叠态只说两件事：调了几次（外加工具名预览）、这段工具调用实际占用了多久（AI 开始思考 →
+ * 最后一个工具结束的墙钟跨度，见 `rows.ts::toolGroupView().spanMs`，含思考与各轮之间的停顿）；展开后是
+ * 各自仍可再展开的卡片（卡片的折叠态由 `ToolCallMessage` 自己管，本组件只把「按住滚动偏移」透传下去）。
  * **段首宿主的正文**若有，显示在组头之**上**、不随折叠隐藏（它是看得见的边界，分段规则见 `rows.ts::buildRows`）。
  * 头部**不显示**成功/失败的状态点。
  *
@@ -29,7 +30,8 @@
  */
 import { memo, useMemo } from 'react'
 import type { Message } from '@/types'
-import { t } from '@/ui/i18n'
+import { t, tpl } from '@/ui/i18n'
+import { formatDuration } from '@/utils/time'
 import { useRowToggleHold } from '@/ui/hooks/useRowToggleHold'
 import { ToolCallMessage } from '../tool-call'
 import { toolGroupView } from './message-list/rows'
@@ -127,6 +129,14 @@ function ToolCallGroup({
             <span className="tool-group__tools" title={view.tools.join(', ')}>
               {view.tools.join(' · ')}
               {view.moreTools > 0 ? ` +${view.moreTools}` : ''}
+            </span>
+          )}
+          {/* 这段工具调用实际占用的时间跨度（AI 开始思考 → 末个工具结束） */}
+          {view.spanMs > 0 && (
+            <span
+              className="tool-group__timing"
+              title={t('从 AI 开始思考到最后一个工具执行结束的总耗时')}>
+              {tpl('共 $__time__', { time: formatDuration(view.spanMs) })}
             </span>
           )}
           <CollapsedSvg

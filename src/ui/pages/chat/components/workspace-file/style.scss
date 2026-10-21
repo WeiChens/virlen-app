@@ -19,6 +19,11 @@
     user-select: none;
     cursor: col-resize;
   }
+
+  /* 聊天区被压到不足 300px：面板占满整块可用宽度，72vw 的上限要让路（这时宿主已把聊天区藏起来） */
+  &.is-full {
+    max-width: none;
+  }
 }
 
 /* 拖拽手柄：压在左边缘上（宽 6px、只有 1px 画出来），hover 才显形 */

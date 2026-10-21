@@ -317,12 +317,27 @@
       gap: 6px;
       margin-top: 4px;
       margin-right: 4px;
-      opacity: 0;
-      transition: opacity 0.15s;
+
+      // 显隐不能挂在操作栏自己身上：父级 opacity 会把整棵子树（含「本轮总耗时」）一起藏掉，
+      // 而那条是回复的结果信息，应该常显；发送时间与操作按钮仍随 hover 出现（下放到子元素）。
+      .action-time,
+      .action-btn,
+      .action-elapsed {
+        opacity: 0;
+        transition: opacity 0.15s;
+      }
 
       .action-time {
         font-size: var(--font-size-xs);
         color: var(--text-secondary, #aaa);
+      }
+
+      // 本轮 agent 循环总耗时：常显、弱化色（它不是一个可点的操作）
+      .action-elapsed {
+        font-size: var(--font-size-xs);
+        color: var(--text-tertiary, #999);
+        white-space: nowrap;
+        cursor: default;
       }
 
       .action-btn {
@@ -338,7 +353,8 @@
         color: var(--text-tertiary, #999);
         transition:
           color 0.15s,
-          background 0.15s;
+          background 0.15s,
+          opacity 0.15s;
 
         &:hover {
           color: var(--text-primary, #1a1a1a);
@@ -353,7 +369,12 @@
     }
 
     &:hover .message-actions {
-      opacity: 1;
+
+      .action-time,
+      .action-btn,
+      .action-elapsed {
+        opacity: 1;
+      }
     }
 
     .action-delete:hover {

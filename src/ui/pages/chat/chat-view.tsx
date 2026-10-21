@@ -252,6 +252,8 @@ function ChatView() {
 
   /** 右侧文件面板：打开的文件 + 它属于哪个会话（切会话就要关） */
   const [openFile, setOpenFile] = useState<string | null>(null)
+  /** 文件面板占满（聊天区会被压到不足 300px）→ 聊天区先不显示 */
+  const [filePanelFull, setFilePanelFull] = useState(false)
   const openFileRef = useRef<string | null>(null)
   const fileDirtyRef = useRef(false)
   const openFileSessionRef = useRef<string | null>(null)
@@ -266,6 +268,8 @@ function ChatView() {
     openFileSessionRef.current = null
     fileDirtyRef.current = false
     setOpenFile(null)
+    // 面板占满时聊天区是藏起来的：关掉必须把它放回来
+    setFilePanelFull(false)
   }, [])
 
   /**
@@ -928,7 +932,7 @@ function ChatView() {
     : appName
 
   return (
-    <div className="chat-view">
+    <div className={filePanelFull ? 'chat-view is-file-full' : 'chat-view'}>
       <ProviderPrompt
         visible={showProviderPrompt}
         onClose={handleClosePrompt}
@@ -1054,6 +1058,8 @@ function ChatView() {
           path={openFile}
           sessionId={chatState.value.currentSessionId ?? undefined}
           onDirtyChange={handleFileDirtyChange}
+          // 占满（聊天区不足 300px）→ 把聊天区藏起来，面板接管整块宽度
+          onExpandedChange={setFilePanelFull}
           onClose={closeFile}
         />
       )}

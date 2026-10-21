@@ -9,6 +9,7 @@ import MarkdownRenderer from './markdown-renderer'
 import './message-bubble.scss'
 import { showToast } from '@/ui/components/shared/Toast'
 import { timeFormat, formatDuration } from '@/utils/time'
+import { agentElapsedMsOf } from '@/utils/messageMeta'
 import { memo, useLayoutEffect, useRef, useState } from 'react'
 import CollapsedSvg from '@/ui/components/icons/CollapsedSvg'
 import ThinkSvg from '@/ui/components/icons/ThinkSvg'
@@ -272,6 +273,9 @@ function MessageBubble({
     isAssistant && !!message.toolCalls?.length && !hasVisibleContent
   // tool 消息内容只是纯结果文本，用简洁方式展示
   const showContent = getContent()
+
+  /** 本轮 agent 循环总耗时（仅正常跑完的那一轮才有；见 `utils/messageMeta.ts`） */
+  const agentElapsedMs = isAssistant ? agentElapsedMsOf(message) : undefined
 
   // 是否显示底部操作栏（streaming 中和纯 toolcall/无内容不显示）
   const showActions = !message.streaming && !showAsToolCall && !isTool
@@ -572,6 +576,15 @@ function MessageBubble({
                   )}
                   {showActions && (
                     <div className="message-actions">
+                      {agentElapsedMs ? (
+                        <span
+                          className="action-elapsed"
+                          title={t('本轮 AI 回复总耗时')}>
+                          {tpl('耗时 $__time__', {
+                            time: formatDuration(agentElapsedMs),
+                          })}
+                        </span>
+                      ) : null}
                       <span className="action-time">
                         {timeFormat(message.timestamp)}
                       </span>

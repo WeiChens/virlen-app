@@ -441,7 +441,6 @@ function ChatInput(
         onDragOver={handlers.handleDragOver}
         onDragLeave={handlers.handleDragLeave}
         onDrop={handlers.handleDrop}>
-        {sessionId && (
           <div
             className="input-resize-handle"
             onMouseDown={handleResizeStart}
@@ -452,8 +451,6 @@ function ChatInput(
               <span></span>
             </div>
           </div>
-        )}
-
         <input
           ref={fileInputRef}
           type="file"

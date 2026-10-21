@@ -101,6 +101,54 @@ let root: ReturnType<typeof createRoot> | null = null
 let closed = 0
 let dirtyCalls: boolean[] = []
 
+/**
+ * jsdom 没有布局引擎：面板宽度全靠 `getBoundingClientRect` 量。
+ * 给「左侧栏 + 聊天区 + 面板」三个角色喂假尺寸；`layout = null` 时保持 jsdom 原本的零尺寸，
+ * 其它用例（面板单独挂在普通 div 里）照旧。
+ */
+let layout: { available: number; inset: number } | null = null
+const realRect = Element.prototype.getBoundingClientRect
+
+function fakeRect(left: number, width: number): DOMRect {
+  return {
+    left,
+    right: left + width,
+    width,
+    top: 0,
+    bottom: 800,
+    height: 800,
+    x: left,
+    y: 0,
+    toJSON: () => ({}),
+  } as DOMRect
+}
+
+async function mountInLayout(
+  available: number,
+  inset: number,
+  onExpandedChange?: (expanded: boolean) => void,
+) {
+  layout = { available, inset }
+  loadMock.mockResolvedValue(textFile())
+  const host = document.createElement('div')
+  host.className = 'chat-view'
+  document.body.appendChild(host)
+  root = createRoot(host)
+  await act(async () => {
+    root!.render(
+      <>
+        <div className="chat-main" />
+        <WorkspaceFilePanel
+          path="E:/repo/src/a.ts"
+          onClose={() => {}}
+          onDirtyChange={() => {}}
+          onExpandedChange={onExpandedChange}
+        />
+      </>,
+    )
+  })
+}
+
 async function mount(path = 'E:/repo/src/a.ts') {
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -151,6 +199,18 @@ beforeAll(() => {
     writable: true,
     value: vi.fn(),
   })
+  Element.prototype.getBoundingClientRect = function (this: Element) {
+    if (!layout) return realRect.call(this)
+    const { available, inset } = layout
+    const right = inset + available
+    if (this.classList.contains('chat-view')) return fakeRect(0, right)
+    if (this.classList.contains('chat-main')) return fakeRect(inset, available)
+    if (this.classList.contains('workspace-file-panel')) {
+      const width = Number.parseFloat((this as HTMLElement).style.width) || 0
+      return fakeRect(right - width, width)
+    }
+    return fakeRect(0, 0)
+  }
 })
 
 beforeEach(() => {
@@ -176,6 +236,7 @@ afterEach(() => {
   act(() => root?.unmount())
   root = null
   document.body.innerHTML = ''
+  layout = null
 })
 
 it('文本：进编辑器，未改动时保存按钮禁用', async () => {
@@ -523,4 +584,65 @@ it('换文件回到默认的编辑模式', async () => {
 
   expect(document.querySelector('.mock-markdown')).toBeNull()
   expect(editor()!.value).toBe('# 另一个')
+})
+
+/** 宽度口径：每次打开按「聊天区 + 面板」可用宽度的一半重算，不沿用上次拖出来的宽度 */
+it('每次打开都按可用宽度的一半，不用上次拖出来的宽度', async () => {
+  await mountInLayout(1200, 260)
+  expect(panel().style.width).toBe('600px')
+  expect(panel().classList.contains('is-full')).toBe(false)
+
+  act(() => root?.unmount())
+  root = null
+  document.body.innerHTML = ''
+
+  // 换一个窄一点的窗口：还是各占一半（早就忘了上次拖到哪）
+  await mountInLayout(800, 260)
+  expect(panel().style.width).toBe('400px')
+})
+
+/** 聊天区连 300 都留不住：面板占满，并通知宿主把聊天区先藏起来 */
+it('聊天区不足 300px：面板占满，且通知宿主藏起聊天区', async () => {
+  const calls: boolean[] = []
+  await mountInLayout(500, 260, (expanded) => calls.push(expanded))
+
+  expect(panel().classList.contains('is-full')).toBe(true)
+  expect(panel().style.width).toBe('500px')
+  expect(calls[calls.length - 1]).toBe(true)
+
+  // 面板关掉（卸载）时要把聊天区放回来
+  act(() => root?.unmount())
+  root = null
+  expect(calls[calls.length - 1]).toBe(false)
+})
+
+/** 拖到聊天区不足 300 → 面板占满；往回拖过那条线 → 聊天区回来 */
+it('拖到聊天区不足 300px 时面板占满，拖回来再恢复', async () => {
+  const calls: boolean[] = []
+  await mountInLayout(1000, 200, (expanded) => calls.push(expanded))
+  expect(panel().style.width).toBe('500px')
+
+  const right = 1200 // inset 200 + 可用 1000
+  act(() => {
+    document
+      .querySelector('.wfp-resizer')!
+      .dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  })
+  act(() => {
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: right - 750 }))
+  })
+  expect(panel().classList.contains('is-full')).toBe(true)
+  expect(panel().style.width).toBe('1000px')
+  expect(calls[calls.length - 1]).toBe(true)
+
+  act(() => {
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: right - 600 }))
+  })
+  expect(panel().classList.contains('is-full')).toBe(false)
+  expect(panel().style.width).toBe('600px')
+  expect(calls[calls.length - 1]).toBe(false)
+
+  act(() => {
+    document.dispatchEvent(new MouseEvent('mouseup'))
+  })
 })

@@ -11,6 +11,7 @@ import {
 } from '@/ui/store'
 import { settingsState } from '@/ui/store'
 import type { AgentEventCallback, Message, MessageContent } from '@/types'
+import { messageHasVisibleContent } from '@/utils/messageContent'
 import { extractText, getEngine, providerTypeOf, transformApiError } from './common'
 import { activeTraces, markErrored } from './trace'
 import {
@@ -18,6 +19,7 @@ import {
   getSessionMessage,
   getSessionMessages,
   persistMessagesIfNeeded,
+  setAgentElapsedMs,
   updateSessionMessage,
 } from './messages'
 import type { ChatServiceEvents } from './types'
@@ -193,6 +195,9 @@ export function createEventHandler(
           updateSessionRuntime(sessionId, { paused: true })
           events?.onMessagesUpdate?.(sessionId)
         } else {
+          // 跑完最后一条回复：本轮 agent 循环总耗时挂到最后一条助手消息上（界面在 message-actions 显示）。
+          // 只在这条分支写：paused 是挂起、error / 用户取消根本不会走到 stream_end，都不算「完成整个循环」。
+          recordAgentElapsed(sessionId, totalMs, trEnd?.rounds ?? 0)
           const sessEnd = sessionStore.getSession(sessionId)
           const lastAssistant = sessEnd
             ? [...sessEnd.messages].reverse().find((m) => m.role === 'assistant')
@@ -275,6 +280,32 @@ export function createEventHandler(
         break
       }
     }
+  }
+}
+
+/**
+ * 本轮 agent 循环总耗时 → 挂到最后一条助手消息的 `uiData` 上（
+ * `utils/messageMeta.ts::AGENT_ELAPSED_KEY`，随消息落库）。
+ *
+ * 只认「最后一条助手消息」：气泡的操作栏只在它身上渲染；更早的回合挂上去会张冠李戴。
+ * 最后一条没有可见内容（空壳）时不写 —— 那种气泡连操作栏都没有，写了也看不到。
+ *
+ * `rounds` 是本轮 LLM 轮次数（`assistant_message_created` 计数）：为 0 说明这一轮没产出任何
+ * 助手消息，最后一条属于上一回合，不能拿本轮耗时去标它。
+ * 暂停恢复的那一轮从「恢复时刻」起算（`activeTraces` 在 resumePausedRun 里重建），不含挂起前的部分。
+ */
+function recordAgentElapsed(
+  sessionId: string,
+  totalMs: number | undefined,
+  rounds: number,
+): void {
+  if (!totalMs || totalMs <= 0 || rounds <= 0) return
+  const messages = getSessionMessages(sessionId)
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role !== 'assistant') continue
+    if (!messageHasVisibleContent(messages[i])) return
+    setAgentElapsedMs(sessionId, messages[i].id, totalMs)
+    return
   }
 }
 
