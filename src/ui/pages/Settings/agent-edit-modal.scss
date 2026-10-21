@@ -371,15 +371,41 @@
 
   // ==================== Tool Grid ====================
 
+  // 工具 / 技能页签采用「固定表头 + 独立滚动列表」的两段式布局：
+  // sticky 会被父级盒子高度截断（滚到一半就跟着走了），改用 flex 列布局，
+  // 表头根本不是滚动区的一部分，永远不会被滚走。
+  .aem-tool-panel {
+    height: 100%;
+    min-height: 0;
+
+    > .form-group.tool-panel {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      min-height: 0;
+      margin-bottom: 0;
+    }
+  }
+
+  // 表头 + 统计 + 检索框：不参与滚动
+  .tool-select-bar {
+    flex-shrink: 0;
+    background: var(--bg-primary, #fff);
+  }
+
+  // 只有列表滚
+  .tool-panel-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+
   .tool-select-header {
     display: flex;
     align-items: start;
     justify-content: space-between;
     margin-bottom: 4px;
-    background-color: var(--bg-primary, #f7f7f8);
-    position: sticky;
-    top: 0;
-    padding-bottom: 5px;
     label {
       margin-bottom: 0;
     }
@@ -478,8 +504,8 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
-    max-height: 440px;
-    // overflow-y: auto;
+    // 滚动交给外层 .tool-panel-scroll；这里再限高会撑出双滚动条
+    // 或让超出部分直接溢出。
     padding-right: 4px;
   }
 

@@ -251,7 +251,6 @@ function SkillPlaza() {
                     className="plaza-card"
                     onClick={() => handlePreview(skill)}>
                     <div className="plaza-card-header">
-                      <div className="plaza-card-icon">🧩</div>
                       <div className="plaza-card-info">
                         <span className="plaza-card-name">{skill.name}</span>
                         {skill.version && (

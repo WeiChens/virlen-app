@@ -141,6 +141,7 @@
     flex: 1;
     overflow-y: auto;
     min-height: 0;
+    padding-right: 10px;
   }
 
   // ==================== 状态 ====================
@@ -270,17 +271,6 @@
       margin-bottom: 6px;
     }
 
-    .plaza-card-icon {
-      flex-shrink: 0;
-      width: 32px;
-      height: 32px;
-      border-radius: 8px;
-      background: var(--accent-bg, #eef2ff);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 16px;
-    }
 
     .plaza-card-info {
       flex: 1;

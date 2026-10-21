@@ -918,182 +918,192 @@ export default function AgentEditModal({
         )}
 
         {tab === 4 && (
-          <div className="aem-form">
-            <div className="form-group">
-              <div className="tool-select-header">
-                <div>
-                  <label>{t('允许使用的工具')}</label>
-                  <span className="form-hint">
-                    {t('已选')} {allowTools.length} / {allTools.length}
-                    {t(' 个工具')}
-                    {toolQuery.trim() && (
-                      <em className="tool-match-hint">
-                        {tpl('（匹配 $__count__ 项）', {
-                          count: filteredTools.length,
-                        })}
-                      </em>
-                    )}
-                  </span>
-                </div>
-                <button
-                  className="toggle-all-btn"
-                  title={t('仅作用于当前筛选结果')}
-                  onClick={toggleAllTools}>
-                  {filteredTools.every((t) => allowTools.includes(t.name)) &&
+          <div className="aem-form aem-tool-panel">
+            <div className="form-group tool-panel">
+              <div className="tool-select-bar">
+                <div className="tool-select-header">
+                  <div>
+                    <label>{t('允许使用的工具')}</label>
+                    <span className="form-hint">
+                      {t('已选')} {allowTools.length} / {allTools.length}
+                      {t(' 个工具')}
+                      {toolQuery.trim() && (
+                        <em className="tool-match-hint">
+                          {tpl('（匹配 $__count__ 项）', {
+                            count: filteredTools.length,
+                          })}
+                        </em>
+                      )}
+                    </span>
+                  </div>
+                  <button
+                    className="toggle-all-btn"
+                    title={t('仅作用于当前筛选结果')}
+                    onClick={toggleAllTools}>
+                    {filteredTools.every((t) => allowTools.includes(t.name)) &&
                     filteredTools.length > 0
-                    ? t('取消全选')
-                    : t('全选')}
-                </button>
+                      ? t('取消全选')
+                      : t('全选')}
+                  </button>
+                </div>
+
+                <input
+                  className="list-filter"
+                  type="text"
+                  value={toolQuery}
+                  onChange={(e) => setToolQuery(e.target.value)}
+                  placeholder={t('搜索工具（名称 / 描述）')}
+                  aria-label={t('搜索工具（名称 / 描述）')}
+                  autoComplete="off"
+                />
               </div>
 
-              <input
-                className="list-filter"
-                type="text"
-                value={toolQuery}
-                onChange={(e) => setToolQuery(e.target.value)}
-                placeholder={t('搜索工具（名称 / 描述）')}
-                aria-label={t('搜索工具（名称 / 描述）')}
-                autoComplete="off"
-              />
+              <div className="tool-panel-scroll">
+                {allTools.length === 0 ? (
+                  <span className="form-hint">{t('暂无可用的工具')}</span>
+                ) : filteredTools.length === 0 ? (
+                  <span className="form-hint">{t('没有匹配的工具')}</span>
+                ) : (
+                  <div className="tool-category-list">
+                    {groupedTools.map(({ category, tools }) => {
+                      const categorySelected = tools.filter((t) =>
+                        allowTools.includes(t.name),
+                      )
+                      const allInCategorySelected =
+                        categorySelected.length === tools.length
 
-              {allTools.length === 0 ? (
-                <span className="form-hint">{t('暂无可用的工具')}</span>
-              ) : filteredTools.length === 0 ? (
-                <span className="form-hint">{t('没有匹配的工具')}</span>
-              ) : (
-                <div className="tool-category-list">
-                  {groupedTools.map(({ category, tools }) => {
-                    const categorySelected = tools.filter((t) =>
-                      allowTools.includes(t.name),
-                    )
-                    const allInCategorySelected =
-                      categorySelected.length === tools.length
-
-                    return (
-                      <div key={category.id} className="tool-category-group">
-                        <div className="tool-category-header">
-                          <label className="tool-category-checkbox">
-                            <TriStateCheckbox
-                              checked={allInCategorySelected}
-                              indeterminate={
-                                !allInCategorySelected &&
-                                categorySelected.length > 0
-                              }
-                              onChange={() =>
-                                toggleCategory(
-                                  tools.map((t) => t.name),
-                                  allowTools,
-                                )
-                              }
-                            />
-                            <span className="tool-category-name">
-                              {category.label}
+                      return (
+                        <div key={category.id} className="tool-category-group">
+                          <div className="tool-category-header">
+                            <label className="tool-category-checkbox">
+                              <TriStateCheckbox
+                                checked={allInCategorySelected}
+                                indeterminate={
+                                  !allInCategorySelected &&
+                                  categorySelected.length > 0
+                                }
+                                onChange={() =>
+                                  toggleCategory(
+                                    tools.map((t) => t.name),
+                                    allowTools,
+                                  )
+                                }
+                              />
+                              <span className="tool-category-name">
+                                {category.label}
+                              </span>
+                            </label>
+                            <span className="tool-category-count">
+                              {categorySelected.length}/{tools.length}
                             </span>
-                          </label>
-                          <span className="tool-category-count">
-                            {categorySelected.length}/{tools.length}
-                          </span>
-                        </div>
-                        <div className="tool-grid">
-                          {tools.map((t) => (
-                            <div className="tool-item" key={t.name}>
-                              <label>
-                                <input
-                                  type="checkbox"
-                                  checked={allowTools.includes(t.name)}
-                                  onChange={() => toggleTool(t.name)}
-                                />
-                                <div>
-                                  <div className="tool-name">
-                                    {t.label || t.name}
+                          </div>
+                          <div className="tool-grid">
+                            {tools.map((t) => (
+                              <div className="tool-item" key={t.name}>
+                                <label>
+                                  <input
+                                    type="checkbox"
+                                    checked={allowTools.includes(t.name)}
+                                    onChange={() => toggleTool(t.name)}
+                                  />
+                                  <div>
+                                    <div className="tool-name">
+                                      {t.label || t.name}
+                                    </div>
+                                    <div className="tool-id">{t.name}</div>
                                   </div>
-                                  <div className="tool-id">{t.name}</div>
-                                </div>
-                                <div className="tool-desc" title={t.description}>
-                                  {t.description}
-                                </div>
-                              </label>
-                            </div>
-                          ))}
+                                  <div
+                                    className="tool-desc"
+                                    title={t.description}>
+                                    {t.description}
+                                  </div>
+                                </label>
+                              </div>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
 
         {tab === 5 && (
-          <div className="aem-form">
-            <div className="form-group">
-              <div className="tool-select-header">
-                <div>
-                  <label>{t('已注册的技能')}</label>
-                  <span className="form-hint">
-                    {t('已选')} {skills.length} / {allSkills.length}
-                    {t('个技能')}
-                    {skillQuery.trim() && (
-                      <em className="tool-match-hint">
-                        {tpl('（匹配 $__count__ 项）', {
-                          count: filteredSkills.length,
-                        })}
-                      </em>
-                    )}
-                  </span>
+          <div className="aem-form aem-tool-panel">
+            <div className="form-group tool-panel">
+              <div className="tool-select-bar">
+                <div className="tool-select-header">
+                  <div>
+                    <label>{t('已注册的技能')}</label>
+                    <span className="form-hint">
+                      {t('已选')} {skills.length} / {allSkills.length}
+                      {t('个技能')}
+                      {skillQuery.trim() && (
+                        <em className="tool-match-hint">
+                          {tpl('（匹配 $__count__ 项）', {
+                            count: filteredSkills.length,
+                          })}
+                        </em>
+                      )}
+                    </span>
+                  </div>
+                  {filteredSkills.length > 0 && (
+                    <button
+                      className="toggle-all-btn"
+                      title={t('仅作用于当前筛选结果')}
+                      onClick={toggleAllSkills}>
+                      {filteredSkills.every((s) =>
+                        skills.includes(s.meta.name),
+                      )
+                        ? t('取消全选')
+                        : t('全选')}
+                    </button>
+                  )}
                 </div>
-                {filteredSkills.length > 0 && (
-                  <button
-                    className="toggle-all-btn"
-                    title={t('仅作用于当前筛选结果')}
-                    onClick={toggleAllSkills}>
-                    {filteredSkills.every((s) =>
-                      skills.includes(s.meta.name),
-                    )
-                      ? t('取消全选')
-                      : t('全选')}
-                  </button>
+
+                <input
+                  className="list-filter"
+                  type="text"
+                  value={skillQuery}
+                  onChange={(e) => setSkillQuery(e.target.value)}
+                  placeholder={t('搜索技能（名称 / 描述）')}
+                  aria-label={t('搜索技能（名称 / 描述）')}
+                  autoComplete="off"
+                />
+              </div>
+
+              <div className="tool-panel-scroll">
+                <div className="tool-grid">
+                  {filteredSkills.map((s) => (
+                    <div className="tool-item" key={s.meta.name}>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={skills.includes(s.meta.name)}
+                          onChange={() => toggleSkill(s.meta.name)}
+                        />
+                        <span className="tool-name">{s.meta.name}</span>
+                        <div className="tool-desc" title={s.meta.description}>
+                          {s.meta.description}
+                        </div>
+                      </label>
+                    </div>
+                  ))}
+                </div>
+                {allSkills.length === 0 && (
+                  <div className="no-skills-hint">
+                    <span className="form-hint">
+                      {t('暂未注册任何技能。请在设置页面导入技能 ZIP 包后刷新。')}
+                    </span>
+                  </div>
+                )}
+                {allSkills.length > 0 && filteredSkills.length === 0 && (
+                  <span className="form-hint">{t('没有匹配的技能')}</span>
                 )}
               </div>
-
-              <input
-                className="list-filter"
-                type="text"
-                value={skillQuery}
-                onChange={(e) => setSkillQuery(e.target.value)}
-                placeholder={t('搜索技能（名称 / 描述）')}
-                aria-label={t('搜索技能（名称 / 描述）')}
-                autoComplete="off"
-              />
-
-              <div className="tool-grid">
-                {filteredSkills.map((s) => (
-                  <div className="tool-item" key={s.meta.name}>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={skills.includes(s.meta.name)}
-                        onChange={() => toggleSkill(s.meta.name)}
-                      />
-                      <span className="tool-name">{s.meta.name}</span>
-                      <div className="tool-desc" title={s.meta.description}>
-                        {s.meta.description}
-                      </div>
-                    </label>
-                  </div>
-                ))}
-              </div>
-              {allSkills.length === 0 && (
-                <div className="no-skills-hint">
-                  <span className="form-hint">
-                    {t('暂未注册任何技能。请在设置页面导入技能 ZIP 包后刷新。')}
-                  </span>
-                </div>
-              )}
-              {allSkills.length > 0 && filteredSkills.length === 0 && (
-                <span className="form-hint">{t('没有匹配的技能')}</span>
-              )}
             </div>
           </div>
         )}
