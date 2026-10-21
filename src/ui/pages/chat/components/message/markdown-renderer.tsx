@@ -5,12 +5,17 @@
  * ⚡ 流式性能两级：① rAF 节流把高频 chunk 合并到每帧一次；② 前缀冻结 —— 把「已定稿的块」与「正在增长的
  * 尾部」拆成两棵子树（见 `splitStablePrefix`），前缀被 memo 冻住，内容不变时整棵跳过 reconcile，每帧只重建
  * 尾部。此前每帧 reconcile 整篇文档是主要 CPU 来源；消息结束时整篇一次性渲染，保证最终结果不变。
+ *
+ * 🖼 图片走 `LocalImage`：AI 常返回「工作目录相对路径」甚至 `C:\…` 这样的本地绝对路径，
+ * 直接塞进 `<img src>` 是一片空白（webview 加载不了 `file:`，相对路径相对的是页面而不是工作目录）。
  */
 import { memo, useState, useRef, useEffect, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import CodeBlock from './code-block'
+import LocalImage from '@/ui/components/shared/LocalImage'
 import { splitStablePrefix } from './streamMarkdown'
+import { allowImageSrc } from './markdown-url'
 import './markdown-renderer.scss'
 
 /** 稳定的 remark 插件数组（避免每次渲染新建数组） */
@@ -92,6 +97,7 @@ const MarkdownBody = memo(function MarkdownBody({
   const components = useMemo(
     () => ({
       code: (props: any) => <CodeBlock inlineCode {...props} streaming={streaming} />,
+      img: ({ node, ...props }: any) => <LocalImage {...props} />,
       a: LinkRenderer as any,
       table: ({ children, ...props }: any) => (
         <div className="table-wrapper">
@@ -149,7 +155,10 @@ const MarkdownBody = memo(function MarkdownBody({
   )
 
   return (
-    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={components}>
+    <ReactMarkdown
+      remarkPlugins={REMARK_PLUGINS}
+      components={components}
+      urlTransform={allowImageSrc}>
       {content}
     </ReactMarkdown>
   )

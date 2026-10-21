@@ -1,0 +1,70 @@
+/* Markdown 正文里的图片（shared/LocalImage）：远程 / data 直出，本地路径读盘转 blob 后同样直出。
+   三种状态（骨架 / 图片 / 失败条）都按 inline 排，避免把所在的段落撑成块级。 */
+
+.md-image {
+  max-width: 100%;
+  /* 大截图不至于把整屏吃满（仍可点开放大看细节） */
+  max-height: 70vh;
+  border-radius: 8px;
+  margin: 8px 0;
+  vertical-align: top;
+  object-fit: contain;
+  cursor: zoom-in;
+}
+
+/* 加载中的骨架：延迟 150ms 才淡入 —— 本地图片常常一帧就到位，早显示只会闪一下灰块 */
+.md-image-loading {
+  display: inline-block;
+  width: 180px;
+  height: 110px;
+  margin: 8px 0;
+  border: 1px solid var(--border-color, #eeeeee);
+  border-radius: 8px;
+  background: var(--hover-bg, #f2f2f2);
+  vertical-align: top;
+  animation: md-image-appear 0.18s ease 0.15s both;
+}
+
+/* 加载不出来：给出「原因 + 原始地址」，别只留一片空白让人猜 */
+.md-image-failed {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(100%, 520px);
+  margin: 8px 0;
+  padding: 6px 10px;
+  border: 1px dashed var(--border-color, #dcdcdc);
+  border-radius: 8px;
+  background: var(--bg-secondary, #fafafa);
+  color: var(--text-secondary, #8a8a8a);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+  vertical-align: top;
+
+  svg {
+    flex: none;
+  }
+
+  .md-image-failed-text {
+    flex: none;
+  }
+
+  .md-image-failed-src {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+    font-size: var(--font-size-2xs);
+    opacity: 0.75;
+  }
+}
+
+@keyframes md-image-appear {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
