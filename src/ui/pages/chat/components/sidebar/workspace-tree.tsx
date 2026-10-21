@@ -8,6 +8,10 @@
  * 点项（`.` 开头）**不隐藏**：树与搜索都按 includeHidden: true 读盘 —— `.env` / `.gitignore` /
  * `.github` 是要编辑的正文。但**系统隐藏项**（如 `.git`：git 自己打上的隐藏属性）Rust 侧一律不列，
  * 前端不做第二道过滤。搜索只额外剪掉 `.git` 内部（版本库对象海量，扫一遍纯噪声）。
+ *
+ * **只监听展开的目录**（`use-dir-watch`）：根与每个展开项各一个非递归 watcher，折叠即退订 ——
+ * 整棵树（node_modules / target / .git）一次保存能刷出几千个事件，盯不起。事件到达只是
+ * 「静默重读这一层」，展开状态、选中、滚动全不动。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -41,6 +45,7 @@ import {
 import type { DirState, TreeEntry, TreeRow } from './tree-rows'
 import { useTreeDrag } from './use-tree-drag'
 import type { TreeDragItem } from './use-tree-drag'
+import { useDirWatchers } from './use-dir-watch'
 import { workspaceTreeMenuItems } from './tree-menu'
 import type { TreeMenuTarget } from './tree-menu'
 import SidebarSearch from './search-box'
@@ -67,6 +72,9 @@ const BASE_INDENT = 6
 
 /** 显示文件大小的最小容器宽度 */
 const SIZE_MIN_CONTAINER_WIDTH = 220
+
+/** 不监听任何目录（无工作目录 / 浏览器调试）—— 恒定引用，避免每帧重算 */
+const NO_DIRS: string[] = []
 
 /** 磁盘搜索命中上限（Rust 侧截断） */
 const SEARCH_MAX_RESULTS = 60
@@ -349,17 +357,43 @@ function WorkspaceTree({
     [rootPath, expanded, loadDir],
   )
 
-  /** 目录展开 / 折叠（首次展开触发懒加载） */
+  /**
+   * 目录展开 / 折叠：展开时读盘。首次是懒加载；已有缓存则**静默重读** —— 折叠期间没有 watcher，
+   * 缓存可能已被外部程序改过（不然会拿一份旧的列表一直显示）。
+   */
   const toggleExpand = useCallback(
     (dirPath: string, open?: boolean) => {
       const next = open ?? !expanded[dirPath]
-      if (next && !dirs[dirPath]?.entries && !dirs[dirPath]?.loading) {
-        void loadDir(dirPath)
+      if (next && !dirs[dirPath]?.loading) {
+        void loadDir(dirPath, !!dirs[dirPath]?.entries)
       }
       setExpanded((prev) => ({ ...prev, [dirPath]: next }))
     },
     [expanded, dirs, loadDir],
   )
+
+  /**
+   * 监听哪几层：根 + 所有**展开**的目录（折叠的不订）：整棵树盯不起，
+   * 而且只看「列表可能变了没」，不需要区分新增 / 删除 / 重命名。
+   */
+  const watchedDirs = useMemo(() => {
+    if (!rootPath || !isTauriEnv()) return NO_DIRS
+    const list = [rootPath]
+    for (const [path, open] of Object.entries(expanded)) {
+      if (open && path && path !== rootPath) list.push(path)
+    }
+    return list
+  }, [rootPath, expanded])
+
+  /** 某一层变了 → 静默重读（不置 loading、失败保留旧内容） */
+  const handleDirChanged = useCallback(
+    (dir: string) => {
+      void loadDir(dir, true)
+    },
+    [loadDir],
+  )
+
+  useDirWatchers(watchedDirs, handleDirChanged)
 
   /** 用一批行覆盖选择集 */
   const setSelection = useCallback((targets: TreeMenuTarget[]) => {

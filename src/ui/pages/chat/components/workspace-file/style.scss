@@ -198,6 +198,39 @@
   }
 }
 
+/* 磁盘上的文件被改过（本地还有草稿）：一条黄条 + 两个动作，绝不静默覆盖。
+   文件被删除时用同一条壳子（灰底），提示信息不一样。 */
+.wfp-disk-note {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-color, #e5e5e5);
+  background: var(--bg-secondary, #f7f7f8);
+  color: var(--text-secondary, #666);
+  font-size: var(--font-size-xs, 11px);
+
+  &.is-warn {
+    background: var(--color-warning-bg, #fffbeb);
+    color: var(--color-warning-text, #b45309);
+  }
+
+  .wfp-disk-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .wfp-action {
+    height: 22px;
+    padding: 0 6px;
+    font-size: var(--font-size-xs, 11px);
+  }
+}
+
 /* 文本：Monaco 占满剩余高度；面板里不要它那圈边框与圆角（会多出两层边界） */
 .wfp-editor {
   flex: 1;

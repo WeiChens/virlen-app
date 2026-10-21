@@ -64,6 +64,12 @@ export interface CodeEditorProps {
   className?: string
   /** Ctrl/Cmd+S 保存（工作目录文件面板用；不传则不接管这个快捷键） */
   onSave?: () => void
+  /**
+   * 编辑器实例就绪 / 销毁（销毁时传 null）。
+   * 给「不经受控 value、直接改内容」的调用方用（文件在磁盘上被改过时要按最小编辑刷新，
+   * 见 `applyTextChange`）—— 受控 value 走的是整篇替换，光标会被冲到文末。
+   */
+  onEditorMount?: (editor: MonacoNs.editor.IStandaloneCodeEditor | null) => void
 }
 
 function buildEditorOptions(
@@ -247,6 +253,9 @@ export default function CodeEditor(props: CodeEditorProps) {
   // addCommand 注册后闭包不会更新：保存回调走 ref，始终指向最新一次渲染
   const onSaveRef = useRef(props.onSave)
   onSaveRef.current = props.onSave
+  // 实例只在挂载时交出去一次，同样走 ref（调用方每帧可能是新的箭头函数）
+  const onEditorMountRef = useRef(props.onEditorMount)
+  onEditorMountRef.current = props.onEditorMount
 
   /**
    * 右键菜单：自绘窗口全局 preventDefault 了原生菜单，Monaco 自己的菜单又没在精简构建里
@@ -308,9 +317,14 @@ export default function CodeEditor(props: CodeEditorProps) {
       menu.openAt(event, editor)
     }
     node?.addEventListener('contextmenu', onContextMenu, true)
-    editor.onDidDispose(() =>
-      node?.removeEventListener('contextmenu', onContextMenu, true),
-    )
+    editor.onDidDispose(() => {
+      node?.removeEventListener('contextmenu', onContextMenu, true)
+      // 实例没了：调用方手里的引用必须失效，否则会往一个已 dispose 的 model 上写
+      onEditorMountRef.current?.(null)
+    })
+
+    // 把实例交给调用方（文件面板要按最小编辑刷新磁盘上的新内容）
+    onEditorMountRef.current?.(editor)
   }
 
   return (

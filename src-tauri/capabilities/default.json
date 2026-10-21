@@ -39,6 +39,8 @@
     "fs:allow-rename",
     "fs:allow-open",
     "fs:allow-seek",
+    "fs:allow-watch",
+    "fs:allow-unwatch",
     {
       "identifier": "fs:scope",
       "allow": [

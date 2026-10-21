@@ -7,7 +7,9 @@
  * 2. **文本走 Rust**：`read_file_with_hash` 带编码嗅探（UTF-8 / GBK / UTF-16…），
  *    前端的 `TextDecoder` 做不到；媒体走 plugin-fs 读字节，再交给 `<img>` / `<audio>` / `<video>`；
  * 3. **保存前比对磁盘 hash**：面板里的内容可能是几分钟前读的，期间编辑器 / AI / 终端都可能改过它 ——
- *    不一致就报冲突，而不是把别人的改动覆盖掉。
+ *    不一致就报冲突，而不是把别人的改动覆盖掉；
+ * 4. **监听正在看的那个文件**（`watchWorkspaceFile`）：只管「磁盘变了」这件事，怎么合并进编辑器
+ *    由面板决定（干净 → 最小编辑刷进去；脏 → 黄条，不覆盖）。
  */
 import { invoke } from '@tauri-apps/api/core'
 import * as tauriFs from '@tauri-apps/plugin-fs'
@@ -145,6 +147,56 @@ export async function loadWorkspaceFile(
     mime: mimeOf(name),
     byteSize: stat.size,
   }
+}
+
+/** 比较用的路径键：统一分隔符 + 小写（Windows / macOS 大小写不敏感） */
+function pathKey(path: string): string {
+  return path.replace(/\\/g, '/').toLowerCase()
+}
+
+/** 父目录（保留原分隔符：路径要原样交给系统 API） */
+function parentDirOf(path: string): string {
+  const index = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  // 顶层（`/a.txt`、`E:/a.txt`）没有可用的父目录 → 交给调用方退回监听文件本身
+  return index > 0 ? path.slice(0, index) : ''
+}
+
+/**
+ * 监听**单个文件**的变化（只用于面板里「正在看的那个文件」）。
+ *
+ * 三个关键选择：
+ * 1. **盯父目录而不是文件本身**：编辑器 / git / 脚本保存常是「写临时文件 + rename」，
+ *    inotify 跟的是 inode，文件被替换后原来那只 watch 不再有任何事件（Linux / macOS 上是真事）。
+ *    目录事件再按文件名过滤 —— VS Code 也是这么做的。
+ * 2. **非递归**：只关心同目录里这一个文件的落盘，不订阅整棵工作区。
+ * 3. **`delayMs` 交给插件在 Rust 侧防抖**：一次保存常冒出 2~4 个事件（写入 / 重命名 / 属性），
+ *    这里再叠一层只会让刷新更迟钝。
+ *
+ * 返回取消函数；监听失败（权限 / 目录不存在）由调用方决定是否降级 —— 面板的选择是
+ * 「退回手动刷新」，功能不受影响。
+ */
+export async function watchWorkspaceFile(
+  path: string,
+  onChange: () => void,
+  sessionId?: string,
+): Promise<() => void> {
+  const fullPath = await securityService.resolveSafePath(path, 'r', sessionId)
+  const target = pathKey(fullPath)
+  const dir = parentDirOf(fullPath)
+
+  return await tauriFs.watch(
+    dir || fullPath,
+    (event) => {
+      for (const changed of event.paths) {
+        // 只认这个文件本身：同一轮保存里目录也会出事件，不能拿它当「内容变了」
+        if (pathKey(String(changed)) === target) {
+          onChange()
+          return
+        }
+      }
+    },
+    { delayMs: 300 },
+  )
 }
 
 /**
