@@ -16,10 +16,14 @@
  * 6. **`ready` 与 `idle` 分开**：`idle` = 没有可识别的目标（未打开 / SVG，不该给按钮）；
  *    `ready` = 就绪但还没跑（设置关了自动识别，等用户点）—— 工具栏据此决定按钮要不要出现；
  * 7. **SVG 不识别**：它不是位图，OCR 必然失败，直接 `idle`（不打扰用户）。
+ *
+ * 状态里的 `done` 除了拼好的 `text`，还带**逐框坐标**（`boxes` + 坐标系 `size`）：预览的透明定位层
+ * 靠它把文字摆回图片上的原位。坐标是那次推理顺带得到的（不额外花钱），但老缓存 / 后端缺字段时
+ * 会是空：界面自己退回纯文本面板（见 `shared/ImageOcr` 的 `placedBoxes`）。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { vision } from '@/infrastructure/vision'
-import type { ImageOcrResult } from '@/infrastructure/vision/types'
+import type { ImageOcrBox, ImageOcrResult, ImageOcrSize } from '@/infrastructure/vision/types'
 import { settingsState } from '@/ui/store/settingStore'
 import { bytesToBase64, imageMimeOf, readImageBytes } from '@/utils/clipboard'
 
@@ -29,8 +33,11 @@ export type ImageOcrState =
   /** 就绪，还没识别（设置关了「打开即识别」，等用户点工具栏） */
   | { status: 'ready' }
   | { status: 'loading' }
-  /** 识别完成：`text` 为空串 = 这次没读出字（可能是引擎瞬时失败，界面给「重新识别」） */
-  | { status: 'done'; text: string }
+  /**
+   * 识别完成：`text` 为空串 = 这次没读出字（可能是引擎瞬时失败，界面给「重新识别」）；
+   * `boxes` + `size` 是透明定位层的原料（原图像素坐标），缺了就退化成纯文本面板。
+   */
+  | { status: 'done'; text: string; boxes: ImageOcrBox[]; size: ImageOcrSize | null }
   | { status: 'error'; message: string }
 
 export interface ImageOcrHandle {
@@ -140,7 +147,17 @@ export function useImageOcr(
     task.then(
       (result) => {
         // `?? ''`：命令返回体意外为空时宁可显示「未识别到文字」，也不要把预览整体打挂
-        if (!cancelled) setState({ status: 'done', text: result?.text ?? '' })
+        if (!cancelled) {
+          setState({
+            status: 'done',
+            text: result?.text ?? '',
+            boxes: result?.boxes ?? [],
+            size:
+              result?.width && result?.height
+                ? { width: result.width, height: result.height }
+                : null,
+          })
+        }
       },
       (error: unknown) => {
         if (!cancelled) {

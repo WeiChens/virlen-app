@@ -10,6 +10,22 @@ export interface VisionAnalyzeResult {
   image_size: [number, number]
 }
 
+/** 一个 OCR 文本框：**原图像素坐标**（左上角 + 宽高） */
+export interface ImageOcrBox {
+  /** 这一框识别出的文字 */
+  text: string
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+/** 文本框坐标系 = 送去推理的图片尺寸 */
+export interface ImageOcrSize {
+  width: number
+  height: number
+}
+
 /**
  * 只做 OCR 的结果（图片预览用）。
  *
@@ -20,4 +36,10 @@ export interface ImageOcrResult {
   text: string
   /** 是否命中磁盘缓存（true = 这次没跑推理） */
   cached: boolean
+  /** 逐个文本框：预览的透明定位层靠它把文字摆回图片上的原位 */
+  boxes?: ImageOcrBox[]
+  /** 文本框坐标系的宽（= 送去推理的图片像素宽） */
+  width?: number
+  /** 文本框坐标系的高 */
+  height?: number
 }

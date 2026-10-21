@@ -10,13 +10,19 @@ import EventEmitter from '@/utils/EventEmitter'
 import { t } from '@/ui/i18n'
 import ContextMenu, {
   useContextMenu,
+  type ContextMenuItem,
 } from '@/ui/components/shared/ContextMenu'
 import { imageMenuItems } from '@/ui/components/shared/ContextMenu/menus'
-import ImageOcrLayer, {
+import ImageOcrPlane, {
   canOcr,
   ImageOcrIcon,
+  ImageOcrOverlay,
   nextOcrAction,
   ocrButtonTitle,
+  ocrTextMenuItems,
+  selectAllOcrText,
+  selectedLinesText,
+  type ImageOcrNatural,
 } from '@/ui/components/shared/ImageOcr'
 import { useImageOcr } from '@/ui/hooks/useImageOcr'
 export interface ImagePreviewProps {
@@ -29,6 +35,20 @@ type ImagePreviewEventParams = {
   show: (params: ImagePreviewProps, consumption: { value: boolean }) => void
 }
 const imagePreviewEvent = new EventEmitter<ImagePreviewEventParams>()
+
+/**
+ * 右键菜单的两种宿主：图片本体（复制图片 / 另存为…）与 OCR 文字层（复制 / 全选）。
+ * 文字层那种把**选区快照**也一并带上：菜单是另一棵树里的按钮，点它时选区可能已被折叠。
+ */
+type PreviewMenuTarget =
+  | { kind: 'image'; src: string }
+  | ({ kind: 'text' } & Parameters<typeof ocrTextMenuItems>[0])
+
+/** 右键菜单项：图片本体走 `imageMenuItems`（复制图片 / 另存为…），文字层走「复制 / 全选」 */
+function menuItemsOf(target: PreviewMenuTarget): ContextMenuItem[] {
+  return target.kind === 'text' ? ocrTextMenuItems(target) : imageMenuItems(target.src)
+}
+
 function ImagePreview() {
   const [showPreview, setShowPreview] = useState(false)
   const [src, setSrc] = useState('')
@@ -49,7 +69,7 @@ function ImagePreview() {
    * （而非 DOM 树）冒泡 —— 菜单虽经 portal 挂到 body，只要在 React 树里是 overlay 的子节点，
    * 点菜单项就会连预览一起关掉。
    */
-  const menu = useContextMenu<string>()
+  const menu = useContextMenu<PreviewMenuTarget>()
 
   // 未提供列表时退化为单张
   const imageList = previewSrcList.length > 0 ? previewSrcList : [src]
@@ -99,7 +119,11 @@ function ImagePreview() {
     setPosition({ x: 0, y: 0 })
   }
 
-  const handleMouseDown = (e: React.MouseEvent<HTMLImageElement>) => {
+  const handleMouseDown = (e: React.MouseEvent<HTMLElement>) => {
+    // 文字层上按下是为了选字，不是拖图
+    if (e.target instanceof Element && e.target.closest('.image-ocr-run, .image-ocr-panel')) {
+      return
+    }
     e.preventDefault()
     setIsDragging(true)
     setDragStart({
@@ -159,8 +183,8 @@ function ImagePreview() {
     if (!showPreview) return
 
     const handleWheel = (e: WheelEvent) => {
-      // 文字层自己可滚动：滚它不应该缩放图片（document 级监听拦在最外层，只能在这里放行）
-      if (e.target instanceof Element && e.target.closest('.image-ocr-layer')) return
+      // 纯文本退路面板自己可滚动：滚它不应该缩放图片
+      if (e.target instanceof Element && e.target.closest('.image-ocr-panel')) return
       e.preventDefault()
       e.stopPropagation()
 
@@ -233,14 +257,14 @@ function ImagePreview() {
           handleNext={handleNext}
           handleClose={handleClose}
           referrerPolicy={referrerPolicy}
-          onImageContextMenu={(ev, src) => menu.openAt(ev, src)}
+          onImageContextMenu={(ev, target) => menu.openAt(ev, target)}
         />
       )}
       {/* 与 overlay 平级：不能被它的「点击关闭」吃掉，见上 */}
       {showPreview && menu.state && (
         <ContextMenu
           position={menu.state.position}
-          items={imageMenuItems(menu.state.target)}
+          items={menuItemsOf(menu.state.target)}
           onClose={menu.close}
         />
       )}
@@ -262,11 +286,11 @@ interface ImagePreviewOverlayProps {
   isDragging: boolean
   position: { x: number; y: number }
   rotate: number
-  handleMouseDown: (e: React.MouseEvent<HTMLImageElement>) => void
+  handleMouseDown: (e: React.MouseEvent<HTMLElement>) => void
   handlePrev: () => void
   handleNext: () => void
   referrerPolicy?: HTMLAttributeReferrerPolicy
-  onImageContextMenu: (ev: React.MouseEvent, src: string) => void
+  onImageContextMenu: (ev: React.MouseEvent, target: PreviewMenuTarget) => void
 }
 function ImagePreviewOverlay(props: ImagePreviewOverlayProps) {
   const {
@@ -292,6 +316,11 @@ function ImagePreviewOverlay(props: ImagePreviewOverlayProps) {
 
   // 当前这张图的 OCR（只做识别文字，不做视觉识别）：开关由设置 `imageOcrAutoPreview` 决定
   const ocr = useImageOcr({ src: imageList[currentIndex] ?? '' })
+  /** 当前图片的实际像素尺寸：只用于校验 EXIF 方向（对不上就不摆字） */
+  const [natural, setNatural] = useState<ImageOcrNatural | null>(null)
+  useEffect(() => {
+    setNatural(null)
+  }, [currentIndex])
   /** 文字层**默认收起**：图先看得干净，要看文字再点工具栏（切图也回到收起） */
   const [ocrVisible, setOcrVisible] = useState(false)
   useEffect(() => {
@@ -365,24 +394,56 @@ function ImagePreviewOverlay(props: ImagePreviewOverlayProps) {
       <div
         className="image-preview-container"
         onClick={(e) => e.stopPropagation()}>
-        <img
-          ref={imageRef}
-          src={imageList[currentIndex]}
-          alt={alt}
-          referrerPolicy={referrerPolicy}
-          className={`preview-image ${isDragging ? 'dragging' : ''}`}
+        {/* 图片与透明文字层共用一个「变换锚点」：字必须跟着图片一起平移 / 旋转 / 缩放 */}
+        <div
+          className={`image-preview-anchor${isDragging ? ' dragging' : ''}`}
           style={{
             transform: `translate(${position.x}px, ${position.y}px) scale(${scale}) rotate(${rotate}deg)`,
             cursor: isDragging ? 'grabbing' : 'grab',
           }}
           onMouseDown={handleMouseDown}
-          onContextMenu={(e) =>
-            onImageContextMenu(e, imageList[currentIndex])
-          }
-        />
-        <ImageOcrLayer
+          onContextMenu={(e) => {
+            const onText =
+              e.target instanceof Element &&
+              e.target.closest('.image-ocr-run, .image-ocr-panel') !== null
+            if (!onText) {
+              onImageContextMenu(e, { kind: 'image', src: imageList[currentIndex] })
+              return
+            }
+            // 文字层：复制 / 全选 —— 本窗口全局屏蔽了系统右键菜单，让给系统等于什么都没有
+            const root = e.currentTarget.querySelector<HTMLElement>(
+              '.image-ocr-layer, .image-ocr-panel-text',
+            )
+            onImageContextMenu(e, {
+              kind: 'text',
+              text: ocr.state.status === 'done' ? ocr.state.text : '',
+              root,
+              // 开菜单这一刻的选区快照（点菜单项时选区可能已被折叠）
+              selection: selectedLinesText(root),
+              onSelectAll: () => selectAllOcrText(root),
+            })
+          }}>
+          <img
+            ref={imageRef}
+            src={imageList[currentIndex]}
+            alt={alt}
+            referrerPolicy={referrerPolicy}
+            className="preview-image"
+            draggable={false}
+            onDragStart={(e) => e.preventDefault()}
+            onLoad={(e) =>
+              setNatural({
+                width: e.currentTarget.naturalWidth,
+                height: e.currentTarget.naturalHeight,
+              })
+            }
+          />
+          <ImageOcrPlane state={ocr.state} visible={ocrVisible} natural={natural} />
+        </div>
+        <ImageOcrOverlay
           state={ocr.state}
           visible={ocrVisible}
+          natural={natural}
           onRetry={ocr.retry}
         />
       </div>

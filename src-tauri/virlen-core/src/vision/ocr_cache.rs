@@ -15,6 +15,7 @@
 //! （理由同 `vision/mod.rs`：stdout 是 CLI 的机器可读通道）。文件损坏 / 版本不符一律当作空缓存。
 
 use crate::agent::host::HostEnv;
+use crate::vision::OcrBox;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -27,7 +28,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const CACHE_FILE: &str = "image-ocr-cache.json";
 
 /// 文件格式版本：不认识就整份丢弃（旧格式的坏条目比重新 OCR 一次更贵）
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 /// 条目上限；越线时按写入时间淘汰到 [`KEEP_ENTRIES`]。一张图的文本通常几 KB，
 /// 400 条 ≈ 1MB 量级 —— 再大就该换存储形态了（那时再想 sqlite，不为省几 KB 提前做）。
@@ -38,8 +39,26 @@ const KEEP_ENTRIES: usize = 300;
 struct Entry {
     /// OCR 文本（**不会为空**：空结果不入缓存，见模块头）
     text: String,
+    #[serde(default)]
+    boxes: Vec<OcrBox>,
+    #[serde(default)]
+    width: u32,
+    #[serde(default)]
+    height: u32,
     /// 写入时间（Unix 秒）—— 只用于淘汰
     at: u64,
+}
+
+/// One cached OCR result: text + per-box coordinates (plus the coordinate space size).
+///
+/// v2 新增了 `boxes` / `width` / `height`：预览的透明定位层要用文本框坐标。
+/// v1 条目只有文本、没有框，命中之后就定位不了字 —— 所以 `VERSION` 抬到 2，v1 文件整份丢弃重算。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CachedOcr {
+    pub text: String,
+    pub boxes: Vec<OcrBox>,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -73,14 +92,25 @@ fn read_cache(path: &Path) -> HashMap<String, Entry> {
         Ok(mut body) if body.version == VERSION => {
             // 旧版本 / 旧逻辑写进来的空条目不认（见模块头：空结果可能是瞬时失败）
             let stale = body.entries.len();
-            body.entries.retain(|_, e| !e.text.trim().is_empty());
+            body.entries
+                .retain(|_, e| !e.text.trim().is_empty() && !e.boxes.is_empty());
             let dropped = stale - body.entries.len();
             if dropped > 0 {
                 eprintln!("[Vision] Dropped {} empty OCR cache entries", dropped);
             }
             body.entries
         }
-        _ => {
+        Ok(body) => {
+            // 版本不符（v1 条目没有框）：整份丢弃，让每张图重算一次（秒级、一次性）
+            eprintln!(
+                "[Vision] OCR cache format v{} != v{}, starting empty: {}",
+                body.version,
+                VERSION,
+                path.display()
+            );
+            HashMap::new()
+        }
+        Err(_) => {
             eprintln!("[Vision] OCR cache unreadable, starting empty: {}", path.display());
             HashMap::new()
         }
@@ -145,17 +175,22 @@ fn mirror_for<'a>(slot: &'a mut Option<Mirror>, host: &dyn HostEnv) -> &'a mut M
 }
 
 /// 读缓存：`Some(text)` 即命中（**空串同样算命中**），`None` = 这张图没识别过
-pub fn get(host: &dyn HostEnv, key: &str) -> Option<String> {
+pub fn get(host: &dyn HostEnv, key: &str) -> Option<CachedOcr> {
     let mut guard = MIRROR.lock().ok()?;
     let mirror = mirror_for(&mut guard, host);
-    mirror.entries.get(key).map(|e| e.text.clone())
+    mirror.entries.get(key).map(|e| CachedOcr {
+        text: e.text.clone(),
+        boxes: e.boxes.clone(),
+        width: e.width,
+        height: e.height,
+    })
 }
 
 /// 写缓存（best-effort：失败只记日志，调用方照常拿到 OCR 结果）
 ///
 /// 空结果**一律不写**：它可能是「真的没字」，也可能是引擎/推理的瞬时失败（模块头）。
-pub fn put(host: &dyn HostEnv, key: &str, text: &str) {
-    if text.trim().is_empty() {
+pub fn put(host: &dyn HostEnv, key: &str, ocr: &CachedOcr) {
+    if ocr.text.trim().is_empty() {
         return;
     }
     let mut guard = match MIRROR.lock() {
@@ -166,7 +201,10 @@ pub fn put(host: &dyn HostEnv, key: &str, text: &str) {
     mirror.entries.insert(
         key.to_string(),
         Entry {
-            text: text.to_string(),
+            text: ocr.text.clone(),
+            boxes: ocr.boxes.clone(),
+            width: ocr.width,
+            height: ocr.height,
             at: now(),
         },
     );
@@ -206,6 +244,22 @@ mod tests {
         *MIRROR.lock().unwrap() = None;
     }
 
+    /// 造一条缓存（带一个框：没有框的条目会被当成「摆不出位置」丢掉）
+    fn cached(x: i32, y: i32, w: i32, h: i32, text: &str) -> CachedOcr {
+        CachedOcr {
+            text: text.to_string(),
+            boxes: vec![OcrBox {
+                text: text.to_string(),
+                x,
+                y,
+                w,
+                h,
+            }],
+            width: 800,
+            height: 600,
+        }
+    }
+
     #[test]
     fn fingerprint_is_content_based() {
         assert_eq!(fingerprint(b"abc"), fingerprint(b"abc"));
@@ -220,16 +274,17 @@ mod tests {
         let host = FixedHost { data: dir.clone() };
         let key = fingerprint(b"pic");
 
-        assert_eq!(get(&host, &key), None, "没写过就是没命中");
-        put(&host, &key, "识别出的文字");
-        assert_eq!(get(&host, &key), Some("识别出的文字".to_string()));
+        assert!(get(&host, &key).is_none(), "没写过就是没命中");
+        put(&host, &key, &cached(10, 20, 100, 30, "识别出的文字"));
+        let hit = get(&host, &key).expect("刚写完应当命中");
+        assert_eq!(hit.text, "识别出的文字");
+        assert_eq!(hit.boxes.len(), 1, "文本框坐标也要活下来（定位层靠它）");
+        assert_eq!((hit.width, hit.height), (800, 600));
 
         restart();
-        assert_eq!(
-            get(&host, &key),
-            Some("识别出的文字".to_string()),
-            "重启后仍命中（落盘生效）"
-        );
+        let hit = get(&host, &key).expect("重启后仍命中（落盘生效）");
+        assert_eq!(hit.text, "识别出的文字");
+        assert_eq!((hit.boxes[0].x, hit.boxes[0].y), (10, 20));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -240,24 +295,35 @@ mod tests {
         let host = FixedHost { data: dir.clone() };
         let key = fingerprint(b"blank");
 
-        put(&host, &key, "");
-        put(&host, &key, "   \n ");
-        assert_eq!(get(&host, &key), None);
+        put(&host, &key, &cached(0, 0, 1, 1, ""));
+        put(&host, &key, &cached(0, 0, 1, 1, "   \n "));
+        assert!(get(&host, &key).is_none());
         restart();
-        assert_eq!(get(&host, &key), None, "落盘文件里也不该出现空条目");
+        assert!(get(&host, &key).is_none(), "落盘文件里也不该出现空条目");
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// 旧版本写进来的空条目要在读盘时丢掉（用户已经踩过的坑，升级后自动愈合）
+    /// v1 文件（条目没有框）整份丢弃：命中之后定位层摆不出位置，不如重算
     #[test]
-    fn legacy_empty_entries_are_dropped_on_load() {
-        let dir = tmp_dir("legacy-empty");
-        let raw = r#"{"version":1,"entries":{"deadbeef":{"text":"","at":1},"keep":{"text":"有字","at":2}}}"#;
+    fn legacy_version_file_is_discarded() {
+        let dir = tmp_dir("legacy-v1");
+        let raw = r#"{"version":1,"entries":{"keep":{"text":"有字","at":2}}}"#;
         std::fs::write(dir.join(CACHE_FILE), raw).unwrap();
         let host = FixedHost { data: dir.clone() };
 
-        assert_eq!(get(&host, "deadbeef"), None, "空条目必须被丢掉");
-        assert_eq!(get(&host, "keep"), Some("有字".to_string()), "有效条目要保留");
+        assert!(get(&host, "keep").is_none(), "v1 条目没有框，不能当命中");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 同版本但「有文本没框」的条目也丢（手改 / 写半截的文件）
+    #[test]
+    fn entries_without_boxes_are_dropped_on_load() {
+        let dir = tmp_dir("no-boxes");
+        let raw = r#"{"version":2,"entries":{"nobox":{"text":"有字","at":1}}}"#;
+        std::fs::write(dir.join(CACHE_FILE), raw).unwrap();
+        let host = FixedHost { data: dir.clone() };
+
+        assert!(get(&host, "nobox").is_none(), "没框就定位不了，不如重算");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -269,9 +335,9 @@ mod tests {
         let host_b = FixedHost { data: b.clone() };
         let key = fingerprint(b"pic");
 
-        put(&host_a, &key, "hello");
-        assert_eq!(get(&host_a, &key), Some("hello".to_string()));
-        assert_eq!(get(&host_b, &key), None, "另一个数据目录不该看到这条缓存");
+        put(&host_a, &key, &cached(1, 2, 3, 4, "hello"));
+        assert_eq!(get(&host_a, &key).map(|h| h.text), Some("hello".to_string()));
+        assert!(get(&host_b, &key).is_none(), "另一个数据目录不该看到这条缓存");
 
         std::fs::remove_dir_all(&a).ok();
         std::fs::remove_dir_all(&b).ok();
@@ -282,10 +348,13 @@ mod tests {
         let dir = tmp_dir("broken");
         std::fs::write(dir.join(CACHE_FILE), "{not json").unwrap();
         let host = FixedHost { data: dir.clone() };
-        assert_eq!(get(&host, &fingerprint(b"pic")), None);
+        assert!(get(&host, &fingerprint(b"pic")).is_none());
         // 坏文件不该让写入也失效
-        put(&host, &fingerprint(b"pic"), "ok");
-        assert_eq!(get(&host, &fingerprint(b"pic")), Some("ok".to_string()));
+        put(&host, &fingerprint(b"pic"), &cached(0, 0, 5, 5, "ok"));
+        assert_eq!(
+            get(&host, &fingerprint(b"pic")).map(|h| h.text),
+            Some("ok".to_string())
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -297,6 +366,9 @@ mod tests {
                 format!("k{i}"),
                 Entry {
                     text: "t".to_string(),
+                    boxes: Vec::new(),
+                    width: 0,
+                    height: 0,
                     at: i as u64,
                 },
             );

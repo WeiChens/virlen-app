@@ -17,7 +17,7 @@
 use crate::agent::host::{compile_time_resource_root, HostEnv};
 use once_cell::sync::Lazy;
 use quasivision::pipeline::PipelineConfig;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -260,6 +260,9 @@ pub fn ocr_image_at(models_dir: &Path, img: &image::DynamicImage) -> Result<OcrT
     Ok(OcrText {
         text: text_of_ocr_boxes(&result.texts),
         sideways: sideways_ratio(&result.texts),
+        boxes: ocr_boxes(&result.texts),
+        width: img.width(),
+        height: img.height(),
     })
 }
 
@@ -280,6 +283,21 @@ fn decode_image(img_bytes: &[u8]) -> Result<image::DynamicImage, String> {
     })
 }
 
+/// 一个 OCR 文本框（**原图像素坐标**：左上角 + 宽高）。
+///
+/// 预览里的「透明定位层」靠它把识别出的文字摆回图片上的原位（`docs/agents/02-subsystems.md` §5.6）。
+/// 坐标来自 quasivision 的 det 模型，`detect_text` 已把降采样空间还原回原图空间，
+/// 所以这里直接就是「原图像素」——前端按 `框 / 原图尺寸` 换算百分比即可，缩放平移全自动跟随。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OcrBox {
+    /// 这一框识别出的文字（已 trim）
+    pub text: String,
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
 /// 一段 OCR 结果
 #[derive(Debug, Clone)]
 pub struct OcrText {
@@ -290,6 +308,11 @@ pub struct OcrText {
     /// 调用方靠它决定要不要换方向重试（`doc_parse::ocr`）：
     /// PP-OCR 对旋转文字只能认出一部分，硬读会得到残缺的文本。
     pub sideways: f32,
+    /// 逐个文本框（阅读顺序：先上后下、先左后右）—— 预览的透明定位层用
+    pub boxes: Vec<OcrBox>,
+    /// 送去推理的图片尺寸（= 文本框坐标系）
+    pub width: u32,
+    pub height: u32,
 }
 
 /// 「竖着」的文本框占比（没有文本框 → 0）
@@ -362,6 +385,38 @@ fn rows_overlap(a_min: i32, a_max: i32, b_min: i32, b_max: i32) -> bool {
     overlap * 2 > shortest
 }
 
+/// 逐个文本框（透明定位层用）：只要带文字的框，按阅读顺序排。
+///
+/// 与 [`text_of_ocr_boxes`] 的区别：那边把同一行的多个框**用空格拼成一行**（给人读 / 给 AI 看），
+/// 这边保持**一个框一项**（给定位用）—— 两个框各自有自己的坐标，合并就定位不了了。
+fn ocr_boxes(elements: &[quasivision::Element]) -> Vec<OcrBox> {
+    let mut boxes: Vec<OcrBox> = elements
+        .iter()
+        .filter_map(|e| {
+            let text = e.text_content.as_deref().map(str::trim)?;
+            if text.is_empty() {
+                return None;
+            }
+            let p = &e.position;
+            let (w, h) = (p.column_max - p.column_min, p.row_max - p.row_min);
+            // 退化框（宽或高为 0）摆到图上就是一条看不见的线，不如不画
+            if w <= 0 || h <= 0 {
+                return None;
+            }
+            Some(OcrBox {
+                text: text.to_string(),
+                x: p.column_min,
+                y: p.row_min,
+                w,
+                h,
+            })
+        })
+        .collect();
+    // 排序口径与 `text_of_ocr_boxes` 一致（先上后下、先左后右），只差「不合并成行」
+    boxes.sort_by_key(|b| (b.y, b.x));
+    boxes
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 预览入口：只要文字 + 按内容指纹缓存
 // ═══════════════════════════════════════════════════════════════════════════
@@ -401,6 +456,9 @@ pub fn ocr_preview_at(models_dir: &Path, img: &image::DynamicImage) -> Result<Oc
     Ok(OcrText {
         text: text_of_ocr_boxes(&result.texts),
         sideways: sideways_ratio(&result.texts),
+        boxes: ocr_boxes(&result.texts),
+        width: img.width(),
+        height: img.height(),
     })
 }
 
@@ -408,7 +466,24 @@ pub fn ocr_preview_at(models_dir: &Path, img: &image::DynamicImage) -> Result<Oc
 #[derive(Debug, Clone, Serialize)]
 pub struct OcrCachedText {
     pub text: String,
+    /// 逐个文本框（原图像素坐标）：前端的透明定位层靠它把文字摆回原位
+    pub boxes: Vec<OcrBox>,
+    /// 文本框坐标系 = 送去推理的图片尺寸（前端拿它算百分比，并与 `naturalWidth` 校验 EXIF 方向）
+    pub width: u32,
+    pub height: u32,
     pub cached: bool,
+}
+
+impl OcrCachedText {
+    fn from_cache(hit: ocr_cache::CachedOcr) -> Self {
+        Self {
+            text: hit.text,
+            boxes: hit.boxes,
+            width: hit.width,
+            height: hit.height,
+            cached: true,
+        }
+    }
 }
 
 /// 空结果重试前的等待：给刚抢过 CPU / 显存的并发视觉任务一点时间收尾
@@ -430,25 +505,37 @@ pub fn ocr_image_cached(
 ) -> Result<OcrCachedText, String> {
     let key = ocr_cache::fingerprint(img_bytes);
     if !force {
-        if let Some(text) = ocr_cache::get(host, &key) {
-            return Ok(OcrCachedText { text, cached: true });
+        if let Some(hit) = ocr_cache::get(host, &key) {
+            return Ok(OcrCachedText::from_cache(hit));
         }
     }
 
     let _serial = OCR_SERIAL.lock().map_err(|e| format!("Lock error: {}", e))?;
     if !force {
-        if let Some(text) = ocr_cache::get(host, &key) {
-            return Ok(OcrCachedText { text, cached: true });
+        if let Some(hit) = ocr_cache::get(host, &key) {
+            return Ok(OcrCachedText::from_cache(hit));
         }
     }
 
     let dir = models_dir(host)?;
-    let text = ocr_text_with_retry(&dir, img_bytes)?;
-    if !text.trim().is_empty() {
-        ocr_cache::put(host, &key, &text);
+    let ocr = ocr_text_with_retry(&dir, img_bytes)?;
+    if !ocr.text.trim().is_empty() {
+        ocr_cache::put(
+            host,
+            &key,
+            &ocr_cache::CachedOcr {
+                text: ocr.text.clone(),
+                boxes: ocr.boxes.clone(),
+                width: ocr.width,
+                height: ocr.height,
+            },
+        );
     }
     Ok(OcrCachedText {
-        text,
+        text: ocr.text,
+        boxes: ocr.boxes,
+        width: ocr.width,
+        height: ocr.height,
         cached: false,
     })
 }
@@ -458,18 +545,18 @@ pub fn ocr_image_cached(
 /// 为什么重试：`detect_text` 在「引擎刚被并发任务拆掉 / predict 失败」时返回空而不是报错
 /// （只往 stderr 记一行，GUI 里看不到）。这类失败几乎都是一次性的，第二次就能读出来；
 /// 解码失败这种真错误仍原样上报。
-fn ocr_text_with_retry(models_dir: &Path, img_bytes: &[u8]) -> Result<String, String> {
+fn ocr_text_with_retry(models_dir: &Path, img_bytes: &[u8]) -> Result<OcrText, String> {
     // 只解码一次：重试复用同一张 `DynamicImage`（解码一份 4K 截图不算便宜）
     let img = decode_image(img_bytes)?;
     let first = ocr_preview_at(models_dir, &img)?;
     if !first.text.trim().is_empty() {
-        return Ok(first.text);
+        return Ok(first);
     }
     std::thread::sleep(OCR_RETRY_DELAY);
     match ocr_preview_at(models_dir, &img) {
-        Ok(second) if !second.text.trim().is_empty() => Ok(second.text),
+        Ok(second) if !second.text.trim().is_empty() => Ok(second),
         // 第二次也空 / 报错：如实回空，交给界面说「未识别到文字（可重试）」
-        _ => Ok(first.text),
+        _ => Ok(first),
     }
 }
 
@@ -759,6 +846,30 @@ mod tests {
         assert_eq!(sideways_ratio(&sideways), 1.0);
     }
 
+    /// 定位层用的逐框输出：一个框一项（不合并成行）、按阅读顺序排、丢弃空框与退化框
+    #[test]
+    fn ocr_boxes_keep_one_item_per_detection_in_reading_order() {
+        let mut blank = ocr_box(9, (0, 10), (0, 10), "  ");
+        blank.text_content = None;
+        let degenerate = ocr_box(8, (10, 10), (10, 10), "zero-size");
+        let boxes = vec![
+            ocr_box(3, (120, 200), (50, 70), "30"),
+            ocr_box(1, (0, 100), (10, 30), "Name"),
+            degenerate,
+            blank,
+            ocr_box(4, (0, 100), (50, 70), "Alice"),
+            ocr_box(2, (120, 200), (10, 30), "Age"),
+        ];
+        let out = ocr_boxes(&boxes);
+
+        // 同一行的两个框各自保留（定位需要各自的坐标）；顺序 = 先上后下、先左后右
+        let texts: Vec<&str> = out.iter().map(|b| b.text.as_str()).collect();
+        assert_eq!(texts, vec!["Name", "Age", "Alice", "30"]);
+        // 坐标与宽高直接照搬检测框（原图像素，left/top/width/height）
+        assert_eq!((out[0].x, out[0].y, out[0].w, out[0].h), (0, 10, 100, 20));
+        assert_eq!((out[2].x, out[2].y, out[2].w, out[2].h), (0, 50, 100, 20));
+    }
+
     #[test]
     fn is_web_hint_matches_legacy_rule() {
         assert!(is_web_hint("C:/x/webpage.png"));
@@ -789,11 +900,29 @@ mod tests {
             data: dir.clone(),
         };
         let bytes = b"pretend-image-bytes";
-        ocr_cache::put(&host, &ocr_cache::fingerprint(bytes), "识别过的文字");
+        ocr_cache::put(
+            &host,
+            &ocr_cache::fingerprint(bytes),
+            &ocr_cache::CachedOcr {
+                text: "识别过的文字".to_string(),
+                boxes: vec![OcrBox {
+                    text: "识别过的文字".to_string(),
+                    x: 12,
+                    y: 24,
+                    w: 160,
+                    h: 32,
+                }],
+                width: 640,
+                height: 480,
+            },
+        );
 
         let r = ocr_image_cached(&host, bytes, false).unwrap();
         assert_eq!(r.text, "识别过的文字");
         assert!(r.cached, "命中缓存时 cached 应为 true");
+        assert_eq!(r.boxes.len(), 1, "框坐标也要一并回来（定位层靠它）");
+        assert_eq!((r.boxes[0].x, r.boxes[0].y, r.boxes[0].w, r.boxes[0].h), (12, 24, 160, 32));
+        assert_eq!((r.width, r.height), (640, 480));
 
         // force = 用户的「重新识别」：必须绕过缓存（会真的去加载模型 → 没模型就报错）
         let err = ocr_image_cached(&host, bytes, true).unwrap_err();

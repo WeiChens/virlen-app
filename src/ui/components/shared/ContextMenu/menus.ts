@@ -141,17 +141,26 @@ export function imageMenuItems(
  * 选区优先是刻意的：菜单叫「复制」而用户已拖选半句话时，期望复制的是那半句
  * （与终端 Ctrl+C 的约定一致）。`copyLabel` 供「复制」在别处有更具体称呼的场景
  * （如代码块的「复制代码」）。
+ *
+ * `getSelected` 给「选区不能直接从 window 拿」的场景用（图片 OCR 文字层要按行补换行、
+ * 退路面板要看自己的根节点）；它在**点菜单项那一刻**被调用，所以调用方得自己兼顾
+ * 「浏览器已经把选区折叠掉」的情况。
  */
 export function textMenuItems(
   getText: () => string,
-  opts: { selectAll?: () => void; allLabel?: string; copyLabel?: string } = {},
+  opts: {
+    selectAll?: () => void
+    allLabel?: string
+    copyLabel?: string
+    getSelected?: () => string
+  } = {},
 ): ContextMenuItem[] {
   const items: ContextMenuItem[] = [
     {
       key: 'copy',
       label: opts.copyLabel ?? t('复制'),
       onClick: async () => {
-        const selected = window.getSelection?.()?.toString() ?? ''
+        const selected = opts.getSelected?.() ?? window.getSelection?.()?.toString() ?? ''
         const text = selected || getText()
         const ok = await copyText(text)
         showToast(ok ? t('已复制到剪贴板') : t('复制失败'))

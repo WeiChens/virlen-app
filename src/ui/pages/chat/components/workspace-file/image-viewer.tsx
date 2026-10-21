@@ -9,10 +9,12 @@
  * 3. **平移夹边**：放大后的图不能被拖出视口（`clampPan`），旋转 90° 时宽高互换也要算进去。
  * 4. **旋转只影响查看**：它不改图片字节、也不产生「未保存」——用户要转的是「看」，不是「存」。
  * 5. **右键菜单与消息里的图片同源**：复制图片 / 另存为复用 `imageMenuItems`，只在本文件追加
- *    旋转与视图动作（blob URL 没有扩展名，所以把 `mime` 一并传下去）。
+ *    旋转与视图动作（blob URL 没有扩展名，所以把 `mime` 一并传下去）；
+ *    文字层里右键换成「复制 / 全选」（`ocrTextMenuItems`）—— 本窗口全局屏蔽了系统右键菜单，
+ *    让给系统等于什么都没有。
  * 6. **识别文字默认不跑也不显示**：设置 → 「图片预览自动识别文字」打开时，打开预览就跑一次 OCR；
- *    否则点工具栏「识别文字」才识别（只做 OCR，不做视觉识别）。文本以半透明文字层盖在图上，
- *    默认收起，识别逻辑在 `hooks/useImageOcr` + `shared/ImageOcr`。
+ *    否则点工具栏「识别文字」才识别（只做 OCR，不做视觉识别）。结果以**透明定位层**摆在图片上的
+ *    原位置（可直接选中复制），默认收起，识别逻辑在 `hooks/useImageOcr` + `shared/ImageOcr`。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { t } from '@/ui/i18n'
@@ -21,11 +23,15 @@ import ContextMenu, {
   type ContextMenuItem,
 } from '@/ui/components/shared/ContextMenu'
 import { imageMenuItems } from '@/ui/components/shared/ContextMenu/menus'
-import ImageOcrLayer, {
+import ImageOcrPlane, {
   canOcr,
   ImageOcrIcon,
+  ImageOcrOverlay,
   nextOcrAction,
   ocrButtonTitle,
+  ocrTextMenuItems,
+  selectAllOcrText,
+  selectedLinesText,
 } from '@/ui/components/shared/ImageOcr'
 import { useImageOcr } from '@/ui/hooks/useImageOcr'
 import {
@@ -100,7 +106,13 @@ export default function ImageViewer({ src, name, mime, path, onOpenInSystem }: P
   const viewRef = useRef<ImageView>(IDENTITY_VIEW)
   /** 拖动起点：按下时的指针位置减掉当时的平移量 */
   const dragStartRef = useRef({ x: 0, y: 0 })
-  const menu = useContextMenu<null>()
+  /**
+   * 右键菜单两种宿主：图片本体（复制 / 另存为 / 旋转…）与 OCR 文字层（复制 / 全选）。
+   * 文字层那种把**选区快照**一并带上：菜单项是另一处的按钮，点它时选区可能已被折叠。
+   */
+  const menu = useContextMenu<
+    { kind: 'image' } | ({ kind: 'text' } & Parameters<typeof ocrTextMenuItems>[0])
+  >()
 
   /** 所有视图变更的唯一出口：先夹边再落地（尺寸未知时 `clampPan` 会原样返回） */
   const commit = useCallback((next: ImageView) => {
@@ -141,8 +153,8 @@ export default function ImageViewer({ src, name, mime, path, onOpenInSystem }: P
     const container = containerRef.current
     if (!container) return
     const onWheel = (event: WheelEvent) => {
-      // 文字层自己可滚动：滚它不该缩放图片
-      if (event.target instanceof Element && event.target.closest('.image-ocr-layer')) return
+      // 纯文本退路面板自己可滚动：滚它不该缩放图片
+      if (event.target instanceof Element && event.target.closest('.image-ocr-panel')) return
       // 缩放只属于这张图：默认滚动挡掉，也不再冒泡给聊天列表（否则会连带滚消息）
       event.preventDefault()
       event.stopPropagation()
@@ -183,7 +195,7 @@ export default function ImageViewer({ src, name, mime, path, onOpenInSystem }: P
   const startDrag = (event: React.MouseEvent) => {
     if (event.button !== 0) return
     // 文字层里要能选中文字：按下不能开始平移图片
-    if (event.target instanceof Element && event.target.closest('.image-ocr-layer')) return
+    if (event.target instanceof Element && event.target.closest('.image-ocr-run, .image-ocr-panel')) return
     event.preventDefault()
     dragStartRef.current = {
       x: event.clientX - viewRef.current.x,
@@ -203,7 +215,7 @@ export default function ImageViewer({ src, name, mime, path, onOpenInSystem }: P
   const percent = scalePercent(ratio, view.scale)
 
   /** 右键菜单：复制 / 另存为（与消息里的图片同一份）+ 旋转 / 视图 / 系统打开 */
-  const menuItems: ContextMenuItem[] = [
+  const imageItems: ContextMenuItem[] = [
     ...imageMenuItems(src, {
       namePrefix: name.replace(/\.[^./\\]+$/, ''),
       mime,
@@ -237,15 +249,32 @@ export default function ImageViewer({ src, name, mime, path, onOpenInSystem }: P
     },
   ]
 
+  /** 菜单项：文字层里右键 = 复制 / 全选，其余照旧是图片动作 */
+  const menuItems =
+    menu.state?.target.kind === 'text' ? ocrTextMenuItems(menu.state.target) : imageItems
+
   return (
     <div
       ref={containerRef}
       className={`wfp-image${dragging ? ' is-dragging' : ''}`}
       onMouseDown={startDrag}
       onContextMenu={(event) => {
-        // 文字层里右键留给系统（选中 / 复制文字），不弹图片菜单
-        if (event.target instanceof Element && event.target.closest('.image-ocr-layer')) return
-        menu.openAt(event, null)
+        if (!(event.target instanceof Element) || !event.target.closest('.image-ocr-run, .image-ocr-panel')) {
+          menu.openAt(event, { kind: 'image' })
+          return
+        }
+        // 文字层：复制 / 全选 —— 本窗口全局屏蔽了系统右键菜单，让给系统等于什么都没有
+        const root = containerRef.current?.querySelector<HTMLElement>(
+          '.image-ocr-layer, .image-ocr-panel-text',
+        ) ?? null
+        menu.openAt(event, {
+          kind: 'text',
+          text: ocr.state.status === 'done' ? ocr.state.text : '',
+          root,
+          // 开菜单这一刻的选区快照（点菜单项时选区可能已被折叠）
+          selection: selectedLinesText(root),
+          onSelectAll: () => selectAllOcrText(root),
+        })
       }}>
       {/* 工具栏：按下不能触发拖动（否则点一下图片就跟着跑） */}
       <div className="wfp-image-bar" onMouseDown={(event) => event.stopPropagation()}>
@@ -302,23 +331,29 @@ export default function ImageViewer({ src, name, mime, path, onOpenInSystem }: P
         )}
       </div>
 
-      <img
-        ref={imageRef}
-        src={src}
-        alt={name}
-        className="wfp-image-content"
-        draggable={false}
-        onLoad={handleLoad}
-        // 原生拖拽会盖掉「按住拖动平移」，并留下一个半透明的拖影
-        onDragStart={(event) => event.preventDefault()}
+      {/* 图片 + 透明文字层的变换锚点：缩放 / 平移 / 旋转都挂在这里，字才能跟着图片一起动 */}
+      <div
+        className="wfp-image-anchor"
         style={{
           transform: `translate(${view.x}px, ${view.y}px) rotate(${view.rotate}deg) scale(${view.scale})`,
-        }}
-      />
+        }}>
+        <img
+          ref={imageRef}
+          src={src}
+          alt={name}
+          className="wfp-image-content"
+          draggable={false}
+          onLoad={handleLoad}
+          // 原生拖拽会盖掉「按住拖动平移」，并留下一个半透明的拖影
+          onDragStart={(event) => event.preventDefault()}
+        />
+        <ImageOcrPlane state={ocr.state} visible={ocrVisible} natural={natural} />
+      </div>
 
-      <ImageOcrLayer
+      <ImageOcrOverlay
         state={ocr.state}
         visible={ocrVisible}
+        natural={natural}
         onRetry={ocr.retry}
       />
 

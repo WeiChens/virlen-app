@@ -338,18 +338,27 @@
     cursor: grabbing;
   }
 
+  /* 图片 + 透明文字层的变换锚点（缩放 / 平移 / 旋转都挂这里） */
+  .wfp-image-anchor {
+    position: relative;
+    display: inline-block;
+    max-width: 100%;
+    max-height: 100%;
+    /* 按钮缩放平滑一点；拖动中关掉，否则图会追不上指针 */
+    transition: transform 0.1s ease-out;
+  }
+
   .wfp-image-content {
+    display: block;
     max-width: 100%;
     max-height: 100%;
     object-fit: contain;
     border-radius: 4px;
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
-    /* 按钮缩放平滑一点；拖动中关掉，否则图会追不上指针 */
-    transition: transform 0.1s ease-out;
     -webkit-user-drag: none;
   }
 
-  &.is-dragging .wfp-image-content {
+  &.is-dragging .wfp-image-anchor {
     transition: none;
   }
 }

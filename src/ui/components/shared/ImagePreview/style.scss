@@ -105,18 +105,28 @@
   justify-content: center;
   position: relative;
 
-  .preview-image {
+  /* 图片 + 透明文字层的「变换锚点」：平移 / 旋转 / 缩放挂在这里，
+     文字层才能和图片严丝合缝地一起动 */
+  .image-preview-anchor {
+    position: relative;
+    display: inline-block;
     max-width: 100%;
     max-height: 90vh;
-    object-fit: contain;
     transition: transform 0.3s ease;
-    user-select: none;
     cursor: grab;
 
     &.dragging {
       cursor: grabbing;
       transition: none; // 拖动时移除过渡效果，更流畅
     }
+  }
+
+  .preview-image {
+    display: block;
+    max-width: 100%;
+    max-height: 90vh;
+    object-fit: contain;
+    user-select: none;
   }
 }
 
