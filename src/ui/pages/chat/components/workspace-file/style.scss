@@ -443,3 +443,225 @@
     fill: none;
   }
 }
+
+/* ==================== 表格预览（xlsx / xls / csv / tsv） ====================
+   表头与行号黏在滚动区边缘：几百行里滚下去还知道自己在哪一列。
+   列宽按内容自适应（不用 table-layout: fixed），长文本靠 max-width 截断 + title 看全文。 */
+.wfp-sheets {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 工作表切换：一屏十几张表时横向滚，不让它把头部撑破 */
+.wfp-sheet-tabs {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border-color, #e5e5e5);
+}
+
+.wfp-sheet-tab {
+  flex: none;
+  max-width: 160px;
+  height: 26px;
+  padding: 0 8px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  font-size: var(--font-size-sm, 12px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  &.is-active {
+    color: var(--accent-color, #4f46e5);
+    border-bottom-color: var(--accent-color, #4f46e5);
+    font-weight: 600;
+  }
+}
+
+.wfp-sheet {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 行 / 列被上限截断：说清共多少（不静默丢） */
+.wfp-sheet-note {
+  flex: none;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-color, #e5e5e5);
+  background: var(--bg-secondary, #f7f7f8);
+  color: var(--text-secondary, #888);
+  font-size: var(--font-size-xs, 11px);
+}
+
+.wfp-sheet-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.wfp-sheet-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  /* `max-content` + `min-width: 100%`：列宽跟内容走，表窄时也铺满面板 */
+  width: max-content;
+  min-width: 100%;
+  font-size: var(--font-size-sm, 12px);
+
+  td,
+  th {
+    padding: 4px 8px;
+    border-right: 1px solid var(--border-color, #e5e5e5);
+    border-bottom: 1px solid var(--border-color, #e5e5e5);
+    /* 单元格一律居中：横向 `text-align`，纵向在表格里**只能用 `vertical-align`**
+       —— `align-content` 是 flex / grid 容器的属性，`<td>` 是 table-cell 盒，写了等于没写。 */
+    text-align: center;
+    vertical-align: middle;
+  }
+
+  td {
+    max-width: 320px;
+    /* 格内换行是真实内容（Alt+Enter），保留；长单词 / URL 强制折行 */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--bg-secondary, #f7f7f8);
+    color: var(--text-secondary, #666);
+    font-weight: 600;
+  }
+
+  /* 左上角那块既要黏顶又要黏左，层级要比其它表头 / 行号高 */
+  .wfp-sheet-corner {
+    position: sticky;
+    left: 0;
+    top: 0;
+    z-index: 3;
+    width: 40px;
+    background: var(--bg-secondary, #f7f7f8);
+  }
+
+  .wfp-sheet-row {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    width: 40px;
+    /* 行号和列标一样居中（Excel 的两个表头都是居中，不是靠右） */
+    text-align: center;
+    background: var(--bg-secondary, #f7f7f8);
+    color: var(--text-secondary, #888);
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
+  }
+
+  tbody tr:hover td {
+    background: var(--hover-bg, #f0f0f0);
+  }
+}
+
+/* ==================== 文稿 / 演示预览（docx / pptx） ==================== */
+.wfp-doc {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ==================== PDF 预览（pdfjs 按页栅格化） ==================== */
+.wfp-pdf {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.wfp-pdf-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-color, #e5e5e5);
+}
+
+.wfp-pdf-count {
+  font-size: var(--font-size-xs, 11px);
+  color: var(--text-secondary, #888);
+}
+
+/* 百分比按钮：点一下回到「适应宽度」（此时高亮） */
+.wfp-pdf-percent {
+  min-width: 48px;
+  height: 22px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  font-size: var(--font-size-sm, 12px);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--hover-bg, #f0f0f0);
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  &.is-fit {
+    color: var(--accent-color, #4f46e5);
+    font-weight: 600;
+  }
+}
+
+/* 页面竖着排、居中；灰底像阅读器的画布区 */
+.wfp-pdf-scroll {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  overflow: auto;
+  background: var(--bg-secondary, #f7f7f8);
+  overscroll-behavior: contain;
+}
+
+/* 占位框尺寸 = 画布尺寸：滚动条一开始就是对的，不会「越滚越长」 */
+.wfp-pdf-page {
+  flex: none;
+  background: #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.14);
+  overflow: hidden;
+}
+
+.wfp-pdf-canvas {
+  display: block;
+}
+
+/* 失败时的原始原因（英文报错）：小一号、次要色，不与上面那句中文抢注意力 */
+.wfp-hint-detail {
+  font-size: var(--font-size-xs, 11px);
+  color: var(--text-secondary, #888) !important;
+  overflow-wrap: anywhere;
+}

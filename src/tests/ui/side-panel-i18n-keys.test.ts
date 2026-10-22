@@ -18,6 +18,11 @@ const FILES = [
   'src/ui/pages/chat/components/side-panel/index.tsx',
   // 内容区：文件面板的全部文案（保存 / 重新加载 / 在系统程序中打开 / HTML 预览提示…）
   'src/ui/pages/chat/components/workspace-file/index.tsx',
+  // 预览组件：表格（行号 / 截断提示）、文稿 / 演示（长度截断）、PDF（页码 / 缩放）
+  'src/ui/pages/chat/components/workspace-file/data-table.tsx',
+  'src/ui/pages/chat/components/workspace-file/sheet-view.tsx',
+  'src/ui/pages/chat/components/workspace-file/document-view.tsx',
+  'src/ui/pages/chat/components/workspace-file/pdf-view.tsx',
 ]
 
 describe('右侧面板文案', () => {

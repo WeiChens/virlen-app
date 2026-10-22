@@ -1,7 +1,7 @@
 /**
- * 工作目录文件面板的数据层：**读取（文本 / 媒体）/ 保存文本**。
+ * 工作目录文件面板的数据层：**读取（文本 / 媒体 / 文档预览）/ 保存文本**。
  *
- * 三条口径：
+ * 四条口径：
  * 1. **读写都要过安全校验**：与侧边栏其它文件操作同一套 `securityService.resolveSafePath`，
  *    黑名单目录里的文件在这里就被拒（面板只负责把原因显示出来）；
  * 2. **文本走 Rust**：`read_file_with_hash` 带编码嗅探（UTF-8 / GBK / UTF-16…），
@@ -10,18 +10,27 @@
  *    不一致就报冲突，而不是把别人的改动覆盖掉；
  * 4. **监听正在看的那个文件**（`watchWorkspaceFile`）：只管「磁盘变了」这件事，怎么合并进编辑器
  *    由面板决定（干净 → 最小编辑刷进去；脏 → 黄条，不覆盖）。
+ *
+ * 文档类的两种读法（`pdf` 与 Office 其余六种不同）：
+ * - `pdf`：读**字节**，面板交给 pdfjs 按页栅格化（Core 只做纯 Rust，不做 PDF 渲染）；
+ * - `docx`/`doc`/`pptx`/`ppt`/`xlsx`/`xls`：调 Rust `cmd_preview_document` 拿**结构化内容**
+ *   （Markdown / 每张表的网格）—— 与 `parse_document` 同一份抽取（铁律 1）。
  */
 import { invoke } from '@tauri-apps/api/core'
 import * as tauriFs from '@tauri-apps/plugin-fs'
 import { securityService } from '@/services/security-service'
 import { computeContentHash10 } from '@/infrastructure/tools/file/common'
-import { mimeOf, previewKindOf, type FilePreviewKind } from '@/domain/files/preview'
+import { mimeOf, previewKindOf, type MediaPreviewKind } from '@/domain/files/preview'
+import type { MergedBounds } from '@/domain/files/sheet-spans'
 
 /** 文本上限：再大就不是「看一眼改两行」，Monaco 也会开始卡 */
 export const MAX_TEXT_BYTES = 2 * 1024 * 1024
 
 /** 媒体上限：整份读进内存再转 blob URL，太大直接把 webview 拖死 */
 export const MAX_MEDIA_BYTES = 64 * 1024 * 1024
+
+/** 文档预览上限（MB）：与 Rust `doc_parse::MAX_DOC_BYTES` 同值（50），只用于文案 */
+const MAX_PREVIEW_BYTES = 50
 
 /** 失败原因（面板据此给本地化文案；`blocked` 直接显示原始原因） */
 export type WorkspaceFileErrorCode =
@@ -30,6 +39,10 @@ export type WorkspaceFileErrorCode =
   | 'not-file'
   | 'conflict'
   | 'binary'
+  /** 文档能打开，但里面没有可预览的内容（空工作簿 / 纯图文稿） */
+  | 'no-text'
+  /** 解析失败（文件损坏 / 加密 / 扩展名与实际格式不符） */
+  | 'preview-failed'
   | 'blocked'
 
 export class WorkspaceFileError extends Error {
@@ -66,11 +79,58 @@ export interface LoadedTextFile {
 }
 
 export interface LoadedMediaFile {
-  kind: Exclude<FilePreviewKind, 'text' | 'other'>
+  kind: MediaPreviewKind
   /** 原样字节：面板自己造 blob URL（卸载时负责 revoke） */
   bytes: Uint8Array
   mime: string
   byteSize: number
+}
+
+/** PDF：原样字节交给 pdfjs（面板按页栅格化，不自己造 URL） */
+export interface LoadedPdfFile {
+  kind: 'pdf'
+  bytes: Uint8Array
+  byteSize: number
+}
+
+/** 一张工作表的网格（与 Rust `PreviewSheetDto` 同形） */
+export interface DocumentPreviewSheet {
+  name: string
+  /** 已切分的格子（行 / 列受 Rust 侧上限约束） */
+  rows: string[][]
+  /** 真实行数 */
+  rowCount: number
+  /** 真实最大列数 */
+  colCount: number
+  /** 合并区域（整张表的 0-based 坐标，未按物化上限裁剪） */
+  merges: MergedBounds[]
+}
+
+/** Rust `cmd_preview_document` 的返回（与 `DocumentPreviewDto` 同形） */
+export interface DocumentPreview {
+  /** 小写扩展名（`docx` / `pptx` / `xlsx` …） */
+  kind: string
+  /** 文稿 / 演示的 Markdown 正文（表格类为空串） */
+  text: string
+  /** 正文的**全文**字符数（不是 `text.length`） */
+  charCount: number
+  /** 正文是否被长度上限截断 */
+  truncated: boolean
+  /** 表格类：每张工作表一份网格（文稿 / 演示为空数组） */
+  sheets: DocumentPreviewSheet[]
+  byteSize: number
+}
+
+/** 文稿 / 演示（正文由 Rust 抽成 Markdown） */
+export interface LoadedDocumentFile {
+  kind: 'document'
+  preview: DocumentPreview
+}
+
+/** 表格（每张工作表一份网格） */
+export interface LoadedSheetFile {
+  kind: 'sheet'
+  preview: DocumentPreview
 }
 
 export interface LoadedOtherFile {
@@ -81,6 +141,9 @@ export interface LoadedOtherFile {
 export type LoadedWorkspaceFile =
   | LoadedTextFile
   | LoadedMediaFile
+  | LoadedPdfFile
+  | LoadedDocumentFile
+  | LoadedSheetFile
   | LoadedOtherFile
 
 function nameOf(path: string): string {
@@ -136,16 +199,53 @@ export async function loadWorkspaceFile(
     return { kind: 'other', byteSize: stat.size }
   }
 
+  // 文档 / 表格：正文由 Rust 抽（与 `parse_document` 同一份抽取），前端只负责画。
+  // 大小上限在 Rust 侧（`doc_parse::MAX_DOC_BYTES`），这里不再叠一层不同的数字
+  if (kind === 'document' || kind === 'sheet') {
+    return { kind, preview: await loadDocumentPreview(fullPath) }
+  }
+
   if (stat.size > MAX_MEDIA_BYTES) {
-    throw new WorkspaceFileError('too-large', '媒体文件超过 64 MB')
+    throw new WorkspaceFileError('too-large', '文件超过 64 MB')
   }
 
   const bytes = await tauriFs.readFile(fullPath)
+  if (kind === 'pdf') {
+    return { kind, bytes, byteSize: stat.size }
+  }
   return {
     kind,
     bytes,
     mime: mimeOf(name),
     byteSize: stat.size,
+  }
+}
+
+/** `cmd_preview_document` 失败时的结构化原因（与 Rust `PreviewErrorDto` 同形） */
+interface PreviewErrorDto {
+  kind: 'unsupported' | 'too_large' | 'no_text' | 'backend' | 'internal'
+  ext: string
+  limit?: number | null
+}
+
+/** 安全校验之后的绝对路径 → 文档预览（形状见 [`DocumentPreview`]） */
+async function loadDocumentPreview(fullPath: string): Promise<DocumentPreview> {
+  try {
+    return await invoke<DocumentPreview>('cmd_preview_document', { path: fullPath })
+  } catch (error) {
+    const reason = error as Partial<PreviewErrorDto> | string
+    const code =
+      typeof reason === 'string' ? undefined : (reason as PreviewErrorDto).kind
+    switch (code) {
+      case 'too_large':
+        throw new WorkspaceFileError('too-large', `文档超过 ${MAX_PREVIEW_BYTES} MB`)
+      case 'no_text':
+        throw new WorkspaceFileError('no-text', `文档里没有可预览的内容：${fullPath}`)
+      default:
+        // 结构化的 `backend` / `internal` / `unsupported`，以及 invoke 直接抛的字符串：
+        // 一律当「解析失败」，原文放进 message 便于排查
+        throw new WorkspaceFileError('preview-failed', messageOf(error))
+    }
   }
 }
 

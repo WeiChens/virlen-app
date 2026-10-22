@@ -3,7 +3,8 @@
  *
  * 重点在两类边界：
  * - **没有扩展名的文本**（LICENSE / Makefile / .gitignore）不能被白名单挡在外面；
- * - **已知二进制容器**（zip / pdf / office / 可执行文件）不能当文本读（读进来是乱码或几 MB 噪声）。
+ * - **已知二进制容器**（zip / odt / 可执行文件）不能当文本读（读进来是乱码或几 MB 噪声），
+ *   而 pdf / Office 六种要走自己的预览通道（`pdf` / `document` / `sheet`），不能落回 `other`。
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -51,10 +52,26 @@ describe('打开方式', () => {
 
   it('已知二进制容器不进编辑器', () => {
     expect(previewKindOf('a.zip')).toBe('other')
-    expect(previewKindOf('a.pdf')).toBe('other')
-    expect(previewKindOf('a.docx')).toBe('other')
     expect(previewKindOf('a.exe')).toBe('other')
     expect(previewKindOf('a.tar.gz')).toBe('other')
+    // 仍然不支持预览的 Office 容器（`doc_parse` 不支持：`odt/ods/odp`）
+    expect(previewKindOf('a.odt')).toBe('other')
+  })
+
+  it('PDF / 文稿 / 表格各有自己的预览通道', () => {
+    // PDF：前端 pdfjs 按页栅格化
+    expect(previewKindOf('a.pdf')).toBe('pdf')
+    expect(previewKindOf('A.PDF')).toBe('pdf')
+    // 文稿 / 演示：Rust 抽成 Markdown
+    for (const name of ['a.docx', 'a.doc', 'a.pptx', 'a.ppt']) {
+      expect(previewKindOf(name)).toBe('document')
+    }
+    // 表格：每张工作表一份网格
+    for (const name of ['a.xlsx', 'a.xls']) {
+      expect(previewKindOf(name)).toBe('sheet')
+    }
+    // CSV / TSV 仍是可编辑文本（预览在 `文本预览` 那一组）
+    expect(previewKindOf('a.csv')).toBe('text')
   })
 })
 
@@ -65,6 +82,12 @@ describe('文本预览（编辑 / 预览两个模式）', () => {
     expect(textPreviewKindOf('index.html')).toBe('html')
     expect(textPreviewKindOf('a.xhtml')).toBe('html')
     expect(textPreviewKindOf('icon.svg')).toBe('svg')
+  })
+
+  it('csv / tsv 多一个表格预览（文件仍可编辑）', () => {
+    expect(textPreviewKindOf('a.csv')).toBe('csv')
+    expect(textPreviewKindOf('a.CSV')).toBe('csv')
+    expect(textPreviewKindOf('a.tsv')).toBe('tsv')
   })
 
   it('其余文本只有编辑', () => {

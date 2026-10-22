@@ -3,6 +3,8 @@
 //! 谁在用：
 //! - `agent::native_tools::file::parse_document`（`parse_document` 工具，Rust 引擎的默认路径）
 //! - GUI 命令 `cmd_parse_document`（TS 回退路径的转发目标，与工具同一个 `parse`）
+//! - GUI 命令 `cmd_preview_document`（右侧文件面板，[`preview`]：与工具同一套 Office 抽取，
+//!   只是输出「行 × 列 / Markdown」而不是一段连续正文）
 //! - `rag::document`（知识库导入的 PDF 抽文字，走 [`pdf::extract_text`]）
 //!
 //! 为什么单独一个模块：`read_file` 只能读 UTF-8/GBK 的**文本文件**，PDF / Office / 压缩容器
@@ -35,6 +37,7 @@ pub mod delimited;
 pub mod ocr;
 pub mod office;
 pub mod pdf;
+pub mod preview;
 pub mod text;
 
 #[cfg(test)]

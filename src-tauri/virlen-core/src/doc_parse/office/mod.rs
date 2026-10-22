@@ -67,7 +67,8 @@ use office_oxide::{Document, DocumentFormat};
 use super::ocr::{OcrOptions, OcrSummary};
 use super::ParseError;
 use self::cells::{flatten_xls_breaks, flatten_xlsx_breaks};
-use self::render::{backend_error, doc_text, xls_text, xlsx_text};
+use self::merge::{xls_merge_regions, xlsx_merge_regions, MergeRegion};
+use self::render::{backend_error, doc_text, render_xls_sheet, xls_text, xlsx_text};
 
 mod cells;
 mod images;
@@ -91,6 +92,135 @@ pub struct OfficeText {
     pub note: Option<String>,
     /// 端侧 OCR 的摘要（`None` = 这条链接根本没碰 OCR）
     pub ocr: Option<OcrSummary>,
+}
+
+/// 一片合并区域（0-based 闭区间）—— 界面把它画成 `colspan` / `rowspan`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MergedBounds {
+    pub row_first: u32,
+    pub row_last: u32,
+    pub col_first: u32,
+    pub col_last: u32,
+}
+
+/// 预览用的表格网格（每张工作表一份行×列）。
+///
+/// 与 [`OfficeText`] 的区别只有一条：**保留单元格的结构**（哪一格属于哪一列、哪些位置是一片合并），
+/// 界面才能画成表格；正文仍然由同一个逐表渲染器产出，不另写一份取值逻辑。
+#[derive(Debug, Clone)]
+pub struct SheetGrid {
+    /// 工作表名
+    pub name: String,
+    /// 已物化的行（行数 / 列数受调用方上限约束）
+    pub rows: Vec<Vec<String>>,
+    /// 这张表的**实际**行数（不受上限影响）
+    pub row_count: usize,
+    /// 这张表的**实际**最大列数（不受上限影响）
+    pub col_count: usize,
+    /// 合并区域（坐标是**整张表**的 0-based 行列，**未**按物化上限裁剪：
+    /// 裁到可见窗口是渲染层的事，底层只交事实）
+    pub merges: Vec<MergedBounds>,
+}
+
+/// 逐表取出「行 × 列」网格 —— 面板预览专用（**只是同一套渲染结果的另一种形状**）。
+///
+/// 与 [`extract_text`] 共用 `Spreadsheet` 的打开 / 压平（格内换行）逻辑，区别只在于：
+/// 它把每张表**单独**渲染再按 `行 → 列` 切开，而正文那条路是把整册拼成一段文本。
+/// `max_rows` / `max_cols` 只限制物化的格子数（见 [`SheetGrid`]）。
+pub fn preview_grids(
+    path: &str,
+    ext: &str,
+    max_rows: usize,
+    max_cols: usize,
+) -> Result<Vec<SheetGrid>, ParseError> {
+    let book = match Spreadsheet::open(path, ext) {
+        Some(book) => book,
+        // 扩展名与容器不符 / 打不开：让库自己嗅容器（错误文案归它）
+        None => {
+            let doc = Document::open(path).map_err(|e| backend_error(ext, e))?;
+            match doc.format() {
+                DocumentFormat::Xlsx | DocumentFormat::Xls => {
+                    Spreadsheet::open_as(path, doc.format(), ext)?
+                }
+                _ => {
+                    return Err(ParseError::Backend {
+                        format: ext.to_string(),
+                        message: "the file is not a spreadsheet".to_string(),
+                    })
+                }
+            }
+        }
+    };
+    Ok(book.grids(max_rows, max_cols))
+}
+
+/// 一张表的制表符正文 → 网格。
+///
+/// 被截掉的部分**不静默丢**：`row_count` / `col_count` 记真实总量，界面据此提示「只看前 N 行」。
+/// 行内**末尾**的空格不算列（渲染器本来也只补到最后一个有内容的格），
+/// 但中间的空格要留着 —— 那是合并单元格摊平后的占位，丢了列会整体左移。
+fn grid_from_tsv(
+    name: &str,
+    body: &str,
+    max_rows: usize,
+    max_cols: usize,
+    regions: &[MergeRegion],
+) -> SheetGrid {
+    // 渲染器每行一个 `\n`：末尾那一个换行不算一行（否则每张表都多出一行空白）
+    let body = body.strip_suffix('\n').unwrap_or(body);
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut row_count = 0usize;
+    let mut col_count = 0usize;
+    if body.is_empty() {
+        return SheetGrid {
+            name: name.to_string(),
+            rows,
+            row_count,
+            col_count,
+            merges: merged_bounds(regions),
+        };
+    }
+    for line in body.split('\n') {
+        row_count += 1;
+        let cells: Vec<&str> = line.split('\t').collect();
+        let last = cells
+            .iter()
+            .rposition(|cell| !cell.trim().is_empty())
+            .map(|idx| idx + 1)
+            .unwrap_or(0);
+        col_count = col_count.max(last);
+        if rows.len() < max_rows {
+            rows.push(
+                cells[..last.min(max_cols)]
+                    .iter()
+                    .map(|cell| cell.trim().to_string())
+                    .collect(),
+            );
+        }
+    }
+    SheetGrid {
+        name: name.to_string(),
+        rows,
+        row_count,
+        col_count,
+        merges: merged_bounds(regions),
+    }
+}
+
+/// 内部区域 → 对外的四元组（`MergeRegion` 的几个字段是模块内的，不对外）
+fn merged_bounds(regions: &[MergeRegion]) -> Vec<MergedBounds> {
+    regions
+        .iter()
+        .map(|region| {
+            let (row_first, row_last, col_first, col_last) = region.bounds();
+            MergedBounds {
+                row_first,
+                row_last,
+                col_first,
+                col_last,
+            }
+        })
+        .collect()
 }
 
 /// 抽一个 Office 文档的文本（**不碰 OCR**）—— 等价于 [`extract_text_with_ocr`] 传 `None`。
@@ -160,6 +290,38 @@ impl Spreadsheet {
                 .map(Box::new)
                 .map(Self::Xls)
                 .map_err(|e| backend_error(ext, e)),
+        }
+    }
+
+    /// 逐表取出「行 × 列」网格（**不碰 OCR**：预览是看内容，不是补文字）
+    ///
+    /// `max_rows` / `max_cols` 只限制**物化**的格子：超出部分不分配内存，
+    /// 真实总量由 [`SheetGrid::row_count`] / [`SheetGrid::col_count`] 如实报出。
+    fn grids(self, max_rows: usize, max_cols: usize) -> Vec<SheetGrid> {
+        match self {
+            Self::Xlsx(mut book) => {
+                flatten_xlsx_breaks(&mut book);
+                (0..book.worksheets.len())
+                    .map(|idx| {
+                        let name = book.worksheets[idx].name.clone();
+                        let body = book.sheet_plain_text(idx).unwrap_or_default();
+                        // 合并区域与正文那条路同源（`parse_a1_range`）：说明里算合并，这里就算
+                        let regions = xlsx_merge_regions(&book.worksheets[idx]);
+                        grid_from_tsv(&name, &body, max_rows, max_cols, &regions)
+                    })
+                    .collect()
+            }
+            Self::Xls(mut book) => {
+                flatten_xls_breaks(&mut book);
+                book.sheets
+                    .iter()
+                    .map(|sheet| {
+                        let body = render_xls_sheet(sheet);
+                        let regions = xls_merge_regions(sheet);
+                        grid_from_tsv(&sheet.name, &body, max_rows, max_cols, &regions)
+                    })
+                    .collect()
+            }
         }
     }
 

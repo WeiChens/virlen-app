@@ -97,6 +97,12 @@ pub(super) fn rc(&self) -> String {
             (rows, cols) => format!("spans {rows} rows x {cols} columns"),
         }
     }
+
+    /// 四元组（0-based 闭区间）：`(row_first, row_last, col_first, col_last)`
+    /// —— 界面画 `colspan` / `rowspan` 时直接拿它
+    pub(super) fn bounds(&self) -> (u32, u32, u32, u32) {
+        (self.row_first, self.row_last, self.col_first, self.col_last)
+    }
 }
 
 /// 一条区域的说明：`<前缀><位置> <跨几行几列>[ (被覆盖格里另存的值)]`
@@ -107,6 +113,19 @@ fn region_text(prefix: &str, place: &str, spans: String, hidden: Option<&str>) -
     }
 }
 
+/// 一张 `.xlsx` 工作表的合并区域（**原始坐标**，不讲「被覆盖格里还存了什么」）。
+///
+/// 与 [`collect_xlsx_merges`] 的区别只在用途：那条路产生一句给模型看的说明（并顺带扫描被覆盖格），
+/// 这条只交出区域本身 —— 面板预览要用它把网格画成 `colspan` / `rowspan`。两边共用
+/// [`parse_a1_range`] 与 [`MergeRegion::is_merge`]，不会出现「说明里算合并、预览里不算」。
+pub(super) fn xlsx_merge_regions(ws: &Worksheet) -> Vec<MergeRegion> {
+    ws.merged_cells
+        .iter()
+        .filter_map(|raw| parse_a1_range(raw))
+        .filter(MergeRegion::is_merge)
+        .collect()
+}
+
 /// 一张 `.xlsx` 工作表的合并区域 —— 直接读工作表自己的 `merged_cells`（`"A1:C1"`，就是 Excel 存的那份）
 pub(super) fn collect_xlsx_merges(
     ws: &Worksheet,
@@ -114,13 +133,7 @@ pub(super) fn collect_xlsx_merges(
     prefix: &str,
     out: &mut Mentions,
 ) {
-    for raw in &ws.merged_cells {
-        let Some(region) = parse_a1_range(raw) else {
-            continue;
-        };
-        if !region.is_merge() {
-            continue;
-        }
+    for region in xlsx_merge_regions(ws) {
         // 扫单元格不便宜：列满上限之后就不再为「被覆盖值」扫了（只计数）
         let hidden = if out.full() {
             None
@@ -199,19 +212,27 @@ fn xlsx_cell_text(cell: &Cell, strings: &SharedStringTable) -> Option<String> {
     shrink(&raw)
 }
 
+/// 一张 `.xls` 工作表的合并区域（`MERGEDCELLS`，0-based 四元组）—— 与 [`xlsx_merge_regions`] 同用途
+pub(super) fn xls_merge_regions(sheet: &Sheet) -> Vec<MergeRegion> {
+    sheet
+        .merged_cells
+        .iter()
+        .map(|&(row_a, row_b, col_a, col_b)| {
+            // 记录里的首尾不保证有序（也不保证不是同一个格子），统一归一
+            MergeRegion::new(
+                u32::from(row_a.min(row_b)),
+                u32::from(row_a.max(row_b)),
+                u32::from(col_a.min(col_b)),
+                u32::from(col_a.max(col_b)),
+            )
+        })
+        .filter(MergeRegion::is_merge)
+        .collect()
+}
+
 /// 一张 `.xls` 工作表的合并区域（`MERGEDCELLS`，0-based 四元组）
 pub(super) fn collect_xls_merges(sheet: &Sheet, prefix: &str, out: &mut Mentions) {
-    for &(row_a, row_b, col_a, col_b) in &sheet.merged_cells {
-        // 记录里的首尾不保证有序（也不保证不是同一个格子），统一归一
-        let region = MergeRegion::new(
-            u32::from(row_a.min(row_b)),
-            u32::from(row_a.max(row_b)),
-            u32::from(col_a.min(col_b)),
-            u32::from(col_a.max(col_b)),
-        );
-        if !region.is_merge() {
-            continue;
-        }
+    for region in xls_merge_regions(sheet) {
         let hidden = if out.full() {
             None
         } else {

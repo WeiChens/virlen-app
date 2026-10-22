@@ -372,6 +372,8 @@ pub fn run() {
             read_file_with_hash,
             // 文档解析（与原生工具 `parse_document` 同一条组装链）
             commands::document::cmd_parse_document,
+            // 右侧文件面板的文档预览（Office 六种：xlsx/xls → 网格，docx/doc/pptx/ppt → Markdown）
+            commands::document::cmd_preview_document,
             stat_path,
             // HTML 预览的本地资源协议（token 登记 / 撤销）
             commands::preview::preview_allow_root,

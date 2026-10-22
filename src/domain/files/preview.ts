@@ -1,23 +1,39 @@
 /**
  * 工作目录文件的「打开方式」判定（纯函数）—— 双击行为与右侧面板共用这一份。
  *
- * 四类：文本（可编辑）/ 图片 / 音频 / 视频 / 其它（不支持预览，交给系统程序）。
+ * 七类：文本（可编辑）/ 图片 / 音频 / 视频 / PDF（按页栅格化）/ 文档（文稿演示 → Markdown）/
+ * 表格（工作表 → 网格）/ 其它（不支持预览，交给系统程序）。
  *
  * ⚠️ 判定只按扩展名，**不读文件头**：读文件头要么多一次 IPC，要么把整个文件读进来才知道类型，
  * 对「双击打开」这个动作太重。未知扩展名一律按文本试读（Rust 侧会拒绝二进制），
- * 已知的二进制容器（zip / pdf / office / 可执行文件）直接归「其它」，不去误读。
+ * 已知的二进制容器（zip / office / 可执行文件）直接归「其它」，不去误读。
  */
 
 /** 打开方式 */
-export type FilePreviewKind = 'text' | 'image' | 'audio' | 'video' | 'other'
+export type FilePreviewKind =
+  | 'text'
+  | 'image'
+  | 'audio'
+  | 'video'
+  /** 页面栅格化渲染（前端 pdfjs，见 `workspace-file/pdf-view.tsx`） */
+  | 'pdf'
+  /** 文稿 / 演示：正文由 Rust 抽成 Markdown，面板直接渲染 */
+  | 'document'
+  /** 表格：每张工作表一份网格（表名可切换） */
+  | 'sheet'
+  | 'other'
+
+/** 走 blob URL 的那几类（图片 / 音频 / 视频） */
+export type MediaPreviewKind = 'image' | 'audio' | 'video'
 
 /**
- * 文本文件里**还能切到预览**的那三种（其余文本只有编辑模式）：
+ * 文本文件里**还能切到预览**的那几种（其余文本只有编辑模式）：
  * - markdown：交给聊天同一套渲染器（react-markdown + GFM）；
  * - html：沙箱 iframe 渲染（脚本不执行）；
- * - svg：当图片渲染（`<img>` 里的 SVG 不会跑脚本）。
+ * - svg：当图片渲染（`<img>` 里的 SVG 不会跑脚本）；
+ * - csv / tsv：把**草稿**解析成表格（所见即当前所改，解析在 `domain/files/delimited.ts`）。
  */
-export type TextPreviewKind = 'markdown' | 'html' | 'svg' | null
+export type TextPreviewKind = 'markdown' | 'html' | 'svg' | 'csv' | 'tsv' | null
 
 const IMAGE_EXT = new Set([
   'png',
@@ -45,13 +61,27 @@ const AUDIO_EXT = new Set([
 
 const VIDEO_EXT = new Set(['mp4', 'webm', 'ogv', 'mov', 'm4v', 'mkv'])
 
+/** PDF：面板按页栅格化（前端 pdfjs）—— 不进编辑器、也不当字节媒体交给 `<video>` */
+const PDF_EXT = new Set(['pdf'])
+
+/**
+ * 文稿 / 演示：正文由 Rust `cmd_preview_document` 抽成 Markdown（与 `parse_document` 同一份抽取）。
+ * 含 `doc` / `ppt` 旧二进制：同一个 `office_oxide` 路径，不额外写代码。
+ */
+const DOCUMENT_EXT = new Set(['docx', 'doc', 'pptx', 'ppt'])
+
+/** 表格：每张工作表一份行×列网格，面板画成表 + 表名切换 */
+const SHEET_EXT = new Set(['xlsx', 'xls'])
+
 /**
  * 明确不能当文本读的容器 / 可执行文件：体积大、内容无意义。
  * 不在表里的未知扩展名仍按文本试读 —— `LICENSE` / `Makefile` / `.gitignore` 这类没有扩展名，
  * 只靠白名单会把它们挡在外面。
+ *
+ * ⚠️ `pdf` 与 Office 六种**不在**这里：它们有自己的预览通道（见上面三个 `*_EXT`），
+ * 写进本表等于让「能预览」的文件又退回「交给系统程序」。
  */
 const BINARY_EXT = new Set([
-  'pdf',
   'zip',
   'rar',
   '7z',
@@ -78,12 +108,6 @@ const BINARY_EXT = new Set([
   'woff',
   'woff2',
   'eot',
-  'doc',
-  'docx',
-  'xls',
-  'xlsx',
-  'ppt',
-  'pptx',
   'odt',
   'ods',
   'odp',
@@ -120,6 +144,7 @@ const MIME_BY_EXT: Record<string, string> = {
   mov: 'video/quicktime',
   m4v: 'video/x-m4v',
   mkv: 'video/x-matroska',
+  pdf: 'application/pdf',
 }
 
 /** Monaco 语言 id（只覆盖 `src/monaco/setupMonaco.ts` 注册过的那批） */
@@ -212,6 +237,9 @@ export function previewKindOf(name: string): FilePreviewKind {
   if (IMAGE_EXT.has(ext)) return 'image'
   if (AUDIO_EXT.has(ext)) return 'audio'
   if (VIDEO_EXT.has(ext)) return 'video'
+  if (PDF_EXT.has(ext)) return 'pdf'
+  if (DOCUMENT_EXT.has(ext)) return 'document'
+  if (SHEET_EXT.has(ext)) return 'sheet'
   if (BINARY_EXT.has(ext)) return 'other'
   return 'text'
 }
@@ -222,6 +250,9 @@ export function textPreviewKindOf(name: string): TextPreviewKind {
   if (ext === 'md' || ext === 'markdown') return 'markdown'
   if (ext === 'html' || ext === 'htm' || ext === 'xhtml') return 'html'
   if (ext === 'svg') return 'svg'
+  // 表格文件仍是**可编辑文本**（Monaco 里改）+ 表格预览：两份能力不互相排斐
+  if (ext === 'csv') return 'csv'
+  if (ext === 'tsv') return 'tsv'
   return null
 }
 

@@ -1,17 +1,18 @@
 /**
  * WorkspaceFilePanel — 工作目录文件在**右侧**打开：文本可直接编辑（Ctrl/Cmd+S 或「保存」落盘），
- * 图片 / 音频 / 视频就地预览，其余类型交给系统程序。
+ * 图片 / 音频 / 视频就地预览，PDF 按页栅格化，Office 文档 / 表格抽成结构化内容预览，
+ * 其余类型交给系统程序。
  *
  * 本组件只管**一个文件的内容**：宽度、拖拽、标签页、占满都归容器 `../side-panel`，
  * 所以这里没有 `<aside>`、没有 resizer、没有「量可用宽度」（旧实现自带这些，见 §11.54）。
  *
- * 七条口径：
+ * 八条口径：
  * 1. **编辑后不自动保存**：草稿只在面板里，`dirty` 由「草稿 ≠ 载入内容」判定；关闭 / 换文件前
  *    由宿主（chat-view）确认，面板自己的关闭按钮也确认一次；
  * 2. **保存前比对 hash**：内容可能已被终端 / AI 改过（见 `workspace-file-service`），冲突时报错，
  *    不静默覆盖；
- * 3. **md / html / svg 多一个预览**：默认停在编辑，顶部 tab 切换；预览渲染的是**草稿**（所见即
- *    当前所改），不是磁盘上的旧内容；
+ * 3. **md / html / svg / csv / tsv 多一个预览**：默认停在编辑，顶部 tab 切换；预览渲染的是**草稿**
+ *    （所见即当前所改），不是磁盘上的旧内容；
  * 4. **媒体走 blob URL**：读回字节后自己造 URL 并在卸载 / 换文件时 `revokeObjectURL`，
  *    避免把文件直接挂到 webview 的 file://（那需要放开 asset 协议范围）；图片交给
  *    `image-viewer.tsx`（滚轮缩放 / 拖动平移 / 右键复制与旋转），本文件只管取字节。
@@ -22,6 +23,9 @@
  * 7. **正在看的这个文件会盯磁盘**（AI / 终端 / 外部编辑器都算）：内容变了且本地干净 →
  *    最小编辑刷进编辑器（光标、滚动、撤销栈都不乱）；本地有未保存修改 → 顶部黄条二选一，
  *    绝不静默覆盖。`hash10` 相同就直接忽略，所以「自己保存触发 watcher」不会自激。
+ * 8. **文档类（pdf / Office）是只看不改**：dirty 永远为 false、保存按钮不出现；预览内容由
+ *    `workspace-file-service` 拿（pdf = 字节交给 pdfjs；Office = Rust `cmd_preview_document`
+ *    抽成 Markdown / 表格网格），磁盘变了就整份重读。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -40,7 +44,12 @@ import RefreshSvg from '@/ui/components/icons/RefreshSvg'
 import ExportSvg from '@/ui/components/icons/ExportSvg'
 import MarkdownRenderer from '@/ui/pages/chat/components/message/markdown-renderer'
 import ImageViewer from './image-viewer'
+import DataTable from './data-table'
+import DocumentView from './document-view'
+import PdfView from './pdf-view'
+import SheetView from './sheet-view'
 import { monacoLanguageOf, relativeDirOf, textPreviewKindOf } from '@/domain/files/preview'
+import { parseDelimitedGrid } from '@/domain/files/delimited'
 import { buildPreviewDocument, previewNeeds } from '@/domain/files/html-preview'
 import {
   allowPreviewRoot,
@@ -119,6 +128,10 @@ function describeError(error: unknown): { message: string; code?: WorkspaceFileE
           code: error.code,
           message: t('无法以文本方式打开（可能是二进制文件或未知编码）'),
         }
+      case 'no-text':
+        return { code: error.code, message: t('文档里没有可预览的内容（可能是纯图片或空表）') }
+      case 'preview-failed':
+        return { code: error.code, message: t('无法解析这份文档（可能已损坏或加密）') }
       default:
         return { code: error.code, message: error.message }
     }
@@ -212,9 +225,14 @@ function WorkspaceFilePanel({
     onDirtyChange?.(dirty)
   }, [dirty, onDirtyChange])
 
-  // 媒体 → blob URL；换文件 / 卸载时释放
+  // 媒体 → blob URL；换文件 / 卸载时释放。
+  // 只有 image / audio / video 走这条路：pdf 交给 pdfjs（字节直接给它）、
+  // document / sheet 连字节都没有（内容是 Rust 抽出来的结构化数据）
   useEffect(() => {
-    if (state.status !== 'ready' || state.file.kind === 'text' || state.file.kind === 'other') {
+    if (
+      state.status !== 'ready' ||
+      (state.file.kind !== 'image' && state.file.kind !== 'audio' && state.file.kind !== 'video')
+    ) {
       setMediaUrl('')
       return
     }
@@ -469,6 +487,15 @@ function WorkspaceFilePanel({
     [htmlPreviewActive, draft],
   )
 
+  /** CSV / TSV 的表格预览：解析的是**草稿**（所见即当前所改，与 md / html 同一个口径） */
+  const csvGrid = useMemo(
+    () =>
+      showPreview && (previewKind === 'csv' || previewKind === 'tsv')
+        ? parseDelimitedGrid(draft, previewKind)
+        : null,
+    [showPreview, previewKind, draft],
+  )
+
   const openPreviewSettings = useCallback(() => {
     // 直达「安全 → HTML 预览」：提示条只能把人送到门口，开关本身只住在设置里
     settingsEvent.emit('openSettings', 'security-preview')
@@ -550,6 +577,16 @@ function WorkspaceFilePanel({
             />
           )
         }
+        // CSV / TSV：表格预览（解析的是草稿）。空草稿 / 解析不出行时退回编辑器
+        if (csvGrid && csvGrid.rows.length > 0) {
+          return (
+            <DataTable
+              rows={csvGrid.rows}
+              rowCount={csvGrid.rowCount}
+              colCount={csvGrid.colCount}
+            />
+          )
+        }
       }
       return (
         <div className="wfp-editor">
@@ -577,6 +614,25 @@ function WorkspaceFilePanel({
           </button>
         </div>
       )
+    }
+    // 文档类只看不改：正文由 Rust 抽成 Markdown（与 `parse_document` 同一份抽取）
+    if (file.kind === 'document') {
+      return (
+        <DocumentView
+          text={file.preview.text}
+          charCount={file.preview.charCount}
+          truncated={file.preview.truncated}
+          onOpenInSystem={openInSystem}
+        />
+      )
+    }
+    // 表格：每张工作表一份网格（表名可切换）
+    if (file.kind === 'sheet') {
+      return <SheetView sheets={file.preview.sheets} />
+    }
+    // PDF：字节交给 pdfjs 按页栅格化
+    if (file.kind === 'pdf') {
+      return <PdfView bytes={file.bytes} name={name} onOpenInSystem={openInSystem} />
     }
     if (!mediaUrl) return <div className="wfp-hint">{t('正在读取文件…')}</div>
 
