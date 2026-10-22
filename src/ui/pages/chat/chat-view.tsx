@@ -52,11 +52,13 @@ import settingsEvent from '@/events/settingsEvent'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
 import DropDownSvg from '@/ui/components/icons/DropDownSvg'
 import SearchSvg from '@/ui/components/icons/SearchSvg'
+import TrajectorySvg from '@/ui/components/icons/TrajectorySvg'
 import './chat-view.scss'
 import { settingsState } from '@/ui/store/settingStore'
 import ChatMessageList, {
   type MessageJumpTarget,
 } from './components/message/message-list'
+import { TrajectoryView } from './components/trajectory/trajectory-view'
 import WelcomeScreen from './components/welcome'
 import { appName } from '@/ui/constants'
 import { sessionStore } from '@/ui/store'
@@ -236,6 +238,8 @@ function ChatView() {
   }>(null)
   const [showProviderPrompt, setShowProviderPrompt] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
+  /** 消息区当前显示的是「轨迹表」而不是「对话」（同一份 messages，两种看法） */
+  const [showTrajectory, setShowTrajectory] = useState(false)
   /** 检索结果的跳转目标（滚动定位 + 临时高亮） */
   const [searchJump, setSearchJump] = useState<MessageJumpTarget | null>(null)
   const searchJumpNonceRef = useRef(0)
@@ -472,6 +476,22 @@ function ChatView() {
     })
   }, [])
 
+  /**
+   * 轨迹里「在对话中查看」：先切回聊天，再复用检索的跳转通道（滚动定位 + 临时高亮）。
+   * 切回是必须的 —— 目标气泡在轨迹视图下根本没渲染，不下发跳转就只能看到一张表。
+   */
+  const handleTrajectoryJump = useCallback((messageId: string) => {
+    const sid = chatState.value.currentSessionId
+    if (!sid) return
+    setShowTrajectory(false)
+    searchJumpNonceRef.current += 1
+    setSearchJump({
+      id: messageId,
+      sessionId: sid,
+      nonce: searchJumpNonceRef.current,
+    })
+  }, [])
+
   // 从 store 同步消息到本地 state（仅用于触发重渲染）
   const [messages, setMessages] = useState<Message[]>([])
   const applyMessagesUpdate = useCallback((sessionId: string) => {
@@ -517,6 +537,8 @@ function ChatView() {
       setMessages([])
       setSearchJump(null)
     }
+    // 切会话（含新建对话）：轨迹是「就这段会话而言」的视图，跟着关掉回到对话
+    setShowTrajectory(false)
   }, [chatState.value.currentSessionId])
   useEffect(() => {
     if (chatState.value.currentSessionId) {
@@ -974,6 +996,17 @@ function ChatView() {
               type="button">
               <SearchSvg />
             </button>
+            {/* 对话 / 轨迹：同一份消息的两种看法（轨迹 = 按轮次摊开的事件记录表） */}
+            {chatState.value.currentSessionId && (
+              <button
+                className={`toolbar-icon-btn${showTrajectory ? ' is-active' : ''}`}
+                onClick={() => setShowTrajectory((value) => !value)}
+                title={showTrajectory ? t('返回对话') : t('轨迹视图')}
+                aria-pressed={showTrajectory}
+                type="button">
+                <TrajectorySvg />
+              </button>
+            )}
             {/* 任务清单入口（未完成数红点 + 浮层编辑） */}
             {chatState.value.currentSessionId && (
               <TodoEntry sessionId={chatState.value.currentSessionId} />
@@ -1013,14 +1046,34 @@ function ChatView() {
 
         {chatState.value.currentSessionId ? (
           <>
-            <ChatMessageList
-              messages={messages}
-              setMessages={setMessages}
-              setText={handleSetText}
-              onQuote={handleQuote}
-              onQuoteJump={handleQuoteJump}
-              jumpTarget={searchJump}
-            />
+            {showTrajectory ? (
+              <TrajectoryView
+                sessionId={chatState.value.currentSessionId}
+                systemPrompt={
+                  sessionStore.getSession(chatState.value.currentSessionId)
+                    ?.systemPrompt
+                }
+                messages={messages}
+                hasMoreOlder={sessionStore.hasMoreMessages(
+                  chatState.value.currentSessionId,
+                )}
+                onLoadOlder={async () => {
+                  const sid = chatState.value.currentSessionId
+                  if (sid) await sessionStore.loadOlderMessages(sid)
+                }}
+                onJumpToMessage={handleTrajectoryJump}
+                onClose={() => setShowTrajectory(false)}
+              />
+            ) : (
+              <ChatMessageList
+                messages={messages}
+                setMessages={setMessages}
+                setText={handleSetText}
+                onQuote={handleQuote}
+                onQuoteJump={handleQuoteJump}
+                jumpTarget={searchJump}
+              />
+            )}
             <ChatInput
               ref={chatInputRef}
               sessionId={chatState.value.currentSessionId}

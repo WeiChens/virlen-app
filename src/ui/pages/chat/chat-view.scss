@@ -92,6 +92,12 @@
         color: var(--text-primary, #1a1a1a);
       }
 
+      // 轨迹视图开关处于开启态
+      &.is-active {
+        background: var(--accent-bg, #eef2ff);
+        color: var(--accent-color, #4f46e5);
+      }
+
       svg {
         width: 16px;
         height: 16px;
