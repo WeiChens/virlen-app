@@ -9,7 +9,13 @@ import type { Virtualizer } from '@tanstack/react-virtual'
 import type { Message } from '@/types'
 import { chatState, sessionStore } from '@/ui/store'
 import commentEvent from '@/events/commentEvent'
-import { isStreamingSession, pickActiveAnchorUser } from './helpers'
+import {
+  captureOlderAnchor,
+  isStreamingSession,
+  pickActiveAnchorUser,
+  resolveOlderAnchorRow,
+  type OlderAnchor,
+} from './helpers'
 import type { ListRow } from './rows'
 import {
   AT_BOTTOM_THRESHOLD,
@@ -68,6 +74,8 @@ export function useScrollController({
   const showScrollBtnRef = useRef(false)
   /** 正在从 SQLite 回补更早消息（防重入） */
   const loadingOlderRef = useRef(false)
+  /** 本次回补前抓住的阅读锚点（前插提交后由 layout effect 消费） */
+  const olderAnchorRef = useRef<(OlderAnchor & { before: number }) | null>(null)
   /** 上一次的条目数（用于判断「条目数变化」而非流式内容更新） */
   const lastMsgCountRef = useRef(0)
 
@@ -77,6 +85,24 @@ export function useScrollController({
     if (!sessionStore.hasMoreMessages(sid)) return
     loadingOlderRef.current = true
     setIsLoadingOlder(true)
+    // 抓「阅读锚点」：前插提交后用它校对 scrollTop（见下方 layout effect）。
+    // 贴底时不抓：那种情况由虚拟库的 followOnAppend 接管，硬校正会把用户从底部拽回上面。
+    olderAnchorRef.current = null
+    const el = containerRef.current
+    if (
+      el &&
+      el.scrollHeight - el.clientHeight - el.scrollTop > AT_BOTTOM_THRESHOLD
+    ) {
+      const anchor = captureOlderAnchor(
+        rowVirtualizer.getVirtualItems(),
+        el.scrollTop,
+        rowsRef.current,
+        messagesRef.current,
+      )
+      if (anchor) {
+        olderAnchorRef.current = { ...anchor, before: messagesRef.current.length }
+      }
+    }
     try {
       const ok = await sessionStore.loadOlderMessages(sid)
       if (ok && sid === chatState.value.currentSessionId) {
@@ -92,7 +118,38 @@ export function useScrollController({
         loadingOlderRef.current = false
       }, 150)
     }
-  }, [setMessages])
+  }, [rowVirtualizer, setMessages])
+
+  /**
+   * 用回补前抓的语义锚点校对滚动位置（消息已提交、绘制之前）。
+   *
+   * 虚拟库自己也会按行 key 锚定（`anchorTo:'end'` 的 `setOptions`），但两件事它做不到：
+   * 1. 锚点行的 key 没了（页边界跨工具组 → `tools:` 首成员变）→ 它一次补偿都不做；
+   * 2. 新页行高还是估值时，`start` 也是估的，误差会留在视口上方。
+   * 这里用库里同一份 `measurementsCache` 重算「该行应当在哪」，只差 > 1px 才写 —— 库已经补正时
+   * 是彻底的空操作，不会双补偿。
+   */
+  const applyOlderAnchor = useCallback(
+    (anchor: OlderAnchor & { before: number }) => {
+      const el = containerRef.current
+      // 只认「真的多出了消息」的那一次提交（否则是流式 / 删除 / 切会话）
+      if (!el || messagesRef.current.length <= anchor.before) return
+      const row = resolveOlderAnchorRow(
+        anchor,
+        messagesRef.current,
+        rowIndexOfMessageRef.current,
+      )
+      if (row === null) return
+      const start = rowVirtualizer.measurementsCache[row]?.start
+      if (start === undefined) return
+      const target = Math.max(0, start + anchor.offset)
+      if (Math.abs(el.scrollTop - target) <= 1) return
+      el.scrollTop = target
+      // 库内部偏移跟着走：否则下一帧会按旧偏移算渲染范围（视口空一块 / 渲染错行）
+      rowVirtualizer.scrollOffset = el.scrollTop
+    },
+    [rowVirtualizer],
+  )
 
   /**
    * 滚到底部并等布局稳定后显示：markdown / canvas / 图片首帧后仍会异步改高度（虚拟列表还有
@@ -174,6 +231,12 @@ export function useScrollController({
         jumpTo(rowIndexOfMessageRef.current[idx] ?? idx)
         return
       }
+    }
+    // 回补历史：用回补前抓的语义锚点校对滚动位置（跳转优先，故放在跳转之后）
+    const olderAnchor = olderAnchorRef.current
+    if (olderAnchor) {
+      olderAnchorRef.current = null
+      applyOlderAnchor(olderAnchor)
     }
     if (needInitialBottomRef.current) {
       // 切会话 / 首次打开：容器隐藏，等布局稳定后滚到底部再显示

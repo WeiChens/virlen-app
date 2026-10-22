@@ -8,6 +8,10 @@
 //!
 //! ⚠️ 判据必须与前端 `utils/messageContent.ts` / `message-list/rows.ts` 同源；若前端改了折叠规则，
 //! 这里要同步，否则会出现「加载条数对不上」。
+//!
+//! 除「可见行补足」外，取页还要做**页边界对齐轮次**（窗口首条必须是 `role='user'`，见
+//! [`is_turn_head`]）：前插历史时既有行的 key / 高度才不会变，虚拟列表的锚定才成立。
+//! 与 dsh 的 turn 对齐分页同一口径（其 `loadOlder` 在首个满足下限的 `turn/start` 停下）。
 
 use crate::agent::types::Message;
 use crate::session_db::repo::SessionRepo;
@@ -15,6 +19,45 @@ use crate::session_db::types::MessagePage;
 
 /// 补足时最多连续取几页（兜底：整段历史全是工具调用时，可见行数永远涨不上去，不能无限取）。
 pub const MESSAGE_FILL_MAX_CHUNKS: usize = 5;
+
+/// 页边界对齐时最多再向前取几页（兜底：整个会话没有 user 消息 / 一长串工具调用时不能无限取）。
+pub const MESSAGE_ALIGN_MAX_CHUNKS: usize = 4;
+
+/// 这条消息能不能当「页边界」（= 窗口首条）。
+///
+/// 只有 `role='user'` 可以：它是轮次起点，`rows.ts::buildRows` 的工具段**只会**被
+/// 「不带工具调用的消息」收口，因此凡以 user 开头的窗口，前插更早内容时：
+/// - 既有首行 `one:<user id>` / `tools:<首成员 id>` 的 key 一定不变（不会被更早的工具段吞并）；
+/// - 更早那一页的最后一条不会与该首行合进同一行（组内容不变 → 行高不变）。
+///
+/// 反例（不对齐就会发生）：边界落在「工具宿主」与它的 `role='tool'` 结果之间时，
+/// 前插那一页的工具宿主会与本页首行的工具段合成一行 → 组行 key 从 `tools:旧首成员` 变成
+/// `tools:新首成员`，虚拟列表的锚定 key 直接消失（tanstack 找不到 key 就一次补偿都不做）
+/// → 视口整块跳到刚取回的那一页。
+fn is_turn_head(message: &Message) -> bool {
+    message.role == "user"
+}
+
+/// 一页（原始 chunk）的取数结果。
+struct OlderChunk {
+    messages: Vec<Message>,
+    has_more: bool,
+    oldest_rowid: Option<i64>,
+}
+
+async fn fetch_older(
+    repo: &dyn SessionRepo,
+    session_id: &str,
+    chunk: usize,
+    cursor: Option<i64>,
+) -> Result<OlderChunk, String> {
+    let page = repo.get_message_page(session_id, chunk, cursor).await?;
+    Ok(OlderChunk {
+        messages: page.messages,
+        has_more: page.has_more,
+        oldest_rowid: page.oldest_rowid,
+    })
+}
 
 /// 消息是否有正文（text 块拼接、去首尾空白；与前端 `messageHasBody` 同口径）。
 pub fn message_has_body(message: &Message) -> bool {
@@ -94,6 +137,10 @@ pub fn visible_row_count(messages: &[Message], fold: bool) -> usize {
 /// - `before_rowid`：起始游标（`None` = 尾部窗口）；
 /// - `min_visible`：可见行数下限（≤ 0 时只取一页，行为与不分页补足一致）；
 /// - `fold`：折叠开关（= 前端设置项 `hideToolCallThink`）。
+///
+/// 两步：① 按可见行补足；② 把窗口首条对齐到轮次起点（`is_turn_head`，见那里的说明），
+/// 上限 [`MESSAGE_ALIGN_MAX_CHUNKS`] 页。第二步只影响「这一页从哪里开始」，不影响 `has_more`
+/// 语义（它始终描述对齐后窗口的最早一条之前还有没有内容）。
 pub async fn get_message_page_filled(
     repo: &dyn SessionRepo,
     session_id: &str,
@@ -108,14 +155,15 @@ pub async fn get_message_page_filled(
     let mut window: Vec<Message> = Vec::new();
     let mut has_more = false;
     let mut oldest_rowid = None;
+    // ① 按可见行补足
     for _ in 0..MESSAGE_FILL_MAX_CHUNKS {
-        let page = repo.get_message_page(session_id, chunk, cursor).await?;
-        has_more = page.has_more;
-        if page.messages.is_empty() {
+        let part = fetch_older(repo, session_id, chunk, cursor).await?;
+        has_more = part.has_more;
+        if part.messages.is_empty() {
             break;
         }
-        oldest_rowid = page.oldest_rowid;
-        let mut merged = page.messages;
+        oldest_rowid = part.oldest_rowid;
+        let mut merged = part.messages;
         merged.append(&mut window);
         window = merged;
         if !has_more || visible_row_count(&window, fold) >= min_visible {
@@ -125,6 +173,23 @@ pub async fn get_message_page_filled(
             Some(rowid) => cursor = Some(rowid),
             None => break,
         }
+    }
+    // ② 页边界对齐轮次：首条不是 user 消息就继续向前取，直到对齐 / 到底 / 触上限
+    for _ in 0..MESSAGE_ALIGN_MAX_CHUNKS {
+        if !has_more || window.first().is_none_or(is_turn_head) {
+            break;
+        }
+        let Some(rowid) = oldest_rowid else { break };
+        let part = fetch_older(repo, session_id, chunk, Some(rowid)).await?;
+        if part.messages.is_empty() {
+            has_more = false;
+            break;
+        }
+        has_more = part.has_more;
+        oldest_rowid = part.oldest_rowid;
+        let mut merged = part.messages;
+        merged.append(&mut window);
+        window = merged;
     }
     Ok(MessagePage {
         messages: window,

@@ -2,6 +2,73 @@
 import type { Message } from '@/types'
 import { getSessionRuntime } from '@/ui/store'
 import { sliceHead } from '@/utils/text'
+import type { ListRow } from './rows'
+
+/**
+ * 前插历史前抓住的「阅读锚点」：一条消息的 id + 它在视口内的偏移（px，相对滚动容器顶部）。
+ *
+ * 为何用**消息 id** 而不是行 key：行 key 会在页边界跨工具组时变（`tools:` + 首成员 id），
+ * 而消息 id 永远不变 —— 前插后拿它重新查出「现在落在哪一行」，再按行首位置算回应有的 scrollTop。
+ */
+export interface OlderAnchor {
+  messageId: string
+  offset: number
+}
+
+/**
+ * 一行用来做锚点的消息 id：单行就是自己；工具组取**首成员**（组身份 = 首成员）。
+ * @returns 该行在当前消息数组里找不到时返回 null
+ */
+export function rowAnchorMessageId(
+  row: ListRow | undefined,
+  messages: readonly Message[],
+): string | null {
+  if (!row) return null
+  const index = row.kind === 'one' ? row.messageIndex : row.messageIndexes[0]
+  return messages[index]?.id ?? null
+}
+
+/**
+ * 抓住「跨越折叠线的那一行」作为锚点（视口顶部正在读的内容）。
+ *
+ * @param items 当前渲染条目（`getVirtualItems()`，按 start 升序）
+ * @param scrollTop 滚动容器的当前偏移
+ * @returns 锚点；没有任何渲染条目（空列表）时为 null
+ */
+export function captureOlderAnchor(
+  items: readonly { index: number; start: number }[],
+  scrollTop: number,
+  rows: readonly ListRow[],
+  messages: readonly Message[],
+): OlderAnchor | null {
+  // 最后一条「顶部不超过折叠线」的条目 = 正压在顶部的那一行
+  let picked: { index: number; start: number } | undefined
+  for (const item of items) {
+    if (item.start > scrollTop) break
+    picked = item
+  }
+  const anchorItem = picked ?? items[0]
+  if (!anchorItem) return null
+  const messageId = rowAnchorMessageId(rows[anchorItem.index], messages)
+  if (messageId === null) return null
+  return { messageId, offset: scrollTop - anchorItem.start }
+}
+
+/**
+ * 锚点消息现在所在的行下标（前插后重算）。
+ * @param rowIndexOfMessage 消息下标 → 行下标（与 `buildRows` 同源）
+ * @returns 消息已不在内存（被删 / 换了会话）时为 null
+ */
+export function resolveOlderAnchorRow(
+  anchor: OlderAnchor,
+  messages: readonly Message[],
+  rowIndexOfMessage: readonly number[],
+): number | null {
+  const messageIndex = messages.findIndex((m) => m.id === anchor.messageId)
+  if (messageIndex < 0) return null
+  const row = rowIndexOfMessage[messageIndex]
+  return row === undefined || row < 0 ? null : row
+}
 
 /** 从消息内容中提取纯文本摘要（截断长度与后端预览保持一致：420 字符） */
 export function previewOfMessage(msg: Message): string {

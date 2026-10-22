@@ -4,7 +4,7 @@ use super::{open_tmp, test_message, test_session};
 use crate::agent::types::{Message, ToolUseContent};
 use crate::session_db::repo::SessionRepo;
 use crate::session_db::visible::{
-    get_message_page_filled, visible_row_count, MESSAGE_FILL_MAX_CHUNKS,
+    get_message_page_filled, visible_row_count, MESSAGE_ALIGN_MAX_CHUNKS, MESSAGE_FILL_MAX_CHUNKS,
 };
 use serde_json::json;
 
@@ -156,7 +156,7 @@ async fn fill_capped_when_visible_never_reaches_target() {
     let repo = open_tmp();
     // 全是工具调用：折叠后可见行恒为 1，靠上限收口
     let mut msgs = Vec::new();
-    for i in 1..=6 {
+    for i in 1..=10 {
         msgs.push(host(&format!("a{}", i)));
         msgs.push(tool(&format!("r{}", i)));
     }
@@ -165,10 +165,77 @@ async fn fill_capped_when_visible_never_reaches_target() {
     let page = get_message_page_filled(&repo, "s1", 2, None, 3, true)
         .await
         .unwrap();
-    // 最多 MESSAGE_FILL_MAX_CHUNKS 页 × 每页 2 条
-    assert_eq!(page.messages.len(), MESSAGE_FILL_MAX_CHUNKS * 2);
+    // 可见行补足取满 MESSAGE_FILL_MAX_CHUNKS 页；此后页边界对齐也找不到 user 消息，
+    // 再取满 MESSAGE_ALIGN_MAX_CHUNKS 页即收口（两个上限都生效）
+    assert_eq!(
+        page.messages.len(),
+        (MESSAGE_FILL_MAX_CHUNKS + MESSAGE_ALIGN_MAX_CHUNKS) * 2
+    );
     assert!(page.has_more);
     assert_eq!(visible_row_count(&page.messages, true), 1);
+}
+
+#[tokio::test]
+async fn page_head_aligns_to_turn_head() {
+    let repo = open_tmp();
+    // u3 / a3 / r3 是一轮。chunk=1：先取 [r3]（0 可见行）→ 再取到 [a3, r3]（1 行，达标）
+    // 但首条是工具宿主
+    seed(
+        &repo,
+        "s1",
+        &[
+            text("u1", "user"),
+            host("a1"),
+            tool("r1"),
+            text("u2", "user"),
+            host("a2"),
+            tool("r2"),
+            text("u3", "user"),
+            host("a3"),
+            tool("r3"),
+        ],
+    )
+    .await;
+
+    let page = get_message_page_filled(&repo, "s1", 1, None, 1, true)
+        .await
+        .unwrap();
+    // 可见行已达标（工具段 1 行），但首条不是 user → 再向前取一条，补齐到轮次起点。
+    // 对齐是按 chunk 粒度走的，chunk 越大越可能多带（但封顶 MESSAGE_ALIGN_MAX_CHUNKS）。
+    assert_eq!(ids(&page), vec!["u3", "a3", "r3"]);
+    assert!(page.has_more);
+}
+
+#[tokio::test]
+async fn page_head_alignment_stops_at_beginning() {
+    let repo = open_tmp();
+    seed(
+        &repo,
+        "s1",
+        &[text("u1", "user"), host("a1"), tool("r1")],
+    )
+    .await;
+
+    let page = get_message_page_filled(&repo, "s1", 2, None, 1, true)
+        .await
+        .unwrap();
+    // 向前取到会话开头：[a1, r1] → [u1, a1, r1]，到底即停
+    assert_eq!(ids(&page), vec!["u1", "a1", "r1"]);
+    assert!(!page.has_more);
+    assert!(page.oldest_rowid.is_some());
+}
+
+#[tokio::test]
+async fn page_head_alignment_keeps_visible_fill() {
+    let repo = open_tmp();
+    // 对齐只会让窗口变长，不会把已达标的内容取回去
+    let msgs: Vec<Message> = (1..=8).map(|i| text(&format!("u{}", i), "user")).collect();
+    seed(&repo, "s1", &msgs).await;
+
+    let page = get_message_page_filled(&repo, "s1", 4, None, 2, true)
+        .await
+        .unwrap();
+    assert_eq!(ids(&page), vec!["u5", "u6", "u7", "u8"]);
 }
 
 #[tokio::test]
