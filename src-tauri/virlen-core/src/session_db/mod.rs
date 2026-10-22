@@ -38,13 +38,15 @@ pub use memory::{
     MEMORY_REDISTILL_PURGE_FINGERPRINT, MEMORY_REDISTILL_RUNNING, MEMORY_REDISTILL_SKIPPED,
 };
 // 库维护（GUI 命令 `cmd_db_*` 需要）
-pub use maintenance::{total_bytes, CheckpointResult, DbMaintenance, DbStats, MaintainResult};
+pub use maintenance::{
+    total_bytes, AttachmentsGcResult, CheckpointResult, DbMaintenance, DbStats, MaintainResult,
+};
 pub use repo::{NoopSessionRepo, SessionRepo};
 pub use settings::{NoopSettingsRepo, SettingsRepo, SqliteSettingsRepo};
 // IPC DTO：GUI 的 `cmd_*` 命令签名用到（core 内部的原生工具同样使用）
 pub use types::{
     MessagePage, MessageSearchPage, MessageTimelinePage, MessageWindow, SearchCursor, SessionStat,
-    UserMessageRef, MSG_QUERY_MAX_LIMIT,
+    TailRepair, UserMessageRef, MSG_QUERY_MAX_LIMIT,
 };
 /// 仅供测试构造 DTO（生产路径只读不构造）
 #[cfg(test)]

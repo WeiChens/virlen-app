@@ -289,6 +289,13 @@ pub fn run() {
         commands::preview::handle_uri_request,
     );
 
+    // 图片附件协议：库里存 `attachment://<hash>.<ext>`，`<img>` 靠这个 scheme 取字节
+    // （见 `virlen_core::attachment` 与 `commands/attachment.rs`）
+    builder = builder.register_asynchronous_uri_scheme_protocol(
+        commands::attachment::SCHEME,
+        commands::attachment::handle_uri_request,
+    );
+
     builder
         .setup(|app| {
             // 初始化 Rust 侧埋点（panic hook + 事件回传桥）
@@ -431,6 +438,7 @@ pub fn run() {
             commands::session_db::cmd_list_sessions,
             commands::session_db::cmd_get_session,
             commands::session_db::cmd_get_messages,
+            commands::session_db::cmd_repair_session_tail,
             commands::session_db::cmd_get_message_page,
             commands::session_db::cmd_get_message_window,
             commands::session_db::cmd_get_message_timeline,
@@ -524,6 +532,8 @@ pub fn run() {
             commands::session_db::cmd_db_stats,
             commands::session_db::cmd_db_checkpoint,
             commands::session_db::cmd_db_maintain,
+            // 无引用的图片附件回收（P0-1 的回收侧）
+            commands::session_db::cmd_attachments_gc,
             // DeepSeek tokenizer（token 计数）
             deepseek_tokenizer::cmd_count_tokens,
             // 埋点：前端就绪后拉取落盘的历史 panic

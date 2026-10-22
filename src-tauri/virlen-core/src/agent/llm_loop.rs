@@ -97,6 +97,7 @@ pub async fn execute_llm_round(
         Some(effective_max_tokens),
         reasoning_effort.as_deref(),
         round,
+        repo,
     )
     .await?;
     let round_duration_ms = crate::telemetry::now_ms() - round_started_ms;
@@ -132,9 +133,13 @@ pub async fn execute_llm_round(
     // 没有 tool calls：LLM 直接给出文字回答
     let mut ctx = match output.ctx {
         None => {
+            // ⚠️ 纯文本回复也必须**定稿**（streaming=false + model）：否则落库的那一行永远带着
+            // `streaming=1` —— 重启后被当成「未定稿」，界面也会一直显示流式光标（线上旧账正是如此）。
+            let mut message = output.assistant_message;
+            finalize_assistant_message(&mut message, &model, sink, session_id);
             return Ok(ExecuteLlmRoundResult {
                 ctx: None,
-                assistant_message: output.assistant_message,
+                assistant_message: message,
                 tool_result_messages: Vec::new(),
                 paused: false,
             })

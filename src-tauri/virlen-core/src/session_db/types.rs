@@ -92,6 +92,33 @@ pub struct MessageSearchPage {
     pub next_cursor: Option<SearchCursor>,
 }
 
+// ==================== 崩溃修复（P0-2）====================
+
+/// 一次「尾部崩溃修复」的结果。
+///
+/// 修复前每次 LLM 轮次都会先落一条**未定稿占位**（`ui_data.pending = true` + `streaming = 1`），
+/// 结算时用同 id 整行覆盖。因此「库里还带着 pending 标记」只能来自**进程在轮次中途退出** ——
+/// 这就是崩溃检测的权威信号，不靠猜内容。
+///
+/// `changed()` 为 `false` 时表示什么都没改（正常会话的每次请求都不会产生写入）。
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TailRepair {
+    /// 清掉 `streaming` 标记的条数（包含下面被判为中断的那些）
+    pub finalized: usize,
+    /// 判定为「崩溃时还没有任何可见内容」而删除的条数
+    pub dropped: usize,
+    /// 补出的「程序中断」工具结果条数
+    pub tool_results: usize,
+}
+
+impl TailRepair {
+    /// 本次修复是否改动过任何一行
+    pub fn changed(&self) -> bool {
+        self.finalized + self.dropped + self.tool_results > 0
+    }
+}
+
 // ==================== 消息查询（query messages 工具）====================
 
 /// 「消息查询」工具的硬上限（服务端权威 clamp，防止 JS 侧绕过）

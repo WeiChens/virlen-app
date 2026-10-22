@@ -3,10 +3,11 @@
 //! 从原 `session_db.rs` 拆出：trait 是 Rust 引擎与 Tauri 命令共用的持久化接口，
 //! 与具体实现（`sqlite.rs`）解耦。
 
+use crate::agent::context::CompactionMask;
 use crate::agent::types::{Message, Session};
 use crate::session_db::types::{
     MessagePage, MessageSearchPage, MessageTimelinePage, MessageWindow, SearchCursor, SessionStat,
-    UserMessageRef,
+    TailRepair, UserMessageRef,
 };
 use crate::session_db::usage::{UsageEntry, UsageQuery, UsageRecordPage, UsageStats};
 use async_trait::async_trait;
@@ -161,6 +162,57 @@ pub trait SessionRepo: Send + Sync {
 
     /// 删除会话及其全部消息
     async fn delete_session(&self, session_id: &str) -> Result<(), String>;
+
+    /// 记录一次上下文压缩（P0-3）。
+    ///
+    /// `[start, end]` 这段原始消息在模型上下文里由 `summary` 这条消息替代。
+    /// 幂等：同一 `summary_message_id` 只记一条（重复压缩同一区间不会写多条）。
+    async fn record_compaction(
+        &self,
+        _session_id: &str,
+        _start_message_id: &str,
+        _end_message_id: &str,
+        _summary_message_id: &str,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// 读取某会话的全部压缩记录（按写入顺序）。没有记录 → 空（调用方走旧的 summary 切片）。
+    async fn list_compactions(&self, _session_id: &str) -> Result<Vec<CompactionMask>, String> {
+        Ok(Vec::new())
+    }
+
+    /// 尾部崩溃修复（幂等，无异常时**零写入**）。
+    ///
+    /// 处理两件事：
+    /// 1. **未定稿的 assistant**：引擎每轮开始会落一条 `pending` 占位，结算时整行覆盖；
+    ///    因此还带着 `pending` 标记的行 = 进程在轮次中途退出。空正文 → 删掉（否则模型会收到
+    ///    一条空 assistant 消息）；有正文 → 清标记并标 `ui_data.interrupted`（模型看到的是
+    ///    “这条回复被截断了”）。**旧版本定稿时漏清 `streaming` 的历史行只清标记，不标中断**。
+    /// 2. **悬空 tool_calls**：尾部 assistant 声明了但没有 tool 返回 → 补一条「程序中断」占位
+    ///    （文案与 `message_protocol::INTERRUPTED_TOOL_RESULT` / 前端 `message-repair.ts` 一致），
+    ///    否则下次请求必 400。
+    ///
+    /// 只扫尾部窗口（崩溃痕迹不可能出现在中间）；只在「悬空 assistant 之后仅有 tool 消息」时补，
+    /// 否则交给请求层清洗（那条路径会把占位归位到正确位置）。
+    ///
+    /// 调用时机：每次 run 开始、**写入新用户消息之前** —— 否则合成结果会排到用户消息之后。
+    async fn repair_tail(&self, _session_id: &str) -> Result<TailRepair, String> {
+        Ok(TailRepair::default())
+    }
+
+    /// 流式过程中把**已产出的正文**写回那条未定稿消息（崩溃保护）。
+    ///
+    /// 为什么需要它：引擎只在轮次结算时落 assistant 消息，进程若在流式途中被杀，那次输出
+    /// 会彻底消失 —— 用户重开只看到「自己发了消息、AI 没反应」。定期把累积正文写回 pending
+    /// 行后，重开至少能看到半截回复，并由 [`SessionRepo::repair_tail`] 标成「已中断」。
+    ///
+    /// 为什么是**同步**方法：它由流式回调调用，回调是 `FnMut`（不能 `.await`）；而
+    /// `append_messages` 走 `spawn_blocking`。实现只做一条 `UPDATE`（行已由占位写路径插好），
+    /// 微秒级，故刻意同步 —— 每轮每秒最多几次，代价远低于一次 IPC。
+    ///
+    /// 默认空实现（`NoopSessionRepo` 无持久化后端）；**尽力而为**：失败绝不能影响流式输出。
+    fn persist_streaming_text(&self, _session_id: &str, _message: &Message) {}
 
     /// 兜底回收孤儿消息（`session_id` 指向不存在会话的行），返回删除条数。
     ///

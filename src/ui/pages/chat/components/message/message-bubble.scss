@@ -340,6 +340,19 @@
         cursor: default;
       }
 
+      // 被中断的回复：常显（这是状态事实，不是可点的操作），用琥珀色与「耗时/时间」区分
+      .action-interrupted {
+        font-size: var(--font-size-xs);
+        line-height: 16px;
+        padding: 0 5px;
+        border-radius: 3px;
+        color: var(--warning-text, #b45309);
+        background: var(--warning-bg, #fef3c7);
+        white-space: nowrap;
+        cursor: default;
+        margin-right: auto;
+      }
+
       .action-btn {
         width: 20px;
         height: 20px;

@@ -198,6 +198,8 @@ describe('sessionRepo 库维护（设置 → 存储）', () => {
       journalSizeLimit: 16777216,
       sessionCount: 3,
       messageCount: 9,
+      attachmentsBytes: 0,
+      attachmentsFiles: 0,
     }
   }
 
@@ -226,11 +228,29 @@ describe('sessionRepo 库维护（设置 → 存储）', () => {
     expect(result!.after.dbBytes + result!.after.walBytes).toBe(600)
   })
 
+  it('attachmentsGc 返回回收统计（设置页展示释放量）', async () => {
+    invokeMock.mockResolvedValueOnce({
+      removed: 2,
+      removedParts: 1,
+      freedBytes: 2048,
+      kept: 7,
+      skippedYoung: 1,
+      skippedUnknown: 0,
+    })
+
+    const result = await sessionRepo.attachmentsGc()
+
+    expect(invokeMock.mock.calls[0][0]).toBe('cmd_attachments_gc')
+    expect(result?.removed).toBe(2)
+    expect(result?.freedBytes).toBe(2048)
+  })
+
   it('非 Tauri 环境 / 命令失败 → 返回 null，绝不把异常抛给 UI', async () => {
     invokeMock.mockRejectedValue(new Error('no tauri'))
 
     await expect(sessionRepo.dbStats()).resolves.toBeNull()
     await expect(sessionRepo.dbCheckpoint()).resolves.toBeNull()
     await expect(sessionRepo.dbMaintain()).resolves.toBeNull()
+    await expect(sessionRepo.attachmentsGc()).resolves.toBeNull()
   })
 })

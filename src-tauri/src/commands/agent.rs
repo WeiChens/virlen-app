@@ -12,6 +12,7 @@ use virlen_core::agent::cancellation::CancellationToken;
 use virlen_core::agent::compress;
 use virlen_core::agent::engine::AgentEngine;
 use virlen_core::agent::event_sink::{self, EventSink};
+use virlen_core::agent::host::HostEnv;
 use virlen_core::agent::provider::{DefaultProviderFactory, ProviderFactory};
 use virlen_core::agent::types::AgentEvent;
 use virlen_core::agent::usage;
@@ -95,6 +96,11 @@ pub fn init_agent_engine(app: &tauri::AppHandle) {
         .try_state::<Arc<dyn MemoryRepo>>()
         .map(|s| s.inner().clone())
         .unwrap_or_else(|| Arc::new(NoopMemoryRepo));
+    // 宿主环境（GUI）：资源目录 + 数据目录；headless / CLI 换 CliHost 即可
+    let host = crate::host::TauriHost::new(app.clone());
+    // 图片附件目录 = `<data_dir>/attachments`（与 `virlen.db` 同级）：
+    // 登记进程级实例，`virlen-attachment` 协议处理器与外置写入才能指向同一份根。
+    virlen_core::attachment::init_global(&host.data_dir());
     let engine = Arc::new(AgentEngine::with_deps(
         bridge.clone(),
         sink.clone(),
@@ -103,8 +109,7 @@ pub fn init_agent_engine(app: &tauri::AppHandle) {
             bridge: bridge.clone(),
             sink: sink.clone(),
         }),
-        // 宿主环境（GUI）：资源目录 + 数据目录；headless / CLI 换 CliHost 即可
-        Arc::new(crate::host::TauriHost::new(app.clone())),
+        Arc::new(host),
         settings,
         memory,
     ));
@@ -358,6 +363,18 @@ pub async fn cmd_compress_context(
         &CancellationToken::new(),
     )
     .await?;
+    // 遮罩记录（P0-3）：区间 = 本次压缩实际覆盖的切片（与 `compress` 内部同源）。
+    // 落库失败不影响本次压缩：下次请求会回退到旧的「最后一条 summary」位置切片。
+    let slice = compress::compress_slice(&messages);
+    if let (Some(first), Some(last)) = (slice.first(), slice.last()) {
+        if let Err(e) = repo
+            .inner()
+            .record_compaction(&session.id, &first.id, &last.id, &out.message.id)
+            .await
+        {
+            eprintln!("[session_db] 写入压缩记录失败（按旧规则切片）: {}", e);
+        }
+    }
     // 记账：AI 摘要是一次真实消费；raw 没有模型调用 → 不记账
     if let Some(llm) = &out.llm {
         let (ptype, pid) = provider

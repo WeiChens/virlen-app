@@ -126,3 +126,47 @@ describe('sessionStore.ensureContextLoaded', () => {
     expect(sessionStore.getSession('s3')!.messages).toHaveLength(70)
   })
 })
+
+/**
+ * 开库顺序：`repairTail` 必须在 `getMessagePage` **之前**。
+ *
+ * 回归背景：崩溃修复过去只在「下次发送前」跑，重开 App 时那条带半截正文的未定稿回复既不会
+ * 被定稿、也不会打上「已中断」—— 实测就是「回复没了、徐标也不出现」。
+ */
+describe('sessionStore.ensureMessagesLoaded', () => {
+  it('读消息之前先收口崩溃残留', async () => {
+    seedSession('s-tail', [])
+    const order: string[] = []
+    vi.spyOn(sessionRepo, 'repairTail').mockImplementation(async () => {
+      order.push('repair')
+      return { finalized: 1, dropped: 0, toolResults: 0 }
+    })
+    vi.spyOn(sessionRepo, 'getMessagePage').mockImplementation(async () => {
+      order.push('page')
+      return { messages: [], hasMore: false, oldestRowid: null }
+    })
+
+    await sessionStore.ensureMessagesLoaded('s-tail')
+
+    expect(order).toEqual(['repair', 'page'])
+  })
+
+  it('会话正在回复中时不修复（那条回复还活着）', async () => {
+    seedSession('s-busy', [])
+    const repair = vi.spyOn(sessionRepo, 'repairTail').mockResolvedValue(null)
+    vi.spyOn(sessionRepo, 'getMessagePage').mockResolvedValue({
+      messages: [],
+      hasMore: false,
+      oldestRowid: null,
+    })
+
+    const { updateSessionRuntime } = await import('@/ui/store')
+    updateSessionRuntime('s-busy', { working: true })
+    try {
+      await sessionStore.ensureMessagesLoaded('s-busy')
+      expect(repair).not.toHaveBeenCalled()
+    } finally {
+      updateSessionRuntime('s-busy', { working: false })
+    }
+  })
+})

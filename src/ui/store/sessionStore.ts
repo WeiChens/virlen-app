@@ -7,6 +7,7 @@ import type { SessionRepo, UserMessageRef } from '@/infrastructure/sessionRepo'
 import { sessionRepo } from '@/infrastructure/sessionRepo'
 import { track, trackError, hashText } from '@/utils/telemetry'
 import { settingsState } from './settingStore'
+import { getSessionRuntime } from './sessionRuntimeStore'
 
 /** 每次 SQL 取的原始消息条数（尾部窗口 / 回补步长） */
 export const MESSAGE_PAGE_SIZE = 60
@@ -104,6 +105,14 @@ class SessionStore {
     if (idx === -1) return
     const started = Date.now()
     try {
+      // ⚠️ 读消息**之前**先收口崩溃残留：上一轮若被杀在流式途中，库里会留一条带半截正文的
+      // 未定稿回复（`pending` 占位）。不修就是“首屏一个半截气泡”，而且徐标也不会出现
+      // —— 修复以前只在下次发送时才跑。幂等：正常会话零写入。
+      // 会话正在跑 / 暂停待恢复时跳过：那条回复还活着，标成中断会误伤。
+      const rt = getSessionRuntime(sessionId)
+      if (!rt.working && !rt.paused) {
+        await this.repo.repairTail(sessionId)
+      }
       // 只拉尾部窗口，避免一次性把数千条消息经 IPC 搬到前端
       const page = await this.repo.getMessagePage(sessionId, {
         limit: MESSAGE_PAGE_SIZE,

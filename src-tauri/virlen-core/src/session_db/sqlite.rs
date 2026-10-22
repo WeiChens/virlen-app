@@ -4,7 +4,9 @@
 //! 会话 / 消息 / 检索的 trait 实现集中在此；消息查询与用量账本的具体实现分别见
 //! `message_query.rs` 与 `usage.rs`，本文件只做转发。
 
+use crate::agent::context::CompactionMask;
 use crate::agent::types::{Message, Session};
+use crate::attachment::AttachmentStore;
 use crate::session_db::maintenance::WAL_SIZE_LIMIT;
 use crate::session_db::message_query;
 use crate::session_db::repo::SessionRepo;
@@ -17,7 +19,7 @@ use crate::session_db::schema::{
 };
 use crate::session_db::types::{
     MessagePage, MessageSearchPage, MessageTimelinePage, MessageWindow, SearchCursor, SessionStat,
-    UserMessageRef,
+    TailRepair, UserMessageRef,
 };
 use crate::session_db::usage::{
     self, backfill_usage_ledger, repair_usage_ledger_model, UsageEntry, UsageQuery,
@@ -25,12 +27,16 @@ use crate::session_db::usage::{
 };
 use async_trait::async_trait;
 use rusqlite::{params, Connection};
-use std::collections::HashMap;
+use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub struct SqliteSessionRepo {
     pub(crate) conn: Arc<Mutex<Connection>>,
+    /// 图片附件仓库（`<数据目录>/attachments`）：**所有落库路径在写前把内联 base64 外置**，
+    /// 库里因此不再堆积图片字节（见 `crate::attachment` 模块头）。
+    attachments: AttachmentStore,
     /// 历史数据迁移（回填 `text_plain` + 重建 FTS）是否已完成。
     /// 未完成时 `search_messages` 回退到旧的 `LIKE content` 路径，保证检索依然正确（略慢）。
     migration_done: Arc<AtomicBool>,
@@ -51,8 +57,11 @@ impl SqliteSessionRepo {
         // 历史高水位（实测 99 MB），而它只是「还没并进主库的页」，本不该长期占盘。
         let _ = conn.pragma_update(None, "journal_size_limit", WAL_SIZE_LIMIT);
         let migration_done = init_schema(&conn)?;
+        // 附件目录与库同级（`<data_dir>/attachments`）：库被搬走 / 备份时图片跟着走
+        let attachments = AttachmentStore::new(db_path.parent().unwrap_or_else(|| std::path::Path::new(".")));
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            attachments,
             migration_done: Arc::new(AtomicBool::new(migration_done)),
         })
     }
@@ -93,6 +102,57 @@ impl SqliteSessionRepo {
         })
         .await
         .map_err(|e| format!("DB task join error: {}", e))?
+    }
+    /// 历史消息里的内联图片外置（P0-1 回填）：把老库里还躺着 base64 的消息换成
+    /// `attachment://` 引用。幂等、分批（批间释放连接锁），无待处理数据时只多一次查询。
+    ///
+    /// 返回实际改造的行数。
+    pub async fn backfill_attachments(&self) -> Result<usize, String> {
+        let conn = self.conn.clone();
+        let store = self.attachments.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::session_db::schema::backfill_attachments(&conn, &store)
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
+    /// 启动兜底：把**最近活跃会话**的尾部崩溃残留收口一遍（返回改动过的会话数）。
+    ///
+    /// 为什么不只依赖「打开会话时修复」：拿到会话的路径有多条（点击 / 托盘 / 手机 /
+    /// 启动恢复），任何一条没走到，半截回复就会一直停在 `pending`。启动时统一扫一遍是
+    /// 唯一不依赖前端时序的收口点（UI 侧还有一道展示兜底，见 `message-bubble`）。
+    ///
+    /// 只扫最近 `STARTUP_REPAIR_SESSIONS` 个会话：崩溃只可能发生在「刚才在用的那个」，
+    /// 而每个会话的代价只是一条按 `session_id` 索引的尾部查询（20 行）。
+    pub async fn repair_recent_tails(&self) -> Result<usize, String> {
+        let ids: Vec<String> = {
+            let conn = self.conn.clone();
+            tokio::task::spawn_blocking(move || -> Result<Vec<String>, String> {
+                let conn = conn.lock().unwrap();
+                let mut stmt = conn
+                    .prepare("SELECT id FROM sessions ORDER BY updated_at DESC LIMIT ?1")
+                    .map_err(|e| format!("准备会话列表查询失败: {}", e))?;
+                let rows = stmt
+                    .query_map(params![STARTUP_REPAIR_SESSIONS as i64], |row| {
+                        row.get::<_, String>(0)
+                    })
+                    .map_err(|e| e.to_string())?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|e| format!("DB task join error: {}", e))??
+        };
+        let mut changed = 0;
+        for id in ids {
+            match self.repair_tail(&id).await {
+                Ok(report) if report.changed() => changed += 1,
+                Ok(_) => {}
+                // 单个会话失败不该拖住其它会话（下次打开它时会再试一次）
+                Err(e) => eprintln!("[session_db] 启动修复会话 {} 失败: {}", id, e),
+            }
+        }
+        Ok(changed)
     }
 }
 
@@ -162,8 +222,11 @@ ON CONFLICT(id) DO UPDATE SET
     ) -> Result<(), String> {
         let conn = self.conn.clone();
         let session_id = session_id.to_string();
-        let messages = messages.to_vec();
+        let mut messages = messages.to_vec();
+        let attachments = self.attachments.clone();
         tokio::task::spawn_blocking(move || -> Result<(), String> {
+            // 写前外置图片：库里只留 `attachment://` 引用（见 `crate::attachment`）
+            attachments.externalize_messages(&mut messages);
             let conn = conn.lock().unwrap();
             let tx = conn
                 .unchecked_transaction()
@@ -230,8 +293,11 @@ INSERT INTO messages (
         let conn = self.conn.clone();
         let session_id = session_id.to_string();
         let from_message_id = from_message_id.to_string();
-        let messages = messages.to_vec();
+        let mut messages = messages.to_vec();
+        let attachments = self.attachments.clone();
         tokio::task::spawn_blocking(move || -> Result<(), String> {
+            // 写前外置图片：库里只留 `attachment://` 引用（见 `crate::attachment`）
+            attachments.externalize_messages(&mut messages);
             let conn = conn.lock().unwrap();
             let tx = conn
                 .unchecked_transaction()
@@ -406,6 +472,7 @@ INSERT INTO messages (
     async fn get_context_messages(&self, session_id: &str) -> Result<Vec<Message>, String> {
         let conn = self.conn.clone();
         let session_id = session_id.to_string();
+        let attachments = self.attachments.clone();
         tokio::task::spawn_blocking(move || -> Result<Vec<Message>, String> {
             let conn = conn.lock().unwrap();
             // 只读「最后一个 summary 及其之后」：请求组装本就丢掉 summary 之前的消息，读进内存是
@@ -414,8 +481,11 @@ INSERT INTO messages (
             let mut stmt = conn
                 .prepare(
                     "SELECT * FROM messages WHERE session_id=?1 \
-                     AND rowid >= IFNULL((SELECT MAX(rowid) FROM messages \
-                                          WHERE session_id=?1 AND role='summary'), 0) \
+                     AND rowid >= IFNULL((SELECT MIN(m.rowid) FROM messages m \
+                                          JOIN compactions c ON m.id = c.end_message_id \
+                                          WHERE c.session_id=?1), \
+                                         IFNULL((SELECT MAX(rowid) FROM messages \
+                                                 WHERE session_id=?1 AND role='summary'), 0)) \
                      ORDER BY rowid ASC",
                 )
                 .map_err(|e| e.to_string())?;
@@ -424,8 +494,13 @@ INSERT INTO messages (
                     message_from_row(row).map_err(row_err)
                 })
                 .map_err(|e| e.to_string())?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|e| e.to_string())
+            let mut messages = rows
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            // 这份结果**唯一的用途是交给模型**：把 `attachment://` 还原成 data URL
+            //（库里只存引用，见 `crate::attachment`）。文件已丢失的图降级成文本提示。
+            attachments.resolve_messages(&mut messages);
+            Ok(messages)
         })
         .await
         .map_err(|e| format!("DB task join error: {}", e))?
@@ -483,6 +558,12 @@ INSERT INTO messages (
             if has_more {
                 rows_buf.truncate(limit);
             }
+            // 崩溃残留的空壳不展示：引擎每轮会先落一条 `pending` 占位，若进程在首字前退出，
+            // 库里就剩一条“什么都没产出”的 assistant 行 —— 界面上只会是一个空气泡。
+            // 下一次发送时 `repair_tail` 会把它删掉；这里只是**不展示**，不碰数据。
+            rows_buf.retain(|(_, message)| {
+                !(is_pending_placeholder(message) && !has_visible_content(message))
+            });
             // 查询为 rowid DESC（新→旧），反转为升序（旧→新）
             rows_buf.reverse();
             let oldest_rowid = rows_buf.first().map(|(rid, _)| *rid);
@@ -588,6 +669,224 @@ INSERT INTO messages (
         .await
     }
 
+    /// 尾部崩溃修复（契约见 `SessionRepo::repair_tail`）。
+    ///
+    /// 全部动作在一个事务里，且**无异常时一行不写** —— 正常会话的每次请求只是多一次
+    /// “读尾部 20 行”的查询（`session_id` 有索引）。
+    async fn repair_tail(&self, session_id: &str) -> Result<TailRepair, String> {
+        let conn = self.conn.clone();
+        let session_id = session_id.to_string();
+        tokio::task::spawn_blocking(move || -> Result<TailRepair, String> {
+            let conn = conn.lock().unwrap();
+            // ① 尾部窗口（崩溃痕迹只可能在最后几条里）
+            let tail: Vec<Message> = {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT * FROM messages WHERE session_id=?1 \
+                         ORDER BY rowid DESC LIMIT ?2",
+                    )
+                    .map_err(|e| format!("准备尾部查询失败: {}", e))?;
+                let rows = stmt
+                    .query_map(params![session_id, TAIL_REPAIR_WINDOW as i64], |row| {
+                        message_from_row(row).map_err(row_err)
+                    })
+                    .map_err(|e| e.to_string())?;
+                let mut out = rows
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| e.to_string())?;
+                out.reverse(); // 升序（旧 → 新）
+                out
+            };
+            if tail.is_empty() {
+                return Ok(TailRepair::default());
+            }
+            let mut report = TailRepair::default();
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| format!("开启事务失败: {}", e))?;
+
+            // ② 未定稿的 assistant
+            for message in &tail {
+                if message.streaming != Some(true) {
+                    continue;
+                }
+                if is_pending_placeholder(message) {
+                    if !has_visible_content(message) {
+                        // 一个字都没产出（崩在首字之前）：留着只会给下次请求添一条空 assistant
+                        tx.execute(
+                            "DELETE FROM messages WHERE id=?1 AND session_id=?2",
+                            params![message.id, session_id],
+                        )
+                        .map_err(|e| format!("删除未定稿占位失败: {}", e))?;
+                        report.dropped += 1;
+                    } else {
+                        tx.execute(
+                            "UPDATE messages SET streaming=0, ui_data=?3 \
+                             WHERE id=?1 AND session_id=?2",
+                            params![
+                                message.id,
+                                session_id,
+                                json!({ "interrupted": true }).to_string()
+                            ],
+                        )
+                        .map_err(|e| format!("标记中断回复失败: {}", e))?;
+                        report.finalized += 1;
+                    }
+                } else {
+                    // 旧版本定稿时漏清 `streaming`（纯文本回复走的就是这条）：
+                    // 内容本身是完整的，只清标记，绝不能当“中断”
+                    tx.execute(
+                        "UPDATE messages SET streaming=0 WHERE id=?1 AND session_id=?2",
+                        params![message.id, session_id],
+                    )
+                    .map_err(|e| format!("清除遗留 streaming 标记失败: {}", e))?;
+                    report.finalized += 1;
+                }
+            }
+
+            // ③ 悬空 tool_calls（补「程序中断」占位，否则下次请求必 400）
+            let last_assistant = tail.iter().rposition(|m| {
+                m.role == "assistant" && m.tool_calls.as_ref().is_some_and(|tcs| !tcs.is_empty())
+            });
+            if let Some(index) = last_assistant {
+                // 只有“其后全是 tool 消息”时才在这里补：否则占位会排到用户消息之后，宁可不补
+                if tail[index + 1..].iter().all(|m| m.role == "tool") {
+                    let answered: HashSet<&str> = tail[index + 1..]
+                        .iter()
+                        .filter_map(|m| m.tool_call_id.as_deref())
+                        .collect();
+                    let missing: Vec<String> = tail[index]
+                        .tool_calls
+                        .as_ref()
+                        .map(|tcs| {
+                            tcs.iter()
+                                .map(|tc| tc.id.clone())
+                                .filter(|id| !id.is_empty() && !answered.contains(id.as_str()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if !missing.is_empty() {
+                        let mut stmt = tx
+                            .prepare(MESSAGE_INSERT_SQL)
+                            .map_err(|e| format!("准备占位写入失败: {}", e))?;
+                        for call_id in missing {
+                            write_message(
+                                &tx,
+                                &mut stmt,
+                                &session_id,
+                                &interrupted_tool_result(&call_id),
+                            )?;
+                            report.tool_results += 1;
+                        }
+                    }
+                }
+            }
+
+            tx.commit().map_err(|e| format!("提交修复事务失败: {}", e))?;
+            Ok(report)
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
+    /// 流式正文增量落库（契约见 `SessionRepo::persist_streaming_text`）。
+    ///
+    /// 只改 `content` / `reasoning_content` / `text_plain` 三列：行已由轮次开头的占位写路径插好，
+    /// 这里不走整行 upsert（不 externalize、不动 ui_data / streaming / tool_calls）。
+    /// 同步 + 拿连接锁：持锁时间就是一条主键 UPDATE（微秒级），流式回调无法 await，故刻意如此。
+    fn persist_streaming_text(&self, session_id: &str, message: &Message) {
+        let conn = match self.conn.try_lock() {
+            Ok(c) => c,
+            // 其它写路径 panic 过也不能让流式输出跟着挂：取回 poisoned guard 继续用。
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            // 连接正被别的写路径占着（VACUUM / 大批量写入）：这一次直接跳过 ——
+            // 宁可少落一帧正文，也不能把流式循环卡在锁上；下一个节流点会补上。
+            Err(std::sync::TryLockError::WouldBlock) => return,
+        };
+        let content = match serde_json::to_string(&message.content) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        if let Err(e) = conn.execute(
+            "UPDATE messages SET content=?3, reasoning_content=?4, text_plain=?5 \
+             WHERE id=?1 AND session_id=?2",
+            params![
+                message.id,
+                session_id,
+                content,
+                message.reasoning_content.as_deref(),
+                // 同步维护检索列：`messages` 上的 AFTER UPDATE 触发器会拿 `new.text_plain`
+                // 重建 FTS 行，不同步的话进程被杀后这半截正文就搜不到。
+                crate::session_db::row::content_plain_text(&message.content),
+            ],
+        ) {
+            eprintln!("[session_db] 流式正文落库失败（下次节流再试）: {}", e);
+        }
+    }
+
+    /// 记录一次上下文压缩（契约见 `SessionRepo::record_compaction`）
+    async fn record_compaction(
+        &self,
+        session_id: &str,
+        start_message_id: &str,
+        end_message_id: &str,
+        summary_message_id: &str,
+    ) -> Result<(), String> {
+        let conn = self.conn.clone();
+        let session_id = session_id.to_string();
+        let start_message_id = start_message_id.to_string();
+        let end_message_id = end_message_id.to_string();
+        let summary_message_id = summary_message_id.to_string();
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let conn = conn.lock().unwrap();
+            // id 由 summary 的 id 推出 → 天然幂等（重复压缩同一区间不会写多条）
+            conn.execute(
+                "INSERT INTO compactions \
+                 (id, session_id, start_message_id, end_message_id, summary_message_id, created_at) \
+                 VALUES (?1,?2,?3,?4,?5,?6) ON CONFLICT(id) DO NOTHING",
+                params![
+                    format!("c-{}", summary_message_id),
+                    session_id,
+                    start_message_id,
+                    end_message_id,
+                    summary_message_id,
+                    crate::agent::llm_round::now_ms(),
+                ],
+            )
+            .map_err(|e| format!("写入压缩记录失败: {}", e))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
+    /// 读取压缩记录（契约见 `SessionRepo::list_compactions`）
+    async fn list_compactions(&self, session_id: &str) -> Result<Vec<CompactionMask>, String> {
+        let conn = self.conn.clone();
+        let session_id = session_id.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Vec<CompactionMask>, String> {
+            let conn = conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT start_message_id, end_message_id, summary_message_id \
+                     FROM compactions WHERE session_id=?1 ORDER BY created_at ASC, id ASC",
+                )
+                .map_err(|e| format!("准备压缩记录查询失败: {}", e))?;
+            let rows = stmt
+                .query_map(params![session_id], |row| {
+                    Ok(CompactionMask {
+                        start_message_id: row.get(0)?,
+                        end_message_id: row.get(1)?,
+                        summary_message_id: row.get(2)?,
+                    })
+                })
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
     async fn delete_session(&self, session_id: &str) -> Result<(), String> {
         let conn = self.conn.clone();
         let session_id = session_id.to_string();
@@ -661,8 +960,11 @@ impl SqliteSessionRepo {
     ) -> Result<bool, String> {
         let conn = self.conn.clone();
         let session_id = session_id.to_string();
-        let messages = messages.to_vec();
+        let mut messages = messages.to_vec();
+        let attachments = self.attachments.clone();
         tokio::task::spawn_blocking(move || -> Result<bool, String> {
+            // 写前外置图片：库里只留 `attachment://` 引用（见 `crate::attachment`）
+            attachments.externalize_messages(&mut messages);
             let conn = conn.lock().unwrap();
             let tx = conn
                 .unchecked_transaction()
@@ -720,6 +1022,69 @@ ON CONFLICT(id) DO UPDATE SET
         })
         .await
         .map_err(|e| format!("DB task join error: {}", e))?
+    }
+}
+
+/// 写消息的 INSERT 语句（18 列）。`repair_tail` 补占位时复用；其余三处写路径内联了同一份 SQL。
+const MESSAGE_INSERT_SQL: &str = r#"
+INSERT INTO messages (
+  id, session_id, role, content, tool_calls, reasoning_content, tool_call_id,
+  is_error, elapsed_ms, reasoning_elapsed_ms, ui_data, timestamp, streaming,
+  model, usage, image_vision_analyze_optimize, image_vision_analyze_result, text_plain
+) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
+"#;
+
+/// 崩溃修复的扫描窗口：只看最后 N 条（崩溃痕迹不可能出现在中间）
+const TAIL_REPAIR_WINDOW: usize = 20;
+
+/// 启动时统一修复的会话上限（按 `updated_at` 取最近的 N 个）
+const STARTUP_REPAIR_SESSIONS: usize = 50;
+
+/// 是不是引擎在轮次开始落下的「未定稿占位」（`ui_data.pending = true`）
+fn is_pending_placeholder(message: &Message) -> bool {
+    message
+        .ui_data
+        .as_ref()
+        .and_then(|ui| ui.get("pending"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// 消息是否有模型可读的内容（正文非空白，或声明了工具调用）
+///
+/// 只有“什么都没有”的未定稿行会被删除：空 assistant 消息会让上游直接 400。
+fn has_visible_content(message: &Message) -> bool {
+    let has_text = match &message.content {
+        Value::String(text) => !text.trim().is_empty(),
+        Value::Array(blocks) => blocks.iter().any(|block| {
+            block
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.trim().is_empty())
+        }),
+        _ => false,
+    };
+    has_text
+        || message
+            .tool_calls
+            .as_ref()
+            .is_some_and(|calls| !calls.is_empty())
+}
+
+/// 「程序中断」工具结果（崩溃修复用）
+///
+/// ⚠️ 文案与 `agent::message_protocol::INTERRUPTED_TOOL_RESULT` / 前端
+/// `src/services/message-repair.ts` 逐字一致（铁律 1），id 也与请求层占位同一套命名。
+fn interrupted_tool_result(call_id: &str) -> Message {
+    Message {
+        id: format!("repair-{}", call_id),
+        role: "tool".to_string(),
+        content: Value::String(crate::agent::message_protocol::INTERRUPTED_TOOL_RESULT.to_string()),
+        tool_call_id: Some(call_id.to_string()),
+        is_error: Some(true),
+        timestamp: crate::agent::llm_round::now_ms(),
+        ui_data: Some(json!({ "interrupted": true })),
+        ..Default::default()
     }
 }
 

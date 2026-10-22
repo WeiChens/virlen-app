@@ -5,7 +5,10 @@
 
 use crate::session_db::memory::MEMORY_DDL;
 use crate::session_db::row::content_plain_text;
+use crate::attachment::AttachmentStore;
+use crate::agent::types::Message;
 use rusqlite::{params, Connection};
+use serde_json::Value;
 use std::sync::{Arc, Mutex};
 
 const DDL: &str = r#"
@@ -131,6 +134,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_message ON usage_ledger(message_id)
   WHERE message_id IS NOT NULL;
 "#;
 
+/// 上下文压缩的**遮罩记录**（P0-3）DDL。
+///
+/// 一行 = 一次压缩事实：「`[start_message_id, end_message_id]` 这段原始消息在模型上下文里
+/// 由 `summary_message_id` 这条消息替代」。为什么不用「最后一条 summary 的位置」表达：
+/// 位置约定无法表达「只压中间一段 / 保留最近几轮」，也会随着 summary 被删 / 挪而静默失效。
+/// 语义与重建规则见 `virlen-core::agent::context`。
+///
+/// ⚠️ 纯新增表，无历史数据要回填，所以**不递增 `SCHEMA_VERSION`**（与 `memories` 同一取舍）：
+/// 递增会让 `migrate()` 对全库重建一次 FTS，白付代价。老库没有记录 → 仍走旧的位置切片。
+const COMPACTIONS_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS compactions (
+  id                 TEXT PRIMARY KEY,
+  session_id         TEXT NOT NULL,
+  start_message_id   TEXT NOT NULL,
+  end_message_id     TEXT NOT NULL,
+  summary_message_id TEXT NOT NULL,
+  created_at         INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_compactions_session ON compactions(session_id);
+"#;
+
 /// 应用设置（配置下沉 D3）DDL
 ///
 /// 为什么放会话库里：与会话共用**同一个 SQLite 文件与同一把单写连接** ——
@@ -174,6 +198,9 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<bool, String> {
     // 应用设置（配置下沉 D3）：纯建表，元数据级开销
     conn.execute_batch(SETTINGS_DDL)
         .map_err(|e| format!("初始化应用设置表失败: {}", e))?;
+    // 压缩遮罩记录（P0-3）：纯建表 + 索引，元数据级开销（同 memories 的取舍，不动 SCHEMA_VERSION）
+    conn.execute_batch(COMPACTIONS_DDL)
+        .map_err(|e| format!("初始化压缩记录表失败: {}", e))?;
     // 长期记忆（记忆功能 P0）：纯建表 + 索引 + FTS 虚表 + 触发器，元数据级开销。
     // ⚠️ 有意**不递增 `SCHEMA_VERSION`**：本次是纯新增、无历史数据要回填，而递增版本会让
     // `migrate()` 对全库执行一次 `messages_fts` rebuild（大库分钟级），白付代价。
@@ -387,6 +414,97 @@ fn ensure_text_plain_column(conn: &Connection) -> Result<(), String> {
             .map_err(|e| format!("添加 text_plain 列失败: {}", e))?;
     }
     Ok(())
+}
+
+/// 把历史消息里的内联图片外置（P0-1）——让**老库**也能瘦下来。
+///
+/// 升级前写入的消息 `content` 里还躺着 `data:image/...;base64`，这里分批换成
+/// `attachment://<sha256>.<ext>` 引用（见 `crate::attachment`）。
+///
+/// - **幂等可重入**：只挑还含 `data:image/` 的行；外置后该行自然不再匹配；
+/// - **批间释放连接锁**：文件 IO 在锁外做，不会把聊天写入卡住（与 `backfill_text_plain` 同策略）；
+/// - **失败只停不恢**：解码不了的坏数据会原地跳过；如果一整批都改不动就结束，避免无限重读同一批。
+///
+/// 返回实际改造的行数（0 = 没有待处理数据）。
+pub(crate) fn backfill_attachments(
+    conn: &Arc<Mutex<Connection>>,
+    store: &AttachmentStore,
+) -> Result<usize, String> {
+    const BATCH: i64 = 200;
+    /// 单轮最多处理多少行（防御：异常数据导致永远改不完时不至于无限循环）
+    const MAX_ROWS: usize = 20_000;
+
+    let mut total = 0usize;
+    while total < MAX_ROWS {
+        // ① 持锁读一批
+        let batch: Vec<(String, String)> = {
+            let guard = conn.lock().unwrap();
+            let mut stmt = guard
+                .prepare(
+                    "SELECT id, content FROM messages \
+                     WHERE content LIKE '%data:image/%' ORDER BY rowid LIMIT ?1",
+                )
+                .map_err(|e| format!("准备历史图片查询失败: {}", e))?;
+            let rows = stmt
+                .query_map(params![BATCH], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+        };
+        if batch.is_empty() {
+            return Ok(total);
+        }
+
+        // ② 锁外外置（写附件文件）
+        let mut updates: Vec<(String, String)> = Vec::new();
+        for (id, content_json) in &batch {
+            let Ok(content) = serde_json::from_str::<Value>(content_json) else {
+                continue;
+            };
+            let mut message = Message {
+                id: id.clone(),
+                content,
+                ..Default::default()
+            };
+            if store.externalize_message(&mut message) == 0 {
+                continue;
+            }
+            match serde_json::to_string(&message.content) {
+                Ok(updated) => updates.push((id.clone(), updated)),
+                Err(e) => eprintln!("[session_db] 序列化外置后的消息失败（跳过）: {}", e),
+            }
+        }
+
+        // 一整批都改不动 → 剩下的都是无法处理的脏数据，结束（否则会无限重读同一批）
+        if updates.is_empty() {
+            return Ok(total);
+        }
+
+        // ③ 持锁写回（单事务；`messages_fts_au` 触发器同步检索索引）
+        {
+            let guard = conn.lock().unwrap();
+            let tx = guard
+                .unchecked_transaction()
+                .map_err(|e| format!("开启外置事务失败: {}", e))?;
+            {
+                let mut upd = tx
+                    .prepare("UPDATE messages SET content=?1 WHERE id=?2")
+                    .map_err(|e| format!("准备外置写回失败: {}", e))?;
+                for (id, content) in &updates {
+                    upd.execute(params![content, id])
+                        .map_err(|e| format!("外置写回失败: {}", e))?;
+                }
+            }
+            tx.commit().map_err(|e| format!("提交外置事务失败: {}", e))?;
+        }
+        total += updates.len();
+        if (batch.len() as i64) < BATCH {
+            return Ok(total);
+        }
+    }
+    Ok(total)
 }
 
 /// 回填 `text_plain`（仅处理 NULL 行；按批处理并在批间释放连接锁，避免长时间占用）。

@@ -24,6 +24,7 @@ use super::types::{
 };
 use crate::session_db::{
     MemoryRepo, NoopSessionRepo, NoopSettingsRepo, NoopMemoryRepo, SessionRepo, SettingsRepo,
+    TailRepair,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -184,6 +185,32 @@ impl AgentEngine {
         let session_id = options.session_id.clone();
         let session = options.session.clone();
 
+        // 0. **崩溃修复**（必须在写入新用户消息之前）：上一轮若崩在中途，库里会留下未定稿占位
+        //    （`ui_data.pending`）与悬空 tool_calls；补出来的工具结果必须紧跟在它所属的
+        //    assistant 之后，晚一步就会排到用户消息后面（上游直接 400）。
+        //    幂等：正常会话每次只是多一次「读尾部 20 行」的查询，零写入。
+        //    ⚠️ 暂停恢复（resume）**不修复**：那条 run 还活着（快照只在内存里，进程必然没死），“缺少 tool
+        //    结果”是**待执行**而不是崩溃残留；补「程序中断」会把待办当成已完成。
+        let repaired: TailRepair = if options.resume_from_snapshot.is_some() {
+            TailRepair::default()
+        } else {
+            match self.repo.repair_tail(&session_id).await {
+                Ok(report) => {
+                    if report.changed() {
+                        eprintln!(
+                            "[session_db] 已修复上一轮的中断残留：定稿 {} 条 / 丢弃空回复 {} 条 / 补工具结果 {} 条",
+                            report.finalized, report.dropped, report.tool_results
+                        );
+                    }
+                    report
+                }
+                Err(e) => {
+                    eprintln!("[session_db] 尾部修复失败（继续本次请求）: {}", e);
+                    TailRepair::default()
+                }
+            }
+        };
+
         // 0. 持久化（先落库再开始循环）：会话元数据 + 用户消息。JS 卡住 / 崩溃不影响落库；写入失败不中断
         //    聊天（尽力而为）。
         //    ⚠️ 会话时间（updated_at）由前端在用户点发送时随 session 一起 upsert；这里的消息写入刻意不刷新
@@ -234,7 +261,7 @@ impl AgentEngine {
         //    ⚠️ 读的是 `get_context_messages` 而非 `get_messages`：请求组装只会用到最后一个 `summary` 及其
         //    之后的消息，已被压缩的旧历史不必读进内存。
         //    读库失败 / 库不可用（Noop）/ 读到空时回退到前端传来的 `messages`（前端恢复时传空数组）。
-        let mut current_messages = if options.resume_from_snapshot.is_some() {
+        let mut current_messages = if options.resume_from_snapshot.is_some() || repaired.changed() {
             match self.repo.get_context_messages(&session_id).await {
                 Ok(msgs) if !msgs.is_empty() => msgs,
                 _ => options.messages.clone(),
@@ -242,6 +269,21 @@ impl AgentEngine {
         } else {
             options.messages.clone()
         };
+        // 图片引用还原：库里只存 `attachment://`（见 `crate::attachment`），而前端重新加载会话后
+        // 传回来的历史同样是引用 —— 交给模型之前必须还原成 data URL。
+        // （`get_context_messages` 已还原过一次，这里对无引用的消息是零成本的空操作。）
+        crate::attachment::AttachmentStore::new(&self.host.data_dir())
+            .resolve_messages(&mut current_messages);
+        // 压缩遮罩（P0-3）：有压缩记录时按记录重建上下文（区间被移走、summary 放到原位）；
+        // 没有记录 → 不动，provider 继续走「最后一条 summary」位置切片，老会话行为不变。
+        match self.repo.list_compactions(&session_id).await {
+            Ok(masks) if !masks.is_empty() => {
+                current_messages =
+                    crate::agent::context::apply_compaction_masks(&current_messages, &masks);
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("[session_db] 读取压缩记录失败（按旧规则切片）: {}", e),
+        }
         let mut remaining_rounds = options.max_tool_rounds;
 
         let skills = session.skills.clone();

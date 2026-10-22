@@ -155,6 +155,20 @@ pub(crate) async fn compress_session(
         .await
         .map_err(|e| CompressError::Failed(format!("压缩结果落库失败: {}", e)))?;
 
+    // 遮罩记录（P0-3）：把「这次压缩盖掉了哪一段」落成显式事实
+    // （区间与压缩算法同源：`compress_slice`）。写失败不影响本次压缩（下次按旧规则切片）。
+    let slice = agent_compress::compress_slice(&messages);
+    if let (Some(first), Some(last)) = (slice.first(), slice.last()) {
+        if let Err(e) = rt
+            .db
+            .repo
+            .record_compaction(&rt.session.id, &first.id, &last.id, &out.message.id)
+            .await
+        {
+            eprintln!("[session_db] 写入压缩记录失败（按旧规则切片）: {}", e);
+        }
+    }
+
     // 记账：AI 摘要是一次真实消费（与 TS `recordUsage({kind:'compress'})` 对称）；
     // 正文压缩没有模型调用 → 不记账。
     if let Some(llm) = &out.llm {

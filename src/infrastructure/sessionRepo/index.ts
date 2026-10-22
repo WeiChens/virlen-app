@@ -58,6 +58,17 @@ export interface SessionRepo {
    * 重建数据库（VACUUM）。独占连接、约 2 倍库大小的临时空间，只在用户显式点击时调。
    */
   dbMaintain(): Promise<DbMaintainResult | null>
+  /**
+   * 回收无引用的图片附件（删消息 / 删会话后的孤儿文件）。
+   */
+  attachmentsGc(): Promise<AttachmentsGcResult | null>
+  /**
+   * 收口上一轮的崩溃残留（未定稿回复 / 悬空工具调用）。
+   *
+   * 读消息**之前**调：进程被杀时库里会留一条带半截正文的未定稿回复，
+   * 由它定稿并标「已中断」。幂等，正常会话零写入；非 Tauri 环境返回 null。
+   */
+  repairTail(sessionId: string): Promise<TailRepair | null>
 }
 
 /** 消息分页结果（与 Rust 端 MessagePage 对应） */
@@ -472,6 +483,32 @@ class SessionRepoImpl implements SessionRepo {
     }
   }
 
+  /**
+   * 回收无引用的图片附件（删消息 / 删会话后留下的孤儿文件）。
+   *
+   * 只动附件目录，不碰数据库；刚写入（30 分钟内）的文件即使暂时没被引用也会跳过 ——
+   * 引擎是“先落盘、再写库”，没有这道阀会删掉正在发送的图。
+   */
+  async attachmentsGc(): Promise<AttachmentsGcResult | null> {
+    try {
+      return await invoke<AttachmentsGcResult>('cmd_attachments_gc')
+    } catch (err) {
+      trackError('session.attachments.gc.error', err)
+      return null
+    }
+  }
+
+  /** 收口上一轮的崩溃残留（见 `SessionRepo::repair_tail` 的契约） */
+  async repairTail(sessionId: string): Promise<TailRepair | null> {
+    try {
+      return await invoke<TailRepair>('cmd_repair_session_tail', { sessionId })
+    } catch (err) {
+      // 非 Tauri（vitest / 手机宿主没这命令）：静默降级，不影响消息读取
+      trackError('session.repair_tail.error', err)
+      return null
+    }
+  }
+
   /** 800ms 合并窗口：期间的新变更会合并进同一个批次 */
   private scheduleFlush(): void {
     if (this.flushTimer) clearTimeout(this.flushTimer)
@@ -530,6 +567,10 @@ export interface DbStats {
   journalSizeLimit: number
   sessionCount: number
   messageCount: number
+  /** 图片附件目录的占用（字节） */
+  attachmentsBytes: number
+  /** 图片附件文件数 */
+  attachmentsFiles: number
 }
 
 /** 一次 WAL 截断的结果 */
@@ -547,4 +588,35 @@ export interface DbMaintainResult {
   vacuumMs: number
   before: DbStats
   after: DbStats
+}
+
+/** 无引用图片附件的回收结果（与 Rust `AttachmentsGcResult` 一一对应） */
+export interface AttachmentsGcResult {
+  /** 删掉的孤儿附件个数 */
+  removed: number
+  /** 删掉的临时文件（`.part`）个数 */
+  removedParts: number
+  /** 释放的字节数 */
+  freedBytes: number
+  /** 仍被引用的个数 */
+  kept: number
+  /** 写入太新（30 分钟内）而跳过的个数 */
+  skippedYoung: number
+  /** 元数据读取 / 删除失败而跳过的个数 */
+  skippedUnknown: number
+}
+
+/**
+ * 一次「尾部崩溃修复」的结果（与 Rust `TailRepair` 一一对应）。
+ *
+ * 引擎每轮开始会先落一条未定稿占位（`pending`），结算时整行覆盖；因此库里还带着
+ * `pending` 标记的行只可能来自「进程在轮次中途退出」。
+ */
+export interface TailRepair {
+  /** 清掉 `streaming` 标记（含被判为中断）的条数 */
+  finalized: number
+  /** 崩在首字之前、正文为空而删掉的条数 */
+  dropped: number
+  /** 补出的「程序中断」工具结果条数 */
+  toolResults: number
 }

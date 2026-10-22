@@ -3,6 +3,7 @@
 //! ⚠️ 新增命令后必须登记到 `lib.rs` 的 `generate_handler![...]`（铁律 4）。
 
 pub mod agent;
+pub mod attachment;
 pub mod document;
 pub mod git;
 pub mod memory;

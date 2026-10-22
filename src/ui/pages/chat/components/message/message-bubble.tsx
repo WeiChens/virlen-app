@@ -26,6 +26,7 @@ import QuickInputSvg from '@/ui/components/icons/QuickInputSvg'
 import { Observer } from 'mobx-react-lite'
 import { openPath } from '@tauri-apps/plugin-opener'
 import { getFileBlocks, getQuoteBlocks, getSkillBlocks, messageHasVisibleContent } from '@/utils/messageContent'
+import { imageDisplaySrc } from '@/domain/files/attachment-src'
 import QuoteChip from '@/ui/components/shared/QuoteChip'
 import ContextMenu, {
   useContextMenu,
@@ -112,6 +113,14 @@ function MessageBubble({
   const isAssistant = message.role === 'assistant'
   const isFeedback = message.role === 'feedback'
   const isSummary = message.role === 'summary'
+  // 崩溃/退出打断的回复（Rust `repair_tail` 写入）：保留已产出的正文，但要让用户知道
+  // 这不是模型说完了，而是一次被截断的输出。
+  //
+  // `uiData.pending` 是同一件事的**未修复形态**：引擎每轮开始会先落一条未定稿占位，
+  // 进程被杀后它会带着半截正文留在库里（节流落库，见 `persist_streaming_text`）。
+  // 只要看到这个标记就按「已中断」展示 —— 不依赖后端修复是否已经跑过/是否成功。
+  const interruptedPending = message.uiData?.pending === true
+  const interrupted = interruptedPending || message.uiData?.interrupted === true
   if (isTool) return null
 
   function getContent(renderer = true): string {
@@ -138,6 +147,9 @@ function MessageBubble({
     return message.content
       .filter((block) => block.type === 'image_url')
       .map((block) => ('image_url' in block ? block.image_url.url : ''))
+      // 库里存的是 `attachment://<hash>.<ext>`（图片已外置）：渲染前翻译成自定义协议 URL。
+      // `data:` / `http(s)` 等原样返回，因此新发消息与历史消息走同一条渲染路径。
+      .map((url) => imageDisplaySrc(url))
   }
 
   /** 文件附件（只存路径，点击用系统默认程序打开） */
@@ -277,12 +289,16 @@ function MessageBubble({
   /** 本轮 agent 循环总耗时（仅正常跑完的那一轮才有；见 `utils/messageMeta.ts`） */
   const agentElapsedMs = isAssistant ? agentElapsedMsOf(message) : undefined
 
+  // 界面上是否真的在流式：未定稿占位（进程已死）不能继续当作「正在输出」，否则
+  // 底部操作栏/徽标永不出现，用户看到的是一个永远在闪的光标。
+  const streamingUi = message.streaming === true && !interruptedPending
+
   // 是否显示底部操作栏（streaming 中和纯 toolcall/无内容不显示）
-  const showActions = !message.streaming && !showAsToolCall && !isTool
+  const showActions = !streamingUi && !showAsToolCall && !isTool
 
   const [showReasoning, setShowReasoning] = useState(false)
   const isReasoningTime =
-    message.streaming && message.reasoningContent && !message.content
+    streamingUi && message.reasoningContent && !message.content
   const hideToolCallThink = settingsState.value.hideToolCallThink
 
   const hideMessageBubble =
@@ -424,7 +440,7 @@ function MessageBubble({
                         <span>
                           {showContent
                             ? t('思考过程')
-                            : message.streaming
+                            : streamingUi
                               ? t('思考中...')
                               : t('思考过程')}
                         </span>
@@ -576,6 +592,15 @@ function MessageBubble({
                   )}
                   {showActions && (
                     <div className="message-actions">
+                      {interrupted && (
+                        <span
+                          className="action-interrupted"
+                          title={t(
+                            '回复在生成过程中被中断（应用退出或崩溃），已保留当时的输出',
+                          )}>
+                          {t('已中断')}
+                        </span>
+                      )}
                       {agentElapsedMs ? (
                         <span
                           className="action-elapsed"

@@ -7,8 +7,8 @@ use virlen_core::agent::types::{Message, Session};
 use virlen_core::session_db::{
     get_message_page_filled, open_session_db, total_bytes, CheckpointResult, DbMaintenance, DbStats,
     MaintainResult, MemoryRepo, MessagePage, MessageSearchPage, MessageTimelinePage, MessageWindow,
-    NoopMemoryRepo, NoopSettingsRepo, SearchCursor, SessionRepo, SettingsRepo, UsageEntry,
-    UsageQuery, UsageRecordPage, UsageStats, UserMessageRef, MSG_QUERY_MAX_LIMIT,
+    NoopMemoryRepo, NoopSettingsRepo, SearchCursor, SessionRepo, SettingsRepo, TailRepair,
+    UsageEntry, UsageQuery, UsageRecordPage, UsageStats, UserMessageRef, MSG_QUERY_MAX_LIMIT,
 };
 
 /// GUI 入口（薄壳）：构造 Tauri 宿主 → 打开会话库 → 注册 Tauri 状态。
@@ -120,6 +120,32 @@ pub async fn cmd_get_messages(
         Some(&session_id),
         started,
         result.as_ref().ok().map(|v| v.len()),
+        result.as_ref().err().map(|s| s.as_str()),
+    );
+    result
+}
+
+/// 收口上一轮的崩溃残留（未定稿回复 / 悬空工具调用），返回本次改动的条数。
+///
+/// 调用时机：**打开会话、读消息之前**（`sessionStore.ensureMessagesLoaded`）——
+/// 与引擎每次发送前的那次修复共用同一份实现（`SessionRepo::repair_tail`），
+/// 幂等且正常会话零写入。没有这一步，重开 App 时半截回复既不会被定稿、
+/// 也不会打上「已中断」，直到用户再发一条消息才会被修复。
+#[tauri::command]
+pub async fn cmd_repair_session_tail(
+    state: tauri::State<'_, Arc<dyn SessionRepo>>,
+    session_id: String,
+) -> Result<TailRepair, String> {
+    let started = crate::telemetry::now_ms();
+    let result = state.repair_tail(&session_id).await;
+    track_db(
+        "repair_session_tail",
+        Some(&session_id),
+        started,
+        result
+            .as_ref()
+            .ok()
+            .map(|r| r.finalized + r.dropped + r.tool_results),
         result.as_ref().err().map(|s| s.as_str()),
     );
     result
@@ -535,6 +561,35 @@ pub async fn cmd_db_checkpoint(
     let m = m.inner().clone();
     m.checkpoint_truncate().await
 }
+
+/// 清理“无引用的图片附件”（P0-1 的回收侧）。
+///
+/// 只扫本地附件目录，不碰数据库行；刚写入（[`GC_GRACE`]）的文件会跳过，避免误删正在发送的图。
+#[tauri::command]
+pub async fn cmd_attachments_gc(
+    m: tauri::State<'_, Arc<DbMaintenance>>,
+) -> Result<virlen_core::session_db::AttachmentsGcResult, String> {
+    let m = m.inner().clone();
+    let started = crate::telemetry::now_ms();
+    let result = m.gc_attachments(GC_GRACE).await;
+    crate::telemetry::track(
+        "rust.db.attachments_gc",
+        serde_json::json!({
+            "duration_ms": crate::telemetry::now_ms() - started,
+            "status": if result.is_err() { "fail" } else { "success" },
+            "removed": result.as_ref().map(|r| r.removed).unwrap_or(0),
+            "removed_parts": result.as_ref().map(|r| r.removed_parts).unwrap_or(0),
+            "freed_bytes": result.as_ref().map(|r| r.freed_bytes).unwrap_or(0),
+        }),
+    );
+    result
+}
+
+/// 附件回收的安全阀：写入不足该时长的文件即使没被引用也不删。
+///
+/// 引擎是「先把图写到附件目录、再把消息落库」，中间存在一个合法的时间窗口；
+/// 30 分钟远超这个窗口，又不会让垃圾文件长期堆积。
+const GC_GRACE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 /// 立即整理：先 wal_checkpoint(TRUNCATE) 回收 -wal，再 VACUUM 归还空闲页。
 /// ⚠️ 只在用户显式点击时调用：VACUUM 期间独占连接（数百 MB 库约 10–60 s），且需约 2 倍库大小的临时盘。

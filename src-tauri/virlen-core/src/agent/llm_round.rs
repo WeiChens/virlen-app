@@ -10,6 +10,7 @@ use super::types::{
     AgentEvent, ChatRequest, Message, Session, StreamEvent, ToolCallContext, ToolDefinition,
     ToolUseContent,
 };
+use crate::session_db::SessionRepo;
 use serde_json::json;
 use serde_json::Value;
 
@@ -36,6 +37,7 @@ pub async fn do_llm_round(
     override_max_tokens: Option<i64>,
     reasoning_effort: Option<&str>,
     round: i64,
+    repo: &dyn SessionRepo,
 ) -> Result<LlmRoundOutput, String> {
     let model = session.model_id.clone();
     let system_prompt = if session.system_prompt.trim().is_empty() {
@@ -61,6 +63,19 @@ pub async fn do_llm_round(
             json!({ "message": assistant_message }),
         ),
     );
+
+    // **未定稿占位**：崩溃检测的权威信号（契约见 `SessionRepo::repair_tail`）。
+    // 结算时用同 id 整行覆盖（upsert），所以只有“轮次中途退出”才可能把它留在库里。
+    // 没有它就无法区分“崩在流式途中”与“用户发了消息但什么都没发生”——
+    // 引擎只在结算时落 assistant 消息，崩在途中的那次输出本来会彻底消失。
+    let mut pending = assistant_message.clone();
+    pending.ui_data = Some(json!({ "pending": true }));
+    if let Err(e) = repo
+        .append_messages_if_alive(session_id, std::slice::from_ref(&pending))
+        .await
+    {
+        eprintln!("[session_db] 写入未定稿占位失败（崩溃检测将不可用）: {}", e);
+    }
 
     let mut ctx = ToolCallContext {
         assistant_message: assistant_message.clone(),
@@ -130,6 +145,7 @@ pub async fn do_llm_round(
             cancel,
             sink,
             session_id,
+            repo,
         )
         .await
     } else {
@@ -197,6 +213,13 @@ const _: () = assert!(
     STREAM_THROTTLE_MS <= 20,
     "STREAM_THROTTLE_MS 须在一帧内（<=20ms）"
 );
+
+/// 流式正文**落库**的节流窗口（比 UI 节流粗得多）。
+///
+/// 两个节流的服务对象不同：`STREAM_THROTTLE_MS` 控制「屏幕一帧看到多少字」，这里控制
+/// 「每秒写几条 SQL」。取值只影响「进程被杀时最多丢多少已产出内容」—— 定在 700ms
+/// 意味着最长丢小半句，而一轮长回复的写入次数仍在个位数。
+const STREAM_PERSIST_MS: i64 = 700;
 
 /// 流式事件节流器 — 距上次发送不足 interval_ms 时丢弃中间事件，force_flush 强制补发
 struct StreamEventThrottle {
@@ -278,6 +301,9 @@ fn flush_stream_state(
 }
 
 /// 流式 LLM 调用处理
+// 八个参数都是流式回调的上下文（取消信号 / 事件出口 / 落库口各一份），打包成结构体
+// 只会把解构再写一遍（同 `cmd_compress_context` 的取舍）。
+#[allow(clippy::too_many_arguments)]
 async fn handle_streaming(
     provider: &dyn Provider,
     request: &ChatRequest,
@@ -286,9 +312,12 @@ async fn handle_streaming(
     cancel: &CancellationToken,
     sink: &dyn EventSink,
     session_id: &str,
+    repo: &dyn SessionRepo,
 ) -> Result<(), String> {
     let mut reasoning_start: Option<i64> = None;
     let mut throttle = StreamEventThrottle::new(STREAM_THROTTLE_MS);
+    // 落库节流：见 `STREAM_PERSIST_MS`（首次调用即允许——`last_emit_ms` 初值为 0）
+    let mut persist_throttle = StreamEventThrottle::new(STREAM_PERSIST_MS);
     let mut pending_delta = String::new();
     let mut pending_reasoning: Option<String> = None;
 
@@ -304,6 +333,11 @@ async fn handle_streaming(
             ctx.round_content.push_str(&delta);
             let current = ctx.assistant_message.text_content();
             ctx.assistant_message.content = Value::String(current + &delta);
+            // 崩溃保护：定期把已产出的正文写回 pending 行。进程若在此被杀，重开能看到
+            // 半截回复（由 `repair_tail` 标成「已中断」）—— 否则那次输出会彻底消失。
+            if persist_throttle.allow() {
+                repo.persist_streaming_text(session_id, &ctx.assistant_message);
+            }
             // 节流：累积 delta，满足 60ms 间隔才批量发送（末尾 MessageStop 强制补发）
             pending_delta.push_str(&delta);
             if throttle.allow() {
@@ -368,6 +402,10 @@ async fn handle_streaming(
             }
             ctx.reasoning_content = rc.clone();
             ctx.assistant_message.reasoning_content = Some(rc.clone());
+            // 与正文同一道崩溃保护：思考内容也属于「已产出、但只存在内存里」
+            if persist_throttle.allow() {
+                repo.persist_streaming_text(session_id, &ctx.assistant_message);
+            }
             // 节流：累积 reasoning，满足 60ms 间隔才批量发送
             pending_reasoning = Some(rc);
             if throttle.allow() {
@@ -416,6 +454,9 @@ async fn handle_streaming(
             pending_reasoning = None;
             // 确保最终状态一定同步（即使没有 pending 增量）
             sync_assistant(ctx, model, sink, session_id);
+            // 流结束立即把完整正文落库：从这一刻到上游结算还有工具执行等若干步，
+            // 期间被杀也不至于丢掉整轮回复（最多丢掉“未定稿”这个事实）。
+            repo.persist_streaming_text(session_id, &ctx.assistant_message);
         }
     };
 
@@ -647,6 +688,7 @@ mod tests {
             None,
             None,
             1,
+            &crate::session_db::NoopSessionRepo,
         ));
 
         let output = out.expect("llm round 应成功");
@@ -725,6 +767,7 @@ mod tests {
             None,
             None,
             1,
+            &crate::session_db::NoopSessionRepo,
         ))
         .expect("llm round 应成功");
 
@@ -819,6 +862,7 @@ mod tests {
             None,
             None,
             1,
+            &crate::session_db::NoopSessionRepo,
         ))
         .expect("llm round 应成功");
 
@@ -867,6 +911,7 @@ mod tests {
             None,
             None,
             1,
+            &crate::session_db::NoopSessionRepo,
         ))
         .expect("llm round 应成功");
 
@@ -943,6 +988,7 @@ mod tests {
             None,
             None,
             1,
+            &crate::session_db::NoopSessionRepo,
         ))
         .expect("llm round 应成功");
 

@@ -9,6 +9,8 @@ pub mod bridge;
 pub mod cancellation;
 // `compress`：上下文压缩（两种模式）—— 与 TS `domain/engine/compress-*.ts` 同语义
 pub mod compress;
+// `context`：压缩遮罩（按 `compactions` 记录重建模型上下文）
+pub mod context;
 pub mod engine;
 pub mod event_sink;
 pub mod host;

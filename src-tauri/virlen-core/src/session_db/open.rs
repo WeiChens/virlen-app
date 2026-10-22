@@ -75,6 +75,34 @@ pub fn open_session_db(host: &dyn HostEnv, spawn: Spawner<'_>) -> Result<Session
         }));
     }
 
+    // 历史内联图片外置（P0-1 回填）：升级前落库的消息里还躺着 base64，这里分批换成
+    // `attachment://` 引用 —— 库 / WAL / 备份体积一起降下来。幂等；没有待处理行时
+    // 只多一次 `LIKE` 查询，故放后台、与迁移和孤儿回收并行（同一把连接锁自然互斥）。
+    {
+        let r_attach = sqlite.clone();
+        spawn(Box::pin(async move {
+            match r_attach.backfill_attachments().await {
+                Ok(0) => {}
+                Ok(n) => eprintln!("[session_db] 已外置 {} 条历史消息的内联图片", n),
+                Err(e) => eprintln!("[session_db] 历史图片外置失败（下次启动重试）: {}", e),
+            }
+        }));
+    }
+
+    // 启动修复（P0-2 收尾）：进程上次若在流式途中被杀，库里会留一条带半截正文的未定稿
+    // 回复（`ui_data.pending` + `streaming=1`）。这里统一扫最近活跃的几个会话 ——
+    // 与「打开会话时修复」互为兜底，前端哪条路径没走到都不会漏。
+    {
+        let r_repair = sqlite.clone();
+        spawn(Box::pin(async move {
+            match r_repair.repair_recent_tails().await {
+                Ok(0) => {}
+                Ok(n) => eprintln!("[session_db] 启动修复了 {} 个会话的中断残留", n),
+                Err(e) => eprintln!("[session_db] 启动修复失败（下次打开会话时再试）: {}", e),
+            }
+        }));
+    }
+
     Ok(SessionDb {
         repo,
         settings,

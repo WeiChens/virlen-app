@@ -7,7 +7,10 @@ use crate::agent::types::{Message, Session, SessionParams};
 use crate::session_db::sqlite::SqliteSessionRepo;
 use serde_json::json;
 
+mod attachments;
 mod bootstrap;
+mod compactions;
+mod crash;
 mod message_query;
 mod migration;
 mod search;

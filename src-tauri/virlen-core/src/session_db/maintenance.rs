@@ -16,6 +16,9 @@ use serde::Serialize;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use crate::attachment::{self, AttachmentStore};
 
 /// WAL 文件在 checkpoint 后的封顶大小（16 MB）。
 ///
@@ -47,6 +50,9 @@ pub struct DbStats {
     pub journal_size_limit: i64,
     pub session_count: u64,
     pub message_count: u64,
+    /// 图片附件目录的占用（`<数据目录>/attachments`）：不计入数据库体积，但同属“本地存储”
+    pub attachments_bytes: u64,
+    pub attachments_files: u64,
 }
 
 /// 一次 WAL checkpoint 的结果
@@ -68,6 +74,24 @@ pub struct MaintainResult {
     pub vacuum_ms: u64,
     pub before: DbStats,
     pub after: DbStats,
+}
+
+/// 图片附件回收结果（IPC DTO）
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentsGcResult {
+    /// 删掉的孤儿附件个数
+    pub removed: usize,
+    /// 删掉的临时文件个数（`.part`）
+    pub removed_parts: usize,
+    /// 释放的字节数
+    pub freed_bytes: u64,
+    /// 仍被引用的个数
+    pub kept: usize,
+    /// 因写入太新而跳过的个数
+    pub skipped_young: usize,
+    /// 因元数据 / 删除失败而跳过的个数
+    pub skipped_unknown: usize,
 }
 
 /// 库占用的总字节（主库 + WAL + SHM）：UI 展示「共占用 / 回收量」用
@@ -105,6 +129,38 @@ impl DbMaintenance {
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock().unwrap();
             checkpoint_on(&conn, &db_path, true)
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
+    /// 回收无引用的图片附件（见 `attachment::AttachmentStore::gc`）。
+    ///
+    /// 两步：① 持锁扫一遍 `messages.content` 里还在被引用的附件名（`LIKE '%attachment://%'`
+    /// 粗筛 + JSON 精确取）；② 释放锁后再扫目录删文件 —— 文件 IO 不能占着连接锁。
+    ///
+    /// `grace`：写入时间不足这个阈值的文件即使暂时没被引用也跳过（引擎先落盘再写库，
+    /// 否则会删掉正在发送的图）。
+    pub async fn gc_attachments(&self, grace: Duration) -> Result<AttachmentsGcResult, String> {
+        let conn = self.conn.clone();
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            // ① 收集引用（持锁）
+            let referenced = {
+                let conn = conn.lock().unwrap();
+                referenced_attachments(&conn)?
+            };
+            // ② 扫目录删文件（锁已释放）
+            let dir = db_path.parent().unwrap_or_else(|| Path::new("."));
+            let report = AttachmentStore::new(dir).gc(&referenced, grace)?;
+            Ok(AttachmentsGcResult {
+                removed: report.removed,
+                removed_parts: report.removed_parts,
+                freed_bytes: report.freed_bytes,
+                kept: report.kept,
+                skipped_young: report.skipped_young,
+                skipped_unknown: report.skipped_unknown,
+            })
         })
         .await
         .map_err(|e| format!("DB task join error: {}", e))?
@@ -170,6 +226,36 @@ fn file_len(path: &Path) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
+/// `<db_path>` 同级附件目录的 `(文件数, 字节数)`
+fn attachments_usage(db_path: &Path) -> (u64, u64) {
+    let dir = db_path.parent().unwrap_or_else(|| Path::new("."));
+    AttachmentStore::new(dir)
+        .usage()
+        .map(|(files, bytes)| (files as u64, bytes))
+        .unwrap_or((0, 0))
+}
+
+/// 扫出所有**仍被引用**的附件名。
+///
+/// 粗筛用 `LIKE '%attachment://%'`（避免逐行解析全库 JSON），再用 `attachment::collect_refs`
+/// 精确取（只有形状合法的引用才算数）。
+fn referenced_attachments(conn: &Connection) -> Result<std::collections::HashSet<String>, String> {
+    let mut stmt = conn
+        .prepare("SELECT content FROM messages WHERE content LIKE '%attachment://%'")
+        .map_err(|e| format!("准备附件引用查询失败: {}", e))?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    let mut refs = std::collections::HashSet::new();
+    for row in rows {
+        let json = row.map_err(|e| e.to_string())?;
+        if let Ok(content) = serde_json::from_str::<serde_json::Value>(&json) {
+            attachment::collect_refs(&content, &mut refs);
+        }
+    }
+    Ok(refs)
+}
+
 /// `<db>-wal` / `<db>-shm` 这类同名前缀的伴随文件路径
 fn sibling_path(db_path: &Path, suffix: &str) -> PathBuf {
     let mut name: OsString = db_path.as_os_str().to_os_string();
@@ -185,6 +271,8 @@ fn stats_with(conn: &Connection, db_path: &Path) -> Result<DbStats, String> {
             .unwrap_or(0)
             .max(0) as u64
     };
+    // 附件目录扫一次就够（`usage()` 本身就是一次目录遍历）
+    let (attachments_files, attachments_bytes) = attachments_usage(db_path);
     Ok(DbStats {
         db_bytes: file_len(db_path),
         wal_bytes: file_len(&sibling_path(db_path, "-wal")),
@@ -197,6 +285,9 @@ fn stats_with(conn: &Connection, db_path: &Path) -> Result<DbStats, String> {
         journal_size_limit: pragma_i64(conn, "journal_size_limit"),
         session_count: count_rows("SELECT COUNT(*) FROM sessions"),
         message_count: count_rows("SELECT COUNT(*) FROM messages"),
+        // 附件目录：读不到就按 0（不影响维护动作本身）
+        attachments_bytes,
+        attachments_files,
     })
 }
 

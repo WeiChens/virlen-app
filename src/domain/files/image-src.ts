@@ -12,6 +12,8 @@
  * （见 `message/markdown-renderer.tsx` 里为什么必须自定义 `urlTransform`）。
  */
 
+import { imageDisplaySrc, isAttachmentRef } from './attachment-src'
+
 /** `inline` = 浏览器自己能加载；`local` = 要过安全校验后读盘 */
 export type ImageSrcKind = 'inline' | 'local'
 
@@ -67,6 +69,9 @@ export function fileUrlToPath(url: string): string {
 export function parseImageSrc(input: string): ParsedImageSrc {
   const raw = (input ?? '').trim()
   if (!raw) return { kind: 'local', value: '', raw }
+
+  // 图片附件引用：翻译成自定义协议 URL 交给浏览器（字节由 Rust 协议处理器读，不走本地读盘层）
+  if (isAttachmentRef(raw)) return { kind: 'inline', value: imageDisplaySrc(raw), raw }
 
   if (INLINE_SRC.test(raw)) return { kind: 'inline', value: raw, raw }
 

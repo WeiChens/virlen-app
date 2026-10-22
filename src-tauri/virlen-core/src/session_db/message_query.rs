@@ -70,12 +70,30 @@ fn seq_of_rowid(conn: &Connection, session_id: &str, rowid: i64) -> Result<i64, 
     .map_err(|e| format!("计算消息时序失败: {}", e))
 }
 
-/// 「已压缩区间」上界 = 最后一个 summary 消息的 1 基时序；无 summary 时返回 None。
+/// 「已压缩区间」上界 = **最后一个被遮罩的消息之后**的 1 基时序；无压缩时返回 None。
 ///
-/// 与 Provider 的切片语义严格一致（`provider.rs::last_summary_index` / TS
-/// `getLastSummaryMessageIndex`）：最后一个 summary 及其之后的消息都已进入模型
-/// 当前上下文，因此**不可查询**。
+/// 口径（P0-3 起）：优先读 `compactions` 记录（`MAX(end_rowid) + 1`），没有记录时回退到
+/// 「最后一条 summary 的位置」——老会话行为一字不变。
+///
+/// 为什么不直接用 summary 的位置：那是把语义编码进位置，summary 被删 / 被挑 / 将来支持
+/// 「只压中间一段」时都会静默失效（见 `agent::context` 模块头）。
 fn boundary_seq(conn: &Connection, session_id: &str) -> Result<Option<i64>, String> {
+    // ① 遮罩记录：边界 = 最后一条被遮罩消息的 rowid + 1
+    let masked_end: Option<i64> = conn
+        .query_row(
+            "SELECT MAX(m.rowid) FROM messages m \
+             JOIN compactions c ON m.id = c.end_message_id WHERE c.session_id=?1",
+            params![session_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("查询遮罩边界失败: {}", e))?
+        .flatten();
+    if let Some(rowid) = masked_end {
+        return Ok(Some(rowid + 1));
+    }
+
+    // ② 没有记录（老会话）：回退到「最后一条 summary」的位置
     let rowid: Option<i64> = conn
         .query_row(
             "SELECT rowid FROM messages WHERE session_id=?1 AND role='summary' \

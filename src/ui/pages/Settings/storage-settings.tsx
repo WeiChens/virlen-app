@@ -36,7 +36,12 @@ function totalBytes(stats: DbStats): number {
   return stats.dbBytes + stats.walBytes + stats.shmBytes
 }
 
-type BusyAction = 'checkpoint' | 'vacuum' | null
+/** 本地存储总占用 = 数据库三件 + 图片附件目录 */
+function grandTotal(stats: DbStats): number {
+  return totalBytes(stats) + stats.attachmentsBytes
+}
+
+type BusyAction = 'checkpoint' | 'vacuum' | 'attachments' | null
 
 function StorageSettings() {
   const [stats, setStats] = useState<DbStats | null>(null)
@@ -110,8 +115,36 @@ function StorageSettings() {
     showToast(tpl('已回收 $__size__', { size: formatBytes(freed) }), 2500)
   }
 
-  const total = stats ? totalBytes(stats) : 0
+  const total = stats ? grandTotal(stats) : 0
   const reclaimable = stats ? stats.freelistPages * stats.pageSize : 0
+
+  /** 清理无引用的图片附件（廉价：只扫附件目录，不动数据库，故不需二次确认） */
+  async function handleAttachmentsGc() {
+    setBusy('attachments')
+    const result = await sessionRepo.attachmentsGc()
+    setBusy(null)
+    if (!result) {
+      track('storage.attachments_gc', { status: 'fail' })
+      showToast(t('操作失败，请查看日志'), 2500)
+      return
+    }
+    track('storage.attachments_gc', {
+      status: 'success',
+      removed: result.removed,
+      removed_parts: result.removedParts,
+      freed_bytes: result.freedBytes,
+    })
+    await refresh()
+    if (result.removed === 0 && result.removedParts === 0) {
+      // 没东西可删也是正常结果：告诉用户“已经干净了”，不要静默
+      showToast(t('没有可清理的图片'), 2000)
+      return
+    }
+    showToast(
+      tpl('已释放 $__size__', { size: formatBytes(result.freedBytes) }),
+      2500,
+    )
+  }
 
   return (
     <div className="storage-settings">
@@ -123,6 +156,12 @@ function StorageSettings() {
             onClick={handleCheckpoint}
             disabled={busy !== null || !stats}>
             {busy === 'checkpoint' ? t('截断中…') : t('截断 WAL 日志')}
+          </button>
+          <button
+            className="storage-btn"
+            onClick={handleAttachmentsGc}
+            disabled={busy !== null || !stats}>
+            {busy === 'attachments' ? t('清理中…') : t('清理无引用图片')}
           </button>
           <button
             className="storage-btn primary"
@@ -164,6 +203,17 @@ function StorageSettings() {
               </span>
             </div>
             <div className="storage-row">
+              <span className="storage-row-label">{t('图片附件')}</span>
+              <span className="storage-row-value">
+                {stats.attachmentsFiles === 0
+                  ? formatBytes(0)
+                  : tpl('$__count__ 个文件 · $__size__', {
+                      count: stats.attachmentsFiles,
+                      size: formatBytes(stats.attachmentsBytes),
+                    })}
+              </span>
+            </div>
+            <div className="storage-row">
               <span className="storage-row-label">{t('会话总数')}</span>
               <span className="storage-row-value">{String(stats.sessionCount)}</span>
             </div>
@@ -180,6 +230,11 @@ function StorageSettings() {
               )}
             </p>
             <p>{t('退出应用时会自动截断 WAL 日志；重建数据库不会自动执行。')}</p>
+            <p>
+              {t(
+                '图片不再被任何消息引用后即可删除；刚写入（30 分钟内）的文件会跳过，避免误删正在发送的图片。',
+              )}
+            </p>
           </div>
         </>
       )}
