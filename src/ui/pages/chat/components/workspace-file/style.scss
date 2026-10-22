@@ -299,6 +299,33 @@
   }
 }
 
+/* 读取 / 解析中的转圈（读文本、等媒体 blob、等 HTML 预览基址、PDF 打开、模型解析共用一颗）。
+   圆环 + 缺口，0.7s 与消息区、搜索框那两颗同一个节奏。
+   ⚠️ `will-change: transform` 不是优化糖：three 解析 glb、pdfjs 栅格化都会占住主线程，
+   不提升成独立合成层的话转圈会跟着停 —— 那就又变回「显示着 loading 但看起来像卡死」。 */
+.wfp-spinner {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border-color, #d0d0d0);
+  border-top-color: var(--accent-color, #4f46e5);
+  border-radius: 50%;
+  animation: wfp-spin 0.7s linear infinite;
+  will-change: transform;
+}
+
+/* 3D 舞台是深色底：同一颗转圈换成白色系，否则几乎看不见 */
+.wfp-model-status .wfp-spinner {
+  border-color: rgba(255, 255, 255, 0.24);
+  border-top-color: #fff;
+}
+
+@keyframes wfp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* 音频 / 视频预览：居中、不铺满（图片有自己的查看器 `.wfp-image`） */
 .wfp-media {
   flex: 1;
@@ -664,4 +691,181 @@
   font-size: var(--font-size-xs, 11px);
   color: var(--text-secondary, #888) !important;
   overflow-wrap: anywhere;
+}
+
+/* ==================== 3D 模型预览（three） ====================
+   工具栏一行（窄面板里会折行）+ 画布铺满剩余高度；信息与失败提示都是浮层，不占画布高度
+   —— 3D 预览的可用面积越大越好。 */
+.wfp-model {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.wfp-model-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-color, #e5e5e5);
+}
+
+/* 预设 / 动画下拉：走共享 `Select`（面板 Portal 到 body）。组件默认 34px 高 / 13px 字，
+   对这条 22px 的紧凑工具栏太大，这里压成与旁边文字按钮同高。
+   ⚠️ 选择器写成 `.wfp-model-bar .wfp-model-select` 而不是单个类名：Select 自己的
+   `.custom-select__trigger` 规则同权重，胜负会取决于两份 CSS 谁后加载 —— 多一层前缀就不赌顺序。 */
+.wfp-model-bar .wfp-model-select {
+  flex: none;
+  max-width: 132px;
+  min-height: 22px;
+  border-radius: 5px;
+
+  .custom-select__trigger {
+    gap: 2px;
+    padding: 0 16px 0 6px;
+  }
+
+  .custom-select__value {
+    font-size: var(--font-size-xs, 11px);
+  }
+
+  .custom-select__arrow {
+    right: 3px;
+
+    svg {
+      width: 10px;
+      height: 10px;
+    }
+  }
+}
+
+/* 下拉面板经 Portal 挂在 body 上（不在工具栏子树里），样式只能靠 `dropdownClassName` 给抓手；
+   ⚠️ 必须与 `.custom-select__dropdown` 一起写，否则与组件默认规则同权重、压不住。 */
+.custom-select__dropdown.wfp-model-dropdown .custom-select__option {
+  padding: 4px 10px;
+  margin-bottom: 1px;
+  font-size: var(--font-size-xs, 11px);
+}
+
+/* 开关类按钮：激活靠底色，不靠图标（窄面板里文字比图标好认） */
+.wfp-model-toggle {
+  flex: none;
+  height: 22px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  font-size: var(--font-size-xs, 11px);
+  line-height: 1;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--hover-bg, #f0f0f0);
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  &.is-active {
+    background: var(--accent-bg, #e8f0fe);
+    color: var(--accent-color, #2563eb);
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+}
+
+.wfp-model-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  /* 深色底：WebGL 上下文建好之前那一瞬不该是白屏 */
+  background: #0e1116;
+}
+
+/* 画布占满舞台；拖动旋转时不要选中文字 */
+.wfp-model-canvas {
+  position: absolute;
+  inset: 0;
+  user-select: none;
+
+  canvas {
+    display: block;
+  }
+}
+
+/* 模型还没解析完时不露画布：否则会先看到空舞台的网格 / 坐标轴，模型再一块块补上。
+   ⚠️ 用 `visibility` 而不是 `display: none` —— ModelScene 靠 `clientWidth` 量尺寸，
+   后者会量到 0，ResizeObserver 也收不到真正的尺寸，模型就永远画不出来。 */
+.wfp-model-canvas.is-loading {
+  visibility: hidden;
+}
+
+/* 在画布上盖一层：读取中 / 失败。失败要能点「在系统程序中打开」，所以只有它接管指针 */
+.wfp-model-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+  font-size: var(--font-size-md, 13px);
+  color: rgba(255, 255, 255, 0.78);
+  /* 读取中：不挡轨道拖拽（模型分批出现时也能提前转） */
+  pointer-events: none;
+
+  &.is-error {
+    pointer-events: auto;
+    background: var(--bg-primary, #fff);
+    color: var(--text-primary, #1a1a1a);
+
+    p {
+      margin: 0;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+    }
+  }
+}
+
+/* 模型信息：压在右上角的小卡片（走浮层而不是一整列，画布高度不缩水） */
+.wfp-model-info {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  margin: 0;
+  min-width: 176px;
+  max-width: calc(100% - 16px);
+  padding: 6px 8px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  font-size: var(--font-size-xs, 11px);
+
+  div {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 1px 0;
+  }
+
+  dt {
+    flex: none;
+    color: var(--text-secondary, #888);
+  }
+
+  dd {
+    margin: 0 0 0 auto;
+    color: var(--text-primary, #1a1a1a);
+    font-variant-numeric: tabular-nums;
+  }
 }

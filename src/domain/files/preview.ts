@@ -1,8 +1,8 @@
 /**
  * 工作目录文件的「打开方式」判定（纯函数）—— 双击行为与右侧面板共用这一份。
  *
- * 七类：文本（可编辑）/ 图片 / 音频 / 视频 / PDF（按页栅格化）/ 文档（文稿演示 → Markdown）/
- * 表格（工作表 → 网格）/ 其它（不支持预览，交给系统程序）。
+ * 九类：文本（可编辑）/ 图片 / 音频 / 视频 / PDF（按页栅格化）/ 文档（文稿演示 → Markdown）/
+ * 表格（工作表 → 网格）/ 3D 模型（three 解析后渲染）/ 其它（不支持预览，交给系统程序）。
  *
  * ⚠️ 判定只按扩展名，**不读文件头**：读文件头要么多一次 IPC，要么把整个文件读进来才知道类型，
  * 对「双击打开」这个动作太重。未知扩展名一律按文本试读（Rust 侧会拒绝二进制），
@@ -21,6 +21,8 @@ export type FilePreviewKind =
   | 'document'
   /** 表格：每张工作表一份网格（表名可切换） */
   | 'sheet'
+  /** 3D 模型：字节交给 three 的加载器（见 `workspace-file/model-loaders.ts`） */
+  | 'model'
   | 'other'
 
 /** 走 blob URL 的那几类（图片 / 音频 / 视频） */
@@ -72,6 +74,46 @@ const DOCUMENT_EXT = new Set(['docx', 'doc', 'pptx', 'ppt'])
 
 /** 表格：每张工作表一份行×列网格，面板画成表 + 表名切换 */
 const SHEET_EXT = new Set(['xlsx', 'xls'])
+
+/**
+ * 能预览的 3D 模型扩展名（**唯一源**：加载器注册表用 `Record<ModelExtension, …>` 对齐它，
+ * 少一个或拼错一个都会被 TS 挡在编译期；见 `workspace-file/model-loaders.ts`）。
+ *
+ * ⚠️ 故意**不含 `pdb`**：它同时是「蛋白质结构」与「MSVC 程序数据库」，后者在 `BINARY_EXT` 里，
+ * 当模型解析会让 .pdb 二进制文件变成一个空白场景 —— 宁可不开这个预览。
+ */
+export type ModelExtension =
+  | 'glb'
+  | 'gltf'
+  | 'fbx'
+  | 'obj'
+  | 'stl'
+  | 'ply'
+  | 'dae'
+  | '3ds'
+  | '3mf'
+  | 'amf'
+  | 'wrl'
+  | 'vrml'
+  | 'pcd'
+
+export const MODEL_EXTENSIONS: readonly ModelExtension[] = [
+  'glb',
+  'gltf',
+  'fbx',
+  'obj',
+  'stl',
+  'ply',
+  'dae',
+  '3ds',
+  '3mf',
+  'amf',
+  'wrl',
+  'vrml',
+  'pcd',
+]
+
+const MODEL_EXT = new Set<string>(MODEL_EXTENSIONS)
 
 /**
  * 明确不能当文本读的容器 / 可执行文件：体积大、内容无意义。
@@ -240,6 +282,9 @@ export function previewKindOf(name: string): FilePreviewKind {
   if (PDF_EXT.has(ext)) return 'pdf'
   if (DOCUMENT_EXT.has(ext)) return 'document'
   if (SHEET_EXT.has(ext)) return 'sheet'
+  // 模型必须排在文本之前：obj / stl / ply / dae 的字节其实也是文本（或全 ASCII），
+  // 否则它们会落进编辑器被当成源码打开
+  if (MODEL_EXT.has(ext)) return 'model'
   if (BINARY_EXT.has(ext)) return 'other'
   return 'text'
 }

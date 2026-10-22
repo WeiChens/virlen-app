@@ -26,6 +26,7 @@ vi.mock('@/services/security-service', () => ({
 import {
   loadWorkspaceFile,
   MAX_MEDIA_BYTES,
+  MAX_MODEL_BYTES,
   MAX_TEXT_BYTES,
   saveWorkspaceText,
   WorkspaceFileError,
@@ -129,6 +130,26 @@ describe('读取', () => {
     statSize(MAX_MEDIA_BYTES + 1)
     await expect(loadWorkspaceFile('E:/repo/movie.mp4')).rejects.toMatchObject({
       code: 'too-large',
+    })
+    expect(readFileMock).not.toHaveBeenCalled()
+  })
+
+  it('3D 模型：按字节读回（不猜 mime，也不当文本试读）', async () => {
+    statSize(4)
+    readFileMock.mockResolvedValue(new Uint8Array([0x67, 0x6c, 0x54, 0x46]))
+
+    const file = await loadWorkspaceFile('E:/repo/scene.glb')
+
+    expect(readFileMock).toHaveBeenCalledWith('E:/repo/scene.glb')
+    expect(file).toEqual({ kind: 'model', bytes: new Uint8Array([0x67, 0x6c, 0x54, 0x46]), byteSize: 4 })
+  })
+
+  it('3D 模型超过上限：报「模型过大」而不是笼统的文件过大', async () => {
+    statSize(MAX_MODEL_BYTES + 1)
+
+    await expect(loadWorkspaceFile('E:/repo/big.glb')).rejects.toMatchObject({
+      code: 'too-large',
+      message: '模型文件超过 64 MB',
     })
     expect(readFileMock).not.toHaveBeenCalled()
   })

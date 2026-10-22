@@ -57,6 +57,17 @@ function pdfjsAssets(): Plugin {
   }
 }
 
+/**
+ * three 的 DRACO / KTX2 解码器（`examples/jsm/libs/{draco/gltf,basis}`）**不需要单独搬**：
+ * three 0.186 的 `DRACOLoader` / `KTX2Loader` 默认就用模块内的
+ * `new URL('../libs/…', import.meta.url)` 引用它们，Vite 打包时会把它们 emit 成独立资产
+ * （安装包自带、离线可用），dev 下也能直接服务。
+ *
+ * ⚠️ 所以这里**特意没有“搬资源”的插件**：自己再搬一份会多出约 1.4MB 重复资产；
+ * 而目 `setDecoderPath('/three/draco/')` 这种字符串形式会让 DRACOLoader 额外去下 500KB 的
+ * `draco_decoder.js` 兜底（对象形式默认值是 `dep_js: null`，不下载）。见 `model-loaders.ts::parseGltf`。
+ */
+
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [react(), pdfjsAssets()],
@@ -73,7 +84,15 @@ export default defineConfig(async () => ({
   optimizeDeps: {
     // monaco-editor 由 setupMonaco 按“子模块入口”引入，禁止依赖预打包，
     // 否则各个子入口可能被打成多份、产生多个 monaco 实例（注册会互相隔离）。
-    exclude: ['monaco-editor'],
+    exclude: [
+      'monaco-editor',
+      // ⚠️ 这两个 loader 靠模块内 `new URL('../libs/…', import.meta.url)` 定位 DRACO / KTX2
+      // 解码器。一旦被预打包，那几行会被重写成 `/node_modules/.vite/libs/…`（**那个目录不存在**），
+      // dev 下 Draco 压过的 glb 直接解不出来（Vite 自己的报错就建议加这个 exclude）。
+      // 生产构建不受影响：`new URL` 由打包器 emit 成资产。
+      'three/examples/jsm/loaders/DRACOLoader.js',
+      'three/examples/jsm/loaders/KTX2Loader.js',
+    ],
   },
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

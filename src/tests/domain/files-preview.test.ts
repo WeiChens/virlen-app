@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest'
 import {
   extensionOf,
   mimeOf,
+  MODEL_EXTENSIONS,
   monacoLanguageOf,
   previewKindOf,
   relativeDirOf,
@@ -72,6 +73,34 @@ describe('打开方式', () => {
     }
     // CSV / TSV 仍是可编辑文本（预览在 `文本预览` 那一组）
     expect(previewKindOf('a.csv')).toBe('text')
+  })
+
+  it('3D 模型：13 种自有加载器的格式都进模型预览（含其实是文本的 obj / stl / dae）', () => {
+    for (const name of [
+      'a.glb',
+      'a.gltf',
+      'a.fbx',
+      'a.obj',
+      'a.stl',
+      'a.ply',
+      'a.dae',
+      'a.3ds',
+      'a.3mf',
+      'a.amf',
+      'a.wrl',
+      'a.vrml',
+      'a.pcd',
+    ]) {
+      expect(previewKindOf(name)).toBe('model')
+    }
+    expect(previewKindOf('SCENE.GLB')).toBe('model')
+    // 与判定表同一份：导出给加载器注册表做穷尽检查
+    expect(MODEL_EXTENSIONS).toHaveLength(13)
+  })
+
+  it('pdb 仍归「其它」：它同时是 MSVC 程序数据库，不能当蛋白质结构解析', () => {
+    expect(previewKindOf('a.pdb')).toBe('other')
+    expect(MODEL_EXTENSIONS).not.toContain('pdb')
   })
 })
 

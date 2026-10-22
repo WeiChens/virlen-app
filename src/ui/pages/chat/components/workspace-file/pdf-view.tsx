@@ -24,6 +24,7 @@ import type {
   RenderTask,
 } from 'pdfjs-dist'
 import { t, tpl } from '@/ui/i18n'
+import LoadingIcon from './loading-icon'
 
 interface Props {
   /** PDF 原始字节（调用方已读过安全校验；这里会**拷贝**一份交给 pdfjs，见下） */
@@ -235,7 +236,15 @@ export default function PdfView({ bytes, name, onOpenInSystem }: Props) {
       </div>
     )
   }
-  if (!doc) return <div className="wfp-hint">{t('正在读取文件…')}</div>
+  // 未打开完成：转圈 + 一句话（与面板其它读取中状态同一个视觉）
+  if (!doc) {
+    return (
+      <div className="wfp-hint">
+        <LoadingIcon />
+        <p>{t('正在读取文件…')}</p>
+      </div>
+    )
+  }
 
   return (
     <div className="wfp-pdf">

@@ -26,6 +26,8 @@
  * 8. **文档类（pdf / Office）是只看不改**：dirty 永远为 false、保存按钮不出现；预览内容由
  *    `workspace-file-service` 拿（pdf = 字节交给 pdfjs；Office = Rust `cmd_preview_document`
  *    抽成 Markdown / 表格网格），磁盘变了就整份重读。
+ * 9. **3D 模型也是只看不改**：字节交给 `model-view.tsx`（three 只在打开模型时动态下载，
+ *    不在主包里），能预览的扩展名见 `domain/files/preview.ts::MODEL_EXTENSIONS`。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -48,6 +50,8 @@ import DataTable from './data-table'
 import DocumentView from './document-view'
 import PdfView from './pdf-view'
 import SheetView from './sheet-view'
+import ModelView from './model-view'
+import LoadingIcon from './loading-icon'
 import { monacoLanguageOf, relativeDirOf, textPreviewKindOf } from '@/domain/files/preview'
 import { parseDelimitedGrid } from '@/domain/files/delimited'
 import { buildPreviewDocument, previewNeeds } from '@/domain/files/html-preview'
@@ -502,8 +506,14 @@ function WorkspaceFilePanel({
   }, [])
 
   const renderBody = () => {
+    // 读取中只给一颗转圈 + 一句话：内容没到之前不摆空编辑器 / 空画布（那样看起来像已加载完但是空的）
     if (state.status === 'loading') {
-      return <div className="wfp-hint">{t('正在读取文件…')}</div>
+      return (
+        <div className="wfp-hint">
+          <LoadingIcon />
+          <p>{t('正在读取文件…')}</p>
+        </div>
+      )
     }
     if (state.status === 'error') {
       return (
@@ -528,7 +538,12 @@ function WorkspaceFilePanel({
         }
         if (previewKind === 'html') {
           if (previewBase === undefined) {
-            return <div className="wfp-hint">{t('正在准备预览…')}</div>
+            return (
+              <div className="wfp-hint">
+                <LoadingIcon />
+                <p>{t('正在准备预览…')}</p>
+              </div>
+            )
           }
           // sandbox="" = 全部限制（脚本不执行、不弹窗、不改顶部导航）；开启脚本时只加
           // allow-scripts，**绝不加 allow-same-origin**（否则脚本会拿到应用页面的同源能力）。
@@ -634,7 +649,19 @@ function WorkspaceFilePanel({
     if (file.kind === 'pdf') {
       return <PdfView bytes={file.bytes} name={name} onOpenInSystem={openInSystem} />
     }
-    if (!mediaUrl) return <div className="wfp-hint">{t('正在读取文件…')}</div>
+    // 3D 模型：字节交给 three（场景与加载器都是懒加载，见 `model-view.tsx`）
+    if (file.kind === 'model') {
+      return <ModelView bytes={file.bytes} name={name} onOpenInSystem={openInSystem} />
+    }
+    // 字节已读完、blob URL 还没建好：同一颗转圈（否则会闪一帧「正在读取文件…」的纯文字）
+    if (!mediaUrl) {
+      return (
+        <div className="wfp-hint">
+          <LoadingIcon />
+          <p>{t('正在读取文件…')}</p>
+        </div>
+      )
+    }
 
     if (file.kind === 'image') {
       return (

@@ -1,5 +1,5 @@
 /**
- * 工作目录文件面板的数据层：**读取（文本 / 媒体 / 文档预览）/ 保存文本**。
+ * 工作目录文件面板的数据层：**读取（文本 / 媒体 / 文档预览 / 3D 模型）/ 保存文本**。
  *
  * 四条口径：
  * 1. **读写都要过安全校验**：与侧边栏其它文件操作同一套 `securityService.resolveSafePath`，
@@ -15,6 +15,9 @@
  * - `pdf`：读**字节**，面板交给 pdfjs 按页栅格化（Core 只做纯 Rust，不做 PDF 渲染）；
  * - `docx`/`doc`/`pptx`/`ppt`/`xlsx`/`xls`：调 Rust `cmd_preview_document` 拿**结构化内容**
  *   （Markdown / 每张表的网格）—— 与 `parse_document` 同一份抽取（铁律 1）。
+ *
+ * 3D 模型（glb / gltf / obj …）走字节：解析全在前端 three 里（`workspace-file/model-loaders.ts`），
+ * 这一层只负责过安全校验 + 体积上限，不预读也不解释格式。
  */
 import { invoke } from '@tauri-apps/api/core'
 import * as tauriFs from '@tauri-apps/plugin-fs'
@@ -28,6 +31,12 @@ export const MAX_TEXT_BYTES = 2 * 1024 * 1024
 
 /** 媒体上限：整份读进内存再转 blob URL，太大直接把 webview 拖死 */
 export const MAX_MEDIA_BYTES = 64 * 1024 * 1024
+
+/**
+ * 模型上限：与媒体同一个数字，但**单独一个常量**（两边的理由不同）：模型是真的要把
+ * 全部顶点 / 索引 / 贴图解到显存里，100MB 的 glb 打开一次就能把 WebGL 上下文弄崩。
+ */
+export const MAX_MODEL_BYTES = 64 * 1024 * 1024
 
 /** 文档预览上限（MB）：与 Rust `doc_parse::MAX_DOC_BYTES` 同值（50），只用于文案 */
 const MAX_PREVIEW_BYTES = 50
@@ -93,6 +102,13 @@ export interface LoadedPdfFile {
   byteSize: number
 }
 
+/** 3D 模型：原样字节交给 three 的加载器（面板不预读、不自己造 URL） */
+export interface LoadedModelFile {
+  kind: 'model'
+  bytes: Uint8Array
+  byteSize: number
+}
+
 /** 一张工作表的网格（与 Rust `PreviewSheetDto` 同形） */
 export interface DocumentPreviewSheet {
   name: string
@@ -142,6 +158,7 @@ export type LoadedWorkspaceFile =
   | LoadedTextFile
   | LoadedMediaFile
   | LoadedPdfFile
+  | LoadedModelFile
   | LoadedDocumentFile
   | LoadedSheetFile
   | LoadedOtherFile
@@ -205,12 +222,21 @@ export async function loadWorkspaceFile(
     return { kind, preview: await loadDocumentPreview(fullPath) }
   }
 
+  // 模型先单独判一次体积：两者数字相同，但模型超限时用户需要看到「模型过大」
+  // （否则会被下面那条通用的「文件超过 64 MB」盖掉）
+  if (kind === 'model' && stat.size > MAX_MODEL_BYTES) {
+    throw new WorkspaceFileError('too-large', '模型文件超过 64 MB')
+  }
+
   if (stat.size > MAX_MEDIA_BYTES) {
     throw new WorkspaceFileError('too-large', '文件超过 64 MB')
   }
 
   const bytes = await tauriFs.readFile(fullPath)
   if (kind === 'pdf') {
+    return { kind, bytes, byteSize: stat.size }
+  }
+  if (kind === 'model') {
     return { kind, bytes, byteSize: stat.size }
   }
   return {
