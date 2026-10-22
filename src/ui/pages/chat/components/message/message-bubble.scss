@@ -100,7 +100,7 @@
   }
 
   &.assistant .message-body {
-    max-width: 85%;
+    max-width: 90%;
   }
 
   &.tool .message-body .message-content {
@@ -440,7 +440,7 @@
   animation: fadeIn 0.2s ease;
 
   .feedback-content {
-    max-width: 85%;
+    max-width: 90%;
     width: fit-content;
     padding: 10px 16px;
     background: var(--feedback-bg, rgba(99, 102, 241, 0.06));

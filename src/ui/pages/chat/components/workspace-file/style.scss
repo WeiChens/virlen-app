@@ -1,48 +1,16 @@
-/* 工作目录文件面板（右侧）：头部（文件名 / 保存 / 刷新 / 系统打开 / 关闭）+ 正文（编辑器或预览）。
-   宽度由组件内联给（可拖拽），这里只管纵向布局与配色。 */
+/* 工作目录文件内容区：头部（目录 / 文件名 / 保存 / 刷新 / 系统打开 / 关闭）+ 正文（编辑器或预览）。
+   本组件是右侧面板容器（`../side-panel`）里的**一块内容**：宽度、拖拽、标签页、占满都归容器，
+   所以这里没有定位、没有 max-width、没有左边界。 */
 
 .workspace-file-panel {
   position: relative;
-  flex: none;
   display: flex;
   flex-direction: column;
-  min-width: 0;
-  /* 窄窗口下不让面板把聊天区挤没（拖动时也按同一口径封顶） */
-  max-width: 72vw;
+  width: 100%;
   height: 100%;
-  border-left: 1px solid var(--border-color, #e5e5e5);
+  min-width: 0;
   background: var(--bg-primary, #fff);
   outline: none;
-
-  /* 拖动时整块面板（含编辑器）都不要选中文字，否则会拖出一片蓝 */
-  &.is-resizing {
-    user-select: none;
-    cursor: col-resize;
-  }
-
-  /* 聊天区被压到不足 300px：面板占满整块可用宽度，72vw 的上限要让路（这时宿主已把聊天区藏起来） */
-  &.is-full {
-    max-width: none;
-  }
-}
-
-/* 拖拽手柄：压在左边缘上（宽 6px、只有 1px 画出来），hover 才显形 */
-.wfp-resizer {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: -3px;
-  width: 6px;
-  z-index: 5;
-  cursor: col-resize;
-  background: transparent;
-  transition: background 0.15s;
-
-  &:hover,
-  .workspace-file-panel.is-resizing & {
-    background: var(--accent-color, #4f46e5);
-    opacity: 0.35;
-  }
 }
 
 .wfp-head {
@@ -65,6 +33,16 @@
   font-size: var(--font-size-md, 13px);
   font-weight: 600;
   color: var(--text-primary, #1a1a1a);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 在标签页里（`hideTitle`）：文件名已经在标签上，头部这一行让给目录（次要色、可截断） */
+.wfp-dir {
+  min-width: 0;
+  font-size: var(--font-size-xs, 11px);
+  color: var(--text-secondary, #888);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -1,4 +1,5 @@
 // ==================== 上下文压缩产物（summary 消息） ====================
+// 消息流里只有这一条提示条（正文在右侧抽屉 `summary-drawer` 里看）。
 // 样式与 .message-feedback 同族：居中偏左的卡片，用虚线边框表达「这是被压缩掉的历史」
 .message-compress-summary {
   display: flex;
@@ -9,7 +10,7 @@
     display: inline-flex;
     align-items: center;
     gap: 10px;
-    max-width: 85%;
+    max-width: 90%;
     padding: 8px 14px;
     background: var(--summary-bg, rgba(99, 102, 241, 0.06));
     border: 1px dashed var(--summary-border, rgba(99, 102, 241, 0.35));
@@ -76,24 +77,4 @@
       fill: var(--accent-color, #6366f1);
     }
   }
-}
-
-// ==================== 摘要全文弹窗 ====================
-.compress-summary-modal-meta {
-  margin-bottom: 8px;
-  color: var(--text-tertiary, #999);
-  font-size: var(--font-size-xs, 12px);
-}
-
-// 摘要可能极长（正文压缩可达数万字符）：限制高度并内部滚动，
-// 否则弹窗会被撑到超出屏幕、底部按钮永远看不到
-.compress-summary-modal-body {
-  max-height: 60vh;
-  overflow: auto;
-  padding: 10px 12px;
-  background: var(--assistant-bubble-bg, #f1f1f3);
-  border-radius: 8px;
-  font-size: var(--font-size-sm, 13px);
-  line-height: 1.6;
-  word-break: break-word;
 }

@@ -2,7 +2,10 @@
  * WorkspaceFilePanel — 工作目录文件在**右侧**打开：文本可直接编辑（Ctrl/Cmd+S 或「保存」落盘），
  * 图片 / 音频 / 视频就地预览，其余类型交给系统程序。
  *
- * 五条口径：
+ * 本组件只管**一个文件的内容**：宽度、拖拽、标签页、占满都归容器 `../side-panel`，
+ * 所以这里没有 `<aside>`、没有 resizer、没有「量可用宽度」（旧实现自带这些，见 §11.54）。
+ *
+ * 七条口径：
  * 1. **编辑后不自动保存**：草稿只在面板里，`dirty` 由「草稿 ≠ 载入内容」判定；关闭 / 换文件前
  *    由宿主（chat-view）确认，面板自己的关闭按钮也确认一次；
  * 2. **保存前比对 hash**：内容可能已被终端 / AI 改过（见 `workspace-file-service`），冲突时报错，
@@ -12,16 +15,15 @@
  * 4. **媒体走 blob URL**：读回字节后自己造 URL 并在卸载 / 换文件时 `revokeObjectURL`，
  *    避免把文件直接挂到 webview 的 file://（那需要放开 asset 协议范围）；图片交给
  *    `image-viewer.tsx`（滚轮缩放 / 拖动平移 / 右键复制与旋转），本文件只管取字节。
- * 5. **宽度可拖**：面板在右侧，拖左边缘改宽；**每次打开都按「聊天区 + 面板」可用宽度的一半重算**
- *    （不记忆上次拖出来的宽度）。聊天区被压到不足 300px 时面板直接占满、聊天区先不显示，
- *    反向往回拖 / 窗口变宽后再恢复（见 `expanded`）。
+ * 5. **标题与宽度不归本组件**：面板在容器（`../side-panel`）的标签页里，标题栏已经写了文件名，
+ *    所以容器会传 `hideTitle`，这里只留「目录 + 操作按钮」一行；宽度 / 拖拽 / 占满也由容器管。
  * 6. **HTML 的脚本 / 外部资源权限来自全局设置**（设置 → 安全 → HTML 预览）：面板只在被安全默认
  *    挡住时给一条提示 + 指路，不在这里放开关 —— 那等于每打开一个文件重勾一次。
  * 7. **正在看的这个文件会盯磁盘**（AI / 终端 / 外部编辑器都算）：内容变了且本地干净 →
  *    最小编辑刷进编辑器（光标、滚动、撤销栈都不乱）；本地有未保存修改 → 顶部黄条二选一，
  *    绝不静默覆盖。`hash10` 相同就直接忽略，所以「自己保存触发 watcher」不会自激。
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import type * as MonacoNs from 'monaco-editor'
 import { openPath } from '@tauri-apps/plugin-opener'
@@ -62,23 +64,16 @@ interface Props {
   /** 要打开的文件绝对路径（工作目录内） */
   path: string
   sessionId?: string
+  /**
+   * 标题已经在容器（`../side-panel`）的标签栏上：头部的图标 + 文件名让位给「目录」一行。
+   * 单独使用时（用例 / 别的宿主）保持默认，还是有文件名与完整路径两行。
+   */
+  hideTitle?: boolean
   /** 关闭（宿主负责清空 openFile；脏数据确认已经在本组件内做过） */
   onClose: () => void
   /** 脏标记变化（宿主据此在「切文件 / 切会话」前确认） */
   onDirtyChange?: (dirty: boolean) => void
-  /**
-   * 面板占满（聊天区被压到不足 `CHAT_MIN_WIDTH`）时为 true：宿主据此把聊天区先藏起来；
-   * 拖回来 / 窗口变宽后回 false 恢复。
-   */
-  onExpandedChange?: (expanded: boolean) => void
 }
-
-/** 面板宽度的范围；DEFAULT_WIDTH 只在量不到可用宽度（jsdom / 宿主布局不同）时兜底 */
-const MIN_WIDTH = 360
-const MAX_WIDTH = 960
-const DEFAULT_WIDTH = 560
-/** 聊天区的最小可用宽度：连它都留不住，就让面板占满、聊天区先不显示 */
-const CHAT_MIN_WIDTH = 300
 
 type LoadState =
   | { status: 'loading' }
@@ -89,37 +84,22 @@ function baseName(path: string): string {
   return path.replace(/\\/g, '/').split('/').pop() || path
 }
 
-/** 面板和聊天区是同一行的兄弟：`.chat-view` 里的那个 `.chat-main` */
-function chatMainOf(panel: HTMLElement | null): HTMLElement | null {
-  const parent = panel?.parentElement
-  if (!parent) return null
-  for (const child of Array.from(parent.children)) {
-    if (child instanceof HTMLElement && child.classList.contains('chat-main')) return child
-  }
-  return null
-}
-
-/** 拖动下限：正常是 MIN_WIDTH；窗口窄到 `MIN_WIDTH + 300` 都放不下时，先让聊天区能露出来 */
-function minDragWidth(available: number): number {
-  if (available <= 0) return MIN_WIDTH
-  return Math.min(MIN_WIDTH, Math.max(120, available - CHAT_MIN_WIDTH))
-}
-
-/** 打开时占「可用宽度的一半」，再夹进允许范围 */
-function preferredWidth(available: number): number {
-  if (available <= 0) return DEFAULT_WIDTH
-  const max = Math.min(MAX_WIDTH, Math.round(window.innerWidth * 0.72))
-  return Math.min(max, Math.max(minDragWidth(available), Math.round(available / 2)))
+/** 父目录（`hideTitle` 时头部显示它：文件名已经在标签栏上了） */
+function parentDir(path: string): string {
+  const parts = path.replace(/\\/g, '/').split('/')
+  parts.pop()
+  return parts.join('/')
 }
 
 /**
- * 拖动上限：常规上限之上，还要够得着「聊天区只剩 300」这条线 —— 再往里就是面板占满，
- * 否则窄窗口里永远触发不到那个状态。
+ * 头部那行目录：只留**最后两段**（`…/chat/components`）。
+ * 深目录里靠后的那几段才是有用的（完整路径在 title 与标签上），
+ * 让它自然截尾的话正好把有用的截掉，所以这里先自己做一次收窄。
  */
-function maxDragWidth(available: number): number {
-  const cap = Math.round(window.innerWidth * 0.72)
-  if (available <= 0) return Math.min(MAX_WIDTH, cap)
-  return Math.min(MAX_WIDTH, Math.max(cap, available - CHAT_MIN_WIDTH))
+function shortDir(path: string): string {
+  const parts = parentDir(path).split('/').filter(Boolean)
+  if (parts.length <= 2) return parts.join('/')
+  return `…/${parts.slice(-2).join('/')}`
 }
 
 /** 失败 → 用户能看懂的一句话（未知原因原样带上，便于排查） */
@@ -149,19 +129,15 @@ function describeError(error: unknown): { message: string; code?: WorkspaceFileE
 function WorkspaceFilePanel({
   path,
   sessionId,
+  hideTitle = false,
   onClose,
   onDirtyChange,
-  onExpandedChange,
 }: Props) {
   const name = baseName(path)
   const [state, setState] = useState<LoadState>({ status: 'loading' })
   /** 文本草稿（非文本时恒为空串） */
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
-  const [width, setWidth] = useState(DEFAULT_WIDTH)
-  /** 「聊天区 + 面板」可用的总宽（0 = 还没量到 / 量不了） */
-  const [available, setAvailable] = useState(0)
-  const [resizing, setResizing] = useState(false)
   /** 媒体 blob URL（非媒体为空串） */
   const [mediaUrl, setMediaUrl] = useState('')
   /** 文本文件的查看方式：md / html / svg 可选预览，其余只有编辑 */
@@ -178,9 +154,6 @@ function WorkspaceFilePanel({
   /** HTML 预览的本地资源基址：undefined = 登记中，null = 登记失败（无 base），string = 就绪 */
   const [previewBase, setPreviewBase] = useState<string | null | undefined>(undefined)
 
-  const panelRef = useRef<HTMLDivElement>(null)
-  /** 左侧栏 + 分隔条占掉的宽度：聊天区被藏起来（占满态）时量不到它，靠上次的值推算 */
-  const insetRef = useRef(0)
   /**
    * 编辑器实例（`CodeEditor.onEditorMount` 给）：磁盘上的新内容要「最小编辑」地塞回去，
    * 走受控 value 会被整篇替换、光标冲到文末（见 `applyTextChange`）。
@@ -203,58 +176,6 @@ function WorkspaceFilePanel({
   const savingRef = useRef(false)
   /** 上一次加载的文件：**只有换文件**才重置查看状态与安全开关（重读同一个文件不该清掉勾选） */
   const lastPathRef = useRef(path)
-
-  /**
-   * 量一次「聊天区 + 面板」可用的总宽：面板贴右，所以 = 容器右边界 - 聊天区左边界
-   * （左侧栏与分隔条不算进来）。量不到时返回 0，宽度退回 DEFAULT_WIDTH。
-   */
-  const measureAvailable = useCallback(() => {
-    const panel = panelRef.current
-    const parent = panel?.parentElement
-    if (!panel || !parent) return 0
-    const parentRect = parent.getBoundingClientRect()
-    const mainRect = chatMainOf(panel)?.getBoundingClientRect()
-    if (mainRect && mainRect.width > 0) {
-      insetRef.current = mainRect.left - parentRect.left
-    } else if (insetRef.current <= 0) {
-      // 聊天区被藏起来，且还没量过「左侧栏 + 分隔条」：这次按量不到处理，别拿满宽去猜
-      return 0
-    }
-    return Math.max(0, Math.round(parentRect.width - insetRef.current))
-  }, [])
-
-  /**
-   * 每次打开都按可用宽度的一半重算（不记忆上次拖出来的宽度）。
-   * 之后窗口 / 左侧栏变化只更新「可用宽度」，宽度本身不跟着改 —— 窄到聊天区不足 300 时
-   * 由下面的 `expanded` 接管，把面板撑满。
-   */
-  useLayoutEffect(() => {
-    const next = measureAvailable()
-    setAvailable(next)
-    setWidth(preferredWidth(next))
-
-    const refresh = () => setAvailable(measureAvailable())
-    const parent = panelRef.current?.parentElement
-    // jsdom 没有 ResizeObserver：没有它就只靠窗口 resize（真机上窗口变化必有这一支）
-    const observer =
-      parent && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(refresh) : null
-    if (parent && observer) observer.observe(parent)
-    window.addEventListener('resize', refresh)
-    return () => {
-      observer?.disconnect()
-      window.removeEventListener('resize', refresh)
-    }
-  }, [measureAvailable])
-
-  /** 聊天区会被压到不足 300px：面板占满，聊天区交给宿主先藏起来 */
-  const expanded = available > 0 && available - width < CHAT_MIN_WIDTH
-
-  useEffect(() => {
-    onExpandedChange?.(expanded)
-  }, [expanded, onExpandedChange])
-
-  // 面板卸载（关掉）时把聊天区放回来：宿主那边也复位，这里兜一层
-  useEffect(() => () => onExpandedChange?.(false), [onExpandedChange])
 
   const dirty =
     state.status === 'ready' &&
@@ -490,37 +411,6 @@ function WorkspaceFilePanel({
     openPath(path).catch(() => showToast(t('打开失败'), 2000))
   }, [path])
 
-  const startResize = useCallback((event: React.MouseEvent) => {
-    event.preventDefault()
-    const rect = panelRef.current?.getBoundingClientRect()
-    if (!rect) return
-    const right = rect.right
-    // 拖之前重量一次：左侧栏或窗口可能刚动过
-    const room = measureAvailable()
-    if (room > 0) setAvailable(room)
-    const min = minDragWidth(room)
-    const max = maxDragWidth(room)
-    setResizing(true)
-    // 指针拖出面板时也要保持 col-resize（与左侧栏拖拽同一手法）
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-
-    const onMove = (moveEvent: MouseEvent) => {
-      // 不能把聊天区压到 300 以下 —— 那条线交给 `expanded`，到这里就直接让面板占满
-      const next = Math.max(min, Math.min(max, Math.round(right - moveEvent.clientX)))
-      setWidth(next)
-    }
-    const onUp = () => {
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      setResizing(false)
-    }
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
-  }, [measureAvailable])
-
   const textFile = state.status === 'ready' && state.file.kind === 'text' ? state.file : null
   const previewKind = textPreviewKindOf(name)
   const showPreview = viewMode === 'preview' && textFile !== null && previewKind !== null
@@ -718,13 +608,8 @@ function WorkspaceFilePanel({
   }
 
   return (
-    <aside
-      ref={panelRef}
-      className={`workspace-file-panel${resizing ? ' is-resizing' : ''}${
-        expanded ? ' is-full' : ''
-      }`}
-      // 占满态直接铺满「聊天区 + 面板」的整块可用宽度（宿主这时已经把聊天区藏起来了）
-      style={{ width: expanded ? available : width }}
+    <div
+      className="workspace-file-panel"
       tabIndex={-1}
       onKeyDown={(event) => {
         // 焦点在面板内（含媒体控件）时也能保存；Monaco 里则由它自己接管
@@ -733,20 +618,21 @@ function WorkspaceFilePanel({
           void saveRef.current()
         }
       }}>
-      <div
-        className="wfp-resizer"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label={t('调整面板宽度')}
-        onMouseDown={startResize}
-      />
-
+      {/* 头：文件名 + 操作按钮。标题在标签栏上时（`hideTitle`）只留目录一行 */}
       <div className="wfp-head">
-        <FileTypeIcon filename={name} className="wfp-icon" />
-        <span className="wfp-name" title={path}>
-          {name}
-        </span>
-        {dirty && <span className="wfp-dirty" title={t('未保存')} />}
+        {hideTitle ? (
+          <span className="wfp-dir" title={path}>
+            {shortDir(path)}
+          </span>
+        ) : (
+          <>
+            <FileTypeIcon filename={name} className="wfp-icon" />
+            <span className="wfp-name" title={path}>
+              {name}
+            </span>
+          </>
+        )}
+        {!hideTitle && dirty && <span className="wfp-dirty" title={t('未保存')} />}
         <span className="wfp-spacer" />
         {textFile && (
           <button
@@ -784,7 +670,7 @@ function WorkspaceFilePanel({
         </button>
       </div>
 
-      {state.status === 'ready' && (
+      {!hideTitle && state.status === 'ready' && (
         <div className="wfp-path" title={path}>
           {path}
         </div>
@@ -845,7 +731,7 @@ function WorkspaceFilePanel({
         )}
         {renderBody()}
       </div>
-    </aside>
+    </div>
   )
 }
 

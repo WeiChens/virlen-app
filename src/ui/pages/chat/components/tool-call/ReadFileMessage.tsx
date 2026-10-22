@@ -90,7 +90,7 @@ function MultiFileCodeView({
     <CodeBlock
       autoCenter
       maxHeight={'55vh'}
-      width={'80%'}
+      width={"100%"}
       fileName={toShortPath(file.fullPath ?? '', workspace)}
       fileNameRender={() => (
         <Select
@@ -194,7 +194,7 @@ class ReadFileMessage implements IToolCallMessage {
         <CodeBlock
           autoCenter
           maxHeight={"55vh"}
-          width={"80%"}
+          width={"100%"}
           fileName={name}
           showLineNumbers
           startLineNumber={startLine}

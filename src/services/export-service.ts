@@ -832,7 +832,7 @@ body {
   border-radius: 16px 4px 16px 16px;
   word-break: break-word;
 }
-.message-bubble.assistant .message-body { max-width: 85%; }
+.message-bubble.assistant .message-body { max-width: 90%; }
 .message-bubble.assistant .message-body .message-content {
   background: var(--assistant-bubble-bg);
   color: var(--text-primary);
@@ -950,7 +950,7 @@ details[open] > .tool-call__row .tool-call__caret { transform: rotate(180deg); }
 .tool-call__code:last-child { margin-bottom: 0; }
 
 /* ==================== 工具调用：折叠组（复刻 .tool-group） ==================== */
-.tool-group { margin: 2px 0 2px 28px; max-width: 90%; }
+.tool-group { margin: 2px 0 2px 28px; max-width: 93%; }
 .tool-group__head {
   display: inline-flex; align-items: center; gap: 8px; width: fit-content; max-width: 100%;
   padding: 4px 10px; border-radius: 8px; cursor: pointer; user-select: none; list-style: none;
@@ -974,13 +974,13 @@ details[open] > .tool-group__head .tool-group__caret { transform: rotate(180deg)
 /* ==================== 反馈消息 / 上下文压缩摘要 ==================== */
 .message-feedback { display: flex; padding: 8px 20px; }
 .feedback-content {
-  max-width: 85%; width: fit-content; padding: 10px 16px;
+  max-width: 90%; width: fit-content; padding: 10px 16px;
   background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 10px;
   color: var(--text-secondary); font-size: var(--font-size-sm); line-height: 1.6;
 }
 .message-compress-summary { display: flex; padding: 8px 20px; }
 .compress-summary-card {
-  display: block; max-width: 85%;
+  display: block; max-width: 90%;
   border: 1px dashed var(--accent-color); border-radius: 10px;
   background: color-mix(in srgb, var(--accent-color) 6%, transparent);
   color: var(--text-secondary); font-size: var(--font-size-sm);

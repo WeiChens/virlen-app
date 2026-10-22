@@ -49,7 +49,7 @@ class WriteFileMessage implements IToolCallMessage {
         <CodeBlock
           autoCenter
           maxHeight={450}
-          width={"80%"}
+          width={"100%"}
           fileName={name}
           showLineNumbers
           actions={[{

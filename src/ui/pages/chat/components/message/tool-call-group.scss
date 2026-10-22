@@ -6,10 +6,7 @@
 // 头部不显示成功/失败的状态点（状态不进头部视觉）。
 .tool-group {
   margin: 2px 8px 2px 28px;
-  width: 90%;
-
-  // max-width: 82%;
-  // width: fit-content;
+  width: 93%;
   &__head {
     display: flex;
     align-items: center;

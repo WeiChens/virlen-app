@@ -39,3 +39,16 @@
 
 **11.13 切会话有唯一入口 `chat-view.tsx::handleSelectSession()`** —— 外部只改 `chatState.currentSessionId` 会「跳过去但消息列表是空的」（它还要 SQLite 懒加载、`setMessages` 镜像、中断残留修复、用户消息索引、埋点、清红点）。
 外部入口（托盘唤起等）拿不到组件函数 → `chat-view` 有「外部入口兜底 effect」（`handledSessionRef`）接住：**新增外部切会话入口只改 store**；组件内自己切（如 `doSend` 新建会话）必须登记 `handledSessionRef`，否则兜底 effect 会按旧内容覆盖刚加的消息。另：`message-list` 的 `hide`（`opacity: 0`）在 `messages` 为空时也必须解除（见 `use-scroll-controller.ts`）。
+
+**11.54 右侧面板 = 容器（`side-panel`）+ 内容（`workspace-file` 等），五个不能踩的点** —— 标签页容器把「多个文件同时打开」变成了常态，随之而来的坑全在**生命周期**上：
+- **① 切标签绝不能卸载内容**：文件面板的草稿只活在组件 state 里（没进 store、没进 SQLite），卸载即丢；Monaco 的撤销栈、滚动位置同理。所以所有标签的内容**一直挂着**，`<div hidden>` 只切显隐（`.side-panel-pane[hidden] { display: none }`），`CodeEditor` 的 `automaticLayout` 会在重新显示时自己补一次 layout。
+- **② 每个标签的脏回调必须是稳定引用**：面板里的 `useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange])` 一旦拿到内联箭头，就变成「面板每渲染一次 → setState 一次」；容器用 `dirtyHandlersRef`（`Map<id, handler>`）缓存，标签关掉时连同脏状态一起删（不删的话宿主会一直被「有未保存草稿」拦住）。
+- **③ 宽度 / 拖拽 / 占满归容器，不要下放给每个内容区**：旧实现把这些写在 `workspace-file` 里（自带 `<aside>`、`.wfp-resizer`、`measureAvailable`），多标签时就会「每个面板各拖各的」。现在 `side-panel/index.tsx` 独占这一套（`MIN_WIDTH` / `CHAT_MIN_WIDTH` / `preferredWidth` / `is-full`），内容区只负责自己那块；宽度**只在容器挂载时**按可用宽度的一半算，加标签 / 切标签都不重算（否则用户拖出来的宽度会被悄悄改回去）。
+- **④ 打开新文件不再需要「丢弃草稿」确认**：这是多标签最直接的收益（旧单面板时代换文件必须先确认）。反过来说，**只有「关全部」的路径**（切会话 / 切工作目录 → `closeAllTabs()`）才要问，且文案说的是「右侧所有标签页」；关单个标签的确认归容器（标签栏那颗 ×）与面板自己（面板头部的关闭按钮，内部已确认过 → `onCloseTab` 直通，不重复问）。
+- **⑤ 标签 id = 内容身份**（`file:<绝对路径>`）：同一个文件再点一次是「激活已有标签」，不是再开一个 —— 否则两个标签各持一份草稿，保存起来互相踩。渲染分支在 `side-panel/index.tsx::renderTab()`，之后接网址访问 / 终端就在那里加一支 `kind`。
+
+**上下文压缩摘要的详情是另一个东西：独立右侧抽屉（`message/summary-drawer.tsx`），不进这个面板。**
+- **为什么分开**：面板的用途是「和消息并排」看文件（改代码时对照）；摘要详情是「把一段被压掉的历史展开读完」，需要整条高度 + 自己的滚动条。塞进标签等于逼用户在看摘要时丢掉消息流，而居中弹窗（原来的 720px `SummaryModal`，已删）又只能挤出一个短胖的框。
+- **形态**：`createPortal` 到 body + `position: fixed`（顶部让开自绘标题栏 `--window-top-bar-height`）、`z-index: 1200`（项目约定的抽屉层：高于全屏代码块 500，低于 Modal 1300 / 右键菜单 2000）；点遮罩 / Esc / 右上角 × 三条路都能关，打开时焦点收进抽屉。
+- **数据**：抽屉只拿 `message` 本体（正文 / 副标题都由 `message/summary-meta.ts` 统一取）；提示条本身仍然**不得**渲染正文。守卫：`tests/ui/summary-message.test.tsx`（提示条无正文 / 点开抽屉 / portal 到 body）+ `tests/ui/summary-drawer.test.tsx`（Esc · 遮罩 · × / 空正文 / 焦点）。
+守卫：`src/tests/ui/side-panel.test.tsx`（切标签不卸载 / 关闭确认 / 脏标记汇总 / 宽度与占满）+ `src/tests/ui/side-panel-style-contract.test.ts`（`hidden` 规则 / 宽度上限只在容器上）+ `src/tests/ui/side-panel-tabs.test.ts`（标签模型的纯函数）。

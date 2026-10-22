@@ -40,7 +40,9 @@ import TodoEntry from './components/todo/TodoEntry'
 import ServiceEntry from './components/service/ServiceEntry'
 import GitEntry from './components/git/GitEntry'
 import SearchDialog from './components/search'
-import WorkspaceFilePanel from './components/workspace-file'
+// 右侧面板容器：多个文件各占一个标签（后面还要接网址访问 / 终端）
+import SidePanel from './components/side-panel'
+import { closeTab, openFileTab, type SidePanelTab } from './components/side-panel/tabs'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 
 import { useToolUI } from './components/tool-ui'
@@ -254,33 +256,59 @@ function ChatView() {
   const resizingRef = useRef(false)
   const currentWidthRef = useRef(sidebarWidth)
 
-  /** 右侧文件面板：打开的文件 + 它属于哪个会话（切会话就要关） */
-  const [openFile, setOpenFile] = useState<string | null>(null)
-  /** 文件面板占满（聊天区会被压到不足 300px）→ 聊天区先不显示 */
+  /**
+   * 右侧面板：**一个文件一个标签**（同一路径不会开出两个标签，见 `side-panel/tabs.ts`）。
+   * `panelTabs` 是唯一真相：空数组 = 容器整个不渲染（也不占宽度）。
+   */
+  const [panelTabs, setPanelTabs] = useState<SidePanelTab[]>([])
+  /** 当前激活的标签（关掉激活的那个时由 `closeTab` 算出邻居） */
+  const [activeTabId, setActiveTabId] = useState<string | null>(null)
+  /** 面板占满（聊天区会被压到不足 300px）→ 聊天区先不显示 */
   const [filePanelFull, setFilePanelFull] = useState(false)
-  const openFileRef = useRef<string | null>(null)
+  /** 任一标签有未保存草稿（切会话 / 切工作目录前要确认） */
   const fileDirtyRef = useRef(false)
+  /** 标签属于哪个会话：切会话要全关（它们属于上一个会话的工作目录） */
   const openFileSessionRef = useRef<string | null>(null)
-  openFileRef.current = openFile
+  const panelTabsRef = useRef<SidePanelTab[]>(panelTabs)
+  panelTabsRef.current = panelTabs
+  const activeTabIdRef = useRef<string | null>(activeTabId)
+  activeTabIdRef.current = activeTabId
 
   const handleFileDirtyChange = useCallback((dirty: boolean) => {
     fileDirtyRef.current = dirty
   }, [])
 
-  const closeFile = useCallback(() => {
-    openFileRef.current = null
+  /** 关掉所有标签（切会话 / 切工作目录）：容器随之卸载，占满态也要解除 */
+  const closeAllTabs = useCallback(() => {
+    panelTabsRef.current = []
+    activeTabIdRef.current = null
     openFileSessionRef.current = null
     fileDirtyRef.current = false
-    setOpenFile(null)
+    setPanelTabs([])
+    setActiveTabId(null)
     // 面板占满时聊天区是藏起来的：关掉必须把它放回来
     setFilePanelFull(false)
+  }, [])
+
+  /** 关掉一个标签：邻居顶上来；关完最后一个就是整块面板卸载 */
+  const handleCloseTab = useCallback((id: string) => {
+    const next = closeTab(panelTabsRef.current, id, activeTabIdRef.current)
+    panelTabsRef.current = next.tabs
+    activeTabIdRef.current = next.activeId
+    setPanelTabs(next.tabs)
+    setActiveTabId(next.activeId)
+    if (next.tabs.length === 0) {
+      openFileSessionRef.current = null
+      fileDirtyRef.current = false
+      setFilePanelFull(false)
+    }
   }, [])
 
   /**
    * 有未保存草稿时先问一句（无草稿直接放行）。
    *
-   * ⚠️ 面板只有一个：`closeFile()` 会让它卸载，草稿随之消失 —— 换文件 / 切会话 / 换工作目录
-   * 三条路径都必须先过这里。面板内部的关闭 / 重新加载按钮同样要确认（见 `workspace-file`）。
+   * `closeAllTabs()` 会把整块面板卸载，**所有标签的草稿一起消失** —— 切会话 / 换工作目录
+   * 两条路径必须先过这里。关单个标签的确认归容器（`side-panel`）与面板自己（`workspace-file`）。
    */
   const confirmDiscardDraft = useCallback(
     (message: string, confirmText: string): Promise<boolean> => {
@@ -294,22 +322,18 @@ function ChatView() {
     [],
   )
 
-  /** 双击文件 → 右侧打开（换文件前先确认草稿） */
-  const handleOpenFile = useCallback(
-    async (path: string) => {
-      if (openFileRef.current === path) return
-      const confirmed = await confirmDiscardDraft(
-        t('打开另一个文件会丢弃当前草稿。'),
-        t('放弃并打开'),
-      )
-      if (!confirmed) return
-      openFileRef.current = path
-      openFileSessionRef.current = chatState.value.currentSessionId
-      fileDirtyRef.current = false
-      setOpenFile(path)
-    },
-    [confirmDiscardDraft],
-  )
+  /**
+   * 双击文件 → 右侧打开：已有同路径的标签就切过去，否则新开一个。
+   * **不再需要「丢弃草稿」确认** —— 打开新文件不再挤掉原来那个（单面板时代的必答题）。
+   */
+  const handleOpenFile = useCallback((path: string) => {
+    const next = openFileTab(panelTabsRef.current, path)
+    panelTabsRef.current = next.tabs
+    activeTabIdRef.current = next.activeId
+    openFileSessionRef.current = chatState.value.currentSessionId
+    setPanelTabs(next.tabs)
+    setActiveTabId(next.activeId)
+  }, [])
 
   // 同步 ref 与 state
   useEffect(() => {
@@ -548,12 +572,12 @@ function ChatView() {
     }
   }, [chatState.value.currentSessionId])
 
-  // 切会话 / 新建对话 → 关掉右侧文件（它属于上一个会话的工作目录）
+  // 切会话 / 新建对话 → 关掉右侧所有标签（它们属于上一个会话的工作目录）
   useEffect(() => {
-    if (!openFileRef.current) return
+    if (panelTabsRef.current.length === 0) return
     if (openFileSessionRef.current === chatState.value.currentSessionId) return
-    closeFile()
-  }, [chatState.value.currentSessionId, closeFile])
+    closeAllTabs()
+  }, [chatState.value.currentSessionId, closeAllTabs])
 
   /** 最近一次「已由本组件处理」的会话切换目标（用于区分自己切的与外部直接改 store 的） */
   const handledSessionRef = useRef<string | null>(null)
@@ -571,9 +595,9 @@ function ChatView() {
   async function handleSelectSession(sessionId: string) {
     const session = sessionStore.getSession(sessionId)
     if (!session) return
-    // 切会话会关掉右侧文件；有未保存草稿先问一句（托盘等外部入口走下面的兜底 effect，不弹）
+    // 切会话会关掉右侧所有标签页；有未保存草稿先问一句（托盘等外部入口走下面的兜底 effect，不弹）
     const confirmed = await confirmDiscardDraft(
-      t('切换会话会关闭当前文件，未保存的修改将丢失。'),
+      t('切换会话会关闭右侧所有标签页，未保存的修改将丢失。'),
       t('放弃并切换'),
     )
     if (!confirmed) return
@@ -940,7 +964,7 @@ function ChatView() {
   }, [])
   const handleOpenFileFromSidebar = useCallback(
     (path: string): void => {
-      void handleOpenFile(path)
+      handleOpenFile(path)
     },
     [handleOpenFile],
   )
@@ -1027,14 +1051,14 @@ function ChatView() {
                   : chatState.value.selectedWorkspace
               }
               setValue={(e) => {
-                // 换工作目录 = 右侧打开的文件已不属于当前目录，一并关掉（先确认草稿）
+                // 换工作目录 = 右侧打开的标签已不属于当前目录，一并关掉（先确认草稿）
                 void (async () => {
                   const confirmed = await confirmDiscardDraft(
-                    t('切换工作目录会关闭当前文件，未保存的修改将丢失。'),
+                    t('切换工作目录会关闭右侧所有标签页，未保存的修改将丢失。'),
                     t('放弃并切换'),
                   )
                   if (!confirmed) return
-                  closeFile()
+                  closeAllTabs()
                   chatState.setValue('selectedWorkspace', e)
                 })()
               }}
@@ -1105,15 +1129,20 @@ function ChatView() {
         )}
       </div>
 
-      {/* 右侧文件面板：文本可编辑（Ctrl+S 保存）/ 图片 / 音视频预览 */}
-      {openFile && (
-        <WorkspaceFilePanel
-          path={openFile}
+      {/*
+        右侧面板：一个文件一个标签（文本可编辑 Ctrl+S 保存 / 图片 / 音视频预览）。
+        **切标签不卸载**，草稿与撤销栈都不会丢；后面还要接网址访问 / 终端。
+      */}
+      {panelTabs.length > 0 && (
+        <SidePanel
+          tabs={panelTabs}
+          activeId={activeTabId}
           sessionId={chatState.value.currentSessionId ?? undefined}
+          onActiveChange={setActiveTabId}
+          onCloseTab={handleCloseTab}
           onDirtyChange={handleFileDirtyChange}
           // 占满（聊天区不足 300px）→ 把聊天区藏起来，面板接管整块宽度
           onExpandedChange={setFilePanelFull}
-          onClose={closeFile}
         />
       )}
 
