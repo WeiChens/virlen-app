@@ -8,6 +8,8 @@
  *    `index.tsx::renderTab()`，加一种只加一支；打开/关闭/选中这套逻辑不用改；
  * 3. **关掉当前激活的标签**：请**右边**那位上来（浏览器的口径：关掉当前页，右边那页顶上来），
  *    没有右邻居再退到左边；全关光就是 `null`（宿主据此把整个容器卸掉）。
+ * 4. **批量关闭（标签右键菜单）**：按「逐个 `closeTab`」的口径收敛激活态 —— 语义只有一份，
+ *    免得「关闭其他」自己再写一套邻居规则。
  */
 
 /** 右侧面板的一个标签页（目前只有「文件」，后续扩 kind 时在这里加联合项） */
@@ -65,6 +67,32 @@ export function closeTab(
   if (id !== activeId) return { tabs: rest, activeId }
   const next = rest[index] ?? rest[index - 1] ?? null
   return { tabs: rest, activeId: next?.id ?? null }
+}
+
+/**
+ * 关掉**一批**标签（右键菜单的关闭其他 / 关闭右侧标签页 / 关闭已保存 / 全部关闭）。
+ *
+ * 收敛口径就是逐个走 `closeTab`：被关的里面有激活标签时，右邻居一路顶上来，
+ * 于是「关闭其他」自然停在唯一剩下的那个标签上（不需要额外的「激活谁」参数）。
+ * 只多一条兜底：关到「剩一个但激活态是 null」时退回第一个 —— 宿主 `activeId=null`
+ * 虽然会被容器兜底显示，但下次关标签的邻居计算会失去基准。
+ */
+export function closeTabs(
+  tabs: SidePanelTab[],
+  ids: readonly string[],
+  activeId: string | null,
+): { tabs: SidePanelTab[]; activeId: string | null } {
+  const doomed = new Set(ids)
+  let state = { tabs, activeId }
+  // 按 tabs 顺序关（不是按 ids 顺序）：邻居规则依赖原顺序，乱序关会让激活态跳得没有道理
+  for (const tab of tabs) {
+    if (doomed.has(tab.id)) state = closeTab(state.tabs, tab.id, state.activeId)
+  }
+  if (state.tabs === tabs) return state
+  return {
+    tabs: state.tabs,
+    activeId: state.activeId ?? state.tabs[0]?.id ?? null,
+  }
 }
 
 /** 标签上显示的名字：文件名（路径可能是 Windows 反斜杠） */

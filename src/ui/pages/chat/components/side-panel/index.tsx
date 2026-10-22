@@ -16,6 +16,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { t } from '@/ui/i18n'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
+import ContextMenu, {
+  useContextMenu,
+  type ContextMenuItem,
+} from '@/ui/components/shared/ContextMenu'
+import { fileMenuItems } from '@/ui/components/shared/ContextMenu/menus'
 import CloseSvg from '@/ui/components/icons/CloseSvg'
 import FileTypeIcon from '@/ui/components/icons/FileTypeIcon'
 import WorkspaceFilePanel from '../workspace-file'
@@ -31,6 +36,8 @@ interface Props {
   onActiveChange: (id: string) => void
   /** 关闭某个标签。**调用前草稿确认已经问过**（面板内或本容器的 `requestCloseTab`） */
   onCloseTab: (id: string) => void
+  /** 一次关掉多个标签（标签右键菜单）；没传时容器退化为逐个 `onCloseTab` */
+  onCloseTabs?: (ids: string[]) => void
   /** 任一标签有未保存草稿（宿主据此在切会话 / 切工作目录前确认） */
   onDirtyChange?: (dirty: boolean) => void
   /** 面板占满（聊天区被压到不足 `CHAT_MIN_WIDTH`）时为 true：宿主据此把聊天区藏起来 */
@@ -83,6 +90,7 @@ function SidePanel({
   sessionId,
   onActiveChange,
   onCloseTab,
+  onCloseTabs,
   onDirtyChange,
   onExpandedChange,
 }: Props) {
@@ -225,13 +233,29 @@ function SidePanel({
   )
 
   /**
-   * 关标签（标签栏那颗 ×）：有草稿先问一句。面板自己头部的关闭按钮走的是另一条路
-   * （它内部已经确认过了，直接 `onCloseTab`），所以这里不会问第二遍。
+   * 标签右键菜单：target 是「右键的那个标签」—— 关闭类动作都作用于它，与当前激活的是谁无关。
+   * 按坐标开（不按锚点）：标签栏就在鼠标下方，菜单跟着指针更符合直觉。
    */
-  const requestCloseTab = useCallback(
-    async (id: string) => {
-      if (!dirtyIds.includes(id)) {
-        onCloseTab(id)
+  const tabMenu = useContextMenu<{ id: string; path: string }>()
+
+  /**
+   * 关一批标签：里面有未保存草稿先问**一次**（逐个问会弹一串对话框）。
+   * 面板自己头部的关闭按钮走的是另一条路（它内部已经确认过，直接 `onCloseTab`）。
+   */
+  const requestCloseTabs = useCallback(
+    async (ids: string[]) => {
+      // 菜单开着的时候标签可能已经没了（切工作目录等）：只处置还活着的
+      const closable = ids.filter((id) => tabs.some((tab) => tab.id === id))
+      if (closable.length === 0) return
+      const submit = () => {
+        if (!onCloseTabs) {
+          for (const id of closable) onCloseTab(id)
+          return
+        }
+        onCloseTabs(closable)
+      }
+      if (!closable.some((id) => dirtyIds.includes(id))) {
+        submit()
         return
       }
       const confirmed = await MessageBox.propt(
@@ -239,10 +263,62 @@ function SidePanel({
         t('关闭后这些修改会丢失。'),
         { confirmText: t('放弃并关闭'), cancelText: t('取消'), danger: true },
       )
-      if (confirmed) onCloseTab(id)
+      if (confirmed) submit()
     },
-    [dirtyIds, onCloseTab],
+    [dirtyIds, onCloseTab, onCloseTabs, tabs],
   )
+
+  /** 关单个标签（标签栏那颗 ×）：有草稿先问一句 */
+  const requestCloseTab = useCallback(
+    (id: string): void => {
+      void requestCloseTabs([id])
+    },
+    [requestCloseTabs],
+  )
+
+  /**
+   * 右键菜单的项。三条口径：
+   * 1. 关闭类一律以「右键的那个标签」为锚点（关闭其他 / 关闭右侧不会因为当前激活的是别人而作用错对象）；
+   * 2. 「关闭已保存」= 关掉所有**没有**未保存草稿的标签（与 VS Code 同口径）；
+   * 3. 文件类动作用全应用唯一那份工厂，`withOpen:false` —— 面板头已经有「在系统程序中打开」。
+   */
+  function tabMenuItems(target: { id: string; path: string }): ContextMenuItem[] {
+    const index = tabs.findIndex((tab) => tab.id === target.id)
+    // 菜单开着的时候目标标签被关掉了：不给任何操作入口
+    if (index < 0) return []
+    const others = tabs.filter((tab) => tab.id !== target.id).map((tab) => tab.id)
+    const right = tabs.slice(index + 1).map((tab) => tab.id)
+    const saved = tabs.filter((tab) => !dirtyIds.includes(tab.id)).map((tab) => tab.id)
+    const fileItems = fileMenuItems(target.path, { withOpen: false })
+    return [
+      { key: 'close', label: t('关闭'), onClick: () => void requestCloseTabs([target.id]) },
+      {
+        key: 'close-others',
+        label: t('关闭其他'),
+        disabled: others.length === 0,
+        onClick: () => void requestCloseTabs(others),
+      },
+      {
+        key: 'close-right',
+        label: t('关闭右侧标签页'),
+        disabled: right.length === 0,
+        onClick: () => void requestCloseTabs(right),
+      },
+      {
+        key: 'close-saved',
+        label: t('关闭已保存'),
+        disabled: saved.length === 0,
+        onClick: () => void requestCloseTabs(saved),
+      },
+      {
+        key: 'close-all',
+        label: t('全部关闭'),
+        onClick: () => void requestCloseTabs(tabs.map((tab) => tab.id)),
+      },
+      // 分隔线画在第一项文件动作上（关闭类 / 文件类两段）
+      ...fileItems.map((item, i) => (i === 0 ? { ...item, divider: true } : item)),
+    ]
+  }
 
   /** 真正渲染某个标签的内容：加新的预览类型（网址 / 终端）就在这里加一支 */
   const renderTab = (tab: SidePanelTab) => {
@@ -302,7 +378,13 @@ function SidePanel({
                 if (el) tabRefs.current.set(tab.id, el)
                 else tabRefs.current.delete(tab.id)
               }}
-              className={`side-panel-tab${active ? ' is-active' : ''}`}>
+              className={`side-panel-tab${active ? ' is-active' : ''}`}
+              // 右键在标签上开菜单；空白处不弹（不给「关谁」的歧义）
+              onContextMenu={
+                tab.kind === 'file'
+                  ? (event) => tabMenu.openAt(event, { id: tab.id, path: tab.path })
+                  : undefined
+              }>
               <button
                 type="button"
                 role="tab"
@@ -341,6 +423,14 @@ function SidePanel({
           </div>
         ))}
       </div>
+
+      {tabMenu.state && (
+        <ContextMenu
+          position={tabMenu.state.position}
+          items={tabMenuItems(tabMenu.state.target)}
+          onClose={tabMenu.close}
+        />
+      )}
     </aside>
   )
 }

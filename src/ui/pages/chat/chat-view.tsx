@@ -42,7 +42,7 @@ import GitEntry from './components/git/GitEntry'
 import SearchDialog from './components/search'
 // 右侧面板容器：多个文件各占一个标签（后面还要接网址访问 / 终端）
 import SidePanel from './components/side-panel'
-import { closeTab, openFileTab, type SidePanelTab } from './components/side-panel/tabs'
+import { closeTab, closeTabs, openFileTab, type SidePanelTab } from './components/side-panel/tabs'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 
 import { useToolUI } from './components/tool-ui'
@@ -278,31 +278,42 @@ function ChatView() {
     fileDirtyRef.current = dirty
   }, [])
 
+  /**
+   * 落一次标签状态：ref 与 state 同步（ref 是同步链路的基准，宿主回调里立刻读得到）。
+   * 关光 = 整块面板卸载的信号 —— 会话归属 / 脏标记 / 占满态一起复位。
+   */
+  const applyPanelTabs = useCallback(
+    (next: { tabs: SidePanelTab[]; activeId: string | null }) => {
+      panelTabsRef.current = next.tabs
+      activeTabIdRef.current = next.activeId
+      setPanelTabs(next.tabs)
+      setActiveTabId(next.activeId)
+      if (next.tabs.length > 0) return
+      openFileSessionRef.current = null
+      fileDirtyRef.current = false
+      // 面板占满时聊天区是藏起来的：关掉必须把它放回来
+      setFilePanelFull(false)
+    },
+    [],
+  )
+
   /** 关掉所有标签（切会话 / 切工作目录）：容器随之卸载，占满态也要解除 */
   const closeAllTabs = useCallback(() => {
-    panelTabsRef.current = []
-    activeTabIdRef.current = null
-    openFileSessionRef.current = null
-    fileDirtyRef.current = false
-    setPanelTabs([])
-    setActiveTabId(null)
-    // 面板占满时聊天区是藏起来的：关掉必须把它放回来
-    setFilePanelFull(false)
-  }, [])
+    applyPanelTabs({ tabs: [], activeId: null })
+  }, [applyPanelTabs])
 
   /** 关掉一个标签：邻居顶上来；关完最后一个就是整块面板卸载 */
   const handleCloseTab = useCallback((id: string) => {
-    const next = closeTab(panelTabsRef.current, id, activeTabIdRef.current)
-    panelTabsRef.current = next.tabs
-    activeTabIdRef.current = next.activeId
-    setPanelTabs(next.tabs)
-    setActiveTabId(next.activeId)
-    if (next.tabs.length === 0) {
-      openFileSessionRef.current = null
-      fileDirtyRef.current = false
-      setFilePanelFull(false)
-    }
-  }, [])
+    applyPanelTabs(closeTab(panelTabsRef.current, id, activeTabIdRef.current))
+  }, [applyPanelTabs])
+
+  /**
+   * 关掉一批标签（标签右键菜单的关闭其他 / 关闭右侧 / 关闭已保存 / 全部关闭）。
+   * 一次算完再落库：逐个回调会让激活态在中间状态里来回跳（还多渲染几次）。
+   */
+  const handleCloseTabs = useCallback((ids: string[]) => {
+    applyPanelTabs(closeTabs(panelTabsRef.current, ids, activeTabIdRef.current))
+  }, [applyPanelTabs])
 
   /**
    * 有未保存草稿时先问一句（无草稿直接放行）。
@@ -1140,6 +1151,7 @@ function ChatView() {
           sessionId={chatState.value.currentSessionId ?? undefined}
           onActiveChange={setActiveTabId}
           onCloseTab={handleCloseTab}
+          onCloseTabs={handleCloseTabs}
           onDirtyChange={handleFileDirtyChange}
           // 占满（聊天区不足 300px）→ 把聊天区藏起来，面板接管整块宽度
           onExpandedChange={setFilePanelFull}

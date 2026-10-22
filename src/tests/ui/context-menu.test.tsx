@@ -428,6 +428,19 @@ describe('菜单项工厂', () => {
     await act(async () => root.unmount())
   })
 
+  /** 标签右键菜单用：面板头已经有「在系统程序中打开」，菜单里不再重复同一个动作 */
+  it('withOpen:false 跳过「打开」，只留编辑器 / 文件管理器 / 复制路径', async () => {
+    const { root } = await render(
+      <ContextMenu
+        position={{ x: 0, y: 0 }}
+        onClose={vi.fn()}
+        items={fileMenuItems('E:/ws/src/a.ts', { withOpen: false })}
+      />,
+    )
+    expect(menuLabels()).toEqual(['编辑器打开', '在文件管理器中显示', '复制路径'])
+    await act(async () => root.unmount())
+  })
+
   it('图片菜单：复制图片 / 另存为', async () => {
     const src = 'data:image/png;base64,AAEC'
     const { root } = await render(

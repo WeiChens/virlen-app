@@ -28,14 +28,16 @@ function toastFail(message: string): void {
  * `openPath` / `revealItemInDir` 只认绝对路径，而 LLM 入参常是相对工作目录的（如 `src/a.ts`）
  * —— 调用方务必传 workspace，否则系统会定位错地方。
  * reveal 由 capabilities 的 `opener:default` 覆盖（含 allow-reveal-item-in-dir），无需单独授权。
+ *
+ * `withOpen:false` 跳过「打开」（系统默认程序）：宿主自己已经有同名入口时别再给第二个。
  */
 export function fileMenuItems(
   path: string,
-  opts: { isDir?: boolean; workspace?: string; line?: number } = {},
+  opts: { isDir?: boolean; workspace?: string; line?: number; withOpen?: boolean } = {},
 ): ContextMenuItem[] {
   // 已是绝对路径 / 无 workspace 时原样返回
   const target = toAbsolutePath(path, opts.workspace)
-  const items: ContextMenuItem[] = [
+  const items: ContextMenuItem[] = opts.withOpen === false ? [] : [
     {
       key: 'open',
       label: opts.isDir ? t('打开文件夹') : t('打开'),

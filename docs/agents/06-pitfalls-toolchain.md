@@ -46,9 +46,10 @@
 - **③ 宽度 / 拖拽 / 占满归容器，不要下放给每个内容区**：旧实现把这些写在 `workspace-file` 里（自带 `<aside>`、`.wfp-resizer`、`measureAvailable`），多标签时就会「每个面板各拖各的」。现在 `side-panel/index.tsx` 独占这一套（`MIN_WIDTH` / `CHAT_MIN_WIDTH` / `preferredWidth` / `is-full`），内容区只负责自己那块；宽度**只在容器挂载时**按可用宽度的一半算，加标签 / 切标签都不重算（否则用户拖出来的宽度会被悄悄改回去）。
 - **④ 打开新文件不再需要「丢弃草稿」确认**：这是多标签最直接的收益（旧单面板时代换文件必须先确认）。反过来说，**只有「关全部」的路径**（切会话 / 切工作目录 → `closeAllTabs()`）才要问，且文案说的是「右侧所有标签页」；关单个标签的确认归容器（标签栏那颗 ×）与面板自己（面板头部的关闭按钮，内部已确认过 → `onCloseTab` 直通，不重复问）。
 - **⑤ 标签 id = 内容身份**（`file:<绝对路径>`）：同一个文件再点一次是「激活已有标签」，不是再开一个 —— 否则两个标签各持一份草稿，保存起来互相踩。渲染分支在 `side-panel/index.tsx::renderTab()`，之后接网址访问 / 终端就在那里加一支 `kind`。
+- **⑥ 右键菜单的关闭类动作「以右键的那个标签为锚点」，且一次批量关**：容器 `requestCloseTabs(ids)` 收一批 id → 宿主 `chat-view.tsx::handleCloseTabs()` → `tabs.ts::closeTabs()`（内部逐个走 `closeTab` 收敛激活态，**不另写一套邻居规则**）→ **一次落库**。逐个回调会让激活态在中间态里来回跳，还多渲染几次。三条容易被改坏的口径：「关闭已保存」= 只关**非脏**标签（全脏时该项禁用）；「关闭右侧 / 关闭其他」按标签栏顺序算，**最后一个标签上「关闭右侧标签页」必须禁用**；批量里夹着未保存草稿只问**一次**（逐个问会弹一串对话框），取消就一个都不关。文件类动作复用 `ContextMenu/menus.ts::fileMenuItems(..., { withOpen: false })`（面板头已有「在系统程序中打开」，别给同名第二入口）。
 
 **上下文压缩摘要的详情是另一个东西：独立右侧抽屉（`message/summary-drawer.tsx`），不进这个面板。**
 - **为什么分开**：面板的用途是「和消息并排」看文件（改代码时对照）；摘要详情是「把一段被压掉的历史展开读完」，需要整条高度 + 自己的滚动条。塞进标签等于逼用户在看摘要时丢掉消息流，而居中弹窗（原来的 720px `SummaryModal`，已删）又只能挤出一个短胖的框。
 - **形态**：`createPortal` 到 body + `position: fixed`（顶部让开自绘标题栏 `--window-top-bar-height`）、`z-index: 1200`（项目约定的抽屉层：高于全屏代码块 500，低于 Modal 1300 / 右键菜单 2000）；点遮罩 / Esc / 右上角 × 三条路都能关，打开时焦点收进抽屉。
 - **数据**：抽屉只拿 `message` 本体（正文 / 副标题都由 `message/summary-meta.ts` 统一取）；提示条本身仍然**不得**渲染正文。守卫：`tests/ui/summary-message.test.tsx`（提示条无正文 / 点开抽屉 / portal 到 body）+ `tests/ui/summary-drawer.test.tsx`（Esc · 遮罩 · × / 空正文 / 焦点）。
-守卫：`src/tests/ui/side-panel.test.tsx`（切标签不卸载 / 关闭确认 / 脏标记汇总 / 宽度与占满）+ `src/tests/ui/side-panel-style-contract.test.ts`（`hidden` 规则 / 宽度上限只在容器上）+ `src/tests/ui/side-panel-tabs.test.ts`（标签模型的纯函数）。
+守卫：`src/tests/ui/side-panel.test.tsx`（切标签不卸载 / 关闭与右键菜单的确认、批量关闭 / 脏标记汇总 / 宽度与占满）+ `src/tests/ui/side-panel-style-contract.test.ts`（`hidden` 规则 / 宽度上限只在容器上）+ `src/tests/ui/side-panel-tabs.test.ts`（标签模型的纯函数：`closeTab` 与 `closeTabs` 收敛一致）+ `src/tests/ui/context-menu.test.tsx`（`fileMenuItems` 的 `withOpen:false`）。

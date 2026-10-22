@@ -26,6 +26,36 @@ const { messageBoxMock } = vi.hoisted(() => ({ messageBoxMock: vi.fn() }))
 vi.mock('@/ui/components/shared/MessageBox', () => ({
   MessageBox: { propt: messageBoxMock },
 }))
+/**
+ * 标签右键菜单里的文件类动作会拉这几个能力（打开 / 编辑器打开 / 复制路径 / 提示）：
+ * 本文件只验「菜单项在不在、对不对」，不真的落地动作 —— 那些在 `context-menu.test.tsx` 里。
+ */
+vi.mock('@tauri-apps/plugin-opener', () => ({
+  openPath: vi.fn(() => Promise.resolve()),
+  revealItemInDir: vi.fn(() => Promise.resolve()),
+}))
+vi.mock('@/utils/clipboard', () => ({
+  copyText: vi.fn(() => Promise.resolve(true)),
+  copyImageToClipboard: vi.fn(() => Promise.resolve(true)),
+  saveImageAs: vi.fn(() => Promise.resolve('E:/tmp/a.png')),
+  defaultImageName: vi.fn(() => 'image-1'),
+  imageMimeOf: vi.fn(() => 'image/png'),
+  imageExtOf: vi.fn(() => 'png'),
+  readImageBytes: vi.fn(() => Promise.resolve(new Uint8Array())),
+}))
+vi.mock('@/ui/components/shared/Toast', () => ({
+  showToast: vi.fn(),
+  useToast: (): unknown => ({ Toast: (): null => null, showToast: vi.fn() }),
+}))
+vi.mock('@/services/editor-service', () => ({
+  editorService: {
+    isEnabled: vi.fn(() => true),
+    getSelectedConfig: vi.fn(() => undefined),
+    getSelectedCommand: vi.fn(() => ''),
+    openFile: vi.fn(() => Promise.resolve({ ok: true })),
+    openWithConfig: vi.fn(() => Promise.resolve({ ok: true })),
+  },
+}))
 /** 文件面板换成桩：容器只依赖它的 props（path / hideTitle / onDirtyChange / onClose） */
 vi.mock('@/ui/pages/chat/components/workspace-file', () => ({
   default: (props: {
@@ -54,6 +84,8 @@ vi.mock('@/ui/pages/chat/components/workspace-file', () => ({
 /** 稳定引用：容器里的 effect 依赖这几个回调，内联箭头会让它们每帧重跑 */
 const activeChanges: string[] = []
 const closedIds: string[] = []
+/** 批量关闭（标签右键菜单）：一次回调带来一批 id */
+const closedBatches: string[][] = []
 const dirtyReports: boolean[] = []
 const expandedReports: boolean[] = []
 
@@ -62,6 +94,9 @@ function onActiveChange(id: string) {
 }
 function onCloseTab(id: string) {
   closedIds.push(id)
+}
+function onCloseTabs(ids: string[]) {
+  closedBatches.push(ids)
 }
 function onDirtyChange(dirty: boolean) {
   dirtyReports.push(dirty)
@@ -72,6 +107,7 @@ function onExpandedChange(expanded: boolean) {
 
 const TAB_A = fileTab('E:/repo/src/a.ts')
 const TAB_B = fileTab('E:/repo/src/b.ts')
+const TAB_C = fileTab('E:/repo/src/c.ts')
 
 ;(globalThis as never as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true
@@ -100,7 +136,11 @@ function fakeRect(left: number, width: number): DOMRect {
 }
 
 /** 挂一个 `.chat-view`：聊天区 + 面板是同一行的兄弟（容器就这样量可用宽度） */
-async function renderPanel(tabs: SidePanelTab[], activeId: string | null) {
+async function renderPanel(
+  tabs: SidePanelTab[],
+  activeId: string | null,
+  opts: { batch?: boolean } = {},
+) {
   if (!root) {
     const host = document.createElement('div')
     host.className = 'chat-view'
@@ -116,6 +156,8 @@ async function renderPanel(tabs: SidePanelTab[], activeId: string | null) {
           activeId={activeId}
           onActiveChange={onActiveChange}
           onCloseTab={onCloseTab}
+          // 不传时容器退化为逐个 onCloseTab（保留既有用例的断言口径）
+          onCloseTabs={opts.batch ? onCloseTabs : undefined}
           onDirtyChange={onDirtyChange}
           onExpandedChange={onExpandedChange}
         />
@@ -130,6 +172,38 @@ const tabsEls = () =>
 const panes = () => [...document.querySelectorAll<HTMLElement>('.side-panel-pane')]
 const stub = (path: string) =>
   document.querySelector<HTMLElement>(`.workspace-file-panel[data-path="${path}"]`)
+
+/** 菜单本体 portal 到 body：按文案取项，比按下标稳 */
+const menuItems = () =>
+  [...document.querySelectorAll<HTMLButtonElement>('.context-menu-item')]
+const menuLabels = () => menuItems().map((el) => el.textContent)
+const menuButton = (label: string) =>
+  menuItems().find((el) => el.textContent === label) ?? null
+
+/** 在某个标签上右键（标签栏是唯一会开菜单的地方） */
+async function rightClickTab(index: number) {
+  await act(async () => {
+    tabsEls()[index].dispatchEvent(
+      new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 120,
+        clientY: 120,
+      }),
+    )
+  })
+}
+
+/** 点菜单里的某一项（动作可能带确认框，act 内把微任务跑完） */
+async function clickMenu(label: string) {
+  const button = menuButton(label)
+  expect(button).not.toBeNull()
+  await act(async () => {
+    button!.click()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
 
 beforeAll(() => {
   Element.prototype.getBoundingClientRect = function (this: Element) {
@@ -150,6 +224,7 @@ beforeEach(() => {
   document.body.innerHTML = ''
   activeChanges.length = 0
   closedIds.length = 0
+  closedBatches.length = 0
   dirtyReports.length = 0
   expandedReports.length = 0
   messageBoxMock.mockReset()
@@ -320,4 +395,106 @@ it('拖到聊天区不足 300px 时面板占满，拖回来再恢复', async () 
   act(() => {
     document.dispatchEvent(new MouseEvent('mouseup'))
   })
+})
+
+/**
+ * 标签右键菜单（VS Code 口径）：关闭类动作都作用于「右键的那个标签」，与当前激活的是谁无关。
+ * 顺序与禁用条件一并钉住 —— 最后一个标签还能点「关闭右侧标签页」就是 bug。
+ */
+it('标签右键：弹出关闭类 + 文件类菜单，禁用条件跟着位置走', async () => {
+  await renderPanel([TAB_A, TAB_B], TAB_A.id)
+  await rightClickTab(0)
+
+  expect(menuLabels()).toEqual([
+    '关闭',
+    '关闭其他',
+    '关闭右侧标签页',
+    '关闭已保存',
+    '全部关闭',
+    '编辑器打开',
+    '在文件管理器中显示',
+    '复制路径',
+  ])
+  // A 右边还有 B；两个标签也够「关闭其他」
+  expect(menuButton('关闭右侧标签页')!.disabled).toBe(false)
+  expect(menuButton('关闭其他')!.disabled).toBe(false)
+
+  // 右键最后一个标签：右边没东西可关
+  await rightClickTab(1)
+  expect(menuButton('关闭右侧标签页')!.disabled).toBe(true)
+
+  // 两个都脏 = 「关闭已保存」没得关
+  act(() => stub('E:/repo/src/a.ts')!.querySelector<HTMLButtonElement>('.stub-dirty')!.click())
+  act(() => stub('E:/repo/src/b.ts')!.querySelector<HTMLButtonElement>('.stub-dirty')!.click())
+  await rightClickTab(0)
+  expect(menuButton('关闭已保存')!.disabled).toBe(true)
+})
+
+it('只有一个标签：「关闭其他」「关闭右侧标签页」都禁用', async () => {
+  await renderPanel([TAB_A], TAB_A.id)
+  await rightClickTab(0)
+
+  expect(menuButton('关闭其他')!.disabled).toBe(true)
+  expect(menuButton('关闭右侧标签页')!.disabled).toBe(true)
+  expect(menuButton('关闭已保存')!.disabled).toBe(false)
+  expect(menuButton('全部关闭')!.disabled).toBe(false)
+})
+
+/** 一次回调带一批 id（而不是逐个 onCloseTab）：宿主一次落库，激活态不会中途跳别处 */
+it('关闭其他 / 关闭右侧 / 全部关闭：一次上报一批 id', async () => {
+  await renderPanel([TAB_A, TAB_B, TAB_C], TAB_A.id, { batch: true })
+
+  // 右键中间的 B：右侧只有 C
+  await rightClickTab(1)
+  await clickMenu('关闭右侧标签页')
+  expect(closedBatches[closedBatches.length - 1]).toEqual([TAB_C.id])
+  expect(closedIds).toEqual([])
+
+  // 右键 A：其他 = B、C
+  await rightClickTab(0)
+  await clickMenu('关闭其他')
+  expect(closedBatches[closedBatches.length - 1]).toEqual([TAB_B.id, TAB_C.id])
+
+  // 任何位置点「全部关闭」都是全部（按标签栏顺序）
+  await rightClickTab(2)
+  await clickMenu('全部关闭')
+  expect(closedBatches[closedBatches.length - 1]).toEqual([TAB_A.id, TAB_B.id, TAB_C.id])
+
+  // 都是干净标签：一个字也不该问
+  expect(messageBoxMock).not.toHaveBeenCalled()
+})
+
+/** 批量关里面夹着一个脏标签：只问一次，取消就一个都不关（不能关一半） */
+it('批量关闭里有脏标签：只确认一次；取消则一个都不关', async () => {
+  await renderPanel([TAB_A, TAB_B], TAB_A.id, { batch: true })
+  act(() => stub('E:/repo/src/a.ts')!.querySelector<HTMLButtonElement>('.stub-dirty')!.click())
+
+  messageBoxMock.mockResolvedValueOnce(false)
+  await rightClickTab(1)
+  await clickMenu('关闭其他')
+  expect(messageBoxMock).toHaveBeenCalledTimes(1)
+  expect(closedBatches).toEqual([])
+
+  messageBoxMock.mockResolvedValueOnce(true)
+  await rightClickTab(1)
+  await clickMenu('关闭其他')
+  expect(closedBatches).toEqual([[TAB_A.id]])
+})
+
+it('关闭已保存跳过脏标签；「关闭」只关右键的那个（脏的则要确认）', async () => {
+  await renderPanel([TAB_A, TAB_B], TAB_A.id, { batch: true })
+  act(() => stub('E:/repo/src/a.ts')!.querySelector<HTMLButtonElement>('.stub-dirty')!.click())
+
+  await rightClickTab(0)
+  expect(menuButton('关闭已保存')!.disabled).toBe(false)
+  await clickMenu('关闭已保存')
+  expect(closedBatches[closedBatches.length - 1]).toEqual([TAB_B.id])
+  // 干净的不用问
+  expect(messageBoxMock).not.toHaveBeenCalled()
+
+  await rightClickTab(0)
+  await clickMenu('关闭')
+  expect(closedBatches[closedBatches.length - 1]).toEqual([TAB_A.id])
+  // A 是脏的：这一次要问
+  expect(messageBoxMock).toHaveBeenCalledTimes(1)
 })
