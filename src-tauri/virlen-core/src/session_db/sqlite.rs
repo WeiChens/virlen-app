@@ -7,7 +7,7 @@
 use crate::agent::context::CompactionMask;
 use crate::agent::types::{Message, Session};
 use crate::attachment::AttachmentStore;
-use crate::session_db::maintenance::WAL_SIZE_LIMIT;
+use crate::session_db::maintenance::{reclaim_after_delete, WAL_SIZE_LIMIT};
 use crate::session_db::message_query;
 use crate::session_db::repo::SessionRepo;
 use crate::session_db::row::{
@@ -917,11 +917,32 @@ INSERT INTO messages (
                 params![session_id],
             )
             .map_err(|e| format!("删除消息失败: {}", e))?;
+            // 压缩遮罩记录也跟着会话走：漏了这一行，删掉的会话还在库里留一份
+            // 「哪些消息被压过」的记录，既搜不到也清不掉
+            tx.execute(
+                "DELETE FROM compactions WHERE session_id=?1",
+                params![session_id],
+            )
+            .map_err(|e| format!("删除压缩记录失败: {}", e))?;
             tx.execute("DELETE FROM sessions WHERE id=?1", params![session_id])
                 .map_err(|e| format!("删除会话失败: {}", e))?;
             // ⚠️ 刻意不删 usage_ledger 里该会话的流水：用量是「已发生过的消费」的事实记录，删会话
             // 只删对话内容。明细里 JOIN 不到标题时显示「已删除会话」，总量不缩水。
             tx.commit().map_err(|e| format!("提交事务失败: {}", e))?;
+            // 事务提交后回收它占的盘空间（VACUUM 不能在事务内跑，且回收失败不能把删除判失败）：
+            // 否则 `auto_vacuum=0` 的库「删了会话、文件一个字节不缩」，用户只能去点「立即整理」。
+            let report = reclaim_after_delete(&conn);
+            if report.vacuumed || report.incremental {
+                crate::telemetry::track(
+                    "db.delete.reclaim",
+                    json!({
+                        "freedPages": report.freed_pages,
+                        "vacuumed": report.vacuumed,
+                        "incremental": report.incremental,
+                        "autoVacuum": report.auto_vacuum,
+                    }),
+                );
+            }
             Ok(())
         })
         .await

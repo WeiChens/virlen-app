@@ -164,7 +164,12 @@ pub trait SessionRepo: Send + Sync {
         limit: usize,
     ) -> Result<MessageTimelinePage, String>;
 
-    /// 删除会话及其全部消息
+    /// 删除会话及其全部消息（含该会话的压缩遮罩记录），并把释放的盘空间回收掉。
+    ///
+    /// 回收口径见 `maintenance::reclaim_after_delete`：`auto_vacuum=INCREMENTAL` 的库用
+    /// `incremental_vacuum` 立即归还空闲页；首次删除释放量够大时把库切到 INCREMENTAL
+    /// （一次性 VACUUM，之后每次删除都很廉价）。用量账本（`usage_ledger`）**故意不删** ——
+    /// 它是「已发生的消费」的事实记录。
     async fn delete_session(&self, session_id: &str) -> Result<(), String>;
 
     /// 记录一次上下文压缩（P0-3）。

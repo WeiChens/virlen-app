@@ -79,6 +79,12 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
   启动只加载会话**元数据**，消息**懒加载**（`sessionStore.ensureMessagesLoaded`）。`utils/db.ts`（IndexedDB）已废弃删除，**不要复活**。
 - **用量账本（token 统计）**：账本 DTO / 聚合 / 明细在 `session_db/usage.rs`；前端 `statsRepo/`、`usage-ledger/`、`services/token-stats-service.ts`。
   ⚠️ **Rust 只回 token 数，费用一律前端算**；内置价目表固定存 USD（`src/domain/pricing/index.ts`），切币种时按固定汇率折算。
+- **删会话就要真回收空间**：`delete_session`（`sqlite.rs`）在事务提交后调用 `maintenance::reclaim_after_delete` ——
+  `auto_vacuum=INCREMENTAL` 的库走 `incremental_vacuum`（空闲页归还、文件收缩）；还是 `off` 且本次释放 ≥ 4 MB 时
+  一次性 `auto_vacuum=INCREMENTAL; VACUUM;`（模式写进库头，之后每次删除都只付增量回收）；末尾再 `PRAGMA wal_checkpoint(TRUNCATE)`
+  让 `-wal` 归零。同一事务里还要删该会话的 `compactions` 行（`usage_ledger` 仍**故意不删**：用量是已发生消费的事实记录）。
+  ⚠️ `PRAGMA incremental_vacuum` 是「**每 step 搬一页**」，`execute()` 只 step 一次（7 个空闲页要 7 次）——必须 step 到 DONE，
+  否则看起来就像「回收没生效」。守卫：`session_db::tests::sessions::delete_reclaims_freed_space`。
 - **应用配置（配置下沉 D3，见 `docs/config-sink-plan.md`）**：`session_db/settings.rs` 的 `app_settings` 表（一 key 一行，`value` 为 JSON 文本），与会话库**同文件 + 同一把单写连接**（不引入第二个写连接 → 无 `SQLITE_BUSY`；迁移/维护天然覆盖它）。命令 `cmd_settings_get_all` / `cmd_settings_upsert` / `cmd_settings_import`（后者**仅表空时**导入，供首启从 localStorage 迁移）。
   ⚠️ **键名与前端 `SettingsStore` 字段同名同层**（如 `providers` / `permissions` / `sandboxMode`），**不建映射表**；保留键以 `__` 开头（`__schemaVersion` / `__migratedFrom`）。新增设置项时必须两侧一起看（字段漂移风险）。
   前端接入：`infrastructure/settingsRepo/`（Tauri 命令 / 非 Tauri 自动降级空实现）+ `settingStore.hydrateSettings()`（启动水合，`main.ts` 里排最前）+ 变更 debounce 回写（退出前 `flushSettingsPersist()`）。

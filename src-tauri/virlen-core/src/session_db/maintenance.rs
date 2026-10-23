@@ -8,8 +8,10 @@
 //! 大小 + PRAGMA + 行数，纯读、毫秒级）、`checkpoint_truncate`（`wal_checkpoint(TRUNCATE)`，把 `-wal`
 //! 收回 0）、`vacuum`（`VACUUM` 重建整库、回收空闲页并把 `auto_vacuum` 切到 INCREMENTAL）。
 //!
-//! ⚠️ `VACUUM` 需约 2 倍库大小的临时空间且期间独占连接（数百 MB 库约 10–60 s），因此只在用户显式点击
-//! 时执行，绝不自动跑；退出时只做廉价的 WAL 截断（`try_checkpoint_truncate`，拿不到锁就直接跳过）。
+//! ⚠️ `VACUUM` 需约 2 倍库大小的临时空间且期间独占连接（数百 MB 库约 10–60 s），因此整库重建只在用户
+//! 显式点击时执行。唯一的自动化例外是 [`reclaim_after_delete`]：删会话后把它释放的空闲页真正归还
+//! （首次释放量够大时一次性把 `auto_vacuum` 切到 INCREMENTAL，之后每次删除都只付增量回收）；
+//! 退出时只做廉价的 WAL 截断（`try_checkpoint_truncate`，拿不到锁就直接跳过）。
 
 use rusqlite::Connection;
 use serde::Serialize;
@@ -224,6 +226,99 @@ fn pragma_i64(conn: &Connection, name: &str) -> i64 {
 
 fn file_len(path: &Path) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+// ==================== 删除会话后的空间回收 ====================
+
+/// 「为了把库切到 `auto_vacuum=INCREMENTAL` 而付一次整库 VACUUM」的门槛：
+/// 本次删除释放的空闲页达到这个量才值得重建（小删除留下的空闲页会被后续写入复用，库不会因此变大）。
+const VACUUM_SWITCH_MIN_FREED_BYTES: u64 = 4 * 1024 * 1024;
+
+/// [`reclaim_after_delete`] 的结果（Telemetry / 排障用）
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ReclaimReport {
+    /// 回收前的空闲页数（≈ 这次删除释放了多少页）
+    pub freed_pages: u64,
+    /// 是否跑了一次整库 `VACUUM`（把库切到 INCREMENTAL）
+    pub vacuumed: bool,
+    /// 是否跑了 `incremental_vacuum`（归还空闲页、文件收缩）
+    pub incremental: bool,
+    /// 收尾时库的 auto_vacuum 模式：0=off 2=incremental
+    pub auto_vacuum: i64,
+}
+
+/// 删除会话之后，把它占的盘空间真正还回去（`SessionRepo::delete_session` 提交事务后调用）。
+///
+/// 为什么需要它：`auto_vacuum=0` 时 `DELETE` 只把页标记为空闲，`virlen.db` 一个字节都不缩；
+/// 删除写进 WAL 的页也要等 checkpoint 才离开 `-wal`。于是「删了会话、空间还在」，用户只能去
+/// 设置 → 存储点「立即整理」。这里把收尾自动化：
+///
+/// 1. `auto_vacuum=INCREMENTAL` → `PRAGMA incremental_vacuum`：空闲页真正归还、文件收缩；
+/// 2. 还是 `off` 且本次释放 ≥ [`VACUUM_SWITCH_MIN_FREED_BYTES`] → `auto_vacuum=INCREMENTAL; VACUUM;`
+///    **一辈子只付这一次**（模式写进库头，之后都走 1）；
+/// 3. 末尾 `wal_checkpoint(TRUNCATE)`：删除本身落在 WAL 里，只有截断才能让 `-wal` 归零。
+///
+/// ⚠️ 尽力而为：任何一步失败只记日志——删除事务已经提交，不能因回收失败而判删除失败（下次删除再试）。
+pub(crate) fn reclaim_after_delete(conn: &Connection) -> ReclaimReport {
+    let page_size = pragma_i64(conn, "page_size").max(0) as u64;
+    let mut report = ReclaimReport {
+        freed_pages: pragma_i64(conn, "freelist_count").max(0) as u64,
+        ..Default::default()
+    };
+    let freed_bytes = report.freed_pages.saturating_mul(page_size);
+    let mut auto_vacuum = pragma_i64(conn, "auto_vacuum");
+
+    if auto_vacuum != 2 && freed_bytes >= VACUUM_SWITCH_MIN_FREED_BYTES {
+        match conn.execute_batch("PRAGMA auto_vacuum=INCREMENTAL; VACUUM;") {
+            Ok(()) => {
+                report.vacuumed = true;
+                auto_vacuum = pragma_i64(conn, "auto_vacuum");
+            }
+            // 临时目录不可写 / 临时盘不够：保持 off，下次删除再试（删除本身不受影响）
+            Err(e) => eprintln!(
+                "[session_db] 删除会话后切换 auto_vacuum 失败（保持 off，下次再试）: {}",
+                e
+            ),
+        }
+    }
+
+    if auto_vacuum == 2 {
+        match incremental_vacuum(conn) {
+            Ok(()) => report.incremental = true,
+            Err(e) => eprintln!("[session_db] 增量回收空闲页失败: {}", e),
+        }
+    }
+
+    // `wal_checkpoint` 会返回一行结果（busy/log/checkpointed）：走 query_row 读掉，
+    // `execute_batch` 对「返回行的语句」不友好。
+    if let Err(e) = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(())) {
+        eprintln!("[session_db] 删除会话后截断 WAL 失败: {}", e);
+    }
+
+    report.auto_vacuum = pragma_i64(conn, "auto_vacuum");
+    report
+}
+
+/// 把 `PRAGMA incremental_vacuum` 跑到完。
+///
+/// ⚠️ 不能写 `execute("PRAGMA incremental_vacuum")`：这条 pragma 是「**每 step 一次搬一页**」的语句，
+/// `execute()` 只 step 一次 —— 实测 7 个空闲页要调 7 次才归零（带 `(N)` 参数也一样），看起来就像
+/// 「增量回收没生效」。必须把语句 step 到返回 DONE。
+fn incremental_vacuum(conn: &Connection) -> Result<(), String> {
+    // 防御：free list 只会变短，正常远达不到这个步数；异常数据也不至于把删除卡死
+    const MAX_STEPS: usize = 1_000_000;
+    let mut stmt = conn
+        .prepare("PRAGMA incremental_vacuum")
+        .map_err(|e| e.to_string())?;
+    let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+    let mut steps = 0usize;
+    while rows.next().map_err(|e| e.to_string())?.is_some() {
+        steps += 1;
+        if steps >= MAX_STEPS {
+            break;
+        }
+    }
+    Ok(())
 }
 
 /// `<db_path>` 同级附件目录的 `(文件数, 字节数)`

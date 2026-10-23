@@ -1,7 +1,8 @@
 //! 会话 / 消息读写、分页与用户消息索引的回归测试
 
-use super::{open_tmp, test_message, test_session};
+use super::{open_tmp, open_tmp_with_path, test_message, test_session};
 use crate::agent::types::Message;
+use crate::session_db::maintenance::DbMaintenance;
 use crate::session_db::repo::SessionRepo;
 use serde_json::json;
 
@@ -142,9 +143,74 @@ async fn delete_removes_session_and_messages() {
     let repo = open_tmp();
     repo.upsert_session(&test_session("s1", "t", 100)).await.unwrap();
     repo.append_messages("s1", &[test_message("m1", "user")]).await.unwrap();
+    repo.record_compaction("s1", "m1", "m1", "sum1")
+        .await
+        .unwrap();
     repo.delete_session("s1").await.unwrap();
     assert!(repo.get_session("s1").await.unwrap().is_none());
     assert!(repo.get_messages("s1").await.unwrap().is_empty());
+    // 压缩遮罩记录也跟着会话走：漏了它，删掉的会话还在库里留一份记录
+    assert!(repo.list_compactions("s1").await.unwrap().is_empty());
+}
+
+/// 造一条 content 很大的消息：页级空闲页要够量才观察得到回收
+fn big_message(id: &str, kb: usize) -> Message {
+    let mut m = test_message(id, "tool");
+    m.content = json!("x".repeat(kb * 1024));
+    m
+}
+
+/// 回归：删会话必须把它占的盘空间还回去，不能等用户去设置里点「立即整理」。
+///
+/// 两条路：首次大删除 → 一次性切 `auto_vacuum=INCREMENTAL`（VACUUM）+ 增量回收 + WAL 截断；
+/// 之后的小删除 → 只走增量回收（不再 VACUUM），空闲页当场归零。
+///
+/// `VACUUM` 需要 SQLite 临时目录可写：本机跑 `cargo test` 时把 `TEMP` 指到工作区（同
+/// `maintenance::tests` 的注记）。
+#[tokio::test]
+async fn delete_reclaims_freed_space() {
+    let (repo, db) = open_tmp_with_path();
+    let m = DbMaintenance::new(db, repo.conn.clone());
+    repo.upsert_session(&test_session("s1", "t", 100))
+        .await
+        .unwrap();
+    let msgs: Vec<Message> = (0..2000)
+        .map(|i| big_message(&format!("m{}", i), 4))
+        .collect();
+    repo.append_messages("s1", &msgs).await.unwrap();
+    // 先把 WAL 并回主库：否则「删除前的大小」还停在旧值上
+    m.checkpoint_truncate().await.unwrap();
+    let before = m.stats().unwrap();
+
+    repo.delete_session("s1").await.unwrap();
+
+    let after = m.stats().unwrap();
+    assert_eq!(after.message_count, 0);
+    assert_eq!(
+        after.auto_vacuum, 2,
+        "首次大删除后库应切到 INCREMENTAL（之后每次删除都不必再 VACUUM）"
+    );
+    assert_eq!(after.freelist_pages, 0, "删除后不应留下空闲页");
+    assert!(
+        after.page_bytes < before.page_bytes,
+        "删除应真的回收页: {:?} -> {:?}",
+        before.page_bytes,
+        after.page_bytes
+    );
+    assert_eq!(after.wal_bytes, 0, "删除后 -wal 应被截为零");
+
+    // 已切到 INCREMENTAL：再删一个小会话也不必 VACUUM，空闲页照样当场归还
+    repo.upsert_session(&test_session("s2", "t", 100))
+        .await
+        .unwrap();
+    repo.append_messages("s2", &[big_message("n1", 16)])
+        .await
+        .unwrap();
+    m.checkpoint_truncate().await.unwrap();
+    repo.delete_session("s2").await.unwrap();
+    let small = m.stats().unwrap();
+    assert_eq!(small.freelist_pages, 0, "小删除也要归还空闲页");
+    assert_eq!(small.auto_vacuum, 2);
 }
 
 #[tokio::test]
