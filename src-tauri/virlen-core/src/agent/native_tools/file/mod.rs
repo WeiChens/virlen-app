@@ -1,10 +1,11 @@
 //! file — 文件操作分类（分类 id: file）
 //!
-//! 一个工具一个文件（9 个）：
+//! 一个工具一个文件（10 个）：
 //! `read_file` / `write_file` / `edit_file` / `delete_file`
-//! / `copy_move_file` / `list_files` / `file_info` / `mkdir` / `parse_document`
+//! / `copy_move_file` / `list_files` / `file_info` / `mkdir` / `parse_document` / `present`
 //!
 //! `common.rs` 为分类内公共：`format_size` / `ensure_parent_dir` / `format_system_time`。
+//! `preview_ext.rs` 是「右侧面板能否预览」的唯一判据（present 用它拒掉不可预览的类型）。
 
 mod common;
 mod copy_move_file;
@@ -14,6 +15,8 @@ mod file_info;
 mod list_files;
 mod mkdir;
 mod parse_document;
+mod present;
+mod preview_ext;
 mod read_file;
 mod write_file;
 
@@ -29,6 +32,7 @@ pub use parse_document::{
     default_max_chars, ocr_options, parse_targets, ParseAggregate, ParseTarget,
 };
 pub(crate) use parse_document::parse_document_tool;
+pub(crate) use present::present_tool;
 pub(crate) use read_file::read_file_tool;
 pub(crate) use write_file::write_file_tool;
 

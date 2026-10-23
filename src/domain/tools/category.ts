@@ -26,6 +26,8 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
       'file_info',
       'mkdir',
       'parse_document',
+      // 交付物：把一个已经存在的文件「交给用户」（右侧面板打开，不复制内容）
+      'present',
     ],
   },
   {

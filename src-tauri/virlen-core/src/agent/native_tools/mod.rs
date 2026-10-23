@@ -28,10 +28,11 @@
 //! │   ├── pty.rs            服务的交互控制台句柄（键击 / 尺寸 / 关停；P3 终端弹窗的底座）
 //! │   ├── panel.rs          **面板**（聊天页右上角）用的公开 API：快照 + 显式终止 + 终端读写（只读、不摘条目）
 //! │   └── common.rs         常量 / 文本辅助（环形窗口、字符安全切片、截断）/ 模型侧文案与 uiData
-//! ├── file/                  文件操作（9）
+//! ├── file/                  文件操作（10）
 //! │   ├── common.rs          format_size / ensure_parent_dir / format_system_time
 //! │   ├── read_file.rs       write_file.rs   edit_file.rs    delete_file.rs
 //! │   ├── copy_move_file.rs  list_files.rs   file_info.rs    mkdir.rs
+//! │   ├── present.rs         **交付物**（声明已存在的文件 → 前端右侧面板直接打开，不复制内容）
 //! │   └── parse_document/    **文档解析**（PDF / Office / CSV / 纯文本；实现唯一源在 `doc_parse`）+ `outTxtFile` 全文落盘
 //! ├── search/                搜索（2）
 //! │   ├── common.rs          glob_to_regex / escape_regex
@@ -70,7 +71,7 @@
 //! │   └── web_search.rs      经已配置搜索源检索（tavily / bocha；直读 `app_settings`）
 //! ```
 //!
-//! **36 个工具全部有 Rust 原生实现**（不再有走 JS 桥的工具）。安全策略与前端
+//! **37 个工具全部有 Rust 原生实现**（不再有走 JS 桥的工具）。安全策略与前端
 //! `securityService.resolveSafePath` / `securityPort.isPathAllowed` 对齐；各工具的模型侧
 //! `content` / `uiData` 与 TS 回退路径逐字对齐（铁律 1）。
 
@@ -221,11 +222,11 @@ pub fn noop_memory() -> &'static NoopMemoryRepo {
     &MEMORY
 }
 
-/// 全部原生工具名（**36 个**）—— `is_native_tool` 与契约守卫测试（本模块的
+/// 全部原生工具名（**37 个**）—— `is_native_tool` 与契约守卫测试（本模块的
 /// `native_tool_list_matches_the_contract`）都取自这一份，新增工具必须同时改这里与
 /// `execute_native_tool` 的分发（否则契约测试会红）。
-const NATIVE_TOOL_NAMES: [&str; 36] = [
-    // file（9）
+const NATIVE_TOOL_NAMES: [&str; 37] = [
+    // file（10）
     "read_file",
     "write_file",
     "edit_file",
@@ -235,6 +236,7 @@ const NATIVE_TOOL_NAMES: [&str; 36] = [
     "file_info",
     "mkdir",
     "parse_document",
+    "present",
     // search（2）
     "search_files_by_name",
     "search_text_in_files",
@@ -271,7 +273,7 @@ const NATIVE_TOOL_NAMES: [&str; 36] = [
 
 /// 是否由原生 Rust 直接执行
 ///
-/// JS 桥虽仍保留（未原生化的工具才走），但当前 36 个工具**全部**已原生实现。
+/// JS 桥虽仍保留（未原生化的工具才走），但当前 37 个工具**全部**已原生实现。
 pub fn is_native_tool(name: &str) -> bool {
     NATIVE_TOOL_NAMES.contains(&name)
 }
@@ -294,6 +296,7 @@ pub async fn execute_native_tool(
         "copy_move_file" => file::copy_move_file_tool(ctx, args).await,
         "mkdir" => file::mkdir_tool(ctx, args).await,
         "parse_document" => file::parse_document_tool(ctx, args).await,
+        "present" => file::present_tool(ctx, args).await,
         "search_files_by_name" => search::search_files_by_name_tool(ctx, args).await,
         "search_text_in_files" => search::search_text_in_files_tool(ctx, args).await,
         "search_knowledge_base" => knowledge_base::search_knowledge_base_tool(ctx, args).await,

@@ -168,6 +168,13 @@
   overflow-wrap: anywhere;
 }
 
+/* `present`（交付物）：文件条横排换行，一排能放下几个就看几个；点一下在右侧面板打开 */
+.present-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 /* 代码块外面的那层壳：只负责与消息列的左右留白（CodeBlock 自己不管外边距） */
 .code-block-shell {
   padding: 0 10px;

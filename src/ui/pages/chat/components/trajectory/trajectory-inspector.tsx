@@ -14,6 +14,8 @@ import { t } from '@/ui/i18n'
 import MarkdownRenderer from '../message/markdown-renderer'
 import CloseSvg from '@/ui/components/icons/CloseSvg'
 import { kindLabel, recordText } from './labels'
+import { TrajectoryToolCatalog } from './trajectory-tool-catalog'
+import { useToolCatalog } from './use-tool-catalog'
 
 export interface TrajectoryInspectorProps {
   record: TrajectoryRecord | null
@@ -25,6 +27,11 @@ export interface TrajectoryInspectorProps {
   onResizeStart: (event: PointerEvent<HTMLDivElement>) => void
   /** 跳回聊天并定位到这条记录所属的消息 */
   onJumpToConversation: (messageId: string) => void
+  /**
+   * 本会话的工具白名单（`undefined` = 全部工具）；「工具」页按它过滤目录。
+   * 三态语义见 `domain/tools/allowed.ts`。
+   */
+  allowedTools?: readonly string[]
 }
 
 interface TabItem {
@@ -107,8 +114,11 @@ export function TrajectoryInspector({
   onClose,
   onResizeStart,
   onJumpToConversation,
+  allowedTools,
 }: TrajectoryInspectorProps) {
   const [tabId, setTabId] = useState('overview')
+  // 工具目录只在系统记录上装载（其它行不该为它付一次契约读取）
+  const toolCatalog = useToolCatalog(allowedTools, record?.kind === 'system')
 
   // 换一条记录 → 回到「概述」（否则会停在上一类记录才有的 tab 上，内容区一片空白）
   useEffect(() => {
@@ -270,11 +280,19 @@ export function TrajectoryInspector({
       })
     }
 
-    if (record.kind === 'system' && record.systemPrompt) {
+    if (record.kind === 'system') {
+      // 系统提示词与工具目录是同一个「请求表面」的两面（dsh 的 SYSTEM_PROMPT_TABS 同序）
+      if (record.systemPrompt) {
+        items.push({
+          id: 'system',
+          label: t('系统提示词'),
+          content: <TextPane text={record.systemPrompt} />,
+        })
+      }
       items.push({
-        id: 'system',
-        label: t('系统提示词'),
-        content: <TextPane text={record.systemPrompt} />,
+        id: 'tools',
+        label: t('工具'),
+        content: <TrajectoryToolCatalog {...toolCatalog} />,
       })
     }
 
@@ -313,7 +331,14 @@ export function TrajectoryInspector({
     })
 
     return items
-  }, [record, groupLabel, onJumpToConversation])
+  }, [
+    record,
+    groupLabel,
+    onJumpToConversation,
+    toolCatalog.tools,
+    toolCatalog.loading,
+    toolCatalog.error,
+  ])
 
   if (!record) return null
   const active = tabs.find((tab) => tab.id === tabId) ?? tabs[0]

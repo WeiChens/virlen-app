@@ -69,6 +69,7 @@ import * as dialog from '@tauri-apps/plugin-dialog'
 import { getMatch } from '@/utils/common'
 import { getDefaultAgent } from '@/services/agent-service'
 import { repairSessionIfNeeded } from '@/services/chat-service'
+import { setPresentRevealHandler } from '@/services/present-service'
 import { vision } from '@/infrastructure/vision'
 import type { VisionAnalyzeResult } from '@/infrastructure/vision/types'
 import { buildUserContent } from '@/utils/messageContent'
@@ -334,17 +335,40 @@ function ChatView() {
   )
 
   /**
+   * 批量在右侧面板打开（`present` 的交付物可能不止一个）：已有同路径的标签只切过去，
+   * 新文件追加到末尾；**激活第一个**（它是主交付物）。一次算完再落 state，N 个文件只渲染一次。
+   */
+  const handleOpenFiles = useCallback(
+    (paths: string[]) => {
+      if (paths.length === 0) return
+      let tabs = panelTabsRef.current
+      let activeId: string | null = null
+      for (const path of paths) {
+        const next = openFileTab(tabs, path)
+        tabs = next.tabs
+        activeId = activeId ?? next.activeId
+      }
+      // 标签归属本会话（切会话时才不会被误关）
+      openFileSessionRef.current = chatState.value.currentSessionId
+      applyPanelTabs({ tabs, activeId })
+    },
+    [applyPanelTabs],
+  )
+
+  /**
    * 双击文件 → 右侧打开：已有同路径的标签就切过去，否则新开一个。
    * **不再需要「丢弃草稿」确认** —— 打开新文件不再挤掉原来那个（单面板时代的必答题）。
    */
-  const handleOpenFile = useCallback((path: string) => {
-    const next = openFileTab(panelTabsRef.current, path)
-    panelTabsRef.current = next.tabs
-    activeTabIdRef.current = next.activeId
-    openFileSessionRef.current = chatState.value.currentSessionId
-    setPanelTabs(next.tabs)
-    setActiveTabId(next.activeId)
-  }, [])
+  const handleOpenFile = useCallback(
+    (path: string) => handleOpenFiles([path]),
+    [handleOpenFiles],
+  )
+
+  /**
+   * AI 交付文件（`present` 工具）→ 右侧面板：登记**唯一入口**（`services/present-service`）。
+   * 标签状态在本组件的 state + ref 里，别处拿不到；卸载时注销，避免留下上一个实例的 handler。
+   */
+  useEffect(() => setPresentRevealHandler(handleOpenFiles), [handleOpenFiles])
 
   // 同步 ref 与 state
   useEffect(() => {
@@ -1088,6 +1112,9 @@ function ChatView() {
                   sessionStore.getSession(chatState.value.currentSessionId)
                     ?.systemPrompt
                 }
+                allowedTools={sessionStore.getSession(
+                  chatState.value.currentSessionId,
+                )?.allowedTools}
                 messages={messages}
                 hasMoreOlder={sessionStore.hasMoreMessages(
                   chatState.value.currentSessionId,

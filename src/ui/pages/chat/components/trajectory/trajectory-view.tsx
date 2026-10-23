@@ -35,6 +35,8 @@ export interface TrajectoryViewProps {
   sessionId: string
   /** 会话系统提示词（顶部那条 `系统` 行） */
   systemPrompt?: string | null
+  /** 会话工具白名单（`undefined` = 全部）；检查器「工具」页据此过滤目录 */
+  allowedTools?: readonly string[]
   /** 已加载的消息（会话顺序，与聊天视图同一份） */
   messages: Message[]
   /** 是否还有更早的历史可回补 */
@@ -103,6 +105,7 @@ function locateByKey(
 export function TrajectoryView({
   sessionId,
   systemPrompt,
+  allowedTools,
   messages,
   hasMoreOlder,
   onLoadOlder,
@@ -380,6 +383,7 @@ export function TrajectoryView({
           record={located?.record ?? null}
           groupLabel={located?.groupLabel}
           width={inspectorWidth}
+          allowedTools={allowedTools}
           onClose={() => setSelectedKey(null)}
           onResizeStart={startResize}
           onJumpToConversation={onJumpToMessage}

@@ -9,7 +9,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { AgentEnginePort } from '@/domain/ports'
 import type { CompressMode, RunSnapshot, SendMessageOptions } from '@/domain/ports'
-import { toolRegistry } from '@/domain/tools'
+import { filterAllowedToolDefs, toolRegistry } from '@/domain/tools'
 import { ToolError, UserInteractionRequired } from '@/domain/tools/types'
 import type { ToolDefinition } from '@/domain/tools/types'
 import { createProviderInstance } from '@/infrastructure/provider'
@@ -425,10 +425,11 @@ export async function resolveToolDefs(
   session: Session,
 ): Promise<ToolDefinition[]> {
   if (!enableTools) return []
-  const allToolDefs = await toolRegistry.listDefinitions()
-  if (session.allowedTools === undefined) return allToolDefs
-  if (session.allowedTools.length === 0) return []
-  return allToolDefs.filter((t) => session.allowedTools!.includes(t.name))
+  // 白名单过滤只在 domain 一处实现（轨迹检查器的工具目录同口径）
+  return filterAllowedToolDefs(
+    await toolRegistry.listDefinitions(),
+    session.allowedTools,
+  )
 }
 
 /** 解析 Provider 连接信息（前端持有 apiKey / baseUrl，传给 Rust） */

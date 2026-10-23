@@ -25,6 +25,7 @@ import TodoWriteMessage from './TodoWriteMessage'
 import MemoryMessage from './MemoryMessage'
 import BackgroundServiceMessage from './BackgroundServiceMessage'
 import ParseDocumentMessage from './ParseDocumentMessage'
+import PresentMessage from './PresentMessage'
 
 export interface IToolCallMessage {
   getToolName(): string
@@ -100,6 +101,7 @@ registerMulti(
   () => new BackgroundServiceMessage(),
 )
 register(new ParseDocumentMessage())
+register(new PresentMessage())
 
 export const getToolCallMessage = (type: string) => {
   return toolCallMessageList.get(type) || new DefaultMessage()

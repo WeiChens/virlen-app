@@ -16,6 +16,8 @@ import type {
 } from './types'
 import type { ToolDefinitionsLoader } from './definitions'
 
+export { filterAllowedToolDefs } from './allowed'
+
 // ==================== 定义加载器（组合根注入） ====================
 
 let definitionsLoader: ToolDefinitionsLoader | null = null

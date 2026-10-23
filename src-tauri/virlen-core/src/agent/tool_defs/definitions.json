@@ -312,6 +312,39 @@
         }
       },
       {
+        "name": "present",
+        "description": "Declare existing files as final deliverables for the user. Use it when the user needs a separate file; prefer your final response when that suffices. The file must already exist — this tool never creates, converts or copies anything: write / generate it first with the file tools or execute_command. On desktop each presented path is opened as a tab in the app's side panel, so only types the panel can preview are accepted: Markdown (md, markdown), HTML (html, htm, xhtml), SVG (svg), CSV/TSV (csv, tsv), plain text and source code, images (png, jpg, jpeg, jfif, gif, webp, bmp, ico, avif), audio (mp3, wav, ogg, oga, m4a, flac, aac, opus, weba), video (mp4, webm, ogv, mov, m4v, mkv), PDF (pdf), Word (docx, doc), Excel (xlsx, xls), PowerPoint (pptx, ppt) and 3D models (glb, gltf, fbx, obj, stl, ply, dae, 3ds, 3mf, amf, wrl, vrml, pcd). Any other type (OpenDocument, archives, executables, fonts, PSD/AI/Sketch, SQLite…) cannot be previewed: it is reported as skipped and nothing is opened, so export it to a supported format first.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File path (relative to workspace or absolute). Use this for a single file. The type must be one the side panel can preview (see the tool description)."
+            },
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Array of file paths to present in one call. At most 10 files; the first one becomes the active tab. Every path must be a previewable type (see the tool description)."
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "path"
+              ]
+            },
+            {
+              "required": [
+                "paths"
+              ]
+            }
+          ],
+          "required": []
+        }
+      },
+      {
         "name": "search_files_by_name",
         "description": "Search for files by filename. Supports plain text (case-insensitive substring match), regex matching (use_regex=true), or glob patterns (glob=true, e.g. \"**/*.ts\", \"*.json\", \"src/**/*.css\"). Returns a list of matching file paths.",
         "parameters": {
@@ -1352,6 +1385,39 @@
         }
       },
       {
+        "name": "present",
+        "description": "Declare existing files as final deliverables for the user. Use it when the user needs a separate file; prefer your final response when that suffices. The file must already exist — this tool never creates, converts or copies anything: write / generate it first with the file tools or execute_command. On desktop each presented path is opened as a tab in the app's side panel, so only types the panel can preview are accepted: Markdown (md, markdown), HTML (html, htm, xhtml), SVG (svg), CSV/TSV (csv, tsv), plain text and source code, images (png, jpg, jpeg, jfif, gif, webp, bmp, ico, avif), audio (mp3, wav, ogg, oga, m4a, flac, aac, opus, weba), video (mp4, webm, ogv, mov, m4v, mkv), PDF (pdf), Word (docx, doc), Excel (xlsx, xls), PowerPoint (pptx, ppt) and 3D models (glb, gltf, fbx, obj, stl, ply, dae, 3ds, 3mf, amf, wrl, vrml, pcd). Any other type (OpenDocument, archives, executables, fonts, PSD/AI/Sketch, SQLite…) cannot be previewed: it is reported as skipped and nothing is opened, so export it to a supported format first.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File path (relative to workspace or absolute). Use this for a single file. The type must be one the side panel can preview (see the tool description)."
+            },
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Array of file paths to present in one call. At most 10 files; the first one becomes the active tab. Every path must be a previewable type (see the tool description)."
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "path"
+              ]
+            },
+            {
+              "required": [
+                "paths"
+              ]
+            }
+          ],
+          "required": []
+        }
+      },
+      {
         "name": "search_files_by_name",
         "description": "Search for files by filename. Supports plain text (case-insensitive substring match), regex matching (use_regex=true), or glob patterns (glob=true, e.g. \"**/*.ts\", \"*.json\", \"src/**/*.css\"). Returns a list of matching file paths.",
         "parameters": {
@@ -2374,6 +2440,39 @@
             "ocrImages": {
               "type": "boolean",
               "description": "Read the text inside the document's embedded images with on-device OCR — it runs locally, the images never leave this machine. Applies to PDF and to Word/Excel/PowerPoint. Omit it to OCR only when the document has no other text (a scanned PDF, a file that is nothing but screenshots); true to also OCR the images of a document that already has text; false to turn OCR off. At most 10 images are read per document — any beyond that are reported as skipped; very small images and very flat ones (wider or taller than 3:1 — banners, separators, single-line screenshots) are never read. In Word/PowerPoint each recognized image's text is inserted right after that image's own marker; in PDF and Excel it comes back as a section marked [OCR] Image N · location."
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "path"
+              ]
+            },
+            {
+              "required": [
+                "paths"
+              ]
+            }
+          ],
+          "required": []
+        }
+      },
+      {
+        "name": "present",
+        "description": "Declare existing files as final deliverables for the user. Use it when the user needs a separate file; prefer your final response when that suffices. The file must already exist — this tool never creates, converts or copies anything: write / generate it first with the file tools or execute_command. On desktop each presented path is opened as a tab in the app's side panel, so only types the panel can preview are accepted: Markdown (md, markdown), HTML (html, htm, xhtml), SVG (svg), CSV/TSV (csv, tsv), plain text and source code, images (png, jpg, jpeg, jfif, gif, webp, bmp, ico, avif), audio (mp3, wav, ogg, oga, m4a, flac, aac, opus, weba), video (mp4, webm, ogv, mov, m4v, mkv), PDF (pdf), Word (docx, doc), Excel (xlsx, xls), PowerPoint (pptx, ppt) and 3D models (glb, gltf, fbx, obj, stl, ply, dae, 3ds, 3mf, amf, wrl, vrml, pcd). Any other type (OpenDocument, archives, executables, fonts, PSD/AI/Sketch, SQLite…) cannot be previewed: it is reported as skipped and nothing is opened, so export it to a supported format first.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File path (relative to workspace or absolute). Use this for a single file. The type must be one the side panel can preview (see the tool description)."
+            },
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Array of file paths to present in one call. At most 10 files; the first one becomes the active tab. Every path must be a previewable type (see the tool description)."
             }
           },
           "oneOf": [
