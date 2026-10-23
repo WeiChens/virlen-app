@@ -1,5 +1,5 @@
 /**
- * 后台服务面板样式 — 标题栏入口 + 浮层（运行中 / 已结束两页）
+ * 后台服务样式 — 标题栏入口 + 浮层（运行中 / 已结束两页）+ 服务终端标签
  *
  * 类名统一 `service-*`；与工具卡片（tool-call/style.scss）共用的只有 `.service-status`（状态徽标，
  * 定义在那边的最外层）。颜色优先用主题变量（`ui/styles/theme.css`），未定义的语义色带 fallback。
@@ -280,37 +280,20 @@
   color: var(--text-tertiary, #999);
 }
 
-/* ==================== 终端弹窗（P3） ====================
+/* ==================== 服务终端（P3，右侧面板里的一个标签） ====================
  *
- * 布局与「终端全屏」（tool-call/style.scss 的 .terminal-fullscreen-layer）同构：
- * 终端块身处消息列表 / 浮层里，只有挂到 body 上（portal）才能不受祖先
- *（transform/filter/overflow）影响地铺开；只让开顶部 30px 的窗口状态栏。
+ * 不再是一个弹窗：终端本体挂在标签页容器（`.side-panel-pane`）里，宽高都交给面板，
+ * 用户拖宽 / 占满时终端跟着变（尺寸经 `cmd_service_console_resize` 同步给伪控制台）。
+ * 头部 / 命令行 / 元信息 / 提示各自固定高度，终端占满剩下的。
  * 配色沿用终端令牌（--terminal-*），保证与命令终端、卡片里那份观感一致。
  */
-.service-console-layer {
-  position: fixed;
-  top: var(--window-top-bar-height, 30px);
-  left: 0;
-  right: 0;
-  bottom: 0;
-  /* 与 shared/Modal 同级（低于 Toast 3012 / Select 9000）；高于聊天区内部层级 */
-  z-index: 1300;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--modal-overlay, rgba(0, 0, 0, 0.5));
-}
-
-.service-console-panel {
+.service-console-pane {
   display: flex;
   flex-direction: column;
+  height: 100%;
   min-height: 0;
-  width: min(1100px, 92vw);
-  height: min(680px, 86vh);
-  border-radius: 10px;
-  overflow: hidden;
+  min-width: 0;
   background: var(--terminal-bg, #191a1b);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
 
   /* 终端主体占满剩余高度（解除原位 240px 定高；同 .terminal-fullscreen-layer 的注释：
      要落在 wrapper 上，内层 .pty-terminal-body 保持 height:100% 去填满它） */
@@ -331,7 +314,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 6px 10px;
   background: var(--terminal-header-bg, #242f3a);
   color: var(--terminal-text, #fff);
 
@@ -366,6 +349,7 @@
     }
   }
 
+  /* 头部那颗 ✕（与标签栏的 × 同一个动作：关掉这个标签） */
   .service-console-close {
     flex: 0 0 auto;
     width: 24px;
@@ -388,7 +372,7 @@
 /* 命令行 + 元信息行：与执行命令的终端卡（.pty-cmd-line）同一套观感 */
 .service-console-cmd {
   flex-shrink: 0;
-  padding: 4px 12px 0;
+  padding: 4px 10px 0;
   font-family: var(--font-mono, monospace);
   font-size: 12px;
   color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
@@ -402,7 +386,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 3px 12px;
-  padding: 4px 12px 6px;
+  padding: 4px 10px 6px;
   font-size: var(--font-size-xs, 11px);
   color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
 
@@ -418,7 +402,7 @@
 /* 底部提示：只显示「为什么不能输入 / 输出有没有被截断」这类需要用户知道的事 */
 .service-console-foot {
   flex-shrink: 0;
-  padding: 5px 12px 7px;
+  padding: 5px 10px 7px;
   font-size: var(--font-size-xs, 11px);
   line-height: 1.5;
   color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));

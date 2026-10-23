@@ -5,6 +5,8 @@
  *（聊天页处于「新对话」时的入口 —— 列出所有会话的服务，每行自带 `sessionId` 归属）。
  * 两者节奏一致，只换查询命令。
  *
+ * `active=false`（标签切走）时**一个请求都不发**：面板的标签一直挂着，没人看着就不必刷徽标。
+ *
  * 为什么不订阅事件：服务的状态变化点分散在读任务 / 等待任务 / 工具 / 面板四处，其中「进程自己退出」
  * 发生在常驻任务里（那里拿不到工具上下文的 sink），为它拉一条跨 crate 的事件通道不划算 ——
  * 单会话条目上限 8 条，一次轮询就是一帧 IPC。节奏：
@@ -33,6 +35,7 @@ export interface ServiceListState {
 export function useServiceList(
   sessionId: string | null,
   fast: boolean,
+  active = true,
 ): ServiceListState {
   const [services, setServices] = useState<BackgroundServiceInfo[]>([])
   // 两个 ref 让「正在跑的循环」读到最新值，而不必因为面板开关 / 换会话而重建循环
@@ -49,11 +52,15 @@ export function useServiceList(
     setServices(rows)
   }, [])
 
+  // 换会话先清空：否则徽标会短暂显示上一个会话的数字（不能跟 `active` 挂钩 —— 切回标签会白一下）
   useEffect(() => {
+    setServices([])
+  }, [sessionId])
+
+  useEffect(() => {
+    if (!active) return
     let alive = true
     let timer: ReturnType<typeof setTimeout> | undefined
-    // 换会话先清空：否则徽标会短暂显示上一个会话的数字
-    setServices([])
 
     const tick = async () => {
       if (document.visibilityState !== 'hidden') {
@@ -71,7 +78,7 @@ export function useServiceList(
       alive = false
       if (timer) clearTimeout(timer)
     }
-  }, [sessionId])
+  }, [sessionId, active])
 
   return { services, refresh }
 }

@@ -38,6 +38,7 @@ import ProviderPrompt from './components/modals/provider-prompt'
 import TodoEntry from './components/todo/TodoEntry'
 // 后台服务：标题栏入口 + 面板（与本会话的 service 工具同一张注册表）
 import ServiceEntry from './components/service/ServiceEntry'
+import type { ServiceTabTarget } from './components/service/ServiceEntry'
 import GitEntry from './components/git/GitEntry'
 import SearchDialog from './components/search'
 // 右侧面板容器：多个文件各占一个标签（后面还要接网址访问 / 终端）
@@ -47,6 +48,7 @@ import {
   closeTabs,
   moveTab,
   openFileTab,
+  openServiceTab,
   type SidePanelTab,
 } from './components/side-panel/tabs'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
@@ -379,6 +381,20 @@ function ChatView() {
   const handleOpenFile = useCallback(
     (path: string) => handleOpenFiles([path]),
     [handleOpenFiles],
+  )
+
+  /**
+   * 服务面板点一行 → 右侧开一个服务终端标签（已开着就只切过去）。
+   * 标签归属「点开这一刻」的当前会话（与文件标签同一套「切会话全关」口径）；
+   * 标签自己的 `sessionId` 可能是另一个会话（新对话页的全局视图），轮询走标签的。
+   */
+  const handleOpenService = useCallback(
+    (target: ServiceTabTarget) => {
+      const next = openServiceTab(panelTabsRef.current, target)
+      openFileSessionRef.current = chatState.value.currentSessionId
+      applyPanelTabs({ tabs: next.tabs, activeId: next.activeId })
+    },
+    [applyPanelTabs],
   )
 
   /**
@@ -1087,8 +1103,11 @@ function ChatView() {
             {chatState.value.currentSessionId && (
               <TodoEntry sessionId={chatState.value.currentSessionId} />
             )}
-            {/* 后台服务：有会话 = 本会话；新对话页 = 全部会话 */}
-            <ServiceEntry sessionId={chatState.value.currentSessionId ?? null} />
+            {/* 后台服务：有会话 = 本会话；新对话页 = 全部会话；点行在右侧面板开终端标签 */}
+            <ServiceEntry
+              sessionId={chatState.value.currentSessionId ?? null}
+              onOpenService={handleOpenService}
+            />
             {/* 源代码管理：徽标 = 未提交变更数；不是 Git 仓库时入口不出现 */}
             <GitEntry
               sessionId={chatState.value.currentSessionId ?? null}

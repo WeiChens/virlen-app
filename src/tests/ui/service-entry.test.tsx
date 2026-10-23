@@ -8,7 +8,9 @@
  * 3. **终止 = 直接调 Rust（不弹二次确认）**，杀完立刻对账：行落到「已结束」、徽标归零 ——
  *    少了这次对账会出现「点了没反应」的假象（下次轮询 1s 之后才变）；
  * 4. **「已结束」页没有终止按钮**（幂等语义留给 AI 的 kill 工具），并如实显示退出码；
- * 5. **新对话页的全局视图**（`sessionId=null`）：跨会话列表 + 每行标归属，终止 / 终端弹窗必须带
+ * 5. **点行不再自己开弹窗**：终端是右侧面板里的一个标签，入口只上报 `onOpenService`（会话 id 在
+ *    点击那一刻定死）—— 标签归面板容器，关闭 / 切会话的语义只在那里写一份；
+ * 6. **新对话页的全局视图**（`sessionId=null`）：跨会话列表 + 每行标归属，终止 / 打开终端必须带
  *    **行自己的**会话 id —— 带错就是「在另一个会话上杀服务」，不是界面问题而是行为错误。
  *
  * 数据层（Rust 注册表 / 命令 / 会话隔离）由 `cargo test -p virlen-core native_tools::service` 守；
@@ -18,12 +20,13 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 
-import ServiceEntry from '@/ui/pages/chat/components/service/ServiceEntry'
+import ServiceEntry, {
+  type ServiceTabTarget,
+} from '@/ui/pages/chat/components/service/ServiceEntry'
 import {
   killBackgroundService,
   listAllBackgroundServices,
   listBackgroundServices,
-  readServiceConsole,
   type BackgroundServiceInfo,
 } from '@/infrastructure/backgroundService'
 import { showToast } from '@/ui/components/shared/Toast'
@@ -37,40 +40,6 @@ vi.mock('@/infrastructure/backgroundService', () => ({
   resizeServiceConsole: vi.fn(),
 }))
 vi.mock('@/ui/components/shared/Toast', () => ({ showToast: vi.fn() }))
-
-/** xterm 在 jsdom 里没有量度 / 画布（`term.open()` 没有意义）—— 这里用最小替身，
- *  只为让终端弹窗能挂载（终端本体自己的行为在 `service-terminal.test.tsx` 里验）。 */
-vi.mock('@xterm/xterm', () => ({
-  Terminal: class {
-    cols = 80
-    rows = 24
-    buffer = { active: { baseY: 0, viewportY: 0 } }
-    options: any
-    constructor(options?: any) {
-      this.options = { fontSize: 13, ...(options ?? {}) }
-    }
-    loadAddon() {}
-    open() {}
-    write() {}
-    reset() {}
-    dispose() {}
-    focus() {}
-    hasSelection() {
-      return false
-    }
-    getSelection() {
-      return ''
-    }
-    clearSelection() {}
-    selectAll() {}
-    paste() {}
-    onData() {
-      return { dispose() {} }
-    }
-    attachCustomKeyEventHandler() {}
-  },
-}))
-vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() {} } }))
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -96,12 +65,18 @@ function svc(over: Partial<BackgroundServiceInfo>): BackgroundServiceInfo {
 }
 
 let root: ReturnType<typeof createRoot> | null = null
+let opened: ServiceTabTarget[]
 
 function mount(sessionId: string | null = 's1') {
+  opened = []
   const host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
-  act(() => root!.render(<ServiceEntry sessionId={sessionId} />))
+  act(() =>
+    root!.render(
+      <ServiceEntry sessionId={sessionId} onOpenService={(t) => opened.push(t)} />,
+    ),
+  )
 }
 
 /** 轮询的第一次 tick 是 `setTimeout(0)`：等它跑完 + 一次 setState 落地 */
@@ -128,16 +103,6 @@ beforeEach(() => {
   vi.mocked(listBackgroundServices).mockReset()
   vi.mocked(listAllBackgroundServices).mockReset()
   vi.mocked(killBackgroundService).mockReset()
-  vi.mocked(readServiceConsole).mockReset()
-  vi.mocked(readServiceConsole).mockResolvedValue({
-    text: '',
-    reset: false,
-    next: 0,
-    headDropped: false,
-    running: true,
-    terminal: true,
-    interactive: true,
-  })
   vi.mocked(showToast).mockClear()
 })
 
@@ -235,7 +200,7 @@ it('终止时服务已不在表里（AI 抢先 kill 掉了）→ 如实提示，
   expect(showToast).toHaveBeenCalledWith('该服务已不在列表中')
 })
 
-it('点行打开终端弹窗；行内「终止」按钮不会顺手把弹窗也打开', async () => {
+it('点行上报「打开终端标签」；行内「终止」按钮不会顺手把它也打开', async () => {
   vi.mocked(listBackgroundServices).mockResolvedValue([svc({})])
   vi.mocked(killBackgroundService).mockResolvedValue(
     svc({ status: 'exited', killed: true, uptime: '3s' }),
@@ -247,23 +212,19 @@ it('点行打开终端弹窗；行内「终止」按钮不会顺手把弹窗也�
   click('.service-row')
   await flush()
 
-  // 弹窗挂到 body 上（createPortal），并从偏移 0 开始拉服务的控制台输出
-  expect(document.querySelector('.service-console-panel')).not.toBeNull()
-  expect(readServiceConsole).toHaveBeenCalledWith('s1', 'svc_1', 0)
-  // 打开弹窗时浮层顺手收起来（不然它挡在弹窗后面）
+  // 本会话视图不传 sessionLabel：终端面板里不必重复写「会话：当前会话」
+  expect(opened).toEqual([
+    { sessionId: 's1', serviceId: 'svc_1', name: 'dev', sessionLabel: undefined },
+  ])
+  // 打开终端时浮层顺手收起来（不然它挡在标签栏前面）
   expect(document.querySelector('.service-popover')).toBeNull()
 
-  act(() => {
-    ;(document.querySelector('.service-console-close') as HTMLButtonElement).click()
-  })
-  expect(document.querySelector('.service-console-panel')).toBeNull()
-
-  // 行内终止：只有 kill，不打开弹窗
+  // 行内终止：只有 kill，不上报打开
   click('.service-entry-btn')
   click('.service-kill-btn')
   await flush()
   expect(killBackgroundService).toHaveBeenCalledWith('s1', 'svc_1')
-  expect(document.querySelector('.service-console-panel')).toBeNull()
+  expect(opened.length).toBe(1)
 })
 
 // ==================== 新对话页的全局视图（P4） ====================
@@ -306,7 +267,7 @@ it('全局视图：跨会话列出 + 每行标归属 + 终止用行自己的会�
   expect(showToast).toHaveBeenCalledWith('已终止 other-dev')
 })
 
-it('全局视图：终端弹窗用行所属会话的 id 轮询，弹窗里也标归属', async () => {
+it('全局视图：打开终端带行所属会话的 id 与归属标签', async () => {
   vi.mocked(listAllBackgroundServices).mockResolvedValue([
     svc({ id: 'svc_9', name: 'other-dev', sessionId: 's2' }),
   ])
@@ -316,10 +277,9 @@ it('全局视图：终端弹窗用行所属会话的 id 轮询，弹窗里也标
   click('.service-row')
   await flush()
 
-  expect(readServiceConsole).toHaveBeenCalledWith('s2', 'svc_9', 0)
-  expect(
-    document.querySelector('.service-console-session')?.textContent?.trim(),
-  ).toBe('会话：s2')
+  expect(opened).toEqual([
+    { sessionId: 's2', serviceId: 'svc_9', name: 'other-dev', sessionLabel: 's2' },
+  ])
 })
 
 it('全局视图：任何会话都没有服务时，入口整个不渲染', async () => {

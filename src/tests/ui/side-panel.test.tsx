@@ -24,7 +24,11 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import SidePanel from '@/ui/pages/chat/components/side-panel'
-import { fileTab, type SidePanelTab } from '@/ui/pages/chat/components/side-panel/tabs'
+import {
+  fileTab,
+  serviceTab,
+  type SidePanelTab,
+} from '@/ui/pages/chat/components/side-panel/tabs'
 
 const { messageBoxMock } = vi.hoisted(() => ({ messageBoxMock: vi.fn() }))
 
@@ -97,6 +101,29 @@ vi.mock('@/ui/pages/chat/components/workspace-file', async () => {
   }
 })
 
+/** 服务终端换成桩：容器只验「标签长什么样 / active 怎么传」，真实终端语义在 `service-terminal.test.tsx` */
+vi.mock('@/ui/pages/chat/components/service/ServiceTerminal', () => ({
+  default: (props: {
+    sessionId: string
+    serviceId: string
+    name: string
+    sessionLabel?: string
+    active: boolean
+    onClose?: () => void
+  }) => (
+    <div
+      className="service-console-pane"
+      data-service={`${props.sessionId}:${props.serviceId}`}
+      data-name={props.name}
+      data-session-label={props.sessionLabel ?? ''}
+      data-active={String(props.active)}>
+      <button type="button" className="stub-service-close" onClick={props.onClose}>
+        close
+      </button>
+    </div>
+  ),
+}))
+
 /** 稳定引用：容器里的 effect 依赖这几个回调，内联箭头会让它们每帧重跑 */
 const activeChanges: string[] = []
 const closedIds: string[] = []
@@ -132,6 +159,11 @@ const TAB_A = fileTab('E:/repo/src/a.ts')
 const TAB_B = fileTab('E:/repo/src/b.ts')
 const TAB_C = fileTab('E:/repo/src/c.ts')
 const TAB_D = fileTab('E:/repo/src/d.ts')
+const TAB_SVC = serviceTab({
+  sessionId: 's1',
+  serviceId: 'svc_1',
+  name: 'dev',
+})
 
 ;(globalThis as never as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true
@@ -442,7 +474,8 @@ it('拖到聊天区不足 300px 时面板占满，拖回来再恢复', async () 
     document.dispatchEvent(new MouseEvent('mousemove', { clientX: right - 750 }))
   })
   expect(panel().classList.contains('is-full')).toBe(true)
-  expect(panel().style.width).toBe('1000px')
+  // 占满的判据是 state 里的 width：拖动中面板跟手（不铺满），松手才真的吃掉整块宽度
+  expect(panel().style.width).toBe('750px')
   expect(expandedReports[expandedReports.length - 1]).toBe(true)
 
   act(() => {
@@ -455,6 +488,49 @@ it('拖到聊天区不足 300px 时面板占满，拖回来再恢复', async () 
   act(() => {
     document.dispatchEvent(new MouseEvent('mouseup'))
   })
+})
+
+/**
+ * 占满态（聊天区被藏起来）往回拖：必须真的能拖回来。
+ * 两个坑：① 面板左缘这时正好压在左侧栏的拖拽条上（`chart-view.scss` 里 z-index 10、命中区 ±3px），
+ * 手柄不抬高层级就收不到 mousedown；② 占满态曾固定上屏 `available`，前 300px 拖动毫无反馈。
+ */
+it('占满态往右拖：按下即跟手变窄，过了 300 那条线聊天区回来', async () => {
+  layout = { available: 500, inset: 260 }
+  await renderPanel([TAB_A], TAB_A.id)
+  // 挂载时 250 宽，聊天区只剩 250 → 直接占满
+  expect(panel().classList.contains('is-full')).toBe(true)
+  expect(panel().style.width).toBe('500px')
+
+  const right = 760 // inset 260 + 可用 500
+  act(() => {
+    document
+      .querySelector('.side-panel-resizer')!
+      .dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  })
+  // 按下那一刻不跳：state 先对齐到眼前这条边
+  expect(panel().style.width).toBe('500px')
+
+  // 拖 100px：聊天区还不足 300（仍占满），面板必须已经跟着变窄
+  act(() => {
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: right - 400 }))
+  })
+  expect(panel().style.width).toBe('400px')
+  expect(panel().classList.contains('is-full')).toBe(true)
+
+  // 拖到聊天区刚好 300：占满态解除，聊天区回来
+  act(() => {
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: right - 120 }))
+  })
+  expect(panel().classList.contains('is-full')).toBe(false)
+  expect(panel().style.width).toBe('200px')
+  expect(expandedReports[expandedReports.length - 1]).toBe(false)
+
+  act(() => {
+    document.dispatchEvent(new MouseEvent('mouseup'))
+  })
+  // 松手后不反弹
+  expect(panel().style.width).toBe('200px')
 })
 
 /** 拖宽不设固定上限：能一路拖到「面板占满」（旧实现封顶 MIN(960, 72vw)） */
@@ -476,16 +552,17 @@ it('拖宽不设固定上限：能一路拖到面板占满', async () => {
   expect(panel().style.width).toBe('1500px')
   expect(panel().classList.contains('is-full')).toBe(false)
 
-  // 过「聊天区只剩 300」那条线：面板占满
+  // 过「聊天区只剩 300」那条线：拖动中仍跟手，松手后面板才真的吃掉整块宽度
   act(() => {
     document.dispatchEvent(new MouseEvent('mousemove', { clientX: right - 1800 }))
   })
   expect(panel().classList.contains('is-full')).toBe(true)
-  expect(panel().style.width).toBe('2000px')
+  expect(panel().style.width).toBe('1800px')
 
   act(() => {
     document.dispatchEvent(new MouseEvent('mouseup'))
   })
+  expect(panel().style.width).toBe('2000px')
 })
 
 /**
@@ -627,6 +704,61 @@ it('标签右键「刷新」：转发给被右键的那个标签的面板', asyn
   expect(menuButton('刷新')!.disabled).toBe(false)
   await clickMenu('刷新')
   expect(reloadCalls).toEqual(['E:/repo/src/b.ts'])
+})
+
+/**
+ * 服务终端是第二种内容（`kind: 'service'`）：标题就是服务名，内容和文件一样**一直挂着**，
+ * 只把 `active` 传下去（终端面板靠它暂停轮询）。
+ */
+it('服务标签：标题是服务名，内容常挂只切 active / hidden', async () => {
+  await renderPanel([TAB_A, TAB_SVC], TAB_A.id)
+
+  expect(
+    tabsEls().map((el) => el.querySelector('.side-panel-tab-name')!.textContent),
+  ).toEqual(['a.ts', 'dev'])
+  // 服务标签有自己的图标（套在 `.side-panel-tab-icon` 框里）
+  expect(tabsEls()[1].querySelector('.side-panel-tab-icon.is-service')).not.toBeNull()
+  expect(document.querySelector('.side-panel-tab-icon.is-service svg')).not.toBeNull()
+
+  const pane = () => document.querySelector<HTMLElement>('.service-console-pane')!
+  expect(pane().dataset.service).toBe('s1:svc_1')
+  expect(pane().dataset.active).toBe('false')
+  expect(panes()[1].hasAttribute('hidden')).toBe(true)
+
+  // 切到服务标签：同一块 DOM，只翻转 hidden / active（卸载会把屏幕内容与已读偏移丢掉）
+  const node = pane()
+  await renderPanel([TAB_A, TAB_SVC], TAB_SVC.id)
+  expect(pane()).toBe(node)
+  expect(pane().dataset.active).toBe('true')
+  expect(panes()[1].hasAttribute('hidden')).toBe(false)
+  expect(panes()[0].hasAttribute('hidden')).toBe(true)
+
+  // 头部那颗 ✕ 关的就是**这个**标签（服务终端没有草稿，直接走 onCloseTab）
+  act(() =>
+    pane().querySelector<HTMLButtonElement>('.stub-service-close')!.click(),
+  )
+  expect(closedIds).toEqual([TAB_SVC.id])
+})
+
+/** 服务终端没有路径 / 没有草稿：右键菜单不能出现文件类动作与「刷新」 */
+it('服务标签的右键菜单：只有关闭类，没有文件类与刷新', async () => {
+  await renderPanel([TAB_A, TAB_SVC], TAB_SVC.id)
+  await rightClickTab(1)
+
+  expect(menuLabels()).toEqual([
+    '关闭',
+    '关闭其他',
+    '关闭右侧标签页',
+    '关闭已保存',
+    '全部关闭',
+  ])
+  // 服务终端没有草稿 → 算「已保存」，可以被「关闭已保存」一并关掉
+  expect(menuButton('关闭已保存')!.disabled).toBe(false)
+
+  // 文件标签那份菜单不受影响（文件类动作还在）
+  await rightClickTab(0)
+  expect(menuLabels()).toContain('编辑器打开')
+  expect(menuButton('刷新')!.disabled).toBe(false)
 })
 
 it('只有一个标签：「关闭其他」「关闭右侧标签页」都禁用', async () => {

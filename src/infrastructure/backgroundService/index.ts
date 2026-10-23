@@ -27,13 +27,13 @@ export interface BackgroundServiceInfo {
   sandbox: string
   /** AI 还没读过的输出字符数 */
   unreadChars: number
-  /** 是否跑在伪控制台里 —— true 才能在弹窗里敲键盘 */
+  /** 是否跑在伪控制台里 —— true 才能在终端面板里敲键盘 */
   terminal: boolean
-  /** 现在就能输入（terminal && 仍在运行）；false 时弹窗是只读回放 */
+  /** 现在就能输入（terminal && 仍在运行）；false 时终端面板只读回放 */
   interactive: boolean
   /**
    * 归属会话（只有全局列表会带）。新对话页靠它给每行标「这条是谁的」，
-   * 并把终止 / 终端弹窗打到正确的会话上。
+   * 并把终止 / 终端面板打到正确的会话上。
    */
   sessionId?: string
 }
@@ -100,9 +100,9 @@ export async function killBackgroundService(
   return row ?? null
 }
 
-// ==================== 终端弹窗 ====================
+// ==================== 服务终端（右侧面板里的一个标签） ====================
 
-/** 终端弹窗读到的增量（字段与 Rust panel.rs::read_service_console 逐字对应） */
+/** 终端面板读到的增量（字段与 Rust panel.rs::read_service_console 逐字对应） */
 export interface ServiceConsoleChunk {
   /** reset=true 时是整个窗口，否则只是自上次 next 起的新增部分 */
   text: string
@@ -122,7 +122,7 @@ export interface ServiceConsoleChunk {
 
 /**
  * 读终端输出（自绝对偏移 from 起的增量）。
- * 返回 null = 本会话已没有这个 id（弹窗据此停止轮询）；IPC 异常会向上抛，
+ * 返回 null = 本会话已没有这个 id（面板据此停止轮询）；IPC 异常会向上抛，
  * 调用方保留上一帧继续轮询（两种语义必须分开）。
  */
 export async function readServiceConsole(

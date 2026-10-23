@@ -2,10 +2,12 @@
  * 右侧面板的标签页模型（纯函数：容器与宿主共用这一份，不碰 DOM、不碰 React）。
  *
  * 三条口径：
- * 1. **id 由内容决定**：`file:<绝对路径>`。同一个文件再点一次是「激活已有标签」而不是
- *    再开一个 —— 否则两个标签各持一份草稿、各自保存，必然互相踩掉；
- * 2. **kind 预留**：之后还要接网址访问（`url`）与终端（`terminal`），渲染分支在
- *    `index.tsx::renderTab()`，加一种只加一支；打开/关闭/选中这套逻辑不用改；
+ * 1. **id 由内容决定**：文件是 `file:<绝对路径>`，服务终端是 `service:<会话id>:<服务id>`
+ *    （服务 id 只在会话内唯一）。同一个内容再点一次是「激活已有标签」而不是再开一个 ——
+ *    文件开两份会各持一份草稿、互相踩；终端开两份则是两个 xterm 抢同一个伪控制台；
+ * 2. **kind 目前两种**：`file`（文本编辑 / 预览）与 `service`（后台服务终端）。渲染分支在
+ *    `index.tsx::renderTab()`，之后接网址访问（`url`）等就在那里加一支；
+ *    打开/关闭/选中这套逻辑不用改；
  * 3. **关掉当前激活的标签**：请**右边**那位上来（浏览器的口径：关掉当前页，右边那页顶上来），
  *    没有右邻居再退到左边；全关光就是 `null`（宿主据此把整个容器卸掉）。
  * 4. **批量关闭（标签右键菜单）**：按「逐个 `closeTab`」的口径收敛激活态 —— 语义只有一份，
@@ -14,13 +16,25 @@
  *    （见 `index.tsx::startTabDrag`：数「其他标签中线在指针左边」的个数），两边不能各算一套。
  */
 
-/** 右侧面板的一个标签页（目前只有「文件」，后续扩 kind 时在这里加联合项） */
-export type SidePanelTab = {
-  id: string
-  kind: 'file'
-  /** 文件绝对路径（工作目录内） */
-  path: string
-}
+/** 右侧面板的一个标签页（扩 kind 时在这里加联合项） */
+export type SidePanelTab =
+  | {
+      id: string
+      kind: 'file'
+      /** 文件绝对路径（工作目录内） */
+      path: string
+    }
+  | {
+      id: string
+      kind: 'service'
+      /** 归属会话（同一服务 id 只在**它自己的**会话里唯一） */
+      sessionId: string
+      serviceId: string
+      /** 标签上显示的服务名：列表还没轮询回来时也要有标题 */
+      name: string
+      /** 归属会话标签（新对话页的全局视图才有；本会话视图不显示） */
+      sessionLabel?: string
+    }
 
 /** 文件标签的 id：路径即身份（同一个文件不会开出两个标签） */
 export function fileTabId(path: string): string {
@@ -30,6 +44,35 @@ export function fileTabId(path: string): string {
 /** 造一个文件标签 */
 export function fileTab(path: string): SidePanelTab {
   return { id: fileTabId(path), kind: 'file', path }
+}
+
+/** 服务终端标签的 id：会话 + 服务（服务 id 只在会话内唯一，跨会话会撞） */
+export function serviceTabId(sessionId: string, serviceId: string): string {
+  return `service:${sessionId}:${serviceId}`
+}
+
+/** 造一个服务终端标签 */
+export function serviceTab(input: {
+  sessionId: string
+  serviceId: string
+  name: string
+  sessionLabel?: string
+}): SidePanelTab {
+  return {
+    id: serviceTabId(input.sessionId, input.serviceId),
+    kind: 'service',
+    ...input,
+  }
+}
+
+/** 打开一个服务终端标签：已开着就只切过去（同一个伪控制台不能交给两份 xterm） */
+export function openServiceTab(
+  tabs: SidePanelTab[],
+  input: { sessionId: string; serviceId: string; name: string; sessionLabel?: string },
+): { tabs: SidePanelTab[]; activeId: string; added: boolean } {
+  const id = serviceTabId(input.sessionId, input.serviceId)
+  if (tabs.some((tab) => tab.id === id)) return { tabs, activeId: id, added: false }
+  return { tabs: [...tabs, serviceTab(input)], activeId: id, added: true }
 }
 
 /**

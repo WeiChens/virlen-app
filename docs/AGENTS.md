@@ -27,7 +27,7 @@
 | [`agents/08-pitfalls-quality.md`](agents/08-pitfalls-quality.md) | §11.28–§11.36：clippy 与 CI 门禁 / CLI 打包 · 三类 CI 失败 / 启动即崩 / 暂停恢复慢 / 残留快照 400 / 只加载到最后 summary / GUI 压缩切 Rust | 改 CI、打包、启动链、压缩与恢复 |
 | [`agents/09-pitfalls-engine.md`](agents/09-pitfalls-engine.md) | §11.37–§11.41：移除 TS 引擎 / 输入框右键菜单 / CLI 会话与用量 / 提示词缓存断点 / 账本缓存写入列 · §11.50–§11.52：请求组装前的工具协议清洗 / 等待用户交互的 await、长耗时工具与同步推理都必须可取消 / 左右对比 diff 的选区与右键菜单 | 改引擎、Provider 请求体、账本与费用、消息协议与取消 |
 | [`agents/10-pitfalls-phone.md`](agents/10-pitfalls-phone.md) | §11.42–§11.47：手机端文件面板两坑 / 编辑文件的三个坑 / 共享包契约四坑 / 默认会话 / 并发恢复 400 | 改手机端 UI 或共享包 `virlen-remote` |
-| [`agents/11-background-service.md`](agents/11-background-service.md) | §11.48 后台服务（工具 / 面板 / 终端弹窗 / 全局视图 / 结束通知）· §11.49 埋点采样用例 · 托盘与后台工作 | 改 `service` 分类、标题栏面板或托盘 |
+| [`agents/11-background-service.md`](agents/11-background-service.md) | §11.48 后台服务（工具 / 面板 / 终端标签 / 全局视图 / 结束通知）· §11.49 埋点采样用例 · 托盘与后台工作 | 改 `service` 分类、标题栏面板或托盘 |
 | [`agents/12-commands.md`](agents/12-commands.md) | §7 常用命令与验证基线 · §9 手册速查（新增工具 / Provider / 搜索源 / Skill）· §10 前端约定 · §13 提交与协作（含提交前自查清单） | 每次动手前查命令、口径与提交要求 |
 | [`agents/13-locate-table.md`](agents/13-locate-table.md) | §12 快速定位表（「我要做的事 → 去哪里」，按功能域列出落点） | 知道要改什么、不知道文件在哪 |
 | [`agents/14-git-management.md`](agents/14-git-management.md) | §5.10 源代码管理（图形化 Git）分层落点表 · §11.53 实施期的十个坑 | 改 Git 入口 / 变更列表 / 差异视图 |

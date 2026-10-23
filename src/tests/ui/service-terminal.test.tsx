@@ -1,5 +1,5 @@
 /**
- * ServiceTerminal — 后台服务的终端弹窗（P3）
+ * ServiceTerminal — 后台服务的终端**面板**（右侧面板里的一个标签）
  *
  * 覆盖这些容易出错的地方：
  * 1. **增量续接**：每帧只把新增部分交给 xterm（不是整段重写）—— 写错就是每 350ms 让终端闪一次；
@@ -7,7 +7,8 @@
  * 3. **输入开关**：只有 `interactive`（跑在伪控制台里 + 仍在运行）才把键击送出去 ——
  *    已结束 / 管道模式下敲键盘必须静默无效；
  * 4. **提示文案**：不能输入时要说清是「服务已结束」还是「管道模式」，并如实提示输出被截断；
- * 5. **关停**：Esc / ✕ 关闭；服务被摘出注册表（读回 null）后停止轮询并提示；
+ * 5. **切走标签**（`active=false`）：一个请求都不发；切回来**带着原偏移续上**（不能从 0 重读整段，
+ *    否则每次切标签都整屏重绘）；服务被摘出注册表（读回 null）后停止轮询并提示；
  * 6. **尺寸上报**：首帧（控制台状态还没回来）也必须把尺寸问出去 ——「还不知道」不等于「不能输入」；
  *    状态明确为「不能输入」后即停止上报（不能白刷 IPC，也不能让伪控制台停在默认尺寸）。
  *
@@ -23,20 +24,25 @@ import * as xtermModule from '@xterm/xterm'
 
 import ServiceTerminal from '@/ui/pages/chat/components/service/ServiceTerminal'
 import {
+  killBackgroundService,
+  listBackgroundServices,
   readServiceConsole,
   resizeServiceConsole,
   writeServiceConsole,
   type BackgroundServiceInfo,
   type ServiceConsoleChunk,
 } from '@/infrastructure/backgroundService'
+import { showToast } from '@/ui/components/shared/Toast'
 
 vi.mock('@/infrastructure/backgroundService', () => ({
   listBackgroundServices: vi.fn(),
+  listAllBackgroundServices: vi.fn(),
   killBackgroundService: vi.fn(),
   readServiceConsole: vi.fn(),
   writeServiceConsole: vi.fn(),
   resizeServiceConsole: vi.fn(),
 }))
+vi.mock('@/ui/components/shared/Toast', () => ({ showToast: vi.fn() }))
 
 vi.mock('@xterm/xterm', () => {
   const instances: any[] = []
@@ -129,32 +135,40 @@ function svc(over: Partial<BackgroundServiceInfo> = {}): BackgroundServiceInfo {
 
 let root: ReturnType<typeof createRoot> | null = null
 let onClose: ReturnType<typeof vi.fn<() => void>>
-let onKill: ReturnType<typeof vi.fn<(service: BackgroundServiceInfo) => void>>
 
-function mount(service: BackgroundServiceInfo | undefined = svc()) {
+/** 挂一次面板；返回重渲染（改 `active` 用，同一个根不会重建终端实例） */
+function mount(over: { active?: boolean; sessionLabel?: string } = {}) {
   onClose = vi.fn<() => void>()
-  onKill = vi.fn<(service: BackgroundServiceInfo) => void>()
   const host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
-  act(() =>
-    root!.render(
-      <ServiceTerminal
-        sessionId="s1"
-        serviceId="svc_1"
-        service={service}
-        killing={false}
-        onKill={onKill}
-        onClose={onClose}
-      />,
-    ),
-  )
+  const render = (next: { active?: boolean } = {}) =>
+    act(() =>
+      root!.render(
+        <ServiceTerminal
+          sessionId="s1"
+          serviceId="svc_1"
+          name="dev"
+          sessionLabel={over.sessionLabel}
+          active={next.active ?? over.active ?? true}
+          onClose={onClose}
+        />,
+      ),
+    )
+  render()
+  return render
 }
 
 /** 等轮询的第一次 tick（`setTimeout(0)`）跑完 + 一次 setState 落地 */
 async function flush() {
   await act(async () => {
     await new Promise((r) => setTimeout(r, 0))
+  })
+}
+
+async function wait(ms: number) {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, ms))
   })
 }
 
@@ -182,11 +196,15 @@ beforeEach(() => {
     })
   }
   document.body.innerHTML = ''
+  vi.mocked(listBackgroundServices).mockReset()
+  vi.mocked(listBackgroundServices).mockResolvedValue([svc()])
+  vi.mocked(killBackgroundService).mockReset()
   vi.mocked(readServiceConsole).mockReset()
   vi.mocked(writeServiceConsole).mockReset()
   vi.mocked(resizeServiceConsole).mockReset()
   vi.mocked(writeServiceConsole).mockResolvedValue(true)
   vi.mocked(resizeServiceConsole).mockResolvedValue(true)
+  vi.mocked(showToast).mockClear()
   xterm.__clear()
 })
 
@@ -208,9 +226,7 @@ it('运行中：首帧整段写入，下一帧只接增量；键击直达服务�
   expect(written()).toBe('booting\n')
 
   // 第二帧：只把新增那段交给 xterm（整段重写会让终端每帧闪一次）
-  await act(async () => {
-    await new Promise((r) => setTimeout(r, 400))
-  })
+  await wait(400)
   expect(written()).toBe('booting\nready on 3000\n')
   expect(readServiceConsole).toHaveBeenLastCalledWith('s1', 'svc_1', 8)
 
@@ -264,9 +280,7 @@ it('reset 帧：清屏后整段重放（环形丢过头时不能半截接 ANSI �
   const term = xterm.__instances[0]
   expect(written()).toBe('old\n')
 
-  await act(async () => {
-    await new Promise((r) => setTimeout(r, 400))
-  })
+  await wait(400)
   expect(term.reset).toHaveBeenCalled()
   expect(written()).toBe('old\nrewritten\n')
   // 窗口开头被环形丢弃 → 如实提示「更早的输出已被截断」
@@ -274,11 +288,14 @@ it('reset 帧：清屏后整段重放（环形丢过头时不能半截接 ANSI �
 })
 
 it('已结束：只读回放（提示 + 键击不送出去 + 没有终止按钮）', async () => {
+  vi.mocked(listBackgroundServices).mockResolvedValue([
+    svc({ status: 'exited', killed: true, returnCode: 1 }),
+  ])
   vi.mocked(readServiceConsole).mockResolvedValue(
     chunk({ text: 'exited\n', next: 7, running: false, interactive: false }),
   )
 
-  mount(svc({ status: 'exited', killed: true, returnCode: 1 }))
+  mount()
   await flush()
 
   expect(written()).toBe('exited\n')
@@ -290,16 +307,20 @@ it('已结束：只读回放（提示 + 键击不送出去 + 没有终止按钮�
 })
 
 it('管道模式（没有伪控制台）：如实说明不能输入', async () => {
+  vi.mocked(listBackgroundServices).mockResolvedValue([
+    svc({ terminal: false, interactive: false }),
+  ])
   vi.mocked(readServiceConsole).mockResolvedValue(
     chunk({ terminal: false, interactive: false }),
   )
 
-  mount(svc({ terminal: false, interactive: false }))
+  mount()
   await flush()
   expect(text('.service-console-foot')).toContain('管道模式下，无法输入')
 })
 
 it('服务被摘出注册表（读回 null）：提示 + 停止轮询', async () => {
+  vi.mocked(listBackgroundServices).mockResolvedValue([])
   vi.mocked(readServiceConsole).mockResolvedValue(null)
 
   mount()
@@ -307,26 +328,83 @@ it('服务被摘出注册表（读回 null）：提示 + 停止轮询', async ()
   expect(text('.service-console-foot')).toContain('该服务已不在列表中')
   const callsAfterGone = vi.mocked(readServiceConsole).mock.calls.length
 
-  await act(async () => {
-    await new Promise((r) => setTimeout(r, 600))
-  })
+  await wait(600)
   // 已经不在表里：不再白刷 IPC（重试也是空）
   expect(vi.mocked(readServiceConsole).mock.calls.length).toBe(callsAfterGone)
-  expect(onClose).not.toHaveBeenCalled()
 })
 
-it('Esc 与 ✕ 都能关闭弹窗', async () => {
+/** 标签切走时不发请求；切回来带着原偏移续上（不能从 0 重读整段，否则整屏重绘闪一下） */
+it('切走标签停轮询；切回来带着原偏移续接', async () => {
+  vi.mocked(readServiceConsole)
+    .mockResolvedValueOnce(chunk({ text: 'boot\n', next: 5 }))
+    .mockResolvedValue(chunk({ text: 'more\n', next: 10 }))
+
+  const render = mount()
+  await flush()
+  expect(written()).toBe('boot\n')
+
+  render({ active: false })
+  const consoleCalls = vi.mocked(readServiceConsole).mock.calls.length
+  const listCalls = vi.mocked(listBackgroundServices).mock.calls.length
+  await wait(600)
+  expect(vi.mocked(readServiceConsole).mock.calls.length).toBe(consoleCalls)
+  expect(vi.mocked(listBackgroundServices).mock.calls.length).toBe(listCalls)
+  // 内容仍在（标签只是 hidden，不卸载）
+  expect(written()).toBe('boot\n')
+
+  render({ active: true })
+  await flush()
+  expect(readServiceConsole).toHaveBeenLastCalledWith('s1', 'svc_1', 5)
+  expect(written()).toBe('boot\nmore\n')
+})
+
+/** 头部：身份在左（名字 + 沙盒），状态徽标与两个动作按钮靠右；✕ = 关标签 */
+it('头部：状态在名字右边，右端依次是 状态 / 终止 / ✕；✕ 上报关闭', async () => {
   vi.mocked(readServiceConsole).mockResolvedValue(chunk({}))
   mount()
   await flush()
 
-  act(() => {
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
-  })
-  expect(onClose).toHaveBeenCalledTimes(1)
+  const head = document.querySelector('.service-console-head')!
+  const name = head.querySelector('.service-console-name')!
+  const status = head.querySelector('.service-status')!
+  // 状态在名字**右边**（左侧只留身份，状态与动作同属右端那一组）
+  expect(
+    name.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy()
+
+  const classes = Array.from(head.children).map((el) => el.className)
+  expect(classes.slice(-3)).toEqual([
+    'service-status is-on-dark is-running',
+    'service-console-kill',
+    'service-console-close',
+  ])
 
   act(() => {
-    ;(document.querySelector('.service-console-close') as HTMLButtonElement).click()
+    ;(head.querySelector('.service-console-close') as HTMLButtonElement).click()
   })
-  expect(onClose).toHaveBeenCalledTimes(2)
+  expect(onClose).toHaveBeenCalledTimes(1)
+})
+
+/** 头部「终止」：与面板行内那颗按钮同一套动作（直接杀 + toast + 就地刷新） */
+it('头部的终止：打到标签自己的会话，并立刻对账成已结束', async () => {
+  const dead = svc({ status: 'exited', killed: true, returnCode: 1 })
+  vi.mocked(listBackgroundServices)
+    .mockResolvedValueOnce([svc()])
+    .mockResolvedValue([dead])
+  vi.mocked(killBackgroundService).mockResolvedValue(dead)
+  vi.mocked(readServiceConsole).mockResolvedValue(chunk({}))
+
+  mount({ sessionLabel: '会话标题' })
+  await flush()
+  expect(text('.service-console-session')).toBe('会话：会话标题')
+
+  act(() => {
+    ;(document.querySelector('.service-console-kill') as HTMLButtonElement).click()
+  })
+  await flush()
+
+  expect(killBackgroundService).toHaveBeenCalledWith('s1', 'svc_1')
+  expect(showToast).toHaveBeenCalledWith('已终止 dev')
+  // 刷新之后已经没有运行中的服务 → 头部的终止按钮消失
+  expect(document.querySelector('.service-console-kill')).toBeNull()
 })

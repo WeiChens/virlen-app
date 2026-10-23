@@ -604,26 +604,6 @@
     }
   }
 
-  /* 沙盒模式徽标（header-left）：显示本条命令**实际**的运行模式（Rust 下发） */
-  .terminal-sandbox-badge {
-    flex-shrink: 0;
-    padding: 0 6px;
-    border-radius: 3px;
-    font-size: var(--font-size-xs);
-    font-weight: 500;
-    line-height: 16px;
-    color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.72));
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    white-space: nowrap;
-
-    &.is-danger {
-      color: #ffd7d7;
-      background: rgba(216, 34, 34, 0.18);
-      border-color: rgba(216, 34, 34, 0.5);
-    }
-  }
-
   /* 内置全屏按钮（与代码块头部的全屏按钮同款，见 message/code-block.scss） */
   .terminal-fullscreen-btn {
     display: flex;
@@ -1505,6 +1485,68 @@
     color: var(--accent-warn, #f59e0b);
     border-color: rgba(245, 158, 11, 0.45);
     background: rgba(245, 158, 11, 0.12);
+  }
+}
+
+/* 同一枚徽标落在**深色终端 chrome**（终端标题栏 / 服务终端头部）上的配色变体。
+ *
+ * 浅色面那套不能直接搬过来：描边走 `--border-color`（浅色主题 #e5e5e5），落在深色头部上
+ * 是一圈发白的描边；`#0fcd55` 的荧光绿在深底上太跳，12% 绿底又会积成一块脏墨绿。
+ * 换成「白系底 + 降饱和语义色」，与下面的沙盒徽标同一套观感。
+ * 色值按 `--terminal-header-bg` 较亮的那档（暗色主题 #535392）校过对比度（≥4.5:1）——
+ * 只按浅色主题的 #181824 调，暗色主题下会发灰看不清。
+ * ⚠️ 只改配色，不新增状态语义：文案与 class 仍来自 `service-status.ts`。 */
+.service-status.is-on-dark {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.82);
+
+  &.is-running {
+    color: #9fe8ba;
+    border-color: rgba(159, 232, 186, 0.35);
+    background: rgba(15, 205, 85, 0.18);
+  }
+
+  &.is-exited,
+  &.is-killed {
+    color: rgba(255, 255, 255, 0.75);
+  }
+
+  &.is-failed {
+    color: #ffc9c9;
+    border-color: rgba(216, 34, 34, 0.52);
+    background: rgba(216, 34, 34, 0.2);
+  }
+
+  &.is-pending {
+    color: #ffd08a;
+    border-color: rgba(245, 158, 11, 0.45);
+    background: rgba(245, 158, 11, 0.18);
+  }
+}
+
+/* 沙盒模式徽标（header-left）：显示这条命令**实际**的运行模式（Rust 下发）。
+ * 两块深色终端 chrome 共用：执行命令的终端卡、服务终端的标签头。
+ * ⚠️ 不能继续嵌在 `.execute-command-wrapper` 下 —— 服务终端头部不在它里面，
+ * 那一路会退化成裸文字（与 `.service-status` 提到最外层是同一条理由）。
+ * 浅色卡片头（`.service-head`）不用这套白系配色，也不要给它套。 */
+.execute-command-wrapper .terminal-sandbox-badge,
+.service-console-head .terminal-sandbox-badge {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: 3px;
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  line-height: 16px;
+  color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.72));
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  white-space: nowrap;
+
+  &.is-danger {
+    color: #ffd7d7;
+    background: rgba(216, 34, 34, 0.18);
+    border-color: rgba(216, 34, 34, 0.5);
   }
 }
 

@@ -10,6 +10,8 @@
  * ③ **主题令牌必须真实存在**：写错名字的 `var(--x)` 不报错，只是永远走 fallback，暗色主题下不走眼。
  * ④ **标签栏滚动条必须跟主题**：写了 `scrollbar-width` 就会让 `::-webkit-scrollbar-thumb` 失效，
  *    暗色主题下冒出浅色滚动条。
+ * ⑤ **占满态的手柄要盖过左侧栏的拖拽条**：面板铺满时它的左缘正好压在 `.sidebar-resizer` 上，
+ *    层级不够就收不到 mousedown —— 看着是「拖不动」，其实拖的是左侧栏（面板再也回不来）。
  */
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -18,6 +20,7 @@ import * as sass from 'sass'
 
 const PANEL_SCSS = 'src/ui/pages/chat/components/side-panel/style.scss'
 const FILE_PANEL_SCSS = 'src/ui/pages/chat/components/workspace-file/style.scss'
+const CHAT_VIEW_SCSS = 'src/ui/pages/chat/chat-view.scss'
 const THEME_SCSS = 'src/ui/styles/theme.scss'
 
 function readProjectFile(rel: string): string {
@@ -31,6 +34,7 @@ const panelSrc = readProjectFile(PANEL_SCSS)
 const panelCss = stripComments(sass.compileString(panelSrc).css)
 const filePanelCss = stripComments(sass.compileString(readProjectFile(FILE_PANEL_SCSS)).css)
 const themeCss = stripComments(sass.compileString(readProjectFile(THEME_SCSS)).css)
+const chatViewCss = stripComments(sass.compileString(readProjectFile(CHAT_VIEW_SCSS)).css)
 
 describe('右侧面板容器 · 样式契约', () => {
   it('非激活标签的内容真的不显示（切标签靠它，不靠卸载）', () => {
@@ -85,5 +89,22 @@ describe('右侧面板容器 · 样式契约', () => {
     const used = [...panelSrc.matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1])
     expect(used.length).toBeGreaterThan(0)
     expect([...new Set(used)].filter((name) => !defined.has(name))).toEqual([])
+  })
+
+  it('占满态的手柄盖过左侧栏拖拽条，且面板永远贴右（否则拖不回来）', () => {
+    // 左侧栏拖拽条的层级与命中区（`::after` 左右各 3px）写在 chat-view.scss
+    const sidebarRule = /\.sidebar-resizer\s*\{([^}]*)\}/.exec(chatViewCss)?.[1]
+    expect(sidebarRule).toBeTruthy()
+    const sidebarZ = Number(/z-index:\s*(\d+)/.exec(sidebarRule!)?.[1])
+    expect(Number.isFinite(sidebarZ)).toBe(true)
+
+    const fullHandle = /\.side-panel\.is-full\s+\.side-panel-resizer\s*\{([^}]*)\}/.exec(
+      panelCss,
+    )?.[1]
+    expect(fullHandle).toBeTruthy()
+    expect(Number(/z-index:\s*(\d+)/.exec(fullHandle!)?.[1])).toBeGreaterThan(sidebarZ)
+
+    // 占满态下聊天区是 display:none：面板不贴右就会从左铺、往右缩，手柄停在原地
+    expect(/\.side-panel\s*\{([^}]*)\}/.exec(panelCss)?.[1]).toContain('margin-left: auto')
   })
 })

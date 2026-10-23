@@ -7,7 +7,8 @@
  *    不给每个面板各写一套「量可用宽度 + 拖左边缘」。切换标签时宽度当然也不跳；
  * 3. **切标签不卸载**：所有标签的内容**一直挂着**，只做显隐 —— 换成卸载再挂载，
  *    草稿、Monaco 撤销栈、滚动位置全丢（文件面板的草稿只活在组件 state 里）；
- * 4. **后面还要接别的东西**（网址访问 / 终端）：加一种 kind 只加 `renderTab()` 的一支。
+ * 4. **两种内容**：文件（`workspace-file`）与后台服务终端（`service/ServiceTerminal`），
+ *    加一种 kind 只加 `renderTab()` 的一支；
  * 5. **标签可拖拽换顺序**：顺序归宿主（`tabs` 是它的 state），容器只在拖动中就地预览，
  *    松手时用 `onMoveTab(id, toIndex)` 上报一次 —— 两边同一个下标口径（`tabs.ts::moveTab`）。
  *
@@ -16,7 +17,7 @@
  * `onCloseTab`，不再问第二遍。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { t } from '@/ui/i18n'
+import { t, tpl } from '@/ui/i18n'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 import ContextMenu, {
   useContextMenu,
@@ -25,7 +26,9 @@ import ContextMenu, {
 import { fileMenuItems } from '@/ui/components/shared/ContextMenu/menus'
 import CloseSvg from '@/ui/components/icons/CloseSvg'
 import FileTypeIcon from '@/ui/components/icons/FileTypeIcon'
+import ServerSvg from '@/ui/components/icons/ServerSvg'
 import WorkspaceFilePanel from '../workspace-file'
+import ServiceTerminal from '../service/ServiceTerminal'
 import { moveTab, tabLabel, type SidePanelTab } from './tabs'
 import { wheelScrollLeft } from './tab-scroll'
 import './style.scss'
@@ -158,6 +161,12 @@ function SidePanel({
   /** 聊天区会被压到不足 300px：面板占满，聊天区交给宿主先藏起来 */
   const expanded = available > 0 && available - width < CHAT_MIN_WIDTH
 
+  /**
+   * 上屏宽度：占满态铺满整块可用宽度（`width` 里记的偏好值可能与眼前这块对不上）。
+   * **拖动中一律按 `width`**：否则从占满态往回拖，前 300px 面板一动不动，手柄就像坏的。
+   */
+  const shownWidth = expanded && !resizing ? available : width
+
   useEffect(() => {
     onExpandedChange?.(expanded)
   }, [expanded, onExpandedChange])
@@ -243,13 +252,15 @@ function SidePanel({
       if (room > 0) setAvailable(room)
       const min = minDragWidth(room)
       const max = maxDragWidth(room)
+      // 占满态上屏的是 `available`，先把 state 对齐到眼前这条边：按下去那一瞬间面板才不会跳一下
+      if (rect.width > 0) setWidth(Math.round(rect.width))
       setResizing(true)
       // 指针拖出面板时也要保持 col-resize（与左侧栏拖拽同一手法）
       document.body.style.cursor = 'col-resize'
       document.body.style.userSelect = 'none'
 
       const onMove = (moveEvent: MouseEvent) => {
-        // 不能把聊天区压到 300 以下 —— 那条线交给 `expanded`，到这里就直接让面板占满
+        // 不能把聊天区压到 300 以下 —— 那条线交给 `expanded`（松手后铺满）
         const next = Math.max(min, Math.min(max, Math.round(right - moveEvent.clientX)))
         setWidth(next)
       }
@@ -270,7 +281,7 @@ function SidePanel({
    * 标签右键菜单：target 是「右键的那个标签」—— 关闭类动作都作用于它，与当前激活的是谁无关。
    * 按坐标开（不按锚点）：标签栏就在鼠标下方，菜单跟着指针更符合直觉。
    */
-  const tabMenu = useContextMenu<{ id: string; path: string }>()
+  const tabMenu = useContextMenu<{ id: string }>()
 
   /**
    * 关一批标签：里面有未保存草稿先问**一次**（逐个问会弹一串对话框）。
@@ -311,21 +322,37 @@ function SidePanel({
   )
 
   /**
-   * 右键菜单的项。三条口径：
+   * 右键菜单的项。四条口径：
    * 1. 关闭类一律以「右键的那个标签」为锚点（关闭其他 / 关闭右侧不会因为当前激活的是别人而作用错对象）；
-   * 2. 「关闭已保存」= 关掉所有**没有**未保存草稿的标签（与 VS Code 同口径）；
-   * 3. 文件类动作用全应用唯一那份工厂，`withOpen:false` —— 面板头已经有「在系统程序中打开」。
-   * 4. 「刷新」= 让那个标签的文件面板**重新读盘**（有草稿会先问）：动作住在面板里（`load()` 与
+   * 2. 「关闭已保存」= 关掉所有**没有**未保存草稿的标签（与 VS Code 同口径；服务终端没有草稿，一并算「已保存」）；
+   * 3. 文件类动作只给**文件**标签（服务终端没有路径可复制 / 没有编辑器），且用全应用唯一那份工厂、
+   *    `withOpen:false` —— 面板头已经有「在系统程序中打开」；
+   * 4. 「刷新」= 让那个**文件**面板重新读盘（有草稿会先问）：动作住在面板里（`load()` 与
    *    草稿确认都在那儿），所以由面板登记上来（见 `reloadRegistrarOf`），容器只负责转发。
    */
-  function tabMenuItems(target: { id: string; path: string }): ContextMenuItem[] {
+  function tabMenuItems(target: { id: string }): ContextMenuItem[] {
     const index = tabs.findIndex((tab) => tab.id === target.id)
     // 菜单开着的时候目标标签被关掉了：不给任何操作入口
     if (index < 0) return []
-    const others = tabs.filter((tab) => tab.id !== target.id).map((tab) => tab.id)
-    const right = tabs.slice(index + 1).map((tab) => tab.id)
-    const saved = tabs.filter((tab) => !dirtyIds.includes(tab.id)).map((tab) => tab.id)
-    const fileItems = fileMenuItems(target.path, { withOpen: false })
+    const tab = tabs[index]
+    const others = tabs.filter((item) => item.id !== target.id).map((item) => item.id)
+    const right = tabs.slice(index + 1).map((item) => item.id)
+    const saved = tabs.filter((item) => !dirtyIds.includes(item.id)).map((item) => item.id)
+    const contentItems: ContextMenuItem[] =
+      tab.kind === 'file'
+        ? [
+            // 刷新归「内容动作」这一段（与文件类动作同一组），分隔线画在它上面
+            {
+              key: 'reload',
+              label: t('刷新'),
+              divider: true,
+              // 面板还没挂载完（刚打开 / 已卸载）时点不了
+              disabled: !reloadActionsRef.current.has(tab.id),
+              onClick: () => reloadActionsRef.current.get(tab.id)?.(),
+            },
+            ...fileMenuItems(tab.path, { withOpen: false }),
+          ]
+        : []
     return [
       { key: 'close', label: t('关闭'), onClick: () => void requestCloseTabs([target.id]) },
       {
@@ -349,23 +376,14 @@ function SidePanel({
       {
         key: 'close-all',
         label: t('全部关闭'),
-        onClick: () => void requestCloseTabs(tabs.map((tab) => tab.id)),
+        onClick: () => void requestCloseTabs(tabs.map((item) => item.id)),
       },
-      // 刷新归「内容动作」这一段（与文件类动作同一组），分隔线画在它上面
-      {
-        key: 'reload',
-        label: t('刷新'),
-        divider: true,
-        // 面板还没挂载完（刚打开 / 已卸载）时点不了
-        disabled: !reloadActionsRef.current.has(target.id),
-        onClick: () => reloadActionsRef.current.get(target.id)?.(),
-      },
-      ...fileItems,
+      ...contentItems,
     ]
   }
 
-  /** 真正渲染某个标签的内容：加新的预览类型（网址 / 终端）就在这里加一支 */
-  const renderTab = (tab: SidePanelTab) => {
+  /** 真正渲染某个标签的内容：加新的内容类型（网址 / 差异…）就在这里加一支 */
+  const renderTab = (tab: SidePanelTab, active: boolean) => {
     if (tab.kind === 'file') {
       return (
         <WorkspaceFilePanel
@@ -376,6 +394,20 @@ function SidePanel({
           onDirtyChange={dirtyHandlerOf(tab.id)}
           // 刷新归容器（标签右键菜单）：面板把动作登记上来
           onReloadReady={reloadRegistrarOf(tab.id)}
+          onClose={() => onCloseTab(tab.id)}
+        />
+      )
+    }
+    if (tab.kind === 'service') {
+      // 会话 id 取标签自己的（全局视图里服务可能属于另一个会话）；切走时停轮询、不卸载
+      return (
+        <ServiceTerminal
+          sessionId={tab.sessionId}
+          serviceId={tab.serviceId}
+          name={tab.name}
+          sessionLabel={tab.sessionLabel}
+          active={active}
+          // 头部那颗 ✕ 与标签栏的 × 同一条路：服务终端没有草稿，直接关
           onClose={() => onCloseTab(tab.id)}
         />
       )
@@ -572,7 +604,7 @@ function SidePanel({
               className="side-panel-pane"
               role="tabpanel"
               hidden={tab.id !== current?.id}>
-              {renderTab(tab)}
+              {renderTab(tab, tab.id === current?.id)}
             </div>
           )
         })}
@@ -587,7 +619,7 @@ function SidePanel({
       ref={panelRef}
       className={`side-panel${resizing ? ' is-resizing' : ''}${expanded ? ' is-full' : ''}`}
       // 占满态直接铺满「聊天区 + 面板」的整块可用宽度（宿主这时已经把聊天区藏起来了）
-      style={{ width: expanded ? available : width }}>
+      style={{ width: shownWidth }}>
       <div
         className="side-panel-resizer"
         role="separator"
@@ -599,7 +631,15 @@ function SidePanel({
       <div className="side-panel-tabs" role="tablist" ref={tabsRef}>
         {arranged.map((tab) => {
           const active = tab.id === current?.id
-          const label = tab.kind === 'file' ? tabLabel(tab.path) : tab.id
+          const label =
+            tab.kind === 'file' ? tabLabel(tab.path) : tab.name || tab.serviceId
+          // 服务标签的 tooltip 带上归属会话：两个会话各有一个 dev 时要分得清
+          const title =
+            tab.kind === 'file'
+              ? tab.path
+              : tab.sessionLabel
+                ? `${label} · ${tpl('会话：$__name__', { name: tab.sessionLabel })}`
+                : label
           return (
             <div
               key={tab.id}
@@ -612,17 +652,13 @@ function SidePanel({
               }`}
               onMouseDown={(event) => startTabDrag(event, tab)}
               // 右键在标签上开菜单；空白处不弹（不给「关谁」的歧义）
-              onContextMenu={
-                tab.kind === 'file'
-                  ? (event) => tabMenu.openAt(event, { id: tab.id, path: tab.path })
-                  : undefined
-              }>
+              onContextMenu={(event) => tabMenu.openAt(event, { id: tab.id })}>
               <button
                 type="button"
                 role="tab"
                 aria-selected={active}
                 className="side-panel-tab-btn"
-                title={tab.kind === 'file' ? tab.path : label}
+                title={title}
                 onClick={() => {
                   // 拖完松手的那一下 click（指针还在被拖的标签上）不算点击
                   const suppression = suppressClickRef.current
@@ -637,6 +673,11 @@ function SidePanel({
                   onActiveChange(tab.id)
                 }}>
                 {tab.kind === 'file' && <FileTypeIcon filename={label} className="side-panel-tab-icon" />}
+                {tab.kind === 'service' && (
+                  <span className="side-panel-tab-icon is-service">
+                    <ServerSvg />
+                  </span>
+                )}
                 <span className="side-panel-tab-name">{label}</span>
                 {dirtyIds.includes(tab.id) && (
                   <span className="side-panel-tab-dirty" title={t('未保存')} />
