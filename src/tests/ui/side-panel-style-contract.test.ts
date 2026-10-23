@@ -4,8 +4,9 @@
  * ① **非激活的标签内容必须真的不显示**：容器靠 `hidden` 属性切标签，一旦 `.side-panel-pane[hidden]`
  *    这条规则没了（或被 `display: flex` 压掉），所有打开的文件会同时挤在一块里 ——
  *    jsdom 不做布局，这个缺陷在 DOM 断言里看不见（元素在、hidden 也在，只是画出来了）。
- * ② **宽度 / 拖拽归容器**：`.workspace-file-panel` 曾经自带 `max-width: 72vw` 与左边框（单面板时代），
+ * ② **宽度归容器且不设固定上限**：`.workspace-file-panel` 曾经自带 `max-width: 72vw` 与左边框（单面板时代），
  *    挪进容器后如果再长回来，就会出现「两层宽度上限」，拖到一半被内层截住。
+ *    容器自己的 72vw / 960 也已拿掉：拖宽的上限就是「聊天区 + 面板」的可用宽度。
  * ③ **主题令牌必须真实存在**：写错名字的 `var(--x)` 不报错，只是永远走 fallback，暗色主题下不走眼。
  * ④ **标签栏滚动条必须跟主题**：写了 `scrollbar-width` 就会让 `::-webkit-scrollbar-thumb` 失效，
  *    暗色主题下冒出浅色滚动条。
@@ -42,10 +43,12 @@ describe('右侧面板容器 · 样式契约', () => {
     expect(pane).toContain('display: flex')
   })
 
-  it('宽度上限只留在容器上，文件面板自己不再带（否则两层上限互相截断）', () => {
+  it('宽度只由容器决定，且不设固定上限（上限 = 「聊天区 + 面板」的可用宽度）', () => {
     const container = /\.side-panel\s*\{([^}]*)\}/.exec(panelCss)?.[1]
     expect(container).toBeTruthy()
-    expect(container).toContain('max-width: 72vw')
+    // 别把 72vw / 960 这类固定上限写回来：宽度的上限只在拖拽逻辑里（`maxDragWidth`）
+    expect(container).not.toContain('max-width')
+    expect(container).toContain('flex: none')
 
     const filePanel = /\.workspace-file-panel\s*\{([^}]*)\}/.exec(filePanelCss)?.[1]
     expect(filePanel).toBeTruthy()
@@ -54,6 +57,13 @@ describe('右侧面板容器 · 样式契约', () => {
     // 内容区要自己撑满容器给的那块
     expect(filePanel).toContain('height: 100%')
     expect(filePanel).toContain('width: 100%')
+  })
+
+  it('标签可拖拽：标签上不选中文字，被拖的那个有 is-dragging 态', () => {
+    const tab = /\.side-panel-tab\s*\{([^}]*)\}/.exec(panelCss)?.[1]
+    expect(tab).toBeTruthy()
+    expect(tab).toContain('user-select: none')
+    expect(panelCss).toMatch(/\.side-panel-tab\.is-dragging\s*\{/)
   })
 
   it('标签栏滚动条跟主题：走 --scrollbar-thumb，且不出现 scrollbar-width', () => {

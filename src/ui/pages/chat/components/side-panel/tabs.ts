@@ -10,6 +10,8 @@
  *    没有右邻居再退到左边；全关光就是 `null`（宿主据此把整个容器卸掉）。
  * 4. **批量关闭（标签右键菜单）**：按「逐个 `closeTab`」的口径收敛激活态 —— 语义只有一份，
  *    免得「关闭其他」自己再写一套邻居规则。
+ * 5. **重排（拖标签）**：`moveTab` 的下标是「插入到最终位置」，与拖动时的落点算法同口径
+ *    （见 `index.tsx::startTabDrag`：数「其他标签中线在指针左边」的个数），两边不能各算一套。
  */
 
 /** 右侧面板的一个标签页（目前只有「文件」，后续扩 kind 时在这里加联合项） */
@@ -93,6 +95,25 @@ export function closeTabs(
     tabs: state.tabs,
     activeId: state.activeId ?? state.tabs[0]?.id ?? null,
   }
+}
+
+/**
+ * 把 `id` 挪到第 `toIndex` 位（数组下标，按「先取出再插入」算：右移时落点即最终下标）。
+ * 越界夹进范围、位置没变就返回原引用（宿主据此不做无意义的重渲染）。
+ */
+export function moveTab(
+  tabs: SidePanelTab[],
+  id: string,
+  toIndex: number,
+): SidePanelTab[] {
+  const from = tabs.findIndex((item) => item.id === id)
+  if (from < 0) return tabs
+  const to = Math.max(0, Math.min(tabs.length - 1, toIndex))
+  if (to === from) return tabs
+  const next = [...tabs]
+  const [moved] = next.splice(from, 1)
+  next.splice(to, 0, moved)
+  return next
 }
 
 /** 标签上显示的名字：文件名（路径可能是 Windows 反斜杠） */

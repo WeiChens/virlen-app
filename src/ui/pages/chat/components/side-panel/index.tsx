@@ -8,12 +8,14 @@
  * 3. **切标签不卸载**：所有标签的内容**一直挂着**，只做显隐 —— 换成卸载再挂载，
  *    草稿、Monaco 撤销栈、滚动位置全丢（文件面板的草稿只活在组件 state 里）；
  * 4. **后面还要接别的东西**（网址访问 / 终端）：加一种 kind 只加 `renderTab()` 的一支。
+ * 5. **标签可拖拽换顺序**：顺序归宿主（`tabs` 是它的 state），容器只在拖动中就地预览，
+ *    松手时用 `onMoveTab(id, toIndex)` 上报一次 —— 两边同一个下标口径（`tabs.ts::moveTab`）。
  *
  * 未保存草稿的归属：本容器汇总「任一标签脏」上报宿主（切会话 / 切工作目录前要确认）；
  * 关标签的确认也在这里 —— 但**面板自己的关闭按钮已经确认过一次**，那条路径直接
  * `onCloseTab`，不再问第二遍。
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { t } from '@/ui/i18n'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 import ContextMenu, {
@@ -24,7 +26,7 @@ import { fileMenuItems } from '@/ui/components/shared/ContextMenu/menus'
 import CloseSvg from '@/ui/components/icons/CloseSvg'
 import FileTypeIcon from '@/ui/components/icons/FileTypeIcon'
 import WorkspaceFilePanel from '../workspace-file'
-import { tabLabel, type SidePanelTab } from './tabs'
+import { moveTab, tabLabel, type SidePanelTab } from './tabs'
 import { wheelScrollLeft } from './tab-scroll'
 import './style.scss'
 
@@ -37,6 +39,8 @@ interface Props {
   onActiveChange: (id: string) => void
   /** 关闭某个标签。**调用前草稿确认已经问过**（面板内或本容器的 `requestCloseTab`） */
   onCloseTab: (id: string) => void
+  /** 把标签 `id` 挪到第 `toIndex` 位（拖动松手时上报一次；不传则标签不可拖） */
+  onMoveTab?: (id: string, toIndex: number) => void
   /** 一次关掉多个标签（标签右键菜单）；没传时容器退化为逐个 `onCloseTab` */
   onCloseTabs?: (ids: string[]) => void
   /** 任一标签有未保存草稿（宿主据此在切会话 / 切工作目录前确认） */
@@ -45,12 +49,15 @@ interface Props {
   onExpandedChange?: (expanded: boolean) => void
 }
 
-/** 面板宽度的范围；DEFAULT_WIDTH 只在量不到可用宽度（jsdom / 宿主布局不同）时兜底 */
+/** 面板宽度：只有下限与兜底默认值，**没有固定上限**（最多给到整块可用宽度，见 `maxDragWidth`） */
 const MIN_WIDTH = 360
-const MAX_WIDTH = 960
 const DEFAULT_WIDTH = 560
 /** 聊天区的最小可用宽度：连它都留不住，就让面板占满、聊天区先不显示 */
 const CHAT_MIN_WIDTH = 300
+/** 鼠标移动超过这么多像素才算「拖标签」（否则还是一次点击） */
+const DRAG_THRESHOLD = 4
+/** 拖完松手后多久内到达的 click 算「拖动的尾巴」（浏览器把它紧跟在 mouseup 后面发） */
+const CLICK_AFTER_DRAG_MS = 400
 
 /** 面板和聊天区是同一行的兄弟：`.chat-view` 里的那个 `.chat-main` */
 function chatMainOf(panel: HTMLElement | null): HTMLElement | null {
@@ -68,21 +75,19 @@ function minDragWidth(available: number): number {
   return Math.min(MIN_WIDTH, Math.max(120, available - CHAT_MIN_WIDTH))
 }
 
-/** 打开时占「可用宽度的一半」，再夹进允许范围 */
+/** 打开时占「可用宽度的一半」（没有固定上限，只受可用宽度本身约束） */
 function preferredWidth(available: number): number {
   if (available <= 0) return DEFAULT_WIDTH
-  const max = Math.min(MAX_WIDTH, Math.round(window.innerWidth * 0.72))
-  return Math.min(max, Math.max(minDragWidth(available), Math.round(available / 2)))
+  return Math.min(available, Math.max(minDragWidth(available), Math.round(available / 2)))
 }
 
 /**
- * 拖动上限：常规上限之上，还要够得着「聊天区只剩 300」这条线 —— 再往里就是面板占满，
- * 否则窄窗口里永远触发不到那个状态。
+ * 拖动上限：**不设固定上限** —— 最多给到「聊天区 + 面板」的整块可用宽度。
+ * 再往左就是面板占满（聊天区交给 `expanded` 藏起来），比可用宽度更宽没有意义。
  */
 function maxDragWidth(available: number): number {
-  const cap = Math.round(window.innerWidth * 0.72)
-  if (available <= 0) return Math.min(MAX_WIDTH, cap)
-  return Math.min(MAX_WIDTH, Math.max(cap, available - CHAT_MIN_WIDTH))
+  // 量不到可用宽度时退回窗口宽度：宁可放宽，也别把用户卡在默认宽度上
+  return available > 0 ? available : window.innerWidth
 }
 
 function SidePanel({
@@ -92,6 +97,7 @@ function SidePanel({
   onActiveChange,
   onCloseTab,
   onCloseTabs,
+  onMoveTab,
   onDirtyChange,
   onExpandedChange,
 }: Props) {
@@ -104,6 +110,8 @@ function SidePanel({
   const insetRef = useRef(0)
   /** 有未保存草稿的标签（标签上一个小圆点；宿主据此决定要不要拦一下） */
   const [dirtyIds, setDirtyIds] = useState<string[]>([])
+  /** 正在拖的标签与它当前的落点（null = 没在拖）；落点 = 最终下标，与 `tabs.ts::moveTab` 同口径 */
+  const [drag, setDrag] = useState<{ id: string; index: number } | null>(null)
 
   /**
    * 量一次「聊天区 + 面板」可用的总宽：面板贴右，所以 = 容器右边界 - 聊天区左边界
@@ -183,11 +191,36 @@ function SidePanel({
     [markDirty],
   )
 
+  /**
+   * 每个标签的「刷新」动作（标签右键菜单里的那一项）：面板挂载时登记、卸载时撤回。
+   * 登记器按标签 id 缓存成稳定引用（面板里的 effect 依赖它）；动作存另一张表，菜单直接取。
+   */
+  const reloadActionsRef = useRef(new Map<string, () => void>())
+  const reloadRegistrarsRef = useRef(
+    new Map<string, (reload: (() => void) | null) => void>(),
+  )
+  const reloadRegistrarOf = useCallback((id: string) => {
+    let registrar = reloadRegistrarsRef.current.get(id)
+    if (!registrar) {
+      registrar = (reload) => {
+        if (reload) reloadActionsRef.current.set(id, reload)
+        else reloadActionsRef.current.delete(id)
+      }
+      reloadRegistrarsRef.current.set(id, registrar)
+    }
+    return registrar
+  }, [])
+
   // 标签关掉之后把它的脏状态一起清掉（不清的话「任一脏」会一直是 true）
   useEffect(() => {
     const alive = new Set(tabs.map((tab) => tab.id))
     for (const key of Array.from(dirtyHandlersRef.current.keys())) {
       if (!alive.has(key)) dirtyHandlersRef.current.delete(key)
+    }
+    for (const registry of [reloadActionsRef, reloadRegistrarsRef]) {
+      for (const key of Array.from(registry.current.keys())) {
+        if (!alive.has(key)) registry.current.delete(key)
+      }
     }
     setDirtyIds((prev) =>
       prev.every((id) => alive.has(id)) ? prev : prev.filter((id) => alive.has(id)),
@@ -282,6 +315,8 @@ function SidePanel({
    * 1. 关闭类一律以「右键的那个标签」为锚点（关闭其他 / 关闭右侧不会因为当前激活的是别人而作用错对象）；
    * 2. 「关闭已保存」= 关掉所有**没有**未保存草稿的标签（与 VS Code 同口径）；
    * 3. 文件类动作用全应用唯一那份工厂，`withOpen:false` —— 面板头已经有「在系统程序中打开」。
+   * 4. 「刷新」= 让那个标签的文件面板**重新读盘**（有草稿会先问）：动作住在面板里（`load()` 与
+   *    草稿确认都在那儿），所以由面板登记上来（见 `reloadRegistrarOf`），容器只负责转发。
    */
   function tabMenuItems(target: { id: string; path: string }): ContextMenuItem[] {
     const index = tabs.findIndex((tab) => tab.id === target.id)
@@ -316,8 +351,16 @@ function SidePanel({
         label: t('全部关闭'),
         onClick: () => void requestCloseTabs(tabs.map((tab) => tab.id)),
       },
-      // 分隔线画在第一项文件动作上（关闭类 / 文件类两段）
-      ...fileItems.map((item, i) => (i === 0 ? { ...item, divider: true } : item)),
+      // 刷新归「内容动作」这一段（与文件类动作同一组），分隔线画在它上面
+      {
+        key: 'reload',
+        label: t('刷新'),
+        divider: true,
+        // 面板还没挂载完（刚打开 / 已卸载）时点不了
+        disabled: !reloadActionsRef.current.has(target.id),
+        onClick: () => reloadActionsRef.current.get(target.id)?.(),
+      },
+      ...fileItems,
     ]
   }
 
@@ -331,6 +374,8 @@ function SidePanel({
           // 标题已经在上面的标签栏里了：面板头只留目录 + 操作按钮
           hideTitle
           onDirtyChange={dirtyHandlerOf(tab.id)}
+          // 刷新归容器（标签右键菜单）：面板把动作登记上来
+          onReloadReady={reloadRegistrarOf(tab.id)}
           onClose={() => onCloseTab(tab.id)}
         />
       )
@@ -374,6 +419,169 @@ function SidePanel({
     return () => el.removeEventListener('wheel', onWheel)
   }, [])
 
+  const dragStateRef = useRef<{
+    id: string
+    /** 按下时的下标（也是初始落点） */
+    from: number
+    startX: number
+    /** 指针在标签内的横向位置：拖动时这个点一直跟着指针 */
+    grabOffset: number
+    target: number
+    moved: boolean
+    /** 拖动开始时「其他标签」的中线 x（快照，不随重排变动） */
+    others: number[]
+    /** 已经写到元素上的 translateX（用来把视觉位置换算回布局位置） */
+    applied: number
+    /** 最后一次鼠标 x：重排落地后要用它再校正一次 */
+    lastX: number
+  } | null>(null)
+  /** 拖完松手那一次 click 是拖动的尾巴：只吞「同一个标签 + 短窗口内」的那一下（自己会过期，不残留） */
+  const suppressClickRef = useRef<{ id: string; until: number } | null>(null)
+
+  /**
+   * 让被拖的标签跟住指针：视觉左边缘 = 指针 - 抓握偏移。
+   *
+   * 位移是**直接写元素 style**的，不走 state：每帧 setState 会让整个面板（含编辑器）重渲染，
+   * 拖起来一跳一跳的。重排后布局位置变了，靠「视觉位置 - 已写位移」反算当前布局位置再重算，
+   * 所以标签始终贴在指针上（不会因为换了一格而顺着旧位移滑一下）。
+   */
+  function followPointer(state: { id: string; grabOffset: number; applied: number }, clientX: number): void {
+    const el = tabRefs.current.get(state.id)
+    if (!el) return
+    const layoutLeft = el.getBoundingClientRect().left - state.applied
+    const next = Math.round(clientX - state.grabOffset - layoutLeft)
+    if (next === state.applied) return
+    state.applied = next
+    el.style.transform = `translateX(${next}px)`
+  }
+
+  /**
+   * 拖标签换顺序。用鼠标事件而不是 HTML5 拖拽：`dragDropEnabled: true`（拖文件进输入框要真实路径，
+   * 见 §11.8）时页面收不到 HTML5 drag / drop，`draggable` 在这里根本不触发。
+   *
+   * 落点只看**开始拖那一刻**的中线快照：用实时 DOM 中线的话，标签一重排中线跟着跑，
+   * 指针停在两格之间就会来回跳。
+   */
+  const startTabDrag = (event: React.MouseEvent, tab: SidePanelTab) => {
+    if (event.button !== 0 || !onMoveTab || tabs.length < 2) return
+    // 关标签那颗 × 上按下不是拖标签
+    if ((event.target as HTMLElement).closest('.side-panel-tab-close')) return
+    const from = tabs.findIndex((item) => item.id === tab.id)
+    if (from < 0) return
+    const rects = tabs.map((item) => ({
+      id: item.id,
+      rect: tabRefs.current.get(item.id)?.getBoundingClientRect() ?? null,
+    }))
+    const own = rects.find((item) => item.id === tab.id)?.rect ?? null
+    const others = rects
+      .filter((item) => item.id !== tab.id)
+      .map((item) => (item.rect ? item.rect.left + item.rect.width / 2 : 0))
+    dragStateRef.current = {
+      id: tab.id,
+      from,
+      startX: event.clientX,
+      grabOffset: own ? event.clientX - own.left : 0,
+      target: from,
+      moved: false,
+      others,
+      applied: 0,
+      lastX: event.clientX,
+    }
+
+    const onMove = (moveEvent: MouseEvent) => {
+      const state = dragStateRef.current
+      if (!state) return
+      if (!state.moved) {
+        if (Math.abs(moveEvent.clientX - state.startX) < DRAG_THRESHOLD) return
+        state.moved = true
+        setDrag({ id: state.id, index: state.target })
+        document.body.style.cursor = 'grabbing'
+        document.body.style.userSelect = 'none'
+      }
+      state.lastX = moveEvent.clientX
+      // 落点 = 「中线在指针左边的其他标签」个数（= 取出被拖标签后的插入位置，也是最终下标）
+      const target = state.others.filter((center) => center < moveEvent.clientX).length
+      if (target !== state.target) {
+        state.target = target
+        setDrag({ id: state.id, index: target })
+      }
+      followPointer(state, moveEvent.clientX)
+    }
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      const state = dragStateRef.current
+      dragStateRef.current = null
+      setDrag(null)
+      if (!state || !state.moved) return
+      // 位移只是拖动中的视觉效果：松手后标签回到它自己的格子里
+      const el = tabRefs.current.get(state.id)
+      if (el) el.style.transform = ''
+      // 用时钟窗口而不是永久标志：click 未如期到达（松手时指针不在标签上）也不会吞掉下一次点击
+      suppressClickRef.current = { id: state.id, until: performance.now() + CLICK_AFTER_DRAG_MS }
+      // 没换位置就别惊动宿主
+      if (state.target !== state.from) onMoveTab?.(state.id, state.target)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+
+  // 拖动中按落点就地重排（松手时宿主落同一份顺序），用户不用等松手才看到结果
+  const arranged = drag ? moveTab(tabs, drag.id, drag.index) : tabs
+
+  // 重排落地后按新布局再校正一次位移：否则标签会「跳一整格」到下一帧才被拉回指针（layout effect = 上屏前）
+  useLayoutEffect(() => {
+    const state = dragStateRef.current
+    if (drag && state) followPointer(state, state.lastX)
+  }, [drag])
+
+  /**
+   * 内容块的渲染顺序 = **打开顺序**，与标签顺序解耦。
+   *
+   * ⚠️ 不能跟着 `tabs` 排序：挪 DOM 会让 React 重连那棵子树的 effect（dev 下还会双调用），
+   * 而 `@monaco-editor/react@4.7` 的 mount-only 清理会 `editor.dispose()` 却不清自己持有的实例，
+   * 紧接着的一次性 effect 又 `setModel` 到已 dispose 的编辑器上 —— 就是
+   * 「InstantiationService has been disposed」+ 视图 rAF 里的 「reading 'domNode'」。
+   * 内容块一次只显一个，顺序本来就无关紧要。
+   */
+  const paneIdsRef = useRef<string[]>([])
+  const paneIds = useMemo(() => {
+    const alive = new Set(tabs.map((tab) => tab.id))
+    const kept = paneIdsRef.current.filter((id) => alive.has(id))
+    for (const tab of tabs) if (!kept.includes(tab.id)) kept.push(tab.id)
+    paneIdsRef.current = kept
+    return kept
+  }, [tabs])
+
+  /**
+   * 内容区与拖动无关：单独 memo 一次，免得拖动中的每一帧都把里面的编辑器全重渲染一遍
+   *（`@monaco-editor/react` 每帧都会 `updateOptions` 一次）。依赖只写 `renderTab` 真正读的东西。
+   */
+  const body = useMemo(
+    () => (
+      <div className="side-panel-body">
+        {paneIds.map((id) => {
+          const tab = tabs.find((item) => item.id === id)
+          if (!tab) return null
+          return (
+            // 所有标签的内容**都挂着**，只切显隐：卸载会把草稿 / 撤销栈 / 滚动位置一起抹掉
+            <div
+              key={tab.id}
+              className="side-panel-pane"
+              role="tabpanel"
+              hidden={tab.id !== current?.id}>
+              {renderTab(tab)}
+            </div>
+          )
+        })}
+      </div>
+    ),
+    // eslint 不在本仓：`renderTab` 读取的只有这几个，漏一个就会出现「切了标签内容不换」
+    [paneIds, tabs, current?.id, sessionId, dirtyHandlerOf, onCloseTab],
+  )
+
   return (
     <aside
       ref={panelRef}
@@ -389,7 +597,7 @@ function SidePanel({
       />
 
       <div className="side-panel-tabs" role="tablist" ref={tabsRef}>
-        {tabs.map((tab) => {
+        {arranged.map((tab) => {
           const active = tab.id === current?.id
           const label = tab.kind === 'file' ? tabLabel(tab.path) : tab.id
           return (
@@ -399,7 +607,10 @@ function SidePanel({
                 if (el) tabRefs.current.set(tab.id, el)
                 else tabRefs.current.delete(tab.id)
               }}
-              className={`side-panel-tab${active ? ' is-active' : ''}`}
+              className={`side-panel-tab${active ? ' is-active' : ''}${
+                drag?.id === tab.id ? ' is-dragging' : ''
+              }`}
+              onMouseDown={(event) => startTabDrag(event, tab)}
               // 右键在标签上开菜单；空白处不弹（不给「关谁」的歧义）
               onContextMenu={
                 tab.kind === 'file'
@@ -412,7 +623,19 @@ function SidePanel({
                 aria-selected={active}
                 className="side-panel-tab-btn"
                 title={tab.kind === 'file' ? tab.path : label}
-                onClick={() => onActiveChange(tab.id)}>
+                onClick={() => {
+                  // 拖完松手的那一下 click（指针还在被拖的标签上）不算点击
+                  const suppression = suppressClickRef.current
+                  if (
+                    suppression &&
+                    suppression.id === tab.id &&
+                    performance.now() < suppression.until
+                  ) {
+                    suppressClickRef.current = null
+                    return
+                  }
+                  onActiveChange(tab.id)
+                }}>
                 {tab.kind === 'file' && <FileTypeIcon filename={label} className="side-panel-tab-icon" />}
                 <span className="side-panel-tab-name">{label}</span>
                 {dirtyIds.includes(tab.id) && (
@@ -432,18 +655,7 @@ function SidePanel({
         })}
       </div>
 
-      <div className="side-panel-body">
-        {tabs.map((tab) => (
-          // 所有标签的内容**都挂着**，只切显隐：卸载会把草稿 / 撤销栈 / 滚动位置一起抹掉
-          <div
-            key={tab.id}
-            className="side-panel-pane"
-            role="tabpanel"
-            hidden={tab.id !== current?.id}>
-            {renderTab(tab)}
-          </div>
-        ))}
-      </div>
+      {body}
 
       {tabMenu.state && (
         <ContextMenu

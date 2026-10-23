@@ -17,7 +17,8 @@
  *    避免把文件直接挂到 webview 的 file://（那需要放开 asset 协议范围）；图片交给
  *    `image-viewer.tsx`（滚轮缩放 / 拖动平移 / 右键复制与旋转），本文件只管取字节。
  * 5. **标题与宽度不归本组件**：面板在容器（`../side-panel`）的标签页里，标题栏已经写了文件名，
- *    所以容器会传 `hideTitle`，这里只留「目录 + 操作按钮」一行；宽度 / 拖拽 / 占满也由容器管。
+ *    所以容器会传 `hideTitle`，这里只留「目录 + 图标按钮（保存 / 关闭）」一行；**刷新不在头部**，
+ *    是标签右键菜单里的一项（动作由本面板经 `onReloadReady` 登记上去）；宽度 / 拖拽 / 占满也由容器管。
  * 6. **HTML 的脚本 / 外部资源权限来自全局设置**（设置 → 安全 → HTML 预览）：面板只在被安全默认
  *    挡住时给一条提示 + 指路，不在这里放开关 —— 那等于每打开一个文件重勾一次。
  * 7. **正在看的这个文件会盯磁盘**（AI / 终端 / 外部编辑器都算）：内容变了且本地干净 →
@@ -42,7 +43,7 @@ import CodeEditor from '@/ui/components/code-editor/CodeEditor'
 import { applyTextChange } from '@/ui/components/code-editor/applyTextChange'
 import FileTypeIcon from '@/ui/components/icons/FileTypeIcon'
 import CloseSvg from '@/ui/components/icons/CloseSvg'
-import RefreshSvg from '@/ui/components/icons/RefreshSvg'
+import SaveSvg from '@/ui/components/icons/SaveSvg'
 import ExportSvg from '@/ui/components/icons/ExportSvg'
 import MarkdownRenderer from '@/ui/pages/chat/components/message/markdown-renderer'
 import ImageViewer from './image-viewer'
@@ -86,6 +87,13 @@ interface Props {
   onClose: () => void
   /** 脏标记变化（宿主据此在「切文件 / 切会话」前确认） */
   onDirtyChange?: (dirty: boolean) => void
+  /**
+   * 下发「重新加载」动作（卸载时下发 null）。
+   *
+   * 头部已经没有刷新按钮了：刷新是**标签右键菜单**里的一项（与关闭类动作放在一起，
+   * 不占头部那排按钮的位置），而菜单在容器里 —— 所以动作得往上报一份。
+   */
+  onReloadReady?: (reload: (() => void) | null) => void
 }
 
 type LoadState =
@@ -149,6 +157,7 @@ function WorkspaceFilePanel({
   hideTitle = false,
   onClose,
   onDirtyChange,
+  onReloadReady,
 }: Props) {
   const name = baseName(path)
   const [state, setState] = useState<LoadState>({ status: 'loading' })
@@ -363,7 +372,7 @@ function WorkspaceFilePanel({
     readingRef.current = true
     void readDiskChange()
       // 读盘失败的常见原因（被删 / 被锁）已在 readDiskChange 里按类型处理，这里只兜住意外
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => {
         readingRef.current = false
         if (rerunRef.current) {
@@ -416,6 +425,19 @@ function WorkspaceFilePanel({
     }
     await load()
   }, [load])
+
+  /**
+   * 把「重新加载」交给容器（刷新是标签右键菜单里的一项，不在头部）：挂载时登记、卸载时撤回。
+   * 登记只做一次，动作本身走 ref（`reload` 会随 `load` 换身份）。
+   */
+  const reloadRef = useRef(reload)
+  reloadRef.current = reload
+  const onReloadReadyRef = useRef(onReloadReady)
+  onReloadReadyRef.current = onReloadReady
+  useEffect(() => {
+    onReloadReadyRef.current?.(() => void reloadRef.current())
+    return () => onReloadReadyRef.current?.(null)
+  }, [])
 
   const requestClose = useCallback(async () => {
     if (dirtyRef.current) {
@@ -720,29 +742,22 @@ function WorkspaceFilePanel({
         {textFile && (
           <button
             type="button"
-            className="wfp-action is-primary"
+            className="wfp-icon-btn is-primary"
             onClick={() => void saveRef.current()}
             disabled={!dirty || saving}
-            title={`${t('保存')} (Ctrl+S)`}>
-            {saving ? t('保存中…') : t('保存')}
+            title={`${t('保存')} (Ctrl+S)`}
+            aria-label={saving ? t('保存中…') : t('保存')}>
+            {saving ? <LoadingIcon /> : <SaveSvg />}
           </button>
         )}
-        <button
-          type="button"
-          className="wfp-icon-btn"
-          onClick={() => void reload()}
-          title={t('重新加载')}
-          aria-label={t('重新加载')}>
-          <RefreshSvg />
-        </button>
-        <button
+        {/* <button
           type="button"
           className="wfp-icon-btn"
           onClick={openInSystem}
           title={t('在系统程序中打开')}
           aria-label={t('在系统程序中打开')}>
           <ExportSvg />
-        </button>
+        </button> */}
         <button
           type="button"
           className="wfp-icon-btn"

@@ -106,7 +106,7 @@ async function mount(path = 'E:/repo/src/a.ts') {
 }
 
 const editor = () => document.querySelector<HTMLTextAreaElement>('.mock-code-editor')
-const saveBtn = () => document.querySelector<HTMLButtonElement>('.wfp-action.is-primary')
+const saveBtn = () => document.querySelector<HTMLButtonElement>('.wfp-icon-btn.is-primary')
 const note = () => document.querySelector<HTMLElement>('.wfp-disk-note')
 const noteBtn = (label: string) =>
   [...(note()?.querySelectorAll<HTMLButtonElement>('.wfp-action') ?? [])].find(

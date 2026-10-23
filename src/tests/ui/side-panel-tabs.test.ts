@@ -9,6 +9,7 @@
  *
  * 另加一条批量口径（标签右键菜单）：`closeTabs` 必须与逐个 `closeTab` 收敛出同一个结果 ——
  * 「关闭其他 / 关闭右侧 / 关闭已保存 / 全部关闭」都会走它。
+ * 最后一组是重排（拖标签换顺序）：`moveTab` 的下标就是最终下标，与容器的落点算法同口径。
  */
 import { expect, it } from 'vitest'
 import {
@@ -16,6 +17,7 @@ import {
   closeTabs,
   fileTab,
   fileTabId,
+  moveTab,
   openFileTab,
   tabDir,
   tabLabel,
@@ -142,4 +144,20 @@ it('标题与目录：兼容 Windows 反斜杠', () => {
   expect(tabLabel('E:/repo/src/a.ts')).toBe('a.ts')
   expect(tabDir('E:\\repo\\src\\a.ts')).toBe('E:/repo/src')
   expect(tabDir('a.ts')).toBe('')
+})
+
+/** 重排（拖标签）：下标是「插入到最终位置」，与拖拽落点算法同口径 */
+it('重排：往右挪 / 往左挪都按最终下标落位', () => {
+  const tabs = [fileTab('a'), fileTab('b'), fileTab('c')]
+  expect(moveTab(tabs, fileTabId('a'), 2).map((tab) => tab.path)).toEqual(['b', 'c', 'a'])
+  expect(moveTab(tabs, fileTabId('c'), 0).map((tab) => tab.path)).toEqual(['c', 'a', 'b'])
+  expect(moveTab(tabs, fileTabId('a'), 1).map((tab) => tab.path)).toEqual(['b', 'a', 'c'])
+})
+
+it('重排：没动位置 / 不存在的 id 都返回原引用（不触发重渲染），越界夹进范围', () => {
+  const tabs = [fileTab('a'), fileTab('b')]
+  expect(moveTab(tabs, fileTabId('a'), 0)).toBe(tabs)
+  expect(moveTab(tabs, fileTabId('nope'), 1)).toBe(tabs)
+  expect(moveTab(tabs, fileTabId('a'), 99).map((tab) => tab.path)).toEqual(['b', 'a'])
+  expect(moveTab(tabs, fileTabId('b'), -3).map((tab) => tab.path)).toEqual(['b', 'a'])
 })

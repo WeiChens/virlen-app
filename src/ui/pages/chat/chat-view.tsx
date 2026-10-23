@@ -42,7 +42,13 @@ import GitEntry from './components/git/GitEntry'
 import SearchDialog from './components/search'
 // 右侧面板容器：多个文件各占一个标签（后面还要接网址访问 / 终端）
 import SidePanel from './components/side-panel'
-import { closeTab, closeTabs, openFileTab, type SidePanelTab } from './components/side-panel/tabs'
+import {
+  closeTab,
+  closeTabs,
+  moveTab,
+  openFileTab,
+  type SidePanelTab,
+} from './components/side-panel/tabs'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 
 import { useToolUI } from './components/tool-ui'
@@ -315,6 +321,17 @@ function ChatView() {
   const handleCloseTabs = useCallback((ids: string[]) => {
     applyPanelTabs(closeTabs(panelTabsRef.current, ids, activeTabIdRef.current))
   }, [applyPanelTabs])
+
+  /** 拖标签换顺序：只改顺序，激活态与草稿都不动（重排口径在 `tabs.ts::moveTab`） */
+  const handleMoveTab = useCallback(
+    (id: string, toIndex: number) => {
+      applyPanelTabs({
+        tabs: moveTab(panelTabsRef.current, id, toIndex),
+        activeId: activeTabIdRef.current,
+      })
+    },
+    [applyPanelTabs],
+  )
 
   /**
    * 有未保存草稿时先问一句（无草稿直接放行）。
@@ -1179,6 +1196,7 @@ function ChatView() {
           onActiveChange={setActiveTabId}
           onCloseTab={handleCloseTab}
           onCloseTabs={handleCloseTabs}
+          onMoveTab={handleMoveTab}
           onDirtyChange={handleFileDirtyChange}
           // 占满（聊天区不足 300px）→ 把聊天区藏起来，面板接管整块宽度
           onExpandedChange={setFilePanelFull}

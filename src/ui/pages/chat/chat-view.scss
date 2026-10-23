@@ -36,7 +36,6 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
-    overflow: hidden;
   }
 
   /* 右侧文件面板占满（聊天区会被压到不足 300px）：聊天区先不显示，回来再显示 */

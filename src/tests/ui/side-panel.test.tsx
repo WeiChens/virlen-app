@@ -1,7 +1,7 @@
 /**
  * 右侧面板容器的口径（标签页 + 宽度）。
  *
- * 五条被钉住的行为：
+ * 六条被钉住的行为：
  * 1. **切标签不卸载**：所有标签的内容一直在 DOM 里，只切 `hidden` ——
  *    卸载会把草稿 / 撤销栈 / 滚动位置一起抹掉（这是加标签页最容易踩的坑）；
  * 2. **关标签前确认**：有未保存草稿先问一句，干净就直接关（面板自己那颗关闭按钮
@@ -9,7 +9,12 @@
  * 3. **脏标记汇总**：任一标签脏就上报宿主（切会话 / 切工作目录要拦一下），
  *    标签关掉后顺手归零（否则「任一脏」会一直是 true）；
  * 4. **宽度归容器**：挂载时按「聊天区 + 面板」可用宽度的一半定宽，加标签 / 切标签不重算；
- * 5. **占满**：聊天区被压到不足 300px 时面板铺满并通知宿主藏起聊天区，卸载时恢复。
+ *    拖宽**没有固定上限**，最多拖到面板占满（上限 = 可用宽度）；
+ * 5. **占满**：聊天区被压到不足 300px 时面板铺满并通知宿主藏起聊天区，卸载时恢复；
+ * 6. **拖标签换顺序**：用鼠标事件（HTML5 拖拽在 `dragDropEnabled: true` 下收不到，§11.8），
+ *    被拖的标签跟着指针（内联 `transform`），拖动中就地预览、松手才上报一次最终下标
+ *    （下标口径见 `tabs.ts::moveTab`）；**内容块按打开顺序排，不跟着标签排序** —— 挪 DOM 会重连
+ *    子树的 effect，`@monaco-editor/react` 会把编辑器误 dispose 再 `setModel` 上去。
  *
  * 文件面板本身被替换成桩：这里只验容器怎么摆它、怎么汇总它，真实文件语义在
  * `workspace-file-panel` / `workspace-file-watch` 两个用例里。
@@ -57,35 +62,50 @@ vi.mock('@/services/editor-service', () => ({
   },
 }))
 /** 文件面板换成桩：容器只依赖它的 props（path / hideTitle / onDirtyChange / onClose） */
-vi.mock('@/ui/pages/chat/components/workspace-file', () => ({
-  default: (props: {
-    path: string
-    hideTitle?: boolean
-    onDirtyChange?: (dirty: boolean) => void
-    onClose: () => void
-  }) => (
-    <div
-      className="workspace-file-panel"
-      data-path={props.path}
-      data-hide-title={String(!!props.hideTitle)}>
-      <button type="button" className="stub-dirty" onClick={() => props.onDirtyChange?.(true)}>
-        dirty
-      </button>
-      <button type="button" className="stub-clean" onClick={() => props.onDirtyChange?.(false)}>
-        clean
-      </button>
-      <button type="button" className="stub-close" onClick={props.onClose}>
-        close
-      </button>
-    </div>
-  ),
-}))
+vi.mock('@/ui/pages/chat/components/workspace-file', async () => {
+  const { useEffect } = await import('react')
+  return {
+    default: (props: {
+      path: string
+      hideTitle?: boolean
+      onDirtyChange?: (dirty: boolean) => void
+      onReloadReady?: (reload: (() => void) | null) => void
+      onClose: () => void
+    }) => {
+      // 真面板会把「刷新」登记给容器（标签右键菜单里的那一项），这里同样登记一份可断言的
+      useEffect(() => {
+        props.onReloadReady?.(() => reloadCalls.push(props.path))
+        return () => props.onReloadReady?.(null)
+      }, [])
+      return (
+        <div
+          className="workspace-file-panel"
+          data-path={props.path}
+          data-hide-title={String(!!props.hideTitle)}>
+          <button type="button" className="stub-dirty" onClick={() => props.onDirtyChange?.(true)}>
+            dirty
+          </button>
+          <button type="button" className="stub-clean" onClick={() => props.onDirtyChange?.(false)}>
+            clean
+          </button>
+          <button type="button" className="stub-close" onClick={props.onClose}>
+            close
+          </button>
+        </div>
+      )
+    },
+  }
+})
 
 /** 稳定引用：容器里的 effect 依赖这几个回调，内联箭头会让它们每帧重跑 */
 const activeChanges: string[] = []
 const closedIds: string[] = []
 /** 批量关闭（标签右键菜单）：一次回调带来一批 id */
 const closedBatches: string[][] = []
+/** 拖标签换顺序：松手时上报的（id, 最终下标） */
+const movedTabs: [string, number][] = []
+/** 标签右键「刷新」：转发到了哪个面板（记路径） */
+const reloadCalls: string[] = []
 const dirtyReports: boolean[] = []
 const expandedReports: boolean[] = []
 
@@ -98,6 +118,9 @@ function onCloseTab(id: string) {
 function onCloseTabs(ids: string[]) {
   closedBatches.push(ids)
 }
+function onMoveTab(id: string, toIndex: number) {
+  movedTabs.push([id, toIndex])
+}
 function onDirtyChange(dirty: boolean) {
   dirtyReports.push(dirty)
 }
@@ -108,6 +131,7 @@ function onExpandedChange(expanded: boolean) {
 const TAB_A = fileTab('E:/repo/src/a.ts')
 const TAB_B = fileTab('E:/repo/src/b.ts')
 const TAB_C = fileTab('E:/repo/src/c.ts')
+const TAB_D = fileTab('E:/repo/src/d.ts')
 
 ;(globalThis as never as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true
@@ -158,6 +182,7 @@ async function renderPanel(
           onCloseTab={onCloseTab}
           // 不传时容器退化为逐个 onCloseTab（保留既有用例的断言口径）
           onCloseTabs={opts.batch ? onCloseTabs : undefined}
+          onMoveTab={onMoveTab}
           onDirtyChange={onDirtyChange}
           onExpandedChange={onExpandedChange}
         />
@@ -207,6 +232,11 @@ async function clickMenu(label: string) {
 
 beforeAll(() => {
   Element.prototype.getBoundingClientRect = function (this: Element) {
+    // 标签在 jsdom 里没布局：按「第几个」给假矩形（宽 100 + 间距 2），拖拽用例靠它算中线
+    if (this.classList.contains('side-panel-tab')) {
+      const index = [...document.querySelectorAll('.side-panel-tab')].indexOf(this)
+      if (index >= 0) return fakeRect(index * 102, 100)
+    }
     if (!layout) return realRect.call(this)
     const { available, inset } = layout
     const right = inset + available
@@ -225,6 +255,8 @@ beforeEach(() => {
   activeChanges.length = 0
   closedIds.length = 0
   closedBatches.length = 0
+  movedTabs.length = 0
+  reloadCalls.length = 0
   dirtyReports.length = 0
   expandedReports.length = 0
   messageBoxMock.mockReset()
@@ -425,6 +457,134 @@ it('拖到聊天区不足 300px 时面板占满，拖回来再恢复', async () 
   })
 })
 
+/** 拖宽不设固定上限：能一路拖到「面板占满」（旧实现封顶 MIN(960, 72vw)） */
+it('拖宽不设固定上限：能一路拖到面板占满', async () => {
+  layout = { available: 2000, inset: 200 }
+  await renderPanel([TAB_A], TAB_A.id)
+  expect(panel().style.width).toBe('1000px')
+
+  const right = 2200 // inset 200 + 可用 2000
+  act(() => {
+    document
+      .querySelector('.side-panel-resizer')!
+      .dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  })
+  act(() => {
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: right - 1500 }))
+  })
+  // 1500 既超过旧常量 960，也超过 72vw（jsdom 窗口 1024 → 737）
+  expect(panel().style.width).toBe('1500px')
+  expect(panel().classList.contains('is-full')).toBe(false)
+
+  // 过「聊天区只剩 300」那条线：面板占满
+  act(() => {
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: right - 1800 }))
+  })
+  expect(panel().classList.contains('is-full')).toBe(true)
+  expect(panel().style.width).toBe('2000px')
+
+  act(() => {
+    document.dispatchEvent(new MouseEvent('mouseup'))
+  })
+})
+
+/**
+ * 拖标签换顺序：不能靠 HTML5 拖拽（`dragDropEnabled: true` 时页面收不到 drag / drop，§11.8），
+ * 所以走鼠标事件；落点只看开始拖那一刻的中线快照，拖动中就地预览，松手才上报宿主。
+ */
+it('拖标签换顺序：拖动中就地重排，松手时上报最终下标', async () => {
+  await renderPanel([TAB_A, TAB_B, TAB_C], TAB_A.id)
+  const names = () =>
+    tabsEls().map((el) => el.querySelector('.side-panel-tab-name')!.textContent)
+  expect(names()).toEqual(['a.ts', 'b.ts', 'c.ts'])
+
+  // 中线：A=50 / B=152 / C=254（见 beforeAll 里的假矩形）
+  await act(async () => {
+    tabsEls()[0].dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 50 }))
+  })
+  await act(async () => {
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: 300 }))
+  })
+  // 指针越过 B、C 的中线：被拖的 A 已经就位到最后
+  expect(names()).toEqual(['b.ts', 'c.ts', 'a.ts'])
+  const dragged = tabsEls()[2]
+  expect(dragged.classList.contains('is-dragging')).toBe(true)
+  // 标签跟着指针：位移直接写在元素 style 上，布局格子留在原处当「洞」
+  expect(dragged.style.transform).toContain('translateX(')
+
+  await act(async () => {
+    document.dispatchEvent(new MouseEvent('mouseup'))
+  })
+  expect(movedTabs).toEqual([[TAB_A.id, 2]])
+  expect(dragged.classList.contains('is-dragging')).toBe(false)
+  // 松手后标签回到自己的格子（位移只是拖动中的视觉效果）
+  expect(dragged.style.transform).toBe('')
+
+  // 宿主按上报的下标落库后重渲染：顺序保持（容器不在松手后自己回弹）
+  await renderPanel([TAB_B, TAB_C, TAB_A], TAB_A.id)
+  expect(names()).toEqual(['b.ts', 'c.ts', 'a.ts'])
+
+  // 拖完那一下 click（指针仍在被拖的标签上）是拖动的尾巴，不算「点标签」
+  act(() => tabsEls()[2].querySelector<HTMLButtonElement>('.side-panel-tab-btn')!.click())
+  expect(activeChanges).toEqual([])
+  // 别的标签不受影响，照常激活
+  act(() => tabsEls()[0].querySelector<HTMLButtonElement>('.side-panel-tab-btn')!.click())
+  expect(activeChanges).toEqual([TAB_B.id])
+})
+
+/**
+ * 重排标签**绝不能带着内容块一起重排**：挪 DOM 会让 React 重连/重跑那棵子树的 effect（dev 下还会双调用），
+ * `@monaco-editor/react` 的 mount-only 清理会把编辑器 dispose 掉、紧接着的一次性 effect 又 `setModel`，
+ * 于是报「InstantiationService has been disposed」。内容块按**打开顺序**排，与标签顺序无关。
+ */
+it('标签重排不改内容块的 DOM 顺序，也不重建内容块', async () => {
+  const paths = () =>
+    panes().map((el) => el.querySelector('.workspace-file-panel')?.getAttribute('data-path'))
+  const tabNames = () =>
+    tabsEls().map((el) => el.querySelector('.side-panel-tab-name')!.textContent)
+
+  await renderPanel([TAB_A, TAB_B, TAB_C], TAB_A.id)
+  expect(paths()).toEqual(['E:/repo/src/a.ts', 'E:/repo/src/b.ts', 'E:/repo/src/c.ts'])
+  const before = panes()
+
+  // 宿主按拖拽结果落库：标签变成 c / a / b
+  await renderPanel([TAB_C, TAB_A, TAB_B], TAB_A.id)
+  expect(tabNames()).toEqual(['c.ts', 'a.ts', 'b.ts'])
+  // 内容块仍按打开顺序，而且是同一批 DOM 节点（没被重建）
+  expect(paths()).toEqual(['E:/repo/src/a.ts', 'E:/repo/src/b.ts', 'E:/repo/src/c.ts'])
+  const after = panes()
+  expect(after).toHaveLength(before.length)
+  before.forEach((el, i) => expect(el).toBe(after[i]))
+
+  // 新开的标签追加在末尾（而不是插到“标签顺序”的位置）
+  await renderPanel([TAB_C, TAB_A, TAB_B, TAB_D], TAB_D.id)
+  expect(paths()).toEqual([
+    'E:/repo/src/a.ts',
+    'E:/repo/src/b.ts',
+    'E:/repo/src/c.ts',
+    'E:/repo/src/d.ts',
+  ])
+})
+
+/** 没挪出阈值就松开：还是一次点击（标签不抖、不上报重排） */
+it('按下后没挪出阈值：不算拖动，松手照常激活', async () => {
+  await renderPanel([TAB_A, TAB_B], TAB_A.id)
+  await act(async () => {
+    tabsEls()[0].dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 50 }))
+  })
+  await act(async () => {
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: 52 }))
+  })
+  expect(tabsEls()[0].classList.contains('is-dragging')).toBe(false)
+  await act(async () => {
+    document.dispatchEvent(new MouseEvent('mouseup'))
+  })
+  expect(movedTabs).toEqual([])
+
+  act(() => tabsEls()[0].querySelector<HTMLButtonElement>('.side-panel-tab-btn')!.click())
+  expect(activeChanges).toEqual([TAB_A.id])
+})
+
 /**
  * 标签右键菜单（VS Code 口径）：关闭类动作都作用于「右键的那个标签」，与当前激活的是谁无关。
  * 顺序与禁用条件一并钉住 —— 最后一个标签还能点「关闭右侧标签页」就是 bug。
@@ -439,6 +599,7 @@ it('标签右键：弹出关闭类 + 文件类菜单，禁用条件跟着位置�
     '关闭右侧标签页',
     '关闭已保存',
     '全部关闭',
+    '刷新',
     '编辑器打开',
     '在文件管理器中显示',
     '复制路径',
@@ -456,6 +617,16 @@ it('标签右键：弹出关闭类 + 文件类菜单，禁用条件跟着位置�
   act(() => stub('E:/repo/src/b.ts')!.querySelector<HTMLButtonElement>('.stub-dirty')!.click())
   await rightClickTab(0)
   expect(menuButton('关闭已保存')!.disabled).toBe(true)
+})
+
+/** 刷新不在面板头部了：右键标签才出现，且转发给**那个**标签的面板 */
+it('标签右键「刷新」：转发给被右键的那个标签的面板', async () => {
+  await renderPanel([TAB_A, TAB_B], TAB_A.id)
+
+  await rightClickTab(1)
+  expect(menuButton('刷新')!.disabled).toBe(false)
+  await clickMenu('刷新')
+  expect(reloadCalls).toEqual(['E:/repo/src/b.ts'])
 })
 
 it('只有一个标签：「关闭其他」「关闭右侧标签页」都禁用', async () => {

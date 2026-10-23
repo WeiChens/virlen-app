@@ -120,7 +120,7 @@ async function mount(path = 'E:/repo/src/a.ts') {
 
 const panel = () => document.querySelector('.workspace-file-panel') as HTMLElement
 const saveBtn = () =>
-  document.querySelector<HTMLButtonElement>('.wfp-action.is-primary')
+  document.querySelector<HTMLButtonElement>('.wfp-icon-btn.is-primary')
 const closeBtn = () =>
   [...document.querySelectorAll<HTMLButtonElement>('.wfp-icon-btn')].find(
     (btn) => btn.getAttribute('aria-label') === '关闭',

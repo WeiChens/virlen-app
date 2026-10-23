@@ -7,8 +7,6 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  /* 窄窗口下不让面板把聊天区挤没（拖动时也按同一口径封顶） */
-  max-width: 72vw;
   height: 100%;
   border-left: 1px solid var(--border-color, #e5e5e5);
   background: var(--bg-primary, #fff);
@@ -17,11 +15,6 @@
   &.is-resizing {
     user-select: none;
     cursor: col-resize;
-  }
-
-  /* 聊天区被压到不足 300px：面板占满整块可用宽度，72vw 的上限要让路（这时宿主已把聊天区藏起来） */
-  &.is-full {
-    max-width: none;
   }
 }
 
@@ -94,9 +87,22 @@
   border-bottom: none;
   border-radius: 6px 6px 0 0;
   color: var(--text-secondary, #666);
+  /* 标签可拖拽换顺序：不让鼠标从标签上划出一片选区 */
+  user-select: none;
+  cursor: default;
 
   &:hover {
     background: var(--hover-bg, #f0f0f0);
+  }
+
+  /* 正在被拖的那一个：跟着指针走（位移是内联 `transform`，见 `startTabDrag`），抬起来压在邻居之上。
+     它自己的格子留在原处当「洞」，邻居按落点重排 */
+  &.is-dragging {
+    position: relative;
+    z-index: 3;
+    cursor: grabbing;
+    opacity: 0.92;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
   }
 
   /* 激活态：与内容区同底色 + 两侧边框，视觉上「接」到下面那块 */

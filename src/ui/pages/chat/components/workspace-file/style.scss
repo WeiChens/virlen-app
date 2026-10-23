@@ -62,7 +62,7 @@
   min-width: 0;
 }
 
-/* 头部动作：文字按钮（保存）与图标按钮（刷新 / 系统打开 / 关闭） */
+/* 头部动作：全部是图标按钮（保存 / 系统打开 / 关闭）—— 刷新已挪到标签右键菜单 */
 .wfp-action {
   flex: none;
   display: inline-flex;
@@ -86,18 +86,6 @@
     opacity: 0.45;
     cursor: not-allowed;
   }
-
-  &.is-primary {
-    border-color: transparent;
-    background: var(--accent-color, #4f46e5);
-    color: var(--primary-fg, #fff);
-    font-weight: 600;
-
-    &:hover:not(:disabled) {
-      filter: brightness(1.08);
-      background: var(--accent-color, #4f46e5);
-    }
-  }
 }
 
 .wfp-icon-btn {
@@ -114,9 +102,24 @@
   color: var(--text-secondary, #666);
   cursor: pointer;
 
-  &:hover {
+  &:hover:not(:disabled) {
     background: var(--hover-bg, #f0f0f0);
     color: var(--text-primary, #1a1a1a);
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  /* 保存：有未保存修改时才用强调色（干净 / 保存中都是灰的 disabled） */
+  &.is-primary:not(:disabled) {
+    color: var(--accent-color, #4f46e5);
+
+    &:hover {
+      background: var(--hover-bg, #f0f0f0);
+      color: var(--accent-color, #4f46e5);
+    }
   }
 
   svg {
