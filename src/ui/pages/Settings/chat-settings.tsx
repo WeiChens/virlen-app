@@ -293,6 +293,48 @@ function ChatSettings() {
         </div>
         <div className="setting-row">
           <div className="setting-label">
+            <span className="label-text">{t('提问在会话内回答')}</span>
+            <span className="label-desc">
+              {t(
+                '默认开：AI 调用 user_choice 提问时不弹窗打断，而是显示在所属会话的消息列表下方；切到那个会话才能回答\n关掉则回到跨会话弹窗（立即引导你解决）',
+              )}
+            </span>
+          </div>
+          <div className="setting-control">
+            <label className="toggle">
+              <input
+                type="checkbox"
+                aria-label={t('提问在会话内回答')}
+                checked={s.userChoiceInline}
+                onChange={(e) => update('userChoiceInline', e.target.checked)}
+              />
+              <span className="toggle-slider" />
+            </label>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="label-text">{t('权限授权在会话内回答')}</span>
+            <span className="label-desc">
+              {t(
+                '默认关：命中权限审批时立即弹窗确认；打开后与提问一样显示在会话消息列表下方，打开那个会话才能处理',
+              )}
+            </span>
+          </div>
+          <div className="setting-control">
+            <label className="toggle">
+              <input
+                type="checkbox"
+                aria-label={t('权限授权在会话内回答')}
+                checked={s.authorizationInline}
+                onChange={(e) => update('authorizationInline', e.target.checked)}
+              />
+              <span className="toggle-slider" />
+            </label>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-label">
             <span className="label-text">{t('强制激活窗口')}</span>
             <span className="label-desc">
               {t(

@@ -12,6 +12,7 @@ import { useEffect, useRef } from 'react'
 import Modal from '@/ui/components/shared/Modal'
 import { navDelta, wrapIndex } from '@/ui/components/shared/keyboardNav'
 import { t } from '@/ui/i18n'
+import AuthorizationBody from './authorization-body'
 import './authorization.scss'
 
 interface Props {
@@ -119,30 +120,23 @@ export default function AuthorizationModal({
         </>
       }
       width={`min(1000px, 80vw)`}>
-      <div className="authorization" ref={rootRef}>
-        <div className={`auth-title${risk ? ` risk-${risk}` : ''}`}>
-          {title}
-        </div>
-        {subTitle && <p className="auth-subtitle">{subTitle}</p>}
-        {hint && <p className="auth-hint">{hint}</p>}
-        {(desc || command) && (
-          <div className="auth-desc">
-            {command && <div className="auth-desc-command">{command}</div>}
-            {desc && <code>{desc}</code>}
-          </div>
-        )}
-        <div className="actions">
-          <button ref={shelveRef} className="btn-shelve" onClick={onShelve}>
-            {t('暂存')}
-          </button>
-          <button ref={cancelRef} className="btn-cancel" onClick={onCancel}>
-            {t('拒绝')}
-          </button>
-          <button ref={confirmRef} className="btn-confirm" onClick={onConfirm}>
-            {t('允许执行')}
-          </button>
-        </div>
-      </div>
+      <AuthorizationBody
+        title={title}
+        subTitle={subTitle}
+        desc={desc}
+        command={command}
+        hint={hint}
+        risk={risk}
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+        onShelve={onShelve}
+        bodyRef={rootRef}
+        actionRefs={{
+          shelve: shelveRef,
+          cancel: cancelRef,
+          confirm: confirmRef,
+        }}
+      />
     </Modal>
   )
 }

@@ -200,3 +200,43 @@ describe('toolOutputStore 沙盒模式（sandbox）', () => {
     expect(entry?.pty).toBe(true) // register 的新字段生效
   })
 })
+
+/**
+ * `awaitingAuth`：命令还没授权时工具卡不渲染终端（空终端看着像「已跑完、没输出」）。
+ * 两条不变量：写入 / 撒销都必须通知（UI 靠订阅重渲染）；同值幂等；`register` 视为「已开跑」。
+ */
+describe('toolOutputStore 等授权标记（awaitingAuth）', () => {
+  const ID = 'tc-auth'
+  beforeEach(() => toolOutputStore.remove(ID))
+  afterEach(() => toolOutputStore.remove(ID))
+
+  it('写入与撤销都会通知，同值幂等', () => {
+    let notified = 0
+    const unsub = toolOutputStore.subscribe((id) => {
+      if (id === ID) notified++
+    })
+
+    toolOutputStore.setAwaitingAuth(ID) // 未建档也能写
+    expect(toolOutputStore.get(ID)?.awaitingAuth).toBe(true)
+    expect(notified).toBe(1)
+
+    const before = toolOutputStore.get(ID)
+    toolOutputStore.setAwaitingAuth(ID) // 同值
+    expect(notified).toBe(1)
+    expect(toolOutputStore.get(ID)).toBe(before)
+
+    toolOutputStore.clearAwaitingAuth(ID)
+    expect(toolOutputStore.get(ID)?.awaitingAuth).toBe(undefined)
+    expect(notified).toBe(2)
+
+    toolOutputStore.clearAwaitingAuth(ID) // 已经没有 → 不通知
+    expect(notified).toBe(2)
+    unsub()
+  })
+
+  it('register 视为「已开跑」：旧标记不保留（工具真的开始了就不该再藏终端）', () => {
+    toolOutputStore.setAwaitingAuth(ID)
+    toolOutputStore.register(ID, { toolName: 'execute_command', output: '' })
+    expect(toolOutputStore.get(ID)?.awaitingAuth).toBe(undefined)
+  })
+})

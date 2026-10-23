@@ -14,6 +14,12 @@ export {
 } from './sessionRuntimeStore'
 export type { SessionRuntime } from './sessionRuntimeStore'
 export {
+  pendingInteractionState,
+  pendingInteractionCount,
+  setPendingInteractionCount,
+  dropPendingInteractions,
+} from './pendingInteractionStore'
+export {
   todoDraftState,
   getTodoDraft,
   hasTodoDraft,

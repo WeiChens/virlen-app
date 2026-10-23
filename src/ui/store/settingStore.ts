@@ -155,6 +155,15 @@ export interface SettingsStore {
   editorOpenDefaultId: string
   /** AI 回复完成或需用户选择时，窗口未激活则强制置前 */
   forceWindowActive: boolean
+  /**
+   * `user_choice` 提问在**会话内**回答（消息列表下方），不弹窗打断 —— 默认开。
+   * 关 = 回到跨会话模态框（引导用户立即解决）。仅决定**新到的**交互怎么呈现，切换不影响已挂起的项。
+   */
+  userChoiceInline: boolean
+  /**
+   * 权限授权在**会话内**回答 —— 默认关（仍弹窗立即确认）。语义同上，仅影响新到的交互。
+   */
+  authorizationInline: boolean
   /** 关闭窗口时隐藏到托盘；关 = 直接退进程（托盘不可用也回退成这个） */
   closeToTray: boolean
   /** AI 回复完成且窗口未显示 / 未激活时是否提醒（任务栏闪烁 + 托盘提示） */
@@ -217,6 +226,9 @@ const defaultSettings: SettingsStore = {
   editorOpenConfigs: [],
   editorOpenDefaultId: '',
   forceWindowActive: false,
+  // 交互呈现：提问默认「不打断」（会话内卡片），权限授权默认仍弹窗（马上确认更安全）
+  userChoiceInline: true,
+  authorizationInline: false,
   closeToTray: true,
   notifyOnComplete: true,
   telemetryEnabled: false,

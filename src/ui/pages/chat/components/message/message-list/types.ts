@@ -41,6 +41,15 @@ export interface ChatMessageListProps {
   onQuoteJump?: (messageId: string) => void
   /** 外部请求滚动定位并临时高亮的目标消息（Ctrl+P 检索结果跳转） */
   jumpTarget?: MessageJumpTarget | null
+  /**
+   * 滚动内容**最底部**的一块（会话内的待应答交互卡片）。
+   *
+   * 为什么挂在滚动容器里而不是列表外面：交互卡片属于这段对话的结尾，跟着一起滚 ——
+   * 悬浮在输入框上方会永久占掉一截高度（多张时更明显）。
+   * ⚠️ 它是 `.vm-list` 的**兄弟**（后者高度 = 虚拟总高、行绝对定位），所以不影响行高测量；
+   * 别塞进 `.vm-list` 里。
+   */
+  footer?: React.ReactNode
 }
 
 /** 稳定的空锚点数组（索引未加载时共用，保证 useMemo 依赖稳定） */

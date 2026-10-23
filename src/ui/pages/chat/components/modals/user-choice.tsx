@@ -1,6 +1,9 @@
 /**
  * user-choice-modal — AI 调用 user_choice 工具时向用户发起的选择弹窗（内联实现 Modal）。
  *
+ * 表单状态与正文在 `choice-form.ts` / `choice-body.tsx`（与「会话内卡片」共用，见
+ * `inline-interactions/`）；这一层只剩**外框与键盘**。
+ *
  * 键盘操作（与 `modals/authorization` 同一套约定）：
  *  - Tab / Shift+Tab / ↑↓←→  在「选项 → 自定义输入框 → 暂存 → 自定义 → 取消 → 确认」之间循环；
  *  - Space  选中 / 取消选中当前选项（选项上唯一的切换方式）；
@@ -10,13 +13,15 @@
  * 打开时不聚焦「确认」：Enter 是两段式的（先空格选中、再回车提交），而一项未选时「确认」
  * 是 disabled、不可聚焦，故焦点落在永远可聚焦的弹窗容器上。
  */
-import { useState, useEffect, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { sessionStore } from '@/ui/store'
 import './user-choice.scss'
 import MarkdownRenderer from '../message/markdown-renderer'
 import { navDelta, wrapIndex } from '@/ui/components/shared/keyboardNav'
-import { t, tpl } from '@/ui/i18n'
+import { t } from '@/ui/i18n'
 import type { ChoiceDraft } from './choice-drafts'
+import { useChoiceForm } from './choice-form'
+import ChoiceBody from './choice-body'
 
 interface Props {
   visible: boolean
@@ -56,18 +61,9 @@ export default function UserChoiceModal({
   initialDraft,
   onDraftChange,
 }: Props) {
-  // AI 可能不传 options，兜底为空数组
-  const safeOptions = Array.isArray(options) ? options : []
-
-  // 初始值取草稿：暂存 → 恢复（新 interactionId、新实例、同一个 toolCallId）时把上次填的带回来
-  const [selected, setSelected] = useState<Set<string>>(
-    () => new Set(initialDraft?.selected ?? []),
-  )
-  const [showCustom, setShowCustom] = useState(!!initialDraft?.showCustom)
-  const [customReply, setCustomReply] = useState(initialDraft?.customReply ?? '')
+  const form = useChoiceForm({ options, multi, initialDraft, onDraftChange })
   const backdropRef = useRef<HTMLDivElement>(null)
   const modalRef = useRef<HTMLDivElement>(null)
-  const customInputRef = useRef<HTMLInputElement>(null)
 
   // 从 sessionId 解析会话标题
   const sessionTitle =
@@ -83,18 +79,6 @@ export default function UserChoiceModal({
     if (visible) modalRef.current?.focus()
   }, [visible])
 
-  // 每次改动都上报草稿（供「暂存 → 恢复」带回来）。
-  // ⚠️ 回调用 ref 持有：它每次渲染都是新引用，进依赖会让这个 effect 退化成「每次渲染都上报」。
-  const draftChangeRef = useRef(onDraftChange)
-  draftChangeRef.current = onDraftChange
-  useEffect(() => {
-    draftChangeRef.current?.({
-      selected: [...selected],
-      customReply,
-      showCustom,
-    })
-  }, [selected, customReply, showCustom])
-
   // ESC 关闭
   useEffect(() => {
     if (!visible) return
@@ -105,29 +89,9 @@ export default function UserChoiceModal({
     return () => document.removeEventListener('keydown', handleEsc)
   }, [visible, onCancel])
 
-  function toggle(option: string) {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(option)) {
-        next.delete(option)
-      } else {
-        if (!multi) {
-          next.clear()
-        }
-        next.add(option)
-      }
-      return next
-    })
-  }
-
   function handleConfirm() {
-    onConfirm({
-      selected: Array.from(selected),
-      customReply: customReply.trim(),
-    })
+    onConfirm(form.value)
   }
-
-  const canConfirm = selected.size > 0 || customReply.trim().length > 0
 
   /**
    * 可键盘导航的项（按 DOM 顺序，由各元素 data-nav 标记）。跳过 disabled（一项未选时
@@ -139,13 +103,6 @@ export default function UserChoiceModal({
         '[data-nav]:not([disabled])',
       ) ?? [],
     )
-  }
-
-  /** 切换第 index 个选项（只拿 data-index 回查，越界忽略） */
-  function toggleAt(index: number) {
-    const opt = safeOptions[index]
-    if (opt === undefined) return
-    toggle(opt)
   }
 
   /**
@@ -164,7 +121,7 @@ export default function UserChoiceModal({
     // Ctrl / Cmd + Enter：任意位置直接提交（同样要求“有选”）
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault()
-      if (canConfirm) handleConfirm()
+      if (form.canConfirm) handleConfirm()
       return
     }
 
@@ -175,7 +132,7 @@ export default function UserChoiceModal({
     // 空格：切换选项（按钮上的空格是浏览器原生行为，不拦）
     if (e.key === ' ' && isOption) {
       e.preventDefault()
-      toggleAt(Number(active.dataset.index))
+      form.toggleAt(Number(active.dataset.index))
       return
     }
 
@@ -198,7 +155,7 @@ export default function UserChoiceModal({
     if (active?.tagName === 'BUTTON') return
     e.preventDefault()
     // 「有选才提交，没选忽略」：选项上也是这套，选中 / 取消一律走空格
-    if (!canConfirm) return
+    if (!form.canConfirm) return
     handleConfirm()
   }
 
@@ -228,89 +185,12 @@ export default function UserChoiceModal({
           </h3>
         </div>
 
-        <div className="choice-body">
-          <div className="choice-options">
-            {safeOptions.map((opt, index) => {
-              const isSelected = selected.has(opt)
-              return (
-                <div
-                  key={opt}
-                  className={`choice-option ${isSelected ? 'selected' : ''}`}
-                  data-nav="option"
-                  data-index={index}
-                  tabIndex={0}
-                  role="checkbox"
-                  aria-checked={isSelected}
-                  onClick={() => toggle(opt)}>
-                  <span className="choice-checkbox">
-                    {multi ? (
-                      <span
-                        className={`check-box ${isSelected ? 'checked' : ''}`}>
-                        {isSelected ? '✓' : ''}
-                      </span>
-                    ) : (
-                      <span
-                        className={`radio-box ${isSelected ? 'checked' : ''}`}>
-                        {isSelected ? '●' : ''}
-                      </span>
-                    )}
-                  </span>
-                  <span className="choice-label">{opt}</span>
-                </div>
-              )
-            })}
-          </div>
-
-          {/* 自定义回复输入框 —— 默认隐藏，点击「自定义」按钮后显示 */}
-          {showCustom && (
-            <div className="choice-custom-reply">
-              <input
-                ref={customInputRef}
-                className="custom-reply-input"
-                data-nav="input"
-                placeholder={
-                  selected.size > 0
-                    ? t('请输入补充内容')
-                    : t('输入自定义回复内容')
-                }
-                value={customReply}
-                onChange={(e) => setCustomReply(e.target.value)}
-              />
-            </div>
-          )}
-        </div>
-
-        <div className="choice-footer">
-          <div className="choice-footer-left">
-            {onShelve && (
-              <button className="btn-shelve" data-nav="button" onClick={onShelve}>
-                {t('暂存')}
-              </button>
-            )}
-            <button
-              className="btn-custom"
-              data-nav="button"
-              onClick={() => {
-                setShowCustom((v) => !v)
-                // 展开时自动聚焦输入框
-                setTimeout(() => customInputRef.current?.focus(), 0)
-              }}>
-              {showCustom ? t('收起自定义') : t('自定义')}
-            </button>
-          </div>
-          <div className="choice-footer-right">
-            <button className="btn-cancel" data-nav="button" onClick={onCancel}>
-              {t('取消')}
-            </button>
-            <button
-              className="btn-confirm"
-              data-nav="button"
-              onClick={handleConfirm}
-              disabled={!canConfirm}>
-              {t('确认')}{multi ? tpl(' (已选 $__count__)', { count: selected.size }) : ''}
-            </button>
-          </div>
-        </div>
+        <ChoiceBody
+          form={form}
+          onConfirm={handleConfirm}
+          onCancel={onCancel}
+          onShelve={onShelve}
+        />
       </div>
     </div>
   )

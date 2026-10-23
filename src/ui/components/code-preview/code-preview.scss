@@ -41,8 +41,9 @@
  * 它的底色（editorGutter.background，#21252b）默认一路铺到正文第一列，
  * 于是 CodePreview 摊开的那段留白看起来只是“行号区变宽了”——两边底色不同，一眼就能看出来。
  * 这里把 .margin 的底色限制在内容盒内（background-clip: content-box），
- * 再用 padding-right 让出 --code-preview-gutter-cutout（由组件内联注入，
- * = lineDecorationsWidth - 6px），让出的部分就露出编辑器底色，成为正文侧的留白。
+ * 再用 padding-right 让出 --code-preview-gutter-cutout（由组件内联注入：有行号时
+ * = lineDecorationsWidth − 贴着行号的那 5px；无行号时 = 整段留白，一点都不剩行号区底色），
+ * 让出的部分就露出编辑器底色，成为正文侧的留白。
  * .margin 内部的行号/装饰层都是绝对定位，不受父级 padding 影响，位置不会错乱。 */
 .code-preview .monaco-editor .margin {
   box-sizing: border-box;

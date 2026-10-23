@@ -363,6 +363,38 @@ describe('TerminalView（运行态与完成态共用同一组件 / 同一 DOM �
     expect(html).not.toContain('Exit code: 0')
     expect(html).toContain('terminal-stdout">ok</code>')
   })
+
+  it('等授权期间不渲染终端；授权结束后终端才出现', async () => {
+    const id = 't-await'
+    toolOutputStore.setAwaitingAuth(id)
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(<TerminalView toolCallId={id} title="Terminal" cmd="ls" />)
+    })
+    // 命令还没跑：一块只有 `$ ls` 的空终端会让人以为「已跑完、没输出」
+    expect(host.querySelector('.execute-command-wrapper')).toBeNull()
+    expect(host.textContent).toBe('')
+
+    await act(async () => toolOutputStore.clearAwaitingAuth(id))
+    expect(host.querySelector('.execute-command-wrapper')).toBeTruthy()
+
+    await act(async () => root.unmount())
+    toolOutputStore.remove(id)
+  })
+
+  it('终端内确认优先：有待确认命令时即使也标了等授权，仍然渲染确认块', () => {
+    const id = 't-await-confirm'
+    toolOutputStore.setAwaitingAuth(id)
+    toolOutputStore.setPendingConfirm(id, { desc: 'rm -rf build' })
+    const html = renderToStaticMarkup(
+      <TerminalView toolCallId={id} title="Terminal" cmd="rm -rf build" />,
+    )
+    expect(html).toContain('is-confirm')
+    expect(html).toContain('尚未执行')
+    toolOutputStore.remove(id)
+  })
 })
 
 /**
@@ -570,6 +602,45 @@ describe('execute_script 展开视图：终端 / 文件 tabs', () => {
       '暂无文件内容',
     )
     expect(host.querySelector('.code-block-wrapper')).toBeNull()
+
+    await act(async () => root.unmount())
+    toolOutputStore.remove('t-script')
+  })
+
+  it('等授权期间整个展开区都不渲染（连 tab 条一起藏）；授权结束后完整出现', async () => {
+    toolOutputStore.register('t-script', {
+      toolName: 'execute_script',
+      output: '',
+    })
+    toolOutputStore.setAwaitingAuth('t-script')
+    const node = new ExecuteScriptMessage().getExpandView({
+      useContent: {
+        id: 't-script',
+        name: 'execute_script',
+        input: {
+          file_path: 'temp/run.js',
+          file_content: SCRIPT,
+          command: 'node temp/run.js',
+        },
+      },
+      message: undefined,
+      expand: true,
+    } as any)
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(node as any)
+    })
+
+    // 脚本还没跑：终端不可能有输出；要看的正文已经在授权卡 / 弹窗里
+    expect(host.querySelector('.script-tabs')).toBeNull()
+    expect(host.querySelector('.execute-command-wrapper')).toBeNull()
+    expect(host.textContent).toBe('')
+
+    await act(async () => toolOutputStore.clearAwaitingAuth('t-script'))
+    expect(tabTexts(host)).toEqual(['终端', '文件'])
+    expect(host.querySelector('.execute-command-wrapper')).toBeTruthy()
 
     await act(async () => root.unmount())
     toolOutputStore.remove('t-script')

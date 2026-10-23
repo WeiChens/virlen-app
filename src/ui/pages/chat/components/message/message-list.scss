@@ -217,6 +217,7 @@
   // 保证虚拟滚动计算出的偏移与真实布局完全一致。
   // 虚拟滚动自行做滚动锚定，禁用浏览器原生 scroll anchoring 以免相互干扰。
   overflow-anchor: none;
+  padding-bottom: 10px;
 
   &::-webkit-scrollbar {
     width: 6px;

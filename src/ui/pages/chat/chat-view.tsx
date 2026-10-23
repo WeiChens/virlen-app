@@ -260,7 +260,7 @@ function ChatView() {
    */
   const [referencedSkills, setReferencedSkills] = useState<string[]>([])
   // 工具交互弹窗：声明的是元素而不是组件类型 —— 内联组件每次渲染换类型会整体卸载重挂（草稿与焦点一起丢）
-  const { toolUI } = useToolUI()
+  const { toolUI, inlineUI } = useToolUI()
   const [sidebarWidth, setSidebarWidth] = useState(getStoredWidth())
   const resizingRef = useRef(false)
   const currentWidthRef = useRef(sidebarWidth)
@@ -1142,26 +1142,30 @@ function ChatView() {
         {chatState.value.currentSessionId ? (
           <>
             {showTrajectory ? (
-              <TrajectoryView
-                sessionId={chatState.value.currentSessionId}
-                systemPrompt={
-                  sessionStore.getSession(chatState.value.currentSessionId)
-                    ?.systemPrompt
-                }
-                allowedTools={sessionStore.getSession(
-                  chatState.value.currentSessionId,
-                )?.allowedTools}
-                messages={messages}
-                hasMoreOlder={sessionStore.hasMoreMessages(
-                  chatState.value.currentSessionId,
-                )}
-                onLoadOlder={async () => {
-                  const sid = chatState.value.currentSessionId
-                  if (sid) await sessionStore.loadOlderMessages(sid)
-                }}
-                onJumpToMessage={handleTrajectoryJump}
-                onClose={() => setShowTrajectory(false)}
-              />
+              <>
+                <TrajectoryView
+                  sessionId={chatState.value.currentSessionId}
+                  systemPrompt={
+                    sessionStore.getSession(chatState.value.currentSessionId)
+                      ?.systemPrompt
+                  }
+                  allowedTools={sessionStore.getSession(
+                    chatState.value.currentSessionId,
+                  )?.allowedTools}
+                  messages={messages}
+                  hasMoreOlder={sessionStore.hasMoreMessages(
+                    chatState.value.currentSessionId,
+                  )}
+                  onLoadOlder={async () => {
+                    const sid = chatState.value.currentSessionId
+                    if (sid) await sessionStore.loadOlderMessages(sid)
+                  }}
+                  onJumpToMessage={handleTrajectoryJump}
+                  onClose={() => setShowTrajectory(false)}
+                />
+                {/* 轨迹视图没有消息滚动容器，卡片退化为一块独立的尾巴（仍可答） */}
+                {inlineUI}
+              </>
             ) : (
               <ChatMessageList
                 messages={messages}
@@ -1170,6 +1174,8 @@ function ChatView() {
                 onQuote={handleQuote}
                 onQuoteJump={handleQuoteJump}
                 jumpTarget={searchJump}
+                // 待应答交互的**会话内**通道：挂在滚动内容最底部（只显示当前会话的）
+                footer={inlineUI}
               />
             )}
             <ChatInput

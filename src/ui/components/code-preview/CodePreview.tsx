@@ -35,16 +35,18 @@ import { tameFindWidget } from '@/monaco/findWidget'
 import './code-preview.scss'
 
 /**
- * 行号列与正文之间的横向间距（px），即 Monaco 的 lineDecorationsWidth。
+ * 行号列与正文之间的横向间距（px），即 Monaco 的 lineDecorationsWidth —— 也就是正文到代码区
+ * 左边界的距离（`contentLeft = 行号列宽 + lineDecorationsWidth`，行号关掉时行号列宽为 0）。
  *
- * 它属于行号区（.margin）宽度，不处理的话行号区底色会一直铺到正文第一列，看着只是「行号区变宽」。
- * 故拆两段：贴着行号的一小段仍留行号区底色（GUTTER_INNER_PAD），其余由 CSS 把行号区底色挖掉
- *（见 code-preview.scss 的 .margin 规则）露出编辑器底色，视觉上就成了正文自己的左侧留白。
+ * 两种模式给**同一个数**：设置里切换「显示行号」不该让代码整体左右跳一下。区别只在底色：
+ * 有行号时这 14px 拆两段 —— 贴着行号的一小段仍留行号区底色（GUTTER_INNER_PAD），其余由 CSS
+ * 把行号区底色挖掉（见 code-preview.scss 的 .margin 规则）露出编辑器底色，视觉上就是正文自己的
+ * 左侧留白；没有行号时整段都挖掉（否则会剩一条没有行号的空槽）。
  */
 const GUTTER_TO_CONTENT_GAP = 14
-/** 上述间距中仍然保留行号区底色的一小段（px） */
+/** 上述间距中仍然保留行号区底色的一小段（px）—— 只贴在有行号的那一侧 */
 const GUTTER_INNER_PAD = 5
-/** 需要挖掉行号区底色、改由编辑器底色绘制的宽度（px） */
+/** 有行号时需要挖掉的行号区底色宽度（px） */
 const GUTTER_BG_CUTOUT = GUTTER_TO_CONTENT_GAP - GUTTER_INNER_PAD
 
 /** 对外暴露的命令式 API（挂载后经 onApiReady 下发，卸载时下发 null），供外层做「全选 → 复制」 */
@@ -121,10 +123,11 @@ function buildPreviewOptions(
   props: CodePreviewProps,
   display: ResolvedCodeDisplay,
   scrollable: boolean,
+  /** 行号最终值（props 优先，其次跟设置）：左留白的画法也要用它，故由调用方算一次传进来 */
+  showLineNumbers: boolean,
 ): MonacoNs.editor.IStandaloneEditorConstructionOptions {
   const {
     showMinimap = false,
-    showLineNumbers = display.showLineNumbers,
     startLineNumber = 1,
     fontSize = display.fontSize,
     fontFamily = display.fontFamily,
@@ -163,7 +166,7 @@ function buildPreviewOptions(
       : 'off',
     // 行号列与正文间的唯一可用间距（padding 选项只支持 top/bottom）；其中「露出编辑器底色」的
     // 那段由 CSS 处理，见 code-preview.scss。
-    lineDecorationsWidth: showLineNumbers ? GUTTER_TO_CONTENT_GAP : GUTTER_INNER_PAD,
+    lineDecorationsWidth: GUTTER_TO_CONTENT_GAP,
     fontSize,
     fontFamily,
     fontLigatures: display.ligatures,
@@ -220,6 +223,8 @@ export default function CodePreview(props: CodePreviewProps) {
   } = props
   /** fitContent 时由编辑器报的内容高度（null = 还没量到，先用调用方给的 height） */
   const [measuredHeight, setMeasuredHeight] = useState<number | null>(null)
+  /** 行号的最终值（props 优先，其次跟设置）：选项与左留白画法都靠它，只算一次 */
+  const showLineNumbers = props.showLineNumbers ?? display.showLineNumbers
 
   /**
    * 自然高度（= 内容高度）与最终渲染高度。
@@ -286,7 +291,10 @@ export default function CodePreview(props: CodePreviewProps) {
       style={
         {
           // 让 lineDecorationsWidth 撑出的留白落在「正文底色」上，而不是把行号区画宽
-          '--code-preview-gutter-cutout': `${GUTTER_BG_CUTOUT}px`,
+          // （有行号时只挖后一段，贴行号的 5px 仍留行号区底色；无行号时整段挖掉）
+          '--code-preview-gutter-cutout': `${
+            showLineNumbers ? GUTTER_BG_CUTOUT : GUTTER_TO_CONTENT_GAP
+          }px`,
         } as CSSProperties
       }>
       <div
@@ -302,7 +310,7 @@ export default function CodePreview(props: CodePreviewProps) {
         value={code}
         theme={theme}
         onMount={handleMount}
-        options={buildPreviewOptions(props, display, scrollable)}
+        options={buildPreviewOptions(props, display, scrollable, showLineNumbers)}
       />
     </div>
   )

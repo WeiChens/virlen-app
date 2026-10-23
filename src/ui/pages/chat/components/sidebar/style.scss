@@ -107,6 +107,89 @@
     overflow-y: auto;
     padding: 8px 4px;
 
+    /* 状态槽：同一时刻只放一枚（「等你回答」优先于「在忙」）。两枚宽度不同（7px / 14px），
+       槽宽固定才不会把标题 / 组名推来推去。会话项与折叠分组头共用这一份。 */
+    .session-flag {
+      flex: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px;
+      height: 14px;
+    }
+
+    /* 「等你回答」琥珀点：有交互在等（提问 / 授权走会话内回答时不弹窗，这个点是别的会话
+       唯一的提示）—— 会话项与折叠分组头都要看得到 */
+    .waiting-interaction-indicator {
+      flex-shrink: 0;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent-warn, #f59e0b);
+      box-shadow: 0 0 4px rgba(245, 158, 11, 0.55);
+    }
+
+    /* 「在忙」蓝点：run 在跑 / 图片识别中 */
+    .working-indicator {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+
+      // 中心圆点
+      &::before {
+        content: '';
+        position: absolute;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--accent-color, #4f46e5);
+        box-shadow: 0 0 4px var(--accent-color, #4f46e5);
+        animation: dotPulse 1.5s ease-in-out infinite;
+      }
+
+      // 涟漪环
+      &::after {
+        content: '';
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        border: 1.5px solid var(--accent-color, #4f46e5);
+        animation: ringRipple 1.5s ease-out infinite;
+      }
+    }
+
+    // 蓝点的两段动画（@keyframes 不受嵌套作用域限制，名字全局唯一）
+    @keyframes dotPulse {
+
+      0%,
+      100% {
+        opacity: 1;
+        transform: scale(1);
+      }
+
+      50% {
+        opacity: 0.6;
+        transform: scale(0.85);
+      }
+    }
+
+    @keyframes ringRipple {
+      0% {
+        transform: scale(0.8);
+        opacity: 0.6;
+      }
+
+      100% {
+        transform: scale(1.3);
+        opacity: 0;
+      }
+    }
+
     .session-item {
       display: flex;
       align-items: center;
@@ -184,64 +267,8 @@
             }
           }
 
-          .working-indicator {
-            position: relative;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 14px;
-            height: 14px;
-            flex-shrink: 0;
-
-            // 中心圆点
-            &::before {
-              content: '';
-              position: absolute;
-              width: 6px;
-              height: 6px;
-              border-radius: 50%;
-              background: var(--accent-color, #4f46e5);
-              box-shadow: 0 0 4px var(--accent-color, #4f46e5);
-              animation: dotPulse 1.5s ease-in-out infinite;
-            }
-
-            // 涟漪环
-            &::after {
-              content: '';
-              position: absolute;
-              width: 100%;
-              height: 100%;
-              border-radius: 50%;
-              border: 1.5px solid var(--accent-color, #4f46e5);
-              animation: ringRipple 1.5s ease-out infinite;
-            }
-          }
-        }
-
-        @keyframes dotPulse {
-
-          0%,
-          100% {
-            opacity: 1;
-            transform: scale(1);
-          }
-
-          50% {
-            opacity: 0.6;
-            transform: scale(0.85);
-          }
-        }
-
-        @keyframes ringRipple {
-          0% {
-            transform: scale(0.8);
-            opacity: 0.6;
-          }
-
-          100% {
-            transform: scale(1.3);
-            opacity: 0;
-          }
+          /* 状态点（在忙 / 等你回答）不再写在这里：两枚共用 `.session-list` 级的一槽一份
+             （见文件上文 `.session-flag` / `.waiting-interaction-indicator` / `.working-indicator`）。 */
         }
 
         .session-meta {
@@ -402,37 +429,7 @@
         box-shadow: 0 0 4px rgba(245, 34, 45, 0.5);
       }
 
-      // 分组头部的工作指示器（组内有会话正在运行时显示）
-      .working-indicator {
-        position: relative;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 14px;
-        height: 14px;
-        flex-shrink: 0;
-
-        &::before {
-          content: '';
-          position: absolute;
-          width: 6px;
-          height: 6px;
-          border-radius: 50%;
-          background: var(--accent-color, #4f46e5);
-          box-shadow: 0 0 4px var(--accent-color, #4f46e5);
-          animation: dotPulse 1.5s ease-in-out infinite;
-        }
-
-        &::after {
-          content: '';
-          position: absolute;
-          width: 100%;
-          height: 100%;
-          border-radius: 50%;
-          border: 1.5px solid var(--accent-color, #4f46e5);
-          animation: ringRipple 1.5s ease-out infinite;
-        }
-      }
+      // 分组头部的工作指示器样式见 `.session-list > .working-indicator`（与会话项共用一份）
 
       /* 会话数徽标：纯展示（单击落在整行上 = 折叠/展开），操作走分组头右键菜单 */
       .group-count {

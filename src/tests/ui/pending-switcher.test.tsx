@@ -22,9 +22,19 @@ vi.mock('@/ui/pages/chat/components/message/markdown-renderer', () => ({
 vi.mock('@/utils/windowAttention', () => ({
   requestAttentionIfUnfocused: async (): Promise<void> => {},
 }))
+/**
+ * 行内授权卡片的代码区是 `CodePreview`（Monaco）：`useToolUI` 静态引到它，而 monaco 在 jsdom
+ * 里导入即崩（`CSS.escape` / codicon 字体别名）。本文件只看弹窗通道，换个不渲染编辑器的替身。
+ */
+vi.mock('@/ui/components/code-preview/CodePreview', () => ({
+  default: ({ code }: { code: string }) => (
+    <pre className="mock-code-preview">{code}</pre>
+  ),
+}))
 
 import toolInteractEvent from '@/events/toolInteractEvent'
 import { useToolUI } from '@/ui/pages/chat/components/tool-ui'
+import { settingsState } from '@/ui/store/settingStore'
 import UserChoiceModal from '@/ui/pages/chat/components/modals/user-choice'
 import {
   clearAllChoiceDrafts,
@@ -34,6 +44,9 @@ import {
 /** 草稿缓存是模块级单例：用例之间必须隔离 */
 beforeEach(() => {
   clearAllChoiceDrafts()
+  // 本文件守的是**弹窗通道**（切换条 / 一次只展示一个 / Alt+←→）。提问默认已改成「会话内回答」，
+  // 那部分归 inline-interactions 的用例；这里显式把弹窗通道开回来（授权默认就是弹窗）。
+  settingsState.setValue('userChoiceInline', false)
 })
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true

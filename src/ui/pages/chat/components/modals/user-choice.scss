@@ -1,3 +1,7 @@
+/* 用户选择（user_choice）弹窗：外框 + 正文。
+   会话内卡片（`inline-interactions/`）走的是另一套紧凑样式 —— 它不用这里的 class，
+   两边颜色都取 `theme.scss` 的令牌，不各写一份写死色值。 */
+
 .user-choice-backdrop {
   position: fixed;
   top: 0;
@@ -59,7 +63,9 @@
       overflow-y: auto;
     }
   }
+}
 
+.user-choice-modal {
   .choice-body {
     padding: 16px 24px;
   }

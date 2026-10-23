@@ -121,6 +121,8 @@ describe('createNativeCommandConfirmHandles 终端内确认（Step 2 ①）', ()
     // 不弹 modal；改在终端块里渲染可编辑命令行
     expect(shows.length).toBe(0)
     expect(toolOutputStore.get('tc-T')?.pendingConfirm?.desc).toBe('npm login')
+    // 授权前不显示终端：等批期间标记为 true（终端块里优先渲染确认块）
+    expect(toolOutputStore.get('tc-T')?.awaitingAuth).toBe(true)
 
     toolInteractEvent.emit(
       'terminalConfirmSubmit',
@@ -131,6 +133,7 @@ describe('createNativeCommandConfirmHandles 终端内确认（Step 2 ①）', ()
       JSON.stringify({ approved: true, command: 'npm login --registry https://x' }),
     )
     expect(toolOutputStore.get('tc-T')?.pendingConfirm).toBeUndefined()
+    expect(toolOutputStore.get('tc-T')?.awaitingAuth).toBe(undefined)
 
     off()
     handles.cleanup()
@@ -172,10 +175,13 @@ describe('createNativeCommandConfirmHandles 终端内确认（Step 2 ①）', ()
     expect(shows.length).toBe(1)
     expect(shows[0].toolCallId).toBe('tc-M')
     expect(toolOutputStore.get('tc-M')?.pendingConfirm).toBeUndefined()
+    // 弹窗路径同样先不给终端：授权前该工具卡不应出现一块空终端
+    expect(toolOutputStore.get('tc-M')?.awaitingAuth).toBe(true)
 
     // 收尾：模拟用户关闭弹窗，避免 promise 悬挂（应答必须带 interactionId）
     toolInteractEvent.emit('commandReject', shows[0].interactionId, 'cancelled')
     await expect(p).rejects.toBeTruthy()
+    expect(toolOutputStore.get('tc-M')?.awaitingAuth).toBe(undefined)
 
     off()
     handles.cleanup()

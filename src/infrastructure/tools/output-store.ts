@@ -45,6 +45,13 @@ export interface ToolOutput {
   /** 待确认命令（存在时 UI 渲染确认块）；提交 / 取消后由 clearPendingConfirm 清空 */
   pendingConfirm?: PendingConfirmInfo
   /**
+   * 这条命令还在**等用户授权**（还没开始跑）。
+   *
+   * 出现期间工具卡不渲染终端 / 脚本视图：授权前那块终端是空的（只有一行 `$ cmd`），
+   * 看着像「已经在跑了」。授权 / 拒绝后由 `clearAwaitingAuth` 撤掉，终端从此才出现。
+   */
+  awaitingAuth?: boolean
+  /**
    * 本次命令实际的沙盒模式（Rust 判定后下发），运行中经 agent:tool-env 写入；
    * 完成态以后端权威字段 uiData.sandbox 为准。
    */
@@ -130,6 +137,27 @@ class ToolOutputStore {
     if (!entry?.pendingConfirm) return
     const next = { ...entry }
     delete next.pendingConfirm
+    this.map.set(toolCallId, next)
+    this.notify(toolCallId)
+  }
+
+  /** 标记「等用户授权」（还没执行）；同值幂等 */
+  setAwaitingAuth(toolCallId: string) {
+    const existing = this.map.get(toolCallId) ?? {
+      toolName: 'execute_command',
+      output: '',
+    }
+    if (existing.awaitingAuth) return
+    this.map.set(toolCallId, { ...existing, awaitingAuth: true })
+    this.notify(toolCallId)
+  }
+
+  /** 撤掉「等授权」（允许 / 拒绝 / 收敛 / 终端内提交均算结束） */
+  clearAwaitingAuth(toolCallId: string) {
+    const entry = this.map.get(toolCallId)
+    if (!entry?.awaitingAuth) return
+    const next = { ...entry }
+    delete next.awaitingAuth
     this.map.set(toolCallId, next)
     this.notify(toolCallId)
   }

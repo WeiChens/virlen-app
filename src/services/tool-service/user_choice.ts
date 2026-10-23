@@ -12,6 +12,7 @@
  */
 import toolInteractEvent from '@/events/toolInteractEvent'
 import { track, getSessionTrace } from '@/utils/telemetry'
+import { PendingSlots } from './pending-slots'
 import type { ToolResult } from '@/domain/tools/types'
 import { v4 } from '@/utils/uuid'
 import { InteractionEnded } from './interaction-end'
@@ -51,7 +52,7 @@ export function createUserChoiceHandles(
   sessionId: string,
 ): UserChoiceHandles {
   /** interactionId → 待应答槽位（跨 session 天然隔离：每个 session 一个 handles 实例） */
-  const pendings = new Map<string, PendingChoice>()
+  const pendings = new PendingSlots<PendingChoice>(sessionId)
 
   // 监听 UI 层的确认 / 取消 / 暂存
   const offResolve = toolInteractEvent.on(

@@ -3,7 +3,7 @@ import { t } from '@/ui/i18n'
 import { IToolCallMessage, ToolMessageProps } from './IToolCallMessage'
 import { toShortPath } from '@/utils/common'
 import { chatState, sessionStore, settingsState } from '@/ui/store'
-import { TerminalView } from './TerminalBlock'
+import { TerminalView, useAwaitingAuth } from './TerminalBlock'
 import { Message } from '@/types'
 import CodeBlock from '../message/code-block'
 
@@ -39,7 +39,14 @@ function ScriptExpandView({
   expand?: boolean
 }) {
   const [tab, setTab] = useState<'terminal' | 'file'>('terminal')
+  const awaitingAuth = useAwaitingAuth(toolCallId)
   const fileLabel = filePath ? shortPath(filePath) : ''
+
+  /**
+   * 授权前整个展开区都不渲染（连 tab 条也不）：脚本还没跑，终端里不可能有东西；
+   * 要看的脚本正文已经写在授权卡 / 授权弹窗里了。授权完再连 tab 一起出现。
+   */
+  if (awaitingAuth) return null
 
   return (
     <div className="script-view">

@@ -24,7 +24,7 @@ import type { ChatMessageListProps } from './message-list/types'
 export type { MessageJumpTarget, ChatMessageListProps } from './message-list/types'
 
 function ChatMessageList(props: ChatMessageListProps) {
-  const { messages, onQuoteJump } = props
+  const { messages, onQuoteJump, footer } = props
   const m = useChatMessageList(props)
 
   // 锚点点击：scrollToMessage 是异步的，这里显式 void 掉返回值
@@ -138,6 +138,9 @@ function ChatMessageList(props: ChatMessageListProps) {
             )
           })}
         </div>
+
+        {/* 滚动内容的最底部（会话内的待应答交互）：跟着对话一起滚，不悬浮占高度 */}
+        {footer}
       </div>
 
       {/* 用户消息锚点列表 — 覆盖整个会话的全量 user 消息，可视区内滚动查找 */}

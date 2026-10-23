@@ -1,0 +1,374 @@
+/* 会话内待应答卡片：挂在消息滚动内容的**最底部**（`ChatMessageList` 的 `footer`），
+   跟着对话一起滚 —— 不是悬浮面板，所以没有边框容器 / 底色，只有每张卡自己的外框。
+   尺寸按「对话尾巴」设计：`sm` 级正文字、一行一个动作，展开一张也只占 3~4 行。
+
+   字号一律走 `--font-size-*`（`ui/styles/theme.scss` 单一事实来源）：写 px 就永远不跟
+   「设置 → 字体大小」的小 / 中 / 大。承字的盒子（折叠箭头、勾选圆点、按钮最小高）用 em
+   挂在自身字号上，字号调大时只撑高、不裁字。契约：`tests/ui/inline-interactions-style-contract.test.ts`。 */
+.inline-interactions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* 与消息列对齐：`.message-bubble` 的左右内边距是 20px */
+  padding: 4px 20px 14px;
+}
+
+/* 「N 个待你回答」：只在 ≥2 张卡片时出现 */
+.inline-interactions-count {
+  font-size: var(--font-size-xs);
+  /* 相对行高：写 px 会随继承变成固定值，字号调大后被裁 */
+  line-height: 1.45;
+  color: var(--text-secondary, #888);
+}
+
+.inline-interaction-card {
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 10px;
+  background: var(--bg-secondary, #f7f7f8);
+  overflow: hidden;
+  max-width: 100%;
+  min-width: min(100%, 400px);
+  width: fit-content;
+  margin-left: 10px;
+
+  /* 授权那张：左侧一道提示色（一眼分出「要批东西」与「只是问你个问题」） */
+  &.is-auth {
+    border-left: 3px solid var(--accent-warn, #f59e0b);
+
+    /* 高危命令换红：卡片在最外层就得能看出「这条不是普通的装个包」 */
+    &.is-dangerous {
+      border-left-color: var(--color-error, #e5484d);
+    }
+  }
+}
+
+.inline-interaction-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  line-height: 1.6;
+}
+
+/* 类型徽标：只靠令牌与半透明底色 —— 写死浅色底在暗色主题下会和浅色字撞成一片 */
+.inline-interaction-badge {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  background: var(--tag-bg, #e8e8ed);
+  color: var(--accent-color, #6366f1);
+
+  &.is-auth {
+    background: rgba(245, 158, 11, 0.16);
+    color: var(--accent-warn, #f59e0b);
+  }
+}
+
+.inline-interaction-summary {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary, #1a1a1a);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 头部没有摘要时（授权展开态：标题已经在正文第一行）的弹性占位，把 key / 折叠开关顶到右边 */
+.inline-interaction-gap {
+  flex: 1;
+  min-width: 0;
+}
+
+.inline-interaction-perm {
+  flex: none;
+  // max-width: 34%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary, #888);
+}
+
+.inline-interaction-toggle {
+  flex: none;
+  /* 方框 = 1.8em × 自身字号（`2xs` → 18px），字号一变跟着变 */
+  width: 1.8em;
+  height: 1.8em;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary, #888);
+  font-size: var(--font-size-2xs);
+  line-height: 1;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--hover-bg, #f0f0f0);
+    color: var(--text-primary, #1a1a1a);
+  }
+}
+
+.inline-interaction-body {
+  padding: 0 10px 8px;
+}
+
+/* 头部已把问题压成一行，只有被截断 / 多段时才在这里补全文 */
+.inline-interaction-question {
+  margin-bottom: 5px;
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+  color: var(--text-primary, #1a1a1a);
+  max-height: 5.8em;
+  overflow-y: auto;
+
+  :first-child {
+    margin-top: 0;
+  }
+
+  :last-child {
+    margin-bottom: 0;
+  }
+}
+
+.inline-interaction-options {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.inline-interaction-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary, #1a1a1a);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--hover-bg, #f0f0f0);
+  }
+
+  &.is-on {
+    border-color: var(--accent-color, #6366f1);
+    background: color-mix(in srgb,
+        var(--accent-color, #6366f1) 12%,
+        transparent);
+  }
+
+  &:focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: 1px;
+  }
+}
+
+/* 单选圆点 / 多选方框：1.3em × 自身字号（`2xs` → 13px），勾上时用主色填满 */
+.inline-interaction-mark {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.3em;
+  height: 1.3em;
+  border: 1.5px solid var(--border-color, #d1d5db);
+  border-radius: 50%;
+  font-size: var(--font-size-2xs);
+  line-height: 1;
+  color: var(--primary-fg);
+
+  &.is-multi {
+    border-radius: 3px;
+  }
+
+  .inline-interaction-option.is-on & {
+    border-color: var(--accent-color, #6366f1);
+    background: var(--accent-color, #6366f1);
+  }
+}
+
+.inline-interaction-option-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.inline-interaction-input {
+  width: 100%;
+  margin-top: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1a1a1a);
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  box-sizing: border-box;
+
+  &::placeholder {
+    color: var(--text-tertiary, #bbb);
+  }
+
+  &:focus {
+    outline: none;
+    border-color: var(--accent-color, #6366f1);
+  }
+}
+
+.inline-interaction-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+
+  &.is-end {
+    justify-content: flex-end;
+    margin-right: 0;
+  }
+}
+
+.inline-interaction-btn {
+  /* 22px = 1.85em @ sm：字号调大时按钮自己长高 */
+  min-height: 1.85em;
+  padding: 2px 10px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1a1a1a);
+  font-size: var(--font-size-sm);
+  line-height: 1.35;
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:hover:not(:disabled) {
+    background: var(--hover-bg, #f0f0f0);
+  }
+
+  &.is-ghost {
+    border-color: transparent;
+    background: transparent;
+    color: var(--text-secondary, #888);
+    margin-right: auto;
+  }
+
+  &.is-primary {
+    border-color: transparent;
+    background: var(--accent-color, #6366f1);
+    color: var(--primary-fg);
+
+    &:hover:not(:disabled) {
+      opacity: 0.9;
+      background: var(--accent-color, #6366f1);
+    }
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+/* ── 授权正文（`auth-body.tsx`，行内专用：不复用弹窗的 `.authorization`）──
+   弹窗正文的层级是「大标题 → 引文块 → 满宽按钮」，缩一档只会得到一个小号弹窗；
+   卡片按「说明 → 警示 → 待执行内容 → 动作」重排，权限名留在卡片头。 */
+.inline-auth {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+
+  /* 段间距统一由这里的 gap 给：动作行不叠自己的 margin-top（那是给提问卡的） */
+  .inline-interaction-actions {
+    margin-top: 0;
+  }
+}
+
+/* AI 的操作说明：次要色、按需换行。不套引文块 —— 那根 3px 竖条是弹窗的分段标记，
+   卡片这里靠代码块（自带边框与工具头）分隔 */
+.inline-auth-note {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  color: var(--text-secondary, #888);
+  overflow-wrap: anywhere;
+}
+
+/* 风险 / 脱壳提示：小警示条。琥珀为常态、高危转红（与卡片左侧那道竖条同一套色彩语义） */
+.inline-auth-hint {
+  display: flex;
+  gap: 5px;
+  margin: 0;
+  padding: 4px 8px;
+  border-left: 3px solid var(--accent-warn, #f59e0b);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--accent-warn, #f59e0b) 12%, transparent);
+  color: var(--text-primary, #1a1a1a);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  /* 后端把「风险提示 + 脱壳警告」用 \n 接成一串，保留换行 */
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+
+  &.is-dangerous {
+    border-left-color: var(--color-error, #e5484d);
+    background: color-mix(in srgb, var(--color-error, #e5484d) 12%, transparent);
+  }
+}
+
+.inline-auth-hint-icon {
+  flex: none;
+  color: var(--accent-warn, #f59e0b);
+
+  .inline-auth-hint.is-dangerous & {
+    color: var(--color-error, #e5484d);
+  }
+}
+
+/* 待执行内容：外壳抄代码块那套（边框 + `--code-*` 工具头），底色交给 Monaco 自己画 */
+.inline-auth-code {
+  min-width: 0;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--code-body-bg, #282c34);
+}
+
+/* 工具头只在「有单独的运行命令」时出现（脚本类）：命令工具的命令本身就是下面的正文 */
+.inline-auth-code-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  background: var(--code-header-bg, #323844);
+  color: var(--code-header-color, #abb2bf);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+}
+
+.inline-auth-code-label {
+  flex: none;
+  opacity: 0.72;
+}
+
+.inline-auth-code-cmd {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--code-font-family, monospace);
+  font-size: var(--font-size-xs);
+  color: var(--code-header-color, #abb2bf);
+}
+
+/* Monaco 外壳默认是「代码块头部下方」的配方（上圆角切平），这里没有那层头部 */
+.inline-auth-code .code-preview {
+  border-radius: 0;
+}

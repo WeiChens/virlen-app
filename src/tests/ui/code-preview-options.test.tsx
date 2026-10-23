@@ -70,6 +70,7 @@ import {
 /** 只取本用例碰到的键，避免把 Monaco 的整个类型搬进来 */
 type PreviewOptions = {
   padding?: { top?: number; bottom?: number }
+  lineDecorationsWidth?: number
   scrollbar?: {
     vertical?: string
     horizontal?: string
@@ -138,6 +139,44 @@ it('未超上限时纵向滚动条藏形（差 1px 也不冒幽灵条），且�
   const o = await mount()
   expect(o.scrollbar?.vertical).toBe('hidden')
   expect(o.scrollbar?.alwaysConsumeMouseWheel).toBe(false)
+})
+
+/**
+ * 正文左边界：正文到代码区左边界的距离**就是** `lineDecorationsWidth`（Monaco 的
+ * `contentLeft = 行号列宽 + lineDecorationsWidth`，行号关掉时行号列宽为 0）。
+ *
+ * 两种模式给同一个数（切「显示行号」不该让代码整体左右跳），区别只在底色画法：
+ * 有行号时只挖掉正文那段、贴着行号的 5px 仍留行号区底色；无行号时整段挖掉，
+ * 否则会剩一条没有行号的空槽。
+ */
+it('行号关掉时正文左侧留白照给（不再贴左边），且整段都是正文底色', async () => {
+  await act(async () =>
+    root.render(
+      <CodePreview code={CODE} language="typescript" showLineNumbers={false} />,
+    ),
+  )
+  const o = state.props!.options as PreviewOptions
+  const inset = o.lineDecorationsWidth ?? 0
+  // 曾经是 5px，文本紧贴边框
+  expect(inset).toBeGreaterThanOrEqual(12)
+  const el = container.querySelector<HTMLElement>('.code-preview')!
+  // 挖掉整段 → 行号区底色一点都不剩（不会出现一条空槽）
+  expect(el.style.getPropertyValue('--code-preview-gutter-cutout')).toBe(`${inset}px`)
+})
+
+it('有行号时挖掉的只是正文那段：左留白同宽，仍留一小条行号区底色贴行号', async () => {
+  await act(async () =>
+    root.render(<CodePreview code={CODE} language="typescript" showLineNumbers />),
+  )
+  const o = state.props!.options as PreviewOptions
+  const inset = o.lineDecorationsWidth ?? 0
+  expect(inset).toBeGreaterThanOrEqual(12)
+  const el = container.querySelector<HTMLElement>('.code-preview')!
+  const cutout = parseFloat(
+    el.style.getPropertyValue('--code-preview-gutter-cutout'),
+  )
+  expect(cutout).toBeGreaterThan(0)
+  expect(cutout).toBeLessThan(inset)
 })
 
 /**

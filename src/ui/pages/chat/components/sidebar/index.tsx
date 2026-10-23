@@ -10,6 +10,7 @@ import {
   chatState,
   getSessionRuntime,
   isSessionRuntimeBusy,
+  pendingInteractionCount,
   sessionStore,
   agentStore,
   settingsState,
@@ -52,6 +53,7 @@ import {
   UNGROUPED_KEY,
   type SessionGroup as AnySessionGroup,
 } from './session-grouping'
+import { statusFlagKind, type StatusFlagKind } from './session-status'
 
 interface Props {
   onSelectSession: (sessionId: string) => void
@@ -80,6 +82,53 @@ const SIDEBAR_TABS: { key: SidebarTab; label: string }[] = [
   { key: 'workspace', label: '工作目录' },
   { key: 'skills', label: '技能' },
 ]
+
+/** 状态槽的呈现（两处共用）：`kind` 由 `statusFlagKind` 定，槽里只有一枚 */
+function StatusFlag({ kind }: { kind: StatusFlagKind }) {
+  return (
+    <span className="session-flag">
+      {kind === 'waiting' ? (
+        <span
+          className="waiting-interaction-indicator"
+          title={t('有交互待你回答')}
+        />
+      ) : (
+        <span className="working-indicator" title={t('运行中')} />
+      )}
+    </span>
+  )
+}
+
+/**
+ * 会话项的「在忙 / 等你回答」状态槽。
+ *
+ * ⚠️ 必须是 observer：它读的是运行时与待答计数，外层分组组件只按 `group.sessions` 记忆化，
+ * store 一变不会重渲（那样琥珀点永远晚一拍甚至不出现）。
+ */
+const SessionStatusFlag = observer(function SessionStatusFlag({
+  sessionId,
+}: {
+  sessionId: string
+}) {
+  const kind = statusFlagKind(
+    pendingInteractionCount(sessionId) > 0,
+    isSessionRuntimeBusy(getSessionRuntime(sessionId)),
+  )
+  return kind ? <StatusFlag kind={kind} /> : null
+})
+
+/** 折叠分组头的同款状态槽：组内任一会话在等 → 琥珀点；否则有会话在跑 → 蓝点。 */
+const GroupStatusFlag = observer(function GroupStatusFlag({
+  sessions,
+}: {
+  sessions: Session[]
+}) {
+  const kind = statusFlagKind(
+    sessions.some((s) => pendingInteractionCount(s.id) > 0),
+    sessions.some((s) => isSessionRuntimeBusy(getSessionRuntime(s.id))),
+  )
+  return kind ? <StatusFlag kind={kind} /> : null
+})
 
 function ChatSidebar({
   onSelectSession,
@@ -431,7 +480,7 @@ function ChatSidebar({
     const rt = getSessionRuntime(session.id)
     const isCurrent = session.id === chatState.value.currentSessionId
     const isEdit = editingId === session.id
-    // 「在忙」= 引擎 run 在跑 或 本地前置处理中（图片识别）
+    // 「在忙」= 引擎 run 在跑 或 本地前置处理中（图片识别）；含它才给 item 加 `working` 修饰类
     const isBusy = isSessionRuntimeBusy(rt)
     return (
       <div
@@ -470,7 +519,7 @@ function ChatSidebar({
                   <svg className="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="200" height="200"><path d="M885.333333 85.333333H138.666667a53.393333 53.393333 0 0 0-53.333334 53.333334v746.666666a53.393333 53.393333 0 0 0 53.333334 53.333334h746.666666a53.393333 53.393333 0 0 0 53.333334-53.333334V138.666667a53.393333 53.393333 0 0 0-53.333334-53.333334z m-458.666666 618.666667a21.333333 21.333333 0 0 1-42.666667 0V320a21.333333 21.333333 0 0 1 42.666667 0z m213.333333 0a21.333333 21.333333 0 0 1-42.666667 0V320a21.333333 21.333333 0 0 1 42.666667 0z" fill="var(--accent-color)"></path></svg>
                 </span>
               )}
-              {isBusy && <span className="working-indicator" />}
+              <SessionStatusFlag sessionId={session.id} />
               <span className="session-title">{session.title}</span>
             </div>
           )}
@@ -787,12 +836,6 @@ function SessionGroupView({
   /** 分组头右键菜单：与「会话项」共用同一个 ContextMenu */
   const menu = useContextMenu<SessionGroup>()
 
-  // 组内有会话在忙（run 在跑 或 图片识别中）
-  const hasWorkingSession = useMemo(
-    () => group.sessions.some((s) => isSessionRuntimeBusy(getSessionRuntime(s.id))),
-    [group.sessions],
-  )
-
   // 组内有未查看的新回复（折叠时分组头显示红点）
   const hasNewReplySession = useMemo(
     () => group.sessions.some((s) => getSessionRuntime(s.id).hasNewReply),
@@ -900,7 +943,8 @@ function SessionGroupView({
         ) : (
           <AgentSvg className="group-icon" />
         )}
-        {isCollapsed && hasWorkingSession && <span className="working-indicator" />}
+        {/* 折叠时组内有会话在忙 / 有交互要你回答：同槽只亮一枚（等你回答优先） */}
+        {isCollapsed && <GroupStatusFlag sessions={group.sessions} />}
         {/* 折叠分组内有未查看的新回复 → 分组头部红点 */}
         {isCollapsed && hasNewReplySession && (
           <span className="new-reply-dot" title={t('有新的回复')} />

@@ -769,6 +769,7 @@
   "无沙盒·忽略规则": "No sandbox · ignore rule",
   "命令命中「忽略沙盒命令」规则，已按规则以「不使用沙盒」方式执行：可写入任意路径。": "Command matched the \"ignore sandbox\" rule and runs WITHOUT the sandbox by that rule: it can write anywhere.",
   "运行中": "Running",
+  "运行": "Run",
   "发送 Ctrl+C：仅对正在等待输入的程序有效；中断整个命令请用「终止」": "Send Ctrl+C: only affects programs waiting for input. Use Kill to interrupt the whole command.",
   "可直接在终端中键击或粘贴输入（回车发送）": "Type or paste directly in the terminal (Enter to send)",
   "粘贴": "Paste",
@@ -2206,5 +2207,17 @@
   "尺寸": "Dimensions",
   "正在加载模型…": "Loading model…",
   "无法解析这个模型": "Can't read this model",
-  "暂不支持该模型格式": "This model format isn't supported"
+  "暂不支持该模型格式": "This model format isn't supported",
+  "提问在会话内回答": "Answer questions inside the chat",
+  "默认开：AI 调用 user_choice 提问时不弹窗打断，而是显示在所属会话的消息列表下方；切到那个会话才能回答\n关掉则回到跨会话弹窗（立即引导你解决）": "On by default: user_choice questions no longer pop up over whatever you are reading — they appear below the message list of the session that asked, and you answer after switching to it.\nTurn it off to get the cross-session modal again (immediate, interrupting).",
+  "权限授权在会话内回答": "Answer permission requests inside the chat",
+  "默认关：命中权限审批时立即弹窗确认；打开后与提问一样显示在会话消息列表下方，打开那个会话才能处理": "Off by default: a permission request opens a confirmation modal immediately. When on, it appears below the message list of its session like a question does, and is handled once you open that session.",
+  "提问": "Question",
+  "授权": "Permission",
+  "有交互待你回答": "An interaction is waiting for your answer",
+  "待你回答的交互": "Interactions waiting for you",
+  "$__count__ 个待你回答": "$__count__ waiting for your answer",
+  "待处理的交互": "Pending interactions",
+  "$__count__ 个待处理": "$__count__ pending",
+  "Alt + ←/→": "Alt + ←/→"
 }

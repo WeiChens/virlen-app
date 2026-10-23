@@ -15,6 +15,7 @@ import { toolOutputStore } from '@/infrastructure/tools/output-store'
 import { track } from '@/utils/telemetry'
 import { v4 } from '@/utils/uuid'
 import { InteractionEnded } from './interaction-end'
+import { PendingSlots } from './pending-slots'
 
 class InteractionShelved extends Error {
   shelveMessage: string
@@ -33,6 +34,15 @@ export interface CommandConfirmHandles {
   cleanup: () => void
 }
 
+/**
+ * 授权结束（允许 / 拒绝 / 收敛 / 终端内提交）：撒掉「等授权」标记 —— 工具卡从这时起才渲染终端。
+ *
+ * 三个结束点都走这里，就是为了不出现「已经批过了终端还藏着」或「拒了反而弹出终端」两类漏洞。
+ */
+function endAuthPending(toolCallId: string): void {
+  if (toolCallId) toolOutputStore.clearAwaitingAuth(toolCallId)
+}
+
 /** 一个待审批交互的槽位（应答 / 收敛后即摘掉 → 重复应答自然失效） */
 interface PendingConfirm {
   resolve: (value: ToolExecutorResponse) => void
@@ -49,7 +59,7 @@ export function createCommandConfirmHandles(
   sessionId: string,
 ): CommandConfirmHandles {
   /** interactionId → 待审批槽位（跨 session 天然隔离：每个 session 一个 handles 实例） */
-  const pendings = new Map<string, PendingConfirm>()
+  const pendings = new PendingSlots<PendingConfirm>(sessionId)
 
   /**
  * 放行：执行待审批命令并把结果 resolve 回去。用户点「允许」与规则自动放行共用同一条路径。
@@ -85,6 +95,7 @@ export function createCommandConfirmHandles(
       const entry = pendings.get(interactionId)
       if (!entry) return
       pendings.delete(interactionId)
+      endAuthPending(entry.toolCallId)
       track('interaction.command.confirm.result', {
         approval_id: entry.approvalId,
         action: 'allow',
@@ -100,6 +111,7 @@ export function createCommandConfirmHandles(
       const entry = pendings.get(interactionId)
       if (!entry) return
       pendings.delete(interactionId)
+      endAuthPending(entry.toolCallId)
       const shelved = reason.startsWith('shelve:')
       track('interaction.command.confirm.result', {
         approval_id: entry.approvalId,
@@ -151,6 +163,7 @@ export function createCommandConfirmHandles(
     for (const [interactionId, entry] of entries) {
       toolInteractEvent.emit('interactionSettled', interactionId, 'expired')
       entry.reject(new InteractionEnded())
+      endAuthPending(entry.toolCallId)
     }
   }
 
@@ -178,6 +191,8 @@ export function createCommandConfirmHandles(
         entry.resolve = resolve
         entry.reject = reject
         pendings.set(interactionId, entry)
+        // 授权前不显示终端：运行中的工具卡此时还是一片空白输出，看着像「已经跑完了」
+        if (entry.toolCallId) toolOutputStore.setAwaitingAuth(entry.toolCallId)
         toolInteractEvent.emit('showAuthorization', {
           interactionId,
           sessionId,
@@ -211,7 +226,7 @@ export function createNativeCommandConfirmHandles(
   sessionId: string,
 ): CommandConfirmHandles {
   /** interactionId → 待审批槽位（多槽，见文件头） */
-  const pendings = new Map<string, PendingConfirm>()
+  const pendings = new PendingSlots<PendingConfirm>(sessionId)
 
   /** 终端分支按 toolCallId 路由（命令行走在终端块里，UI 拿不到 interactionId） */
   function findByToolCallId(
@@ -227,6 +242,7 @@ export function createNativeCommandConfirmHandles(
       const entry = pendings.get(interactionId)
       if (!entry) return
       pendings.delete(interactionId)
+      endAuthPending(entry.toolCallId)
 
       track('interaction.command.confirm.result', {
         approval_id: entry.approvalId,
@@ -252,6 +268,7 @@ export function createNativeCommandConfirmHandles(
       const entry = pendings.get(interactionId)
       if (!entry) return
       pendings.delete(interactionId)
+      endAuthPending(entry.toolCallId)
       const shelved = reason.startsWith('shelve:')
       track('interaction.command.confirm.result', {
         approval_id: entry.approvalId,
@@ -291,6 +308,7 @@ export function createNativeCommandConfirmHandles(
       if (!found) return
       const [interactionId, entry] = found
       pendings.delete(interactionId)
+      endAuthPending(entry.toolCallId)
       track('interaction.command.confirm.result', {
         approval_id: entry.approvalId,
         action: 'allow',
@@ -313,6 +331,7 @@ export function createNativeCommandConfirmHandles(
       if (!found) return
       const [interactionId, entry] = found
       pendings.delete(interactionId)
+      endAuthPending(entry.toolCallId)
       track('interaction.command.confirm.result', {
         approval_id: entry.approvalId,
         action: 'reject',
@@ -340,6 +359,7 @@ export function createNativeCommandConfirmHandles(
       }
       toolInteractEvent.emit('interactionSettled', interactionId, 'expired')
       entry.reject(new InteractionEnded())
+      endAuthPending(entry.toolCallId)
     }
   }
 
@@ -370,6 +390,8 @@ export function createNativeCommandConfirmHandles(
         entry.resolve = resolve
         entry.reject = reject
         pendings.set(interactionId, entry)
+        // 授权前不显示终端：等批期间工具卡不渲染终端 / 脚本视图（授权结束由 endAuthPending 撤掉）
+        if (entry.toolCallId) toolOutputStore.setAwaitingAuth(entry.toolCallId)
         // Rust 判定「走终端」时不弹 modal，改在该 toolCallId 的终端块里渲染可编辑命令行。
         // 走哪条路只由 Rust 下发的 presentation 决定（前端不猜平台）。
         if (data.presentation === 'terminal') {

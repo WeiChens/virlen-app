@@ -8,6 +8,7 @@ import {
   sessionStore,
   updateSessionRuntime,
   dropSessionRuntime,
+  dropPendingInteractions,
   agentStore,
 } from '@/ui/store'
 import { v4 } from '@/utils/uuid'
@@ -209,6 +210,7 @@ export async function deleteSessions(ids: string[]): Promise<number> {
   const count = sessionStore.deleteSessions(ids)
   // 同步丢弃运行时状态与清单草稿，否则它们会永久挂在已不存在的会话 id 上
   dropSessionRuntime(ids)
+  dropPendingInteractions(ids)
   dropTodoDrafts(ids)
   return count
 }

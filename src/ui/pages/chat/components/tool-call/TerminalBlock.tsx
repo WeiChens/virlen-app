@@ -273,6 +273,26 @@ export function useToolLiveOutput(toolCallId: string) {
 }
 
 /**
+ * 这条命令是不是还在**等用户授权**（还没开始跑）。
+ *
+ * 授权前终端是空的（只有一行 `$ cmd`）—— 看起来像「已经跑完、没输出」；所以等批期间干脆不渲染
+ * 终端 / 脚本视图，授权完再出现（写入点 `services/tool-service/command_confirm.ts`）。
+ */
+export function useAwaitingAuth(toolCallId: string): boolean {
+  const [awaiting, setAwaiting] = useState(
+    () => !!toolOutputStore.get(toolCallId)?.awaitingAuth,
+  )
+  useEffect(() => {
+    setAwaiting(!!toolOutputStore.get(toolCallId)?.awaitingAuth)
+    return toolOutputStore.subscribe((id, out) => {
+      if (id !== toolCallId) return
+      setAwaiting(!!out.awaitingAuth)
+    })
+  }, [toolCallId])
+  return awaiting
+}
+
+/**
  * 终端视图：运行中与完成后共用同一个组件实例 —— 两态 DOM 结构相同，React 复用节点，
  * 切换时滚动位置天然保住，不会把已贴底的视图弹回顶部。
  */
@@ -352,6 +372,13 @@ export function TerminalView({
       </div>
     )
   }
+
+  /**
+   * 授权前不显示终端：此时输出必然是空的（命令还没跑），一块只有 `$ cmd` 的空终端
+   * 看着像「已跑完、没输出」。授权结束（允许 / 拒绝 / 收敛）后标记消失，终端才出现。
+   * ⚠️ 必须在「终端内确认」之后：那条路径本来就用终端块承载审批输入。
+   */
+  if (running && entry?.awaitingAuth) return null
 
   /**
    * PTY 路径走 xterm：输出是带光标控制的原始 VT 流，<pre> 无法表达，也没法键击输入。
