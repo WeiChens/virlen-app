@@ -44,7 +44,8 @@
   }
 }
 
-/* 标签栏：横向排、超出就自己滚（标签一多不能把面板顶宽），底边与内容区同一条线 */
+/* 标签栏：横向排、超出就自己滚（标签一多不能把面板顶宽），底边与内容区同一条线。
+   滚动条之外，鼠标滚轮也能推（纵向手势换算成横向，见 `tab-scroll.ts`）。 */
 .side-panel-tabs {
   flex: none;
   display: flex;
@@ -55,22 +56,33 @@
   background: var(--bg-secondary, #f7f7f8);
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: thin;
 
-  /* 细滚动条：默认那条在 30px 高的标签栏里太占地方 */
+  /* 滚动条跟主题：令牌 --scrollbar-thumb（亮 #ccc / 暗 #585b70），与全局 `*::-webkit-scrollbar` 同一档。
+     细条 + 透明轨道：默认那条在 30px 高的标签栏里太抢眼；hover 深一档，抓得住。
+     ⚠️ 不要在这里写 `scrollbar-width`：一旦给了标准属性，Chromium 就忽略下面的
+     `::-webkit-scrollbar-*`，暗色主题下滚动条会退回浏览器默认的浅色（同 search-dialog.scss 那条注记）。 */
   &::-webkit-scrollbar {
     height: 4px;
   }
 
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
   &::-webkit-scrollbar-thumb {
     border-radius: 2px;
-    background: var(--border-color, #e5e5e5);
+    background: var(--scrollbar-thumb, #ccc);
+
+    &:hover {
+      background: var(--text-secondary, #888);
+    }
   }
 }
 
-/* 一个标签 = 主体按钮（图标 + 文件名 + 脏点）+ 关闭按钮 */
+/* 一个标签 = 主体按钮（图标 + 文件名 + 脏点）+ 关闭按钮。
+   `flex: none`：标签不压缩（文件名不被挤成省略号），放不下就交给标签栏横向滚动 */
 .side-panel-tab {
-  flex: 0 1 auto;
+  flex: none;
   min-width: 0;
   max-width: 200px;
   display: flex;

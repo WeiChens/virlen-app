@@ -1,11 +1,14 @@
 /**
- * 右侧面板容器 · 样式契约（都是编译期不会报、只在界面上出问题的两条）。
+ * 右侧面板容器 · 样式契约（都是编译期不会报、只在界面上出问题的几条）。
  *
  * ① **非激活的标签内容必须真的不显示**：容器靠 `hidden` 属性切标签，一旦 `.side-panel-pane[hidden]`
  *    这条规则没了（或被 `display: flex` 压掉），所有打开的文件会同时挤在一块里 ——
  *    jsdom 不做布局，这个缺陷在 DOM 断言里看不见（元素在、hidden 也在，只是画出来了）。
  * ② **宽度 / 拖拽归容器**：`.workspace-file-panel` 曾经自带 `max-width: 72vw` 与左边框（单面板时代），
  *    挪进容器后如果再长回来，就会出现「两层宽度上限」，拖到一半被内层截住。
+ * ③ **主题令牌必须真实存在**：写错名字的 `var(--x)` 不报错，只是永远走 fallback，暗色主题下不走眼。
+ * ④ **标签栏滚动条必须跟主题**：写了 `scrollbar-width` 就会让 `::-webkit-scrollbar-thumb` 失效，
+ *    暗色主题下冒出浅色滚动条。
  */
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -51,6 +54,20 @@ describe('右侧面板容器 · 样式契约', () => {
     // 内容区要自己撑满容器给的那块
     expect(filePanel).toContain('height: 100%')
     expect(filePanel).toContain('width: 100%')
+  })
+
+  it('标签栏滚动条跟主题：走 --scrollbar-thumb，且不出现 scrollbar-width', () => {
+    // ⚠️ 标准属性一出现，Chromium 就忽略下面的 ::-webkit-scrollbar-*，暗色主题下滚动条回退成浅色
+    const tabs = /\.side-panel-tabs\s*\{([^}]*)\}/.exec(panelCss)?.[1]
+    expect(tabs).toBeTruthy()
+    expect(tabs).not.toContain('scrollbar-width')
+
+    const thumb = /\.side-panel-tabs::-webkit-scrollbar-thumb\s*\{([^}]*)\}/.exec(panelCss)?.[1]
+    expect(thumb).toBeTruthy()
+    expect(thumb).toContain('var(--scrollbar-thumb')
+    // 细条：与标签栏 30px 的高度相称
+    const bar = /\.side-panel-tabs::-webkit-scrollbar\s*\{([^}]*)\}/.exec(panelCss)?.[1]
+    expect(bar).toContain('height: 4px')
   })
 
   it('容器引用的每个主题令牌都在 theme.scss 里真实定义（否则 fallback 永远生效）', () => {

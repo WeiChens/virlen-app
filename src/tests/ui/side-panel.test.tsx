@@ -251,6 +251,34 @@ it('每个标签一颗按钮，激活态靠 aria-selected；点别的标签上�
   expect(activeChanges).toEqual([TAB_B.id])
 })
 
+/**
+ * 标签栏只有横向溢出（`overflow-y: hidden`）：纵向滚轮得自己接成横向滚动，否则标签一多
+ * 就只能去够底下那条 4px 的滚动条。jsdom 不做布局（clientWidth / scrollWidth 恒 0），
+ * 这里手动造出「内容比可视区宽」。
+ */
+it('标签栏溢出时：纵向滚轮被换算成横向滚动并吞掉', async () => {
+  await renderPanel([TAB_A, TAB_B], TAB_A.id)
+  const bar = document.querySelector<HTMLElement>('.side-panel-tabs')!
+  Object.defineProperty(bar, 'clientWidth', { value: 100, configurable: true })
+  Object.defineProperty(bar, 'scrollWidth', { value: 300, configurable: true })
+
+  const wheel = new WheelEvent('wheel', { deltaY: 60, cancelable: true, bubbles: true })
+  bar.dispatchEvent(wheel)
+  expect(wheel.defaultPrevented).toBe(true)
+})
+
+/** 反例：标签都放得下（jsdom 默认量到 0）时不能拦，滚轮该继续去滚外层 */
+it('标签栏不溢出时：滚轮照常冒泡', async () => {
+  await renderPanel([TAB_A, TAB_B], TAB_A.id)
+  const wheel = new WheelEvent('wheel', {
+    deltaY: 60,
+    cancelable: true,
+    bubbles: true,
+  })
+  document.querySelector<HTMLElement>('.side-panel-tabs')!.dispatchEvent(wheel)
+  expect(wheel.defaultPrevented).toBe(false)
+})
+
 it('切标签**不卸载**：两块内容都在 DOM，非激活那块只是 hidden', async () => {
   await renderPanel([TAB_A, TAB_B], TAB_A.id)
 

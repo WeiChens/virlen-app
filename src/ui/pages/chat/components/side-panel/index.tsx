@@ -25,6 +25,7 @@ import CloseSvg from '@/ui/components/icons/CloseSvg'
 import FileTypeIcon from '@/ui/components/icons/FileTypeIcon'
 import WorkspaceFilePanel from '../workspace-file'
 import { tabLabel, type SidePanelTab } from './tabs'
+import { wheelScrollLeft } from './tab-scroll'
 import './style.scss'
 
 interface Props {
@@ -340,6 +341,8 @@ function SidePanel({
   // activeId 指向已关闭的标签（宿主还没来得及换）时退回第一个，别渲染出一片空白
   const current = tabs.find((tab) => tab.id === activeId) ?? tabs[0] ?? null
 
+  /** 标签栏本体：滚轮横向滚动挂在它上面 */
+  const tabsRef = useRef<HTMLDivElement>(null)
   /**
    * 激活的标签滚进可视区：标签一多标签栏会横向滚，开一个新文件时
    * 它可能刚落在视野外（点标签本身不需要，但双击文件 / 已开着再点一下就靠它）。
@@ -352,6 +355,24 @@ function SidePanel({
       el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     }
   }, [current?.id])
+
+  /**
+   * 标签栏：滚轮纵向手势 → 横向滚动。
+   * 自己挂非 passive 的原生监听，不用 `onWheel` —— React 的 wheel 监听在 root 上带
+   * `passive: true`，里面 `preventDefault()` 不生效（标签一多滚起来还会牵动外层滚动）。
+   */
+  useEffect(() => {
+    const el = tabsRef.current
+    if (!el) return
+    const onWheel = (event: WheelEvent) => {
+      const next = wheelScrollLeft(el, event)
+      if (next === null) return
+      event.preventDefault()
+      el.scrollLeft = next
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
 
   return (
     <aside
@@ -367,7 +388,7 @@ function SidePanel({
         onMouseDown={startResize}
       />
 
-      <div className="side-panel-tabs" role="tablist">
+      <div className="side-panel-tabs" role="tablist" ref={tabsRef}>
         {tabs.map((tab) => {
           const active = tab.id === current?.id
           const label = tab.kind === 'file' ? tabLabel(tab.path) : tab.id
