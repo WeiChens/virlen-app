@@ -119,6 +119,18 @@ export function createEventHandler(
         scheduleGitRefresh(sessionId)
         break
 
+      case 'vision_image_created':
+        /*
+         * 工具把图片交给模型（`role='vision_image'`，见 Rust `vision/image_send.rs`）：
+         * 界面不渲染它（`rows.ts` 跳过），但必须进内存 —— 下一次发送的 `options.messages`
+         * 就是这份列表，缺了它图片就只存于库里、模型下一轮看不到。
+         */
+        if (event.data?.message) {
+          addSessionMessage(sessionId, event.data.message)
+          events?.onMessagesUpdate?.(sessionId)
+        }
+        break
+
       case 'tool_progress': {
         // 引擎在累积工具参数期间推送的进度：这段时间没有其它事件，用它显示「正在写入 · 1.2k 字符」。
         const tp = event.data ?? {}

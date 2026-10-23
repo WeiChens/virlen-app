@@ -173,6 +173,23 @@ pub(super) fn openai_content(msg: &Message, content: &Value) -> Value {
     }
 }
 
+/// `data:<mime>;base64,<payload>` → `(mime, payload)`；不是 base64 数据 URL 则为 `None`。
+///
+/// 为什么必须从 URL 里取 mime 而不能写死：`image_url` 块里的图有 PNG / JPEG / WebP / GIF
+/// 多种，声明错的 `media_type` 会让上游直接拒收（或把图当损坏数据）。
+fn split_data_url(url: &str) -> Option<(&str, &str)> {
+    let rest = url.strip_prefix("data:")?;
+    let (meta, payload) = rest.split_once(',')?;
+    if !meta.contains(";base64") {
+        return None;
+    }
+    let mime = meta.split(';').next().unwrap_or("").trim();
+    if mime.is_empty() {
+        return None;
+    }
+    Some((mime, payload))
+}
+
 /// content 块数组 → Anthropic 内容块
 ///
 /// file（附件）/ quote（引用）/ skill（技能引用）在 Anthropic 协议里没有对应结构，
@@ -200,13 +217,12 @@ pub(super) fn anthropic_blocks(blocks: &[Value]) -> Vec<Value> {
                     .and_then(|i| i.get("url"))
                     .and_then(Value::as_str)
                     .unwrap_or("");
-                if let Some(rest) = url.strip_prefix("data:") {
-                    let data = rest.split(',').nth(1).unwrap_or(rest);
+                if let Some((mime, data)) = split_data_url(url) {
                     out.push(json!({
                         "type": "image",
                         "source": {
                             "type": "base64",
-                            "media_type": "image/jpeg",
+                            "media_type": mime,
                             "data": data,
                         }
                     }));

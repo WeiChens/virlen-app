@@ -19,7 +19,7 @@ use super::Provider;
 use super::super::cancellation::CancellationToken;
 use super::super::types::{
     ChatRequest, Message, ProgressThrottle, StreamEvent, TokenUsage, ToolUseContent,
-    TOOL_PROGRESS_INTERVAL_MS,
+    TOOL_PROGRESS_INTERVAL_MS, VISION_IMAGE_ROLE,
 };
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -142,6 +142,26 @@ impl NativeAnthropicProvider {
 
         let request_messages = slice_messages(&request.messages);
         for msg in request_messages {
+            // `vision_image`：工具把图片交给模型。模型侧它就是一条 user 消息，但必须**并入**
+            // 紧邻的 user turn（那里正是上一条 tool_result）：Anthropic 要求 tool_result 位于
+            // 该 turn 块数组的**最前面**，追加 text + image 正好在后；另起一条会变成
+            // 「连续两条 user」，部分网关直接 400。
+            if msg.role == VISION_IMAGE_ROLE {
+                let blocks = anthropic_blocks(
+                    msg.content.as_array().map(Vec::as_slice).unwrap_or(&[]),
+                );
+                if let Some(last) = messages.last_mut() {
+                    if last.get("role").and_then(Value::as_str) == Some("user") {
+                        if let Some(arr) = last.get_mut("content").and_then(Value::as_array_mut) {
+                            arr.extend(blocks);
+                            continue;
+                        }
+                    }
+                }
+                messages.push(json!({ "role": "user", "content": blocks }));
+                continue;
+            }
+
             if msg.role == "summary" || msg.role == "feedback" {
                 messages.push(json!({
                     "role": "user",

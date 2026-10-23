@@ -11,7 +11,7 @@ import {
   extractJsonData,
 } from './http-utils'
 import { v4 } from '@/utils/uuid'
-import { fileBlockToText, quoteBlockToText, skillBlockToText, getLastSummaryMessageIndex } from '@/types'
+import { fileBlockToText, quoteBlockToText, skillBlockToText, getLastSummaryMessageIndex, VISION_IMAGE_ROLE } from '@/types'
 import type { MessageContent } from '@/types'
 import { processVisionContent } from './visionInject'
 
@@ -283,6 +283,18 @@ export class OpenAiProvider implements IProvider {
 
     // 消息列表
     for (const msg of requestMessages) {
+      // 工具注入的图片消息（vision_image）：投影成一条 user 消息
+      //（`tool` 消息的 content 在 OpenAI 协议里只能是字符串，放不下图片 part）
+      if (msg.role === VISION_IMAGE_ROLE) {
+        messages.push({
+          role: 'user',
+          content: Array.isArray(msg.content)
+            ? toOpenAiBlocks(msg.content)
+            : msg.content,
+        })
+        continue
+      }
+
       // summary / feedback 角色：转为 user 消息
       if (msg.role === 'summary' || msg.role === 'feedback') {
         messages.push({

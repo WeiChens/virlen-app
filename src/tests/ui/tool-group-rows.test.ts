@@ -364,3 +364,47 @@ describe('toolGroupView（折叠态文案）', () => {
     ).toBe(0)
   })
 })
+
+describe('vision_image 注入消息（工具把图片交给模型）', () => {
+  const imageMessage = (id: string): Message => ({
+    id,
+    role: 'vision_image',
+    content: [
+      { type: 'text', text: 'Image "shot.png" (/w/shot.png)' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,QUJD' } },
+    ],
+    timestamp: 0,
+  })
+
+  it('永不占行：折叠开着关了都不渲染，也不打断工具段', () => {
+    const messages: Message[] = [
+      user('u1', '看下截图'),
+      assistant('a1', [tc('c1'), tc('c2')]),
+      toolResult('t1', 'c1', '🖼️ /w/1.png'),
+      toolResult('t2', 'c2', '🖼️ /w/2.png'),
+      imageMessage('img1'),
+      assistant('a2', undefined, '看完了'),
+    ]
+
+    const grouped = buildRows(messages, true)
+    expect(grouped.map((r) => r.kind)).toEqual(['one', 'tools', 'one'])
+    expect(grouped[1]).toMatchObject({ kind: 'tools', messageIndexes: [1] })
+
+    // 关掉折叠：tool 消息会自己占行（旧行为），但 vision_image 仍然不渲染
+    const flat = buildRows(messages, false)
+    expect(flat.map((r) => (r.kind === 'one' ? messages[r.messageIndex].role : 'tools'))).toEqual([
+      'user',
+      'assistant',
+      'tool',
+      'tool',
+      'assistant',
+    ])
+  })
+
+  it('行下标映射把隐藏行归到前一行（搜索命中不会跳到空行）', () => {
+    const messages: Message[] = [user('u1', 'x'), imageMessage('img1')]
+    const map = buildRowIndexMap(messages, buildRows(messages, true))
+    expect(map[0]).toBe(0)
+    expect(map[1]).toBe(0)
+  })
+})

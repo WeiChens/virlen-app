@@ -7,6 +7,7 @@
  * 尾部段（tools 行的 tail）：后面再没有可见气泡时默认展开，否则用户看不到进展。
  */
 import type { Message } from '@/types'
+import { VISION_IMAGE_ROLE } from '@/types'
 import {
   messageHasAttachmentBlocks,
   messageHasBody,
@@ -75,6 +76,9 @@ export function buildRows(
 
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index]
+    // 「工具把图片交给模型」的注入消息：**永不渲染**（用户没发这张图，工具结果里已有文字交代）。
+    // 放在 tool 之前判：这条不论是否开启折叠都不占行。
+    if (message.role === VISION_IMAGE_ROLE) continue
     // 启用折叠时：tool 消息不渲染，不占行也不打断工具段
     if (groupTools && message.role === 'tool') continue
     // 带工具调用的 assistant：并入当前段。中段再遇带正文的宿主就收口（正文是看得见的边界）
@@ -123,7 +127,7 @@ export function buildRowIndexMap(
       for (const messageIndex of row.messageIndexes) map[messageIndex] = rowIndex
     }
   }
-  /** 未映射（tool 消息）：向前填到宿主所在行 */
+  /** 未映射（tool / vision_image 消息）：向前填到宿主所在行 */
   let last = 0
   for (let i = 0; i < map.length; i++) {
     if (map[i] >= 0) last = map[i]

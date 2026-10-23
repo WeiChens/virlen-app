@@ -13,7 +13,7 @@ import type { ChatRequest, IProvider } from './types'
 import type { MessageContent, TokenUsage } from '@/types'
 import { apiFetch, getResponseReader, readStreamLines } from './http-utils'
 import { track } from '@/utils/telemetry'
-import { fileBlockToText, quoteBlockToText, skillBlockToText, getLastSummaryMessageIndex } from '@/types'
+import { fileBlockToText, quoteBlockToText, skillBlockToText, getLastSummaryMessageIndex, VISION_IMAGE_ROLE } from '@/types'
 import { processVisionContent } from './visionInject'
 import { fetch } from '@tauri-apps/plugin-http'
 
@@ -92,13 +92,16 @@ function toAnthropicBlocks(
     } else if (block.type === 'image_url') {
       const url = block.image_url.url
       if (url.startsWith('data:')) {
-        const parts = url.split(',')
+        // media_type 必须从 data URL 里取：写死 `image/jpeg` 会让 PNG/WebP 被上游当损坏数据拒收
+        const comma = url.indexOf(',')
+        const meta = comma > 5 ? url.slice(5, comma) : ''
+        const mime = meta.split(';')[0].trim()
         out.push({
           type: 'image',
           source: {
             type: 'base64',
-            media_type: 'image/jpeg',
-            data: parts[1],
+            media_type: mime || 'image/png',
+            data: comma >= 0 ? url.slice(comma + 1) : '',
           },
         })
       } else {
@@ -415,6 +418,21 @@ export class AnthropicProvider implements IProvider {
         ? request.messages
         : request.messages.slice(lastSummaryMessageIndex)
     for (const msg of requestMessages) {
+      // 工具注入的图片消息（vision_image）：模型侧就是一条 user 消息，但必须**并入**紧邻的
+      // user turn（那里正是 tool_result）：tool_result 必须在块数组最前，另起一条会变成连续两条 user
+      if (msg.role === VISION_IMAGE_ROLE) {
+        const blocks = Array.isArray(msg.content)
+          ? toAnthropicBlocks(msg.content)
+          : []
+        const last = messages[messages.length - 1]
+        if (last?.role === 'user') {
+          last.content.push(...blocks)
+          continue
+        }
+        messages.push({ role: 'user', content: blocks })
+        continue
+      }
+
       // summary / feedback 角色：转为 user 消息
       if (msg.role === 'summary' || msg.role === 'feedback') {
         messages.push({

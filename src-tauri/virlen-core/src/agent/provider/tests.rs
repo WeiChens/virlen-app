@@ -4,7 +4,9 @@
 //! 避免依赖父模块的私有 use 绑定（可读性也更好）。
 
 use super::blocks::process_vision_content;
-use super::super::types::{ChatRequest, Message, ToolDefinition, ToolParameters, ToolUseContent};
+use super::super::types::{
+    ChatRequest, Message, ToolDefinition, ToolParameters, ToolUseContent, VISION_IMAGE_ROLE,
+};
 use super::{NativeAnthropicProvider, NativeOpenAiProvider};
 use serde_json::{json, Value};
 
@@ -463,4 +465,88 @@ fn mark_tail_block_only_touches_whitelisted_non_empty_blocks() {
         let mut m = json!({ "role": "user", "content": [{ "type": kind }] });
         assert!(super::anthropic::mark_tail_block(&mut m), "{kind} 应在白名单里");
     }
+}
+
+// ==================== vision_image（工具把图片交给模型） ====================
+
+/// 工具注入的图片消息：一段文本说明 + 一个 data URL 图片块
+fn vision_image_message() -> Message {
+    msg(
+        VISION_IMAGE_ROLE,
+        json!([
+            { "type": "text", "text": "Image \"shot.png\" (/w/shot.png); attached to this turn." },
+            {
+                "type": "image_url",
+                "image_url": { "url": "data:image/png;base64,AQID", "detail": "auto" }
+            }
+        ]),
+        None,
+        None,
+    )
+}
+
+#[test]
+fn openai_projects_vision_image_as_a_user_message() {
+    let p = NativeOpenAiProvider::new("test", "key", "https://api.test.com");
+    let body = p.build_request(&chat_request(vec![vision_image_message()]));
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["role"], "user", "vision_image 必须投影成 user");
+    let content = messages[0]["content"].as_array().unwrap();
+    assert_eq!(content[0]["type"], "text");
+    assert_eq!(content[1]["type"], "image_url");
+    assert_eq!(content[1]["image_url"]["url"], "data:image/png;base64,AQID");
+}
+
+#[test]
+fn anthropic_merges_vision_image_into_the_tool_result_turn() {
+    let p = NativeAnthropicProvider::new("test", "key", "https://api.test.com");
+    let mut tool = msg("tool", json!("🖼️ /w/shot.png"), None, None);
+    tool.tool_call_id = Some("call_1".into());
+
+    let body = p.build_request(&chat_request(vec![tool, vision_image_message()]));
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(
+        messages.len(),
+        1,
+        "必须并入同一条 user turn；另起一条会变成连续两条 user: {body}"
+    );
+    let content = messages[0]["content"].as_array().unwrap();
+    assert_eq!(content[0]["type"], "tool_result", "tool_result 必须仍在最前面");
+    assert_eq!(content[1]["type"], "text");
+    assert_eq!(content[2]["type"], "image");
+    assert_eq!(content[2]["source"]["type"], "base64");
+    // media_type 必须取自 data URL：写死 jpeg 会让 PNG 被上游当损坏数据拒收
+    assert_eq!(content[2]["source"]["media_type"], "image/png");
+    assert_eq!(content[2]["source"]["data"], "AQID");
+}
+
+#[test]
+fn anthropic_vision_image_starts_a_user_turn_when_nothing_precedes_it() {
+    let p = NativeAnthropicProvider::new("test", "key", "https://api.test.com");
+    let body = p.build_request(&chat_request(vec![vision_image_message()]));
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"][1]["type"], "image");
+}
+
+#[test]
+fn anthropic_data_url_media_type_is_read_from_the_url() {
+    let body = super::blocks::anthropic_blocks(&[json!({
+        "type": "image_url",
+        "image_url": { "url": "data:image/webp;base64,ZZZ" }
+    })]);
+    assert_eq!(body[0]["source"]["media_type"], "image/webp");
+    assert_eq!(body[0]["source"]["data"], "ZZZ");
+}
+
+#[test]
+fn anthropic_keeps_plain_urls_as_url_sources() {
+    let body = super::blocks::anthropic_blocks(&[json!({
+        "type": "image_url",
+        "image_url": { "url": "https://example.com/a.png" }
+    })]);
+    assert_eq!(body[0]["source"]["type"], "url");
+    assert_eq!(body[0]["source"]["url"], "https://example.com/a.png");
 }

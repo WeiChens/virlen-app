@@ -646,7 +646,7 @@
       },
       {
         "name": "vision_analyze",
-        "description": "Run a complete visual analysis of an image; a single call returns all detection results:\n[UI element detection] Detects buttons, icons, images, text blocks, containers, etc.\n[OCR] Recognizes all text in the image.\n[Icon recognition] Recognizes the meaning of 81 common icons.\n[Object detection] Detects 254 everyday object classes (people, cars, phones, food, animals, etc.), with parent-child containment relations.\nOutput is tree text; coordinates use the [x,y w×h] format.\nSuited to analysing UI screenshots, natural photos, and the like.",
+        "description": "Read an image file and make it available to you. What comes back depends on the user's local vision setting:\n[Local pseudo-vision enabled] A single call returns all detection results: UI element detection (buttons, icons, images, text blocks, containers), OCR text, recognition of 81 common icons, and 254 everyday object classes (people, cars, phones, food, animals), with parent-child containment relations — as tree text with [x,y w×h] coordinates.\n[Local pseudo-vision disabled] No on-device inference runs: the image itself is attached to this turn as a picture you can see, and the result is only its facts (path, format, dimensions, bytes). Look at the attached image directly; do not read the same file again just to see it.\nSuited to analysing UI screenshots, natural photos, and the like.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1686,7 +1686,7 @@
       },
       {
         "name": "vision_analyze",
-        "description": "Run a complete visual analysis of an image; a single call returns all detection results:\n[UI element detection] Detects buttons, icons, images, text blocks, containers, etc.\n[OCR] Recognizes all text in the image.\n[Icon recognition] Recognizes the meaning of 81 common icons.\n[Object detection] Detects 254 everyday object classes (people, cars, phones, food, animals, etc.), with parent-child containment relations.\nOutput is tree text; coordinates use the [x,y w×h] format.\nSuited to analysing UI screenshots, natural photos, and the like.",
+        "description": "Read an image file and make it available to you. What comes back depends on the user's local vision setting:\n[Local pseudo-vision enabled] A single call returns all detection results: UI element detection (buttons, icons, images, text blocks, containers), OCR text, recognition of 81 common icons, and 254 everyday object classes (people, cars, phones, food, animals), with parent-child containment relations — as tree text with [x,y w×h] coordinates.\n[Local pseudo-vision disabled] No on-device inference runs: the image itself is attached to this turn as a picture you can see, and the result is only its facts (path, format, dimensions, bytes). Look at the attached image directly; do not read the same file again just to see it.\nSuited to analysing UI screenshots, natural photos, and the like.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2726,7 +2726,7 @@
       },
       {
         "name": "vision_analyze",
-        "description": "Run a complete visual analysis of an image; a single call returns all detection results:\n[UI element detection] Detects buttons, icons, images, text blocks, containers, etc.\n[OCR] Recognizes all text in the image.\n[Icon recognition] Recognizes the meaning of 81 common icons.\n[Object detection] Detects 254 everyday object classes (people, cars, phones, food, animals, etc.), with parent-child containment relations.\nOutput is tree text; coordinates use the [x,y w×h] format.\nSuited to analysing UI screenshots, natural photos, and the like.",
+        "description": "Read an image file and make it available to you. What comes back depends on the user's local vision setting:\n[Local pseudo-vision enabled] A single call returns all detection results: UI element detection (buttons, icons, images, text blocks, containers), OCR text, recognition of 81 common icons, and 254 everyday object classes (people, cars, phones, food, animals), with parent-child containment relations — as tree text with [x,y w×h] coordinates.\n[Local pseudo-vision disabled] No on-device inference runs: the image itself is attached to this turn as a picture you can see, and the result is only its facts (path, format, dimensions, bytes). Look at the attached image directly; do not read the same file again just to see it.\nSuited to analysing UI screenshots, natural photos, and the like.",
         "parameters": {
           "type": "object",
           "properties": {

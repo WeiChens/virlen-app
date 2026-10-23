@@ -15,6 +15,7 @@ import { sessionRuntimeState, sessionStore, settingsState } from '@/ui/store'
 import { contextWindowOf, pickContextTokens, toContextInfo } from '@/domain/usage/context-occupancy'
 import {
   buildToolCallIndex,
+  isTransferableMessage,
   projectContentToText,
   toMessageDTO,
   toRuntimeDTO,
@@ -170,6 +171,8 @@ export function createStoreBridge(
       for (const m of s.messages) {
         // 流式中的消息内容走 stream 通道，定稿后再走消息通道
         if (m.streaming) continue
+        // 工具注入的图片消息（vision_image）不发手机：电脑端自己都不渲染它
+        if (!isTransferableMessage(m)) continue
         seen.add(m.id)
         /*
          * 变更检测用完整投影，发送用档位投影：若把档位投影存进快照，切到精简档时

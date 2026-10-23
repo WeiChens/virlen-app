@@ -8,7 +8,7 @@ use super::Provider;
 use super::super::cancellation::CancellationToken;
 use super::super::types::{
     ChatRequest, Message, ProgressThrottle, StreamEvent, TokenUsage, ToolUseContent,
-    TOOL_PROGRESS_INTERVAL_MS,
+    TOOL_PROGRESS_INTERVAL_MS, VISION_IMAGE_ROLE,
 };
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -75,6 +75,17 @@ impl NativeOpenAiProvider {
 
         let request_messages = slice_messages(&request.messages);
         for msg in request_messages {
+            // `vision_image`：工具把图片交给模型（`role` 只是持久化载体，界面不渲染）。
+            // OpenAI 协议的 `tool` 消息 content 只能是字符串，放不下图片 part，因此这里投影成
+            // 一条独立的 user 消息（紧跟在 tool 结果之后，合法且语义正确）。
+            if msg.role == VISION_IMAGE_ROLE {
+                messages.push(json!({
+                    "role": "user",
+                    "content": openai_content(msg, &msg.content),
+                }));
+                continue;
+            }
+
             // summary / feedback 角色：转为 user 消息
             if msg.role == "summary" || msg.role == "feedback" {
                 messages.push(json!({

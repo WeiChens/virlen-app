@@ -76,6 +76,7 @@ pub async fn execute_tool_steps(
 
     for i in start_index..run.steps.len() {
         if cancel.is_cancelled() {
+            flush_image_messages(&session_id, repo, sink, host, &mut tool_result_messages).await;
             return (false, tool_result_messages);
         }
 
@@ -129,6 +130,7 @@ pub async fn execute_tool_steps(
                     }),
                 ),
             );
+            flush_image_messages(&session_id, repo, sink, host, &mut tool_result_messages).await;
             return (false, tool_result_messages);
         }
 
@@ -145,6 +147,7 @@ pub async fn execute_tool_steps(
         tool_result_messages.push(tool_result_msg);
 
         if cancel.is_cancelled() {
+            flush_image_messages(&session_id, repo, sink, host, &mut tool_result_messages).await;
             return (false, tool_result_messages);
         }
         if let Some(p) = persist_snapshot {
@@ -152,7 +155,45 @@ pub async fn execute_tool_steps(
         }
     }
 
+    flush_image_messages(&session_id, repo, sink, host, &mut tool_result_messages).await;
     (true, tool_result_messages)
+}
+
+/// 本轮工具结束后：把工具排队等注入的「图片消息」追加到结果列表并落库。
+///
+/// 时机很关键：必须等**本轮所有 tool 消息都已在列**才能追加 —— `tool` 消息之间不能被别的
+/// 角色隔断，否则 OpenAI 以「tool_call 没有紧跟响应」报错。取消 / 暂停路径也要排空：否则这条
+/// 消息会漂到用户下一次提问才注入，和它服务于的那次回答彻底脱节。
+///
+/// 除落库外还要**通知界面**（`vision_image_created`）：下一次发送的 `options.messages` 是前端
+/// 内存里那份列表，界面若没有这条消息，图就只在数据库里 —— 用户下次提问时模型就看不到它了。
+/// 事件里发的是**外置后的副本**（`attachment://` 引用）：界面不渲染它，没必要把几 MB base64
+/// 再搬一趟 IPC；组装请求时 `resolve_messages` 会还原成 data URL。
+async fn flush_image_messages(
+    session_id: &str,
+    repo: &dyn SessionRepo,
+    sink: &dyn EventSink,
+    host: &dyn HostEnv,
+    tool_result_messages: &mut Vec<Message>,
+) {
+    let images = native_tools::drain_image_messages(session_id);
+    if images.is_empty() {
+        return;
+    }
+    // 与轮次边界注入同一纪律：落库失败只降级为「只进本轮上下文」，绝不影响本轮执行
+    if let Err(e) = repo.append_messages_if_alive(session_id, &images).await {
+        eprintln!("[session_db] 写入图片消息失败: {}", e);
+    }
+    let store = crate::attachment::AttachmentStore::new(&host.data_dir());
+    for message in &images {
+        let mut wire = message.clone();
+        store.externalize_message(&mut wire);
+        sink.emit_agent_event(
+            session_id,
+            &AgentEvent::new("vision_image_created", json!({ "message": wire })),
+        );
+    }
+    tool_result_messages.extend(images);
 }
 
 /// 工具输出写入埋点前的截断上限（与前端 truncateText 默认值一致）
@@ -567,4 +608,119 @@ fn handle_tool_result(
     );
 
     tool_result_message
+}
+
+// ==================== 测试 ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::types::VISION_IMAGE_ROLE;
+    use std::path::PathBuf;
+
+    /// 只回一个临时数据目录的宿主：外置时写入这里，绝不碰真实 `DSH_HOME`
+    struct TempHost {
+        root: PathBuf,
+    }
+    impl crate::agent::host::HostEnv for TempHost {
+        fn resource_candidates(&self) -> Vec<PathBuf> {
+            vec![self.root.clone()]
+        }
+        fn data_dir(&self) -> PathBuf {
+            self.root.clone()
+        }
+    }
+
+    fn temp_host(tag: &str) -> TempHost {
+        let dir = std::env::temp_dir()
+            .join(format!("virlen_tool_flush_{}_{}", tag, uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        TempHost { root: dir }
+    }
+
+    fn tool_message(id: &str) -> Message {
+        Message {
+            id: id.into(),
+            role: "tool".into(),
+            content: json!("🖼️ /w/shot.png"),
+            tool_call_id: Some("call_1".into()),
+            timestamp: 1,
+            ..Default::default()
+        }
+    }
+
+    fn image_message(id: &str) -> Message {
+        Message {
+            id: id.into(),
+            role: VISION_IMAGE_ROLE.into(),
+            content: json!([
+                { "type": "text", "text": "Image \"shot.png\" (/w/shot.png)" },
+                {
+                    "type": "image_url",
+                    "image_url": { "url": "data:image/png;base64,AQID", "detail": "auto" }
+                }
+            ]),
+            timestamp: 2,
+            ..Default::default()
+        }
+    }
+
+    /// 图片消息必须排在**本轮所有 tool 结果之后**（否则 tool 消息会被别的角色隔断），
+    /// 且排空后不得重复注入。
+    #[tokio::test]
+    async fn flush_appends_queued_images_after_tool_results() {
+        let sid = "s_tool_flush_images";
+        let sink = crate::agent::event_sink::TestEventSink::new();
+        let host = temp_host("order");
+        let mut results: Vec<Message> = vec![tool_message("t1"), tool_message("t2")];
+        native_tools::queue_image_message(sid, image_message("img1"));
+
+        flush_image_messages(sid, native_tools::noop_repo(), &sink, &host, &mut results).await;
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].role, "tool");
+        assert_eq!(results[1].role, "tool");
+        assert_eq!(results[2].role, VISION_IMAGE_ROLE, "图片消息必须排在所有 tool 结果之后");
+
+        // 界面也要收到这条消息（下一次发送的消息列表来自界面内存）；事件里发的是**外置后的引用**，
+        // 不把几 MB base64 再搬一趟 IPC
+        {
+            let events = sink.events.lock().unwrap();
+            let image_event = events
+                .iter()
+                .find(|(_, event)| event["type"] == "vision_image_created")
+                .expect("应发出 vision_image_created");
+            assert_eq!(image_event.1["data"]["message"]["id"], "img1");
+            let url = image_event.1["data"]["message"]["content"][1]["image_url"]["url"]
+                .as_str()
+                .unwrap();
+            assert!(
+                url.starts_with("attachment://") && url.ends_with(".png"),
+                "事件里应是外置引用，实得 {url}"
+            );
+        }
+
+        // 幂等：队列已空，再排一次什么也不发生
+        flush_image_messages(sid, native_tools::noop_repo(), &sink, &host, &mut results).await;
+        assert_eq!(results.len(), 3);
+        std::fs::remove_dir_all(&host.root).ok();
+    }
+
+    /// 没有待注入图片时是空操作（不能凭空多出一条消息）
+    #[tokio::test]
+    async fn flush_is_a_noop_without_queued_images() {
+        let sid = "s_tool_flush_empty";
+        let sink = crate::agent::event_sink::TestEventSink::new();
+        let host = temp_host("noop");
+        let mut results: Vec<Message> = vec![tool_message("t1")];
+        flush_image_messages(sid, native_tools::noop_repo(), &sink, &host, &mut results).await;
+        assert_eq!(results.len(), 1);
+        assert!(
+            {
+                let events = sink.events.lock().unwrap();
+                events.is_empty()
+            },
+            "没有图片时不应发事件"
+        );
+        std::fs::remove_dir_all(&host.root).ok();
+    }
 }

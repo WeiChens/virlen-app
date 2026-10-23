@@ -34,7 +34,15 @@ export interface ProviderConfigTemplate {
 
 export type ModelInfo = string
 
-export type MessageRole = 'user' | 'assistant' | 'tool' | 'summary' | 'feedback'
+export type MessageRole = 'user' | 'assistant' | 'tool' | 'summary' | 'feedback' | 'vision_image'
+
+/**
+ * 「工具把图片交给模型」的注入消息角色（与 Rust `types::VISION_IMAGE_ROLE` 逐字一致）。
+ *
+ * 它不是给人看的消息：列表 / 导出 / 侧栏一律跳过，只在组装请求时由 Provider 映射成 user ——
+ * `tool` 消息的 content 在 OpenAI 协议里只能是字符串，放不下图片 part（同 dsh 的图片块不进对话气泡）。
+ */
+export const VISION_IMAGE_ROLE = 'vision_image'
 
 export interface TextContent {
   type: 'text'
@@ -305,6 +313,11 @@ export type AgentEventType =
   | 'assistant_message_created'
   | 'assistant_message_updated'
   | 'tool_result_created'
+  /**
+   * 工具把图片交给模型的注入消息（`role='vision_image'`）：界面不渲染，但必须进内存 ——
+   * 下一次发送的 `options.messages` 就是界面这份列表，少了它图就只存于库里。
+   */
+  | 'vision_image_created'
   | 'iteration_start'
   | 'iteration_verify_start'
   | 'iteration_verify_end'

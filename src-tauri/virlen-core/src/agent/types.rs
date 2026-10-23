@@ -51,6 +51,17 @@ pub struct Session {
 /// 消息内容 — 兼容 string 或 block 数组
 pub type MessageContent = Value;
 
+/// 「把图片本身交给模型」的注入消息角色。
+///
+/// 它不是给人看的消息：前端列表 / 导出 / 侧栏一律跳过（与 dsh 的图片块不进对话气泡同义），
+/// 只在组装请求时投影成 `user`：
+/// - OpenAI 兼容 → `{role:"user", content:[{text},{image_url}]}`；
+/// - Anthropic → 并入紧邻的 tool_result 那一轮 user 消息（追加 text + `{type:"image"}`）。
+///
+/// 为什么不用 `tool` 或 `feedback`：`tool` 的 content 在 OpenAI 协议里只能是字符串，
+/// `feedback` 会被界面当成卡片渲染出来。
+pub const VISION_IMAGE_ROLE: &str = "vision_image";
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Message {

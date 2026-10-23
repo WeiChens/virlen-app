@@ -5,6 +5,7 @@
 import { useState, useMemo, useCallback, JSX } from 'react'
 import { observer } from 'mobx-react-lite'
 import type { Session, Message } from '@/types'
+import { VISION_IMAGE_ROLE } from '@/types'
 import {
   chatState,
   getSessionRuntime,
@@ -706,6 +707,8 @@ function formatSessionForKB(session: Session, messages?: Message[]): string {
   lines.push('')
 
   for (const msg of targetMsgs) {
+    // 「工具把图片交给模型」的注入消息：没有可读正文（只有图片 + 路径），不入知识库
+    if (msg.role === VISION_IMAGE_ROLE) continue
     const roleLabel =
       msg.role === 'user'
         ? '## 👤 User'

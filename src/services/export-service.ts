@@ -17,6 +17,7 @@ import type {
   SkillContent,
   ToolUseContent,
 } from '@/types'
+import { VISION_IMAGE_ROLE } from '@/types'
 import {
   getFileBlocks,
   getQuoteBlocks,
@@ -192,6 +193,8 @@ function buildRows(messages: readonly Message[], index: SessionIndex): Row[] {
   }
 
   for (const message of messages) {
+    // 「工具把图片交给模型」的注入消息：导出也不写（用户没发这张图，工具卡片里已有文字交代）
+    if (message.role === VISION_IMAGE_ROLE) continue
     if (message.role === 'tool') {
       // 被宿主引用过的结果已进调用卡片；只有孤儿结果才自己占行
       if (isOrphanToolResult(message, index)) {

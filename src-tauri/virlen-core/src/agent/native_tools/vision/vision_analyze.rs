@@ -5,12 +5,36 @@
 //! 失败走 `NativeToolOutcome::error(...)` 而非 `Err(...)`（后者会被前缀成 `error: …`，与桥路径不一致）。
 //! UI 直接渲染 `content`（tree text 语言无关）故不下发 uiData；推理是秒级同步调用，必须 `spawn_blocking`，
 //! 且**必须可取消**（用户点「停止」要立刻有反馈；两层取消的说明见 `vision_analyze_tool` 内注释）。
+//!
+//! ## 关闭「本地图片伪视觉分析」时（`app_settings.imageVisionAnalyzeOptimize = false`）
+//! 不再跑端侧模型：工具结果只回一段「图片事实」信封，图片本体另交一条 `role = vision_image`
+//! 的注入消息（见 `image_send`；前端不渲染，组装请求时投影成 user）。
+//! 与 dsh `read_image` 同一套语义（文本信封 + 图片块），区别是本项目 `tool` 消息放不下图片块。
 
 use crate::agent::native_tools::common::{arg_str, resolve_safe_path};
 use crate::agent::native_tools::heavy;
+use crate::agent::native_tools::vision::image_send;
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
 use crate::vision;
 use serde_json::Value;
+
+/// 「本地图片伪视觉分析」开关在 `app_settings` 里的键名（与前端 `settingStore` 同名字段）。
+///
+/// 缺省 `true`：没写过这一行（用户没改过设置）时行为与旧版完全一致。
+const ANALYZE_OPTIMIZE_KEY: &str = "imageVisionAnalyzeOptimize";
+
+/// 本轮是否走「把图片交给模型」而不是端侧分析。
+///
+/// 读库失败按**开启端侧分析**处理（`false`）：一次读配置失败不该悄悄改变发给模型的内容。
+async fn should_send_image(ctx: &NativeToolCtx<'_>) -> bool {
+    match ctx.settings.get_all().await {
+        Ok(map) => !map
+            .get(ANALYZE_OPTIMIZE_KEY)
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        Err(_) => false,
+    }
+}
 
 /// 取消时的统一结果（文案与 `web_fetch` 同口径：`<工具名> was cancelled: <目标>`）
 fn cancelled(source_path: &str) -> Result<NativeToolOutcome, String> {
@@ -43,6 +67,12 @@ pub(crate) async fn vision_analyze_tool(
             content: format!("Error: source path does not exist — {}", source_path),
             ui_data: None,
         });
+    }
+
+    // 关闭「本地图片伪视觉分析」→ 不跑端侧模型，直接把图片本身交给模型看
+    //（工具结果只回「图片事实」，图片本体另走 `role = vision_image` 的注入消息）
+    if should_send_image(ctx).await {
+        return send_image(ctx, &source_path).await;
     }
 
     // 模型目录来自宿主（GUI = resource_dir，CLI = exe 同级 / $VIRLEN_RESOURCE_DIR）
@@ -84,6 +114,47 @@ pub(crate) async fn vision_analyze_tool(
         // 阻塞线程内的检查点先命中：沿用取消文案，不要退化成 `Vision Error: …`
         Err(e) if e == vision::CANCELLED_MSG => cancelled(&source_path),
         Err(e) => Ok(NativeToolOutcome::error(format!("Vision Error: {}", e))),
+    }
+}
+
+/// 「关闭本地图片伪视觉分析」的路径：读盘 + 校验 + 组一条 `role = vision_image` 消息入队。
+///
+/// 工具结果只给模型「图片事实」（路径 / 格式 / 尺寸 / 字节数），图片本体由
+/// `tool_executor` 在本轮工具全部结束后作为独立消息注入 —— 与 dsh `read_image`
+/// 「文本信封 + 图片块」同一套语义，区别是本项目 `tool` 消息放不下图片块。
+async fn send_image(
+    ctx: &NativeToolCtx<'_>,
+    source_path: &str,
+) -> Result<NativeToolOutcome, String> {
+    let read_path = source_path.to_string();
+    let display = source_path.to_string();
+
+    // 读盘 / 嗅探 / base64 都是阻塞活：与端侧推理共用 `run_heavy`（并发闸 + 降优先级 + 两层取消）
+    let result = heavy::run_heavy(ctx.cancel, move |_flag| {
+        let bytes = std::fs::read(&read_path)
+            .map_err(|e| format!("Failed to read file '{}': {}", read_path, e))?;
+        let (mime, dims) = image_send::inspect_image(&display, &bytes)?;
+        let envelope = image_send::envelope_text(&display, mime, bytes.len(), dims);
+        let message = image_send::build_image_message(&display, mime, &bytes, dims);
+        Ok::<_, String>((message, envelope))
+    })
+    .await;
+
+    match result {
+        heavy::Heavy::Cancelled => cancelled(source_path),
+        heavy::Heavy::Panicked(e) => Ok(NativeToolOutcome::error(format!(
+            "Vision Error: internal error: {}",
+            e
+        ))),
+        heavy::Heavy::Done(Ok((message, envelope))) => {
+            image_send::queue(ctx.session_id, message);
+            Ok(NativeToolOutcome::Value {
+                content: envelope,
+                ui_data: None,
+            })
+        }
+        // 读盘失败 / 不是支持的图片 / 超出体积上限：工具级错误（模型可据此换路径或先压缩）
+        heavy::Heavy::Done(Err(e)) => Ok(NativeToolOutcome::error(format!("Vision Error: {}", e))),
     }
 }
 
@@ -139,6 +210,127 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("virlen_vision_tool_{}_{}", tag, uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// 只回一条配置的 `SettingsRepo`：`imageVisionAnalyzeOptimize = false`
+    ///（= 用户关掉了本地伪视觉分析 → 工具改成把图片交给模型）
+    struct OptOutSettings;
+
+    #[async_trait::async_trait]
+    impl crate::session_db::SettingsRepo for OptOutSettings {
+        async fn get_all(&self) -> Result<serde_json::Map<String, Value>, String> {
+            Ok([("imageVisionAnalyzeOptimize".to_string(), Value::Bool(false))]
+                .into_iter()
+                .collect())
+        }
+        async fn upsert(&self, _entries: serde_json::Map<String, Value>) -> Result<(), String> {
+            Ok(())
+        }
+        async fn import_if_empty(
+            &self,
+            _entries: serde_json::Map<String, Value>,
+        ) -> Result<bool, String> {
+            Ok(false)
+        }
+    }
+
+    /// 关闭伪视觉分析后的全链路：**不碰模型目录**（EmptyHost 照样能跑通），
+    /// 工具结果只回「图片事实」信封，图片本体入队等 `tool_executor` 注入。
+    #[tokio::test]
+    async fn image_mode_returns_envelope_and_queues_the_image() {
+        let dir = tmp_dir("image_mode");
+        std::fs::write(dir.join("shot.png"), super::image_send::PNG_1X1).unwrap();
+        let sec = test_security(&dir.to_string_lossy());
+        let host = EmptyHost { root: dir.clone() };
+        let cancel = CancellationToken::new();
+        let sink = TestEventSink::new();
+        let bridge = AgentBridgeState::default();
+        let session_id = "s_vision_image_mode";
+        let settings = OptOutSettings;
+        let ctx = NativeToolCtx {
+            session_id,
+            tool_call_id: "tc",
+            cancel: &cancel,
+            sink: &sink,
+            bridge: &bridge,
+            security: &sec,
+            repo: crate::agent::native_tools::noop_repo(),
+            memory: crate::agent::native_tools::noop_memory(),
+            skills: None,
+            host: &host,
+            settings: &settings,
+        };
+
+        let r = vision_analyze_tool(&ctx, &json!({ "path": "shot.png" }))
+            .await
+            .expect("不应是调用级错误");
+        match r {
+            NativeToolOutcome::Value { content, ui_data } => {
+                assert!(content.starts_with("🖼️ "), "content: {content}");
+                assert!(content.contains("image/png, 1x1 px"), "content: {content}");
+                assert!(
+                    content.contains("attached to this conversation turn"),
+                    "content: {content}"
+                );
+                assert!(
+                    !content.contains("models directory not found"),
+                    "关闭伪视觉分析后不得去探测模型目录: {content}"
+                );
+                assert!(ui_data.is_none(), "与旧行为一致：无 uiData");
+            }
+            other => panic!("expected Value, got {other:?}"),
+        }
+
+        // 图片本体入队：一条 `role = vision_image`、内容为 text + data URL
+        let queued = super::image_send::drain(session_id);
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].role, crate::agent::types::VISION_IMAGE_ROLE);
+        assert_eq!(queued[0].content[1]["type"], "image_url");
+        assert!(queued[0].content[1]["image_url"]["url"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 关闭伪视觉分析 + 不是图片 → 工具级错误，且不得入队（否则会给模型发一个空/错的图）
+    #[tokio::test]
+    async fn image_mode_rejects_non_image_files_without_queueing() {
+        let dir = tmp_dir("image_mode_bad");
+        std::fs::write(dir.join("notes.txt"), b"just text").unwrap();
+        let sec = test_security(&dir.to_string_lossy());
+        let host = EmptyHost { root: dir.clone() };
+        let cancel = CancellationToken::new();
+        let sink = TestEventSink::new();
+        let bridge = AgentBridgeState::default();
+        let session_id = "s_vision_image_bad";
+        let settings = OptOutSettings;
+        let ctx = NativeToolCtx {
+            session_id,
+            tool_call_id: "tc",
+            cancel: &cancel,
+            sink: &sink,
+            bridge: &bridge,
+            security: &sec,
+            repo: crate::agent::native_tools::noop_repo(),
+            memory: crate::agent::native_tools::noop_memory(),
+            skills: None,
+            host: &host,
+            settings: &settings,
+        };
+
+        let r = vision_analyze_tool(&ctx, &json!({ "path": "notes.txt" }))
+            .await
+            .expect("不应是调用级错误");
+        match r {
+            NativeToolOutcome::Error { content, .. } => {
+                assert!(content.starts_with("Vision Error: "), "content: {content}");
+                assert!(content.contains("not a supported image format"), "content: {content}");
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        assert_eq!(super::image_send::pending_count(session_id), 0);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]

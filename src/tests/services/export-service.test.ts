@@ -703,6 +703,32 @@ describe('sessionToHtml — 摘要与反馈', () => {
     expect(html).toContain('<div class="feedback-content">')
     expect(html).toContain('校验失败')
   })
+
+  // 工具把图片交给模型时注入的 `vision_image` 消息：它只是持久化载体，导出里一条都不写
+  // （连 data URL 也不能进 HTML，否则单文件会凭空大几 MB）
+  it('vision_image 注入消息不导出', () => {
+    const html = toHtml(
+      makeSession({
+        messages: [
+          makeMessage({ role: 'user', content: '看下这张截图' }),
+          makeMessage({
+            role: 'vision_image',
+            content: [
+              { type: 'text', text: 'Image "shot.png" (/w/shot.png)' },
+              {
+                type: 'image_url',
+                image_url: { url: 'data:image/png;base64,QUJD' },
+              },
+            ],
+          }),
+        ],
+      }),
+    )
+
+    expect(html).toContain('看下这张截图')
+    expect(html).not.toContain('data:image/png;base64')
+    expect(html).not.toContain('shot.png')
+  })
 })
 
 describe('sessionToHtml — 转义', () => {

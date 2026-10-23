@@ -1,5 +1,6 @@
 /** message-list 纯辅助函数（无组件状态，「传参进、结果出」）。 */
 import type { Message } from '@/types'
+import { VISION_IMAGE_ROLE } from '@/types'
 import { getSessionRuntime } from '@/ui/store'
 import { sliceHead } from '@/utils/text'
 import type { ListRow } from './rows'
@@ -106,6 +107,11 @@ export function resolveJumpAnchorId(
   // 本次尚未加载到该消息：无法判断角色，原样返回交给调用方继续回补
   if (index < 0) return msgId
   const target = list[index]
+  // 图片注入消息同样不渲染气泡（它连内容都不显示）：命中时往前找上一个可见宿主，
+  // 递归一层即可（上一条可能也是不渲染的 tool 消息，那时由下面的分支继续往上找）
+  if (target.role === VISION_IMAGE_ROLE) {
+    return index > 0 ? resolveJumpAnchorId(list, list[index - 1].id) : null
+  }
   if (target.role !== 'tool' || !target.toolCallId) return msgId
   for (let i = index - 1; i >= 0; i--) {
     const m = list[i]

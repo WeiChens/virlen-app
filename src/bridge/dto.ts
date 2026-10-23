@@ -3,6 +3,7 @@
  * 富内容（图片 / 文件）降级为占位符；引用与文件自 §36 起结构化下行，不再展平进 text。
  */
 import type { Message, MessageContent, Session } from '@/types'
+import { VISION_IMAGE_ROLE } from '@/types'
 import { agentStore, sessionRuntimeState, sessionStore, settingsState } from '@/ui/store'
 import { toShortPath } from '@/utils/common'
 import {
@@ -20,13 +21,25 @@ import {
   type TransferTier,
 } from 'virlen-remote'
 
-/** 电脑侧 `MessageRole`（含 summary / feedback）→ 协议四角色白名单。 */
+/** 电脑侧 `MessageRole`（含 summary / feedback / vision_image）→ 协议四角色白名单。 */
 const ROLE_MAP: Record<Message['role'], MessageDTO['role']> = {
   user: 'user',
   assistant: 'assistant',
   tool: 'tool',
   summary: 'system',
   feedback: 'assistant',
+  // 工具注入的图片消息本不该发给手机（见 `isTransferableMessage`）；真漏到这里的兜底
+  vision_image: 'system',
+}
+
+/**
+ * 是否要把这条消息发给手机端。
+ *
+ * `vision_image`（工具把图片交给模型）在电脑端就不渲染，手机端更不该凭空多出一条
+ * 只有路径说明的「用户消息」—— 列表 / 增量 / 分页三处投影都先过这里。
+ */
+export function isTransferableMessage(message: Message): boolean {
+  return message.role !== VISION_IMAGE_ROLE
 }
 
 /**

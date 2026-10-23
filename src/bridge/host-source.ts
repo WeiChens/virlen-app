@@ -63,7 +63,7 @@ import {
   shouldCompress,
   toContextInfo,
 } from '@/domain/usage/context-occupancy'
-import { buildToolCallIndex, normalizeWorkspace, toMessageDTO, toRuntimeDTO, toSessionSummaryDTO } from './dto'
+import { buildToolCallIndex, isTransferableMessage, normalizeWorkspace, toMessageDTO, toRuntimeDTO, toSessionSummaryDTO } from './dto'
 import type { Acl } from './acl'
 import { previewOf, type AuditLog } from './audit'
 import type { HostFiles } from './file-source'
@@ -345,7 +345,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
         auditOp('host.session.messages', params.sessionId, `older=${added.length}`)
         return {
           /* 工具名索引从整个已加载窗口建：跨页拿不到时手机端只显示工具名，不猜 */
-          messages: added.map((m) =>
+          messages: added.filter(isTransferableMessage).map((m) =>
             toMessageDTO(m, buildToolCallIndex(after), tier, {
               sessionId: params.sessionId,
               ...(summary ? { summary: true } : {}),
@@ -361,7 +361,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
       const paging = sessionStore.value.messagePaging[params.sessionId]
       auditOp('host.session.messages', params.sessionId)
       return {
-        messages: all.map((m) =>
+        messages: all.filter(isTransferableMessage).map((m) =>
           toMessageDTO(m, toolCalls, tier, {
             sessionId: params.sessionId,
             ...(summary ? { summary: true } : {}),

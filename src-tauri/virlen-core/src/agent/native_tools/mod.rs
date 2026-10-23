@@ -52,7 +52,8 @@
 //! │   ├── list_skills.rs
 //! │   └── read_skill_source.rs
 //! ├── vision/                视觉（1）
-//! │   └── vision_analyze.rs  端侧视觉分析（模型目录经 `ctx.host` 定位；无 `tauri::`）
+//! │   ├── vision_analyze.rs  端侧视觉分析（模型目录经 `ctx.host` 定位；无 `tauri::`）
+//! │   └── image_send.rs      「关闭伪视觉分析」时把图片交给模型（`role = vision_image` + 会话队列）
 //! └── knowledge_base/        知识库（6）
 //!     ├── common.rs          rag_service / build_search_context
 //!     ├── search_knowledge_base.rs        list_knowledge_bases.rs
@@ -116,6 +117,13 @@ pub use service::{
 };
 // `SandboxBypass`：TS 引擎入口 `run_command_for_ts_engine` 的脱壳原因入参（跨 crate）。
 pub use execute::SandboxBypass;
+// 「把图片交给模型」的注入队列（`role = vision_image`）：
+// - `drain_image_messages` —— `tool_executor` 在本轮工具结束后排空并落库；
+// - `drop_image_messages` —— 会话删除时丢掉还没注入的那几条（与 `kill_session_services` 同一处）。
+pub use vision::drop_image_messages;
+pub(crate) use vision::drain_image_messages;
+#[cfg(test)]
+pub(crate) use vision::queue_image_message;
 // PTY 会话交互：前端中途插键盘 / 改窗口尺寸 / 命名控制键 / 接管交还（Step 1 + Step 2 ③②）
 pub use execute::{pty_key, pty_resize, pty_set_held, pty_write};
 
