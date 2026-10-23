@@ -475,14 +475,23 @@ INSERT INTO messages (
         let attachments = self.attachments.clone();
         tokio::task::spawn_blocking(move || -> Result<Vec<Message>, String> {
             let conn = conn.lock().unwrap();
-            // 只读「最后一个 summary 及其之后」：请求组装本就丢掉 summary 之前的消息，读进内存是
-            // 纯浪费（大历史下是恢复慢的主因之一）。无 summary → `rowid >= 0` 恒真 = 取全部。
+            // 只读「最旧的那条 summary 及其之后」：请求组装本就丢掉 summary 之前的消息，读进内存是
+            // 纯浪费（大历史下是恢复慢的主因之一）。无 summary / 无记录 → `rowid >= 0` 恒真 = 取全部。
             // 旧消息仍留库供 `list_messages` / `read_messages` 检索，本查询不删行。
+            //
+            // ⚠️ 起点必须是 `summary_message_id`，**不能**是 `end_message_id`（被遮罩区间的末条）：
+            // 末条本身落在区间内部，从它起读会把「区间末条」当成窗口第一条——那条消息的区间起点
+            // 已不在窗口里，`apply_compaction_masks` 会整条记录丢弃（端点缺失），于是
+            //   · 单次压缩：残活靠 provider「最后一条 summary」切片兜住（侥幸正确）；
+            //   · **两次以上压缩：后一条 mask 生效后上下文里再无 summary 角色**，窗口首条
+            //     （无前置 user 的 assistant）会原样发给模型 —— Anthropic 直接 400
+            //     （first message must use the user role）。
+            // 从 summary 起读则最省内存且自洽：压缩区间全部由 summary 代表，其后即尾巴。
             let mut stmt = conn
                 .prepare(
                     "SELECT * FROM messages WHERE session_id=?1 \
                      AND rowid >= IFNULL((SELECT MIN(m.rowid) FROM messages m \
-                                          JOIN compactions c ON m.id = c.end_message_id \
+                                          JOIN compactions c ON m.id = c.summary_message_id \
                                           WHERE c.session_id=?1), \
                                          IFNULL((SELECT MAX(rowid) FROM messages \
                                                  WHERE session_id=?1 AND role='summary'), 0)) \
@@ -720,13 +729,18 @@ INSERT INTO messages (
                         .map_err(|e| format!("删除未定稿占位失败: {}", e))?;
                         report.dropped += 1;
                     } else {
+                        // 定稿时把 `text_plain` 一并补齐：流式节流落库**不写**这一列
+                        //（写它就会触发 `messages_fts_au` 重建整段 trigram，见
+                        // `persist_streaming_text`），崩在途中的这半截正文因此还没进索引。
+                        // 这里只重建一次，代价与正文长度同阶。
                         tx.execute(
-                            "UPDATE messages SET streaming=0, ui_data=?3 \
+                            "UPDATE messages SET streaming=0, ui_data=?3, text_plain=?4 \
                              WHERE id=?1 AND session_id=?2",
                             params![
                                 message.id,
                                 session_id,
-                                json!({ "interrupted": true }).to_string()
+                                json!({ "interrupted": true }).to_string(),
+                                crate::session_db::row::content_plain_text(&message.content),
                             ],
                         )
                         .map_err(|e| format!("标记中断回复失败: {}", e))?;
@@ -791,9 +805,15 @@ INSERT INTO messages (
 
     /// 流式正文增量落库（契约见 `SessionRepo::persist_streaming_text`）。
     ///
-    /// 只改 `content` / `reasoning_content` / `text_plain` 三列：行已由轮次开头的占位写路径插好，
+    /// 只改 `content` / `reasoning_content` 两列：行已由轮次开头的占位写路径插好，
     /// 这里不走整行 upsert（不 externalize、不动 ui_data / streaming / tool_calls）。
-    /// 同步 + 拿连接锁：持锁时间就是一条主键 UPDATE（微秒级），流式回调无法 await，故刻意如此。
+    ///
+    /// ⚠️ **刻意不写 `text_plain`**：这一列一改就会触发 `messages_fts_au`，把整段正文的
+    /// trigram 全删重建 —— 节流窗口是 700ms、每次写的又是「当前全量」，长回复因此是近似
+    /// 平方级的索引写入，还会把流式循环卡在这条同步 UPDATE 上。半截正文的检索由两个结算点
+    /// 补齐：崩在中途 → `repair_tail`；正常结束 → 整行 upsert（`append_messages`）。
+    ///
+    /// 同步 + 拿连接锁：持锁时间就是一条主键 UPDATE，流式回调无法 await，故刻意如此。
     fn persist_streaming_text(&self, session_id: &str, message: &Message) {
         let conn = match self.conn.try_lock() {
             Ok(c) => c,
@@ -808,16 +828,13 @@ INSERT INTO messages (
             Err(_) => return,
         };
         if let Err(e) = conn.execute(
-            "UPDATE messages SET content=?3, reasoning_content=?4, text_plain=?5 \
+            "UPDATE messages SET content=?3, reasoning_content=?4 \
              WHERE id=?1 AND session_id=?2",
             params![
                 message.id,
                 session_id,
                 content,
                 message.reasoning_content.as_deref(),
-                // 同步维护检索列：`messages` 上的 AFTER UPDATE 触发器会拿 `new.text_plain`
-                // 重建 FTS 行，不同步的话进程被杀后这半截正文就搜不到。
-                crate::session_db::row::content_plain_text(&message.content),
             ],
         ) {
             eprintln!("[session_db] 流式正文落库失败（下次节流再试）: {}", e);

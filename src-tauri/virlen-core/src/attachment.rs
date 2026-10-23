@@ -33,7 +33,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
 /// 数据库里的引用前缀。必须与前端 `src/domain/files/attachment-src.ts` 的常量逐字一致。
@@ -133,10 +133,60 @@ fn strip_whitespace(payload: &str) -> String {
         .collect()
 }
 
+/// 外置结果记忆表：**同一条消息每轮发送都会被重新外置**（引擎把整份历史交给写库路径），
+/// 没有它就是把同一张图反复 base64 解码 + SHA-256。
+///
+/// 键是**完整的 data URL**（精确匹配，不存在碰撞风险）；一条超大图不记
+/// （[`MEMO_MAX_ENTRY`]），总占用超过 [`MEMO_MAX_BYTES`] 时按写入顺序淘汰。
+#[derive(Debug, Default)]
+struct RefMemo {
+    /// `(data URL, 附件名)`，按写入顺序排列（头部最旧）
+    entries: Vec<(String, String)>,
+    /// `entries` 里字符串的总字节数（用来封顶）
+    bytes: usize,
+}
+
+/// 记忆表总容量上限（字节）。消息本身已经存着一份 URL，这里再存一份，所以不能无限长。
+const MEMO_MAX_BYTES: usize = 64 * 1024 * 1024;
+/// 单条超过这个大小的 URL 不进记忆表（它一条就能把整张表挤空）
+const MEMO_MAX_ENTRY: usize = 24 * 1024 * 1024;
+
+impl RefMemo {
+    fn get(&self, url: &str) -> Option<&str> {
+        self.entries
+            .iter()
+            .find(|(key, _)| key == url)
+            .map(|(_, name)| name.as_str())
+    }
+
+    fn insert(&mut self, url: &str, name: &str) {
+        let cost = url.len() + name.len();
+        if cost > MEMO_MAX_ENTRY || self.get(url).is_some() {
+            return;
+        }
+        self.entries.push((url.to_string(), name.to_string()));
+        self.bytes += cost;
+        // FIFO 淘汰（表很小，`remove(0)` 的搬移可忽略）
+        while self.bytes > MEMO_MAX_BYTES && self.entries.len() > 1 {
+            let (old_url, old_name) = self.entries.remove(0);
+            self.bytes -= old_url.len() + old_name.len();
+        }
+    }
+
+    fn forget(&mut self, url: &str) {
+        if let Some(index) = self.entries.iter().position(|(key, _)| key == url) {
+            let (old_url, old_name) = self.entries.remove(index);
+            self.bytes -= old_url.len() + old_name.len();
+        }
+    }
+}
+
 /// 附件仓库（值类型：根目录 = `<数据目录>/attachments`）
 #[derive(Clone, Debug)]
 pub struct AttachmentStore {
     root: PathBuf,
+    /// 外置结果记忆表（`Arc` 让 clone 出来的句柄共享同一份，否则每轮都是空表）
+    memo: Arc<Mutex<RefMemo>>,
 }
 
 impl AttachmentStore {
@@ -144,7 +194,25 @@ impl AttachmentStore {
     pub fn new(data_dir: &Path) -> Self {
         Self {
             root: data_dir.join("attachments"),
+            memo: Arc::new(Mutex::new(RefMemo::default())),
         }
+    }
+
+    /// 拿记忆表（中毒也继续用：图片外置绝不该因为一次 panic 就彻底失效）
+    fn memo(&self) -> std::sync::MutexGuard<'_, RefMemo> {
+        self.memo.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn memo_get(&self, url: &str) -> Option<String> {
+        self.memo().get(url).map(str::to_string)
+    }
+
+    fn memo_put(&self, url: &str, name: &str) {
+        self.memo().insert(url, name);
+    }
+
+    fn memo_forget(&self, url: &str) {
+        self.memo().forget(url);
     }
 
     pub fn root(&self) -> &Path {
@@ -201,6 +269,16 @@ impl AttachmentStore {
         let Some(ext) = ext_for_mime(mime) else {
             return false;
         };
+        // 命中记忆表 → 跳过整段「base64 解码 + SHA-256」；但必须再确认文件还在
+        //（被 GC / 手删时不能把死引用写进库，那种引用还原时只会降级成文案）。
+        if let Some(name) = self.memo_get(url) {
+            if self.root.join(&name).is_file() {
+                let reference = format!("{}{}", PREFIX, name);
+                image.insert("url".into(), Value::String(reference));
+                return true;
+            }
+            self.memo_forget(url);
+        }
         let Ok(bytes) = STANDARD.decode(strip_whitespace(payload)) else {
             eprintln!("[attachment] 图片 base64 解码失败（{}），保持内联", mime);
             return false;
@@ -216,6 +294,7 @@ impl AttachmentStore {
                 return false;
             }
         };
+        self.memo_put(url, &name);
         image.insert("url".into(), Value::String(format!("{}{}", PREFIX, name)));
         true
     }
@@ -597,6 +676,39 @@ mod tests {
         // 再次外置不再改写（已经是引用）
         assert_eq!(store.externalize_message(&mut first), 0);
         assert_eq!(store.list_names().unwrap().len(), 1);
+    }
+
+    /// 同一条消息每轮发送都会重新外置：命中记忆表必须跳过解码 + 哈希，但不能盲信它
+    /// （文件被 GC / 手删时要重新落盘，否则写进库的就是一个永远加载不出来的死引用）。
+    #[test]
+    fn memo_reuses_the_ref_but_verifies_the_file() {
+        let dir = temp_dir("memo");
+        let store = AttachmentStore::new(&dir);
+        let url = png_data_url(b"memo-bytes");
+
+        let mut first = message_with_image(&url);
+        assert_eq!(store.externalize_message(&mut first), 1);
+        let reference = url_of(&first).to_string();
+        let name = reference.trim_start_matches(PREFIX).to_string();
+        let path = dir.join("attachments").join(&name);
+        assert!(path.is_file());
+
+        // ① 同样的 URL 再来一次（clone 出来的句柄也必须共享同一张表）
+        let mut again = message_with_image(&url);
+        assert_eq!(store.clone().externalize_message(&mut again), 1);
+        assert_eq!(url_of(&again), reference);
+
+        // ② 文件被删：记忆表命中也要重新落盘
+        std::fs::remove_file(&path).unwrap();
+        let mut rebuilt = message_with_image(&url);
+        assert_eq!(store.externalize_message(&mut rebuilt), 1);
+        assert_eq!(url_of(&rebuilt), reference);
+        assert!(path.is_file(), "死引用必须重建，不能只信记忆表");
+
+        // ③ 字节变一个字符 → 键不同 → 换一个新附件（内容寻址，不复用旧名字）
+        let mut changed = message_with_image(&png_data_url(b"memo-bytez"));
+        assert_eq!(store.externalize_message(&mut changed), 1);
+        assert_ne!(url_of(&changed), reference);
     }
 
     #[test]

@@ -9,7 +9,27 @@ use super::{open_tmp, test_message, test_session};
 use crate::agent::message_protocol::INTERRUPTED_TOOL_RESULT;
 use crate::agent::types::{Message, ToolUseContent};
 use crate::session_db::repo::SessionRepo;
+use crate::session_db::sqlite::SqliteSessionRepo;
 use serde_json::json;
+
+/// `messages.text_plain`（检索列）的当前值 —— 正文列与检索列的同步是下面几条用例的重点
+fn text_plain_of(repo: &SqliteSessionRepo, id: &str) -> String {
+    let conn = repo.conn.lock().unwrap();
+    conn.query_row(
+        "SELECT text_plain FROM messages WHERE id=?1",
+        rusqlite::params![id],
+        |row| row.get(0),
+    )
+    .unwrap()
+}
+
+async fn search_hits(repo: &dyn SessionRepo, query: &str) -> usize {
+    repo.search_messages(query, Some("s1"), None, 10, None)
+        .await
+        .unwrap()
+        .items
+        .len()
+}
 
 /// 引擎在轮次开始时落下的未定稿占位
 fn pending_placeholder(id: &str, content: &str) -> Message {
@@ -303,4 +323,65 @@ async fn streaming_persist_only_touches_content() {
     // pending / streaming 原样保留：此刻这一轮还活着，不能提前定稿
     assert_eq!(stored[0].streaming, Some(true));
     assert_eq!(stored[0].ui_data, Some(json!({ "pending": true })));
+    // ⚠️ `text_plain` 刻意不跟：它一改就会触发 `messages_fts_au` 重建整段 trigram，
+    // 而节流落库是 700ms 一次 × 当前全量正文 = 近似平方级。半截正文的检索由结算点补。
+    assert_eq!(text_plain_of(&repo, "a1"), "");
+}
+
+/// 崩在流式中途：修复（定稿 + 标「已中断」）时必须把检索列补上 ——
+/// 流式落库刻意不写它，否则这半截正文永远搜不到。
+#[tokio::test]
+async fn repair_tail_backfills_text_plain_for_partial_reply() {
+    let repo = open_tmp();
+    seed(&repo, &[pending_placeholder("a1", "")]).await;
+    let snapshot = pending_placeholder("a1", "半截回复正文");
+    repo.persist_streaming_text("s1", &snapshot);
+    assert_eq!(text_plain_of(&repo, "a1"), "");
+
+    let report = repo.repair_tail("s1").await.unwrap();
+    assert_eq!(report.finalized, 1);
+    assert_eq!(text_plain_of(&repo, "a1"), "半截回复正文");
+    // 补了检索列 → 现在能搜到（索引只重建了这一次）
+    assert_eq!(search_hits(&repo, "半截回复").await, 1);
+}
+
+/// `messages_fts_au` 必须带 `WHEN`：否则**任何** UPDATE（含每 700ms 一次的流式落库）
+/// 都会把整段 `text_plain` 的 trigram 删掉重建。老库由 `ensure_fts_update_trigger` 补装。
+#[tokio::test]
+async fn fts_update_trigger_only_rebuilds_when_text_plain_changes() {
+    let repo = open_tmp();
+    // ① 触发器定义
+    let trigger_sql: String = {
+        let conn = repo.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='messages_fts_au'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    assert!(
+        trigger_sql.to_ascii_uppercase().contains("WHEN"),
+        "messages_fts_au 缺 WHEN：每次流式落库都会重建整段 trigram: {trigger_sql}"
+    );
+
+    // ② 行为：只改非检索列 → 索引条目仍在
+    let mut message = test_message("m1", "assistant");
+    message.content = json!("苹果香蕉橘子");
+    seed(&repo, &[message]).await;
+    {
+        let conn = repo.conn.lock().unwrap();
+        conn.execute("UPDATE messages SET elapsed_ms=42 WHERE id='m1'", [])
+            .unwrap();
+    }
+    assert_eq!(search_hits(&repo, "香蕉橘子").await, 1);
+
+    // ③ 改 `text_plain` → 索引跟着换（外部内容表的正文取自这一列）
+    {
+        let conn = repo.conn.lock().unwrap();
+        conn.execute("UPDATE messages SET text_plain='葡萄西瓜' WHERE id='m1'", [])
+            .unwrap();
+    }
+    assert_eq!(search_hits(&repo, "香蕉橘子").await, 0);
+    assert_eq!(search_hits(&repo, "葡萄西瓜").await, 1);
 }

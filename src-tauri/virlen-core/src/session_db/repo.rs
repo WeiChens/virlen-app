@@ -93,12 +93,16 @@ pub trait SessionRepo: Send + Sync {
     /// 获取会话的全部消息（按插入顺序）
     async fn get_messages(&self, session_id: &str) -> Result<Vec<Message>, String>;
 
-    /// 获取「模型当前上下文」所需的消息：从最后一条 `summary` 起（含它）到最新，无 `summary` 时返回全部
-    /// （均按插入顺序升序）。
+    /// 获取「模型当前上下文」所需的消息：从**最早那次压缩留下的 summary** 起（含它）到最新；
+    /// 无压缩记录时退化为「最后一条 `summary` 起」，两者都没有则返回全部（均按插入顺序升序）。
     ///
-    /// 语义等价于「`get_messages` 之后丢掉最后一个 summary 之前的全部消息」—— 请求组装本就只保留最后一个
-    /// summary 及其之后的消息，因此断点恢复等「以库为权威回读上下文」的场景无需把已压缩的旧历史读进内存 /
-    /// 反序列化（大历史下正是「继续」要等好几秒的主因之一）。
+    /// 语义等价于「`get_messages` 之后丢掉「已被 summary 代表」的旧区间」—— 请求组装本就只保留最后
+    /// 一个 summary 及其之后的消息，因此断点恢复等「以库为权威回读上下文」的场景无需把已压缩的旧历史
+    /// 读进内存 / 反序列化（大历史下正是「继续」要等好几秒的主因之一）。
+    ///
+    /// ⚠️ 起点取 `compactions.summary_message_id` 而**不是** `end_message_id`：后者落在被遮罩区间
+    /// 内部，从它起读会让「区间起点」落在窗口外 → `agent::context::apply_compaction_masks` 丢弃整条
+    /// 记录，多次压缩后上下文首条会是无前置 user 的 assistant（Anthropic 直接 400）。
     ///
     /// ⚠️ 旧消息仍留在库里：模型侧查询工具（`list_messages` / `read_messages`）靠它们检索「已压缩区间」，
     /// 删掉会让那两个工具失去意义。本方法只影响「回读进内存的上下文」。
@@ -208,8 +212,12 @@ pub trait SessionRepo: Send + Sync {
     /// 行后，重开至少能看到半截回复，并由 [`SessionRepo::repair_tail`] 标成「已中断」。
     ///
     /// 为什么是**同步**方法：它由流式回调调用，回调是 `FnMut`（不能 `.await`）；而
-    /// `append_messages` 走 `spawn_blocking`。实现只做一条 `UPDATE`（行已由占位写路径插好），
-    /// 微秒级，故刻意同步 —— 每轮每秒最多几次，代价远低于一次 IPC。
+    /// `append_messages` 走 `spawn_blocking`。实现只做一条 `UPDATE`（行已由占位写路径插好）。
+    ///
+    /// ⚠️ 实现只写 `content` / `reasoning_content`，**刻意不写 `text_plain`**：那一列一改就会
+    /// 触发 `messages_fts_au` 把整段正文的 trigram 全删重建（700ms 一次 × 当前全量 = 平方级
+    /// 索引写入，还会把流式循环卡在这条同步 UPDATE 上）。半截正文的检索由结算点补齐：
+    /// 崩在中途 → `repair_tail`；正常结束 → 整行 upsert。
     ///
     /// 默认空实现（`NoopSessionRepo` 无持久化后端）；**尽力而为**：失败绝不能影响流式输出。
     fn persist_streaming_text(&self, _session_id: &str, _message: &Message) {}

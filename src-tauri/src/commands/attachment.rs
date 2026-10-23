@@ -35,22 +35,24 @@ pub fn handle_uri_request(
     request: Request<Vec<u8>>,
     responder: UriSchemeResponder,
 ) {
-    let permit = match semaphore().try_acquire() {
-        Ok(permit) => permit,
-        Err(_) => {
-            respond(
-                responder,
-                StatusCode::TOO_MANY_REQUESTS,
-                "text/plain",
-                b"busy".to_vec(),
-                false,
-            );
-            return;
-        }
-    };
-
     tauri::async_runtime::spawn(async move {
-        let _permit = permit;
+        // 许可必须在**任务内部等**：同步回调里 `try_acquire` 失败只能立刻回 429，
+        // 而 `<img>` 不会重试 —— 一条消息带十几张图时，超出并发的那几张就是永久裂图。
+        // 这里排队只会让一屏图片多等几毫秒，不会有可感知的副作用。
+        let _permit = match semaphore().acquire().await {
+            Ok(permit) => permit,
+            // 只有信号量被 close 才会走到这里（本模块从不 close）
+            Err(_) => {
+                respond(
+                    responder,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "text/plain",
+                    b"busy".to_vec(),
+                    false,
+                );
+                return;
+            }
+        };
         let (status, mime, body, cacheable) = serve(&request).await;
         respond(responder, status, mime, body, cacheable);
     });

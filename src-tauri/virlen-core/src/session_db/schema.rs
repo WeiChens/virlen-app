@@ -7,7 +7,7 @@ use crate::session_db::memory::MEMORY_DDL;
 use crate::session_db::row::content_plain_text;
 use crate::attachment::AttachmentStore;
 use crate::agent::types::Message;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 
@@ -73,6 +73,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
 
 /// FTS 同步触发器（SQLite 官方推荐的外部内容表维护方式）：
 /// 随 messages 增删改自动维护索引，无需在每个写路径手动同步。
+///
+/// ⚠️ `messages_fts_au` **必须带 `WHEN`**：没有它，任何一条 UPDATE（含流式节流落库
+/// `persist_streaming_text`，700ms 一次、每次写当前全量正文）都会把整段 `text_plain` 的
+/// trigram 全删重建 —— 长回复因此是近似平方级的索引写入，还会把流式循环卡在这条同步
+/// UPDATE 上。外部内容表的正文取自 `messages`，只改别的列不会让索引变脏。
+/// 老库上这条触发器的旧定义没有 `WHEN`，由 [`ensure_fts_update_trigger`] 在打开时替换。
 pub(crate) const FTS_TRIGGERS_DDL: &str = r#"
 CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
   INSERT INTO messages_fts(rowid, text_plain) VALUES (new.rowid, COALESCE(new.text_plain, ''));
@@ -80,7 +86,26 @@ END;
 CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
   INSERT INTO messages_fts(messages_fts, rowid, text_plain) VALUES('delete', old.rowid, COALESCE(old.text_plain, ''));
 END;
-CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON messages BEGIN
+CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON messages
+WHEN new.text_plain IS NOT old.text_plain
+BEGIN
+  INSERT INTO messages_fts(messages_fts, rowid, text_plain) VALUES('delete', old.rowid, COALESCE(old.text_plain, ''));
+  INSERT INTO messages_fts(rowid, text_plain) VALUES (new.rowid, COALESCE(new.text_plain, ''));
+END;
+"#;
+
+/// `messages_fts_au` 的**升级版**定义（带 `WHEN`，见 [`FTS_TRIGGERS_DDL`] 的说明）。
+///
+/// 单独抽一份是因为 `CREATE TRIGGER IF NOT EXISTS` 换不掉老库上的旧定义 —— 必须
+/// `DROP` 后重建。[`ensure_fts_update_trigger`] 只在旧定义确实缺 `WHEN` 时执行这条。
+///
+/// `old.text_plain IS NOT new.text_plain`：用 `IS NOT` 而不是 `<>`，任一侧为 NULL 时
+/// 也能正确判定（列是 `NOT NULL DEFAULT ''`，但历史库可能残留 NULL）。
+const FTS_UPDATE_TRIGGER_DDL: &str = r#"
+DROP TRIGGER IF EXISTS messages_fts_au;
+CREATE TRIGGER messages_fts_au AFTER UPDATE ON messages
+WHEN new.text_plain IS NOT old.text_plain
+BEGIN
   INSERT INTO messages_fts(messages_fts, rowid, text_plain) VALUES('delete', old.rowid, COALESCE(old.text_plain, ''));
   INSERT INTO messages_fts(rowid, text_plain) VALUES (new.rowid, COALESCE(new.text_plain, ''));
 END;
@@ -190,6 +215,9 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<bool, String> {
     ensure_text_plain_column(conn)?;
     conn.execute_batch(FTS_DDL)
         .map_err(|e| format!("初始化 FTS 索引失败: {}", e))?;
+    // 老库补丁：`messages_fts_au` 曾经没有 `WHEN`，任何 UPDATE 都会重建整段 trigram
+    //（流式节流落库被放大几十倍）。这里换成带 `WHEN` 的定义；已是最新则零写入。
+    ensure_fts_update_trigger(conn)?;
     // 用量账本：纯建表 + 建索引，元数据级开销，可放在快速路径
     conn.execute_batch(USAGE_LEDGER_DDL)
         .map_err(|e| format!("初始化用量账本失败: {}", e))?;
@@ -387,6 +415,41 @@ fn ensure_usage_cache_write_column(conn: &Connection) -> Result<(), String> {
         .map_err(|e| format!("添加 usage_ledger.cache_write_tokens 列失败: {}", e))?;
     }
     Ok(())
+}
+
+/// 老库补丁：把 `messages_fts_au` 换成带 `WHEN` 的版本（定义见 [`FTS_UPDATE_TRIGGER_DDL`]）。
+///
+/// 为什么必须在这里做：`CREATE TRIGGER IF NOT EXISTS` 换不掉已存在的旧定义，而旧的
+/// `messages_fts_au` 没有 `WHEN` —— 流式节流落库（700ms 一次、每次写当前全量正文）会因此
+/// 把整段 `text_plain` 的 trigram 全删重建，长回复是近似平方级的索引写入。
+///
+/// 为什么不递增 `SCHEMA_VERSION`：那会让 `migrate()` 对全库重建一次 FTS（大库分钟级），
+/// 而这里换一条触发器定义是元数据级开销。
+///
+/// 幂等：先读 `sqlite_master.sql`，已带 `WHEN` 就什么都不做（正常启动零写入）。
+///
+/// ⚠️ **只替换已有的触发器，绝不在这里新建**：尚未迁移的老库里 FTS 索引还是空的，
+/// 触发器会对未入索引的 rowid 发 FTS5 的 `'delete'` 指令 → 直接报
+/// `database disk image is malformed`（回填 `text_plain` 时必踩）。新建的职责归
+/// `FTS_TRIGGERS_DDL`（新库走 `init_schema`、老库走 `migrate()` 的链后重建）——那里
+/// 的 `messages_fts_au` 已经带 `WHEN`，两边口径一致。
+fn ensure_fts_update_trigger(conn: &Connection) -> Result<(), String> {
+    let current: Option<String> = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='messages_fts_au'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("读取 FTS 更新触发器定义失败: {}", e))?;
+    let Some(current) = current else {
+        return Ok(()); // 还没有这条触发器：交给 `FTS_TRIGGERS_DDL`
+    };
+    if current.to_ascii_uppercase().contains("WHEN") {
+        return Ok(());
+    }
+    conn.execute_batch(FTS_UPDATE_TRIGGER_DDL)
+        .map_err(|e| format!("重建 FTS 更新触发器失败: {}", e))
 }
 
 /// 老库补 `text_plain` 列（新库由 DDL 直接建出，这里检测后跳过）

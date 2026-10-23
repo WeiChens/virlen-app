@@ -72,8 +72,11 @@ fn seq_of_rowid(conn: &Connection, session_id: &str, rowid: i64) -> Result<i64, 
 
 /// 「已压缩区间」上界 = **最后一个被遮罩的消息之后**的 1 基时序；无压缩时返回 None。
 ///
-/// 口径（P0-3 起）：优先读 `compactions` 记录（`MAX(end_rowid) + 1`），没有记录时回退到
-/// 「最后一条 summary 的位置」——老会话行为一字不变。
+/// 口径（P0-3 起）：优先读 `compactions` 记录（末条被遮罩消息的**会话内时序 + 1**），
+/// 没有记录时回退到「最后一条 summary 的位置」——老会话行为一字不变。
+///
+/// ⚠️ 两个分支返回的**必须是同一个单位**（会话内 1 基时序）：消费方一律按
+/// `last_queryable = boundary - 1` 与 `seq_of_rowid` / `ROW_NUMBER()` 的结果比较。
 ///
 /// 为什么不直接用 summary 的位置：那是把语义编码进位置，summary 被删 / 被挑 / 将来支持
 /// 「只压中间一段」时都会静默失效（见 `agent::context` 模块头）。
@@ -90,7 +93,14 @@ fn boundary_seq(conn: &Connection, session_id: &str) -> Result<Option<i64>, Stri
         .map_err(|e| format!("查询遮罩边界失败: {}", e))?
         .flatten();
     if let Some(rowid) = masked_end {
-        return Ok(Some(rowid + 1));
+        // ⚠️ **必须换算成会话内时序**：`rowid` 是跨会话全局单调的，而消费方按会话内 1 基
+        // 时序比较 —— 直接返回 `rowid + 1` 会在多会话库上把边界放大约「其它会话的消息数」，
+        // 边界钳制随之失效（`query_messages` 会把已在模型上下文里的消息再吐一遍）。
+        //
+        // 语义：被遮罩区间的末条**不在**模型上下文里（它已被 summary 取代）→ 可查询，
+        // 故边界 = 末条的时序 + 1（= 第一条不可查询的时序）。
+        let end_seq = seq_of_rowid(conn, session_id, rowid)?;
+        return Ok(Some(end_seq + 1));
     }
 
     // ② 没有记录（老会话）：回退到「最后一条 summary」的位置
