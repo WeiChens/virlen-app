@@ -692,14 +692,15 @@
         cursor: pointer;
       }
 
-      /* 展开箭头：独立命中区（点它只切展开，不改选择）——宽度仍取 12px，
-         与文件行的 .tree-arrow-placeholder 对齐，否则两类行的图标会错开 2px */
+      /* 展开开关（目录行特有）：坐落在文件类型图标那一列（16px），左边 12px 由
+         .tree-arrow-placeholder 占住 —— 两类行的名字起点因此完全重合。
+         点它只切展开，不改选择 */
       .tree-arrow-btn {
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 12px;
-        height: 14px;
+        width: 16px;
+        height: 16px;
         flex-shrink: 0;
         border-radius: 3px;
         cursor: pointer;
@@ -709,19 +710,21 @@
         }
       }
 
+      /* 图标本身是向下 chevron：先逆时针 90° 定在 `>`（折叠），展开再顺时针转回来 */
       .tree-arrow-icon {
-        width: 12px;
-        height: 12px;
+        width: 14px;
+        height: 14px;
         flex-shrink: 0;
         fill: var(--text-secondary, #666);
+        transform: rotate(-90deg);
         transition: transform 0.15s ease;
 
-        &.collapsed {
-          transform: rotate(-90deg);
+        &.expanded {
+          transform: rotate(0deg);
         }
       }
 
-      /* 文件行没有展开箭头 → 占位，保证图标列对齐 */
+      /* 左侧固定占位：目录行之后接箭头、文件行之后接类型图标，宽度必须一致 */
       .tree-arrow-placeholder {
         width: 12px;
         height: 12px;
@@ -816,6 +819,8 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      transform: translateX(30px);
+      opacity: .7;
 
       &.error {
         color: var(--color-error, #cf222e);

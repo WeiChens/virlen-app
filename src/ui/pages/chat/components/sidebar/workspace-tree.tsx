@@ -29,8 +29,7 @@ import { MessageBox } from '@/ui/components/shared/MessageBox'
 import ContextMenu, { useContextMenu } from '@/ui/components/shared/ContextMenu'
 import { track } from '@/utils/telemetry'
 import { t, tpl } from '@/ui/i18n'
-import DropDownSvg from '@/ui/components/icons/DropDownSvg'
-import FolderSvg from '@/ui/components/icons/FolderSvg'
+import CollapsedSvg from '@/ui/components/icons/CollapsedSvg'
 import RefreshSvg from '@/ui/components/icons/RefreshSvg'
 import FileTypeIcon from '@/ui/components/icons/FileTypeIcon'
 import {
@@ -852,6 +851,8 @@ function WorkspaceTree({
               onRowClick(target, {})
             }
           }}>
+          {/* 目录与文件行同一列：目录摆 `>` 开关，文件摆类型图标（左侧 12px 占位两边共有） */}
+          <span className="tree-arrow-placeholder" />
           {row.isDir ? (
             // 箭头单独命中：只切展开，不改选择
             <span
@@ -861,15 +862,10 @@ function WorkspaceTree({
                 toggleExpand(row.path)
               }}
               onDoubleClick={(e) => e.stopPropagation()}>
-              <DropDownSvg
-                className={`tree-arrow-icon ${isOpen ? '' : 'collapsed'}`}
+              <CollapsedSvg
+                className={`tree-arrow-icon${isOpen ? ' expanded' : ''}`}
               />
             </span>
-          ) : (
-            <span className="tree-arrow-placeholder" />
-          )}
-          {row.isDir ? (
-            <FolderSvg className="tree-icon" />
           ) : (
             <FileTypeIcon filename={row.name} className="tree-icon" />
           )}

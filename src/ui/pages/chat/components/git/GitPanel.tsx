@@ -30,7 +30,6 @@ import {
   loadCommitDetail,
   refreshBranches,
   refreshRemotes,
-  refreshStatus,
   resumePick,
   stage,
   syncNow,
@@ -450,17 +449,6 @@ export const GitPanel = observer(function GitPanel({
               onClick={() => setGraphOpen(true)}>
               <GraphSvg />
             </button>
-            <button
-              type="button"
-              className="git-icon-btn"
-              title={t('刷新')}
-              aria-label={t('刷新')}
-              disabled={busy}
-              onClick={() => void refreshStatus()}>
-              <RefreshSvg />
-            </button>
-            {/* 更多：同步 / 合并 / 贮藏 / 撤销上次提交 / 修改上一次提交 —— 不常用的动作收进来，
-                免得把分支名与落差数字挤掉（面板内容宽只有 496px）。 */}
             <button
               ref={moreBtnRef}
               type="button"
