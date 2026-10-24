@@ -21,6 +21,12 @@
  *    小一圈、整体还往左上收」，缩放越大差得越远。倍率取**已经落到 webview 上**的那个值
  *    （`appliedZoomFactor()`，见 `ui/hooks/applied-zoom.ts`），不是设置里的期望值：
  *    `setZoom` 是异步 IPC，照期望值算会先撑大一两帧再收回。
+ * 6. **被 DOM 浮层盖住时得自己让位**：原生子窗口**永远画在 HTML 之上**（它是窗口的子窗口，
+ *    不是 DOM 节点）—— `z-index` / portal / `.settings-overlay` 那套层级对它完全无效。
+ *    所以设置页 / Modal / 抽屉 / 右键菜单一打开，必须让它自己 `hide`，否则它会把整个浮层
+ *    盖住（用户看到的就是「打开设置页，网页还在最上面」）。判据是**占位中心点的命中测试**
+ *    （`coveredByOverlay`），而不是维护一张浮层清单 —— 那些浮层全是 portal 到 body 的，
+ *    只要中心命中的元素跑出占位，就说明被盖了。
  */
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { appliedZoomFactor } from '@/ui/hooks/applied-zoom'
@@ -48,6 +54,12 @@ interface NativeBrowserView {
   hostRef: RefObject<HTMLDivElement | null>
   /** 建不起来的原因（非桌面环境 / 命令失败）；`null` = 正常 */
   error: string | null
+  /**
+   * 是否被 DOM 浮层盖住（原生视图已藏起来）。
+   * 调用方据此把占位里的「正在加载…」一并收掉：
+   * 设置页的遮罩是半透明的，底下留着那行字会透出来。
+   */
+  covered: boolean
 }
 
 /** 小于这个尺寸就算不可见（`display:none` 的元素 rect 正好是 0） */
@@ -55,6 +67,27 @@ const MIN_SIZE = 2
 
 /** 位置变化小于这个值就不发命令（亚像素抖动没有意义，只是白跑一趟 IPC） */
 const MIN_DELTA = 0.5
+
+/**
+ * 让位判定：占位的中心点是不是被 DOM 浮层盖住了（`rect` 是 CSS 像素，与 `elementFromPoint` 同口径）。
+ *
+ * 为什么用命中测试而不是「浮层清单」：设置页（`.settings-overlay`）、`Modal`（`.modal-overlay`）、
+ * 抽屉、右键菜单、全局提示全都是 portal 到 body 的，列清单一定会漏；而它们要盖住视图时，
+ * 中心点必然跑到 `.browser-viewport` 外面。取中心点是**最小代价的近似**：全屏遮罩型浮层
+ * （设置页 / Modal）必然命中；局部浮层只在真的压住主要区域时才让位（遮一个小角就藏起来会是闪烁）。
+ * ⚠️ 不能因为「原生视图看不见」而放弃这一步 —— 反过来，它盖在遮罩上会**吃掉鼠标**，
+ * 用户点「设置」里的东西却落到了网页上。
+ */
+function coveredByOverlay(host: HTMLElement, rect: DOMRect): boolean {
+  const x = rect.left + rect.width / 2
+  const y = rect.top + rect.height / 2
+  // 中心点根本不在视口里（面板大半滚出去）：与遮挡无关，交给尺寸判断
+  if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) return false
+  // jsdom 没有布局引擎，也不提供 elementFromPoint（单测里按需打桩）
+  if (typeof document.elementFromPoint !== 'function') return false
+  const hit = document.elementFromPoint(x, y)
+  return hit !== null && !host.contains(hit)
+}
 
 interface ViewState {
   created: boolean
@@ -81,6 +114,9 @@ export function useNativeBrowserView({ label, url, reloadToken }: Options): Nati
   const [error, setError] = useState<string | null>(() =>
     hasBrowserView() ? null : 'unavailable',
   )
+  const [covered, setCovered] = useState(false)
+  /** 上一帧的遮挡结论：只在翻转时 setState（否则每帧一次调度） */
+  const coveredRef = useRef(false)
   const stateRef = useRef<ViewState>({
     created: false,
     creating: false,
@@ -147,10 +183,21 @@ export function useNativeBrowserView({ label, url, reloadToken }: Options): Nati
       }
       // 没有地址、或者布局上根本看不见（别的标签 / 面板已收起）：不建，已建的就藏起来。
       // 拖动面板宽度时也藏：子窗口会吃掉 document 上的 mousemove / mouseup（见文件头第 2 条）。
+      // 被 DOM 浮层盖住（设置页 / Modal / 抽屉 / 菜单）时同样藏：原生窗口不吃 z-index（第 6 条）。
       const dragging =
         host.closest('.side-panel')?.classList.contains('is-resizing') ?? false
+      const sized = rect.width >= MIN_SIZE && rect.height >= MIN_SIZE
+      // 尺寸正常才值得做命中测试（rect 为 0 时中心点毫无意义）
+      const isCovered = sized && coveredByOverlay(host, rect)
+      if (isCovered !== coveredRef.current) {
+        coveredRef.current = isCovered
+        setCovered(isCovered)
+      }
       const visible =
-        !dragging && !!state.wantUrl && rect.width >= MIN_SIZE && rect.height >= MIN_SIZE
+        sized &&
+        !dragging &&
+        !!state.wantUrl &&
+        !isCovered
 
       if (!state.created) {
         if (!visible || state.creating || state.failed) return
@@ -204,5 +251,5 @@ export function useNativeBrowserView({ label, url, reloadToken }: Options): Nati
     }
   }, [label])
 
-  return { hostRef, error }
+  return { hostRef, error, covered }
 }

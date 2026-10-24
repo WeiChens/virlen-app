@@ -23,6 +23,9 @@
  *    静默下载正是这组用例要防的那个问题（原生视图没有浏览器那种下载栏）。
  * 11. 位置算的是**逻辑像素**：rect 是 CSS 像素，传给原生视图前要乘「已生效的界面缩放」
  *    （`setZoom(1.25)` 之后 1 CSS px 占 1.25 DIP），否则缩放后视图比占位小一圈、往左上收。
+ * 12. **被 DOM 浮层盖住时要自己躲**：原生子窗口永远画在 HTML 之上，`z-index` 管不了它 ——
+ *    设置页 / Modal 一打开，视图必须 `hide`，否则它把整个浮层盖住（还吃掉鼠标）。
+ *    判据是占位中心点的 `elementFromPoint`（jsdom 不实现，这里打桩）。
  *
  * 真实网页能不能打开只能在真窗口里验；这里只钉「我们自己的逻辑」。
  */
@@ -134,8 +137,7 @@ const forwardBtn = () => navButtons()[1]
 const reloadBtn = () => navButtons()[2]
 
 /** jsdom 里所有元素的 rect 都是 0；这里只给挂载点一个真实尺寸 */
-function setViewportRect(rect: { left: number; top: number; width: number; height: number }) {
-  const element = viewport()
+function setViewportRect(rect: { left: number; top: number; width: number; height: number }) {  const element = viewport()
   if (!element) throw new Error('viewport 还没挂上')
   const full = {
     x: rect.left,
@@ -187,10 +189,23 @@ function emit(event: Omit<BrowserViewEvent, 'label'>) {
   })
 }
 
+/**
+ * 占位中心点的命中测试替身（`use-native-view.ts::coveredByOverlay` 用）：
+ * jsdom 没有布局引擎也不实现 `elementFromPoint`，默认答「命中的是占位自己」；
+ * 用例里把 `overlayHit` 指向一个浮层就能模拟「设置页 / Modal 盖住面板」。
+ */
+let overlayHit: Element | null = null
+function stubHitTest() {
+  document.elementFromPoint = () =>
+    overlayHit ?? document.querySelector('.browser-viewport')
+}
+
 beforeEach(() => {
   bridge.available = true
   // 界面缩放是模块级状态（`ui/hooks/applied-zoom.ts`），用例之间必须复位
   setAppliedZoomFactor(1)
+  overlayHit = null
+  stubHitTest()
   bridge.open.mockResolvedValue(undefined)
   bridge.apply.mockResolvedValue(undefined)
   bridge.navigate.mockResolvedValue(undefined)
@@ -498,6 +513,54 @@ it('界面缩放：rect 是 CSS 像素，传给原生视图的是逻辑像素（
     { x: 0, y: 40, width: 400, height: 500 },
     true,
   )
+})
+
+it('设置页 / Modal 盖住占位时：原生视图先躲开（它是子窗口，不吃 z-index）', async () => {
+  mount('https://a.com/')
+  setViewportRect({ left: 0, top: 40, width: 420, height: 560 })
+  await tick()
+  expect(bridge.open).toHaveBeenCalledTimes(1)
+  // 刚建好、位置也没变：一帧都不该发
+  expect(bridge.apply).not.toHaveBeenCalled()
+  expect(document.querySelector('.browser-pending')).not.toBeNull()
+
+  // 设置页打开（全屏遮罩）：中心点命中的不再是占位
+  const overlay = document.createElement('div')
+  overlay.className = 'settings-overlay'
+  document.body.appendChild(overlay)
+  overlayHit = overlay
+  await tick()
+  expect(bridge.apply).toHaveBeenLastCalledWith(expect.any(String), expect.anything(), false)
+  // 只藏不销毁：关掉设置页，网页 / 滚动位置 / 登录都还在
+  expect(bridge.close).not.toHaveBeenCalled()
+  // 半透明遮罩下不能透出「正在加载…」（视图已藏起来，它早不是加载中了）
+  expect(document.querySelector('.browser-pending')).toBeNull()
+
+  // 关掉设置页：下一帧重新露出来
+  overlay.remove()
+  overlayHit = null
+  await tick()
+  expect(bridge.apply).toHaveBeenLastCalledWith(expect.any(String), expect.anything(), true)
+  expect(bridge.close).not.toHaveBeenCalled()
+  expect(document.querySelector('.browser-pending')).not.toBeNull()
+})
+
+it('被盖住时不去新建视图（建了也是一层白占的窗口）', async () => {
+  const overlay = document.createElement('div')
+  overlay.className = 'modal-overlay'
+  document.body.appendChild(overlay)
+  overlayHit = overlay
+
+  mount('https://a.com/')
+  setViewportRect({ left: 0, top: 40, width: 420, height: 560 })
+  await tick()
+  expect(bridge.open).not.toHaveBeenCalled()
+
+  // 遮罩撤掉：下一帧才真的建
+  overlay.remove()
+  overlayHit = null
+  await tick()
+  expect(bridge.open).toHaveBeenCalledTimes(1)
 })
 
 it('视图建不起来：给一张说明卡（而不是永久白框）', async () => {

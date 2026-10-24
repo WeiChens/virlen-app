@@ -124,7 +124,7 @@ export default function BrowserPane({ initialUrl, onNavigate, onTitle, onClose }
   const viewLabel = viewLabelRef.current
 
   const url = historyCurrent(history)
-  const { hostRef, error: viewError } = useNativeBrowserView({
+  const { hostRef, error: viewError, covered } = useNativeBrowserView({
     label: viewLabel,
     url,
     reloadToken: reloadKey,
@@ -442,7 +442,8 @@ export default function BrowserPane({ initialUrl, onNavigate, onTitle, onClose }
               </button>
             </div>
           ) : (
-            <div className="browser-pending">{t('正在加载…')}</div>
+            /* 被 DOM 浮层盖住时视图已藏起来；遮罩是半透明的，这行字会透出来，干脆不画 */
+            !covered && <div className="browser-pending">{t('正在加载…')}</div>
           )}
         </div>
       </div>

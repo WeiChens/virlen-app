@@ -42,6 +42,10 @@
 //! 症状对照：漏乘 = 视图比占位小一圈且整体往左上收，缩放越大差得越远。
 //! ⚠️ 子 WebView 是**原生窗口**，浮在 HTML 之上：位置 / 尺寸 / 显隐都要前端逐帧同步
 //! （见 `src/infrastructure/browser/browser-view.ts` 与 `BrowserPane` 的宿主 hook）。
+//! 这里的「浮在 HTML 之上」是硬约束 —— 它是窗口的子窗口，`z-index` / portal 都管不了它，
+//! 所以上面那些 DOM 浮层（设置页 `.settings-overlay` / `Modal` / 抽屉 / 右键菜单）一打开，
+//! 必须由前端把它 `hide` 掉（占位中心点的 `elementFromPoint` 判定，见 `use-native-view.ts`），
+//! 而不能指望用层级把它压下去。
 
 use tauri::{Emitter, LogicalPosition, LogicalSize, Manager, Url};
 
