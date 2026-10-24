@@ -1,7 +1,7 @@
 /**
  * settings-view — 设置面板主入口
- * 包含 通用设置 / Provider 管理 / 安全 / Agent 管理 四个子页面
- * 从新的 store (settingsState) 读取/写入
+ * 左侧导航切换各子页面（通用 / 模型服务 / 安全 / … / 关于）；从新的 store (settingsState) 读取/写入
+ * 只负责面板本身：入口按钮在窗口状态栏（见 layout/WindowLayout），经 settingsEvent 打开
  */
 import { useState, useEffect, useCallback, useRef } from 'react'
 import GeneralSettings from './general-settings'
@@ -18,8 +18,10 @@ import EditorSettings from './editor-settings'
 import StorageSettings from './storage-settings'
 import PhoneControlSettings from './phone-control-settings'
 import MemorySettings from './memory-settings'
+import AboutSettings from './about-settings'
 import CloseSvg from '@/ui/components/icons/CloseSvg'
 import SettingSvg from '@/ui/components/icons/SettingSvg'
+import AboutSvg from '@/ui/components/icons/AboutSvg'
 import SystemSvg from '@/ui/components/icons/SystemSvg'
 import MessageSvg from '@/ui/components/icons/MessageSvg'
 import LockSvg from '@/ui/components/icons/LockSvg'
@@ -50,6 +52,7 @@ export type SettingsPage =
   | 'storage'
   | 'phone-control'
   | 'memory'
+  | 'about'
 
 export default function SettingsView() {
   const [open, setOpen] = useState(false)
@@ -134,17 +137,7 @@ export default function SettingsView() {
     if (open) panelRef.current?.focus()
   }, [open])
 
-  if (!open && !closing) {
-    return (
-      <button
-        className="settings-trigger"
-        onClick={() => setOpen(true)}
-        title={t('设置')}
-        aria-label={t('设置')}>
-        <SettingSvg />
-      </button>
-    )
-  }
+  if (!open && !closing) return null
 
   return (
     <div
@@ -253,6 +246,12 @@ export default function SettingsView() {
               <CodeSvg fill="var(--nav-item-color)" />
               <span>{t('打开编辑器')}</span>
             </button>
+            <button
+              className={`nav-item ${page === 'about' ? 'active' : ''}`}
+              onClick={() => setPage('about')}>
+              <AboutSvg fill="var(--nav-item-color)" />
+              <span>{t('关于')}</span>
+            </button>
           </nav>
         </div>
         <div className="settings-content">
@@ -272,6 +271,7 @@ export default function SettingsView() {
           {page === 'knowledge-base' && <KnowledgeBaseSettings />}
           {page === 'memory' && <MemorySettings />}
           {page === 'editor' && <EditorSettings />}
+          {page === 'about' && <AboutSettings />}
         </div>
       </div>
     </div>

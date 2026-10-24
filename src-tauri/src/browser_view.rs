@@ -17,7 +17,8 @@
 //! 这里加载的是**外部网页**，所以四件事必须钉住：
 //! 1. **它碰不到本应用的命令**：Tauri 2 对非本地来源发起的 IPC 一律要求显式 `remote`
 //!    capability（`tauri/src/webview/mod.rs::on_message` 的 `!is_local` 分支）。本应用的
-//!    capabilities 里没有 `remote`，因此网页即便拿到 `__TAURI_INTERNALS__` 也调不动任何命令；
+//!    capabilities 里没有 `remote`，所以命令本来就不通；但拒绝**不是静默的**（页面调一次就留一条
+//!    控制台红字），所以在下面再加一道 `REMOTE_LOCKDOWN`：`_blank` 就地导航 + IPC 通道永不落地；
 //! 2. **导航只放行 web**：`file:` / `tauri:` / 未知自定义协议一律拒绝，避免网页把视图带到
 //!    本地资源或应用自己的协议上；带用户名 / 密码的地址也拒绝（会被写进标签标题与历史）；
 //! 3. **新窗口不另开**：`window.open` / `target=_blank` 收进**同一个视图**导航
@@ -51,6 +52,67 @@ use tauri::{Emitter, LogicalPosition, LogicalSize, Manager, Url};
 
 /// 主窗口 / 主 webview 的 label（`tauri.conf.json` 只声明了一个窗口，没写 label 时默认 `main`）
 const MAIN: &str = "main";
+
+/// 远程页面**既碰不到宿主通道，也不走「新窗口请求」那条链路**。
+///
+/// ### 为什么需要这段脚本
+///
+/// 在网页里点一个 `<a target="_blank">`，控制台会冒出一条与页面无关的红字：
+///
+/// ```text
+/// Uncaught (in promise) shell.open not allowed on window "main", webview "browser-view-1", URL: https://www.baidu.com/
+/// allowed on: [windows: "main", URL: local]  referenced by: capability: default, permission: allow-open
+/// ```
+///
+/// 链路是：Tauri 把 `__TAURI_INTERNALS__`（`invoke`）与 `window.ipc` **注入到每一个 webview**
+/// （`tauri/src/manager/webview.rs` 的 `all_initialization_scripts`），远程子视图也不例外；
+/// 命令被 capability 拦住（没有 `remote`）—— 但拒绝**不是静默的**，页面调一次就在控制台留一条红字。
+///
+/// ⚠️ 想「把入口删掉」是行不通的，已经试过：`__TAURI_INTERNALS__` 是
+/// `Object.defineProperty(window, …)`（**无 `configurable`**）装的，`window.ipc` 更死（
+/// `Object.freeze`）—— 页面上 `delete` / 重定义都是静默失败。所以只能从两个**可控的面**收口：
+///
+/// 1. **`<a target="_blank">` 在 DOM 层就地导航**：`preventDefault` + `location.href`，
+///    WebView2 根本不会发起「新窗口请求」。与已有的 `on_new_window` → `Deny` 同一语义
+///    （面板只有一个视图），但走的是普通导航 —— 地址栏 / 历史照常回传，也不碰宿主通道；
+/// 2. **把 IPC 的 `fetch` 通道掐成「永不落地」**：`invoke` 的实现在 `ipc-protocol.js` 里先用
+///    `fetch('http://ipc.localhost/…')` 发命令，失败才回退 `window.ipc.postMessage`；
+///    我们不回退、也不报错，页面就算调 `invoke` 也只会拿到一个永远 pending 的 Promise。
+///    用的是**永不 settle** 而不是「报错」：报错会让 `ipc-protocol.js` 回退到 postMessage 那条真的通的路。
+///
+/// 口径：命令本来就不通（capability 没有 `remote`），这里收的是「噪声」与「不用的面」，
+/// 不是唯一的防线。也用了 `_for_all_frames`：iframe 里的 `_blank` 链接一并管住。
+const REMOTE_LOCKDOWN: &str = r#"
+(function () {
+  // ① `<a target="_blank">`（含中键）：就地导航，不交给 WebView2 的新窗口机制
+  function follow(e) {
+    if (e.defaultPrevented) return
+    var el = e.target
+    if (el && el.nodeType !== 1) el = el.parentElement
+    while (el && el.nodeType === 1 && el.tagName !== 'A') el = el.parentElement
+    if (!el || el.tagName !== 'A') return
+    if (String(el.target || '').toLowerCase() !== '_blank') return
+    var href = el.href || ''
+    if (!/^https?:/i.test(href)) return // 其它协议继续交给 on_navigation 拒
+    e.preventDefault()
+    location.href = href
+  }
+  document.addEventListener('click', follow, true)
+  document.addEventListener('auxclick', follow, true)
+
+  // ② 宿主 IPC 通道：永不落地（见上面的注释，不能改成报错）
+  var rawFetch = window.fetch
+  if (typeof rawFetch === 'function') {
+    window.fetch = function (input) {
+      var url = typeof input === 'string' ? input : (input && input.url) || ''
+      if (url.indexOf('ipc.localhost') !== -1 || url.indexOf('ipc://') === 0) {
+        return new Promise(function () {})
+      }
+      return rawFetch.apply(this, arguments)
+    }
+  }
+})()
+"#;
 
 /// 网页侧状态回传事件：**只发给主 webview**（不能让网页自己收到自己的浏览记录）
 pub const NAVIGATE_EVENT: &str = "browser:navigate";
@@ -243,6 +305,8 @@ pub async fn browser_view_open(
         label.clone(),
         tauri::WebviewUrl::External(parsed),
     )
+    // 远程页面：`_blank` 就地导航 + 宿主 IPC 通道永不落地（见 `REMOTE_LOCKDOWN` 的注释）
+    .initialization_script_for_all_frames(REMOTE_LOCKDOWN)
     .on_navigation(navigation_allowed)
     .on_page_load(move |webview, payload| {
         let phase = match payload.event() {

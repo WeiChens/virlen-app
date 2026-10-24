@@ -25,7 +25,8 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 6px 8px;
+  padding: 0 8px;
+  height: var(--side-panel-head-h, 27px);
   border-bottom: 1px solid var(--border-color, #e5e5e5);
   background: var(--bg-secondary, #f7f7f8);
 }
@@ -76,7 +77,8 @@
 .browser-address {
   flex: 1 1 auto;
   min-width: 0;
-  height: 26px;
+  /* 28：这一行 37px（含 1px 底线），上下还能留 4px 呼吸 */
+  height: 28px;
   padding: 0 8px;
   border: 1px solid var(--border-color, #e5e5e5);
   border-radius: 6px;

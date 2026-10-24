@@ -82,14 +82,18 @@
   z-index: 20;
 }
 
-/* 标签栏 = 可横向滚动的标签区 + 右侧两颗固定按钮（「+」打开开始页 / 「»」收起面板）。
-   底色与底线挂在整条上，按钮就不会跟着标签一起滚走。 */
+/* 标签栏 = 可横向滚动的标签区 + 右侧固定按钮（「+」打开开始页 / 全屏 / ✕ 收起面板）。
+   底色与底线挂在整条上，按钮就不会跟着标签一起滚走。
+
+   高度跟聊天区对齐：标签栏（36）+ 当前标签页自己的 header（37）= 73 = `.chat-header`
+   （40 + 32 + 1），两侧内容从同一条横线开始。三个数的定义与算式见 theme.scss 的「布局尺寸」
+   （⚠️ 跨实现镜像：改那边要同步看这里和每个 pane 的 header）。 */
 .side-panel-tabbar {
   flex: none;
   display: flex;
   border-bottom: 1px solid var(--border-color, #e5e5e5);
   background: var(--bg-secondary, #f7f7f8);
-  height: 40px;
+  height: var(--side-panel-tabbar-h, 36px);
 }
 
 /* 标签栏：横向排、超出就自己滚（标签一多不能把面板顶宽），底边与内容区同一条线。
@@ -126,7 +130,7 @@
   }
 }
 
-/* 标签栏右侧的两颗固定按钮：24px 方形，hover 才显形 */
+/* 标签栏右侧的固定按钮：「+」新标签 / 全屏 / ✕ 收起（不跟着标签区横向滚动）。 */
 .side-panel-tabbar-actions {
   flex: none;
   display: flex;
@@ -163,11 +167,6 @@
     width: 13px;
     height: 13px;
     fill: currentColor;
-  }
-
-  /* 「收起」：向下 chevron 转成朝右（= 往边缘收） */
-  &.is-collapse svg {
-    transform: rotate(-90deg);
   }
 }
 
@@ -366,16 +365,24 @@
 }
 
 /* 「工作区文件」标签：树自己带 `flex: 1` 与滚动区，这里只做一层纵向容器
-   （搜索框固定、树滚动，与左侧栏同一条口径） */
+   （搜索框固定、树滚动，与左侧栏同一条口径）。
+   搜索框那一行就是本标签的 header：在面板里它顶满一行、不带左侧栏那 8px 下外边距。 */
 .side-panel-files {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding-top: 6px;
 
   >* {
     flex: 1;
     min-height: 0;
     min-width: 0;
+  }
+
+  /* 与左侧栏共用同一颗搜索框组件：这里的尺寸只影响面板内的那份。
+     搜索框本体 28px，用上下各 (head - 28) / 2 的外边距占满一行（即面板的「文件 header」行高），
+     不写分数像素，改 `--side-panel-head-h` 时自动重新居中。 */
+  .sidebar-search {
+    height: 28px;
+    margin: calc((var(--side-panel-head-h, 37px) - 28px) / 2) 10px;
   }
 }

@@ -50,6 +50,20 @@ it('折回文本与文件里的那一侧一致：续行不换行、换行标记�
   expect(input.colHeaderNote.new).toBe('Ln 5–6')
 })
 
+it('整行新增 / 删除的 ↵ 不进文本：折回来就是文件里的那几行', () => {
+  // 回归：标记曾被并进相邻片段（`'a↵'`），下游按 `value === NL_MARK` 判定失效 → ↵ 进了 Monaco 正文，
+  // 用户一眼看到红字里的 ↵、选中还能把它复制出去
+  const input = toMonacoDiffInput(buildDiffRows(null, 'a\nb', 1) as SideBySideRow[])
+  expect(input.oldText).toBe('')
+  expect(input.newText).toBe('a\nb')
+
+  const removed = toMonacoDiffInput(
+    buildDiffRows('x\ny', null, 3) as SideBySideRow[],
+  )
+  expect(removed.oldText).toBe('x\ny')
+  expect(removed.newText).toBe('')
+})
+
 it('多处编辑之间的省略行两侧都插占位，且列头不再写区间', () => {
   const rows = [
     {

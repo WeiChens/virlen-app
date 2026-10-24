@@ -87,7 +87,6 @@ import { useToolUI } from './components/tool-ui'
 import HideSideBarSvg from '@/ui/components/icons/HideSideBarSvg'
 import ShowSideBarSvg from '@/ui/components/icons/ShowSideBarSvg'
 import PanelRightSvg from '@/ui/components/icons/PanelRightSvg'
-import SettingsView from '@/ui/pages/Settings/settings-view'
 import { t, tpl } from '@/ui/i18n'
 import settingsEvent from '@/events/settingsEvent'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
@@ -1519,31 +1518,29 @@ function ChatView() {
                 没有标签就开「开始页」；有标签就展开 ↔ 收起 —— **收起只是隐藏**，标签与草稿都留着；
                 收起时这颗按钮上的徽标是「这个会话里还开着几个标签」（与 Ctrl+Alt+B 同一条路）。
               */}
-              <button
-                className={`toolbar-icon-btn${panelVisible ? ' is-active' : ''}`}
-                onClick={handleTogglePanel}
-                title={
-                  panelVisible
-                    ? t('收起右侧栏')
-                    : panelTabCount > 0
+              {!panelVisible && (
+                <button
+                  className="toolbar-icon-btn"
+                  onClick={handleTogglePanel}
+                  title={
+                    panelTabCount > 0
                       ? tpl('打开右侧栏（$__count__ 个标签页）', { count: panelTabCount })
                       : t('打开右侧栏')
-                }
-                aria-label={
-                  panelTabCount > 0
-                    ? tpl('右侧栏：$__count__ 个标签页', { count: panelTabCount })
-                    : t('右侧栏')
-                }
-                aria-pressed={panelVisible}
-                type="button">
-                <PanelRightSvg />
-                {!panelVisible && panelTabCount > 0 && (
-                  <span className="toolbar-badge" aria-hidden="true">
-                    {panelTabCount}
-                  </span>
-                )}
-              </button>
-              <SettingsView />
+                  }
+                  aria-label={
+                    panelTabCount > 0
+                      ? tpl('右侧栏：$__count__ 个标签页', { count: panelTabCount })
+                      : t('右侧栏')
+                  }
+                  type="button">
+                  <PanelRightSvg />
+                  {panelTabCount > 0 && (
+                    <span className="toolbar-badge" aria-hidden="true">
+                      {panelTabCount}
+                    </span>
+                  )}
+                </button>
+              )}
             </div>
           </div>
           {/* 对话 / 轨迹：与 dsh 一致，header 正下方一条 tab（有会话才出现） */}

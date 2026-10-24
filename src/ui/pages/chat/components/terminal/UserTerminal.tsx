@@ -8,7 +8,9 @@
  * 1. **默认脱壳，但头部不挂徽标**：这里跑的是用户自己敲的命令（与 VS Code 终端一致），
  *    根本不进沙盒 —— 常驻一枚「沙盒已关闭」只是噪声（与 `SandboxBadge` 只画「在沙盒里」同一口径）；
  * 2. **关标签 = 关终端**：`onClose` 由宿主先 `kill` 掉进程树再关标签（服务那边是「终止但留条目」）；
- * 3. **没有终止按钮**：想杀就用 `exit` / `Ctrl+D` / 关标签 —— 少一颗按钮，少一次
+ *    **进程自己结束也走这条路**：用户敲 `exit` / `Ctrl+D` / 命令跑完 → 标签自动关掉，
+ *    不留一个「只能看输出」的死终端；
+ * 3. **没有终止按钮**：想杀就 `exit` / `Ctrl+D` / 关标签 —— 少一颗按钮，少一次
  *    「按钮按了但进程没死」的困惑；
  * 4. **没有元信息那一行**（`.service-console-meta`：工作目录 / 进程 pid）：用户自己的终端
  *    屏幕上就是全部有用的东西，工作目录已经在标签 tooltip 上（`side-panel` 的 `tab.cwd`），
@@ -16,7 +18,7 @@
  *
  * `active=false` 表示这个标签被切走了：**标签仍然挂着**（切回来要保留屏幕内容），但轮询暂停。
  */
-import { useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { t, tpl } from '@/ui/i18n'
 import { resizeUserTerminal, writeUserTerminal } from '@/infrastructure/terminal'
 import { serviceStatusLabel } from '../tool-call/service-status'
@@ -72,6 +74,19 @@ export default function UserTerminal({
   )
 
   const running = !!info?.interactive
+
+  /**
+   * 进程一结束就**关掉这个标签**（用户明确要求）：与服务终端相反 —— 那边「终止但留条目」，
+   * 好让人翻最后一屏输出；用户自己的终端没有回看的价值，留一个只能看的死终端只是噪声。
+   * ⚠️ `info === null`（首帧，轮询还没回来）不是「已结束」；`closedRef` 防同一次结束
+   * 反复上报（宿主那边的 `onClose` 每次渲染都是新的箭头函数）。
+   */
+  const closedRef = useRef(false)
+  useEffect(() => {
+    if (!info || info.running || closedRef.current) return
+    closedRef.current = true
+    onClose()
+  }, [info, onClose])
   const status = serviceStatusLabel(
     info ? (info.running ? 'running' : 'exited') : undefined,
     info?.killed,

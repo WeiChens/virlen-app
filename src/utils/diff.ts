@@ -54,12 +54,19 @@ function splitLines(value: string): string[] {
   return arr
 }
 
-/** 追加片段；同类型相邻片段合并（减少渲染节点） */
+/**
+ * 追加片段；同类型相邻片段合并（减少渲染节点）。
+ * ⚠️ 换行标记必须**自成一段**：并进相邻片段（`'abc'` + `'↵'`）后，渲染、折回文本与复制三处
+ * 的 `value === NL_MARK` 判定全部失效，↵ 会漏进 Monaco 正文与剪贴板。
+ */
 function pushPart(buf: WordPart[], type: WordPart['type'], value: string): void {
   if (value === '') return
   const last = buf[buf.length - 1]
-  if (last && last.type === type) last.value += value
-  else buf.push({ type, value })
+  if (last && last.type === type && value !== NL_MARK && last.value !== NL_MARK) {
+    last.value += value
+  } else {
+    buf.push({ type, value })
+  }
 }
 
 /**
@@ -435,6 +442,31 @@ interface LegacyDiffRow {
 }
 
 /**
+ * 把并进相邻片段的换行标记拆成独立片段：早期落库的片段是 `'abc↵'` 这种合并形态，
+ * 下游按 `value === NL_MARK` 判定，不拆就会把 ↵ 当成正文。
+ */
+function splitNlMarks(parts: WordPart[]): WordPart[] {
+  let merged = false
+  for (const part of parts) {
+    if (part.value.length > 1 && part.value.includes(NL_MARK)) merged = true
+  }
+  if (!merged) return parts
+  const out: WordPart[] = []
+  for (const part of parts) {
+    const segs = part.value.split(NL_MARK)
+    if (segs.length === 1) {
+      out.push(part)
+      continue
+    }
+    for (let i = 0; i < segs.length; i += 1) {
+      if (segs[i] !== '') out.push({ type: part.type, value: segs[i] })
+      if (i < segs.length - 1) out.push({ type: part.type, value: NL_MARK })
+    }
+  }
+  return out
+}
+
+/**
  * 把历史消息里落库的差异行归一成当前模型。按老口径归一（不重算）：老消息当初显示什么样，
  * 现在还得是什么样，否则会与当时看到的、以及增删统计对不上。
  */
@@ -451,8 +483,8 @@ export function normalizeDiffRows(rows: unknown): DiffRow[] {
         type: (r.type ?? 'equal') as DiffRowType,
         leftLineNo: (r.leftLineNo as number | null) ?? null,
         rightLineNo: (r.rightLineNo as number | null) ?? null,
-        left: (r.left as WordPart[]) ?? [],
-        right: (r.right as WordPart[]) ?? [],
+        left: splitNlMarks((r.left as WordPart[]) ?? []),
+        right: splitNlMarks((r.right as WordPart[]) ?? []),
       })
       continue
     }

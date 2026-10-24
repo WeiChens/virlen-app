@@ -238,8 +238,12 @@ export default function BrowserPane({ initialUrl, onNavigate, onTitle, onClose }
       setProblem(check.reason === 'empty' ? null : check.reason)
       return
     }
-    applyHistory(historyGo(history, check.url))
-  }, [address, applyHistory, history])
+    // 新建标签页那条「空白」不是一页：第一个地址**替换**掉它而不是追加。
+    // 追加的后果：后退会退到空串 → 视图被销毁（`use-native-view` 对空地址就是 close），
+    // 永远等不到 `finished`，进度条只能等 15s 兜底才停。浏览器也是同一口径（空白页不在后退栈里）。
+    const next = url ? historyGo(history, check.url) : historyReplace(history, check.url)
+    applyHistory(next)
+  }, [address, applyHistory, history, url])
 
   /** 刷新：地址不变也要真的重载（换 reloadKey + 记一次待兑现的导航） */
   const reload = useCallback(() => {
@@ -250,7 +254,11 @@ export default function BrowserPane({ initialUrl, onNavigate, onTitle, onClose }
     setReloadKey((key) => key + 1)
   }, [url])
 
-  /** 后退 / 前进：面板历史决定方向，页面自己的历史栈负责执行 */
+  /**
+   * 后退 / 前进：面板历史决定方向，页面自己的历史栈负责执行。
+   * ⚠️ 目标是空白（历史里真留了空白条目，比如老板本留下的状态）时不置 `loading`：
+   * 视图会因空地址被销毁，没有 `finished` 可等，进度条就会一直转。
+   */
   const goBack = useCallback(() => {
     if (!back) return
     const next = historyBack(history)
@@ -259,9 +267,9 @@ export default function BrowserPane({ initialUrl, onNavigate, onTitle, onClose }
     setHistory(next)
     setDraft(null)
     setProblem(null)
-    pendingRef.current = target
-    setLoading(true)
-    void historyBrowserView(viewLabel, 'back')
+    pendingRef.current = target || null
+    setLoading(!!target)
+    if (target) void historyBrowserView(viewLabel, 'back')
   }, [back, history, viewLabel])
 
   const goForward = useCallback(() => {
@@ -272,9 +280,9 @@ export default function BrowserPane({ initialUrl, onNavigate, onTitle, onClose }
     setHistory(next)
     setDraft(null)
     setProblem(null)
-    pendingRef.current = target
-    setLoading(true)
-    void historyBrowserView(viewLabel, 'forward')
+    pendingRef.current = target || null
+    setLoading(!!target)
+    if (target) void historyBrowserView(viewLabel, 'forward')
   }, [forward, history, viewLabel])
 
   /** 兜底出口：只在 http(s) 地址上给（`openUrl` 不接受别的协议，也是安全红线） */

@@ -309,12 +309,15 @@
   }
 }
 
+/* 头部一行：高度走 `--side-panel-head-h`（与标签栏相加 = 聊天区 header，
+   算式见 theme.scss「布局尺寸」），控件靠 align-items 居中，不再用上下 padding 撑高。 */
 .service-console-head {
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
+  height: var(--side-panel-head-h, 37px);
+  padding: 0 10px;
   background: var(--terminal-header-bg, #242f3a);
   color: var(--terminal-text, #fff);
 

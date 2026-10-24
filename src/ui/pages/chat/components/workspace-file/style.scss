@@ -13,12 +13,16 @@
   outline: none;
 }
 
+/* 头部一行（面板里的「文件 header」）：高度走 `--side-panel-head-h`，
+   与标签栏相加才等于聊天区 header（算式见 theme.scss「布局尺寸」）。
+   ⚠️ 不写上下 padding：高度由令牌定，控件靠 `align-items: center` 居中。 */
 .wfp-head {
   display: flex;
   align-items: center;
   gap: 6px;
   flex: none;
-  padding: 8px 10px;
+  height: var(--side-panel-head-h, 37px);
+  padding: 0 10px;
   border-bottom: 1px solid var(--border-color, #e5e5e5);
 }
 

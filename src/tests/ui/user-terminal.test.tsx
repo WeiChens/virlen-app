@@ -358,6 +358,26 @@ it('标签切走（active=false）不发任何请求，但推送仍然落屏', a
   expect(written()).toBe('initPUSH')
 })
 
+it('进程一结束就关掉标签（与服务终端「终止但留条目」相反）', async () => {
+  vi.mocked(readUserTerminal)
+    .mockResolvedValueOnce(chunk({})) // 首帧：还在跑
+    .mockResolvedValue(chunk({ running: false, interactive: false, exitCode: 0 }))
+
+  mount()
+  await flush()
+  // 跑着的时候不能提前关（否则开一个终端就没了）
+  expect(onClose).not.toHaveBeenCalled()
+
+  // 用户敲了 exit：推送那一帧就够关标签，不必等慢轮询
+  push({ from: 0, next: 0, running: false })
+  await flush()
+  expect(onClose).toHaveBeenCalledTimes(1)
+
+  // 只关一次：后续的帧 / 轮询不再重复上报（宿主会重复 kill + 关标签）
+  await wait(1100)
+  expect(onClose).toHaveBeenCalledTimes(1)
+})
+
 it('头部那颗 ✕ 走宿主给的 onClose（关终端由宿主负责杀进程树）', async () => {
   vi.mocked(readUserTerminal).mockResolvedValue(chunk({}))
   mount()

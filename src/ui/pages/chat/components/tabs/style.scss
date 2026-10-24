@@ -10,7 +10,7 @@
   /* 与 header 的按钮同一条左侧基准线（.chat-toolbar 的 16px 内边距） */
   display: flex;
   gap: 36px;
-  /* 与标题行留出一点呼吸：标题行里的按钮是 28px 高、行高 40px，上下各留 6px */
+  /* 与标题行留出一点呼吸：标题行 40px 内是 28px 按钮，这里再给 2px */
   margin-top: 2px;
   padding-left: 16px;
   /* 下划线要盖住底边线：让 tab 条落在它的上层 */
@@ -20,7 +20,9 @@
 
 .chat-view-tab {
   position: relative;
-  padding: 0 0 9px;
+  /* 下边 14px 是给「选中下划线」留的呼吸：行高 16 + 14 = 30，加 tab 条的 margin-top 2
+     就是 `--chat-view-tabs-h` 的 32（改这里要同步 theme.scss 的令牌，否则右侧面板与它错开） */
+  padding: 0 0 14px;
   border: none;
   background: transparent;
   font-size: var(--font-size-sm, 13px);

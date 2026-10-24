@@ -1,0 +1,99 @@
+.about-settings {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+
+  .about-header {
+    display: flex;
+    align-items: center;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-color, #e5e5e5);
+  }
+
+  .section-title {
+    font-size: var(--font-size-xl);
+    font-weight: 600;
+    margin: 0;
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  .about-body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding-top: 12px;
+  }
+
+  .about-logo {
+    width: 150px;
+    height: 150px;
+  }
+
+  .about-name {
+    font-weight: bold;
+    font-size: 22px;
+    text-align: center;
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  .about-rows {
+    width: 100%;
+    max-width: 360px;
+    display: flex;
+    flex-direction: column;
+    margin-top: 4px;
+  }
+
+  .about-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 2px;
+    border-bottom: 1px solid var(--border-color, #f0f0f0);
+    font-size: var(--font-size-md);
+
+    &:last-child {
+      border-bottom: none;
+    }
+  }
+
+  .about-row-label {
+    color: var(--text-secondary, #666);
+  }
+
+  .about-row-value {
+    flex: 1;
+    text-align: right;
+    color: var(--text-primary, #1a1a1a);
+    font-variant-numeric: tabular-nums;
+    user-select: text;
+  }
+
+  .about-link {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--link-color, var(--accent-color, #4f46e5));
+    font-size: var(--font-size-md);
+    font-family: inherit;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+
+    &:hover {
+      color: var(--link-color-hover, var(--accent-color, #4f46e5));
+    }
+
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 2px;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+  }
+}

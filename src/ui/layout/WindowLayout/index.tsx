@@ -9,12 +9,12 @@ import { invoke } from '@tauri-apps/api/core'
 import { appLogo, appName } from '@/ui/constants'
 import { phoneToggleView } from './phone-toggle'
 import SplitScreenSvg from '@/ui/components/icons/SplitScreenSvg'
-import AboutSvg from '@/ui/components/icons/AboutSvg'
-import AboutModal from './view/AboutModal'
+import SettingSvg from '@/ui/components/icons/SettingSvg'
+import SettingsView from '@/ui/pages/Settings/settings-view'
 import UpdateModal from '@/ui/components/shared/UpdateModal/UpdateModal'
 // 导入进度弹窗（文件夹 / 压缩包导入）：与 Toast / MessageBox 同样是模块级单例，全局挂一次
 import TaskProgress from '@/ui/components/shared/TaskProgress'
-import menuEvent from '@/events/menuEvent'
+import settingsEvent from '@/events/settingsEvent'
 import updateEvent from '@/events/updateEvent'
 import { useToast, showToast } from '@/ui/components/shared/Toast'
 // useMessageBox() 给的是组件（下面 <MessageBox /> 渲染用）；MessageBox as MessagePrompt 是
@@ -77,18 +77,6 @@ const WindowLayout = ({ children, padding = 0, className }: Props) => {
     handle()
     return () => {
       unlisten.then((e) => e())
-    }
-  }, [])
-
-  const [aboutShow, setAboutShow] = useState(false)
-  function aboutHandle() {
-    setAboutShow(true)
-  }
-  useEffect(() => {
-    const uninstall: Function[] = []
-    uninstall.push(menuEvent.on('showAboutModal', aboutHandle))
-    return () => {
-      uninstall.forEach((e) => e())
     }
   }, [])
 
@@ -184,8 +172,11 @@ const WindowLayout = ({ children, padding = 0, className }: Props) => {
               <span className={`phone-dot phone-dot--${phone.dot}`} />
             )}
           </div>
-          <div className="control about" onClick={() => aboutHandle()}>
-            <AboutSvg />
+          <div
+            className="control settings"
+            title={t('设置')}
+            onClick={() => settingsEvent.emit('openSettings', 'general')}>
+            <SettingSvg />
           </div>
           <div className="control minimize" onClick={() => minHandle()}>
             <WinMinSvg />
@@ -207,7 +198,7 @@ const WindowLayout = ({ children, padding = 0, className }: Props) => {
           {children}
         </div>
       </div>
-      <AboutModal show={aboutShow} onHide={() => setAboutShow(false)} />
+      <SettingsView />
       <UpdateModal
         show={updateShow}
         updateInfo={updateInfo}

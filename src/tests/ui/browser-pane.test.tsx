@@ -358,6 +358,24 @@ it('提交地址：按挂载点的 rect 建视图，地址规范化后同时写�
   expect(onNavigate).toHaveBeenCalledWith('http://localhost:5173/')
 })
 
+it('空白页的第一个地址替换掉空白条目：后退不可用，不会退回空串再一直转圈', async () => {
+  mount()
+  setViewportRect({ left: 0, top: 0, width: 800, height: 600 })
+  await tick()
+
+  submit('https://a.com')
+  await tick()
+  expect(addressInput().value).toBe('https://a.com/')
+  // 空白页不在后退栈里（浏览器同口径）：否则后退会退到空串 —— 空地址会把视图销毁，
+  // 永远等不到 finished，进度条只能等 15s 兜底才停（用户看到的就是「一直转」）
+  expect(backBtn().disabled).toBe(true)
+
+  emit({ phase: 'started', url: 'https://a.com/' })
+  expect(document.querySelector('.browser-progress')).not.toBeNull()
+  emit({ phase: 'finished', url: 'https://a.com/' })
+  expect(document.querySelector('.browser-progress')).toBeNull()
+})
+
 it('有初始地址：直接建视图，但不把挂载当成一次导航上报', async () => {
   mount('https://docs.rs/tokio')
   setViewportRect({ left: 0, top: 0, width: 800, height: 600 })

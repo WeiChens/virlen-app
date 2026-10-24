@@ -135,6 +135,8 @@ const navigations: Array<[string, string]> = []
 const guideOpens: number[] = []
 const collapses: number[] = []
 const closed: string[] = []
+/** 面板占满态的上报历史（宿主据此藏 / 放回聊天区） */
+const expandedStates: boolean[] = []
 
 async function renderPanel(
   tabs: SidePanelTab[],
@@ -165,6 +167,7 @@ async function renderPanel(
           loadTerminalShells={opts.loadShells}
           onOpenPath={(path) => openedPaths.push(path)}
           onAttachPaths={() => {}}
+          onExpandedChange={(v) => expandedStates.push(v)}
           onBrowserNavigate={(id, url) => navigations.push([id, url])}
         />
       </>,
@@ -197,6 +200,7 @@ afterEach(() => {
   guideOpens.length = 0
   collapses.length = 0
   closed.length = 0
+  expandedStates.length = 0
   messageBoxMock.mockReset()
   messageBoxMock.mockResolvedValue(true)
 })
@@ -321,20 +325,42 @@ it('开始页标签：标题是「开始页」，图标与关闭按钮都在', a
   expect(tab.querySelector('.side-panel-tab-close')).not.toBeNull()
 })
 
-it('标签栏：「+」开开始页、「»」收起面板，各自只上报一次', async () => {
+it('标签栏：「+」开开始页、全屏居中、✕ 收起面板，各自只上报一次', async () => {
   await renderPanel([pageTab('files')])
 
   const actions = [...document.querySelectorAll<HTMLButtonElement>('.side-panel-tabbar-action')]
   expect(actions.map((el) => el.getAttribute('aria-label'))).toEqual([
     '新标签页',
+    '全屏',
     '收起右侧栏',
   ])
   await act(async () => {
     actions[0].click()
-    actions[1].click()
+    actions[2].click()
   })
   expect(guideOpens).toHaveLength(1)
   expect(collapses).toHaveLength(1)
+})
+
+it('全屏：点一下铺满整块可用宽度（聊天区交给宿主藏），再点一下回到原来的宽度', async () => {
+  // 量到的可用宽度是 900（见 beforeAll 的 getBoundingClientRect），定宽落在 450
+  await renderPanel([pageTab('files')])
+  const panel = document.querySelector<HTMLElement>('.side-panel')!
+  expect(panel.style.width).toBe('450px')
+  expect(panel.classList.contains('is-full')).toBe(false)
+
+  const fullBtn = () =>
+    document.querySelector<HTMLButtonElement>('.side-panel-tabbar-action.is-fullscreen')!
+  await act(async () => fullBtn().click())
+  expect(panel.style.width).toBe('900px')
+  expect(panel.classList.contains('is-full')).toBe(true)
+  expect(fullBtn().getAttribute('aria-label')).toBe('退出全屏')
+  expect(expandedStates[expandedStates.length - 1]).toBe(true)
+
+  await act(async () => fullBtn().click())
+  expect(panel.style.width).toBe('450px')
+  expect(panel.classList.contains('is-full')).toBe(false)
+  expect(expandedStates[expandedStates.length - 1]).toBe(false)
 })
 
 it('工作区文件标签：容器把树按 panel 变体渲染，单击文件即上报打开', async () => {  await renderPanel([pageTab('files')])

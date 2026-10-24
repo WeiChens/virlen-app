@@ -33,6 +33,9 @@ import { contrastRatio, normalizeHex } from '@/ui/theme/accentPalette'
 
 const PANEL_SCSS = 'src/ui/pages/chat/components/side-panel/style.scss'
 const FILE_PANEL_SCSS = 'src/ui/pages/chat/components/workspace-file/style.scss'
+const BROWSER_SCSS = 'src/ui/pages/chat/components/side-panel/browser/style.scss'
+const CONSOLE_SCSS = 'src/ui/pages/chat/components/service/style.scss'
+const TABS_SCSS = 'src/ui/pages/chat/components/tabs/style.scss'
 const CHAT_VIEW_SCSS = 'src/ui/pages/chat/chat-view.scss'
 const THEME_SCSS = 'src/ui/styles/theme.scss'
 
@@ -46,6 +49,9 @@ const stripComments = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, 
 const panelSrc = readProjectFile(PANEL_SCSS)
 const panelCss = stripComments(sass.compileString(panelSrc).css)
 const filePanelCss = stripComments(sass.compileString(readProjectFile(FILE_PANEL_SCSS)).css)
+const browserCss = stripComments(sass.compileString(readProjectFile(BROWSER_SCSS)).css)
+const consoleCss = stripComments(sass.compileString(readProjectFile(CONSOLE_SCSS)).css)
+const tabsCss = stripComments(sass.compileString(readProjectFile(TABS_SCSS)).css)
 const themeCss = stripComments(sass.compileString(readProjectFile(THEME_SCSS)).css)
 const chatViewCss = stripComments(sass.compileString(readProjectFile(CHAT_VIEW_SCSS)).css)
 
@@ -77,6 +83,34 @@ function themeTokens(selector: string): Record<string, string> {
   }
   if (Object.keys(out).length === 0) throw new Error(`theme.scss 里找不到 ${selector}`)
   return out
+}
+
+/** theme.scss 里 `--x: <value>;` 的原始值 */
+function tokenValue(name: string): string {
+  const m = new RegExp(`\\n\\s*${name}\\s*:\\s*([^;]+);`).exec(themeCss)
+  if (!m) throw new Error(`theme.scss 里找不到 ${name}`)
+  return m[1].trim()
+}
+
+/**
+ * `calc(var(--a) + var(--b))` → 像素数（只支持 `px` 与加法：布局尺寸令牌就这几种写法）。
+ * 用它钉住「两侧算出来是同一个数」，而不是把 41 / 27 / 68 写死在断言里。
+ */
+function resolveLen(expr: string, depth = 0): number {
+  if (depth > 4) throw new Error(`令牌循环引用：${expr}`)
+  const expanded = expr.replace(/var\((--[a-z0-9-]+)\)/g, (_, name: string) =>
+    `${resolveLen(tokenValue(name), depth + 1)}px`,
+  )
+  return expanded
+    .replace(/calc\(/g, '')
+    .replace(/\)/g, '')
+    .split('+')
+    .map((part) => {
+      const px = /(-?\d+(?:\.\d+)?)px/.exec(part)
+      if (!px) throw new Error(`不认识的尺寸：${part}`)
+      return Number(px[1])
+    })
+    .reduce((a, b) => a + b, 0)
 }
 
 /** `color-mix(in srgb, <fg> p%, transparent)` 叠在 <bg> 上 = 逐通道线性混合（同浏览器） */
@@ -170,6 +204,61 @@ describe('右侧面板容器 · 样式契约', () => {
 
     // 占满态下聊天区是 display:none：面板不贴右就会从左铺、往右缩，手柄停在原地
     expect(/\.side-panel\s*\{([^}]*)\}/.exec(panelCss)?.[1]).toContain('margin-left: auto')
+  })
+
+  it('标签栏 + 各页自己的 header = 聊天区 header 高度（两侧内容从同一条线开始）', () => {
+    // 面板两行（标签栏 36 + 页头 37）= 73 = .chat-header（工具栏 40 + 视图 tab 条 32 + 底线 1）
+    const panelRows = resolveLen(
+      'calc(var(--side-panel-tabbar-h) + var(--side-panel-head-h))',
+    )
+    const chatHeader = resolveLen(
+      'calc(var(--chat-toolbar-h) + var(--chat-view-tabs-h) + 1px)',
+    )
+    expect(panelRows).toBe(chatHeader)
+
+    // 工具栏与标签栏引用同一份令牌，否则「同高」只是巧合
+    expect(/\.chat-toolbar\s*\{([^}]*)\}/.exec(chatViewCss)?.[1]).toContain(
+      'height: var(--chat-toolbar-h)',
+    )
+
+    // 每个标签页自己的 header 都必须吃 `--side-panel-head-h`：
+    // 谁写死一套上下 padding，那个标签的底线就比聊天区错开。
+    // （文件树那一行是个 28px 的搜索胶囊居中，所以它吃令牌的方式是外边距的 calc）
+    for (const [label, css, selector, why] of [
+      ['工作区文件', filePanelCss, '\\.wfp-head', 'height: var(--side-panel-head-h'],
+      ['浏览器', browserCss, '\\.browser-bar', 'height: var(--side-panel-head-h'],
+      [
+        '终端（服务 / 用户）',
+        consoleCss,
+        '\\.service-console-head',
+        'height: var(--side-panel-head-h',
+      ],
+      [
+        '工作区文件树（搜索框）',
+        panelCss,
+        '\\.side-panel-files \\.sidebar-search',
+        'margin: calc((var(--side-panel-head-h',
+      ],
+    ] as const) {
+      const rule = new RegExp(`${selector}\\s*\\{([^}]*)\\}`).exec(css)?.[1]
+      expect(rule, `${label} 的 header 规则`).toBeTruthy()
+      expect(rule, `${label} 的 header 要占满两行算式里的那一行`).toContain(why)
+    }
+  })
+
+  it('`.chat-view-tabs` 的实际高度 = `--chat-view-tabs-h`（否则上面那条等式只是纸上的）', () => {
+    const wrap = /\.chat-view-tabs\s*\{([^}]*)\}/.exec(tabsCss)?.[1]
+    const tab = /\.chat-view-tab\s*\{([^}]*)\}/.exec(tabsCss)?.[1]
+    expect(wrap).toBeTruthy()
+    expect(tab).toBeTruthy()
+
+    const marginTop = Number(/(?:^|[;\s])margin-top:\s*(\d+(?:\.\d+)?)px/.exec(wrap!)?.[1])
+    const lineHeight = Number(/line-height:\s*(\d+(?:\.\d+)?)px/.exec(tab!)?.[1])
+    // padding: 0 0 14px —— 第三个值就是下划线那一段留白（前两个是零，没有单位）
+    const padBottom = Number(
+      /padding:\s*[\d.]+(?:px)?\s+[\d.]+(?:px)?\s+([\d.]+)px/.exec(tab!)?.[1],
+    )
+    expect(marginTop + lineHeight + padBottom).toBe(resolveLen('var(--chat-view-tabs-h)'))
   })
 
   it('显隐过渡：收起时宽度归 0，时长 200ms，拖动时不过渡', () => {

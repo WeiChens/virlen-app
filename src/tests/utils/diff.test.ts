@@ -114,6 +114,25 @@ describe('buildDiffRows', () => {
     expect(rows[1].rightLineNo).toBeNull()
   })
 
+  it('整行新增 / 删除时换行标记**自成一段**（不能并进相邻片段）', () => {
+    // ⚠️ 并成 `'a↵'` 后，视图层「value === NL_MARK」的判定全部失效，↵ 会漏进 Monaco 正文与剪贴板
+    const added = buildDiffRows(null, text('a', 'b'))
+    expect(added[0].right).toEqual([
+      { type: 'added', value: 'a' },
+      { type: 'added', value: NL_MARK },
+    ])
+    const removed = buildDiffRows(text('a', 'b'), null)
+    expect(removed[0].left).toEqual([
+      { type: 'removed', value: 'a' },
+      { type: 'removed', value: NL_MARK },
+    ])
+    for (const row of [...added, ...removed]) {
+      for (const part of [...row.left, ...row.right]) {
+        if (part.value !== NL_MARK) expect(part.value).not.toContain(NL_MARK)
+      }
+    }
+  })
+
   it('startLine 让行号从文件里的真实行号开始（edit_file 用绝对行号）', () => {
     const rows = buildDiffRows(text('a', 'b'), text('a', 'b'), 10)
     expect(rows.map((r) => r.leftLineNo)).toEqual([10, 11])
@@ -195,6 +214,22 @@ describe('normalizeDiffRows（历史消息里落库的老行模型）', () => {
       right: [{ type: 'added' as const, value: 'y' }],
     }
     expect(normalizeDiffRows([fresh, { type: 'gap' }, null, 42])).toEqual([fresh])
+  })
+
+  it('早期落库的「标记并进相邻片段」形态会被拆开（否则 ↵ 会被当成正文）', () => {
+    const rows = normalizeDiffRows([
+      {
+        type: 'added',
+        leftLineNo: null,
+        rightLineNo: 1,
+        left: [],
+        right: [{ type: 'added', value: `a${NL_MARK}` }],
+      },
+    ])
+    expect(rows[0].right).toEqual([
+      { type: 'added', value: 'a' },
+      { type: 'added', value: NL_MARK },
+    ])
   })
 
   it('不是数组（老消息里字段缺失）→ 空数组，不抛', () => {

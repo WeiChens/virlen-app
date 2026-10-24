@@ -1,32 +1,3 @@
-.settings-trigger {
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  cursor: pointer;
-  color: var(--text-secondary, #666);
-  margin-right: 4px;
-
-  &:hover {
-    background: var(--hover-bg, #f0f0f0);
-  }
-
-  /* 此前 Settings 目录 13 个样式文件的 :focus-visible 覆盖率为 0 */
-  &:focus-visible {
-    outline: var(--focus-ring);
-    outline-offset: 2px;
-  }
-
-  svg {
-    width: 18px;
-    height: 18px;
-  }
-}
-
 /* 遮罩层 */
 .settings-overlay {
   position: fixed;

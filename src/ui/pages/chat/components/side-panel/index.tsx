@@ -39,7 +39,8 @@ import FolderSvg from '@/ui/components/icons/FolderSvg'
 import TerminalSvg from '@/ui/components/icons/TerminalSvg'
 import GlobeSvg from '@/ui/components/icons/GlobeSvg'
 import AddSvg from '@/ui/components/icons/AddSvg'
-import CollapsedSvg from '@/ui/components/icons/CollapsedSvg'
+import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
+import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
 import WorkspaceFilePanel from '../workspace-file'
 import ServiceTerminal from '../service/ServiceTerminal'
 import UserTerminal from '../terminal/UserTerminal'
@@ -196,6 +197,11 @@ function SidePanel({
    * 标签切走时树**不卸载**（只试 hidden），却不能再往上抬一层（chat-view 已经够长）。
    */
   const [filesQuery, setFilesQuery] = useState('')
+  /**
+   * 标签栏「全屏」按钮：用户手动让面板接管整块可用宽度（聊天区交给宿主藏起来）。
+   * 与 `expanded`（窗口太窄时的自动占满）分开记 —— 自动占满不是用户选的，窗口宽回来就该自己退。
+   */
+  const [fullscreen, setFullscreen] = useState(false)
 
   /**
    * 量一次「聊天区 + 面板」可用的总宽：面板贴右，所以 = 容器右边界 - 聊天区左边界
@@ -253,14 +259,39 @@ function SidePanel({
 
   /**
    * 聊天区会被压到不足 `CHAT_MIN_WIDTH`（450）：面板占满，聊天区交给宿主先藏起来。
+   * 两种来源：用户按了标签栏的全屏（`fullscreen`），或窗口本来就窄到挤不下两者。
    * 收起时不算 —— 宽度是 0，拿它去比只会得「占满」并把聊天区藏掉。
    */
-  const expanded = !collapsed && available > 0 && available - width < CHAT_MIN_WIDTH
+  const expanded =
+    !collapsed &&
+    available > 0 &&
+    (fullscreen || available - width < CHAT_MIN_WIDTH)
   /**
    * 上屏宽度：占满态铺满整块可用宽度（`width` 里记的偏好值可能与眼前这块对不上）。
    * **拖动中一律按 `width`**：否则从占满态往回拖，前 450px（`CHAT_MIN_WIDTH`）面板一动不动，手柄就像坏的。
    */
   const shownWidth = expanded && !resizing ? available : width
+
+  // 收起时把全屏态一并退掉：再展开时回到用户拖出来的宽度，而不是莫名其妙又占满
+  useEffect(() => {
+    if (collapsed) setFullscreen(false)
+  }, [collapsed])
+
+  /**
+   * 全屏 ↔ 还原。
+   * 退出时若宽度本来就已经大到挤掉聊天区（窗口太窄时被自动顶成占满），
+   * 顺手收到「刚好留出 `CHAT_MIN_WIDTH`」那条线（与拖动下限同一口径），否则聊天区回不来。
+   */
+  const toggleFullscreen = useCallback(() => {
+    if (!fullscreen) {
+      setFullscreen(true)
+      return
+    }
+    setFullscreen(false)
+    if (available > 0 && available - width < CHAT_MIN_WIDTH) {
+      setWidth(minDragWidth(available))
+    }
+  }, [fullscreen, available, width])
 
   useEffect(() => {
     onExpandedChange?.(expanded)
@@ -354,6 +385,8 @@ function SidePanel({
       if (!rect) return
       // 用户亲手拖过就不再自动定宽（量到可用宽度也不改回去）
       widthSettledRef.current = true
+      // 从全屏往回拖 = 退出全屏：否则上屏宽度只认 `available`，手柄怎么拖都不动
+      setFullscreen(false)
       const right = rect.right
       // 拖之前重量一次：左侧栏或窗口可能刚动过
       const room = measureAvailable()
@@ -943,7 +976,7 @@ function SidePanel({
           })}
         </div>
 
-        {/* 标签栏右侧的两颗固定按钮（不跟着标签区横向滚动） */}
+        {/* 标签栏右侧的固定按钮（不跟着标签区横向滚动）：新标签 / 全屏 / 收起 */}
         {(onOpenGuide || onCollapse) && (
           <div className="side-panel-tabbar-actions">
             {onOpenGuide && (
@@ -959,11 +992,22 @@ function SidePanel({
             {onCollapse && (
               <button
                 type="button"
+                className="side-panel-tabbar-action is-fullscreen"
+                title={fullscreen ? t('退出全屏') : t('全屏')}
+                aria-label={fullscreen ? t('退出全屏') : t('全屏')}
+                aria-pressed={fullscreen}
+                onClick={toggleFullscreen}>
+                {fullscreen ? <ExitFullScreenSvg /> : <FullScreenSvg />}
+              </button>
+            )}
+            {onCollapse && (
+              <button
+                type="button"
                 className="side-panel-tabbar-action is-collapse"
                 title={t('收起右侧栏')}
                 aria-label={t('收起右侧栏')}
                 onClick={onCollapse}>
-                <CollapsedSvg />
+                <CloseSvg />
               </button>
             )}
           </div>

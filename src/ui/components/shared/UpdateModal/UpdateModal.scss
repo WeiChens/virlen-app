@@ -10,7 +10,7 @@
     width: 480px;
     height: fit-content;
     max-height: 80vh;
-    /* 同 AboutModal：--active-bg 不是「面」，且亮色下更像灰底对话框 */
+    /* --active-bg 不是「面」，且亮色下更像灰底对话框 */
     background-color: var(--bg-primary);
     border-radius: 5px;
     border: 1px solid rgb(125, 125, 125);
@@ -36,7 +36,7 @@
       flex-direction: row;
       justify-content: space-between;
       align-items: center;
-      /* 同 AboutModal：原硬编码 #565656 在暗色底仅 1.24:1 */
+      /* 原硬编码 #565656 在暗色底仅 1.24:1 */
       color: var(--text-primary);
       /* 标题行不写死高度：字号变大时行高自己撞开 */
       min-height: 45px;
@@ -45,7 +45,7 @@
       }
 
       .remove {
-        /* 同 AboutModal：图标用 currentColor（原 var(--accent-color) 与圆底
+        /* 图标用 currentColor（原 var(--accent-color) 与圆底
            var(--primary-color) 同色，X 不可见） */
         color: var(--primary-fg);
         background-color: var(--primary-color);
