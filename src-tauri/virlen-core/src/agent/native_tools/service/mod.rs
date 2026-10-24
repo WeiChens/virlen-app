@@ -37,6 +37,12 @@ mod registry;
 mod runner;
 mod start;
 
+// 伪控制台句柄与环形输出窗口：**用户终端**（`native_tools::user_shell`）复用同一份。
+// 两者都是「一个活进程 + 一条 ConPTY + 一段可续接的输出」，行为要求完全一致
+// （关停顺序 / 尺寸去重 / 续接协议）—— 再造一份必然在其中一条上分叉。
+pub(crate) use pty::ServicePty;
+pub(crate) use registry::LogBuffer;
+
 pub(crate) use get::get_background_service_tool;
 pub(crate) use kill::kill_background_service_tool;
 pub(crate) use list::list_background_services_tool;

@@ -28,6 +28,10 @@
 //! │   ├── pty.rs            服务的交互控制台句柄（键击 / 尺寸 / 关停；P3 终端弹窗的底座）
 //! │   ├── panel.rs          **面板**（聊天页右上角）用的公开 API：快照 + 显式终止 + 终端读写（只读、不摘条目）
 //! │   └── common.rs         常量 / 文本辅助（环形窗口、字符安全切片、截断）/ 模型侧文案与 uiData
+//! ├── user_shell/           **用户自己的交互终端**（右侧面板「新建终端」，不是工具）
+//! │   ├── spawn.rs          起 `powershell -NoLogo`（ConPTY）—— **默认脱壳**（用户亲手敲）
+//! │   ├── panel.rs          界面用的公开 API：开始 / 读 / 写 / 改尺寸 / 关 / 列
+//! │   └── mod.rs            会话隔离的终端注册表（容量 / 生命周期 / 终端 id）
 //! ├── file/                  文件操作（10）
 //! │   ├── common.rs          format_size / ensure_parent_dir / format_system_time
 //! │   ├── read_file.rs       write_file.rs   edit_file.rs    delete_file.rs
@@ -87,6 +91,7 @@ mod search;
 mod service;
 mod skill;
 mod system;
+mod user_shell;
 mod vision;
 mod web;
 
@@ -115,6 +120,13 @@ pub use service::{
 pub use service::{
     attach_service_notice_host, inject_service_notices, mark_session_active, mark_session_idle,
     ServiceNoticeHost,
+};
+// 用户终端（右侧面板「新建终端」）：**默认脱壳**，只服务界面 —— 它不是工具，
+// 模型没有任何入口去操作用户自己的终端（终端 id 不进模型上下文）。
+pub use user_shell::{
+    attach_output_host, kill_all_shells, kill_session_shells, kill_terminal, list_shells,
+    list_terminals, read_terminal, resize_terminal, start_terminal, write_terminal, ConsoleDelta,
+    ShellInfo, ShellKind, TerminalOutputHost,
 };
 // `SandboxBypass`：TS 引擎入口 `run_command_for_ts_engine` 的脱壳原因入参（跨 crate）。
 pub use execute::SandboxBypass;

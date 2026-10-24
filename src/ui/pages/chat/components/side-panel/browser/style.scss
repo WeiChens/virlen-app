@@ -1,0 +1,304 @@
+/**
+ * 浏览器标签（右侧面板的一个 kind = `browser`）的样式。
+ *
+ * 与两个终端不同的地方：它是**浅色/跟主题**的（跑的是网页，不是终端），所以不复用
+ * `.service-console-*` 那套深色骨架。地址栏 / 进度条 / 内容区三块纵向排：
+ * 前两块固定高，内容区占满剩下的。
+ *
+ * ⚠️ 内容区里**没有 iframe**：网页是原生子 WebView（`use-native-view.ts`），
+ * 浮在 HTML 之上。`.browser-viewport` 唯一的职责是提供一个 rect（位置 / 尺寸），
+ * 原生视图不在 DOM 里，所以这里也没有办法给它写 `border` / `border-radius` / 阴影 ——
+ * 要改外观得改 WebView2 自己的边距（目前刻意留 0，让网页铺满）。
+ */
+.browser-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg-primary, #fff);
+}
+
+/* 地址栏那一行：导航按钮 + 输入框 + 外部打开 + 关闭 */
+.browser-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color, #e5e5e5);
+  background: var(--bg-secondary, #f7f7f8);
+}
+
+.browser-nav {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+/* ← → ↻ 用文字字形而不是图标：字号一档就够，省三个只能在这儿用一次的 SVG */
+.browser-nav-btn,
+.browser-tool {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s;
+
+  &:hover:not(:disabled) {
+    background: var(--hover-bg, #ececec);
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  &:disabled {
+    /* 不能后退 / 还没地址时按钮必须一看就知道按不动（不是「按了没反应」） */
+    color: var(--text-tertiary, #b3b3b3);
+    cursor: default;
+  }
+}
+
+.browser-tool.is-close {
+  font-size: 11px;
+}
+
+/* 地址栏输入框：焦点进来全选（浏览器口径），地址为空时等输入 */
+.browser-address {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1a1a1a);
+  font-family: inherit;
+  font-size: var(--font-size-sm, 12px);
+  outline: none;
+
+  &::placeholder {
+    color: var(--text-tertiary, #b3b3b3);
+  }
+
+  &:focus {
+    border-color: var(--accent-color, #4f46e5);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color, #4f46e5) 18%, transparent);
+  }
+}
+
+/* 地址被拒的一句话（只在这时出现，不占常驻高度） */
+.browser-error {
+  flex: none;
+  padding: 4px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--error-color, #dc2626) 24%, transparent);
+  background: color-mix(in srgb, var(--error-color, #dc2626) 8%, transparent);
+  color: var(--error-color, #dc2626);
+  font-size: var(--font-size-xs, 11px);
+  line-height: 1.5;
+}
+
+/**
+ * 下载被拦下的一条提示（`.browser-error` 的暖色兄弟）。
+ *
+ * 为什么必须有：视图是原生子窗口，浮在 HTML 之上，没有浏览器那种下载栏；
+ * 不拦的话 WebView2 会把文件直接写进系统下载目录 —— 用户点一下只看得到「没反应」。
+ * 它也占一行高度：内容区被推下去，原生视图下一帧跟着重新定位（见 `use-native-view.ts`）。
+ */
+.browser-notice {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-warning, #f59e0b) 30%, transparent);
+  background: color-mix(in srgb, var(--color-warning, #f59e0b) 10%, transparent);
+  color: var(--color-warning-text, #b45309);
+  font-size: var(--font-size-xs, 11px);
+  line-height: 1.5;
+}
+
+/* 文件名可能很长：一行内截断，完整名字放 `title` */
+.browser-notice-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-notice-name {
+  margin-left: 4px;
+  font-weight: 600;
+}
+
+.browser-notice-action {
+  flex: none;
+  max-width: 46%;
+  padding: 2px 8px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--color-warning-text, #b45309) 35%, transparent);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: var(--color-warning-text, #b45309);
+  font: inherit;
+  font-size: var(--font-size-xs, 11px);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
+
+  &:hover:not(:disabled) {
+    border-color: var(--color-warning-text, #b45309);
+    background: color-mix(in srgb, var(--color-warning, #f59e0b) 16%, var(--bg-primary, #fff));
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+/**
+ * 加载进度：原生视图里没有东西可给我们看（DOM 里只有一块空白），
+ * 这条 2px 的不确定进度条是「它真的在加载」的唯一信号。
+ */
+.browser-progress {
+  flex: none;
+  height: 2px;
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    var(--accent-color, #4f46e5),
+    transparent
+  );
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: browser-progress 1.1s ease-in-out infinite;
+}
+
+@keyframes browser-progress {
+  from {
+    background-position: -40% 0;
+  }
+
+  to {
+    background-position: 140% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .browser-progress {
+    /* 减弱动效：不动，给一条静止的细线（有「在加载」这个信息就够了） */
+    animation: none;
+    background-image: none;
+    background-color: var(--accent-color, #4f46e5);
+    opacity: 0.5;
+  }
+}
+
+/* 内容区：原生视图的挂载点铺满它（真正的像素在 WebView2 子窗口里） */
+.browser-frame {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+  background: var(--bg-primary, #fff);
+}
+
+.browser-viewport {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-primary, #fff);
+}
+
+/* 首帧占位：原生视图建起来之前（通常一两帧）看到的是这句，而不是白屏 */
+.browser-pending {
+  color: var(--text-tertiary, #999);
+  font-size: var(--font-size-xs, 11px);
+  user-select: none;
+}
+
+/* 空白页（还没输入地址）：定心一段说明，别让人对着白屏猜 */
+.browser-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+  color: var(--text-secondary, #888);
+
+  .browser-empty-icon {
+    display: inline-flex;
+    width: 44px;
+    height: 44px;
+    opacity: 0.35;
+
+    svg {
+      width: 100%;
+      height: 100%;
+      fill: currentColor;
+    }
+  }
+
+  .browser-empty-title {
+    margin: 0;
+    font-size: var(--font-size-md, 13.5px);
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  .browser-empty-note {
+    margin: 0;
+    max-width: 320px;
+    font-size: var(--font-size-xs, 11px);
+    line-height: 1.6;
+    color: var(--text-tertiary, #999);
+  }
+}
+
+/**
+ * 「网页视图启动失败」：不在桌面应用里（浏览器调试），或 Rust 侧创建视图报错。
+ * 基座用 `.browser-empty` 的居中排版，这里只添「动作按钮」。
+ */
+.browser-blocked {
+  /* 不是错误操作，不给红底：只把图标压淡一档，让人一眼看出这是「没有内容」而不是「报错」 */
+  gap: 10px;
+
+  .browser-blocked-action {
+    margin-top: 2px;
+    padding: 4px 14px;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 7px;
+    background: var(--bg-primary, #fff);
+    color: var(--text-primary, #1a1a1a);
+    font: inherit;
+    font-size: var(--font-size-xs, 11px);
+    cursor: pointer;
+    transition:
+      background 0.12s,
+      border-color 0.12s;
+
+    &:hover {
+      border-color: var(--accent-color, #4f46e5);
+      color: var(--accent-color, #4f46e5);
+    }
+  }
+}

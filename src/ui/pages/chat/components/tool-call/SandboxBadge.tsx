@@ -10,13 +10,15 @@ import { t } from '@/ui/i18n'
  * 取值契约（Rust `runner/mod.rs` 的 `attach_sandbox` / `emit_sandbox_env`）：
  *   write_isolation | readonly | no_sandbox_bypass | no_sandbox_disabled | no_sandbox_degraded | no_sandbox
  *
+ * **只画「在沙盒里」的那两种**（`write_isolation` / `readonly`）；`no_sandbox*` 一律不画。
+ * 「没沙盒」是常态而不是异常 —— 设置里关掉沙盒、命中忽略规则、AI 申请脱壳、用户终端本来
+ * 就不进沙盒，全落在这一档；四档再各配一枚红标，界面很快就成一片红，谁都不看了。真正需要人
+ * 当场注意的脱壳，在**审批弹窗**那一刻已经拦过一次（那一步必须点过）。
+ *
  * 单独成文件（而非挂在 `TerminalBlock.tsx`）：`TerminalBlock ⇄ XtermTerminal` 已互为依赖，
  * 徽标被两者共用，放这里可避免新增循环。
  */
-const SANDBOX_LABELS: Record<
-  string,
-  { label: string; title: string; danger?: boolean }
-> = {
+const SANDBOX_LABELS: Record<string, { label: string; title: string }> = {
   write_isolation: {
     label: '沙盒·写隔离',
     title: '命令在沙盒内运行：仅工作目录、白名单目录与系统临时目录可写（写隔离）。',
@@ -25,33 +27,6 @@ const SANDBOX_LABELS: Record<
     label: '沙盒·只读',
     title: '命令在沙盒内以只读方式运行：无法写入任何文件。',
   },
-  no_sandbox_bypass: {
-    label: '无沙盒·已授权',
-    title:
-      '命令未使用沙盒运行（已批准脱壳）：不受写隔离与受限令牌限制，可写入任意路径。',
-    danger: true,
-  },
-  no_sandbox_disabled: {
-    label: '无沙盒',
-    title: '命令未使用沙盒运行（设置中已关闭沙盒）：可写入任意路径。',
-    danger: true,
-  },
-  no_sandbox_degraded: {
-    label: '无沙盒·已降级',
-    title: '命令未使用沙盒运行（沙盒不可用，已降级为完全权限）。',
-    danger: true,
-  },
-  no_sandbox_rule: {
-    label: '无沙盒·忽略规则',
-    title:
-      '命令命中「忽略沙盒命令」规则，已按规则以「不使用沙盒」方式执行：可写入任意路径。',
-    danger: true,
-  },
-  no_sandbox: {
-    label: '无沙盒',
-    title: '命令未使用沙盒运行（完全权限）。',
-    danger: true,
-  },
 }
 
 export function SandboxBadge({ kind }: { kind?: string }) {
@@ -59,9 +34,7 @@ export function SandboxBadge({ kind }: { kind?: string }) {
   const info = SANDBOX_LABELS[kind]
   if (!info) return null
   return (
-    <span
-      className={`terminal-sandbox-badge${info.danger ? ' is-danger' : ''}`}
-      title={t(info.title)}>
+    <span className="terminal-sandbox-badge" title={t(info.title)}>
       {t(info.label)}
     </span>
   )

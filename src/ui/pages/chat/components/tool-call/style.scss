@@ -1531,6 +1531,8 @@
 }
 
 /* 沙盒模式徽标（header-left）：显示这条命令**实际**的运行模式（Rust 下发）。
+ * ⚠️ **只在真在沙盒里时出现**（`write_isolation` / `readonly`）—— 「无沙盒」是常态（设置里关掉 /
+ * 忽略规则 / 申请脱壳 / 用户终端），那些档位不再画徽标，所以这里也没有红系变体了。
  * 两块深色终端 chrome 共用：执行命令的终端卡、服务终端的标签头。
  * ⚠️ 不能继续嵌在 `.execute-command-wrapper` 下 —— 服务终端头部不在它里面，
  * 那一路会退化成裸文字（与 `.service-status` 提到最外层是同一条理由）。
@@ -1547,12 +1549,6 @@
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.12);
   white-space: nowrap;
-
-  &.is-danger {
-    color: #ffd7d7;
-    background: rgba(216, 34, 34, 0.18);
-    border-color: rgba(216, 34, 34, 0.5);
-  }
 }
 
 .service-empty,

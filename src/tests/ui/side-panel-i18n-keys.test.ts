@@ -16,11 +16,16 @@ const DICT = JSON.parse(
 const FILES = [
   // 容器：标签栏的关闭 / 未保存 / 放下未保存修改的确认
   'src/ui/pages/chat/components/side-panel/index.tsx',
+  // 开始页（三扇门）与浏览器标签（地址栏 / 兜底提示 / 空白页）
+  'src/ui/pages/chat/components/side-panel/guide.tsx',
+  'src/ui/pages/chat/components/side-panel/browser/BrowserPane.tsx',
   // 内容区：文件面板的全部文案（保存 / 重新加载 / 在系统程序中打开 / HTML 预览提示…）
   'src/ui/pages/chat/components/workspace-file/index.tsx',
   // 第二种内容：后台服务入口浮层 + 终端标签
   'src/ui/pages/chat/components/service/ServiceEntry.tsx',
   'src/ui/pages/chat/components/service/ServiceTerminal.tsx',
+  // 用户自己的终端（退出码 / 被关掉的提示）
+  'src/ui/pages/chat/components/terminal/UserTerminal.tsx',
   // 预览组件：表格（行号 / 截断提示）、文稿 / 演示（长度截断）、PDF（页码 / 缩放）
   'src/ui/pages/chat/components/workspace-file/data-table.tsx',
   'src/ui/pages/chat/components/workspace-file/sheet-view.tsx',

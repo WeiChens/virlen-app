@@ -515,8 +515,11 @@
 
   /* ==================== 页签下的搜索框（三个页签共用，见 search-box.tsx） ==================== */
   /* 位置：页签与内容区之间（.sidebar-tabs 的 8px 下外边距就是它的上间距），
-     不参与滚动；底色 / 圆角跟页签分段控件同一套语言 */
-  .sidebar-search {
+     不参与滚动；底色 / 圆角跟页签分段控件同一套语言。
+     ⚠️ `@at-root`：搜索框 / 空态 / 文件树这三个东西**不只**待在左侧栏 ——
+     右侧面板的「工作区文件」标签用的就是同一棵树（`side-panel/index.tsx`）。
+     挂在 `.chat-sidebar` 下面的话，右侧那份会变成没有行高、没有 hover 的裸文字。 */
+  @at-root .sidebar-search {
     flex-shrink: 0;
     display: flex;
     align-items: center;
@@ -602,7 +605,7 @@
   }
 
   /* ==================== 空态（工作目录 / 技能页签共用） ==================== */
-  .sidebar-empty {
+  @at-root .sidebar-empty {
     text-align: center;
     padding: 40px 20px;
     color: var(--text-secondary, #999);
@@ -620,8 +623,9 @@
 
   /* ==================== 工作目录树（虚拟列表） ==================== */
   /* 外层只负责「搜索框 + 滚动区」的竖向排列；滚动落在 .tree-scroll 上，
-     这样搜索框不随树滚动，虚拟列表的 getScrollElement 也始终指向同一个元素 */
-  .workspace-tree {
+     这样搜索框不随树滚动，虚拟列表的 getScrollElement 也始终指向同一个元素。
+     ⚠️ `@at-root` 理由同上面的搜索框：右侧面板里复用同一棵树。 */
+  @at-root .workspace-tree {
     flex: 1;
     min-height: 0;
     display: flex;

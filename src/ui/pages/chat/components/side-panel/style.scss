@@ -13,8 +13,19 @@
      拖手柄时左缘不动（= 拖不回来）。非占满态聊天区 `flex: 1` 吃掉余量，这条不起作用。 */
   margin-left: auto;
 
+  /* 显隐过渡：宽度 + 淡出。宽度一变，聊天区就跟着长 / 缩 —— 这就是「滑出来」的全部，
+     面板本身没有任何超出的内容可动，不需要 transform。
+     ⚠️ 容器**常驻挂载**（收起 = 加 `.is-collapsed`，宽度收 0），没有「等过渡跑完再卸载」那套定时器，
+     所以这个时长只决定观感（改它不会让任何东西提前 / 推迟被摘掉）。
+     ⚠️ 拖动时（`.is-resizing`）必须关掉：拖一像素等 200ms 过渡，手柄会黏手。 */
+  transition:
+    width 200ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    opacity 160ms ease-out,
+    border-left-color 160ms ease-out;
+
   /* 拖动时整块面板（含编辑器）都不要选中文字，否则会拖出一片蓝 */
   &.is-resizing {
+    transition: none;
     user-select: none;
     cursor: col-resize;
 
@@ -24,6 +35,25 @@
     iframe {
       pointer-events: none;
     }
+  }
+
+  /* 收起（含入场首帧）：宽度收到 0 —— `!important` 压过内联的 `width`，那条是拖拽 / 占满态
+     算出来的实宽，没有更高优先级就无法被过渡改向。同时裁剪 + 不接指针：面板从「完好的一栏」
+     滑成「一条边」的过程中，里面的编辑器 / 终端 / iframe 不能溢出来抢占聊天区。
+     ⚠️ 收起**不等于**卸载：里面的标签 / 草稿 / 终端屏幕全留着（切回来原样），
+     靠的就是这个类加在**同一个 DOM** 上，而不是把容器从树上拿掉。 */
+  &.is-collapsed {
+    width: 0 !important;
+    min-width: 0;
+    opacity: 0;
+    border-left-color: transparent;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  /* 系统「减弱动态效果」：过渡一刀切掉（此时那 200ms 延时只影响卸载时机，看不见） */
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
   }
 }
 
@@ -52,16 +82,25 @@
   z-index: 20;
 }
 
+/* 标签栏 = 可横向滚动的标签区 + 右侧两颗固定按钮（「+」打开开始页 / 「»」收起面板）。
+   底色与底线挂在整条上，按钮就不会跟着标签一起滚走。 */
+.side-panel-tabbar {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  border-bottom: 1px solid var(--border-color, #e5e5e5);
+  background: var(--bg-secondary, #f7f7f8);
+}
+
 /* 标签栏：横向排、超出就自己滚（标签一多不能把面板顶宽），底边与内容区同一条线。
    滚动条之外，鼠标滚轮也能推（纵向手势换算成横向，见 `tab-scroll.ts`）。 */
 .side-panel-tabs {
-  flex: none;
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: flex-end;
   gap: 2px;
   padding: 4px 6px 0;
-  border-bottom: 1px solid var(--border-color, #e5e5e5);
-  background: var(--bg-secondary, #f7f7f8);
   overflow-x: auto;
   overflow-y: hidden;
 
@@ -84,6 +123,46 @@
     &:hover {
       background: var(--text-secondary, #888);
     }
+  }
+}
+
+/* 标签栏右侧的两颗固定按钮：24px 方形，hover 才显形 */
+.side-panel-tabbar-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px 4px 2px;
+}
+
+.side-panel-tabbar-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+  transition: background 0.12s;
+
+  &:hover {
+    background: var(--hover-bg, #f0f0f0);
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  svg {
+    width: 13px;
+    height: 13px;
+    fill: currentColor;
+  }
+
+  /* 「收起」：向下 chevron 转成朝右（= 往边缘收） */
+  &.is-collapse svg {
+    transform: rotate(-90deg);
   }
 }
 
@@ -151,8 +230,10 @@
   width: 14px;
   height: 14px;
 
-  /* 服务终端标签：`ServerSvg` 自带 200×200 属性尺寸，包一层 14px 的框把它收进来（fill 跟文字色） */
-  &.is-service {
+  /* 服务终端 / 开始页 / 文件树标签：这几个图标自带 200×200 属性尺寸，
+     包一层 14px 的框把它们收进来（fill 跟文字色） */
+  &.is-service,
+  &.is-page {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -240,6 +321,20 @@
   }
 
   /* 具体内容（文件面板等）自己撑满：内容区只负责「一块」，不猜里面是什么 */
+  >* {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+  }
+}
+
+/* 「工作区文件」标签：树自己带 `flex: 1` 与滚动区，这里只做一层纵向容器
+   （搜索框固定、树滚动，与左侧栏同一条口径） */
+.side-panel-files {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+
   >* {
     flex: 1;
     min-height: 0;

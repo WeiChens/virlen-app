@@ -302,6 +302,10 @@ impl ServiceState {
 // ==================== 输出窗口 ====================
 
 /// 带「已读游标」的环形输出窗口（按**字符**计数，中文安全）。
+///
+/// ⚠️ 后台服务与**用户终端**（`native_tools::user_shell`）共用这一个实现：
+/// 终端的续接协议（`read_from` 的 `(text, reset, next, headDropped)`）只有一份，
+/// 否则两边的「环形丢弃后整段重放」很快就会出现两套说法。
 pub(crate) struct LogBuffer {
     /// 尾部窗口正文
     text: String,
@@ -314,7 +318,7 @@ pub(crate) struct LogBuffer {
 }
 
 impl LogBuffer {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             text: String::new(),
             chars: 0,
@@ -323,7 +327,7 @@ impl LogBuffer {
         }
     }
 
-    pub(super) fn push(&mut self, chunk: &str) {
+    pub(crate) fn push(&mut self, chunk: &str) {
         let n = chunk.chars().count();
         self.text.push_str(chunk);
         self.chars += n;
@@ -337,17 +341,24 @@ impl LogBuffer {
     }
 
     /// 窗口正文（不消费游标）
-    pub(super) fn window(&self) -> &str {
+    pub(crate) fn window(&self) -> &str {
         &self.text
     }
 
+    /// 累计写入的字符总数（= 窗口末尾的绝对偏移）。
+    ///
+    /// 用户终端的**推送任务**用它当起始偏移：客户端挂载时会自己读整窗，推送只负责之后的新内容。
+    pub(crate) fn total(&self) -> u64 {
+        self.total
+    }
+
     /// 未读字符数
-    pub(super) fn unread(&self) -> u64 {
+    pub(crate) fn unread(&self) -> u64 {
         self.total - self.read_cursor
     }
 
     /// 取「自上次读取以来的新内容」并推进游标；返回 `(内容, 是否因环形丢弃而缺了开头)`。
-    pub(super) fn read_new(&mut self) -> (String, bool) {
+    pub(crate) fn read_new(&mut self) -> (String, bool) {
         let window_start = self.total - self.chars as u64;
         let truncated = self.read_cursor < window_start;
         let start = self.read_cursor.max(window_start);
@@ -363,7 +374,7 @@ impl LogBuffer {
     /// - `from` 落在窗口之前（首次读取传 0、或环形已把客户端持有的那截丢掉）→ `reset=true` +
     ///   整个窗口，客户端据此**整段重放**（终端的转义序列必须从完整的一段开始，不能接半截）；
     /// - 否则只回新增部分，客户端按偏移续接。
-    pub(super) fn read_from(&self, from: u64) -> (String, bool, u64, bool) {
+    pub(crate) fn read_from(&self, from: u64) -> (String, bool, u64, bool) {
         let window_start = self.total - self.chars as u64;
         let head_dropped = window_start > 0;
         if from < window_start {

@@ -41,22 +41,52 @@ import ServiceEntry from './components/service/ServiceEntry'
 import type { ServiceTabTarget } from './components/service/ServiceEntry'
 import GitEntry from './components/git/GitEntry'
 import SearchDialog from './components/search'
-// 右侧面板容器：多个文件各占一个标签（后面还要接网址访问 / 终端）
+// 右侧面板容器：多个文件 / 终端 / 网页各占一个标签
 import SidePanel from './components/side-panel'
 import {
+  browserTab,
   closeTab,
   closeTabs,
   moveTab,
+  nextTerminalIndex,
   openFileTab,
+  openPageTab,
   openServiceTab,
+  replacePageTab,
+  replaceTabWith,
+  terminalTab,
+  updateBrowserTab,
+  updateBrowserTitle,
   type FileTabView,
   type SidePanelTab,
 } from './components/side-panel/tabs'
+import {
+  bucketOf,
+  clearBucketTabs,
+  guideTabIdOf,
+  isBucketVisible,
+  parkedTabsOf,
+  panelKeyOf,
+  scopeTabs,
+  withBucketOpen,
+  withBucketTabs,
+  withoutSessions,
+  type PanelBucket,
+  type PanelBuckets,
+} from './components/side-panel/sessions'
+import { killUserTerminal, listUserTerminalShells, startUserTerminal } from '@/infrastructure/terminal'
+import { resolveShellChoice } from './components/terminal/shells'
+import {
+  isTypingTarget,
+  matchesCommand,
+  PANEL_COMMANDS,
+} from '@/ui/shortcuts/commands'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 
 import { useToolUI } from './components/tool-ui'
 import HideSideBarSvg from '@/ui/components/icons/HideSideBarSvg'
 import ShowSideBarSvg from '@/ui/components/icons/ShowSideBarSvg'
+import PanelRightSvg from '@/ui/components/icons/PanelRightSvg'
 import SettingsView from '@/ui/pages/Settings/settings-view'
 import { t, tpl } from '@/ui/i18n'
 import settingsEvent from '@/events/settingsEvent'
@@ -267,82 +297,158 @@ function ChatView() {
   const currentWidthRef = useRef(sidebarWidth)
 
   /**
-   * 右侧面板：**一个文件一个标签**（同一路径不会开出两个标签，见 `side-panel/tabs.ts`）。
-   * `panelTabs` 是唯一真相：空数组 = 容器整个不渲染（也不占宽度）。
+   * 右侧面板：**每个会话一套标签**（`side-panel/sessions.ts`）。
+   *
+   * 三条口径（与旧版的差别就在这三条上）：
+   * 1. **收起 = 只隐藏**：`open` 只是宽度收到 0，标签 / 草稿 / 终端屏幕一条不动；
+   * 2. **切会话 = 换一桶**：别的会话的标签交给容器 `parkedTabs` 继续挂着（不卸载、不显示）——
+   *    所以切回去草稿与终端滚动都是原来那份；两个会话各开同一个文件也互不影响；
+   * 3. **面板容器常驻**（不再按「有没有标签」挂载 / 卸载）：要清状态只能靠卸载，不能两头都要。
    */
-  const [panelTabs, setPanelTabs] = useState<SidePanelTab[]>([])
-  /** 当前激活的标签（关掉激活的那个时由 `closeTab` 算出邻居） */
-  const [activeTabId, setActiveTabId] = useState<string | null>(null)
+  const [panelBuckets, setPanelBuckets] = useState<PanelBuckets>({})
+  /** 同步链路的基准：宿主回调（关闭标签 / 拖顺序 / 网页回传）里立刻读得到最新一桶 */
+  const panelBucketsRef = useRef<PanelBuckets>(panelBuckets)
+  panelBucketsRef.current = panelBuckets
   /** 面板占满（聊天区会被压到不足 300px）→ 聊天区先不显示 */
   const [filePanelFull, setFilePanelFull] = useState(false)
-  /** 任一标签有未保存草稿（切会话 / 切工作目录前要确认） */
+  /** 任一标签有未保存草稿（切工作目录前要确认；切会话不用 —— 草稿跟着会话留着） */
   const fileDirtyRef = useRef(false)
-  /** 标签属于哪个会话：切会话要全关（它们属于上一个会话的工作目录） */
-  const openFileSessionRef = useRef<string | null>(null)
   /** present 的「请你再看一次」序号：每次交付自增，标签记住它，面板据此把视图迁回预览 */
   const viewSeqRef = useRef(0)
-  const panelTabsRef = useRef<SidePanelTab[]>(panelTabs)
-  panelTabsRef.current = panelTabs
-  const activeTabIdRef = useRef<string | null>(activeTabId)
-  activeTabIdRef.current = activeTabId
+  /** 网页标签的序号：只用于造 id（`browser:3`），关掉不回收（回收会让新标签撞上旧的） */
+  const browserSeqRef = useRef(0)
+
+  /** 当前会话（新对话页也算一桶，见 `panelKeyOf`） */
+  const panelKey = panelKeyOf(chatState.value.currentSessionId)
+  const currentBucket = bucketOf(panelBuckets, panelKey)
+  /** 面板此刻该不该露着（展开着并且至少一个标签） */
+  const panelVisible = isBucketVisible(currentBucket)
+  /** 工具栏徽标用：**这个会话里还开着几个标签**（收起时告诉用户里面还有东西） */
+  const panelTabCount = currentBucket.tabs.length
+  /** 别的会话的标签：交给容器一直挂着（切回去草稿 / 终端屏幕还在） */
+  const parkedPanelTabs = useMemo(
+    () => parkedTabsOf(panelBuckets, panelKey),
+    [panelBuckets, panelKey],
+  )
+
+  /** 取「当前会话那一桶」（回调里调，不依赖渲染期快照） */
+  const bucketNow = useCallback((): { key: string; bucket: PanelBucket } => {
+    const key = panelKeyOf(chatState.value.currentSessionId)
+    return { key, bucket: bucketOf(panelBucketsRef.current, key) }
+  }, [])
 
   const handleFileDirtyChange = useCallback((dirty: boolean) => {
     fileDirtyRef.current = dirty
   }, [])
 
   /**
-   * 落一次标签状态：ref 与 state 同步（ref 是同步链路的基准，宿主回调里立刻读得到）。
-   * 关光 = 整块面板卸载的信号 —— 会话归属 / 脏标记 / 占满态一起复位。
+   * 落一次某个会话的标签状态（ref 与 state 同步：ref 是同步链路的基准）。
+   * id 在这里统一加会话前缀，**标签变多就展开面板**（见 `sessions.ts::withBucketTabs`）。
    */
-  const applyPanelTabs = useCallback(
-    (next: { tabs: SidePanelTab[]; activeId: string | null }) => {
-      panelTabsRef.current = next.tabs
-      activeTabIdRef.current = next.activeId
-      setPanelTabs(next.tabs)
-      setActiveTabId(next.activeId)
-      if (next.tabs.length > 0) return
-      openFileSessionRef.current = null
-      fileDirtyRef.current = false
-      // 面板占满时聊天区是藏起来的：关掉必须把它放回来
-      setFilePanelFull(false)
+  const applyBucketTabs = useCallback(
+    (key: string, next: { tabs: readonly SidePanelTab[]; activeId: string | null }) => {
+      const buckets = withBucketTabs(panelBucketsRef.current, key, next)
+      panelBucketsRef.current = buckets
+      setPanelBuckets(buckets)
     },
     [],
   )
 
-  /** 关掉所有标签（切会话 / 切工作目录）：容器随之卸载，占满态也要解除 */
-  const closeAllTabs = useCallback(() => {
-    applyPanelTabs({ tabs: [], activeId: null })
-  }, [applyPanelTabs])
+  /** 展开 / 收起当前会话的面板（收起 ≠ 关标签） */
+  const applyBucketOpen = useCallback(
+    (key: string, open: boolean) => {
+      const buckets = withBucketOpen(panelBucketsRef.current, key, open)
+      panelBucketsRef.current = buckets
+      setPanelBuckets(buckets)
+    },
+    [],
+  )
 
-  /** 关掉一个标签：邻居顶上来；关完最后一个就是整块面板卸载 */
-  const handleCloseTab = useCallback((id: string) => {
-    applyPanelTabs(closeTab(panelTabsRef.current, id, activeTabIdRef.current))
-  }, [applyPanelTabs])
+  /**
+   * 关标签前先把里面的**用户终端**杀掉：关标签 = 关终端。
+   *
+   * 服务终端不走这条 —— 它还留在 AI 的服务注册表里，终止与否是用户在那边的决定；
+   * 而用户自己的 shell 只有标签这一个入口，标签没了它就不该再跑（`dev server` 占着端口没人知道）。
+   * ⚠️ **收起面板 / 切会话不在此列**：那两条只是看不见 / 换了一桶，终端还得继续跑。
+   * 传 `null` = 所有会话的全部（组件卸载 / 会话被删）。
+   */
+  const killTerminalsIn = useCallback((ids: Set<string> | null) => {
+    for (const bucket of Object.values(panelBucketsRef.current)) {
+      for (const tab of bucket.tabs) {
+        if (tab.kind !== 'terminal') continue
+        if (ids && !ids.has(tab.id)) continue
+        void killUserTerminal(tab.sessionId, tab.termId)
+      }
+    }
+  }, [])
+
+  /**
+   * 关掉**当前会话**的全部标签（切工作目录这条路）：终端先杀，容器只隐藏不卸载。
+   * ⚠️ 别的会话不受影响 —— 它们各自的桶还在，切回去照旧。
+   */
+  const closeSessionTabs = useCallback(() => {
+    const { key, bucket } = bucketNow()
+    if (bucket.tabs.length === 0) return
+    killTerminalsIn(new Set(bucket.tabs.map((tab) => tab.id)))
+    const buckets = clearBucketTabs(panelBucketsRef.current, key)
+    panelBucketsRef.current = buckets
+    setPanelBuckets(buckets)
+    fileDirtyRef.current = false
+    // 面板占满时聊天区是藏起来的：关掉必须把它放回来
+    setFilePanelFull(false)
+  }, [bucketNow, killTerminalsIn])
+
+  /** 关掉一个标签：邻居顶上来；关完最后一个就是面板收起来（容器仍在，标签内容随之卸载） */
+  const handleCloseTab = useCallback(
+    (id: string) => {
+      killTerminalsIn(new Set([id]))
+      const { key, bucket } = bucketNow()
+      applyBucketTabs(key, closeTab(bucket.tabs, id, bucket.activeId))
+    },
+    [applyBucketTabs, bucketNow, killTerminalsIn],
+  )
 
   /**
    * 关掉一批标签（标签右键菜单的关闭其他 / 关闭右侧 / 关闭已保存 / 全部关闭）。
    * 一次算完再落库：逐个回调会让激活态在中间状态里来回跳（还多渲染几次）。
    */
-  const handleCloseTabs = useCallback((ids: string[]) => {
-    applyPanelTabs(closeTabs(panelTabsRef.current, ids, activeTabIdRef.current))
-  }, [applyPanelTabs])
+  const handleCloseTabs = useCallback(
+    (ids: string[]) => {
+      killTerminalsIn(new Set(ids))
+      const { key, bucket } = bucketNow()
+      applyBucketTabs(key, closeTabs(bucket.tabs, ids, bucket.activeId))
+    },
+    [applyBucketTabs, bucketNow, killTerminalsIn],
+  )
 
   /** 拖标签换顺序：只改顺序，激活态与草稿都不动（重排口径在 `tabs.ts::moveTab`） */
   const handleMoveTab = useCallback(
     (id: string, toIndex: number) => {
-      applyPanelTabs({
-        tabs: moveTab(panelTabsRef.current, id, toIndex),
-        activeId: activeTabIdRef.current,
+      const { key, bucket } = bucketNow()
+      applyBucketTabs(key, {
+        tabs: moveTab(bucket.tabs, id, toIndex),
+        activeId: bucket.activeId,
       })
     },
-    [applyPanelTabs],
+    [applyBucketTabs, bucketNow],
+  )
+
+  /** 切标签：只改激活态（不动标签列表，也不碰收起态） */
+  const handleActiveTabChange = useCallback(
+    (id: string) => {
+      const { key, bucket } = bucketNow()
+      if (bucket.activeId === id) return
+      applyBucketTabs(key, { tabs: bucket.tabs, activeId: id })
+    },
+    [applyBucketTabs, bucketNow],
   )
 
   /**
    * 有未保存草稿时先问一句（无草稿直接放行）。
    *
-   * `closeAllTabs()` 会把整块面板卸载，**所有标签的草稿一起消失** —— 切会话 / 换工作目录
-   * 两条路径必须先过这里。关单个标签的确认归容器（`side-panel`）与面板自己（`workspace-file`）。
+   * ⚠️ 现在只剩**切工作目录**一条路需要问：收起面板 / 切会话都不再丢任何东西
+   *（草稿跟着会话的桶留着，切回去还在）。关单个标签的确认归容器（`side-panel`）
+   * 与面板自己（`workspace-file`）。
    */
   const confirmDiscardDraft = useCallback(
     (message: string, confirmText: string): Promise<boolean> => {
@@ -359,11 +465,13 @@ function ChatView() {
   /**
    * 批量在右侧面板打开（`present` 的交付物可能不止一个）：已有同路径的标签只切过去，
    * 新文件追加到末尾；**激活第一个**（它是主交付物）。一次算完再落 state，N 个文件只渲染一次。
+   * 落的是**当前会话**那一桶（后台会话不抢标签页）。
    */
   const handleOpenFiles = useCallback(
     (paths: string[], view?: FileTabView) => {
       if (paths.length === 0) return
-      let tabs = panelTabsRef.current
+      const { key, bucket } = bucketNow()
+      let tabs = bucket.tabs
       let activeId: string | null = null
       // present 是「请看这个」：同一个文件重复交付也要把面板请回预览（序号自增，值相同不重渲染）
       const viewSeq = view ? ++viewSeqRef.current : undefined
@@ -372,11 +480,9 @@ function ChatView() {
         tabs = next.tabs
         activeId = activeId ?? next.activeId
       }
-      // 标签归属本会话（切会话时才不会被误关）
-      openFileSessionRef.current = chatState.value.currentSessionId
-      applyPanelTabs({ tabs, activeId })
+      applyBucketTabs(key, { tabs, activeId })
     },
-    [applyPanelTabs],
+    [applyBucketTabs, bucketNow],
   )
 
   /**
@@ -390,16 +496,15 @@ function ChatView() {
 
   /**
    * 服务面板点一行 → 右侧开一个服务终端标签（已开着就只切过去）。
-   * 标签归属「点开这一刻」的当前会话（与文件标签同一套「切会话全关」口径）；
-   * 标签自己的 `sessionId` 可能是另一个会话（新对话页的全局视图），轮询走标签的。
+   * 标签落在当前会话那一桶；标签自己的 `sessionId` 可能是另一个会话
+   *（新对话页的全局视图），轮询 / 终止都走标签自己的。
    */
   const handleOpenService = useCallback(
     (target: ServiceTabTarget) => {
-      const next = openServiceTab(panelTabsRef.current, target)
-      openFileSessionRef.current = chatState.value.currentSessionId
-      applyPanelTabs({ tabs: next.tabs, activeId: next.activeId })
+      const { key, bucket } = bucketNow()
+      applyBucketTabs(key, openServiceTab(bucket.tabs, target))
     },
-    [applyPanelTabs],
+    [applyBucketTabs, bucketNow],
   )
 
   /**
@@ -412,6 +517,194 @@ function ChatView() {
     () => setPresentRevealHandler((paths) => handleOpenFiles(paths, 'preview')),
     [handleOpenFiles],
   )
+
+  /**
+   * 右侧面板的工作目录：与文件树、目录树**同一套解析**（会话工作区 → 已选目录 → 全局默认）。
+   *
+   * 做成函数而不是渲染期常量：终端的 `cwd` 必须在**点的当下**现取（用户可能刚换了工作目录）。
+   */
+  const panelWorkspacePath = useCallback((): string => {
+    const sessionId = chatState.value.currentSessionId
+    const raw = sessionId
+      ? sessionStore.getSession(sessionId)?.workspace
+      : chatState.value.selectedWorkspace
+    return raw || settingsState.value.defaultWorkspace || ''
+  }, [])
+
+  /** 「+」/ 工具栏：打开（或切到）当前会话的开始页；已开着就只激活 */
+  const handleOpenGuide = useCallback(() => {
+    const { key, bucket } = bucketNow()
+    const next = openPageTab(bucket.tabs, 'guide')
+    applyBucketTabs(key, next)
+  }, [applyBucketTabs, bucketNow])
+
+  /**
+   * 「工作区文件」页：快捷键 / 工具栏直接开（`fromGuide=false`）；
+   * 从开始页的胶囊点进来时**把开始页原地换成文件树**（参考实现的口径）。
+   */
+  const handleOpenFilesPage = useCallback(
+    (fromGuide = false) => {
+      const { key, bucket } = bucketNow()
+      const next = fromGuide
+        ? replacePageTab(bucket.tabs, 'files', guideTabIdOf(key))
+        : openPageTab(bucket.tabs, 'files')
+      applyBucketTabs(key, next)
+    },
+    [applyBucketTabs, bucketNow],
+  )
+
+  /**
+   * 新建终端（开始页的胶囊 / `Ctrl + \``）：在**会话工作区**起一个真 shell。
+   *
+   * 五个必须守住的点：
+   * 1. **先起进程再建标签**：终端 id 由 Rust 给（`term_N`），失败就什么标签也不留；
+   *    失败原因原样展示（工作目录不存在 / 平台不支持 / 终端数量到上限 / 选的那种没装）——
+   *    这是用户主动点的动作，静默失败会让人以为「点了没反应」。
+   * 2. **从开始页进来时原地替换**（`replaceTabWith`）：开始页是门厅，点完就该消失。
+   * 3. **默认脱壳**：这里不做任何审批 / 沙盒判断（产品口径，见 `user_shell` 模块头）。
+   * 4. **`shellId` 显式给了就用它**（开始页的类型菜单），否则用**上次用的那种**
+   *    （`settings.terminalShell`；设置里空着 = 让 Rust 用默认的 Windows PowerShell）——
+   *    `Ctrl + \`` 要快，不能每次都弹菜单，但也不能永远只开 powershell。
+   * 5. **开成了就把这次用的记下来**：下次 `Ctrl + \`` 直接开它，菜单里也会标「上次使用」。
+   *
+   * 标签落在**点它的那一刻**那个会话的桶里；起进程是异步的，期间切了会话就 kill 掉不建标签。
+   */
+  const handleNewTerminal = useCallback(
+    async (fromGuide = false, shellId?: string) => {
+      const sessionId = chatState.value.currentSessionId ?? ''
+      const key = panelKeyOf(sessionId)
+      const cwd = panelWorkspacePath()
+      if (!cwd) {
+        void MessageBox.info(t('无法打开终端'), t('这个会话没有工作区目录。'))
+        return
+      }
+      const remembered = settingsState.value.terminalShell || undefined
+      const shell = resolveShellChoice(shellId, remembered)
+      try {
+        // 初始尺寸只是占位：xterm 挂载后立刻按真实宽高上报（同尺寸会被 Rust 去重）
+        const info = await startUserTerminal(sessionId, cwd, 120, 30, shell)
+        // 起进程是异步的：期间切了会话就不把这个终端塞进新会话的工作目录
+        if (panelKeyOf(chatState.value.currentSessionId) !== key) {
+          void killUserTerminal(sessionId, info.id)
+          return
+        }
+        // 记住**实际**用的那一种（Rust 没指定时会自己挑默认，不能把空串记成「用户选的」）
+        if (info.shell && info.shell !== settingsState.value.terminalShell) {
+          settingsState.setValue('terminalShell', info.shell)
+        }
+        const tabs = bucketOf(panelBucketsRef.current, key).tabs
+        const tab = scopeTabs(
+          key,
+          [
+            terminalTab({
+              termId: info.id,
+              sessionId,
+              shell: info.shell,
+              cwd: info.cwd,
+              pid: info.pid,
+              // 序号取「已用最大值 + 1」：关掉中间那个再开不会出现两个「终端 2」（见 `tabs.ts`）
+              index: nextTerminalIndex(tabs),
+            }),
+          ],
+        )[0]
+        const guideId = guideTabIdOf(key)
+        const next =
+          fromGuide && tabs.some((item) => item.id === guideId)
+            ? replaceTabWith(tabs, tab, guideId)
+            : { tabs: [...tabs, tab], activeId: tab.id }
+        applyBucketTabs(key, next)
+      } catch (e: any) {
+        // 上次用的那种已经不在了（卸载了 / 换了台机器）：丢掉记忆，下次按键回到默认
+        if (!shellId && remembered) {
+          settingsState.setValue('terminalShell', '')
+        }
+        void MessageBox.info(
+          t('无法打开终端'),
+          String(e?.message ?? e ?? ''),
+        )
+      }
+    },
+    [applyBucketTabs, panelWorkspacePath],
+  )
+
+  /**
+   * 新建网页标签（开始页的「浏览器」/ `Ctrl + T`）：地址留空，由用户在地址栏里输入。
+   *
+   * 与终端相反，这里**没有要先做成的事**（不起进程、不需要工作目录），所以同步建标签即可；
+   * 从开始页进来同样原地替换（`replaceTabWith`）—— 用户看到的还是刚才那一格。
+   */
+  const handleOpenBrowser = useCallback(
+    (fromGuide = false) => {
+      // 序号只增不减：回收会跟还开着的旧标签撞 id（它全局一份，不按会话分）
+      browserSeqRef.current += 1
+      const seq = browserSeqRef.current
+      const { key, bucket } = bucketNow()
+      const tabs = bucket.tabs
+      // 两条路都走标签模型：原地接管开始页那一格 / 追加到末尾
+      const tab = scopeTabs(key, [browserTab({ seq })])[0]
+      const guideId = guideTabIdOf(key)
+      const next =
+        fromGuide && tabs.some((item) => item.id === guideId)
+          ? replaceTabWith(tabs, tab, guideId)
+          : { tabs: [...tabs, tab], activeId: tab.id }
+      applyBucketTabs(key, next)
+    },
+    [applyBucketTabs, bucketNow],
+  )
+
+  /**
+   * 网页标签里导航了一次 → 把地址写回标签（标签标题 = 主机名，会跟着换）。
+   *
+   * 只改那一个标签、**不动激活态**：导航发生在用户正在看的那个面板里，但回调是异步到达的，
+   * 期间用户可能已经切到别的标签 —— 不能把焦点抢回来。
+   */
+  const handleBrowserNavigate = useCallback(
+    (id: string, url: string) => {
+      const { key, bucket } = bucketNow()
+      const tabs = updateBrowserTab(bucket.tabs, id, url)
+      // 地址没变 / 标签已经关掉：原引用返回，不触发重渲染
+      if (tabs === bucket.tabs) return
+      applyBucketTabs(key, { tabs, activeId: bucket.activeId })
+    },
+    [applyBucketTabs, bucketNow],
+  )
+
+  /**
+   * 页面上报标题（`document.title`）→ 只改那一个标签的文字。
+   *
+   * 与导航同一条口径：**不动激活态** —— 事件是异步到的，期间用户可能已经切到别的标签。
+   * 标题没变时 `updateBrowserTitle` 返回原引用，这里直接跳过（不触发重渲染）。
+   */
+  const handleBrowserTitle = useCallback(
+    (id: string, title: string) => {
+      const { key, bucket } = bucketNow()
+      const tabs = updateBrowserTitle(bucket.tabs, id, title)
+      if (tabs === bucket.tabs) return
+      applyBucketTabs(key, { tabs, activeId: bucket.activeId })
+    },
+    [applyBucketTabs, bucketNow],
+  )
+
+  /**
+   * 收起右侧栏 = **只隐藏**（什么都不丢）：标签、草稿、终端屏幕全留着，展开就原样回来。
+   * 所以这里不再问「未保存的修改将丢失」—— 已经没有东西会丢了。
+   * 真正会丢东西的只剩「切工作目录」（工具栏那个下拉菜单），确认在那边。
+   */
+  const handleCollapsePanel = useCallback(() => {
+    const { key } = bucketNow()
+    applyBucketOpen(key, false)
+  }, [applyBucketOpen, bucketNow])
+
+  /** 工具栏按钮 / 快捷键：有标签就展开 ↔ 收起；一个也没有就展开面板并开开始页 */
+  const handleTogglePanel = useCallback(() => {
+    const { key, bucket } = bucketNow()
+    if (bucket.tabs.length > 0) {
+      applyBucketOpen(key, !bucket.open)
+      return
+    }
+    applyBucketOpen(key, true)
+    handleOpenGuide()
+  }, [applyBucketOpen, bucketNow, handleOpenGuide])
 
   // 同步 ref 与 state
   useEffect(() => {
@@ -429,6 +722,42 @@ function ChatView() {
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [])
+
+  /**
+   * 右侧栏快捷键（键位定义在 `ui/shortcuts/commands.ts`，与开始页的键帽同源）：
+   * - `Ctrl+Shift+E` 工作区文件；
+   * - `Ctrl+\`` 新建终端；
+   * - `Ctrl+T` 新建网页标签；
+   * - `Ctrl+Alt+B` 展开 / 收起右侧栏。
+   *
+   * 不在输入框 / 终端里抢键：那边有自己的语义（readline 的 Ctrl+E 是行尾）。
+   */
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (isTypingTarget(e.target)) return
+      if (matchesCommand(e, PANEL_COMMANDS['panel.files'])) {
+        e.preventDefault()
+        handleOpenFilesPage()
+        return
+      }
+      if (matchesCommand(e, PANEL_COMMANDS['panel.terminal'])) {
+        e.preventDefault()
+        void handleNewTerminal()
+        return
+      }
+      if (matchesCommand(e, PANEL_COMMANDS['panel.browser'])) {
+        e.preventDefault()
+        handleOpenBrowser()
+        return
+      }
+      if (matchesCommand(e, PANEL_COMMANDS['panel.toggle'])) {
+        e.preventDefault()
+        handleTogglePanel()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [handleNewTerminal, handleOpenBrowser, handleOpenFilesPage, handleTogglePanel])
 
   // Ctrl / Cmd + N 新建对话（等价于侧边栏按钮）
   useEffect(() => {
@@ -650,15 +979,44 @@ function ChatView() {
     }
   }, [chatState.value.currentSessionId])
 
-  // 切会话 / 新建对话 → 关掉右侧所有标签（它们属于上一个会话的工作目录）
+  /**
+   * 会话列表变了（或切了会话）：把**已经删掉的会话**那一桶连标签一起丢掉。
+   *
+   * 三个必须守住的点：
+   * 1. **列表空的时候一律不动**：会话是懒加载的，刚启动 / 重新拉列表的瞬间可能是空数组，
+   *    那一瞬把桶清掉就等于把用户的三个草稿杀了（连里面的终端一起）；
+   * 2. **当前那一桶永远保留**：删会话与切会话可能错开一帧；
+   * 3. **切会话也算一次时机**：删的正好是当前会话时，`keep` 那一瞬还是它 —— 只靠列表变化
+   *    会把孤儿桶留到下次，那一桶里的终端就再也没人能看见了。
+   */
   useEffect(() => {
-    if (panelTabsRef.current.length === 0) return
-    if (openFileSessionRef.current === chatState.value.currentSessionId) return
-    closeAllTabs()
-  }, [chatState.value.currentSessionId, closeAllTabs])
+    if (sessions.length === 0) return
+    const keep = panelKeyOf(chatState.value.currentSessionId)
+    const alive = new Set(sessions.map((session) => session.id))
+    const { buckets, dropped } = withoutSessions(
+      panelBucketsRef.current,
+      alive,
+      keep,
+    )
+    if (buckets === panelBucketsRef.current) return
+    for (const tab of dropped) {
+      if (tab.kind === 'terminal') void killUserTerminal(tab.sessionId, tab.termId)
+    }
+    panelBucketsRef.current = buckets
+    setPanelBuckets(buckets)
+  }, [sessions, panelKey])
 
   /** 最近一次「已由本组件处理」的会话切换目标（用于区分自己切的与外部直接改 store 的） */
   const handledSessionRef = useRef<string | null>(null)
+
+  /**
+   * 本组件卸载（关窗口 / 页面切走）= 这些终端没有归属了：尽最后一把力杀掉进程树。
+   * ⚠️ 是**所有会话**的终端（面板按会话分桶，别的会话里还跑着的也得收）。
+   *
+   * 真正的兜底在 Rust 侧（每个终端都挂着一个带 `KILL_ON_JOB_CLOSE` 的 Job，进程退出时
+   * 内核代杀），所以这里不 await、失败也不报错 —— 只是一个「尽早」。
+   */
+  useEffect(() => () => killTerminalsIn(null), [killTerminalsIn])
 
   /**
    * 会话切换的外部入口兜底：托盘唤起这类路径只改 currentSessionId，拿不到 handleSelectSession，
@@ -673,12 +1031,8 @@ function ChatView() {
   async function handleSelectSession(sessionId: string) {
     const session = sessionStore.getSession(sessionId)
     if (!session) return
-    // 切会话会关掉右侧所有标签页；有未保存草稿先问一句（托盘等外部入口走下面的兜底 effect，不弹）
-    const confirmed = await confirmDiscardDraft(
-      t('切换会话会关闭右侧所有标签页，未保存的修改将丢失。'),
-      t('放弃并切换'),
-    )
-    if (!confirmed) return
+    // ⚠️ 切会话不再确认、也不再关掉右侧标签：每个会话一套（`panelBuckets`），
+    // 切回去原样还在（草稿 / 终端屏幕都没动过）
     // 先登记再干活：内部会再次写同值 currentSessionId，早登记避免兜底 effect 重入
     handledSessionRef.current = sessionId
     const fromSessionId = chatState.value.currentSessionId
@@ -1055,6 +1409,13 @@ function ChatView() {
     t('对话')
     : appName
 
+  /**
+   * 右侧面板的「工作区文件」与「新建终端」能不能用：与目录树/文件树同一套解析
+   * （会话工作区 → 已选目录 → 全局默认目录）。三者都没配时禁用入口并说明原因，
+   * 而不是让人点进去看一句「未设置工作目录」。
+   */
+  const panelWorkspaceReady = Boolean(panelWorkspacePath())
+
   return (
     <div className={filePanelFull ? 'chat-view is-file-full' : 'chat-view'}>
       <ProviderPrompt
@@ -1139,12 +1500,41 @@ function ChatView() {
                     t('放弃并切换'),
                   )
                   if (!confirmed) return
-                  closeAllTabs()
+                  closeSessionTabs()
                   chatState.setValue('selectedWorkspace', e)
                 })()
               }}
               workspaces={historyWorkspaces}
             />
+            {/*
+              右侧面板：一个标签一个视图（文件 / 服务终端 / 用户终端 / 网页 / 开始页 / 文件树）。
+              没有标签就开「开始页」；有标签就展开 ↔ 收起 —— **收起只是隐藏**，标签与草稿都留着；
+              收起时这颗按钮上的徽标是「这个会话里还开着几个标签」（与 Ctrl+Alt+B 同一条路）。
+            */}
+            <button
+              className={`toolbar-icon-btn${panelVisible ? ' is-active' : ''}`}
+              onClick={handleTogglePanel}
+              title={
+                panelVisible
+                  ? t('收起右侧栏')
+                  : panelTabCount > 0
+                    ? tpl('打开右侧栏（$__count__ 个标签页）', { count: panelTabCount })
+                    : t('打开右侧栏')
+              }
+              aria-label={
+                panelTabCount > 0
+                  ? tpl('右侧栏：$__count__ 个标签页', { count: panelTabCount })
+                  : t('右侧栏')
+              }
+              aria-pressed={panelVisible}
+              type="button">
+              <PanelRightSvg />
+              {!panelVisible && panelTabCount > 0 && (
+                <span className="toolbar-badge" aria-hidden="true">
+                  {panelTabCount}
+                </span>
+              )}
+            </button>
             <SettingsView />
           </div>
         </div>
@@ -1220,23 +1610,45 @@ function ChatView() {
       </div>
 
       {/*
-        右侧面板：一个文件一个标签（文本可编辑 Ctrl+S 保存 / 图片 / 音视频预览）。
-        **切标签不卸载**，草稿与撤销栈都不会丢；后面还要接网址访问 / 终端。
+        右侧面板：一条标签一个视图（文件 / 服务终端 / 用户终端 / 网页 / 开始页 / 文件树）。
+        **切标签不卸载**（草稿与撤销栈都不会丢），**收起也不卸载**（宽度收 0，只是看不见）。
+        别的会话的标签经 `parkedTabs` 一直挂着 —— 切回去时草稿 / 终端屏幕就是原来那份。
+        （所以它不再按「有没有标签」挂载 / 卸载：要清状态只能靠卸载，两个好处不能都要。）
       */}
-      {panelTabs.length > 0 && (
-        <SidePanel
-          tabs={panelTabs}
-          activeId={activeTabId}
-          sessionId={chatState.value.currentSessionId ?? undefined}
-          onActiveChange={setActiveTabId}
-          onCloseTab={handleCloseTab}
-          onCloseTabs={handleCloseTabs}
-          onMoveTab={handleMoveTab}
-          onDirtyChange={handleFileDirtyChange}
-          // 占满（聊天区不足 300px）→ 把聊天区藏起来，面板接管整块宽度
-          onExpandedChange={setFilePanelFull}
-        />
-      )}
+      <SidePanel
+        tabs={currentBucket.tabs}
+        activeId={currentBucket.activeId}
+        // 别的会话挂着的标签：内容照旧活着，不进标签栏、不显示
+        parkedTabs={parkedPanelTabs}
+        // 收起 = 只隐藏：宿主的 `open` 与「有标签吗」共同决定
+        collapsed={!panelVisible}
+        sessionId={chatState.value.currentSessionId ?? undefined}
+        onActiveChange={handleActiveTabChange}
+        onCloseTab={handleCloseTab}
+        onCloseTabs={handleCloseTabs}
+        onMoveTab={handleMoveTab}
+        onDirtyChange={handleFileDirtyChange}
+        // 占满（聊天区不足 300px）→ 把聊天区藏起来，面板接管整块宽度
+        onExpandedChange={setFilePanelFull}
+        // 「+」开开始页；「»」收起（什么都不丢，所以不问草稿）；开始页里的胶囊原地换成目标页
+        onOpenGuide={handleOpenGuide}
+        onCollapse={handleCollapsePanel}
+        onPickGuide={(kind, shell) => {
+          if (kind === 'files') handleOpenFilesPage(true)
+          else if (kind === 'terminal') void handleNewTerminal(true, shell)
+          else handleOpenBrowser(true)
+        }}
+        guideWorkspaceReady={panelWorkspaceReady}
+        // 开始页的「新建终端」先问类型再开（没装的灰显）：探测在 Rust，宿主只转交
+        loadTerminalShells={listUserTerminalShells}
+        // 面板里的文件树：单击即开（与左侧栏的双击同一条链路）
+        onOpenPath={handleOpenFile}
+        onAttachPaths={handleAttachPaths}
+        // 网页标签里导航了 → 地址写回标签（tooltip / 兑底标题跟着换）
+        onBrowserNavigate={handleBrowserNavigate}
+        // 页面报来自己的标题 → 标签栏优先显示它
+        onBrowserTitle={handleBrowserTitle}
+      />
 
       {toolUI}
 

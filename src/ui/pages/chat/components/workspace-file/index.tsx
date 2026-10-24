@@ -24,6 +24,8 @@
  * 7. **正在看的这个文件会盯磁盘**（AI / 终端 / 外部编辑器都算）：内容变了且本地干净 →
  *    最小编辑刷进编辑器（光标、滚动、撤销栈都不乱）；本地有未保存修改 → 顶部黄条二选一，
  *    绝不静默覆盖。`hash10` 相同就直接忽略，所以「自己保存触发 watcher」不会自激。
+ *    **只盯「正在被看」的那一个**（`active`）：标签常驻挂载，藏着的那十几个文件标签不订
+ *    任何 watcher；重新被看着时先读一次盘对齐 hash（不盯期间 AI / 终端可能改过）。
  * 8. **文档类（pdf / Office）是只看不改**：dirty 永远为 false、保存按钮不出现；预览内容由
  *    `workspace-file-service` 拿（pdf = 字节交给 pdfjs；Office = Rust `cmd_preview_document`
  *    抽成 Markdown / 表格网格），磁盘变了就整份重读。
@@ -94,6 +96,13 @@ interface Props {
    * `defaultView` 的变化推不动视图 —— 用户手动切到编辑后再 present 同一文件，得靠它迁回去。
    */
   viewSeq?: number
+  /**
+   * 此刻是不是**正在被看**（右侧面板里 = 当前会话的选中标签 + 面板没收起）。
+   * `false` 时不订磁盘 watcher（标签本身不卸载，草稿 / 撤销栈照旧留着）；
+   * 从 `false` 回到 `true` 时先读一次盘对齐 hash，变了才刷新。
+   * 不传 = 一直盯着（单独使用本组件时就是「打开即看着」）。
+   */
+  active?: boolean
   /** 关闭（宿主负责清空 openFile；脏数据确认已经在本组件内做过） */
   onClose: () => void
   /** 脏标记变化（宿主据此在「切文件 / 切会话」前确认） */
@@ -166,6 +175,7 @@ function WorkspaceFilePanel({
   path,
   sessionId,
   hideTitle = false,
+  active = true,
   defaultView = 'edit',
   viewSeq,
   onClose,
@@ -223,6 +233,8 @@ function WorkspaceFilePanel({
   const savingRef = useRef(false)
   /** 上一次加载的文件：**只有换文件**才重置查看状态（重读同一个文件不该清掉用户选的视图） */
   const lastPathRef = useRef(path)
+  /** 第一次订阅（= 挂载那一轮）不对齐：`load()` 正在读同一个文件（见下面的 watch effect） */
+  const firstWatchRef = useRef(true)
 
   const dirty =
     state.status === 'ready' &&
@@ -413,17 +425,34 @@ function WorkspaceFilePanel({
   }, [readDiskChange])
 
   /**
-   * 只盯「当前打开的这个文件」。订阅失败（没权限 / 目录不存在）就静默降级：
-   * 退回手动刷新，面板其余功能不受影响。
+   * 只盯「**正在被看**的那个文件」。三条口径：
+   *
+   * 1. **不活跃立刻退订**（`active === false`）：标签常驻挂载（切标签不卸载、切会话不清状态、
+   *    面板收起也不卸载），所以窗口里可能同时挂着十几个文件标签 —— 每个一个父目录 watcher 的话，
+   *    一次落盘就是十几次整文件重读；
+   * 2. **重新盯上时先读一次盘对齐**（`checkDisk` 读盘比 `hash10`，内容不同才刷新）：不盯的那段时间
+   *    里 AI / 终端可能改过，不补这一次就会「看到旧内容 + 基线 hash 过期 → 保存报冲突」；
+   * 3. **挂载那一轮不对齐**：`load()` 正在读同一个文件，再读一遍等于把大文件读两次
+   *    （`firstWatchRef` 只吞掉第一次；换文件时 `readDiskChange` 也会因为 state 不是 ready 自己退出）。
+   *
+   * 订阅失败（没权限 / 目录不存在）静默降级：退回手动刷新，面板其余功能不受影响。
    */
   useEffect(() => {
+    const first = firstWatchRef.current
+    firstWatchRef.current = false
+    if (!active) return
     let dead = false
     let unwatch: (() => void) | null = null
     void (async () => {
       try {
         const stop = await watchWorkspaceFile(path, () => checkDisk(), sessionId)
-        if (dead) stop()
-        else unwatch = stop
+        if (dead) {
+          stop()
+          return
+        }
+        unwatch = stop
+        // 订阅建好之后再对齐：这一读之后到来的事件一个都不会漏
+        if (!first) checkDisk()
       } catch {
         // 忽略：只是没有实时刷新
       }
@@ -432,7 +461,7 @@ function WorkspaceFilePanel({
       dead = true
       unwatch?.()
     }
-  }, [path, sessionId, checkDisk])
+  }, [active, path, sessionId, checkDisk])
 
   /** 黄条「重新加载」：用磁盘那版覆盖草稿（用户已经明确选了丢弃） */
   const takeDiskChange = useCallback(() => {

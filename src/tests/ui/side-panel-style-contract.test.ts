@@ -14,6 +14,10 @@
  *    层级不够就收不到 mousedown —— 看着是「拖不动」，其实拖的是左侧栏（面板再也回不来）。
  * ⑥ **拖动期间 iframe 不能参与命中**：HTML 预览是独立文档，指针跨进去以后 document 上的
  *    mousemove / mouseup 就收不到了（向右拖 = 指针进面板），拖动会断在半路。
+ * ⑦ **显隐过渡的时长就是 `PANEL_MOTION_MS = 200`**：短了面板会在半路被摘掉（跳一下），
+ *    长了会让「关掉了却还在」的窗口变宽；拖动时又必须关掉过渡（否则手柄黏手）。
+ *    容器现在**常驻挂载**（收起只是 `is-collapsed`），不再有「等过渡跑完再卸载」那套定时器，
+ *    所以这个数只写在样式表里 —— 改它只影响观感，不影响任何卸载时机。
  */
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -104,8 +108,7 @@ describe('右侧面板容器 · 样式契约', () => {
     expect(frame).toContain('pointer-events: none')
   })
 
-  it('占满态的手柄盖过左侧栏拖拽条，且面板永远贴右（否则拖不回来）', () => {
-    // 左侧栏拖拽条的层级与命中区（`::after` 左右各 3px）写在 chat-view.scss
+  it('占满态的手柄盖过左侧栏拖拽条，且面板永远贴右（否则拖不回来）', () => {    // 左侧栏拖拽条的层级与命中区（`::after` 左右各 3px）写在 chat-view.scss
     const sidebarRule = /\.sidebar-resizer\s*\{([^}]*)\}/.exec(chatViewCss)?.[1]
     expect(sidebarRule).toBeTruthy()
     const sidebarZ = Number(/z-index:\s*(\d+)/.exec(sidebarRule!)?.[1])
@@ -119,5 +122,27 @@ describe('右侧面板容器 · 样式契约', () => {
 
     // 占满态下聊天区是 display:none：面板不贴右就会从左铺、往右缩，手柄停在原地
     expect(/\.side-panel\s*\{([^}]*)\}/.exec(panelCss)?.[1]).toContain('margin-left: auto')
+  })
+
+  it('显隐过渡：收起时宽度归 0，时长 200ms，拖动时不过渡', () => {
+    const container = /\.side-panel\s*\{([^}]*)\}/.exec(panelCss)?.[1]
+    expect(container).toBeTruthy()
+    expect(container).toContain('transition:')
+
+    // 面板常驻挂载：收起 / 展开只靠这一个过渡，没有 JS 定时器陪着一起改
+    const widthMs = Number(/width\s+(\d+)ms/.exec(container!)?.[1])
+    expect(widthMs).toBe(200)
+
+    // 收起：“!important” 压过内联宽度；裁剪 + 不接指针，内容不能溢出来抢聊天区
+    const collapsed = /\.side-panel\.is-collapsed\s*\{([^}]*)\}/.exec(panelCss)?.[1]
+    expect(collapsed).toBeTruthy()
+    expect(collapsed).toContain('width: 0 !important')
+    expect(collapsed).toContain('overflow: hidden')
+    expect(collapsed).toContain('pointer-events: none')
+
+    // 拖动时不能有过渡（拖一像素等 200ms，手柄会黏手）
+    expect(/\.side-panel\.is-resizing\s*\{([^}]*)\}/.exec(panelCss)?.[1]).toContain(
+      'transition: none',
+    )
   })
 })

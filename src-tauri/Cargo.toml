@@ -63,7 +63,10 @@ workspace = true
 # 核心库（零 `tauri::`）：引擎 / 会话与配置持久化 / 沙盒 / 安全判定 / RAG / 视觉 / 宿主抽象。
 # 本 package 只提供「GUI 壳」：Tauri 命令、事件出口、托盘、平台集成。
 virlen-core = { path = "virlen-core" }
-tauri = { version = "2", features = ["tray-icon"] }
+# `unstable`：右侧栏「网页」标签要用同一窗口里的**原生子 WebView**（`Window::add_child`），
+#   该 API 在 Tauri 2 里仍挂在 `unstable` feature 下。为什么要子 WebView 见 `src/browser_view.rs`
+#   文件头（X-Frame-Options 对 iframe 是硬限制，对独立浏览上下文不适用）。
+tauri = { version = "2", features = ["tray-icon", "unstable"] }
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"

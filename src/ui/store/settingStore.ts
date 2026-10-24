@@ -74,6 +74,13 @@ export interface SettingsStore {
   sandboxMode: SandboxMode
   /** 是否在系统提示词中包含环境信息 */
   allowEnvPrompt: boolean
+  /**
+   * 用户终端用哪种 shell（上次选择；`''` = 从没选过，让 Rust 用默认的 Windows PowerShell）。
+   * 取值是稳定 id（`cmd` / `powershell` / `pwsh` / `gitbash`，见 `user_shell/shells.rs`）：
+   * `Ctrl + \`` 直接开这一种，菜单里也把它标成「上次使用」。
+   * ⚠️ 存 id 而不是可执行文件路径：路径跟着机器变，换台机器就会指向不存在的东西。
+   */
+  terminalShell: string
   providers: ProviderConfig[]
   /** 搜索供应商（持久化在 app_settings，localStorage 不再保存） */
   searchProviders: SearchProviderConfig[]
@@ -191,6 +198,8 @@ const defaultSettings: SettingsStore = {
   permissions: withDefaultPermissions(undefined),
   sandboxMode: 'on',
   allowEnvPrompt: true,
+  // 终端类型：空 = 没选过（Rust 默认 powershell）
+  terminalShell: '',
   providers: [],
   searchProviders: [],
   defaultSearchProviderId: '',

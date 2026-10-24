@@ -12,6 +12,11 @@
  * **只监听展开的目录**（`use-dir-watch`）：根与每个展开项各一个非递归 watcher，折叠即退订 ——
  * 整棵树（node_modules / target / .git）一次保存能刷出几千个事件，盯不起。事件到达只是
  * 「静默重读这一层」，展开状态、选中、滚动全不动。
+ *
+ * **而且只在「正在被看」时才监听**（`active`）：右侧面板里的每棵树都常驻挂载（切标签不卸载、
+ * 切会话不清状态），不是当前标签 / 面板收起时一个目录也不订；回到「被看」时把正在看着的
+ * 那几层静默重读一遍（不盯期间的增删不会再有事件送来）。树根按 `sessionId`（标签自己的会话）解析，
+ * 不传才是当前会话。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -57,6 +62,25 @@ interface Props {
   /** 搜索关键词与写回（值由父组件持有：切页签会卸载本组件） */
   searchQuery: string
   onSearchQueryChange: (value: string) => void
+  /**
+   * 这棵树长在哪：左侧栏（`sidebar`，默认）还是右侧面板的「工作区文件」标签（`panel`）。
+   *
+   * 唯一差别是**文件行的单击语义**：右侧面板里单击就打开（面板不长驻、用户点一下就是“看这个”），
+   * 左侧栏保持双击（改掉老手感没有任何好处）。样式不受它影响 —— 树样式已 `@at-root`，两边共用。
+   */
+  /**
+   * 这棵树此刻是不是**正在被看**（右侧面板里 = 当前会话的选中标签 + 面板没收起）。
+   * `false` 时一个目录 watcher 也不订；回到 `true` 时把正在看着的那几层静默重读一遍。
+   * 不传 = 一直盯着（左侧栏的常驻树就是这样）。
+   */
+  active?: boolean
+  /**
+   * 树根用哪个会话的工作目录。不传 = 当前会话（左侧栏、开始页都这样）；
+   * 右侧面板里别的会话挂着的那个标签必须传**标签自己的**会话：
+   * 否则它会去当前会话的目录里订 watcher、把别的会话的文件树画出来。
+   */
+  sessionId?: string
+  variant?: 'sidebar' | 'panel'
 }
 
 /** 行高（与 style.scss 的 .tree-row 一致） */
@@ -132,6 +156,9 @@ function WorkspaceTree({
   onOpenFile,
   searchQuery: query,
   onSearchQueryChange: setQuery,
+  variant = 'sidebar',
+  active = true,
+  sessionId,
 }: Props) {
   /** 已加载目录缓存，key 为绝对路径 */
   const [dirs, setDirs] = useState<Record<string, DirState>>({})
@@ -177,10 +204,12 @@ function WorkspaceTree({
     [],
   )
 
-  // 在 observer 渲染中读取，切换会话 / 换工作目录时能同步刷新
-  const sessionId = chatState.value.currentSessionId
-  const rawRoot = sessionId
-    ? sessionStore.getSession(sessionId)?.workspace
+  // 在 observer 渲染中读取，切换会话 / 换工作目录时能同步刷新。
+  // `sessionId` 是宿主传进来的归属（右侧面板里 = 标签自己的会话）：它同时定树根与写操作的
+  // 安全校验上下文 —— 两者必须是同一个会话，否者一边看 A、一边去 B 里删改
+  const ownerId = sessionId ?? chatState.value.currentSessionId
+  const rawRoot = ownerId
+    ? sessionStore.getSession(ownerId)?.workspace
     : chatState.value.selectedWorkspace
   const rootPath = normalizeTreePath(
     rawRoot || settingsState.value.defaultWorkspace || '',
@@ -374,15 +403,16 @@ function WorkspaceTree({
   /**
    * 监听哪几层：根 + 所有**展开**的目录（折叠的不订）：整棵树盯不起，
    * 而且只看「列表可能变了没」，不需要区分新增 / 删除 / 重命名。
+   * 不活跃（不是当前标签 / 面板收起）时一层都不订。
    */
   const watchedDirs = useMemo(() => {
-    if (!rootPath || !isTauriEnv()) return NO_DIRS
+    if (!active || !rootPath || !isTauriEnv()) return NO_DIRS
     const list = [rootPath]
     for (const [path, open] of Object.entries(expanded)) {
       if (open && path && path !== rootPath) list.push(path)
     }
     return list
-  }, [rootPath, expanded])
+  }, [active, rootPath, expanded])
 
   /** 某一层变了 → 静默重读（不置 loading、失败保留旧内容） */
   const handleDirChanged = useCallback(
@@ -393,6 +423,23 @@ function WorkspaceTree({
   )
 
   useDirWatchers(watchedDirs, handleDirChanged)
+
+  /**
+   * 从「不看着」回到「看着」（切到这个标签 / 面板重新展开）：把正在看着的那几层静默重读一遍。
+   * 不盯的那段时间里的增删不会再有事件送来，不补这一次树就一直是旧的。
+   * 首次挂载不算（`loadDir(rootPath)` 正在读）；目录 / 加载函数的身份变化不算「回来」，走 ref。
+   */
+  const firstLiveRef = useRef(true)
+  const watchedDirsRef = useRef<string[]>(NO_DIRS)
+  watchedDirsRef.current = watchedDirs
+  const loadDirRef = useRef(loadDir)
+  loadDirRef.current = loadDir
+  useEffect(() => {
+    const first = firstLiveRef.current
+    firstLiveRef.current = false
+    if (first || !active) return
+    for (const dir of watchedDirsRef.current) void loadDirRef.current(dir, true)
+  }, [active])
 
   /** 用一批行覆盖选择集 */
   const setSelection = useCallback((targets: TreeMenuTarget[]) => {
@@ -468,8 +515,10 @@ function WorkspaceTree({
       anchorRef.current = row.path
       setSelection([row])
       if (row.isDir) toggleExpand(row.path)
+      // 右侧面板里单击文件就是「打开」：面板本来就窄，再要双击反直觉
+      else if (variant === 'panel') onOpenFile(row.path)
     },
-    [rows, rowMeta, setSelection, toggleExpand],
+    [rows, rowMeta, setSelection, toggleExpand, variant, onOpenFile],
   )
 
   /** 目录 / 文件 → 输入框附件（右键引用、拖到输入框共用） */
@@ -510,7 +559,7 @@ function WorkspaceTree({
       const result = await fileTransferService.move(
         pending.map((item) => item.path),
         targetDir,
-        sessionId || undefined,
+        ownerId || undefined,
       )
       track('sidebar.file.op', {
         op: 'move',
@@ -561,7 +610,7 @@ function WorkspaceTree({
       )
       setSelection([])
     },
-    [sessionId, refreshAfterFileOp, setSelection],
+    [ownerId, refreshAfterFileOp, setSelection],
   )
 
   const { startDrag, draggedRef } = useTreeDrag({
@@ -644,7 +693,7 @@ function WorkspaceTree({
   const handlePaste = useCallback(
     async (row: TreeMenuTarget) => {
       const dir = pasteDirFor(row)
-      const result = await fileTransferService.paste(dir, sessionId || undefined)
+      const result = await fileTransferService.paste(dir, ownerId || undefined)
       track('sidebar.file.op', {
         op: 'paste',
         ok: result.ok,
@@ -662,7 +711,7 @@ function WorkspaceTree({
       showToast(tpl('已粘贴 $__count__ 项', { count: result.copied ?? 0 }), 2000)
       refreshAfterFileOp(dir)
     },
-    [sessionId, refreshAfterFileOp],
+    [ownerId, refreshAfterFileOp],
   )
 
   const handleDelete = useCallback(
@@ -693,7 +742,7 @@ function WorkspaceTree({
       for (const target of targets) {
         const result = await fileTransferService.remove(
           target.path,
-          sessionId || undefined,
+          ownerId || undefined,
         )
         if (result.ok) {
           removed++
@@ -736,7 +785,7 @@ function WorkspaceTree({
       refreshAfterFileOp(...targets.map((target) => parentDirOf(target.path)))
       setSelection([])
     },
-    [sessionId, refreshAfterFileOp, setSelection],
+    [ownerId, refreshAfterFileOp, setSelection],
   )
 
   /** 提交行内重命名 */
@@ -751,7 +800,7 @@ function WorkspaceTree({
     const result = await fileTransferService.rename(
       current.path,
       name,
-      sessionId || undefined,
+      ownerId || undefined,
     )
     track('sidebar.file.op', { op: 'rename', ok: result.ok })
     if (!result.ok) {
@@ -767,7 +816,7 @@ function WorkspaceTree({
       return
     }
     refreshAfterFileOp(parentDirOf(current.path))
-  }, [sessionId, refreshAfterFileOp, applyRenaming])
+  }, [ownerId, refreshAfterFileOp, applyRenaming])
 
   const virtualizer = useVirtualizer({
     count: rows.length,

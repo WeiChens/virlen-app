@@ -24,7 +24,11 @@ use crate::agent::native_tools::execute::pty_session::SizeTracker;
 #[cfg(target_os = "windows")]
 use crate::sandbox::pty::PseudoConsole;
 
-/// 一个服务的伪控制台句柄（输入写端 + `HPCON`）。
+/// 一个伪控制台句柄（输入写端 + `HPCON`）。
+///
+/// ⚠️ 名字里的 Service 只是**历史原因**（先给后台服务做的）：用户自己的终端
+/// （`native_tools::user_shell`）用的是**同一个类型**。两边的约束一字不差 ——
+/// 关控制台 = 杀附着进程、尺寸要去重、非 Windows 是空壳；各写一份必然在其中一条上分叉。
 pub(crate) struct ServicePty {
     /// 输入写端：用户键击写这里（`None` = 已关闭 / 从未拿到）。
     #[cfg(target_os = "windows")]
@@ -42,7 +46,7 @@ pub(crate) struct ServicePty {
 impl ServicePty {
     /// `cols` / `rows`：伪控制台**创建时**的尺寸（写入去重器，使「与初始尺寸相同」的
     /// 首次上报也成为 no-op）。
-    pub(super) fn new(input: File, pty: PseudoConsole, cols: i16, rows: i16) -> Self {
+    pub(crate) fn new(input: File, pty: PseudoConsole, cols: i16, rows: i16) -> Self {
         let mut tracker = SizeTracker::default();
         tracker.changed(cols, rows);
         Self {
@@ -56,7 +60,7 @@ impl ServicePty {
     ///
     /// `false` = 写不进去（控制台已关闭 / 管道已断）—— 前端据此复位输入。
     /// ⚠️ 与命令路径一样**不记录内容**：PTY 里敲的常是密码 / token（§9 密钥红线）。
-    pub(super) fn write(&self, data: &str) -> bool {
+    pub(crate) fn write(&self, data: &str) -> bool {
         if data.is_empty() {
             return true;
         }
@@ -76,7 +80,7 @@ impl ServicePty {
     /// 与上报尺寸相同 → 直接回 true、不调 `ResizePseudoConsole`（见 [`SizeTracker`]）。
     /// ⚠️ 持锁调用 `resize_raw`：`HPCON` 是裸句柄，必须保证 `close()` 不能与之并发
     /// （两者共用同一把锁）。
-    pub(super) fn resize(&self, cols: u16, rows: u16) -> bool {
+    pub(crate) fn resize(&self, cols: u16, rows: u16) -> bool {
         let guard = match self.pty.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
@@ -98,7 +102,7 @@ impl ServicePty {
     ///
     /// `ClosePseudoConsole` 会终止仍附着在伪控制台上的进程树 —— 调用点只有两处，
     /// 都发生在「进程已经退出」之后：`runner::supervise` 的常驻等待任务、以及条目被清出时的 drop。
-    pub(super) fn close(&self) {
+    pub(crate) fn close(&self) {
         let mut guard = match self.pty.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
@@ -120,15 +124,15 @@ impl ServicePty {
 #[cfg(not(target_os = "windows"))]
 impl ServicePty {
     /// 非 Windows 恒 `false`（没有可写的伪控制台）
-    pub(super) fn write(&self, _data: &str) -> bool {
+    pub(crate) fn write(&self, _data: &str) -> bool {
         false
     }
 
     /// 非 Windows 恒 `false`（没有可调尺寸的伪控制台）
-    pub(super) fn resize(&self, _cols: u16, _rows: u16) -> bool {
+    pub(crate) fn resize(&self, _cols: u16, _rows: u16) -> bool {
         false
     }
 
     /// 非 Windows 无操作
-    pub(super) fn close(&self) {}
+    pub(crate) fn close(&self) {}
 }

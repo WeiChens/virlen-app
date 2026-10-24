@@ -14,3 +14,4 @@ pub mod preview;
 pub mod rag;
 pub mod service;
 pub mod session_db;
+pub mod terminal;

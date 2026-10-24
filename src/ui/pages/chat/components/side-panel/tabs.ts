@@ -5,8 +5,14 @@
  * 1. **id 由内容决定**：文件是 `file:<绝对路径>`，服务终端是 `service:<会话id>:<服务id>`
  *    （服务 id 只在会话内唯一）。同一个内容再点一次是「激活已有标签」而不是再开一个 ——
  *    文件开两份会各持一份草稿、互相踩；终端开两份则是两个 xterm 抢同一个伪控制台；
- * 2. **kind 目前两种**：`file`（文本编辑 / 预览）与 `service`（后台服务终端）。渲染分支在
- *    `index.tsx::renderTab()`，之后接网址访问（`url`）等就在那里加一支；
+ *    ⚠️ 但这只对**同一个会话**成立：宿主把标签按会话分桶（`side-panel/sessions.ts`），
+ *    落库时给 id 加一个会话前缀 —— 同一个文件在两个会话里各有一份草稿，id 必须分开。
+ *    所以**去重一律按内容（kind + 路径 / 服务 / 终端 id）判，不按 `id` 字符串比**：
+ *    `id` 在容器眼里是不透明的渲染 key（前缀由宿主加），比对它就会「同一个文件开两份」；
+ * 2. **kind 目前六种**：`file`（文本编辑 / 预览）、`service`（后台服务终端）、
+ *    `guide`（开始页：右侧栏的「门厅」，三个入口胶囊）、`files`（工作区文件树）、
+ *    `terminal`（**用户自己的交互终端**，一个终端一个标签）与 `browser`（**网页**，
+ *    一个网页一个标签）。渲染分支在 `index.tsx::renderTab()`，加一种内容只加一支；
  *    打开/关闭/选中这套逻辑不用改；
  * 3. **关掉当前激活的标签**：请**右边**那位上来（浏览器的口径：关掉当前页，右边那页顶上来），
  *    没有右邻居再退到左边；全关光就是 `null`（宿主据此把整个容器卸掉）。
@@ -39,11 +45,64 @@ export type SidePanelTab =
       /** 归属会话标签（新对话页的全局视图才有；本会话视图不显示） */
       sessionLabel?: string
     }
+  | {
+      id: string
+      kind: 'guide'
+    }
+  | {
+      id: string
+      kind: 'files'
+    }
+  | {
+      id: string
+      kind: 'terminal'
+      /** 终端 id（Rust 侧 `term_N`，**全局唯一** —— 计数在 Rust 里） */
+      termId: string
+      /** 归属会话（关标签时要拿它去 `cmd_terminal_kill`；会话隔离靠它） */
+      sessionId: string
+      /** 实际使用的 shell 类型 id（`powershell` / `cmd` / `pwsh` / `gitbash`）；展示时经 `terminal/shells.tsx::shellLabel` */
+      shell: string
+      /** 工作目录（会话工作区）—— 只给标签 tooltip 用（面板里不再占一行元信息） */
+      cwd: string
+      /** shell 进程 pid（开终端时 Rust 回的；**只用于诊断**，界面不展示） */
+      pid: number
+      /**
+       * 标签上的序号（开的时候是第几个终端）。关掉其他终端**不重排** ——
+       * 重排会让标签文字跟着别人的生死变，反而更难认。
+       */
+      index: number
+    }
+  | {
+      id: string
+      kind: 'browser'
+      /**
+       * 当前地址（空串 = 空白页，等着用户输入）。
+       * 它是**面板的镜像**：面板里每次导航都会回调宿主写回这里，标签标题因此跟着换；
+       * 反方向不成立 —— 面板只在挂载时读一次，之后地址归它自己管（历史在它那儿）。
+       */
+      url: string
+      /**
+       * 页面自己报上来的 `document.title`（标签栏优先显示它）。
+       * 空串 / 未设置 = 还没拿到：退回主机名（`urlLabel`），而不是给一个空标签。
+       * ⚠️ 不落盘：标题是运行时状态，重启后应当重新由页面报上来。
+       */
+      title?: string
+      /** 宿主自增的序号：只用来造 id（`browser:3`），不显示（标题优先用页面标题） */
+      seq: number
+    }
+
+/** 右侧栏的「页面」（按 kind 打开，不像文件 / 服务那样按内容身份去重） */
+export type SidePanelPageKind = 'guide' | 'files'
+
+/** 开始页的标签 id（同会话只一个：再点「+」只切过去） */
+export const GUIDE_TAB_ID = 'guide'
+
+/** 工作区文件树的标签 id（树根跟着当前会话走，所以不把路径编进 id） */
+export const FILES_TAB_ID = 'files'
 
 /** 文件标签打开时落在哪个视图：present 的交付物默认给人看，普通打开仍是给人改 */
 export type FileTabView = 'edit' | 'preview'
 
-/** 文件标签的 id：路径即身份（同一个文件不会开出两个标签） */
 export function fileTabId(path: string): string {
   return `file:${path}`
 }
@@ -62,6 +121,102 @@ export function serviceTabId(sessionId: string, serviceId: string): string {
   return `service:${sessionId}:${serviceId}`
 }
 
+/** 用户终端标签的 id：终端 id 本身全局唯一（Rust 侧计数器）——前缀仍由宿主按会话加 */
+export function terminalTabId(termId: string): string {
+  return `terminal:${termId}`
+}
+
+/** 网页标签的 id：`seq` 是宿主自增的序号（同一个网址可以开两个标签，浏览器口径） */
+export function browserTabId(seq: number): string {
+  return `browser:${seq}`
+}
+
+/** 造一个网页标签（`url` 空串 = 空白页） */
+export function browserTab(input: { seq: number; url?: string }): SidePanelTab {
+  return { id: browserTabId(input.seq), kind: 'browser', url: input.url ?? '', seq: input.seq }
+}
+
+/**
+ * 打开一个网页标签。
+ *
+ * 与文件 / 终端**不同**：这里不去重 —— 同一个网址开两个标签是浏览器最基本的用法
+ *（对照两个分支、同一个文档的不同锚点）；身份是 `seq`，所以两份互不影响。
+ */
+export function openBrowserTab(
+  tabs: SidePanelTab[],
+  input: { seq: number; url?: string },
+): { tabs: SidePanelTab[]; activeId: string; added: boolean } {
+  const tab = browserTab(input)
+  return { tabs: [...tabs, tab], activeId: tab.id, added: true }
+}
+
+/**
+ * 面板里导航了一次 → 把地址写回标签（标签标题 = 主机名，所以标题会跟着换）。
+ * 地址没变 / 标签已经关掉 / 不是网页标签时返回原引用（宿主据此跳过重渲染）。
+ */
+export function updateBrowserTab(
+  tabs: SidePanelTab[],
+  id: string,
+  url: string,
+): SidePanelTab[] {
+  const index = tabs.findIndex((tab) => tab.id === id)
+  if (index < 0) return tabs
+  const tab = tabs[index]
+  if (tab.kind !== 'browser' || tab.url === url) return tabs
+  const next = [...tabs]
+  next[index] = { ...tab, url }
+  return next
+}
+
+/**
+ * 页面报来新标题 → 写到标签上（标签栏显示它）。
+ *
+ * 标题没变 / 标签已经关掉 / 不是网页标签时返回原引用（宿主据此跳过重渲染）。
+ * ⚠️ 标题与地址是两件事：SPA 换标题时 `url` 可能没变，反过来也一样。
+ */
+export function updateBrowserTitle(
+  tabs: SidePanelTab[],
+  id: string,
+  title: string,
+): SidePanelTab[] {
+  const index = tabs.findIndex((tab) => tab.id === id)
+  if (index < 0) return tabs
+  const tab = tabs[index]
+  const nextTitle = title.trim()
+  // 空白标题当「没拿到」：留着上一次的，也不给标签一个空文字
+  if (tab.kind !== 'browser' || !nextTitle || tab.title === nextTitle) return tabs
+  const next = [...tabs]
+  next[index] = { ...tab, title: nextTitle }
+  return next
+}
+
+/** 造一个用户终端标签 */
+export function terminalTab(input: {
+  termId: string
+  sessionId: string
+  shell: string
+  cwd: string
+  pid: number
+  index: number
+}): SidePanelTab {
+  return { id: terminalTabId(input.termId), kind: 'terminal', ...input }
+}
+
+/**
+ * 新终端该用哪个序号：**已用最大序号 + 1**。
+ *
+ * ⚠️ 不能用「当前开着几个终端 + 1」：终端 1 / 2 / 3 开着，关掉 1 与 2 再新开一个，
+ * 数量算出来是 2 → 与新标签里原来那个「终端 3」不撞，但与「终端 2」撞（如果它还开着）。
+ * 序号本身**不重排**（关掉别人的不该改我的标签文字），所以只能往上加。
+ */
+export function nextTerminalIndex(tabs: SidePanelTab[]): number {
+  let max = 0
+  for (const tab of tabs) {
+    if (tab.kind === 'terminal' && tab.index > max) max = tab.index
+  }
+  return max + 1
+}
+
 /** 造一个服务终端标签 */
 export function serviceTab(input: {
   sessionId: string
@@ -76,14 +231,118 @@ export function serviceTab(input: {
   }
 }
 
+/** 造一个「页面」标签（开始页 / 工作区文件树） */
+export function pageTab(kind: SidePanelPageKind): SidePanelTab {
+  return { id: kind === 'guide' ? GUIDE_TAB_ID : FILES_TAB_ID, kind }
+}
+
+/**
+ * 打开一个「页面」：已开着就只切过去，否则追加到末尾。
+ *
+ * 与 `openFileTab` 同一形状（`{ tabs, activeId, added }`）—— 宿主只记一套口径。
+ */
+export function openPageTab(
+  tabs: SidePanelTab[],
+  kind: SidePanelPageKind,
+): { tabs: SidePanelTab[]; activeId: string; added: boolean } {
+  const tab = pageTab(kind)
+  // 按 kind 找（不按 id）：id 上可能带着宿主的会话前缀
+  const opened = tabs.find((item) => item.kind === kind)
+  if (opened) return { tabs, activeId: opened.id, added: false }
+  return { tabs: [...tabs, tab], activeId: tab.id, added: true }
+}
+
+/**
+ * 在「开始页」里点了一个入口：把开始页**原地换成**目标页（参考实现的口径 ——
+ * 开始页是门厅，不是常驻页面；点完就该消失，标签栏不留一个「开始」）。
+ *
+ * 三种情形：
+ * - 目标页没开着 → 新标签落在开始页原来的位置上（用户看到的还是那一格）；
+ * - 目标页已经开着 → 只把它激活，顺手把开始页关掉；
+ * - 传进来的 `fromId` 已经不在（菜单开着时被关掉）→ 退化成普通的 `openPageTab`。
+ */
+export function replacePageTab(
+  tabs: SidePanelTab[],
+  kind: SidePanelPageKind,
+  fromId: string,
+): { tabs: SidePanelTab[]; activeId: string; added: boolean } {
+  const opened = openPageTab(tabs, kind)
+  if (!tabs.some((item) => item.id === fromId)) return opened
+  // 目标页已经开着：只需激活它，再把来源页（开始页）关掉
+  if (!opened.added) {
+    return {
+      tabs: opened.tabs.filter((item) => item.id !== fromId),
+      activeId: opened.activeId,
+      added: false,
+    }
+  }
+  // 新标签先挿在末尾：要接管来源页那一格，先把「来源页 + 它自己」一起摸出来
+  const rest = opened.tabs.filter(
+    (item) => item.id !== fromId && item.id !== opened.activeId,
+  )
+  const from = tabs.findIndex((item) => item.id === fromId)
+  const moved = opened.tabs.find((item) => item.id === opened.activeId)!
+  const at = Math.max(0, Math.min(from, rest.length))
+  const next = [...rest]
+  next.splice(at, 0, moved)
+  return { tabs: next, activeId: opened.activeId, added: true }
+}
+
 /** 打开一个服务终端标签：已开着就只切过去（同一个伪控制台不能交给两份 xterm） */
 export function openServiceTab(
   tabs: SidePanelTab[],
   input: { sessionId: string; serviceId: string; name: string; sessionLabel?: string },
 ): { tabs: SidePanelTab[]; activeId: string; added: boolean } {
-  const id = serviceTabId(input.sessionId, input.serviceId)
-  if (tabs.some((tab) => tab.id === id)) return { tabs, activeId: id, added: false }
-  return { tabs: [...tabs, serviceTab(input)], activeId: id, added: true }
+  // 按「会话 + 服务」找（不按 id）：服务 id 只在会话内唯一，与标签 id 的前缀无关
+  const opened = tabs.find(
+    (tab) =>
+      tab.kind === 'service' &&
+      tab.sessionId === input.sessionId &&
+      tab.serviceId === input.serviceId,
+  )
+  if (opened) return { tabs, activeId: opened.id, added: false }
+  const tab = serviceTab(input)
+  return { tabs: [...tabs, tab], activeId: tab.id, added: true }
+}
+
+/**
+ * 把一个**新**标签放在 `fromId` 原来那一格（并关掉 `fromId`）。
+ *
+ * 开始页的「新建终端」用它：起终端是异步的（先 `cmd_terminal_start`，拿到 id 才有标签），
+ * 所以不能走 `replacePageTab`（那个只认页面 kind）。用户看到的仍然是「点了那一扇门，
+ * 它就变成了终端」—— 标签不多出一个，位置也不跳。
+ * `fromId` 已经不在了（菜单开着时被关掉）→ 追加到末尾。
+ */
+export function replaceTabWith(
+  tabs: SidePanelTab[],
+  tab: SidePanelTab,
+  fromId: string,
+): { tabs: SidePanelTab[]; activeId: string } {
+  const rest = tabs.filter((item) => item.id !== fromId && item.id !== tab.id)
+  const from = tabs.findIndex((item) => item.id === fromId)
+  const at = from < 0 ? rest.length : Math.min(from, rest.length)
+  const next = [...rest]
+  next.splice(at, 0, tab)
+  return { tabs: next, activeId: tab.id }
+}
+
+/** 打开一个终端标签：同一个终端不会开出两份（两个 xterm 抢一个伪控制台） */
+export function openTerminalTab(
+  tabs: SidePanelTab[],
+  input: {
+    termId: string
+    sessionId: string
+    shell: string
+    cwd: string
+    pid: number
+    index: number
+  },
+): { tabs: SidePanelTab[]; activeId: string; added: boolean } {
+  const tab = terminalTab(input)
+  // 按终端 id 找（不按标签 id）：两个 xterm 抢一个伪控制台是必须防的事
+  const opened = tabs.find((item) => item.kind === 'terminal' && item.termId === input.termId)
+  if (opened) return { tabs, activeId: opened.id, added: false }
+  return { tabs: [...tabs, tab], activeId: tab.id, added: true }
 }
 
 /**
@@ -102,20 +361,21 @@ export function openFileTab(
   viewSeq?: number,
 ): { tabs: SidePanelTab[]; activeId: string; added: boolean } {
   const tab = fileTab(path, view, viewSeq)
-  const index = tabs.findIndex((item) => item.id === tab.id)
+  // 按路径找（不按 id）：id 上带着宿主的会话前缀，拿它比会「同一个文件开两份」
+  const index = tabs.findIndex((item) => item.kind === 'file' && item.path === path)
   if (index < 0) return { tabs: [...tabs, tab], activeId: tab.id, added: true }
 
   const current = tabs[index]
   // 普通打开（无 view）不碰已开着标签的视图；值没变也不换引用，避免无意义重渲染
   if (current.kind !== 'file' || !view) {
-    return { tabs, activeId: tab.id, added: false }
+    return { tabs, activeId: current.id, added: false }
   }
   if (current.view === view && current.viewSeq === viewSeq) {
-    return { tabs, activeId: tab.id, added: false }
+    return { tabs, activeId: current.id, added: false }
   }
   const next = [...tabs]
   next[index] = { ...current, view, viewSeq }
-  return { tabs: next, activeId: tab.id, added: false }
+  return { tabs: next, activeId: current.id, added: false }
 }
 
 /**

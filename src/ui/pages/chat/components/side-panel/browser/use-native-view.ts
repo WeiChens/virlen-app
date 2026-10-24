@@ -1,0 +1,199 @@
+/**
+ * 原生网页视图的**宿主**：把 DOM 里的一个占位 div 翻译成 WebView2 子视图的位置与显隐。
+ *
+ * 为什么需要这一层：child webview 是**原生窗口**，浮在 HTML 之上，它不知道自己在页面布局里
+ * 该占哪一格。DOM 这边只负责量出一个 rect（`getBoundingClientRect`），真正的像素在原生层。
+ *
+ * 四条口径：
+ * 1. **逐帧比对，变了才发**：面板宽度的 200ms 过渡、拖分隔条、窗口缩放都会让 rect 每帧变化，
+ *    一帧一次命令才跟得上；但静止时必须一条都不发（否则 60 次/秒的 IPC 白烧 CPU）。
+ * 2. **不可见就 hide，不销毁**：切标签、收起面板都要保住页面状态（滚动位置、表单、登录）。
+ *    rect 的宽或高小于 2px（`display:none` 就是 0）即视为不可见。
+ *    ⚠️ 拖面板宽度时（祖先 `.is-resizing`）也要藏起来：原生视图是**子窗口**，
+ *    指针一进它的矩形，`document` 上的 `mousemove` / `mouseup` 就收不到了 —— 拖动会断在半路。
+ * 3. **建视图要等布局**：地址有了但还没量到 rect（首次挂载那一帧、后台标签）时不创建，
+ *    否则 WebView2 会拿到 0 尺寸或错位置。
+ * 4. **失败要能说出来**：创建失败（非桌面环境、命令报错）落到 `error`，由调用方展示 ——
+ *    静默失败等于永久白框。
+ */
+import { useEffect, useRef, useState, type RefObject } from 'react'
+import {
+  applyBrowserView,
+  closeBrowserView,
+  hasBrowserView,
+  navigateBrowserView,
+  openBrowserView,
+  reloadBrowserView,
+  type BrowserViewBounds,
+} from '@/infrastructure/browser/browser-view'
+
+interface Options {
+  /** 视图 label（一个网页标签一个，由调用方保证稳定） */
+  label: string
+  /** 要加载的地址（空串 = 空白页：不建视图） */
+  url: string
+  /** 刷新计数：变化即重载（地址不变时唯一能触发重载的信号） */
+  reloadToken: number
+}
+
+interface NativeBrowserView {
+  /** 挂到铺满内容区的占位元素上（原生视图会盖在它上面） */
+  hostRef: RefObject<HTMLDivElement | null>
+  /** 建不起来的原因（非桌面环境 / 命令失败）；`null` = 正常 */
+  error: string | null
+}
+
+/** 小于这个尺寸就算不可见（`display:none` 的元素 rect 正好是 0） */
+const MIN_SIZE = 2
+
+/** 位置变化小于这个值就不发命令（亚像素抖动没有意义，只是白跑一趟 IPC） */
+const MIN_DELTA = 0.5
+
+interface ViewState {
+  created: boolean
+  creating: boolean
+  visible: boolean
+  /** 上一次创建失败过：同一个地址不再每帧重试（改地址时重置，见 url 的 effect） */
+  failed: boolean
+  bounds: BrowserViewBounds
+  /** 最新想要的地址（异步创建期间用户可能又改了一次） */
+  wantUrl: string
+}
+
+function sameBounds(a: BrowserViewBounds, b: BrowserViewBounds): boolean {
+  return (
+    Math.abs(a.x - b.x) < MIN_DELTA &&
+    Math.abs(a.y - b.y) < MIN_DELTA &&
+    Math.abs(a.width - b.width) < MIN_DELTA &&
+    Math.abs(a.height - b.height) < MIN_DELTA
+  )
+}
+
+export function useNativeBrowserView({ label, url, reloadToken }: Options): NativeBrowserView {
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  const [error, setError] = useState<string | null>(() =>
+    hasBrowserView() ? null : 'unavailable',
+  )
+  const stateRef = useRef<ViewState>({
+    created: false,
+    creating: false,
+    visible: false,
+    failed: false,
+    bounds: { x: 0, y: 0, width: 0, height: 0 },
+    wantUrl: url,
+  })
+
+  /**
+   * 地址变化：已建好的视图直接导航；还没建的下一次 rAF 会带着新地址建。
+   * 地址被清空（用户重开空白页）时销毁视图 —— 留着它就等于留着一个看不见的页面在跑。
+   */
+  useEffect(() => {
+    const state = stateRef.current
+    state.wantUrl = url
+    // 换了地址就重新给一次机会（上一轮可能是网络 / 时机问题）
+    state.failed = false
+    if (!url) {
+      if (state.created || state.creating) {
+        state.created = false
+        state.visible = false
+        // 飞行中的 open 由它自己的 `.then` 在落地时收（这里先把 creating 放开，
+        // 否则那一边会以为「已被新一轮接管」而不 close，视图就泄漏了）
+        state.creating = false
+        void closeBrowserView(label)
+      }
+      return
+    }
+    if (state.created) void navigateBrowserView(label, url)
+  }, [label, url])
+
+  /** 刷新：只换计数、不动地址；首次挂载不算一次刷新 */
+  const reloadSeen = useRef(false)
+  useEffect(() => {
+    if (!reloadSeen.current) {
+      reloadSeen.current = true
+      return
+    }
+    void reloadBrowserView(label)
+  }, [label, reloadToken])
+
+  /** 逐帧同步：量 rect → 建视图 / 改大小 / 显隐。组件卸载时销毁视图。 */
+  useEffect(() => {
+    if (!hasBrowserView()) return
+    const state = stateRef.current
+    let frame = 0
+    let stopped = false
+
+    const tick = (): void => {
+      if (stopped) return
+      frame = requestAnimationFrame(tick)
+
+      const host = hostRef.current
+      if (!host) return
+      const rect = host.getBoundingClientRect()
+      const bounds: BrowserViewBounds = {
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+      }
+      // 没有地址、或者布局上根本看不见（别的标签 / 面板已收起）：不建，已建的就藏起来。
+      // 拖动面板宽度时也藏：子窗口会吃掉 document 上的 mousemove / mouseup（见文件头第 2 条）。
+      const dragging =
+        host.closest('.side-panel')?.classList.contains('is-resizing') ?? false
+      const visible =
+        !dragging && !!state.wantUrl && rect.width >= MIN_SIZE && rect.height >= MIN_SIZE
+
+      if (!state.created) {
+        if (!visible || state.creating || state.failed) return
+        state.creating = true
+        const target = state.wantUrl
+        openBrowserView(label, target, bounds)
+          .then(() => {
+            // 这一轮是不是已经被新一轮（StrictMode 的「卸载 → 再挂载」）接管了：
+            // 新一轮已开始创建（creating）或已建好（created）时，**不能**替它 close 同名视图。
+            const takenOver = state.creating || state.created
+            state.creating = false
+            if (stopped || !state.wantUrl) {
+              state.created = false
+              state.visible = false
+              // 真正卸载（没任何新一轮接管）时，这个刚建好的视图必须收掉，否则泄漏
+              if (!takenOver) void closeBrowserView(label)
+              return
+            }
+            state.created = true
+            state.visible = true
+            state.bounds = bounds
+            setError(null)
+            // 创建期间用户又换了地址：补一次导航（那次 effect 跑的时候 created 还是 false）
+            if (state.wantUrl !== target) void navigateBrowserView(label, state.wantUrl)
+          })
+          .catch((reason: unknown) => {
+            state.creating = false
+            state.failed = true
+            if (!stopped) setError(reason instanceof Error ? reason.message : String(reason))
+          })
+        return
+      }
+
+      if (!sameBounds(state.bounds, bounds) || state.visible !== visible) {
+        state.bounds = bounds
+        state.visible = visible
+        void applyBrowserView(label, bounds, visible)
+      }
+    }
+
+    frame = requestAnimationFrame(tick)
+    return () => {
+      stopped = true
+      cancelAnimationFrame(frame)
+      state.created = false
+      state.visible = false
+      state.creating = false
+      // 这里只收拾眼前这一份；飞行中的 open 由它自己的 `.then` 在落地时收
+      // （那里会先看 `state.creating`，避免把 StrictMode 下一轮刚建的视图杀掉）
+      void closeBrowserView(label)
+    }
+  }, [label])
+
+  return { hostRef, error }
+}

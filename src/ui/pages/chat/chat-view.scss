@@ -75,6 +75,8 @@
 
     // 工具栏图标按钮（搜索消息等）
     .toolbar-icon-btn {
+      /* 徽标（右侧栏收起时的标签数）绝对定位在右上角，靠它当参照 */
+      position: relative;
       width: 28px;
       height: 28px;
       display: flex;
@@ -85,6 +87,26 @@
       background: transparent;
       cursor: pointer;
       color: var(--text-secondary, #666);
+
+      /* 右上角小徽标：右侧栏收起后告诉用户「里面还开着几个标签」。
+         不接指针（点了要开面板，不是点徽标），不换行，超过两位也不撑大按钮 */
+      .toolbar-badge {
+        position: absolute;
+        top: -3px;
+        right: -3px;
+        min-width: 14px;
+        height: 14px;
+        padding: 0 3px;
+        box-sizing: border-box;
+        border-radius: 7px;
+        background: var(--accent-color, #4f46e5);
+        /* ⚠️ 品牌底上的字一律 `--primary-fg`（浅色主题色下自动转黑），不能写 #fff */
+        color: var(--primary-fg, #fff);
+        font-size: 9px;
+        line-height: 14px;
+        text-align: center;
+        pointer-events: none;
+      }
 
       &:hover {
         background: var(--hover-bg, #f0f0f0);

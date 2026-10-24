@@ -15,6 +15,12 @@
  *    被拖的标签跟着指针（内联 `transform`），拖动中就地预览、松手才上报一次最终下标
  *    （下标口径见 `tabs.ts::moveTab`）；**内容块按打开顺序排，不跟着标签排序** —— 挪 DOM 会重连
  *    子树的 effect，`@monaco-editor/react` 会把编辑器误 dispose 再 `setModel` 上去。
+ * 7. **别的会话的标签靠 `parkedTabs` 一直挂着**（不显示、不进标签栏）：切会话不清状态的
+ *    实现就是「从来没卸载过」，所以切过去再切回来，草稿 / 撤销栈 / 终端屏幕都是原样；
+ *    脏标记仍按标签记，但**上报给宿主的只算本会话**（否则后台会话的草稿会拦住眼前的操作）。
+ * 8. **但盯着磁盘 / 目录的只有一个**：常驻挂载 ≠ 常驻订阅。文件面板与文件树只在
+ *    `active`（= 当前激活标签 **且** 面板没收起）时才订 watcher —— 否则藏着的那批标签
+ *    各盯一个父目录，一次落盘换来十几次整文件重读（见 `workspace-file-watch` 用例）。
  *
  * 文件面板本身被替换成桩：这里只验容器怎么摆它、怎么汇总它，真实文件语义在
  * `workspace-file-panel` / `workspace-file-watch` 两个用例里。
@@ -26,9 +32,11 @@ import { createRoot } from 'react-dom/client'
 import SidePanel from '@/ui/pages/chat/components/side-panel'
 import {
   fileTab,
+  pageTab,
   serviceTab,
   type SidePanelTab,
 } from '@/ui/pages/chat/components/side-panel/tabs'
+import { scopeTabs } from '@/ui/pages/chat/components/side-panel/sessions'
 
 const { messageBoxMock } = vi.hoisted(() => ({ messageBoxMock: vi.fn() }))
 
@@ -65,13 +73,16 @@ vi.mock('@/services/editor-service', () => ({
     openWithConfig: vi.fn(() => Promise.resolve({ ok: true })),
   },
 }))
-/** 文件面板换成桩：容器只依赖它的 props（path / hideTitle / onDirtyChange / onClose） */
+/** 文件面板换成桩：容器只依赖它的 props（path / hideTitle / sessionId / onDirtyChange / onClose） */
 vi.mock('@/ui/pages/chat/components/workspace-file', async () => {
   const { useEffect } = await import('react')
   return {
     default: (props: {
       path: string
       hideTitle?: boolean
+      sessionId?: string
+      /** 此刻是不是「正在被看」：只有它才盯磁盘 */
+      active?: boolean
       onDirtyChange?: (dirty: boolean) => void
       onReloadReady?: (reload: (() => void) | null) => void
       onClose: () => void
@@ -85,6 +96,8 @@ vi.mock('@/ui/pages/chat/components/workspace-file', async () => {
         <div
           className="workspace-file-panel"
           data-path={props.path}
+          data-session={props.sessionId ?? ''}
+          data-active={String(props.active)}
           data-hide-title={String(!!props.hideTitle)}>
           <button type="button" className="stub-dirty" onClick={() => props.onDirtyChange?.(true)}>
             dirty
@@ -100,6 +113,21 @@ vi.mock('@/ui/pages/chat/components/workspace-file', async () => {
     },
   }
 })
+
+/**
+ * 工作区树换成桩：这里只验容器传下去的 `active`（该不该盯目录）与 `sessionId`
+ *（树根用哪个会话）；树自己的监听口径在 `sidebar-dir-watch` 用例里。
+ */
+vi.mock('@/ui/pages/chat/components/sidebar/workspace-tree', () => ({
+  default: (props: { variant?: string; sessionId?: string; active?: boolean }) => (
+    <div
+      className="stub-tree"
+      data-variant={props.variant ?? ''}
+      data-session={props.sessionId ?? ''}
+      data-active={String(props.active)}
+    />
+  ),
+}))
 
 /** 服务终端换成桩：容器只验「标签长什么样 / active 怎么传」，真实终端语义在 `service-terminal.test.tsx` */
 vi.mock('@/ui/pages/chat/components/service/ServiceTerminal', () => ({
@@ -195,7 +223,12 @@ function fakeRect(left: number, width: number): DOMRect {
 async function renderPanel(
   tabs: SidePanelTab[],
   activeId: string | null,
-  opts: { batch?: boolean } = {},
+  opts: {
+    batch?: boolean
+    parked?: SidePanelTab[]
+    sessionId?: string
+    collapsed?: boolean
+  } = {},
 ) {
   if (!root) {
     const host = document.createElement('div')
@@ -210,6 +243,11 @@ async function renderPanel(
         <SidePanel
           tabs={tabs}
           activeId={activeId}
+          // 别的会话挂着的标签：内容一直挂着，不显示、不进标签栏
+          parkedTabs={opts.parked}
+          sessionId={opts.sessionId}
+          // 收起 = 宽度收 0，内容照旧挂着（这是「不丢状态」的实现）
+          collapsed={opts.collapsed}
           onActiveChange={onActiveChange}
           onCloseTab={onCloseTab}
           // 不传时容器退化为逐个 onCloseTab（保留既有用例的断言口径）
@@ -828,4 +866,98 @@ it('关闭已保存跳过脏标签；「关闭」只关右键的那个（脏的�
   expect(closedBatches[closedBatches.length - 1]).toEqual([TAB_A.id])
   // A 是脏的：这一次要问
   expect(messageBoxMock).toHaveBeenCalledTimes(1)
+})
+
+/**
+ * 别的会话挂着的标签（`parkedTabs`）：**这就是「切会话不清状态」的实现** ——
+ * 它们的内容从来没被摘下来过（草稿 / 撤销栈 / 终端屏幕都活在子组件里），
+ * 只是不在标签栏里、也不显示。
+ */
+it('别的会话的标签：内容一直挂着，但不进标签栏、也不显示', async () => {
+  const PARKED = fileTab('E:/repo/src/parked.ts')
+  await renderPanel([TAB_A], TAB_A.id, { parked: [PARKED] })
+
+  expect(tabsEls().length).toBe(1)
+  const parkedPane = panes().find(
+    (pane) => pane.querySelector('[data-path="E:/repo/src/parked.ts"]'),
+  )
+  expect(parkedPane).toBeTruthy()
+  expect(parkedPane!.hasAttribute('hidden')).toBe(true)
+})
+
+it('切会话 = 换一桶：同一份内容不卸载（草稿、滚动位置都还在）', async () => {
+  await renderPanel([TAB_A], TAB_A.id, { parked: [TAB_B] })
+  const before = stub('E:/repo/src/b.ts')
+  expect(before).toBeTruthy()
+
+  // 切到另一个会话：A 变 parked、B 变当前 —— DOM 节点必须是原来那一个（不能卸载重建）
+  await renderPanel([TAB_B], TAB_B.id, { parked: [TAB_A] })
+  expect(stub('E:/repo/src/b.ts')).toBe(before)
+  expect(stub('E:/repo/src/a.ts')).toBeTruthy()
+})
+
+it('隐藏会话的脏不算「本会话有未保存草稿」；切回去它还是脏的', async () => {
+  await renderPanel([TAB_A], TAB_A.id, { parked: [TAB_B] })
+  dirtyReports.length = 0
+
+  // 别的会话里那份脏：不能拦住当前会话的切工作目录 / 关标签
+  act(() => stub('E:/repo/src/b.ts')!.querySelector<HTMLButtonElement>('.stub-dirty')!.click())
+  expect(dirtyReports.every((dirty) => dirty === false)).toBe(true)
+  expect(document.querySelector('.side-panel-tab-dirty')).toBeNull()
+
+  // 切到它那一桶：脏状态跟着回来（标签小圆点 + 上报宿主 true）
+  await renderPanel([TAB_B], TAB_B.id, { parked: [TAB_A] })
+  expect(dirtyReports[dirtyReports.length - 1]).toBe(true)
+  expect(document.querySelector('.side-panel-tab-dirty')).toBeTruthy()
+})
+
+it('文件面板拿的是**标签自己**的会话 id（挂着的那份不能跟着当前会话跑）', async () => {
+  const own = scopeTabs('sess-1', [fileTab('E:/repo/src/a.ts')])[0]
+  const other = scopeTabs('sess-2', [fileTab('E:/repo/src/b.ts')])[0]
+
+  await renderPanel([own], own.id, { parked: [other], sessionId: 'sess-1' })
+  expect(stub('E:/repo/src/a.ts')!.dataset.session).toBe('sess-1')
+  expect(stub('E:/repo/src/b.ts')!.dataset.session).toBe('sess-2')
+})
+
+/**
+ * 「盯磁盘」只给正在被看的那一个：内容常驻挂载是为了不丢草稿 / 终端屏幕，不是为了常驻订阅。
+ * 藏着的那批标签各盯一个父目录，一次落盘就是十几次整文件重读（口径见 `workspace-file-watch`）。
+ */
+it('只有「当前标签 + 面板未收起」才让文件面板盯盘', async () => {
+  const PARKED = fileTab('E:/repo/src/parked.ts')
+  const activeOf = (path: string) => stub(path)!.dataset.active
+
+  await renderPanel([TAB_A, TAB_B], TAB_A.id, { parked: [PARKED] })
+  expect(activeOf('E:/repo/src/a.ts')).toBe('true')
+  expect(activeOf('E:/repo/src/b.ts')).toBe('false')
+  expect(activeOf('E:/repo/src/parked.ts')).toBe('false')
+
+  // 切标签：上一个不盯了，这一个开始盯（同一块 DOM，没重建 → 草稿还在）
+  const node = stub('E:/repo/src/b.ts')
+  await renderPanel([TAB_A, TAB_B], TAB_B.id, { parked: [PARKED] })
+  expect(activeOf('E:/repo/src/a.ts')).toBe('false')
+  expect(activeOf('E:/repo/src/b.ts')).toBe('true')
+  expect(stub('E:/repo/src/b.ts')).toBe(node)
+
+  // 面板收起：连选中的那个也不再盯（内容还挂着，展开时它自己重读一次盘对齐）
+  await renderPanel([TAB_A, TAB_B], TAB_B.id, { parked: [PARKED], collapsed: true })
+  expect(activeOf('E:/repo/src/b.ts')).toBe('false')
+  expect(stub('E:/repo/src/b.ts')).toBe(node)
+})
+
+it('工作区文件标签：树根按标签自己的会话，且只有被看着时才盯目录', async () => {
+  const own = scopeTabs('sess-1', [pageTab('files')])[0]
+  const other = scopeTabs('sess-2', [pageTab('files')])[0]
+  const tree = (session: string) =>
+    document.querySelector<HTMLElement>(`.stub-tree[data-session="${session}"]`)
+
+  await renderPanel([own], own.id, { parked: [other], sessionId: 'sess-1' })
+  expect(tree('sess-1')!.dataset.active).toBe('true')
+  expect(tree('sess-1')!.dataset.variant).toBe('panel')
+  // 别的会话挂着的那棵：不显示，也不订任何目录
+  expect(tree('sess-2')!.dataset.active).toBe('false')
+
+  await renderPanel([own], own.id, { parked: [other], sessionId: 'sess-1', collapsed: true })
+  expect(tree('sess-1')!.dataset.active).toBe('false')
 })

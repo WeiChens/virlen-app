@@ -118,6 +118,10 @@ pub fn init_agent_engine(app: &tauri::AppHandle) {
     app.manage(repo);
     // 后台服务结束通知的界面出口（必须在引擎能起服务之前接上）
     native_tools::attach_service_notice_host(Arc::new(TauriServiceNoticeHost::new(app.clone())));
+    // 用户终端的输出推送出口（`terminal:output`）：接上以后键入回显不再等轮询
+    native_tools::attach_output_host(Arc::new(
+        crate::commands::terminal::TauriTerminalOutputHost::new(app.clone()),
+    ));
     // 记忆再蒸馏调度宿主：挂上后立刻尝试排空一次，之后由写路径闸门唤醒
     virlen_core::agent::memory::redistill::sched::attach_host(Arc::new(
         crate::commands::memory::GuiRedistillRuntime::new(app.clone()),

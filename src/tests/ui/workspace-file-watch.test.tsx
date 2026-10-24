@@ -7,6 +7,9 @@
  * 3. **本地干净 → 新内容自动刷进来**，基线 hash 跟着换，不出现未保存标记；
  * 4. **本地有草稿 → 绝不覆盖**，只挂一条黄条；点「重新加载」才换成磁盘那版。
  *
+ * 另一条（标签常驻挂载带来的）：**只有正在被看的那一个才订**（`active`）—— 不看着就退订，
+ * 重新被看着时先读一次盘对齐 hash（不盯期间的落盘不会再有事件），首次挂载不重复读。
+ *
  * Monaco 全部 mock（jsdom 起不来）：这里只验面板的状态机，最小编辑的区间在
  * `code-editor-apply-text-change` / `minimal-text-edit` 两个用例里各自守。
  */
@@ -91,15 +94,20 @@ function textFile(content: string, hash10 = 'hash1'): LoadedWorkspaceFile {
 
 let root: ReturnType<typeof createRoot> | null = null
 
-async function mount(path = 'E:/repo/src/a.ts') {
+async function mount(path = 'E:/repo/src/a.ts', active?: boolean) {
   const host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
-  const render = (nextPath: string) =>
+  const render = (nextPath: string, nextActive?: boolean) =>
     root!.render(
-      <WorkspaceFilePanel path={nextPath} onClose={() => {}} onDirtyChange={() => {}} />,
+      <WorkspaceFilePanel
+        path={nextPath}
+        active={nextActive}
+        onClose={() => {}}
+        onDirtyChange={() => {}}
+      />,
     )
-  await act(async () => render(path))
+  await act(async () => render(path, active))
   // watch 的订阅是 `await` 出来的（先过路径校验）：再冲一轮微任务，回调才拿得到
   await act(async () => {})
   return { render }
@@ -266,4 +274,64 @@ it('关掉面板（卸载）时取消订阅', async () => {
   root = null
 
   expect(unwatchMock).toHaveBeenCalledTimes(1)
+})
+
+/**
+ * 「只盯正在被看的那一个」：标签常驻挂载（切标签不卸载 / 切会话不清状态 / 面板收起也不卸载），
+ * 所以「挂在 DOM 里」不等于「该盯盘」—— 藏着的那十几个标签各订一个父目录 watcher，
+ * 一次落盘就是十几次整文件重读。
+ */
+it('不看着（active=false）时一个 watcher 也不订，内容照样加载', async () => {
+  await mount('E:/repo/src/a.ts', false)
+
+  expect(watchMock).not.toHaveBeenCalled()
+  expect(editor()!.value).toBe('hello')
+})
+
+it('首次挂上只读一次盘：不额外对齐（挂载时 load() 正在读它）', async () => {
+  await mount()
+
+  expect(watchMock).toHaveBeenCalledTimes(1)
+  expect(loadMock).toHaveBeenCalledTimes(1)
+})
+
+it('收起 / 切走（true → false）退订；回来（false → true）先读一次盘对齐，变了才刷新', async () => {
+  loadMock.mockReset()
+  loadMock
+    .mockResolvedValueOnce(textFile('hello'))
+    .mockResolvedValue(textFile('hello v2', 'hash2'))
+  const { render } = await mount()
+  expect(watchMock).toHaveBeenCalledTimes(1)
+
+  // 切到别的标签 / 收起面板：同一个组件不卸载，只是不盯了
+  await act(async () => render('E:/repo/src/a.ts', false))
+  await act(async () => {})
+  expect(unwatchMock).toHaveBeenCalledTimes(1)
+  expect(watchMock).toHaveBeenCalledTimes(1)
+
+  // 回来：不等事件，先把盘读一遍（不盯期间 AI / 终端可能改过），hash 不同才刷新
+  await act(async () => render('E:/repo/src/a.ts', true))
+  await act(async () => {})
+  await act(async () => {})
+  expect(watchMock).toHaveBeenCalledTimes(2)
+  expect(loadMock).toHaveBeenCalledTimes(2)
+  expect(editor()!.value).toBe('hello v2')
+})
+
+it('回来时磁盘没变（hash 相同）：对齐也不动草稿、不出现黄条', async () => {
+  loadMock.mockReset()
+  // 每次读盘都是同一版（含回到前台时那一次对齐）
+  loadMock.mockResolvedValue(textFile('hello', 'same'))
+  const { render } = await mount()
+
+  type('hello!')
+  await act(async () => render('E:/repo/src/a.ts', false))
+  await act(async () => {})
+  await act(async () => render('E:/repo/src/a.ts', true))
+  await act(async () => {})
+  await act(async () => {})
+
+  expect(loadMock).toHaveBeenCalledTimes(2)
+  expect(editor()!.value).toBe('hello!')
+  expect(note()).toBeNull()
 })

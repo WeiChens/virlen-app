@@ -1,6 +1,7 @@
 ﻿use std::fs;
 use tauri::Manager;
 
+mod browser_view;
 mod clipboard_files;
 /// 全部 `#[tauri::command]`；业务语义在 `virlen-core`
 mod commands;
@@ -483,6 +484,15 @@ pub fn run() {
             commands::service::cmd_service_console_read,
             commands::service::cmd_service_console_write,
             commands::service::cmd_service_console_resize,
+            // 用户自己的交互终端（右侧面板「新建终端」；**默认脱壳**，只服务界面）
+            commands::terminal::cmd_terminal_start,
+            // 四种 shell（cmd / powershell / pwsh / git bash）的「装没装」探测
+            commands::terminal::cmd_terminal_shells,
+            commands::terminal::cmd_terminal_read,
+            commands::terminal::cmd_terminal_write,
+            commands::terminal::cmd_terminal_resize,
+            commands::terminal::cmd_terminal_kill,
+            commands::terminal::cmd_terminal_list,
             // 源代码管理（语义在 `virlen-core::git`，全程 git 子进程）
             commands::git::git_repo_info,
             commands::git::git_status,
@@ -565,6 +575,15 @@ pub fn run() {
             commands::phone_audit::cmd_phone_audit_append,
             commands::phone_audit::cmd_phone_audit_list,
             commands::phone_audit::cmd_phone_audit_clear,
+            // 右侧栏「网页」标签：同一窗口里的原生子 WebView（X-Frame-Options 对 iframe 是硬限制，
+            // 对独立浏览上下文不适用 —— 见 `browser_view.rs` 文件头）
+            browser_view::browser_view_open,
+            browser_view::browser_view_apply,
+            browser_view::browser_view_navigate,
+            browser_view::browser_view_reload,
+            browser_view::browser_view_history,
+            browser_view::browser_view_current_url,
+            browser_view::browser_view_close,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -598,6 +617,14 @@ pub fn run() {
                     telemetry::track(
                         "tool.service.exit_cleanup",
                         serde_json::json!({ "count": stopped }),
+                    );
+                }
+                // 用户终端同理（与 Job 的 KILL_ON_JOB_CLOSE 双保险：正常退出要把进程树收干净）
+                let shells = virlen_core::agent::native_tools::kill_all_shells();
+                if shells > 0 {
+                    telemetry::track(
+                        "terminal.exit_cleanup",
+                        serde_json::json!({ "count": shells }),
                     );
                 }
                 // 再蒸馏任务不能跨进程存活

@@ -310,12 +310,20 @@ pub async fn cmd_delete_session(
     if result.is_ok() {
         // 会话没了 → 它的后台服务也不该继续跑；删除失败则不动（会话还在，服务就该还在）
         let stopped = virlen_core::agent::native_tools::kill_session_services(&session_id);
+        // 用户自己的终端同理：会话都删了，那个工作目录下的 shell 没有归属了
+        let shells = virlen_core::agent::native_tools::kill_session_shells(&session_id);
         // 待注入的图片消息（`role = vision_image`）同理：会话都没了，注入点也不存在了
         virlen_core::agent::native_tools::drop_image_messages(&session_id);
         if stopped > 0 {
             crate::telemetry::track(
                 "tool.service.session_cleanup",
                 serde_json::json!({ "count": stopped }),
+            );
+        }
+        if shells > 0 {
+            crate::telemetry::track(
+                "terminal.session_cleanup",
+                serde_json::json!({ "count": shells }),
             );
         }
     }

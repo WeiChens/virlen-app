@@ -13,16 +13,31 @@
  */
 import { expect, it } from 'vitest'
 import {
+  browserTab,
+  browserTabId,
   closeTab,
   closeTabs,
   fileTab,
   fileTabId,
   moveTab,
+  openBrowserTab,
   openFileTab,
+  openPageTab,
   openServiceTab,
+  openTerminalTab,
+  pageTab,
+  replacePageTab,
+  replaceTabWith,
   serviceTabId,
   tabDir,
   tabLabel,
+  terminalTab,
+  terminalTabId,
+  nextTerminalIndex,
+  updateBrowserTab,
+  updateBrowserTitle,
+  FILES_TAB_ID,
+  GUIDE_TAB_ID,
   type SidePanelTab,
 } from '@/ui/pages/chat/components/side-panel/tabs'
 
@@ -236,4 +251,202 @@ it('服务标签：已开着就只切过去（列表引用不变），并与文�
   expect(again.added).toBe(false)
   expect(again.tabs).toBe(opened.tabs)
   expect(again.activeId).toBe('service:s1:svc_1')
+})
+
+/**
+ * 「页面」标签（开始页 `guide` / 工作区文件树 `files`）是**单例**：
+ * 它们不按路径去重，而是按 kind —— `+` 连点两次只有一个开始页。
+ */
+it('页面标签：按 kind 单例，已开着就只切过去', () => {
+  const guide = openPageTab([], 'guide')
+  expect(guide.added).toBe(true)
+  expect(guide.activeId).toBe(GUIDE_TAB_ID)
+  expect(guide.tabs[0]).toMatchObject({ kind: 'guide', id: GUIDE_TAB_ID })
+
+  const again = openPageTab(guide.tabs, 'guide')
+  expect(again.added).toBe(false)
+  expect(again.tabs).toBe(guide.tabs)
+  expect(again.activeId).toBe(GUIDE_TAB_ID)
+
+  const files = openPageTab(guide.tabs, 'files')
+  expect(files.tabs.map((tab) => tab.kind)).toEqual(['guide', 'files'])
+  expect(files.activeId).toBe(FILES_TAB_ID)
+})
+
+/**
+ * 开始页是「门厅」不是常驻页面：点胶囊后它必须消失，且目标页**接管它那一格**
+ * （参考实现的 `replaceTab: true`；标签栏里多留一个「开始」只会让人误以为可以回到首页）。
+ */
+it('开始页点入口：目标页接管开始页的位置，开始页消失', () => {
+  const tabs = [fileTab('a'), pageTab('guide'), fileTab('b')]
+  const next = replacePageTab(tabs, 'files', GUIDE_TAB_ID)
+
+  expect(next.added).toBe(true)
+  expect(next.tabs.map((tab) => tab.kind)).toEqual(['file', 'files', 'file'])
+  expect(next.activeId).toBe(FILES_TAB_ID)
+})
+
+it('开始页点入口（目标页已开着）：只激活目标页，顺手关掉开始页', () => {
+  const tabs = [pageTab('files'), pageTab('guide')]
+  const next = replacePageTab(tabs, 'files', GUIDE_TAB_ID)
+
+  expect(next.added).toBe(false)
+  expect(next.tabs.map((tab) => tab.kind)).toEqual(['files'])
+  expect(next.activeId).toBe(FILES_TAB_ID)
+})
+
+it('开始页已不在（菜单开着时被关掉）：退化成普通打开，别把标签弄丢', () => {
+  const next = replacePageTab([fileTab('a')], 'files', GUIDE_TAB_ID)
+  expect(next.tabs.map((tab) => tab.kind)).toEqual(['file', 'files'])
+  expect(next.activeId).toBe(FILES_TAB_ID)
+})
+
+/** 造一个终端标签入参（序号只用于标签文字） */
+const term = (termId: string, index = 1) => ({
+  termId,
+  sessionId: 's1',
+  shell: 'powershell',
+  cwd: 'E:/repo',
+  pid: 100 + index,
+  index,
+})
+
+/**
+ * 用户终端：id 由终端 id 决定（同一个终端不能开两份 —— 两个 xterm 抢一个伪控制台），
+ * 重复打开只切过去。
+ */
+it('终端标签：id 即身份，重复打开只切过去', () => {
+  expect(terminalTabId('term_1')).toBe('terminal:term_1')
+  expect(terminalTab(term('term_1')).id).toBe('terminal:term_1')
+
+  const opened = openTerminalTab([], term('term_1'))
+  expect(opened.added).toBe(true)
+  expect(opened.activeId).toBe('terminal:term_1')
+
+  const again = openTerminalTab(opened.tabs, term('term_1', 2))
+  expect(again.added).toBe(false)
+  expect(again.tabs).toBe(opened.tabs)
+  expect(again.activeId).toBe('terminal:term_1')
+})
+
+it('终端标签：序号是标签文字的一部分，关掉、拖顺序都不改它', () => {
+  const tabs = [
+    ...openTerminalTab([], term('term_1', 1)).tabs,
+    ...openTerminalTab([], term('term_2', 2)).tabs,
+  ]
+  expect(tabs.map((tab) => (tab.kind === 'terminal' ? tab.index : 0))).toEqual([1, 2])
+
+  const moved = moveTab(tabs, 'terminal:term_2', 0)
+  expect(moved.map((tab) => (tab.kind === 'terminal' ? tab.index : 0))).toEqual([2, 1])
+
+  const closed = closeTab(tabs, 'terminal:term_1', 'terminal:term_1')
+  expect(closed.tabs.map((tab) => tab.id)).toEqual(['terminal:term_2'])
+  expect((closed.tabs[0] as { index?: number }).index).toBe(2)
+})
+
+/**
+ * 「新建终端」是异步的（先起进程才拿到 id），所以开始页不能用 `replacePageTab`：
+ * `replaceTabWith` 直接把新标签放进开始页那一格，看不到「开始页 ⭢ 新标签」的跳位。
+ */
+it('replaceTabWith：新标签接管来源页那一格，来源页消失', () => {
+  const tabs = [fileTab('a'), pageTab('guide'), fileTab('b')]
+  const next = replaceTabWith(tabs, terminalTab(term('term_9')), GUIDE_TAB_ID)
+
+  expect(next.tabs.map((tab) => tab.id)).toEqual([
+    'file:a',
+    'terminal:term_9',
+    'file:b',
+  ])
+  expect(next.activeId).toBe('terminal:term_9')
+})
+
+it('replaceTabWith：来源页已经不在时追加到末尾，不丢标签', () => {
+  const next = replaceTabWith([fileTab('a')], terminalTab(term('term_9')), GUIDE_TAB_ID)
+  expect(next.tabs.map((tab) => tab.id)).toEqual(['file:a', 'terminal:term_9'])
+  expect(next.activeId).toBe('terminal:term_9')
+})
+
+/**
+ * 终端序号：取「已用最大序号 + 1」，**不是**「当前开着几个终端 + 1」。
+ *
+ * ⚠️ 用数量会在「关掉中间那个再新开」时撞号：终端 1 / 2 开着，关掉 1 再开一个，
+ * 数量算出来是 2 → 两个标签都叫「终端 2」。序号不重排（关掉别人的不改我的名字），
+ * 所以只能往上加。
+ */
+it('终端序号：取已用最大值 + 1，关掉中间那个再开也不撞号', () => {
+  expect(nextTerminalIndex([])).toBe(1)
+  // 文件 / 网页 / 页面标签不参与计数
+  expect(nextTerminalIndex([fileTab('a'), pageTab('guide')])).toBe(1)
+
+  const term1 = terminalTab(term('term_1', 1))
+  const term2 = terminalTab(term('term_2', 2))
+  const term3 = terminalTab(term('term_3', 3))
+  expect(nextTerminalIndex([term1, term2, term3])).toBe(4)
+  // 关掉 1 与 2，只剩 3：下一个必须是 4（而不是 2）
+  expect(nextTerminalIndex([term3])).toBe(4)
+  expect(nextTerminalIndex([fileTab('a'), term1])).toBe(2)
+})
+
+/**
+ * 网页标签：与文件 / 终端相反，**同一个网址可以开好几个** —— 对照两个分支、
+ * 同一个文档的不同锚点都是它的正经用法。身份是宿主自增的 `seq`，不是网址。
+ */
+it('网页标签：id 由序号决定（同一个网址也能开两份），每次都追加并激活', () => {
+  expect(browserTabId(3)).toBe('browser:3')
+  expect(browserTab({ seq: 3, url: 'https://a.com/' }).id).toBe('browser:3')
+
+  const first = openBrowserTab([], { seq: 1, url: 'https://a.com/' })
+  expect(first.added).toBe(true)
+  expect(first.activeId).toBe('browser:1')
+
+  const second = openBrowserTab(first.tabs, { seq: 2, url: 'https://a.com/' })
+  expect(second.tabs.map((tab) => tab.id)).toEqual(['browser:1', 'browser:2'])
+  expect(second.activeId).toBe('browser:2')
+})
+
+it('网页标签：地址写回（标题跟着换），值没变 / 标签不在 / 不是网页都返回原引用', () => {
+  const tabs = [
+    fileTab('a'),
+    browserTab({ seq: 1, url: 'https://a.com/' }),
+    browserTab({ seq: 2, url: '' }),
+  ]
+  const moved = updateBrowserTab(tabs, 'browser:1', 'https://b.com/x')
+  expect(moved).not.toBe(tabs)
+  expect(moved[1]).toMatchObject({ kind: 'browser', url: 'https://b.com/x', seq: 1 })
+  // 其他标签原封不动
+  expect(moved[0]).toBe(tabs[0])
+  expect(moved[2]).toBe(tabs[2])
+
+  expect(updateBrowserTab(moved, 'browser:1', 'https://b.com/x')).toBe(moved)
+  expect(updateBrowserTab(moved, 'browser:9', 'https://c.com/')).toBe(moved)
+  expect(updateBrowserTab(moved, 'file:a', 'https://c.com/')).toBe(moved)
+})
+
+it('网页标签：空白页的地址是空串（面板据此渲染输入引导，而不是加载 about:blank）', () => {
+  const tab = browserTab({ seq: 5 })
+  expect(tab.kind === 'browser' && tab.url).toBe('')
+})
+
+it('网页标签：标题写回只改文字（不动地址），没变 / 空标题 / 标签不在都返回原引用', () => {
+  const tabs = [
+    fileTab('a'),
+    browserTab({ seq: 1, url: 'https://a.com/' }),
+    browserTab({ seq: 2, url: 'https://b.com/' }),
+  ]
+  const named = updateBrowserTitle(tabs, 'browser:1', 'A 站首页')
+  expect(named).not.toBe(tabs)
+  expect(named[1]).toMatchObject({
+    kind: 'browser',
+    url: 'https://a.com/',
+    title: 'A 站首页',
+  })
+  // 其他标签原封不动
+  expect(named[0]).toBe(tabs[0])
+  expect(named[2]).toBe(tabs[2])
+
+  expect(updateBrowserTitle(named, 'browser:1', 'A 站首页')).toBe(named)
+  // 空标题不是「标题变成空」：宁可留着上一次的，也不要给标签一个空文字
+  expect(updateBrowserTitle(named, 'browser:1', '  ')).toBe(named)
+  expect(updateBrowserTitle(named, 'browser:9', 'x')).toBe(named)
+  expect(updateBrowserTitle(named, 'file:a', 'x')).toBe(named)
 })

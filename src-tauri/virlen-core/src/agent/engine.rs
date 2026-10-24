@@ -575,6 +575,8 @@ impl AgentEngine {
         clear_all_tool_call_histories();
         // 后台服务不跨生命周期存活：引擎销毁即收掉（GUI 退出另有 `RunEvent::Exit` 兜底，CLI 另有收尾）。
         crate::agent::native_tools::kill_all_services();
+        // 用户终端同理（它们属于界面会话，引擎销毁 = 这一侧的生命周期结束）。
+        crate::agent::native_tools::kill_all_shells();
     }
 }
 
