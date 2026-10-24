@@ -112,8 +112,12 @@ interface Props {
 /** 面板宽度：只有下限与兜底默认值，**没有固定上限**（最多给到整块可用宽度，见 `maxDragWidth`） */
 const MIN_WIDTH = 360
 const DEFAULT_WIDTH = 560
-/** 聊天区的最小可用宽度：连它都留不住，就让面板占满、聊天区先不显示 */
-const CHAT_MIN_WIDTH = 300
+/**
+ * 聊天区的最小可用宽度：连它都留不住，就让面板占满、聊天区先不显示。
+ * 450（旧值 300）：300 时消息气泡只剩一条窄栏，中文一行放不下几个字、输入框的工具行也挤掉；
+ * 与其把聊天区挤成一条，不如让面板占满（宿主把 `.chat-main` 隐起来，往回拖过这条线再回来）。
+ */
+const CHAT_MIN_WIDTH = 450
 /** 鼠标移动超过这么多像素才算「拖标签」（否则还是一次点击） */
 const DRAG_THRESHOLD = 4
 /** 拖完松手后多久内到达的 click 算「拖动的尾巴」（浏览器把它紧跟在 mouseup 后面发） */
@@ -131,7 +135,7 @@ function chatMainOf(panel: HTMLElement | null): HTMLElement | null {
   return null
 }
 
-/** 拖动下限：正常是 MIN_WIDTH；窗口窄到 `MIN_WIDTH + 300` 都放不下时，先让聊天区能露出来 */
+/** 拖动下限：正常是 MIN_WIDTH；窗口窄到 `MIN_WIDTH + CHAT_MIN_WIDTH` 都放不下时，先让聊天区能露出来 */
 function minDragWidth(available: number): number {
   if (available <= 0) return MIN_WIDTH
   return Math.min(MIN_WIDTH, Math.max(120, available - CHAT_MIN_WIDTH))
@@ -215,7 +219,7 @@ function SidePanel({
   /**
    * **第一次量到可用宽度时**按它的一半定宽（通常是首个标签打开的那一刻；加标签、切标签都不重算，
    * 用户拖出来的宽度不会被悄悄改回去）。之后窗口 / 左侧栏变化只更新「可用宽度」，
-   * 宽度本身不跟着改 —— 窄到聊天区不足 300 时由下面的 `expanded` 接管，把面板撑满。
+   * 宽度本身不跟着改 —— 窄到聊天区不足 `CHAT_MIN_WIDTH` 时由下面的 `expanded` 接管，把面板撑满。
    * ⚠️ 容器现在是**常驻挂载**的（没标签也在树上），首帧很可能量不到（布局还没排好）：
    * 所以定宽放在「第一次量到非 0」那一刻，而不是无条件在挂载时干一次（否则会永远停在 560）。
    */
@@ -248,13 +252,13 @@ function SidePanel({
   }, [measureAvailable])
 
   /**
-   * 聊天区会被压到不足 300px：面板占满，聊天区交给宿主先藏起来。
+   * 聊天区会被压到不足 `CHAT_MIN_WIDTH`（450）：面板占满，聊天区交给宿主先藏起来。
    * 收起时不算 —— 宽度是 0，拿它去比只会得「占满」并把聊天区藏掉。
    */
   const expanded = !collapsed && available > 0 && available - width < CHAT_MIN_WIDTH
   /**
    * 上屏宽度：占满态铺满整块可用宽度（`width` 里记的偏好值可能与眼前这块对不上）。
-   * **拖动中一律按 `width`**：否则从占满态往回拖，前 300px 面板一动不动，手柄就像坏的。
+   * **拖动中一律按 `width`**：否则从占满态往回拖，前 450px（`CHAT_MIN_WIDTH`）面板一动不动，手柄就像坏的。
    */
   const shownWidth = expanded && !resizing ? available : width
 
@@ -364,7 +368,7 @@ function SidePanel({
       document.body.style.userSelect = 'none'
 
       const onMove = (moveEvent: MouseEvent) => {
-        // 不能把聊天区压到 300 以下 —— 那条线交给 `expanded`（松手后铺满）
+        // 不能把聊天区压到 `CHAT_MIN_WIDTH` 以下 —— 那条线交给 `expanded`（松手后铺满）
         const next = Math.max(min, Math.min(max, Math.round(right - moveEvent.clientX)))
         setWidth(next)
       }
@@ -445,17 +449,17 @@ function SidePanel({
     const contentItems: ContextMenuItem[] =
       tab.kind === 'file'
         ? [
-            // 刷新归「内容动作」这一段（与文件类动作同一组），分隔线画在它上面
-            {
-              key: 'reload',
-              label: t('刷新'),
-              divider: true,
-              // 面板还没挂载完（刚打开 / 已卸载）时点不了
-              disabled: !reloadActionsRef.current.has(tab.id),
-              onClick: () => reloadActionsRef.current.get(tab.id)?.(),
-            },
-            ...fileMenuItems(tab.path, { withOpen: false }),
-          ]
+          // 刷新归「内容动作」这一段（与文件类动作同一组），分隔线画在它上面
+          {
+            key: 'reload',
+            label: t('刷新'),
+            divider: true,
+            // 面板还没挂载完（刚打开 / 已卸载）时点不了
+            disabled: !reloadActionsRef.current.has(tab.id),
+            onClick: () => reloadActionsRef.current.get(tab.id)?.(),
+          },
+          ...fileMenuItems(tab.path, { withOpen: false }),
+        ]
         : []
     return [
       { key: 'close', label: t('关闭'), onClick: () => void requestCloseTabs([target.id]) },
@@ -538,7 +542,7 @@ function SidePanel({
             sessionId={paneSessionIdOf(tab, sessionId)}
             // 不是当前标签 / 面板收起时不订任何目录 watcher（见 `workspace-tree`）
             active={live}
-            onAttachPaths={onAttachPaths ?? (() => {})}
+            onAttachPaths={onAttachPaths ?? (() => { })}
             onOpenFile={(path) => onOpenPath?.(path)}
             searchQuery={filesQuery}
             onSearchQueryChange={setFilesQuery}
@@ -597,7 +601,7 @@ function SidePanel({
    * 激活的标签滚进可视区：标签一多标签栏会横向滚，开一个新文件时
    * 它可能刚落在视野外（点标签本身不需要，但双击文件 / 已开着再点一下就靠它）。
    */
-  const tabRefs = useRef(new Map<string, HTMLDivElement>())
+  const tabRefs = useRef(new Map<string, HTMLElement>())
   useEffect(() => {
     const el = current ? tabRefs.current.get(current.id) : null
     // jsdom 没有实现 scrollIntoView：有才调
@@ -812,9 +816,8 @@ function SidePanel({
   return (
     <aside
       ref={panelRef}
-      className={`side-panel${resizing ? ' is-resizing' : ''}${expanded ? ' is-full' : ''}${
-        collapsed ? ' is-collapsed' : ''
-      }`}
+      className={`side-panel${resizing ? ' is-resizing' : ''}${expanded ? ' is-full' : ''}${collapsed ? ' is-collapsed' : ''
+        }`}
       // 占满态直接铺满「聊天区 + 面板」的整块可用宽度（宿主这时已经把聊天区藏起来了）
       style={{ width: shownWidth }}>
       <div
@@ -855,37 +858,43 @@ function SidePanel({
                       ? tab.url || t('浏览器')
                       : label
             return (
+              /* 一个标签 = 外层 div（拖动 / 右键 / 整行点击都挂它）+ 里面一颗真按钮 `role="tab"`
+                 + 平级的关闭按钮。
+                 ⚠️ 外层**不能**写成 <button>：关闭按钮也是 <button>，HTML 不允许按钮嵌按钮
+                 （解析器会把外层提前闭合），React 会报 “<button> cannot be a descendant of
+                 <button>”。`role="tab"` / `aria-selected` 归**内层那颗按钮**（键盘 Tab 到的是它），
+                 外层的 onClick 只负责「点标签的空白 / 内边也切过去」（内层点击会冒泡到这里）。 */
               <div
                 key={tab.id}
                 ref={(el) => {
                   if (el) tabRefs.current.set(tab.id, el)
                   else tabRefs.current.delete(tab.id)
                 }}
-                className={`side-panel-tab${active ? ' is-active' : ''}${
-                  drag?.id === tab.id ? ' is-dragging' : ''
-                }`}
+                className={`side-panel-tab${active ? ' is-active' : ''}${drag?.id === tab.id ? ' is-dragging' : ''
+                  }`}
                 onMouseDown={(event) => startTabDrag(event, tab)}
                 // 右键在标签上开菜单；空白处不弹（不给「关谁」的歧义）
-                onContextMenu={(event) => tabMenu.openAt(event, { id: tab.id })}>
+                onContextMenu={(event) => tabMenu.openAt(event, { id: tab.id })}
+                onClick={() => {
+                  // 拖完松手的那一下 click（指针还在被拖的标签上）不算点击
+                  const suppression = suppressClickRef.current
+                  if (
+                    suppression &&
+                    suppression.id === tab.id &&
+                    performance.now() < suppression.until
+                  ) {
+                    suppressClickRef.current = null
+                    return
+                  }
+                  onActiveChange(tab.id)
+                }}>
                 <button
                   type="button"
                   role="tab"
                   aria-selected={active}
                   className="side-panel-tab-btn"
                   title={title}
-                  onClick={() => {
-                    // 拖完松手的那一下 click（指针还在被拖的标签上）不算点击
-                    const suppression = suppressClickRef.current
-                    if (
-                      suppression &&
-                      suppression.id === tab.id &&
-                      performance.now() < suppression.until
-                    ) {
-                      suppressClickRef.current = null
-                      return
-                    }
-                    onActiveChange(tab.id)
-                  }}>
+                >
                   {tab.kind === 'file' && <FileTypeIcon filename={label} className="side-panel-tab-icon" />}
                   {tab.kind === 'service' && (
                     <span className="side-panel-tab-icon is-service">
@@ -922,7 +931,11 @@ function SidePanel({
                   className="side-panel-tab-close"
                   title={t('关闭')}
                   aria-label={t('关闭')}
-                  onClick={() => void requestCloseTab(tab.id)}>
+                  onClick={(e) => {
+                    // 外层 div 也开着「点标签切过去」：关标签不能顺手把那个标签激活
+                    e.stopPropagation()
+                    requestCloseTab(tab.id)
+                  }}>
                   <CloseSvg />
                 </button>
               </div>

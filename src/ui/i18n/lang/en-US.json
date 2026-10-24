@@ -2230,6 +2230,7 @@
   "浏览会话工作区的文件": "Browse files in this session's workspace",
   "新建终端": "New terminal",
   "在会话工作区运行命令": "Run commands in the session workspace",
+  "选择终端类型": "Choose terminal type",
   "浏览器": "Browser",
   "浏览网页": "Browse web pages",
   "即将支持": "Coming soon",

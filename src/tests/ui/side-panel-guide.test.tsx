@@ -8,7 +8,8 @@
  * 3. **没有工作区时「工作区文件」与「新建终端」禁用并说明原因**，而不是让人点进去读一句
  *    「未设置工作目录」；浏览器不依赖工作区，因此照常可点；
  * 4. **点胶囊 = 上报给宿主**（原地替换开始页的语义在 `tabs.ts::replacePageTab` / `replaceTabWith`，
- *    宿主那边做）；
+ *    宿主那边做）；终端**不带 shell** 上报（= 上次用的 = 后端默认），弹类型菜单的是
+ *    标题后面那颗单独的 ▾ —— 一个按钮里不能再塞一个按钮；
  * 5. **面板里的文件树是 `panel` 变体**：单击文件就打开（左侧栏仍是双击）。
  *
  * 文件树本身换成桩：这里只验「容器把它摆在哪、传了什么」，真实树语义在
@@ -171,9 +172,13 @@ async function renderPanel(
   })
 }
 
-const entries = () => [...document.querySelectorAll<HTMLButtonElement>('.panel-guide-entry')]
+const entries = () => [...document.querySelectorAll<HTMLElement>('.panel-guide-entry')]
+/** 整行（布局容器）：验顺序 / 文案 / 键帽时用它 */
 const entryOf = (kind: string) =>
-  document.querySelector<HTMLButtonElement>(`.panel-guide-entry[data-guide-entry="${kind}"]`)
+  document.querySelector<HTMLElement>(`.panel-guide-entry[data-guide-entry="${kind}"]`)
+/** 主操作那层（铺满整行的真按钮）：点它 = 直接开默认那种 */
+const hitOf = (kind: string) =>
+  entryOf(kind)?.querySelector<HTMLButtonElement>('.panel-guide-entry-hit') ?? null
 
 beforeAll(() => {
   // jsdom 没布局：容器量可用宽度时会拿 0 → 退回 DEFAULT_WIDTH，不影响这里的断言
@@ -205,7 +210,7 @@ it('开始页：三扇门按「文件 / 终端 / 浏览器」排，键帽与描�
     'browser',
   ])
   const files = entryOf('files')!
-  expect(files.disabled).toBe(false)
+  expect(hitOf('files')!.disabled).toBe(false)
   expect(files.textContent).toContain('工作区文件')
   expect(files.textContent).toContain('浏览会话工作区的文件')
   // 键帽来自命令表（primary 在 Windows 下是 Ctrl），不是写死的文本
@@ -214,13 +219,15 @@ it('开始页：三扇门按「文件 / 终端 / 浏览器」排，键帽与描�
     'Shift',
     'E',
   ])
+  // 一扇门里绝不能出现「按钮嵌按钮」：HTML 不允许，解析器会把外层提前闭合
+  expect(document.querySelectorAll('.panel-guide-entry button button')).toHaveLength(0)
 })
 
 it('开始页：终端与浏览器都接入了（可点 + 键帽从命令表取）', async () => {
   await renderPanel([pageTab('guide')])
 
   const terminal = entryOf('terminal')!
-  expect(terminal.disabled).toBe(false)
+  expect(hitOf('terminal')!.disabled).toBe(false)
   expect(terminal.textContent).not.toContain('即将支持')
   expect([...terminal.querySelectorAll('kbd')].map((k) => k.textContent)).toEqual([
     'Ctrl',
@@ -229,7 +236,7 @@ it('开始页：终端与浏览器都接入了（可点 + 键帽从命令表取�
 
   // 浏览器：现在真的会开一个网页标签，键帽同样来自命令表（Ctrl+T）
   const browser = entryOf('browser')!
-  expect(browser.disabled).toBe(false)
+  expect(hitOf('browser')!.disabled).toBe(false)
   expect(browser.textContent).not.toContain('即将支持')
   expect([...browser.querySelectorAll('kbd')].map((k) => k.textContent)).toEqual([
     'Ctrl',
@@ -237,13 +244,16 @@ it('开始页：终端与浏览器都接入了（可点 + 键帽从命令表取�
   ])
 
   await act(async () => {
-    terminal.click()
-    browser.click()
+    hitOf('terminal')!.click()
+    hitOf('browser')!.click()
   })
   expect(picked).toEqual(['terminal', 'browser'])
+  // 整行点击 = 不开菜单（类型菜单归标题后面那颗 ▾，见 `terminal-shells.test.tsx`）
+  expect(document.querySelectorAll('.context-menu')).toHaveLength(0)
+  expect(pickedShells).toEqual([undefined, undefined])
 })
 
-it('开始页：宿主接了类型列表时，点终端先弹菜单，选哪种就带哪个 id 上报', async () => {
+it('开始页：宿主接了类型列表时，整行直开默认那种（菜单归标题后那颗 ▾）', async () => {
   await renderPanel([pageTab('guide')], {
     loadShells: async () => [
       { id: 'powershell', available: true, default: true, hint: null },
@@ -252,38 +262,43 @@ it('开始页：宿主接了类型列表时，点终端先弹菜单，选哪种�
     ],
   })
 
+  // 有类型列表 ≠ 每次都得先挑一次：整行点下去照旧直开（宿主按上次用的 / 后端默认开）
   await act(async () => {
-    entryOf('terminal')!.click()
+    hitOf('terminal')!.click()
   })
-  const items = [...document.querySelectorAll<HTMLButtonElement>('.context-menu-item')]
-  expect(items.map((b) => b.textContent)).toEqual([
-    'Windows PowerShell（默认）',
-    '命令提示符',
-    'Git Bash（未安装）',
-  ])
-  // 菜单开着的时候一个终端都不该开
-  expect(picked).toEqual([])
-
-  await act(async () => items[1].click())
+  expect(document.querySelectorAll('.context-menu-item')).toHaveLength(0)
   expect(picked).toEqual(['terminal'])
-  expect(pickedShells).toEqual(['cmd'])
+  expect(pickedShells).toEqual([undefined])
+  // ▾ 在（可挑类型），但它是文案后面单独一颗按钮
+  expect(entryOf('terminal')!.querySelector('.panel-guide-entry-caret')).not.toBeNull()
 })
 
-it('开始页：没有工作区时「新建终端」也禁用（终端的工作目录就是会话工作区）', async () => {  await renderPanel([pageTab('guide')], { workspaceReady: false })
+it('开始页：没有工作区时「新建终端」也禁用（终端的工作目录就是会话工作区）', async () => {  await renderPanel([pageTab('guide')], {
+    workspaceReady: false,
+    // 接上类型列表：连 ▾ 也得跟着禁用（没工作目录时开终端本身就不成立）
+    loadShells: async () => [{ id: 'cmd', available: true, default: true, hint: null }],
+  })
 
   const terminal = entryOf('terminal')!
-  expect(terminal.disabled).toBe(true)
+  expect(hitOf('terminal')!.disabled).toBe(true)
   expect(terminal.textContent).toContain('这个会话没有工作区目录。')
   // 浏览器不依赖工作目录：照常可点
-  expect(entryOf('browser')!.disabled).toBe(false)
-  await act(async () => terminal.click())
+  expect(hitOf('browser')!.disabled).toBe(false)
+  await act(async () => hitOf('terminal')!.click())
+  expect(picked).toEqual([])
+  // 连 ▾ 一起禁用：没工作目录时开终端本身就不成立
+  const caret = terminal.querySelector<HTMLButtonElement>('.panel-guide-entry-caret')
+  expect(caret).not.toBeNull()
+  expect(caret!.disabled).toBe(true)
+  await act(async () => caret!.click())
+  expect(document.querySelectorAll('.context-menu-item')).toHaveLength(0)
   expect(picked).toEqual([])
 })
 
 it('开始页：点「工作区文件」把语义上报宿主（原地替换在宿主 / tabs.ts 那边做）', async () => {
   await renderPanel([pageTab('guide')])
 
-  await act(async () => entryOf('files')!.click())
+  await act(async () => hitOf('files')!.click())
   expect(picked).toEqual(['files'])
 })
 
@@ -291,9 +306,9 @@ it('开始页：没有工作区时「工作区文件」禁用，并把原因写�
   await renderPanel([pageTab('guide')], { workspaceReady: false })
 
   const files = entryOf('files')!
-  expect(files.disabled).toBe(true)
+  expect(hitOf('files')!.disabled).toBe(true)
   expect(files.textContent).toContain('这个会话没有工作区目录。')
-  await act(async () => files.click())
+  await act(async () => hitOf('files')!.click())
   expect(picked).toEqual([])
 })
 

@@ -18,11 +18,18 @@
  *    长了会让「关掉了却还在」的窗口变宽；拖动时又必须关掉过渡（否则手柄黏手）。
  *    容器现在**常驻挂载**（收起只是 `is-collapsed`），不再有「等过渡跑完再卸载」那套定时器，
  *    所以这个数只写在样式表里 —— 改它只影响观感，不影响任何卸载时机。
+ * ⑧ **标签的强调层级：激活 > 悬停 > 常态**（两档主题都要成立）。这一条写在 CSS 里就守不住：
+ *    旧写法（激活 `--bg-primary` / 悬停 `--hover-bg`）在亮色下两者都是 1.07:1（看不出选中），
+ *    暗色下悬停 1.40:1 反而比激活的 1.07:1 更亮 —— 看上去「划过的像选中」。
+ *    现在两者都是 theme-agnostic 的薄涂（悬停 = 文字色 7%，激活 = 品牌色 20%），
+ *    这里把两档主题的实际对比度算出来钉住。
  */
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import * as sass from 'sass'
+
+import { contrastRatio, normalizeHex } from '@/ui/theme/accentPalette'
 
 const PANEL_SCSS = 'src/ui/pages/chat/components/side-panel/style.scss'
 const FILE_PANEL_SCSS = 'src/ui/pages/chat/components/workspace-file/style.scss'
@@ -41,6 +48,47 @@ const panelCss = stripComments(sass.compileString(panelSrc).css)
 const filePanelCss = stripComments(sass.compileString(readProjectFile(FILE_PANEL_SCSS)).css)
 const themeCss = stripComments(sass.compileString(readProjectFile(THEME_SCSS)).css)
 const chatViewCss = stripComments(sass.compileString(readProjectFile(CHAT_VIEW_SCSS)).css)
+
+/** `#rrggbb` → 对比度计算要的 RGB（与 `accent-color-contract` 同一口径） */
+function rgbOf(hex: string) {
+  const h = normalizeHex(hex)
+  if (!h) throw new Error(`不是合法颜色：${hex}`)
+  return {
+    r: Number.parseInt(h.slice(1, 3), 16),
+    g: Number.parseInt(h.slice(3, 5), 16),
+    b: Number.parseInt(h.slice(5, 7), 16),
+  }
+}
+
+/** 取某一条选择器所在规则体里的全部令牌（sass 编译会把属性选择器的引号去掉，两边都去） */
+function themeTokens(selector: string): Record<string, string> {
+  const want = selector.replace(/['"]/g, '')
+  const out: Record<string, string> = {}
+  for (const rule of themeCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selectors = rule[1]
+      .split(',')
+      .map((s) => s.replace(/\s+/g, ' ').trim().replace(/['"]/g, ''))
+    if (!selectors.includes(want)) continue
+    for (const part of rule[2].split(';')) {
+      const i = part.indexOf(':')
+      if (i < 0) continue
+      out[part.slice(0, i).trim()] = part.slice(i + 1).trim()
+    }
+  }
+  if (Object.keys(out).length === 0) throw new Error(`theme.scss 里找不到 ${selector}`)
+  return out
+}
+
+/** `color-mix(in srgb, <fg> p%, transparent)` 叠在 <bg> 上 = 逐通道线性混合（同浏览器） */
+function over(fg: string, bg: string, p: number): string {
+  const f = rgbOf(fg)
+  const b = rgbOf(bg)
+  const ch = (x: number, y: number) =>
+    Math.round(x * p + y * (1 - p))
+      .toString(16)
+      .padStart(2, '0')
+  return `#${ch(f.r, b.r)}${ch(f.g, b.g)}${ch(f.b, b.b)}`
+}
 
 describe('右侧面板容器 · 样式契约', () => {
   it('非激活标签的内容真的不显示（切标签靠它，不靠卸载）', () => {
@@ -144,5 +192,52 @@ describe('右侧面板容器 · 样式契约', () => {
     expect(/\.side-panel\.is-resizing\s*\{([^}]*)\}/.exec(panelCss)?.[1]).toContain(
       'transition: none',
     )
+  })
+
+  it('标签的强调层级：激活 > 悬停 > 常态，两档主题都成立', () => {
+    const hoverRule = /\.side-panel-tab:hover:not\(\.is-active\)\s*\{([^}]*)\}/.exec(panelCss)?.[1]
+    const activeRule = /\.side-panel-tab\.is-active\s*\{([^}]*)\}/.exec(panelCss)?.[1]
+    expect(hoverRule, '悬停态规则').toBeTruthy()
+    expect(activeRule, '激活态规则').toBeTruthy()
+
+    // 不要退回这两档：它们的对比度取决于标签栏底色（亮 #fff / #f7f7f8 拉不开＝看不出选中；
+    // 暗 #313244 / #181825 亮过激活态＝悬停像选中）。见 style.scss 里那段注记。
+    expect(hoverRule).not.toContain('var(--hover-bg')
+    expect(activeRule).not.toContain('--bg-primary')
+
+    /** 规则里那一行 `color-mix(in srgb, var(--x) N%, transparent)` 的 N% */
+    const pct = (rule: string, token: string): number => {
+      const re = new RegExp(`color-mix\\(in srgb, var\\(--${token}\\) (\\d+)%, transparent\\)`)
+      const m = re.exec(rule)
+      expect(m, `规则里要有 var(--${token}) 的薄涂`).toBeTruthy()
+      return Number(m![1]) / 100
+    }
+    const hoverPct = pct(hoverRule!, 'text-primary')
+    const activePct = pct(activeRule!, 'primary')
+
+    const ratio = (a: string, b: string) => contrastRatio(rgbOf(a), rgbOf(b))
+    for (const [theme, selector] of [
+      ['亮色', '[data-theme=light]'],
+      ['暗色', '[data-theme=dark]'],
+    ] as const) {
+      const tokens = themeTokens(selector)
+      const bar = tokens['--bg-secondary']
+      const text = tokens['--text-primary']
+      const primary = tokens['--primary']
+
+      const activeBg = over(primary, bar, activePct)
+      const hoverBg = over(text, bar, hoverPct)
+      const active = ratio(activeBg, bar)
+      const hover = ratio(hoverBg, bar)
+
+      expect(active, `${theme}：激活底 ${activeBg} 对标签栏底 ${bar}`).toBeGreaterThan(1.2)
+      expect(hover, `${theme}：悬停底 ${hoverBg} 对标签栏底 ${bar}`).toBeGreaterThan(1.08)
+      expect(active, `${theme}：激活必须比悬停更强（否则划过的像选中）`).toBeGreaterThan(hover)
+      // 激活底上的字仍要过 AA（12px 小字）：所以文字用 --text-primary，不能用 --primary
+      expect(
+        ratio(text, activeBg),
+        `${theme}：激活标签文字对薄涂底（不能用 --primary，暗色只有 3.75:1）`,
+      ).toBeGreaterThanOrEqual(4.5)
+    }
   })
 })

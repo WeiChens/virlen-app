@@ -18,15 +18,25 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { settingsState } from '@/ui/store/settingStore'
 import { isTauriAvailable } from '@/services/rust-engine'
 import { applyZoomCommand, normalizeZoom, zoomCommandOf } from '@/domain/zoom'
+import { setAppliedZoomFactor } from './applied-zoom'
 
 /**
  * 应用缩放（幂等，可重复调用；脏值由 normalizeZoom 兜底）。
  * 非 Tauri（浏览器 dev / vitest）直接返回：那里没有 webview 可以缩放。
+ *
+ * ⚠️ 成功之后必须调 `setAppliedZoomFactor`：原生子视图要按「**已生效**」的倍率把 CSS 像素
+ *    换算成逻辑像素（`applied-zoom.ts` 里写了为什么不能读设置里的期望值）。
  */
 export async function applyWebviewZoom(factor: unknown): Promise<void> {
-  if (!isTauriAvailable()) return
+  const zoom = normalizeZoom(factor)
+  if (!isTauriAvailable()) {
+    // 没有 webview 可缩放，但换算口径仍要有值（单测 / 浏览器预览据此一致）
+    setAppliedZoomFactor(zoom)
+    return
+  }
   try {
-    await getCurrentWebviewWindow().setZoom(normalizeZoom(factor))
+    await getCurrentWebviewWindow().setZoom(zoom)
+    setAppliedZoomFactor(zoom)
   } catch (e) {
     // 不抛：缩放是外观项，失败不该把设置页 / 启动流程带崩
     console.warn('[zoom] 设置界面缩放失败：', e)

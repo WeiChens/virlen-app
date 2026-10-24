@@ -36,41 +36,74 @@
 }
 
 /* 一扇门 = 图标 + （标题 + 描述）+ 快捷键键帽。
+   结构上是「同一格网格叠两层」：
+   - `-hit`：铺满整行的**真按钮**（主操作 = 直接开默认那种；可 disabled、键盘可达）；
+   - `-body`：看得见的内容层，`pointer-events: none`，只有标题后面那颗 ▾ 例外。
+   为什么不写「一个 button 里再塞一个 button」：HTML 不允许（解析器会把外层提前闭合），
+   而 ▾（挑终端类型）必须是自己能点的控件 —— 「开一个终端」与「挑哪种终端」是两件事。
    `max-width: 100%` 让窄面板里也保住两侧留白，而不是横向撑破 */
 .panel-guide-entry {
-  display: flex;
-  gap: 14px;
-  align-items: center;
+  display: grid;
+  /* 只一列，且允许被内容压窄：不写这行，窄面板里描述（nowrap）会把行撑宽 */
+  grid-template-columns: minmax(0, 1fr);
   box-sizing: border-box;
   width: 100%;
   min-height: 56px;
-  padding: 14px 16px;
-  color: var(--text-primary, #1a1a1a);
-  font: inherit;
-  text-align: left;
+  max-width: 100%;
   background: var(--bg-secondary, #f7f7f8);
   border: 1px solid var(--border-color, #e5e5e5);
   border-radius: 20px;
-  cursor: pointer;
   transition: background 0.12s, border-color 0.12s;
 
-  &:hover:not(:disabled) {
+  &:hover:not(.is-disabled) {
     background: var(--hover-bg, #f0f0f0);
     border-color: var(--border-color-light, rgba(108, 108, 108, 0.134));
   }
 
   /* 禁用：只有「没有工作目录」的文件与终端两个入口（三个入口本身都已接入）。
      不给 hover 反馈，但描述照常可读 —— 用户要看到「为什么点不动」 */
-  &:disabled {
-    cursor: default;
+  &.is-disabled {
     opacity: 0.6;
   }
+}
 
-  svg {
-    width: 100%;
-    height: 100%;
-    fill: currentColor;
+/* 两层落在同一格上：内容层长多高，行就多高；按钮层跟着 stretch 铺满 */
+.panel-guide-entry-hit,
+.panel-guide-entry-body {
+  grid-area: 1 / 1;
+}
+
+/* 主操作那层：透明、无边框，只提供命中区与焦点环（视觉全在内容层上） */
+.panel-guide-entry-hit {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 20px;
+  cursor: pointer;
+
+  &:disabled {
+    cursor: default;
   }
+
+  &:focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: 2px;
+  }
+}
+
+/* 内容层：整层不抢指针（点击穿到下面那层按钮上），只有 ▾ 单独开回来 */
+.panel-guide-entry-body {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  box-sizing: border-box;
+  padding: 14px 16px;
+  color: var(--text-primary, #1a1a1a);
+  font: inherit;
+  text-align: left;
+  pointer-events: none;
 }
 
 /* 固定的 26px 图标框：不同图标的视觉大小不一，靠它把三行的文字左边缘对齐 */
@@ -82,6 +115,12 @@
   width: 26px;
   height: 26px;
   color: var(--text-secondary, #666);
+
+  svg {
+    width: 100%;
+    height: 100%;
+    fill: currentColor;
+  }
 }
 
 .panel-guide-entry-text {
@@ -92,12 +131,61 @@
   min-width: 0;
 }
 
+/* 标题行：文案 + （终端才有的）▾ —— ▾ 紧跟在文案后面，才看得出「这一格还能挑类型」 */
+.panel-guide-entry-title-row {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  min-width: 0;
+}
+
 .panel-guide-entry-title {
+  min-width: 0;
   overflow: hidden;
   font-size: var(--font-size-base, 14px);
   line-height: 1.4;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* 标题后面的 ▾：只管「挑类型」，不管「开终端」（点整行才是开默认那种）。
+   它是内容层里唯一开回 `pointer-events` 的元素 —— 不开回来就点不动（穿到下面那层按钮上）。
+   18px 的命中区比图标大一圈，鼠标不用瞄；hover 用文字色薄涂而不是 `--hover-bg`（与标签栏同一口径） */
+.panel-guide-entry-caret {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: var(--text-tertiary, #767676);
+  pointer-events: auto;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+
+  svg {
+    width: 10px;
+    height: 10px;
+    fill: currentColor;
+  }
+
+  &:hover:not(:disabled) {
+    color: var(--text-primary, #1a1a1a);
+    background: color-mix(in srgb, var(--text-primary, #1a1a1a) 10%, transparent);
+  }
+
+  &:disabled {
+    cursor: default;
+  }
+
+  &:focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: 1px;
+  }
 }
 
 .panel-guide-entry-desc {

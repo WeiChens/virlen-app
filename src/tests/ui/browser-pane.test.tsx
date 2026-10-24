@@ -21,6 +21,8 @@
  * 9. 视图建不起来（非桌面环境 / 命令失败）必须给一张说明卡，而不是永久白框；
  * 10. 下载一律拦下：**不落盘**（Rust 侧取消），但用户必须看到一条提示与外部出口 ——
  *    静默下载正是这组用例要防的那个问题（原生视图没有浏览器那种下载栏）。
+ * 11. 位置算的是**逻辑像素**：rect 是 CSS 像素，传给原生视图前要乘「已生效的界面缩放」
+ *    （`setZoom(1.25)` 之后 1 CSS px 占 1.25 DIP），否则缩放后视图比占位小一圈、往左上收。
  *
  * 真实网页能不能打开只能在真窗口里验；这里只钉「我们自己的逻辑」。
  */
@@ -29,6 +31,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import BrowserPane from '@/ui/pages/chat/components/side-panel/browser/BrowserPane'
+import { setAppliedZoomFactor } from '@/ui/hooks/applied-zoom'
 import type { BrowserViewEvent } from '@/infrastructure/browser/browser-view'
 import {
   canGoBack,
@@ -186,6 +189,8 @@ function emit(event: Omit<BrowserViewEvent, 'label'>) {
 
 beforeEach(() => {
   bridge.available = true
+  // 界面缩放是模块级状态（`ui/hooks/applied-zoom.ts`），用例之间必须复位
+  setAppliedZoomFactor(1)
   bridge.open.mockResolvedValue(undefined)
   bridge.apply.mockResolvedValue(undefined)
   bridge.navigate.mockResolvedValue(undefined)
@@ -200,6 +205,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   frames = []
   bridge.listeners = []
+  setAppliedZoomFactor(1)
   bridge.open.mockReset()
   bridge.apply.mockReset()
   bridge.navigate.mockReset()
@@ -468,6 +474,30 @@ it('逐帧同步：位置变了就 apply；切到别的标签（rect 为 0）只
   setViewportRect({ left: 0, top: 40, width: 600, height: 560 })
   await tick()
   expect(bridge.apply).toHaveBeenLastCalledWith(expect.any(String), expect.anything(), true)
+})
+
+it('界面缩放：rect 是 CSS 像素，传给原生视图的是逻辑像素（要乘缩放）', async () => {
+  // 125%：这一行就是 useZoom 在 setZoom 成功之后的动作
+  setAppliedZoomFactor(1.25)
+  mount('https://a.com/')
+  setViewportRect({ left: 0, top: 32, width: 400, height: 480 })
+  await tick()
+
+  expect(bridge.open).toHaveBeenCalledWith(expect.any(String), 'https://a.com/', {
+    x: 0,
+    y: 40,
+    width: 500,
+    height: 600,
+  })
+
+  // 逐帧同步走同一个倍率（面板宽度 320 CSS × 1.25 = 400 DIP）
+  setViewportRect({ left: 0, top: 32, width: 320, height: 400 })
+  await tick()
+  expect(bridge.apply).toHaveBeenLastCalledWith(
+    expect.any(String),
+    { x: 0, y: 40, width: 400, height: 500 },
+    true,
+  )
 })
 
 it('视图建不起来：给一张说明卡（而不是永久白框）', async () => {

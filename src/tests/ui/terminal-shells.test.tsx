@@ -7,8 +7,8 @@
  * 2. **装了的在前、没装的沉底且灰显**，未装的项标「未安装」、悬停能看到「查过哪些目录」；
  * 3. **标出「上次使用」**（`Ctrl + \`` 开的就是它）；从没用过时标后端给的「默认」；
  * 4. **`Ctrl + \`` 不弹菜单**：显式选的 > 上次记的 > 让后端定（`resolveShellChoice`）；
- * 5. **点「新建终端」先问类型再开**；探测不到（非桌面环境）或列不出来就直接开默认那种，
- *    不能让人点了没反应。
+ * 5. **整行点下去 = 直开默认那种，标题后面的 ▾ 才问类型**；探测不到（非桌面环境）或
+ *    列不出来就直接开默认那种，不能让人点了没反应；没有 `loadShells` 就干脆不画 ▾。
  */
 import { afterEach, beforeAll, expect, it } from 'vitest'
 import { act } from 'react'
@@ -174,9 +174,13 @@ async function renderGuide(loadShells?: () => Promise<UserTerminalShell[]>) {
 }
 
 const entry = (kind: string) =>
-  document.querySelector<HTMLButtonElement>(
-    `.panel-guide-entry[data-guide-entry="${kind}"]`,
-  )
+  document.querySelector<HTMLElement>(`.panel-guide-entry[data-guide-entry="${kind}"]`)
+/** 主操作那层（铺满整行的真按钮）：点它 = 直接开默认那种 */
+const hit = (kind: string) =>
+  entry(kind)?.querySelector<HTMLButtonElement>('.panel-guide-entry-hit') ?? null
+/** 标题后面那颗 ▾：点它才弹类型菜单 */
+const caret = () =>
+  document.querySelector<HTMLButtonElement>('.panel-guide-entry-caret')
 const menuItems = () => [
   ...document.querySelectorAll<HTMLButtonElement>('.context-menu .context-menu-item'),
 ]
@@ -188,12 +192,24 @@ afterEach(() => {
   picked.length = 0
 })
 
-it('开始页：点「新建终端」先弹类型菜单，选中一种才开（带 id 上报宿主）', async () => {
+it('开始页：点整行直接开默认终端（不弹菜单、不带 shell id）', async () => {
   settingsState.setValue('terminalShell', 'cmd')
   await renderGuide(async () => SHELLS)
 
   await act(async () => {
-    entry('terminal')!.click()
+    hit('terminal')!.click()
+  })
+  // 一个菜单也不该出现：多数人只是想再开一个终端，不该为此多点一次
+  expect(menuItems()).toEqual([])
+  expect(picked).toEqual([['terminal', undefined]])
+})
+
+it('开始页：点标题后的 ▾ 才弹类型菜单，选中一种才开（带 id 上报宿主）', async () => {
+  settingsState.setValue('terminalShell', 'cmd')
+  await renderGuide(async () => SHELLS)
+
+  await act(async () => {
+    caret()!.click()
   })
   expect(menuItems().map((b) => b.textContent)).toEqual([
     'Windows PowerShell',
@@ -214,11 +230,34 @@ it('开始页：点「新建终端」先弹类型菜单，选中一种才开（�
   expect(menuItems()).toEqual([])
 })
 
+it('开始页：菜单开着时再点一次 ▾ 就关掉（不会先关又开）', async () => {
+  await renderGuide(async () => SHELLS)
+
+  await act(async () => {
+    caret()!.click()
+  })
+  expect(menuItems()).toHaveLength(4)
+
+  await act(async () => {
+    caret()!.click()
+  })
+  expect(menuItems()).toEqual([])
+  expect(picked).toEqual([])
+})
+
+it('开始页：只有终端有 ▾，文件与浏览器没有（那两格没有类型可挑）', async () => {
+  await renderGuide(async () => SHELLS)
+
+  expect(caret()).not.toBeNull()
+  expect(entry('files')!.querySelector('.panel-guide-entry-caret')).toBeNull()
+  expect(entry('browser')!.querySelector('.panel-guide-entry-caret')).toBeNull()
+})
+
 it('开始页：探测不到类型列表就直接开默认终端（点了必须有反应）', async () => {
   await renderGuide(async () => [])
 
   await act(async () => {
-    entry('terminal')!.click()
+    caret()!.click()
   })
   expect(menuItems()).toEqual([])
   expect(picked).toEqual([['terminal', undefined]])
@@ -231,17 +270,18 @@ it('开始页：一个 shell 都用不了（非 Windows）不弹全灰的菜单�
   ])
 
   await act(async () => {
-    entry('terminal')!.click()
+    caret()!.click()
   })
   expect(menuItems()).toEqual([])
   expect(picked).toEqual([['terminal', undefined]])
 })
 
-it('开始页：没有 loadShells（非桌面 / 老调用点）也直接开默认终端', async () => {
+it('开始页：没有 loadShells（非桌面 / 老调用点）就没菜单可弹 —— 连 ▾ 也不画，整行直开默认', async () => {
   await renderGuide(undefined)
 
+  expect(caret()).toBeNull()
   await act(async () => {
-    entry('terminal')!.click()
+    hit('terminal')!.click()
   })
   expect(menuItems()).toEqual([])
   expect(picked).toEqual([['terminal', undefined]])
@@ -251,8 +291,8 @@ it('开始页：文件与浏览器不受影响（照旧直接上报，不弹菜�
   await renderGuide(async () => SHELLS)
 
   await act(async () => {
-    entry('files')!.click()
-    entry('browser')!.click()
+    hit('files')!.click()
+    hit('browser')!.click()
   })
   expect(picked).toEqual([
     ['files', undefined],

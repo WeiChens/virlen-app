@@ -33,8 +33,13 @@
 //!
 //! ## 坐标
 //!
-//! 前端传的是 CSS 像素（`getBoundingClientRect()`），与 `LogicalPosition` / `LogicalSize`
-//! 同一口径，DPI 缩放交给 WebView2 按窗口自己换算。
+//! 前端传的是**逻辑像素**（DIP）：`getBoundingClientRect()` 量出来的是 CSS 像素，前端已经乘过
+//! **已生效的界面缩放**（`setZoom(1.25)` 之后 1 CSS px 占 1.25 DIP，见 `ui/hooks/applied-zoom.ts`）。
+//! 这里只交给 `LogicalPosition` / `LogicalSize`，屏幕 DPI 的换算由 Tauri / WebView2 按窗口自己算。
+//! ⚠️ 两个容易混的倍率：窗口 DPI（系统缩放 125%）已在 `Logical*` 里面，而 webview 的
+//! `setZoom` **不在**——子视图是独立的 WebView2 控制器，不会跟着主 webview 缩放，所以那个倍率
+//! 只能前端在传参前乘进来（Rust 侧拿不到主 webview 的 zoom，Tauri 没给 getter）。
+//! 症状对照：漏乘 = 视图比占位小一圈且整体往左上收，缩放越大差得越远。
 //! ⚠️ 子 WebView 是**原生窗口**，浮在 HTML 之上：位置 / 尺寸 / 显隐都要前端逐帧同步
 //! （见 `src/infrastructure/browser/browser-view.ts` 与 `BrowserPane` 的宿主 hook）。
 

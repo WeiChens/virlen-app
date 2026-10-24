@@ -10,7 +10,8 @@
  * 1. **原生视图只在桌面应用里存在**：浏览器调试 / 单测下 `invoke` 无处可去，
  *    所以每个函数先看 `hasBrowserView()`，没有就安静降级（调用方据此显示一句说明）；
  * 2. **位置 / 尺寸 / 显隐走同一条命令**（`browser_view_apply`）：它们是逐帧同步的三件事，
- *    拆成三条命令会并发、乱序，从隐藏恢复时会先显示再定位（肉眼可见的闪）；
+ *    拆成三条命令会并发、乱序，从隐藏恢复时会先显示再定位（肉眼可见的闪）；坐标是**逻辑
+ *    像素**（调用方已把 CSS 像素乘过界面缩放，见 `BrowserViewBounds`）；
  * 3. **网页侧的变化只能靠事件回传**：跨域读不到 `contentWindow.location`，但 WebView2 自己
  *    知道（`on_page_load` / `on_document_title_changed`），Rust 把结果发到主 webview 的
  *    `browser:navigate` 上，本模块负责拆包。
@@ -20,7 +21,14 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
-/** 视图位置 / 尺寸（CSS 像素，与 `getBoundingClientRect()` 同一口径；DPI 换算在 Rust 侧） */
+/**
+ * 视图位置 / 尺寸（**逻辑像素 / DIP**）。
+ *
+ * 调用方已经把它换算好了：`getBoundingClientRect()` 是 CSS 像素，乘上**已生效的界面缩放**
+ * 才是逻辑像素（`setZoom(1.25)` 之后 1 CSS px = 1.25 DIP，见 `ui/hooks/applied-zoom.ts`）；
+ * 剩下的屏幕 DPI 换算在 Rust 侧由 `LogicalPosition` / `LogicalSize` 完成。
+ * 漏掉这一步的症状：缩放后视图比占位小一圈、整体往左上收。
+ */
 export interface BrowserViewBounds {
   x: number
   y: number

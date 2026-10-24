@@ -10,7 +10,7 @@
  *    标签关掉后顺手归零（否则「任一脏」会一直是 true）；
  * 4. **宽度归容器**：挂载时按「聊天区 + 面板」可用宽度的一半定宽，加标签 / 切标签不重算；
  *    拖宽**没有固定上限**，最多拖到面板占满（上限 = 可用宽度）；
- * 5. **占满**：聊天区被压到不足 300px 时面板铺满并通知宿主藏起聊天区，卸载时恢复；
+ * 5. **占满**：聊天区被压到不足 450px（`CHAT_MIN_WIDTH`）时面板铺满并通知宿主藏起聊天区，卸载时恢复；
  * 6. **拖标签换顺序**：用鼠标事件（HTML5 拖拽在 `dragDropEnabled: true` 下收不到，§11.8），
  *    被拖的标签跟着指针（内联 `transform`），拖动中就地预览、松手才上报一次最终下标
  *    （下标口径见 `tabs.ts::moveTab`）；**内容块按打开顺序排，不跟着标签排序** —— 挪 DOM 会重连
@@ -475,14 +475,14 @@ it('宽度：按可用宽度的一半，切标签不重算（重开才重算）'
   root = null
   document.body.innerHTML = ''
 
-  // 整块面板重新打开（新会话）：按那时的可用宽度重算
-  layout = { available: 800, inset: 260 }
+  // 整块面板重新打开（新会话）：按那时的可用宽度重算（1000 的一半 = 500，留给聊天区 500 ≥ 450）
+  layout = { available: 1000, inset: 260 }
   await renderPanel([TAB_A], TAB_A.id)
-  expect(panel().style.width).toBe('400px')
+  expect(panel().style.width).toBe('500px')
 })
 
-/** 聊天区连 300 都留不住：面板占满，并通知宿主把聊天区先藏起来 */
-it('聊天区不足 300px：面板占满，且通知宿主藏起聊天区', async () => {
+/** 聊天区连 450 都留不住：面板占满，并通知宿主把聊天区先藏起来 */
+it('聊天区不足 450px：面板占满，且通知宿主藏起聊天区', async () => {
   layout = { available: 500, inset: 260 }
   await renderPanel([TAB_A], TAB_A.id)
 
@@ -496,8 +496,8 @@ it('聊天区不足 300px：面板占满，且通知宿主藏起聊天区', asyn
   expect(expandedReports[expandedReports.length - 1]).toBe(false)
 })
 
-/** 拖到聊天区不足 300 → 面板占满；往回拖过那条线 → 聊天区回来 */
-it('拖到聊天区不足 300px 时面板占满，拖回来再恢复', async () => {
+/** 拖到聊天区不足 450 → 面板占满；往回拖过那条线 → 聊天区回来 */
+it('拖到聊天区不足 450px 时面板占满，拖回来再恢复', async () => {
   layout = { available: 1000, inset: 200 }
   await renderPanel([TAB_A], TAB_A.id)
   expect(panel().style.width).toBe('500px')
@@ -517,10 +517,10 @@ it('拖到聊天区不足 300px 时面板占满，拖回来再恢复', async () 
   expect(expandedReports[expandedReports.length - 1]).toBe(true)
 
   act(() => {
-    document.dispatchEvent(new MouseEvent('mousemove', { clientX: right - 600 }))
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: right - 500 }))
   })
   expect(panel().classList.contains('is-full')).toBe(false)
-  expect(panel().style.width).toBe('600px')
+  expect(panel().style.width).toBe('500px')
   expect(expandedReports[expandedReports.length - 1]).toBe(false)
 
   act(() => {
@@ -531,44 +531,45 @@ it('拖到聊天区不足 300px 时面板占满，拖回来再恢复', async () 
 /**
  * 占满态（聊天区被藏起来）往回拖：必须真的能拖回来。
  * 两个坑：① 面板左缘这时正好压在左侧栏的拖拽条上（`chart-view.scss` 里 z-index 10、命中区 ±3px），
- * 手柄不抬高层级就收不到 mousedown；② 占满态曾固定上屏 `available`，前 300px 拖动毫无反馈。
+ * 手柄不抬高层级就收不到 mousedown；② 占满态曾固定上屏 `available`，前 450px
+ * （`CHAT_MIN_WIDTH`）拖动毫无反馈。
  */
-it('占满态往右拖：按下即跟手变窄，过了 300 那条线聊天区回来', async () => {
-  layout = { available: 500, inset: 260 }
+it('占满态往右拖：按下即跟手变窄，过了 450 那条线聊天区回来', async () => {
+  layout = { available: 800, inset: 200 }
   await renderPanel([TAB_A], TAB_A.id)
-  // 挂载时 250 宽，聊天区只剩 250 → 直接占满
+  // 挂载时 400 宽，聊天区只剩 400（< 450）→ 直接占满
   expect(panel().classList.contains('is-full')).toBe(true)
-  expect(panel().style.width).toBe('500px')
+  expect(panel().style.width).toBe('800px')
 
-  const right = 760 // inset 260 + 可用 500
+  const right = 1000 // inset 200 + 可用 800
   act(() => {
     document
       .querySelector('.side-panel-resizer')!
       .dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
   })
   // 按下那一刻不跳：state 先对齐到眼前这条边
-  expect(panel().style.width).toBe('500px')
+  expect(panel().style.width).toBe('800px')
 
-  // 拖 100px：聊天区还不足 300（仍占满），面板必须已经跟着变窄
+  // 拖到 700 宽：聊天区只剩 100（仍不足 450），面板必须已经跟着变窄
   act(() => {
-    document.dispatchEvent(new MouseEvent('mousemove', { clientX: right - 400 }))
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: right - 700 }))
   })
-  expect(panel().style.width).toBe('400px')
+  expect(panel().style.width).toBe('700px')
   expect(panel().classList.contains('is-full')).toBe(true)
 
-  // 拖到聊天区刚好 300：占满态解除，聊天区回来
+  // 拖到 350 宽：聊天区刚好 450（= 拖动下限）→ 占满态解除，聊天区回来
   act(() => {
-    document.dispatchEvent(new MouseEvent('mousemove', { clientX: right - 120 }))
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: right - 350 }))
   })
   expect(panel().classList.contains('is-full')).toBe(false)
-  expect(panel().style.width).toBe('200px')
+  expect(panel().style.width).toBe('350px')
   expect(expandedReports[expandedReports.length - 1]).toBe(false)
 
   act(() => {
     document.dispatchEvent(new MouseEvent('mouseup'))
   })
   // 松手后不反弹
-  expect(panel().style.width).toBe('200px')
+  expect(panel().style.width).toBe('350px')
 })
 
 /** 拖宽不设固定上限：能一路拖到「面板占满」（旧实现封顶 MIN(960, 72vw)） */
@@ -590,7 +591,7 @@ it('拖宽不设固定上限：能一路拖到面板占满', async () => {
   expect(panel().style.width).toBe('1500px')
   expect(panel().classList.contains('is-full')).toBe(false)
 
-  // 过「聊天区只剩 300」那条线：拖动中仍跟手，松手后面板才真的吃掉整块宽度
+  // 过「聊天区只剩 200」那条线：拖动中仍跟手，松手后面板才真的吃掉整块宽度
   act(() => {
     document.dispatchEvent(new MouseEvent('mousemove', { clientX: right - 1800 }))
   })

@@ -15,8 +15,15 @@
  *    否则 WebView2 会拿到 0 尺寸或错位置。
  * 4. **失败要能说出来**：创建失败（非桌面环境、命令报错）落到 `error`，由调用方展示 ——
  *    静默失败等于永久白框。
+ * 5. **量到的 CSS 像素要乘界面缩放**：`getBoundingClientRect()` 给的是 **CSS 像素**，
+ *    `LogicalPosition` / `LogicalSize` 要的是 **逻辑像素**（DIP）。界面缩放（webview 原生
+ *    `setZoom`）一放大，同一个 rect 在屏幕上占的就是 `CSS × zoom` —— 不乘就是「视图比占位
+ *    小一圈、整体还往左上收」，缩放越大差得越远。倍率取**已经落到 webview 上**的那个值
+ *    （`appliedZoomFactor()`，见 `ui/hooks/applied-zoom.ts`），不是设置里的期望值：
+ *    `setZoom` 是异步 IPC，照期望值算会先撑大一两帧再收回。
  */
 import { useEffect, useRef, useState, type RefObject } from 'react'
+import { appliedZoomFactor } from '@/ui/hooks/applied-zoom'
 import {
   applyBrowserView,
   closeBrowserView,
@@ -130,11 +137,13 @@ export function useNativeBrowserView({ label, url, reloadToken }: Options): Nati
       const host = hostRef.current
       if (!host) return
       const rect = host.getBoundingClientRect()
+      // CSS 像素 → 逻辑像素：界面缩放让 1 CSS px 占 `zoom` 个 DIP（见文件头第 5 条）
+      const zoom = appliedZoomFactor()
       const bounds: BrowserViewBounds = {
-        x: rect.left,
-        y: rect.top,
-        width: rect.width,
-        height: rect.height,
+        x: rect.left * zoom,
+        y: rect.top * zoom,
+        width: rect.width * zoom,
+        height: rect.height * zoom,
       }
       // 没有地址、或者布局上根本看不见（别的标签 / 面板已收起）：不建，已建的就藏起来。
       // 拖动面板宽度时也藏：子窗口会吃掉 document 上的 mousemove / mouseup（见文件头第 2 条）。

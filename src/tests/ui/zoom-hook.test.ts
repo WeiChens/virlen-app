@@ -1,9 +1,10 @@
 /**
  * applyWebviewZoom 与快捷键的接线：设置值 → webview 原生缩放。
  *
- * 这里把 Tauri 判定与 webviewWindow 都桩掉，只为守住四件事：
+ * 这里把 Tauri 判定与 webviewWindow 都桩掉，只为守住五件事：
  *  ① 递给 setZoom 的是**归一化后**的倍率（不是滑杆的原始字符串 / 越界值）；
- *  ② setZoom 失败被吞掉（缩放是外观项，不该把调用方带崩）；
+ *  ② setZoom 失败被吞掉（缩放是外观项，不该把调用方带崩），**且不修改「已生效」倍率**
+ *    （原生子视图靠它把 CSS 像素换算成逻辑像素，见 `applied-zoom.ts`）；
  *  ③ 非 Tauri（浏览器 dev / 测试环境）直接跳过，不去碰 api；
  *  ④ Ctrl/Cmd + = / - / 0 真的改变设置（且事件被吃掉），并由 reaction 落到 setZoom。
  */
@@ -22,6 +23,7 @@ vi.mock('@tauri-apps/api/webviewWindow', () => ({
 vi.mock('@/services/rust-engine', () => ({ isTauriAvailable }))
 
 import { applyWebviewZoom, useZoom } from '@/ui/hooks/useZoom'
+import { appliedZoomFactor, setAppliedZoomFactor } from '@/ui/hooks/applied-zoom'
 import { settingsState } from '@/ui/store/settingStore'
 
 beforeEach(() => {
@@ -29,11 +31,14 @@ beforeEach(() => {
   setZoom.mockImplementation(() => Promise.resolve())
   isTauriAvailable.mockReturnValue(true)
   settingsState.value.zoomFactor = 1
+  setAppliedZoomFactor(1)
 })
 
 it('把设置值归一化后交给 setZoom', async () => {
   await applyWebviewZoom(1.25)
   expect(setZoom).toHaveBeenCalledWith(1.25)
+  // 落地之后才改「已生效」倍率（原生视图的 CSS → DIP 换算读它）
+  expect(appliedZoomFactor()).toBe(1.25)
 })
 
 it('越界 / 字符串 / 脏值都先归一化', async () => {
@@ -53,6 +58,8 @@ it('setZoom 失败只告警，不抛给调用方', async () => {
 
   await expect(applyWebviewZoom(1.5)).resolves.toBeUndefined()
   expect(warn).toHaveBeenCalled()
+  // 没落地就不能改：否则原生视图会按一个「页面并没缩放」的倍率去摆位置
+  expect(appliedZoomFactor()).toBe(1)
 
   warn.mockRestore()
 })
@@ -61,6 +68,8 @@ it('非 Tauri 环境直接跳过（那里没有可缩放的 webview）', async (
   isTauriAvailable.mockReturnValue(false)
   await applyWebviewZoom(1.5)
   expect(setZoom).not.toHaveBeenCalled()
+  // 没有 webview 可缩放，口径仍要跟上（单测 / 浏览器预览读同一份值）
+  expect(appliedZoomFactor()).toBe(1.5)
 })
 
 // ==================== 快捷键（窗口级监听） ====================
