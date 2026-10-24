@@ -31,6 +31,7 @@ import {
   graphWidth,
   laneWidth,
   layoutGraph,
+  localBranchNames,
   nodeRadius,
   paintOps,
   parseCommitRefs,
@@ -281,6 +282,22 @@ describe('提交图 · 引用解析（%D 的全名）', () => {
     expect(pickRowRefs(refs).shown).toEqual({ name: 'b1', kind: 'branch' })
     expect(pickRowRefs(refs).hidden.map((r) => r.name)).toEqual(['b2', 'r1'])
     expect(pickRowRefs([])).toEqual({ shown: null, hidden: [] })
+  })
+
+  it('复制分支名的取用口径：本地分支 + 当前分支，去重保序；远程与标签不给', () => {
+    expect(
+      localBranchNames([
+        { name: 'master', kind: 'head' },
+        { name: 'feat/x', kind: 'branch' },
+        { name: 'origin/master', kind: 'remote' },
+        { name: 'v1.0', kind: 'tag' },
+        { name: 'feat/x', kind: 'branch' },
+      ]),
+    ).toEqual(['master', 'feat/x'])
+
+    // 游离 HEAD 只有字面量 `HEAD`（不是一条能 checkout 的线）
+    expect(localBranchNames([{ name: 'HEAD', kind: 'head' }])).toEqual([])
+    expect(localBranchNames([])).toEqual([])
   })
 })
 

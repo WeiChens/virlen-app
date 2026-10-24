@@ -401,7 +401,16 @@ it('行右键：菜单项按**这一行**的引用给（切到分支 / 合并到
     '合并 feature 到当前分支',
     '复制提交 hash',
     '复制提交标题',
+    // 行上挂着本地分支 → 多一条「复制分支名称」；这一行没有远程引用，所以只有一条
+    '复制分支名称 feature',
   ])
+
+  // 复制的就是这一行那个分支名（不是当前分支 master）
+  await act(async () => menuItem('复制分支名称 feature').click())
+  expect(copyText).toHaveBeenCalledWith('feature')
+  // 点完一项菜单就关了：再开一次才能点下一项
+  expect(menuLabels()).toEqual([])
+  await rightClick(rows()[1])
 
   await act(async () => menuItem('复制提交 hash').click())
   expect(copyText).toHaveBeenCalledWith(oid(2))

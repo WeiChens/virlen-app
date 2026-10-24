@@ -12,7 +12,8 @@
  * ⚠️ **`scope` 决定「挑选」给不给**：`head`（提交记录：只有 HEAD 可达的提交）里每一行要么是 HEAD
  * 要么是它的**祖先** —— 挑一个祖先过来得到的是一条空提交（git 只会回 `now empty`），所以在那里
  * 整份都不给；`all`（提交图：含别的分支）才是挑选真正的用处。这条判据只写在这里，两个弹窗
- * 只负责如实报自己的 scope。
+ * 只负责如实报自己的 scope。同一条 `scope` 也给**「复制分支名称」**看门：提交记录不画引用标签，
+ * 看不见的引用不该从菜单里冒出来。
  *
  * 分组的空行（`divider`）统一落在**组内第一项**上（[`pushGroup`] 一处实现）：组是给人看的，
  * 每两项之间都画横线就等于没有分组。
@@ -31,6 +32,7 @@ import {
   undoLastCommit,
 } from '@/services/git-service'
 import type { GitCommitLogEntry, GitLogScope, GraphRef } from '@/domain/git'
+import { localBranchNames } from '@/domain/git'
 import type { ContextMenuItem } from '@/ui/components/shared/ContextMenu'
 
 export interface CommitMenuArgs {
@@ -151,7 +153,7 @@ export function commitMenuItems(args: CommitMenuArgs): ContextMenuItem[] {
   }
 
   // ④ 复制类不受写入口禁用影响（读错了也不会坏事）；标题为空就没有可复制的，置灰
-  pushGroup(items, [
+  const copies: ContextMenuItem[] = [
     {
       key: 'copy-hash',
       label: t('复制提交 hash'),
@@ -169,6 +171,22 @@ export function commitMenuItems(args: CommitMenuArgs): ContextMenuItem[] {
         showToast(ok ? t('已复制到剪贴板') : t('复制失败'))
       },
     },
-  ])
+  ]
+  // ④-① 复制分支名：**一个本地分支一条** —— 行上只摆得下一个标签，进 `+n` 能徽标的那些，
+  //   正是要把它名字拿走的时候（远程引用不给：那是云端的倒影，本名就是 `x`，见 `localBranchNames`）。
+  //   只在提交图（`all`）给：提交记录不画引用标签，看不见的引用不该从菜单里冒出来。
+  if (args.scope === 'all') {
+    for (const name of localBranchNames(refs)) {
+      copies.push({
+        key: `copy-branch:${name}`,
+        label: tpl('复制分支名称 $__name__', { name }),
+        onClick: async () => {
+          const ok = await copyText(name)
+          showToast(ok ? t('已复制到剪贴板') : t('复制失败'))
+        },
+      })
+    }
+  }
+  pushGroup(items, copies)
   return items
 }

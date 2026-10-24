@@ -45,8 +45,9 @@
   top: calc(100% + 8px);
   right: 0;
   z-index: 60;
-  /* 两段横着排（更改 | 暂存的更改）要宽度：单行里的文件名 / 目录 / 动作 / 行数都靠它才不挤 */
-  width: 840px;
+  /* 宽度只给单列用：变更列表已改成 tab 切换（不再两列并排），840px 那档是当初为了
+     容纳两列才撑的；长路径挤了就看行尾省略号 / 悬停 title（那里有完整路径） */
+  width: 420px;
   max-width: calc(100vw - 32px);
   padding: 10px 12px 12px;
   border: 1px solid var(--border-color, #e5e5e5);
@@ -220,13 +221,13 @@
   }
 }
 
-/* 提交框（在**面板最下面**：先看改了什么再写信息） */
+/* 提交框（挂在「暂存区」tab 下：提交只跟暂存区有关） */
 .git-commit {
   display: flex;
   flex-direction: column;
   gap: 6px;
   padding-top: 8px;
-  border-top: 1px solid var(--border-color, #e5e5e5);
+  // border-top: 1px solid var(--border-color, #e5e5e5);
 
   textarea {
     width: 100%;
@@ -235,7 +236,7 @@
     resize: vertical;
     padding: 6px 8px;
     border: 1px solid var(--border-color, #e5e5e5);
-    border-radius: 6px;
+    border-radius: 3px;
     background: var(--bg-primary, #fff);
     color: var(--text-primary, #1a1a1a);
     font: inherit;
@@ -303,82 +304,114 @@
   }
 }
 
-/* 变更列表区：**每段一列、各自一个滚动容器**（标题在段自己身上，不随列表滚走） */
-.git-list-box {
+/* 变更列表的 tab 栏：一次只展开一段（并排两列时每列只剩一半宽度）。
+   行尾是**当前段**的批量入口（「全部暂存」只在「更改」这一段有意义）。 */
+.git-tabs {
+  flex: none;
   display: flex;
-  /* 两段横着排：竖向空间不够时向横向要（而不是把两段堆起来各分一半高度） */
-  flex-direction: row;
-  gap: 12px;
-  max-height: 46vh;
-  overflow: hidden;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 4px;
 
-  /* 列表区直接跟在仓库条后面时（没有提交区 / 统计 / 输出块隔开）自己顶上一条分隔线 */
+  /* 上面直接是仓库条时（没有统计 / 输出块隔开）自己顶上一条分隔线 */
   .git-repo-bar + & {
     border-top: 1px solid var(--border-color, #e5e5e5);
   }
 }
 
-/* 一段 = 标题（固定）+ 自己的滚动列表，占一列。
-   ⚠️ 两列等宽（`flex: 1 1 0` + `min-width: 0`，否则长路径会把某一列撑宽）；
-   高度由 `.git-list-box` 的 46vh 拉伸决定，多出来的内容落在**各自的**列表里滚。 */
-.git-section {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 0;
+/* 一个 tab = 标题 + 计数 */
+.git-tab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  font: inherit;
+  font-size: var(--font-size-xs, 11px);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
 
-  /* 两列之间一道竖分隔线（与上方那条横分隔线同一套语义） */
-  & + & {
-    padding-left: 12px;
-    border-left: 1px solid var(--border-color, #e5e5e5);
+  &:hover:not(.is-active) {
+    background: var(--hover-bg, #f0f0f0);
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  &:focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: 1px;
+  }
+
+  /* 激活态：品牌色淡底 + 主色文字（与选中行同一套配色语义） */
+  &.is-active {
+    background: color-mix(in srgb, var(--primary-color, #3b6ef6) 12%, transparent);
+    color: var(--primary-color, #3b6ef6);
+  }
+
+  /* 冲突是三段里唯一「必须处理」的：计数用危险色，扫一眼就知道有事 */
+  &.is-danger .git-tab-count {
+    color: var(--color-error-text, #991b1b);
   }
 }
 
-/* 段标题：在**本段自己的滚动列表之外**，所以不再需要 sticky（它本来就不会被滚走） */
-.git-section-title {
+.git-tab-count {
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+/* 当前段的批量入口（「全部暂存 / 全部取消暂存」）：与 `.git-row-btn` 同一口径——**顶层规则**。
+   ⚠️ 这类小按钮写进某个父选择器里，换个语境渲染就掉回浏览器默认按钮（方角、系统色）——
+   已踩过两次（段标题的「全部暂存」、空态的「初始化仓库」）。 */
+.git-bulk-btn {
   flex: none;
-  box-sizing: border-box;
-  height: 26px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 2px;
-  font-size: var(--font-size-xs, 11px);
-  font-weight: 600;
+  height: 22px;
+  padding: 0 7px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
   color: var(--text-secondary, #666);
-  letter-spacing: 0.02em;
+  font: inherit;
+  font-size: var(--font-size-xs, 11px);
+  cursor: pointer;
 
-  .git-section-count {
-    font-weight: 400;
+  &:hover:not(:disabled) {
+    background: var(--hover-bg, #f0f0f0);
+    color: var(--primary-color, #3b6ef6);
   }
 
-  /* 「全部暂存 / 全部取消暂存」是同一颗 .git-row-btn 的**文字**形态 */
-  .git-row-btn {
-    width: auto;
-    padding: 0 7px;
-    font-size: var(--font-size-xs, 11px);
-    /* hover 整段才显形（与行内操作同一口径）：常驻会把标题画成一堵按钮墙 */
-    opacity: 0;
-    transition: opacity 0.12s ease;
-
-    /* 禁用态（只读沙盒 / 有操作在跑）**常显**：告诉用户「这颗按钮在这儿，只是此刻点不了」，
-       比整颗消失好懂（与后台服务面板的终止按钮同一取舍） */
-    &:disabled {
-      opacity: 0.5;
-    }
-
-    /* 标题底下不是行（没有那层 hover 底），hover 底沿用行内那颗的 --bg-primary 就看不出来 */
-    &:hover:not(:disabled) {
-      background: var(--hover-bg, #f0f0f0);
-      box-shadow: none;
-    }
+  &:focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: 1px;
   }
 
-  &:hover .git-row-btn:not(:disabled),
-  .git-row-btn:focus-visible {
-    opacity: 1;
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
+}
+
+/* 变更列表区：高度上限只由它给（46vh），多出来的内容在列表里自己滚 */
+.git-list-box {
+  display: flex;
+  flex-direction: column;
+  max-height: 46vh;
+  overflow: hidden;
+}
+
+/* 一段 = 一个滚动列表（tab 已经在上面说清是哪一段，这里不再重复一行标题）。
+   `min-width: 0`：长路径不许把面板撑宽；高度由 `.git-list-box` 的 46vh 拉伸决定 */
+.git-section {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
 }
 
 /* 一段自己的滚动列表（行高必须固定，虚拟列表的前缀和靠它） */
@@ -397,8 +430,8 @@
   }
 }
 
-/* 列表里的小按钮（行内「暂存 / 取消暂存 / 丢弃」与段标题的「全部…」共用的**唯一样式源**）
-   ⚠️ 必须挂在顶层：段标题那颗不在 `.git-row` 内，写进 `.git-row` 作用域它就掉回浏览器默认按钮样式
+/* 列表里的小按钮（行内「暂存 / 取消暂存 / 丢弃」共用的**唯一样式源**；tab 栏那颗批量入口见 `.git-bulk-btn`）
+   ⚠️ 必须挂在顶层：写进 `.git-row` 作用域，别处渲染的同款按钮就掉回浏览器默认按钮样式
    （方角、被系统主题撑大、hover 没反馈），实测反馈「按钮没有样式」正是这一处。 */
 .git-row-btn {
   flex: none;
@@ -494,21 +527,23 @@
   .del { color: var(--color-error-text, #991b1b); }
 }
 
-/* 顶部汇总（与变更行同一个口径）：文件数 + 总增删行数 */
+/* 增删行数的语义色（顶部汇总与提交区提示共用的**唯一样式源**，挂顶层）：
+   增=绿、删=红，暗色主题跟着变；「还有没算出来的」用中性色，别看着像又一个删行数。
+   ⚠️ 写进某一个父选择器（如 `.git-stats-summary`）里，另一处渲染时就没色了 —— 与 `.git-row-btn` 同一个坑 */
+.git-stat-add { color: var(--color-success-text, #2e7d32); }
+.git-stat-del { color: var(--color-error-text, #991b1b); }
+.git-stat-more { color: var(--text-secondary, #666); }
+
+/* 当前段的行数汇总（挂在 tab **下方**；暂存那一段不用它 —— 数字落在 `.git-hint` 上） */
 .git-stats-summary {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 4px 6px;
+  padding: 4px 4px 0px;
   font-size: var(--font-size-xs, 11px);
   color: var(--text-secondary, #666);
-  border-bottom: 1px solid var(--border-color, #e5e5e5);
+  border-top: 1px solid var(--border-color, #e5e5e5);
   font-variant-numeric: tabular-nums;
-
-  .git-stat-add { color: var(--color-success-text, #2e7d32); }
-  .git-stat-del { color: var(--color-error-text, #991b1b); }
-  /* 「还有没算出来的」：用中性色，别看着像又一个删行数 */
-  .git-stat-more { color: var(--text-secondary, #666); }
 }
 
 .git-row {

@@ -1,9 +1,11 @@
 /**
- * GitPanel — 仓库头（分支 / ahead-behind / 提交记录 / 提交图 / 刷新）+ 三段变更列表 + 提交区。
+ * GitPanel — 仓库头（分支 / ahead-behind / 提交记录 / 提交图 / 刷新）+ 变更列表 + 提交区。
  *
- * 顺序：**变更列表在前、提交区在最下面**（先看改了什么再写信息）；段顺序为
- * 「更改（含未跟踪）→ 暂存的更改 → 冲突」—— 三段口径与差异弹窗共用 `sections.ts`（冲突段无批量入口）。
- * 提交区只在暂存区非空时出现。
+ * 变更列表**一次只看一段**：顶部 tab 切换「更改（含未跟踪）→ 暂存区 → 冲突」。
+ * 两段并排时每列只剩一半宽度（面板宽只有 496px），长路径与行内操作只能互相挤；
+ * 段口径与差异弹窗共用 `sections.ts`（冲突段无批量入口、且只在该段非空时出现）。
+ * 提交区只挂在「暂存区」tab 下 —— 提交只跟暂存区有关；显隐还看暂存区是否非空
+ * （amend 模式例外：只改提交信息也得有地方写）。
  * 选中模式同资源管理器：单击选中、Ctrl 加减、Shift 范围，**双击**才开差异。
  * 行内操作在该行属于选中集时作用于同侧全部（按钮文案带数量）。
  * 只读沙盒下所有写入口禁用（Rust 侧同样会拒，这里是双保险）。
@@ -12,13 +14,13 @@
  *（输入框只认真实路径），并剔除**已删除**的文件（磁盘上已不存在，挂上去只会换来一句
  *「无法访问该路径」）。两者共用 `attachPaths`，口径只有一份。
  */
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { runInAction } from 'mobx'
 import { t, tpl } from '@/ui/i18n'
 import { settingsState } from '@/ui/store'
 import { gitStore } from '@/ui/store/gitStore'
-import { groupChanges, statOf, statTotals } from '@/domain/git'
+import { groupChanges, sectionStatTotals, statOf } from '@/domain/git'
 import { toAbsolutePath } from '@/utils/common'
 import { showToast } from '@/ui/components/shared/Toast'
 import {
@@ -51,7 +53,7 @@ import GitDiffModal from './GitDiffModal'
 import GitLogModal from './GitLogModal'
 import GitGraphModal from './GitGraphModal'
 import GitStashModal from './GitStashModal'
-import { changeSections, rowKey, splitRowKey } from './sections'
+import { changeSections, rowKey, splitRowKey, type GitSectionKey } from './sections'
 import VirtualList from './VirtualList'
 
 interface Props {
@@ -60,12 +62,25 @@ interface Props {
   onAttachPaths: (paths: string[]) => void
 }
 
-/** 段标题与文件行**分开两个滚动容器**：标题挂在段自己的列表外（固定），只有文件行在 `.git-list` 里滚 ——
-    滚一长段时那一段的标题与「全部暂存」不会跑掉，两段也各自从顶部开始滚。 */
+/** 变更列表只有一行标题信息：段标题 + 文件行都住在同一段里，现在是「一次只看一段」，
+    段标题换成顶部 tab（计数与批量入口都在那一行）—— 两段并排时每列只有一半宽度，
+    长路径与行内操作互相挤。 */
 
 /** 行高（px）—— 虚拟列表靠它算前缀和，**必须与 `.git-list .git-row` 一致**：
     24 是行内那颗 22px 按钮的下限（20px 时按钮会被裁掉半截） */
 const ROW_H = 24
+
+/** 某一段空掉时的提示（各段说自己的话，不用一句通用的「没有更改」） */
+function emptySectionText(key: GitSectionKey): string {
+  switch (key) {
+    case 'staged':
+      return t('没有暂存的更改')
+    case 'conflicts':
+      return t('没有冲突')
+    default:
+      return t('没有未暂存的更改')
+  }
+}
 
 /** 输出块（hooks / 网络进度）：`pre` 等宽、限高滚动，两处共用。 */
 function OutputBlock({
@@ -112,6 +127,8 @@ export const GitPanel = observer(function GitPanel({
   const anchorRef = useRef<string | null>(null)
   /** 「修改上一次提交」：开着时提交走 `--amend`（改信息 / 把暂存内容并入上一条） */
   const [amend, setAmend] = useState(false)
+  /** 变更列表当前 tab（`sections` 的 key）：一次只看一段 */
+  const [tab, setTab] = useState<GitSectionKey>('unstaged')
   /** 头部「更多」菜单：同步浮层 / 合并浮层 / 贮藏浮层 / 撤销上次提交 / 修改上一次提交 ——
    * 五项都不常用，常驻会挤掉分支名 */
   const more = useContextMenu()
@@ -121,7 +138,6 @@ export const GitPanel = observer(function GitPanel({
   const groups = groupChanges(snapshot)
   /** 行数统计（只在面板打开时取；没回来时 `null`，行内就不画数字） */
   const stats = gitStore.stats
-  const totals = statTotals(snapshot, stats)
   const readonly = settingsState.value.sandboxMode === 'readonly'
   const busy = gitStore.busy !== null
   const disabled = readonly || busy
@@ -139,17 +155,42 @@ export const GitPanel = observer(function GitPanel({
   const selectedLive = selected.filter((key) => flatKeys.includes(key))
   const selectedSet = new Set(selectedLive)
 
-  /** 每段一份行高数组（全是 `ROW_H`）：两段是两个独立滚动容器，各自只切自己的窗口 */
-  const sectionLists = useMemo(
-    () =>
-      sections
-        .filter((section) => section.entries.length > 0)
-        .map((section) => ({
-          section,
-          heights: section.entries.map(() => ROW_H),
-        })),
-    [sections],
+  /**
+   * 变更列表改成**一次只看一段**（顶部 tab 切换）：并排两列时每列只有一半宽度，
+   * 长路径与行内操作互相挤。冲突段只在这一段非空时出现（常驻一个「冲突 0」只是噪音）。
+   */
+  const visibleSections = sections.filter(
+    (section) => section.key !== 'conflicts' || section.entries.length > 0,
   )
+  /** 当前段（tab 指向的那段；冲突处理完之后自动回落到第一段） */
+  const activeSection =
+    visibleSections.find((section) => section.key === tab) ?? visibleSections[0]
+
+  /**
+   * 第一次拿到快照时按「有内容的那一段」定一次初值：全暂存完再打开面板不该先看到空列表，
+   * 有冲突则先看冲突（三段里唯一「必须处理」的）。之后一切以用户点的 tab 为准。
+   */
+  const tabInitedRef = useRef(false)
+  useEffect(() => {
+    if (tabInitedRef.current || !snapshot) return
+    tabInitedRef.current = true
+    const target =
+      visibleSections.find(
+        (section) => section.key === 'conflicts' && section.entries.length > 0,
+      ) ?? visibleSections.find((section) => section.entries.length > 0)
+    if (target) setTab(target.key)
+  }, [snapshot, visibleSections])
+
+  /** 当前段每行的高度（都是 `ROW_H`）：长度不变就复用同一份数组，虚拟列表别每帧重算前缀和 */
+  const activeHeights = useMemo(
+    () => new Array<number>(activeSection.entries.length).fill(ROW_H),
+    [activeSection.entries.length],
+  )
+
+  /** 当前段的行数合计（**只算这一段**：同一个文件两段都有改动时各算各的，相加没有意义） */
+  const activeTotals = sectionStatTotals(activeSection.side, activeSection.entries, stats)
+  /** 暂存段的合计：那个 tab 不单占一行汇总，数字落到提交区的提示上 */
+  const stagedTotals = sectionStatTotals('staged', groups.staged, stats)
 
   /** 单击选中 / Ctrl-Cmd 加减 / Shift 取一段；锚点只在单击与 Ctrl 时挪动。 */
   function selectRow(key: string, mod: { shift: boolean; toggle: boolean }): void {
@@ -293,13 +334,6 @@ export const GitPanel = observer(function GitPanel({
     })
     return items
   }
-
-  const nothingToShow =
-    !!snapshot &&
-    groups.staged.length === 0 &&
-    groups.unstaged.length === 0 &&
-    groups.untracked.length === 0 &&
-    groups.conflicts.length === 0
 
   // 进行中的挑选 / 还原：冲突解决到一半时，面板顶部必须给两条出路（界面上没有终端可用）
   const pick = gitStore.pick
@@ -480,85 +514,98 @@ export const GitPanel = observer(function GitPanel({
         />
       )}
 
-      {/* 行数汇总（每一行也各有「+a −d」）：文件数来自快照（统计没回来时也准），行数来自统计 */}
-      {gitStore.repo && totals.files > 0 && (
-        <div
-          className="git-stats-summary"
-          title={t('未跟踪文件按全文新增计；二进制与冲突文件不计入行数')}>
-          <span>{tpl('已编辑 $__count__ 个文件', { count: totals.files })}</span>
-          <span className="git-spacer" />
-          {stats && (
-            <>
-              <span className="git-stat-add">+{totals.added}</span>
-              <span className="git-stat-del">−{totals.deleted}</span>
-              {/* 有文件数不出来（二进制 / 冲突）→ 合计只是「已知部分」，用省略号说清楚 */}
-              {totals.partial && <span className="git-stat-more">…</span>}
-            </>
-          )}
-        </div>
-      )}
-
       {gitStore.repo && (
         <>
-          {nothingToShow && (
-            <div className="git-list">
-              <div className="git-empty">{t('没有更改')}</div>
-            </div>
-          )}
+          {/* tab 栏：三段变更一次只看一段（并排两列时每列只有一半宽度，长路径与行内操作互相挤）。
+              计数挂在 tab 上，当前段的批量入口在行尾 —— 段自己的标题行因此可以省掉。 */}
+          <div className="git-tabs" role="tablist">
+            {visibleSections.map((section) => (
+              <button
+                key={section.key}
+                type="button"
+                role="tab"
+                aria-selected={section.key === activeSection.key}
+                className={`git-tab${section.key === activeSection.key ? ' is-active' : ''}${section.key === 'conflicts' ? ' is-danger' : ''
+                  }`}
+                onClick={() => setTab(section.key)}>
+                <span className="git-tab-name">{section.title}</span>
+                <span className="git-tab-count">{section.entries.length}</span>
+              </button>
+            ))}
+            <span className="git-spacer" />
+            {/* 一段只有一条时没有「全部」可言 */}
+            {activeSection.bulk && activeSection.entries.length > 1 && (
+              <button
+                type="button"
+                className="git-bulk-btn"
+                title={activeSection.bulk.label}
+                disabled={disabled}
+                onClick={activeSection.bulk.run}>
+                {activeSection.bulk.label}
+              </button>
+            )}
+          </div>
 
-          {sectionLists.length > 0 && (
-            <div className="git-list-box">
-              {sectionLists.map(({ section, heights }) => (
-                <section className="git-section" key={section.key}>
-                  {/* 段标题在这一段自己的滚动列表**之外**（不随列表滚走） */}
-                  <div className="git-section-title">
-                    <span>{section.title}</span>
-                    <span className="git-section-count">
-                      {section.entries.length}
-                    </span>
-                    <span className="git-spacer" />
-                    {/* 一段只有一条时没有「全部」可言 */}
-                    {section.bulk && section.entries.length > 1 && (
-                      <button
-                        type="button"
-                        className="git-row-btn"
-                        title={section.bulk.label}
+
+
+          <div className="git-list-box">
+            <section className="git-section" role="tabpanel">
+              {activeSection.entries.length > 0 ? (
+                <VirtualList
+                  // 换 tab = 换一份内容与滚动位置（不给 key 会沿用上一段的 scrollTop）
+                  key={activeSection.key}
+                  className="git-list"
+                  items={activeSection.entries}
+                  heights={activeHeights}
+                  render={(entry) => {
+                    const key = rowKey(activeSection.side, entry.path)
+                    // 批量目标在这里算一次：行只负责「按钮被点了」，不重复一遍选中集口径
+                    const paths = actionPaths(key, activeSection.side)
+                    return (
+                      <GitChangeRow
+                        key={key}
+                        entry={entry}
+                        side={activeSection.side}
+                        stat={statOf(stats, activeSection.side, entry.path)}
                         disabled={disabled}
-                        onClick={section.bulk.run}>
-                        {section.bulk.label}
-                      </button>
-                    )}
-                  </div>
-                  <VirtualList
-                    className="git-list"
-                    items={section.entries}
-                    heights={heights}
-                    render={(entry) => {
-                      const key = rowKey(section.side, entry.path)
-                      // 批量目标在这里算一次：行只负责「按钮被点了」，不重复一遍选中集口径
-                      const paths = actionPaths(key, section.side)
-                      return (
-                        <GitChangeRow
-                          key={key}
-                          entry={entry}
-                          side={section.side}
-                          stat={statOf(stats, section.side, entry.path)}
-                          disabled={disabled}
-                          selected={selectedSet.has(key)}
-                          batch={paths.length}
-                          dragPaths={paths}
-                          onAttach={attachPaths}
-                          onSelect={(mod) => selectRow(key, mod)}
-                          onStage={() => void stage(paths)}
-                          onUnstage={() => void unstage(paths)}
-                          onDiscard={() => void discard(paths)}
-                          onOpenDiff={setDiffTarget}
-                        />
-                      )
-                    }}
-                  />
-                </section>
-              ))}
+                        selected={selectedSet.has(key)}
+                        batch={paths.length}
+                        dragPaths={paths}
+                        onAttach={attachPaths}
+                        onSelect={(mod) => selectRow(key, mod)}
+                        onStage={() => void stage(paths)}
+                        onUnstage={() => void unstage(paths)}
+                        onDiscard={() => void discard(paths)}
+                        onOpenDiff={setDiffTarget}
+                      />
+                    )
+                  }}
+                />
+              ) : (
+                <div className="git-empty">{emptySectionText(activeSection.key)}</div>
+              )}
+            </section>
+          </div>
+          {/* 行数汇总挂在 tab **下方**、只描述当前这一段（跨段总和会跟列表对不上）：
+              文件数来自快照（统计没回来时也准），行数来自统计。
+              暂存那一段不占这一行 —— 它的数字落在提交区的提示上（见 `.git-hint`）；
+              冲突段没有行数可言（conflicts 不在统计里），也不给。 */}
+          {activeSection.key === 'unstaged' && activeSection.entries.length > 0 && (
+            <div
+              className="git-stats-summary"
+              title={t('未跟踪文件按全文新增计；二进制与冲突文件不计入行数')}>
+              <span>
+                {tpl('已编辑 $__count__ 个文件', { count: activeTotals.files })}
+              </span>
+              <span className="git-spacer" />
+              {stats && (
+                <>
+                  <span className="git-stat-add">+{activeTotals.added}</span>
+                  <span className="git-stat-del">−{activeTotals.deleted}</span>
+                  {/* 有文件数不出来（二进制 / 未跟踪过大）→ 合计只是「已知部分」 */}
+                  {activeTotals.partial && <span className="git-stat-more">…</span>}
+                </>
+              )}
             </div>
           )}
 
@@ -568,57 +615,73 @@ export const GitPanel = observer(function GitPanel({
             </div>
           )}
 
-          {/* 提交区在**最下面**（先看改了什么再写提交信息）；amend 模式下即使暂存区为空也要出现
-              —— 只改提交信息是它最常见的用途 */}
-          {(groups.staged.length > 0 || (amend && !!head?.oid)) && (
-            <div className="git-commit">
-              <textarea
-                value={gitStore.commitDraft}
-                placeholder={
-                  readonly
-                    ? t('只读沙盒模式下无法提交')
-                    : t('提交信息（Ctrl+Enter 提交）')
-                }
-                disabled={disabled}
-                onChange={(e) =>
-                  runInAction(() => {
-                    gitStore.commitDraft = e.target.value
-                  })
-                }
-                onKeyDown={(e) => {
-                  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                    e.preventDefault()
-                    void commit(gitStore.commitDraft, amend)
+          {/* 提交区挂在「暂存区」这一 tab 下（提交只跟暂存区有关），amend 模式下即使暂存区为空
+              也要出现 —— 只改提交信息是它最常见的用途 */}
+          {activeSection.key === 'staged' &&
+            (groups.staged.length > 0 || (amend && !!head?.oid)) && (
+              <div className="git-commit">
+                <textarea
+                  value={gitStore.commitDraft}
+                  placeholder={
+                    readonly
+                      ? t('只读沙盒模式下无法提交')
+                      : t('提交信息（Ctrl+Enter 提交）')
                   }
-                }}
-              />
-              <div className="git-commit-row">
-                <span className="git-hint">
-                  {gitStore.busy
-                    ? tpl('执行中：$__op__', { op: gitStore.busy })
-                    : groups.staged.length > 0
-                      ? tpl('已暂存 $__count__ 个文件', {
-                        count: groups.staged.length,
-                      })
-                      : t('修改提交信息（不改动文件内容）')}
-                </span>
-                <span className="git-spacer" />
-                <button
-                  type="button"
-                  className="git-primary-btn"
-                  disabled={disabled || !gitStore.commitDraft.trim()}
-                  onClick={() => {
-                    void (async () => {
-                      const ok = await commit(gitStore.commitDraft, amend)
-                      // 改完就退出 amend 模式：下一次提交默认是新的
-                      if (ok) setAmend(false)
-                    })()
-                  }}>
-                  {amend ? t('修改提交') : t('提交')}
-                </button>
+                  disabled={disabled}
+                  onChange={(e) =>
+                    runInAction(() => {
+                      gitStore.commitDraft = e.target.value
+                    })
+                  }
+                  onKeyDown={(e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                      e.preventDefault()
+                      void commit(gitStore.commitDraft, amend)
+                    }
+                  }}
+                  rows={4}
+                />
+                <div className="git-commit-row">
+                  {/* 暂存那一段的行数合计就落在这句提示上（那个 tab 不再单占一行汇总） */}
+                  <span className="git-hint">
+                    {gitStore.busy ? (
+                      tpl('执行中：$__op__', { op: gitStore.busy })
+                    ) : groups.staged.length > 0 ? (
+                      <>
+                        {tpl('已暂存 $__count__ 个文件', {
+                          count: groups.staged.length,
+                        })}
+                        {stats && (
+                          <>
+                            <span className="git-stat-add"> +{stagedTotals.added}</span>
+                            <span className="git-stat-del"> −{stagedTotals.deleted}</span>
+                            {stagedTotals.partial && (
+                              <span className="git-stat-more"> …</span>
+                            )}
+                          </>
+                        )}
+                      </>
+                    ) : (
+                      t('修改提交信息（不改动文件内容）')
+                    )}
+                  </span>
+                  <span className="git-spacer" />
+                  <button
+                    type="button"
+                    className="git-primary-btn"
+                    disabled={disabled || !gitStore.commitDraft.trim()}
+                    onClick={() => {
+                      void (async () => {
+                        const ok = await commit(gitStore.commitDraft, amend)
+                        // 改完就退出 amend 模式：下一次提交默认是新的
+                        if (ok) setAmend(false)
+                      })()
+                    }}>
+                    {amend ? t('修改提交') : t('提交')}
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
+            )}
         </>
       )}
 

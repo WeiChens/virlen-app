@@ -11,8 +11,9 @@
  *    （按钮文案会写明「… N 个文件」，点之前就知道它带走几个）；
  * 6. **不常用的三个动作收在「更多」里**（同步浮层 / 撤销上次提交 / 修改上一次提交），
  *    落差数字则是**按钮**（点它 = 先拉取再推送）—— 头部宽度只够一件事一个入口。
- * 7. **段顺序是「更改 → 暂存的更改」，提交区在列表最下面**（实测反馈）：文件暂存后在列表里往下走，
- *    而不是跑到顶上；先看改了什么，再写提交信息。
+ * 7. **变更列表一次只看一段（顶部 tab 切换）+ 提交区只挂在「暂存区」tab 下**（实测反馈）：
+ *    两段并排时每列只剩一半宽度，长路径与行内操作互相挤；段顺序仍是「更改 → 暂存区」
+ *    （文件暂存后往下走，而不是跑到顶上），先看改了什么，再切到暂存区写提交信息。
  *
  * 数据与写操作全部 mock：这里只验界面，git 语义由 Rust 用例（`cargo test -p virlen-core git`）守。
  */
@@ -172,6 +173,27 @@ function clickWith(el: Element, init: MouseEventInit) {
   })
 }
 
+/** 变更 tab 上的文案（顺序即段顺序） */
+function tabLabels(): string[] {
+  return [...document.querySelectorAll('.git-tab-name')].map(
+    (el) => el.textContent ?? '',
+  )
+}
+
+/** 当前 tab 的名称 */
+function activeTab(): string {
+  return document.querySelector('.git-tab.is-active .git-tab-name')?.textContent ?? ''
+}
+
+/** 切到某个变更 tab（一次只看一段） */
+function clickTab(label: string) {
+  const tab = [...document.querySelectorAll<HTMLElement>('.git-tab')].find(
+    (el) => el.querySelector('.git-tab-name')?.textContent === label,
+  )
+  if (!tab) throw new Error(`tab「${label}」不存在`)
+  click(tab)
+}
+
 /** 当前选中的行（DOM 上就是 .git-row.selected），按列表顺序给出去重的路径 */
 function selectedPaths(): string[] {
   return [
@@ -225,16 +247,18 @@ it('暂存区为空：不渲染提交区（也没有可提交的东西），但�
 
   expect(document.querySelector('.git-commit')).toBeNull()
   expect(document.querySelector('.git-primary-btn')).toBeNull()
-  // 「更改」段与它的「全部暂存」都还在 —— 提交区消失不等于没有出路
-  expect(
-    document.querySelector('.git-section-title .git-row-btn')?.textContent,
-  ).toBe('全部暂存')
+  // 「更改」tab 与它的「全部暂存」都还在 —— 提交区消失不等于没有出路
+  expect(activeTab()).toBe('更改')
+  expect(document.querySelector('.git-bulk-btn')?.textContent).toBe('全部暂存')
   expect(document.querySelectorAll('.git-row').length).toBe(2)
 })
 
-it('暂存区非空：提交区出现，提示在左、提交按钮在行尾', () => {
+it('暂存区非空：提交区出现在暂存 tab 下，提示在左、提交按钮在行尾', () => {
   setStore([stagedEntry('staged.txt'), unstagedEntry('work.txt')])
   mount()
+  // 提交区只挂在「暂存区」这一 tab 下（提交只跟暂存区有关）
+  expect(document.querySelector('.git-commit')).toBeNull()
+  clickTab('暂存区')
 
   const row = document.querySelector('.git-commit-row')
   expect(row).not.toBeNull()
@@ -245,23 +269,55 @@ it('暂存区非空：提交区出现，提示在左、提交按钮在行尾', (
   expect(row!.lastElementChild?.textContent).toBe('提交')
 })
 
-/** 段顺序与提交区位置（实测反馈）：暂存后在列表里往下走，提交区在列表之后 */
-it('段顺序是「更改 → 暂存的更改」，且提交区在列表之后', () => {
+/** tab 顺序与提交区位置（实测反馈）：两段并排挤掉一半宽度，改成 tab 切换；提交区归暂存区 */
+it('tab 顺序是「更改 → 暂存区」，提交区只在暂存那个 tab 下', () => {
   setStore([stagedEntry('s.txt'), unstagedEntry('a.txt')])
   mount()
 
-  const titles = [...document.querySelectorAll('.git-section-title')].map(
-    (el) => el.firstElementChild?.textContent,
-  )
-  expect(titles).toEqual(['更改', '暂存的更改'])
+  expect(tabLabels()).toEqual(['更改', '暂存区'])
+  // 默认停在「更改」：先看改了什么，再切到暂存区写提交信息
+  expect(activeTab()).toBe('更改')
 
-  // 提交区在**最后**：先看改了什么，再写提交信息
+  clickTab('暂存区')
+  expect(activeTab()).toBe('暂存区')
+  // 提交区在暂存列表**之后**：先看改了哪些文件，再写提交信息
   const list = document.querySelector('.git-list') as HTMLElement
   const commitBox = document.querySelector('.git-commit') as HTMLElement
   expect(commitBox).not.toBeNull()
   expect(
     list.compareDocumentPosition(commitBox) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy()
+})
+
+/** 冲突段：处理掉之前一直在 tab 上，且是唯一带危险色的那一个（初值优先落到它） */
+it('有冲突时多一个「冲突」tab（危险色），初值就落在那一段', () => {
+  setStore([
+    entry({ path: 'c.txt', x: 'U', y: 'U', kind: 'unmerged' }),
+    unstagedEntry('a.txt'),
+  ])
+  mount()
+
+  expect(tabLabels()).toEqual(['更改', '暂存区', '冲突'])
+  expect(activeTab()).toBe('冲突')
+  // 冲突是三段里唯一「必须处理」的：计数走危险色（样式契约里钉了选择器）
+  expect(
+    document.querySelector('.git-tab.is-danger .git-tab-name')?.textContent,
+  ).toBe('冲突')
+  // 冲突段没有批量入口（「暂存」对冲突文件是「标记已解决」，不能批量做）
+  expect(document.querySelector('.git-bulk-btn')).toBeNull()
+  expect(document.querySelectorAll('.git-row').length).toBe(1)
+})
+
+/** 空段不是白屏：各段说自己的话（否则切过去看不出是「空的」还是「没渲染」） */
+it('切到空的那一段给一句空态文案', () => {
+  setStore([unstagedEntry('a.txt')])
+  mount()
+
+  clickTab('暂存区')
+  expect(document.querySelector('.git-list')).toBeNull()
+  expect(document.querySelector('.git-empty')?.textContent).toBe('没有暂存的更改')
+  // 提交区也不在（没有暂存的东西可提交）
+  expect(document.querySelector('.git-commit')).toBeNull()
 })
 
 it('提交按钮：草稿为空时禁用，写入草稿后可点，并把草稿交给 commit()', () => {
@@ -286,15 +342,12 @@ it('提交按钮：草稿为空时禁用，写入草稿后可点，并把草稿�
   expect(commit).toHaveBeenCalledWith('feat: 面板', false)
 })
 
-it('未跟踪就在「更改」段里（不再单列），行内排布 = 图标在左、状态字母在最右', () => {
+it('未跟踪就在「更改」tab 里（不再单列），行内排布 = 图标在左、状态字母在最右', () => {
   setStore([unstagedEntry('a.txt'), untrackedEntry('new.ts')])
   mount()
 
   // 只有「更改」一段（未跟踪不另起一段）；已跟踪的改动在前、未跟踪在后
-  const titles = [...document.querySelectorAll('.git-section-title')].map(
-    (el) => el.firstElementChild?.textContent,
-  )
-  expect(titles).toEqual(['更改'])
+  expect(tabLabels()).toEqual(['更改', '暂存区'])
   const rows = [...document.querySelectorAll('.git-row')]
   expect(rows.length).toBe(2)
   expect(
@@ -313,7 +366,7 @@ it('未跟踪就在「更改」段里（不再单列），行内排布 = 图标�
   expect(rows[1].querySelector('.git-row-icon')).not.toBeNull()
 
   // 合并后的「全部暂存」仍然是「没暂存的全暂存」（未跟踪不能因为换了个位置就被漏掉）
-  click(document.querySelector('.git-section-title .git-row-btn'))
+  click(document.querySelector('.git-bulk-btn'))
   expect(stage).toHaveBeenCalledWith(['a.txt', 'new.ts'])
 })
 
@@ -407,7 +460,7 @@ it('批量：点选中行里的按钮作用于同侧选中的全部，文案写�
   ])
   mount()
 
-  // 列表顺序 = 段顺序：a.txt、b.txt（更改）、s.txt（暂存的更改）
+  // 「更改」tab 里只有 a.txt、b.txt
   const rows = [...document.querySelectorAll('.git-row')]
   click(rows[0])
   clickWith(rows[1], { ctrlKey: true })
@@ -417,8 +470,10 @@ it('批量：点选中行里的按钮作用于同侧选中的全部，文案写�
   click(stageBtn)
   expect(stage).toHaveBeenCalledWith(['a.txt', 'b.txt'])
 
-  // 未选中的那一行：只作用于它自己（「取消暂存」不带数量）
-  const unstageBtn = rowButtons(rows[2])[0]
+  // 「暂存区」tab：未选中的那一行只作用于它自己（「取消暂存」不带数量）
+  clickTab('暂存区')
+  const stagedRow = document.querySelector('.git-row')!
+  const unstageBtn = rowButtons(stagedRow)[0]
   expect(unstageBtn.getAttribute('aria-label')).toBe('取消暂存')
   click(unstageBtn)
   expect(unstage).toHaveBeenCalledWith(['s.txt'])
@@ -428,12 +483,13 @@ it('批量只取同侧：选中集里混了已暂存的行，点「暂存更改�
   setStore([stagedEntry('s.txt'), unstagedEntry('a.txt')])
   mount()
 
-  // 段顺序：更改（a.txt）在前、暂存的更改（s.txt）在后
-  const rows = [...document.querySelectorAll('.git-row')]
-  click(rows[0])
-  clickWith(rows[1], { ctrlKey: true })
+  // 选中集是跨 tab 的（切 tab 不清选区）：先在「更改」里选 a.txt，再去暂存那边选 s.txt
+  click(document.querySelector('.git-row')!)
+  clickTab('暂存区')
+  clickWith(document.querySelector('.git-row')!, { ctrlKey: true })
+  clickTab('更改')
 
-  const stageBtn = rowButtons(rows[0])[1]
+  const stageBtn = rowButtons(document.querySelector('.git-row')!)[1]
   // 同侧只有它自己 → 单数文案（不是「暂存 2 个文件」）
   expect(stageBtn.getAttribute('aria-label')).toBe('暂存更改')
   click(stageBtn)
@@ -668,10 +724,13 @@ it('「修改上一次提交」在更多菜单里：提交走 amend，并回填�
 it('暂存区为空时 amend 模式仍给提交区', async () => {
   setStore([unstagedEntry('a.txt')])
   mount()
-  expect(document.querySelector('.git-commit')).toBeNull()
 
   await openMoreMenu()
   await clickMoreItem('修改上一次提交')
+  // 提交区只挂在暂存 tab 下：此刻还在「更改」，amend 开着也不显示
+  expect(document.querySelector('.git-commit')).toBeNull()
+  // tab 本身可点，切过去就该看见它
+  clickTab('暂存区')
   expect(document.querySelector('.git-commit')).toBeTruthy()
   expect(document.querySelector('.git-hint')?.textContent).toBe(
     '修改提交信息（不改动文件内容）',
@@ -906,8 +965,8 @@ it('变更很多时列表走虚拟化（不真的铺几千个 .git-row）', () =
   }
 })
 
-/** 两段各一个滚动区：标题在各自的列表**之外**，滚一长段时标题与「全部暂存」不会跟着滚走 */
-it('更改与暂存的更改各有一个滚动列表，段标题在列表之外', () => {
+/** 一次只看一段：切 tab 换的是**同一个**滚动列表的内容（不再并排两个容器） */
+it('切 tab 换列表内容：段标题不是单独一行，标题在 tab 上', () => {
   setStore([
     stagedEntry('s.txt'),
     unstagedEntry('a.txt'),
@@ -915,27 +974,35 @@ it('更改与暂存的更改各有一个滚动列表，段标题在列表之外'
   ])
   mount()
 
-  const groups = [...document.querySelectorAll('.git-section')]
-  expect(
-    groups.map((el) => el.querySelector('.git-section-title > span')?.textContent),
-  ).toEqual(['更改', '暂存的更改'])
-
-  for (const group of groups) {
-    const lists = group.querySelectorAll('.git-list')
-    // 一段一个列表（两个滚动容器，不共用）
-    expect(lists.length).toBe(1)
-    // 标题不在列表里 —— 在里面就会随自己的列表一起滚走
-    expect(lists[0].querySelector('.git-section-title')).toBeNull()
-    expect(group.querySelectorAll('.git-row').length).toBeGreaterThan(0)
-  }
-
-  // 46vh 的高度上限只由外层容器给（两段加起来超过它时各自收缩、各自滚）
+  // 一次只渲染一个列表（46vh 的高度上限只由外层容器给）
   expect(document.querySelectorAll('.git-list-box').length).toBe(1)
+  expect(document.querySelectorAll('.git-list').length).toBe(1)
+  expect(document.querySelectorAll('.git-section').length).toBe(1)
+  // 段标题（包括「全部暂存」那一行）不再占高度：信息全在 tab 栏上
+  expect(document.querySelector('.git-section-title')).toBeNull()
+  expect(activeTab()).toBe('更改')
+  expect([...document.querySelectorAll('.git-row-name')].map((el) => el.textContent)).toEqual([
+    'a.txt',
+    'b.txt',
+  ])
+
+  clickTab('暂存区')
+  expect([...document.querySelectorAll('.git-row-name')].map((el) => el.textContent)).toEqual([
+    's.txt',
+  ])
+  // 计数跟当前 tab 对得上（s.txt 一个）
+  expect(
+    document.querySelector('.git-tab.is-active .git-tab-count')?.textContent,
+  ).toBe('1')
 })
 
 // ==================== 行数统计（+增 −删） ====================
-/** 行内是「每文件」的数，摘要行是「总和」—— 两者同一个口径（都来自 `gitStore.stats`） */
-it('每个文件显示 +增 −删，顶部给合计', () => {
+/**
+ * 汇总**只描述当前这一段**（不再是跨段总和）：
+ * - 挂在当前 tab 内容的**最下方**（列表之后）；
+ * - 暂存那一段不占这一行 —— 它的数字落在提交区的 `.git-hint` 上。
+ */
+it('行数汇总只算当前段：更改在列表下方、暂存在提交区提示上', () => {
   setStore([stagedEntry('a.txt'), unstagedEntry('b.txt')])
   runInAction(() => {
     gitStore.stats = {
@@ -945,19 +1012,37 @@ it('每个文件显示 +增 −删，顶部给合计', () => {
   })
   mount()
 
-  const rows = [...document.querySelectorAll('.git-row')]
-  expect(rows.map((r) => r.querySelector('.git-row-stat')?.textContent)).toEqual([
-    // 段顺序：更改（b.txt）在前、暂存的更改（a.txt）在后
-    '+10−0',
-    '+3−1',
-  ])
+  // 「更改」tab：只有 b.txt 的行内数字
+  const rowStats = () =>
+    [...document.querySelectorAll('.git-row')].map(
+      (r) => r.querySelector('.git-row-stat')?.textContent,
+    )
+  expect(rowStats()).toEqual(['+10−0'])
 
-  const summary = document.querySelector('.git-stats-summary')?.textContent
-  expect(summary).toContain('已编辑 2 个文件')
-  expect(summary).toContain('+13')
-  expect(summary).toContain('−1')
-  // 都算得出 → 不加省略号
-  expect(summary).not.toContain('…')
+  const summary = document.querySelector('.git-stats-summary') as HTMLElement
+  expect(summary.textContent).toContain('已编辑 1 个文件')
+  // 只算这一段：a.txt（staged 那一侧）的 +3 −1 不能借进来
+  expect(summary.querySelector('.git-stat-add')?.textContent).toBe('+10')
+  expect(summary.querySelector('.git-stat-del')?.textContent).toBe('−0')
+  expect(summary.textContent).not.toContain('…')
+  // 位置：在 tab **内容区的最下方**（列表之后）
+  const tabs = document.querySelector('.git-tabs') as HTMLElement
+  const list = document.querySelector('.git-list') as HTMLElement
+  expect(
+    tabs.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy()
+  expect(
+    list.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy()
+
+  // 「暂存区」tab：不占汇总行，数字落到提交区提示上
+  clickTab('暂存区')
+  expect(rowStats()).toEqual(['+3−1'])
+  expect(document.querySelector('.git-stats-summary')).toBeNull()
+  const hint = document.querySelector('.git-hint') as HTMLElement
+  expect(hint.textContent).toContain('已暂存 1 个文件')
+  expect(hint.querySelector('.git-stat-add')?.textContent?.trim()).toBe('+3')
+  expect(hint.querySelector('.git-stat-del')?.textContent?.trim()).toBe('−1')
 })
 
 /** 二进制 / 冲突没有数字：行内不画（不写 0），合计加省略号说明「只是已知部分」 */
@@ -985,6 +1070,11 @@ it('统计未加载时不显示行数合计', () => {
   const summary = document.querySelector('.git-stats-summary')?.textContent
   expect(summary).toContain('已编辑 1 个文件')
   expect(summary).not.toContain('+')
+
+  // 暂存那边同理：提示只报个数，不编 +0 −0
+  clickTab('暂存区')
+  expect(document.querySelector('.git-stats-summary')).toBeNull()
+  expect(document.querySelector('.git-hint')).toBeNull()
 })
 
 /**

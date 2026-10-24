@@ -245,7 +245,7 @@ it('左侧清单：列出各段文件、当前文件高亮，点另一个即切�
   const titles = [...document.querySelectorAll('.git-diff-side-title')].map(
     (el) => el.textContent,
   )
-  expect(titles).toEqual(['更改3', '暂存的更改1'])
+  expect(titles).toEqual(['更改3', '暂存区1'])
   expect(document.querySelectorAll('.git-diff-side-row').length).toBe(4)
 
   // 当前行高亮（打开时定位到双击的那一行）

@@ -434,6 +434,9 @@ export async function stage(paths: string[]): Promise<boolean> {
   const snapshot = await run('stage', () => invokeStage(dir, paths))
   if (!snapshot) return false
   acceptSnapshot(snapshot)
+  // index 变了：行数按**段**存放（staged / worktree），不重取的话行内会去旧的那一段里找
+  // ——找不到就不画数字（实测反馈：全部取消暂存后切回「更改」，+N −M 全没了）
+  void refreshStats()
   return true
 }
 
@@ -443,6 +446,8 @@ export async function unstage(paths: string[]): Promise<boolean> {
   const snapshot = await run('unstage', () => invokeUnstage(dir, paths))
   if (!snapshot) return false
   acceptSnapshot(snapshot)
+  // 同上：文件从 staged 段跳到 worktree 段，统计必须重取
+  void refreshStats()
   return true
 }
 
@@ -464,6 +469,8 @@ export async function discard(paths: string[]): Promise<boolean> {
   const snapshot = await run('discard', () => invokeDiscard(dir, paths))
   if (!snapshot) return false
   acceptSnapshot(snapshot)
+  // 工作区文件被改写 / 删掉了：行内数字必须跟着重取（否则还挂着丢弃前的 +N −M）
+  void refreshStats()
   return true
 }
 
@@ -545,6 +552,8 @@ export async function undoLastCommit(): Promise<boolean> {
   const snapshot = await run('commit_undo', () => invokeUndoLastCommit(dir))
   if (!snapshot) return false
   acceptSnapshot(snapshot)
+  // 撤掉的改动全进了暂存区：统计的段归属整体换了，不重取就看不到数字
+  void refreshStats()
   await refreshBranches()
   showToast(t('已撤销上次提交，改动保留在暂存区'))
   return true

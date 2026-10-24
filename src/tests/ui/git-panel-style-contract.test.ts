@@ -1,9 +1,9 @@
 /**
  * 源代码管理面板 · 样式契约（两条都是**实测反馈**里暴露出来的，且编译期不会报）。
  *
- * ① **小按钮的样式必须挂在顶层**：变更行里的那颗在 `.git-row` 内，段标题里的「全部暂存」不在 ——
- *    把 `.git-row-btn` 写进 `.git-row` 作用域，段标题那颗就掉回浏览器默认按钮样式
- *    （方角、被系统主题撑大、hover 没反馈）。
+ * ① **小按钮 / 共用样式必须挂在顶层**：变更行里的那颗在 `.git-row` 内，tab 栏行尾的「全部暂存」不在 ——
+ *    把 `.git-row-btn` / `.git-bulk-btn` 写进某个父选择器作用域，那几颗就掉回浏览器默认按钮样式
+ *    （方角、被系统主题撑大、hover 没反馈）；增删行数的语义色同理（汇总与提交提示两处渲染）。
  * ② **引用的主题令牌必须真实存在**：`var(--x, #fallback)` 在 `--x` 从未定义时 fallback 永远生效，
  *    暗色主题照的还是亮色档 —— 实测踩过：`--success-color` / `--warning-color` / `--danger-color`
  *    三个名字全项目都没有定义（亮色档的绿 #16a34a 在深底上几乎不可读）。
@@ -38,12 +38,11 @@ function selectors(css: string): string[] {
 }
 
 describe('源代码管理 · 面板样式契约', () => {
-  it('小按钮的样式挂在顶层 —— 段标题里的「全部…」也拿得到', () => {
+  it('小按钮的样式挂在顶层 —— tab 栏行尾的批量入口也拿得到', () => {
     // 存在一条**选择器就是它自己**的规则；嵌在 .git-row 里就不可能有
     expect(selectors(panelCss)).toContain('.git-row-btn')
-    // 段标题那颗另有文字形态（宽度自适应、hover 才显形）；虚拟列表后标题是扁平条目，hover 判定落在它自己身上
-    expect(panelCss).toMatch(/\.git-section-title\s+\.git-row-btn\s*\{/)
-    expect(panelCss).toMatch(/\.git-section-title:hover[^{]*\.git-row-btn/)
+    // 批量入口（「全部暂存 / 全部取消暂存」）同样是顶层规则：写进某个父选择器就掉回浏览器默认按钮
+    expect(selectors(panelCss)).toContain('.git-bulk-btn')
     // 状态字母同理：变更行与差异弹窗左侧清单共用一个顶层规则（写进 .git-row 弹窗那份就没色了）
     expect(selectors(panelCss)).toContain('.git-row-letter')
     expect(selectors(panelCss)).toContain('.git-row-letter.s-\\?')
@@ -52,6 +51,9 @@ describe('源代码管理 · 面板样式契约', () => {
     // 主按钮同理：同一个类名会在不同语境下渲染（曾经是提交区 + 空态「初始化仓库」），
     // 写进 `.git-commit` 作用域里，另一处就掉回浏览器默认按钮（方角、系统色）—— 实测踩过
     expect(selectors(panelCss)).toContain('.git-primary-btn')
+    // 增删行数的语义色有两处消费者（tab 下的汇总 + 提交区的 `.git-hint`）：也必须在顶层
+    expect(selectors(panelCss)).toContain('.git-stat-add')
+    expect(selectors(panelCss)).toContain('.git-stat-del')
   })
 
   it('变更行的固定行高与 GitPanel 的 ROW_H 一致，且容得下行内按钮', () => {
@@ -64,14 +66,29 @@ describe('源代码管理 · 面板样式契约', () => {
     expect(rule).toContain(`height: ${rowH}px`)
   })
 
-  it('两段变更列表横着排（竖向空间不够就向横向要）', () => {
+  it('变更列表一次只看一段（tab 切换），不再横向分两列', () => {
+    // 列表容器只有一个子元素（当前段），所以是纵向 flex
     const box = /\.git-list-box\s*\{([^}]*)\}/.exec(panelCss)?.[1]
     expect(box).toBeTruthy()
-    expect(box).toContain('flex-direction: row')
-    // 两列等宽：`min-width: 0` 防止长路径把某一列撑宽
+    expect(box).toContain('flex-direction: column')
+    expect(box).toContain('max-height: 46vh')
+    // 段容器仍要 `min-width: 0`：长路径不许把面板撑宽
     const section = /\.git-section\s*\{([^}]*)\}/.exec(panelCss)?.[1]
     expect(section).toBeTruthy()
     expect(section).toContain('min-width: 0')
+    // tab 栏与 tab 本体都必须是顶层规则（否则 tab 掉回浏览器默认按钮：方角、系统色）
+    expect(selectors(panelCss)).toContain('.git-tabs')
+    expect(selectors(panelCss)).toContain('.git-tab')
+    // 激活态 / 冲突计数各自有一条（状态不能只靠 JS 里的类名）
+    expect(selectors(panelCss)).toContain('.git-tab.is-active')
+    expect(selectors(panelCss)).toContain('.git-tab.is-danger .git-tab-count')
+    // 段标题已经被 tab 取代：这套规则不该再回来
+    expect(selectors(panelCss)).not.toContain('.git-section-title')
+    // 汇总行挂在列表**下方**：分隔线在上边界（与列表之间），不在自己下面
+    const summary = /\.git-stats-summary\s*\{([^}]*)\}/.exec(panelCss)?.[1]
+    expect(summary).toBeTruthy()
+    expect(summary).toContain('border-top')
+    expect(summary).not.toContain('border-bottom')
   })
 
   it('差异弹窗的遮罩从自绘标题栏下方开始（不压住窗口状态栏）', () => {

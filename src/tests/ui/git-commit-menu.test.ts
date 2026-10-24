@@ -8,6 +8,8 @@
  *   而「提交记录」视图（`scope = 'head'`）**整份不给挑选** —— 那里每一行都是 HEAD 或它的祖先，挑了必是空提交；
  * - 「在此提交上新建分支…」由宿主给回调才出现（输入框挂在宿主的弹窗里）；
  * - 复制类永远在（写入口被 `disabled` 时也能复制），标题为空则置灰；
+ * - 「复制分支名称」**一个本地分支一条**，且只在提交图（`scope = 'all'`）出现：提交记录不画引用标签，
+ *   远程引用与标签不进这组（远程是云端的倒影，本名就是它自己那一截）。
  * - 分隔线只落在**组首**（逐项画线等于没分组）。
  *
  * 菜单本体（定位 / 关闭 / 点菜单项不关弹窗）由 `context-menu.test.tsx` 与两个弹窗的用例守。
@@ -175,6 +177,7 @@ describe('提交行的右键菜单', () => {
       '合并 feature 到当前分支',
       '复制提交 hash',
       '复制提交标题',
+      '复制分支名称 feature',
     ])
     // 分支组的第一项带分隔线
     expect(item(items, '切换到分支 feature').divider).toBe(true)
@@ -213,6 +216,7 @@ describe('提交行的右键菜单', () => {
       ...HISTORY_LABELS,
       '复制提交 hash',
       '复制提交标题',
+      '复制分支名称 master',
     ])
 
     // 标签与远端倒影都只是当前分支时同样不给（`merge master` 只会 Already up to date）
@@ -230,6 +234,7 @@ describe('提交行的右键菜单', () => {
       '合并 origin/master 到当前分支',
       '复制提交 hash',
       '复制提交标题',
+      '复制分支名称 master',
     ])
   })
 
@@ -285,6 +290,46 @@ describe('提交行的右键菜单', () => {
     vi.mocked(copyText).mockResolvedValueOnce(false)
     await item(items, '复制提交 hash').onClick()
     expect(showToast).toHaveBeenLastCalledWith('复制失败')
+  })
+
+  it('复制分支名称：一个本地分支一条，远程与标签不进，且只在提交图给', async () => {
+    const refs: GraphRef[] = [
+      { name: 'master', kind: 'head' },
+      { name: 'feature', kind: 'branch' },
+      { name: 'hotfix', kind: 'branch' },
+      { name: 'origin/master', kind: 'remote' },
+      { name: 'v1.0', kind: 'tag' },
+    ]
+    const items = commitMenuItems({ entry: entry(), scope: 'all', refs, currentBranch: 'master' })
+
+    // 三个本地分支 → 三条（`HEAD -> refs/heads/master` 的 name 就是 master，不能漏）
+    expect(labels(items).filter((l) => String(l).startsWith('复制分支名称'))).toEqual([
+      '复制分支名称 master',
+      '复制分支名称 feature',
+      '复制分支名称 hotfix',
+    ])
+    // 远程与标签不在这一组：前者是云端的倒影（复制出来还得剥前缀），后者不是可 checkout 的线
+    expect(labels(items)).not.toContain('复制分支名称 origin/master')
+    expect(labels(items)).not.toContain('复制分支名称 v1.0')
+
+    // 点哪条就复制哪个名字（不是这一行的某一个「代表分支」）
+    await item(items, '复制分支名称 hotfix').onClick()
+    expect(copyText).toHaveBeenLastCalledWith('hotfix')
+    expect(showToast).toHaveBeenLastCalledWith('已复制到剪贴板')
+
+    // 游离 HEAD 只有字面量 HEAD —— 那不是一条可以 checkout 的线
+    expect(
+      labels(
+        commitMenuItems({ entry: entry(), scope: 'all', refs: [{ name: 'HEAD', kind: 'head' }] }),
+      ),
+    ).not.toContain('复制分支名称 HEAD')
+
+    // 提交记录（scope=head）不画引用标签 → 整组都不给
+    expect(
+      labels(commitMenuItems({ entry: entry(), scope: 'head', refs })).filter((l) =>
+        String(l).startsWith('复制分支名称'),
+      ),
+    ).toEqual([])
   })
 
   it('空标题（--allow-empty-message）没有可复制的 → 那一项置灰', () => {

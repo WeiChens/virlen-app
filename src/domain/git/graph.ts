@@ -356,6 +356,25 @@ export function pickRowRefs(refs: GraphRef[]): { shown: GraphRef | null; hidden:
   }
 }
 
+/**
+ * 这一行挂着的**本地分支名**（去重、保持 `%D` 原顺序）—— 「复制分支名称」的唯一口径。
+ *
+ * 三条口径：
+ * - **不含远程引用**（`origin/x`）：它是云端的倒影，本名就是 `x` —— 复制它只会让人再手动剥一次前缀；
+ * - `head` 档的 name 本身就是一个分支名（`HEAD -> refs/heads/x` → `x`），不能漏；
+ *   但**游离 HEAD** 只会是字面量 `HEAD`，那不是分支，跳过；
+ * - 标签不是分支，不进这份清单（它是「这个提交被标了版」，不是一条可以 checkout 的线）。
+ */
+export function localBranchNames(refs: GraphRef[]): string[] {
+  const out: string[] = []
+  for (const ref of refs) {
+    if (ref.kind !== 'branch' && ref.kind !== 'head') continue
+    if (ref.name === 'HEAD') continue
+    if (!out.includes(ref.name)) out.push(ref.name)
+  }
+  return out
+}
+
 // 绘制指令
 
 export interface GraphGeometry {

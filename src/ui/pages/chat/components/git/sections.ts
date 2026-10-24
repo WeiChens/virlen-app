@@ -31,7 +31,7 @@ export interface GitSectionActions {
 const paths = (list: GitChangeEntry[]): string[] => list.map((entry) => entry.path)
 
 /**
- * 三段：**更改（含未跟踪）→ 暂存的更改 → 冲突**（实测反馈：把一个文件暂存后它应该向下走，而不是
+ * 三段：**更改（含未跟踪）→ 暂存区 → 冲突**（实测反馈：把一个文件暂存后它应该向下走，而不是
  * 一跳就跑到列表顶上；「我现在还要改的」永远在上半屏）。
  *
  * ⚠️ **未跟踪不再单独成段**（实测反馈）：它就是「更改」的一项，只是没进过 index —— 与 VS Code 同口径。
@@ -59,7 +59,7 @@ export function changeSections(
     },
     {
       key: 'staged',
-      title: t('暂存的更改'),
+      title: t('暂存区'),
       side: 'staged',
       entries: groups.staged,
       bulk: {
@@ -82,7 +82,7 @@ export function changeSections(
 /**
  * 一行的稳定标识（选中集用它）：**侧 + 路径**。
  *
- * 只按路径会串味 —— 同一个文件可以在「暂存的更改」与「更改」两段各出现一次（git 的真实语义，
+ * 只按路径会串味 —— 同一个文件可以在「暂存区」与「更改」两段各出现一次（git 的真实语义，
  * 两段的 diff 基准不同）。分隔符取 NUL：路径里不可能出现它（POSIX / Windows 都禁止），
  * 于是拼接不会歧义。
  */
