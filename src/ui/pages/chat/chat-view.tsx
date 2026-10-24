@@ -49,6 +49,7 @@ import {
   moveTab,
   openFileTab,
   openServiceTab,
+  type FileTabView,
   type SidePanelTab,
 } from './components/side-panel/tabs'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
@@ -278,6 +279,8 @@ function ChatView() {
   const fileDirtyRef = useRef(false)
   /** 标签属于哪个会话：切会话要全关（它们属于上一个会话的工作目录） */
   const openFileSessionRef = useRef<string | null>(null)
+  /** present 的「请你再看一次」序号：每次交付自增，标签记住它，面板据此把视图迁回预览 */
+  const viewSeqRef = useRef(0)
   const panelTabsRef = useRef<SidePanelTab[]>(panelTabs)
   panelTabsRef.current = panelTabs
   const activeTabIdRef = useRef<string | null>(activeTabId)
@@ -358,12 +361,14 @@ function ChatView() {
    * 新文件追加到末尾；**激活第一个**（它是主交付物）。一次算完再落 state，N 个文件只渲染一次。
    */
   const handleOpenFiles = useCallback(
-    (paths: string[]) => {
+    (paths: string[], view?: FileTabView) => {
       if (paths.length === 0) return
       let tabs = panelTabsRef.current
       let activeId: string | null = null
+      // present 是「请看这个」：同一个文件重复交付也要把面板请回预览（序号自增，值相同不重渲染）
+      const viewSeq = view ? ++viewSeqRef.current : undefined
       for (const path of paths) {
-        const next = openFileTab(tabs, path)
+        const next = openFileTab(tabs, path, view, viewSeq)
         tabs = next.tabs
         activeId = activeId ?? next.activeId
       }
@@ -400,8 +405,13 @@ function ChatView() {
   /**
    * AI 交付文件（`present` 工具）→ 右侧面板：登记**唯一入口**（`services/present-service`）。
    * 标签状态在本组件的 state + ref 里，别处拿不到；卸载时注销，避免留下上一个实例的 handler。
+   *
+   * 交付物默认落在「预览」（能预览的类型才有那个 tab）—— present 的语义是给人看，不是给人改。
    */
-  useEffect(() => setPresentRevealHandler(handleOpenFiles), [handleOpenFiles])
+  useEffect(
+    () => setPresentRevealHandler((paths) => handleOpenFiles(paths, 'preview')),
+    [handleOpenFiles],
+  )
 
   // 同步 ref 与 state
   useEffect(() => {

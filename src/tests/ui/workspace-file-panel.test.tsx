@@ -5,6 +5,8 @@
  * 2. **关闭 / 刷新前有未保存草稿必须确认**（面板自己一颗按钮，宿主还有切文件 / 切会话两处）；
  * 3. **图片 / 音频 / 视频各自渲染对应的原生标签**，blob URL 由本组件负责创建与释放；
  * 4. **保存冲突不静默覆盖**：错误弹窗说明「文件已被其他程序修改」。
+ * 5. **`present` 的交付物默认落在预览**：`defaultView="preview"` 只对可预览的类型生效，
+ *    `viewSeq` 自增让「同一个文件再交付一次」从编辑迁回预览。
  *
  * 读取 / 写入与 Monaco 全部 mock：真实文件语义在 `workspace-file-service` 的用例里。
  */
@@ -101,20 +103,35 @@ let root: ReturnType<typeof createRoot> | null = null
 let closed = 0
 let dirtyCalls: boolean[] = []
 
-async function mount(path = 'E:/repo/src/a.ts') {
+/** 面板的额外入参（present 打开的文件才带：落在哪个视图 + 「又请你看一次」的序号） */
+type MountProps = { defaultView?: 'edit' | 'preview'; viewSeq?: number }
+
+function renderPanel(path: string, props: MountProps = {}) {
+  root!.render(
+    <WorkspaceFilePanel
+      path={path}
+      onClose={() => {
+        closed += 1
+      }}
+      onDirtyChange={(dirty) => dirtyCalls.push(dirty)}
+      {...props}
+    />,
+  )
+}
+
+async function mount(path = 'E:/repo/src/a.ts', props: MountProps = {}) {
   const host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
   await act(async () => {
-    root!.render(
-      <WorkspaceFilePanel
-        path={path}
-        onClose={() => {
-          closed += 1
-        }}
-        onDirtyChange={(dirty) => dirtyCalls.push(dirty)}
-      />,
-    )
+    renderPanel(path, props)
+  })
+}
+
+/** 换一批 props 重渲染（同一个文件再交付一次：path 不变、只有 viewSeq 变） */
+async function rerender(path: string, props: MountProps) {
+  await act(async () => {
+    renderPanel(path, props)
   })
 }
 
@@ -354,6 +371,40 @@ it('html：预览用沙箱 iframe；登记成功后注入 base（相对路径可
     '<base href="http://virlen-preview.localhost/test-token-0001/">',
   )
   expect(frame!.getAttribute('srcdoc')).toContain('<h1>hi</h1>')
+})
+
+/**
+ * present 的交付物默认给人看：打开 `.html` 直接落在「预览」（实测反馈：AI 交付的页面
+ * 打开还是源码，还得自己再点一下）。同一个文件再交付一次也要能迁回去。
+ */
+it('present 打开 html：默认落在预览（再交付一次也能从编辑回来）', async () => {
+  loadMock.mockResolvedValue(textFile('<h1>hi</h1>'))
+  await mount('E:/repo/page.html', { defaultView: 'preview', viewSeq: 1 })
+
+  const tabAt = (index: number) =>
+    [...document.querySelectorAll<HTMLButtonElement>('.wfp-tab')][index]
+  expect(tabAt(1).getAttribute('aria-selected')).toBe('true')
+  expect(document.querySelector('iframe.wfp-frame')).not.toBeNull()
+
+  // 用户切去编辑
+  await act(async () => {
+    tabAt(0).click()
+  })
+  expect(editor()).not.toBeNull()
+
+  // AI 又交付一次同一份文件：path 不变，靠自增的 viewSeq 回到预览
+  await rerender('E:/repo/page.html', { defaultView: 'preview', viewSeq: 2 })
+  expect(tabAt(1).getAttribute('aria-selected')).toBe('true')
+  expect(document.querySelector('iframe.wfp-frame')).not.toBeNull()
+})
+
+/** 只有能预览的类型才认 present 的「默认预览」—— `.txt` 上根本没有预览 tab */
+it('present 打开不能预览的类型（.txt）：没有预览 tab，仍停在编辑', async () => {
+  loadMock.mockResolvedValue(textFile('hello'))
+  await mount('E:/repo/note.txt', { defaultView: 'preview', viewSeq: 1 })
+
+  expect(document.querySelectorAll('.wfp-tab')).toHaveLength(0)
+  expect(editor()).not.toBeNull()
 })
 
 /**

@@ -83,6 +83,17 @@ interface Props {
    * 单独使用时（用例 / 别的宿主）保持默认，还是有文件名与完整路径两行。
    */
   hideTitle?: boolean
+  /**
+   * 打开时落在哪个视图：`preview` = present 的交付物默认给人看（`.html` 展开就是页面）。
+   * 只有**能预览**的类型（md / html / svg / csv / tsv）认这个提示，其余一律编辑 ——
+   * 否则会出现「预览 tab 没画出来却选中了它」。
+   */
+  defaultView?: 'edit' | 'preview'
+  /**
+   * 「又请你看一次」的序号（present 每次自增）：标签已经开着、`path` 没变时，只靠
+   * `defaultView` 的变化推不动视图 —— 用户手动切到编辑后再 present 同一文件，得靠它迁回去。
+   */
+  viewSeq?: number
   /** 关闭（宿主负责清空 openFile；脏数据确认已经在本组件内做过） */
   onClose: () => void
   /** 脏标记变化（宿主据此在「切文件 / 切会话」前确认） */
@@ -155,11 +166,21 @@ function WorkspaceFilePanel({
   path,
   sessionId,
   hideTitle = false,
+  defaultView = 'edit',
+  viewSeq,
   onClose,
   onDirtyChange,
   onReloadReady,
 }: Props) {
   const name = baseName(path)
+  /** 有没有第二个视图（md / html / svg / csv / tsv）：state 初值与多处渲染都要用，先算一次 */
+  const previewKind = textPreviewKindOf(name)
+  /**
+   * 挂载时（= 这个标签第一次打开）落在哪个视图。只有能预览的类型才认 `preview`。
+   * 换文件 / present 再打开同一个文件时回到这里，见下面的 effect。
+   */
+  const landingView: 'edit' | 'preview' =
+    defaultView === 'preview' && previewKind !== null ? 'preview' : 'edit'
   const [state, setState] = useState<LoadState>({ status: 'loading' })
   /** 文本草稿（非文本时恒为空串） */
   const [draft, setDraft] = useState('')
@@ -167,7 +188,7 @@ function WorkspaceFilePanel({
   /** 媒体 blob URL（非媒体为空串） */
   const [mediaUrl, setMediaUrl] = useState('')
   /** 文本文件的查看方式：md / html / svg 可选预览，其余只有编辑 */
-  const [viewMode, setViewMode] = useState<'edit' | 'preview'>('edit')
+  const [viewMode, setViewMode] = useState<'edit' | 'preview'>(landingView)
   /** SVG 预览的 blob URL（draft 里就是 SVG 源码） */
   const [svgUrl, setSvgUrl] = useState('')
   /**
@@ -200,7 +221,7 @@ function WorkspaceFilePanel({
   const dirtyRef = useRef(false)
   /** 保存中重入保护（Ctrl+S 连按） */
   const savingRef = useRef(false)
-  /** 上一次加载的文件：**只有换文件**才重置查看状态与安全开关（重读同一个文件不该清掉勾选） */
+  /** 上一次加载的文件：**只有换文件**才重置查看状态（重读同一个文件不该清掉用户选的视图） */
   const lastPathRef = useRef(path)
 
   const dirty =
@@ -217,8 +238,8 @@ function WorkspaceFilePanel({
     setFileGone(false)
     if (lastPathRef.current !== path) {
       lastPathRef.current = path
-      // 换文件回到编辑（默认模式）；脚本权限是全局设置，不随文件重置
-      setViewMode('edit')
+      // 换文件回到「打开时的视图」（默认编辑；present 交付物是预览）。脚本权限是全局设置，不随文件重置
+      setViewMode(landingView)
     }
     try {
       const file = await loadWorkspaceFile(path, sessionId)
@@ -232,6 +253,15 @@ function WorkspaceFilePanel({
   useEffect(() => {
     void load()
   }, [load])
+
+  /**
+   * present 再打开一次（标签已开着，`path` 没变 → `load` 不跑）：靠 `viewSeq` 把它请回预览。
+   * 注意依赖只有这两个值 —— 用户手动切的编辑 / 预览不会被其它重渲染改回去。
+   */
+  useEffect(() => {
+    if (viewSeq === undefined) return
+    setViewMode(landingView)
+  }, [viewSeq, landingView])
 
   // 脏标记上报：宿主在切换文件 / 会话前要知道
   useEffect(() => {
@@ -456,7 +486,6 @@ function WorkspaceFilePanel({
   }, [path])
 
   const textFile = state.status === 'ready' && state.file.kind === 'text' ? state.file : null
-  const previewKind = textPreviewKindOf(name)
   const showPreview = viewMode === 'preview' && textFile !== null && previewKind !== null
 
   // SVG 预览：把草稿当图片渲染（`<img>` 里的 SVG 不会执行脚本，比注入 innerHTML 安全）

@@ -391,6 +391,10 @@ function SidePanel({
           sessionId={sessionId}
           // 标题已经在上面的标签栏里了：面板头只留目录 + 操作按钮
           hideTitle
+          // 打开时落在哪个视图：present 的交付物直接给预览（普通打开仍是编辑）；
+          // viewSeq 让「同一个文件再 present 一次」也能把用户手动切走的视图请回预览
+          defaultView={tab.view}
+          viewSeq={tab.viewSeq}
           onDirtyChange={dirtyHandlerOf(tab.id)}
           // 刷新归容器（标签右键菜单）：面板把动作登记上来
           onReloadReady={reloadRegistrarOf(tab.id)}

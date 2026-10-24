@@ -17,6 +17,13 @@
   &.is-resizing {
     user-select: none;
     cursor: col-resize;
+
+    /* HTML 预览是独立文档：指针一进 iframe，document 上的 mousemove / mouseup 就收不到了
+       （向右拖 = 指针进面板，拖动会断在半路、松手还停在 resizing）。
+       拖动期间让它不参与命中，事件才会继续冒到 document */
+    iframe {
+      pointer-events: none;
+    }
   }
 }
 

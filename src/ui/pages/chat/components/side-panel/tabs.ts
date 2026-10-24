@@ -23,6 +23,10 @@ export type SidePanelTab =
       kind: 'file'
       /** 文件绝对路径（工作目录内） */
       path: string
+      /** 打开时落在哪个视图（缺省 = 编辑；present 的交付物是预览） */
+      view?: FileTabView
+      /** 「又请你看一次」的序号：present 每次都自增，面板据此把视图迁回去 */
+      viewSeq?: number
     }
   | {
       id: string
@@ -36,14 +40,21 @@ export type SidePanelTab =
       sessionLabel?: string
     }
 
+/** 文件标签打开时落在哪个视图：present 的交付物默认给人看，普通打开仍是给人改 */
+export type FileTabView = 'edit' | 'preview'
+
 /** 文件标签的 id：路径即身份（同一个文件不会开出两个标签） */
 export function fileTabId(path: string): string {
   return `file:${path}`
 }
 
 /** 造一个文件标签 */
-export function fileTab(path: string): SidePanelTab {
-  return { id: fileTabId(path), kind: 'file', path }
+export function fileTab(
+  path: string,
+  view?: FileTabView,
+  viewSeq?: number,
+): SidePanelTab {
+  return { id: fileTabId(path), kind: 'file', path, view, viewSeq }
 }
 
 /** 服务终端标签的 id：会话 + 服务（服务 id 只在会话内唯一，跨会话会撞） */
@@ -76,8 +87,10 @@ export function openServiceTab(
 }
 
 /**
- * 打开一个文件：已有同路径的标签就只切过去（`tabs` 原样返回，草稿一个字都不动），
- * 否则追加到末尾。返回新的标签列表与要激活的 id。
+ * 打开一个文件：已有同路径的标签就只切过去，否则追加到末尾。返回新的标签列表与要激活的 id。
+ *
+ * 已开着时**不重建标签**（草稿一个字都不动）；唯一会改的是「打开时的视图」——present 再看一次
+ * 同一个文件（带 `view` / 自增的 `viewSeq`）要把面板请回预览；两个值都没变就返回原引用。
  *
  * 注意这里**不需要任何「丢弃草稿」的确认** —— 打开新文件不再挤掉原来那个，
  * 这正是加标签页最直接的收益（旧实现是单面板，换文件必须确认）。
@@ -85,14 +98,24 @@ export function openServiceTab(
 export function openFileTab(
   tabs: SidePanelTab[],
   path: string,
+  view?: FileTabView,
+  viewSeq?: number,
 ): { tabs: SidePanelTab[]; activeId: string; added: boolean } {
-  const tab = fileTab(path)
-  const exists = tabs.some((item) => item.id === tab.id)
-  return {
-    tabs: exists ? tabs : [...tabs, tab],
-    activeId: tab.id,
-    added: !exists,
+  const tab = fileTab(path, view, viewSeq)
+  const index = tabs.findIndex((item) => item.id === tab.id)
+  if (index < 0) return { tabs: [...tabs, tab], activeId: tab.id, added: true }
+
+  const current = tabs[index]
+  // 普通打开（无 view）不碰已开着标签的视图；值没变也不换引用，避免无意义重渲染
+  if (current.kind !== 'file' || !view) {
+    return { tabs, activeId: tab.id, added: false }
   }
+  if (current.view === view && current.viewSeq === viewSeq) {
+    return { tabs, activeId: tab.id, added: false }
+  }
+  const next = [...tabs]
+  next[index] = { ...current, view, viewSeq }
+  return { tabs: next, activeId: tab.id, added: false }
 }
 
 /**

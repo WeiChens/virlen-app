@@ -56,6 +56,33 @@ it('打开已打开的文件：只切过去，列表引用都不变（草稿一�
   expect(again.activeId).toBe(fileTabId('E:/repo/a.ts'))
 })
 
+/**
+ * present 的交付物默认给人看：标签记住「打开时的视图」，同一个文件再交付一次靠 `viewSeq`
+ * 把视图请回去（不重建标签 —— 草稿、Monaco 撤销栈都还在里面）。
+ */
+it('present 打开的标签记住「预览」，重复交付只更新视图提示', () => {
+  const opened = openFileTab([], 'E:/repo/a.html', 'preview', 1)
+  expect(opened.added).toBe(true)
+  const tab = opened.tabs[0]
+  expect(tab.kind === 'file' && tab.view).toBe('preview')
+  expect(tab.kind === 'file' && tab.viewSeq).toBe(1)
+
+  // 普通打开（无 view）不碰这个提示：用户手动切到编辑后不该被它改回去
+  const plain = openFileTab(opened.tabs, 'E:/repo/a.html')
+  expect(plain.tabs).toBe(opened.tabs)
+
+  // 同一个文件再 present 一次：seq 变了 → 换一份标签（面板据此迁回预览）
+  const again = openFileTab(opened.tabs, 'E:/repo/a.html', 'preview', 2)
+  expect(again.tabs).not.toBe(opened.tabs)
+  expect(again.tabs.length).toBe(1)
+  const updated = again.tabs[0]
+  expect(updated.kind === 'file' && updated.viewSeq).toBe(2)
+
+  // 值完全没变：返回原引用（宿主不必重渲染）
+  const same = openFileTab(again.tabs, 'E:/repo/a.html', 'preview', 2)
+  expect(same.tabs).toBe(again.tabs)
+})
+
 it('关掉非激活的标签：激活态不动', () => {
   const tabs = [fileTab('E:/repo/a.ts'), fileTab('E:/repo/b.ts')]
   const result = closeTab(tabs, fileTabId('E:/repo/a.ts'), fileTabId('E:/repo/b.ts'))

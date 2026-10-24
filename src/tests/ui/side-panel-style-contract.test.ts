@@ -12,6 +12,8 @@
  *    暗色主题下冒出浅色滚动条。
  * ⑤ **占满态的手柄要盖过左侧栏的拖拽条**：面板铺满时它的左缘正好压在 `.sidebar-resizer` 上，
  *    层级不够就收不到 mousedown —— 看着是「拖不动」，其实拖的是左侧栏（面板再也回不来）。
+ * ⑥ **拖动期间 iframe 不能参与命中**：HTML 预览是独立文档，指针跨进去以后 document 上的
+ *    mousemove / mouseup 就收不到了（向右拖 = 指针进面板），拖动会断在半路。
  */
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -89,6 +91,17 @@ describe('右侧面板容器 · 样式契约', () => {
     const used = [...panelSrc.matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1])
     expect(used.length).toBeGreaterThan(0)
     expect([...new Set(used)].filter((name) => !defined.has(name))).toEqual([])
+  })
+
+  it('拖动期间 iframe 不参与命中（否则 HTML 预览里拖不动）', () => {
+    const resizing = /\.side-panel\.is-resizing\s*\{([^}]*)\}/.exec(panelCss)?.[1]
+    expect(resizing).toBeTruthy()
+    expect(resizing).toContain('user-select: none')
+
+    // 嵌套规则编译后展开成 `.side-panel.is-resizing iframe`
+    const frame = /\.side-panel\.is-resizing iframe\s*\{([^}]*)\}/.exec(panelCss)?.[1]
+    expect(frame).toBeTruthy()
+    expect(frame).toContain('pointer-events: none')
   })
 
   it('占满态的手柄盖过左侧栏拖拽条，且面板永远贴右（否则拖不回来）', () => {
