@@ -1,0 +1,56 @@
+/**
+ * 视图切换 tab（对话 / 轨迹）样式 —— 照 dsh 的 conversation tab：
+ * 13/16 文字、间距 36px、选中项 2px 下划线。
+ *
+ * ⚠️ 下划线是 `bottom: -1px`：它必须压住 header 的**底边线**，所以那 1px 分隔线挂在
+ * `.chat-header`（header + tabs 的公共外框）上，`.chat-toolbar` 自己不再画底边。
+ */
+
+.chat-view-tabs {
+  /* 与 header 的按钮同一条左侧基准线（.chat-toolbar 的 16px 内边距） */
+  display: flex;
+  gap: 36px;
+  /* 与标题行留出一点呼吸：标题行里的按钮是 28px 高、行高 40px，上下各留 6px */
+  margin-top: 2px;
+  padding-left: 16px;
+  /* 下划线要盖住底边线：让 tab 条落在它的上层 */
+  position: relative;
+  z-index: 1;
+}
+
+.chat-view-tab {
+  position: relative;
+  padding: 0 0 9px;
+  border: none;
+  background: transparent;
+  font-size: var(--font-size-sm, 13px);
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--text-tertiary, #767676);
+  cursor: pointer;
+
+  /* 选中态的下划线：未选中时占位透明，切换时不跳动 */
+  &::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    bottom: -1px;
+    left: 0;
+    height: 2px;
+    border-radius: 2px;
+    background: transparent;
+  }
+
+  &:hover {
+    color: var(--text-secondary, #666);
+  }
+
+  /* 放在 :hover 之后：同特异度，后者覆盖前者（选中项 hover 也保持品牌色） */
+  &.is-active {
+    color: var(--accent-color, #4f46e5);
+
+    &::after {
+      background: var(--accent-color, #4f46e5);
+    }
+  }
+}

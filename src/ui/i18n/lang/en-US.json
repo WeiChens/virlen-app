@@ -2127,6 +2127,7 @@
   "自身耗时": "Own duration",
   "计时": "Timing",
   "调用": "Calls",
+  "轨迹": "Trajectory",
   "轨迹工具栏": "Trajectory toolbar",
   "轨迹概览条": "Trajectory overview strip",
   "滚轮缩放，Shift + 滚轮左右平移，双击空白处回到 100%": "Scroll to zoom, Shift + scroll to pan, double-click empty space to reset to 100%",

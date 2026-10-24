@@ -43,12 +43,25 @@
     display: none;
   }
 
+  /*
+   * header 外框：标题行 +（有会话时的）视图 tab，两者共用一条底边线。
+   * tab 的选中下划线要**压在这条线上**（dsh 同款），所以分隔线不能再画在 .chat-toolbar 上 ——
+   * 否则 tab 条会被一道线隔在 header 外面，选中态的下划线也会叠出一条双线。
+   */
+  .chat-header {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    border-bottom: 1px solid var(--border-color, #e5e5e5);
+    background: var(--bg-primary, #fff);
+  }
+
   .chat-toolbar {
+    flex: none;
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 0px 16px;
-    border-bottom: 1px solid var(--border-color, #e5e5e5);
     background: var(--bg-primary, #fff);
     height: 40px;
     .toggle-sidebar-btn {
@@ -113,7 +126,7 @@
         color: var(--text-primary, #1a1a1a);
       }
 
-      // 轨迹视图开关处于开启态
+      // 开关类按钮处于开启态（如右侧栏已展开）
       &.is-active {
         background: var(--accent-bg, #eef2ff);
         color: var(--accent-color, #4f46e5);

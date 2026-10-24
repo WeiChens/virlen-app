@@ -93,13 +93,14 @@ import settingsEvent from '@/events/settingsEvent'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
 import DropDownSvg from '@/ui/components/icons/DropDownSvg'
 import SearchSvg from '@/ui/components/icons/SearchSvg'
-import TrajectorySvg from '@/ui/components/icons/TrajectorySvg'
 import './chat-view.scss'
 import { settingsState } from '@/ui/store/settingStore'
 import ChatMessageList, {
   type MessageJumpTarget,
 } from './components/message/message-list'
 import { TrajectoryView } from './components/trajectory/trajectory-view'
+// 对话 / 轨迹：header 正下方的一条 tab（dsh 同款）
+import { ChatViewTabs, type ChatViewTab } from './components/tabs/chat-view-tabs'
 import WelcomeScreen from './components/welcome'
 import { appName } from '@/ui/constants'
 import { sessionStore } from '@/ui/store'
@@ -280,8 +281,23 @@ function ChatView() {
   }>(null)
   const [showProviderPrompt, setShowProviderPrompt] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
-  /** 消息区当前显示的是「轨迹表」而不是「对话」（同一份 messages，两种看法） */
-  const [showTrajectory, setShowTrajectory] = useState(false)
+  /**
+   * 消息区停在哪个视图（对话 / 轨迹）：**按会话记**（与 dsh 的 per-session view 一致），
+   * 切走再切回来还是原来那个 tab。只记非默认值，默认（对话）不占条目、也不必持久化。
+   */
+  const [viewBySession, setViewBySession] = useState<Record<string, ChatViewTab>>({})
+  const currentSessionId = chatState.value.currentSessionId
+  /** 当前视图：没有会话时恒为「对话」（新对话页没有轨迹可看） */
+  const activeView: ChatViewTab =
+    (currentSessionId ? viewBySession[currentSessionId] : undefined) ?? 'chat'
+  /** tab 点击：只改本会话那一条（同一 tab 再点一次不产生新对象，避免无意义重渲染） */
+  const selectView = useCallback((next: ChatViewTab) => {
+    const sid = chatState.value.currentSessionId
+    if (!sid) return
+    setViewBySession((current) =>
+      current[sid] === next ? current : { ...current, [sid]: next },
+    )
+  }, [])
   /** 检索结果的跳转目标（滚动定位 + 临时高亮） */
   const [searchJump, setSearchJump] = useState<MessageJumpTarget | null>(null)
   const searchJumpNonceRef = useRef(0)
@@ -908,20 +924,23 @@ function ChatView() {
   }, [])
 
   /**
-   * 轨迹里「在对话中查看」：先切回聊天，再复用检索的跳转通道（滚动定位 + 临时高亮）。
+   * 轨迹里「在对话中查看」：先切回对话 tab，再复用检索的跳转通道（滚动定位 + 临时高亮）。
    * 切回是必须的 —— 目标气泡在轨迹视图下根本没渲染，不下发跳转就只能看到一张表。
    */
-  const handleTrajectoryJump = useCallback((messageId: string) => {
-    const sid = chatState.value.currentSessionId
-    if (!sid) return
-    setShowTrajectory(false)
-    searchJumpNonceRef.current += 1
-    setSearchJump({
-      id: messageId,
-      sessionId: sid,
-      nonce: searchJumpNonceRef.current,
-    })
-  }, [])
+  const handleTrajectoryJump = useCallback(
+    (messageId: string) => {
+      const sid = chatState.value.currentSessionId
+      if (!sid) return
+      selectView('chat')
+      searchJumpNonceRef.current += 1
+      setSearchJump({
+        id: messageId,
+        sessionId: sid,
+        nonce: searchJumpNonceRef.current,
+      })
+    },
+    [selectView],
+  )
 
   // 从 store 同步消息到本地 state（仅用于触发重渲染）
   const [messages, setMessages] = useState<Message[]>([])
@@ -962,14 +981,13 @@ function ChatView() {
     () => sessionStore.onMessagesChanged(syncMessagesToUI),
     [syncMessagesToUI],
   )
-  // currentSessionId 变为 null 时清空 messages（并丢弃未消费的跳转目标）
+  // currentSessionId 变为 null 时清空 messages（并丢弃未消费的跳转目标）。
+  // 视图（对话 / 轨迹）不用在这里重置：它是按会话算出来的，切会话自然跟着变。
   useEffect(() => {
     if (!chatState.value.currentSessionId) {
       setMessages([])
       setSearchJump(null)
     }
-    // 切会话（含新建对话）：轨迹是「就这段会话而言」的视图，跟着关掉回到对话
-    setShowTrajectory(false)
   }, [chatState.value.currentSessionId])
   useEffect(() => {
     if (chatState.value.currentSessionId) {
@@ -1442,106 +1460,101 @@ function ChatView() {
       )}
 
       <div className="chat-main" style={{ position: 'relative' }}>
-        <div className="chat-toolbar">
-          <button className="toggle-sidebar-btn" onClick={toggleSidebar}>
-            {chatState.value.sidebarOpen ? (
-              <HideSideBarSvg />
-            ) : (
-              <ShowSideBarSvg />
-            )}
-          </button>
-          <span className="chat-title">{currentTitle}</span>
-          <div className="chat-toolbar-actions">
-            <button
-              className="toolbar-icon-btn"
-              onClick={() => setShowSearch(true)}
-              title={t('搜索消息')}
-              type="button">
-              <SearchSvg />
-            </button>
-            {/* 对话 / 轨迹：同一份消息的两种看法（轨迹 = 按轮次摊开的事件记录表） */}
-            {chatState.value.currentSessionId && (
-              <button
-                className={`toolbar-icon-btn${showTrajectory ? ' is-active' : ''}`}
-                onClick={() => setShowTrajectory((value) => !value)}
-                title={showTrajectory ? t('返回对话') : t('轨迹视图')}
-                aria-pressed={showTrajectory}
-                type="button">
-                <TrajectorySvg />
-              </button>
-            )}
-            {/* 任务清单入口（未完成数红点 + 浮层编辑） */}
-            {chatState.value.currentSessionId && (
-              <TodoEntry sessionId={chatState.value.currentSessionId} />
-            )}
-            {/* 后台服务：有会话 = 本会话；新对话页 = 全部会话；点行在右侧面板开终端标签 */}
-            <ServiceEntry
-              sessionId={chatState.value.currentSessionId ?? null}
-              onOpenService={handleOpenService}
-            />
-            {/* 源代码管理：徽标 = 未提交变更数；不是 Git 仓库时入口不出现 */}
-            <GitEntry
-              sessionId={chatState.value.currentSessionId ?? null}
-              // 变更行“拖到输入框 / 右键引用到输入框” → 输入框附件（与目录树同一条链路）
-              onAttachPaths={handleAttachPaths}
-            />
-            <WorkspaceDisplay
-              value={
-                chatState.value.currentSessionId
-                  ? sessionStore.getSession(chatState.value.currentSessionId)
-                    ?.workspace
-                  : chatState.value.selectedWorkspace
-              }
-              setValue={(e) => {
-                // 换工作目录 = 右侧打开的标签已不属于当前目录，一并关掉（先确认草稿）
-                void (async () => {
-                  const confirmed = await confirmDiscardDraft(
-                    t('切换工作目录会关闭右侧所有标签页，未保存的修改将丢失。'),
-                    t('放弃并切换'),
-                  )
-                  if (!confirmed) return
-                  closeSessionTabs()
-                  chatState.setValue('selectedWorkspace', e)
-                })()
-              }}
-              workspaces={historyWorkspaces}
-            />
-            {/*
-              右侧面板：一个标签一个视图（文件 / 服务终端 / 用户终端 / 网页 / 开始页 / 文件树）。
-              没有标签就开「开始页」；有标签就展开 ↔ 收起 —— **收起只是隐藏**，标签与草稿都留着；
-              收起时这颗按钮上的徽标是「这个会话里还开着几个标签」（与 Ctrl+Alt+B 同一条路）。
-            */}
-            <button
-              className={`toolbar-icon-btn${panelVisible ? ' is-active' : ''}`}
-              onClick={handleTogglePanel}
-              title={
-                panelVisible
-                  ? t('收起右侧栏')
-                  : panelTabCount > 0
-                    ? tpl('打开右侧栏（$__count__ 个标签页）', { count: panelTabCount })
-                    : t('打开右侧栏')
-              }
-              aria-label={
-                panelTabCount > 0
-                  ? tpl('右侧栏：$__count__ 个标签页', { count: panelTabCount })
-                  : t('右侧栏')
-              }
-              aria-pressed={panelVisible}
-              type="button">
-              <PanelRightSvg />
-              {!panelVisible && panelTabCount > 0 && (
-                <span className="toolbar-badge" aria-hidden="true">
-                  {panelTabCount}
-                </span>
+        <div className="chat-header">
+          <div className="chat-toolbar">
+            <button className="toggle-sidebar-btn" onClick={toggleSidebar}>
+              {chatState.value.sidebarOpen ? (
+                <HideSideBarSvg />
+              ) : (
+                <ShowSideBarSvg />
               )}
             </button>
-            <SettingsView />
+            <span className="chat-title">{currentTitle}</span>
+            <div className="chat-toolbar-actions">
+              <button
+                className="toolbar-icon-btn"
+                onClick={() => setShowSearch(true)}
+                title={t('搜索消息')}
+                type="button">
+                <SearchSvg />
+              </button>
+              {/* 任务清单入口（未完成数红点 + 浮层编辑） */}
+              {chatState.value.currentSessionId && (
+                <TodoEntry sessionId={chatState.value.currentSessionId} />
+              )}
+              {/* 后台服务：有会话 = 本会话；新对话页 = 全部会话；点行在右侧面板开终端标签 */}
+              <ServiceEntry
+                sessionId={chatState.value.currentSessionId ?? null}
+                onOpenService={handleOpenService}
+              />
+              {/* 源代码管理：徽标 = 未提交变更数；不是 Git 仓库时入口不出现 */}
+              <GitEntry
+                sessionId={chatState.value.currentSessionId ?? null}
+                // 变更行“拖到输入框 / 右键引用到输入框” → 输入框附件（与目录树同一条链路）
+                onAttachPaths={handleAttachPaths}
+              />
+              <WorkspaceDisplay
+                value={
+                  chatState.value.currentSessionId
+                    ? sessionStore.getSession(chatState.value.currentSessionId)
+                      ?.workspace
+                    : chatState.value.selectedWorkspace
+                }
+                setValue={(e) => {
+                  // 换工作目录 = 右侧打开的标签已不属于当前目录，一并关掉（先确认草稿）
+                  void (async () => {
+                    const confirmed = await confirmDiscardDraft(
+                      t('切换工作目录会关闭右侧所有标签页，未保存的修改将丢失。'),
+                      t('放弃并切换'),
+                    )
+                    if (!confirmed) return
+                    closeSessionTabs()
+                    chatState.setValue('selectedWorkspace', e)
+                  })()
+                }}
+                workspaces={historyWorkspaces}
+              />
+              {/*
+                右侧面板：一个标签一个视图（文件 / 服务终端 / 用户终端 / 网页 / 开始页 / 文件树）。
+                没有标签就开「开始页」；有标签就展开 ↔ 收起 —— **收起只是隐藏**，标签与草稿都留着；
+                收起时这颗按钮上的徽标是「这个会话里还开着几个标签」（与 Ctrl+Alt+B 同一条路）。
+              */}
+              <button
+                className={`toolbar-icon-btn${panelVisible ? ' is-active' : ''}`}
+                onClick={handleTogglePanel}
+                title={
+                  panelVisible
+                    ? t('收起右侧栏')
+                    : panelTabCount > 0
+                      ? tpl('打开右侧栏（$__count__ 个标签页）', { count: panelTabCount })
+                      : t('打开右侧栏')
+                }
+                aria-label={
+                  panelTabCount > 0
+                    ? tpl('右侧栏：$__count__ 个标签页', { count: panelTabCount })
+                    : t('右侧栏')
+                }
+                aria-pressed={panelVisible}
+                type="button">
+                <PanelRightSvg />
+                {!panelVisible && panelTabCount > 0 && (
+                  <span className="toolbar-badge" aria-hidden="true">
+                    {panelTabCount}
+                  </span>
+                )}
+              </button>
+              <SettingsView />
+            </div>
           </div>
+          {/* 对话 / 轨迹：与 dsh 一致，header 正下方一条 tab（有会话才出现） */}
+          {chatState.value.currentSessionId && (
+            <ChatViewTabs value={activeView} onChange={selectView} />
+          )}
         </div>
 
         {chatState.value.currentSessionId ? (
           <>
-            {showTrajectory ? (
+            {activeView === 'trajectory' ? (
               <>
                 <TrajectoryView
                   sessionId={chatState.value.currentSessionId}
@@ -1561,7 +1574,7 @@ function ChatView() {
                     if (sid) await sessionStore.loadOlderMessages(sid)
                   }}
                   onJumpToMessage={handleTrajectoryJump}
-                  onClose={() => setShowTrajectory(false)}
+                  onClose={() => selectView('chat')}
                 />
                 {/* 轨迹视图没有消息滚动容器，卡片退化为一块独立的尾巴（仍可答） */}
                 {inlineUI}
