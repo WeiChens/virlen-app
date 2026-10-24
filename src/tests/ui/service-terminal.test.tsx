@@ -301,6 +301,10 @@ it('已结束：只读回放（提示 + 键击不送出去 + 没有终止按钮�
   expect(written()).toBe('exited\n')
   expect(text('.service-console-foot')).toContain('服务已结束，只能查看输出')
   expect(document.querySelector('.service-console-kill')).toBeNull()
+  // 已退出的终端不再闪光标（光标判定挂在终端主体 wrapper 上，`XtermTerminal.scss` 据此中和光标）
+  expect(
+    document.querySelector('.pty-terminal-body-wrapper')!.className,
+  ).toContain('is-finished')
 
   act(() => xterm.__type('x'))
   expect(writeServiceConsole).not.toHaveBeenCalled()

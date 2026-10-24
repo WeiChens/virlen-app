@@ -35,6 +35,8 @@ import { createRoot } from 'react-dom/client'
 
 import BrowserPane from '@/ui/pages/chat/components/side-panel/browser/BrowserPane'
 import { setAppliedZoomFactor } from '@/ui/hooks/applied-zoom'
+import { settingsState } from '@/ui/store'
+import { resetBrowserViewPolicy } from '@/ui/pages/chat/components/side-panel/browser/view-policy'
 import type { BrowserViewEvent } from '@/infrastructure/browser/browser-view'
 import {
   canGoBack,
@@ -100,6 +102,29 @@ function runFrame() {
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
+/* ------------------------------------------------------------------ ResizeObserver 替身 */
+
+/**
+ * 真实环境靠 `ResizeObserver` 把「不可见 → 可见」的标签唤醒（看得见才逐帧跑，见
+ * `use-native-view.ts` 的帧节奏）：这里手写一个替身，用例用 `wake()` 手动触发。
+ */
+let resizeObservers: { cb: ResizeObserverCallback; alive: boolean }[] = []
+vi.stubGlobal(
+  'ResizeObserver',
+  class {
+    private entry: { cb: ResizeObserverCallback; alive: boolean }
+    constructor(cb: ResizeObserverCallback) {
+      this.entry = { cb, alive: true }
+      resizeObservers.push(this.entry)
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {
+      this.entry.alive = false
+    }
+  },
+)
+
 /* ------------------------------------------------------------------ 挂载工具 */
 
 const { openUrlMock } = vi.hoisted(() => ({ openUrlMock: vi.fn(() => Promise.resolve()) }))
@@ -160,6 +185,14 @@ async function tick() {
   })
 }
 
+/** 尺寸变化后的唤醒（真实环境由 ResizeObserver 叫醒，这里手动触发） */
+async function wake() {
+  await act(async () => {
+    for (const item of resizeObservers) if (item.alive) item.cb([], {} as any)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+}
+
 /** React 受控输入：必须走原生 setter + input 事件，直接赋 value 不会触发 onChange */
 function typeAddress(text: string) {
   const input = addressInput()
@@ -204,7 +237,12 @@ beforeEach(() => {
   bridge.available = true
   // 界面缩放是模块级状态（`ui/hooks/applied-zoom.ts`），用例之间必须复位
   setAppliedZoomFactor(1)
+  // 存活策略也是模块级状态：上一个用例的计时器不能漏到下一个
+  resetBrowserViewPolicy()
+  settingsState.value.browserSleepAfterSec = 20
+  settingsState.value.browserMaxViews = 10
   overlayHit = null
+  resizeObservers = []
   stubHitTest()
   bridge.open.mockResolvedValue(undefined)
   bridge.apply.mockResolvedValue(undefined)
@@ -219,6 +257,10 @@ afterEach(() => {
   root = null
   document.body.innerHTML = ''
   frames = []
+  resizeObservers = []
+  resetBrowserViewPolicy()
+  settingsState.value.browserSleepAfterSec = 20
+  settingsState.value.browserMaxViews = 10
   bridge.listeners = []
   setAppliedZoomFactor(1)
   bridge.open.mockReset()
@@ -497,16 +539,77 @@ it('逐帧同步：位置变了就 apply；切到别的标签（rect 为 0）只
     true,
   )
 
-  // 切走：display:none 的元素 rect 全是 0 → 隐藏（不 close，页面状态要留着）
+  // 切走：display:none 的元素 rect 全是 0 → 隐藏（不 close，页面状态要留着），并停掉逐帧
   setViewportRect({ left: 0, top: 0, width: 0, height: 0 })
   await tick()
   expect(bridge.apply).toHaveBeenLastCalledWith(expect.any(String), expect.anything(), false)
   expect(bridge.close).not.toHaveBeenCalled()
 
-  // 切回来：恢复显示
+  // 切回来：恢复显示（真实环境是 ResizeObserver 叫醒的，这里手动触发）
   setViewportRect({ left: 0, top: 40, width: 600, height: 560 })
-  await tick()
+  await wake()
   expect(bridge.apply).toHaveBeenLastCalledWith(expect.any(String), expect.anything(), true)
+})
+
+it('看不见时不再逐帧空转：停掉 rAF，只在唤醒后补一帧', async () => {
+  mount('https://a.com/')
+  setViewportRect({ left: 0, top: 40, width: 420, height: 560 })
+  await tick()
+  expect(frames.length).toBe(1)
+
+  // 切走：这一帧发完 hide 就不再接力了
+  setViewportRect({ left: 0, top: 0, width: 0, height: 0 })
+  await tick()
+  expect(frames.length).toBe(0)
+
+  // 唤醒后（尺寸又有了）才重新开始逐帧
+  setViewportRect({ left: 0, top: 40, width: 420, height: 560 })
+  await wake()
+  expect(frames.length).toBe(1)
+})
+
+it('切走超过了设定时间：释放原生视图（省内存），切回来重建并重新加载当前地址', async () => {
+  // 用例提速：真实设置是整数秒（默认 20），这里只要证明「到点才释放」
+  settingsState.value.browserSleepAfterSec = 0.15
+  mount('https://a.com/')
+  setViewportRect({ left: 0, top: 40, width: 420, height: 560 })
+  await tick()
+  // 先制造一条可后退的历史
+  submit('https://b.com/')
+  await tick()
+  expect(backBtn().disabled).toBe(false)
+  expect(bridge.open).toHaveBeenCalledTimes(1)
+
+  // 切走：先只是隐藏（不销毁）
+  setViewportRect({ left: 0, top: 0, width: 0, height: 0 })
+  await tick()
+  expect(bridge.close).not.toHaveBeenCalled()
+
+  // 时间没到：还是不动
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 40))
+  })
+  expect(bridge.close).not.toHaveBeenCalled()
+
+  // 到点：原生视图被释放（面板自己那份 state 不动）
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  })
+  expect(bridge.close).toHaveBeenCalledTimes(1)
+
+  // 切回来：带当前地址重建；原生历史栈已没了，面板的后退历史必须收敛成当前页
+  setViewportRect({ left: 0, top: 40, width: 420, height: 560 })
+  await wake()
+  await tick()
+  expect(bridge.open).toHaveBeenCalledTimes(2)
+  expect(bridge.open).toHaveBeenLastCalledWith(
+    expect.any(String),
+    'https://b.com/',
+    expect.anything(),
+  )
+  expect(addressInput().value).toBe('https://b.com/')
+  expect(backBtn().disabled).toBe(true)
+  expect(forwardBtn().disabled).toBe(true)
 })
 
 it('界面缩放：rect 是 CSS 像素，传给原生视图的是逻辑像素（要乘缩放）', async () => {

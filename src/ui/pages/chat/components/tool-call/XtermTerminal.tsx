@@ -24,6 +24,7 @@ import { NOTIFY_INTERVAL_MS } from '@/infrastructure/tools/output-store'
 import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
 import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
 import { SandboxBadge } from './SandboxBadge'
+import './XtermTerminal.scss'
 
 /**
  * PTY 终端块：用 xterm.js 渲染 ConPTY 的原始 VT 流（<pre> 表达不了光标控制 / 进度条重绘）。
@@ -495,7 +496,7 @@ export function XtermTerminal({
   // 滚轮拦截在创建 effect 里（`onWheel`），此处不重复处理
   return (
     <div
-      className="pty-terminal-body-wrapper"
+      className={`pty-terminal-body-wrapper${running ? '' : ' is-finished'}`}
       onContextMenu={(e) => menu.openAt(e, undefined)}>
       <div className="pty-terminal-body" ref={hostRef} />
       {/* ContextMenu 经 createPortal 挂 body（消息列表祖先带 transform/overflow，fixed 会被牵连） */}

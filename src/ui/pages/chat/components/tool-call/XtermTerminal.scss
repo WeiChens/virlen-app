@@ -1,0 +1,17 @@
+/**
+ * `XtermTerminal` 自己的样式（只有一条：非运行态不显示光标）。
+ *
+ * 光标的状态挂在**终端主体 wrapper** 上，而不是某个调用方的祖先容器：后台服务面板里没有
+ * `.execute-command-wrapper`，靠祖先类名的话那边的已退出终端会一直闪光标（实测报障）。
+ */
+.pty-terminal-body-wrapper {
+  /* 非运行态（命令 / 服务已结束）：内容是只读回放，不显示终端光标。
+     ⚠️ 不能用 display:none —— xterm 把 .xterm-cursor 打在**字符格**上，
+     隐藏元素会连该格字符一起去掉；这里只中和光标的「反色块 / 轮廓」并停掉闪烁动画。 */
+  &.is-finished .xterm-cursor {
+    background-color: transparent !important;
+    animation: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+  }
+}

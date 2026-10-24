@@ -352,15 +352,8 @@
     }
   }
 
-  /* 非运行态（命令已结束）：内容是只读回放，不显示终端光标。
-     ⚠️ 不能用 display:none —— xterm 把 .xterm-cursor 打在**字符格**上，
-     隐藏元素会连该格字符一起去掉；这里只中和光标的「反色块 / 轮廓」。 */
-  &.is-finished .xterm-cursor {
-    background-color: transparent !important;
-    animation: none !important;
-    outline: none !important;
-    box-shadow: none !important;
-  }
+  /* 非运行态不显示光标：判定挂在终端主体 wrapper 上（`XtermTerminal.scss`），
+     因为服务面板里没有这个祖先容器。 */
 
   /* ---------- 提示行 ---------- */
   .pty-hint {

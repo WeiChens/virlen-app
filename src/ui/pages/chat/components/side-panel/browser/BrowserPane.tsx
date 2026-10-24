@@ -14,6 +14,8 @@
  *    免得「后退」退回去又被重定向回来、转圈。
  * 2. **切标签不卸载**（与容器同一条口径）：本组件一直挂着，非激活时 rect 为 0，
  *    宿主据此把原生视图 `hide` 掉 —— 页面、滚动位置、表单、登录都还在。
+ *    **例外：闲置休眠** —— 切走超过设定秒数（默认 20，可关）会 `close` 掉原生视图省内存，
+ *    切回来重建并重载当前地址（页面内状态丢，面板历史收敛成当前页），见 `view-policy.ts`。
  * 3. **地址是唯一的导航来源**：`url` 一变宿主就 `navigate`；同一地址再来一次算刷新
  *    （`reloadToken`），因为 `navigate` 到当前地址不会重新加载。
  * 4. **下载一律拦下并告知**：原生子窗口没有浏览器那种下载栏，放行就等于「静默写进系统下载
@@ -124,11 +126,24 @@ export default function BrowserPane({ initialUrl, onNavigate, onTitle, onClose }
   const viewLabel = viewLabelRef.current
 
   const url = historyCurrent(history)
-  const { hostRef, error: viewError, covered } = useNativeBrowserView({
+  const { hostRef, error: viewError, covered, slept } = useNativeBrowserView({
     label: viewLabel,
     url,
     reloadToken: reloadKey,
   })
+  /**
+   * 原生视图被闲置休眠过（页面已重新加载）：原生历史栈没了，面板历史必须收敛成当前页 ——
+   * 否则「后退 / 前进」指向的是已经不存在的页面，点了也只会没反应。
+   */
+  const sleptSeenRef = useRef(slept)
+  useEffect(() => {
+    if (sleptSeenRef.current === slept) return
+    sleptSeenRef.current = slept
+    pendingRef.current = null
+    const next = newHistory(historyCurrent(historyRef.current))
+    historyRef.current = next
+    setHistory(next)
+  }, [slept])
   const back = canGoBack(history)
   const forward = canGoForward(history)
   /** 地址栏里显示的文本：用户正在敲的就是草稿，否则是真当前地址 */

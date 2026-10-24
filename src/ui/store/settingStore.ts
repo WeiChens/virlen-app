@@ -160,6 +160,14 @@ export interface SettingsStore {
   editorOpenConfigs: EditorOpenConfig[]
   /** 默认编辑器配置 id */
   editorOpenDefaultId: string
+  /**
+   * 右侧面板的网页标签切走后多久销毁原生视图（秒，0 = 不销毁）。
+   * 销毁只省内存，切回来会重新加载当前地址（页面内状态丢失）——「切标签不卸载」的例外，取舍见
+   * `side-panel/browser/view-policy.ts`。
+   */
+  browserSleepAfterSec: number
+  /** 同时存活的网页视图上限（0 = 不限）：超出时销毁最久没看的**隐藏中**视图 */
+  browserMaxViews: number
   /** AI 回复完成或需用户选择时，窗口未激活则强制置前 */
   forceWindowActive: boolean
   /**
@@ -234,6 +242,9 @@ const defaultSettings: SettingsStore = {
   htmlPreviewAllowRemote: false,
   editorOpenConfigs: [],
   editorOpenDefaultId: '',
+  // 网页标签：切走 20 秒后释放原生视图；同时最多留 10 个
+  browserSleepAfterSec: 20,
+  browserMaxViews: 10,
   forceWindowActive: false,
   // 交互呈现：提问默认「不打断」（会话内卡片），权限授权默认仍弹窗（马上确认更安全）
   userChoiceInline: true,

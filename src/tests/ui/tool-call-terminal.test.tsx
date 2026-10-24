@@ -829,6 +829,12 @@ describe('XtermTerminalBlock（PTY）结构与操作区', () => {
   it('完成态加 is-finished 类（用于隐藏终端光标）；运行态不加', () => {
     expect(render(true)).not.toContain('is-finished')
     expect(render(false)).toContain('is-finished')
+    // ⚠️ 判定必须落在**终端主体 wrapper** 上（CSS 就挂在那儿）：后台服务面板里没有
+    // `.execute-command-wrapper` 这个祖先，挂在祖先上的话那边的已退出终端会一直闪光标
+    expect(render(true)).toContain('class="pty-terminal-body-wrapper"')
+    expect(render(false)).toContain(
+      'class="pty-terminal-body-wrapper is-finished"',
+    )
   })
 })
 

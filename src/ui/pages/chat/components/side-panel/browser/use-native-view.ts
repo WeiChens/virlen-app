@@ -27,9 +27,17 @@
  *    盖住（用户看到的就是「打开设置页，网页还在最上面」）。判据是**占位中心点的命中测试**
  *    （`coveredByOverlay`），而不是维护一张浮层清单 —— 那些浮层全是 portal 到 body 的，
  *    只要中心命中的元素跑出占位，就说明被盖了。
+ * 7. **看不见就不跑帧**：看得见时逐帧同步（面板宽度过渡 / 拖分隔条要跟手），整体不可见就
+ *    停掉 rAF，改由 `ResizeObserver` 与 `visibilitychange` 唤醒；没有 RO 的环境（jsdom 单测）
+ *    低频轮询兜底。隐藏的标签不该每帧白量一次布局。
+ * 8. **闲置休眠与上限**（`view-policy.ts`）：切走超过设定秒数就 `close` 掉原生视图，存活数超上限
+ *    时淘汰最久没看的隐藏视图（设置项 `browserSleepAfterSec` / `browserMaxViews`，0 = 关）。
+ *    销毁只发生在不可见时；重建后 `slept` 加一，调用方据此把后退 / 前进历史收敛成当前页。
  */
 import { useEffect, useRef, useState, type RefObject } from 'react'
+import { reaction } from 'mobx'
 import { appliedZoomFactor } from '@/ui/hooks/applied-zoom'
+import { settingsState } from '@/ui/store'
 import {
   applyBrowserView,
   closeBrowserView,
@@ -39,6 +47,12 @@ import {
   reloadBrowserView,
   type BrowserViewBounds,
 } from '@/infrastructure/browser/browser-view'
+import {
+  noteBrowserView,
+  refreshBrowserViewPolicy,
+  setBrowserViewAwake,
+  trackBrowserView,
+} from './view-policy'
 
 interface Options {
   /** 视图 label（一个网页标签一个，由调用方保证稳定） */
@@ -60,6 +74,11 @@ interface NativeBrowserView {
    * 设置页的遮罩是半透明的，底下留着那行字会透出来。
    */
   covered: boolean
+  /**
+   * 原生视图因**闲置休眠**被销毁过的次数。变化即说明页面被重新加载过、原生历史栈已清空，
+   * 调用方要把自己的后退 / 前进历史收敛成当前页（否则按钮指向已经不存在的页面）。
+   */
+  slept: number
 }
 
 /** 小于这个尺寸就算不可见（`display:none` 的元素 rect 正好是 0） */
@@ -67,6 +86,12 @@ const MIN_SIZE = 2
 
 /** 位置变化小于这个值就不发命令（亚像素抖动没有意义，只是白跑一趟 IPC） */
 const MIN_DELTA = 0.5
+
+/**
+ * 不可见时的轮询间隔（ms）：看得见才逐帧跑，看不见的标签不该每帧白量一次布局。
+ * 有 `ResizeObserver` 的环境靠尺寸变化唤醒（不轮询），没有的环境（jsdom 单测）只能低频兜底。
+ */
+const IDLE_TICK_MS = 250
 
 /**
  * 让位判定：占位的中心点是不是被 DOM 浮层盖住了（`rect` 是 CSS 像素，与 `elementFromPoint` 同口径）。
@@ -125,6 +150,39 @@ export function useNativeBrowserView({ label, url, reloadToken }: Options): Nati
     bounds: { x: 0, y: 0, width: 0, height: 0 },
     wantUrl: url,
   })
+  /** 闲置休眠销毁视图的次数（见 `NativeBrowserView.slept`） */
+  const [slept, setSlept] = useState(0)
+
+  /**
+   * 登记到存活策略表：什么时候真销毁由设置决定（切走超过 N 秒 / 存活数超出上限）。
+   * ⚠️ 只销毁、不导航：`wantUrl` 留着，下一次可见时会带着同一地址重建。
+   */
+  useEffect(
+    () =>
+      trackBrowserView(label, () => {
+        const state = stateRef.current
+        // 在用的那一页绝不动（可见时 slept 也不算：此刻销毁等于无端刷新）
+        if (!state.created || state.visible) return
+        state.created = false
+        state.creating = false
+        setSlept((n) => n + 1)
+        void closeBrowserView(label)
+      }),
+    [label],
+  )
+
+  /** 两个策略参数是设置项：改了就重排计时器并立刻淘汰一次 */
+  useEffect(
+    () =>
+      reaction(
+        () => [
+          settingsState.value.browserSleepAfterSec,
+          settingsState.value.browserMaxViews,
+        ],
+        () => refreshBrowserViewPolicy(),
+      ),
+    [],
+  )
 
   /**
    * 地址变化：已建好的视图直接导航；还没建的下一次 rAF 会带着新地址建。
@@ -142,6 +200,7 @@ export function useNativeBrowserView({ label, url, reloadToken }: Options): Nati
         // 飞行中的 open 由它自己的 `.then` 在落地时收（这里先把 creating 放开，
         // 否则那一边会以为「已被新一轮接管」而不 close，视图就泄漏了）
         state.creating = false
+        setBrowserViewAwake(label, false)
         void closeBrowserView(label)
       }
       return
@@ -159,19 +218,57 @@ export function useNativeBrowserView({ label, url, reloadToken }: Options): Nati
     void reloadBrowserView(label)
   }, [label, reloadToken])
 
-  /** 逐帧同步：量 rect → 建视图 / 改大小 / 显隐。组件卸载时销毁视图。 */
+  /**
+   * 逐帧同步：量 rect → 建视图 / 改大小 / 显隐。组件卸载时销毁视图。
+   *
+   * 节奏：**看得见才逐帧**（面板宽度过渡 / 拖分隔条要跟手），整体不可见时停掉 rAF，改由
+   * `ResizeObserver` 与 `visibilitychange` 唤醒 —— 隐藏的标签不该每帧白量一次布局。
+   * 没有 `ResizeObserver` 的环境（jsdom 单测）没法靠尺寸变化唤醒，只能低频轮询兜底。
+   */
   useEffect(() => {
     if (!hasBrowserView()) return
     const state = stateRef.current
     let frame = 0
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let observer: ResizeObserver | null = null
     let stopped = false
 
-    const tick = (): void => {
+    /** 收起已排的下一拍（rAF 与低频轮询二选一，不允许两路同时跑） */
+    function cancelScheduled(): void {
+      if (frame) {
+        cancelAnimationFrame(frame)
+        frame = 0
+      }
+      if (timer !== null) {
+        clearTimeout(timer)
+        timer = null
+      }
+    }
+
+    function schedule(active: boolean): void {
       if (stopped) return
-      frame = requestAnimationFrame(tick)
+      cancelScheduled()
+      if (active) frame = requestAnimationFrame(tick)
+      else if (!observer) timer = setTimeout(tick, IDLE_TICK_MS)
+    }
+
+    /** 外部唤醒（占位尺寸变了 / 窗口回到前台）：立刻补一拍，再按结论决定下一拍 */
+    function wake(): void {
+      if (stopped) return
+      cancelScheduled()
+      tick()
+    }
+
+    function tick(): void {
+      if (stopped) return
+      frame = 0
+      timer = null
 
       const host = hostRef.current
-      if (!host) return
+      if (!host) {
+        schedule(false)
+        return
+      }
       const rect = host.getBoundingClientRect()
       // CSS 像素 → 逻辑像素：界面缩放让 1 CSS px 占 `zoom` 个 DIP（见文件头第 5 条）
       const zoom = appliedZoomFactor()
@@ -193,14 +290,18 @@ export function useNativeBrowserView({ label, url, reloadToken }: Options): Nati
         coveredRef.current = isCovered
         setCovered(isCovered)
       }
-      const visible =
-        sized &&
-        !dragging &&
-        !!state.wantUrl &&
-        !isCovered
+      /** 窗口最小化 / 切到后台：画面本来就看不到，不必让视图悬着 */
+      const documentHidden = document.visibilityState === 'hidden'
+      const inUse = sized && !dragging && !isCovered && !!state.wantUrl
+      const visible = inUse && !documentHidden
+      // 存活策略：`inUse` 决定能不能被上限淘汰，`parked`（彻底不可见）才允许开始计闲置时间
+      noteBrowserView(label, inUse, !sized || documentHidden)
 
       if (!state.created) {
-        if (!visible || state.creating || state.failed) return
+        if (!visible || state.creating || state.failed) {
+          schedule(sized && !documentHidden)
+          return
+        }
         state.creating = true
         const target = state.wantUrl
         openBrowserView(label, target, bounds)
@@ -212,6 +313,7 @@ export function useNativeBrowserView({ label, url, reloadToken }: Options): Nati
             if (stopped || !state.wantUrl) {
               state.created = false
               state.visible = false
+              setBrowserViewAwake(label, false)
               // 真正卸载（没任何新一轮接管）时，这个刚建好的视图必须收掉，否则泄漏
               if (!takenOver) void closeBrowserView(label)
               return
@@ -220,14 +322,18 @@ export function useNativeBrowserView({ label, url, reloadToken }: Options): Nati
             state.visible = true
             state.bounds = bounds
             setError(null)
+            // 建好了才允许计入「存活视图数」：超出上限时由策略关掉最久没看的隐藏视图
+            setBrowserViewAwake(label, true)
             // 创建期间用户又换了地址：补一次导航（那次 effect 跑的时候 created 还是 false）
             if (state.wantUrl !== target) void navigateBrowserView(label, state.wantUrl)
           })
           .catch((reason: unknown) => {
             state.creating = false
             state.failed = true
+            setBrowserViewAwake(label, false)
             if (!stopped) setError(reason instanceof Error ? reason.message : String(reason))
           })
+        schedule(sized && !documentHidden)
         return
       }
 
@@ -236,20 +342,30 @@ export function useNativeBrowserView({ label, url, reloadToken }: Options): Nati
         state.visible = visible
         void applyBrowserView(label, bounds, visible)
       }
+      schedule(sized && !documentHidden)
     }
 
+    observer =
+      typeof ResizeObserver === 'function' ? new ResizeObserver(wake) : null
+    const host = hostRef.current
+    if (observer && host) observer.observe(host)
+    document.addEventListener('visibilitychange', wake)
     frame = requestAnimationFrame(tick)
+
     return () => {
       stopped = true
-      cancelAnimationFrame(frame)
+      cancelScheduled()
+      observer?.disconnect()
+      document.removeEventListener('visibilitychange', wake)
       state.created = false
       state.visible = false
       state.creating = false
+      setBrowserViewAwake(label, false)
       // 这里只收拾眼前这一份；飞行中的 open 由它自己的 `.then` 在落地时收
       // （那里会先看 `state.creating`，避免把 StrictMode 下一轮刚建的视图杀掉）
       void closeBrowserView(label)
     }
   }, [label])
 
-  return { hostRef, error, covered }
+  return { hostRef, error, covered, slept }
 }

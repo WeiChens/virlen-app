@@ -33,6 +33,10 @@ import {
   normalizeZoom,
   zoomPercent,
 } from '@/domain/zoom'
+import {
+  BROWSER_MAX_VIEWS_MAX,
+  BROWSER_SLEEP_MAX_SEC,
+} from '@/ui/pages/chat/components/side-panel/browser/view-policy'
 import './general-settings.scss'
 import { openUrl } from '@tauri-apps/plugin-opener'
 
@@ -134,15 +138,49 @@ function AccentColorField({
 function GeneralSettings() {
   const s = settingsState.value
   const [telemetryBusy, setTelemetryBusy] = useState(false)
-  /** 缩放滑杆草稿：拖动期间只改它，松手才落库（同代码显示页的字号滑杆） */
+  /**
+   * 缩放滑杆草稿：拖动期间只改它，松手才落库（同代码显示页的字号滑杆） */
   const [zoomDraft, setZoomDraft] = useState(() =>
     normalizeZoom(settingsState.value.zoomFactor),
+  )
+  /**
+   * 两个网页视图策略参数也走草稿 + 失焦提交：每敲一个字符就落库会刷出几十条
+   * `settings.change` 埋点，而这两个值只有在提交那一刻才有意义。
+   */
+  const [sleepDraft, setSleepDraft] = useState(() =>
+    String(settingsState.value.browserSleepAfterSec),
+  )
+  const [maxViewsDraft, setMaxViewsDraft] = useState(() =>
+    String(settingsState.value.browserMaxViews),
   )
 
   // 外部改了缩放（「恢复默认」）→ 草稿跟上
   useEffect(() => {
     setZoomDraft(normalizeZoom(s.zoomFactor))
   }, [s.zoomFactor])
+
+  // 设置被别处改（新窗口 / 恢复默认）→ 草稿跟上
+  useEffect(() => {
+    setSleepDraft(String(s.browserSleepAfterSec))
+  }, [s.browserSleepAfterSec])
+  useEffect(() => {
+    setMaxViewsDraft(String(s.browserMaxViews))
+  }, [s.browserMaxViews])
+
+  /** 按边界收敛：空 / 非数字回落当前值（不让输入框凭空变成 0 —— `Number('')` 也是 0） */
+  function commitBrowserNumber(
+    raw: string,
+    key: 'browserSleepAfterSec' | 'browserMaxViews',
+    max: number,
+    setDraft: (value: string) => void,
+  ) {
+    const n = raw.trim() === '' ? Number.NaN : Number(raw)
+    const value = Number.isFinite(n)
+      ? Math.min(Math.max(0, Math.round(n)), max)
+      : s[key]
+    setDraft(String(value))
+    if (value !== s[key]) update(key, value)
+  }
 
   function commitZoom(next: number) {
     const value = normalizeZoom(next)
@@ -346,6 +384,84 @@ function GeneralSettings() {
               onClick={() => update('zoomFactor', DEFAULT_ZOOM)}>
               {t('恢复默认')}
             </button>
+          </div>
+        </div>
+      </div>
+      <h2 className="section-title">{t('内置浏览器')}</h2>
+
+      <div className="section">
+        {/* 两个策略的真实现点在 `side-panel/browser/view-policy.ts`：这里只负责把上限写进设置。
+            0 是两个策略各自的「关掉」档（不休眠 / 不限个数），文案里写清楚。 */}
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="label-text">{t('闲置网页休眠')}</span>
+            <span className="label-desc">
+              {t(
+                '网页标签切走后超过这么久就释放它的网页视图（省内存），切回来会重新加载当前地址，页面内的滚动位置与表单内容会丢\n0 = 不释放',
+              )}
+            </span>
+          </div>
+          <div className="setting-control">
+            <div className="unit-input">
+              <input
+                type="number"
+                min={0}
+                max={BROWSER_SLEEP_MAX_SEC}
+                step={5}
+                aria-label={t('闲置网页休眠')}
+                value={sleepDraft}
+                onChange={(e) => setSleepDraft(e.target.value)}
+                onBlur={() =>
+                  commitBrowserNumber(
+                    sleepDraft,
+                    'browserSleepAfterSec',
+                    BROWSER_SLEEP_MAX_SEC,
+                    setSleepDraft,
+                  )
+                }
+                onKeyDown={(e) => {
+                  // 回车在 number 输入框里不提交表单 —— 主动失焦即触发校正
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                }}
+              />
+              <span className="unit">{t('秒')}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="label-text">{t('最多保留网页')}</span>
+            <span className="label-desc">
+              {t(
+                '同时存活的网页视图超过这个数量时，释放最久没看的那个（正看着的不会被释放）\n0 = 不限',
+              )}
+            </span>
+          </div>
+          <div className="setting-control">
+            <div className="unit-input">
+              <input
+                type="number"
+                min={0}
+                max={BROWSER_MAX_VIEWS_MAX}
+                step={1}
+                aria-label={t('最多保留网页')}
+                value={maxViewsDraft}
+                onChange={(e) => setMaxViewsDraft(e.target.value)}
+                onBlur={() =>
+                  commitBrowserNumber(
+                    maxViewsDraft,
+                    'browserMaxViews',
+                    BROWSER_MAX_VIEWS_MAX,
+                    setMaxViewsDraft,
+                  )
+                }
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                }}
+              />
+              <span className="unit">{t('个')}</span>
+            </div>
           </div>
         </div>
       </div>
