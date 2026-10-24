@@ -4,6 +4,7 @@
  * 变更列表**一次只看一段**：顶部 tab 切换「更改（含未跟踪）→ 暂存区 → 冲突」。
  * 两段并排时每列只剩一半宽度（面板宽只有 496px），长路径与行内操作只能互相挤；
  * 段口径与差异弹窗共用 `sections.ts`（冲突段无批量入口、且只在该段非空时出现）。
+ * 批量入口成功后 tab 跟到内容去的那一段（全部暂存 → 暂存区，全部取消暂存 → 更改）。
  * 提交区只挂在「暂存区」tab 下 —— 提交只跟暂存区有关；显隐还看暂存区是否非空
  * （amend 模式例外：只改提交信息也得有地方写）。
  * 选中模式同资源管理器：单击选中、Ctrl 加减、Shift 范围，**双击**才开差异。
@@ -52,7 +53,13 @@ import GitDiffModal from './GitDiffModal'
 import GitLogModal from './GitLogModal'
 import GitGraphModal from './GitGraphModal'
 import GitStashModal from './GitStashModal'
-import { changeSections, rowKey, splitRowKey, type GitSectionKey } from './sections'
+import {
+  changeSections,
+  rowKey,
+  splitRowKey,
+  type GitChangeSection,
+  type GitSectionKey,
+} from './sections'
 import VirtualList from './VirtualList'
 
 interface Props {
@@ -142,10 +149,7 @@ export const GitPanel = observer(function GitPanel({
   const disabled = readonly || busy
   const head = snapshot?.head
 
-  const sections = changeSections(groups, {
-    stage: (paths) => void stage(paths),
-    unstage: (paths) => void unstage(paths),
-  })
+  const sections = changeSections(groups, { stage, unstage })
 
   /** 当前快照的行键（顺序即列表顺序）；写操作后行会换段/消失，选中集要按它对账。 */
   const flatKeys = sections.flatMap((section) =>
@@ -222,6 +226,18 @@ export const GitPanel = observer(function GitPanel({
       .filter((row) => row.side === side)
       .map((row) => row.path)
     return [...new Set(paths)]
+  }
+
+  /**
+   * 批量入口（全部暂存 / 全部取消暂存）：成功后把 tab 跟到内容去的那一段 ——
+   * 全部暂存完文件都在暂存区，留在「更改」只能看到空列表；取消暂存同理回「更改」。
+   * 失败（返回 false）时留在原地，错误已由 git-service 报过。
+   */
+  async function runBulk(section: GitChangeSection): Promise<void> {
+    if (!section.bulk) return
+    const ok = await section.bulk.run()
+    if (!ok) return
+    setTab(section.key === 'unstaged' ? 'staged' : 'unstaged')
   }
 
   /**
@@ -528,7 +544,7 @@ export const GitPanel = observer(function GitPanel({
                 className="git-bulk-btn"
                 title={activeSection.bulk.label}
                 disabled={disabled}
-                onClick={activeSection.bulk.run}>
+                onClick={() => void runBulk(activeSection)}>
                 {activeSection.bulk.label}
               </button>
             )}

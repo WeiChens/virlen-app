@@ -144,8 +144,8 @@ function sections(): GitChangeSection[] {
     truncated: false,
   }
   return changeSections(groupChanges(snapshot), {
-    stage: () => {},
-    unstage: () => {},
+    stage: async () => true,
+    unstage: async () => true,
   })
 }
 

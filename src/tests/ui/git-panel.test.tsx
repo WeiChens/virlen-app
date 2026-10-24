@@ -14,6 +14,8 @@
  * 7. **变更列表一次只看一段（顶部 tab 切换）+ 提交区只挂在「暂存区」tab 下**（实测反馈）：
  *    两段并排时每列只剩一半宽度，长路径与行内操作互相挤；段顺序仍是「更改 → 暂存区」
  *    （文件暂存后往下走，而不是跑到顶上），先看改了什么，再切到暂存区写提交信息。
+ * 8. **批量动作成功后 tab 跟内容走**：「全部暂存」→「暂存区」，「全部取消暂存」→「更改」
+ *    （失败 / 没做成就不动 tab，错误由 git-service 报）。
  *
  * 数据与写操作全部 mock：这里只验界面，git 语义由 Rust 用例（`cargo test -p virlen-core git`）守。
  */
@@ -287,6 +289,52 @@ it('tab 顺序是「更改 → 暂存区」，提交区只在暂存那个 tab �
   expect(
     list.compareDocumentPosition(commitBox) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy()
+})
+
+/**
+ * 实测反馈：批量动作把整段内容搬到了另一侧 —— 全部暂存后文件都在暂存区，留在「更改」只能
+ * 看到空列表；全部取消暂存同理该回「更改」。成败以 git-service 的返回值为准。
+ */
+it('「全部暂存」成功后 tab 跟到「暂存区」', async () => {
+  vi.mocked(stage).mockResolvedValue(true)
+  setStore([unstagedEntry('a.txt'), untrackedEntry('new.ts')])
+  mount()
+  expect(activeTab()).toBe('更改')
+
+  await act(async () => {
+    document.querySelector<HTMLElement>('.git-bulk-btn')!.click()
+  })
+
+  expect(stage).toHaveBeenCalledWith(['a.txt', 'new.ts'])
+  expect(activeTab()).toBe('暂存区')
+})
+
+it('「全部取消暂存」成功后 tab 回到「更改」', async () => {
+  vi.mocked(unstage).mockResolvedValue(true)
+  setStore([stagedEntry('a.txt'), stagedEntry('b.txt')])
+  mount()
+  // 没有未暂存的改动 → 初值落在「暂存区」
+  expect(activeTab()).toBe('暂存区')
+
+  await act(async () => {
+    document.querySelector<HTMLElement>('.git-bulk-btn')!.click()
+  })
+
+  expect(unstage).toHaveBeenCalledWith(['a.txt', 'b.txt'])
+  expect(activeTab()).toBe('更改')
+})
+
+it('批量动作失败（返回 false）时不动 tab', async () => {
+  vi.mocked(stage).mockResolvedValue(false)
+  setStore([unstagedEntry('a.txt'), unstagedEntry('b.txt')])
+  mount()
+
+  await act(async () => {
+    document.querySelector<HTMLElement>('.git-bulk-btn')!.click()
+  })
+
+  expect(stage).toHaveBeenCalled()
+  expect(activeTab()).toBe('更改')
 })
 
 /** 冲突段：处理掉之前一直在 tab 上，且是唯一带危险色的那一个（初值优先落到它） */

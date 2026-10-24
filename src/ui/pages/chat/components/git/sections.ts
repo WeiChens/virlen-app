@@ -19,13 +19,14 @@ export interface GitChangeSection {
   title: string
   side: 'staged' | 'unstaged'
   entries: GitChangeEntry[]
-  /** 段标题右侧的批量入口（`null` = 这一段没有，例如冲突段） */
-  bulk: { label: string; run: () => void } | null
+  /** 段标题右侧的批量入口（`null` = 这一段没有，例如冲突段）。
+   *  返回这一批是否真的做成了：面板据此决定要不要跟着内容换 tab */
+  bulk: { label: string; run: () => Promise<boolean> } | null
 }
 
 export interface GitSectionActions {
-  stage: (paths: string[]) => void
-  unstage: (paths: string[]) => void
+  stage: (paths: string[]) => Promise<boolean>
+  unstage: (paths: string[]) => Promise<boolean>
 }
 
 const paths = (list: GitChangeEntry[]): string[] => list.map((entry) => entry.path)
@@ -45,9 +46,8 @@ export function changeSections(
   groups: GitGroups,
   actions: GitSectionActions,
 ): GitChangeSection[] {
-  const stageAll = (): void => {
+  const stageAll = (): Promise<boolean> =>
     actions.stage([...paths(groups.unstaged), ...paths(groups.untracked)])
-  }
   return [
     {
       key: 'unstaged',
