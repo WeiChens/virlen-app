@@ -130,6 +130,8 @@ export function TrajectoryView({
   /** 拖拽时要拿最新的宽度（onUp 的闭包拿不到 setState 后的值） */
   const inspectorWidthRef = useRef(inspectorWidth)
   inspectorWidthRef.current = inspectorWidth
+  /** 正在拖拽时的收尾函数：组件卸载时也要把 window 上的监听摘掉，否则会漏在那 */
+  const stopResizeRef = useRef<(() => void) | null>(null)
   const nonceRef = useRef(0)
   /** 视口内第一条记录（由表格上报，回补历史后用它把视口锚回原处） */
   const anchorKeyRef = useRef<string | null>(null)
@@ -262,6 +264,9 @@ export function TrajectoryView({
     }
   }, [hasMoreOlder, loadingOlder, onLoadOlder])
 
+  // 卸载时把拖拽的收尾做掉（否则监听留在 window 上，下一次鼠标移动还会去改一个已不存在的面板）
+  useEffect(() => () => stopResizeRef.current?.(), [])
+
   // Esc：先收检查器，再退出轨迹
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -284,37 +289,54 @@ export function TrajectoryView({
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [onClose, selectedKey])
 
-  /** 拖拽检查器左边缘调宽（向右拖变宽，左侧才是内容区） */
-  const startResize = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      event.preventDefault()
-      const startX = event.clientX
-      const startWidth = inspectorWidth
-      const onMove = (moveEvent: MouseEvent) => {
-        const next = Math.min(
-          INSPECTOR_MAX_WIDTH,
-          Math.max(INSPECTOR_MIN_WIDTH, startWidth + (startX - moveEvent.clientX)),
+  /**
+   * 拖拽检查器左边缘调宽（向右拖变宽，左侧才是内容区）。
+   *
+   * ⚠️ 按下与移动必须是**同一族事件**：`pointerdown` 上 `preventDefault()` 会让浏览器
+   * 抑制整段按压期间的兼容 mouse 事件（mousedown / mousemove / mouseup），只留 pointer 一族。
+   * 混用 mousemove 的症状就是「按住拖不动，松手后跟着鼠标跑」—— 松手才恢复 mousemove，
+   * 而那时监听还挂着；下一次 click 的 mouseup 才把它摘掉。
+   */
+  const startResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    stopResizeRef.current?.()
+    const startX = event.clientX
+    // 读 ref 而不是闭包里的 state：useCallback 的依赖是空的，闭包里的宽度永远是挂载那一帧的值
+    const startWidth = inspectorWidthRef.current
+    // 指针拖到表格上方时别顺手选中一片文字
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    const onMove = (moveEvent: PointerEvent): void => {
+      const next = Math.min(
+        INSPECTOR_MAX_WIDTH,
+        Math.max(INSPECTOR_MIN_WIDTH, startWidth + (startX - moveEvent.clientX)),
+      )
+      setInspectorWidth(next)
+    }
+    const stop = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', stop)
+      window.removeEventListener('pointercancel', stop)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      stopResizeRef.current = null
+      // 只在松手时写一次：拖拽期间每帧写 localStorage 是同步 IO，会掉帧
+      try {
+        localStorage.setItem(
+          INSPECTOR_STORAGE_KEY,
+          String(Math.round(inspectorWidthRef.current)),
         )
-        setInspectorWidth(next)
+      } catch {
+        // 隐私模式下写不进去：宽度只在本次会话内有效
       }
-      const onUp = () => {
-        window.removeEventListener('mousemove', onMove)
-        window.removeEventListener('mouseup', onUp)
-        // 只在松手时写一次：拖拽期间每帧写 localStorage 是同步 IO，会掉帧
-        try {
-          localStorage.setItem(
-            INSPECTOR_STORAGE_KEY,
-            String(Math.round(inspectorWidthRef.current)),
-          )
-        } catch {
-          // 隐私模式下写不进去：宽度只在本次会话内有效
-        }
-      }
-      window.addEventListener('mousemove', onMove)
-      window.addEventListener('mouseup', onUp)
-    },
-    [],
-  )
+    }
+    stopResizeRef.current = stop
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', stop)
+    window.addEventListener('pointercancel', stop)
+  }, [])
 
   return (
     <div className="trajectory-view">
@@ -346,6 +368,9 @@ export function TrajectoryView({
       />
 
       <TrajectoryTimeline
+        // 切会话重置缩放（zoom 是概览条自己的状态，不重置会带着上一段的放大倍率进来）
+        // 加前缀：同一父节点下 TrajectoryStats 也在用 sessionId 当 key，裸 id 会撞车
+        key={`timeline:${sessionId}`}
         model={timelineModel}
         mode={mode}
         range={range}

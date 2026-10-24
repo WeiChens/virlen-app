@@ -48,4 +48,21 @@ export {
   type TrajectoryFlatOptions,
   type TrajectoryFlatResult,
 } from './rows'
+export {
+  BAR_GAP_PX,
+  BAR_HEIGHT,
+  BAR_OFFSET,
+  LANE_HEIGHT,
+  MIN_BAR_PX,
+  STRIP_HEIGHT,
+  timelineHitTest,
+  timelinePaintOps,
+  timelineSpanPx,
+  type TimelineColorSlot,
+  type TimelinePaintOp,
+  type TimelinePaintOptions,
+  type TimelineRectOp,
+  type TimelineRingOp,
+  type TimelineVLineOp,
+} from './paint'
 export { searchRecords } from './search'

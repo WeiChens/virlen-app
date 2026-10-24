@@ -492,6 +492,13 @@ describe('概览时间轴', () => {
     expect(hasTimelineTime(turns)).toBe(true)
   })
 
+  it('time 模式：零耗时的记录投影成零宽（可见宽度交给视图的像素下限，不按域比例撑宽）', () => {
+    const model = buildTimeline(turns, 'time')!
+    const user = model.spans.find((s) => s.kind === 'user')
+    expect(user).toBeDefined()
+    expect(user!.end).toBe(user!.start)
+  })
+
   it('没有任何起点时刻时会话没有 time 模型', () => {
     const unknown = buildTrajectory({
       messages: [{ id: 'u0', role: 'user', content: '没有时间戳', timestamp: 0 }],

@@ -8,7 +8,8 @@
  * - `sequence`：**等宽**。每条记录一格，与真实时间无关 —— 永远可用，适合看「发生了什么、
  *   顺序怎么排」。这是默认模式。
  * - `time`：**真实时间轴**。按 `startedAt` / `durationMs` 投影；不知道起点的记录不画（不猜），
- *   没有耗时的记录画成一根最小刻度（否则零宽看不见）。整段会话一条可用时间都没有时，
+ *   零耗时的记录投影成零宽（可见宽度由视图层的像素下限兜底：模型不能按域比例放大区间，
+ *   那会在概览放大后让相邻记录互相压住）。整段会话一条可用时间都没有时，
  *   调用方应禁用这个模式（见 `hasTimelineTime`）。
  *
  * ⚠️ 折叠状态**不参与**投影：概览永远是整段会话的地图，收起某一轮不该让地图缩水。
@@ -55,9 +56,6 @@ const LANE_ORDER: Record<ReturnType<typeof laneOf>, 0 | 1 | 2> = {
   assistant: 1,
   tool: 2,
 }
-
-/** 真实时间轴下「零耗时」记录的最小可见宽度（ms）：取整段跨度的 1/600，最少 1ms */
-const MIN_TIME_WIDTH_RATIO = 1 / 600
 
 /** 展平所有轮次里的记录（保持展示顺序） */
 function allRecords(turns: readonly TrajectoryTurn[]) {
@@ -144,7 +142,6 @@ function buildTimeModel(
   const domainEnd = Math.max(...timed.map((item) => item.end))
   // 跨度为零（只有一条瞬时记录）时给一个最小窗口，避免除零
   const span = domainEnd - domainStart || 1
-  const minWidth = Math.max(1, span * MIN_TIME_WIDTH_RATIO)
 
   const spans: TrajectoryTimelineSpan[] = []
   const boundaries: TrajectoryTurnBoundary[] = []
@@ -158,7 +155,7 @@ function buildTimeModel(
       kind: item.record.kind,
       lane: LANE_ORDER[laneOf(item.record.kind)],
       start: item.start,
-      end: Math.max(item.end, item.start + minWidth),
+      end: item.end,
       isError: item.record.isError === true,
       label: item.record.text || item.record.toolName || '',
     })

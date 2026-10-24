@@ -175,6 +175,9 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   &__lanes {
     flex: none;
     width: 30px;
+    // 钉在轨道顶部 48px 内：放大后视口底部会多出一条 6px 滚动条，标签不能跟着被拉开
+    align-self: flex-start;
+    height: 48px;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -188,34 +191,42 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
     }
   }
 
-  &__track {
+  // 视口：画布垫在底层（pointer-events: none），滚动层叠在上面，只负责原生滚动条与手势
+  &__viewport {
     position: relative;
     flex: 1;
     min-width: 0;
-    height: 48px;
+    // 底色与圆角在视口上（而不是画在 canvas 里）：放大后滚动条也落在底色上
     border-radius: 4px;
     background: var(--bg-secondary, #f7f7f8);
-    cursor: crosshair;
     overflow: hidden;
+    // 高度由滚动层决定：内容 48px + 放大后那条 6px 横向滚动条
+    cursor: crosshair;
     user-select: none;
   }
 
-  &__boundary {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 1px;
-    background: var(--border-color, #e5e5e5);
+  // 滚动层：未放大时内容与它同宽（没有溢出也就没有滚动条），放大后横向滚动条由它出
+  &__scroll {
+    position: relative;
+    overflow-x: auto;
+    overflow-y: hidden;
   }
 
-  &__range {
+  // 空占位：只为撑出横向滚动范围（宽度 = 100% × 缩放倍率，由内联样式给）
+  &__spacer {
+    // ⚠️ = STRIP_HEIGHT（domain/trajectory/paint.ts）；画布高度也从那里来，两边必须同值
+    height: 48px;
+  }
+
+  // 画布：只有视口那么大，不看内容层宽度（放大 32× 也不会撑出几万像素宽的画布）
+  &__canvas {
     position: absolute;
+    left: 0;
     top: 0;
-    bottom: 0;
-    background: color-mix(in srgb, var(--accent-color, #4f46e5) 14%, transparent);
-    border-left: 1px solid var(--accent-color, #4f46e5);
-    border-right: 1px solid var(--accent-color, #4f46e5);
+    display: block;
+    // 指针事件全交给上面的滚动层（命中判定在 canvas 外算）
     pointer-events: none;
+    z-index: 1;
   }
 
   &__mode {
@@ -224,59 +235,6 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
     font-size: 9px;
     color: var(--text-tertiary, #767676);
     white-space: nowrap;
-  }
-}
-
-.trajectory-span {
-  position: absolute;
-  height: 10px;
-  margin-top: 3px;
-  padding: 0;
-  border: none;
-  border-radius: 2px;
-  min-width: 2px;
-  cursor: pointer;
-  background: var(--text-secondary, #666);
-  opacity: 0.55;
-  transition: opacity 0.12s;
-
-  &[data-kind='user'] {
-    background: var(--accent-color, #4f46e5);
-    opacity: 0.7;
-  }
-
-  &[data-kind='message'] {
-    background: color-mix(in srgb, var(--text-primary, #1a1a1a) 65%, transparent);
-  }
-
-  &[data-kind='tool'] {
-    background: var(--color-warning, #f59e0b);
-    opacity: 0.7;
-  }
-
-  &[data-kind='compacted'] {
-    background: #8b5cf6;
-    opacity: 0.6;
-  }
-
-  &[data-kind='system'],
-  &[data-kind='context'] {
-    background: var(--text-tertiary, #767676);
-    opacity: 0.4;
-  }
-
-  &.is-error {
-    background: var(--color-error, #cf222e);
-    opacity: 0.85;
-  }
-
-  &:hover {
-    opacity: 1;
-  }
-
-  &.is-selected {
-    opacity: 1;
-    box-shadow: 0 0 0 1.5px var(--bg-primary, #fff), 0 0 0 2.5px var(--accent-color, #4f46e5);
   }
 }
 
@@ -768,6 +726,8 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
     width: 6px;
     cursor: col-resize;
     z-index: 2;
+    // 拖动走 pointer 事件：触摸屏上别让浏览器先把手势当成滚动
+    touch-action: none;
 
     &:hover {
       background: color-mix(in srgb, var(--accent-color, #4f46e5) 35%, transparent);

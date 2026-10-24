@@ -6,7 +6,7 @@
  * 1. 没有布局 → `clientHeight / offsetHeight` 恒为 0，虚拟列表渲染区间为空（什么都不显示）；
  * 2. 没有 ResizeObserver → 虚拟库收不到尺寸变化。
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { Message } from '@/types'
@@ -161,6 +161,48 @@ const MESSAGES: Message[] = [
 let root: Root | null = null
 let container: HTMLDivElement | null = null
 
+/** 假 2D 上下文：只记「调用过哪些绘制 API」（几何口径由 `tests/domain/trajectory-paint.test.ts` 守） */
+function fakeContext(): { calls: string[] } & Record<string, unknown> {
+  const calls: string[] = []
+  const record = (name: string) => (): void => {
+    calls.push(name)
+  }
+  return {
+    calls,
+    beginPath: record('beginPath'),
+    roundRect: record('roundRect'),
+    fillRect: record('fillRect'),
+    strokeRect: record('strokeRect'),
+    clearRect: record('clearRect'),
+    setTransform: record('setTransform'),
+    fill: record('fill'),
+    fillStyle: '',
+    strokeStyle: '',
+    lineWidth: 0,
+    globalAlpha: 1,
+  }
+}
+
+let ctx: { calls: string[] } & Record<string, unknown>
+const originalGetContext = HTMLCanvasElement.prototype.getContext
+
+beforeEach(() => {
+  ctx = fakeContext()
+  HTMLCanvasElement.prototype.getContext = (() =>
+    ctx) as unknown as HTMLCanvasElement['getContext']
+})
+
+/** 在概览条上按一下（pointerdown + pointerup，不移动 = 点击） */
+function press(el: Element, x: number, y: number): void {
+  for (const type of ['pointerdown', 'pointerup']) {
+    act(() => {
+      el.dispatchEvent(
+        new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y }),
+      )
+    })
+  }
+}
+
 function render(element: React.ReactElement): HTMLDivElement {
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -185,6 +227,7 @@ function baseProps(overrides: Record<string, unknown> = {}) {
 }
 
 afterEach(() => {
+  HTMLCanvasElement.prototype.getContext = originalGetContext
   act(() => {
     root?.unmount()
   })
@@ -346,16 +389,104 @@ describe('TrajectoryView', () => {
     ).toBe(true)
   })
 
-  it('概览条：有多少条记录就有多少根条，点一根能定位到对应记录', () => {
+  it('概览条：canvas 真的被驱动去画，点一根能定位到对应记录', () => {
     const el = render(<TrajectoryView {...baseProps()} />)
-    const spans = [...el.querySelectorAll<HTMLButtonElement>('.trajectory-span')]
-    expect(spans.length).toBe(el.querySelectorAll('.trajectory-record').length)
-    act(() => {
-      spans[spans.length - 1].click()
-    })
-    // 最后一根条 = 最后一条记录（第 2 轮的用户消息），选中并打开检查器
-    expect(el.querySelector('.trajectory-record.is-selected')).not.toBeNull()
+    expect(el.querySelector('.trajectory-timeline__canvas')).not.toBeNull()
+    // jsdom 里 `clientWidth` 是 0，能画出条子就说明「模型 → 指令 → canvas」这条链是通的
+    expect(ctx.calls).toContain('fillRect')
+
+    const rows = el.querySelectorAll('.trajectory-record')
+    // 等宽模式下第 N 根条就在 [(N-1)/总数, N/总数) 里；取最后一根（第 2 轮的用户消息，输入泳道）
+    const x = ((rows.length - 0.5) / rows.length) * 900
+    press(el.querySelector('.trajectory-timeline__viewport')!, x, 5)
+    expect(el.querySelector('.trajectory-record.is-selected')?.textContent).toContain(
+      '谢谢',
+    )
     expect(el.querySelector('.trajectory-inspector')).not.toBeNull()
+  })
+
+  it('概览条：滚轮放大后内容层变宽（放大后才出横向滚动条），双击回到 1×', () => {
+    const el = render(<TrajectoryView {...baseProps()} />)
+    const spacer = el.querySelector<HTMLElement>('.trajectory-timeline__spacer')
+    const scroll = el.querySelector<HTMLElement>('.trajectory-timeline__scroll')
+    const viewport = el.querySelector<HTMLElement>('.trajectory-timeline__viewport')
+    expect(spacer).not.toBeNull()
+    expect(scroll).not.toBeNull()
+    // 1× = 整段会话铺满视口：内容不溢出，视口不会出滚动条
+    expect(spacer!.style.width).toBe('100%')
+
+    act(() => {
+      scroll!.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true }),
+      )
+    })
+    expect(parseFloat(spacer!.style.width)).toBeGreaterThan(100)
+
+    act(() => {
+      viewport!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    })
+    expect(spacer!.style.width).toBe('100%')
+  })
+
+  it('概览条：悬停在条子上时把它的摘要当作提示（条子不再是 DOM 节点）', () => {
+    const el = render(<TrajectoryView {...baseProps()} />)
+    const viewport = el.querySelector<HTMLElement>('.trajectory-timeline__viewport')!
+    const rows = el.querySelectorAll('.trajectory-record')
+    const x = ((rows.length - 0.5) / rows.length) * 900
+    act(() => {
+      viewport.dispatchEvent(
+        new MouseEvent('pointermove', { bubbles: true, clientX: x, clientY: 5 }),
+      )
+    })
+    expect(viewport.title).toContain('谢谢')
+    act(() => {
+      // 移到条子之外（落点落在第一根之前）：悬停高亮与提示都该退回默认
+      viewport.dispatchEvent(
+        new MouseEvent('pointermove', {
+          bubbles: true,
+          clientX: -20,
+          clientY: 5,
+        }),
+      )
+    })
+    expect(viewport.title).toContain('滚轮缩放')
+  })
+
+  it('概览条：拖出一段区间只提亮那个时间段的行', () => {
+    const el = render(<TrajectoryView {...baseProps()} />)
+    const viewport = el.querySelector<HTMLElement>('.trajectory-timeline__viewport')!
+    const rows = el.querySelectorAll('.trajectory-record')
+    const at = (index: number) => ((index + 0.5) / rows.length) * 900
+    act(() => {
+      viewport.dispatchEvent(
+        new MouseEvent('pointerdown', {
+          bubbles: true,
+          clientX: at(0),
+          clientY: 5,
+        }),
+      )
+    })
+    act(() => {
+      viewport.dispatchEvent(
+        new MouseEvent('pointermove', {
+          bubbles: true,
+          clientX: at(1),
+          clientY: 5,
+        }),
+      )
+    })
+    act(() => {
+      viewport.dispatchEvent(
+        new MouseEvent('pointerup', {
+          bubbles: true,
+          clientX: at(1),
+          clientY: 5,
+        }),
+      )
+    })
+    const dimmed = [...el.querySelectorAll('.trajectory-record.is-dimmed')]
+    expect(dimmed.length).toBeGreaterThan(0)
+    expect(dimmed.length).toBeLessThan(rows.length)
   })
 
   it('回补更早历史后，选中的记录仍指向同一条（按 key 而不是行号）', () => {
@@ -391,6 +522,40 @@ describe('TrajectoryView', () => {
     expect(selected?.textContent).toContain('谢谢')
     // 行号确实变了（选中行不再是 #5）
     expect(selected?.querySelector('.col-index')?.textContent).not.toBe('#5')
+  })
+
+  it('检查器：按住分隔条拖动才改宽度，松手后不再跟着鼠标跑', () => {
+    const el = render(<TrajectoryView {...baseProps()} />)
+    act(() => {
+      el.querySelector<HTMLButtonElement>('.trajectory-record')!.click()
+    })
+    const aside = el.querySelector<HTMLElement>('.trajectory-inspector')!
+    const handle = el.querySelector<HTMLElement>('.trajectory-inspector__resizer')!
+    const widthOf = (): number =>
+      parseFloat(aside.style.getPropertyValue('--trajectory-inspector-width'))
+    const before = widthOf()
+
+    act(() => {
+      handle.dispatchEvent(
+        new MouseEvent('pointerdown', { bubbles: true, cancelable: true, clientX: 900 }),
+      )
+    })
+    act(() => {
+      window.dispatchEvent(new MouseEvent('pointermove', { clientX: 800 }))
+    })
+    // 分隔条在面板左缘：向左拖 100px = 变宽 100px
+    expect(widthOf()).toBe(before + 100)
+
+    act(() => {
+      window.dispatchEvent(new MouseEvent('pointerup', { clientX: 800 }))
+    })
+    // 松手后再动鼠标不该继续改宽度（pointerdown 上 preventDefault 会抑制兼容 mousemove，
+    // 之前挂在 window 上的 mousemove 监听就变成了「松手后跟着鼠标跑」）
+    act(() => {
+      window.dispatchEvent(new MouseEvent('pointermove', { clientX: 400 }))
+    })
+    expect(widthOf()).toBe(before + 100)
+    localStorage.removeItem('virlen.trajectory.inspectorWidth')
   })
 
   it('没有消息时显示空状态，不渲染表格', () => {
