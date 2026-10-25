@@ -36,12 +36,14 @@ interface Props {
   onOpenInSystem: () => void
 }
 
-/** 工具栏的四个显隐 / 动效开关 */
+/** 工具栏的显隐 / 动效开关 */
 interface ViewOptions {
   wireframe: boolean
   showGrid: boolean
   showAxes: boolean
   autoRotate: boolean
+  /** 用模型自带的 punctual 灯（默认关：强度是按作者场景尺度标的，缩放后会过曝） */
+  useModelLights: boolean
 }
 
 const DEFAULT_OPTIONS: ViewOptions = {
@@ -49,6 +51,7 @@ const DEFAULT_OPTIONS: ViewOptions = {
   showGrid: true,
   showAxes: true,
   autoRotate: false,
+  useModelLights: false,
 }
 
 function formatBytes(size: number): string {
@@ -158,6 +161,7 @@ export default function ModelView({ bytes, name, onOpenInSystem }: Props) {
     scene.setGrid(options.showGrid)
     scene.setAxes(options.showAxes)
     scene.setAutoRotate(options.autoRotate)
+    scene.setModelLights(options.useModelLights)
   }, [options, sceneReady])
 
   const toggle = useCallback((key: keyof ViewOptions) => {
@@ -249,6 +253,14 @@ export default function ModelView({ bytes, name, onOpenInSystem }: Props) {
           aria-pressed={options.autoRotate}
           onClick={() => toggle('autoRotate')}>
           {t('自动旋转')}
+        </button>
+        <button
+          type="button"
+          className={`wfp-model-toggle${options.useModelLights ? ' is-active' : ''}`}
+          title={t('用模型自带的灯光（按预览尺度归一）')}
+          aria-pressed={options.useModelLights}
+          onClick={() => toggle('useModelLights')}>
+          {t('模型灯光')}
         </button>
         <button
           type="button"

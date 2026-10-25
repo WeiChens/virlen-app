@@ -21,6 +21,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import type { ModelPreset } from './model-presets'
+import { subjectSpan, type BoxSpan } from './model-framing'
 
 /** 预览的可视化选项（工具栏那几个开关） */
 export interface ModelViewOptions {
@@ -28,6 +29,8 @@ export interface ModelViewOptions {
   showGrid: boolean
   showAxes: boolean
   autoRotate: boolean
+  /** 用模型自带的 punctual 灯（glTF `KHR_lights_punctual`），默认关，见 `applyModelLights` */
+  useModelLights: boolean
 }
 
 /** 模型信息（尺寸是**模型自身单位**下的包围盒，不是被自动取景缩放后的） */
@@ -41,6 +44,20 @@ export interface ModelStats {
 
 /** 自动取景的目标尺寸：把最长边缩到这么多个「单位」，与相机距离同一量级 */
 const FIT_SIZE = 2.5
+
+/**
+ * 模型自带灯在「主体中心」处的等效辐照度上限：与预览自己的主光（sun 2.0~2.2）同量级。
+ * 见 `applyModelLights` 为什么必须归一。
+ */
+const MODEL_LIGHT_CAP = 2
+
+/** 模型自带的一盏灯：记下作者标定的强度，开关 / 重新取景时从它算起 */
+interface ModelLight {
+  light: THREE.Light
+  intensity: number
+  /** 点光 / 聚光：辐照度按距离平方衰减，缩放场景后必须重算 */
+  attenuates: boolean
+}
 
 export class ModelScene {
   private readonly container: HTMLElement
@@ -57,6 +74,8 @@ export class ModelScene {
   private readonly groundMaterial: THREE.MeshStandardMaterial
   private readonly pmrem: THREE.PMREMGenerator
   private envTexture: THREE.Texture | null = null
+  /** 缓存下来的摄影棚环境（`env: 'room'` 的预设复用同一张，切走时不释放） */
+  private roomTexture: THREE.Texture | null = null
   private readonly resizeObserver: ResizeObserver
 
   private model: THREE.Object3D | null = null
@@ -88,7 +107,15 @@ export class ModelScene {
     showGrid: true,
     showAxes: true,
     autoRotate: false,
+    useModelLights: false,
   }
+
+  /** 模型自带的灯（glTF `KHR_lights_punctual`）：默认不显示，原因见 `applyModelLights` */
+  private modelLights: ModelLight[] = []
+  /** 当前取景缩放出来的倍率（根节点缩放）：点光强度归一要用它 */
+  private fittedScale = 1
+  /** 取景后「主体中心」的世界坐标：点光在主体处的辐照度按它量 */
+  private readonly subjectCenter = new THREE.Vector3()
 
   /** 「重置视图」回到的相机姿态（每次取景后更新） */
   private readonly homeCamera = {
@@ -216,7 +243,18 @@ export class ModelScene {
     }
     object.traverse((child) => {
       const mesh = child as THREE.Mesh
-      if (!mesh.isMesh) return
+      if (!mesh.isMesh) {
+        // glTF 的 `KHR_lights_punctual` 会被 GLTFLoader 还原成真正的灯，跟网格一起挂在这棵树上
+        if ((child as THREE.Light).isLight) {
+          const light = child as THREE.Light
+          this.modelLights.push({
+            light,
+            intensity: light.intensity,
+            attenuates: !!(light as THREE.PointLight).isPointLight || !!(light as THREE.SpotLight).isSpotLight,
+          })
+        }
+        return
+      }
       mesh.castShadow = true
       mesh.receiveShadow = true
       if (mesh.material) this.originalMaterials.set(mesh, mesh.material)
@@ -238,6 +276,8 @@ export class ModelScene {
     this.mixer = null
     this.sourceSize = null
     this.homeTransform = null
+    this.modelLights = []
+    this.fittedScale = 1
     if (!this.model) return
     this.disposeObject(this.model)
     this.scene.remove(this.model)
@@ -250,8 +290,9 @@ export class ModelScene {
   }
 
   /**
-   * 自动取景：模型居中、最长边缩到 `FIT_SIZE`、底部贴地，相机退到能装下它的距离。
+   * 自动取景：主体居中、最长边缩到 `FIT_SIZE`、底部贴地，相机退到能装下它的距离。
    * 先恢复根节点原始变换再算 —— 反复「重置视图」不会把模型越缩越小（口径 3）。
+   * 取景框取的是**主体**而不是整棵树：星空 / 远景散布物会把包围盒撞大好几倍（见 `model-framing.ts`）。
    */
   frameObject(): void {
     const object = this.model
@@ -267,12 +308,14 @@ export class ModelScene {
       object.scale.copy(this.homeTransform.scale)
     }
     object.updateMatrixWorld(true)
-    const box = new THREE.Box3().setFromObject(object)
-    if (box.isEmpty()) return
+    const whole = new THREE.Box3().setFromObject(object)
+    if (whole.isEmpty()) return
+    // 原始尺寸（整棵树）在缩放前记下来：面板里显示的「尺寸」要是模型自己的单位
+    this.sourceSize = whole.getSize(new THREE.Vector3())
+
+    const box = this.subjectBox(object) ?? whole
     const size = box.getSize(new THREE.Vector3())
     const center = box.getCenter(new THREE.Vector3())
-    // 原始尺寸在缩放前记下来：面板里显示的「尺寸」要是模型自己的单位
-    this.sourceSize = size.clone()
 
     const maxDimension = Math.max(size.x, size.y, size.z, 1e-6)
     const scale = FIT_SIZE / maxDimension
@@ -282,7 +325,9 @@ export class ModelScene {
     object.position.y += -box.min.y * scale
     object.position.z += -center.z * scale
 
-    const fitted = new THREE.Box3().setFromObject(object)
+    this.fittedScale = object.scale.x
+
+    const fitted = this.subjectBox(object) ?? new THREE.Box3().setFromObject(object)
     const fittedSize = fitted.getSize(new THREE.Vector3())
     const fittedCenter = fitted.getCenter(new THREE.Vector3())
     const fov = (this.camera.fov * Math.PI) / 180
@@ -293,9 +338,34 @@ export class ModelScene {
     this.controls.target.copy(fittedCenter)
     this.controls.update()
 
+    this.subjectCenter.copy(fittedCenter)
+    this.applyModelLights()
+
     this.homeCamera.position.copy(this.camera.position)
     this.homeCamera.target.copy(fittedCenter)
     this.requestRender()
+  }
+
+  /**
+   * 主体包围盒：逐网格求包围盒，剔除尺寸离群者后并集（星空盒 / 远景散布的真正元凶）。
+   * 返回 null（没有任何网格）时由调用方退回整树包围盒。
+   */
+  private subjectBox(object: THREE.Object3D): THREE.Box3 | null {
+    // ⚠️ 必须自己刷一次矩阵：`Box3.setFromObject(mesh)` 用的是 mesh 的**父级 matrixWorld**，
+    // 而父级只有 `updateMatrixWorld` 才会刷新。缩放 / 平移后不刷，拿到的就是缩放前的坐标
+    // —— 表现为相机距离被 `maxDistance` 截到 200、模型缩成画面里一个小点。
+    object.updateMatrixWorld(true)
+    const spans: BoxSpan[] = []
+    object.traverse((child) => {
+      const mesh = child as THREE.Mesh
+      if (!mesh.isMesh) return
+      const box = new THREE.Box3().setFromObject(mesh)
+      if (box.isEmpty()) return
+      spans.push({ min: [box.min.x, box.min.y, box.min.z], max: [box.max.x, box.max.y, box.max.z] })
+    })
+    const span = subjectSpan(spans)
+    if (!span) return null
+    return new THREE.Box3(new THREE.Vector3(...span.min), new THREE.Vector3(...span.max))
   }
 
   resetView(): void {
@@ -358,25 +428,59 @@ export class ModelScene {
     this.requestRender()
   }
 
+  setModelLights(on: boolean): void {
+    this.options.useModelLights = on
+    this.applyModelLights()
+    this.requestRender()
+  }
+
+  /**
+   * 模型自带的 punctual 灯（glTF `KHR_lights_punctual`）：**默认关**。
+   *
+   * 为什么不能直接用：它们是按**作者自己的场景尺度**标的物理量（本例点光 220–2600 cd、
+   * 方向光 12–120 lux），而预览会把整棵树缩到最长边 2.5（实测 ×0.005）——距离缩 200 倍，
+   * 点光辐照度就大 4 万倍，方向光更是不衰减。石墙被 ACES 压成一整块白（实测整幅 90% 像素 ≥240）。
+   *
+   * 打开时按预览尺度归一，只保留相对明暗与色温：
+   * - 点光 / 聚光：先乘 `scale²` 还原作者尺度下的辐照度，再按「主体中心」封顶到
+   *   `MODEL_LIGHT_CAP`（与预览主光同量级）—— 贴着火盆的墙面仍会比远处亮；
+   * - 方向光：按最亮那盏整体缩，保持它们之间的比例（否则三盏全被锁到上限，日/轮形光就没了）。
+   */
+  private applyModelLights(): void {
+    const on = this.options.useModelLights
+    if (this.model) this.model.updateMatrixWorld(true)
+
+    // 方向光共用一个缩放系数，比例不丢
+    let strongest = 0
+    for (const item of this.modelLights) {
+      if (!item.attenuates) strongest = Math.max(strongest, item.intensity)
+    }
+    const directionalGain = strongest > MODEL_LIGHT_CAP ? MODEL_LIGHT_CAP / strongest : 1
+
+    const worldPosition = new THREE.Vector3()
+    const scale = Math.max(this.fittedScale, 1e-6)
+    for (const item of this.modelLights) {
+      item.light.visible = on
+      if (!on) {
+        item.light.intensity = item.intensity
+        continue
+      }
+      if (item.attenuates) {
+        item.light.getWorldPosition(worldPosition)
+        const distance = Math.max(worldPosition.distanceTo(this.subjectCenter), 1e-4)
+        const ceiling = MODEL_LIGHT_CAP * distance * distance
+        item.light.intensity = Math.min(item.intensity * scale * scale, ceiling)
+      } else {
+        item.light.intensity = item.intensity * directionalGain
+      }
+    }
+  }
+
   /** 应用场景预设：背景 / 地面 / 环境反射 / 三盏灯 / 曝光 / 网格配色 */
   applyPreset(preset: ModelPreset): void {
     this.scene.background = new THREE.Color(preset.background)
     this.groundMaterial.color.set(preset.ground)
-
-    const gradient = makeGradientTexture(preset.envTop, preset.envBottom)
-    const target = this.pmrem.fromEquirectangular(gradient)
-    gradient.dispose()
-    // ⚠️ 兑底：CubeUV 高度小于 2 时，three 会把 `CUBEUV_TEXEL_HEIGHT` 定义成整数字面量
-    // （`1.0 / 1` → `1`），片元着色器里 `uv.y *= CUBEUV_TEXEL_HEIGHT` 编译失败 ——
-    // 带 envMap 的材质全都画不出，表现是「模型一片空白」（已踩过：源贴图宽度给成 1 时
-    // PMREM 用 `width / 4` 算 cube 尺寸，整个贴图塔成 1px）。宁可退回上一个环境贴图。
-    if (target.height >= 2) {
-      this.envTexture?.dispose()
-      this.envTexture = target.texture
-      this.scene.environment = this.envTexture
-    } else {
-      target.dispose()
-    }
+    this.applyEnvironment(preset)
 
     this.hemi.color.set(preset.hemi.sky)
     this.hemi.groundColor.set(preset.hemi.ground)
@@ -393,6 +497,45 @@ export class ModelScene {
     this.renderer.toneMappingExposure = preset.exposure
     this.rebuildGrid(preset.grid.center, preset.grid.grid)
     this.requestRender()
+  }
+
+  /**
+   * 环境反射来源：默认是 64×32 的**竖直渐变**（只能表达上天下地的色温）；
+   * `env: 'room'` 换成 three 自带的摄影棚（RoomEnvironment）—— 柔光箱有形状，
+   * 金属 / 低粗糙材质才有可判的反射。摄影棚贴图懒建一次后缓存，来回切预设不必重建（PMREM 要渲一遍）。
+   */
+  private applyEnvironment(preset: ModelPreset): void {
+    if (preset.env === 'room') {
+      if (!this.roomTexture) {
+        const room = new RoomEnvironment()
+        this.roomTexture = this.pmrem.fromScene(room, 0.04).texture
+        room.dispose()
+      }
+      this.useEnvironment(this.roomTexture)
+      return
+    }
+
+    const gradient = makeGradientTexture(preset.envTop, preset.envBottom)
+    const target = this.pmrem.fromEquirectangular(gradient)
+    gradient.dispose()
+    // ⚠️ 兜底：CubeUV 高度小于 2 时，three 会把 `CUBEUV_TEXEL_HEIGHT` 定义成整数字面量
+    // （`1.0 / 1` → `1`），片元着色器里 `uv.y *= CUBEUV_TEXEL_HEIGHT` 编译失败 ——
+    // 带 envMap 的材质全都画不出，表现是「模型一片空白」（已踩过：源贴图宽度给成 1 时
+    // PMREM 用 `width / 4` 算 cube 尺寸，整个贴图塔成 1px）。宁可退回上一个环境贴图。
+    if (target.height >= 2) {
+      this.useEnvironment(target.texture)
+    } else {
+      target.dispose()
+    }
+  }
+
+  /** 换环境贴图：渐变那张是每次新建的（要放掉），缓存的摄影棚贴图不能放 */
+  private useEnvironment(texture: THREE.Texture): void {
+    if (this.envTexture !== texture && this.envTexture !== this.roomTexture) {
+      this.envTexture?.dispose()
+    }
+    this.envTexture = texture
+    this.scene.environment = texture
   }
 
   // ------------------------------------------------------------------ 动画
@@ -551,8 +694,10 @@ export class ModelScene {
     this.clearModel()
     this.controls.dispose()
     this.pmrem.dispose()
-    this.envTexture?.dispose()
+    if (this.envTexture && this.envTexture !== this.roomTexture) this.envTexture.dispose()
     this.envTexture = null
+    this.roomTexture?.dispose()
+    this.roomTexture = null
 
     this.ground.geometry.dispose()
     this.groundMaterial.dispose()

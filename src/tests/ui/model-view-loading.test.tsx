@@ -27,6 +27,7 @@ vi.mock('@/ui/pages/chat/components/workspace-file/model-scene', () => {
     setGrid = vi.fn()
     setAxes = vi.fn()
     setAutoRotate = vi.fn()
+    setModelLights = vi.fn()
     resetView = vi.fn()
     playAnimation = vi.fn()
     stopAnimations = vi.fn()

@@ -18,7 +18,12 @@ export interface ModelPreset {
   background: string
   /** 接收阴影的地面基色 */
   ground: string
-  /** 渐变环境反射：顶部色 / 底部色（equirect → PMREM） */
+  /**
+   * 环境反射来源：缺省 = 下面的渐变；`'room'` = three 自带的摄影棚（RoomEnvironment）。
+   * 渐变只能表达「上天下地的色温」，表达不了柔光箱形状 —— 判 PBR 材质的反射时用 room。
+   */
+  env?: 'gradient' | 'room'
+  /** 渐变环境反射：顶部色 / 底部色（equirect → PMREM；`env: 'room'` 时只作兜底） */
   envTop: string
   envBottom: string
   hemi: { sky: string; ground: string; intensity: number }
@@ -56,6 +61,34 @@ export const MODEL_PRESETS: readonly ModelPreset[] = [
     grid: { center: '#8a929c', grid: '#aab0b8' },
   },
   {
+    id: 'neutral',
+    label: '中性灰',
+    background: '#8c8c8c',
+    ground: '#7d7d7d',
+    envTop: '#ffffff',
+    envBottom: '#909090',
+    // 补光刻意用纯白：带蓝的补光会把深色石墙往冷紫推，判材质本色时就错了
+    hemi: { sky: '#ffffff', ground: '#808080', intensity: 0.8 },
+    sun: { color: '#ffffff', intensity: 2.0, position: [4, 8, 5] },
+    fill: { color: '#ffffff', intensity: 0.5, position: [-5, 4, -3] },
+    exposure: 1,
+    grid: { center: '#5f5f5f', grid: '#6e6e6e' },
+  },
+  {
+    id: 'room',
+    label: '摄影棚',
+    background: '#cfd3d8',
+    ground: '#b9bec5',
+    env: 'room',
+    envTop: '#ffffff',
+    envBottom: '#b0b6be',
+    hemi: { sky: '#ffffff', ground: '#9aa0a8', intensity: 0.7 },
+    sun: { color: '#ffffff', intensity: 1.8, position: [5, 9, 6] },
+    fill: { color: '#ffffff', intensity: 0.45, position: [-6, 4, -4] },
+    exposure: 1,
+    grid: { center: '#8a929c', grid: '#aab0b8' },
+  },
+  {
     id: 'dusk',
     label: '黄昏',
     background: '#1d1413',
@@ -67,6 +100,20 @@ export const MODEL_PRESETS: readonly ModelPreset[] = [
     fill: { color: '#6a5aff', intensity: 0.5, position: [-6, 4, -3] },
     exposure: 1.05,
     grid: { center: '#4a3320', grid: '#2a1c14' },
+  },
+  {
+    id: 'moonlight',
+    label: '月光',
+    background: '#070b12',
+    ground: '#0d131c',
+    envTop: '#1b2b4a',
+    envBottom: '#04060a',
+    // 半球光压得很低：让 emissive（火盆 / 门灯 / 月亮）自己成为光源，而不是被环境光冲平
+    hemi: { sky: '#9fbcff', ground: '#080b10', intensity: 0.35 },
+    sun: { color: '#a8c4ff', intensity: 1.8, position: [-4, 7, -3] },
+    fill: { color: '#5a6bff', intensity: 0.3, position: [5, 3, 5] },
+    exposure: 1.15,
+    grid: { center: '#1d2a3d', grid: '#131c28' },
   },
 ]
 

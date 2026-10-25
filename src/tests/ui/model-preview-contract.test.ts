@@ -25,6 +25,7 @@ const VITE_CONFIG = read('vite.config.ts')
 const LOADERS = read('src/ui/pages/chat/components/workspace-file/model-loaders.ts')
 const VIEW = read('src/ui/pages/chat/components/workspace-file/model-view.tsx')
 const SCSS = read('src/ui/pages/chat/components/workspace-file/style.scss')
+const SCENE = read('src/ui/pages/chat/components/workspace-file/model-scene.ts')
 
 /** 顶层静态 import（`await import('…')` 这种动态引入不算） */
 function staticImports(source: string): { clause: string; from: string }[] {
@@ -69,6 +70,25 @@ describe('模型预览 · 懒加载契约', () => {
     expect(VIEW).toContain("await import('./model-scene')")
     expect(VIEW).toContain("await import('./model-loaders')")
     expect(imports.some((item) => item.from === './model-presets')).toBe(true)
+  })
+})
+
+describe('模型预览 · 取景与灯光契约', () => {
+  it('取景走主体包围盒（星空 / 远景散布会撑爆整棵树包围盒）', () => {
+    expect(SCENE).toContain('subjectSpan(')
+  })
+
+  it('取包围盒前先刷矩阵（Box3.setFromObject 读的是父级 matrixWorld）', () => {
+    const body = /private subjectBox\([^)]*\)[^{]*\{([\s\S]*?)\n  \}/.exec(SCENE)?.[1] ?? ''
+    const updateAt = body.indexOf('updateMatrixWorld(true)')
+    const boxAt = body.indexOf('new THREE.Box3().setFromObject')
+    expect(updateAt).toBeGreaterThan(-1)
+    expect(boxAt).toBeGreaterThan(updateAt)
+  })
+
+  it('模型自带 punctual 灯默认不开（强度按作者场景尺度标注，缩放后必过曝）', () => {
+    expect(VIEW).toMatch(/useModelLights: false/)
+    expect(VIEW).toContain('setModelLights(')
   })
 })
 
