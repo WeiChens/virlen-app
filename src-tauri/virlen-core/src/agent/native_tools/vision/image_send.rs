@@ -22,6 +22,10 @@
 //! 内容里是 `data:image/...;base64,...`，`append_messages_inner` 写前会自动外置成
 //! `attachment://<sha256>.<ext>`（见 `crate::attachment`），请求组装时再还原 —— 所以
 //! base64 只活在内存与本轮请求里，不会把库撑大。
+//!
+//! ## 发出去的是转换后的图，不是原文件
+//! 读盘后过一道 `encode::encode_for_model`：最长边缩到设置档位、按设置编码成 JPEG / PNG / WebP。
+//! 同一个设置同样作用于用户直接发的图（前端 `hooks.ts::fileToDataUrl`），两边规则必须一致。
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
@@ -31,8 +35,8 @@ use serde_json::json;
 
 use crate::agent::types::{Message, VISION_IMAGE_ROLE};
 
-/// 单张图上限 —— 与 `crate::attachment::MAX_BYTES` 同值：再大就不外置，也不该塞进请求
-/// （base64 后还要再涨 1/3，且这张图会随之后每一次请求重发）。
+/// 单张图上限（对**转换后**的字节生效）：`attachment::MAX_BYTES` 同值，再大就不外置、
+/// 也不该塞进请求（base64 后还要再涨 1/3，且这张图会随之后每一次请求重发）。
 const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 
 /// 支持的图片格式（魔数 → mime）。
@@ -123,11 +127,14 @@ fn handle_text(path: &str, mime: &str, bytes: usize, dims: Option<(u32, u32)>) -
 }
 
 /// 组装一条 `role = vision_image` 消息（text handle + `image_url` data URL）。
+///
+/// `source` = 「原图是什么」：只在重编码过时传入，供 UI / 轨迹展示「原图 3840x2160 · 3.2 MB」。
 pub(crate) fn build_image_message(
     path: &str,
     mime: &str,
     bytes: &[u8],
     dims: Option<(u32, u32)>,
+    source: Option<(&'static str, usize)>,
 ) -> Message {
     let data_url = format!("data:{};base64,{}", mime, STANDARD.encode(bytes));
     let content = json!([
@@ -146,6 +153,10 @@ pub(crate) fn build_image_message(
     if let Some((w, h)) = dims {
         ui_data["width"] = json!(w);
         ui_data["height"] = json!(h);
+    }
+    if let Some((source_mime, source_bytes)) = source {
+        ui_data["sourceMediaType"] = json!(source_mime);
+        ui_data["sourceBytes"] = json!(source_bytes);
     }
     Message {
         id: uuid::Uuid::new_v4().to_string(),
@@ -194,6 +205,8 @@ pub fn drop_session(session_id: &str) {
 pub(crate) type ImageFacts = (&'static str, Option<(u32, u32)>);
 
 /// 该文件能否作为图片消息发给模型：返回 mime / 宽高，或一句可回给模型的错误。
+///
+/// 只看「能不能解出图片」：体积上限在 [`prepare_image`] 里对**转换后**的字节判。
 pub(crate) fn inspect_image(path: &str, bytes: &[u8]) -> Result<ImageFacts, String> {
     if bytes.is_empty() {
         return Err(format!("cannot send \"{}\" as an image: the file is empty", path));
@@ -204,15 +217,50 @@ pub(crate) fn inspect_image(path: &str, bytes: &[u8]) -> Result<ImageFacts, Stri
             path, SUPPORTED
         ));
     };
-    if bytes.len() > MAX_IMAGE_BYTES {
+    Ok((mime, image_dimensions(bytes)))
+}
+
+/// 一张「准备发出去」的图：已经过嗅探 + 缩放 + 重编码。
+pub(crate) struct Prepared {
+    pub bytes: Vec<u8>,
+    pub mime: &'static str,
+    pub dims: Option<(u32, u32)>,
+    pub reencoded: bool,
+    /// 原文件的事实（重编码过才有意义，UI 用）
+    pub source_mime: &'static str,
+    pub source_bytes: usize,
+}
+
+/// 读盘后的字节 → 实际要发出去的那份图（嗅探 → 缩放 / 转码 → 体积上限）。
+///
+/// 体积上限对**输出**判：一张 40 MB 的截图缩到 1568 长边 + JPEG 后只有几百 KB，
+/// 按原文件大小卡掉它是错的。
+pub(crate) fn prepare_image(
+    path: &str,
+    raw: &[u8],
+    plan: super::encode::Plan,
+) -> Result<Prepared, String> {
+    let (source_mime, _) = inspect_image(path, raw)?;
+    let encoded = super::encode::encode_for_model(raw, source_mime, plan)?;
+    if encoded.bytes.is_empty() {
+        return Err(format!("cannot send \"{}\" as an image: encoding produced an empty file", path));
+    }
+    if encoded.bytes.len() > MAX_IMAGE_BYTES {
         return Err(format!(
             "cannot send \"{}\" as an image: {} exceeds the {} limit; downscale the image and try again",
             path,
-            human_size(bytes.len()),
+            human_size(encoded.bytes.len()),
             human_size(MAX_IMAGE_BYTES)
         ));
     }
-    Ok((mime, image_dimensions(bytes)))
+    Ok(Prepared {
+        mime: encoded.mime,
+        dims: Some((encoded.width, encoded.height)),
+        reencoded: encoded.reencoded,
+        source_mime,
+        source_bytes: raw.len(),
+        bytes: encoded.bytes,
+    })
 }
 
 // ==================== 测试 ====================
@@ -279,7 +327,7 @@ mod tests {
 
     #[test]
     fn image_message_carries_text_then_data_url() {
-        let message = build_image_message("/w/shot.png", "image/png", PNG_1X1, Some((1, 1)));
+        let message = build_image_message("/w/shot.png", "image/png", PNG_1X1, Some((1, 1)), None);
         assert_eq!(message.role, VISION_IMAGE_ROLE);
         let blocks = message.content.as_array().expect("content 应是块数组");
         assert_eq!(blocks.len(), 2);
@@ -314,13 +362,42 @@ mod tests {
         assert!(not_image.contains("not a supported image format"), "err: {not_image}");
     }
 
+    /// 转换后才是发出去的那份：PNG → JPEG 后 mime / 尺寸 / 字节都按新图报，且记住原图事实
+    #[test]
+    fn prepare_image_reports_the_converted_facts() {
+        let plan = super::super::encode::Plan {
+            format: super::super::encode::OutputFormat::Jpeg,
+            max_dimension: 1568,
+        };
+        let png = super::super::encode::noisy_png(40, 20);
+        let p = prepare_image("/w/shot.png", &png, plan).unwrap();
+        assert!(p.reencoded);
+        assert_eq!(p.mime, "image/jpeg");
+        assert_eq!(p.dims, Some((40, 20)));
+        assert_eq!(p.source_mime, "image/png");
+        assert_eq!(p.source_bytes, png.len());
+        assert_eq!(&p.bytes[..3], &[0xff, 0xd8, 0xff], "发送的应是 JPEG");
+    }
+
+    /// 本来就是目标格式且不超阈值 → 原字节直传（不做无谓的二次有损）
+    #[test]
+    fn prepare_image_passes_png_through_when_png_is_requested() {
+        let plan = super::super::encode::Plan {
+            format: super::super::encode::OutputFormat::Png,
+            max_dimension: 1568,
+        };
+        let p = prepare_image("/w/shot.png", PNG_1X1, plan).unwrap();
+        assert!(!p.reencoded);
+        assert_eq!(p.bytes, PNG_1X1);
+    }
+
     #[test]
     fn queue_is_per_session_and_drains_in_order() {
         let a = "s_vision_queue_a";
         let b = "s_vision_queue_b";
-        queue(a, build_image_message("/w/1.png", "image/png", PNG_1X1, None));
-        queue(a, build_image_message("/w/2.png", "image/png", PNG_1X1, None));
-        queue(b, build_image_message("/w/3.png", "image/png", PNG_1X1, None));
+        queue(a, build_image_message("/w/1.png", "image/png", PNG_1X1, None, None));
+        queue(a, build_image_message("/w/2.png", "image/png", PNG_1X1, None, None));
+        queue(b, build_image_message("/w/3.png", "image/png", PNG_1X1, None, None));
         assert_eq!(pending_count(a), 2);
 
         let drained = drain(a);

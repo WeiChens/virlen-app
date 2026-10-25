@@ -13,6 +13,7 @@
 
 use crate::agent::native_tools::common::{arg_str, resolve_safe_path};
 use crate::agent::native_tools::heavy;
+use crate::agent::native_tools::vision::encode::Plan;
 use crate::agent::native_tools::vision::image_send;
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
 use crate::vision;
@@ -23,16 +24,17 @@ use serde_json::Value;
 /// 缺省 `true`：没写过这一行（用户没改过设置）时行为与旧版完全一致。
 const ANALYZE_OPTIMIZE_KEY: &str = "imageVisionAnalyzeOptimize";
 
-/// 本轮是否走「把图片交给模型」而不是端侧分析。
+/// 本轮是否走「把图片交给模型」：是则返回本次的图片档位（**只读一次设置**）。
 ///
-/// 读库失败按**开启端侧分析**处理（`false`）：一次读配置失败不该悄悄改变发给模型的内容。
-async fn should_send_image(ctx: &NativeToolCtx<'_>) -> bool {
+/// 读库失败按**开启端侧分析**处理（`None`）：一次读配置失败不该悄悄改变发给模型的内容。
+async fn send_image_plan(ctx: &NativeToolCtx<'_>) -> Option<Plan> {
     match ctx.settings.get_all().await {
-        Ok(map) => !map
+        Ok(map) => (!map
             .get(ANALYZE_OPTIMIZE_KEY)
             .and_then(Value::as_bool)
-            .unwrap_or(true),
-        Err(_) => false,
+            .unwrap_or(true))
+            .then(|| Plan::from_settings(&map)),
+        Err(_) => None,
     }
 }
 
@@ -71,8 +73,8 @@ pub(crate) async fn vision_analyze_tool(
 
     // 关闭「本地图片伪视觉分析」→ 不跑端侧模型，直接把图片本身交给模型看
     //（工具结果只回「图片事实」，图片本体另走 `role = vision_image` 的注入消息）
-    if should_send_image(ctx).await {
-        return send_image(ctx, &source_path).await;
+    if let Some(plan) = send_image_plan(ctx).await {
+        return send_image(ctx, &source_path, plan).await;
     }
 
     // 模型目录来自宿主（GUI = resource_dir，CLI = exe 同级 / $VIRLEN_RESOURCE_DIR）
@@ -125,17 +127,32 @@ pub(crate) async fn vision_analyze_tool(
 async fn send_image(
     ctx: &NativeToolCtx<'_>,
     source_path: &str,
+    plan: Plan,
 ) -> Result<NativeToolOutcome, String> {
     let read_path = source_path.to_string();
     let display = source_path.to_string();
 
-    // 读盘 / 嗅探 / base64 都是阻塞活：与端侧推理共用 `run_heavy`（并发闸 + 降优先级 + 两层取消）
+    // 读盘 / 嗅探 / 缩放 / 编码 / base64 都是阻塞活：与端侧推理共用 `run_heavy`
     let result = heavy::run_heavy(ctx.cancel, move |_flag| {
-        let bytes = std::fs::read(&read_path)
+        let raw = std::fs::read(&read_path)
             .map_err(|e| format!("Failed to read file '{}': {}", read_path, e))?;
-        let (mime, dims) = image_send::inspect_image(&display, &bytes)?;
-        let envelope = image_send::envelope_text(&display, mime, bytes.len(), dims);
-        let message = image_send::build_image_message(&display, mime, &bytes, dims);
+        let prepared = image_send::prepare_image(&display, &raw, plan)?;
+        let envelope = image_send::envelope_text(
+            &display,
+            prepared.mime,
+            prepared.bytes.len(),
+            prepared.dims,
+        );
+        let source = prepared
+            .reencoded
+            .then_some((prepared.source_mime, prepared.source_bytes));
+        let message = image_send::build_image_message(
+            &display,
+            prepared.mime,
+            &prepared.bytes,
+            prepared.dims,
+            source,
+        );
         Ok::<_, String>((message, envelope))
     })
     .await;
@@ -239,7 +256,8 @@ mod tests {
     #[tokio::test]
     async fn image_mode_returns_envelope_and_queues_the_image() {
         let dir = tmp_dir("image_mode");
-        std::fs::write(dir.join("shot.png"), super::image_send::PNG_1X1).unwrap();
+        // 用内容随机的图（纯色 1x1 PNG 转 JPEG 反而更大，会命中「不劣化」回退）
+        std::fs::write(dir.join("shot.png"), super::super::encode::noisy_png(120, 80)).unwrap();
         let sec = test_security(&dir.to_string_lossy());
         let host = EmptyHost { root: dir.clone() };
         let cancel = CancellationToken::new();
@@ -267,7 +285,8 @@ mod tests {
         match r {
             NativeToolOutcome::Value { content, ui_data } => {
                 assert!(content.starts_with("🖼️ "), "content: {content}");
-                assert!(content.contains("image/png, 1x1 px"), "content: {content}");
+                // 默认档位 = JPEG，所以发给模型的是转换后的 JPEG（原 120x80 PNG）
+                assert!(content.contains("image/jpeg, 120x80 px"), "content: {content}");
                 assert!(
                     content.contains("attached to this conversation turn"),
                     "content: {content}"
@@ -289,7 +308,7 @@ mod tests {
         assert!(queued[0].content[1]["image_url"]["url"]
             .as_str()
             .unwrap()
-            .starts_with("data:image/png;base64,"));
+            .starts_with("data:image/jpeg;base64,"));
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -8,6 +8,13 @@ import * as tauriFs from '@tauri-apps/plugin-fs'
 import { v4 } from '@/utils/uuid'
 import { showToast } from '@/ui/components/shared/Toast'
 import { t, tpl } from '@/ui/i18n'
+import { settingsState } from '@/ui/store'
+import {
+  IMAGE_QUALITY,
+  fitWithin,
+  normalizeImageFormat,
+  normalizeMaxDimension,
+} from '@/domain/image'
 import { getRegisteredSkill } from '@/skill'
 
 // 图片附件
@@ -15,58 +22,103 @@ import { getRegisteredSkill } from '@/skill'
 /** 图片附件 */
 export interface ImageAttachment {
   id: string
-  url: string // base64 data URL
+  /** 实际进消息的 base64 data URL（已按设置缩放 / 转码） */
+  url: string
+  /**
+   * 原图 data URL —— 只在上面被转换过时存在。
+   *
+   * 为什么留着：**本地伪视觉分析（默认开）根本不会把图发给模型**，那一步只需要尽量清晰的像素；
+   * 拿压缩后的 JPEG 去跑 OCR / 物体检测只会让结果变差。所以分析用原图，发送用 `url`。
+   * 只有输入区内存里存着它，发送后丢弃（库与请求体里只有 `url`）。
+   */
+  originalUrl?: string
   name?: string
 }
 
-/** 图片最大像素阈值：超过则压缩 */
-const MAX_PIXELS = 1920 * 1920
-const MAX_DIMENSION = 1920
-const COMPRESS_QUALITY = 0.85
-
-/** 将 File 转为 base64 dataURL（超尺寸自动压缩） */
-function fileToDataUrl(file: File): Promise<string> {
+/** FileReader 的 Promise 包装 */
+function readAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
-    reader.onload = () => {
-      const dataUrl = reader.result as string
-      // 非图片直接返回
-      if (!file.type.startsWith('image/')) {
-        resolve(dataUrl)
-        return
-      }
-
-      // 用 Image 对象检测原始尺寸
-      const img = new Image()
-      img.onload = () => {
-        const pixelCount = img.naturalWidth * img.naturalHeight
-        if (pixelCount <= MAX_PIXELS) {
-          // 未超限，直接返回原始 dataURL
-          resolve(dataUrl)
-          return
-        }
-
-        // 超限 → canvas 缩放压缩
-        const canvas = document.createElement('canvas')
-        let { naturalWidth: w, naturalHeight: h } = img
-        if (w > MAX_DIMENSION || h > MAX_DIMENSION) {
-          const ratio = Math.min(MAX_DIMENSION / w, MAX_DIMENSION / h)
-          w = Math.round(w * ratio)
-          h = Math.round(h * ratio)
-        }
-        canvas.width = w
-        canvas.height = h
-        const ctx = canvas.getContext('2d')!
-        ctx.drawImage(img, 0, 0, w, h)
-        const compressed = canvas.toDataURL('image/jpeg', COMPRESS_QUALITY)
-        resolve(compressed)
-      }
-      img.onerror = () => resolve(dataUrl) // 加载失败则返回原始数据
-      img.src = dataUrl
-    }
+    reader.onload = () => resolve(reader.result as string)
     reader.onerror = reject
     reader.readAsDataURL(file)
   })
+}
+
+/** dataURL → 已解码的 <img>；失败返回 null（由调用方退回原图，不阻断发送） */
+function loadImage(src: string): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => resolve(null)
+    img.src = src
+  })
+}
+
+/**
+ * canvas 缩放 + 按格式编码；拿不到目标编码时返回 null。
+ *
+ * 注意 JPEG 必须先铺白底：canvas 默认透明，直接导出会让透明区变成黑块。
+ * 另外浏览器不支持某个编码时 `toDataURL` 会**静默回退 PNG**，所以按前缀兜底。
+ */
+function encodeViaCanvas(
+  img: HTMLImageElement,
+  width: number,
+  height: number,
+  format: 'jpeg' | 'png' | 'webp',
+): string | null {
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
+  if (format === 'jpeg') {
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, width, height)
+  }
+  ctx.drawImage(img, 0, 0, width, height)
+  const url = canvas.toDataURL(`image/${format}`, IMAGE_QUALITY)
+  return url.startsWith(`data:image/${format}`) ? url : null
+}
+
+/** 一张附件图的两种形态（只转换过时才有 originalUrl） */
+export interface PreparedImage {
+  /** 实际进消息的那份 */
+  url: string
+  /** 原始 data URL（给本地视觉分析用） */
+  originalUrl?: string
+}
+
+/**
+ * 将 File 转为 base64 dataURL：按设置缩到最长边上限，并转成设置的格式。
+ *
+ * 与 Rust `vision/encode.rs` 同一套规则（铁律 1），四条：
+ * 1. 只缩不放；
+ * 2. 目标格式就是原格式、且不用缩放 → 原样返回（不做无谓的二次有损）；
+ * 3. 只转格式时若结果更大 → 原样返回（不劣化）；
+ * 4. 动图（GIF）一旦转换只剩首帧 —— 是格式选择的固有代价，不是 bug。
+ */
+async function prepareImage(file: File): Promise<PreparedImage> {
+  const raw = await readAsDataUrl(file)
+  if (!file.type.startsWith('image/')) return { url: raw }
+
+  const img = await loadImage(raw)
+  if (!img) return { url: raw }
+
+  const { width, height } = fitWithin(
+    img.naturalWidth,
+    img.naturalHeight,
+    normalizeMaxDimension(settingsState.value.imageMaxDimension),
+  )
+  const scaling = width !== img.naturalWidth || height !== img.naturalHeight
+  const format = normalizeImageFormat(settingsState.value.imageConvertFormat)
+
+  if (!scaling && file.type === `image/${format}`) return { url: raw }
+
+  const encoded = encodeViaCanvas(img, width, height, format)
+  if (!encoded) return { url: raw }
+  if (!scaling && encoded.length >= raw.length) return { url: raw }
+  return { url: encoded, originalUrl: raw }
 }
 
 /** 图片附件管理 hook */
@@ -85,8 +137,8 @@ export function useImageAttachment() {
     const newImages: ImageAttachment[] = []
     for (const file of Array.from(files)) {
       if (!validTypes.includes(file.type)) continue
-      const url = await fileToDataUrl(file)
-      newImages.push({ id: v4(), url, name: file.name })
+      const prepared = await prepareImage(file)
+      newImages.push({ id: v4(), ...prepared, name: file.name })
     }
     if (newImages.length === 0) {
       showToast(t('不支持的图片格式，仅支持 PNG / JPEG / WebP / GIF / BMP'))
@@ -103,8 +155,8 @@ export function useImageAttachment() {
     for (const raw of paths) {
       const path = normalizeFsPath(raw)
       try {
-        const url = await readImageFileAsDataUrl(path)
-        newImages.push({ id: v4(), url, name: fsBaseName(path) })
+        const prepared = await readImageFileAsDataUrl(path)
+        newImages.push({ id: v4(), ...prepared, name: fsBaseName(path) })
       } catch (err) {
         console.error('读取图片失败:', path, err)
         showToast(tpl('读取图片失败：$__path__', { path }))
@@ -189,15 +241,15 @@ function mimeOf(p: string): string {
 }
 
 /**
- * 读取磁盘图片 → dataURL（超尺寸自动压缩）。拖拽给的是路径，这里还原成 File 复用同一条链路。
+ * 读取磁盘图片 → 与选图同一条处理链路（超尺寸自动压缩）。拖拽给的是路径，这里还原成 File。
  */
-export async function readImageFileAsDataUrl(path: string): Promise<string> {
+export async function readImageFileAsDataUrl(path: string): Promise<PreparedImage> {
   const bytes = await tauriFs.readFile(path)
   const name = fsBaseName(path)
   const file = new File([bytes as unknown as BlobPart], name, {
     type: mimeOf(path),
   })
-  return fileToDataUrl(file)
+  return prepareImage(file)
 }
 
 /**

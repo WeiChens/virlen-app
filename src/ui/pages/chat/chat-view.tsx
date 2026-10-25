@@ -1215,7 +1215,8 @@ function ChatView() {
         imageOptimize = true
         const analyses = await Promise.all(
           images.map((img) =>
-            vision.analyzeBase64(img.url).catch((err): null => {
+            // 本地分析用**原图**：这一步不发给模型，压缩只会降低 OCR / 检测结果
+            vision.analyzeBase64(img.originalUrl ?? img.url).catch((err): null => {
               console.error('vision_analyze failed:', err)
               return null
             }),

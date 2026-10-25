@@ -69,6 +69,36 @@ function ChatSettings() {
       },
     ]
 
+  /** 发图前的格式选项：三者体积/兼容性互有取舍，title 给出“什么时候该选它” */
+  const IMAGE_FORMAT_OPTIONS: {
+    value: SettingsStore['imageConvertFormat']
+    label: string
+    title: string
+  }[] = [
+      {
+        value: 'jpeg',
+        label: 'JPEG',
+        title: t('体积最小，适合照片与截图；不支持透明（透明区会变白）'),
+      },
+      {
+        value: 'png',
+        label: 'PNG',
+        title: t('无损、支持透明，但体积最大（截图文字的保真度最好）'),
+      },
+      {
+        value: 'webp',
+        label: 'WebP',
+        title: t('同画质下比 JPEG 再小一截，支持透明；个别接口可能不认'),
+      },
+    ]
+
+  /** 最长边选项：同时影响请求体字节与视觉 token */
+  const IMAGE_MAX_DIMENSION_OPTIONS: { value: number; label: string; title: string }[] = [
+    { value: 1024, label: '1024', title: t('最省 token，细节损失明显') },
+    { value: 1568, label: '1568', title: t('推荐：常见视觉模型的分档上限') },
+    { value: 2048, label: '2048', title: t('保留更多细节，体积与 token 更大') },
+  ]
+
   useEffect(() => {
     if (!s.defaultWorkspace) {
       resolveDefaultWorkspace().then(setResolvedWorkspace)
@@ -178,6 +208,40 @@ function ChatSettings() {
               />
               <span className="toggle-slider" />
             </label>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="label-text">{t('图片发送格式')}</span>
+            <span className="label-desc">
+              {t(
+                '添加图片时按该格式处理一次（库里存的也是这份，原文件不入库）；只在过长时等比缩小',
+              )}
+            </span>
+          </div>
+          <div className="setting-control">
+            <Select
+              value={s.imageConvertFormat}
+              onChange={(v) => update('imageConvertFormat', v)}
+              options={IMAGE_FORMAT_OPTIONS}
+              width={120}
+            />
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="label-text">{t('图片最长边')}</span>
+            <span className="label-desc">
+              {t('发图前等比缩到该上限，同时减小请求体与视觉 token')}
+            </span>
+          </div>
+          <div className="setting-control">
+            <Select
+              value={s.imageMaxDimension}
+              onChange={(v) => update('imageMaxDimension', v)}
+              options={IMAGE_MAX_DIMENSION_OPTIONS}
+              width={120}
+            />
           </div>
         </div>
         <div className="setting-row">

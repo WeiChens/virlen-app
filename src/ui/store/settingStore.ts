@@ -18,6 +18,7 @@ import {
 } from '@/infrastructure/settingsRepo'
 import type { ModelPrice } from '@/domain/pricing'
 import type { CompressMode } from '@/domain/ports'
+import { DEFAULT_IMAGE_CONVERT_FORMAT, DEFAULT_IMAGE_MAX_DIMENSION, type ImageConvertFormat } from '@/domain/image'
 import { DEFAULT_CODE_DISPLAY_SETTINGS } from '@/domain/code-display'
 import { DEFAULT_ZOOM } from '@/domain/zoom'
 
@@ -122,6 +123,16 @@ export interface SettingsStore {
    * 同一张图只会真跑一次。
    */
   imageOcrAutoPreview: boolean
+  /**
+   * 发给模型前把图片转成什么格式（JPEG / PNG / WebP）。
+   * 在**添加图片时**就转一次：库里存的也是这份（原文件不入库），避免每轮请求重编码。
+   */
+  imageConvertFormat: ImageConvertFormat
+  /**
+   * 发图前的最长边上限（1024 / 1568 / 2048）：同时降字节与视觉 token。
+   * 只缩不放；与格式一起决定 `hooks.ts::fileToDataUrl` 的处理。
+   */
+  imageMaxDimension: number
   /** 知识库默认检索数量 */
   ragDefaultTopK: number
   /**
@@ -228,6 +239,9 @@ const defaultSettings: SettingsStore = {
   imageVisionAnalyzeOptimize: true,
   // 图片预览：默认不显示识别文字，也不自动识别（点工具栏「识别文字」才跑）
   imageOcrAutoPreview: false,
+  // 发图前压缩：默认 JPEG + 1568 最长边（字节与 token 的最优平衡）
+  imageConvertFormat: DEFAULT_IMAGE_CONVERT_FORMAT,
+  imageMaxDimension: DEFAULT_IMAGE_MAX_DIMENSION,
   ragDefaultTopK: 5,
   memoryEnabled: true,
   memoryNormalTopK: 20,

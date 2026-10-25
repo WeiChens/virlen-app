@@ -43,6 +43,12 @@ tokio = { version = "1", features = [
 ] }
 trash = "5"
 image = "0.25"
+# 有损 WebP 编码（`image` 只带**无损** WebP：`codecs/webp/encoder.rs` 明写 lossy 需 libwebp）。
+# libwebp 源码随 crate 打包、用 cc 编译，三平台都不需要额外系统库。
+# ⚠️ 新增依赖会让 cargo 重新解析整张图，把 bindgen 的 syn 从 2.x 提到 3.x —— bindgen 声明的是
+#    `syn = ">=2, <4"`，而它自己的 prettyplease 0.2 只吃 syn 2，于是 bindgen 直接编译失败。
+#    遇到就手工把 Cargo.lock 里 bindgen 的依赖改回 `"syn 2.0.117"`（该版本在图上、满足约束）。
+webp = "0.3"
 base64 = "0.22"
 
 # ── RAG 知识库 ──

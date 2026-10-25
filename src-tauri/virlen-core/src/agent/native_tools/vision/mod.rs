@@ -6,9 +6,9 @@
 //! - **关闭**：不跑端侧模型，改把图片本身交给模型看 —— 工具回一段「图片事实」文本，
 //!   另注入一条 `role = vision_image` 的消息（组装请求时投影成 user，见 `image_send`）。
 
+mod encode;
 mod image_send;
 mod vision_analyze;
-
 pub(crate) use image_send::drain as drain_image_messages;
 pub use image_send::drop_session as drop_image_messages;
 #[cfg(test)]
