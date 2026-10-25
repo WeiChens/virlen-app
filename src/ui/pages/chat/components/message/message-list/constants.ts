@@ -33,6 +33,11 @@ export const MAX_OVERSCAN_ITEMS = Math.max(20, OVERSCAN) * OVERSCAN_SCREENS
 export const AT_BOTTOM_THRESHOLD = 120
 /** 距顶部 ≤ 该值触发回补更早消息 */
 export const SCROLL_TOP_THRESHOLD = 400
+/**
+ * 「位置算不算被夹掉了」的像素容差：容差内不写 scrollTop。
+ * 写与不写都来自同一份锚点，容差只是让「虚拟库已经补正」的那一帧变成彻底的空操作。
+ */
+export const RESTORE_TOLERANCE = 2
 /** 列表上下内边距（由虚拟容器承担，保证滚动偏移计算与真实布局一致） */
 export const LIST_PADDING = 8
 /** 「点击查看更多」提示条高度（预留占位，避免与首条消息重叠） */

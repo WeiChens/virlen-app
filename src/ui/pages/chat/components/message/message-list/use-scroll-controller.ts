@@ -18,10 +18,37 @@ import {
 } from './helpers'
 import type { ListRow } from './rows'
 import {
+  anchorAt,
+  nextIntent,
+  restoreTargetOf,
+  type ScrollIntent,
+  type ScrollView,
+} from './scroll-restore'
+import {
   AT_BOTTOM_THRESHOLD,
   MAX_SETTLE_POLLS,
   SCROLL_TOP_THRESHOLD,
 } from './constants'
+
+/** 取滚动容器的几何（与 `scroll-restore.ts` 的入参同形） */
+function viewOf(el: HTMLElement): ScrollView {
+  return {
+    scrollTop: el.scrollTop,
+    scrollHeight: el.scrollHeight,
+    clientHeight: el.clientHeight,
+  }
+}
+
+/**
+ * 复位窗口最长跑多少帧（约 2s）：窗口恢复 / 行重测分几拍回来时要连续纠正，
+ * 但不能无限跑 —— 到点还在动就说明有别的东西在抢（这时让位比硬拉更安全）。
+ */
+const MAX_RESTORE_FRAMES = 120
+/**
+ * 复位窗口至少跑多少帧（约 200ms）：位置「看起来已经对了」不能马上收手 ——
+ * 浏览器可能在恢复后的几帧里再补写一次它自己存下的偏移。
+ */
+const MIN_RESTORE_FRAMES = 12
 
 interface Params {
   messages: Message[]
@@ -78,6 +105,18 @@ export function useScrollController({
   const olderAnchorRef = useRef<(OlderAnchor & { before: number }) | null>(null)
   /** 上一次的条目数（用于判断「条目数变化」而非流式内容更新） */
   const lastMsgCountRef = useRef(0)
+  /**
+   * 离开这一屏时的滚动意图（贴底 / 停在某个偏移）。
+   * 位置被浏览器夹到 0 之后按它复位 —— 详见 `scroll-restore.ts` 与 `restoreLostPosition`。
+   */
+  const intentRef = useRef<ScrollIntent>({ atEnd: true, offset: 0, anchor: null })
+  /** 上一拍的内容总高（判断「塌陷 → 重建」，见下面的 layout effect） */
+  const lastTotalSizeRef = useRef(0)
+  /** 复位窗口正在跑：这期间的位置是浏览器挪的，不能拿它覆盖意图 */
+  const restoringRef = useRef(false)
+  /** 复位窗口的 rAF 句柄与代数（代数让被取消的旧帧老实退出） */
+  const restoreRafRef = useRef<number | null>(null)
+  const restoreGenRef = useRef(0)
 
   const loadOlder = useCallback(async () => {
     const sid = chatState.value.currentSessionId
@@ -150,6 +189,180 @@ export function useScrollController({
     },
     [rowVirtualizer],
   )
+
+  /** 收掉复位窗口（用户一动手 / 切会话 / 卸载时走这里） */
+  const stopRestoreHold = useCallback(() => {
+    restoreGenRef.current += 1
+    if (restoreRafRef.current !== null) cancelAnimationFrame(restoreRafRef.current)
+    restoreRafRef.current = null
+    restoringRef.current = false
+  }, [])
+
+  /** 按意图写一次位置；写了返回 true（`false` = 已经在位 / 现在没法判断） */
+  const applyRestoreTarget = useCallback(
+    (el: HTMLDivElement): boolean => {
+      const target = restoreTargetOf(
+        intentRef.current,
+        viewOf(el),
+        (index) => rowVirtualizer.measurementsCache[index]?.start,
+      )
+      if (target === null) return false
+      if (target === 'end') {
+        const count = rowsRef.current.length
+        if (count === 0) return false
+        rowVirtualizer.scrollToIndex(count - 1, {
+          align: 'end',
+          behavior: 'auto',
+        })
+        return true
+      }
+      el.scrollTop = target
+      // 库内部偏移跟着走：否则下一帧会按旧偏移算渲染范围（视口空一块 / 渲染错行）
+      rowVirtualizer.scrollOffset = el.scrollTop
+      return true
+    },
+    [rowVirtualizer, rowsRef],
+  )
+
+  /**
+   * 位置被浏览器挪走之后按「离开前的意图」复位（判定见 `scroll-restore.ts`）。
+   *
+   * ⚠️ 只纠一次不够：窗口恢复那一拍 `scrollTop` 可能被**分几次**夹（恢复动画逐帧改高）、
+   * 浏览器会在我们写完后又补写它自己的偏移、行重测也会改总高。所以开一个「复位窗口」，
+   * 至少跑 ~200ms、连续 3 帧不再需要动才收（或到帧上限）。
+   * 窗口期间**冻结意图**（`restoringRef`）：那几拍的滚动事件看到的位置都是被夹出来的，
+   * 记下来只会让下一次纠正照着错的位置走。用户一动手（wheel / 触摸 / 按键）立即收手。
+   * ⚠️ 切会话 / 首开的贴底由 `settleToBottom` 独占：它在跑的时候必须让路，否则两边抢写 scrollTop。
+   */
+  const restoreLostPosition = useCallback(() => {
+    if (needInitialBottomRef.current || settleTimerRef.current !== null) return
+    const el = containerRef.current
+    if (!el) return
+    if (restoringRef.current) {
+      // 窗口已经在跑（高度分几拍回来时每一拍都会调到这里）：就地把新的一拍纠正掉
+      applyRestoreTarget(el)
+      return
+    }
+    stopRestoreHold()
+    const gen = restoreGenRef.current
+    restoringRef.current = true
+    let stable = 0
+    let frames = 0
+    const step = () => {
+      if (gen !== restoreGenRef.current) return
+      restoreRafRef.current = null
+      const el = containerRef.current
+      if (!el || needInitialBottomRef.current || settleTimerRef.current !== null) {
+        stopRestoreHold()
+        return
+      }
+      if (++frames > MAX_RESTORE_FRAMES) {
+        stopRestoreHold()
+        return
+      }
+      const moved = applyRestoreTarget(el)
+      // 视口 0 那几拍（窗口还最小化着）不写也不计稳定：等它回来看高度
+      stable = el.clientHeight > 0 && !moved ? stable + 1 : 0
+      if (stable >= 3 && frames >= MIN_RESTORE_FRAMES) {
+        stopRestoreHold()
+        return
+      }
+      restoreRafRef.current = requestAnimationFrame(step)
+    }
+    step()
+  }, [
+    applyRestoreTarget,
+    needInitialBottomRef,
+    settleTimerRef,
+    stopRestoreHold,
+  ])
+
+  /**
+   * 容器**高度**变了 = 窗口被最小化 / 恢复、聊天区被藏起来又放回来、面板占满被解除：
+   * 这些时机浏览器会把 scrollTop 夹掉（中段也不例外，见 `scroll-restore.ts` 头注释），
+   * 而容器自己不会告诉虚拟库「该回哪去」—— 在这里补。
+   * 只认高度差 ≥ 1px：拖分隔条只改宽度，纵向位置本来就对，硬滚会跟手打架。
+   */
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    let lastHeight = el.clientHeight
+    const observer = new ResizeObserver(() => {
+      const cur = containerRef.current
+      if (!cur) return
+      if (Math.abs(cur.clientHeight - lastHeight) < 1) return
+      lastHeight = cur.clientHeight
+      restoreLostPosition()
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [restoreLostPosition])
+
+  /**
+   * 窗口重新可见 / 重新聚焦也补一次：最小化时 RO 未必真报到 0 高度（WebView2 各版本不一），
+   * 这条是「总有个触发点」的兜底 —— 位置本来就在位时它是一次空操作。
+   */
+  useEffect(() => {
+    const wake = () => {
+      if (!document.hidden) restoreLostPosition()
+    }
+    document.addEventListener('visibilitychange', wake)
+    window.addEventListener('focus', wake)
+    return () => {
+      document.removeEventListener('visibilitychange', wake)
+      window.removeEventListener('focus', wake)
+    }
+  }, [restoreLostPosition])
+
+  /**
+   * 用户一动手就收手：复位窗口期间意图是冻结的，继续拉会跟手打架。
+   * 自下而上滚动的入口只有这些（滚轮 / 触摸 / 拖滚动条 / 键盘），监听在捕获前即可。
+   */
+  useEffect(() => {
+    const cancel = () => stopRestoreHold()
+    const el = containerRef.current
+    const passive = { passive: true }
+    el?.addEventListener('wheel', cancel, passive)
+    el?.addEventListener('touchstart', cancel, passive)
+    el?.addEventListener('pointerdown', cancel, passive)
+    window.addEventListener('keydown', cancel)
+    return () => {
+      el?.removeEventListener('wheel', cancel)
+      el?.removeEventListener('touchstart', cancel)
+      el?.removeEventListener('pointerdown', cancel)
+      window.removeEventListener('keydown', cancel)
+    }
+  }, [stopRestoreHold])
+
+  // 卸载时把复位窗口停掉（否则帧回调会在组件没了之后继续写 DOM）
+  useEffect(() => stopRestoreHold, [stopRestoreHold])
+
+  /**
+   * 切会话：**上一段的意图不代表这一段**。这里只是把意图拨回「贴底」——真正的贴底由
+   * `settleToBottom` 做（它靠 `needInitialBottomRef`，不读这里）。不拨的话，上一会话「读到一半」
+   * 的偏移会在新会话里被当成复位目标。
+   */
+  useLayoutEffect(() => {
+    // 切会话也是「上一段的复位窗口作废」的时刻：它还在跑就会把旧锚点写进新会话
+    stopRestoreHold()
+    intentRef.current = { atEnd: true, offset: 0, anchor: null }
+    lastTotalSizeRef.current = 0
+  }, [sessionId, stopRestoreHold])
+
+  /**
+   * 内容总高从塌陷里重建（例如窗口最小化期间行没布局 → 总高被夹掉，恢复后重新测出来）：
+   * 容器尺寸没变，上面的 RO 唤不醒，补在这里。
+   * ⚠️ 只认「上一拍不足一屏（塌陷）→ 现在长出来了」：正常增长（流式 / 行内展开）位置本来就对，
+   * 抢着写会把用户正在读的位置推走。
+   */
+  useLayoutEffect(() => {
+    const el = containerRef.current
+    const total = rowVirtualizer.getTotalSize()
+    const prev = lastTotalSizeRef.current
+    lastTotalSizeRef.current = total
+    if (!el || total <= prev || prev >= el.clientHeight) return
+    restoreLostPosition()
+  })
 
   /**
    * 滚到底部并等布局稳定后显示：markdown / canvas / 图片首帧后仍会异步改高度（虚拟列表还有
@@ -298,6 +511,16 @@ export function useScrollController({
       // container 是上层 const 的窄化结果；函数声明会被提升，TS 不再保留窄化，故显式断言
       const { scrollTop, scrollHeight, clientHeight } = container!
       const distFromBottom = scrollHeight - clientHeight - scrollTop
+
+      // 记住「离开这一屏时在哪」：位置被浏览器挪走（窗口最小化 / 恢复、面板占满）后靠它复位。
+      // ⚠️ 复位窗口期间不记：那几拍的偏移是浏览器夹出来的，记下来就把真正的锚点覆盖掉了。
+      if (!restoringRef.current) {
+        intentRef.current = nextIntent(
+          intentRef.current,
+          { scrollTop, scrollHeight, clientHeight },
+          anchorAt(rowVirtualizer.measurementsCache, scrollTop),
+        )
+      }
 
       updateActiveDot()
 

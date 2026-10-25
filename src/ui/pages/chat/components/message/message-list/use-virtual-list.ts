@@ -279,6 +279,34 @@ export function useVirtualList({
   /** 行内改高的「按住滚动偏移」（见 scroll-hold.ts） */
   const scrollHold = useMemo(() => createScrollHold(), [])
 
+  /**
+   * 量一行的真实高度（库的 `measureElement`：RO 参数与挂载时的同步测量走同一条）。
+   *
+   * 与库默认实现的唯一差别：**量到 0 不收**。0 只表示「这一行还没布局」（窗口最小化 / 聊天区被
+   * `display:none` 藏起来时都可能出现），不是这一行真的没有高度；收下它，sizer 的总高就跟着塌成
+   * 几十像素，浏览器随即把 `scrollTop` 夹到 0，而且**高度恢复后也不会自己回来**
+   * （无头 Chromium 实测：内容塌到 0、视口一度高过内容，两种都会永久归零）——症状正是
+   * 「切到会话时在底部，最小化再切回来变成最顶部」。宁可先用上次的实测值 / 估算值占位，
+   * 等 RO 拿到真实高度再量。
+   */
+  const measureRowHeight = useCallback(
+    (
+      element: Element,
+      entry: ResizeObserverEntry | undefined,
+      instance: Virtualizer<HTMLDivElement, Element>,
+    ) => {
+      const el = element as HTMLElement
+      const box = entry?.borderBoxSize?.[0]
+      const height = box ? Math.round(box.blockSize) : el.offsetHeight
+      if (height > 0) return height
+      const index = instance.indexFromElement(el)
+      const key = index >= 0 ? instance.options.getItemKey(index) : null
+      const cached = key === null ? undefined : instance.itemSizeCache.get(key)
+      return cached !== undefined && cached > 0 ? cached : ESTIMATED_ITEM_HEIGHT
+    },
+    [],
+  )
+
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => containerRef.current,
@@ -287,6 +315,8 @@ export function useVirtualList({
     overscan: OVERSCAN,
     getItemKey,
     rangeExtractor,
+    // 0 高度不入缓存（见 `measureRowHeight`）
+    measureElement: measureRowHeight,
     // ⚠️ 必须关掉库默认开启的 flushSync：条目测量发生在提交阶段，库在「测量同步改写了 scrollTop」
     // 时会 flushSync(rerender)，而渲染 / 提交中调 flushSync 是 React 明令禁止的。
     useFlushSync: false,
@@ -334,6 +364,8 @@ export function useVirtualList({
       if (index < 0) return
       const key = rowVirtualizer.options.getItemKey(index)
       if (rowVirtualizer.itemSizeCache.has(key)) return
+      // 还没布局（见 `measureRowHeight` 的 0 高度）：这一拍不写，等 RO 送来真实高度
+      if (node.offsetHeight <= 0) return
       rowVirtualizer.resizeItem(index, node.offsetHeight)
     },
     [rowVirtualizer],
