@@ -327,12 +327,12 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
       <div className="section-desc">
         <span className="t">
           {t(
-            '命中下面规则的命令会自动以「不使用沙盒」方式执行：不再要求授权，AI 也不必显式申请 sandbox:"off"。适合 vitest / vite / node-gyp 等需要管道 stdio、在沙盒下必然失败的命令。',
+            '命中规则的命令不再单独申请沙盒授权，直接放开执行。适用于 vitest、vite、node-gyp 等无法在沙盒内运行的命令。',
           )}
         </span>
         <br />
         {t(
-          '规则只免除「沙盒脱壳」授权（并把该命令改为「不使用沙盒」执行）；命令本身的审批仍按「权限管理」的设置执行（如终端安装命令设为「询问」时仍会询问一次）。「沙盒脱壳」权限设为「禁止」或沙盒处于只读模式时，规则不生效。',
+          '规则仅免除沙盒授权；命令本身的审批仍按「权限管理」设置执行（如安装类命令设为「询问」时仍会询问）。「沙盒脱壳」权限为「禁止」或处于只读模式时，规则不生效。',
         )}
       </div>
 
@@ -350,7 +350,7 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
         {/* 只有一条规则时无所谓优先级，不占位置 */}
         {rules.length > 1 && (
           <span className="rules-order-hint">
-            {t('拖动左侧把手调整优先级；从上到下依次匹配，越靠上优先级越高')}
+            {t('从上到下依次匹配，越靠上优先级越高')}
           </span>
         )}
       </div>
@@ -360,7 +360,7 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
           <p className="empty-title">{t('还没有规则')}</p>
           <p className="empty-desc">
             {t(
-              '配好规则后，AI 执行安装 / 测试这类命令时会自动以「不使用沙盒」方式执行，不必每次申请脱壳授权。',
+              '配置后，AI 执行安装、测试类命令时自动放开，无需逐次申请授权。',
             )}
           </p>
           <div className="empty-presets">
@@ -581,11 +581,11 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
               )}
               <span className="form-hint">
                 {draft.kind === 'text'
-                  ? t('按上面的比较方式，与 AI 实际执行的命令文本做比较（忽略首尾空白）')
+                  ? t('按所选的比较方式与命令文本比较（忽略首尾空白）')
                   : draft.kind === 'regex'
                     ? t('JavaScript 正则，与整条命令做匹配（test 语义）')
                     : t(
-                        '写一个函数，参数 command 是 AI 实际要执行的命令，返回真值即命中。默认模板返回 false（不命中），请按需修改；请只写你自己信任的代码。',
+                        '参数 command 为待匹配的命令，返回真值即命中；请只写你信任的代码。',
                       )}
               </span>
             </div>
@@ -633,7 +633,7 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
                         error: testResult.error,
                       })
                     : testResult.matched
-                      ? t('命中：该命令将以「不使用沙盒」方式执行（免脱壳授权）')
+                      ? t('命中：该命令将放开执行，不再单独授权')
                       : t('未命中')}
                 </div>
               )}

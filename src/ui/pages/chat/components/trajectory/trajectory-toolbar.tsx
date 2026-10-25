@@ -51,7 +51,7 @@ export function TrajectoryToolbar({
           disabled={timeDisabled}
           title={
             timeDisabled
-              ? t('这段会话没有可用的时间戳，只能按顺序等宽显示')
+              ? t('这段对话没有可用的时间戳，只能按顺序等宽显示')
               : mode === 'time'
                 ? t('切换为等宽显示')
                 : t('按真实时间显示（条宽 = 实测耗时）')

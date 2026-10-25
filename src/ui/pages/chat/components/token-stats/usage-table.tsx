@@ -79,7 +79,7 @@ function formatTime(ts: number): string {
 /** 会话标题：会话被删后流水仍在，标题用占位文案 */
 function sessionLabel(r: CostedRecord): string {
   if (r.sessionTitle) return r.sessionTitle
-  return r.sessionId ? t('已删除会话') : t('无会话上下文')
+  return r.sessionId ? t('已删除对话') : t('无对话上下文')
 }
 
 /**
@@ -206,7 +206,7 @@ export default function UsageTable({
               onSort={onSort}>
               {t('时间')}
             </SortTh>
-            <th>{t('会话')}</th>
+            <th>{t('对话')}</th>
             <th>{t('模型')}</th>
             <th>{t('类型')}</th>
             <SortTh
@@ -263,7 +263,7 @@ export default function UsageTable({
               num>
               <span
                 title={t(
-                  '输出速度：Completion token ÷ 生成窗口（请求耗时减去等响应头耗时，不含发送与排队）；未记录耗时的旧流水显示 -',
+                  '输出速度 = 输出 token ÷ 生成耗时（不含发送与排队）；未记录耗时的旧流水显示 -',
                 )}>
                 tok/s
               </span>

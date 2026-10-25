@@ -290,7 +290,7 @@ describe('TrajectoryView', () => {
   it('把消息摊成「会话开始 + 第 1 轮 + 第 2 轮」的记录表', () => {
     const el = render(<TrajectoryView {...baseProps()} />)
     const text = el.textContent ?? ''
-    expect(text).toContain('会话开始')
+    expect(text).toContain('对话开始')
     expect(text).toContain('第 1 轮')
     expect(text).toContain('第 2 轮')
     expect(text).toContain('第 1 步')
@@ -560,7 +560,7 @@ describe('TrajectoryView', () => {
 
   it('没有消息时显示空状态，不渲染表格', () => {
     const el = render(<TrajectoryView {...baseProps({ messages: [] })} />)
-    expect(el.textContent).toContain('这段会话还没有可显示的记录')
+    expect(el.textContent).toContain('此对话还没有可显示的记录')
     expect(el.querySelector('.trajectory-table')).toBeNull()
   })
 
@@ -601,7 +601,7 @@ describe('TrajectoryView', () => {
     }
     const el = render(<TrajectoryView {...baseProps()} />)
     await flushUsage()
-    expect(el.textContent).toContain('会话全量')
+    expect(el.textContent).toContain('对话全量')
     expect(el.textContent).toContain('对话 2 次')
     // 600 / (1000 + 600 + 100) = 35%
     expect(el.textContent).toContain('缓存 35%')

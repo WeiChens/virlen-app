@@ -89,7 +89,7 @@ export function PausedRunBanner({
               fill="var(--accent-color)"></path>
           </svg>
         </span>
-        <span className="paused-text">{t('会话已暂停，是否继续？')}</span>
+        <span className="paused-text">{t('本轮回复已暂停，是否继续？')}</span>
       </div>
       <button className="paused-resume-btn" onClick={onResume}>
         {t('继续')}

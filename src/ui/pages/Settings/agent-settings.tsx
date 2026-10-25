@@ -68,6 +68,12 @@ function AgentSettings() {
         </button>
       </div>
 
+      <p className="agent-page-desc">
+        {t(
+          'Agent 预设了提示词与可用工具，可按任务分别配置。',
+        )}
+      </p>
+
       <div className="agent-list">
         {agents.map((agent) => (
           <div key={agent.id} className="agent-item">
@@ -116,7 +122,7 @@ function AgentSettings() {
 
         {agents.length === 0 && (
           <div className="agent-empty">
-            <p>{t('暂无 Agent，点击上方按钮创建')}</p>
+            <p>{t('暂无 Agent')}</p>
           </div>
         )}
       </div>

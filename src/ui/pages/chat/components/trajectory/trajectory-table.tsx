@@ -177,7 +177,7 @@ export function TrajectoryTable({
         onScroll={handleScroll}
         role="rowgroup">
         {rows.length === 0 ? (
-          <div className="trajectory-table__empty">{t('这段会话还没有可显示的记录')}</div>
+          <div className="trajectory-table__empty">{t('这段对话还没有可显示的记录')}</div>
         ) : (
           <div
             className="trajectory-table__body"

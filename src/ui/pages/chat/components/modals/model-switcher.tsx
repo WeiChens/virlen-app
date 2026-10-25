@@ -143,7 +143,7 @@ function ModelSwitcher() {
 
                     {provider.models.length === 0 ? (
                       <div className="dropdown-no-models">
-                        {t('暂无模型 — 请先"获取模型"')}
+                        {t('暂无模型，请先获取模型列表')}
                       </div>
                     ) : (
                       provider.models.map((model: ModelInfo) => {

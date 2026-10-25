@@ -22,6 +22,7 @@ import { MessageBox } from '@/ui/components/shared/MessageBox'
 import { providerPort } from '@/domain'
 import { createProviderInstance } from '@/infrastructure/provider'
 import { providerService } from '@/services/provider-service'
+import { protocolLabel } from '@/ui/constants/providerVocabulary'
 
 function ProviderSettings() {
   const [showAdd, setShowAdd] = useState(false)
@@ -312,8 +313,8 @@ function ProviderSettings() {
                 {expandedProvider === provider.id && (
                   <div className="provider-card-body">
                     <div className="provider-detail-row">
-                      <span className="detail-label">{t('类型')}</span>
-                      <span className="detail-value">{provider.type}</span>
+                      <span className="detail-label">{t('接口协议')}</span>
+                      <span className="detail-value">{protocolLabel(provider.type)}</span>
                     </div>
                     <div className="provider-detail-row">
                       <span className="detail-label">{t('API Key')}</span>

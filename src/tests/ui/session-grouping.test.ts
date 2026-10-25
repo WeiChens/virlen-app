@@ -61,17 +61,17 @@ describe('groupSessions — 按 Agent 分组', () => {
     // 代码助手(a1) < 文档助手(a2)，未分组最后
     expect(groups.map((g) => g.key)).toEqual(['a1', 'a2', UNGROUPED_KEY])
     expect(groups[2].name).toBe('未分组')
-    expect(groups[2].title).toBe('未关联 Agent 的会话')
+    expect(groups[2].title).toBe('未关联 Agent 的对话')
   })
 
-  it('Agent 已删除（查不到）→ 落到该 id 的分组，名称为「未知代理」', () => {
+  it('Agent 已删除（查不到）→ 落到该 id 的分组，名称为「未知 Agent」', () => {
     const groups = groupSessions(
       [makeSession('s1', '孤儿', { agentId: 'gone' })],
       { type: 'agent', lookupAgent },
     )
     expect(groups).toHaveLength(1)
     expect(groups[0].key).toBe('gone')
-    expect(groups[0].name).toBe('未知代理')
+    expect(groups[0].name).toBe('未知 Agent')
   })
 
   it('Agent 简介作为悬停提示；没有简介时退回名称', () => {

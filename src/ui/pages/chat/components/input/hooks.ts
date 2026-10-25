@@ -627,7 +627,7 @@ export function useVoiceInput(onSpeechResult: (text: string) => void) {
       (window as any).SpeechRecognition ||
       (window as any).webkitSpeechRecognition
     if (!SpeechRecognition) {
-      showToast(t('您的浏览器不支持语音输入，请使用 Chrome 或 Edge'))
+      showToast(t('当前环境不支持语音输入'))
       return
     }
 

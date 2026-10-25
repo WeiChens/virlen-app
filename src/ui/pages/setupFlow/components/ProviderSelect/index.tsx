@@ -1,7 +1,7 @@
 /**
  * ProviderSelect — 引导流程内的模型服务商下拉选择器
  *
- * 自定义下拉框：展示服务商图标 + 名称，展开后附带宽高信息（baseUrl）。
+ * 自定义下拉框：展示服务商图标 + 名称，展开后附带服务地址（API 地址）。
  * 点击外部自动关闭。
  */
 import { useState, useRef, useEffect } from 'react'

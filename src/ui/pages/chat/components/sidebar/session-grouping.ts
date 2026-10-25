@@ -102,10 +102,10 @@ function groupByAgent<S extends GroupableSession>(
       let title: string
       if (key === UNGROUPED_KEY) {
         name = t('未分组')
-        title = t('未关联 Agent 的会话')
+        title = t('未关联 Agent 的对话')
       } else {
         const agent = lookupAgent?.(key)
-        name = agent?.name || t('未知代理')
+        name = agent?.name || t('未知 Agent')
         title = agent?.description || name
       }
       group = { key, name, icon: 'agent', title, sessions: [] }
@@ -140,8 +140,8 @@ function groupByWorkspace<S extends GroupableSession>(
           : key.split(/[/]|[\\]/).pop() || key
       const title =
         key === UNGROUPED_KEY
-          ? t('未设置工作目录的会话')
-          : tpl('工作目录: $__path__', { path: key })
+          ? t('未设置工作目录的对话')
+          : tpl('工作目录：$__path__', { path: key })
       group = { key, name, icon: 'folder', title, sessions: [] }
       groupMap.set(key, group)
     }

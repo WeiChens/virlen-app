@@ -60,12 +60,12 @@ function ChatSettings() {
       {
         value: 'ai',
         label: t('AI 摘要'),
-        title: t('调用 AI 把历史总结成一段，最省 token，但需要一次模型调用（慢、要花钱）'),
+        title: t('让 AI 将历史对话总结为一段，最省 token，但需额外调用一次模型（较慢、计费）'),
       },
       {
         value: 'raw',
         label: t('正文压缩'),
-        title: t('本地压缩，毫秒级完成且不花钱；正文一字不删，只去掉思考过程并省略超长工具输出'),
+        title: t('本地处理，不产生费用；仅去除思考过程并省略超长工具输出'),
       },
     ]
 
@@ -78,7 +78,7 @@ function ChatSettings() {
       {
         value: 'jpeg',
         label: 'JPEG',
-        title: t('体积最小，适合照片与截图；不支持透明（透明区会变白）'),
+        title: t('体积最小，适合照片与截图；不支持透明（透明区域会变白）'),
       },
       {
         value: 'png',
@@ -137,7 +137,7 @@ function ChatSettings() {
         update('defaultWorkspace', selected.replace(/\\/g, '/'))
       }
     } catch {
-      showToast(t('文件夹选择器不可用'), 1500)
+      showToast(t('无法打开文件夹选择器'), 1500)
     }
   }
 
@@ -148,9 +148,9 @@ function ChatSettings() {
       <div className="section">
         <div className="setting-row">
           <div className="setting-label">
-            <span className="label-text">{t('最大输出 Token')}</span>
+            <span className="label-text">{t('单次回复长度')}</span>
             <span className="label-desc">
-              {t('单次回复的最大 token 数')}（{t('当前')}:{' '}
+              {t('单次回复的最大长度')}（{t('当前')}:{' '}
               {formatMaxTokens(s.maxTokens)}）
             </span>
           </div>
@@ -166,7 +166,7 @@ function ChatSettings() {
         <div className="setting-row">
           <div className="setting-label">
             <span className="label-text">{t('默认工作目录')}</span>
-            <span className="label-desc">{t('新会话的默认工作目录')}</span>
+            <span className="label-desc">{t('新建对话的默认工作目录')}</span>
           </div>
           <div className="setting-control">
             <div className="input-with-btn">
@@ -181,7 +181,7 @@ function ChatSettings() {
               <button
                 className="folder-btn"
                 onClick={pickFolder}
-                title={t('选择目录')}>
+                title={t('选择文件夹')}>
                 <FolderSvg fill="var(--text-secondary)" />
               </button>
             </div>
@@ -189,18 +189,16 @@ function ChatSettings() {
         </div>
         <div className="setting-row">
           <div className="setting-label">
-            <span className="label-text">{t('本地图片伪视觉分析')}</span>
+            <span className="label-text">{t('图片内容提取（本地）')}</span>
             <span className="label-desc">
-              {t(
-                '发送的图片会进行 UI 检测 + OCR + 物体检测\n提取结构化文本发给 AI，而非发送原始图片\n让LLM拥有视觉能力\n让VLM更节省token，但是伪视觉分析，没有真实VLM分析的智能',
-              )}
+              {t('在本地提取图片中的文字与界面元素后发送给模型，比直接发送图片更省 token')}
             </span>
           </div>
           <div className="setting-control">
             <label className="toggle">
               <input
                 type="checkbox"
-                aria-label={t('本地图片伪视觉分析')}
+                aria-label={t('图片内容提取（本地）')}
                 checked={s.imageVisionAnalyzeOptimize}
                 onChange={(e) =>
                   update('imageVisionAnalyzeOptimize', e.target.checked)
@@ -214,9 +212,7 @@ function ChatSettings() {
           <div className="setting-label">
             <span className="label-text">{t('图片发送格式')}</span>
             <span className="label-desc">
-              {t(
-                '添加图片时按该格式处理一次（库里存的也是这份，原文件不入库）；只在过长时等比缩小',
-              )}
+              {t('图片按该格式存储；超出尺寸时等比缩小')}
             </span>
           </div>
           <div className="setting-control">
@@ -232,7 +228,7 @@ function ChatSettings() {
           <div className="setting-label">
             <span className="label-text">{t('图片最长边')}</span>
             <span className="label-desc">
-              {t('发图前等比缩到该上限，同时减小请求体与视觉 token')}
+              {t('发送前将长边缩至该尺寸以内，以减小请求体积与 token 消耗')}
             </span>
           </div>
           <div className="setting-control">
@@ -285,9 +281,7 @@ function ChatSettings() {
           <div className="setting-label">
             <span className="label-text">{t('AI 生成标题')}</span>
             <span className="label-desc">
-              {t(
-                '用 AI 根据对话内容生成会话标题\n关闭后不再发起标题生成的 LLM 调用，直接截取首条用户消息',
-              )}
+              {t('根据对话内容自动生成标题；关闭后用首条消息代替')}
             </span>
           </div>
           <div className="setting-control">
@@ -306,9 +300,7 @@ function ChatSettings() {
           <div className="setting-label">
             <span className="label-text">{t('上下文压缩方式')}</span>
             <span className="label-desc">
-              {t(
-                '点击 token 环压缩上下文时使用的方式',
-              )}
+              {t('点击 token 环压缩上下文时采用的方式')}
             </span>
           </div>
           <div className="setting-control">
@@ -329,9 +321,7 @@ function ChatSettings() {
           <div className="setting-label">
             <span className="label-text">{t('上下文窗口')}</span>
             <span className="label-desc">
-              {t(
-                'token 环 / 上下文压缩百分比里「100%」对应的 token 数',
-              )}
+              {t('token 环显示 100% 时对应的 token 数')}
             </span>
           </div>
           <div className="setting-control">
@@ -357,18 +347,16 @@ function ChatSettings() {
         </div>
         <div className="setting-row">
           <div className="setting-label">
-            <span className="label-text">{t('提问在会话内回答')}</span>
+            <span className="label-text">{t('提问在对话内回答')}</span>
             <span className="label-desc">
-              {t(
-                '默认开：AI 调用 user_choice 提问时不弹窗打断，而是显示在所属会话的消息列表下方；切到那个会话才能回答\n关掉则回到跨会话弹窗（立即引导你解决）',
-              )}
+              {t('开启后，提问显示在所属对话下方，进入该对话时作答；关闭则弹窗提醒')}
             </span>
           </div>
           <div className="setting-control">
             <label className="toggle">
               <input
                 type="checkbox"
-                aria-label={t('提问在会话内回答')}
+                aria-label={t('提问在对话内回答')}
                 checked={s.userChoiceInline}
                 onChange={(e) => update('userChoiceInline', e.target.checked)}
               />
@@ -378,18 +366,16 @@ function ChatSettings() {
         </div>
         <div className="setting-row">
           <div className="setting-label">
-            <span className="label-text">{t('权限授权在会话内回答')}</span>
+            <span className="label-text">{t('授权请求在对话内处理')}</span>
             <span className="label-desc">
-              {t(
-                '默认关：命中权限审批时立即弹窗确认；打开后与提问一样显示在会话消息列表下方，打开那个会话才能处理',
-              )}
+              {t('开启后，授权请求显示在所属对话下方，进入该对话时处理')}
             </span>
           </div>
           <div className="setting-control">
             <label className="toggle">
               <input
                 type="checkbox"
-                aria-label={t('权限授权在会话内回答')}
+                aria-label={t('授权请求在对话内处理')}
                 checked={s.authorizationInline}
                 onChange={(e) => update('authorizationInline', e.target.checked)}
               />
@@ -399,18 +385,16 @@ function ChatSettings() {
         </div>
         <div className="setting-row">
           <div className="setting-label">
-            <span className="label-text">{t('强制激活窗口')}</span>
+            <span className="label-text">{t('自动切换到前台')}</span>
             <span className="label-desc">
-              {t(
-                'AI 回复完成或需要用户选择时，若窗口未激活则自动将窗口置为活动状态\n窗口还在时不再额外推送系统通知；窗口已关闭（托盘还在）时仍会推送',
-              )}
+              {t('AI 回复完成或需要选择时，若窗口未激活则自动置前')}
             </span>
           </div>
           <div className="setting-control">
             <label className="toggle">
               <input
                 type="checkbox"
-                aria-label={t('强制激活窗口')}
+                aria-label={t('自动切换到前台')}
                 checked={s.forceWindowActive}
                 onChange={(e) =>
                   update('forceWindowActive', e.target.checked)
@@ -424,7 +408,7 @@ function ChatSettings() {
           <div className="setting-label">
             <span className="label-text">{t('关闭窗口时隐藏到托盘')}</span>
             <span className="label-desc">
-              {t('点关闭按钮只隐藏窗口，AI 继续在后台工作；从托盘菜单可真正退出')}
+              {t('点关闭仅隐藏窗口，AI 继续在后台运行；从托盘菜单可退出')}
             </span>
           </div>
           <div className="setting-control">
@@ -443,7 +427,7 @@ function ChatSettings() {
           <div className="setting-label">
             <span className="label-text">{t('回复完成时提醒我')}</span>
             <span className="label-desc">
-              {t('窗口未显示或未激活时，用任务栏闪烁 + 托盘提示提醒（含未读计数）')}
+              {t('窗口未显示或未激活时提醒你')}
             </span>
           </div>
           <div className="setting-control">
@@ -462,7 +446,7 @@ function ChatSettings() {
           <div className="setting-label">
             <span className="label-text">{t('预加载技能元数据')}</span>
             <span className="label-desc">
-              {t('启动时预先拉取 skill 的描述信息，但会提前消耗 TOKEN')}
+              {t('启动时预加载技能描述，响应更快，但会提前消耗 token')}
             </span>
           </div>
           <div className="setting-control">
@@ -481,7 +465,7 @@ function ChatSettings() {
           <div className="setting-label">
             <span className="label-text">{t('最大工具调用轮数')}</span>
             <span className="label-desc">
-              {t('单次对话中 LLM 可连续调用工具的最大次数')}
+              {t('单次对话中连续调用工具的最大轮数')}
             </span>
           </div>
           <div className="setting-control">
@@ -496,7 +480,7 @@ function ChatSettings() {
         <div className="setting-row">
           <div className="setting-label">
             <span className="label-text">{t('侧边栏分组')}</span>
-            <span className="label-desc">{t('会话列表的分组方式')}</span>
+            <span className="label-desc">{t('对话列表的分组方式')}</span>
           </div>
           <div className="setting-control">
             <div className="segmented-control">

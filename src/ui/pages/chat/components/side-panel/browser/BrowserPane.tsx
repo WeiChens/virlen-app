@@ -449,7 +449,7 @@ export default function BrowserPane({ initialUrl, onNavigate, onTitle, onClose }
               </span>
               <p className="browser-empty-title">{t('在上面输入网址开始浏览')}</p>
               <p className="browser-empty-note">
-                {t('只放行 http / https 地址；页面在独立视图里打开，不受嵌入限制。')}
+                {t('仅支持 http / https 地址。')}
               </p>
             </div>
           ) : viewError ? (

@@ -20,6 +20,7 @@ import {
   defaultReasoningEffortList,
   sortReasoningEfforts,
 } from '@/domain/provider/catalog'
+import { protocolLabel } from '@/ui/constants/providerVocabulary'
 
 /**
  * 老数据迁移：只有单个 reasoningEffort 时，候选项用默认基础档位 + 该单值合成，
@@ -308,7 +309,7 @@ export default function ProviderEditModal({
             </div>
 
             <div className="form-group">
-              <label>{t('类型')}</label>
+              <label>{t('接口协议')}</label>
               {allowTypeList.length > 0 ? (
                 <Select
                   value={type}
@@ -318,9 +319,9 @@ export default function ProviderEditModal({
                       allowTypeList.find((t) => t.type === v)?.baseUrl || ''
                     setBaseUrl(baseUrl)
                   }}
-                  options={allowTypeList.map((t) => ({
-                    value: t.type,
-                    label: t.type,
+                  options={allowTypeList.map((opt) => ({
+                    value: opt.type,
+                    label: protocolLabel(opt.type),
                   }))}
                   width="100%"
                 />
@@ -330,9 +331,9 @@ export default function ProviderEditModal({
                   onChange={(v) => setType(v)}
                   disabled={isTemplateFixed}
                   options={[
-                    { value: 'openai', label: 'OpenAI' },
-                    { value: 'anthropic', label: 'Anthropic' },
-                    { value: 'gemini', label: 'Gemini' },
+                    { value: 'openai', label: protocolLabel('openai') },
+                    { value: 'anthropic', label: protocolLabel('anthropic') },
+                    { value: 'gemini', label: protocolLabel('gemini') },
                   ]}
                   width="100%"
                 />
@@ -513,7 +514,7 @@ export default function ProviderEditModal({
                 width="100%"
               />
               <span className="form-hint">
-                {t('会话未单独切换时使用此默认值')}
+                {t('对话里没单独切换时，用这个默认值')}
               </span>
             </div>
           )}

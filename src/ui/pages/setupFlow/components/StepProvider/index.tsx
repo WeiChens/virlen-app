@@ -1,7 +1,7 @@
 /**
  * StepProvider — 引导第三步：配置模型服务商
  *
- * 选择服务商 → 填写 API Key（自定义还需 Base URL）→ 填写/自动获取模型 ID，
+ * 选择服务商 → 填写 API Key（自定义还需 API 地址）→ 填写/自动获取模型 ID，
  * 校验通过后注册 Provider 并完成初始化。
  */
 import { useState } from 'react'
@@ -72,7 +72,7 @@ function StepProvider({ onBack, onComplete }: Props) {
       }
 
       const instance = createProviderInstance(providerConfig)
-      if (!instance) throw new Error(t('创建 Provider 实例失败'))
+      if (!instance) throw new Error(t('无法创建模型服务配置'))
 
       const fetchedModels = await instance.listModels()
       if (!fetchedModels || fetchedModels.length === 0) {
@@ -80,9 +80,9 @@ function StepProvider({ onBack, onComplete }: Props) {
       }
 
       setModelId(fetchedModels[0])
-      showToast(tpl('已自动填入: $__model__', { model: fetchedModels[0] }))
+      showToast(tpl('已自动填入：$__model__', { model: fetchedModels[0] }))
     } catch (err: any) {
-      const msg = tpl('获取失败: $__error__', {
+      const msg = tpl('获取失败：$__error__', {
         error: err.message || String(err),
       })
       // 内联错误：与字段就近展示，避免只靠 toast 一闪而过
@@ -120,7 +120,7 @@ function StepProvider({ onBack, onComplete }: Props) {
       }
 
       const instance = createProviderInstance(providerConfig)
-      if (!instance) throw new Error(t('创建 Provider 实例失败'))
+      if (!instance) throw new Error(t('无法创建模型服务配置'))
 
       const valid = await instance.validateApiKey(providerConfig)
       if (!valid) throw new Error(t('API Key 验证失败，请检查后重试'))
@@ -185,7 +185,7 @@ function StepProvider({ onBack, onComplete }: Props) {
       {isCustom && (
         <div className="api-key-section">
           <label className="api-key-label" htmlFor="setup-base-url">
-            Base URL
+            {t('API 地址')}
           </label>
           <input
             id="setup-base-url"
@@ -201,7 +201,7 @@ function StepProvider({ onBack, onComplete }: Props) {
             autoComplete="off"
           />
           <p className="api-key-hint">
-            {t('输入兼容 OpenAI 接口的 API 地址。')}
+            {t('输入 OpenAI 兼容协议的 API 地址。')}
           </p>
         </div>
       )}
@@ -266,7 +266,7 @@ function StepProvider({ onBack, onComplete }: Props) {
             </button>
           </div>
           <p className="api-key-hint">
-            {t('输入你要使用的模型 ID。不确定时可点击「自动获取」尝试拉取。')}
+            {t('模型 ID 可在服务商文档中查看；不确定时可点击「自动获取」获取列表。')}
           </p>
         </div>
       )}

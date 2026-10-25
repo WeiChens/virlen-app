@@ -28,7 +28,7 @@ const PreviewSecurity = observer(function PreviewSecurity() {
       <div className="section">
         <div className="section-desc">
           <span className="t">
-            {t('HTML 文件默认在沙盒里渲染，脚本不执行；只在信任要预览的页面时开启下面两项。')}
+            {t('HTML 文件默认在隔离环境中渲染，脚本不执行；仅在信任所预览的页面时开启以下两项。')}
           </span>
         </div>
 
@@ -57,7 +57,7 @@ const PreviewSecurity = observer(function PreviewSecurity() {
             <span className="label-text">{t('允许外部资源')}</span>
             <span className="label-desc">
               {s.htmlPreviewAllowScripts
-                ? t('允许从 CDN 加载脚本并收发网络请求（如 three.js）；会向第三方发起请求')
+                ? t('允许从 CDN 加载脚本并发起网络请求；会连接第三方服务器')
                 : t('需先开启「允许运行脚本」')}
             </span>
           </div>

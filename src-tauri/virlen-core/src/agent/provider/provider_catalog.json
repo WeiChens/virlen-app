@@ -41,14 +41,14 @@
     {
       "templateName": "zhipu",
       "type": "openai",
-      "label": "智普",
+      "label": "智谱",
       "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
       "officialLink": "https://open.bigmodel.cn"
     },
     {
       "templateName": "qwen",
       "type": "openai",
-      "label": "千问",
+      "label": "通义千问",
       "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "allowTypeList": [
         {

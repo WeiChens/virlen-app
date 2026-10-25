@@ -216,7 +216,7 @@ it('开始页：三扇门按「文件 / 终端 / 浏览器」排，键帽与描�
   const files = entryOf('files')!
   expect(hitOf('files')!.disabled).toBe(false)
   expect(files.textContent).toContain('工作区文件')
-  expect(files.textContent).toContain('浏览会话工作区的文件')
+  expect(files.textContent).toContain('浏览当前对话工作区的文件')
   // 键帽来自命令表（primary 在 Windows 下是 Ctrl），不是写死的文本
   expect([...files.querySelectorAll('kbd')].map((k) => k.textContent)).toEqual([
     'Ctrl',
@@ -285,7 +285,7 @@ it('开始页：没有工作区时「新建终端」也禁用（终端的工作�
 
   const terminal = entryOf('terminal')!
   expect(hitOf('terminal')!.disabled).toBe(true)
-  expect(terminal.textContent).toContain('这个会话没有工作区目录。')
+  expect(terminal.textContent).toContain('此对话未设置工作区目录。')
   // 浏览器不依赖工作目录：照常可点
   expect(hitOf('browser')!.disabled).toBe(false)
   await act(async () => hitOf('terminal')!.click())
@@ -311,7 +311,7 @@ it('开始页：没有工作区时「工作区文件」禁用，并把原因写�
 
   const files = entryOf('files')!
   expect(hitOf('files')!.disabled).toBe(true)
-  expect(files.textContent).toContain('这个会话没有工作区目录。')
+  expect(files.textContent).toContain('此对话未设置工作区目录。')
   await act(async () => hitOf('files')!.click())
   expect(picked).toEqual([])
 })

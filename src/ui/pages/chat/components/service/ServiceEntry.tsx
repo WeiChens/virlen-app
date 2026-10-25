@@ -96,7 +96,7 @@ function ServiceRow({
         {/* 归属会话（全局视图才有）：本会话视图不显示 —— 就是当前会话，画出来只占宽 */}
         {sessionLabel && (
           <span className="service-row-session" title={sessionLabel}>
-            {tpl('会话：$__name__', { name: sessionLabel })}
+            {tpl('对话：$__name__', { name: sessionLabel })}
           </span>
         )}
         <span className="service-spacer" />
@@ -228,7 +228,7 @@ export default function ServiceEntry({ sessionId, onOpenService }: Props) {
             <span className="service-popover-title">{t('后台服务')}</span>
             {/* 可见范围提示：已选会话 = 本会话（与工具同一张表）；新对话页 = 全部会话 */}
             <span className="service-scope">
-              {globalView ? t('全部会话') : t('仅本会话')}
+              {globalView ? t('全部对话') : t('仅本对话')}
             </span>
             <span className="service-spacer" />
             <button

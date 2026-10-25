@@ -17,7 +17,7 @@ import { t, tpl } from '@/ui/i18n'
 export function turnTitle(title: TrajectoryTurnTitle): string {
   switch (title.kind) {
     case 'start':
-      return t('会话开始')
+      return t('对话开始')
     case 'turn':
       return tpl('第 $__turn__ 轮', { turn: title.turn })
     case 'compaction':

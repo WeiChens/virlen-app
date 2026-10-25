@@ -78,7 +78,7 @@ type SidebarTab = 'sessions' | 'workspace' | 'skills'
 
 /** 页签定义（label 即 i18n key） */
 const SIDEBAR_TABS: { key: SidebarTab; label: string }[] = [
-  { key: 'sessions', label: '会话' },
+  { key: 'sessions', label: '对话' },
   { key: 'workspace', label: '工作目录' },
   { key: 'skills', label: '技能' },
 ]
@@ -515,7 +515,7 @@ function ChatSidebar({
                 </span>
               )}
               {rt.paused && (
-                <span className="shelved-indicator" title={t('工具调用已暂停')}>
+                <span className="shelved-indicator" title={t('有待处理的提问')}>
                   <svg className="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="200" height="200"><path d="M885.333333 85.333333H138.666667a53.393333 53.393333 0 0 0-53.333334 53.333334v746.666666a53.393333 53.393333 0 0 0 53.333334 53.333334h746.666666a53.393333 53.393333 0 0 0 53.333334-53.333334V138.666667a53.393333 53.393333 0 0 0-53.333334-53.333334z m-458.666666 618.666667a21.333333 21.333333 0 0 1-42.666667 0V320a21.333333 21.333333 0 0 1 42.666667 0z m213.333333 0a21.333333 21.333333 0 0 1-42.666667 0V320a21.333333 21.333333 0 0 1 42.666667 0z" fill="var(--accent-color)"></path></svg>
                 </span>
               )}
@@ -576,7 +576,7 @@ function ChatSidebar({
           <SidebarSearch
             value={sessionQuery}
             onChange={setSessionQuery}
-            placeholder={t('搜索会话标题…')}
+            placeholder={t('搜索对话标题…')}
           />
         )}
         <div className="session-list">
@@ -602,7 +602,7 @@ function ChatSidebar({
             ))
           ) : sessionKeyword ? (
             <div className="empty-sessions">
-              <p>{t('未找到匹配的会话')}</p>
+              <p>{t('未找到匹配的对话')}</p>
               <p className="hint">{t('试试其他关键词')}</p>
             </div>
           ) : (
@@ -663,7 +663,7 @@ function ChatSidebar({
       {/* 导入知识库对话框 */}
       <Modal
         visible={showImportModal}
-        title={t('导入会话到知识库')}
+        title={t('导入对话到知识库')}
         onClose={handleCloseImport}
         width={560}
         className="import-kb-modal"
@@ -845,10 +845,10 @@ function SessionGroupView({
   const handleDeleteAllSessions = useCallback(async () => {
     const count = group.sessions.length
     const confirmed = await MessageBox.propt(
-      tpl('删除 $__name__ 分组下的所有会话？', {
+      tpl('删除 $__name__ 分组下的所有对话？', {
         name: group.name,
       }),
-      tpl('该操作将永久删除 $__count__ 个会话，无法恢复。', {
+      tpl('该操作将永久删除 $__count__ 个对话，无法恢复。', {
         count,
       }),
       { confirmText: t('确认删除'), cancelText: t('取消'), danger: true },
@@ -862,7 +862,7 @@ function SessionGroupView({
     if (currentId && ids.includes(currentId)) {
       chatState.set({ currentSessionId: null })
     }
-    showToast(tpl('已删除 $__count__ 个会话', { count: deleted }), 2000)
+    showToast(tpl('已删除 $__count__ 个对话', { count: deleted }), 2000)
   }, [group.sessions, group.name])
 
   const handleOpenWorkspace = useCallback(async () => {
@@ -900,7 +900,7 @@ function SessionGroupView({
             }
           : {
               key: 'edit-agent',
-              label: t('编辑智能体'),
+              label: t('编辑 Agent'),
               divider: true,
               onClick: handleEditAgent,
             },
@@ -908,7 +908,7 @@ function SessionGroupView({
     }
     items.push({
       key: 'delete-all',
-      label: t('删除所有会话'),
+      label: t('删除所有对话'),
       divider: true,
       danger: true,
       onClick: handleDeleteAllSessions,

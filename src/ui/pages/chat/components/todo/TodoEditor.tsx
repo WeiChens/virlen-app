@@ -306,7 +306,7 @@ export const TodoEditor = observer(function TodoEditor({
           </div>
           <div className="todo-ai-updated-tip">
             {t(
-              '你的编辑还留着。「放弃编辑并同步」= 跟随 AI 的最新清单；「覆盖更新」= 用你这份整体覆盖 AI。',
+              '你的编辑尚未提交：放弃编辑将同步 AI 的最新清单，覆盖更新将用你的清单替换 AI 的版本。',
             )}
           </div>
         </div>
@@ -314,7 +314,7 @@ export const TodoEditor = observer(function TodoEditor({
 
       {list.length === 0 ? (
         <div className="todo-empty">
-          {t('暂无任务。可以让 AI 先规划，或点下方「添加任务」。')}
+          {t('暂无任务。可让 AI 规划，或点击下方「添加任务」。')}
         </div>
       ) : (
         <div className="todo-rows" ref={rowsRef}>
@@ -353,7 +353,7 @@ export const TodoEditor = observer(function TodoEditor({
                   type="button"
                   className="danger"
                   onClick={() => remove(item.id)}
-                  title={t('移除该项（模型会知道是用户移除的）')}>
+                  title={t('移除该项')}>
                   ✕
                 </button>
               </div>
@@ -400,12 +400,12 @@ export const TodoEditor = observer(function TodoEditor({
       {working && (
         <div className="todo-warn">
           {committed
-            ? t('AI 正在回复中：你的清单已生效，本轮结束后写入对话')
+            ? t('AI 正在回复中：清单已生效，本轮结束后写入对话')
             : draft
               ? t(
-                'AI 正在回复中：改动还只是草稿，点「应用变更 / 覆盖更新」后才会在本轮结束时生效',
+                'AI 正在回复中：当前改动为草稿，点击「应用变更 / 覆盖更新」后于本轮结束时生效',
               )
-              : t('AI 正在回复中：你随时可以改这份清单，改完点「应用变更」才会生效')}
+              : t('AI 正在回复中：清单可随时修改，应用变更后方才生效')}
         </div>
       )}
     </div>

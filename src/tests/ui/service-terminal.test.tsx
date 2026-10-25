@@ -320,7 +320,7 @@ it('管道模式（没有伪控制台）：如实说明不能输入', async () =
 
   mount()
   await flush()
-  expect(text('.service-console-foot')).toContain('管道模式下，无法输入')
+  expect(text('.service-console-foot')).toContain('当前平台不支持交互输入，只能查看输出')
 })
 
 it('服务被摘出注册表（读回 null）：提示 + 停止轮询', async () => {
@@ -400,7 +400,7 @@ it('头部的终止：打到标签自己的会话，并立刻对账成已结束'
 
   mount({ sessionLabel: '会话标题' })
   await flush()
-  expect(text('.service-console-session')).toBe('会话：会话标题')
+  expect(text('.service-console-session')).toBe('对话：会话标题')
 
   act(() => {
     ;(document.querySelector('.service-console-kill') as HTMLButtonElement).click()

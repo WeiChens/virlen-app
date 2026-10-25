@@ -34,7 +34,7 @@ export function TrajectoryToolCatalog({
   }
   if (tools.length === 0) {
     return (
-      <p className="trajectory-tools__empty">{t('本次会话没有可用的工具')}</p>
+      <p className="trajectory-tools__empty">{t('本次对话没有可用的工具')}</p>
     )
   }
 

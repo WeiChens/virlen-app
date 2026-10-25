@@ -254,12 +254,12 @@ it('全局视图：跨会话列出 + 每行标归属 + 终止用行自己的会�
 
   click('.service-entry-btn')
   expect(document.querySelector('.service-scope')?.textContent?.trim()).toBe(
-    '全部会话',
+    '全部对话',
   )
   // 归属：测试环境的 sessionStore 里没有 s2（取不到标题）→ 退回 id，仍说清了「这条是谁的」
   expect(
     document.querySelector('.service-row-session')?.textContent?.trim(),
-  ).toBe('会话：s2')
+  ).toBe('对话：s2')
 
   click('.service-kill-btn')
   await flush()

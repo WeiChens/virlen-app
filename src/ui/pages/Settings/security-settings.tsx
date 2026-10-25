@@ -145,18 +145,16 @@ const FileAccessSecurity = observer(function FileAccessSecurity() {
       <div className="section">
         <div className="section-desc">
           <span className="t">
-            {t('AI 对文件系统工具实现的访问规则如下(终端执行不在管控范围内)：')}
+            {t(
+              '文件工具可访问的范围：黑名单目录不可访问；工作目录与白名单目录可读写；其余目录只读。终端命令不受此限制。',
+            )}
           </span>
-          <b>{t('黑名单目录')}</b>
-          {t('完全不能访问')}，<b>{t('工作目录')}</b>
-          {t('可以读取和编辑文件')}，<b>{t('白名单目录')}</b>
-          {t('可以读取和编辑文件')}，<b>{t('其他目录')}</b>
-          {t('只能查看、不能动里面的文件')}
         </div>
 
         <div className="setting-row">
           <div className="setting-label">
-            <span className="label-text">{t('名单切换')}</span>
+            <span className="label-text">{t('名单类型')}</span>
+            <span className="label-desc">{t('选择要管理的名单')}</span>
           </div>
           <div className="setting-control">
             <div className="segmented-control">
@@ -173,7 +171,7 @@ const FileAccessSecurity = observer(function FileAccessSecurity() {
               <button
                 className={`segment ${activeList === 'skipEachDirs' ? 'active' : ''}`}
                 onClick={() => setActiveList('skipEachDirs')}>
-                {t('忽略遍历文件夹')}
+                {t('跳过文件夹')}
               </button>
             </div>
           </div>
@@ -186,11 +184,11 @@ const FileAccessSecurity = observer(function FileAccessSecurity() {
             alignItems: 'flex-start',
           }}>
           <div className="setting-label">
-            <span className="label-text">{t('添加目录')}</span>
+            <span className="label-text">{t('添加文件夹')}</span>
             <span className="label-desc">
               {activeList === 'skipEachDirs'
-                ? t('输入文件夹名（仅名称，非路径），如 node_modules')
-                : t('输入绝对路径，如 C:/code/my-project')}
+                ? t('文件夹名即可，无需完整路径，如 node_modules')
+                : t('输入完整路径，如 C:/code/my-project')}
             </span>
           </div>
           <div
@@ -230,7 +228,7 @@ const FileAccessSecurity = observer(function FileAccessSecurity() {
             ? `${t('白名单')} (${whitelist.length})`
             : activeList === 'blacklist'
               ? `${t('黑名单')} (${blacklist.length})`
-              : `${t('忽略遍历文件夹')} (${skipEachDirs.length})`}
+              : `${t('跳过文件夹')} (${skipEachDirs.length})`}
         </h2>
 
         {currentList.length === 0 ? (
@@ -240,7 +238,7 @@ const FileAccessSecurity = observer(function FileAccessSecurity() {
               ? t('白名单')
               : activeList === 'blacklist'
                 ? t('黑名单')
-                : t('忽略遍历文件夹')}
+                : t('跳过文件夹')}
             {activeList === 'skipEachDirs'
               ? t('，请在上方添加')
               : t('目录，请在上方添加')}

@@ -715,7 +715,7 @@ export async function exportUsageCsv(
     lines.push(
       [
         new Date(r.ts).toLocaleString(),
-        csvCell(r.sessionTitle || t('已删除会话')),
+        csvCell(r.sessionTitle || t('已删除对话')),
         csvCell(r.model),
         csvCell(r.providerType || ''),
         csvCell(kindLabel(r.kind)),

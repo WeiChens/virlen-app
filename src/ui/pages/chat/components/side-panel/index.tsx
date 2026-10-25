@@ -884,7 +884,7 @@ function SidePanel({
               tab.kind === 'file'
                 ? tab.path
                 : tab.kind === 'service' && tab.sessionLabel
-                  ? `${label} · ${tpl('会话：$__name__', { name: tab.sessionLabel })}`
+                  ? `${label} · ${tpl('对话：$__name__', { name: tab.sessionLabel })}`
                   : tab.kind === 'terminal'
                     ? `${label} · ${shellLabel(tab.shell)} · ${tab.cwd}`
                     : tab.kind === 'browser'

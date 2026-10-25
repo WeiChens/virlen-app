@@ -81,7 +81,7 @@ export function TrajectoryStats({ ledger, window, loading }: TrajectoryStatsProp
         <span className="trajectory-stats__title">{t('请求统计')}</span>
         <span className="trajectory-stats__summary">{summary.join(' · ')}</span>
         <span className="trajectory-stats__scope">
-          {ledger === null ? t('仅已加载') : t('会话全量')}
+          {ledger === null ? t('仅已加载') : t('对话全量')}
         </span>
       </button>
 
@@ -89,7 +89,7 @@ export function TrajectoryStats({ ledger, window, loading }: TrajectoryStatsProp
         <div className="trajectory-stats__body">
           <div className="trajectory-stats__group">
             <div className="trajectory-stats__group-title">
-              {t('会话全量（每次 LLM 调用一条流水）')}
+              {t('对话全量（每次 LLM 调用一条流水）')}
             </div>
             {ledger === null ? (
               <p className="trajectory-note">

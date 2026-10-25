@@ -65,7 +65,7 @@ function StorageSettings() {
     setBusy(null)
     if (!result) {
       track('storage.checkpoint', { status: 'fail' })
-      showToast(t('操作失败，请查看日志'), 2500)
+      showToast(t('操作失败，详情见日志'), 2500)
       await refresh()
       return
     }
@@ -77,7 +77,7 @@ function StorageSettings() {
     await refresh()
     if (result.busy) {
       // 有其它连接占着 WAL 时 checkpoint 无法完成，此时文件不会变小（不是错误）
-      showToast(t('数据库正被占用，未能截断 WAL 日志'), 2500)
+      showToast(t('数据库正被占用，暂时无法压缩'), 2500)
       return
     }
     showToast(tpl('已回收 $__size__', { size: formatBytes(freed) }), 2000)
@@ -86,11 +86,11 @@ function StorageSettings() {
   /** 重建数据库（VACUUM）：耗时且需临时空间，必须先经用户确认 */
   async function handleVacuum() {
     const confirmed = await MessageBox.propt(
-      t('重建数据库'),
+      t('整理数据库'),
       t(
-        '重建会整理整个数据库：期间请勿发送消息（数百 MB 的库约需 10–60 秒），并需要约 2 倍库大小的临时磁盘空间。确定继续？',
+        '整理将重建整个数据库，期间请勿发送消息（数百 MB 约需 10–60 秒），并需要约两倍库大小的临时磁盘空间。确定继续？',
       ),
-      { confirmText: t('重建数据库'), cancelText: t('取消') },
+      { confirmText: t('开始整理'), cancelText: t('取消') },
     )
     if (!confirmed) return
     setBusy('vacuum')
@@ -99,7 +99,7 @@ function StorageSettings() {
     setBusy(null)
     if (!result) {
       track('storage.maintain', { status: 'fail', duration_ms: Date.now() - startedAt })
-      showToast(t('操作失败，请查看日志'), 2500)
+      showToast(t('操作失败，详情见日志'), 2500)
       await refresh()
       return
     }
@@ -125,7 +125,7 @@ function StorageSettings() {
     setBusy(null)
     if (!result) {
       track('storage.attachments_gc', { status: 'fail' })
-      showToast(t('操作失败，请查看日志'), 2500)
+      showToast(t('操作失败，详情见日志'), 2500)
       return
     }
     track('storage.attachments_gc', {
@@ -155,7 +155,7 @@ function StorageSettings() {
             className="storage-btn"
             onClick={handleCheckpoint}
             disabled={busy !== null || !stats}>
-            {busy === 'checkpoint' ? t('截断中…') : t('截断 WAL 日志')}
+            {busy === 'checkpoint' ? t('压缩中…') : t('压缩日志文件')}
           </button>
           <button
             className="storage-btn"
@@ -167,14 +167,14 @@ function StorageSettings() {
             className="storage-btn primary"
             onClick={handleVacuum}
             disabled={busy !== null || !stats}>
-            {busy === 'vacuum' ? t('重建中…') : t('重建数据库')}
+            {busy === 'vacuum' ? t('整理中…') : t('整理数据库')}
           </button>
         </div>
       </div>
 
       {loading && !stats && <div className="storage-empty">{t('加载中…')}</div>}
       {!loading && !stats && (
-        <div className="storage-empty">{t('数据库不可用（浏览器模式）')}</div>
+        <div className="storage-empty">{t('当前环境无法读取本地数据')}</div>
       )}
 
       {stats && (
@@ -190,11 +190,11 @@ function StorageSettings() {
               <span className="storage-row-value">{formatBytes(stats.dbBytes)}</span>
             </div>
             <div className="storage-row">
-              <span className="storage-row-label">{t('WAL 日志')}</span>
+              <span className="storage-row-label">{t('日志文件')}</span>
               <span className="storage-row-value">{formatBytes(stats.walBytes)}</span>
             </div>
             <div className="storage-row">
-              <span className="storage-row-label">{t('空闲页（可回收）')}</span>
+              <span className="storage-row-label">{t('可回收空间')}</span>
               <span className="storage-row-value">
                 {tpl('$__pages__ 页 · $__size__', {
                   pages: stats.freelistPages,
@@ -214,7 +214,7 @@ function StorageSettings() {
               </span>
             </div>
             <div className="storage-row">
-              <span className="storage-row-label">{t('会话总数')}</span>
+              <span className="storage-row-label">{t('对话总数')}</span>
               <span className="storage-row-value">{String(stats.sessionCount)}</span>
             </div>
             <div className="storage-row">
@@ -226,13 +226,13 @@ function StorageSettings() {
           <div className="storage-note">
             <p>
               {t(
-                '数据库体积偏大时，可用「截断 WAL 日志」回收日志文件，用「重建数据库」归还已删除数据留下的空闲页。',
+                '数据体积偏大时，可用「压缩日志文件」回收日志占用的空间，用「整理数据库」归还已删除数据占用的空间。',
               )}
             </p>
-            <p>{t('退出应用时会自动截断 WAL 日志；重建数据库不会自动执行。')}</p>
+            <p>{t('退出应用时会自动压缩日志；整理数据库不会自动执行。')}</p>
             <p>
               {t(
-                '图片不再被任何消息引用后即可删除；刚写入（30 分钟内）的文件会跳过，避免误删正在发送的图片。',
+                '图片不再被任何消息引用后即可清理。',
               )}
             </p>
           </div>

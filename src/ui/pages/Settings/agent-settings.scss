@@ -23,6 +23,14 @@
     color: var(--text-primary, #1a1a1a);
   }
 
+  // 一句「Agent 是干什么的」：Agent 是行话，得让用户先看懂这个页面的用途
+  .agent-page-desc {
+    margin: 0 0 10px;
+    font-size: var(--font-size-sm);
+    line-height: 1.6;
+    color: var(--text-secondary, #888);
+  }
+
   .agent-add-btn {
     display: flex;
     align-items: center;

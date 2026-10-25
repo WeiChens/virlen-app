@@ -272,7 +272,7 @@ export default observer(function PhoneControlSettings() {
         <div className="phone-control__head-text">
           <h2 className="phone-control__title">{t('手机控制')}</h2>
           <p className="phone-control__sub">
-            {t('用手机扫码配对，在外网查看与操作本机 Agent（P2P 加密链路）。')}
+            {t('用手机扫码配对后，可在外网查看与操作本机 Agent，链路加密。')}
           </p>
         </div>
       </header>
@@ -387,7 +387,7 @@ export default observer(function PhoneControlSettings() {
           />
         ))}
         <p className="phone-control__tip">
-          {t('改名只改本机显示的标签（手机侧不知道本机给它起了什么名），不影响它的授权与连接。 移除后该手机立刻断开（若此刻正连着），它手上的授权与旧二维码一并作废 —— 想再连必须重新扫屏上的新码并由你确认；它自己重连上来的那几次会被直接拒掉（状态胶囊会写「已拒绝接入」）。授权凭证当月有效，每次连接自动续期，最长 90 天。')}
+          {t('改名仅影响本机显示。移除后手机立即断开，需重新扫码确认才能再连；授权按月续期，最长 90 天。')}
         </p>
       </section>
       {/* ICE 配置：默认值由服务端下发，客户端源码不含任何 TURN 凭证。
@@ -432,8 +432,7 @@ export default observer(function PhoneControlSettings() {
           </button>
         </div>
         <p className="phone-control__tip">
-          {t('留空 = 用服务端下发的默认值（信令服务的')} <code>GET /ice</code>
-          {t('，配置在服务端 .env）；填了就完全用你这份（自建 coturn / 内网 STUN / 公共 STUN 都行）。保存后如果手机控制已启用，会重建链路让新配置立即生效（二维码会换一张）。')}
+          {t('留空则使用默认服务器；填写后以该配置为准（自建、内网或公共 STUN / TURN 均可）。')}
         </p>
       </details>
 

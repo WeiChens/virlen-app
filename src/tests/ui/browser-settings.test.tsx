@@ -73,7 +73,7 @@ function blur(el: HTMLInputElement) {
 
 it('两行的取值范围直接取策略常量（不在这里另写一套 min / max）', () => {
   const sleep = numInput('闲置网页休眠')
-  const max = numInput('最多保留网页')
+  const max = numInput('同时保留网页数')
   expect(sleep.max).toBe(String(BROWSER_SLEEP_MAX_SEC))
   expect(sleep.min).toBe('0')
   expect(max.max).toBe(String(BROWSER_MAX_VIEWS_MAX))
@@ -93,7 +93,7 @@ it('输入过程中不落库，失焦才写一次', () => {
 })
 
 it('越界值按边界收敛；空输入回落当前值（不凭空变成 0）', () => {
-  const max = numInput('最多保留网页')
+  const max = numInput('同时保留网页数')
 
   type(max, '9999')
   blur(max)
@@ -112,7 +112,7 @@ it('0 是合法值：关掉策略不能被收敛吃掉', () => {
   blur(sleep)
   expect(settingsState.value.browserSleepAfterSec).toBe(0)
 
-  const max = numInput('最多保留网页')
+  const max = numInput('同时保留网页数')
   type(max, '0')
   blur(max)
   expect(settingsState.value.browserMaxViews).toBe(0)

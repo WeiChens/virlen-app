@@ -171,7 +171,7 @@ function MemorySettings() {
             ? tpl('属于某个项目的记忆，只会在该项目里的对话中带上（当前按 $__path__ 判断）', {
                 path: settingsState.value.defaultWorkspace,
               })
-            : t('还没设默认工作目录，所以「项目」类的记忆暂时不会被带上（可在「Agent」里设置）')}
+            : t('尚未设置默认工作目录，「项目」类记忆暂不带上（可在「聊天」中设置）')}
         </div>
       </section>
 

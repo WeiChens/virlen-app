@@ -859,7 +859,7 @@ export default function AgentEditModal({
                 />
               </div>
               <span className="form-hint">
-                {t('创建会话时将自动使用此模型，用户可在会话中切换')}
+                {t('新对话默认使用此模型，可在对话中切换')}
               </span>
             </div>
             <div className="form-group">
@@ -876,13 +876,13 @@ export default function AgentEditModal({
                 <button
                   className="folder-btn"
                   onClick={pickFolder}
-                  title={t('选择目录')}
+                  title={t('选择文件夹')}
                   type="button">
                   <FolderSvg fill="var(--bg-primary)" />
                 </button>
               </div>
               <span className="form-hint">
-                {t('设置后，该 Agent 创建的会话默认以此目录为工作区')}
+                {t('设置后，该 Agent 创建的对话默认使用此目录')}
               </span>
             </div>
             <div className="form-group">
@@ -909,7 +909,7 @@ export default function AgentEditModal({
               ) : (
                 <span className="form-hint">
                   {t(
-                    '创建会话时，若工作目录下存在该文件（相对路径），其内容会注入系统提示词；留空则不注入，文件不存在、超过 64 KB 或无法解析时自动跳过',
+                    '创建对话时，若工作目录下存在该文件（相对路径），其内容会一并加入提示词；留空则不读取，文件不存在、超过 64 KB 或无法解析时自动跳过',
                   )}
                 </span>
               )}

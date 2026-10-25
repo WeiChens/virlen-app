@@ -64,7 +64,7 @@ function ServiceDetail({ ui }: { ui: Record<string, any> }) {
 /** 列表块（list 工具）。 */
 function ServiceList({ services }: { services: any[] }) {
   if (!services.length) {
-    return <div className="service-empty">{t('本会话暂无后台服务')}</div>
+    return <div className="service-empty">{t('本对话暂无后台服务')}</div>
   }
   return (
     <div className="service-list">
@@ -110,7 +110,7 @@ class BackgroundServiceMessage implements IToolCallMessage {
     try {
       const { name, cmd, id } = props.useContent.input
       if (props.useContent.name === 'list_background_services') {
-        return t('本会话的后台服务')
+        return t('本对话的后台服务')
       }
       if (props.useContent.name === 'start_background_service') {
         return (

@@ -213,9 +213,9 @@ function GeneralSettings() {
     ]
 
   const SANDBOX_MODE_OPTIONS: { value: SandboxMode; label: string, title: string }[] = [
-    { value: 'on', label: t('默认模式'), title: t('默认模式，有读文件的权限，只能在工作目录里有写的权限') },
-    { value: 'readonly', label: t('只读模式'), title: t('只读模式，只有读文件的权限，无法写入文件') },
-    { value: 'off', label: t('完全访问模式'), title: t('完全访问模式，可以访问系统文件，有风险，请谨慎使用') },
+    { value: 'on', label: t('标准模式'), title: t('可读取文件，仅可在工作目录内写入') },
+    { value: 'readonly', label: t('只读模式'), title: t('仅可读取文件，不可写入') },
+    { value: 'off', label: t('完全访问模式'), title: t('可读写任意文件（含系统目录），风险较高') },
   ]
 
   function update<K extends keyof SettingsStore>(
@@ -235,7 +235,7 @@ function GeneralSettings() {
       // §7.1.3 隐私红线：关闭即停止采集并清空本地已采集数据（禁用为破坏性操作）
       const n = clearTelemetry()
       if (n > 0) {
-        showToast(tpl('已清理 $__n__ 条埋点数据', { n }), 1800)
+        showToast(tpl('已清空 $__n__ 条日志', { n }), 1800)
       }
     }
   }
@@ -246,7 +246,7 @@ function GeneralSettings() {
     try {
       const r = await exportTelemetryBundle()
       if (r) {
-        showToast(tpl('已导出 $__n__ 条到本地', { n: r.count }), 2000)
+        showToast(tpl('已导出 $__n__ 条日志', { n: r.count }), 2000)
       }
     } catch (e: any) {
       showToast(t('导出失败') + t('：') + (e?.message || String(e)), 2500)
@@ -260,7 +260,7 @@ function GeneralSettings() {
       await openUrl('https://virlen.cn/trace/')
     } catch (e: any) {
       showToast(
-        t('打开可视化预览失败') + '：' + (e?.message || String(e)),
+        t('无法打开在线分析页') + '：' + (e?.message || String(e)),
         2500,
       )
     }
@@ -268,11 +268,11 @@ function GeneralSettings() {
 
   function handleClearTelemetry() {
     if (telemetryState.bufferedCount === 0) {
-      showToast(t('暂无埋点数据'), 1500)
+      showToast(t('暂无日志'), 1500)
       return
     }
     const n = clearTelemetry()
-    showToast(tpl('已清理 $__n__ 条埋点数据', { n }), 1800)
+    showToast(tpl('已清空 $__n__ 条日志', { n }), 1800)
   }
 
   return (
@@ -397,7 +397,7 @@ function GeneralSettings() {
             <span className="label-text">{t('闲置网页休眠')}</span>
             <span className="label-desc">
               {t(
-                '网页标签切走后超过这么久就释放它的网页视图（省内存），切回来会重新加载当前地址，页面内的滚动位置与表单内容会丢\n0 = 不释放',
+                '网页切至后台超过该时长后释放并重新加载，页面状态不再保留\n0 = 不释放',
               )}
             </span>
           </div>
@@ -431,10 +431,10 @@ function GeneralSettings() {
 
         <div className="setting-row">
           <div className="setting-label">
-            <span className="label-text">{t('最多保留网页')}</span>
+            <span className="label-text">{t('同时保留网页数')}</span>
             <span className="label-desc">
               {t(
-                '同时存活的网页视图超过这个数量时，释放最久没看的那个（正看着的不会被释放）\n0 = 不限',
+                '同时保留的网页上限，超出时释放最久未访问的\n0 = 不限制',
               )}
             </span>
           </div>
@@ -445,7 +445,7 @@ function GeneralSettings() {
                 min={0}
                 max={BROWSER_MAX_VIEWS_MAX}
                 step={1}
-                aria-label={t('最多保留网页')}
+                aria-label={t('同时保留网页数')}
                 value={maxViewsDraft}
                 onChange={(e) => setMaxViewsDraft(e.target.value)}
                 onBlur={() =>
@@ -470,9 +470,9 @@ function GeneralSettings() {
       <div className="section">
         <div className="setting-row">
           <div className="setting-label">
-            <span className="label-text">{t('终端权限')}</span>
+            <span className="label-text">{t('命令执行权限')}</span>
             <span className="label-desc">
-              {t('对终端命令权限的设定')}
+              {t('终端命令可访问的文件范围')}
             </span>
           </div>
           <div className="setting-control">
@@ -488,7 +488,7 @@ function GeneralSettings() {
           <div className="setting-label">
             <span className="label-text">{t('注入环境信息')}</span>
             <span className="label-desc">
-              {t('在系统提示词中自动加入当前 OS、工作目录、工具版本等信息')}
+              {t('在提示词中加入操作系统、工作目录与工具版本信息')}
             </span>
           </div>
           <div className="setting-control">
@@ -504,19 +504,17 @@ function GeneralSettings() {
           </div>
         </div>
       </div>
-      <h2 className="section-title">{t('诊断埋点')}</h2>
+      <h2 className="section-title">{t('运行日志')}</h2>
 
       <div className="section">
         <div className="setting-row">
           <div className="setting-label">
-            <span className="label-text">{t('诊断埋点')}</span>
+            <span className="label-text">{t('运行日志')}</span>
             <span className="label-desc">
-              {t(
-                '开启后在本地记录运行数据，用于排查问题。\n关闭时停止采集；数据仅保存在本地，不会自动外发',
-              )}
+              {t('在本地记录运行数据，用于问题排查，不会上传')}
               {telemetryBuildDisabled && (
                 <span className="telemetry-build-off">
-                  {t('（当前构建已禁用埋点）')}
+                  {t('（此版本已禁用）')}
                 </span>
               )}
             </span>
@@ -526,7 +524,7 @@ function GeneralSettings() {
               <label className="toggle">
                 <input
                   type="checkbox"
-                  aria-label={t('诊断埋点')}
+                  aria-label={t('运行日志')}
                   checked={s.telemetryEnabled}
                   disabled={telemetryBuildDisabled}
                   onChange={(e) => toggleTelemetry(e.target.checked)}
@@ -544,18 +542,18 @@ function GeneralSettings() {
             className="tel-btn"
             onClick={handleExportTelemetry}
             disabled={telemetryBusy || telemetryState.bufferedCount === 0}>
-            {t('导出本地')}
+            {t('导出日志')}
           </button>
           <button
             className="tel-btn primary"
             onClick={handlePreviewTelemetry}>
-            {t('可视化预览')}
+            {t('在线查看')}
           </button>
           <button
             className="tel-btn danger"
             onClick={handleClearTelemetry}
             disabled={telemetryBusy || telemetryState.bufferedCount === 0}>
-            {t('清理数据')}
+            {t('清空日志')}
           </button>
         </div>
       </div>

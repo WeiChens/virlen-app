@@ -172,7 +172,7 @@ describe('轨迹检查器「工具」页', () => {
     act(() => {
       tab(el, '工具')!.click()
     })
-    expect(el.textContent).toContain('本次会话没有可用的工具')
+    expect(el.textContent).toContain('本次对话没有可用的工具')
     expect(el.querySelector('.trajectory-tools__item')).toBeNull()
   })
 

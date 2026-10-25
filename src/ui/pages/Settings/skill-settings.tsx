@@ -116,7 +116,7 @@ function SkillSettings() {
     setRefreshing(true)
     try {
       await refreshSkillsMeta()
-      showToast(t('技能元信息已刷新'), 1000)
+      showToast(t('技能信息已更新'), 1000)
       loadSkills()
     } catch (e: any) {
       showToast(
@@ -215,7 +215,7 @@ function SkillSettings() {
                 className="skill-action-btn"
                 onClick={handleRefresh}
                 disabled={refreshing}>
-                {t('刷新元信息')}
+                {t('刷新信息')}
               </button>
               <button
                 className="skill-import-btn"

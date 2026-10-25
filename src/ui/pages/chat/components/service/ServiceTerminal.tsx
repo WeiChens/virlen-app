@@ -100,7 +100,7 @@ export default function ServiceTerminal({
   } else if (!info) {
     hints.push(t('正在连接终端…'))
   } else if (!info.terminal) {
-    hints.push(t('该服务运行在管道模式下，无法输入（当前平台不支持交互终端）'))
+    hints.push(t('当前平台不支持交互输入，只能查看输出'))
   } else if (!info.running) {
     hints.push(t('服务已结束，只能查看输出'))
   }
@@ -145,7 +145,7 @@ export default function ServiceTerminal({
       <div className="service-console-meta">
         {sessionLabel && (
           <span className="service-console-session">
-            {tpl('会话：$__name__', { name: sessionLabel })}
+            {tpl('对话：$__name__', { name: sessionLabel })}
           </span>
         )}
         <span>{tpl('服务 ID：$__id__', { id: serviceId })}</span>

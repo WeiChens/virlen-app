@@ -70,7 +70,7 @@ function StepWorkdir({ onNext }: Props) {
             <FolderSvg fill="currentColor" />
           </span>
           <span className={'workdir-path-text' + (workdir ? '' : ' is-empty')}>
-            {workdir || t('尚未选择目录')}
+            {workdir || t('尚未选择文件夹')}
           </span>
         </div>
       </div>
@@ -80,7 +80,7 @@ function StepWorkdir({ onNext }: Props) {
       </button>
 
       <p className="workdir-hint">
-        {t('你也可以跳过此步骤，之后在设置中随时修改。')}
+        {t('可跳过此步骤，之后在设置中修改。')}
       </p>
 
       <div className="setup-actions">

@@ -187,8 +187,8 @@ function SearchDialog({
             onChange={(e) => setQuery(e.target.value)}
             placeholder={
               isGlobal
-                ? t('搜索所有会话的消息...')
-                : t('搜索会话中的消息...')
+                ? t('搜索全部对话的消息...')
+                : t('搜索当前对话中的消息...')
             }
             spellCheck={false}
             autoComplete="off"
@@ -250,8 +250,8 @@ function SearchDialog({
                 {hasQuery
                   ? t('试试其他关键词，或切换上方的筛选范围')
                   : isGlobal
-                    ? t('还没有任何会话消息')
-                    : t('当前会话还没有消息')}
+                    ? t('还没有任何对话消息')
+                    : t('当前对话还没有消息')}
               </p>
             </div>
           ) : (

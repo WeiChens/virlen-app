@@ -324,7 +324,7 @@ export function TrajectoryTimeline({
   if (!hasTimeline) {
     return (
       <div className="trajectory-timeline is-empty">
-        <span>{t('这段会话还没有可投影的记录')}</span>
+        <span>{t('这段对话还没有可投影的记录')}</span>
       </div>
     )
   }

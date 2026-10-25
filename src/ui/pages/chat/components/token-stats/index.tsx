@@ -78,7 +78,7 @@ const GROUPS: { key: UsageGroupBy; label: string }[] = [
   { key: 'week', label: '按周' },
   { key: 'month', label: '按月' },
   { key: 'model', label: '按模型' },
-  { key: 'session', label: '按会话' },
+  { key: 'session', label: '按对话' },
   { key: 'kind', label: '按类型' },
 ]
 
@@ -307,7 +307,7 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
           return key.length >= 10 ? key.slice(5) : key
         case 'session': {
           const s = sessionStore.getSession(key)
-          return s?.title || (key ? t('已删除会话') : t('无会话上下文'))
+          return s?.title || (key ? t('已删除对话') : t('无对话上下文'))
         }
         case 'kind':
           return key
@@ -453,7 +453,7 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
   const handleClear = async () => {
     const ok = await MessageBox.propt(
       t('清空用量统计'),
-      t('将删除全部用量流水（不影响会话与消息）。此操作不可撤销，确定继续？'),
+      t('将删除全部用量流水（不影响对话与消息）。此操作不可撤销，确定继续？'),
       { danger: true, confirmText: t('清空') },
     )
     if (!ok) return
@@ -590,8 +590,8 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
                 className="filter-input"
                 type="search"
                 value={sessionKeyword}
-                placeholder={t('搜索会话')}
-                aria-label={t('搜索会话')}
+                placeholder={t('搜索对话')}
+                aria-label={t('搜索对话')}
                 onChange={(e) => {
                   setSessionKeyword(e.target.value)
                   setPage(1)
@@ -634,7 +634,7 @@ const TokenStatsPanel = observer(function TokenStatsPanel({
                 checked={onlyCurrentSession}
                 onChange={(e) => setOnlyCurrentSession(e.target.checked)}
               />
-              {t('仅当前会话')}
+              {t('仅当前对话')}
             </label>
           )}
         </div>

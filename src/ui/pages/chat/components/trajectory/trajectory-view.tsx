@@ -382,7 +382,7 @@ export function TrajectoryView({
       <div className="trajectory-view__body">
         {turns.length === 0 ? (
           <div className="trajectory-view__empty">
-            {t('这段会话还没有可显示的记录，先聊两句吧')}
+            {t('此对话还没有可显示的记录')}
           </div>
         ) : (
           <TrajectoryTable

@@ -58,14 +58,14 @@ const ENTRIES: Entry[] = [
     command: 'panel.files',
     icon: FolderSvg,
     label: '工作区文件',
-    description: '浏览会话工作区的文件',
+    description: '浏览当前对话工作区的文件',
   },
   {
     kind: 'terminal',
     command: 'panel.terminal',
     icon: TerminalSvg,
     label: '新建终端',
-    description: '在会话工作区运行命令',
+    description: '在当前对话工作区运行命令',
   },
   {
     kind: 'browser',
@@ -160,7 +160,7 @@ export default function Guide({ onPick, workspaceReady, loadShells }: Props) {
           const disabled = command.pending === true || noWorkspace
           const Icon = entry.icon
           const description = noWorkspace
-            ? t('这个会话没有工作区目录。')
+            ? t('此对话未设置工作区目录。')
             : t(entry.description)
           // 只有终端有「类型」要挑；宿主没接 `loadShells`（非桌面 / 老调用点）时没有菜单可弹，
           // 就把 ▾ 也省了 —— 不摆一颗点了没东西的控件（整行照旧直开默认那种）

@@ -34,7 +34,7 @@ export default function ExportDialog({
   return (
     <Modal
       visible={visible}
-      title={t('导出会话')}
+      title={t('导出对话')}
       onClose={onCancel}
       footer={
         <ModalFooterButtons
@@ -45,7 +45,7 @@ export default function ExportDialog({
       }>
       <div className="export-dialog-body">
         <p className="export-dialog-hint">
-          {t('将会话「')}
+          {t('将对话「')}
           <strong>{sessionTitle}</strong>
           {t('」导出为 HTML 文件')}
         </p>
@@ -75,7 +75,7 @@ export default function ExportDialog({
           <span className="export-option-main">
             <span className="export-option-text">{t('省略思考文本')}</span>
             <span className="export-option-desc">
-              {t('不包含模型的思考过程（reasoning content）')}
+              {t('不包含模型的思考过程')}
             </span>
           </span>
         </label>

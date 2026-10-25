@@ -252,7 +252,7 @@ export function useInputHandlers(p: Params) {
       if (imageFiles.length > 0) await p.addImages(imageFiles)
       if (otherFiles.length > 0) {
         // HTML5 的 File 对象拿不到磁盘路径，文件附件只能用原生拖拽事件
-        showToast(t('浏览器调试模式拿不到文件路径，请在桌面端拖拽文件'))
+        showToast(t('无法获取该文件的路径，请将文件直接拖入输入框'))
       }
     },
     [p.addImages, p.setIsDragOver],

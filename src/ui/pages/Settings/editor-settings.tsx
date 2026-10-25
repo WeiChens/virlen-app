@@ -120,8 +120,10 @@ function EditorSettings() {
   return (
     <div className="editor-settings">
       <div className="add-section">
-        <h3>{t('配置编辑器')}</h3>
-        <p className="add-hint">{t('选择常用编辑器预设，或自定义命令模板')}</p>
+        <h3>{t('外部编辑器')}</h3>
+        <p className="add-hint">
+          {t('选择默认编辑器预设，或自定义命令模板')}
+        </p>
 
         {/* 预设（不可修改） */}
         <div className="template-grid">

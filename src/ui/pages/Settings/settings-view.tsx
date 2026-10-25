@@ -244,7 +244,7 @@ export default function SettingsView() {
               className={`nav-item ${page === 'editor' ? 'active' : ''}`}
               onClick={() => setPage('editor')}>
               <CodeSvg fill="var(--nav-item-color)" />
-              <span>{t('打开编辑器')}</span>
+              <span>{t('外部编辑器')}</span>
             </button>
             <button
               className={`nav-item ${page === 'about' ? 'active' : ''}`}

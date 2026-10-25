@@ -189,7 +189,7 @@ function WorkspaceDisplay({
 
   const label = value
     ? value.split('/').pop()?.split('\\').pop()
-    : t('选择目录')
+    : t('选择文件夹')
 
   const showDropdown = !sessionId && workspaces && workspaces.length > 0
   return (
@@ -203,7 +203,7 @@ function WorkspaceDisplay({
           sessionId
             ? value
               ? tpl('打开工作目录：$__path__', { path: value })
-              : t('该会话未设置工作目录')
+              : t('此对话未设置工作目录')
             : value
               ? `${tpl('当前工作目录：$__path__', { path: value })}\n${t('点击更换')}`
               : t('点击选择工作目录')
@@ -259,7 +259,7 @@ function WorkspaceDisplay({
                 }}
                 type="button">
                 <span className="workspace-dropdown-label">
-                  {t('选择其他目录...')}
+                  {t('选择其他文件夹...')}
                 </span>
               </button>
             </div>
@@ -590,7 +590,7 @@ function ChatView() {
       const key = panelKeyOf(sessionId)
       const cwd = panelWorkspacePath()
       if (!cwd) {
-        void MessageBox.info(t('无法打开终端'), t('这个会话没有工作区目录。'))
+        void MessageBox.info(t('无法打开终端'), t('此对话未设置工作区目录。'))
         return
       }
       const remembered = settingsState.value.terminalShell || undefined

@@ -147,7 +147,7 @@ function CodeDisplaySettings() {
 
         {follow && (
           <div className="cd-hint">
-            {t('跟随应用主题：界面亮色用 Virlen Light，暗色用 Virlen Dark')}
+            {t('跟随应用主题切换亮暗配色')}
           </div>
         )}
 
@@ -164,12 +164,12 @@ function CodeDisplaySettings() {
         </div>
       </div>
 
-      <h2 className="section-title">{t('字体')}</h2>
+      <h2 className="section-title">{t('字体与排版')}</h2>
 
       <div className="section">
         <div className="setting-row">
           <div className="setting-label">
-            <span className="label-text">{t('字族')}</span>
+            <span className="label-text">{t('字体')}</span>
             <span className="label-desc">
               {t('代码区使用的等宽字体，缺字体时按系统回退')}
             </span>

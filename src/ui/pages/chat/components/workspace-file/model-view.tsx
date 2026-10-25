@@ -257,7 +257,7 @@ export default function ModelView({ bytes, name, onOpenInSystem }: Props) {
         <button
           type="button"
           className={`wfp-model-toggle${options.useModelLights ? ' is-active' : ''}`}
-          title={t('用模型自带的灯光（按预览尺度归一）')}
+          title={t('使用模型自带的灯光')}
           aria-pressed={options.useModelLights}
           onClick={() => toggle('useModelLights')}>
           {t('模型灯光')}
