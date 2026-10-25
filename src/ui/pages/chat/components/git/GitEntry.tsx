@@ -119,6 +119,12 @@ export const GitEntry = observer(function GitEntry({
 
   const repo = gitStore.repo
   const count = repo ? changedFileCount(gitStore.snapshot) : 0
+  /**
+   * 有操作在跑（提交 / 合并 / 推送…）：图标呼吸一下，作为「它还在动」的恒定信号。
+   * 面板开着也保留 —— 推送这类长操作用户会顺手把气泡收起来等，两种状态下同一个信号
+   * 才不会有「一关就没动静」的空档。
+   */
+  const running = gitStore.busy !== null
   const title = !repo
     ? t('源代码管理')
     : repo.bare
@@ -131,9 +137,10 @@ export const GitEntry = observer(function GitEntry({
     <div className="git-entry" ref={wrapRef}>
       <button
         type="button"
-        className={`toolbar-icon-btn git-entry-btn ${open ? 'active' : ''}`}
+        className={`toolbar-icon-btn git-entry-btn ${open ? 'active' : ''}${running ? ' is-busy' : ''}`}
         onClick={() => setOpen((v) => !v)}
-        title={title}>
+        title={title}
+        aria-busy={running || undefined}>
         <GitSvg />
         {count > 0 && <span className="git-badge">{badgeText(count)}</span>}
       </button>

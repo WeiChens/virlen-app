@@ -41,6 +41,7 @@ import GlobeSvg from '@/ui/components/icons/GlobeSvg'
 import AddSvg from '@/ui/components/icons/AddSvg'
 import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
 import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
+import HideRightSideBarSvg from '@/ui/components/icons/HideRightSideBarSvg'
 import WorkspaceFilePanel from '../workspace-file'
 import ServiceTerminal from '../service/ServiceTerminal'
 import UserTerminal from '../terminal/UserTerminal'
@@ -86,7 +87,7 @@ interface Props {
   onExpandedChange?: (expanded: boolean) => void
   /** 标签栏的「+」：打开 / 切到开始页（不传则不显示这颗按钮） */
   onOpenGuide?: () => void
-  /** 标签栏的「»」：收起右侧栏（不传则不显示） */
+  /** 标签栏右端的收起按钮：收起右侧栏（不传则不显示） */
   onCollapse?: () => void
   /**
    * 开始页点了一扇门：宿主持有标签状态，由它把开始页原地换成目标页。
@@ -1007,7 +1008,7 @@ function SidePanel({
                 title={t('收起右侧栏')}
                 aria-label={t('收起右侧栏')}
                 onClick={onCollapse}>
-                <CloseSvg />
+                <HideRightSideBarSvg />
               </button>
             )}
           </div>

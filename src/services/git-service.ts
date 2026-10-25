@@ -76,7 +76,7 @@ let statusTaskId: string | null = null
 /** 进行中的行数统计的任务 id（同理：新的一次先停掉旧的） */
 let statsTaskId: string | null = null
 
-/** 进行中的网络操作任务 id：面板关掉时也停掉（网络超时 10 分钟） */
+/** 进行中的网络操作任务 id：只由同步浮层的「取消」/ 被新的同步取代而停止（关面板不停） */
 let syncTaskId: string | null = null
 
 /** 错误 → 一行文案（Rust 侧已拼好 stderr） */
@@ -333,20 +333,14 @@ export function setPanelOpen(open: boolean): void {
   runInAction(() => {
     gitStore.open = open
   })
-  if (!open && statusTaskId) {
-    stopTask(statusTaskId)
-    statusTaskId = null
-  }
-  if (!open && statsTaskId) {
-    stopTask(statsTaskId)
-    statsTaskId = null
-  }
-  // 网络操作不随面板关闭丢结果，但别让它在后台白等到超时
-  if (!open) cancelSync()
+  // ⚠️ 收起气泡**不中断**任何进行中的 git 调用：用户点完提交 / 推送后随手点空白处是常态，
+  //    那次操作必须跑完（结果落在 store 与 toast 上，不需要面板在场）。中断只走用户显式
+  //    点「取消」（`cancelSync`，见同步浮层）或下一次刷新取代上一次（taskId 对账）。
 }
 
 /**
- * 取消进行中的网络操作。只是发起中断：命令壳会等子进程真正退出后才报「已取消」。
+ * 取消进行中的网络操作（用户点同步浮层的「取消」）。
+ * 只是发起中断：命令壳会等子进程真正退出后才报「已取消」。
  */
 export function cancelSync(): void {
   if (!syncTaskId) return
@@ -855,7 +849,7 @@ async function syncAction(
   try {
     result = await run(label, () => call(dir, remote, taskId), {
       dialog,
-      // `cancelSync()`（用户点取消 / 关面板）会把 `syncTaskId` 置空，再次发起会换成新 id：
+      // `cancelSync()`（同步浮层的「取消」）会把 `syncTaskId` 置空，再次发起会换成新 id：
       // 两种都说明「这一次的失败是我自己叫停的」
       stale: () => syncTaskId !== taskId,
     })

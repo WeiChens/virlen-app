@@ -114,6 +114,16 @@ describe('源代码管理 · 面板样式契约', () => {
     expect(z).toBeLessThan(modalZ) // 低于全局 Modal：确认框必须压在上面
   })
 
+  it('入口图标的「运行中」呼吸动画：类真的落到按钮上，关键帧也在', () => {
+    // 有操作在跑就有这个类（开 / 关气泡都算）：长操作时用户会收起气泡等
+    expect(selectors(panelCss)).toContain('.git-entry .git-entry-btn.is-busy')
+    expect(selectors(panelCss)).toContain('.git-entry .git-entry-btn.is-busy svg')
+    expect(panelCss).toMatch(
+      /\.git-entry \.git-entry-btn\.is-busy svg\s*\{[^}]*animation:[^;]*git-entry-breathing/,
+    )
+    expect(panelCss).toContain('@keyframes git-entry-breathing')
+  })
+
   it('面板引用的每个主题令牌都在 theme.scss 里真实定义（否则 fallback 永远生效）', () => {
     const defined = new Set(
       [...themeCss.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]),

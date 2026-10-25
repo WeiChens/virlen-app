@@ -325,7 +325,7 @@ it('开始页标签：标题是「开始页」，图标与关闭按钮都在', a
   expect(tab.querySelector('.side-panel-tab-close')).not.toBeNull()
 })
 
-it('标签栏：「+」开开始页、全屏居中、✕ 收起面板，各自只上报一次', async () => {
+it('标签栏：「+」开开始页、全屏居中、收起按钮收面板，各自只上报一次', async () => {
   await renderPanel([pageTab('files')])
 
   const actions = [...document.querySelectorAll<HTMLButtonElement>('.side-panel-tabbar-action')]

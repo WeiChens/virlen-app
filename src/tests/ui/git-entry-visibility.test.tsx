@@ -78,6 +78,29 @@ it('没装 git / 探测失败：同样不渲染入口', () => {
   expect(document.querySelector('.git-entry')).toBeNull()
 })
 
+it('操作在跑（开 / 关气泡都一样）：图标带 `is-busy`；空闲就摘掉', () => {
+  runInAction(() => {
+    gitStore.repo = {
+      root: '/tmp/repo',
+      git_dir: '/tmp/repo/.git',
+      bare: false,
+      version: '2.44.0',
+      caps: { porcelain_v2: true, switch: true, restore: true },
+    }
+    gitStore.busy = 'push'
+  })
+  mount()
+  const btn = document.querySelector('.git-entry-btn')!
+  expect(btn.classList.contains('is-busy')).toBe(true)
+
+  act(() => {
+    runInAction(() => {
+      gitStore.busy = null
+    })
+  })
+  expect(document.querySelector('.git-entry-btn')!.classList.contains('is-busy')).toBe(false)
+})
+
 it('已有仓库：入口与徽标出现', () => {
   runInAction(() => {
     gitStore.repo = {

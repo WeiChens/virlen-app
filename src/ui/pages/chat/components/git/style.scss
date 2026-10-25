@@ -17,6 +17,30 @@
       color: var(--primary-color, #3b6ef6);
       background: var(--hover-bg, #f0f0f0);
     }
+
+    /* 有操作在跑：图标缓慢呼吸（颜色是静态信号，动效只是加强）。开 / 关气泡都亮，
+       推送这类长操作用户会收起来等，一致才不会有「一关就没动静」的空档。
+       ⚠️ 动画只给 svg：整颗按钮一起透明度呼吸会把徽标上的变更数也闪掉一半时间。 */
+    &.is-busy {
+      color: var(--primary-color, #3b6ef6);
+
+      svg {
+        animation: git-entry-breathing 1.4s ease-in-out infinite;
+      }
+    }
+  }
+}
+
+/* 呼吸：透明度走合成层，不触发重绘。`prefers-reduced-motion` 由 App.css 的全局
+   降级饭口接管（时长归 0 = 只剩 `.is-busy` 的品牌色），不动它。 */
+@keyframes git-entry-breathing {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.3;
   }
 }
 
