@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * `web_search` 结果格式 golden 一致性测试（TS 侧）
  *

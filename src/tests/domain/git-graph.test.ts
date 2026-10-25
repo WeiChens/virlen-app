@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 提交图的纯函数用例（`domain/git/graph.ts`）。
  *

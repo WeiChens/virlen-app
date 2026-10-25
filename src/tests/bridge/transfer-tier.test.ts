@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * §33 传输档位 —— 「TURN 中继 / 类型未知时，只发主要内容」。
  *

@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 提示词契约一致性测试（与工具定义「机制 C」同一模式）
  *

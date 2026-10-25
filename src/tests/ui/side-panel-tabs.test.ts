@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 右侧面板标签页模型的纯函数口径。
  *

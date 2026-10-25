@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 侧边栏「待你回答」徽标的数据源（`ui/store/pendingInteractionStore`）。
  *

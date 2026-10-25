@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Security 端口测试 — 路径安全校验逻辑
  *

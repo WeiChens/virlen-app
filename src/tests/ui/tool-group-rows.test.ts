@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 工具组**行模型**的纯函数用例（`message-list/rows.ts`）。
  *

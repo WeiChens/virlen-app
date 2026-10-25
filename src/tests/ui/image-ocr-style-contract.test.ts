@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 图片预览 OCR 文字层的「样式契约」。
  *

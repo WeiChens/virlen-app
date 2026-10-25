@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * streamMarkdown.splitStablePrefix — 流式 Markdown「前缀冻结」切分策略测试
  *

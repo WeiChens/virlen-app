@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 电脑侧「通讯层」埋点单测（§25）。
  *

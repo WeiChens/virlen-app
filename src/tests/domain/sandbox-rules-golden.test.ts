@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 「忽略沙盒命令」规则 golden 一致性测试（TS 侧）
  *

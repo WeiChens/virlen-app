@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 「右侧面板能预览什么」是同一份知识，两处使用：
  * - TS 镜像 `src/domain/files/preview.ts`（面板判定 + present 的 JS 回退执行器）；

@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 网页视图存活策略（`side-panel/browser/view-policy.ts`）：闲置休眠 + 上限 LRU。
  *

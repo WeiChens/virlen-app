@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * telemetry SDK 测试 — 打码 / 文本 / 哈希 / 链路字段解析 / 错误抽取
  *

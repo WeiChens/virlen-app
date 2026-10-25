@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 已配对手机的**改名**（`PairingStore.rename`）。
  *

@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 3D 预览的取景主体判定（`model-framing.ts`）。
  *

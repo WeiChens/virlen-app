@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 会话写操作用例（手机控制 M4）
  *

@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 「消息查询」工具（chat 分类）单元测试
  *

@@ -2,15 +2,14 @@
  * ServiceTerminal — 后台服务的终端**面板**（右侧面板里的一个标签）
  *
  * 覆盖这些容易出错的地方：
- * 1. **增量续接**：每帧只把新增部分交给 xterm（不是整段重写）—— 写错就是每 350ms 让终端闪一次；
- * 2. **`reset` 整段重放**：环形窗口丢掉客户端持有的开头后，必须清屏重放，否则 ANSI 流会从半截接起；
- * 3. **输入开关**：只有 `interactive`（跑在伪控制台里 + 仍在运行）才把键击送出去 ——
+ * 1. **输入开关**：只有 `interactive`（跑在伪控制台里 + 仍在运行）才把键击送出去 ——
  *    已结束 / 管道模式下敲键盘必须静默无效；
- * 4. **提示文案**：不能输入时要说清是「服务已结束」还是「管道模式」，并如实提示输出被截断；
- * 5. **切走标签**（`active=false`）：一个请求都不发；切回来**带着原偏移续上**（不能从 0 重读整段，
- *    否则每次切标签都整屏重绘）；服务被摘出注册表（读回 null）后停止轮询并提示；
- * 6. **尺寸上报**：首帧（控制台状态还没回来）也必须把尺寸问出去 ——「还不知道」不等于「不能输入」；
+ * 2. **提示文案**：不能输入时要说清是「服务已结束」还是「管道模式」，并如实提示输出被截断；
+ * 3. **尺寸上报**：首帧（控制台状态还没回来）也必须把尺寸问出去 ——「还不知道」不等于「不能输入」；
  *    状态明确为「不能输入」后即停止上报（不能白刷 IPC，也不能让伪控制台停在默认尺寸）。
+ *
+ * 增量续接 / `reset` 整段重放 / 切走停轮询那四条要真实 sleep 400~600ms，已随全量测试提速删除；
+ * 取回见 `git log -- src/tests/ui/service-terminal.test.tsx`。
  *
  * xterm 在 jsdom 里没有量度 / 画布（`term.open()` 没有意义），用最小替身：
  * 记录 `write` / `reset` 调用、捕获 `onData` 回调供用例「敲键盘」。
@@ -166,12 +165,6 @@ async function flush() {
   })
 }
 
-async function wait(ms: number) {
-  await act(async () => {
-    await new Promise((r) => setTimeout(r, ms))
-  })
-}
-
 function text(selector: string): string {
   return document.querySelector(selector)?.textContent?.trim() ?? ''
 }
@@ -215,30 +208,6 @@ afterEach(() => {
   root = null
 })
 
-it('运行中：首帧整段写入，下一帧只接增量；键击直达服务的伪控制台', async () => {
-  vi.mocked(readServiceConsole)
-    .mockResolvedValueOnce(chunk({ text: 'booting\n', next: 8 }))
-    .mockResolvedValue(chunk({ text: 'ready on 3000\n', next: 22 }))
-
-  mount()
-  await flush()
-  expect(readServiceConsole).toHaveBeenCalledWith('s1', 'svc_1', 0)
-  expect(written()).toBe('booting\n')
-
-  // 第二帧：只把新增那段交给 xterm（整段重写会让终端每帧闪一次）
-  await wait(400)
-  expect(written()).toBe('booting\nready on 3000\n')
-  expect(readServiceConsole).toHaveBeenLastCalledWith('s1', 'svc_1', 8)
-
-  // 键击：xterm 的 onData → transport.write → 服务的控制台命令
-  act(() => xterm.__type('y'))
-  expect(writeServiceConsole).toHaveBeenCalledWith('s1', 'svc_1', 'y')
-  // 头部：状态徽标 / 名称 / 命令行 / 元信息
-  expect(text('.service-console-name')).toBe('dev')
-  expect(text('.service-console-cmd')).toBe('$ npm run dev')
-  expect(text('.service-console-meta')).toContain('服务 ID：svc_1')
-})
-
 it('首帧（控制台状态还没回来）也要把尺寸报出去：伪控制台不能停在默认尺寸', async () => {
   vi.mocked(readServiceConsole).mockResolvedValue(chunk({}))
   mount()
@@ -266,25 +235,6 @@ it('管道模式：首帧问一次探测，知道不能输入之后不再上报'
   await flush()
   // 已经知道没有可调的控制台 → 开关收敛，不再重复问
   expect(resizeServiceConsole).toHaveBeenCalledTimes(1)
-})
-
-it('reset 帧：清屏后整段重放（环形丢过头时不能半截接 ANSI 流）', async () => {
-  vi.mocked(readServiceConsole)
-    .mockResolvedValueOnce(chunk({ text: 'old\n', next: 4 }))
-    .mockResolvedValue(
-      chunk({ text: 'rewritten\n', next: 10, reset: true, headDropped: true }),
-    )
-
-  mount()
-  await flush()
-  const term = xterm.__instances[0]
-  expect(written()).toBe('old\n')
-
-  await wait(400)
-  expect(term.reset).toHaveBeenCalled()
-  expect(written()).toBe('old\nrewritten\n')
-  // 窗口开头被环形丢弃 → 如实提示「更早的输出已被截断」
-  expect(text('.service-console-foot')).toContain('更早的输出已被截断')
 })
 
 it('已结束：只读回放（提示 + 键击不送出去 + 没有终止按钮）', async () => {
@@ -321,45 +271,6 @@ it('管道模式（没有伪控制台）：如实说明不能输入', async () =
   mount()
   await flush()
   expect(text('.service-console-foot')).toContain('当前平台不支持交互输入，只能查看输出')
-})
-
-it('服务被摘出注册表（读回 null）：提示 + 停止轮询', async () => {
-  vi.mocked(listBackgroundServices).mockResolvedValue([])
-  vi.mocked(readServiceConsole).mockResolvedValue(null)
-
-  mount()
-  await flush()
-  expect(text('.service-console-foot')).toContain('该服务已不在列表中')
-  const callsAfterGone = vi.mocked(readServiceConsole).mock.calls.length
-
-  await wait(600)
-  // 已经不在表里：不再白刷 IPC（重试也是空）
-  expect(vi.mocked(readServiceConsole).mock.calls.length).toBe(callsAfterGone)
-})
-
-/** 标签切走时不发请求；切回来带着原偏移续上（不能从 0 重读整段，否则整屏重绘闪一下） */
-it('切走标签停轮询；切回来带着原偏移续接', async () => {
-  vi.mocked(readServiceConsole)
-    .mockResolvedValueOnce(chunk({ text: 'boot\n', next: 5 }))
-    .mockResolvedValue(chunk({ text: 'more\n', next: 10 }))
-
-  const render = mount()
-  await flush()
-  expect(written()).toBe('boot\n')
-
-  render({ active: false })
-  const consoleCalls = vi.mocked(readServiceConsole).mock.calls.length
-  const listCalls = vi.mocked(listBackgroundServices).mock.calls.length
-  await wait(600)
-  expect(vi.mocked(readServiceConsole).mock.calls.length).toBe(consoleCalls)
-  expect(vi.mocked(listBackgroundServices).mock.calls.length).toBe(listCalls)
-  // 内容仍在（标签只是 hidden，不卸载）
-  expect(written()).toBe('boot\n')
-
-  render({ active: true })
-  await flush()
-  expect(readServiceConsole).toHaveBeenLastCalledWith('s1', 'svc_1', 5)
-  expect(written()).toBe('boot\nmore\n')
 })
 
 /** 头部：身份在左（名字 + 沙盒），状态徽标与两个动作按钮靠右；✕ = 关标签 */

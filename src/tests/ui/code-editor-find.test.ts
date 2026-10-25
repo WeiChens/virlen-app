@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 代码编辑器的查找（Ctrl/Cmd+F：右上角搜索框 + 命中高亮）—— 守三件只在运行期才露的事。
  *

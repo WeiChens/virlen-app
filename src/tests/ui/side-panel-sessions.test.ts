@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 右侧面板的**会话分桶**（`side-panel/sessions.ts`）—— 「收起 / 切会话不清状态」靠的就是它。
  *

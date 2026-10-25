@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 会话内待应答卡片的**挂载位置**契约（源码级）。
  *

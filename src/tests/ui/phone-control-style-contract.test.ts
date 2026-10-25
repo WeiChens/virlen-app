@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * phone-control 设置页的「类名 ↔ 样式定义」契约（§26）。
  *

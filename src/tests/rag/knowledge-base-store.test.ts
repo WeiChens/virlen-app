@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * knowledge-base-store 测试 — Tauri invoke 委托层
  *

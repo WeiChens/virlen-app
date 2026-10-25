@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * `edit_file` 的差异输入适配层（`EditFileMessage` 里的 `toMonacoDiffInput`）：行模型 → Monaco 的两份文本。
  *

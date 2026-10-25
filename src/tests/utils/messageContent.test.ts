@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * messageContent — 用户消息 content 组装 / 解析测试
  *

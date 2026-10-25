@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * EventEmitter 测试 — 事件发布/订阅系统
  *

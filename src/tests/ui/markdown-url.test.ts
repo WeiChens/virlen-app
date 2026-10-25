@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Markdown 图片 URL 的放行规则。
  *

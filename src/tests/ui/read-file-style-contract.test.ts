@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * read_file 多文件下拉的样式契约（选项单行 / 面板按内容撑宽 / 面板跟代码块一起深色）。
  *

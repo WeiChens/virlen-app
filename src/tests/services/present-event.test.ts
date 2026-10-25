@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * `present` → 右侧面板（自动打开那一次的唯一落点）
  *

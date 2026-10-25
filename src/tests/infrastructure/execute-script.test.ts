@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * execute_script 脚本文件编码测试
  *

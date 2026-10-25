@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * sessionRepo.saveDiff — 会话元数据「按差异回写」回归测试
  *

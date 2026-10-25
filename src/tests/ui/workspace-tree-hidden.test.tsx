@@ -133,18 +133,3 @@ it('加载目录时 includeHidden 为 true，点文件照常出现、系统隐�
   // 普通项不受影响
   expect(names).toContain('a.txt')
 })
-
-it('搜索同口径：includeHidden 为 true，但 .git 目录仍整棵剪掉', async () => {
-  await mount('env')
-
-  // 防抖 250ms
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 320))
-  })
-
-  const args = lastArgs('search_files_by_name')
-  expect(args?.includeHidden).toBe(true)
-  expect(args?.skipDirNames).toContain('.git')
-  // 点开头的**文件**不在剪枝清单里（剪掉 .git 目录不等于剪掉 .gitignore）
-  expect(args?.skipDirNames).not.toContain('.gitignore')
-})

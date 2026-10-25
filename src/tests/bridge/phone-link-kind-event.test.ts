@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 电脑端发出 `host.event.connection.changed`（协议表里那个「从未发过」的事件）。
  *

@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 终端输出处理（processTerminalOutput）—— 与 Rust 侧 `process_terminal_output` 逐条对齐。
  *

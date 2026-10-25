@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * ToolRegistry 测试（机制 C：定义来自权威源，前端只注册执行器）
  *

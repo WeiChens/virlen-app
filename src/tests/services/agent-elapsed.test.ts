@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 「本轮 agent 循环总耗时」写回 —— `stream_end` 的消费侧。
  *

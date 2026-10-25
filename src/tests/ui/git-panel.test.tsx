@@ -1,3 +1,7 @@
+// @vitest-environment jsdom
+// 为什么回退 jsdom：差异视图会挂真 `@monaco-editor/react`，它的 AMD loader 往 body 里插 `<script src>`；
+// happy-dom 会给这个脚本发 load / error，loader 的回调里读不到 `window.monaco` 就变成未处理拒绝
+// （vitest 因此判 exit 1）。jsdom 不加载外部脚本，这条路径根本不会触发。
 /**
  * GitPanel — 面板主体的界面行为（实测反馈里那几条，都是「看起来小事、错了很难受」的那种）。
  *

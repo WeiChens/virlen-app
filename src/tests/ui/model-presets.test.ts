@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 3D 预览的场景预设（`model-presets.ts`）：纯数据，**不 import three**，所以能直接单测。
  *

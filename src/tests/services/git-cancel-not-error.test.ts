@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 「取消」不是错误：被取代 / 被用户叫停的那次 git 调用**不许**落到 `gitStore.error`。
  *

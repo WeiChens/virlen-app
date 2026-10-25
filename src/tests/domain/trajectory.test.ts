@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 轨迹投影层单测：只测「消息 → 轮次/组/行」的规则，不碰 React。
  */

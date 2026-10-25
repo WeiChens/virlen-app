@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 提交行的右键菜单项（`git/commit-menu.ts`）：**给了哪些项、按什么条件给**。
  *

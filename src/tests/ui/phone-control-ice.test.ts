@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 「ICE 从哪来」的 store 用例（M7，§31）。
  *

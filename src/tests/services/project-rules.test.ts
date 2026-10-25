@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 「项目规则 / 记忆文件」（AGENTS.md 等）—— 会话创建时注入系统提示词的契约
  *

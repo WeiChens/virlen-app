@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * parse_document 工具（TS 回退路径）—— 转发契约测试
  *

@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * present 工具（JS 回退路径）— 交付物语义
  *

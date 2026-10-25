@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * vision_image_created —— 「工具把图片交给模型」注入消息的前端落点。
  *

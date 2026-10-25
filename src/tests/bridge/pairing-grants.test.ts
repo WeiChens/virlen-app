@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 配对表 / 授权凭证（M6，§30.4）—— 纯逻辑用例。
  *

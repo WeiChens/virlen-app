@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * sessionStore.ensureContextLoaded — 发送路径「只加载到最后一条 summary」的回归测试
  *

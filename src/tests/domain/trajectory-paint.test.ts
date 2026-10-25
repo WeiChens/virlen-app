@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 概览条的 canvas 绘制指令与命中判定（纯函数口径）。
  *

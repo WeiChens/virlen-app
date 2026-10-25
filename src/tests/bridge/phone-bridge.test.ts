@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 电脑侧 bridge 集成测试（M2-3）。
  *

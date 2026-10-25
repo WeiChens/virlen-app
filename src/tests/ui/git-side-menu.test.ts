@@ -1,8 +1,9 @@
+// @vitest-environment node
 /**
  * 差异弹窗左清单的行右键菜单项（`git/side-menu.ts`）：**给了哪些项、按什么顺序、路径是不是绝对的**。
  *
- * 菜单本体（定位 / 点外面关闭 / 禁用态）由 `context-menu.test.tsx` 守，两个弹窗的接线由
- * `git-diff-modal.test.tsx` / `git-commit-modal.test.tsx` 守 —— 这里只钉「组装口径」：
+ * 菜单本体（定位 / 点外面关闭 / 禁用态）由 `context-menu.test.tsx` 守，提交详情弹窗的接线由
+ * `git-commit-modal.test.tsx` 守（差异弹窗那份 `git-diff-modal.test.tsx` 已随测试提速删除，历史见 git）—— 这里只钉「组装口径」：
  * 写入口在最前、引用居中、打开类在后且带分隔线；已删除的文件只留「复制路径」；
  * 仓库根相对路径必须补成绝对路径（`openPath` / `revealItemInDir` 只认绝对）。
  */

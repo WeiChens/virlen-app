@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 3D 预览的两块「不碰 three」的部分：
  * 1. **加载器注册表**（`model-loaders.ts`）—— 扩展名 → loader 的镜像必须与 `domain/files/preview.ts`

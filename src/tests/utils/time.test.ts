@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * `formatCommitTime` —— 提交记录的时间展示（提交列表口径，用户定的 2026-10）。
  *

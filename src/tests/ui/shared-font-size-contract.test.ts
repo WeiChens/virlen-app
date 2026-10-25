@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * shared 组件（`src/ui/components/shared`）的「字号跟随」契约。
  *

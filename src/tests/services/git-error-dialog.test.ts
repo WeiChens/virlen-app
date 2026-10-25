@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Git 失败的**落点**契约：报错进持久弹窗（`gitStore.errorBox`），而不是几秒就消失的 toast。
  *

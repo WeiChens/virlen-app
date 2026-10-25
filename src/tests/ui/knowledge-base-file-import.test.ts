@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 知识库文件导入：同名冲突策略 + 二进制拦截 + 报账文案
  *

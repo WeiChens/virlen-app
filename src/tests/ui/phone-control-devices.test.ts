@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * `phoneControlStore` 的设备列表 / 在线标记（M8 真机缺陷回归）。
  *

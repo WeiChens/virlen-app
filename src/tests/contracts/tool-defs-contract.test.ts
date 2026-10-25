@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 工具契约一致性测试（机制 C）
  *

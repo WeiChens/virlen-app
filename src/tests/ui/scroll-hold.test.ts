@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 「按住滚动偏移」状态机（message-list/scroll-hold.ts）
  *

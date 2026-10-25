@@ -8,6 +8,8 @@
  * 书写。Vitest 运行时已提供全局 vi（globals: true），但编辑器需要显式 import 才有类型提示。
  */
 import { vi } from 'vitest'
+// 必须是第一条 import：node 环境的存储垫片要在其它模块求值前挂上（见该文件头注释）
+import './node-globals'
 import { setToolDefinitionsLoader } from '@/domain/tools'
 import { loadToolDefinitions } from '@/infrastructure/tools/definitions-source'
 import { setPromptTexts } from '@/domain/agent'

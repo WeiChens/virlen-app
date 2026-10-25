@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 差异内核（`utils/diff`）—— 全项目「左右对比」的**唯一实现**（jsdiff 的 diffLines + 组内 diffChars，
  * 与 xwjc-app 的 `VersionCompareDetailPage/diff.js` 同一套）。

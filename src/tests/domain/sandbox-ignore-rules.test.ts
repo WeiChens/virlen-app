@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * sandbox-ignore-rules 领域模块单测 — 「忽略沙盒命令」规则匹配
  *

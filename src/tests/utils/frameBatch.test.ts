@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * frameBatch — 帧合批器语义测试
  *

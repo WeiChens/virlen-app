@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * parse_document 多文档下拉的样式契约（紧凑 ghost 触发器 / 宽度跟内容走 / 不回写共享 Select）。
  *

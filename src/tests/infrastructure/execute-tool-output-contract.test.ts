@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * execute 组工具「模型侧固定英文」契约测试（P4b-②）
  *

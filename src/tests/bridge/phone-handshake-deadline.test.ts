@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 「握手截止」兜底（P1）—— 链路已 open 却迟迟不握手 → 到期踢链。
  *

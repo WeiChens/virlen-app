@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 界面缩放的口径（纯函数）：设置页滑杆、hook、埋点读的都是这一份。
  *

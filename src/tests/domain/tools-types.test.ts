@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Tool Types 测试 — 工具相关类型和类
  *

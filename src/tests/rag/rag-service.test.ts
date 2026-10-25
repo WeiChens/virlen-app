@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * rag-service 测试 — 知识库服务编排层
  *

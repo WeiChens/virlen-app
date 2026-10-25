@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * RAG 领域类型测试 — 知识库相关的类型定义和默认值
  *

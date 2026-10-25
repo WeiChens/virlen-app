@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * tool-call 目录的「样式跟随设置」契约。
  *

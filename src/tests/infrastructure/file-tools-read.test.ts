@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * read_file 工具 — 行内字符上限保护测试
  *

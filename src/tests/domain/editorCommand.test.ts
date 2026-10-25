@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * editorCommand.ts 工具函数测试
  *

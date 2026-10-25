@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 回补历史时的「阅读锚点」纯函数用例（`message-list/helpers.ts` 的
  * `captureOlderAnchor` / `resolveOlderAnchorRow`）。

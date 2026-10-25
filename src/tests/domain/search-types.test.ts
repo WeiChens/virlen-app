@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Search 领域类型测试 — 搜索供应商相关类型定义
  *

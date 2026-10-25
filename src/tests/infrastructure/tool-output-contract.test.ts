@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Group A 工具「模型侧固定英文 + UI 侧结构化 uiData」契约测试（P4b）
  *

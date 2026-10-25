@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * codicon 图标字体（Monaco 精简构建）—— 守「图标在界面上不是豆腐块」这条线。
  *

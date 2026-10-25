@@ -35,7 +35,7 @@
 | 层 | 技术 |
 |---|---|
 | 前端 | React 19、TypeScript（`strict: true` 但 `strictNullChecks: false`）、Vite 7、MobX 6（`mobx` / `mobx-react-lite`）、Sass、react-markdown + remark-gfm、PrismJS、Monaco、turndown + cheerio、JSZip、`@tanstack/react-virtual`、echarts、xterm、virlen-remote（手机控制传输层，自维护 npm 包） |
-| 测试 | Vitest 4（jsdom，全局 `vi`）；Rust 内联 `#[cfg(test)] mod tests` |
+| 测试 | Vitest 4（默认 happy-dom；纯逻辑用例用文件头 `// @vitest-environment node`，个别回退 jsdom；实测 44s→15s，见 §7）；Rust 内联 `#[cfg(test)] mod tests` |
 | 后端 | Tauri 2、Tokio、Serde、rusqlite（bundled, WAL）、reqwest（原生 SSE）、turbovec + text-splitter（RAG）、grep/walkdir/ignore（文件搜索）、sha2、trash、quasivision、image、pdf-extract |
 | 包管理 | pnpm（`pnpm-workspace.yaml` 需 `allowBuilds: esbuild/@parcel/watcher`） |
 

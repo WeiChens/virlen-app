@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * `host.session.create` 的**接线**测试（M4）。
  *

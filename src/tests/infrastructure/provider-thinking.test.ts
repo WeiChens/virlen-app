@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * provider thinking 参数映射测试
  *

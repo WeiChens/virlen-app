@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * execute_command 的 `confirm:"terminal"`（Step 2 ①，TS 引擎路径）。
  *

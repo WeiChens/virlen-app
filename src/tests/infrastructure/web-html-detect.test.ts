@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * `web_fetch` 的 HTML 判定（`isHtml`）golden 一致性测试（TS 侧）
  *

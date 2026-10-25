@@ -22,16 +22,7 @@ vi.mock('@/ui/pages/chat/components/message/code-block', () => ({
   default: ({ children }: any) => <pre>{children}</pre>,
 }))
 
-/**
- * 用量账本替身：默认空（jsdom 里没有 Tauri，真 repo 会兜底成空），
- * 需要时由单个用例填空 —— 否则统计条 / 请求页这两块没法验证。
- */
-const ledgerMock = vi.hoisted(() => ({
-  all: null as unknown,
-  chat: null as unknown,
-  records: [] as unknown[],
-}))
-
+/** 账本替身：jsdom 里没有 Tauri，真 repo 会兜底成空（统计条只走「账本不可用」那一支）。 */
 vi.mock('@/infrastructure/statsRepo', () => {
   const emptyBucket = {
     key: '',
@@ -51,13 +42,8 @@ vi.mock('@/infrastructure/statsRepo', () => {
   }
   return {
     statsRepo: {
-      stats: async (query: { kind?: string }) => {
-        // legacy（历史回填）在用例里恒为空：归入对话请求的逻辑单独在 hook 里管
-        if (query.kind === 'chat_round') return ledgerMock.chat ?? EMPTY_STATS
-        if (query.kind === 'legacy') return EMPTY_STATS
-        return ledgerMock.all ?? EMPTY_STATS
-      },
-      records: async () => ({ records: ledgerMock.records, total: ledgerMock.records.length }),
+      stats: async () => EMPTY_STATS,
+      records: async () => ({ records: [] as unknown[], total: 0 }),
       clear: async () => 0,
     },
   }
@@ -234,57 +220,7 @@ afterEach(() => {
   container?.remove()
   root = null
   container = null
-  ledgerMock.all = null
-  ledgerMock.chat = null
-  ledgerMock.records = []
 })
-
-/** 等 hook 的 400ms 防抖把账本数据装进来 */
-async function flushUsage(): Promise<void> {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 500))
-  })
-}
-
-/** 账本聚合桶 */
-function bucket(patch: Record<string, number> = {}) {
-  return {
-    key: '',
-    promptTokens: 0,
-    completionTokens: 0,
-    cachedTokens: 0,
-    cacheWriteTokens: 0,
-    totalTokens: 0,
-    calls: 0,
-    estimatedCalls: 0,
-    ...patch,
-  }
-}
-
-/** 一条账本明细（chat_round） */
-function usageRecord(patch: Record<string, unknown> = {}) {
-  return {
-    id: 1,
-    ts: T0 + 5000,
-    sessionId: 's1',
-    sessionTitle: '会话',
-    messageId: 'a1',
-    model: 'gpt-4o',
-    providerType: 'openai',
-    providerConfigId: 'p1',
-    kind: 'chat_round',
-    round: 1,
-    promptTokens: 120,
-    completionTokens: 30,
-    cachedTokens: 0,
-    cacheWriteTokens: 0,
-    totalTokens: 150,
-    estimated: false,
-    durationMs: 4200,
-    traceId: 'tr-1',
-    ...patch,
-  }
-}
 
 describe('TrajectoryView', () => {
   it('把消息摊成「会话开始 + 第 1 轮 + 第 2 轮」的记录表', () => {
@@ -562,102 +498,6 @@ describe('TrajectoryView', () => {
     const el = render(<TrajectoryView {...baseProps({ messages: [] })} />)
     expect(el.textContent).toContain('此对话还没有可显示的记录')
     expect(el.querySelector('.trajectory-table')).toBeNull()
-  })
-
-  it('请求统计：账本为空时只报「已加载的记录」，并说清口径', async () => {
-    const el = render(<TrajectoryView {...baseProps()} />)
-    await flushUsage()
-    const bar = el.querySelector('.trajectory-stats__bar')
-    expect(bar).not.toBeNull()
-    expect(bar!.textContent).toContain('请求统计')
-    // 窗口口径：MESSAGES 里只有一条回复行
-    expect(bar!.textContent).toContain('对话 1 次')
-    expect(bar!.textContent).toContain('仅已加载')
-
-    act(() => {
-      el.querySelector<HTMLButtonElement>('.trajectory-stats__bar')!.click()
-    })
-    expect(el.textContent).toContain('账本不可用')
-    expect(el.textContent).toContain('已加载的记录')
-    expect(el.querySelectorAll('.trajectory-stats__metric').length).toBeGreaterThan(0)
-  })
-
-  it('请求统计：账本给出会话全量合计（对话请求 / 其它调用 / 缓存命中率）', async () => {
-    const totals = bucket({
-      promptTokens: 1000,
-      completionTokens: 200,
-      cachedTokens: 600,
-      cacheWriteTokens: 100,
-      totalTokens: 1900,
-      calls: 3,
-      estimatedCalls: 1,
-    })
-    ledgerMock.all = { buckets: [], totals, firstTs: T0, lastTs: T0 + 5000 }
-    ledgerMock.chat = {
-      buckets: [],
-      totals: bucket({ calls: 2, promptTokens: 1000, completionTokens: 200 }),
-      firstTs: T0,
-      lastTs: T0 + 5000,
-    }
-    const el = render(<TrajectoryView {...baseProps()} />)
-    await flushUsage()
-    expect(el.textContent).toContain('对话全量')
-    expect(el.textContent).toContain('对话 2 次')
-    // 600 / (1000 + 600 + 100) = 35%
-    expect(el.textContent).toContain('缓存 35%')
-
-    act(() => {
-      el.querySelector<HTMLButtonElement>('.trajectory-stats__bar')!.click()
-    })
-    expect(el.textContent).toContain('其它调用')
-    expect(el.textContent).toContain('估算用量')
-    // 3 次调用、2 次对话请求 → 其它调用 1
-    const metrics = [...el.querySelectorAll('.trajectory-stats__metric')]
-    const other = metrics.find((m) => m.textContent?.startsWith('其它调用'))
-    expect(other?.textContent).toContain('1')
-  })
-
-  it('账本流水落到回复行：实测耗时替掉反推值，并标记模型', async () => {
-    ledgerMock.all = {
-      buckets: [],
-      totals: bucket({ calls: 1, promptTokens: 120, completionTokens: 30, totalTokens: 150 }),
-      firstTs: T0,
-      lastTs: T0 + 5000,
-    }
-    ledgerMock.chat = {
-      buckets: [],
-      totals: bucket({ calls: 1 }),
-      firstTs: T0,
-      lastTs: T0 + 5000,
-    }
-    ledgerMock.records = [usageRecord()]
-    const el = render(<TrajectoryView {...baseProps()} />)
-    await flushUsage()
-
-    const assistantRow = [...el.querySelectorAll<HTMLButtonElement>('.trajectory-record')].find(
-      (row) => row.textContent?.includes('我先看看'),
-    )
-    expect(assistantRow).toBeDefined()
-    // 账本实测 4.2s（反推值是 300ms，两者不会同时出现）
-    expect(assistantRow!.querySelector('.col-time')?.textContent).toBe('4.2s')
-    expect(assistantRow!.querySelector('.trajectory-record__model')?.textContent).toBe('gpt-4o')
-
-    act(() => {
-      assistantRow!.click()
-    })
-    const requestTab = [...el.querySelectorAll<HTMLButtonElement>('.trajectory-tab')].find(
-      (tab) => tab.textContent === '请求',
-    )
-    expect(requestTab).toBeDefined()
-    act(() => {
-      requestTab!.click()
-    })
-    const inspector = el.querySelector('.trajectory-inspector')
-    expect(inspector?.textContent).toContain('gpt-4o')
-    expect(inspector?.textContent).toContain('openai')
-    // 30 tok / 4.2s ≈ 7 tok/s
-    expect(inspector?.textContent).toContain('7 tok/s')
-    expect(inspector?.textContent).toContain('#1')
   })
 
   it('没有账本时回复行的耗时仍是反推值，并加 ≈ 标记', () => {

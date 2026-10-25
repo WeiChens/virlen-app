@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * permission 领域模块单测 — 注册表 / 三态决策 / 旧枚举迁移
  *

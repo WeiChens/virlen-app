@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Tool Category 测试 — 工具分类映射
  *

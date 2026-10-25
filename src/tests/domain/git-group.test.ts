@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * git/group —— 状态分组与徽标口径的纯函数测试（**界面口径的唯一实现**）。
  *

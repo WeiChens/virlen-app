@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * execute-command 命令解析/风险分类测试 — 回归：引号内内容不应被展开
  *

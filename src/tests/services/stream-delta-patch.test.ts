@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 流式补丁的增量协议 — `assistant_message_updated` 的消费侧
  *

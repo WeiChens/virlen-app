@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 文件夹 / 压缩包导入：进度弹窗 + 可取消 + .gitignore 过滤
  *

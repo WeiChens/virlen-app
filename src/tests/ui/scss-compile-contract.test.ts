@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * SCSS 编译契约：`src` 下每一份 `.scss` 都必须能被 dart-sass 编译通过。
  *

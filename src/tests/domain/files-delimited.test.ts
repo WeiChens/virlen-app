@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * CSV / TSV 草稿 → 表格网格（面板预览用）。
  *

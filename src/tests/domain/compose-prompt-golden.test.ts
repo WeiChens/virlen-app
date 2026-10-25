@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 系统提示词 golden 一致性测试（TS 侧）
  *

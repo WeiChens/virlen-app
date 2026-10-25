@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 用量记账端口测试（domain/usage）
  *

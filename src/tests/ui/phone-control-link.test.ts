@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 设置页 store ↔ 服务 的新接线（M9）。
  *

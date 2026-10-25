@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 会话内待应答卡片（`inline-interactions/style.scss`）的**字号跟随**契约。
  *

@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 文档删除（`knowledge-base/doc-delete.ts`）—— 单份删除的返回口径 + 清空的进度/取消/计数
  *

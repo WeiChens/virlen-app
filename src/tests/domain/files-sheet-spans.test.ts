@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 合并区域 → `colspan` / `rowspan` 的换算口径（表格预览）。
  *

@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 贮藏消息的展示口径（`parseStashMessage` / `stashSummary`）。
  *

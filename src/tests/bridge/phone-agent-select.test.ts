@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 「新建会话时选定 Agent」（协议 0.6.0）—— 电脑侧接线与校验回归。
  *

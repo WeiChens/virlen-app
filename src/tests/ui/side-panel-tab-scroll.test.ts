@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 标签栏「滚轮 → 横向」换算（`tab-scroll.ts`）的口径。
  *

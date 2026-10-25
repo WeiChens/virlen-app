@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 电脑端链路类型判定 —— **再导出守卫**。
  *

@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 把磁盘上的新内容写进 Monaco 的方式：**最小编辑**，而不是整篇替换。
  *

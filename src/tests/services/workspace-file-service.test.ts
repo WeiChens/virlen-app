@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 工作目录文件面板的数据层：读取分类、上限、hash 冲突检测。
  *

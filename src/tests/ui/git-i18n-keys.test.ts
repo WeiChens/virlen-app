@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 源代码管理的 UI 文案契约（铁律 7：新增 UI 文案必须同步 `en-US.json`）。
  *

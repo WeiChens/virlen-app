@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 「旧文本 → 新文本」的最小编辑区间。
  *

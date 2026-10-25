@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * message-repair 测试 — 悬空 tool_calls 的检测与修复
  *

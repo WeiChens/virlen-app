@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * `host.session.compress` —— **接线与三道闸**（§22）。
  *

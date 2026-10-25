@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Provider Catalog 测试 — 供应商目录（模板表 + 推理强度档位表）
  *

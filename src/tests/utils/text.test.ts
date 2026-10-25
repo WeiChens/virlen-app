@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * utils/text — 代理对（surrogate pair）安全截断 / 清洗
  *

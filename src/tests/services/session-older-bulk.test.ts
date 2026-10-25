@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * sessionStore 批量回补（`loadOlderMessagesUntil`）用例。
  *

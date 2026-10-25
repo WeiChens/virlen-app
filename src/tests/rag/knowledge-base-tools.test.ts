@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * knowledge-base 工具测试 — AI Tool 定义与执行
  *

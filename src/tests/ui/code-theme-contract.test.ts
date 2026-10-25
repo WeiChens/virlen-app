@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 代码主题契约：调色板（唯一色源）→ Monaco 主题 / CSS 变量。
  *

@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 待应答交互的**队列状态机**（`modals/pending-interactions.ts`）纯函数用例。
  *

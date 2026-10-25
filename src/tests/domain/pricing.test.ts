@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 定价模块测试 — 费用估算（纯函数）
  *

@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * deleteSessionMessage / clearSessionMessages — 用户消息锚点索引同步回归测试
  *

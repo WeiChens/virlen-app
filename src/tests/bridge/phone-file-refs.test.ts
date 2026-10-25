@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * §37 消息里引用电脑上的文件（`SendParams.files` / `MessageDTO.files`）—— 电脑侧实现用例。
  *

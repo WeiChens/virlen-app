@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * ContextMenu（全应用唯一一份右键菜单）的层级契约。
  *

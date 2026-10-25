@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * memory 列表弹窗的样式契约（表格化 + 筛选 + 分页）。
  *

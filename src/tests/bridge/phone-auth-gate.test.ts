@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 握手闸门 —— 「没通过 `hello` 的链路，`host.*` 一律拒」（M10 真机缺陷回归）。
  *

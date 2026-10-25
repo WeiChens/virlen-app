@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * message-list 锚点纯函数用例：`pickActiveAnchorUser`（活跃圆点判定）与 `findJumpTarget`（定位目标判定）。
  *

@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * todo/state — 任务清单纯函数测试
  *

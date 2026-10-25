@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 文档列表的过滤 / 分页口径（纯函数）
  *

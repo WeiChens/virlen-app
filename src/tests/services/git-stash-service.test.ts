@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * git-service 的贮藏编排（只测**编排**，git 语义由 Rust 用例守）。
  *

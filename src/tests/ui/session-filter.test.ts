@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest'
 import { filterSessionGroups } from '@/ui/pages/chat/components/sidebar/session-filter'
 

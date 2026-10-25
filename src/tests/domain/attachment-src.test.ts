@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 图片附件引用（`attachment://`）的前端解析：库里的引用必须翻译成自定义协议 URL 才能渲染。
  * 与 Rust `virlen_core::attachment` / `commands/attachment.rs` 是同一套形状校验。

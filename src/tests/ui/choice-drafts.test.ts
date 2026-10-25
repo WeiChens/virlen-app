@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 提问草稿缓存（`modals/choice-drafts.ts`）纯函数用例。
  *

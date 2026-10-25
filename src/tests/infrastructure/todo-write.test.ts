@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * todo_write 工具 — 语义测试
  *

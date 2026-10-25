@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 配对表 → UI 的同步（M8 真机缺陷回归）。
  *

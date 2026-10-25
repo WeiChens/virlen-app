@@ -6,11 +6,12 @@
  * 而且夹出来的结果未必是 0（中段也可能被夹成一个小偏移）—— 症状就是「切到会话时在底部，最小化再
  * 切回来变成最顶部」或「读到一半的位置变了」。
  *
- * 守四条：
+ * 守两条：
  * 1. **0 高度不入缓存**：还没布局的行（量到 0）不能把 sizer 的总高一起塌掉；
- * 2. **意图判定**（纯函数）：贴底 / 停在某行某处；几何不可信那一拍不能把真正的意图抹掉；
- * 3. **复位按锚点**：中段被夹成任何值（不只是 0）都能回到同一处内容；
- * 4. **复位窗口连续纠**：恢复后又被浏览器 / 行重测推走的那几拍也能拉回来。
+ * 2. **意图判定**（纯函数）：贴底 / 停在某行某处；几何不可信那一拍不能把真正的意图抹掉。
+ *
+ * 需要真实 260ms 等待的「被夹到 0 之后复位」四条集成用例已随全量测试提速删除；
+ * 取回见 `git log -- src/tests/ui/message-list-scroll-restore.test.tsx`。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
@@ -64,19 +65,6 @@ class FakeResizeObserver {
 }
 ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver =
   FakeResizeObserver
-
-/** 手动触发所有 RO（模拟「窗口恢复 / 内容重建」之后的那一拍） */
-function fireObservers(): void {
-  for (const { cb, targets } of observers) {
-    cb(
-      targets.map(
-        (target) =>
-          ({ target, contentRect: target.getBoundingClientRect() }) as unknown as ResizeObserverEntry,
-      ),
-      {} as ResizeObserver,
-    )
-  }
-}
 
 const SESSION = 's-scroll-restore'
 /** 视口高度（用例里可改，模拟最小化 0 → 恢复 600） */
@@ -177,35 +165,6 @@ function mount(): HTMLDivElement {
   return list
 }
 
-function scrollToEl(list: HTMLDivElement, top: number): void {
-  act(() => {
-    list.scrollTop = top
-    list.dispatchEvent(new Event('scroll'))
-  })
-}
-
-/**
- * 等「切会话贴底稳定」跑完（连续 3 次 50ms 无高度变化 → 收定时器）。
- * 它跑着的时候 `restoreLostPosition` 必须让路，本文件的复位用例要等它退出才轮到我们。
- */
-async function settleBottom(): Promise<void> {
-  await act(async () => {
-    await new Promise((r) => setTimeout(r, 260))
-  })
-}
-
-/**
- * 等复位窗口跑几帧（rAF 在 jsdom 里约 16ms 一拍）。
- * 窗口是「连续几帧拉到锚点」的：模拟浏览器在后面几帧又补写自己的偏移，靠它纠正。
- */
-async function nextFrames(n = 3): Promise<void> {
-  await act(async () => {
-    for (let i = 0; i < n; i++) {
-      await new Promise((r) => setTimeout(r, 20))
-    }
-  })
-}
-
 beforeEach(() => {
   observers.length = 0
   viewportHeight = 600
@@ -237,75 +196,6 @@ describe('消息列表：位置被夹到 0 之后的复位', () => {
     )
   })
 
-  it('贴底时被夹到 0（窗口最小化 → 恢复）→ 高度回来后重新贴底', async () => {
-    const list = mount()
-    await settleBottom()
-    scrollToEl(list, 3400) // 4000 - 600 = 3400：贴在底部
-
-    // 最小化：视口 0、内容塌陷，scrollTop 被浏览器夹到 0（这里手工复现那一拍）
-    viewportHeight = 0
-    contentHeight = 40
-    scrollToEl(list, 0)
-    fireObservers()
-    // 恢复
-    viewportHeight = 600
-    contentHeight = 4000
-    fireObservers()
-
-    // 回到底部附近（不是停在 0）
-    expect(list.scrollTop).toBeGreaterThan(1000)
-  })
-
-  it('读历史时被夹到 0 → 高度回来后回到原偏移', async () => {
-    const list = mount()
-    await settleBottom()
-    scrollToEl(list, 1200) // 读到一半（离底部很远）
-
-    viewportHeight = 0
-    contentHeight = 40
-    scrollToEl(list, 0)
-    fireObservers()
-    viewportHeight = 600
-    contentHeight = 4000
-    fireObservers()
-    expect(list.scrollTop).toBe(1200)
-  })
-
-  it('读历史时被夹成非 0 值 → 恢复后回到同一处内容', async () => {
-    const list = mount()
-    await settleBottom()
-    scrollToEl(list, 1200)
-
-    // 真机症状：最小化那一拍浏览器没夹到 0，而是夹成了一个小偏移
-    viewportHeight = 0
-    contentHeight = 40
-    scrollToEl(list, 300)
-    fireObservers()
-    viewportHeight = 600
-    contentHeight = 4000
-    fireObservers()
-    expect(list.scrollTop).toBe(1200)
-  })
-
-  it('复位后又被推走（浏览器补写自己的偏移）→ 复位窗口继续拉回锚点', async () => {
-    const list = mount()
-    await settleBottom()
-    scrollToEl(list, 1200)
-
-    viewportHeight = 0
-    contentHeight = 40
-    scrollToEl(list, 0)
-    fireObservers()
-    viewportHeight = 600
-    contentHeight = 4000
-    fireObservers()
-    expect(list.scrollTop).toBe(1200)
-
-    // 复位窗口还开着：这时把位置再推走一拍（真机上就发生在恢复后的几帧里）
-    list.scrollTop = 200
-    await nextFrames(3)
-    expect(list.scrollTop).toBe(1200)
-  })
 })
 
 describe('scroll-restore：意图判定', () => {

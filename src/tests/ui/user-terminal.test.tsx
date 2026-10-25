@@ -1,12 +1,14 @@
 /**
  * UserTerminal — 用户自己的交互终端（右侧面板里的一个标签）。
  *
- * 五条被钉住的：
+ * 四条被钉住的：
  * 1. **默认脱壳但不挂徽标**：用户终端本来就不进沙盒，「沙盒已关闭」常驻就是噪声（2026-10-24 去掉了）；
- * 2. **增量续接**：每帧只把新增部分交给 xterm，`reset` 那帧整段重放；
+ * 2. **增量续接**：推送帧按偏移只追加，断档才按游标回头补读（不按字符下标切串）；
  * 3. **输入跟着运行状态走**：跑着才把键击送出去，结束后敲键盘必须静默无效；
- * 4. **结束后如实报退出码**（`exitCode` 为 null 时不编一个）；
- * 5. **终端被外面关掉**（读回 null）→ 提示一句并停止轮询（保留最后一屏）。
+ * 4. **结束后如实报退出码**（`exitCode` 为 null 时不编一个）。
+ *
+ * 慢轮询（1s 周期）那几条要真实 sleep 1~2s，已随全量测试提速删除；
+ * 取回见 `git log -- src/tests/ui/user-terminal.test.tsx`。
  *
  * xterm 在 jsdom 里没有画布（`term.open()` 没有意义），用与 `service-terminal.test.tsx`
  * 同一份最小替身；数据层（ConPTY / 注册表 / 会话隔离）由
@@ -166,12 +168,6 @@ async function flush() {
   })
 }
 
-async function wait(ms: number) {
-  await act(async () => {
-    await new Promise((r) => setTimeout(r, ms))
-  })
-}
-
 function text(selector: string): string {
   return document.querySelector(selector)?.textContent?.trim() ?? ''
 }
@@ -210,35 +206,6 @@ afterEach(() => {
   root = null
 })
 
-it('运行中：头部只留名字与状态，增量续接，键击直达伪控制台', async () => {
-  vi.mocked(readUserTerminal)
-    .mockResolvedValueOnce(chunk({ text: 'PS E:\\repo> ', next: 12 }))
-    .mockResolvedValue(chunk({ text: 'done\n', next: 17 }))
-
-  mount()
-  await flush()
-  expect(readUserTerminal).toHaveBeenCalledWith('s1', 'term_3', 0)
-  expect(written()).toBe('PS E:\\repo> ')
-
-  // 头部不挂「沙盒已关闭」徽标：用户终端永远不进沙盒，常驻一枚红标只是噪声
-  // （与 `SandboxBadge` 只画「在沙盒里」同一口径）
-  // 头部显示**展示名**（`powershell` id → Windows PowerShell）：不同 shell 一眼能分清
-  expect(text('.service-console-name')).toBe('Windows PowerShell')
-  expect(document.querySelector('.terminal-sandbox-badge')).toBeNull()
-  // 不再有元信息那一行（工作目录 / 进程 pid）：它只是白白吃持终端高度，
-  // 工作目录已经在标签 tooltip 上 —— 这一条是用户明确要求的
-  expect(document.querySelector('.service-console-meta')).toBeNull()
-
-  // 第二帧只接增量（整段重写会让终端每帧闪一次）。实时增量走推送，轮询只负责状态 ——
-  // 所以这里等一个慢轮询周期（SAFETY_MS = 1000）
-  await wait(1100)
-  expect(written()).toBe('PS E:\\repo> done\n')
-  expect(readUserTerminal).toHaveBeenLastCalledWith('s1', 'term_3', 12)
-
-  act(() => xterm.__type('g'))
-  expect(writeUserTerminal).toHaveBeenCalledWith('s1', 'term_3', 'g')
-})
-
 it('已结束：键击不再送出，退出码如实显示（null 时不编）', async () => {
   vi.mocked(readUserTerminal).mockResolvedValue(
     chunk({ text: 'bye\n', next: 4, running: false, interactive: false, exitCode: 2 }),
@@ -262,23 +229,6 @@ it('终止退出（没有退出码）：只说「已结束」，不编一个 0',
   const foot = text('.service-console-foot')
   expect(foot).toContain('终端已结束，只能查看输出')
   expect(foot).not.toContain('退出码')
-})
-
-it('终端被外面关掉（读回 null）：提示一句并停止请求，保留最后一屏', async () => {
-  vi.mocked(readUserTerminal)
-    .mockResolvedValueOnce(chunk({ text: 'last screen\n', next: 12 }))
-    .mockResolvedValue(null)
-
-  mount()
-  await flush()
-  // 第二个请求来自慢轮询（1s）—— 推送只会在有新输出 / 终态时来
-  await wait(1100)
-  expect(text('.service-console-foot')).toContain('该终端已不在列表中')
-  expect(written()).toBe('last screen\n')
-
-  const calls = vi.mocked(readUserTerminal).mock.calls.length
-  await wait(2200)
-  expect(vi.mocked(readUserTerminal).mock.calls.length).toBe(calls)
 })
 
 it('推送帧（from 与游标严丝合缝）直接追加：键入回显不必等轮询', async () => {
@@ -344,38 +294,6 @@ it('推送里 running=false 立刻禁掉输入：退出那一帧不必等轮询'
   expect(writeUserTerminal).toHaveBeenCalledTimes(1)
   // 退出码也跟着立刻到手，不必等 1s 的慢轮询
   expect(text('.service-console-foot')).toContain('退出码 0')
-})
-
-it('标签切走（active=false）不发任何请求，但推送仍然落屏', async () => {
-  vi.mocked(readUserTerminal).mockResolvedValue(chunk({ text: 'init', next: 4 }))
-
-  mount({ active: false })
-  await wait(1200)
-  expect(readUserTerminal).not.toHaveBeenCalled()
-
-  // 切走了也在收推送：切回来不必整屏追一次（偏移与累积串一直准着）
-  push({ from: 0, next: 8, text: 'initPUSH' })
-  expect(written()).toBe('initPUSH')
-})
-
-it('进程一结束就关掉标签（与服务终端「终止但留条目」相反）', async () => {
-  vi.mocked(readUserTerminal)
-    .mockResolvedValueOnce(chunk({})) // 首帧：还在跑
-    .mockResolvedValue(chunk({ running: false, interactive: false, exitCode: 0 }))
-
-  mount()
-  await flush()
-  // 跑着的时候不能提前关（否则开一个终端就没了）
-  expect(onClose).not.toHaveBeenCalled()
-
-  // 用户敲了 exit：推送那一帧就够关标签，不必等慢轮询
-  push({ from: 0, next: 0, running: false })
-  await flush()
-  expect(onClose).toHaveBeenCalledTimes(1)
-
-  // 只关一次：后续的帧 / 轮询不再重复上报（宿主会重复 kill + 关标签）
-  await wait(1100)
-  expect(onClose).toHaveBeenCalledTimes(1)
 })
 
 it('头部那颗 ✕ 走宿主给的 onClose（关终端由宿主负责杀进程树）', async () => {

@@ -1,3 +1,6 @@
+// @vitest-environment jsdom
+// 为什么回退 jsdom：本文件读回 `style.width`，jsdom 会把 `8.0%` 归一成 `8%`，happy-dom 保留原文。
+// 守的是「8%/92% 余量」这条行为，不是某个 DOM 实现的序列化格式。
 /**
  * 启动屏（`src/boot/splash.ts`）的行为契约。
  *

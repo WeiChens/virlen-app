@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * sandbox-rules-dnd 单测 — 「忽略沙盒命令」列表拖拽排序的几何计算
  *

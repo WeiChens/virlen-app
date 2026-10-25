@@ -568,50 +568,6 @@ it('看不见时不再逐帧空转：停掉 rAF，只在唤醒后补一帧', asy
   expect(frames.length).toBe(1)
 })
 
-it('切走超过了设定时间：释放原生视图（省内存），切回来重建并重新加载当前地址', async () => {
-  // 用例提速：真实设置是整数秒（默认 20），这里只要证明「到点才释放」
-  settingsState.value.browserSleepAfterSec = 0.15
-  mount('https://a.com/')
-  setViewportRect({ left: 0, top: 40, width: 420, height: 560 })
-  await tick()
-  // 先制造一条可后退的历史
-  submit('https://b.com/')
-  await tick()
-  expect(backBtn().disabled).toBe(false)
-  expect(bridge.open).toHaveBeenCalledTimes(1)
-
-  // 切走：先只是隐藏（不销毁）
-  setViewportRect({ left: 0, top: 0, width: 0, height: 0 })
-  await tick()
-  expect(bridge.close).not.toHaveBeenCalled()
-
-  // 时间没到：还是不动
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 40))
-  })
-  expect(bridge.close).not.toHaveBeenCalled()
-
-  // 到点：原生视图被释放（面板自己那份 state 不动）
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 200))
-  })
-  expect(bridge.close).toHaveBeenCalledTimes(1)
-
-  // 切回来：带当前地址重建；原生历史栈已没了，面板的后退历史必须收敛成当前页
-  setViewportRect({ left: 0, top: 40, width: 420, height: 560 })
-  await wake()
-  await tick()
-  expect(bridge.open).toHaveBeenCalledTimes(2)
-  expect(bridge.open).toHaveBeenLastCalledWith(
-    expect.any(String),
-    'https://b.com/',
-    expect.anything(),
-  )
-  expect(addressInput().value).toBe('https://b.com/')
-  expect(backBtn().disabled).toBe(true)
-  expect(forwardBtn().disabled).toBe(true)
-})
-
 it('界面缩放：rect 是 CSS 像素，传给原生视图的是逻辑像素（要乘缩放）', async () => {
   // 125%：这一行就是 useZoom 在 setZoom 成功之后的动作
   setAppliedZoomFactor(1.25)

@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Markdown 图片地址的分类与归一化。
  *

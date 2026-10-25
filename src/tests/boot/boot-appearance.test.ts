@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 启动期外观缓存（`src/ui/theme/bootAppearance.ts`）的契约。
  *

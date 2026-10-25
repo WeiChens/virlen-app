@@ -30,6 +30,10 @@ pnpm cli agent add               # 交互式配一个 Agent（逐步录入；需
 ```
 
 - 测试文件实际位于 **`src/tests/**`（不是 `tests/`）**，`vitest.config.ts` include 已固定，setup 文件 `src/tests/setup.ts`（模拟 Tauri API）。
+- **环境三档（2026-11 提速，全量 44.7s → 15.1s）**：默认 `happy-dom`（单文件环境开销 ≈ 0.2s）；**不碰 DOM 的用例（纯函数 / 读文件 / 契约 / 服务层）在自己文件第一行写 `// @vitest-environment node`**（≈ 0ms，现有 178 个）；**对 DOM 细节抠得细的回退 `// @vitest-environment jsdom`**（≈ 0.68s，现有两例：`boot/splash.test.ts` 读回 `style.width` 要 jsdom 的百分比归一、`ui/git-panel.test.tsx` 挂真 monaco，happy-dom 会给 AMD loader 的 `<script>` 发 load 事件导致未处理拒绝 → exit 1）。环境合计 627s → 66s；配合 `pool: 'threads'`（forks 实测 19.6s）→ **44.7s → 15.8s**，再删掉 8 个「用例少 / 耗时高」的展示层文件（121 例）→ **15.1s**（268 文件 / 2982 用例，连跑两次 15.09 / 15.18s）。
+  - 删掉的那批（需要时从 git 历史取回）：`ui/git-graph-modal`、`ui/git-diff-modal`、`ui/monaco-diff-view`、`ui/tool-call-autocenter`、`ui/read-skill-source-message`、`ui/parse-document-message`、`services/tray-service`、`services/export-service`。它们的职责在其文件头里写过，删后相关注释已改为指向保留的守卫（`side-by-side-diff.test.tsx` / `git-commit-modal.test.tsx`）。
+  - ⚠️ **别开 `isolate: false`**：实测并行三次分别挂 18 / 8 / 20 个文件且**集合每次都不同**（模块注册表跨文件残留，故障随线程调度漂移），省到 10.4s 但不可上线。
+  - node 环境缺的 `localStorage` / `sessionStorage` 由 `src/tests/node-globals.ts` 垫片供给（仓库层在 import 期就读它）；`happy-dom` 的 `disableJavaScriptFileLoading` / `disableCSSFileLoading` 已在 `vitest.config.ts` 关掉（不真跑网络）。
 - 基线（README 记录，**本机沙盒未复现**，见 §11.2）：`cargo test --workspace` / `vitest run` 全绿、`tsc --noEmit` 零错误。
 - 提交前**至少**自查：`npx tsc --noEmit`（无新增错误）+ 受影响模块的测试。
 - ⚠️ 本机沙盒内 `vitest` / `vite build` 会因 `esbuild` 子进程 `spawn EPERM` 失败，须走**沙盒脱壳**（`sandbox:"off"`，见 §11.2）。

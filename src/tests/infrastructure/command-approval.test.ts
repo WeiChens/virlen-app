@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * command-approval 审批注册表测试 — 回归 #2
  *

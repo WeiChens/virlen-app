@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 「移除」的完整语义 = **删记录 + 断链**（M9 真机需求）。
  *

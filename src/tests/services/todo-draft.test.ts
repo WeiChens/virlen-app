@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * todoDraftStore + todo-service — 「应用才是修改」回归测试
  *

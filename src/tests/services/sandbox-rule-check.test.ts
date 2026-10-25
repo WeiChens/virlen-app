@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 「忽略沙盒命令」规则的判定（**TS 侧实现**）
  *

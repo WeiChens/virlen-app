@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 启动屏的**结构契约**（`index.html` 里那一段内联 HTML/CSS）。
  *

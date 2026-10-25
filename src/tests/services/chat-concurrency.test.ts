@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * chat 并发保护 + 会话激活测试（手机控制 M0 前置改造）
  *

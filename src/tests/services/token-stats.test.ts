@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * token-stats-service 测试 — 用量统计编排
  *

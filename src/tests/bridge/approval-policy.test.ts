@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * approval-policy —— 审批分级的**契约测试**（docs/phone-control-bridge.md §16.2）。
  *

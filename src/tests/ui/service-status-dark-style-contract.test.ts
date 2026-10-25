@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 后台服务徽标 · 深色终端头部配色契约。
  *

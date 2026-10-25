@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * mdYamlFrontmatter 测试 — Markdown YAML frontmatter 解析
  *

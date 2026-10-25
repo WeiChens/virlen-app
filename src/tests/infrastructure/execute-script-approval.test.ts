@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * execute_script 授权载荷 —— 回归：脚本授权弹窗必须能看到**脚本内容**。
  *

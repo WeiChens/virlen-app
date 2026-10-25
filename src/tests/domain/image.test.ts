@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 发图档位领域层：设置值归一化 + 等比缩放。
  *

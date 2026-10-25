@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * git 差异的视图模型 —— 两侧文本 → 行（`gitDiffRows`）+ 空侧判定（`singleSideOf`）。
  *

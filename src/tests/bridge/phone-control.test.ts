@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 电脑端「手机控制」服务测试（M3-4 建立，M6 扩展）。
  *

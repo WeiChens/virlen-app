@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 行数统计的取用口径（`domain/git/stats.ts`）：行按段查、**一段**的合计怎么算。
  *
