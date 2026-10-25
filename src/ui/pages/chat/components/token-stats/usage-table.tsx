@@ -85,6 +85,7 @@ function sessionLabel(r: CostedRecord): string {
 /**
  * 输出速度展示。不可计算（旧流水未记耗时 / 无输出 token）一律 `-`，
  * 不能显示 0（会把“没数据”读成“很慢”）；≥ 100 时不再留小数位。
+ * 口径：completion ÷ 生成窗口（请求耗时 − 等响应头耗时），见 `outputTokPerSec`。
  */
 function formatRate(v: number | null): string {
   if (v === null) return '-'
@@ -253,7 +254,7 @@ export default function UsageTable({
               num>
               {t('合计')}
             </SortTh>
-            {/* 输出速度：Completion ÷ 请求耗时（含首字延迟） */}
+            {/* 输出速度：Completion ÷ 生成窗口（请求耗时 − 等响应头耗时） */}
             <SortTh
               keyName="tokPerSec"
               activeKey={sortKey}
@@ -262,7 +263,7 @@ export default function UsageTable({
               num>
               <span
                 title={t(
-                  '输出速度：Completion token ÷ 请求耗时（含首字延迟）；未记录耗时的旧流水显示 -',
+                  '输出速度：Completion token ÷ 生成窗口（请求耗时减去等响应头耗时，不含发送与排队）；未记录耗时的旧流水显示 -',
                 )}>
                 tok/s
               </span>

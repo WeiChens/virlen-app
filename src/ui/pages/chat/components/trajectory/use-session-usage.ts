@@ -137,6 +137,9 @@ function toFacts(record: {
   durationMs: number
   estimated: boolean
   traceId: string | null
+  requestBytes?: number
+  responseStartMs?: number
+  firstByteMs?: number
 }): TrajectoryRequestFacts {
   return {
     ...(record.id > 0 ? { id: record.id } : {}),
@@ -146,6 +149,10 @@ function toFacts(record: {
     kind: record.kind,
     ...(record.round !== null ? { round: record.round } : {}),
     ...(record.durationMs > 0 ? { durationMs: record.durationMs } : {}),
+    // 0 = 未采集（旧流水 / 桥接协议）→ 不挂字段，检查器落破折号
+    ...((record.requestBytes ?? 0) > 0 ? { requestBytes: record.requestBytes } : {}),
+    ...((record.responseStartMs ?? 0) > 0 ? { responseStartMs: record.responseStartMs } : {}),
+    ...((record.firstByteMs ?? 0) > 0 ? { firstByteMs: record.firstByteMs } : {}),
     ...(record.estimated ? { estimated: true } : {}),
     ...(record.traceId ? { traceId: record.traceId } : {}),
     ...(record.ts > 0 ? { ts: record.ts } : {}),

@@ -27,6 +27,8 @@ describe('行内交互卡片挂在哪', () => {
   })
 
   it('聊天页把卡片作为 footer 传进去（而不是当兄弟节点渲染）', () => {
-    expect(chatSrc).toContain('footer={inlineUI}')
+    // `inlineUI` 现在经 `ChatMessages` 的 `listProps` 注入列表（消息镜像容器接管了那一层），
+    // 仍然是「作为列表的 footer」，不是聊天页里的兄弟节点
+    expect(chatSrc).toContain('footer: inlineUI')
   })
 })

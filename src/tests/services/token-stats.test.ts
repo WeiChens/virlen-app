@@ -284,9 +284,20 @@ describe('币种', () => {
 })
 
 describe('输出速度（tok/s）', () => {
-  it('completion ÷ 请求耗时（秒）', () => {
+  it('completion ÷ 生成窗口（请求耗时 − 等响应头耗时）', () => {
     expect(outputTokPerSec({ completionTokens: 500, durationMs: 10_000 })).toBe(50)
     expect(outputTokPerSec({ completionTokens: 1, durationMs: 3_000 })).toBeCloseTo(0.333, 3)
+    // 等响应头 2s 不算在分母里：500 ÷ 8s = 62.5（旧口径会给 50）
+    expect(
+      outputTokPerSec({ completionTokens: 500, durationMs: 10_000, responseStartMs: 2_000 }),
+    ).toBe(62.5)
+    // 异常值（等待 ≥ 整段 / 负数）退回整段耗时，不产生非正分母
+    expect(
+      outputTokPerSec({ completionTokens: 500, durationMs: 10_000, responseStartMs: 10_000 }),
+    ).toBe(50)
+    expect(
+      outputTokPerSec({ completionTokens: 500, durationMs: 10_000, responseStartMs: -5 }),
+    ).toBe(50)
   })
 
   it('拿不到耗时就返回 null（旧流水 / 时钟异常），不是 0', () => {

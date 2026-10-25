@@ -22,7 +22,7 @@ import {
   sessionRuntimeState,
   agentStore,
 } from '@/ui/store'
-import { observable } from 'mobx'
+import { observer } from 'mobx-react-lite'
 import { t } from '@/ui/i18n'
 import { useVoiceInput, isImagePath, normalizeFsPath } from './hooks'
 import { PathAutocomplete } from './path-autocomplete'
@@ -411,15 +411,6 @@ function ChatInput(
   const agentName =
     chatState.value.currentSessionId && agent ? agent.name : undefined
 
-  // 定时刷新（同步 store 变化到 UI）
-  const [, forceUpdate] = useState(0)
-  useEffect(() => {
-    const timer = setInterval(() => {
-      forceUpdate((n) => n + 1)
-    }, 2000)
-    return () => clearInterval(timer)
-  }, [])
-
   // 工作中指示器：压缩优先（明确的长任务），否则用业务侧写入的 loadingText（只展示一个状态）
   const workingText = compacting
     ? t('上下文压缩中')
@@ -599,4 +590,9 @@ function ChatInput(
   )
 }
 
-export default observable(forwardRef(ChatInput))
+/**
+ * ⚠️ 必须是 `observer`（不是 `observable`）：后者把组件包成「可观察对象」，React 仍能渲染，
+ * 但 MobX 不会跟踪 render 里读的 store —— 以前靠一条 2s 的 `setInterval` 强制重渲染兜底，
+ * 空闲时 loadingText / 工作中状态最多迟到 2 秒。
+ */
+export default observer(forwardRef(ChatInput))

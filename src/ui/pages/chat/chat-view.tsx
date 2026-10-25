@@ -94,10 +94,11 @@ import DropDownSvg from '@/ui/components/icons/DropDownSvg'
 import SearchSvg from '@/ui/components/icons/SearchSvg'
 import './chat-view.scss'
 import { settingsState } from '@/ui/store/settingStore'
-import ChatMessageList, {
-  type MessageJumpTarget,
-} from './components/message/message-list'
-import { TrajectoryView } from './components/trajectory/trajectory-view'
+import type { MessageJumpTarget } from './components/message/message-list'
+// 消息镜像容器（`messages` 状态住在它里面，见文件头）
+import ChatMessages, {
+  type ChatMessagesHandle,
+} from './components/chat-messages'
 // 对话 / 轨迹：header 正下方的一条 tab（dsh 同款）
 import { ChatViewTabs, type ChatViewTab } from './components/tabs/chat-view-tabs'
 import WelcomeScreen from './components/welcome'
@@ -114,7 +115,6 @@ import type { VisionAnalyzeResult } from '@/infrastructure/vision/types'
 import { buildUserContent } from '@/utils/messageContent'
 import type { MessageSearchItem } from '@/infrastructure/sessionRepo'
 import { requestAttentionIfUnfocused } from '@/utils/windowAttention'
-import { createFrameBatcher } from '@/utils/frameBatch'
 import { track, trackPerf, hashText } from '@/utils/telemetry'
 /** 侧边栏宽度 localStorage 键 */
 const SIDEBAR_WIDTH_KEY = '_sidebar_width'
@@ -941,52 +941,31 @@ function ChatView() {
     [selectView],
   )
 
-  // 从 store 同步消息到本地 state（仅用于触发重渲染）
-  const [messages, setMessages] = useState<Message[]>([])
-  const applyMessagesUpdate = useCallback((sessionId: string) => {
-    if (sessionId !== chatState.value.currentSessionId) return
-    const s = sessionStore.getSession(sessionId)
-    if (s) setMessages([...s.messages])
-  }, [])
   /**
-   * 帧合批：流式期间 onMessagesUpdate 每秒上百次，逐次 setMessages 会把重渲染拉到与 chunk 同量级；
-   * 合并到每帧一次后上限钉在帧率，视觉无差别。
+   * 消息镜像住在 `ChatMessages` 里（见该文件头）：宿主只留两个 ref 入口 ——
+   * 高频道（流式 chunk / 引擎事件）走 `schedule`，低频（发送 / 回填）走 `syncNow`。
+   * ⚠️ 别再把 `messages` 状态搬回本组件：那是每帧一次的重渲染，会把整页 JSX 重建一遍。
    */
-  const messagesBatchRef = useRef<ReturnType<
-    typeof createFrameBatcher<[string]>
-  > | null>(null)
-  if (!messagesBatchRef.current) {
-    messagesBatchRef.current = createFrameBatcher(applyMessagesUpdate)
-  }
-  useEffect(() => () => messagesBatchRef.current?.cancel(), [])
-  /** 高频路径（流式 chunk / 引擎事件）：帧合批 */
+  const chatMessagesRef = useRef<ChatMessagesHandle | null>(null)
   const syncMessagesToUI = useCallback((sessionId: string) => {
-    if (sessionId !== chatState.value.currentSessionId) return
-    messagesBatchRef.current?.schedule(sessionId)
+    chatMessagesRef.current?.schedule(sessionId)
   }, [])
-  /** 低频路径（发送、图片分析结果回填）：立即生效，并丢弃排队中的旧更新 */
-  const syncMessagesToUINow = useCallback(
-    (sessionId: string) => {
-      messagesBatchRef.current?.cancel()
-      applyMessagesUpdate(sessionId)
-    },
-    [applyMessagesUpdate],
-  )
+  const syncMessagesToUINow = useCallback((sessionId: string) => {
+    chatMessagesRef.current?.syncNow(sessionId)
+  }, [])
   /**
-   * 消息镜像的兜底同步：messagesChanged 是消息 CRUD 的唯一收口点，任何来源（含手机 bridge）都会到达这里；
-   * 走 rAF 合批，与 onMessagesUpdate 同帧去重。
+   * 数据侧准备完（懒加载 / 悬空修复）后自增：这些写路径**不发** `messagesChanged`，
+   * 只靠订阅会漏掉刚拉回来的那批消息。
    */
-  useEffect(
-    () => sessionStore.onMessagesChanged(syncMessagesToUI),
-    [syncMessagesToUI],
+  const [messagesSyncKey, setMessagesSyncKey] = useState(0)
+  const requestMessagesSync = useCallback(
+    () => setMessagesSyncKey((n) => n + 1),
+    [],
   )
-  // currentSessionId 变为 null 时清空 messages（并丢弃未消费的跳转目标）。
+  // currentSessionId 变为 null 时丢弃未消费的跳转目标（消息镜像随容器卸载自动清掉）。
   // 视图（对话 / 轨迹）不用在这里重置：它是按会话算出来的，切会话自然跟着变。
   useEffect(() => {
-    if (!chatState.value.currentSessionId) {
-      setMessages([])
-      setSearchJump(null)
-    }
+    if (!chatState.value.currentSessionId) setSearchJump(null)
   }, [chatState.value.currentSessionId])
   useEffect(() => {
     if (chatState.value.currentSessionId) {
@@ -1061,11 +1040,11 @@ function ChatView() {
     chatState.setValue('currentSessionId', sessionId)
     // 切换会话时从该会话运行时恢复错误信息（跨会话不丢失）
     chatState.setValue('error', getSessionRuntime(sessionId).error)
-    setMessages([...session.messages])
-    // 消息到位后再渲染一次（悬空 tool_calls 的修复结果也在这里出现）
+    // 镜像的即时切换由 `ChatMessages` 的 layout effect 在**上屏前**完成（不闪旧会话）
+    // 消息到位后再刷一次（悬空 tool_calls 的修复结果也在这里出现）；懒加载不发 messagesChanged
     const updated = await prep
     if (updated && chatState.value.currentSessionId === sessionId) {
-      setMessages([...updated.messages])
+      requestMessagesSync()
     }
     const renderMs = Math.round(
       (typeof performance !== 'undefined' ? performance.now() : Date.now()) -
@@ -1203,8 +1182,8 @@ function ChatView() {
       }
       chatState.setValue('currentSessionId', sid)
       // 新建会话由本函数自己接管（内存即真相）；登记一下，避免兜底 effect 重新加载把刚加的消息覆盖回去
+      // （新会话的消息镜像由 `ChatMessages` 挂载时从 store 初始化，不必在这里清）
       handledSessionRef.current = sid
-      setMessages([])
     }
 
     // 立即添加用户消息，让 UI 立刻显示（含图片，不含分析结果）
@@ -1551,43 +1530,43 @@ function ChatView() {
 
         {chatState.value.currentSessionId ? (
           <>
-            {activeView === 'trajectory' ? (
-              <>
-                <TrajectoryView
-                  sessionId={chatState.value.currentSessionId}
-                  systemPrompt={
-                    sessionStore.getSession(chatState.value.currentSessionId)
-                      ?.systemPrompt
-                  }
-                  allowedTools={sessionStore.getSession(
-                    chatState.value.currentSessionId,
-                  )?.allowedTools}
-                  messages={messages}
-                  hasMoreOlder={sessionStore.hasMoreMessages(
-                    chatState.value.currentSessionId,
-                  )}
-                  onLoadOlder={async () => {
-                    const sid = chatState.value.currentSessionId
-                    if (sid) await sessionStore.loadOlderMessages(sid)
-                  }}
-                  onJumpToMessage={handleTrajectoryJump}
-                  onClose={() => selectView('chat')}
-                />
-                {/* 轨迹视图没有消息滚动容器，卡片退化为一块独立的尾巴（仍可答） */}
-                {inlineUI}
-              </>
-            ) : (
-              <ChatMessageList
-                messages={messages}
-                setMessages={setMessages}
-                setText={handleSetText}
-                onQuote={handleQuote}
-                onQuoteJump={handleQuoteJump}
-                jumpTarget={searchJump}
+            <ChatMessages
+              ref={chatMessagesRef}
+              sessionId={chatState.value.currentSessionId}
+              view={activeView}
+              syncKey={messagesSyncKey}
+              listProps={{
+                setText: handleSetText,
+                onQuote: handleQuote,
+                onQuoteJump: handleQuoteJump,
+                jumpTarget: searchJump,
                 // 待应答交互的**会话内**通道：挂在滚动内容最底部（只显示当前会话的）
-                footer={inlineUI}
-              />
-            )}
+                footer: inlineUI,
+              }}
+              trajectoryProps={{
+                systemPrompt: sessionStore.getSession(
+                  chatState.value.currentSessionId,
+                )?.systemPrompt,
+                allowedTools: sessionStore.getSession(
+                  chatState.value.currentSessionId,
+                )?.allowedTools,
+                hasMoreOlder: sessionStore.hasMoreMessages(
+                  chatState.value.currentSessionId,
+                ),
+                onLoadOlder: async () => {
+                  const sid = chatState.value.currentSessionId
+                  if (!sid) return
+                  await sessionStore.loadOlderMessages(sid)
+                  // 回补历史直接换 `sessions[i]`、**不发** messagesChanged（轨迹视图没有自己的列表
+                  // 去 setMessages）→ 不让镜像补一次，这里拉回来的消息不会上屏
+                  requestMessagesSync()
+                },
+                onJumpToMessage: handleTrajectoryJump,
+                onClose: () => selectView('chat'),
+              }}
+              // 轨迹视图没有消息滚动容器，卡片退化为一块独立的尾巴（仍可答）
+              trajectoryTail={inlineUI}
+            />
             <ChatInput
               ref={chatInputRef}
               sessionId={chatState.value.currentSessionId}

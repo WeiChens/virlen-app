@@ -26,6 +26,7 @@
  * - 用户 / 系统 / 上下文 / 压缩行：0 或 `null`（不占时间轴宽度）
  */
 import type { Message, ToolUseContent } from '@/types'
+import { generationWindowMs } from '@/domain/usage'
 import {
   getFileBlocks,
   getImageUrls,
@@ -117,8 +118,10 @@ function indexStarts(results: ResultIndex): StartIndex {
 /**
  * 账本流水 → 记录上的请求事实。
  *
- * `tokensPerSecond` 在耗时**不足 1 秒**时刻意不算：那点时间里首字延迟占了绝大部分，
- * 除出来的 tok/s 会被放大成几万，比不给值更误导（与总览页的 tok/s 口径一致）。
+ * `tokensPerSecond` 的分母是**生成窗口**（`请求耗时 − 等响应头耗时`，“见
+ * `domain/usage::generationWindowMs`）：发送与排队的时间不算模型在吐字。
+ * 而且窗口**不足 1 秒**时仍然不算：这么短的时间里计时误差会被放大成几万，
+ * 比不给值更误导。
  *
  * @param facts 账本流水（没查到就不挂 request）
  * @param output 该次请求的补全 token（用来算吞吐）
@@ -128,13 +131,18 @@ function requestInfo(
   output: number | undefined,
 ): TrajectoryRequestInfo | undefined {
   if (!facts) return undefined
-  const measured =
-    facts.durationMs !== undefined && Number.isFinite(facts.durationMs) && facts.durationMs > 0
-      ? Math.round(facts.durationMs)
-      : undefined
+  // 0 = 未采集（旧流水 / 桥接协议 / 非流式拿不到首字节）→ 不挂字段，UI 落破折号
+  const positive = (value: number | undefined): number | undefined =>
+    value !== undefined && Number.isFinite(value) && value > 0 ? Math.round(value) : undefined
+  const measured = positive(facts.durationMs)
+  // 输出速度只除「生成窗口」（发送 / 排队不算），见 `generationWindowMs`
+  const windowMs = generationWindowMs({
+    durationMs: facts.durationMs,
+    responseStartMs: facts.responseStartMs,
+  })
   const tokensPerSecond =
-    measured !== undefined && measured >= 1000 && output !== undefined && output > 0
-      ? Math.round((output * 1000) / measured)
+    windowMs >= 1000 && output !== undefined && output > 0
+      ? Math.round((output * 1000) / windowMs)
       : undefined
   return {
     ...(facts.id !== undefined ? { id: facts.id } : {}),
@@ -143,6 +151,15 @@ function requestInfo(
     kind: facts.kind,
     ...(facts.round !== undefined ? { round: facts.round } : {}),
     ...(measured !== undefined ? { durationMs: measured } : {}),
+    ...(positive(facts.requestBytes) !== undefined
+      ? { requestBytes: positive(facts.requestBytes)! }
+      : {}),
+    ...(positive(facts.responseStartMs) !== undefined
+      ? { responseStartMs: positive(facts.responseStartMs)! }
+      : {}),
+    ...(positive(facts.firstByteMs) !== undefined
+      ? { firstByteMs: positive(facts.firstByteMs)! }
+      : {}),
     ...(facts.estimated === true ? { estimated: true } : {}),
     ...(facts.traceId ? { traceId: facts.traceId } : {}),
     ...(tokensPerSecond !== undefined ? { tokensPerSecond } : {}),

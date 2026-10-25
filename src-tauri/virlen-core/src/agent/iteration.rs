@@ -168,6 +168,7 @@ pub async fn run_iteration(
         {
             Ok(outcome) => {
                 // 验证是真实 LLM 调用，但不产生消息 → 必须显式记账，否则这笔消费就漏了
+                let request_metrics = provider.take_request_metrics();
                 crate::agent::usage::record_usage(
                     repo,
                     session_id,
@@ -180,6 +181,7 @@ pub async fn run_iteration(
                     outcome.usage,
                     false,
                     Some(crate::telemetry::now_ms() - verify_started_ms),
+                    request_metrics,
                 )
                 .await;
                 outcome.result

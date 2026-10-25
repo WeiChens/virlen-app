@@ -27,6 +27,7 @@
  *    盖住（用户看到的就是「打开设置页，网页还在最上面」）。判据是**占位中心点的命中测试**
  *    （`coveredByOverlay`），而不是维护一张浮层清单 —— 那些浮层全是 portal 到 body 的，
  *    只要中心命中的元素跑出占位，就说明被盖了。
+ *    ⚠️ 命中测试每帧一次是白烧：结论只在浮层开合时变，故按 100ms 降频（wake 时强制重算）。
  * 7. **看不见就不跑帧**：看得见时逐帧同步（面板宽度过渡 / 拖分隔条要跟手），整体不可见就
  *    停掉 rAF，改由 `ResizeObserver` 与 `visibilitychange` 唤醒；没有 RO 的环境（jsdom 单测）
  *    低频轮询兜底。隐藏的标签不该每帧白量一次布局。
@@ -252,9 +253,29 @@ export function useNativeBrowserView({ label, url, reloadToken }: Options): Nati
       else if (!observer) timer = setTimeout(tick, IDLE_TICK_MS)
     }
 
+    /** 命中测试的最小间隔（ms） */
+    const COVER_CHECK_MS = 100
+    /** 上一次命中测试的结论与时间：rAF 每秒 60 次，结论却只在浮层开合时变 */
+    let coverAt = 0
+    let coverHit = false
+    /**
+     * 浮层都是 portal 到 body 的：body 的直接子节点一变（开 / 关一个浮层）就把结论标脏
+     * 并立刻补一拍 —— 只靠 100ms 的定时降频，开设置页那一瞬会是「网页仍盖在上面」。
+     * 回调在 DOM 变更后的微任务里跑（React 提交已结束），此时 setState 不会打断渲染。
+     */
+    const overlayWatcher =
+      typeof MutationObserver === 'function'
+        ? new MutationObserver(() => wake())
+        : null
+    if (overlayWatcher && document.body) {
+      overlayWatcher.observe(document.body, { childList: true })
+    }
+
     /** 外部唤醒（占位尺寸变了 / 窗口回到前台）：立刻补一拍，再按结论决定下一拍 */
     function wake(): void {
       if (stopped) return
+      // 刚回到前台 / 刚显示：遮挡结论可能已经变了，下一拍强制重测
+      coverAt = 0
       cancelScheduled()
       tick()
     }
@@ -284,8 +305,16 @@ export function useNativeBrowserView({ label, url, reloadToken }: Options): Nati
       const dragging =
         host.closest('.side-panel')?.classList.contains('is-resizing') ?? false
       const sized = rect.width >= MIN_SIZE && rect.height >= MIN_SIZE
-      // 尺寸正常才值得做命中测试（rect 为 0 时中心点毫无意义）
-      const isCovered = sized && coveredByOverlay(host, rect)
+      // 尺寸正常才值得做命中测试（rect 为 0 时中心点毫无意义）；降频到 10Hz —— 每帧一次
+      // `elementFromPoint` 是一次强制命中测试，而结论只在浮层开合时变。
+      if (!sized) {
+        coverAt = 0
+        coverHit = false
+      } else if (coverAt === 0 || Date.now() - coverAt >= COVER_CHECK_MS) {
+        coverAt = Date.now()
+        coverHit = coveredByOverlay(host, rect)
+      }
+      const isCovered = sized && coverHit
       if (isCovered !== coveredRef.current) {
         coveredRef.current = isCovered
         setCovered(isCovered)
@@ -356,6 +385,7 @@ export function useNativeBrowserView({ label, url, reloadToken }: Options): Nati
       stopped = true
       cancelScheduled()
       observer?.disconnect()
+      overlayWatcher?.disconnect()
       document.removeEventListener('visibilitychange', wake)
       state.created = false
       state.visible = false

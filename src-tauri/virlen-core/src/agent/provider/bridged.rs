@@ -4,6 +4,7 @@
 //! 事件再经 `ProviderBridgeMsg` 回灌（见 `docs/rust-engine.md`）。
 
 use super::Provider;
+use super::RequestMetrics;
 use super::super::bridge::{AgentBridgeState, ProviderBridgeMsg};
 use super::super::cancellation::CancellationToken;
 use super::super::event_sink::EventSink;
@@ -19,6 +20,8 @@ pub struct BridgedProvider {
     base_url: String,
     bridge: Arc<AgentBridgeState>,
     sink: Arc<dyn EventSink>,
+    /// 最近一次请求的传输侧事实（引擎取走后清空）
+    metrics: std::sync::Mutex<Option<RequestMetrics>>,
 }
 
 impl BridgedProvider {
@@ -38,7 +41,13 @@ impl BridgedProvider {
             base_url: base_url.to_string(),
             bridge,
             sink,
+            metrics: std::sync::Mutex::new(None),
         }
+    }
+
+    /// 记录本次请求的传输侧事实（覆盖上一次的残留值）
+    fn store_metrics(&self, metrics: RequestMetrics) {
+        *self.metrics.lock().unwrap() = Some(metrics);
     }
 
     fn request_value(&self, request: &ChatRequest) -> Value {
@@ -61,6 +70,10 @@ impl BridgedProvider {
 
 #[async_trait]
 impl Provider for BridgedProvider {
+    fn take_request_metrics(&self) -> Option<RequestMetrics> {
+        self.metrics.lock().unwrap().take()
+    }
+
     async fn chat(
         &self,
         request: &ChatRequest,
@@ -100,6 +113,7 @@ impl Provider for BridgedProvider {
         _cancel: &CancellationToken,
         on_event: &mut (dyn FnMut(StreamEvent) + Send),
     ) -> Result<(), String> {
+        let started = crate::telemetry::now_ms();
         let request_value = self.request_value(request);
         let mut rx = self
             .bridge
@@ -113,15 +127,27 @@ impl Provider for BridgedProvider {
                 true,
             )
             .await?;
+        // 桥接协议看不到真实 HTTP 响应头，也拿不到 provider 侧请求体 → 只采集首字节。
+        // 请求体大小留 0（UI 显示破折号）：桥接转发的 ChatRequest 与 provider 最终发出的
+        // body 不是同一份（gemini 等协议形状不同），拿它冒充会直接误导。
+        let mut first_byte_ms: Option<i64> = None;
 
         while let Some(msg) = rx.recv().await {
             match msg {
                 ProviderBridgeMsg::Event(v) => {
+                    if first_byte_ms.is_none() {
+                        first_byte_ms = Some((crate::telemetry::now_ms() - started).max(1));
+                    }
                     if let Some(ev) = parse_bridge_stream_event(&v) {
                         on_event(ev);
                     }
                 }
                 ProviderBridgeMsg::Done { error, .. } => {
+                    self.store_metrics(RequestMetrics {
+                        request_bytes: 0,
+                        response_start_ms: None,
+                        first_byte_ms,
+                    });
                     if let Some(err) = error {
                         return Err(err);
                     }
@@ -129,6 +155,11 @@ impl Provider for BridgedProvider {
                 }
             }
         }
+        self.store_metrics(RequestMetrics {
+            request_bytes: 0,
+            response_start_ms: None,
+            first_byte_ms,
+        });
         Ok(())
     }
 }

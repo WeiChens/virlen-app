@@ -66,6 +66,12 @@ export interface UsageRecord {
   estimated: boolean
   /** LLM 请求耗时（ms，含首字延迟）；0 = 未测量（旧流水）→ 算不出 tok/s */
   durationMs: number
+  /** 请求体实际字节数（JSON 序列化后）；0 / 缺省 = 未采集 */
+  requestBytes?: number
+  /** 发出请求 → 收到响应头（ms）；0 / 缺省 = 未采集 */
+  responseStartMs?: number
+  /** 发出请求 → 收到首个响应字节（ms）；0 / 缺省 = 未采集（非流式拿不到） */
+  firstByteMs?: number
   traceId: string | null
 }
 

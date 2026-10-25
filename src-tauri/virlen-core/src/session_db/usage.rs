@@ -44,6 +44,12 @@ pub struct UsageEntry {
     pub estimated: bool,
     /// LLM 请求耗时（ms）；未测量传 `None` / 0（UI 显示 `-` 而不是 0 tok/s）
     pub duration_ms: Option<i64>,
+    /// 请求体实际字节数（JSON 序列化后的 UTF-8 长度）；0 = 未采集
+    pub request_bytes: i64,
+    /// 发出请求 → 收到响应头（ms）；0 = 未采集
+    pub response_start_ms: i64,
+    /// 发出请求 → 收到首个响应字节（ms）；0 = 未采集（非流式无法把等待与读取分开）
+    pub first_byte_ms: i64,
     pub trace_id: Option<String>,
 }
 
@@ -117,6 +123,12 @@ pub struct UsageRecord {
     pub estimated: bool,
     /// LLM 请求耗时（ms）；0 = 未测量（历史流水），UI 显示 `-`
     pub duration_ms: i64,
+    /// 请求体实际字节数；0 = 未采集
+    pub request_bytes: i64,
+    /// 发出请求 → 收到响应头（ms）；0 = 未采集
+    pub response_start_ms: i64,
+    /// 发出请求 → 收到首个响应字节（ms）；0 = 未采集
+    pub first_byte_ms: i64,
     pub trace_id: Option<String>,
 }
 
@@ -283,8 +295,8 @@ pub(crate) async fn append(
 INSERT OR IGNORE INTO usage_ledger (
   ts, session_id, message_id, model, provider_type, provider_config_id,
   kind, round, prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens,
-  total_tokens, estimated, duration_ms, trace_id
-) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
+  total_tokens, estimated, duration_ms, request_bytes, response_start_ms, first_byte_ms, trace_id
+) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
 "#,
                 )
                 .map_err(|e| format!("准备用量写入失败: {}", e))?;
@@ -305,6 +317,9 @@ INSERT OR IGNORE INTO usage_ledger (
                     e.total_tokens,
                     e.estimated as i64,
                     e.duration_ms.unwrap_or(0).max(0),
+                    e.request_bytes.max(0),
+                    e.response_start_ms.max(0),
+                    e.first_byte_ms.max(0),
                     e.trace_id,
                 ])
                 .map_err(|err| format!("写入用量流水失败: {}", err))?;
@@ -446,7 +461,7 @@ pub(crate) async fn records(
 SELECT u.id, u.ts, u.session_id, s.title, u.message_id, u.model,
    u.provider_type, u.provider_config_id, u.kind, u.round,
    u.prompt_tokens, u.completion_tokens, u.cached_tokens, u.cache_write_tokens, u.total_tokens,
-   u.estimated, u.duration_ms, u.trace_id
+   u.estimated, u.duration_ms, u.request_bytes, u.response_start_ms, u.first_byte_ms, u.trace_id
 FROM usage_ledger u
 LEFT JOIN sessions s ON s.id = u.session_id{where_sql}
 ORDER BY u.ts DESC, u.id DESC
@@ -486,7 +501,10 @@ LIMIT ?{limit_idx} OFFSET ?{offset_idx}
                             total_tokens: row.get(14)?,
                             estimated: row.get::<_, i64>(15)? != 0,
                             duration_ms: row.get(16)?,
-                            trace_id: row.get(17)?,
+                            request_bytes: row.get(17)?,
+                            response_start_ms: row.get(18)?,
+                            first_byte_ms: row.get(19)?,
+                            trace_id: row.get(20)?,
                         })
                     })
                 .map_err(|e| e.to_string())?;

@@ -8,6 +8,7 @@
 //!
 //! 记账失败只告警，**绝不**让主流程（聊天 / 验证）因统计失败而失败。
 
+use super::provider::RequestMetrics;
 use super::types::{Session, TokenUsage};
 use crate::session_db::{SessionRepo, UsageEntry};
 
@@ -102,6 +103,8 @@ pub fn ledger_tokens(u: &TokenUsage, provider_type: &str) -> LedgerTokens {
 /// - `message_id`：`chat_round` 传 assistant 消息 id 作幂等键；其余传 `None`（每次调用独立记账）
 /// - `duration_ms`：本次 LLM 请求的墙钟耗时（含首字延迟）—— UI 用它算 tok/s；
 ///   拿不到就传 `None`（落库为 0，UI 显示 `-`）。与 TS 侧 `UsageLedgerRecord.durationMs` 对称（铁律 1）
+/// - `metrics`：provider 采集的传输侧事实（请求体字节数 / 等响应头 / 等首字节）；
+///   拿不到传 `None`（落库为 0 = 未采集，UI 显示破折号）
 /// - `usage` 为 `None`（provider 未返回用量，如流式中断）时不记账
 /// - `estimated`：`usage` 是否为**本地估算**（provider 没回报用量时的兜底）——
 ///   UI 需与真实用量区分展示（与 TS `recordUsage` 的 `estimated` 列语义一致）
@@ -118,6 +121,7 @@ pub async fn record_usage(
     usage: Option<TokenUsage>,
     estimated: bool,
     duration_ms: Option<i64>,
+    metrics: Option<RequestMetrics>,
 ) {
     let Some(u) = usage else {
         return;
@@ -141,6 +145,16 @@ pub async fn record_usage(
         estimated,
         // 非正耗时不记（如注入假时长 / 时钟回拨）→ UI 显示 '-' 而不是除零或无穷大
         duration_ms: duration_ms.filter(|d| *d > 0),
+        // 0 = 未采集（旧流水 / 桥接 / 非流式拿不到首字节）—— 同上，0 不当成真实值
+        request_bytes: metrics.map(|m| m.request_bytes as i64).unwrap_or(0),
+        response_start_ms: metrics
+            .and_then(|m| m.response_start_ms)
+            .filter(|v| *v > 0)
+            .unwrap_or(0),
+        first_byte_ms: metrics
+            .and_then(|m| m.first_byte_ms)
+            .filter(|v| *v > 0)
+            .unwrap_or(0),
         trace_id: crate::telemetry::get_session_trace(session_id),
     };
     if let Err(e) = repo.append_usage(&[entry]).await {

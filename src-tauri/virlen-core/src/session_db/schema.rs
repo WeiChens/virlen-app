@@ -149,6 +149,11 @@ CREATE TABLE IF NOT EXISTS usage_ledger (
   -- LLM 请求耗时（ms）：0 = 未测量（历史流水 / 旧版本写的），UI 显示 '-'。
   -- 存原始耗时而不存 tok/s：单位换算与口径（是否含首字延迟）改一次不用回填历史数据
   duration_ms        INTEGER NOT NULL DEFAULT 0,
+  -- 传输侧事实（轨迹检查器「请求」页）：请求体实际字节数 / 等响应头耗时 / 等首字节耗时。
+  -- 0 = 未采集（旧流水 / 桥接协议 / 非流式拿不到首字节）—— UI 显示 `-`，不得当成 0。
+  request_bytes      INTEGER NOT NULL DEFAULT 0,
+  response_start_ms  INTEGER NOT NULL DEFAULT 0,
+  first_byte_ms      INTEGER NOT NULL DEFAULT 0,
   trace_id           TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_ledger(ts);
@@ -223,6 +228,7 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<bool, String> {
         .map_err(|e| format!("初始化用量账本失败: {}", e))?;
     ensure_usage_duration_column(conn)?;
     ensure_usage_cache_write_column(conn)?;
+    ensure_usage_transport_columns(conn)?;
     // 应用设置（配置下沉 D3）：纯建表，元数据级开销
     conn.execute_batch(SETTINGS_DDL)
         .map_err(|e| format!("初始化应用设置表失败: {}", e))?;
@@ -377,6 +383,37 @@ fn ensure_memories_superseded_by_column(conn: &Connection) -> Result<(), String>
     if !exists {
         conn.execute("ALTER TABLE memories ADD COLUMN superseded_by TEXT", [])
             .map_err(|e| format!("添加 memories.superseded_by 列失败: {}", e))?;
+    }
+    Ok(())
+}
+
+/// 老库给 `usage_ledger` 补三个**传输侧**列（新库由 DDL 直接建出，这里检测后跳过）。
+///
+/// 与 `ensure_usage_duration_column` 同一策略：元数据级 `ALTER`（带默认值，不重写表），
+/// 不占 `SCHEMA_VERSION`。旧流水补出来是 0 = 未采集 —— 那时根本没记录过这些事实，
+/// 不能拿 0 字节 / 0 毫秒去冒充测量值。
+fn ensure_usage_transport_columns(conn: &Connection) -> Result<(), String> {
+    let existing: std::collections::HashSet<String> = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(usage_ledger)")
+            .map_err(|e| format!("读取 usage_ledger 表结构失败: {}", e))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| e.to_string())?;
+        rows.flatten().collect()
+    };
+    for column in ["request_bytes", "response_start_ms", "first_byte_ms"] {
+        if existing.contains(column) {
+            continue;
+        }
+        conn.execute(
+            &format!(
+                "ALTER TABLE usage_ledger ADD COLUMN {} INTEGER NOT NULL DEFAULT 0",
+                column
+            ),
+            [],
+        )
+        .map_err(|e| format!("添加 usage_ledger.{} 列失败: {}", column, e))?;
     }
     Ok(())
 }

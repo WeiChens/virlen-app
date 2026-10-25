@@ -222,14 +222,23 @@ function isValidPath(str: string): boolean {
  *
  * 行内代码嵌在正文里，跟的是界面字号；代码块（block）跟的是独立的「代码显示」字号，
  * 两者不要混 —— 否则用户只想把代码调大时，正文里的 `inline code` 也跟着变。
+ *
+ * 缓存：这是渲染期读值，`getComputedStyle` 每次都会做一次样式解析。真值只随根节点的
+ * `data-font-size` 变（theme.scss 的 `[data-font-size=…]` 分支），拿它当缓存键即可 ——
+ * 读属性比读计算样式便宜得多。
  */
+let uiMdCache: { key: string; px: number } | null = null
 function getUiMdFontPx(): number {
   if (typeof document === 'undefined') return 13
+  const key = document.documentElement.dataset.fontSize ?? ''
+  if (uiMdCache && uiMdCache.key === key) return uiMdCache.px
   const val = getComputedStyle(document.documentElement)
     .getPropertyValue('--font-size-md')
     .trim()
   const parsed = parseInt(val, 10)
-  return isNaN(parsed) ? 13 : parsed
+  const px = isNaN(parsed) ? 13 : parsed
+  uiMdCache = { key, px }
+  return px
 }
 
 /**
@@ -311,14 +320,17 @@ const HEADER_FALLBACK_PX = 38
 /** 代码区至少保留的高度（px）：窗口极小时也不至于给 Monaco 算出负数 */
 const MIN_BODY_HEIGHT_PX = 120
 
-/** 窗口自绘标题栏高度（`--window-top-bar-height`）：全屏代码块要从可用高度里让出它 */
+/** 窗口自绘标题栏高度（`--window-top-bar-height`）：主题里的固定令牌，读到一次就缓存。 */
+let topBarHeightCache: number | null = null
 function topBarHeightPx(): number {
+  if (topBarHeightCache !== null) return topBarHeightCache
   if (typeof document === 'undefined') return 30
   const raw = getComputedStyle(document.documentElement)
     .getPropertyValue('--window-top-bar-height')
     .trim()
   const parsed = parseFloat(raw)
-  return Number.isFinite(parsed) ? parsed : 30
+  topBarHeightCache = Number.isFinite(parsed) ? parsed : 30
+  return topBarHeightCache
 }
 
 /**

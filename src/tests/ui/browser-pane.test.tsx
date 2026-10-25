@@ -666,6 +666,38 @@ it('设置页 / Modal 盖住占位时：原生视图先躲开（它是子窗口�
   expect(document.querySelector('.browser-pending')).not.toBeNull()
 })
 
+it('命中测试不是每帧一次：没有 DOM 变化时按 100ms 降频', async () => {
+  mount('https://a.com/')
+  setViewportRect({ left: 0, top: 40, width: 420, height: 560 })
+  await tick()
+  expect(bridge.open).toHaveBeenCalledTimes(1)
+
+  // 从这一帧开始计数：连续 10 帧、没有任何浮层变化
+  let hits = 0
+  const real = document.elementFromPoint.bind(document)
+  document.elementFromPoint = ((x: number, y: number) => {
+    hits++
+    return real(x, y)
+  }) as typeof document.elementFromPoint
+  for (let i = 0; i < 10; i++) await tick()
+  // 每帧一次就是 10 次；降频后应该一次都不做（10 帧 ≪ 100ms）
+  expect(hits).toBeLessThanOrEqual(1)
+
+  // 浮层出现（body 直接子节点变化）→ 不等到 100ms 就重测并藏起来
+  const overlay = document.createElement('div')
+  overlay.className = 'settings-overlay'
+  document.body.appendChild(overlay)
+  overlayHit = overlay
+  await tick()
+  // 关键是「没有回到逐帧」：最多因为 StrictMode 双挂载多跑一次，而不是 60 次/秒
+  expect(hits).toBeLessThanOrEqual(2)
+  expect(bridge.apply).toHaveBeenLastCalledWith(
+    expect.any(String),
+    expect.anything(),
+    false,
+  )
+})
+
 it('被盖住时不去新建视图（建了也是一层白占的窗口）', async () => {
   const overlay = document.createElement('div')
   overlay.className = 'modal-overlay'

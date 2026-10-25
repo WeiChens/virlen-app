@@ -5,7 +5,7 @@ import commentEvent from '@/events/commentEvent'
 import { chatState, sessionStore, settingsState } from '@/ui/store'
 import { Message } from '@/types'
 import { ToolOutput, toolOutputStore } from '@/infrastructure/tools/output-store'
-import { processTerminalOutput } from '@/infrastructure/tools/execute/common'
+import { processTerminalOutput, TerminalOutputParser } from '@/infrastructure/tools/execute/common'
 import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
 import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
 import { XtermTerminalBlock } from './XtermTerminal'
@@ -30,8 +30,12 @@ export interface TerminalSegment {
 }
 
 /** 运行中：整条流作为单个 live 片段；整体做 ANSI / 回车处理，保证 \r 进度条跨 chunk 覆盖正确 */
-export function buildLiveSegments(raw: string): TerminalSegment[] {
-  const text = processTerminalOutput(raw)
+export function buildLiveSegments(
+  raw: string,
+  /** 增量解析器（运行中传入）：只解析新增部分；不传＝一次性从头解析 */
+  parser?: TerminalOutputParser,
+): TerminalSegment[] {
+  const text = parser ? parser.feed(raw) : processTerminalOutput(raw)
   if (!text) return []
   return [{ kind: 'live', text }]
 }
@@ -320,6 +324,10 @@ export function TerminalView({
     ? entry?.sandbox
     : (message?.uiData?.sandbox ?? entry?.sandbox)
   const [killing, setKilling] = useState(false)
+  /** 运行中输出的增量解析器（每条命令一份，换 toolCallId 重建） */
+  const liveParserRef = useRef<{ id: string; parser: TerminalOutputParser } | null>(
+    null,
+  )
   // 「打开即居中」只在用户点开时触发（expand 的 false→true）；不能用 !running ——
   // 运行中的终端未展开也会挂载，命令结束时会把列表拽走
   const rootRef = useAutoCenter(!!expand)
@@ -331,13 +339,25 @@ export function TerminalView({
   const cwd = workspace ? workspace.replace(/\\/g, '/').replace(/\/+$/, '') : ''
 
   const segments = useMemo(() => {
-    if (running) return buildLiveSegments(output)
-    return buildFinishedSegments(
-      message?.uiData,
-      message?.content as string,
-      !!message?.isError,
-    )
-  }, [running, output, message])
+    if (!running) {
+      return buildFinishedSegments(
+        message?.uiData,
+        message?.content as string,
+        !!message?.isError,
+      )
+    }
+    /*
+     * 运行中：整段 output 每 50ms 变一次（`output-store` 的节流窗口），所以只把**新增部分**
+     * 交给解析器 —— 每次从头解析一遍在几 MB 输出下就是 O(n²)。
+     * 换一条命令（toolCallId 变）就换一个解析器，旧状态不能跨命令复用。
+     */
+    let live = liveParserRef.current
+    if (!live || live.id !== toolCallId) {
+      live = { id: toolCallId, parser: new TerminalOutputParser() }
+      liveParserRef.current = live
+    }
+    return buildLiveSegments(output, live.parser)
+  }, [running, output, message, toolCallId])
 
   // 只在低频节点（展开 / 命令结束）请外层确认一次贴底；外层虚拟列表已配 anchorTo:'end'
   useEffect(() => {

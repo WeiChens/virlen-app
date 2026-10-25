@@ -381,6 +381,8 @@ pub async fn cmd_compress_context(
     }
     // 记账：AI 摘要是一次真实消费；raw 没有模型调用 → 不记账
     if let Some(llm) = &out.llm {
+        // AI 摘要那次请求的传输侧事实（raw / 桥接协议拿不到 → 落 0）
+        let request_metrics = provider_obj.as_ref().and_then(|p| p.take_request_metrics());
         let (ptype, pid) = provider
             .as_ref()
             .map(|p| (p.provider_type.as_str(), p.provider_id.as_str()))
@@ -397,6 +399,7 @@ pub async fn cmd_compress_context(
             Some(llm.usage.clone()),
             llm.estimated,
             Some(llm.duration_ms),
+            request_metrics,
         )
         .await;
     }
@@ -449,6 +452,7 @@ pub async fn cmd_generate_title(
         &CancellationToken::new(),
     )
     .await?;
+    let request_metrics = provider_obj.take_request_metrics();
     if let Some(u) = &out.usage {
         usage::record_usage(
             repo.inner().as_ref(),
@@ -462,6 +466,7 @@ pub async fn cmd_generate_title(
             Some(u.clone()),
             false,
             Some(out.duration_ms),
+            request_metrics,
         )
         .await;
     }

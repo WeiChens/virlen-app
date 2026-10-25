@@ -25,6 +25,7 @@ import ContextMenu, {
 } from '@/ui/components/shared/ContextMenu'
 import { editableMenuItems } from '@/ui/components/shared/ContextMenu/editable'
 import ChatInput from '@/ui/pages/chat/components/input'
+import { chatState } from '@/ui/store'
 import { initDefaultAgent } from '@/services/agent-service'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
@@ -278,6 +279,23 @@ describe('输入框右键菜单的接线（受控 textarea）', () => {
 })
 
 describe('聊天输入框的接线', () => {
+  it('是 observer：loadingText 变了当帧就上屏（不靠 2s 定时器兜底）', async () => {
+    await initDefaultAgent()
+    chatState.setValue('loadingText', '')
+    const { host, root } = await render(<ChatInput onSend={() => {}} loading />)
+    const label = () =>
+      host.querySelector('.working-indicator')?.getAttribute('aria-label')
+    expect(label()).toBe('正在工作中')
+
+    // 只改 store，不推进任何定时器：以前包成 observable（而不是 observer）时
+    // 这一句要等最多 2 秒的强制重渲染才会上屏
+    await act(async () => {
+      chatState.setValue('loadingText', '视觉分析中')
+    })
+    expect(label()).toBe('视觉分析中')
+    await act(async () => root.unmount())
+  })
+
   it('右键 textarea 弹出四项菜单（关掉浏览器原生菜单）', async () => {
     // 输入框里带 Agent 选择器，它要求默认 Agent 已就位
     // （真实启动流程在 main.ts 的 step('defaultAgent') 里做这一步）

@@ -366,168 +366,237 @@ function installListener(): void {
 // 5. 终端输出处理
 
 /**
- * 把终端输出中的 \r 覆盖、光标移动与清屏序列解释成纯文本。
- * 必须完整吞掉转义序列（旧实现只吃 `0-9;`，`\x1b[?25l` 会漏出 "25l"）。
- * 与 Rust common.rs::process_terminal_output 逐条对齐。
+ * 终端输出解析器（**有状态**）：喂的是「累积输出」，只解析上次之后新增的那一段。
+ *
+ * 为什么需要：运行中的命令每 50ms 通知一次 UI（`output-store.ts` 的 `NOTIFY_INTERVAL_MS`），
+ * 而 `output` 是整段累积串。以前每次都从头跑一遍逐字符状态机 —— 一轮大输出（几 MB）就是 O(n²)，
+ * CPU 全耗在重解析已经解析过的内容上（还会把主线程卡住）。
+ *
+ * 两条不变量：
+ * 1. **只前进**：`raw` 单调增长，变短视为换了一条流（重置）；同一份内容重复喂是幂等的；
+ * 2. **半截转义序列留到下一块**：`"\x1b["` 可能被切在两个 chunk 之间，当正文吐出去就是乱码。
+ *
+ * 单次结果与 Rust `common.rs::process_terminal_output` 逐条对齐（回归用例见
+ * `tests/infrastructure/terminal-output.test.ts`）。
  */
-export function processTerminalOutput(raw: string): string {
-  if (!raw) return ''
+export class TerminalOutputParser {
+  /**
+   * 行缓冲区。⚠️ **不裁剪尾部空行**：裁剪会让 `\x1b[B` 的边界判定与全量解析不一致
+   *（空行也是光标可停的可写位置）；只在 `text()` 输出时跳过尾部空行。
+   */
+  private buffer: string[] = ['']
+  /** 当前行（从 0 开始） */
+  private row = 0
+  /** 当前列 */
+  private col = 0
+  /** 已经吃进解析器的原始长度 */
+  private rawLen = 0
+  /** 上一块末尾没解析完的转义序列（已计入 rawLen） */
+  private carry = ''
+  private cache: string | null = null
 
-  // 行缓冲区
-  const buffer: string[] = ['']
-  let row = 0 // 当前行（从 0 开始）
-  let col = 0 // 当前列
+  /** 喂入**累积**输出，返回当前的纯文本视图 */
+  feed(raw: string): string {
+    // 空 / null（旧实现 `if (!raw) return ''`，调用方可能传 undefined）
+    if (!raw) {
+      this.reset()
+      return ''
+    }
+    if (raw.length < this.rawLen) this.reset()
+    // React StrictMode / 重复渲染会把同一份内容喂两次：必须是幂等的
+    if (raw.length === this.rawLen) return this.text()
+    const chunk = this.carry + raw.slice(this.rawLen)
+    this.rawLen = raw.length
+    this.carry = this.scan(chunk)
+    this.cache = null
+    return this.text()
+  }
 
-  let i = 0
-  while (i < raw.length) {
-    const ch = raw[i]
+  /** 当前解析结果（移除尾部空行，保留至少一行） */
+  text(): string {
+    if (this.cache !== null) return this.cache
+    let end = this.buffer.length
+    while (end > 1 && this.buffer[end - 1] === '') end--
+    this.cache = this.buffer.slice(0, end).join('\n')
+    return this.cache
+  }
 
-    if (ch === '\r') {
-      // 回车：回到行首
-      col = 0
-      i++
-    } else if (ch === '\n') {
-      // 换行：移动到下一行
-      row++
-      col = 0
-      if (row >= buffer.length) {
-        buffer.push('')
-      }
-      i++
-    } else if (ch === '\x1b' && i + 1 < raw.length) {
-      // ---- ANSI 转义序列：必须完整吞掉，否则参数会被当成正文写进输出 ----
-      // （旧实现只认 `ESC [` 且只吃 0-9;，`\x1b[?25l` 这类私有模式会把 "25l" 漏成正文）
-      const kind = raw[i + 1]
-      if (kind === '[') {
-        // CSI: ESC [ 0x30-0x3F(参数) 0x20-0x2F(中间) 0x40-0x7E(结束)
-        let j = i + 2
-        let params = ''
-        while (j < raw.length && /[0-9;:<=>?]/.test(raw[j])) {
-          params += raw[j]
-          j++
-        }
-        // 中间字节（空格、!、"、#、$、%、&、'、*、+、-、.、/）不属于参数，跳过
-        while (j < raw.length && raw[j] >= ' ' && raw[j] <= '/') {
-          j++
-        }
-        const cmd = j < raw.length ? raw[j] : ' '
-        i = Math.min(j + 1, raw.length) // 跳过命令字符
-        // 带 ? < = > 前缀的是私有模式 → 整体忽略（但已完整吞掉）
-        const privateMode = /^[?<=>]/.test(params)
-        const numStr = params.replace(/^[?<=>]+/, '')
-        const num = parseInt(numStr, 10) || 1
-        if (!privateMode) {
-          switch (cmd) {
-            case 'A': // 光标上移
-              row = Math.max(0, row - num)
-              break
-            case 'B': // 光标下移
-              row = Math.min(buffer.length - 1, row + num)
-              break
-            case 'C': // 光标右移
-              col += num
-              break
-            case 'D': // 光标左移
-              col = Math.max(0, col - num)
-              break
-            case 'K': {
-              // 清除从光标到行尾
-              while (row >= buffer.length) buffer.push('')
-              const line = buffer[row] ?? ''
-              buffer[row] = line.substring(0, col)
-              break
+  private reset(): void {
+    this.buffer = ['']
+    this.row = 0
+    this.col = 0
+    this.rawLen = 0
+    this.carry = ''
+    this.cache = null
+  }
+
+  /** 解析一块；返回末尾那段**尚未完成**的转义序列（没有则空串） */
+  private scan(chunk: string): string {
+    const n = chunk.length
+    const buffer = this.buffer
+    let row = this.row
+    let col = this.col
+    let i = 0
+    try {
+      while (i < n) {
+        const ch = chunk[i]
+
+        if (ch === '\r') {
+          // 回车：回到行首
+          col = 0
+          i++
+        } else if (ch === '\n') {
+          // 换行：移动到下一行
+          row++
+          col = 0
+          if (row >= buffer.length) buffer.push('')
+          i++
+        } else if (ch === '\x1b') {
+          // ---- ANSI 转义序列：必须完整吞掉，否则参数会被当成正文写进输出 ----
+          if (i + 1 >= n) return chunk.slice(i)
+          const kind = chunk[i + 1]
+          if (kind === '[') {
+            // CSI: ESC [ 0x30-0x3F(参数) 0x20-0x2F(中间) 0x40-0x7E(结束)
+            let j = i + 2
+            let params = ''
+            while (j < n && /[0-9;:<=>?]/.test(chunk[j])) {
+              params += chunk[j]
+              j++
             }
-            case 'J': {
-              // 清除屏幕：0 = 光标到屏幕尾, 1 = 屏幕头到光标, 2/3 = 全屏
-              const mode = numStr ? parseInt(numStr, 10) : 0
-              if (mode === 2 || mode === 3) {
-                buffer.length = 0
-                buffer.push('')
-                row = 0
-                col = 0
+            if (j >= n) return chunk.slice(i)
+            // 中间字节（空格、!、"、#、$、%、&、'、*、+、-、.、/）不属于参数，跳过
+            while (j < n && chunk[j] >= ' ' && chunk[j] <= '/') j++
+            if (j >= n) return chunk.slice(i)
+            const cmd = chunk[j]
+            i = j + 1
+            // 带 ? < = > 前缀的是私有模式 → 整体忽略（但已完整吞掉）
+            const privateMode = /^[?<=>]/.test(params)
+            const numStr = params.replace(/^[?<=>]+/, '')
+            const num = parseInt(numStr, 10) || 1
+            if (!privateMode) {
+              switch (cmd) {
+                case 'A': // 光标上移
+                  row = Math.max(0, row - num)
+                  break
+                case 'B': // 光标下移
+                  row = Math.min(buffer.length - 1, row + num)
+                  break
+                case 'C': // 光标右移
+                  col += num
+                  break
+                case 'D': // 光标左移
+                  col = Math.max(0, col - num)
+                  break
+                case 'K': {
+                  // 清除从光标到行尾
+                  while (row >= buffer.length) buffer.push('')
+                  const line = buffer[row] ?? ''
+                  buffer[row] = line.substring(0, col)
+                  break
+                }
+                case 'J': {
+                  // 清除屏幕：0 = 光标到屏幕尾, 1 = 屏幕头到光标, 2/3 = 全屏
+                  const mode = numStr ? parseInt(numStr, 10) : 0
+                  if (mode === 2 || mode === 3) {
+                    buffer.length = 0
+                    buffer.push('')
+                    row = 0
+                    col = 0
+                  }
+                  break
+                }
+                case 'H': // 光标定位: \x1b[row;colH
+                case 'f': {
+                  const parts = numStr.split(';')
+                  const r = parseInt(parts[0], 10) || 1
+                  const c = parseInt(parts[1], 10) || 1
+                  row = r - 1
+                  col = c - 1
+                  break
+                }
+                default:
+                  // 颜色 / 样式 / ECH 擦除字符等：对纯文本无影响，忽略
+                  break
               }
-              break
             }
-            case 'H': // 光标定位: \x1b[row;colH
-            case 'f': {
-              const parts = numStr.split(';')
-              const r = parseInt(parts[0], 10) || 1
-              const c = parseInt(parts[1], 10) || 1
-              row = r - 1
-              col = c - 1
-              break
+          } else if (kind === ']') {
+            // OSC: ESC ] ... 由 BEL 或 ST(ESC \) 结束（典型是 `\x1b]0;标题\x07`）
+            let j = i + 2
+            let closed = false
+            while (j < n) {
+              if (chunk[j] === '\x07') {
+                j++
+                closed = true
+                break
+              }
+              if (chunk[j] === '\x1b' && chunk[j + 1] === '\\') {
+                j += 2
+                closed = true
+                break
+              }
+              j++
             }
-            default:
-              // 颜色 / 样式 / ECH 擦除字符等：对纯文本无影响，忽略
-              break
+            if (!closed) return chunk.slice(i)
+            i = Math.min(j, n)
+          } else if (kind >= ' ' && kind <= '/') {
+            // 带中间字节的**三字节**转义（ESC ( 0 切字符集 / ESC # 8 等）
+            if (i + 3 > n) return chunk.slice(i)
+            i += 3
+          } else {
+            // 两字符转义（ESC 7 保存光标 / ESC = 等）
+            i += 2
           }
-        }
-      } else if (kind === ']') {
-        // OSC: ESC ] ... 由 BEL 或 ST(ESC \) 结束（典型是 `\x1b]0;标题\x07`）
-        let j = i + 2
-        while (j < raw.length) {
-          if (raw[j] === '\x07') {
-            j++
-            break
+        } else if (ch === '\b') {
+          // 退格：光标左移一格
+          col = Math.max(0, col - 1)
+          i++
+        } else if (ch === '\t') {
+          // Tab → 补到下一个 8 列边界
+          const tabStop = 8
+          const nextCol = Math.ceil((col + 1) / tabStop) * tabStop
+          while (row >= buffer.length) buffer.push('')
+          let line = buffer[row]
+          while (col < nextCol) {
+            if (col >= line.length) {
+              line += ' '
+            }
+            col++
           }
-          if (raw[j] === '\x1b' && raw[j + 1] === '\\') {
-            j += 2
-            break
+          buffer[row] = line
+          i++
+        } else if (ch >= ' ') {
+          // 可打印字符：写入缓冲区
+          while (row >= buffer.length) buffer.push('')
+          const line = buffer[row]
+          if (col >= line.length) {
+            // 追加到行尾
+            buffer[row] = line + ch
+          } else {
+            // 覆盖当前位置
+            buffer[row] = line.substring(0, col) + ch + line.substring(col + 1)
           }
-          j++
+          col++
+          i++
+        } else {
+          // 不可见控制字符（如 \x00-\x1f 中未处理的）→ 跳过
+          i++
         }
-        i = Math.min(j, raw.length)
-      } else if (kind >= ' ' && kind <= '/') {
-        // 带中间字节的**三字节**转义（ESC ( 0 切字符集 / ESC # 8 等）
-        i = Math.min(i + 3, raw.length)
-      } else {
-        // 两字符转义（ESC 7 保存光标 / ESC = 等）
-        i = Math.min(i + 2, raw.length)
       }
-    } else if (ch === '\b') {
-      // 退格：光标左移一格
-      col = Math.max(0, col - 1)
-      i++
-    } else if (ch === '\t') {
-      // Tab → 补到下一个 8 列边界
-      const tabStop = 8
-      const nextCol = Math.ceil((col + 1) / tabStop) * tabStop
-      while (row >= buffer.length) buffer.push('')
-      let line = buffer[row]
-      while (col < nextCol) {
-        if (col >= line.length) {
-          line += ' '
-        }
-        col++
-      }
-      buffer[row] = line
-      i++
-    } else if (ch >= ' ') {
-      // 可打印字符：写入缓冲区
-      while (row >= buffer.length) {
-        buffer.push('')
-      }
-      let line = buffer[row]
-      if (col >= line.length) {
-        // 追加到行尾
-        buffer[row] = line + ch
-      } else {
-        // 覆盖当前位置
-        buffer[row] = line.substring(0, col) + ch + line.substring(col + 1)
-      }
-      col++
-      i++
-    } else {
-      // 不可见控制字符（如 \x00-\x1f 中未处理的）→ 跳过
-      i++
+      return ''
+    } finally {
+      this.row = row
+      this.col = col
     }
   }
+}
 
-  // 移除尾部空行（保留至少一行）
-  while (buffer.length > 1 && buffer[buffer.length - 1] === '') {
-    buffer.pop()
-  }
-  return buffer.join('\n')
+/**
+ * 把终端输出中的 \r 覆盖、光标移动与清屏序列解释成纯文本（一次性版本）。
+ * 必须完整吞掉转义序列（旧实现只吃 `0-9;`，`\x1b[?25l` 会漏出 "25l"）。
+ * 流式场景请用 `TerminalOutputParser`：这个函数每次都从头解析。
+ */
+export function processTerminalOutput(raw: string): string {
+  return new TerminalOutputParser().feed(raw)
 }
 
 // 6. 命令执行核心

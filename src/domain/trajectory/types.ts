@@ -65,6 +65,12 @@ export interface TrajectoryRequestFacts {
   round?: number
   /** LLM 请求耗时（ms）；0 / 缺省 = 未测量（旧流水） */
   durationMs?: number
+  /** 请求体实际字节数（JSON 序列化后）；缺省 = 未采集 */
+  requestBytes?: number
+  /** 发出请求 → 收到响应头（ms）；缺省 = 未采集 */
+  responseStartMs?: number
+  /** 发出请求 → 收到首个响应字节（ms）；缺省 = 未采集 */
+  firstByteMs?: number
   /** 用量是本地估算（非 API 返回） */
   estimated?: boolean
   traceId?: string
@@ -88,10 +94,21 @@ export interface TrajectoryRequestInfo {
   round?: number
   /** 账本实测的请求耗时（ms，含首字延迟）；未测量时为 undefined */
   durationMs?: number
+  /**
+   * 请求体实际字节数（JSON 序列化后的 UTF-8 长度）。
+   *
+   * 与 token 数不同：它包含工具定义 / 系统提示词 / 图片块 base64 等**原样发出去的内容**，
+   * 所以能解释「为什么这次请求特别慢」（传输量与上传带宽都在它上面）。
+   */
+  requestBytes?: number
+  /** 发出请求 → 收到响应头（ms）：纯网络 + 服务端排队，**不含**任何生成时间 */
+  responseStartMs?: number
+  /** 发出请求 → 收到首个响应字节（ms）：响应头 + 首 token 之前的一切 */
+  firstByteMs?: number
   /** 用量为本地估算 */
   estimated?: boolean
   traceId?: string
-  /** 输出速度（tok/s）：`output / durationMs`；耗时未测或不足 1s 时为 undefined */
+  /** 输出速度（tok/s）：`output / 生成窗口`（请求耗时 − 等响应头耗时）；窗口未测或不足 1s 时为 undefined */
   tokensPerSecond?: number
   /**
    * 这条请求的模型与**上一次请求**不同（第一条请求也算）。

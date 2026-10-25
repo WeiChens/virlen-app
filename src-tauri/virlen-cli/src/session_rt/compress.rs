@@ -147,6 +147,8 @@ pub(crate) async fn compress_session(
     .await
     .map_err(CompressError::Failed)?;
     let elapsed_ms = virlen_core::telemetry::now_ms() - started;
+    // AI 摘要那次请求的传输侧事实（raw 模式没有 provider → None）
+    let request_metrics = provider.as_ref().and_then(|p| p.take_request_metrics());
 
     // 落库（先落库，再让界面报成功 —— 与引擎「先落库再 emit」同一条口径）
     rt.db
@@ -184,6 +186,7 @@ pub(crate) async fn compress_session(
             Some(llm.usage.clone()),
             llm.estimated,
             Some(llm.duration_ms),
+            request_metrics,
         )
         .await;
     }

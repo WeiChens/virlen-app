@@ -335,6 +335,8 @@ impl SessionRuntime {
         )
         .await
         .ok()?;
+        // 标题生成是真实请求，传输侧事实同样记下（不产生消息，但轨迹里能看到这笔记账）
+        let request_metrics = provider.take_request_metrics();
 
         self.session.title = out.title.clone();
         self.session.updated_at = virlen_core::telemetry::now_ms();
@@ -352,6 +354,7 @@ impl SessionRuntime {
                 Some(u.clone()),
                 false,
                 Some(out.duration_ms),
+                request_metrics,
             )
             .await;
         }

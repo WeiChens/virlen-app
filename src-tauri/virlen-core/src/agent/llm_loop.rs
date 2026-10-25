@@ -102,6 +102,10 @@ pub async fn execute_llm_round(
     .await?;
     let round_duration_ms = crate::telemetry::now_ms() - round_started_ms;
 
+    // provider 采集的传输侧事实（请求体大小 / 等响应头 / 等首字节）——
+    // 必须在本轮结束后立即取走，否则会残留到下一轮请求头上。
+    let request_metrics = provider.take_request_metrics();
+
     // 用量记账（kind=chat_round）——与 TS 引擎 `engine.round.end` 处对齐（铁律 1）。
     // 有 tool calls 时用量在 `ctx.assistant_message` 上（ctx 里的消息才是被流式更新过的那条），
     // 无 tool calls 时在返回的 `assistant_message` 上。
@@ -127,6 +131,7 @@ pub async fn execute_llm_round(
         ledger_usage,
         false,
         Some(round_duration_ms),
+        request_metrics,
     )
     .await;
 

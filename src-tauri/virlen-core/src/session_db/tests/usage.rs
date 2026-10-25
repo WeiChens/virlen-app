@@ -30,6 +30,9 @@ fn usage_entry(id: Option<&str>, ts: i64, kind: &str, total: i64) -> UsageEntry 
         total_tokens: total,
         estimated: false,
         duration_ms: Some(TEST_DURATION_MS),
+        request_bytes: 0,
+        response_start_ms: 0,
+        first_byte_ms: 0,
         trace_id: None,
     }
 }
@@ -236,6 +239,34 @@ async fn usage_duration_round_trip_and_legacy_zero() {
     );
     assert_eq!(by_id["m2"], 0, "未测量的流水落 0");
     assert_eq!(by_id["m3"], 0, "负耗时不记（避免负 tok/s）");
+}
+
+#[tokio::test]
+async fn usage_transport_columns_round_trip_and_legacy_zero() {
+    // 传输侧事实（轨迹「请求」页）：请求体字节数 / 等响应头 / 等首字节。
+    // 旧流水没有这些事实 → 落 0 = 未采集，UI 显示破折号而不是「0 字节 / 0ms」。
+    let repo = open_tmp();
+    let mut measured = usage_entry(Some("m1"), 1_000, "chat_round", 100);
+    measured.request_bytes = 12_345;
+    measured.response_start_ms = 210;
+    measured.first_byte_ms = 890;
+    // 未采集（非流式 / 桥接协议）
+    let unmeasured = usage_entry(Some("m2"), 2_000, "chat_round", 100);
+    repo.append_usage(&[measured, unmeasured]).await.unwrap();
+
+    let page = repo.usage_records(&UsageQuery::default()).await.unwrap();
+    let by_id: std::collections::HashMap<String, (i64, i64, i64)> = page
+        .records
+        .iter()
+        .map(|r| {
+            (
+                r.message_id.clone().unwrap_or_default(),
+                (r.request_bytes, r.response_start_ms, r.first_byte_ms),
+            )
+        })
+        .collect();
+    assert_eq!(by_id["m1"], (12_345, 210, 890));
+    assert_eq!(by_id["m2"], (0, 0, 0), "未采集的列落 0（UI 显示破折号）");
 }
 
 #[tokio::test]

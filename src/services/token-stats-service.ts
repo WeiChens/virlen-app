@@ -12,6 +12,7 @@ import {
   type ModelPrice,
   type TokenCost,
 } from '@/domain/pricing'
+import { generationWindowMs } from '@/domain/usage'
 import {
   statsRepo,
   type UsageBucket,
@@ -119,14 +120,17 @@ export interface RateInput {
   completionTokens: number
   /** 未测量（旧流水）时为 0 / undefined */
   durationMs?: number
+  /** 发出请求 → 收到响应头（ms）；缺省 = 没这项事实，分母退回整段耗时 */
+  responseStartMs?: number
 }
 
 /**
- * 输出速度 = completionTokens ÷ (durationMs/1000)，含首字延迟与思考时间。
+ * 输出速度 = completionTokens ÷ **生成窗口**（`请求耗时 − 等响应头耗时`，
+ * 见 `domain/usage::generationWindowMs`）：发送与排队的时间不算模型在吐字。
  * 返回 null 表示算不出（旧流水无耗时 / 无输出）→ UI 显示 -，绝不能当成 0。
  */
 export function outputTokPerSec(r: RateInput): number | null {
-  const ms = r.durationMs ?? 0
+  const ms = generationWindowMs(r)
   if (ms <= 0 || r.completionTokens <= 0) return null
   return r.completionTokens / (ms / 1000)
 }
@@ -197,7 +201,8 @@ export interface RecordsSummary {
 }
 
 /**
- * 明细汇总。tok/s 用加权口径（可测行 completion 之和 ÷ 可测行耗时之和），避免小请求拉偏均值。
+ * 明细汇总。tok/s 用加权口径（可测行 completion 之和 ÷ 可测行**生成窗口**之和），
+ * 避免小请求拉偏均值。
  */
 export function summarizeRecords(records: CostedRecord[]): RecordsSummary {
   let promptTokens = 0
@@ -220,8 +225,10 @@ export function summarizeRecords(records: CostedRecord[]): RecordsSummary {
     cost.cached += r.cost.cached
     cost.cacheWrite += r.cost.cacheWrite
     cost.total += r.cost.total
-    if (r.durationMs > 0 && r.completionTokens > 0) {
-      rateDurMs += r.durationMs
+    // 加权口径与单行一致：只累加「生成窗口」，发送 / 排队不进分母
+    const windowMs = generationWindowMs(r)
+    if (windowMs > 0 && r.completionTokens > 0) {
+      rateDurMs += windowMs
       rateCompletion += r.completionTokens
       rateSamples++
     }

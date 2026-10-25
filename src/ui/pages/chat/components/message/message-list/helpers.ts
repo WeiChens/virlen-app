@@ -154,17 +154,58 @@ export function pickActiveAnchorUser(
   topOf: (messageIndex: number) => number | undefined,
   viewportBottom: number,
 ): string | null {
-  let active: string | null = null
+  const n = messages.length
+  /** 一条都没进入视口时的兜底（高亮不能整个消失） */
   let firstUserId: string | null = null
-  for (let i = 0; i < messages.length; i++) {
-    if (messages[i].role !== 'user') continue
-    if (firstUserId === null) firstUserId = messages[i].id
-    const top = topOf(i)
-    if (top === undefined) continue
-    // 顶部偏移随顺序单调递增：一旦落到视口底边之下，后面的只会更靠下
-    if (top > viewportBottom) break
-    active = messages[i].id
+  for (let i = 0; i < n; i++) {
+    if (messages[i].role === 'user') {
+      firstUserId = messages[i].id
+      break
+    }
   }
-  // 视口整体停在第一条用户消息之上（一条都没进入视口）→ 仍指向第一条，避免高亮整个消失
-  return active ?? firstUserId
+  if (firstUserId === null) return null
+
+  /**
+   * 线性版（也是二分的前提被打断时的退路）：语义与二分版逐条等价。
+   * 未测量的条目**跳过但不中断**（后面还有测过的条目）。
+   */
+  const linear = (): string | null => {
+    let active: string | null = null
+    for (let i = 0; i < n; i++) {
+      if (messages[i].role !== 'user') continue
+      const top = topOf(i)
+      if (top === undefined) continue
+      // 顶部偏移随顺序单调递增：一旦落到视口底边之下，后面的只会更靠下
+      if (top > viewportBottom) break
+      active = messages[i].id
+    }
+    return active ?? firstUserId
+  }
+
+  /*
+   * 二分：找「顶部 ≤ 视口底边」的最后一个下标。滚动事件里每次都全量扫一遍是白花 ——
+   * 滚到底部时（最常见的位置）线性扫描正好是最差情况，而 `top` 按消息顺序单调不减。
+   */
+  let lo = 0
+  let hi = n - 1
+  let boundary = -1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    const top = topOf(mid)
+    // 未测量（虚拟列表还没给出该行 start）→ 单调性前提不成立，退回线性
+    if (top === undefined) return linear()
+    if (top <= viewportBottom) {
+      boundary = mid
+      lo = mid + 1
+    } else {
+      hi = mid - 1
+    }
+  }
+  // 从边界往回找最近的一条**已测量**的用户消息（间隔通常只有几条，比全量扫描便宜）
+  for (let i = boundary; i >= 0; i--) {
+    if (messages[i].role !== 'user') continue
+    if (topOf(i) === undefined) continue
+    return messages[i].id
+  }
+  return firstUserId
 }

@@ -596,6 +596,74 @@ describe('请求事实（用量账本）', () => {
     expect(assistant.request?.tokensPerSecond).toBe(48)
   })
 
+  it('传输侧事实（请求体大小 / 等响应头 / 首字节）原样透传，0 = 未采集不挂字段', () => {
+    const turns = buildTrajectory({
+      usage: [
+        {
+          messageId: 'a1',
+          kind: 'chat_round',
+          durationMs: 4200,
+          requestBytes: 12_345,
+          responseStartMs: 210,
+          firstByteMs: 890,
+        },
+        // 旧流水 / 桥接协议 / 非流式：三列都是 0 → 检查器该落破折号，而不是「0 字节 / 0ms」
+        { messageId: 'a2', kind: 'chat_round', durationMs: 900 },
+      ],
+      messages: [
+        msg('u1', 'user', { content: '你好' }),
+        msg('a1', 'assistant', { content: '答', timestamp: T0 + 10 }),
+        msg('u2', 'user', { content: '再问', timestamp: T0 + 20 }),
+        msg('a2', 'assistant', { content: '再答', timestamp: T0 + 30 }),
+      ],
+    })
+    const measured = turns[0].groups[1].records[0]
+    expect(measured.request).toMatchObject({
+      requestBytes: 12_345,
+      responseStartMs: 210,
+      firstByteMs: 890,
+      durationMs: 4200,
+    })
+
+    const unmeasured = turns[1].groups[1].records[0]
+    expect(unmeasured.request?.requestBytes).toBeUndefined()
+    expect(unmeasured.request?.responseStartMs).toBeUndefined()
+    expect(unmeasured.request?.firstByteMs).toBeUndefined()
+  })
+
+  it('输出速度只除「生成窗口」（请求耗时 − 等响应头耗时），发送与排队不算', () => {
+    const turns = buildTrajectory({
+      usage: [
+        {
+          messageId: 'a1',
+          kind: 'chat_round',
+          durationMs: 4200,
+          responseStartMs: 200,
+        },
+        // 旧流水没有「等响应头」→ 退回整段耗时（保守值，不猜）
+        { messageId: 'a2', kind: 'chat_round', durationMs: 4200 },
+      ],
+      messages: [
+        msg('u1', 'user', { content: '你好' }),
+        msg('a1', 'assistant', {
+          content: '答',
+          timestamp: T0 + 10,
+          usage: { promptTokens: 100, completionTokens: 200, totalTokens: 300 },
+        }),
+        msg('u2', 'user', { content: '再问', timestamp: T0 + 20 }),
+        msg('a2', 'assistant', {
+          content: '再答',
+          timestamp: T0 + 30,
+          usage: { promptTokens: 100, completionTokens: 200, totalTokens: 300 },
+        }),
+      ],
+    })
+    // 200 tok ÷ (4.2s − 0.2s) = 50 tok/s（旧口径会给 48）
+    expect(turns[0].groups[1].records[0].request?.tokensPerSecond).toBe(50)
+    // 没有等响应头事实：分母退回 4.2s
+    expect(turns[1].groups[1].records[0].request?.tokensPerSecond).toBe(48)
+  })
+
   it('账本耗时 0 = 未测量，退回「请求 → 首个工具开跑」的反推', () => {
     const turns = buildTrajectory({
       usage: [{ messageId: 'a1', kind: 'chat_round', durationMs: 0 }],

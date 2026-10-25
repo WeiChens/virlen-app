@@ -10,6 +10,7 @@ import { contentText } from '@/domain/trajectory'
 import type { TrajectoryRecord } from '@/domain/trajectory'
 import { messageBodyText } from '@/utils/messageContent'
 import { formatDuration } from '@/utils/time'
+import { formatSize } from '@/infrastructure/tools/file/common'
 import { t } from '@/ui/i18n'
 import MarkdownRenderer from '../message/markdown-renderer'
 import CloseSvg from '@/ui/components/icons/CloseSvg'
@@ -189,11 +190,35 @@ export function TrajectoryInspector({
               <Field label={t('账本轮次')} value={`#${request.round}`} />
             )}
             <Field
+              label={t('请求体大小')}
+              value={
+                request.requestBytes !== undefined
+                  ? `${formatSize(request.requestBytes)}（${request.requestBytes.toLocaleString()} B）`
+                  : '—'
+              }
+            />
+            <Field
               label={t('请求耗时')}
               value={
                 request.durationMs !== undefined
                   ? formatDuration(request.durationMs)
                   : t('未测量')
+              }
+            />
+            <Field
+              label={t('等响应头')}
+              value={
+                request.responseStartMs !== undefined
+                  ? formatDuration(request.responseStartMs)
+                  : '—'
+              }
+            />
+            <Field
+              label={t('首字节')}
+              value={
+                request.firstByteMs !== undefined
+                  ? formatDuration(request.firstByteMs)
+                  : '—'
               }
             />
             <Field
@@ -220,6 +245,11 @@ export function TrajectoryInspector({
             <p className="trajectory-note">
               {t(
                 '数据来自用量账本：每次 LLM 请求落一条流水，含首字延迟与工具参数生成 —— 所以没有工具调用的纯文本回复也有真实耗时。',
+              )}
+            </p>
+            <p className="trajectory-note">
+              {t(
+                '请求体大小 = 实际发出的 JSON 字节数（含系统提示词与工具定义，不只是对话正文）。「等响应头」= 发出请求 → 收到响应头（含网络往返与服务端排队）；「首字节」= 到第一个响应字节（含首 token 之前的一切）。两者都不含后面的流式回复，完整区间看「请求耗时」。「输出速度」= 输出 token ÷（请求耗时 − 等响应头耗时），同样不算发送与排队。桥接协议（gemini 等）拿不到请求体与响应头；非流式请求无法把首字节与读取分开，这些都显示破折号。',
               )}
             </p>
           </>

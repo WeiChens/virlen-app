@@ -46,6 +46,16 @@ function messageFingerprint(subscriptions: SubscriptionRegistry): string {
       // 否则工具名与入参回填、错误标记变化都收不到
       const meta = `${s.id}\u0001${m.id}\u0001${m.streaming ? 1 : 0}\u0001${m.toolCalls?.length ?? 0}\u0001${m.toolCallId ?? ''}\u0001${m.isError ? 1 : 0}`
       if (!subscribed) continue
+      /*
+       * 流式正文不进指纹：它是每秒几十次变化的正文，而 `diffMessages` 本来就跳过它
+       *（正文增量由 `pushStream` 单独推）。拼进去就是每个 token 重建一份「全会话正文」——
+       * 开销与会话总字数成正比。`streaming` 标志本身仍在 meta 里：定稿那一刻指纹必变，
+       * 定稿后的全文会在下一轮被读到并下发。
+       */
+      if (m.streaming) {
+        parts.push(`${meta}\u0001${m.role}\u0001-`)
+        continue
+      }
       parts.push(`${meta}\u0001${m.role}\u0001${projectContentToText(m.content)}`)
     }
   }

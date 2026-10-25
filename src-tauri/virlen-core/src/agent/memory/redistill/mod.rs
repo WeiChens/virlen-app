@@ -794,6 +794,10 @@ async fn record_usage(
         estimated: false,
         // 非正耗时不记（时钟回拨 / 假时长）→ UI 显示 '-' 而不是除零
         duration_ms: Some(duration_ms).filter(|d| *d > 0),
+        // 记忆再蒸馏不采集传输侧事实
+        request_bytes: 0,
+        response_start_ms: 0,
+        first_byte_ms: 0,
         trace_id: None,
     };
     if let Err(e) = sessions.append_usage(&[entry]).await {

@@ -65,6 +65,52 @@ describe('pickActiveAnchorUser', () => {
     const tops = topOfMap({ 1: 200 })
     expect(pickActiveAnchorUser(users, tops, 600)).toBe('u2')
   })
+
+  it('二分版与逐条扫描逐字等价（含未测量的洞）', () => {
+    // 参考实现：就是改造前那段线性扫描
+    const linear = (
+      list: Message[],
+      topOf: (i: number) => number | undefined,
+      bottom: number,
+    ): string | null => {
+      let active: string | null = null
+      let first: string | null = null
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].role !== 'user') continue
+        if (first === null) first = list[i].id
+        const top = topOf(i)
+        if (top === undefined) continue
+        if (top > bottom) break
+        active = list[i].id
+      }
+      return active ?? first
+    }
+
+    // 500 条消息，每 7 条一个用户消息；top 单调（每条 +90）
+    const list: Message[] = Array.from({ length: 500 }, (_, i) =>
+      msg(
+        i % 7 === 0 ? `u${i}` : `a${i}`,
+        i % 7 === 0 ? 'user' : 'assistant',
+      ),
+    )
+    const tops = (i: number) => i * 90
+    for (const bottom of [-1, 0, 1, 450, 4500, 44999, 99999]) {
+      expect(pickActiveAnchorUser(list, tops, bottom)).toBe(
+        linear(list, tops, bottom),
+      )
+    }
+
+    // 洞（虚拟列表还没给出该行 start）：两边都必须退回线性语义
+    const holes: Record<number, number> = {}
+    for (let i = 0; i < 500; i++) holes[i] = i * 90
+    holes[140] = undefined as unknown as number
+    const withHole = (i: number) => holes[i]
+    for (const bottom of [1260, 4500, 9000]) {
+      expect(pickActiveAnchorUser(list, withHole, bottom)).toBe(
+        linear(list, withHole, bottom),
+      )
+    }
+  })
 })
 
 describe('findJumpTarget', () => {

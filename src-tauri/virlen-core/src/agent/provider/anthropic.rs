@@ -16,6 +16,7 @@
 use super::blocks::{anthropic_blocks, process_vision_content, slice_messages, text_of_content};
 use super::sse::{read_sse_lines, SseItem};
 use super::Provider;
+use super::{json_body_bytes, RequestMetrics};
 use super::super::cancellation::CancellationToken;
 use super::super::types::{
     ChatRequest, Message, ProgressThrottle, StreamEvent, TokenUsage, ToolUseContent,
@@ -101,6 +102,8 @@ pub struct NativeAnthropicProvider {
     api_key: String,
     base_url: String,
     http: reqwest::Client,
+    /// 最近一次请求的传输侧事实（引擎取走后清空，见 `Provider::take_request_metrics`）
+    metrics: std::sync::Mutex<Option<RequestMetrics>>,
 }
 
 impl NativeAnthropicProvider {
@@ -114,7 +117,13 @@ impl NativeAnthropicProvider {
             api_key: api_key.to_string(),
             base_url: base.trim_end_matches('/').to_string(),
             http: reqwest::Client::new(),
+            metrics: std::sync::Mutex::new(None),
         }
+    }
+
+    /// 记录本次请求的传输侧事实（覆盖上一次的残留值）
+    fn store_metrics(&self, metrics: RequestMetrics) {
+        *self.metrics.lock().unwrap() = Some(metrics);
     }
 
     fn headers(&self) -> reqwest::header::HeaderMap {
@@ -359,6 +368,10 @@ impl NativeAnthropicProvider {
 
 #[async_trait]
 impl Provider for NativeAnthropicProvider {
+    fn take_request_metrics(&self) -> Option<RequestMetrics> {
+        self.metrics.lock().unwrap().take()
+    }
+
     async fn chat(
         &self,
         request: &ChatRequest,
@@ -366,13 +379,22 @@ impl Provider for NativeAnthropicProvider {
     ) -> Result<Message, String> {
         let body = self.build_request(request);
         let url = format!("{}/messages", self.base_url);
+        let request_bytes = json_body_bytes(&body);
 
+        let started = crate::telemetry::now_ms();
         let resp = tokio::select! {
             _ = cancel.cancelled() => return Err("cancelled".into()),
             r = self.http.post(&url).headers(self.headers()).json(&body).send() => r.map_err(|e| format!("API Error: {}", e))?,
         };
+        let response_start_ms = (crate::telemetry::now_ms() - started).max(1);
         let status = resp.status();
         let text = resp.text().await.map_err(|e| format!("Failed to read the response: {}", e))?;
+        // 非流式只能拿到「收完整个响应」的时刻，首字节无法与读取耗时分开 → 不采集
+        self.store_metrics(RequestMetrics {
+            request_bytes,
+            response_start_ms: Some(response_start_ms),
+            first_byte_ms: None,
+        });
         if !status.is_success() {
             return Err(format!("API Error ({}): {}", status.as_u16(), text));
         }
@@ -389,11 +411,14 @@ impl Provider for NativeAnthropicProvider {
         let mut body = self.build_request(request);
         body["stream"] = Value::Bool(true);
         let url = format!("{}/messages", self.base_url);
+        let request_bytes = json_body_bytes(&body);
 
+        let started = crate::telemetry::now_ms();
         let resp = tokio::select! {
             _ = cancel.cancelled() => return Err("cancelled".into()),
             r = self.http.post(&url).headers(self.headers()).json(&body).send() => r.map_err(|e| format!("API Error: {}", e))?,
         };
+        let response_start_ms = (crate::telemetry::now_ms() - started).max(1);
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.map_err(|e| format!("Failed to read the error response: {}", e))?;
@@ -409,6 +434,8 @@ impl Provider for NativeAnthropicProvider {
         let mut progress = ProgressThrottle::new(TOOL_PROGRESS_INTERVAL_MS);
         let mut thinking_buffer = String::new();
         let mut last_usage: Option<TokenUsage> = None;
+        // 首个响应字节的到达时刻（ms，相对 `started`）：取第一个 SSE 行，跳过 Idle 心跳
+        let mut first_byte_ms: Option<i64> = None;
 
         let result = read_sse_lines(resp, cancel, &mut |item: SseItem| {
             let line = match item {
@@ -417,7 +444,12 @@ impl Provider for NativeAnthropicProvider {
                     on_event(StreamEvent::Idle);
                     return true;
                 }
-                SseItem::Line(l) => l,
+                SseItem::Line(l) => {
+                    if first_byte_ms.is_none() {
+                        first_byte_ms = Some((crate::telemetry::now_ms() - started).max(1));
+                    }
+                    l
+                }
             };
             let trimmed = line.trim();
 
@@ -570,6 +602,11 @@ impl Provider for NativeAnthropicProvider {
         })
         .await;
 
+        self.store_metrics(RequestMetrics {
+            request_bytes,
+            response_start_ms: Some(response_start_ms),
+            first_byte_ms,
+        });
         result
     }
 }

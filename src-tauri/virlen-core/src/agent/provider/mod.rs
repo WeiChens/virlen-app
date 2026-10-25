@@ -38,6 +38,25 @@ pub use models::{list_models, verify_connection};
 // 「消息直接发给模型时」是同一套文本形式（铁律 1）。因此这里收窄为 `pub(crate)` 转出（`blocks` 仍不对外）。
 pub(crate) use blocks::{file_block_to_text, quote_block_to_text, skill_block_to_text};
 
+/// 一次请求的**传输侧事实**（轨迹检查器「请求」页用）。
+///
+/// 与 `usage_ledger.duration_ms` 的分工：`duration_ms` 是整段请求（含完整流式回复），
+/// 这里拆出「请求体多大 / 等响应头多久 / 等首个字节多久」—— 才能区分「请求重」与「模型慢」。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RequestMetrics {
+    /// 实际发出的请求体字节数（JSON 序列化后的 UTF-8 长度）；0 = 未采集（桥接协议 / 非 JSON body）
+    pub request_bytes: usize,
+    /// 发出请求 → 收到响应头（ms）；`None` = 未采集
+    pub response_start_ms: Option<i64>,
+    /// 发出请求 → 收到首个响应字节（ms）；`None` = 未采集（非流式无法把等待与读取分开）
+    pub first_byte_ms: Option<i64>,
+}
+
+/// 请求体实际字节数 —— 与 reqwest `.json()` 同一个序列化器，所以就是线上发出的长度。
+pub(crate) fn json_body_bytes(body: &serde_json::Value) -> usize {
+    serde_json::to_vec(body).map(|b| b.len()).unwrap_or(0)
+}
+
 // ==================== Provider trait ====================
 
 #[async_trait]
@@ -53,6 +72,14 @@ pub trait Provider: Send + Sync {
         cancel: &CancellationToken,
         on_event: &mut (dyn FnMut(StreamEvent) + Send),
     ) -> Result<(), String>;
+
+    /// 取走**最近一次**请求的传输侧事实（只有原生 HTTP provider 提供）。
+    ///
+    /// 「取走」而非「读取」：同一个 provider 实例会服务多轮请求，残留的旧值会被
+    /// 记到下一次请求头上。默认 `None`（桥接 / 测试替身不提供 → UI 显示破折号，不猜）。
+    fn take_request_metrics(&self) -> Option<RequestMetrics> {
+        None
+    }
 }
 
 // ==================== Provider 工厂 ====================

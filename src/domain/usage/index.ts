@@ -36,6 +36,12 @@ export interface UsageLedgerRecord {
    * 只存耗时而非 tok/s：口径变动时不必回填历史。
    */
   durationMs?: number
+  /** 请求体实际字节数（JSON 序列化后）；未采集就不传 */
+  requestBytes?: number
+  /** 发出请求 → 收到响应头（ms）；未采集就不传 */
+  responseStartMs?: number
+  /** 发出请求 → 收到首个响应字节（ms）；未采集就不传 */
+  firstByteMs?: number
 }
 
 export type UsageKind =
@@ -47,6 +53,26 @@ export type UsageKind =
   /** 长期记忆的整理调用（一批一条；历史数据里还有旧「按天蒸馏」的 memory:<day>） */
   | 'memory'
   | 'legacy'
+
+/**
+ * 一次请求的**生成窗口**（ms）= 请求耗时 − 等响应头耗时。
+ *
+ * 为什么不能直接拿请求耗时当分母：发送请求、网络往返、服务端排队这段时间里模型还
+ * 没开始吐字，算进去会把速度**系统性地压低**（长提示词 / 慢连接下尤其严重）。
+ *
+ * - 缺「等响应头」（旧流水 / 桥接协议）→ 退回整段耗时（保守值，不猜）；
+ * - 等待 ≥ 整段（异常值 / 时钟偏差）→ 同样退回整段，不产生非正分母。
+ */
+export function generationWindowMs(record: {
+  durationMs?: number
+  responseStartMs?: number
+}): number {
+  const total = record.durationMs ?? 0
+  if (!(total > 0)) return 0
+  const wait = record.responseStartMs ?? 0
+  if (!(wait > 0) || wait >= total) return total
+  return total - wait
+}
 
 /** 用量账本写入端口 */
 export interface UsageLedgerPort {
