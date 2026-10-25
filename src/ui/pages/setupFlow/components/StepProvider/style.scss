@@ -6,7 +6,7 @@
   text-align: center;
 
   h2 {
-    font-size: 24px;
+    font-size: calc(var(--font-size-4xl) + 2px);
     font-weight: 700;
     color: var(--text-primary);
     margin: 0 0 8px;
@@ -32,7 +32,7 @@
   .api-key-label {
     display: block;
     margin-bottom: 8px;
-    font-size: 13px;
+    font-size: var(--font-size-md);
     font-weight: 600;
     color: var(--text-primary);
   }
@@ -47,7 +47,7 @@
     width: 100%;
     height: 42px;
     padding: 0 44px 0 14px;
-    font-size: 14px;
+    font-size: var(--font-size-base);
     font-family: monospace;
     color: var(--text-primary);
     background: var(--bg-secondary);
@@ -110,7 +110,7 @@
 
   .api-key-hint {
     margin-top: 6px;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     color: var(--text-tertiary);
   }
 
@@ -123,7 +123,7 @@
       flex: 1;
       height: 42px;
       padding: 0 12px;
-      font-size: 13px;
+      font-size: var(--font-size-md);
       font-family: monospace;
       color: var(--text-primary);
       background: var(--bg-secondary);
@@ -150,7 +150,7 @@
   .fetch-models-btn {
     padding: 0 16px;
     height: 42px;
-    font-size: 13px;
+    font-size: var(--font-size-md);
     font-weight: 500;
     color: var(--primary);
     background: var(--primary-soft);
@@ -182,7 +182,7 @@
   .setup-error {
     margin: -8px 0 20px;
     padding: 10px 14px;
-    font-size: 13px;
+    font-size: var(--font-size-md);
     text-align: left;
     color: var(--color-error-text, var(--color-error));
     background: var(--color-error-bg);
@@ -193,7 +193,7 @@
   /* 主按钮禁用原因提示 */
   .setup-form-hint {
     margin: 0 0 12px;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     color: var(--text-tertiary);
   }
 }

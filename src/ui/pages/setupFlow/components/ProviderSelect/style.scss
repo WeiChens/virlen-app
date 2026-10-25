@@ -21,7 +21,7 @@
     transition:
       border-color 0.15s ease,
       box-shadow 0.15s ease;
-    font-size: 14px;
+    font-size: var(--font-size-base);
     color: var(--text-primary);
   }
 
@@ -67,7 +67,7 @@
   }
 
   .provider-select-arrow {
-    font-size: 10px;
+    font-size: var(--font-size-2xs);
     color: var(--text-tertiary);
     transition: transform 0.2s ease;
     flex-shrink: 0;
@@ -102,7 +102,7 @@
     background: transparent;
     cursor: pointer;
     transition: background 0.1s ease;
-    font-size: 14px;
+    font-size: var(--font-size-base);
     color: var(--text-primary);
     text-align: left;
   }
@@ -116,7 +116,7 @@
   }
 
   .provider-select-url {
-    font-size: 11px;
+    font-size: var(--font-size-xs);
     color: var(--text-tertiary);
     margin-left: auto;
     flex-shrink: 0;

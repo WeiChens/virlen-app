@@ -24,15 +24,15 @@
   position: absolute;
   top: -2px;
   right: -3px;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 4px;
+  min-width: 1.5em;
+  height: 1.5em;
+  padding: 0 0.4em;
   border-radius: 999px;
   background: var(--success-color, #16a34a);
   color: #fff;
-  font-size: 10px;
+  font-size: var(--font-size-2xs);
   font-weight: 700;
-  line-height: 15px;
+  line-height: 1.5;
   text-align: center;
   border: 1.5px solid var(--bg-primary, #fff);
   pointer-events: none;
@@ -60,7 +60,7 @@
   margin-bottom: 8px;
 
   .service-popover-title {
-    font-size: var(--font-size-md, 14px);
+    font-size: var(--font-size-md);
     font-weight: 600;
     color: var(--text-primary, #1a1a1a);
   }
@@ -70,7 +70,7 @@
     padding: 1px 8px;
     border-radius: 999px;
     border: 1px dashed var(--border-color, #e5e5e5);
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     color: var(--text-secondary, #888);
     white-space: nowrap;
   }
@@ -80,7 +80,7 @@
     background: transparent;
     color: var(--text-secondary, #888);
     cursor: pointer;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     line-height: 1;
     width: 22px;
     height: 22px;
@@ -116,7 +116,7 @@
     background: transparent;
     color: var(--text-secondary, #888);
     font: inherit;
-    font-size: var(--font-size-sm, 12.5px);
+    font-size: var(--font-size-sm);
     cursor: pointer;
 
     &:hover {
@@ -139,7 +139,7 @@
       border-radius: 999px;
       background: var(--border-color-light, #eceff3);
       color: var(--text-secondary, #888);
-      font-size: 10px;
+      font-size: var(--font-size-2xs);
       font-weight: 700;
       line-height: 16px;
       text-align: center;
@@ -179,7 +179,7 @@
     .service-row-name {
       min-width: 0;
       font-weight: 600;
-      font-size: var(--font-size-sm, 13px);
+      font-size: var(--font-size-sm);
       color: var(--text-primary, #1a1a1a);
       overflow: hidden;
       text-overflow: ellipsis;
@@ -194,7 +194,7 @@
       padding: 0 6px;
       border-radius: 4px;
       background: var(--hover-bg, #f2f4f7);
-      font-size: var(--font-size-xs, 11px);
+      font-size: var(--font-size-xs);
       line-height: 16px;
       color: var(--text-secondary, #888);
       overflow: hidden;
@@ -206,7 +206,7 @@
   .service-row-cmd {
     margin-top: 3px;
     font-family: var(--font-mono, monospace);
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     color: var(--accent-color, #4f46e5);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -219,7 +219,7 @@
     align-items: center;
     gap: 3px 12px;
     margin-top: 3px;
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     color: var(--text-tertiary, #999);
   }
 
@@ -232,7 +232,7 @@
     background: var(--bg-primary, #fff);
     color: var(--text-secondary, #888);
     font: inherit;
-    font-size: var(--font-size-xs, 11.5px);
+    font-size: var(--font-size-xs);
     cursor: pointer;
     opacity: 0;
     transition: opacity 0.15s;
@@ -267,7 +267,7 @@
 
 .service-panel-empty {
   padding: 12px 6px;
-  font-size: var(--font-size-sm, 13px);
+  font-size: var(--font-size-sm);
   color: var(--text-secondary, #888);
 }
 
@@ -275,7 +275,7 @@
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px dashed var(--border-color, #e5e5e5);
-  font-size: var(--font-size-xs, 11.5px);
+  font-size: var(--font-size-xs);
   line-height: 1.5;
   color: var(--text-tertiary, #999);
 }
@@ -323,7 +323,7 @@
 
   .service-console-name {
     min-width: 0;
-    font-size: var(--font-size-sm, 13px);
+    font-size: var(--font-size-sm);
     font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -338,7 +338,7 @@
     background: transparent;
     color: var(--terminal-text, #fff);
     font: inherit;
-    font-size: var(--font-size-xs, 11.5px);
+    font-size: var(--font-size-xs);
     cursor: pointer;
 
     &:hover:not(:disabled) {
@@ -361,7 +361,7 @@
     border-radius: 5px;
     background: transparent;
     color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
-    font-size: 13px;
+    font-size: var(--font-size-md);
     line-height: 1;
     cursor: pointer;
 
@@ -377,7 +377,7 @@
   flex-shrink: 0;
   padding: 4px 10px 0;
   font-family: var(--font-mono, monospace);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
   white-space: pre-wrap;
   word-break: break-all;
@@ -390,7 +390,7 @@
   align-items: center;
   gap: 3px 12px;
   padding: 4px 10px 6px;
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
   color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
 
   /* 归属会话（只有从新对话页的全局视图打开时才渲染）—— 深色头部下用 chip 提亮 */
@@ -406,7 +406,7 @@
 .service-console-foot {
   flex-shrink: 0;
   padding: 5px 10px 7px;
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
   line-height: 1.5;
   color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
   user-select: none;

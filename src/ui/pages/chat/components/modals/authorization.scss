@@ -2,7 +2,7 @@
   padding: 8px 0;
 
   .auth-title {
-    font-size: 15px;
+    font-size: var(--font-size-lg);
     font-weight: 600;
     color: var(--text-primary);
     margin-bottom: 8px;
@@ -18,7 +18,7 @@
   }
 
   .auth-subtitle {
-    font-size: 13px;
+    font-size: var(--font-size-md);
     color: var(--text-primary);
     background: var(--bg-secondary);
     border-left: 3px solid var(--accent-color);
@@ -31,7 +31,7 @@
   }
 
   .auth-hint {
-    font-size: 13px;
+    font-size: var(--font-size-md);
     color: var(--text-secondary);
     margin: 0 0 12px 0;
     line-height: 1.5;
@@ -52,7 +52,7 @@
     .auth-desc-command {
       font-family:
         'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
-      font-size: 12px;
+      font-size: var(--font-size-sm);
       color: var(--text-secondary);
       padding-bottom: 8px;
       margin-bottom: 8px;
@@ -64,7 +64,7 @@
     code {
       font-family:
         'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
-      font-size: 13px;
+      font-size: var(--font-size-md);
       color: var(--text-primary);
       white-space: pre-wrap;
       word-break: break-all;
@@ -80,7 +80,7 @@
       padding: 8px 16px;
       border-radius: 6px;
       border: 1px solid var(--border-color);
-      font-size: 13px;
+      font-size: var(--font-size-md);
       cursor: pointer;
       transition: all 0.15s;
 
@@ -132,7 +132,7 @@
   border: 1px solid var(--border-color);
   font-family:
     'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 400;
   color: var(--text-secondary);
   vertical-align: middle;

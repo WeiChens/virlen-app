@@ -200,8 +200,8 @@
       // 它同时解释了「为什么这一行没有删除按钮」
       .kb-card-badge {
         flex-shrink: 0;
-        padding: 1px 5px;
-        border-radius: 4px;
+        padding: 0.09em 0.45em;
+        border-radius: 0.36em;
         background: var(--hover-bg, #f0f0f0);
         color: var(--text-secondary, #888);
         font-size: var(--font-size-xs);
@@ -778,7 +778,7 @@
       border-radius: 6px;
       background: var(--input-bg, #fff);
       color: var(--text-primary);
-      font-size: var(--font-size-xs, 13px);
+      font-size: var(--font-size-xs);
       outline: none;
       resize: vertical;
       font-family: 'Consolas', 'Monaco', 'Courier New', monospace;

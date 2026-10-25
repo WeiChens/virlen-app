@@ -290,9 +290,9 @@
 
     .rule-badge {
       flex-shrink: 0;
-      padding: 1px 6px;
+      padding: 0.09em 0.55em;
       border: 1px solid var(--border-color, #e5e5e5);
-      border-radius: 4px;
+      border-radius: 0.36em;
       background: var(--control-active-bg, #fff);
       font-size: var(--font-size-xs);
       color: var(--text-secondary, #666);

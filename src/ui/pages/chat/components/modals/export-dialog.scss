@@ -10,7 +10,7 @@
 
 .export-dialog-hint {
   margin: 0 0 20px;
-  font-size: 14px;
+  font-size: var(--font-size-base);
   color: var(--text-secondary, #666);
   line-height: 1.6;
   white-space: pre-wrap;
@@ -53,13 +53,13 @@
   }
 
   .export-option-text {
-    font-size: 14px;
+    font-size: var(--font-size-base);
     font-weight: 600;
     color: var(--text-primary, #1a1a1a);
   }
 
   .export-option-desc {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     color: var(--text-secondary, #999);
   }
 }

@@ -85,7 +85,7 @@
       color: var(--text-secondary, #666);
 
       .hint-icon {
-        font-size: 16px;
+        font-size: var(--font-size-xl);
       }
     }
   }
@@ -102,7 +102,7 @@
     background: var(--sidebar-bg, #f9fafb);
 
     .type-icon {
-      font-size: 20px;
+      font-size: var(--font-size-3xl);
     }
 
     .type-meta {
@@ -180,7 +180,7 @@
     line-height: 1.5;
 
     .hint-icon {
-      font-size: 14px;
+      font-size: var(--font-size-base);
       flex-shrink: 0;
       margin-top: 1px;
     }

@@ -53,8 +53,8 @@
 /* 类型徽标：只靠令牌与半透明底色 —— 写死浅色底在暗色主题下会和浅色字撞成一片 */
 .inline-interaction-badge {
   flex: none;
-  padding: 0 6px;
-  border-radius: 4px;
+  padding: 0 0.55em;
+  border-radius: 0.36em;
   font-size: var(--font-size-xs);
   line-height: 1.45;
   background: var(--tag-bg, #e8e8ed);

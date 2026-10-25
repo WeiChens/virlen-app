@@ -5,7 +5,6 @@
   color: var(--text-primary, #1a1a1a);
 
   // ==================== 侧边栏拖拽手柄 ====================
-
   .sidebar-resizer {
     width: 2px;
     cursor: col-resize;
@@ -64,6 +63,7 @@
     padding: 0px 16px;
     background: var(--bg-primary, #fff);
     height: var(--chat-toolbar-h);
+
     .toggle-sidebar-btn {
       width: 32px;
       height: 32px;
@@ -107,16 +107,16 @@
         position: absolute;
         top: -3px;
         right: -3px;
-        min-width: 14px;
-        height: 14px;
-        padding: 0 3px;
+        min-width: 1.56em;
+        height: 1.56em;
+        padding: 0 0.34em;
         box-sizing: border-box;
-        border-radius: 7px;
+        border-radius: 0.78em;
         background: var(--accent-color, #4f46e5);
         /* ⚠️ 品牌底上的字一律 `--primary-fg`（浅色主题色下自动转黑），不能写 #fff */
         color: var(--primary-fg, #fff);
-        font-size: 9px;
-        line-height: 14px;
+        font-size: calc(var(--font-size-2xs) - 1px);
+        line-height: 1.56;
         text-align: center;
         pointer-events: none;
       }
@@ -158,15 +158,16 @@
         display: flex;
         align-items: center;
         gap: 4px;
-        padding: 4px 8px;
+        padding: 3px 8px;
         border: 1px solid var(--border-color, #e5e5e5);
-        border-radius: 6px;
+        border-radius: 5px;
         background: var(--bg-primary, #fff);
         cursor: pointer;
         font-size: var(--font-size-sm);
         color: var(--text-secondary, #888);
         // transition: all 0.15s;
         height: 28px;
+
         &.has-dropdown {
           border-radius: 6px 0 0 6px;
           border-right: none;
@@ -232,14 +233,17 @@
         /* 统一 hover：任一个按钮 hover，两个同时高亮 */
         &:has(.workspace-btn:hover),
         &:has(.workspace-dropdown-toggle:hover) {
+
           .workspace-btn,
           .workspace-dropdown-toggle {
             background: var(--hover-bg, #f0f0f0);
             border-color: var(--accent-color, #4f46e5);
           }
+
           .workspace-btn {
             color: var(--text-primary, #1a1a1a);
           }
+
           .workspace-dropdown-toggle {
             color: var(--text-primary, #1a1a1a);
           }
@@ -324,7 +328,7 @@
               white-space: nowrap;
               overflow: hidden;
               text-overflow: ellipsis;
-              font-size: var(--font-size-xs, 11px);
+              font-size: var(--font-size-xs);
               color: var(--text-secondary, #888);
               direction: rtl;
               text-align: right;

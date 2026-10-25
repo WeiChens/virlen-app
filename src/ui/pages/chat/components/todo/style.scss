@@ -35,15 +35,15 @@
   position: absolute;
   top: -2px;
   right: -3px;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 4px;
+  min-width: 1.5em;
+  height: 1.5em;
+  padding: 0 0.4em;
   border-radius: 999px;
   background: var(--error-color, #dc2626);
   color: #fff;
-  font-size: 10px;
+  font-size: var(--font-size-2xs);
   font-weight: 700;
-  line-height: 15px;
+  line-height: 1.5;
   text-align: center;
   border: 1.5px solid var(--bg-primary, #fff);
   pointer-events: none;
@@ -75,7 +75,7 @@
   margin-bottom: 8px;
 
   .todo-popover-title {
-    font-size: var(--font-size-md, 14px);
+    font-size: var(--font-size-md);
     font-weight: 600;
     color: var(--text-primary, #1a1a1a);
   }
@@ -85,7 +85,7 @@
     background: transparent;
     color: var(--text-secondary, #888);
     cursor: pointer;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     line-height: 1;
     width: 22px;
     height: 22px;
@@ -102,7 +102,7 @@
   padding: 1px 8px;
   border-radius: 999px;
   border: 1px solid var(--border-color, #e5e5e5);
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
   font-weight: 600;
   color: var(--text-secondary, #888);
   white-space: nowrap;
@@ -143,7 +143,7 @@
   }
 
   .todo-progress-text {
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     color: var(--text-secondary, #888);
     white-space: nowrap;
   }
@@ -232,7 +232,7 @@
     border-radius: 6px;
     background: transparent;
     font: inherit;
-    font-size: var(--font-size-sm, 13px);
+    font-size: var(--font-size-sm);
     color: var(--text-primary, #1a1a1a);
     box-sizing: border-box;
   }
@@ -292,7 +292,7 @@
     border: 1.5px solid var(--border-color, #e5e5e5);
     background: var(--bg-primary, #fff);
     color: var(--text-secondary, #888);
-    font-size: 11px;
+    font-size: var(--font-size-xs);
     line-height: 1;
     cursor: pointer;
     padding: 0;
@@ -318,7 +318,7 @@
     border-radius: 6px;
     background: transparent;
     font: inherit;
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     color: var(--text-secondary, #888);
 
     &:hover {
@@ -345,7 +345,7 @@
       border-radius: 5px;
       background: transparent;
       color: var(--text-secondary, #888);
-      font-size: 11px;
+      font-size: var(--font-size-xs);
       line-height: 1;
       cursor: pointer;
 
@@ -371,7 +371,7 @@
   background: color-mix(in srgb,
       var(--primary-color, #3b6ef6) 8%,
       transparent);
-  font-size: var(--font-size-xs, 11.5px);
+  font-size: var(--font-size-xs);
   line-height: 1.5;
 
   .todo-ai-updated-head {
@@ -399,7 +399,7 @@
 
 .todo-empty {
   padding: 10px 4px;
-  font-size: var(--font-size-sm, 13px);
+  font-size: var(--font-size-sm);
   color: var(--text-secondary, #888);
 }
 
@@ -410,7 +410,7 @@
   border: 1px solid var(--warning-color, #d97706);
   background: rgba(217, 119, 6, 0.08);
   color: var(--warning-color, #d97706);
-  font-size: var(--font-size-xs, 11.5px);
+  font-size: var(--font-size-xs);
   line-height: 1.5;
 }
 
@@ -425,7 +425,7 @@
 }
 
 .todo-dirty {
-  font-size: var(--font-size-xs, 11.5px);
+  font-size: var(--font-size-xs);
   color: var(--text-secondary, #888);
 
   // 已应用（等本轮结束生效）比「未应用」更醒目
@@ -441,7 +441,7 @@
   background: var(--bg-primary, #fff);
   color: var(--text-primary, #1a1a1a);
   font: inherit;
-  font-size: var(--font-size-sm, 12.5px);
+  font-size: var(--font-size-sm);
   cursor: pointer;
 
   &:hover:not(:disabled) {

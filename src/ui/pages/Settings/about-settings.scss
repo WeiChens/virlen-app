@@ -33,7 +33,7 @@
 
   .about-name {
     font-weight: bold;
-    font-size: 22px;
+    font-size: var(--font-size-4xl);
     text-align: center;
     color: var(--text-primary, #1a1a1a);
   }

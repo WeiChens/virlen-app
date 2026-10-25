@@ -17,7 +17,7 @@
     border-radius: 10px;
     color: var(--text-secondary, #555);
     font-family: inherit;
-    font-size: var(--font-size-sm, 13px);
+    font-size: var(--font-size-sm);
     text-align: left;
     cursor: pointer;
     transition:
@@ -57,7 +57,7 @@
 
     .compress-summary-meta {
       color: var(--text-tertiary, #999);
-      font-size: var(--font-size-xs, 12px);
+      font-size: var(--font-size-xs);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;

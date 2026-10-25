@@ -68,7 +68,7 @@
     outline: none;
     background: transparent;
     color: var(--text-primary, #1a1a1a);
-    font-size: var(--font-size-base, 13px);
+    font-size: var(--font-size-base);
     font-weight: 500;
     line-height: 1.6;
 
@@ -151,7 +151,7 @@
     border: none;
     background: transparent;
     color: var(--text-secondary, #666);
-    font-size: var(--font-size-sm, 12px);
+    font-size: var(--font-size-sm);
     cursor: pointer;
     transition: color 0.12s;
 
@@ -178,7 +178,7 @@
 
   .search-count {
     margin-left: auto;
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     color: var(--text-tertiary, #999);
     font-variant-numeric: tabular-nums;
   }
@@ -256,7 +256,7 @@
     border-radius: 4px;
     background: color-mix(in srgb, var(--primary, #4f46e5) 14%, transparent);
     color: var(--text-primary, #4f46e5);
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     line-height: 1.5;
     white-space: nowrap;
   }
@@ -269,7 +269,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     color: var(--text-primary, #1a1a1a);
-    font-size: var(--font-size-sm, 14px);
+    font-size: var(--font-size-sm);
     line-height: 1.5;
 
     mark {
@@ -288,7 +288,7 @@
     gap: 10px;
     flex-shrink: 0;
     min-width: 0;
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     color: var(--text-tertiary, #999);
   }
 
@@ -347,13 +347,13 @@
   .search-empty-title {
     margin: 0;
     color: var(--text-primary, #1a1a1a);
-    font-size: var(--font-size-base, 14px);
+    font-size: var(--font-size-base);
   }
 
   .search-empty-hint {
     margin: 0;
     color: var(--text-tertiary, #999);
-    font-size: var(--font-size-sm, 12px);
+    font-size: var(--font-size-sm);
   }
 }
 
@@ -364,7 +364,7 @@
   justify-content: center;
   padding: 12px 0;
   color: var(--text-tertiary, #999);
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
 
   /* 小旋螺：纯 CSS，不引动画库 */
   &::before {
@@ -383,7 +383,7 @@
   padding: 10px 0;
   text-align: center;
   color: var(--text-tertiary, #999);
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
 }
 
 @keyframes searchSpin {
@@ -400,7 +400,7 @@
   padding: 8px 16px;
   border-top: 1px solid var(--border-color-light, rgba(108, 108, 108, 0.13));
   color: var(--text-tertiary, #999);
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
 
   .search-hint {
     display: inline-flex;
@@ -421,7 +421,7 @@
     background: var(--bg-secondary, #f7f7f8);
     color: var(--text-secondary, #666);
     font-family: inherit;
-    font-size: 10px;
+    font-size: var(--font-size-2xs);
     line-height: 1;
   }
 }

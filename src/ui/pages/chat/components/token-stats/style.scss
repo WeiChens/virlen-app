@@ -67,7 +67,7 @@
 
   h3 {
     margin: 0;
-    font-size: 15px;
+    font-size: var(--font-size-lg);
     font-weight: 600;
   }
 
@@ -84,7 +84,7 @@
     border-radius: 6px;
     background: transparent;
     color: var(--text-primary, #1a1a1a);
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     cursor: pointer;
 
     &:hover:not(:disabled) {
@@ -143,7 +143,7 @@
     border-bottom: 2px solid transparent;
     background: transparent;
     color: var(--text-secondary, #666);
-    font-size: 13px;
+    font-size: var(--font-size-md);
     cursor: pointer;
 
     &.active {
@@ -174,7 +174,7 @@
       border-radius: 6px;
       background: transparent;
       color: var(--text-secondary, #666);
-      font-size: 12px;
+      font-size: var(--font-size-sm);
       cursor: pointer;
 
       &.active {
@@ -199,7 +199,7 @@
       border-radius: 6px;
       background: var(--bg-primary, #fff);
       color: var(--text-primary, #1a1a1a);
-      font-size: 12px;
+      font-size: var(--font-size-sm);
 
       &:focus-visible {
         outline: var(--focus-ring);
@@ -209,12 +209,12 @@
 
     .range-sep {
       color: var(--text-secondary, #666);
-      font-size: 12px;
+      font-size: var(--font-size-sm);
     }
 
     .range-hint {
       color: var(--accent-warn, #f59e0b);
-      font-size: 12px;
+      font-size: var(--font-size-sm);
     }
   }
 
@@ -223,7 +223,7 @@
     align-items: center;
     gap: 6px;
     margin-left: auto;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     color: var(--text-secondary, #666);
     cursor: pointer;
   }
@@ -259,20 +259,20 @@
     }
 
     .stat-label {
-      font-size: 12px;
+      font-size: var(--font-size-sm);
       color: var(--text-secondary, #666);
       margin-bottom: 4px;
     }
 
     .stat-value {
-      font-size: 18px;
+      font-size: var(--font-size-2xl);
       font-weight: 600;
       font-variant-numeric: tabular-nums;
     }
 
     .stat-sub {
       margin-top: 4px;
-      font-size: 11px;
+      font-size: var(--font-size-xs);
       color: var(--text-secondary, #666);
     }
   }
@@ -285,7 +285,7 @@
 
   h4 {
     margin: 0 0 8px;
-    font-size: 13px;
+    font-size: var(--font-size-md);
     font-weight: 600;
     color: var(--text-secondary, #666);
   }
@@ -318,7 +318,7 @@
       border-radius: 6px;
       background: transparent;
       color: var(--text-secondary, #666);
-      font-size: 11px;
+      font-size: var(--font-size-xs);
       cursor: pointer;
 
       &.active {
@@ -337,7 +337,7 @@
 .empty-hint,
 .foot-note {
   margin: 6px 0 0;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--text-secondary, #666);
 }
 
@@ -350,7 +350,7 @@
 .token-stats-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   margin-bottom: 20px;
 
   th,
@@ -421,7 +421,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--text-secondary, #666);
   position: sticky;
   bottom: 0;
@@ -461,7 +461,7 @@
     border-radius: 8px;
     background: color-mix(in srgb, var(--accent-warn, #f59e0b) 12%, transparent);
     color: var(--text-primary, #1a1a1a);
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     line-height: 1.5;
   }
 
@@ -469,13 +469,13 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
 
     /* 币种用项目统一的 Select 组件（原生 select 各平台样式不一，已弃用）；
        下拉面板是 portal 到 body 的（z-index 9000），高于面板遮罩的 1200，不会被盖住。*/
     .custom-select {
       min-height: 28px;
-      font-size: 12px;
+      font-size: var(--font-size-sm);
     }
 
     .link-btn {
@@ -487,7 +487,7 @@
     border: none;
     background: transparent;
     color: var(--accent-color, #4f46e5);
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     cursor: pointer;
     padding: 0;
 
@@ -498,13 +498,13 @@
 
   .pricing-empty {
     color: var(--text-secondary, #666);
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 
   .pricing-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
 
     th,
     td {
@@ -528,7 +528,7 @@
 
     .model-meta {
       color: var(--text-secondary, #666);
-      font-size: 11px;
+      font-size: var(--font-size-xs);
     }
 
     input {
@@ -539,14 +539,14 @@
       border-radius: 6px;
       background: var(--bg-primary, #fff);
       color: inherit;
-      font-size: 12px;
+      font-size: var(--font-size-sm);
       font-variant-numeric: tabular-nums;
     }
   }
 
   .pricing-unit {
     margin: 0;
-    font-size: 11px;
+    font-size: var(--font-size-xs);
     color: var(--text-secondary, #666);
   }
 }
@@ -561,7 +561,7 @@
     border-radius: 6px;
     background: var(--bg-primary, #fff);
     color: var(--text-primary, #1a1a1a);
-    font-size: 12px;
+    font-size: var(--font-size-sm);
 
     &::placeholder {
       color: var(--text-secondary, #666);
@@ -589,7 +589,7 @@
     cursor: pointer;
 
     .sort-ind {
-      font-size: 9px;
+      font-size: calc(var(--font-size-2xs) - 1px);
       opacity: 0.4;
     }
 
@@ -616,7 +616,7 @@
 /* 截断提示（匹配行超过拉取上限） */
 .table-hint {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--accent-warn, #f59e0b);
 }
 
@@ -637,7 +637,7 @@
     border-radius: 6px;
     background: transparent;
     color: var(--text-primary, #1a1a1a);
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     cursor: pointer;
     min-width: 80px;
     justify-content: center;
@@ -670,7 +670,7 @@
   }
 
   .summary-hint {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     color: var(--text-secondary, #666);
   }
 
@@ -685,7 +685,7 @@
     background: var(--bg-secondary, #f7f7f8);
 
     .summary-scope {
-      font-size: 12px;
+      font-size: var(--font-size-sm);
       color: var(--text-secondary, #666);
     }
 
@@ -695,12 +695,12 @@
       gap: 6px;
 
       .summary-label {
-        font-size: 12px;
+        font-size: var(--font-size-sm);
         color: var(--text-secondary, #666);
       }
 
       .summary-value {
-        font-size: 13px;
+        font-size: var(--font-size-md);
         font-variant-numeric: tabular-nums;
 
         &.strong {

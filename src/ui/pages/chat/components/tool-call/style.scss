@@ -399,8 +399,8 @@
      字体/配色沿用原状态栏，避免换位置后观感跳变。 */
   .xterm-badge {
     flex-shrink: 0;
-    padding: 2px 7px;
-    border-radius: 5px;
+    padding: 0.18em 0.64em;
+    border-radius: 0.45em;
     background: rgba(255, 255, 255, 0.05);
     font-family: $pty-mono;
     font-size: var(--font-size-xs);
@@ -438,8 +438,8 @@
   }
 
   .pty-confirm-badge {
-    padding: 1px 8px;
-    border-radius: 4px;
+    padding: 0.09em 0.73em;
+    border-radius: 0.36em;
     font-size: var(--font-size-xs);
     background: var(--terminal-note, #e5c07b);
     color: #1a1a1a;
@@ -1533,11 +1533,11 @@
 .execute-command-wrapper .terminal-sandbox-badge,
 .service-console-head .terminal-sandbox-badge {
   flex-shrink: 0;
-  padding: 0 6px;
-  border-radius: 3px;
+  padding: 0 0.55em;
+  border-radius: 0.27em;
   font-size: var(--font-size-xs);
   font-weight: 500;
-  line-height: 16px;
+  line-height: 1.45;
   color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.72));
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -1653,12 +1653,12 @@
     /* 元信息徽标（类型 / 大小 / 字符数 / 工作表）：比标题弱一档，横向不换行 */
     .doc-badge {
       flex-shrink: 0;
-      padding: 0 6px;
-      border-radius: 3px;
+      padding: 0 0.55em;
+      border-radius: 0.27em;
       background: var(--tag-bg, #e8e8ed);
       color: var(--text-secondary, #666);
       font-size: var(--font-size-xs);
-      line-height: 17px;
+      line-height: 1.55;
       white-space: nowrap;
     }
 

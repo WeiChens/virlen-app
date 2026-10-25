@@ -54,7 +54,7 @@
     flex: 1;
     min-width: 0;
     margin: 0;
-    font-size: var(--font-size-md, 14px);
+    font-size: var(--font-size-md);
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
@@ -93,7 +93,7 @@
   padding: 8px 16px;
   border-bottom: 1px solid var(--border-color, #f0f0f0);
   color: var(--text-secondary, #888);
-  font-size: var(--font-size-xs, 12px);
+  font-size: var(--font-size-xs);
 }
 
 /* 正文（可达数万字符）：抽屉自己滚，不撑高页面 */
@@ -102,7 +102,7 @@
   min-height: 0;
   overflow-y: auto;
   padding: 4px 20px 24px;
-  font-size: var(--font-size-sm, 13px);
+  font-size: var(--font-size-sm);
   line-height: 1.7;
   word-break: break-word;
 

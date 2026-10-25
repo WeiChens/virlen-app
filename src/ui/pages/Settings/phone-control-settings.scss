@@ -20,7 +20,7 @@
   padding: 20px 24px 28px;
   overflow-y: auto;
   color: var(--text-primary, #1a1a1a);
-  font-size: var(--font-size-md, 13px);
+  font-size: var(--font-size-md);
 
   /* ── 页头 ── */
   &__head {
@@ -55,7 +55,7 @@
 
   &__title {
     margin: 0;
-    font-size: var(--font-size-2xl, 18px);
+    font-size: var(--font-size-2xl);
     font-weight: 600;
     line-height: 1.3;
   }
@@ -63,7 +63,7 @@
   &__sub {
     margin: 2px 0 0;
     color: var(--text-secondary, #666);
-    font-size: var(--font-size-sm, 12px);
+    font-size: var(--font-size-sm);
     line-height: 1.5;
   }
 
@@ -91,12 +91,12 @@
   }
 
   &__switch-title {
-    font-size: var(--font-size-base, 14px);
+    font-size: var(--font-size-base);
     font-weight: 600;
   }
 
   &__switch-desc {
-    font-size: var(--font-size-sm, 12px);
+    font-size: var(--font-size-sm);
     line-height: 1.5;
     color: var(--text-secondary, #666);
   }
@@ -119,7 +119,7 @@
     border-radius: 999px;
     background: var(--input-bg, #f1f1f3);
     color: var(--text-secondary, #666);
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     line-height: 1.7;
 
     /* 停用：就是「什么都没发生」的基础款（灰）。显式写出来，让「每种状态都有样式」可被断言——
@@ -168,7 +168,7 @@
     align-items: center;
     padding: 2px 9px;
     border-radius: 999px;
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     line-height: 1.7;
 
     &--direct {
@@ -217,7 +217,7 @@
 
   &__card-title {
     margin: 0;
-    font-size: var(--font-size-base, 14px);
+    font-size: var(--font-size-base);
     font-weight: 600;
     color: var(--text-primary, #1a1a1a);
   }
@@ -228,7 +228,7 @@
     border-radius: 999px;
     background: var(--tag-bg, #e8e8ed);
     color: var(--text-secondary, #666);
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     font-variant-numeric: tabular-nums;
     line-height: 1.8;
   }
@@ -267,7 +267,7 @@
     align-items: center;
     justify-content: center;
     color: var(--text-secondary, #666);
-    font-size: var(--font-size-sm, 12px);
+    font-size: var(--font-size-sm);
   }
 
   &__steps {
@@ -285,7 +285,7 @@
       align-items: flex-start;
       gap: 8px;
       color: var(--text-secondary, #666);
-      font-size: var(--font-size-sm, 12px);
+      font-size: var(--font-size-sm);
       line-height: 1.6;
     }
   }
@@ -301,7 +301,7 @@
     border-radius: 50%;
     background: var(--primary-soft, #eef2ff);
     color: var(--link-color, #4f46e5);
-    font-size: var(--font-size-2xs, 10px);
+    font-size: var(--font-size-2xs);
     font-weight: 600;
     font-variant-numeric: tabular-nums;
   }
@@ -331,7 +331,7 @@
 
   &__ticket-text {
     color: var(--text-secondary, #666);
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     font-variant-numeric: tabular-nums;
   }
 
@@ -342,7 +342,7 @@
 
     summary {
       color: var(--text-secondary, #666);
-      font-size: var(--font-size-xs, 11px);
+      font-size: var(--font-size-xs);
       cursor: pointer;
 
       &:hover {
@@ -365,7 +365,7 @@
       background: var(--bg-primary, #fff);
       color: var(--text-secondary, #666);
       font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
-      font-size: var(--font-size-xs, 11px);
+      font-size: var(--font-size-xs);
       line-height: 1.5;
       resize: vertical;
     }
@@ -381,7 +381,7 @@
 
     summary {
       color: var(--text-primary, #1a1a1a);
-      font-size: var(--font-size-base, 14px);
+      font-size: var(--font-size-base);
       font-weight: 600;
       cursor: pointer;
 
@@ -399,14 +399,14 @@
   /* 当前生效的 ICE 来源（"服务端下发（2 个服务器）" 之类） */
   &__ice-status {
     color: var(--text-secondary, #666);
-    font-size: var(--font-size-sm, 12px);
+    font-size: var(--font-size-sm);
     line-height: 1.5;
   }
 
   /* 自定义配置非法：红字提醒，但不阻断连接（会自动降级到服务端默认） */
   &__ice-error {
     color: var(--color-danger, #e53e3e);
-    font-size: var(--font-size-sm, 12px);
+    font-size: var(--font-size-sm);
     line-height: 1.5;
   }
 
@@ -419,7 +419,7 @@
     background: var(--bg-primary, #fff);
     color: var(--text-primary, #1a1a1a);
     font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     line-height: 1.5;
     resize: vertical;
 
@@ -438,7 +438,7 @@
   &__tip {
     margin: 0;
     color: var(--text-secondary, #666);
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     line-height: 1.6;
 
     code {
@@ -504,7 +504,7 @@
     align-items: center;
     gap: 8px;
     min-width: 0;
-    font-size: var(--font-size-base, 14px);
+    font-size: var(--font-size-base);
     font-weight: 600;
   }
 
@@ -529,7 +529,7 @@
     background: var(--input-bg, #f1f1f3);
     color: var(--text-primary, #1a1a1a);
     font-family: inherit;
-    font-size: var(--font-size-base, 14px);
+    font-size: var(--font-size-base);
     font-weight: 600;
     outline: none;
 
@@ -569,7 +569,7 @@
     border-radius: 999px;
     background: var(--color-success-bg, #dafbe1);
     color: var(--color-success-text, #2e7d32);
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     font-weight: 500;
     line-height: 1.7;
   }
@@ -588,7 +588,7 @@
     flex-wrap: wrap;
     gap: 6px;
     min-width: 0;
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
   }
 
   /* 元信息胶囊：比「· 分隔的长句」更容易按列扫读 */
@@ -610,7 +610,7 @@
     border: 1px dashed var(--border-color, #e5e5e5);
     border-radius: 10px;
     color: var(--text-secondary, #666);
-    font-size: var(--font-size-sm, 12px);
+    font-size: var(--font-size-sm);
     text-align: center;
 
     p {
@@ -668,7 +668,7 @@
     padding: 7px 12px;
     border-bottom: 1px solid var(--border-color-light, rgba(0, 0, 0, 0.08));
     font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     line-height: 1.6;
     word-break: break-word;
 
@@ -695,11 +695,11 @@
 
   &__audit-badge {
     flex: 0 0 auto;
-    padding: 0 6px;
-    border-radius: 4px;
+    padding: 0 0.6em;
+    border-radius: 0.4em;
     background: var(--tag-bg, #e8e8ed);
     color: var(--text-secondary, #666);
-    font-size: var(--font-size-2xs, 10px);
+    font-size: var(--font-size-2xs);
     line-height: 1.9;
   }
 
@@ -736,14 +736,14 @@
 
     h4 {
       margin: 0 0 6px;
-      font-size: var(--font-size-lg, 15px);
+      font-size: var(--font-size-lg);
       font-weight: 600;
     }
 
     p {
       margin: 0 0 18px;
       color: var(--text-secondary, #666);
-      font-size: var(--font-size-sm, 12px);
+      font-size: var(--font-size-sm);
       line-height: 1.6;
     }
   }
@@ -788,7 +788,7 @@
     border-radius: 8px;
     background: var(--bg-primary, #fff);
     color: var(--text-primary, #1a1a1a);
-    font-size: var(--font-size-md, 13px);
+    font-size: var(--font-size-md);
     line-height: 1.4;
     cursor: pointer;
     transition:
@@ -845,7 +845,7 @@
     &--small {
       padding: 4px 10px;
       border-radius: 7px;
-      font-size: var(--font-size-sm, 12px);
+      font-size: var(--font-size-sm);
     }
   }
 }

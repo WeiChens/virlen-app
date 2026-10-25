@@ -384,7 +384,7 @@
 
     .memory-form-hint {
       margin: 4px 0 0;
-      font-size: var(--font-size-2xs, var(--font-size-xs));
+      font-size: var(--font-size-2xs);
       color: var(--text-secondary, #888);
     }
 
@@ -623,7 +623,7 @@
     // 「点击整行可编辑…」—— 行内操作去掉之后，得有一条路告诉用户动作在哪儿
     .memory-list-hint {
       margin: 0;
-      font-size: var(--font-size-2xs, var(--font-size-xs));
+      font-size: var(--font-size-2xs);
       color: var(--text-secondary, #888);
       line-height: 1.4;
     }

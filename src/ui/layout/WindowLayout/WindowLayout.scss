@@ -27,7 +27,7 @@
       filter: brightness(1.1);
     }
     .title {
-      font-size: 14px;
+      font-size: var(--font-size-base);
       display: flex;
       gap: 3px;
       align-items: center;
@@ -37,7 +37,7 @@
         height: 20px;
       }
       .edit {
-        font-size: 18px;
+        font-size: var(--font-size-2xl);
         margin: 0 10px;
         display: inline-block;
         transform: translateY(5px);
@@ -177,7 +177,7 @@
             height: 24px;
           }
           .menu-item-title {
-            font-size: 15px;
+            font-size: var(--font-size-lg);
           }
         }
       }

@@ -15,7 +15,7 @@
   }
 
   .welcome-title {
-    font-size: 36px;
+    font-size: calc(var(--font-size-4xl) + 14px);
     font-weight: 700;
     color: var(--text-primary);
     margin: 0 0 12px;
@@ -24,7 +24,7 @@
   .welcome-subtitle {
     max-width: 420px;
     margin: 0 auto 40px;
-    font-size: 16px;
+    font-size: var(--font-size-xl);
     line-height: 1.6;
     color: var(--text-secondary);
   }
@@ -32,6 +32,6 @@
   .btn-start {
     min-width: 200px;
     height: 48px;
-    font-size: 16px;
+    font-size: var(--font-size-xl);
   }
 }

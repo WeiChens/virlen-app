@@ -57,7 +57,7 @@
         min-width: 0;
 
         .provider-icon {
-          font-size: 20px;
+          font-size: var(--font-size-3xl);
           svg {
             width: 20px;
             height: 20px;
@@ -98,8 +98,8 @@
 
         .status-badge {
           font-size: var(--font-size-xs);
-          padding: 2px 8px;
-          border-radius: 10px;
+          padding: 0.18em 0.73em;
+          border-radius: 0.91em;
           font-weight: 500;
 
           &.ok {
@@ -288,7 +288,7 @@
         }
 
         .template-icon {
-          font-size: 24px;
+          font-size: calc(var(--font-size-4xl) + 2px);
           svg {
             width: 24px;
             height: 24px;

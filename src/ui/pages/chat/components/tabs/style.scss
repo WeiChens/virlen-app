@@ -5,43 +5,51 @@
  * ⚠️ 下划线是 `bottom: -1px`：它必须压住 header 的**底边线**，所以那 1px 分隔线挂在
  * `.chat-header`（header + tabs 的公共外框）上，`.chat-toolbar` 自己不再画底边。
  */
-
 .chat-view-tabs {
   /* 与 header 的按钮同一条左侧基准线（.chat-toolbar 的 16px 内边距） */
   display: flex;
-  gap: 36px;
+  gap: 6px;
   /* 与标题行留出一点呼吸：标题行 40px 内是 28px 按钮，这里再给 2px */
   margin-top: 2px;
-  padding-left: 16px;
+  padding-left: 12px;
   /* 下划线要盖住底边线：让 tab 条落在它的上层 */
   position: relative;
   z-index: 1;
+  /* 两枚 tab 共用一条下划线，位置 / 宽度由 tsx 量出后写进这两个变量（缺省 0 宽 = 不可见） */
+  --tab-underline-x: 0px;
+  --tab-underline-w: 0px;
+
+  /* 下划线挂在容器上而不是每个 tab 上：只有同一个盒子才能从 A 平移到 B */
+  &::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    bottom: -1px;
+    width: var(--tab-underline-w);
+    height: 2px;
+    border-radius: 2px;
+    background: var(--accent-color, #4f46e5);
+    transform: translateX(var(--tab-underline-x));
+    transition:
+      transform 0.2s ease-in-out,
+      width 0.2s ease-in-out;
+  }
 }
 
 .chat-view-tab {
   position: relative;
   /* 下边 14px 是给「选中下划线」留的呼吸：行高 16 + 14 = 30，加 tab 条的 margin-top 2
      就是 `--chat-view-tabs-h` 的 32（改这里要同步 theme.scss 的令牌，否则右侧面板与它错开） */
-  padding: 0 0 14px;
+  padding: 4px 15px 10px;
   border: none;
   background: transparent;
-  font-size: var(--font-size-sm, 13px);
+  font-size: var(--font-size-sm);
   line-height: 16px;
   font-weight: 500;
   color: var(--text-tertiary, #767676);
   cursor: pointer;
-
-  /* 选中态的下划线：未选中时占位透明，切换时不跳动 */
-  &::after {
-    content: '';
-    position: absolute;
-    right: 0;
-    bottom: -1px;
-    left: 0;
-    height: 2px;
-    border-radius: 2px;
-    background: transparent;
-  }
+  /* 只过渡颜色：`all` 会把布局属性也纳入过渡（未来加 padding 就会抖） */
+  transition: color 0.2s ease-in-out;
 
   &:hover {
     color: var(--text-secondary, #666);
@@ -50,9 +58,5 @@
   /* 放在 :hover 之后：同特异度，后者覆盖前者（选中项 hover 也保持品牌色） */
   &.is-active {
     color: var(--accent-color, #4f46e5);
-
-    &::after {
-      background: var(--accent-color, #4f46e5);
-    }
   }
 }

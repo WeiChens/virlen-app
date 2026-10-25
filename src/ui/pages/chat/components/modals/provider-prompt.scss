@@ -12,20 +12,20 @@
   text-align: center;
 
   .prompt-icon {
-    font-size: 48px;
+    font-size: calc(var(--font-size-4xl) + 26px);
     margin-bottom: 16px;
   }
 
   h3 {
     margin: 0 0 8px;
-    font-size: 17px;
+    font-size: calc(var(--font-size-xl) + 1px);
     font-weight: 600;
     color: var(--text-primary, #1a1a1a);
   }
 
   p {
     margin: 0 0 24px;
-    font-size: 13px;
+    font-size: var(--font-size-md);
     line-height: 1.6;
     color: var(--text-secondary, #888);
   }
@@ -40,7 +40,7 @@
       gap: 6px;
       padding: 9px 18px;
       border-radius: 8px;
-      font-size: 14px;
+      font-size: var(--font-size-base);
       font-weight: 500;
       cursor: pointer;
       transition: all 0.15s;

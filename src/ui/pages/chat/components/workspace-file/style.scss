@@ -34,7 +34,7 @@
 
 .wfp-name {
   min-width: 0;
-  font-size: var(--font-size-md, 13px);
+  font-size: var(--font-size-md);
   font-weight: 600;
   color: var(--text-primary, #1a1a1a);
   white-space: nowrap;
@@ -45,7 +45,7 @@
 /* 在标签页里（`hideTitle`）：文件名已经在标签上，头部这一行让给目录（次要色、可截断） */
 .wfp-dir {
   min-width: 0;
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
   color: var(--text-secondary, #888);
   white-space: nowrap;
   overflow: hidden;
@@ -79,7 +79,7 @@
   border-radius: 6px;
   background: var(--bg-primary, #fff);
   color: var(--text-primary, #1a1a1a);
-  font-size: var(--font-size-sm, 12px);
+  font-size: var(--font-size-sm);
   cursor: pointer;
 
   &:hover:not(:disabled) {
@@ -137,7 +137,7 @@
 .wfp-path {
   flex: none;
   padding: 3px 10px 6px;
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
   color: var(--text-secondary, #888);
   white-space: nowrap;
   overflow: hidden;
@@ -169,7 +169,7 @@
   border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--text-secondary, #666);
-  font-size: var(--font-size-sm, 12px);
+  font-size: var(--font-size-sm);
   cursor: pointer;
 
   &:hover {
@@ -194,7 +194,7 @@
   border-bottom: 1px solid var(--border-color, #e5e5e5);
   background: var(--bg-secondary, #f7f7f8);
   color: var(--text-secondary, #666);
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
 
   &.is-warn {
     background: var(--color-warning-bg, #fffbeb);
@@ -212,7 +212,7 @@
   .wfp-action {
     height: 22px;
     padding: 0 6px;
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
   }
 }
 
@@ -245,7 +245,7 @@
   overscroll-behavior: contain;
 
   .markdown-renderer {
-    font-size: var(--font-size-md, 13px);
+    font-size: var(--font-size-md);
   }
 }
 
@@ -269,7 +269,7 @@
   border-bottom: 1px solid var(--border-color, #e5e5e5);
   background: var(--color-warning-bg, #fffbeb);
   color: var(--color-warning-text, #b45309);
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
 
   span {
     flex: 1;
@@ -279,7 +279,7 @@
   .wfp-action {
     height: 22px;
     padding: 0 6px;
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
   }
 }
 
@@ -292,7 +292,7 @@
   gap: 10px;
   padding: 24px;
   text-align: center;
-  font-size: var(--font-size-md, 13px);
+  font-size: var(--font-size-md);
   color: var(--text-secondary, #666);
 
   p {
@@ -365,7 +365,7 @@
 
 .wfp-media-hint {
   margin: 0;
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
   color: var(--text-secondary, #888);
 }
 
@@ -440,7 +440,7 @@
   border-radius: 4px;
   background: transparent;
   color: var(--text-secondary, #666);
-  font-size: var(--font-size-sm, 12px);
+  font-size: var(--font-size-sm);
   line-height: 1;
   cursor: pointer;
 
@@ -508,7 +508,7 @@
   border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--text-secondary, #666);
-  font-size: var(--font-size-sm, 12px);
+  font-size: var(--font-size-sm);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -539,7 +539,7 @@
   border-bottom: 1px solid var(--border-color, #e5e5e5);
   background: var(--bg-secondary, #f7f7f8);
   color: var(--text-secondary, #888);
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
 }
 
 .wfp-sheet-scroll {
@@ -555,7 +555,7 @@
   /* `max-content` + `min-width: 100%`：列宽跟内容走，表窄时也铺满面板 */
   width: max-content;
   min-width: 100%;
-  font-size: var(--font-size-sm, 12px);
+  font-size: var(--font-size-sm);
 
   td,
   th {
@@ -639,7 +639,7 @@
 }
 
 .wfp-pdf-count {
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
   color: var(--text-secondary, #888);
 }
 
@@ -652,7 +652,7 @@
   border-radius: 4px;
   background: transparent;
   color: var(--text-secondary, #666);
-  font-size: var(--font-size-sm, 12px);
+  font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
   cursor: pointer;
 
@@ -695,7 +695,7 @@
 
 /* 失败时的原始原因（英文报错）：小一号、次要色，不与上面那句中文抢注意力 */
 .wfp-hint-detail {
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
   color: var(--text-secondary, #888) !important;
   overflow-wrap: anywhere;
 }
@@ -736,7 +736,7 @@
   }
 
   .custom-select__value {
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
   }
 
   .custom-select__arrow {
@@ -754,7 +754,7 @@
 .custom-select__dropdown.wfp-model-dropdown .custom-select__option {
   padding: 4px 10px;
   margin-bottom: 1px;
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
 }
 
 /* 开关类按钮：激活靠底色，不靠图标（窄面板里文字比图标好认） */
@@ -766,7 +766,7 @@
   border-radius: 4px;
   background: transparent;
   color: var(--text-secondary, #666);
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
   line-height: 1;
   cursor: pointer;
 
@@ -824,7 +824,7 @@
   gap: 8px;
   padding: 24px;
   text-align: center;
-  font-size: var(--font-size-md, 13px);
+  font-size: var(--font-size-md);
   color: rgba(255, 255, 255, 0.78);
   /* 读取中：不挡轨道拖拽（模型分批出现时也能提前转） */
   pointer-events: none;
@@ -856,7 +856,7 @@
   border-radius: 6px;
   background: var(--bg-primary, #fff);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
 
   div {
     display: flex;

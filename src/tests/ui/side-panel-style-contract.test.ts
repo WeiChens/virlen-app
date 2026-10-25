@@ -255,11 +255,15 @@ describe('右侧面板容器 · 样式契约', () => {
 
     const marginTop = Number(/(?:^|[;\s])margin-top:\s*(\d+(?:\.\d+)?)px/.exec(wrap!)?.[1])
     const lineHeight = Number(/line-height:\s*(\d+(?:\.\d+)?)px/.exec(tab!)?.[1])
-    // padding: 0 0 14px —— 第三个值就是下划线那一段留白（前两个是零，没有单位）
-    const padBottom = Number(
-      /padding:\s*[\d.]+(?:px)?\s+[\d.]+(?:px)?\s+([\d.]+)px/.exec(tab!)?.[1],
+    // 展开 padding 简写：`4px 15px 10px` = 上 / 左右 / 下；未写出的值按 CSS 规则回落
+    const padShorthand = /(?:^|[;\s])padding:\s*([^;]+);/.exec(tab!)?.[1].trim().split(/\s+/)
+    expect(padShorthand).toBeTruthy()
+    const px = (v: string | undefined) => Number((v ?? '0').replace(/px$/, ''))
+    const padTop = px(padShorthand![0])
+    const padBottom = px(padShorthand![2] ?? padShorthand![0])
+    expect(marginTop + padTop + lineHeight + padBottom).toBe(
+      resolveLen('var(--chat-view-tabs-h)'),
     )
-    expect(marginTop + lineHeight + padBottom).toBe(resolveLen('var(--chat-view-tabs-h)'))
   })
 
   it('显隐过渡：收起时宽度归 0，时长 200ms，拖动时不过渡', () => {

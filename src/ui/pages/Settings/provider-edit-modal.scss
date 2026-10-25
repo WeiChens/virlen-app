@@ -291,7 +291,7 @@
           border: none;
           color: color-mix(in srgb, var(--primary-fg, #fff) 70%, transparent);
           cursor: pointer;
-          font-size: 14px;
+          font-size: var(--font-size-base);
           line-height: 1;
           padding: 0 2px;
           border-radius: 4px;
@@ -331,7 +331,7 @@
         border-radius: 6px;
         background: var(--primary);
         color: var(--primary-fg, #fff);
-        font-size: 18px;
+        font-size: var(--font-size-2xl);
         cursor: pointer;
         transition: opacity 0.15s;
 

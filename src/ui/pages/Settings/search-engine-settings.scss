@@ -49,7 +49,7 @@
           gap: 8px;
         }
         .template-icon {
-          font-size: 20px;
+          font-size: var(--font-size-3xl);
           width: 20px;
           height: 20px;
         }
@@ -183,8 +183,8 @@
       .active-badge {
         font-size: var(--font-size-2xs);
         font-weight: 600;
-        padding: 2px 8px;
-        border-radius: 10px;
+        padding: 0.2em 0.8em;
+        border-radius: 1em;
         background: var(--color-success-bg);
         color: var(--color-success-text);
         flex-shrink: 0;
@@ -333,7 +333,7 @@
     text-align: center;
 
     .empty-icon {
-      font-size: 48px;
+      font-size: calc(var(--font-size-4xl) + 26px);
       margin-bottom: 16px;
     }
 

@@ -125,7 +125,7 @@
           border-radius: 6px;
           background: var(--active-bg, #eef2ff);
           color: var(--accent-color, #4f46e5);
-          font-size: 11px;
+          font-size: var(--font-size-xs);
           font-weight: 700;
           flex-shrink: 0;
 
@@ -155,8 +155,8 @@
         .active-badge {
           font-size: var(--font-size-2xs);
           font-weight: 600;
-          padding: 2px 8px;
-          border-radius: 10px;
+          padding: 0.2em 0.8em;
+          border-radius: 1em;
           background: var(--color-success-bg);
           color: var(--color-success-text);
           flex-shrink: 0;
@@ -207,7 +207,7 @@
           .template-icon {
             background: var(--hover-bg, #f0f0f0);
             color: var(--text-secondary, #666);
-            font-size: 14px;
+            font-size: var(--font-size-base);
           }
         }
       }

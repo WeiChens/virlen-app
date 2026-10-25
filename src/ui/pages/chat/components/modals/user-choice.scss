@@ -31,12 +31,12 @@
     .choice-session-badge {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
-      padding: 3px 10px 3px 8px;
+      gap: 0.42em;
+      padding: 0.25em 0.83em 0.25em 0.67em;
       margin-bottom: 10px;
-      border-radius: 6px;
+      border-radius: 0.5em;
       background: var(--tag-bg, #eef2ff);
-      font-size: 12px;
+      font-size: var(--font-size-sm);
       color: var(--accent-color, #6366f1);
       font-weight: 500;
       white-space: nowrap;
@@ -45,8 +45,8 @@
       text-overflow: ellipsis;
 
       .badge-dot {
-        width: 6px;
-        height: 6px;
+        width: 0.5em;
+        height: 0.5em;
         border-radius: 50%;
         background: var(--accent-color, #6366f1);
         flex-shrink: 0;
@@ -55,7 +55,7 @@
 
     .choice-title {
       margin: 0;
-      font-size: 16px;
+      font-size: var(--font-size-xl);
       font-weight: 600;
       color: var(--text-primary, #1a1a1a);
       line-height: 1.4;
@@ -85,7 +85,7 @@
       border: 1px solid var(--border-color, #e5e7eb);
       border-radius: 8px;
       background: var(--bg-secondary, #f9fafb);
-      font-size: 14px;
+      font-size: var(--font-size-base);
       color: var(--text-primary, #1a1a1a);
       line-height: 1.5;
       font-family: inherit;
@@ -150,7 +150,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     font-weight: bold;
     border: 2px solid var(--border-color, #d1d5db);
     transition: all 0.15s;
@@ -168,11 +168,11 @@
 
   .radio-box {
     border-radius: 50%;
-    font-size: 10px;
+    font-size: var(--font-size-2xs);
   }
 
   .choice-label {
-    font-size: 14px;
+    font-size: var(--font-size-base);
     color: var(--text-primary, #1a1a1a);
     line-height: 1.4;
   }
@@ -201,7 +201,7 @@
       border: 1px dashed var(--border-color, #d1d5db);
       border-radius: 8px;
       background: transparent;
-      font-size: 13px;
+      font-size: var(--font-size-md);
       color: var(--text-secondary, #888);
       cursor: pointer;
       transition: all 0.15s;
@@ -218,7 +218,7 @@
       border: 1px dashed var(--border-color, #d1d5db);
       border-radius: 8px;
       background: transparent;
-      font-size: 13px;
+      font-size: var(--font-size-md);
       color: var(--text-secondary, #888);
       cursor: pointer;
       transition: all 0.15s;
@@ -240,7 +240,7 @@
       border: 1px solid var(--border-color, #e5e5e5);
       border-radius: 8px;
       background: var(--bg-primary, #fff);
-      font-size: 14px;
+      font-size: var(--font-size-base);
       color: var(--text-primary, #1a1a1a);
       cursor: pointer;
       transition: all 0.15s;
@@ -255,7 +255,7 @@
       border: none;
       border-radius: 8px;
       background: var(--accent-color, #6366f1);
-      font-size: 14px;
+      font-size: var(--font-size-base);
       color: var(--primary-fg);
       cursor: pointer;
       transition: all 0.15s;

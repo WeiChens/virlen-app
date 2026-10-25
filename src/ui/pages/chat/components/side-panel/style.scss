@@ -12,7 +12,6 @@
   /* 永远贴右：占满态下聊天区是 `display: none`，没有这一条面板就从左边铺、往右缩，
      拖手柄时左缘不动（= 拖不回来）。非占满态聊天区 `flex: 1` 吃掉余量，这条不起作用。 */
   margin-left: auto;
-
   /* 显隐过渡：宽度 + 淡出。宽度一变，聊天区就跟着长 / 缩 —— 这就是「滑出来」的全部，
      面板本身没有任何超出的内容可动，不需要 transform。
      ⚠️ 容器**常驻挂载**（收起 = 加 `.is-collapsed`，宽度收 0），没有「等过渡跑完再卸载」那套定时器，
@@ -85,14 +84,13 @@
 /* 标签栏 = 可横向滚动的标签区 + 右侧固定按钮（「+」打开开始页 / 全屏 / ✕ 收起面板）。
    底色与底线挂在整条上，按钮就不会跟着标签一起滚走。
 
-   高度跟聊天区对齐：标签栏（36）+ 当前标签页自己的 header（37）= 73 = `.chat-header`
+   高度跟聊天区对齐：标签栏（36）+ 当前标签页自己的 header（33）= 69 = `.chat-header`
    （40 + 32 + 1），两侧内容从同一条横线开始。三个数的定义与算式见 theme.scss 的「布局尺寸」
    （⚠️ 跨实现镜像：改那边要同步看这里和每个 pane 的 header）。 */
 .side-panel-tabbar {
   flex: none;
   display: flex;
-  border-bottom: 1px solid var(--border-color, #e5e5e5);
-  background: var(--bg-secondary, #f7f7f8);
+  // border-bottom: 1px solid var(--border-color, #e5e5e5);
   height: var(--side-panel-tabbar-h, 36px);
 }
 
@@ -244,7 +242,7 @@
   /* 按钮不继承页面字体（UA 默认 Arial）：少了这一条，文件名这类拉丁字母和旁边
      `.git-tab` / 正文不是同一套字形 */
   font-family: inherit;
-  font-size: var(--font-size-sm, 12px);
+  font-size: var(--font-size-sm);
   cursor: pointer;
 
   /* 键盘 Tab 到标签上要看得见（原来没有任何焦点提示，`.git-tab` 是有的） */

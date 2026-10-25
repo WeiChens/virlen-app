@@ -67,7 +67,7 @@
         border-radius: 6px;
         background: transparent;
         color: var(--text-secondary, #666);
-        font-size: var(--font-size-sm, 12.5px);
+        font-size: var(--font-size-sm);
         cursor: pointer;
         transition:
           color 0.15s,
@@ -151,7 +151,7 @@
         .reasoning-elapsed {
           margin-left: 2px;
           font-weight: 400;
-          font-size: 11px;
+          font-size: var(--font-size-xs);
           color: var(--text-tertiary, #999);
         }
 
@@ -446,7 +446,7 @@
     background: var(--feedback-bg, rgba(99, 102, 241, 0.06));
     border: 1px solid var(--feedback-border, rgba(99, 102, 241, 0.15));
     border-radius: 10px;
-    font-size: var(--font-size-sm, 13px);
+    font-size: var(--font-size-sm);
     line-height: 1.6;
     color: var(--text-secondary, #555);
 
@@ -483,11 +483,11 @@
   border: 1px solid var(--warning-color, #d97706);
   background: rgba(217, 119, 6, 0.08);
   color: var(--warning-color, #d97706);
-  font-size: var(--font-size-sm, 12.5px);
+  font-size: var(--font-size-sm);
   animation: fadeIn 0.2s ease;
 
   .ico {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     line-height: 1;
   }
 }

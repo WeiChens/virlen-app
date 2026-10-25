@@ -6,7 +6,7 @@
   text-align: center;
 
   h2 {
-    font-size: 24px;
+    font-size: calc(var(--font-size-4xl) + 2px);
     font-weight: 700;
     color: var(--text-primary);
     margin: 0 0 8px;
@@ -30,7 +30,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    font-size: 14px;
+    font-size: var(--font-size-base);
     color: var(--text-primary);
     word-break: break-all;
     text-align: left;
@@ -59,7 +59,7 @@
 
   .workdir-hint {
     margin: 12px 0 28px;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     color: var(--text-tertiary);
   }
 }

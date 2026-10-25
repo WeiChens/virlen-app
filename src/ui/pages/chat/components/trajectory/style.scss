@@ -16,7 +16,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   flex-direction: column;
   background: var(--bg-primary, #fff);
   color: var(--text-primary, #1a1a1a);
-  font-size: var(--font-size-sm, 13px);
+  font-size: var(--font-size-sm);
 
   &__body {
     flex: 1;
@@ -32,7 +32,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
     align-items: center;
     justify-content: center;
     color: var(--text-tertiary, #767676);
-    font-size: var(--font-size-sm, 13px);
+    font-size: var(--font-size-sm);
   }
 }
 
@@ -77,7 +77,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
       outline: none;
       background: transparent;
       color: var(--text-primary, #1a1a1a);
-      font-size: var(--font-size-sm, 13px);
+      font-size: var(--font-size-sm);
       font-family: inherit;
 
       &::placeholder {
@@ -87,7 +87,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   }
 
   &__count {
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     color: var(--text-secondary, #666);
     white-space: nowrap;
   }
@@ -101,7 +101,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
     color: var(--text-secondary, #666);
     cursor: pointer;
     line-height: 1;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
 
     &:hover:not(:disabled) {
       background: var(--hover-bg, #f0f0f0);
@@ -125,7 +125,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-secondary, #666);
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
   font-family: inherit;
   cursor: pointer;
   white-space: nowrap;
@@ -168,7 +168,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   &.is-empty {
     justify-content: center;
     color: var(--text-tertiary, #767676);
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     padding: 10px 12px;
   }
 
@@ -181,7 +181,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    font-size: 9px;
+    font-size: calc(var(--font-size-2xs) - 1px);
     line-height: 16px;
     color: var(--text-tertiary, #767676);
     text-align: right;
@@ -232,7 +232,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   &__mode {
     flex: none;
     align-self: flex-end;
-    font-size: 9px;
+    font-size: calc(var(--font-size-2xs) - 1px);
     color: var(--text-tertiary, #767676);
     white-space: nowrap;
   }
@@ -256,7 +256,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
     background: transparent;
     color: var(--text-secondary, #666);
     font-family: inherit;
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     text-align: left;
     cursor: pointer;
 
@@ -268,7 +268,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   &__caret {
     flex: none;
     width: 12px;
-    font-size: 10px;
+    font-size: var(--font-size-2xs);
     color: var(--text-tertiary, #767676);
     transition: transform 0.12s;
 
@@ -301,7 +301,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
     border-radius: 4px;
     background: var(--tag-bg, #e8e8ed);
     color: var(--text-tertiary, #767676);
-    font-size: 10px;
+    font-size: var(--font-size-2xs);
     line-height: 15px;
   }
 
@@ -320,7 +320,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   &__group-title {
     margin: 4px 0 4px;
     color: var(--text-tertiary, #767676);
-    font-size: 10px;
+    font-size: var(--font-size-2xs);
   }
 
   &__grid {
@@ -338,7 +338,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
 
   &__metric-label {
     color: var(--text-tertiary, #767676);
-    font-size: 10px;
+    font-size: var(--font-size-2xs);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -346,7 +346,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
 
   &__metric-value {
     color: var(--text-primary, #1a1a1a);
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     font-variant-numeric: tabular-nums;
   }
 }
@@ -370,7 +370,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
     border-bottom: 1px solid var(--border-color, #e5e5e5);
     background: var(--bg-primary, #fff);
     color: var(--text-tertiary, #767676);
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
 
     .col-num,
     .col-time {
@@ -385,7 +385,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
     border-bottom: 1px solid var(--border-color-light, rgba(108, 108, 108, 0.134));
     background: var(--bg-secondary, #f7f7f8);
     color: var(--text-secondary, #666);
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     font-family: inherit;
     cursor: pointer;
 
@@ -446,7 +446,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   background: var(--bg-secondary, #f7f7f8);
   color: var(--text-primary, #1a1a1a);
   font-family: inherit;
-  font-size: var(--font-size-sm, 13px);
+  font-size: var(--font-size-sm);
   text-align: left;
   cursor: pointer;
 
@@ -457,7 +457,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   &__caret {
     flex: none;
     width: 12px;
-    font-size: 10px;
+    font-size: var(--font-size-2xs);
     color: var(--text-tertiary, #767676);
     transition: transform 0.12s;
 
@@ -473,7 +473,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
 
   &__summary {
     margin-left: auto;
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     color: var(--text-secondary, #666);
     white-space: nowrap;
     overflow: hidden;
@@ -489,7 +489,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   height: 100%;
   padding: 0 12px 0 24px;
   color: var(--text-secondary, #666);
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
 
   &__title {
     font-weight: 600;
@@ -513,7 +513,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   background: transparent;
   color: var(--text-primary, #1a1a1a);
   font-family: inherit;
-  font-size: var(--font-size-sm, 13px);
+  font-size: var(--font-size-sm);
   text-align: left;
   cursor: pointer;
   transition: background 0.1s, opacity 0.12s;
@@ -544,7 +544,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
 
   .col-index {
     color: var(--text-tertiary, #767676);
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     font-variant-numeric: tabular-nums;
   }
 
@@ -566,7 +566,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   .col-time {
     text-align: right;
     font-variant-numeric: tabular-nums;
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     color: var(--text-secondary, #666);
     white-space: nowrap;
   }
@@ -584,7 +584,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
     border-radius: 4px;
     background: var(--tag-bg, #e8e8ed);
     color: var(--text-secondary, #666);
-    font-size: 10px;
+    font-size: var(--font-size-2xs);
     line-height: 16px;
   }
 
@@ -600,18 +600,18 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
     background: color-mix(in srgb, var(--accent-color, #4f46e5) 10%, transparent);
     color: var(--accent-color, #4f46e5);
     font-family: Menlo, Consolas, 'Liberation Mono', monospace;
-    font-size: 10px;
+    font-size: var(--font-size-2xs);
     line-height: 16px;
   }
 
   &__badge {
     flex: none;
-    padding: 0 5px;
-    border-radius: 4px;
+    padding: 0 0.5em;
+    border-radius: 0.4em;
     background: var(--color-error-bg, #ffebe9);
     color: var(--color-error-text, #991b1b);
-    font-size: 10px;
-    line-height: 16px;
+    font-size: var(--font-size-2xs);
+    line-height: 1.6;
   }
 
   &__pulse {
@@ -628,7 +628,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
     flex: none;
     font-family: Menlo, Consolas, 'Liberation Mono', 'PingFang SC', 'Microsoft YaHei',
       monospace;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     color: var(--text-primary, #1a1a1a);
   }
 
@@ -640,7 +640,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
     color: var(--text-tertiary, #767676);
     font-family: Menlo, Consolas, 'Liberation Mono', 'PingFang SC', 'Microsoft YaHei',
       monospace;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 
   .trajectory-tool__arrow {
@@ -654,7 +654,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text-secondary, #666);
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 }
 
@@ -663,7 +663,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   display: inline-block;
   padding: 0 6px;
   border-radius: 4px;
-  font-size: 10px;
+  font-size: var(--font-size-2xs);
   line-height: 16px;
   white-space: nowrap;
   background: var(--tag-bg, #e8e8ed);
@@ -752,7 +752,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   &__index {
     flex: none;
     color: var(--text-tertiary, #767676);
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     font-variant-numeric: tabular-nums;
   }
 
@@ -761,7 +761,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     color: var(--text-secondary, #666);
   }
 
@@ -828,7 +828,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   border-radius: 5px;
   background: transparent;
   color: var(--text-secondary, #666);
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
   font-family: inherit;
   cursor: pointer;
   white-space: nowrap;
@@ -848,7 +848,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   display: flex;
   gap: 10px;
   padding: 3px 0;
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
   line-height: 18px;
 
   &__label {
@@ -870,7 +870,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   background: var(--inline-code-bg, #e8e8ed);
   color: var(--inline-code-color, #642dd1);
   font-family: Menlo, Consolas, monospace;
-  font-size: 10px;
+  font-size: var(--font-size-2xs);
 }
 
 .trajectory-jump {
@@ -880,7 +880,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   border-radius: 6px;
   background: var(--bg-primary, #fff);
   color: var(--accent-color, #4f46e5);
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
   font-family: inherit;
   cursor: pointer;
 
@@ -897,7 +897,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   color: var(--text-primary, #1a1a1a);
   font-family: Menlo, Consolas, 'Liberation Mono', 'PingFang SC', 'Microsoft YaHei',
     monospace;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 17px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -910,18 +910,18 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
 }
 
 .trajectory-markdown {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 19px;
 
   .markdown-renderer {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 }
 
 .trajectory-note {
   margin: 10px 0 0;
   color: var(--text-tertiary, #767676);
-  font-size: 10px;
+  font-size: var(--font-size-2xs);
   line-height: 16px;
 }
 
@@ -937,7 +937,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   &__error {
     margin: 0;
     color: var(--text-tertiary, #767676);
-    font-size: 11px;
+    font-size: var(--font-size-xs);
   }
 
   &__error {
@@ -960,7 +960,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
     padding: 6px 8px;
     cursor: pointer;
     list-style: none;
-    font-size: var(--font-size-xs, 11px);
+    font-size: var(--font-size-xs);
     line-height: 18px;
 
     // 三条都要：Chrome 的 marker / Safari 的 marker / 显式去掉默认三角
@@ -1003,7 +1003,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
     flex: none;
     color: var(--text-primary, #1a1a1a);
     font-family: Menlo, Consolas, monospace;
-    font-size: 11px;
+    font-size: var(--font-size-xs);
   }
 
   &__label {
@@ -1012,7 +1012,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
     border-radius: 3px;
     background: var(--accent-bg, #eef2ff);
     color: var(--accent-color, #4f46e5);
-    font-size: 10px;
+    font-size: var(--font-size-2xs);
   }
 
   &__desc {
@@ -1022,7 +1022,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text-tertiary, #767676);
-    font-size: 10px;
+    font-size: var(--font-size-2xs);
   }
 
   &__body {
@@ -1032,7 +1032,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   &__full {
     margin: 0 0 6px;
     color: var(--text-secondary, #666);
-    font-size: 11px;
+    font-size: var(--font-size-xs);
     line-height: 17px;
     white-space: pre-wrap;
     word-break: break-word;
