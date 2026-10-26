@@ -375,19 +375,19 @@ it('工作区文件标签：容器把树按 panel 变体渲染，单击文件即
   expect(openedPaths).toEqual(['E:/repo/src/a.ts'])
 })
 
-it('终端标签：标题带序号、图标是终端，容器把 id / shell / active 交给面板（不再传 cwd / pid）', async () => {
+it('终端标签：标题就是终端类型名（不编序号）、图标是终端，容器把 id / shell / active 交给面板（不再传 cwd / pid）', async () => {
   const tab = terminalTab({
     termId: 'term_7',
     sessionId: 's1',
     shell: 'powershell',
     cwd: 'E:/repo',
     pid: 4242,
-    index: 2,
   })
   await renderPanel([tab])
 
   const label = document.querySelector<HTMLElement>('.side-panel-tab')!
-  expect(label.textContent).toContain('终端 2')
+  expect(label.textContent).toContain('Windows PowerShell')
+  expect(label.textContent).not.toContain('终端')
   expect(label.querySelector('.side-panel-tab-icon.is-page')).not.toBeNull()
 
   const pane = document.querySelector<HTMLElement>('.user-terminal-pane')!

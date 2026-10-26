@@ -75,17 +75,13 @@ export type SidePanelTab =
       termId: string
       /** 归属会话（关标签时要拿它去 `cmd_terminal_kill`；会话隔离靠它） */
       sessionId: string
-      /** 实际使用的 shell 类型 id（`powershell` / `cmd` / `pwsh` / `gitbash`）；展示时经 `terminal/shells.tsx::shellLabel` */
+      /** 实际使用的 shell 类型 id（`powershell` / `cmd` / `pwsh` / `gitbash`）—— **标签标题就是它**
+       *（`terminal/shells.tsx::shellLabel`），同名无所谓，不编序号 */
       shell: string
       /** 工作目录（会话工作区）—— 只给标签 tooltip 用（面板里不再占一行元信息） */
       cwd: string
       /** shell 进程 pid（开终端时 Rust 回的；**只用于诊断**，界面不展示） */
       pid: number
-      /**
-       * 标签上的序号（开的时候是第几个终端）。关掉其他终端**不重排** ——
-       * 重排会让标签文字跟着别人的生死变，反而更难认。
-       */
-      index: number
     }
   | {
       id: string
@@ -225,24 +221,8 @@ export function terminalTab(input: {
   shell: string
   cwd: string
   pid: number
-  index: number
 }): SidePanelTab {
   return { id: terminalTabId(input.termId), kind: 'terminal', ...input }
-}
-
-/**
- * 新终端该用哪个序号：**已用最大序号 + 1**。
- *
- * ⚠️ 不能用「当前开着几个终端 + 1」：终端 1 / 2 / 3 开着，关掉 1 与 2 再新开一个，
- * 数量算出来是 2 → 与新标签里原来那个「终端 3」不撞，但与「终端 2」撞（如果它还开着）。
- * 序号本身**不重排**（关掉别人的不该改我的标签文字），所以只能往上加。
- */
-export function nextTerminalIndex(tabs: SidePanelTab[]): number {
-  let max = 0
-  for (const tab of tabs) {
-    if (tab.kind === 'terminal' && tab.index > max) max = tab.index
-  }
-  return max + 1
 }
 
 /** 造一个服务终端标签 */
@@ -363,7 +343,6 @@ export function openTerminalTab(
     shell: string
     cwd: string
     pid: number
-    index: number
   },
 ): { tabs: SidePanelTab[]; activeId: string; added: boolean } {
   const tab = terminalTab(input)

@@ -939,12 +939,14 @@ function SidePanel({
                   : tab.kind === 'files'
                     ? t('工作区文件')
                     : tab.kind === 'terminal'
-                      ? tpl('终端 $__index__', { index: tab.index })
+                      // 标题就用终端类型名（PowerShell / cmd / Git Bash…）：同名无所谓，
+                      // 靠 tooltip 里的工作目录区分（不编「终端 1 / 2」）
+                      ? shellLabel(tab.shell)
                       : tab.kind === 'browser'
                         ? tab.title || urlLabel(tab.url) || t('浏览器')
                         : tab.name || tab.serviceId
             // 服务标签的 tooltip 带上归属会话：两个会话各有一个 dev 时要分得清；
-            // 终端标签的 tooltip 给工作目录（几个终端同名时靠它区分）；
+            // 终端标签的 tooltip 给工作目录（标签文字已经是 shell 类型名，几个终端可能同名）；
             // 网页标签的 tooltip 给完整地址（标题只有主机名，同主机的两页靠它区分）
             const title =
               tab.kind === 'file'
@@ -954,7 +956,7 @@ function SidePanel({
                 : tab.kind === 'service' && tab.sessionLabel
                   ? `${label} · ${tpl('对话：$__name__', { name: tab.sessionLabel })}`
                   : tab.kind === 'terminal'
-                    ? `${label} · ${shellLabel(tab.shell)} · ${tab.cwd}`
+                    ? `${label} · ${tab.cwd}`
                     : tab.kind === 'browser'
                       ? tab.url || t('浏览器')
                       : label

@@ -118,6 +118,7 @@
   display: flex;
   // border-bottom: 1px solid var(--border-color, #e5e5e5);
   height: var(--side-panel-tabbar-h, 36px);
+  padding-right: 8px;
 }
 
 /* 标签栏：横向排、超出就自己滚（标签一多不能把面板顶宽），底边与内容区同一条线。
@@ -166,8 +167,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: none;
   border-radius: 5px;

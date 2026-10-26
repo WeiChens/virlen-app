@@ -194,7 +194,6 @@ describe('会话分桶 · 会话被删', () => {
         shell: 'cmd',
         cwd: 'E:/repo',
         pid: 1,
-        index: 1,
       }),
     ])[0]
     const withTerminal: SidePanelTab[] = [...bucketOf(buckets, S1).tabs, terminal]

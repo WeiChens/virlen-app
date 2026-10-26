@@ -2,7 +2,8 @@
  * 终端类型（shell）的**界面层**：展示名 + 「新建终端」的菜单项（纯函数，方便单测）。
  *
  * 与后端的分工：Rust 只给稳定 id（`powershell` / `cmd` / `pwsh` / `gitbash`）与「装没装」，
- * 展示名与措辞在这里 —— core 里不该出现「命令提示符」这种界面文案。
+ * 展示名与措辞在这里 —— core 里不该出现界面文案。展示名同时是**右侧栏终端标签的标题**
+ *（重名无所谓，不编「终端 1 / 2」）。
  *
  * 四条口径：
  * 1. **装了的在前、没装的沉底**：菜单是给人点的，第一项就该能点；
@@ -16,10 +17,10 @@ import { t, tpl } from '@/ui/i18n'
 import type { ContextMenuItem } from '@/ui/components/shared/ContextMenu'
 import type { UserTerminalShell } from '@/infrastructure/terminal'
 
-/** 类型 id → 展示名（产品名不翻译；只有「命令提示符」需要 en-US 条目） */
+/** 类型 id → 展示名（产品名 / 命令名不翻译，无需 en-US 条目） */
 const SHELL_LABELS: Record<string, string> = {
   powershell: 'Windows PowerShell',
-  cmd: '命令提示符',
+  cmd: 'cmd',
   pwsh: 'PowerShell 7',
   gitbash: 'Git Bash',
 }

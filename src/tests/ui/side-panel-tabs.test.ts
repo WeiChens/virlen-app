@@ -39,7 +39,6 @@ import {
   tabLabel,
   terminalTab,
   terminalTabId,
-  nextTerminalIndex,
   updateBrowserTab,
   updateBrowserTitle,
   FILES_TAB_ID,
@@ -360,14 +359,13 @@ it('开始页已不在（菜单开着时被关掉）：退化成普通打开，�
   expect(next.activeId).toBe(FILES_TAB_ID)
 })
 
-/** 造一个终端标签入参（序号只用于标签文字） */
-const term = (termId: string, index = 1) => ({
+/** 造一个终端标签入参（`pid` 只是诊断字段，不同就代表「另一个进程」） */
+const term = (termId: string, pid = 101) => ({
   termId,
   sessionId: 's1',
   shell: 'powershell',
   cwd: 'E:/repo',
-  pid: 100 + index,
-  index,
+  pid,
 })
 
 /**
@@ -386,21 +384,6 @@ it('终端标签：id 即身份，重复打开只切过去', () => {
   expect(again.added).toBe(false)
   expect(again.tabs).toBe(opened.tabs)
   expect(again.activeId).toBe('terminal:term_1')
-})
-
-it('终端标签：序号是标签文字的一部分，关掉、拖顺序都不改它', () => {
-  const tabs = [
-    ...openTerminalTab([], term('term_1', 1)).tabs,
-    ...openTerminalTab([], term('term_2', 2)).tabs,
-  ]
-  expect(tabs.map((tab) => (tab.kind === 'terminal' ? tab.index : 0))).toEqual([1, 2])
-
-  const moved = moveTab(tabs, 'terminal:term_2', 0)
-  expect(moved.map((tab) => (tab.kind === 'terminal' ? tab.index : 0))).toEqual([2, 1])
-
-  const closed = closeTab(tabs, 'terminal:term_1', 'terminal:term_1')
-  expect(closed.tabs.map((tab) => tab.id)).toEqual(['terminal:term_2'])
-  expect((closed.tabs[0] as { index?: number }).index).toBe(2)
 })
 
 /**
@@ -423,27 +406,6 @@ it('replaceTabWith：来源页已经不在时追加到末尾，不丢标签', ()
   const next = replaceTabWith([fileTab('a')], terminalTab(term('term_9')), GUIDE_TAB_ID)
   expect(next.tabs.map((tab) => tab.id)).toEqual(['file:a', 'terminal:term_9'])
   expect(next.activeId).toBe('terminal:term_9')
-})
-
-/**
- * 终端序号：取「已用最大序号 + 1」，**不是**「当前开着几个终端 + 1」。
- *
- * ⚠️ 用数量会在「关掉中间那个再新开」时撞号：终端 1 / 2 开着，关掉 1 再开一个，
- * 数量算出来是 2 → 两个标签都叫「终端 2」。序号不重排（关掉别人的不改我的名字），
- * 所以只能往上加。
- */
-it('终端序号：取已用最大值 + 1，关掉中间那个再开也不撞号', () => {
-  expect(nextTerminalIndex([])).toBe(1)
-  // 文件 / 网页 / 页面标签不参与计数
-  expect(nextTerminalIndex([fileTab('a'), pageTab('guide')])).toBe(1)
-
-  const term1 = terminalTab(term('term_1', 1))
-  const term2 = terminalTab(term('term_2', 2))
-  const term3 = terminalTab(term('term_3', 3))
-  expect(nextTerminalIndex([term1, term2, term3])).toBe(4)
-  // 关掉 1 与 2，只剩 3：下一个必须是 4（而不是 2）
-  expect(nextTerminalIndex([term3])).toBe(4)
-  expect(nextTerminalIndex([fileTab('a'), term1])).toBe(2)
 })
 
 /**

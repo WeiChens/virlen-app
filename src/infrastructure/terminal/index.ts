@@ -43,8 +43,8 @@ export interface UserTerminalInfo {
 /**
  * 一种可选的终端类型（字段与 Rust `user_shell/shells.rs::detect_all` + `panel::list_shells` 对应）。
  *
- * ⚠️ 展示名不在这里：那是界面文案（`ui/pages/chat/components/terminal/shells.ts` 的
- * `shellLabel`）。core 只给稳定 id，免得「命令提示符」这种中文名字跑进 Rust。
+ * ⚠️ 展示名不在这里：那是界面文案（`ui/pages/chat/components/terminal/shells.tsx` 的
+ * `shellLabel`，同时也是右侧栏终端标签的标题）。core 只给稳定 id，免得中文展示名跑进 Rust。
  */
 export interface UserTerminalShell {
   /** 类型 id（`cmd` / `powershell` / `pwsh` / `gitbash`），开终端时原样传回 */

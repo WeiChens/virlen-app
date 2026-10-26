@@ -2200,8 +2200,6 @@
   "终端已结束，只能查看输出": "The terminal has exited; output only",
   "该终端已不在列表中（可能已被关闭）": "This terminal is no longer listed (it may have been closed)",
   "无法打开终端": "Can't open the terminal",
-  "终端 $__index__": "Terminal $__index__",
-  "命令提示符": "Command Prompt",
   "$__name__（上次使用）": "$__name__ (last used)",
   "$__name__（默认）": "$__name__ (default)",
   "$__name__（未安装）": "$__name__ (not installed)",

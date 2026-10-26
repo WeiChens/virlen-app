@@ -86,7 +86,7 @@ afterEach(() => {
 
 it('展示名：四种 id 都有人话，不认识的 id 原样显示', () => {
   expect(shellLabel('powershell')).toBe('Windows PowerShell')
-  expect(shellLabel('cmd')).toBe('命令提示符')
+  expect(shellLabel('cmd')).toBe('cmd')
   expect(shellLabel('pwsh')).toBe('PowerShell 7')
   expect(shellLabel('gitbash')).toBe('Git Bash')
   // 后端多给一种类型时不该假装它是默认那种
@@ -137,7 +137,7 @@ it('菜单项：未安装的灰显 + 标「未安装」+ 悬停给原因；上�
   const texts = items.map((i) => String((i.label as any).props?.children ?? i.label))
   // 上次用的那种被标出来，其余可用项是纯名字
   expect(texts[0]).toBe('Windows PowerShell')
-  expect(texts[1]).toBe('命令提示符（上次使用）')
+  expect(texts[1]).toBe('cmd（上次使用）')
   expect(texts[2]).toBe('PowerShell 7（未安装）')
   // 未安装的项把原因挂在 title 上（查过哪些目录）
   expect((items[2].label as any).props.title).toContain('没找到 pwsh.exe')
@@ -213,7 +213,7 @@ it('开始页：点标题后的 ▾ 才弹类型菜单，选中一种才开（�
   })
   expect(menuItems().map((b) => b.textContent)).toEqual([
     'Windows PowerShell',
-    '命令提示符（上次使用）',
+    'cmd（上次使用）',
     'PowerShell 7（未安装）',
     'Git Bash（未安装）',
   ])

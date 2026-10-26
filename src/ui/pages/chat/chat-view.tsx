@@ -48,7 +48,6 @@ import {
   closeTab,
   closeTabs,
   moveTab,
-  nextTerminalIndex,
   openFileTab,
   openPageTab,
   openServiceTab,
@@ -706,8 +705,6 @@ function ChatView() {
               shell: info.shell,
               cwd: info.cwd,
               pid: info.pid,
-              // 序号取「已用最大值 + 1」：关掉中间那个再开不会出现两个「终端 2」（见 `tabs.ts`）
-              index: nextTerminalIndex(tabs),
             }),
           ],
         )[0]
