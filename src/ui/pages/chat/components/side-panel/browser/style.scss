@@ -39,7 +39,7 @@
   gap: 1px;
 }
 
-/* ← → ↻ 用文字字形而不是图标：字号一档就够，省三个只能在这儿用一次的 SVG */
+/* 导航 / 工具按钮共用一套盒模型：24px 方形、无边框，悬停才出面 */
 .browser-nav-btn,
 .browser-tool {
   flex: none;
@@ -56,7 +56,10 @@
   font-size: var(--font-size-md);
   line-height: 1;
   cursor: pointer;
-  transition: background 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    opacity 0.12s;
 
   &:hover:not(:disabled) {
     background: var(--hover-bg, #ececec);
@@ -64,14 +67,33 @@
   }
 
   &:disabled {
-    /* 不能后退 / 还没地址时按钮必须一看就知道按不动（不是「按了没反应」） */
-    color: var(--text-tertiary, #b3b3b3);
+    /* 不能后退 / 还没地址时按钮必须一看就知道按不动（不是「按了没反应」）。
+       只换颜色不够：--text-secondary(#666) 与 --text-tertiary(#767676) 肉眼几乎同色。
+       所以叠一档 opacity，让整枚图标一起淡下去。 */
+    color: var(--text-tertiary, #767676);
+    opacity: 0.32;
     cursor: default;
   }
 }
 
-.browser-tool.is-close {
-  font-size: var(--font-size-xs);
+/**
+ * 按钮里的图标统一一套口径：14px 方形、颜色跟 `currentColor`（按钮禁用时整枚一起淡下去）。
+ * `.is-back` = 后退：与前进共用一枚右箭头，转 180°（几何只有一份，见 `ArrowRightSvg`）。
+ * `.is-close` = 关闭：这枚 X 几乎铺满 viewBox，同尺寸看着比箭头大，所以压到 12px。
+ */
+.browser-glyph {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+
+  &.is-back {
+    transform: rotate(180deg);
+  }
+
+  &.is-close {
+    width: 12px;
+    height: 12px;
+  }
 }
 
 /* 地址栏输入框：焦点进来全选（浏览器口径），地址为空时等输入 */

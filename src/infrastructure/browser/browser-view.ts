@@ -51,6 +51,15 @@ export interface BrowserViewEvent {
   title?: string | null
   /** 仅 `download`：被拦下的文件名（拿不到时是 `null`，提示里就不带文件名） */
   name?: string | null
+  /**
+   * 仅 `location`（Windows）：原生历史栈现在能不能后退 / 前进。
+   *
+   * ⚠️ 后退 / 前进的按钮状态**只能**来自这里：面板不维护历史条目，也就无从推算（见
+   * `browser-view.rs::browser_view_history`）。`null` / 缺失 = 平台不上报（非 Windows），
+   * 调用方按「有地址就允许点」兜底。
+   */
+  canBack?: boolean | null
+  canForward?: boolean | null
 }
 
 /** 事件名（与 Rust 的 `NAVIGATE_EVENT` 必须一致） */
@@ -90,7 +99,7 @@ export async function applyBrowserView(
   }
 }
 
-/** 发起一次导航（地址栏回车 / 后退 / 前进） */
+/** 发起一次导航（地址栏回车）。后退 / 前进走 `historyBrowserView`，不走这里 */
 export async function navigateBrowserView(label: string, url: string): Promise<void> {
   if (!hasBrowserView()) return
   try {
@@ -110,7 +119,13 @@ export async function reloadBrowserView(label: string): Promise<void> {
   }
 }
 
-/** 后退 / 前进（走网页自己的历史栈，与面板那条历史同向） */
+/**
+ * 后退 / 前进 —— **原生历史栈是唯一真相**。
+ *
+ * 面板不维护自己的历史条目（也没有「把重定向折成一条」这种事）：服务端 302 与页面自己的
+ * 跳转在 Chromium 里怎么记就怎么记，`GoBack` 直接回到用户真去过的那一页。按钮状态不问这里，
+ * 而是跟着 `location` 事件回传的 `canBack` / `canForward`。
+ */
 export async function historyBrowserView(
   label: string,
   direction: 'back' | 'forward',
@@ -123,7 +138,7 @@ export async function historyBrowserView(
   }
 }
 
-/** 当前真实地址（`null` = 视图不存在；服务端重定向之后它比我们的历史栈准） */
+/** 当前真实地址（`null` = 视图不存在）；留给核对 / 调试，面板的地址显示走事件 */
 export async function currentBrowserViewUrl(label: string): Promise<string | null> {
   if (!hasBrowserView()) return null
   try {

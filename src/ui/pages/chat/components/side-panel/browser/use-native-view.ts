@@ -33,9 +33,13 @@
  *    低频轮询兜底。隐藏的标签不该每帧白量一次布局。
  * 8. **闲置休眠与上限**（`view-policy.ts`）：切走超过设定秒数就 `close` 掉原生视图，存活数超上限
  *    时淘汰最久没看的隐藏视图（设置项 `browserSleepAfterSec` / `browserMaxViews`，0 = 关）。
- *    销毁只发生在不可见时；重建后 `slept` 加一，调用方据此把后退 / 前进历史收敛成当前页。
+ *    销毁只发生在不可见时；重建后原生历史栈是空的，后退 / 前进的可用性自动跟着回来
+ *    （`canBack` / `canForward` 每次提交都会重新上报）。
+ * 9. **导航是命令，不是受控值**：本 hook 对外只给 `navigate` / `reload` / `goBack` / `goForward`。
+ *    页面自己也会改地址（302 / 页内跳转 / 后退），把地址当 prop 必然绕成「页面已到 B，我们
+ *    又把 A 推下去」的回环 —— 后退 / 前进因此只发原生历史命令，结果由页面回传。
  */
-import { useEffect, useRef, useState, type RefObject } from 'react'
+import { useEffect, useRef, useState, useCallback, type RefObject } from 'react'
 import { reaction } from 'mobx'
 import { appliedZoomFactor } from '@/ui/hooks/applied-zoom'
 import { settingsState } from '@/ui/store'
@@ -43,6 +47,7 @@ import {
   applyBrowserView,
   closeBrowserView,
   hasBrowserView,
+  historyBrowserView,
   navigateBrowserView,
   openBrowserView,
   reloadBrowserView,
@@ -58,10 +63,8 @@ import {
 interface Options {
   /** 视图 label（一个网页标签一个，由调用方保证稳定） */
   label: string
-  /** 要加载的地址（空串 = 空白页：不建视图） */
-  url: string
-  /** 刷新计数：变化即重载（地址不变时唯一能触发重载的信号） */
-  reloadToken: number
+  /** 建视图时要加载的地址（空串 = 空白页：不建视图）；**只在建视图那一刻读** */
+  initialUrl: string
 }
 
 interface NativeBrowserView {
@@ -76,10 +79,16 @@ interface NativeBrowserView {
    */
   covered: boolean
   /**
-   * 原生视图因**闲置休眠**被销毁过的次数。变化即说明页面被重新加载过、原生历史栈已清空，
-   * 调用方要把自己的后退 / 前进历史收敛成当前页（否则按钮指向已经不存在的页面）。
+   * 发起一次导航（地址栏回车）。
+   * ⚠️ 导航是**命令**而不是受控 prop：地址也会由页面自己变（302 / 页面内跳转 / 后退），
+   * 当成 prop 就会变成「页面已到 B，我们又把 A 推下去」的回环（曾经的真 bug）。
    */
-  slept: number
+  navigate(url: string): void
+  /** 重新加载当前页面（地址不变也要真的重载） */
+  reload(): void
+  /** 后退 / 前进 —— **原生历史栈**（面板不维护历史，见 `browser-view.ts`） */
+  goBack(): void
+  goForward(): void
 }
 
 /** 小于这个尺寸就算不可见（`display:none` 的元素 rect 正好是 0） */
@@ -135,7 +144,7 @@ function sameBounds(a: BrowserViewBounds, b: BrowserViewBounds): boolean {
   )
 }
 
-export function useNativeBrowserView({ label, url, reloadToken }: Options): NativeBrowserView {
+export function useNativeBrowserView({ label, initialUrl }: Options): NativeBrowserView {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const [error, setError] = useState<string | null>(() =>
     hasBrowserView() ? null : 'unavailable',
@@ -149,24 +158,22 @@ export function useNativeBrowserView({ label, url, reloadToken }: Options): Nati
     visible: false,
     failed: false,
     bounds: { x: 0, y: 0, width: 0, height: 0 },
-    wantUrl: url,
+    wantUrl: initialUrl,
   })
-  /** 闲置休眠销毁视图的次数（见 `NativeBrowserView.slept`） */
-  const [slept, setSlept] = useState(0)
 
   /**
    * 登记到存活策略表：什么时候真销毁由设置决定（切走超过 N 秒 / 存活数超出上限）。
    * ⚠️ 只销毁、不导航：`wantUrl` 留着，下一次可见时会带着同一地址重建。
+   * 重建后的原生历史栈是空白的（`canBack` / `canForward` 自然就是 false）。
    */
   useEffect(
     () =>
       trackBrowserView(label, () => {
         const state = stateRef.current
-        // 在用的那一页绝不动（可见时 slept 也不算：此刻销毁等于无端刷新）
+        // 在用的那一页绝不动（可见时也不算：此刻销毁等于无端刷新）
         if (!state.created || state.visible) return
         state.created = false
         state.creating = false
-        setSlept((n) => n + 1)
         void closeBrowserView(label)
       }),
     [label],
@@ -186,38 +193,36 @@ export function useNativeBrowserView({ label, url, reloadToken }: Options): Nati
   )
 
   /**
-   * 地址变化：已建好的视图直接导航；还没建的下一次 rAF 会带着新地址建。
-   * 地址被清空（用户重开空白页）时销毁视图 —— 留着它就等于留着一个看不见的页面在跑。
+   * 发起一次导航（地址栏回车）。已建好的视图直接导；还没建的下一次 rAF 会带着新地址建。
    */
-  useEffect(() => {
-    const state = stateRef.current
-    state.wantUrl = url
-    // 换了地址就重新给一次机会（上一轮可能是网络 / 时机问题）
-    state.failed = false
-    if (!url) {
-      if (state.created || state.creating) {
-        state.created = false
-        state.visible = false
-        // 飞行中的 open 由它自己的 `.then` 在落地时收（这里先把 creating 放开，
-        // 否则那一边会以为「已被新一轮接管」而不 close，视图就泄漏了）
-        state.creating = false
-        setBrowserViewAwake(label, false)
-        void closeBrowserView(label)
-      }
-      return
-    }
-    if (state.created) void navigateBrowserView(label, url)
-  }, [label, url])
+  const navigate = useCallback(
+    (url: string) => {
+      const state = stateRef.current
+      state.wantUrl = url
+      // 换了地址就重新给一次机会（上一轮可能是网络 / 时机问题）
+      state.failed = false
+      if (state.created) void navigateBrowserView(label, url)
+    },
+    [label],
+  )
 
-  /** 刷新：只换计数、不动地址；首次挂载不算一次刷新 */
-  const reloadSeen = useRef(false)
-  useEffect(() => {
-    if (!reloadSeen.current) {
-      reloadSeen.current = true
-      return
-    }
+  /** 重新加载当前页面（地址不变也要真的重载） */
+  const reload = useCallback(() => {
+    if (!stateRef.current.created) return
     void reloadBrowserView(label)
-  }, [label, reloadToken])
+  }, [label])
+
+  /**
+   * 后退 / 前进：**只发原生命令**。
+   * ⚠️ 不再「改地址 → navigate」—— 那会与原生后退打架（地址那一路刚导到目标页，原生后退
+   * 把它退回去，落在中转页上再跳一次）。地址由页面回传，这里不预设任何结果。
+   */
+  const goBack = useCallback(() => {
+    void historyBrowserView(label, 'back')
+  }, [label])
+  const goForward = useCallback(() => {
+    void historyBrowserView(label, 'forward')
+  }, [label])
 
   /**
    * 逐帧同步：量 rect → 建视图 / 改大小 / 显隐。组件卸载时销毁视图。
@@ -397,5 +402,5 @@ export function useNativeBrowserView({ label, url, reloadToken }: Options): Nati
     }
   }, [label])
 
-  return { hostRef, error, covered, slept }
+  return { hostRef, error, covered, navigate, reload, goBack, goForward }
 }

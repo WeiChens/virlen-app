@@ -1,23 +1,22 @@
 /**
- * 浏览器面板的「地址」工具与历史模型 —— **纯函数**（不碰 React、不碰 DOM、不碰 Tauri）。
+ * 浏览器面板的「地址」工具 —— **纯函数**（不碰 React、不碰 DOM、不碰 Tauri）。
  *
- * 分成两件事，但都只跟「一串网址」有关，所以放在同一个文件里：
+ * **地址校验**（`normalizeAddress`）：把地址栏里那串人话变成可用的 URL，或者明确说出
+ * 为什么不行。三条红线（P3 的安全口径）：
+ * - **只放行 http / https**：`javascript:` / `data:` / `file:` / `blob:` / `about:` 一律拒绝。
+ *   这不是「多一层洁癖」—— 地址栏是用户输入，而视图一旦吃下 `javascript:` 就是在**本应用的源**里
+ *   执行脚本（比 iframe 里的页面危险得多）；
+ * - **带凭据的地址拒绝**：`http://user:pass@host/` 会把密码写进标签标题、右键菜单、
+ *   以后可能的历史记录里；要登录就用页面自己的表单；
+ * - **无协议时补协议**：`localhost:5173` 补 `http://`（本机 / 内网 dev server 基本都是 http），
+ *   其余补 `https://`。注意 `localhost:5173` 在 URL 语法里「像」一个 scheme，
+ *   所以只有「冒号后面紧跟端口号」时才按主机:端口处理，否则 `javascript:80` 也能混过去。
  *
- * 1. **地址校验**（`normalizeAddress`）：把地址栏里那串人话变成可用的 URL，或者明确说出
- *    为什么不行。三条红线（P3 的安全口径）：
- *    - **只放行 http / https**：`javascript:` / `data:` / `file:` / `blob:` / `about:` 一律拒绝。
- *      这不是「多一层洁癖」—— 地址栏是用户输入，而 iframe 的 `src` 一旦吃下 `javascript:`
- *      就是在**本应用的源**里执行脚本（比 iframe 里的页面危险得多）；
- *    - **带凭据的地址拒绝**：`http://user:pass@host/` 会把密码写进标签标题、右键菜单、
- *      以后可能的历史记录里；要登录就用页面自己的表单；
- *    - **无协议时补协议**：`localhost:5173` 补 `http://`（本机 / 内网 dev server 基本都是 http），
- *      其余补 `https://`。注意 `localhost:5173` 在 URL 语法里「像」一个 scheme，
- *      所以只有「冒号后面紧跟端口号」时才按主机:端口处理，否则 `javascript:80` 也能混过去。
- *
- * 2. **历史**（`newHistory` / `historyGo` / `historyReplace` / `historyBack` / `historyForward`）：
- *    记的是**真实地址**。面板里的网页现在是原生子 WebView（不是 iframe），页面自己跳走、
- *    服务端重定向都能通过 `on_page_load` 回传，所以历史里不会再有「不知道跳到哪了」的空洞；
- *    `historyReplace` 专门对付重定向：用户发起的 A 最终落在 B，历史里留 A 只会让后退绕圈。
+ * ⚠️ **这里没有历史模型，一条都不要加回来**：后退 / 前进归 WebView2 自己的历史栈
+ * （见 `browser-view.rs::browser_view_history`）。面板曾经维护过一条合成历史，靠「两跳间隔短」
+ * 「又落回出发页」把重定向折成一条 —— 那都是在猜，而猜错就会**删掉用户真去过的页面**
+ * （快站点点两个链接就能被并成一条；「登录后跳回原页」也能被判成中转页）。参考实现 dsh
+ * 桌面端（`ElectronWebViewImpl`）同样不维护应用侧历史，只用原生 `canGoBack` / `goBack`。
  */
 
 /** 地址为什么不能用（`empty` 只是「还没输入」，调用方当无事发生即可） */
@@ -110,58 +109,4 @@ export function urlLabel(url: string): string {
   } catch {
     return url
   }
-}
-
-/** 历史：一条线 + 一个游标（浏览器口径：后退后再导航会砍掉前面的分支） */
-export interface BrowserHistory {
-  entries: string[]
-  cursor: number
-}
-
-export function newHistory(url: string): BrowserHistory {
-  return { entries: [url], cursor: 0 }
-}
-
-/** 当前地址（空串 = 空白页） */
-export function historyCurrent(history: BrowserHistory): string {
-  return history.entries[history.cursor] ?? ''
-}
-
-export function canGoBack(history: BrowserHistory): boolean {
-  return history.cursor > 0
-}
-
-export function canGoForward(history: BrowserHistory): boolean {
-  return history.cursor < history.entries.length - 1
-}
-
-/**
- * 发起一次导航：追加到游标之后。地址与当前条目相同时返回原引用
- * （点两次同一个链接不该多出一条历史，宿主也不必重渲染）。
- */
-export function historyGo(history: BrowserHistory, url: string): BrowserHistory {
-  if (historyCurrent(history) === url) return history
-  const entries = [...history.entries.slice(0, history.cursor + 1), url]
-  return { entries, cursor: entries.length - 1 }
-}
-
-/**
- * 把**当前这一条**换成另一个地址（不新增条目）。
- *
- * 服务端重定向专用：用户要的是 A，最终落在 B —— 历史里留 A 会让「后退」退到 A、
- * 再被重定向回 B，转圈。网页里点链接这种「真的去了新地方」的导航仍然走 `historyGo`。
- */
-export function historyReplace(history: BrowserHistory, url: string): BrowserHistory {
-  if (historyCurrent(history) === url) return history
-  const entries = [...history.entries]
-  entries[history.cursor] = url
-  return { entries, cursor: history.cursor }
-}
-
-export function historyBack(history: BrowserHistory): BrowserHistory {
-  return canGoBack(history) ? { ...history, cursor: history.cursor - 1 } : history
-}
-
-export function historyForward(history: BrowserHistory): BrowserHistory {
-  return canGoForward(history) ? { ...history, cursor: history.cursor + 1 } : history
 }

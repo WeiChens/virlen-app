@@ -11,13 +11,18 @@
  * 1. 只放行 http / https：`javascript:` / `data:` / `file:` 一律拒绝；
  * 2. 带凭据的地址拒绝（`user:pass@` 会被写进标签标题 / 历史）；
  * 3. 无协议时补协议：本机 / 内网补 `http://`，其余补 `https://`；
- * 4. 地址规范化（`new URL().href`）：标签标题、视图地址、历史条目共用同一个串；
- * 5. 历史按浏览器口径：后退再导航砍掉前进分支；`historyReplace` 专治重定向（A→B 不留 A）。
+ * 4. 地址规范化（`new URL().href`）：标签标题、视图地址共用同一个串。
+ *
+ * ⚠️ 这里**没有**面板侧历史模型，也不许加回来：后退 / 前进归 WebView2 自己的历史栈。
+ * 曾经的合成历史靠「两跳间隔短」「又落回出发页」把重定向折成一条 —— 那是猜，猜错会删掉
+ * 用户真去过的页面（快站点点两个链接能被并成一条；「登录后跳回原页」会被当成中转页）。
+ * 参考实现 dsh 桌面端（`ElectronWebViewImpl`）同样只用原生 `canGoBack` / `goBack`。
  *
  * 二、**面板与原生视图的接线**（`browser-view` 在这里是 mock）
- * 6. 地址是唯一的导航来源：地址变 → `navigate`；同一地址再来一次算刷新（`reload`）；
- * 7. 视图的 rect 逐帧同步：不可见（切标签 / 收起面板，rect 为 0）只 `hide` 不销毁；
- * 8. 页面回传的真实地址要写回地址栏（重定向替换当前条目，页面自己跳走则新增一条）；
+ * 5. 导航是命令：地址栏回车 → `navigate`；后退 / 前进 → **只发原生命令**，不另发导航；
+ * 6. 页面回传的地址只用来**显示**（302 / 页内跳转 / 后退都不往历史里塞东西）；
+ * 7. 后退 / 前进按钮的可用性只能来自 `location` 事件的 `canBack` / `canForward`；
+ * 8. 视图的 rect 逐帧同步：不可见（切标签 / 收起面板，rect 为 0）只 `hide` 不销毁；
  * 9. 视图建不起来（非桌面环境 / 命令失败）必须给一张说明卡，而不是永久白框；
  * 10. 下载一律拦下：**不落盘**（Rust 侧取消），但用户必须看到一条提示与外部出口 ——
  *    静默下载正是这组用例要防的那个问题（原生视图没有浏览器那种下载栏）。
@@ -39,14 +44,6 @@ import { settingsState } from '@/ui/store'
 import { resetBrowserViewPolicy } from '@/ui/pages/chat/components/side-panel/browser/view-policy'
 import type { BrowserViewEvent } from '@/infrastructure/browser/browser-view'
 import {
-  canGoBack,
-  canGoForward,
-  historyBack,
-  historyCurrent,
-  historyForward,
-  historyGo,
-  historyReplace,
-  newHistory,
   normalizeAddress,
   urlLabel,
 } from '@/ui/pages/chat/components/side-panel/browser/url'
@@ -73,7 +70,6 @@ vi.mock('@/infrastructure/browser/browser-view', () => ({
   navigateBrowserView: bridge.navigate,
   reloadBrowserView: bridge.reload,
   historyBrowserView: bridge.history,
-  currentBrowserViewUrl: () => Promise.resolve(null),
   closeBrowserView: bridge.close,
   listenBrowserView: async (handler: (event: BrowserViewEvent) => void) => {
     bridge.listeners.push(handler)
@@ -183,6 +179,24 @@ async function tick() {
     runFrame()
     await new Promise((resolve) => setTimeout(resolve, 0))
   })
+}
+
+/**
+ * 推进一帧并冲出这一帧的副作用（假时钟版：`setTimeout` 被接管）。
+ * ⚠️ 每一轮都**重新给它一次尺寸并叫醒逐帧同步**：假时钟下 React 的渲染/effect 比真时钟晚一拍，
+ * 首次量到 rect 为 0 时 `use-native-view` 会停掉 rAF（等 ResizeObserver 唤醒），不重推就永远建
+ * 不出视图。
+ */
+async function tickFake() {
+  for (let round = 0; round < 4; round++) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+      setViewportRect({ left: 0, top: 0, width: 800, height: 600 })
+      for (const item of resizeObservers) if (item.alive) item.cb([], {} as any)
+      runFrame()
+      await vi.advanceTimersByTimeAsync(0)
+    })
+  }
 }
 
 /** 尺寸变化后的唤醒（真实环境由 ResizeObserver 叫醒，这里手动触发） */
@@ -332,41 +346,11 @@ it('地址：标签标题取主机名（解析不了就原样回显）', () => {
   expect(urlLabel('nonsense')).toBe('nonsense')
 })
 
-it('历史：追加 / 后退 / 前进，后退后再导航会砍掉前面的分支', () => {
-  const first = newHistory('a')
-  expect(historyCurrent(first)).toBe('a')
-  expect(canGoBack(first)).toBe(false)
-  expect(canGoForward(first)).toBe(false)
-
-  const second = historyGo(first, 'b')
-  expect(second.entries).toEqual(['a', 'b'])
-  expect(historyCurrent(second)).toBe('b')
-  expect(canGoBack(second)).toBe(true)
-
-  // 同一个地址再提交一次：不新增历史（宿主当刷新处理，见 BrowserPane::applyHistory）
-  expect(historyGo(second, 'b')).toBe(second)
-
-  const back = historyBack(second)
-  expect(historyCurrent(back)).toBe('a')
-  expect(canGoForward(back)).toBe(true)
-  // 已经到头 / 到尾：原引用返回，不越界
-  expect(historyBack(back)).toBe(back)
-  expect(historyForward(historyGo(second, 'c')).entries).toEqual(['a', 'b', 'c'])
-
-  // 从「a」再往「c」走：b 那条前进分支必须消失
-  expect(historyGo(back, 'c').entries).toEqual(['a', 'c'])
-})
-
-it('历史：重定向替换当前条目（A 最终落在 B，历史里不该留下 A）', () => {
-  const trail = historyGo(newHistory('https://a.com/'), 'https://a.com/login')
-  const redirected = historyReplace(trail, 'https://b.com/home')
-  expect(redirected.entries).toEqual(['https://a.com/', 'https://b.com/home'])
-  expect(historyCurrent(redirected)).toBe('https://b.com/home')
-  // 原地退回一步仍然是用户真正去过的那个页面，而不是被重定向前的那一跳
-  expect(historyCurrent(historyBack(redirected))).toBe('https://a.com/')
-  // 地址没变时原引用返回（不制造无意义的重渲染）
-  expect(historyReplace(redirected, 'https://b.com/home')).toBe(redirected)
-})
+/*
+ * 历史模型不在这里：后退 / 前进归 WebView2 自己的历史栈（`src-tauri/src/browser_view.rs`）。
+ * 面板侧没有任何「折叠 / 跳过中转页」的纯函数可测 —— 这正是修掉「没 302 的地址也被清理」
+ * 那组 bug 的方式：少一套能删数据的逻辑。
+ */
 
 /* --------------------------------------------------------------- 面板与原生视图 */
 
@@ -400,21 +384,22 @@ it('提交地址：按挂载点的 rect 建视图，地址规范化后同时写�
   expect(onNavigate).toHaveBeenCalledWith('http://localhost:5173/')
 })
 
-it('空白页的第一个地址替换掉空白条目：后退不可用，不会退回空串再一直转圈', async () => {
+it('空白页的第一个地址：地址栏先乐观显示目标，后退能不能用等原生报（不自己推算）', async () => {
   mount()
   setViewportRect({ left: 0, top: 0, width: 800, height: 600 })
   await tick()
 
   submit('https://a.com')
   await tick()
+  // 页面报回真实地址之前，地址栏不能停在旧值上
   expect(addressInput().value).toBe('https://a.com/')
-  // 空白页不在后退栈里（浏览器同口径）：否则后退会退到空串 —— 空地址会把视图销毁，
-  // 永远等不到 finished，进度条只能等 15s 兜底才停（用户看到的就是「一直转」）
-  expect(backBtn().disabled).toBe(true)
 
   emit({ phase: 'started', url: 'https://a.com/' })
   expect(document.querySelector('.browser-progress')).not.toBeNull()
+  // 空白页不在历史栈里（Chromium 同口径）：原生报 `canBack: false`，按钮就真的是灰的
+  emit({ phase: 'location', url: 'https://a.com/', canBack: false, canForward: false })
   emit({ phase: 'finished', url: 'https://a.com/' })
+  expect(backBtn().disabled).toBe(true)
   expect(document.querySelector('.browser-progress')).toBeNull()
 })
 
@@ -458,7 +443,7 @@ it('非法地址：报一句原因并保留原来那一页', async () => {
   expect(document.querySelector('.browser-error')).toBeNull()
 })
 
-it('后退 / 前进：面板历史决定方向，原生视图负责执行，地址栏跟着换', async () => {
+it('后退 / 前进：只发原生命令，地址与按钮状态都由页面回传（不再自己 navigate）', async () => {
   mount('https://a.com/')
   setViewportRect({ left: 0, top: 0, width: 800, height: 600 })
   await tick()
@@ -466,21 +451,47 @@ it('后退 / 前进：面板历史决定方向，原生视图负责执行，地�
   submit('https://b.com/')
   await tick()
   expect(bridge.navigate).toHaveBeenLastCalledWith(expect.any(String), 'https://b.com/')
+
+  // 提交之后：Chromium 自己换来一条历史（`location` 事件带 canBack / canForward）
+  emit({ phase: 'location', url: 'https://b.com/', canBack: true, canForward: false })
   expect(backBtn().disabled).toBe(false)
   expect(forwardBtn().disabled).toBe(true)
 
+  bridge.navigate.mockClear()
   act(() => backBtn().click())
-  expect(bridge.history).toHaveBeenLastCalledWith(expect.any(String), 'back')
+  // ⚠️ 只发原生命令：再补一次「地址变 → navigate」就会跟原生后退打架
+  //（地址那一路刚导到目标页，原生后退又把它退回去，落在中转页上再跳一次 = 回退又跳回去）
+  expect(bridge.history).toHaveBeenCalledWith(expect.any(String), 'back')
+  expect(bridge.navigate).not.toHaveBeenCalled()
+
+  // 真的回到了 a.com：地址栏跟页面走，按钮状态跟原生栈走
+  emit({ phase: 'location', url: 'https://a.com/', canBack: false, canForward: true })
   expect(addressInput().value).toBe('https://a.com/')
   expect(backBtn().disabled).toBe(true)
   expect(forwardBtn().disabled).toBe(false)
 
   act(() => forwardBtn().click())
   expect(bridge.history).toHaveBeenLastCalledWith(expect.any(String), 'forward')
-  expect(addressInput().value).toBe('https://b.com/')
+  expect(bridge.navigate).not.toHaveBeenCalled()
 })
 
-it('刷新：地址不变也要真的重载（走 reload 命令，不新增历史）', async () => {
+it('没有 canBack 上报的平台：按「有地址就能点」兜底，一旦报了就按真实状态来', async () => {
+  mount('https://a.com/')
+  setViewportRect({ left: 0, top: 0, width: 800, height: 600 })
+  await tick()
+
+  // `started` / `finished` 不带历史状态（非 Windows 就是这种情况）：不推算，两个都放行
+  emit({ phase: 'finished', url: 'https://a.com/' })
+  expect(backBtn().disabled).toBe(false)
+  expect(forwardBtn().disabled).toBe(false)
+
+  // 页面报过真实状态之后就按真实状态来（原生说栈底，就真的是栈底）
+  emit({ phase: 'location', url: 'https://a.com/', canBack: false, canForward: false })
+  expect(backBtn().disabled).toBe(true)
+  expect(forwardBtn().disabled).toBe(true)
+})
+
+it('刷新：地址不变也要真的重载（走 reload 命令，不动历史）', async () => {
   mount('https://a.com/')
   setViewportRect({ left: 0, top: 0, width: 800, height: 600 })
   await tick()
@@ -490,6 +501,7 @@ it('刷新：地址不变也要真的重载（走 reload 命令，不新增历�
 
   expect(bridge.reload).toHaveBeenCalledTimes(1)
   expect(bridge.navigate).not.toHaveBeenCalled()
+  expect(bridge.history).not.toHaveBeenCalled()
   expect(onNavigate).not.toHaveBeenCalled()
 })
 
@@ -502,27 +514,111 @@ it('页面自己跳走：回传的真实地址写进地址栏（不再有「已�
 
   expect(addressInput().value).toBe('https://a.com/next')
   expect(onNavigate).toHaveBeenLastCalledWith('https://a.com/next')
-  // 新增一条：后退能回到 a.com
-  expect(backBtn().disabled).toBe(false)
+  expect(document.querySelector('.browser-progress')).not.toBeNull()
 
   emit({ phase: 'finished', url: 'https://a.com/next' })
   expect(document.querySelector('.browser-progress')).toBeNull()
 })
 
-it('服务端重定向：替换当前条目，后退不会绕回被重定向前那一跳', async () => {
+it('服务端 302：地址栏跟到落地页，面板一次导航都不发（折叠是 Chromium 自己的事）', async () => {
   mount('https://a.com/')
   setViewportRect({ left: 0, top: 0, width: 800, height: 600 })
   await tick()
 
   submit('https://a.com/login')
   await tick()
-  // 实际落在 b.com：这是我们发起的那次导航的终点
+  bridge.navigate.mockClear()
+
+  // 我们发起的那次导航在服务端被 302 到 b.com：回传的只有落地地址
   emit({ phase: 'started', url: 'https://b.com/home' })
+  emit({ phase: 'location', url: 'https://b.com/home', canBack: true, canForward: false })
   emit({ phase: 'finished', url: 'https://b.com/home' })
 
   expect(addressInput().value).toBe('https://b.com/home')
+  // ⚠️ 关键：不「清理」任何东西、不补导航、不动历史 —— 302 只在 Chromium 的栈里替换一格
+  expect(bridge.navigate).not.toHaveBeenCalled()
+  expect(bridge.history).not.toHaveBeenCalled()
+
+  // 后退交给原生：发一次命令，落回哪一页由 Chromium 决定（它已经折好了）
   act(() => backBtn().click())
+  expect(bridge.history).toHaveBeenCalledWith(expect.any(String), 'back')
+  expect(bridge.navigate).not.toHaveBeenCalled()
+  emit({ phase: 'location', url: 'https://a.com/', canBack: false, canForward: true })
   expect(addressInput().value).toBe('https://a.com/')
+})
+
+it('页面里点链接走 302：中转地址只更新地址栏，不折叠也不删条目', async () => {
+  mount('https://a.com/')
+  setViewportRect({ left: 0, top: 0, width: 800, height: 600 })
+  await tick()
+  emit({ phase: 'finished', url: 'https://a.com/' })
+  bridge.navigate.mockClear()
+
+  // 点链接 → 中转地址 → 落地页：每一跳都只改地址，面板不发任何命令
+  for (const hop of ['https://a.com/go?to=t', 'https://t.com/home']) {
+    emit({ phase: 'started', url: hop })
+    emit({ phase: 'location', url: hop, canBack: true, canForward: false })
+    emit({ phase: 'finished', url: hop })
+  }
+
+  expect(addressInput().value).toBe('https://t.com/home')
+  expect(bridge.navigate).not.toHaveBeenCalled()
+  expect(bridge.history).not.toHaveBeenCalled()
+})
+
+it('连续的多次真导航（不管隔多久）：只更新地址，不按间隔猜重定向', async () => {
+  // 手动拨钟（不用假定时器：`tick()` 里还要真的等一拍）
+  let clock = Date.now()
+  const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => clock)
+  try {
+    mount('https://a.com/')
+    setViewportRect({ left: 0, top: 0, width: 800, height: 600 })
+    await tick()
+    emit({ phase: 'finished', url: 'https://a.com/' })
+    onNavigate.mockClear()
+
+    // 快站点点两个链接（相隔 50ms）、慢站点点一个（相隔 5s）：待遇完全一样
+    emit({ phase: 'finished', url: 'https://a.com/one' })
+    clock += 50
+    emit({ phase: 'finished', url: 'https://a.com/two' })
+    clock += 5_000
+    emit({ phase: 'finished', url: 'https://a.com/three' })
+
+    expect(addressInput().value).toBe('https://a.com/three')
+    // 地址每次都如实上报宿主（以前 50ms 那一次会被 HOP_GAP_MS 并掉）
+    expect(onNavigate.mock.calls.map(([url]) => url)).toEqual([
+      'https://a.com/one',
+      'https://a.com/two',
+      'https://a.com/three',
+    ])
+    // 面板自己一次导航 / 一次历史删除都不做
+    expect(bridge.navigate).not.toHaveBeenCalled()
+    expect(bridge.history).not.toHaveBeenCalled()
+  } finally {
+    nowSpy.mockRestore()
+  }
+})
+
+it('加载永远等不到 finished（打不开的站点）：15s 后自己收掉进度条', async () => {
+  vi.useFakeTimers()
+  try {
+    mount('https://a.com/')
+    setViewportRect({ left: 0, top: 0, width: 800, height: 600 })
+    await tickFake()
+    expect(bridge.open).toHaveBeenCalled()
+
+    emit({ phase: 'started', url: 'https://a.com/' })
+    expect(document.querySelector('.browser-progress')).not.toBeNull()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+    expect(document.querySelector('.browser-progress')).toBeNull()
+    // 只是把进度条收掉：地址栏仍然停在页面上那一页
+    expect(addressInput().value).toBe('https://a.com/')
+  } finally {
+    vi.useRealTimers()
+  }
 })
 
 it('逐帧同步：位置变了就 apply；切到别的标签（rect 为 0）只隐藏不销毁', async () => {
@@ -761,20 +857,22 @@ it('页面标题：回传的 document.title 交给宿主（标签栏用它，而
   expect(addressInput().value).toBe('https://a.com/')
 })
 
-it('SPA 路由（只有 location，没有重新加载）：地址栏跟着变，历史追加一条', async () => {
+it('SPA 路由（只有 location，没有重新加载）：地址栏跟着变，面板不发任何命令', async () => {
   mount('https://a.com/')
   setViewportRect({ left: 0, top: 0, width: 800, height: 600 })
   await tick()
   // 初次加载已经结束
   emit({ phase: 'finished', url: 'https://a.com/' })
+  bridge.navigate.mockClear()
 
-  emit({ phase: 'location', url: 'https://a.com/detail/1' })
+  emit({ phase: 'location', url: 'https://a.com/detail/1', canBack: true, canForward: false })
 
   expect(addressInput().value).toBe('https://a.com/detail/1')
   expect(onNavigate).toHaveBeenLastCalledWith('https://a.com/detail/1')
   expect(backBtn().disabled).toBe(false)
-  // 这不是一次加载：不能因此亮进度条
+  // 这不是一次加载：不能因此亮进度条，也不该补一次导航
   expect(document.querySelector('.browser-progress')).toBeNull()
+  expect(bridge.navigate).not.toHaveBeenCalled()
 })
 
 it('宿主重渲染换了回调函数：监听不重注册，事件照样到手', async () => {

@@ -32,6 +32,15 @@
 //!    但它连提示都没有 —— 这里要的是「不静默」，不是「照抄」。
 
 //!
+//! ## 历史（后退 / 前进）
+//!
+//! **原生历史栈是唯一真相**，前端不另算一份（口径见 [`browser_view_history`]）。
+//! 跳转链会骗人：服务端 302、页面自己 `location.href` / meta refresh 都会让「地址变了」
+//! 发生好几次，任何基于「两跳间隔」「落回出发页」的前端判据都是猜 —— 猜错就删掉用户真去过
+//! 的页面。Chromium 自己不猜：服务端重定向在提交时**替换**进行中的那一条，`GoBack` 因此
+//! 直接回到出发页；`CanGoBack` / `CanGoForward` 决定按钮该不该亮（见 [`emit_location`]）。
+//! 参考实现 dsh 桌面端（`ElectronWebViewImpl`）同一口径：`element.goBack()` + `element.canGoBack()`。
+//!
 //! ## 坐标
 //!
 //! 前端传的是**逻辑像素**（DIP）：`getBoundingClientRect()` 量出来的是 CSS 像素，前端已经乘过
@@ -160,14 +169,25 @@ fn emit_to_main(app: &tauri::AppHandle, payload: serde_json::Value) {
 /// 只有 Windows 有「地址变了但没加载页面」的可靠信号（WebView2 的 `SourceChanged`，
 /// 见 [`observe_native_events`]），其他平台靠 `on_page_load` 的 `started/finished`，
 /// 所以本函数在非 Windows 目标上是死代码，必须按平台门住（`-D warnings`）。
+///
+/// ⚠️ `canBack` / `canForward` 跟着这条事件一起走：原生历史是唯一真相（见
+/// [`browser_view_history`]），而 `SourceChanged` 正好在**提交那一刻**触发，顺手问一次
+/// `CanGoBack` / `CanGoForward` 就够 —— 前端因此不必再猜「历史里有几条」，也不必为按钮
+/// 状态多跑一条 IPC。跳转链里这条事件会连着来几次，最后一次的结论才是按钮该显示的那个。
 #[cfg(target_os = "windows")]
-fn emit_location(app: &tauri::AppHandle, label: &str, url: &str) {
+fn emit_location(app: &tauri::AppHandle, label: &str, url: &str, can_back: bool, can_forward: bool) {
     if url.is_empty() || url == "about:blank" {
         return;
     }
     emit_to_main(
         app,
-        serde_json::json!({ "label": label, "phase": "location", "url": url }),
+        serde_json::json!({
+            "label": label,
+            "phase": "location",
+            "url": url,
+            "canBack": can_back,
+            "canForward": can_forward,
+        }),
     );
 }
 
@@ -243,7 +263,18 @@ fn observe_native_events(app: &tauri::AppHandle, view: &tauri::Webview, label: &
                 // WebView2 的这两个属性是 out 参数（*mut PWSTR），不是返回值
                 let mut raw = PWSTR::null();
                 if core.Source(&mut raw).is_ok() {
-                    emit_location(&location_app, &location_label, &take_pwstr(raw));
+                    // 历史栈状态跟地址一起回传（见 emit_location 的注释）：提交之后按钮该不该亮
+                    let mut can_back = windows_core::BOOL(0);
+                    let mut can_forward = windows_core::BOOL(0);
+                    let _ = core.CanGoBack(&mut can_back);
+                    let _ = core.CanGoForward(&mut can_forward);
+                    emit_location(
+                        &location_app,
+                        &location_label,
+                        &take_pwstr(raw),
+                        can_back.as_bool(),
+                        can_forward.as_bool(),
+                    );
                 }
             }
             Ok(())
@@ -431,11 +462,13 @@ pub async fn browser_view_reload(app: tauri::AppHandle, label: String) -> Result
     view.reload().map_err(|e| e.to_string())
 }
 
-/// 后退 / 前进。
+/// 后退 / 前进 —— **原生历史栈是唯一真相**，面板不另算一份。
 ///
-/// Tauri 没有暴露 `canGoBack` / `goBack`，但面板自己维护着一条历史（`browser/url.ts`）：
-/// 我们发起的每次导航都会同时进 WebView2 的历史栈，所以这里执行网页自己的
-/// `history.back()` 与那条历史是同一个方向。
+/// 为什么不自己维护一条历史：跳转链会骗人。服务端 302 / 页面自己 `location.href` 都会让
+/// 「地址变了」发生好几次，任何基于「两跳间隔」「落回出发页就删条目」的判据都是猜；猜错的
+/// 后果不是「历史长一点」，而是**删掉用户真去过的页面**（快站点点两个链接就能被并成一条）。
+/// Chromium 自己的栈不猜：服务端重定向在提交时替换掉进行中的那一条，`GoBack` 因此直接回到
+/// 出发页；按钮可用性来自 `CanGoBack` / `CanGoForward`（见 [`emit_location`]）。
 #[tauri::command]
 pub async fn browser_view_history(
     app: tauri::AppHandle,
@@ -443,12 +476,36 @@ pub async fn browser_view_history(
     direction: String,
 ) -> Result<(), String> {
     let view = view_of(&app, &label)?;
-    let script = match direction.as_str() {
-        "back" => "history.back()",
-        "forward" => "history.forward()",
+    match direction.as_str() {
+        "back" | "forward" => {}
         other => return Err(format!("未知的历史方向: {other}")),
-    };
-    view.eval(script).map_err(|e| e.to_string())
+    }
+    // Windows：用 WebView2 自己的 `GoBack` / `GoForward`（与 `CanGoBack` 同一份真相）。
+    // ⚠️ CoreWebView2 只能在主线程上用，`with_webview` 会把闭包派过去；命令是 async
+    //（不在主线程上跑），所以这里等待主线程不会死锁。
+    #[cfg(target_os = "windows")]
+    {
+        let back = direction == "back";
+        view.with_webview(move |platform| unsafe {
+            let Ok(core) = platform.controller().CoreWebView2() else {
+                return;
+            };
+            let _ = if back { core.GoBack() } else { core.GoForward() };
+        })
+        .map_err(|e| e.to_string())?;
+    }
+    // 其他平台没有这条原生接口：退回网页自己的 `history`（面板侧已不参与历史判断）。
+    // 代价是拿不到 `canBack` / `canForward`，前端按「有地址就允许点」兜底。
+    #[cfg(not(target_os = "windows"))]
+    {
+        let script = if direction == "back" {
+            "history.back()"
+        } else {
+            "history.forward()"
+        };
+        view.eval(script).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// 当前真实地址（`null` = 视图不存在）。
