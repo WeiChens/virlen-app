@@ -280,3 +280,61 @@ async fn legacy_sessions_without_records_keep_the_summary_boundary() {
     let seqs: Vec<i64> = page.items.iter().map(|i| i.seq).collect();
     assert_eq!(seqs, vec![1, 2]);
 }
+
+/// 界面上的「右键删除」= `truncate_messages_from`（删该消息及其之后）。
+/// 被删的正是一条 summary 时，指向它的遮罩必须跟着消失 —— 否则那段历史既不在上下文里、
+/// 也没有 summary 代言。
+#[tokio::test]
+async fn truncate_from_summary_drops_its_compaction() {
+    let repo = open_tmp();
+    seed(&repo, &five_messages()).await; // m1 m2 m3 sum1 m4
+    repo.record_compaction("s1", "m1", "m3", "sum1")
+        .await
+        .unwrap();
+
+    repo.truncate_messages_from("s1", "sum1").await.unwrap();
+
+    assert!(
+        repo.list_compactions("s1").await.unwrap().is_empty(),
+        "summary 被删了，指向它的遮罩不能留着"
+    );
+    // 只截掉了 sum1 及其之后：前三条消息仍在（证明清的是记录，不是历史）
+    assert_eq!(repo.get_messages("s1").await.unwrap().len(), 3);
+}
+
+/// 整体替换（清空会话 / 压缩落库都走它）把 summary 换掉时，遮罩同样不能留
+#[tokio::test]
+async fn replace_without_summary_drops_its_compaction() {
+    let repo = open_tmp();
+    seed(&repo, &five_messages()).await;
+    repo.record_compaction("s1", "m1", "m3", "sum1")
+        .await
+        .unwrap();
+
+    // 换成一份不含 sum1 的历史
+    repo.replace_messages("s1", &[user_msg("m1", "一")])
+        .await
+        .unwrap();
+
+    assert!(repo.list_compactions("s1").await.unwrap().is_empty());
+}
+
+/// 反向约束：区间端点被这次压缩吃掉（「先记遮罩、再整体替换」的正常产物）时，遮罩必须留着
+/// —— 只看 summary 是否存在，不看端点。
+#[tokio::test]
+async fn replace_keeps_compaction_when_endpoints_are_gone() {
+    let repo = open_tmp();
+    seed(&repo, &five_messages()).await;
+    repo.record_compaction("s1", "m1", "m3", "sum1")
+        .await
+        .unwrap();
+
+    // 压缩落库后的形态：只剩 summary + 尾巴，区间端点 m1/m3 已不在库里
+    repo.replace_messages("s1", &[summary_message("sum1"), user_msg("m4", "四")])
+        .await
+        .unwrap();
+
+    let masks = repo.list_compactions("s1").await.unwrap();
+    assert_eq!(masks.len(), 1, "端点消失是正常现象，遮罩不能因此被清");
+    assert_eq!(masks[0].summary_message_id, "sum1");
+}

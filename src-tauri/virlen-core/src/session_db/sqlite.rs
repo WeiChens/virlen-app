@@ -252,6 +252,8 @@ INSERT INTO messages (
                     write_message(&tx, &mut stmt, &session_id, m)?;
                 }
             }
+            // 整体替换可能把某条 summary 一并换掉（删消息 / 清空会话都走这里）→ 它的遮罩跟着走
+            prune_compactions_without_summary(&tx, &session_id)?;
             tx.commit().map_err(|e| format!("提交事务失败: {}", e))?;
             Ok(())
         })
@@ -269,15 +271,22 @@ INSERT INTO messages (
         let message_id = message_id.to_string();
         tokio::task::spawn_blocking(move || -> Result<(), String> {
             let conn = conn.lock().unwrap();
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| format!("开启事务失败: {}", e))?;
             // 删除目标消息及其之后（rowid >= 目标）的全部消息。
             // 目标不存在时子查询为 NULL → 条件不成立 → 不删除任何行（安全幂等）。
-            conn.execute(
+            tx.execute(
                 "DELETE FROM messages \
                  WHERE session_id=?1 \
                    AND rowid >= (SELECT rowid FROM messages WHERE id=?2 AND session_id=?1)",
                 params![session_id, message_id],
             )
             .map_err(|e| format!("删除消息失败: {}", e))?;
+            // 被截掉的尾巴里可能正躺着一条 summary（界面上右键删除）→ 指向它的遮罩必须同步清掉，
+            // 否则下次重建上下文会按「没有替身的遮罩」把一整段历史移走
+            prune_compactions_without_summary(&tx, &session_id)?;
+            tx.commit().map_err(|e| format!("提交事务失败: {}", e))?;
             Ok(())
         })
         .await
@@ -333,6 +342,8 @@ INSERT INTO messages (
                     write_message(&tx, &mut stmt, &session_id, m)?;
                 }
             }
+            // 后缀替换同理：被换掉的 summary 不能让它的遮罩继续生效
+            prune_compactions_without_summary(&tx, &session_id)?;
             tx.commit().map_err(|e| format!("提交事务失败: {}", e))?;
             Ok(())
         })
@@ -1077,6 +1088,31 @@ const TAIL_REPAIR_WINDOW: usize = 20;
 
 /// 启动时统一修复的会话上限（按 `updated_at` 取最近的 N 个）
 const STARTUP_REPAIR_SESSIONS: usize = 50;
+
+/// 清掉「替身已不存在」的压缩遮罩 —— 只按 `summary_message_id` 判存亡。
+///
+/// 为什么必须清：遮罩（`compactions`）的语义是「这段历史已被 `summary_message_id` 那条 summary
+/// 取代」。用户在界面上右键删掉那条 summary 后，库里就只剩一条**没有替身的遮罩**：
+/// `apply_compaction_masks` 会照它把区间移走，于是那一段历史凭空消失（既不进上下文、也没人代表）；
+/// `get_context_messages` 取窗口起点用的也是 summary 的 rowid。消息删了、遮罩还在 = 记着一笔
+/// 已经不存在的账。
+///
+/// ⚠️ 只看 `summary_message_id`，**不**看 `start/end_message_id`：压缩落库是「先记遮罩、再整体
+/// 替换消息」两步（GUI `cmd_compress_context` / CLI `compress_session`），区间端点本来就是这次压缩
+/// 要吃掉的消息 —— 它们不在库里是**正常现象**，拿它判失效会把刚记下的遮罩一起删掉。
+fn prune_compactions_without_summary(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<usize, String> {
+    conn.execute(
+        // `messages.id` NOT NULL → 子查询不会返回 NULL，`NOT IN` 没有「遇 NULL 全不命中」的陷阱
+        "DELETE FROM compactions \
+         WHERE session_id=?1 \
+           AND summary_message_id NOT IN (SELECT id FROM messages WHERE session_id=?1)",
+        params![session_id],
+    )
+    .map_err(|e| format!("清理失效压缩记录失败: {}", e))
+}
 
 /// 是不是引擎在轮次开始落下的「未定稿占位」（`ui_data.pending = true`）
 fn is_pending_placeholder(message: &Message) -> bool {

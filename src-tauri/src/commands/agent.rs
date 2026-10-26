@@ -335,13 +335,26 @@ pub async fn cmd_compress_context(
     bridge: tauri::State<'_, Arc<AgentBridgeState>>,
     repo: tauri::State<'_, Arc<dyn SessionRepo>>,
     session: types::Session,
-    messages: Vec<types::Message>,
+    mut messages: Vec<types::Message>,
     tool_defs: Vec<types::ToolDefinition>,
     mode: String,
     provider: Option<types::ProviderConnection>,
 ) -> Result<CompressResultDto, String> {
     let mode =
         compress::CompressMode::parse(&mode).ok_or_else(|| format!("未知的压缩方式: {}", mode))?;
+    // 图片引用还原：库里只存 `attachment://<sha256>.<ext>`（见 `virlen_core::attachment`），
+    // 而压缩入参是**前端 store 直传的历史**，里面仍是引用 —— 上游拿到这个私有协议只会
+    // 400 `Unsupported image_url format`。与引擎组装聊天请求同口径（`AgentEngine::run` 亦调
+    // `resolve_messages`）。`raw` 模式纯本地渲染、不发给模型，故不还原（省一次读盘 + base64）。
+    if mode == compress::CompressMode::Ai {
+        match virlen_core::attachment::global() {
+            Some(store) => {
+                store.resolve_messages(&mut messages);
+            }
+            // 未初始化时不阻断：与「失败只降级、不阻断」的约定一致，只是上游可能仍报 400
+            None => eprintln!("[compress] 附件存储未初始化，图片引用无法还原"),
+        }
+    }
     let provider_obj: Option<Box<dyn provider::Provider>> = match mode {
         compress::CompressMode::Ai => {
             let conn = provider.as_ref().ok_or_else(|| {

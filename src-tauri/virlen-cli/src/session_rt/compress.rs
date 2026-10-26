@@ -133,12 +133,33 @@ pub(crate) async fn compress_session(
         CompressMode::Raw => None,
     };
 
+    // 图片引用还原（**只对这次发给模型的那份副本**）：库里只存 `attachment://<sha256>.<ext>`
+    // （见 `virlen_core::attachment`），`get_messages` 读回来的是**引用**、不是 data URL；
+    // 不还原就把这个私有协议原样递给上游 → 400 `Unsupported image_url format`。
+    // 与引擎组装聊天请求同口径（`AgentEngine::run` 亦调 `resolve_messages`，取同一个 `host.data_dir()`）。
+    // ⚠️ 三个「不」：
+    // - **须在 `before` / 阈值闸之后**：内联后的 base64 会把字符数（token 粗估的口径）撑大好几倍，
+    //   污染「压缩前占用」的判定与展示；
+    // - **`raw` 模式不还原**：纯本地渲染、不发给模型（`raw.rs` 自己把 image 块降级成占位）；
+    // - **不改 `messages` 本身**：它接下来要交给 `rt.messages`（快照），保持引用形态，
+    //   内存里不常驻几 MB base64。
+    let resolved_messages;
+    let compress_messages = if mode == CompressMode::Ai {
+        let mut copy = messages.clone();
+        virlen_core::attachment::AttachmentStore::new(&rt.host.data_dir())
+            .resolve_messages(&mut copy);
+        resolved_messages = copy;
+        &resolved_messages[..]
+    } else {
+        &messages[..]
+    };
+
     let started = virlen_core::telemetry::now_ms();
     let out = agent_compress::compress(
         agent_compress::CompressInput {
             mode,
             session: &rt.session,
-            messages: &messages,
+            messages: compress_messages,
             tool_defs: &rt.resources.tool_defs,
             provider: provider.as_deref(),
         },
