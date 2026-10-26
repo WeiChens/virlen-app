@@ -47,6 +47,7 @@ import SidebarSearch from './search-box'
 import ImportMessageList from './import-message-list'
 import { extractPlainText } from './session-text'
 import { filterSessionGroups } from './session-filter'
+import { foldGroupSessions } from './session-fold'
 import {
   groupSessions,
   toggleGroupPin,
@@ -669,8 +670,9 @@ function ChatSidebar({
                 key={group.key}
                 group={group}
                 sessionGroupType={sessionGroupType}
-                // 搜索时强制展开：命中项藏在折叠的分组里等于没搜到
+                // 搜索时强制展开：命中项藏在折叠的分组 / 折叠的归档里等于没搜到
                 isCollapsed={sessionKeyword ? false : !expandGroups[group.key]}
+                isSearching={sessionKeyword !== ''}
                 isPinned={pinnedGroupKeys.includes(group.key)}
                 isUngrouped={group.key === UNGROUPED_KEY}
                 hasActiveSession={
@@ -892,6 +894,8 @@ interface SessionGroupViewProps {
   group: SessionGroup
   sessionGroupType: 'agent' | 'workspace'
   isCollapsed: boolean
+  /** 正在按关键词搜索：组内折叠一律铺开（否则命中的归档会话搜了却看不见） */
+  isSearching: boolean
   /** 已置顶（排到最前 + 图钉） */
   isPinned: boolean
   isUngrouped: boolean
@@ -910,6 +914,7 @@ function SessionGroupView({
   group,
   sessionGroupType,
   isCollapsed,
+  isSearching,
   isPinned,
   isUngrouped,
   hasActiveSession,
@@ -920,6 +925,11 @@ function SessionGroupView({
   onArchiveGroup,
 }: SessionGroupViewProps) {
   const [showAll, setShowAll] = useState(false)
+  /** 组内折叠：混排时归档的会话全部收进「展示全部」（规则见 session-fold） */
+  const folded = useMemo(
+    () => foldGroupSessions(group.sessions, showAll || isSearching),
+    [group.sessions, showAll, isSearching],
+  )
   /** 分组头右键菜单：与「会话项」共用同一个 ContextMenu */
   const menu = useContextMenu<SessionGroup>()
 
@@ -1075,10 +1085,8 @@ function SessionGroupView({
       )}
       {!isCollapsed && (
         <div className="session-group-items">
-          {group.sessions.length > 11 && !showAll
-            ? group.sessions.slice(0, 10).map(renderSession)
-            : group.sessions.map(renderSession)}
-          {group.sessions.length > 11 && !showAll && (
+          {folded.visible.map(renderSession)}
+          {folded.folded && (
             <button
               className="show-all-btn"
               onClick={(e) => {
