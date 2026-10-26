@@ -127,6 +127,8 @@ export default function ModelView({ bytes, name, onOpenInSystem }: Props) {
       try {
         const loaded = await loaders.loadModelFile(bytes, name, {
           renderer: scene.getRenderer(),
+          // 非 glTF 的贴图是异步到的：到齐后补画一帧（当前模型已被换掉也无害）
+          onLateChange: () => scene.requestRender(),
         })
         if (cancelled) return
         scene.setModel(loaded.object, loaded.animations)
