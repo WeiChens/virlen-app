@@ -432,7 +432,7 @@ it('html 在子目录：基址带上文件所在目录', async () => {
 })
 
 /**
- * 脚本权限住在设置里（设置 → 安全 → HTML 预览）：开着才给 allow-scripts 并注入 CSP。
+ * 脚本权限住在设置里（设置 → 浏览器 → HTML 预览）：开着才给 allow-scripts 并注入 CSP。
  * 面板里不再有开关 —— 每打开一个文件重勾一次不现实（实测反馈）。
  */
 it('设置开启「允许运行脚本」后：preview 给 allow-scripts、带 CSP，且本地协议回 JS', async () => {
@@ -473,7 +473,7 @@ it('设置开启「允许外部资源」后：CSP 的 script-src / connect-src �
 })
 
 /** 页面含脚本但设置里没开：控制台报错用户看不到，就在预览上方给一句话 + 把人送到设置 */
-it('页面含脚本而设置没开：预览上方给提示，按钮跳「设置 → 安全 → HTML 预览」', async () => {
+it('页面含脚本而设置没开：预览上方给提示，按钮跳「设置 → 浏览器 → HTML 预览」', async () => {
   loadMock.mockResolvedValue(textFile('<script>document.title = "x"</script>'))
   await mount('E:/repo/page.html')
   await act(async () => {
@@ -488,7 +488,7 @@ it('页面含脚本而设置没开：预览上方给提示，按钮跳「设置 
   expect(document.querySelector('iframe.wfp-frame')!.getAttribute('sandbox')).toBe('')
 
   await act(async () => note!.querySelector<HTMLButtonElement>('.wfp-action')!.click())
-  expect(opened).toEqual(['security-preview'])
+  expect(opened).toEqual(['browser'])
   // 提示条只指路：不替用户改安全设置（开关只住在设置里）
   expect(settingsState.value.htmlPreviewAllowScripts).toBe(false)
   off()

@@ -19,7 +19,7 @@
  * 5. **标题与宽度不归本组件**：面板在容器（`../side-panel`）的标签页里，标题栏已经写了文件名，
  *    所以容器会传 `hideTitle`，这里只留「目录 + 图标按钮（保存 / 关闭）」一行；**刷新不在头部**，
  *    是标签右键菜单里的一项（动作由本面板经 `onReloadReady` 登记上去）；宽度 / 拖拽 / 占满也由容器管。
- * 6. **HTML 的脚本 / 外部资源权限来自全局设置**（设置 → 安全 → HTML 预览）：面板只在被安全默认
+ * 6. **HTML 的脚本 / 外部资源权限来自全局设置**（设置 → 浏览器 → HTML 预览）：面板只在被安全默认
  *    挡住时给一条提示 + 指路，不在这里放开关 —— 那等于每打开一个文件重勾一次。
  * 7. **正在看的这个文件会盯磁盘**（AI / 终端 / 外部编辑器都算）：内容变了且本地干净 →
  *    最小编辑刷进编辑器（光标、滚动、撤销栈都不乱）；本地有未保存修改 → 顶部黄条二选一，
@@ -202,7 +202,7 @@ function WorkspaceFilePanel({
   /** SVG 预览的 blob URL（draft 里就是 SVG 源码） */
   const [svgUrl, setSvgUrl] = useState('')
   /**
-   * HTML 预览的脚本 / 外部资源权限：**全局设置**（设置 → 安全 → HTML 预览）。
+   * HTML 预览的脚本 / 外部资源权限：**全局设置**（设置 → 浏览器 → HTML 预览）。
    * 不在面板里放开关 —— 那等于每打开一个文件都要重勾一次（实测反馈）。
    * `allowRemote` 再与 `allowScripts` 取一次与：外部脚本没有脚本执行权限时毫无意义。
    */
@@ -581,8 +581,8 @@ function WorkspaceFilePanel({
   )
 
   const openPreviewSettings = useCallback(() => {
-    // 直达「安全 → HTML 预览」：提示条只能把人送到门口，开关本身只住在设置里
-    settingsEvent.emit('openSettings', 'security-preview')
+    // 直达「浏览器 → HTML 预览」：提示条只能把人送到门口，开关本身只住在设置里
+    settingsEvent.emit('openSettings', 'browser')
   }, [])
 
   const renderBody = () => {

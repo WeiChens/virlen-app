@@ -163,10 +163,18 @@ function minDragWidth(available: number): number {
   return Math.min(MIN_WIDTH, Math.max(120, available - CHAT_MIN_WIDTH))
 }
 
-/** 打开时占「可用宽度的一半」（没有固定上限，只受可用宽度本身约束） */
+/**
+ * 打开时的默认宽度：**聊天区（chat-main）的一半**，且**绝不把聊天区压到 `CHAT_MIN_WIDTH` 以下**。
+ *
+ * 一半 = 面板与聊天区各占一块可用宽度的一半（面板收起时聊天区就是整块可用宽度）。
+ * 那条 450 是硬约束：窗口不够宽时先缩面板（与拖动下限同一手法），
+ * 而不是让面板铺满、把聊天区藏起来 —— 只有连 `minDragWidth` 都保不住 450 时才轮到占满。
+ */
 function preferredWidth(available: number): number {
   if (available <= 0) return DEFAULT_WIDTH
-  return Math.min(available, Math.max(minDragWidth(available), Math.round(available / 2)))
+  const half = Math.round(available / 2)
+  const keepChat = available - CHAT_MIN_WIDTH
+  return Math.min(available, Math.max(minDragWidth(available), Math.min(half, keepChat)))
 }
 
 /**
@@ -261,11 +269,13 @@ function SidePanel({
   /**
    * **第一次量到可用宽度时**按它的一半定宽（通常是首个标签打开的那一刻；加标签、切标签都不重算，
    * 用户拖出来的宽度不会被悄悄改回去）。之后窗口 / 左侧栏变化只更新「可用宽度」，
-   * 宽度本身不跟着改 —— 窄到聊天区不足 `CHAT_MIN_WIDTH` 时由下面的 `expanded` 接管，把面板撑满。
+   * 宽度本身不跟着改 —— 重新打开时由下面那个 effect 按新的可用宽度再算一次。
    * ⚠️ 容器现在是**常驻挂载**的（没标签也在树上），首帧很可能量不到（布局还没排好）：
    * 所以定宽放在「第一次量到非 0」那一刻，而不是无条件在挂载时干一次（否则会永远停在 560）。
    */
   const widthSettledRef = useRef(false)
+  /** 用户亲手拖过宽度：此后每次打开都沿用它，不再改回「一半」（拖出来的宽度是用户的意思） */
+  const userWidthRef = useRef(false)
   useLayoutEffect(() => {
     const settle = (next: number) => {
       if (widthSettledRef.current || next <= 0) return
@@ -294,8 +304,26 @@ function SidePanel({
   }, [measureAvailable])
 
   /**
+   * 收起 → **打开**：按此刻的可用宽度重算一次默认宽度。
+   *
+   * 为什么不能只在挂载时算：容器常驻挂载（收起不卸载），窗口缩放 / 拖左侧栏之后再打开，
+   * 旧的一半就与眼前的聊天区对不上了。加标签、切标签仍然不重算；用户拖过的宽度不动（`userWidthRef`）。
+   */
+  const wasCollapsedRef = useRef(collapsed)
+  useLayoutEffect(() => {
+    const reopening = wasCollapsedRef.current && !collapsed
+    wasCollapsedRef.current = collapsed
+    if (!reopening || userWidthRef.current) return
+    const next = measureAvailable()
+    if (next <= 0) return
+    setAvailable(next)
+    setWidth(preferredWidth(next))
+  }, [collapsed, measureAvailable])
+
+  /**
    * 聊天区会被压到不足 `CHAT_MIN_WIDTH`（450）：面板占满，聊天区交给宿主先藏起来。
-   * 两种来源：用户按了标签栏的全屏（`fullscreen`），或窗口本来就窄到挤不下两者。
+   * 两种来源：用户按了标签栏的全屏（`fullscreen`），或可用宽度连「最小面板 + 450」都放不下
+   *（`preferredWidth` 已把默认宽度让到那 450 以内，所以自动占满只剩这种真挤不下的情形）。
    * 收起时不算 —— 宽度是 0，拿它去比只会得「占满」并把聊天区藏掉。
    */
   const expanded =
@@ -456,8 +484,9 @@ function SidePanel({
       event.preventDefault()
       const rect = panelRef.current?.getBoundingClientRect()
       if (!rect) return
-      // 用户亲手拖过就不再自动定宽（量到可用宽度也不改回去）
+      // 用户亲手拖过：此后不再自动定宽（量到可用宽度、重新打开都不改回去）
       widthSettledRef.current = true
+      userWidthRef.current = true
       // 从全屏往回拖 = 退出全屏：否则上屏宽度只认 `available`，手柄怎么拖都不动
       setFullscreen(false)
       const right = rect.right

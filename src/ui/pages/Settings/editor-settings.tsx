@@ -1,5 +1,6 @@
 /**
- * editor-settings — 打开编辑器配置页：预设（EDITOR_PRESETS，不可修改）在前，自定义在后且可编辑。
+ * editor-settings — 打开编辑器配置（「代码」设置页里的一段，宿主见 `code-display-settings.tsx`）：
+ * 预设（EDITOR_PRESETS，不可修改）在前，自定义在后且可编辑。
  * 点卡片 = 选中为默认编辑器，自定义卡片右上角的编辑图标才进编辑。
  * 命令支持 ${filePath} ${line} ${column} 占位符。
  */
@@ -120,7 +121,6 @@ function EditorSettings() {
   return (
     <div className="editor-settings">
       <div className="add-section">
-        <h3>{t('外部编辑器')}</h3>
         <p className="add-hint">
           {t('选择默认编辑器预设，或自定义命令模板')}
         </p>

@@ -2005,6 +2005,7 @@
   "页面内联脚本与本地脚本可以执行；沙箱仍然隔离，脚本读不到应用数据": "Inline and local scripts can run; the sandbox still keeps them away from app data",
   "允许从网上加载脚本和资源（CDN 里的库、网络请求），会连接第三方服务器": "Lets pages load scripts and resources from the web (CDN libraries, network requests); this contacts third-party servers",
   "需先开启「允许运行脚本」": "Turn on “Allow scripts” first",
+  "代码": "Code",
   "代码显示": "Code display",
   "代码主题": "Code theme",
   "代码块、差异视图与代码编辑器共用一套配色": "Code blocks, diff views and the code editor share one palette",

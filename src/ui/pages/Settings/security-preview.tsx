@@ -1,5 +1,7 @@
 /**
- * security-preview — 设置 · 安全 · HTML 预览：工作目录 HTML 预览的脚本与外部资源权限。
+ * security-preview — 设置 · 浏览器 · HTML 预览：工作目录 HTML 预览的脚本与外部资源权限。
+ *
+ * 提供组件，由 `browser-settings.tsx`（设置 → 浏览器）渲染。
  *
  * 两条口径：
  * 1. **默认全关**：预览默认在 `sandbox=""` 的 iframe 里渲染，脚本不执行（与 `html-preview.ts` 的 CSP 同源）；

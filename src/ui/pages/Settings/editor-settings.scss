@@ -1,5 +1,5 @@
+/* 内容已并入「代码」页（`code-display-settings.tsx`）：外层不自带 padding，标题也归宿主页 */
 .editor-settings {
-  padding: 24px;
 
   // ==================== Toggle ====================
 
@@ -52,13 +52,6 @@
 
   .add-section {
     margin-bottom: 24px;
-
-    h3 {
-      font-size: var(--font-size-xl);
-      font-weight: 600;
-      margin: 0 0 4px;
-      color: var(--text-primary, #1a1a1a);
-    }
 
     .add-hint {
       font-size: var(--font-size-sm);

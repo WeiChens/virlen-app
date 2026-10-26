@@ -314,7 +314,7 @@
 
       // 归档会话：整体降调（仍可点击 / 右键，只把归档态说清楚；打开被入口拦截）
       &.archived {
-        opacity: 0.6;
+        opacity: 0.5;
 
         .session-info .session-title {
           color: var(--text-secondary, #999);
@@ -438,19 +438,8 @@
 
         .group-icon,
         .group-toggle {
-          opacity: 0.6;
+          opacity: 0.55;
         }
-      }
-
-      .group-archived-tag {
-        flex-shrink: 0;
-        padding: 0 4px;
-        border-radius: 4px;
-        background: var(--hover-bg, #e8e8ee);
-        color: var(--text-secondary, #888);
-        font-size: var(--font-size-2xs);
-        line-height: 1.5;
-        white-space: nowrap;
       }
 
       // 已置顶的分组 → 只在分组头挂一枚图钉（图标 / 分组名不做高亮，用色同会话项的置顶指示器）
@@ -477,7 +466,6 @@
       }
 
       // 分组头部的工作指示器样式见 `.session-list > .working-indicator`（与会话项共用一份）
-
       /* 会话数徽标：纯展示（单击落在整行上 = 折叠/展开），操作走分组头右键菜单 */
       .group-count {
         flex-shrink: 0;
@@ -719,8 +707,8 @@
       /* 选中态：铺底 + 左侧强调条（与 hover 同优先级，靠源码顺序取胜） */
       &.selected {
         background: var(--active-bg, #e8e8ed);
-        // box-shadow: inset 2px 0 0 0 var(--accent-color, #4f46e5);
 
+        // box-shadow: inset 2px 0 0 0 var(--accent-color, #4f46e5);
         .tree-name {
           color: var(--accent-color, #4f46e5);
         }
@@ -921,11 +909,9 @@
         mark {
           padding: 0 2px;
           border-radius: 3px;
-          background: color-mix(
-            in srgb,
-            var(--primary, #4f46e5) 24%,
-            transparent
-          );
+          background: color-mix(in srgb,
+              var(--primary, #4f46e5) 24%,
+              transparent);
           color: inherit;
           font-weight: 600;
         }

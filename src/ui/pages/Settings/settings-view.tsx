@@ -5,16 +5,16 @@
  */
 import { useState, useEffect, useCallback, useRef } from 'react'
 import GeneralSettings from './general-settings'
+import BrowserSettings from './browser-settings'
 import CodeDisplaySettings from './code-display-settings'
 import ChatSettings from './chat-settings'
 import ProviderSettings from './provider-settings'
-import SecuritySettings, { type SecurityTab } from './security-settings'
+import SecuritySettings from './security-settings'
 import AgentSettings from './agent-settings'
 import SkillSettings from './skill-settings'
 import QuickInputSettings from './quickinput-settings'
 import SearchEngineSettings from './search-engine-settings'
 import KnowledgeBaseSettings from './knowledge-base-settings'
-import EditorSettings from './editor-settings'
 import StorageSettings from './storage-settings'
 import PhoneControlSettings from './phone-control-settings'
 import MemorySettings from './memory-settings'
@@ -23,6 +23,7 @@ import CloseSvg from '@/ui/components/icons/CloseSvg'
 import SettingSvg from '@/ui/components/icons/SettingSvg'
 import AboutSvg from '@/ui/components/icons/AboutSvg'
 import SystemSvg from '@/ui/components/icons/SystemSvg'
+import GlobeSvg from '@/ui/components/icons/GlobeSvg'
 import MessageSvg from '@/ui/components/icons/MessageSvg'
 import LockSvg from '@/ui/components/icons/LockSvg'
 import AgentSvg from '@/ui/components/icons/AgentSvg'
@@ -41,6 +42,7 @@ export type SettingsPage =
   | 'general'
   | 'code-display'
   | 'chat'
+  | 'browser'
   | 'provider'
   | 'security'
   | 'agent'
@@ -48,7 +50,6 @@ export type SettingsPage =
   | 'quickinput'
   | 'search-engine'
   | 'knowledge-base'
-  | 'editor'
   | 'storage'
   | 'phone-control'
   | 'memory'
@@ -58,8 +59,6 @@ export default function SettingsView() {
   const [open, setOpen] = useState(false)
   const [closing, setClosing] = useState(false)
   const [page, setPage] = useState<SettingsPage>('general')
-  /** 安全页的子 Tab：提到这一层，预览区的提示条才能直达「HTML 预览」 */
-  const [securityTab, setSecurityTab] = useState<SecurityTab>('permissions')
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   )
@@ -68,13 +67,7 @@ export default function SettingsView() {
   useEffect(() => {
     const unlisten = settingsEvent.on('openSettings', (targetPage) => {
       setClosing(false)
-      if (targetPage === 'security-preview') {
-        // 语义上的 `security` + 子页：侧边栏仍高亮「安全」，落地直接是预览那一页
-        setPage('security')
-        setSecurityTab('preview')
-      } else {
-        setPage(targetPage as SettingsPage)
-      }
+      setPage(targetPage as SettingsPage)
       setOpen(true)
     })
     return unlisten
@@ -172,13 +165,19 @@ export default function SettingsView() {
               className={`nav-item ${page === 'code-display' ? 'active' : ''}`}
               onClick={() => setPage('code-display')}>
               <CodeSvg fill="var(--nav-item-color)" />
-              <span>{t('代码显示')}</span>
+              <span>{t('代码')}</span>
             </button>
             <button
               className={`nav-item ${page === 'chat' ? 'active' : ''}`}
               onClick={() => setPage('chat')}>
               <MessageSvg fill="var(--nav-item-color)" />
               <span>{t('聊天')}</span>
+            </button>
+            <button
+              className={`nav-item ${page === 'browser' ? 'active' : ''}`}
+              onClick={() => setPage('browser')}>
+              <GlobeSvg fill="var(--nav-item-color)" />
+              <span>{t('浏览器')}</span>
             </button>
             <button
               className={`nav-item ${page === 'storage' ? 'active' : ''}`}
@@ -241,12 +240,6 @@ export default function SettingsView() {
               <span>{t('记忆')}</span>
             </button>
             <button
-              className={`nav-item ${page === 'editor' ? 'active' : ''}`}
-              onClick={() => setPage('editor')}>
-              <CodeSvg fill="var(--nav-item-color)" />
-              <span>{t('外部编辑器')}</span>
-            </button>
-            <button
               className={`nav-item ${page === 'about' ? 'active' : ''}`}
               onClick={() => setPage('about')}>
               <AboutSvg fill="var(--nav-item-color)" />
@@ -258,19 +251,17 @@ export default function SettingsView() {
           {page === 'general' && <GeneralSettings />}
           {page === 'code-display' && <CodeDisplaySettings />}
           {page === 'chat' && <ChatSettings />}
+          {page === 'browser' && <BrowserSettings />}
           {page === 'storage' && <StorageSettings />}
           {page === 'phone-control' && <PhoneControlSettings />}
           {page === 'agent' && <AgentSettings />}
           {page === 'provider' && <ProviderSettings />}
-          {page === 'security' && (
-            <SecuritySettings tab={securityTab} onTabChange={setSecurityTab} />
-          )}
+          {page === 'security' && <SecuritySettings />}
           {page === 'skill' && <SkillSettings />}
           {page === 'quickinput' && <QuickInputSettings />}
           {page === 'search-engine' && <SearchEngineSettings />}
           {page === 'knowledge-base' && <KnowledgeBaseSettings />}
           {page === 'memory' && <MemorySettings />}
-          {page === 'editor' && <EditorSettings />}
           {page === 'about' && <AboutSettings />}
         </div>
       </div>

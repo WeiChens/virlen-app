@@ -1,8 +1,11 @@
 /**
- * code-display-settings — 代码显示设置页
+ * code-display-settings — 「代码」设置页
  *
- * 一个页面管住代码区的全部外观：主题（固定 / 跟随应用）、字族、字号、行高、连字、行号，
- * 顶部给一块真实 Monaco 预览（同一套解析结果，改完立刻能看出效果）。
+ * 主体是代码区外观：主题（固定 / 跟随应用）、字族、字号、行高、连字、行号，
+ * 末尾给一块真实 Monaco 预览（同一套解析结果，改完立刻能看出效果）。
+ *
+ * 页尾还挂着「外部编辑器」（`editor-settings.tsx`）：两者都只服务代码 / 编辑体验，
+ * 原来分成两个菜单，改一处要先去对地方。
  *
  * 表单样式复用 general-settings.scss（顶层作用域已含 .code-display-settings），
  * 本页只补主题卡片与滑块这类专属部分（code-display-settings.scss）。
@@ -16,6 +19,7 @@ import { settingsState } from '@/ui/store'
 import type { SettingsStore } from '@/ui/store'
 import Select from '@/ui/components/shared/Select'
 import CodePreview from '@/ui/components/code-preview/CodePreview'
+import EditorSettings from './editor-settings'
 import { showToast } from '@/ui/components/shared/Toast'
 import { t } from '@/ui/i18n'
 import {
@@ -292,6 +296,11 @@ function CodeDisplaySettings() {
             {t('恢复默认')}
           </button>
         </div>
+      </div>
+
+      <h2 className="section-title">{t('外部编辑器')}</h2>
+      <div className="section">
+        <EditorSettings />
       </div>
     </div>
   )

@@ -13,7 +13,7 @@
 
     .security-tab {
       flex: 1;
-      /* 四个 Tab 时（权限 / 沙盒规则 / 文件访问 / HTML 预览）宁可收窄内边距也不换行：
+      /* 三个 Tab 时（权限 / 沙盒规则 / 文件访问）宁可收窄内边距也不换行：
          换行会让 Tab 高度不一，看着像两个控件 */
       padding: 8px 10px;
       border: none;

@@ -1002,17 +1002,17 @@ function SessionGroupView({
       items.push(
         sessionGroupType === 'workspace'
           ? {
-              key: 'open-workspace',
-              label: t('打开文件路径'),
-              divider: true,
-              onClick: handleOpenWorkspace,
-            }
+            key: 'open-workspace',
+            label: t('打开文件路径'),
+            divider: true,
+            onClick: handleOpenWorkspace,
+          }
           : {
-              key: 'edit-agent',
-              label: t('编辑 Agent'),
-              divider: true,
-              onClick: handleEditAgent,
-            },
+            key: 'edit-agent',
+            label: t('编辑 Agent'),
+            divider: true,
+            onClick: handleEditAgent,
+          },
       )
     }
     items.push({
@@ -1067,10 +1067,6 @@ function SessionGroupView({
           </span>
         )}
         <span className="group-name">{group.name}</span>
-        {/* 整组归档 → 明确的文字标记（只靠颜色对色弱用户不可见） */}
-        {allArchived && (
-          <span className="group-archived-tag">{t('已归档')}</span>
-        )}
         {/* 会话数只是计数（点击交给整行），操作全在右键菜单里 */}
         <span className="group-count">{group.sessions.length}</span>
       </div>

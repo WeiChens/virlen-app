@@ -1,11 +1,12 @@
 /**
  * security-settings — 安全设置页面（Tab 容器）
  *
- * 四个子 Tab：
+ * 三个子 Tab：
  *  - 权限管理（默认）：命令 / 脚本执行的三态权限（见 `@/domain/permission`）
  *  - 忽略沙盒命令：命中规则的命令免除「沙盒脱壳」审批（见 `@/domain/security/sandbox-ignore-rules`）
  *  - 文件访问安全：文件系统白名单 / 黑名单 / 忽略遍历文件夹
- *  - HTML 预览：工作目录 HTML 预览的脚本与外部资源权限（见 `security-preview.tsx`）
+ *
+ * 原「HTML 预览」子 Tab 已随内置浏览器一起拆到「浏览器」页（`browser-settings.tsx`）。
  */
 import { useState } from 'react'
 import { observer } from 'mobx-react-lite'
@@ -14,24 +15,16 @@ import DeleteSvg from '@/ui/components/icons/DeleteSvg'
 import AddSvg from '@/ui/components/icons/AddSvg'
 import SecurityPermissions from './security-permissions'
 import SandboxIgnoreRules from './security-sandbox-rules'
-import PreviewSecurity from './security-preview'
 import './general-settings.scss'
 import './security-settings.scss'
 import { showToast } from '@/ui/components/shared/Toast'
 import { t } from '@/ui/i18n'
 
-type SecurityTab = 'permissions' | 'sandbox-rules' | 'file-access' | 'preview'
+type SecurityTab = 'permissions' | 'sandbox-rules' | 'file-access'
 type ListType = 'whitelist' | 'blacklist' | 'skipEachDirs'
 
-export type { SecurityTab }
-
-interface SecuritySettingsProps {
-  /** 当前子 Tab（由设置面板持有：文件预览的提示条要能直达「HTML 预览」） */
-  tab: SecurityTab
-  onTabChange: (tab: SecurityTab) => void
-}
-
-function SecuritySettings({ tab, onTabChange }: SecuritySettingsProps) {
+function SecuritySettings() {
+  const [tab, setTab] = useState<SecurityTab>('permissions')
   return (
     <div
       className="general-settings security-settings"
@@ -44,29 +37,22 @@ function SecuritySettings({ tab, onTabChange }: SecuritySettingsProps) {
           role="tab"
           aria-selected={tab === 'permissions'}
           className={`security-tab ${tab === 'permissions' ? 'active' : ''}`}
-          onClick={() => onTabChange('permissions')}>
+          onClick={() => setTab('permissions')}>
           {t('权限管理')}
         </button>
         <button
           role="tab"
           aria-selected={tab === 'sandbox-rules'}
           className={`security-tab ${tab === 'sandbox-rules' ? 'active' : ''}`}
-          onClick={() => onTabChange('sandbox-rules')}>
+          onClick={() => setTab('sandbox-rules')}>
           {t('忽略沙盒命令')}
         </button>
         <button
           role="tab"
           aria-selected={tab === 'file-access'}
           className={`security-tab ${tab === 'file-access' ? 'active' : ''}`}
-          onClick={() => onTabChange('file-access')}>
+          onClick={() => setTab('file-access')}>
           {t('文件访问安全')}
-        </button>
-        <button
-          role="tab"
-          aria-selected={tab === 'preview'}
-          className={`security-tab ${tab === 'preview' ? 'active' : ''}`}
-          onClick={() => onTabChange('preview')}>
-          {t('HTML 预览')}
         </button>
       </div>
 
@@ -74,7 +60,6 @@ function SecuritySettings({ tab, onTabChange }: SecuritySettingsProps) {
         {tab === 'permissions' && <SecurityPermissions />}
         {tab === 'sandbox-rules' && <SandboxIgnoreRules />}
         {tab === 'file-access' && <FileAccessSecurity />}
-        {tab === 'preview' && <PreviewSecurity />}
       </div>
     </div>
   )

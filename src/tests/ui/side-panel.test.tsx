@@ -8,10 +8,11 @@
  *    已经确认过一次，走 `onCloseTab` 直通，不重复问）；
  * 3. **脏标记汇总**：任一标签脏就上报宿主（切会话 / 切工作目录要拦一下），
  *    标签关掉后顺手归零（否则「任一脏」会一直是 true）；
- * 4. **宽度归容器**：挂载时按「聊天区 + 面板」可用宽度的一半定宽，加标签 / 切标签不重算；
- *    拖宽**没有固定上限**，最多拖到面板占满（上限 = 可用宽度）；宽度过渡期间还要把
- *    消息列表的宽度**钉在终值**（`chat-freeze.ts`，否则面板一动内容就跟着一帧一折行）；
- * 5. **占满**：聊天区被压到不足 450px（`CHAT_MIN_WIDTH`）时面板铺满并通知宿主藏起聊天区，卸载时恢复；
+ * 4. **宽度归容器**：打开时按「聊天区（chat-main）」的一半定宽，但**绝不把聊天区压到 450px 以下**
+ *    （`preferredWidth`：窗口不够宽就先缩面板）；每次打开重算一次，加标签 / 切标签不重算，
+ *    用户拖过之后不再自动改回来；拖宽**没有固定上限**，最多拖到面板占满（上限 = 可用宽度）；
+ *    宽度过渡期间还要把消息列表的宽度**钉在终值**（`chat-freeze.ts`，否则面板一动内容就跟着一帧一折行）；
+ * 5. **占满**：可用宽度连「最小面板 + 450」都放不下时面板铺满并通知宿主藏起聊天区，卸载时恢复；
  * 6. **拖标签换顺序**：用鼠标事件（HTML5 拖拽在 `dragDropEnabled: true` 下收不到，§11.8），
  *    被拖的标签跟着指针（内联 `transform`），拖动中就地预览、松手才上报一次最终下标
  *    （下标口径见 `tabs.ts::moveTab`）；**内容块按打开顺序排，不跟着标签排序** —— 挪 DOM 会重连
@@ -501,8 +502,8 @@ it('预览位：一有未保存草稿就上报升级（否则下一个文件会�
   expect(pinnedIds).toEqual([TAB_A.id])
 })
 
-/** 宽度口径：挂载时按「聊天区 + 面板」可用宽度的一半，加标签 / 切标签都不重算 */
-it('宽度：按可用宽度的一半，切标签不重算（重开才重算）', async () => {
+/** 宽度口径：打开时按「聊天区」的一半（收起时 chat-main 就是整块可用宽度），且给聊天区留足 450px */
+it('宽度：可用宽度的一半，且给聊天区留足 450px', async () => {
   layout = { available: 1200, inset: 260 }
   await renderPanel([TAB_A], TAB_A.id)
   expect(panel().style.width).toBe('600px')
@@ -520,6 +521,72 @@ it('宽度：按可用宽度的一半，切标签不重算（重开才重算）'
   layout = { available: 1000, inset: 260 }
   await renderPanel([TAB_A], TAB_A.id)
   expect(panel().style.width).toBe('500px')
+})
+
+/**
+ * 「聊天区不能小于 450px」是硬约束：窗口不够宽时先缩面板，
+ * 而不是让面板铺满把聊天区藏起来（后者只留给「连最小面板 + 450 都放不下」的窗口）。
+ */
+it('窗口不够宽时先缩面板：chat-main 始终留 450px（不铺满、不藏聊天区）', async () => {
+  // 800 的一半是 400，但那样聊天区只剩 400 < 450 → 面板让到 350
+  layout = { available: 800, inset: 260 }
+  await renderPanel([TAB_A], TAB_A.id)
+  expect(panel().style.width).toBe('350px')
+  expect(panel().classList.contains('is-full')).toBe(false)
+  expect(expandedReports[expandedReports.length - 1]).toBe(false)
+
+  act(() => root?.unmount())
+  root = null
+  document.body.innerHTML = ''
+
+  // 900 是「一半刚好等于 450」的那条线：面板 450、聊天区 450
+  layout = { available: 900, inset: 260 }
+  await renderPanel([TAB_A], TAB_A.id)
+  expect(panel().style.width).toBe('450px')
+  expect(panel().classList.contains('is-full')).toBe(false)
+})
+
+/** 容器常驻挂载（收起不卸载）：不按「打开」这一刻重算，窗口缩放后就会停在旧的一半 */
+it('重新打开时按当下的 chat-main 宽度重算（窗口缩放后不停在旧的一半）', async () => {
+  layout = { available: 1000, inset: 260 }
+  await renderPanel([TAB_A], TAB_A.id, { collapsed: true })
+  expect(panel().style.width).toBe('500px')
+
+  // 窗口 / 左侧栏变了：收起状态下宽度不跟着改，只有「打开」那一刻才重算
+  layout = { available: 1400, inset: 260 }
+  await act(async () => {
+    window.dispatchEvent(new Event('resize'))
+  })
+  expect(panel().style.width).toBe('500px')
+
+  await renderPanel([TAB_A], TAB_A.id)
+  expect(panel().style.width).toBe('700px')
+  expect(panel().classList.contains('is-full')).toBe(false)
+})
+
+/** 拖出来的宽度是用户的意思：收起再打开也不改回一半 */
+it('拖过宽度之后重新打开也不改回一半', async () => {
+  layout = { available: 1000, inset: 200 }
+  await renderPanel([TAB_A], TAB_A.id)
+  expect(panel().style.width).toBe('500px')
+
+  const right = 1200 // inset 200 + 可用 1000
+  act(() => {
+    document
+      .querySelector('.side-panel-resizer')!
+      .dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  })
+  act(() => {
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: right - 480 }))
+  })
+  act(() => {
+    document.dispatchEvent(new MouseEvent('mouseup'))
+  })
+  expect(panel().style.width).toBe('480px')
+
+  await renderPanel([TAB_A], TAB_A.id, { collapsed: true })
+  await renderPanel([TAB_A], TAB_A.id)
+  expect(panel().style.width).toBe('480px')
 })
 
 /**
@@ -634,7 +701,14 @@ it('拖到聊天区不足 450px 时面板占满，拖回来再恢复', async () 
 it('占满态往右拖：按下即跟手变窄，过了 450 那条线聊天区回来', async () => {
   layout = { available: 800, inset: 200 }
   await renderPanel([TAB_A], TAB_A.id)
-  // 挂载时 400 宽，聊天区只剩 400（< 450）→ 直接占满
+  // 默认宽度把聊天区护在 450：面板 350（占满只留给「真挤不下」的窗口）
+  expect(panel().style.width).toBe('350px')
+  expect(panel().classList.contains('is-full')).toBe(false)
+
+  // 用户按全屏：面板接管整块可用宽度
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>('.side-panel-tabbar-action.is-fullscreen')!.click()
+  })
   expect(panel().classList.contains('is-full')).toBe(true)
   expect(panel().style.width).toBe('800px')
 

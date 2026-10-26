@@ -1,10 +1,11 @@
 /**
- * 「设置 → 通用 → 内置浏览器」的两行数值设置。
+ * 「设置 → 浏览器 → 内置浏览器」的两行数值设置。
  *
- * 守三件事：
+ * 守四件事：
  *  ① 草稿 + **失焦才落库**（每敲一个字符就写表会刷出几十条 `settings.change` 埋点）；
  *  ② 越界值按边界收敛，空 / 非数字回落当前值（不让输入框凭空变成 0）；
- *  ③ 0 是「关掉该策略」的合法值（不休眠 / 不限个数），不能被收敛逻辑吃掉。
+ *  ③ 0 是「关掉该策略」的合法值（不休眠 / 不限个数），不能被收敛逻辑吃掉；
+ *  ④ HTML 预览的两个开关也在这页（组件在 `security-preview.tsx`，原来挂在「安全」子 Tab）。
  *
  * 策略本身（什么时候真销毁）在 `view-policy.ts`，隔离在 `browser-view-policy.test.ts`。
  */
@@ -15,7 +16,7 @@ import { createRoot } from 'react-dom/client'
 // 页面本身不碰 Tauri（只有「可视化预览」会 openUrl），桩掉免得 import 阶段就报错
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: vi.fn() }))
 
-import GeneralSettings from '@/ui/pages/Settings/general-settings'
+import BrowserSettings from '@/ui/pages/Settings/browser-settings'
 import { settingsState } from '@/ui/store'
 import {
   BROWSER_MAX_VIEWS_MAX,
@@ -37,7 +38,7 @@ beforeEach(() => {
   document.body.appendChild(container)
   root = createRoot(container)
   act(() => {
-    root.render(<GeneralSettings />)
+    root.render(<BrowserSettings />)
   })
 })
 
@@ -116,4 +117,12 @@ it('0 是合法值：关掉策略不能被收敛吃掉', () => {
   type(max, '0')
   blur(max)
   expect(settingsState.value.browserMaxViews).toBe(0)
+})
+
+it('HTML 预览的两个开关与内置浏览器同页（原来在「安全」子 Tab）', () => {
+  expect(container.textContent).toContain('内置浏览器')
+  expect(container.textContent).toContain('HTML 预览')
+  expect(
+    container.querySelectorAll('.setting-row input[type="checkbox"]'),
+  ).toHaveLength(2)
 })
