@@ -82,6 +82,10 @@ import {
   PANEL_COMMANDS,
 } from '@/ui/shortcuts/commands'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
+import { showToast } from '@/ui/components/shared/Toast'
+// 系统拖进来的文件：监听只有一份（输入框与右侧栏各自登记一个落点）
+import { useNativeFileDrop } from '@/ui/hooks/useNativeFileDrop'
+import { splitDroppedPaths } from '@/services/workspace-file-service'
 
 import { useToolUI } from './components/tool-ui'
 import HideSideBarSvg from '@/ui/components/icons/HideSideBarSvg'
@@ -346,6 +350,13 @@ function ChatView() {
     [panelBuckets, panelKey],
   )
 
+  /**
+   * 系统文件拖放的**唯一**监听（`virlen:drag-drop`，拖拽要真实路径只能走原生通道，见 §11.8）：
+   * 按坐标派给登记过的落点 —— 输入框（拖进去 = 加附件）与右侧栏（拖进去 = 开文件标签）。
+   * 各处自己 listen 会把同一次拖放处理两遍。
+   */
+  useNativeFileDrop()
+
   /** 取「当前会话那一桶」（回调里调，不依赖渲染期快照） */
   const bucketNow = useCallback((): { key: string; bucket: PanelBucket } => {
     const key = panelKeyOf(chatState.value.currentSessionId)
@@ -506,6 +517,26 @@ function ChatView() {
    */
   const handleOpenFile = useCallback(
     (path: string) => handleOpenFiles([path]),
+    [handleOpenFiles],
+  )
+
+  /**
+   * 文件被**拖进右侧栏**（原生拖放，带真实路径）：一个文件一个标签，与双击文件树同一条路
+   *（已有同路径的只切过去，草稿一个字不动）。
+   *
+   * 先问一下 `stat_path`：拖进来的是文件夹（或已经不在的路径）时不能开标签 ——
+   * 那会变成一个“该路径不是文件”的错误标签，关闭还得用户自己动手。挑出来的那批提示一句。
+   */
+  const handleDropPaths = useCallback(
+    (paths: string[]) => {
+      void (async () => {
+        const { files, skipped } = await splitDroppedPaths(paths)
+        if (files.length > 0) handleOpenFiles(files)
+        if (skipped.length > 0) {
+          showToast(t('右侧栏只能打开文件，文件夹已跳过'))
+        }
+      })()
+    },
     [handleOpenFiles],
   )
 
@@ -1638,6 +1669,8 @@ function ChatView() {
         onBrowserNavigate={handleBrowserNavigate}
         // 页面报来自己的标题 → 标签栏优先显示它
         onBrowserTitle={handleBrowserTitle}
+        // 系统里把文件拖进来 → 开标签（容器只负责命中与高亮，开标签归宿主）
+        onDropPaths={handleDropPaths}
       />
 
       {toolUI}

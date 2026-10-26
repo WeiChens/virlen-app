@@ -1,21 +1,9 @@
 /**
  * input 组件的纯辅助函数（无组件状态）
+ *
+ * 原生拖放的事件形状与监听已不在这一层：监听只有一份，住在 `@/ui/hooks/useNativeFileDrop`
+ *（输入框只是其中的一个落点，见 `use-native-drag-drop.ts`）。
  */
-
-/** 是否在 Tauri 环境（浏览器调试模式下没有原生拖拽事件） */
-export function isTauriEnv(): boolean {
-  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
-}
-
-/**
- * 原生拖放事件负载（来自 Rust 的 drag_drop 模块）
- * 形状与 Tauri 内置的 DragDropEvent 一致；落点是相对窗口左上角的物理像素。
- */
-export type DragDropPayload =
-  | { type: 'enter'; paths: string[]; position: { x: number; y: number } }
-  | { type: 'over'; position: { x: number; y: number } }
-  | { type: 'leave' }
-  | { type: 'drop'; paths: string[]; position: { x: number; y: number } }
 
 /** 像不像一个绝对路径（用于从剪贴板文本里辨认文件路径） */
 function looksLikeAbsolutePath(p: string): boolean {

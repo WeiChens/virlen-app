@@ -247,6 +247,31 @@ export async function loadWorkspaceFile(
   }
 }
 
+/**
+ * 拖放进来的路径里哪些能当文件标签打开（目录 / 已不存在的路径挑出来）。
+ *
+ * 只问 `stat_path`（一条一次），**不做安全校验**：真正的读 / 写在 `loadWorkspaceFile`
+ * 与保存那条路上，被黑名单拦下的文件应当带着原因显示在面板里，而不是在这里静默消失。
+ * 问不到（非 Tauri 环境 / 路径怪）时按文件处理：交给面板去说「文件不存在」。
+ */
+export async function splitDroppedPaths(
+  paths: readonly string[],
+): Promise<{ files: string[]; skipped: string[] }> {
+  const files: string[] = []
+  const skipped: string[] = []
+  for (const path of paths) {
+    let stat: PathStat | null = null
+    try {
+      stat = await invoke<PathStat | null>('stat_path', { path })
+    } catch {
+      stat = null
+    }
+    if (stat && (!stat.exists || !stat.is_file)) skipped.push(path)
+    else files.push(path)
+  }
+  return { files, skipped }
+}
+
 /** `cmd_preview_document` 失败时的结构化原因（与 Rust `PreviewErrorDto` 同形） */
 interface PreviewErrorDto {
   kind: 'unsupported' | 'too_large' | 'no_text' | 'backend' | 'internal'

@@ -18,6 +18,9 @@
  * 7. **但「盯着磁盘」只给正在被看的那一个**：常驻挂载 ≠ 常驻订阅。文件标签只在我们传
  *    `active`（= 当前激活标签 **且** 面板没收起）时才订 watcher，文件树同理 —— 否则收起 / 切走后
  *    十几个标签各盯一个父目录，一次落盘换来十几次整文件重读。重新被看着时子组件自己读一次盘对齐。
+ * 8. **系统里拖进来的文件直接开成标签**：面板整块登记为一个原生拖放落点（另一个在输入框），
+ *    拖入时铺一层提示，松手把路径交给宿主的 `onDropPaths`（开标签归宿主，容器不碰标签状态）。
+ *    监听只有一份（`useNativeFileDrop`）—— 各处自己 `listen` 会把同一次拖放处理两遍。
  *
  * 未保存草稿的归属：本容器汇总「**本会话**任一标签脏」上报宿主（切工作目录前要确认）；
  * 关标签的确认也在这里 —— 但**面板自己的关闭按钮已经确认过一次**，那条路径直接
@@ -54,6 +57,7 @@ import { urlLabel } from './browser/url'
 import { moveTab, tabLabel, type SidePanelTab } from './tabs'
 import { paneSessionIdOf } from './sessions'
 import { wheelScrollLeft } from './tab-scroll'
+import { useNativeDropTarget } from '@/ui/hooks/useNativeFileDrop'
 import './style.scss'
 
 interface Props {
@@ -109,6 +113,11 @@ interface Props {
   onOpenPath?: (path: string) => void
   /** 文件树右键「引用到输入框」/ 拖到输入框（与左侧栏同一条链路） */
   onAttachPaths?: (paths: string[]) => void
+  /**
+   * 系统里拖进来的文件（原生拖放，带真实路径）：宿主持有标签状态，由它把路径开成文件标签。
+   * 不传 = 面板不接拖放（也就没有拖入高亮）。
+   */
+  onDropPaths?: (paths: string[]) => void
 }
 
 /** 面板宽度：只有下限与兜底默认值，**没有固定上限**（最多给到整块可用宽度，见 `maxDragWidth`） */
@@ -179,6 +188,7 @@ function SidePanel({
   onAttachPaths,
   onBrowserNavigate,
   onBrowserTitle,
+  onDropPaths,
 }: Props) {
   const panelRef = useRef<HTMLElement>(null)
   const [width, setWidth] = useState(DEFAULT_WIDTH)
@@ -203,6 +213,19 @@ function SidePanel({
    * 与 `expanded`（窗口太窄时的自动占满）分开记 —— 自动占满不是用户选的，窗口宽回来就该自己退。
    */
   const [fullscreen, setFullscreen] = useState(false)
+  /** 有文件正被拖到面板上方（原生拖放只给坐标，命中由 `useNativeFileDrop` 算）：铺一层提示 */
+  const [dropActive, setDropActive] = useState(false)
+
+  /**
+   * 登记「整个面板」作为一个原生拖放落点（另一个在输入框，见 `input/use-native-drag-drop`）。
+   * 收起时不接：那时宽度是 0（命中判定本来就会跳过），显式再挡一道，免得高亮留在看不见的地方。
+   */
+  useNativeDropTarget({
+    element: () => panelRef.current,
+    enabled: () => !collapsed && !!onDropPaths,
+    onHover: setDropActive,
+    onDrop: (paths) => onDropPaths?.(paths),
+  })
 
   /**
    * 量一次「聊天区 + 面板」可用的总宽：面板贴右，所以 = 容器右边界 - 聊天区左边界
@@ -861,6 +884,14 @@ function SidePanel({
         aria-label={t('调整面板宽度')}
         onMouseDown={startResize}
       />
+
+      {/* 文件正被拖到面板上方：整块铺一层提示。`pointer-events: none` 是必须的 ——
+          原生拖放的命中按**坐标**算（见 `useNativeFileDrop`），这层只负责告诉用户「松手就开」。 */}
+      {dropActive && (
+        <div className="side-panel-drop-hint" aria-hidden="true">
+          <span className="side-panel-drop-hint-text">{t('松开即可打开文件')}</span>
+        </div>
+      )}
 
       <div className="side-panel-tabbar">
         <div className="side-panel-tabs" role="tablist" ref={tabsRef}>

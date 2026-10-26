@@ -56,6 +56,32 @@
   }
 }
 
+/* 有文件正被拖到面板上方：整块铺一层虚线框 + 中间一句提示。
+   ⚠️ `pointer-events: none` 是必须的：原生拖放的命中由 `useNativeFileDrop` 按**坐标**算，
+   这层只是提示 —— 一旦它能接指针，里面那层（编辑器 / iframe / 终端）在拖动期间就收不到事件。
+   层级放在内容之上、拖宽手柄（5 / 占满态 20）之下：提示不该盖掉那 6px 的拖宽条。 */
+.side-panel-drop-hint {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  border: 2px dashed color-mix(in srgb, var(--primary) 55%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+
+.side-panel-drop-hint-text {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1a1a1a);
+  font-size: var(--font-size-sm);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+}
+
 /* 拖拽手柄：压在左边缘上（宽 6px、只有 1px 画出来），hover 才显形 */
 .side-panel-resizer {
   position: absolute;
