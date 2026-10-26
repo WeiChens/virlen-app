@@ -24,6 +24,11 @@
  *    暗色下悬停 1.40:1 反而比激活的 1.07:1 更亮 —— 看上去「划过的像选中」。
  *    现在两者都是 theme-agnostic 的薄涂（悬停 = 文字色 7%，激活 = 品牌色 20%），
  *    这里把两档主题的实际对比度算出来钉住。
+ * ⑨ **预览位标签的斜体要真的斜**：`font-style: italic` 在本项目完全无效（界面字体
+ *    `AlimamaAgileVF-Thin` 没有 italic 字面，`App.css` 的 `:root { font-synthesis: none }
+ *    又关掉了合成斜体；`font-synthesis-style: auto` 与 `@font-face { font-style: oblique … }`
+ *    也都实测不出斜体）。字体自带的 `slnt` 轴能出**真斜体**，但只改拉丁字形 —— 中文文件名的
+ *    标签一点不斜。所以这里用**几何倾斜**（`transform: skewX`），中英文与字体回退全都盖到。
  */
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -157,6 +162,26 @@ describe('右侧面板容器 · 样式契约', () => {
     expect(tab).toBeTruthy()
     expect(tab).toContain('user-select: none')
     expect(panelCss).toMatch(/\.side-panel-tab\.is-dragging\s*\{/)
+  })
+
+  /**
+   * 预览位（临时标签）靠斜体告知「下一个文件会顶掉我」。
+   * ⚠️ 这里钉的是「斜体真的画得出来」：
+   * - `font-style: italic` 在本项目完全无效（字体无 italic 字面 + `App.css` 关掉了合成斜体）；
+   * - 字体自带的 `slnt` 轴只能斜拉丁字形，中文文件名（`说明.md`）一个像素都不斜；
+   * 所以只能用几何倾斜，而且它必须同时中英文都盖到（不靠字体）。
+   */
+  it('预览位标签的斜体要真的斜（几何倾斜，不靠字体 / 不靠 font-style）', () => {
+    const rule = /\.side-panel-tab\.is-preview \.side-panel-tab-name\s*\{([^}]*)\}/.exec(
+      panelCss,
+    )?.[1]
+    expect(rule, '预览位斜体规则').toBeTruthy()
+    expect(rule).toMatch(/transform:\s*skewX\(-\d+(?:\.\d+)?deg\)/)
+    // flex 子项已经块级化，但这一步别被后人删掉（换回 inline 元素就没有 transform 了）
+    expect(rule).toContain('display: inline-block')
+    // `font-style: italic` / `font-variation-settings` 在这套字体下都不靠谱（见上），别再写回去
+    expect(rule).not.toContain('font-style')
+    expect(rule).not.toContain('font-variation-settings')
   })
 
   it('标签栏滚动条跟主题：走 --scrollbar-thumb，且不出现 scrollbar-width', () => {

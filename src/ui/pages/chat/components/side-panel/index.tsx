@@ -21,6 +21,11 @@
  * 8. **系统里拖进来的文件直接开成标签**：面板整块登记为一个原生拖放落点（另一个在输入框），
  *    拖入时铺一层提示，松手把路径交给宿主的 `onDropPaths`（开标签归宿主，容器不碰标签状态）。
  *    监听只有一份（`useNativeFileDrop`）—— 各处自己 `listen` 会把同一次拖放处理两遍。
+ * 9. **文件标签分「预览位」与「常驻」**（`tabs.ts` 头注释第 6 条）：预览位是用户「路过看一眼」
+ *    开的（点文件树 / 拖文件进来），标签文字**斜体**，下一个打开的文件顶掉它；常驻（present
+ *    交付 / 用户双击标签 / 改动了草稿）不被顶掉。容器在这条链路上只做两件事：
+ *    - 标签上双击 → `onPinTab`（升级成常驻，标签状态归宿主）；
+ *    - 子面板报脏的那一刻 → 也 `onPinTab`（预览位永远是干净的，顶掉它才不会丢草稿）。
  *
  * 未保存草稿的归属：本容器汇总「**本会话**任一标签脏」上报宿主（切工作目录前要确认）；
  * 关标签的确认也在这里 —— 但**面板自己的关闭按钮已经确认过一次**，那条路径直接
@@ -54,7 +59,7 @@ import WorkspaceTree from '../sidebar/workspace-tree'
 import Guide from './guide'
 import BrowserPane from './browser/BrowserPane'
 import { urlLabel } from './browser/url'
-import { moveTab, tabLabel, type SidePanelTab } from './tabs'
+import { isPreviewTab, moveTab, tabLabel, type SidePanelTab } from './tabs'
 import { paneSessionIdOf } from './sessions'
 import { wheelScrollLeft } from './tab-scroll'
 import { useNativeDropTarget } from '@/ui/hooks/useNativeFileDrop'
@@ -83,6 +88,11 @@ interface Props {
   onCloseTab: (id: string) => void
   /** 把标签 `id` 挪到第 `toIndex` 位（拖动松手时上报一次；不传则标签不可拖） */
   onMoveTab?: (id: string, toIndex: number) => void
+  /**
+   * 把一个**预览位**的文件标签升级成常驻（双击标签 / 改动草稿两条路）。
+   * 标签状态归宿主，所以这里只上报；不传 = 双击不升级（预览位只能靠宿主自己的风控口径留不住）。
+   */
+  onPinTab?: (id: string) => void
   /** 一次关掉多个标签（标签右键菜单）；没传时容器退化为逐个 `onCloseTab` */
   onCloseTabs?: (ids: string[]) => void
   /** 任一标签有未保存草稿（宿主据此在切会话 / 切工作目录前确认） */
@@ -177,6 +187,7 @@ function SidePanel({
   onCloseTab,
   onCloseTabs,
   onMoveTab,
+  onPinTab,
   onDirtyChange,
   onExpandedChange,
   onOpenGuide,
@@ -401,6 +412,27 @@ function SidePanel({
   useEffect(() => {
     onDirtyChange?.(dirty)
   }, [dirty, onDirtyChange])
+
+  /**
+   * 「改动就能留下来」：预览位标签一旦脏了就升级成常驻。
+   *
+   * 为什么必须在脏的那一刻升级：顶掉预览位 = 那一格的面板**卸载**（草稿、撤销栈一起没），
+   * 下一个打开的文件不能把用户刚写下的东西顶掉。反过来，预览位永远是干净的 ——
+   * 所以顶掉它不需要任何确认（旧实现是单面板，换文件必须问「放弃未保存的修改？」）。
+   *
+   * 「支持编辑」不用另判：只有文本文件会脏（媒体 / PDF / Office / 3D 是只看不改，
+   * 它们连草稿都没有），所以能走到这里的本来就只有能改的那几种。
+   * 别的会话挂着的标签也算在内（`parkedTabs`）：它们切回去时同样不能被下一个文件顶掉。
+   */
+  const parkedList = parkedTabs ?? EMPTY_PARKED
+  useEffect(() => {
+    if (!onPinTab) return
+    for (const id of dirtyIds) {
+      const tab =
+        tabs.find((item) => item.id === id) ?? parkedList.find((item) => item.id === id)
+      if (tab && isPreviewTab(tab)) onPinTab(id)
+    }
+  }, [dirtyIds, tabs, parkedList, onPinTab])
 
   const startResize = useCallback(
     (event: React.MouseEvent) => {
@@ -897,6 +929,8 @@ function SidePanel({
         <div className="side-panel-tabs" role="tablist" ref={tabsRef}>
           {arranged.map((tab) => {
             const active = tab.id === current?.id
+            /** 预览位（临时标签）：文字斜体，下一个打开的文件顶掉它（见 `tabs.ts` 头注释第 6 条） */
+            const preview = isPreviewTab(tab)
             const label =
               tab.kind === 'file'
                 ? tabLabel(tab.path)
@@ -914,7 +948,9 @@ function SidePanel({
             // 网页标签的 tooltip 给完整地址（标题只有主机名，同主机的两页靠它区分）
             const title =
               tab.kind === 'file'
-                ? tab.path
+                ? isPreviewTab(tab)
+                  ? `${tab.path} · ${t('预览模式')}`
+                  : tab.path
                 : tab.kind === 'service' && tab.sessionLabel
                   ? `${label} · ${tpl('对话：$__name__', { name: tab.sessionLabel })}`
                   : tab.kind === 'terminal'
@@ -935,9 +971,16 @@ function SidePanel({
                   if (el) tabRefs.current.set(tab.id, el)
                   else tabRefs.current.delete(tab.id)
                 }}
-                className={`side-panel-tab${active ? ' is-active' : ''}${drag?.id === tab.id ? ' is-dragging' : ''
-                  }`}
+                className={`side-panel-tab${active ? ' is-active' : ''}${preview ? ' is-preview' : ''}${
+                  drag?.id === tab.id ? ' is-dragging' : ''
+                }`}
                 onMouseDown={(event) => startTabDrag(event, tab)}
+                // 双击标签 = 「这个我要留着」：预览位升级成常驻（在关闭按钮上双击不算）
+                onDoubleClick={(event) => {
+                  if (!preview) return
+                  if ((event.target as HTMLElement).closest('.side-panel-tab-close')) return
+                  onPinTab?.(tab.id)
+                }}
                 // 右键在标签上开菜单；空白处不弹（不给「关谁」的歧义）
                 onContextMenu={(event) => tabMenu.openAt(event, { id: tab.id })}
                 onClick={() => {

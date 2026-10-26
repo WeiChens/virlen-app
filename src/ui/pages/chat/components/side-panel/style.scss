@@ -254,6 +254,28 @@
   }
 }
 
+/* 预览位（临时标签）：下一个打开的文件会顶掉它，所以文字用斜体先告诉用户「这个是临时的」。
+   只管字形，不碰底色 —— 它与 `.is-active` / `.is-dragging` 同时存在时互不干扰；
+   升级成常驻（双击标签 / 改草稿 / present）后这个类就没了，文字自己正过来。
+
+   ⚠️ 为什么是**几何倾斜**而不是 `font-style: italic`：
+   1. `font-style: italic` 在这里是完全无效的 —— 界面字体 `AlimamaAgileVF-Thin` 没有 italic
+      字面，而 `App.css` 的 `:root { font-synthesis: none }` 又关掉了合成斜体；
+      `font-synthesis-style: auto` 与 `@font-face { font-style: oblique 0deg 12deg }` 两种写法
+      在这款变量字体上也都不出斜体（无头 Chrome 截图实测）。
+   2. 这款字体确实自带 `slnt` 轴（0 → 12），`font-variation-settings: 'slnt' 12` 能出**真斜体**，
+      但它只改写拉丁字形 —— 中文文件名（`说明.md`）一个像素都不斜，预览位就在这些标签上失形。
+   3. 斜切是纯几何的：与字体、字体回退、脚本（中 / 英 / 数字）全部无关，跨平台一个样。
+   
+   三条细节：`inline-block` 才能吃 transform（flex 子项已经是块级，写上只为不被后人改回去）；
+   `transform-origin` 靠左中点 —— 文字左右各多出 ≈1px（`tan(10°) × 半行高`），不会顶到图标或脏点；
+   别把 `font-style: italic` 顺手加回来当「兜底」：两档叠起来就是 20° 的双重斜。 */
+.side-panel-tab.is-preview .side-panel-tab-name {
+  display: inline-block;
+  transform: skewX(-10deg);
+  transform-origin: left center;
+}
+
 .side-panel-tab-btn {
   flex: 1;
   min-width: 0;

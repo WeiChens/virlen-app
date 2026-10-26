@@ -84,7 +84,11 @@
     background: var(--blockquote-bg, #f8f9fa);
     border-radius: 0 6px 6px 0;
     color: var(--text-secondary, #666);
+    /* 引用块的斜体：三条必须一起写，否则在这套字体上完全看不出斜
+       （理由与实测见 `src/ui/App.css` 里 `em, i, cite` 那段注释） */
     font-style: italic;
+    font-synthesis-style: auto;
+    font-variation-settings: 'slnt' 12;
 
     p {
       margin: 4px 0;
@@ -165,9 +169,9 @@
   strong {
     font-weight: 600;
   }
-  em {
-    font-style: italic;
-  }
+  // 斜体（`<em>`）：**不能**只写 `font-style: italic` —— 界面字体没有 italic 字面、
+  // `:root` 又关了合成斜体，那只等于没写。完整口径（三条 + 实测）在 `src/ui/App.css`
+  // 的 `em, i, cite` 全局规则里，这里不用再重复一遍（重复两份迟早会漏一份）。
   del {
     color: var(--text-secondary, #999);
   }

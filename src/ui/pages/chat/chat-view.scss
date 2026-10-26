@@ -51,8 +51,10 @@
     flex: none;
     display: flex;
     flex-direction: column;
-    border-bottom: 1px solid var(--border-color, #e5e5e5);
     background: var(--bg-primary, #fff);
+    &.active {
+      border-bottom: 1px solid var(--border-color, #e5e5e5);
+    }
   }
 
   .chat-toolbar {

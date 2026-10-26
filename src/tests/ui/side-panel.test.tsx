@@ -161,6 +161,8 @@ const closedBatches: string[][] = []
 const movedTabs: [string, number][] = []
 /** 标签右键「刷新」：转发到了哪个面板（记路径） */
 const reloadCalls: string[] = []
+/** 预览位升级成常驻：上报了哪些标签 id */
+const pinnedIds: string[] = []
 const dirtyReports: boolean[] = []
 const expandedReports: boolean[] = []
 
@@ -175,6 +177,9 @@ function onCloseTabs(ids: string[]) {
 }
 function onMoveTab(id: string, toIndex: number) {
   movedTabs.push([id, toIndex])
+}
+function onPinTab(id: string) {
+  pinnedIds.push(id)
 }
 function onDirtyChange(dirty: boolean) {
   dirtyReports.push(dirty)
@@ -253,6 +258,8 @@ async function renderPanel(
           // 不传时容器退化为逐个 onCloseTab（保留既有用例的断言口径）
           onCloseTabs={opts.batch ? onCloseTabs : undefined}
           onMoveTab={onMoveTab}
+          // 双击标签 / 改草稿 → 升级成常驻（预览位口径）
+          onPinTab={onPinTab}
           onDirtyChange={onDirtyChange}
           onExpandedChange={onExpandedChange}
         />
@@ -327,6 +334,7 @@ beforeEach(() => {
   closedBatches.length = 0
   movedTabs.length = 0
   reloadCalls.length = 0
+  pinnedIds.length = 0
   dirtyReports.length = 0
   expandedReports.length = 0
   messageBoxMock.mockReset()
@@ -458,6 +466,36 @@ it('脏了又干净：汇总值跟着回 false，不是一次脏就永远脏', a
   act(() => stub('E:/repo/src/a.ts')!.querySelector<HTMLButtonElement>('.stub-clean')!.click())
   expect(dirtyReports[dirtyReports.length - 1]).toBe(false)
   expect(tabsEls()[0].querySelector('.side-panel-tab-dirty')).toBeNull()
+})
+
+/**
+ * 预览位 / 常驻：用户打开的标签是「临时」的（文字斜体、下一个打开的文件顶掉它）。
+ * 容器只负责把两条升级路径转给宿主：双击标签、子面板报脏。
+ */
+it('预览位：标签带 is-preview（常驻不带），双击标签上报升级', async () => {
+  await renderPanel([TAB_A, fileTab('E:/repo/src/b.ts', undefined, undefined, true)], TAB_A.id)
+  expect(tabsEls()[0].classList.contains('is-preview')).toBe(true)
+  expect(tabsEls()[1].classList.contains('is-preview')).toBe(false)
+
+  await act(async () => {
+    tabsEls()[0].dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+  })
+  expect(pinnedIds).toEqual([TAB_A.id])
+
+  // 已经是常驻的那一个：双击不上报（没什么可升级的）
+  pinnedIds.length = 0
+  await act(async () => {
+    tabsEls()[1].dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+  })
+  expect(pinnedIds).toEqual([])
+})
+
+it('预览位：一有未保存草稿就上报升级（否则下一个文件会把它顶掉）', async () => {
+  await renderPanel([TAB_A], TAB_A.id)
+  expect(pinnedIds).toEqual([])
+
+  act(() => stub('E:/repo/src/a.ts')!.querySelector<HTMLButtonElement>('.stub-dirty')!.click())
+  expect(pinnedIds).toEqual([TAB_A.id])
 })
 
 /** 宽度口径：挂载时按「聊天区 + 面板」可用宽度的一半，加标签 / 切标签都不重算 */

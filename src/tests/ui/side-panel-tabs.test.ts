@@ -11,6 +11,9 @@
  * 另加一条批量口径（标签右键菜单）：`closeTabs` 必须与逐个 `closeTab` 收敛出同一个结果 ——
  * 「关闭其他 / 关闭右侧 / 关闭已保存 / 全部关闭」都会走它。
  * 最后一组是重排（拖标签换顺序）：`moveTab` 的下标就是最终下标，与容器的落点算法同口径。
+ *
+ * 预览位 / 常驻（`pinned`）单独一组：用户打开的是预览位（斜体、会被下一个文件顶掉），
+ * present 交付与「再点一次」是常驻；升级之后永不退回。
  */
 import { expect, it } from 'vitest'
 import {
@@ -20,6 +23,7 @@ import {
   closeTabs,
   fileTab,
   fileTabId,
+  isPreviewTab,
   moveTab,
   openBrowserTab,
   openFileTab,
@@ -27,6 +31,7 @@ import {
   openServiceTab,
   openTerminalTab,
   pageTab,
+  pinTab,
   replacePageTab,
   replaceTabWith,
   serviceTabId,
@@ -77,7 +82,7 @@ it('打开已打开的文件：只切过去，列表引用都不变（草稿一�
  * 把视图请回去（不重建标签 —— 草稿、Monaco 撤销栈都还在里面）。
  */
 it('present 打开的标签记住「预览」，重复交付只更新视图提示', () => {
-  const opened = openFileTab([], 'E:/repo/a.html', 'preview', 1)
+  const opened = openFileTab([], 'E:/repo/a.html', { view: 'preview', viewSeq: 1, pinned: true })
   expect(opened.added).toBe(true)
   const tab = opened.tabs[0]
   expect(tab.kind === 'file' && tab.view).toBe('preview')
@@ -88,15 +93,68 @@ it('present 打开的标签记住「预览」，重复交付只更新视图提�
   expect(plain.tabs).toBe(opened.tabs)
 
   // 同一个文件再 present 一次：seq 变了 → 换一份标签（面板据此迁回预览）
-  const again = openFileTab(opened.tabs, 'E:/repo/a.html', 'preview', 2)
+  const again = openFileTab(opened.tabs, 'E:/repo/a.html', { view: 'preview', viewSeq: 2, pinned: true })
   expect(again.tabs).not.toBe(opened.tabs)
   expect(again.tabs.length).toBe(1)
   const updated = again.tabs[0]
   expect(updated.kind === 'file' && updated.viewSeq).toBe(2)
 
   // 值完全没变：返回原引用（宿主不必重渲染）
-  const same = openFileTab(again.tabs, 'E:/repo/a.html', 'preview', 2)
+  const same = openFileTab(again.tabs, 'E:/repo/a.html', { view: 'preview', viewSeq: 2, pinned: true })
   expect(same.tabs).toBe(again.tabs)
+})
+
+/**
+ * 预览位（临时标签）与常驻：用户点开的是「先看一眼」，下一个打开的文件顶掉它；
+ * 常驻（present 交付 / 留住了的）谁都不顶。四条升级路径见 `tabs.ts` 头注释第 6 条。
+ */
+it('预览位：打开另一个文件顶掉激活着的预览位（标签数不变，位置不变）', () => {
+  const first = openFileTab([], 'E:/repo/a.ts')
+  const openedTab = first.tabs[0]
+  expect(isPreviewTab(openedTab)).toBe(true)
+
+  const second = openFileTab(first.tabs, 'E:/repo/b.ts', { activeId: first.activeId })
+  expect(second.added).toBe(true)
+  // 顶掉那一格：不是新增，也没有「两个标签各持一份草稿」
+  expect(second.tabs.length).toBe(1)
+  expect(second.tabs.map(filePathOf)).toEqual(['E:/repo/b.ts'])
+  expect(second.activeId).toBe(fileTabId('E:/repo/b.ts'))
+
+  // 占位顺序也保住了：中间那一格被顶掉，左右还是原来的邻居
+  const three = [
+    fileTab('E:/repo/a', undefined, undefined, true),
+    // 中间这个是预览位（用户最后打开的那个）
+    fileTab('E:/repo/b'),
+    fileTab('E:/repo/c', undefined, undefined, true),
+  ]
+  const preview = openFileTab(three, 'E:/repo/p.ts', { activeId: fileTabId('E:/repo/b') })
+  expect(preview.tabs.map(filePathOf).map((path) => path.split('/').pop())).toEqual([
+    'a',
+    'p.ts',
+    'c',
+  ])
+})
+
+it('常驻：present 交付 / 再点一次激活着的它 / pinTab 都会留下来', () => {
+  // present 从不顶掉别人：直接追加
+  const delivered = openFileTab([], 'E:/repo/out.html', { pinned: true })
+  expect(isPreviewTab(delivered.tabs[0])).toBe(false)
+  const more = openFileTab(delivered.tabs, 'E:/repo/b.ts', { activeId: delivered.activeId })
+  expect(more.tabs.length).toBe(2)
+
+  // 再次打开**已经激活的**它 = 用户点第二遍：「这个我要留着」
+  const again = openFileTab(more.tabs, 'E:/repo/b.ts', { activeId: fileTabId('E:/repo/b.ts') })
+  expect(isPreviewTab(again.tabs[1])).toBe(false)
+
+  // 不是激活的那个再打开：只切过去，还是预览位（下次会被顶掉）
+  const other = openFileTab(more.tabs, 'E:/repo/b.ts', { activeId: delivered.activeId })
+  expect(other.tabs).toBe(more.tabs)
+
+  // 双击标签那条路：`pinTab` 升级；已经常驻 / 不是文件标签 / 已经关掉 → 原引用
+  const pinned = pinTab(more.tabs, fileTabId('E:/repo/b.ts'))
+  expect(isPreviewTab(pinned[1])).toBe(false)
+  expect(pinTab(pinned, fileTabId('E:/repo/b.ts'))).toBe(pinned)
+  expect(pinTab(more.tabs, 'nope')).toBe(more.tabs)
 })
 
 it('关掉非激活的标签：激活态不动', () => {

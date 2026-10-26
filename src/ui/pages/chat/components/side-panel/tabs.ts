@@ -20,6 +20,15 @@
  *    免得「关闭其他」自己再写一套邻居规则。
  * 5. **重排（拖标签）**：`moveTab` 的下标是「插入到最终位置」，与拖动时的落点算法同口径
  *    （见 `index.tsx::startTabDrag`：数「其他标签中线在指针左边」的个数），两边不能各算一套。
+ * 6. **文件标签有两种持留方式：预览位 / 常驻**（`pinned`）。
+ *    - **预览位**（`pinned !== true`，用户点开 / 拖进来的都是它）：标签文字是斜体，
+ *      **下一个打开的文件顶掉它**（`openFileTab` 的 `activeId` 就是那一格）—— 逛文件树时
+ *      不会攒出十几个「路过看一眼」的标签；
+ *    - **常驻**（present 的交付物、用户明确要留下看的）：谁都不顶它，追加到末尾。
+ *    - 升级只有四条路（都在本文件里判，容器 / 宿主只负责传话）：
+ *      ① present 交付（`pinned: true`）；② 再次打开**已经激活的**它（`current.id === activeId`）；
+ *      ③ 双击标签（`pinTab`）；④ 改动草稿 → 脏（容器上报脏时顺手 `pinTab`）。
+ *      常驻之后**永不退回**预览位：那是用户的判断，不该被下一次点击改掉。
  */
 
 /** 右侧面板的一个标签页（扩 kind 时在这里加联合项） */
@@ -33,6 +42,12 @@ export type SidePanelTab =
       view?: FileTabView
       /** 「又请你看一次」的序号：present 每次都自增，面板据此把视图迁回去 */
       viewSeq?: number
+      /**
+       * 常驻模式（`true`）/ 预览位（`false` 或缺省）—— 见头注释第 6 条。
+       * 预览位：标签文字斜体，下一个打开的文件会**顶掉它**；改草稿 / 双击标签 / present
+       * 都会把它变成常驻，此后不再被顶掉。
+       */
+      pinned?: boolean
     }
   | {
       id: string
@@ -107,13 +122,26 @@ export function fileTabId(path: string): string {
   return `file:${path}`
 }
 
-/** 造一个文件标签 */
+/** 造一个文件标签（`pinned` 缺省 = 预览位：用户打开的都是「先看一眼」） */
 export function fileTab(
   path: string,
   view?: FileTabView,
   viewSeq?: number,
+  pinned?: boolean,
 ): SidePanelTab {
-  return { id: fileTabId(path), kind: 'file', path, view, viewSeq }
+  return { id: fileTabId(path), kind: 'file', path, view, viewSeq, pinned: pinned === true }
+}
+
+/**
+ * 这个标签是「预览位」吗（斜体 + 会被下一个打开的文件顶掉）。
+ * 只有文件标签有这个概念：服务 / 终端 / 网页 / 页面都是用户明确要的东西。
+ *
+ * ⚠️ 故意不写成类型谓词（`tab is 文件标签`）：那样调用处写在 `tab.kind === 'file'` 里面时，
+ * 否定分支会被 TS 算成 `never`（谓词的否分支是「排除整个文件标签」），
+ * 于是 `isPreviewTab(tab) ? … : tab.path` 这种写法反而编译不过。
+ */
+export function isPreviewTab(tab: SidePanelTab): boolean {
+  return tab.kind === 'file' && tab.pinned !== true
 }
 
 /** 服务终端标签的 id：会话 + 服务（服务 id 只在会话内唯一，跨会话会撞） */
@@ -345,37 +373,102 @@ export function openTerminalTab(
   return { tabs: [...tabs, tab], activeId: tab.id, added: true }
 }
 
+/** 打开一个文件的选项（视图提示 + 常驻模式 + 当前激活的是谁） */
+export interface OpenFileOptions {
+  /** 打开时落在哪个视图（present 的交付物是 `preview`） */
+  view?: FileTabView
+  /** 「又请你看一次」的序号（present 每次自增） */
+  viewSeq?: number
+  /** 常驻模式（present 的交付物）；不传 = 预览位，会被下一个打开的文件顶掉 */
+  pinned?: boolean
+  /**
+   * 当前激活的标签 id。两个用途：**预览位替换**（激活的那个是预览位文件标签 → 新文件占它那一格）
+   * 与「**再打开已经激活的它** → 升级成常驻」。拿不准就传宿主的 `bucket.activeId`。
+   */
+  activeId?: string | null
+}
+
 /**
- * 打开一个文件：已有同路径的标签就只切过去，否则追加到末尾。返回新的标签列表与要激活的 id。
+ * 预览位在哪：**当前激活的那个预览位文件标签**的下标；`-1` = 没有可占的格子（新标签追加到末尾）。
  *
- * 已开着时**不重建标签**（草稿一个字都不动）；唯一会改的是「打开时的视图」——present 再看一次
- * 同一个文件（带 `view` / 自增的 `viewSeq`）要把面板请回预览；两个值都没变就返回原引用。
+ * 只认文件标签、只认预览位 —— 常驻标签（present 交付 / 用户动手留下看的）不许被顶掉，
+ * 服务 / 终端 / 网页 / 页面也一样（它们背后有进程、有历史，不是「路过看一眼」）。
+ */
+function previewSlotIndex(tabs: SidePanelTab[], activeId: string | null): number {
+  if (!activeId) return -1
+  const index = tabs.findIndex((tab) => tab.id === activeId)
+  if (index < 0) return -1
+  return isPreviewTab(tabs[index]) ? index : -1
+}
+
+/**
+ * 打开一个文件（右侧栏唯一的入口）。三条口径：
  *
- * 注意这里**不需要任何「丢弃草稿」的确认** —— 打开新文件不再挤掉原来那个，
- * 这正是加标签页最直接的收益（旧实现是单面板，换文件必须确认）。
+ * 1. **已有同路径的标签**就只切过去，草稿一个字都不动；`.view` / `.viewSeq` 有变才换标签
+ *    （present 再看一次同一个文件要把面板请回预览；普通打开不碰用户手动切走的视图）。
+ *    顺手按头注释第 6 条判升级：`pinned: true`（present 交付）或「打开的就是激活着的它」。
+ * 2. **没有就新开**：预览位（`pinned !== true`）且激活的那个也是预览位 → **顶掉它那一格**
+ *    （下标不变，标签数量不变 —— 逛文件树不会攒出十几个标签）；否则追加到末尾。
+ * 3. 视图中「谁被激活」由调用方传 `activeId` 决定 —— 本函数不猜，纯函数口径不变。
+ *
+ * ⚠️ 顶掉预览位 = 那一格的面板**卸载**（草稿、撤销栈一起没）。所以「改动过」必须先把标签
+ * 升级成常驻（容器在脏上报时做，见 `side-panel/index.tsx`）—— 能顶掉的永远只有干净的预览位。
+ * 也因此这里**不需要任何「丢弃草稿」的确认**（旧实现是单面板，换文件必须问）。
  */
 export function openFileTab(
   tabs: SidePanelTab[],
   path: string,
-  view?: FileTabView,
-  viewSeq?: number,
+  options: OpenFileOptions = {},
 ): { tabs: SidePanelTab[]; activeId: string; added: boolean } {
-  const tab = fileTab(path, view, viewSeq)
+  const { view, viewSeq } = options
+  const activeId = options.activeId ?? null
   // 按路径找（不按 id）：id 上带着宿主的会话前缀，拿它比会「同一个文件开两份」
   const index = tabs.findIndex((item) => item.kind === 'file' && item.path === path)
-  if (index < 0) return { tabs: [...tabs, tab], activeId: tab.id, added: true }
+
+  if (index < 0) {
+    const tab = fileTab(path, view, viewSeq, options.pinned === true)
+    // 常驻（present）从不顶别人的格子：交付物是「请看这个」，不是「换掉你手上的那个」
+    const slot = options.pinned === true ? -1 : previewSlotIndex(tabs, activeId)
+    if (slot < 0) return { tabs: [...tabs, tab], activeId: tab.id, added: true }
+    const next = [...tabs]
+    next[slot] = tab
+    return { tabs: next, activeId: tab.id, added: true }
+  }
 
   const current = tabs[index]
-  // 普通打开（无 view）不碰已开着标签的视图；值没变也不换引用，避免无意义重渲染
-  if (current.kind !== 'file' || !view) {
+  if (current.kind !== 'file') {
     return { tabs, activeId: current.id, added: false }
   }
-  if (current.view === view && current.viewSeq === viewSeq) {
+  // 升级成常驻：present 交付，或「再打开一次已经激活着的它」（用户点第二遍 = 我要留着）
+  const pinned = current.pinned === true || options.pinned === true || current.id === activeId
+  const nextView = view ?? current.view
+  const nextSeq = viewSeq ?? current.viewSeq
+  if (
+    nextView === current.view &&
+    nextSeq === current.viewSeq &&
+    pinned === (current.pinned === true)
+  ) {
     return { tabs, activeId: current.id, added: false }
   }
   const next = [...tabs]
-  next[index] = { ...current, view, viewSeq }
+  next[index] = { ...current, view: nextView, viewSeq: nextSeq, pinned }
   return { tabs: next, activeId: current.id, added: false }
+}
+
+/**
+ * 把一个**预览位**标签升级成常驻（双击标签 / 改动草稿两条路）。
+ *
+ * 不是文件标签 / 已经常驻 / 标签已经关掉 → 返回原引用（宿主据此跳过重渲染）。
+ * 反向不提供：常驻 → 预览位没有任何入口（用户留下的东西不该被下一次点击改掉）。
+ */
+export function pinTab(tabs: SidePanelTab[], id: string): SidePanelTab[] {
+  const index = tabs.findIndex((tab) => tab.id === id)
+  if (index < 0) return tabs
+  const tab = tabs[index]
+  if (tab.kind !== 'file' || tab.pinned === true) return tabs
+  const next = [...tabs]
+  next[index] = { ...tab, pinned: true }
+  return next
 }
 
 /**

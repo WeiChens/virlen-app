@@ -181,6 +181,7 @@
   "删除编辑器": "Delete Editor",
   "确定要删除这个编辑器配置吗？此操作无法撤销": "Are you sure you want to delete this editor config? This cannot be undone",
   "预览": "Preview",
+  "预览模式": "Preview mode",
   "编辑编辑器": "Edit Editor",
   "例如：VS Code / IDEA": "e.g., VS Code / IDEA",
   "支持 ${filePath}（文件路径）、${line}（行号）、${column}（列号）占位符": "Supports ${filePath} (file path), ${line} (line number), ${column} (column number) placeholders",

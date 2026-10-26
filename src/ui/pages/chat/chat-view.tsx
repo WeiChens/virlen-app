@@ -52,6 +52,7 @@ import {
   openFileTab,
   openPageTab,
   openServiceTab,
+  pinTab,
   replacePageTab,
   replaceTabWith,
   terminalTab,
@@ -490,30 +491,48 @@ function ChatView() {
 
   /**
    * 批量在右侧面板打开（`present` 的交付物可能不止一个）：已有同路径的标签只切过去，
-   * 新文件追加到末尾；**激活第一个**（它是主交付物）。一次算完再落 state，N 个文件只渲染一次。
-   * 落的是**当前会话**那一桶（后台会话不抢标签页）。
+   * 新文件**占掉预览位（没有就追加到末尾）**；**激活第一个**（它是主交付物）。
+   * 一次算完再落 state，N 个文件只渲染一次。落的是**当前会话**那一桶（后台会话不抢标签页）。
+   *
+   * 两种持留方式（见 `tabs.ts` 头注释第 6 条）：
+   * - **不传 `pinned`**（用户双击文件树 / 拖文件进来 / 侧栏点一下）：预览位 —— 标签斜体，
+   *   下一个打开的文件会顶掉它（用户只是「路过看一眼」）；
+   * - **`pinned: true`**（present 交付）：常驻，谁都不顶它。
+   *
+   * `activeId` 只交给**这一批里的第一个**：一次拖进来三个文件时，第一个占掉预览位，
+   * 其余追加 —— 否则三个会互相顶，最后只剩一个。
    */
   const handleOpenFiles = useCallback(
-    (paths: string[], view?: FileTabView) => {
+    (paths: string[], options: { view?: FileTabView; pinned?: boolean } = {}) => {
       if (paths.length === 0) return
       const { key, bucket } = bucketNow()
       let tabs = bucket.tabs
       let activeId: string | null = null
       // present 是「请看这个」：同一个文件重复交付也要把面板请回预览（序号自增，值相同不重渲染）
-      const viewSeq = view ? ++viewSeqRef.current : undefined
+      const viewSeq = options.view ? ++viewSeqRef.current : undefined
+      let slotOwner: string | null = bucket.activeId
       for (const path of paths) {
-        const next = openFileTab(tabs, path, view, viewSeq)
+        const next = openFileTab(tabs, path, {
+          view: options.view,
+          viewSeq,
+          pinned: options.pinned,
+          activeId: slotOwner,
+        })
         tabs = next.tabs
         activeId = activeId ?? next.activeId
+        slotOwner = null
       }
       applyBucketTabs(key, { tabs, activeId })
+      // 顶掉预览位时标签数量不变，`withBucketTabs` 的「加标签就展开」判不出来 ——
+      // 但用户点了 / 拖进来一个文件，当然是要看见它
+      applyBucketOpen(key, true)
     },
-    [applyBucketTabs, bucketNow],
+    [applyBucketOpen, applyBucketTabs, bucketNow],
   )
 
   /**
-   * 双击文件 → 右侧打开：已有同路径的标签就切过去，否则新开一个。
-   * **不再需要「丢弃草稿」确认** —— 打开新文件不再挤掉原来那个（单面板时代的必答题）。
+   * 双击文件 → 右侧打开：已有同路径的标签就切过去，否则占掉预览位（没有预览位就追加）。
+   * **不再需要「丢弃草稿」确认** —— 能顶掉的只有干净的预览位（改动过的已经被升级成常驻了）。
    */
   const handleOpenFile = useCallback(
     (path: string) => handleOpenFiles([path]),
@@ -521,8 +540,27 @@ function ChatView() {
   )
 
   /**
+   * 把标签升级成常驻（双击标签 / 改动草稿两条路由容器转上来）。
+   *
+   * 走**全部桶**找它自己那一桶（不拿当前桶硬套）：别的会话挂着的标签也会脏（容器把它们
+   * 一起上报），切回去时同样不能被下一个打开的文件顶掉。
+   * `pinTab` 遇到「不是文件标签 / 已经常驻 / 已经关掉」返回原引用 —— 这里直接跳过。
+   */
+  const handlePinTab = useCallback(
+    (id: string) => {
+      for (const [key, bucket] of Object.entries(panelBucketsRef.current)) {
+        if (!bucket.tabs.some((tab) => tab.id === id)) continue
+        const tabs = pinTab(bucket.tabs, id)
+        if (tabs !== bucket.tabs) applyBucketTabs(key, { tabs, activeId: bucket.activeId })
+        return
+      }
+    },
+    [applyBucketTabs],
+  )
+
+  /**
    * 文件被**拖进右侧栏**（原生拖放，带真实路径）：一个文件一个标签，与双击文件树同一条路
-   *（已有同路径的只切过去，草稿一个字不动）。
+   *（已有同路径的只切过去，草稿一个字不动；拖进来的同样是**预览位**，除非它已经被留住了）。
    *
    * 先问一下 `stat_path`：拖进来的是文件夹（或已经不在的路径）时不能开标签 ——
    * 那会变成一个“该路径不是文件”的错误标签，关闭还得用户自己动手。挑出来的那批提示一句。
@@ -557,10 +595,11 @@ function ChatView() {
    * AI 交付文件（`present` 工具）→ 右侧面板：登记**唯一入口**（`services/present-service`）。
    * 标签状态在本组件的 state + ref 里，别处拿不到；卸载时注销，避免留下上一个实例的 handler。
    *
-   * 交付物默认落在「预览」（能预览的类型才有那个 tab）—— present 的语义是给人看，不是给人改。
+   * 交付物默认落在「预览」（能预览的类型才有那个 tab），并且是**常驻**标签 ——
+   * present 的语义是给人看，不是给人改，也不该被下一个打开的文件顶掉。
    */
   useEffect(
-    () => setPresentRevealHandler((paths) => handleOpenFiles(paths, 'preview')),
+    () => setPresentRevealHandler((paths) => handleOpenFiles(paths, { view: 'preview', pinned: true })),
     [handleOpenFiles],
   )
 
@@ -1470,7 +1509,7 @@ function ChatView() {
       )}
 
       <div className="chat-main" style={{ position: 'relative' }}>
-        <div className="chat-header">
+        <div className={`chat-header${chatState.value.currentSessionId?" active":""}`}>
           <div className="chat-toolbar">
             <button className="toggle-sidebar-btn" onClick={toggleSidebar}>
               {chatState.value.sidebarOpen ? (
@@ -1648,6 +1687,8 @@ function ChatView() {
         onCloseTab={handleCloseTab}
         onCloseTabs={handleCloseTabs}
         onMoveTab={handleMoveTab}
+        // 双击标签 / 改动了草稿 → 把预览位升级成常驻（标签订阅口径在 `tabs.ts::pinTab`）
+        onPinTab={handlePinTab}
         onDirtyChange={handleFileDirtyChange}
         // 占满（聊天区不足 300px）→ 把聊天区藏起来，面板接管整块宽度
         onExpandedChange={setFilePanelFull}

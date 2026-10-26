@@ -530,6 +530,29 @@ svg {
   fill: var(--icon-color);
 }
 
+/* ===== 斜体（全局，html 语义标签） =====
+   背景：界面字体 `AlimamaAgileVF-Thin` **没有 italic 字面**，而本文件的
+   `:root { font-synthesis: none }` 又把浏览器的合成斜体关了 —— 所以直接写
+   `font-style: italic` 在本项目里是**空的**（markdown 的 `*斜体*` 一直没斜，就是因为这个）。
+   实测（无头 Chrome 截图）能真的斜起来的三条缺一不可：
+   1. `font-style: italic` —— 有真 italic 字面的字体（Consolas 等）靠它选字面；
+   2. `font-synthesis-style: auto` —— 只在这一层把合成开回来（`:root` 的 `none` 仍生效）；
+      中文走系统回退字体，没有斜体字面，就靠它合成；
+   3. `font-variation-settings: 'slnt' 12` —— 这款变量字体自带 `slnt` 轴（0→12），
+      给它轴值就是**真斜体字形**（单层 a、更窄的字母），比合成斜体好看。
+   ⚠️ 三条同时写**不会**叠成双重斜体（实测：拉丁与第 3 条一致，中文才走第 2 条的合成）。
+   ⚠️ 反过来也别把 `:root` 的 `font-synthesis: none` 拆了 —— 那是为了禁止「假粗体」，
+   斜体只在这几个语义标签上单独放行。
+   ⚠️ 行内元素不能用 `transform: skewX()` 代替（`transform` 对非替换行内盒不生效，
+   加 `inline-block` 又会让长段斜体跨不了行）—— skew 只适合短标签（见右侧面板的预览位标签）。 */
+em,
+i,
+cite {
+  font-style: italic;
+  font-synthesis-style: auto;
+  font-variation-settings: 'slnt' 12;
+}
+
 /* ===== 无障碍：尊重系统「减弱动态效果」 =====
    影响：工作指示器流光/涟漪、光标闪烁、logo 入场、弹窗淡入等全部降级为静态。
    已核查：本项目中没有任何元素「靠动画才能可见」（无 opacity:0 + animation 且无 forwards），
