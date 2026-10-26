@@ -313,20 +313,20 @@
       },
       {
         "name": "present",
-        "description": "Declare existing files as final deliverables for the user. Use it when the user needs a separate file; prefer your final response when that suffices. The file must already exist — this tool never creates, converts or copies anything: write / generate it first with the file tools or execute_command. On desktop each presented path is opened as a tab in the app's side panel, so only types the panel can preview are accepted: Markdown (md, markdown), HTML (html, htm, xhtml), SVG (svg), CSV/TSV (csv, tsv), plain text and source code, images (png, jpg, jpeg, jfif, gif, webp, bmp, ico, avif), audio (mp3, wav, ogg, oga, m4a, flac, aac, opus, weba), video (mp4, webm, ogv, mov, m4v, mkv), PDF (pdf), Word (docx, doc), Excel (xlsx, xls), PowerPoint (pptx, ppt) and 3D models (glb, gltf, fbx, obj, stl, ply, dae, 3ds, 3mf, amf, wrl, vrml, pcd). Any other type (OpenDocument, archives, executables, fonts, PSD/AI/Sketch, SQLite…) cannot be previewed: it is reported as skipped and nothing is opened, so export it to a supported format first.",
+        "description": "Declare existing files as final deliverables for the user. Use it when the user needs a separate file; prefer your final response when that suffices. The file must already exist — this tool never creates, converts or copies anything: write / generate it first with the file tools or execute_command. On desktop each presented path is opened as a tab in the app's side panel, so only types the panel can preview are accepted: Markdown (md, markdown), HTML (html, htm, xhtml), SVG (svg), CSV/TSV (csv, tsv), plain text and source code, images (png, jpg, jpeg, jfif, gif, webp, bmp, ico, avif), audio (mp3, wav, ogg, oga, m4a, flac, aac, opus, weba), video (mp4, webm, ogv, mov, m4v, mkv), PDF (pdf), Word (docx, doc), Excel (xlsx, xls), PowerPoint (pptx, ppt) and 3D models (glb, gltf, fbx, obj, stl, ply, dae, 3ds, 3mf, amf, wrl, vrml, pcd). Any other type (OpenDocument, archives, executables, fonts, PSD/AI/Sketch, SQLite…) cannot be previewed: it is reported as skipped and nothing is opened, so export it to a supported format first. An http(s) URL is also accepted in `path` / `paths`: it is opened as a browser tab in the side panel (only http/https, no credentials).",
         "parameters": {
           "type": "object",
           "properties": {
             "path": {
               "type": "string",
-              "description": "File path (relative to workspace or absolute). Use this for a single file. The type must be one the side panel can preview (see the tool description)."
+              "description": "File path (relative to workspace or absolute), or an http(s) URL. Use this for a single deliverable. A URL is opened in the side panel's browser tab; a file must be a type the side panel can preview (see the tool description)."
             },
             "paths": {
               "type": "array",
               "items": {
                 "type": "string"
               },
-              "description": "Array of file paths to present in one call. At most 10 files; the first one becomes the active tab. Every path must be a previewable type (see the tool description)."
+              "description": "Array of file paths and/or http(s) URLs to present in one call. At most 10 deliverables (files and URLs counted together); the first one becomes the active tab. Every file path must be a previewable type (see the tool description)."
             }
           },
           "oneOf": [
@@ -1386,20 +1386,20 @@
       },
       {
         "name": "present",
-        "description": "Declare existing files as final deliverables for the user. Use it when the user needs a separate file; prefer your final response when that suffices. The file must already exist — this tool never creates, converts or copies anything: write / generate it first with the file tools or execute_command. On desktop each presented path is opened as a tab in the app's side panel, so only types the panel can preview are accepted: Markdown (md, markdown), HTML (html, htm, xhtml), SVG (svg), CSV/TSV (csv, tsv), plain text and source code, images (png, jpg, jpeg, jfif, gif, webp, bmp, ico, avif), audio (mp3, wav, ogg, oga, m4a, flac, aac, opus, weba), video (mp4, webm, ogv, mov, m4v, mkv), PDF (pdf), Word (docx, doc), Excel (xlsx, xls), PowerPoint (pptx, ppt) and 3D models (glb, gltf, fbx, obj, stl, ply, dae, 3ds, 3mf, amf, wrl, vrml, pcd). Any other type (OpenDocument, archives, executables, fonts, PSD/AI/Sketch, SQLite…) cannot be previewed: it is reported as skipped and nothing is opened, so export it to a supported format first.",
+        "description": "Declare existing files as final deliverables for the user. Use it when the user needs a separate file; prefer your final response when that suffices. The file must already exist — this tool never creates, converts or copies anything: write / generate it first with the file tools or execute_command. On desktop each presented path is opened as a tab in the app's side panel, so only types the panel can preview are accepted: Markdown (md, markdown), HTML (html, htm, xhtml), SVG (svg), CSV/TSV (csv, tsv), plain text and source code, images (png, jpg, jpeg, jfif, gif, webp, bmp, ico, avif), audio (mp3, wav, ogg, oga, m4a, flac, aac, opus, weba), video (mp4, webm, ogv, mov, m4v, mkv), PDF (pdf), Word (docx, doc), Excel (xlsx, xls), PowerPoint (pptx, ppt) and 3D models (glb, gltf, fbx, obj, stl, ply, dae, 3ds, 3mf, amf, wrl, vrml, pcd). Any other type (OpenDocument, archives, executables, fonts, PSD/AI/Sketch, SQLite…) cannot be previewed: it is reported as skipped and nothing is opened, so export it to a supported format first. An http(s) URL is also accepted in `path` / `paths`: it is opened as a browser tab in the side panel (only http/https, no credentials).",
         "parameters": {
           "type": "object",
           "properties": {
             "path": {
               "type": "string",
-              "description": "File path (relative to workspace or absolute). Use this for a single file. The type must be one the side panel can preview (see the tool description)."
+              "description": "File path (relative to workspace or absolute), or an http(s) URL. Use this for a single deliverable. A URL is opened in the side panel's browser tab; a file must be a type the side panel can preview (see the tool description)."
             },
             "paths": {
               "type": "array",
               "items": {
                 "type": "string"
               },
-              "description": "Array of file paths to present in one call. At most 10 files; the first one becomes the active tab. Every path must be a previewable type (see the tool description)."
+              "description": "Array of file paths and/or http(s) URLs to present in one call. At most 10 deliverables (files and URLs counted together); the first one becomes the active tab. Every file path must be a previewable type (see the tool description)."
             }
           },
           "oneOf": [
@@ -2459,20 +2459,20 @@
       },
       {
         "name": "present",
-        "description": "Declare existing files as final deliverables for the user. Use it when the user needs a separate file; prefer your final response when that suffices. The file must already exist — this tool never creates, converts or copies anything: write / generate it first with the file tools or execute_command. On desktop each presented path is opened as a tab in the app's side panel, so only types the panel can preview are accepted: Markdown (md, markdown), HTML (html, htm, xhtml), SVG (svg), CSV/TSV (csv, tsv), plain text and source code, images (png, jpg, jpeg, jfif, gif, webp, bmp, ico, avif), audio (mp3, wav, ogg, oga, m4a, flac, aac, opus, weba), video (mp4, webm, ogv, mov, m4v, mkv), PDF (pdf), Word (docx, doc), Excel (xlsx, xls), PowerPoint (pptx, ppt) and 3D models (glb, gltf, fbx, obj, stl, ply, dae, 3ds, 3mf, amf, wrl, vrml, pcd). Any other type (OpenDocument, archives, executables, fonts, PSD/AI/Sketch, SQLite…) cannot be previewed: it is reported as skipped and nothing is opened, so export it to a supported format first.",
+        "description": "Declare existing files as final deliverables for the user. Use it when the user needs a separate file; prefer your final response when that suffices. The file must already exist — this tool never creates, converts or copies anything: write / generate it first with the file tools or execute_command. On desktop each presented path is opened as a tab in the app's side panel, so only types the panel can preview are accepted: Markdown (md, markdown), HTML (html, htm, xhtml), SVG (svg), CSV/TSV (csv, tsv), plain text and source code, images (png, jpg, jpeg, jfif, gif, webp, bmp, ico, avif), audio (mp3, wav, ogg, oga, m4a, flac, aac, opus, weba), video (mp4, webm, ogv, mov, m4v, mkv), PDF (pdf), Word (docx, doc), Excel (xlsx, xls), PowerPoint (pptx, ppt) and 3D models (glb, gltf, fbx, obj, stl, ply, dae, 3ds, 3mf, amf, wrl, vrml, pcd). Any other type (OpenDocument, archives, executables, fonts, PSD/AI/Sketch, SQLite…) cannot be previewed: it is reported as skipped and nothing is opened, so export it to a supported format first. An http(s) URL is also accepted in `path` / `paths`: it is opened as a browser tab in the side panel (only http/https, no credentials).",
         "parameters": {
           "type": "object",
           "properties": {
             "path": {
               "type": "string",
-              "description": "File path (relative to workspace or absolute). Use this for a single file. The type must be one the side panel can preview (see the tool description)."
+              "description": "File path (relative to workspace or absolute), or an http(s) URL. Use this for a single deliverable. A URL is opened in the side panel's browser tab; a file must be a type the side panel can preview (see the tool description)."
             },
             "paths": {
               "type": "array",
               "items": {
                 "type": "string"
               },
-              "description": "Array of file paths to present in one call. At most 10 files; the first one becomes the active tab. Every path must be a previewable type (see the tool description)."
+              "description": "Array of file paths and/or http(s) URLs to present in one call. At most 10 deliverables (files and URLs counted together); the first one becomes the active tab. Every file path must be a previewable type (see the tool description)."
             }
           },
           "oneOf": [

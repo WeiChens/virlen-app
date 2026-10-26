@@ -16,6 +16,7 @@ import CodeBlock from './code-block'
 import LocalImage from '@/ui/components/shared/LocalImage'
 import { splitStablePrefix } from './streamMarkdown'
 import { allowImageSrc } from './markdown-url'
+import { handleMarkdownLinkClick } from './markdown-link'
 import './markdown-renderer.scss'
 
 /** 稳定的 remark 插件数组（避免每次渲染新建数组） */
@@ -73,11 +74,19 @@ interface Props {
 function LinkRenderer({ href, children, ...props }: any) {
   return (
     <a
+      {...props}
       href={href}
       target="_blank"
       rel="noopener noreferrer"
       className="md-link"
-      {...props}>
+      /*
+       * http(s) 链接开在**右侧栏的网页标签**里（回复里点文档 / 仓库，看完顺手接着聊，也不用
+       * 把窗口切成两个）；`#锚点` / 相对路径 / `mailto:` 与带修饰键的点击都不接管，保持原行为。
+       * 没人接管（不在聊天页 / 用例里）时 `handleMarkdownLinkClick` 返回 false → 不 preventDefault。
+       */
+      onClick={(e: any) => {
+        if (handleMarkdownLinkClick(e, href)) e.preventDefault()
+      }}>
       {children}
     </a>
   )

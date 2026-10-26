@@ -180,6 +180,53 @@
   gap: 6px;
 }
 
+/* 交付网址：与文件条同一套「一格一个」的观感，主机优先、地址接在后面（过长就省略） */
+.present-links {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.present-link {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  background: var(--bg-primary, #fff);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+
+  &:hover {
+    background: var(--hover-bg, rgba(0, 0, 0, 0.04));
+    border-color: var(--primary-color, #3b6ef6);
+  }
+
+  .present-link-host {
+    flex-shrink: 0;
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+  }
+
+  /* 剩下的部分都是路径：挤不下就打省略号，不让它把卡片擑宽 */
+  .present-link-url {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--font-size-xs);
+    color: var(--text-secondary, #888);
+  }
+}
+
 /* 代码块外面的那层壳：只负责与消息列的左右留白（CodeBlock 自己不管外边距） */
 .code-block-shell {
   padding: 0 10px;

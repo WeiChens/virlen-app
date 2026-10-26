@@ -1,14 +1,17 @@
-//! `present` 工具（原生）— 把**已存在的文件**声明为交付物：右侧面板按标签页打开，不复制内容。
+//! `present` 工具（原生）— 把**已存在的文件**或**网址**声明为交付物：右侧面板按标签页打开，不复制内容。
 //!
-//! 四条口径：
+//! 五条口径：
 //! 1. **只声明、不产出**：路径必须已经存在且是文件。不存在 / 是目录 / 被安全规则挡下的一律记进
 //!    `skipped` 并写进 content —— 绝不为它开一个打不开的标签（UI 只打开 `files` 里那些）；
 //! 2. **类型必须能在右侧面板预览**（见 `preview_ext.rs`）：不可预览的类型（ODF / 压缩包 /
 //!    可执行文件 …）同样只进 `skipped` —— 面板对它只会显示「暂不支持预览 → 在系统程序中打开」，
 //!    那不叫「交付物」，所以宁可报错也不开标签；
-//! 3. **权限判定与其它文件工具同源**（`resolve_safe_path(.., "r", ..)`）：本工具不写盘，
+//! 3. **网址单独一条队列**（`links`）：`http(s)://…` 在面板里开成**网页标签**（`type = "present"`
+//!    的 `links` 字段），不走文件系统那条路。只放行 http(s)（面板的地址校验同一道红线），
+//!    带凭据的地址同样拒掉 —— 它会泄进标签标题与右键菜单；
+//! 4. **权限判定与其它文件工具同源**（`resolve_safe_path(.., "r", ..)`）：本工具不写盘，
 //!    所以只要读得到就不该拒；唯一副作用在 UI（打开标签），由前端按 `uiData.type = "present"` 触发；
-//! 4. **模型侧固定英文 + `uiData` 给 UI**（D2 语义，与其余工具一致）。
+//! 5. **模型侧固定英文 + `uiData` 给 UI**（D2 语义，与其余工具一致）。
 
 use crate::agent::native_tools::common::{arg_str, arg_str_array, resolve_safe_path};
 use crate::agent::native_tools::{NativeToolCtx, NativeToolOutcome};
@@ -17,8 +20,8 @@ use serde_json::{json, Value};
 use super::common::format_size;
 use super::preview_ext::is_previewable;
 
-/// 一次最多声明几个文件：右侧面板是标签页，几十个标签既没人看、打开也慢
-const MAX_FILES: usize = 10;
+/// 一次最多声明几个交付物（文件 + 网址合计）：右侧面板是标签页，几十个标签既没人看、打开也慢
+const MAX_DELIVERABLES: usize = 10;
 
 /// 路径末段（Windows / POSIX 分隔符都认）
 fn file_name_of(path: &str) -> String {
@@ -44,6 +47,39 @@ fn skip_entry(path: &str, reason: impl Into<String>) -> Value {
     json!({ "path": path, "reason": reason.into() })
 }
 
+/// 解析 `http(s)://…` → `(原地址, 主机标签)`。
+///
+/// **故意不引 `url` crate**：全仓只有这一处要判格式，为它加一个依赖不值当。这里只做
+/// 「够用且安全」的三条——**协议白名单**（http(s)）、**主机非空**、**不带 `user:pass@`**
+/// （凭据会泄进标签标题 / 右键菜单）。真正的规范化在前端地址栏那一侧
+/// （`side-panel/browser/url.ts::normalizeAddress`），它拿到的已经是这里筛过的字符串。
+fn parse_http_link(raw: &str) -> Result<(String, String), String> {
+    let text = raw.trim();
+    let lower = text.to_ascii_lowercase();
+    let scheme = if lower.starts_with("https://") {
+        "https"
+    } else if lower.starts_with("http://") {
+        "http"
+    } else {
+        return Err("only http(s) URLs can be opened in the side panel".to_string());
+    };
+    // 前缀是 ASCII，按字节切安全（大小写变体已在 `lower` 上判过）
+    let rest = &text[scheme.len() + 3..];
+    // 主机 = 第一个 `/` `?` `#` 之前那段（含端口）
+    let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..host_end];
+    if authority.is_empty() {
+        return Err("URL has no host".to_string());
+    }
+    if authority.contains('@') {
+        return Err("URL must not carry credentials (user:pass@)".to_string());
+    }
+    if authority.chars().any(char::is_whitespace) {
+        return Err("URL contains whitespace".to_string());
+    }
+    Ok((text.to_string(), authority.to_string()))
+}
+
 fn skip_line(entry: &Value) -> String {
     format!(
         "- {} — {}",
@@ -64,16 +100,35 @@ pub(crate) async fn present_tool(
     }
 
     let mut files: Vec<Value> = Vec::new();
+    let mut links: Vec<Value> = Vec::new();
     let mut skipped: Vec<Value> = Vec::new();
     // 已经收下的绝对路径：同一个文件只开一个标签（标签 id 就是路径），重复声明是模型的小失误
     let mut accepted: Vec<String> = Vec::new();
 
     for input in requested {
-        if files.len() >= MAX_FILES {
+        if files.len() + links.len() >= MAX_DELIVERABLES {
             skipped.push(skip_entry(
                 &input,
-                format!("at most {} files per call", MAX_FILES),
+                format!("at most {} deliverables per call", MAX_DELIVERABLES),
             ));
+            continue;
+        }
+
+        // 网址（带 `://` 的那一类）不是文件：直接进 `links`，**不碰文件系统**
+        //（`resolve_safe_path` 会把 `https://…` 当成不存在的路径拒掉，报出的理由还莫名其妙）
+        if input.contains("://") {
+            match parse_http_link(&input) {
+                Ok((url, host)) => {
+                    if links
+                        .iter()
+                        .any(|l| l.get("url").and_then(|v| v.as_str()) == Some(url.as_str()))
+                    {
+                        continue;
+                    }
+                    links.push(json!({ "url": url, "name": host }));
+                }
+                Err(reason) => skipped.push(skip_entry(&input, reason)),
+            }
             continue;
         }
 
@@ -124,22 +179,26 @@ pub(crate) async fn present_tool(
     }
 
     // 全被跳过 → 当成失败（is_error）：否则模型会以为「已经给用户了」，用户那边什么都没开
-    if files.is_empty() {
+    if files.is_empty() && links.is_empty() {
         let detail = skipped.iter().map(skip_line).collect::<Vec<_>>().join("\n");
         return Ok(NativeToolOutcome::error(format!(
-            "Error: no file was presented; nothing was opened in the side panel.\n{}",
+            "Error: no deliverable was presented; nothing was opened in the side panel.\n{}",
             detail
         )));
     }
 
     let mut lines = vec![format!(
-        "Presented {} file(s) to the user as deliverables (opened in the side panel on desktop; contents are not copied):",
-        files.len()
+        "Presented {} deliverable(s) to the user (opened in the side panel on desktop; contents are not copied):",
+        files.len() + links.len()
     )];
     for file in &files {
         let path = file.get("path").and_then(|v| v.as_str()).unwrap_or("");
         let size = file.get("sizeBytes").and_then(|v| v.as_u64()).unwrap_or(0);
         lines.push(format!("- {} ({})", path, format_size(size as usize)));
+    }
+    for link in &links {
+        let url = link.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        lines.push(format!("- {} (web page, opened in the side panel browser)", url));
     }
     if !skipped.is_empty() {
         lines.push(String::new());
@@ -154,6 +213,7 @@ pub(crate) async fn present_tool(
         ui_data: Some(json!({
             "type": "present",
             "files": files,
+            "links": links,
             "skipped": skipped,
         })),
     })
@@ -213,7 +273,7 @@ mod tests {
 
         match outcome {
             NativeToolOutcome::Value { content, ui_data } => {
-                assert!(content.contains("Presented 1 file(s)"), "content: {content}");
+                assert!(content.contains("Presented 1 deliverable(s)"), "content: {content}");
                 assert!(content.contains("Skipped 2 path(s)"), "content: {content}");
                 let ui = ui_data.expect("应下发 uiData");
                 assert_eq!(ui.get("type").and_then(|v| v.as_str()), Some("present"));
@@ -243,7 +303,7 @@ mod tests {
         match outcome {
             NativeToolOutcome::Error { content, ui_data } => {
                 assert!(
-                    content.contains("no file was presented"),
+                    content.contains("no deliverable was presented"),
                     "content: {content}"
                 );
                 assert!(content.contains("file does not exist"), "content: {content}");
@@ -299,12 +359,104 @@ mod tests {
         let outcome = run(&dir, json!({ "path": "表.ods" })).await;
         match outcome {
             NativeToolOutcome::Error { content, .. } => {
-                assert!(content.contains("no file was presented"), "content: {content}");
+                assert!(
+                    content.contains("no deliverable was presented"),
+                    "content: {content}"
+                );
                 assert!(content.contains("cannot be previewed"), "content: {content}");
             }
             other => panic!("expected Error, got {other:?}"),
         }
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 网址与文件可以混着交：网址进 `links`（不碰文件系统），非法的那几种进 `skipped`
+    #[tokio::test]
+    async fn presents_urls_alongside_files() {
+        let dir = temp_dir("url");
+        std::fs::write(dir.join("报表.xlsx"), "x").unwrap();
+
+        let outcome = run(
+            &dir,
+            json!({
+                "paths": [
+                    "https://docs.rs/tokio",
+                    "https://docs.rs/tokio",
+                    "https://user:pass@a.com/",
+                    "ftp://files.example.com/a",
+                    "报表.xlsx"
+                ]
+            }),
+        )
+        .await;
+
+        match outcome {
+            NativeToolOutcome::Value { content, ui_data } => {
+                let ui = ui_data.expect("应下发 uiData");
+                let files = ui.get("files").and_then(|v| v.as_array()).unwrap();
+                let links = ui.get("links").and_then(|v| v.as_array()).unwrap();
+                assert_eq!(files.len(), 1, "只应有 xlsx: {ui}");
+                assert_eq!(links.len(), 1, "同一个网址只开一个标签: {ui}");
+                assert_eq!(
+                    links[0].get("url").and_then(|v| v.as_str()),
+                    Some("https://docs.rs/tokio")
+                );
+                // 标签文字用主机（与前端 `urlLabel` 同口径）
+                assert_eq!(
+                    links[0].get("name").and_then(|v| v.as_str()),
+                    Some("docs.rs")
+                );
+                let skipped = ui.get("skipped").and_then(|v| v.as_array()).unwrap();
+                assert_eq!(skipped.len(), 2, "带凭据 + ftp 都应被跳过: {ui}");
+                assert!(content.contains("Presented 2 deliverable(s)"), "content: {content}");
+                assert!(
+                    content.contains("https://docs.rs/tokio (web page"),
+                    "content: {content}"
+                );
+            }
+            other => panic!("expected Value, got {other:?}"),
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 只交网址也算成功（以前没有文件就当失败）
+    #[tokio::test]
+    async fn url_only_is_a_success() {
+        let dir = temp_dir("url_only");
+        let outcome = run(&dir, json!({ "path": "https://example.com/" })).await;
+        match outcome {
+            NativeToolOutcome::Value { content, ui_data } => {
+                let ui = ui_data.expect("应下发 uiData");
+                assert_eq!(ui.get("files").and_then(|v| v.as_array()).map(|a| a.len()), Some(0));
+                assert_eq!(ui.get("links").and_then(|v| v.as_array()).map(|a| a.len()), Some(1));
+                assert!(content.contains("Presented 1 deliverable(s)"), "content: {content}");
+            }
+            other => panic!("expected Value, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 没主机的地址不算交付物（开出来只会是一张错误页）；协议不是 http(s) 也不行
+    #[tokio::test]
+    async fn malformed_urls_are_skipped() {
+        let dir = temp_dir("bad_url");
+        let outcome = run(&dir, json!({ "paths": ["http://", "file:///C:/a.txt"] })).await;
+        match outcome {
+            NativeToolOutcome::Error { content, .. } => {
+                assert!(
+                    content.contains("no deliverable was presented"),
+                    "content: {content}"
+                );
+                assert!(content.contains("URL has no host"), "content: {content}");
+                assert!(
+                    content.contains("only http(s) URLs can be opened"),
+                    "content: {content}"
+                );
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 

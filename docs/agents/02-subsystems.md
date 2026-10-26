@@ -43,7 +43,7 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 
   | 分类 id | 目录 | 工具数 | 代表工具 |
   |---|---|:--:|---|
-  | `file` | `tools/file/` | 10 | read_file / write_file / edit_file / delete_file / copy_move_file / list_files / file_info / mkdir / parse_document（**文档解析**：PDF / Office / CSV，实现在 `doc_parse`）/ present（**交付物**：声明已有文件 → 右侧面板打开，不复制内容；**只接受面板能预览的类型**，其余记 skipped 报错而不开标签 —— 清单 `native_tools/file/preview_ext.json` ↔ TS 镜像 `domain/files/preview.ts`，由 `src/tests/contracts/present-preview-ext.test.ts` 守） |
+  | `file` | `tools/file/` | 10 | read_file / write_file / edit_file / delete_file / copy_move_file / list_files / file_info / mkdir / parse_document（**文档解析**：PDF / Office / CSV，实现在 `doc_parse`）/ present（**交付物**：声明已有文件 → 右侧面板打开，不复制内容；**网址（http(s)）也收**，在面板里开成网页标签（`uiData.links`，见 §11.57 ⑬）；**文件只接受面板能预览的类型**，其余记 skipped 报错而不开标签 —— 清单 `native_tools/file/preview_ext.json` ↔ TS 镜像 `domain/files/preview.ts`，由 `src/tests/contracts/present-preview-ext.test.ts` 守） |
   | `search` | `tools/search/` | 2 | search_files_by_name / search_text_in_files |
   | `execute` | `tools/execute/` | 2 | execute_command / execute_script |
   | `service` | `tools/service/` | 4 | start_background_service / get_background_service / kill_background_service / list_background_services（后台服务：**工具返回后进程继续活着**，见 §11.47） |

@@ -4,9 +4,10 @@
  *
  * 四条：
  *   ① 存在的文件进 `uiData.files`（前端据此在右侧面板打开），缺失 / 目录进 `skipped`；
- *   ② 同一个文件重复声明只收一次（标签 id 就是路径，重复 = 两个标签抢一份草稿）；
+ *      **http(s) 网址**进 `uiData.links`（开成网页标签），非法的那几种也进 `skipped`；
+ *   ② 同一个文件 / 同一个网址重复声明只收一次（标签 id 就是路径，重复 = 两个标签抢一份草稿）；
  *   ③ 一个都不成立 → 抛错：否则模型会以为「已经交给用户了」，用户那边什么都没开；
- *   ④ `uiData.type = "present"` 是与 Rust / 前端约定的契约（铁律 1）。
+ *   ④ `uiData.type = "present"` / `files[].path` / `links[].url` 是与 Rust / 前端约定的契约（铁律 1）。
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import * as tauriFs from '@tauri-apps/plugin-fs'
@@ -61,7 +62,7 @@ describe('present（JS 回退路径）', () => {
     )) as ToolResult
 
     expect(typeof result).not.toBe('string')
-    expect(result.content).toContain('Presented 1 file(s)')
+    expect(result.content).toContain('Presented 1 deliverable(s)')
     expect(result.content).toContain('Skipped 2 path(s)')
     expect(result.content).toContain('file does not exist')
 
@@ -84,12 +85,58 @@ describe('present（JS 回退路径）', () => {
     expect((result.uiData?.files as unknown[]).length).toBe(1)
   })
 
+  it('网址进 links（不碰文件系统），非法网址 / 非 http(s) 协议进 skipped', async () => {
+    mockStat({ 'out/report.xlsx': { size: 2048 } })
+    const tool = await toolRegistry.get('present')
+
+    const result = (await tool!.executor(
+      {
+        paths: [
+          'https://docs.rs/tokio',
+          'https://docs.rs/tokio',
+          'https://user:pass@a.com/',
+          'ftp://files.example.com/a',
+          'http://',
+          'out/report.xlsx',
+        ],
+      },
+      makeCtx(),
+    )) as ToolResult
+
+    // 同一个网址 / 文件都只收一次：1 文件 + 1 网址
+    expect(result.content).toContain('Presented 2 deliverable(s)')
+    const links = result.uiData?.links as { url: string; name: string }[]
+    expect(links).toHaveLength(1)
+    expect(links[0]).toEqual({ url: 'https://docs.rs/tokio', name: 'docs.rs' })
+
+    const skipped = result.uiData?.skipped as { path: string; reason: string }[]
+    expect(skipped.map((s) => s.path)).toEqual([
+      'https://user:pass@a.com/',
+      'ftp://files.example.com/a',
+      'http://',
+    ])
+    expect(skipped[0].reason).toContain('credentials')
+    expect(skipped[1].reason).toContain('only http(s) URLs')
+    expect(skipped[2].reason).toContain('no host')
+  })
+
+  it('只交网址也算成功（以前没文件就当失败）', async () => {
+    const tool = await toolRegistry.get('present')
+    const result = (await tool!.executor(
+      { path: 'https://example.com/' },
+      makeCtx(),
+    )) as ToolResult
+    expect((result.uiData?.files as unknown[]).length).toBe(0)
+    expect((result.uiData?.links as unknown[]).length).toBe(1)
+    expect(result.content).toContain('Presented 1 deliverable(s)')
+  })
+
   it('一个都不成立 → 抛错（is_error），不让模型误以为已交付', async () => {
     mockStat({})
     const tool = await toolRegistry.get('present')
     await expect(
       tool!.executor({ path: 'missing.docx' }, makeCtx()),
-    ).rejects.toThrow(/no file was presented/)
+    ).rejects.toThrow(/no deliverable was presented/)
   })
 
   it('缺参 → 抛错，并说明要传什么', async () => {

@@ -26,7 +26,7 @@ import type { ChatServiceEvents } from './types'
 import { trayNotifyCompleted } from '@/services/tray-service'
 import { notifyWorkspaceActivity } from '@/services/git-service'
 import { flushTodoDraft } from '@/services/todo-service'
-import { presentedPathsOf, revealPresentedFiles } from '@/services/present-service'
+import { presentedOf, revealPresented } from '@/services/present-service'
 import { t } from '@/ui/i18n'
 import {
   track,
@@ -115,10 +115,10 @@ export function createEventHandler(
         if (event.data?.message) {
           addSessionMessage(sessionId, event.data.message)
           events?.onMessagesUpdate?.(sessionId)
-          // `present`：交付文件直接摊到右侧面板。⚠️ 只认「用户正看着的那个会话」——
+          // `present`：交付文件 / 网址直接摊到右侧面板。⚠️ 只认「用户正看着的那个会话」——
           // 后台会话的工具结果不该把标签页抢过去（切回去还能在卡片里点开）
           if (chatState.value.currentSessionId === sessionId) {
-            revealPresentedFiles(presentedPathsOf(event.data.message))
+            revealPresented(presentedOf(event.data.message))
           }
         }
         // 这次工具可能改了工作区文件 → 排期一次 git 状态刷新（防抖在 git-service）

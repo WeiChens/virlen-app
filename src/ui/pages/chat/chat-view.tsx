@@ -115,6 +115,7 @@ import { getMatch } from '@/utils/common'
 import { getDefaultAgent } from '@/services/agent-service'
 import { repairSessionIfNeeded } from '@/services/chat-service'
 import { setPresentRevealHandler } from '@/services/present-service'
+import { setSidePanelBrowserHandler } from '@/services/browser-open-service'
 import { vision } from '@/infrastructure/vision'
 import type { VisionAnalyzeResult } from '@/infrastructure/vision/types'
 import { buildUserContent } from '@/utils/messageContent'
@@ -607,18 +608,6 @@ function ChatView() {
   )
 
   /**
-   * AI 交付文件（`present` 工具）→ 右侧面板：登记**唯一入口**（`services/present-service`）。
-   * 标签状态在本组件的 state + ref 里，别处拿不到；卸载时注销，避免留下上一个实例的 handler。
-   *
-   * 交付物默认落在「预览」（能预览的类型才有那个 tab），并且是**常驻**标签 ——
-   * present 的语义是给人看，不是给人改，也不该被下一个打开的文件顶掉。
-   */
-  useEffect(
-    () => setPresentRevealHandler((paths) => handleOpenFiles(paths, { view: 'preview', pinned: true })),
-    [handleOpenFiles],
-  )
-
-  /**
    * 右侧面板的工作目录：与文件树、目录树**同一套解析**（会话工作区 → 已选目录 → 全局默认）。
    *
    * 做成函数而不是渲染期常量：终端的 `cwd` 必须在**点的当下**现取（用户可能刚换了工作目录）。
@@ -729,28 +718,57 @@ function ChatView() {
   )
 
   /**
-   * 新建网页标签（开始页的「浏览器」/ `Ctrl + T`）：地址留空，由用户在地址栏里输入。
+   * 新建网页标签：开始页的「浏览器」/ `Ctrl + T` 开空白页；消息里的链接（`url` 非空）
+   * 直接带着地址开。
    *
    * 与终端相反，这里**没有要先做成的事**（不起进程、不需要工作目录），所以同步建标签即可；
    * 从开始页进来同样原地替换（`replaceTabWith`）—— 用户看到的还是刚才那一格。
    */
   const handleOpenBrowser = useCallback(
-    (fromGuide = false) => {
+    (takeGuideSlot = false, url = '') => {
       // 序号只增不减：回收会跟还开着的旧标签撞 id（它全局一份，不按会话分）
       browserSeqRef.current += 1
       const seq = browserSeqRef.current
       const { key, bucket } = bucketNow()
       const tabs = bucket.tabs
       // 两条路都走标签模型：原地接管开始页那一格 / 追加到末尾
-      const tab = scopeTabs(key, [browserTab({ seq })])[0]
+      const tab = scopeTabs(key, [browserTab({ seq, url })])[0]
       const guideId = guideTabIdIn(tabs)
       const next =
-        fromGuide && guideId
+        takeGuideSlot && guideId
           ? replaceTabWith(tabs, tab, guideId)
           : { tabs: [...tabs, tab], activeId: tab.id }
       applyBucketTabs(key, next)
     },
     [applyBucketTabs, bucketNow],
+  )
+
+  /**
+   * Markdown 正文里的链接 → 右侧栏网页标签（`services/browser-open-service` 是唯一出口）。
+   *
+   * 开始页开着就**接管那一格**（用户视线不用跳，标签栏也不会凭空多一格）；否则追加。
+   * 面板收着 / 当前会话没有标签都不影响：落桶时会自动展开（`withBucketTabs`）。
+   */
+  useEffect(
+    () => setSidePanelBrowserHandler((url) => handleOpenBrowser(true, url)),
+    [handleOpenBrowser],
+  )
+
+  /**
+   * 交付物（`present` 工具）→ 右侧面板：登记**唯一入口**（`services/present-service`）。
+   * 标签状态在本组件的 state + ref 里，别处拿不到；卸载时注销，避免留下上一个实例的 handler。
+   *
+   * 文件默认落在「预览」（能预览的类型才有那个 tab），并且是**常驻**标签 ——
+   * present 的语义是给人看，不是给人改，也不该被下一个打开的文件顶掉。
+   * 网址开成**网页标签**；先开网址、后开文件，让文件（交付的主体）落在最后成为激活页。
+   */
+  useEffect(
+    () =>
+      setPresentRevealHandler(({ paths, urls }) => {
+        for (const url of urls) handleOpenBrowser(true, url)
+        if (paths.length > 0) handleOpenFiles(paths, { view: 'preview', pinned: true })
+      }),
+    [handleOpenFiles, handleOpenBrowser],
   )
 
   /**
