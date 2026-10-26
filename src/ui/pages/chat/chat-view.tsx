@@ -62,9 +62,10 @@ import {
   type SidePanelTab,
 } from './components/side-panel/tabs'
 import {
+  adoptNewBucket,
   bucketOf,
   clearBucketTabs,
-  guideTabIdOf,
+  guideTabIdIn,
   isBucketVisible,
   parkedTabsOf,
   panelKeyOf,
@@ -392,6 +393,21 @@ function ChatView() {
   )
 
   /**
+   * 新对话页 → 刚建出来的会话：把 `__new__` 那一桶过继过去（见 `sessions.ts::adoptNewBucket`）。
+   *
+   * 用户在新对话里开的标签（文件 / 终端 / 网页…）不能因为「发了一条消息」就没了 ——
+   * 不过继的话，`sessionId` 一落地右侧栏就换成（空的）新桶，观感上就是右侧栏直接消失。
+   * ⚠️ 必须与 `setValue('currentSessionId', …)` 在**同一个同步块**里调：中间隔一次渲染，
+   * 面板会先按空桶闪一帧。
+   */
+  const adoptPanelBucket = useCallback((key: string) => {
+    const buckets = adoptNewBucket(panelBucketsRef.current, key)
+    if (buckets === panelBucketsRef.current) return
+    panelBucketsRef.current = buckets
+    setPanelBuckets(buckets)
+  }, [])
+
+  /**
    * 关标签前先把里面的**用户终端**杀掉：关标签 = 关终端。
    *
    * 服务终端不走这条 —— 它还留在 AI 的服务注册表里，终止与否是用户在那边的决定；
@@ -630,9 +646,12 @@ function ChatView() {
   const handleOpenFilesPage = useCallback(
     (fromGuide = false) => {
       const { key, bucket } = bucketNow()
-      const next = fromGuide
-        ? replacePageTab(bucket.tabs, 'files', guideTabIdOf(key))
-        : openPageTab(bucket.tabs, 'files')
+      // 开始页按 kind 找（不拿 key 拼 id）：过继来的标签前缀还是新对话页那个
+      const guideId = guideTabIdIn(bucket.tabs)
+      const next =
+        fromGuide && guideId
+          ? replacePageTab(bucket.tabs, 'files', guideId)
+          : openPageTab(bucket.tabs, 'files')
       applyBucketTabs(key, next)
     },
     [applyBucketTabs, bucketNow],
@@ -692,9 +711,9 @@ function ChatView() {
             }),
           ],
         )[0]
-        const guideId = guideTabIdOf(key)
+        const guideId = guideTabIdIn(tabs)
         const next =
-          fromGuide && tabs.some((item) => item.id === guideId)
+          fromGuide && guideId
             ? replaceTabWith(tabs, tab, guideId)
             : { tabs: [...tabs, tab], activeId: tab.id }
         applyBucketTabs(key, next)
@@ -727,9 +746,9 @@ function ChatView() {
       const tabs = bucket.tabs
       // 两条路都走标签模型：原地接管开始页那一格 / 追加到末尾
       const tab = scopeTabs(key, [browserTab({ seq })])[0]
-      const guideId = guideTabIdOf(key)
+      const guideId = guideTabIdIn(tabs)
       const next =
-        fromGuide && tabs.some((item) => item.id === guideId)
+        fromGuide && guideId
           ? replaceTabWith(tabs, tab, guideId)
           : { tabs: [...tabs, tab], activeId: tab.id }
       applyBucketTabs(key, next)
@@ -1250,6 +1269,9 @@ function ChatView() {
           },
         })
       }
+      // 过继新对话页攒下的标签，再切到新会话：否则右侧栏会换成（空的）新桶
+      //（用户观感 = 好端端的右侧栏直接消失，见 `sessions.ts::adoptNewBucket`）
+      adoptPanelBucket(sid)
       chatState.setValue('currentSessionId', sid)
       // 新建会话由本函数自己接管（内存即真相）；登记一下，避免兜底 effect 重新加载把刚加的消息覆盖回去
       // （新会话的消息镜像由 `ChatMessages` 挂载时从 store 初始化，不必在这里清）

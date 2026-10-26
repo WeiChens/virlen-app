@@ -2,7 +2,7 @@
 /**
  * 右侧面板的**会话分桶**（`side-panel/sessions.ts`）—— 「收起 / 切会话不清状态」靠的就是它。
  *
- * 六条被钉住的：
+ * 七条被钉住的：
  * 1. **桶 key = 会话 id**，新对话页（`null`）单独一桶；
  * 2. **标签 id 带会话前缀**：同一个文件在两个会话里各有一份（id 不同、草稿不互相踩），
  *    加前缀是幂等的（宿主会拿着已经带前缀的 id 再走一遍）；
@@ -11,15 +11,18 @@
  * 4. **别的会话的标签是「parked」**：内容照旧交给容器挂着，只是不在当前这一桶里；
  * 5. **关掉当前会话的标签不影响别人**；
  * 6. **会话被删就丢掉它的桶**（并把标签交回宿主杀终端），但新对话页那一桶与当前桶永远保留 ——
- *    会话列表懒加载时可能是空的，那一瞬清桶等于杀用户草稿。
+ *    会话列表懒加载时可能是空的，那一瞬清桶等于杀用户草稿；
+ * 7. **新对话页那一桶过继给刚建出来的会话**（`adoptNewBucket`）：id 一个字都不改（它是容器的
+ *    渲染 key，改了内容块就重挂、草稿与终端屏幕一起没）。
  */
 import { describe, expect, it } from 'vitest'
 
 import {
   NEW_PANEL_KEY,
+  adoptNewBucket,
   bucketOf,
   clearBucketTabs,
-  guideTabIdOf,
+  guideTabIdIn,
   isBucketVisible,
   panelKeyOf,
   parkedTabsOf,
@@ -52,6 +55,11 @@ function openFile(
 ): PanelBuckets {
   const next = openFileTab(bucketOf(buckets, key).tabs, path)
   return withBucketTabs(buckets, key, next)
+}
+
+/** 按宿主的口径往某个会话的桶里开「开始页」（含加前缀） */
+function openGuide(buckets: PanelBuckets, key: string): PanelBuckets {
+  return withBucketTabs(buckets, key, openPageTab(bucketOf(buckets, key).tabs, 'guide'))
 }
 
 describe('会话分桶 · key 与前缀', () => {
@@ -140,12 +148,12 @@ describe('会话分桶 · 落状态', () => {
     expect(withBucketOpen(buckets, S1, false)).toBe(buckets)
   })
 
-  it('开始页 id 也带前缀（两个会话各有一个「开始页」）', () => {
-    expect(guideTabIdOf(S1)).not.toBe(guideTabIdOf(S2))
-    // 宿主的路径：标签模型不管前缀，落桶时统一加
-    const buckets = withBucketTabs({}, S1, openPageTab([], 'guide'))
-    expect(bucketOf(buckets, S1).activeId).toBe(guideTabIdOf(S1))
-    expect(bucketOf(buckets, S1).tabs[0].id).toBe(guideTabIdOf(S1))
+  it('开始页 id 也带会话前缀（两个会话各有一个「开始页」）', () => {
+    const one = withBucketTabs({}, S1, openPageTab([], 'guide'))
+    const two = withBucketTabs({}, S2, openPageTab([], 'guide'))
+    expect(bucketOf(one, S1).tabs[0].id).toBe(`${S1}\u0000guide`)
+    expect(bucketOf(one, S1).tabs[0].id).not.toBe(bucketOf(two, S2).tabs[0].id)
+    expect(bucketOf(one, S1).activeId).toBe(bucketOf(one, S1).tabs[0].id)
   })
 })
 
@@ -205,6 +213,60 @@ describe('会话分桶 · 会话被删', () => {
     const kept = withoutSessions(buckets, new Set<string>(), S1)
     expect(kept.buckets).toBe(buckets)
     expect(kept.dropped).toHaveLength(0)
+  })
+})
+
+describe('会话分桶 · 新对话页过继给刚建出来的会话', () => {
+  it('标签连着 id 一起搬过去（id 是渲染 key，一个字都不能改）', () => {
+    const buckets = openFile(openGuide({}, NEW_PANEL_KEY), NEW_PANEL_KEY, 'E:/repo/a.ts')
+    const before = bucketOf(buckets, NEW_PANEL_KEY)
+
+    const adopted = adoptNewBucket(buckets, S1)
+    const after = bucketOf(adopted, S1)
+
+    expect(after.tabs).toBe(before.tabs)
+    expect(after.tabs[0].id).toBe(`${NEW_PANEL_KEY}\u0000guide`)
+    expect(after.activeId).toBe(before.activeId)
+    expect(after.open).toBe(true)
+    // 过继 = 搬走：新对话页不留副本（下次开始新对话是干干净净的一桶）
+    expect(adopted[NEW_PANEL_KEY]).toBeUndefined()
+    expect(adopted).not.toBe(buckets)
+  })
+
+  it('过继之后继续落状态：前缀不再叠一层，新加的还是按当前会话加', () => {
+    let buckets = adoptNewBucket(openFile({}, NEW_PANEL_KEY, 'E:/repo/a.ts'), S1)
+    const adoptedId = bucketOf(buckets, S1).tabs[0].id
+
+    buckets = withBucketTabs(buckets, S1, openPageTab(bucketOf(buckets, S1).tabs, 'files'))
+    const [file, page] = bucketOf(buckets, S1).tabs
+    expect(file.id).toBe(adoptedId)
+    expect(file.id.split('\u0000')).toHaveLength(2)
+    expect(page.id).toBe(`${S1}\u0000files`)
+  })
+
+  it('目标已经有自己的一桶时不过继（不合并、不覆盖）', () => {
+    let buckets: PanelBuckets = openFile({}, NEW_PANEL_KEY, 'E:/repo/scratch.ts')
+    buckets = openFile(buckets, S1, 'E:/repo/a.ts')
+    expect(adoptNewBucket(buckets, S1)).toBe(buckets)
+    // 新对话页那一桶也不能被动
+    expect(bucketOf(buckets, NEW_PANEL_KEY).tabs).toHaveLength(1)
+  })
+
+  it('没东西可过继 / 目标就是新对话页时返回原引用', () => {
+    const empty: PanelBuckets = {}
+    expect(adoptNewBucket(empty, S1)).toBe(empty)
+    expect(adoptNewBucket(empty, NEW_PANEL_KEY)).toBe(empty)
+
+    const closed: PanelBuckets = openFile({}, NEW_PANEL_KEY, 'E:/repo/a.ts')
+    const cleared = clearBucketTabs(closed, NEW_PANEL_KEY)
+    expect(adoptNewBucket(cleared, S1)).toBe(cleared)
+  })
+
+  it('过继来的开始页按 kind 找得到（拼 key 拼不出来）', () => {
+    const adopted = adoptNewBucket(openGuide({}, NEW_PANEL_KEY), S1)
+    const tabs = bucketOf(adopted, S1).tabs
+    expect(guideTabIdIn(tabs)).toBe(`${NEW_PANEL_KEY}\u0000guide`)
+    expect(guideTabIdIn([])).toBeNull()
   })
 })
 
