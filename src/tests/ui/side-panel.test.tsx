@@ -9,7 +9,8 @@
  * 3. **脏标记汇总**：任一标签脏就上报宿主（切会话 / 切工作目录要拦一下），
  *    标签关掉后顺手归零（否则「任一脏」会一直是 true）；
  * 4. **宽度归容器**：挂载时按「聊天区 + 面板」可用宽度的一半定宽，加标签 / 切标签不重算；
- *    拖宽**没有固定上限**，最多拖到面板占满（上限 = 可用宽度）；
+ *    拖宽**没有固定上限**，最多拖到面板占满（上限 = 可用宽度）；宽度过渡期间还要把
+ *    消息列表的宽度**钉在终值**（`chat-freeze.ts`，否则面板一动内容就跟着一帧一折行）；
  * 5. **占满**：聊天区被压到不足 450px（`CHAT_MIN_WIDTH`）时面板铺满并通知宿主藏起聊天区，卸载时恢复；
  * 6. **拖标签换顺序**：用鼠标事件（HTML5 拖拽在 `dragDropEnabled: true` 下收不到，§11.8），
  *    被拖的标签跟着指针（内联 `transform`），拖动中就地预览、松手才上报一次最终下标
@@ -262,6 +263,8 @@ async function renderPanel(
           onPinTab={onPinTab}
           onDirtyChange={onDirtyChange}
           onExpandedChange={onExpandedChange}
+          // 标签栏右侧那排按钮（全屏也挂在这个条件里）：过渡钉宽用例要点全屏 → 半屏
+          onCollapse={() => {}}
         />
       </>,
     )
@@ -517,6 +520,62 @@ it('宽度：按可用宽度的一半，切标签不重算（重开才重算）'
   layout = { available: 1000, inset: 260 }
   await renderPanel([TAB_A], TAB_A.id)
   expect(panel().style.width).toBe('500px')
+})
+
+/**
+ * 过渡期钉宽（`side-panel/chat-freeze.ts`）：面板宽度一变，同一行的聊天区（`flex: 1`）每帧跟着变，
+ * 不钉住的话消息列表在过渡里一帧一折行（逐行 RO 连发实测 + 虚拟滚动补偿 scrollTop = 一边滑一边抖）。
+ * 这里只验「什么时候钉 / 钉多少 / 什么时候摘」，摘锁时机在 `side-panel-chat-freeze` 单测里。
+ */
+it('过渡期钉宽：展开时钉在终值（可用宽度 − 面板终宽）', async () => {
+  layout = { available: 1200, inset: 260 }
+  await renderPanel([TAB_A], TAB_A.id)
+  const main = document.querySelector<HTMLElement>('.chat-main')!
+  expect(panel().style.width).toBe('600px')
+  expect(main.style.getPropertyValue('--chat-freeze-width')).toBe('600px')
+
+  // 面板卸载时要把变量摘掉：它挂在兄弟节点上，不清就是一条常驻的固定宽度
+  act(() => root?.unmount())
+  root = null
+  expect(main.style.getPropertyValue('--chat-freeze-width')).toBe('')
+})
+
+it('过渡期钉宽：收起按面板终宽 0 算，聊天区铺满整条可用宽度', async () => {
+  layout = { available: 1200, inset: 260 }
+  await renderPanel([TAB_A], TAB_A.id, { collapsed: true })
+  const main = document.querySelector<HTMLElement>('.chat-main')!
+  expect(main.style.getPropertyValue('--chat-freeze-width')).toBe('1200px')
+})
+
+it('过渡期钉宽：占满态（聊天区已被藏起来）不钉', async () => {
+  layout = { available: 500, inset: 260 }
+  await renderPanel([TAB_A], TAB_A.id)
+  expect(panel().classList.contains('is-full')).toBe(true)
+  const main = document.querySelector<HTMLElement>('.chat-main')!
+  expect(main.style.getPropertyValue('--chat-freeze-width')).toBe('')
+})
+
+/**
+ * 全屏 → 半屏这一路最容易漏：进入占满态时不钉（聊天区 `display: none`），退出时必须**重新钉住**。
+ * 真机上这一帧聊天区宽度还正好是 0（面板还占着整块），从 0 一路涨到终值的每一帧都会折一次行。
+ */
+it('过渡期钉宽：退出全屏（全屏 → 半屏）要重新钉回半屏的终值', async () => {
+  layout = { available: 1200, inset: 260 }
+  await renderPanel([TAB_A], TAB_A.id)
+  const main = document.querySelector<HTMLElement>('.chat-main')!
+  const fullBtn = () =>
+    document.querySelector<HTMLButtonElement>('.side-panel-tabbar-action.is-fullscreen')!
+  expect(main.style.getPropertyValue('--chat-freeze-width')).toBe('600px')
+
+  // 进全屏：面板接管整块宽度，钉宽没有意义 → 变量摘掉
+  await act(async () => fullBtn().click())
+  expect(panel().classList.contains('is-full')).toBe(true)
+  expect(main.style.getPropertyValue('--chat-freeze-width')).toBe('')
+
+  // 退出全屏：面板 1200 → 600 开始过渡，钉的仍是终值 600（不是过渡起点的 0）
+  await act(async () => fullBtn().click())
+  expect(panel().classList.contains('is-full')).toBe(false)
+  expect(main.style.getPropertyValue('--chat-freeze-width')).toBe('600px')
 })
 
 /** 聊天区连 450 都留不住：面板占满，并通知宿主把聊天区先藏起来 */

@@ -477,7 +477,7 @@ $accent-mix-usermsg-dark-brand: 45%; // mix(brand, #fff, 45%)
      （code-block.scss 的 .code-block-fullscreen-layer）共用这一份，避免两边各写一个 30px */
   --window-top-bar-height: 30px;
   /* 聊天区 header 的两行：顶部工具栏 + （有会话时的）「对话 / 轨迹」tab 条（含 1px 底边线） */
-  --chat-toolbar-h: 36px;
+  --chat-toolbar-h: 42px;
   /* = margin-top 2 + 文字行高 16 + 下划线留白 14（components/tabs/style.scss） */
   --chat-view-tabs-h: 32px;
   /* 右侧面板的两行，**只保证两者之和 = `.chat-header`**（40 + 32 + 1 = 73）：
@@ -486,7 +486,7 @@ $accent-mix-usermsg-dark-brand: 45%; // mix(brand, #fff, 45%)
      ⚠️ 跨实现镜像：每个标签页的 header 一律写 `height: var(--side-panel-head-h)`，
      不要再各自写一套上下 padding（一页一个高度，底线就永远对不上）；
      改这三个数就得重算 `36 + 33 = 69`，否则接缝处露出台阶（用例扫令牌钉住）。 */
-  --side-panel-tabbar-h: 36px;
+  --side-panel-tabbar-h: 42px;
   --side-panel-head-h: 33px;
   /* ===== 提交图（与主题无关；颜色在上面两个主题块里） =====
      ⚠️ 行高是**硬编码像素**、不跟界面字号缩放：canvas 的行坐标（`~ 行号 × 行高`）全靠它，

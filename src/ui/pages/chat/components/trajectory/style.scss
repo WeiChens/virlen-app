@@ -901,7 +901,7 @@ $columns-narrow: 46px 50px minmax(0, 1fr) 70px;
   line-height: 17px;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 60vh;
+  // max-height: 60vh;
   overflow: auto;
 
   &.is-mono {

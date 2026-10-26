@@ -77,8 +77,7 @@
 .browser-address {
   flex: 1 1 auto;
   min-width: 0;
-  /* 28：这一行 37px（含 1px 底线），上下还能留 4px 呼吸 */
-  height: 28px;
+  height: 26px;
   padding: 0 8px;
   border: 1px solid var(--border-color, #e5e5e5);
   border-radius: 6px;

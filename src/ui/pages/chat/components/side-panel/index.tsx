@@ -60,6 +60,7 @@ import Guide from './guide'
 import BrowserPane from './browser/BrowserPane'
 import { urlLabel } from './browser/url'
 import { isPreviewTab, moveTab, tabLabel, type SidePanelTab } from './tabs'
+import { freezeChatWidth } from './chat-freeze'
 import { paneSessionIdOf } from './sessions'
 import { wheelScrollLeft } from './tab-scroll'
 import { useNativeDropTarget } from '@/ui/hooks/useNativeFileDrop'
@@ -306,6 +307,22 @@ function SidePanel({
    * **拖动中一律按 `width`**：否则从占满态往回拖，前 450px（`CHAT_MIN_WIDTH`）面板一动不动，手柄就像坏的。
    */
   const shownWidth = expanded && !resizing ? available : width
+
+  /**
+   * 面板宽度一变，同一行的聊天区（`flex: 1`）就跟着变 —— 过渡那 200ms 里消息列表会被
+   * 一帧一帧地重新折行（抖 + 掉帧，见 `chat-freeze.ts` 头注释）。这里在**过渡开始的那一帧**
+   * （layout effect：DOM 已改、还没画）把消息列表的宽度钉到终值，过渡窗口过去再放开。
+   *
+   * - 拖动中不钉：宽度本来就跟手，钉住反而看不见自己在拖什么（`.is-resizing` 也关掉了过渡）；
+   * - 进 / 出占满态是一对：**进**去时聊天区是 `display: none`（没得钉），**退**出来时最该钉 ——
+   *   而那一刻它还是 `display: none`（`is-file-full` 是宿主在面板的 passive effect 里才去掉的，
+   *   比这里晚一拍），所以左缘用 `insetRef` 兜底（见 `chat-freeze.ts`）；
+   * - `available` 也在依赖里：窗口 / 左侧栏一改可用宽度就按新布局重钉一次（面板可能随之定宽）。
+   */
+  useLayoutEffect(() => {
+    if (resizing || expanded) return undefined
+    return freezeChatWidth(chatMainOf(panelRef.current), collapsed ? 0 : width, insetRef.current)
+  }, [resizing, expanded, collapsed, width, available])
 
   // 收起时把全屏态一并退掉：再展开时回到用户拖出来的宽度，而不是莫名其妙又占满
   useEffect(() => {

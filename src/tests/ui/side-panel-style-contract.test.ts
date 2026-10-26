@@ -29,6 +29,8 @@
  *    又关掉了合成斜体；`font-synthesis-style: auto` 与 `@font-face { font-style: oblique … }`
  *    也都实测不出斜体）。字体自带的 `slnt` 轴能出**真斜体**，但只改拉丁字形 —— 中文文件名的
  *    标签一点不斜。所以这里用**几何倾斜**（`transform: skewX`），中英文与字体回退全都盖到。
+ * ⑩ **过渡期的消息列表宽度钉在终值**（`chat-freeze.ts`）：变量名 / 读取点 / 摘锁时长是一对
+ *    跨文件契约，对不上就是「钉不住」或「提前放开」，而两者都是零报错。
  */
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -43,6 +45,7 @@ const BROWSER_SCSS = 'src/ui/pages/chat/components/side-panel/browser/style.scss
 const CONSOLE_SCSS = 'src/ui/pages/chat/components/service/style.scss'
 const TABS_SCSS = 'src/ui/pages/chat/components/tabs/style.scss'
 const CHAT_VIEW_SCSS = 'src/ui/pages/chat/chat-view.scss'
+const MESSAGE_LIST_SCSS = 'src/ui/pages/chat/components/message/message-list.scss'
 const THEME_SCSS = 'src/ui/styles/theme.scss'
 
 function readProjectFile(rel: string): string {
@@ -311,6 +314,35 @@ describe('右侧面板容器 · 样式契约', () => {
     expect(/\.side-panel\.is-resizing\s*\{([^}]*)\}/.exec(panelCss)?.[1]).toContain(
       'transition: none',
     )
+  })
+
+  /**
+   * ⑩ **过渡期钉宽是一对跨文件契约**：`chat-freeze.ts` 把消息列表宽度钉在终值（否则面板一动，
+   *    消息列表每帧折行 = 抖 + 掉帧）。三处一旦对不上都是零报错、只在界面上出问题：
+   *    变量名写错 → 读不到、钉不住；读取点丢了 `var()` → 白写；摘锁时长与样式表不一致 →
+   *    提前放开（最后几帧又折行）或拖得太久（内容卡在固定宽度）。
+   */
+  it('过渡期钉宽：变量名 / 读取点 / 摘锁时长三处对得上', () => {
+    const freezeSrc = readProjectFile('src/ui/pages/chat/components/side-panel/chat-freeze.ts')
+    const listCss = stripComments(sass.compileString(readProjectFile(MESSAGE_LIST_SCSS)).css)
+
+    const varName = /CHAT_FREEZE_VAR = '(--[a-z-]+)'/.exec(freezeSrc)?.[1]
+    expect(varName, 'chat-freeze.ts 里的变量名').toBeTruthy()
+
+    const container = /\.chat-messages-container\s*\{([^}]*)\}/.exec(listCss)?.[1]
+    expect(container, '消息列表容器规则').toBeTruthy()
+    expect(container, '宽度要读 chat-freeze.ts 写的那条变量，缺省回到自适应').toContain(
+      `width: var(${varName}, auto)`,
+    )
+
+    // 挂在 `.chat-main` 上：变量只往下流进消息列表，面板里的树 / 终端不受牵连
+    expect(freezeSrc).toContain('main.style.setProperty(CHAT_FREEZE_VAR')
+
+    const freezeMs = Number(/PANEL_WIDTH_MOTION_MS = (\d+)/.exec(freezeSrc)?.[1])
+    const panelWidthMs = Number(
+      /width\s+(\d+)ms/.exec(/\.side-panel\s*\{([^}]*)\}/.exec(panelCss)?.[1] ?? '')?.[1],
+    )
+    expect(freezeMs).toBe(panelWidthMs)
   })
 
   it('标签的强调层级：激活 > 悬停 > 常态，两档主题都成立', () => {

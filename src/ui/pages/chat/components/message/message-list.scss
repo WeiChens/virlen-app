@@ -213,6 +213,14 @@
 .chat-messages-container {
   flex: 1;
   overflow-y: auto;
+  /*
+   * 宽度默认跟着 `.chat-main` 自适应；右侧栏展开 / 全屏 / 收起的**过渡期间**，面板会把
+   * 终值写进 `--chat-freeze-width`（挂在 `.chat-main` 上，见 `side-panel/chat-freeze.ts`）。
+   * 不钉住的话，面板每动一像素的消息列表就要重新折行一次 → 逐行 RO 连发实测、
+   * 虚拟滚动再按行高差补偿 scrollTop，观感是「一边滑一边抖」（长会话还会掉帧）。
+   * ⚠️ 变量名与 `chat-freeze.ts` 成对：只有那边写入、这里读取，改名要一起改。
+   */
+  width: var(--chat-freeze-width, auto);
   // 上下内边距改由虚拟容器（paddingStart/paddingEnd）承担，
   // 保证虚拟滚动计算出的偏移与真实布局完全一致。
   // 虚拟滚动自行做滚动锚定，禁用浏览器原生 scroll anchoring 以免相互干扰。
