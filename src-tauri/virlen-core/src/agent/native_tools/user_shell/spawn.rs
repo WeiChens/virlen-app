@@ -16,11 +16,14 @@
 //! 同一个 Job 兜底、同一套输出推送。加第五种 shell 只需要在 `shells.rs` 里加一个 kind。
 
 use std::path::Path;
+#[cfg(target_os = "windows")]
 use std::sync::Arc;
 
+#[cfg(target_os = "windows")]
 use super::super::execute::common::{kill_process_tree, Terminator};
+#[cfg(target_os = "windows")]
 use super::super::service::ServicePty;
-use super::shells::{self, ShellKind};
+use super::shells::ShellKind;
 use super::Spawned;
 
 /// 起一个交互 shell。
@@ -39,7 +42,7 @@ pub(super) fn spawn_shell(
     };
 
     // 先解析：没装就**在创建伪控制台之前**失败，不留下半截资源
-    let (program, args) = shells::resolve(kind)?;
+    let (program, args) = super::shells::resolve(kind)?;
 
     // 前端量不到尺寸时会传 0：夹到「能跑起来的最小终端」，真实尺寸随后就到。
     let cols = cols.clamp(20, 500) as i16;
