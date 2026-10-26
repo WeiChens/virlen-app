@@ -2,8 +2,8 @@
 /**
  * 「取消」不是错误：被取代 / 被用户叫停的那次 git 调用**不许**落到 `gitStore.error`。
  *
- * 链路：`refreshStatus` / `refreshStats` 起新的一次前会 `stopTask` 旧 task，`cancelSync()`
- * （同步浮层的「取消」）也会停 —— Rust 侧 `exec` 的取消分支回的是
+ * 链路：`refreshStatus` / `refreshStats` 起新的一次前会 `stopTask` 旧 task，`cancelSync()` 也会停 ——
+ * Rust 侧 `exec` 的取消分支回的是
  * 「git 操作已取消」。如果前端把它当普通失败写进 `error`，面板上就会长期挂着一行红字：
  * `refreshStatus` 成功时刻意**不清** `error`（那是有意的，见 service 里的注释），所以它不会
  * 自己消失，直到下一次写操作 / 同步 / 换工作目录。
@@ -158,7 +158,7 @@ it('行数统计被取代：同样是静默的', async () => {
   expect(gitStore.stats).toEqual(STATS)
 })
 
-it('同步被用户取消（浮层的「取消」）：不写 error、不弹错误窗、不 toast 成功', async () => {
+it('同步被 cancelSync 叫停：不写 error、不弹错误窗、不 toast 成功', async () => {
   const pending = deferred<never>()
   ipc.fetchRemote.mockReturnValueOnce(pending.promise)
 

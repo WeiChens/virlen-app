@@ -28,9 +28,11 @@ import {
   abortPick,
   commit,
   discard,
+  fetchRemote,
   loadCommitDetail,
+  pullRemote,
+  pushRemote,
   refreshBranches,
-  refreshRemotes,
   resumePick,
   stage,
   syncNow,
@@ -48,7 +50,6 @@ import MoreSvg from '@/ui/components/icons/MoreSvg'
 import GitChangeRow, { type GitRowTarget } from './GitChangeRow'
 import GitBranchMenu from './GitBranchMenu'
 import GitMergeMenu from './GitMergeMenu'
-import GitSyncMenu from './GitSyncMenu'
 import GitDiffModal from './GitDiffModal'
 import GitLogModal from './GitLogModal'
 import GitGraphModal from './GitGraphModal'
@@ -120,8 +121,6 @@ export const GitPanel = observer(function GitPanel({
   const [diffTarget, setDiffTarget] = useState<GitRowTarget | null>(null)
   const [logOpen, setLogOpen] = useState(false)
   const [graphOpen, setGraphOpen] = useState(false)
-  /** 远程浮层（获取 / 拉取 / 推送 / 测试连接） */
-  const [syncMenuOpen, setSyncMenuOpen] = useState(false)
   /**
    * 贮藏浮层（列表 + 新建）：面板里放不下第三块常驻区域，收进「更多」
    */
@@ -135,8 +134,8 @@ export const GitPanel = observer(function GitPanel({
   const [amend, setAmend] = useState(false)
   /** 变更列表当前 tab（`sections` 的 key）：一次只看一段 */
   const [tab, setTab] = useState<GitSectionKey>('unstaged')
-  /** 头部「更多」菜单：同步浮层 / 合并浮层 / 贮藏浮层 / 撤销上次提交 / 修改上一次提交 ——
-   * 五项都不常用，常驻会挤掉分支名 */
+  /** 头部「更多」菜单：三个远程动作 / 合并浮层 / 贮藏浮层 / 撤销上次提交 / 修改上一次提交 ——
+   * 都不常用，常驻会挤掉分支名 */
   const more = useContextMenu()
   const moreBtnRef = useRef<HTMLButtonElement>(null)
 
@@ -298,23 +297,35 @@ export const GitPanel = observer(function GitPanel({
     more.openAtPoint({ x: rect.right, y: rect.bottom + 4 }, undefined)
   }
 
-  /** 头部菜单项：高频动作仍是分支 / 落差 / 记录 / 图 / 刷新，这里只放不常用的（同步 / 合并 / 贮藏 / 撤销提交 / amend） */
+  /** 头部菜单项：高频动作仍是分支 / 落差 / 记录 / 图 / 刷新，这里只放不常用的
+   *（获取 / 拉取 / 推送 / 合并 / 贮藏 / 撤销提交 / amend） */
   function moreItems(): ContextMenuItem[] {
     const items: ContextMenuItem[] = [
       {
-        key: 'sync',
-        label: t('同步远程（获取 / 拉取 / 推送）'),
-        // 开浮层本身是读操作，只读沙盒下也能看地址、测连接
-        disabled: busy,
-        onClick: () => {
-          if (!syncMenuOpen) void refreshRemotes()
-          setSyncMenuOpen(true)
-        },
+        key: 'fetch',
+        label: t('获取远程更新'),
+        // 三个远程动作都是写操作（要过 Rust 的写闸）：只读沙盒 / 忙时一律禁用
+        disabled,
+        onClick: () => void fetchRemote(),
+      },
+      {
+        key: 'pull',
+        label: t('拉取远程更新'),
+        // 拉取 / 推送按分支名进行 —— 游离 HEAD 上没有这个前提（Rust 侧同样会拒）
+        disabled: disabled || !head?.branch,
+        onClick: () => void pullRemote(),
+      },
+      {
+        key: 'push',
+        label: t('推送本地提交'),
+        disabled: disabled || !head?.branch,
+        onClick: () => void pushRemote(),
       },
     ]
     items.push({
       key: 'merge',
       label: t('合并分支…'),
+      divider: true,
       // 开浮层是读操作（只读沙盒下也能看分支列表）；真正合并的那一下在浮层里再按只读 / busy 禁用。
       // 没有提交时合并无从谈起（HEAD 还没诞生）
       disabled: busy || !head?.oid,
@@ -694,10 +705,6 @@ export const GitPanel = observer(function GitPanel({
           disabled={disabled}
           onClose={() => setBranchMenuOpen(false)}
         />
-      )}
-
-      {syncMenuOpen && (
-        <GitSyncMenu readonly={readonly} onClose={() => setSyncMenuOpen(false)} />
       )}
 
       {stashOpen && (

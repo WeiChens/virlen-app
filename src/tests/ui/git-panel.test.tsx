@@ -13,7 +13,7 @@
  * 4. **段标题右侧的「全部暂存」一直存在**（它是批量入口，不能因为「没样式」而被当成裸文字）；
  * 5. **单击 = 选中、双击 = 打开差异**；Ctrl / Shift 多选后点行内按钮即作用于同侧选中的全部
  *    （按钮文案会写明「… N 个文件」，点之前就知道它带走几个）；
- * 6. **不常用的三个动作收在「更多」里**（同步浮层 / 撤销上次提交 / 修改上一次提交），
+ * 6. **不常用的动作收在「更多」里**（获取 / 拉取 / 推送 / 合并 / 贮藏 / 撤销上次提交 / 修改上一次提交），
  *    落差数字则是**按钮**（点它 = 先拉取再推送）—— 头部宽度只够一件事一个入口。
  * 7. **变更列表一次只看一段（顶部 tab 切换）+ 提交区只挂在「暂存区」tab 下**（实测反馈）：
  *    两段并排时每列只剩一半宽度，长路径与行内操作互相挤；段顺序仍是「更改 → 暂存区」
@@ -36,10 +36,12 @@ import {
   commit,
   checkRefFormat,
   discard,
+  fetchRemote,
   loadCommitDetail,
   loadDiffSides,
+  pullRemote,
+  pushRemote,
   refreshStatus,
-  refreshRemotes,
   refreshBranches,
   refreshStashes,
   renameBranch,
@@ -71,14 +73,11 @@ vi.mock('@/services/git-service', () => ({
   loadCommitDetail: vi.fn(),
   removeBranch: vi.fn(),
   renameBranch: vi.fn(),
-  // 远程（凭据策略 = SSH）：同步浮层用
-  refreshRemotes: vi.fn(),
+  // 远程（凭据策略 = SSH）：三个直达菜单项
   fetchRemote: vi.fn(),
   pullRemote: vi.fn(),
   pushRemote: vi.fn(),
   syncNow: vi.fn(),
-  testRemote: vi.fn(),
-  cancelSync: vi.fn(),
   // 贮藏（stash）：入口在「更多」菜单，浮层打开时才取列表
   refreshStashes: vi.fn(() => Promise.resolve()),
   createStash: vi.fn(() => Promise.resolve(true)),
@@ -565,6 +564,25 @@ it('双击才打开差异：单击只选中（多选几个一起处理是高频�
   expect(loadDiffSides).toHaveBeenCalledWith('a.txt', 'worktree', null)
 })
 
+/** 全屏入口是图标按钮（不是文字按钮：一行「全屏 / 退出全屏」会让弹窗头忽宽忽窄） */
+it('差异弹窗的全屏入口是图标按钮：无可见文案，名字在 title / aria-label', async () => {
+  setStore([unstagedEntry('a.txt')])
+  mount()
+  await act(async () => {
+    document
+      .querySelector('.git-row')!
+      .dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+  })
+
+  const btn = document.querySelector<HTMLButtonElement>(
+    '.git-diff-head .git-icon-btn',
+  )!
+  expect(btn.textContent).toBe('')
+  expect(btn.getAttribute('title')).toBe('全屏')
+  expect(btn.getAttribute('aria-label')).toBe('全屏')
+  expect(btn.getAttribute('aria-pressed')).toBe('false')
+})
+
 // ==================== 分支浮层：远程分支 ====================
 
 /** 分支列表（浮层用它渲染；点远程分支必须走 detach） */
@@ -888,33 +906,59 @@ it('分支重命名：右键进重命名模式，输入框带旧名字，回车�
 
 // ==================== 远程（凭据策略 = SSH） ====================
 
-const sshRemote = {
-  name: 'origin',
-  url: 'git@github.com:a/b.git',
-  push_url: 'git@github.com:a/b.git',
-  kind: 'ssh' as const,
-}
+/**
+ * 三个远程动作各占一个菜单项、点下去直接跑（不再套一层浮层）：
+ * 远程交给 Rust `pick`（origin → 唯一一个 → 都不是就报错），界面不猜。
+ */
+it('「更多」里是三个独立的远程动作：获取 / 拉取 / 推送各点各的', async () => {
+  setStore([unstagedEntry('a.txt')])
+  mount()
 
-/** 同步入口在更多菜单里：点它才刷新远程列表（远程是用户随时会用终端改的，不缓存） */
-it('「同步远程」打开远程浮层：远程名 + 类型 + 三个动作', async () => {
+  const labels = await openMoreMenu()
+  expect(labels).toContain('获取远程更新')
+  expect(labels).toContain('拉取远程更新')
+  expect(labels).toContain('推送本地提交')
+  // 旧的那一项（开浮层）不再存在，也没有浮层可开
+  expect(labels).not.toContain('同步远程（获取 / 拉取 / 推送）')
+
+  await clickMoreItem('获取远程更新')
+  expect(fetchRemote).toHaveBeenCalledTimes(1)
+
+  await openMoreMenu()
+  await clickMoreItem('拉取远程更新')
+  expect(pullRemote).toHaveBeenCalledTimes(1)
+
+  await openMoreMenu()
+  await clickMoreItem('推送本地提交')
+  expect(pushRemote).toHaveBeenCalledTimes(1)
+
+  // 不传远程名（= 交给 Rust 选）：否则多远程时又变成界面替用户猜一个
+  for (const fn of [fetchRemote, pullRemote, pushRemote]) {
+    expect(fn).toHaveBeenCalledWith()
+  }
+  expect(document.querySelector('.git-sync-menu')).toBeNull()
+})
+
+/** 游离 HEAD 上按分支名操作不成立：拉取 / 推送禁用，获取仍可点（它只动远程跟踪分支） */
+it('游离 HEAD：拉取 / 推送在菜单里禁用，获取仍可点', async () => {
   setStore([unstagedEntry('a.txt')])
   runInAction(() => {
-    gitStore.remotes = [sshRemote]
+    if (!gitStore.snapshot?.head) return
+    gitStore.snapshot.head.branch = null
   })
   mount()
 
-  expect(await openMoreMenu()).toContain('同步远程（获取 / 拉取 / 推送）')
-  await clickMoreItem('同步远程（获取 / 拉取 / 推送）')
-  expect(refreshRemotes).toHaveBeenCalled()
-
-  const menu = document.querySelector('.git-sync-menu') as HTMLElement
-  expect(menu).toBeTruthy()
-  expect(menu.querySelector('.git-sync-remote')?.textContent).toBe('origin')
-  expect(menu.querySelector('.git-sync-kind')?.textContent).toBe('SSH')
-  expect(menu.textContent).toContain('git@github.com:a/b.git')
-  expect(
-    [...menu.querySelectorAll('.git-sync-btn')].map((el) => el.textContent),
-  ).toEqual(['获取', '拉取', '推送'])
+  await openMoreMenu()
+  const item = (label: string): HTMLButtonElement => {
+    const el = [...document.querySelectorAll('.context-menu-item')].find(
+      (n) => n.textContent === label,
+    ) as HTMLButtonElement | undefined
+    if (!el) throw new Error(`菜单项「${label}」不存在`)
+    return el
+  }
+  expect(item('获取远程更新').disabled).toBe(false)
+  expect(item('拉取远程更新').disabled).toBe(true)
+  expect(item('推送本地提交').disabled).toBe(true)
 })
 
 /** 贮藏入口在更多菜单里：点开是独立浮层（面板已经两列 + 提交区，放不下第三块常驻区域） */

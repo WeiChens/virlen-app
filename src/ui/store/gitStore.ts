@@ -38,7 +38,7 @@ class GitStore {
    */
   stats: GitStatReport | null = null
   branches: GitBranchInfo[] = []
-  /** 远程仓库（`git remote -v`）—— 同步浮层据此显示地址 / 类型，也据此判断「有没有配远程」 */
+  /** 远程仓库（`git remote -v`）—— 一键同步据此从 upstream（`origin/main`）反推远程名 */
   remotes: GitRemoteInfo[] = []
   /**
    * 贮藏条目（新 → 旧）。

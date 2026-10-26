@@ -2,10 +2,8 @@
 /**
  * Git 失败的**落点**契约：报错进持久弹窗（`gitStore.errorBox`），而不是几秒就消失的 toast。
  *
- * 两条分支必须分开：
- * - **面板里的动作**（暂存 / 提交 / 分支…）没有「原地」可展示错误 → 填 `errorBox`，由弹窗呈现；
- * - **同步浮层里的动作**（fetch / pull / push）自己会把 stderr 留在浮层里 → 只填 `error`，
- *   不再弹窗（否则两层信息重复，弹窗还会盖住那个浮层）。
+ * 所有失败都是同一个落点：填 `errorBox`（持久弹窗，多行 stderr 能读能复制）—— 菜单 / 面板里
+ * 都没有「原地」可展示错误的容器，action 跑完菜单就收了；唯一不弹窗的是取消（见 `stale`）。
  *
  * 这里只 mock 到 IPC 边界：`run()` / `syncAction()` 的分支判断是真的在跑。
  */
@@ -106,13 +104,13 @@ describe('git 失败信息的落点', () => {
     expect(gitStore.error).toBe(GIT_FAILURE.message)
   })
 
-  it('同步浮层的动作失败：不弹窗，错误留给浮层就地显示', async () => {
+  it('远程动作失败：同样弹持久错误窗（菜单一收就没地方读多行 stderr）', async () => {
     ipc.fetchRemote.mockRejectedValue(GIT_FAILURE)
     const ok = await fetchRemote('origin')
 
     expect(ok).toBe(false)
     expect(showToast).not.toHaveBeenCalled()
-    expect(gitStore.errorBox).toBeNull()
+    expect(gitStore.errorBox).toEqual({ op: 'fetch', text: GIT_FAILURE.message })
     expect(gitStore.error).toBe(GIT_FAILURE.message)
   })
 

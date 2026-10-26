@@ -49,6 +49,9 @@ describe('源代码管理 · 面板样式契约', () => {
     expect(selectors(panelCss)).toContain('.git-row-letter.s-\\?')
     // 文件类型图标也共用一个顶层规则（列表行与弹窗清单两处渲染）
     expect(selectors(panelCss)).toContain('.git-row-icon, .git-diff-side-icon')
+    // 图标按钮同理：面板头（提交记录 / 提交图 / 更多）与弹窗头（全屏）两处渲染，
+    // 写进 `.git-repo-bar` 里，弹窗那颗就掉回浏览器默认按钮
+    expect(selectors(panelCss)).toContain('.git-icon-btn')
     // 主按钮同理：同一个类名会在不同语境下渲染（曾经是提交区 + 空态「初始化仓库」），
     // 写进 `.git-commit` 作用域里，另一处就掉回浏览器默认按钮（方角、系统色）—— 实测踩过
     expect(selectors(panelCss)).toContain('.git-primary-btn')

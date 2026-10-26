@@ -18,6 +18,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { observer } from 'mobx-react-lite'
 import { t } from '@/ui/i18n'
 import { parseCommitRefs } from '@/domain/git'
 import type { GitCommitLogEntry } from '@/domain/git'
@@ -35,10 +36,15 @@ interface Props {
   onClose: () => void
 }
 
-export function GitLogModal({ disabled, onClose }: Props) {
+export const GitLogModal = observer(function GitLogModal({ disabled, onClose }: Props) {
   /** 取数范围：本弹窗只列 HEAD 可达的提交 —— 右键菜单也靠它决定给不给「挑选」（见 `commit-menu`） */
   const SCOPE = 'head' as const
-  const { commits, loading, loadingMore, hasMore, error, loadMore } = useCommitPages(SCOPE)
+  /** 当前 HEAD：`head` 范围的可达提交随它变（切分支后整份列表都错了）→ 身份变就整份重取 */
+  const head = gitStore.snapshot?.head
+  const { commits, loading, loadingMore, hasMore, error, loadMore } = useCommitPages(
+    SCOPE,
+    head ? `${head.branch ?? ''}@${head.oid}` : null,
+  )
   const rootRef = useRef<HTMLDivElement>(null)
   /** 打开的那条提交（`null` = 没开详情） */
   const [detailOid, setDetailOid] = useState<string | null>(null)
@@ -80,8 +86,8 @@ export function GitLogModal({ disabled, onClose }: Props) {
     ? commitMenuItems({
         entry: menuTarget,
         refs: parseCommitRefs(menuTarget.refs),
-        currentBranch: gitStore.snapshot?.head.branch ?? null,
-        isHead: gitStore.snapshot?.head.oid === menuTarget.oid,
+        currentBranch: head?.branch ?? null,
+        isHead: head?.oid === menuTarget.oid,
         scope: SCOPE,
         disabled,
         // 菜单项只回答「被点了」：具体开哪一条在这里钉住（目标行的 oid / 那条提交）
@@ -165,6 +171,6 @@ export function GitLogModal({ disabled, onClose }: Props) {
     </div>,
     document.body,
   )
-}
+})
 
 export default GitLogModal

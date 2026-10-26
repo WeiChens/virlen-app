@@ -76,7 +76,7 @@ let statusTaskId: string | null = null
 /** 进行中的行数统计的任务 id（同理：新的一次先停掉旧的） */
 let statsTaskId: string | null = null
 
-/** 进行中的网络操作任务 id：只由同步浮层的「取消」/ 被新的同步取代而停止（关面板不停） */
+/** 进行中的网络操作任务 id：被 `cancelSync` / 新的同步取代而停止（关面板不停） */
 let syncTaskId: string | null = null
 
 /** 错误 → 一行文案（Rust 侧已拼好 stderr） */
@@ -90,11 +90,6 @@ async function run<T>(
   label: string,
   fn: () => Promise<T>,
   opts: {
-    /**
-     * `dialog: false` = 调用方**自己就地展示**错误（如同步浮层），不再弹窗 ——
-     * 两层信息重复，而且弹窗会盖住那个浮层。
-     */
-    dialog?: boolean
     /**
      * 这次调用是否已被取消 / 取代（取消是**我们主动 kill 的 git**，不是失败）。
      * 在 catch 里判：为 `true` 时**不写 error、不弹窗、不回读** —— 否则面板会长期挂着
@@ -122,7 +117,7 @@ async function run<T>(
     runInAction(() => {
       gitStore.error = text
       // ⚠️ 不用 toast：git 的报错是多行 stderr，几秒就消失的提示读不完也复制不了
-      if (opts.dialog !== false) gitStore.errorBox = { op: label, text }
+      gitStore.errorBox = { op: label, text }
     })
     track('git.op', { op: label, ok: false, ms: Date.now() - started })
     // 失败后立刻回读：列表过期是写操作失败的头号原因（面板拿着旧快照，git 说 did not match）
@@ -334,13 +329,13 @@ export function setPanelOpen(open: boolean): void {
     gitStore.open = open
   })
   // ⚠️ 收起气泡**不中断**任何进行中的 git 调用：用户点完提交 / 推送后随手点空白处是常态，
-  //    那次操作必须跑完（结果落在 store 与 toast 上，不需要面板在场）。中断只走用户显式
-  //    点「取消」（`cancelSync`，见同步浮层）或下一次刷新取代上一次（taskId 对账）。
+  //    那次操作必须跑完（结果落在 store 与 toast 上，不需要面板在场）。中断只走显式
+  //    调用 `cancelSync`（同步入口拆成菜单项后暂时没有界面按钮）或下一次刷新取代上一次（taskId 对账）。
 }
 
 /**
- * 取消进行中的网络操作（用户点同步浮层的「取消」）。
- * 只是发起中断：命令壳会等子进程真正退出后才报「已取消」。
+ * 取消进行中的网络操作。只是发起中断：命令壳会等子进程真正退出后才报「已取消」。
+ * 同步入口现在是「更多」里的三个直达菜单项，没有取消按钮 —— 保留给服务层与用例。
  */
 export function cancelSync(): void {
   if (!syncTaskId) return
@@ -831,15 +826,15 @@ export async function abortPick(kind: GitPickKind): Promise<boolean> {
 
 /**
  * 一次网络操作的公共流程：busy 串行 → 落输出 → toast → 刷新状态与分支。
- * remote 由调用方显式给出（两边都猜会出现「界面说 origin、实际跑了别的」）。
- * 默认**不弹错误窗**：主调用方是同步浮层，它会把失败原文留在原地（见 `run` 的 `dialog`）。
+ * remote 由调用方显式给出（两边都猜会出现「界面说 origin、实际跑了别的」）；传 `null` = 交给
+ * Rust `pick`（origin → 唯一一个 → 都不是就报错，多个远程不猜）。
+ * 失败一律走持久错误窗：调用方是「更多」菜单，点完菜单就收了，没有原位可以读多行 stderr。
  */
 async function syncAction(
   label: string,
   call: (dir: string, remote: string | null, taskId: string) => Promise<GitSyncResult>,
   remote: string | null,
   success: (result: GitSyncResult) => string,
-  dialog = false,
 ): Promise<boolean> {
   const dir = gitStore.dir
   if (!dir || !gitStore.repo) return false
@@ -848,8 +843,7 @@ async function syncAction(
   let result: GitSyncResult | null = null
   try {
     result = await run(label, () => call(dir, remote, taskId), {
-      dialog,
-      // `cancelSync()`（同步浮层的「取消」）会把 `syncTaskId` 置空，再次发起会换成新 id：
+      // `cancelSync()` 会把 `syncTaskId` 置空，再次发起会换成新 id：
       // 两种都说明「这一次的失败是我自己叫停的」
       stale: () => syncTaskId !== taskId,
     })
@@ -867,7 +861,7 @@ async function syncAction(
   return true
 }
 
-/** 成功文案（浮层与一键同步共用，避免两处文案跑偏） */
+/** 成功文案（三个远程菜单项与一键同步共用，避免两处文案跑偏） */
 const pullDone = (r: GitSyncResult): string =>
   tpl('已从 $__remote__ 拉取', { remote: r.remote })
 const pushDone = (r: GitSyncResult): string =>
@@ -916,17 +910,16 @@ export async function syncNow(): Promise<boolean> {
   const head = gitStore.snapshot?.head
   if (!head?.branch) return false
   const remote = remoteOf(head.upstream)
-  // 面板头的一键同步没有「原地」可展示错误：失败必须弹窗（dialog = true）
   if (
     head.behind > 0 &&
-    !(await syncAction('pull', invokePull, remote, pullDone, true))
+    !(await syncAction('pull', invokePull, remote, pullDone))
   )
     return false
   // 拉取后 ahead 可能变了（快进带进来的提交本来就在远程上）→ 以新快照为准
   const after = gitStore.snapshot?.head
   if (
     (after?.ahead ?? 0) > 0 &&
-    !(await syncAction('push', invokePush, remote, pushDone, true))
+    !(await syncAction('push', invokePush, remote, pushDone))
   )
     return false
   return true

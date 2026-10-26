@@ -46,6 +46,8 @@ import {
 } from '@/domain/git'
 import type { GitChangeEntry, GitDiffSides } from '@/domain/git'
 import FileTypeIcon from '@/ui/components/icons/FileTypeIcon'
+import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
+import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
 import ContextMenu, { useContextMenu } from '@/ui/components/shared/ContextMenu'
 import { gitStore } from '@/ui/store/gitStore'
 import { MonacoDiffView } from '../message/MonacoDiffView'
@@ -270,14 +272,16 @@ export function GitDiffModal({
             onClick={() => void runAction()}>
             {actionLabel}
           </button>
-          {/* 全屏：只看差异时清单与正文都想要更大面积（Esc 先退全屏，再按一下才关弹窗） */}
+          {/* 全屏：只看差异时清单与正文都想要更大面积（Esc 先退全屏，再按一下才关弹窗）。
+              图标按钮（与弹窗头其它图标同一套 `.git-icon-btn`）：文案进 title / aria-label */}
           <button
             type="button"
-            className="git-diff-full"
+            className="git-icon-btn"
             title={full ? t('退出全屏') : t('全屏')}
+            aria-label={full ? t('退出全屏') : t('全屏')}
             aria-pressed={full}
             onClick={() => setFull((v) => !v)}>
-            {full ? t('退出全屏') : t('全屏')}
+            {full ? <ExitFullScreenSvg /> : <FullScreenSvg />}
           </button>
           <button
             type="button"

@@ -23,7 +23,6 @@ const FILES = [
   'src/ui/pages/chat/components/git/GitPanel.tsx',
   'src/ui/pages/chat/components/git/GitChangeRow.tsx',
   'src/ui/pages/chat/components/git/GitBranchMenu.tsx',
-  'src/ui/pages/chat/components/git/GitSyncMenu.tsx',
   'src/ui/pages/chat/components/git/GitErrorModal.tsx',
   // 虚拟列表与「左清单可拖拽宽度」：两个弹窗共用，新增文案同样要进字典
   'src/ui/pages/chat/components/git/VirtualList.tsx',

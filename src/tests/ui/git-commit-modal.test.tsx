@@ -14,6 +14,7 @@
  *
  * 5. **左清单行右键给基本操作**（打开 / 编辑器打开 / 在文件管理器中显示 / 复制路径）：
  *    历史提交不可暂存，所以**没有**写入口；菜单项组装口径由 `git-side-menu.test.ts` 守。
+ * 6. **全屏**：头部图标按钮铺满遮罩；Esc 先退全屏、再一下才关详情。
  */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act } from 'react'
@@ -182,6 +183,25 @@ it('打开即取详情：头里是短 oid + 标题，默认选中并加载第一
   expect(stub?.getAttribute('data-new')).toBe('new\n')
 })
 
+/** 作者 / 时间 / 文件数住在左栏顶部：原先它是弹窗头下方一整行，把清单与差异一起往下压 */
+it('作者 / 时间 / 文件数在左栏顶部，不再单占弹窗头下方一整行', async () => {
+  await mount()
+
+  const meta = document.querySelector('.git-commit-meta')
+  expect(meta).toBeTruthy()
+  // 位置：在左栏（aside）里；弹窗头里没有它
+  expect(meta!.closest('.git-commit-side')).toBeTruthy()
+  expect(document.querySelector('.git-diff-head .git-commit-meta')).toBeNull()
+  // 三样都在：作者 / 时间 / 文件数
+  expect(meta!.querySelector('.git-commit-author')?.textContent).toBe('virlen')
+  expect(meta!.querySelector('.git-commit-time')?.textContent).toBeTruthy()
+  expect(meta!.querySelector('.git-commit-count')?.textContent).toBe(
+    '2 个文件有变更',
+  )
+  // ⚠️ 计数那块不能占用左栏文件清单的容器类（`.git-commit-files` 带 flex:1 / 滚动）
+  expect(meta!.querySelector('.git-commit-files')).toBeNull()
+})
+
 it('点清单里的另一行：重新取差异，改动对象跟着换（改名会把旧路径一起交下去）', async () => {
   vi.mocked(loadCommitDetail).mockResolvedValue(
     detail({
@@ -230,10 +250,12 @@ it('正文块在左栏顶部（不在弹窗头下方）、默认展开、标题�
   )
   await mount()
 
-  // 位置：左栏（清单前）——它原先压在弹窗头下方，一有正文就把差异区往下顶
+  // 位置：左栏（清单前）——它原先压在弹窗头下方，一有正文就把差异区往下顶；
+  // 它上面只剩那行作者 / 时间元信息（见上一条用例），再往上就是左栏的顶边
   const side = document.querySelector('.git-commit-side')
-  const box = side?.firstElementChild as HTMLElement
-  expect(box.classList.contains('git-commit-message')).toBe(true)
+  const box = side?.querySelector('.git-commit-message') as HTMLElement
+  expect(box).toBeTruthy()
+  expect(box.previousElementSibling?.classList.contains('git-commit-meta')).toBe(true)
   expect(box.classList.contains('is-collapsed')).toBe(false)
   expect(document.querySelector('.git-diff-head .git-commit-message')).toBeNull()
   // 标题已在弹窗头里，正文块只放后续段落
@@ -259,6 +281,39 @@ it('清单为空（空提交 / 纯合并）给空态，不发差异请求', asyn
 
 it('Esc 关掉详情', async () => {
   await mount()
+  await act(async () => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+  })
+  expect(closed).toBe(true)
+})
+
+/** 全屏：铺满遮罩；Esc 先退全屏（一次性关掉两层 = 「按错一下就没了」） */
+it('全屏：弹窗铺满遮罩，Esc 先退全屏再一下才关详情', async () => {
+  await mount()
+  const btn = () =>
+    document.querySelector<HTMLButtonElement>('.git-diff-head .git-icon-btn')!
+  // 图标按钮：没有可见文案，名字在 title / aria-label 里
+  expect(btn().textContent).toBe('')
+  expect(btn().getAttribute('aria-label')).toBe('全屏')
+  expect(btn().getAttribute('aria-pressed')).toBe('false')
+  expect(document.querySelector('.git-diff-modal.is-fullscreen')).toBeNull()
+
+  await act(async () => {
+    btn().click()
+  })
+  expect(document.querySelector('.git-diff-modal.is-fullscreen')).toBeTruthy()
+  expect(document.querySelector('.git-diff-backdrop.is-fullscreen')).toBeTruthy()
+  expect(btn().getAttribute('aria-label')).toBe('退出全屏')
+  expect(btn().getAttribute('aria-pressed')).toBe('true')
+
+  // 第一下只退全屏：详情还在
+  await act(async () => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+  })
+  expect(document.querySelector('.git-diff-modal.is-fullscreen')).toBeNull()
+  expect(closed).toBe(false)
+
+  // 第二下才关
   await act(async () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
   })

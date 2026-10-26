@@ -120,6 +120,45 @@
   min-width: 0;
 }
 
+/* 图标按钮：面板头（提交记录 / 提交图 / 更多）与弹窗头（全屏 / 退出全屏）共用 —— **唯一样式源**，挂顶层。
+   同 `.git-close`：写进某一个语境（如 `.git-repo-bar`）里，其它语境那份就掉回浏览器默认样式（§11.53 ⑬）。 */
+.git-icon-btn {
+  /* 固定 24×24：头部路径 / 提示都带省略号，不让它们把图标挤小（与 .git-close 同口径） */
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--hover-bg, #f0f0f0);
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* 菜单展开中的那个按钮（「更多」）：按下感比 hover 强一档，否则吃不住「它现在是开的」 */
+  &.is-active {
+    background: var(--hover-bg, #f0f0f0);
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  svg {
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
+  }
+}
+
 /* 头部：分支按钮 + ahead/behind + 刷新 */
 .git-repo-bar {
   display: flex;
@@ -207,41 +246,6 @@
     &:disabled {
       opacity: 0.6;
       cursor: not-allowed;
-    }
-  }
-
-  .git-icon-btn {
-    width: 24px;
-    height: 24px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: none;
-    border-radius: 5px;
-    background: transparent;
-    color: var(--text-secondary, #666);
-    cursor: pointer;
-
-    &:hover:not(:disabled) {
-      background: var(--hover-bg, #f0f0f0);
-      color: var(--text-primary, #1a1a1a);
-    }
-
-    &:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
-    /* 菜单展开中的那个按钮（「更多」）：按下感比 hover 强一档，否则吃不住「它现在是开的」 */
-    &.is-active {
-      background: var(--hover-bg, #f0f0f0);
-      color: var(--text-primary, #1a1a1a);
-    }
-
-    svg {
-      width: 14px;
-      height: 14px;
-      fill: currentColor;
     }
   }
 }
@@ -662,232 +666,6 @@
   }
 }
 
-/* 远程浮层（与分支浮层同一套外观，靠右挂）—— 获取 / 拉取 / 推送 + 测试连接。
-   凭据策略 = SSH：这里没有输入框，只有一句「用本机密钥」和一个能验证它的按钮。 */
-.git-sync-menu {
-  position: absolute;
-  top: 74px;
-  right: 12px;
-  z-index: 70;
-  width: 320px;
-  max-width: calc(100vw - 40px);
-  padding: 8px;
-  border: 1px solid var(--border-color, #e5e5e5);
-  border-radius: 10px;
-  background: var(--bg-primary, #fff);
-  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.18);
-
-  .git-sync-names {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    margin-bottom: 6px;
-  }
-
-  .git-sync-name {
-    padding: 1px 8px;
-    border: 1px solid var(--border-color, #e5e5e5);
-    border-radius: 999px;
-    background: transparent;
-    color: var(--text-secondary, #666);
-    font: inherit;
-    font-size: var(--font-size-xs);
-    cursor: pointer;
-
-    &.current {
-      border-color: var(--primary-color, #3b6ef6);
-      color: var(--primary-color, #3b6ef6);
-    }
-  }
-
-  .git-sync-head {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .git-sync-remote {
-    font-size: var(--font-size-sm);
-    font-weight: 600;
-    color: var(--text-primary, #1a1a1a);
-  }
-
-  .git-sync-kind {
-    padding: 0 5px;
-    border-radius: 4px;
-    background: var(--bg-secondary, #f7f7f8);
-    color: var(--text-secondary, #666);
-    font-size: var(--font-size-2xs);
-    line-height: 16px;
-
-    /* SSH 是这套凭据策略下的正常形态，给一点强调；HTTPS 不必区分，靠错误里的指引说话 */
-    &.ssh {
-      background: rgba(59, 110, 246, 0.12);
-      color: var(--primary-color, #3b6ef6);
-    }
-  }
-
-  .git-sync-url {
-    margin-top: 2px;
-    overflow: hidden;
-    font-size: var(--font-size-xs);
-    color: var(--text-secondary, #666);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .git-sync-actions {
-    display: flex;
-    gap: 6px;
-    margin-top: 8px;
-  }
-
-  .git-sync-btn {
-    flex: 1;
-    padding: 5px 6px;
-    border: 1px solid var(--border-color, #e5e5e5);
-    border-radius: 6px;
-    background: var(--bg-secondary, #f7f7f8);
-    color: var(--text-primary, #1a1a1a);
-    font: inherit;
-    font-size: var(--font-size-sm);
-    cursor: pointer;
-
-    &:hover:not(:disabled) {
-      border-color: var(--primary-color, #3b6ef6);
-    }
-
-    &:focus-visible {
-      outline: var(--focus-ring);
-      outline-offset: 1px;
-    }
-
-    &:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-    }
-  }
-
-  .git-sync-test {
-    flex: none;
-    padding: 1px 6px;
-    border: none;
-    border-radius: 4px;
-    background: transparent;
-    color: var(--primary-color, #3b6ef6);
-    font: inherit;
-    font-size: var(--font-size-xs);
-    cursor: pointer;
-
-    &:hover:not(:disabled) {
-      background: var(--hover-bg, #f0f0f0);
-    }
-
-    &:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-    }
-  }
-
-  /* 「点了会发生什么」：先给落差数字再给按钮——拉取与推送的后果差很多 */
-  .git-sync-track {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 6px;
-    font-size: var(--font-size-xs);
-    color: var(--text-secondary, #666);
-  }
-
-  .git-sync-count {
-    font-variant-numeric: tabular-nums;
-    color: var(--text-primary, #1a1a1a);
-  }
-
-  /* 进行中：状态在左、取消在右。网络操作可能跑很久，只置灰按钮等于让人对着死界面等 */
-  .git-sync-busy {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 6px;
-    padding: 3px 6px;
-    border-radius: 5px;
-    background: var(--bg-secondary, #f7f7f8);
-    font-size: var(--font-size-xs);
-    color: var(--text-primary, #1a1a1a);
-  }
-
-  .git-sync-cancel {
-    flex: none;
-    padding: 1px 6px;
-    border: 1px solid var(--border-color, #e5e5e5);
-    border-radius: 4px;
-    background: var(--bg-primary, #fff);
-    color: var(--text-secondary, #666);
-    font: inherit;
-    font-size: var(--font-size-xs);
-    cursor: pointer;
-
-    &:hover {
-      border-color: var(--color-error, #dc2626);
-      color: var(--color-error, #dc2626);
-    }
-  }
-
-  /* SSH 失败时 stderr 里可能有几行 —— 要能看全，不能截成一行 */
-  .git-sync-result {
-    margin-top: 4px;
-    font-size: var(--font-size-xs);
-    line-height: 1.45;
-    white-space: pre-wrap;
-    word-break: break-word;
-
-    &.ok {
-      color: var(--color-success-text, #2e7d32);
-    }
-
-    &.error {
-      color: var(--color-error, #dc2626);
-    }
-  }
-
-  .git-sync-hint {
-    margin-top: 6px;
-    font-size: var(--font-size-xs);
-    color: var(--text-secondary, #666);
-  }
-
-  .git-sync-policy {
-    margin-top: 8px;
-    padding-top: 6px;
-    border-top: 1px solid var(--border-color, #e5e5e5);
-    font-size: var(--font-size-2xs);
-    color: var(--text-secondary, #666);
-  }
-
-  .git-sync-empty {
-    padding: 10px 4px;
-    text-align: center;
-    font-size: var(--font-size-sm);
-    color: var(--text-secondary, #666);
-
-    /* 终端命令原样展示（可选中 / 可复制）—— 空态要给出下一步，而不是只说「不行」 */
-    code {
-      display: block;
-      margin-top: 4px;
-      padding: 4px 6px;
-      border-radius: 5px;
-      background: var(--bg-secondary, #f7f7f8);
-      color: var(--text-primary, #1a1a1a);
-      font-family: Consolas, 'Courier New', monospace;
-      font-size: var(--font-size-xs);
-      text-align: left;
-      word-break: break-all;
-      user-select: all;
-    }
-  }
-}
-
 /* 空态 / 提示 / 错误 */
 .git-empty {
   padding: 18px 4px;
@@ -1286,9 +1064,9 @@
       color: var(--text-secondary, #666);
     }
 
-    /* 「暂存更改 / 取消暂存」与「全屏 / 退出全屏」：看完差异顺手处理是最常见的下一步，弹窗里就地给入口 */
-    .git-diff-action,
-    .git-diff-full {
+    /* 「暂存更改 / 取消暂存」：看完差异顺手处理是最常见的下一步，弹窗里就地给入口
+       （全屏用 `.git-icon-btn` 的图标按钮，与头部其它图标同一种手感） */
+    .git-diff-action {
       flex: none;
       padding: 3px 10px;
       border: 1px solid var(--border-color, #e5e5e5);
@@ -1543,17 +1321,34 @@
     color: var(--text-secondary, #666);
   }
 
+  /* 作者 / 时间 / 文件数：左栏顶部一行（不再单占弹窗头下方一整行，见 GitCommitModal 口径 3b）。
+     名字可截断（悬停给「名字 <邮箱>」），时间与文件数不让位 */
   .git-commit-meta {
+    flex: none;
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 4px 12px 0;
+    flex-wrap: wrap;
+    gap: 2px 8px;
+    padding: 8px 12px 2px;
     font-size: var(--font-size-xs);
     color: var(--text-secondary, #666);
 
+    .git-commit-author {
+      flex: 0 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     /* 定宽数字：`刚刚` 与 `2026-10-09 00:53` 混排时不抖 */
     .git-commit-time {
+      flex: none;
       font-variant-numeric: tabular-nums;
+    }
+
+    .git-commit-count {
+      flex: none;
     }
   }
 

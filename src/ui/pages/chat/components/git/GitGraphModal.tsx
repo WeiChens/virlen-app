@@ -20,6 +20,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { observer } from 'mobx-react-lite'
 import { t, tpl } from '@/ui/i18n'
 import { gitStore } from '@/ui/store/gitStore'
 import ContextMenu, { useContextMenu } from '@/ui/components/shared/ContextMenu'
@@ -38,10 +39,18 @@ interface Props {
   onClose: () => void
 }
 
-export function GitGraphModal({ disabled, onClose }: Props) {
+export const GitGraphModal = observer(function GitGraphModal({ disabled, onClose }: Props) {
   /** 取数范围：全部分支 —— 右键的「挑选」只在这个范围里才有意义（见 `commit-menu`） */
   const SCOPE = 'all' as const
-  const { commits, loading, loadingMore, hasMore, error, loadMore } = useCommitPages(SCOPE)
+  /**
+   * 当前 HEAD：引用标签来自取数那一刻的 `%D`（`HEAD -> x`）→ 身份（分支名 + oid）变就整份重取。
+   * 切到同一个提交上的另一个分支时 oid 都没变，只重渲染看不出任何区别。
+   */
+  const head = gitStore.snapshot?.head
+  const { commits, loading, loadingMore, hasMore, error, loadMore } = useCommitPages(
+    SCOPE,
+    head ? `${head.branch ?? ''}@${head.oid}` : null,
+  )
   const listRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   /** 打开的那条提交（`null` = 没开详情） */
@@ -91,8 +100,8 @@ export function GitGraphModal({ disabled, onClose }: Props) {
     ? commitMenuItems({
         entry: menuTarget,
         refs: parseCommitRefs(menuTarget.refs),
-        currentBranch: gitStore.snapshot?.head.branch ?? null,
-        isHead: gitStore.snapshot?.head.oid === menuTarget.oid,
+        currentBranch: head?.branch ?? null,
+        isHead: head?.oid === menuTarget.oid,
         scope: SCOPE,
         disabled,
         // 菜单项只回答「被点了」：具体开哪一条在这里钉住（目标行的 oid / 那条提交）
@@ -124,7 +133,7 @@ export function GitGraphModal({ disabled, onClose }: Props) {
         <div className="git-graph-body">
           <GraphCanvas
             layout={layout}
-            headOid={gitStore.snapshot?.head.oid ?? null}
+            headOid={head?.oid ?? null}
             listRef={listRef}
             label={t('提交图：一个点是一次提交，一条线是父子关系')}
           />
@@ -190,6 +199,6 @@ export function GitGraphModal({ disabled, onClose }: Props) {
     </div>,
     document.body,
   )
-}
+})
 
 export default GitGraphModal

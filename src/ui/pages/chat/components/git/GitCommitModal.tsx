@@ -11,6 +11,9 @@
  * 3b. **完整提交信息住左栏顶部**（可折叠、正文自己滚，且不再重画标题）：它原先趴在弹窗头下方，
  *    一有正文就把左清单与差异区一起往下压 —— 而多行正文往往只是补充说明，位置该让给差异。
  *    正文 == 标题（只有一行）时整块不画，与「不重复画一遍」同一条取舍。
+ *    作者 / 时间 / 文件数同理：不再单占弹窗头下方一整行，收进左栏顶部。
+ * 3c. **全屏**（铺满遮罩）：一个提交里横向看多个文件时面积不够（与差异弹窗同一套图标按钮，
+ *    Esc 先退全屏、再一下才关详情）。
  * 4. 弹窗内的 `mousedown` 必须 `stopPropagation`、Esc / ↑↓ 走**捕获阶段**：本弹窗 portal 到 body，
  *    宿主（提交记录 / 提交图弹窗、源代码管理面板）的关闭逻辑都按 DOM 包含关系或 document 监听判定
  *    —— 少这两行就是「关详情连整个弹窗一起关掉」（与 `GitLogModal` 同款坑）。
@@ -27,6 +30,8 @@ import { baseName, dirName, singleSideOf } from '@/domain/git'
 import type { GitCommitDetail, GitCommitFile, GitDiffSides } from '@/domain/git'
 import { formatCommitTime } from '@/utils/time'
 import FileTypeIcon from '@/ui/components/icons/FileTypeIcon'
+import FullScreenSvg from '@/ui/components/icons/FullScreenSvg'
+import ExitFullScreenSvg from '@/ui/components/icons/ExitFullScreenSvg'
 import ContextMenu, { useContextMenu } from '@/ui/components/shared/ContextMenu'
 import { gitStore } from '@/ui/store/gitStore'
 import { MonacoDiffView } from '../message/MonacoDiffView'
@@ -54,6 +59,8 @@ export function GitCommitModal({ oid, onClose }: Props) {
   const [sidesLoading, setSidesLoading] = useState(false)
   /** 左栏「提交信息」块是否展开（默认展开：多行正文就是用户点开这条提交想看的东西之一） */
   const [messageOpen, setMessageOpen] = useState(true)
+  /** 全屏（铺满遮罩）：与差异弹窗同一套 —— Esc 先退全屏，再一下才关详情 */
+  const [full, setFull] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   /** 左清单宽度（与差异弹窗共用一份偏好） */
   const sideWidth = useSideWidth()
@@ -120,6 +127,11 @@ export function GitCommitModal({ oid, onClose }: Props) {
       if (e.key === 'Escape') {
         // 只关详情，不冒泡（宿主的 Esc 监听会把整串弹窗都关掉）
         e.stopPropagation()
+        // 全屏状态下 Esc 先退全屏（一次性关掉两层状态 = 「按错一下就没」）
+        if (full) {
+          setFull(false)
+          return
+        }
         onClose()
         return
       }
@@ -132,7 +144,7 @@ export function GitCommitModal({ oid, onClose }: Props) {
     }
     document.addEventListener('keydown', onKey, true)
     return () => document.removeEventListener('keydown', onKey, true)
-  }, [onClose])
+  }, [onClose, full])
 
   useEffect(() => {
     rootRef.current?.focus()
@@ -153,7 +165,7 @@ export function GitCommitModal({ oid, onClose }: Props) {
 
   return createPortal(
     <div
-      className="git-diff-backdrop"
+      className={`git-diff-backdrop${full ? ' is-fullscreen' : ''}`}
       // ⚠️ 必须 `stopPropagation`：宿主（提交记录 / 提交图 / 面板）的「点浮层外关闭」按 DOM 包含关系
       //    判定，而本弹窗嵌在它们的遮罩里 —— 不拦住就是「点一下详情的遮罩，整串弹窗全关」。
       onMouseDown={(e) => {
@@ -161,7 +173,9 @@ export function GitCommitModal({ oid, onClose }: Props) {
         onClose()
       }}>
       <div
-        className={`git-diff-modal git-commit-modal${sideWidth.resizing ? ' is-resizing' : ''}`}
+        className={`git-diff-modal git-commit-modal${sideWidth.resizing ? ' is-resizing' : ''}${
+          full ? ' is-fullscreen' : ''
+        }`}
         ref={rootRef}
         tabIndex={-1}
         onMouseDown={(e) => e.stopPropagation()}>
@@ -176,6 +190,16 @@ export function GitCommitModal({ oid, onClose }: Props) {
           {detail && detail.parents.length > 1 && (
             <span className="git-diff-note">{t('合并提交：变更相对第一个父提交')}</span>
           )}
+          {/* 全屏：与差异弹窗同一套图标按钮（`.git-icon-btn`）—— 文案进 title / aria-label */}
+          <button
+            type="button"
+            className="git-icon-btn"
+            title={full ? t('退出全屏') : t('全屏')}
+            aria-label={full ? t('退出全屏') : t('全屏')}
+            aria-pressed={full}
+            onClick={() => setFull((v) => !v)}>
+            {full ? <ExitFullScreenSvg /> : <FullScreenSvg />}
+          </button>
           <button
             type="button"
             className="git-close"
@@ -185,32 +209,29 @@ export function GitCommitModal({ oid, onClose }: Props) {
           </button>
         </div>
 
-        <div className="git-commit-meta">
-          {detail && (
-            <span
-              className="git-commit-author"
-              title={`${detail.author_name} <${detail.author_email}>`}
-            >
-              {detail.author_name}
-            </span>
-          )}
-          {detail && (
-            <span className="git-commit-time" title={detail.author_time}>
-              {formatCommitTime(detail.author_time) || detail.author_time}
-            </span>
-          )}
-          {detail && files.length > 1 && (
-            <span className="git-diff-note">
-              {tpl('$__count__ 个文件有变更', { count: files.length })}
-            </span>
-          )}
-        </div>
-
         <div className="git-diff-main">
           {/* 左栏 = 提交信息（可折叠）+ 文件清单：信息块钉在顶部，滚动只发生在清单里 */}
           <aside
             className="git-diff-side git-commit-side"
             style={{ width: sideWidth.width }}>
+            {/* 作者 / 时间 / 文件数：与「提交信息」同住左栏顶部（都是这条提交的元信息，不是文件数据） */}
+            {detail && (
+              <div className="git-commit-meta">
+                <span
+                  className="git-commit-author"
+                  title={`${detail.author_name} <${detail.author_email}>`}>
+                  {detail.author_name}
+                </span>
+                <span className="git-commit-time" title={detail.author_time}>
+                  {formatCommitTime(detail.author_time) || detail.author_time}
+                </span>
+                {files.length > 1 && (
+                  <span className="git-commit-count">
+                    {tpl('$__count__ 个文件有变更', { count: files.length })}
+                  </span>
+                )}
+              </div>
+            )}
             {body && (
               <section
                 className={`git-commit-message${messageOpen ? '' : ' is-collapsed'}`}>
