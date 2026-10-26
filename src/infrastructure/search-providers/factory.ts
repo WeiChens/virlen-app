@@ -3,6 +3,7 @@ import type { ISearchProvider } from '@/domain/search/types'
 import type { SearchProviderConfig } from '@/domain/search/config'
 import { TavilySearchProvider } from './tavily'
 import { BochaSearchProvider } from './bocha'
+import { DeepSeekSearchProvider } from './deepseek'
 
 /** 根据配置创建搜索供应商实例；配置类型不支持时抛错。 */
 export function createSearchProviderInstance(
@@ -19,10 +20,15 @@ export function createSearchProviderInstance(
         apiKey: config.apiKey,
         baseUrl: config.baseUrl || undefined,
       })
+    case 'deepseek':
+      return new DeepSeekSearchProvider({
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl || undefined,
+      })
     default:
       throw new Error(
         `Unknown search provider type: "${(config as any).type}". ` +
-          `Supported types: tavily, bocha.`,
+          `Supported types: tavily, bocha, deepseek.`,
       )
   }
 }

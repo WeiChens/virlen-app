@@ -9,6 +9,7 @@ export type SearchProviderType =
   | 'tavily'
   // | 'searxng'
   | 'bocha'
+  | 'deepseek'
 
 /** 可持久化的搜索供应商配置 */
 export interface SearchProviderConfig {
@@ -73,6 +74,17 @@ export const SEARCH_PROVIDER_TEMPLATES: SearchProviderTemplate[] = [
     defaultBaseUrl: 'https://api.tavily.com',
     officialLink: 'https://tavily.com',
     icon: '/supplier/tavily.png',
+  },
+  {
+    type: 'deepseek',
+    label: 'DeepSeek',
+    description:
+      'DeepSeek 官方网页搜索接口，自带相关性排序与给模型阅读的长摘要，与对话模型共用 API Key',
+    requireApiKey: true,
+    // 只填到域名：搜索走 `/v1/tools/search`、验 Key 走 `/user/balance`
+    defaultBaseUrl: 'https://api.deepseek.com',
+    officialLink: 'https://platform.deepseek.com',
+    icon: '/supplier/deepseek.ico',
   },
   // {
   //   type: 'searxng',

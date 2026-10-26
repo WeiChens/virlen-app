@@ -8,4 +8,7 @@ export type { SearXNGConfig } from './searxng'
 export { BochaSearchProvider } from './bocha'
 export type { BochaConfig } from './bocha'
 
+export { DeepSeekSearchProvider } from './deepseek'
+export type { DeepSeekConfig } from './deepseek'
+
 export { createSearchProviderInstance } from './factory'
