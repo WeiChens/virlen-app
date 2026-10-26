@@ -24,6 +24,7 @@ import { chatState } from '@/ui/store/chatState'
 import { sessionStore } from '@/ui/store/sessionStore'
 import { gitStore } from '@/ui/store/gitStore'
 import { badgeText, changedFileCount } from '@/domain/git'
+import { usePopoverViewportFit } from '@/ui/components/shared/popoverFit'
 import {
   refreshOnFocus,
   refreshStatus,
@@ -47,6 +48,9 @@ export const GitEntry = observer(function GitEntry({
 }: Props) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
+  /* 面板是 420px 定宽、`right: 0` 挂在工具栏图标上：窗口一窄左缘就跑出窗口，
+     高度随变更数 / 输出块涨、窗口一矮下缘同样出界 —— 打开时夹进可视区（口径见 popoverFit.ts） */
+  const popover = usePopoverViewportFit(open)
 
   const dir = sessionId
     ? sessionStore.getSession(sessionId)?.workspace || null
@@ -83,11 +87,11 @@ export const GitEntry = observer(function GitEntry({
     if (!open) return
     const onDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null
-      // 弹窗（portal 到 body）在 `.git-entry` 之外：点它不算「点在外面」，
-      // 否则「在错误弹窗里点复制」或「在贮藏浮层里点一下」会把背后的面板一并关掉。
-      // 两类遮罩：全局 Modal 的 `.modal-overlay` 与 git 自己的 `.git-diff-backdrop`
-      // （差异 / 日志 / 提交图 / 贮藏共用同一层）。
-      if (target?.closest?.('.modal-overlay, .git-diff-backdrop')) return
+      /* ⚠️ 面板自己开着遮罩（差异 / 日志 / 提交图 / 贮藏共用 `.git-diff-backdrop`，全局 Modal 用
+         `.modal-overlay`）时，这一下**一律不算"点在外面"**：遮罩从自绘标题栏下方开始（要留出拖窗口 /
+         点窗口按钮），所以「点最大化」「双击标题栏」都落在面板外面 —— 只按 target 判会把面板连同弹窗
+         一起收掉（用户报回：看着差异把窗口全屏，弹窗被关掉）。 */
+      if (document.querySelector('.modal-overlay, .git-diff-backdrop')) return
       if (!wrapRef.current?.contains(target)) closeRef.current()
     }
     document.addEventListener('mousedown', onDown)
@@ -145,7 +149,7 @@ export const GitEntry = observer(function GitEntry({
         {count > 0 && <span className="git-badge">{badgeText(count)}</span>}
       </button>
       {open && (
-        <div className="git-popover">
+        <div className="git-popover" ref={popover.ref} style={popover.style}>
           <GitPanel
             onClose={() => setOpen(false)}
             onAttachPaths={onAttachPaths}

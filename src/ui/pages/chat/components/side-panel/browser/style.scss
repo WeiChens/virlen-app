@@ -29,6 +29,7 @@
   height: var(--side-panel-head-h, 27px);
   border-bottom: 1px solid var(--border-color, #e5e5e5);
   background: var(--bg-secondary, #f7f7f8);
+  position: relative;
 }
 
 .browser-nav {
@@ -187,6 +188,10 @@
   background-size: 40% 100%;
   background-repeat: no-repeat;
   animation: browser-progress 1.1s ease-in-out infinite;
+  position: absolute;
+  width: 100%;
+  bottom: -1px;
+  left: 0;
 }
 
 @keyframes browser-progress {

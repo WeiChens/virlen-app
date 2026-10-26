@@ -397,6 +397,7 @@ export default function BrowserPane({ initialUrl, onNavigate, onTitle, onClose }
           onClick={onClose}>
           ✕
         </button>
+        {loading && <div className="browser-progress" aria-hidden="true" />}
       </div>
 
       {problem && problem !== 'empty' && (
@@ -434,7 +435,6 @@ export default function BrowserPane({ initialUrl, onNavigate, onTitle, onClose }
         </div>
       )}
 
-      {loading && <div className="browser-progress" aria-hidden="true" />}
 
       <div className="browser-frame">
         {/*

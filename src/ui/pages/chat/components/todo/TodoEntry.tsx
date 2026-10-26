@@ -24,6 +24,7 @@ import {
 import { getSessionRuntime, sessionStore } from '@/ui/store'
 import { dropUnappliedTodoDraft, getTodoDraft } from '@/ui/store/todoDraftStore'
 import { showToast } from '@/ui/components/shared/Toast'
+import { usePopoverViewportFit } from '@/ui/components/shared/popoverFit'
 import { TodoEditor } from './TodoEditor'
 import './style.scss'
 
@@ -34,6 +35,9 @@ interface Props {
 export const TodoEntry = observer(function TodoEntry({ sessionId }: Props) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
+  /* 浮层是 680px 定宽、`right: 0` 挂在工具栏图标上：窗口一窄左缘就跑出窗口，
+     高度随清单行数涨、窗口一矮下缘同样出界 —— 打开时夹进可视区（口径见 popoverFit.ts） */
+  const popover = usePopoverViewportFit(open)
 
   const session = sessionStore.getSession(sessionId)
   const current = pickCurrentTodos(session?.messages || [])
@@ -143,7 +147,7 @@ export const TodoEntry = observer(function TodoEntry({ sessionId }: Props) {
       </button>
 
       {open && (
-        <div className="todo-popover">
+        <div className="todo-popover" ref={popover.ref} style={popover.style}>
           <div className="todo-popover-head">
             <span className="todo-popover-title">{t('任务清单')}</span>
             {/* 来源徽章只在非默认状态出现：模型写入是默认情况，画个徽章只占宽、没信息量 */}
