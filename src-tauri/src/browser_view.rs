@@ -156,6 +156,11 @@ fn emit_to_main(app: &tauri::AppHandle, payload: serde_json::Value) {
 }
 
 /// 地址变化（`phase = "location"`）。`about:blank` 不算导航。
+///
+/// 只有 Windows 有「地址变了但没加载页面」的可靠信号（WebView2 的 `SourceChanged`，
+/// 见 [`observe_native_events`]），其他平台靠 `on_page_load` 的 `started/finished`，
+/// 所以本函数在非 Windows 目标上是死代码，必须按平台门住（`-D warnings`）。
+#[cfg(target_os = "windows")]
 fn emit_location(app: &tauri::AppHandle, label: &str, url: &str) {
     if url.is_empty() || url == "about:blank" {
         return;
@@ -190,10 +195,7 @@ fn download_name(destination: &std::path::Path, url: &Url) -> Option<String> {
             return Some(name.to_string());
         }
     }
-    let segment = url
-        .path_segments()?
-        .filter(|segment| !segment.is_empty())
-        .next_back()?;
+    let segment = url.path_segments()?.rfind(|segment| !segment.is_empty())?;
     Some(segment.to_string())
 }
 
@@ -369,6 +371,10 @@ pub async fn browser_view_open(
     // Windows：真实地址与标题走 WebView2 自己的事件（SPA 的 pushState 只能靠它）
     #[cfg(target_os = "windows")]
     observe_native_events(&app, &webview, &label);
+    // 其他平台没有这条原生事件源：视图已经建好了，句柄不用再持有（丢在这里是**有意**的，
+    // 若直接不管，非 Windows 目标会报 `unused variable`）。
+    #[cfg(not(target_os = "windows"))]
+    drop(webview);
     Ok(())
 }
 
