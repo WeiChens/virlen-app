@@ -118,6 +118,7 @@ export async function createSession(
     createdAt: now,
     updatedAt: now,
     pinned: false,
+    archived: false,
     tags: [],
     agentId: targetAgent.id,
     allowedTools: [...targetAgent.allowTools],

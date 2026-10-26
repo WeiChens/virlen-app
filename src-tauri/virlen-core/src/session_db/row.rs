@@ -46,6 +46,7 @@ pub(crate) fn session_from_row(row: &Row) -> Result<Session, String> {
         created_at: row.get("created_at").map_err(|e| e.to_string())?,
         updated_at: row.get("updated_at").map_err(|e| e.to_string())?,
         pinned: row.get::<_, i64>("pinned").map_err(|e| e.to_string())? != 0,
+        archived: row.get::<_, i64>("archived").map_err(|e| e.to_string())? != 0,
         tags: from_json(&tags_json)?,
         workspace: row.get("workspace").map_err(|e| e.to_string())?,
         agent_id: row.get("agent_id").map_err(|e| e.to_string())?,
@@ -161,6 +162,7 @@ pub(crate) fn session_insert_params(session: &Session) -> Result<Vec<Box<dyn rus
                 .system_prompt_manually_edited
                 .map(|v| if v { 1 } else { 0 }),
         ),
+        Box::new(if session.archived { 1 } else { 0 }),
     ])
 }
 

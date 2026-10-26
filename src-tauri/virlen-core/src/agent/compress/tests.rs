@@ -46,6 +46,7 @@ fn session() -> Session {
         created_at: 0,
         updated_at: 0,
         pinned: false,
+        archived: false,
         tags: Vec::new(),
         workspace: None,
         agent_id: None,

@@ -32,6 +32,29 @@ async fn upsert_is_idempotent() {
     assert_eq!(loaded.updated_at, 200);
 }
 
+/// 归档标记：写入 / 读回 / 覆盖（侧栏「归档」的落库口径）
+///
+/// 单看 get_session 不够：侧栏列表走 `list_sessions`，两处都得把标记带出来，
+/// 否则「归档了但刷新后又变回来」。
+#[tokio::test]
+async fn archived_flag_roundtrips_and_clears() {
+    let repo = open_tmp();
+    let mut s = test_session("s1", "title", 100);
+    s.archived = true;
+    repo.upsert_session(&s).await.unwrap();
+
+    assert!(repo.get_session("s1").await.unwrap().unwrap().archived);
+    assert!(
+        repo.list_sessions().await.unwrap()[0].archived,
+        "列表投影也必须带归档标记"
+    );
+
+    // 取消归档（同一行 upsert）→ 库里的标记真的回到 0
+    s.archived = false;
+    repo.upsert_session(&s).await.unwrap();
+    assert!(!repo.get_session("s1").await.unwrap().unwrap().archived);
+}
+
 #[tokio::test]
 async fn append_and_get_messages_ordered() {
     let repo = open_tmp();

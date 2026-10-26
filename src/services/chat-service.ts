@@ -39,4 +39,12 @@ export {
 } from './chat/repair'
 
 /** 会话激活（数据侧）—— 组件与手机接口层共用的唯一入口；并含会话写操作用例（M4） */
-export { activateSession, renameSession, setSessionPinned, MAX_SESSION_TITLE_LEN } from './chat/session'
+export {
+  activateSession,
+  renameSession,
+  setSessionPinned,
+  setSessionArchived,
+  setSessionsArchived,
+  countArchiveBlockedSessions,
+  MAX_SESSION_TITLE_LEN,
+} from './chat/session'

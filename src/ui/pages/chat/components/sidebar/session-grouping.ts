@@ -3,7 +3,7 @@
  *
  * 维度由 `settings.sessionGroupType` 决定：按 Agent 或按工作目录。置顶分组排最前（置顶组之间保持名称序）；
  * 置顶 key 按维度分开存（见 `settingStore.pinnedSessionGroups`）—— `UNGROUPED_KEY` 在两个维度里是同一个
- * 字面量，混一份列表会互相串。
+ * 字面量，混一份列表会互相串。**组内会话全归档**的分组沉到最后（归档优先于置顶）。
  *
  * ⚠️ **组内顺序 = 入参顺序**：会话排序（会话级 `pinned` → `updatedAt` 倒序）的唯一来源是
  * `sessionStore.listSessions()`，这里只做聚合 + 分组置顶，调用方必须传已排序的列表。
@@ -32,6 +32,8 @@ export interface GroupableSession {
   title: string
   /** 未置顶时可能是 undefined（老数据），一律按「未置顶」处理 */
   pinned?: boolean
+  /** 未归档时可能是 undefined（老数据），一律按「未归档」处理 */
+  archived?: boolean
   agentId?: string
   workspace?: string
 }
@@ -51,7 +53,7 @@ export interface GroupSessionsOptions<S extends GroupableSession> {
   pinnedGroups?: readonly string[]
 }
 
-/** 把（已排序的）会话列表聚合成分组，置顶分组排最前 */
+/** 把（已排序的）会话列表聚合成分组，置顶分组排最前、全归档分组排最后 */
 export function groupSessions<S extends GroupableSession>(
   sessions: S[],
   options: GroupSessionsOptions<S>,
@@ -60,7 +62,27 @@ export function groupSessions<S extends GroupableSession>(
     options.type === 'workspace'
       ? groupByWorkspace(sessions)
       : groupByAgent(sessions, options.lookupAgent)
-  return pinnedFirst(groups, options.pinnedGroups)
+  return archivedLast(pinnedFirst(groups, options.pinnedGroups))
+}
+
+/**
+ * 组内会话**全部归档**的分组沉到最后（归档优先于置顶：置顶组一旦全归档也跟着下沉）。
+ *
+ * 只换位置，不改组内顺序 —— 会话自身的「归档殿后」由 `sessionStore.listSessions` 负责。
+ */
+function archivedLast<S extends GroupableSession>(
+  groups: SessionGroup<S>[],
+): SessionGroup<S>[] {
+  if (groups.length < 2) return groups
+  const active: SessionGroup<S>[] = []
+  const archived: SessionGroup<S>[] = []
+  for (const group of groups) {
+    const allArchived =
+      group.sessions.length > 0 && group.sessions.every((s) => s.archived === true)
+    if (allArchived) archived.push(group)
+    else active.push(group)
+  }
+  return archived.length === 0 ? groups : [...active, ...archived]
 }
 
 /**

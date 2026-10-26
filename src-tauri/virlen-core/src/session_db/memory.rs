@@ -1379,6 +1379,7 @@ mod tests {
                 created_at: 1,
                 updated_at: 1,
                 pinned: false,
+                archived: false,
                 tags: Vec::new(),
                 workspace: None,
                 agent_id: None,

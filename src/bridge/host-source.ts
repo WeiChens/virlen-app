@@ -513,6 +513,10 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
     renameSession(params: RenameSessionParams) {
       acl.assert('session.rename')
       requireSession(params.sessionId)
+      // 归档会话只允许取消归档 / 删除（归档是电脑侧状态，手机列表可能还没刷新）
+      if (sessionStore.getSession(params.sessionId)?.archived) {
+        throw new BridgeError('E_CONFLICT', '会话已归档，请先取消归档')
+      }
       if (!renameSession(params.sessionId, params.title)) {
         throw new BridgeError('E_BAD_REQUEST', '标题不能为空')
       }
@@ -522,6 +526,11 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
 
     setPinned(params: PinSessionParams) {
       acl.assert('session.pin')
+      requireSession(params.sessionId)
+      // 同 renameSession：归档会话只允许取消归档 / 删除
+      if (sessionStore.getSession(params.sessionId)?.archived) {
+        throw new BridgeError('E_CONFLICT', '会话已归档，请先取消归档')
+      }
       if (!setSessionPinned(params.sessionId, params.pinned)) {
         throw new BridgeError('E_NOT_FOUND', `会话不存在：${params.sessionId}`)
       }

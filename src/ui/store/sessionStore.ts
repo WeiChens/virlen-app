@@ -54,6 +54,7 @@ class SessionStore {
       deleteSession: action,
       /** 必须声明 action：否则 observer（手机推送 reaction）会报 MobX strict-mode 警告。 */
       deleteSessions: action,
+      setSessionsArchived: action,
       notifySessionChanged: action,
       clear: action,
     })
@@ -501,9 +502,11 @@ class SessionStore {
     return this.value.sessions.find((s) => s.id === id)
   }
 
-  /** 获取排序后的会话列表（置顶优先 → updatedAt 倒序） */
+  /** 获取排序后的会话列表（归档殿后 → 置顶优先 → updatedAt 倒序） */
   listSessions(): Session[] {
     return [...this.value.sessions].sort((a, b) => {
+      // 归档沉底：即使置顶也排在所有未归档之后（归档 = 不想再看见）
+      if (!!a.archived !== !!b.archived) return a.archived ? 1 : -1
       if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
       return b.updatedAt - a.updatedAt
     })
@@ -521,6 +524,7 @@ class SessionStore {
         | 'systemPrompt'
         | 'params'
         | 'pinned'
+        | 'archived'
         | 'tags'
         | 'providerConfigId'
         | 'modelId'
@@ -553,12 +557,38 @@ class SessionStore {
     return this.updateSession(id, { title })
   }
 
-  /** 切换置顶状态 */
+  /**
+   * 切换置顶状态。归档会话拒绝（只允许取消归档 / 删除）——
+   * 侧栏菜单已不提供该入口，这里是数据层兜底（侧栏直调 store，不经 service）。
+   */
   toggleSessionPin(id: string): boolean {
     const session = this.getSession(id)
-    if (!session) return false
+    if (!session || session.archived) return false
     this.updateSession(id, { pinned: !session.pinned })
     return true
+  }
+
+  /**
+   * 批量归档 / 取消归档：一次重建列表 + 一次持久化（分组「全部归档」不能逐条写）。
+   * 只改写目标态不一致的会话 —— 重复归档是幂等空操作。
+   * @returns 实际改动条数
+   */
+  setSessionsArchived(ids: string[], archived: boolean): number {
+    if (ids.length === 0) return 0
+    const target = new Set(ids)
+    const sessions = [...this.value.sessions]
+    let changed = 0
+    for (let i = 0; i < sessions.length; i++) {
+      const session = sessions[i]
+      if (!target.has(session.id)) continue
+      if (!!session.archived === !!archived) continue
+      sessions[i] = { ...session, archived }
+      changed++
+    }
+    if (changed === 0) return 0
+    this.value.sessions = sessions
+    this.persist()
+    return changed
   }
 
   /** 删除会话 */

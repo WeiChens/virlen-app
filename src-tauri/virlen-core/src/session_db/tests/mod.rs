@@ -37,6 +37,7 @@ pub(crate) fn test_session(id: &str, title: &str, updated_at: i64) -> Session {
         created_at: 1,
         updated_at,
         pinned: false,
+        archived: false,
         tags: vec!["tag1".into()],
         workspace: Some("/ws".into()),
         agent_id: None,

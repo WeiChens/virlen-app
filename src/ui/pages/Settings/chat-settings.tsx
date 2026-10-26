@@ -14,6 +14,12 @@ import { showToast } from '@/ui/components/shared/Toast'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
 import Select from '@/ui/components/shared/Select'
 import { t } from '@/ui/i18n'
+import {
+  AUTO_ARCHIVE_MAX_DAYS,
+  AUTO_ARCHIVE_MIN_DAYS,
+  resolveAutoArchiveDays,
+  runAutoArchiveOnce,
+} from '@/services/chat/auto-archive'
 import './general-settings.scss'
 
 function formatMaxTokens(v: number): string {
@@ -26,6 +32,10 @@ function ChatSettings() {
   /** 上下文窗口的本地草稿（k 为单位）—— onChange 不设限，blur / 回车时才校正提交 */
   const [windowKInput, setWindowKInput] = useState(() =>
     String(s.contextWindowTokens / 1000),
+  )
+  /** 自动归档天数的本地草稿 —— 与上下文窗口同一套做法（onChange 不校正，失焦才提交） */
+  const [archiveDaysInput, setArchiveDaysInput] = useState(() =>
+    String(s.sessionAutoArchiveDays),
   )
 
   const MAX_TOKENS_OPTIONS: { value: number; label: string }[] = [
@@ -126,6 +136,27 @@ function ChatSettings() {
       setWindowKInput(String(tokens / 1000))
     } else {
       setWindowKInput(String(s.contextWindowTokens / 1000))
+    }
+  }
+
+  // 设置值被外部改变（水合 / 其它入口）时同步草稿
+  useEffect(() => {
+    setArchiveDaysInput(String(s.sessionAutoArchiveDays))
+  }, [s.sessionAutoArchiveDays])
+
+  /**
+   * 提交自动归档天数：blur / 回车时校正（越界夹到 1–3650）；非法则回退。
+   * 提交后立即跑一次 —— 否则把 30 改成 1 要等到下一次定时检查才生效。
+   */
+  function commitAutoArchiveDays() {
+    const raw = Number(archiveDaysInput)
+    if (Number.isFinite(raw) && raw > 0) {
+      const days = resolveAutoArchiveDays(raw)
+      update('sessionAutoArchiveDays', days)
+      setArchiveDaysInput(String(days))
+      runAutoArchiveOnce()
+    } else {
+      setArchiveDaysInput(String(s.sessionAutoArchiveDays))
     }
   }
 
@@ -492,6 +523,59 @@ function ChatSettings() {
                   {opt.label}
                 </button>
               ))}
+            </div>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="label-text">{t('自动归档闲置对话')}</span>
+            <span className="label-desc">
+              {t('超过设定天数没有新消息的对话自动归档；置顶、运行中以及当前打开的对话不受影响')}
+            </span>
+          </div>
+          <div className="setting-control">
+            <label className="toggle">
+              <input
+                type="checkbox"
+                aria-label={t('自动归档闲置对话')}
+                checked={s.sessionAutoArchiveEnabled}
+                onChange={(e) => {
+                  update('sessionAutoArchiveEnabled', e.target.checked)
+                  // 打开开关本就期望「立刻清掉闲置的」，走一次判定（关闭时是空操作）
+                  runAutoArchiveOnce()
+                }}
+              />
+              <span className="toggle-slider" />
+            </label>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="label-text">{t('自动归档天数')}</span>
+            <span className="label-desc">
+              {t('最后一条消息距今超过该天数即归档')}
+            </span>
+          </div>
+          <div className="setting-control">
+            <div className="unit-input">
+              <input
+                type="number"
+                min={AUTO_ARCHIVE_MIN_DAYS}
+                max={AUTO_ARCHIVE_MAX_DAYS}
+                step="1"
+                aria-label={t('自动归档天数')}
+                value={archiveDaysInput}
+                disabled={!s.sessionAutoArchiveEnabled}
+                onChange={(e) => setArchiveDaysInput(e.target.value)}
+                onBlur={commitAutoArchiveDays}
+                onKeyDown={(e) => {
+                  // 同上下文窗口：number 输入框里回车不提交，主动失焦触发校正
+                  if (e.key === 'Enter') {
+                    (e.target as HTMLInputElement).blur()
+                  }
+                }}
+              />
+              <span className="unit">{t('天')}</span>
             </div>
           </div>
         </div>

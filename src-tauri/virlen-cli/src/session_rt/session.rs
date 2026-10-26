@@ -109,6 +109,7 @@ pub(crate) fn new_session(resources: &Resources, title: &str) -> Session {
         created_at: now,
         updated_at: now,
         pinned: false,
+        archived: false,
         tags: Vec::new(),
         workspace: Some(resources.workspace.clone()),
         agent_id: None,

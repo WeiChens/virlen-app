@@ -42,6 +42,8 @@ import { tauriUsageLedger } from '@/infrastructure/usage-ledger'
 import { initTrayService } from '@/services/tray-service'
 // 后台服务「结束通知」：AI 空闲时服务结束了 → Rust 发 `agent:service-exit`，前端落进消息列表
 import { initServiceNotice } from '@/services/service-notice'
+// 闲置会话自动归档（设置项 sessionAutoArchive*）：应立即跑一次 + 定时检查，必须在 sessionLoad 之后接线
+import { initSessionAutoArchive } from '@/services/chat/auto-archive'
 // 安全配置：规则以 Rust 侧 `app_settings` 为唯一源（localStorage 不保存），
 // 启动同步由 store 的 hydrate 负责（它同时刷新 observable，设置页立即展示表里的值）。
 import { flushSecurityPersist } from '@/infrastructure/securityRepo'
@@ -280,6 +282,10 @@ async function init() {
 
   providerService.initProviders()
   searchProviderService.initSearchProviders()
+
+  // 闲置会话自动归档：必须在 sessionLoad（阶段 1）之后 —— 否则扫到的是空列表。
+  // 非阻塞，不占启动关键路径里的 step。
+  initSessionAutoArchive()
 
   // 初始化知识库（无知识库时自动创建默认知识库，非阻塞）
   ragService.initKnowledgeBases().catch((err) => {

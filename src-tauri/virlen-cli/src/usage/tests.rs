@@ -77,6 +77,7 @@ async fn seed_session(host: &Arc<dyn HostEnv>, id: &str, title: &str) {
             created_at: now,
             updated_at: now,
             pinned: false,
+            archived: false,
             tags: Vec::new(),
             workspace: None,
             agent_id: None,

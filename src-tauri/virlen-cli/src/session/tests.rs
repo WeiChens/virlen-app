@@ -47,6 +47,7 @@ fn session(id: &str, title: &str, updated: i64) -> Session {
         created_at: updated - 10,
         updated_at: updated,
         pinned: false,
+        archived: false,
         tags: Vec::new(),
         workspace: Some("E:/proj".to_string()),
         agent_id: None,

@@ -27,7 +27,10 @@ CREATE TABLE IF NOT EXISTS sessions (
   agent_id TEXT,
   allowed_tools TEXT,
   skills TEXT,
-  system_prompt_manually_edited INTEGER
+  system_prompt_manually_edited INTEGER,
+  -- 归档标记：侧栏里排到最后、不可打开（右键取消归档才能进）。
+  -- 放在表尾：老库由 ensure_sessions_archived_column 追加的列也落在这里，新老库列序一致。
+  archived INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -217,6 +220,8 @@ pub(crate) const SCHEMA_VERSION: i64 = 3;
 pub(crate) fn init_schema(conn: &Connection) -> Result<bool, String> {
     conn.execute_batch(DDL)
         .map_err(|e| format!("初始化表结构失败: {}", e))?;
+    // 老库补 `sessions.archived`（纯新增元数据级 ALTER，不占 SCHEMA_VERSION）
+    ensure_sessions_archived_column(conn)?;
     ensure_text_plain_column(conn)?;
     conn.execute_batch(FTS_DDL)
         .map_err(|e| format!("初始化 FTS 索引失败: {}", e))?;
@@ -414,6 +419,40 @@ fn ensure_usage_transport_columns(conn: &Connection) -> Result<(), String> {
             [],
         )
         .map_err(|e| format!("添加 usage_ledger.{} 列失败: {}", column, e))?;
+    }
+    Ok(())
+}
+
+/// 老库给 `sessions` 补 `archived` 列（新库由 DDL 直接建出，这里检测后跳过）。
+///
+/// 与 `ensure_memories_project_path_column` 同一策略：元数据级 `ALTER`（带默认值，不重写表），
+/// 放在 `init_schema` 快速路径里，**不占 `SCHEMA_VERSION`** —— 递增版本会触发全库 FTS 重建，
+/// 而这里只是一列默认值。旧会话补出来是 0 = 未归档（升级不改变任何现有会话的可见性）。
+fn ensure_sessions_archived_column(conn: &Connection) -> Result<(), String> {
+    let exists = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(sessions)")
+            .map_err(|e| format!("读取 sessions 表结构失败: {}", e))?;
+        let mut has = false;
+        {
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(|e| e.to_string())?;
+            for name in rows.flatten() {
+                if name == "archived" {
+                    has = true;
+                    break;
+                }
+            }
+        }
+        has
+    };
+    if !exists {
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
+            [],
+        )
+        .map_err(|e| format!("添加 sessions.archived 列失败: {}", e))?;
     }
     Ok(())
 }

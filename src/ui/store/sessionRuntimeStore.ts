@@ -106,6 +106,17 @@ export function isSessionRuntimeBusy(rt: SessionRuntime): boolean {
 }
 
 /**
+ * 该会话的引擎 run 是否**还活着**（在跑 / 本地前置准备 / 暂停等你回答）。
+ *
+ * 与 `isSessionRuntimeBusy` 的唯一差别是多算 `paused`：暂停中的 run 仍在等一次回答，
+ * 归档会把它从视图里摘掉 —— 那条交互就再也没人答得上了。归档闸门用它（见
+ * `services/chat/session.ts::setSessionArchived`）。
+ */
+export function isSessionRunActive(rt: SessionRuntime): boolean {
+  return rt.working || rt.preparing || rt.paused
+}
+
+/**
  * 丢弃已删除会话的运行时状态（否则 sessions 条目永久残留、working / hasNewReply 挂在已不存在的 id 上）。
  */
 export function dropSessionRuntime(ids: Iterable<string>): void {

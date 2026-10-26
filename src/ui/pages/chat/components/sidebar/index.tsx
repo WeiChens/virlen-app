@@ -21,7 +21,7 @@ import AgentSvg from '@/ui/components/icons/AgentSvg'
 import PinSvg from '@/ui/components/icons/PinSvg'
 import ExportDialog from '@/ui/pages/chat/components/modals/ExportDialog'
 import { exportSessionToFile } from '@/services/export-service'
-import { deleteSessions, renameSession } from '@/services/chat-service'
+import { deleteSessions, renameSession, setSessionArchived, setSessionsArchived, countArchiveBlockedSessions } from '@/services/chat-service'
 import { showToast } from '@/ui/components/shared/Toast'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 import Modal, { ModalFooterButtons } from '@/ui/components/shared/Modal'
@@ -222,7 +222,11 @@ function ChatSidebar({
 
   const handleSelect = useCallback(
     (sessionId: string) => {
-      // 清红点由 onSelectSession 统一负责，托盘唤起 / 检索跳转等入口也走同一套
+      // 归档会话不可打开：只能先右键「取消归档」（清红点走 onSelectSession，入口统一）
+      if (sessionStore.getSession(sessionId)?.archived) {
+        showToast(t('该对话已归档，取消归档后才能打开'), 2500)
+        return
+      }
       chatState.setValue('currentSessionId', sessionId)
       onSelectSession(sessionId)
     },
@@ -242,6 +246,51 @@ function ChatSidebar({
   const handleTogglePin = useCallback((sessionId: string) => {
     sessionStore.toggleSessionPin(sessionId)
   }, [])
+
+  /** 归档 / 取消归档：归档当前会话时退出视图（运行中的会话不允许归档，取消归档不受限） */
+  const handleToggleArchive = useCallback((session: Session) => {
+    const next = !session.archived
+    // ⚠️ service 会拒绝「run 还活着」的归档（含暂停等你回答的），这里必须告知原因，不能静默不动
+    if (!setSessionArchived(session.id, next)) {
+      if (next) showToast(t('该对话正在运行，结束后才能归档'), 2500)
+      return
+    }
+    if (next && chatState.value.currentSessionId === session.id) {
+      chatState.set({ currentSessionId: null })
+    }
+    showToast(next ? t('已归档') : t('已取消归档'), 2000)
+  }, [])
+
+  /** 分组「全部归档 / 全部取消归档」：一次写入，组内当前会话被归档时一并退出视图 */
+  const handleArchiveGroup = useCallback(
+    (group: SessionGroup, archived: boolean) => {
+      const ids = group.sessions.map((s) => s.id)
+      // 运行中的会被跳过（与 service 内过滤同一判据，见 countArchiveBlockedSessions）
+      const blocked = archived ? countArchiveBlockedSessions(ids) : 0
+      const changed = setSessionsArchived(ids, archived)
+      const currentId = chatState.value.currentSessionId
+      // 只有当前会话真的变成了归档态才退出视图：被跳过的运行中会话切走会让人以为被中断了
+      if (archived && currentId && sessionStore.getSession(currentId)?.archived) {
+        chatState.set({ currentSessionId: null })
+      }
+      if (archived && changed === 0 && blocked > 0) {
+        showToast(
+          tpl('$__count__ 个对话正在运行，暂时不能归档', { count: blocked }),
+          2500,
+        )
+        return
+      }
+      const base = archived
+        ? tpl('已归档 $__count__ 个对话', { count: changed })
+        : tpl('已取消归档 $__count__ 个对话', { count: changed })
+      const suffix =
+        blocked > 0
+          ? tpl('（$__count__ 个正在运行，已跳过）', { count: blocked })
+          : ''
+      showToast(base + suffix, 2500)
+    },
+    [],
+  )
 
   const handleStartEdit = useCallback((session: Session) => {
     setEditingId(session.id)
@@ -381,39 +430,68 @@ function ChatSidebar({
     setImportLoading(false)
   }, [importSessionId, selectedKbId, selectedMsgIds, handleCloseImport])
 
-  /** 会话项右键菜单项：渲染时按 target 现算，文案不会是打开那一刻的过期值 */
+  /**
+   * 会话项右键菜单项：渲染时按 target 现算，文案不会是打开那一刻的过期值。
+   *
+   * 归档会话**只给两个入口**：取消归档、删除。其余操作（置顶 / 重命名 / 导出 / 导入知识库）
+   * 一律不提供 —— 归档 = 「暂时不想动它」，只保留恢复与清理两条路。
+   */
   const buildSessionMenuItems = useCallback(
-    (session: Session): ContextMenuItem[] => [
-      {
-        key: 'pin',
-        label: session.pinned ? t('取消置顶') : t('置顶'),
-        onClick: () => handleTogglePin(session.id),
-      },
-      {
-        key: 'rename',
-        label: t('重命名'),
-        onClick: () => handleStartEdit(session),
-      },
-      {
-        key: 'export',
-        label: t('导出'),
-        onClick: () => handleOpenExport(session.id),
-      },
-      {
-        key: 'import-kb',
-        label: t('导入知识库'),
-        onClick: () => handleOpenImportKB(session.id),
-      },
-      {
-        key: 'delete',
-        label: t('删除'),
-        divider: true,
-        danger: true,
-        onClick: () => handleDelete(session.id),
-      },
-    ],
+    (session: Session): ContextMenuItem[] => {
+      if (session.archived) {
+        return [
+          {
+            key: 'unarchive',
+            label: t('取消归档'),
+            onClick: () => handleToggleArchive(session),
+          },
+          {
+            key: 'delete',
+            label: t('删除'),
+            divider: true,
+            danger: true,
+            onClick: () => handleDelete(session.id),
+          },
+        ]
+      }
+      return [
+        {
+          key: 'pin',
+          label: session.pinned ? t('取消置顶') : t('置顶'),
+          onClick: () => handleTogglePin(session.id),
+        },
+        {
+          key: 'archive',
+          label: t('归档'),
+          onClick: () => handleToggleArchive(session),
+        },
+        {
+          key: 'rename',
+          label: t('重命名'),
+          onClick: () => handleStartEdit(session),
+        },
+        {
+          key: 'export',
+          label: t('导出'),
+          onClick: () => handleOpenExport(session.id),
+        },
+        {
+          key: 'import-kb',
+          label: t('导入知识库'),
+          onClick: () => handleOpenImportKB(session.id),
+        },
+        {
+          key: 'delete',
+          label: t('删除'),
+          divider: true,
+          danger: true,
+          onClick: () => handleDelete(session.id),
+        },
+      ]
+    },
     [
       handleTogglePin,
+      handleToggleArchive,
       handleStartEdit,
       handleOpenExport,
       handleOpenImportKB,
@@ -485,7 +563,7 @@ function ChatSidebar({
     return (
       <div
         key={session.id}
-        className={`session-item ${isCurrent ? 'active' : ''} ${isBusy ? 'working' : ''} ${session.pinned ? 'pinned' : ''}`}
+        className={`session-item ${isCurrent ? 'active' : ''} ${isBusy ? 'working' : ''} ${session.pinned ? 'pinned' : ''} ${session.archived ? 'archived' : ''}`}
         onClick={() => handleSelect(session.id)}
         // 右键即菜单：openAt 会 preventDefault + stopPropagation，顺带拦掉默认菜单
         onContextMenu={(e) => sessionMenu.openAt(e, session)}>
@@ -521,6 +599,11 @@ function ChatSidebar({
               )}
               <SessionStatusFlag sessionId={session.id} />
               <span className="session-title">{session.title}</span>
+              {session.archived && (
+                <span className="archived-indicator" title={t('已归档')}>
+                  {t('已归档')}
+                </span>
+              )}
             </div>
           )}
           <span className="session-meta">{timeFormat(session.updatedAt)}</span>
@@ -598,6 +681,7 @@ function ChatSidebar({
                 onToggleGroup={() => toggleGroup(group.key)}
                 onNewSession={() => handleNewSessionInGroup(group)}
                 onTogglePin={() => handleToggleGroupPin(group.key)}
+                onArchiveGroup={(archived) => handleArchiveGroup(group, archived)}
               />
             ))
           ) : sessionKeyword ? (
@@ -818,6 +902,8 @@ interface SessionGroupViewProps {
   onNewSession: () => void
   /** 置顶 / 取消置顶本分组 */
   onTogglePin: () => void
+  /** 整组归档 / 取消归档（入参 = 目标态） */
+  onArchiveGroup: (archived: boolean) => void
 }
 
 function SessionGroupView({
@@ -831,10 +917,17 @@ function SessionGroupView({
   onToggleGroup,
   onNewSession,
   onTogglePin,
+  onArchiveGroup,
 }: SessionGroupViewProps) {
   const [showAll, setShowAll] = useState(false)
   /** 分组头右键菜单：与「会话项」共用同一个 ContextMenu */
   const menu = useContextMenu<SessionGroup>()
+
+  /** 组内会话全部已归档 → 分组头显示归档态（分组本身也已排到列表尾部） */
+  const allArchived = useMemo(
+    () => group.sessions.length > 0 && group.sessions.every((s) => !!s.archived),
+    [group.sessions],
+  )
 
   // 组内有未查看的新回复（折叠时分组头显示红点）
   const hasNewReplySession = useMemo(
@@ -887,6 +980,12 @@ function SessionGroupView({
         label: isPinned ? t('取消置顶分组') : t('置顶分组'),
         onClick: onTogglePin,
       },
+      {
+        key: 'archive-group',
+        // 已全归档 → 对称的「取消」入口，否则要逐个取消
+        label: allArchived ? t('全部取消归档') : t('全部归档'),
+        onClick: () => onArchiveGroup(!allArchived),
+      },
     ]
     // 「打开文件路径 / 编辑智能体」按分组维度二选一，未分组均不适用
     if (group.key !== UNGROUPED_KEY) {
@@ -918,8 +1017,10 @@ function SessionGroupView({
     isPinned,
     sessionGroupType,
     group.key,
+    allArchived,
     onNewSession,
     onTogglePin,
+    onArchiveGroup,
     handleOpenWorkspace,
     handleEditAgent,
     handleDeleteAllSessions,
@@ -928,7 +1029,7 @@ function SessionGroupView({
   return (
     <div className="session-group">
       <div
-        className={`session-group-header${hasActiveSession && isCollapsed ? ' has-active' : ''}`}
+        className={`session-group-header${hasActiveSession && isCollapsed ? ' has-active' : ''}${allArchived ? ' archived' : ''}`}
         onClick={onToggleGroup}
         // 右键即菜单（与「会话项」一致）
         onContextMenu={(e) => menu.openAt(e, group)}
@@ -956,6 +1057,10 @@ function SessionGroupView({
           </span>
         )}
         <span className="group-name">{group.name}</span>
+        {/* 整组归档 → 明确的文字标记（只靠颜色对色弱用户不可见） */}
+        {allArchived && (
+          <span className="group-archived-tag">{t('已归档')}</span>
+        )}
         {/* 会话数只是计数（点击交给整行），操作全在右键菜单里 */}
         <span className="group-count">{group.sessions.length}</span>
       </div>

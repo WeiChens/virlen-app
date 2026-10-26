@@ -252,6 +252,8 @@ export interface Session {
   createdAt: number
   updatedAt: number
   pinned: boolean
+  /** 归档：侧栏里排在最后，且未取消归档前不打开（右键菜单切换） */
+  archived?: boolean
   tags: string[]
   workspace?: string
   agentId?: string

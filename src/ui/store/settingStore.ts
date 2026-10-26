@@ -110,6 +110,14 @@ export interface SettingsStore {
   /** 会话侧边栏分组方式 */
   sessionGroupType: SessionGroupType
   /**
+   * 自动归档闲置会话（默认开）：超过 `sessionAutoArchiveDays` 天没有新消息的会话自动归档。
+   * 归档是**只改标记**的温和动作，随时能右键取消归档。
+   * ⚠️ 跳过的三类：run 还活着的、置顶的、当前正在查看的 —— 口径只在 `services/chat/auto-archive.ts`。
+   */
+  sessionAutoArchiveEnabled: boolean
+  /** 自动归档的闲置天数（默认 30，1–3650；越界值由 auto-archive 执行器校正） */
+  sessionAutoArchiveDays: number
+  /**
    * 已置顶的分组 key（按维度分开存）：分组是虚拟的，置顶只能住在设置里；
    * UNGROUPED_KEY 两个维度共用同一个字面量，混一份会互相串。
    */
@@ -235,6 +243,8 @@ const defaultSettings: SettingsStore = {
   quickInputTemplates: [],
   goalQuickInputTemplates: [],
   sessionGroupType: 'workspace',
+  sessionAutoArchiveEnabled: true,
+  sessionAutoArchiveDays: 30,
   pinnedSessionGroups: { agent: [], workspace: [] },
   imageVisionAnalyzeOptimize: true,
   // 图片预览：默认不显示识别文字，也不自动识别（点工具栏「识别文字」才跑）

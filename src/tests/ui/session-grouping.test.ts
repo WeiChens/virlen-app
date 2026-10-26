@@ -163,6 +163,40 @@ describe('groupSessions — 分组置顶', () => {
   })
 })
 
+describe('groupSessions — 全归档分组沉底', () => {
+  it('组内会话全部归档 → 分组排到最后（即使它被置顶）', () => {
+    // 名称序 a1(代码) < a3(翻译) < a2(文档)；a1 整组归档 → 沉底
+    const sessions = [
+      makeSession('s1', '甲', { agentId: 'a1', archived: true }),
+      makeSession('s2', '乙', { agentId: 'a2' }),
+      makeSession('s3', '丙', { agentId: 'a3' }),
+    ]
+    expect(
+      groupSessions(sessions, { type: 'agent', lookupAgent }).map((g) => g.key),
+    ).toEqual(['a3', 'a2', 'a1'])
+    // 归档优先于置顶：置顶的 a1 也得跟着沉底
+    expect(
+      groupSessions(sessions, { type: 'agent', lookupAgent, pinnedGroups: ['a1'] }).map(
+        (g) => g.key,
+      ),
+    ).toEqual(['a3', 'a2', 'a1'])
+  })
+
+  it('只有部分归档 → 不算全归档，分组位置不变（组内归档排序由 store 负责）', () => {
+    const sessions = [
+      makeSession('s1', '甲', { agentId: 'a1', archived: true }),
+      makeSession('s2', '乙', { agentId: 'a1' }),
+    ]
+    expect(
+      groupSessions(sessions, { type: 'agent', lookupAgent }).map((g) => g.key),
+    ).toEqual(['a1'])
+    // 组内顺序 = 入参顺序（本函数不重排）
+    expect(
+      groupSessions(sessions, { type: 'agent', lookupAgent })[0].sessions.map((s) => s.id),
+    ).toEqual(['s1', 's2'])
+  })
+})
+
 describe('toggleGroupPin', () => {
   it('未置顶 → 追加入列', () => {
     expect(toggleGroupPin([], 'a1')).toEqual(['a1'])

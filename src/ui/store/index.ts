@@ -11,6 +11,7 @@ export {
   updateSessionRuntime,
   dropSessionRuntime,
   isSessionRuntimeBusy,
+  isSessionRunActive,
 } from './sessionRuntimeStore'
 export type { SessionRuntime } from './sessionRuntimeStore'
 export {

@@ -34,6 +34,10 @@ pub struct Session {
     pub created_at: i64,
     pub updated_at: i64,
     pub pinned: bool,
+    /// 归档标记：归档的会话在侧栏殿后且不可打开（取消归档才能进）。
+    /// `serde(default)` 保证老前端 / 老桥接协议不带这个字段时按「未归档」处理。
+    #[serde(default)]
+    pub archived: bool,
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]

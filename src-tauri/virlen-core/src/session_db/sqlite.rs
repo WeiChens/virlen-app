@@ -171,8 +171,8 @@ impl SessionRepo for SqliteSessionRepo {
 INSERT INTO sessions (
   id, title, provider_config_id, model_id, system_prompt, params,
   created_at, updated_at, pinned, tags, workspace, agent_id,
-  allowed_tools, skills, system_prompt_manually_edited
-) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+  allowed_tools, skills, system_prompt_manually_edited, archived
+) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
 ON CONFLICT(id) DO UPDATE SET
   title=excluded.title,
   provider_config_id=excluded.provider_config_id,
@@ -186,7 +186,8 @@ ON CONFLICT(id) DO UPDATE SET
   agent_id=excluded.agent_id,
   allowed_tools=excluded.allowed_tools,
   skills=excluded.skills,
-  system_prompt_manually_edited=excluded.system_prompt_manually_edited
+  system_prompt_manually_edited=excluded.system_prompt_manually_edited,
+  archived=excluded.archived
 "#,
                 rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
             )

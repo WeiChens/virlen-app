@@ -34,6 +34,7 @@ fn session(id: &str, title: &str, agent: Option<&str>, ws: Option<&str>, updated
         created_at: updated,
         updated_at: updated,
         pinned: false,
+        archived: false,
         tags: Vec::new(),
         workspace: ws.map(String::from),
         agent_id: agent.map(String::from),

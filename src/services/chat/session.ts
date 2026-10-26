@@ -12,8 +12,10 @@
  */
 import {
   sessionStore,
+  sessionRuntimeState,
   getSessionRuntime,
   updateSessionRuntime,
+  isSessionRunActive,
 } from '@/ui/store'
 import type { Session } from '@/types'
 import { repairSessionIfNeeded } from './repair'
@@ -51,8 +53,15 @@ export async function activateSession(
  */
 export const MAX_SESSION_TITLE_LEN = 80
 
-/** 重命名会话（唯一入口）：`trim()` 后为空 → 不改（返回 false）；超长 → 截断；会话不存在 → false。 */
+/**
+ * 重命名会话（唯一入口）：`trim()` 后为空 → 不改（返回 false）；超长 → 截断；
+ * 会话不存在 / **已归档** → false。
+ *
+ * 归档会话只允许「取消归档」与「删除」，其它写操作一律拒绝（见 `setSessionArchived`）。
+ */
 export function renameSession(sessionId: string, title: string): boolean {
+  const session = sessionStore.getSession(sessionId)
+  if (!session || session.archived) return false
   const trimmed = (title ?? '').trim()
   if (!trimmed) return false
   const next =
@@ -64,11 +73,67 @@ export function renameSession(sessionId: string, title: string): boolean {
 
 /**
  * 置顶 / 取消置顶（唯一入口）。接**目标态**而非切换：手机拿到的列表可能过期，切换会把状态翻反。
+ * 会话不存在 / **已归档** → false（归档会话只允许取消归档与删除）。
  */
 export function setSessionPinned(sessionId: string, pinned: boolean): boolean {
   const session = sessionStore.getSession(sessionId)
-  if (!session) return false
+  if (!session || session.archived) return false
   if (!!session.pinned === !!pinned) return true // 目标态已达成：幂等空操作
   sessionStore.toggleSessionPin(sessionId)
   return true
+}
+
+/**
+ * 归档 / 取消归档（唯一入口，接目标态）。
+ *
+ * 归档只改标记：不删消息、不断运行、不刷 `updatedAt`（它只由用户发消息刷新）。
+ * **有 run 在跑（含暂停等你回答）的会话拒绝归档**：归档会把它从视图里摘掉，那条交互就永远
+ * 没人答得上了。取消归档不受此限（恢复动作永远允许）。
+ * **归档后的会话只允许取消归档与删除**，其余操作在各自入口拒绝：
+ *   - 打开：侧栏 `handleSelect` + `chat-view.handleSelectSession` 校验 `archived`；
+ *   - 重命名 / 置顶：本文件拒绝；
+ *   - 导出 / 导入知识库等面板操作：侧栏右键菜单不给入口。
+ * `activateSession` 故意不拦：它同时被手机订阅复用，拦掉会变成「订阅成功但消息永远空白」。
+ */
+export function setSessionArchived(
+  sessionId: string,
+  archived: boolean,
+): boolean {
+  if (!sessionStore.getSession(sessionId)) return false
+  if (archived && isArchiveBlocked(sessionId)) return false
+  sessionStore.setSessionsArchived([sessionId], archived)
+  return true
+}
+
+/**
+ * 批量归档 / 取消归档（分组「全部归档」用）：@returns 实际改动条数
+ *
+ * 归档方向**跳过** run 还活着的会话（一条在跑不该让整组归档全失败）；
+ * 取消归档不过滤 —— 恢复动作永远允许。跳过条数由 `countArchiveBlockedSessions` 取，
+ * ⚠️ 两处口径必须一致，否则提示的条数和实际改动对不上。
+ */
+export function setSessionsArchived(
+  sessionIds: string[],
+  archived: boolean,
+): number {
+  const targets = archived
+    ? sessionIds.filter((id) => !isArchiveBlocked(id))
+    : sessionIds
+  return sessionStore.setSessionsArchived(targets, archived)
+}
+
+/** 这批会话里有多少条会被「运行中」挡住归档（侧栏提示跳过条数用） */
+export function countArchiveBlockedSessions(sessionIds: string[]): number {
+  return sessionIds.filter(isArchiveBlocked).length
+}
+
+/**
+ * 该会话当前是否禁止归档：run 还活着（在跑 / 本地前置准备 / 暂停等回答）。
+ * 会话不存在、或从没跑过（无运行时条目）都不算挡住 —— 写入侧会自己返回 false。
+ * 不直接用 `getSessionRuntime`：它会**建**空条目，批量统计时白开一堆内存。
+ */
+function isArchiveBlocked(sessionId: string): boolean {
+  if (!sessionStore.getSession(sessionId)) return false
+  const rt = sessionRuntimeState.value.sessions[sessionId]
+  return !!rt && isSessionRunActive(rt)
 }

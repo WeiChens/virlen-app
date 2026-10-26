@@ -581,6 +581,22 @@ describe('M4 会话写操作', () => {
       h.caller.call('host.session.pin', { sessionId: 'nope', pinned: true }),
     ).rejects.toMatchObject({ code: 'E_NOT_FOUND' })
   })
+
+  it('归档会话只允许取消归档 / 删除：重命名 / 置顶 → E_CONFLICT（不能误报“会话不存在”）', async () => {
+    sessionStore.saveSession(makeSession('s-w-3', '归档的'))
+    sessionStore.setSessionsArchived(['s-w-3'], true)
+    const h = setup()
+    await expect(
+      h.caller.call('host.session.rename', { sessionId: 's-w-3', title: '改个名' }),
+    ).rejects.toMatchObject({ code: 'E_CONFLICT' })
+    await expect(
+      h.caller.call('host.session.pin', { sessionId: 's-w-3', pinned: true }),
+    ).rejects.toMatchObject({ code: 'E_CONFLICT' })
+    expect(sessionStore.getSession('s-w-3')!.title).toBe('归档的')
+    // 允许的两条路：删除照样可走（“取消归档”是电脑侧右键菜单里的动作，不经手机接口）
+    await h.caller.call('host.session.delete', { sessionId: 's-w-3', confirm: true })
+    expect(sessionStore.getSession('s-w-3')).toBeUndefined()
+  })
 })
 
 // ───────────────────────────── M4：交互应答（分级 / 独立校验） ─────────────────────────────

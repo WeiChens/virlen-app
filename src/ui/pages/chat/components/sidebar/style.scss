@@ -237,6 +237,9 @@
           display: flex;
           align-items: center;
           gap: 6px;
+          // 标题旁还有置顶 / 状态 / 归档标记（各自 flex-shrink:0）：
+          // 不给 0 的话长标题会把后面的标记顶出可视区
+          min-width: 0;
         }
 
         .session-title-wrapper {
@@ -254,6 +257,18 @@
               height: 12px;
               fill: var(--accent-color, #4f46e5);
             }
+          }
+
+          /* 归档标记：只靠颜色对色弱用户不可见，用文字标签 */
+          .archived-indicator {
+            flex-shrink: 0;
+            padding: 0 4px;
+            border-radius: 4px;
+            background: var(--hover-bg, #e8e8ee);
+            color: var(--text-secondary, #888);
+            font-size: var(--font-size-2xs);
+            line-height: 1.5;
+            white-space: nowrap;
           }
 
           .shelved-indicator {
@@ -294,6 +309,15 @@
 
         .session-info .session-title {
           color: var(--accent-color, #4f46e5);
+        }
+      }
+
+      // 归档会话：整体降调（仍可点击 / 右键，只把归档态说清楚；打开被入口拦截）
+      &.archived {
+        opacity: 0.6;
+
+        .session-info .session-title {
+          color: var(--text-secondary, #999);
         }
       }
 
@@ -404,6 +428,29 @@
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+      }
+
+      // 组内会话全部归档 → 分组降调 + 文字标记（排序已由 session-grouping 沉到尾部）
+      &.archived {
+        .group-name {
+          color: var(--text-secondary, #999);
+        }
+
+        .group-icon,
+        .group-toggle {
+          opacity: 0.6;
+        }
+      }
+
+      .group-archived-tag {
+        flex-shrink: 0;
+        padding: 0 4px;
+        border-radius: 4px;
+        background: var(--hover-bg, #e8e8ee);
+        color: var(--text-secondary, #888);
+        font-size: var(--font-size-2xs);
+        line-height: 1.5;
+        white-space: nowrap;
       }
 
       // 已置顶的分组 → 只在分组头挂一枚图钉（图标 / 分组名不做高亮，用色同会话项的置顶指示器）

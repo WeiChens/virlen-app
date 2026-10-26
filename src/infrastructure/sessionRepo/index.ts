@@ -266,6 +266,7 @@ function persistedSignature(session: Session): string {
     session.createdAt,
     session.updatedAt,
     session.pinned,
+    session.archived ?? false,
     session.tags ?? [],
     session.workspace ?? null,
     session.agentId ?? null,

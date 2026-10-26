@@ -137,3 +137,47 @@ CREATE TABLE messages (
     repo.migrate().await.unwrap();
     assert!(has_index(&repo, "idx_messages_ts"), "迁移后应建好检索索引");
 }
+
+/// 老库（`sessions` 表建于 `archived` 之前）→ 开库自动补列，旧会话读出来是「未归档」，
+/// 且补出来的列可正常写入（不是只能读的遗留列）。
+///
+/// 不递增 `SCHEMA_VERSION` 的取舍就在这条用例里：老库打开后直接可用，不触发全库 FTS 重建。
+#[tokio::test]
+async fn legacy_sessions_table_gets_archived_column() {
+    let dir = std::env::temp_dir().join(format!(
+        "virlen_legacy_archived_{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("legacy.db");
+    {
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch(
+            r#"
+CREATE TABLE sessions (
+  id TEXT PRIMARY KEY, title TEXT NOT NULL, provider_config_id TEXT NOT NULL,
+  model_id TEXT NOT NULL, system_prompt TEXT NOT NULL DEFAULT '', params TEXT NOT NULL,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, pinned INTEGER NOT NULL DEFAULT 0,
+  tags TEXT NOT NULL DEFAULT '[]', workspace TEXT, agent_id TEXT, allowed_tools TEXT,
+  skills TEXT, system_prompt_manually_edited INTEGER
+);
+INSERT INTO sessions (id, title, provider_config_id, model_id, system_prompt, params, created_at, updated_at)
+  VALUES ('s1', '旧会话', 'p1', 'gpt-4o', '', '{"temperature":0.7,"topP":1.0,"maxTokens":100,"stream":true}', 1, 100);
+"#,
+        )
+        .unwrap();
+    }
+
+    let repo = SqliteSessionRepo::open(&db).unwrap();
+    let mut loaded = repo.get_session("s1").await.unwrap().expect("老会话应仍在");
+    assert!(!loaded.archived, "补出来的列默认 0 = 未归档（升级不改变可见性）");
+    assert_eq!(loaded.title, "旧会话");
+
+    loaded.archived = true;
+    repo.upsert_session(&loaded).await.unwrap();
+    assert!(
+        repo.get_session("s1").await.unwrap().unwrap().archived,
+        "补出来的列必须可写"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

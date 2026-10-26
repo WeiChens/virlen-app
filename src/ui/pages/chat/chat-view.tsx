@@ -1131,6 +1131,15 @@ function ChatView() {
   async function handleSelectSession(sessionId: string) {
     const session = sessionStore.getSession(sessionId)
     if (!session) return
+    // 归档会话不可打开。⚠️ 这里是桌面端**所有**切会话入口的收口（侧栏 / 托盘唤起 /
+    // 检索跳转都直接改过 store）：不把游标退回去，界面会停在一个空白会话上。
+    if (session.archived) {
+      if (chatState.value.currentSessionId === sessionId) {
+        chatState.setValue('currentSessionId', null)
+      }
+      showToast(t('该对话已归档，取消归档后才能打开'), 2500)
+      return
+    }
     // ⚠️ 切会话不再确认、也不再关掉右侧标签：每个会话一套（`panelBuckets`），
     // 切回去原样还在（草稿 / 终端屏幕都没动过）
     // 先登记再干活：内部会再次写同值 currentSessionId，早登记避免兜底 effect 重入
