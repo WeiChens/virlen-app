@@ -8,8 +8,10 @@
 //!
 //! ## 关闭「本地图片伪视觉分析」时（`app_settings.imageVisionAnalyzeOptimize = false`）
 //! 不再跑端侧模型：工具结果只回一段「图片事实」信封，图片本体另交一条 `role = vision_image`
-//! 的注入消息（见 `image_send`；前端不渲染，组装请求时投影成 user）。
+//! 的注入消息（见 `image_send`；前端列表不渲染，组装请求时投影成 user）。
 //! 与 dsh `read_image` 同一套语义（文本信封 + 图片块），区别是本项目 `tool` 消息放不下图片块。
+//! 另外工具结果会带一份 `uiData`（`type = vision_image_sent` + `imageMessageId`）：界面卡片
+//! 展开时据此把「真正发出去的那张图」渲染出来，不用再退化成只有一段文本。
 
 use crate::agent::native_tools::common::{arg_str, resolve_safe_path};
 use crate::agent::native_tools::heavy;
@@ -121,9 +123,10 @@ pub(crate) async fn vision_analyze_tool(
 
 /// 「关闭本地图片伪视觉分析」的路径：读盘 + 校验 + 组一条 `role = vision_image` 消息入队。
 ///
-/// 工具结果只给模型「图片事实」（路径 / 格式 / 尺寸 / 字节数），图片本体由
-/// `tool_executor` 在本轮工具全部结束后作为独立消息注入 —— 与 dsh `read_image`
-/// 「文本信封 + 图片块」同一套语义，区别是本项目 `tool` 消息放不下图片块。
+/// 工具结果给模型「图片事实」（路径 / 格式 / 尺寸 / 字节数），并给界面一份
+/// `uiData`（[`image_send::sent_ui_data`]：事实 + 注入消息 id）—— 卡片展开时按 id 取那条
+/// 消息里的图渲染。图片本体由 `tool_executor` 在本轮工具全部结束后作为独立消息注入 ——
+/// 与 dsh `read_image` 「文本信封 + 图片块」同一套语义，区别是本项目 `tool` 消息放不下图片块。
 async fn send_image(
     ctx: &NativeToolCtx<'_>,
     source_path: &str,
@@ -143,9 +146,11 @@ async fn send_image(
             prepared.bytes.len(),
             prepared.dims,
         );
-        let source = prepared
-            .reencoded
-            .then_some((prepared.source_mime, prepared.source_bytes));
+        let source = prepared.reencoded.then_some(image_send::SourceFacts {
+            mime: prepared.source_mime,
+            bytes: prepared.source_bytes,
+            dims: prepared.source_dims,
+        });
         let message = image_send::build_image_message(
             &display,
             prepared.mime,
@@ -164,10 +169,12 @@ async fn send_image(
             e
         ))),
         heavy::Heavy::Done(Ok((message, envelope))) => {
+            // 先把 UI 要的引用摘出来（message 接下来要移交给队列）
+            let ui_data = image_send::sent_ui_data(&message);
             image_send::queue(ctx.session_id, message);
             Ok(NativeToolOutcome::Value {
                 content: envelope,
-                ui_data: None,
+                ui_data: Some(ui_data),
             })
         }
         // 读盘失败 / 不是支持的图片 / 超出体积上限：工具级错误（模型可据此换路径或先压缩）
@@ -282,6 +289,7 @@ mod tests {
         let r = vision_analyze_tool(&ctx, &json!({ "path": "shot.png" }))
             .await
             .expect("不应是调用级错误");
+        let ui_image_id;
         match r {
             NativeToolOutcome::Value { content, ui_data } => {
                 assert!(content.starts_with("🖼️ "), "content: {content}");
@@ -295,7 +303,21 @@ mod tests {
                     !content.contains("models directory not found"),
                     "关闭伪视觉分析后不得去探测模型目录: {content}"
                 );
-                assert!(ui_data.is_none(), "与旧行为一致：无 uiData");
+                // 界面靠 uiData 找到「真正发出去的那张图」
+                let ui = ui_data.expect("模型分析模式必须带 uiData（展开视图要渲染图片）");
+                assert_eq!(ui["type"], "vision_image_sent");
+                assert!(
+                    ui["path"].as_str().unwrap().ends_with("/shot.png"),
+                    "path: {}",
+                    ui["path"]
+                );
+                assert_eq!(ui["mediaType"], "image/jpeg");
+                assert_eq!(ui["width"], 120);
+                assert_eq!(ui["height"], 80);
+                assert_eq!(ui["sourceMediaType"], "image/png", "原图对照要带给界面");
+                assert_eq!(ui["sourceWidth"], 120);
+                assert_eq!(ui["sourceHeight"], 80);
+                ui_image_id = ui["imageMessageId"].as_str().unwrap().to_string();
             }
             other => panic!("expected Value, got {other:?}"),
         }
@@ -304,6 +326,10 @@ mod tests {
         let queued = super::image_send::drain(session_id);
         assert_eq!(queued.len(), 1);
         assert_eq!(queued[0].role, crate::agent::types::VISION_IMAGE_ROLE);
+        assert_eq!(
+            queued[0].id, ui_image_id,
+            "uiData 必须指向那条已入队的注入消息"
+        );
         assert_eq!(queued[0].content[1]["type"], "image_url");
         assert!(queued[0].content[1]["image_url"]["url"]
             .as_str()

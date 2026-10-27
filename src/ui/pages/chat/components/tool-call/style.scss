@@ -173,6 +173,51 @@
   overflow-wrap: anywhere;
 }
 
+/* vision_analyze（模型分析模式）：展开视图只放「真正发给模型的那张图」+ 事实。
+   图是缩放 / 转码后的附件（内容寻址），点一下开大图浮层。 */
+.vision-image-sent {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 100%;
+
+  .vision-image-sent-img {
+    display: block;
+    max-width: 100%;
+    max-height: 300px;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    border-radius: 4px;
+    background: var(--bg-primary);
+    cursor: zoom-in;
+  }
+
+  .vision-image-sent-missing {
+    font-size: var(--font-size-xs);
+    color: var(--text-tertiary);
+  }
+
+  /* 事实列：mime · 宽高 · 字节；原图那行更淡，仅作对照 */
+  .vision-image-sent-facts {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: var(--font-size-xs);
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+  }
+
+  .vision-image-sent-title {
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  .vision-image-sent-source {
+    color: var(--text-tertiary);
+  }
+}
+
 /* `present`（交付物）：文件条横排换行，一排能放下几个就看几个；点一下在右侧面板打开 */
 .present-files {
   display: flex;

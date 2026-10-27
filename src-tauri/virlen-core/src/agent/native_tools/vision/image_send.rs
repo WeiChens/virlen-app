@@ -26,12 +26,18 @@
 //! ## 发出去的是转换后的图，不是原文件
 //! 读盘后过一道 `encode::encode_for_model`：最长边缩到设置档位、按设置编码成 JPEG / PNG / WebP。
 //! 同一个设置同样作用于用户直接发的图（前端 `hooks.ts::fileToDataUrl`），两边规则必须一致。
+//!
+//! ## 界面怎么看到「真正发出去的那张图」
+//! 工具结果（`role = tool`）的正文只能是文本，图片在注入消息里；而注入消息本身界面不渲染。
+//! 所以工具结果另带一份 `uiData`（[`sent_ui_data`]）：`type = vision_image_sent` +
+//! `imageMessageId`（注入消息的 id）+ 图片事实。卡片展开视图按 id 到会话里取那条消息的
+//! `image_url` 渲染 —— 显示的就是**发给模型的那份字节**（附件内容寻址，与发出去的完全相同）。
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::agent::types::{Message, VISION_IMAGE_ROLE};
 
@@ -126,15 +132,24 @@ fn handle_text(path: &str, mime: &str, bytes: usize, dims: Option<(u32, u32)>) -
     )
 }
 
+/// 原图事实（只在重编码 / 缩放真的发生过时才给，UI 用它对账「发出去的这份缩了多少」）
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SourceFacts {
+    pub mime: &'static str,
+    pub bytes: usize,
+    pub dims: Option<(u32, u32)>,
+}
+
 /// 组装一条 `role = vision_image` 消息（text handle + `image_url` data URL）。
 ///
-/// `source` = 「原图是什么」：只在重编码过时传入，供 UI / 轨迹展示「原图 3840x2160 · 3.2 MB」。
+/// `source` = 「原图是什么」（mime / 字节 / 宽高）：只在重编码过时传入，
+/// 供 UI / 轨迹展示「原图 image/png · 3840x2160 px · 3.2 MB」。
 pub(crate) fn build_image_message(
     path: &str,
     mime: &str,
     bytes: &[u8],
     dims: Option<(u32, u32)>,
-    source: Option<(&'static str, usize)>,
+    source: Option<SourceFacts>,
 ) -> Message {
     let data_url = format!("data:{};base64,{}", mime, STANDARD.encode(bytes));
     let content = json!([
@@ -154,9 +169,13 @@ pub(crate) fn build_image_message(
         ui_data["width"] = json!(w);
         ui_data["height"] = json!(h);
     }
-    if let Some((source_mime, source_bytes)) = source {
-        ui_data["sourceMediaType"] = json!(source_mime);
-        ui_data["sourceBytes"] = json!(source_bytes);
+    if let Some(source) = source {
+        ui_data["sourceMediaType"] = json!(source.mime);
+        ui_data["sourceBytes"] = json!(source.bytes);
+        if let Some((w, h)) = source.dims {
+            ui_data["sourceWidth"] = json!(w);
+            ui_data["sourceHeight"] = json!(h);
+        }
     }
     Message {
         id: uuid::Uuid::new_v4().to_string(),
@@ -166,6 +185,24 @@ pub(crate) fn build_image_message(
         timestamp: crate::telemetry::now_ms(),
         ..Default::default()
     }
+}
+
+/// 工具结果下发给界面的 `uiData`：图片消息自己的事实 + 那条注入消息的 id。
+///
+/// 卡片展开视图拿 `imageMessageId` 去会话里找这条消息，把它的 `image_url` 渲染出来 ——
+/// 显示的就是**发给模型的那份字节**（附件是内容寻址的，与请求里的 data URL 一一对应）。
+/// 只有 `type` 换成 `vision_image_sent`，其余事实（mime / 宽高 / 字节 / 原图对照）照旧。
+pub(crate) fn sent_ui_data(message: &Message) -> Value {
+    let mut data = message
+        .ui_data
+        .clone()
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    if let Value::Object(map) = &mut data {
+        map.insert("type".into(), json!("vision_image_sent"));
+        map.insert("imageMessageId".into(), json!(message.id));
+    }
+    data
 }
 
 // ==================== 会话级待注入队列 ====================
@@ -229,6 +266,7 @@ pub(crate) struct Prepared {
     /// 原文件的事实（重编码过才有意义，UI 用）
     pub source_mime: &'static str,
     pub source_bytes: usize,
+    pub source_dims: Option<(u32, u32)>,
 }
 
 /// 读盘后的字节 → 实际要发出去的那份图（嗅探 → 缩放 / 转码 → 体积上限）。
@@ -240,7 +278,7 @@ pub(crate) fn prepare_image(
     raw: &[u8],
     plan: super::encode::Plan,
 ) -> Result<Prepared, String> {
-    let (source_mime, _) = inspect_image(path, raw)?;
+    let (source_mime, source_dims) = inspect_image(path, raw)?;
     let encoded = super::encode::encode_for_model(raw, source_mime, plan)?;
     if encoded.bytes.is_empty() {
         return Err(format!("cannot send \"{}\" as an image: encoding produced an empty file", path));
@@ -259,6 +297,7 @@ pub(crate) fn prepare_image(
         reencoded: encoded.reencoded,
         source_mime,
         source_bytes: raw.len(),
+        source_dims,
         bytes: encoded.bytes,
     })
 }
@@ -376,7 +415,36 @@ mod tests {
         assert_eq!(p.dims, Some((40, 20)));
         assert_eq!(p.source_mime, "image/png");
         assert_eq!(p.source_bytes, png.len());
+        assert_eq!(p.source_dims, Some((40, 20)), "原图尺寸要留给 UI 对账");
         assert_eq!(&p.bytes[..3], &[0xff, 0xd8, 0xff], "发送的应是 JPEG");
+    }
+
+    /// 工具结果下发界的 `uiData`：事实原样带过来，只把 type 换成「已发送」并指回注入消息
+    #[test]
+    fn sent_ui_data_points_back_at_the_injected_message() {
+        let message = build_image_message(
+            "/w/shot.png",
+            "image/jpeg",
+            &[0xff, 0xd8, 0xff],
+            Some((40, 20)),
+            Some(SourceFacts {
+                mime: "image/png",
+                bytes: 999,
+                dims: Some((80, 40)),
+            }),
+        );
+        let data = sent_ui_data(&message);
+        assert_eq!(data["type"], "vision_image_sent");
+        assert_eq!(data["imageMessageId"], message.id);
+        assert_eq!(data["path"], "/w/shot.png");
+        assert_eq!(data["mediaType"], "image/jpeg");
+        assert_eq!(data["width"], 40);
+        assert_eq!(data["height"], 20);
+        assert_eq!(data["sourceMediaType"], "image/png");
+        assert_eq!(data["sourceWidth"], 80);
+        assert_eq!(data["sourceHeight"], 40);
+        // 注入消息自己的 uiData 不能被改写（它仍标 vision_image）
+        assert_eq!(message.ui_data.as_ref().unwrap()["type"], "vision_image");
     }
 
     /// 本来就是目标格式且不超阈值 → 原字节直传（不做无谓的二次有损）
