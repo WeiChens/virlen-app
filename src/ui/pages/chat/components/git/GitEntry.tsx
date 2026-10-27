@@ -49,7 +49,10 @@ export const GitEntry = observer(function GitEntry({
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
   /* 面板是 420px 定宽、`right: 0` 挂在工具栏图标上：窗口一窄左缘就跑出窗口，
-     高度随变更数 / 输出块涨、窗口一矮下缘同样出界 —— 打开时夹进可视区（口径见 popoverFit.ts） */
+     高度随变更数 / 输出块涨、窗口一矮下缘同样出界 —— 打开时夹进可视区（口径见 popoverFit.ts）。
+     ⚠️ 两份样式**分开棘**：位移归气泡本体，高度上限归面板内部的 `.git-panel-scroll`。
+     气泡本体若自己成了滚动容器，里面的分支 / 合并浮层（绝对定位，高度固定 320px）比面板高时
+     就会把气泡撑出滚动条、还跟着面板一起滚（用户报回，见 §11.66）。 */
   const popover = usePopoverViewportFit(open)
 
   const dir = sessionId
@@ -149,10 +152,11 @@ export const GitEntry = observer(function GitEntry({
         {count > 0 && <span className="git-badge">{badgeText(count)}</span>}
       </button>
       {open && (
-        <div className="git-popover" ref={popover.ref} style={popover.style}>
+        <div className="git-popover" ref={popover.ref} style={popover.frameStyle}>
           <GitPanel
             onClose={() => setOpen(false)}
             onAttachPaths={onAttachPaths}
+            bodyStyle={popover.bodyStyle}
           />
         </div>
       )}

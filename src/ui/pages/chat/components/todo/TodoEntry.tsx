@@ -147,7 +147,11 @@ export const TodoEntry = observer(function TodoEntry({ sessionId }: Props) {
       </button>
 
       {open && (
-        <div className="todo-popover" ref={popover.ref} style={popover.style}>
+        /* 单层气泡：位移与高度上限摊在同一个元素上（气泡里没有绝对定位的子浮层） */
+        <div
+          className="todo-popover"
+          ref={popover.ref}
+          style={{ ...popover.frameStyle, ...popover.bodyStyle }}>
           <div className="todo-popover-head">
             <span className="todo-popover-title">{t('任务清单')}</span>
             {/* 来源徽章只在非默认状态出现：模型写入是默认情况，画个徽章只占宽、没信息量 */}

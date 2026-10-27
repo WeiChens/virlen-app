@@ -8,6 +8,8 @@
  * ② **引用的主题令牌必须真实存在**：`var(--x, #fallback)` 在 `--x` 从未定义时 fallback 永远生效，
  *    暗色主题照的还是亮色档 —— 实测踩过：`--success-color` / `--warning-color` / `--danger-color`
  *    三个名字全项目都没有定义（亮色档的绿 #16a34a 在深底上几乎不可读）。
+ * ③ **气泡本体不滚、高度上限归内部滚动体**：`.git-popover` 里的分支 / 合并浮层是它的绝对定位子元素，
+ *    气泡一旦成为滚动容器，比面板高的浮层就会把气泡撑出滚动条（用户报回，§11.66）。
  *
  * 与 `scss-compile-contract.test.ts` 分工：那份保证「能编译」，这份保证「编译出来的东西真的落到元素上」。
  */
@@ -101,6 +103,26 @@ describe('源代码管理 · 面板样式契约', () => {
     expect(backdrop).toBeTruthy()
     expect(backdrop).toContain('top: var(--window-top-bar-height')
     expect(backdrop).not.toContain('inset: 0')
+  })
+
+  it('气泡本体不滚：高度上限只给内部滚动体（否则分支 / 合并浮层会把面板撑出滚动条）', () => {
+    // 用户报回：分支浮层一开，面板就冒出滚动条，底部的分支还得先滚面板才看得到。
+    // 浮层（`top: 74px`、最高 320px）是 `.git-popover` 的绝对定位子元素 —— 气泡本体一旦成了
+    // 滚动容器，比面板高的浮层就成了它的滚动内容（§11.66）。
+    const popover = /\.git-popover\s*\{([^}]*)\}/.exec(panelCss)?.[1]
+    expect(popover).toBeTruthy()
+    expect(popover).toContain('overflow: visible')
+    expect(popover).not.toContain('overflow-y')
+    // 高度上限只走内联（`popoverFit.ts` 按窗口可视区算），样式表里不能固定
+    expect(popover).not.toContain('max-height')
+
+    // 内边距搬到滚动体上 —— 气泡的 padding box 边不受内边距影响，
+    // 所以浮层的锚点（`top: 74px` / `right: 12px`）不用跟着改
+    const body = /\.git-panel-scroll\s*\{([^}]*)\}/.exec(panelCss)?.[1]
+    expect(body).toBeTruthy()
+    expect(body).toContain('padding: 10px 12px 12px')
+    // 自滚时吃气泡的圆角（不然方角滚动条压在圆角外面）
+    expect(body).toContain('border-radius: inherit')
   })
 
   it('git 弹窗的层级低于全局确认框（删除贮藏的确认框不能被盖住）', () => {

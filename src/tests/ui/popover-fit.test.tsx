@@ -5,9 +5,10 @@
  * ① **纯函数**：溢出算位移的方向与数值、量不到视口时一律不动（jsdom / happy-dom 的假 rect 全是 0，
  *    拿 0 当真值会算出「凭空位移 8px」）；
  * ② **hook**：打开的第一帧就写样式、关闭复位、**resize 重算不能把已施加的位移再算一遍**
- *    （否则夹过的位置被当成原始位置 → 位移清零、气泡弹回出界状态）；
- * ③ **接线**：两个入口确实把 `ref` / `style` 摊到气泡上，且两份 style.scss 的锚点仍是 `right: 0`
- *    —— 位移是按这个锚点算的相对偏移（见 popoverFit.ts 的 ⚠️）。
+ *    （否则夹过的位置被当成原始位置 → 位移清零、气泡弹回出界状态）；**位移与高度上限是分开的两份**
+ *    （`frameStyle` / `bodyStyle` —— 气泡里的绝对定位浮层不能被气泡自己的滚动裁掉，§11.66）；
+ * ③ **接线**：两个入口各自把这两份摊到对的地方（单层的摊同一个元素、两层的分开），
+ *    且两份 style.scss 的锚点仍是 `right: 0` —— 位移是按这个锚点算的相对偏移（见 popoverFit.ts 的 ⚠️）。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
@@ -106,11 +107,24 @@ describe('fitPopoverInViewport（纯函数）', () => {
 ;(globalThis as never as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true
 
-/** 被测气泡：只摊 `ref` / `style`，与两个入口的写法一致 */
+/** 被测气泡（单层）：位移与高度上限摊在同一个元素上，与任务清单入口的写法一致 */
 function Harness({ open }: { open: boolean }) {
-  const { ref, style } = usePopoverViewportFit(open)
+  const { ref, frameStyle, bodyStyle } = usePopoverViewportFit(open)
   if (!open) return null
-  return <div className="probe-popover" ref={ref} style={style} />
+  return (
+    <div className="probe-popover" ref={ref} style={{ ...frameStyle, ...bodyStyle }} />
+  )
+}
+
+/** 被测气泡（两层）：气泡本体只拿位移，高度上限归内部滚动体，与源代码管理入口的写法一致 */
+function SplitHarness({ open }: { open: boolean }) {
+  const { ref, frameStyle, bodyStyle } = usePopoverViewportFit(open)
+  if (!open) return null
+  return (
+    <div className="probe-popover" ref={ref} style={frameStyle}>
+      <div className="probe-scroll-body" style={bodyStyle} />
+    </div>
+  )
 }
 
 let root: ReturnType<typeof createRoot> | null = null
@@ -203,6 +217,26 @@ describe('usePopoverViewportFit', () => {
     })
     expect(probe().style.right).toBe('-128px')
   })
+
+  /**
+   * 气泡里还有绝对定位的子浮层（git 的分支 / 合并）时必须**分开摊**：气泡本体一旦带上
+   * `max-height` + `overflow-y: auto`，比面板高的子浮层就会把气泡撑出滚动条，还跟着面板一起滚。
+   */
+  it('两份样式是分开的：位移归气泡本体，高度上限与自滚归滚动体', () => {
+    stubRect({ left: -120, right: 560, top: 56, height: 300 })
+    act(() => root!.render(<SplitHarness open />))
+
+    const frame = probe()
+    expect(frame.style.right).toBe('-128px')
+    expect(frame.style.maxHeight).toBe('')
+    expect(frame.style.overflowY).toBe('')
+
+    const body = document.querySelector('.probe-scroll-body') as HTMLElement
+    expect(body.style.maxHeight).toBe(`${VH - POPOVER_VIEWPORT_MARGIN - 56}px`)
+    expect(body.style.overflowY).toBe('auto')
+    expect(body.style.overflowX).toBe('hidden')
+    expect(body.style.right).toBe('')
+  })
 })
 
 /* ==================== 接线 / 样式锚点契约 ==================== */
@@ -218,16 +252,22 @@ function ruleBody(src: string, selector: string): string {
 }
 
 describe('接线与样式锚点', () => {
-  it('两个入口都把 ref / style 摊到气泡上（否则算出来的位移落不到元素）', () => {
-    const files = [
-      'src/ui/pages/chat/components/todo/TodoEntry.tsx',
-      'src/ui/pages/chat/components/git/GitEntry.tsx',
-    ]
-    for (const file of files) {
-      const src = readProjectFile(file)
-      expect(src).toContain('usePopoverViewportFit(open)')
-      expect(src).toMatch(/ref=\{popover\.ref\} style=\{popover\.style\}/)
-    }
+  it('任务清单是单层气泡：位移与高度上限都摊在气泡本体上', () => {
+    const src = readProjectFile('src/ui/pages/chat/components/todo/TodoEntry.tsx')
+    expect(src).toContain('usePopoverViewportFit(open)')
+    // 气泡里没有绝对定位的子浮层 → 两份样式摊在同一个元素上
+    expect(src).toMatch(
+      /ref=\{popover\.ref\}[\s\S]{0,80}style=\{\{ \.\.\.popover\.frameStyle, \.\.\.popover\.bodyStyle \}\}/,
+    )
+  })
+
+  it('源代码管理是两层：位移归气泡本体，高度上限归内部滚动体', () => {
+    const src = readProjectFile('src/ui/pages/chat/components/git/GitEntry.tsx')
+    expect(src).toContain('usePopoverViewportFit(open)')
+    expect(src).toMatch(/ref=\{popover\.ref\} style=\{popover\.frameStyle\}/)
+    expect(src).toMatch(/bodyStyle=\{popover\.bodyStyle\}/)
+    // 气泡本体自己滚 = 分支 / 合并浮层被裁 + 把气泡撑出滚动条（§11.66 的原始 bug）
+    expect(src).not.toContain('style={popover.style}')
   })
 
   it('两份 style.scss 的气泡锚点仍是 `right: 0`（位移按这个锚点算）', () => {

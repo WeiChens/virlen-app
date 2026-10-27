@@ -15,7 +15,7 @@
  *（输入框只认真实路径），并剔除**已删除**的文件（磁盘上已不存在，挂上去只会换来一句
  *「无法访问该路径」）。两者共用 `attachPaths`，口径只有一份。
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { observer } from 'mobx-react-lite'
 import { runInAction } from 'mobx'
 import { t, tpl } from '@/ui/i18n'
@@ -67,6 +67,12 @@ interface Props {
   onClose: () => void
   /** 把一批真实路径挂到输入框（聊天页把它接到 `ChatInput.attachPaths`） */
   onAttachPaths: (paths: string[]) => void
+  /**
+   * 滚动体（`.git-panel-scroll`）的样式：高度上限 + 自滚。
+   * 由入口 `.git-popover` 按窗口可视区算好传进来（`popoverFit.ts`）—— 气泡本体**不滚**，
+   * 否则里面的分支 / 合并浮层会把气泡撑出滚动条（§11.66）。
+   */
+  bodyStyle?: CSSProperties
 }
 
 /** 变更列表只有一行标题信息：段标题 + 文件行都住在同一段里，现在是「一次只看一段」，
@@ -116,6 +122,7 @@ function OutputBlock({
 export const GitPanel = observer(function GitPanel({
   onClose,
   onAttachPaths,
+  bodyStyle,
 }: Props) {
   const [branchMenuOpen, setBranchMenuOpen] = useState(false)
   const [diffTarget, setDiffTarget] = useState<GitRowTarget | null>(null)
@@ -364,7 +371,8 @@ export const GitPanel = observer(function GitPanel({
   // 进行中的挑选 / 还原：冲突解决到一半时，面板顶部必须给两条出路（界面上没有终端可用）
   const pick = gitStore.pick
 
-  return (
+  /** 面板正文 —— 唯一被 `.git-panel-scroll` 包起来的部分（浮层见文件末尾，不能包进去） */
+  const panelBody = (
     <>
       <div className="git-head">
         <span className="git-head-title">{t('源代码管理')}</span>
@@ -699,6 +707,17 @@ export const GitPanel = observer(function GitPanel({
             )}
         </>
       )}
+    </>
+  )
+
+  return (
+    <>
+      {/* 滚动体：只装面板正文。分支 / 合并浮层是 `.git-popover` 的**绝对定位子元素**（`top: 74px`），
+          必须留在它外面 —— 包进滚动体就会被 `max-height` 裁掉，比面板高时还会把气泡撑出滚动条
+          （用户报回，§11.66）。贮藏 / 差异 / 记录 / 提交图是 portal 到 body 的，放哪一层都一样。 */}
+      <div className="git-panel-scroll" style={bodyStyle}>
+        {panelBody}
+      </div>
 
       {branchMenuOpen && (
         <GitBranchMenu

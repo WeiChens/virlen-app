@@ -11,6 +11,11 @@
  * 口径与 `ContextMenu`（右键菜单）/ `Select`（下拉）一致：打开时与窗口 resize 时**实测**一次，
  * 把溢出量算成位移；区别只在纵向 —— 这几个气泡贴着标题栏往下展开，**上面没有空间可翻**，
  * 所以不给「翻到上面」那一档，改成压 `max-height` 让它自己滚（够不着底部按钮比多一条滚动条更糟）。
+ *
+ * ⚠️ **位移归气泡本体，高度上限归「滚动体」，两者不一定是同一个元素**（§11.66）：气泡里若还有
+ * 绝对定位的浮层（git 的分支 / 合并浮层就挂在 `.git-popover` 里），气泡本体一旦自己成了滚动容器，
+ * 浮层比气泡高时就会把它撑出滚动条、并且跟着面板一起滚 —— 所以 `GitPanel` 的内容另包一层
+ * `.git-panel-scroll` 接 `bodyStyle`，气泡本体只留 `frameStyle` 的位移（`overflow: visible`）。
  */
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 
@@ -65,8 +70,17 @@ export function fitPopoverInViewport(
 export interface PopoverFitBinding {
   /** 挂到气泡容器上（量的是它自己的矩形） */
   ref: React.RefObject<HTMLDivElement | null>
-  /** 摊到气泡容器上 */
-  style: React.CSSProperties
+  /**
+   * 摊到**气泡本体**：只有横向位移（气泡自己的锚点是 `right: 0`，所以要的是 `right` 的相对偏移）。
+   * 气泡本体必须保持 `overflow: visible` —— 见文件头 ⚠️。
+   */
+  frameStyle: React.CSSProperties
+  /**
+   * 摊到**滚动体**：高度上限 + 自滚。
+   * 单层气泡（任务清单 `.todo-popover`）就把这一份和 `frameStyle` 一起摊在气泡本体上；
+   * 气泡内部另有滚动体（`.git-popover > .git-panel-scroll`）时只摊给它。
+   */
+  bodyStyle: React.CSSProperties
 }
 
 /**
@@ -116,15 +130,17 @@ export function usePopoverViewportFit(open: boolean): PopoverFitBinding {
     return () => window.removeEventListener('resize', measure)
   }, [open, measure])
 
-  const style: React.CSSProperties = {}
-  if (fit.shiftRight) style.right = -fit.shiftRight
+  const bodyStyle: React.CSSProperties = {}
   if (fit.maxHeight !== null) {
-    style.maxHeight = fit.maxHeight
-    style.overflowY = 'auto'
+    bodyStyle.maxHeight = fit.maxHeight
+    bodyStyle.overflowY = 'auto'
     /* ⚠️ 一个轴不是 `visible` 时另一轴会被算成 `auto`（横向因此可能冒出滚动条）——
        横向已由气泡自己的 `max-width: calc(100vw - 32px)` + 上面的位移兜住，显式关掉。 */
-    style.overflowX = 'hidden'
+    bodyStyle.overflowX = 'hidden'
   }
 
-  return { ref, style }
+  const frameStyle: React.CSSProperties = {}
+  if (fit.shiftRight) frameStyle.right = -fit.shiftRight
+
+  return { ref, frameStyle, bodyStyle }
 }

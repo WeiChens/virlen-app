@@ -664,6 +664,51 @@ it('游离 HEAD 徽标仍能点开分支浮层（detach 不是死路）', () => 
   expect(branchItem('main')).not.toBeNull()
 })
 
+// ==================== 面板的滚动体（浮层不能被它包住） ====================
+
+/**
+ * 用户报回：分支浮层比面板高时，**面板**冒出了滚动条，浮层底部还看不到（得先滚面板）。
+ *
+ * 根因：浮层（`top: 74px`，最高 320px）是 `.git-popover` 的**绝对定位子元素**，而气泡本体被
+ * `max-height` + `overflow-y: auto` 夹成了滚动容器 —— 比气泡高的浮层就成了气泡的滚动内容，
+ * 滚一下还把浮层一起带走。
+ *
+ * 口径：气泡本体**不滚**，高度上限只给内部的 `.git-panel-scroll`；两块浮层必须留在滚动体**外面**
+ * （仍以气泡的 padding box 为锚点）。
+ */
+it('分支浮层挂在滚动体外面，高度上限只落在 `.git-panel-scroll` 上', () => {
+  setStore([unstagedEntry('a.txt')])
+  setBranches([{ name: 'main', is_head: true }, { name: 'feature' }])
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  root = createRoot(host)
+  act(() =>
+    root!.render(
+      <GitPanel
+        onClose={() => { }}
+        onAttachPaths={() => { }}
+        bodyStyle={{ maxHeight: 320, overflowY: 'auto', overflowX: 'hidden' }}
+      />,
+    ),
+  )
+
+  // 正文（头部 / 列表 / 提交区）在滚动体里，高度上限由入口 `.git-popover` 算好传进来
+  const body = document.querySelector('.git-panel-scroll') as HTMLElement
+  expect(body).not.toBeNull()
+  expect(body.style.maxHeight).toBe('320px')
+  expect(body.style.overflowY).toBe('auto')
+  expect(body.querySelector('.git-head')).not.toBeNull()
+  expect(body.querySelector('.git-list-box')).not.toBeNull()
+
+  openBranchMenu()
+  const menu = document.querySelector('.git-branch-menu')
+  expect(menu).not.toBeNull()
+  // 关键：不在滚动体里（否则被 max-height 裁掉 / 把面板撑出滚动条），但仍是面板的直接子元素
+  expect(body.contains(menu)).toBe(false)
+  expect(menu?.parentElement).toBe(body.parentElement)
+})
+
 // ==================== 提交输出（hooks）/ 在文件管理器中显示 ====================
 
 /**

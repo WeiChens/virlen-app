@@ -74,12 +74,24 @@
      容纳两列才撑的；长路径挤了就看行尾省略号 / 悬停 title（那里有完整路径） */
   width: 420px;
   max-width: calc(100vw - 32px);
-  padding: 10px 12px 12px;
   border: 1px solid var(--border-color, #e5e5e5);
   border-radius: 10px;
   background: var(--bg-primary, #fff);
   box-shadow: 0 12px 32px rgba(16, 24, 40, 0.14);
   text-align: left;
+  /* ⚠️ 气泡本体**不许滚**（`overflow` 保持 visible）：分支 / 合并浮层是它的绝对定位子元素
+     （`top: 74px`），气泡一旦按 `overflow-y: auto` 裁起来，这两块比面板高时就会把气泡**撑出滚动条**、
+     并跟着面板一起滚（用户报回，§11.66）。高度上限与自滚全部交给下面那个滚动体。 */
+  overflow: visible;
+}
+
+/* 面板正文的滚动体（max-height 由入口按窗口可视区内联传进来，见 `popoverFit.ts`）。
+   内边距从 `.git-popover` 搬到这儿：气泡的 padding box 边就是边框内沿，内边距搬走不影响
+   浮层的锚点（`top: 74px` / `right: 12px` 仍是同一个位置），滚动条也仍在内容外侧 12px。 */
+.git-panel-scroll {
+  padding: 10px 12px 12px;
+  /* 自滚时吃气泡的圆角：否则方角滚动条会压在圆角外面 */
+  border-radius: inherit;
 }
 
 .git-head {
