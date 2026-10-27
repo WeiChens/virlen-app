@@ -12,8 +12,9 @@
  * 5. **关掉当前会话的标签不影响别人**；
  * 6. **会话被删就丢掉它的桶**（并把标签交回宿主杀终端），但新对话页那一桶与当前桶永远保留 ——
  *    会话列表懒加载时可能是空的，那一瞬清桶等于杀用户草稿；
- * 7. **新对话页那一桶过继给刚建出来的会话**（`adoptNewBucket`）：id 一个字都不改（它是容器的
- *    渲染 key，改了内容块就重挂、草稿与终端屏幕一起没）。
+ * 8. **「哪里还开着标签栏」可以外显**：`panelTabSummaries` 只做镜像（计数口径与工具栏徽标一致），
+ *    开始页的「其他对话的标签页」由 `parkedBucketsOf` 分组，点一行靠 `withBucketActive`
+ *    一次把「展开 + 激活」落地。
  */
 import { describe, expect, it } from 'vitest'
 
@@ -25,11 +26,14 @@ import {
   guideTabIdIn,
   isBucketVisible,
   panelKeyOf,
+  panelTabSummaries,
+  parkedBucketsOf,
   parkedTabsOf,
   scopeTabId,
   scopeTabs,
   sessionIdOfTab,
   tabScopeOf,
+  withBucketActive,
   withBucketOpen,
   withBucketTabs,
   withoutSessions,
@@ -283,5 +287,66 @@ describe('会话分桶 · 与标签模型的配合', () => {
     )
     expect(bucketOf(again, key).tabs.length).toBe(1)
     expect(bucketOf(again, key).activeId).toBe(scoped[0].id)
+  })
+})
+
+describe('会话分桶 · 「哪里还开着标签栏」的外显', () => {
+  it('每个会话一份摘要：计数 = `tabs.length`（与工具栏徽标同一口径），open 原样带出', () => {
+    let buckets: PanelBuckets = openGuide({}, S1)
+    buckets = openFile(buckets, S1, 'E:/repo/a.ts')
+    buckets = openFile(buckets, S2, 'E:/repo/b.ts')
+    buckets = withBucketOpen(buckets, S2, false)
+
+    const summaries = panelTabSummaries(buckets)
+    // 开始页也算一格：不这样的话「侧栏说 1、工具栏说 2」会被当成 bug
+    expect(summaries[S1]).toEqual({ count: 2, open: true })
+    expect(summaries[S2]).toEqual({ count: 1, open: false })
+  })
+
+  it('新对话页与空桶不进摘要（侧栏没这两行，挂个 0 只是噪音）', () => {
+    let buckets: PanelBuckets = openFile({}, NEW_PANEL_KEY, 'E:/repo/scratch.ts')
+    buckets = openFile(buckets, S1, 'E:/repo/a.ts')
+    buckets = clearBucketTabs(buckets, S1)
+
+    const summaries = panelTabSummaries(buckets)
+    expect(Object.keys(summaries)).toEqual([])
+  })
+
+  it('开始页清单按会话分组（跳过当前桶、跳过空桶，新对话页那一桶也算）', () => {
+    let buckets: PanelBuckets = openFile({}, NEW_PANEL_KEY, 'E:/repo/scratch.ts')
+    buckets = openFile(buckets, S1, 'E:/repo/a.ts')
+    buckets = openFile(buckets, S2, 'E:/repo/b.ts')
+    buckets = clearBucketTabs(buckets, S2)
+
+    const parked = parkedBucketsOf(buckets, S1)
+    expect(parked.map((entry) => entry.key)).toEqual([NEW_PANEL_KEY])
+    expect(parked[0].tabs.map((tab) => tab.id)).toEqual([
+      `${NEW_PANEL_KEY}\u0000file:E:/repo/scratch.ts`,
+    ])
+    // 与 `parkedTabsOf` 同一份口径：后者就是它摊平的结果
+    expect(parkedTabsOf(buckets, S1)).toEqual(parked[0].tabs)
+  })
+
+  it('点一行：展开那一桶并激活那个标签（一次落地，不闪中间帧）', () => {
+    let buckets: PanelBuckets = openFile({}, S1, 'E:/repo/a.ts')
+    buckets = openFile(buckets, S1, 'E:/repo/b.ts')
+    buckets = withBucketOpen(buckets, S1, false)
+    const [first, second] = bucketOf(buckets, S1).tabs
+    expect(bucketOf(buckets, S1).activeId).toBe(second.id)
+
+    const next = withBucketActive(buckets, S1, first.id)
+    expect(bucketOf(next, S1).activeId).toBe(first.id)
+    expect(bucketOf(next, S1).open).toBe(true)
+    // 标签一条不动（展开 ≠ 开标签）
+    expect(bucketOf(next, S1).tabs).toBe(bucketOf(buckets, S1).tabs)
+  })
+
+  it('目标标签不在那一桶 / 已经是它且已展开 → 原引用（不凭空造激活态）', () => {
+    const buckets: PanelBuckets = openFile({}, S1, 'E:/repo/a.ts')
+    const activeId = bucketOf(buckets, S1).activeId!
+
+    expect(withBucketActive(buckets, S1, 'nope')).toBe(buckets)
+    expect(withBucketActive(buckets, S1, activeId)).toBe(buckets)
+    expect(withBucketActive(buckets, S2, activeId)).toBe(buckets)
   })
 })

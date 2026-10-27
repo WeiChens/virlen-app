@@ -68,12 +68,17 @@ import {
   clearBucketTabs,
   guideTabIdIn,
   isBucketVisible,
+  NEW_PANEL_KEY,
+  parkedBucketsOf,
   parkedTabsOf,
   panelKeyOf,
+  panelTabSummaries,
   scopeTabs,
+  withBucketActive,
   withBucketOpen,
   withBucketTabs,
   withoutSessions,
+  type OtherSessionTabs,
   type PanelBucket,
   type PanelBuckets,
 } from './components/side-panel/sessions'
@@ -352,6 +357,40 @@ function ChatView() {
   const parkedPanelTabs = useMemo(
     () => parkedTabsOf(panelBuckets, panelKey),
     [panelBuckets, panelKey],
+  )
+  /**
+   * 侧栏徽标用：每个会话还开着几个标签、面板收没收起（`panelTabs`）。
+   * 标签属于会话，而面板一次只显示一个 —— 切走后这是唯一能说清「哪里还开着」的地方。
+   */
+  const panelTabCounts = useMemo(() => panelTabSummaries(panelBuckets), [panelBuckets])
+  /**
+   * 开始页的「其他对话的标签页」：按会话分组，**会话标题由宿主补齐**（容器拿不到会话 store）。
+   *
+   * 两条口径：
+   * 1. **开始页不算内容**（`guide` 不进清单）：它在别的会话里也只是一张门厅，不是想回去看的东西；
+   * 2. **改了会话名也要跟着变**：标题不在 `panelBuckets` 里，所以额外拿 `panelTitleSig`
+   *    当依赖 —— 只用 `panelBuckets` 会让清单停在旧标题上；而每次渲染现造数组又会把
+   *    容器 `body` 的 memo 打穿（里面的 Monaco 跟着重渲染）。
+   */
+  const panelTitleSig = Object.keys(panelBuckets)
+    .filter((key) => key !== panelKey)
+    .map((key) =>
+      key === NEW_PANEL_KEY ? t('新对话') : sessionStore.getSession(key)?.title ?? '',
+    )
+    .join('\u0000')
+  const parkedPanels = useMemo<OtherSessionTabs[]>(
+    () =>
+      parkedBucketsOf(panelBuckets, panelKey)
+        .map(({ key, tabs }) => ({
+          sessionId: key,
+          label:
+            key === NEW_PANEL_KEY
+              ? t('新对话')
+              : sessionStore.getSession(key)?.title || key,
+          tabs: tabs.filter((tab) => tab.kind !== 'guide'),
+        }))
+        .filter((group) => group.tabs.length > 0),
+    [panelBuckets, panelKey, panelTitleSig],
   )
 
   /**
@@ -1193,6 +1232,39 @@ function ChatView() {
     })
   }
 
+  /**
+   * 侧栏会话项的标签徽标 / 开始页的「其他对话的标签页」：切到那个会话并把它的面板展开。
+   * 带 `tabId` 时连激活标签一起落地 —— 用户点的是某一格，不只是那个会话。
+   *
+   * 三条口径：
+   * 1. **先改桶再切会话，同一个同步块**：中间隔一帧的话，面板会先按旧的 `activeId` /
+   *    「收起」闪一下（新对话页与刚切过去的会话都存在这个窗口）；
+   * 2. **展开 ≠ 开标签**：两个入口只列已经有标签的会话，这里不新增任何标签；
+   * 3. 目标标签已经不在（徽标是上一帧的）→ `withBucketActive` 原引用返回，退回「只展开」；
+   * 4. **新对话页（`NEW_PANEL_KEY`）不是会话**：`handleSelectSession` 查不到会话会直接返回
+   *    （点下去像没反应），所以走「新建对话」同一条路 —— 只把 `currentSessionId` 置空。
+   */
+  function handleOpenSessionPanel(sessionId: string, tabId?: string) {
+    const current = panelBucketsRef.current
+    const buckets = tabId
+      ? withBucketActive(current, sessionId, tabId)
+      : withBucketOpen(current, sessionId, true)
+    if (buckets !== current) {
+      panelBucketsRef.current = buckets
+      setPanelBuckets(buckets)
+    }
+    if (sessionId === NEW_PANEL_KEY) {
+      // 新对话页那一桶挂着的标签也要能回去（否则在别的会话的开始页里点那一行毫无反应）。
+      // ⚠️ `handledSessionRef` 必须归零：它记的是「本组件最后处理过的会话」，现在是「没有会话」。
+      // 不清的话，外部入口（托盘唤起）再打开刚离开的那个会话时，兜底 effect 会以为已经处理过
+      // 而跳过数据准备 —— 就是 §11.13 那条「跳过去但消息列表是空的」。
+      handledSessionRef.current = null
+      chatState.set({ currentSessionId: null, error: null })
+      return
+    }
+    void handleSelectSession(sessionId)
+  }
+
   const hasEnabledProvider = settingsState.value.providers.some(
     (p) => p.enabled,
   )
@@ -1565,6 +1637,10 @@ function ChatView() {
         // 已引用的技能卡片高亮 + 再点取消（引用状态由输入框回传）
         referencedSkills={referencedSkills}
         onToggleSkill={handleToggleSkill}
+        // 每个会话「还开着几个右侧标签页」：切走后唯一的「哪里还开着」外显（侧栏徽标）
+        panelTabs={panelTabCounts}
+        // 点徽标 = 切过去 + 展开面板（不能让整行那个「选中会话」再跑一遍）
+        onOpenSessionPanel={handleOpenSessionPanel}
       />
       {chatState.value.sidebarOpen && (
         <div className="sidebar-resizer" onMouseDown={handleResizerMouseDown} />
@@ -1772,6 +1848,9 @@ function ChatView() {
         onBrowserNavigate={handleBrowserNavigate}
         // 页面报来自己的标题 → 标签栏优先显示它
         onBrowserTitle={handleBrowserTitle}
+        // 开始页的「其他对话的标签页」：别的会话的标签（一行直达，不必先跑回去再找）
+        otherSessions={parkedPanels}
+        onOpenOtherTab={handleOpenSessionPanel}
         // 系统里把文件拖进来 → 开标签（容器只负责命中与高亮，开标签归宿主）
         onDropPaths={handleDropPaths}
       />

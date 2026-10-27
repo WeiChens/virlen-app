@@ -20,8 +20,10 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import SidePanel from '@/ui/pages/chat/components/side-panel'
+import type { OtherSessionTabs } from '@/ui/pages/chat/components/side-panel/sessions'
 import {
   browserTab,
+  fileTab,
   pageTab,
   terminalTab,
   type SidePanelTab,
@@ -137,10 +139,16 @@ const collapses: number[] = []
 const closed: string[] = []
 /** 面板占满态的上报历史（宿主据此藏 / 放回聊天区） */
 const expandedStates: boolean[] = []
+/** 开始页「其他对话的标签页」点了哪一行（会话 id, 标签 id） */
+const otherOpens: Array<[string, string]> = []
 
 async function renderPanel(
   tabs: SidePanelTab[],
-  opts: { workspaceReady?: boolean; loadShells?: () => Promise<any[]> } = {},
+  opts: {
+    workspaceReady?: boolean
+    loadShells?: () => Promise<any[]>
+    otherSessions?: OtherSessionTabs[]
+  } = {},
 ) {
   if (!root) {
     const host = document.createElement('div')
@@ -169,6 +177,8 @@ async function renderPanel(
           onAttachPaths={() => {}}
           onExpandedChange={(v) => expandedStates.push(v)}
           onBrowserNavigate={(id, url) => navigations.push([id, url])}
+          otherSessions={opts.otherSessions}
+          onOpenOtherTab={(sessionId, tabId) => otherOpens.push([sessionId, tabId])}
         />
       </>,
     )
@@ -201,6 +211,7 @@ afterEach(() => {
   collapses.length = 0
   closed.length = 0
   expandedStates.length = 0
+  otherOpens.length = 0
   messageBoxMock.mockReset()
   messageBoxMock.mockResolvedValue(true)
 })
@@ -437,4 +448,53 @@ it('网页标签（空白页）：没有地址时标题退回「浏览器」', a
   await renderPanel([browserTab({ seq: 1 })])
   const label = document.querySelector<HTMLElement>('.side-panel-tab')!
   expect(label.textContent).toContain('浏览器')
+})
+
+it('开始页：没有别的对话开着标签时不画清单（不放空壳）', async () => {
+  await renderPanel([pageTab('guide')])
+  expect(document.querySelector('[data-panel-guide-others]')).toBeNull()
+})
+
+it('开始页「其他对话的标签页」：按对话分组 + 总数，点一行上报（会话 id, 标签 id）', async () => {
+  await renderPanel([pageTab('guide')], {
+    otherSessions: [
+      {
+        sessionId: 'sess-2',
+        label: '重构右侧栏',
+        tabs: [
+          fileTab('E:/repo/src/a.ts'),
+          terminalTab({
+            termId: 'term_3',
+            sessionId: 'sess-2',
+            shell: 'pwsh',
+            cwd: 'E:/repo',
+            pid: 1,
+          }),
+        ],
+      },
+      { sessionId: 'sess-3', label: '修 CI', tabs: [browserTab({ seq: 4, url: 'https://docs.rs/tokio' })] },
+    ],
+  })
+
+  const section = document.querySelector<HTMLElement>('[data-panel-guide-others]')!
+  expect(section).not.toBeNull()
+  expect(section.querySelector('.panel-guide-others-count')!.textContent).toBe('3')
+  // 两组，每组一行会话名 + 它自己的标签
+  const groups = [...section.querySelectorAll<HTMLElement>('.panel-guide-others-group')]
+  expect(groups.map((g) => g.querySelector('.panel-guide-others-session')!.textContent)).toEqual([
+    '重构右侧栏',
+    '修 CI',
+  ])
+  // 标签名走 `tabDisplayName`（与标签栏同一套）：文件名 / 终端类型名 / 网页主机名
+  expect(
+    [...section.querySelectorAll<HTMLElement>('.panel-guide-other-tab')].map(
+      (el) => el.textContent,
+    ),
+  ).toEqual(['a.ts', 'PowerShell 7', 'docs.rs'])
+
+  // 点一行 = 上报那个标签（切会话 + 展开面板归宿主，容器不猜）
+  await act(async () => {
+    section.querySelectorAll<HTMLButtonElement>('.panel-guide-other-tab')[1].click()
+  })
+  expect(otherOpens).toEqual([['sess-2', 'terminal:term_3']])
 })

@@ -19,6 +19,7 @@ import AddSvg from '@/ui/components/icons/AddSvg'
 import DropDownSvg from '@/ui/components/icons/DropDownSvg'
 import AgentSvg from '@/ui/components/icons/AgentSvg'
 import PinSvg from '@/ui/components/icons/PinSvg'
+import PanelRightSvg from '@/ui/components/icons/PanelRightSvg'
 import ExportDialog from '@/ui/pages/chat/components/modals/ExportDialog'
 import { exportSessionToFile } from '@/services/export-service'
 import { deleteSessions, renameSession, setSessionArchived, setSessionsArchived, countArchiveBlockedSessions } from '@/services/chat-service'
@@ -55,6 +56,7 @@ import {
   type SessionGroup as AnySessionGroup,
 } from './session-grouping'
 import { statusFlagKind, type StatusFlagKind } from './session-status'
+import type { PanelTabSummary } from '../side-panel/sessions'
 
 interface Props {
   onSelectSession: (sessionId: string) => void
@@ -68,6 +70,13 @@ interface Props {
   referencedSkills: string[]
   /** 技能卡片单击：未引用则引用，已引用则取消 */
   onToggleSkill: (name: string) => void
+  /**
+   * 每个会话「还开着几个右侧标签页、面板收没收起」（`side-panel/sessions.ts::panelTabSummaries`）。
+   * 标签属于会话，而面板一次只显示一个 —— 切走后「哪里还开着标签栏」就只剩这枚徽标能说。
+   */
+  panelTabs?: Record<string, PanelTabSummary>
+  /** 点徽标：切到那个会话并展开它的右侧栏（宿主持有标签状态） */
+  onOpenSessionPanel?: (sessionId: string) => void
   style?: React.CSSProperties
   className?: string
 }
@@ -138,6 +147,8 @@ function ChatSidebar({
   onAttachSkills,
   referencedSkills,
   onToggleSkill,
+  panelTabs,
+  onOpenSessionPanel,
   style,
   className = '',
 }: Props) {
@@ -561,6 +572,9 @@ function ChatSidebar({
     const isEdit = editingId === session.id
     // 「在忙」= 引擎 run 在跑 或 本地前置处理中（图片识别）；含它才给 item 加 `working` 修饰类
     const isBusy = isSessionRuntimeBusy(rt)
+    // 右侧栏徽标：**只给别的会话** —— 当前会话的标签数在工具栏那颗按钮上，
+    // 同一件事在两个地方说就是噪音（而且当前那行的徽标会和「选中」高亮抢眼神）
+    const panel = isCurrent ? undefined : panelTabs?.[session.id]
     return (
       <div
         key={session.id}
@@ -609,6 +623,32 @@ function ChatSidebar({
           )}
           <span className="session-meta">{timeFormat(session.updatedAt)}</span>
         </div>
+        {/* 那个对话的右侧栏还开着（或挂着收起）：一枚可点的徽标 —— 切走会话后「哪里还开着」
+            就靠它。数字与工具栏徽标同口径（`tabs.length`，开始页也算一格）；
+            `is-collapsed` = 面板是收起的（标签挂着但看不见），色阶降一档。 */}
+        {panel && panel.count > 0 && (
+          <button
+            type="button"
+            className={`session-panel-badge${panel.open ? '' : ' is-collapsed'}`}
+            title={
+              panel.open
+                ? tpl('右侧栏打开着 $__count__ 个标签页', { count: panel.count })
+                : tpl('右侧栏已收起，还有 $__count__ 个标签页', { count: panel.count })
+            }
+            aria-label={
+              panel.open
+                ? tpl('右侧栏打开着 $__count__ 个标签页', { count: panel.count })
+                : tpl('右侧栏已收起，还有 $__count__ 个标签页', { count: panel.count })
+            }
+            // 徽标自带动作（切过去并展开面板），不能让整行那个「选中会话」再跑一遍
+            onClick={(e) => {
+              e.stopPropagation()
+              onOpenSessionPanel?.(session.id)
+            }}>
+            <PanelRightSvg />
+            <span className="session-panel-badge-count">{panel.count}</span>
+          </button>
+        )}
       </div>
     )
   }
@@ -680,6 +720,7 @@ function ChatSidebar({
                   group.sessions.some((s) => s.id === currentSessionId)
                 }
                 renderSession={renderSession}
+                panelTabs={panelTabs}
                 onToggleGroup={() => toggleGroup(group.key)}
                 onNewSession={() => handleNewSessionInGroup(group)}
                 onTogglePin={() => handleToggleGroupPin(group.key)}
@@ -902,6 +943,8 @@ interface SessionGroupViewProps {
   /** 组内含当前选中会话（用于分组高亮） */
   hasActiveSession: boolean
   renderSession: (session: Session) => JSX.Element
+  /** 每个会话的右侧栏摘要（折叠时分组头用它们汇总，见 `session-panel-badge`） */
+  panelTabs?: Record<string, PanelTabSummary>
   onToggleGroup: () => void
   onNewSession: () => void
   /** 置顶 / 取消置顶本分组 */
@@ -919,6 +962,7 @@ function SessionGroupView({
   isUngrouped,
   hasActiveSession,
   renderSession,
+  panelTabs,
   onToggleGroup,
   onNewSession,
   onTogglePin,
@@ -943,6 +987,15 @@ function SessionGroupView({
   const hasNewReplySession = useMemo(
     () => group.sessions.some((s) => getSessionRuntime(s.id).hasNewReply),
     [group.sessions],
+  )
+
+  /** 折叠时组内还有几个右侧标签页（展开时每个会话行自己的徽标会说明） */
+  const panelTabCount = useMemo(
+    () =>
+      panelTabs
+        ? group.sessions.reduce((sum, s) => sum + (panelTabs[s.id]?.count ?? 0), 0)
+        : 0,
+    [group.sessions, panelTabs],
   )
 
   const handleDeleteAllSessions = useCallback(async () => {
@@ -1067,6 +1120,19 @@ function SessionGroupView({
           </span>
         )}
         <span className="group-name">{group.name}</span>
+        {/* 折叠分组内还有右侧标签页：否则组里挂着的那些标签栏完全隐形。
+            位置靠右、紧贴会话数 —— 左边那块是「状态」（在忙 / 待答 / 新回复），
+            这一枚是「计数」，与 `group-count` 同一组读数。`group-name` 是 `flex: 1`，
+            所以放在它后面就自然贴右。 */}
+        {isCollapsed && panelTabCount > 0 && (
+          <span
+            className="group-panel-badge"
+            title={tpl('组内还有 $__count__ 个右侧栏标签页', { count: panelTabCount })}
+            aria-label={tpl('组内还有 $__count__ 个右侧栏标签页', { count: panelTabCount })}>
+            <PanelRightSvg />
+            {panelTabCount}
+          </span>
+        )}
         {/* 会话数只是计数（点击交给整行），操作全在右键菜单里 */}
         <span className="group-count">{group.sessions.length}</span>
       </div>

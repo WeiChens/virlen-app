@@ -23,6 +23,9 @@
  * 4. **新对话页那一桶会过继给刚建出来的会话**（`adoptNewBucket`）：用户在新对话里攒下的标签，
  *    发第一条消息时会话 id 才落地 —— 不过继的话右侧栏突然换成（空的）新桶，
  *    用户的观感就是「好端端的右侧栏直接消失」。
+ * 5. **「哪一桶还开着标签栏」也得能说清**：面板一次只显示一桶，切走后用户就没有任何线索 ——
+ *    `panelTabSummaries`（侧栏徽标）/ `parkedBucketsOf`（开始页清单）/ `withBucketActive`（点一行直达）
+ *    就是给这两处外显供数据的：只做镜像与分组，不碰 DOM、不改标签。
  */
 import type { SidePanelTab } from './tabs'
 
@@ -187,6 +190,23 @@ export function withBucketOpen(
   return { ...buckets, [key]: { ...prev, open } }
 }
 
+/**
+ * 展开某一桶并把它里面的某个标签设为激活（侧栏徽标 / 开始页「其他对话的标签页」两个入口用）。
+ *
+ * 为什么合成一个函数：分两次调用（先 `withBucketTabs` 改激活、再 `withBucketOpen` 展开）会在
+ * 中间多渲染一帧「面板展开了但还是旧标签」的中间态。标签不在这一桶里 → 原引用返回（不凭空造激活态）。
+ */
+export function withBucketActive(
+  buckets: PanelBuckets,
+  key: string,
+  activeId: string,
+): PanelBuckets {
+  const prev = bucketOf(buckets, key)
+  if (!prev.tabs.some((tab) => tab.id === activeId)) return buckets
+  if (prev.activeId === activeId && prev.open) return buckets
+  return { ...buckets, [key]: { ...prev, activeId, open: true } }
+}
+
 /** 关掉**这一桶**的全部标签（切工作目录这条路径用；会话之间互不影响） */
 export function clearBucketTabs(buckets: PanelBuckets, key: string): PanelBuckets {
   const prev = bucketOf(buckets, key)
@@ -195,16 +215,70 @@ export function clearBucketTabs(buckets: PanelBuckets, key: string): PanelBucket
 }
 
 /**
+ * 别的会话的桶（按桶的插入顺序，跳过空桶）：开始页「其他对话的标签页」清单用。
+ *
+ * 与 `parkedTabsOf` 同一份口径（**唯一实现**）：那个函数就是它摊平的结果。
+ * `NEW_PANEL_KEY` 也在这里出现 —— 新对话页攒下的标签同样会「挂」在别的会话里看不见。
+ */
+export function parkedBucketsOf(
+  buckets: PanelBuckets,
+  key: string,
+): { key: string; tabs: SidePanelTab[] }[] {
+  const parked: { key: string; tabs: SidePanelTab[] }[] = []
+  for (const [other, bucket] of Object.entries(buckets)) {
+    if (other === key || bucket.tabs.length === 0) continue
+    parked.push({ key: other, tabs: bucket.tabs })
+  }
+  return parked
+}
+
+/**
  * 其它会话的标签：**内容照旧挂着**（草稿 / 撤销栈 / 终端屏幕都活着），只是不在标签栏里、
  * 也不显示 —— 靠容器的 `parkedTabs` 一直渲染。切回来时就是原来那份，一个字都没动。
  */
 export function parkedTabsOf(buckets: PanelBuckets, key: string): SidePanelTab[] {
-  const parked: SidePanelTab[] = []
-  for (const [other, bucket] of Object.entries(buckets)) {
-    if (other === key) continue
-    parked.push(...bucket.tabs)
+  return parkedBucketsOf(buckets, key).flatMap((entry) => entry.tabs)
+}
+
+/**
+ * 别的会话还开着的标签（开始页「其他对话的标签页」清单的一行）。
+ * `label` 是会话标题（宿主从会话 store 补）：容器不该为了显示一个标题去读会话。
+ */
+export interface OtherSessionTabs {
+  sessionId: string
+  label: string
+  tabs: SidePanelTab[]
+}
+
+/** 一个会话的右侧栏摘要（侧栏徽标用） */
+export interface PanelTabSummary {
+  /** 标签数（与工具栏徽标同一口径：`tabs.length`，开始页也算一格） */
+  count: number
+  /** 那一桶的面板是展开着的吗（收起时徽标降一档 = 「挂着但看不见」） */
+  open: boolean
+}
+
+/**
+ * 每个会话「还开着几个标签页、面板收没收起」—— 侧栏会话项徽标的数据。
+ *
+ * 为什么需要它：标签属于会话（本文件头注释），而面板一次只显示一个会话 —— 切走之后
+ * 「哪里还开着标签栏」就只剩这条信息能说清。
+ *
+ * 三条口径：
+ * 1. **跳过空桶与新对话页**：侧栏里没有 `__new__` 那一行；空桶挂个 0 只是噪音；
+ * 2. **计数口径与工具栏徽标一致**（`tabs.length`，开始页也算一格）：两处说的是同一件事，
+ *    口径不同的话「侧栏说 2、工具栏说 3」会被当成 bug；
+ * 3. 只做镜像、不做判断：收起 / 展开的差别留给界面（`open` 原样带出去）。
+ */
+export function panelTabSummaries(
+  buckets: PanelBuckets,
+): Record<string, PanelTabSummary> {
+  const out: Record<string, PanelTabSummary> = {}
+  for (const [key, bucket] of Object.entries(buckets)) {
+    if (key === NEW_PANEL_KEY || bucket.tabs.length === 0) continue
+    out[key] = { count: bucket.tabs.length, open: bucket.open }
   }
-  return parked
+  return out
 }
 
 /**

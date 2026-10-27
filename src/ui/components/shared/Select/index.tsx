@@ -86,6 +86,8 @@ interface SelectProps {
   dropdownWidth?: SelectDropdownWidth
   /** 'content' 策略的宽度上限（px），默认 500 */
   dropdownMaxWidth?: number
+  /** 读屏用的可访问名称：触发器上没有可见 label 时靠它（如逐行的权限下拉） */
+  ariaLabel?: string
 }
 
 function Select({
@@ -99,6 +101,7 @@ function Select({
   dropdownClassName,
   dropdownWidth = 'trigger',
   dropdownMaxWidth = DROPDOWN_CONTENT_MAX_WIDTH,
+  ariaLabel,
 }: SelectProps) {
   const [open, setOpen] = useState(false)
   const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({})
@@ -237,6 +240,7 @@ function Select({
       ref={triggerRef}
       tabIndex={disabled ? -1 : 0}
       role="combobox"
+      aria-label={ariaLabel}
       aria-expanded={open}
       aria-haspopup="listbox"
       /* 选中项的说明也挂到触发器上：不展开下拉也能看到（如终端权限的风险提示） */

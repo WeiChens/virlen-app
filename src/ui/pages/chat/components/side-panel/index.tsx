@@ -53,15 +53,14 @@ import HideRightSideBarSvg from '@/ui/components/icons/HideRightSideBarSvg'
 import WorkspaceFilePanel from '../workspace-file'
 import ServiceTerminal from '../service/ServiceTerminal'
 import UserTerminal from '../terminal/UserTerminal'
-import { shellLabel } from '../terminal/shells'
 import type { UserTerminalShell } from '@/infrastructure/terminal'
 import WorkspaceTree from '../sidebar/workspace-tree'
 import Guide from './guide'
 import BrowserPane from './browser/BrowserPane'
-import { urlLabel } from './browser/url'
-import { isPreviewTab, moveTab, tabLabel, type SidePanelTab } from './tabs'
+import { isPreviewTab, moveTab, type SidePanelTab } from './tabs'
+import { tabDisplayName } from './tab-title'
+import { paneSessionIdOf, type OtherSessionTabs } from './sessions'
 import { freezeChatWidth } from './chat-freeze'
-import { paneSessionIdOf } from './sessions'
 import { wheelScrollLeft } from './tab-scroll'
 import { useNativeDropTarget } from '@/ui/hooks/useNativeFileDrop'
 import './style.scss'
@@ -129,6 +128,13 @@ interface Props {
    * 不传 = 面板不接拖放（也就没有拖入高亮）。
    */
   onDropPaths?: (paths: string[]) => void
+  /**
+   * **别的会话还开着什么**（开始页底部的「其他对话的标签页」清单）。
+   * 宿主补齐会话标题（容器拿不到会话 store），标签本身已经带着会话前缀。
+   */
+  otherSessions?: OtherSessionTabs[]
+  /** 点清单里的一行：宿主持有标签状态，由它切会话 + 展开面板 + 激活那个标签 */
+  onOpenOtherTab?: (sessionId: string, tabId: string) => void
 }
 
 /** 面板宽度：只有下限与兜底默认值，**没有固定上限**（最多给到整块可用宽度，见 `maxDragWidth`） */
@@ -146,7 +152,8 @@ const DRAG_THRESHOLD = 4
 const CLICK_AFTER_DRAG_MS = 400
 /** 没有别的会话挂着标签时的空表（共享一份，避免每次渲染换引用） */
 const EMPTY_PARKED: SidePanelTab[] = []
-
+/** 没有别的会话开着标签时的空表（同上） */
+const EMPTY_OTHER: OtherSessionTabs[] = []
 /** 面板和聊天区是同一行的兄弟：`.chat-view` 里的那个 `.chat-main` */
 function chatMainOf(panel: HTMLElement | null): HTMLElement | null {
   const parent = panel?.parentElement
@@ -209,6 +216,8 @@ function SidePanel({
   onBrowserNavigate,
   onBrowserTitle,
   onDropPaths,
+  otherSessions = EMPTY_OTHER,
+  onOpenOtherTab,
 }: Props) {
   const panelRef = useRef<HTMLElement>(null)
   const [width, setWidth] = useState(DEFAULT_WIDTH)
@@ -663,6 +672,8 @@ function SidePanel({
           onPick={(kind, shell) => onPickGuide?.(kind, shell)}
           workspaceReady={guideWorkspaceReady}
           loadShells={loadTerminalShells}
+          otherSessions={otherSessions}
+          onOpenOtherTab={onOpenOtherTab}
         />
       )
     }
@@ -945,6 +956,9 @@ function SidePanel({
       filesQuery,
       onBrowserNavigate,
       onBrowserTitle,
+      // 开始页的「其他对话的标签页」：清单换了 / 标题改了这一块要跟着重算
+      otherSessions,
+      onOpenOtherTab,
     ],
   )
 
@@ -977,20 +991,7 @@ function SidePanel({
             const active = tab.id === current?.id
             /** 预览位（临时标签）：文字斜体，下一个打开的文件顶掉它（见 `tabs.ts` 头注释第 6 条） */
             const preview = isPreviewTab(tab)
-            const label =
-              tab.kind === 'file'
-                ? tabLabel(tab.path)
-                : tab.kind === 'guide'
-                  ? t('开始页')
-                  : tab.kind === 'files'
-                    ? t('工作区文件')
-                    : tab.kind === 'terminal'
-                      // 标题就用终端类型名（PowerShell / cmd / Git Bash…）：同名无所谓，
-                      // 靠 tooltip 里的工作目录区分（不编「终端 1 / 2」）
-                      ? shellLabel(tab.shell)
-                      : tab.kind === 'browser'
-                        ? tab.title || urlLabel(tab.url) || t('浏览器')
-                        : tab.name || tab.serviceId
+            const label = tabDisplayName(tab)
             // 服务标签的 tooltip 带上归属会话：两个会话各有一个 dev 时要分得清；
             // 终端标签的 tooltip 给工作目录（标签文字已经是 shell 类型名，几个终端可能同名）；
             // 网页标签的 tooltip 给完整地址（标题只有主机名，同主机的两页靠它区分）

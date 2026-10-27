@@ -230,3 +230,101 @@
   border: 1px dashed var(--border-color, #e5e5e5);
   border-radius: 999px;
 }
+
+/* ==================== 其他对话的标签页（直达清单） ====================
+   标签属于会话，切走之后那些标签栏在本会话里完全看不见（只是 hidden 挂着）。
+   这份清单就是「我知道在哪，但要先跑回去再找」的解法：宽度与三扇门对齐（380），
+   只在真有东西时出现 —— 不放一个空壳。 */
+.panel-guide-others {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 380px;
+  max-width: 100%;
+}
+
+/* 标题行：左边「其他对话的标签页」，右边总数（与分组头的计数徽标同一套观感） */
+.panel-guide-others-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px;
+  color: var(--text-tertiary, #767676);
+  font-size: var(--font-size-xs);
+  line-height: 1.6;
+
+  .panel-guide-others-count {
+    flex: none;
+    min-width: 18px;
+    padding: 0 6px;
+    color: var(--text-secondary, #666);
+    font-size: var(--font-size-2xs);
+    text-align: center;
+    background: var(--hover-bg, #e8e8e8);
+    border-radius: 999px;
+  }
+}
+
+.panel-guide-others-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 40vh;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+/* 一组 = 一个对话（组名一行，下面挂它的标签） */
+.panel-guide-others-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* 会话名：弱一档、单行省略 —— 它只是「这些标签是谁的」，不是可点的东西 */
+.panel-guide-others-session {
+  overflow: hidden;
+  padding: 2px 4px;
+  color: var(--text-tertiary, #767676);
+  font-size: var(--font-size-2xs);
+  line-height: 1.5;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 一行一个标签：真按钮（键盘可达），悬停用薄涂而不是换底色（与标签栏同一手法） */
+.panel-guide-other-tab {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 5px 8px;
+  color: var(--text-secondary, #666);
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--text-primary, #1a1a1a);
+    background: color-mix(in srgb, var(--text-primary, #1a1a1a) 7%, transparent);
+  }
+
+  &:focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: 1px;
+  }
+
+  /* 文件名 / 服务名 / 网页标题都可能很长：单行省略，全名在 tooltip 里 */
+  .panel-guide-other-name {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+}

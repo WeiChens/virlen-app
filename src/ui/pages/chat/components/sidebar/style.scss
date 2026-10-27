@@ -312,6 +312,55 @@
         }
       }
 
+      /* 「那个对话的右侧栏还开着」——可点的小徽标（图标 + 标签数）。
+         为什么只给非当前会话：当前会话的标签数在工具栏那颗按钮上，两处说同一件事就是噪音。
+         颜色只用**品牌薄涂**（与标签栏激活态同一手法）：写 `--bg-primary` 在亮 / 暗两档都看不出。
+         `is-collapsed` = 面板收起（标签挂着但没展开）：只留一圈描边，观感上「有东西但没摊着」。 */
+      .session-panel-badge {
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        box-sizing: border-box;
+        padding: 1px 6px 1px 4px;
+        color: var(--accent-color, #4f46e5);
+        font-family: inherit;
+        font-size: var(--font-size-2xs);
+        line-height: 1.6;
+        background: color-mix(in srgb, var(--primary, #4f46e5) 16%, transparent);
+        border: none;
+        border-radius: 999px;
+        cursor: pointer;
+
+        /* `.session-item svg` 定了 18px / 次要色，徽标里的图标要比它小且继承徽标色 */
+        svg {
+          width: 12px;
+          height: 12px;
+          color: inherit;
+          fill: currentColor;
+        }
+
+        &:hover {
+          background: color-mix(in srgb, var(--primary, #4f46e5) 26%, transparent);
+        }
+
+        &:focus-visible {
+          outline: var(--focus-ring);
+          outline-offset: 1px;
+        }
+
+        &.is-collapsed {
+          color: var(--text-secondary, #666);
+          background: transparent;
+          box-shadow: inset 0 0 0 1px var(--border-color, #e5e5e5);
+
+          &:hover {
+            color: var(--text-primary, #1a1a1a);
+            background: var(--hover-bg, #f0f0f0);
+          }
+        }
+      }
+
       // 归档会话：整体降调（仍可点击 / 右键，只把归档态说清楚；打开被入口拦截）
       &.archived {
         opacity: 0.5;
@@ -466,6 +515,28 @@
       }
 
       // 分组头部的工作指示器样式见 `.session-list > .working-indicator`（与会话项共用一份）
+      /* 折叠分组里还有右侧标签页：与 `group-count` **同一套底色与文字色**（一组读数，不另立风格）。
+         不接指针：点它 = 折叠 / 展开分组，而不是替用户挑一个会话展开面板。 */
+      .group-panel-badge {
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        gap: 3px;
+        box-sizing: border-box;
+        padding: 1px 7px;
+        color: var(--text-secondary, #999);
+        font-size: var(--font-size-xs);
+        line-height: 1.5;
+        background: var(--hover-bg, #e8e8e8);
+        border-radius: 10px;
+        pointer-events: none;
+
+        svg {
+          width: 12px;
+          height: 12px;
+          fill: currentColor;
+        }
+      }
       /* 会话数徽标：纯展示（单击落在整行上 = 折叠/展开），操作走分组头右键菜单 */
       .group-count {
         flex-shrink: 0;

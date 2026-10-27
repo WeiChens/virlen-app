@@ -24,7 +24,7 @@
  *    而 ▾ 必须是自己能点的控件 —— 「开一个终端」与「挑哪种终端」是两件事。
  */
 import { useRef, useState, type ComponentType } from 'react'
-import { t } from '@/ui/i18n'
+import { t, tpl } from '@/ui/i18n'
 import { keycaps, PANEL_COMMANDS, type PanelCommandId } from '@/ui/shortcuts/commands'
 import ContextMenu, {
   useContextMenu,
@@ -38,6 +38,8 @@ import TerminalSvg from '@/ui/components/icons/TerminalSvg'
 import GlobeSvg from '@/ui/components/icons/GlobeSvg'
 import DropDownSvg from '@/ui/components/icons/DropDownSvg'
 import { shellMenuItems } from '../terminal/shells'
+import { tabDisplayName } from './tab-title'
+import type { OtherSessionTabs } from './sessions'
 import './guide.scss'
 
 type EntryKind = 'files' | 'terminal' | 'browser'
@@ -89,13 +91,29 @@ interface Props {
    * 不传 = 不弹类型菜单，`onPick('terminal')` 直接用默认那种。
    */
   loadShells?: () => Promise<UserTerminalShell[]>
+  /**
+   * **别的对话还开着什么**（宿主从其它分桶里摊出来的）：开始页底部的直达清单。
+   * 标签属于会话，切走之后那些标签栏在本会话里完全看不见（只 hidden 挂着） ——
+   * 这份清单是「我知道在哪，但要先跑回去再找」的解法：一行一条，点了就到。
+   */
+  otherSessions?: OtherSessionTabs[]
+  /** 点清单里的一行：宿主切会话 + 展开面板 + 激活那个标签（三件事在同一个同步块里） */
+  onOpenOtherTab?: (sessionId: string, tabId: string) => void
 }
 
-export default function Guide({ onPick, workspaceReady, loadShells }: Props) {
+export default function Guide({
+  onPick,
+  workspaceReady,
+  loadShells,
+  otherSessions = [],
+  onOpenOtherTab,
+}: Props) {
   const shellMenu = useContextMenu()
   /** ▾ 自己：既当菜单的锚点，也当「再点一次关掉」的豁免元素 */
   const caretRef = useRef<HTMLButtonElement | null>(null)
   const [shellItems, setShellItems] = useState<ContextMenuItem[]>([])
+  /** 清单里一共几个标签（标题右侧的计数）；没传清单时不算 */
+  const otherTabCount = otherSessions.reduce((sum, group) => sum + group.tabs.length, 0)
 
   /**
    * 点整行：直接开。终端**不带** shell —— 宿主按「上次用的那种 → 后端默认」开
@@ -227,6 +245,41 @@ export default function Guide({ onPick, workspaceReady, loadShells }: Props) {
           )
         })}
       </div>
+
+      {/* 其他对话的标签页：标签属于会话，切走后在本会话完全看不见 —— 从这里一行直达。
+          只在真有东西时出现（不放一个空壳）；行是按钮（键盘可达），点了由宿主切会话 + 展开面板。 */}
+      {otherTabCount > 0 && (
+        <div className="panel-guide-others" data-panel-guide-others="">
+          <div className="panel-guide-others-head">
+            <span>{t('其他对话的标签页')}</span>
+            <span className="panel-guide-others-count">{otherTabCount}</span>
+          </div>
+          <ul className="panel-guide-others-list">
+            {otherSessions.map((group) => (
+              <li key={group.sessionId} className="panel-guide-others-group">
+                <span className="panel-guide-others-session" title={group.label}>
+                  {group.label}
+                </span>
+                {group.tabs.map((tab) => {
+                  const name = tabDisplayName(tab)
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      className="panel-guide-other-tab"
+                      // 名字可能是长文件名：补一句「点了会发生什么」，别只给一串路径
+                      title={tpl('切到该对话并打开 $__name__', { name })}
+                      data-session-id={group.sessionId}
+                      onClick={() => onOpenOtherTab?.(group.sessionId, tab.id)}>
+                      <span className="panel-guide-other-name">{name}</span>
+                    </button>
+                  )
+                })}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* 终端类型菜单（没装的灰显）：位置贴着 ▾，点外面 / Esc / 再点一次 ▾ 关掉 */}
       {shellMenu.state && (
