@@ -73,7 +73,7 @@ interface Props {
 
 function LinkRenderer({ href, children, ...props }: any) {
   return (
-    <a
+    <button
       {...props}
       href={href}
       target="_blank"
@@ -88,7 +88,7 @@ function LinkRenderer({ href, children, ...props }: any) {
         if (handleMarkdownLinkClick(e, href)) e.preventDefault()
       }}>
       {children}
-    </a>
+    </button>
   )
 }
 

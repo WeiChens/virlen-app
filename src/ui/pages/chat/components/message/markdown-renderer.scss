@@ -68,9 +68,10 @@
   .md-link {
     color: var(--accent-color, #4f46e5);
     text-decoration: none;
+    border: none;
     border-bottom: 1px solid transparent;
     transition: border-color 0.15s;
-
+    cursor: pointer;
     &:hover {
       border-bottom-color: var(--accent-color, #4f46e5);
     }
