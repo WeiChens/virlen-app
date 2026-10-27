@@ -611,6 +611,56 @@ fn all_sessions_snapshot_marks_ownership_and_keeps_the_scoped_view_in_shape() {
     super::registry::remove("svc_all_b");
 }
 
+/// 跨会话的 `start` 不得把**刚结束**的条目抹掉：面板「已结束」页与模型「补读收尾输出」都建在它上面。
+///
+/// 曾经这样红过（macOS CI）：`ensure_capacity` 从前一律 `retain(is_running)`，于是别的会话一 start，
+/// 本会话刚结束的条目就没了 —— 两个 panel 用例随机变成「刚杀的服务找不到」（用例并行跑，邻座抢走）。
+#[test]
+fn another_sessions_start_keeps_finished_entries_and_quota_ignores_them() {
+    use std::sync::Arc;
+
+    let mk = |sid: &str, id: &str| {
+        Arc::new(super::registry::ServiceEntry::new(
+            id.to_string(),
+            sid.to_string(),
+            id.to_string(),
+            "sleep 600".to_string(),
+            0,
+            1,
+            "no_sandbox".to_string(),
+            Arc::new(super::registry::ServiceState::new()),
+            Arc::new(|| {}),
+        ))
+    };
+
+    // 把本会话配额（`MAX_SERVICES_PER_SESSION`）用**已结束**的条目占满：它们只是留档，不该挡住新服务
+    let ids: Vec<String> = (0..super::common::MAX_SERVICES_PER_SESSION)
+        .map(|i| format!("svc_prune_fin_{i}"))
+        .collect();
+    for id in &ids {
+        let entry = mk("s_prune", id);
+        entry.state.finish(Some(0), false);
+        super::registry::insert(entry);
+    }
+
+    // `ensure_capacity` 是 start 的第一步：它只能清**过期**的，刚结束的一条都不能少
+    assert!(
+        super::registry::ensure_capacity("s_prune").is_ok(),
+        "已结束的条目不占配额（否则「先 kill 几个」指向模型已经杀掉的 id = 死路）"
+    );
+    assert!(super::registry::ensure_capacity("s_other").is_ok());
+    for id in &ids {
+        assert!(
+            super::registry::get("s_prune", id).is_some(),
+            "{id} 刚结束：别的会话的 start 不得把它抹掉（面板「已结束」页靠它）"
+        );
+    }
+
+    for id in &ids {
+        super::registry::remove(id);
+    }
+}
+
 /// 面板的读操作**不得消费已读游标**：用户刷一眼 / 在面板里杀服务之后，模型仍要能读到那段输出。
 #[tokio::test]
 async fn panel_kill_leaves_the_models_unread_output_intact() {

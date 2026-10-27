@@ -9,7 +9,7 @@
 //! （长耗时读取不会阻塞其它会话的服务）。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
@@ -182,6 +182,11 @@ pub(crate) struct ServiceState {
     exit_within_startup: AtomicBool,
     /// 状态或输出发生变化 —— 等待方（工具的等待窗口 / `waitFor`）据此醒来
     pub(super) notify: Notify,
+    /// 落定终态的时刻（ms；0 = 仍在运行）。
+    ///
+    /// 只给「已结束条目留多久」用（[`super::registry::prune_finished`]）：面板「已结束」页与
+    /// 模型的收尾补读靠它，过期才让位。
+    finished_at: AtomicI64,
     /// 实时输出通道：仅**工具调用进行中**时存在（工具把它挂进 `agent:tool-output` 事件，
     /// 工具返回后置空 —— 之后的输出只进缓冲区，不再往已完成的气泡里推）。
     pub(super) live: Mutex<Option<tokio::sync::mpsc::UnboundedSender<(bool, String)>>>,
@@ -200,6 +205,7 @@ impl ServiceState {
             notice_muted: AtomicBool::new(false),
             startup_window: AtomicBool::new(true),
             exit_within_startup: AtomicBool::new(false),
+            finished_at: AtomicI64::new(0),
             notify: Notify::new(),
             live: Mutex::new(None),
         }
@@ -296,8 +302,18 @@ impl ServiceState {
         // ⚠️ 先取证再落状态：`notify_waiters` 一响，start 工具那边就会关窗口，之后再读就没意义了。
         self.exit_within_startup
             .store(self.startup_window.load(Ordering::SeqCst), Ordering::SeqCst);
+        // 同理先记时刻再翻状态：清理逻辑看到「已结束」时，时间戳必须已经可用
+        //（否则读到 0 = 远古，刚结束的条目会被当成过期瞬间抹掉）
+        self.finished_at
+            .store(crate::telemetry::now_ms(), Ordering::SeqCst);
         *self.status.lock().unwrap() = Status::Exited { code, killed };
         self.notify.notify_waiters();
+    }
+
+    /// 结束时刻（`None` = 仍在运行）。
+    pub(super) fn finished_at(&self) -> Option<i64> {
+        let at = self.finished_at.load(Ordering::SeqCst);
+        (at > 0).then_some(at)
     }
 
     /// 等待进入终态（`timeout_ms` 内）；返回是否已结束。
@@ -437,18 +453,31 @@ pub(super) fn next_id() -> String {
     format!("svc_{}", NEXT_ID.fetch_add(1, Ordering::SeqCst))
 }
 
+/// 已结束的条目在注册表里留多久（面板「已结束」页 / 模型补读收尾输出都靠它）。
+///
+/// ⚠️ 不能像从前那样「一结束就清」（`retain(is_running)`）：那条清理是**跨会话**的 ——
+/// 别的会话一 start 就把本会话刚结束的条目抹掉，而面板终止后条目**本来就该留着**。
+/// macOS CI 就是这样红的：`panel_*` 两个用例并行跑，条目在「已结束」与断言之间被邻座抢走。
+const FINISHED_RETAIN_MS: i64 = 5 * 60 * 1000;
+
+/// 留档的条数上限：终归是**内存**（每条最多三份 200k 字符的环形窗口）。
+/// TTL 只管时间不管突发速率，所以再压一层条数（超出时先埋**最早结束**的）。
+const MAX_FINISHED_RETAINED: usize = 64;
+
 /// 容量检查（**spawn 之前**调用，避免起完才发现放不下）。
 ///
-/// 规则：先清掉**所有会话**里已结束的条目（它们只是留给 AI / 面板读收尾输出的，读不完也不该挡住
-/// 新服务；面板终止不摘条目，所以必须在这里清），再按「本会话上限 / 全局上限」拒绝。
-/// 返回的错误文案给模型看（英文，含怎么办）。
+/// 规则：先顺手清理**过期**的已结束条目（见 [`prune_finished`]）—— 但只看时间/条数，
+/// **不因为「已结束」就清**；再按「本会话上限 / 全局上限」拒绝。返回的错误文案给模型看（英文，含怎么办）。
 ///
-/// ⚠️ 清理必须**跨会话**：只清本会话的话，全局上限会被别的会话的已结束条目占满，而这里报的
-/// 「先 kill 几个」对模型是死路 —— 它既看不见、也杀不掉别的会话的服务。
+/// ⚠️ 配额只算**活着**的进程：已结束的条目不占位置。这样上面那条「只清过期」才站得住 ——
+/// 否则报给模型的「先 kill 几个」会指向它已经杀掉的 id（死路）。
 pub(super) fn ensure_capacity(session_id: &str) -> Result<(), String> {
     let mut map = SERVICES.lock().unwrap();
-    map.retain(|_, e| e.is_running());
-    let session_count = map.values().filter(|e| e.session_id == session_id).count();
+    prune_finished(&mut map);
+    let session_count = map
+        .values()
+        .filter(|e| e.session_id == session_id && e.is_running())
+        .count();
     if session_count >= super::common::MAX_SERVICES_PER_SESSION {
         return Err(format!(
             "This conversation already has {session_count} background services running (limit {}). \
@@ -456,7 +485,8 @@ pub(super) fn ensure_capacity(session_id: &str) -> Result<(), String> {
             super::common::MAX_SERVICES_PER_SESSION
         ));
     }
-    if map.len() >= super::common::MAX_SERVICES_TOTAL {
+    let running_total = map.values().filter(|e| e.is_running()).count();
+    if running_total >= super::common::MAX_SERVICES_TOTAL {
         return Err(format!(
             "Too many background services across all conversations (limit {}). \
              Stop some first with kill_background_service.",
@@ -464,6 +494,34 @@ pub(super) fn ensure_capacity(session_id: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// 清理已结束的**留档**条目：过期的（[`FINISHED_RETAIN_MS`]）+ 超出条数上限的（最早结束的先走）。
+///
+/// 只服务内存上限；刚结束的条目必须留住 —— 面板「已结束」页与模型「面板没抹掉我的未读输出」
+/// 两个承诺都建在它上面（见 `panel.rs` 模块头的第 2 条）。
+fn prune_finished(map: &mut HashMap<String, Arc<ServiceEntry>>) {
+    let now = crate::telemetry::now_ms();
+    map.retain(|_, e| {
+        e.is_running()
+            || e.state
+                .finished_at()
+                .is_some_and(|at| now.saturating_sub(at) < FINISHED_RETAIN_MS)
+    });
+
+    let mut finished: Vec<(i64, String)> = map
+        .iter()
+        .filter(|(_, e)| !e.is_running())
+        .map(|(id, e)| (e.state.finished_at().unwrap_or(0), id.clone()))
+        .collect();
+    if finished.len() <= MAX_FINISHED_RETAINED {
+        return;
+    }
+    finished.sort_by_key(|(at, _)| *at);
+    let drop_n = finished.len() - MAX_FINISHED_RETAINED;
+    for (_, id) in finished.into_iter().take(drop_n) {
+        map.remove(&id);
+    }
 }
 
 /// 本会话内是否已有同名**存活**服务（防「AI 反复起同一个 dev server」抢端口）。
