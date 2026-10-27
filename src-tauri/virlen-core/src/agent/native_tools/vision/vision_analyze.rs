@@ -289,8 +289,7 @@ mod tests {
         let r = vision_analyze_tool(&ctx, &json!({ "path": "shot.png" }))
             .await
             .expect("不应是调用级错误");
-        let ui_image_id;
-        match r {
+        let ui_image_id = match r {
             NativeToolOutcome::Value { content, ui_data } => {
                 assert!(content.starts_with("🖼️ "), "content: {content}");
                 // 默认档位 = JPEG，所以发给模型的是转换后的 JPEG（原 120x80 PNG）
@@ -317,10 +316,12 @@ mod tests {
                 assert_eq!(ui["sourceMediaType"], "image/png", "原图对照要带给界面");
                 assert_eq!(ui["sourceWidth"], 120);
                 assert_eq!(ui["sourceHeight"], 80);
-                ui_image_id = ui["imageMessageId"].as_str().unwrap().to_string();
+                // 返回值就是这条 id：初值此前靠「先声明后赋值」，clippy 的
+                // needless_late_init 会当场报错（CI 是 `-D warnings`）
+                ui["imageMessageId"].as_str().unwrap().to_string()
             }
             other => panic!("expected Value, got {other:?}"),
-        }
+        };
 
         // 图片本体入队：一条 `role = vision_image`、内容为 text + data URL
         let queued = super::image_send::drain(session_id);
