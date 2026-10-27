@@ -322,7 +322,9 @@
         align-items: center;
         gap: 2px;
         box-sizing: border-box;
-        padding: 1px 6px 1px 4px;
+        /* 内边距与图标全挂在自身字号上（徽标尺寸必须跟「设置 → 字体大小」走，
+           写死 px 时字大一号就把数字裁了；见 `tests/ui/font-size-follows-setting.test.ts`） */
+        padding: 0.1em 0.6em 0.1em 0.4em;
         color: var(--accent-color, #4f46e5);
         font-family: inherit;
         font-size: var(--font-size-2xs);
@@ -334,8 +336,8 @@
 
         /* `.session-item svg` 定了 18px / 次要色，徽标里的图标要比它小且继承徽标色 */
         svg {
-          width: 12px;
-          height: 12px;
+          width: 1.2em;
+          height: 1.2em;
           color: inherit;
           fill: currentColor;
         }
@@ -601,7 +603,7 @@
         align-items: center;
         gap: 3px;
         box-sizing: border-box;
-        padding: 1px 7px;
+        padding: 0.1em 0.6em;
         color: var(--text-secondary, #999);
         font-size: var(--font-size-xs);
         line-height: 1.5;
@@ -610,8 +612,8 @@
         pointer-events: none;
 
         svg {
-          width: 12px;
-          height: 12px;
+          width: 1.1em;
+          height: 1.1em;
           fill: currentColor;
         }
       }
