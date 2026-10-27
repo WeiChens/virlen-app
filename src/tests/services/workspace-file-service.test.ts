@@ -142,7 +142,13 @@ describe('读取', () => {
     const file = await loadWorkspaceFile('E:/repo/scene.glb')
 
     expect(readFileMock).toHaveBeenCalledWith('E:/repo/scene.glb')
-    expect(file).toEqual({ kind: 'model', bytes: new Uint8Array([0x67, 0x6c, 0x54, 0x46]), byteSize: 4 })
+    expect(file).toEqual({
+      kind: 'model',
+      bytes: new Uint8Array([0x67, 0x6c, 0x54, 0x46]),
+      byteSize: 4,
+      // 绝对路径一并给下去：模型旁边的贴图靠它找（`model-textures.ts`）
+      path: 'E:/repo/scene.glb',
+    })
   })
 
   it('3D 模型超过上限：报「模型过大」而不是笼统的文件过大', async () => {

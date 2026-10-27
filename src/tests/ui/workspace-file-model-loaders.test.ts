@@ -169,6 +169,8 @@ describe('非 PBR 材质归一到 Standard', () => {
   function recordingThree() {
     const created: Record<string, unknown>[] = []
     const THREE = {
+      // `toStandardMaterial` 会用这个常量标颜色贴图（真 three 里就是 'srgb'）
+      SRGBColorSpace: 'srgb',
       MeshStandardMaterial: class {
         constructor(parameters: Record<string, unknown>) {
           created.push(parameters)
@@ -213,6 +215,10 @@ describe('非 PBR 材质归一到 Standard', () => {
     expect(parameters.side).toBe(2)
     expect(parameters.vertexColors).toBe(true)
     expect(parameters.map).toBeDefined()
+    // 颜色贴图要按 sRGB 解码（DAE / 3DS / 3MF 的 loader 自己不标，会整体发白）
+    expect((parameters.map as { colorSpace?: string }).colorSpace).toBe('srgb')
+    // 法线贴图是数据：一个字不能动（标成 sRGB 会让光照错位）
+    expect((parameters.normalMap as { colorSpace?: string }).colorSpace).toBeUndefined()
     expect(parameters.normalMap).toBeDefined()
     expect(parameters.metalness).toBe(0)
     expect(parameters.roughness).toBeCloseTo(shininessToRoughness(30), 5)

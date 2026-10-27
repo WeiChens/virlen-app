@@ -22,6 +22,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import type { ModelPreset } from './model-presets'
 import { subjectSpan, type BoxSpan } from './model-framing'
+import { DIAGNOSTIC_TITLES, type DiagnosticReport } from './model-diagnostics'
 
 /** 预览的可视化选项（工具栏那几个开关） */
 export interface ModelViewOptions {
@@ -59,6 +60,18 @@ interface ModelLight {
   attenuates: boolean
 }
 
+/**
+ * 统计用的最小「可画对象」视图：网格 / 点云 / 线（`Mesh.isMesh`、`Points.isPoints`、`Line.isLine`）。
+ * 不能用 `THREE.Mesh` 断言：`.pcd` 返回的是 `Points`，两者交叉类型里没有 `isLine`。
+ */
+interface DrawableLike {
+  isMesh?: boolean
+  isPoints?: boolean
+  isLine?: boolean
+  geometry?: THREE.BufferGeometry
+  material?: THREE.Material | THREE.Material[]
+}
+
 export class ModelScene {
   private readonly container: HTMLElement
   private readonly renderer: THREE.WebGLRenderer
@@ -79,6 +92,8 @@ export class ModelScene {
   private readonly resizeObserver: ResizeObserver
 
   private model: THREE.Object3D | null = null
+  /** 异常上报（面板给）：取景时遇到「没有几何」这类情况要能说出来，不能只是白屏 */
+  private report: DiagnosticReport | undefined
   /** 模型根节点进来时的原始变换：取景 / 重置都从它算起（口径 3） */
   private homeTransform: {
     position: THREE.Vector3
@@ -123,8 +138,10 @@ export class ModelScene {
     target: new THREE.Vector3(0, 1, 0),
   }
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, report?: DiagnosticReport) {
     this.container = container
+    // 场景先拿一份不跟轮次的报告：上下文丢失可能发生在第一个模型进来之前
+    this.report = report
     // 隐藏标签里挂载时量到的是 0：先按兜底尺寸建上下文，ResizeObserver 会在真正显示时纠正
     const width = container.clientWidth || 640
     const height = container.clientHeight || 420
@@ -146,6 +163,17 @@ export class ModelScene {
     canvas.style.width = '100%'
     canvas.style.height = '100%'
     container.appendChild(canvas)
+
+    // 上下文丢失（显存吃紧 / 驱动重启）：画面会永久停在最后一帧，必须说出来 ——
+    // 否则用户以为「模型就长这样」。不自动恢复：重新打开这个文件比半死不活的恢复稳当。
+    canvas.addEventListener('webglcontextlost', (event) => {
+      event.preventDefault()
+      this.report?.({
+        level: 'error',
+        code: 'context-lost',
+        title: DIAGNOSTIC_TITLES['context-lost'],
+      })
+    })
 
     this.scene = new THREE.Scene()
     this.scene.background = new THREE.Color('#0e1116')
@@ -232,9 +260,14 @@ export class ModelScene {
     return this.renderer
   }
 
-  /** 换模型：会先把上一份彻底释放（几何 / 材质 / 线框替身） */
-  setModel(object: THREE.Object3D, animations: readonly THREE.AnimationClip[]): void {
+  /** 换模型：会先把上一份彻底释放（几何 / 材质 / 贴图 / 线框替身） */
+  setModel(
+    object: THREE.Object3D,
+    animations: readonly THREE.AnimationClip[],
+    report?: DiagnosticReport,
+  ): void {
     this.clearModel()
+    this.report = report
     this.model = object
     this.homeTransform = {
       position: object.position.clone(),
@@ -279,6 +312,8 @@ export class ModelScene {
     this.modelLights = []
     this.fittedScale = 1
     if (!this.model) return
+    // 线框开着时 `mesh.material` 是替身：先换回原件，否则原件（连同它的贴图）永远不会被释放
+    this.applyWireframe(false)
     this.disposeObject(this.model)
     this.scene.remove(this.model)
     this.model = null
@@ -309,7 +344,15 @@ export class ModelScene {
     }
     object.updateMatrixWorld(true)
     const whole = new THREE.Box3().setFromObject(object)
-    if (whole.isEmpty()) return
+    if (whole.isEmpty()) {
+      // 有节点但没有任何几何（只有灯 / 空组）：取景无从谈起，画面就是个空舞台 —— 得说一句
+      this.report?.({
+        level: 'warning',
+        code: 'empty-bounds',
+        title: DIAGNOSTIC_TITLES['empty-bounds'],
+      })
+      return
+    }
     // 原始尺寸（整棵树）在缩放前记下来：面板里显示的「尺寸」要是模型自己的单位
     this.sourceSize = whole.getSize(new THREE.Vector3())
 
@@ -379,17 +422,24 @@ export class ModelScene {
     let meshes = 0
     const materials = new Set<THREE.Material>()
     this.model.traverse((child) => {
-      const mesh = child as THREE.Mesh
-      if (!mesh.isMesh) return
+      // PCD 是点云（`Points`）、部分格式还会带线：它们也算一个「网格」、顶点照数，
+      // 三角形只对 `Mesh` 有意义 —— 只认 `isMesh` 的话 .pcd 的信息面板是 0 / 0 / 0
+      const object = child as DrawableLike
+      const drawable = !!(object.isMesh || object.isPoints || object.isLine)
+      if (!drawable) return
       meshes += 1
-      const geometry = mesh.geometry
+      const geometry = object.geometry
       if (geometry) {
         // 索引几何：一个三角形 = 3 个索引；非索引几何：一个三角形 = 3 个顶点
-        if (geometry.index) triangles += geometry.index.count / 3
-        else if (geometry.attributes.position) triangles += geometry.attributes.position.count / 3
+        if (object.isMesh) {
+          if (geometry.index) triangles += geometry.index.count / 3
+          else if (geometry.attributes.position) {
+            triangles += geometry.attributes.position.count / 3
+          }
+        }
         if (geometry.attributes.position) vertices += geometry.attributes.position.count
       }
-      const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+      const list = Array.isArray(object.material) ? object.material : [object.material]
       for (const material of list) if (material) materials.add(material)
     })
     return {
@@ -675,14 +725,30 @@ export class ModelScene {
     this.requestRender()
   }
 
+  /**
+   * 释放一棵模型树：几何、材质，以及**材质上的贴图**。
+   *
+   * ⚠️ `Material.dispose()` 只管程序与事件，**不碰贴图**：不显式 `texture.dispose()`，
+   * 那些 GL 纹理要等整个上下文丢失才回收 —— 开几个带 4K 贴图的模型就能把显存吃干净。
+   * 同一张贴图常被多个材质共享：用 Set 去重，只放一次。
+   */
   private disposeObject(object: THREE.Object3D): void {
+    const textures = new Set<THREE.Texture>()
     object.traverse((child) => {
       const mesh = child as THREE.Mesh
       if (!mesh.isMesh) return
       mesh.geometry?.dispose()
       const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-      for (const material of list) material?.dispose()
+      for (const material of list) {
+        if (!material) continue
+        for (const value of Object.values(material as unknown as Record<string, unknown>)) {
+          const texture = value as THREE.Texture | null
+          if (texture && texture.isTexture) textures.add(texture)
+        }
+        material.dispose()
+      }
     })
+    for (const texture of textures) texture.dispose()
   }
 
   dispose(): void {

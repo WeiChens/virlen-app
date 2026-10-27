@@ -729,9 +729,17 @@ function WorkspaceFilePanel({
     if (file.kind === 'pdf') {
       return <PdfView bytes={file.bytes} name={name} onOpenInSystem={openInSystem} />
     }
-    // 3D 模型：字节交给 three（场景与加载器都是懒加载，见 `model-view.tsx`）
+    // 3D 模型：字节交给 three（场景与加载器都是懒加载，见 `model-view.tsx`）；
+    // 绝对路径一并给下去 —— 它要用它去同目录找模型引用的贴图（`model-textures.ts`）
     if (file.kind === 'model') {
-      return <ModelView bytes={file.bytes} name={name} onOpenInSystem={openInSystem} />
+      return (
+        <ModelView
+          bytes={file.bytes}
+          name={name}
+          path={file.path}
+          onOpenInSystem={openInSystem}
+        />
+      )
     }
     // 字节已读完、blob URL 还没建好：同一颗转圈（否则会闪一帧「正在读取文件…」的纯文字）
     if (!mediaUrl) {

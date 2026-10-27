@@ -37,10 +37,15 @@ vi.mock('@/services/security-service', () => ({
     resolveSafePath: async (path: string): Promise<string> => path,
   },
 }))
-/** 只验面板把**字节**交给了它（真组件要 WebGL 上下文） */
+/** 只验面板把**字节 + 绝对路径**交给了它（真组件要 WebGL 上下文） */
 vi.mock('@/ui/pages/chat/components/workspace-file/model-view', () => ({
-  default: ({ bytes, name }: { bytes: Uint8Array; name: string }) => (
-    <div className="mock-model" data-name={name} data-bytes={String(bytes.length)} />
+  default: ({ bytes, name, path }: { bytes: Uint8Array; name: string; path?: string }) => (
+    <div
+      className="mock-model"
+      data-name={name}
+      data-bytes={String(bytes.length)}
+      data-path={path ?? ''}
+    />
   ),
 }))
 /** Monaco / Markdown 渲染器在 jsdom 里加载不了（面板静态引了它们，与三个分支无关） */
@@ -85,12 +90,15 @@ it('glb：字节交给模型预览，且面板不给编辑入口', async () => {
     kind: 'model',
     bytes: new Uint8Array([0x67, 0x6c, 0x54, 0x46]),
     byteSize: 4,
+    path: 'E:/repo/scene.glb',
   } satisfies LoadedWorkspaceFile)
   await mount('E:/repo/scene.glb')
 
   const model = document.querySelector<HTMLElement>('.mock-model')
   expect(model?.dataset.name).toBe('scene.glb')
   expect(model?.dataset.bytes).toBe('4')
+  // 绝对路径要下去：模型旁边的贴图靠它才能找到（面板自己不做贴图的事）
+  expect(model?.dataset.path).toBe('E:/repo/scene.glb')
   // 只看不改：没有保存按钮，也没有「编辑 / 预览」两个 tab
   expect(document.querySelector('.wfp-action.is-primary')).toBeNull()
   expect(document.querySelectorAll('.wfp-tab')).toHaveLength(0)

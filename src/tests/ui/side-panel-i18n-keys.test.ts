@@ -32,6 +32,9 @@ const FILES = [
   'src/ui/pages/chat/components/workspace-file/sheet-view.tsx',
   'src/ui/pages/chat/components/workspace-file/document-view.tsx',
   'src/ui/pages/chat/components/workspace-file/pdf-view.tsx',
+  // 3D 模型预览：工具栏 / 加载失败文案 / 模型信息（含「贴图」）/ 异常日志弹窗
+  'src/ui/pages/chat/components/workspace-file/model-view.tsx',
+  'src/ui/pages/chat/components/workspace-file/model-log.tsx',
 ]
 
 describe('右侧面板文案', () => {

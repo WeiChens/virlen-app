@@ -107,6 +107,11 @@ export interface LoadedModelFile {
   kind: 'model'
   bytes: Uint8Array
   byteSize: number
+  /**
+   * 磁盘上的**绝对路径**（已过安全校验）：`model-view` 拿它去同目录找模型引用的贴图
+   * （`workspace-file/model-textures.ts`）—— 面板只拿到一个文件的字节，贴图往往是旁边的另一个文件。
+   */
+  path: string
 }
 
 /** 一张工作表的网格（与 Rust `PreviewSheetDto` 同形） */
@@ -237,7 +242,7 @@ export async function loadWorkspaceFile(
     return { kind, bytes, byteSize: stat.size }
   }
   if (kind === 'model') {
-    return { kind, bytes, byteSize: stat.size }
+    return { kind, bytes, byteSize: stat.size, path: fullPath }
   }
   return {
     kind,

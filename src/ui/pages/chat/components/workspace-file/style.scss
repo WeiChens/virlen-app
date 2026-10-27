@@ -876,3 +876,179 @@
     font-variant-numeric: tabular-nums;
   }
 }
+
+/* 异常日志入口：与旁边文字按钮同高的图标按钮（22px），徽标挂在右上角。
+   颜色只跟最严重的那一级走：有 error 就是红的，只有 warning 才是橙的 —— 不看徽标也能注意到。 */
+.wfp-model-log-btn {
+  position: relative;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+
+  svg {
+    width: 14px;
+    height: 14px;
+    /* 图标是填充式路径（`evenodd` 挖出叹号）：wfp 里没有全局 `svg { fill }` 兜底 */
+    fill: currentColor;
+  }
+
+  &:hover {
+    background: var(--hover-bg, #f0f0f0);
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  &.is-active {
+    background: var(--accent-bg, #e8f0fe);
+  }
+
+  &.is-warning {
+    color: var(--warning-color, #d97706);
+  }
+
+  &.is-error {
+    color: var(--danger-color, #dc2626);
+  }
+}
+
+.wfp-model-log-badge {
+  position: absolute;
+  top: -4px;
+  right: -5px;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 3px;
+  border-radius: 6px;
+  background: var(--warning-color, #d97706);
+  color: #fff;
+  font-size: 9px;
+  line-height: 12px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+
+  .wfp-model-log-btn.is-error & {
+    background: var(--danger-color, #dc2626);
+  }
+}
+
+/* ==================== 异常日志弹窗（挂在 body 上，不受面板样式影响） ==================== */
+.wfp-log-tally {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: var(--font-size-xs);
+}
+
+.wfp-log-tally-item {
+  padding: 1px 8px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 10px;
+  color: var(--text-secondary, #666);
+
+  b {
+    color: inherit;
+    font-variant-numeric: tabular-nums;
+  }
+
+  &.is-error {
+    color: var(--danger-color, #dc2626);
+    border-color: currentColor;
+  }
+
+  &.is-warning {
+    color: var(--warning-color, #d97706);
+    border-color: currentColor;
+  }
+}
+
+.wfp-log-empty {
+  margin: 20px 0;
+  text-align: center;
+  color: var(--text-secondary, #888);
+  font-size: var(--font-size-md);
+}
+
+/* 日志列表：最多占半屏，内部滚动（一条的 detail 可能是整段库报错） */
+.wfp-log-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: min(56vh, 420px);
+  overflow-y: auto;
+}
+
+.wfp-log-item {
+  padding: 6px 8px;
+  border-left: 3px solid var(--border-color, #e5e5e5);
+  border-radius: 6px;
+  background: var(--hover-bg, #f7f7f7);
+  font-size: var(--font-size-xs);
+
+  &.is-error {
+    border-left-color: var(--danger-color, #dc2626);
+  }
+
+  &.is-warning {
+    border-left-color: var(--warning-color, #d97706);
+  }
+}
+
+.wfp-log-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.wfp-log-level {
+  flex: none;
+  font-weight: 600;
+  color: var(--text-secondary, #666);
+
+  .wfp-log-item.is-error & {
+    color: var(--danger-color, #dc2626);
+  }
+
+  .wfp-log-item.is-warning & {
+    color: var(--warning-color, #d97706);
+  }
+}
+
+.wfp-log-title {
+  flex: 1 1 auto;
+  color: var(--text-primary, #1a1a1a);
+  overflow-wrap: anywhere;
+}
+
+.wfp-log-count {
+  flex: none;
+  color: var(--text-secondary, #888);
+  font-variant-numeric: tabular-nums;
+}
+
+.wfp-log-time {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-secondary, #999);
+  font-variant-numeric: tabular-nums;
+}
+
+/* detail：文件名 / 路径 / 库抛的原文（不翻译），等宽字体 + 允许任意处断行 */
+.wfp-log-detail {
+  margin: 2px 0 0;
+  color: var(--text-secondary, #888);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}

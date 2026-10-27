@@ -6,9 +6,12 @@
  * 2. 场景管理器（`model-scene.ts` 的 `applyPreset`）动态 import 时读同一份。
  * 合到 `model-scene.ts` 里的话，下拉框就得把整个 three 造进主包。
  *
- * 三套预设的取舍：面板只有几百像素宽，天空穹顶 / 程序化草地那类「观赏性背景」不划算
+ * 六套预设的取舍：面板只有几百像素宽，天空穹顶 / 程序化草地那类「观赏性背景」不划算
  * （见参考实现 `C:\code\demo\3d-preview` 的 presets），这里只保留真正影响「看清模型」的四件事：
  * 背景色、**环境反射贴图**（金属 / 粗糙材质没它是一片死灰）、三盏灯的色温、曝光。
+ *
+ * ⚠️ 本文件只有**数据**：「现在选的是哪一档」不在里面 —— 它全应用一份、存 localStorage，
+ * 见 `model-environment.ts`（别在组件里再加一份 `useState`，面板标签是同时挂着的）。
  */
 export interface ModelPreset {
   id: string

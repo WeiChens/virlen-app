@@ -1,7 +1,7 @@
 /**
  * 3D 模型的加载器注册表：**扩展名 → three 的 loader**（面板只把字节交给这一层）。
  *
- * 八条口径：
+ * 九条口径：
  * 1. **扩展名的唯一源是 `domain/files/preview.ts`**（`ModelExtension` / `MODEL_EXTENSIONS`）。
  *    下面那张 `Record<ModelExtension, …>` 是穷尽检查：那边加了格式却忘了加加载器，编译期就报错
  *    （铁律 3：双份镜像必须同步，这里用类型系统钉住）。
@@ -10,14 +10,19 @@
  * 3. **只处理单文件模型**：面板只拿到**一个文件**的字节，所以 `.gltf` 引用外部 `.bin` / 贴图时
  *    在解析前就拦下并给一句人话（否则 GLTFLoader 抛的是 `Failed to load buffer`）。
  * 4. **纯几何格式补默认材质**：STL / PLY 只有顶点、OBJ 常常没有 mtl，不补就是一片全黑。
- * 5. **贴图一律从字节里出**：FBX / 3DS / DAE 里写的相对贴图路径加载不到，`LoadingManager.onError`
- *    直接吞掉 —— 否则控制台刷一片 404，而模型其实已经画出来了。
+ * 5. **贴图先按磁盘找，找不到才静默**：FBX / 3DS / DAE 里写的是**相对路径**，而 loader 是相对
+ *    页面基址去取的（`FBXLoader` 更狠，直接把目录剥掉只留文件名）—— 一个都取不到。面板拿得到
+ *    模型的绝对路径，所以在 `parse` 之前由 `model-textures.ts` 把同目录的贴图读成 blob URL，
+ *    再经 `LoadingManager.setURLModifier` 换进去（`tga` / `dds` 另注册 three 的专用 loader）。
+ *    仍然找不到的：`LoadingManager.onError` 直接吞掉 —— 否则控制台刷一片 404，而模型其实已经画出来了。
  * 6. **glTF 的金属度缺省值不是 0**：`metallicFactor` 不写 = 纯金属（亮度只剩环境反射），
  *    加载后统一过一遍 `fixUndeclaredMetalness`。
  * 7. **非 PBR 材质一律换成 `MeshStandardMaterial`**：Phong / Lambert 在 three 里**没有**
  *    `RE_IndirectSpecular`（`lights_phong_pars_fragment` 只定义了 Direct 与 IndirectDiffuse），
  *    所以只拿得到环境光的漫反射、拿不到 IBL 高光；同一份资产换成 GLB 走 Standard 就明显更亮。
- *    预览要的是「同一模型不同格式观感一致」，不是还原各家的着色模型。
+ *    预览要的是「同一模型不同格式观感一致」，不是还原各家的着色模型（FBX / DAE / 3DS / WRL /
+ *    OBJ / 3MF / AMF 都走这一遍）。颜色贴图（`map` / `emissiveMap`）顺手补上 `SRGBColorSpace`：
+ *    FBX / WRL 的 loader 自己会标，DAE / 3DS / 3MF 不会 —— 不补就会整体发白。
  *    ⚠️ Blender 导出的 FBX 把**线性**颜色直接写进 `Diffuse` / `Emissive`（实测与 glTF 的
  *    `baseColorFactor` 逐位相等），而 `FBXLoader` 一律当 sRGB 解 —— 双重解码、整体暗一档；
  *    它的 `ShininessExponent` 也是 `100·(1-roughness)²`。两样都按导出器反算回去
@@ -25,9 +30,21 @@
  * 8. **贴图是异步到的、而且可能根本到不了**：`parse` 返回时每个 `TextureLoader` 的纹理都还没有
  *    `image`，得等这一批结束再判定；从没上传成功的槽（`Texture.version` 恒为 0）会把材质乘成黑的，
  *    必须摘掉，同时让场景补画一帧（静止的预览不会自己重绘）。
+ * 9. **blob URL 的生命周期跟着模型走**：本地贴图造出来的 URL 由 `LoadedModel.dispose()` 一起放，
+ *    面板在换文件 / 卸载时调它 —— 否则每开一个模型就漏一份贴图字节的内存。
+ * 10. **不靠控制台说话**：贴图缺失 / 过大 / 失效槽被移除这些「模型还能看，但不对劲」的情况
+ *    全部通过 `ctx.report` 进面板的异常日志（`model-diagnostics.ts`）；报得上去才有得看，
+ *    不该让用户去开 DevTools 才明白为什么是纯色。
  */
 import type * as THREE from 'three'
 import { extensionOf, type ModelExtension } from '@/domain/files/preview'
+import { loadModelTextures, type ModelTextures } from './model-textures'
+import {
+  DIAGNOSTIC_TITLES,
+  droppedTextureDiagnostic,
+  textureDiagnostic,
+  type DiagnosticReport,
+} from './model-diagnostics'
 
 /** 加载完成的一个模型 */
 export interface LoadedModel {
@@ -36,6 +53,10 @@ export interface LoadedModel {
   animations: THREE.AnimationClip[]
   /** 小写扩展名 */
   format: ModelExtension
+  /** 本地贴图统计（`found < total` = 有贴图没在磁盘上找到）；没有外部引用时为空 */
+  textures?: { found: number; total: number }
+  /** 放掉解析期间新增的资源（目前只有本地贴图的 blob URL，口径 9），可重复调用 */
+  dispose?: () => void
 }
 
 export interface ModelLoadContext {
@@ -46,6 +67,16 @@ export interface ModelLoadContext {
   renderer?: THREE.WebGLRenderer
   /** 异步贴图到齐后叫一声：场景要补画一帧，否则贴图要等用户拖一下才出现（口径 8） */
   onLateChange?: () => void
+  /**
+   * 模型在磁盘上的**绝对路径**：给了才会去同目录找它引用的贴图（口径 5）。
+   * 面板拿得到（`LoadedModelFile.path`）；只有字节的调用方（用例）可以不给。
+   */
+  path?: string
+  /**
+   * 异常上报（见 `model-diagnostics.ts`）：贴图缺失 / 贴图过大 / 失效贴图槽被移除…
+   * 面板把它接进工具栏的「异常日志」（不给就只存 silently，与旧行为一致）。
+   */
+  report?: DiagnosticReport
 }
 
 /** 可本地化的失败原因（其余异常按库的原文显示在详情里） */
@@ -166,7 +197,7 @@ export function dropUnloadedTextures(object: ObjectTree): number {
  */
 function watchTextures(
   manager: THREE.LoadingManager,
-  onSettled: (() => void) | undefined,
+  onSettled: ((dropped: number) => void) | undefined,
 ): (object: THREE.Object3D) => void {
   let object: THREE.Object3D | null = null
   let pending = 0
@@ -174,8 +205,7 @@ function watchTextures(
   const itemEnd = manager.itemEnd.bind(manager)
   const settle = () => {
     if (!object) return
-    dropUnloadedTextures(object)
-    onSettled?.()
+    onSettled?.(dropUnloadedTextures(object))
   }
   manager.itemStart = (url) => {
     pending += 1
@@ -189,6 +219,40 @@ function watchTextures(
   return (model) => {
     object = model
     if (pending === 0) settle()
+  }
+}
+
+/**
+ * 一批贴图结算：把「失效槽被摘掉」记进异常日志，再让场景补画一帧（口径 8）。
+ *
+ * 两个都要做：少了前者用户只看到「莫名其妙变回纯色」，少了后者贴图要等拖一下才出现。
+ */
+function settleTextures(ctx: ParseContext, dropped: number): void {
+  const issue = droppedTextureDiagnostic(dropped)
+  if (issue) ctx.report?.(issue)
+  ctx.onLateChange?.()
+}
+
+/**
+ * 把本地贴图接到 `LoadingManager` 上（口径 5），两件事：
+ * 1. `setURLModifier`：把 loader 要的 URL 换成 blob URL。`FBXLoader` 只留文件名、DAE / 3DS 给
+ *    相对路径，`urlFor` 两把键都认；认不出来的原样返回（网络贴图 / 内嵌 blob 都不动）；
+ * 2. `tga` / `dds` 浏览器 `<img>` 解不了，按需注册 three 的专用 loader ——
+ *    `FBXLoader` 在 `manager.getHandler('.tga')` 为空时会**整张贴图跳过**。
+ */
+async function applyLocalTextures(
+  manager: THREE.LoadingManager,
+  textures: ModelTextures | null | undefined,
+): Promise<void> {
+  if (!textures) return
+  manager.setURLModifier((url) => textures.urlFor(url))
+  if (textures.extensions.has('tga')) {
+    const { TGALoader } = await import('three/examples/jsm/loaders/TGALoader.js')
+    manager.addHandler(/\.tga$/i, new TGALoader(manager))
+  }
+  if (textures.extensions.has('dds')) {
+    const { DDSLoader } = await import('three/examples/jsm/loaders/DDSLoader.js')
+    manager.addHandler(/\.dds$/i, new DDSLoader(manager))
   }
 }
 
@@ -315,11 +379,28 @@ export function toStandardMaterial(
   }
   for (const slot of COPIED_TEXTURE_SLOTS) {
     const value = source[slot]
-    if (value) parameters[slot] = value
+    if (!value) continue
+    // 颜色贴图必须按 sRGB 解码：法线 / 粗糙度 / AO 是数据，必须留线性（不在这里动）
+    if (slot === 'map' || slot === 'emissiveMap') markColorTexture(THREE, value)
+    parameters[slot] = value
   }
   return new THREE.MeshStandardMaterial(
     parameters as THREE.MeshStandardMaterialParameters,
   )
+}
+
+/**
+ * 把颜色贴图标成 sRGB。
+ *
+ * `FBXLoader` / `VRMLLoader` / `MTLLoader` 会给 `map` 标 `SRGBColorSpace`，
+ * **`ColladaLoader` / `TDSLoader` / `ThreeMFLoader` 一个字都不标** —— 它们解出来的贴图保持
+ * `NoColorSpace`，采样时不做 sRGB→线性，整张贴图看起来发白。本地贴图接上之后这条才真正可见。
+ */
+function markColorTexture(THREE: ThreeModule, texture: unknown): void {
+  const record = texture as { colorSpace?: string } | null
+  if (!record || typeof record !== 'object') return
+  if (record.colorSpace === THREE.SRGBColorSpace) return
+  record.colorSpace = THREE.SRGBColorSpace
 }
 
 /** 把被多解一次的颜色还原成作者写的线性值（不动原实例：材质可能共享） */
@@ -497,10 +578,18 @@ export function fixUndeclaredMetalness(gltf: GltfMaterialFixInput): void {
   })
 }
 
+/**
+ * 解析器的上下文 = 面板给的选项 + `loadModelFile` 事先备好的本地贴图。
+ * 贴图必须在 `parse` 之前就解析完：`setURLModifier` 的回调是**同步**的。
+ */
+interface ParseContext extends ModelLoadContext {
+  textures?: ModelTextures | null
+}
+
 type ModelParse = (
   bytes: Uint8Array,
   ext: ModelExtension,
-  ctx: ModelLoadContext,
+  ctx: ParseContext,
 ) => Promise<LoadedModel>
 
 /** glb / gltf：Draco 压缩网格 + KTX2 压缩贴图都挂上，解码器随包分发（离线可用） */
@@ -549,7 +638,9 @@ const parseFbx: ModelParse = async (bytes, ext, ctx) => {
   const THREE = await loadThree()
   const manager = await quietManager()
   // 监听要在 parse 之前挂上：贴图的加载项是 parse 期间同步登记的
-  const watch = watchTextures(manager, ctx.onLateChange)
+  const watch = watchTextures(manager, (dropped) => settleTextures(ctx, dropped))
+  // 同目录的贴图先读成 blob URL（口径 5）：不可用也不致于让整个模型打不开
+  await applyLocalTextures(manager, ctx.textures)
   const buffer = toArrayBuffer(bytes)
   const object = new FBXLoader(manager).parse(buffer, '')
   normalizeMaterials(THREE, object, { blenderFbx: detectBlenderFbx(buffer) })
@@ -596,7 +687,8 @@ const parseDae: ModelParse = async (bytes, ext, ctx) => {
   const { ColladaLoader } = await import('three/examples/jsm/loaders/ColladaLoader.js')
   const THREE = await loadThree()
   const manager = await quietManager()
-  const watch = watchTextures(manager, ctx.onLateChange)
+  const watch = watchTextures(manager, (dropped) => settleTextures(ctx, dropped))
+  await applyLocalTextures(manager, ctx.textures)
   const result = new ColladaLoader(manager).parse(toText(bytes), '')
   normalizeMaterials(THREE, result.scene)
   watch(result.scene)
@@ -608,7 +700,8 @@ const parseTds: ModelParse = async (bytes, ext, ctx) => {
   const { TDSLoader } = await import('three/examples/jsm/loaders/TDSLoader.js')
   const THREE = await loadThree()
   const manager = await quietManager()
-  const watch = watchTextures(manager, ctx.onLateChange)
+  const watch = watchTextures(manager, (dropped) => settleTextures(ctx, dropped))
+  await applyLocalTextures(manager, ctx.textures)
   const object = new TDSLoader(manager).parse(toArrayBuffer(bytes), '')
   normalizeMaterials(THREE, object)
   watch(object)
@@ -617,13 +710,19 @@ const parseTds: ModelParse = async (bytes, ext, ctx) => {
 
 const parseThreeMf: ModelParse = async (bytes, ext) => {
   const { ThreeMFLoader } = await import('three/examples/jsm/loaders/3MFLoader.js')
+  const THREE = await loadThree()
   const object = new ThreeMFLoader().parse(toArrayBuffer(bytes))
+  // 3MF 的材质来自切片软件的色块（`MeshPhongMaterial`）：不归一就比其它格式暗一档（口径 7）
+  normalizeMaterials(THREE, object)
   return { object, animations: [], format: ext }
 }
 
 const parseAmf: ModelParse = async (bytes, ext) => {
   const { AMFLoader } = await import('three/examples/jsm/loaders/AMFLoader.js')
+  const THREE = await loadThree()
   const object = new AMFLoader().parse(toArrayBuffer(bytes))
+  // 同上：AMFLoader 只会造 `MeshPhongMaterial`
+  normalizeMaterials(THREE, object)
   return { object, animations: [], format: ext }
 }
 
@@ -631,7 +730,8 @@ const parseVrml: ModelParse = async (bytes, ext, ctx) => {
   const { VRMLLoader } = await import('three/examples/jsm/loaders/VRMLLoader.js')
   const THREE = await loadThree()
   const manager = await quietManager()
-  const watch = watchTextures(manager, ctx.onLateChange)
+  const watch = watchTextures(manager, (dropped) => settleTextures(ctx, dropped))
+  await applyLocalTextures(manager, ctx.textures)
   const object = new VRMLLoader(manager).parse(toText(bytes), '')
   normalizeMaterials(THREE, object)
   watch(object)
@@ -666,6 +766,13 @@ export function modelLoaderOf(extension: string): ModelParse | null {
   return REGISTRY[extension as ModelExtension] ?? null
 }
 
+/**
+ * 可能引用**同目录贴图**的格式：`glb` / `3mf` / `amf` / `ply` / `stl` / `pcd` 的贴图与额外数据都在
+ * 文件里，扫了也白扫（0.6MB 的 glb 在磁盘上再无别的依赖）。OBJ 的贴图写在自己的 `.mtl` 里
+ * （当前不读 mtl），所以也不在内。
+ */
+const EXTERNAL_TEXTURE_FORMATS = new Set<ModelExtension>(['fbx', 'dae', '3ds', 'wrl', 'vrml'])
+
 /** 文件名 + 字节 → 可直接塞进场景的对象树 */
 export async function loadModelFile(
   bytes: Uint8Array,
@@ -680,5 +787,48 @@ export async function loadModelFile(
   if (bytes.byteLength === 0) {
     throw new ModelLoadError('unsupported', '模型文件是空的')
   }
-  return await parse(bytes, ext as ModelExtension, ctx)
+
+  // 本地贴图（口径 5）：磁盘路径 + 模型字节 → blob URL。失败一律当「没贴图」，不能挡住模型
+  let textures: ModelTextures | null = null
+  if (ctx.path && EXTERNAL_TEXTURE_FORMATS.has(ext as ModelExtension)) {
+    try {
+      textures = await loadModelTextures(bytes, ctx.path, undefined, ctx.report)
+    } catch (cause) {
+      // 读不到 / 造不出 blob URL：退化成「没有贴图」，不是「打不开模型」——
+      // 但得说一句，否则用户只看到纯色而不知道为什么
+      textures = null
+      ctx.report?.({
+        level: 'warning',
+        code: 'texture-scan',
+        title: DIAGNOSTIC_TITLES['texture-scan'],
+        detail: cause instanceof Error ? cause.message : String(cause),
+      })
+    }
+  }
+
+  let loaded: LoadedModel
+  try {
+    loaded = await parse(bytes, ext as ModelExtension, { ...ctx, textures })
+  } catch (error) {
+    // 解析失败：blob URL 没人接手了，当场放掉（口径 9）
+    textures?.dispose()
+    throw error
+  }
+  if (!textures) return loaded
+  // 贴图统计在 `parse` 之后才准确（loader 这一轮才真正开始要文件）：缺的那几张直接进异常日志，
+  // 信息面板只给「2 / 3」——用户没法凭它去补文件，名字才能
+  const issue = textureDiagnostic(textures.found, textures.total, textures.missing)
+  if (issue) ctx.report?.(issue)
+  // `requested === 0`：loader 一张都没按磁盘路径来问（贴图全是内嵌的 `data:` / `blob:`，
+  // 或者扫到的只是假引用）—— 这时报「0 / 3」只会误导，不给这一行；blob URL 该放的照放（口径 9）
+  const stats =
+    textures.requested > 0 ? { textures: { found: textures.found, total: textures.total } } : {}
+  return {
+    ...loaded,
+    ...stats,
+    dispose: () => {
+      loaded.dispose?.()
+      textures.dispose()
+    },
+  }
 }
