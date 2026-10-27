@@ -5,7 +5,7 @@
 use serde_json::Value;
 
 use virlen_core::agent::native_tools::{
-    kill_service_snapshot, list_all_service_snapshots, list_service_snapshots,
+    ack_service_notice, kill_service_snapshot, list_all_service_snapshots, list_service_snapshots,
     read_service_console, resize_service_console, write_service_console,
 };
 
@@ -33,8 +33,9 @@ pub async fn cmd_kill_background_service(session_id: String, id: String) -> Opti
 // ==================== 终端弹窗（P3） ====================
 // 三条命令只服务用户在弹窗里的交互（与工具无关），同一张注册表、同样按 `session_id` 隔离。
 
-/// 读服务的终端输出（自偏移 `from` 起的增量；`None` = 本会话已无此 id）。
-/// `reset=true` 时回整个窗口（首次读取 / 环形已丢掉开头），前端整段重放。
+/// 读服务的终端输出（自绝对偏移 `from` 起的增量；`None` = 本会话已无此 id）。
+/// `reset` 是**出参**（依 `from` 推导）：`true` = 回的是整个窗口（首次读取 / 环形已丢掉开头），
+/// 前端丢掉本地内容整段重放；否则只续接新增部分。
 #[tauri::command]
 pub async fn cmd_service_console_read(
     session_id: String,
@@ -61,4 +62,15 @@ pub async fn cmd_service_console_resize(
     rows: u16,
 ) -> bool {
     resize_service_console(&session_id, &id, cols, rows)
+}
+
+// ==================== 结束通知 ====================
+
+/// 前端确认「这条结束通知已上屏 + 落库」→ Rust 才把它从待注入队列里摘掉（幂等）。
+///
+/// ⚠️ 不能用 `agent:service-exit` 的 emit 返回值代替：没有监听者（前端未挂监听 / webview 重载 /
+/// 窗口已销毁）时 emit 同样成功 —— 按它出队会让这条通知凭空消失（模型与用户都看不到）。
+#[tauri::command]
+pub async fn cmd_ack_service_notice(id: String) -> bool {
+    ack_service_notice(&id)
 }

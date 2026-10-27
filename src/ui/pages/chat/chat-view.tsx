@@ -10,6 +10,8 @@ import {
 import { observer } from 'mobx-react-lite'
 import type { Message, MessageContent } from '@/types'
 import { v4 } from '@/utils/uuid'
+// 深层组件（工具卡片）上报「用户点了什么」：面板标签归本组件一家所有
+import commentEvent from '@/events/commentEvent'
 import {
   chatState,
   getSessionRuntime,
@@ -605,6 +607,20 @@ function ChatView() {
       applyBucketTabs(key, openServiceTab(bucket.tabs, target))
     },
     [applyBucketTabs, bucketNow],
+  )
+
+  /**
+   * 工具卡片（后台服务）里的「打开终端」：与面板点一行走**同一个** `handleOpenService`。
+   * 会话 id 在这里按当前会话补 —— 卡片只知道服务的 id / 名字（它不知道自己被哪一桶渲染）。
+   */
+  useEffect(
+    () =>
+      commentEvent.on('openServiceTerminal', ({ serviceId, name }) => {
+        const sessionId = chatState.value.currentSessionId
+        if (!sessionId) return
+        handleOpenService({ sessionId, serviceId, name })
+      }),
+    [handleOpenService],
   )
 
   /**

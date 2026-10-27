@@ -539,6 +539,10 @@ function PtyKeyBar({ toolCallId }: { toolCallId: string }) {
 /**
  * PTY 终端块（header + 终端 + 提示）。status 由调用方传入，避免与 TerminalBlock 循环依赖。
  * 全屏是原位 + portal 两份同时渲染（xterm 写入自包含，不需要 serialize）；代价是期间同一条流解析两遍。
+ *
+ * 两个使用者：`execute_command` / `execute_script` 的运行态（可输入）与后台服务工具卡片的
+ * **只读回放**（`running=false`，head / meta / actions 三个插槽放服务的状态、元信息与动作）。
+ * 终端窗口的 chrome（红黄绿点 / 全屏 / 右键菜单）只写这一份，两份会立刻分叉成两种观感。
  */
 export function XtermTerminalBlock({
   title,
@@ -548,6 +552,9 @@ export function XtermTerminalBlock({
   note,
   status,
   sandbox,
+  head,
+  meta,
+  actions,
   stream,
   running,
   toolCallId,
@@ -566,6 +573,16 @@ export function XtermTerminalBlock({
   status?: ReactNode
   /** 本次命令实际的沙盒模式（header 徽标；缺省不显示） */
   sandbox?: string
+  /**
+   * 标题栏**身份区**（红黄绿点 + 沙盒徽标之后、右侧动作区之前）：
+   * 后台服务卡片在这里放「状态徽标 + 服务名」—— 终端窗口的骨架只有这一份，
+   * 服务卡片不再另抄一套 chrome。
+   */
+  head?: ReactNode
+  /** 命令行下方的一行元信息（服务 ID / 进程 / 运行时长 …）；执行命令卡片不需要 */
+  meta?: ReactNode
+  /** 标题栏右端动作区**最前面**的自定义按钮（服务卡片：打开终端 / 复制输出） */
+  actions?: ReactNode
   stream: string
   running: boolean
   toolCallId: string
@@ -605,10 +622,12 @@ export function XtermTerminalBlock({
           <span className="xterm-dot xterm-dot--yellow" />
           <span className="xterm-dot xterm-dot--green" />
           <SandboxBadge kind={sandbox} />
+          {head}
           {
             held && <span className='xterm-hint'>{t('已接管：超时已暂停（上限 30 分钟）')}</span>
           }
           <div className="terminal-header-actions">
+            {actions}
             {size && (
               <span className="xterm-badge">
                 {size.cols}×{size.rows}
@@ -665,12 +684,14 @@ export function XtermTerminalBlock({
             <span className="pty-prompt">$</span> {cmd}
           </div>
         )}
-        {/* 尺寸同步权：全屏期间只由全屏实例上报，退出后原位实例夺回 */}
+        {meta && <div className="pty-meta-line">{meta}</div>}
+        {/* 尺寸同步权：全屏期间只由全屏实例上报，退出后原位实例夺回。
+            已结束（命令 / 服务退出）时伪控制台已关，上报只会拿到 false 并触发 8 次重试 —— 纯噪音。 */}
         <XtermTerminal
           stream={stream}
           running={running}
           toolCallId={toolCallId}
-          syncResize={isFull || !fullscreen}
+          syncResize={running && (isFull || !fullscreen)}
           onResize={setSize}
         />
         {/* 输出末尾的附加说明（与 <pre> 版 TerminalBlock 行为对齐） */}

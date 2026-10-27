@@ -402,6 +402,20 @@
     }
   }
 
+  /* ---------- 元信息行（后台服务卡片：服务 ID / 进程 / 运行时长 / 退出码 …） ----------
+     与命令行同一套等宽字体与暗色，只是更淡；窄窗口自动折行，不挤成一团。 */
+  .pty-meta-line {
+    flex-shrink: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 10px;
+    padding: 1px 10px 3px;
+    font-family: $pty-mono;
+    font-size: var(--font-size-xs);
+    color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
+    user-select: text;
+  }
+
   .pty-terminal-body-wrapper {
     padding: 8px 10px;
     flex: 1 1 auto;
@@ -1482,7 +1496,23 @@
 
 /* ==================== 后台服务卡片（BackgroundServiceMessage） ====================
    四个工具（start / get / kill / list）共用：展示「启动的命令」+「等待窗口里收到的输出」。
-   卡片语系与 execute-command-wrapper / code-block 对齐（相同的边距、边框、圆角）。 */
+   start / get / kill 的输出块就是命令终端那个窗口（`.execute-command-wrapper.is-pty`）——
+   输出交 xterm 回放，全屏 / 选中复制一并继承；这里只剩三块服务自己的东西：
+   标题栏的服务名、命令行下的元信息行、容器内的终端主体尺寸。 */
+.execute-command-wrapper.is-pty {
+  /* 服务名（身份区，与状态徽标并列）：过长就省略，不允许把右侧动作区挤走 */
+  .service-card-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+    color: var(--terminal-text, #fff);
+    user-select: none;
+  }
+}
+
+/* 浅色卡片：只剩两个用途 —— spawn 就失败（没有 pid / 没有输出，只有一句错误）与解析异常。 */
 .service-view {
   margin: 4px 20px 20px 28px;
   width: min(880px, 92%);
@@ -1693,8 +1723,27 @@
 
     .service-list-meta {
       flex-shrink: 0;
+      display: flex;
+      gap: 8px;
       font-size: var(--font-size-xs);
       color: var(--text-tertiary, #999);
+    }
+
+    /* 行内「打开终端」：与面板点一行同一个动作（右侧面板开服务终端标签） */
+    .service-list-open {
+      flex-shrink: 0;
+      padding: 0 8px;
+      font-size: var(--font-size-xs);
+      color: var(--accent-color, #4f46e5);
+      background: transparent;
+      border: 1px solid var(--border-color, #e5e5e5);
+      border-radius: 4px;
+      cursor: pointer;
+
+      &:hover {
+        border-color: var(--accent-color, #4f46e5);
+        background: var(--hover-bg, rgba(0, 0, 0, 0.04));
+      }
     }
   }
 }

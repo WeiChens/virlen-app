@@ -33,8 +33,7 @@ pub(crate) async fn kill_background_service_tool(
     if state_before == status::RUNNING {
         // AI 自己 kill：工具结果里已经有收尾状态 + 输出 → 不再另发「服务已结束」通知
         //（用户从面板终止是另一条路，那条要通知）。
-        entry.state.mute_notice();
-        entry.terminate();
+        entry.terminate_quietly();
         waited = entry.state.wait_finished(KILL_WAIT_MS).await;
         crate::telemetry::track(
             "tool.service.kill",

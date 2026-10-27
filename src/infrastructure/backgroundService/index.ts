@@ -182,3 +182,21 @@ export async function resizeServiceConsole(
     return false
   }
 }
+
+// ==================== 结束通知 ====================
+
+/**
+ * 结束通知回执：告诉 Rust「这条已上屏 + 落库」→ 它才把通知从「待注入队列」里摘掉。
+ *
+ * ⚠️ 必须在上屏 + `cmd_append_messages` **都成功之后**才调：Rust 侧 emit 成功不代表有人接
+ *（没有监听者时同样成功），漏了 ack 它会在下一次请求前再注入一遍（按 id 去重，不会重复上屏）。
+ */
+export async function ackServiceNotice(id: string): Promise<boolean> {
+  if (!isTauri()) return false
+  try {
+    return await invoke<boolean>('cmd_ack_service_notice', { id })
+  } catch (e: any) {
+    console.warn(`[service] 结束通知回执失败：${e?.message || String(e)}`)
+    return false
+  }
+}

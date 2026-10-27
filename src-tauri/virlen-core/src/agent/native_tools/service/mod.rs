@@ -49,9 +49,11 @@ pub(crate) use list::list_background_services_tool;
 pub(crate) use start::start_background_service_tool;
 
 // 「服务结束通知」的宿主出口 + 会话活跃标记（引擎 / 轮次边界用，见 `notice.rs`）。
+// `ack_service_notice`：前端确认已上屏并落库 → 队列里那条才出队（emit 成功不算送达）。
 pub use notice::{
-    attach_host as attach_service_notice_host, inject_pending as inject_service_notices,
-    mark_session_active, mark_session_idle, ServiceNoticeHost,
+    ack_delivered as ack_service_notice, attach_host as attach_service_notice_host,
+    inject_pending as inject_service_notices, mark_session_active, mark_session_idle,
+    ServiceNoticeHost,
 };
 
 // 生命周期清理：会话删除 / 应用退出 / 引擎销毁 / CLI 结束（供命令层与引擎调用）。

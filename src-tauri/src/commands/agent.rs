@@ -61,13 +61,13 @@ impl TauriServiceNoticeHost {
 }
 
 impl native_tools::ServiceNoticeHost for TauriServiceNoticeHost {
-    fn present_service_notice(&self, session_id: &str, message: serde_json::Value) -> bool {
-        self.app
-            .emit(
-                "agent:service-exit",
-                serde_json::json!({ "sessionId": session_id, "message": message }),
-            )
-            .is_ok()
+    fn present_service_notice(&self, session_id: &str, message: serde_json::Value) {
+        // ⚠️ 返回值只说明「事件发出去了」：没有监听者时 emit 同样成功。所以这条通知**不出队**，
+        // 要等前端上屏 + 落库后调 `cmd_ack_service_notice` —— 否则丢一时机就永远丢了。
+        let _ = self.app.emit(
+            "agent:service-exit",
+            serde_json::json!({ "sessionId": session_id, "message": message }),
+        );
     }
 }
 

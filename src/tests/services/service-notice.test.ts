@@ -184,4 +184,51 @@ describe('service-notice — 前端落点', () => {
       ),
     ).toHaveLength(1)
   })
+
+  it('落库成功后回执 ack（Rust 侧才把通知出队）', async () => {
+    setTauriEnv(true)
+    sessionStore.saveSession(makeSession(SESSION_ID))
+    vi.mocked(invoke).mockClear()
+
+    handleServiceExit({ sessionId: SESSION_ID, message: noticeMessage('notice-ack') })
+    await flushPromises()
+
+    const ack = vi
+      .mocked(invoke)
+      .mock.calls.filter(([cmd]) => cmd === 'cmd_ack_service_notice')
+    expect(ack).toHaveLength(1)
+    expect(ack[0][1]).toEqual({ id: 'notice-ack' })
+  })
+
+  it('落库失败 → 不回执（通知留在 Rust 队列，下一次请求前注入）', async () => {
+    setTauriEnv(true)
+    sessionStore.saveSession(makeSession(SESSION_ID))
+    vi.mocked(invoke).mockClear()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // 只让落库失败，其它命令照常（否则连 sessionStore 自己的防抖落库也会炸）
+    vi.mocked(invoke).mockImplementation((cmd: string) =>
+      cmd === 'cmd_append_messages'
+        ? Promise.reject(new Error('db down'))
+        : Promise.resolve(true),
+    )
+    try {
+      handleServiceExit({ sessionId: SESSION_ID, message: noticeMessage('notice-nodb') })
+      await flushPromises()
+      const ack = vi
+        .mocked(invoke)
+        .mock.calls.filter(([cmd]) => cmd === 'cmd_ack_service_notice')
+      expect(ack).toHaveLength(0)
+      expect(warn).toHaveBeenCalled()
+    } finally {
+      vi.mocked(invoke).mockImplementation(() => Promise.resolve())
+      warn.mockRestore()
+    }
+  })
 })
+
+/** 等 promise 链跑完（落库 → ack 是两级 then，多转几圈） */
+async function flushPromises(): Promise<void> {
+  for (let i = 0; i < 4; i += 1) {
+    await new Promise((r) => setTimeout(r, 0))
+  }
+}

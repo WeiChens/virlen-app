@@ -484,6 +484,8 @@ pub fn run() {
             commands::service::cmd_service_console_read,
             commands::service::cmd_service_console_write,
             commands::service::cmd_service_console_resize,
+            // 后台服务结束通知：前端上屏 + 落库后的回执（ack 才出队）
+            commands::service::cmd_ack_service_notice,
             // 用户自己的交互终端（右侧面板「新建终端」；**默认脱壳**，只服务界面）
             commands::terminal::cmd_terminal_start,
             // 四种 shell（cmd / powershell / pwsh / git bash）的「装没装」探测

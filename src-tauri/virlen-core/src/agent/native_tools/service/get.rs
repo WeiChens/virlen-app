@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use super::common::{
     arg_clamped_i64, arg_trimmed, base_ui, cap_output, format_uptime, parse_read_mode,
-    read_mode_name, render_output, status, with_output,
+    read_mode_name, render_output, slice_from_char, status, with_output,
 };
 use super::registry;
 use super::runner::STATUS_TICK;
@@ -36,13 +36,15 @@ pub(crate) async fn get_background_service_tool(
     let wait_for = arg_trimmed(args, "waitFor");
     let mut matched = false;
     if wait_ms > 0 || wait_for.is_some() {
+        // 只扫新增内容（见 `OutputScan`）：等待窗口最长 60s、每 50ms 醒一次
+        let mut scan = wait_for.as_deref().map(OutputScan::new);
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(wait_ms.max(0) as u64);
         loop {
             if !entry.is_running() {
                 break;
             }
-            if let Some(needle) = &wait_for {
-                if output_contains(&entry, needle) {
+            if let Some(scan) = scan.as_mut() {
+                if scan.matches(&entry) {
                     matched = true;
                     break;
                 }
@@ -118,15 +120,70 @@ pub(crate) async fn get_background_service_tool(
     })
 }
 
-/// 输出（stdout + stderr 窗口）里是否出现 `needle`（大小写不敏感）。
+/// `waitFor` 的增量匹配器：只扫**上一次之后新增**的内容。
 ///
-/// 只看**窗口内的尾部**（环形容量 20 万字符）：dev server 的 ready 提示总在最近一段输出里。
-fn output_contains(entry: &super::registry::ServiceEntry, needle: &str) -> bool {
-    let needle = needle.to_lowercase();
-    let out = entry.state.stdout.lock().unwrap();
-    if out.window().to_lowercase().contains(&needle) {
+/// 为什么要增量：等待窗口最长 60s、每 `STATUS_TICK`（50ms）醒一次，而单个窗口上限 20 万字符 ——
+/// 每跳都对两个窗口做一次 `to_lowercase()` + `contains`，上千次全量分配足以把一次 `waitFor`
+/// 变成可见的 CPU 尖峰（而 dev server 等 `ready` 正是这个参数最常用的姿势）。
+struct OutputScan {
+    needle_lower: String,
+    /// 已扫到的绝对偏移（两个流各一份）
+    stdout_seen: u64,
+    stderr_seen: u64,
+}
+
+impl OutputScan {
+    fn new(needle: &str) -> Self {
+        Self {
+            needle_lower: needle.to_lowercase(),
+            stdout_seen: 0,
+            stderr_seen: 0,
+        }
+    }
+
+    /// 两个流里是否出现了 `needle`（大小写不敏感）。
+    fn matches(&mut self, entry: &registry::ServiceEntry) -> bool {
+        {
+            let out = entry.state.stdout.lock().unwrap();
+            if scan_window(
+                out.window(),
+                out.window_start(),
+                out.total(),
+                &mut self.stdout_seen,
+                &self.needle_lower,
+            ) {
+                return true;
+            }
+        }
+        let err = entry.state.stderr.lock().unwrap();
+        scan_window(
+            err.window(),
+            err.window_start(),
+            err.total(),
+            &mut self.stderr_seen,
+            &self.needle_lower,
+        )
+    }
+}
+
+/// 在窗口「自 `seen` 起的新增部分」里找 `needle`（已小写），并把 `seen` 推到窗口末尾。
+///
+/// 会向后回退 `needle` 的长度：needle 可能横跨两次读取的边界（上次它只到齐了一半）。
+fn scan_window(
+    window: &str,
+    window_start: u64,
+    total: u64,
+    seen: &mut u64,
+    needle_lower: &str,
+) -> bool {
+    if needle_lower.is_empty() {
         return true;
     }
-    let err = entry.state.stderr.lock().unwrap();
-    err.window().to_lowercase().contains(&needle)
+    let overlap = needle_lower.chars().count() as u64 + 1;
+    // 首次扫描从窗口起点开始（ready 拦截可能已经在窗口里了）；环形丢掉开头时也不能越界
+    let from = seen.saturating_sub(overlap).max(window_start);
+    *seen = total;
+    slice_from_char(window, (from - window_start) as usize)
+        .to_lowercase()
+        .contains(needle_lower)
 }

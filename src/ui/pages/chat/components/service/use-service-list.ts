@@ -7,6 +7,9 @@
  *
  * `active=false`（标签切走）时**一个请求都不发**：面板的标签一直挂着，没人看着就不必刷徽标。
  *
+ * `fast` 进**依赖**：面板一打开就重建循环、立即拉一帧 —— 否则要等上一个 5s 定时器到点才切节奏，
+ * 用户看到的是 5s 前的旧数据（与「面板打开 1s」的口径不符）。
+ *
  * 为什么不订阅事件：服务的状态变化点分散在读任务 / 等待任务 / 工具 / 面板四处，其中「进程自己退出」
  * 发生在常驻任务里（那里拿不到工具上下文的 sink），为它拉一条跨 crate 的事件通道不划算 ——
  * 单会话条目上限 8 条，一次轮询就是一帧 IPC。节奏：
@@ -38,9 +41,7 @@ export function useServiceList(
   active = true,
 ): ServiceListState {
   const [services, setServices] = useState<BackgroundServiceInfo[]>([])
-  // 两个 ref 让「正在跑的循环」读到最新值，而不必因为面板开关 / 换会话而重建循环
-  const fastRef = useRef(fast)
-  fastRef.current = fast
+  // `sessionRef` 让 `refresh`（终止后立刻对账）读到最新会话，而不必因为换会话重建回调
   const sessionRef = useRef(sessionId)
   sessionRef.current = sessionId
 
@@ -70,7 +71,7 @@ export function useServiceList(
         if (!alive) return
         setServices(rows)
       }
-      timer = setTimeout(tick, fastRef.current ? FAST_MS : SLOW_MS)
+      timer = setTimeout(tick, fast ? FAST_MS : SLOW_MS)
     }
 
     timer = setTimeout(tick, 0)
@@ -78,7 +79,7 @@ export function useServiceList(
       alive = false
       if (timer) clearTimeout(timer)
     }
-  }, [sessionId, active])
+  }, [sessionId, active, fast])
 
   return { services, refresh }
 }

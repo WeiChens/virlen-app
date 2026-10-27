@@ -12,11 +12,12 @@
  * 与 todo 的 feedback 消息同一套载体（`role='feedback'`），因此「落库 + 上屏」两条路都走现成设施。
  */
 import { invoke } from '@tauri-apps/api/core'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { listen } from '@tauri-apps/api/event'
 import type { Message } from '@/types'
 import { isTauriAvailable } from '@/services/rust-engine'
 import { sessionStore } from '@/ui/store'
 import { addSessionMessage } from '@/services/chat/messages'
+import { ackServiceNotice } from '@/infrastructure/backgroundService'
 
 /** Rust → JS 的事件名（`commands/agent.rs::TauriServiceNoticeHost`；raw 事件，不进 AgentEventType 契约） */
 export const EVENT_SERVICE_EXIT = 'agent:service-exit'
@@ -28,24 +29,24 @@ export interface ServiceExitPayload {
   message?: Message
 }
 
-let unlisten: UnlistenFn | null = null
+/** 同步的「已开始挂载」标志：`listen` 的 promise resolve 之前它就已经是 true —— 只看 promise
+ *  结果会让并发调用挂上**两个**监听（同一条通知落两次，而前端不按 id 去重）。 */
+let started = false
 
 /**
  * 挂上监听（`main.ts::init` 调一次；非 Tauri 环境 / 挂载失败一律静默 —— 这是增强能力，
  * 绝不能影响聊天主流程）。
  */
 export function initServiceNotice(): void {
-  if (unlisten || !isTauriAvailable()) return
+  if (started || !isTauriAvailable()) return
+  started = true
   void listen<ServiceExitPayload>(EVENT_SERVICE_EXIT, (event) => {
     handleServiceExit(event.payload)
+  }).catch(() => {
+    // 事件系统不可用：不挂监听（Rust 侧收不到 ack → 通知留在队列里，
+    // 下一次 LLM 请求之前注入，不影响 AI 侧）；复位以便下次还能再试
+    started = false
   })
-    .then((off) => {
-      unlisten = off
-    })
-    .catch(() => {
-      // 事件系统不可用：不挂监听（Rust 侧会看到「没人接管」→ 通知留在队列里，
-      // 下一次 LLM 请求之前注入，不影响 AI 侧）
-    })
 }
 
 /**
@@ -64,11 +65,16 @@ export function handleServiceExit(payload: ServiceExitPayload): boolean {
   if (sessionStore.isMessagesLoaded(sessionId)) {
     addSessionMessage(sessionId, message)
   }
-  // 显式落库：`addSessionMessage` 的落库在 Tauri 下由引擎负责（`persistMessagesIfNeeded` 会跳过），
-  // 这条不是引擎写的 —— 与 todo 落地同一条做法（id 是主键，幂等 upsert）。
+  // 落库 + 回执：Rust 侧要等这个 ack 才把通知从「待注入队列」里摘掉 —— `emit` 成功不代表前端
+  // 收到了（没有监听者时 Tauri 同样回成功）。所以**落库失败就不 ack**：通知留在队列里，
+  // 下一次 LLM 请求前注入（AI 侧不丢），而界面上不会重复（Rust 侧同一条只投一次）。
   void invoke('cmd_append_messages', {
     sessionId,
     messages: [message],
-  }).catch(() => {})
+  })
+    .then(() => ackServiceNotice(message.id))
+    .catch((e: any) => {
+      console.warn(`[service] 结束通知落库失败：${e?.message || String(e)}`)
+    })
   return true
 }

@@ -117,9 +117,10 @@ pub use service::{
 };
 // 后台服务「结束通知」（见 `service/notice.rs`）：宿主（GUI）挂事件出口；引擎维护「会话是否在跑」；
 // 轮次边界注入本地排队的那几条（不依赖 JS 是否在场 —— CLI / 手机走同一条路）。
+// `ack_service_notice`：前端上屏 + 落库成功后回报，队列里那条才出队（见 `notice::ack_delivered`）。
 pub use service::{
-    attach_service_notice_host, inject_service_notices, mark_session_active, mark_session_idle,
-    ServiceNoticeHost,
+    ack_service_notice, attach_service_notice_host, inject_service_notices, mark_session_active,
+    mark_session_idle, ServiceNoticeHost,
 };
 // 用户终端（右侧面板「新建终端」）：**默认脱壳**，只服务界面 —— 它不是工具，
 // 模型没有任何入口去操作用户自己的终端（终端 id 不进模型上下文）。

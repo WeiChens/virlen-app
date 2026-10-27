@@ -76,10 +76,21 @@ impl ServiceEntry {
     }
 
     /// 终止整棵进程树（幂等）。**只发信号**：状态由常驻等待任务在进程真退出时落定。
+    ///
+    /// ⚠️ 默认**会**发「服务已结束」通知（用户从面板终止正是要让 AI 知道）。
+    /// 「这件事已经有别的交代」的终止一律走 [`Self::terminate_quietly`]。
     pub(super) fn terminate(&self) {
         self.state.kill_requested.store(true, Ordering::SeqCst);
         (self.terminator)();
         kill_process_tree(self.pid);
+    }
+
+    /// 终止但**不发结束通知**：AI 自己 kill / 启动等待窗口内被取消 / 会话删除 / 应用退出。
+    ///
+    /// 把这些场景收进一个方法，避免以后新增终止入口时漏掉 `mute_notice`（漏了就是一条重复消息）。
+    pub(super) fn terminate_quietly(&self) {
+        self.state.mute_notice();
+        self.terminate();
     }
 
     /// 快照档：(status 字符串, 退出码, 是否被终止)
@@ -163,6 +174,12 @@ pub(crate) struct ServiceState {
     /// 窗口内就退出的服务，工具结果已经写清「已退出 + 退出码 + 输出」→ 不再另发通知；
     /// 工具返回后才退出的才通知（这才是「AI 以为它在跑、其实已经死了」的那一类）。
     startup_window: AtomicBool,
+    /// **退出发生在启动窗口内**（在 [`Self::finish`] 那一刻取证，之后不再变）。
+    ///
+    /// ⚠️ 必须当场取证：`finish` 与 `close_startup_window` 分别跑在等待任务与工具任务上，
+    /// 谁先谁后没有保证 —— 事后读「窗口还开着吗」会让「窗口内退出」的服务既写进 start 结果、
+    /// 又发一条结束通知（同一件事说两遍）。
+    exit_within_startup: AtomicBool,
     /// 状态或输出发生变化 —— 等待方（工具的等待窗口 / `waitFor`）据此醒来
     pub(super) notify: Notify,
     /// 实时输出通道：仅**工具调用进行中**时存在（工具把它挂进 `agent:tool-output` 事件，
@@ -182,6 +199,7 @@ impl ServiceState {
             kill_requested: AtomicBool::new(false),
             notice_muted: AtomicBool::new(false),
             startup_window: AtomicBool::new(true),
+            exit_within_startup: AtomicBool::new(false),
             notify: Notify::new(),
             live: Mutex::new(None),
         }
@@ -202,9 +220,15 @@ impl ServiceState {
         self.startup_window.store(false, Ordering::SeqCst);
     }
 
-    /// 启动等待窗口是否还开着（开着时进程退出由 start 工具的结果交代，不另发通知）
+    /// 启动等待窗口是否还开着（仅测试断言用；通知判定看 [`Self::exit_within_startup`]）。
+    #[cfg(test)]
     pub(super) fn startup_window(&self) -> bool {
         self.startup_window.load(Ordering::SeqCst)
+    }
+
+    /// 这次退出是否发生在启动窗口内（`finish` 时取证）——是则「服务已结束」由 start 工具的结果交代。
+    pub(super) fn exit_within_startup(&self) -> bool {
+        self.exit_within_startup.load(Ordering::SeqCst)
     }
 
     /// 挂上交互控制台（`runner::supervise` 在 spawn 成功后立即调用）。
@@ -269,6 +293,9 @@ impl ServiceState {
 
     /// 落定终态（等待任务调用）。
     pub(super) fn finish(&self, code: Option<i32>, killed: bool) {
+        // ⚠️ 先取证再落状态：`notify_waiters` 一响，start 工具那边就会关窗口，之后再读就没意义了。
+        self.exit_within_startup
+            .store(self.startup_window.load(Ordering::SeqCst), Ordering::SeqCst);
         *self.status.lock().unwrap() = Status::Exited { code, killed };
         self.notify.notify_waiters();
     }
@@ -352,6 +379,12 @@ impl LogBuffer {
         self.total
     }
 
+    /// 窗口起点（= `total - chars`）——按绝对偏移扫描窗口内容的调用方（如 `get` 的 `waitFor`）用它换算，
+    /// 免得每跳都 `chars().count()` 一遍 20 万字符。
+    pub(crate) fn window_start(&self) -> u64 {
+        self.total - self.chars as u64
+    }
+
     /// 未读字符数
     pub(crate) fn unread(&self) -> u64 {
         self.total - self.read_cursor
@@ -406,18 +439,15 @@ pub(super) fn next_id() -> String {
 
 /// 容量检查（**spawn 之前**调用，避免起完才发现放不下）。
 ///
-/// 规则：先清本会话里已结束的条目（它们只是留给 AI 读收尾输出的，读不完也不该挡住新服务），
-/// 再按「本会话上限 / 全局上限」拒绝。返回的错误文案给模型看（英文，含怎么办）。
+/// 规则：先清掉**所有会话**里已结束的条目（它们只是留给 AI / 面板读收尾输出的，读不完也不该挡住
+/// 新服务；面板终止不摘条目，所以必须在这里清），再按「本会话上限 / 全局上限」拒绝。
+/// 返回的错误文案给模型看（英文，含怎么办）。
+///
+/// ⚠️ 清理必须**跨会话**：只清本会话的话，全局上限会被别的会话的已结束条目占满，而这里报的
+/// 「先 kill 几个」对模型是死路 —— 它既看不见、也杀不掉别的会话的服务。
 pub(super) fn ensure_capacity(session_id: &str) -> Result<(), String> {
     let mut map = SERVICES.lock().unwrap();
-    let finished: Vec<String> = map
-        .values()
-        .filter(|e| e.session_id == session_id && !e.is_running())
-        .map(|e| e.id.clone())
-        .collect();
-    for id in finished {
-        map.remove(&id);
-    }
+    map.retain(|_, e| e.is_running());
     let session_count = map.values().filter(|e| e.session_id == session_id).count();
     if session_count >= super::common::MAX_SERVICES_PER_SESSION {
         return Err(format!(
@@ -506,9 +536,10 @@ pub fn kill_session_services(session_id: &str) -> usize {
     let n = entries.len();
     for e in entries {
         // 会话删除：整批收摊 —— 通知没有落点（会话都没了），全部抑制
-        e.state.mute_notice();
         if e.is_running() {
-            e.terminate();
+            e.terminate_quietly();
+        } else {
+            e.state.mute_notice();
         }
     }
     super::notice::drop_session(session_id);
@@ -524,9 +555,10 @@ pub fn kill_all_services() -> usize {
     let n = entries.len();
     for e in entries {
         // 应用退出 / 引擎销毁：没人会收到通知 → 全部抑制
-        e.state.mute_notice();
         if e.is_running() {
-            e.terminate();
+            e.terminate_quietly();
+        } else {
+            e.state.mute_notice();
         }
     }
     super::notice::clear_all();
@@ -617,6 +649,26 @@ mod tests {
         assert!(killed.load(Ordering::SeqCst));
         assert!(state.kill_requested.load(Ordering::SeqCst));
         entry.terminate();
+    }
+
+    /// 静默终止：抑制位必须置上（否则取消 / 整批收摊会在事后补一条重复的「服务已结束」）。
+    #[test]
+    fn terminate_quietly_mutes_the_exit_notice() {
+        let state = Arc::new(ServiceState::new());
+        let entry = ServiceEntry::new(
+            "svc_q".into(),
+            "s1".into(),
+            "n".into(),
+            "cmd".into(),
+            0,
+            0,
+            "no_sandbox".into(),
+            state.clone(),
+            Arc::new(|| {}),
+        );
+        entry.terminate_quietly();
+        assert!(state.notice_muted());
+        assert!(state.kill_requested.load(Ordering::SeqCst));
     }
 
     #[test]

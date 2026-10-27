@@ -241,8 +241,10 @@ pub(crate) async fn start_background_service_tool(
     // 用户取消 / 点了「终止」：前端终止按钮走的是「运行中命令注册表」的终止器，
     // 它只会杀进程、不会置位本服务的 `kill_requested` —— 这里补一刀（幂等）并等状态落定，
     // 否则快照会拿到 killed=false，模型分不清「被终止」与「自己退出」。
+    // ⚠️ **静默**终止：本工具的返回已经写清「在等待窗口内被终止」，若进程死得慢（超过下面这 500ms），
+    // 事后还会再发一条「服务已结束」—— 同一件事说两遍（`terminate_quietly`）。
     if matches!(outcome, WaitOutcome::Cancelled) {
-        entry.terminate();
+        entry.terminate_quietly();
         let _ = state.wait_finished(500).await;
     }
     // 等待窗口到此结束：「窗口内退出」由本工具的返回（已退出 + 退出码 + 窗口内输出）交代，
@@ -320,7 +322,7 @@ pub(crate) async fn start_background_service_tool(
     // 用户取消 / 点了「终止」：服务已被杀（cancel 路径要自己补一刀），不能报成功 ——
     // 否则模型会以为它还在跑，往后一直去 get 一个已经死掉的服务。
     if matches!(outcome, WaitOutcome::Cancelled) {
-        entry.terminate();
+        entry.terminate_quietly();
         return Ok(NativeToolOutcome::error_with_ui(
             format!(
                 "Background service \"{name}\" (id: {id}) was terminated before the wait finished.\nCommand: {cmd}"

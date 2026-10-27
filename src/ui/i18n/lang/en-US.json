@@ -2345,6 +2345,8 @@
   "本地处理，不产生费用；仅去除思考过程并省略超长工具输出": "Handled locally at no cost; removes reasoning and truncates very long tool output",
   "本对话暂无后台服务": "No background services in this conversation",
   "本对话的后台服务": "Background services in this conversation",
+  "复制全部输出": "Copy all output",
+  "正在等待输出…": "Waiting for output…",
   "本次对话没有可用的工具": "No tools available in this conversation",
   "本轮回复已暂停，是否继续？": "This reply is paused. Continue?",
   "根据对话内容自动生成标题；关闭后用首条消息代替": "Generate titles from the conversation; when off, the first message is used",
