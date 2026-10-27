@@ -166,11 +166,10 @@ class ReadFileMessage implements IToolCallMessage {
     }
   }
   getExpandView(props: ToolMessageProps): React.ReactNode {
+    if (!props.expand) return null
     if (props.message?.isError) {
       return <div className="error">{props.message.content as string}</div>
     }
-    if (!props.expand) return null
-
     const workspace =
       sessionStore.getSession(chatState.value.currentSessionId)?.workspace ||
       settingsState.value.defaultWorkspace

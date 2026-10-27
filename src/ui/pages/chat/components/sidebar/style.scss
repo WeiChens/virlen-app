@@ -377,7 +377,35 @@
 
     // ==================== Agent 分组容器 ====================
     .session-group {
-      margin-bottom: 4px;
+      // margin-bottom: 4px;
+
+      /* 折叠 / 展开的过渡：组内高度事先不知道，`height: auto` 不能过渡，于是让外层当网格
+         容器、把行轨从 `1fr` 收到 `0fr`（现代浏览器里这正是「auto 高度过渡」的标准做法）。
+         收放的同时给列表淡入淡出：只收高度的话，行是被「上下削掉」的（文字会突然被裁一半），
+         透明度同步跟到 0 / 1 才是「收掉了」而不是「被切了一半」。
+         内层必须 `min-height: 0` —— 网格项的默认 `min-height: auto` 会让 0fr 收不成 0。
+         `overflow: hidden` 只加在内层，外层不能加：它一旦成为滚动容器，收起动画之外
+         也会改变外边距 / 溢出的行为（`0fr` 那一侧本来就靠内层裁切）。 */
+      .session-group-body {
+        display: grid;
+        grid-template-rows: 1fr;
+        transition: grid-template-rows 0.25s ease;
+
+        > .session-group-items {
+          min-height: 0;
+          overflow: hidden;
+          opacity: 1;
+          transition: opacity 0.25s ease;
+        }
+
+        &.is-collapsed {
+          grid-template-rows: 0fr;
+
+          > .session-group-items {
+            opacity: 0;
+          }
+        }
+      }
 
       // 组内会话项去掉底部外边距（统一由 group 控制间距）
       .session-item {
@@ -413,14 +441,13 @@
       display: flex;
       align-items: center;
       gap: 6px;
-      padding: 6px 6px;
+      padding: 3px 6px;
       border-radius: 6px;
       cursor: pointer;
       user-select: none;
       transition: background 0.15s;
       position: relative;
-      margin-bottom: 2px;
-      height: 30px;
+      height: 32px;
 
       &:hover {
         background: var(--hover-bg, #f0f0f0);
@@ -444,12 +471,62 @@
         }
       }
 
+      /* 图标与折叠箭头共用一格（省下一份 `gap` 6px + 14px 宽）：**展开**的分组常显箭头
+         （会话行就在下面摊着，那 14px 是「点这里收起」的把手），**收起**的分组回落到类型图标
+         （方向已经没有可读的信息，此时更该说的是「这是什么组」），hover 时一律换成箭头。
+         叠放用「同一网格格叠两层」（不是 `display` 切换：那会打断透明度过渡，看起来是硬闪）。 */
+      .group-slot {
+        display: grid;
+        place-items: center;
+        width: 14px;
+        height: 14px;
+        flex-shrink: 0;
+
+        > * {
+          grid-area: 1 / 1;
+        }
+
+        .group-icon {
+          opacity: 1;
+          transition: opacity 0.12s ease;
+        }
+
+        .group-toggle {
+          opacity: 0;
+        }
+      }
+
+      /* 展开态常显箭头：方向（0°）与下方摊开的会话行一起表达「没收起」，
+         那 14px 同时就是收起的命中区。 */
+      &.is-expanded .group-slot {
+        .group-icon {
+          opacity: 0;
+        }
+
+        .group-toggle {
+          opacity: 1;
+        }
+      }
+
+      /* 收起态默认是类型图标，但鼠标一进分组头就换成箭头（「这里能点开」的提示）。 */
+      &:hover .group-slot {
+        .group-icon {
+          opacity: 0;
+        }
+
+        .group-toggle {
+          opacity: 1;
+        }
+      }
+
       .group-toggle {
         width: 14px;
         height: 14px;
         flex-shrink: 0;
         fill: var(--text-secondary, #999);
-        transition: transform 0.2s ease;
+        transition:
+          transform 0.2s ease,
+          opacity 0.12s ease;
 
         &.collapsed {
           transform: rotate(-90deg);
@@ -485,8 +562,9 @@
           color: var(--text-secondary, #999);
         }
 
-        .group-icon,
-        .group-toggle {
+        /* 降调加在**那一格**上：图标 / 箭头的透明度已归 `.group-slot` 管，
+           留在这里会被叠放规则盖掉（看起来就是「归档态没生效」）。 */
+        .group-slot {
           opacity: 0.55;
         }
       }

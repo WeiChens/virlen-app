@@ -1092,21 +1092,25 @@ function SessionGroupView({
   return (
     <div className="session-group">
       <div
-        className={`session-group-header${hasActiveSession && isCollapsed ? ' has-active' : ''}${allArchived ? ' archived' : ''}`}
+        className={`session-group-header${hasActiveSession && isCollapsed ? ' has-active' : ''}${isCollapsed ? '' : ' is-expanded'}${allArchived ? ' archived' : ''}`}
         onClick={onToggleGroup}
         // 右键即菜单（与「会话项」一致）
         onContextMenu={(e) => menu.openAt(e, group)}
         title={group.title}>
-        <DropDownSvg
-          className={`group-toggle ${isCollapsed ? 'collapsed' : ''}`}
-        />
-        {group.icon === 'folder' ? (
-          <FolderSvg className="group-icon" />
-        ) : isUngrouped ? (
-          <FolderSvg className="group-icon" />
-        ) : (
-          <AgentSvg className="group-icon" />
-        )}
+        {/* 图标与折叠箭头**共用一格**（省下一份 gap 6px + 14px 宽）：展开的分组常显箭头（它就是那一列的
+            「点这里收起」把手），收起的分组回落到类型图标（方向已不存在，留个「这是什么组」），
+            hover 时一律换成箭头。叠放靠「同一网格格叠两层」（样式在 `.group-slot`），
+            不是 display 切换（那会打断透明度过渡）。 */}
+        <span className="group-slot">
+          <DropDownSvg
+            className={`group-toggle ${isCollapsed ? 'collapsed' : ''}`}
+          />
+          {group.icon === 'folder' || isUngrouped ? (
+            <FolderSvg className="group-icon" />
+          ) : (
+            <AgentSvg className="group-icon" />
+          )}
+        </span>
         {/* 折叠时组内有会话在忙 / 有交互要你回答：同槽只亮一枚（等你回答优先） */}
         {isCollapsed && <GroupStatusFlag sessions={group.sessions} />}
         {/* 折叠分组内有未查看的新回复 → 分组头部红点 */}
@@ -1145,7 +1149,14 @@ function SessionGroupView({
           onClose={menu.close}
         />
       )}
-      {!isCollapsed && (
+      {/* 折叠 / 展开的过渡：组内高度事先不知道，`height: auto` 不能过渡，所以外层走
+          `grid-template-rows: 1fr ↔ 0fr`（样式在 `.session-group-body`）。收起时内容仍挂着 ——
+          一是没有高度就没有过渡，二是展开回来时滚动位置 / 「展示全部」的展开态不用重算。
+          ⚠️ 正因为「挂着但看不见」，收起态必须 `inert`：否则 Tab 键会走进看不见的会话行，
+          `show-all-btn` 也还能被点到 / 被读屏念出来。 */}
+      <div
+        className={`session-group-body${isCollapsed ? ' is-collapsed' : ''}`}
+        inert={isCollapsed}>
         <div className="session-group-items">
           {folded.visible.map(renderSession)}
           {folded.folded && (
@@ -1159,7 +1170,7 @@ function SessionGroupView({
             </button>
           )}
         </div>
-      )}
+      </div>
     </div>
   )
 }
