@@ -1,9 +1,10 @@
 /**
- * 模型预览的「解析中」：转圈显示、画布藏起来，解析完成后一次性显示。
+ * 模型预览的「解析中」：转圈盖在舞台上，**画布全程可见**（先看到空舞台的网格 / 坐标轴），
+ * 解析完成后模型才一次性出现。
  *
  * 为什么值得一条用例：`phase === 'loading'` 只持续到 three 解析完，人工看只能看到
- * 「画面上有个东西」；而**画布露不露**这一点肉眼分不清「藏了」还是「本来就是空的」——
- * 露出来的那种会先显示空舞台的网格 / 坐标轴，模型再一块块补上。
+ * 「画面上有个东西」；而**画布露不露**这一点肉眼分不清「藏了」还是「本来就是空的」。
+ * 现在的口径：画布从藏不藏（藏了就连空舞台都没有），旧模型在开新一份之前要先 `clearModel`。
  *
  * three 在 jsdom 里起不来（没有 WebGL）：场景与加载器都换成替身（与 `workspace-file-model`
  * 同一手法），只验这两个状态的 DOM 契约。
@@ -31,10 +32,12 @@ type LoadedModel = {
 
 let resolveLoad: (model: LoadedModel) => void = () => {}
 let rejectLoad: (error: unknown) => void = () => {}
-const { loadMock, setModelCalls, appliedPresets } = vi.hoisted(() => ({
+const { loadMock, setModelCalls, clearModelCalls, appliedPresets } = vi.hoisted(() => ({
   loadMock: vi.fn(),
   /** `setModel(object, animations, report)` 的入参：验第三参（异常上报）真的传下去了 */
   setModelCalls: [] as unknown[][],
+  /** `clearModel()` 的调用次数：开新一份之前必须先清掉旧模型 */
+  clearModelCalls: { count: 0 },
   /** 场景收到的预设（`applyPreset` 的实际入参）：验「环境是全局一份」 */
   appliedPresets: [] as unknown[],
 }))
@@ -52,6 +55,19 @@ vi.mock('@/ui/pages/chat/components/workspace-file/model-scene', () => {
     setAxes = vi.fn()
     setAutoRotate = vi.fn()
     setModelLights = vi.fn()
+    // 网格列表 / 选中模式：这个用例集不碰它（面板默认不展开），但接口得齐 ——
+    // 少一个方法就会在 `setModel` 之后抛错，整条加载链跟着变成 error 态。
+    setSelectionMode = vi.fn()
+    setMoveMode = vi.fn()
+    setMeshPickHandler = vi.fn()
+    setMeshVisible = vi.fn()
+    selectMesh = vi.fn()
+    frameObject = vi.fn()
+    focusVisible = vi.fn()
+    clearModel = vi.fn(() => {
+      clearModelCalls.count += 1
+    })
+    listMeshes = (): unknown[] => []
     resetView = vi.fn()
     playAnimation = vi.fn()
     stopAnimations = vi.fn()
@@ -129,16 +145,29 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-it('解析中：转圈盖在舞台上，画布标记为 is-loading（不露空舞台）', async () => {
+it('解析中：转圈盖在舞台上，画布同时露出来（空舞台的网格 / 坐标轴）', async () => {
   await mount()
 
   const status = document.querySelector('.wfp-model-status')
   expect(status?.querySelector('.wfp-spinner')).not.toBeNull()
   expect(status?.textContent).toContain('正在加载模型')
-  expect(document.querySelector('.wfp-model-canvas')?.classList.contains('is-loading')).toBe(true)
+  // 画布不再贴 `is-loading`（不再藏）：模型靠 clearModel / setModel 控制，不靠画布显隐
+  expect(document.querySelector('.wfp-model-canvas')).not.toBeNull()
+  expect(document.querySelector('.wfp-model-canvas')?.classList.contains('is-loading')).toBe(false)
 })
 
-it('解析完成：转圈与 is-loading 一起收掉（内容一次性显示）', async () => {
+it('开新一份之前先清掉旧模型（加载期间画面里不该还是上一个模型）', async () => {
+  await mount()
+  // 解析还没回来（loading 中）就已经清过一次
+  expect(clearModelCalls.count).toBeGreaterThan(0)
+  expect(setModelCalls).toHaveLength(0)
+
+  await act(async () => resolveLoad({ object: {}, animations: [], format: 'glb' }))
+  await act(async () => {})
+  expect(setModelCalls).toHaveLength(1)
+})
+
+it('解析完成：转圈收掉，模型一次性显示', async () => {
   await mount()
 
   await act(async () => resolveLoad({ object: {}, animations: [], format: 'glb' }))
@@ -146,7 +175,6 @@ it('解析完成：转圈与 is-loading 一起收掉（内容一次性显示）'
 
   expect(document.querySelector('.wfp-model-status')).toBeNull()
   expect(document.querySelector('.wfp-spinner')).toBeNull()
-  expect(document.querySelector('.wfp-model-canvas')?.classList.contains('is-loading')).toBe(false)
 })
 
 it('把模型绝对路径交给加载器（同目录的贴图靠它找）', async () => {
@@ -224,12 +252,13 @@ it('加载器上报的异常进日志：徽标 = 警告 + 错误条数，点开�
   // detail 不翻译：文件名要能直接拿去补文件
   expect(item?.textContent).toContain('1 / 2 · a.png')
 
-  // 清空：徽标与条目一起消失，弹窗回到空态
+  // 清空：徽标与入口一起消失（没异常就不留按钮），弹窗回到空态
   const clear = [...document.querySelectorAll<HTMLElement>('.modal-footer button')].find(
     (element) => element.textContent === '清空',
   )
   await act(async () => clear?.click())
   expect(document.querySelector('.wfp-model-log-badge')).toBeNull()
+  expect(document.querySelector('.wfp-model-log-btn')).toBeNull()
   expect(document.querySelector('.wfp-log-empty')?.textContent).toContain('没有发现异常')
 })
 
@@ -252,15 +281,13 @@ it('解析失败也记进日志（模型打不开时更要能点开看原因）'
   expect(item?.textContent).toContain('不支持的模型格式：.txt')
 })
 
-it('没有问题：不显示徽标，弹窗是空态', async () => {
+it('没有问题：日志入口整个不渲染（没异常就不该挂一个点不进去的图标）', async () => {
   await mount()
   await act(async () => resolveLoad({ object: {}, animations: [], format: 'glb' }))
   await act(async () => {})
 
+  expect(document.querySelector('.wfp-model-log-btn')).toBeNull()
   expect(document.querySelector('.wfp-model-log-badge')).toBeNull()
-  const button = document.querySelector<HTMLElement>('.wfp-model-log-btn')
-  await act(async () => button?.click())
-  expect(document.querySelector('.wfp-log-empty')?.textContent).toContain('没有发现异常')
 })
 
 it('场景侧的异常（空包围盒、上下文丢失）走同一个日志：第三参就是上报函数', async () => {

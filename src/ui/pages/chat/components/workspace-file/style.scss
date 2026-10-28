@@ -795,7 +795,9 @@
   background: #0e1116;
 }
 
-/* 画布占满舞台；拖动旋转时不要选中文字 */
+/* 画布占满舞台；拖动旋转时不要选中文字。
+   **加载中也照常可见**（只是里面还没模型）：空舞台的网格 / 坐标轴 + 转圈比一块空白屏清楚，
+   模型本体由 `clearModel` / `setModel` 控制，与画布的显隐无关。 */
 .wfp-model-canvas {
   position: absolute;
   inset: 0;
@@ -804,13 +806,6 @@
   canvas {
     display: block;
   }
-}
-
-/* 模型还没解析完时不露画布：否则会先看到空舞台的网格 / 坐标轴，模型再一块块补上。
-   ⚠️ 用 `visibility` 而不是 `display: none` —— ModelScene 靠 `clientWidth` 量尺寸，
-   后者会量到 0，ResizeObserver 也收不到真正的尺寸，模型就永远画不出来。 */
-.wfp-model-canvas.is-loading {
-  visibility: hidden;
 }
 
 /* 在画布上盖一层：读取中 / 失败。失败要能点「在系统程序中打开」，所以只有它接管指针 */
@@ -840,6 +835,27 @@
       overflow-wrap: anywhere;
     }
   }
+}
+
+/* 移动模式的操作提示：WASD / Q/E 在界面上没有任何可见入口，不写这一行等于让人瞎按。
+   底部居中（列表在左上、信息卡在右上、选中详情在右下），不吃指针事件 —— 拖视角靠的就是画布。 */
+.wfp-model-move-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  /* 比详情卡高一层：提示就一行，「选中详情 + 提示」同时出现在窄面板里时不能把键位提示盖掉 */
+  z-index: 3;
+  transform: translateX(-50%);
+  max-width: calc(100% - 16px);
+  padding: 3px 8px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: var(--font-size-2xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
 }
 
 /* 模型信息：压在右上角的小卡片（走浮层而不是一整列，画布高度不缩水） */
@@ -939,6 +955,346 @@
 
   .wfp-model-log-btn.is-error & {
     background: var(--danger-color, #dc2626);
+  }
+}
+
+/* 「更多」：与异常日志同尺寸的图标按钮（工具栏末尾，没异常时它就是最后一个） */
+.wfp-model-more {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+
+  svg {
+    width: 14px;
+    height: 14px;
+    /* 路径是三个圆点（`fill` 由属性给） */
+    fill: currentColor;
+  }
+
+  &:hover {
+    background: var(--hover-bg, #f0f0f0);
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  &.is-active {
+    background: var(--accent-bg, #e8f0fe);
+    color: var(--accent-color, #2563eb);
+  }
+}
+
+/* 「更多」菜单项：左侧一列勾（开关类才有），勾的位置常占一格 ——
+   否则菜单项开关时文字会左右跳。菜单本体 portal 到 body，所以这两个类必须是全局的。 */
+.wfp-model-menu-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wfp-model-menu-check {
+  flex: none;
+  width: 1em;
+  color: var(--accent-color, #2563eb);
+}
+
+/* ==================== 网格列表（选中模式 / 逐网格显隐） ====================
+   压在左上角：信息卡在右上角，两者不抢位置；列表内部滚动，画布高度一点不缩水
+   （面板里 3D 预览的可用面积越大越好）。
+   ⚠️ 只能 `position: absolute` 盖在舞台上：一旦做成舞台的 flex 兄弟节点，面板一开画布就矮一大截。 */
+.wfp-mesh-panel {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  /* 与右上角的「模型信息」卡同一行（那张最小 176px + 两侧 16px）：侧栏最窄只有 360px，
+     宽度得让出右侧那一块 —— 用 min / max 夹住，两个浮层不会叠在一起。 */
+  width: min(216px, max(150px, calc(100% - 200px)));
+  max-height: calc(100% - 16px);
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 6px;
+  /* 85% 底色：盖在模型上时会“透”出一点画面，隐约看得出背面还有几何，
+     但保留 15% 透明度而不是模糊 —— 几百行的列表要的是读得清。 */
+  background: color-mix(in srgb, var(--bg-primary, #fff) 85%, transparent);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  font-size: var(--font-size-xs);
+  overflow: hidden;
+}
+
+.wfp-mesh-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 8px;
+  border-bottom: 1px solid var(--border-color, #e5e5e5);
+  color: var(--text-secondary, #888);
+  font-variant-numeric: tabular-nums;
+}
+
+.wfp-mesh-title {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 「显示全部」：与工具栏开关按钮同款，只是小一号（面板里只有这一个次要动作） */
+.wfp-mesh-all {
+  flex: none;
+  margin-left: auto;
+  height: 18px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent-color, #2563eb);
+  font-size: var(--font-size-2xs);
+  line-height: 1;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--hover-bg, #f0f0f0);
+  }
+
+  &:disabled {
+    color: var(--text-secondary, #888);
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.wfp-mesh-empty {
+  margin: 12px 8px;
+  color: var(--text-secondary, #888);
+}
+
+/* 列表：多网格的模型可能几百行，只在这里滚（高度受舞台约束） */
+.wfp-mesh-list {
+  flex: 0 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 2px 0;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.wfp-mesh-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 6px;
+
+  &:hover {
+    background: var(--hover-bg, #f0f0f0);
+  }
+
+  &.is-selected {
+    background: var(--accent-bg, #e8f0fe);
+
+    .wfp-mesh-name {
+      color: var(--accent-color, #2563eb);
+      font-weight: 600;
+    }
+  }
+
+  /* 藏起来的行：一眼能看出「它不在画面里」，但还能点回来 */
+  &.is-hidden {
+    .wfp-mesh-eye,
+    .wfp-mesh-name,
+    .wfp-mesh-tris {
+      opacity: 0.45;
+    }
+
+    .wfp-mesh-name {
+      text-decoration: line-through;
+    }
+  }
+}
+
+/* 眼睛按钮：18px 宽 / 行高 22px（图标 13px 居中） */
+.wfp-mesh-eye {
+  flex: none;
+  width: 18px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+
+  svg {
+    width: 13px;
+    height: 13px;
+    /* ⚠️ 必须在这里写成 CSS：`App.css` 有全局 `svg { fill: var(--icon-color) }`，
+       而 CSS **盖得住** svg 上的 `fill="none"` 呈现属性（属性权重是 0）—— 不写这两行，
+       睁眼图标会被整块填实（就是一个黑饼），看不出是「眼睛」。 */
+    fill: none;
+    stroke: currentColor;
+  }
+
+  &:hover {
+    color: var(--text-primary, #1a1a1a);
+  }
+}
+
+/* 折叠箭头（分组行行首，14px）：展开时箭头**由 CSS 转 90°**（角度只在样式里一份） */
+.wfp-mesh-twist {
+  flex: none;
+  width: 14px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+
+  svg {
+    width: 10px;
+    height: 10px;
+    /* ⚠️ 同 `.wfp-mesh-eye svg`：`App.css` 的全局 `svg { fill: var(--icon-color) }` 盖得住
+       svg 上的 `fill="none"` 呈现属性（属性权重 0），不写这两行箭头会变成一个黑三角。 */
+    fill: none;
+    stroke: currentColor;
+    transition: transform 0.12s ease;
+  }
+
+  &.is-open svg {
+    transform: rotate(90deg);
+  }
+
+  &:hover {
+    color: var(--text-primary, #1a1a1a);
+  }
+}
+
+/* 名称：占满剩余宽度，超长省略（完整层级路径在 `title` 里） */
+.wfp-mesh-name {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary, #1a1a1a);
+  font-size: var(--font-size-xs);
+  text-align: left;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.wfp-mesh-tris {
+  flex: none;
+  color: var(--text-secondary, #888);
+  font-size: var(--font-size-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 分组行：它是「一层」不是「一块」—— 名字加粗、右边那列三角形数是**整组合计**（折起来时
+   也能看出这一组多重）；缩进由行内 `paddingLeft` 给（层级是数据自带的，底下见 `.wfp-mesh-row`） */
+.wfp-mesh-group {
+  .wfp-mesh-name {
+    font-weight: 600;
+  }
+
+  /* 一半亮：组里藏了一部分（混合态）。不划线 —— 还有东西看得见，划掉反而误以为整组都没了 */
+  &.is-mixed .wfp-mesh-name {
+    opacity: 0.75;
+  }
+}
+
+/* 选中那一块的详情：压在**右下角**（列表在左上、信息卡在右上），不跟列表一起滚 ——
+   列表可能有几百行，详情挂在列表下面的话，选中靠后的网格就永远看不到它。 */
+.wfp-mesh-detail {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: min(240px, calc(100% - 16px));
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  font-size: var(--font-size-xs);
+
+  dl {
+    margin: 0;
+
+    div {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+  }
+
+  dt {
+    flex: none;
+    color: var(--text-secondary, #888);
+  }
+
+  dd {
+    margin: 0 0 0 auto;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* 名字与路径都可以用鼠标圈：复制按钮只是顺手的那条路 */
+.wfp-mesh-detail-name {
+  font-weight: 600;
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+
+.wfp-mesh-detail-path {
+  color: var(--text-secondary, #888);
+  font-size: var(--font-size-2xs);
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+
+.wfp-mesh-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.wfp-mesh-action {
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 4px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1a1a1a);
+  font-size: var(--font-size-2xs);
+  line-height: 1;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--hover-bg, #f0f0f0);
   }
 }
 
