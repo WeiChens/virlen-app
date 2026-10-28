@@ -45,6 +45,8 @@ import GitEntry from './components/git/GitEntry'
 import SearchDialog from './components/search'
 // 右侧面板容器：多个文件 / 终端 / 网页各占一个标签
 import SidePanel from './components/side-panel'
+// 拖动落点登记（拖侧栏会话徒标到「当前对话」的标签栏 / 聊天区 = 把那批标签搬进来）
+import { registerDropArea } from './components/sidebar/session-drop'
 import {
   browserTab,
   closeTab,
@@ -74,6 +76,8 @@ import {
   panelKeyOf,
   panelTabSummaries,
   scopeTabs,
+  transferSessionTabs,
+  transferTab,
   withBucketActive,
   withBucketOpen,
   withBucketTabs,
@@ -400,6 +404,10 @@ function ChatView() {
    */
   useNativeFileDrop()
 
+  /** 聊天区本体：拖会话徒标时可以落在这里（= 搬进当前会话，不必去命中 36px 高的标签栏） */
+  const chatMainRef = useRef<HTMLDivElement>(null)
+  useEffect(() => registerDropArea('chat-main', () => chatMainRef.current), [])
+
   /** 取「当前会话那一桶」（回调里调，不依赖渲染期快照） */
   const bucketNow = useCallback((): { key: string; bucket: PanelBucket } => {
     const key = panelKeyOf(chatState.value.currentSessionId)
@@ -547,9 +555,13 @@ function ChatView() {
   )
 
   /**
-   * 批量在右侧面板打开（`present` 的交付物可能不止一个）：已有同路径的标签只切过去，
+   * 批量在**指定会话那一桶**里打开（`key` = `panelKeyOf(sessionId)`）：已有同路径的标签只切过去，
    * 新文件**占掉预览位（没有就追加到末尾）**；**激活第一个**（它是主交付物）。
-   * 一次算完再落 state，N 个文件只渲染一次。落的是**当前会话**那一桶（后台会话不抢标签页）。
+   * 一次算完再落 state，N 个文件只渲染一次。
+   *
+   * 为什么要显式给 `key`：`present` 的交付要落进**它自己那个会话**的桶 —— 后台会话跑完时
+   * 用户可能正看着别的会话 / 新对话页，拿「眼前这桶」落库就把交付扔错了地方（或者白交）。
+   * 桶是会话自己的，落别的桶**不会把眼前的面板抢过去**（`withBucketTabs` 只展开目标那一桶）。
    *
    * 两种持留方式（见 `tabs.ts` 头注释第 6 条）：
    * - **不传 `pinned`**（用户双击文件树 / 拖文件进来 / 侧栏点一下）：预览位 —— 标签斜体，
@@ -559,10 +571,14 @@ function ChatView() {
    * `activeId` 只交给**这一批里的第一个**：一次拖进来三个文件时，第一个占掉预览位，
    * 其余追加 —— 否则三个会互相顶，最后只剩一个。
    */
-  const handleOpenFiles = useCallback(
-    (paths: string[], options: { view?: FileTabView; pinned?: boolean } = {}) => {
+  const openFilesToBucket = useCallback(
+    (
+      key: string,
+      paths: string[],
+      options: { view?: FileTabView; pinned?: boolean } = {},
+    ) => {
       if (paths.length === 0) return
-      const { key, bucket } = bucketNow()
+      const bucket = bucketOf(panelBucketsRef.current, key)
       let tabs = bucket.tabs
       let activeId: string | null = null
       // present 是「请看这个」：同一个文件重复交付也要把面板请回预览（序号自增，值相同不重渲染）
@@ -584,7 +600,14 @@ function ChatView() {
       // 但用户点了 / 拖进来一个文件，当然是要看见它
       applyBucketOpen(key, true)
     },
-    [applyBucketOpen, applyBucketTabs, bucketNow],
+    [applyBucketOpen, applyBucketTabs],
+  )
+
+  /** 批量在**当前会话**那一桶打开（文件树双击 / 拖文件 / 侧栏点一下） */
+  const handleOpenFiles = useCallback(
+    (paths: string[], options: { view?: FileTabView; pinned?: boolean } = {}) =>
+      openFilesToBucket(panelKeyOf(chatState.value.currentSessionId), paths, options),
+    [openFilesToBucket],
   )
 
   /**
@@ -595,6 +618,51 @@ function ChatView() {
     (path: string) => handleOpenFiles([path]),
     [handleOpenFiles],
   )
+
+  /**
+   * 把一个会话开着的那批标签**整批**搬到另一个会话（侧栏徒标拖到标签栏 / 另一个会话行上）。
+   *
+   * 口径与拖单个标签一致（id 不改、同内容不搬、目标桶追加 + 激活 + 自动展开），只是数量变成「整批」：
+   * 搬完源框就空了（徽标随之消失）。部分重复不算失败 —— 剩下的照搬、重复的跳过；
+   * 全跳过时才提一句（否则标签凭空不动，看着像拖坏了）。
+   */
+  const handleTransferSessionTabs = useCallback(
+    (fromSessionId: string, toSessionId: string | null) => {
+      const result = transferSessionTabs(
+        panelBucketsRef.current,
+        panelKeyOf(fromSessionId),
+        panelKeyOf(toSessionId),
+      )
+      if (result.moved > 0) {
+        panelBucketsRef.current = result.buckets
+        setPanelBuckets(result.buckets)
+      }
+      if (result.moved === 0 && result.skipped > 0) {
+        showToast(t('这些标签都已经在目标会话里打开了'))
+      }
+    },
+    [],
+  )
+
+  /**
+   * 把标签转移到另一个会话（标签栏拖到侧栏会话项上 = 「这个标签归那个会话了」）。
+   *
+   * 两条口径：
+   * 1. **只搬不杀**：终端标签还是同一个进程，只是换了一桶显示（`transferTab` 不动 `sessionId`）；
+   * 2. **搬不过去时说一句**：目标会话里已经打开了同一个东西（`duplicate`）就不搬 ——
+   *    条数不变、标签留在原地，不提示的话看起来就像拖坏了。
+   */
+  const handleTransferTabToSession = useCallback((tabId: string, sessionId: string) => {
+    const result = transferTab(panelBucketsRef.current, tabId, panelKeyOf(sessionId))
+    if (!result.moved) {
+      if (result.reason === 'duplicate') {
+        showToast(t('该会话里已经打开了这个标签'))
+      }
+      return
+    }
+    panelBucketsRef.current = result.buckets
+    setPanelBuckets(result.buckets)
+  }, [])
 
   /**
    * 把标签升级成常驻（双击标签 / 改动草稿两条路由容器转上来）。
@@ -773,19 +841,19 @@ function ChatView() {
   )
 
   /**
-   * 新建网页标签：开始页的「浏览器」/ `Ctrl + T` 开空白页；消息里的链接（`url` 非空）
+   * 新建网页标签（在**指定会话那一桶**）：开始页的「浏览器」/ `Ctrl + T` 开空白页；消息里的链接（`url` 非空）
    * 直接带着地址开。
    *
    * 与终端相反，这里**没有要先做成的事**（不起进程、不需要工作目录），所以同步建标签即可；
    * 从开始页进来同样原地替换（`replaceTabWith`）—— 用户看到的还是刚才那一格。
+   * 显式给 `key` 的理由与 `openFilesToBucket` 相同：`present` 的网址要落进**交付归属的会话**。
    */
-  const handleOpenBrowser = useCallback(
-    (takeGuideSlot = false, url = '') => {
+  const openBrowserToBucket = useCallback(
+    (key: string, takeGuideSlot: boolean, url: string) => {
       // 序号只增不减：回收会跟还开着的旧标签撞 id（它全局一份，不按会话分）
       browserSeqRef.current += 1
       const seq = browserSeqRef.current
-      const { key, bucket } = bucketNow()
-      const tabs = bucket.tabs
+      const tabs = bucketOf(panelBucketsRef.current, key).tabs
       // 两条路都走标签模型：原地接管开始页那一格 / 追加到末尾
       const tab = scopeTabs(key, [browserTab({ seq, url })])[0]
       const guideId = guideTabIdIn(tabs)
@@ -795,7 +863,14 @@ function ChatView() {
           : { tabs: [...tabs, tab], activeId: tab.id }
       applyBucketTabs(key, next)
     },
-    [applyBucketTabs, bucketNow],
+    [applyBucketTabs],
+  )
+
+  /** 新建网页标签（**当前会话**那一桶：开始页 / `Ctrl + T` / 正文链接） */
+  const handleOpenBrowser = useCallback(
+    (takeGuideSlot = false, url = '') =>
+      openBrowserToBucket(panelKeyOf(chatState.value.currentSessionId), takeGuideSlot, url),
+    [openBrowserToBucket],
   )
 
   /**
@@ -813,17 +888,22 @@ function ChatView() {
    * 交付物（`present` 工具）→ 右侧面板：登记**唯一入口**（`services/present-service`）。
    * 标签状态在本组件的 state + ref 里，别处拿不到；卸载时注销，避免留下上一个实例的 handler。
    *
+   * **落到交付归属的会话那一桶**（`sessionId`；缺席 = 眼前这个会话）：
+   * 后台会话跑完时用户可能正看着别的会话 / 新对话页 —— 标签照样进那个会话的桶，
+   * 侧栏会话徽标会亮起来，切回去就是打开着的样子（以前按「当前会话」一刀切，交付就丢了）。
+   *
    * 文件默认落在「预览」（能预览的类型才有那个 tab），并且是**常驻**标签 ——
    * present 的语义是给人看，不是给人改，也不该被下一个打开的文件顶掉。
    * 网址开成**网页标签**；先开网址、后开文件，让文件（交付的主体）落在最后成为激活页。
    */
   useEffect(
     () =>
-      setPresentRevealHandler(({ paths, urls }) => {
-        for (const url of urls) handleOpenBrowser(true, url)
-        if (paths.length > 0) handleOpenFiles(paths, { view: 'preview', pinned: true })
+      setPresentRevealHandler(({ paths, urls, sessionId }) => {
+        const key = panelKeyOf(sessionId || chatState.value.currentSessionId)
+        for (const url of urls) openBrowserToBucket(key, true, url)
+        if (paths.length > 0) openFilesToBucket(key, paths, { view: 'preview', pinned: true })
       }),
-    [handleOpenFiles, handleOpenBrowser],
+    [openFilesToBucket, openBrowserToBucket],
   )
 
   /**
@@ -1641,12 +1721,14 @@ function ChatView() {
         panelTabs={panelTabCounts}
         // 点徽标 = 切过去 + 展开面板（不能让整行那个「选中会话」再跑一遍）
         onOpenSessionPanel={handleOpenSessionPanel}
+        // 拖徽标 = 把那批标签整批搬进标签栏（= 当前会话）或另一个会话行
+        onTransferSessionTabs={handleTransferSessionTabs}
       />
       {chatState.value.sidebarOpen && (
         <div className="sidebar-resizer" onMouseDown={handleResizerMouseDown} />
       )}
 
-      <div className="chat-main" style={{ position: 'relative' }}>
+      <div className="chat-main" ref={chatMainRef} style={{ position: 'relative' }}>
         <div className={`chat-header${chatState.value.currentSessionId?" active":""}`}>
           <div className="chat-toolbar">
             <button className="toggle-sidebar-btn" onClick={toggleSidebar}>
@@ -1825,6 +1907,8 @@ function ChatView() {
         onCloseTab={handleCloseTab}
         onCloseTabs={handleCloseTabs}
         onMoveTab={handleMoveTab}
+        // 拖着标签丢到侧栏的会话项上 → 这个标签归那个会话了（分桶口径见 `sessions.ts::transferTab`）
+        onTransferTab={handleTransferTabToSession}
         // 双击标签 / 改动了草稿 → 把预览位升级成常驻（标签订阅口径在 `tabs.ts::pinTab`）
         onPinTab={handlePinTab}
         onDirtyChange={handleFileDirtyChange}

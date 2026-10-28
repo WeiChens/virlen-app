@@ -155,6 +155,39 @@
   }
 }
 
+/* 拖着会话的徽标压在标签栏上：整条栏亮一圈 = 「松手就把那批标签搬进这个会话」。
+   类由 `sidebar/session-badge-drag.ts` 直接写（拖动中每帧都问一次落点，走 state 会刷帧）。 */
+.side-panel-tabs.is-drop-target {
+  background: color-mix(in srgb, var(--accent-color, #4f46e5) 14%, transparent);
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px var(--accent-color, #4f46e5);
+}
+
+/* 拖动中的浮层（「拿在手上的那一份」）：右侧栏拖标签、拖侧栏会话徒标共用。
+   `position: fixed` 是必须的 —— 标签栏是 `overflow-y: hidden`、侧栏的分组也会裁内容，
+   放在容器里写纵向位移会被裁掉（那就是「拖到左侧栏时只横着滑、上下不动」的真正原因）。
+   ⚠️ `transform` 由 JS 每帧写（把浮层摆到指针下），这里千万别写 transform，也别给它加
+   `transition: transform`：跟手会变成拖泥带水。
+   层级与工作区的文件拖拽浮层同一档：Modal 800 < ghost 3000 < Toast 3012。 */
+.is-tab-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 3000;
+  margin: 0;
+  pointer-events: none;
+  opacity: 0.95;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  will-change: transform;
+  transition: opacity 0.12s;
+
+  /* 指针压在落点（会话行 / 标签栏）上：浮层淡下去。标签最宽 270px、会话行也就这么宽，
+     不淡的话会遮住「松手就落这儿」那块高亮，用户就分不清到底会落到哪 */
+  &.is-over-session {
+    opacity: 0.4;
+  }
+}
+
 /* 标签栏右侧的固定按钮：「+」新标签 / 全屏 / ✕ 收起（不跟着标签区横向滚动）。 */
 .side-panel-tabbar-actions {
   flex: none;
@@ -229,14 +262,11 @@
     color: var(--text-primary, #1a1a1a);
   }
 
-  /* 正在被拖的那一个：跟着指针走（位移是内联 `transform`，见 `startTabDrag`），抬起来压在邻居之上。
-     它自己的格子留在原处当「洞」，邻居按落点重排 */
+  /* 正在被拖的那一个：本体留在标签栏里当「落点空格」（内联 `visibility: hidden`，见
+     `startTabDrag` 的 `raiseGhost`），跟着指针走的是挂在 body 上的克隆 `.is-tab-ghost`。
+     这里只留状态语义 —— 别再往这儿写 `transform` / `z-index`：本体已经被藏起来，写了也看不见。 */
   &.is-dragging {
-    position: relative;
-    z-index: 3;
     cursor: grabbing;
-    opacity: 0.92;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
   }
 
   /* 激活态 = 品牌色薄涂（与 `.git-tab` / `.wfp-tab` 同一套「品牌色 = 选中」语义）：

@@ -35,6 +35,8 @@ import {
   replacePageTab,
   replaceTabWith,
   serviceTabId,
+  serviceTab,
+  tabContentKey,
   tabDir,
   tabLabel,
   terminalTab,
@@ -251,6 +253,28 @@ it('标题与目录：兼容 Windows 反斜杠', () => {
   expect(tabLabel('E:/repo/src/a.ts')).toBe('a.ts')
   expect(tabDir('E:\\repo\\src\\a.ts')).toBe('E:/repo/src')
   expect(tabDir('a.ts')).toBe('')
+})
+
+/**
+ * 内容身份（`tabContentKey`）：拖标签到别的会话时判「是不是同一个东西」。
+ * ⚠️ **不含会话前缀** —— 拿标签 `id` 比的话，同一个文件在两个会话里会被当成两个东西，
+ * 拖过去就会在一桶里攒出两条（`openFileTab` 按路径找只认得到第一条，第二条再也点不到）。
+ */
+it('内容身份：与各 open*Tab 的去重口径一致，且不看会话前缀', () => {
+  expect(tabContentKey(fileTab('E:/repo/a.ts'))).toBe('file:E:/repo/a.ts')
+  expect(tabContentKey(terminalTab({ termId: 'term_1', sessionId: 's1', shell: 'pwsh', cwd: 'E:/', pid: 1 }))).toBe(
+    'terminal:term_1',
+  )
+  expect(tabContentKey(serviceTab({ sessionId: 's1', serviceId: 'svc_1', name: 'dev' }))).toBe(
+    'service:s1:svc_1',
+  )
+  expect(tabContentKey(browserTab({ seq: 3, url: 'https://a.com/' }))).toBe('browser:3')
+  expect(tabContentKey(pageTab('guide'))).toBe('guide')
+  expect(tabContentKey(pageTab('files'))).toBe('files')
+  // 前缀（宿主加的会话作用域）不影响身份：同一个文件在哪个会话里都是同一个东西
+  expect(tabContentKey({ ...fileTab('E:/repo/a.ts'), id: 's1\u0000file:E:/repo/a.ts' })).toBe(
+    tabContentKey(fileTab('E:/repo/a.ts')),
+  )
 })
 
 /** 重排（拖标签）：下标是「插入到最终位置」，与拖拽落点算法同口径 */

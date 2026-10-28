@@ -12,6 +12,9 @@
  *    开始页 / 文件树，加一种 kind 只加 `renderTab()` 的一支；
  * 5. **标签可拖拽换顺序**：顺序归宿主（`tabs` 是它的 state），容器只在拖动中就地预览，
  *    松手时用 `onMoveTab(id, toIndex)` 上报一次 —— 两边同一个下标口径（`tabs.ts::moveTab`）。
+ *    **拖到侧栏的会话项上 = 把标签转移给那个会话**（`onTransferTab`）：
+ *    落点判定在 `sidebar/session-drop.ts`（按会话行的 rect 命中，不走 HTML5 DnD），
+ *    拖出标签栏且不落在会话行上 = 取消（标签回原位，什么都不做）。
  * 6. **标签属于会话，不属于窗口**：宿主按会话分桶（`sessions.ts`），切会话只是换一桶；
  *    别的会话的标签通过 `parkedTabs` 交给这里**一直挂着**（内容不卸载、也不进标签栏）——
  *    所以「收起 / 切会话不清状态」不是靠缓存，而是靠它们从来没被摘下来过。
@@ -62,6 +65,11 @@ import { tabDisplayName } from './tab-title'
 import { paneSessionIdOf, type OtherSessionTabs } from './sessions'
 import { freezeChatWidth } from './chat-freeze'
 import { wheelScrollLeft } from './tab-scroll'
+import {
+  highlightSessionDrop,
+  registerDropArea,
+  sessionDropHitAt,
+} from '../sidebar/session-drop'
 import { useNativeDropTarget } from '@/ui/hooks/useNativeFileDrop'
 import './style.scss'
 
@@ -88,6 +96,11 @@ interface Props {
   onCloseTab: (id: string) => void
   /** 把标签 `id` 挪到第 `toIndex` 位（拖动松手时上报一次；不传则标签不可拖） */
   onMoveTab?: (id: string, toIndex: number) => void
+  /**
+   * 把标签 `id` 转移给另一个会话（拖着标签丢到侧栏的会话项上；标签状态归宿主）。
+   * 不传 = 标签只能在本会话里换顺序。
+   */
+  onTransferTab?: (id: string, sessionId: string) => void
   /**
    * 把一个**预览位**的文件标签升级成常驻（双击标签 / 改动草稿两条路）。
    * 标签状态归宿主，所以这里只上报；不传 = 双击不升级（预览位只能靠宿主自己的风控口径留不住）。
@@ -148,6 +161,11 @@ const DEFAULT_WIDTH = 560
 const CHAT_MIN_WIDTH = 450
 /** 鼠标移动超过这么多像素才算「拖标签」（否则还是一次点击） */
 const DRAG_THRESHOLD = 4
+/**
+ * 标签栏竖向的「还算在栏内」余量（px）：按下后手抖着往上 / 往下偏一点不该被当成
+ * 「离开标签栏 → 取消换顺序」。横向不给余量 —— 横向出栏就是「要交给左边的会话」。
+ */
+const STRIP_SLACK = 24
 /** 拖完松手后多久内到达的 click 算「拖动的尾巴」（浏览器把它紧跟在 mouseup 后面发） */
 const CLICK_AFTER_DRAG_MS = 400
 /** 没有别的会话挂着标签时的空表（共享一份，避免每次渲染换引用） */
@@ -203,6 +221,7 @@ function SidePanel({
   onCloseTab,
   onCloseTabs,
   onMoveTab,
+  onTransferTab,
   onPinTab,
   onDirtyChange,
   onExpandedChange,
@@ -743,6 +762,9 @@ function SidePanel({
 
   /** 标签栏本体：滚轮横向滚动挂在它上面 */
   const tabsRef = useRef<HTMLDivElement>(null)
+  // 标签栏也是落点：拖**会话徒标**上来 = 把那批标签搬进当前会话
+  //（命中判定在 `sidebar/session-drop.ts`，拖动在 `sidebar/session-badge-drag.ts`）
+  useEffect(() => registerDropArea('tabbar', () => tabsRef.current), [])
   /**
    * 激活的标签滚进可视区：标签一多标签栏会横向滚，开一个新文件时
    * 它可能刚落在视野外（点标签本身不需要，但双击文件 / 已开着再点一下就靠它）。
@@ -779,118 +801,233 @@ function SidePanel({
     /** 按下时的下标（也是初始落点） */
     from: number
     startX: number
-    /** 指针在标签内的横向位置：拖动时这个点一直跟着指针 */
-    grabOffset: number
+    startY: number
+    /** 抓握点（指针相对标签左上角）：浮层按它摆位，抓哪儿就一直抓哪儿 */
+    grabX: number
+    grabY: number
     target: number
     moved: boolean
     /** 拖动开始时「其他标签」的中线 x（快照，不随重排变动） */
     others: number[]
-    /** 已经写到元素上的 translateX（用来把视觉位置换算回布局位置） */
-    applied: number
-    /** 最后一次鼠标 x：重排落地后要用它再校正一次 */
-    lastX: number
+    /** 跟着指针走的那一份（挂在 body 上的克隆，见 `raiseGhost`）；未越过阈值时是 null */
+    ghost: HTMLElement | null
+    /** 浮层克隆自哪个标签元素：松手要把它的「留空」还原（`visibility`） */
+    host: HTMLElement | null
+    /** 指针此刻压在哪个会话行上（值 = 会话 id）；`null` = 不在任何行上 */
+    dropSessionId: string | null
   } | null>(null)
   /** 拖完松手那一次 click 是拖动的尾巴：只吞「同一个标签 + 短窗口内」的那一下（自己会过期，不残留） */
   const suppressClickRef = useRef<{ id: string; until: number } | null>(null)
 
   /**
-   * 让被拖的标签跟住指针：视觉左边缘 = 指针 - 抓握偏移。
+   * 让浮层跟住指针（**横向纵向都跟**）：浮层左上角 = 指针 - 抓握点。
    *
-   * 位移是**直接写元素 style**的，不走 state：每帧 setState 会让整个面板（含编辑器）重渲染，
-   * 拖起来一跳一跳的。重排后布局位置变了，靠「视觉位置 - 已写位移」反算当前布局位置再重算，
-   * 所以标签始终贴在指针上（不会因为换了一格而顺着旧位移滑一下）。
+   * 为什么不在标签本体上写 `translate`：`.side-panel-tabs` 是 `overflow-x: auto` +
+   * `overflow-y: hidden`（横向滚动条的另一半），纵向位移会被裁掉 —— 拖到左侧栏的会话行时
+   * 标签只能横着滑、上下不动，看着像「它还赖在标签栏里」。所以跟着指针的那一份是挂在
+   * `body` 上的克隆（`raiseGhost`，`position: fixed`），不受标签栏裁切。
+   *
+   * 位移直接写元素 style：每帧 setState 会让整个面板（含编辑器）重渲染，拖起来一跳一跳的。
+   * 浮层是 fixed 的、与标签栏重排无关，所以也不存在「换了一格要重新校正位移」那回事。
    */
-  function followPointer(state: { id: string; grabOffset: number; applied: number }, clientX: number): void {
-    const el = tabRefs.current.get(state.id)
-    if (!el) return
-    const layoutLeft = el.getBoundingClientRect().left - state.applied
-    const next = Math.round(clientX - state.grabOffset - layoutLeft)
-    if (next === state.applied) return
-    state.applied = next
-    el.style.transform = `translateX(${next}px)`
+  function followPointer(
+    state: { ghost: HTMLElement | null; grabX: number; grabY: number },
+    clientX: number,
+    clientY: number,
+  ): void {
+    const ghost = state.ghost
+    if (!ghost) return
+    ghost.style.transform = `translate3d(${Math.round(clientX - state.grabX)}px, ${Math.round(
+      clientY - state.grabY,
+    )}px, 0)`
   }
 
   /**
-   * 拖标签换顺序。用鼠标事件而不是 HTML5 拖拽：`dragDropEnabled: true`（拖文件进输入框要真实路径，
+   * 越过拖动阈值时把标签「拿起来」：克隆一份挂到 `body` 上（`position: fixed`，跟着指针走），
+   * 本体留在标签栏里但 `visibility: hidden` —— 格子还在（邻居按落点重排的预览照旧），
+   * 空出来的那一格就是「松手会落在这儿」。
+   *
+   * 为什么克隆而不是另画一个：图标 / 文件名 / 脏点 / 预览位的斜体全在标签本体里，
+   * 克隆一份与手上拿的完全一致，也不必为浮层再维护一套样式（只多一个 `.is-tab-ghost`）。
+   * 纯视觉：`pointer-events: none` + `inert`，不抢鼠标、不进 Tab 序列、读屏也不念。
+   */
+  function raiseGhost(state: NonNullable<typeof dragStateRef.current>): void {
+    const el = tabRefs.current.get(state.id)
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const ghost = el.cloneNode(true) as HTMLElement
+    // `is-dragging` 是给「栏里那个空格子」用的状态类（内含 position / 阴影），浮层不要
+    ghost.classList.remove('is-dragging')
+    ghost.classList.add('is-tab-ghost')
+    ghost.setAttribute('aria-hidden', 'true')
+    ghost.setAttribute('inert', '')
+    ghost.style.width = `${rect.width}px`
+    ghost.style.height = `${rect.height}px`
+    document.body.appendChild(ghost)
+    state.ghost = ghost
+    state.host = el
+    // 抓握点：按下那一刻指针在标签内的位置（否则浮层会「跳一下」把左上角贴到指针上）
+    state.grabX = state.startX - rect.left
+    state.grabY = state.startY - rect.top
+    // 本体留空当落点：`visibility` 而不是 `display` —— 格子必须还在，否则邻居会挤过来
+    el.style.visibility = 'hidden'
+  }
+
+  // 卸载兜底：拖动途中面板被卸掉时，浮层不能留在 body 上
+  useEffect(() => {
+    return () => {
+      dragStateRef.current?.ghost?.remove()
+      dragStateRef.current = null
+    }
+  }, [])
+
+  /**
+   * 拖标签：**在标签栏里 = 换顺序**，**丢到侧栏会话项上 = 把这个标签转移给那个会话**。
+   *
+   * 用鼠标事件而不是 HTML5 拖拽：`dragDropEnabled: true`（拖文件进输入框要真实路径，
    * 见 §11.8）时页面收不到 HTML5 drag / drop，`draggable` 在这里根本不触发。
    *
-   * 落点只看**开始拖那一刻**的中线快照：用实时 DOM 中线的话，标签一重排中线跟着跑，
-   * 指针停在两格之间就会来回跳。
+   * 五条口径：
+   * 1. 换顺序的落点只看**开始拖那一刻**的中线快照：用实时 DOM 中线的话，标签一重排中线跟着跑，
+   *    指针停在两格之间就会来回跳；
+   * 2. **指针离开标签栏就不再算换顺序**（落点退回原位）：往左拖明明是「要交给别的会话」，
+   *    若仍按 x 算，松手会把标签踢到最前面（所有中线都在指针右边 → 下标 0）；
+   *    —— 拖出标签栏又没落在会话行上 = 取消（标签回原位，什么都不做）；
+   * 3. 会话行落点由 `sidebar/session-drop.ts` 判（按会话行的 rect 命中：拖起来的那一份（浮层）
+   *    永远压在指针下，`elementFromPoint` 那类做法得先把它排掉才能用；而“收起分组里隐形行”
+   *    那种隐形重叠只有 rect 才查得出来，见该文件的口径 ⑤）；
+   * 4. **自己的会话行不算落点**（也不高亮）：「转移给自己」没有意义，亮了却什么都不发生更像坏了；
+   * 5. **拿起来的是浮层（body 上的克隆），本体只留一个空格**：标签栏 `overflow-y: hidden`，
+   *    在栏内写的纵向位移会被裁掉（见 `raiseGhost` / `followPointer`）。
    */
   const startTabDrag = (event: React.MouseEvent, tab: SidePanelTab) => {
-    if (event.button !== 0 || !onMoveTab || tabs.length < 2) return
+    if (event.button !== 0) return
     // 关标签那颗 × 上按下不是拖标签
     if ((event.target as HTMLElement).closest('.side-panel-tab-close')) return
+    // 一个落点也没有（既不能换顺序也不能转移）→ 干脆不开始
+    if (!onMoveTab && !onTransferTab) return
     const from = tabs.findIndex((item) => item.id === tab.id)
     if (from < 0) return
     const rects = tabs.map((item) => ({
       id: item.id,
       rect: tabRefs.current.get(item.id)?.getBoundingClientRect() ?? null,
     }))
-    const own = rects.find((item) => item.id === tab.id)?.rect ?? null
     const others = rects
       .filter((item) => item.id !== tab.id)
       .map((item) => (item.rect ? item.rect.left + item.rect.width / 2 : 0))
+    // 标签栏的范围在拖动的这几百毫秒里不会变（横向滚动跟着指针走的情况不存在）：开始时就量一次
+    const strip = tabsRef.current?.getBoundingClientRect() ?? null
+    const inStrip = (x: number, y: number) =>
+      !!strip &&
+      x >= strip.left &&
+      x <= strip.right &&
+      y >= strip.top - STRIP_SLACK &&
+      y <= strip.bottom + STRIP_SLACK
     dragStateRef.current = {
       id: tab.id,
       from,
       startX: event.clientX,
-      grabOffset: own ? event.clientX - own.left : 0,
+      startY: event.clientY,
+      grabX: 0,
+      grabY: 0,
       target: from,
       moved: false,
       others,
-      applied: 0,
-      lastX: event.clientX,
+      ghost: null,
+      host: null,
+      dropSessionId: null,
     }
 
     const onMove = (moveEvent: MouseEvent) => {
       const state = dragStateRef.current
       if (!state) return
       if (!state.moved) {
-        if (Math.abs(moveEvent.clientX - state.startX) < DRAG_THRESHOLD) return
+        // 横向纵向都算：往左下拖去某个会话行时，最前面几像素可能只有竖向位移
+        const passed =
+          Math.abs(moveEvent.clientX - state.startX) >= DRAG_THRESHOLD ||
+          Math.abs(moveEvent.clientY - state.startY) >= DRAG_THRESHOLD
+        if (!passed) return
         state.moved = true
         setDrag({ id: state.id, index: state.target })
         document.body.style.cursor = 'grabbing'
         document.body.style.userSelect = 'none'
+        // 拿起来：浮层跟着指针（本体留空当落点）
+        raiseGhost(state)
       }
-      state.lastX = moveEvent.clientX
-      // 落点 = 「中线在指针左边的其他标签」个数（= 取出被拖标签后的插入位置，也是最终下标）
-      const target = state.others.filter((center) => center < moveEvent.clientX).length
-      if (target !== state.target) {
-        state.target = target
-        setDrag({ id: state.id, index: target })
+      // ① 会话行落点（自己的会话行不算）
+      const hit = onTransferTab
+        ? sessionDropHitAt(moveEvent.clientX, moveEvent.clientY)
+        : null
+      const dropSessionId = hit && hit.sessionId !== sessionId ? hit.sessionId : null
+      state.dropSessionId = dropSessionId
+      // 每帧调（换行才动 DOM）：行内重渲染会把我们写上的类抹掉，这里顺手补齐
+      highlightSessionDrop(dropSessionId ? hit!.row : null)
+      // 压在会话行上时浮层半透明：不然它（最宽 270px，行也就这么宽）会把
+      // 「松手就落这一行」的高亮整个盖住，等于什么都没提示
+      state.ghost?.classList.toggle('is-over-session', !!dropSessionId)
+      // ② 落点只有三种：会话行 → 转移；标签栏内 → 换顺序；其余（拖着标签栏外遛）→ 取消
+      //   取消时把落点退回原位，否则松手会按**之前**在栏内算出的下标落库
+      if (dropSessionId) {
+        if (state.target !== state.from) {
+          state.target = state.from
+          setDrag(null)
+        }
+      } else if (inStrip(moveEvent.clientX, moveEvent.clientY)) {
+        // 落点 = 「中线在指针左边的其他标签」个数（= 取出被拖标签后的插入位置，也是最终下标）
+        const target = state.others.filter((center) => center < moveEvent.clientX).length
+        if (target !== state.target) {
+          state.target = target
+          setDrag({ id: state.id, index: target })
+        }
+      } else if (state.target !== state.from) {
+        state.target = state.from
+        setDrag(null)
       }
-      followPointer(state, moveEvent.clientX)
+      followPointer(state, moveEvent.clientX, moveEvent.clientY)
     }
     const onUp = () => {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
+      window.removeEventListener('blur', onCancel)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
       const state = dragStateRef.current
       dragStateRef.current = null
       setDrag(null)
+      // 拖动中的提示一律收掉：不管这次拖动算不算数
+      highlightSessionDrop(null)
+      // 浮层只是拖动中的视觉效果：先收掉浮层，再让本体回到自己的格子
+      state?.ghost?.remove()
+      if (state?.host) state.host.style.visibility = ''
       if (!state || !state.moved) return
-      // 位移只是拖动中的视觉效果：松手后标签回到它自己的格子里
-      const el = tabRefs.current.get(state.id)
-      if (el) el.style.transform = ''
       // 用时钟窗口而不是永久标志：click 未如期到达（松手时指针不在标签上）也不会吞掉下一次点击
       suppressClickRef.current = { id: state.id, until: performance.now() + CLICK_AFTER_DRAG_MS }
-      // 没换位置就别惊动宿主
+      // 落在会话行上 → 转移（标签状态归宿主）；否则回落成换顺序（没换位置就不惊动宿主）
+      if (state.dropSessionId) {
+        onTransferTab?.(state.id, state.dropSessionId)
+        return
+      }
       if (state.target !== state.from) onMoveTab?.(state.id, state.target)
+    }
+    /**
+     * 窗口失焦（Alt+Tab / 弹窗抢焦点）时 `mouseup` 可能永远不来：收尾成**取消**。
+     * 不收的话浮层会一直黏在屏幕上（它挂在 body 上，不归任何 React 树管）。
+     */
+    const onCancel = () => {
+      const state = dragStateRef.current
+      if (state) {
+        state.dropSessionId = null
+        state.target = state.from
+      }
+      onUp()
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
+    window.addEventListener('blur', onCancel)
   }
 
   // 拖动中按落点就地重排（松手时宿主落同一份顺序），用户不用等松手才看到结果
   const arranged = drag ? moveTab(tabs, drag.id, drag.index) : tabs
-
-  // 重排落地后按新布局再校正一次位移：否则标签会「跳一整格」到下一帧才被拉回指针（layout effect = 上屏前）
-  useLayoutEffect(() => {
-    const state = dragStateRef.current
-    if (drag && state) followPointer(state, state.lastX)
-  }, [drag])
 
   /**
    * 内容块的渲染顺序 = **打开顺序**，与标签顺序解耦。

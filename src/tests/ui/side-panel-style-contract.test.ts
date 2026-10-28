@@ -168,6 +168,32 @@ describe('右侧面板容器 · 样式契约', () => {
   })
 
   /**
+   * 拖着标签的那一份是挂在 `body` 上的浮层：
+   * ① 标签栏是 `overflow-x: auto` + `overflow-y: hidden`（横向滚动的另一半），纵向位移在**栏里**
+   *    一定会被裁掉 —— 所以浮层必须 `position: fixed`（否则拖到左侧栏时标签只横着滑，上下不动）；
+   * ② 浮层压在指针下面：必须 `pointer-events: none`，否则落点判定 / 悬停全被它挡住；
+   * ③ 层级要高过侧栏与面板（但不该盖住 Modal / Toast 那一档）。
+   */
+  it('拖动浮层：fixed + 不吃事件 + 高过面板（否则纵向位移会被标签栏裁掉）', () => {
+    // 浮层是**通用**类（拖右侧栏标签 / 拖侧栏会话徒标共用），不带 `.side-panel-tab` 前缀
+    const ghost = /\.is-tab-ghost\s*\{([^}]*)\}/.exec(panelCss)?.[1]
+    expect(ghost, '浮层规则').toBeTruthy()
+    expect(ghost).toContain('position: fixed')
+    expect(ghost).toContain('pointer-events: none')
+    expect(ghost).toMatch(/z-index:\s*([2-9]\d{2,}|\d{4,})/)
+    // 标签栏仍然裁纵向：这正是「浮层必须在 body 上」的因，删了这条注释就变成过度设计
+    const tabs = /\.side-panel-tabs\s*\{([^}]*)\}/.exec(panelCss)?.[1]
+    expect(tabs).toContain('overflow-y: hidden')
+  })
+
+  /** 拖会话徒标到标签栏上：整条栏要亮（不然不知道能不能放） */
+  it('标签栏落点有高亮规则（拖会话徒标上来时）', () => {
+    const rule = /\.side-panel-tabs\.is-drop-target\s*\{([^}]*)\}/.exec(panelCss)?.[1]
+    expect(rule, '标签栏落点规则').toBeTruthy()
+    expect(rule).toContain('background')
+  })
+
+  /**
    * 预览位（临时标签）靠斜体告知「下一个文件会顶掉我」。
    * ⚠️ 这里钉的是「斜体真的画得出来」：
    * - `font-style: italic` 在本项目完全无效（字体无 italic 字面 + `App.css` 关掉了合成斜体）；

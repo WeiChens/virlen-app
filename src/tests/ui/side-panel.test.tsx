@@ -13,8 +13,10 @@
  *    用户拖过之后不再自动改回来；拖宽**没有固定上限**，最多拖到面板占满（上限 = 可用宽度）；
  *    宽度过渡期间还要把消息列表的宽度**钉在终值**（`chat-freeze.ts`，否则面板一动内容就跟着一帧一折行）；
  * 5. **占满**：可用宽度连「最小面板 + 450」都放不下时面板铺满并通知宿主藏起聊天区，卸载时恢复；
- * 6. **拖标签换顺序**：用鼠标事件（HTML5 拖拽在 `dragDropEnabled: true` 下收不到，§11.8），
- *    被拖的标签跟着指针（内联 `transform`），拖动中就地预览、松手才上报一次最终下标
+ * 6. **拖标签换顺序 / 转移**：用鼠标事件（HTML5 拖拽在 `dragDropEnabled: true` 下收不到，§11.8），
+ *    越过阈值后把标签「拿起来」——克隆一份挂到 `body` 上当浮层（`position: fixed`，横纵都跟指针），
+ *    本体 `visibility: hidden` 留在标签栏里当落点空格（标签栏是 `overflow-y: hidden`，纵向位移在栏里会被裁掉）；
+ *    拖动中就地预览、松手才上报一次最终下标或一次转移
  *    （下标口径见 `tabs.ts::moveTab`）；**内容块按打开顺序排，不跟着标签排序** —— 挪 DOM 会重连
  *    子树的 effect，`@monaco-editor/react` 会把编辑器误 dispose 再 `setModel` 上去。
  * 7. **别的会话的标签靠 `parkedTabs` 一直挂着**（不显示、不进标签栏）：切会话不清状态的
@@ -39,6 +41,7 @@ import {
   type SidePanelTab,
 } from '@/ui/pages/chat/components/side-panel/tabs'
 import { scopeTabs } from '@/ui/pages/chat/components/side-panel/sessions'
+import { dropAreaHitAt, registerSessionDropList } from '@/ui/pages/chat/components/sidebar/session-drop'
 
 const { messageBoxMock } = vi.hoisted(() => ({ messageBoxMock: vi.fn() }))
 
@@ -161,6 +164,8 @@ const closedIds: string[] = []
 const closedBatches: string[][] = []
 /** 拖标签换顺序：松手时上报的（id, 最终下标） */
 const movedTabs: [string, number][] = []
+/** 拖标签到侧栏会话项上：松手时上报的（标签 id, 目标会话 id） */
+const transferredTabs: [string, string][] = []
 /** 标签右键「刷新」：转发到了哪个面板（记路径） */
 const reloadCalls: string[] = []
 /** 预览位升级成常驻：上报了哪些标签 id */
@@ -179,6 +184,9 @@ function onCloseTabs(ids: string[]) {
 }
 function onMoveTab(id: string, toIndex: number) {
   movedTabs.push([id, toIndex])
+}
+function onTransferTab(id: string, sessionId: string) {
+  transferredTabs.push([id, sessionId])
 }
 function onPinTab(id: string) {
   pinnedIds.push(id)
@@ -235,6 +243,8 @@ async function renderPanel(
     parked?: SidePanelTab[]
     sessionId?: string
     collapsed?: boolean
+    /** 传了才能把标签拖到侧栏会话项上（`onTransferTab`） */
+    transfer?: boolean
   } = {},
 ) {
   if (!root) {
@@ -260,6 +270,8 @@ async function renderPanel(
           // 不传时容器退化为逐个 onCloseTab（保留既有用例的断言口径）
           onCloseTabs={opts.batch ? onCloseTabs : undefined}
           onMoveTab={onMoveTab}
+          // 拖着标签丢到侧栏会话项上（落点由 `sidebar/session-drop.ts` 判）
+          onTransferTab={opts.transfer ? onTransferTab : undefined}
           // 双击标签 / 改草稿 → 升级成常驻（预览位口径）
           onPinTab={onPinTab}
           onDirtyChange={onDirtyChange}
@@ -273,8 +285,12 @@ async function renderPanel(
 }
 
 const panel = () => document.querySelector('.side-panel') as HTMLElement
+/** 标签栏里的标签（⚠️ 不含拖动浮层：浮层也带 `.side-panel-tab`，但它挂在 body 上） */
 const tabsEls = () =>
-  [...document.querySelectorAll<HTMLElement>('.side-panel-tab')]
+  [...document.querySelectorAll<HTMLElement>('.side-panel-tabs .side-panel-tab')]
+/** 拖动中的浮层（克隆的标签本体，跟着指针走） */
+const dragGhost = () =>
+  document.querySelector<HTMLElement>('.side-panel-tab.is-tab-ghost')
 const panes = () => [...document.querySelectorAll<HTMLElement>('.side-panel-pane')]
 const stub = (path: string) =>
   document.querySelector<HTMLElement>(`.workspace-file-panel[data-path="${path}"]`)
@@ -313,10 +329,16 @@ async function clickMenu(label: string) {
 
 beforeAll(() => {
   Element.prototype.getBoundingClientRect = function (this: Element) {
-    // 标签在 jsdom 里没布局：按「第几个」给假矩形（宽 100 + 间距 2），拖拽用例靠它算中线
+    // 标签在 jsdom 里没布局：按「第几个」给假矩形（宽 100 + 间距 2），拖拽用例靠它算中线。
+    // ⚠️ 只数标签栏里的（浮层也带 `.side-panel-tab`，它在 body 上）
     if (this.classList.contains('side-panel-tab')) {
-      const index = [...document.querySelectorAll('.side-panel-tab')].indexOf(this)
+      const index = [...document.querySelectorAll('.side-panel-tabs .side-panel-tab')].indexOf(this)
       if (index >= 0) return fakeRect(index * 102, 100)
+    }
+    // 标签栏 = 所有标签的假矩形的整体范围：拖出这个范围就不再算「换顺序」（见 startTabDrag 口径 2）
+    if (this.classList.contains('side-panel-tabs')) {
+      const count = document.querySelectorAll('.side-panel-tabs .side-panel-tab').length
+      return fakeRect(0, count * 102)
     }
     if (!layout) return realRect.call(this)
     const { available, inset } = layout
@@ -337,6 +359,7 @@ beforeEach(() => {
   closedIds.length = 0
   closedBatches.length = 0
   movedTabs.length = 0
+  transferredTabs.length = 0
   reloadCalls.length = 0
   pinnedIds.length = 0
   dirtyReports.length = 0
@@ -796,16 +819,25 @@ it('拖标签换顺序：拖动中就地重排，松手时上报最终下标', a
   expect(names()).toEqual(['b.ts', 'c.ts', 'a.ts'])
   const dragged = tabsEls()[2]
   expect(dragged.classList.contains('is-dragging')).toBe(true)
-  // 标签跟着指针：位移直接写在元素 style 上，布局格子留在原处当「洞」
-  expect(dragged.style.transform).toContain('translateX(')
+  // 跟着指针的那一份是挂在 body 上的克隆：标签栏是 `overflow-y: hidden`，纵向位移在栏里会被裁掉
+  expect(dragGhost()).not.toBeNull()
+  expect(dragged.style.visibility).toBe('hidden')
+  expect(dragGhost()!.style.transform).toContain('translate3d(')
+
+  // 横纵都跟：抓握点被按住，指针走多远浮层就走多远（抓握点 = 按下时指针在标签内的位置）
+  await act(async () => {
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: 300, clientY: 240 }))
+  })
+  expect(dragGhost()!.style.transform).toBe('translate3d(250px, 240px, 0)')
 
   await act(async () => {
     document.dispatchEvent(new MouseEvent('mouseup'))
   })
   expect(movedTabs).toEqual([[TAB_A.id, 2]])
   expect(dragged.classList.contains('is-dragging')).toBe(false)
-  // 松手后标签回到自己的格子（位移只是拖动中的视觉效果）
-  expect(dragged.style.transform).toBe('')
+  // 松手后浮层收掉、本体回到自己的格子
+  expect(dragGhost()).toBeNull()
+  expect(dragged.style.visibility).toBe('')
 
   // 宿主按上报的下标落库后重渲染：顺序保持（容器不在松手后自己回弹）
   await renderPanel([TAB_B, TAB_C, TAB_A], TAB_A.id)
@@ -817,6 +849,136 @@ it('拖标签换顺序：拖动中就地重排，松手时上报最终下标', a
   // 别的标签不受影响，照常激活
   act(() => tabsEls()[0].querySelector<HTMLButtonElement>('.side-panel-tab-btn')!.click())
   expect(activeChanges).toEqual([TAB_B.id])
+})
+
+/**
+ * 拖动中窗口失焦（Alt+Tab / 弹窗抢焦点）：`mouseup` 可能永远不来。
+ * 不收尾的话浮层（挂在 body 上、不归 React 树管）会一直黏在屏幕上。
+ */
+it('拖动中失焦：浮层收掉、什么都不上报', async () => {
+  await renderPanel([TAB_A, TAB_B], TAB_A.id, { transfer: true, sessionId: 'sess-1' })
+  const draggedEl = tabsEls()[0]
+
+  await act(async () => {
+    draggedEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 50 }))
+  })
+  await act(async () => {
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: 300 }))
+  })
+  expect(dragGhost()).not.toBeNull()
+  expect(draggedEl.style.visibility).toBe('hidden')
+
+  await act(async () => {
+    window.dispatchEvent(new Event('blur'))
+  })
+  expect(dragGhost()).toBeNull()
+  expect(draggedEl.style.visibility).toBe('')
+  expect(draggedEl.classList.contains('is-dragging')).toBe(false)
+  // 失焦 = 取消：不重排也不转移
+  expect(movedTabs).toEqual([])
+  expect(transferredTabs).toEqual([])
+})
+
+/**
+ * 标签栏也是落点：拖左侧栏的会话徒标上来 = 把那批标签整批搬进**当前**会话。
+ * 容器得把自己的标签栏登记进去（`registerTabStrip`），否则拖上来永远命中不到。
+ */
+it('标签栏被登记为落点（拖会话徽标用）', async () => {
+  await renderPanel([TAB_A], TAB_A.id)
+  const strip = document.querySelector('.side-panel-tabs') as HTMLElement
+  const rect = strip.getBoundingClientRect()
+  expect(rect.width).toBeGreaterThan(0)
+  expect(dropAreaHitAt('tabbar', rect.left + 1, rect.top + 1)).toBe(true)
+  expect(dropAreaHitAt('tabbar', rect.right + 50, rect.top + 1)).toBe(false)
+})
+
+/** 造一个假侧栏会话列表（一行会话），返回那一行与注销函数 */
+function fakeSessionList(sessionId: string): { list: HTMLElement; row: HTMLElement; dispose: () => void } {
+  const list = document.createElement('div')
+  list.className = 'session-list'
+  const rowEl = document.createElement('div')
+  rowEl.className = 'session-item'
+  rowEl.setAttribute('data-session-row', sessionId)
+  list.appendChild(rowEl)
+  document.body.insertBefore(list, document.body.firstChild)
+  list.getBoundingClientRect = () => fakeRect(0, 200)
+  rowEl.getBoundingClientRect = () =>
+    ({
+      left: 0,
+      right: 200,
+      top: 0,
+      bottom: 24,
+      width: 200,
+      height: 24,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }) as DOMRect
+  return { list, row: rowEl, dispose: registerSessionDropList(() => list) }
+}
+
+/**
+ * 拖到侧栏的会话项上 = 把这个标签转移给那个会话（`onTransferTab`，标签状态归宿主）。
+ * 四条：会话行命中**优先于**换顺序（指针在最左也不会把标签踢到最前面）；
+ * 只有落点那一行亮（其余行不描虚框）；松手只上报转移；拖动提示一律收掉。
+ */
+it('把标签拖到侧栏会话项上：只上报转移，不报重排', async () => {
+  const { list, row, dispose } = fakeSessionList('sess-2')
+  try {
+    await renderPanel([TAB_A, TAB_B, TAB_C], TAB_A.id, {
+      transfer: true,
+      sessionId: 'sess-1',
+    })
+
+    await act(async () => {
+      tabsEls()[0].dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 50 }))
+    })
+    await act(async () => {
+      document.dispatchEvent(new MouseEvent('mousemove', { clientX: 20, clientY: 10 }))
+    })
+    // 指针压在那一行上 → 就那一行亮（不再给整个列表加「能放」的虚框），浮层淡下去
+    expect(row.classList.contains('tab-drop-target')).toBe(true)
+    expect(list.classList.contains('tab-drag-active')).toBe(false)
+    expect(document.querySelectorAll('.tab-drop-target')).toHaveLength(1)
+    expect(dragGhost()?.classList.contains('is-over-session')).toBe(true)
+
+    await act(async () => {
+      document.dispatchEvent(new MouseEvent('mouseup'))
+    })
+    expect(transferredTabs).toEqual([[TAB_A.id, 'sess-2']])
+    // 会话行不是「换顺序」的落点：指针在最左也不该把标签踢到下标 0
+    expect(movedTabs).toEqual([])
+    expect(row.classList.contains('tab-drop-target')).toBe(false)
+    expect(dragGhost()).toBeNull()
+  } finally {
+    dispose()
+    list.remove()
+  }
+})
+
+/** 自己的会话行不算落点（不能「转移给自己」）：不高亮、不转移，松手什么都不做 */
+it('拖到自己的会话项上：不亮、不转移', async () => {
+  const { row, dispose } = fakeSessionList('sess-1')
+  try {
+    await renderPanel([TAB_A, TAB_B], TAB_A.id, { transfer: true, sessionId: 'sess-1' })
+
+    await act(async () => {
+      tabsEls()[0].dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 50 }))
+    })
+    await act(async () => {
+      document.dispatchEvent(new MouseEvent('mousemove', { clientX: 20, clientY: 10 }))
+    })
+    expect(row.classList.contains('tab-drop-target')).toBe(false)
+
+    await act(async () => {
+      document.dispatchEvent(new MouseEvent('mouseup'))
+    })
+    expect(transferredTabs).toEqual([])
+    expect(movedTabs).toEqual([])
+  } finally {
+    dispose()
+    row.parentElement?.remove()
+  }
 })
 
 /**

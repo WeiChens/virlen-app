@@ -1723,6 +1723,8 @@
   "暂无运行中的后台服务": "No background service is running",
   "暂无已结束的后台服务": "No finished background services",
   "该服务已不在列表中": "This service is no longer in the list",
+  "该会话里已经打开了这个标签": "This tab is already open in that conversation",
+  "这些标签都已经在目标会话里打开了": "These tabs are all already open in that conversation",
   "已终止 $__name__": "Stopped $__name__",
   "已向 $__name__ 发出终止信号，尚未确认退出": "Sent a stop signal to $__name__, but it has not exited yet",
   "操作失败": "Operation failed",

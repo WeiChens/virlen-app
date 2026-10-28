@@ -7,6 +7,10 @@
  * ① 工具结果到达（自动打开，见 `services/chat/event-handler.ts`）；
  * ② 工具卡片里点文件名 / 网址（再打开一次；标签已存在就只是切过去）。
  *
+ * ⚠️ 触发①**带着归属会话**（`sessionId`）：右侧栏是按会话分桶的（`side-panel/sessions.ts`），
+ * 标签该落进「跑出这次交付的那个会话」那一桶 —— 用户当时可能正看着别的会话或新对话页，
+ * 不然交付就白交了。落桶与「换桶」由宿主的 `panelKeyOf(sessionId)` 决定，本文件不判断。
+ *
  * ⚠️ `uiData.type = "present"` / `files[].path` / `links[].url` 是与 Rust
  * `native_tools/file/present.rs` 逐字对齐的契约（铁律 1）—— 改一边必须同步另一边
  *（TS 回退执行器 `infrastructure/tools/file/present.ts` 也是同一份形状），
@@ -18,6 +22,17 @@ import type { Message } from '@/types'
 export interface PresentedPayload {
   paths: string[]
   urls: string[]
+  /**
+   * 这次交付**归属的会话**（`present` 的工具结果是哪个会话跑出来的）。
+   *
+   * 交付要落进**它自己那一桶**右侧栏，不能落进「用户此刻眼前那一桶」——
+   * 后台会话跑完时用户可能正看着别的会话 / 新对话页，按当前会话一刀切
+   * 就等于把交付静悄悄丢了（切回去还得自己在卡片里点一遍）。
+   *
+   * 缺席 = 「就是眼前这个会话」：消息卡片里再点一次那条路（`PresentMessage`）
+   * 不需要带 —— 卡片只会在它自己的会话里渲染。
+   */
+  sessionId?: string
 }
 
 /** 打开右侧面板标签的实现（由 chat-view 注入；它独占标签状态） */
@@ -82,6 +97,8 @@ export function revealPresented(payload: PresentedPayload): boolean {
   const paths = payload?.paths ?? []
   const urls = payload?.urls ?? []
   if (paths.length === 0 && urls.length === 0) return false
-  handler({ paths: [...paths], urls: [...urls] })
+  const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : ''
+  // 归属会话原样透传（空 = 没指定，宿主按当前会话落桶）；这里不猜、也不替宿主挑
+  handler({ paths: [...paths], urls: [...urls], ...(sessionId ? { sessionId } : {}) })
   return true
 }

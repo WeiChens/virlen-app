@@ -35,6 +35,20 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+
+    /* 拖着侧栏会话的徒标压在聊天区上：整块透一层品牌色 + 描一圈（松手 = 把那批标签
+       搬进当前会话）。类由 `sidebar/session-badge-drag.ts` 在鼠标事件里直接写 DOM
+       （拖动中每帧都问落点，走 React state 会刷帧），所以只能按类名写样式。
+       用 `::after` 而不是 `box-shadow: inset`：后者会被子元素的背景盖住。 */
+    &.is-drop-target::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      z-index: 6;
+      pointer-events: none;
+      background: color-mix(in srgb, var(--accent-color, #4f46e5) 8%, transparent);
+      box-shadow: inset 0 0 0 2px var(--accent-color, #4f46e5);
+    }
   }
 
   /* 右侧文件面板占满（聊天区会被压到不足 300px）：聊天区先不显示，回来再显示 */

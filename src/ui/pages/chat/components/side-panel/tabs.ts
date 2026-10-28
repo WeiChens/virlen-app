@@ -140,6 +140,28 @@ export function isPreviewTab(tab: SidePanelTab): boolean {
   return tab.kind === 'file' && tab.pinned !== true
 }
 
+/**
+ * 标签的**内容身份**（跳会话时用来比「是不是同一个东西」）。
+ *
+ * 与各 `open*Tab` 的去重口径一致：文件看路径、服务看「会话 + 服务 id」、终端看终端 id、
+ * 网页看自己的序号、页面看 kind。⚠️ **不含会话前缀** —— `id` 带着前缀（跨桶唯一），
+ * 拿 `id` 比会得出「同一个文件是两个东西」，把标签搬进别的会话时就会撇出两条重复的。
+ */
+export function tabContentKey(tab: SidePanelTab): string {
+  switch (tab.kind) {
+    case 'file':
+      return `file:${tab.path}`
+    case 'service':
+      return `service:${tab.sessionId}:${tab.serviceId}`
+    case 'terminal':
+      return `terminal:${tab.termId}`
+    case 'browser':
+      return `browser:${tab.seq}`
+    default:
+      return tab.kind
+  }
+}
+
 /** 服务终端标签的 id：会话 + 服务（服务 id 只在会话内唯一，跨会话会撞） */
 export function serviceTabId(sessionId: string, serviceId: string): string {
   return `service:${sessionId}:${serviceId}`

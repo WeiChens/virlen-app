@@ -55,11 +55,28 @@ describe('侧栏标签徽标：只给别的会话，且分「展开 / 收起」�
     expect(src).toMatch(/<button\s+type="button"\s+className=\{`session-panel-badge/)
   })
 
-  it('点徽标先拦住冒泡，再上报「切过去并展开」', () => {
-    const handler = /onClick=\{\(e\) => \{\s*e\.stopPropagation\(\)\s*onOpenSessionPanel\?\.\(session\.id\)\s*\}\}/.test(
-      src,
-    )
-    expect(handler).toBe(true)
+  it('点徽标先拦住冒泡，再上报「切过去并展开」；拖完那一下 click 不算打开', () => {
+    expect(src).toContain('e.stopPropagation()')
+    expect(src).toContain('if (badgeDragJustEnded()) return')
+    // 顺序是契约：先判「刚才在拖」，再打开面板
+    const suppress = src.indexOf('if (badgeDragJustEnded()) return')
+    const open = src.indexOf('onOpenSessionPanel?.(session.id)')
+    expect(suppress).toBeGreaterThan(-1)
+    expect(open).toBeGreaterThan(suppress)
+  })
+
+  /**
+   * 按住徽标可以拖：拖到**标签栏** = 把那一批搬进当前会话；拖到**另一个会话行** = 搬去那个会话。
+   * 落点判定 / 浮层都在 `sidebar/session-badge-drag.ts`（用例见 `session-badge-drag.test.ts`）。
+   */
+  it('按住徽标可拖：两个落点都接上，光标先说明「抓得起来」', () => {
+    expect(src).toContain('onMouseDown={(e) =>')
+    expect(src).toContain('startSessionBadgeDrag(e, {')
+    expect(src).toContain('fromSessionId: session.id')
+    // 拖到标签栏时目标就是「当前会话」（新对话页则是 null，由宿主用 panelKeyOf 解）
+    expect(src).toContain("target.kind === 'session' ? target.sessionId : chatState.value.currentSessionId")
+    expect(src).toContain('onTransferSessionTabs(')
+    expect(css).toMatch(/\.session-panel-badge \{[\s\S]*?cursor: grab/)
   })
 
   it('折叠分组头挂汇总（展开时每个会话行自己会说）', () => {
@@ -148,6 +165,29 @@ describe('chat-view 的接线：摘要来自唯一真相，跳转一次落地', 
     // 新对话页那一桶没有会话对象：标题给「新对话」，否则会显示成 `__new__`
     expect(chatView).toMatch(/key === NEW_PANEL_KEY\s*\? t\('新对话'\)/)
   })
+
+  it('徽标拖动 = 整批转移：走 `transferSessionTabs`（同内容不搬、部分成功也算搬成）', () => {
+    expect(chatView).toContain('const handleTransferSessionTabs = useCallback(')
+    expect(chatView).toContain('transferSessionTabs(')
+    expect(chatView).toContain('onTransferSessionTabs={handleTransferSessionTabs}')
+    // 全重复才提示一句（标签凭空不动才像拖坏了）
+    expect(chatView).toContain('这些标签都已经在目标会话里打开了')
+  })
+
+  /**
+   * 「搬进当前会话」的两块落点都得登记：标签栏（面板）与聊天区（聊天页）。
+   * 漏了聊天区那一条，用户就只能去命中 36px 高的标签栏；漏了标签栏，最精确的那个也没了。
+   */
+  it('两块「当前会话」落点都登记：面板登标签栏、聊天页登 chat-main', () => {
+    expect(chatView).toContain("registerDropArea('chat-main', () => chatMainRef.current)")
+    expect(chatView).toContain('ref={chatMainRef}')
+    const panel = readProjectFile('src/ui/pages/chat/components/side-panel/index.tsx')
+    expect(panel).toContain("registerDropArea('tabbar', () => tabsRef.current)")
+    // 聊天区的高亮是整块透一层（`::after`，内阴影会被子元素背景盖住）
+    const chatCss = sass.compileString(readProjectFile('src/ui/pages/chat/chat-view.scss')).css
+    expect(chatCss).toMatch(/\.chat-main\.is-drop-target::after \{/)
+    expect(chatCss).toMatch(/\.chat-main\.is-drop-target::after \{[\s\S]*?pointer-events: none/)
+  })
 })
 
 describe('新文案已登记（中文即 key）', () => {
@@ -157,6 +197,7 @@ describe('新文案已登记（中文即 key）', () => {
     '组内还有 $__count__ 个右侧栏标签页',
     '其他对话的标签页',
     '切到该对话并打开 $__name__',
+    '这些标签都已经在目标会话里打开了',
   ])('%s', (key) => {
     expect(en[key], `${key} 未登记到 en-US.json`).toBeTruthy()
   })

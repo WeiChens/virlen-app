@@ -115,11 +115,11 @@ export function createEventHandler(
         if (event.data?.message) {
           addSessionMessage(sessionId, event.data.message)
           events?.onMessagesUpdate?.(sessionId)
-          // `present`：交付文件 / 网址直接摊到右侧面板。⚠️ 只认「用户正看着的那个会话」——
-          // 后台会话的工具结果不该把标签页抢过去（切回去还能在卡片里点开）
-          if (chatState.value.currentSessionId === sessionId) {
-            revealPresented(presentedOf(event.data.message))
-          }
+          // `present`：交付文件 / 网址摊到右侧面板 —— 落进**这条结果所属会话**的那一桶
+          //（`sessionId` 必须带上）。以前按「当前会话」一刀切：用户正看着别的会话 / 新对话页时
+          // 交付就被静悄悄丢了。现在标签进它自己那一桶，侧栏徠标会亮，切回去就是打开着的样子
+          //（口径见 `services/present-service`）
+          revealPresented({ ...presentedOf(event.data.message), sessionId })
         }
         // 这次工具可能改了工作区文件 → 排期一次 git 状态刷新（防抖在 git-service）
         scheduleGitRefresh(sessionId)

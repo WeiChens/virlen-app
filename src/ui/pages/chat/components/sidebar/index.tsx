@@ -2,7 +2,7 @@
  * 侧边栏，三个页签：会话 / 工作目录 / 技能。搜索关键词挂在侧边栏一级（否则切页签回来就丢）。
  * 会话页签：working 指示、按 Agent 或工作目录分组、置顶、导出 Markdown、导入知识库。
  */
-import { useState, useMemo, useCallback, JSX } from 'react'
+import { useState, useMemo, useCallback, useEffect, useRef, JSX } from 'react'
 import { observer } from 'mobx-react-lite'
 import type { Session, Message } from '@/types'
 import { VISION_IMAGE_ROLE } from '@/types'
@@ -49,6 +49,8 @@ import ImportMessageList from './import-message-list'
 import { extractPlainText } from './session-text'
 import { filterSessionGroups } from './session-filter'
 import { foldGroupSessions } from './session-fold'
+import { registerSessionDropList, SESSION_ROW_ATTR } from './session-drop'
+import { badgeDragJustEnded, startSessionBadgeDrag } from './session-badge-drag'
 import {
   groupSessions,
   toggleGroupPin,
@@ -77,6 +79,13 @@ interface Props {
   panelTabs?: Record<string, PanelTabSummary>
   /** 点徽标：切到那个会话并展开它的右侧栏（宿主持有标签状态） */
   onOpenSessionPanel?: (sessionId: string) => void
+  /**
+   * 拖徽标：把那一个会话**开着的那批标签**整批搬到另一个会话。
+   *
+   * `toSessionId` 为 `null` = 新对话页（拖到标签栏、而当前还没建会话时）；归属由宿主按
+   * `panelKeyOf` 解（侧栏不持有分桶）。
+   */
+  onTransferSessionTabs?: (fromSessionId: string, toSessionId: string | null) => void
   style?: React.CSSProperties
   className?: string
 }
@@ -149,6 +158,7 @@ function ChatSidebar({
   onToggleSkill,
   panelTabs,
   onOpenSessionPanel,
+  onTransferSessionTabs,
   style,
   className = '',
 }: Props) {
@@ -164,6 +174,15 @@ function ChatSidebar({
   const [skillsQuery, setSkillsQuery] = useState('')
   /** 会话项右键菜单（共享 ContextMenu 负责外部关闭 / Esc / 视口钳制） */
   const sessionMenu = useContextMenu<Session>()
+  /**
+   * 会话列表容器：**拖动右侧栏标签时的落点**（`side-panel` 按会话行的 rect 命中，
+   * 见 `session-drop.ts`）。登记容器而不是逐行：列表重渲染 / 分组折叠 / 搜索过滤都不用重登记。
+   */
+  const sessionListRef = useRef<HTMLDivElement>(null)
+  useEffect(
+    () => registerSessionDropList(() => sessionListRef.current),
+    [],
+  )
 
   const [showImportModal, setShowImportModal] = useState(false)
   const [importSessionId, setImportSessionId] = useState<string | null>(null)
@@ -579,6 +598,8 @@ function ChatSidebar({
       <div
         key={session.id}
         className={`session-item ${isCurrent ? 'active' : ''} ${isBusy ? 'working' : ''} ${session.pinned ? 'pinned' : ''} ${session.archived ? 'archived' : ''}`}
+        // 拖动右侧栏标签时的落点标记：`sidebar/session-drop.ts` 按这个属性找行（值 = 会话 id）
+        {...{ [SESSION_ROW_ATTR]: session.id }}
         onClick={() => handleSelect(session.id)}
         // 右键即菜单：openAt 会 preventDefault + stopPropagation，顺带拦掉默认菜单
         onContextMenu={(e) => sessionMenu.openAt(e, session)}>
@@ -641,8 +662,22 @@ function ChatSidebar({
                 : tpl('右侧栏已收起，还有 $__count__ 个标签页', { count: panel.count })
             }
             // 徽标自带动作（切过去并展开面板），不能让整行那个「选中会话」再跑一遍
+            onMouseDown={(e) =>
+              // 按住就能拖：拖到标签栏 / 另一个会话行 = 把那批标签整批搬过去
+              onTransferSessionTabs &&
+              startSessionBadgeDrag(e, {
+                fromSessionId: session.id,
+                onDrop: (target) =>
+                  onTransferSessionTabs(
+                    session.id,
+                    target.kind === 'session' ? target.sessionId : chatState.value.currentSessionId,
+                  ),
+              })
+            }
             onClick={(e) => {
               e.stopPropagation()
+              // 拖完松手那一下不是「打开面板」
+              if (badgeDragJustEnded()) return
               onOpenSessionPanel?.(session.id)
             }}>
             <PanelRightSvg />
@@ -703,7 +738,7 @@ function ChatSidebar({
             placeholder={t('搜索对话标题…')}
           />
         )}
-        <div className="session-list">
+        <div className="session-list" ref={sessionListRef}>
           {groups.length > 0 ? (
             groups.map((group) => (
               <SessionGroupView

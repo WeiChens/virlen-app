@@ -332,7 +332,13 @@
         background: color-mix(in srgb, var(--primary, #4f46e5) 16%, transparent);
         border: none;
         border-radius: 999px;
-        cursor: pointer;
+        /* 可拖：拖到标签栏 / 另一个会话行 = 把那批标签搬过去（`session-badge-drag.ts`），
+           光标先告诉用户它是「抓得起来的」，点击仍然是「打开那个会话的面板」 */
+        cursor: grab;
+
+        &:active {
+          cursor: grabbing;
+        }
 
         /* `.session-item svg` 定了 18px / 次要色，徽标里的图标要比它小且继承徽标色 */
         svg {
@@ -1549,4 +1555,21 @@ body.is-tree-dragging {
   .tree-move-hint {
     margin: 0;
   }
+}
+
+/* ── 拖动时的落点提示（拖右侧栏标签 / 拖会话徒标共用）────────────────────
+   两个类都由 `sidebar/session-drop.ts` 在鼠标事件里**直接写到 DOM 上**（拖动期间每帧都要问
+   「指针在哪一行」，走 React state 会把侧栏刷成幻灯片），所以只能按类名写样式。
+
+   - `.tab-drop-target`（挂在指针压着的那一行上）：松手就落这一行；
+   - 标签栏的 `.is-drop-target` 在 `side-panel/style.scss`（拖徒标到标签栏 = 整批搬进当前会话）。
+
+   ⚠️ **只标落点那一行**，别给所有会话行描虚线圈（拖动时满屏都是框，反而看不清落点）。
+   ⚠️ 选择器必须写到 `.chat-sidebar .session-list ...` 这一级（0,4,0）：上面的
+   `.session-item:hover` 也是 0,4,0，靠「在后面」才盖得住它的底色。 */
+.chat-sidebar .session-list .session-item.tab-drop-target {
+  /* 实心高亮 + 实线描边：拖动中唯一的亮处，一眼就能看出会落到哪 */
+  background: color-mix(in srgb, var(--accent-color, #4f46e5) 16%, transparent);
+  outline: 1px solid var(--accent-color, #4f46e5);
+  outline-offset: -1px;
 }

@@ -15,6 +15,9 @@
  * 8. **「哪里还开着标签栏」可以外显**：`panelTabSummaries` 只做镜像（计数口径与工具栏徽标一致），
  *    开始页的「其他对话的标签页」由 `parkedBucketsOf` 分组，点一行靠 `withBucketActive`
  *    一次把「展开 + 激活」落地。
+ * 9. **标签能从一桶搬到另一桶**（标签栏拖到侧栏会话项上，`transferTab`）：`id` / 会话字段
+ *    一个字不改（草稿 / 终端屏幕 / 工作区都靠它们已经活着），锚点桶的激活态按 `closeTab`
+ *    收敛；目标桶已有同内容标签时不搬（`duplicate`，由调用方提示）。
  */
 import { describe, expect, it } from 'vitest'
 
@@ -33,6 +36,8 @@ import {
   scopeTabs,
   sessionIdOfTab,
   tabScopeOf,
+  transferSessionTabs,
+  transferTab,
   withBucketActive,
   withBucketOpen,
   withBucketTabs,
@@ -287,6 +292,108 @@ describe('会话分桶 · 与标签模型的配合', () => {
     )
     expect(bucketOf(again, key).tabs.length).toBe(1)
     expect(bucketOf(again, key).activeId).toBe(scoped[0].id)
+  })
+})
+
+describe('会话分桶 · 标签换会话（拖到侧栏会话项上）', () => {
+  it('搬过去：源桶少一格（激活态按邻居收敛）、目标桶追加 + 激活 + 展开，id 一字不改', () => {
+    let buckets: PanelBuckets = openFile({}, S1, 'E:/repo/a.ts')
+    buckets = openFile(buckets, S1, 'E:/repo/b.ts')
+    const [first, second] = bucketOf(buckets, S1).tabs
+    expect(bucketOf(buckets, S1).activeId).toBe(second.id)
+
+    const result = transferTab(buckets, second.id, S2)
+    expect(result.moved).toBe(true)
+    // 源桶：被拖走的那条不在了，激活态由右边邻居（没有就左边）顶上来
+    expect(bucketOf(result.buckets, S1).tabs.map((tab) => tab.id)).toEqual([first.id])
+    expect(bucketOf(result.buckets, S1).activeId).toBe(first.id)
+    // 目标桶：追加到末尾并激活，自动展开（切回去就该看到它）
+    const target = bucketOf(result.buckets, S2)
+    expect(target.tabs.map((tab) => tab.id)).toEqual([second.id])
+    expect(target.activeId).toBe(second.id)
+    expect(target.open).toBe(true)
+    // 标签对象整体照搬：id（容器渲染 key）与原会话前缀都不改
+    expect(target.tabs[0]).toBe(second)
+    expect(tabScopeOf(target.tabs[0])).toBe(S1)
+  })
+
+  it('目标桶里已有同内容标签 → 不搬（duplicate，原引用返回）', () => {
+    let buckets: PanelBuckets = openFile({}, S1, 'E:/repo/a.ts')
+    buckets = openFile(buckets, S2, 'E:/repo/a.ts')
+    const id = bucketOf(buckets, S1).tabs[0].id
+
+    const result = transferTab(buckets, id, S2)
+    expect(result.moved).toBe(false)
+    expect(result.reason).toBe('duplicate')
+    expect(result.buckets).toBe(buckets)
+  })
+
+  it('拖回自己那一桶 / 标签已经不在了 → 静默不动（不算错误）', () => {
+    const buckets: PanelBuckets = openFile({}, S1, 'E:/repo/a.ts')
+    const id = bucketOf(buckets, S1).tabs[0].id
+
+    expect(transferTab(buckets, id, S1)).toEqual({ buckets, moved: false })
+    expect(transferTab(buckets, 'gone', S2)).toEqual({ buckets, moved: false })
+  })
+
+  it('终端标签搬家不改归属会话（终端还是那个进程，不杀也不重开）', () => {
+    const tab = scopeTabs(S1, [
+      terminalTab({ termId: 'term_1', sessionId: S1, shell: 'powershell', cwd: 'E:/repo', pid: 42 }),
+    ])[0]
+    const buckets: PanelBuckets = { [S1]: { tabs: [tab], activeId: tab.id, open: true } }
+
+    const result = transferTab(buckets, tab.id, S2)
+    const moved = bucketOf(result.buckets, S2).tabs[0]
+    expect(moved.kind).toBe('terminal')
+    expect(moved).toMatchObject({ sessionId: S1, termId: 'term_1' })
+  })
+})
+
+describe('会话分桶 · 整批搬（拖侧栏徒标到标签栏 / 另一个会话行）', () => {
+  it('整批搬过去：目标桶追加 + 激活最后一个 + 展开，源桶清空（徒标随之消失）', () => {
+    let buckets: PanelBuckets = openFile({}, S1, 'E:/repo/a.ts')
+    buckets = openFile(buckets, S1, 'E:/repo/b.ts')
+    buckets = withBucketTabs(
+      buckets,
+      S1,
+      openServiceTab(bucketOf(buckets, S1).tabs, { sessionId: S1, serviceId: 'svc_1', name: 'dev' }),
+    )
+    const sourceIds = bucketOf(buckets, S1).tabs.map((tab) => tab.id)
+
+    const result = transferSessionTabs(buckets, S1, S2)
+    expect(result.moved).toBe(3)
+    expect(result.skipped).toBe(0)
+    // 源桶全空：`tabs` 清掉、激活态归 null（徽标 count=0 → 不显示）
+    expect(bucketOf(result.buckets, S1).tabs).toEqual([])
+    expect(bucketOf(result.buckets, S1).activeId).toBeNull()
+    // 目标桶：顺序照旧、激活最后一张、自动展开，id 一字不改
+    const target = bucketOf(result.buckets, S2)
+    expect(target.tabs.map((tab) => tab.id)).toEqual(sourceIds)
+    expect(target.activeId).toBe(sourceIds[sourceIds.length - 1])
+    expect(target.open).toBe(true)
+  })
+
+  it('与目标桶重复的跳过，其余照搬（部分成功也算搬成）', () => {
+    let buckets: PanelBuckets = openFile({}, S1, 'E:/repo/a.ts')
+    buckets = openFile(buckets, S1, 'E:/repo/b.ts')
+    buckets = openFile(buckets, S2, 'E:/repo/a.ts')
+    const duplicateId = bucketOf(buckets, S2).tabs[0].id
+    const movedId = bucketOf(buckets, S1).tabs[1].id
+
+    const result = transferSessionTabs(buckets, S1, S2)
+    expect(result.moved).toBe(1)
+    expect(result.skipped).toBe(1)
+    // 重复的那个仍在原位（不搬也不删），另一个追加到末尾
+    const target = bucketOf(result.buckets, S2)
+    expect(target.tabs.map((tab) => tab.id)).toEqual([duplicateId, movedId])
+  })
+
+  it('全重复 / 同一个桶 / 空桶：原引用返回（不算搬成，也不提示）', () => {
+    let buckets: PanelBuckets = openFile({}, S1, 'E:/repo/a.ts')
+    buckets = openFile(buckets, S2, 'E:/repo/a.ts')
+    expect(transferSessionTabs(buckets, S1, S2)).toEqual({ buckets, moved: 0, skipped: 1 })
+    expect(transferSessionTabs(buckets, S1, S1)).toEqual({ buckets, moved: 0, skipped: 0 })
+    expect(transferSessionTabs(buckets, 'gone', S2)).toEqual({ buckets, moved: 0, skipped: 0 })
   })
 })
 

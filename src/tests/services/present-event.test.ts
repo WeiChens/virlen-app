@@ -4,7 +4,8 @@
  *
  * 四条口径：
  *   ① 只有 `uiData.type = "present"` 的**成功**结果才开标签（失败结果里的东西根本没被收下）；
- *   ② 只认用户正看着的那个会话 —— 后台会话的工具结果不该把标签页抢过去；
+ *   ② **每次交付都带归属会话** —— 后台会话（用户正看着别处）也要交：标签落进它自己那一桶，
+ *      不抢眼前的面板（分桶与展开都在宿主的 `panelKeyOf(sessionId)` 那一步）；
  *   ③ 没有登记宿主（不在聊天页 / 用例里没注入）时如实返回 false，不假装开过；
  *   ④ 注销后不再回调（聊天页卸载不能把旧实例的 handler 留着）。
  *
@@ -146,6 +147,19 @@ describe('revealPresented', () => {
     expect(seen).toHaveLength(1)
   })
 
+  it('归属会话原样透传给宿主（空 / 不是字符串 = 没指定，不往 payload 里塞）', () => {
+    const seen: { paths: string[]; urls: string[]; sessionId?: string }[] = []
+    setPresentRevealHandler((payload) => seen.push(payload))
+
+    revealPresented({ paths: ['E:/out/a.xlsx'], urls: [], sessionId: 's-1' })
+    revealPresented({ paths: ['E:/out/a.xlsx'], urls: [], sessionId: '' })
+
+    expect(seen).toEqual([
+      { paths: ['E:/out/a.xlsx'], urls: [], sessionId: 's-1' },
+      { paths: ['E:/out/a.xlsx'], urls: [] },
+    ])
+  })
+
   it('两项都空不算一次打开', () => {
     const handler = vi.fn()
     setPresentRevealHandler(handler)
@@ -170,6 +184,7 @@ describe('tool_result_created → 右侧面板', () => {
     expect(handler).toHaveBeenCalledWith({
       paths: ['E:/out/a.xlsx', 'E:/out/b.pptx'],
       urls: [],
+      sessionId: id,
     })
   })
 
@@ -188,10 +203,11 @@ describe('tool_result_created → 右侧面板', () => {
     expect(handler).toHaveBeenCalledWith({
       paths: [],
       urls: ['https://docs.rs/tokio'],
+      sessionId: id,
     })
   })
 
-  it('后台会话（用户没在看）不开标签', () => {
+  it('后台会话（用户正看着别的会话 / 新对话页）也照样交付，带上它自己的会话 id', () => {
     const id = seed()
     chatState.setValue('currentSessionId', 'some-other-session')
     const handler = vi.fn()
@@ -203,7 +219,12 @@ describe('tool_result_created → 右侧面板', () => {
       data: { message: presentResult(['E:/out/a.xlsx']) },
     })
 
-    expect(handler).not.toHaveBeenCalled()
+    // 至于落哪一桶是宿主的决定（`panelKeyOf(sessionId)`）—— 这里只保证「交付没被丢掉」
+    expect(handler).toHaveBeenCalledWith({
+      paths: ['E:/out/a.xlsx'],
+      urls: [],
+      sessionId: id,
+    })
   })
 
   it('失败结果不开标签（文件根本没被收下）', () => {

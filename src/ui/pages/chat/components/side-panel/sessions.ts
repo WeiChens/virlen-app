@@ -27,7 +27,7 @@
  *    `panelTabSummaries`（侧栏徽标）/ `parkedBucketsOf`（开始页清单）/ `withBucketActive`（点一行直达）
  *    就是给这两处外显供数据的：只做镜像与分组，不碰 DOM、不改标签。
  */
-import type { SidePanelTab } from './tabs'
+import { closeTab, tabContentKey, type SidePanelTab } from './tabs'
 
 /** 新对话页（还没有会话 id）那一桶的 key —— 与真会话 id 不会撞 */
 export const NEW_PANEL_KEY = '__new__'
@@ -207,11 +207,126 @@ export function withBucketActive(
   return { ...buckets, [key]: { ...prev, activeId, open: true } }
 }
 
+/**
+ * 把一个标签从一桶搬到另一桶（标签栏拖到侧栏会话项上：「这个标签归那个会话了」）的结果。
+ *
+ * 为什么用「结果 + 原因」而不是抛异常 / 返回 null：没搬成的「重复」要跟用户说一句
+ * （否则标签凭空不动，看起来像坏了），而「拖回自己那一桶」不该有任何提示。
+ */
+export interface TabTransfer {
+  buckets: PanelBuckets
+  /** 搬成了吗（标签已不在 / 源桶就是目标桶 / 目标桶里已有同内容标签 → false） */
+  moved: boolean
+  /** 没搬成的原因：`duplicate` 需要给用户一句提示，其余静默 */
+  reason?: 'duplicate'
+}
+
+/**
+ * 把一个标签从一桶搬到另一桶（标签栏拖到侧栏会话项上：「这个标签归那个会话了」）。
+ *
+ * 五条口径：
+ * 1. **标签对象整体照搬，`id` 一个字都不改**：它是容器的渲染 key，改 = 卸载重挂
+ *    （草稿 / 撤销栈 / 终端屏幕 / 网页历史一起没）；文件面板的工作区也由 id 前缀反解
+ *    （与 `adoptNewBucket` 同一条口径，别按「前缀 = 桶 key」写判断）；
+ * 2. **目标桶里已有同内容标签就不搬**（`moved: false` + `reason: 'duplicate'`）：
+ *    一桶里两条同内容标签，`openFileTab` 按路径找只会认得到第一条，第二条从此点不到；
+ * 3. **源桶的激活态按 `closeTab` 的邻居规则收敛**（不在本文件另写一套）；
+ * 4. **目标桶追加到末尾并激活 + 自动展开**（`withBucketTabs`）：用户把它放到那儿了，
+ *    切回去就该看到它；
+ * 5. **不杀任何终端**：搬标签 ≠ 关标签（`killTerminalsIn` 只在真关掉时调），
+ *    终端标签里记的 `sessionId` 也照着原样 —— 它代表「这个终端属于谁」，不是「谁在显示它」。
+ */
+export function transferTab(
+  buckets: PanelBuckets,
+  tabId: string,
+  toKey: string,
+): TabTransfer {
+  let fromKey: string | null = null
+  let tab: SidePanelTab | null = null
+  for (const [key, bucket] of Object.entries(buckets)) {
+    const found = bucket.tabs.find((item) => item.id === tabId)
+    if (!found) continue
+    fromKey = key
+    tab = found
+    break
+  }
+  // 已经关掉了 / 拖到了自己那一桶：什么都不做（后者是「拖回原位」，不该报错）
+  if (!fromKey || !tab || fromKey === toKey) return { buckets, moved: false }
+  const from = buckets[fromKey]
+  const to = bucketOf(buckets, toKey)
+  const contentKey = tabContentKey(tab)
+  if (to.tabs.some((item) => tabContentKey(item) === contentKey)) {
+    return { buckets, moved: false, reason: 'duplicate' }
+  }
+  const closed = closeTab(from.tabs, tabId, from.activeId)
+  const next: PanelBuckets = {
+    ...buckets,
+    [fromKey]: { ...from, tabs: closed.tabs, activeId: closed.activeId },
+  }
+  return {
+    buckets: withBucketTabs(next, toKey, { tabs: [...to.tabs, tab], activeId: tab.id }),
+    moved: true,
+  }
+}
+
 /** 关掉**这一桶**的全部标签（切工作目录这条路径用；会话之间互不影响） */
 export function clearBucketTabs(buckets: PanelBuckets, key: string): PanelBuckets {
   const prev = bucketOf(buckets, key)
   if (prev.tabs.length === 0 && prev.activeId === null) return buckets
   return { ...buckets, [key]: { ...prev, tabs: [], activeId: null } }
+}
+
+/**
+ * 把一个会话**开着的那批标签整批**搬到另一个会话的结果（侧栏徒标拖到标签栏 / 另一个会话行上）。
+ *
+ * 为什么「部分成功」也算搬成：整批里很可能有目标会话已经开着的文件，为了一个重复就把
+ * 剩下的全拦下太奇怪；跳过的那几个由 `skipped` 报出去（宿主拿它提示一句）。
+ */
+export interface SessionTabsTransfer {
+  buckets: PanelBuckets
+  /** 真搬过去的标签数 */
+  moved: number
+  /** 目标桶里已有同内容、被跳过的个数 */
+  skipped: number
+}
+
+/**
+ * 把一个会话开着的那批标签整批搬到另一个会话（侧栏徒标拖到标签栏 / 另一个会话行上）。
+ *
+ * 与 `transferTab` 同一套口径：标签对象**整体照搬、`id` 一个字不改**（渲染 key + 工作区反解），
+ * 目标桶里已有同内容标签就跳过（`tabContentKey`），目标桶追加 + 激活 + 自动展开。
+ * 差别只有两点：
+ * 1. **整批**：搬完源桶就空了（侧栏徒标随之消失，等于「那个会话的右侧栏整体挪过去」）；
+ * 2. 全跳过时 `moved === 0`（只有这时才算没搬成），部分跳过不影响其余标签过去。
+ */
+export function transferSessionTabs(
+  buckets: PanelBuckets,
+  fromKey: string,
+  toKey: string,
+): SessionTabsTransfer {
+  if (fromKey === toKey) return { buckets, moved: 0, skipped: 0 }
+  const from = bucketOf(buckets, fromKey)
+  if (from.tabs.length === 0) return { buckets, moved: 0, skipped: 0 }
+  const to = bucketOf(buckets, toKey)
+  const taken = new Set(to.tabs.map((tab) => tabContentKey(tab)))
+  const incoming: SidePanelTab[] = []
+  let skipped = 0
+  for (const tab of from.tabs) {
+    const contentKey = tabContentKey(tab)
+    if (taken.has(contentKey)) {
+      skipped += 1
+      continue
+    }
+    taken.add(contentKey)
+    incoming.push(tab)
+  }
+  if (incoming.length === 0) return { buckets, moved: 0, skipped }
+  const grown = withBucketTabs(buckets, toKey, {
+    tabs: [...to.tabs, ...incoming],
+    // 激活最后一个：整批搬过来时用户最想看的是「刚搬过来的那批」的最后一张
+    activeId: incoming[incoming.length - 1].id,
+  })
+  return { buckets: clearBucketTabs(grown, fromKey), moved: incoming.length, skipped }
 }
 
 /**
