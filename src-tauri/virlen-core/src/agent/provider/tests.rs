@@ -350,6 +350,7 @@ fn cache_request(system: Option<&str>, tool_count: usize, messages: Vec<Message>
                 properties: json!({}),
                 required: vec![],
                 one_of: None,
+                extra: Default::default(),
             },
         })
         .collect();

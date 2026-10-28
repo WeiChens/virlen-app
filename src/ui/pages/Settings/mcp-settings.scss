@@ -1,0 +1,676 @@
+.mcp-settings {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+
+  // ==================== 头部 ====================
+
+  .mcp-header {
+    display: flex;
+    /* 面板窄时让操作区整体折到第二行：否则说明文字被挤成两行、按钮被压扁 */
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px 16px;
+
+    .mcp-header-text {
+      flex: 1 1 240px;
+      min-width: 0;
+    }
+
+    h3 {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      margin: 0 0 4px;
+      font-size: var(--font-size-xl);
+      font-weight: 600;
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    /* 「2 / 3 台已连接」：标题旁的轻量计数，不抢标题 */
+    .mcp-header-count {
+      font-size: var(--font-size-xs);
+      font-weight: 400;
+      color: var(--text-secondary);
+      white-space: nowrap;
+    }
+
+    .mcp-hint {
+      margin: 0;
+      font-size: var(--font-size-sm);
+      color: var(--text-secondary, #999);
+    }
+  }
+
+  .mcp-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+
+  // ==================== 按钮（本页自带，避免依赖某个组件作用域的全局类） ====================
+
+  .btn-primary,
+  .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: var(--font-size-md);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+    white-space: nowrap;
+
+    /* 带图标的按钮（详情底部的重连 / 删除）：图标与文字一起居中 */
+    svg {
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+      fill: currentColor;
+    }
+
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 1px;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+
+  .btn-primary {
+    border: 1px solid var(--accent-color, #4f46e5);
+    background: var(--accent-color, #4f46e5);
+    // 品牌底上的字一律走 --primary-fg：主题色被调浅时要自动转黑，写死白色就糊在亮底上了
+    color: var(--primary-fg);
+
+    &:hover:not(:disabled) {
+      filter: brightness(1.08);
+    }
+  }
+
+  .btn-secondary {
+    border: 1px solid var(--border-color, #e5e5e5);
+    background: var(--bg-primary, #fff);
+    color: var(--text-primary, #1a1a1a);
+
+    &:hover:not(:disabled) {
+      border-color: var(--accent-color, #4f46e5);
+    }
+  }
+
+  /* 破坏性动作用文字按钮：平时不抢眼，hover 才露出红底 */
+  .btn-danger-text {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--color-danger);
+    font-size: var(--font-size-md);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+
+    svg {
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+      fill: currentColor;
+    }
+
+    &:hover:not(:disabled) {
+      background: var(--color-danger-bg);
+      border-color: color-mix(in srgb, var(--color-danger) 30%, transparent);
+    }
+
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 1px;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    /* 28×28：行内五个图标按钮 26px 在触屏笔记本上太难点了 */
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary, #999);
+    font-size: var(--font-size-md);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+
+    svg {
+      width: 15px;
+      height: 15px;
+      fill: currentColor;
+    }
+
+    &:hover:not(:disabled) {
+      background: var(--hover-bg, #f5f5f5);
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 1px;
+    }
+
+    &:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+  }
+
+  // ==================== 空态 / 提示条 ====================
+
+  .mcp-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 36px 24px;
+    border: 1px dashed var(--border-color, #e5e5e5);
+    border-radius: 12px;
+    text-align: center;
+    color: var(--text-secondary, #999);
+    font-size: var(--font-size-md);
+    line-height: 1.7;
+
+    /* 图标只当「这里是什么」的锚点：低对比，不与 CTA 抢注意力 */
+    .mcp-empty-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      margin-bottom: 2px;
+      border-radius: 12px;
+      background: var(--bg-tertiary);
+      color: var(--text-tertiary);
+
+      svg {
+        width: 20px;
+        height: 20px;
+        fill: currentColor;
+      }
+    }
+
+    .mcp-empty-title {
+      margin: 0;
+      font-size: var(--font-size-base);
+      font-weight: 600;
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    .mcp-empty-desc {
+      margin: 0;
+      max-width: 46ch;
+    }
+
+    button {
+      margin-top: 6px;
+    }
+
+    .mcp-empty-hint {
+      margin: 4px 0 0;
+      max-width: 52ch;
+      font-size: var(--font-size-sm);
+      color: var(--text-tertiary, #bbb);
+    }
+  }
+
+  /* 错误条：图标 + 可换行正文 + 关闭（长错误以前把行撑成一整块红） */
+  .mcp-banner.error {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px 10px 14px;
+    border: 1px solid color-mix(in srgb, var(--color-error-text) 40%, transparent);
+    border-radius: 8px;
+    background: var(--color-error-bg);
+    color: var(--color-error-text);
+    font-size: var(--font-size-sm);
+    line-height: 1.6;
+
+    > svg {
+      width: 16px;
+      height: 16px;
+      margin-top: 0.2em;
+      flex-shrink: 0;
+      fill: currentColor;
+    }
+
+    .mcp-banner-text {
+      flex: 1;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    /* 关闭键与错误同色：中性灰在红条上会显得「这是个次要按钮」 */
+    .icon-btn {
+      color: inherit;
+
+      &:hover:not(:disabled) {
+        background: color-mix(in srgb, currentColor 14%, transparent);
+        color: inherit;
+      }
+
+      svg {
+        width: 12px;
+        height: 12px;
+      }
+    }
+  }
+
+  // ==================== 列表 ====================
+
+  .mcp-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  /* 一台服务器 = 两块**平级**区域：
+       .mcp-row-cell    折叠态（摘要 + 操作）
+       .mcp-row-details 展开面板，插在 cell 后面
+     以前两者塞在同一张 grid 里，展开时得把 `align-items: center` 改成 `start`，
+     整块摘要就往上跳半行；现在展开只增加高度，cell 的列宽 / 行高 / 垂直对齐全不变。 */
+  .mcp-row {
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 10px;
+    background: var(--bg-primary, #fff);
+    /* 圆角裁剪：展开区的底面色不会溢出右下角 */
+    overflow: hidden;
+    transition: border-color 0.15s, box-shadow 0.15s;
+
+    /* 只暗示「这一行可以展开」，不做整行点击（行内还有图标按钮） */
+    &:hover {
+      border-color: color-mix(in srgb, var(--primary) 26%, var(--border-color));
+    }
+
+    &.expanded {
+      border-color: color-mix(in srgb, var(--primary) 40%, var(--border-color));
+      box-shadow: 0 1px 2px color-mix(in srgb, var(--text-primary) 6%, transparent);
+    }
+
+    /* 写操作进行中：整行降对比，防止连点（按钮本身也已 disabled） */
+    &.is-busy {
+      opacity: 0.6;
+    }
+
+    .expand-btn svg {
+      transition: transform 0.15s;
+    }
+
+    &.expanded .expand-btn svg {
+      transform: rotate(180deg);
+    }
+
+    /* —— 折叠态（cell）——
+       两列一行：标题 | 操作；失败摘要单独占第二行（跨两列）。
+       标题与操作都在第 1 行，所以「有没有摘要」「展没展开」都不会挪动它们。 */
+    .mcp-row-cell {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 2px 16px;
+      padding: 10px 14px;
+    }
+
+    .mcp-row-title {
+      grid-area: 1 / 1;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+
+    .mcp-server-name {
+      font-size: var(--font-size-md);
+      font-weight: 600;
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    .mcp-badge {
+      // 尺寸挂在自身字号上（em）：字体调大一档时标签跟着长，不会被裁成一条缝
+      padding: 0.1em 0.6em;
+      border-radius: 0.4em;
+      font-size: var(--font-size-xs);
+      background: var(--tag-bg);
+      color: var(--text-secondary, #777);
+
+      &.muted {
+        opacity: 0.7;
+      }
+    }
+
+    // 状态胶囊：四档色调（ok / warn / error / muted）+ 一枚跟随色调的状态点
+    .mcp-capsule {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5em;
+      padding: 0.1em 0.7em;
+      border-radius: 999px;
+      font-size: var(--font-size-xs);
+      border: 1px solid transparent;
+
+      .mcp-dot {
+        width: 0.5em;
+        height: 0.5em;
+        border-radius: 50%;
+        flex-shrink: 0;
+        background: currentColor;
+      }
+
+      /* 连接中 / 退避重连：点呼吸，静止时看不出「还在等」 */
+      &.is-pending .mcp-dot {
+        animation: mcp-dot-pulse 1.4s ease-in-out infinite;
+      }
+
+      /* 用双档语义色（文字 / 底色），暗色主题下才不是把亮色值硬套上去 */
+      &.tone-ok {
+        color: var(--color-success-text);
+        border-color: color-mix(in srgb, var(--color-success-text) 35%, transparent);
+        background: var(--color-success-bg);
+      }
+
+      &.tone-warn {
+        color: var(--color-warning-text);
+        border-color: color-mix(in srgb, var(--color-warning-text) 35%, transparent);
+        background: var(--color-warning-bg);
+      }
+
+      &.tone-error {
+        color: var(--color-error-text);
+        border-color: color-mix(in srgb, var(--color-error-text) 35%, transparent);
+        background: var(--color-error-bg);
+      }
+
+      &.tone-muted {
+        color: var(--text-secondary, #999);
+        border-color: var(--border-color, #e5e5e5);
+      }
+    }
+
+    // 启动命令与「被 Agent 启用」从行内挪进详情：列表只留名字 / 状态 / 失败摘要
+
+    /* 失败摘要：cell 的第二行（跨两列），只在折叠态出现 —— 展开后由详情里的呼叫块给全文 */
+    .mcp-row-error {
+      grid-area: 2 / 1 / 3 / -1;
+      font-size: var(--font-size-xs);
+      line-height: 1.5;
+      /* 语义色里的「文字档」：--danger-color 在 theme.scss 里从未定义过 */
+      color: var(--color-error-text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* 操作区固定在 cell 第 1 行右侧：与标题同一行、垂直居中，展开时不动 */
+    .mcp-row-actions {
+      grid-area: 1 / 2;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    /* 展开面板：与 cell 平级的独立块 —— 底色下沉一档 + 虚线上边界，一眼区分「这是详情」 */
+    .mcp-row-details {
+      padding: 12px 14px;
+      border-top: 1px dashed var(--border-color, #e5e5e5);
+      background: var(--bg-secondary);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+
+      h4 {
+        margin: 0 0 6px;
+        font-size: var(--font-size-sm);
+        font-weight: 600;
+        color: var(--text-primary, #1a1a1a);
+      }
+
+      .details-muted {
+        margin: 0;
+        font-size: var(--font-size-xs);
+        color: var(--text-secondary, #999);
+      }
+
+      /* 「被几个 Agent 启用」：0 时高亮提醒（白名单是穷举的，不勾就看不见工具） */
+      .mcp-detail-agents {
+        margin: 0;
+        font-size: var(--font-size-xs);
+        line-height: 1.6;
+        color: var(--text-secondary, #999);
+
+        &.warn {
+          color: var(--color-warning-text);
+        }
+      }
+
+      /* 详情底部的低频动作（重连 / 删除） */
+      .mcp-detail-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding-top: 10px;
+        border-top: 1px solid var(--border-color-light);
+      }
+
+      /* 工具清单：名字一行、描述两行（原来挤在一行，26 个工具读起来像一堵墙） */
+      .mcp-tool-list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        max-height: 240px;
+        overflow-y: auto;
+
+        li {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          padding-bottom: 6px;
+          font-size: var(--font-size-xs);
+          color: var(--text-secondary, #777);
+          border-bottom: 1px solid var(--border-color-light);
+
+          &:last-child {
+            padding-bottom: 0;
+            border-bottom: none;
+          }
+
+          code {
+            color: var(--text-primary, #1a1a1a);
+            font-size: var(--font-size-xs);
+            overflow-wrap: anywhere;
+          }
+
+          .mcp-tool-desc {
+            min-width: 0;
+            line-height: 1.5;
+            /* 描述最多两行：26 个工具的全文会把折叠区变成无底洞 */
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
+            line-clamp: 2;
+            overflow: hidden;
+          }
+        }
+      }
+
+      // 观测面板：左标签右值（值为长文本时允许换行，不撑破行宽）
+      .mcp-diag-list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+
+        li {
+          display: flex;
+          gap: 10px;
+          font-size: var(--font-size-xs);
+          color: var(--text-primary, #1a1a1a);
+
+          > span:first-child {
+            flex-shrink: 0;
+            min-width: 96px;
+            color: var(--text-secondary, #999);
+          }
+
+          > span:last-child {
+            min-width: 0;
+            overflow-wrap: anywhere;
+          }
+
+          /* 启动命令 / URL：等宽体 + 可逐字断行（长参数不撑破面板） */
+          .mcp-diag-code {
+            font-family: var(--code-font-family);
+            font-size: var(--font-size-xs);
+            color: var(--text-primary, #1a1a1a);
+            overflow-wrap: anywhere;
+          }
+        }
+      }
+
+      /* 失败原因：折叠时只有一行截断摘要，这里给全文 + 图标 */
+      .mcp-callout {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        margin-top: 8px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        font-size: var(--font-size-xs);
+        line-height: 1.6;
+
+        > svg {
+          width: 14px;
+          height: 14px;
+          margin-top: 0.15em;
+          flex-shrink: 0;
+          fill: currentColor;
+        }
+
+        &.warn {
+          color: var(--color-warning-text);
+          background: var(--color-warning-bg);
+          border: 1px solid color-mix(in srgb, var(--color-warning-text) 28%, transparent);
+        }
+
+        .mcp-callout-body {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          min-width: 0;
+
+          strong {
+            font-weight: 600;
+          }
+
+          span {
+            overflow-wrap: anywhere;
+          }
+        }
+      }
+
+      // stderr 尾部：等宽 + 有界高度（服务器可能刷屏）
+      .mcp-stderr {
+        margin: 0;
+        padding: 8px 10px;
+        max-height: 160px;
+        overflow: auto;
+        border: 1px solid var(--border-color-light);
+        border-radius: 8px;
+        background: var(--bg-tertiary);
+        font-family: var(--code-font-family);
+        font-size: var(--font-size-xs);
+        line-height: 1.5;
+        white-space: pre-wrap;
+        /* anywhere 而不是 break-all：路径 / URL 断成一片反而读不出结构 */
+        overflow-wrap: anywhere;
+      }
+    }
+  }
+
+  // ==================== 导入弹窗 ====================
+
+  .mcp-import-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+
+    p {
+      margin: 0;
+      font-size: var(--font-size-sm);
+      color: var(--text-secondary, #777);
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 200px;
+      padding: 10px 12px;
+      border: 1px solid var(--border-color, #e5e5e5);
+      border-radius: 8px;
+      background: var(--bg-primary, #fff);
+      color: var(--text-primary, #1a1a1a);
+      font-family: var(--code-font-family, monospace);
+      font-size: var(--font-size-sm);
+      line-height: 1.5;
+      resize: vertical;
+      box-sizing: border-box;
+      outline: none;
+
+      &:focus {
+        border-color: var(--accent-color, #4f46e5);
+      }
+    }
+  }
+}
+
+/* 状态点的呼吸：只用来表达「还在等」，终态保持静止 */
+@keyframes mcp-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mcp-settings .mcp-capsule.is-pending .mcp-dot {
+    animation: none;
+  }
+}

@@ -87,10 +87,13 @@ pub async fn execute_tool_steps(
             step.started_at = Some(now_ms());
 
             notify_step_start(step, sink, &session_id);
-            // exec_path：native=Rust 原生工具；bridge=委托 JS 桥执行。
-            let exec_path = if security.is_some()
-                && native_tools::is_native_tool(&step.tool_name)
-            {
+            // exec_path：mcp=MCP 工具（Rust 侧直调外部服务器）；native=Rust 原生工具；
+            // bridge=委托 JS 桥执行。
+            // ⚠️ mcp 判定**不看 security**：MCP 的授权来自它自己的 per-server 审批配置，
+            //    不是本机权限模型；`mcp__` 前缀不可能来自内置工具。
+            let exec_path = if crate::mcp::is_mcp_tool_name(&step.tool_name) {
+                "mcp"
+            } else if security.is_some() && native_tools::is_native_tool(&step.tool_name) {
                 "native"
             } else {
                 "bridge"
@@ -209,8 +212,14 @@ fn truncate_for_telemetry(input: &str, max: usize) -> String {
     format!("{}\n…[truncated {} chars]", head, total - max)
 }
 
-/// 工具名 → 分类 ID（与 JS `src/domain/tools/category.ts` 保持一致，未知回退 `system`）
+/// 工具名 → 分类 ID（与 JS `src/domain/tools/category.ts` 保持一致，未知回退 `system`）。
+///
+/// `mcp` 是**唯一不在静态分类表里**的返回值：MCP 工具是运行期动态定义（不在 `definitions.json`），
+/// 前端也按「动态分组」呈现它们（方案 §8.6：`TOOL_CATEGORIES` 不加静态项，那是契约测试的断言）。
 fn tool_category(tool_name: &str) -> &'static str {
+    if crate::mcp::is_mcp_tool_name(tool_name) {
+        return "mcp";
+    }
     match tool_name {
         "read_file" | "write_file" | "edit_file" | "delete_file" | "copy_move_file"
         | "list_files" | "file_info" | "mkdir" => "file",
@@ -381,6 +390,60 @@ async fn execute_single_step(
         return "[StormBreaker] Tool \"".to_string()
             + &step.tool_name
             + "\" was repeated across the last few calls and has been blocked automatically. Rethink your strategy: try a different approach, or give the final answer directly.";
+    }
+
+    // ===== MCP 工具优先（契约外的动态定义，由 Rust 直调外部服务器） =====
+    // 不看 security：见上面 exec_path 的注释。未装配 McpHost 时 Noop 会回一条明确错误，
+    // 绝不静默转给 JS 桥（那里永远没有 `mcp__*` 的执行器）。
+    if crate::mcp::is_mcp_tool_name(&step.tool_name) {
+        let mcp_started = crate::telemetry::now_ms();
+        // 审批在 `mcp::bridge` 里（ask 档弹 `confirm_mcp_call`）：拒绝 = `[User cancelled]`，
+        // 暂存 = 把 run 标成暂停（下面把它翻译成既有的 `__SHELVED__`）。
+        let approval_ctx = crate::mcp::McpApprovalCtx {
+            session_id,
+            tool_call_id: &step.tool_call_id,
+            sink,
+            bridge,
+            cancel,
+        };
+        let gated =
+            crate::mcp::call_with_approval(&step.tool_name, step.input.clone(), &approval_ctx).await;
+        let outcome = match gated {
+            crate::mcp::McpGatedCall::Done(outcome) => outcome,
+            crate::mcp::McpGatedCall::Shelved => {
+                crate::telemetry::track(
+                    "rust.tool.mcp",
+                    json!({
+                        "tool_name": step.tool_name,
+                        "server": crate::mcp::split_mcp_tool_name(&step.tool_name).map(|(server, _)| server),
+                        "duration_ms": crate::telemetry::now_ms() - mcp_started,
+                        "status": "shelved",
+                    }),
+                );
+                return "__SHELVED__".to_string();
+            }
+        };
+        crate::telemetry::track(
+            "rust.tool.mcp",
+            json!({
+                "tool_name": step.tool_name,
+                // 只记服务器与耗时，**不记参数与结果正文**（方案 §7.1 第 6 条）
+                "server": crate::mcp::split_mcp_tool_name(&step.tool_name).map(|(server, _)| server),
+                "duration_ms": crate::telemetry::now_ms() - mcp_started,
+                "status": if outcome.is_error { "fail" } else { "success" },
+            }),
+        );
+        return if outcome.is_error {
+            step.status = ToolStepStatus::Failed;
+            step.error = Some(outcome.content.clone());
+            step.ui_data = outcome.ui_data;
+            outcome.content
+        } else {
+            step.status = ToolStepStatus::Completed;
+            step.result = Some(outcome.content.clone());
+            step.ui_data = outcome.ui_data;
+            outcome.content
+        };
     }
 
     // ===== 原生工具优先（P2：命令 / 文件 / 搜索 / 知识库；Step 2：任务清单 / 用户选择） =====

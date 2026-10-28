@@ -20,6 +20,8 @@ pub mod file_ops;
 /// 源代码管理（图形化 Git）：`git` 子进程驱动 + porcelain 解析 —— 零新增依赖，GUI / CLI 共用
 pub mod git;
 pub mod host;
+/// MCP（Model Context Protocol）客户端：协议层（命名 / 配置 / schema / JSON-RPC / 传输 / 单连接）
+pub mod mcp;
 pub mod rag;
 pub mod sandbox;
 pub mod search;

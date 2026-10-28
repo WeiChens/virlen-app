@@ -1073,6 +1073,41 @@
           "properties": {},
           "required": []
         }
+      },
+      {
+        "name": "list_mcp_resources",
+        "description": "List the resources published by connected MCP servers. A resource is data a server exposes for reading (a file, a record, a document), addressed by a URI; it is not a tool call. Use this first to discover the URIs, then read one with read_mcp_resource. Pass \"server\" to inspect a single server (a disconnected one is then reported as such), or omit it to query every connected server that supports resources.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "server": {
+              "type": "string",
+              "description": "MCP server name — the namespace shown in Settings → MCP servers (not the server's self-reported name). Omit to list resources from every connected server."
+            }
+          },
+          "required": []
+        }
+      },
+      {
+        "name": "read_mcp_resource",
+        "description": "Read one MCP resource by URI and return its content as text. Get the URI from list_mcp_resources (or from a resource link in a tool result) — an arbitrary URI is likely to fail. Binary resources are reported with their size only; their bytes never enter the conversation. Both \"server\" and \"uri\" are required.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "server": {
+              "type": "string",
+              "description": "MCP server name that owns the resource (the namespace shown in Settings → MCP servers)."
+            },
+            "uri": {
+              "type": "string",
+              "description": "Resource URI exactly as returned by list_mcp_resources, for example file:///notes.md or db://orders/42."
+            }
+          },
+          "required": [
+            "server",
+            "uri"
+          ]
+        }
       }
     ],
     "macos": [
@@ -2146,6 +2181,41 @@
           "properties": {},
           "required": []
         }
+      },
+      {
+        "name": "list_mcp_resources",
+        "description": "List the resources published by connected MCP servers. A resource is data a server exposes for reading (a file, a record, a document), addressed by a URI; it is not a tool call. Use this first to discover the URIs, then read one with read_mcp_resource. Pass \"server\" to inspect a single server (a disconnected one is then reported as such), or omit it to query every connected server that supports resources.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "server": {
+              "type": "string",
+              "description": "MCP server name — the namespace shown in Settings → MCP servers (not the server's self-reported name). Omit to list resources from every connected server."
+            }
+          },
+          "required": []
+        }
+      },
+      {
+        "name": "read_mcp_resource",
+        "description": "Read one MCP resource by URI and return its content as text. Get the URI from list_mcp_resources (or from a resource link in a tool result) — an arbitrary URI is likely to fail. Binary resources are reported with their size only; their bytes never enter the conversation. Both \"server\" and \"uri\" are required.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "server": {
+              "type": "string",
+              "description": "MCP server name that owns the resource (the namespace shown in Settings → MCP servers)."
+            },
+            "uri": {
+              "type": "string",
+              "description": "Resource URI exactly as returned by list_mcp_resources, for example file:///notes.md or db://orders/42."
+            }
+          },
+          "required": [
+            "server",
+            "uri"
+          ]
+        }
       }
     ],
     "linux": [
@@ -3218,6 +3288,41 @@
           "type": "object",
           "properties": {},
           "required": []
+        }
+      },
+      {
+        "name": "list_mcp_resources",
+        "description": "List the resources published by connected MCP servers. A resource is data a server exposes for reading (a file, a record, a document), addressed by a URI; it is not a tool call. Use this first to discover the URIs, then read one with read_mcp_resource. Pass \"server\" to inspect a single server (a disconnected one is then reported as such), or omit it to query every connected server that supports resources.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "server": {
+              "type": "string",
+              "description": "MCP server name — the namespace shown in Settings → MCP servers (not the server's self-reported name). Omit to list resources from every connected server."
+            }
+          },
+          "required": []
+        }
+      },
+      {
+        "name": "read_mcp_resource",
+        "description": "Read one MCP resource by URI and return its content as text. Get the URI from list_mcp_resources (or from a resource link in a tool result) — an arbitrary URI is likely to fail. Binary resources are reported with their size only; their bytes never enter the conversation. Both \"server\" and \"uri\" are required.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "server": {
+              "type": "string",
+              "description": "MCP server name that owns the resource (the namespace shown in Settings → MCP servers)."
+            },
+            "uri": {
+              "type": "string",
+              "description": "Resource URI exactly as returned by list_mcp_resources, for example file:///notes.md or db://orders/42."
+            }
+          },
+          "required": [
+            "server",
+            "uri"
+          ]
         }
       }
     ]

@@ -57,6 +57,13 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     ],
   },
   {
+    // MCP **资源**（外部服务器声明的可读数据）。动态的 `mcp__<server>__<tool>` 不在任何
+    // 静态分类里 —— 它们由设置页在运行期增删，分组在编辑器内单独计算（domain/tools/grouping.ts）。
+    id: 'mcp',
+    label: 'MCP 资源',
+    toolNames: ['list_mcp_resources', 'read_mcp_resource'],
+  },
+  {
     id: 'knowledge_base',
     label: '知识库',
     toolNames: [

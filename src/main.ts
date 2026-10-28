@@ -42,6 +42,8 @@ import { tauriUsageLedger } from '@/infrastructure/usage-ledger'
 import { initTrayService } from '@/services/tray-service'
 // 后台服务「结束通知」：AI 空闲时服务结束了 → Rust 发 `agent:service-exit`，前端落进消息列表
 import { initServiceNotice } from '@/services/service-notice'
+// MCP：Rust 发 `mcp:changed` / `mcp:status` → 失效工具定义缓存 + 补默认 Agent 白名单
+import { initMcpBridge } from '@/services/mcp'
 // 闲置会话自动归档（设置项 sessionAutoArchive*）：应立即跑一次 + 定时检查，必须在 sessionLoad 之后接线
 import { initSessionAutoArchive } from '@/services/chat/auto-archive'
 // 安全配置：规则以 Rust 侧 `app_settings` 为唯一源（localStorage 不保存），
@@ -279,6 +281,10 @@ async function init() {
   // 后台服务结束通知（P5）：AI 空闲时服务结束 → 落一条 feedback 消息（用户可见，AI 下次请求带上）。
   // 必须在窗口显示前挂好：服务是应用运行中才有的东西，启动即挂最省心（AI 在跑时那条路不经过前端）。
   await step('serviceNotice', () => initServiceNotice())
+
+  // MCP 事件桥：工具集合变化 → 失效定义缓存（下一次发送自然拿到新集合）。
+  // 必须在 `defaultAgent` 之后：`handleMcpChanged` 会调 initDefaultAgent 补白名单。
+  await step('mcp', () => initMcpBridge())
 
   providerService.initProviders()
   searchProviderService.initSearchProviders()

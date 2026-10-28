@@ -29,6 +29,8 @@ export interface SystemPromptParts {
   personality?: string
   /** 已按 Agent 白名单过滤后的技能；空数组表示不注入 */
   skills?: SkillMetaLike[]
+  /** MCP 服务器说明书（Rust `mcp::instructions()` 的产物，已带归属前缀 + 32 KB 截断）；null/空 → 不注入 */
+  mcpInstructions?: string | null
 }
 
 /** 基础提示词：工具调用规范 + 核心原则（与 Rust `prompts::base_system_prompt` 对应） */
@@ -37,7 +39,7 @@ export function baseSystemPrompt(): string {
 }
 
 /**
- * 按固定顺序拼接：基础规范 → 环境 → 项目规则 → 记忆 → 角色/身份/性格 → 技能。
+ * 按固定顺序拼接：基础规范 → 环境 → 项目规则 → 记忆 → 角色/身份/性格 → 技能 → MCP 说明书。
  * 顺序即优先级；片段间空行分隔，技能段内部单换行。
  */
 export function composeSystemPrompt(parts: SystemPromptParts): string {
@@ -70,6 +72,9 @@ export function composeSystemPrompt(parts: SystemPromptParts): string {
     lines.push('')
     out.push(lines.join('\n'))
   }
+
+  // MCP 说明书：**外部**服务器提供，优先级最低（位置与 Rust `compose_system_prompt` 末尾一致）
+  if (parts.mcpInstructions) out.push(parts.mcpInstructions)
 
   return out.join('\n\n')
 }

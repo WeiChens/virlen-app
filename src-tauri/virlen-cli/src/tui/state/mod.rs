@@ -234,9 +234,12 @@ impl Interaction {
             .to_string()
     }
 
-    /// 命令授权类交互（`title/desc/hint/risk` 全部由 Rust 侧下发，这里只展示）
+    /// 授权类交互（`title/desc/hint/risk` 全部由 Rust 侧下发，这里只展示）
+    ///
+    /// `confirm_mcp_call` 与命令审批同一种样式：都是「风险 + 内容 + 允许/拒绝」，
+    /// 只是内容从命令正文变成工具参数。
     pub(crate) fn is_confirm(&self) -> bool {
-        self.kind == "confirm_command_native"
+        self.kind == "confirm_command_native" || self.kind == "confirm_mcp_call"
     }
 
     pub(crate) fn question(&self) -> String {

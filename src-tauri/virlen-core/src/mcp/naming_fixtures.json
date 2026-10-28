@@ -1,0 +1,55 @@
+{
+  "note": "MCP 公开工具名的黄金值 —— Rust（virlen-core/src/mcp/naming.rs）与 TS（src/tests/domain/mcp-naming.test.ts）读同一份，算法漂移即红。expected 由 server + \"\\0\" + raw 的 SHA-256 前 12 位十六进制派生。",
+  "maxLength": 64,
+  "hashLength": 12,
+  "cases": [
+    {
+      "server": "github",
+      "raw": "create_issue",
+      "expected": "mcp__github__create_issue",
+      "why": "干净名：原样返回"
+    },
+    {
+      "server": "my tools",
+      "raw": "list/files",
+      "expected": "mcp__my_tools__list_files_668868c4870a",
+      "why": "空格与斜杠被替换 → 必须追加哈希，否则会与 my_tools/list_files 折叠"
+    },
+    {
+      "server": "ssssssssssssssssssssssssssssssss",
+      "raw": "tttttttttttttttttttttttttttttttttttttttt",
+      "expected": "mcp__ssssssssssssssssssssssssssssssss__tttttttttttt_b0e739ade712",
+      "why": "超 64 字符：保留头部 51 字符 + 1 下划线 + 12 位哈希"
+    },
+    {
+      "server": "工具",
+      "raw": "读取",
+      "expected": "mcp_________64dca7652fb5",
+      "why": "非 ASCII 逐字符替换成一个下划线（不按字节，避免长度随编码漂移）"
+    },
+    {
+      "server": "a",
+      "raw": "b",
+      "expected": "mcp__a__b",
+      "why": "最短干净名"
+    },
+    {
+      "server": "fs",
+      "raw": "read_file",
+      "expected": "mcp__fs__read_file",
+      "why": "下划线本身合法，不触发哈希"
+    },
+    {
+      "server": "x",
+      "raw": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "mcp__x__aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_690ca6cb2231",
+      "why": "刚好超长（raw 60 字符，合计 65）→ 截断"
+    },
+    {
+      "server": "notes",
+      "raw": "search.v2",
+      "expected": "mcp__notes__search_v2_839492a54234",
+      "why": "点号被替换"
+    }
+  ]
+}

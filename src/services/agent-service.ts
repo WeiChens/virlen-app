@@ -5,6 +5,7 @@ import type { Agent } from '@/types'
 import { getEnvPrompt } from '@/services/env-service'
 import { loadProjectRulesPrompt } from '@/services/project-rules-service'
 import { loadMemorySection, touchMemories } from '@/infrastructure/memoryRepo'
+import { mcpRepo } from '@/infrastructure/mcp/repo'
 import {
   DEFAULT_PROJECT_RULES_FILE,
   resolveProjectRulesFile,
@@ -52,6 +53,10 @@ export async function assembleAgentPrompt(
       .map((s) => ({ name: s.meta.name, description: s.meta.description }))
   }
 
+  // MCP 服务器说明书：只收「已就绪 + 开了 injectInstructions」的那些，Rust 侧拼好带归属前缀。
+  // 与记忆同理 —— 只在建会话那一刻取一次，中途改配置不影响已建会话的 systemPrompt。
+  const mcpInstructions = await mcpRepo.instructions()
+
   // 顺序与分隔符由 domain 层固定：必须与 Rust 侧 prompts/assemble.rs 逐字节一致
   // （golden 测试 src/tests/domain/compose-prompt-golden.test.ts 守这条线）
   return composeSystemPrompt({
@@ -63,6 +68,7 @@ export async function assembleAgentPrompt(
     identity: agent.identity,
     personality: agent.personality,
     skills,
+    mcpInstructions,
   })
 }
 

@@ -1988,3 +1988,109 @@
 .code-block-ml {
   margin-left: 30px;
 }
+
+/* ==================== MCP 工具卡片（`mcp__server__tool`） ====================
+   一张通用卡：按 Rust `mcp/results.rs::project` 下发的 blocks[] 渲染。
+   块间 8px 间距（多块正文叠在一起时读得清），二进制块只给一行灰字。 */
+.mcp-tool-view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+
+  .mcp-block {
+    min-width: 0;
+  }
+
+  .mcp-block-title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+    margin-bottom: 4px;
+    font-size: var(--font-size-sm);
+    overflow-wrap: anywhere;
+  }
+
+  .mcp-block-muted {
+    font-size: var(--font-size-sm);
+    color: var(--text-tertiary);
+    overflow-wrap: anywhere;
+  }
+
+  /* 二进制 / 图片 / 资源链接：内容确实存在，但不会在会话里渲染 —— 用一块标签跟普通正文区分 */
+  .mcp-chip {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px;
+    max-width: 100%;
+    padding: 4px 8px;
+    border: 1px solid var(--border-color-light);
+    border-radius: 6px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+
+    code {
+      color: var(--text-primary);
+      font-size: var(--font-size-sm);
+      overflow-wrap: anywhere;
+    }
+  }
+
+  /* 说明性提示（结果截断 / 不支持的内容块 / 单台服务器不可用）：左边一道细线，不当正文读 */
+  .mcp-note {
+    padding-left: 8px;
+    border-left: 2px solid var(--border-color);
+    color: var(--text-tertiary);
+    font-size: var(--font-size-sm);
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+  }
+
+  /* 资源清单：一个资源一行（uri 第一要素，次要信息灰字） */
+  .mcp-resource-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    min-width: 0;
+
+    li {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+      /* 一条资源 = 一个条目：左侧细线让多条资源之间不糊成一片 */
+      padding-left: 8px;
+      border-left: 2px solid var(--border-color-light);
+      overflow-wrap: anywhere;
+
+      code {
+        color: var(--text-primary);
+        font-size: var(--font-size-sm);
+        overflow-wrap: anywhere;
+      }
+    }
+  }
+
+  /* 结构化结果默认收起：一次调用可能带几百行 JSON，展开是个主动动作 */
+  .mcp-json {
+    font-size: var(--font-size-sm);
+
+    summary {
+      cursor: pointer;
+      color: var(--text-secondary);
+      font-size: var(--font-size-sm);
+    }
+
+    &[open] summary {
+      margin-bottom: 6px;
+    }
+  }
+}

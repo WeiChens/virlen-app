@@ -511,6 +511,9 @@ $accent-mix-usermsg-dark-brand: 45%; // mix(brand, #fff, 45%)
   --font-size-3xl: 20px;
   --font-size-4xl: 22px;
 }
+code{
+  font-family: var(--code-font-family);
+}
 
 /* ===== 字号缩放（通过 CSS 变量覆盖实现，无需改 px → rem） ===== */
 [data-font-size='small'] {

@@ -55,6 +55,8 @@ pub(crate) struct RunOptions {
     pub append_system_prompt: Option<String>,
     pub max_rounds: Option<i64>,
     pub no_tools: bool,
+    /// 不启用 MCP 工具（与 `--no-tools` 同风格：完全不起服务器子进程）
+    pub no_mcp: bool,
     pub json: bool,
 }
 
@@ -132,6 +134,17 @@ impl SessionRuntime {
             .get_all()
             .await
             .map_err(|e| format!("读取配置失败: {}", e))?;
+
+        // MCP：读同一份 `app_settings.mcpServers`，启动服务器并**等它们有结论**
+        // （CLI 是跑完就退的进程，不等就拿不到工具；见 `mcp::start_from_settings`）。
+        // `--no-mcp` 时完全不起任何子进程（零 IPC 开销）。
+        // 失败只告警：一台 MCP 服务器配错不该让整次运行不可用。
+        if !opts.no_mcp {
+            if let Err(e) = virlen_core::mcp::start_from_settings(db.settings.as_ref(), None).await
+            {
+                eprintln!("[mcp] 初始化失败（本次运行无 MCP 工具）: {}", e);
+            }
+        }
 
         // ⚠️ 顺序即契约：先读会话记录里的工作目录（它是权威），再装配资源
         let session_workspace: Option<String> = match opts.session_id.as_deref() {

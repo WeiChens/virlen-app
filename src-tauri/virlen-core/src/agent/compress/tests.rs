@@ -100,6 +100,7 @@ fn tool_defs() -> Vec<ToolDefinition> {
             properties: json!({ "path": { "type": "string" } }),
             required: vec!["path".into()],
             one_of: None,
+            extra: Default::default(),
         },
     }]
 }

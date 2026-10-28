@@ -11,6 +11,7 @@ import {
   createNativeCommandConfirmHandles,
 } from './command_confirm'
 import type { CommandConfirmHandles } from './command_confirm'
+import { createMcpConfirmHandles } from './mcp_confirm'
 import type { ToolExecutorResponse } from '@/domain/tools/types'
 import { ToolService } from '../port/ToolService'
 
@@ -25,6 +26,7 @@ class ToolServiceImpl implements ToolService {
     let userChoiceInner: UserChoiceHandles | null = null
     let commandConfirmInner: CommandConfirmHandles | null = null
     let nativeCommandConfirmInner: CommandConfirmHandles | null = null
+    let mcpConfirmInner: CommandConfirmHandles | null = null
 
     return {
       handler: async (type: string, data: Record<string, any>) => {
@@ -47,12 +49,20 @@ class ToolServiceImpl implements ToolService {
           }
           return nativeCommandConfirmInner.handler(type, data)
         }
+        if (type === 'confirm_mcp_call') {
+          // MCP 工具调用（ask 档）：只回「允许 / 拒绝」，真正的 tools/call 在 Rust 侧
+          if (!mcpConfirmInner) {
+            mcpConfirmInner = createMcpConfirmHandles(sessionId)
+          }
+          return mcpConfirmInner.handler(type, data)
+        }
         throw new Error(`未知的交互类型: ${type}`)
       },
       cleanup: () => {
         userChoiceInner?.cleanup()
         commandConfirmInner?.cleanup()
         nativeCommandConfirmInner?.cleanup()
+        mcpConfirmInner?.cleanup()
       },
     }
   }

@@ -46,6 +46,9 @@ pub struct PromptParts<'a> {
     pub personality: Option<&'a str>,
     /// 已按 Agent 白名单过滤后的技能；空切片表示不注入
     pub skills: &'a [SkillMeta<'a>],
+    /// MCP 服务器说明书（`mcp::instructions()` 的产物，已带归属前缀 + 总量截断）；
+    /// `None`/空串表示不注入。放在最后：它是**外部**服务器提供的背景，优先级最低。
+    pub mcp_instructions: Option<&'a str>,
 }
 
 /// 基础提示词：工具调用规范 + 核心原则（两侧共用同一份 md）
@@ -55,7 +58,7 @@ pub fn base_system_prompt() -> String {
 
 /// 按固定顺序拼接系统提示词。
 ///
-/// 顺序即优先级：基础规范 → 环境 → 项目规则 → **记忆** → 角色/身份/性格 → 技能。
+/// 顺序即优先级：基础规范 → 环境 → 项目规则 → **记忆** → 角色/身份/性格 → 技能 → MCP 说明书。
 /// 片段之间用空行分隔；技能段内部用单换行（末尾保留一个换行）。
 pub fn compose_system_prompt(parts: &PromptParts) -> String {
     let mut out: Vec<String> = vec![base_system_prompt()];
@@ -109,6 +112,13 @@ pub fn compose_system_prompt(parts: &PromptParts) -> String {
         );
         lines.push(String::new());
         out.push(lines.join("\n"));
+    }
+
+    // MCP 说明书：外部服务器提供，优先级最低（位置与 TS `composeSystemPrompt` 末尾一致）
+    if let Some(mcp) = parts.mcp_instructions {
+        if !mcp.is_empty() {
+            out.push(mcp.to_string());
+        }
     }
 
     out.join("\n\n")
@@ -210,6 +220,7 @@ mod tests {
             identity: Some(FIXTURE_IDENTITY),
             personality: Some(FIXTURE_PERSONALITY),
             skills: &skills,
+            mcp_instructions: None,
         })
     }
 

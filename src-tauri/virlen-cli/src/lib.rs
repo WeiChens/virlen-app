@@ -145,6 +145,9 @@ pub async fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i
     if stopped > 0 {
         let _ = writeln!(err, "已终止 {stopped} 个后台服务");
     }
+    // MCP 服务器同样是本进程起的：收尾时逐个关掉（stdio 子进程会连带杀掉进程树）；
+    // Job 的 KILL_ON_JOB_CLOSE 只在进程被强杀时生效，正常退出要显式关。
+    virlen_core::mcp::host().kill_all().await;
     code
 }
 

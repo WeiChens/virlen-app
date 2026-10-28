@@ -126,6 +126,8 @@ pub fn init_agent_engine(app: &tauri::AppHandle) {
     virlen_core::agent::memory::redistill::sched::attach_host(Arc::new(
         crate::commands::memory::GuiRedistillRuntime::new(app.clone()),
     ));
+    // MCP：挂上空管理器（同步）-> 异步读配置再 reload；引擎命中 `mcp__` 前缀时走它
+    crate::commands::mcp::init_mcp(app);
     // 启动补跑：此刻队列是空的，先判定一次
     crate::commands::memory::request_redistill_on_startup(app);
 }

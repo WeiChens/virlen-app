@@ -175,6 +175,13 @@ pub struct ToolParameters {
     /// 可选 JSON Schema `oneOf`（如 read_file 的 path/paths 二选一）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub one_of: Option<Vec<RequiredSet>>,
+    /// 透传其余 JSON Schema 关键字（`additionalProperties` / `$defs` / `allOf` / `description` …）。
+    ///
+    /// ⚠️ 不加这一条，MCP 工具的嵌套 schema 在**序列化给 provider 时会被静默丢掉**：
+    /// MCP 服务器给的是任意 JSON Schema，而本结构只声明了四个键，其余键会被 serde 丢弃。
+    /// 内置 37 个工具的定义不含多余键，因此对它们序列化结果无影响。
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

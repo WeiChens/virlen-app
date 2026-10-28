@@ -18,8 +18,8 @@ import {
 } from '@/domain/tools/category'
 
 describe('TOOL_CATEGORIES', () => {
-  it('应该包含 12 个分类', () => {
-    expect(TOOL_CATEGORIES).toHaveLength(12)
+  it('应该包含 13 个分类', () => {
+    expect(TOOL_CATEGORIES).toHaveLength(13)
   })
 
   it('每个分类都应该有 id、label 和 toolNames', () => {
@@ -117,6 +117,12 @@ describe('TOOL_CATEGORIES', () => {
       'memory_write',
     ])
   })
+
+  it('MCP 分类只包含两个资源工具（动态 mcp__* 不进静态表）', () => {
+    const mcpCat = TOOL_CATEGORIES.find((c) => c.id === 'mcp')
+    expect(mcpCat).toBeDefined()
+    expect(mcpCat!.toolNames).toEqual(['list_mcp_resources', 'read_mcp_resource'])
+  })
 })
 
 describe('getCategoryId', () => {
@@ -140,6 +146,8 @@ describe('getCategoryId', () => {
     expect(getCategoryId('get_background_service')).toBe('service')
     expect(getCategoryId('kill_background_service')).toBe('service')
     expect(getCategoryId('list_background_services')).toBe('service')
+    expect(getCategoryId('list_mcp_resources')).toBe('mcp')
+    expect(getCategoryId('read_mcp_resource')).toBe('mcp')
   })
 
   it('未知工具应返回 undefined', () => {

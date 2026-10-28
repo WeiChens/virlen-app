@@ -457,6 +457,17 @@ pub fn run() {
             commands::session_db::cmd_settings_get_all,
             commands::session_db::cmd_settings_upsert,
             commands::session_db::cmd_settings_import,
+            // MCP（外部工具服务器）：列表 / 增删改 / 启停 / 重连 / 定义 / 状态 / 测试 / 导入
+            commands::mcp::cmd_mcp_list,
+            commands::mcp::cmd_mcp_upsert,
+            commands::mcp::cmd_mcp_remove,
+            commands::mcp::cmd_mcp_set_enabled,
+            commands::mcp::cmd_mcp_reload,
+            commands::mcp::cmd_mcp_tool_definitions,
+            commands::mcp::cmd_mcp_status,
+            commands::mcp::cmd_mcp_test,
+            commands::mcp::cmd_mcp_import,
+            commands::mcp::cmd_mcp_instructions,
             // 长期记忆：面板 CRUD + 建会话注入段
             commands::memory::cmd_memory_list,
             commands::memory::cmd_memory_upsert,
@@ -631,6 +642,8 @@ pub fn run() {
                 }
                 // 再蒸馏任务不能跨进程存活
                 virlen_core::agent::memory::redistill::sched::shutdown();
+                // MCP：发出关闭指令（stdio 子进程另有 Job 的 KILL_ON_JOB_CLOSE 兜底）
+                virlen_core::mcp::host().shutdown_all();
                 // 退出前把 WAL 截断回零（幂等；拿不到锁就跳过，绝不拖住退出）
                 if let Some(m) = app.try_state::<std::sync::Arc<virlen_core::session_db::DbMaintenance>>() {
                     let _ = m.try_checkpoint_truncate();

@@ -19,6 +19,14 @@ edition = "2021"
 [lints]
 workspace = true
 
+# MCP 测试夹具服务器：**只用于测试**（`tests/mcp_stdio.rs` 用 `CARGO_BIN_EXE_mcp-fixture` 定位）。
+# 为什么要真子进程：stdio 传输里最容易错的是进程侧（Windows `.cmd` 垫片 / 管道半包 /
+# 退出检测 / stderr 归类），假 Transport 只能测到「我们自己想象的行为」。
+# 不影响应用产物：`cargo build -p virlen-app` 不会构建依赖包的 bin。
+[[bin]]
+name = "mcp-fixture"
+path = "src/bin/mcp_fixture.rs"
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

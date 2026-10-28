@@ -6,6 +6,7 @@ pub mod agent;
 pub mod attachment;
 pub mod document;
 pub mod git;
+pub mod mcp;
 pub mod memory;
 pub mod phone_audit;
 pub mod phone_device;

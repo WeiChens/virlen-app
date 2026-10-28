@@ -12,6 +12,7 @@ import ProviderSettings from './provider-settings'
 import SecuritySettings from './security-settings'
 import AgentSettings from './agent-settings'
 import SkillSettings from './skill-settings'
+import McpSettings from './mcp-settings'
 import QuickInputSettings from './quickinput-settings'
 import SearchEngineSettings from './search-engine-settings'
 import KnowledgeBaseSettings from './knowledge-base-settings'
@@ -34,6 +35,7 @@ import CodeSvg from '@/ui/components/icons/CodeSvg'
 import StorageSvg from '@/ui/components/icons/StorageSvg'
 import PhoneSvg from '@/ui/components/icons/PhoneSvg'
 import PinSvg from '@/ui/components/icons/PinSvg'
+import McpSvg from '@/ui/components/icons/McpSvg'
 import settingsEvent from '@/events/settingsEvent'
 import { t } from '@/ui/i18n'
 import './settings-view.scss'
@@ -47,6 +49,7 @@ export type SettingsPage =
   | 'security'
   | 'agent'
   | 'skill'
+  | 'mcp'
   | 'quickinput'
   | 'search-engine'
   | 'knowledge-base'
@@ -216,6 +219,12 @@ export default function SettingsView() {
               <span>{t('技能')}</span>
             </button>
             <button
+              className={`nav-item ${page === 'mcp' ? 'active' : ''}`}
+              onClick={() => setPage('mcp')}>
+              <McpSvg fill="var(--nav-item-color)" />
+              <span>MCP</span>
+            </button>
+            <button
               className={`nav-item ${page === 'quickinput' ? 'active' : ''}`}
               onClick={() => setPage('quickinput')}>
               <QuickInputSvg fill="var(--nav-item-color)" />
@@ -258,6 +267,7 @@ export default function SettingsView() {
           {page === 'provider' && <ProviderSettings />}
           {page === 'security' && <SecuritySettings />}
           {page === 'skill' && <SkillSettings />}
+          {page === 'mcp' && <McpSettings />}
           {page === 'quickinput' && <QuickInputSettings />}
           {page === 'search-engine' && <SearchEngineSettings />}
           {page === 'knowledge-base' && <KnowledgeBaseSettings />}

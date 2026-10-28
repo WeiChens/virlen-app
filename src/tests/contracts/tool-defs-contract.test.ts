@@ -24,7 +24,7 @@ import {
 } from '@/domain/tools/definitions'
 
 const FILE = JSON.parse(DEFINITIONS_RAW) as ToolDefinitionsFile
-const EXPECTED_TOOLS = 37
+const EXPECTED_TOOLS = 39
 
 /** 用真实适配器（走内嵌契约分支）+ 真实 toolsInit 组装一个干净的注册中心 */
 async function freshRegistry() {
@@ -40,7 +40,7 @@ async function freshRegistry() {
 }
 
 describe('工具契约（权威源结构）', () => {
-  it('文件可用，且三平台各 37 个工具', () => {
+  it('文件可用，且三平台各 39 个工具', () => {
     expect(isUsableDefinitionsFile(FILE)).toBe(true)
     for (const platform of PLATFORM_KEYS) {
       expect(FILE.variants[platform], `缺少平台 ${platform}`).toHaveLength(
@@ -97,7 +97,7 @@ describe('契约 ↔ 执行器一一对应（真实适配器 + 真实 toolsInit�
   it('所有契约定义都有执行器，且没有多余执行器', async () => {
     const registry = await freshRegistry()
 
-    // 走真实适配器：非 Tauri 环境下应能取到内嵌契约（并给出 37 个工具）
+    // 走真实适配器：非 Tauri 环境下应能取到内嵌契约（并给出 39 个工具）
     const defs = await registry.listDefinitions()
     expect(defs).toHaveLength(EXPECTED_TOOLS)
 
@@ -119,6 +119,8 @@ describe('契约 ↔ 执行器一一对应（真实适配器 + 真实 toolsInit�
     expect(first).toContain('present')
     expect(first).toContain('start_background_service')
     expect(first).toContain('list_background_services')
+    expect(first).toContain('list_mcp_resources')
+    expect(first).toContain('read_mcp_resource')
   })
 
   it('label 来自注册（i18n），且每个工具都有', async () => {

@@ -88,6 +88,7 @@ fn parse_all_options() {
         "--max-rounds",
         "5",
         "--no-tools",
+        "--no-mcp",
         "--json",
         "你好",
     ]))
@@ -103,6 +104,7 @@ fn parse_all_options() {
             append_system_prompt: Some("用中文回答".into()),
             max_rounds: Some(5),
             no_tools: true,
+            no_mcp: true,
             json: true,
         })
     );
@@ -689,6 +691,27 @@ fn ask_user_reads_stdin_when_interactive() {
         &mut input,
     );
     assert_eq!(answer["value"], "B");
+}
+
+/// MCP 工具调用的审批：与命令审批同一个问法（`y` 放行，回 `approved`）
+#[test]
+fn ask_user_handles_mcp_confirm() {
+    let payload = json!({
+        "permName": "mcp.fs.call",
+        "title": "MCP 工具调用",
+        "desc": "{ \"path\": \"/tmp/a.txt\" }",
+        "risk": "dangerous"
+    });
+
+    let mut input = std::io::Cursor::new(b"y\n".to_vec());
+    let answer = ask_user("confirm_mcp_call", &payload, true, &mut input);
+    assert_eq!(answer["__kind"], "value");
+    assert_eq!(answer["value"], "approved");
+
+    // 非 TTY 一律拒绝（fail-closed）
+    let mut input = std::io::Cursor::new(b"y\n".to_vec());
+    let answer = ask_user("confirm_mcp_call", &payload, false, &mut input);
+    assert_eq!(answer["__kind"], "cancelled");
 }
 
 /// 未知交互类型也必须应答（否则引擎会一直等回执）

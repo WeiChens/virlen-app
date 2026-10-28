@@ -5,6 +5,10 @@
  * Tauri 运行时走 cmd_list_tool_definitions（Rust 按当前平台返回，权威且只有一份）；浏览器 dev / vitest 走
  * 动态 import(...json?raw)（同一份，按平台快照选变体）。Rust 命令失败时降级到内嵌契约并告警
  *（版本错配时不至于整个聊天不可用）。因两路径同源，无需差异检查。
+ *
+ * ⚠️ MCP 工具**不在契约里**（运行期动态定义，见 `docs/mcp-plan.md`）：它由 Rust 单独生成，
+ * 这里只往后拼一段，且失败时降级为空（服务器挂了不能让聊天不可用）。顺序固定为
+ * 「内置（契约顺序）在前，MCP 按公开名排序在后」—— 提示词前缀稳定，KV cache 不抖。
  */
 import { invoke } from '@tauri-apps/api/core'
 import type { ResolvedToolDefinition } from '@/domain/tools/types'
@@ -32,8 +36,15 @@ export async function loadDefinitionsFile(): Promise<ToolDefinitionsFile> {
   return JSON.parse(raw) as ToolDefinitionsFile
 }
 
-/** 默认加载器：Tauri 优先命令，失败/非 Tauri 环境走内嵌契约 */
+/** 默认加载器：Tauri 优先命令，失败/非 Tauri 环境走内嵌契约；最后拼接 MCP 工具 */
 export async function loadToolDefinitions(): Promise<ResolvedToolDefinition[]> {
+  const builtin = await loadBuiltinToolDefinitions()
+  const mcp = await loadMcpToolDefinitions()
+  return [...builtin, ...mcp]
+}
+
+/** 内置 39 个工具（契约 ∩ 平台） */
+async function loadBuiltinToolDefinitions(): Promise<ResolvedToolDefinition[]> {
   if (isTauriEnv()) {
     try {
       return await invoke<ResolvedToolDefinition[]>('cmd_list_tool_definitions')
@@ -49,4 +60,22 @@ export async function loadToolDefinitions(): Promise<ResolvedToolDefinition[]> {
     return []
   }
   return definitionsForPlatform(file, platformSnapshot())
+}
+
+/**
+ * MCP 工具定义（Rust 当前快照）。
+ *
+ * ⚠️ 失败一律降级为空数组：MCP 是**增强能力**，一台服务器连不上不能让整个聊天不可用。
+ * 不在这里排序 —— Rust 已按公开名排好（`McpManager::republish`）。
+ */
+async function loadMcpToolDefinitions(): Promise<ResolvedToolDefinition[]> {
+  if (!isTauriEnv()) return []
+  try {
+    return await invoke<ResolvedToolDefinition[]>('cmd_mcp_tool_definitions')
+  } catch (e: any) {
+    console.warn(
+      `[tool-defs] cmd_mcp_tool_definitions 失败，MCP 工具暂不可见：${e?.message || String(e)}`,
+    )
+    return []
+  }
 }

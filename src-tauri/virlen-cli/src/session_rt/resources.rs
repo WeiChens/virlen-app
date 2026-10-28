@@ -258,7 +258,14 @@ pub(crate) fn build_resources(
 
     let enable_tools = !cmd.no_tools;
     let tool_defs = if enable_tools {
-        tool_defs::list_tool_definitions()
+        let mut defs = tool_defs::list_tool_definitions();
+        // MCP 工具是**运行期动态定义**（不在 definitions.json 里）：管理器已在
+        // `SessionRuntime::bootstrap` 里启动并等过，这里读的是已发布快照。
+        // 不放进 `list_tool_definitions()`：那会打破「39 个工具」的契约断言。
+        if !cmd.no_mcp {
+            defs.extend(virlen_core::mcp::definitions());
+        }
+        defs
     } else {
         Vec::new()
     };
@@ -417,9 +424,13 @@ pub(crate) fn build_system_prompt(workspace: &Path, allow_env: bool, extra: Opti
     };
 
     let project_rules = read_project_rules(workspace);
+    // MCP 服务器说明书：CLI 的宿主在进会话前已经 `attach` 好了管理器（`--no-mcp` 时是 Noop），
+    // 这里同步取「已就绪服务器的说明书」，绝不等待连接。
+    let mcp_instructions = virlen_core::mcp::instructions();
     let mut prompt = compose_system_prompt(&PromptParts {
         env_prompt: env_prompt.as_deref(),
         project_rules: project_rules.as_deref(),
+        mcp_instructions: mcp_instructions.as_deref(),
         ..Default::default()
     });
 

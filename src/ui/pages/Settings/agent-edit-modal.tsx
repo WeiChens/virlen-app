@@ -18,6 +18,7 @@ import { t, tpl } from '@/ui/i18n'
 import './agent-edit-modal.scss'
 import { toolRegistry } from '@/domain/tools'
 import { TOOL_CATEGORIES } from '@/domain/tools/category'
+import { groupToolsForEditor } from '@/domain/tools/grouping'
 import { ResolvedToolDefinition } from '@/domain/tools/types'
 import { uuid } from '@/utils/uuid'
 import { DEFAULT_PROJECT_RULES_FILE, isSafeProjectRulesPath } from '@/domain/agent/project-rules'
@@ -420,33 +421,23 @@ export default function AgentEditModal({
     }
   }
 
-  /** 按分类分组，未匹配分类的归入「其他」——只分组**过滤后**的列表 */
-  const groupedTools = useMemo(() => {
-    const grouped: Array<{
-      category: (typeof TOOL_CATEGORIES)[0]
-      tools: ResolvedToolDefinition[]
-    }> = []
-
-    const usedNames = new Set<string>()
-
-    for (const cat of TOOL_CATEGORIES) {
-      const tools = filteredTools.filter((t) => cat.toolNames.includes(t.name))
-      if (tools.length > 0) {
-        grouped.push({ category: cat, tools })
-        for (const t of tools) usedNames.add(t.name)
-      }
-    }
-
-    const uncategorized = filteredTools.filter((t) => !usedNames.has(t.name))
-    if (uncategorized.length > 0) {
-      grouped.push({
-        category: { id: 'other', label: t('其他'), toolNames: uncategorized.map((t) => t.name) },
-        tools: uncategorized,
-      })
-    }
-
-    return grouped
-  }, [filteredTools])
+  /**
+   * 按分类分组，未匹配分类的归入「其他」——只分组**过滤后**的列表。
+   *
+   * 分组规则本身在 `domain/tools/grouping.ts`（纯函数，有单测）：MCP 工具按**服务器**动态分组
+   * （`MCP · <server>`），放在静态分类之后、「其他」之前 —— 既靠近「新东西」，又不打乱存量
+   * 工具的勾选习惯。为什么不写进 `TOOL_CATEGORIES`：那张表是契约（条数与 `definitions.json` 对齐），
+   * 而 MCP 服务器是用户随时可增删的运行期事实。
+   */
+  const groupedTools = useMemo(
+    () =>
+      groupToolsForEditor(filteredTools, {
+        categories: TOOL_CATEGORIES,
+        otherLabel: t('其他'),
+        mcpLabel: (server) => tpl('MCP · $__server__', { server }),
+      }),
+    [filteredTools],
+  )
 
   const allSkills = useMemo(
     () => listRegisteredSkills(),

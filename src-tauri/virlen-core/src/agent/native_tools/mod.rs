@@ -52,6 +52,8 @@
 //! │   ├── common.rs          文本格式化 / 输出上限 / 单会话字符预算（对齐 TS `tools/chat/common.ts`）
 //! │   ├── list_messages.rs   列出「已压缩区间」的消息时序
 //! │   └── read_messages.rs   按锚点读窗口内消息正文
+//! ├── mcp/                  MCP 资源（2）—— 服务器声明的可读数据（P3）
+//! │   └── mod.rs             list_mcp_resources / read_mcp_resource（跨服务器，所以是内置工具）
 //! ├── skill/                 技能（2）
 //! │   ├── common.rs          SKILL.md 元信息解析 / 目录扫描 / 文件树
 //! │   ├── list_skills.rs
@@ -75,7 +77,7 @@
 //! │   └── web_search.rs      经已配置搜索源检索（tavily / bocha；直读 `app_settings`）
 //! ```
 //!
-//! **37 个工具全部有 Rust 原生实现**（不再有走 JS 桥的工具）。安全策略与前端
+//! **39 个工具全部有 Rust 原生实现**（不再有走 JS 桥的工具）。安全策略与前端
 //! `securityService.resolveSafePath` / `securityPort.isPathAllowed` 对齐；各工具的模型侧
 //! `content` / `uiData` 与 TS 回退路径逐字对齐（铁律 1）。
 
@@ -85,6 +87,7 @@ mod heavy;
 pub(crate) mod execute;
 mod file;
 mod knowledge_base;
+mod mcp;
 mod memory;
 pub(crate) mod plan;
 mod search;
@@ -238,7 +241,7 @@ pub fn noop_memory() -> &'static NoopMemoryRepo {
 /// 全部原生工具名（**37 个**）—— `is_native_tool` 与契约守卫测试（本模块的
 /// `native_tool_list_matches_the_contract`）都取自这一份，新增工具必须同时改这里与
 /// `execute_native_tool` 的分发（否则契约测试会红）。
-const NATIVE_TOOL_NAMES: [&str; 37] = [
+const NATIVE_TOOL_NAMES: [&str; 39] = [
     // file（10）
     "read_file",
     "write_file",
@@ -282,11 +285,14 @@ const NATIVE_TOOL_NAMES: [&str; 37] = [
     "get_background_service",
     "kill_background_service",
     "list_background_services",
+    // mcp（2）—— MCP 服务器声明的资源（P3）
+    "list_mcp_resources",
+    "read_mcp_resource",
 ];
 
 /// 是否由原生 Rust 直接执行
 ///
-/// JS 桥虽仍保留（未原生化的工具才走），但当前 37 个工具**全部**已原生实现。
+/// JS 桥虽仍保留（未原生化的工具才走），但当前 39 个工具**全部**已原生实现。
 pub fn is_native_tool(name: &str) -> bool {
     NATIVE_TOOL_NAMES.contains(&name)
 }
@@ -341,6 +347,8 @@ pub async fn execute_native_tool(
         "get_background_service" => service::get_background_service_tool(ctx, args).await,
         "kill_background_service" => service::kill_background_service_tool(ctx, args).await,
         "list_background_services" => service::list_background_services_tool(ctx, args).await,
+        "list_mcp_resources" => mcp::list_mcp_resources_tool(ctx, args).await,
+        "read_mcp_resource" => mcp::read_mcp_resource_tool(ctx, args).await,
         _ => Err(format!("Tool \"{}\" not implemented natively", tool_name)),
     }
 }

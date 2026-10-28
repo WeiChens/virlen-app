@@ -19,5 +19,6 @@ export const toolsInit = async () => {
     import('@/infrastructure/tools/plan'),
     import('@/infrastructure/tools/chat'),
     import('@/infrastructure/tools/memory'),
+    import('@/infrastructure/tools/mcp'),
   ])
 }

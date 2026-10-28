@@ -26,6 +26,9 @@ import MemoryMessage from './MemoryMessage'
 import BackgroundServiceMessage from './BackgroundServiceMessage'
 import ParseDocumentMessage from './ParseDocumentMessage'
 import PresentMessage from './PresentMessage'
+import McpToolMessage from './McpToolMessage'
+import McpResourceMessage from './McpResourceMessage'
+import { isMcpToolName } from '@/domain/mcp/naming'
 
 export interface IToolCallMessage {
   getToolName(): string
@@ -102,7 +105,23 @@ registerMulti(
 )
 register(new ParseDocumentMessage())
 register(new PresentMessage())
+registerMulti(
+  ['list_mcp_resources', 'read_mcp_resource'],
+  () => new McpResourceMessage(),
+)
 
+/** MCP 卡片无状态（不持有 props），一份实例足够 */
+const mcpToolMessage = new McpToolMessage()
+
+/**
+ * 取工具卡片实现。
+ *
+ * ⚠️ `mcp__*` 是**前缀**兜底（不是逐个注册）：MCP 工具由服务器在运行期决定，
+ * 前端不可能在编译期把名字写进注册表。其余名字仍精确匹配，未命中退 `DefaultMessage`。
+ */
 export const getToolCallMessage = (type: string) => {
-  return toolCallMessageList.get(type) || new DefaultMessage()
+  const registered = toolCallMessageList.get(type)
+  if (registered) return registered
+  if (isMcpToolName(type)) return mcpToolMessage
+  return new DefaultMessage()
 }

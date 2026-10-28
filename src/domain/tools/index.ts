@@ -5,6 +5,8 @@
  *   `ToolDefinitionsLoader` 注入；本注册中心只保存**执行器**（+ i18n 文案 `label`）；
  * - `listDefinitions()` 返回「契约 ∩ 已注册执行器」，**顺序以契约为准**（模型既不会看到没实现的工具，
  *   也不会漏掉契约新增的）；
+ * - **MCP 工具是例外**：它们是运行期动态定义、执行在 Rust（没有 JS 执行器），因此只要定义存在
+ *   就进 `listDefinitions()`，不参与「契约 ∩ 执行器」的相交（见 `isMcpToolName`）；
  * - 所有读取接口都是异步的（首次读取时才载入定义）。
  */
 import { ToolRegistry } from '../ports/ToolRegistry'
@@ -15,6 +17,7 @@ import type {
   ToolExecutor,
 } from './types'
 import type { ToolDefinitionsLoader } from './definitions'
+import { isMcpToolName } from '../mcp/naming'
 
 export { filterAllowedToolDefs } from './allowed'
 
@@ -102,7 +105,12 @@ export class ToolRegistryImpl implements ToolRegistry {
     const out: ResolvedToolDefinition[] = []
     for (const def of defs) {
       const exec = this.executors.get(def.name)
-      if (exec) out.push(withLabel(def, exec))
+      if (exec) {
+        out.push(withLabel(def, exec))
+      } else if (isMcpToolName(def.name)) {
+        // MCP 工具由 Rust 执行（`tool_executor` 的 `exec_path = "mcp"`），前端没有执行器
+        out.push(def)
+      }
     }
     return out
   }
@@ -127,10 +135,12 @@ export class ToolRegistryImpl implements ToolRegistry {
     return out
   }
 
-  /** 诊断：契约里有定义、但没有执行器（正常为空） */
+  /** 诊断：契约里有定义、但没有执行器（正常为空；MCP 工具由 Rust 执行，不在此列） */
   async missingExecutorNames(): Promise<string[]> {
     const defs = await this.ensureDefinitions()
-    return defs.filter((d) => !this.executors.has(d.name)).map((d) => d.name)
+    return defs
+      .filter((d) => !this.executors.has(d.name) && !isMcpToolName(d.name))
+      .map((d) => d.name)
   }
 
   /** 诊断：注册了执行器、但契约里没有定义（正常为空） */

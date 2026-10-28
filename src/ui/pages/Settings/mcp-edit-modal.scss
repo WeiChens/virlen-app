@@ -1,0 +1,367 @@
+.mcp-edit-form {
+  padding: 4px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+
+    label {
+      font-size: var(--font-size-md);
+      font-weight: 500;
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    input[type='text'],
+    input[type='number'],
+    textarea {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid var(--border-color, #e5e5e5);
+      border-radius: 8px;
+      font-size: var(--font-size-md);
+      background: var(--bg-primary, #fff);
+      color: var(--text-primary, #1a1a1a);
+      outline: none;
+      box-sizing: border-box;
+      transition: border-color 0.15s;
+
+      &:focus {
+        border-color: var(--accent-color, #4f46e5);
+      }
+
+      /* 键盘定位的焦点环比鼠标 hover 的描边多一层光晕（与其他表单页同口径） */
+      &:focus-visible {
+        outline: none;
+        box-shadow: var(--focus-shadow);
+      }
+    }
+
+    textarea {
+      min-height: 72px;
+      font-family: var(--code-font-family, monospace);
+      font-size: var(--font-size-sm);
+      line-height: 1.5;
+      resize: vertical;
+    }
+  }
+
+  /* 表单辅助说明：既要在 .form-group 里用，也要能在 .form-section 直接用（工具区的提示） ——
+     所以挂在表单作用域而不是某个字段上 */
+  .form-hint {
+    margin: 0;
+    font-size: var(--font-size-xs);
+    line-height: 1.5;
+    color: var(--text-secondary, #999);
+  }
+
+  // 三个数值字段并排（审批 / 两个超时）；窄弹窗下自动降成两列、一列
+  .form-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+  }
+
+  // 传输方式：两枚互斥按钮（比 select 少一次展开，也更清楚）
+  .transport-switch {
+    display: flex;
+    gap: 8px;
+
+    button {
+      flex: 1;
+      padding: 8px 10px;
+      border: 1px solid var(--border-color, #e5e5e5);
+      border-radius: 8px;
+      background: var(--bg-primary, #fff);
+      color: var(--text-primary, #1a1a1a);
+      font-size: var(--font-size-sm);
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+
+      &.active {
+        border-color: var(--accent-color, #4f46e5);
+        color: var(--accent-color, #4f46e5);
+        background: color-mix(in srgb, var(--accent-color, #4f46e5) 8%, transparent);
+      }
+    }
+  }
+
+  /* 选项分组：标题 + 若干「说明在左、开关在右」的行 */
+  .form-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+
+    .form-section-title {
+      margin: 0;
+      font-size: var(--font-size-sm);
+      font-weight: 600;
+      color: var(--text-secondary, #666);
+    }
+  }
+
+  .form-switches {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 10px;
+    overflow: hidden;
+
+    .switch-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 10px 12px;
+      transition: background 0.15s;
+
+      & + .switch-row {
+        border-top: 1px solid var(--border-color-light);
+      }
+
+      /* 只有右侧开关接交互（整行不是 label：Toggle 自己就是一个 label，嵌套 label 无效）
+         —— 行只做 hover 高亮，告诉读者「这个开关管的是这一整段」 */
+      &:hover {
+        background: var(--bg-tertiary);
+      }
+
+      .switch-text {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+
+        .switch-title {
+          font-size: var(--font-size-md);
+          color: var(--text-primary, #1a1a1a);
+        }
+
+        .switch-hint {
+          font-size: var(--font-size-xs);
+          line-height: 1.5;
+          color: var(--text-secondary, #666);
+        }
+      }
+    }
+  }
+
+  /* ==================== 工具清单（测试连接 → 勾选） ==================== */
+
+  .tools-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+
+    /* 「已连接 · 26 个工具」：就是探测结果，不再单独占一块绿底提示框 */
+    .tools-count {
+      font-size: var(--font-size-xs);
+      color: var(--color-success-text);
+      white-space: nowrap;
+    }
+  }
+
+  .tools-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: var(--font-size-xs);
+    color: var(--text-secondary, #777);
+  }
+
+  /* 文字按钮（全选 / 取消全选）：与 agent 编辑器的同类动作一个观感 */
+  .link-btn {
+    padding: 2px 8px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--accent-color, #4f46e5);
+    font-size: var(--font-size-xs);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s;
+
+    &:hover {
+      background: var(--hover-bg, #f0f0f0);
+    }
+
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 1px;
+    }
+  }
+
+  /* 26 个工具不能把弹窗撑成两屏：区内滚动，行内名字 + 两行描述 */
+  .mcp-tool-picker {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color, #e5e5e5);
+    border-radius: 10px;
+
+    li + li {
+      border-top: 1px solid var(--border-color-light);
+    }
+
+    label {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 8px 12px;
+      cursor: pointer;
+      transition: background 0.15s;
+
+      &:hover {
+        background: var(--bg-tertiary);
+      }
+    }
+
+    /* 浏览器原生复选框：尺寸用 em 跟着字号走（可用性尺寸，不再自己画一枚） */
+    input[type='checkbox'] {
+      flex-shrink: 0;
+      width: 1.15em;
+      height: 1.15em;
+      margin: 0.15em 0 0;
+      accent-color: var(--accent-color, #4f46e5);
+      cursor: pointer;
+    }
+
+    .picker-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    code {
+      font-family: var(--code-font-family);
+      font-size: var(--font-size-xs);
+      color: var(--text-primary, #1a1a1a);
+      overflow-wrap: anywhere;
+    }
+
+    .picker-desc {
+      font-size: var(--font-size-xs);
+      line-height: 1.5;
+      color: var(--text-secondary, #777);
+      /* 描述动辄 200 字符：折叠两行，全文挂 title */
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      line-clamp: 2;
+      overflow: hidden;
+    }
+  }
+
+  // 「测试连接」结果：成功已在工具区头里展示，这里只剩失败态（原因原文来自 Rust，不翻译）+ 常见原因
+  .probe-result {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    font-size: var(--font-size-sm);
+    line-height: 1.6;
+    border: 1px solid var(--border-color, #e5e5e5);
+    background: var(--bg-tertiary);
+
+    .probe-head {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      min-width: 0;
+
+      /* 状态点代替图标：成功 / 失败只差一个颜色，不再多引一枚 SVG */
+      .probe-dot {
+        width: 8px;
+        height: 8px;
+        margin-top: 0.45em;
+        flex-shrink: 0;
+        border-radius: 50%;
+        background: currentColor;
+      }
+
+      .probe-title {
+        flex: 1;
+        min-width: 0;
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+
+      .probe-close {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 22px;
+        height: 22px;
+        margin: -2px -4px 0 0;
+        padding: 0;
+        flex-shrink: 0;
+        border: none;
+        border-radius: 5px;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        opacity: 0.7;
+
+        svg {
+          width: 11px;
+          height: 11px;
+          fill: currentColor;
+        }
+
+        &:hover {
+          opacity: 1;
+          background: color-mix(in srgb, currentColor 14%, transparent);
+        }
+
+        &:focus-visible {
+          outline: var(--focus-ring);
+          outline-offset: 1px;
+        }
+      }
+    }
+
+    &.error {
+      border-color: color-mix(in srgb, var(--color-error-text) 40%, transparent);
+      background: var(--color-error-bg);
+      color: var(--color-error-text);
+    }
+
+    .probe-hint {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      margin: 0;
+      font-size: var(--font-size-xs);
+      line-height: 1.5;
+
+      svg {
+        width: 12px;
+        height: 12px;
+        margin-top: 0.2em;
+        flex-shrink: 0;
+        fill: currentColor;
+      }
+    }
+  }
+}
+
+/* 弹窗页脚的门禁说明（渲染在 Modal 的 footer 里，拿不到 .mcp-edit-form 作用域，
+   故写成顶层规则）；`margin-right: auto` 把它推到左端，按钮仍靠右 */
+.mcp-footer-hint {
+  margin-right: auto;
+  align-self: center;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary, #999);
+}

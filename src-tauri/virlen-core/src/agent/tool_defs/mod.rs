@@ -72,7 +72,7 @@ pub fn tool_count() -> usize {
 mod tests {
     use super::*;
 
-    const EXPECTED_TOOLS: usize = 37;
+    const EXPECTED_TOOLS: usize = 39;
 
     #[test]
     fn all_platforms_present_and_complete() {

@@ -80,7 +80,9 @@ pub(crate) fn ask_user(kind: &str, data: &Value, interactive: bool, stdin: &mut 
     let denied = || json!({ "__kind": "cancelled" });
 
     match kind {
-        "confirm_command_native" => {
+        // MCP 工具调用（ask 档）与命令审批同一个问法：都是「把要干的事摆出来，y 放行」
+        //（`mcp/bridge.rs` 只认 `approved` 文本，与命令路径同一口径）
+        "confirm_command_native" | "confirm_mcp_call" => {
             let title = data.get("title").and_then(Value::as_str).unwrap_or("");
             let desc = data.get("desc").and_then(Value::as_str).unwrap_or("");
             let hint = data.get("hint").and_then(Value::as_str).unwrap_or("");
