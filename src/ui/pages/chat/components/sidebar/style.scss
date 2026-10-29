@@ -888,9 +888,6 @@
         cursor: pointer;
       }
 
-      /* 展开开关（目录行特有）：坐落在文件类型图标那一列（16px），左边 12px 由
-         .tree-arrow-placeholder 占住 —— 两类行的名字起点因此完全重合。
-         点它只切展开，不改选择 */
       .tree-arrow-btn {
         display: flex;
         align-items: center;
@@ -920,12 +917,6 @@
         }
       }
 
-      /* 左侧固定占位：目录行之后接箭头、文件行之后接类型图标，宽度必须一致 */
-      .tree-arrow-placeholder {
-        width: 12px;
-        height: 12px;
-        flex-shrink: 0;
-      }
 
       .tree-icon {
         width: 16px;
