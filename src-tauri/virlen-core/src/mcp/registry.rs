@@ -305,10 +305,18 @@ impl McpHost for McpManager {
     ///
     /// 只收「已就绪且 `injectInstructions` 开」的：`backoff` / `failed` 的服务器本轮没有工具可用，
     /// 把它的说明书也注进去只会浪费上下文并误导模型。
-    fn instructions(&self) -> Option<String> {
+    ///
+    /// `allowed_servers` 是 Agent 白名单折算出的服务器名（`None` = 不过滤，`Some(&[])` = 一个都不注）。
+    /// ⚠️ 必须与「工具实际下发」同一口径：白名单把某台服务器的工具全摘掉后，说明书也不能注 ——
+    /// 否则模型会看到“怎么用一批它完全看不到的工具”的指引（真实事故：改名后的幽灵名把默认 Agent 的
+    /// MCP 工具全部落空，提示词里仍整段注入 blender 说明书）。
+    fn instructions(&self, allowed_servers: Option<&[String]>) -> Option<String> {
         let servers = self.servers.read().unwrap().clone();
         let entries: Vec<(String, String)> = servers
             .iter()
+            .filter(|server| {
+                super::instructions::allows_server(allowed_servers, &server.config().name)
+            })
             .filter_map(|server| {
                 server
                     .instructions()

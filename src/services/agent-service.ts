@@ -6,6 +6,7 @@ import { getEnvPrompt } from '@/services/env-service'
 import { loadProjectRulesPrompt } from '@/services/project-rules-service'
 import { loadMemorySection, touchMemories } from '@/infrastructure/memoryRepo'
 import { mcpRepo } from '@/infrastructure/mcp/repo'
+import { mcpServersOfTools } from '@/domain/mcp/naming'
 import {
   DEFAULT_PROJECT_RULES_FILE,
   resolveProjectRulesFile,
@@ -53,9 +54,14 @@ export async function assembleAgentPrompt(
       .map((s) => ({ name: s.meta.name, description: s.meta.description }))
   }
 
-  // MCP 服务器说明书：只收「已就绪 + 开了 injectInstructions」的那些，Rust 侧拼好带归属前缀。
+  // MCP 服务器说明书：只收「已就绪 + 开了 injectInstructions + **该 Agent 白名单里确实有它的工具**」的那些，
+  // Rust 侧拼好带归属前缀。
+  // 第三项必须与「工具实际下发」（`filterAllowedToolDefs`）同口径：白名单把某台服务器的工具全摘掉后，
+  // 注入它的说明书只会教模型用一批它完全看不到的工具（真实事故：默认 Agent 0 个 MCP 工具，说明书照旧）。
   // 与记忆同理 —— 只在建会话那一刻取一次，中途改配置不影响已建会话的 systemPrompt。
-  const mcpInstructions = await mcpRepo.instructions()
+  const mcpInstructions = await mcpRepo.instructions(
+    mcpServersOfTools(agent.allowTools),
+  )
 
   // 顺序与分隔符由 domain 层固定：必须与 Rust 侧 prompts/assemble.rs 逐字节一致
   // （golden 测试 src/tests/domain/compose-prompt-golden.test.ts 守这条线）

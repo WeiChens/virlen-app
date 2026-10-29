@@ -14,6 +14,7 @@ import Select from '@/ui/components/shared/Select'
 import Toggle from '@/ui/components/shared/Toggle'
 import { showToast } from '@/ui/components/shared/Toast'
 import { mcpRepo } from '@/infrastructure/mcp/repo'
+import { migrateAgentToolNames } from '@/services/mcp'
 import {
   MCP_APPROVAL_OPTIONS,
   argsToText,
@@ -239,6 +240,15 @@ export default function McpEditModal({
     setSaving(true)
     try {
       await mcpRepo.upsert(config)
+      // 改名 → 把各 Agent 白名单里的旧公开名成新名（不迁就等于把该服务器的工具从所有
+      // Agent 上静默摘掉）。必须等 upsert 成功后再改，否则服务器没改而白名单先跑了。
+      const previousName = initialConfig?.name
+      if (previousName && previousName !== config.name) {
+        const migrated = migrateAgentToolNames(previousName, config.name)
+        if (migrated > 0) {
+          showToast(tpl('已同步 $__count__ 个工具名', { count: migrated }))
+        }
+      }
       onSaved()
     } catch (e: any) {
       showToast(e?.message ?? String(e))
@@ -301,7 +311,9 @@ export default function McpEditModal({
             onChange={(e) => setName(e.target.value)}
           />
           <p className="form-hint" id="mcp-name-hint">
-            {t('用作工具名前缀（mcp__名称__工具）。改名会让已有会话里的工具名失效。')}
+            {t(
+              '用作工具名前缀（mcp__名称__工具）。改名会同步迁移各 Agent 的白名单，但已有会话历史里的工具名仍会失效。',
+            )}
           </p>
         </div>
 

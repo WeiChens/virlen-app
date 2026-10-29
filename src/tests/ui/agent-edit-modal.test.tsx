@@ -16,6 +16,7 @@ import AgentEditModal from '@/ui/pages/Settings/agent-edit-modal'
 import { useMessageBox } from '@/ui/components/shared/MessageBox'
 import { setToolDefinitionsLoader, toolRegistry } from '@/domain/tools'
 import type { ResolvedToolDefinition, ToolExecutor } from '@/domain/tools/types'
+import { agentStore } from '@/ui/store'
 import type { Agent } from '@/types'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
@@ -348,5 +349,47 @@ describe('AgentEditModal', () => {
     expect(el<HTMLTextAreaElement>('textarea.md-textarea')!.value).toContain(
       '说话严谨',
     )
+  })
+
+  /**
+   * 「已选 N」的口径（§11.69）：白名单里的幽灵名（MCP 服务器改名 / 已移除）不能算进 N ——
+   * 否则就是用户报过的「48 行一个都没勾，却写着已选 35 / 48」。
+   */
+  it('白名单含当前列表里不存在的名字：计数只算列表内、失效项单独提示、「清理」才移除', async () => {
+    const agent: Agent = {
+      ...AGENT,
+      allowTools: ['alpha_tool', 'mcp__gone__tool'],
+    }
+    await render(agent)
+    await act(async () => tabByText('工具选择').click())
+
+    const header = () => el<HTMLElement>('.tool-select-header')!.textContent ?? ''
+    // 列表里只有 alpha_tool 存在且被勾上
+    expect(header()).toContain('已选 1 / 2 个工具')
+    expect(header()).toContain('1 项已失效')
+
+    // 清理前先保存：幽灵名**原样保留**（保存时不按当前列表裁剪，MCP 离线时裁了就回不来）
+    await act(async () => el<HTMLButtonElement>('.btn-confirm')!.click())
+    expect(new Set(agentStore.getAgent('agent-1')!.allowTools)).toEqual(
+      new Set(['alpha_tool', 'mcp__gone__tool']),
+    )
+  })
+
+  it('点「清理」只移除失效名，勾上的工具一个不少，并提示不再有失效项', async () => {
+    const agent: Agent = {
+      ...AGENT,
+      allowTools: ['alpha_tool', 'mcp__gone__tool'],
+    }
+    await render(agent)
+    await act(async () => tabByText('工具选择').click())
+
+    await act(async () => el<HTMLButtonElement>('.tool-orphan-clear')!.click())
+
+    const header = () => el<HTMLElement>('.tool-select-header')!.textContent ?? ''
+    expect(header()).toContain('已选 1 / 2 个工具')
+    expect(header()).not.toContain('项已失效')
+
+    await act(async () => el<HTMLButtonElement>('.btn-confirm')!.click())
+    expect(agentStore.getAgent('agent-1')!.allowTools).toEqual(['alpha_tool'])
   })
 })

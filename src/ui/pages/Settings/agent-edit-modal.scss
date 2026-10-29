@@ -369,6 +369,30 @@
     margin-left: 4px;
   }
 
+  // 「N 项已失效」一行 + 就地清理（只改表单状态，保存后才落库）
+  // 选择器写成 `.form-hint.tool-orphan-hint`：要与 `.form-group .form-hint` 同权，
+  // 否则灰色文字色盖掉这里的警示色（两者特异度相同时后者生效）
+  .form-hint.tool-orphan-hint {
+    display: block;
+    margin-top: 2px;
+    color: var(--warning-color, #b45309);
+  }
+
+  .tool-orphan-clear {
+    margin-left: 6px;
+    padding: 0 6px;
+    font-size: var(--font-size-sm);
+    color: var(--accent-color, #4f46e5);
+    background: none;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    cursor: pointer;
+
+    &:hover {
+      background: var(--hover-bg, #f0f0f0);
+    }
+  }
+
   // ==================== Tool Grid ====================
 
   // 工具 / 技能页签采用「固定表头 + 独立滚动列表」的两段式布局：

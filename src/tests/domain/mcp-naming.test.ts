@@ -6,7 +6,7 @@
  * 两套实现必然漂移），所以这里断言的是「Rust 生成的名字，前端能正确拆回服务器与原始工具名」。
  */
 import fixturesRaw from '../../../src-tauri/virlen-core/src/mcp/naming_fixtures.json?raw'
-import { isMcpToolName, mcpToolLabel, parseMcpToolName } from '@/domain/mcp'
+import { isMcpToolName, mcpServersOfTools, mcpToolLabel, parseMcpToolName } from '@/domain/mcp'
 
 interface FixtureCase {
   server: string
@@ -70,5 +70,26 @@ describe('MCP 公开名（黄金值来自 Rust）', () => {
   it('卡片标签是 server · raw，拆不出来时退回原名', () => {
     expect(mcpToolLabel('mcp__github__create_issue')).toBe('github · create_issue')
     expect(mcpToolLabel('read_file')).toBe('read_file')
+  })
+
+  it('白名单 → 涉及的服务器（说明书注入口径，与工具下发同三态）', () => {
+    // `undefined`（无白名单 = 全部工具）→ 不过滤
+    expect(mcpServersOfTools(undefined)).toBeNull()
+    // 空数组 = 一个都不注
+    expect(mcpServersOfTools([])).toEqual([])
+    // 只拿到内置工具 = 没有任何 MCP 服务器
+    expect(mcpServersOfTools(['read_file', 'execute_command'])).toEqual([])
+    // 按服务器去重，保持首次出现顺序；形状残缺的名字忽略
+    expect(
+      mcpServersOfTools([
+        'mcp__fs__read',
+        'read_file',
+        'mcp__db__query',
+        'mcp__fs__write',
+        'mcp__broken',
+      ]),
+    ).toEqual(['fs', 'db'])
+    // 旧名（改名后的幽灵名）仍能解出旧服务器 —— Rust 侧名单认不得它，自然不会注入（fail-closed）
+    expect(mcpServersOfTools(['mcp__fs-old__read'])).toEqual(['fs-old'])
   })
 })

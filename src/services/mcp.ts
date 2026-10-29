@@ -18,7 +18,7 @@ import { toolRegistry } from '@/domain/tools'
 import { initDefaultAgent } from '@/services/agent-service'
 import { agentStore } from '@/ui/store/agentStore'
 import { mcpStore } from '@/ui/store/mcpStore'
-import type { McpServerStatus } from '@/domain/mcp'
+import { migrateAllowedToolNames, type McpServerStatus } from '@/domain/mcp'
 
 /** Rust → JS 事件名（`src-tauri/src/commands/mcp.rs::TauriMcpSink`） */
 export const EVENT_MCP_CHANGED = 'mcp:changed'
@@ -49,6 +49,25 @@ export function initMcpBridge(): void {
   void handleMcpChanged().catch(() => {
     // 对齐失败不影响主流程：下一次 `mcp:changed` 或用户手动刷新会再试
   })
+}
+
+/**
+ * 服务器改名 → 迁移各 Agent 白名单里的旧公开名（返回改写的名字条数）。
+ *
+ * 为什么在前端做而不是在 `cmd_mcp_upsert` 里直接改表：Agent 的运行期权威副本是
+ * `agentRepo` 的**内存快照**（写入 400ms debounce 才落表）。Rust 改表后前端快照仍是旧的，
+ * 下一次 `initDefaultAgent()` 或编辑器保存会把它整份写回去，迁移当场被抹掉。
+ * 代价：绕过 GUI 直接改 `app_settings.mcpServers`（如 `virlen-cli config set`）不会迁移。
+ */
+export function migrateAgentToolNames(oldName: string, newName: string): number {
+  const before = agentStore.listAgents()
+  const { agents, changed } = migrateAllowedToolNames(before, oldName, newName)
+  if (changed === 0) return 0
+  // 只写真正改过的那几个：saveAgent 会刷 updatedAt，没必要整份重写
+  agents.forEach((agent, index) => {
+    if (agent !== before[index]) agentStore.saveAgent(agent)
+  })
+  return changed
 }
 
 /**

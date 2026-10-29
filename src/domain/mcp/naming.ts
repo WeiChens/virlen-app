@@ -48,3 +48,24 @@ export function mcpToolLabel(name: string): string {
   const parsed = parseMcpToolName(name)
   return parsed ? `${parsed.server} · ${parsed.raw}` : name
 }
+
+/**
+ * 白名单 → 涉及的 MCP 服务器名（去重）。
+ *
+ * 唯一用途：**说明书注入口径**（`agent-service` 传给 `cmd_mcp_instructions`）。
+ * 三态映射与 `filterAllowedToolDefs`（工具下发的唯一口径）逐条对应：
+ * - `undefined`（无白名单 = 全部工具）→ `null`（不过滤）；
+ * - `[]`（显式关掉全部）→ `[]`（一个都不注）；
+ * - 有名字 → 解析出的服务器名；旧名解析出已不存在的服务器时，Rust 侧自然过滤掉（fail-closed）。
+ */
+export function mcpServersOfTools(
+  toolNames: readonly string[] | undefined,
+): string[] | null {
+  if (toolNames === undefined) return null
+  const servers = new Set<string>()
+  for (const name of toolNames) {
+    const parsed = parseMcpToolName(name)
+    if (parsed) servers.add(parsed.server)
+  }
+  return [...servers]
+}

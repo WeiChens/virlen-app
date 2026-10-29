@@ -212,6 +212,27 @@ export default function AgentEditModal({
     )
   }, [allTools, toolQuery])
 
+  /**
+   * 「已选」的口径：**当前工具列表里被勾上的数量**，不是 `allowTools.length`。
+   *
+   * ⚠️ 白名单是名字列表，不保证每个名字现在都存在：MCP 服务器改名 / 被删 / 停用、平台
+   * 不支持的内置工具，都会留下指向空气的条目。此前直接数 `allowTools.length`，于是出现过
+   * 「48 行一个都没勾、却写着已选 35 / 48」（§11.69）—— 一半是真状态，一半是幽灵。
+   */
+  const allToolNames = useMemo(
+    () => new Set(allTools.map((tool) => tool.name)),
+    [allTools],
+  )
+  const selectedToolCount = useMemo(
+    () => allTools.filter((tool) => allowTools.includes(tool.name)).length,
+    [allTools, allowTools],
+  )
+  /** 白名单里当前不存在的名字（去重）：不参与下发，但会被原样保存 —— 只能显式清理 */
+  const orphanToolNames = useMemo(
+    () => [...new Set(allowTools)].filter((name) => !allToolNames.has(name)),
+    [allowTools, allToolNames],
+  )
+
   useEffect(() => {
     ; (async () => {
       const res = await toolRegistry.listDefinitions()
@@ -367,6 +388,8 @@ export default function AgentEditModal({
         providerConfigId,
         modelId,
       },
+      // 白名单**原样落库**，不按当前工具列表裁剪：MCP 服务器离线 / 暂未发布的工具
+      // 此刻本来就不在列表里，保存时裁掉等于永久丢勾选。幽灵只由用户点「清理」移除。
       allowTools,
       skills,
       defaultParams: {
@@ -389,6 +412,16 @@ export default function AgentEditModal({
         ? prev.filter((t) => t !== toolName)
         : [...prev, toolName],
     )
+  }
+
+  /**
+   * 清掉已失效的名字。**只改表单状态**（点保存才落库），且只由用户显式点这里触发。
+   *
+   * ⚠️ 不能反过来「保存时按当前列表自动裁剪」：MCP 服务器离线时它的工具本来就不在列表里，
+   * 自动裁剪等于把用户勾过的 MCP 工具永久删掉，重连也回不来。
+   */
+  function clearOrphanTools() {
+    setAllowTools((prev) => prev.filter((name) => allToolNames.has(name)))
   }
 
   function toggleAllTools() {
@@ -916,8 +949,10 @@ export default function AgentEditModal({
                   <div>
                     <label>{t('允许使用的工具')}</label>
                     <span className="form-hint">
-                      {t('已选')} {allowTools.length} / {allTools.length}
-                      {t(' 个工具')}
+                      {tpl('已选 $__done__ / $__all__ 个工具', {
+                        done: selectedToolCount,
+                        all: allTools.length,
+                      })}
                       {toolQuery.trim() && (
                         <em className="tool-match-hint">
                           {tpl('（匹配 $__count__ 项）', {
@@ -926,6 +961,21 @@ export default function AgentEditModal({
                         </em>
                       )}
                     </span>
+                    {/* 幽灵条目要摆出来：否则「已选」与实际下发对不上，用户只会以为界面坏了 */}
+                    {orphanToolNames.length > 0 && (
+                      <span className="form-hint tool-orphan-hint">
+                        {tpl('$__count__ 项已失效（服务器改名或已移除）', {
+                          count: orphanToolNames.length,
+                        })}
+                        <button
+                          type="button"
+                          className="tool-orphan-clear"
+                          title={t('从白名单里移除这些名字（保存后生效）')}
+                          onClick={clearOrphanTools}>
+                          {t('清理')}
+                        </button>
+                      </span>
+                    )}
                   </div>
                   <button
                     className="toggle-all-btn"

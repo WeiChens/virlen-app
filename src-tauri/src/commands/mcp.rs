@@ -217,9 +217,16 @@ pub async fn cmd_mcp_import(app: tauri::AppHandle, json: String) -> Result<Impor
 ///
 /// 建会话时调一次：MCP 说明书与记忆一样属于「会话建立那一刻的背景」，中途变更不影响已建会话
 /// （保 prompt cache，且不把用户已经发出去的那一轮上下文改写掉）。
+///
+/// `allowedServers`：会话所属 Agent 白名单折算出的**服务器名**（不是公开工具名）。
+/// `null` = 不过滤（无白名单的宿主）；空数组 = 一个都不注 —— 必须与「工具实际下发」同口径，
+/// 否则提示词会教模型用一批它完全看不到的工具。
 #[tauri::command]
-pub async fn cmd_mcp_instructions(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    Ok(manager_of(&app)?.instructions())
+pub async fn cmd_mcp_instructions(
+    app: tauri::AppHandle,
+    allowed_servers: Option<Vec<String>>,
+) -> Result<Option<String>, String> {
+    Ok(manager_of(&app)?.instructions(allowed_servers.as_deref()))
 }
 
 // ==================== 测试 ====================

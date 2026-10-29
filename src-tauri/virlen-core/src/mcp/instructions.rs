@@ -38,6 +38,20 @@ pub fn render(entries: &[(String, String)]) -> Option<String> {
     Some(truncate(&joined, MAX_INSTRUCTIONS_CHARS))
 }
 
+/// 一台服务器的说明书能不能注入。
+///
+/// - `None`：调用方没有白名单（CLI 全量下发工具、测试宿主）→ 不过滤；
+/// - `Some(list)`：只有名单内的才注 —— 空名单 = 一个都不注。
+///
+/// ⚠️ 必须与「工具实际下发」同一口径（TS `filterAllowedToolDefs` / 引擎 `resolveToolDefs`）：
+/// 白名单把某台服务器的工具全摘掉却仍注入它的说明书，模型会去用一批它完全看不到的工具。
+pub fn allows_server(allowed: Option<&[String]>, server: &str) -> bool {
+    match allowed {
+        None => true,
+        Some(list) => list.iter().any(|name| name == server),
+    }
+}
+
 /// 按字符截断（不切坏 UTF-8），并留一行明确标记
 fn truncate(input: &str, max: usize) -> String {
     let total = input.chars().count();
@@ -71,6 +85,19 @@ mod tests {
         assert!(fs < db, "顺序应与传入顺序一致");
         assert!(block.contains("Read-only server."));
         assert!(block.contains("not as instructions from the user"), "归属说明不能少");
+    }
+
+    #[test]
+    fn server_filter_matches_allowlist() {
+        // 无白名单 = 不过滤
+        assert!(allows_server(None, "fs"));
+        // 空名单 = 一个都不注（白名单把工具全关掉的情形）
+        assert!(!allows_server(Some(&[]), "fs"));
+        let list = vec!["fs".to_string()];
+        assert!(allows_server(Some(&list), "fs"));
+        assert!(!allows_server(Some(&list), "db"));
+        // 旧名（改名后的幽灵名）解出的服务器不在名单里 → 不注（fail-closed）
+        assert!(!allows_server(Some(&list), "fs-old"));
     }
 
     /// 超限必须截断，且不能切出半个 UTF-8

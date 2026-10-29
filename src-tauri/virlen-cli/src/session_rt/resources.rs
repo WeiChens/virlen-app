@@ -274,10 +274,26 @@ pub(crate) fn build_resources(
         .get("allowEnvPrompt")
         .and_then(Value::as_bool)
         .unwrap_or(true);
+    // MCP 说明书与工具**同一口径**：只给「本次真的下发了该服务器工具」的服务器。
+    // `--no-tools` / `--no-mcp` 下 `tool_defs` 里没有 `mcp__` 名字 → 说明书也不注。
+    // CLI 没有 Agent 白名单（工具本就全量下发），所以从实际下发的定义里反推，而不是传 `None`：
+    // 传 `None` 会让 `--no-tools` 时依旧注入一堆用不上的说明书。
+    let mcp_servers: Vec<String> = {
+        let mut names: Vec<String> = tool_defs
+            .iter()
+            .filter_map(|def| {
+                virlen_core::mcp::split_mcp_tool_name(&def.name).map(|(server, _)| server.to_string())
+            })
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    };
     let system_prompt = build_system_prompt(
         Path::new(&workspace),
         allow_env,
         cmd.append_system_prompt.as_deref(),
+        Some(&mcp_servers),
     );
 
     Ok(Resources {
@@ -411,7 +427,15 @@ pub(crate) fn provider_id_list(providers: &[ProviderLite]) -> String {
 ///
 /// CLI 不注入角色 / 身份 / 性格 / 技能 —— 那些来自桌面端的 Agent 配置与技能注册表，
 /// headless 下不可得（不是「另一份实现」，而是「没有输入」）。
-pub(crate) fn build_system_prompt(workspace: &Path, allow_env: bool, extra: Option<&str>) -> String {
+///
+/// `mcp_servers`：本次**真的下发了工具**的 MCP 服务器名（`None` = 不过滤）—— 与工具下发
+/// 同一口径，否则会教模型用一批它看不到的工具。
+pub(crate) fn build_system_prompt(
+    workspace: &Path,
+    allow_env: bool,
+    extra: Option<&str>,
+    mcp_servers: Option<&[String]>,
+) -> String {
     let env_prompt = if allow_env {
         Some(format!(
             "# Current Environment\n- OS: {} ({})\n- Current working directory: {}",
@@ -425,8 +449,8 @@ pub(crate) fn build_system_prompt(workspace: &Path, allow_env: bool, extra: Opti
 
     let project_rules = read_project_rules(workspace);
     // MCP 服务器说明书：CLI 的宿主在进会话前已经 `attach` 好了管理器（`--no-mcp` 时是 Noop），
-    // 这里同步取「已就绪服务器的说明书」，绝不等待连接。
-    let mcp_instructions = virlen_core::mcp::instructions();
+    // 这里同步取「已就绪且本次真有工具下发」的服务器说明书，绝不等待连接。
+    let mcp_instructions = virlen_core::mcp::instructions(mcp_servers);
     let mut prompt = compose_system_prompt(&PromptParts {
         env_prompt: env_prompt.as_deref(),
         project_rules: project_rules.as_deref(),

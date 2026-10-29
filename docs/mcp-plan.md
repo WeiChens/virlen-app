@@ -1080,9 +1080,12 @@ call_with_approval(tool_name, args, ctx)
   总量 **32 KB**（按字符截断 + 标记）；
 - `RuntimeStatus.instructions` 只在「已就绪 + `injectInstructions` 开 + 内容非空」时保存；
   `McpHost::instructions()` 默认 `None`（未挂载 / CLI `--no-mcp` 自然不注入）；
-- GUI：新增命令 `cmd_mcp_instructions` → `mcpRepo.instructions()` → `assembleAgentPrompt()` →
-  `composeSystemPrompt({ mcpInstructions })`（**末尾追加**，优先级最低）；
-- CLI：`build_system_prompt()` 取 `virlen_core::mcp::instructions()` 塞进 `PromptParts.mcp_instructions`；
+- **注入范围与工具下发同口径**（2026-10-29 补）：`McpHost::instructions(allowed_servers)` 的
+  `None` = 不过滤、`[]` = 一个都不注、名单 = 只收名单内；`cmd_mcp_instructions` 同参数；
+- GUI：`cmd_mcp_instructions` → `mcpRepo.instructions(mcpServersOfTools(agent.allowTools))` →
+  `assembleAgentPrompt()` → `composeSystemPrompt({ mcpInstructions })`（**末尾追加**，优先级最低）；
+- CLI：`build_system_prompt()` 从**实际下发的 `tool_defs`** 反解服务器名，再取
+  `virlen_core::mcp::instructions(Some(&servers))` 塞进 `PromptParts.mcp_instructions`；
 - Rust `PromptParts` 与 TS `SystemPromptParts` 各加一个同名字段 —— golden 测试用的是固定输入
   （不含该字段），逐字节对齐不受影响；
 - 添加/编辑服务器新增开关「注入服务器说明」（默认开）。
@@ -1132,3 +1135,27 @@ call_with_approval(tool_name, args, ctx)
 3. 指名一台不存在的服务器 → `list_mcp_resources` 卡片变红且文案可行动；
 4. 设置页展开某台服务器 → 看到「运行状态」（状态 / 重连次数 / 连接时间 / 上次失败原因）与 stderr 尾部；
 5. 关掉「注入服务器说明」→ 新建会话的系统提示词里不再出现 `# MCP Server Instructions`。
+
+### 改名迁移与白名单幽灵名（2026-10-29，§8.6 白名单的收尾）
+
+`allowTools` 是**穷举白名单**，而公开名 `mcp__<server>__<raw>` 内嵌配置名 —— 改名会让旧名整体失效，
+界面却还按 `allowTools.length` 报「已选 N」（用户报过：48 行一个都没勾、写着已选 35）。三条落地：
+
+- **计数改口径**：`agent-edit-modal` 只数「当前列表里被勾上的」，幽灵另起一行「N 项已失效（服务器改名或已移除）」+ 显式「清理」（只改表单状态，保存才落库）；
+- **保存不裁剪**：MCP 服务器离线时它的工具本来就不在列表里，按列表裁掉等于永久丢勾选；
+- **改名迁移**：`domain/mcp/rename.ts` 只替换**纯净前缀**（带 SHA-256 指纹 / 拼完超 64 字符的一律不动，留给上面的「已失效」兜底），由 `services/mcp.ts::migrateAgentToolNames` 写回 `agentStore` —— **不走 Rust 改表**：Agent 的运行期权威副本是 `agentRepo` 的内存快照，Rust 改表后前端会整份覆盖回去。
+
+细节、边界与守卫单测见 `agents/06-pitfalls-toolchain.md` §11.69。
+
+### 说明书注入与工具下发同口径（2026-10-29）
+
+默认 Agent 一个 MCP 工具都没勾时，系统提示词里仍整段注入服务器说明书 —— 因为「发不发给模型」按
+`filterAllowedToolDefs` 过滤，而「注不注说明书」只看 `ready` + `injectInstructions`，两套判定互不相干。
+
+- `cmd_mcp_instructions(allowedServers)` / `McpHost::instructions(allowed_servers)`：`null` = 不过滤、
+  `[]` = 一个都不注、名单 = 只收名单内（判定单点在 `mcp/instructions.rs::allows_server`）；
+- GUI 传 `mcpServersOfTools(agent.allowTools)`；CLI 从**实际下发的 `tool_defs`** 反解服务器名
+  （`--no-tools` / `--no-mcp` 时自然为空）；
+- 改名后的幽灵名解出已不存在的服务器 → Rust 不认 → 不注（fail-closed，与工具侧等价）。
+
+细节与守卫单测见 `agents/06-pitfalls-toolchain.md` §11.70。

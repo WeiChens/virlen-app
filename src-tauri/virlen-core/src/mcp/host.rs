@@ -194,8 +194,13 @@ pub trait McpHost: Send + Sync {
     /// 需要注入系统提示词的服务器说明书（已带归属前缀 + 总量截断）。
     ///
     /// `None` = 没有任何服务器要注入（未启用 / 没给 instructions / `injectInstructions=false`）。
+    /// `allowed_servers` = 本次会话所属 Agent 白名单里**至少有一个工具**的服务器名：
+    /// - `None`：不过滤（无 Agent 白名单的宿主，例如 CLI 全量下发工具时的会话）；
+    /// - `Some(&[])`：一个都不注 —— 白名单把工具全摘掉了，说明书教的就是一批模型看不到的工具。
+    ///
     /// ⚠️ 同步且绝不等待连接：建会话时调它，不能因为某台服务器正在退避而卡住。
-    fn instructions(&self) -> Option<String> {
+    fn instructions(&self, allowed_servers: Option<&[String]>) -> Option<String> {
+        let _ = allowed_servers;
         None
     }
 
@@ -297,8 +302,10 @@ pub async fn call_tool(
 }
 
 /// 便捷：服务器说明书片段（未挂载 / 没内容 → `None`）
-pub fn instructions() -> Option<String> {
-    host().instructions()
+///
+/// `allowed_servers` 语义见 [`McpHost::instructions`]；`None` = 不过滤。
+pub fn instructions(allowed_servers: Option<&[String]>) -> Option<String> {
+    host().instructions(allowed_servers)
 }
 
 /// 便捷：列资源（`server = None` → 全部就绪且支持 resources 的服务器）

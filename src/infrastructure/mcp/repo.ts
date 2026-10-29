@@ -42,8 +42,12 @@ export interface McpRepo {
   /**
    * 要注入系统提示词的服务器说明书（已带归属前缀 + 32 KB 截断）；没有 → `null`。
    * 建会话时取一次（与长期记忆同理：中途变更不改已建会话的 systemPrompt）。
+   *
+   * `allowedServers` = 该 Agent 白名单里**至少有一个工具**的服务器名（`null` = 不过滤）。
+   * 白名单把某台服务器的工具全摘掉后，它的说明书也不能注 —— 否则提示词会教模型用一批
+   * 它完全看不到的工具（事故：默认 Agent 0 个 MCP 工具，提示词里仍整段 blender 说明书）。
    */
-  instructions(): Promise<string | null>
+  instructions(allowedServers?: string[] | null): Promise<string | null>
 }
 
 const EMPTY_LIST: McpListResult = { configs: [], statuses: [], epoch: 0 }
@@ -60,7 +64,10 @@ const tauriRepo: McpRepo = {
   status: () => invoke<McpServerStatus[]>('cmd_mcp_status'),
   test: (config) => invoke<McpProbeResult>('cmd_mcp_test', { config }),
   importJson: (json) => invoke<McpImportResult>('cmd_mcp_import', { json }),
-  instructions: () => invoke<string | null>('cmd_mcp_instructions'),
+  instructions: (allowedServers) =>
+    invoke<string | null>('cmd_mcp_instructions', {
+      allowedServers: allowedServers ?? null,
+    }),
 }
 
 const noopRepo: McpRepo = {
@@ -96,6 +103,8 @@ export const mcpRepo: McpRepo = {
   test: (config) => (isTauriEnv() ? tauriRepo.test(config) : noopRepo.test(config)),
   importJson: (json) =>
     isTauriEnv() ? tauriRepo.importJson(json) : noopRepo.importJson(json),
-  instructions: () =>
-    isTauriEnv() ? tauriRepo.instructions() : noopRepo.instructions(),
+  instructions: (allowedServers) =>
+    isTauriEnv()
+      ? tauriRepo.instructions(allowedServers)
+      : noopRepo.instructions(allowedServers),
 }
