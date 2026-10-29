@@ -1,36 +1,58 @@
 /**
- * MCP 公开工具名的**解析**（纯逻辑）。
+ * MCP 工具名的**前端视图**（纯逻辑）。
  *
- * 名字形状：`mcp__<serverName>__<rawName>`，由 Rust `mcp::naming::public_tool_name` 生成：
- * - 非法字符 → `_`；超 64 字符 → 前缀截断 + 12 位 SHA-256 兜底；
- * - `serverName` 校验禁止出现 `__`，所以「第一个 `__` 之后」就是原始名（`raw` 里可以有 `__`）。
+ * 现在的公开名就是**服务器自己的工具名**（`get_scene_info` / `look`），由 Rust
+ * `mcp::naming::public_tool_name` 生成：名字里不再有服务器名，所以前端既不能生成也不能解析归属 ——
+ * 归属只能由 Rust 随定义一起下发（`cmd_mcp_tool_definitions` 的 `mcpServer` / `rawName`）。
+ * 本模块把那份快照存成「名字 → 归属」目录，供卡片标题、编辑器分组与旧数据展示查。
  *
- * ⚠️ **这里只解析、不生成**。生成需要 SHA-256 与「逐字符替换 + 截断 + 哈希」三段规则，
- * 前端再实现一遍就是第二份真相 —— 而名字一旦两侧不一致，会话历史里的工具名会指向另一个工具。
- * 前端拿到的一切名字都来自 Rust（`cmd_mcp_tool_definitions` / `cmd_mcp_status`）。
+ * 旧数据（历史消息、旧白名单）里仍是 `mcp__<server>__<raw>`：**只解析、不生成**，
+ * 解析结果仅用于展示与一次性迁移（生成需要 SHA-256，两套实现必然漂移）。
  */
 
-/** 保留前缀：内置 39 个工具不允许以它开头 */
+/** 历史公开名前缀 —— 只用于识别旧数据 */
 export const MCP_PREFIX = 'mcp__'
 
-/** 服务器名与工具名之间的分隔符 */
+/** 历史名字里服务器名与工具名之间的分隔符 */
 const SEP = '__'
 
-/** 是不是 MCP 工具（引擎按它决定走 MCP 分发而不是内置执行器） */
-export function isMcpToolName(name: string): boolean {
+/** 一个公开名的归属 */
+export interface McpToolRef {
+  /** 服务器配置名 */
+  server: string
+  /** 服务器自己的工具名 */
+  raw: string
+}
+
+/** MCP 名称目录：公开名 → 归属（每次定义快照刷新时整体替换） */
+const catalog = new Map<string, McpToolRef>()
+
+/**
+ * 用最新一次定义快照替换目录（空数组 = 当前没有 MCP 工具，目录清空）。
+ *
+ * 只装**已发布**的名字：冲突被扣下的工具不在这里（它们本来就不该被当成可用工具）。
+ */
+export function setMcpToolCatalog(
+  tools: readonly { name: string; server: string; raw: string }[],
+): void {
+  catalog.clear()
+  for (const tool of tools) {
+    catalog.set(tool.name, { server: tool.server, raw: tool.raw })
+  }
+}
+
+/** 是不是**旧版**公开名（`mcp__<server>__<raw>`） */
+export function isLegacyMcpToolName(name: string): boolean {
   return name.startsWith(MCP_PREFIX)
 }
 
 /**
- * 从公开名反推 `(serverName, rawName)`；不是 MCP 名 / 形状残缺 → `null`。
+ * 从旧版公开名反推归属；不是旧版名 / 形状残缺 → `null`。
  *
- * 只用于**展示分组**（卡片标题、Agent 编辑器的动态分组）。路由以 Rust 侧的路由表为准：
- * 名字被哈希归一化过时，这里只能给出「近似」服务端名。
+ * ⚠️ 只用于**旧数据**（历史消息卡片、白名单一次性迁移）。新名字不带前缀，归属问 `mcpToolRef`。
  */
-export function parseMcpToolName(
-  name: string,
-): { server: string; raw: string } | null {
-  if (!isMcpToolName(name)) return null
+export function parseMcpToolName(name: string): McpToolRef | null {
+  if (!isLegacyMcpToolName(name)) return null
   const rest = name.slice(MCP_PREFIX.length)
   const index = rest.indexOf(SEP)
   if (index <= 0) return null
@@ -40,32 +62,26 @@ export function parseMcpToolName(
   return { server, raw }
 }
 
-/**
- * 卡片 / 分组标题用的短标签：`server · raw`。
- * 解析不出来时退回原名（宁可直接显示，也不要渲染成空白）。
- */
-export function mcpToolLabel(name: string): string {
-  const parsed = parseMcpToolName(name)
-  return parsed ? `${parsed.server} · ${parsed.raw}` : name
+/** 公开名的归属：先查目录（新名字），再退旧前缀解析（历史消息） */
+export function mcpToolRef(name: string): McpToolRef | null {
+  return catalog.get(name) ?? parseMcpToolName(name)
+}
+
+/** 是不是 MCP 工具（新名字靠目录，旧名字靠前缀） */
+export function isMcpToolName(name: string): boolean {
+  return mcpToolRef(name) !== null
+}
+
+/** 所属服务器名（认不出来 → `null`） */
+export function mcpToolServer(name: string): string | null {
+  return mcpToolRef(name)?.server ?? null
 }
 
 /**
- * 白名单 → 涉及的 MCP 服务器名（去重）。
- *
- * 唯一用途：**说明书注入口径**（`agent-service` 传给 `cmd_mcp_instructions`）。
- * 三态映射与 `filterAllowedToolDefs`（工具下发的唯一口径）逐条对应：
- * - `undefined`（无白名单 = 全部工具）→ `null`（不过滤）；
- * - `[]`（显式关掉全部）→ `[]`（一个都不注）；
- * - 有名字 → 解析出的服务器名；旧名解析出已不存在的服务器时，Rust 侧自然过滤掉（fail-closed）。
+ * 卡片 / 分组标题用的标签：`server · raw`。
+ * 认不出来时退回原名（宁可直接显示，也不要渲染成空白）。
  */
-export function mcpServersOfTools(
-  toolNames: readonly string[] | undefined,
-): string[] | null {
-  if (toolNames === undefined) return null
-  const servers = new Set<string>()
-  for (const name of toolNames) {
-    const parsed = parseMcpToolName(name)
-    if (parsed) servers.add(parsed.server)
-  }
-  return [...servers]
+export function mcpToolLabel(name: string): string {
+  const ref = mcpToolRef(name)
+  return ref ? `${ref.server} · ${ref.raw}` : name
 }

@@ -6,7 +6,7 @@
  * 之后都重新拉一遍 —— 否则「界面显示已启用、实际已经失败」这类幻觉迟早出现。
  */
 import { makeObservable, observable } from 'mobx'
-import type { McpServerConfig, McpServerStatus } from '@/domain/mcp'
+import type { McpConflict, McpServerConfig, McpServerStatus } from '@/domain/mcp'
 import { mcpRepo } from '@/infrastructure/mcp/repo'
 
 class McpStore {
@@ -14,6 +14,8 @@ class McpStore {
   configs: McpServerConfig[] = []
   /** 运行态（与 configs 同 id 对应；可能短暂缺项 —— 刚新增还没起任务） */
   statuses: McpServerStatus[] = []
+  /** 本世代被扣下不发的同名工具（不在任何 `statuses[].tools` 里，界面必须单列） */
+  conflicts: McpConflict[] = []
   /** 工具快照世代（每次工具集合变化 +1） */
   epoch = 0
   /** 正在拉取（按钮禁用 / 骨架） */
@@ -27,6 +29,7 @@ class McpStore {
     makeObservable(this, {
       configs: observable,
       statuses: observable,
+      conflicts: observable,
       epoch: observable,
       loading: observable,
       error: observable,
@@ -59,6 +62,7 @@ class McpStore {
       const result = await mcpRepo.list()
       this.configs = result.configs
       this.statuses = result.statuses
+      this.conflicts = result.conflicts ?? []
       this.epoch = result.epoch
       this.hydrated = true
     } catch (e: any) {

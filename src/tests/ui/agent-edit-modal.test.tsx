@@ -17,6 +17,7 @@ import { useMessageBox } from '@/ui/components/shared/MessageBox'
 import { setToolDefinitionsLoader, toolRegistry } from '@/domain/tools'
 import type { ResolvedToolDefinition, ToolExecutor } from '@/domain/tools/types'
 import { agentStore } from '@/ui/store'
+import { mcpStore } from '@/ui/store/mcpStore'
 import type { Agent } from '@/types'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
@@ -391,5 +392,25 @@ describe('AgentEditModal', () => {
 
     await act(async () => el<HTMLButtonElement>('.btn-confirm')!.click())
     expect(agentStore.getAgent('agent-1')!.allowTools).toEqual(['alpha_tool'])
+  })
+
+  it('同名冲突：被扣下的 MCP 工具在工具选择页如实列出（不静默变少）', async () => {
+    // 冲突名单不在工具定义里（被扣下了），只能由 MCP 快照带过来
+    mcpStore.conflicts = [
+      { name: 'read_file', kind: 'builtin', servers: ['fs'] },
+      { name: 'look', kind: 'server', servers: ['blender', 'other'] },
+    ]
+    try {
+      await render(AGENT)
+      await act(async () => tabByText('工具选择').click())
+
+      const hint = el<HTMLElement>('.tool-conflict-hint')
+      expect(hint.textContent).toContain('2 个 MCP 工具因同名未下发')
+      expect(hint.textContent).toContain('read_file')
+      expect(hint.textContent).toContain('与内置工具重名')
+      expect(hint.textContent).toContain('blender / other')
+    } finally {
+      mcpStore.conflicts = []
+    }
   })
 })

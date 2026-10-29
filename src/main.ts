@@ -2,7 +2,7 @@ import { initEvnService } from './services/env-service'
 import { initI18n, t } from './ui/i18n'
 // 入场启动屏（本体在 index.html 里内联，见 src/boot/splash.ts）
 import { bootSplash } from './boot/splash'
-import { initDefaultAgent } from '@/services/agent-service'
+import { initDefaultAgent, migrateLegacyMcpToolNames } from '@/services/agent-service'
 import {
   initDefaultWorkspace,
   settingsState,
@@ -268,9 +268,13 @@ async function init() {
   bootSplash.setText(t('正在加载数据…'))
 
   // ── 阶段 2：依赖阶段 1 的结果 ──
+  // 旧白名单里的 `mcp__<server>__<raw>` 剥成裸工具名：不剥就永远对不上现在的名字
+  //（§11.69 的幽灵名）。必须在 initDefaultAgent 之前跑：默认 Agent 尚不存在时
+  // 建出来的快照才是干净的。
+  step('mcpLegacyNames', () => migrateLegacyMcpToolNames())
   await Promise.all([
-    // ⚠️ 必须在 `hydrateAgents()` 之后：否则默认 Agent 的补全读到空列表、
-    //    在本地重建并覆盖表里已有的 Agent。
+    // ⚠️ 必须在 `hydrateAgents()` 之后：否则默认 Agent 的创建读到空列表，
+    //    会在本地造一份并覆盖表里已有的 Agent。
     step('defaultAgent', () => initDefaultAgent()).then(() => agentStore.reload()),
     step('security', () => securityService.initDefaultSecurity()),
   ])
@@ -283,7 +287,7 @@ async function init() {
   await step('serviceNotice', () => initServiceNotice())
 
   // MCP 事件桥：工具集合变化 → 失效定义缓存（下一次发送自然拿到新集合）。
-  // 必须在 `defaultAgent` 之后：`handleMcpChanged` 会调 initDefaultAgent 补白名单。
+  // 必须在 `defaultAgent` 之后：首次对齐会刷新状态与冲突名单，那时默认 Agent 应已就位。
   await step('mcp', () => initMcpBridge())
 
   providerService.initProviders()

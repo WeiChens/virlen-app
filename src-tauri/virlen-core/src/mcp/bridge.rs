@@ -21,7 +21,6 @@ use crate::agent::cancellation::CancellationToken;
 use crate::agent::event_sink::EventSink;
 use super::config::McpApproval;
 use super::host::{call_tool, host, McpCallOutcome};
-use super::naming::split_mcp_tool_name;
 
 /// 审批弹窗里参数正文的上限（字符数，4 KB）。
 ///
@@ -68,10 +67,12 @@ pub async fn call_with_approval(
     arguments: Value,
     ctx: &McpApprovalCtx<'_>,
 ) -> McpGatedCall {
-    // 名字形状残缺（手工拼出来的 `mcp__x`）：不问人，直接调 —— 管理器会回一条「不可用」
-    let Some((server, raw)) = split_mcp_tool_name(tool_name) else {
+    // 路由表里没有这个名字（服务器已被删除 / 名字是模型编的）：不问人，直接调 ——
+    // 管理器会回一条「不可用」。一个假的审批弹窗比一句如实的错误更浪费时间。
+    let Some(route) = super::host::route(tool_name) else {
         return McpGatedCall::Done(call_tool(tool_name, arguments, Some(ctx.cancel)).await);
     };
+    let (server, raw) = (route.server.as_str(), route.raw.as_str());
 
     match host().approval_for(server) {
         // `allow` 与「服务器已经不在了」都直通（后者的错误由管理器如实给出）
@@ -217,9 +218,9 @@ mod tests {
         }
     }
 
-    /// 名字残缺（没有 `__` 分隔）时不问人：直接调，让管理器给「不可用」
+    /// 路由表里没有这个名字（服务器已删 / 名字是模型编的）时不问人：直接调，让管理器给「不可用」
     #[tokio::test]
-    async fn malformed_name_goes_straight_to_host() {
+    async fn unknown_name_goes_straight_to_host() {
         let _guard = lock().lock().await;
         // 未挂载宿主 → Noop 回一条明确错误；这条路径上不该有任何审批交互
         super::super::host::detach();
@@ -238,7 +239,7 @@ mod tests {
                 assert!(outcome.is_error);
                 assert!(outcome.content.contains("not available"), "{}", outcome.content);
             }
-            McpGatedCall::Shelved => panic!("残缺名字不该产生暂存"),
+            McpGatedCall::Shelved => panic!("没有路由名不该产生暂存"),
         }
     }
 
@@ -250,6 +251,12 @@ mod tests {
         struct DenyHost;
         #[async_trait::async_trait]
         impl crate::mcp::McpHost for DenyHost {
+            fn route(&self, tool_name: &str) -> Option<crate::mcp::McpToolRoute> {
+                (tool_name == "read").then(|| crate::mcp::McpToolRoute {
+                    server: "fs".into(),
+                    raw: "read".into(),
+                })
+            }
             fn approval_for(&self, server: &str) -> Option<McpApproval> {
                 (server == "fs").then_some(McpApproval::Deny)
             }
@@ -275,7 +282,7 @@ mod tests {
             bridge: &bridge,
             cancel: &cancel,
         };
-        match call_with_approval("mcp__fs__read", json!({}), &ctx).await {
+        match call_with_approval("read", json!({}), &ctx).await {
             McpGatedCall::Done(outcome) => {
                 assert!(outcome.is_error);
                 assert!(
@@ -297,6 +304,12 @@ mod tests {
         struct AllowHost;
         #[async_trait::async_trait]
         impl crate::mcp::McpHost for AllowHost {
+            fn route(&self, tool_name: &str) -> Option<crate::mcp::McpToolRoute> {
+                (tool_name == "read").then(|| crate::mcp::McpToolRoute {
+                    server: "fs".into(),
+                    raw: "read".into(),
+                })
+            }
             fn approval_for(&self, _server: &str) -> Option<McpApproval> {
                 Some(McpApproval::Allow)
             }
@@ -318,10 +331,10 @@ mod tests {
             bridge: &bridge,
             cancel: &cancel,
         };
-        match call_with_approval("mcp__fs__read", json!({}), &ctx).await {
+        match call_with_approval("read", json!({}), &ctx).await {
             McpGatedCall::Done(outcome) => {
                 assert!(!outcome.is_error);
-                assert_eq!(outcome.content, "called mcp__fs__read");
+                assert_eq!(outcome.content, "called read");
             }
             McpGatedCall::Shelved => panic!("allow 不该产生暂存"),
         }
@@ -349,6 +362,12 @@ mod tests {
 
     #[async_trait::async_trait]
     impl crate::mcp::McpHost for AskHost {
+        fn route(&self, tool_name: &str) -> Option<crate::mcp::McpToolRoute> {
+            (tool_name == "read").then(|| crate::mcp::McpToolRoute {
+                server: "fs".into(),
+                raw: "read".into(),
+            })
+        }
         fn approval_for(&self, _server: &str) -> Option<McpApproval> {
             Some(McpApproval::Ask)
         }
@@ -375,7 +394,7 @@ mod tests {
             cancel: &cancel,
         };
 
-        let call = call_with_approval("mcp__fs__read", json!({ "path": "/tmp/a.txt" }), &ctx);
+        let call = call_with_approval("read", json!({ "path": "/tmp/a.txt" }), &ctx);
         let responder = async {
             let (event_name, payload) = rx.recv().await.expect("应当发出一条交互请求");
             assert_eq!(event_name, "agent:user-interaction-request");
@@ -415,7 +434,7 @@ mod tests {
         match gated {
             McpGatedCall::Done(outcome) => {
                 assert!(!outcome.is_error);
-                assert_eq!(outcome.content, "called mcp__fs__read");
+                assert_eq!(outcome.content, "called read");
             }
             McpGatedCall::Shelved => panic!("允许后不该是暂存"),
         }

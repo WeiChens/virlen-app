@@ -6,7 +6,7 @@
  * - `listDefinitions()` 返回「契约 ∩ 已注册执行器」，**顺序以契约为准**（模型既不会看到没实现的工具，
  *   也不会漏掉契约新增的）；
  * - **MCP 工具是例外**：它们是运行期动态定义、执行在 Rust（没有 JS 执行器），因此只要定义存在
- *   就进 `listDefinitions()`，不参与「契约 ∩ 执行器」的相交（见 `isMcpToolName`）；
+ *   就进 `listDefinitions()`，不参与「契约 ∩ 执行器」的相交（看 `origin === 'mcp'`）；
  * - 所有读取接口都是异步的（首次读取时才载入定义）。
  */
 import { ToolRegistry } from '../ports/ToolRegistry'
@@ -17,7 +17,6 @@ import type {
   ToolExecutor,
 } from './types'
 import type { ToolDefinitionsLoader } from './definitions'
-import { isMcpToolName } from '../mcp/naming'
 
 export { filterAllowedToolDefs } from './allowed'
 
@@ -107,7 +106,7 @@ export class ToolRegistryImpl implements ToolRegistry {
       const exec = this.executors.get(def.name)
       if (exec) {
         out.push(withLabel(def, exec))
-      } else if (isMcpToolName(def.name)) {
+      } else if (def.origin === 'mcp') {
         // MCP 工具由 Rust 执行（`tool_executor` 的 `exec_path = "mcp"`），前端没有执行器
         out.push(def)
       }
@@ -139,7 +138,7 @@ export class ToolRegistryImpl implements ToolRegistry {
   async missingExecutorNames(): Promise<string[]> {
     const defs = await this.ensureDefinitions()
     return defs
-      .filter((d) => !this.executors.has(d.name) && !isMcpToolName(d.name))
+      .filter((d) => !this.executors.has(d.name) && d.origin !== 'mcp')
       .map((d) => d.name)
   }
 

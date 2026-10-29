@@ -6,7 +6,7 @@
 //! 进程级事实（GUI 挂 `McpManager`，CLI 挂同一个，测试与无 MCP 的宿主挂 [`NoopMcpHost`]）。
 //!
 //! ⚠️ 三条纪律：
-//! 1. **未挂载时必须是可用的 Noop**：`mcp__*` 名字命中时给一条明确英文错误，
+//! 1. **未挂载时必须是可用的 Noop**：任何 MCP 工具调用都给一条明确英文错误，
 //!    绝不静默转给 JS 桥（那里永远没有执行器，模型只会看到「工具不存在」）。
 //! 2. `definitions()` / `statuses()` 是**同步**的：读的是已发布快照，绝不等待连接
 //!    （否则启动会被 `npx` 冷启动拖死，见方案 §8.5）。
@@ -57,17 +57,51 @@ impl McpServerState {
     }
 }
 
-/// 一个已发布的 MCP 工具（公开名 → 服务器原始名）
+/// 一个已发布的 MCP 工具
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpToolInfo {
-    /// 模型可见名 `mcp__<server>__<raw>`（含哈希归一化）
+    /// 模型可见名（= 用户指定的别名，缺省则服务器自己的工具名；仅字符替换 / 超长 / 历史前缀时带 12 位哈希后缀）
     pub name: String,
     /// 服务器自己的名字（`tools/call` 只认它）
     pub raw_name: String,
     pub description: String,
     /// 已过 `mcp::schema::sanitize` 的 JSON Schema（可直接下发模型）
     pub input_schema: Value,
+}
+
+/// 一个公开名归属哪台服务器的哪个工具（分发 / 审批 / 展示共用）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpToolRoute {
+    /// 服务器配置名（审批档按它查）
+    pub server: String,
+    /// 服务器自己的工具名（`tools/call` 原样发送）
+    pub raw: String,
+}
+
+/// 冲突的两类来源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum McpConflictKind {
+    /// 与内置工具（`definitions.json` 里 39 个）重名：内置优先
+    Builtin,
+    /// 两台以上服务器发布了同名工具：无法判定该发给谁 → 都不下发
+    Server,
+}
+
+/// 一个被**扣下不发**的同名工具。
+///
+/// 为什么不加后缀区分：名字是模型唯一的身份凭据，`look_1` / `look_2` 只会让模型猜。
+/// 冲突必须由人来消除（在 MCP 设置里给工具改公开名 / 关掉一台服务器），所以只做「不猜 + 报出来」。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpConflict {
+    /// 冲突的公开名（模型本该看到的名字）
+    pub name: String,
+    pub kind: McpConflictKind,
+    /// 涉及的服务器名（`Builtin` 时为空）
+    pub servers: Vec<String>,
 }
 
 /// 一台服务器的对外状态快照（不持久化；前端只读）
@@ -80,7 +114,14 @@ pub struct McpServerStatus {
     pub transport: String,
     pub state: McpServerState,
     pub tool_count: usize,
+    /// 已发布（模型可见）的工具：已被 `enabledTools` 裁剪过
     pub tools: Vec<McpToolInfo>,
+    /// 服务器提供的**完整**工具清单（不受 `enabledTools` 裁剪）。
+    ///
+    /// 设置页编辑弹窗要用它回填勾选 —— 拿 `tools` 当候选就只能看到已勾过的那些，
+    /// 被排除的工具再也勾不回来（白名单是穷举的）。`tools` 的语义保持不变（模型看到什么就报什么）。
+    #[serde(default)]
+    pub all_tools: Vec<McpToolInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -111,7 +152,7 @@ pub struct McpServerStatus {
 /// `cancel` 是「用户点了停止」：MCP 调用往往几十秒（跑 `npx`、访问网络），
 /// 不能等到超时才结束（与 `execute_command` 同一纪律）。
 pub struct McpCallRequest<'a> {
-    /// 公开名（`mcp__…`）—— 由 [`super::host`] 的实现解成 `(server, raw)`
+    /// 公开名（可能是别名）—— 由 [`super::host`] 的实现解成 `(server, raw)`
     pub tool_name: &'a str,
     pub arguments: Value,
     pub cancel: Option<&'a CancellationToken>,
@@ -191,6 +232,27 @@ pub trait McpHost: Send + Sync {
         None
     }
 
+    /// 这个公开名现在归哪台服务器的哪个工具。
+    ///
+    /// 工具名不带前缀了，「是不是 MCP 工具」只能问这里（`owns` 的默认实现就是问它）。
+    /// ⚠️ 同步且绝不等待连接；返回 `None` 表示「不是我负责的名字」。
+    fn route(&self, tool_name: &str) -> Option<McpToolRoute> {
+        let _ = tool_name;
+        None
+    }
+
+    /// 这个名字是不是 MCP 工具（引擎据此决定 `exec_path` / 卡片分类）。
+    ///
+    /// 默认实现直接问 [`Self::route`]：实现者只覆写一个即可。
+    fn owns(&self, tool_name: &str) -> bool {
+        self.route(tool_name).is_some()
+    }
+
+    /// 本世代被扣下不发的同名工具（界面上要如实报出来，否则用户只会看到「工具少了」）。
+    fn conflicts(&self) -> Vec<McpConflict> {
+        Vec::new()
+    }
+
     /// 需要注入系统提示词的服务器说明书（已带归属前缀 + 总量截断）。
     ///
     /// `None` = 没有任何服务器要注入（未启用 / 没给 instructions / `injectInstructions=false`）。
@@ -241,7 +303,7 @@ pub trait McpHost: Send + Sync {
     fn shutdown_all(&self) {}
 }
 
-/// 没有 MCP 的宿主（测试 / CLI 未启用 / GUI 尚未装配）：命中 `mcp__` 前缀时如实报错。
+/// 没有 MCP 的宿主（测试 / CLI 未启用 / GUI 尚未装配）：任何调用都如实报错。
 pub struct NoopMcpHost;
 
 #[async_trait]
@@ -284,6 +346,21 @@ pub fn definitions() -> Vec<ToolDefinition> {
 /// 便捷：全部服务器状态（未挂载 → 空）
 pub fn statuses() -> Vec<McpServerStatus> {
     host().statuses()
+}
+
+/// 便捷：公开名归属（未挂载 / 不认识 → `None`）
+pub fn route(tool_name: &str) -> Option<McpToolRoute> {
+    host().route(tool_name)
+}
+
+/// 便捷：这个名字是不是 MCP 工具
+pub fn owns(tool_name: &str) -> bool {
+    host().owns(tool_name)
+}
+
+/// 便捷：本世代被扣下不发的同名工具
+pub fn conflicts() -> Vec<McpConflict> {
+    host().conflicts()
 }
 
 /// 便捷：调一个 MCP 工具（`tool_name` 是公开名）
@@ -386,8 +463,8 @@ mod tests {
         assert!(is_attached());
         assert_eq!(host().epoch(), 7);
         assert!(host().is_ready());
-        let outcome = call_tool("mcp__fs__ping", json!({}), None).await;
-        assert_eq!(outcome.content, "called mcp__fs__ping");
+        let outcome = call_tool("ping", json!({}), None).await;
+        assert_eq!(outcome.content, "called ping");
         assert!(!outcome.is_error);
         detach();
         assert!(!is_attached());
@@ -419,6 +496,7 @@ mod tests {
             state: McpServerState::Disabled,
             tool_count: 0,
             tools: Vec::new(),
+            all_tools: Vec::new(),
             server_name: None,
             server_version: None,
             connected_at: None,

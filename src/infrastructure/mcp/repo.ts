@@ -35,7 +35,7 @@ export interface McpRepo {
   /** 当前快照里的 MCP 工具定义（同步返回，不等连接） */
   toolDefinitions(): Promise<ResolvedToolDefinition[]>
   status(): Promise<McpServerStatus[]>
-  /** 「测试连接」：临时连一次，不落库 */
+  /** 设置页「获取工具列表」：临时连一次列工具，不落库（命令名仍是 `cmd_mcp_test`） */
   test(config: McpServerConfig): Promise<McpProbeResult>
   /** 从 Claude Desktop 风格 JSON 导入 */
   importJson(json: string): Promise<McpImportResult>
@@ -50,7 +50,7 @@ export interface McpRepo {
   instructions(allowedServers?: string[] | null): Promise<string | null>
 }
 
-const EMPTY_LIST: McpListResult = { configs: [], statuses: [], epoch: 0 }
+const EMPTY_LIST: McpListResult = { configs: [], statuses: [], conflicts: [], epoch: 0 }
 
 const tauriRepo: McpRepo = {
   isAvailable: () => true,

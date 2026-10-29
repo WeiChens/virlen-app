@@ -275,15 +275,14 @@ pub(crate) fn build_resources(
         .and_then(Value::as_bool)
         .unwrap_or(true);
     // MCP 说明书与工具**同一口径**：只给「本次真的下发了该服务器工具」的服务器。
-    // `--no-tools` / `--no-mcp` 下 `tool_defs` 里没有 `mcp__` 名字 → 说明书也不注。
+    // `--no-tools` / `--no-mcp` 下 `tool_defs` 里没有任何 MCP 工具 → 说明书也不注。
     // CLI 没有 Agent 白名单（工具本就全量下发），所以从实际下发的定义里反推，而不是传 `None`：
     // 传 `None` 会让 `--no-tools` 时依旧注入一堆用不上的说明书。
+    // 工具名已不带 `mcp__` 前缀 → 归属只能问 MCP 路由表。
     let mcp_servers: Vec<String> = {
         let mut names: Vec<String> = tool_defs
             .iter()
-            .filter_map(|def| {
-                virlen_core::mcp::split_mcp_tool_name(&def.name).map(|(server, _)| server.to_string())
-            })
+            .filter_map(|def| virlen_core::mcp::route(&def.name).map(|route| route.server))
             .collect();
         names.sort();
         names.dedup();

@@ -116,8 +116,9 @@ const mcpToolMessage = new McpToolMessage()
 /**
  * 取工具卡片实现。
  *
- * ⚠️ `mcp__*` 是**前缀**兜底（不是逐个注册）：MCP 工具由服务器在运行期决定，
- * 前端不可能在编译期把名字写进注册表。其余名字仍精确匹配，未命中退 `DefaultMessage`。
+ * ⚠️ MCP 工具**不能逐个注册**（名字由服务器在运行期决定），要靠「名称目录」兜底：
+ * 目录由工具定义加载器写入（`setMcpToolCatalog`），`mcp__` 前缀只用于旧会话。
+ * 其余名字仍精确匹配，未命中退 `DefaultMessage`。
  */
 export const getToolCallMessage = (type: string) => {
   const registered = toolCallMessageList.get(type)

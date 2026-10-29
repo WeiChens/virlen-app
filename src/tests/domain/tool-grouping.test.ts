@@ -6,17 +6,22 @@
  *   ① MCP 工具按服务器动态成组，且**不进「其他」**（进了也能勾，但找不到「那台服务器的全部工具」）；
  *   ② 服务器组按名字排序（每次打开位置都变会让人勾错行）；
  *   ③ 静态分类保持契约顺序，未认领的才落「其他」。
+ *
+ * 服务器名取自定义的 `mcpServer`（Rust 随定义下发）—— 工具名里已经没有服务器名，不能靠拆名字。
  */
 import { describe, expect, it } from 'vitest'
 import { groupToolsForEditor } from '@/domain/tools/grouping'
 import { TOOL_CATEGORIES } from '@/domain/tools/category'
 import type { ResolvedToolDefinition } from '@/domain/tools/types'
 
-const tool = (name: string): ResolvedToolDefinition => ({
-  name,
-  description: '',
-  input_schema: { type: 'object', properties: {} },
-} as unknown as ResolvedToolDefinition)
+/** 造一个定义；`server` 有值时按 MCP 定义（`origin` + `mcpServer`）标记 */
+const tool = (name: string, server?: string): ResolvedToolDefinition =>
+  ({
+    name,
+    description: '',
+    input_schema: { type: 'object', properties: {} },
+    ...(server ? { origin: 'mcp', mcpServer: server } : {}),
+  }) as unknown as ResolvedToolDefinition
 
 const OPTIONS = {
   categories: TOOL_CATEGORIES,
@@ -32,30 +37,25 @@ const groupOf = (groups: ReturnType<typeof groupToolsForEditor>, id: string) =>
 describe('groupToolsForEditor', () => {
   it('静态分类在前，MCP 按服务器成组，未认领的落「其他」', () => {
     const groups = groupToolsForEditor(
-      [
-        tool('read_file'),
-        tool('mcp__fs__read_file'),
-        tool('ghost_tool'),
-        tool('mcp__git__status'),
-      ],
+      [tool('read_file'), tool('look', 'fs'), tool('ghost_tool'), tool('status', 'git')],
       OPTIONS,
     )
     expect(ids(groups)).toEqual(['file', 'mcp:fs', 'mcp:git', 'other'])
     // MCP 工具绝不出现在「其他」里（否则「其他」会混进别的服务器的工具）
     expect(groupOf(groups, 'other')?.tools.map((t) => t.name)).toEqual(['ghost_tool'])
-    expect(groupOf(groups, 'mcp:fs')?.tools.map((t) => t.name)).toEqual(['mcp__fs__read_file'])
+    expect(groupOf(groups, 'mcp:fs')?.tools.map((t) => t.name)).toEqual(['look'])
   })
 
   it('服务器组按名字排序（与工具到达顺序无关）', () => {
     const groups = groupToolsForEditor(
-      [tool('mcp__zeta__a'), tool('mcp__alpha__b'), tool('mcp__mid__c')],
+      [tool('a', 'zeta'), tool('b', 'alpha'), tool('c', 'mid')],
       OPTIONS,
     )
     expect(ids(groups)).toEqual(['mcp:alpha', 'mcp:mid', 'mcp:zeta'])
   })
 
   it('组标题与批量勾选清单一致（toolNames 就是组内工具名）', () => {
-    const groups = groupToolsForEditor([tool('mcp__fs__a'), tool('mcp__fs__b')], OPTIONS)
+    const groups = groupToolsForEditor([tool('a', 'fs'), tool('b', 'fs')], OPTIONS)
     const mcp = groupOf(groups, 'mcp:fs')
     expect(mcp?.category.label).toBe('MCP · fs')
     expect(mcp?.category.toolNames).toEqual(mcp?.tools.map((t) => t.name))
@@ -70,7 +70,7 @@ describe('groupToolsForEditor', () => {
     expect(groupToolsForEditor([], OPTIONS)).toEqual([])
   })
 
-  it('形状残缺的 mcp__ 名字不硬塞进服务器组，落到「其他」', () => {
+  it('缺 mcpServer 的定义不硬塞进服务器组，落到「其他」', () => {
     const groups = groupToolsForEditor([tool('mcp__broken')], OPTIONS)
     expect(ids(groups)).toEqual(['other'])
   })

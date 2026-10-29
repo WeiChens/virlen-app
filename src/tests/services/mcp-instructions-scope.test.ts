@@ -1,11 +1,14 @@
 /**
  * 系统提示词里 MCP 说明书的**注入范围**（`assembleAgentPrompt` 的那条接缝）
  *
- * 事故：默认 Agent 的「工具选择」里一个 MCP 工具都没勾（白名单只剩内置 39 个），
+ * 事故一：默认 Agent 的「工具选择」里一个 MCP 工具都没勾（白名单只剩内置 39 个），
  * 提示词却仍整段注入 blender 服务器说明书 —— 因为这里当年无条件调 `mcpRepo.instructions()`，
  * 与「工具实际下发」（`filterAllowedToolDefs`）是两套互不相干的判定。
  *
- * 这里只钉一件事：**传给 Rust 的服务器名单必须由 Agent 白名单折算**，
+ * 事故二：工具名改成「服务器自己的工具名」之后，服务器名再也解析不出来 —— 归属必须取自
+ * 定义快照的 `mcpServer`，不能靠拆名字（否则又会退化成「按旧前缀猜」）。
+ *
+ * 这里钉两件事：**传给 Rust 的服务器名单由「实际下发的定义 ∩ 白名单」折算**，
  * 三态（`undefined` / `[]` / 有名字）与工具下发逐条对齐。
  *
  * 依赖链按需 mock：真实 `env-service` / `project-rules-service` / 记忆 / 技能都要 I/O，
@@ -13,15 +16,46 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { Agent } from '@/types'
+import type { ResolvedToolDefinition } from '@/domain/tools/types'
 
 const mocks = vi.hoisted(() => ({
   instructions: vi.fn(
     async (_servers?: string[] | null): Promise<string | null> => null,
   ),
+  listDefinitions: vi.fn(
+    async (): Promise<ResolvedToolDefinition[]> => [
+      { name: 'read_file', description: '', parameters: { type: 'object', properties: {}, required: [] } },
+      {
+        name: 'look',
+        origin: 'mcp' as const,
+        mcpServer: 'blender',
+        description: '',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+      {
+        name: 'get_scene_info',
+        origin: 'mcp' as const,
+        mcpServer: 'blender',
+        description: '',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+      {
+        name: 'query',
+        origin: 'mcp' as const,
+        mcpServer: 'db',
+        description: '',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+    ],
+  ),
 }))
 
 vi.mock('@/infrastructure/mcp/repo', () => ({
   mcpRepo: { instructions: mocks.instructions },
+}))
+// 工具定义是「谁该被注入」的唯一来源：只替换注册中心的读取口，`filterAllowedToolDefs` 用真的
+vi.mock('@/domain/tools', () => ({
+  toolRegistry: { listDefinitions: mocks.listDefinitions },
 }))
 vi.mock('@/services/env-service', () => ({
   getEnvPrompt: async (): Promise<string | undefined> => undefined,
@@ -50,7 +84,7 @@ function agentWith(allowTools: string[] | undefined): Agent {
     defaultWorkspace: '',
     projectRulesFile: 'AGENTS.md',
     defaultModel: { providerConfigId: '', modelId: '' },
-    // `undefined` 是「没有白名单 = 全部工具」的老数据形态（类型上是 string[]）
+    // `undefined` 是「没有白名单 = 全部工具」的老数据形态（类型上是 string[])
     allowTools: allowTools as string[],
     skills: [],
     defaultParams: {},
@@ -66,12 +100,18 @@ describe('assembleAgentPrompt · MCP 说明书注入范围', () => {
     expect(mocks.instructions).toHaveBeenCalledWith([])
   })
 
-  it('白名单里有某台服务器的工具 → 只传这台（去重、丢内置名）', async () => {
+  it('白名单里有某台服务器的工具 → 只传这台（去重、按定义的 mcpServer 折算）', async () => {
     mocks.instructions.mockClear()
     await assembleAgentPrompt(
-      agentWith(['read_file', 'mcp__blender__look', 'mcp__blender__get_scene_info']),
+      agentWith(['read_file', 'look', 'get_scene_info']),
     )
     expect(mocks.instructions).toHaveBeenCalledWith(['blender'])
+  })
+
+  it('多台服务器按工具出现顺序去重', async () => {
+    mocks.instructions.mockClear()
+    await assembleAgentPrompt(agentWith(['look', 'query', 'get_scene_info']))
+    expect(mocks.instructions).toHaveBeenCalledWith(['blender', 'db'])
   })
 
   it('没有白名单（undefined = 全部工具）→ null（不过滤）', async () => {
@@ -81,8 +121,10 @@ describe('assembleAgentPrompt · MCP 说明书注入范围', () => {
   })
 
   it('Rust 返回的说明书进系统提示词，返回 null 时不出现该段', async () => {
-    mocks.instructions.mockReturnValueOnce(Promise.resolve('# MCP Server Instructions\n\nx'))
-    const withMcp = await assembleAgentPrompt(agentWith(['mcp__blender__look']))
+    mocks.instructions.mockReturnValueOnce(
+      Promise.resolve('# MCP Server Instructions\n\nx'),
+    )
+    const withMcp = await assembleAgentPrompt(agentWith(['look']))
     expect(withMcp).toContain('# MCP Server Instructions')
 
     mocks.instructions.mockReturnValueOnce(Promise.resolve(null))

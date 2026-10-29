@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::{Emitter, Manager};
 
@@ -95,13 +96,16 @@ async fn persist_and_reload(
 
 // ==================== 命令 ====================
 
-/// 列表页的一次性拉取：配置 + 状态 + 世代
+/// 列表页的一次性拉取：配置 + 状态 + 世代 + **被扣下不发的同名工具**
 #[tauri::command]
 pub async fn cmd_mcp_list(app: tauri::AppHandle) -> Result<Value, String> {
     let manager = manager_of(&app)?;
     Ok(json!({
         "configs": manager.configs(),
         "statuses": manager.statuses(),
+        // 冲突必须单独带出来：它们**不在**工具定义里（被扣下了），
+        // 界面只能靠这份名单告诉用户「为什么工具少了一个」。
+        "conflicts": manager.conflicts(),
         "epoch": manager.epoch(),
     }))
 }
@@ -166,10 +170,38 @@ pub async fn cmd_mcp_reload(app: tauri::AppHandle, id: Option<String>) -> Result
     Ok(json!({ "ok": true }))
 }
 
+/// 一条 MCP 工具定义 + 它属于哪台服务器的哪个工具。
+///
+/// `mcpServer` / `rawName` 必须一起下发：工具名里已经没有服务器名了（前端再也解析不出来），
+/// 而 Agent 编辑器要按服务器分组、说明书注入要按服务器折算、卡片标题要显示原始名。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpToolDefinitionOut {
+    #[serde(flatten)]
+    definition: ToolDefinition,
+    mcp_server: String,
+    raw_name: String,
+}
+
 /// 当前快照里的 MCP 工具定义（**同步返回**，不等连接）
 #[tauri::command]
-pub async fn cmd_mcp_tool_definitions(app: tauri::AppHandle) -> Result<Vec<ToolDefinition>, String> {
-    Ok(manager_of(&app)?.definitions())
+pub async fn cmd_mcp_tool_definitions(
+    app: tauri::AppHandle,
+) -> Result<Vec<McpToolDefinitionOut>, String> {
+    let manager = manager_of(&app)?;
+    Ok(manager
+        .definitions()
+        .into_iter()
+        // 路由表里没有 = 本世代不归任何服务器（不应发生）：宁可不给，也不给一个认不出归属的名字
+        .filter_map(|definition| {
+            let route = manager.route(&definition.name)?;
+            Some(McpToolDefinitionOut {
+                definition,
+                mcp_server: route.server,
+                raw_name: route.raw,
+            })
+        })
+        .collect())
 }
 
 /// 全部服务器状态

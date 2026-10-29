@@ -13,9 +13,9 @@
 | 客户端放哪 | **Rust（`virlen-core/src/mcp`）**，GUI 与 headless CLI 共用 |
 | 新增依赖 | **零**（手写 JSON-RPC 2.0 + 复用 `tokio` / `reqwest` / `serde_json`） |
 | 配置存哪 | `app_settings.mcpServers`（与 `searchProviders` / `agents` 同一张表、同一份 CLI 可读配置） |
-| 工具名 | `mcp__<serverName>__<rawName>`，超 64 字符 / 含非法字符时追加 12 位 SHA-256 前缀哈希 |
+| 工具名 | **服务器自己的工具名**（`get_scene_info` / `look`）；字符替换 / 超 64 字符时追加 12 位 SHA-256 后缀。同名冲突：跨服务器两边都不下发、与内置重名内置优先，都报给界面 |
 | 定义装配 | MCP 定义由 Rust 生成 → 前端 `cmd_mcp_tool_definitions` 取用 → 与契约合并后**由前端（GUI）/ CLI 各自装配**；白名单仍只有 `filterAllowedToolDefs` 一份实现 |
-| 执行 | `tool_executor` 里按 `mcp__` 前缀分发到 `McpHost`，不再走 JS 桥 |
+| 执行 | `tool_executor` 里按 `mcp::owns(name)`（快照路由表）分发到 `McpHost`，不再走 JS 桥 |
 | 审批 | 每服务器三态 `allow / ask / deny`；`ask` 走既有 `request_user_interaction` 通道（类型 `confirm_mcp_call`），手机端经既有 approval 通道也能批 |
 | 分期 | P0 协议层 → P1 工具桥 + 配置 UI → P2 审批 + 卡片 + 白名单 → P3 资源/指令/观测 → P4（可选）反向 MCP Server |
 
@@ -29,7 +29,7 @@
 
 1. 两种传输：**stdio**（本地子进程）与 **Streamable HTTP**（远端）。
 2. `initialize` 握手（协议版本协商）、`tools/list`（含分页）、`tools/call`、`notifications/tools/list_changed` 重同步、`notifications/cancelled`。
-3. 工具以 `mcp__<server>__<tool>` 暴露给模型，能被 Agent 白名单勾选、被轨迹检查器看到、被工具卡片渲染。
+3. 工具以**服务器自己的工具名**暴露给模型，能被 Agent 白名单勾选、被轨迹检查器看到、被工具卡片渲染。
 4. 设置页：增删改查 + 连接状态 + 工具清单 + 从 Claude Desktop 风格 JSON 导入。
 5. 安全：默认不启用、`deny` 即不连接、stdio 子进程环境变量清洗、结果/参数大小上限、审批交互。
 6. CLI 同源：`virlen-cli run/chat` 也能用同一批 MCP 工具。
@@ -180,7 +180,7 @@ export const DEFAULT_MCP_SERVER: Omit<McpServerConfig, 'id' | 'name' | 'transpor
 export type McpServerState = 'disabled' | 'connecting' | 'ready' | 'backoff' | 'failed' | 'error'
 
 export interface McpToolInfo {
-  /** 公开名（mcp__server__tool） */
+  /** 公开名（= 服务器自己的工具名） */
   name: string
   /** 服务器自己的名字（只用于 tools/call） */
   rawName: string
@@ -212,23 +212,38 @@ export interface McpServerStatus {
 
 ### 4.3 公开工具名（稳定身份）
 
+> 📌 2026-10-29 改口径：公开名不再是 `mcp__<server>__<raw>`，而是**服务器自己的工具名**。
+> 旧算法下「改一次服务器配置名 = 所有历史会话与白名单里的工具名一起失效」（§11.69 的事故），
+> 而名字里带服务器名带来的唯一好处（区分同名工具）本来就该由冲突判定来做。下面是现在的算法；
+> 文末「公开名改为服务器自己的工具名」一节记了这次改动的边界。
+
 ```rust
-/// 模型可见名 = f(serverName, rawName)，纯函数；同一对输入永远同一名字。
-/// - 干净情况：`mcp__<server>__<raw>` 原样返回；
-/// - 发生替换或截断时追加 12 位 SHA-256(server\0raw) 十六进制前缀，
-///   保证不同身份**绝不折叠**（会话历史 / 权限规则不会因改名失效）。
-pub fn public_tool_name(server: &str, raw: &str) -> String
+/// 模型可见名 = f(rawName)，纯函数；同一输入永远同一名字。
+/// - 干净情况：原名原样返回（`get_scene_info` / `look`）；
+/// - 发生字符替换 / 空名 / 超 64 字符时追加 12 位 SHA-256(raw) 十六进制后缀；
+/// - 以历史前缀 `mcp__` 开头时换成中性前缀 `mcp_tool_`（否则会被旧数据当成旧版名）。
+pub fn public_tool_name(raw: &str) -> String
 ```
 
 规则：
 
 1. 字符集 `[A-Za-z0-9_-]`（三大 provider 的函数名交集）；非法字符 → `_`。
 2. 上限 **64** 字符（OpenAI 契约）；超出 → `前 51 字符 + "_" + 12 hex`。
-3. `raw` 名**只**用于 `tools/call`，绝不解公开名反推（服务器改名 → 新名字，旧名字自然消失）。
+3. `raw` 名**只**用于 `tools/call`；归属（`server` / `raw`）随定义一起下发，前端不解析。
 4. 同一服务器列出重名工具 → 整批拒绝（保留上一世代），不做「部分注册」。
-5. 若算出的公开名撞上内置工具（理论上不可能，`mcp__` 前缀保留）→ 该服务器按 `error` 上报，不注册。
+5. **跨服务器同名 → 两边都不下发**（fail-closed，不按顺序猜）；**与内置 39 个重名 → 内置优先**，
+   MCP 那个不下发。两类都进 `conflicts`，Agent 编辑器 / MCP 设置页如实报出来。
+6. **用户可以逐工具改名**（`McpServerConfig::tool_aliases`，默认 = 与服务一致）：
+   别名优先于 `public_tool_name(raw)`，只校验不归一化（见文末「工具公开名可自定义」）。
 
-TS 侧同名实现 `publicToolName()` + `parseMcpToolName(name)`（拆 `server` / `raw`，用于卡片标题与分组）；两侧一致性由 §12.4 fixture 守住。
+归属与分发：
+
+| 事 | 做法 |
+|---|---|
+| 「是不是 MCP 工具」 | `McpHost::owns(name)`（读快照路由表）；前端看定义的 `origin === 'mcp'` / 名称目录 |
+| 调谁 | `McpManager` 快照里的 `routes: name → (server_id, server_name, raw)` |
+| 审批档 | 按 `route.server` 查（服务器配置名） |
+| 展示 | 定义自带 `mcpServer` / `rawName`；旧会话退回 `mcp__` 前缀解析（只解析、不生成） |
 
 ### 4.4 结果映射（`tools/call` → 模型 / UI）
 
@@ -284,9 +299,9 @@ pub struct ToolParameters {
 
 ```
 mcp/
-├── mod.rs            对外 API：attach / host() / definitions() / status() / is_mcp_tool_name()
+├── mod.rs            对外 API：attach / host() / definitions() / status() / route() / owns() / conflicts()
 ├── config.rs         McpServerConfig（serde camelCase）+ 校验 + 环境清洗
-├── naming.rs         public_tool_name / is_mcp_tool_name / 64 字符与哈希规则
+├── naming.rs         public_tool_name(raw) / 旧版名识别 / 64 字符与哈希规则
 ├── schema.rs         §4.5 的 JSON Schema 清洗
 ├── jsonrpc.rs        Request/Response/Notification + id 生成 + 错误码映射 + 行帧切分
 ├── transport/
@@ -391,7 +406,7 @@ syncChain = syncChain.then(sync_once)   // 一次只有一个 sync 在跑
 
 ### 7.1 六道闸
 
-1. **默认不启用**：`mcpServers` 为空时零代码路径生效；引擎侧 `McpHost` 为 `Noop`（`is_mcp_tool_name` 永不命中）。
+1. **默认不启用**：`mcpServers` 为空时零代码路径生效；引擎侧 `McpHost` 为 `Noop`（`owns()` 永不命中）。
 2. **首次启用警示**：设置页启用开关弹确认（复用现有 Modal），文案明确「该服务器将以你的身份读写文件、访问网络」。
 3. **per-server 三态**：`allow`（直接执行）/ `ask`（每次确认，**默认**）/ `deny`（不连接、工具不下发）。
 4. **stdio 环境清洗**：见 §5.2。
@@ -455,7 +470,7 @@ let payload = ctx.bridge.request_user_interaction(
 
 ```rust
 // 1) 执行路径标记（埋点 / 轨迹诊断用）
-let exec_path = if mcp::is_mcp_tool_name(&step.tool_name) && mcp::host().is_ready() {
+let exec_path = if mcp::owns(&step.tool_name) && mcp::host().is_ready() {
     "mcp"
 } else if security.is_some() && native_tools::is_native_tool(&step.tool_name) {
     "native"
@@ -464,7 +479,7 @@ let exec_path = if mcp::is_mcp_tool_name(&step.tool_name) && mcp::host().is_read
 };
 
 // 2) execute_single_step 里最前面加分发（不看 security：MCP 的决定来自自身配置）
-if mcp::is_mcp_tool_name(&step.tool_name) {
+if mcp::owns(&step.tool_name) {
     return mcp::bridge::call_mcp_tool(&step.tool_name, &step.input, /* ctx */).await;
 }
 ```
@@ -1082,7 +1097,7 @@ call_with_approval(tool_name, args, ctx)
   `McpHost::instructions()` 默认 `None`（未挂载 / CLI `--no-mcp` 自然不注入）；
 - **注入范围与工具下发同口径**（2026-10-29 补）：`McpHost::instructions(allowed_servers)` 的
   `None` = 不过滤、`[]` = 一个都不注、名单 = 只收名单内；`cmd_mcp_instructions` 同参数；
-- GUI：`cmd_mcp_instructions` → `mcpRepo.instructions(mcpServersOfTools(agent.allowTools))` →
+- GUI：`cmd_mcp_instructions` → `mcpRepo.instructions(<白名单 ∩ 定义里 origin === 'mcp' 的 mcpServer>)` →
   `assembleAgentPrompt()` → `composeSystemPrompt({ mcpInstructions })`（**末尾追加**，优先级最低）；
 - CLI：`build_system_prompt()` 从**实际下发的 `tool_defs`** 反解服务器名，再取
   `virlen_core::mcp::instructions(Some(&servers))` 塞进 `PromptParts.mcp_instructions`；
@@ -1136,16 +1151,35 @@ call_with_approval(tool_name, args, ctx)
 4. 设置页展开某台服务器 → 看到「运行状态」（状态 / 重连次数 / 连接时间 / 上次失败原因）与 stderr 尾部；
 5. 关掉「注入服务器说明」→ 新建会话的系统提示词里不再出现 `# MCP Server Instructions`。
 
-### 改名迁移与白名单幽灵名（2026-10-29，§8.6 白名单的收尾）
+### 白名单幽灵名（2026-10-29，§8.6 白名单的收尾）
 
-`allowTools` 是**穷举白名单**，而公开名 `mcp__<server>__<raw>` 内嵌配置名 —— 改名会让旧名整体失效，
-界面却还按 `allowTools.length` 报「已选 N」（用户报过：48 行一个都没勾、写着已选 35）。三条落地：
+`allowTools` 是**穷举白名单**，工具名一旦对不上就静默失效，而界面却按 `allowTools.length` 报「已选 N」
+（用户报过：48 行一个都没勾、写着已选 35）。三条落地：
 
-- **计数改口径**：`agent-edit-modal` 只数「当前列表里被勾上的」，幽灵另起一行「N 项已失效（服务器改名或已移除）」+ 显式「清理」（只改表单状态，保存才落库）；
+- **计数改口径**：`agent-edit-modal` 只数「当前列表里被勾上的」，幽灵另起一行
+  「N 项已失效（对应工具已不存在或已停用）」+ 显式「清理」（只改表单状态，保存才落库）；
 - **保存不裁剪**：MCP 服务器离线时它的工具本来就不在列表里，按列表裁掉等于永久丢勾选；
-- **改名迁移**：`domain/mcp/rename.ts` 只替换**纯净前缀**（带 SHA-256 指纹 / 拼完超 64 字符的一律不动，留给上面的「已失效」兜底），由 `services/mcp.ts::migrateAgentToolNames` 写回 `agentStore` —— **不走 Rust 改表**：Agent 的运行期权威副本是 `agentRepo` 的内存快照，Rust 改表后前端会整份覆盖回去。
+- **旧名一次性迁移**：`agent-service.ts::migrateLegacyMcpToolNames` 在启动时把 `mcp__<server>__<raw>`
+  剥成裸工具名（§11.71 之后工具名与服务器无关，所以这一步就是全部迁移）。
 
 细节、边界与守卫单测见 `agents/06-pitfalls-toolchain.md` §11.69。
+
+### 公开名改为服务器自己的工具名（2026-10-29）
+
+公开名从 `mcp__<server>__<raw>` 改为**服务器自己的工具名**（`get_scene_info` / `look`）：名字里带服务器名
+的代价是「改一次配置名 = 所有历史会话与白名单失效」，而它唯一的好处（区分同名工具）本就该由冲突判定做。
+
+- **生成**：`public_tool_name(raw)`（`mcp/naming.rs`）；字符替换 / 空名 / 超 64 字符 → 追加 12 位
+  SHA-256(raw)，以 `mcp__` 开头的先换成 `mcp_tool_`（否则会被旧数据当成旧版名）；
+- **归属随定义下发**：`cmd_mcp_tool_definitions` 每条带 `mcpServer` / `rawName`，前端写进名称目录
+  （`domain/mcp/naming.ts::setMcpToolCatalog`），卡片标题 / 编辑器分组 / 说明书折算都查它；
+- **分发**：`McpHost::owns(name)` / `route(name)`（快照路由表），不再看前缀；路由表保留历史名字，
+  服务器退避时能报「不可用」而不是「不认识这个工具」；
+- **同名冲突 fail-closed**：跨服务器同名 → 两边都不下发；与内置 39 个重名 → 内置优先。
+  两类都进 `McpHost::conflicts()` → `cmd_mcp_list.conflicts`，Agent 编辑器与 MCP 设置页各报一行；
+- **删掉的**：`domain/mcp/rename.ts` 与 `migrateAgentToolNames`（改名不再影响工具名）。
+
+细节与守卫单测见 `agents/06-pitfalls-toolchain.md` §11.71。
 
 ### 说明书注入与工具下发同口径（2026-10-29）
 
@@ -1154,8 +1188,50 @@ call_with_approval(tool_name, args, ctx)
 
 - `cmd_mcp_instructions(allowedServers)` / `McpHost::instructions(allowed_servers)`：`null` = 不过滤、
   `[]` = 一个都不注、名单 = 只收名单内（判定单点在 `mcp/instructions.rs::allows_server`）；
-- GUI 传 `mcpServersOfTools(agent.allowTools)`；CLI 从**实际下发的 `tool_defs`** 反解服务器名
-  （`--no-tools` / `--no-mcp` 时自然为空）；
-- 改名后的幽灵名解出已不存在的服务器 → Rust 不认 → 不注（fail-closed，与工具侧等价）。
+- GUI 传「白名单 ∩ 实际定义里的 MCP 工具」折算出的服务器名（`filterAllowedToolDefs` + `origin === 'mcp'`）；
+  CLI 从**实际下发的 `tool_defs`** 反解服务器名（`--no-tools` / `--no-mcp` 时自然为空）；
+- 定义里认不出归属的名字 → Rust 不认 → 不注（fail-closed，与工具侧等价）。
 
 细节与守卫单测见 `agents/06-pitfalls-toolchain.md` §11.70。
+
+### 工具公开名可自定义（2026-10-29）
+
+公开名默认就是服务器自己的工具名，但用户可以**逐个改**（真实需求：两台服务器都叫 `look`、或者想让模型
+更认得出用途）。落点：`McpServerConfig::tool_aliases`（`rawName → 模型可见名`，落 `app_settings.mcpServers`）。
+
+- **只改「模型看到的名字」**：`tools/call` 永远发 `rawName`；白名单（`enabledTools`）也按 `rawName` 存，
+  所以改名不动白名单口径，只动公开名；
+- **只校验、不纠正**（`mcp::naming::validate_tool_alias`）：字符集 `[A-Za-z0-9_-]`、≤ 64、非空、
+  不占历史前缀 `mcp__`；同一服务器内别名不得重名。默认名允许「归一化 + 加指纹」，别名**不允许** ——
+  界面上看到的名字必须就是下发的名字；
+- **与内置 / 另一台服务器重名不在保存时拦**：那是发布期判定（`registry::classify`，fail-closed +
+  界面横幅）。拦在这里会让「以后新增一个同名内置工具」把整份配置卡成存不进去；
+- **改名后跑一次白名单迁移**（`agent-service.ts::migrateAgentToolNames`）：`allowTools` 存的是公开名，
+  不迁就留下一批指向旧名的幽灵条目（§11.69 同款事故）。历史消息里的旧名字不迁（已落库）。
+
+⚠️ 改一处别名会让整台服务器重连一次：`McpManager::reload` 以「配置完全一致」判断能否原地保留，
+别名在配置里 → 运行时重建。要改成「只 request_sync」得让 `ServerRuntime` 支持热换配置，暂不做。
+
+### 默认 Agent 不再自动补工具（2026-10-29）
+
+`initDefaultAgent` 以前是「只补不删」：启动 + 每次 `mcp:changed` 都把缺失的工具名补回默认 Agent 白名单。
+名字与服务器解耦之后这一步真的会生效，于是**用户在默认 Agent 里取消勾选的 MCP 工具会被反复加回来**。
+
+- 现在：**只建不补**（默认 Agent 不存在时按当时可用的工具建一份快照，已存在则一个字都不动）；
+- `services/mcp.ts::handleMcpChanged` 只失效定义缓存 + 刷新状态/冲突名单，不碰 Agent；
+- 白名单此后**只由用户在编辑器里决定**（新增内置工具也不再自动补 —— 想给就勾）。
+
+细节见 `agents/06-pitfalls-toolchain.md` §11.72。
+
+### 编辑服务器不再重取工具清单 + 审批默认直接执行（2026-10-30）
+
+旧行为：每次打开编辑弹窗，工具选择都是空的，必须先点「测试连接」才能保存 —— 改一个审批方式也得重连一次。
+
+- **清单来源分级**：已连上的服务器直接读新字段 `McpServerStatus::all_tools`（**完整**清单，不受 `enabledTools`
+  裁剪）；新增 / 从未连上才需要点「获取工具列表」（命令仍是 `cmd_mcp_test`，只改了界面文案）；
+- **不能拿 `status.tools` 当候选**：它已按白名单裁过，回填后只能看到已勾过的工具，被排除的再也勾不回来；
+- **门禁改成「有没有清单」**：有清单就按勾选写回，连接参数一改才清（那是真的过期了）；失败提示与清单可同时显示；
+- **新建草稿审批默认 `allow`**（`createMcpServerDraft` 与 `McpApproval::default` 同改）：与内置工具缺省放行同口径；
+  ⚠️ `import` 例外 —— `mcp/import.rs` 显式写 `ask`，粘贴来的第三方配置不能变成「导入即直接执行」。
+
+细节见 `agents/06-pitfalls-toolchain.md` §11.74。

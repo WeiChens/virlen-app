@@ -17,9 +17,13 @@ import { agentStore } from '@/ui/store/agentStore'
 import { mcpRepo } from '@/infrastructure/mcp/repo'
 import {
   stateTone,
+  validateMcpToolAlias,
+  withToolAlias,
   type McpServerConfig,
   type McpServerStatus,
+  type McpToolInfo,
 } from '@/domain/mcp'
+import { migrateAgentToolNames } from '@/services/agent-service'
 import McpEditModal from './mcp-edit-modal'
 import Modal from '@/ui/components/shared/Modal'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
@@ -71,7 +75,7 @@ function commandLine(config: McpServerConfig): string {
  *
  * 为什么要算这个：`allowTools` 是**穷举白名单**（`undefined` 才是「全部」），
  * 用户连上服务器却看不到工具，最容易踩的就是存量 Agent 里没有这几个名字（方案 §8.6）。
- * 默认 Agent 会在 `mcp:changed` 时自动补入，所以这里的 0 基本等于「自定义 Agent 都没勾」。
+ * 默认 Agent 也**不再自动补入**（只在创建时快照一次），所以这里的 0 就是「没人勾」。
  */
 function enabledByAgentCount(status: McpServerStatus | undefined): number {
   const names = new Set((status?.tools ?? []).map((tool) => tool.name))
@@ -90,21 +94,31 @@ function McpSettings() {
   const [importing, setImporting] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  /** 正在改名的工具（`null` = 弹窗关闭） */
+  const [renaming, setRenaming] = useState<
+    { config: McpServerConfig; tool: McpToolInfo } | null
+  >(null)
+  const [renameValue, setRenameValue] = useState('')
 
   // 页面打开拉一次（事件只推「变化」，首次的快照得自己取）
   useEffect(() => {
     void mcpStore.refresh()
   }, [])
 
-  /** 统一的「写操作 + 刷新」包装：失败把原因摆到页面上，不吞 */
-  async function run(id: string | null, action: () => Promise<unknown>) {
+  /** 统一的「写操作 + 刷新」包装：失败把原因摆到页面上，不吞（返回是否成功，供写后动作分支） */
+  async function run(
+    id: string | null,
+    action: () => Promise<unknown>,
+  ): Promise<boolean> {
     setBusyId(id)
     try {
       await action()
       await mcpStore.refresh()
+      return true
     } catch (e: any) {
       mcpStore.error = e?.message ?? String(e)
       showToast(t('操作失败：') + (e?.message ?? String(e)))
+      return false
     } finally {
       setBusyId(null)
     }
@@ -125,6 +139,59 @@ function McpSettings() {
   async function handleReconnect(config: McpServerConfig) {
     await run(config.id, () => mcpRepo.reload(config.id))
     showToast(t('重连'))
+  }
+
+  /** 打开改名弹窗：预填当前公开名（改名大多是「在现有名字上改几个字」） */
+  function openRename(config: McpServerConfig, tool: McpToolInfo) {
+    setRenaming({ config, tool })
+    setRenameValue(tool.name)
+  }
+
+  /**
+   * 保存工具别名：`toolAliases` 是「服务器原始工具名 → 模型可见名」，清空 / 回填原名 = 删条目（恢复默认）。
+   *
+   * 改名后必须跑一次白名单迁移：`allowTools` 存的是公开名，不迁就留下一批指向旧名的幽灵条目
+   *（§11.69 的事故就是这么来的）。新名字优先取刷新后的状态 —— 清空别名时默认名可能是带哈希的，
+   * 前端算不出来（生成需要 SHA-256，两套实现必然漂移）。
+   */
+  async function handleRenameSave() {
+    if (!renaming) return
+    const { config, tool } = renaming
+    const value = renameValue.trim()
+    const error = value ? validateMcpToolAlias(value) : null
+    if (error) {
+      showToast(error)
+      return
+    }
+    // 同一台服务器内重名：Rust 也会拦，但在这里挡住用户才能就地改（不必先吃一条错误提示）
+    const clash =
+      !!value &&
+      value !== tool.name &&
+      (mcpStore.statusOf(config.id)?.tools ?? []).some(
+        (other) => other.name === value && other.rawName !== tool.rawName,
+      )
+    if (clash) {
+      showToast(tpl('工具名重复：$__name__', { name: value }))
+      return
+    }
+
+    const nextAliases = withToolAlias(config.toolAliases, tool.rawName, value)
+
+    const ok = await run(config.id, () =>
+      mcpRepo.upsert({ ...config, toolAliases: nextAliases }),
+    )
+    if (!ok) return
+
+    const renamed =
+      mcpStore
+        .statusOf(config.id)
+        ?.tools.find((item) => item.rawName === tool.rawName)?.name ??
+      (value || tool.rawName)
+    if (migrateAgentToolNames([{ from: tool.name, to: renamed }]) > 0) {
+      agentStore.reload()
+    }
+    setRenaming(null)
+    showToast(t('已保存'))
   }
 
   async function handleImport() {
@@ -212,6 +279,33 @@ function McpSettings() {
             }}>
             <CloseSvg />
           </button>
+        </div>
+      )}
+
+      {mcpStore.conflicts.length > 0 && (
+        <div className="mcp-banner warning" role="alert">
+          <AlertSvg />
+          <div className="mcp-banner-text">
+            <span>
+              {tpl('$__count__ 个 MCP 工具因同名未下发', {
+                count: mcpStore.conflicts.length,
+              })}
+            </span>
+            <ul className="mcp-conflict-list">
+              {mcpStore.conflicts.map((item) => (
+                <li key={item.name}>
+                  <code>{item.name}</code>
+                  <span>
+                    {item.kind === 'builtin'
+                      ? t('与内置工具重名')
+                      : tpl('多台服务器同名：$__servers__', {
+                          servers: item.servers.join(' / '),
+                        })}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
         </div>
       )}
 
@@ -354,11 +448,32 @@ function McpSettings() {
                     </div>
                     <div className="details-section">
                       <h4>{tpl('工具（$__count__）', { count: status?.toolCount ?? 0 })}</h4>
+                      <p className="details-muted">
+                        {t(
+                          '工具名就是模型看到的名字，默认与服务器一致；与其他服务器或内置工具同名时，在这里给其中一个改名。',
+                        )}
+                      </p>
                       {status && status.tools.length > 0 ? (
                         <ul className="mcp-tool-list">
                           {status.tools.map((tool) => (
                             <li key={tool.name}>
-                              <code>{tool.rawName}</code>
+                              <div className="mcp-tool-head">
+                                <code>{tool.name}</code>
+                                <button
+                                  className="icon-btn"
+                                  title={t('改名')}
+                                  aria-label={t('改名')}
+                                  disabled={busy}
+                                  onClick={() => openRename(config, tool)}>
+                                  <EditSvg />
+                                </button>
+                              </div>
+                              {/* 公开名与服务器原名不一样时要摆出原名：改名的人得知道自己在改哪一个 */}
+                              {tool.rawName !== tool.name && (
+                                <span className="mcp-tool-raw">
+                                  {tpl('服务器原名：$__raw__', { raw: tool.rawName })}
+                                </span>
+                              )}
                               <span className="mcp-tool-desc" title={tool.description}>
                                 {tool.description}
                               </span>
@@ -410,6 +525,58 @@ function McpSettings() {
           void mcpStore.refresh()
         }}
       />
+
+      {/* 给单个工具改公开名：只影响「模型看到的名字」，调用仍发服务器原名 */}
+      <Modal
+        visible={renaming !== null}
+        title={t('重命名工具')}
+        width={520}
+        onClose={() => setRenaming(null)}
+        footer={
+          <>
+            <button className="btn-secondary" onClick={() => setRenaming(null)}>
+              {t('取消')}
+            </button>
+            <button
+              className="btn-primary"
+              disabled={busyId !== null}
+              onClick={() => void handleRenameSave()}>
+              {t('保存')}
+            </button>
+          </>
+        }>
+        <div className="mcp-rename-form">
+          <ul className="mcp-diag-list">
+            <li>
+              <span>{t('所属服务器')}</span>
+              <span>{renaming?.config.name}</span>
+            </li>
+            <li>
+              <span>{t('服务器原名')}</span>
+              <span>
+                <code className="mcp-diag-code">{renaming?.tool.rawName}</code>
+              </span>
+            </li>
+          </ul>
+          <div className="form-group">
+            <label htmlFor="mcp-tool-alias">{t('模型看到的工具名')}</label>
+            <input
+              id="mcp-tool-alias"
+              type="text"
+              spellCheck={false}
+              value={renameValue}
+              placeholder={renaming?.tool.rawName ?? ''}
+              aria-describedby="mcp-tool-alias-hint"
+              onChange={(e) => setRenameValue(e.target.value)}
+            />
+            <p className="form-hint" id="mcp-tool-alias-hint">
+              {t(
+                '只能包含字母、数字、下划线和连字符，最长 64 个字符。留空或填回原名即恢复默认；保存后各 Agent 白名单会跟着改，历史会话里的旧名字不会变。',
+              )}
+            </p>
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         visible={importOpen}

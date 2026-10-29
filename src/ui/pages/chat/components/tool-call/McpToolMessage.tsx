@@ -1,5 +1,5 @@
 /**
- * McpToolMessage — 任意 MCP 服务器工具调用（`mcp__<server>__<raw>`）的卡片。
+ * McpToolMessage — 任意 MCP 服务器工具调用的卡片。
  *
  * 为什么不给每台服务器写一张卡：MCP 工具是**运行期动态定义**，前端在编译期不知道有哪些。
  * 一张卡按 Rust 下发的 `uiData.blocks[]` 通用渲染即可 —— 块类型（text / image / resource /
@@ -10,7 +10,7 @@
  * ⚠️ 正文 / 参数都是**不可信外部文本**：一律当纯文本渲染（`<pre>` / 字符串插值），绝不 `dangerouslySetInnerHTML`。
  */
 import { t, tpl } from '@/ui/i18n'
-import { parseMcpToolName } from '@/domain/mcp/naming'
+import { mcpToolServer } from '@/domain/mcp/naming'
 import { IToolCallMessage, ToolMessageProps } from './IToolCallMessage'
 
 /** 一行摘要最多显示多少字符（完整内容在展开视图里） */
@@ -65,8 +65,9 @@ class McpToolMessage implements IToolCallMessage {
   }
 
   getToolLabel(type: string): string {
-    const parsed = parseMcpToolName(type)
-    return parsed ? tpl('MCP · $__server__', { server: parsed.server }) : t('MCP 工具')
+    // 工具名里已经没有服务器名：从名称目录（定义快照）查，旧会话则退回前缀解析
+    const server = mcpToolServer(type)
+    return server ? tpl('MCP · $__server__', { server }) : t('MCP 工具')
   }
 
   getShortText(props: ToolMessageProps): React.ReactNode {

@@ -4,9 +4,11 @@
  * 只做「把表单收成一条 `McpServerConfig`」，落库与校验的最终裁决都在 Rust
  * （`cmd_mcp_upsert` → `mcp::config::validate`）。这里的本地校验只为少一次往返。
  *
- * 「测试连接」（`cmd_mcp_test`）走的是**真实的连接链**（与正式运行同一条监督器），
- * 只是连完立刻 dispose —— 因此它测得出 Windows 的 `.cmd` 垫片、环境清洗、协议版本回退，
- * 也测得出「命令拼错」。
+ * 工具清单有两个来源，**不需要每次重新连**：
+ * 1. 已经连上的服务器：`mcpStore` 里那份完整的工具列表（Rust 的 `allTools`，不受白名单裁剪）；
+ * 2. 新增 / 从未连上：点「获取工具列表」（`cmd_mcp_test`）临时连一次 —— 它走的是
+ *    **真实的连接链**（与正式运行同一条监督器），只是连完立刻 dispose，因此能测出 Windows 的
+ *    `.cmd` 垫片、环境清洗、协议版本回退，也能测出「命令拼错」。
  */
 import { useEffect, useState } from 'react'
 import Modal from '@/ui/components/shared/Modal'
@@ -14,7 +16,7 @@ import Select from '@/ui/components/shared/Select'
 import Toggle from '@/ui/components/shared/Toggle'
 import { showToast } from '@/ui/components/shared/Toast'
 import { mcpRepo } from '@/infrastructure/mcp/repo'
-import { migrateAgentToolNames } from '@/services/mcp'
+import { mcpStore } from '@/ui/store/mcpStore'
 import {
   MCP_APPROVAL_OPTIONS,
   argsToText,
@@ -51,7 +53,7 @@ function approvalLabel(value: McpApproval): string {
 }
 
 /**
- * 探测到的工具 → 初始勾选。
+ * 候选清单 → 初始勾选。
  *
  * 存量白名单存在就按它勾（逐字对应服务器自己的 rawName），没有就全选 —— 新增服务器
  * 永远是「全部交给模型」，想收窄再逐个取消（白名单是穷举的，少勾一个等于少给一个工具）。
@@ -60,6 +62,17 @@ function initialToolSelection(tools: McpToolInfo[], whitelist?: string[]): strin
   const names = tools.map((tool) => tool.rawName)
   if (!whitelist) return names
   return names.filter((name) => whitelist.includes(name))
+}
+
+/**
+ * 已经知道的工具清单：`mcpStore` 里这台服务器的**完整**工具列表（`allTools`）。
+ *
+ * 不能用 `status.tools`：那是按白名单裁过的，拿它当候选会把被排除的工具藏起来。
+ * 空列表一律当「不知道」——停用 / 失败时 Rust 会清空清单，这时只能重新获取。
+ */
+function knownToolsOf(id: string): McpToolInfo[] | null {
+  const all = mcpStore.statusOf(id)?.allTools ?? []
+  return all.length > 0 ? all : null
 }
 
 /**
@@ -82,7 +95,7 @@ export default function McpEditModal({
   onSaved,
 }: Props) {
   const isEdit = !!initialConfig
-  /** 新增模式的稳定 id："测试连接"与"保存"必须用同一个 id（否则每点一次就换一个身份） */
+  /** 新增模式的稳定 id："获取工具列表"与"保存"必须用同一个 id（否则每点一次就换一个身份） */
   const [draftId, setDraftId] = useState('')
   const [name, setName] = useState('')
   const [transport, setTransport] = useState<McpTransportKind>('stdio')
@@ -92,13 +105,18 @@ export default function McpEditModal({
   const [envText, setEnvText] = useState('')
   const [url, setUrl] = useState('')
   const [headersText, setHeadersText] = useState('')
-  const [approval, setApproval] = useState<McpApproval>('ask')
+  const [approval, setApproval] = useState<McpApproval>('allow')
   const [toolCallTimeoutMs, setToolCallTimeoutMs] = useState(60_000)
   const [startupTimeoutMs, setStartupTimeoutMs] = useState(30_000)
   const [reconnectEnabled, setReconnectEnabled] = useState(true)
   const [injectInstructions, setInjectInstructions] = useState(true)
   const [enabled, setEnabled] = useState(true)
-  /** 勾选的工具（rawName）。`null` = 还没探测过，首次探测后按白名单 / 全选初始化 */
+  /**
+   * 候选工具清单（rawName 为准）。`null` = 目前不知道这台服务器有哪些工具，
+   * 必须先点「获取工具列表」。
+   */
+  const [toolList, setToolList] = useState<McpToolInfo[] | null>(null)
+  /** 勾选的工具（rawName）。`null` = 还没清单，拿到后按白名单 / 全选初始化 */
   const [selectedTools, setSelectedTools] = useState<string[] | null>(null)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -123,16 +141,23 @@ export default function McpEditModal({
     setReconnectEnabled(draft.reconnect.enabled)
     setInjectInstructions(draft.injectInstructions)
     setEnabled(draft.enabled)
-    setSelectedTools(null)
+    // 优先用「这台服务器已经在跑的那一份」：编辑一台已经连上的服务器不该每次重连；
+    // 真拿不到（新增 / 从未连上 / 失败后清单被清）才需要「获取工具列表」
+    const known = isEdit ? knownToolsOf(draft.id) : null
+    setToolList(known)
+    setSelectedTools(known ? initialToolSelection(known, draft.enabledTools) : null)
     setProbe(null)
     setSaving(false)
     setTesting(false)
-  }, [visible, initialConfig])
+  }, [visible, initialConfig, isEdit])
 
   /** 停用或审批为「禁用」时不会建连：这类配置不要求先测（Rust 的探针也会直接拒绝） */
   const needsProbe = enabled && approval !== 'deny'
 
-  /** 表单 → 配置（保存与「测试连接」共用同一条组装，避免两处漂移） */
+  /** 已有清单就可以直接勾选 / 保存（不必重连）；没有清单才必须先「获取工具列表」 */
+  const hasToolList = toolList !== null
+
+  /** 表单 → 配置（保存与「获取工具列表」共用同一条组装，避免两处漂移） */
   function buildConfig(): McpServerConfig {
     const base = initialConfig ?? {
       ...createMcpServerDraft(transport),
@@ -148,9 +173,9 @@ export default function McpEditModal({
       reconnect: { ...base.reconnect, enabled: reconnectEnabled },
       injectInstructions,
       enabled,
-      // 有探测结果就按勾选写回；没有（停用 / 禁用 / 未测）就沿用原配置，不凭 UI 猜
-      enabledTools: probe?.ok
-        ? selectionToWhitelist(probe.tools, selectedTools ?? [])
+      // 有清单就按勾选写回；没有（停用 / 禁用 / 从未拿到清单）就沿用原配置，不凭 UI 猜
+      enabledTools: toolList
+        ? selectionToWhitelist(toolList, selectedTools ?? [])
         : initialConfig?.enabledTools,
     }
     if (transport === 'stdio') {
@@ -173,15 +198,20 @@ export default function McpEditModal({
     return config
   }
 
-  /** 连接参数一变，上一次探测就过期了：清掉结果（保存门禁随之重新关上） */
-  function invalidateProbe() {
+  /**
+   * 连接参数一变，上一份清单就过期了：清掉候选与勾选（保存门禁随之重新关上）。
+   * 只挂在这类字段上 —— 审批 / 超时不影响「服务器给什么工具」，不该让人重连一次。
+   */
+  function invalidateTools() {
     setProbe(null)
+    setToolList(null)
+    setSelectedTools(null)
   }
 
   /** 全选 / 取消全选（只作用于服务器实际提供的工具） */
   function toggleAllTools() {
-    if (!probe?.ok) return
-    const names = probe.tools.map((tool) => tool.rawName)
+    if (!toolList) return
+    const names = toolList.map((tool) => tool.rawName)
     const allChecked = names.every((name) => (selectedTools ?? []).includes(name))
     setSelectedTools(allChecked ? [] : names)
   }
@@ -195,7 +225,7 @@ export default function McpEditModal({
     })
   }
 
-  async function handleTest() {
+  async function handleFetchTools() {
     const config = buildConfig()
     const error = validateMcpConfig(config)
     if (error) {
@@ -210,9 +240,10 @@ export default function McpEditModal({
       const result = await mcpRepo.test({ ...config, enabledTools: undefined })
       setProbe(result)
       if (result.ok) {
+        setToolList(result.tools)
         setSelectedTools((current) => {
           const names = result.tools.map((tool) => tool.rawName)
-          // 首次探测：有存量白名单就按它勾，没有就全选；重测则保留用户手改过的勾选
+          // 首次获取：有存量白名单就按它勾，没有就全选；重获取则保留用户手改过的勾选
           return current === null
             ? initialToolSelection(result.tools, initialConfig?.enabledTools)
             : names.filter((name) => current.includes(name))
@@ -227,8 +258,8 @@ export default function McpEditModal({
 
   async function handleSave() {
     // 没有工具清单就不允许保存：白名单是穷举的，猜错的一行等于一个工具都看不到
-    if (needsProbe && !probe?.ok) {
-      showToast(t('先测试连接，读到工具列表后才能保存'))
+    if (needsProbe && !hasToolList) {
+      showToast(t('先获取工具列表才能保存'))
       return
     }
     const config = buildConfig()
@@ -239,16 +270,8 @@ export default function McpEditModal({
     }
     setSaving(true)
     try {
+      // 改名不动白名单：公开名与服务器名无关（个别工具的可自定义名在 MCP 设置里单独改）
       await mcpRepo.upsert(config)
-      // 改名 → 把各 Agent 白名单里的旧公开名成新名（不迁就等于把该服务器的工具从所有
-      // Agent 上静默摘掉）。必须等 upsert 成功后再改，否则服务器没改而白名单先跑了。
-      const previousName = initialConfig?.name
-      if (previousName && previousName !== config.name) {
-        const migrated = migrateAgentToolNames(previousName, config.name)
-        if (migrated > 0) {
-          showToast(tpl('已同步 $__count__ 个工具名', { count: migrated }))
-        }
-      }
       onSaved()
     } catch (e: any) {
       showToast(e?.message ?? String(e))
@@ -266,10 +289,8 @@ export default function McpEditModal({
       footer={
         <>
           {/* 保存门禁前置说明：按钮置灰时得让用户知道「差哪一步」 */}
-          {needsProbe && !probe?.ok && (
-            <span className="mcp-footer-hint">
-              {t('先测试连接，读到工具列表后才能保存')}
-            </span>
+          {needsProbe && !hasToolList && (
+            <span className="mcp-footer-hint">{t('先获取工具列表才能保存')}</span>
           )}
           <button className="btn-secondary" onClick={onClose}>
             {t('取消')}
@@ -282,15 +303,15 @@ export default function McpEditModal({
                 ? t('服务器已停用或审批方式为「禁用」，不会建立连接。')
                 : undefined
             }
-            onClick={() => void handleTest()}>
-            {testing ? t('正在连接…') : t('测试连接')}
+            onClick={() => void handleFetchTools()}>
+            {testing ? t('正在获取…') : t('获取工具列表')}
           </button>
           <button
             className="btn-primary"
-            disabled={saving || testing || (needsProbe && !probe?.ok)}
+            disabled={saving || testing || (needsProbe && !hasToolList)}
             title={
-              needsProbe && !probe?.ok
-                ? t('先测试连接，读到工具列表后才能保存')
+              needsProbe && !hasToolList
+                ? t('先获取工具列表才能保存')
                 : undefined
             }
             onClick={() => void handleSave()}>
@@ -312,7 +333,7 @@ export default function McpEditModal({
           />
           <p className="form-hint" id="mcp-name-hint">
             {t(
-              '用作工具名前缀（mcp__名称__工具）。改名会同步迁移各 Agent 的白名单，但已有会话历史里的工具名仍会失效。',
+              '用作服务器标识：界面分组与审批档（mcp.名称.call）。工具名不再包含服务器名，改名不会让已有 Agent 或会话里的工具失效。',
             )}
           </p>
         </div>
@@ -324,7 +345,7 @@ export default function McpEditModal({
               className={transport === 'stdio' ? 'active' : ''}
               onClick={() => {
                 setTransport('stdio')
-                invalidateProbe()
+                invalidateTools()
               }}
               type="button">
               {t('标准输入输出（本地进程）')}
@@ -333,7 +354,7 @@ export default function McpEditModal({
               className={transport === 'http' ? 'active' : ''}
               onClick={() => {
                 setTransport('http')
-                invalidateProbe()
+                invalidateTools()
               }}
               type="button">
               {t('HTTP（远端）')}
@@ -354,7 +375,7 @@ export default function McpEditModal({
                 aria-describedby="mcp-command-hint"
                 onChange={(e) => {
                   setCommand(e.target.value)
-                  invalidateProbe()
+                  invalidateTools()
                 }}
               />
               <p className="form-hint" id="mcp-command-hint">
@@ -370,7 +391,7 @@ export default function McpEditModal({
                 placeholder={'-y\n@modelcontextprotocol/server-filesystem\n.'}
                 onChange={(e) => {
                   setArgsText(e.target.value)
-                  invalidateProbe()
+                  invalidateTools()
                 }}
               />
             </div>
@@ -384,7 +405,7 @@ export default function McpEditModal({
                 placeholder={t('留空 = 继承当前进程')}
                 onChange={(e) => {
                   setCwd(e.target.value)
-                  invalidateProbe()
+                  invalidateTools()
                 }}
               />
             </div>
@@ -398,7 +419,7 @@ export default function McpEditModal({
                 aria-describedby="mcp-env-hint"
                 onChange={(e) => {
                   setEnvText(e.target.value)
-                  invalidateProbe()
+                  invalidateTools()
                 }}
               />
               <p className="form-hint" id="mcp-env-hint">
@@ -418,7 +439,7 @@ export default function McpEditModal({
                 placeholder="https://mcp.example.com/mcp"
                 onChange={(e) => {
                   setUrl(e.target.value)
-                  invalidateProbe()
+                  invalidateTools()
                 }}
               />
             </div>
@@ -432,7 +453,7 @@ export default function McpEditModal({
                 aria-describedby="mcp-headers-hint"
                 onChange={(e) => {
                   setHeadersText(e.target.value)
-                  invalidateProbe()
+                  invalidateTools()
                 }}
               />
               <p className="form-hint" id="mcp-headers-hint">{t('每行一个 Name: value。')}</p>
@@ -478,15 +499,15 @@ export default function McpEditModal({
           </div>
         </div>
 
-        {/* 工具清单 = 「测试连接」的结果：连上才知道服务器有哪些工具，
-            勾选决定交给模型哪些（默认全选）。所以保存前必须先测通 —— 白名单是穷举的，
-            以前靠手敲名字，填错一个字就是 0 个工具。 */}
+        {/* 工具清单：连上才知道服务器有哪些工具，勾选决定交给模型哪些（默认全选）。
+            清单要么已经跟着服务器跑着（`allTools`），要么点「获取工具列表」现取 ——
+            白名单是穷举的，所以没有清单时不让保存。 */}
         <div className="form-section">
           <div className="tools-head">
             <h4 className="form-section-title">{t('工具选择')}</h4>
-            {needsProbe && probe?.ok && (
+            {needsProbe && toolList && (
               <span className="tools-count">
-                {tpl('已连接 · $__count__ 个工具', { count: probe.toolCount })}
+                {tpl('服务器提供 $__count__ 个工具', { count: toolList.length })}
               </span>
             )}
           </div>
@@ -495,73 +516,79 @@ export default function McpEditModal({
             <p className="form-hint">
               {t('服务器已停用或审批方式为「禁用」，不会建立连接；工具清单保持原有设置。')}
             </p>
-          ) : probe?.ok ? (
-            probe.tools.length === 0 ? (
-              <p className="form-hint">{t('这台服务器没有提供任何工具。')}</p>
-            ) : (
-              <>
-                <div className="tools-bar">
-                  <span>
-                    {tpl('已选 $__done__/$__all__', {
-                      done: selectedTools?.length ?? 0,
-                      all: probe.tools.length,
-                    })}
-                  </span>
-                  <button type="button" className="link-btn" onClick={toggleAllTools}>
-                    {(selectedTools?.length ?? 0) >= probe.tools.length
-                      ? t('取消全选')
-                      : t('全选')}
-                  </button>
-                </div>
-                <ul className="mcp-tool-picker">
-                  {probe.tools.map((tool) => (
-                    <li key={tool.name}>
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={selectedTools?.includes(tool.rawName) ?? false}
-                          onChange={() => toggleTool(tool.rawName)}
-                        />
-                        <span className="picker-text">
-                          {/* 列的是服务器自己的名字（白名单也用它），公开名挂 title */}
-                          <code title={tool.name}>{tool.rawName}</code>
-                          {tool.description && (
-                            <span className="picker-desc" title={tool.description}>
-                              {tool.description}
-                            </span>
-                          )}
-                        </span>
-                      </label>
-                    </li>
-                  ))}
-                </ul>
-                <p className="form-hint">{t('未勾选的工具不会交给模型。')}</p>
-              </>
-            )
-          ) : probe ? (
-            <div className="probe-result error" role="status">
-              <div className="probe-head">
-                <span className="probe-dot" aria-hidden="true" />
-                <strong className="probe-title">
-                  {probe.error || t('连接失败')}
-                </strong>
-                <button
-                  className="probe-close"
-                  title={t('关闭')}
-                  aria-label={t('关闭')}
-                  onClick={() => setProbe(null)}>
-                  <CloseSvg />
-                </button>
-              </div>
-              <p className="probe-hint">
-                <AlertSvg />
-                <span>
-                  {t('常见原因：命令写错、依赖未安装、端口未开放，或服务器输出的不是 UTF-8。')}
-                </span>
-              </p>
-            </div>
           ) : (
-            <p className="form-hint">{t('先测试连接：连上后会自动列出这台服务器的工具。')}</p>
+            <>
+              {/* 失败提示与清单可以同时存在：清单已回填时点一次重取失败，不能把原因吞掉 */}
+              {probe && !probe.ok && (
+                <div className="probe-result error" role="status">
+                  <div className="probe-head">
+                    <span className="probe-dot" aria-hidden="true" />
+                    <strong className="probe-title">{probe.error || t('连接失败')}</strong>
+                    <button
+                      className="probe-close"
+                      title={t('关闭')}
+                      aria-label={t('关闭')}
+                      onClick={() => setProbe(null)}>
+                      <CloseSvg />
+                    </button>
+                  </div>
+                  <p className="probe-hint">
+                    <AlertSvg />
+                    <span>
+                      {t('常见原因：命令写错、依赖未安装、端口未开放，或服务器输出的不是 UTF-8。')}
+                    </span>
+                  </p>
+                </div>
+              )}
+              {toolList ? (
+                toolList.length === 0 ? (
+                  <p className="form-hint">{t('这台服务器没有提供任何工具。')}</p>
+                ) : (
+                  <>
+                    <div className="tools-bar">
+                      <span>
+                        {tpl('已选 $__done__/$__all__', {
+                          done: selectedTools?.length ?? 0,
+                          all: toolList.length,
+                        })}
+                      </span>
+                      <button type="button" className="link-btn" onClick={toggleAllTools}>
+                        {(selectedTools?.length ?? 0) >= toolList.length
+                          ? t('取消全选')
+                          : t('全选')}
+                      </button>
+                    </div>
+                    <ul className="mcp-tool-picker">
+                      {toolList.map((tool) => (
+                        <li key={tool.name}>
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={selectedTools?.includes(tool.rawName) ?? false}
+                              onChange={() => toggleTool(tool.rawName)}
+                            />
+                            <span className="picker-text">
+                              {/* 列公开名（改过名时就是别名），白名单仍按 rawName 存 → title 给原名备查 */}
+                              <code title={tool.rawName}>{tool.name}</code>
+                              {tool.description && (
+                                <span className="picker-desc" title={tool.description}>
+                                  {tool.description}
+                                </span>
+                              )}
+                            </span>
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="form-hint">{t('未勾选的工具不会交给模型。')}</p>
+                  </>
+                )
+              ) : probe ? null : (
+                <p className="form-hint">
+                  {t('点「获取工具列表」连上后会自动列出这台服务器的工具。')}
+                </p>
+              )}
+            </>
           )}
         </div>
 

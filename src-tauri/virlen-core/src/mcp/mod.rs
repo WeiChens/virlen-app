@@ -6,7 +6,8 @@
 //! ```text
 //! mcp/
 //! ├── mod.rs          对外出口（本文件）
-//! ├── naming.rs       公开工具名：`mcp__<server>__<raw>` + 64 字符/12 hex 规则
+//! ├── naming.rs       公开工具名：**直接用服务器自己的工具名** + 64 字符/12 hex 规则
+//! │                  （`mcp__<server>__<raw>` 只剩旧数据识别）
 //! ├── naming_fixtures.json  命名黄金值（Rust 与 TS 两侧共用同一份，防算法漂移）
 //! ├── config.rs       服务器配置（serde camelCase）+ 校验 + 子进程环境清洗 + 重连退避
 //! ├── schema.rs       MCP 的任意 JSON Schema → 三大 provider 都吃得下的子集
@@ -26,8 +27,9 @@
 //! ```
 //!
 //! ⚠️ 三条不变量（P1 接引擎时必须继续成立）：
-//! 1. **公开名是 `(serverName, rawName)` 的纯函数**，同一对输入永远同一名字；`tools/call`
-//!    只发服务器自己的 `rawName`，公开名绝不解回原始名（会话历史与权限规则靠这条稳定）。
+//! 1. **公开名 = 服务器自己的工具名**（必要时加哈希后缀），同一输入永远同一名字；`tools/call`
+//!    只发服务器自己的 `rawName`。跨服务器同名**不折叠、不猜路由**：由 `McpManager::republish`
+//!    判定为冲突并**两边都不下发**（fail-closed），同时报给界面。
 //! 2. **一个服务器的工具要么整批生效、要么一个都不注册**（同步失败保留上一世代）。
 //! 3. **stdio 子进程不套沙盒**（它本来就要读写文件/网络），防护靠：默认不启用 + 审批 +
 //!    环境变量清洗 + 结果大小上限（见 `docs/mcp-plan.md` §7）。
@@ -58,13 +60,16 @@ pub use config::{
     McpReconnectConfig, McpServerConfig, McpTransport, StdioSpec,
 };
 pub use host::{
-    attach, call_tool, definitions, detach, host, instructions, is_attached, list_resources,
-    read_resource, statuses, McpCallOutcome, McpCallRequest, McpHost, McpServerState,
-    McpServerStatus, McpToolInfo, NoopMcpHost,
+    attach, call_tool, conflicts, definitions, detach, host, instructions, is_attached,
+    list_resources, owns, read_resource, route, statuses, McpCallOutcome, McpCallRequest,
+    McpConflict, McpConflictKind, McpHost, McpServerState, McpServerStatus, McpToolInfo,
+    McpToolRoute, NoopMcpHost,
 };
 pub use import::{parse_import, ImportResult, SkippedImport};
 pub use jsonrpc::{parse_message, Incoming, RpcError};
-pub use naming::{is_mcp_tool_name, public_tool_name, split_mcp_tool_name, MCP_PREFIX};
+pub use naming::{
+    is_legacy_mcp_tool_name, public_tool_name, split_legacy_mcp_tool_name, MCP_PREFIX,
+};
 pub use registry::{
     load_configs, probe, save_configs, start_from_settings, validate_configs, McpChangeSink,
     McpManager, SETTINGS_KEY,

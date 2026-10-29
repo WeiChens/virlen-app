@@ -393,6 +393,43 @@
     }
   }
 
+  // 同名冲突提示：被扣下的工具不在列表里，必须在列表上方占一行说清楚
+  .tool-conflict-hint {
+    margin: 6px 0 8px;
+    padding: 8px 10px;
+    font-size: var(--font-size-xs);
+    color: var(--warning-color, #b45309);
+    background: var(--warning-bg, rgba(180, 83, 9, 0.08));
+    border: 1px solid currentColor;
+    border-radius: 6px;
+
+    .tool-conflict-title {
+      display: block;
+      font-weight: 600;
+    }
+
+    ul {
+      margin: 4px 0;
+      padding-left: 16px;
+    }
+
+    li {
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+    }
+
+    code {
+      font-family: var(--code-font-family, monospace);
+      color: inherit;
+    }
+
+    .tool-conflict-note {
+      display: block;
+      color: var(--text-secondary, #888);
+    }
+  }
+
   // ==================== Tool Grid ====================
 
   // 工具 / 技能页签采用「固定表头 + 独立滚动列表」的两段式布局：

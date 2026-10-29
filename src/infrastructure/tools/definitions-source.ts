@@ -9,6 +9,9 @@
  * ⚠️ MCP 工具**不在契约里**（运行期动态定义，见 `docs/mcp-plan.md`）：它由 Rust 单独生成，
  * 这里只往后拼一段，且失败时降级为空（服务器挂了不能让聊天不可用）。顺序固定为
  * 「内置（契约顺序）在前，MCP 按公开名排序在后」—— 提示词前缀稳定，KV cache 不抖。
+ *
+ * ⚠️ MCP 名字里已经没有服务器名（`public_tool_name(raw)`）：归属由 Rust 随定义一起下发
+ *（`mcpServer` / `rawName`），这里顺手写进名称目录，供卡片标题、编辑器分组、旧数据展示查。
  */
 import { invoke } from '@tauri-apps/api/core'
 import type { ResolvedToolDefinition } from '@/domain/tools/types'
@@ -18,10 +21,17 @@ import {
   type ToolDefinitionsFile,
 } from '@/domain/tools/definitions'
 import { platformSnapshot } from './execute/common'
+import { setMcpToolCatalog } from '@/domain/mcp/naming'
 
 /** 是否在 Tauri 环境（与 `services/rust-engine.ts::isTauriAvailable` 同一判据） */
 function isTauriEnv(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
+
+/** `cmd_mcp_tool_definitions` 的一行（Rust `McpToolDefinitionOut`：定义 + 归属） */
+interface McpToolDefinitionRow extends ResolvedToolDefinition {
+  mcpServer: string
+  rawName: string
 }
 
 /**
@@ -67,11 +77,23 @@ async function loadBuiltinToolDefinitions(): Promise<ResolvedToolDefinition[]> {
  *
  * ⚠️ 失败一律降级为空数组：MCP 是**增强能力**，一台服务器连不上不能让整个聊天不可用。
  * 不在这里排序 —— Rust 已按公开名排好（`McpManager::republish`）。
+ *
+ * `mcpServer` / `rawName` 是 Rust 随定义一起下发的归属信息（名字里已经没有服务器名了）：
+ * 编辑器按服务器分组、说明书注入按服务器折算、卡片标题显示原始名都要它。
+ * 名称目录**只在成功时**替换：拉取失败时保留上一份，历史会话的卡片还能认出服务器。
  */
 async function loadMcpToolDefinitions(): Promise<ResolvedToolDefinition[]> {
   if (!isTauriEnv()) return []
   try {
-    return await invoke<ResolvedToolDefinition[]>('cmd_mcp_tool_definitions')
+    const rows = await invoke<McpToolDefinitionRow[]>('cmd_mcp_tool_definitions')
+    setMcpToolCatalog(
+      rows.map((row) => ({ name: row.name, server: row.mcpServer, raw: row.rawName })),
+    )
+    return rows.map(({ mcpServer, rawName: _rawName, ...def }) => ({
+      ...def,
+      origin: 'mcp' as const,
+      mcpServer,
+    }))
   } catch (e: any) {
     console.warn(
       `[tool-defs] cmd_mcp_tool_definitions 失败，MCP 工具暂不可见：${e?.message || String(e)}`,

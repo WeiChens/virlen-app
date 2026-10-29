@@ -11,6 +11,8 @@ import { MessageBox } from '@/ui/components/shared/MessageBox'
 import type { Agent } from '@/types'
 import { agentStore } from '@/ui/store'
 import { settingsState } from '@/ui/store'
+import { mcpStore } from '@/ui/store/mcpStore'
+import type { McpConflict } from '@/domain/mcp'
 import FolderSvg from '@/ui/components/icons/FolderSvg'
 import Select from '@/ui/components/shared/Select'
 import { listRegisteredSkills } from '@/skill'
@@ -202,6 +204,8 @@ export default function AgentEditModal({
     return p ? p.models : []
   }, [providerConfigId, providers])
   const [allTools, setAllTools] = useState([] as ResolvedToolDefinition[])
+  /** 本世代被扣下不发的同名 MCP 工具（不在 `allTools` 里，只能单独请） */
+  const [mcpConflicts, setMcpConflicts] = useState([] as McpConflict[])
 
   /** 工具过滤（名称 / 中文标签 / 描述，大小写不敏感） */
   const filteredTools = useMemo(() => {
@@ -237,6 +241,16 @@ export default function AgentEditModal({
     ; (async () => {
       const res = await toolRegistry.listDefinitions()
       setAllTools(res)
+    })()
+  }, [visible])
+
+  useEffect(() => {
+    if (!visible) return
+    ; (async () => {
+      // 冲突名单**不在**工具定义里（被扣下了），只能问 MCP 快照：打开弹窗时对齐一次，
+      // 否则展示的是「上次启动时」的名单
+      await mcpStore.refresh()
+      setMcpConflicts(mcpStore.conflicts)
     })()
   }, [visible])
 
@@ -964,7 +978,7 @@ export default function AgentEditModal({
                     {/* 幽灵条目要摆出来：否则「已选」与实际下发对不上，用户只会以为界面坏了 */}
                     {orphanToolNames.length > 0 && (
                       <span className="form-hint tool-orphan-hint">
-                        {tpl('$__count__ 项已失效（服务器改名或已移除）', {
+                        {tpl('$__count__ 项已失效（对应工具已不存在或已停用）', {
                           count: orphanToolNames.length,
                         })}
                         <button
@@ -998,6 +1012,35 @@ export default function AgentEditModal({
                   autoComplete="off"
                 />
               </div>
+
+              {/* 同名冲突：被扣下的工具**不在**下面的列表里，只能在这里说清楚 ——
+                  否则用户只会发现「这台服务器的工具少了一个」 */}
+              {mcpConflicts.length > 0 && (
+                <div className="tool-conflict-hint" role="alert">
+                  <span className="tool-conflict-title">
+                    {tpl('$__count__ 个 MCP 工具因同名未下发', {
+                      count: mcpConflicts.length,
+                    })}
+                  </span>
+                  <ul>
+                    {mcpConflicts.map((item) => (
+                      <li key={item.name}>
+                        <code>{item.name}</code>
+                        <span>
+                          {item.kind === 'builtin'
+                            ? t('与内置工具重名')
+                            : tpl('多台服务器同名：$__servers__', {
+                                servers: item.servers.join(' / '),
+                              })}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  <span className="tool-conflict-note">
+                    {t('在 MCP 设置里给工具改名或停用其中一台服务器后即可恢复')}
+                  </span>
+                </div>
+              )}
 
               <div className="tool-panel-scroll">
                 {allTools.length === 0 ? (

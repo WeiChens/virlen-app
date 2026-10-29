@@ -12,8 +12,14 @@ import type {
   McpTransportKind,
 } from './types'
 
-/** 服务器名长度上限（公开名预算：`mcp__` + 名 + `__` + 工具名 ≤ 64） */
+/** 服务器名长度上限（只影响展示与审批档查找；工具公开名里已不含它） */
 export const MAX_SERVER_NAME_LEN = 32
+
+/** 工具公开名长度上限（与 Rust `mcp::naming::MAX_PUBLIC_NAME_LEN` 同值：provider 函数名硬上限） */
+export const MAX_TOOL_NAME_LEN = 64
+
+/** 旧版公开名的前缀：别名不得占用（否则会被旧数据当成 `mcp__<server>__<raw>`） */
+export const LEGACY_TOOL_NAME_PREFIX = 'mcp__'
 
 /** 默认值（与 Rust serde 默认一致；新建服务器从这里出发） */
 export const DEFAULT_MCP_TIMEOUTS = {
@@ -42,8 +48,10 @@ export function createMcpServerDraft(
     env: {},
     url: '',
     headers: {},
-    // 默认「每次确认」：新服务器一律从严，用户明确允许后才直通
-    approval: 'ask',
+    // 默认「直接执行」：与内置工具的缺省放行同口径（新建服务器不弹审批打扰）；
+    // 想收紧的用户在弹窗里改成「每次确认」或「禁用」。
+    // 注意：从 JSON 导入是例外 —— Rust 侧 `import.rs` 显式写 ask（那是别人写的配置）。
+    approval: 'allow',
     ...DEFAULT_MCP_TIMEOUTS,
     reconnect: { ...DEFAULT_MCP_RECONNECT },
     enabledTools: undefined,
@@ -75,6 +83,26 @@ export function validateServerName(name: string): string | null {
   return null
 }
 
+/**
+ * 用户自定义工具名（别名）的合法性：错误文案 / `null`。
+ *
+ * 与 Rust `mcp::naming::validate_tool_alias` 同语义，且同样是**只校验、不纠正**：界面上看到的名字
+ * 必须就是下发给模型的名字（静默归一化会变成「我明明填了却不是我填的」）。
+ */
+export function validateMcpToolAlias(alias: string): string | null {
+  if (!alias) return '工具名不能为空'
+  if (!/^[A-Za-z0-9_-]+$/.test(alias)) {
+    return '工具名只能包含字母、数字、下划线和连字符'
+  }
+  if (alias.length > MAX_TOOL_NAME_LEN) {
+    return `工具名不能超过 ${MAX_TOOL_NAME_LEN} 个字符`
+  }
+  if (alias.startsWith(LEGACY_TOOL_NAME_PREFIX)) {
+    return `工具名不能以 ${LEGACY_TOOL_NAME_PREFIX} 开头`
+  }
+  return null
+}
+
 /** 单条配置校验（返回第一条错误；合法 → null）。与 Rust `McpServerConfig::validate` 同语义 */
 export function validateMcpConfig(config: McpServerConfig): string | null {
   const nameError = validateServerName(config.name)
@@ -84,6 +112,15 @@ export function validateMcpConfig(config: McpServerConfig): string | null {
   if (!(config.startupTimeoutMs > 0)) return `${config.name}：启动超时必须大于 0`
   if (config.enabledTools?.some((tool) => !tool.trim())) {
     return `${config.name}：工具白名单里有空名字`
+  }
+  // 别名：自洽校验（非法字符 / 与内置重名不在这里拦 —— 后者是发布期判定）
+  const seenAliases = new Set<string>()
+  for (const [raw, alias] of Object.entries(config.toolAliases ?? {})) {
+    if (!raw.trim()) return `${config.name}：工具别名缺少原始工具名`
+    const aliasError = validateMcpToolAlias(alias)
+    if (aliasError) return `${config.name}（${raw}）：${aliasError}`
+    if (seenAliases.has(alias)) return `${config.name}：工具名重复：${alias}`
+    seenAliases.add(alias)
   }
   if (config.transport === 'stdio') {
     if (!config.command?.trim()) return `${config.name}：命令不能为空`
@@ -106,6 +143,24 @@ export function validateMcpConfigs(configs: McpServerConfig[]): string | null {
     seen.add(config.name)
   }
   return null
+}
+
+/**
+ * 别名表的**一次编辑**（纯函数）：`value` 空 / 等于服务器原名时删掉该条目（恢复默认）。
+ *
+ * 返回 `undefined` = 整张表空了 —— 与 Rust 的 `skip_serializing_if = "BTreeMap::is_empty"`
+ * 同口径（不往配置里写空对象）。
+ */
+export function withToolAlias(
+  aliases: Record<string, string> | undefined,
+  rawName: string,
+  value: string,
+): Record<string, string> | undefined {
+  const next = { ...(aliases ?? {}) }
+  const trimmed = value.trim()
+  if (!trimmed || trimmed === rawName) delete next[rawName]
+  else next[rawName] = trimmed
+  return Object.keys(next).length > 0 ? next : undefined
 }
 
 /** 审批三态的可选项（设置页按此渲染，文案走 i18n） */

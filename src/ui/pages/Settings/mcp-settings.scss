@@ -6,6 +6,46 @@
 
   // ==================== 头部 ====================
 
+  // 同名冲突条：工具被扣下不发是「模型看不到」，不报就是静默变少
+  .mcp-banner.warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid color-mix(in srgb, var(--warning-color, #b45309) 40%, transparent);
+    border-radius: 8px;
+    background: var(--warning-bg, rgba(180, 83, 9, 0.08));
+    color: var(--warning-color, #b45309);
+    font-size: var(--font-size-sm);
+    line-height: 1.6;
+
+    .mcp-banner-text {
+      flex: 1;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .mcp-conflict-list {
+      margin: 6px 0 0;
+      padding-left: 16px;
+
+      li {
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+      }
+
+      code {
+        font-family: var(--code-font-family, monospace);
+        color: inherit;
+      }
+
+      span {
+        color: var(--text-secondary, #888);
+      }
+    }
+  }
+
   .mcp-header {
     display: flex;
     /* 面板窄时让操作区整体折到第二行：否则说明文字被挤成两行、按钮被压扁 */
@@ -513,6 +553,29 @@
             overflow-wrap: anywhere;
           }
 
+          /* 公开名 + 改名按钮：名字是模型看到的那个，按钮紧跟其后 */
+          .mcp-tool-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+
+            .icon-btn {
+              flex: none;
+              opacity: 0.7;
+
+              &:hover {
+                opacity: 1;
+              }
+            }
+          }
+
+          /* 改过名时提示服务器原名：不改名就不显示（不重复两逆） */
+          .mcp-tool-raw {
+            font-size: var(--font-size-xs);
+            color: var(--text-tertiary, #999);
+          }
+
           .mcp-tool-desc {
             min-width: 0;
             line-height: 1.5;
@@ -522,42 +585,6 @@
             -webkit-line-clamp: 2;
             line-clamp: 2;
             overflow: hidden;
-          }
-        }
-      }
-
-      // 观测面板：左标签右值（值为长文本时允许换行，不撑破行宽）
-      .mcp-diag-list {
-        margin: 0;
-        padding: 0;
-        list-style: none;
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-
-        li {
-          display: flex;
-          gap: 10px;
-          font-size: var(--font-size-xs);
-          color: var(--text-primary, #1a1a1a);
-
-          > span:first-child {
-            flex-shrink: 0;
-            min-width: 96px;
-            color: var(--text-secondary, #999);
-          }
-
-          > span:last-child {
-            min-width: 0;
-            overflow-wrap: anywhere;
-          }
-
-          /* 启动命令 / URL：等宽体 + 可逐字断行（长参数不撑破面板） */
-          .mcp-diag-code {
-            font-family: var(--code-font-family);
-            font-size: var(--font-size-xs);
-            color: var(--text-primary, #1a1a1a);
-            overflow-wrap: anywhere;
           }
         }
       }
@@ -617,6 +644,98 @@
         line-height: 1.5;
         white-space: pre-wrap;
         /* anywhere 而不是 break-all：路径 / URL 断成一片反而读不出结构 */
+        overflow-wrap: anywhere;
+      }
+    }
+  }
+
+  /* ==================== 工具改名弹窗 ====================
+     ⚠️ 必须挂在页面作用域：Modal 是 .mcp-settings 的直接子节点，**不在 .mcp-row-details 里**
+     —— 这些规则原先嵌在详情面板下，编译出的选择器匹配不到弹窗，整个弹窗一条样式都不生效。*/
+  .mcp-rename-form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 4px 0;
+
+    /* 字段组与 mcp-edit-modal.scss 同口径（那份是 .mcp-edit-form 作用域，这里拿不到） */
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+
+      label {
+        font-size: var(--font-size-md);
+        font-weight: 500;
+        color: var(--text-primary, #1a1a1a);
+      }
+
+      input[type='text'] {
+        width: 100%;
+        padding: 8px 12px;
+        border: 1px solid var(--border-color, #e5e5e5);
+        border-radius: 8px;
+        font-size: var(--font-size-md);
+        /* 工具名是标识符：等宽体下 l / 1 / I 才分得清 */
+        font-family: var(--code-font-family, monospace);
+        background: var(--bg-primary, #fff);
+        color: var(--text-primary, #1a1a1a);
+        outline: none;
+        box-sizing: border-box;
+        transition: border-color 0.15s;
+
+        &:focus {
+          border-color: var(--accent-color, #4f46e5);
+        }
+
+        &:focus-visible {
+          outline: none;
+          box-shadow: var(--focus-shadow);
+        }
+      }
+    }
+
+    .form-hint {
+      margin: 0;
+      font-size: var(--font-size-xs);
+      line-height: 1.5;
+      color: var(--text-secondary, #999);
+    }
+  }
+
+  /* 观测面板：左标签右值（值为长文本时允许换行，不撑破行宽）。
+     详情面板与工具改名弹窗共用，所以同样挂在页面作用域，不能嵌进 .mcp-row-details */
+  .mcp-diag-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+
+    li {
+      display: flex;
+      gap: 10px;
+      font-size: var(--font-size-xs);
+      color: var(--text-primary, #1a1a1a);
+
+      > span:first-child {
+        flex-shrink: 0;
+        min-width: 96px;
+        color: var(--text-secondary, #999);
+      }
+
+      > span:last-child {
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+
+      /* 启动命令 / URL：等宽体 + 可逐字断行（长参数不撑破面板） */
+      .mcp-diag-code {
+        font-family: var(--code-font-family);
+        font-size: var(--font-size-xs);
+        color: var(--text-primary, #1a1a1a);
         overflow-wrap: anywhere;
       }
     }

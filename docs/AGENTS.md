@@ -22,7 +22,7 @@
 | [`agents/03-phone-core.md`](agents/03-phone-core.md) | §5.9 之一：装配入口 / 生产接线 / 传输 / 落盘 / 文件表 / 依赖方向 / 服务状态机 / 链路自愈对账 / 重连令牌 / 推送时机 | 改手机控制的链路与配对 |
 | [`agents/04-phone-interactions.md`](agents/04-phone-interactions.md) | §5.9 之二：待应答交互注册表 / 终态通知 / 运行结束收敛 / JS 桥接 / 运行时状态 / Agent 选择 / 工具消息下行四字段 / runningTools / 默认打开哪个会话 | 改手机端的交互、审批、消息投影 |
 | [`agents/05-phone-files.md`](agents/05-phone-files.md) | §5.9 之三：工作目录文件（浏览 / 下载 / 上传 / 编辑 / 引用）/ 压缩方式 / 界面字号 / 依赖形态 | 改手机端文件域与展示口径 |
-| [`agents/06-pitfalls-toolchain.md`](agents/06-pitfalls-toolchain.md) | §11.1–§11.13：中文编码 / 本机沙盒限制 / 版本号 / README / 前端工程 / ConPTY / 拖拽 / 粘贴 / 输入框高度 / comctl32 清单 / 单实例 / 切会话入口 · §11.54 右侧面板容器（标签页）与摘要详情抽屉 · §11.55 开始页与工作区文件标签 · §11.56 用户终端（默认脱壳）· §11.57 浏览器标签 · §11.58–§11.70 终端 shell 探测 / 渲染白烧 / 滚动复位 / 气泡夹取 / GLB 与 FBX 亮度 / 3D 环境共用档 / git 浮层溢出 / 分组折叠过渡 / 3D 网格列表与选中模式 · 工具栏收纳 / 日志入口按需 / 加载期空舞台 / 3D 移动模式（WASD·Q/E 走位）· 3D 网格树（可折叠 / 整组显隐）· Agent 工具白名单的幽灵名（MCP 改名迁移 / 「已选」计数口径）· MCP 说明书注入与工具下发同口径 | 环境和桌面端集成踩坑 |
+| [`agents/06-pitfalls-toolchain.md`](agents/06-pitfalls-toolchain.md) | §11.1–§11.13：中文编码 / 本机沙盒限制 / 版本号 / README / 前端工程 / ConPTY / 拖拽 / 粘贴 / 输入框高度 / comctl32 清单 / 单实例 / 切会话入口 · §11.54 右侧面板容器（标签页）与摘要详情抽屉 · §11.55 开始页与工作区文件标签 · §11.56 用户终端（默认脱壳）· §11.57 浏览器标签 · §11.58–§11.75 终端 shell 探测 / 渲染白烧 / 滚动复位 / 气泡夹取 / GLB 与 FBX 亮度 / 3D 环境共用档 / git 浮层溢出 / 分组折叠过渡 / 3D 网格列表与选中模式 · 工具栏收纳 / 日志入口按需 / 加载期空舞台 / 3D 移动模式（WASD·Q/E 走位）· 3D 网格树（可折叠 / 整组显隐）· Agent 工具白名单的幽灵名（「已选」计数口径 / 旧名迁移）· MCP 说明书注入与工具下发同口径 · MCP 工具名改为服务器自己的工具名（归属随定义下发 / 同名冲突 fail-closed）· MCP 工具公开名可自定义（只校验不纠正 / 改名迁白名单）· 默认 Agent 只建不补（不再自动补工具）· 编辑服务器不再重取工具清单、审批默认直接执行（allTools / 获取工具列表 / 导入仍 ask） | 环境和桌面端集成踩坑 |
 | [`agents/07-pitfalls-cli.md`](agents/07-pitfalls-cli.md) | §11.14–§11.27：workspace 拆包四条硬约束 / CLI 三条边界 / 配置下沉进度 / TUI 坑 / 大文件拆分口径 / TUI 渲染三坑 / 续连 / 评审四项 / 提示词解耦 / 配置向导 | 动 `src-tauri/virlen-cli`、core 目录结构或 TUI |
 | [`agents/08-pitfalls-quality.md`](agents/08-pitfalls-quality.md) | §11.28–§11.36：clippy 与 CI 门禁 / CLI 打包 · 三类 CI 失败 / 启动即崩 / 暂停恢复慢 / 残留快照 400 / 只加载到最后 summary / GUI 压缩切 Rust | 改 CI、打包、启动链、压缩与恢复 |
 | [`agents/09-pitfalls-engine.md`](agents/09-pitfalls-engine.md) | §11.37–§11.41：移除 TS 引擎 / 输入框右键菜单 / CLI 会话与用量 / 提示词缓存断点 / 账本缓存写入列 · §11.50–§11.52：请求组装前的工具协议清洗 / 等待用户交互的 await、长耗时工具与同步推理都必须可取消 / 左右对比 diff 的选区与右键菜单 | 改引擎、Provider 请求体、账本与费用、消息协议与取消 |
@@ -46,7 +46,7 @@
 
 | §11.x（常见坑） | 分册 |
 |---|---|
-| §11.1–§11.13 · §11.54–§11.69 | [`agents/06-pitfalls-toolchain.md`](agents/06-pitfalls-toolchain.md) |
+| §11.1–§11.13 · §11.54–§11.75 | [`agents/06-pitfalls-toolchain.md`](agents/06-pitfalls-toolchain.md) |
 | §11.14–§11.27 | [`agents/07-pitfalls-cli.md`](agents/07-pitfalls-cli.md) |
 | §11.28–§11.36 | [`agents/08-pitfalls-quality.md`](agents/08-pitfalls-quality.md) |
 | §11.37–§11.41 · §11.50–§11.52 | [`agents/09-pitfalls-engine.md`](agents/09-pitfalls-engine.md) |

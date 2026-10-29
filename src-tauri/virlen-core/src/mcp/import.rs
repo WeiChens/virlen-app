@@ -86,6 +86,9 @@ fn build_config(name: &str, entry: &Value) -> Result<McpServerConfig, String> {
     let mut value = json!({
         "id": uuid::Uuid::new_v4().to_string(),
         "name": name,
+        // ⚠️ 显式 ask：外部配置是「别人写的」，不能用 `McpApproval` 的缺省值（allow）
+        // 把它变成「导入即直接执行」——导入的人未必筛过里面那条 command
+        "approval": "ask",
     });
 
     if let Some(command) = object.get("command").and_then(Value::as_str) {
@@ -184,7 +187,7 @@ mod tests {
         assert_eq!(spec.command, "npx");
         assert_eq!(spec.args.len(), 3);
         assert_eq!(spec.env.get("FOO").map(String::as_str), Some("bar"));
-        // 外部格式没有审批概念 → 走默认（ask），不是 allow
+        // 外部格式没有审批概念 → 导入一律 ask（新建草稿缺省是 allow）
         assert_eq!(fs.approval, super::super::config::McpApproval::Ask);
         assert!(!fs.id.is_empty());
 

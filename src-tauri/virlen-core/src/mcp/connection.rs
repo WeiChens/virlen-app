@@ -29,7 +29,6 @@ use super::client::{Client, McpTool};
 use super::config::{McpApproval, McpServerConfig, McpTransport};
 use super::host::{McpCallOutcome, McpServerState, McpServerStatus, McpToolInfo};
 use super::jsonrpc::Incoming;
-use super::naming::public_tool_name;
 use super::resources::{McpResourceListing, McpResourceRead};
 use super::results;
 use super::schema;
@@ -112,6 +111,10 @@ pub(crate) struct ServerRuntime {
     client: RwLock<Option<Arc<Client>>>,
     /// 最近一世代工具（`failed` 时才清空）
     tools: RwLock<Vec<PublishedTool>>,
+    /// 同一世代的**完整**工具清单（**不**按 `enabledTools` 裁剪）：设置页编辑弹窗回填勾选用。
+    ///
+    /// ⚠️ 不能直接拿 `tools` 当候选：它已被白名单裁过，被排除的工具就再也勾不回来了。
+    all_tools: RwLock<Vec<McpToolInfo>>,
     cmd_tx: mpsc::UnboundedSender<Command>,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// 任何状态 / 工具变化都调一次（manager 重算快照 + 发事件）
@@ -134,6 +137,7 @@ impl ServerRuntime {
             status: Mutex::new(RuntimeStatus::new(initial)),
             client: RwLock::new(None),
             tools: RwLock::new(Vec::new()),
+            all_tools: RwLock::new(Vec::new()),
             cmd_tx,
             task: Mutex::new(None),
             on_change,
@@ -173,6 +177,11 @@ impl ServerRuntime {
             .collect()
     }
 
+    /// 服务器提供的完整工具清单（不受 `enabledTools` 裁剪）—— 设置页编辑弹窗靠它回填勾选
+    pub(crate) fn all_tool_infos(&self) -> Vec<McpToolInfo> {
+        self.all_tools.read().unwrap().clone()
+    }
+
     pub(crate) fn status(&self) -> McpServerStatus {
         let runtime = self.status.lock().unwrap().clone();
         let tools = self.tool_infos();
@@ -183,6 +192,7 @@ impl ServerRuntime {
             state: runtime.state,
             tool_count: tools.len(),
             tools,
+            all_tools: self.all_tool_infos(),
             server_name: runtime.server_name,
             server_version: runtime.server_version,
             connected_at: runtime.connected_at,
@@ -389,6 +399,10 @@ impl ServerRuntime {
         }
         self.client.write().unwrap().take();
         self.tools.write().unwrap().clear();
+        self.all_tools.write().unwrap().clear();
+        self.all_tools.write().unwrap().clear();
+        self.all_tools.write().unwrap().clear();
+        self.all_tools.write().unwrap().clear();
     }
 
     /// 同步版（`RunEvent::Exit` 这类同步出口）：只发指令，不等待
@@ -425,7 +439,12 @@ impl ServerRuntime {
         self.update(|status| status.state = McpServerState::Connecting);
     }
 
-    fn mark_ready(&self, client: &Arc<Client>, tools: Vec<PublishedTool>) {
+    fn mark_ready(
+        &self,
+        client: &Arc<Client>,
+        tools: Vec<PublishedTool>,
+        all_tools: Vec<McpToolInfo>,
+    ) {
         let info = client.info();
         // 说明书只在「开启注入」时保存（关掉后不再占内存，也不必在快照里筛）
         let instructions = if self.cfg.inject_instructions {
@@ -436,6 +455,7 @@ impl ServerRuntime {
             None
         };
         *self.tools.write().unwrap() = tools;
+        *self.all_tools.write().unwrap() = all_tools;
         *self.client.write().unwrap() = Some(client.clone());
         self.update(|status| {
             // 重连计数是累计量：换一代连接不能把它清零
@@ -545,9 +565,9 @@ async fn supervise(runtime: Arc<ServerRuntime>, mut cmd_rx: mpsc::UnboundedRecei
         let connected = connect_and_sync(&runtime).await;
 
         let failure = match connected {
-            Ok((client, tools)) => {
+            Ok((client, tools, all_tools)) => {
                 let started = Instant::now();
-                runtime.mark_ready(&client, tools);
+                runtime.mark_ready(&client, tools, all_tools);
                 let outcome = serve(&runtime, &client, &mut cmd_rx).await;
                 runtime.mark_disconnected();
                 client.close().await;
@@ -620,10 +640,13 @@ async fn backoff(
     }
 }
 
-/// 建连 + 首次 `tools/list`（失败带上诊断尾部）
+/// 建连 + 首次 `tools/list`（失败带上诊断尾部）。
+///
+/// 返回 `(连接, 模型可见的工具, 服务器完整工具清单)`：后者**不**受白名单裁剪，
+/// 供设置页把「已排除的工具」也列出来。
 async fn connect_and_sync(
     runtime: &Arc<ServerRuntime>,
-) -> Result<(Arc<Client>, Vec<PublishedTool>), (String, Option<String>)> {
+) -> Result<(Arc<Client>, Vec<PublishedTool>, Vec<McpToolInfo>), (String, Option<String>)> {
     let transport: Arc<dyn Transport> = match &runtime.cfg.transport {
         McpTransport::Stdio { .. } => {
             let spec = runtime
@@ -653,7 +676,10 @@ async fn connect_and_sync(
     };
 
     match client.list_tools(runtime.cfg.startup_timeout()).await {
-        Ok(tools) => Ok((client, build_tools(&runtime.cfg, tools))),
+        Ok(tools) => {
+            let all_tools = all_tool_infos(&runtime.cfg, &tools);
+            Ok((client, build_tools(&runtime.cfg, tools), all_tools))
+        }
         Err(error) => {
             let tail = transport.stderr_tail();
             client.close().await;
@@ -708,13 +734,50 @@ async fn serve(
 /// 重列工具并发布新世代（失败**不动**上一世代）
 async fn resync(runtime: &Arc<ServerRuntime>, client: &Arc<Client>) -> Result<(), TransportError> {
     let tools = client.list_tools(runtime.cfg.startup_timeout()).await?;
+    let all_tools = all_tool_infos(&runtime.cfg, &tools);
     let published = build_tools(&runtime.cfg, tools);
     *runtime.tools.write().unwrap() = published;
+    *runtime.all_tools.write().unwrap() = all_tools;
     runtime.update(|status| {
         status.last_error = None;
         status.attempt = None;
     });
     Ok(())
+}
+
+/// 一条原始工具 → 对外信息（公开名 / schema 清洗 / 描述兜底）。
+///
+/// 「模型可见的那一份」与「完整清单」共用这一处，避免两条路径各算一份名字。
+/// 公开名 = 用户指定的别名，否则服务器自己的工具名（必要时加哈希后缀）；
+/// **不拼服务器名** —— 拼了就变成「改服务器名 = 所有历史与白名单失效」（见 naming.rs 头注释）。
+fn tool_info(cfg: &McpServerConfig, tool: &McpTool) -> McpToolInfo {
+    let description = match tool.description.trim() {
+        "" => format!("MCP tool \"{}\" from server \"{}\"", tool.name, cfg.name),
+        text => text.to_string(),
+    };
+    McpToolInfo {
+        name: cfg.public_name_for(&tool.name),
+        raw_name: tool.name.clone(),
+        description,
+        input_schema: schema::sanitize(&tool.input_schema),
+    }
+}
+
+/// 服务器的**完整**工具清单（**不**按 `enabledTools` 裁剪，同公开名只留第一个）。
+///
+/// 设置页编辑弹窗拿它当候选：用 `tools`（已裁剪）当候选会让被排除的工具再也勾不回来。
+fn all_tool_infos(cfg: &McpServerConfig, tools: &[McpTool]) -> Vec<McpToolInfo> {
+    let mut infos: Vec<McpToolInfo> = Vec::with_capacity(tools.len());
+    for tool in tools {
+        let info = tool_info(cfg, tool);
+        if infos.iter().any(|existing| existing.name == info.name) {
+            continue;
+        }
+        infos.push(info);
+    }
+    // 与 `build_tools` 同序：设置页每次打开看到的行顺序一致
+    infos.sort_by(|a, b| a.raw_name.cmp(&b.raw_name));
+    infos
 }
 
 /// 服务器工具 → 公开工具（过滤白名单 / 清洗 schema / 排序稳定）
@@ -724,37 +787,29 @@ fn build_tools(cfg: &McpServerConfig, tools: Vec<McpTool>) -> Vec<PublishedTool>
         if !cfg.allows_tool(&tool.name) {
             continue;
         }
-        let public_name = public_tool_name(&cfg.name, &tool.name);
-        // 防御：理论上哈希保证不撞，真撞了也只留第一个（不覆盖已发布的定义）
-        if published.iter().any(|p| p.public_name == public_name) {
+        let info = tool_info(cfg, &tool);
+        // 防御：同一台服务器内两个工具算出了同一个公开名（别名重名已在 `validate` 驳回，
+        // 但别名意外撞上另一个工具的默认名时仍可能发生）。这里只留第一个，
+        // 宁可少一个也不让两个身份共用一个名字（调用会打到另一个工具）。
+        if published.iter().any(|p| p.public_name == info.name) {
             eprintln!(
                 "[mcp] {} 的工具 {} 与已发布的公开名 {} 冲突，已跳过",
-                cfg.name, tool.name, public_name
+                cfg.name, tool.name, info.name
             );
             continue;
         }
-        let input_schema = schema::sanitize(&tool.input_schema);
-        let parameters = serde_json::from_value::<ToolParameters>(input_schema.clone())
-            .unwrap_or_else(|_| loose_parameters(&input_schema));
-        let description = match tool.description.trim() {
-            "" => format!("MCP tool \"{}\" from server \"{}\"", tool.name, cfg.name),
-            text => text.to_string(),
-        };
+        let parameters = serde_json::from_value::<ToolParameters>(info.input_schema.clone())
+            .unwrap_or_else(|_| loose_parameters(&info.input_schema));
         published.push(PublishedTool {
-            public_name: public_name.clone(),
-            raw_name: tool.name.clone(),
-            info: McpToolInfo {
-                name: public_name.clone(),
-                raw_name: tool.name,
-                description: description.clone(),
-                input_schema,
-            },
+            public_name: info.name.clone(),
+            raw_name: info.raw_name.clone(),
             definition: ToolDefinition {
-                name: public_name,
+                name: info.name.clone(),
                 label: None,
-                description,
+                description: info.description.clone(),
                 parameters,
             },
+            info,
         });
     }
     // 按原始名排序：提示词前缀稳定（KV cache 友好），世代比较也不需要顺序无关的处理
@@ -808,9 +863,10 @@ mod tests {
         let cfg = stdio_cfg("fs");
         let tools = build_tools(&cfg, vec![tool("b_tool", "B"), tool("a_tool", "A")]);
         assert_eq!(tools.len(), 2);
-        assert_eq!(tools[0].public_name, "mcp__fs__a_tool");
+        // 公开名 = 服务器自己的工具名（不再拼服务器名）
+        assert_eq!(tools[0].public_name, "a_tool");
         assert_eq!(tools[0].raw_name, "a_tool");
-        assert_eq!(tools[0].definition.name, "mcp__fs__a_tool");
+        assert_eq!(tools[0].definition.name, "a_tool");
         // required 里不存在的字段必须被剪掉（OpenAI 严格模式会整请求 400）
         assert_eq!(tools[0].definition.parameters.required, vec!["path"]);
     }
@@ -822,6 +878,48 @@ mod tests {
         let tools = build_tools(&cfg, vec![tool("b_tool", "B"), tool("a_tool", "A")]);
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].raw_name, "a_tool");
+    }
+
+    /// 完整清单不受白名单裁剪：设置页靠它把「被排除的工具」也列出来（否则再也勾不回来）
+    #[test]
+    fn all_tool_infos_ignores_whitelist() {
+        let mut cfg = stdio_cfg("fs");
+        cfg.enabled_tools = Some(vec!["a_tool".into()]);
+        let raw = vec![tool("b_tool", "B"), tool("a_tool", "A")];
+
+        let published = build_tools(&cfg, raw.clone());
+        assert_eq!(published.len(), 1, "模型只看到白名单里的那个");
+
+        let all = all_tool_infos(&cfg, &raw);
+        assert_eq!(all.len(), 2, "完整清单必须两个都在");
+        assert_eq!(all[0].raw_name, "a_tool", "按原始名排序，与 build_tools 同序");
+        assert_eq!(all[1].raw_name, "b_tool");
+    }
+
+    /// 完整清单也要用别名（设置页展示的就是模型看到的那个名字）
+    #[test]
+    fn all_tool_infos_applies_aliases() {
+        let mut cfg = stdio_cfg("blender");
+        cfg.tool_aliases.insert("look".into(), "blender_look".into());
+        let all = all_tool_infos(&cfg, &[tool("look", "L")]);
+        assert_eq!(all[0].name, "blender_look");
+        assert_eq!(all[0].raw_name, "look");
+    }
+
+    /// 别名只改「模型看到的名字」：`raw_name`（调用时发给服务器的名字）必须不变
+    #[test]
+    fn build_tools_applies_aliases() {
+        let mut cfg = stdio_cfg("blender");
+        cfg.tool_aliases
+            .insert("look".into(), "blender_look".into());
+        let tools = build_tools(&cfg, vec![tool("look", "L"), tool("stat", "S")]);
+        let look = tools.iter().find(|t| t.raw_name == "look").expect("应有 look");
+        assert_eq!(look.public_name, "blender_look");
+        assert_eq!(look.definition.name, "blender_look");
+        assert_eq!(look.info.name, "blender_look");
+        assert_eq!(look.info.raw_name, "look", "调用仍发服务器自己的名字");
+        // 没改名的工具不受影响
+        assert!(tools.iter().any(|t| t.public_name == "stat"));
     }
 
     #[test]

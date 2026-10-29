@@ -9,6 +9,15 @@ export interface ToolDefinitionLike<D> {
   name: string
   /** UI 文案（i18n）。机制 C 下不进契约，由注册时的 label 提供 */
   label?: string
+  /**
+   * 定义来源：`mcp` = 运行期动态定义（由 Rust 执行，前端**没有**执行器）。
+   *
+   * ⚠️ 判断「是不是 MCP 工具」只能看这里：工具名已不带 `mcp__` 前缀（名字就是服务器自己的工具名），
+   * 前缀那套只剩旧数据识别。
+   */
+  origin?: 'mcp'
+  /** 所属 MCP 服务器名（仅 `origin === 'mcp'`；编辑器分组 / 说明书折算用） */
+  mcpServer?: string
   description: D
   parameters: {
     type: 'object'

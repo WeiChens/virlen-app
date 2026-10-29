@@ -3,16 +3,16 @@
 //! 形状与 TS `src/domain/mcp/types.ts` 一一对应（serde camelCase）：配置**扁平**存传输字段
 //! （`transport` 只做判别标签），这样设置页的编辑状态与落库 JSON 同形，不需要来回映射。
 //!
-//! ⚠️ 校验规则（`validate`）在两侧各有一份实现，语义由 `tests/` 的同一批用例固定：
-//! 服务器名 `^[A-Za-z0-9_-]{1,32}$` **且不含 `__`**（`__` 是公开名的分隔符，混进来会让
-//! 名字无法反解成「服务器 / 工具」）。
+//! ⚠️ 校验规则（`validate`）在两侧各有一份实现（前端 `domain/mcp/config.ts`），语义由
+//! `tests/` 的同一批用例固定：服务器名 `^[A-Za-z0-9_-]{1,32}$` **且不含 `__`**（旧版公开名的
+//! 分隔符，旧数据反解靠它）。
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-/// 服务器名长度上限（公开名预算：`mcp__` + 名 + `__` + 工具名 ≤ 64）
+/// 服务器名长度上限（只影响展示与审批档查找；工具公开名里已不含它）
 pub const MAX_SERVER_NAME_LEN: usize = 32;
 
 /// 单次 `tools/call` 默认超时
@@ -46,21 +46,32 @@ pub struct McpServerConfig {
     /// 只暴露这些工具（`rawName` 白名单）；`None` = 全部
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled_tools: Option<Vec<String>>,
-    /// 是否把服务器 `instructions` 注入系统提示词（P3 才消费，配置面先留好）
+    /// 把服务器 `instructions` 注入系统提示词（实际上在 `publish` 判定）
     #[serde(default = "default_true")]
     pub inject_instructions: bool,
+    /// 工具公开名的自定义覆盖：`服务器原始工具名 → 模型可见名`（无条目 = 与服务一致）。
+    ///
+    /// 只影响「模型看到的名字」（下发、卡片、白名单），`tools/call` 永远发服务器原始名。
+    /// 用户改名的动机通常是让模型更认得出用途（`look` → `blender_look`）或自己解同名冲突。
+    /// ⚠️ 名字是模型唯一的身份凭据：给一个工具改名 = 旧名在白名单 / 会话历史里失效（白名单
+    /// 由保存时的迁移顺手挽救，历史消息不能了）。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_aliases: BTreeMap<String, String>,
 }
 
 /// 审批三态 —— 与内置权限同一套词表（`allow` / `ask` / `deny`）。
 ///
-/// - `allow`：直接执行；
-/// - `ask`（默认）：每次调用经 `confirm_mcp_call` 交互确认；
+/// - `allow`（默认）：直接执行；
+/// - `ask`：每次调用经 `confirm_mcp_call` 交互确认；
 /// - `deny`：**不建立连接**、工具不下发（比「连上但不许调」更可预测）。
+///
+/// 缺省值 = `allow`：新建服务器不弹审批打扰（用户自己填的命令，与内置工具默认放行同口径）。
+/// ⚠️ `import` 是例外：粘贴进来的第三方配置**显式写 `ask`**（不是「用户自己写的」）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum McpApproval {
-    Allow,
     #[default]
+    Allow,
     Ask,
     Deny,
 }
@@ -195,6 +206,15 @@ impl McpServerConfig {
         }
     }
 
+    /// 一个服务器原始工具名**对模型可见的名字**：有别名用别名，否则走默认算法
+    ///（[`super::naming::public_tool_name`] —— 与服务一致，必要时加哈希后缀）。
+    pub fn public_name_for(&self, raw_name: &str) -> String {
+        match self.tool_aliases.get(raw_name) {
+            Some(alias) => alias.clone(),
+            None => super::naming::public_tool_name(raw_name),
+        }
+    }
+
     pub fn tool_call_timeout(&self) -> Duration {
         Duration::from_millis(self.tool_call_timeout_ms.max(1))
     }
@@ -220,6 +240,7 @@ impl McpServerConfig {
                 return Err(format!("{}：工具白名单里有空名字", self.name));
             }
         }
+        validate_tool_aliases(&self.name, &self.tool_aliases)?;
         match &self.transport {
             McpTransport::Stdio { command, .. } => {
                 if command.trim().is_empty() {
@@ -234,6 +255,29 @@ impl McpServerConfig {
         }
         Ok(())
     }
+}
+
+/// 别名表自检：每个别名自己合法 + 同一台服务器内不得重名。
+///
+/// 同名会让其中一项**静默不发布**（`build_tools` 只留第一个）—— 那是「工具莫名少了一个」
+/// 这类最难查的现象，所以在这里当场驳。与内置 / 另一台服务器重名不在这里拦：那是发布期的
+/// 判定（`registry::classify`：内置优先、跨服务器都不发，并在界面横幅上报出），
+/// 而且堵在这里会让「以后新增一个同名内置工具」把整份配置卡成存不进去。
+fn validate_tool_aliases(server: &str, aliases: &BTreeMap<String, String>) -> Result<(), String> {
+    let mut seen: Vec<&str> = Vec::with_capacity(aliases.len());
+    for (raw, alias) in aliases {
+        if raw.trim().is_empty() {
+            return Err(format!("{server}：工具别名缺少原始工具名"));
+        }
+        if let Err(error) = super::naming::validate_tool_alias(alias) {
+            return Err(format!("{server}（{raw}）：{error}"));
+        }
+        if seen.contains(&alias.as_str()) {
+            return Err(format!("{server}：工具名重复：{alias}"));
+        }
+        seen.push(alias);
+    }
+    Ok(())
 }
 
 /// 服务器名校验（公开名前缀的命名空间）。
@@ -251,7 +295,7 @@ pub fn validate_server_name(name: &str) -> Result<(), String> {
         return Err("服务器名只能包含字母、数字、下划线和连字符".to_string());
     }
     if name.contains("__") {
-        // `__` 是公开名 `mcp__<server>__<raw>` 的分隔符：混进服务器名会让名字无法反解
+        // `__` 是**旧版**公开名 `mcp__<server>__<raw>` 的分隔符：混进服务器名会让旧数据反解错
         return Err("服务器名不能包含连续下划线（__ 是工具名分隔符）".to_string());
     }
     Ok(())
@@ -403,7 +447,7 @@ mod tests {
         let cfg = stdio_config();
         assert_eq!(cfg.name, "fs");
         assert!(cfg.enabled, "enabled 默认 true");
-        assert_eq!(cfg.approval, McpApproval::Ask, "审批默认 ask");
+        assert_eq!(cfg.approval, McpApproval::Allow, "审批默认直接执行");
         assert_eq!(cfg.tool_call_timeout_ms, DEFAULT_TOOL_CALL_TIMEOUT_MS);
         assert_eq!(cfg.startup_timeout_ms, DEFAULT_STARTUP_TIMEOUT_MS);
         assert_eq!(cfg.reconnect, McpReconnectConfig::default());
@@ -543,6 +587,50 @@ mod tests {
         cfg.enabled_tools = Some(vec!["echo".into()]);
         assert!(cfg.allows_tool("echo"));
         assert!(!cfg.allows_tool("other"));
+    }
+
+    /// 别名优先，默认回落到与服务一致的名字（同一份定义只能有一个对外名字）
+    #[test]
+    fn aliases_override_public_names() {
+        let mut cfg = stdio_config();
+        assert_eq!(cfg.public_name_for("look"), "look");
+        cfg.tool_aliases
+            .insert("look".into(), "blender_look".into());
+        assert_eq!(cfg.public_name_for("look"), "blender_look");
+        // 没改名的工具不受影响
+        assert_eq!(cfg.public_name_for("get_scene_info"), "get_scene_info");
+
+        // 落库形状：`toolAliases` 是 camelCase 对象，空时整个键不出现（不吃存储）
+        let value = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(value["toolAliases"]["look"], "blender_look");
+        let empty = serde_json::to_value(stdio_config()).unwrap();
+        assert!(empty.get("toolAliases").is_none(), "空别名表不应落库");
+
+        // 回遢：与 TS 侧同形
+        let back: McpServerConfig = serde_json::from_value(value).unwrap();
+        assert_eq!(back, cfg);
+    }
+
+    /// 别名不自洽（非法字符 / 空 / 同服务器重名）在落库前就驳；与内置重名交由发布期报给界面
+    #[test]
+    fn validate_rejects_broken_aliases() {
+        let mut cfg = stdio_config();
+        cfg.tool_aliases.insert("look".into(), "has space".into());
+        assert!(cfg.validate().is_err());
+
+        cfg.tool_aliases.insert("look".into(), "".into());
+        assert!(cfg.validate().is_err());
+
+        cfg.tool_aliases.clear();
+        cfg.tool_aliases.insert("a".into(), "same".into());
+        cfg.tool_aliases.insert("b".into(), "same".into());
+        let error = cfg.validate().expect_err("同一台服务器内重名应被拒");
+        assert!(error.contains("重复"), "{error}");
+
+        // 合法：名字合法就通过（即使它恰好占用了内置工具名 —— 那由发布期扣下 + 界面报）
+        cfg.tool_aliases.clear();
+        cfg.tool_aliases.insert("a".into(), "read_file".into());
+        assert_eq!(cfg.validate(), Ok(()));
     }
 
     #[cfg(target_os = "windows")]

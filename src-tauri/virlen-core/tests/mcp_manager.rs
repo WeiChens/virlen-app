@@ -2,7 +2,8 @@
 //!
 //! 与 `mcp_stdio.rs` 的分工：那边测协议层（握手 / 分页 / 断链），这边测「接进引擎之后」的语义：
 //!
-//! - 一台服务器连上后，工具以 `mcp__<server>__<raw>` 出现在快照里；
+//! - 一台服务器连上后，工具以**服务器自己的名字**（必要时带哈希后缀）出现在快照里，
+//!   名字里不含服务器名（改服务器名不能影响白名单与历史）；
 //! - 世代（epoch）只在**工具集合**变化时前进，`list_changed` 重同步不会抖；
 //! - `tools/call` 的结果按 `results.rs` 的规则投影（模型文本 + 界面块）；
 //! - 工具名不存在 / 服务器被移除时给的是**明确错误**，不是静默成功；
@@ -65,11 +66,7 @@ async fn manager_publishes_calls_and_tears_down_a_real_server() {
         .collect();
     assert_eq!(
         names,
-        vec![
-            "mcp__fixture__echo",
-            "mcp__fixture__fail",
-            "mcp__fixture__structured"
-        ]
+        vec!["echo", "fail", "structured"]
     );
     assert!(manager.epoch() >= 1, "有工具就应有世代");
     assert!(manager.is_ready());
@@ -83,7 +80,7 @@ async fn manager_publishes_calls_and_tears_down_a_real_server() {
     // 3) 调通一个工具：模型侧文本 + 界面侧块
     let echo = manager
         .call(McpCallRequest {
-            tool_name: "mcp__fixture__echo",
+            tool_name: "echo",
             arguments: json!({ "text": "hello" }),
             cancel: None,
         })
@@ -99,7 +96,7 @@ async fn manager_publishes_calls_and_tears_down_a_real_server() {
     // 4) 服务器报的业务失败必须走失败通道（红色卡片），不能渲染成成功
     let failed = manager
         .call(McpCallRequest {
-            tool_name: "mcp__fixture__fail",
+            tool_name: "fail",
             arguments: json!({}),
             cancel: None,
         })
@@ -110,7 +107,7 @@ async fn manager_publishes_calls_and_tears_down_a_real_server() {
     // 5) 不存在的工具：明确说「不可用」，且不改状态
     let missing = manager
         .call(McpCallRequest {
-            tool_name: "mcp__fixture__nope",
+            tool_name: "nope",
             arguments: json!({}),
             cancel: None,
         })
@@ -126,7 +123,7 @@ async fn manager_publishes_calls_and_tears_down_a_real_server() {
     assert!(manager.epoch() > before, "注销工具也是一次世代变化");
 }
 
-/// `probe`（设置页「测试连接」）走的是同一条连接链：不落库、不影响正在跑的服务器
+/// `probe`（设置页「获取工具列表」）走的是同一条连接链：不落库、不影响正在跑的服务器
 #[tokio::test]
 async fn probe_reports_tools_without_leaving_a_server_behind() {
     let config = fixture_config("probe");
@@ -135,7 +132,7 @@ async fn probe_reports_tools_without_leaving_a_server_behind() {
         tools.iter().map(|tool| tool.raw_name.as_str()).collect::<Vec<_>>(),
         vec!["echo", "fail", "structured"]
     );
-    assert_eq!(tools[0].name, "mcp__probe__echo");
+    assert_eq!(tools[0].name, "echo");
 }
 
 /// 配置非法时不建连，直接给出可读错误（设置页能原样显示）

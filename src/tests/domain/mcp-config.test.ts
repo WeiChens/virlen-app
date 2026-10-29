@@ -6,6 +6,7 @@
  */
 import {
   MAX_SERVER_NAME_LEN,
+  MAX_TOOL_NAME_LEN,
   argsToText,
   createMcpServerDraft,
   enabledToolsToText,
@@ -18,7 +19,9 @@ import {
   textToPairs,
   validateMcpConfig,
   validateMcpConfigs,
+  validateMcpToolAlias,
   validateServerName,
+  withToolAlias,
 } from '@/domain/mcp'
 
 describe('MCP 服务器名校验（与 Rust 同语义）', () => {
@@ -50,6 +53,11 @@ describe('MCP 单条配置校验', () => {
 
   it('默认草稿补上必填项后可通过', () => {
     expect(validateMcpConfig(base())).toBeNull()
+  })
+
+  it('新建草稿默认「直接执行」（与 Rust 的 McpApproval 缺省同口径）', () => {
+    expect(createMcpServerDraft('stdio').approval).toBe('allow')
+    expect(createMcpServerDraft('http').approval).toBe('allow')
   })
 
   it('超时必须大于 0', () => {
@@ -89,8 +97,51 @@ describe('MCP 单条配置校验', () => {
   })
 })
 
-describe('文本框 ↔ 结构互转', () => {
-  it('参数每行一个，空行忽略', () => {
+describe('工具公开名（别名）校验与编辑', () => {
+  it('合法名字与边界（与 Rust validate_tool_alias 同语义）', () => {
+    for (const name of ['look', 'blender_look', 'a-b_C9', 'x'.repeat(MAX_TOOL_NAME_LEN)]) {
+      expect(validateMcpToolAlias(name), name).toBeNull()
+    }
+    expect(validateMcpToolAlias('')).toContain('不能为空')
+    expect(validateMcpToolAlias('has space')).toContain('只能包含')
+    expect(validateMcpToolAlias('读取')).toContain('只能包含')
+    expect(validateMcpToolAlias('x'.repeat(MAX_TOOL_NAME_LEN + 1))).toContain('不能超过')
+    // 历史前缀会被旧数据当成 `mcp__<server>__<raw>` 解析
+    expect(validateMcpToolAlias('mcp__blender__look')).toContain('不能以')
+  })
+
+  it('别名表：写入 / 改回原名 / 清空即删除，全空时整个键不写', () => {
+    const one = withToolAlias(undefined, 'look', 'blender_look')
+    expect(one).toEqual({ look: 'blender_look' })
+
+    const two = withToolAlias(one, 'stat', 'blender_stat')
+    expect(two).toEqual({ look: 'blender_look', stat: 'blender_stat' })
+
+    // 改回原名 = 恢复默认（删条目）
+    expect(withToolAlias(two, 'look', ' look ')).toEqual({ stat: 'blender_stat' })
+    expect(withToolAlias(two, 'look', '')).toEqual({ stat: 'blender_stat' })
+    // 最后一条也删掉 → `undefined`（不往配置里写空对象）
+    expect(withToolAlias({ look: 'blender_look' }, 'look', '')).toBeUndefined()
+  })
+
+  it('配置校验会拦住自相矛盾的别名（与内置重名不在这里拦）', () => {
+    const base = createMcpServerDraft('stdio')
+    base.name = 'blender'
+    base.command = 'npx'
+
+    base.toolAliases = { look: 'has space' }
+    expect(validateMcpConfig(base)).toContain('只能包含')
+
+    base.toolAliases = { look: 'same', stat: 'same' }
+    expect(validateMcpConfig(base)).toContain('重复')
+
+    // 占用内置工具名只会在发布期被内置工具顶掉（界面横幅报），不阻塞保存
+    base.toolAliases = { look: 'read_file' }
+    expect(validateMcpConfig(base)).toBeNull()
+  })
+})
+
+describe('文本框 ↔ 结构互转', () => {  it('参数每行一个，空行忽略', () => {
     expect(textToArgs('-y\n\n@server\n  .  ')).toEqual(['-y', '@server', '.'])
     expect(argsToText(['-y', '@server'])).toBe('-y\n@server')
   })

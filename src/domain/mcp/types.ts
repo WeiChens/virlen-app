@@ -6,8 +6,8 @@
  *
  * 与内置工具的关键区别：
  * - MCP 工具是**运行期动态定义**（不在 `definitions.json` 里，不参与「39 个工具」的契约断言）；
- * - 公开名固定 `mcp__<server>__<raw>`，由 Rust 生成；前端**只解析不生成**
- *   （生成需要 SHA-256，两套实现必然漂移，见 `naming.ts` 文件头）；
+ * - 公开名就是**服务器自己的工具名**（可在设置页逐工具改别名；仅在字符替换 / 超长时带哈希后缀），
+ *   由 Rust 生成；名字里不含服务器名 → 归属由定义一起下发（`mcpServer`），前端不解析；
  * - 执行在 Rust（`McpHost`），前端没有对应的执行器。
  */
 
@@ -16,7 +16,8 @@ export type McpTransportKind = 'stdio' | 'http'
 
 /**
  * 审批三态（与内置权限同一套词表）：
- * - `allow` 直接执行；`ask`（默认）每次确认；`deny` **不建立连接**、工具不下发。
+ * - `allow`（默认，新建草稿）直接执行；`ask` 每次确认；`deny` **不建立连接**、工具不下发。
+ * 从 JSON 导入是例外：Rust 侧显式写 `ask`（别人写的配置不自动放开）。
  */
 export type McpApproval = 'allow' | 'ask' | 'deny'
 
@@ -62,19 +63,41 @@ export interface McpServerConfig {
   }
   /** 只暴露这些工具（`rawName` 白名单；`undefined` = 全部） */
   enabledTools?: string[]
+  /**
+   * 工具公开名的自定义覆盖：`服务器原始工具名 → 模型可见名`（无条目 = 与服务一致）。
+   *
+   * 只影响模型看到的名字（下发 / 卡片 / 白名单），`tools/call` 永远发服务器原始名。
+   * 落库与校验的裁决在 Rust（`mcp::config::validate`）。
+   */
+  toolAliases?: Record<string, string>
   /** 是否把服务器 `instructions` 注入系统提示词（建会话时由 `cmd_mcp_instructions` 取回） */
   injectInstructions: boolean
 }
 
 /** 一个已发布的 MCP 工具 */
 export interface McpToolInfo {
-  /** 公开名 `mcp__<server>__<raw>` */
+  /** 模型可见名（= 用户指定的别名，缺省则服务器自己的工具名；必要时带 12 位哈希后缀） */
   name: string
   /** 服务器自己的名字（`tools/call` 只认它） */
   rawName: string
   description: string
   /** 已清洗的 JSON Schema（可直接下发模型） */
   inputSchema: Record<string, unknown>
+}
+
+/**
+ * 一个被**扣下不发**的同名工具。
+ *
+ * 名字是模型唯一的身份凭据：与内置重名时内置优先，两台服务器同名时两边都不发 ——
+ * 不猜路由，而是把原因摆到界面上让人处理（改名 / 停用其中一台）。
+ */
+export interface McpConflict {
+  /** 冲突的公开名 */
+  name: string
+  /** `builtin` = 与内置工具重名；`server` = 两台以上服务器同名 */
+  kind: 'builtin' | 'server'
+  /** 涉及的服务器名（`builtin` 时是「想占用这个名字」的服务器） */
+  servers: string[]
 }
 
 /** 一台服务器的状态快照（只读；Rust 是唯一来源） */
@@ -84,7 +107,15 @@ export interface McpServerStatus {
   transport: McpTransportKind
   state: McpServerState
   toolCount: number
+  /** 已发布（模型可见）的工具：**已被 `enabledTools` 裁剪** */
   tools: McpToolInfo[]
+  /**
+   * 服务器提供的**完整**工具清单（不受 `enabledTools` 裁剪）。
+   *
+   * 编辑弹窗用它当候选回填勾选 —— 拿 `tools` 当候选就只能看到已勾过的那些，
+   * 被排除的工具再也勾不回来（白名单是穷举的）。
+   */
+  allTools: McpToolInfo[]
   /** 服务器自称的 serverInfo（仅供展示，绝不用于命名） */
   serverName?: string
   serverVersion?: string
@@ -103,6 +134,8 @@ export interface McpServerStatus {
 export interface McpListResult {
   configs: McpServerConfig[]
   statuses: McpServerStatus[]
+  /** 本世代被扣下不发的同名工具（不在任何 status.tools 里，必须单独报） */
+  conflicts: McpConflict[]
   epoch: number
 }
 

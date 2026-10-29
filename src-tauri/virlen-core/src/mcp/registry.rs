@@ -15,7 +15,7 @@
 //! 3. **配置变更走差量**：`reload` 只重建「配置真的变了」的服务器 —— 改一个字段不该让其它
 //!    服务器的 stdio 子进程全部重启。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -24,7 +24,8 @@ use async_trait::async_trait;
 use super::config::{validate_all, McpApproval, McpServerConfig};
 use super::connection::ServerRuntime;
 use super::host::{
-    McpCallOutcome, McpCallRequest, McpHost, McpServerState, McpServerStatus, McpToolInfo,
+    McpCallOutcome, McpCallRequest, McpConflict, McpConflictKind, McpHost, McpServerState,
+    McpServerStatus, McpToolInfo, McpToolRoute,
 };
 use super::resources::{McpResourceListing, McpResourceRead};
 use crate::agent::cancellation::CancellationToken;
@@ -56,6 +57,8 @@ pub trait McpChangeSink: Send + Sync {
 #[derive(Debug, Clone)]
 struct Route {
     server_id: String,
+    /// 服务器**配置名**：审批档按它查，界面也按它分组
+    server_name: String,
     raw_name: String,
 }
 
@@ -64,7 +67,12 @@ struct Snapshot {
     epoch: u64,
     tools: Vec<ToolDefinition>,
     statuses: Vec<McpServerStatus>,
+    /// 公开名 → 路由。**包含本世代暂时没发布、但历史上出现过的名字**（服务器退避 / 断链时，
+    /// 模型可能拿着上一轮的名单来调）—— 那时由服务器自己报「不可用」，比报「不认识这个工具」准确。
+    /// 已删除的服务器与本世代冲突的名字**永不入表**（冲突不猜路由）。
     routes: HashMap<String, Route>,
+    /// 本世代被扣下不发的同名工具（界面必须报出来，否则用户只会看到「工具莫名少了」）
+    conflicts: Vec<McpConflict>,
     /// 工具集合的指纹（判断「变了没有」，避免把状态抖动也当世代）
     signature: String,
 }
@@ -76,10 +84,76 @@ impl Snapshot {
             tools: Vec::new(),
             statuses: Vec::new(),
             routes: HashMap::new(),
+            conflicts: Vec::new(),
             // 与「空工具列表」的序列化结果一致 → 首次发布不会凭空产生一个世代
-            signature: "[]".to_string(),
+            signature: signature(&[], &[]),
         }
     }
+}
+
+/// 世代指纹：工具集合 + 冲突名单（冲突变了前端也得重拉，否则报告是旧的）
+fn signature(tools: &[ToolDefinition], conflicts: &[McpConflict]) -> String {
+    serde_json::to_string(&(tools, conflicts)).unwrap_or_default()
+}
+
+/// 一次发布的「同名判定」（纯函数，便于单测）。
+///
+/// 入参是全部候选 `(服务器名, 服务器 id, 已发布定义, 服务器原始工具名)`，出参是
+/// `(可发布的定义, 路由表, 冲突名单)`：
+/// - 与内置工具重名 → **内置优先**（它有自己的执行器与沙箱语义），MCP 那个扣下；
+/// - 两台以上服务器同名 → 谁都可能是「对的那台」→ **全扣下**（fail-closed，绝不按顺序猜）。
+///
+/// 为什么不给冲突的工具加后缀区分：名字是模型唯一的身份凭据，`look_1` / `look_2` 只会让模型猜；
+/// 冲突必须由人来消除（设置页里给工具改公开名 / 关掉一台服务器），所以只做「不猜 + 报出来」。
+fn classify(
+    candidates: &[(String, String, ToolDefinition, String)],
+    builtin: &HashSet<String>,
+) -> (Vec<ToolDefinition>, HashMap<String, Route>, Vec<McpConflict>) {
+    // 名字 → 候选下标（保持服务器顺序：提示里的服务器列表才是稳定的）
+    let mut owners: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (index, (_, _, def, _)) in candidates.iter().enumerate() {
+        owners.entry(def.name.as_str()).or_default().push(index);
+    }
+
+    let mut tools: Vec<ToolDefinition> = Vec::new();
+    let mut published: HashMap<String, Route> = HashMap::new();
+    let mut conflicts: Vec<McpConflict> = Vec::new();
+    for (name, indexes) in owners {
+        let involved = || -> Vec<String> {
+            indexes
+                .iter()
+                .map(|index| candidates[*index].0.clone())
+                .collect()
+        };
+        let kind = if builtin.contains(name) {
+            McpConflictKind::Builtin
+        } else if indexes.len() > 1 {
+            McpConflictKind::Server
+        } else {
+            let (server_name, server_id, def, raw) = &candidates[indexes[0]];
+            tools.push(def.clone());
+            published.insert(
+                name.to_string(),
+                Route {
+                    server_id: server_id.clone(),
+                    server_name: server_name.clone(),
+                    raw_name: raw.clone(),
+                },
+            );
+            continue;
+        };
+        conflicts.push(McpConflict {
+            name: name.to_string(),
+            kind,
+            servers: involved(),
+        });
+    }
+
+    // 排序固定：提示词前缀稳定（KV cache 友好），也便于「世代是否变化」的比较
+    // （上面按 HashMap 迭代，顺序随机，必须排）
+    tools.sort_by(|a, b| a.name.cmp(&b.name));
+    conflicts.sort_by(|a, b| a.name.cmp(&b.name));
+    (tools, published, conflicts)
 }
 
 // ==================== 管理器 ====================
@@ -188,31 +262,54 @@ impl McpManager {
     }
 
     /// 重算并发布快照（任何服务器状态变化都会走到这里）
+    ///
+    /// 工具名不再带服务器前缀，所以这里多了「同名判定」：
+    /// - 与内置工具重名 → 内置优先（它有自己的执行器与沙箱语义），MCP 那个不下发；
+    /// - 两台以上服务器同名 → 无法判定该发给谁 → 都不下发（fail-closed，绝不按顺序猜）；
+    ///
+    /// 两类都记进 `conflicts`，界面（Agent 编辑器 / MCP 设置页）如实报出来 —— 工具静默变少
+    /// 比报错难查得多。
     fn republish(&self) {
         let servers = self.servers.read().unwrap().clone();
-        let mut tools: Vec<ToolDefinition> = Vec::new();
+        let previous = self.snapshot.read().unwrap().clone();
         let mut statuses: Vec<McpServerStatus> = Vec::with_capacity(servers.len());
-        let mut routes: HashMap<String, Route> = HashMap::new();
-
+        // (服务器名, 服务器 id, 已发布定义, 服务器原始工具名)
+        let mut candidates: Vec<(String, String, ToolDefinition, String)> = Vec::new();
         for server in &servers {
             let status = server.status();
-            tools.extend(server.definitions());
+            let defs = server.definitions();
             for info in &status.tools {
-                routes.insert(
-                    info.name.clone(),
-                    Route {
-                        server_id: status.id.clone(),
-                        raw_name: info.raw_name.clone(),
-                    },
-                );
+                if let Some(def) = defs.iter().find(|def| def.name == info.name) {
+                    candidates.push((
+                        status.name.clone(),
+                        status.id.clone(),
+                        def.clone(),
+                        info.raw_name.clone(),
+                    ));
+                }
             }
             statuses.push(status);
         }
-        // 排序固定：提示词前缀稳定（KV cache 友好），也便于「世代是否变化」的比较
-        tools.sort_by(|a, b| a.name.cmp(&b.name));
 
-        let signature = serde_json::to_string(&tools).unwrap_or_default();
-        let previous = self.snapshot.read().unwrap().clone();
+        let builtin: HashSet<String> = crate::agent::tool_defs::tool_names().into_iter().collect();
+        let (tools, published, conflicts) = classify(&candidates, &builtin);
+
+        // 路由表：继承历史名字（退避 / 断链时给「不可用」而不是「不认识」），
+        // 剔掉已删除的服务器与本世代冲突的名字 —— 冲突永不猜路由。
+        let live: HashSet<&str> = servers
+            .iter()
+            .map(|server| server.config().id.as_str())
+            .collect();
+        let conflict_names: HashSet<&str> = conflicts.iter().map(|item| item.name.as_str()).collect();
+        let mut routes = previous.routes.clone();
+        routes.retain(|name, route| {
+            live.contains(route.server_id.as_str()) && !conflict_names.contains(name.as_str())
+        });
+        for (name, route) in published {
+            routes.insert(name, route);
+        }
+
+        let signature = signature(&tools, &conflicts);
         let tools_changed = signature != previous.signature;
         let epoch = if tools_changed {
             previous.epoch + 1
@@ -224,6 +321,7 @@ impl McpManager {
             tools,
             statuses,
             routes,
+            conflicts,
             signature,
         });
         *self.snapshot.write().unwrap() = snapshot.clone();
@@ -288,7 +386,23 @@ impl McpHost for McpManager {
             .any(|server| server.is_ready())
     }
 
-    /// 按 `serverName` 查审批档（公开名里的命名空间，不是配置 id）。
+    fn route(&self, tool_name: &str) -> Option<McpToolRoute> {
+        self.snapshot
+            .read()
+            .unwrap()
+            .routes
+            .get(tool_name)
+            .map(|route| McpToolRoute {
+                server: route.server_name.clone(),
+                raw: route.raw_name.clone(),
+            })
+    }
+
+    fn conflicts(&self) -> Vec<McpConflict> {
+        self.snapshot.read().unwrap().conflicts.clone()
+    }
+
+    /// 按 `serverName` 查审批档（服务器**配置名**，不是工具名）。
     ///
     /// 读的是 `configs`（含 `enabled=false` 的），不是服务器列表：用户刚把某台服务器
     /// 改成 `deny` 时，监督任务可能还在收尾，审批判定不该跟着抖。
@@ -548,6 +662,84 @@ mod tests {
             "reconnect": { "enabled": false },
         }))
         .unwrap()
+    }
+
+    /// 候选：`(服务器名, 服务器 id, 工具名, 原始工具名)`
+    fn candidate(
+        server: &str,
+        name: &str,
+        raw: &str,
+    ) -> (String, String, ToolDefinition, String) {
+        (
+            server.to_string(),
+            format!("id-{server}"),
+            ToolDefinition {
+                name: name.to_string(),
+                label: None,
+                description: String::new(),
+                parameters: serde_json::from_value(json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }))
+                .unwrap(),
+            },
+            raw.to_string(),
+        )
+    }
+
+    /// 干净名（不撞内置、不撞别的服务器）→ 发布 + 路由到它自己的服务器
+    #[test]
+    fn classify_publishes_unambiguous_names() {
+        let builtin: HashSet<String> = ["read_file".to_string()].into_iter().collect();
+        let candidates = vec![
+            candidate("blender", "look", "look"),
+            candidate("fs", "stat", "stat"),
+        ];
+        let (tools, routes, conflicts) = classify(&candidates, &builtin);
+        assert_eq!(
+            tools.iter().map(|def| def.name.as_str()).collect::<Vec<_>>(),
+            vec!["look", "stat"]
+        );
+        assert!(conflicts.is_empty());
+        let route = routes.get("look").expect("应有路由");
+        assert_eq!(route.server_name, "blender");
+        assert_eq!(route.raw_name, "look");
+    }
+
+    /// 与内置工具重名：内置优先，MCP 那个**不发布也不路由**，但必须报出来
+    #[test]
+    fn classify_lets_builtin_win() {
+        let builtin: HashSet<String> = ["read_file".to_string()].into_iter().collect();
+        let candidates = vec![candidate("fs", "read_file", "read_file")];
+        let (tools, routes, conflicts) = classify(&candidates, &builtin);
+        assert!(tools.is_empty(), "与内置重名不该下发");
+        assert!(routes.is_empty(), "冲突永不猜路由");
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].name, "read_file");
+        assert_eq!(conflicts[0].kind, McpConflictKind::Builtin);
+        assert_eq!(conflicts[0].servers, vec!["fs"]);
+    }
+
+    /// 两台服务器同名：都不下发（不按顺序猜），两个服务器都要报出来
+    #[test]
+    fn classify_drops_cross_server_duplicates() {
+        let builtin: HashSet<String> = HashSet::new();
+        let candidates = vec![
+            candidate("blender", "look", "look"),
+            candidate("other", "look", "look"),
+            candidate("fs", "stat", "stat"),
+        ];
+        let (tools, routes, conflicts) = classify(&candidates, &builtin);
+        assert_eq!(
+            tools.iter().map(|def| def.name.as_str()).collect::<Vec<_>>(),
+            vec!["stat"]
+        );
+        assert!(!routes.contains_key("look"), "同名不该有路由");
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].name, "look");
+        assert_eq!(conflicts[0].kind, McpConflictKind::Server);
+        assert_eq!(conflicts[0].servers, vec!["blender", "other"]);
     }
 
     /// 没启过的管理器：定义 / 状态 / 世代都是空，调工具给明确错误
