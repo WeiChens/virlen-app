@@ -49,7 +49,12 @@ import ImportMessageList from './import-message-list'
 import { extractPlainText } from './session-text'
 import { filterSessionGroups } from './session-filter'
 import { foldGroupSessions } from './session-fold'
-import { registerSessionDropList, SESSION_ROW_ATTR } from './session-drop'
+import {
+  registerSessionDropList,
+  SESSION_ROW_ATTR,
+  SESSION_GROUP_ATTR,
+  SESSION_DROP_GROUP_EVENT,
+} from './session-drop'
 import { badgeDragJustEnded, startSessionBadgeDrag } from './session-badge-drag'
 import {
   groupSessions,
@@ -165,6 +170,87 @@ function ChatSidebar({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
   const [expandGroups, setExpandGroups] = useState<Record<string, boolean>>({})
+  /** 悬停多久才临时展开：太短擦过就开（闪），太长像没反应 */
+  const HOVER_OPEN_DELAY = 500
+  /**
+   * 拖动悬停在折叠分组上时的**临时展开**（事件源见 `session-drop.ts` 的
+   * `sessionGroupHitAt` / `announceCollapsedGroup`）：只在拖动期间生效，不写进
+   * `expandGroups` —— 用户收起的分组不该因为一次擦过就永久展开。
+   *
+   * 带 **500ms 停顿**（`HOVER_OPEN_DELAY`）：拖动中会一路划过好几个分组，立即展开
+   * 会一整列噼里咋嗯地闪。停满 500ms 才展开 = 「在这儿停下」是有意动作，路过的都不算；
+   * 中途换分组 / 离开就取消计时（展开后不再重设 —— 收回由事件带 `null` 负责）。
+   */
+  const [dragHoverGroup, setDragHoverGroup] = useState<string | null>(null)
+  /**
+   * 「锁定」：临时展开后指针**进过组内会话行**就锁住 —— 哪怕后来挪出分组容器
+   * （悬在组间隙 / 别的分组头上）也不收回，松手才收（`endSessionGroupHover`）。
+   * 不锁的话「展开→想去组内某行→中途划出 1px 缝隙→收起」会来回跳。
+   */
+  const lockedGroupRef = useRef<string | null>(null)
+  const hoverTimerRef = useRef<number | null>(null)
+  useEffect(() => {
+    const clearTimer = () => {
+      if (hoverTimerRef.current !== null) {
+        window.clearTimeout(hoverTimerRef.current)
+        hoverTimerRef.current = null
+      }
+    }
+    const onAnnounce = (event: Event) => {
+      const { key, onRow, end } = (event as CustomEvent<{
+        key: string | null
+        onRow?: boolean
+        end?: boolean
+      }>).detail
+      // 拖动结束（松手 / 取消 / 失焦）：解锁。**进过组内行（已锁定）的分组转正为
+      // 用户展开**（写进 expandGroups）—— 刚把标签落进那个组，折叠回去就看不见去哪儿了；
+      // 没锁定（只路过 / 悬停了头部）的照旧收回。
+      if (end) {
+        clearTimer()
+        const locked = lockedGroupRef.current
+        lockedGroupRef.current = null
+        if (locked) {
+          setDragHoverGroup(null)
+          setExpandGroups((prev) => ({ ...prev, [locked]: true }))
+        } else {
+          setDragHoverGroup(null)
+        }
+        return
+      }
+      // 进过组内会话行 → 锁定这个分组：之后事件带 null（挪出容器）也不收
+      if (key !== null && onRow) {
+        lockedGroupRef.current = key
+      }
+      if (key === null) {
+        // 离开分组：锁定的不收（等松手），没锁的走正常收回
+        if (lockedGroupRef.current) return
+        clearTimer()
+        setDragHoverGroup(null)
+        return
+      }
+      // 已锁定的分组保持展开：对同一分组不再重复计时；别的分组照常走 500ms
+      if (lockedGroupRef.current === key) return
+      setDragHoverGroup((prev) => {
+        // ⚠️ updater 里只能 return prev（任何返回值都会**立即**上屏）：
+        // 展开在计时器回调里。同一个目标不重计（拖过组内行时事件 key 不变），
+        // 换了目标就重设 500ms 计时 —— 路过的分组永远展不开。
+        if (prev !== key) {
+          clearTimer()
+          hoverTimerRef.current = window.setTimeout(() => {
+            hoverTimerRef.current = null
+            setDragHoverGroup(key)
+          }, HOVER_OPEN_DELAY)
+        }
+        return prev
+      })
+    }
+    window.addEventListener(SESSION_DROP_GROUP_EVENT, onAnnounce)
+    return () => {
+      clearTimer()
+      lockedGroupRef.current = null
+      window.removeEventListener(SESSION_DROP_GROUP_EVENT, onAnnounce)
+    }
+  }, [])
   const [exportSessionId, setExportSessionId] = useState<string | null>(null)
   const [statsOpen, setStatsOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<SidebarTab>('sessions')
@@ -745,8 +831,13 @@ function ChatSidebar({
                 key={group.key}
                 group={group}
                 sessionGroupType={sessionGroupType}
-                // 搜索时强制展开：命中项藏在折叠的分组 / 折叠的归档里等于没搜到
-                isCollapsed={sessionKeyword ? false : !expandGroups[group.key]}
+                // 搜索时强制展开：命中项藏在折叠的分组 / 折叠的归档里等于没搜到；
+                // 拖标签悬停时同样临时展开（让人看清松手会把标签放进哪个组）
+                isCollapsed={
+                  sessionKeyword
+                    ? false
+                    : !(dragHoverGroup === group.key || !!expandGroups[group.key])
+                }
                 isSearching={sessionKeyword !== ''}
                 isPinned={pinnedGroupKeys.includes(group.key)}
                 isUngrouped={group.key === UNGROUPED_KEY}
@@ -1125,7 +1216,7 @@ function SessionGroupView({
   ])
 
   return (
-    <div className="session-group">
+    <div className="session-group" {...{ [SESSION_GROUP_ATTR]: group.key }}>
       <div
         className={`session-group-header${hasActiveSession && isCollapsed ? ' has-active' : ''}${isCollapsed ? '' : ' is-expanded'}${allArchived ? ' archived' : ''}`}
         onClick={onToggleGroup}
@@ -1202,6 +1293,16 @@ function SessionGroupView({
                 setShowAll(true)
               }}>
               {t('展示全部')} ({group.sessions.length})
+            </button>
+          )}
+          {showAll && !folded.folded && (
+            <button
+              className="show-all-btn"
+              onClick={(e) => {
+                e.stopPropagation()
+                setShowAll(false)
+              }}>
+              {t('收起')}
             </button>
           )}
         </div>

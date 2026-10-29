@@ -128,6 +128,7 @@
   "已删除 $__count__ 项，$__failed__ 项失败": "Deleted $__count__ items, $__failed__ failed",
   "$__count__ 项": "$__count__ items",
   "展示全部": "Show all",
+  "收起": "Collapse",
   "打开文件路径": "Open file path",
   "删除所有会话": "Delete all sessions",
   "更多操作": "More actions",

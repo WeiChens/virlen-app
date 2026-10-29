@@ -194,3 +194,138 @@ export function highlightSessionDrop(row: HTMLElement | null): void {
     row.classList.add(DROP_TARGET_CLASS)
   }
 }
+
+/**
+ * 「拖标签悬停在分组上 → 临时展开」：分组容器打 `data-session-group`，
+ * 指针压在哪个分组容器（头 + 行）里就报那个分组 key。
+ *
+ * 与会话行同一条口径：按 rect 命中（浮层压在指针下）。⚠️ **展开中的分组也要报**：
+ * 只报折叠分组的话，展开后指针压在组内会话行上 → 报 null → 分组收回 → 行又看不见了
+ * → 又命中分组 → 折叠来回跳。容器 rect 覆盖整个组，指针在组内就一直报同一个 key。
+ */
+export const SESSION_GROUP_ATTR = 'data-session-group'
+
+/** 指针压着分组 / 离开时广播（值 = 是否压在组内**会话行**上；`null` = 离开分组）。侧栏监听它做临时展开 */
+export const SESSION_DROP_GROUP_EVENT = 'virlen:session-drop-group'
+
+/**
+ * 指针压着分组 / 离开时广播（拖动循环每帧调；`(key, onRow)` 都没变就不发）。
+ *
+ * `onRow` = 指针此刻压在组内**会话行**上：侧栏靠它把已展开的分组「锁定」——
+ * 展开后指针进了组内行，哪怕挪出分组容器（悬在组间隙上）也不收回，
+ * 松手才收（`endSessionGroupHover`）。不然展开→挪动→收起会来回跳。
+ */
+export function announceCollapsedGroup(key: string | null, onRow = false): void {
+  // (key, onRow) 一起去重：指针从分组头挪进组内行也要发（侧栏靠它把展开的分组「锁定」）
+  if (announcedGroup === key && announcedOnRow === onRow) return
+  announcedGroup = key
+  announcedOnRow = onRow
+  window.dispatchEvent(
+    new CustomEvent(SESSION_DROP_GROUP_EVENT, { detail: { key, onRow } }),
+  )
+}
+
+/** 上一次广播出去的分组 key（`null` = 已经收回） */
+let announcedGroup: string | null = null
+/** 上一次广播时指针是否压在会话行上 */
+let announcedOnRow = false
+
+/**
+ * 指针压在哪个分组容器上（优先报会话行所在的那组）；不在任何分组上 → `null`
+ */
+export function sessionGroupHitAt(x: number, y: number): string | null {
+  const list = listElement()
+  if (!list) return null
+  const box = list.getBoundingClientRect()
+  if (box.width <= 0 || box.height <= 0) return null
+  if (x < box.left || x > box.right || y < box.top || y > box.bottom) return null
+  const groups = list.querySelectorAll<HTMLElement>(`[${SESSION_GROUP_ATTR}]`)
+  for (const group of groups) {
+    const rect = group.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) continue
+    if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+      return group.getAttribute(SESSION_GROUP_ATTR) ?? null
+    }
+  }
+  return null
+}
+
+/**
+ * 拖动结束：收回临时展开 + 清掉「已锁定展开」状态。
+ *
+ * 与 `announceCollapsedGroup(null)` 的区别：null 只是「指针离开了分组」，
+ * 已锁定的分组不收；这条是松手 / 取消，一律收场。
+ */
+export function endSessionGroupHover(): void {
+  announcedGroup = null
+  announcedOnRow = false
+  window.dispatchEvent(
+    new CustomEvent(SESSION_DROP_GROUP_EVENT, { detail: { key: null, end: true } }),
+  )
+}
+
+/** 离列表上 / 下边缘多近开始滚动（px） */
+const EDGE_ZONE = 32
+/** 每帧滚动多少（px）：rAF 循环里每帧走一小步，凑到边缘附近是减速带不是开关 */
+const EDGE_STEP = 6
+
+/**
+ * 边缘滚动的 rAF 循环状态：指针最后一次的坐标 + 循环句柄。
+ *
+ * 为什么不能只靠 `mousemove` 驱动：指针停住时 mousemove 不再来，滚动也就停了 ——
+ * 「想滚出下面的行」恰恰是把指针停在边缘上不动等它滚。所以这里挂一个 rAF 循环：
+ * 只要指针还在感应区里就每帧走一步；出了感应区 / 列表没了 / 被显式停掉就收。
+ */
+let edgeScroll: { x: number; y: number; raf: number } | null = null
+
+/** 这一帧该滚多少：进感应区返回步长（上负下正），不在则 0 */
+function edgeStepAt(list: HTMLElement, x: number, y: number): number {
+  const box = list.getBoundingClientRect()
+  if (box.width <= 0 || box.height <= 0) return 0
+  if (x < box.left || x > box.right) return 0
+  const fromTop = y - box.top
+  const fromBottom = box.bottom - y
+  if (fromTop >= 0 && fromTop <= EDGE_ZONE) {
+    return -(EDGE_STEP * (EDGE_ZONE - fromTop)) / EDGE_ZONE
+  }
+  if (fromBottom >= 0 && fromBottom <= EDGE_ZONE) {
+    return (EDGE_STEP * (EDGE_ZONE - fromBottom)) / EDGE_ZONE
+  }
+  return 0
+}
+
+/** 拖动时指针贴近列表上 / 下边缘 → 持续滚出被裁住的行来（拖动结束调 `stopSessionListScroll`） */
+export function scrollSessionListAt(x: number, y: number): void {
+  const list = listElement()
+  if (!list) {
+    stopSessionListScroll()
+    return
+  }
+  if (edgeScroll) {
+    // 循环已在跑：只更新坐标，速度由循环里的判定决定（出区自动停）
+    edgeScroll.x = x
+    edgeScroll.y = y
+    return
+  }
+  if (edgeStepAt(list, x, y) === 0) return
+  edgeScroll = { x, y, raf: 0 }
+  const frame = () => {
+    if (!edgeScroll) return
+    const current = listElement()
+    const step = current ? edgeStepAt(current, edgeScroll.x, edgeScroll.y) : 0
+    if (step === 0) {
+      stopSessionListScroll()
+      return
+    }
+    current!.scrollTop += step
+    edgeScroll.raf = requestAnimationFrame(frame)
+  }
+  edgeScroll.raf = requestAnimationFrame(frame)
+}
+
+/** 收掉边缘滚动的 rAF 循环（拖动收尾 / 失焦取消时调；没在跑就什么都不做） */
+export function stopSessionListScroll(): void {
+  if (!edgeScroll) return
+  cancelAnimationFrame(edgeScroll.raf)
+  edgeScroll = null
+}

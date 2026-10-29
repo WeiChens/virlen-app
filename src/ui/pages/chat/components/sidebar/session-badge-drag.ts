@@ -18,10 +18,16 @@
  */
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import {
+  announceCollapsedGroup,
   dropAreaHitAt,
   highlightDropArea,
   highlightSessionDrop,
   sessionDropHitAt,
+  sessionGroupHitAt,
+  SESSION_GROUP_ATTR,
+  scrollSessionListAt,
+  stopSessionListScroll,
+  endSessionGroupHover,
 } from './session-drop'
 
 /** 超过这个位移才算拖动（否则还是一次点击：点徽标 = 打开那个会话的面板） */
@@ -107,6 +113,8 @@ export function startSessionBadgeDrag(
       document.body.style.userSelect = 'none'
     }
     place(move.clientX, move.clientY)
+    // 拖到列表上 / 下边缘附近时慢慢滚出被裁住的行（与拖标签同一套口径）
+    scrollSessionListAt(move.clientX, move.clientY)
     // 落点：会话行（自己的不算）优先，其次「大片落点」：标签栏（精确）与聊天区（离得够大）
     const hit = sessionDropHitAt(move.clientX, move.clientY)
     const rowSessionId = hit && hit.sessionId !== from ? hit.sessionId : null
@@ -124,6 +132,14 @@ export function startSessionBadgeDrag(
     highlightSessionDrop(rowSessionId ? hit!.row : null)
     highlightDropArea('tabbar', overTabbar)
     highlightDropArea('chat-main', overChat)
+    // 与拖标签同一套「悬停分组临时展开」：优先取压着的会话行所属的 `.session-group`，
+    // 行上取不到才退回容器 rect；onRow = 压在组内行上（侧栏靠它锁定展开的分组）
+    const hoverGroupKey =
+      hit?.row
+        ?.closest(`[${SESSION_GROUP_ATTR}]`)
+        ?.getAttribute(SESSION_GROUP_ATTR) ??
+      sessionGroupHitAt(move.clientX, move.clientY)
+    announceCollapsedGroup(hoverGroupKey, !!hoverGroupKey && !!hit?.row)
     // 浮层压住落点时淡下去，别把「松手就落这儿」的高亮整个盖住（与拖标签同一口径）
     ghost.classList.toggle('is-over-session', !!target)
   }
@@ -137,6 +153,10 @@ export function startSessionBadgeDrag(
     highlightSessionDrop(null)
     highlightDropArea('tabbar', false)
     highlightDropArea('chat-main', false)
+    // 悬停临时展开的分组与边缘滚动一并收回（onUp / 失焦取消都走这里）；松手一律收场
+    announceCollapsedGroup(null)
+    stopSessionListScroll()
+    endSessionGroupHover()
     ghost?.remove()
     ghost = null
   }

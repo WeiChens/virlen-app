@@ -67,6 +67,12 @@ import { freezeChatWidth } from './chat-freeze'
 import { wheelScrollLeft } from './tab-scroll'
 import {
   highlightSessionDrop,
+  announceCollapsedGroup,
+  sessionGroupHitAt,
+  SESSION_GROUP_ATTR,
+  scrollSessionListAt,
+  stopSessionListScroll,
+  endSessionGroupHover,
   registerDropArea,
   sessionDropHitAt,
 } from '../sidebar/session-drop'
@@ -954,6 +960,8 @@ function SidePanel({
         // 拿起来：浮层跟着指针（本体留空当落点）
         raiseGhost(state)
       }
+      // 拖到侧栏附近就先问一次边缘滚动（贴近列表上 / 下边缘时慢慢滚出被裁住的行）
+      scrollSessionListAt(moveEvent.clientX, moveEvent.clientY)
       // ① 会话行落点（自己的会话行不算）
       const hit = onTransferTab
         ? sessionDropHitAt(moveEvent.clientX, moveEvent.clientY)
@@ -962,6 +970,15 @@ function SidePanel({
       state.dropSessionId = dropSessionId
       // 每帧调（换行才动 DOM）：行内重渲染会把我们写上的类抹掉，这里顺手补齐
       highlightSessionDrop(dropSessionId ? hit!.row : null)
+      // 压在某个分组上 → 临时展开（松手才收；见 session-drop.ts 与侧栏的锁定口径）。
+      // 优先取压着的那条会话行所属的 `.session-group` 容器（行 rect 是即时布局的，
+      // 不受 250ms 展开过渡影响），行上取不到才退回容器 rect。
+      const hoverGroupKey =
+        hit?.row
+          ?.closest(`[${SESSION_GROUP_ATTR}]`)
+          ?.getAttribute(SESSION_GROUP_ATTR) ??
+        sessionGroupHitAt(moveEvent.clientX, moveEvent.clientY)
+      announceCollapsedGroup(hoverGroupKey, !!hoverGroupKey && !!hit?.row)
       // 压在会话行上时浮层半透明：不然它（最宽 270px，行也就这么宽）会把
       // 「松手就落这一行」的高亮整个盖住，等于什么都没提示
       state.ghost?.classList.toggle('is-over-session', !!dropSessionId)
@@ -996,6 +1013,11 @@ function SidePanel({
       setDrag(null)
       // 拖动中的提示一律收掉：不管这次拖动算不算数
       highlightSessionDrop(null)
+      // 临时展开的折叠分组与边缘滚动一并收回
+      announceCollapsedGroup(null)
+      stopSessionListScroll()
+      // 松手 / 取消：一律收场（包括已「锁定」展开的分组）
+      endSessionGroupHover()
       // 浮层只是拖动中的视觉效果：先收掉浮层，再让本体回到自己的格子
       state?.ghost?.remove()
       if (state?.host) state.host.style.visibility = ''

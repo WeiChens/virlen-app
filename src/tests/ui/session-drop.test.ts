@@ -11,17 +11,24 @@
  * 5. **只高亮落点那一行**（不再给所有行描虚线）；标签栏也有自己的落点（`registerTabStrip`）；
  * 6. **注销后不再命中**（侧栏卸载不能把落点留着）。
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
   dropAreaHitAt,
   highlightDropArea,
   highlightSessionDrop,
+  announceCollapsedGroup,
+  endSessionGroupHover,
   registerDropArea,
   registerSessionDropList,
   sessionDropHitAt,
+  sessionGroupHitAt,
+  scrollSessionListAt,
+  stopSessionListScroll,
   SESSION_ROW_ATTR,
+  SESSION_GROUP_ATTR,
+  SESSION_DROP_GROUP_EVENT,
 } from '@/ui/pages/chat/components/sidebar/session-drop'
 
 const disposers: (() => void)[] = []
@@ -97,7 +104,36 @@ function mountList(rows: (HTMLElement | HTMLElement[])[]): HTMLElement {
   return list
 }
 
+/** 造一个分组容器（可选：收起态带 `inert`） */
+function group(key: string, children: HTMLElement[], collapsed = false): HTMLElement {
+  const element = document.createElement('div')
+  element.className = 'session-group'
+  element.setAttribute(SESSION_GROUP_ATTR, key)
+  const body = document.createElement('div')
+  body.className = collapsed ? 'session-group-body is-collapsed' : 'session-group-body'
+  if (collapsed) body.setAttribute('inert', '')
+  const items = document.createElement('div')
+  items.className = 'session-group-items'
+  for (const child of children) items.appendChild(child)
+  body.appendChild(items)
+  element.appendChild(body)
+  element.getBoundingClientRect = () =>
+    ({
+      left: 0,
+      top: 0,
+      right: 200,
+      bottom: 100,
+      width: 200,
+      height: 100,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }) as DOMRect
+  return element
+}
+
 afterEach(() => {
+  stopSessionListScroll()
   highlightSessionDrop(null)
   for (const dispose of disposers.splice(0)) dispose()
   document.body.innerHTML = ''
@@ -234,7 +270,143 @@ describe('大片落点（标签栏 / 聊天区）', () => {
 })
 
 /**
- * 两端接线（编译期不会报、跑界面才看得见）：侧栏得给会话行打标并登记列表，
+ * 「拖标签悬停在分组上 → 临时展开」：分组容器按 rect 命中，报分组 key。
+ * 展开中的分组也报（否则压着组内行时展开/收回来回跳）。
+ */
+describe('sessionGroupHitAt（悬停分组临时展开）', () => {
+  it('压在折叠分组容器上报它的 key；展开中的分组也报（防止展开→收回来回跳）', () => {
+    const list = mountList([])
+    const collapsed = group('g-collapsed', [row('sess-1', 0)], true)
+    const expanded = group('g-open', [row('sess-2', 0)])
+    list.appendChild(collapsed)
+    list.appendChild(expanded)
+    expect(sessionGroupHitAt(50, 10)).toBe('g-collapsed')
+    // 换个模拟：展开组排在前面
+    collapsed.remove()
+    expanded.remove()
+    list.appendChild(expanded)
+    expect(sessionGroupHitAt(50, 10)).toBe('g-open')
+  })
+
+  it('列表外 / 未登记 → null；容器尺寸 0 → 不接', () => {
+    expect(sessionGroupHitAt(50, 10)).toBeNull()
+    const list = mountList([])
+    const collapsed = group('g', [row('sess-1', 0)], true)
+    collapsed.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 200, bottom: 0, width: 200, height: 0, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+    list.appendChild(collapsed)
+    expect(sessionGroupHitAt(50, 10)).toBeNull()
+  })
+
+  it('announceCollapsedGroup：(key, onRow) 都没变不重发；endSessionGroupHover 带 end 收场', () => {
+    const seen: { key: string | null; onRow?: boolean; end?: boolean }[] = []
+    const onEvent = (event: Event) =>
+      seen.push((event as CustomEvent<{ key: string | null; onRow?: boolean; end?: boolean }>).detail)
+    window.addEventListener(SESSION_DROP_GROUP_EVENT, onEvent)
+    announceCollapsedGroup('g-1')
+    announceCollapsedGroup('g-1') // 同一个 key：不重发
+    announceCollapsedGroup('g-1', true) // 压到组内行上：要发（侧栏靠它锁定）
+    announceCollapsedGroup('g-1', true)
+    endSessionGroupHover()
+    window.removeEventListener(SESSION_DROP_GROUP_EVENT, onEvent)
+    expect(seen).toEqual([
+      { key: 'g-1', onRow: false },
+      { key: 'g-1', onRow: true },
+      { key: null, end: true },
+    ])
+  })
+})
+
+  it('拖到列表边缘慢慢滚动：起步只滚一步，指针停在感应区内则持续滚（见下一个用例）', () => {
+    mountList([])
+    const list = document.querySelector('.session-list') as HTMLElement
+    let scrollTop = 100
+    Object.defineProperty(list, 'scrollTop', {
+      get: () => scrollTop,
+      set: (v: number) => {
+        scrollTop = v
+      },
+      configurable: true,
+    })
+    // 同步调用只负责登记循环（真正滚动交给 rAF，见下一用例）；
+    // 这里只验证「横向在列表外 / 未登记」时连循环都不起
+    stopSessionListScroll()
+    scrollSessionListAt(500, 190)
+    expect(scrollTop).toBe(100)
+  })
+
+  it('拖到列表边缘持续滚动：rAF 驱动，指针停住也继续滚，出区 / 未登记自动停', () => {
+    vi.useFakeTimers()
+    try {
+      mountList([])
+      const list = document.querySelector('.session-list') as HTMLElement
+      let scrollTop = 0
+      Object.defineProperty(list, 'scrollTop', {
+        get: () => scrollTop,
+        set: (v: number) => {
+          scrollTop = v
+        },
+        configurable: true,
+      })
+      /** jsdom 没有 rAF：手工驱动（vitest fake timers 也不接管它） */
+      const rafQueue: (() => void)[] = []
+      const rafSpy = vi
+        .spyOn(window, 'requestAnimationFrame')
+        .mockImplementation((cb: FrameRequestCallback) => {
+          rafQueue.push(() => cb(performance.now()))
+          return rafQueue.length
+        })
+      const cancelSpy = vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {})
+
+      // 进入下边缘感应区：首帧 + 后续每帧都走一步（指针坐标不变也滚 —— 这是本次修正的核心）
+      scrollSessionListAt(50, 192)
+      rafQueue.splice(0).forEach((run) => run())
+      const first = scrollTop
+      expect(first).toBeCloseTo(4.5)
+      rafQueue.splice(0).forEach((run) => run())
+      expect(scrollTop).toBeCloseTo(first + 4.5)
+
+      // 指针挪出感应区：下一帧收循环
+      scrollSessionListAt(50, 160) // 更新坐标，还在循环里
+      rafQueue.splice(0).forEach((run) => run())
+      expect(rafQueue).toHaveLength(0)
+      expect(scrollTop).toBeCloseTo(first + 4.5)
+
+      // 再次进入：新建循环；显式 stop 也收（y=199 离下边缘 1px → 步长 6*31/32 = 5.8125）
+      scrollSessionListAt(50, 199)
+      rafQueue.splice(0).forEach((run) => run())
+      expect(scrollTop).toBeCloseTo(first + 4.5 + 5.8125)
+      stopSessionListScroll()
+      expect(cancelSpy).toHaveBeenCalled()
+      const before = scrollTop
+      rafQueue.splice(0).forEach((run) => run())
+      expect(scrollTop).toBe(before)
+
+      // 未登记（注销后）：登记被清，循环收掉；重新登记供 afterEach 清理
+      disposers.splice(0).forEach((dispose) => dispose())
+      scrollSessionListAt(50, 199)
+      expect(rafQueue).toHaveLength(0)
+      rafSpy.mockRestore()
+      cancelSpy.mockRestore()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('两端接线（源码契约）：两条拖动循环都接了边缘滚动，且收尾都停循环', () => {
+    const readSrc = (p: string) => readFileSync(resolve(process.cwd(), p), 'utf8')
+    for (const path of [
+      'src/ui/pages/chat/components/side-panel/index.tsx',
+      'src/ui/pages/chat/components/sidebar/session-badge-drag.ts',
+    ]) {
+      const src = readSrc(path)
+      expect(src).toContain('scrollSessionListAt(')
+      expect(src).toContain('stopSessionListScroll()')
+    }
+  })
+
+  /**
+   * 两端接线（编译期不会报、跑界面才看得见）：侧栏得给会话行打标并登记列表，
  * 否则「拖标签到会话项」永远命中不到；容器得走这里的三个出口，否则「能命中但没人问」；
  * 样式得有两个提示类，否则 classList 写了也不长东西。
  */
@@ -251,6 +423,43 @@ describe('两端接线（源码契约）', () => {
   it('侧栏：折叠的分组内容是 `inert`（落点判定靠它跳过看不见的行）', () => {
     const sidebar = read('src/ui/pages/chat/components/sidebar/index.tsx')
     expect(sidebar).toContain('inert={isCollapsed}')
+  })
+
+  it('侧栏：分组容器打 `data-session-group` 并监听悬停展开事件', () => {
+    const sidebar = read('src/ui/pages/chat/components/sidebar/index.tsx')
+    expect(sidebar).toContain('SESSION_GROUP_ATTR')
+    expect(sidebar).toContain('SESSION_DROP_GROUP_EVENT')
+    expect(sidebar).toContain('dragHoverGroup === group.key')
+  })
+
+  it('容器：拖动中广播悬停分组（onRow 锁定），松手 endSessionGroupHover 收场', () => {
+    const panel = read('src/ui/pages/chat/components/side-panel/index.tsx')
+    expect(panel).toContain('sessionGroupHitAt(')
+    expect(panel).toContain('announceCollapsedGroup(')
+    expect(panel).toContain('endSessionGroupHover()')
+    // 临时展开有过渡，容器 rect 未长全时按容器问会问空 → 折叠来回跳；
+    // 必须先走「压着的会话行 → closest(SESSION_GROUP_ATTR)」这条即时口径
+    expect(panel).toContain(`closest(\`[\${SESSION_GROUP_ATTR}]\`)`)
+  })
+
+  it('侧栏：进过组内行就锁定（lockedGroupRef），松手转正为用户展开，end 一律收场', () => {
+    const sidebar = read('src/ui/pages/chat/components/sidebar/index.tsx')
+    expect(sidebar).toContain('lockedGroupRef')
+    expect(sidebar).toContain('if (end)')
+    // 松手把标签落进了那个组，折叠回去就看不见去哪儿了：锁定分组必须转正
+    expect(sidebar).toContain('setExpandGroups((prev) => ({ ...prev, [locked]: true }))')
+  })
+
+  it('徒标拖动（session-badge-drag）也接同一套悬停展开，收尾收回', () => {
+    const badge = read(
+      'src/ui/pages/chat/components/sidebar/session-badge-drag.ts',
+    )
+    expect(badge).toContain('announceCollapsedGroup(')
+    expect(badge).toContain(`closest(\`[\${SESSION_GROUP_ATTR}]\`)`)
+    // finish / onUp / onCancel 都走 finish：收回要在 finish 里，不能只收 onUp
+    expect(badge.indexOf('announceCollapsedGroup(null)')).toBeGreaterThan(
+      badge.indexOf('const finish'),
+    )
   })
 
   it('容器：拖动中间命中、写高亮，松手上报 `onTransferTab`', () => {
