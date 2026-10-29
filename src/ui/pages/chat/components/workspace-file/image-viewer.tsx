@@ -15,9 +15,14 @@
  * 6. **识别文字默认不跑也不显示**：设置 → 「图片预览自动识别文字」打开时，打开预览就跑一次 OCR；
  *    否则点工具栏「识别文字」才识别（只做 OCR，不做视觉识别）。结果以**透明定位层**摆在图片上的
  *    原位置（可直接选中复制），默认收起，识别逻辑在 `hooks/useImageOcr` + `shared/ImageOcr`。
+ * 7. **基本信息是底部靠右的一条单行**（格式 · 文件大小 · 分辨率 · 色彩模式 · 位深度）：
+ *    「文件大小」来自面板（磁盘字节数），分辨率优先用**文件头**里的值、
+ *    没解析出来时退回 `<img>` 的自然尺寸；色彩模式与位深度只能靠文件头（`domain/files/image-info`），
+ *    认不出就不显示那一项 —— 宁可少一项，也不猜。行内只放数值（带标签的完整说法在悬停 title 里），
+ *    这样半宽面板里也挤得下；工具栏那颗按钮可以收起它。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { t } from '@/ui/i18n'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { t, tpl } from '@/ui/i18n'
 import ContextMenu, {
   useContextMenu,
   type ContextMenuItem,
@@ -46,6 +51,44 @@ import {
   zoomAt,
   type ImageView,
 } from '@/domain/files/image-view'
+import type { ImageColorMode, ImageFileInfo } from '@/domain/files/image-info'
+
+/** 色彩模式 → 展示文案（`t()` 的 key 就是中文本身，英文在 lang/en-US.json 里） */
+const COLOR_MODE_LABEL: Record<ImageColorMode, string> = {
+  rgb: 'RGB',
+  rgba: 'RGBA',
+  gray: '灰度',
+  'gray-alpha': '灰度 + Alpha',
+  indexed: '索引色',
+  cmyk: 'CMYK',
+  vector: '矢量',
+}
+
+const KB = 1024
+
+/** 文件大小（B / KB / MB）：面板里的文件都在 64 MB 以内，不需要 GB */
+function formatBytes(bytes: number): string {
+  if (bytes < KB) return `${bytes} B`
+  if (bytes < KB * KB) return `${(bytes / KB).toFixed(1)} KB`
+  return `${(bytes / KB / KB).toFixed(1)} MB`
+}
+
+/**
+ * 位深度：**单行只留「每像素多少位」**（用户说的 8 / 24 / 32），每通道拆解只进 `detail`
+ * （悬停 `title` 里看）—— 底部那条要一行放得下，括号里那串在半宽面板里会把分辨率挤掉。
+ */
+function bitDepthOf(info: ImageFileInfo | null): { value: string; detail: string } | null {
+  const bits = info?.bitsPerPixel ?? 0
+  if (bits <= 0) return null
+  const per = info?.bitsPerChannel ?? 0
+  const channels = per > 0 ? Math.round(bits / per) : 0
+  const value = tpl('$__bits__ 位', { bits })
+  if (bits <= 8 || channels <= 1) return { value, detail: value }
+  return {
+    value,
+    detail: tpl('$__bits__ 位（$__per__ 位/通道 ×$__n__）', { bits, per, n: channels }),
+  }
+}
 
 interface Props {
   /** 图片地址（面板里是 blob URL） */
@@ -59,6 +102,10 @@ interface Props {
    * 没有路径（如 SVG 预览）就不识别文字。
    */
   path?: string
+  /** 文件头解析出的图像信息（面板传；认不出 / 没有字节时为 null） */
+  info?: ImageFileInfo | null
+  /** 文件在磁盘上的字节数（面板传；没有就只显示像素尺寸） */
+  byteSize?: number
   /** 「在系统程序中打开」（面板已有实现，这里只透传） */
   onOpenInSystem: () => void
 }
@@ -78,12 +125,25 @@ function RotateSvg({ flip }: { flip?: boolean }) {
   )
 }
 
-export default function ImageViewer({ src, name, mime, path, onOpenInSystem }: Props) {
+/** 「图片信息」图标：圆圈里一个 i（线条造型，不跟着 `fill: currentColor` 被填实） */
+function InfoSvg() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden fill="none" stroke="currentColor" strokeWidth={1.8}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 10.6v6" strokeLinecap="round" />
+      <circle cx="12" cy="7.3" r="1.1" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+export default function ImageViewer({ src, name, mime, path, info, byteSize, onOpenInSystem }: Props) {
   const [view, setView] = useState<ImageView>(IDENTITY_VIEW)
   const [dragging, setDragging] = useState(false)
   /** 图片自然尺寸与容器可视区：只用于算「100% 是多少真实像素」 */
   const [natural, setNatural] = useState({ width: 0, height: 0 })
   const [viewport, setViewport] = useState({ width: 0, height: 0 })
+  /** 基本信息卡片：默认展开（用户要的就是「打开就看到」），工具栏那颗按钮可以收起它 */
+  const [infoVisible, setInfoVisible] = useState(true)
 
   // 识别文字（**只做 OCR**）：开关由设置 `imageOcrAutoPreview` 决定，关着就等用户点按钮
   const ocr = useImageOcr(path ? { src, path } : null)
@@ -214,6 +274,33 @@ export default function ImageViewer({ src, name, mime, path, onOpenInSystem }: P
   const ratio = fitRatio(natural, viewport)
   const percent = scalePercent(ratio, view.scale)
 
+  /**
+   * 基本信息：**有一项算一项**，全部拼成**底部一条单行**（格式 · 大小 · 分辨率 · 色彩模式 · 位深度）。
+   * - 格式：文件头认出来的优先，SVG（文本、没有魔数）按 mime 认；
+   * - 分辨率：文件头里的编码尺寸优先，其次 `<img>` 的自然尺寸（图片加载完才有）；
+   * - 色彩模式 / 位深度：只有文件头能给，认不出就不显示。
+   * 带标签的完整说法放 `title`（悬停看），行内只留数值 —— 面板半宽时一行也放得下。
+   */
+  const meta = useMemo(() => {
+    const items: { label: string; value: string; detail: string }[] = []
+    const add = (label: string, value: string, detail = value) =>
+      items.push({ label, value, detail })
+    const format = info?.format ?? (mime === 'image/svg+xml' ? 'SVG' : '')
+    if (format) add(t('格式'), format)
+    if (byteSize && byteSize > 0) add(t('文件大小'), formatBytes(byteSize))
+    const width = info?.width ?? natural.width
+    const height = info?.height ?? natural.height
+    if (width > 0 && height > 0) add(t('分辨率'), `${width} × ${height}`)
+    if (info?.colorMode) add(t('色彩模式'), t(COLOR_MODE_LABEL[info.colorMode]))
+    const depth = bitDepthOf(info ?? null)
+    if (depth) add(t('位深度'), depth.value, depth.detail)
+    return {
+      items,
+      line: items.map((item) => item.value).join(' · '),
+      title: items.map((item) => `${item.label}：${item.detail}`).join('\n'),
+    }
+  }, [info, byteSize, mime, natural])
+
   /** 右键菜单：复制 / 另存为（与消息里的图片同一份）+ 旋转 / 视图 / 系统打开 */
   const imageItems: ContextMenuItem[] = [
     ...imageMenuItems(src, {
@@ -329,6 +416,17 @@ export default function ImageViewer({ src, name, mime, path, onOpenInSystem }: P
             <ImageOcrIcon size={14} />
           </button>
         )}
+        {/* 基本信息：没有一项可显示时不给入口（点了没反应比不出现更差） */}
+        {meta.items.length > 0 && (
+          <button
+            type="button"
+            className={`wfp-image-btn info-btn${infoVisible ? ' is-active' : ''}`}
+            onClick={() => setInfoVisible((visible) => !visible)}
+            aria-label={infoVisible ? t('隐藏图片信息') : t('图片信息')}
+            title={infoVisible ? t('隐藏图片信息') : t('图片信息')}>
+            <InfoSvg />
+          </button>
+        )}
       </div>
 
       {/* 图片 + 透明文字层的变换锚点：缩放 / 平移 / 旋转都挂在这里，字才能跟着图片一起动 */}
@@ -356,6 +454,17 @@ export default function ImageViewer({ src, name, mime, path, onOpenInSystem }: P
         natural={natural}
         onRetry={ocr.retry}
       />
+
+      {/* 基本信息：**底部靠右一条单行**（右上角是工具栏、正下方是识别文字的小条）。
+          放不下时自然省略，完整带标签的说法在 title 里；按下不能开拖 —— 文字要能选中复制。 */}
+      {infoVisible && meta.items.length > 0 && (
+        <p
+          className="wfp-image-info"
+          title={meta.title}
+          onMouseDown={(event) => event.stopPropagation()}>
+          {meta.line}
+        </p>
+      )}
 
       {menu.state && (
         // 与图片容器平级（portal 到 body）：菜单项点击不能被容器的拖动 / 右键处理吃掉

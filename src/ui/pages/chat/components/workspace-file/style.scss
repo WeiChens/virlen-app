@@ -472,9 +472,41 @@
     fill: currentColor;
   }
 
-  /* 文字识别图标是线条造型（stroke），不能跟着 fill: currentColor 被填实 */
-  &.ocr-btn svg {
+  /* 文字识别 / 图片信息图标：线条造型（stroke），不能跟着 fill: currentColor 被填实 */
+  &.ocr-btn svg,
+  &.info-btn svg {
     fill: none;
+  }
+}
+
+/* 图片基本信息：**底部靠右的一条单行**（格式 · 大小 · 分辨率 · 色彩模式 · 位深度）。
+   直接贴紧右下角：不加边框 / 圆角 / 底色（胶囊会占掉一块图片面积），只留几像素
+   内边距把字从角上顶开；深浅两色图片都能读——靠一层淡投影撑对比度。 */
+.wfp-image-info {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  margin: 0;
+  max-width: 100%;
+  padding: 2px 6px;
+  color: var(--text-secondary, #666);
+  font-size: var(--font-size-2xs);
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  /* 一行到底：放不下就省略（完整带标签的说法在 title 里） */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background-color: var(--bg-secondary, #fff);
+  opacity: .7;
+  /* 文字可以选中复制（容器是 user-select: none，图片拖选会变成平移） */
+  user-select: text;
+  cursor: default;
+  transition: .3s;
+
+  &:hover {
+    opacity: .9;
   }
 }
 
@@ -1109,6 +1141,7 @@
 
   /* 藏起来的行：一眼能看出「它不在画面里」，但还能点回来 */
   &.is-hidden {
+
     .wfp-mesh-eye,
     .wfp-mesh-name,
     .wfp-mesh-tris {

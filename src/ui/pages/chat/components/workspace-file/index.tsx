@@ -15,7 +15,9 @@
  *    （所见即当前所改），不是磁盘上的旧内容；
  * 4. **媒体走 blob URL**：读回字节后自己造 URL 并在卸载 / 换文件时 `revokeObjectURL`，
  *    避免把文件直接挂到 webview 的 file://（那需要放开 asset 协议范围）；图片交给
- *    `image-viewer.tsx`（滚轮缩放 / 拖动平移 / 右键复制与旋转），本文件只管取字节。
+ *    `image-viewer.tsx`（滚轮缩放 / 拖动平移 / 右键复制与旋转 / 左下角的格式 · 大小 ·
+ *    分辨率 · 色彩模式 · 位深度卡片，后两项来自 `domain/files/image-info` 的文件头解析），
+ *    本文件只管取字节并把解析结果递下去。
  * 5. **标题与宽度不归本组件**：面板在容器（`../side-panel`）的标签页里，标题栏已经写了文件名，
  *    所以容器会传 `hideTitle`，这里只留「目录 + 图标按钮（保存 / 关闭）」一行；**刷新不在头部**，
  *    是标签右键菜单里的一项（动作由本面板经 `onReloadReady` 登记上去）；宽度 / 拖拽 / 占满也由容器管。
@@ -56,6 +58,7 @@ import SheetView from './sheet-view'
 import ModelView from './model-view'
 import LoadingIcon from './loading-icon'
 import { monacoLanguageOf, relativeDirOf, textPreviewKindOf } from '@/domain/files/preview'
+import { readImageInfo, svgImageInfo } from '@/domain/files/image-info'
 import { parseDelimitedGrid } from '@/domain/files/delimited'
 import { buildPreviewDocument, previewNeeds } from '@/domain/files/html-preview'
 import {
@@ -131,6 +134,9 @@ function parentDir(path: string): string {
   parts.pop()
   return parts.join('/')
 }
+
+/** SVG 的图片信息：文本格式没有文件头，「矢量」与格式直接写定（尺寸仍由 `<img>` 自然尺寸给） */
+const SVG_INFO = svgImageInfo()
 
 /**
  * 头部那行目录：只留**最后两段**（`…/chat/components`）。
@@ -517,6 +523,24 @@ function WorkspaceFilePanel({
   const textFile = state.status === 'ready' && state.file.kind === 'text' ? state.file : null
   const showPreview = viewMode === 'preview' && textFile !== null && previewKind !== null
 
+  /**
+   * 图片的基本信息（文件头 → 格式 / 尺寸 / 色彩模式 / 位深度）：只在图片类文件上解一次，
+   * 字节本来就已经在内存里（造 blob URL 用的就是它）。认不出格式时是 null，卡片只显示文件大小。
+   */
+  const imageInfo = useMemo(() => {
+    if (state.status !== 'ready' || state.file.kind !== 'image') return null
+    return readImageInfo(state.file.bytes)
+  }, [state])
+
+  /** SVG 预览的文件大小 = 草稿的 UTF-8 字节数（随编辑变化，与保存后的字节数同口径） */
+  const svgByteSize = useMemo(
+    () =>
+      showPreview && previewKind === 'svg'
+        ? new TextEncoder().encode(draft).byteLength
+        : undefined,
+    [showPreview, previewKind, draft],
+  )
+
   // SVG 预览：把草稿当图片渲染（`<img>` 里的 SVG 不会执行脚本，比注入 innerHTML 安全）
   useEffect(() => {
     if (!showPreview || previewKind !== 'svg') {
@@ -668,6 +692,8 @@ function WorkspaceFilePanel({
               src={svgUrl}
               name={name}
               mime="image/svg+xml"
+              info={SVG_INFO}
+              byteSize={svgByteSize}
               onOpenInSystem={openInSystem}
             />
           )
@@ -758,6 +784,8 @@ function WorkspaceFilePanel({
           path={path}
           name={name}
           mime={file.mime}
+          info={imageInfo}
+          byteSize={file.byteSize}
           onOpenInSystem={openInSystem}
         />
       )

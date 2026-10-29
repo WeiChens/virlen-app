@@ -14,6 +14,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import ImageViewer from '@/ui/pages/chat/components/workspace-file/image-viewer'
+import type { ImageFileInfo } from '@/domain/files/image-info'
 import { imageOcrMemo } from '@/ui/hooks/useImageOcr'
 import { settingsState } from '@/ui/store/settingStore'
 
@@ -48,7 +49,10 @@ beforeAll(() => {
   ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 })
 
-async function mount(path?: string) {
+async function mount(
+  path?: string,
+  extra?: { info?: ImageFileInfo | null; byteSize?: number },
+) {
   const host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
@@ -59,6 +63,8 @@ async function mount(path?: string) {
         name="pic.png"
         mime="image/png"
         path={path}
+        info={extra?.info}
+        byteSize={extra?.byteSize}
         onOpenInSystem={() => {
           systemOpened += 1
         }}
@@ -132,8 +138,45 @@ describe('工具栏', () => {
   })
 })
 
-describe('滚轮与拖动', () => {
-  it('滚轮向上放大、向下缩小', async () => {
+describe('基本信息', () => {
+  const info: ImageFileInfo = {
+    format: 'PNG',
+    width: 1920,
+    height: 1080,
+    colorMode: 'rgba',
+    bitsPerChannel: 8,
+    bitsPerPixel: 32,
+  }
+
+  const line = () => document.querySelector<HTMLElement>('.wfp-image-info')
+
+  it('底部一条单行：格式 · 大小 · 分辨率 · 色彩模式 · 位深度', async () => {
+    await mount(undefined, { info, byteSize: 2 * 1024 * 1024 })
+    expect(line()!.textContent).toBe('PNG · 2.0 MB · 1920 × 1080 · RGBA · 32 位')
+    // 行内只留数值；带标签的完整说法在 title 里（位深度含每通道拆解）
+    expect(line()!.title).toContain('文件大小：2.0 MB')
+    expect(line()!.title).toContain('位深度：32 位（8 位/通道 ×4）')
+  })
+
+  it('工具栏那颗按钮可以收起 / 再展开', async () => {
+    await mount(undefined, { info, byteSize: 1024 })
+    expect(line()).not.toBeNull()
+
+    act(() => button('隐藏图片信息').click())
+    expect(line()).toBeNull()
+
+    act(() => button('图片信息').click())
+    expect(line()).not.toBeNull()
+  })
+
+  it('没有任何可显示的信息时不给入口（点了没反应比不出现更差）', async () => {
+    await mount()
+    expect(line()).toBeNull()
+    expect(button('图片信息')).toBeUndefined()
+  })
+})
+
+describe('滚轮与拖动', () => {  it('滚轮向上放大、向下缩小', async () => {
     await mount()
     const el = container()
 
