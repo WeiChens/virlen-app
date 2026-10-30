@@ -194,6 +194,7 @@
   "手动输入命令模板": "Enter a command template manually",
   "已添加：$__name__": "Added: $__name__",
   "已保存": "Saved",
+  "链接指向的文件不存在：$__path__": "The linked file does not exist: $__path__",
   "已切换默认编辑器：$__name__": "Default editor switched to: $__name__",
   "删除编辑器": "Delete Editor",
   "确定要删除这个编辑器配置吗？此操作无法撤销": "Are you sure you want to delete this editor config? This cannot be undone",

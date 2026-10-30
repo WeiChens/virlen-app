@@ -9,11 +9,12 @@
  *    它在正文里就地标一句 `image 3 · png · 640×480 px`、在表前插一句合并说明 ——
  *    这些英文说明是**给模型的**，界面不翻译、也不显示（这里只渲染正文）；
  * 2. **太长就截断**（Rust 侧按字符数上限切），提示条说清共多少字，并给「系统程序打开」的出口；
- * 3. 面板宽度窄：正文按面板字号（比聊天区小一号），由 `.wfp-preview` 统一控制。
+ * 3. 面板宽度窄：正文按面板字号（比聊天区小一号），由 `.wfp-preview` 统一控制；
+ * 4. 长文档走 `VirtualMarkdown` 虚拟渲染（块切分 + react-virtual），短文档退化为整篇渲染。
  */
 import { useMemo } from 'react'
 import { t, tpl } from '@/ui/i18n'
-import MarkdownRenderer from '@/ui/pages/chat/components/message/markdown-renderer'
+import VirtualMarkdown from './virtual-markdown'
 
 interface Props {
   /** Markdown 正文（可能已按上限截断） */
@@ -44,9 +45,8 @@ export default function DocumentView({ text, charCount, truncated, onOpenInSyste
           </button>
         </div>
       )}
-      <div className="wfp-preview">
-        <MarkdownRenderer content={text} />
-      </div>
+      {/* 长文档（抽取出的 md 可能很长）走虚拟渲染；短文档组件内部退化为整篇渲染 */}
+      <VirtualMarkdown content={text} />
     </div>
   )
 }

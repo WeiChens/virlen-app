@@ -12,6 +12,8 @@
 import { memo, useState, useRef, useEffect, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import rehypeRaw from 'rehype-raw'
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import CodeBlock from './code-block'
 import LocalImage from '@/ui/components/shared/LocalImage'
 import { splitStablePrefix } from './streamMarkdown'
@@ -21,6 +23,29 @@ import './markdown-renderer.scss'
 
 /** 稳定的 remark 插件数组（避免每次渲染新建数组） */
 const REMARK_PLUGINS = [remarkGfm]
+
+/**
+ * HTML 白名单 schema：默认 schema + 本项目已放行的资源协议。
+ * - `img[src]`：与 `allowImageSrc` 同口径（本地相对路径 / file: / data: 都要能过），
+ *   否则 markdown 里的 `<img>` 会被 sanitize 清空 src；
+ * - `a[href]` 交 `handleMarkdownLinkClick` 接管，协议由它判，sanitize 只拦 `javascript:`。
+ * sanitize 放在 raw 之后，脚本 / 事件属性 / style 标签等默认就在白名单外。
+ */
+const SANITIZE_SCHEMA = {
+  ...defaultSchema,
+  protocols: {
+    ...defaultSchema.protocols,
+    src: ['http', 'https', 'mailto', 'data', 'file'],
+  },
+  attributes: {
+    ...defaultSchema.attributes,
+    // 保留 img 上与 LocalImage 兼容的属性（react-markdown 会透传给 components.img）
+    img: [...(defaultSchema.attributes?.img || []), 'src', 'alt', 'title', 'width', 'height'],
+  },
+}
+
+/** 稳定的 rehype 插件数组 */
+const REHYPE_PLUGINS = [rehypeRaw, [rehypeSanitize, SANITIZE_SCHEMA]]
 
 /**
  * rAF 节流 content：streaming 时每帧最多更新一次（高频 content 变化被合并）；非 streaming 立即更新并取消 pending rAF。
@@ -69,9 +94,22 @@ interface Props {
   content: string
   isUser?: boolean
   streaming?: boolean
+  /**
+   * 本地文件链接的宿主回调（`[下一个](next.md)` 这类相对/本地路径）。
+   * 只有**文件预览**传（把链接解析到当前文件目录并开新标签）；聊天不传，保持原行为。
+   */
+  onLocalLink?: (href: string) => void
 }
 
-function LinkRenderer({ href, children, ...props }: any) {
+/** 绝对的 http(s) / 锚点 / mailto 等都不是「本地文件链接」；其余（`next.md`、`./a/b.md`、绝对路径）算 */
+const NON_FILE_HREF = /^(https?:|#|mailto:|data:|javascript:)/i
+
+function isLocalFileHref(href?: string | null): boolean {
+  const text = (href ?? '').trim()
+  return text !== '' && !NON_FILE_HREF.test(text)
+}
+
+function LinkRenderer({ href, onLocalLink, children, ...props }: any) {
   return (
     <button
       {...props}
@@ -85,7 +123,24 @@ function LinkRenderer({ href, children, ...props }: any) {
        * 没人接管（不在聊天页 / 用例里）时 `handleMarkdownLinkClick` 返回 false → 不 preventDefault。
        */
       onClick={(e: any) => {
-        if (handleMarkdownLinkClick(e, href)) e.preventDefault()
+        if (handleMarkdownLinkClick(e, href)) {
+          e.preventDefault()
+          return
+        }
+        /**
+         * 本地文件链接（`[下一个](next.md)`）：只有**文件预览**场景传了 `onLocalLink` 才接管
+         * （宿主把相对链接解析到当前文件目录并开新标签）。聊天回复不传 → 保持原行为；
+         * 修饰键 / 非左键也不接管（与 handleMarkdownLinkClick 同一套口径）。
+         */
+        if (
+          onLocalLink &&
+          isLocalFileHref(href) &&
+          e.button === 0 &&
+          !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey
+        ) {
+          e.preventDefault()
+          onLocalLink(href)
+        }
       }}>
       {children}
     </button>
@@ -99,15 +154,17 @@ function LinkRenderer({ href, children, ...props }: any) {
 const MarkdownBody = memo(function MarkdownBody({
   content,
   streaming,
+  onLocalLink,
 }: {
   content: string
   streaming?: boolean
+  onLocalLink?: (href: string) => void
 }) {
   const components = useMemo(
     () => ({
       code: (props: any) => <CodeBlock inlineCode {...props} streaming={streaming} />,
       img: ({ node, ...props }: any) => <LocalImage {...props} />,
-      a: LinkRenderer as any,
+      a: (props: any) => <LinkRenderer {...props} onLocalLink={onLocalLink} />,
       table: ({ children, ...props }: any) => (
         <div className="table-wrapper">
           <table {...props}>{children}</table>
@@ -160,12 +217,13 @@ const MarkdownBody = memo(function MarkdownBody({
         </p>
       ),
     }),
-    [streaming],
+    [streaming, onLocalLink],
   )
 
   return (
     <ReactMarkdown
       remarkPlugins={REMARK_PLUGINS}
+      rehypePlugins={REHYPE_PLUGINS}
       components={components}
       urlTransform={allowImageSrc}>
       {content}
@@ -178,6 +236,7 @@ export default memo(function MarkdownRenderer({
   content,
   isUser,
   streaming,
+  onLocalLink,
 }: Props) {
   // rAF 节流：避免流式高频更新导致 ReactMarkdown 重复解析
   const displayContent = useThrottledContent(content, streaming)
@@ -192,8 +251,8 @@ export default memo(function MarkdownRenderer({
     if (prefix) {
       return (
         <div className="markdown-renderer">
-          <MarkdownBody content={prefix} streaming={streaming} />
-          <MarkdownBody content={tail} streaming={streaming} />
+          <MarkdownBody content={prefix} streaming={streaming} onLocalLink={onLocalLink} />
+          <MarkdownBody content={tail} streaming={streaming} onLocalLink={onLocalLink} />
         </div>
       )
     }
@@ -201,7 +260,7 @@ export default memo(function MarkdownRenderer({
 
   return (
     <div className="markdown-renderer">
-      <MarkdownBody content={displayContent} streaming={streaming} />
+      <MarkdownBody content={displayContent} streaming={streaming} onLocalLink={onLocalLink} />
     </div>
   )
 })

@@ -140,6 +140,8 @@ interface Props {
   guideWorkspaceReady?: boolean
   /** 开始页 / 文件树里双击（面板里单击）文件 → 宿主开标签 */
   onOpenPath?: (path: string) => void
+  /** markdown 预览里的本地文件链接 → 宿主开新标签（与 onOpenPath 同一条链路） */
+  onOpenLinkedFile?: (path: string) => void
   /** 文件树右键「引用到输入框」/ 拖到输入框（与左侧栏同一条链路） */
   onAttachPaths?: (paths: string[]) => void
   /**
@@ -237,6 +239,7 @@ function SidePanel({
   guideWorkspaceReady = true,
   loadTerminalShells,
   onOpenPath,
+  onOpenLinkedFile,
   onAttachPaths,
   onBrowserNavigate,
   onBrowserTitle,
@@ -688,6 +691,7 @@ function SidePanel({
           // 刷新归容器（标签右键菜单）：面板把动作登记上来
           onReloadReady={reloadRegistrarOf(tab.id)}
           onClose={() => onCloseTab(tab.id)}
+          onOpenLinkedFile={onOpenLinkedFile}
         />
       )
     }
@@ -1109,6 +1113,7 @@ function SidePanel({
       dirtyHandlerOf,
       onCloseTab,
       onOpenPath,
+      onOpenLinkedFile,
       onAttachPaths,
       onPickGuide,
       guideWorkspaceReady,

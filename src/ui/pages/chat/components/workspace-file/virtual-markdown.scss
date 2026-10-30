@@ -1,0 +1,25 @@
+/**
+ * VirtualMarkdown 的虚拟层样式。
+ *
+ * `.wfp-preview`（style.scss）的滚动容器身份和 `padding: 12px 14px` **保持原样**（留白不变），
+ * 这里只补虚拟定位必需的两条 —— 内层撑总高（relative 定位基准）、块绝对定位
+ * （top 由 react-virtual 给，高度由 measureElement 实测回写）。
+ *
+ * ⚠️ 滚动容器带 padding 时，虚拟块的坐标要扣掉这段 padding（组件里 `scrollMargin: 14`），
+ * 否则首块会被推开一段、末尾多出一段空白。
+ */
+
+.virtual-md-inner {
+  position: relative;
+  width: 100%;
+}
+
+.virtual-md-item {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+
+  /* 块与块之间：MarkdownRenderer 内部块元素自带 margin，这里补一个层间距 */
+  padding-bottom: 4px;
+}

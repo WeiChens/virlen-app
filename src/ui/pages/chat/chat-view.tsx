@@ -1927,6 +1927,8 @@ function ChatView() {
         loadTerminalShells={listUserTerminalShells}
         // 面板里的文件树：单击即开（与左侧栏的双击同一条链路）
         onOpenPath={handleOpenFile}
+        // markdown 预览里的本地文件链接（相对路径已在面板里解析并过安全校验）→ 开新标签
+        onOpenLinkedFile={handleOpenFile}
         onAttachPaths={handleAttachPaths}
         // 网页标签里导航了 → 地址写回标签（tooltip / 兑底标题跟着换）
         onBrowserNavigate={handleBrowserNavigate}

@@ -36,9 +36,10 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
+import { invoke } from '@tauri-apps/api/core'
 import type * as MonacoNs from 'monaco-editor'
 import { openPath } from '@tauri-apps/plugin-opener'
-import { t } from '@/ui/i18n'
+import { t, tpl } from '@/ui/i18n'
 import { settingsState } from '@/ui/store'
 import settingsEvent from '@/events/settingsEvent'
 import { showToast } from '@/ui/components/shared/Toast'
@@ -49,7 +50,7 @@ import FileTypeIcon from '@/ui/components/icons/FileTypeIcon'
 import CloseSvg from '@/ui/components/icons/CloseSvg'
 import SaveSvg from '@/ui/components/icons/SaveSvg'
 import ExportSvg from '@/ui/components/icons/ExportSvg'
-import MarkdownRenderer from '@/ui/pages/chat/components/message/markdown-renderer'
+import VirtualMarkdown from './virtual-markdown'
 import ImageViewer from './image-viewer'
 import DataTable from './data-table'
 import DocumentView from './document-view'
@@ -108,6 +109,11 @@ interface Props {
   active?: boolean
   /** 关闭（宿主负责清空 openFile；脏数据确认已经在本组件内做过） */
   onClose: () => void
+  /**
+   * markdown 预览里的本地文件链接（`[下一个](next.md)`）：宿主开一个新标签。
+   * 传的是**解析后的绝对路径**（相对链接已按当前文件所在目录拼接、已过安全校验）。
+   */
+  onOpenLinkedFile?: (absolutePath: string) => void
   /** 脏标记变化（宿主据此在「切文件 / 切会话」前确认） */
   onDirtyChange?: (dirty: boolean) => void
   /**
@@ -123,6 +129,13 @@ type LoadState =
   | { status: 'loading' }
   | { status: 'ready'; file: LoadedWorkspaceFile }
   | { status: 'error'; message: string; code?: WorkspaceFileErrorCode }
+
+/** Rust `stat_path` 的返回（与 `workspace-file-service` 同形；这里只看 exists） */
+interface PathStat {
+  exists: boolean
+  is_file: boolean
+  size: number
+}
 
 function baseName(path: string): string {
   return path.replace(/\\/g, '/').split('/').pop() || path
@@ -185,6 +198,7 @@ function WorkspaceFilePanel({
   defaultView = 'edit',
   viewSeq,
   onClose,
+  onOpenLinkedFile,
   onDirtyChange,
   onReloadReady,
 }: Props) {
@@ -192,11 +206,18 @@ function WorkspaceFilePanel({
   /** 有没有第二个视图（md / html / svg / csv / tsv）：state 初值与多处渲染都要用，先算一次 */
   const previewKind = textPreviewKindOf(name)
   /**
-   * 挂载时（= 这个标签第一次打开）落在哪个视图。只有能预览的类型才认 `preview`。
+   * 挂载时（= 这个标签第一次打开）落在哪个视图：
+   * - md 默认**预览**（看文档是主场景，改动是例外；注释下方 tab 可随时切编辑）；
+   * - 其余可预览类型（html / svg / csv / tsv）仍默认编辑（改文件是主场景）；
+   * - present 交付的（`defaultView = 'preview'`）认提示，直接落预览。
    * 换文件 / present 再打开同一个文件时回到这里，见下面的 effect。
    */
   const landingView: 'edit' | 'preview' =
-    defaultView === 'preview' && previewKind !== null ? 'preview' : 'edit'
+    defaultView === 'preview' && previewKind !== null
+      ? 'preview'
+      : previewKind === 'markdown'
+        ? 'preview'
+        : 'edit'
   const [state, setState] = useState<LoadState>({ status: 'loading' })
   /** 文本草稿（非文本时恒为空串） */
   const [draft, setDraft] = useState('')
@@ -520,6 +541,46 @@ function WorkspaceFilePanel({
     openPath(path).catch(() => showToast(t('打开失败'), 2000))
   }, [path])
 
+  /**
+   * markdown 预览里的本地文件链接：按**当前文件所在目录**拼接相对路径
+   * （`next.md` / `./docs/b.md` / `../a.md`），再走安全校验 + 存在性检查；
+   * 都过了才交给宿主开新标签，否则 toast 说明原因（不静默没反应）。
+   * 绝对路径（Windows 盘符 / `\`）直接用，相对拼接只对相对路径生效。
+   */
+  const handleLocalLink = useCallback(
+    async (href: string) => {
+      const raw = href.trim()
+      if (!raw) return
+      /**
+       * markdown 链接的 destination 常被 URL 编码（中文 / 空格 / `#` 等）：
+       * `第03课.md` 写进链接就成了 `%E7%AC%AC03%E8%AF%BE.md` —— 不解码永远找不到文件。
+       * 解不开（有孤立 `%`）就原样用：磁盘上的文件名可能真带 `%`。
+       */
+      let decoded = raw
+      try {
+        decoded = decodeURIComponent(raw)
+      } catch {
+        // URIError：原样用
+      }
+      const joined = /^[A-Za-z]:[\\/]/.test(decoded) || decoded.startsWith('/')
+        ? decoded.replace(/\\/g, '/')
+        : `${parentDir(path)}/${decoded.replace(/\\/g, '/')}`
+      try {
+        const absolute = await securityService.resolveSafePath(joined, 'r', sessionId)
+        const stat = await invoke<PathStat>('stat_path', { path: absolute })
+        if (!stat?.exists) {
+          showToast(tpl('链接指向的文件不存在：$__path__', { path: decoded }), 3000)
+          return
+        }
+        onOpenLinkedFile?.(absolute)
+      } catch {
+        // 校验被拒（黑名单 / 工作区外）与不存在同一句：不给目录结构泄露的线索
+        showToast(tpl('链接指向的文件不存在：$__path__', { path: decoded }), 3000)
+      }
+    },
+    [path, sessionId, onOpenLinkedFile],
+  )
+
   const textFile = state.status === 'ready' && state.file.kind === 'text' ? state.file : null
   const showPreview = viewMode === 'preview' && textFile !== null && previewKind !== null
 
@@ -634,11 +695,8 @@ function WorkspaceFilePanel({
     if (file.kind === 'text') {
       if (showPreview) {
         if (previewKind === 'markdown') {
-          return (
-            <div className="wfp-preview">
-              <MarkdownRenderer content={draft} />
-            </div>
-          )
+          // 长文档虚拟渲染（只渲染视口附近的块）；短文档组件内部退化为整篇渲染，与原行为一致
+          return <VirtualMarkdown content={draft} onLocalLink={handleLocalLink} />
         }
         if (previewKind === 'html') {
           if (previewBase === undefined) {
