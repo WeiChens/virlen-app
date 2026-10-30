@@ -43,6 +43,13 @@ const FENCE = /^\s{0,3}(`{3,}|~{3,})/
 /** setext 下划线（`===` / `---`）：跟上一段段落一体 */
 const SETEXT = /^ {0,3}(=+|-+)\s*$/
 
+/** HTML 块类型 6 起始标签（CommonMark）：details / div / table 等；type 1（script/pre/style/textarea）罕见，一并认 */
+const HTML_BLOCK_START = /^ {0,3}<\/?([A-Za-z][A-Za-z0-9-]*)\b/
+/** HTML 块里作为「容器」追踪的标签：会在内部开子结构，必须等到闭合才算块结束 */
+const HTML_CONTAINER_TAGS = new Set(['details', 'div', 'table', 'blockquote', 'figure', 'dl', 'ul', 'ol'])
+/** 自闭合或无闭合体的行内标签（br / img / summary 行内出现时不影响追踪） */
+const HTML_VOID_TAGS = new Set(['br', 'hr', 'img', 'input'])
+
 /** 一行是否为空 */
 const isEmpty = (s: string) => s.trim() === ''
 
@@ -63,6 +70,10 @@ export function splitMarkdownBlocks(content: string): string[] {
   const chunks: RawChunk[] = []
   let start = 0
   let fence: string | null = null
+  /** HTML 容器标签追踪：非空时正在 HTML 块内部，一切切点判定都暂停 */
+  const htmlStack: string[] = []
+  /** 上一段是否为 HTML 块（切点归属标记用：HTML 块不可二次切分） */
+  let prevWasHtml = false
 
   const push = (end: number, resplittable: RawChunk['resplittable']) => {
     const text = lines.slice(start, end).join('\n')
@@ -91,6 +102,37 @@ export function splitMarkdownBlocks(content: string): string[] {
       continue
     }
     if (fence) continue
+
+    // ---- HTML 块追踪：与围栏同款 ----
+    // 行内出现开标签 → 入栈；闭标签 → 弹栈。栈非空时不产生任何切点。
+    const tagMatches = line.matchAll(/<\/?([A-Za-z][A-Za-z0-9-]*)\b[^>]*?(\/)?>/g)
+    for (const m of tagMatches) {
+      const tag = m[1].toLowerCase()
+      if (HTML_VOID_TAGS.has(tag)) continue
+      const isClose = m[0].startsWith('</')
+      const isSelfClose = m[2] === '/'
+      if (isClose) {
+        const idx = htmlStack.lastIndexOf(tag)
+        if (idx >= 0) {
+          htmlStack.length = idx
+          // 栈弹空 = HTML 块结束：闭标签行收进本块（push 是 [start,end)，不补 i+1 会把
+          // 闭标签行留给下一块，折叠结构就被拆散了）
+          if (htmlStack.length === 0) {
+            push(i + 1, 'no')
+            prevWasHtml = false
+          }
+        }
+      } else if (!isSelfClose) {
+        htmlStack.push(tag)
+      }
+    }
+    // 只有进入过 HTML 容器块的行才受追踪保护；普通段落里的行内 <span> 之类
+    // 开闭同在一行，栈已归零，不影响。此处栈非空 = 处在跨行 HTML 块内部。
+    if (htmlStack.length > 0) {
+      prevWasHtml = true
+      continue
+    }
+
     if (isEmpty(line)) continue
 
     // 空行之后的新块起点判定：
@@ -111,9 +153,12 @@ export function splitMarkdownBlocks(content: string): string[] {
         if (LIST_OR_CONTAINER.test(prevNonEmpty)) continue
         // 容器块起点：整块（到下一个顶层块前）不可行级二次切分 → 'no'
         push(i, 'no')
+        prevWasHtml = false
         continue
       }
-      push(i, 'paragraph')
+      // 若刚结束的是 HTML 块，本切点收的是它 → 'no'
+      push(i, prevWasHtml ? 'no' : 'paragraph')
+      prevWasHtml = false
       continue
     }
   }

@@ -121,6 +121,31 @@ describe('splitMarkdownBlocks — 顶层块切分', () => {
     const owner = blocks.find((b) => b.includes('大标题'))
     expect(owner).toContain('===')
   })
+
+  it('HTML 折叠块（<details>）整体一块，内部空行不切', () => {
+    const md = [
+      long('折叠块之前的段落。', Math.ceil(BIG / 10)),
+      '',
+      '<details>',
+      '<summary>答案与解析</summary>',
+      '',
+      '- A 不可用',
+      '- B 可用',
+      '',
+      '第二段解析。',
+      '',
+      '</details>',
+      '',
+      '尾',
+    ].join('\n')
+    const blocks = splitMarkdownBlocks(md)
+    const det = blocks.find((b) => b.includes('<details>'))
+    expect(det).toBeDefined()
+    // 开标签与闭标签在同一块（折叠结构没被拆散）
+    expect(det).toContain('</details>')
+    expect(det).toContain('<summary>')
+    expect(det).toContain('第二段解析。')
+  })
 })
 
 describe('splitMarkdownBlocks — 超长片段二次切分', () => {
