@@ -319,3 +319,38 @@ it('多行选区只取第一行（跨块查询几乎必然零命中）', async (
   expect(input()?.value).toBe('改法 1：借用')
   expect(count()).toBe('1/1')
 })
+
+/**
+ * 点正文会把焦点收回滚动容器（Ctrl+F 的「预览在前台」判据靠它）—— 但代码块里的 Monaco
+ * 必须例外：它在自己的 mousedown 里聚焦隐藏 textarea 并 preventDefault，我们晚一步 focus
+ * 就会把它拽出来，Ctrl+C 从此落不到编辑器上（Monaco 的选区不进 window.getSelection）。
+ */
+async function pressMouseDown(target: Element): Promise<void> {
+  await act(async () => {
+    target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+  })
+}
+
+it('点普通正文时把焦点收回预览容器', async () => {
+  await mount()
+  // 替身渲染器只是直出 innerHTML，没有真正的 <p>：直接点渲染出来的正文容器
+  const line = preview()!.querySelector('.mock-markdown')!
+
+  await pressMouseDown(line)
+
+  expect(document.activeElement).toBe(preview())
+})
+
+it('点代码块里的 Monaco 时不抢焦点（否则 Ctrl+C 复制失效）', async () => {
+  await mount(
+    ['正文段落', '', '<div class="monaco-editor"><textarea class="inputarea"></textarea></div>'].join(
+      '\n',
+    ),
+  )
+  const textarea = document.querySelector<HTMLTextAreaElement>('.monaco-editor textarea')!
+  textarea.focus()
+
+  await pressMouseDown(textarea)
+
+  expect(document.activeElement).toBe(textarea)
+})

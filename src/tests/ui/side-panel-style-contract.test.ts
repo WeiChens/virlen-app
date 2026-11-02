@@ -31,6 +31,8 @@
  *    标签一点不斜。所以这里用**几何倾斜**（`transform: skewX`），中英文与字体回退全都盖到。
  * ⑩ **过渡期的消息列表宽度钉在终值**（`chat-freeze.ts`）：变量名 / 读取点 / 摘锁时长是一对
  *    跨文件契约，对不上就是「钉不住」或「提前放开」，而两者都是零报错。
+ * ⑪ **占满态的交界只有一道**：面板铺满时它的左缘正好落在左侧栏那条 2px 手柄上（`inset` 含它），
+ *    两条手柄 / 两个边框并排 —— DOM 里都在、都合法，只在屏幕上看着是「两道拖动条、两条线」。
  */
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -259,6 +261,22 @@ describe('右侧面板容器 · 样式契约', () => {
 
     // 占满态下聊天区是 display:none：面板不贴右就会从左铺、往右缩，手柄停在原地
     expect(/\.side-panel\s*\{([^}]*)\}/.exec(panelCss)?.[1]).toContain('margin-left: auto')
+  })
+
+  it('占满态只留一道手柄、一条分界线（两道叠在同一个 2px 上）', () => {
+    // 面板左缘 = 容器宽 − inset，而 inset 含左侧栏那 2px：两条手柄落在同一位置。
+    // 面板手柄的 z-index 更高，侧栏这条留着就只剩一个效果 —— 「一个边界上两道手柄」。
+    const hidden = /\.chat-view\.is-file-full\s+\.sidebar-resizer\s*\{([^}]*)\}/.exec(chatViewCss)?.[1]
+    expect(hidden).toBeTruthy()
+    expect(hidden).toContain('visibility: hidden')
+    expect(hidden).toContain('pointer-events: none')
+    // 不能换 display: none：面板宽度按含这 2px 的 inset 算，摘掉会让面板右移 2px
+    expect(hidden).not.toContain('display: none')
+
+    // 侧栏右框与面板左框也只隔那 2px：占满态去掉侧栏那条，交界才只剩一道线
+    expect(
+      /\.chat-view\.is-file-full\s+\.chat-sidebar\s*\{([^}]*)\}/.exec(chatViewCss)?.[1],
+    ).toContain('border-right-color: transparent')
   })
 
   it('标签栏 + 各页自己的 header = 聊天区 header 高度（两侧内容从同一条线开始）', () => {

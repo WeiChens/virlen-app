@@ -30,6 +30,21 @@
     }
   }
 
+  /* 右侧面板占满（`.is-file-full`）时聊天区是 `display: none`，面板左缘正好落在上面这 2px 上
+     （`inset` = 侧栏宽 + 这 2px，面板宽 = 容器宽 − inset），面板自己的手柄因此与这条叠在同一个
+     位置 —— 一个边界上两道手柄。面板手柄 z-index 更高、能拖回来，这条收不到 mousedown，藏起来。
+     用 `visibility` 不用 `display: none`：面板宽度按含这 2px 的 `inset` 算，摘掉会右移 2px 露缝。 */
+  &.is-file-full .sidebar-resizer {
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  /* 同一状态下侧栏右边界与面板左边界只隔这 2px，两个 1px 边框并排就是中间两道竖线。
+     交界只留一道：去掉侧栏那条（面板的左框还在，与非占满态的分界线同色）。 */
+  &.is-file-full .chat-sidebar {
+    border-right-color: transparent;
+  }
+
   .chat-main {
     flex: 1;
     display: flex;

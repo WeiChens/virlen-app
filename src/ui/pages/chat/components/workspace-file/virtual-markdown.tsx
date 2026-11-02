@@ -15,7 +15,14 @@
  * 浏览器自带的查找根本搜不到，所以自己实现「源码级匹配 + 按块跳转 + 尽力高亮」——
  * 匹配在块文本上算（命中数是全量的），跳转用 `scrollToIndex`，高亮只画在已挂载的块上。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import MarkdownRenderer from '@/ui/pages/chat/components/message/markdown-renderer'
 import { splitMarkdownBlocks, MIN_VIRTUALIZE_CHARS } from './mdBlocks'
@@ -145,6 +152,22 @@ export default function VirtualMarkdown({ content, onLocalLink }: Props) {
     }
   }, [query, caseSensitive, activeMatch, renderedKey, plain])
 
+  /**
+   * 点正文 → 把焦点收回滚动容器（下面 Ctrl+F 的「这个预览在前台」判据要靠它）。
+   *
+   * ⚠️ 只在「这一下点击没人认领焦点」时才能这么做：Monaco（代码块）在自己的 mousedown 里
+   * 刚把隐藏 textarea 聚焦并 `preventDefault()`（浏览器此后不会再纠正焦点），而 React 的
+   * 事件委托挂在根容器上 —— 我们这段跑在 Monaco 之后，一 `focus()` 就把焦点从编辑器抢走。
+   * 编辑器一失焦：Ctrl+C 的 keydown 进不到它，原生复制也没有选区（Monaco 的选区不进
+   * `window.getSelection()`）→ 表现就是「代码块里选中了文本，Ctrl+C 没反应」。
+   * 里面的输入控件 / Monaco 自己管焦点，一律不碰。
+   */
+  const focusPreview = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    const target = event.target instanceof Element ? event.target : null
+    if (isTextEditingElement(target)) return
+    scrollRef.current?.focus({ preventScroll: true })
+  }, [])
+
   const closeFind = useCallback(() => {
     setFindOpen(false)
     // 关掉就清查询：高亮跟着消失（不然浮层没了还有一片橙色块，看不出是谁画的）
@@ -229,7 +252,7 @@ export default function VirtualMarkdown({ content, onLocalLink }: Props) {
           className="wfp-preview"
           ref={scrollRef}
           tabIndex={-1}
-          onMouseDown={() => scrollRef.current?.focus({ preventScroll: true })}>
+          onMouseDown={focusPreview}>
           {/* data-index 是查找高亮的锚：整篇渲染也算「第 0 块」，两条路径共用一套高亮代码 */}
           <div data-index={0}>
             <MarkdownRenderer content={content} onLocalLink={onLocalLink} />
@@ -246,7 +269,7 @@ export default function VirtualMarkdown({ content, onLocalLink }: Props) {
         className="wfp-preview virtual-md"
         ref={scrollRef}
         tabIndex={-1}
-        onMouseDown={() => scrollRef.current?.focus({ preventScroll: true })}>
+        onMouseDown={focusPreview}>
         <div className="virtual-md-inner" style={{ height: virtualizer.getTotalSize() }}>
           {virtualizer.getVirtualItems().map((item) => (
             <div
