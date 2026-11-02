@@ -17,6 +17,7 @@ import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import CodeBlock from './code-block'
 import LocalImage from '@/ui/components/shared/LocalImage'
 import { splitStablePrefix } from './streamMarkdown'
+import { attachDetailsFold } from './details-fold'
 import { allowImageSrc } from './markdown-url'
 import { handleMarkdownLinkClick } from './markdown-link'
 import './markdown-renderer.scss'
@@ -240,6 +241,13 @@ export default memo(function MarkdownRenderer({
 }: Props) {
   // rAF 节流：避免流式高频更新导致 ReactMarkdown 重复解析
   const displayContent = useThrottledContent(content, streaming)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  // 折叠块（<details>）开合过渡：事件委托挂一次，后续流式 / 虚拟列表重建的节点自动生效
+  useEffect(() => {
+    const el = rootRef.current
+    return el ? attachDetailsFold(el) : undefined
+  }, [])
 
   if (isUser) {
     return <>{displayContent}</>
@@ -250,7 +258,7 @@ export default memo(function MarkdownRenderer({
     const [prefix, tail] = splitStablePrefix(displayContent)
     if (prefix) {
       return (
-        <div className="markdown-renderer">
+        <div className="markdown-renderer" ref={rootRef}>
           <MarkdownBody content={prefix} streaming={streaming} onLocalLink={onLocalLink} />
           <MarkdownBody content={tail} streaming={streaming} onLocalLink={onLocalLink} />
         </div>
@@ -259,7 +267,7 @@ export default memo(function MarkdownRenderer({
   }
 
   return (
-    <div className="markdown-renderer">
+    <div className="markdown-renderer" ref={rootRef}>
       <MarkdownBody content={displayContent} streaming={streaming} onLocalLink={onLocalLink} />
     </div>
   )

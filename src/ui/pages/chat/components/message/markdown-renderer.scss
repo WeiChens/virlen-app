@@ -7,6 +7,7 @@
   // ==================== 段落 ====================
   .md-p {
     margin: 0 0 2px;
+
     // margin-bottom: -10px;
     // display: inline-block;
     &:last-child {
@@ -22,6 +23,7 @@
     margin: 16px 0 8px;
     font-weight: 600;
     line-height: 1.35;
+
     &:first-child {
       margin-top: 0;
     }
@@ -32,18 +34,23 @@
     border-bottom: 1px solid var(--border-color, #e5e5e5);
     padding-bottom: 6px;
   }
+
   .md-h2 {
     font-size: 1.2em;
   }
+
   .md-h3 {
     font-size: 1.1em;
   }
+
   .md-h4 {
     font-size: 1.05em;
   }
+
   pre {
     white-space: pre-wrap;
   }
+
   // ==================== 行内代码 ====================
   .inline-code {
     padding: 1px 6px;
@@ -56,8 +63,10 @@
       monospace, 'Noto Color Emoji';
     display: inline;
     word-break: break-word;
+
     &.clickable {
       cursor: pointer;
+
       &:hover {
         background: var(--inline-code-hover-bg, #d9d9e4);
       }
@@ -72,6 +81,7 @@
     border-bottom: 1px solid transparent;
     transition: border-color 0.15s;
     cursor: pointer;
+
     &:hover {
       border-bottom-color: var(--accent-color, #4f46e5);
     }
@@ -101,6 +111,7 @@
   .md-ol {
     margin: 3px 0;
     padding-left: 20px;
+
     li {
       margin: 3px 0;
     }
@@ -108,6 +119,7 @@
 
   .md-ul {
     list-style: disc;
+
     // display: inline-block;
     ul {
       list-style: circle;
@@ -170,6 +182,7 @@
   strong {
     font-weight: 600;
   }
+
   // 斜体（`<em>`）：**不能**只写 `font-style: italic` —— 界面字体没有 italic 字面、
   // `:root` 又关了合成斜体，那只等于没写。完整口径（三条 + 实测）在 `src/ui/App.css`
   // 的 `em, i, cite` 全局规则里，这里不用再重复一遍（重复两份迟早会漏一份）。
@@ -182,5 +195,22 @@
     max-width: 100%;
     border-radius: 8px;
     margin: 8px 0;
+  }
+
+  // ==================== 折叠块（<details>） ====================
+  // 开合过渡由 `details-fold.ts` 用 WAAPI 插值 height（纯 CSS 的 `::details-content` +
+  // `interpolate-size: allow-keywords` 只有新版 Chromium 认，各平台 WebView 版本不可控）。
+  // 这里只给动画期间加裁剪：不加的话高度收到一半时内容会溢出到块外。
+  details.is-folding {
+    overflow: clip;
+  }
+
+  details {
+    margin-top: 4px;
+    margin-bottom: 8px;
+    summary{
+      cursor: pointer;
+      user-select: none;
+    }
   }
 }

@@ -1,5 +1,5 @@
 /**
- * VirtualMarkdown 的虚拟层样式。
+ * VirtualMarkdown 的虚拟层 + 查找浮层样式。
  *
  * `.wfp-preview`（style.scss）的滚动容器身份和 `padding: 12px 14px` **保持原样**（留白不变），
  * 这里只补虚拟定位必需的两条 —— 内层撑总高（relative 定位基准）、块绝对定位
@@ -8,6 +8,20 @@
  * ⚠️ 滚动容器带 padding 时，虚拟块的坐标要扣掉这段 padding（组件里 `scrollMargin: 14`），
  * 否则首块会被推开一段、末尾多出一段空白。
  */
+
+/* 包一层是为了让查找浮层能绝对定位在预览区右上角（.wfp-preview 自己是滚动容器，不能当基准） */
+.wfp-preview-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+
+  /* 滚动容器可编程聚焦（Ctrl+F 的焦点判据）：鼠标点出来的焦点不画框 */
+  > .wfp-preview:focus {
+    outline: none;
+  }
+}
 
 .virtual-md-inner {
   position: relative;
@@ -22,4 +36,142 @@
 
   /* 块与块之间：MarkdownRenderer 内部块元素自带 margin，这里补一个层间距 */
   padding-bottom: 4px;
+}
+
+/* ==================== 查找浮层（Ctrl/Cmd+F） ====================
+   观感对齐 Monaco 的查找框：右上角小浮层，输入框 + 3/12 计数 + 三个开关。 */
+.wfp-find {
+  position: absolute;
+  top: 8px;
+  right: 16px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 30px;
+  padding: 0 4px 0 8px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  box-shadow: var(--shadow-md, 0 8px 24px rgba(0, 0, 0, 0.16));
+  font-size: var(--font-size-sm, 12px);
+  color: var(--text-primary, #1a1a1a);
+
+  .wfp-find-icon {
+    flex: none;
+    width: 13px;
+    height: 13px;
+    margin-right: 4px;
+    fill: var(--text-tertiary, #999);
+  }
+
+  .wfp-find-input {
+    width: 150px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text-primary, #1a1a1a);
+    font-family: inherit;
+    font-size: var(--font-size-sm, 12px);
+
+    &::placeholder {
+      color: var(--text-tertiary, #999);
+    }
+  }
+
+  /* 计数：定宽右对齐，从一个命中翻到「12/120」时输入框不会来回抖 */
+  .wfp-find-count {
+    flex: none;
+    min-width: 44px;
+    padding: 0 4px;
+    text-align: right;
+    color: var(--text-secondary, #666);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+
+    &.is-empty {
+      color: var(--color-error, #f35b5e);
+    }
+  }
+
+  .wfp-find-sep {
+    flex: none;
+    width: 1px;
+    height: 14px;
+    margin: 0 2px;
+    background: var(--border-color, #e5e5e5);
+  }
+
+  .wfp-find-btn {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-secondary, #666);
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      background: var(--hover-bg, #f0f0f0);
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    &:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+
+    svg {
+      width: 13px;
+      height: 13px;
+      fill: currentColor;
+    }
+
+    /* 「上一个」是同一个下箭头转 180°（图标库里没有单独的向上箭头） */
+    .is-up {
+      transform: rotate(180deg);
+    }
+
+    &.wfp-find-case {
+      width: 26px;
+      font-size: var(--font-size-xs, 11px);
+      font-weight: 600;
+      letter-spacing: -0.2px;
+    }
+
+    /* 区分大小写打开时点亮（与 Monaco 的高亮态一致：不是按钮态，是「已启用」） */
+    &.wfp-find-case.is-on {
+      color: var(--accent-color, #4f46e5);
+      background: var(--accent-bg, #eceafd);
+    }
+  }
+}
+
+/* ==================== 命中高亮 ====================
+   CSS Custom Highlight：只画颜色，不动 DOM（react-markdown 的输出照常 reconcile）。
+   浏览器不支持这个 API 时这两条规则是空转，跳转照样能用（见 md-find.ts）。
+   配色沿用 Monaco 查找的口径：全部命中 = 半透明淡橙，当前命中 = 更实的橙。 */
+::highlight(md-find) {
+  background-color: rgba(234, 92, 0, 0.28);
+}
+
+::highlight(md-find-current) {
+  background-color: rgba(255, 152, 0, 0.62);
+}
+
+[data-theme='dark'] {
+  ::highlight(md-find) {
+    background-color: rgba(234, 92, 0, 0.42);
+  }
+
+  ::highlight(md-find-current) {
+    background-color: rgba(255, 176, 46, 0.78);
+  }
 }

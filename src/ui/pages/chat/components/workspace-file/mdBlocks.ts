@@ -43,12 +43,53 @@ const FENCE = /^\s{0,3}(`{3,}|~{3,})/
 /** setext 下划线（`===` / `---`）：跟上一段段落一体 */
 const SETEXT = /^ {0,3}(=+|-+)\s*$/
 
-/** HTML 块类型 6 起始标签（CommonMark）：details / div / table 等；type 1（script/pre/style/textarea）罕见，一并认 */
-const HTML_BLOCK_START = /^ {0,3}<\/?([A-Za-z][A-Za-z0-9-]*)\b/
-/** HTML 块里作为「容器」追踪的标签：会在内部开子结构，必须等到闭合才算块结束 */
-const HTML_CONTAINER_TAGS = new Set(['details', 'div', 'table', 'blockquote', 'figure', 'dl', 'ul', 'ol'])
-/** 自闭合或无闭合体的行内标签（br / img / summary 行内出现时不影响追踪） */
-const HTML_VOID_TAGS = new Set(['br', 'hr', 'img', 'input'])
+/**
+ * 行首的第一个标签（≤3 空格缩进）：只有**行首**的开标签才会开启一个跨行 HTML 块。
+ * 散文 / 行内代码里的 `<i32>`、`<T>` 一律不算 —— 否则栈永远弹不空，后面整篇会被吞进同一块。
+ */
+const LEADING_TAG = /^ {0,3}<(\/?)([A-Za-z][A-Za-z0-9-]*)\b[^>]*?(\/)?>/
+/** 闭合标签：只弹**已经在栈里**的标签（`</summary>` / 散文里的 `</x>` 不误伤），允许出现在行尾 */
+const CLOSE_TAG = /<\/([A-Za-z][A-Za-z0-9-]*)\s*>/g
+/**
+ * 只有**可以跨行、正文里会夹空行**的容器标签才开启「HTML 块」保护：
+ * 折叠块（details）/ 分栏（div）/ 表格 / 引用… 它们的开闭标签必须落在同一个片段里。
+ * 行首的 `<p align="center">`、`<span>`、`<a>` 这类**不追踪** —— 它们常常没闭合，
+ * 追踪下去会把后面整篇吞成一块（虚拟化白做）；不追踪的代价只是那几行跟相邻段落同块，渲染不变。
+ */
+const HTML_BLOCK_TAGS = new Set([
+  'details',
+  'div',
+  'table',
+  'thead',
+  'tbody',
+  'tr',
+  'td',
+  'th',
+  'blockquote',
+  'figure',
+  'figcaption',
+  'dl',
+  'dt',
+  'dd',
+  'ul',
+  'ol',
+  'li',
+  'section',
+  'article',
+  'aside',
+  'header',
+  'footer',
+  'nav',
+  'form',
+  'video',
+  'audio',
+  'picture',
+  'iframe',
+  'script',
+  'style',
+  'textarea',
+  'pre',
+])
 
 /** 一行是否为空 */
 const isEmpty = (s: string) => s.trim() === ''
@@ -70,10 +111,8 @@ export function splitMarkdownBlocks(content: string): string[] {
   const chunks: RawChunk[] = []
   let start = 0
   let fence: string | null = null
-  /** HTML 容器标签追踪：非空时正在 HTML 块内部，一切切点判定都暂停 */
+  /** HTML 标签栈：非空 = 正处在跨行 HTML 块（如 <details>）内部，一切切点判定暂停 */
   const htmlStack: string[] = []
-  /** 上一段是否为 HTML 块（切点归属标记用：HTML 块不可二次切分） */
-  let prevWasHtml = false
 
   const push = (end: number, resplittable: RawChunk['resplittable']) => {
     const text = lines.slice(start, end).join('\n')
@@ -83,53 +122,48 @@ export function splitMarkdownBlocks(content: string): string[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
+    /** 本行开始前是否已处在 HTML 块内部（用来判定「本行把栈闭合了」） */
+    const wasInHtml = htmlStack.length > 0
 
+    // ---- 围栏代码块 ----
+    // 围栏判定排在 HTML 追踪之前（代码体里的 `<T>` 不能被当标签），但 **HTML 块内部不再产生
+    // 切点**：<details> 的正文里常有 ``` 代码块，在那里切一刀就把开/闭标签拆到两个片段，
+    // 折叠结构当场散架（单独渲染的 `<details>` 会把后面的内容全吞掉、`</details>` 变成孤儿）。
     const fenceMatch = FENCE.exec(line)
-    if (fenceMatch) {
-      const marker = fenceMatch[1]
-      if (!fence) {
-        // 围栏起始行属于这个围栏块
-        push(i, 'no')
-        fence = marker
-        continue
-      }
-      if (marker[0] === fence[0] && marker.length >= fence.length) {
+    if (fence) {
+      if (fenceMatch && fenceMatch[1][0] === fence[0] && fenceMatch[1].length >= fence.length) {
         // 闭合行收进这个围栏块，之后才能切（'fence' 标记它可以行级二次切分）
         fence = null
-        push(i + 1, 'fence')
-        continue
+        if (!wasInHtml) push(i + 1, 'fence')
       }
       continue
     }
-    if (fence) continue
-
-    // ---- HTML 块追踪：与围栏同款 ----
-    // 行内出现开标签 → 入栈；闭标签 → 弹栈。栈非空时不产生任何切点。
-    const tagMatches = line.matchAll(/<\/?([A-Za-z][A-Za-z0-9-]*)\b[^>]*?(\/)?>/g)
-    for (const m of tagMatches) {
-      const tag = m[1].toLowerCase()
-      if (HTML_VOID_TAGS.has(tag)) continue
-      const isClose = m[0].startsWith('</')
-      const isSelfClose = m[2] === '/'
-      if (isClose) {
-        const idx = htmlStack.lastIndexOf(tag)
-        if (idx >= 0) {
-          htmlStack.length = idx
-          // 栈弹空 = HTML 块结束：闭标签行收进本块（push 是 [start,end)，不补 i+1 会把
-          // 闭标签行留给下一块，折叠结构就被拆散了）
-          if (htmlStack.length === 0) {
-            push(i + 1, 'no')
-            prevWasHtml = false
-          }
-        }
-      } else if (!isSelfClose) {
-        htmlStack.push(tag)
-      }
+    if (fenceMatch) {
+      if (!wasInHtml) push(i, 'no')
+      fence = fenceMatch[1]
+      continue
     }
-    // 只有进入过 HTML 容器块的行才受追踪保护；普通段落里的行内 <span> 之类
-    // 开闭同在一行，栈已归零，不影响。此处栈非空 = 处在跨行 HTML 块内部。
-    if (htmlStack.length > 0) {
-      prevWasHtml = true
+
+    // ---- HTML 块追踪 ----
+    // 开标签只认行首（见 LEADING_TAG）；闭标签整行扫、只弹已在栈里的。
+    // 规则不对称是故意的：宁可不进 HTML 块，也不要把散文里的 <T> 当成结构。
+    const lead = LEADING_TAG.exec(line)
+    if (lead && !lead[1] && !lead[3]) {
+      const tag = lead[2].toLowerCase()
+      if (HTML_BLOCK_TAGS.has(tag)) htmlStack.push(tag)
+    }
+    CLOSE_TAG.lastIndex = 0
+    for (let m = CLOSE_TAG.exec(line); m; m = CLOSE_TAG.exec(line)) {
+      const idx = htmlStack.lastIndexOf(m[1].toLowerCase())
+      if (idx >= 0) htmlStack.length = idx
+    }
+
+    // 仍在 HTML 块内部：不产生任何切点
+    if (htmlStack.length > 0) continue
+    // 本行把栈闭合了 = HTML 块结束：整个块（含闭标签行）收成一个不可再切的片段
+    // （push 是 [start,end)，不补 i+1 会把闭标签行留给下一块）
+    if (wasInHtml) {
+      push(i + 1, 'no')
       continue
     }
 
@@ -153,12 +187,9 @@ export function splitMarkdownBlocks(content: string): string[] {
         if (LIST_OR_CONTAINER.test(prevNonEmpty)) continue
         // 容器块起点：整块（到下一个顶层块前）不可行级二次切分 → 'no'
         push(i, 'no')
-        prevWasHtml = false
         continue
       }
-      // 若刚结束的是 HTML 块，本切点收的是它 → 'no'
-      push(i, prevWasHtml ? 'no' : 'paragraph')
-      prevWasHtml = false
+      push(i, 'paragraph')
       continue
     }
   }

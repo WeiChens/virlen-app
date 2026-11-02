@@ -146,6 +146,79 @@ describe('splitMarkdownBlocks — 顶层块切分', () => {
     expect(det).toContain('<summary>')
     expect(det).toContain('第二段解析。')
   })
+
+  it('HTML 折叠块里的围栏代码块不会把折叠结构切开（回归）', () => {
+    // 真实形态：<details> 正文里夹着 ```rust 代码块 + 更多小节。围栏判定若在 HTML 块内部
+    // 产生切点，`<details>` 与 `</details>` 会落进不同片段，预览里只剩第一小节。
+    const md = [
+      long('折叠块之前的段落。', Math.ceil(BIG / 10)),
+      '',
+      '<details><summary>答案与解析</summary>',
+      '',
+      '**改法 1（最佳）：改签名为借用**',
+      '',
+      '```rust',
+      'fn print_len(s: &str) {',
+      '    println!("{}", s.len());',
+      '}',
+      '```',
+      '',
+      '**改法 2：调用方克隆**',
+      '',
+      '```rust',
+      'print_len(s.clone());',
+      '```',
+      '',
+      '**判据**：函数是否需要拥有这个值？',
+      '',
+      '</details>',
+      '',
+      '尾',
+    ].join('\n')
+    const blocks = splitMarkdownBlocks(md)
+    const det = blocks.find((b) => b.includes('<details>'))
+    expect(det).toBeDefined()
+    expect(det).toContain('</details>')
+    expect(det).toContain('fn print_len(s: &str) {')
+    expect(det).toContain('**改法 2：调用方克隆**')
+    expect(det).toContain('**判据**')
+    // 围栏块没被单独拎出去成块
+    expect(blocks.some((b) => b.startsWith('```'))).toBe(false)
+  })
+
+  it('折叠块正文里的行内 <i32> 不会把后面整篇吞成一块', () => {
+    const md = [
+      '<details>',
+      '<summary>答案</summary>',
+      '',
+      '- A 不可用：`String` 非 `Copy`',
+      '- C 不可用：`Vec<i32>` 非 `Copy`',
+      '- D 可用：`&&str` 是 `Copy`',
+      '',
+      '</details>',
+      '',
+      long('折叠块之后的长段落内容。', Math.ceil(BIG / 10)),
+    ].join('\n')
+    const blocks = splitMarkdownBlocks(md)
+    // 行内 <i32> 不能入栈：折叠块照常闭合，后面的长段落另成块
+    expect(blocks.length).toBeGreaterThan(1)
+    const det = blocks[0]
+    expect(det).toContain('<details>')
+    expect(det).toContain('</details>')
+  })
+
+  it('行首未闭合的 <p> 不会把后面整篇吞成一块', () => {
+    const md = [
+      '<p align="center">标题居中',
+      '',
+      long('段落一。', Math.ceil(BIG / 10)),
+      '',
+      long('段落二。', Math.ceil(BIG / 10)),
+    ].join('\n')
+    const blocks = splitMarkdownBlocks(md)
+    // 非容器标签不入栈：后面照常切（虚拟化不能被一个未闭合标签掀掉）
+    expect(blocks.length).toBeGreaterThan(1)
+  })
 })
 
 describe('splitMarkdownBlocks — 超长片段二次切分', () => {
