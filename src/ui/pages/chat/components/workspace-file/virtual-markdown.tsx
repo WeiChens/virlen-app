@@ -23,7 +23,7 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
-import { useVirtualizer } from '@tanstack/react-virtual'
+import { useVirtualizer, type VirtualItem, type Virtualizer } from '@tanstack/react-virtual'
 import MarkdownRenderer from '@/ui/pages/chat/components/message/markdown-renderer'
 import { splitMarkdownBlocks, MIN_VIRTUALIZE_CHARS } from './mdBlocks'
 import {
@@ -42,8 +42,15 @@ const ESTIMATED_BLOCK_HEIGHT = 120
 /** 视口外上下多渲染几块 */
 const OVERSCAN = 6
 
-/** 滚动容器（.wfp-preview）的 padding：虚拟坐标要扣掉这段（见 virtual-markdown.scss 头注） */
-const SCROLL_MARGIN = 14
+/**
+ * 首测补偿的容差：条目顶部在视口上方不足这个距离时，不再调 scrollTop。
+ * 首测分支（isFirstMeasure）只看 `itemStart < scrollOffset`，被 overscan 提前挂载的
+ * 顶部附近块一实测就会触发补偿 —— 向上滚时表现为视口内容突然整体位移（抽搐）。
+ * 跳转 / 锚点场景的偏移远大于这个值，不受影响。
+ */
+const FIRST_MEASURE_TOLERANCE = 240
+
+const SCROLL_MARGIN = 12
 
 interface Props {
   content: string
@@ -72,9 +79,27 @@ export default function VirtualMarkdown({ content, onLocalLink }: Props) {
     overscan: OVERSCAN,
     // 滚动容器有 padding（.wfp-preview 的 12px 14px）：虚拟块坐标从内容区起算，
     // 必须扣掉左右 padding（横向 padding 决定测量原点），否则首块被推开、末尾多一段空白
-    scrollMargin: SCROLL_MARGIN,
+    scrollMargin: 12,
     // 测量发生在提交阶段，库同步改 scrollTop 会在渲染中 flushSync(rerender) → React 告警
     useFlushSync: false,
+    // ⚠️ 该字段已在 virtual-core 3.17.10 运行时支持（见其 esm/index.js 的 measureNode），
+    // 但 VirtualizerOptions 类型尚未声明，这里用断言透传，等上游补齐类型后可去掉。
+    ...( {
+      // 向上滚动时不要补偿 scrollTop：未测量块（估算 120px）实测后普遍变大，
+      // 内容在视口上方膨胀时库若调整 scrollTop，整个预览会「抽一下」跳到别处。
+      // 这里接管补偿判定：完全在视口上方较远处才补偿（跳转/锚点场景），
+      // 视口附近（容差内）与向上滚动中一律不补偿。
+      shouldAdjustScrollPositionOnItemSizeChange: (
+        item: VirtualItem,
+        _delta: number,
+        instance: Virtualizer<HTMLDivElement, Element>,
+      ) => {
+        const offset = instance.scrollOffset + instance.scrollAdjustments
+        if (instance.scrollDirection === 'backward') return false
+        if (item.end <= offset) return true
+        return offset - item.start > FIRST_MEASURE_TOLERANCE
+      },
+    } as Partial<Parameters<typeof useVirtualizer>[0]> ),
   })
 
   // ==================== 查找（Ctrl/Cmd+F） ====================
