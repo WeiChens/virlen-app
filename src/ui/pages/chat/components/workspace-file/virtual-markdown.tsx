@@ -52,6 +52,12 @@ const FIRST_MEASURE_TOLERANCE = 240
 
 const SCROLL_MARGIN = 12
 
+/**
+ * 宽度变化后等多少帧才算「稳定」：面板的 `transition: width 200ms` 跑完后 RO 还会
+ * 再报一拍（rAF 延迟），给 3 帧余量（≈48ms）让它收敛。
+ */
+const WIDTH_STABLE_FRAMES = 3
+
 interface Props {
   content: string
   /** 本地文件链接接管（与 MarkdownRenderer 同义，透传下去） */
@@ -66,6 +72,25 @@ export default function VirtualMarkdown({ content, onLocalLink }: Props) {
   const blocks = useMemo(() => splitMarkdownBlocks(content), [content])
   // 短文档只有一块 → 不值得虚拟化，直接整篇渲染（DOM 结构与原来一致）
   const plain = blocks.length <= 1
+
+  /**
+   * 容器**宽度**正在变化（面板展开 / 收起 / 拖宽的过渡期）：
+   * 期间所有块都会被重测（文本折行变了 → 高度变了），但绝不能让虚拟库据此补偿
+   * scrollTop —— 那会把阅读位置逐帧推走（宽度变 → 折行变 → 视口上方块高度变 →
+   * 库补偿 → scrollTop 被推下去 → 又一批块进视口被重测 → 循环到过渡结束）。
+   * 宽度稳定后再按记住的 scrollTop 校正一次（折行变了总高也变了，位置可能差一点）。
+   *
+   * · `widthChanging` = 正在过渡中（`shouldAdjustScrollPositionOnItemSizeChange` 读它 → 全禁补偿）；
+   * · `anchorTop` / `anchorKey` = 过渡开始那一刻「视口顶端压在哪一块的什么位置」，
+   *   稳定后用它 + 重新测出的块位置校正 scrollTop（块高度变了，同一个 key 的 start 也变了）。
+   */
+  const widthChangeRef = useRef<{
+    changing: boolean
+    stableFrames: number
+    anchorKey: VirtualItem['key'] | null
+    anchorDelta: number
+    scrollTop: number
+  }>({ changing: false, stableFrames: 0, anchorKey: null, anchorDelta: 0, scrollTop: 0 })
 
   const virtualizer = useVirtualizer({
     count: blocks.length,
@@ -89,11 +114,16 @@ export default function VirtualMarkdown({ content, onLocalLink }: Props) {
       // 内容在视口上方膨胀时库若调整 scrollTop，整个预览会「抽一下」跳到别处。
       // 这里接管补偿判定：完全在视口上方较远处才补偿（跳转/锚点场景），
       // 视口附近（容差内）与向上滚动中一律不补偿。
+      //
+      // ⚠️ 容器宽度正在变化时（面板展开/收起/拖宽的过渡期）一律不补偿：
+      // 文本折行变 → 视口上方的块高度逐批变 → 库若补偿会把 scrollTop 一步步推走，
+      // 用户看到的就是「内容往下跑了」。宽度稳定后由外层的 rAF 校正一次位置。
       shouldAdjustScrollPositionOnItemSizeChange: (
         item: VirtualItem,
         _delta: number,
         instance: Virtualizer<HTMLDivElement, Element>,
       ) => {
+        if (widthChangeRef.current.changing) return false
         const offset = instance.scrollOffset + instance.scrollAdjustments
         if (instance.scrollDirection === 'backward') return false
         if (item.end <= offset) return true
@@ -101,6 +131,105 @@ export default function VirtualMarkdown({ content, onLocalLink }: Props) {
       },
     } as Partial<Parameters<typeof useVirtualizer>[0]> ),
   })
+
+  /**
+   * 容器宽度变化检测：面板展开 / 收起 / 拖宽时有 200ms 的 `transition: width`，
+   * 期间文本折行逐帧变 → 块高度逐批变 → 虚拟库重测。
+   *
+   * 这里在宽度变化的第一帧：
+   * 1. 抓住「此刻视口顶端压在哪一块」（anchor key + 块内偏移）；
+   * 2. 置 `changing = true`（`shouldAdjustScrollPositionOnItemSizeChange` 读它 → 全禁补偿）；
+   *
+   * 宽度稳定后（连续 N 帧不再变）：
+   * 3. 用同一个 anchor key 在重测后的 measurementsCache 里查它的新 start；
+   * 4. `scrollTop = newStart + anchorDelta` —— 折行变了块高度也变了，但用户压着的那一条
+   *    内容块的顶部还是应该在同一个偏移上。
+   *
+   * ⚠️ 只管宽度，不管高度：高度变化是宽度变化的后果（折行变了），不是独立事件。
+   * 拖宽手柄期间面板的 `.is-resizing` 关掉了过渡，宽度跟手走——那也走这条路径，
+   * 但宽度一帧一帧地变、每一帧都重测重校正，观感就是「内容跟着手走不跳」。
+   */
+  useEffect(() => {
+    if (plain) return // 整篇渲染没有虚拟层，浏览器自己管 scrollTop
+    const el = scrollRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    let lastWidth = el.clientWidth
+    let rafId: number | null = null
+
+    const onWidthChange = () => {
+      const cur = scrollRef.current
+      if (!cur) return
+      const width = cur.clientWidth
+      if (width === lastWidth) return
+      // 宽度变了：如果还没在 changing 中，抓住此刻的阅读错点
+      const state = widthChangeRef.current
+      if (!state.changing) {
+        const items = virtualizer.getVirtualItems()
+        const scrollTop = cur.scrollTop
+        if (items.length > 0) {
+          // 视口顶端压在哪个块上（items 按 start 升序）
+          let hit = items[0]
+          for (const vi of items) {
+            if (vi.start <= scrollTop) hit = vi
+            else break
+          }
+          state.anchorKey = hit.key
+          state.anchorDelta = scrollTop - hit.start
+        } else {
+          state.anchorKey = null
+          state.anchorDelta = 0
+        }
+        state.scrollTop = scrollTop
+        state.changing = true
+        state.stableFrames = 0
+      }
+      lastWidth = width
+      // 每次宽度变化都重置稳定计数
+      state.stableFrames = 0
+
+      // 用 rAF 轮询：宽度不再变化后连续 N 帧才收（过渡结束 + RO 的 rAF 延迟）
+      if (rafId !== null) cancelAnimationFrame(rafId)
+      const tick = () => {
+        rafId = null
+        const s = widthChangeRef.current
+        if (!s.changing) return
+        const el = scrollRef.current
+        if (!el) {
+          s.changing = false
+          return
+        }
+        if (++s.stableFrames >= WIDTH_STABLE_FRAMES) {
+          // 宽度已稳定：校正 scrollTop
+          s.changing = false
+          if (s.anchorKey !== null) {
+            // 在重测后的 measurementsCache 里查 anchor key 的新 start
+            const measurements = virtualizer.measurementsCache
+            const idx = measurements.findIndex(
+              (m) => m.key === s.anchorKey,
+            )
+            if (idx >= 0) {
+              const target = measurements[idx].start + s.anchorDelta
+              if (Math.abs(el.scrollTop - target) > 1) {
+                el.scrollTop = target
+                virtualizer.scrollOffset = target
+              }
+            }
+          }
+          return
+        }
+        rafId = requestAnimationFrame(tick)
+      }
+      rafId = requestAnimationFrame(tick)
+    }
+
+    const observer = new ResizeObserver(() => onWidthChange())
+    observer.observe(el)
+    return () => {
+      observer.disconnect()
+      if (rafId !== null) cancelAnimationFrame(rafId)
+      widthChangeRef.current.changing = false
+    }
+  }, [plain, virtualizer])
 
   // ==================== 查找（Ctrl/Cmd+F） ====================
   const [findOpen, setFindOpen] = useState(false)

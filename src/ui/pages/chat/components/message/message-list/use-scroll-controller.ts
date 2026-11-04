@@ -233,14 +233,21 @@ export function useScrollController({
    * 窗口期间**冻结意图**（`restoringRef`）：那几拍的滚动事件看到的位置都是被夹出来的，
    * 记下来只会让下一次纠正照着错的位置走。用户一动手（wheel / 触摸 / 按键）立即收手。
    * ⚠️ 切会话 / 首开的贴底由 `settleToBottom` 独占：它在跑的时候必须让路，否则两边抢写 scrollTop。
+   * ⚠️ 窗口最小化时虚拟库的 `calculateRange` 会因 `getSize()===0` 把 range 清成 null →
+   *   `virtualItems` 变空、所有行被卸载。恢复后 range 不会在同一帧就回来（RO → rAF 有延迟），
+   *   此时抢跑 `applyRestoreTarget` 会把 scrollTop 写到一个 measurementsCache 还是旧值 /
+   *   行还没挂载的位置上，下一帧 range 恢复、行重新挂载（估算→实测）时位置再跳一次 ——
+   *   这正是「最小化再打开列表闪动」的来源。所以复位窗口先等 `virtualItems` 非空再开始补偿。
    */
   const restoreLostPosition = useCallback(() => {
     if (needInitialBottomRef.current || settleTimerRef.current !== null) return
     const el = containerRef.current
     if (!el) return
     if (restoringRef.current) {
-      // 窗口已经在跑（高度分几拍回来时每一拍都会调到这里）：就地把新的一拍纠正掉
-      applyRestoreTarget(el)
+      // 窗口已经在跑（高度分几拍回来时每一拍都会调到这里）：就地把新的一拍纠正掉。
+      // 但 virtualItems 为空时（range 被最小化的 0 高度清掉了，还没恢复）不写 ——
+      // 此时 measurementsCache 可能是旧值，行也没挂载，写了下一帧还是会跳。
+      if (rowVirtualizer.getVirtualItems().length > 0) applyRestoreTarget(el)
       return
     }
     stopRestoreHold()
@@ -260,6 +267,15 @@ export function useScrollController({
         stopRestoreHold()
         return
       }
+      // 等虚拟列表的渲染范围恢复：窗口最小化时 range 会被清成 null（getSize===0），
+      // virtualItems 变空、行全部卸载；恢复后 range 要等 RO → rAF 才回来。
+      // 在它回来之前不写位置 —— 否则行重新挂载时估算→实测的高度跳变会再甩一次。
+      const virtualItems = rowVirtualizer.getVirtualItems()
+      if (virtualItems.length === 0) {
+        stable = 0
+        restoreRafRef.current = requestAnimationFrame(step)
+        return
+      }
       const moved = applyRestoreTarget(el)
       // 视口 0 那几拍（窗口还最小化着）不写也不计稳定：等它回来看高度
       stable = el.clientHeight > 0 && !moved ? stable + 1 : 0
@@ -275,6 +291,7 @@ export function useScrollController({
     needInitialBottomRef,
     settleTimerRef,
     stopRestoreHold,
+    rowVirtualizer,
   ])
 
   /**
