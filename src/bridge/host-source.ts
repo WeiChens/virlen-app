@@ -164,11 +164,7 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
       const path = normalizeWorkspace(session.workspace)
       if (path) counts.set(path, (counts.get(path) ?? 0) + 1)
     }
-    // Agent 默认目录 / 全局默认目录也算「现有」（会话数 0 不代表没有）
-    for (const agent of agentStore.listAgents()) {
-      const path = normalizeWorkspace(agent.defaultWorkspace)
-      if (path && !counts.has(path)) counts.set(path, 0)
-    }
+    // 全局默认目录也算「现有」（会话数 0 不代表没有）
     const fallback = normalizeWorkspace(settingsState.value.defaultWorkspace)
     if (fallback && !counts.has(fallback)) counts.set(fallback, 0)
     return [...counts.entries()]
@@ -654,21 +650,17 @@ export function createDesktopHostSource(deps: DesktopHostSourceDeps): DesktopHos
     },
 
     /**
-     * Agent 候选集：只给 id / name / 默认模型 / 默认工作目录，不含 systemPrompt、
+     * Agent 候选集：只给 id / name / 默认模型，不含 systemPrompt、
      * allowTools、skills、params。真正组装仍在 createSession 里。
      */
     listAgents(): AgentOptionDTO[] {
       acl.assert('session.agent')
-      const agents = agentStore.listAgents().map((agent) => {
-        const workspace = normalizeWorkspace(agent.defaultWorkspace)
-        return {
-          id: agent.id,
-          name: agent.name,
-          // 老数据可能缺默认模型 / 目录 → 缺了就不带字段
-          ...(agent.defaultModel ? { defaultModel: { ...agent.defaultModel } } : {}),
-          ...(workspace ? { defaultWorkspace: workspace } : {}),
-        }
-      })
+      const agents = agentStore.listAgents().map((agent) => ({
+        id: agent.id,
+        name: agent.name,
+        // 老数据可能缺默认模型 → 缺了就不带字段
+        ...(agent.defaultModel ? { defaultModel: { ...agent.defaultModel } } : {}),
+      }))
       auditOp('host.agent.list', undefined, `${agents.length} 个候选 Agent`)
       return agents
     },

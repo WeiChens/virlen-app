@@ -100,7 +100,7 @@ export async function createSession(
   const id = v4()
   const now = Date.now()
 
-  const realWorkspace = workspace || targetAgent.defaultWorkspace || undefined
+  const realWorkspace = workspace || undefined
   const systemPrompt = await assembleAgentPrompt(targetAgent, realWorkspace)
 
   const effectiveProvider =

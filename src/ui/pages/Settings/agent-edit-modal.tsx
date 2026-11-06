@@ -13,7 +13,6 @@ import { agentStore } from '@/ui/store'
 import { settingsState } from '@/ui/store'
 import { mcpStore } from '@/ui/store/mcpStore'
 import type { McpConflict } from '@/domain/mcp'
-import FolderSvg from '@/ui/components/icons/FolderSvg'
 import Select from '@/ui/components/shared/Select'
 import { listRegisteredSkills } from '@/skill'
 import { t, tpl } from '@/ui/i18n'
@@ -66,12 +65,12 @@ const TAB_NAMES = [
   '基础信息',
   '身份设定',
   '性格设定',
-  '模型与目录',
+  '模型设置',
   '工具选择',
   '技能选择',
 ]
 
-/** 「模型与目录」Tab 的下标 */
+/** 「模型设置」Tab 的下标 */
 const TAB_MODEL_AND_DIR = 3
 
 /** 参与校验的字段 */
@@ -95,7 +94,6 @@ interface FormValues {
   personality: string
   providerConfigId: string
   modelId: string
-  defaultWorkspace: string
   projectRulesFile: string
   allowTools: string[]
   skills: string[]
@@ -113,7 +111,6 @@ function initialValues(agent: Agent | null): FormValues {
       personality: '',
       providerConfigId: '',
       modelId: '',
-      defaultWorkspace: settingsState.value.defaultWorkspace,
       projectRulesFile: DEFAULT_PROJECT_RULES_FILE,
       // 新建时工具在初始化 effect 里异步补齐（默认全选），基线快照会跟着刷新
       allowTools: [],
@@ -129,7 +126,6 @@ function initialValues(agent: Agent | null): FormValues {
     personality: agent.personality,
     providerConfigId: agent.defaultModel?.providerConfigId,
     modelId: agent.defaultModel?.modelId,
-    defaultWorkspace: agent.defaultWorkspace,
     // 老数据没有该字段 → 显示默认值，保存后落库
     projectRulesFile: agent.projectRulesFile ?? DEFAULT_PROJECT_RULES_FILE,
     allowTools: [...agent.allowTools],
@@ -154,7 +150,6 @@ export default function AgentEditModal({
   const [personality, setPersonality] = useState('')
   const [providerConfigId, setProviderConfigId] = useState('')
   const [modelId, setModelId] = useState('')
-  const [defaultWorkspace, setDefaultWorkspace] = useState('')
   const [projectRulesFile, setProjectRulesFile] = useState('')
   /** 字段级校验错误（非空即表示该字段会被驳回；提交时统一刷新） */
   const [fieldErrors, setFieldErrors] = useState<
@@ -190,7 +185,6 @@ export default function AgentEditModal({
     personality,
     providerConfigId,
     modelId,
-    defaultWorkspace,
     projectRulesFile,
     allowTools,
     skills,
@@ -263,7 +257,6 @@ export default function AgentEditModal({
     setPersonality(init.personality)
     setProviderConfigId(init.providerConfigId)
     setModelId(init.modelId)
-    setDefaultWorkspace(init.defaultWorkspace)
     setProjectRulesFile(init.projectRulesFile)
     setAllowTools(init.allowTools)
     setSkills(init.skills)
@@ -396,7 +389,6 @@ export default function AgentEditModal({
       description: description.trim(),
       personality: personality.trim(),
       identity: identity.trim(),
-      defaultWorkspace: defaultWorkspace.trim(),
       projectRulesFile: projectRulesFile.trim(),
       defaultModel: {
         providerConfigId,
@@ -557,22 +549,6 @@ export default function AgentEditModal({
     e.preventDefault()
     setTab(next)
     tabRefs.current[next]?.focus()
-  }
-
-  async function pickFolder() {
-    try {
-      const { open } = await import('@tauri-apps/plugin-dialog')
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        defaultPath: defaultWorkspace,
-      })
-      if (selected) {
-        setDefaultWorkspace(selected.replace(/\\/g, '/'))
-      }
-    } catch {
-      // 非 Tauri 环境忽略
-    }
   }
 
   return (
@@ -898,29 +874,6 @@ export default function AgentEditModal({
               </div>
               <span className="form-hint">
                 {t('新对话默认使用此模型，可在对话中切换')}
-              </span>
-            </div>
-            <div className="form-group">
-              <label htmlFor="agent-workspace">{t('工作目录')}</label>
-              <div className="input-with-btn">
-                <input
-                  id="agent-workspace"
-                  type="text"
-                  value={defaultWorkspace}
-                  onChange={(e) => setDefaultWorkspace(e.target.value)}
-                  placeholder={t('例如：/home/user/projects 或留空')}
-                  autoComplete="off"
-                />
-                <button
-                  className="folder-btn"
-                  onClick={pickFolder}
-                  title={t('选择文件夹')}
-                  type="button">
-                  <FolderSvg fill="var(--bg-primary)" />
-                </button>
-              </div>
-              <span className="form-hint">
-                {t('设置后，该 Agent 创建的对话默认使用此目录')}
               </span>
             </div>
             <div className="form-group">

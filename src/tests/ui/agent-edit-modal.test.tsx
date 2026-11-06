@@ -43,7 +43,6 @@ const AGENT: Agent = {
   description: '写代码的',
   personality: '',
   identity: '',
-  defaultWorkspace: 'E:/proj',
   projectRulesFile: 'AGENTS.md',
   defaultModel: { providerConfigId: '', modelId: '' },
   allowTools: [],
@@ -140,7 +139,7 @@ describe('AgentEditModal', () => {
 
   it('规则文件非法路径：输入被驳回（不写入表单）并拦住保存', async () => {
     const { onSave } = await render(AGENT)
-    await act(async () => tabByText('模型与目录').click())
+    await act(async () => tabByText('模型设置').click())
 
     const input = el<HTMLInputElement>('#agent-rules-file')!
     expect(input.value).toBe('AGENTS.md')
@@ -151,7 +150,7 @@ describe('AgentEditModal', () => {
     expect(el<HTMLInputElement>('#agent-rules-file')!.value).toBe('AGENTS.md')
     expect(el('.form-error')?.textContent).toContain('相对路径')
     // Tab 上打红点 —— 用户在别的页签也知道这里有问题
-    expect(tabByText('模型与目录').className).toContain('has-error')
+    expect(tabByText('模型设置').className).toContain('has-error')
 
     // 挂着未修正的驳回 → 不允许保存（否则会拿旧值静默成功）
     await act(async () => el<HTMLButtonElement>('.btn-confirm')!.click())
@@ -160,7 +159,7 @@ describe('AgentEditModal', () => {
 
   it('规则文件合法路径：接受（含 ./ 归一化）并清掉报错', async () => {
     const { onSave } = await render(AGENT)
-    await act(async () => tabByText('模型与目录').click())
+    await act(async () => tabByText('模型设置').click())
 
     const input = el<HTMLInputElement>('#agent-rules-file')!
     await act(async () => setInputValue(input, './.cursor/rules.md'))
@@ -169,7 +168,7 @@ describe('AgentEditModal', () => {
       './.cursor/rules.md',
     )
     expect(el('.form-error')).toBeNull()
-    expect(tabByText('模型与目录').className).not.toContain('has-error')
+    expect(tabByText('模型设置').className).not.toContain('has-error')
 
     await act(async () => el<HTMLButtonElement>('.btn-confirm')!.click())
     expect(onSave).toHaveBeenCalledTimes(1)

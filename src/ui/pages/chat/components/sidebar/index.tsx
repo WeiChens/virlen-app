@@ -317,21 +317,10 @@ function ChatSidebar({
         sessionGroupType === 'agent' &&
         group.key !== UNGROUPED_KEY
       ) {
-        // 设置 agent，并把它的 defaultWorkspace 带上
+        // 设置 agent（工作目录不随 Agent 走，由用户自己选）
         chatState.setValue('selectedAgentId', group.key)
         chatState.setValue('selectedWorkspace', '')
         chatState.set({ currentSessionId: null, error: null })
-        const agent = agentStore.getAgent(group.key)
-        if (agent?.defaultWorkspace) {
-          setTimeout(
-            () =>
-              chatState.setValue(
-                'selectedWorkspace',
-                agent.defaultWorkspace!,
-              ),
-            0,
-          )
-        }
       }
     },
     [sessionGroupType],

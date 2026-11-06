@@ -1656,8 +1656,7 @@ function ChatView() {
           ].filter(Boolean),
           settingsState.availableModel,
         ),
-        selectedWorkspace:
-          agent.defaultWorkspace || settingsState.value.defaultWorkspace,
+        selectedWorkspace: settingsState.value.defaultWorkspace,
       })
     }
   }, [chatState.value.currentSessionId, settingsState.value.defaultWorkspace])

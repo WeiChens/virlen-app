@@ -310,37 +310,6 @@
     }
   }
 
-  // ==================== Input with Button ====================
-
-  .input-with-btn {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-
-    input {
-      flex: 1;
-    }
-
-    .folder-btn {
-      width: 36px;
-      height: 36px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border: 1px solid var(--border-color, #e5e5e5);
-      border-radius: 8px;
-      background: var(--accent-color, #fff);
-      cursor: pointer;
-      flex-shrink: 0;
-      transition: all 0.15s;
-
-      svg {
-        width: 16px;
-        height: 16px;
-      }
-    }
-  }
-
   // ==================== 列表检索框 ====================
 
   // 选择器写成 .form-group input.list-filter 是为了与其上方的

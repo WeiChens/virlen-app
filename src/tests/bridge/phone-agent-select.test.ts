@@ -61,7 +61,6 @@ function makeAgent(id: string, name: string, extra: Partial<Agent> = {}): Agent 
     // 下面这些字段是**本机机密**（提示词 / 工具白名单），投影里出现任何一个都是缺陷
     personality: 'SECRET-PERSONALITY',
     identity: 'SECRET-IDENTITY',
-    defaultWorkspace: 'E:/code/virlen-demo',
     defaultModel: { providerConfigId: 'p-openai', modelId: 'gpt-4o' },
     allowTools: ['read_file', 'write_file'],
     skills: ['SECRET-SKILL'],
@@ -117,7 +116,6 @@ beforeEach(() => {
   agentStore.saveAgent(makeAgent(AGENT_A, 'Virlen'))
   agentStore.saveAgent(
     makeAgent(AGENT_B, '代码评审员', {
-      defaultWorkspace: 'E:/code/another-project',
       defaultModel: { providerConfigId: 'p-anthropic', modelId: 'claude-sonnet-4' },
     }),
   )
@@ -130,7 +128,7 @@ afterEach(() => {
 })
 
 describe('host.agent.list —— 候选集是白名单投影', () => {
-  it('只给 id / name / 默认模型 / 默认工作目录（提示词与工具白名单不得外泄）', async () => {
+  it('只给 id / name / 默认模型（提示词与工具白名单不得外泄）', async () => {
     const h = setup()
     const { agents } = await h.caller.call('host.agent.list', {})
 
@@ -138,10 +136,9 @@ describe('host.agent.list —— 候选集是白名单投影', () => {
     expect(b).toBeTruthy()
     expect(b!.name).toBe('代码评审员')
     expect(b!.defaultModel).toEqual({ providerConfigId: 'p-anthropic', modelId: 'claude-sonnet-4' })
-    expect(b!.defaultWorkspace).toBe('E:/code/another-project')
 
     // 字段白名单：多一个字段（哪怕值看起来无害）都算投影失守
-    expect(Object.keys(b!).sort()).toEqual(['defaultModel', 'defaultWorkspace', 'id', 'name'])
+    expect(Object.keys(b!).sort()).toEqual(['defaultModel', 'id', 'name'])
     expect(JSON.stringify(agents)).not.toContain('SECRET')
 
     h.dispose()

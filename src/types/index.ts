@@ -224,7 +224,6 @@ export interface Agent {
   description: string
   personality: string
   identity: string
-  defaultWorkspace: string
   /**
    * 项目规则文件（相对工作目录的路径，默认 AGENTS.md）。会话创建时若存在则注入系统提示词；
    * 空串 = 不注入。老数据缺省时按默认值处理。

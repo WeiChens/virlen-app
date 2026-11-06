@@ -141,7 +141,7 @@ virlen-cli list-agent —— 列出 Agent（与桌面端同一份 app_settings.a
   -h, --help    显示本帮助
 
 说明:
-  Agent 配置（名称 / 描述 / 默认工作目录 / 默认模型 / 技能 / 工具白名单）
+  Agent 配置（名称 / 描述 / 默认模型 / 技能 / 工具白名单）
   自配置下沉后以数据库里的 `agents` 键为唯一源，桌面端与 CLI 读写同一份。
 ";
 

@@ -46,7 +46,7 @@ virlen-cli agent —— 交互式管理 Agent 配置（与桌面端同一份 app
 
 用法:
   virlen-cli agent add                交互向导：逐步录入姓名 / 描述 / 身份 / 性格 /
-                                      工作目录 / 规则文件 / 默认模型 / 工具 / 技能 / 参数
+                                      规则文件 / 默认模型 / 工具 / 技能 / 参数
   virlen-cli agent edit [<id>]        交互向导（不给 id 时从列表里选）；现有值作默认
   virlen-cli agent rm <id> [--yes]    删除（需确认；默认 Agent '__default__' 不可删）
   virlen-cli agent list [--json]      列出全部 Agent（同 list-agent）
@@ -196,7 +196,6 @@ struct AgentEnv {
     tools: Vec<(String, String)>,
     skills: Vec<String>,
     providers: Vec<ProviderOption>,
-    default_workspace: String,
 }
 
 impl AgentEnv {
@@ -238,11 +237,6 @@ impl AgentEnv {
             tools,
             skills,
             providers,
-            default_workspace: all
-                .get("defaultWorkspace")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
         })
     }
 }
@@ -272,7 +266,6 @@ struct AgentDraft {
     description: String,
     identity: String,
     personality: String,
-    default_workspace: String,
     project_rules_file: String,
     provider_config_id: String,
     model_id: String,
@@ -464,15 +457,7 @@ async fn collect(
         existing.map(|e| get_str(e, "personality")).as_deref(),
     )?;
 
-    // ── 4. 默认工作目录 ──
-    step!("默认工作目录");
-    let ws_default = existing
-        .map(|e| get_str(e, "defaultWorkspace"))
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| env.default_workspace.clone());
-    let default_workspace = p.text_opt("默认工作目录", Some(&ws_default))?;
-
-    // ── 5. 项目规则文件 ──
+    // ── 4. 项目规则文件 ──
     step!("项目规则文件");
     p.say("  相对工作目录的路径；文件存在时其内容会被注入系统提示词。留空 = 不注入。");
     let rules_default = existing
@@ -484,7 +469,7 @@ async fn collect(
         validate_project_rules_path,
     )?;
 
-    // ── 6. 默认模型 ──
+    // ── 5. 默认模型 ──
     step!("默认模型");
     let existing_model = existing
         .and_then(|e| e.get("defaultModel"))
@@ -522,7 +507,7 @@ async fn collect(
         }
     };
 
-    // ── 7. 工具白名单 ──
+    // ── 6. 工具白名单 ──
     step!("工具白名单");
     p.say("  勾选这个 Agent 能用哪些工具；留空 = 不限制。");
     let tool_labels: Vec<String> = env
@@ -545,7 +530,7 @@ async fn collect(
     let picked = p.multi("勾选工具：", &tool_labels, &tool_default)?;
     let allow_tools: Vec<String> = picked.iter().map(|i| env.tools[*i].0.clone()).collect();
 
-    // ── 8. 技能（没有技能目录就跳过，不占一个空步） ──
+    // ── 7. 技能（没有技能目录就跳过，不占一个空步） ──
     let mut skills: Vec<String> = existing.map(|e| get_strs(e, "skills")).unwrap_or_default();
     if env.skills.is_empty() {
         p.say("  （没发现技能：技能目录 <data_dir>/skills 为空或不存在，跳过）");
@@ -566,7 +551,7 @@ async fn collect(
         skills = picked.iter().map(|i| env.skills[*i].clone()).collect();
     }
 
-    // ── 9. 默认参数 ──
+    // ── 8. 默认参数 ──
     step!("默认参数");
     let temp_default = existing
         .and_then(|e| e.get("defaultParams"))
@@ -589,7 +574,7 @@ async fn collect(
         validate_top_p,
     )?)?;
 
-    // ── 10. 回显 + 确认 ──
+    // ── 9. 回显 + 确认 ──
     step!("确认写入");
     p.say(&format!("  id          : {}", id));
     p.say(&format!("  名称        : {}", name));
@@ -598,14 +583,6 @@ async fn collect(
         "  身份 / 性格 : {} / {}",
         if identity.is_empty() { "（空）" } else { &identity },
         if personality.is_empty() { "（空）" } else { &personality }
-    ));
-    p.say(&format!(
-        "  工作目录    : {}",
-        if default_workspace.is_empty() {
-            "（未设置）".to_string()
-        } else {
-            default_workspace.clone()
-        }
     ));
     p.say(&format!(
         "  规则文件    : {}",
@@ -651,7 +628,6 @@ async fn collect(
         description,
         identity,
         personality,
-        default_workspace,
         project_rules_file,
         provider_config_id,
         model_id,
@@ -677,7 +653,6 @@ async fn finish_write(
     patch.insert("description".into(), json!(draft.description));
     patch.insert("identity".into(), json!(draft.identity));
     patch.insert("personality".into(), json!(draft.personality));
-    patch.insert("defaultWorkspace".into(), json!(draft.default_workspace));
     patch.insert("projectRulesFile".into(), json!(draft.project_rules_file));
     patch.insert(
         "defaultModel".into(),

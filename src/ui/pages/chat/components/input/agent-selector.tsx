@@ -3,7 +3,7 @@
  * 仅当没有活跃会话时显示，用于选择默认 Agent
  */
 import { useState, useRef, useEffect } from 'react'
-import { chatState, agentStore, settingsState } from '@/ui/store'
+import { chatState, agentStore } from '@/ui/store'
 import AgentSvg from '@/ui/components/icons/AgentSvg'
 import DropDownSvg from '@/ui/components/icons/DropDownSvg'
 import { getDefaultAgent } from '@/services/agent-service'
@@ -43,17 +43,13 @@ export default function AgentSelector({ sessionId }: Props) {
     const agent = agentStore.getAgent(agentId)
     if (agent) {
       chatState.setValue('selectedAgentId', agentId)
-      // 将 Agent 的模型和工作目录复制到 chat-view 状态
+      // Agent 的模型复制到 chat-view 状态；工作目录不随 Agent 走（由用户自己选）
       if (agent.defaultModel?.providerConfigId && agent.defaultModel?.modelId) {
         chatState.setValue('selectModel', {
           providerConfigId: agent.defaultModel?.providerConfigId,
           modelId: agent.defaultModel?.modelId,
         })
       }
-      chatState.setValue(
-        'selectedWorkspace',
-        agent.defaultWorkspace || settingsState.value.defaultWorkspace,
-      )
     }
     setAgentOpen(false)
   }

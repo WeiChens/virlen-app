@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use crate::{EXIT_ERROR, EXIT_OK};
 
-use super::render::{brief, pad, pad_left, COL_COUNT, COL_DIR, COL_ID, COL_MODEL};
+use super::render::{brief, pad, pad_left, COL_COUNT, COL_ID, COL_MODEL};
 use super::*;
 
 // ==================== Agent 视图 ====================
@@ -29,9 +29,6 @@ pub(crate) struct AgentLite {
     pub(crate) name: String,
     #[serde(default)]
     pub(crate) description: String,
-    /// 默认工作目录（未配置时为空串）
-    #[serde(default)]
-    pub(crate) default_workspace: String,
     #[serde(default)]
     pub(crate) default_model: AgentDefaultModel,
     /// 启用的技能名
@@ -155,22 +152,16 @@ pub(crate) async fn run_agents(
     let _ = writeln!(out, "共 {} 个 Agent\n", agents.len());
     let _ = writeln!(
         out,
-        "{}  {}  {}  {}  名称",
+        "{}  {}  {}  名称",
         pad("ID", COL_ID),
         pad_left("会话数", COL_COUNT),
         pad("默认模型", COL_MODEL),
-        pad("默认工作目录", COL_DIR),
     );
     for a in &agents {
         let model = if a.default_model.model_id.trim().is_empty() {
             "-".to_string()
         } else {
             brief(&a.default_model.model_id, COL_MODEL)
-        };
-        let ws = if a.default_workspace.trim().is_empty() {
-            "-".to_string()
-        } else {
-            brief(&a.default_workspace, COL_DIR)
         };
         let name = if a.name.trim().is_empty() {
             a.id.clone()
@@ -179,11 +170,10 @@ pub(crate) async fn run_agents(
         };
         let _ = writeln!(
             out,
-            "{}  {}  {}  {}  {}",
+            "{}  {}  {}  {}",
             pad(&a.id, COL_ID),
             pad_left(&counts.get(&a.id).copied().unwrap_or(0).to_string(), COL_COUNT),
             pad(&model, COL_MODEL),
-            pad(&ws, COL_DIR),
             brief(&name, 30)
         );
     }

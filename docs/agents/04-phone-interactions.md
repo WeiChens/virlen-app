@@ -17,10 +17,10 @@
   同处的 `registerSessionToolHandler` 现在返回**归属令牌**，`unregisterSessionToolHandler(sessionId, token)` 校验通过才注销 —— 否则交错的 run（同会话重发 / 手机端与桌面端几乎同时发 / 暂停恢复）会互相删表，后一个的提问就掉进上面那条分支。回归用例：`src/tests/services/rust-engine-interaction.test.ts`。
 - **运行时状态由电脑侧权威**：错误文案来自 `sessionRuntimeState`（电脑侧写入），手机侧只做投影——所以「重新发送时清掉上一条错误」必须在电脑侧做（`host-source.ts::send` 与桌面 `chat-view.handleSend` 同构），否则手机会被补推的快照顶得反复弹同一条红条。
 - **Agent 选择（协议 0.6.0）**：新建会话时可指定**归属 Agent**（此前手机建的会话永远归默认 Agent）。
-  - 电脑侧：`host.agent.list` 给候选集（白名单：`id` / `name` / `defaultModel` / `defaultWorkspace`，**不含** `systemPrompt` / `allowTools` / `skills` / `params`）；`host.session.create` 的 `CreateSessionParams.agentId` 带归属，未知 id → `E_BAD_REQUEST` 并进审计（`host-source.ts::requireAgent`）；不传 = 默认 Agent（旧行为不变）。
+  - 电脑侧：`host.agent.list` 给候选集（白名单：`id` / `name` / `defaultModel`，**不含** `systemPrompt` / `allowTools` / `skills` / `params` / `defaultWorkspace`）；`host.session.create` 的 `CreateSessionParams.agentId` 带归属，未知 id → `E_BAD_REQUEST` 并进审计（`host-source.ts::requireAgent`）；不传 = 默认 Agent（旧行为不变）。
   - 权限位 `session.agent`（常量 `SESSION_AGENT_CAPABILITY`，见 `acl.ts`）：这是**权限**而不是功能标记 —— 选 Agent 就是选 systemPrompt / 工具白名单 / skills，所以 handler 里独立 `assert`，不靠手机端隐藏入口（§7-⑪）。
   - **已有会话的 Agent 不可改**：换 Agent 就是换提示词与工具白名单，历史对话会前后错配（与「工作目录只在新建时确定」同一条理由）。因此只有「新建时指定」，没有 `setAgent`。
-  - 手机端（`virlen-mobile`）：`store/chat.ts` 的 `draft.agentId` + `loadAgents()`，面板 `ui/components/NewChatPanel.tsx` + `ui/components/ModelPicker.tsx::AgentPicker`。**换 Agent 会清掉草稿里的模型 / 工作目录**（与桌面 `chat-view` 那条 effect 同语义）；旧电脑端没有该能力 → 选择器不显示，且创建时**不携带** `agentId`（否则会被静默丢掉，用户以为选了却没生效）。
+  - 手机端（`virlen-mobile`）：`store/chat.ts` 的 `draft.agentId` + `loadAgents()`，面板 `ui/components/NewChatPanel.tsx` + `ui/components/ModelPicker.tsx::AgentPicker`。**换 Agent 会清掉草稿里的模型**（与桌面 `chat-view` 那条 effect 同语义）；工作目录**不随 Agent 走**（2026-10 拍板：Agent 只管提示词与工具白名单，`defaultWorkspace` 字段已从前端 / Rust CLI / 候选集一起删掉，`agent.defaultWorkspace` 在手机端只剩「老电脑端才可能给」的兼容回落）；旧电脑端没有该能力 → 选择器不显示，且创建时**不携带** `agentId`（否则会被静默丢掉，用户以为选了却没生效）。
 - **工具消息的四个下行字段（白名单投影，`bridge/dto.ts::toMessageDTO`）**：`toolName` / `toolArgs`（折叠态一行）/ `toolArgsFull`（展开区完整入参）/ `text`。
   工具结果消息（`role:'tool'`）**自己只有结果文本**，名字与入参都在**发起此次调用的 assistant 消息**的 `toolCalls[]` 上 —— 靠 `buildToolCallIndex`（`toolCallId` → `{name, input}`，匹配规则与桌面 `resolveJumpAnchorId` 一致）接起来。
   `toolArgs` 是**一行摘要**（`src/store/chat.ts` / `npm run build` / `在 src 中搜索 sessionError`），由共享包的 `summarizeToolArgs` 生成（真实电脑侧与演示宿主 `testing/mock-host.ts` 共用同一份，避免两端漂移）；路径按会话工作目录缩短（`toShortPath`，与桌面卡片同口径）。

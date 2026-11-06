@@ -26,8 +26,8 @@ export async function assembleAgentPrompt(
   agent: Agent,
   workingDir?: string,
 ): Promise<string> {
-  // 生效工作目录：会话指定 > Agent 默认（与 session.workspace 的取值口径一致）
-  const effectiveWorkspace = workingDir || agent.defaultWorkspace
+  // 生效工作目录：会话指定 > 全局默认（与 session.workspace 的取值口径一致）
+  const effectiveWorkspace = workingDir || settingsState.value.defaultWorkspace
 
   const envPrompt = settingsState.value.allowEnvPrompt
     ? await getEnvPrompt(effectiveWorkspace)
@@ -108,7 +108,6 @@ async function _buildDefaultAgent(): Promise<Agent> {
     description: '全能型 AI 助手，可以使用所有内置工具',
     personality: '',
     identity: '',
-    defaultWorkspace: '',
     projectRulesFile: DEFAULT_PROJECT_RULES_FILE,
     defaultModel: {
       providerConfigId: '',

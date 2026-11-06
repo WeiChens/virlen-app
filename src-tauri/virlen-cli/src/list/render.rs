@@ -19,7 +19,6 @@ pub(crate) const COL_TIME: usize = 16;
 pub(crate) const COL_MODEL: usize = 20;
 pub(crate) const COL_TITLE: usize = 40;
 pub(crate) const COL_COUNT: usize = 6;
-pub(crate) const COL_DIR: usize = 28;
 /// 「上下文」列：放得下 `100% 200k`（表头写 `上下文/<窗口>`，即 100% 对应的窗口）
 pub(crate) const COL_CTX: usize = 13;
 /// 「条数」列（对话消息数）

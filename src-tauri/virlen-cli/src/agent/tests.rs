@@ -150,7 +150,6 @@ fn test_env() -> AgentEnv {
             label: "我的供应商  [p1]".into(),
             models: vec!["m1".into(), "m2".into()],
         }],
-        default_workspace: "D:/ws".into(),
     }
 }
 
@@ -161,7 +160,6 @@ fn existing_agent() -> Value {
         "description": "干活用的",
         "identity": "你是助手",
         "personality": "严谨",
-        "defaultWorkspace": "D:/proj",
         "projectRulesFile": "AGENTS.md",
         "defaultModel": { "providerConfigId": "p1", "modelId": "m2" },
         "allowTools": ["read_file"],
@@ -172,12 +170,10 @@ fn existing_agent() -> Value {
     })
 }
 
-/// 编辑流程共消费 13 行输入
-/// （名称 / 描述 / 身份 / 性格 / 工作目录 / 规则文件 / 供应商 / 模型 / 工具 / 技能 / 温度 / topP / 确认）
+/// 编辑流程共消费 12 行输入
+/// （名称 / 描述 / 身份 / 性格 / 规则文件 / 供应商 / 模型 / 工具 / 技能 / 温度 / topP / 确认）
 fn edit_script() -> Vec<&'static str> {
-    vec![
-        "", "", "", "", "", "", "", "", "", "", "", "", "y",
-    ]
+    vec!["", "", "", "", "", "", "", "", "", "", "", "y"]
 }
 
 #[tokio::test]
@@ -198,7 +194,6 @@ async fn edit_wizard_collects_existing_values_as_defaults() {
     assert_eq!(draft.description, "干活用的");
     assert_eq!(draft.identity, "你是助手");
     assert_eq!(draft.personality, "严谨");
-    assert_eq!(draft.default_workspace, "D:/proj");
     assert_eq!(draft.project_rules_file, "AGENTS.md");
     assert_eq!(draft.provider_config_id, "p1");
     assert_eq!(draft.model_id, "m2");
@@ -208,7 +203,7 @@ async fn edit_wizard_collects_existing_values_as_defaults() {
     assert_eq!(draft.top_p, 0.9);
 
     assert!(printed.contains("第 1 步：名称"), "{}", printed);
-    assert!(printed.contains("第 10 步：确认写入"), "{}", printed);
+    assert!(printed.contains("第 9 步：确认写入"), "{}", printed);
     assert!(printed.contains("默认使用哪个模型？"), "{}", printed);
 }
 
@@ -237,7 +232,6 @@ async fn add_wizard_requires_name_and_selects_all_tools_by_default() {
         "", "跑腿的", // 描述（空 → 重问）
         "",     // 身份：空
         "",     // 性格：空
-        "",     // 工作目录：取 env 默认（D:/ws）
         "",     // 规则文件：AGENTS.md
         "",     // 供应商：第 1 个
         "",     // 模型：第 1 个
@@ -257,7 +251,6 @@ async fn add_wizard_requires_name_and_selects_all_tools_by_default() {
 
     assert_eq!(draft.name, "新助手");
     assert_eq!(draft.description, "跑腿的");
-    assert_eq!(draft.default_workspace, "D:/ws");
     assert_eq!(draft.project_rules_file, "AGENTS.md");
     assert_eq!(draft.provider_config_id, "p1");
     assert_eq!(draft.model_id, "m1");
@@ -280,7 +273,7 @@ async fn wizard_survives_without_any_provider() {
     env.providers.clear();
     let script = vec![
         "A", "D", "", "", // 名称/描述/身份/性格
-        "", "",  // 工作目录 / 规则文件
+        "",  // 规则文件
         "",      // 工具
         "",      // 技能
         "", "",  // 温度 / topP
@@ -304,10 +297,8 @@ async fn wizard_survives_without_any_provider() {
 async fn skills_step_is_skipped_when_none_available() {
     let mut env = test_env();
     env.skills.clear();
-    // 技能那步被跳过 → 只需 11 个空行 + 最后的 y（共 12 行）
-    let script = vec![
-        "", "", "", "", "", "", "", "", "", "", "", "y",
-    ];
+    // 技能那步被跳过 → 只需 10 个空行 + 最后的 y（共 11 行）
+    let script = vec!["", "", "", "", "", "", "", "", "", "", "y"];
 
     let mut input = cursor(&script);
     let mut out: Vec<u8> = Vec::new();
@@ -318,5 +309,5 @@ async fn skills_step_is_skipped_when_none_available() {
 
     assert_eq!(draft.skills, vec!["reviewer"], "已有技能应原样保留");
     assert!(printed.contains("跳过"), "{}", printed);
-    assert!(printed.contains("第 9 步：确认写入"), "{}", printed);
+    assert!(printed.contains("第 8 步：确认写入"), "{}", printed);
 }

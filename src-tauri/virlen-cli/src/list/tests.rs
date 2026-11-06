@@ -49,7 +49,6 @@ fn agent(id: &str, name: &str) -> AgentLite {
         id: id.to_string(),
         name: name.to_string(),
         description: String::new(),
-        default_workspace: String::new(),
         default_model: AgentDefaultModel::default(),
         skills: Vec::new(),
         allow_tools: Vec::new(),
@@ -494,7 +493,6 @@ async fn list_agents_end_to_end_with_session_counts() {
                 "id": "a1",
                 "name": "Virlen",
                 "description": "全能助手",
-                "defaultWorkspace": "E:/proj",
                 "defaultModel": { "providerConfigId": "p1", "modelId": "m1" }
             },
             { "id": "a2", "name": "Reviewer" }
@@ -519,7 +517,6 @@ async fn list_agents_end_to_end_with_session_counts() {
     let text = String::from_utf8_lossy(&out).to_string();
     assert!(text.contains("共 2 个 Agent"), "text={text}");
     assert!(text.contains("Virlen") && text.contains("Reviewer"));
-    assert!(text.contains("E:/proj"), "含默认工作目录");
 
     // JSON：会话数按 agent_id 聚合
     let mut out: Vec<u8> = Vec::new();

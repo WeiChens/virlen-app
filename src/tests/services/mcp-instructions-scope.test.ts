@@ -81,7 +81,6 @@ function agentWith(allowTools: string[] | undefined): Agent {
     description: '',
     personality: '',
     identity: '',
-    defaultWorkspace: '',
     projectRulesFile: 'AGENTS.md',
     defaultModel: { providerConfigId: '', modelId: '' },
     // `undefined` 是「没有白名单 = 全部工具」的老数据形态（类型上是 string[])

@@ -23,7 +23,6 @@ function agent(id: string, allowTools: string[], updatedAt = 1): Agent {
     description: '',
     personality: '',
     identity: '',
-    defaultWorkspace: '',
     projectRulesFile: 'AGENTS.md',
     defaultModel: { providerConfigId: 'p1', modelId: 'm1' },
     allowTools,

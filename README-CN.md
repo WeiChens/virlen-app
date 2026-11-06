@@ -479,7 +479,7 @@ pnpm cli run --workspace D:/proj "改一下这个项目" # 工作目录（默认
 pnpm cli list-session                  # 会话列表（默认最近 50 条；--limit 0 = 全部）
 pnpm cli list-session -g agent         # 按 Agent 分组（-g workdir = 按工作目录）
 pnpm cli list-session -g workdir --json
-pnpm cli list-agent                    # Agent 列表（含各自会话数 / 默认模型 / 默认工作目录）
+pnpm cli list-agent                    # Agent 列表（含各自会话数 / 默认模型）
 pnpm cli list-agent --json
 ```
 
