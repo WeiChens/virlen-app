@@ -21,6 +21,21 @@
   > .wfp-preview:focus {
     outline: none;
   }
+
+  /* 切会话恢复期间（块重新挂载 + scrollTop 校正那几帧）内容在跳动：
+     用 opacity:0 遮住跳动，校正完成后去掉 class，CSS 过渡 opacity 0→1 平滑淡入。
+     只挂在虚拟模式下（plain 文档不虚拟化、没有跳动问题）。
+     ⚠️ 加 class 时必须瞬间变 0（不能过渡——那几帧内容正在跳动，过渡的话用户看得到跳动），
+     去掉 class 时才过渡 0→1。所以 transition 写在「无 is-restoring」的选择器上，
+     is-restoring 选择器只有 opacity:0 不带 transition。 */
+  > .wfp-preview.virtual-md {
+    transition: opacity 500ms ease-out;
+  }
+
+  > .wfp-preview.is-restoring {
+    opacity: 0;
+    transition: none;
+  }
 }
 
 .virtual-md-inner {

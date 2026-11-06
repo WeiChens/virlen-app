@@ -696,7 +696,15 @@ function WorkspaceFilePanel({
       if (showPreview) {
         if (previewKind === 'markdown') {
           // 长文档虚拟渲染（只渲染视口附近的块）；短文档组件内部退化为整篇渲染，与原行为一致
-          return <VirtualMarkdown content={draft} onLocalLink={handleLocalLink} />
+          // `active` 给它做「从不可见恢复」（切会话 / 切标签 / 面板展开）时的位置校正 + 淡入：
+          // 面板 display:none 期间浏览器会归零 scrollTop，回来时必须自己找回阅读位置。
+          return (
+            <VirtualMarkdown
+              content={draft}
+              onLocalLink={handleLocalLink}
+              active={active}
+            />
+          )
         }
         if (previewKind === 'html') {
           if (previewBase === undefined) {

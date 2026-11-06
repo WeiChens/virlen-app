@@ -36,6 +36,7 @@ import {
 } from './md-find'
 import MdFindWidget from './md-find-widget'
 import './virtual-markdown.scss'
+import { sleep } from '@/utils/common'
 
 /** 未测量前的估算块高：只决定首帧占位，测过即被真实值取代 */
 const ESTIMATED_BLOCK_HEIGHT = 120
@@ -58,13 +59,25 @@ const SCROLL_MARGIN = 12
  */
 const WIDTH_STABLE_FRAMES = 3
 
+/**
+ * 容器高度从 0 恢复后等多少帧再校正位置：`display:none` → `display:flex` 恢复时，
+ * 浏览器恢复 `scrollTop` 与 RO 报告新高度有时序差，给几帧让布局稳定后再按锚点校正。
+ */
+const HEIGHT_RESTORE_FRAMES = 3
+
 interface Props {
   content: string
   /** 本地文件链接接管（与 MarkdownRenderer 同义，透传下去） */
   onLocalLink?: (href: string) => void
+  /**
+   * 此刻是不是**正在被看**（当前标签 + 面板未收起，由 SidePanel 给）。
+   * 切会话 / 切标签 / 面板收起再展开时它会 false → true 翻转 —— 那就是
+   * 「容器刚从 display:none 恢复」的唯一可靠信号（不靠 offsetParent / RO 猜）。
+   */
+  active?: boolean
 }
 
-export default function VirtualMarkdown({ content, onLocalLink }: Props) {
+export default function VirtualMarkdown({ content, onLocalLink, active = true }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   /** 包一层（查找浮层的定位基准 + 找自己那个输入框） */
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -74,6 +87,13 @@ export default function VirtualMarkdown({ content, onLocalLink }: Props) {
   const plain = blocks.length <= 1
 
   /**
+   * 切会话恢复中（display:none → display:flex）：块重新挂载 + scrollTop 校正那几帧
+   * 内容在跳动，用 opacity:0 遮住；校正完成后去掉 class，CSS 过渡 opacity 0→1 平滑淡入。
+   * plain 文档不虚拟化、没有跳动问题，不需要这个遮罩。
+   */
+  const [restoring, setRestoring] = useState(false)
+
+  /**
    * 容器**宽度**正在变化（面板展开 / 收起 / 拖宽的过渡期）：
    * 期间所有块都会被重测（文本折行变了 → 高度变了），但绝不能让虚拟库据此补偿
    * scrollTop —— 那会把阅读位置逐帧推走（宽度变 → 折行变 → 视口上方块高度变 →
@@ -81,8 +101,13 @@ export default function VirtualMarkdown({ content, onLocalLink }: Props) {
    * 宽度稳定后再按记住的 scrollTop 校正一次（折行变了总高也变了，位置可能差一点）。
    *
    * · `widthChanging` = 正在过渡中（`shouldAdjustScrollPositionOnItemSizeChange` 读它 → 全禁补偿）；
-   * · `anchorTop` / `anchorKey` = 过渡开始那一刻「视口顶端压在哪一块的什么位置」，
+   * · `anchorKey` / `anchorDelta` = 过渡开始那一刻「视口顶端压在哪一块的什么位置」，
    *   稳定后用它 + 重新测出的块位置校正 scrollTop（块高度变了，同一个 key 的 start 也变了）。
+   *
+   * 另一份状态 `visibilityAnchor` 用于切会话（`display:none` → `display:flex`）的位置恢复：
+   * 面板 `hidden` 时容器高度变 0 → 浏览器把 scrollTop 归零，虚拟库的 scrollOffset 却还留着旧值；
+   * 恢复时浏览器恢复 scrollTop 的量不确定（0~旧值），且与 RO 报高度有时序差 → 位置偏下。
+   * 恢复前记住「视口顶端在哪一块的什么位置」，恢复后用重新测出的块位置校正 scrollTop。
    */
   const widthChangeRef = useRef<{
     changing: boolean
@@ -90,7 +115,10 @@ export default function VirtualMarkdown({ content, onLocalLink }: Props) {
     anchorKey: VirtualItem['key'] | null
     anchorDelta: number
     scrollTop: number
-  }>({ changing: false, stableFrames: 0, anchorKey: null, anchorDelta: 0, scrollTop: 0 })
+    /** 切会话显隐恢复：容器高度从 0 恢复时的锚点（null = 没在恢复中） */
+    visibilityAnchor: { key: VirtualItem['key']; delta: number } | null
+    visibilityFrames: number
+  }>({ changing: false, stableFrames: 0, anchorKey: null, anchorDelta: 0, scrollTop: 0, visibilityAnchor: null, visibilityFrames: 0 })
 
   const virtualizer = useVirtualizer({
     count: blocks.length,
@@ -107,9 +135,22 @@ export default function VirtualMarkdown({ content, onLocalLink }: Props) {
     scrollMargin: 12,
     // 测量发生在提交阶段，库同步改 scrollTop 会在渲染中 flushSync(rerender) → React 告警
     useFlushSync: false,
+    // 量到 0 不收：0 只表示「这一行还没布局」——切会话时面板 `display:none` 会让 RO 报出 0 高度，
+    // 库默认实现会把它写进 itemSizeCache → 切回来后块重测的 delta = realHeight - 0 = realHeight，
+    // 触发 scrollTop 补偿，向上滚时表现为内容整体位移（抽搐）。
+    // 与聊天区 use-virtual-list 的 measureRowHeight 同一套口径：量到 0 返回缓存值 / 估算值占位。
+    measureElement: (element, entry, instance) => {
+      const box = entry?.borderBoxSize?.[0]
+      const height = box ? Math.round(box.blockSize) : (element as HTMLElement).offsetHeight
+      if (height > 0) return height
+      const index = instance.indexFromElement(element)
+      const key = index >= 0 ? instance.options.getItemKey(index) : null
+      const cached = key === null ? undefined : instance.itemSizeCache.get(key)
+      return cached !== undefined && cached > 0 ? cached : ESTIMATED_BLOCK_HEIGHT
+    },
     // ⚠️ 该字段已在 virtual-core 3.17.10 运行时支持（见其 esm/index.js 的 measureNode），
     // 但 VirtualizerOptions 类型尚未声明，这里用断言透传，等上游补齐类型后可去掉。
-    ...( {
+    ...({
       // 向上滚动时不要补偿 scrollTop：未测量块（估算 120px）实测后普遍变大，
       // 内容在视口上方膨胀时库若调整 scrollTop，整个预览会「抽一下」跳到别处。
       // 这里接管补偿判定：完全在视口上方较远处才补偿（跳转/锚点场景），
@@ -123,13 +164,14 @@ export default function VirtualMarkdown({ content, onLocalLink }: Props) {
         _delta: number,
         instance: Virtualizer<HTMLDivElement, Element>,
       ) => {
-        if (widthChangeRef.current.changing) return false
+        const state = widthChangeRef.current
+        if (state.changing || state.visibilityAnchor !== null) return false
         const offset = instance.scrollOffset + instance.scrollAdjustments
         if (instance.scrollDirection === 'backward') return false
         if (item.end <= offset) return true
         return offset - item.start > FIRST_MEASURE_TOLERANCE
       },
-    } as Partial<Parameters<typeof useVirtualizer>[0]> ),
+    } as Partial<Parameters<typeof useVirtualizer>[0]>),
   })
 
   /**
@@ -154,82 +196,186 @@ export default function VirtualMarkdown({ content, onLocalLink }: Props) {
     const el = scrollRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
     let lastWidth = el.clientWidth
-    let rafId: number | null = null
+    let widthRafId: number | null = null
 
-    const onWidthChange = () => {
+    const onResize = () => {
       const cur = scrollRef.current
       if (!cur) return
       const width = cur.clientWidth
-      if (width === lastWidth) return
-      // 宽度变了：如果还没在 changing 中，抓住此刻的阅读错点
       const state = widthChangeRef.current
-      if (!state.changing) {
-        const items = virtualizer.getVirtualItems()
-        const scrollTop = cur.scrollTop
-        if (items.length > 0) {
-          // 视口顶端压在哪个块上（items 按 start 升序）
-          let hit = items[0]
-          for (const vi of items) {
-            if (vi.start <= scrollTop) hit = vi
-            else break
-          }
-          state.anchorKey = hit.key
-          state.anchorDelta = scrollTop - hit.start
-        } else {
-          state.anchorKey = null
-          state.anchorDelta = 0
-        }
-        state.scrollTop = scrollTop
-        state.changing = true
-        state.stableFrames = 0
-      }
-      lastWidth = width
-      // 每次宽度变化都重置稳定计数
-      state.stableFrames = 0
 
-      // 用 rAF 轮询：宽度不再变化后连续 N 帧才收（过渡结束 + RO 的 rAF 延迟）
-      if (rafId !== null) cancelAnimationFrame(rafId)
-      const tick = () => {
-        rafId = null
-        const s = widthChangeRef.current
-        if (!s.changing) return
-        const el = scrollRef.current
-        if (!el) {
-          s.changing = false
-          return
+      // ---- 宽度变化（面板展开 / 收起 / 拖宽过渡）----
+      if (width !== lastWidth) {
+        // 宽度变了：如果还没在 changing 中，抓住此刻的阅读错点
+        if (!state.changing) {
+          const items = virtualizer.getVirtualItems()
+          const scrollTop = cur.scrollTop
+          if (items.length > 0) {
+            // 视口顶端压在哪个块上（items 按 start 升序）
+            let hit = items[0]
+            for (const vi of items) {
+              if (vi.start <= scrollTop) hit = vi
+              else break
+            }
+            state.anchorKey = hit.key
+            state.anchorDelta = scrollTop - hit.start
+          } else {
+            state.anchorKey = null
+            state.anchorDelta = 0
+          }
+          state.scrollTop = scrollTop
+          state.changing = true
+          state.stableFrames = 0
         }
-        if (++s.stableFrames >= WIDTH_STABLE_FRAMES) {
-          // 宽度已稳定：校正 scrollTop
-          s.changing = false
-          if (s.anchorKey !== null) {
-            // 在重测后的 measurementsCache 里查 anchor key 的新 start
-            const measurements = virtualizer.measurementsCache
-            const idx = measurements.findIndex(
-              (m) => m.key === s.anchorKey,
-            )
-            if (idx >= 0) {
-              const target = measurements[idx].start + s.anchorDelta
-              if (Math.abs(el.scrollTop - target) > 1) {
-                el.scrollTop = target
-                virtualizer.scrollOffset = target
+        lastWidth = width
+        // 每次宽度变化都重置稳定计数
+        state.stableFrames = 0
+
+        // 用 rAF 轮询：宽度不再变化后连续 N 帧才收（过渡结束 + RO 的 rAF 延迟）
+        if (widthRafId !== null) cancelAnimationFrame(widthRafId)
+        const tick = () => {
+          widthRafId = null
+          const s = widthChangeRef.current
+          if (!s.changing) return
+          const el = scrollRef.current
+          if (!el) {
+            s.changing = false
+            return
+          }
+          if (++s.stableFrames >= WIDTH_STABLE_FRAMES) {
+            // 宽度已稳定：校正 scrollTop
+            s.changing = false
+            if (s.anchorKey !== null) {
+              // 在重测后的 measurementsCache 里查 anchor key 的新 start
+              const measurements = virtualizer.measurementsCache
+              const idx = measurements.findIndex(
+                (m) => m.key === s.anchorKey,
+              )
+              if (idx >= 0) {
+                const target = measurements[idx].start + s.anchorDelta
+                if (Math.abs(el.scrollTop - target) > 1) {
+                  el.scrollTop = target
+                  virtualizer.scrollOffset = target
+                }
               }
             }
+            return
           }
-          return
+          widthRafId = requestAnimationFrame(tick)
         }
-        rafId = requestAnimationFrame(tick)
+        widthRafId = requestAnimationFrame(tick)
       }
-      rafId = requestAnimationFrame(tick)
     }
 
-    const observer = new ResizeObserver(() => onWidthChange())
+    const observer = new ResizeObserver(() => onResize())
     observer.observe(el)
     return () => {
       observer.disconnect()
-      if (rafId !== null) cancelAnimationFrame(rafId)
+      if (widthRafId !== null) cancelAnimationFrame(widthRafId)
       widthChangeRef.current.changing = false
     }
   }, [plain, virtualizer])
+
+  /**
+   * 从「不可见」回到「可见」（切会话切回来 / 切标签 / 面板收起再展开）。
+   *
+   * 面板 `display:none` 期间容器高度为 0 → 浏览器把 scrollTop 归零，而虚拟库的
+   * `scrollOffset` 还留着离开前那次的值；恢复时浏览器把 scrollTop 还原多少并不确定
+   *（0~旧值，取决于 layout 时序，这就是「位置往下偏 n 像素且 n 不定」的来源）。
+   *
+   * 这里在恢复的那一刻抓住「视口顶端压在哪一块的什么位置」→ 等块重新挂载 + 测量完
+   * → 用它在重测后的 measurementsCache 里校正 scrollTop。
+   * 同时用 `restoring` 遮住那几帧的跳动（opacity:0），校正完去掉 → CSS 淡入。
+   *
+   * ⚠️ 信号用 `active`（React 数据流）而不是 offsetParent / RO：Chromium 的 RO 在
+   * `display:none` 时不报回调（没有盒模型），靠它根本检测不到「离开过」。
+   */
+  const prevActiveRef = useRef(active)
+  useEffect(() => {
+    const prev = prevActiveRef.current
+    prevActiveRef.current = active
+    // 首次挂载（prev === active）不是「恢复」；只有 false → true 才是
+
+    if (prev || !active) return
+
+    const state = widthChangeRef.current
+
+    // 抓锚点：**此刻** virtualizer.scrollOffset 还是离开前那次的值
+    //（DOM 的 scrollTop 可能已被浏览器归零，不能拿它算）
+    const anchorOf = (): { key: VirtualItem['key']; delta: number } | null => {
+      const offset = virtualizer.scrollOffset ?? 0
+      if (offset <= 0) return null
+      const measurements = virtualizer.measurementsCache
+      if (measurements.length === 0) return null
+      let lo = 0
+      let hi = measurements.length - 1
+      let hit = 0
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1
+        if (measurements[mid].start <= offset) {
+          hit = mid
+          lo = mid + 1
+        } else {
+          hi = mid - 1
+        }
+      }
+      return {
+        key: measurements[hit].key,
+        delta: offset - measurements[hit].start,
+      }
+    }
+
+    if (plain) {
+      // 整篇渲染：没有虚拟层、没有跳动，不需要遮罩也不需要锚点校正
+      return
+    }
+
+    const anchor = anchorOf()
+    if (anchor) {
+      // 告诉 shouldAdjustScrollPositionOnItemSizeChange「这几帧不要补偿」
+      state.visibilityAnchor = { key: anchor.key, delta: anchor.delta }
+      state.visibilityFrames = 0
+    }
+    // 先遮住：接下来几帧块在重新挂载 / 位置在校正，会跳动
+    setRestoring(true)
+
+    let rafId = 0
+    const tick = () => {
+      rafId = 0
+      // 等块重新挂载 + 测量：连续 HEIGHT_RESTORE_FRAMES 帧后再校正
+      if (++state.visibilityFrames < HEIGHT_RESTORE_FRAMES) {
+        rafId = requestAnimationFrame(tick)
+        return
+      }
+      const el = scrollRef.current
+      if (el && anchor) {
+        // 用锚点 key 在重测后的 measurementsCache 里查它的新 start
+        const measurements = virtualizer.measurementsCache
+        const idx = measurements.findIndex((m) => m.key === anchor.key)
+        if (idx >= 0) {
+          const target = Math.max(0, measurements[idx].start + anchor.delta)
+          if (Math.abs(el.scrollTop - target) > 1) {
+            el.scrollTop = target
+            // 库内部偏移跟着走：否则下一帧按旧偏移算渲染范围（视口空一块 / 错行）
+            virtualizer.scrollOffset = target
+          }
+        }
+      }
+      state.visibilityAnchor = null
+      // 校正完成：去掉遮罩 → CSS 过渡 opacity 0→1 平滑淡入
+      // setRestoring(false)
+      sleep(120).then(() => setRestoring(false))
+    }
+    rafId = requestAnimationFrame(tick)
+
+    return () => {
+      if (rafId !== 0) {
+        cancelAnimationFrame(rafId)
+      }
+      state.visibilityAnchor = null
+      setRestoring(false)
+    }
+  }, [active, plain, virtualizer])
 
   // ==================== 查找（Ctrl/Cmd+F） ====================
   const [findOpen, setFindOpen] = useState(false)
@@ -244,8 +390,9 @@ export default function VirtualMarkdown({ content, onLocalLink }: Props) {
     () => findMatches(blocks, query, caseSensitive),
     [blocks, query, caseSensitive],
   )
-  const active = matches.length === 0 ? -1 : Math.min(current, matches.length - 1)
-  const activeMatch = active >= 0 ? matches[active] : null
+  /** 当前命中下标（-1 = 无命中）；避开 prop 名 `active`（那是「面板正在被看」） */
+  const activeIndex = matches.length === 0 ? -1 : Math.min(current, matches.length - 1)
+  const activeMatch = activeIndex >= 0 ? matches[activeIndex] : null
 
   // 查询 / 大小写变了：回到第一处命中
   useEffect(() => {
@@ -263,17 +410,17 @@ export default function VirtualMarkdown({ content, onLocalLink }: Props) {
   )
 
   useEffect(() => {
-    if (active >= 0) jumpTo(active)
-  }, [active, jumpTo])
+    if (activeIndex >= 0) jumpTo(activeIndex)
+  }, [activeIndex, jumpTo])
 
   // 高亮：命中 / 当前项 / 已挂载的块集合变化都要重算。
   // 依赖 renderedKey 而不是每次渲染都跑：块集合没变时重复扫 DOM 纯属浪费。
   const renderedKey = plain
     ? 'plain'
     : virtualizer
-        .getVirtualItems()
-        .map((item) => item.index)
-        .join(',')
+      .getVirtualItems()
+      .map((item) => item.index)
+      .join(',')
 
   useEffect(() => {
     const root = scrollRef.current
@@ -388,7 +535,7 @@ export default function VirtualMarkdown({ content, onLocalLink }: Props) {
     <MdFindWidget
       query={query}
       total={matches.length}
-      current={active}
+      current={activeIndex}
       caseSensitive={caseSensitive}
       focusSignal={focusSignal}
       onQueryChange={setQuery}
@@ -420,7 +567,7 @@ export default function VirtualMarkdown({ content, onLocalLink }: Props) {
   return (
     <div className="wfp-preview-wrap" ref={wrapRef}>
       <div
-        className="wfp-preview virtual-md"
+        className={`wfp-preview virtual-md${restoring ? ' is-restoring' : ''}`}
         ref={scrollRef}
         tabIndex={-1}
         onMouseDown={focusPreview}>
