@@ -7,6 +7,8 @@
  * 4. **保存冲突不静默覆盖**：错误弹窗说明「文件已被其他程序修改」。
  * 5. **`present` 的交付物默认落在预览**：`defaultView="preview"` 只对可预览的类型生效，
  *    `viewSeq` 自增让「同一个文件再交付一次」从编辑迁回预览。
+ * 6. **markdown 打开默认落在预览**（看文档是主场景）；html / svg / csv 仍默认停在编辑。
+ *    换文件回到这个默认视图，不留在上一份文件手选的那个。
  *
  * 读取 / 写入与 Monaco 全部 mock：真实文件语义在 `workspace-file-service` 的用例里。
  */
@@ -333,20 +335,21 @@ it('没有改动时关闭不问', async () => {
   expect(closed).toBe(1)
 })
 
-/** md / html / svg：多一个「预览」，默认停在编辑 */
-it('markdown：两个 tab，默认编辑，点预览才渲染', async () => {
+/** md 默认落在预览（看文档是主场景），html / svg 仍默认停在编辑 */
+it('markdown：两个 tab，默认预览，点编辑才渲染编辑器', async () => {
   loadMock.mockResolvedValue(textFile('# 标题'))
   await mount('E:/repo/README.md')
 
   const tabs = [...document.querySelectorAll<HTMLButtonElement>('.wfp-tab')]
   expect(tabs.map((tab) => tab.textContent)).toEqual(['编辑', '预览'])
-  expect(tabs[0].getAttribute('aria-selected')).toBe('true')
-  expect(editor()).not.toBeNull()
-
-  act(() => tabs[1].click())
-
+  expect(tabs[1].getAttribute('aria-selected')).toBe('true')
   expect(document.querySelector('.mock-markdown')?.textContent).toBe('# 标题')
   expect(editor()).toBeNull()
+
+  act(() => tabs[0].click())
+
+  expect(editor()!.value).toBe('# 标题')
+  expect(document.querySelector('.mock-markdown')).toBeNull()
 })
 
 it('html：预览用沙箱 iframe；登记成功后注入 base（相对路径可解析）', async () => {
@@ -555,11 +558,12 @@ it('普通文本没有预览 tab（只有编辑）', async () => {
   expect(document.querySelector('.wfp-tabs')).toBeNull()
 })
 
-it('换文件回到默认的编辑模式', async () => {
+it('换文件回到默认视图（不留在上一份手选的编辑）', async () => {
   loadMock.mockResolvedValue(textFile('# 标题'))
   await mount('E:/repo/README.md')
-  act(() => [...document.querySelectorAll<HTMLButtonElement>('.wfp-tab')][1].click())
-  expect(document.querySelector('.mock-markdown')).not.toBeNull()
+  // md 默认预览；用户手动切到编辑
+  act(() => [...document.querySelectorAll<HTMLButtonElement>('.wfp-tab')][0].click())
+  expect(editor()!.value).toBe('# 标题')
 
   loadMock.mockResolvedValue(textFile('# 另一个'))
   await act(async () => {
@@ -572,8 +576,9 @@ it('换文件回到默认的编辑模式', async () => {
     )
   })
 
-  expect(document.querySelector('.mock-markdown')).toBeNull()
-  expect(editor()!.value).toBe('# 另一个')
+  // 换文件回到默认视图（md = 预览），不跟着上一份文件的编辑态走
+  expect(document.querySelector('.mock-markdown')?.textContent).toBe('# 另一个')
+  expect(editor()).toBeNull()
 })
 
 /** 在标签页里（`hideTitle`）：文件名已经在标签上，头部只留目录 */

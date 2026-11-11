@@ -69,7 +69,7 @@
   border-radius: 6px;
   background: var(--bg-primary, #fff);
   box-shadow: var(--shadow-md, 0 8px 24px rgba(0, 0, 0, 0.16));
-  font-size: var(--font-size-sm, 12px);
+  font-size: var(--font-size-sm);
   color: var(--text-primary, #1a1a1a);
 
   .wfp-find-icon {
@@ -89,7 +89,7 @@
     background: transparent;
     color: var(--text-primary, #1a1a1a);
     font-family: inherit;
-    font-size: var(--font-size-sm, 12px);
+    font-size: var(--font-size-sm);
 
     &::placeholder {
       color: var(--text-tertiary, #999);
@@ -156,7 +156,7 @@
 
     &.wfp-find-case {
       width: 26px;
-      font-size: var(--font-size-xs, 11px);
+      font-size: var(--font-size-xs);
       font-weight: 600;
       letter-spacing: -0.2px;
     }
