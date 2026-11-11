@@ -162,10 +162,27 @@ impl TempRepo {
 
     /// 跑一条 git 并断言成功（用例内部用，失败即 panic）
     fn git(&self, args: &[&str]) -> String {
-        let out = GitCmd::write(&self.path())
-            .args(args.iter().map(|s| s.to_string()))
-            .run()
-            .expect("git 起不来");
+        self.git_with_date(args, None)
+    }
+
+    /// 跑一条 git，同时把**作者时间与提交时间**钉在 `date` 上（`GIT_AUTHOR_DATE` / `GIT_COMMITTER_DATE`）。
+    ///
+    /// ⚠️ git 的 oid 是内容哈希：cherry-pick 原样保留作者信息，committer 却取「现在」。若原提交与
+    /// 这次重放在同一秒里诞生（身份、父提交、树、信息全同），重放出来的对象逐字节一致 →
+    /// **新旧 oid 相同**，「挑选生成了一条新提交」于是假失败（Linux CI 进程快，秒级粒度更密，必现）。
+    /// 把原提交钉到固定的过去时间，重放的 committer 时间就必然与之不同。
+    fn git_dated(&self, date: &str, args: &[&str]) -> String {
+        self.git_with_date(args, Some(date))
+    }
+
+    fn git_with_date(&self, args: &[&str], date: Option<&str>) -> String {
+        let mut cmd = GitCmd::write(&self.path()).args(args.iter().map(|s| s.to_string()));
+        if let Some(date) = date {
+            cmd = cmd
+                .env("GIT_AUTHOR_DATE", date)
+                .env("GIT_COMMITTER_DATE", date);
+        }
+        let out = cmd.run().expect("git 起不来");
         assert!(
             out.ok(),
             "git {:?} 失败: {}",
@@ -2068,10 +2085,12 @@ fn cherry_pick_brings_a_commit_and_revert_takes_it_back() {
     repo.git(&["add", "-A"]);
     repo.git(&["commit", "-q", "-m", "init"]);
     repo.git(&["branch", "-M", "main"]);
+    let base = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
     repo.git(&["checkout", "-q", "-b", "feat"]);
     repo.write("b.txt", "feat\n");
     repo.git(&["add", "-A"]);
-    repo.git(&["commit", "-q", "-m", "feat: add b"]);
+    // 提交时间钉在过去：同一秒内重放会算出同一个 oid，`assert_ne!` 便会假失败（见 `git_dated`）
+    repo.git_dated("2026-01-01 00:00:00 +0000", &["commit", "-q", "-m", "feat: add b"]);
     let picked = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
     repo.git(&["checkout", "-q", "main"]);
 
@@ -2086,6 +2105,12 @@ fn cherry_pick_brings_a_commit_and_revert_takes_it_back() {
         .expect("cherry-pick 应成功");
     assert!(file.exists(), "被挑选的改动要落到当前分支");
     assert_ne!(result.oid, picked, "cherry-pick 生成的是一条新提交");
+    // 「新提交」的实质：它长在当前分支上（父提交 = 挑选前的 HEAD），而不是把 feat 的指针搬过来
+    assert_eq!(
+        repo.git(&["rev-parse", "HEAD^"]).trim(),
+        base,
+        "新提交的父提交是挑选当下的 HEAD"
+    );
     assert_eq!(
         repo.git(&["log", "-1", "--pretty=%s"]).trim(),
         "feat: add b",
