@@ -4,7 +4,7 @@ import RemoveSvg from '@/ui/components/icons/RemoveSvg'
 import { t } from '@/ui/i18n'
 import { getVersion } from '@tauri-apps/api/app'
 import { downloadAndInstall, launchInstaller } from '@/services/download-service'
-import { setIgnoredVersion, setSnooze } from '@/services/update-service'
+import { setIgnoredVersion, setSnooze, resolveUpdateDownloadUrl } from '@/services/update-service'
 import type { DownloadProgress } from '@/services/download-service'
 import type { ICheckUpdateResponse } from '@/types'
 
@@ -67,13 +67,26 @@ const UpdateModal = ({ show, updateInfo, onHide, onForceCancel }: Props) => {
     downloadingRef.current = true
     setDownloading(true)
 
-    const url = latest_version.download.url
+    // 接口给的是本地直链；OSS 链接要现换（1 小时过期，且有限流）
+    const localUrl = latest_version.download.url
     const fileName = latest_version.download.original_name || `Virlen_${latest_version.version}.exe`
 
     try {
-      const filePath = await downloadAndInstall(url, fileName, (progress) => {
-        setDownloadProgress({ ...progress })
-      })
+      const url = await resolveUpdateDownloadUrl(localUrl)
+
+      let filePath: string
+      try {
+        filePath = await downloadAndInstall(url, fileName, (progress) => {
+          setDownloadProgress({ ...progress })
+        })
+      } catch (err) {
+        // OSS 签名链接失败（未配跨域 / 链接过期 / 对象没了）→ 回落本地直链，别让用户卡在更新路上
+        if (!localUrl || url === localUrl) throw err
+        console.warn('[UpdateModal] OSS 链接下载失败，改用本地链接重试:', err)
+        filePath = await downloadAndInstall(localUrl, fileName, (progress) => {
+          setDownloadProgress({ ...progress })
+        })
+      }
 
       // 下载完成 → 启动安装包
       await launchInstaller(filePath)

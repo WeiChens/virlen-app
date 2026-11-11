@@ -120,6 +120,38 @@ async function getPlatform(): Promise<UpdatePlatform> {
 }
 
 /**
+ * 把本地下载直链换成 1 小时有效的 OSS 签名链接。
+ *
+ * 后端不再在 check-update / 版本列表里下发长期可用的 OSS 直链（防止被当 CDN 刷），
+ * 改成下载前现换一张短命链接：
+ * - 没启用 OSS / 对象还在传 / 传失败 → 接口原样返回 download_url（type=local）；
+ * - 限流（同一链接每天 3 次、单 IP 每天 10 次，429）或其他错误 → 直接回落本地直链。
+ *
+ * 无论哪种情况都一定会返回一个可用的 URL，调用方不需要再判空。
+ */
+export async function resolveUpdateDownloadUrl(localUrl: string): Promise<string> {
+  if (!localUrl) return localUrl
+  try {
+    const response = await fetch(`${domain}/api/public/versions/oss-link`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ download_url: localUrl }),
+    })
+
+    if (!response.ok) return localUrl
+
+    const result: IApiResponse<{ url?: string }> = await response.json()
+    const url = result.code === 200 ? result.data?.url : ''
+    return url || localUrl
+  } catch (err) {
+    console.warn('[UpdateService] 换 OSS 临时链接失败，改用本地链接:', err)
+    return localUrl
+  }
+}
+
+/**
  * 检查更新
  *
  * @returns 检查结果，如果网络错误或 API 不可用则返回 null
