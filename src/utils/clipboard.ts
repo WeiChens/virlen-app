@@ -9,6 +9,9 @@
  * fetch 会被 CORS 拦，Rust 侧无同源限制）。
  */
 
+import { ATTACHMENT_SCHEME } from '@/domain/files/attachment-src'
+import { PREVIEW_SCHEME } from '@/infrastructure/preview-asset'
+
 /** 复制纯文本；失败返回 false（调用方决定要不要提示） */
 export async function copyText(text: string): Promise<boolean> {
   if (!text) return false
@@ -116,8 +119,42 @@ export function imageExtOf(src: string, mime?: string): string {
 }
 
 /**
+ * 这个 URL 指向的是**本应用自己注册的自定义协议**（`virlen-attachment` / `virlen-preview`）。
+ *
+ * 为什么要单独判：它们在 Windows / Android 上表现为 `http://virlen-attachment.localhost/…`，
+ * 看上去就是普通 http，但**不是外网请求** —— 背后是 Rust 的协议处理器（已回 CORS 头），
+ * 只能由 webview 自己的 `fetch` 取，交给 `plugin-http` 会当成外部主机去发真请求（DNS 解不到）。
+ * 非 Windows 平台则是 `<scheme>://localhost/…`。两种形态都要认。
+ */
+export function isAppSchemeUrl(src: string): boolean {
+  const raw = (src ?? '').trim().toLowerCase()
+  if (!raw) return false
+  for (const scheme of [ATTACHMENT_SCHEME, PREVIEW_SCHEME]) {
+    const lower = scheme.toLowerCase()
+    if (raw.startsWith(`${lower}://`)) return true
+    if (raw.startsWith(`http://${lower}.localhost/`)) return true
+    if (raw.startsWith(`https://${lower}.localhost/`)) return true
+  }
+  return false
+}
+
+/**
  * 取图片原始字节（dataURL 本地解码 / blob 与远端走 fetch）。
- * 远端走 `plugin-http`：WebView 内 fetch 会撞 CORS，Rust 侧不会。
+ *
+ * 三条取字节的路，选错就是「图片看得见、但 OCR / 复制 / 另存为全部失败」：
+ *
+ * 1. `data:` —— 本地 base64 解码，不过网络；
+ * 2. **本应用自己的自定义协议**（`virlen-attachment` / `virlen-preview`）—— 必须用 webview 自带的
+ *    `fetch`。它们是 Tauri 注册的 URI scheme，Windows 上表现为 `http://virlen-attachment.localhost/<name>`，
+ *    看着像 http 但**并不是外网请求**：协议处理器就是 Rust 自己（`commands/attachment.rs`），
+ *    它已回 `Access-Control-Allow-Origin: *`，webview 内 fetch 拿得到。
+ *    ⚠️ **不能**丢给 `plugin-http`：插件的 scope 只放行 `http(s)://*`，而它把这种 URL 当外部主机
+ *    去发真实网络请求 —— 发的是 `virlen-attachment.localhost`，DNS 根本解析不到；
+ *    非 Windows 平台更是 `virlen-attachment://localhost/...`，连 URL 都不合法。
+ *    受伤的是消息里的图片（库里只存 `attachment://<sha256>.<ext>` 引用）：图能靠协议处理器正常
+ *    渲染，但图片预览里的「识别文字」、右键「复制图片 / 另存为」全都在这里挂掉。
+ * 3. 其余（`blob:` / 外部 `http(s)`）—— 远端走 `plugin-http`：WebView 内 fetch 会撞 CORS，
+ *    Rust 侧不会。
  */
 export async function readImageBytes(src: string): Promise<Uint8Array> {
   if (src.startsWith('data:')) {
@@ -129,8 +166,9 @@ export async function readImageBytes(src: string): Promise<Uint8Array> {
     // 极少数非 base64 的 dataURL（如 svg+xml 明文）按 URL 解码
     return new TextEncoder().encode(decodeURIComponent(payload))
   }
-  if (src.startsWith('blob:')) {
+  if (src.startsWith('blob:') || isAppSchemeUrl(src)) {
     const resp = await fetch(src)
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
     return new Uint8Array(await resp.arrayBuffer())
   }
   const { fetch: httpFetch } = await import('@tauri-apps/plugin-http')

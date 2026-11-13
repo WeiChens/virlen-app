@@ -7,7 +7,7 @@
  *   3. 「另存为」的写出内容与「用户取消不算失败」；
  *   4. 「读剪贴板文本」的原生优先与两级兜底（终端 / 输入框右键「粘贴」共用）。
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
@@ -18,6 +18,7 @@ import {
   defaultImageName,
   imageExtOf,
   imageMimeOf,
+  isAppSchemeUrl,
   readClipboardText,
   readImageBytes,
   saveImageAs,
@@ -55,6 +56,79 @@ describe('图片字节来源', () => {
     await expect(readImageBytes('https://example.com/missing.png')).rejects.toThrow(
       'HTTP 404',
     )
+  })
+
+  // ── 本应用自己的自定义协议 ───────────────────────────────────────
+  //
+  // 回归：消息里的图片库里只存 `attachment://<sha256>.<ext>`，渲染时翻成 `virlen-attachment` 协议 URL。
+  // 图靠协议处理器（Rust）能正常渲染，但「识别文字 / 复制图片 / 另存为」都要在前端取字节 ——
+  // 当时一律交给 plugin-http，而插件 scope 只放行 http(s)，它把 `virlen-attachment.localhost.com`
+  // 当外部主机发真请求（DNS 解不到），于是预览里的 OCR 恒失败。
+  describe('自定义协议（virlen-attachment / virlen-preview）', () => {
+    const HASH = 'a'.repeat(64)
+
+    function stubBrowserFetch() {
+      const browserFetch = vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new Uint8Array([4, 5, 6]).buffer,
+      })) as any
+      vi.stubGlobal('fetch', browserFetch)
+      return browserFetch
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    it('Windows 形态（http://<scheme>.localhost/…）必须走 webview 的 fetch，不能走 plugin-http', async () => {
+      const browserFetch = stubBrowserFetch()
+      const url = `http://virlen-attachment.localhost/${HASH}.png`
+
+      const bytes = await readImageBytes(url)
+
+      expect(browserFetch).toHaveBeenCalledWith(url)
+      expect(httpFetch).not.toHaveBeenCalled()
+      expect(Array.from(bytes)).toEqual([4, 5, 6])
+    })
+
+    it('非 Windows 形态（<scheme>://localhost/…）同样走 webview 的 fetch', async () => {
+      const browserFetch = stubBrowserFetch()
+      const url = `virlen-attachment://localhost/${HASH}.jpg`
+
+      await readImageBytes(url)
+
+      expect(browserFetch).toHaveBeenCalledWith(url)
+      expect(httpFetch).not.toHaveBeenCalled()
+    })
+
+    it('HTML 预览的 virlen-preview 协议也一样', async () => {
+      const browserFetch = stubBrowserFetch()
+      const url = 'http://virlen-preview.localhost/tok/abc.png'
+
+      await readImageBytes(url)
+
+      expect(browserFetch).toHaveBeenCalledWith(url)
+      expect(httpFetch).not.toHaveBeenCalled()
+    })
+
+    it('自定义协议非 2xx 也抛错（不静默返回空字节）', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => ({ ok: false, status: 404 })) as any,
+      )
+      await expect(
+        readImageBytes(`http://virlen-attachment.localhost/${HASH}.png`),
+      ).rejects.toThrow('HTTP 404')
+    })
+
+    it('普通 http(s) 不得被误判成应用协议', () => {
+      // 主机名里恰好带 scheme 字样，但不是 `.localhost`
+      expect(isAppSchemeUrl('https://virlen-attachment.com/a.png')).toBe(false)
+      expect(isAppSchemeUrl('https://example.com/a.png')).toBe(false)
+      expect(isAppSchemeUrl('blob:http://localhost/abc')).toBe(false)
+      expect(isAppSchemeUrl('virlen-attachment://localhost/x.png')).toBe(true)
+    })
   })
 
   it('MIME / 扩展名 / 默认文件名', () => {
