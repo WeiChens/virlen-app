@@ -14,6 +14,8 @@ import WindowLayout from './layout/WindowLayout'
 import SetupFlow from './pages/setupFlow'
 import ChatView from './pages/chat/chat-view'
 import ImagePreview from './components/shared/ImagePreview'
+// 全应用兜底的右键菜单：没有自定义菜单的地方，有选中文本就弹一个「复制」（无选中则跳过）
+import GlobalTextMenu from './components/shared/ContextMenu/global'
 import ErrorBoundary from './components/shared/ErrorBoundary'
 function App() {
   useTheme()
@@ -43,6 +45,8 @@ function App() {
           </Suspense>
         )}
         <ImagePreview />
+        {/* 挂在最外层：任何没有自己的右键处理的地方都由它兜底（原生菜单也由它一并挡掉） */}
+        <GlobalTextMenu />
       </WindowLayout>
     </ErrorBoundary>
   )

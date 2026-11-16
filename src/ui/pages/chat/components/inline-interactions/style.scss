@@ -23,22 +23,15 @@
 
 .inline-interaction-card {
   border: 1px solid var(--border-color, #e5e5e5);
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--bg-secondary, #f7f7f8);
   overflow: hidden;
   max-width: 100%;
   min-width: min(100%, 400px);
   width: fit-content;
   margin-left: 10px;
-
-  /* 授权那张：左侧一道提示色（一眼分出「要批东西」与「只是问你个问题」） */
-  &.is-auth {
-    border-left: 3px solid var(--accent-warn, #f59e0b);
-
-    /* 高危命令换红：卡片在最外层就得能看出「这条不是普通的装个包」 */
-    &.is-dangerous {
+  &.is-auth.is-dangerous {
       border-left-color: var(--color-error, #e5484d);
-    }
   }
 }
 
@@ -69,7 +62,7 @@
 .inline-interaction-summary {
   flex: 1;
   min-width: 0;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
   color: var(--text-primary, #1a1a1a);
   white-space: nowrap;
   overflow: hidden;

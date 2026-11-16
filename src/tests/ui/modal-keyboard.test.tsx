@@ -48,8 +48,13 @@ async function render(node: React.ReactNode) {
 }
 
 const activeEl = (): HTMLElement | null => document.activeElement as HTMLElement
-/** 当前焦点元素的文案（弹窗容器上是整段文字，因此按钮 / 选项用例只断言相等） */
-const activeText = (): string => activeEl()?.textContent?.trim() ?? ''
+/** 当前焦点元素的文案（弹窗容器上是整段文字，因此按钮 / 选项用例只断言相等）
+ *  图标按钮（如右上角「暂存」的 ✕）取 `aria-label`：它的可访问名是「暂存」，
+ *  文本只有一个字形 —— 断言按用户看到的名字走。 */
+const activeText = (): string =>
+  activeEl()?.getAttribute('aria-label')?.trim() ||
+  activeEl()?.textContent?.trim() ||
+  ''
 /** 当前焦点项的「名字」——选项取 .choice-label（否则会把勾选符号 ● 也算进去） */
 const activeLabel = (): string =>
   activeEl()?.querySelector('.choice-label')?.textContent?.trim() ??

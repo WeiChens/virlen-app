@@ -100,7 +100,7 @@ class ExecuteScriptMessage implements IToolCallMessage {
       return (
         <span className="execute-command-short">
           {tips && <span className="execute-command-tips">{tips}</span>}
-          <span style={{ color: 'var(--accent-color)', fontWeight: 500 }}>
+          <span className="cmd">
             {command || scriptLabel}
           </span>
         </span>

@@ -20,13 +20,22 @@
   width: 820px;
   max-width: 80vw;
   background: var(--bg-primary, #fff);
-  border-radius: 14px;
+  border-radius: 12px;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.2);
   animation: modalSlideIn 0.2s ease;
   overflow: hidden;
 
   .choice-header {
-    padding: 20px 24px 0;
+    padding: 14px 18px 0;
+    /* 两栏：左边是会话徽标 + 问题正文（占满），右边只有暂存的 ✕ */
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+
+    .choice-header-main {
+      flex: 1;
+      min-width: 0;
+    }
 
     .choice-session-badge {
       display: inline-flex;
@@ -59,15 +68,51 @@
       font-weight: 600;
       color: var(--text-primary, #1a1a1a);
       line-height: 1.4;
-      max-height: calc(16px * 5.6); /* 4 lines */
+      max-height: calc(var(--font-size-xl) * 1.6 * 4);
       overflow-y: auto;
+      *{
+        font-size: var(--font-size-xl);
+      }
+    }
+
+    /* 暂存 —— 右上角的图标按钮（标题栏右侧唯一元素，不抢正文宽度） */
+    .choice-shelve-close {
+      flex-shrink: 0;
+      margin-top: -2px;
+      /* 方框由字号推导，字形比 1em 宽时只会把热区撞大，不会把 ✕ 压住 */
+      min-width: 1em;
+      min-height: 1em;
+      padding: 8px;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      font-size: var(--font-size-2xl);
+      line-height: 1;
+      color: var(--text-tertiary, #9ca3af);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition:
+        color 0.15s,
+        background 0.15s;
+
+      &:hover {
+        color: var(--accent-warn, #f59e0b);
+        background: var(--hover-bg, #fffbeb);
+      }
+
+      &:focus-visible {
+        outline: var(--focus-ring);
+        outline-offset: 2px;
+      }
     }
   }
 }
 
 .user-choice-modal {
   .choice-body {
-    padding: 16px 24px;
+    padding: 14px 18px;
   }
 
   .choice-options {
@@ -172,7 +217,7 @@
   }
 
   .choice-label {
-    font-size: var(--font-size-base);
+    font-size: var(--font-size-md);
     color: var(--text-primary, #1a1a1a);
     line-height: 1.4;
   }
@@ -196,25 +241,8 @@
       gap: 8px;
     }
 
-    .btn-shelve {
-      padding: 8px 14px;
-      border: 1px dashed var(--border-color, #d1d5db);
-      border-radius: 8px;
-      background: transparent;
-      font-size: var(--font-size-md);
-      color: var(--text-secondary, #888);
-      cursor: pointer;
-      transition: all 0.15s;
-
-      &:hover {
-        border-color: var(--accent-warn, #f59e0b);
-        color: var(--accent-warn, #f59e0b);
-        background: var(--hover-bg, #fffbeb);
-      }
-    }
-
     .btn-custom {
-      padding: 8px 14px;
+      padding: 4px 14px;
       border: 1px dashed var(--border-color, #d1d5db);
       border-radius: 8px;
       background: transparent;
@@ -236,7 +264,7 @@
     }
 
     .btn-cancel {
-      padding: 8px 16px;
+      padding: 4px 16px;
       border: 1px solid var(--border-color, #e5e5e5);
       border-radius: 8px;
       background: var(--bg-primary, #fff);
@@ -251,7 +279,7 @@
     }
 
     .btn-confirm {
-      padding: 8px 20px;
+      padding: 4px 20px;
       border: none;
       border-radius: 8px;
       background: var(--accent-color, #6366f1);
@@ -276,6 +304,7 @@
   from {
     opacity: 0;
   }
+
   to {
     opacity: 1;
   }
@@ -286,6 +315,7 @@
     opacity: 0;
     transform: translateY(-10px) scale(0.98);
   }
+
   to {
     opacity: 1;
     transform: translateY(0) scale(1);

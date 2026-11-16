@@ -9,7 +9,7 @@
   margin: 0 8px 0 28px;
   border-radius: 6px;
   font-size: var(--font-size-sm);
-  max-width: 80%;
+  max-width: 95%;
   overflow: hidden;
   width: fit-content;
   cursor: pointer;
@@ -628,7 +628,7 @@
     /* 选中 = 品牌底；底上的字与描边都走 --primary-fg
        （浅色主题色下自动转黑字，见 accent-color-contract 的守卫） */
     &.is-selected {
-      border-color: var(--primary-fg);
+      border-color: var(--accent-color);
       background-color: var(--accent-color);
       color: var(--primary-fg);
     }
@@ -639,13 +639,13 @@
     padding: 6px 10px;
     border-radius: 6px;
     background: var(--bg-secondary, #f9fafb);
-    border-left: 3px solid var(--accent-color, #6366f1);
-    font-size: var(--font-size-md);
+    // border-left: 3px solid var(--accent-color, #6366f1);
+    font-size: var(--font-size-sm);
     line-height: 1.5;
 
     .customReply-label {
       font-weight: 600;
-      color: var(--text-secondary, #888);
+      color: var(--text-primary, #888);
       margin-right: 4px;
     }
 
@@ -897,6 +897,7 @@
   gap: 6px;
   min-width: 0;
   overflow: hidden;
+  max-width: 100%;
 
   .execute-command-tips {
     font-size: var(--font-size-xs);
@@ -913,6 +914,14 @@
       margin-left: 6px;
       color: var(--text-tertiary, #9ca3af);
     }
+  }
+  .cmd{
+    color: var(--accent-color);
+    font-weight: 500;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 }
 

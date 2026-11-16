@@ -92,11 +92,12 @@ describe('会话内卡片 —— 字号跟随「设置 → 字体大小」', () 
     expect(offenders).toEqual([])
   })
 
-  it('各段字号落到正确的档位（正文 sm / 辅助与徽标 xs / 图形记号 2xs）', () => {
+  it('各段字号落到正确的档位（主行 md / 正文 sm / 辅助与徽标 xs / 图形记号 2xs）', () => {
     const expected: [string, string][] = [
       ['.inline-interactions-count', 'var(--font-size-xs)'],
       ['.inline-interaction-badge', 'var(--font-size-xs)'],
-      ['.inline-interaction-summary', 'var(--font-size-sm)'],
+      // 卡片主行（徽标 + 摘要）：比正文大一档，一眼能看出「这条在干什么」
+      ['.inline-interaction-summary', 'var(--font-size-md)'],
       ['.inline-interaction-perm', 'var(--font-size-xs)'],
       ['.inline-interaction-toggle', 'var(--font-size-2xs)'],
       ['.inline-interaction-question', 'var(--font-size-sm)'],

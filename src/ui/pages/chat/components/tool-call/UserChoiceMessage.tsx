@@ -81,7 +81,7 @@ class UserChoiceMessage implements IToolCallMessage {
           )}
           {customReply && (
             <div className="UserChoiceMessage-customReply">
-              <span className="customReply-label">{t('自定义补充')}：</span>
+              <span className="customReply-label">{t('自定义回复')}：</span>
               <span className="customReply-text">{customReply}</span>
             </div>
           )}

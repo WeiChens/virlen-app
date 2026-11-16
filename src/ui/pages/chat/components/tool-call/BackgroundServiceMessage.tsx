@@ -277,7 +277,7 @@ class BackgroundServiceMessage implements IToolCallMessage {
         return (
           <span className="execute-command-short">
             {name && <span className="execute-command-tips">{name}</span>}
-            <span style={{ color: 'var(--accent-color)', fontWeight: 500 }}>
+            <span className="cmd">
               {cmd}
             </span>
           </span>

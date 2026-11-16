@@ -142,13 +142,7 @@ const WindowLayout = ({ children, padding = 0, className }: Props) => {
     showToast(t('已关闭手机控制'), 2000)
   }
   return (
-    <div
-      className="WindowLayout"
-      onContextMenu={(e) => {
-        if (!import.meta.env.DEV) {
-          e.preventDefault()
-        }
-      }}>
+    <div className="WindowLayout">
       <div data-tauri-drag-region className="window-top-bar">
         <div data-tauri-drag-region className="title">
           <img

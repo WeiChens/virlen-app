@@ -233,8 +233,8 @@ describe('暂存 → 恢复：草稿带回来', () => {
       document.querySelector('.choice-option.selected')?.textContent,
     ).toContain('停下')
 
-    // 暂存：这次交互出队（引擎侧留暂停快照），草稿保留
-    click('.choice-footer .btn-shelve')
+    // 暂存：这次交互出队（引擎侧留暂停快照），草稿保留。入口是右上角的 ✕ 图标按钮
+    click('.choice-shelve-close')
     expect(document.querySelector('.user-choice-modal')).toBeNull()
 
     // 恢复：引擎重跑同一个 tool call（同 toolCallId、新 interactionId）
@@ -271,7 +271,7 @@ describe('暂存 → 恢复：草稿带回来', () => {
     await mount()
     showChoice('a1', '用哪个方案？', 'tc-1')
     click('.choice-option', 1)
-    click('.choice-footer .btn-shelve')
+    click('.choice-shelve-close')
 
     showChoice('a2', '用哪个方案？', 'tc-2')
     expect(document.querySelector('.choice-option.selected')).toBeNull()

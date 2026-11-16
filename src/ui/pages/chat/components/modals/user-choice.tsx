@@ -5,10 +5,15 @@
  * `inline-interactions/`）；这一层只剩**外框与键盘**。
  *
  * 键盘操作（与 `modals/authorization` 同一套约定）：
- *  - Tab / Shift+Tab / ↑↓←→  在「选项 → 自定义输入框 → 暂存 → 自定义 → 取消 → 确认」之间循环；
+ *  - Tab / Shift+Tab / ↑↓←→  在「选项 → 自定义输入框 → 暂存(右上角 ✕) → 自定义 → 取消 → 确认」之间循环
+ *    （✕ 的**几何**位置在右上角，但键盘顺序仍排在选项之后 —— 见下方 `navNodes` 的 ⚠️）；
  *  - Space  选中 / 取消选中当前选项（选项上唯一的切换方式）；
  *  - Enter  有选中项（或填了自定义回复）时提交，没选则忽略；
  *  - Ctrl / Cmd + Enter  任意位置直接提交；Esc 取消。
+ *
+ * 「暂存」的入口是右上角的 ✕（图标按钮，`title` / `aria-label` = 暂存）—— 它把 run 存成暂停快照，
+ * 与右下角的「取消」（放弃这次提问）是两回事，所以两者并存；标题栏因此改成左右两栏：
+ * 左边是会话徽标 + 问题正文，右边只有这一个 ✕。
  *
  * 打开时不聚焦「确认」：Enter 是两段式的（先空格选中、再回车提交），而一项未选时「确认」
  * 是 disabled、不可聚焦，故焦点落在永远可聚焦的弹窗容器上。
@@ -94,15 +99,29 @@ export default function UserChoiceModal({
   }
 
   /**
-   * 可键盘导航的项（按 DOM 顺序，由各元素 data-nav 标记）。跳过 disabled（一项未选时
-   * 「确认」不可用）：与浏览器 tab 顺序一致，否则 .focus() 静默失败、高亮会「卡」在相邻项上。
+   * 可键盘导航的项（由各元素 `data-nav` 标记）。跳过 disabled（一项未选时「确认」不可用）：
+   * 与浏览器 tab 顺序一致，否则 .focus() 静默失败、高亮会「卡」在相邻项上。
+   *
+   * ⚠️ 顺序**不**等于 DOM 顺序：「暂存」的入口是标题栏右上角的 ✕，DOM 里排在正文之前，
+   * 但键盘循环把它排在选项之后（自定义之前）—— 先答问题、再考虑「先放下」；否则进弹窗
+   * 按一下 ↓ 就落在「暂存」上，一按空格就把整个 run 暂停了，太容易误触。
+   * 契约见 `tests/ui/modal-keyboard.test.tsx`。
    */
   function navNodes(): HTMLElement[] {
-    return Array.from(
+    const nodes = Array.from(
       modalRef.current?.querySelectorAll<HTMLElement>(
         '[data-nav]:not([disabled])',
       ) ?? [],
     )
+    const shelveAt = nodes.findIndex((el) =>
+      el.classList.contains('choice-shelve-close'),
+    )
+    if (shelveAt < 0) return nodes
+    const [shelve] = nodes.splice(shelveAt, 1)
+    // 插在「自定义」之前（自定义回复输入框展开时也就落在它后面，与移进标题栏之前的顺序一致）
+    const anchor = nodes.findIndex((el) => el.classList.contains('btn-custom'))
+    nodes.splice(anchor < 0 ? nodes.length : anchor, 0, shelve)
+    return nodes
   }
 
   /**
@@ -174,15 +193,30 @@ export default function UserChoiceModal({
         aria-modal="true"
         tabIndex={-1}>
         <div className="choice-header">
-          {sessionTitle && (
-            <div className="choice-session-badge">
-              <span className="badge-dot" />
-              {sessionTitle}
-            </div>
+          <div className="choice-header-main">
+            {sessionTitle && (
+              <div className="choice-session-badge">
+                <span className="badge-dot" />
+                {sessionTitle}
+              </div>
+            )}
+            <h3 className="choice-title">
+              <MarkdownRenderer content={question} />
+            </h3>
+          </div>
+          {/* 暂存（图标按钮）：语义是「先放下，之后再答」，与右下角的「取消」是两回事。
+              放在标题栏末尾 —— Tab 循环里排在「确认」之后，几何位置在右上角。 */}
+          {onShelve && (
+            <button
+              type="button"
+              className="choice-shelve-close"
+              data-nav="button"
+              title={t('暂存')}
+              aria-label={t('暂存')}
+              onClick={onShelve}>
+              ✕
+            </button>
           )}
-          <h3 className="choice-title">
-            <MarkdownRenderer content={question} />
-          </h3>
         </div>
 
         <ChoiceBody

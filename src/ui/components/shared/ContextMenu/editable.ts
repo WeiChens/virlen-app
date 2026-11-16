@@ -1,7 +1,7 @@
 /**
  * editable — 可编辑控件（input / textarea）的右键菜单工厂。
  *
- * 原生右键菜单在生产环境被全局禁用（见 ContextMenu/index.tsx、layout/WindowLayout），别处浮层都自补了
+ * 原生右键菜单在生产环境被全局禁用（见 ContextMenu/global.tsx），别处浮层都自补了
  * 菜单，但输入框一直漏着 —— 而它恰是原生菜单真有内容的地方（剪切 / 复制 / 粘贴 / 全选）。
  *
  * 只做「文本」，不做撤销 / 重做：撤销栈属于浏览器，replaceValue 会把它截断，做了也是假的（请用 Ctrl+Z）；

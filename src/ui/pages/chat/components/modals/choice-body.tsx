@@ -13,11 +13,14 @@ interface Props {
   form: ChoiceForm
   onConfirm: () => void
   onCancel: () => void
-  /** 不传 = 不给「暂存」入口（暂存会暂停整个 run，行内卡片与弹窗同口径，默认都给） */
+  /**
+   * 不传 = 不给「暂存」入口。暂存会暂停整个 run，入口在**弹窗外框的右上角 ✕**
+   *（见 `modals/user-choice`），不在正文里：这里保留该参数只为兼容旧调用方。
+   */
   onShelve?: () => void
 }
 
-export default function ChoiceBody({ form, onConfirm, onCancel, onShelve }: Props) {
+export default function ChoiceBody({ form, onConfirm, onCancel }: Props) {
   const customInputRef = useRef<HTMLInputElement>(null)
 
   return (
@@ -74,11 +77,6 @@ export default function ChoiceBody({ form, onConfirm, onCancel, onShelve }: Prop
 
       <div className="choice-footer">
         <div className="choice-footer-left">
-          {onShelve && (
-            <button className="btn-shelve" data-nav="button" onClick={onShelve}>
-              {t('暂存')}
-            </button>
-          )}
           <button
             className="btn-custom"
             data-nav="button"

@@ -17,7 +17,7 @@ class ExecuteCommandMessage implements IToolCallMessage {
           {tips && (
             <span className="execute-command-tips">{tips}</span>
           )}
-          <span style={{ color: 'var(--accent-color)', fontWeight: 500 }}>
+          <span className="cmd">
             {command}
           </span>
         </span>
