@@ -37,6 +37,7 @@ import {
 } from './messages'
 import { prepareMessagesForSend } from './repair'
 import { createEventHandler, finishWorking } from './event-handler'
+import { maybeAutoCompress } from './auto-compress'
 import type { ChatServiceEvents } from './types'
 import {
   track,
@@ -340,7 +341,48 @@ export async function sendMessage(
     toolInteract.cleanup()
   }
 
-  finishWorking(sessionId, sessionRt, events, content, traceId)
+  await finishRound(sessionId, sessionRt, events, content, traceId)
+}
+/**
+ * 一轮回复循环的收尾：先显式收尾（`finishWorking`），再判是否要自动压缩。
+ *
+ * ⚠️ 两点都不能省：
+ * - **必须 await `finishWorking`**：它是 async，且 `working = false` 写在它**第一个 await 之后** ——
+ *   不等它回来就判自动压缩，`isSessionIdle()` 会读到本轮还活着的 `working = true`，永远不触发。
+ *   （真实踩过的 bug：开关开了、占用早就超 100%，就是不见压缩。）
+ * - **收尾失败不得跳过压缩**：包 try/catch，`finishWorking` 报错时仍然继续判压缩。
+ * 三处调用点（发送 / 恢复 / 迭代）共用这一份，避免各写一遍走叉。
+ */
+async function autoCompressAfterRound(
+  sessionId: string,
+  events?: ChatServiceEvents,
+): Promise<void> {
+  try {
+    await maybeAutoCompress(sessionId, events)
+  } catch {
+    // 自动压缩是旁路能力：失败不能反过来影响本轮已完成的回复
+  }
+}
+
+/**
+ * 收尾 + 自动压缩（三处调用点共用）。
+ *
+ * `finishWorking` 报错时仍然要到自动压缩：它已经把 `working` 置回 false 之后才可能抛
+ *（标题生成那段），本轮回复对用户已经完成了，压缩不该被一个旁路错误牵连。
+ */
+async function finishRound(
+  sessionId: string,
+  sessionRt: ReturnType<typeof getSessionRuntime>,
+  events: ChatServiceEvents | undefined,
+  content: MessageContent | undefined,
+  traceId: string | undefined,
+): Promise<void> {
+  try {
+    await finishWorking(sessionId, sessionRt, events, content, traceId)
+  } catch (err) {
+    console.warn('[chat] 收尾失败（不影响本轮回复）:', err)
+  }
+  await autoCompressAfterRound(sessionId, events)
 }
 
 /**
@@ -462,7 +504,7 @@ async function resumePausedRunImpl(
   }
 
   // 传 traceId，保证 engine.finish 事件被记录且链路上下文被回收
-  finishWorking(sessionId, sessionRt, events, undefined, traceId)
+  await finishRound(sessionId, sessionRt, events, undefined, traceId)
 }
 
 /**
@@ -596,7 +638,8 @@ export async function sendMessageWithGoal(
     toolInteract.cleanup()
   }
 
-  finishWorking(sessionId, sessionRt, events, content, traceId)
+  // 迭代模式同样算「一轮回复循环跑完」→ 同一个收尾入口
+  await finishRound(sessionId, sessionRt, events, content, traceId)
 }
 
 /** 取消当前正在处理的请求（非暂停状态） */

@@ -57,3 +57,18 @@ export function contextRatio(context: ContextInfoDTO): number {
 export function shouldCompress(context: ContextInfoDTO): boolean {
   return (context.tokens ?? 0) > 0 && contextRatio(context) >= COMPRESS_MIN_RATIO
 }
+
+/**
+ * 上下文是否已「满」（占用达到 100% = 达到设置里的上下文窗口）—— **自动压缩**的触发判据。
+ *
+ * 与 token 环满环同一个口径（`tokens / windowTokens`，见 [`contextRatio`]），只是不截断到 1:
+ * 判定「已满」时截断与否结果相同，但保留原始比值便于埋点上报真实占用。
+ * 没有用量数据（`null`）时返回 `false` —— 没有数据就不该假设上下文快满了。
+ */
+export function isContextFull(context: ContextInfoDTO): boolean {
+  const tokens = context.tokens
+  if (tokens == null || tokens <= 0) return false
+  const window = context.windowTokens
+  if (window <= 0) return false
+  return tokens >= window
+}

@@ -350,6 +350,27 @@ function ChatSettings() {
         </div>
         <div className="setting-row">
           <div className="setting-label">
+            <span className="label-text">{t('上下文自动压缩')}</span>
+            <span className="label-desc">
+              {t('AI 回复结束后若上下文已满（token 环到达 100%），自动用上面的压缩方式压缩一次')}
+            </span>
+          </div>
+          <div className="setting-control">
+            <label className="toggle">
+              <input
+                type="checkbox"
+                aria-label={t('上下文自动压缩')}
+                checked={s.contextAutoCompress}
+                onChange={(e) =>
+                  update('contextAutoCompress', e.target.checked)
+                }
+              />
+              <span className="toggle-slider" />
+            </label>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-label">
             <span className="label-text">{t('上下文窗口')}</span>
             <span className="label-desc">
               {t('token 环显示 100% 时对应的 token 数')}

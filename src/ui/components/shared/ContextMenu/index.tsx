@@ -9,8 +9,12 @@
  * keydown 捕获 + stopPropagation 让 Esc 只关菜单，不连带触发外层。
  *
  * 传 anchorElement 才支持「再点一次那个按钮关掉」：否则 mousedown 先关、click 又开，看着像点不动。
+ *
+ * 出场动画：从锚点（右键点 / 按钮最近的角）以 scale(0.3) 长到 1
+ *（变量 `--context-menu-origin-x/y` 写内联，keyframes 见 style.scss）。
  */
 import {
+  CSSProperties,
   ReactNode,
   useCallback,
   useEffect,
@@ -52,6 +56,14 @@ export interface ContextMenuPosition {
  */
 export type ContextMenuPlacement = 'bottom-right' | 'bottom-left' | 'top-left'
 
+/**
+ * 首帧兜底尺寸（px）：首次渲染时菜单还没量过，但位置已经要算（贴边展开方向要知道右/下边界），
+ * 只能粗估。132 对应 style.scss 的 min-width；高度取「两三行 + 内边距」的量级。
+ * 反正只用一帧，下一轮 layout 量到真尺寸就把位置纠正掉。
+ */
+const FALLBACK_WIDTH = 132
+const FALLBACK_HEIGHT = 96
+
 interface Props {
   position: ContextMenuPosition
   items: ContextMenuItem[]
@@ -80,6 +92,13 @@ export default function ContextMenu({
   anchorElement,
 }: Props) {
   const menuRef = useRef<HTMLDivElement>(null)
+  // 出场动画的锚点（视口坐标，即松开缩放 1 时鼠标所在处）+ 钳进视口后的菜单左上角；
+  // 后者是量出来的位置，拿不到就只能等 layout 量完再首绘（见下方 render），免得闪一帧 0,0
+  const [origin, setOrigin] = useState<{
+    anchor: ContextMenuPosition
+    left: number
+    top: number
+  } | null>(null)
 
   // 关闭行为：点菜单外 / Esc
   useEffect(() => {
@@ -119,9 +138,15 @@ export default function ContextMenu({
     const rawY = placement === 'top-left' ? position.y - h : position.y
     const x = Math.max(8, Math.min(rawX, window.innerWidth - w - 8))
     const y = Math.max(8, Math.min(rawY, window.innerHeight - h - 8))
-    el.style.left = `${x}px`
-    el.style.top = `${y}px`
-  }, [position, placement])
+    // 位置只由渲染时的 style 驱动（不在这里命令式写 el.style.left/top）：
+    // 两边同写一个属性会打架，React 下一轮还会认为自己没变而留下脏值。
+    // 等比状态：同一锚点只 setState 一次，不会多渲染一轮
+    setOrigin((prev) =>
+      prev && prev.anchor.x === position.x && prev.anchor.y === position.y && prev.left === x && prev.top === y
+        ? prev
+        : { anchor: { x: position.x, y: position.y }, left: x, top: y },
+    )
+  }, [position, placement, origin])
 
   function handleItemClick(item: ContextMenuItem): void {
     if (item.disabled) return
@@ -130,11 +155,40 @@ export default function ContextMenu({
     void item.onClick()
   }
 
+  // 首帧也画（不以 origin 为渲染条件）：origin 为空时用原始锚点兜底位置，量完下一轮纠正。
+  // 差距只出现在贴边被钳制的场景，而且是同一个布局帧内完成（layout 阶段刷新），看不到跳动。
+  const anchor = origin?.anchor ?? position
+  // origin 还没填 → 原点先给 0,0：首帧 scale 刚从 0.3 起、opacity 约 0，看不出来，量完立刻纠正为真实鼠标点
+  const originX = origin ? origin.anchor.x - origin.left : 0
+  const originY = origin ? origin.anchor.y - origin.top : 0
+  // 兜底位置也得按展开方向估（否则 top-left 会先出现在锚点右下方、再一跳跳上来），
+  // 尺寸未知时只能用菜单的 CSS min-width（132px）和几行的高度粗估
+  const fallbackLeft =
+    placement === 'bottom-right' ? position.x : Math.max(8, position.x - FALLBACK_WIDTH)
+  const fallbackTop =
+    placement === 'top-left' ? Math.max(8, position.y - FALLBACK_HEIGHT) : position.y
+
   return createPortal(
     <div
+      // 不能挂 key：这个组件靠 `position` 变化来「同一实例重新定位」（见上面的定位 effect）。
+      // 用 position 当 key 会在每次移动时整颗重建 DOM —— ref 失效、量过的尺寸归零，
+      // 位置会算错（且外部拿到的节点不再属于当前渲染）。
+      // 出场动画只负责「打开那一刻」，不该把「移动」也当成新开一次。
       className={`context-menu${dark ? ' context-menu--dark' : ''}`}
       ref={menuRef}
-      role="menu">
+      role="menu"
+      style={
+        {
+          // 原点 = 菜单左上角到鼠标的位移（transform-origin 默认是菜单中心的 50% 50%，
+          // 用像素位移换算）：bottom-right 时正好是菜单左上角（即右键点），
+          // 其他展开方向则是离鼠标最近的那个角；贴边被钳过也照样指向真实鼠标位置
+          '--context-menu-origin-x': `${originX}px`,
+          '--context-menu-origin-y': `${originY}px`,
+          // 位置直接写在样式里：首帧就落在算好的地方，不会在 0,0 闪一下
+          left: `${origin ? origin.left : fallbackLeft}px`,
+          top: `${origin ? origin.top : fallbackTop}px`,
+        } as CSSProperties
+      }>
       {items.map((item) => (
         <div key={item.key}>
           {item.divider && <div className="context-menu-divider" role="separator" />}

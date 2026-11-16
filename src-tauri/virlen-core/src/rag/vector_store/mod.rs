@@ -358,10 +358,11 @@ fn context_header_of(chunk: &crate::rag::document::DocumentChunk) -> Option<Stri
         .filter(|s| !s.is_empty())
 }
 
-/// 检索结果给模型 / 界面看的正文 = 语境头 + 空行 + 原文
-///
-/// 实现在 [`ChunkResult::retrieved_text`]（同一份口径，只此一处）。
-/// 没有语境头的老数据 → 原样返回。
+// 检索结果给模型 / 界面看的正文 = 语境头 + 空行 + 原文。
+// 实现在 [`ChunkResult::retrieved_text`]（同一份口径，只此一处）；没有语境头的老数据 → 原样返回。
+//（写成普通注释而不是 `///`：这段说明描述的是别处的 `retrieved_text`，
+// 紧跟在 `format_data_size` 上方会被 rustdoc 当成它的文档，也会触发 clippy 的
+// empty_line_after_doc_comments。）
 
 /// 格式化知识库数据目录大小（当前未被使用，保留供后续 UI 展示用）
 #[allow(dead_code)]

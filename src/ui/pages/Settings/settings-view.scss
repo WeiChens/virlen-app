@@ -45,6 +45,7 @@
   z-index: 100;
   box-shadow: -4px 0 20px rgba(0, 0, 0, 0.08);
   animation: slideIn 0.2s ease;
+  outline: none;
 
   &.closing {
     animation: slideOut 0.2s ease forwards;

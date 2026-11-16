@@ -20,6 +20,11 @@
   box-shadow: var(--shadow-md, 0 8px 24px rgba(0, 0, 0, 0.12));
   /* 菜单本身不该被选中（误拖会连带选中背后的文本） */
   user-select: none;
+  /* 出场动画：从鼠标位置以 scale 0.3 长到 1
+     原点由 index.tsx 按「锚点到菜单左上角的位移」算好（--context-menu-origin-x/y，单位 px）。
+     ⚠️ 原点不能用百分比替代 —— 菜单贴边被钳进视口后，鼠标可能落在菜单之外。 */
+  transform-origin: var(--context-menu-origin-x, 0px) var(--context-menu-origin-y, 0px);
+  animation: context-menu-pop-in 0.13s cubic-bezier(0.16, 1, 0.3, 1) both;
 
   .context-menu-item {
     display: block;
@@ -82,5 +87,17 @@
     .context-menu-divider {
       background: rgba(255, 255, 255, 0.12);
     }
+  }
+}
+
+/* 出场动画：从鼠标位置缩放长开，同时轻微淡入（只缩放不加位移，原点才稳定） */
+@keyframes context-menu-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
   }
 }

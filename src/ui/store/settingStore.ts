@@ -161,6 +161,12 @@ export interface SettingsStore {
    * 上下文压缩方式：ai = LLM 总结（省 token 但慢、花钱）；raw = 本地渲染（零消耗，保留正文）。
    */
   contextCompressMode: CompressMode
+  /**
+   * 上下文自动压缩（默认**关**）：agent 每跑完一轮回复循环后，若上下文占用已达 100%
+   * （= `contextWindowTokens`，token 环满环）就自动压一次，用 {@link contextCompressMode} 作为压缩方式。
+   * 判据与触发点见 `services/chat/auto-compress.ts`（单一实现，发送链路末尾调用）。
+   */
+  contextAutoCompress: boolean
   /** 上下文窗口（token），即 token 环的 100% 口径；桌面端可编辑，CLI 只读 */
   contextWindowTokens: number
   /** 是否启用「打开编辑器」功能 */
@@ -259,6 +265,8 @@ const defaultSettings: SettingsStore = {
   memoryRedistillEnabled: true,
   aiGenerateTitle: true,
   contextCompressMode: 'ai',
+  // 自动压缩：默认关（开启后每轮结束都可能多一次模型调用，须用户主动选择）
+  contextAutoCompress: false,
   contextWindowTokens: 200000,
   editorOpenEnabled: true,
   // ⚠️ 两个预览安全开关都必须默认 false：开脚本等于允许页面代码在本机执行

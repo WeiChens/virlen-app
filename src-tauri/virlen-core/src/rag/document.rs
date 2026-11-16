@@ -373,13 +373,9 @@ fn numbered_section(t: &str) -> Option<String> {
     // 「1.2 配置」/「1 安装」：最多两段数字 + 空白（或顿号），且必须还有标题正文。
     //    三段以上（`1.0.3 修复`）当版本号，不当章节 —— 版本号不是章节，混进语境头只会误导检索。
     if first.is_ascii_digit() {
-        let (head, tail) = match t.find(|c: char| c.is_whitespace() || c == '、') {
-            Some(idx) => (
-                &t[..idx],
-                t[idx..].trim_start_matches(|c: char| c.is_whitespace() || c == '、'),
-            ),
-            None => return None,
-        };
+        let idx = t.find(|c: char| c.is_whitespace() || c == '、')?;
+        let head = &t[..idx];
+        let tail = t[idx..].trim_start_matches(|c: char| c.is_whitespace() || c == '、');
         let parts: Vec<&str> = head.split('.').collect();
         if parts.len() > 2
             || parts
@@ -398,8 +394,7 @@ fn numbered_section(t: &str) -> Option<String> {
 fn last_sentence(text: &str) -> Option<&str> {
     let mut start = 0usize;
     let mut segments: Vec<&str> = Vec::new();
-    let mut iter = text.char_indices().peekable();
-    while let Some((i, ch)) = iter.next() {
+    for (i, ch) in text.char_indices() {
         if is_sentence_end(ch, text, i) {
             segments.push(&text[start..i]);
             start = i + ch.len_utf8();
