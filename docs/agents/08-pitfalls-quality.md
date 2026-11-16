@@ -28,13 +28,23 @@
 - **④ 续修（同一轮第二次 push）**：core 修完后 ubuntu clippy 才轮到 `virlen-app`，又露出 **3 条同类告警**（全在 `tray/notify.rs`：`show_notification` 的 `session_id` 只在 Windows 分支用；`PACKAGE_APP_ID` 与 `toast_app_id` 的调用方都是 Windows 专属）→ 改成 `#[cfg(target_os = "windows")]`。判据：报错行的 `due to N previous errors` 就是该 target 的**全部**告警数。**教训同①：平台专属项一律显式门禁，两侧都得能编译。**
 - **边界**：非 Windows 的编译**本地无法复现**（依据是「clippy 已证明这些项在 Linux 上零引用 → 门禁掉不可能破坏编译」+ 逐项引用点 grep 审计）；`virlen-app` 的 Linux 专属分支（约 7 处）**从未被 clippy 检查过**。
 - **⑤ `macos-14` runner 已退役（2026-11）**：`build-macos.yml` 两个 job 的 `runs-on: macos-14` 在 build 入口就失败，报 `The configuration 'macos-14-arm64-us-default' is not supported` —— 该错误**发生在排队阶段，一个 step 都不会跑**，所以日志里看不到任何编译输出，容易被误判成「镜像规格/硬件不可用」。真因：GitHub Actions 已于 **2026-11-02 全部退役 macOS 14 镜像**（[runner-images#13518](https://github.com/actions/runner-images/issues/13518)；Intel 版只在 Azure DevOps 延到 11-23）。修法：改 `macos-15`（**arm64** GA 镜像，与 `aarch64-apple-darwin` 三元组一致）；要 x64 得用 `macos-15-intel`（末代 Intel 镜像）。**⚠️ 不要用 `-latest`**：它当前指向 macOS 26（Xcode 26），本项目的 macOS 专属依赖 `speech =0.5.0` 的注释明确写了「0.8.x 引用了 macOS 26 SDK 才有的 API → 旧 SDK 编译报 `extra argument 'weight' in call`」，但反向（Xcode 26 编译老代码）同样未验证过，发版 workflow 里显式钉版本才可复现。
-- **⑥ Windows 上 `ort-sys` build script panic（`examples/` 目录不存在）**：`build-windows.yml` 的 **test job**（`cargo test --workspace`）报
+- **⑥ Windows 上 `ort-sys` build script panic（`dynamic_link.rs:42` = `fs::copy` 返回 `code 3`）**：`build-windows.yml` 的 **test job**（`cargo test --workspace`）报
   `ort-sys v2.0.0-rc.12` → `build\dynamic_link.rs:42: called Result::unwrap() on an Err value: Os { code: 3, kind: NotFound }`。
-  **真因**：ort-sys 的 `copy_dylibs` 把预编译包里的 `DirectML.dll` 往 `target/<profile>/{,examples,deps}` **三处**`fs::copy(..).unwrap()`；
-  Windows 没 Developer Mode 时 `symlink_file` 必失败 → 走 `copy` 回退，而这几处里 **`examples/` 目录只在存在 example 源码时才被 cargo 创建** ——
-  本仓库没有任何 `examples/*.rs` → 干净 checkout 里该目录不存在 → `CopyFileW` 报 `ERROR_PATH_NOT_FOUND`（**code 3 = “系统找不到指定的路径”**）= 第 42 行那个 panic。
-  **修法**：在第一次 cargo 调用前 `mkdir -p` 出 `target/<profile>/{examples,deps}`（debug 与 `<triple>/debug|release` 都要，见 workflow 的 `Pre-create cargo output dirs`）。
-- **⚠️ 本地无法复现，不要因为「本机能编过」就否定这个诊断**：本机 `src-tauri/target/debug/examples/` 里残留着 `ocr_probe.exe` / `ocr_boxes_probe.exe` 等**历史 example 二进制**（源码早已不在仓库里），那个目录恰好把 bug 盖住了。
+  **代码事实（逐行核对过源码）**：`copy_dylibs(lib_dir, OUT_DIR)` 先 `OUT_DIR.ancestors().nth(3)` 取 base，再对
+  `[base, base/examples, base/deps]` 循环；每轮先试 `symlink_file`，失败才回退 `fs::copy(..).unwrap()`（**第 42 行**）。
+- **❗ 实证结论（本地实测 > 静态推断）**：Windows 无 Developer Mode 时 symlink 必失败 → **第一轮 `base`** 就置 `copy_fallback = true`
+  → 第 53 行 **`break`** 跳出循环，`examples/`、`deps/` **根本不参与拷贝**。所以「examples 目录不存在」是**错**的解释：
+  删掉本地 `target/debug/examples/` 后重编 ort-sys 依然 `exit 0` 就是铁证。能触发 `code 3` 的只剩「**第一轮 base 目录不存在/不可写**」。
+  base 由 `nth(3)` 推出，而它的落点随 cargo 的 `OUT_DIR` 布局变化（CI 日志的 `rerun-if-changed=…\target\debug\build\DirectML.dll`
+  说明那边 base 是 `target\debug\build`，本机是 `target\debug` —— 纯靠公式算会算错）。
+- **防御式修法（不靠 `nth(3)` 推算）**：在第一次 cargo 调用前把 `target` 下**所有可能成为 base 的目录**及其 `examples`/`deps` 一次建齐
+  （`target/debug`、`target/debug/build`、`target/release`、`target/release/build`、`target/<triple>/{debug,release}{,/build}`；`mkdir -p` 幂等，成本近零），
+  并把实际目录 `find` 进日志，便于下次直接定位真实 base。见 workflow 的 `Pre-create cargo output dirs`。
+- **`cargo:rerun-if-changed` 的正确读法**：它只在 `!copy_fallback` 时打印（第 48 行），而 `copy_fallback` 一为真就 `break` ⇒
+  日志里**出现几条** `rerun-if-changed` 就说明**前几轮 symlink 真的成功了**；**1 条后紧跟 `cargo:warning=… had to copy dylibs…`** 才是走了 copy 回退；
+  **没有 warning 却 panic** ⇒ 失败在「目录/权限」，而非「examples 缺失」。
+- **⚠️ 本地不可靠的两处**：① 本机 `target/debug/examples/` 残留着 `ocr_probe.exe` / `ocr_boxes_probe.exe` 等**历史 example 二进制**（源码已不在仓库），会掩盖真实目录状态；
+  ② 本机访问 `cdn.pyke.io` 会 `native-tls: 安全包中没有可用的凭证` → 无法复现「下载→解压→拷贝」整链，别指望本地跑通。
 - **两个幌子（别被日志带偏）**：① 报错行旁边有 `cargo:rustc-link-lib=DirectML` 等 —— 那只是 build script **将要**打印的链接指令，不是链接失败；
   ② 日志里有 `[ort-sys] downloading from 'cdn.pyke.io/…'` —— 但 `Failed to download` / `Extraction … failed` / `hash … does not match` 三条 `cargo::error=` **一条都没出现** ⇒ 下载与校验是成功的，别去查代理/证书/掉包。
 - **顺手修的（性能，非此 bug 的解）**：ort-sys 的 300+ MB 预编译包落到 `%LOCALAPPDATA%\ort.pyke.io\dfbin\<triple>\<sha>`，**不在 `Swatinem/rust-cache` 覆盖范围**（它只管 `target/` 与 cargo 注册表/索引）→ 每个 job 都重下。用 `actions/cache@v4` 缓存它，并以 **`ORT_CACHE_DIR`**（ort-sys `src/internal/dirs.rs::cache_dir` 认这个变量）指过去。

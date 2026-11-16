@@ -86,13 +86,28 @@ jobs:
       - name: Pre-create cargo output dirs (ort-sys copies DirectML.dll into examples/)
         shell: bash
         run: |
-          for d in \
-            target/debug/examples target/debug/deps \
-            target/x86_64-pc-windows-msvc/debug/examples target/x86_64-pc-windows-msvc/debug/deps \
-            target/x86_64-pc-windows-msvc/release/examples target/x86_64-pc-windows-msvc/release/deps; do
-            mkdir -p "src-tauri/$d"
+          # ort-sys 的 `copy_dylibs(lib_dir, OUT_DIR)` 会用 `OUT_DIR.ancestors().nth(3)` 取基目录，
+          # 然后依次往 `<base>`、`<base>/examples`、`<base>/deps` 三个位置拷贝 `DirectML.dll`。
+          # Windows 上第 2 个位置（某 profile 目录下的 examples/）在**没有任何 example 源码**时不存在
+          # → `fs::copy(..).unwrap()` 返回 `Os { code: 3, kind: NotFound }` → build script panic。
+          #
+          # 因为 `nth(3)` 的落点随 cargo 的 OUT_DIR 布局而变（本机与 CI 实测不一致），这里**不靠推算**，
+          # 直接把 target 下所有可能成为 base 的目录、及其 examples/deps 一次建齐（mkdir -p 幂等，成本近零）。
+          for base in \
+            target/debug \
+            target/debug/build \
+            target/release \
+            target/release/build \
+            target/x86_64-pc-windows-msvc/debug \
+            target/x86_64-pc-windows-msvc/debug/build \
+            target/x86_64-pc-windows-msvc/release \
+            target/x86_64-pc-windows-msvc/release/build; do
+            mkdir -p "src-tauri/$base" "src-tauri/$base/examples" "src-tauri/$base/deps"
           done
-          ls -d src-tauri/target/debug/examples src-tauri/target/debug/deps
+          # 诊断：把实际建好的目录打出来（万一仍失败，对照日志即可定位真实 base）
+          echo "::group::precreated dirs"
+          find src-tauri/target -maxdepth 3 -type d \( -name examples -o -name deps \) | sort
+          echo "::endgroup::"
 
       # 5) Rust 测试（各模块内联 #[cfg(test)] mod tests）
       - name: Rust tests (cargo test)
@@ -175,13 +190,22 @@ jobs:
       - name: Pre-create cargo output dirs (ort-sys copies DirectML.dll into examples/)
         shell: bash
         run: |
-          for d in \
-            target/debug/examples target/debug/deps \
-            target/x86_64-pc-windows-msvc/debug/examples target/x86_64-pc-windows-msvc/debug/deps \
-            target/x86_64-pc-windows-msvc/release/examples target/x86_64-pc-windows-msvc/release/deps; do
-            mkdir -p "src-tauri/$d"
+          # 同 test job：把 target 下所有可能作为 nth(3) base 的目录及其 examples/deps 一次建齐。
+          # `CARGO_BUILD_TARGET` 让产物落 target/<triple>/release/，但 debug 侧也一并建上（幂等）。
+          for base in \
+            target/debug \
+            target/debug/build \
+            target/release \
+            target/release/build \
+            target/x86_64-pc-windows-msvc/debug \
+            target/x86_64-pc-windows-msvc/debug/build \
+            target/x86_64-pc-windows-msvc/release \
+            target/x86_64-pc-windows-msvc/release/build; do
+            mkdir -p "src-tauri/$base" "src-tauri/$base/examples" "src-tauri/$base/deps"
           done
-          ls -d src-tauri/target/x86_64-pc-windows-msvc/release/examples
+          echo "::group::precreated dirs"
+          find src-tauri/target -maxdepth 4 -type d \( -name examples -o -name deps \) | sort
+          echo "::endgroup::"
 
       # ── 6. Build CLI (virlen-cli) ──
       # headless CLI 与 GUI **同源同 workspace**（共享 Cargo.lock / target/ / rust-cache），
