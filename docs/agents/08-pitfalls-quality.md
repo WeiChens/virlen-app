@@ -47,6 +47,13 @@
   ② 本机访问 `cdn.pyke.io` 会 `native-tls: 安全包中没有可用的凭证` → 无法复现「下载→解压→拷贝」整链，别指望本地跑通。
 - **两个幌子（别被日志带偏）**：① 报错行旁边有 `cargo:rustc-link-lib=DirectML` 等 —— 那只是 build script **将要**打印的链接指令，不是链接失败；
   ② 日志里有 `[ort-sys] downloading from 'cdn.pyke.io/…'` —— 但 `Failed to download` / `Extraction … failed` / `hash … does not match` 三条 `cargo::error=` **一条都没出现** ⇒ 下载与校验是成功的，别去查代理/证书/掉包。
+- **⑦ 共用全局静态量的单测：并行跑才会炸（Linux 先摇到，Windows 常常没摇到）**：`notice.rs` 的用例共用一个全局 `PENDING`/`ACTIVE`/`PRESENTED`，
+  而 `cargo test` 默认多线程并行 —— 一个用例末尾的 `clear_all()` 会把另一个用例刚入队的通知**整批清掉**，症状是 `left: 0, right: 1` 且
+  **平台相关**（极易误判为「Linux 特有问题」）。
+  **定位手法**：别只看 CI 那一条 —— 用测试二进制手动 `--test-threads 4` 循环跑同一模块（`./virlen_core-*.exe --test-threads 4 <模块名>`），
+  几轮就能抓到全部受害者（本例实测 15 轮炸 2 次；完整跑只会暴露第一个）。
+  **修法**：模块级 `static GLOBAL_STATE: Mutex<()>` + 每个碰静态量的用例 `let _guard = lock_global();`（拿下锁后还要 `drop_session(sid)` 清自己的残留，
+  因为这类用例多用「累积计数」断言），并给锁加毒化回退 `unwrap_or_else(|e| e.into_inner())`。**新增同类用例必须拿锁**。
 - **顺手修的（性能，非此 bug 的解）**：ort-sys 的 300+ MB 预编译包落到 `%LOCALAPPDATA%\ort.pyke.io\dfbin\<triple>\<sha>`，**不在 `Swatinem/rust-cache` 覆盖范围**（它只管 `target/` 与 cargo 注册表/索引）→ 每个 job 都重下。用 `actions/cache@v4` 缓存它，并以 **`ORT_CACHE_DIR`**（ort-sys `src/internal/dirs.rs::cache_dir` 认这个变量）指过去。
   ⚠️ `ORT_CACHE_DIR` **必须经 `$GITHUB_ENV` 持久化**，不能在命令行写 `VAR=… pnpm run …` —— 本 workflow 的 `shell: bash` 在 Windows 上会落到 **PowerShell**，那句会被当成外部命令。
 - **为何只在 Windows**：三个平台的预编译包里**只有 Windows 包带 `DirectML.dll`**（解压后只有 `onnxruntime.lib` + `DirectML.dll`，Linux/macOS 只发静态库）；没有 `.dll/.so/.dylib` 就不会进那个拷贝循环。

@@ -282,6 +282,21 @@ mod tests {
     use crate::agent::native_tools::service::registry::{ServiceEntry, ServiceState};
     use serde_json::json;
 
+    /// 串行锁：本模块多个用例共用**全局** `PENDING` / `ACTIVE` / `PRESENTED`，
+    /// 而 `cargo test` 默认多线程并行 —— 一个用例末尾的 `clear_all()` 会把另一个用例
+    /// 刚入队的通知整批清掉（典型症状：`inject_pending_appends_once` 偶发
+    /// `left: 0, right: 1`，且**随平台/调度变化**：Linux 摇到、Windows 没摇到，
+    /// 是竞态而非逻辑错）。凡碰这三个静态量的用例必须先拿这把锁。
+    ///
+    /// ⚠️ `clear_all()` 是全局清场，在它之后的断言只对本用例自己的会话成立 —— 因此
+    /// 拿锁后仍要用**本用例独有的 session_id**（下面各自都用不同 sid）。
+    static GLOBAL_STATE: Mutex<()> = Mutex::new(());
+
+    /// 拿串行锁；被前面的用例 panic 毒化了也照常用（不再重复 panic，让报错停在真正的地方）。
+    fn lock_global() -> std::sync::MutexGuard<'static, ()> {
+        GLOBAL_STATE.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// 记录被投递过的通知的宿主出口（验「空闲 → 立刻上屏」与「ack ≠ 投递」两条路）。
     struct RecordingHost {
         seen: Mutex<Vec<(String, Value)>>,
@@ -331,9 +346,11 @@ mod tests {
     ///（否则界面与模型会看到两次：一次是上屏的那条，一次是下一次请求里注入的那条）。
     #[test]
     fn active_session_queues_and_never_presents() {
+        let _guard = lock_global();
         // ⚠️ 消息 id 必须跨用例唯一：`ack_delivered` 按 id 跨会话查找（真实链路里 id 是 uuid）
         let host = RecordingHost::new();
         let sid = "s_notice_active";
+        drop_session(sid); // 累积计数断言：先确保本会话队列干净
         mark_session_active(sid);
         route(
             sid,
@@ -371,8 +388,10 @@ mod tests {
     /// 投递后队列内容不变，直到 ack。
     #[test]
     fn idle_session_presents_immediately_but_keeps_the_notice_until_ack() {
+        let _guard = lock_global();
         let host = RecordingHost::new();
         let sid = "s_notice_idle_host";
+        drop_session(sid); // 累积计数断言：先确保本会话队列干净
         route(sid, json!({ "id": "notice_idle_1" }), false, Some(&host));
         assert_eq!(host.count(), 1, "空闲时立刻上屏");
         assert_eq!(pending_count(sid), 1, "ack 之前仍留在队列里（丢 emit 不能丢消息）");
@@ -397,7 +416,11 @@ mod tests {
     /// 先后无保证 —— 先取证、后关窗口也必须静默（否则同一件事会被 start 结果 + 结束通知说两遍）。
     #[test]
     fn startup_window_and_muted_exits_are_silent() {
+        let _guard = lock_global();
         let sid = "s_notice_silent";
+        // 本用例全程用「累积计数」断言（0 → 1 → 1 → 0），必须先确保该会话队列是空的：
+        // 拿锁只挡其他用例，挡不住上次运行/自身重入留下的残留。
+        drop_session(sid);
 
         // ① 窗口内退出：finish 时取证 → 之后窗口被关掉（start 工具的正常收尾）也不得发
         let state = Arc::new(ServiceState::new());
@@ -468,7 +491,9 @@ mod tests {
     /// 轮次边界注入：消息进本次请求的列表（幂等：注入过就不再注入）。
     #[tokio::test]
     async fn inject_pending_appends_once() {
+        let _guard = lock_global();
         let sid = "s_notice_inject";
+        drop_session(sid); // 累积计数断言：先确保本会话队列干净
         let state = Arc::new(ServiceState::new());
         let e = entry(sid, "svc_inj", &state);
         // 工具已返回（窗口关闭）之后才退出 → 应当生成通知
@@ -496,7 +521,9 @@ mod tests {
     /// 界面已上屏并落库、但 ack 丢了 → 注入时必须按 id 去重（库里主键幂等，上下文里不是）。
     #[tokio::test]
     async fn inject_pending_skips_notices_already_in_the_context() {
+        let _guard = lock_global();
         let sid = "s_notice_inject_dup";
+        drop_session(sid); // 累积计数断言：先确保本会话队列干净
         let state = Arc::new(ServiceState::new());
         let e = entry(sid, "svc_dup", &state);
         state.close_startup_window();
