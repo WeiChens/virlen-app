@@ -5,6 +5,13 @@
 #
 # Tech stack: Tauri v2 + React 19 + Rust + pnpm
 # Dependencies include quasivision (ONNX Runtime + CoreML backend)
+#
+# ⚠️ Runner 标签用 `macos-15`（**arm64** 镜像），不要退回 `macos-14`：
+#    GitHub Actions 已于 2026-11-02 全部退役 macOS 14 镜像，用旧标签的 job 会在排队阶段直接
+#    失败（报 `The configuration 'macos-14-arm64-us-default' is not supported`，且**根本不会
+#    进入任何 step**）。`macos-15` 是当前 GA 的 arm64 镜像（Apple Silicon），与本 workflow
+#    的 `aarch64-apple-darwin` 三元组一致；`macos-15-intel` 才是 x64（末代 Intel 镜像）。
+#    详见 <https://github.com/actions/runner-images/issues/13518>。
 # =============================================================================
 
 name: Build macOS
@@ -26,7 +33,7 @@ jobs:
   # 从而阻断 release（release 依赖 build）。
   test:
     name: Test (tsc + vitest + cargo)
-    runs-on: macos-14
+    runs-on: macos-15
 
     steps:
       - name: Checkout repository
@@ -86,7 +93,7 @@ jobs:
   build-macos:
     name: Build macOS (Apple Silicon)
     needs: [test]
-    runs-on: macos-14
+    runs-on: macos-15
 
     steps:
       # ── 1. Checkout ─────────────────────────────────────────────────────
