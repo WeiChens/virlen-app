@@ -263,61 +263,63 @@ function SkillPlaza() {
                     <p className="plaza-card-desc">
                       {skill.description || t('暂无描述')}
                     </p>
-                    <div className="plaza-card-meta">
-                      {skill.tags && skill.tags.length > 0 && (
-                        <div className="plaza-card-tags">
-                          {skill.tags.slice(0, 3).map((tag) => (
-                            <span key={tag} className="plaza-tag">{tag}</span>
-                          ))}
-                          {skill.tags.length > 3 && (
-                            <span className="plaza-tag-more">
-                              +{skill.tags.length - 3}
+                    <div className="plaza-card-footer-wrapper">
+                      <div className="plaza-card-meta">
+                        {skill.tags && skill.tags.length > 0 && (
+                          <div className="plaza-card-tags">
+                            {skill.tags.slice(0, 3).map((tag) => (
+                              <span key={tag} className="plaza-tag">{tag}</span>
+                            ))}
+                            {skill.tags.length > 3 && (
+                              <span className="plaza-tag-more">
+                                +{skill.tags.length - 3}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        <div className="plaza-card-stats">
+                          {skill.author && (
+                            <span className="plaza-stat">
+                              👤 {skill.author.length > 10 ? skill.author.slice(0, 10) + '…' : skill.author}
+                            </span>
+                          )}
+                          <span className="plaza-stat">
+                            ⬇ {fmtDownloads(skill.download_count)}
+                          </span>
+                          {skill.file_size && (
+                            <span className="plaza-stat">
+                              📦 {fmtFileSize(skill.file_size)}
                             </span>
                           )}
                         </div>
-                      )}
-                      <div className="plaza-card-stats">
-                        {skill.author && (
-                          <span className="plaza-stat">
-                            👤 {skill.author.length > 10 ? skill.author.slice(0, 10) + '…' : skill.author}
+                      </div>
+                      <div className="plaza-card-footer">
+                        {installed ? (
+                          <span className="plaza-installed-badge">
+                            ✓ {t('已安装')}
                           </span>
-                        )}
-                        <span className="plaza-stat">
-                          ⬇ {fmtDownloads(skill.download_count)}
-                        </span>
-                        {skill.file_size && (
-                          <span className="plaza-stat">
-                            📦 {fmtFileSize(skill.file_size)}
-                          </span>
+                        ) : (
+                          <button
+                            className="plaza-import-btn"
+                            disabled={isImporting}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleImport(skill)
+                            }}>
+                            {isImporting ? (
+                              <>
+                                <div className="plaza-mini-spinner" />
+                                {t('导入中…')}
+                              </>
+                            ) : (
+                              <>
+                                <AddSvg fill="currentColor" />
+                                {t('导入')}
+                              </>
+                            )}
+                          </button>
                         )}
                       </div>
-                    </div>
-                    <div className="plaza-card-footer">
-                      {installed ? (
-                        <span className="plaza-installed-badge">
-                          ✓ {t('已安装')}
-                        </span>
-                      ) : (
-                        <button
-                          className="plaza-import-btn"
-                          disabled={isImporting}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleImport(skill)
-                          }}>
-                          {isImporting ? (
-                            <>
-                              <div className="plaza-mini-spinner" />
-                              {t('导入中…')}
-                            </>
-                          ) : (
-                            <>
-                              <AddSvg fill="currentColor" />
-                              {t('导入')}
-                            </>
-                          )}
-                        </button>
-                      )}
                     </div>
                   </div>
                 )

@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use virlen_core::agent::memory::integrity::{self, MemoryIntegrityReport};
 use virlen_core::agent::memory::prompt::{load_memory_section, MemoryPromptSection};
 use virlen_core::agent::memory::tools::{
     run_recall, run_search, run_write, MemoryToolDeps, MemoryToolOutput, WriteRequest,
@@ -489,6 +490,130 @@ pub async fn cmd_memory_redistill_runs(
     limit: Option<usize>,
 ) -> Result<Vec<virlen_core::session_db::MemoryRedistillRun>, String> {
     state.list_redistill_runs(limit.unwrap_or(20)).await
+}
+
+// ==================== 记忆详情「引用完整性」自检 ====================
+//
+// 摘要与正文分居两处（`memories` 表 + 知识库文档），断链两边都**静默成功**，
+// 只能靠主动核验发现：孤儿正文 = 记忆删了正文没删；断链 = 正文没了而记忆还指着它。
+// 核验只读，清理是显式动作（`cmd_memory_integrity_purge`）。
+
+/// 核验一次（只读）。RAG 未初始化时如实报 `kbAvailable = false`，不把「没检查」当「干净」。
+#[tauri::command]
+pub async fn cmd_memory_integrity_check(
+    memory: tauri::State<'_, Arc<dyn MemoryRepo>>,
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+) -> Result<MemoryIntegrityReport, String> {
+    let records = memory.list(None, true).await?;
+    let report = integrity::check(
+        settings.inner().as_ref(),
+        &records,
+        virlen_core::rag::get_service().ok(),
+    )
+    .await;
+    track_integrity(&report, "manual");
+    Ok(report)
+}
+
+/// 清掉孤儿正文，然后**重新核验**并返回当前状态（删失败的那几篇仍在 `orphans` 里）
+///
+/// 只删名字带「记忆详情」前缀的那些：用户往这个库里手导的文档同样没被引用，
+/// 但不是记忆的残留，留给人在面板里判断。
+#[tauri::command]
+pub async fn cmd_memory_integrity_purge(
+    memory: tauri::State<'_, Arc<dyn MemoryRepo>>,
+    settings: tauri::State<'_, Arc<dyn SettingsRepo>>,
+) -> Result<MemoryIntegrityReport, String> {
+    let rag = virlen_core::rag::get_service().ok();
+    let records = memory.list(None, true).await?;
+    let before = integrity::check(settings.inner().as_ref(), &records, rag).await;
+
+    let (removed, failed, skipped) = match (rag, before.kb_id.as_deref()) {
+        (Some(rag), Some(kb_id)) if !before.orphans.is_empty() => {
+            integrity::purge_orphans(rag, kb_id, &before.orphans).await
+        }
+        _ => (0, 0, 0),
+    };
+
+    let after = integrity::check(settings.inner().as_ref(), &records, rag).await;
+    crate::telemetry::track(
+        "memory.integrity_purge",
+        serde_json::json!({
+            "orphans_before": before.orphans.len(),
+            "removed": removed,
+            "failed": failed,
+            "skipped": skipped,
+            "orphans_after": after.orphans.len(),
+            "dangling": after.dangling.len(),
+        }),
+    );
+    eprintln!(
+        "[memory] 清理孤儿正文：删除 {} 篇，失败 {} 篇，跳过 {} 篇（不像记忆正文），剩 {} 篇",
+        removed,
+        failed,
+        skipped,
+        after.orphans.len()
+    );
+    Ok(after)
+}
+
+/// 启动时静默核验一次（只打日志 + 埋点，**不删不改**）
+///
+/// 为什么要开机就跑：断链与孤儿都是静默的，用户不会主动去查；而它们一旦发生，
+/// 「记忆失效」与「知识库越长越大」会一直积下去，直到有人注意到。
+pub fn check_integrity_on_startup(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let memory = app
+            .try_state::<Arc<dyn MemoryRepo>>()
+            .map(|s| s.inner().clone());
+        let settings = app
+            .try_state::<Arc<dyn SettingsRepo>>()
+            .map(|s| s.inner().clone());
+        let (Some(memory), Some(settings)) = (memory, settings) else {
+            return;
+        };
+        let Ok(records) = memory.list(None, true).await else {
+            return;
+        };
+        // 没有任何记忆 = 没有引用可核（不建库、不打扰）
+        if records.is_empty() {
+            return;
+        }
+        let report = integrity::check(
+            settings.as_ref(),
+            &records,
+            virlen_core::rag::get_service().ok(),
+        )
+        .await;
+        // 没有**具体问题**就安静收场：`is_clean()` 在「知识库不可用」时也是 false，
+        // 而那种情况下本来就查不出东西 —— 每次开机报一句「未能核验」只会造成噪音
+        // （RAG 初始化失败、无嵌入模型的机器上会天天出现）。
+        if report.dangling.is_empty() && report.orphans.is_empty() {
+            if !report.kb_available {
+                eprintln!("[memory] 记忆详情自检跳过：知识库暂不可用");
+            }
+            return;
+        }
+        eprintln!("[memory] 记忆详情引用完整性：{}", report.summary());
+        track_integrity(&report, "startup");
+    });
+}
+
+/// 埋点只报计数：记忆正文、文档名与路径一律不进埋点。
+fn track_integrity(report: &MemoryIntegrityReport, trigger: &str) {
+    crate::telemetry::track(
+        "memory.integrity",
+        serde_json::json!({
+            "trigger": trigger,
+            "kb_available": report.kb_available,
+            "orphans": report.orphans.len(),
+            "dangling": report.dangling.len(),
+            "checked_memories": report.checked_memories,
+            "checked_docs": report.checked_docs,
+        }),
+    );
 }
 
 /// 埋点只报计数与状态，记忆正文绝不进埋点。

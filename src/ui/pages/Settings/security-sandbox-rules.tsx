@@ -322,9 +322,15 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
 
   return (
     <div className="sandbox-ignore-rules">
-      <h2 className="section-title">{t('忽略沙盒命令')}</h2>
-
-      <div className="section-desc">
+      <div className='sandbox-ignore-rules-top'>
+        <h2 className="section-title">{t('忽略沙盒命令')}
+        </h2>
+        <button className="rule-add-btn" onClick={openCreate}>
+          <AddSvg fill="currentColor" />
+          <span>{t('新增规则')}</span>
+        </button>
+      </div>
+      {/* <div className="section-desc">
         <span className="t">
           {t(
             '命中规则的命令不再单独申请沙盒授权，直接放开执行。适用于 vitest、vite、node-gyp 等无法在沙盒内运行的命令。',
@@ -334,20 +340,15 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
         {t(
           '规则仅免除沙盒授权；命令本身的审批仍按「权限管理」设置执行（如安装类命令设为「询问」时仍会询问）。「沙盒脱壳」权限为「禁止」或处于只读模式时，规则不生效。',
         )}
-      </div>
+      </div> */}
 
       <div className="rules-toolbar">
-        <button className="rule-add-btn" onClick={openCreate}>
-          <AddSvg fill="currentColor" />
-          <span>{t('新增规则')}</span>
-        </button>
         <span className="rules-count">
           {tpl('共 $__count__ 条规则（$__enabled__ 条已启用）', {
             count: rules.length,
             enabled: rules.filter((r) => r.enabled).length,
           })}
         </span>
-        {/* 只有一条规则时无所谓优先级，不占位置 */}
         {rules.length > 1 && (
           <span className="rules-order-hint">
             {t('从上到下依次匹配，越靠上优先级越高')}
@@ -394,9 +395,8 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
           {rules.map((rule, index) => (
             <div
               key={rule.id}
-              className={`rule-item${rule.enabled ? '' : ' is-disabled'}${
-                drag?.id === rule.id ? ' is-dragging' : ''
-              }`}
+              className={`rule-item${rule.enabled ? '' : ' is-disabled'}${drag?.id === rule.id ? ' is-dragging' : ''
+                }`}
               style={
                 drag?.id === rule.id
                   ? { transform: `translateY(${drag.dy}px)` }
@@ -585,8 +585,8 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
                   : draft.kind === 'regex'
                     ? t('JavaScript 正则，与整条命令做匹配（test 语义）')
                     : t(
-                        '参数 command 为待匹配的命令，返回真值即命中；请只写你信任的代码。',
-                      )}
+                      '参数 command 为待匹配的命令，返回真值即命中；请只写你信任的代码。',
+                    )}
               </span>
             </div>
 
@@ -621,17 +621,16 @@ const SandboxIgnoreRules = observer(function SandboxIgnoreRules() {
               </div>
               {testResult && (
                 <div
-                  className={`test-result ${
-                    testResult.error
-                      ? 'error'
-                      : testResult.matched
-                        ? 'matched'
-                        : 'unmatched'
-                  }`}>
+                  className={`test-result ${testResult.error
+                    ? 'error'
+                    : testResult.matched
+                      ? 'matched'
+                      : 'unmatched'
+                    }`}>
                   {testResult.error
                     ? tpl('规则报错（按未命中处理）：$__error__', {
-                        error: testResult.error,
-                      })
+                      error: testResult.error,
+                    })
                     : testResult.matched
                       ? t('命中：该命令将放开执行，不再单独授权')
                       : t('未命中')}

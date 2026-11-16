@@ -39,11 +39,18 @@ export interface KnowledgeBaseDocument {
 /** 检索结果块 */
 export interface KnowledgeBaseChunk {
   id: string
+  /** 原文片段（**不含**语境头）：界面上的片段预览、按块拼回全文都用它 */
   content: string
   document_id: string
   document_name: string
   chunk_index: number
   score: number
+  /**
+   * 检索语境头（文档名 + 所属章节 + 前后一句），与当初被嵌入的文本同口径。
+   * **只往「给模型看的上下文」里拼**（见 `chunkRetrievedText`），不要当正文展示；
+   * 升级前导入的块没有这个字段（Rust 侧 `#[serde(default)]`）→ 缺失即当没有。
+   */
+  context_header?: string | null
 }
 
 /** 检索响应（含格式化的上下文） */

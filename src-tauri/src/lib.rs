@@ -308,7 +308,12 @@ pub fn run() {
             // 初始化 RAG 知识库服务
             if let Err(e) = commands::rag::init_rag_service(app.handle()) {
                 eprintln!("[RAG] 初始化失败: {}", e);
-            } 
+            }
+
+            // 启动自检：记忆详情的引用完整性（只打日志 + 埋点，不删不改）
+            //   ⚠️ 必须在 `init_rag_service` **之后**：它要列「记忆详情」知识库里有哪些文档，
+            //   RAG 没就绪就会把「没检查」当成「不干净」，每次启动都报一条假警。
+            commands::memory::check_integrity_on_startup(app.handle()); 
 
             // 视觉模型按需懒加载，启动期无需初始化
 
@@ -486,6 +491,9 @@ pub fn run() {
             // 长期记忆再蒸馏
             commands::memory::cmd_memory_redistill,
             commands::memory::cmd_memory_redistill_runs,
+            // 记忆详情引用完整性（自检只读；清理是显式动作）
+            commands::memory::cmd_memory_integrity_check,
+            commands::memory::cmd_memory_integrity_purge,
             // 后台服务面板
             commands::service::cmd_list_background_services,
             commands::service::cmd_kill_background_service,

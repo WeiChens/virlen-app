@@ -340,6 +340,29 @@ pub trait MemoryRepo: Send + Sync {
         limit: usize,
     ) -> Result<Vec<MemoryRecord>, String>;
 
+    /// 取**同一作用域**的**启用**条目（写入前查重用的候选集）
+    ///
+    /// `project_path`：`None` / 空串 = 只取「不限定项目」的通用记忆；`Some(p)` = 只取项目路径
+    /// **指向同一处**的条目 —— 比较走路径归一化（分隔符 / 尾斜杠 / 长路径前缀 / Windows·macOS 大小写）
+    /// 而不是原字符串相等：同一个项目换个写法写进来的记忆，也必须能互相查重。
+    ///
+    /// 为什么要按作用域隔离：查重会把旧条目归档（`superseded_by` 软删），跳作用域比较就等于
+    /// 「写一条项目记忆顺手把别的项目的记忆停掉」—— 静默丢事实。
+    ///
+    /// 排序：命中降序 → 更新时间降序 → id 升序（全序：同一份库永远得到同一份候选列表，判定可断言）。
+    /// 数量上限由调用方给（[`crate::agent::memory::dedupe::MEMORY_DEDUPE_MAX_CANDIDATES`]）——
+    /// 写路径上不允许读全表。
+    ///
+    /// ⚠️ **默认实现返回空列表**（查重降级为「不查重」）：已有的测试桩不必逐个跟着改，
+    /// 代价是「忘了覆写不会报错」。新实现若想参与查重，必须覆写它。
+    async fn active_in_scope(
+        &self,
+        _project_path: Option<&str>,
+        _limit: usize,
+    ) -> Result<Vec<MemoryRecord>, String> {
+        Ok(Vec::new())
+    }
+
     // ===== 再蒸馏（P2′）=====
     //
     // ⚠️ 这组方法带**安全默认实现**（一律返回「没有候选 / 未命中」）：因此只有 `SqliteMemoryRepo`
@@ -687,6 +710,103 @@ fn supersede_in_conn(
     Ok(hit)
 }
 
+/// 作用域归一化表达式（SQL 版）—— 与 [`crate::agent::memory::scope::path_key`] 同一套规则
+///
+/// 为什么要归一：库里存的是**写入当时的工作目录原样字符串**（`scope_for_write` 只 `trim()`），
+/// 而 `C:\work\app\` 与 `C:/work/app` 是同一个项目的两种写法。按原字符串相等比，
+/// 同一项目换个写法就查不出重复 —— 于是「先写 pnpm、后写 npm」两条互斥事实就在同一个项目里
+/// 并存（正是本功能要消灭的场景）。
+///
+/// 规则（与 `path_key` 逐条对应）：
+/// - `\` → `/`（跨平台路径）；
+/// - 去掉 Windows 长路径前缀 `//?/`（在统一分隔符之后处理）；
+/// - 压缩一遍重复的 `//`、去掉尾部 `/`；
+/// - Windows / macOS 再折成小写（其余平台保留大小写敏感，`/Foo` 与 `/foo` 是两个目录）。
+///
+/// 已知差异（都只影响候选集宽窄，不会删数据）：
+/// - 项目路径正好是根 `/` 时，归一化后与「不限定项目」同为空串（`path_key` 会保留 `/`）
+///   —— 根目录当项目路径是病态用法，注入侧本来也把它当「匹配一切」；
+/// - 连三个以上分隔符只压一遍（`path_key` 循环压到底）。
+fn scope_key_sql(expr: &str) -> String {
+    let normalized = format!(
+        "replace(replace(replace(trim(coalesce({expr}, '')), '\\', '/'), '//?/', ''), '//', '/')"
+    );
+    let trimmed = format!("rtrim({normalized}, '/')");
+    if cfg!(any(target_os = "windows", target_os = "macos")) {
+        format!("lower({trimmed})")
+    } else {
+        trimmed
+    }
+}
+
+/// 取同一作用域的启用条目（纯函数）
+///
+/// 两侧套**同一个**归一化表达式（[`scope_key_sql`]）：口径只有一处定义，查重不会因为
+/// 写入时的工作目录写法不同而漏掉（也不会因写法相近而跨项目顶替）。
+///
+/// ⚠️ **两条腿**取候选（各取一半上限）：
+/// - 命中优先（`hits DESC`）：长期高频的定稿事实最可能与新写入撞车；
+/// - 新鲜度优先（`updated_at DESC`）：重复写入最常撞的是**刚写下的那条**（`hits = 0
+///   `），只按命中排序会把它挤出候选集。
+/// 两腿取并集后再按全序排一遍，同一份库永远得到同一份候选列表。
+fn active_in_scope_in_conn(
+    conn: &Connection,
+    project_path: Option<&str>,
+    limit: usize,
+) -> Result<Vec<MemoryRecord>, String> {
+    let limit = limit.clamp(1, 500);
+    let scope = project_path.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("");
+    let leg = limit.div_ceil(2);
+
+    let mut seen: std::collections::HashMap<String, MemoryRecord> = std::collections::HashMap::new();
+    for order in [
+        "hits DESC, updated_at DESC, id ASC",
+        "updated_at DESC, hits DESC, id ASC",
+    ] {
+        for record in query_scope_leg(conn, scope, order, leg)? {
+            seen.entry(record.id.clone()).or_insert(record);
+        }
+    }
+
+    let mut out: Vec<MemoryRecord> = seen.into_values().collect();
+    out.sort_by(|a, b| {
+        b.hits
+            .cmp(&a.hits)
+            .then_with(|| b.updated_at.cmp(&a.updated_at))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    out.truncate(limit);
+    Ok(out)
+}
+
+/// 取一条腿（作用域过滤 + 指定排序 + 上限）
+fn query_scope_leg(
+    conn: &Connection,
+    scope: &str,
+    order_by: &str,
+    limit: usize,
+) -> Result<Vec<MemoryRecord>, String> {
+    let sql = format!(
+        "SELECT * FROM memories \
+         WHERE disabled = 0 AND {stored} = {wanted} \
+         ORDER BY {order_by} LIMIT ?2",
+        stored = scope_key_sql("project_path"),
+        wanted = scope_key_sql("?1"),
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("准备记忆作用域查询失败: {}", e))?;
+    let rows = stmt
+        .query_map(params![scope, limit as i64], memory_from_row)
+        .map_err(|e| format!("查询作用域内记忆失败: {}", e))?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
 /// 取某个指纹的流水（纯函数）
 fn get_run_in_conn(conn: &Connection, fingerprint: &str) -> Result<Option<MemoryRedistillRun>, String> {
     conn.query_row(
@@ -761,15 +881,29 @@ fn id_taken_in_conn(conn: &Connection, id: &str) -> Result<bool, String> {
 /// 写入（纯函数）：同 id 覆盖，但 `created_at` 与 `hits` / `last_used_at` 保持库中现值 ——
 /// 它们是「历史统计」，不能被编辑摘要这种动作清掉。
 ///
+/// `updated_at`：**传了就用传的**（重新写一条已存在的记录时，调用方要能表达「就是现在」），
+/// 没传（0）才退成 `created_at`。过去两列都写 `created_at`，于是「合并 / 编辑已有条目」会把
+/// `updated_at` 退回创建时间 —— 时间倒退，依赖它排序与保留期判定的地方都跟着错。
+///
 /// ⚠️ `superseded_by` **刻意不进写入列清单**：它是「被谁顶替」这个**历史事实**，同样不能被
 /// 编辑摘要抹掉（否则一次编辑就能让归档清理的护栏失效）。新条目不写该列 → 自然为 NULL。
 /// 唯一的写入点是 [`MemoryRepo::supersede`]。
 fn upsert_in_conn(conn: &Connection, r: &MemoryRecord, now_ms: i64) -> Result<(), String> {
+    let created_at = if r.created_at > 0 {
+        r.created_at
+    } else {
+        now_ms
+    };
+    let updated_at = if r.updated_at > 0 {
+        r.updated_at
+    } else {
+        created_at
+    };
     conn.execute(
         "INSERT INTO memories (
             id, level, kind, summary, project_path, detail_kb_id, detail_doc_id, tags, source_day,
             source_session_id, origin, hits, last_used_at, created_at, updated_at, disabled
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14, ?15)
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
          ON CONFLICT(id) DO UPDATE SET
             level = excluded.level,
             kind = excluded.kind,
@@ -795,7 +929,8 @@ fn upsert_in_conn(conn: &Connection, r: &MemoryRecord, now_ms: i64) -> Result<()
             r.origin,
             r.hits,
             r.last_used_at,
-            if r.created_at > 0 { r.created_at } else { now_ms },
+            created_at,
+            updated_at,
             if r.disabled { 1 } else { 0 },
         ],
     )
@@ -953,6 +1088,21 @@ impl MemoryRepo for SqliteMemoryRepo {
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock().unwrap();
             search_in_conn(&conn, &query, level.as_deref(), kind.as_deref(), limit)
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
+    async fn active_in_scope(
+        &self,
+        project_path: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<MemoryRecord>, String> {
+        let conn = self.conn.clone();
+        let project_path = project_path.map(|s| s.to_string());
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().unwrap();
+            active_in_scope_in_conn(&conn, project_path.as_deref(), limit)
         })
         .await
         .map_err(|e| format!("DB task join error: {}", e))?
@@ -1324,6 +1474,33 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// 重新写一条已存在的记录时，`updated_at` 要能是**现在**（不能退回到创建时间）
+    ///
+    /// 回归锁：以前 upsert 把 `updated_at` 也写成 `created_at`，于是「合并 / 编辑已有条目」
+    /// 会让更新时间倒退 —— 依赖它排序与保留期判定的地方都跟着错。
+    #[tokio::test]
+    async fn upsert_keeps_the_given_updated_at_instead_of_rewinding_to_created_at() {
+        let (repo, dir) = tmp_repo();
+        let mut first = record("m1", MEMORY_LEVEL_NORMAL, "项目用 pnpm 构建");
+        first.created_at = 1_700_000_000_000;
+        first.updated_at = 1_700_000_000_000;
+        repo.upsert(&first).await.unwrap();
+
+        // 合并（例如重复写入时补详情正文）：created_at 不动，updated_at 是现在
+        let mut merged = record("m1", MEMORY_LEVEL_NORMAL, "项目用 pnpm 构建");
+        merged.created_at = 1_700_000_000_000;
+        merged.updated_at = 1_800_000_000_000;
+        repo.upsert(&merged).await.unwrap();
+
+        let got = &repo.list(None, true).await.unwrap()[0];
+        assert_eq!(got.created_at, 1_700_000_000_000, "创建时间不能被改写");
+        assert_eq!(
+            got.updated_at, 1_800_000_000_000,
+            "更新时间要跟着这次写入走，不能退回创建时间"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[tokio::test]
     async fn level_and_disable_updates_report_miss() {
         let (repo, dir) = tmp_repo();
@@ -1493,8 +1670,128 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    // ==================== 再蒸馏（P2′） ====================
+    /// 写入前查重的候选集：只给**同一作用域 + 未停用**的条目（跳作用域就会跨项目顶替）
+    #[tokio::test]
+    async fn active_in_scope_isolates_projects_and_separates_disabled() {
+        let (repo, dir) = tmp_repo();
 
+        let mut mine = record("m_mine", MEMORY_LEVEL_NORMAL, "本项目的约定");
+        mine.project_path = Some("C:/work/app".into());
+        repo.upsert(&mine).await.unwrap();
+
+        let mut other = record("m_other", MEMORY_LEVEL_NORMAL, "别的项目的约定");
+        other.project_path = Some("C:/work/other".into());
+        repo.upsert(&other).await.unwrap();
+
+        // 全局（不限定项目）的条目：永远只出现在「全局作用域」的候选里
+        repo.upsert(&record("m_global", MEMORY_LEVEL_NORMAL, "通用偏好"))
+            .await
+            .unwrap();
+
+        // 停用的：不候选（否则会把用户自己停用的条目归档成「改前版」）
+        let mut off = record("m_off", MEMORY_LEVEL_NORMAL, "停用的约定");
+        off.project_path = Some("C:/work/app".into());
+        off.disabled = true;
+        repo.upsert(&off).await.unwrap();
+
+        let app = repo.active_in_scope(Some("C:/work/app"), 50).await.unwrap();
+        let ids: Vec<&str> = app.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["m_mine"], "只该看到本项目且启用的那一条：{ids:?}");
+
+        // 路径两侧空白不影响作用域判定（归一化后比）
+        let padded = repo
+            .active_in_scope(Some("  C:/work/app  "), 50)
+            .await
+            .unwrap();
+        assert_eq!(padded.len(), 1);
+
+        let global = repo.active_in_scope(None, 50).await.unwrap();
+        assert_eq!(global.len(), 1);
+        assert_eq!(global[0].id, "m_global", "全局作用域不拿项目条目来查重");
+
+        // 上限生效（写路径上不允许读全表）
+        assert_eq!(
+            repo.active_in_scope(None, 0).await.unwrap().len(),
+            1,
+            "clamp 到 1 而不是 0"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 候选不能只按命中排序：刚写下（hits = 0）的条目也要进候选集
+    #[tokio::test]
+    async fn active_in_scope_keeps_fresh_entries_alongside_hot_ones() {
+        let (repo, dir) = tmp_repo();
+        for i in 0..3 {
+            let mut hot = record(
+                &format!("m_hot{i}"),
+                MEMORY_LEVEL_NORMAL,
+                &format!("热条目 {i}"),
+            );
+            hot.hits = 10;
+            hot.updated_at = 1_000 + i;
+            repo.upsert(&hot).await.unwrap();
+        }
+        let mut fresh = record("m_fresh", MEMORY_LEVEL_NORMAL, "刚写下的条目");
+        fresh.updated_at = 9_999;
+        repo.upsert(&fresh).await.unwrap();
+
+        let got = repo.active_in_scope(None, 2).await.unwrap();
+        assert_eq!(got.len(), 2);
+        assert!(
+            got.iter().any(|m| m.id == "m_fresh"),
+            "刚写的条目被挤出候选集了：{got:?}"
+        );
+        assert!(
+            got.iter().any(|m| m.id.starts_with("m_hot")),
+            "热点条目也要在：{got:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 作用域比较走路径归一化：同一项目换个写法（分隔符 / 尾斜杠 / 大小写）也要认出来
+    ///
+    /// 反例同样是重点：兄弟目录、父目录不能被归一化“宽”到同一个作用域 —— 那会跨项目顶替。
+    #[tokio::test]
+    async fn active_in_scope_normalizes_the_project_path() {
+        let (repo, dir) = tmp_repo();
+
+        // 写入时的工作目录是 Windows 风格带尾斜杠（`scope_for_write` 只 trim，原样落库）
+        let mut mine = record("m_mine", MEMORY_LEVEL_NORMAL, "项目用 pnpm 构建");
+        mine.project_path = Some("C:\\Work\\App\\".into());
+        repo.upsert(&mine).await.unwrap();
+
+        // 分隔符 + 尾斜杠不同 → 仍是同一个项目
+        let same = repo.active_in_scope(Some("C:/Work/App"), 50).await.unwrap();
+        assert_eq!(
+            same.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            vec!["m_mine"],
+            "同一项目的另一种写法必须查得出来"
+        );
+
+        // 兄弟目录 / 父目录不能因为「前缀相近」被认成同一处
+        assert!(repo
+            .active_in_scope(Some("C:/Work/App2"), 50)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(repo
+            .active_in_scope(Some("C:/Work"), 50)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // 大小写：与 `scope::path_key` 一致 —— Windows / macOS 不敏感，其余平台保留原样
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        {
+            let lower = repo.active_in_scope(Some("c:/work/app"), 50).await.unwrap();
+            assert_eq!(lower.len(), 1, "Windows / macOS 上大小写不敏感");
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ==================== 再蒸馏（P2′） ====================
     /// 老库补 `superseded_by` 列：幂等，且补出来是 NULL（= 没被顶替 → 永不被自动清理）
     #[tokio::test]
     async fn legacy_memories_table_gets_superseded_by_column() {

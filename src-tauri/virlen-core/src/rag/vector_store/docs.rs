@@ -34,8 +34,16 @@ impl VectorStoreManager {
         let chunk_count = chunks.len();
 
         // 1. 生成嵌入向量（先获得，释放 self 的不可变借用）
-        let texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
-        let embeddings = self.embedding_provider.embed_batch(&texts)?;
+        //
+        //    ⚠️ 嵌入用的是 `embedding_text`（语境头 + 原文），**不是** `content`：
+        //    块只有 512 字符，单看一块往往不知道它讲的是哪个文档的哪一节 ——
+        //    把语境写进被嵌入的那段文字，就是 Anthropic Contextual Retrieval 的做法。
+        let texts: Vec<String> = chunks
+            .iter()
+            .map(crate::rag::document::embedding_text)
+            .collect();
+        let text_refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+        let embeddings = self.embedding_provider.embed_batch(&text_refs)?;
         let dim = self.embedding_provider.dimensions();
         let n = embeddings.len();
 
@@ -90,6 +98,7 @@ impl VectorStoreManager {
                     chunk_index: chunk.chunk_index,
                     file_type: file_type.clone(),
                     overlap_prefix_chars: overlap_prefix_of(chunk),
+                    context_header: context_header_of(chunk),
                 },
             );
         }
@@ -243,9 +252,13 @@ impl VectorStoreManager {
                 }
             }
 
-            // 1b. 生成新嵌入向量
-            let texts: Vec<&str> = new_chunks.iter().map(|c| c.content.as_str()).collect();
-            let embeddings = self.embedding_provider.embed_batch(&texts)?;
+            // 1b. 生成新嵌入向量（同 `add_document`：嵌入的是语境头 + 原文）
+            let texts: Vec<String> = new_chunks
+                .iter()
+                .map(crate::rag::document::embedding_text)
+                .collect();
+            let text_refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+            let embeddings = self.embedding_provider.embed_batch(&text_refs)?;
             let dim = self.embedding_provider.dimensions();
             let n = embeddings.len();
 
@@ -289,6 +302,7 @@ impl VectorStoreManager {
                         chunk_index: chunk.chunk_index,
                         file_type: file_type.clone(),
                         overlap_prefix_chars: overlap_prefix_of(chunk),
+                        context_header: context_header_of(chunk),
                     },
                 );
             }

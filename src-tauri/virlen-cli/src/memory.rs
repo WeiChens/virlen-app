@@ -5,6 +5,7 @@
 //! virlen-cli memory redistill [--purge] [--force] [--dry-run] [--json]
 //! virlen-cli memory runs [--limit N] [--json]
 //! virlen-cli memory export [--out PATH]
+//! virlen-cli memory integrity [--purge] [--json]
 //! ```
 //!
 //! 与桌面端共用同一份库（`HostEnv::data_dir()` 下的 `virlen.db`）与**同一份 core 实现**：
@@ -69,6 +70,11 @@ pub(crate) enum MemoryCmd {
     Export {
         out: Option<String>,
     },
+    /// 记忆详情引用完整性自检（`--purge` = 顺手删掉孤儿正文）
+    Integrity {
+        purge: bool,
+        json: bool,
+    },
 }
 
 /// 帮助文本（`memory --help` / 用法错误时打印）
@@ -87,6 +93,10 @@ virlen-cli memory —— 长期记忆（与桌面端同一份 virlen.db）
   virlen-cli memory export [--out PATH]
                                  导出全部记忆为 JSON（含停用项；不带 --out 则打到标准输出）
                                  格式：{ format, schemaVersion, exportedAt, count, memories[] }
+  virlen-cli memory integrity [--purge] [--json]
+                                 核验「记忆 → 详情正文」的引用完整性
+                                 孤儿正文 = 记忆删了但知识库里还留着；断链 = 正文没了而记忆还指着它
+                                 默认只报告；--purge 顺手删孤儿（只删名字带「记忆详情」前缀的）
   -h, --help                     显示本帮助
 
 选项:
@@ -95,6 +105,7 @@ virlen-cli memory —— 长期记忆（与桌面端同一份 virlen.db）
       --purge              （仅 redistill）只做归档清理，不调模型
       --force              （仅 redistill）忽略冷却与幂等判定（排障 / 手动重跑）
       --dry-run            （仅 redistill）只打印计划（分组 / 批大小 / 预计调用数），**不写库**
+      --purge              （仅 integrity）删掉孤儿正文（默认只报告不动手；只删名字带「记忆详情」前缀的）
       --out <PATH>         （仅 export）写到文件（UTF-8）；父目录不存在会报错
       --json               输出 JSON（便于脚本；export 恒为 JSON）
 
@@ -219,8 +230,22 @@ pub(crate) fn parse(args: Vec<&str>) -> Result<MemoryCmd, String> {
             }
             Ok(MemoryCmd::Export { out })
         }
+        "integrity" => {
+            let mut purge = false;
+            let mut json = false;
+            for arg in rest {
+                match arg {
+                    "--purge" => purge = true,
+                    "--json" => json = true,
+                    other => {
+                        return Err(format!("未知选项: {}（见 `virlen-cli memory --help`）", other))
+                    }
+                }
+            }
+            Ok(MemoryCmd::Integrity { purge, json })
+        }
         other => Err(format!(
-            "未知子命令: {}（可用: list / redistill / runs / export）",
+            "未知子命令: {}（可用: list / redistill / runs / export / integrity）",
             other
         )),
     }
@@ -267,6 +292,7 @@ pub(super) async fn run(
         }
         MemoryCmd::Runs { limit, json } => runs(&db, limit, json, out, err).await,
         MemoryCmd::Export { out: path } => export(&db, path.as_deref(), out, err).await,
+        MemoryCmd::Integrity { purge, json } => integrity(host, &db, purge, json, out, err).await,
     }
 }
 
@@ -381,9 +407,137 @@ async fn export(
     }
 }
 
+/// `memory integrity`：记忆 → 详情正文的引用完整性（与 GUI 同一份 `agent::memory::integrity`）
+///
+/// 默认**只报告**；`--purge` 才删孤儿正文（那几篇已确认无人引用）。
+async fn integrity(
+    host: &Arc<dyn HostEnv>,
+    db: &SessionDb,
+    purge: bool,
+    json: bool,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> i32 {
+    // 知识库：懒初始化（与 GUI 同一目录）；起不来就如实报「未核验」，不当作干净
+    let rag = virlen_core::rag::ensure_service(host.data_dir()).ok();
+    let records = match db.memory.list(None, true).await {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = writeln!(err, "错误: 读取记忆失败: {}", e);
+            return EXIT_ERROR;
+        }
+    };
+
+    let mut report =
+        virlen_core::agent::memory::integrity::check(db.settings.as_ref(), &records, rag).await;
+
+    let mut purged = (0usize, 0usize, 0usize);
+    if purge {
+        if let (Some(rag), Some(kb_id)) = (rag, report.kb_id.clone()) {
+            if !report.orphans.is_empty() {
+                purged = virlen_core::agent::memory::integrity::purge_orphans(
+                    rag,
+                    &kb_id,
+                    &report.orphans,
+                )
+                .await;
+                // 删完再核一次：返回的是**现在**的状态
+                report = virlen_core::agent::memory::integrity::check(
+                    db.settings.as_ref(),
+                    &records,
+                    Some(rag),
+                )
+                .await;
+            }
+        }
+    }
+
+    if json {
+        let payload = serde_json::json!({
+            "report": report,
+            "purged": purged.0,
+            "purgeFailed": purged.1,
+            "purgeSkipped": purged.2,
+        });
+        match serde_json::to_string_pretty(&payload) {
+            Ok(s) => {
+                let _ = writeln!(out, "{}", s);
+            }
+            Err(e) => {
+                let _ = writeln!(err, "错误: 序列化失败: {}", e);
+                return EXIT_ERROR;
+            }
+        }
+        return if report.is_clean() { EXIT_OK } else { EXIT_ERROR };
+    }
+
+    let _ = writeln!(out, "{}", report.summary());
+    // 「没有库」这条提示只在**核验过 RAG** 时才成立：RAG 起不来时 kb_id 也是 None，
+    // 但那时一句「所有带链接的条目都算断链」是彻头彻尾的误导
+    if report.kb_id.is_none() && report.kb_available {
+        let _ = writeln!(out, "（还没有记忆详情知识库：所有带链接的条目都算断链）");
+    }
+    if !report.orphans.is_empty() {
+        // 可安全清理 vs 需人工确认：后者是用户往「记忆详情」库里手导的文档，`--purge` 不碰
+        let (safe, manual): (Vec<_>, Vec<_>) =
+            report.orphans.iter().partition(|o| o.looks_like_detail);
+        if !safe.is_empty() {
+            let _ = writeln!(out, "\n孤儿正文（没人引用，占着知识库）：");
+            for o in &safe {
+                let _ = writeln!(out, "  {}  {}", o.doc_id, o.doc_name);
+            }
+        }
+        if !manual.is_empty() {
+            let _ = writeln!(
+                out,
+                "\n同样没被引用、但不像记忆正文（`--purge` 不会动它们，请人工确认）："
+            );
+            for o in &manual {
+                let _ = writeln!(out, "  {}  {}", o.doc_id, o.doc_name);
+            }
+        }
+    }
+    if !report.dangling.is_empty() {
+        let _ = writeln!(out, "\n断链（记忆说有详情，但正文读不到）：");
+        for d in &report.dangling {
+            let _ = writeln!(
+                out,
+                "  {}  [{}]{}  {}",
+                d.memory_id,
+                d.reason,
+                if d.disabled { " 已停用" } else { "" },
+                d.summary
+            );
+        }
+    }
+    if purge {
+        if report.kb_id.is_none() {
+            let _ = writeln!(out, "\n（没找到记忆详情知识库，没有可清理的正文）");
+        } else {
+            let _ = writeln!(
+                out,
+                "\n已删除孤儿正文 {} 篇（失败 {}，跳过 {}）。",
+                purged.0, purged.1, purged.2
+            );
+        }
+    } else if !report.orphans.is_empty() {
+        let _ = writeln!(
+            out,
+            "\n（加 --purge 删掉上面这些孤儿正文；不像记忆正文的那几篇需人工处理）"
+        );
+    }
+
+    // 只有真正干净才 0：断链不会自动修（可能是库被重建 / 换机恢复），
+    // 而「未能核验」也不该当成通过
+    if report.is_clean() {
+        EXIT_OK
+    } else {
+        EXIT_ERROR
+    }
+}
+
 /// CLI 侧的 Provider 构建器：只支持**原生**协议（headless 没有 JS 宿主）
 struct CliRedistillBuilder;
-
 impl MemoryProviderBuilder for CliRedistillBuilder {
     fn build(&self, conn: &ProviderConnection) -> Result<Box<dyn Provider>, String> {
         create_native_provider(conn)
@@ -778,6 +932,25 @@ mod tests {
             parse(vec!["export", "--json"]),
             Ok(MemoryCmd::Export { out: None })
         );
+    }
+
+    #[test]
+    fn parse_integrity_options() {
+        assert_eq!(
+            parse(vec!["integrity"]),
+            Ok(MemoryCmd::Integrity {
+                purge: false,
+                json: false
+            })
+        );
+        assert_eq!(
+            parse(vec!["integrity", "--purge", "--json"]),
+            Ok(MemoryCmd::Integrity {
+                purge: true,
+                json: true
+            })
+        );
+        assert!(parse(vec!["integrity", "--nope"]).is_err());
     }
 
     #[test]

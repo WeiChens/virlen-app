@@ -21,14 +21,50 @@ import { useCallback, useEffect, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { settingsState } from '@/ui/store'
 import { t, tpl } from '@/ui/i18n'
-import { listMemories, loadMemorySection } from '@/infrastructure/memoryRepo'
+import {
+  checkMemoryIntegrity,
+  listMemories,
+  loadMemorySection,
+  purgeMemoryOrphans,
+} from '@/infrastructure/memoryRepo'
+import { MessageBox } from '@/ui/components/shared/MessageBox'
+import { showToast } from '@/ui/components/shared/Toast'
 import {
   MEMORY_NORMAL_TOP_K_MAX,
+  deletableOrphanCount,
+  isIntegrityClean,
+  type MemoryDanglingLink,
+  type MemoryIntegrityReport,
   type MemoryPromptSection,
   type MemoryRecord,
 } from '@/domain/memory'
 import MemoryListModal from './memory/MemoryListModal'
 import './memory-settings.scss'
+
+/** 自检报告的一句人话（计数由 Rust 给出，前端不自己算「干净不干净」） */
+function integritySummary(report: MemoryIntegrityReport): string {
+  if (!report.kbAvailable) {
+    return t('知识库暂不可用，这次没能检查')
+  }
+  if (isIntegrityClean(report)) {
+    return tpl('引用完整：$__memories__ 条记忆、$__docs__ 篇正文都对得上', {
+      memories: report.checkedMemories,
+      docs: report.checkedDocs,
+    })
+  }
+  return tpl('发现 $__orphans__ 篇孤儿正文、$__dangling__ 条断链', {
+    orphans: report.orphans.length,
+    dangling: report.dangling.length,
+  })
+}
+
+/** 断链的原因说成用户能懂的话（`reason` 是后端给的机器标识） */
+function danglingReason(link: MemoryDanglingLink): string {
+  if (link.reason === 'kb-mismatch') {
+    return t('指向别的知识库（换机或库被重建过）')
+  }
+  return link.disabled ? t('正文已不在（该记忆已停用）') : t('正文已经没了')
+}
 
 function MemorySettings() {
   const [items, setItems] = useState<MemoryRecord[]>([])
@@ -37,6 +73,10 @@ function MemorySettings() {
   const [showPreview, setShowPreview] = useState(false)
   /** 记忆列表弹窗的开关（列表本体在 `MemoryListModal` 里） */
   const [showList, setShowList] = useState(false)
+  /** 详情正文自检的报告；`null` = 还没查过 / 没查成 */
+  const [integrity, setIntegrity] = useState<MemoryIntegrityReport | null>(null)
+  const [checkingIntegrity, setCheckingIntegrity] = useState(false)
+  const [purging, setPurging] = useState(false)
 
   const topK = settingsState.value.memoryNormalTopK
 
@@ -71,6 +111,49 @@ function MemorySettings() {
   // 预算告警：被裁过就说明记忆总量已超过能带上的上限（计数由 Rust 侧给出，前端不自己算）
   const hasBudgetWarning =
     !!section && (section.droppedNormal > 0 || section.droppedPermanent > 0)
+
+  /**
+   * 核验「记忆 → 详情正文」的引用完整性。
+   *
+   * 只读、不建库：后端 RAG 不可用时它如实返回 `kbAvailable = false`，面板照实说「没查成」，
+   * 不把「没检查」显示成「干净」。
+   */
+  async function runIntegrityCheck() {
+    setCheckingIntegrity(true)
+    const report = await checkMemoryIntegrity()
+    setCheckingIntegrity(false)
+    if (!report) {
+      showToast(t('检查失败，没能读到记忆详情'), 2000)
+      return
+    }
+    setIntegrity(report)
+  }
+
+  /** 清理孤儿正文（只删带「记忆详情」前缀的那几篇；删正文不可撤销，所以先二次确认） */
+  async function runPurge() {
+    const count = integrity ? deletableOrphanCount(integrity) : 0
+    if (count === 0) return
+    const confirmed = await MessageBox.propt(
+      t('清理孤儿正文'),
+      tpl('这 $__count__ 篇正文已经没有记忆引用了，删除后无法恢复。继续？', {
+        count,
+      }),
+      { confirmText: t('删除'), cancelText: t('取消'), danger: true },
+    )
+    if (!confirmed) return
+    setPurging(true)
+    const report = await purgeMemoryOrphans()
+    setPurging(false)
+    if (!report) {
+      showToast(t('清理失败，请稍后再试'), 2000)
+      return
+    }
+    // 后端在同一个命令里「清 → 重新核验」，所以这份报告就是**现在**的状态
+    setIntegrity(report)
+    showToast(t('已清理孤儿正文'), 1500)
+  }
+
+  const deletableCount = integrity ? deletableOrphanCount(integrity) : 0
 
   return (
     <div className="memory-settings">
@@ -191,6 +274,79 @@ function MemorySettings() {
           ›
         </span>
       </button>
+
+      {/* 详情正文自检（**页尾**，属于维护动作）：记忆只存摘要，正文在知识库里 ——
+          那条链接断掉是静默的，只能主动核验。默认不自动跑，用户点才查。 */}
+      <section className="memory-group">
+        <div className="memory-group-title">{t('详情正文自检')}</div>
+        <p className="memory-page-desc">
+          {t(
+            '重要记忆的详情正文存在知识库里，记忆条目只留一个链接。这里核验这些链接是否还指得着正文。',
+          )}
+        </p>
+        <div className="memory-integrity-actions">
+          <button
+            type="button"
+            className="memory-option-link"
+            disabled={checkingIntegrity}
+            onClick={() => void runIntegrityCheck()}>
+            {checkingIntegrity ? t('正在检查…') : t('检查一遍')}
+          </button>
+          {deletableCount > 0 && (
+            <button
+              type="button"
+              className="memory-option-link is-danger"
+              disabled={purging}
+              onClick={() => void runPurge()}>
+              {purging
+                ? t('正在清理…')
+                : tpl('清理 $__count__ 篇孤儿正文', { count: deletableCount })}
+            </button>
+          )}
+        </div>
+
+        {integrity && (
+          <div
+            className={`memory-integrity-report${isIntegrityClean(integrity) ? '' : ' is-warn'}`}>
+            <div className="memory-integrity-summary">{integritySummary(integrity)}</div>
+
+            {integrity.orphans.length > 0 && (
+              <div className="memory-integrity-list">
+                <div className="memory-integrity-list-title">
+                  {t('孤儿正文（没被任何记忆引用）')}
+                </div>
+                {integrity.orphans.map((o) => (
+                  <div key={o.docId} className="memory-integrity-item" title={o.docName}>
+                    <span className="memory-integrity-item-name">{o.docName}</span>
+                    {!o.looksLikeDetail && (
+                      <span className="memory-integrity-item-note">
+                        {t('不像记忆正文，需要你自己确认')}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {integrity.dangling.length > 0 && (
+              <div className="memory-integrity-list">
+                <div className="memory-integrity-list-title">
+                  {t('断链（记忆说有正文，但读不到）')}
+                </div>
+                {integrity.dangling.map((d) => (
+                  <div
+                    key={`${d.memoryId}:${d.docId}`}
+                    className="memory-integrity-item"
+                    title={d.summary}>
+                    <span className="memory-integrity-item-name">{d.summary}</span>
+                    <span className="memory-integrity-item-note">{danglingReason(d)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </section>
 
       {/* 记忆列表弹窗：数据与刷新回调都由本页给，弹窗只管交互 */}
       <MemoryListModal

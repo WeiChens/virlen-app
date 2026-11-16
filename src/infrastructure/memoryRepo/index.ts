@@ -5,6 +5,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import {
   MEMORY_PROMPT_MAX_CHARS,
+  type MemoryIntegrityReport,
   type MemoryPromptSection,
   type MemoryRecord,
 } from '@/domain/memory'
@@ -100,6 +101,36 @@ export async function exportMemories(): Promise<string | null> {
     return (await invoke<string>('cmd_memory_export')) ?? null
   } catch (e: any) {
     console.warn(`[memory] 导出记忆失败：${e?.message || String(e)}`)
+    return null
+  }
+}
+
+/**
+ * 核验「记忆 → 详情正文」的引用完整性（**只读**，不建库不删东西）。
+ *
+ * 失败 / 非 Tauri → `null`：面板据此说「没查成」，不要把「没检查」说成「干净」。
+ */
+export async function checkMemoryIntegrity(): Promise<MemoryIntegrityReport | null> {
+  if (!isTauri()) return null
+  try {
+    return (await invoke<MemoryIntegrityReport>('cmd_memory_integrity_check')) ?? null
+  } catch (e: any) {
+    console.warn(`[memory] 记忆详情自检失败：${e?.message || String(e)}`)
+    return null
+  }
+}
+
+/**
+ * 清掉孤儿正文（只删名字带「记忆详情」前缀的那些），返回**清理后**的报告。
+ *
+ * 后端在同一个命令里「清 → 重新核验」，所以返回的 `orphans` 是删失败后剩下的那几篇。
+ */
+export async function purgeMemoryOrphans(): Promise<MemoryIntegrityReport | null> {
+  if (!isTauri()) return null
+  try {
+    return (await invoke<MemoryIntegrityReport>('cmd_memory_integrity_purge')) ?? null
+  } catch (e: any) {
+    console.warn(`[memory] 清理孤儿正文失败：${e?.message || String(e)}`)
     return null
   }
 }

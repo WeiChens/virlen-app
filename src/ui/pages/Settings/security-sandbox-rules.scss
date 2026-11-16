@@ -14,14 +14,26 @@
 
   .rules-toolbar {
     display: flex;
-    flex-wrap: wrap;
+    justify-content: space-between;
     align-items: center;
     gap: 6px 10px;
     flex: 0 0 auto;
     padding: 0 2px 10px;
   }
 
+  .sandbox-ignore-rules-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border-color, #e5e5e5);
+    margin-bottom: 4px;
+    .section-title {
+      border-bottom: none;
+    }
+  }
+
   .rule-add-btn {
+    margin-left: auto;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -57,7 +69,6 @@
 
   /* 顺序提示：单独占一行（工具条行已经放了按钮 + 计数，挤在一起会换行错位） */
   .rules-order-hint {
-    flex-basis: 100%;
     font-size: var(--font-size-xs);
     color: var(--text-tertiary, #999);
   }

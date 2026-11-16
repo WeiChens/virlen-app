@@ -9,10 +9,27 @@ export interface RAGContext {
     content: string
     documentName: string
     score: number
+    /** 检索语境头（文档名 + 章节 + 前后句）；没有就省略/空 */
+    contextHeader?: string | null
   }>
   query: string
   knowledgeBaseId: string
   formattedContext: string
+}
+
+/**
+ * 片段文本 = 语境头 + 空行 + 原文（没有语境头就是原文）。
+ *
+ * 与 Rust `ChunkResult::retrieved_text` **同一条口径**：这样模型看到的片段与当初被嵌入的
+ * 那段文字逐字一致。仅供「给模型看的上下文」，不要让界面预览或拼回全文用它（那两处要原文）。
+ */
+export function chunkRetrievedText(
+  contextHeader?: string | null,
+  content?: string | null,
+): string {
+  const header = (contextHeader ?? '').trim()
+  const body = content ?? ''
+  return header ? `${header}\n\n${body}` : body
 }
 
 /** RAG 查询选项 */

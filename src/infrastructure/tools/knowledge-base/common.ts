@@ -1,9 +1,13 @@
 /** knowledge-base — 知识库分类公共函数（id: knowledge_base），供本分类 6 个工具复用。 */
 import type { KnowledgeBaseChunk } from '@/domain/ports'
+import { chunkRetrievedText } from '@/domain/rag/types'
 
 /**
  * 构建含 document_id 的搜索上下文（AI 可见文本）。相比 Rust 后端返回的 context（只有 document_name），
  * 额外输出 document_id，使 AI 能识别每个 chunk 所属文档，从而调用需要 document_id 的工具。
+ *
+ * Content 用的是「语境头 + 原文」（`chunkRetrievedText`）：与当初被嵌入的文本逐字一致，
+ * AI 不必再从 512 字符的片段里猜它属于哪个文档的哪一节。
  */
 export function buildSearchContext(
   results: KnowledgeBaseChunk[],
@@ -19,7 +23,7 @@ export function buildSearchContext(
     lines.push(`[${i + 1}] Document: ${r.document_name}`)
     lines.push(`    Document ID: ${r.document_id}`)
     lines.push(`    Similarity: ${(r.score * 100).toFixed(1)}%`)
-    lines.push(`    Content: ${r.content}`)
+    lines.push(`    Content: ${chunkRetrievedText(r.context_header, r.content)}`)
     lines.push('')
   }
 

@@ -6,7 +6,9 @@
 //! 长度口径：提示词要求 AI 写 ≤ `MEMORY_SUMMARY_HINT_CHARS`（120）；落库强制
 //! `MEMORY_SUMMARY_MAX_CHARS`（150）—— 超出按码点截断（半截仍比没有有用，但不能挤掉上下文）。
 
+pub mod dedupe;
 pub mod export;
+pub mod integrity;
 pub mod kb;
 pub mod prompt;
 pub mod redistill;

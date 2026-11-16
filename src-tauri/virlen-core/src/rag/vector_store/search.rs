@@ -303,11 +303,14 @@ impl VectorStoreManager {
                 let info = state.chunks.get(&id)?;
                 Some(ChunkResult {
                     id: info.chunk_id.clone(),
+                    // 原文与语境头分开给：模型侧要拼起来看（`retrieved_text`），
+                    // 界面上的片段预览只要原文
                     content: info.content.clone(),
                     document_id: info.document_id.clone(),
                     document_name: info.document_name.clone(),
                     chunk_index: info.chunk_index,
                     score: scores[i],
+                    context_header: info.context_header.clone(),
                 })
             })
             .collect();

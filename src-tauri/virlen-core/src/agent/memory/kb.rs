@@ -154,12 +154,19 @@ pub async fn remove_detail(
         .map_err(|e| format!("删除记忆详情失败: {}", e))
 }
 
+/// 详情文档名的前缀（`记忆详情：<摘要前 40 字>`）
+///
+/// 单独导出是因为它有第二个用途：**引用完整性自检**只把带这个前缀的未引用文档当成
+/// 「可安全清理的孤儿正文」—— 「记忆详情」是 builtin 库，用户往里手导的文档不该被
+/// `--purge` 一并删掉（那是用户自己的内容，不是记忆的残留）。
+pub const DETAIL_DOC_NAME_PREFIX: &str = "记忆详情";
+
 /// 文档名：`记忆详情` 前缀 + 摘要（≤40 字符），让知识库列表里可读
 pub fn detail_doc_name(summary: &str) -> String {
     let head: String = summary.chars().take(40).collect();
     if head.is_empty() {
-        "记忆详情".to_string()
+        DETAIL_DOC_NAME_PREFIX.to_string()
     } else {
-        format!("记忆详情：{}", head)
+        format!("{}：{}", DETAIL_DOC_NAME_PREFIX, head)
     }
 }

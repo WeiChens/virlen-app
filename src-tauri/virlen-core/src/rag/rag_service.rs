@@ -392,6 +392,10 @@ impl RagService {
 
     /// 将检索结果格式化为上下文文本（供 LLM 使用）
     ///
+    /// 每段 = 语境头 + 原文（[`ChunkResult::retrieved_text`]）：与当初被嵌入的那段文字逐字一致，
+    /// 模型不必再猜「这块属于哪个文档的哪一节」。有语境头时文档名已在头里，就不在
+    /// `[片段 N]` 行里再报一次（否则同一个文档名每块重复两遍）。
+    ///
     /// ⚠️ 与前端 `rag-service.ts` 的 `buildContextText()` 重复，修改时请同步更新两处。
     pub fn format_context(chunks: &[ChunkResult], max_chars: usize) -> String {
         let mut context = String::new();
@@ -400,14 +404,19 @@ impl RagService {
 
         let mut total_chars = 0;
         for (i, chunk) in chunks.iter().enumerate() {
-            let header = format!(
-                "[片段 {}] 来自：{}（相似度：{:.2}）\n",
-                i + 1,
-                chunk.document_name,
-                chunk.score
-            );
+            let header = match chunk.context_header.as_deref().map(str::trim) {
+                Some(h) if !h.is_empty() => {
+                    format!("[片段 {}] （相似度：{:.2}）\n", i + 1, chunk.score)
+                }
+                _ => format!(
+                    "[片段 {}] 来自：{}（相似度：{:.2}）\n",
+                    i + 1,
+                    chunk.document_name,
+                    chunk.score
+                ),
+            };
 
-            let entry = format!("{}{}\n\n---\n", header, chunk.content);
+            let entry = format!("{}{}\n\n---\n", header, chunk.retrieved_text());
 
             if total_chars + entry.len() > max_chars {
                 context.push_str(&format!(
@@ -532,6 +541,7 @@ mod tests {
                 document_name: "rust.md".into(),
                 chunk_index: 0,
                 score: 0.95,
+                context_header: None,
             },
             ChunkResult {
                 id: "chunk2".into(),
@@ -540,6 +550,7 @@ mod tests {
                 document_name: "rust.md".into(),
                 chunk_index: 1,
                 score: 0.85,
+                context_header: None,
             },
         ];
 
@@ -552,6 +563,32 @@ mod tests {
         assert!(context.contains("[片段 2]"));
     }
 
+    /// 有语境头的块：上下文里必须有语境头（与嵌入时的文本一致），且文档名**不重复**两遍
+    #[test]
+    fn format_context_uses_the_header_without_repeating_the_document_name() {
+        let chunks = vec![ChunkResult {
+            id: "chunk1".into(),
+            content: "先把服务停掉，再替换二进制。".into(),
+            document_id: "doc1".into(),
+            document_name: "ops.md".into(),
+            chunk_index: 3,
+            score: 0.9,
+            context_header: Some("〔语境〕文档《ops.md》｜章节「部署」".into()),
+        }];
+
+        let context = RagService::format_context(&chunks, 500);
+        assert!(context.contains("章节「部署」"), "{context}");
+        assert!(
+            context.contains("先把服务停掉，再替换二进制。"),
+            "原文不能丢：{context}"
+        );
+        assert_eq!(
+            context.matches("ops.md").count(),
+            1,
+            "文档名只该出现在语境头里：{context}"
+        );
+    }
+
     #[test]
     fn test_format_context_truncation() {
         let chunks: Vec<ChunkResult> = (0..10)
@@ -562,6 +599,7 @@ mod tests {
                 document_name: "big.txt".into(),
                 chunk_index: i,
                 score: 1.0 - (i as f32) * 0.1,
+                context_header: None,
             })
             .collect();
 

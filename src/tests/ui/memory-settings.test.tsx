@@ -25,7 +25,7 @@ import { createRoot } from 'react-dom/client'
 
 import MemorySettings from '@/ui/pages/Settings/memory-settings'
 import { settingsState } from '@/ui/store'
-import type { MemoryRecord } from '@/domain/memory'
+import type { MemoryIntegrityReport, MemoryRecord } from '@/domain/memory'
 
 vi.mock('@/infrastructure/memoryRepo', () => ({
   listMemories: vi.fn(),
@@ -37,6 +37,9 @@ vi.mock('@/infrastructure/memoryRepo', () => ({
   touchMemories: vi.fn(),
   // P3：导出备份（Rust 给文本，面板负责选路径写文件）
   exportMemories: vi.fn(),
+  // 详情正文的引用完整性自检（只读 + 显式清理）
+  checkMemoryIntegrity: vi.fn(),
+  purgeMemoryOrphans: vi.fn(),
 }))
 
 vi.mock('@/ui/components/shared/Toast', () => ({ showToast: vi.fn() }))
@@ -52,10 +55,12 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 vi.mock('@tauri-apps/plugin-fs', () => ({ writeTextFile: vi.fn(() => Promise.resolve()) }))
 
 import {
+  checkMemoryIntegrity,
   deleteMemory,
   exportMemories,
   listMemories,
   loadMemorySection,
+  purgeMemoryOrphans,
   setMemoryDisabled,
   setMemoryLevel,
   upsertMemory,
@@ -294,6 +299,10 @@ beforeEach(() => {
   })
   vi.mocked(exportMemories).mockReset()
   vi.mocked(exportMemories).mockResolvedValue(null)
+  vi.mocked(checkMemoryIntegrity).mockReset()
+  vi.mocked(checkMemoryIntegrity).mockResolvedValue(null)
+  vi.mocked(purgeMemoryOrphans).mockReset()
+  vi.mocked(purgeMemoryOrphans).mockResolvedValue(null)
   // 二次确认默认「确定」（队列里的 once 实现必须清掉，否则会漏到下一条用例）
   vi.mocked(MessageBox.propt).mockReset()
   vi.mocked(MessageBox.propt).mockResolvedValue(true)
@@ -967,6 +976,146 @@ it('重新读取后选中集收敛：已不存在的条目不会留在计数里'
   // 列表空了 → 分页栏也不该留着
   expect(document.querySelector('.memory-pager')).toBeNull()
   expect(document.querySelector('.memory-empty')).not.toBeNull()
+
+  await act(async () => root.unmount())
+})
+
+// ==================== 详情正文自检（引用完整性） ====================
+//
+// 记忆只存摘要，详情正文在知识库里；那条链接断掉是**静默**的。这组守住四件事：
+// ① 自检是主动动作（进页面不会自己跑、也不常驻告警）；② 「没核验」不能显示成「干净」；
+// ③ 清理只针对「像记忆正文」的那几篇，且必须先二次确认；④ 失败不静默、也不伪造报告。
+
+/** 造一份自检报告（camelCase，与 Rust 侧同形） */
+function integrityReport(
+  over: Partial<MemoryIntegrityReport> = {},
+): MemoryIntegrityReport {
+  return {
+    kbId: 'kb_mem',
+    kbAvailable: true,
+    checkedMemories: 2,
+    checkedDocs: 1,
+    orphans: [],
+    dangling: [],
+    ...over,
+  }
+}
+
+it('详情正文自检：点「检查一遍」才跑；干净时只说「引用完整」、不给清理入口', async () => {
+  vi.mocked(checkMemoryIntegrity).mockResolvedValue(integrityReport())
+  const { root } = await render()
+
+  // 默认什么都不显示（自检是主动动作，不是常驻告警）
+  expect(document.querySelector('.memory-integrity-report')).toBeNull()
+  expect(checkMemoryIntegrity).not.toHaveBeenCalled()
+
+  await click(buttonByText('检查一遍'))
+  expect(checkMemoryIntegrity).toHaveBeenCalledTimes(1)
+
+  const report = document.querySelector('.memory-integrity-report')!
+  expect(report.classList.contains('is-warn')).toBe(false)
+  expect(report.textContent).toContain('引用完整')
+  expect(report.textContent).toContain('2 条记忆')
+  expect(document.querySelector('.memory-option-link.is-danger')).toBeNull()
+
+  await act(async () => root.unmount())
+})
+
+it('孤儿正文：只把「像记忆正文」的算可清理，清理前二次确认，之后用返回的报告刷新', async () => {
+  vi.mocked(checkMemoryIntegrity).mockResolvedValue(
+    integrityReport({
+      orphans: [
+        { docId: 'd1', docName: '记忆详情：项目用 pnpm 构建', looksLikeDetail: true },
+        { docId: 'd2', docName: '公司制度.pdf', looksLikeDetail: false },
+      ],
+      dangling: [
+        {
+          memoryId: 'm1',
+          summary: '被顶替的旧版',
+          kbId: 'kb_mem',
+          docId: 'd_gone',
+          reason: 'doc-missing',
+          disabled: true,
+        },
+      ],
+    }),
+  )
+  // 清理后：可清理的那篇没了，用户手导的那篇还在（且仍然不在清理范围）
+  vi.mocked(purgeMemoryOrphans).mockResolvedValue(
+    integrityReport({
+      orphans: [{ docId: 'd2', docName: '公司制度.pdf', looksLikeDetail: false }],
+    }),
+  )
+  const { root } = await render()
+
+  await click(buttonByText('检查一遍'))
+  let report = document.querySelector('.memory-integrity-report')!
+  expect(report.textContent).toContain('断链')
+  expect(report.textContent).toContain('正文已不在（该记忆已停用）')
+  expect(report.textContent).toContain('不像记忆正文，需要你自己确认')
+
+  // 2 篇孤儿里只有 1 篇可清理
+  await click(buttonByText('清理 1 篇孤儿正文'))
+  expect(purgeMemoryOrphans).toHaveBeenCalledTimes(1)
+  // 删正文不可撤销：必须先二次确认，且确认文案说清篇数
+  expect(vi.mocked(MessageBox.propt)).toHaveBeenCalledTimes(1)
+  expect(vi.mocked(MessageBox.propt).mock.calls[0][1]).toContain('1')
+
+  report = document.querySelector('.memory-integrity-report')!
+  expect(report.textContent).toContain('公司制度.pdf')
+  expect(report.textContent).not.toContain('记忆详情：项目用 pnpm 构建')
+  // 剩下那篇不在清理范围 → 清理入口消失
+  expect(document.querySelector('.memory-option-link.is-danger')).toBeNull()
+
+  await act(async () => root.unmount())
+})
+
+it('二次确认取消时不清理（删正文不可撤销）', async () => {
+  vi.mocked(checkMemoryIntegrity).mockResolvedValue(
+    integrityReport({
+      orphans: [{ docId: 'd1', docName: '记忆详情：旧的', looksLikeDetail: true }],
+    }),
+  )
+  const { root } = await render()
+
+  await click(buttonByText('检查一遍'))
+  vi.mocked(MessageBox.propt).mockResolvedValueOnce(false)
+  await click(buttonByText('清理 1 篇孤儿正文'))
+
+  expect(purgeMemoryOrphans).not.toHaveBeenCalled()
+  // 报告还是原来那份（孤儿仍在，清理入口还在）
+  expect(document.querySelector('.memory-integrity-report')!.textContent).toContain(
+    '记忆详情：旧的',
+  )
+
+  await act(async () => root.unmount())
+})
+
+it('知识库不可用：如实说「没能检查」，不当成干净、也不给清理入口', async () => {
+  vi.mocked(checkMemoryIntegrity).mockResolvedValue(
+    integrityReport({ kbAvailable: false, kbId: null, checkedDocs: 0 }),
+  )
+  const { root } = await render()
+
+  await click(buttonByText('检查一遍'))
+  const report = document.querySelector('.memory-integrity-report')!
+  expect(report.textContent).toContain('没能检查')
+  expect(report.classList.contains('is-warn')).toBe(true)
+  expect(document.querySelector('.memory-option-link.is-danger')).toBeNull()
+
+  await act(async () => root.unmount())
+})
+
+it('检查失败不静默：给提示，且不伪造一份报告', async () => {
+  vi.mocked(checkMemoryIntegrity).mockResolvedValue(null)
+  const { root } = await render()
+
+  await click(buttonByText('检查一遍'))
+  expect(showToast).toHaveBeenCalledWith(
+    expect.stringContaining('检查失败'),
+    expect.any(Number),
+  )
+  expect(document.querySelector('.memory-integrity-report')).toBeNull()
 
   await act(async () => root.unmount())
 })

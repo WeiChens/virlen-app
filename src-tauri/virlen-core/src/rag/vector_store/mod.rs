@@ -81,12 +81,40 @@ pub struct DocumentInfo {
 /// 检索结果块
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ChunkResult {
+    /// **原文**片段（不含语境头）—— 与当初被分块切出来的那段文字逐字一致。
+    ///
+    /// 界面上的片段预览、按块拼回全文等「当正文读」的地方都该用它；
+    /// 想看「这块属于哪个文档的哪一节」用 [`ChunkResult::context_header`]。
     pub id: String,
     pub content: String,
     pub document_id: String,
     pub document_name: String,
     pub chunk_index: usize,
     pub score: f32,
+    /// 检索语境头（文档名 + 所属章节 + 前后一句），见
+    /// [`crate::rag::document::META_CONTEXT_HEADER`]。
+    ///
+    /// **只给模型看的**：拼上它以后，模型看到的片段与当初被嵌入的那段文字逐字一致
+    /// （[`crate::rag::document::embedding_text`]），不必再从 512 字符的片段里猜上下文。
+    /// 单独成字段而不是混进 `content`：混进去会让界面上的片段预览变成一屏语境头、
+    /// 让上下文的 `[片段 N] 来自：文档名` 与头里的文档名重复两遍。
+    ///
+    /// `None` = 升级前导入的块（那时还不生成语境头），此时模型看到的就是原文。
+    #[serde(default)]
+    pub context_header: Option<String>,
+}
+
+impl ChunkResult {
+    /// 给模型 / 日志看的完整片段 = 语境头 + 空行 + 原文（没有语境头就是原文）
+    ///
+    /// 单点定义，避免三处调用方各拼一套：Rust [`crate::rag::rag_service::RagService::format_context`]
+    /// 与前端 `buildSearchContext` / `buildContextText` 用的是同一条口径。
+    pub fn retrieved_text(&self) -> String {
+        match self.context_header.as_deref().map(str::trim) {
+            Some(header) if !header.is_empty() => format!("{}\n\n{}", header, self.content),
+            _ => self.content.clone(),
+        }
+    }
 }
 
 /// 块信息 — 用于 turbovec u64 ID → 块内容的反向查找
@@ -99,13 +127,19 @@ struct ChunkInfo {
     chunk_index: usize,
     file_type: String,
     /// 本块开头有多少**字符**是上一块结尾的重复（分块时记下，见
-    /// [`crate::rag::document::META_OVERLAP_PREFIX`]）。
+    /// [`crate::rag::document::META_OVERLAP_PREFIX`）。
     ///
     /// 读全文时按它裁掉重叠，否则预览 / 编辑 / 导出会看到重复内容。
     /// `None` = 升级前写的块（那时没这个字段）—— 此时由
     /// [`VectorStoreManager::legacy_overlap_prefix`] 按默认重叠量回推。
     #[serde(default)]
     overlap_prefix_chars: Option<usize>,
+    /// 检索语境头（文档名 + 所属章节 + 前后一句），见
+    /// [`crate::rag::document::META_CONTEXT_HEADER`]。
+    ///
+    /// `None` = 升级前导入的块（那时还不生成语境头）—— 检索结果原样返回，行为与升级前一致。
+    #[serde(default)]
+    context_header: Option<String>,
 }
 
 /// 单个知识库的索引状态
@@ -314,6 +348,20 @@ fn overlap_prefix_of(chunk: &crate::rag::document::DocumentChunk) -> Option<usiz
         .get(crate::rag::document::META_OVERLAP_PREFIX)
         .and_then(|s| s.parse().ok())
 }
+
+/// 从块元数据取「检索语境头」（缺字段 / 空串 → `None` = 老数据）
+fn context_header_of(chunk: &crate::rag::document::DocumentChunk) -> Option<String> {
+    chunk
+        .metadata
+        .get(crate::rag::document::META_CONTEXT_HEADER)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// 检索结果给模型 / 界面看的正文 = 语境头 + 空行 + 原文
+///
+/// 实现在 [`ChunkResult::retrieved_text`]（同一份口径，只此一处）。
+/// 没有语境头的老数据 → 原样返回。
 
 /// 格式化知识库数据目录大小（当前未被使用，保留供后续 UI 展示用）
 #[allow(dead_code)]

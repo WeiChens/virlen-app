@@ -1,6 +1,8 @@
 /**
- * 设置 → 手机控制：开关 → 扫码配对 → 高级（ICE）→ 已绑定手机 → 操作记录 → 配对确认。
+ * 设置 → 手机控制：开关 → 扫码配对 → 已绑定手机 → 配对确认。
  * 细节一律收进折叠区，首屏只留「现在能不能连、怎么连」。
+ *
+ * 低频的两块（ICE 服务器配置 / 操作记录）不占首屏：页头右侧的「更多」菜单点开弹窗再看。
  */
 import { useEffect, useRef, useState } from 'react'
 import QRCode from 'qrcode'
@@ -10,8 +12,14 @@ import { phoneControlStore } from '@/ui/store/phoneControlStore'
 import { DEVICE_NAME_MAX, transferTierOf, type PhoneControlStatus, type TransferTier } from '@/bridge'
 import Toggle from '@/ui/components/shared/Toggle'
 import { showToast } from '@/ui/components/shared/Toast'
+import Modal from '@/ui/components/shared/Modal'
+import ContextMenu, {
+  useContextMenu,
+  type ContextMenuItem,
+} from '@/ui/components/shared/ContextMenu'
 import PhoneSvg from '@/ui/components/icons/PhoneSvg'
 import RefreshSvg from '@/ui/components/icons/RefreshSvg'
+import MoreSvg from '@/ui/components/icons/MoreSvg'
 import type { AuditEntry, PairedDevice } from '@/bridge'
 import { t, tpl } from '@/ui/i18n'
 import './phone-control-settings.scss'
@@ -124,9 +132,8 @@ function DeviceRow({
 
   return (
     <div
-      className={`phone-control__device${online ? ' phone-control__device--online' : ''}${
-        editing ? ' phone-control__device--editing' : ''
-      }`}
+      className={`phone-control__device${online ? ' phone-control__device--online' : ''}${editing ? ' phone-control__device--editing' : ''
+        }`}
     >
       <span className="phone-control__device-icon" aria-hidden="true">
         <PhoneSvg />
@@ -166,11 +173,11 @@ function DeviceRow({
           )}
         </span>
         <span className="phone-control__device-meta">
-          <span className="phone-control__chip">{t(shortKey(device.mobileKey))}</span>
+          {/* <span className="phone-control__chip">{t(shortKey(device.mobileKey))}</span> */}
           <span className="phone-control__chip">
             {tpl('凭证$__grant__', { grant: describeGrantRemaining(device) })}
           </span>
-          <span className="phone-control__chip">{tpl('上次连接 $__time__', { time: last })}</span>
+          {/* <span className="phone-control__chip">{tpl('上次连接 $__time__', { time: last })}</span> */}
         </span>
       </div>
       <span className="phone-control__device-actions">
@@ -237,8 +244,114 @@ function auditText(e: AuditEntry): string {
     : e.method
 }
 
+/** 页头「更多」菜单能打开的两块内容（同一时刻只可能开一个） */
+type PanelKey = 'ice' | 'audit'
+
+/**
+ * ICE 配置正文。
+ * 默认值由服务端下发，客户端源码不含任何 TURN 凭证 ——
+ * 这里只显示「来源 + 数量」，不渲染服务端下发的凭证（截图 / 录屏 / 日志都会外流）。
+ */
+function IcePanel() {
+  const s = phoneControlStore
+
+  // 弹窗一打开就回填文本框：等价于折叠区展开时的那次 `loadIceText()`
+  useEffect(() => {
+    s.loadIceText()
+  }, [s])
+
+  return (
+    <div className="phone-control__ice">
+      <div className="phone-control__ice-status">
+        {t('当前生效：')}
+        {s.iceDetail}
+        {s.iceLoading ? t('（解析中…）') : ''}
+        {s.iceWarning ? ` · ${s.iceWarning}` : ''}
+      </div>
+      {s.iceCustomError && (
+        <div className="phone-control__ice-error">
+          {t('自定义配置有问题：')}
+          {s.iceCustomError}
+        </div>
+      )}
+      <textarea
+        className="phone-control__ice-text"
+        rows={8}
+        spellCheck={false}
+        placeholder={ICE_PLACEHOLDER}
+        value={s.iceText}
+        onChange={(e) => s.setIceText(e.target.value)}
+      />
+      <div className="phone-control__ice-actions">
+        <button type="button" className="btn btn--small" onClick={() => void s.resetIceConfig()}>
+          {t('恢复服务端默认')}
+        </button>
+        <button
+          type="button"
+          className="btn btn--primary btn--small"
+          onClick={() => void s.saveIceConfig()}
+        >
+          {t('保存')}
+        </button>
+      </div>
+      <p className="phone-control__tip">
+        {t('留空则使用默认服务器；填写后以该配置为准（自建、内网或公共 STUN / TURN 均可）。')}
+      </p>
+    </div>
+  )
+}
+
+/**
+ * 操作记录（审计）正文：手机是远程全权控制面，审批取宽松档 ——
+ * 「谁在什么时候批了什么」必须可回溯。
+ */
+function AuditPanel() {
+  const s = phoneControlStore
+
+  return (
+    <div className="phone-control__audit">
+      <div className="phone-control__audit-head">
+        <span className="phone-control__count">{s.auditView.length}</span>
+        <button
+          type="button"
+          className="btn btn--small"
+          disabled={s.auditView.length === 0}
+          onClick={() => void s.clearAudit()}
+        >
+          {t('清空记录')}
+        </button>
+      </div>
+      {s.auditView.length === 0 && (
+        <div className="phone-control__empty">
+          <p>{t('还没有操作记录。手机的每次操作与审批都会留在这里。')}</p>
+        </div>
+      )}
+      <ul className="phone-control__audit-list">
+        {s.auditView.map((e, i) => (
+          <li
+            key={`${e.at}-${e.method}-${i}`}
+            className={`phone-control__audit-item${e.allowed ? '' : ' phone-control__audit-item--denied'}${e.kind === 'approval' ? ' phone-control__audit-item--approval' : ''
+              }`}
+          >
+            <span className="phone-control__audit-time">{auditTime(e)}</span>
+            <span className="phone-control__audit-badge">
+              {e.kind === 'approval' ? t('审批') : t('操作')}
+            </span>
+            <span className="phone-control__audit-text">{auditText(e)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 export default observer(function PhoneControlSettings() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  /** 「更多」按钮本身（菜单锚点 + toggle 判定） */
+  const moreBtnRef = useRef<HTMLButtonElement>(null)
+  const more = useContextMenu()
+  /** 当前打开的弹窗（null = 都关着） */
+  const [panel, setPanel] = useState<PanelKey | null>(null)
   const s = phoneControlStore
 
   useEffect(() => {
@@ -263,6 +376,36 @@ export default observer(function PhoneControlSettings() {
       ? 0
       : Math.max(0, Math.min(100, (s.ticketLeftSec / TICKET_TTL_SEC) * 100))
 
+  /**
+   * 「更多」菜单：展开位置取自按钮本身（右下角对齐）—— 不从鼠标事件来，所以用 `openAtPoint`；
+   * `anchorElement` 让「再点一次」走 toggle（否则 mousedown 先关、click 又开，看着像点不动）。
+   */
+  function toggleMoreMenu(): void {
+    if (more.state) {
+      more.close()
+      return
+    }
+    const rect = moreBtnRef.current?.getBoundingClientRect()
+    if (!rect) return
+    more.openAtPoint({ x: rect.right, y: rect.bottom + 4 }, undefined)
+  }
+
+  /** 页头菜单项：都是低频的「看一眼 / 改一次」类动作，主流程（开关 / 扫码 / 已绑定手机）不进菜单 */
+  function moreItems(): ContextMenuItem[] {
+    return [
+      {
+        key: 'ice',
+        label: t('配置 ICE 服务器'),
+        onClick: () => setPanel('ice'),
+      },
+      {
+        key: 'audit',
+        label: t('操作记录'),
+        onClick: () => setPanel('audit'),
+      },
+    ]
+  }
+
   return (
     <div className="phone-control">
       <header className="phone-control__head">
@@ -272,20 +415,42 @@ export default observer(function PhoneControlSettings() {
         <div className="phone-control__head-text">
           <h2 className="phone-control__title">{t('手机控制')}</h2>
           <p className="phone-control__sub">
-            {t('用手机扫码配对后，可在外网查看与操作本机 Agent，链路加密。')}
+            {t('使用手机控制本机Virlen')}
           </p>
         </div>
+        <button
+          ref={moreBtnRef}
+          type="button"
+          className={`phone-control__more${more.state ? ' phone-control__more--active' : ''}`}
+          title={t('更多')}
+          aria-label={t('更多')}
+          aria-haspopup="menu"
+          aria-expanded={!!more.state}
+          onClick={toggleMoreMenu}
+        >
+          <MoreSvg fill="currentColor" />
+        </button>
       </header>
+
+      {more.state && (
+        <ContextMenu
+          position={more.state.position}
+          placement="bottom-left"
+          anchorElement={moreBtnRef.current}
+          items={moreItems()}
+          onClose={more.close}
+        />
+      )}
 
       {/* 主开关：它是本页唯一决定「下面还有没有内容」的东西，故给它一块卡片 */}
       <section className="phone-control__switch">
         <div className="phone-control__switch-text">
           <span className="phone-control__switch-title">{t('启用手机控制')}</span>
-          <span className="phone-control__switch-desc">
+          {/* <span className="phone-control__switch-desc">
             {s.enabled
               ? t('已开启：手机可扫码配对并操作本机，关闭会断开当前连接。')
               : t('开启后生成配对二维码；关闭会断开所有已连接的手机。')}
-          </span>
+          </span> */}
           <span className="phone-control__status-row">
             <span className={`phone-control__status phone-control__status--${s.status}`}>
               <span className="phone-control__dot" aria-hidden="true" />
@@ -304,7 +469,7 @@ export default observer(function PhoneControlSettings() {
           </span>
         </div>
         <Toggle
-          size="lg"
+          size="md"
           checked={s.enabled}
           onChange={(next) => s.setEnabled(next)}
           ariaLabel={t('启用手机控制')}
@@ -369,7 +534,7 @@ export default observer(function PhoneControlSettings() {
         {s.devices.length === 0 && (
           <div className="phone-control__empty">
             <PhoneSvg />
-            <p>{t('还没有绑定手机。启用后让手机扫一次二维码即可。')}</p>
+            <p>{t('还没有绑定手机。')}</p>
           </div>
         )}
         {s.devices.map((d) => (
@@ -386,91 +551,25 @@ export default observer(function PhoneControlSettings() {
             }}
           />
         ))}
-        <p className="phone-control__tip">
-          {t('改名仅影响本机显示。移除后手机立即断开，需重新扫码确认才能再连；授权按月续期，最长 90 天。')}
-        </p>
       </section>
-      {/* ICE 配置：默认值由服务端下发，客户端源码不含任何 TURN 凭证。
-          这里只显示「来源 + 数量」，不渲染服务端下发的凭证 —— 截图 / 录屏 / 日志都会外流。 */}
-      <details
-        className="phone-control__ice"
-        onToggle={(e) => {
-          if ((e.target as HTMLDetailsElement).open) s.loadIceText()
-        }}
+      {/* 低频两块收进弹窗（入口在页头「更多」）：它们不参与「现在能不能连」的判断，摆在这里只是拉长首屏 */}
+      <Modal
+        visible={panel === 'ice'}
+        title={t('ICE 服务器（STUN / TURN）')}
+        width={520}
+        onClose={() => setPanel(null)}
       >
-        <summary>{t('高级：ICE 服务器（STUN / TURN）')}</summary>
-        <div className="phone-control__ice-status">
-          {t('当前生效：')}
-          {s.iceDetail}
-          {s.iceLoading ? t('（解析中…）') : ''}
-          {s.iceWarning ? ` · ${s.iceWarning}` : ''}
-        </div>
-        {s.iceCustomError && (
-          <div className="phone-control__ice-error">
-            {t('自定义配置有问题：')}
-            {s.iceCustomError}
-          </div>
-        )}
-        <textarea
-          className="phone-control__ice-text"
-          rows={6}
-          spellCheck={false}
-          placeholder={ICE_PLACEHOLDER}
-          value={s.iceText}
-          onChange={(e) => s.setIceText(e.target.value)}
-        />
-        <div className="phone-control__ice-actions">
-          <button
-            type="button"
-            className="btn btn--primary btn--small"
-            onClick={() => void s.saveIceConfig()}
-          >
-            {t('保存')}
-          </button>
-          <button type="button" className="btn btn--small" onClick={() => void s.resetIceConfig()}>
-            {t('恢复服务端默认')}
-          </button>
-        </div>
-        <p className="phone-control__tip">
-          {t('留空则使用默认服务器；填写后以该配置为准（自建、内网或公共 STUN / TURN 均可）。')}
-        </p>
-      </details>
+        <IcePanel />
+      </Modal>
 
-      {/* 操作记录（审计）：手机是远程全权控制面，审批取宽松档 —— 「谁在什么时候批了什么」必须可回溯。 */}
-      <section className="phone-control__audit">
-        <div className="phone-control__audit-head">
-          <h3 className="phone-control__card-title">{t('操作记录')}</h3>
-          <button
-            type="button"
-            className="btn btn--small"
-            disabled={s.auditView.length === 0}
-            onClick={() => void s.clearAudit()}
-          >
-            {t('清空记录')}
-          </button>
-        </div>
-        {s.auditView.length === 0 && (
-          <div className="phone-control__empty">
-            <p>{t('还没有操作记录。手机的每次操作与审批都会留在这里。')}</p>
-          </div>
-        )}
-        <ul className="phone-control__audit-list">
-          {s.auditView.map((e, i) => (
-            <li
-              key={`${e.at}-${e.method}-${i}`}
-              className={`phone-control__audit-item${e.allowed ? '' : ' phone-control__audit-item--denied'}${
-                e.kind === 'approval' ? ' phone-control__audit-item--approval' : ''
-              }`}
-            >
-              <span className="phone-control__audit-time">{auditTime(e)}</span>
-              <span className="phone-control__audit-badge">
-                {e.kind === 'approval' ? t('审批') : t('操作')}
-              </span>
-              <span className="phone-control__audit-text">{auditText(e)}</span>
-            </li>
-          ))}
-        </ul>
-      </section>
+      <Modal
+        visible={panel === 'audit'}
+        title={t('操作记录')}
+        width={560}
+        onClose={() => setPanel(null)}
+      >
+        <AuditPanel />
+      </Modal>
 
       {s.pendingPair && (
         <div className="phone-control__confirm" role="dialog" aria-modal="true">

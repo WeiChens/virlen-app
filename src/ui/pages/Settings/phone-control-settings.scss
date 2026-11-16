@@ -50,7 +50,51 @@
   }
 
   &__head-text {
+    flex: 1;
     min-width: 0;
+  }
+
+  /* 页头右侧的「更多」：低频入口（ICE 配置 / 操作记录）住在这里，不占首屏 */
+  &__more {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary, #666);
+    cursor: pointer;
+    transition:
+      background 0.15s ease,
+      border-color 0.15s ease,
+      color 0.15s ease;
+
+    svg {
+      width: 18px;
+      height: 18px;
+      fill: currentColor;
+    }
+
+    &:hover {
+      background: var(--hover-bg, #f0f0f0);
+      color: var(--text-primary, #1a1a1a);
+    }
+
+    &:focus-visible {
+      outline: var(--focus-ring);
+      outline-offset: 2px;
+    }
+
+    /* 菜单开着时：与 .git-icon-btn 的 is-active 同一套语义（按钮被按下了） */
+    &--active {
+      border-color: var(--border-color, #e5e5e5);
+      background: var(--hover-bg, #f0f0f0);
+      color: var(--text-primary, #1a1a1a);
+    }
   }
 
   &__title {
@@ -371,29 +415,13 @@
     }
   }
 
-  /* ── ICE 配置折叠区（§31）──
-     平时收起（大多数用户不需要改）；收起时只有「标题 + 三角」，展开后与其它卡片同节奏。 */
+  /* ── ICE 配置（弹窗正文，§31）──
+     默认值由服务端下发，客户端源码不含任何 TURN 凭证。弹窗已自带边框与底色，
+     这里只负责内部竖向节奏，不再画第二层卡片。 */
   &__ice {
-    padding: 12px 16px;
-    border: 1px solid var(--border-color, #e5e5e5);
-    border-radius: 12px;
-    background: var(--card-bg, #fafafa);
-
-    summary {
-      color: var(--text-primary, #1a1a1a);
-      font-size: var(--font-size-base);
-      font-weight: 600;
-      cursor: pointer;
-
-      &:focus-visible {
-        outline: var(--focus-ring);
-        outline-offset: 2px;
-      }
-    }
-
-    > *:not(summary) {
-      margin-top: 10px;
-    }
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
   }
 
   /* 当前生效的 ICE 来源（"服务端下发（2 个服务器）" 之类） */
@@ -432,6 +460,7 @@
   &__ice-actions {
     display: flex;
     gap: 8px;
+    justify-content: flex-end;
   }
 
   /* 说明段（移除的后果 / 凭证期限 / ICE 留空语义）—— 纯文字，不抢视觉重心 */
@@ -524,7 +553,8 @@
     flex: 1;
     min-width: 0;
     padding: 1px 8px;
-    border: 1px solid var(--accent-color, #4f46e5);
+    // border: 1px solid var(--accent-color, #4f46e5);
+    border: none;
     border-radius: 7px;
     background: var(--input-bg, #f1f1f3);
     color: var(--text-primary, #1a1a1a);
@@ -626,13 +656,14 @@
     }
   }
 
-  /* ── 操作记录（审计）── */
+  /* ── 操作记录（审计，弹窗正文）── */
   &__audit {
     display: flex;
     flex-direction: column;
     gap: 10px;
   }
 
+  /* 计数 + 「清空记录」一行：计数在左（先告诉有多少条再给动作） */
   &__audit-head {
     display: flex;
     align-items: center;

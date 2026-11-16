@@ -315,14 +315,20 @@
 
     .plaza-card-meta {
       display: flex;
-      flex-direction: column;
+      flex-direction: row;
+      align-items: center;
       gap: 6px;
+    }
+    .plaza-card-footer-wrapper{
+      display: flex;
+      flex-direction: row;
+      justify-content: space-between;
     }
 
     .plaza-card-tags {
       display: flex;
       gap: 4px;
-      flex-wrap: wrap;
+      align-items: center;
     }
 
     .plaza-tag {

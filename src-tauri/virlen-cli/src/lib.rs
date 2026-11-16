@@ -7,7 +7,7 @@
 //! virlen-cli list-session | list-agent          列出会话 / Agent
 //! virlen-cli provider <add|edit|rm|list|test>   交互式管理供应商配置
 //! virlen-cli agent <add|edit|rm|list>           交互式管理 Agent 配置
-//! virlen-cli memory <list|redistill|runs|export>  长期记忆（列出 / 再蒸馏 / 整理流水 / 导出 JSON）
+//! virlen-cli memory <list|redistill|runs|export|integrity>  长期记忆（列出 / 再蒸馏 / 整理流水 / 导出 JSON / 引用完整性自检）
 //! ```
 //!
 //! 命令实现住 lib 而非 bin：bin 目标无法被单测引用。三方分工（各只依赖内层）：`virlen-core`（引擎 /
@@ -84,9 +84,9 @@ Virlen CLI（headless）—— 与桌面端读写同一份配置（app_settings 
   virlen-cli session <show|search|rm|purge>
                                          会话管理：查看一条会话 / 检索历史正文 /
                                          删除会话 / 回收孤儿消息（`session --help` 看说明）
-  virlen-cli memory <list|redistill|runs|export>
+  virlen-cli memory <list|redistill|runs|export|integrity>
                                          长期记忆：列出记忆 / 再蒸馏（把 AI 写下的合并成更少条目）/
-                                         看整理流水 / 导出 JSON
+                                         看整理流水 / 导出 JSON / 核验详情正文引用完整性
                                          （与桌面端同一份库与同一份 core 实现，`memory --help` 看说明）
   virlen-cli usage [选项]                用量账本（token 统计；`usage --help` 看选项）
                                          只统计 token，不显示费用（价目表在前端 TS）

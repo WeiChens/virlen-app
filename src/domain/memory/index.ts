@@ -90,6 +90,62 @@ export interface MemoryPromptSection {
   budget: number
 }
 
+// ==================== 详情正文的引用完整性自检 ====================
+//
+// 记忆条目只存摘要，详情正文是知识库里的一篇文档（`detailKbId` + `detailDocId`）。
+// 两侧各自都会「正常返回成功」，所以断链与孤儿都是**静默**的 —— 只能主动核验。
+// 下面三个类型与 Rust `agent::memory::integrity` 同形（camelCase）。
+
+/** 孤儿正文：在记忆详情库里、但没有任何记忆引用它 */
+export interface MemoryOrphanDetail {
+  docId: string
+  docName: string
+  /**
+   * 名字带「记忆详情」前缀 = 确实像记忆正文（`清理孤儿正文` 会删）。
+   * `false` 是用户自己导进这个库的文档：同样没被引用，但不是记忆的残留，只能人工判断。
+   */
+  looksLikeDetail: boolean
+}
+
+/** 断链：记忆的详情链接指向一个读不到的文档 */
+export interface MemoryDanglingLink {
+  memoryId: string
+  /** 记忆摘要（界面要能让用户认出是哪条） */
+  summary: string
+  kbId: string
+  docId: string
+  /** `doc-missing`（库还在，文档没了）/ `kb-mismatch`（指向别的知识库，或那个库已不在） */
+  reason: string
+  /** 该条目是否已停用（停用的仍能被 `memory_recall` 读到，所以同样算断链） */
+  disabled: boolean
+}
+
+/** 自检报告（`cmd_memory_integrity_check` / `_purge` 的返回） */
+export interface MemoryIntegrityReport {
+  /** 当前认定的「记忆详情」知识库 id（找不到就是 `null`） */
+  kbId?: string | null
+  /** RAG 是否可用：`false` = 本次没法核验知识库侧，报告**不代表**干净 */
+  kbAvailable: boolean
+  checkedMemories: number
+  checkedDocs: number
+  orphans: MemoryOrphanDetail[]
+  dangling: MemoryDanglingLink[]
+}
+
+/** 报告是否真的干净（与 Rust `MemoryIntegrityReport::is_clean` 同口径：没核验过不算干净） */
+export function isIntegrityClean(report: MemoryIntegrityReport): boolean {
+  return (
+    report.kbAvailable &&
+    report.orphans.length === 0 &&
+    report.dangling.length === 0
+  )
+}
+
+/** 可以放心清理的孤儿篇数（名字带「记忆详情」前缀的那些） */
+export function deletableOrphanCount(report: MemoryIntegrityReport): number {
+  return report.orphans.filter((o) => o.looksLikeDetail).length
+}
+
 // ==================== 导出（P3） ====================
 
 /** 导出信封的格式标识（与 Rust `MEMORY_EXPORT_FORMAT` 同值） */

@@ -17,7 +17,7 @@ import type {
   ZipPreview,
 } from '@/domain/ports'
 import type { RAGConfig, RAGContext, RAGQueryOptions } from '@/domain/rag/types'
-import { defaultRAGConfig } from '@/domain/rag/types'
+import { defaultRAGConfig, chunkRetrievedText } from '@/domain/rag/types'
 
 class RagService {
   /** 最大上下文字符数（固定，不从配置读取） */
@@ -200,6 +200,7 @@ class RagService {
       content: string
       documentName: string
       score: number
+      contextHeader?: string | null
     }> = []
 
     for (const kbId of options.knowledgeBaseIds) {
@@ -212,6 +213,7 @@ class RagService {
               content: chunk.content,
               documentName: chunk.document_name,
               score: chunk.score,
+              contextHeader: chunk.context_header ?? null,
             })
           }
         }
@@ -254,6 +256,7 @@ class RagService {
       content: string
       documentName: string
       score: number
+      contextHeader?: string | null
     }>,
   ): string {
     let context = '以下是从知识库中检索到的相关文档片段：\n\n---\n'
@@ -262,8 +265,11 @@ class RagService {
 
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i]
-      const header = `[片段 ${i + 1}] 来自：${chunk.documentName}（相似度：${chunk.score.toFixed(2)}）\n`
-      const entry = `${header}${chunk.content}\n\n---\n`
+      // 有语境头时文档名已在头里，不在 `[片段 N]` 行里再报一次（与 Rust `format_context` 同口径）
+      const header = chunk.contextHeader?.trim()
+        ? `[片段 ${i + 1}] （相似度：${chunk.score.toFixed(2)}）\n`
+        : `[片段 ${i + 1}] 来自：${chunk.documentName}（相似度：${chunk.score.toFixed(2)}）\n`
+      const entry = `${header}${chunkRetrievedText(chunk.contextHeader, chunk.content)}\n\n---\n`
 
       if (totalChars + entry.length > maxChars) {
         context += `\n...（已截断，共 ${chunks.length} 个片段中的前 ${i} 个）\n`
