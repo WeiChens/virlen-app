@@ -68,7 +68,33 @@ jobs:
         shell: bash
         run: pnpm build
 
-      # 4) Rust 测试（各模块内联 #[cfg(test)] mod tests）
+      # 4) 预建 Cargo 的输出目录 —— **Windows 上这一步是必需的**，不是清理
+      # 背景：`quasivision` → `ort-sys` 的 build script 会把预编译包里的 `DirectML.dll`
+      # 拷到 `target/<profile>/{,examples,deps}` 三处（ort-sys `build/dynamic_link.rs::copy_dylibs`），
+      # 且写的是 `fs::copy(..).unwrap()`。Windows 上没有 Developer Mode 时符号链接会失败，
+      # 走 `fs::copy` 回退，而 **`examples/` 目录在仓库里没有任何 example 源码时根本不存在**
+      # → `ERROR_PATH_NOT_FOUND`（code 3）→ build script panic：
+      #   `ort-sys ... build\dynamic_link.rs:42: called Result::unwrap() on an Err value:
+      #    Os { code: 3, kind: NotFound }`
+      # ⚠️ 本地永远复现不了：旧构建残留的 `target/debug/examples/`（历史 example 二进制的产物）
+      #    把这个 bug 盖住了；CI 是干净 checkout，必然崩。
+      # 和它无关的两件事（别被日志带偏）：① 不是缺 DirectML/DX12 库；
+      #    ② 不是下载失败 —— `cargo::error=` 那几条打印（下载/解压/hash 不符）一条都没出现。
+      # 为什么只在 Windows 发生：三个平台的预编译包里**只有 Windows 包带 `DirectML.dll`**
+      # （解压后只有 `onnxruntime.lib` + `DirectML.dll`；Linux/macOS 只发静态库）→ 别的平台
+      # 压根不进这个“枚举 .dll/.so/.dylib 并拷贝”的循环。
+      - name: Pre-create cargo output dirs (ort-sys copies DirectML.dll into examples/)
+        shell: bash
+        run: |
+          for d in \
+            target/debug/examples target/debug/deps \
+            target/x86_64-pc-windows-msvc/debug/examples target/x86_64-pc-windows-msvc/debug/deps \
+            target/x86_64-pc-windows-msvc/release/examples target/x86_64-pc-windows-msvc/release/deps; do
+            mkdir -p "src-tauri/$d"
+          done
+          ls -d src-tauri/target/debug/examples src-tauri/target/debug/deps
+
+      # 5) Rust 测试（各模块内联 #[cfg(test)] mod tests）
       - name: Rust tests (cargo test)
         working-directory: src-tauri
         shell: bash
@@ -107,12 +133,57 @@ jobs:
           workspaces: src-tauri
           cache-on-failure: true
 
+      # ── 3.5 缓存 ONNX Runtime 预编译库（ort-sys）──
+      # 这条是**性能**优化，不是修那个 panic 的（修法见 test job 的「Pre-create cargo output dirs」）。
+      # 事实：ort-sys 的 build script 要从 `cdn.pyke.io` 拉 `onnxruntime.lib`（305 MB）+
+      # `DirectML.dll`（18 MB），解到 `%LOCALAPPDATA%\ort.pyke.io\dfbin\x86_64-pc-windows-msvc\<sha>`。
+      # 这个目录**不在 `Swatinem/rust-cache` 的范围内**（它只管 target/ 与 cargo 注册表/索引）
+      # → 每次 CI（每个 job）都要重下 300+ MB。缓存后命中就整段跳过。
+      - name: Cache ONNX Runtime prebuilt binaries (ort-sys)
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ort-pyke-cache
+          key: ort-pyke-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ort-pyke-${{ runner.os }}-${{ runner.arch }}-
+
       # ── 4. Install frontend dependencies ─────────────────────────────────
       - name: Install frontend dependencies
         shell: bash
         run: pnpm install --frozen-lockfile
 
-      # ── 5. Build CLI (virlen-cli) ──
+      # ⚠️ 让 ort-sys 用上面缓存的那份预编译库：它认 `ORT_CACHE_DIR`
+      #    （见 ort-sys `src/internal/dirs.rs::cache_dir`），其下的 `dfbin/<triple>/<sha>/`
+      #    就是展开后的 onnxruntime.lib / DirectML.dll。
+      #    ⚠️ 必须经 **`$GITHUB_ENV`** 持久化，不能在命令行写 `ORT_CACHE_DIR=… pnpm run …`：
+      #    那是 bash 语法，本 workflow 会走 PowerShell（pwsh 会把它当成外部命令 → 直接失败）。
+      - name: Point ort-sys cache at the cached directory
+        shell: bash
+        run: |
+          echo "ORT_CACHE_DIR=$RUNNER_TEMP/ort-pyke-cache" >> "$GITHUB_ENV"
+          # 自检：确认预编译库真的就位（不阻断，只提示；缺了就会白下 320MB）
+          if compgen -G "$RUNNER_TEMP/ort-pyke-cache/dfbin/*/*/onnxruntime.lib" > /dev/null; then
+            echo "::notice::ort-sys 预编译库命中缓存：$(ls -1 "$RUNNER_TEMP"/ort-pyke-cache/dfbin/*/*/ | tr '\n' ' ')"
+          else
+            echo "::warning::ort-sys 缓存未命中（首次运行或 Cargo.lock 变更）→ 本次仍会从 cdn.pyke.io 下载约 320MB"
+          fi
+
+      # ── 5. 预建 Cargo 输出目录（Windows 必需，理由同 test job）──
+      # 这里也要建：`CARGO_BUILD_TARGET` 让产物落 `target/<triple>/release/`，而
+      # ort-sys 拷 `DirectML.dll` 的目标是 `target/<triple>/release/examples/` ——
+      # 仓库里没有任何 example 源码，干净 checkout 不会生成这个目录 → `fs::copy` 报 code 3。
+      - name: Pre-create cargo output dirs (ort-sys copies DirectML.dll into examples/)
+        shell: bash
+        run: |
+          for d in \
+            target/debug/examples target/debug/deps \
+            target/x86_64-pc-windows-msvc/debug/examples target/x86_64-pc-windows-msvc/debug/deps \
+            target/x86_64-pc-windows-msvc/release/examples target/x86_64-pc-windows-msvc/release/deps; do
+            mkdir -p "src-tauri/$d"
+          done
+          ls -d src-tauri/target/x86_64-pc-windows-msvc/release/examples
+
+      # ── 6. Build CLI (virlen-cli) ──
       # headless CLI 与 GUI **同源同 workspace**（共享 Cargo.lock / target/ / rust-cache），
       # 但只依赖 virlen-core → 二进制里没有 tauri / wry / tao / webview2-com。
       # 放在 `cargo install tauri-cli` 之前：CLI 出问题即早退，不必白等那趟编译。
@@ -129,12 +200,12 @@ jobs:
           CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
         run: pnpm run build:cli
 
-      # ── 6. Install Tauri CLI ────────────────────────────────────────────
+      # ── 7. Install Tauri CLI ────────────────────────────────────────────
       - name: Install Tauri CLI
         shell: bash
         run: cargo install tauri-cli --version "^2.0"
 
-      # ── 7. Build the app ────────────────────────────────────────────────
+      # ── 8. Build the app ────────────────────────────────────────────────
       - name: Build Virlen for Windows
         shell: bash
         env:
@@ -144,7 +215,7 @@ jobs:
         run: |
           pnpm tauri build --target x86_64-pc-windows-msvc
 
-      # ── 8. Upload build artifacts ───────────────────────────────────────
+      # ── 9. Upload build artifacts ───────────────────────────────────────
       - name: Upload NSIS installer
         uses: actions/upload-artifact@v4
         with:
@@ -161,7 +232,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      # ── 9. Stage & upload CLI bundle (zip) ──────────────────────────────
+      # ── 10. Stage & upload CLI bundle (zip) ──────────────────────────────
       # 产物形态是 **zip 包**，不是裸二进制：裸 exe 不带 `quasivision_models/`，用户在别的
       # 机器上跑 `vision_analyze` 只会拿到「quasivision models directory not found.」。
       # zip 内容：exe + 端侧视觉模型 + DirectML.dll + README.txt（说明文案的唯一源是
@@ -223,7 +294,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # ── 10. (Optional) Create Release on tag push ───────────────────────────
+  # ── 11. (Optional) Create Release on tag push ───────────────────────────
   release:
     name: Create Release
     if: startsWith(github.ref, 'refs/tags/v')
