@@ -489,8 +489,12 @@ mod tests {
     }
 
     /// 轮次边界注入：消息进本次请求的列表（幂等：注入过就不再注入）。
-    #[tokio::test]
-    async fn inject_pending_appends_once() {
+    ///
+    /// 这两个用例写成同步的 + `block_on`：串行锁是 std `Mutex`，持锁跨 await 会被
+    /// `clippy::await_holding_lock` 拦下 —— 而这把锁的正事就是覆盖整个用例（含 await 段），
+    /// 收窄持锁范围等于放弃串行化。
+    #[test]
+    fn inject_pending_appends_once() {
         let _guard = lock_global();
         let sid = "s_notice_inject";
         drop_session(sid); // 累积计数断言：先确保本会话队列干净
@@ -502,15 +506,16 @@ mod tests {
         on_service_exit(&e);
 
         let repo = crate::agent::native_tools::noop_repo();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         let mut messages: Vec<Message> = Vec::new();
-        inject_pending(repo, sid, &mut messages).await;
+        rt.block_on(inject_pending(repo, sid, &mut messages));
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, "feedback");
         assert!(messages[0].text_content().contains("svc_inj"));
         assert_eq!(pending_count(sid), 0);
 
         // 再注入一次：什么都不发生（队列已空，不得重复注入）
-        inject_pending(repo, sid, &mut messages).await;
+        rt.block_on(inject_pending(repo, sid, &mut messages));
         assert_eq!(messages.len(), 1);
 
         drop_session(sid);
@@ -519,8 +524,8 @@ mod tests {
     }
 
     /// 界面已上屏并落库、但 ack 丢了 → 注入时必须按 id 去重（库里主键幂等，上下文里不是）。
-    #[tokio::test]
-    async fn inject_pending_skips_notices_already_in_the_context() {
+    #[test]
+    fn inject_pending_skips_notices_already_in_the_context() {
         let _guard = lock_global();
         let sid = "s_notice_inject_dup";
         drop_session(sid); // 累积计数断言：先确保本会话队列干净
@@ -541,7 +546,9 @@ mod tests {
         }))
         .unwrap()];
 
-        inject_pending(repo, sid, &mut messages).await;
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(inject_pending(repo, sid, &mut messages));
         assert_eq!(messages.len(), 1, "同一 id 不得在上下文里出现两次");
         assert_eq!(pending_count(sid), 0, "队列照常排空（否则会反复重试）");
         drop_session(sid);
