@@ -43,7 +43,7 @@ function SkillPlaza() {
 
   useEffect(() => {
     fetchCategories()
-    fetchSkills()
+    fetchSkills(null)
   }, [])
 
   async function fetchCategories() {
@@ -55,7 +55,7 @@ function SkillPlaza() {
     }
   }
 
-  async function fetchSkills() {
+  async function fetchSkills(categoryId: number) {
     setLoading(true)
     setErrorMsg('')
     try {
@@ -64,7 +64,7 @@ function SkillPlaza() {
         page_size: pagination.page_size,
       }
       if (searchKeyword) params.keyword = searchKeyword
-      if (selectedCategoryId) params.category_id = selectedCategoryId
+      if (categoryId) params.category_id = categoryId
 
       const result = await fetchPlazaSkills(params)
       setSkills(result.data)
@@ -84,26 +84,26 @@ function SkillPlaza() {
   function doSearch() {
     setSearchKeyword(keyword)
     setPagination(prev => ({ ...prev, page: 1 }))
-    fetchSkills()
+    fetchSkills(selectedCategoryId)
   }
 
   function clearSearch() {
     setKeyword('')
     setSearchKeyword('')
     setPagination(prev => ({ ...prev, page: 1 }))
-    fetchSkills()
+    fetchSkills(selectedCategoryId)
   }
 
   function selectCategory(id?: number) {
     setSelectedCategoryId(id)
     setPagination(prev => ({ ...prev, page: 1 }))
-    fetchSkills()
+    fetchSkills(id)
   }
 
   function goToPage(p: number) {
     if (p < 1 || p > pagination.total_pages) return
     setPagination(prev => ({ ...prev, page: p }))
-    fetchSkills()
+    fetchSkills(selectedCategoryId)
   }
 
   const visiblePages = useMemo(() => {
@@ -216,7 +216,7 @@ function SkillPlaza() {
         {!loading && errorMsg && (
           <div className="plaza-state plaza-state-error">
             <p>{errorMsg}</p>
-            <button className="plaza-retry-btn" onClick={fetchSkills}>
+            <button className="plaza-retry-btn" onClick={()=>fetchSkills(selectedCategoryId)}>
               {t('重试')}
             </button>
           </div>
