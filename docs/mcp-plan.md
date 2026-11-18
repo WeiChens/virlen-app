@@ -282,14 +282,15 @@ pub struct ToolParameters {
 }
 ```
 
-`mcp::schema::sanitize(input_schema) -> ToolParameters` 做四件事：
+`mcp::schema::sanitize(input_schema) -> ToolParameters` 做五件事：
 
 1. 剥离 `$schema` / `$id`（Gemini / OpenAI 会拒）。
 2. **内联本地 `$ref`**：只解析 `#/$defs/<k>`、`#/definitions/<k>`，深度上限 8；解析不了（远端 ref / 循环）→ 该节点降级为 `{"type":"object"}` 并保留原 `description`。
 3. `required` 只保留 `properties` 里真实存在的键（OpenAI 严格模式会因为「required 指向不存在的属性」整请求 400）。
 4. `type` 缺失时补 `object`；顶层非 object → 整个工具降级成 `{type:'object', properties:{}, additionalProperties:true}` + description 末尾追加一行「参数为自由格式，见工具说明」。
+5. **剥掉正则类关键字**（`pattern` / `patternProperties`，任意层级）：provider 各用自己的正则方言编译 schema 里的每条 `pattern`，编不过就整请求 400（真实报错见 §11.76）。
 
-> ⚠️ 这三条是**真实故障源**而不是洁癖：MCP 生态里 `$ref` + `$defs`（Zod → JSON Schema 常见产物）和「required 里有已删字段」都很常见，任一命中就是「某台服务器一连上，整个对话请求 400」。
+> ⚠️ 这些条是**真实故障源**而不是洁癖：MCP 生态里 `$ref` + `$defs`（Zod → JSON Schema 常见产物）、「required 里有已删字段」、Zod 给字符串附的 `^[^\uD800-\uDFFF]*$` 都很常见，任一命中就是「某台服务器一连上，整个对话请求 400」。
 
 ---
 

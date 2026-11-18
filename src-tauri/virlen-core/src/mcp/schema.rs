@@ -2,14 +2,18 @@
 //!
 //! 为什么必须有这一层：MCP 生态里 Zod / TypeBox 生成的 schema 大量使用 `$ref` + `$defs`，
 //! 而本项目的 `ToolParameters` 是简化结构（`type` / `properties` / `required` / `oneOf`）。
-//! 不处理会踩三种真实故障：
+//! 不处理会踩四类真实故障：
 //!
 //! 1. 嵌套 schema 在序列化给 provider 时**静默丢失**（用户看到「工具参数不对」但没人报错）；
 //! 2. `required` 指向已被删除的属性 → OpenAI 严格模式整请求 400；
-//! 3. `$ref` / `$schema` 这类关键字被 Gemini 直接拒掉（它只认 OpenAPI 子集）。
+//! 3. `$ref` / `$schema` 这类关键字被 Gemini 直接拒掉（它只认 OpenAPI 子集）；
+//! 4. 正则类关键字（`pattern` / `patternProperties`）由 provider 用自己的方言编译，编译不了就整请求 400
+//!    （真实报错：Zod 产出的 `^[^\uD800-\uDFFF]*$` 被判 `is not a "regex"`）。
 //!
 //! 处理策略（宁松不炸）：能内联就内联；内联不了（远端 `$ref` / 循环 / 超深）就**降级**成
 //! 宽松 object，并把原因写进 `description`，让模型知道「参数是自由格式」而不是瞎猜。
+//! 正则类关键字则**一律剥掉**：它只是给模型的软提示，参数最终还是 MCP 服务器自己校验，
+//! 留着换不来正确性，只换来「一台服务器的某个工具带正则 → 所有对话 400」。
 
 use serde_json::{Map, Value};
 
@@ -68,7 +72,9 @@ pub fn sanitize(input: &Value) -> Value {
         .unwrap_or_default();
     obj.insert("required".to_string(), Value::Array(required));
 
-    Value::Object(obj)
+    let mut out = Value::Object(obj);
+    strip_regex_keywords(&mut out);
+    out
 }
 
 // ==================== 内部实现 ====================
@@ -197,6 +203,28 @@ fn description_of(obj: &Map<String, Value>) -> Option<&str> {
 fn strip_bookkeeping_keys(obj: &mut Map<String, Value>) {
     for key in ["$defs", "definitions", "$schema", "$id", "$comment", "$anchor"] {
         obj.remove(key);
+    }
+}
+
+/// **任意层级**剥掉 `pattern` / `patternProperties`（含 `oneOf` / 数组 items 里的）。
+///
+/// 为什么不做「编译通过就保留」：provider 各用各的正则方言（Rust `regex` / ECMA-262 / RE2），
+/// 本地判过不代表远端判过（`\uD800` 在 ECMA-262 合法、在 Rust `regex` 非法），漏一个就是整请求 400。
+fn strip_regex_keywords(node: &mut Value) {
+    match node {
+        Value::Object(map) => {
+            map.remove("pattern");
+            map.remove("patternProperties");
+            for value in map.values_mut() {
+                strip_regex_keywords(value);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                strip_regex_keywords(item);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -380,6 +408,43 @@ mod tests {
         assert_eq!(out["type"], "object");
         assert_eq!(out["properties"]["a"]["type"], "number");
         assert_eq!(out["required"], json!([]));
+    }
+
+    /// 真实故障：`close_binary` 的 `pattern: "^[^\\uD800-\\uDFFF]*$"` 被 provider 判 `is not a "regex"`，
+    /// 整个对话请求 400 —— 正则类关键字必须在**任何层级**都消失。
+    #[test]
+    fn regex_keywords_are_stripped_at_every_level() {
+        let input = json!({
+            "type": "object",
+            "patternProperties": { "^x-": { "type": "string" } },
+            "properties": {
+                "binary": { "type": "string", "pattern": "^[^\\uD800-\\uDFFF]*$", "minLength": 1 },
+                "list": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": { "name": { "type": "string", "pattern": "^[a-z]+$" } }
+                    }
+                },
+                "either": {
+                    "anyOf": [
+                        { "type": "string", "pattern": "^a$" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        });
+        let out = sanitize(&input);
+        let text = out.to_string();
+        assert!(!text.contains("pattern"), "pattern / patternProperties 一个都不能留：{text}");
+        // 非正则关键字照旧保留（不是把整个属性删掉）
+        assert_eq!(out["properties"]["binary"]["type"], "string");
+        assert_eq!(out["properties"]["binary"]["minLength"], 1);
+        assert_eq!(
+            out["properties"]["list"]["items"]["properties"]["name"]["type"],
+            "string"
+        );
+        assert_eq!(out["properties"]["either"]["anyOf"][0]["type"], "string");
     }
 
     #[test]
