@@ -205,7 +205,6 @@
 
   .service-row-cmd {
     margin-top: 3px;
-    font-family: var(--font-mono, monospace);
     font-size: var(--font-size-sm);
     color: var(--accent-color, #4f46e5);
     overflow: hidden;
@@ -376,7 +375,6 @@
 .service-console-cmd {
   flex-shrink: 0;
   padding: 4px 10px 0;
-  font-family: var(--font-mono, monospace);
   font-size: var(--font-size-sm);
   color: var(--terminal-text-secondary, rgba(255, 255, 255, 0.6));
   white-space: pre-wrap;

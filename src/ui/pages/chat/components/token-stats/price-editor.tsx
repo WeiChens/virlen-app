@@ -64,11 +64,6 @@ const PriceEditor = observer(function PriceEditor() {
       </p>
       <p className="pricing-hint">
         {t(
-          '表格里显示的就是当前生效的单价：内置预估价可直接编辑，改动任一栏即保存为自定义价，点「恢复内置价」可还原；标着「未收录」的模型必须手动填写，否则费用按 0 计。',
-        )}
-      </p>
-      <p className="pricing-hint">
-        {t(
           '内置预估价以美元存储，切换币种时按固定汇率（1 USD = 7.2 CNY）折算；你手填的单价按当前币种原样使用。',
         )}
       </p>

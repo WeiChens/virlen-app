@@ -668,7 +668,6 @@
     border-radius: 6px;
     background: var(--bg-secondary, #f7f7f8);
     color: var(--text-primary, #1a1a1a);
-    /* ⚠️ 字体栈写字面量：主题里**没有** --font-mono 这个令牌（引用不存在的令牌只会永远走 fallback） */
     font-family: Consolas, 'Courier New', monospace;
     font-size: var(--font-size-xs);
     line-height: 1.5;
@@ -1565,7 +1564,6 @@
       }
 
       /* hash 用等宽字体（字母数字容易被读错），颜色仍走次要文字色 —— 它是佐证，不是主角。
-         ⚠️ 字体栈写字面量：主题里**没有** --font-mono 这个令牌，引用一个不存在的令牌只会
          让 fallback 永远生效（§11.53 ⑭）。 */
       .git-log-hash {
         flex: none;

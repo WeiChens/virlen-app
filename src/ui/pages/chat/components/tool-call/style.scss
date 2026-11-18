@@ -1554,7 +1554,6 @@
 
   .service-cmd {
     padding: 6px 10px 0;
-    font-family: var(--font-mono, monospace);
     font-size: var(--font-size-sm);
     color: var(--accent-color, #4f46e5);
     word-break: break-all;
@@ -1576,7 +1575,6 @@
     overflow: auto;
     border-radius: 6px;
     background: var(--bg-secondary, #f9fafb);
-    font-family: var(--font-mono, monospace);
     font-size: var(--font-size-sm);
     line-height: 1.5;
     color: var(--text-secondary, #666);
@@ -1722,7 +1720,6 @@
     .service-list-cmd {
       flex: 1;
       min-width: 0;
-      font-family: var(--font-mono, monospace);
       font-size: var(--font-size-sm);
       color: var(--accent-color, #4f46e5);
       overflow: hidden;
@@ -1758,7 +1755,6 @@
 }
 
 .service-id-short {
-  font-family: var(--font-mono, monospace);
   font-size: var(--font-size-sm);
   color: var(--accent-color, #4f46e5);
 }
