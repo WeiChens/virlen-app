@@ -380,6 +380,9 @@ pub fn run() {
             commands::document::cmd_parse_document,
             // 右侧文件面板的文档预览（Office 六种：xlsx/xls → 网格，docx/doc/pptx/ppt → Markdown）
             commands::document::cmd_preview_document,
+            // 「获取模型」/「测试连接」走后端：第三方网关常常不回 CORS 头，webview 里 fetch 会被拦
+            commands::provider::list_provider_models,
+            commands::provider::verify_provider_connection,
             stat_path,
             // HTML 预览的本地资源协议（token 登记 / 撤销）
             commands::preview::preview_allow_root,

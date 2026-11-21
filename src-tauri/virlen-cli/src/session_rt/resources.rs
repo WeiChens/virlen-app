@@ -360,7 +360,7 @@ pub(crate) fn resolve_connection(
     // 漏一个原生协议（例如 responses）就会被当成桥接协议拒掉，功能直接不可用。
     if !matches!(provider.type_.as_str(), "openai" | "anthropic" | "responses") {
         return Err(format!(
-            "CLI 暂不支持 Provider 类型 `{}`（{}）：该协议需要前端 JS 桥（BridgedProvider），请改用 openai 兼容 / openai responses / anthropic",
+            "CLI 暂不支持 Provider 类型 `{}`（{}）：该协议需要前端 JS 桥（BridgedProvider），请改用 openai / openai responses / anthropic",
             provider.type_,
             if provider.name.is_empty() { provider.id.as_str() } else { provider.name.as_str() }
         ));

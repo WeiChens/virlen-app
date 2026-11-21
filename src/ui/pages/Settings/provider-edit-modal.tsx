@@ -13,7 +13,7 @@ import PwdHide from '@/ui/components/icons/pwdHide'
 import Select from '@/ui/components/shared/Select'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { isURL } from '@/utils/common'
-import { createProviderInstance } from '@/infrastructure/provider'
+import { fetchProviderModels } from '@/services/provider-health-service'
 import { providerService } from '@/services/provider-service'
 import {
   reasoningEffortUnion,
@@ -215,14 +215,9 @@ export default function ProviderEditModal({
       createdAt: Date.now(),
       updatedAt: Date.now(),
     }
-    const provider = createProviderInstance(config)
-    if (!provider) {
-      showToast(t('获取模型失败'))
-      return
-    }
+    // 走 Rust 命令（第三方网关常常不回 CORS 头，webview 里 fetch 会被拦）—— 见 provider-health-service
     setFetching(true)
-    provider
-      .listModels()
+    fetchProviderModels(config)
       .then((fetchedModels) => {
         setModels(fetchedModels)
       })

@@ -124,7 +124,7 @@ pub fn create_native_provider(conn: &ProviderConnection) -> Result<Box<dyn Provi
             &conn.base_url,
         ))),
         other => Err(format!(
-            "Provider 协议 \"{}\" 需要前端 JS 桥，headless 环境不支持（可用：openai 兼容 / openai responses / anthropic）",
+            "Provider 协议 \"{}\" 需要前端 JS 桥，headless 环境不支持（可用：openai / openai responses / anthropic）",
             other
         )),
     }

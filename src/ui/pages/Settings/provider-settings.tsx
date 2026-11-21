@@ -21,6 +21,7 @@ import { showToast } from '@/ui/components/shared/Toast'
 import { MessageBox } from '@/ui/components/shared/MessageBox'
 import { providerPort } from '@/domain'
 import { createProviderInstance } from '@/infrastructure/provider'
+import { fetchProviderModels, testProviderConnection } from '@/services/provider-health-service'
 import { providerService } from '@/services/provider-service'
 import { protocolLabel } from '@/ui/constants/providerVocabulary'
 
@@ -63,15 +64,12 @@ function ProviderSettings() {
     if (!provider) return
     setTesting((prev) => ({ ...prev, [providerId]: true }))
     try {
-      const registeredProvider = await providerPort.get(providerId)
-      if (!registeredProvider) {
-        // 未注册（如该服务商处于停用状态）→ 直接判定连接失败，不发起请求
-        setConnectionStatus((prev) => ({ ...prev, [providerId]: false }))
-        return
-      }
-      const flag = await registeredProvider.validateApiKey(provider)
-      setConnectionStatus((prev) => ({ ...prev, [providerId]: flag }))
+      // 走 Rust 命令（第三方网关常常不回 CORS 头，webview 里 fetch 会被拦）：
+      // 顺带不再依赖「已注册的 TS 实例」—— 停用的服务商也能测
+      await testProviderConnection(provider)
+      setConnectionStatus((prev) => ({ ...prev, [providerId]: true }))
     } catch (e) {
+      // 失败原因上文：401 / 404 / 额度不足的原文比一句「测试失败」有用得多
       showToast(e instanceof Error ? e.message : String(e))
       setConnectionStatus((prev) => ({ ...prev, [providerId]: false }))
     } finally {
@@ -86,17 +84,10 @@ function ProviderSettings() {
     if (!provider) return
     setFetchingModels((prev) => ({ ...prev, [providerId]: true }))
     try {
-      const registeredProvider = await providerPort.get(providerId)
-      if (!registeredProvider) {
-        // 未注册（如该服务商处于停用状态）→ 按失败提示，不发起请求
-        showToast(t('获取模型失败'))
-        return
-      }
-      const models = await registeredProvider.listModels()
+      // 走 Rust 命令（同 handleTest）；失败直接向上抛，由调用方统一提示（原有 .catch 链不变）
+      const models = await fetchProviderModels(provider)
       provider.models = models
       settingsState.setValue('providers', [...settingsState.value.providers])
-    } catch (e: any) {
-      throw e
     } finally {
       setFetchingModels((prev) => ({ ...prev, [providerId]: false }))
     }

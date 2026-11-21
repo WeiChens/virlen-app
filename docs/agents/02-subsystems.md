@@ -146,6 +146,8 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
   TS：`types/index.ts::ProviderType`、`providerVocabulary.ts`、`provider/index.ts` 工厂 case、`reasoning-effort-slider.tsx` 的默认档位兜底。
   守卫用例：Rust `provider/models.rs` 与 CLI `session_rt/tests.rs::resolve_connection_accepts_native_protocols_and_rejects_bridged`，TS `tests/infrastructure/provider-responses.test.ts`。
   `verify_connection` 的输出预算/温度按协议分开：`responses` 用 `max_output_tokens: 16` + `temperature: 1.0`（推理模型的 `max_output_tokens` 太小会被判非法、gpt-5 类拒绝 `temperature = 0`，两者都会把能用的 provider 误判成失败）。
+- **「获取模型」/「测试连接」必须走后端**（`commands::provider::{list_provider_models, verify_provider_connection}` ← 前端唯一出口 `services/provider-health-service.ts`）：第三方网关相当一部分不回 `Access-Control-Allow-Origin`，webview 里的 fetch 被 CORS 拦成「Failed to fetch」，用户看到「获取失败」而 key 与地址其实是好的；Rust 的 reqwest 没有同源策略，且与 CLI `config verify` 共用 `virlen-core` 同一份实现。⚠️ 只有**确定不会发请求**的两种情形才回落 TS（桥接协议 gemini / 没有 Tauri 运行时）；后端**报错不回落** —— 同一请求打两遍会被服务商计费两次，且会掩盖真正的 401 原文。停用的服务商也能测（不再依赖「已注册的 TS 实例」）。
+  协议显示名：`openai` 只叫「OpenAI」（不再叫「OpenAI 兼容」，落盘值仍是 `openai`）；CLI 报错/帮助文案里的「openai 兼容」同口径写 `openai`。
 - **搜索源**：实现 `ISearchProvider`（`domain/search/types.ts`），放 `infrastructure/search-providers/`（**实际接入 `tavily` / `bocha` / `deepseek`**，`searxng.ts` 存在但未接入），`factory.ts` 注册。配置存 `SettingsStore.searchProviders` + `defaultSearchProviderId` → **已随配置下沉落到 `app_settings`**：原生 `web_search`（`native_tools/web/web_search.rs`）与 CLI 经 `ctx.settings` 读**同一份**，不再依赖前端下发。**两侧清单必须同步**：TS 模板表 + 工厂 + Rust 分发三处的类型集合与默认地址由 `src/tests/contracts/search-provider-parity.test.ts` 守（只改一侧 = 「设置里能加、引擎永远说未配置」）。
 
 ### 5.6 视觉 / RAG / Skill

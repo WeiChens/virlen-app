@@ -108,7 +108,7 @@ virlen-cli chat —— 交互式会话（与桌面端共用同一份配置与会
   指定了 --no-tui、或终端连续绘制失败超过 5 秒（降级，并在 stderr 说明原因）。
 
 ⚠️ 已知限制:
-  - Provider 需与 `run` 一致：CLI 只支持 openai 兼容 / anthropic（Gemini 等需前端 JS 桥）。
+  - Provider 需与 `run` 一致：CLI 只支持 openai / openai responses / anthropic（Gemini 等需前端 JS 桥）。
   - 白名单 / 黑名单 / 跳过目录在桌面端 localStorage，CLI 读不到（按空处理）。
   - 退出即结束：当前回合会被取消（会话与消息已落库，可随时续跑）。退出时会打印
     会话 id 与续连命令（`virlen-cli chat --session <id>`）；用 `--session <id>` 重连时

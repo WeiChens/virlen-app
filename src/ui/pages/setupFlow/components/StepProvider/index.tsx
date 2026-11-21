@@ -10,6 +10,7 @@ import { settingsState } from '@/ui/store/settingStore'
 import type { ProviderType } from '@/types'
 import { showToast } from '@/ui/components/shared/Toast'
 import { providerService } from '@/services/provider-service'
+import { fetchProviderModels, testProviderConnection } from '@/services/provider-health-service'
 import { createProviderInstance } from '@/infrastructure/provider'
 import { providerPort } from '@/domain'
 import { uuid } from '@/utils/uuid'
@@ -71,10 +72,8 @@ function StepProvider({ onBack, onComplete }: Props) {
         updatedAt: Date.now(),
       }
 
-      const instance = createProviderInstance(providerConfig)
-      if (!instance) throw new Error(t('无法创建模型服务配置'))
-
-      const fetchedModels = await instance.listModels()
+      // 走 Rust 命令（第三方网关常常不回 CORS 头）—— 见 provider-health-service
+      const fetchedModels = await fetchProviderModels(providerConfig)
       if (!fetchedModels || fetchedModels.length === 0) {
         throw new Error(t('未获取到可用模型'))
       }
@@ -122,7 +121,8 @@ function StepProvider({ onBack, onComplete }: Props) {
       const instance = createProviderInstance(providerConfig)
       if (!instance) throw new Error(t('无法创建模型服务配置'))
 
-      const valid = await instance.validateApiKey(providerConfig)
+      // 走 Rust 命令（同 handleFetchModels）；回落时仍用 TS 实例（桥接协议 / 浏览器 dev）
+      const valid = await testProviderConnection(providerConfig)
       if (!valid) throw new Error(t('API Key 验证失败，请检查后重试'))
 
       providerPort.register(providerConfig.id, instance)

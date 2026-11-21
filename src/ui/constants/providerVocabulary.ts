@@ -7,7 +7,7 @@
 import { t } from '@/ui/i18n'
 
 const PROTOCOL_LABELS: Record<string, string> = {
-  openai: 'OpenAI 兼容',
+  openai: 'OpenAI',
   anthropic: 'Anthropic',
   gemini: 'Google Gemini',
   responses: 'OpenAI Responses',

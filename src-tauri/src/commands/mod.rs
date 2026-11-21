@@ -12,6 +12,7 @@ pub mod phone_audit;
 pub mod phone_device;
 pub mod phone_pairing;
 pub mod preview;
+pub mod provider;
 pub mod rag;
 pub mod service;
 pub mod session_db;
