@@ -8,6 +8,8 @@ import {
   type MemoryIntegrityReport,
   type MemoryPromptSection,
   type MemoryRecord,
+  type MemoryRedistillReport,
+  type MemoryRedistillRun,
 } from '@/domain/memory'
 
 /** Tauri 环境判定（与 `services/rust-engine.ts::isTauriAvailable` 同一口径） */
@@ -135,6 +137,39 @@ export async function purgeMemoryOrphans(): Promise<MemoryIntegrityReport | null
   }
 }
 
+/**
+ * 手动跑一轮记忆整理（再蒸馏）。`force` 默认 `true`：用户点按钮就是显式意图，
+ * 不该被「30 分钟冷却 / 这批处理过」挡住而回一句「没有需要整理的东西」。
+ *
+ * ⚠️ 这里**不吞错**（与上面的读接口相反）：手动动作失败必须把原因说出来
+ * （典型是「后台整理正在进行中」）—— 吞成 `null` 用户只能看到一句「失败」。
+ */
+export async function runMemoryRedistill(
+  options: { task?: 'full' | 'purge'; force?: boolean } = {},
+): Promise<MemoryRedistillReport | null> {
+  if (!isTauri()) return null
+  return await invoke<MemoryRedistillReport>('cmd_memory_redistill', {
+    task: options.task ?? 'full',
+    force: options.force ?? true,
+  })
+}
+
+/**
+ * 最近的整理流水（含闸门级跳过 `gate:*` 与清理行 `purge`），按时间倒序。
+ *
+ * 读不到 → `[]`（与其它读接口同口径）：它只用来在面板上多一行说明，
+ * 没必要因为一行说明挂了整个设置页。
+ */
+export async function listMemoryRedistillRuns(limit = 5): Promise<MemoryRedistillRun[]> {
+  if (!isTauri()) return []
+  try {
+    return (await invoke<MemoryRedistillRun[]>('cmd_memory_redistill_runs', { limit })) ?? []
+  } catch (e: any) {
+    console.warn(`[memory] 读取整理流水失败：${e?.message || String(e)}`)
+    return []
+  }
+}
+
 // 三个 `memory_*` 工具的 GUI 入口：语义全在 Rust（`agent::memory::tools`），这里只转交结果，
 // 使回退路径执行器与 Rust 引擎下模型看到的行为逐字一致。
 
@@ -189,7 +224,8 @@ export async function recallMemory(memoryId: string): Promise<MemoryToolOutput> 
 
 /**
  * `memory_write`：写入一条记忆（`detail` 非空则详情落专用知识库）。
- * `workspace`：`kind = 'project'` 时成为这条记忆的项目作用域（与 Rust 原生工具同口径，模型不必猜路径）。
+ * `workspace`：这条记忆的**默认**作用域（`projectPath` 不传时用它；分类 / 级别不改变这条规则）；
+ * `projectPath`：显式指定（`"global"` = 跨项目通用）——与 Rust 原生工具同口径。
  */
 export async function writeMemory(params: {
   summary: string
@@ -198,8 +234,10 @@ export async function writeMemory(params: {
   detail?: string
   /** 来源会话（记进 `source_session_id`，便于溯源） */
   sessionId?: string
-  /** 会话工作目录（项目记忆的作用域） */
+  /** 会话工作目录（没显式给 `projectPath` 时的默认作用域） */
   workspace?: string
+  /** 显式作用域：`"global"` / `"none"` / 空串 = 跨项目通用；其他 = 该目录 */
+  projectPath?: string
 }): Promise<MemoryToolOutput> {
   if (!isTauri()) return UNAVAILABLE
   try {
@@ -210,6 +248,7 @@ export async function writeMemory(params: {
       detail: params.detail ?? null,
       sessionId: params.sessionId ?? null,
       workspace: params.workspace ?? null,
+      projectPath: params.projectPath ?? null,
     })
   } catch (e: any) {
     return { content: `Error saving memory: ${e?.message || String(e)}`, uiData: { mode: 'error' } }

@@ -15,6 +15,8 @@ pub(crate) async fn memory_write_tool(
     let kind = arg_str(args, "kind").unwrap_or_default();
     let level = arg_str(args, "level");
     let detail = arg_str(args, "detail");
+    // 选填：不传 = 当前工作目录（见 `scope::scope_for_write`）
+    let project_path = arg_str(args, "project_path");
 
     let out = run_write(
         &deps(ctx),
@@ -23,6 +25,7 @@ pub(crate) async fn memory_write_tool(
             kind: &kind,
             level: level.as_deref(),
             detail: detail.as_deref(),
+            project_path: project_path.as_deref(),
         },
     )
     .await?;

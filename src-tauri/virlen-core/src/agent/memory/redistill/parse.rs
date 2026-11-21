@@ -106,12 +106,12 @@ mod tests {
 
     #[test]
     fn parses_fenced_json_with_surrounding_prose() {
-        let raw = "Sure, here is the result:\n```json\n{\"groups\":[{\"source_ids\":[\"m_1\",\"m_2\"],\"summary\":\"合并后的一句话\",\"kind\":\"project\",\"tags\":[\" virlen-app \"]}]}\n```\nHope that helps!";
+        let raw = "Sure, here is the result:\n```json\n{\"groups\":[{\"source_ids\":[\"m_1\",\"m_2\"],\"summary\":\"合并后的一句话\",\"kind\":\"fact\",\"tags\":[\" virlen-app \"]}]}\n```\nHope that helps!";
         let drafts = parse_redistill_response(raw).unwrap();
         assert_eq!(drafts.len(), 1);
         assert_eq!(drafts[0].source_ids, vec!["m_1", "m_2"]);
         assert_eq!(drafts[0].summary, "合并后的一句话");
-        assert_eq!(drafts[0].kind, "project");
+        assert_eq!(drafts[0].kind, "fact");
         assert_eq!(drafts[0].tags, vec!["virlen-app"]);
         assert!(drafts[0].detail.is_none());
     }

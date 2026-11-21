@@ -207,6 +207,8 @@ async fn write_one(
         disabled: false,
         // 它是顶替别人的那个，不是被顶替的
         superseded_by: None,
+        // 刚生成的合并条目：详情就是这份归档（预算内），肯定装得下
+        detail_too_long: false,
     };
     if let Err(e) = deps.memory.upsert(&record).await {
         // ⚠️ 详情文档已经写进知识库：条目落库失败时它就成了**永远不被引用的孤儿**
@@ -235,6 +237,12 @@ async fn rollback(deps: &ApplyDeps<'_>, rag: &'static RagService, ids: &[String]
 pub struct PurgeOutcome {
     pub purged: usize,
     pub failed: usize,
+    /// 护栏 ④ 挡下的条数（新条目已不存在 / 没有归档详情）
+    ///
+    /// 必须单独计数而不能混进 `failed`：它们不是「删失败了」，而是「本轮根本不该删」。
+    /// 但它也是**本轮真的动过手**的证据 —— 调用方据此推进「上次清理时间」，
+    /// 否则 `purge_due` 永远为真，变成每次启动（乃至每次写记忆）都排一次清理、再打一遍这堆日志。
+    pub retained: usize,
 }
 
 /// 归档清理：**唯一**会真正删记忆的自动路径，因此四条护栏缺一不删。
@@ -274,6 +282,7 @@ pub async fn purge_archived(
         return out;
     };
 
+    let mut retained_sample: Vec<String> = Vec::new();
     for m in candidates {
         let Some(new_id) = m
             .superseded_by
@@ -288,10 +297,12 @@ pub async fn purge_archived(
         match deps.memory.get(&new_id).await {
             Ok(Some(new_rec)) if new_rec.detail_doc_id.is_some() => {}
             Ok(_) => {
-                eprintln!(
-                    "[memory] 保留归档条目 {}：它指向的新条目 {} 已不存在或没有归档详情",
-                    m.id, new_id
-                );
+                out.retained += 1;
+                // ⚠️ 这是**持久**状态（新条目被用户删了），每轮都会命中同一批 —— 不逐条打，
+                // 循环末尾统一打一行汇总（最多带 5 个 id，足够定位）
+                if retained_sample.len() < 5 {
+                    retained_sample.push(format!("{}→{}", m.id, new_id));
+                }
                 continue;
             }
             Err(e) => {
@@ -314,6 +325,13 @@ pub async fn purge_archived(
                 out.failed += 1;
             }
         }
+    }
+    // 汇总行：留在日志里但每次只有一条；这批条目需人工处理（面板删除或恢复），代码不会再动它们
+    if out.retained > 0 {
+        eprintln!(
+            "[memory] 保留 {} 条归档条目（指向的新条目已不存在或没有归档详情，需人工处理）：{:?}",
+            out.retained, retained_sample
+        );
     }
     out
 }

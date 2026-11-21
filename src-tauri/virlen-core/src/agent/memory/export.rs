@@ -75,7 +75,7 @@ mod tests {
         MemoryRecord {
             id: id.into(),
             level: level.into(),
-            kind: "project".into(),
+            kind: "fact".into(),
             summary: format!("记忆 {}", id),
             created_at,
             updated_at: created_at,

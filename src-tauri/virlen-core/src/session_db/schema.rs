@@ -3,7 +3,7 @@
 //! - 建表 / 补列 / FTS 虚表等元数据级操作走快速路径（`init_schema`）；
 //! - 大批量回填（`text_plain`、用量账本）由 `migrate()` 在后台执行，避免超大库首次启动卡顿。
 
-use crate::session_db::memory::MEMORY_DDL;
+use crate::session_db::memory::{MEMORY_DDL, MEMORY_KIND_PROJECT_LEGACY};
 use crate::session_db::row::content_plain_text;
 use crate::attachment::AttachmentStore;
 use crate::agent::types::Message;
@@ -249,6 +249,12 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<bool, String> {
     ensure_memories_project_path_column(conn)?;
     // 记忆补 `superseded_by` 列（再蒸馏的软删标记）：同上，纯新增列
     ensure_memories_superseded_by_column(conn)?;
+    // 记忆补 `detail_too_long` 列（详情装不进归档 → 永不参与再蒸馏）：同上，纯新增列
+    ensure_memories_detail_too_long_column(conn)?;
+    // 再蒸馏流水补 `purged_retained` 列（护栏 ④ 保留的条数）：同上，纯新增列
+    ensure_memory_redistill_runs_purged_retained_column(conn)?;
+    // 分类收敛：`project` 已不是合法分类（路径改成任何分类都可带），老数据改成 `fact`
+    migrate_memories_project_kind(conn)?;
 
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -359,6 +365,32 @@ fn ensure_memories_project_path_column(conn: &Connection) -> Result<(), String> 
     Ok(())
 }
 
+/// 老库的分类收敛：`kind = 'project'` → `fact`（新库不会有这个值，这里检测后跳过）。
+///
+/// 为什么在快速路径而不是 `SCHEMA_VERSION` 迁移：只是一条 `UPDATE ... WHERE kind = 'project'`，
+/// 有索引可走、命中行数为 0 时是空扫；而递增版本号会让 `migrate()` 对全库重跑 `messages_fts` rebuild。
+///
+/// 为什么是 `fact` 而不是 `user` / `decision`：「项目约定 / 项目事实」在三个新分类里最接近事实；
+/// 分类只是展示标签，**`project_path` 原样保留**（这条记忆的可见范围才是实质信息）。
+fn migrate_memories_project_kind(conn: &Connection) -> Result<(), String> {
+    let stale: i64 = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM memories WHERE kind = ?1)",
+            params![MEMORY_KIND_PROJECT_LEGACY],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if stale == 0 {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE memories SET kind = 'fact' WHERE kind = ?1",
+        params![MEMORY_KIND_PROJECT_LEGACY],
+    )
+    .map_err(|e| format!("迁移记忆分类（project → fact）失败: {}", e))?;
+    Ok(())
+}
+
 /// 老库给 `memories` 补 `superseded_by` 列（再蒸馏的软删标记；新库由 DDL 直接建出，这里检测后跳过）。
 ///
 /// 与 `ensure_memories_project_path_column` 同一策略：元数据级 `ALTER`（可空、无默认值，不重写表），
@@ -388,6 +420,77 @@ fn ensure_memories_superseded_by_column(conn: &Connection) -> Result<(), String>
     if !exists {
         conn.execute("ALTER TABLE memories ADD COLUMN superseded_by TEXT", [])
             .map_err(|e| format!("添加 memories.superseded_by 列失败: {}", e))?;
+    }
+    Ok(())
+}
+
+/// 老库给 `memories` 补 `detail_too_long` 列（再蒸馏的「详情装不进归档」标记；新库由 DDL 建出）。
+///
+/// 与 `ensure_memories_superseded_by_column` 同一策略：元数据级 `ALTER`（**带默认值**、不重写表），
+/// 放在 `init_schema` 快速路径里，**不占 `SCHEMA_VERSION`**。
+///
+/// 旧记忆补出来是 0 = 「还没量过」：它们会照旧参与整理，下次量到超长时再被标上。
+/// 若默认成 1，等于把全库老记忆一次性排除出整理 —— 那才是真丢功能。
+fn ensure_memories_detail_too_long_column(conn: &Connection) -> Result<(), String> {
+    let exists = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(memories)")
+            .map_err(|e| format!("读取 memories 表结构失败: {}", e))?;
+        let mut has = false;
+        {
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(|e| e.to_string())?;
+            for name in rows.flatten() {
+                if name == "detail_too_long" {
+                    has = true;
+                    break;
+                }
+            }
+        }
+        has
+    };
+    if !exists {
+        conn.execute(
+            "ALTER TABLE memories ADD COLUMN detail_too_long INTEGER NOT NULL DEFAULT 0",
+            [],
+        )
+        .map_err(|e| format!("添加 memories.detail_too_long 列失败: {}", e))?;
+    }
+    Ok(())
+}
+
+/// 老库给 `memory_redistill_runs` 补 `purged_retained` 列（新库由 DDL 建出，这里检测后跳过）。
+///
+/// 为什么必须补而不能靠 `row.get` 容错：`run_from_row` 按列名取全字段，缺列会让**整个流水查询**
+/// 报错（不是单行降级）—— 面板的「上次整理」与冷却 / 退避判定全挂在它上面。
+///
+/// 旧行补出来是 0 = 那时没统计过这个数，不冒充「保留过 N 条」。
+fn ensure_memory_redistill_runs_purged_retained_column(conn: &Connection) -> Result<(), String> {
+    let exists = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(memory_redistill_runs)")
+            .map_err(|e| format!("读取整理流水表结构失败: {}", e))?;
+        let mut has = false;
+        {
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(|e| e.to_string())?;
+            for name in rows.flatten() {
+                if name == "purged_retained" {
+                    has = true;
+                    break;
+                }
+            }
+        }
+        has
+    };
+    if !exists {
+        conn.execute(
+            "ALTER TABLE memory_redistill_runs ADD COLUMN purged_retained INTEGER NOT NULL DEFAULT 0",
+            [],
+        )
+        .map_err(|e| format!("添加 memory_redistill_runs.purged_retained 列失败: {}", e))?;
     }
     Ok(())
 }

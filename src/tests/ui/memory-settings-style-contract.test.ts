@@ -9,8 +9,8 @@
  *
  * 改完之后的规则是：**紧凑表格**（小字号 + 单行省略 + 悬停看全文，一屏看更多）、
  * **行内不再有任何操作按钮**（动作走「点行编辑」+「勾选 + 批量栏」）、**列表只在弹窗里**、
- * 表头吸顶由「表格自己滚」保证；工具栏分两行 —— **两个下拉筛选在第二行左侧、批量栏常驻在右侧**
- * （未选中时按钮全禁用，选中才亮底）。
+ * 表头吸顶由「表格自己滚」保证；工具栏分两行 —— **排序跟搜索住第一行，三个下拉筛选在第二行左侧、
+ * 批量栏常驻在右侧**（未选中时按钮全禁用，选中才亮底）。
  *
  * 这些**全是纯 CSS / 布局行为** —— jsdom 不加载 scss，组件测试断言不到；样式被删掉时
  * 组件测试照样全绿（那就是"看起来在测"的假绿灯）。
@@ -38,6 +38,8 @@ const scss = readProjectFile('src/ui/pages/Settings/memory-settings.scss')
 const tsx = readProjectFile('src/ui/pages/Settings/memory-settings.tsx')
 /** 列表本体（表格 / 批量栏 / 分页）在弹窗组件里：设置页只留设置项 + 一个入口按钮 */
 const listTsx = readProjectFile('src/ui/pages/Settings/memory/MemoryListModal.tsx')
+/** 排序是纯函数（字段 × 方向），契约靠它保证「不就地排父级数组」 */
+const sortTs = readProjectFile('src/ui/pages/Settings/memory/sort.ts')
 const css = sass.compileString(scss).css
 /** 全局样式（`ui/App.tsx` 在入口处引入，全应用可见）：变量定义去这里查。
  *  theme.scss 必须**编译**后再查：品牌令牌由 SCSS 函数派生（`@include accent-vars`），
@@ -98,9 +100,12 @@ describe('memory 列表弹窗 —— 表格 / 筛选 / 分页的样式契约', (
     expect(listTsx).not.toContain('memory-item-actions')
     expect(listTsx).not.toContain('handleToggleLevel')
     expect(listTsx).not.toContain('handleDelete')
-    // 编辑入口改成了「点整行」（提示文案得把这一点告诉用户）
-    expect(listTsx).toContain('openEdit(item)')
-    expect(listTsx).toContain('点一行就能改内容')
+    // 编辑入口改成了「点整行」：只断言结构（行上的 onClick 真的走 openEdit），
+    // 不再绑死一句提示文案 —— 交互自明的部分不写解释（2026-10 起把「点一行就能改」那句提示删了，
+    // 行本身有 cursor:pointer + 悬停底色，再说一遍就是噪声）
+    expect(listTsx).toContain('onClick={() => openEdit(item)}')
+    expect(listTsx).not.toContain('memory-list-hint')
+    expect(css).not.toContain('.memory-list-hint')
   })
 
   it('表格紧凑：小字号 + 单行省略（一屏看更多的关键）', () => {
@@ -131,23 +136,34 @@ describe('memory 列表弹窗 —— 表格 / 筛选 / 分页的样式契约', (
     ).toBe('0')
   })
 
-  it('工具栏第二行：左边两个下拉筛选 + 右边常驻的批量栏', () => {
-    // 两个筛选下拉同住一行、都在左侧筛选组里；搜索与导出 / 新增留在第一行
+  it('工具栏第二行：左边三个下拉筛选 + 右边常驻的批量栏；排序住第一行', () => {
+    // 三个筛选下拉同住一行、都在左侧筛选组里；搜索 / 排序 / 导出 / 新增留在第一行
     expect(decl(css, '.memory-settings .memory-toolbar .memory-action-row', 'display')).toBe('flex')
     expect(
       decl(css, '.memory-settings .memory-toolbar .memory-action-row .memory-filter-selects', 'display'),
     ).toBe('flex')
-    // 下拉前面得有小字标签（共享 Select 本身不带标签，不写就不知道这两框筛的是什么）
+    // 排序组住在第一行（与搜索同一行），且不与批量栏抢宽度
     expect(
-      decl(css, '.memory-settings .memory-toolbar .memory-action-row .memory-filter-label', 'color'),
+      decl(css, '.memory-settings .memory-toolbar .memory-filter-row .memory-sort-group', 'display'),
+    ).toBe('flex')
+    // 下拉前面得有小字标签（共享 Select 本身不带标签，不写就不知道这几框筛的是什么）。
+    // 两行都用它，所以样式提到 `.memory-toolbar` 一级
+    expect(
+      decl(css, '.memory-settings .memory-toolbar .memory-filter-label', 'color'),
     ).toBeTruthy()
     // 批量栏常驻（因此底色不能常驻，否则页面上永远挂着一块主色块），用 margin-left:auto 贴右
     expect(decl(css, '.memory-settings .memory-batch-bar', 'margin-left')).toBe('auto')
     expect(decl(css, '.memory-settings .memory-batch-bar.is-active', 'background')).toBeTruthy()
-    // 组件侧：两个下拉与批量栏真的在第二行（结构对不上时样式再对也没用）
+    // 组件侧：三个下拉、排序与批量栏真的在对应行（结构对不上时样式再对也没用）
     expect(listTsx).toContain('memory-action-row')
     expect(listTsx).toContain('memory-filter-kind')
     expect(listTsx).toContain('memory-filter-level')
+    expect(listTsx).toContain('memory-filter-state')
+    expect(listTsx).toContain('memory-sort-field')
+
+    // 排序是纯函数 + 不在原地排 props：就地排会让父级持有的 `items` 跟着变（下次重取前都是旧序）
+    expect(sortTs).toContain('[...items].sort')
+    expect(sortTs).toContain('SORT_DEFAULT')
   })
 
   it('渲染时才出现的类名都有样式（选中行 / 停用行 / 复选框 / 批量栏 / 分页 / 筛选）', () => {
@@ -165,6 +181,12 @@ describe('memory 列表弹窗 —— 表格 / 筛选 / 分页的样式契约', (
       ['.memory-settings .memory-form .memory-form-scope .memory-form-path', 'border'],
       ['.memory-settings .memory-toolbar .memory-filter-row .memory-search', 'border'],
       ['.memory-settings .memory-pager .memory-pager-page', 'font-variant-numeric'],
+      // 整理记忆（手动再蒸馏）的按钮行与结果块：也是渲染时才出现
+      ['.memory-settings .memory-redistill-actions', 'display'],
+      ['.memory-settings .memory-redistill-report', 'background'],
+      ['.memory-settings .memory-redistill-report.is-warn', 'background'],
+      ['.memory-settings .memory-redistill-report .memory-redistill-summary', 'color'],
+      ['.memory-settings .memory-redistill-report .memory-redistill-note', 'color'],
     ] as const) {
       expect(decl(css, selector, prop), `${selector} 缺少 ${prop}`).toBeTruthy()
     }
@@ -176,6 +198,10 @@ describe('memory 列表弹窗 —— 表格 / 筛选 / 分页的样式契约', (
     expect(
       decl(css, '.memory-settings .modal-content.memory-list-modal .modal-footer button', 'padding'),
     ).toBe('4px 10px')
+    // 条数在工具栏里说一次就够：footer 只有分页控件，右侧对齐（`.memory-pager-info` 已删）
+    expect(decl(css, '.memory-settings .memory-pager', 'justify-content')).toBe('flex-end')
+    expect(css).not.toContain('.memory-pager-info')
+    expect(listTsx).not.toContain('memory-pager-info')
   })
 
   it('用到的 CSS 变量都真的已定义（防「幽灵变量」静默降级为 fallback）', () => {

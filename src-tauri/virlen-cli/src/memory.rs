@@ -111,7 +111,7 @@ virlen-cli memory —— 长期记忆（与桌面端同一份 virlen.db）
 
 说明:
   再蒸馏只在「AI 写下的候选 ≥ 100 条」时才值得跑（自动触发就是这么判的）；手动跑不看阈值，
-  但一轮最多 3 批（每批最多 40 条来源，见 MEMORY_REDISTILL_MAX_BATCHES_PER_RUN /
+  但一轮最多 6 批（每批最多 40 条来源，见 MEMORY_REDISTILL_MAX_BATCHES_PER_RUN /
   MEMORY_REDISTILL_BATCH_MAX_ITEMS），每批一次模型调用。
   调用会记入用量账本（类型「记忆整理」），可在 `virlen-cli usage` 里看到。
   ⚠️ CLI 是 headless：只支持 openai / openai responses / anthropic 协议；gemini 等需要桌面端 JS 宿主。

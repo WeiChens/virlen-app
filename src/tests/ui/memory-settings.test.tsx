@@ -11,8 +11,10 @@
  *    因此本文件里除入口与设置项外，断言列表的用例都先打开弹窗（`render()` 默认就开，
  *    要测「默认不开」的用例传 `{ openList: false }`）；
  * 5. **记录日期**：每条要标出「什么时候记下的」（`createdAt`，缺失时不编日期）；
- * 6. **筛选与分页**：内容模糊搜索、分类 / 级别两个下拉筛选、分页 —— 三者的组合最容易出
- *    「看起来空了」这类假象（页码停在越界处、筛选后不重置页），所以逐条守着；
+ * 6. **筛选、排序与分页**：内容模糊搜索、分类 / 级别 / **状态**三个下拉筛选、**排序**
+ *    （记录时间 / 使用次数 × 升降序）、分页 —— 这几者的组合最容易出「看起来空了」这类假象
+ *    （页码停在越界处、筛选后不重置页），所以逐条守着。状态**默认只看使用中**，
+ *    要断言停用条目就得先把它筛回来；
  * 7. **多选与批量**：行内已无操作按钮，停用 / 删除 / 升降级全走「勾选 + 批量栏」，
  *    因此「勾选真的生效、条数与事实一致」比过去更关键；批量栏**常驻**（未选中时全禁用），
  *    所以不再断言「没选中时它不存在」，而是断言「它在、但不可点」。
@@ -25,7 +27,11 @@ import { createRoot } from 'react-dom/client'
 
 import MemorySettings from '@/ui/pages/Settings/memory-settings'
 import { settingsState } from '@/ui/store'
-import type { MemoryIntegrityReport, MemoryRecord } from '@/domain/memory'
+import type {
+  MemoryIntegrityReport,
+  MemoryRecord,
+  MemoryRedistillReport,
+} from '@/domain/memory'
 
 vi.mock('@/infrastructure/memoryRepo', () => ({
   listMemories: vi.fn(),
@@ -40,6 +46,10 @@ vi.mock('@/infrastructure/memoryRepo', () => ({
   // 详情正文的引用完整性自检（只读 + 显式清理）
   checkMemoryIntegrity: vi.fn(),
   purgeMemoryOrphans: vi.fn(),
+  // 手动整理记忆（再蒸馏）：一轮可能调模型 1~6 次
+  runMemoryRedistill: vi.fn(),
+  // 最近一条整理流水（面板上的「上次整理」）：默认没有记录
+  listMemoryRedistillRuns: vi.fn(),
 }))
 
 vi.mock('@/ui/components/shared/Toast', () => ({ showToast: vi.fn() }))
@@ -61,6 +71,8 @@ import {
   listMemories,
   loadMemorySection,
   purgeMemoryOrphans,
+  runMemoryRedistill,
+  listMemoryRedistillRuns,
   setMemoryDisabled,
   setMemoryLevel,
   upsertMemory,
@@ -84,7 +96,7 @@ const permanentMemory: MemoryRecord = {
 const normalMemory: MemoryRecord = {
   id: 'm_n1',
   level: 'normal',
-  kind: 'project',
+  kind: 'fact',
   summary: '在 virlen-app 实现记忆功能',
   hits: 0,
   sourceDay: '2026-10-05',
@@ -246,8 +258,24 @@ async function typeInto(selector: string, text: string) {
   })
 }
 
+/** 工具栏的排序下拉（第一行；同样 Portal 到 body） */
+async function pickSort(label: string) {
+  const trigger = document.querySelector<HTMLElement>('.memory-sort-group .memory-sort-field')
+  if (!trigger) throw new Error('找不到排序下拉')
+  await click(trigger)
+  const options = Array.from(
+    document.querySelectorAll<HTMLElement>('.custom-select__dropdown .custom-select__option'),
+  )
+  const target = options.find((o) => o.textContent === label)
+  if (!target) throw new Error(`排序下拉里找不到：${label}`)
+  await click(target)
+}
+
 /** 工具栏第二行的筛选下拉（共享 `Select`，下拉面板 Portal 到 body） */
-async function pickFilter(cls: 'memory-filter-kind' | 'memory-filter-level', label: string) {
+async function pickFilter(
+  cls: 'memory-filter-kind' | 'memory-filter-level' | 'memory-filter-state',
+  label: string,
+) {
   const trigger = document.querySelector<HTMLElement>(`.memory-filter-selects .${cls}`)
   if (!trigger) throw new Error(`找不到筛选下拉：${cls}`)
   await click(trigger)
@@ -263,6 +291,8 @@ async function pickFilter(cls: 'memory-filter-kind' | 'memory-filter-level', lab
 const pickLevelFilter = (label: string) => pickFilter('memory-filter-level', label)
 /** 分类筛选 */
 const pickKindFilter = (label: string) => pickFilter('memory-filter-kind', label)
+/** 状态筛选（默认是「使用中」，要看归档条目得显式切回「全部 / 已停用」） */
+const pickStateFilter = (label: string) => pickFilter('memory-filter-state', label)
 
 /** 改每页条数（footer 里的共享 `Select`） */
 async function pickPageSize(label: string) {
@@ -284,7 +314,9 @@ beforeEach(() => {
   vi.mocked(setMemoryLevel).mockReset()
   vi.mocked(setMemoryDisabled).mockReset()
   vi.mocked(loadMemorySection).mockReset()
+  vi.mocked(listMemoryRedistillRuns).mockReset()
   vi.mocked(listMemories).mockResolvedValue([permanentMemory, normalMemory])
+  vi.mocked(listMemoryRedistillRuns).mockResolvedValue([])
   vi.mocked(upsertMemory).mockResolvedValue(undefined)
   vi.mocked(deleteMemory).mockResolvedValue(true)
   vi.mocked(setMemoryLevel).mockResolvedValue(true)
@@ -303,6 +335,8 @@ beforeEach(() => {
   vi.mocked(checkMemoryIntegrity).mockResolvedValue(null)
   vi.mocked(purgeMemoryOrphans).mockReset()
   vi.mocked(purgeMemoryOrphans).mockResolvedValue(null)
+  vi.mocked(runMemoryRedistill).mockReset()
+  vi.mocked(runMemoryRedistill).mockResolvedValue(null)
   // 二次确认默认「确定」（队列里的 once 实现必须清掉，否则会漏到下一条用例）
   vi.mocked(MessageBox.propt).mockReset()
   vi.mocked(MessageBox.propt).mockResolvedValue(true)
@@ -320,7 +354,17 @@ it('表格展示：一行一条记忆，字段各就其列（含记录日与来�
   const headers = Array.from(document.querySelectorAll('.memory-table thead th')).map(
     (n) => n.textContent,
   )
-  expect(headers).toEqual(['', '内容', '分类', '项目', '级别', '记录', '来源', '使用次数', '状态'])
+  expect(headers).toEqual([
+    '',
+    '内容',
+    '分类',
+    '项目',
+    '级别',
+    '记录日',
+    '来源日',
+    '使用次数',
+    '状态',
+  ])
 
   expect(rows()).toHaveLength(2)
   // 顺序沿用后端给的（永久在前 → 新建在前），前端不再自己分区
@@ -328,7 +372,7 @@ it('表格展示：一行一条记忆，字段各就其列（含记录日与来�
   expect(cell('用户偏好中文回复', 'memory-cell-kind').textContent).toBe('用户偏好')
   expect(cell('用户偏好中文回复', 'memory-cell-level').textContent).toBe('永久')
   expect(cell('在 virlen-app 实现记忆功能', 'memory-cell-level').textContent).toBe('普通')
-  expect(cell('在 virlen-app 实现记忆功能', 'memory-cell-kind').textContent).toBe('项目')
+  expect(cell('在 virlen-app 实现记忆功能', 'memory-cell-kind').textContent).toBe('事实')
   expect(cell('用户偏好中文回复', 'memory-cell-source').textContent).toBe('2026-10-05')
   // 「使用次数」= 被注入 / 被检索到的累计次数（top-k 排序的输入，不是本次会话的数）
   expect(cell('用户偏好中文回复', 'memory-cell-hits').textContent).toBe('3')
@@ -437,7 +481,7 @@ it('新增记忆：写入仓储后重新拉列表；空内容则不写只提示'
   const saved = vi.mocked(upsertMemory).mock.calls[0][0]
   expect(saved.summary).toBe('用户要求回复简洁')
   expect(saved.level).toBe('normal')
-  expect(saved.kind).toBe('project')
+  expect(saved.kind).toBe('fact')
   expect(vi.mocked(listMemories)).toHaveBeenCalledTimes(3)
 
   // 空内容：不写仓储（Rust 侧也会拒，但别让用户白跑一趟 IPC）
@@ -469,7 +513,7 @@ it('分类 / 级别用共享 Select 组件（下拉选择真的写进草稿）',
   const kindOptions = Array.from(
     document.querySelectorAll<HTMLElement>('.custom-select__dropdown .custom-select__option'),
   )
-  expect(kindOptions.map((o) => o.textContent)).toEqual(['用户偏好', '项目', '决策', '事实'])
+  expect(kindOptions.map((o) => o.textContent)).toEqual(['用户偏好', '决策', '事实'])
   await click(kindOptions.find((o) => o.textContent === '决策')!)
 
   // 展开「级别」→ 选「永久」
@@ -487,13 +531,13 @@ it('分类 / 级别用共享 Select 组件（下拉选择真的写进草稿）',
   await act(async () => root.unmount())
 })
 
-it('项目路径：只在「项目」分类下出现；非项目保存时被清掉；留空 = 不限定项目', async () => {
+it('作用域：路径输入框常驻（与分类无关，任何分类都可带）；切分类不清空；留空 = 全局', async () => {
   await act(async () => {
     settingsState.setValue('defaultWorkspace', 'C:/code/virlen-app')
   })
   const { root } = await render()
 
-  // 新增默认就是「项目」→ 路径输入框在，且能一键填默认工作目录
+  // 新增：路径输入框在（默认分类已是 fact），且能一键填默认工作目录
   await click(buttonByText('新增记忆'))
   expect(document.querySelector('.memory-form-path')).not.toBeNull()
   await click(buttonByText('用默认工作目录'))
@@ -501,7 +545,7 @@ it('项目路径：只在「项目」分类下出现；非项目保存时被清�
   await click(buttonByText('保存'))
   expect(vi.mocked(upsertMemory).mock.calls[0][0].projectPath).toBe('C:/code/virlen-app')
 
-  // 改成「用户偏好」→ 路径输入框消失，且草稿里的路径被清空（不留半状态）
+  // 换成「用户偏好」：输入框照旧在（作用域与分类是两个维度），刚填的路径**不被清掉**
   await click(buttonByText('新增记忆'))
   await click(buttonByText('用默认工作目录'))
   await typeInto('.memory-edit-modal .memory-form-summary', '用户偏好中文')
@@ -513,10 +557,16 @@ it('项目路径：只在「项目」分类下出现；非项目保存时被清�
     document.querySelectorAll<HTMLElement>('.custom-select__dropdown .custom-select__option'),
   )
   await click(opts.find((o) => o.textContent === '用户偏好')!)
-  expect(document.querySelector('.memory-form-path')).toBeNull()
+  expect(document.querySelector('.memory-form-path')).not.toBeNull()
   await click(buttonByText('保存'))
   expect(vi.mocked(upsertMemory).mock.calls[1][0].kind).toBe('user')
-  expect(vi.mocked(upsertMemory).mock.calls[1][0].projectPath).toBeNull()
+  expect(vi.mocked(upsertMemory).mock.calls[1][0].projectPath).toBe('C:/code/virlen-app')
+
+  // 留空 = 跨项目通用（面板是用户显式操作，不会被默默改成默认目录）
+  await click(buttonByText('新增记忆'))
+  await typeInto('.memory-edit-modal .memory-form-summary', '用户偏好简短回复')
+  await click(buttonByText('保存'))
+  expect(vi.mocked(upsertMemory).mock.calls[2][0].projectPath).toBeNull()
 
   // 用完恢复全局设置（defaultWorkspace 是全局 store，留着会影响后面的用例）
   await act(async () => {
@@ -525,18 +575,21 @@ it('项目路径：只在「项目」分类下出现；非项目保存时被清�
   await act(async () => root.unmount())
 })
 
-it('项目列：项目记忆显示路径（悬停看全文），非项目留空，不限项目明说「所有项目」', async () => {
+it('项目列：有作用域显示路径（悬停看全文），没作用域一律明说「所有项目」（与分类无关）', async () => {
   vi.mocked(listMemories).mockResolvedValue([
-    normalMemory, // project + 有路径
-    permanentMemory, // user → 该列留空
-    { ...disabledNormalMemory, kind: 'project' }, // project 但没限项目
+    normalMemory, // fact + 有路径
+    permanentMemory, // user + 无路径
+    { ...disabledNormalMemory, kind: 'decision' }, // 另一个分类、也没限目录
   ])
   const { root } = await render()
+
+  // 项目列要把停用的也算上（它默认被状态筛选滤掉了）
+  await pickStateFilter('全部')
 
   const scoped = cell('在 virlen-app 实现记忆功能', 'memory-cell-project')
   expect(scoped.textContent).toBe('C:/code/virlen-app')
   expect(scoped.title).toBe('C:/code/virlen-app')
-  expect(cell('用户偏好中文回复', 'memory-cell-project').textContent).toBe('')
+  expect(cell('用户偏好中文回复', 'memory-cell-project').textContent).toBe('所有项目')
   expect(cell('旧的技术选型笔记（已过时）', 'memory-cell-project').textContent).toBe('所有项目')
 
   await act(async () => root.unmount())
@@ -547,7 +600,7 @@ it('项目列：项目记忆显示路径（悬停看全文），非项目留空�
 it('注入预览展示后端渲染的段文本（前端不自己拼）', async () => {
   const { root } = await render()
 
-  await click(buttonByText('查看 AI 会读到什么'))
+  await click(buttonByText('预览注入内容'))
   const body = document.querySelector('.memory-preview-body')!
   expect(body.textContent).toContain('# Memory')
   expect(body.textContent).toContain('- [user] 用户偏好中文回复 (id: m_p1)')
@@ -583,7 +636,7 @@ it('常驻预算行展示后端算出的字符数与预算（不用点预览）'
   const row = document.querySelector('.memory-budget-row')!
   expect(row.textContent).toContain('120')
   expect(row.textContent).toContain('4000')
-  expect(row.textContent).toContain('本次对话会带上 1 条记忆（共 2 条）')
+  expect(row.textContent).toContain('本次对话注入 1 条记忆（共 2 条）')
   // 没被裁 → 不告警（告警必须是真的有事）
   expect(row.classList.contains('is-warn')).toBe(false)
   expect(document.querySelectorAll('.memory-preview-warn')).toHaveLength(0)
@@ -607,7 +660,7 @@ it('超出预算时常驻行变告警并给出可操作建议', async () => {
   expect(warn.textContent).toContain('永久 2 条')
   expect(warn.textContent).toContain('普通 5 条')
   // 光说「超了」没用，得告诉用户怎么改
-  expect(warn.textContent).toContain('建议删掉用不到的')
+  expect(warn.textContent).toContain('建议删除不再需要的条目')
 
   await act(async () => root.unmount())
 })
@@ -724,16 +777,19 @@ it('级别筛选：只留永久 / 只留普通；与搜索叠加', async () => {
 it('分类筛选：只留选中的分类；与级别、搜索三者叠加', async () => {
   vi.mocked(listMemories).mockResolvedValue([
     permanentMemory, // user / permanent
-    normalMemory, // project / normal
-    disabledNormalMemory, // fact / normal（已停用也要能筛出来 —— 否则没地方管理它们）
+    normalMemory, // fact / normal（带作用域）
+    // decision / normal（已停用也要能筛出来 —— 否则没地方管理它们）
+    { ...disabledNormalMemory, kind: 'decision' },
   ])
   const { root } = await render()
 
+  // 停用的那条默认被状态筛选遮住（它默认只列使用中的）；这条用例只管分类，先放开状态
+  await pickStateFilter('全部')
   expect(rows()).toHaveLength(3)
 
   await pickKindFilter('事实')
   expect(rows()).toHaveLength(1)
-  expect(cell('旧的技术选型笔记（已过时）', 'memory-cell-kind').textContent).toBe('事实')
+  expect(cell('在 virlen-app 实现记忆功能', 'memory-cell-kind').textContent).toBe('事实')
   // 计数如实反映筛选（用户得知道被筛掉了多少）
   expect(document.querySelector('.memory-count')!.textContent).toContain('筛选出 1 条 / 共 3 条')
 
@@ -743,11 +799,11 @@ it('分类筛选：只留选中的分类；与级别、搜索三者叠加', asyn
   expect(document.querySelector('.memory-empty')!.textContent).toContain('没有匹配的记忆')
 
   await pickLevelFilter('全部')
-  await pickKindFilter('项目')
+  await pickKindFilter('决策')
   expect(rows()).toHaveLength(1)
-  expect(rows()[0].querySelector('.memory-cell-summary')!.textContent).toContain('virlen-app')
+  expect(rows()[0].querySelector('.memory-cell-summary')!.textContent).toContain('已过时')
 
-  // 与搜索叠加：项目 + 搜「用户偏好」 → 空
+  // 与搜索叠加：决策 + 搜「用户偏好」 → 空
   await typeInto('.memory-search', '用户偏好')
   expect(rows()).toHaveLength(0)
 
@@ -757,16 +813,129 @@ it('分类筛选：只留选中的分类；与级别、搜索三者叠加', asyn
   await act(async () => root.unmount())
 })
 
-it('工具栏两行：两个筛选下拉都在第二行左侧，批量栏常驻在第二行右侧', async () => {
+it('工具栏两行：三个筛选下拉都在第二行左侧，排序在第一行，批量栏常驻在第二行右侧', async () => {
   const { root } = await render()
 
   const row = document.querySelector('.memory-action-row')!
-  // 两个下拉（分类 / 级别）都在第二行的筛选组里；第一行只留搜索与导出 / 新增
-  expect(row.querySelectorAll('.memory-filter-selects .custom-select')).toHaveLength(2)
-  expect(document.querySelector('.memory-filter-row .custom-select')).toBeNull()
+  // 三个下拉（分类 / 级别 / 状态）都在第二行的筛选组里；第一行只留搜索、排序与导出 / 新增
+  expect(row.querySelectorAll('.memory-filter-selects .custom-select')).toHaveLength(3)
+  expect(document.querySelector('.memory-filter-row .memory-filter-selects')).toBeNull()
+  // 排序是「这一屏看什么」的开关，跟搜索住第一行（不跟筛选抢第二行的宽度）
+  expect(document.querySelector('.memory-filter-row .memory-sort-group')).not.toBeNull()
+  expect(row.querySelector('.memory-sort-group')).toBeNull()
   // 批量栏与筛选同住第二行（右侧），**未选中时也在**，只是按钮全禁用
   expect(row.querySelector('.memory-batch-bar')).not.toBeNull()
   expect(batchText()).toContain('已选 0 条')
+
+  await act(async () => root.unmount())
+})
+
+// ==================== 状态筛选与排序 ====================
+//
+// 两条默认口径：
+// ① **默认只看使用中的**：停用的大多是再蒸馏归档的旧条目，默认攤在表里会把还在用的淹掉；
+//    但必须能筛回去（否则归档条目永远改不回来），且被筛掉多少要如实说。
+// ② 排序只认用户显式选的字段：选了「记录时间」就不再让永久记忆顶到最前；没有记录日期的
+//    永远排最后（当 0 参与升序会顶到第一行，看着像排错了）。
+
+/** 当前表格顺序下的内容列（排序用例只关心顺序） */
+function summaries(): string[] {
+  return rows().map((r) => r.querySelector('.memory-cell-summary')!.textContent ?? '')
+}
+
+it('状态筛选：默认只列使用中的；切到「已停用 / 全部」才看得见归档条目', async () => {
+  vi.mocked(listMemories).mockResolvedValue([
+    permanentMemory,
+    normalMemory,
+    disabledNormalMemory,
+  ])
+  const { root } = await render()
+
+  // 默认（使用中）：停用的那条不出现，但条数说明被筛掉了多少
+  expect(summaries()).toEqual(['用户偏好中文回复', '在 virlen-app 实现记忆功能'])
+  expect(document.querySelector('.memory-count')!.textContent).toContain('筛选出 2 条 / 共 3 条')
+
+  // 已停用：只看归档的（否则没地方把它们改回来）
+  await pickStateFilter('已停用')
+  expect(summaries()).toEqual(['旧的技术选型笔记（已过时）'])
+  expect(cell('旧的技术选型笔记（已过时）', 'memory-cell-state').textContent).toBe('已停用')
+
+  await pickStateFilter('全部')
+  expect(rows()).toHaveLength(3)
+
+  await act(async () => root.unmount())
+})
+
+it('排序：记录时间 / 使用次数 × 升序 / 降序；默认沿用后端顺序', async () => {
+  // 故意让**后端顺序与任何排序都不同**，否则「没排」与「排对了」看不出区别
+  const untimed: MemoryRecord = {
+    id: 'm_0',
+    level: 'normal',
+    kind: 'fact',
+    summary: '没记录日期的老数据',
+    hits: 7,
+  }
+  const oldest: MemoryRecord = {
+    id: 'm_1',
+    level: 'normal',
+    kind: 'fact',
+    summary: '最早的一条',
+    hits: 0,
+    createdAt: 100,
+  }
+  const newest: MemoryRecord = {
+    id: 'm_2',
+    level: 'permanent',
+    kind: 'user',
+    summary: '最新的一条',
+    hits: 4,
+    createdAt: 300,
+  }
+  const middle: MemoryRecord = {
+    id: 'm_3',
+    level: 'normal',
+    kind: 'fact',
+    summary: '中间的一条',
+    hits: 2,
+    createdAt: 200,
+  }
+  vi.mocked(listMemories).mockResolvedValue([untimed, oldest, newest, middle])
+  const { root } = await render()
+
+  expect(summaries()).toEqual(['没记录日期的老数据', '最早的一条', '最新的一条', '中间的一条'])
+
+  // 记录时间：降序不再让永久记忆靠默认分区占位 —— 用户选了字段就是纯时间序
+  await pickSort('记录时间：降序')
+  expect(summaries()).toEqual(['最新的一条', '中间的一条', '最早的一条', '没记录日期的老数据'])
+
+  // 升序：没记录日期的仍在**最后**（当 0 参与升序会顶到第一行）
+  await pickSort('记录时间：升序')
+  expect(summaries()).toEqual(['最早的一条', '中间的一条', '最新的一条', '没记录日期的老数据'])
+
+  await pickSort('使用次数：降序')
+  expect(summaries()).toEqual(['没记录日期的老数据', '最新的一条', '中间的一条', '最早的一条'])
+
+  await pickSort('使用次数：升序')
+  expect(summaries()).toEqual(['最早的一条', '中间的一条', '最新的一条', '没记录日期的老数据'])
+
+  // 选回默认：原样回到后端顺序（不是倒数第三次排序的结果）
+  await pickSort('默认顺序')
+  expect(summaries()).toEqual(['没记录日期的老数据', '最早的一条', '最新的一条', '中间的一条'])
+
+  await act(async () => root.unmount())
+})
+
+it('切换排序回到第 1 页（用户要看的是新的第一名，不是原来那页）', async () => {
+  vi.mocked(listMemories).mockResolvedValue(manyMemories(25))
+  const { root } = await render()
+
+  await click(buttonByText('下一页'))
+  expect(pager().querySelector('.memory-pager-page')!.textContent).toContain('2 / 2')
+
+  // manyMemories 的 hits = 序号 → 降序第一行是「批量记忆 25」
+  await pickSort('使用次数：降序')
+  expect(pager().querySelector('.memory-pager-page')!.textContent).toContain('1 / 2')
+  expect(rows()[0].querySelector('.memory-cell-summary')!.textContent).toBe('批量记忆 25')
 
   await act(async () => root.unmount())
 })
@@ -778,7 +947,9 @@ it('分页：默认每页 20 条，可翻页、可改每页条数，切页不丢
   const { root } = await render()
 
   expect(rows()).toHaveLength(20)
-  expect(pager().textContent).toContain('共 25 条')
+  // 条数只在工具栏说一次（分页栏不重复）：开箱就是「共 N 条」
+  expect(document.querySelector('.memory-count')!.textContent).toContain('共 25 条')
+  expect(pager().textContent).not.toContain('共')
   expect(pager().querySelector('.memory-pager-page')!.textContent).toContain('1 / 2')
   // 第一页是 20 条：上一页按钮必须禁用
   expect(buttonByText('上一页').disabled).toBe(true)
@@ -836,8 +1007,9 @@ it('批量栏常驻：未选中时按钮全禁用且给出「怎么开始」，�
   for (const label of ['升级为永久', '降级为普通', '停用', '启用', '删除', '取消选择']) {
     expect(batchButton(label).disabled, `${label} 未选中时应当是禁用的`).toBe(true)
   }
-  // 灰着的同时要说清怎么开始（否则一排灰按钮看着就像坏了）
-  expect(batchButton('删除').title).toContain('先勾选')
+  // 灰着就够了：禁用态**不挂 title** —— `disabled` 的控件不派发鼠标事件，
+  // tooltip 永远不会弹（写了就是死代码），且「为什么灰」看左侧行数据就够
+  expect(batchButton('删除').title).toBe('')
   expect(batchBar().classList.contains('is-active')).toBe(false)
 
   await click(itemChecks()[0])
@@ -883,9 +1055,11 @@ it('批量停用 / 启用：跳过已经如此的条目，并报真实条数', a
   vi.mocked(listMemories).mockResolvedValue([permanentMemory, disabledNormalMemory])
   const { root } = await render()
 
+  // 停用的条目默认不列出来（状态筛选 = 使用中）：批量启用前得先把它筛出来
+  await pickStateFilter('全部')
   await selectRow('旧的技术选型笔记（已过时）') // 这条本来就是停用的
   expect(batchButton('停用').disabled).toBe(true) // 没有可停用的 → 按钮必须是禁的
-  expect(batchButton('停用').title).toContain('都已停用')
+  expect(batchButton('停用').title).toBe('') // 同样不挂 title（见上）
   expect(batchButton('启用').disabled).toBe(false)
 
   await click(batchButton('启用'))
@@ -980,6 +1154,197 @@ it('重新读取后选中集收敛：已不存在的条目不会留在计数里'
   await act(async () => root.unmount())
 })
 
+// ==================== 整理记忆（再蒸馏） ====================
+//
+// 手动整理是**花钱**的显式动作（一轮最多 3 次模型调用），也是唯一会改写记忆集合的按钮。
+// 这组守住四件事：
+// ① 不点不跑（进页面不会自己整理，也不常驻告警）；
+// ② 结果给出结论 —— 合并了多少、调用几次、跳过原因（不能只报一个 ok）；
+// ③ 与后台整理撞车时把后端原因原样告知，不伪造结果；
+// ④ 跑着的时候两枚按钮都禁用（重复点 = 重复花钱）。
+
+/** 造一份整理报告（camelCase，与 Rust `RedistillReport` 同形） */
+function redistillReport(
+  over: Partial<MemoryRedistillReport> = {},
+): MemoryRedistillReport {
+  return {
+    status: 'ok',
+    task: 'full',
+    purged: 0,
+    purgedFailed: 0,
+    purgedRetained: 0,
+    batches: [],
+    itemsIn: 0,
+    itemsOut: 0,
+    calls: 0,
+    ...over,
+  }
+}
+
+it('整理记忆：不点不跑；点「立即整理」跑完整一轮并刷新列表', async () => {
+  vi.mocked(runMemoryRedistill).mockResolvedValue(
+    redistillReport({
+      purged: 2,
+      itemsIn: 6,
+      itemsOut: 2,
+      calls: 1,
+      batches: [
+        {
+          fingerprint: 'fp1',
+          scope: 'C:/code/virlen-app',
+          status: 'done',
+          itemsIn: 6,
+          itemsOut: 2,
+          details: 2,
+          drifted: 0,
+          unarchived: 0,
+          model: 'gpt-x',
+        },
+      ],
+    }),
+  )
+  const { root } = await render()
+
+  // 进页面不会自己整理（后台自动整理是 Rust 的调度，不归面板管）
+  expect(document.querySelector('.memory-redistill-report')).toBeNull()
+  expect(runMemoryRedistill).not.toHaveBeenCalled()
+
+  await click(buttonByText('立即整理'))
+  // 组件只传任务；`force` 由仓储层默认（用户点按钮 = 显式意图）
+  expect(runMemoryRedistill).toHaveBeenCalledWith({ task: 'full' })
+
+  const report = document.querySelector('.memory-redistill-report')!
+  expect(report.classList.contains('is-warn')).toBe(false)
+  expect(report.textContent).toContain('6 条合并为 2 条')
+  expect(report.textContent).toContain('模型调用 1 次')
+  expect(report.textContent).toContain('同时清理了 2 条超期归档')
+
+  // 条数变了：列表与注入预算必须重取（否则入口还写着整理前的条数）
+  expect(vi.mocked(listMemories)).toHaveBeenCalledTimes(3)
+  expect(vi.mocked(loadMemorySection)).toHaveBeenCalledTimes(3)
+
+  await act(async () => root.unmount())
+})
+
+it('整理：没有模型配置时如实说原因（告警色，不假装整理完成）', async () => {
+  vi.mocked(runMemoryRedistill).mockResolvedValue(redistillReport({ status: 'no-model' }))
+  const { root } = await render()
+
+  await click(buttonByText('立即整理'))
+  const report = document.querySelector('.memory-redistill-report')!
+  expect(report.classList.contains('is-warn')).toBe(true)
+  expect(report.textContent).toContain('没有可用的模型配置')
+  expect(report.textContent).not.toContain('合并为')
+
+  await act(async () => root.unmount())
+})
+
+it('整理：没东西可整理是正常结果（不染告警），跳过的原因按批数汇总', async () => {
+  vi.mocked(runMemoryRedistill).mockResolvedValue(
+    redistillReport({
+      status: 'nothing',
+      batches: [
+        {
+          fingerprint: 'a',
+          scope: '',
+          status: 'skipped',
+          itemsIn: 6,
+          itemsOut: 0,
+          details: 0,
+          drifted: 0,
+          unarchived: 0,
+          reason: 'no-gain',
+        },
+        {
+          fingerprint: 'b',
+          scope: 'C:/p',
+          status: 'skipped',
+          itemsIn: 7,
+          itemsOut: 0,
+          details: 0,
+          drifted: 0,
+          unarchived: 0,
+          reason: 'no-gain',
+        },
+      ],
+    }),
+  )
+  const { root } = await render()
+
+  await click(buttonByText('立即整理'))
+  const report = document.querySelector('.memory-redistill-report')!
+  expect(report.classList.contains('is-warn')).toBe(false)
+  expect(report.textContent).toContain('没有需要整理的条目')
+
+  // 同类原因只写一次 + 批数（3 批就写 3 行重复等于没写）
+  const note = document.querySelector('.memory-redistill-note')!
+  expect(note.textContent).toContain('跳过 2 批')
+  expect(note.textContent).toContain('模型判定这些条目合并后没有改进（2 批）')
+
+  await act(async () => root.unmount())
+})
+
+it('整理：被护栏保留的归档必须说出来（不能报「没有需要清理的超期归档」）', async () => {
+  // 现场：库里的归档条目指向的新条目已经被用户删了 → 护栏 ④ 永久保留，
+  // 它们既没删掉也不会再被自动删；以前这个数字只写进 stdout，GUI 用户只看得到「无可清理」。
+  vi.mocked(runMemoryRedistill).mockResolvedValue(
+    redistillReport({ status: 'ok', task: 'purge', purged: 0, purgedFailed: 0, purgedRetained: 2 }),
+  )
+  const { root } = await render()
+
+  await click(buttonByText('只清理归档'))
+  expect(runMemoryRedistill).toHaveBeenCalledWith({ task: 'purge' })
+  const report = document.querySelector('.memory-redistill-report')!
+  expect(report.textContent).toContain('没有需要清理的超期归档')
+  expect(report.textContent).toContain('另有 2 条归档被保留')
+  expect(report.textContent).toContain('需手动处理')
+
+  await act(async () => root.unmount())
+})
+
+it('整理：与后台整理撞车时把后端原因原样告知，不伪造报告', async () => {
+  vi.mocked(runMemoryRedistill).mockRejectedValue(
+    new Error('记忆整理正在进行中，请稍后再试'),
+  )
+  const { root } = await render()
+
+  await click(buttonByText('立即整理'))
+  expect(showToast).toHaveBeenCalledWith(
+    expect.stringContaining('记忆整理正在进行中'),
+    expect.any(Number),
+  )
+  expect(document.querySelector('.memory-redistill-report')).toBeNull()
+  // 失败也要把按钮恢复可用（否则看着像卡住了）
+  expect(buttonByText('立即整理').disabled).toBe(false)
+
+  await act(async () => root.unmount())
+})
+
+it('整理：跑着的时候两枚按钮都禁用（重复点 = 重复花钱）', async () => {
+  let release: ((r: MemoryRedistillReport) => void) | null = null
+  vi.mocked(runMemoryRedistill).mockImplementation(
+    () =>
+      new Promise<MemoryRedistillReport>((resolve) => {
+        release = resolve
+      }),
+  )
+  const { root } = await render()
+
+  await click(buttonByText('立即整理'))
+  // 进行中：主按钮改成进度文案，两枚都禁用（清理归档与完整整理写同一批记忆）
+  expect(buttonByText('正在整理…').disabled).toBe(true)
+  expect(buttonByText('只清理归档').disabled).toBe(true)
+  expect(runMemoryRedistill).toHaveBeenCalledTimes(1)
+
+  await act(async () => {
+    release!(redistillReport({ status: 'nothing' }))
+    await Promise.resolve()
+  })
+  expect(buttonByText('立即整理').disabled).toBe(false)
+
+  await act(async () => root.unmount())
+})
+
 // ==================== 详情正文自检（引用完整性） ====================
 //
 // 记忆只存摘要，详情正文在知识库里；那条链接断掉是**静默**的。这组守住四件事：
@@ -1001,7 +1366,7 @@ function integrityReport(
   }
 }
 
-it('详情正文自检：点「检查一遍」才跑；干净时只说「引用完整」、不给清理入口', async () => {
+it('详情正文自检：点「检查一遍」才跑；干净时只说「检查通过」、不给清理入口', async () => {
   vi.mocked(checkMemoryIntegrity).mockResolvedValue(integrityReport())
   const { root } = await render()
 
@@ -1014,7 +1379,7 @@ it('详情正文自检：点「检查一遍」才跑；干净时只说「引用�
 
   const report = document.querySelector('.memory-integrity-report')!
   expect(report.classList.contains('is-warn')).toBe(false)
-  expect(report.textContent).toContain('引用完整')
+  expect(report.textContent).toContain('检查通过')
   expect(report.textContent).toContain('2 条记忆')
   expect(document.querySelector('.memory-option-link.is-danger')).toBeNull()
 
@@ -1051,8 +1416,8 @@ it('孤儿正文：只把「像记忆正文」的算可清理，清理前二次�
   await click(buttonByText('检查一遍'))
   let report = document.querySelector('.memory-integrity-report')!
   expect(report.textContent).toContain('断链')
-  expect(report.textContent).toContain('正文已不在（该记忆已停用）')
-  expect(report.textContent).toContain('不像记忆正文，需要你自己确认')
+  expect(report.textContent).toContain('正文缺失（该记忆已停用）')
+  expect(report.textContent).toContain('非记忆详情文档，请人工确认')
 
   // 2 篇孤儿里只有 1 篇可清理
   await click(buttonByText('清理 1 篇孤儿正文'))
@@ -1091,7 +1456,7 @@ it('二次确认取消时不清理（删正文不可撤销）', async () => {
   await act(async () => root.unmount())
 })
 
-it('知识库不可用：如实说「没能检查」，不当成干净、也不给清理入口', async () => {
+it('知识库不可用：如实说「未执行检查」，不当成干净、也不给清理入口', async () => {
   vi.mocked(checkMemoryIntegrity).mockResolvedValue(
     integrityReport({ kbAvailable: false, kbId: null, checkedDocs: 0 }),
   )
@@ -1099,7 +1464,7 @@ it('知识库不可用：如实说「没能检查」，不当成干净、也不�
 
   await click(buttonByText('检查一遍'))
   const report = document.querySelector('.memory-integrity-report')!
-  expect(report.textContent).toContain('没能检查')
+  expect(report.textContent).toContain('未执行检查')
   expect(report.classList.contains('is-warn')).toBe(true)
   expect(document.querySelector('.memory-option-link.is-danger')).toBeNull()
 
@@ -1116,6 +1481,137 @@ it('检查失败不静默：给提示，且不伪造一份报告', async () => {
     expect.any(Number),
   )
   expect(document.querySelector('.memory-integrity-report')).toBeNull()
+
+  await act(async () => root.unmount())
+})
+
+// ==================== 「上次整理」（自动整理的可见性） ====================
+//
+// 自动整理是用户无感的：没跑也不会报错，所以失败原因曾经完全不可观测（「217 条一个月没被整理过」
+// 就是这么摸出来的）。这块守两件事：闸门级跳过要如实说出来（并染告警），正常结果不能也染红。
+
+it('上次整理：闸门级跳过（知识库不可用）要说出来并且染告警色', async () => {
+  vi.mocked(listMemoryRedistillRuns).mockResolvedValue([
+    {
+      fingerprint: 'gate:no-rag',
+      status: 'skipped',
+      itemsIn: 0,
+      itemsOut: 0,
+      purged: 0,
+      purgedFailed: 0,
+      purgedRetained: 0,
+      attempts: 0,
+      error: '知识库不可用',
+      startedAt: 1_795_000_000_000,
+      finishedAt: 1_795_000_060_000,
+    },
+  ])
+  const { root } = await render({ openList: false })
+
+  const last = document.querySelector<HTMLElement>('.memory-redistill-last')
+  expect(last).not.toBeNull()
+  expect(last!.textContent).toContain('上次整理')
+  expect(last!.textContent).toContain('知识库不可用')
+  expect(last!.classList.contains('is-warn')).toBe(true)
+
+  await act(async () => root.unmount())
+})
+
+it('上次整理：正常合并结果不染告警，且不被同一轮的「这批刚整理过」盖掉', async () => {
+  vi.mocked(listMemoryRedistillRuns).mockResolvedValue([
+    {
+      fingerprint: 'gate:already-done',
+      status: 'skipped',
+      itemsIn: 0,
+      itemsOut: 0,
+      purged: 0,
+      purgedFailed: 0,
+      purgedRetained: 0,
+      attempts: 0,
+      error: '这一批已处理过或正在被处理',
+      startedAt: 1_795_000_060_001,
+      finishedAt: 1_795_000_060_001,
+    },
+    {
+      fingerprint: 'abc123',
+      status: 'done',
+      itemsIn: 6,
+      itemsOut: 2,
+      purged: 0,
+      purgedFailed: 0,
+      purgedRetained: 0,
+      attempts: 1,
+      error: null,
+      startedAt: 1_795_000_000_000,
+      finishedAt: 1_795_000_060_000,
+    },
+  ])
+  const { root } = await render({ openList: false })
+
+  const last = document.querySelector<HTMLElement>('.memory-redistill-last')!
+  expect(last.textContent).toContain('合并 6 条为 2 条')
+  expect(last.classList.contains('is-warn')).toBe(false)
+
+  await act(async () => root.unmount())
+})
+
+it('上次整理：最近一轮只有「条目不足一批」时要说出来（不被几个月前的成功盖住）', async () => {
+  // 现场：这一轮没有任何合并（剩余的都是装得进归档但凑不足一批的零头）。
+  // 若把这类噪声无条件跳过，面板会拿 3 周前的 done 行当「上次整理」（用户现下的问题反而看不见）。
+  vi.mocked(listMemoryRedistillRuns).mockResolvedValue([
+    {
+      fingerprint: 'gate:too-few-items',
+      status: 'skipped',
+      itemsIn: 0,
+      itemsOut: 0,
+      purged: 0,
+      purgedFailed: 0,
+      purgedRetained: 0,
+      attempts: 0,
+      error: '这一组可归档的条数不够，凑不齐一批',
+      startedAt: 1_796_000_000_000,
+      finishedAt: 1_796_000_000_000,
+    },
+    {
+      // 三周前的真实合并：不能被当成「上次整理」
+      fingerprint: 'old-done',
+      status: 'done',
+      itemsIn: 6,
+      itemsOut: 2,
+      purged: 0,
+      purgedFailed: 0,
+      purgedRetained: 0,
+      attempts: 1,
+      error: null,
+      startedAt: 1_794_000_000_000,
+      finishedAt: 1_794_000_060_000,
+    },
+  ])
+  const { root } = await render({ openList: false })
+
+  const last = document.querySelector<HTMLElement>('.memory-redistill-last')!
+  expect(last.textContent).toContain('未执行：可归档条目不足一批')
+  expect(last.textContent).not.toContain('合并 6 条为 2 条')
+
+  await act(async () => root.unmount())
+})
+
+it('上次整理：没有流水就整行不渲染（不编一条「暂无记录」）', async () => {
+  const { root } = await render({ openList: false })
+  expect(document.querySelector('.memory-redistill-last')).toBeNull()
+  await act(async () => root.unmount())
+})
+
+it('详情装不进归档的条目在状态列标「不参与整理」', async () => {
+  vi.mocked(listMemories).mockResolvedValue([
+    { ...permanentMemory, detailTooLong: true },
+    normalMemory,
+  ])
+  const { root } = await render()
+
+  expect(cell('用户偏好中文回复', 'memory-cell-state').textContent).toContain('不参与整理')
+  // 正常的条目不能被误标
+  expect(cell('在 virlen-app 实现记忆功能', 'memory-cell-state').textContent).toBe('')
 
   await act(async () => root.unmount())
 })

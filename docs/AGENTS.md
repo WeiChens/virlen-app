@@ -46,7 +46,7 @@
 
 | §11.x（常见坑） | 分册 |
 |---|---|
-| §11.1–§11.13 · §11.54–§11.77 | [`agents/06-pitfalls-toolchain.md`](agents/06-pitfalls-toolchain.md) |
+| §11.1–§11.13 · §11.54–§11.81 | [`agents/06-pitfalls-toolchain.md`](agents/06-pitfalls-toolchain.md) |
 | §11.14–§11.27 | [`agents/07-pitfalls-cli.md`](agents/07-pitfalls-cli.md) |
 | §11.28–§11.36 | [`agents/08-pitfalls-quality.md`](agents/08-pitfalls-quality.md) |
 | §11.37–§11.41 · §11.50–§11.52 | [`agents/09-pitfalls-engine.md`](agents/09-pitfalls-engine.md) |

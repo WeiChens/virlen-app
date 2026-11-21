@@ -28,12 +28,14 @@ use crate::session_db::{
 
 // ==================== 候选 / 分组 / 选组 / 切批 ====================
 
-/// 这条记忆能不能被自动整理：**未停用**且**不是用户手写的**。
+/// 这条记忆能不能被自动整理：**未停用**、**不是用户手写的**、**详情没有长到装不进归档**。
 ///
 /// 用户手写的不动是硬约定（自动合并用户自己的记忆 = 「我的记忆被 AI 改了」）；
-/// 停用的本来就不注入，再花力气合并它没有意义（用户显式关掉了它）。
+/// 停用的本来就不注入，再花力气合并它没有意义（用户显式关掉了它）；
+/// `detail_too_long` 是上次实测的结论（单条详情就超过归档预算 → 永远无法连同其它来源一起归档
+/// → 也就永远无法停用它），不排除就会一直占着批次名额反复被量、却一条也合并不了。
 pub fn is_redistill_candidate(m: &MemoryRecord) -> bool {
-    !m.disabled && m.origin.trim() != MEMORY_ORIGIN_USER
+    !m.disabled && m.origin.trim() != MEMORY_ORIGIN_USER && !m.detail_too_long
 }
 
 /// 分组键：`project_path` 原样（空串 = 不限定项目）。
@@ -527,7 +529,7 @@ mod tests {
         MEMORY_REDISTILL_MAX_INPUT_CHARS, MEMORY_REDISTILL_MAX_OUT_ITEMS,
     };
     use crate::agent::memory::{MEMORY_DETAIL_MAX_CHARS, MEMORY_SUMMARY_MAX_CHARS};
-    use crate::session_db::{MEMORY_KIND_PROJECT, MEMORY_ORIGIN_DISTILL};
+    use crate::session_db::MEMORY_ORIGIN_DISTILL;
 
     const NOW: i64 = 1_700_000_000_000;
 
@@ -535,7 +537,7 @@ mod tests {
         MemoryRecord {
             id: id.into(),
             level: MEMORY_LEVEL_NORMAL.into(),
-            kind: MEMORY_KIND_PROJECT.into(),
+            kind: "fact".into(),
             summary: format!("记忆 {}", id),
             project_path: scope.map(String::from),
             origin: MEMORY_ORIGIN_DISTILL.into(),
@@ -664,7 +666,7 @@ mod tests {
         MergeDraft {
             source_ids: ids.iter().map(|s| (*s).to_string()).collect(),
             summary: summary.to_string(),
-            kind: "project".into(),
+            kind: "fact".into(),
             tags: Vec::new(),
             detail: None,
         }
@@ -788,7 +790,7 @@ mod tests {
         assert!(!prompt.contains("{{memories}}"));
         assert!(prompt.contains("C:/work/app"));
         assert!(prompt.contains("20"));
-        assert!(prompt.contains("- (id: m_abc) [project] ("));
+        assert!(prompt.contains("- (id: m_abc) [fact] ("));
         assert!(prompt.contains("记忆 m_abc"));
 
         // 不限定项目时说清楚（模型才不会硬塞一个项目名进来）
@@ -805,7 +807,7 @@ mod tests {
     #[test]
     fn memory_line_omits_date_when_created_at_is_missing() {
         let line = memory_line(&mem("m1", None, 0));
-        assert_eq!(line, "- (id: m1) [project] 记忆 m1");
+        assert_eq!(line, "- (id: m1) [fact] 记忆 m1");
     }
 
     // ── 归档 ──
@@ -828,7 +830,7 @@ mod tests {
         assert!(out.contains("### m1 · decision · "));
         assert!(out.contains("会话导出改为 HTML 单文件"));
         assert!(out.contains("详情的正文一段"), "来源自己的详情必须一起归档（否则原文真丢）");
-        assert!(out.contains("### m2 · project · "));
+        assert!(out.contains("### m2 · fact · "));
         assert!(out.contains("导出省略工具调用 = 连工具结果一起省"));
         assert!(out.chars().count() <= MEMORY_DETAIL_MAX_CHARS);
     }

@@ -22,15 +22,13 @@ export const MEMORY_PROMPT_MAX_CHARS = 4000
 export const MEMORY_LEVELS = ['normal', 'permanent'] as const
 export type MemoryLevel = (typeof MEMORY_LEVELS)[number]
 
-/** 记忆分类（面板下拉；未知值由 Rust 侧收敛为 `fact`） */
-export const MEMORY_KINDS = ['user', 'project', 'decision', 'fact'] as const
-export type MemoryKind = (typeof MEMORY_KINDS)[number]
-
-/**
- * 项目分类（只有它才允许带 `projectPath`），与 Rust `MEMORY_KIND_PROJECT` 同值。
- * 非 `project` 带路径会被服务端清掉。
+/** 记忆分类（面板下拉；未知值由 Rust 侧收敛为 `fact`）
+ *
+ * 分类只说「这条记忆是什么」，**可见范围由 `projectPath` 表达**（任何分类都可带，也可不带）。
+ * 旧的 `project` 分类已移除（老数据由 Rust 开库迁移改成 `fact`）。
  */
-export const MEMORY_KIND_PROJECT = 'project'
+export const MEMORY_KINDS = ['user', 'decision', 'fact'] as const
+export type MemoryKind = (typeof MEMORY_KINDS)[number]
 
 /** 项目路径的长度上限（与 Rust `MEMORY_PROJECT_PATH_MAX_CHARS` 同值；超限服务端拒绝） */
 export const MEMORY_PROJECT_PATH_MAX_CHARS = 500
@@ -51,7 +49,7 @@ export interface MemoryRecord {
   kind: MemoryKind | string
   summary: string
   /**
-   * 项目路径（仅 `project` 有意义）：只在「工作目录 = 它或子目录」时注入与召回；`null` = 跨项目通用。
+   * 项目路径（选填，**任何分类都可带**）：只在「工作目录 = 它或子目录」时注入与召回；`null` = 跨项目通用。
    * ⚠️ 匹配在 Rust（`agent::memory::scope`），前端只传工作目录。
    */
   projectPath?: string | null
@@ -72,6 +70,11 @@ export interface MemoryRecord {
    * `null` = 从未参与合并（用户手写的 / 被用户停用）—— 自动清理的护栏字段。
    */
   supersededBy?: string | null
+  /**
+   * 详情正文长到**永远装不进归档**（再蒸馏实测后回写）：这种条目不能被自动整理合并 ——
+   * 停用来源的前提是原文进得了归档。它们也不计入触发阈值（否则闸门会永远判「越线了」）。
+   */
+  detailTooLong?: boolean
 }
 
 /** 注入段（`cmd_memory_prompt_section` 的返回） */
@@ -144,6 +147,102 @@ export function isIntegrityClean(report: MemoryIntegrityReport): boolean {
 /** 可以放心清理的孤儿篇数（名字带「记忆详情」前缀的那些） */
 export function deletableOrphanCount(report: MemoryIntegrityReport): number {
   return report.orphans.filter((o) => o.looksLikeDetail).length
+}
+
+// ==================== 再蒸馏（记忆整理） ====================
+//
+// 同一件事的多条记忆会被合并成一条，旧条目归档（停用 + `supersededBy`）；归档正文里
+// 保留合并前的原文，所以「合并」不是不可逆的删除。
+// 自动触发阈值与批次上限下面这几个常量是**镜像**（面板文案要用，不值得为两句话走 IPC）。
+// ⚠️ 改值必须同步 `agent/memory/redistill/mod.rs` 同名常量。
+
+/** 攒够这么多条 AI 写下的记忆才会自动整理 */
+export const MEMORY_REDISTILL_TRIGGER_COUNT = 100
+
+/** 同一作用域内至少这么多条才值得合并（少于它调模型只是白花钱） */
+export const MEMORY_REDISTILL_MIN_GROUP_ITEMS = 5
+
+/** 一轮最多整理几个批次（每批一次模型调用）。与 Rust 同名常量同步（3 → 6：一批受归档预算限制只有 4–8 条） */
+export const MEMORY_REDISTILL_MAX_BATCHES_PER_RUN = 6
+
+/** 报告级状态（`RedistillReport.status`，与 Rust `REPORT_*` 同值） */
+export type MemoryRedistillStatus =
+  | 'ok'
+  | 'disabled'
+  | 'unavailable'
+  | 'no-model'
+  | 'nothing'
+
+/** 批次级状态（`BatchReport.status`，与 Rust `MEMORY_REDISTILL_*` 同值） */
+export type MemoryRedistillBatchStatus = 'done' | 'partial' | 'skipped' | 'failed'
+
+/** 一批的结果（与 Rust `BatchReport` 同形） */
+export interface MemoryRedistillBatch {
+  fingerprint: string
+  /** 作用域：空串 = 跨项目通用的那批 */
+  scope: string
+  status: MemoryRedistillBatchStatus | string
+  itemsIn: number
+  itemsOut: number
+  /** 写进归档的合并说明条数 */
+  details: number
+  /** 模型给的结果与来源对不上的条数 */
+  drifted: number
+  /** 没能写进归档（因此没敢停用来源）的条数 */
+  unarchived: number
+  model?: string | null
+  /** 跳过原因（`no-gain` / `no-rag` / `archive-too-long` / `too-few-items` / `already-done`） */
+  reason?: string | null
+  /** 失败原因 / 降级说明（不含记忆正文） */
+  error?: string | null
+}
+
+/**
+ * 一条整理流水（与 Rust `MemoryRedistillRun` 同形；面板只读最近一条，用来回答
+ * 「上次自动整理为什么什么都没做」）。
+ *
+ * ⚠️ `fingerprint` 的两族特殊值：`gate:<reason>` = **闸门级跳过**（这一轮什么都没跑，
+ * 没有批次指纹可写）；`purge` = 只清理归档那一行。
+ */
+export interface MemoryRedistillRun {
+  fingerprint: string
+  /** `running` | `done` | `partial` | `skipped` | `failed` */
+  status: string
+  itemsIn: number
+  itemsOut: number
+  purged: number
+  purgedFailed: number
+  /** 被护栏 ④ **保留**的条数（指向的新条目已不存在）：代码不会再动它们，只能人工处理 */
+  purgedRetained: number
+  attempts: number
+  model?: string | null
+  /** 跳过原因（机器标识）/ 闸门跳过的一句话说明（不含记忆正文） */
+  error?: string | null
+  startedAt: number
+  finishedAt?: number | null
+}
+
+/** 一轮整理的结果（`cmd_memory_redistill` 的返回，与 Rust `RedistillReport` 同形） */
+export interface MemoryRedistillReport {
+  status: MemoryRedistillStatus | string
+  /** `full`（清理 + 合并）/ `purge`（只清理归档） */
+  task: string
+  /** 删掉的超期归档条数 */
+  purged: number
+  /** 删除失败的归档条数 */
+  purgedFailed: number
+  /**
+   * 被护栏 ④ **保留**的条数（它们指向的新条目已不存在 / 没有归档详情）。
+   *
+   * 既没删掉也不会再被自动删（代码不再动它们）—— 必须上报，否则面板只能报一句
+   * 「没有需要清理的超期归档」，而真相是「有 N 条得人工处理」。
+   */
+  purgedRetained: number
+  batches: MemoryRedistillBatch[]
+  itemsIn: number
+  itemsOut: number
+  /** 实际发生的模型调用次数（= 花了几次钱） */
+  calls: number
 }
 
 // ==================== 导出（P3） ====================

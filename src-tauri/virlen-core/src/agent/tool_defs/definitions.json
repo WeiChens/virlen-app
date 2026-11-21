@@ -886,7 +886,6 @@
               "type": "string",
               "enum": [
                 "user",
-                "project",
                 "decision",
                 "fact"
               ],
@@ -921,7 +920,7 @@
       },
       {
         "name": "memory_write",
-        "description": "Save a long-term memory so later sessions remember it. Use it when the user explicitly asks to remember something, or when a stable fact / preference / decision is worth keeping across sessions. Keep the summary under 120 characters - distill, do not paste; put long content into \"detail\" (stored in a dedicated knowledge base, only the summary stays in memory). Never store secrets, credentials or transient state.",
+        "description": "Save a long-term memory so later sessions remember it. Use it when the user explicitly asks to remember something, or when a stable fact / preference / decision is worth keeping across sessions. Keep the summary under 120 characters - distill, do not paste; put long content into \"detail\" (stored in a dedicated knowledge base, only the summary stays in memory). Never store secrets, credentials or transient state. The memory is scoped to the current session workspace by default (see project_path) - pass project_path \"global\" for anything that must apply in every project; kind and level do not change this.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -933,11 +932,10 @@
               "type": "string",
               "enum": [
                 "user",
-                "project",
                 "decision",
                 "fact"
               ],
-              "description": "user = about the user; project = project/repo knowledge (automatically scoped to the session workspace, so it loads again only in sessions working inside that directory); decision = a decision that was made (and why); fact = a stable technical fact."
+              "description": "user = about the user; decision = a decision that was made (and why); fact = a stable technical fact. Visibility is NOT part of the kind - use project_path for that."
             },
             "level": {
               "type": "string",
@@ -951,6 +949,10 @@
             "detail": {
               "type": "string",
               "description": "Optional full detail when the content is large or important. Stored in a dedicated knowledge base and linked to the memory; read it later with memory_recall."
+            },
+            "project_path": {
+              "type": "string",
+              "description": "Optional. Where this memory is visible. Omit it for project/repo knowledge - the current session workspace is used, so the memory loads again only in sessions working inside that directory. Pass \"global\" for cross-project facts and preferences (e.g. the user's language, or how the user always wants answers) - the kind and level do not change this. Pass another absolute directory only when the user explicitly wants it filed under that project."
             }
           },
           "required": [
@@ -1994,7 +1996,6 @@
               "type": "string",
               "enum": [
                 "user",
-                "project",
                 "decision",
                 "fact"
               ],
@@ -2029,7 +2030,7 @@
       },
       {
         "name": "memory_write",
-        "description": "Save a long-term memory so later sessions remember it. Use it when the user explicitly asks to remember something, or when a stable fact / preference / decision is worth keeping across sessions. Keep the summary under 120 characters - distill, do not paste; put long content into \"detail\" (stored in a dedicated knowledge base, only the summary stays in memory). Never store secrets, credentials or transient state.",
+        "description": "Save a long-term memory so later sessions remember it. Use it when the user explicitly asks to remember something, or when a stable fact / preference / decision is worth keeping across sessions. Keep the summary under 120 characters - distill, do not paste; put long content into \"detail\" (stored in a dedicated knowledge base, only the summary stays in memory). Never store secrets, credentials or transient state. The memory is scoped to the current session workspace by default (see project_path) - pass project_path \"global\" for anything that must apply in every project; kind and level do not change this.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2041,11 +2042,10 @@
               "type": "string",
               "enum": [
                 "user",
-                "project",
                 "decision",
                 "fact"
               ],
-              "description": "user = about the user; project = project/repo knowledge (automatically scoped to the session workspace, so it loads again only in sessions working inside that directory); decision = a decision that was made (and why); fact = a stable technical fact."
+              "description": "user = about the user; decision = a decision that was made (and why); fact = a stable technical fact. Visibility is NOT part of the kind - use project_path for that."
             },
             "level": {
               "type": "string",
@@ -2059,6 +2059,10 @@
             "detail": {
               "type": "string",
               "description": "Optional full detail when the content is large or important. Stored in a dedicated knowledge base and linked to the memory; read it later with memory_recall."
+            },
+            "project_path": {
+              "type": "string",
+              "description": "Optional. Where this memory is visible. Omit it for project/repo knowledge - the current session workspace is used, so the memory loads again only in sessions working inside that directory. Pass \"global\" for cross-project facts and preferences (e.g. the user's language, or how the user always wants answers) - the kind and level do not change this. Pass another absolute directory only when the user explicitly wants it filed under that project."
             }
           },
           "required": [
@@ -3102,7 +3106,6 @@
               "type": "string",
               "enum": [
                 "user",
-                "project",
                 "decision",
                 "fact"
               ],
@@ -3137,7 +3140,7 @@
       },
       {
         "name": "memory_write",
-        "description": "Save a long-term memory so later sessions remember it. Use it when the user explicitly asks to remember something, or when a stable fact / preference / decision is worth keeping across sessions. Keep the summary under 120 characters - distill, do not paste; put long content into \"detail\" (stored in a dedicated knowledge base, only the summary stays in memory). Never store secrets, credentials or transient state.",
+        "description": "Save a long-term memory so later sessions remember it. Use it when the user explicitly asks to remember something, or when a stable fact / preference / decision is worth keeping across sessions. Keep the summary under 120 characters - distill, do not paste; put long content into \"detail\" (stored in a dedicated knowledge base, only the summary stays in memory). Never store secrets, credentials or transient state. The memory is scoped to the current session workspace by default (see project_path) - pass project_path \"global\" for anything that must apply in every project; kind and level do not change this.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3149,11 +3152,10 @@
               "type": "string",
               "enum": [
                 "user",
-                "project",
                 "decision",
                 "fact"
               ],
-              "description": "user = about the user; project = project/repo knowledge (automatically scoped to the session workspace, so it loads again only in sessions working inside that directory); decision = a decision that was made (and why); fact = a stable technical fact."
+              "description": "user = about the user; decision = a decision that was made (and why); fact = a stable technical fact. Visibility is NOT part of the kind - use project_path for that."
             },
             "level": {
               "type": "string",
@@ -3167,6 +3169,10 @@
             "detail": {
               "type": "string",
               "description": "Optional full detail when the content is large or important. Stored in a dedicated knowledge base and linked to the memory; read it later with memory_recall."
+            },
+            "project_path": {
+              "type": "string",
+              "description": "Optional. Where this memory is visible. Omit it for project/repo knowledge - the current session workspace is used, so the memory loads again only in sessions working inside that directory. Pass \"global\" for cross-project facts and preferences (e.g. the user's language, or how the user always wants answers) - the kind and level do not change this. Pass another absolute directory only when the user explicitly wants it filed under that project."
             }
           },
           "required": [

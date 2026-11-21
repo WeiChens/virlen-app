@@ -14,7 +14,6 @@ import { t, tpl } from '@/ui/i18n'
 import { settingsState } from '@/ui/store'
 import { upsertMemory } from '@/infrastructure/memoryRepo'
 import {
-  MEMORY_KIND_PROJECT,
   MEMORY_PROJECT_PATH_MAX_CHARS,
   MEMORY_SUMMARY_HINT_CHARS,
   MEMORY_SUMMARY_MAX_CHARS,
@@ -42,8 +41,7 @@ interface MemoryDraft {
   level: MemoryLevel
   disabled: boolean
   /**
-   * 项目路径 —— **只有分类是「项目」时**才编辑它（其它分类一律空串）。
-   * 空串 = 不限定项目（跨项目通用）；服务端还会再守一道（非 project 带路径会被清掉）。
+   * 项目路径（选填，**与分类无关**）：空 = 不限定目录（跨项目通用）；填了 = 只在工作目录命中它的会话里可见。
    */
   projectPath: string
   /** 详情链接（不在表单里编辑，但要**原样回传** —— 否则编辑摘要会把详情链静默清空） */
@@ -53,7 +51,7 @@ interface MemoryDraft {
 
 function toDraft(item: MemoryRecord | null): MemoryDraft {
   if (!item) {
-    return { summary: '', kind: 'project', level: 'normal', disabled: false, projectPath: '' }
+    return { summary: '', kind: 'fact', level: 'normal', disabled: false, projectPath: '' }
   }
   return {
     id: item.id,
@@ -86,9 +84,8 @@ function MemoryEditModal({ visible, item, onClose, onSaved }: Props) {
       kind: draft.kind,
       level: draft.level,
       disabled: draft.disabled,
-      // 只有项目分类才带路径（其它分类传 null —— 服务端同样会清掉，两边一致）
-      projectPath:
-        draft.kind === MEMORY_KIND_PROJECT ? draft.projectPath.trim() || null : null,
+      // 路径与分类无关（任何分类都可带）：空串 = 跨项目通用
+      projectPath: draft.projectPath.trim() || null,
       detailKbId: draft.detailKbId ?? null,
       detailDocId: draft.detailDocId ?? null,
     })
@@ -98,9 +95,8 @@ function MemoryEditModal({ visible, item, onClose, onSaved }: Props) {
   }
 
   const recorded = item ? memoryDateTitle(item) : ''
-  /** 设置里的默认工作目录：编辑项目记忆时一键填入（用户不必手敲路径） */
+  /** 设置里的默认工作目录：编辑作用域时一键填入（用户不必手敲路径） */
   const defaultWorkspace = settingsState.value.defaultWorkspace || ''
-  const isProject = draft.kind === MEMORY_KIND_PROJECT
 
   return (
     <Modal
@@ -130,7 +126,7 @@ function MemoryEditModal({ visible, item, onClose, onSaved }: Props) {
           onChange={(e) => setDraft({ ...draft, summary: e.target.value })}
         />
         <div className="memory-form-hint">
-          {tpl('写短一点更好记：建议 $__hint__ 字以内，最多 $__max__ 字。', {
+          {tpl('建议 $__hint__ 字以内，最多 $__max__ 字。', {
             hint: MEMORY_SUMMARY_HINT_CHARS,
             max: MEMORY_SUMMARY_MAX_CHARS,
           })}
@@ -141,10 +137,7 @@ function MemoryEditModal({ visible, item, onClose, onSaved }: Props) {
             {/* 用共享 `Select`：下拉面板 Portal 到 body，不会被弹窗的滚动容器裁剪 */}
             <Select
               value={draft.kind}
-              // 改成非项目时顺手把路径清掉：不给「非项目却带路径」的半状态留机会
-              onChange={(v) =>
-                setDraft({ ...draft, kind: v as MemoryKind, projectPath: '' })
-              }
+              onChange={(v) => setDraft({ ...draft, kind: v as MemoryKind })}
               options={kindOptions()}
               width={120}
             />
@@ -159,30 +152,30 @@ function MemoryEditModal({ visible, item, onClose, onSaved }: Props) {
             />
           </label>
         </div>
-        {/* 项目路径只对「项目」分类显示 —— 它是这条记忆的可见范围，不能藏起来；
-            空 = 所有项目可见，填了 = 只在该路径（或其子目录）的会话里注入 */}
-        {isProject && (
-          <div className="memory-form-row memory-form-scope">
-            <label>
-              <span>{t('只在这个项目里带上')}</span>
-              <input
-                className="memory-form-path"
-                type="text"
-                value={draft.projectPath}
-                maxLength={MEMORY_PROJECT_PATH_MAX_CHARS}
-                placeholder={t('留空 = 所有项目都带上')}
-                onChange={(e) => setDraft({ ...draft, projectPath: e.target.value })}
-              />
-            </label>
-            {defaultWorkspace && (
-              <button
-                className="memory-action-btn"
-                onClick={() => setDraft({ ...draft, projectPath: defaultWorkspace })}>
-                {t('用默认工作目录')}
-              </button>
-            )}
-          </div>
-        )}
+        {/* 作用域与分类无关（任何分类都可带），所以常驻显示：它是这条记忆的可见范围，不能藏起来；
+            空 = 所有项目可见，填了 = 只在该路径（或其子目录）的会话里注入。
+            标签只写字段名（与列表的「项目」列同名），含义交给 placeholder —— 两个都说一遍会变成
+            「只在这个项目里带上 / 留空 = 所有项目」这种一句套一句的否定。 */}
+        <div className="memory-form-row memory-form-scope">
+          <label>
+            <span>{t('项目')}</span>
+            <input
+              className="memory-form-path"
+              type="text"
+              value={draft.projectPath}
+              maxLength={MEMORY_PROJECT_PATH_MAX_CHARS}
+              placeholder={t('留空 = 不限定项目')}
+              onChange={(e) => setDraft({ ...draft, projectPath: e.target.value })}
+            />
+          </label>
+          {defaultWorkspace && (
+            <button
+              className="memory-action-btn"
+              onClick={() => setDraft({ ...draft, projectPath: defaultWorkspace })}>
+              {t('用默认工作目录')}
+            </button>
+          )}
+        </div>
         {/* 记录时间只读展示：用户编辑时最想确认的就是「这条是什么时候记下的」 */}
         {recorded && <div className="memory-form-hint">{recorded}</div>}
       </div>

@@ -53,10 +53,11 @@ pub struct MemoryToolDeps<'a> {
     /// 当前会话的**工作目录**（已解析：会话指定 > Agent 默认）。
     ///
     /// 两个用途：
-    /// 1. 写 `kind = project` 的记忆时作为它的项目路径（见 `scope::scope_for_write`）；
-    /// 2. 检索时筛掉属于**别的项目**的记忆（与注入同一规则，见 `scope::memory_applies`）。
+    /// 1. 写记忆时作为**默认**作用域（模型没传 `project_path` 就用它，见 `scope::scope_for_write`）：
+    ///    这条记忆之后只在该目录（或其子目录）里注入与召回；
+    /// 2. 检索时筛掉属于**别的目录**的记忆（与注入同一规则，见 `scope::memory_applies`）。
     ///
-    ///    空串 = 没有工作目录 → 项目记忆一概不写路径 / 不检索到。
+    ///    空串 = 没有工作目录 → 写入时默认不限定目录 / 检索时不命中任何带路径的记忆。
     pub workspace: &'a str,
     pub now_ms: i64,
 }
@@ -272,12 +273,20 @@ pub async fn run_recall(deps: &MemoryToolDeps<'_>, memory_id: &str) -> Result<Me
 /// `memory_write` 的入参
 pub struct WriteRequest<'a> {
     pub summary: &'a str,
-    /// `user` | `project` | `decision` | `fact`（非法值直接拒绝，让模型自己改）
+    /// `user` | `decision` | `fact`（非法值直接拒绝，让模型自己改）
     pub kind: &'a str,
     /// `normal`（默认）| `permanent`
     pub level: Option<&'a str>,
     /// 非空 → 详情正文落专用知识库，条目只留 `kb_id` / `doc_id`
     pub detail: Option<&'a str>,
+    /// 这条记忆的可见范围，**选填**：
+    /// - 不传 / `None` → 当前会话工作目录（「写记忆默认就是本项目的」）；
+    /// - `"global"` / `"none"` / 空串 → 跨项目通用；
+    /// - 其他值 → 该目录（用户明确说「记到别的目录下」时）。
+    ///
+    /// ⚠️ **不按分类 / 级别开例外**：`kind = user` / `level = permanent` 不传路径也落工作目录 ——
+    /// 跨项目就显式传 `"global"`。可见范围只由这一字段表达。
+    pub project_path: Option<&'a str>,
 }
 
 /// `memory_write`：写入一条记忆（用户当场说「记住这个」时）。
@@ -288,8 +297,9 @@ pub struct WriteRequest<'a> {
 ///   归档成**改前版**（`disabled + superseded_by`，仍可 `memory_recall`，过了归档保留期才由清理删）——
 ///   这是「同一事实只留一份生效版本」的落地，否则「用 pnpm」与「改用 npm」会同时在库里
 ///   按分数抢排名，等于抛硬币；
-/// - `kind = project` 时**自动**带上当前会话的工作目录作为项目路径（模型不必（也不该）自己猜路径）：
-///   这条记忆之后只在该项目（或其子目录）里注入与召回；
+/// - `project_path` 不给时**自动**带上当前会话的工作目录作为作用域（模型不必（也不该）自己猜路径）：
+///   这条记忆之后只在该目录（或其子目录）里注入与召回；要让一条记忆跨项目可见（如「用户偏好中文回复」）
+///   必须显式传 `project_path = "global"`（分类 / 级别不改变这条规则）；
 /// - `detail` 非空 → 详情落知识库；**落库失败不牵连记忆条目**（返回里说明「只存了摘要」）；
 /// - `level` 可给 `permanent`（已定稿：不设二次确认门，用户可以事后在面板降级 / 停用 / 删除）。
 ///
@@ -319,8 +329,22 @@ pub async fn run_write(
     }
     let level = level.unwrap_or(MEMORY_LEVEL_NORMAL);
     let detail = req.detail.unwrap_or("").trim();
-    // 项目作用域：只有 project 才带，且以**当前工作目录**为值（模型看不到别的项目路径）
-    let project_path = scope_for_write(kind, deps.workspace);
+    // 作用域：不传 → 当前工作目录；`global` / `none` / 空串 → 跨项目通用；其它值 → 该目录
+    //（不按分类 / 级别开例外 —— 可见范围只由 `project_path` 表达，见 `scope::scope_for_write`）
+    let project_path = scope_for_write(req.project_path, deps.workspace);
+    if let Some(p) = project_path.as_deref() {
+        // 超长拒绝而不是截断：截出来的路径指不到任何地方（与命令层同口径）
+        if p.chars().count() > scope::MEMORY_PROJECT_PATH_MAX_CHARS {
+            return Ok(invalid_param(
+                "project_path",
+                p,
+                &format!(
+                    "a directory path under {} characters, or \"global\" for a cross-project memory",
+                    scope::MEMORY_PROJECT_PATH_MAX_CHARS
+                ),
+            ));
+        }
+    }
 
     // ① 写入前查重：只跟**同一作用域**的启用条目比（别的项目 / 已归档的都不参与）
     let candidates = match deps
@@ -404,11 +428,16 @@ pub async fn run_write(
         record.id, record.level, record.kind, record.summary
     );
     if let Some(path) = record.project_path.as_deref() {
-        // 告诉模型它刚写的这条是「项目记忆」：以后再写同类事实时分类才一致
+        // 告诉模型它刚写的这条被定在哪：以后再写同类事实时分类才一致
         content.push_str(&format!(
-            "\nScope: project at {} (injected only in sessions working inside it).",
+            "\nScope: {} (injected only in sessions working inside it — pass project_path \"global\" for a memory that should apply everywhere).",
             path
         ));
+    } else {
+        // 没带路径（= 跨项目通用）：也说一声，否则模型会以为每次都默认落到工作目录
+        content.push_str(
+            "\nScope: global (applies in every project — pass project_path with a directory to keep a memory inside one project).",
+        );
     }
     if let Some(note) = &detail_note {
         content.push('\n');
@@ -827,7 +856,7 @@ mod tests {
         MemoryRecord {
             id: id.into(),
             level: MEMORY_LEVEL_NORMAL.into(),
-            kind: "project".into(),
+            kind: "fact".into(),
             summary: summary.into(),
             origin: "user".into(),
             source_day: "2026-10-05".into(),
@@ -874,7 +903,7 @@ mod tests {
         let r = run_recall(&d, "m1").await.unwrap();
         let w = run_write(
             &d,
-            WriteRequest { summary: "x", kind: "fact", level: None, detail: None },
+            WriteRequest { summary: "x", kind: "fact", level: None, detail: None, project_path: None },
         )
         .await
         .unwrap();
@@ -897,7 +926,7 @@ mod tests {
 
         assert!(out.content.contains("Found 1 memories for \"记忆功能\""));
         // 没有详情 → 不给 id（与注入段同一条规则）
-        assert!(out.content.contains("- (kind: project, level: normal, day: 2026-10-05)"));
+        assert!(out.content.contains("- (kind: fact, level: normal, day: 2026-10-05)"));
         assert!(!out.content.contains("m_a1"), "没详情的条目不得带 id：{out:?}");
         assert!(out.content.contains("memory_recall"));
         assert_eq!(out.ui_data["count"], 1);
@@ -940,7 +969,7 @@ mod tests {
         let bad_level = run_search(&d, "x", Some("very"), None, None).await.unwrap();
         assert!(bad_level.content.contains("Allowed values: normal, permanent"));
         let bad_kind = run_search(&d, "x", None, Some("note"), None).await.unwrap();
-        assert!(bad_kind.content.contains("Allowed values: user, project, decision, fact"));
+        assert!(bad_kind.content.contains("Allowed values: user, decision, fact"));
     }
 
     #[tokio::test]
@@ -1012,19 +1041,24 @@ mod tests {
         let settings = NoopSettingsRepo;
         let d = deps(&repo, &settings);
 
-        let missing = run_write(&d, WriteRequest { summary: "  ", kind: "fact", level: None, detail: None })
+        let missing = run_write(&d, WriteRequest { summary: "  ", kind: "fact", level: None, detail: None, project_path: None })
             .await
             .unwrap();
         assert!(missing.content.starts_with("Missing required parameter: \"summary\""));
 
-        let bad_kind = run_write(&d, WriteRequest { summary: "x", kind: "note", level: None, detail: None })
+        let bad_kind = run_write(&d, WriteRequest { summary: "x", kind: "note", level: None, detail: None, project_path: None })
             .await
             .unwrap();
-        assert!(bad_kind.content.contains("Allowed values: user, project, decision, fact"));
+        assert!(bad_kind.content.contains("Allowed values: user, decision, fact"));
+        // 已废弃的分类：旧 prompt 背出来的 `project` 也必须被拒（否则写进去一条永远无法编辑的脏分类）
+        let legacy_kind = run_write(&d, WriteRequest { summary: "x", kind: "project", level: None, detail: None, project_path: None })
+            .await
+            .unwrap();
+        assert!(legacy_kind.content.contains("Allowed values: user, decision, fact"), "{}", legacy_kind.content);
 
         let bad_level = run_write(
             &d,
-            WriteRequest { summary: "x", kind: "fact", level: Some("high"), detail: None },
+            WriteRequest { summary: "x", kind: "fact", level: Some("high"), detail: None, project_path: None },
         )
         .await
         .unwrap();
@@ -1033,7 +1067,7 @@ mod tests {
         // 正常写入：id 前缀 / 级别默认 normal / 来源会话 / 原文
         let ok = run_write(
             &d,
-            WriteRequest { summary: "  用户偏好中文回复  ", kind: "user", level: None, detail: None },
+            WriteRequest { summary: "  用户偏好中文回复  ", kind: "user", level: None, detail: None, project_path: None },
         )
         .await
         .unwrap();
@@ -1054,7 +1088,7 @@ mod tests {
         let long = "字".repeat(MEMORY_SUMMARY_MAX_CHARS + 20);
         let out = run_write(
             &deps(&repo, &settings),
-            WriteRequest { summary: &long, kind: "user", level: Some(PERM), detail: None },
+            WriteRequest { summary: &long, kind: "user", level: Some(PERM), detail: None, project_path: None },
         )
         .await
         .unwrap();
@@ -1077,6 +1111,7 @@ mod tests {
                 kind: "decision",
                 level: None,
                 detail: Some("很长很长的正文……"),
+                project_path: None,
             },
         )
         .await
@@ -1098,7 +1133,7 @@ mod tests {
 
         let first = run_write(
             &d,
-            WriteRequest { summary: "用户偏好中文回复", kind: "user", level: None, detail: None },
+            WriteRequest { summary: "用户偏好中文回复", kind: "user", level: None, detail: None, project_path: None },
         )
         .await
         .unwrap();
@@ -1107,7 +1142,7 @@ mod tests {
         // 同一句话再写一遍（标点 / 空白差异被归一化掉）：不新建条目
         let again = run_write(
             &d,
-            WriteRequest { summary: "  用户偏好中文回复。", kind: "user", level: None, detail: None },
+            WriteRequest { summary: "  用户偏好中文回复。", kind: "user", level: None, detail: None, project_path: None },
         )
         .await
         .unwrap();
@@ -1130,14 +1165,14 @@ mod tests {
 
         run_write(
             &d,
-            WriteRequest { summary: "用户偏好中文回复", kind: "user", level: None, detail: None },
+            WriteRequest { summary: "用户偏好中文回复", kind: "user", level: None, detail: None, project_path: None },
         )
         .await
         .unwrap();
 
         let upgraded = run_write(
             &d,
-            WriteRequest { summary: "用户偏好中文回复", kind: "user", level: Some(PERM), detail: None },
+            WriteRequest { summary: "用户偏好中文回复", kind: "user", level: Some(PERM), detail: None, project_path: None },
         )
         .await
         .unwrap();
@@ -1147,7 +1182,7 @@ mod tests {
         // 再来一次普通写入：不得降级
         let again = run_write(
             &d,
-            WriteRequest { summary: "用户偏好中文回复", kind: "user", level: None, detail: None },
+            WriteRequest { summary: "用户偏好中文回复", kind: "user", level: None, detail: None, project_path: None },
         )
         .await
         .unwrap();
@@ -1164,7 +1199,7 @@ mod tests {
 
         let old = run_write(
             &d,
-            WriteRequest { summary: "项目用 pnpm 构建", kind: "project", level: None, detail: None },
+            WriteRequest { summary: "项目用 pnpm 构建", kind: "fact", level: None, detail: None, project_path: None },
         )
         .await
         .unwrap();
@@ -1172,7 +1207,7 @@ mod tests {
 
         let new = run_write(
             &d,
-            WriteRequest { summary: "项目用 npm 构建", kind: "project", level: None, detail: None },
+            WriteRequest { summary: "项目用 npm 构建", kind: "fact", level: None, detail: None, project_path: None },
         )
         .await
         .unwrap();
@@ -1206,13 +1241,13 @@ mod tests {
 
         run_write(
             &d,
-            WriteRequest { summary: "项目用 pnpm 构建", kind: "project", level: Some(PERM), detail: None },
+            WriteRequest { summary: "项目用 pnpm 构建", kind: "fact", level: Some(PERM), detail: None, project_path: None },
         )
         .await
         .unwrap();
         let out = run_write(
             &d,
-            WriteRequest { summary: "项目用 npm 构建", kind: "project", level: None, detail: None },
+            WriteRequest { summary: "项目用 npm 构建", kind: "fact", level: None, detail: None, project_path: None },
         )
         .await
         .unwrap();
@@ -1235,7 +1270,7 @@ mod tests {
         let app = deps_in(&repo, &settings, "C:/work/app");
         run_write(
             &app,
-            WriteRequest { summary: "项目用 pnpm 构建", kind: "project", level: None, detail: None },
+            WriteRequest { summary: "项目用 pnpm 构建", kind: "fact", level: None, detail: None, project_path: None },
         )
         .await
         .unwrap();
@@ -1243,7 +1278,7 @@ mod tests {
         let other = deps_in(&repo, &settings, "C:/work/other");
         let out = run_write(
             &other,
-            WriteRequest { summary: "项目用 pnpm 构建", kind: "project", level: None, detail: None },
+            WriteRequest { summary: "项目用 pnpm 构建", kind: "fact", level: None, detail: None, project_path: None },
         )
         .await
         .unwrap();
@@ -1265,7 +1300,7 @@ mod tests {
         let first = deps_in(&repo, &settings, "C:\\work\\app\\");
         run_write(
             &first,
-            WriteRequest { summary: "项目用 pnpm 构建", kind: "project", level: None, detail: None },
+            WriteRequest { summary: "项目用 pnpm 构建", kind: "fact", level: None, detail: None, project_path: None },
         )
         .await
         .unwrap();
@@ -1274,7 +1309,7 @@ mod tests {
         let second = deps_in(&repo, &settings, "C:/work/app");
         let out = run_write(
             &second,
-            WriteRequest { summary: "项目用 pnpm 构建", kind: "project", level: None, detail: None },
+            WriteRequest { summary: "项目用 pnpm 构建", kind: "fact", level: None, detail: None, project_path: None },
         )
         .await
         .unwrap();
@@ -1309,6 +1344,7 @@ mod tests {
                 kind: "decision",
                 level: None,
                 detail: Some("一份新的、更详细的正文"),
+                project_path: None,
             },
         )
         .await
@@ -1332,31 +1368,86 @@ mod tests {
     // ── 项目作用域 ──
 
     #[tokio::test]
-    async fn project_writes_get_the_workspace_others_do_not() {
+    async fn writes_default_to_the_workspace_and_global_is_opt_in() {
         let repo = StubRepo::new(true, vec![]);
         let settings = NoopSettingsRepo;
         let d = deps_in(&repo, &settings, "C:/work/app");
 
-        run_write(&d, WriteRequest { summary: "项目约定", kind: "project", level: None, detail: None })
+        // 不传 project_path（模型惰性）→ 当前工作目录
+        run_write(&d, WriteRequest { summary: "项目约定", kind: "fact", level: None, detail: None, project_path: None })
             .await
             .unwrap();
-        run_write(&d, WriteRequest { summary: "用户喜欢简洁", kind: "user", level: None, detail: None })
+        // ⚠️ **分类 / 级别不改变作用域**（用户定口径：可见范围只由 `project_path` 表达）：
+        // user 与 permanent 不传路径也落工作目录，要跨项目就显式传 "global"
+        run_write(&d, WriteRequest { summary: "用户喜欢简洁", kind: "user", level: None, detail: None, project_path: None })
             .await
             .unwrap();
+        run_write(&d, WriteRequest { summary: "用户是中文母语", kind: "user", level: Some(PERM), detail: None, project_path: None })
+            .await
+            .unwrap();
+        // 显式全局
+        run_write(
+            &d,
+            WriteRequest { summary: "用户偏好中文回复", kind: "user", level: None, detail: None, project_path: Some("global") },
+        )
+        .await
+        .unwrap();
+        // 显式别的目录
+        run_write(
+            &d,
+            WriteRequest { summary: "另一个项目的约定", kind: "fact", level: None, detail: None, project_path: Some("D:/code/other") },
+        )
+        .await
+        .unwrap();
 
         let stored = repo.items.lock().unwrap().clone();
-        assert_eq!(stored[0].project_path.as_deref(), Some("C:/work/app"));
-        assert_eq!(stored[1].project_path, None, "非 project 分类不限定项目");
+        let path_of = |summary: &str| {
+            stored
+                .iter()
+                .find(|m| m.summary == summary)
+                .unwrap()
+                .project_path
+                .clone()
+        };
+        assert_eq!(path_of("项目约定").as_deref(), Some("C:/work/app"));
+        assert_eq!(
+            path_of("用户喜欢简洁").as_deref(),
+            Some("C:/work/app"),
+            "kind = user 也不跳项目（不按分类开例外）"
+        );
+        assert_eq!(
+            path_of("用户是中文母语").as_deref(),
+            Some("C:/work/app"),
+            "permanent 也不跳项目：要全量注入就显式传 global"
+        );
+        assert_eq!(path_of("用户偏好中文回复"), None, "global = 跨项目通用");
+        assert_eq!(path_of("另一个项目的约定").as_deref(), Some("D:/code/other"));
 
-        // 没有工作目录时（CLI / 未设目录的会话）project 也不带路径 = 通用记忆
+        // 没有工作目录且没显式指定 → 全局（不编一个路径出来）
         let repo2 = StubRepo::new(true, vec![]);
         run_write(
             &deps_in(&repo2, &settings, "  "),
-            WriteRequest { summary: "项目约定", kind: "project", level: None, detail: None },
+            WriteRequest { summary: "项目约定", kind: "fact", level: None, detail: None, project_path: None },
         )
         .await
         .unwrap();
         assert_eq!(repo2.items.lock().unwrap()[0].project_path, None);
+    }
+
+    /// 显式传的路径超过上限：拒绝（不是截断 —— 截出来的路径指不到任何地方）
+    #[tokio::test]
+    async fn too_long_explicit_path_is_rejected() {
+        let repo = StubRepo::new(true, vec![]);
+        let settings = NoopSettingsRepo;
+        let long = format!("C:/{}", "a".repeat(scope::MEMORY_PROJECT_PATH_MAX_CHARS));
+        let out = run_write(
+            &deps(&repo, &settings),
+            WriteRequest { summary: "x", kind: "fact", level: None, detail: None, project_path: Some(&long) },
+        )
+        .await
+        .unwrap();
+        assert!(out.content.contains("project_path"), "{}", out.content);
+        assert!(repo.items.lock().unwrap().is_empty(), "拒绝就不该落库");
     }
 
     #[tokio::test]
@@ -1365,11 +1456,13 @@ mod tests {
         let settings = NoopSettingsRepo;
         let out = run_write(
             &deps_in(&repo, &settings, "C:/work/app"),
-            WriteRequest { summary: "项目约定", kind: "project", level: None, detail: None },
+            WriteRequest { summary: "项目约定", kind: "fact", level: None, detail: None, project_path: None },
         )
         .await
         .unwrap();
-        assert!(out.content.contains("Scope: project at C:/work/app"), "{}", out.content);
+        assert!(out.content.contains("Scope: C:/work/app"), "{}", out.content);
+        // 必须顺手告诉模型「想让这条处处生效该怎么传」，否则下一句跨项目偏好又被锁进来
+        assert!(out.content.contains("project_path \"global\""), "{}", out.content);
         assert_eq!(out.ui_data["projectPath"], "C:/work/app");
     }
 

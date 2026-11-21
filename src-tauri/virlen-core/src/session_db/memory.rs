@@ -45,7 +45,10 @@ CREATE TABLE IF NOT EXISTS memories (
   -- 被哪个新条目顶替的（再蒸馏的软删标记）：非空 + disabled = 1 = 已归档。
   -- ⚠️ 它同时是**归档清理（GC）的判定字段**：没有它 = 用户自己停用的，永不清理。
   -- 老库的列由 `schema.rs` 的 `ensure_memories_superseded_by_column` 补出（补为 NULL）。
-  superseded_by     TEXT
+  superseded_by     TEXT,
+  -- 详情正文超过单条归档上限（单条装不进归档 → 永不参与再蒸馏）；由再蒸馏实测后回写。
+  -- 老库的列由 `schema.rs` 的 `ensure_memories_detail_too_long_column` 补出（补为 0）。
+  detail_too_long   INTEGER NOT NULL DEFAULT 0
 );
 
 -- 注入选取：先按级别 + 未禁用定位，再按热度 / 时间倒序（与 agent::memory::select_for_inject 口径一致）
@@ -85,6 +88,7 @@ CREATE TABLE IF NOT EXISTS memory_redistill_runs (
   drifted        INTEGER NOT NULL DEFAULT 0,  -- CAS 未命中的来源数（期间被改过）
   purged         INTEGER NOT NULL DEFAULT 0,  -- 本轮清理掉多少条归档超期的旧条目
   purged_failed  INTEGER NOT NULL DEFAULT 0,
+  purged_retained INTEGER NOT NULL DEFAULT 0, -- 被护栏 ④ 挡下、再也不会被删的条数（需人工处理）
   out_ids        TEXT NOT NULL DEFAULT '[]',  -- 本次产出的新条目 id（只存 id，不存正文）
   model          TEXT,
   error          TEXT,
@@ -104,11 +108,11 @@ pub const MEMORY_LEVEL_NORMAL: &str = "normal";
 /// 永久记忆：**全量注入**，不参与 top-k 淘汰
 pub const MEMORY_LEVEL_PERMANENT: &str = "permanent";
 
-/// 项目记忆的分类值（与 TS `MEMORY_KINDS` 里的 `project` 同值）。
+/// 老分类值 `project`（**已废弃**）：分类只剩 `user` / `decision` / `fact`，路径改为**任何分类都可带**。
 ///
-/// 只有它才允许带 `project_path`：别的分类是「跨项目通用的事实」，带上路径会让该记忆
-/// 凭空只在某一个目录下可见（用户也不会想到去别的项目找它）。
-pub const MEMORY_KIND_PROJECT: &str = "project";
+/// 保留这个常量只为一件事：`schema.rs` 的开库迁移要把老数据改成 `fact`（迁移完就再也不会有
+/// 这个值）。⚠️ 不要在任何「校验 / 下拉 / 提示词」里再用它。
+pub const MEMORY_KIND_PROJECT_LEGACY: &str = "project";
 
 /// `memories.origin`：创建方式（重蒸馏只动 AI 产出的条目，用户手写的一律不碰）
 ///
@@ -126,13 +130,23 @@ pub const MEMORY_REDISTILL_RUNNING: &str = "running";
 pub const MEMORY_REDISTILL_DONE: &str = "done";
 /// 跑完但有降级（来源被改动 / 详情读不到 / 没收益）
 pub const MEMORY_REDISTILL_PARTIAL: &str = "partial";
-/// 没什么可做（无有效输出、知识库不可用……）：不写库，也算「这一批处理过了」
+/// 没什么可做（无有效输出 → 这一批算处理过了；或闸门级跳过 → 见 [`MEMORY_REDISTILL_GATE_PREFIX`]）
 pub const MEMORY_REDISTILL_SKIPPED: &str = "skipped";
 /// 模型调用 / 落库失败：`attempts` 未耗尽前可重试
 pub const MEMORY_REDISTILL_FAILED: &str = "failed";
 
 /// 清理任务的主键（它自己的幂等键：全局唯一的一行，`finished_at` = 上次清理时间）
 pub const MEMORY_REDISTILL_PURGE_FINGERPRINT: &str = "purge";
+
+/// 闸门 / 报告级跳过的流水指纹前缀：`gate:<reason>`（`gate:no-rag` / `gate:no-model` …）。
+///
+/// 这类跳过**没有批次指纹可用**：拿真实指纹记一行 `skipped` 会让那一批永久判成
+/// 「已处理」（`decide_claim` 把 `skipped` 当终态），一次环境问题就废掉一批记忆。
+/// 所以另开一族指纹 —— 它只回答「上次自动整理为什么什么都没做」。
+///
+/// ⚠️ [`MemoryRepo::last_redistill_run`]（冷却与退避的输入）必须把这族行排除：
+/// 否则「知识库还没就绪」也会启动 30 分钟冷却，反过来让自动整理更久不动。
+pub const MEMORY_REDISTILL_GATE_PREFIX: &str = "gate:";
 
 /// 一次再蒸馏的流水（`memory_redistill_runs` 一行的镜像；CLI / 将来的面板看它）
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -153,6 +167,10 @@ pub struct MemoryRedistillRun {
     pub drifted: i64,
     pub purged: i64,
     pub purged_failed: i64,
+    /// 被护栏 ④ **保留**下来的条数（指向的新条目已不存在 / 没有归档详情）。
+    ///
+    /// 这些条目代码不会再动它们（除非人工），所以必须能被面板说出来 —— 只打日志等于静默。
+    pub purged_retained: i64,
     /// 本次产出的新条目 id（只存 id，不存正文）
     pub out_ids: Vec<String>,
     /// 实际使用的模型（`providerConfigId/modelId`）
@@ -199,6 +217,8 @@ pub struct ClaimOptions {
     pub stale_ms: i64,
     /// 失败后最多尝试几次
     pub max_attempts: i64,
+    /// 尝试耗尽后的长期退避（过了它才再放一次；`decide_claim` 的两个分支都用得上）
+    pub exhausted_retry_ms: i64,
     /// `true` = 忽略已有状态（面板 / CLI 的 `--force`）；自动触发永远为 `false`
     pub force: bool,
 }
@@ -209,13 +229,18 @@ pub struct ClaimOptions {
 /// - 没有记录 → 抢；
 /// - `running` 且未超 `stale_ms` → 让给别人（多窗口 / GUI + CLI 同时开着只跑一次）；
 ///   超过阈值（进程被杀留下的残留）→ 抢占，否则那一批永远卡在 `running`；
-/// - `failed` 且 `attempts < max_attempts` → 允许重试；
+/// - `failed` 且 `attempts < max_attempts` → 允许重试；尝试耗尽后再过 `exhausted_retry_ms` 依然允许；
 /// - 其余（含未知状态）→ 视为已处理：宁可少跑一次，也不要让「重复整理」把记忆写两遍。
+///
+/// ⚠️ 「尝试耗尽」**不能是永久判定**：批次指纹只由来源 `id + updated_at` 决定，来源不再变动时它
+/// 永远不会变 —— 一次网络抖动用光 3 次尝试，这批记忆就永久退出整理（用户永远看不到它们被合并）。
+/// 所以耗尽只是「先别再试」，过了长期退避仍然放一次。
 pub fn decide_claim(
     existing: Option<&MemoryRedistillRun>,
     now_ms: i64,
     stale_ms: i64,
     max_attempts: i64,
+    exhausted_retry_ms: i64,
     force: bool,
 ) -> ClaimDecision {
     if force {
@@ -234,6 +259,10 @@ pub fn decide_claim(
         }
         MEMORY_REDISTILL_FAILED => {
             if run.attempts < max_attempts.max(1) {
+                return ClaimDecision::Claimed;
+            }
+            let finished = run.finished_at.unwrap_or(run.started_at);
+            if now_ms.saturating_sub(finished) >= exhausted_retry_ms.max(0) {
                 ClaimDecision::Claimed
             } else {
                 ClaimDecision::Exhausted
@@ -262,11 +291,11 @@ pub struct MemoryRecord {
     pub id: String,
     /// `normal` | `permanent`
     pub level: String,
-    /// `user` | `project` | `decision` | `fact`
+    /// `user` | `decision` | `fact`（老数据里的 `project` 由开库迁移改成 `fact`）
     pub kind: String,
     /// 记忆正文（硬上限见 `agent::memory::MEMORY_SUMMARY_MAX_CHARS`；写入前由命令层钳制）
     pub summary: String,
-    /// 项目路径（仅 `kind = project` 才有）：该记忆只在「工作目录 = 它 或 它之下的子目录」
+    /// 项目路径（**任何分类都可带**，选填）：该记忆只在「工作目录 = 它 或 它之下的子目录」
     /// 的会话里注入与召回。`None` / 空 = 不限定项目（跨项目通用）。
     ///
     /// 老库的列由 `schema.rs` 的 `ensure_memories_project_path_column` 补出（补为 NULL = 通用），
@@ -290,6 +319,14 @@ pub struct MemoryRecord {
     /// `None` = 没被顶替（用户手写的、或从未参与过合并）—— 这是 **GC 的判定字段**：
     /// 没有它 = 用户自己停用的，永不清理。老库的列由 `ensure_memories_superseded_by_column` 补出。
     pub superseded_by: Option<String>,
+    /// 详情正文长到**永远装不进归档**（单条就超过 `MEMORY_REDISTILL_MAX_SOURCE_DETAIL_CHARS`）：
+    /// 这种条目再蒸馏永不参与（停用来源的前提是原文进得了归档）。
+    ///
+    /// 为什么要落成列：正文在知识库里，而闸门（`redistill_stats`）只查 `memories` 表 ——
+    /// 不落标记的话，这些永不参与合并的条目会一直计入候选条数，让闸门永远判「越线了」，
+    /// 一次次触发整理（读库 / 切批 / 量详情）却一条都合并不动。
+    /// 编辑一条记忆（`upsert`）会把标记清零 = 重新量一次。
+    pub detail_too_long: bool,
 }
 
 /// 记忆仓储端口。
@@ -326,6 +363,14 @@ pub trait MemoryRepo: Send + Sync {
 
     /// 启用 / 禁用（禁用 = 不注入、不参与召回）；返回是否命中
     async fn set_disabled(&self, id: &str, disabled: bool) -> Result<bool, String>;
+
+    /// 给这几条打上「详情太长、永远装不进归档」的标记（再蒸馏实测后回写；返回命中行数）。
+    ///
+    /// 默认实现什么都不做（测试桩 / [`NoopMemoryRepo`]）——它只是闸门计数的优化，
+    /// 漏掉只会让闸门多触发几次，不会错合并。
+    async fn mark_detail_too_long(&self, _ids: &[String]) -> Result<usize, String> {
+        Ok(0)
+    }
 
     /// 注入后记一次使用（`hits += 1` / `last_used_at = now`）——top-k 排序的输入
     async fn touch(&self, ids: &[String], now_ms: i64) -> Result<(), String>;
@@ -478,6 +523,7 @@ fn memory_from_row(row: &rusqlite::Row) -> rusqlite::Result<MemoryRecord> {
             .get::<_, Option<String>>("superseded_by")?
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
+        detail_too_long: row.get::<_, i64>("detail_too_long")? != 0,
     })
 }
 
@@ -494,6 +540,7 @@ fn run_from_row(row: &rusqlite::Row) -> rusqlite::Result<MemoryRedistillRun> {
         drifted: row.get("drifted")?,
         purged: row.get("purged")?,
         purged_failed: row.get("purged_failed")?,
+        purged_retained: row.get("purged_retained")?,
         // 坏行不报错：`out_ids` 只是「将来能撤销」的线索，不值得让整条流水读不出来
         out_ids: serde_json::from_str(&out_ids_json).unwrap_or_default(),
         model: row.get("model")?,
@@ -640,7 +687,8 @@ fn redistill_stats_in_conn(
 ) -> Result<RedistillStats, String> {
     let candidates = conn
         .query_row(
-            "SELECT COUNT(*) FROM memories WHERE disabled = 0 AND origin <> ?1",
+            "SELECT COUNT(*) FROM memories \
+             WHERE disabled = 0 AND origin <> ?1 AND detail_too_long = 0",
             params![MEMORY_ORIGIN_USER],
             |row| row.get::<_, i64>(0),
         )
@@ -660,7 +708,8 @@ fn redistill_stats_in_conn(
 
     let has_group = conn
         .query_row(
-            "SELECT 1 FROM memories WHERE disabled = 0 AND origin <> ?1 \
+            "SELECT 1 FROM memories \
+             WHERE disabled = 0 AND origin <> ?1 AND detail_too_long = 0 \
              GROUP BY COALESCE(TRIM(project_path), '') HAVING COUNT(*) >= ?2 LIMIT 1",
             params![MEMORY_ORIGIN_USER, min_group_items.max(2) as i64],
             |row| row.get::<_, i64>(0),
@@ -823,9 +872,9 @@ fn upsert_run_in_conn(conn: &Connection, run: &MemoryRedistillRun) -> Result<(),
     conn.execute(
         "INSERT INTO memory_redistill_runs (
             fingerprint, status, scope, items_in, items_out, details, drifted, purged,
-            purged_failed, out_ids, model, error, attempts, started_at, finished_at,
+            purged_failed, purged_retained, out_ids, model, error, attempts, started_at, finished_at,
             prompt_tokens, completion_tokens
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
          ON CONFLICT(fingerprint) DO UPDATE SET
             status = excluded.status,
             scope = excluded.scope,
@@ -835,6 +884,7 @@ fn upsert_run_in_conn(conn: &Connection, run: &MemoryRedistillRun) -> Result<(),
             drifted = excluded.drifted,
             purged = excluded.purged,
             purged_failed = excluded.purged_failed,
+            purged_retained = excluded.purged_retained,
             out_ids = excluded.out_ids,
             model = excluded.model,
             error = excluded.error,
@@ -853,6 +903,7 @@ fn upsert_run_in_conn(conn: &Connection, run: &MemoryRedistillRun) -> Result<(),
             run.drifted,
             run.purged,
             run.purged_failed,
+            run.purged_retained,
             serde_json::to_string(&run.out_ids).unwrap_or_else(|_| "[]".to_string()),
             run.model,
             run.error,
@@ -888,6 +939,10 @@ fn id_taken_in_conn(conn: &Connection, id: &str) -> Result<bool, String> {
 /// ⚠️ `superseded_by` **刻意不进写入列清单**：它是「被谁顶替」这个**历史事实**，同样不能被
 /// 编辑摘要抹掉（否则一次编辑就能让归档清理的护栏失效）。新条目不写该列 → 自然为 NULL。
 /// 唯一的写入点是 [`MemoryRepo::supersede`]。
+///
+/// `detail_too_long` **不进**写入列清单：它只能由 [`MemoryRepo::mark_detail_too_long`] 置 1，
+/// 而任何一次 `upsert`（编辑）都把它清零 = 「内容变了就该重新量」。若让它跟着调用方传的值走，
+/// 前端把整行回传时就会把标记一起带回来。
 fn upsert_in_conn(conn: &Connection, r: &MemoryRecord, now_ms: i64) -> Result<(), String> {
     let created_at = if r.created_at > 0 {
         r.created_at
@@ -914,6 +969,9 @@ fn upsert_in_conn(conn: &Connection, r: &MemoryRecord, now_ms: i64) -> Result<()
             tags = excluded.tags,
             origin = excluded.origin,
             disabled = excluded.disabled,
+            -- 编辑一次 = 重新量一次：标记清零，详情变小后能重新参与整理
+            --（新行不在列表里，靠列的 DEFAULT 0）
+            detail_too_long = 0,
             updated_at = excluded.updated_at",
         params![
             r.id,
@@ -1047,6 +1105,36 @@ impl MemoryRepo for SqliteMemoryRepo {
         .map_err(|e| format!("DB task join error: {}", e))?
     }
 
+    async fn mark_detail_too_long(&self, ids: &[String]) -> Result<usize, String> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let conn = self.conn.clone();
+        let ids = ids.to_vec();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().unwrap();
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| format!("开启详情过长标记事务失败: {}", e))?;
+            let mut hit = 0usize;
+            {
+                let mut stmt = tx
+                    .prepare("UPDATE memories SET detail_too_long = 1 WHERE id = ?1 AND detail_too_long = 0")
+                    .map_err(|e| format!("准备详情过长标记失败: {}", e))?;
+                for id in &ids {
+                    hit += stmt
+                        .execute(params![id])
+                        .map_err(|e| format!("标记详情过长失败: {}", e))?;
+                }
+            }
+            tx.commit()
+                .map_err(|e| format!("提交详情过长标记事务失败: {}", e))?;
+            Ok(hit)
+        })
+        .await
+        .map_err(|e| format!("DB task join error: {}", e))?
+    }
+
     async fn touch(&self, ids: &[String], now_ms: i64) -> Result<(), String> {
         if ids.is_empty() {
             return Ok(());
@@ -1153,6 +1241,7 @@ impl MemoryRepo for SqliteMemoryRepo {
                 opts.now_ms,
                 opts.stale_ms,
                 opts.max_attempts,
+                opts.exhausted_retry_ms,
                 opts.force,
             ) != ClaimDecision::Claimed
             {
@@ -1204,9 +1293,12 @@ impl MemoryRepo for SqliteMemoryRepo {
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock().unwrap();
             conn.query_row(
-                "SELECT * FROM memory_redistill_runs WHERE fingerprint <> ?1 \
+                // 闸门级跳过（`gate:*`）**不参与**冷却 / 退避判定：它们只回答「上次为什么没跑」，
+                // 拿来当 last_run 会让一次环境问题启动 30 分钟冷却，反而更久不动。
+                "SELECT * FROM memory_redistill_runs \
+                 WHERE fingerprint <> ?1 AND substr(fingerprint, 1, length(?2)) <> ?2 \
                  ORDER BY started_at DESC LIMIT 1",
-                params![MEMORY_REDISTILL_PURGE_FINGERPRINT],
+                params![MEMORY_REDISTILL_PURGE_FINGERPRINT, MEMORY_REDISTILL_GATE_PREFIX],
                 run_from_row,
             )
             .optional()
@@ -1305,7 +1397,7 @@ mod tests {
         MemoryRecord {
             id: id.into(),
             level: level.into(),
-            kind: "project".into(),
+            kind: "fact".into(),
             summary: summary.into(),
             tags: vec!["virlen-app".into()],
             source_day: "2026-10-05".into(),
@@ -1403,6 +1495,40 @@ mod tests {
             Some("C:/code/app")
         );
         assert_eq!(repo.search("升级前", None, None, 5).await.unwrap().len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 分类收敛：老库的 `kind = 'project'` 开库后变成 `fact`（**路径原样保留**：可见范围才是实质信息）
+    #[tokio::test]
+    async fn legacy_project_kind_is_migrated_to_fact_on_open() {
+        let dir = std::env::temp_dir().join(format!("virlen_memory_kind_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("virlen.db");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.execute_batch(MEMORY_DDL).unwrap();
+            conn.execute_batch(
+                "INSERT INTO memories (id, level, kind, summary, project_path, tags, source_day, origin, created_at, updated_at)\n\
+                 VALUES ('m_p', 'normal', 'project', '升级前的项目记忆', 'C:/code/app', '[]', '', 'model', 1, 1);\n\
+                 INSERT INTO memories (id, level, kind, summary, tags, source_day, origin, created_at, updated_at)\n\
+                 VALUES ('m_f', 'normal', 'fact', '本来就是事实', '[]', '', 'model', 2, 2);\n\
+                 INSERT INTO memories_fts(memories_fts) VALUES('rebuild');",
+            )
+            .unwrap();
+        }
+
+        let session = crate::session_db::sqlite::SqliteSessionRepo::open(&db).unwrap();
+        let repo = SqliteMemoryRepo::new(session.conn.clone());
+        let legacy = repo.get("m_p").await.unwrap().unwrap();
+        assert_eq!(legacy.kind, "fact", "废掉的分类必须就地改掉，否则面板永远编辑不了它");
+        assert_eq!(legacy.project_path.as_deref(), Some("C:/code/app"), "路径不能跟着分类一起丢");
+        assert_eq!(repo.get("m_f").await.unwrap().unwrap().kind, "fact");
+        // 迁移不能把 FTS 弄坏（触发器与外部内容表要跟着更新）
+        assert_eq!(repo.search("升级前", None, None, 5).await.unwrap().len(), 1);
+        assert!(
+            repo.list(None, true).await.unwrap().iter().all(|m| m.kind == "fact"),
+            "库里不该再有任何旧分类"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1803,11 +1929,14 @@ mod tests {
         let db = dir.join("virlen.db");
         {
             let conn = rusqlite::Connection::open(&db).unwrap();
-            // 「上一个版本」的表结构 = 当前 DDL 删掉 superseded_by 那一列 —— **不手抄 DDL**，
+            // 「上一个版本」的表结构 = 当前 DDL 删掉**后来才补的两列** —— **不手抄 DDL**，
             // 而且按行处理（源码里混有 CRLF / LF，直接匹配带换行的整行会依赖文件行尾）
             let legacy_ddl: String = MEMORY_DDL
                 .lines()
-                .filter(|l| !l.trim_start().starts_with("superseded_by"))
+                .filter(|l| {
+                    let t = l.trim_start();
+                    !t.starts_with("superseded_by") && !t.starts_with("detail_too_long")
+                })
                 .collect::<Vec<_>>()
                 .join("\n")
                 // 列删了，它前面的逗号也得去（否则 `DEFAULT 0, )` 是语法错）
@@ -1816,8 +1945,9 @@ mod tests {
                     "disabled          INTEGER NOT NULL DEFAULT 0",
                 );
             assert!(
-                !legacy_ddl.contains("superseded_by     TEXT"),
-                "DDL 里找不到 superseded_by 那一行 —— 改列名/缩进时记得同步本用例"
+                !legacy_ddl.contains("superseded_by     TEXT")
+                    && !legacy_ddl.contains("detail_too_long   INTEGER"),
+                "DDL 里找不到这两列 —— 改列名/缩进时记得同步本用例"
             );
             conn.execute_batch(&legacy_ddl).unwrap();
             conn.execute_batch(
@@ -1833,6 +1963,7 @@ mod tests {
         let all = repo.list(None, true).await.unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].superseded_by, None, "补出来的列是 NULL");
+        assert!(!all[0].detail_too_long, "补出来的标记是 0 = 还没量过，不该把老记忆一次排除出整理");
 
         // 幂等：再开一次不报错（补列在快速路径里跑两次）
         let session2 = crate::session_db::sqlite::SqliteSessionRepo::open(&db).unwrap();
@@ -1851,6 +1982,70 @@ mod tests {
             repo.get("m_up").await.unwrap().unwrap().superseded_by.as_deref(),
             Some("m_new")
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 老库补 `memory_redistill_runs.purged_retained` 列：不补的话 `run_from_row` 按列名取字段会**整表查询报错**
+    ///（不是单行降级）—— 面板「上次整理」与冷却 / 退避判定全挂在它上面。
+    #[tokio::test]
+    async fn legacy_redistill_runs_table_gets_purged_retained_column() {
+        let dir = std::env::temp_dir().join(format!(
+            "virlen_runs_legacy_retained_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("virlen.db");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            // 「上一个版本」= 当前 DDL 删掉那一列（不手抄 DDL；按行处理避免 CRLF/LF 差异）
+            let legacy_ddl: String = MEMORY_DDL
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("purged_retained"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                !legacy_ddl.contains("purged_retained"),
+                "DDL 里找不到 purged_retained 那一行 —— 改列名 / 缩进时记得同步本用例"
+            );
+            conn.execute_batch(&legacy_ddl).unwrap();
+            // 一条遗留流水（那时还没有这一列）
+            conn.execute_batch(
+                "INSERT INTO memory_redistill_runs (fingerprint, status, started_at, finished_at)
+\
+                 VALUES ('purge', 'done', 1, 1);",
+            )
+            .unwrap();
+        }
+
+        let session = crate::session_db::sqlite::SqliteSessionRepo::open(&db).unwrap();
+        let repo = SqliteMemoryRepo::new(session.conn.clone());
+        let runs = repo.list_redistill_runs(10).await.unwrap();
+        assert_eq!(runs.len(), 1, "老库的流水必须照样读得出来（缺列不能把整表查询弄挂）");
+        assert_eq!(runs[0].purged_retained, 0, "补出来是 0 = 那时没统计过，不冒充「保留过 N 条」");
+
+        // 新列可写：写→读回环
+        let row = MemoryRedistillRun {
+            fingerprint: MEMORY_REDISTILL_PURGE_FINGERPRINT.to_string(),
+            status: MEMORY_REDISTILL_DONE.to_string(),
+            purged: 2,
+            purged_retained: 3,
+            started_at: 1_700_000_000_000,
+            finished_at: Some(1_700_000_000_000),
+            ..Default::default()
+        };
+        repo.finish_redistill_run(&row).await.unwrap();
+        let got = repo
+            .get_redistill_run(MEMORY_REDISTILL_PURGE_FINGERPRINT)
+            .await
+            .unwrap()
+            .expect("刚写的流水要读得回来");
+        assert_eq!(got.purged_retained, 3);
+        assert_eq!(got.purged, 2);
+
+        // 幂等：再开一次不报错（补列在快速路径里跑两次）
+        let session2 = crate::session_db::sqlite::SqliteSessionRepo::open(&db).unwrap();
+        let repo2 = SqliteMemoryRepo::new(session2.conn.clone());
+        assert_eq!(repo2.list_redistill_runs(10).await.unwrap().len(), 1);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1928,52 +2123,116 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// 抢锁四个分支（纯函数）—— DB 只负责执行它
+    /// 抢锁分支（纯函数）—— DB 只负责执行它
     #[test]
     fn decide_claim_covers_the_four_branches() {
         let now = 1_700_000_000_000i64;
+        /// 尝试耗尽后的长期退避（与生产同一个 7 天量级，但测试里用可读的小值）
+        const RETRY: i64 = 604_800_000;
         let run = |status: &str, attempts: i64, started_at: i64| MemoryRedistillRun {
             status: status.into(),
             attempts,
             started_at,
+            finished_at: Some(started_at),
             ..Default::default()
         };
         assert_eq!(
-            decide_claim(None, now, 600_000, 3, false),
+            decide_claim(None, now, 600_000, 3, RETRY, false),
             ClaimDecision::Claimed,
             "没记录 → 抢"
         );
         assert_eq!(
-            decide_claim(Some(&run(MEMORY_REDISTILL_DONE, 1, now)), now, 600_000, 3, false),
+            decide_claim(
+                Some(&run(MEMORY_REDISTILL_DONE, 1, now)),
+                now,
+                600_000,
+                3,
+                RETRY,
+                false
+            ),
             ClaimDecision::AlreadyDone
         );
         assert_eq!(
-            decide_claim(Some(&run(MEMORY_REDISTILL_SKIPPED, 1, now)), now, 600_000, 3, false),
+            decide_claim(
+                Some(&run(MEMORY_REDISTILL_SKIPPED, 1, now)),
+                now,
+                600_000,
+                3,
+                RETRY,
+                false
+            ),
             ClaimDecision::AlreadyDone,
             "跳过也算处理过了（否则无收益的批会无限重试）"
         );
         assert_eq!(
-            decide_claim(Some(&run(MEMORY_REDISTILL_FAILED, 1, now)), now, 600_000, 3, false),
+            decide_claim(
+                Some(&run(MEMORY_REDISTILL_FAILED, 1, now)),
+                now,
+                600_000,
+                3,
+                RETRY,
+                false
+            ),
             ClaimDecision::Claimed,
             "失败但没耗尽 → 可重试"
         );
         assert_eq!(
-            decide_claim(Some(&run(MEMORY_REDISTILL_FAILED, 3, now)), now, 600_000, 3, false),
+            decide_claim(
+                Some(&run(MEMORY_REDISTILL_FAILED, 3, now)),
+                now,
+                600_000,
+                3,
+                RETRY,
+                false
+            ),
             ClaimDecision::Exhausted,
-            "尝试耗尽 → 等人工"
+            "尝试耗尽 → 先别再试"
         );
         assert_eq!(
-            decide_claim(Some(&run(MEMORY_REDISTILL_RUNNING, 1, now - 1_000)), now, 600_000, 3, false),
+            decide_claim(
+                Some(&run(MEMORY_REDISTILL_FAILED, 3, now - RETRY - 1)),
+                now,
+                600_000,
+                3,
+                RETRY,
+                false
+            ),
+            ClaimDecision::Claimed,
+            "⚠️ 耗尽不是永久拉黑：批次指纹在来源不变时永远不会变，否则一次网络抖动就把这批记忆永久逐出整理"
+        );
+        assert_eq!(
+            decide_claim(
+                Some(&run(MEMORY_REDISTILL_RUNNING, 1, now - 1_000)),
+                now,
+                600_000,
+                3,
+                RETRY,
+                false
+            ),
             ClaimDecision::Busy,
             "别人在跑 → 让开（多窗口只跑一次）"
         );
         assert_eq!(
-            decide_claim(Some(&run(MEMORY_REDISTILL_RUNNING, 1, now - 700_000)), now, 600_000, 3, false),
+            decide_claim(
+                Some(&run(MEMORY_REDISTILL_RUNNING, 1, now - 700_000)),
+                now,
+                600_000,
+                3,
+                RETRY,
+                false
+            ),
             ClaimDecision::Claimed,
             "崩溃残留（超老化阈值）→ 抢占"
         );
         assert_eq!(
-            decide_claim(Some(&run(MEMORY_REDISTILL_RUNNING, 1, now)), now, 600_000, 3, true),
+            decide_claim(
+                Some(&run(MEMORY_REDISTILL_RUNNING, 1, now)),
+                now,
+                600_000,
+                3,
+                RETRY,
+                true
+            ),
             ClaimDecision::Claimed,
             "force（用户的显式动作）→ 直接抢"
         );
@@ -1988,6 +2247,7 @@ mod tests {
             now_ms: now,
             stale_ms: 600_000,
             max_attempts: 3,
+            exhausted_retry_ms: 604_800_000,
             force: false,
         };
 
@@ -2119,6 +2379,87 @@ mod tests {
         let stats = repo.redistill_stats(1_700_000_000_000, 2_592_000_000, 5).await.unwrap();
         assert_eq!(stats.candidates, 5, "被停用的那条退出候选");
         assert_eq!(stats.purge_candidates, 1, "停用时刻 1_000 → 远超出保留期");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 「详情装不进归档」的条目**不再计入候选**，且编辑一次就能重新参与。
+    ///
+    /// 缺陷背景：这些条目永远参与不了合并（停用来源的前提是原文进得了归档），但它们仍计入
+    /// 候选条数 → 闸门每次都判「越线了」，一轮轮读库 / 切批 / 量详情却一条也合并不动。
+    #[tokio::test]
+    async fn detail_too_long_entries_drop_out_of_the_gate_and_come_back_after_an_edit() {
+        let (repo, dir) = tmp_repo();
+        for i in 0..6 {
+            let mut r = record(&format!("m_a{i}"), MEMORY_LEVEL_NORMAL, "x");
+            r.origin = MEMORY_ORIGIN_MODEL.into();
+            repo.upsert(&r).await.unwrap();
+        }
+
+        // 标两条（返回命中数；重复标不再计数）
+        let ids = vec!["m_a0".to_string(), "m_a1".to_string()];
+        assert_eq!(repo.mark_detail_too_long(&ids).await.unwrap(), 2);
+        assert_eq!(repo.mark_detail_too_long(&ids).await.unwrap(), 0, "幂等");
+
+        let stats = repo.redistill_stats(1_700_000_000_000, 2_592_000_000, 4).await.unwrap();
+        assert_eq!(stats.candidates, 4, "被标记的那两条不再计数");
+        assert!(stats.has_group, "剩下的 4 条仍在一个作用域里（阈值 4）");
+        assert!(
+            !repo
+                .redistill_stats(1_700_000_000_000, 2_592_000_000, 5)
+                .await
+                .unwrap()
+                .has_group,
+            "但如果它们把组拖到 5 条就成不成组了 —— 闸门就会一直判越线"
+        );
+        let got = repo.get("m_a0").await.unwrap().unwrap();
+        assert!(got.detail_too_long);
+        assert!(
+            !crate::agent::memory::redistill::plan::is_redistill_candidate(&got),
+            "分组也要排除它（否则它一直占着批次名额反复被量）"
+        );
+
+        // 编辑一次 = 重新量一次（细节变小后能重新参与）
+        let mut edited = got.clone();
+        edited.summary = "改短了".into();
+        repo.upsert(&edited).await.unwrap();
+        assert!(
+            !repo.get("m_a0").await.unwrap().unwrap().detail_too_long,
+            "upsert 要清零标记（内容变了就得重新量）"
+        );
+        assert_eq!(
+            repo.redistill_stats(1_700_000_000_000, 2_592_000_000, 5)
+                .await
+                .unwrap()
+                .candidates,
+            5
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 闸门级跳过的流水（`gate:*`）**不参与**冷却 / 退避判定。
+    ///
+    /// 否则「知识库还没就绪」这种一次性环境问题也会被当成「刚跑过」，自动整理反而更久不动。
+    #[tokio::test]
+    async fn gate_skip_runs_are_visible_but_do_not_drive_the_cooldown() {
+        let (repo, dir) = tmp_repo();
+        let now = 1_700_000_000_000i64;
+        let row = MemoryRedistillRun {
+            fingerprint: format!("{}no-rag", MEMORY_REDISTILL_GATE_PREFIX),
+            status: MEMORY_REDISTILL_SKIPPED.to_string(),
+            error: Some("知识库不可用".into()),
+            started_at: now,
+            finished_at: Some(now),
+            ..Default::default()
+        };
+        repo.finish_redistill_run(&row).await.unwrap();
+
+        assert!(
+            repo.last_redistill_run().await.unwrap().is_none(),
+            "只有闸门行时，冷却判定应视为「还没跑过」"
+        );
+        let runs = repo.list_redistill_runs(10).await.unwrap();
+        assert_eq!(runs.len(), 1, "但排障时看得到它（这就是它的全部意义）");
+        assert_eq!(runs[0].fingerprint, row.fingerprint);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

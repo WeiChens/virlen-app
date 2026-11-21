@@ -128,9 +128,10 @@ pub fn init_agent_engine(app: &tauri::AppHandle) {
     ));
     // MCP：挂上空管理器（同步）-> 异步读配置再 reload；引擎命中 `mcp__` 前缀时走它
     crate::commands::mcp::init_mcp(app);
-    // 启动补跑：此刻队列是空的，先判定一次
-    crate::commands::memory::request_redistill_on_startup(app);
-    // 启动自检（记忆详情引用完整性）**不在这里**：它要读 RAG，而 RAG 服务在本函数之后才初始化
+    // 启动补跑（再蒸馏）= **不在这里**，理由同下：它要读知识库写归档详情，
+    // 抢在 `init_rag_service` 之前跑只会拿一个 `rag = None` → 整批 skipped(no-rag)。
+    // 由 `lib.rs` 在 RAG 就绪后调 `memory::request_redistill_on_startup`。
+    // 启动自检（记忆详情引用完整性）同样**不在这里**：它要读 RAG，而 RAG 服务在本函数之后才初始化
     //（见 `lib.rs` 的 `init_rag_service`）—— 在这里 spawn 会与它竞争，抢在前面就每次启动都报
     //「知识库不可用」的假警。因此由 `lib.rs` 在 RAG 就绪后调用。
 }

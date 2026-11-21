@@ -24,13 +24,14 @@ Your job: **merge related memories into fewer, more complete entries.**
 
 Strict JSON, no markdown fence, no explanation around it:
 
-{"groups":[{"source_ids":["m_ab12cd34ef","m_gh56ij78kl"],"summary":"...","kind":"project","tags":["virlen-app"],"detail":"..."}]}
+{"groups":[{"source_ids":["m_ab12cd34ef","m_gh56ij78kl"],"summary":"...","kind":"fact","tags":["virlen-app"],"detail":"..."}]}
 
 Field rules:
 
 - `summary`: one self-contained sentence, at most 120 characters. State the conclusion, not the
   process. Keep the language of the input memories.
-- `kind`: one of `user` / `project` / `decision` / `fact`.
+- `kind`: one of `user` / `decision` / `fact`. Use `fact` for project conventions. Visibility is
+  not a kind: the merged entry keeps the scope of this batch (see Scope below).
 - `tags`: optional, at most 3 short tags.
 - `detail`: optional. Use it only when the merged knowledge does not fit in one sentence
   (at most 8000 characters). It is stored as this entry's detail document.

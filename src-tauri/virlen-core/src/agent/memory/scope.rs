@@ -1,7 +1,11 @@
 //! 记忆的**项目作用域**（纯字符串判定，零 I/O）
 //!
-//! 解决什么：`kind = project` 的记忆只对「某个项目」有意义。没有作用域时它们会被注入到**每个**
+//! 解决什么：带 `project_path` 的记忆只对「某个目录」有意义。没有作用域时它们会被注入到**每个**
 //! 会话（你去改前端项目，却收到后端项目的构建命令记忆）—— 记忆越多，噪音越大。
+//!
+//! 作用域与**分类无关**：分类（`user` / `decision` / `fact`）只说「这条记忆是什么」，
+//! `project_path` 说「它在哪可见」。两者可以任意组合（「项目里的一个决策」不再需要在
+//! 「project」和「decision」之间二选一）。
 //!
 //! 匹配规则（**单向包含**，已与产品确认）：
 //! - 工作目录 == 项目路径 → 命中；
@@ -22,7 +26,7 @@
 //!
 //! 完整取舍（路径从哪来 / 连带影响哪几处）见 `docs/memory-plan.md` §3.1.1。
 
-use crate::session_db::{MemoryRecord, MEMORY_KIND_PROJECT};
+use crate::session_db::MemoryRecord;
 
 /// 项目路径的长度上限（字符）：路径是用户 / 模型输入，不能无界落库。
 ///
@@ -106,15 +110,46 @@ pub fn declared_project(m: &MemoryRecord) -> Option<&str> {
     })
 }
 
-/// 写入时该给这条记忆定什么作用域：只有 `project` 才带路径，工作目录为空则不带（= 通用）。
+/// 写入时该给这条记忆定什么作用域（**唯一实现**：`memory_write` 与 `cmd_memory_write` 都走它；
+/// 面板保存 `cmd_memory_upsert` **不走** —— 那是用户显式填的值，空就是「要全局」）。
 ///
-/// 唯一实现：命令层（面板保存）、工具层（`memory_write`）都调它 ——
-/// 否则「非 project 也带路径」这类脏数据会在某一条写入路径上偷偷溜进库。
-pub fn scope_for_write(kind: &str, workspace: &str) -> Option<String> {
-    if kind.trim() != MEMORY_KIND_PROJECT {
-        return None;
+/// `requested` 是**调用方显式指定**的路径（模型 / 面板传上来的 `project_path`）：
+/// - `None`（没传）→ **当前工作目录**。这是为「AI 惰性」定的默认：写记忆时绝大多数事实就是
+///   本项目的知识，默认落地比默认全局安全（错在「少看见」而不是「到处乱闪」）。
+/// - `"global"` / `"none"` / 空串（不区分大小写与首尾空白）→ `None` = 不限定项目（跨项目通用）；
+///   跨项目的偏好必须显式这么传，否则会被锁在当前项目里。
+/// - 其余 → 该路径（原样 `trim` 后的字符串）。
+///
+/// 工作目录为空且没显式指定 → `None`（没有项目标签，就不能编一个）。
+///
+/// ⚠️ **不按分类 / 级别开例外**（曾短暂让 `kind = user` / `level = permanent` 默认全局，
+/// 用户否决）：可见范围只由 `project_path` 一个字段表达，「默认值又看分类」会让同一句
+/// 写在不同 kind 下落到不同作用域，无法从代码 / 日志 / 面板上看出这条记忆为何是全局的。
+/// 代价已知：带路径的 `permanent` 不再是「全量注入」——那是**显式**的取舍
+///（想要全量就传 `global`），且 `memory_write` 的返回会把定下的作用域告诉模型。
+///
+/// ⚠️ 「没传」（`None`）与「传了空串」是两种意思：前者落到工作目录，后者是**显式**的全局
+/// （模型只是没词可说时传了空串；把它当成「默认」就等于让它惰性默认又被默默忽略）。
+pub fn scope_for_write(requested: Option<&str>, workspace: &str) -> Option<String> {
+    match requested {
+        Some(v) => {
+            let v = v.trim();
+            if v.is_empty() || is_global_token(v) {
+                None
+            } else {
+                Some(v.to_string())
+            }
+        }
+        None => clean(Some(workspace)).map(|w| w.to_string()),
     }
-    clean(Some(workspace)).map(|w| w.to_string())
+}
+
+/// 「不限定项目」的显式写法（模型记不住一个 flag 但能记住一个词：三种都收，且不区分大小写）
+pub fn is_global_token(v: &str) -> bool {
+    matches!(
+        v.trim().to_ascii_lowercase().as_str(),
+        "global" | "none" | ""
+    )
 }
 
 /// 内部：把 `Option<&str>` 里的空串折叠成 `None`
@@ -131,7 +166,7 @@ mod tests {
         MemoryRecord {
             id: id.into(),
             level: MEMORY_LEVEL_NORMAL.into(),
-            kind: MEMORY_KIND_PROJECT.into(),
+            kind: "fact".into(),
             summary: format!("记忆 {}", id),
             project_path: project.map(String::from),
             created_at: 1,
@@ -224,16 +259,57 @@ mod tests {
     // ── 写入作用域 ──
 
     #[test]
-    fn only_project_kind_gets_a_scope() {
+    fn write_scope_defaults_to_the_workspace_and_honors_explicit_global() {
+        // 没传 → 当前工作目录（AI 惰性的兼容：默认落在本会话项目里）
         assert_eq!(
-            scope_for_write("project", " C:/work/app "),
+            scope_for_write(None, " C:/work/app "),
             Some("C:/work/app".to_string())
         );
-        assert_eq!(scope_for_write("user", "C:/work/app"), None);
-        assert_eq!(scope_for_write("decision", "C:/work/app"), None);
-        assert_eq!(scope_for_write("fact", "C:/work/app"), None);
-        assert_eq!(scope_for_write("project", "   "), None, "没有工作目录 → 通用记忆");
-        assert_eq!(scope_for_write("project", ""), None);
+        // 显式全局：三种写法都认，且不区分大小写 / 首尾空白
+        for token in ["global", "GLOBAL", " global ", "none", "", "   "] {
+            assert_eq!(
+                scope_for_write(Some(token), "C:/work/app"),
+                None,
+                "{token:?} 应当表示全局"
+            );
+        }
+        // 显式别的目录：原样（trim 后）落库
+        assert_eq!(
+            scope_for_write(Some(" D:/code/other "), "C:/work/app"),
+            Some("D:/code/other".to_string())
+        );
+        // 没有工作目录且没显式指定 → 全局（不编一个路径出来）
+        assert_eq!(scope_for_write(None, "   "), None);
+        assert_eq!(scope_for_write(None, ""), None);
+    }
+
+    /// 作用域**只看** `project_path`，不按分类 / 级别开例外。
+    ///
+    /// 曾经短暂让 `kind = user` / `level = permanent` 默认全局，用户否决：可见范围只能由
+    /// `project_path` 一个字段表达（同一句话不该因为分类不同而落到不同作用域）；
+    /// 带路径的 `permanent` 不是「全量注入」是**显式**的取舍，想要就传 `global`。
+    /// 这条守的就是「不存在的例外不会偷偷长回来」。
+    #[test]
+    fn scope_ignores_kind_and_level() {
+        assert_eq!(
+            scope_for_write(None, "C:/work/app"),
+            Some("C:/work/app".to_string()),
+            "签名里根本没有 kind / level：作用域只由 project_path 决定"
+        );
+        assert_eq!(
+            scope_for_write(Some("global"), "C:/work/app"),
+            None,
+            "跨项目只能显式要求"
+        );
+    }
+
+    #[test]
+    fn global_token_accepts_only_the_three_spellings() {
+        assert!(is_global_token("global"));
+        assert!(is_global_token(" None "));
+        assert!(is_global_token(""));
+        assert!(!is_global_token("global-ish"));
+        assert!(!is_global_token("C:/work/app"));
     }
 
     #[test]

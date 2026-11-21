@@ -2,7 +2,11 @@
  * 长期记忆列表弹窗。
  *
  * 紧凑表格 + 常驻批量栏（未选中时全禁用）：行内不挂按钮，点整行 = 编辑，勾选 + 批量栏 = 批量操作。
- * 筛选 / 分页在前端做（后端检索排除了停用项，而这里必须能筛出它们）；
+ *
+ * 文案只写「看不出来的那一半」（作用域、会调模型 = 花钱、被保留的归档），
+ * 交互方式（怎么勾选 / 点哪改）交给控件本身表达 —— 行列里已有的信息不重复说第二遍。
+ * 筛选 / 排序 / 分页都在前端做（后端检索排除了停用项，而这里必须能筛出它们）；
+ * **状态默认只看「使用中」**：停用的大多是再蒸馏归档的旧条目，默认全列会把在用的那几条淹掉。
  * 表头全选只作用于本页，选中集跨页保留并如实报出不在当前页的条数。
  */
 import { useEffect, useMemo, useState } from 'react'
@@ -19,12 +23,21 @@ import {
   setMemoryLevel,
 } from '@/infrastructure/memoryRepo'
 import {
-  MEMORY_KIND_PROJECT,
   type MemoryExportFile,
   type MemoryRecord,
 } from '@/domain/memory'
 import { formatMemoryDay, memoryDateTitle } from './format'
-import { FILTER_ALL, kindLabel, kindOptions, levelLabel, levelOptions } from './labels'
+import {
+  FILTER_ALL,
+  kindLabel,
+  kindOptions,
+  levelLabel,
+  levelOptions,
+  sortOptions,
+  stateOptions,
+  type MemoryStateFilter,
+} from './labels'
+import { SORT_DEFAULT, sortMemories, type MemoryListSort } from './sort'
 import MemoryEditModal from './MemoryEditModal'
 
 export interface MemoryListModalProps {
@@ -102,6 +115,10 @@ function MemoryListModal({
   const [levelFilter, setLevelFilter] = useState<'all' | 'permanent' | 'normal'>(FILTER_ALL)
   /** 分类（all = 不筛）；与级别是两个独立维度，可叠加 */
   const [kindFilter, setKindFilter] = useState<string>(FILTER_ALL)
+  /** 状态（默认 `active`：只要还在用的，归档的旧条目默认不挡路） */
+  const [stateFilter, setStateFilter] = useState<MemoryStateFilter>('active')
+  /** 排序（默认沿用后端顺序：永久在前 → 新建在前） */
+  const [sort, setSort] = useState<MemoryListSort>(SORT_DEFAULT)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(PAGE_SIZE_DEFAULT)
   /** 选中的记忆 id（批量操作作用对象，跨页保留） */
@@ -110,7 +127,7 @@ function MemoryListModal({
   const [editOpen, setEditOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<MemoryRecord | null>(null)
 
-  // 关闭时清掉临时视图状态：下次打开回到「全量、第 1 页、无选中」
+  // 关闭时清掉临时视图状态：下次打开回到「默认筛选、默认顺序、第 1 页、无选中」
   useEffect(() => {
     if (visible) return
     setSelected(EMPTY_SELECTION)
@@ -119,6 +136,8 @@ function MemoryListModal({
     setQuery('')
     setLevelFilter(FILTER_ALL)
     setKindFilter(FILTER_ALL)
+    setStateFilter('active')
+    setSort(SORT_DEFAULT)
     setPage(1)
     setPageSize(PAGE_SIZE_DEFAULT)
   }, [visible])
@@ -136,11 +155,17 @@ function MemoryListModal({
   /** 筛选下拉在渲染时建（true = 带「全部」那条，编辑表单不能带） */
   const levelFilterOptions: SelectOption[] = levelOptions(true)
   const kindFilterOptions: SelectOption[] = kindOptions(true)
+  const stateFilterOptions: SelectOption[] = stateOptions()
+  const sortFieldOptions: SelectOption[] = sortOptions()
 
-  /** 筛选结果（顺序沿用后端：永久在前 → 新建在前）。三个条件叠加，任一不匹配就出局。 */
+  /**
+   * 筛选 + 排序结果（分页的输入）。
+   *
+   * 四个筛选条件叠加，任一不匹配就出局；没选排序时顺序沿用后端（永久在前 → 新建在前）。
+   */
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return items.filter((m) => {
+    const matched = items.filter((m) => {
       if (kindFilter !== FILTER_ALL && m.kind !== kindFilter) return false
       if (
         levelFilter !== FILTER_ALL &&
@@ -148,10 +173,13 @@ function MemoryListModal({
       ) {
         return false
       }
+      if (stateFilter === 'active' && m.disabled) return false
+      if (stateFilter === 'disabled' && !m.disabled) return false
       if (!q) return true
       return (m.summary ?? '').toLowerCase().includes(q)
     })
-  }, [items, query, kindFilter, levelFilter])
+    return sortMemories(matched, sort)
+  }, [items, query, kindFilter, levelFilter, stateFilter, sort])
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize))
   // 夹一下而不是纠 state：筛选后条数变少时不该多渲染一帧「空白页」
@@ -165,7 +193,7 @@ function MemoryListModal({
   async function handleExport() {
     const json = await exportMemories()
     if (!json) {
-      showToast(t('导出失败：读不到记忆数据'), 2500)
+      showToast(t('导出失败：无法读取记忆数据'), 2500)
       return
     }
     let count = items.length
@@ -221,14 +249,6 @@ function MemoryListModal({
     items.filter((m) => selected.has(m.id) && needsOp(m, op)).length
 
   /**
-   * 批量按钮的禁用原因提示：没勾选时必须说清怎么开始，否则一排灰按钮看着像坏了；能点时不给 tip。
-   */
-  function batchTip(op: BatchOp, already: string): string | undefined {
-    if (selected.size === 0) return t('先勾选要操作的记忆')
-    return batchCount(op) === 0 ? already : undefined
-  }
-
-  /**
    * 逐条调仓储方法（一条一个 IPC），单条失败不拖垮整批。
    * 不加 Rust 批量命令：面板量级下这点 IPC 无感，而批量命令要多维护一套部分失败语义。
    */
@@ -238,7 +258,7 @@ function MemoryListModal({
     if (op === 'delete') {
       const confirmed = await MessageBox.propt(
         t('删除记忆'),
-        tpl('删除选中的 $__count__ 条记忆？存进知识库的长内容也会一起删掉，无法恢复。', {
+        tpl('删除选中的 $__count__ 条记忆？存入知识库的详情正文将一并删除，且不可恢复。', {
           count: targets.length,
         }),
         { confirmText: t('删除'), cancelText: t('取消'), danger: true },
@@ -291,8 +311,7 @@ function MemoryListModal({
         onClick={() => openEdit(item)}
         // 键盘可达：整行可聚焦，Enter / Space 等同点击（WCAG 2.1.1）
         tabIndex={0}
-        onKeyDown={rowKeyHandler(() => openEdit(item))}
-        title={t('点击编辑这条记忆')}>
+        onKeyDown={rowKeyHandler(() => openEdit(item))}>
         <td className="memory-cell-check">
           <input
             type="checkbox"
@@ -309,9 +328,9 @@ function MemoryListModal({
           {item.summary}
         </td>
         <td className="memory-cell-kind">{kindLabel(item.kind)}</td>
-        {/* 项目路径决定这条记忆在哪些会话可见；没限路径的要明说「所有项目」，不能留空白 */}
+        {/* 项目路径决定这条记忆在哪些会话可见（与分类无关）；不限路径的要明说「所有项目」，不能留空白 */}
         <td className="memory-cell-project" title={item.projectPath || undefined}>
-          {item.projectPath || (item.kind === MEMORY_KIND_PROJECT ? t('所有项目') : '')}
+          {item.projectPath || t('所有项目')}
         </td>
         <td className="memory-cell-level">{levelLabel(item.level)}</td>
         <td className="memory-cell-date" title={memoryDateTitle(item)}>
@@ -319,7 +338,16 @@ function MemoryListModal({
         </td>
         <td className="memory-cell-source">{item.sourceDay || '—'}</td>
         <td className="memory-cell-hits">{item.hits ?? 0}</td>
-        <td className="memory-cell-state">{item.disabled ? t('已停用') : ''}</td>
+        <td className="memory-cell-state">
+          {item.disabled ? t('已停用') : ''}
+          {item.detailTooLong && (
+            <span
+              className="memory-state-tag"
+              title={t('详情太长，装不进归档；改短并保存后会重新参与整理')}>
+              {t('不参与整理')}
+            </span>
+          )}
+        </td>
       </tr>
     )
   }
@@ -336,14 +364,6 @@ function MemoryListModal({
         footer={
           filtered.length > 0 && (
             <div className="memory-pager">
-              <span className="memory-pager-info">
-                {filtered.length === items.length
-                  ? tpl('共 $__count__ 条', { count: items.length })
-                  : tpl('筛选出 $__shown__ 条 / 共 $__total__ 条', {
-                      shown: filtered.length,
-                      total: items.length,
-                    })}
-              </span>
               <div className="memory-pager-actions">
                 <span className="memory-pager-size">
                   {t('每页')}
@@ -391,6 +411,7 @@ function MemoryListModal({
                 setPage(1)
               }}
             />
+            {/* 条数只在这里说一次（分页栏不再重复）：它紧贴着筛选控件，改完筛选立刻能看到影响 */}
             <span className="memory-count">
               {filtered.length === items.length
                 ? tpl('共 $__count__ 条', { count: items.length })
@@ -399,6 +420,24 @@ function MemoryListModal({
                     total: items.length,
                   })}
             </span>
+            {/* 排序跟着搜索住第一行（都是「这一屏看什么」的开关）；筛选下拉在第二行 */}
+            <div className="memory-sort-group">
+              <span className="memory-filter-label">{t('排序')}</span>
+              <Select
+                className="memory-sort-field"
+                value={sort}
+                onChange={(v) => {
+                  setSort(v as MemoryListSort)
+                  // 排序变了就回第 1 页：用户要看的是「新的第一名」，不是停在原来那页上
+                  setPage(1)
+                }}
+                options={sortFieldOptions}
+                // 148：最长选项「记录时间：降序」7 个汉字 ≈ 91px + 触发器左右内边距 42px
+                // （下拉面板默认与触发器等宽，窄了选项也会被截成省略号）
+                width={148}
+                ariaLabel={t('排序')}
+              />
+            </div>
             <div className="memory-toolbar-actions">
               <button className="memory-action-btn" onClick={() => void handleExport()}>
                 {t('导出备份')}
@@ -434,7 +473,21 @@ function MemoryListModal({
                 options={levelFilterOptions}
                 width={92}
               />
+              {/* 默认只看使用中的（文件头注释里有理由），归档的旧条目要点这里才看得见 */}
+              <span className="memory-filter-label">{t('状态')}</span>
+              <Select
+                className="memory-filter-state"
+                value={stateFilter}
+                onChange={(v) => {
+                  setStateFilter(v as MemoryStateFilter)
+                  setPage(1)
+                }}
+                options={stateFilterOptions}
+                width={96}
+              />
             </div>
+            {/* 批量栏：**只靠置灰表达不可用**，不挂 title —— `disabled` 的控件不派发鼠标事件，
+                tooltip 永远不会弹（写了就是死代码），且一排按钮「为什么灰」看左侧行数据就够 */}
             <div
               className={`memory-batch-bar${selected.size > 0 ? ' is-active' : ''}`}
               role="toolbar"
@@ -448,28 +501,24 @@ function MemoryListModal({
               <button
                 className="memory-action-btn"
                 disabled={busy || batchCount('permanent') === 0}
-                title={batchTip('permanent', t('选中的都已是永久记忆'))}
                 onClick={() => void runBatch('permanent')}>
                 {t('升级为永久')}
               </button>
               <button
                 className="memory-action-btn"
                 disabled={busy || batchCount('normal') === 0}
-                title={batchTip('normal', t('选中的本就是普通记忆'))}
                 onClick={() => void runBatch('normal')}>
                 {t('降级为普通')}
               </button>
               <button
                 className="memory-action-btn"
                 disabled={busy || batchCount('disable') === 0}
-                title={batchTip('disable', t('选中的都已停用'))}
                 onClick={() => void runBatch('disable')}>
                 {t('停用')}
               </button>
               <button
                 className="memory-action-btn"
                 disabled={busy || batchCount('enable') === 0}
-                title={batchTip('enable', t('选中的都未停用'))}
                 onClick={() => void runBatch('enable')}>
                 {t('启用')}
               </button>
@@ -477,7 +526,6 @@ function MemoryListModal({
               <button
                 className="memory-action-btn danger"
                 disabled={busy || selected.size === 0}
-                title={selected.size === 0 ? t('先勾选要操作的记忆') : undefined}
                 onClick={() => void runBatch('delete')}>
                 {t('删除')}
               </button>
@@ -489,10 +537,6 @@ function MemoryListModal({
               </button>
             </div>
           </div>
-
-          <p className="memory-list-hint">
-            {t('点一行就能改内容；要停用或删除，先勾选，再用右边的批量操作。')}
-          </p>
         </div>
 
         <div className="memory-table-wrap">
@@ -521,15 +565,14 @@ function MemoryListModal({
                     }}
                     onChange={(e) => togglePage(pageRows, e.target.checked)}
                     aria-label={tpl('全选本页 $__count__ 条', { count: pageRows.length })}
-                    title={tpl('全选本页 $__count__ 条', { count: pageRows.length })}
                   />
                 </th>
                 <th>{t('内容')}</th>
                 <th>{t('分类')}</th>
                 <th>{t('项目')}</th>
                 <th>{t('级别')}</th>
-                <th>{t('记录')}</th>
-                <th>{t('来源')}</th>
+                <th>{t('记录日')}</th>
+                <th>{t('来源日')}</th>
                 <th>{t('使用次数')}</th>
                 <th>{t('状态')}</th>
               </tr>
@@ -543,8 +586,8 @@ function MemoryListModal({
               {loading && items.length === 0
                 ? t('加载中…')
                 : items.length === 0
-                  ? t('还没有记忆 —— 你可以自己加一条，也可以在对话里直接告诉 AI 什么值得记住')
-                  : t('没有匹配的记忆（试试清空搜索或筛选）')}
+                  ? t('暂无记忆。可手动新增，或在对话中告知 AI 哪些内容值得记住。')
+                  : t('没有匹配的记忆（可清空搜索或筛选条件）')}
             </div>
           )}
         </div>

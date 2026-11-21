@@ -193,7 +193,7 @@ mod tests {
             .map(|i| MemoryRecord {
                 id: format!("other{}", i),
                 level: MEMORY_LEVEL_NORMAL.into(),
-                kind: "project".into(),
+                kind: "fact".into(),
                 summary: format!("别的项目 {}", i),
                 hits: 100, // 热度很高：若不过滤，它们会吃光 top-k
                 project_path: Some("C:/work/other".into()),
@@ -203,7 +203,7 @@ mod tests {
         all.push(MemoryRecord {
             id: "mine".into(),
             level: MEMORY_LEVEL_NORMAL.into(),
-            kind: "project".into(),
+            kind: "fact".into(),
             summary: "本项目的一条".into(),
             project_path: Some("C:/work/app".into()),
             ..Default::default()
@@ -285,7 +285,7 @@ mod tests {
             MemoryRecord {
                 id: "m_n1".into(),
                 level: MEMORY_LEVEL_NORMAL.into(),
-                kind: "project".into(),
+                kind: "fact".into(),
                 summary: "在 virlen-app 实现记忆功能".into(),
                 created_at: 2,
                 ..Default::default()

@@ -13,9 +13,7 @@ use virlen_core::agent::memory::{
 };
 // 记忆 DTO / 级别常量住在持久化层，命令层从这里取
 use virlen_core::agent::memory::scope::MEMORY_PROJECT_PATH_MAX_CHARS;
-use virlen_core::session_db::{
-    MemoryRecord, MemoryRepo, SettingsRepo, MEMORY_KIND_PROJECT, MEMORY_LEVEL_NORMAL,
-};
+use virlen_core::session_db::{MemoryRecord, MemoryRepo, SettingsRepo, MEMORY_LEVEL_NORMAL};
 
 /// 列出记忆（设置页面板的数据源）
 #[tauri::command]
@@ -26,8 +24,10 @@ pub async fn cmd_memory_list(
     state.list(None, include_disabled.unwrap_or(true)).await
 }
 
-/// 新增 / 编辑一条记忆（面板保存与 `memory_write` 共用）。项目路径不变量：仅 kind = project 才保留，
-/// 空白收敛为 None，超长拒绝。
+/// 新增 / 编辑一条记忆（面板保存与 `memory_write` 共用）。
+///
+/// 项目路径：**任何分类都可带**（选填）；面板传的是用户显式填的路径，所以**不跑**
+/// `scope_for_write` 的「默认工作目录」逻辑 —— 空就真的是全局。
 #[tauri::command]
 pub async fn cmd_memory_upsert(
     state: tauri::State<'_, Arc<dyn MemoryRepo>>,
@@ -53,18 +53,17 @@ pub async fn cmd_memory_upsert(
     }
     record.summary = summary;
 
-    // ⚠️ 不能用 `scope_for_write(kind, 路径)`（那个算的是当前工作目录）：
-    // 面板保存的是用户显式指定的路径，这里只做「仅 project 保留 + 空白收敛 + 长度校验」。
-    let path = if record.kind == MEMORY_KIND_PROJECT {
-        record
-            .project_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(String::from)
-    } else {
-        None
-    };
+    // ⚠️ 不能用 `scope_for_write(路径, 工作目录)`：它带「不传就落到工作目录」的默认，
+    // 而面板保存的是用户**显式**填的值（空 = 用户要全局，不能被默默改成默认目录）。
+    // 这里只做「空白收敛 + 长度校验」。
+    let path = record
+        .project_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    // 面板走下拉 + 输入框，没有模型那种「global」写法；但用户真手敲了也照样当全局
+    let path = path.filter(|p| !virlen_core::agent::memory::scope::is_global_token(p));
     if let Some(p) = path.as_deref() {
         if p.chars().count() > MEMORY_PROJECT_PATH_MAX_CHARS {
             return Err(format!(
@@ -219,7 +218,8 @@ pub async fn cmd_memory_export(
 // `memory_*` 工具的 GUI 孪生：语义在 `agent::memory::tools`，这里只装依赖并原样转交。
 
 /// 组装记忆操作依赖（RAG 未初始化则降级为「详情不可读写」）。
-/// workspace：写入时给 project 定作用域，检索时筛掉别的项目。
+/// workspace：写入时作默认作用域（模型没显式传 `project_path`；分类 / 级别不改变这条规则），
+/// 检索时筛掉别的目录。
 fn memory_deps<'a>(
     memory: &'a dyn MemoryRepo,
     settings: &'a dyn SettingsRepo,
@@ -296,7 +296,7 @@ pub async fn cmd_memory_recall(
     Ok(out)
 }
 
-/// `memory_write` 等价命令（session_id 写进 source_session_id，workspace 作项目作用域）。
+/// `memory_write` 等价命令（session_id 写进 source_session_id，workspace 作默认作用域）。
 /// 逐参数接收：收结构体会要求前端改形状。
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
@@ -309,6 +309,8 @@ pub async fn cmd_memory_write(
     detail: Option<String>,
     session_id: Option<String>,
     workspace: Option<String>,
+    // 选填：不传 = 当前工作目录；`global` = 跨项目通用（与原生工具同一口径）
+    project_path: Option<String>,
 ) -> Result<MemoryToolOutput, String> {
     let deps = memory_deps(
         memory.inner().as_ref(),
@@ -323,6 +325,7 @@ pub async fn cmd_memory_write(
             kind: &kind,
             level: level.as_deref(),
             detail: detail.as_deref(),
+            project_path: project_path.as_deref(),
         },
     )
     .await?;
@@ -449,7 +452,13 @@ pub fn request_redistill_on_startup(app: &tauri::AppHandle) {
     });
 }
 
-/// 手动触发一次（排障用；force = 忽略冷却与幂等判定）
+/// 手动触发一次（设置 → 记忆里的「立即整理」按钮；force = 忽略冷却与幂等判定）
+///
+/// 后台自动整理正在跑时直接拒：`force` 会绕过指纹 claim，两条路径同时跑同一批记忆
+/// 既重复计费，也可能互相覆盖归档结果。
+///
+/// 这里先问一句 `is_running()` 只是为了**在装配 builder 之前**就快速失败；真正的互斥在
+/// [`run_direct`] 里（它自己抢 `RUNNING`）—— 只靠这一句是单向的，后台路径拦不住手动路径。
 #[tauri::command]
 pub async fn cmd_memory_redistill(
     app: tauri::AppHandle,
@@ -460,7 +469,10 @@ pub async fn cmd_memory_redistill(
     task: Option<String>,
     force: Option<bool>,
 ) -> Result<virlen_core::agent::memory::redistill::RedistillReport, String> {
-    use virlen_core::agent::memory::redistill::{RedistillTask, sched::run_direct};
+    use virlen_core::agent::memory::redistill::{RedistillTask, sched::MEMORY_REDISTILL_BUSY, sched::run_direct};
+    if virlen_core::agent::memory::redistill::sched::is_running() {
+        return Err(MEMORY_REDISTILL_BUSY.to_string());
+    }
     let builder = GuiRedistillBuilder {
         bridge: bridge.inner().clone(),
         app: app.clone(),

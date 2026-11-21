@@ -11,7 +11,7 @@
 //! 3. **一次只跑一个任务**：进程内标志 + DB 指纹 claim 双保险（多窗口 / GUI + CLI 同开也只跑一次）。
 
 use std::collections::VecDeque;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 
 use crate::agent::cancellation::CancellationToken;
 use crate::agent::memory::prompt::enabled_from_settings;
@@ -47,6 +47,30 @@ static RUNNING: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(false));
 /// 当前任务的取消令牌（退出时取消它）
 static CURRENT: LazyLock<Mutex<Option<CancellationToken>>> = LazyLock::new(|| Mutex::new(None));
 
+/// 取「正在跑」标志（**对锁中毒免疫**）：panic 兜底的意义就在于「坏过一次之后还能接着用」，
+/// 若这里 `unwrap()` 一下，一次 panic 就会把整个闸门变成永久 panic。
+fn running_flag() -> MutexGuard<'static, bool> {
+    RUNNING.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 手动触发时「已经有一轮在跑」的统一文案（命令层与 core 共用一份，避免两处措辞分叉）
+pub const MEMORY_REDISTILL_BUSY: &str = "记忆整理正在进行中，请稍后再试";
+
+/// 把守「跑完必复位」：`RUNNING = false` / `CURRENT = None`。
+///
+/// ⚠️ 复位必须绑在 Drop 上。若只写在 `run_at(...).await` 之后，后台任务里任何一处 panic
+/// （release 下被 runtime 吞掉，只留一个 `spawn` 的 Err 日志）都会让 `RUNNING` **永久为 true** ——
+/// 之后本进程内所有 [`request`] / [`pump`] 立即 `return false`，表现就是「这一整天自动整理彻底
+/// 消失，重启后又好了」。
+struct RunningGuard;
+
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        *running_flag() = false;
+        *CURRENT.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
 /// 挂上宿主（GUI 在引擎初始化时调一次）。重复挂载以最后一次为准，并立刻尝试排空队列。
 pub fn attach_host(rt: Arc<dyn MemoryRedistillRuntime>) {
     *HOST.lock().unwrap() = Some(rt);
@@ -56,7 +80,7 @@ pub fn attach_host(rt: Arc<dyn MemoryRedistillRuntime>) {
 
 /// 尝试把队列里的待办交给宿主；没有宿主 / 宿主不接 → 留在队列（下次启动或下次触发再来）。
 pub fn pump() -> bool {
-    if *RUNNING.lock().unwrap() {
+    if *running_flag() {
         return false;
     }
     if QUEUE.lock().unwrap().is_empty() {
@@ -66,6 +90,14 @@ pub fn pump() -> bool {
         return false;
     };
     host.spawn_redistill(CancellationToken::new())
+}
+
+/// 是否有一轮正在跑（面板手动触发前先问一句，避免与后台自动整理同时改同一批记忆）。
+///
+/// ⚠️ 只覆盖**进程内**的后台任务：GUI 与 CLI 同开时另靠 DB 指纹 claim 兜底
+/// （`claim_redistill_run`），这里不是唯一防线。
+pub fn is_running() -> bool {
+    *running_flag()
 }
 
 /// 退出点（`app.exit` / 引擎销毁 / CLI 结束）：取消正在跑的任务并清空队列。
@@ -84,7 +116,7 @@ pub async fn request(memory: &dyn MemoryRepo, settings: &dyn SettingsRepo, now_m
         return false; // 没有本地库（浏览器 dev / 库打不开）：如实不跑
     }
     // 节流：已有待办 / 正在跑 → 这一次不再入队
-    if *RUNNING.lock().unwrap() || !QUEUE.lock().unwrap().is_empty() {
+    if *running_flag() || !QUEUE.lock().unwrap().is_empty() {
         return false;
     }
     let settings_map = match settings.get_all().await {
@@ -162,7 +194,7 @@ pub async fn execute_pending(
     cancel: CancellationToken,
 ) -> Option<Result<RedistillReport, String>> {
     let task = {
-        let mut running = RUNNING.lock().unwrap();
+        let mut running = running_flag();
         if *running {
             return None;
         }
@@ -170,7 +202,9 @@ pub async fn execute_pending(
         *running = true;
         task
     };
-    *CURRENT.lock().unwrap() = Some(cancel.clone());
+    // 置位之后立刻上守卫：从这一刻到函数退出（含 unwind）之间任何路径出事都能复位
+    let guard = RunningGuard;
+    *CURRENT.lock().unwrap_or_else(|e| e.into_inner()) = Some(cancel.clone());
 
     let deps = RedistillDeps {
         memory,
@@ -182,14 +216,18 @@ pub async fn execute_pending(
     };
     let report = run_at(deps, task, crate::telemetry::now_ms(), false).await;
 
-    *RUNNING.lock().unwrap() = false;
-    *CURRENT.lock().unwrap() = None;
+    // 先复位再 pump（pump 第一件事就是看 RUNNING）
+    drop(guard);
     // 跑的过程中可能又来了待办（闸门在 RUNNING 期间不入队，所以这里最多再跑一个）
     pump();
     Some(report)
 }
 
 /// 跑一轮（不经过队列）—— 面板 / CLI 的显式触发用（`force` = 忽略冷却与指纹幂等）。
+///
+/// ⚠️ 与后台任务**双向互斥**：手动路径同样占 `RUNNING`。只让命令层先问一句 [`is_running`]
+/// 是**单向**的 —— 手动在跑时后台 `pump()` 照样能开跑，而 `force` 会绕过指纹 claim，
+/// 于是同一批被合并两次（双倍模型费用 + 两份归档详情 + 重复软删）。
 pub async fn run_direct(
     memory: &dyn MemoryRepo,
     sessions: &dyn SessionRepo,
@@ -199,7 +237,18 @@ pub async fn run_direct(
     task: RedistillTask,
     force: bool,
 ) -> Result<RedistillReport, String> {
+    // 置位在**持锁期间**完成：之后到达的 request / pump / run_direct 都看得见（与 execute_pending 同序）
+    {
+        let mut running = running_flag();
+        if *running {
+            return Err(MEMORY_REDISTILL_BUSY.to_string());
+        }
+        *running = true;
+    }
     let cancel = CancellationToken::new();
+    let guard = RunningGuard;
+    *CURRENT.lock().unwrap_or_else(|e| e.into_inner()) = Some(cancel.clone());
+
     let deps = RedistillDeps {
         memory,
         sessions,
@@ -208,7 +257,12 @@ pub async fn run_direct(
         builder,
         cancel: &cancel,
     };
-    run_at(deps, task, crate::telemetry::now_ms(), force).await
+    let report = run_at(deps, task, crate::telemetry::now_ms(), force).await;
+
+    // 先复位再 pump（pump 第一件事就是看 RUNNING）
+    drop(guard);
+    pump();
+    report
 }
 
 /// 候选模型（CLI / GUI 报告用；与流水线内部同一份实现）
@@ -225,7 +279,7 @@ pub(crate) fn queued_tasks() -> Vec<RedistillTask> {
 #[cfg(test)]
 pub(crate) fn reset_for_tests() {
     QUEUE.lock().unwrap().clear();
-    *RUNNING.lock().unwrap() = false;
+    *running_flag() = false;
     *CURRENT.lock().unwrap() = None;
     *HOST.lock().unwrap() = None;
 }
@@ -401,6 +455,59 @@ mod tests {
         assert!(request(&many(), &settings, NOW).await);
         assert_eq!(calls.load(Ordering::SeqCst), 1, "入队即尝试唤醒宿主");
         assert_eq!(queued_tasks().len(), 1, "宿主没接 → 请求留在队列里");
+
+        // ── ⑥ 手动路径也必须占 RUNNING（双向互斥）──
+        //
+        // 只让命令层先问一句 `is_running()` 是**单向**的：手动在跑时后台 `pump()` 照样能开跑，
+        // 而 `force` 会绕过指纹 claim → 同一批记忆被两条路径各合并一次
+        //（双倍模型费用 + 两份归档详情 + 重复软删）。
+        //
+        // 不拆成独立用例：队列 / 宿主 / RUNNING 都是进程级单例，拆开并行跑会互相干扰。
+        reset_for_tests();
+        struct RefusingBuilder;
+        impl MemoryProviderBuilder for RefusingBuilder {
+            fn build(
+                &self,
+                _conn: &crate::agent::types::ProviderConnection,
+            ) -> Result<Box<dyn crate::agent::provider::Provider>, String> {
+                Err("本用例不该真的调模型".to_string())
+            }
+        }
+        let memory = repo(true, MEMORY_REDISTILL_TRIGGER_COUNT as i64, 0, true);
+        let sessions = crate::session_db::NoopSessionRepo;
+
+        // 空闲时放行，且**自己复位**（否则这一整天自动整理彻底消失）
+        let ok = run_direct(
+            &memory,
+            &sessions,
+            &settings,
+            None,
+            &RefusingBuilder,
+            RedistillTask::Full,
+            true,
+        )
+        .await;
+        assert!(ok.is_ok(), "空闲时该放行：{:?}", ok.err());
+        assert!(!is_running(), "run_direct 跑完必须复位 RUNNING");
+
+        // 已经有一轮在跑 → 直接拒（不碰库、不调模型），且不能把别人的标志改掉
+        *running_flag() = true;
+        let busy = run_direct(
+            &memory,
+            &sessions,
+            &settings,
+            None,
+            &RefusingBuilder,
+            RedistillTask::Full,
+            true,
+        )
+        .await;
+        assert_eq!(busy.unwrap_err(), MEMORY_REDISTILL_BUSY);
+        assert!(is_running(), "拒绝时不得清掉别人占着的标志");
+
+        // 互斥不是永久拉黑：标志复位后又能跑
+        *running_flag() = false;
+        assert!(!is_running());
 
         reset_for_tests();
         assert!(queued_tasks().is_empty());

@@ -343,8 +343,12 @@ pub fn is_valid_level(level: &str) -> bool {
     level == MEMORY_LEVEL_NORMAL || level == MEMORY_LEVEL_PERMANENT
 }
 
-/// 记忆分类的合法取值（**唯一一份**：命令层、工具层、TS `MEMORY_KINDS` 三方同名同值）
-pub const MEMORY_KINDS: [&str; 4] = ["user", "project", "decision", "fact"];
+/// 记忆分类的合法取值（**唯一一份**：命令层、工具层、再蒸馏、TS `MEMORY_KINDS` 四方同名同值）
+///
+/// 已移除 `project`：分类只描述「这条记忆是什么」，**可见范围改由 `project_path` 表达**
+///（任何分类都可以带，也可以不带）。把两件事拆开之后，「项目里的一个决策」不用再在
+/// 「project」和「decision」之间二选一。老数据的 `project` 由开库迁移改成 `fact`。
+pub const MEMORY_KINDS: [&str; 3] = ["user", "decision", "fact"];
 
 /// 分类校验（未知值一律拒绝，由调用方决定是收敛到 `fact` 还是回一句提示让模型重试）
 pub fn is_valid_kind(kind: &str) -> bool {
@@ -361,7 +365,7 @@ mod tests {
         MemoryRecord {
             id: id.into(),
             level: level.into(),
-            kind: "project".into(),
+            kind: "fact".into(),
             summary: summary.into(),
             created_at,
             ..Default::default()
@@ -472,7 +476,7 @@ mod tests {
 
     #[test]
     fn budget_drops_normal_before_permanent() {
-        // 每条正文 160 字符 ≈ 渲染后 171 字符（`- [project] …`；无详情就没有 id 后缀）：
+        // 每条正文 160 字符 ≈ 渲染后 171 字符（`- [fact] …`；无详情就没有 id 后缀）：
         // 3 条永久 + 20 条普通 ≈ 4255 字符，必然越过 4000 预算
         let mut all: Vec<MemoryRecord> = (0..3)
             .map(|i| m(&format!("p{}", i), MEMORY_LEVEL_PERMANENT, &"永".repeat(160), i))
@@ -534,7 +538,7 @@ mod tests {
             "- [user] (PLACEHOLDER_PERM) 用户偏好中文回复",
             "",
             "## Recent",
-            "- [project] (PLACEHOLDER_RECENT) 在 virlen-app 实现记忆功能 (id: m_b7)",
+            "- [fact] (PLACEHOLDER_RECENT) 在 virlen-app 实现记忆功能 (id: m_b7)",
         ]
         .join("\n")
         .replace("PLACEHOLDER_PERM", &memory_created_day(perm_ts))
@@ -585,7 +589,7 @@ mod tests {
         let out = render_memory_section(&[plain, with_detail]);
         assert!(!out.contains("m_a1"), "没详情的条目不得出现 id：{out}");
         assert!(
-            out.contains("- [project] (") && out.contains(") 没有详情\n"),
+            out.contains("- [fact] (") && out.contains(") 没有详情\n"),
             "没详情的条目只留「日期 + 正文」：{out}"
         );
         assert!(out.contains("有详情 (id: m_b7)"));
@@ -697,13 +701,15 @@ mod tests {
     }
 
     #[test]
-    fn kind_validation_covers_the_four_kinds() {
+    fn kind_validation_covers_the_known_kinds() {
         for k in MEMORY_KINDS {
             assert!(is_valid_kind(k), "{k} 应当合法");
         }
-        assert!(!is_valid_kind(""));
+        assert!(!is_valid_kind(""), "kind 是必填");
         assert!(!is_valid_kind("User"), "大小写敏感：宁可让模型重试，也不静默改写");
         assert!(!is_valid_kind("note"));
+        // 已废弃的分类：模型若把旧 prompt 里的 `project` 背出来，必须被拒（让它改成 user/decision/fact）
+        assert!(!is_valid_kind("project"), "project 已不是合法分类");
     }
 
     #[test]

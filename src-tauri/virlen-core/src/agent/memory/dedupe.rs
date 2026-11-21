@@ -242,7 +242,7 @@ mod tests {
         MemoryRecord {
             id: id.into(),
             level: MEMORY_LEVEL_NORMAL.into(),
-            kind: "project".into(),
+            kind: "fact".into(),
             summary: summary.into(),
             origin: "model".into(),
             hits: 0,

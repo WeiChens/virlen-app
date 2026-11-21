@@ -120,11 +120,6 @@
       color: var(--text-primary, #1a1a1a);
     }
 
-    .memory-list-entry-hint {
-      font-size: var(--font-size-xs);
-      color: var(--text-secondary, #888);
-    }
-
     .memory-list-entry-arrow {
       flex-shrink: 0;
       color: var(--accent-color, #4f46e5);
@@ -238,6 +233,14 @@
       text-decoration: underline;
     }
 
+    // 禁用态必须有视觉：手动整理 / 自检跑着的时候按钮是灰的，
+    // 看起来可点、点了没反应比直接置灰更让人困惑
+    &:disabled {
+      opacity: 0.5;
+      cursor: default;
+      text-decoration: none;
+    }
+
     &:focus-visible {
       outline: 2px solid var(--primary, #4f46e5);
       outline-offset: 2px;
@@ -314,13 +317,6 @@
     border: 1px solid var(--border-color, #e5e5e5);
     border-radius: 8px;
     background: var(--hover-bg, #fafafa);
-
-    .memory-preview-title {
-      font-size: var(--font-size-sm);
-      font-weight: 600;
-      color: var(--text-primary, #1a1a1a);
-      margin-bottom: 6px;
-    }
 
     .memory-preview-body {
       margin: 0;
@@ -513,6 +509,14 @@
     // 状态列只在「已停用」时有字，用告警色
     .memory-cell-state {
       color: var(--color-danger, #e53e3e);
+
+      // 「不参与整理」（详情太长装不进归档）：不是错误态，用次要色，比告警轻一档
+      .memory-state-tag {
+        display: inline-block;
+        margin-left: 4px;
+        font-size: var(--font-size-xs);
+        color: var(--text-secondary, #888);
+      }
     }
 
     // 列宽（固定布局，内容列吃剩下的空间）
@@ -551,7 +555,7 @@
     }
   }
 
-  // ==================== 列表弹窗的工具栏（筛选 / 批量 / 提示） ====================
+  // ==================== 列表弹窗的工具栏（筛选 / 批量） ====================
   //
   // 与表格滚动区分开：筛选栏与批量栏常驻不滚。批量栏必须在**任何滚动位置**都可见 ——
   // 否则在长表格底部勾选后还要滚回顶部才能操作，多选就失去意义了。
@@ -562,6 +566,14 @@
     gap: 6px;
     padding: 10px 12px 8px;
     border-bottom: 1px solid var(--border-color, #e5e5e5);
+
+    // 下拉前面的小字标签（排序 / 级别 / 分类 / 状态）：共享 `Select` 不带标签，工具栏得自己说明白。
+    // 提到这一级是因为**两行都用**：排序住在第一行，筛选住在第二行
+    .memory-filter-label {
+      font-size: var(--font-size-xs);
+      color: var(--text-secondary, #888);
+      white-space: nowrap;
+    }
 
     .memory-filter-row {
       display: flex;
@@ -591,6 +603,14 @@
         white-space: nowrap;
       }
 
+      // 排序：搜索之后、导出 / 新增之前（都属于「这一屏看什么」）
+      .memory-sort-group {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex: none;
+      }
+
       .memory-toolbar-actions {
         display: flex;
         align-items: center;
@@ -607,39 +627,28 @@
       gap: 8px;
       flex-wrap: wrap;
 
+      // 三个筛选下拉连小字标签作为一个**整体**换行（弹窗宽 920，这组 ~380px 一定放得下）：
+      // 让它在组内自己折行会出现「标签和它的下拉被拆到两行」的难读情形
       .memory-filter-selects {
         display: flex;
         align-items: center;
         gap: 6px;
+        flex: none;
       }
-
-      // 下拉前面的小字标签（级别 / 分类）：共享 `Select` 不带标签，筛选栏得自己说明白
-      .memory-filter-label {
-        font-size: var(--font-size-xs);
-        color: var(--text-secondary, #888);
-        white-space: nowrap;
-      }
-    }
-
-    // 「点击整行可编辑…」—— 行内操作去掉之后，得有一条路告诉用户动作在哪儿
-    .memory-list-hint {
-      margin: 0;
-      font-size: var(--font-size-2xs);
-      color: var(--text-secondary, #888);
-      line-height: 1.4;
     }
   }
 
   // ==================== 分页（在弹窗 footer，不随表格滚动） ====================
+  //
+  // 只有分页控件、没有条数文案：条数在工具栏里紧贴着筛选控件说一次（同一弹窗里说两遍就是噪声）。
 
   .memory-pager {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     width: 100%;
     gap: 10px;
 
-    .memory-pager-info,
     .memory-pager-size,
     .memory-pager-page {
       font-size: var(--font-size-xs);
@@ -758,6 +767,68 @@
 .memory-settings .modal-content.memory-edit-modal .modal-footer .memory-action-btn:not(.primary) {
   border: 1px solid var(--border-color, #e5e5e5);
   color: var(--text-primary, #1a1a1a);
+}
+
+// ==================== 整理记忆（再蒸馏）的按钮行与结果块 ====================
+//
+// 与「详情正文自检」同一套外观（两者都是页尾的维护动作，不该长两个样），但类名分开：
+// 文案与数据来源完全不同，共用一个类名以后改一个会误伤另一个。
+.memory-settings .memory-redistill-last {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: var(--font-size-xs);
+  line-height: 1.6;
+  color: var(--text-secondary, #888);
+
+  .memory-redistill-last-title {
+    flex: none;
+    font-weight: 600;
+  }
+
+  // 「上次没跑成」（知识库不可用 / 没模型 / 开关关了）：自动整理本来就是用户无感的，
+  // 不染一点色它永远不会被注意到 —— 这正是「217 条一个月没被整理过」没人发现的原因
+  &.is-warn .memory-redistill-last-text {
+    color: var(--color-danger, #e53e3e);
+  }
+}
+
+.memory-settings .memory-redistill-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.memory-settings .memory-redistill-report {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 8px;
+  background: var(--bg-secondary, #f7f7f8);
+  font-size: var(--font-size-sm);
+
+  // 「没干成」（无模型 / 有批次失败）：给一块淡红底，否则一行灰字看着像成功
+  &.is-warn {
+    border-color: var(--color-error-border, #fecaca);
+    background: var(--color-error-bg, #ffebe9);
+  }
+
+  .memory-redistill-summary {
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  // 跳过原因：一句补充说明，不能跟主句抢镜头
+  .memory-redistill-note {
+    font-size: var(--font-size-xs);
+    line-height: 1.6;
+    color: var(--text-secondary, #888);
+  }
 }
 
 // ==================== 详情正文自检（页尾的维护动作） ====================

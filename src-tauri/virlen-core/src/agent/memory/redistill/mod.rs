@@ -46,8 +46,8 @@ use crate::agent::usage::ledger_tokens;
 use crate::rag::rag_service::RagService;
 use crate::session_db::{
     ClaimOptions, MemoryRecord, MemoryRepo, MemoryRedistillRun, SessionRepo, SettingsRepo, UsageEntry,
-    MEMORY_REDISTILL_DONE, MEMORY_REDISTILL_FAILED, MEMORY_REDISTILL_PARTIAL,
-    MEMORY_REDISTILL_PURGE_FINGERPRINT, MEMORY_REDISTILL_SKIPPED,
+    MEMORY_REDISTILL_DONE, MEMORY_REDISTILL_FAILED, MEMORY_REDISTILL_GATE_PREFIX,
+    MEMORY_REDISTILL_PARTIAL, MEMORY_REDISTILL_PURGE_FINGERPRINT, MEMORY_REDISTILL_SKIPPED,
 };
 
 pub mod apply;
@@ -77,7 +77,11 @@ pub const MEMORY_REDISTILL_MAX_OUT_ITEMS: usize = 20;
 pub const MEMORY_REDISTILL_MIN_RATIO: usize = 2;
 
 /// 单轮最多跑几批（= 单轮模型调用上限）
-pub const MEMORY_REDISTILL_MAX_BATCHES_PER_RUN: usize = 3;
+///
+/// 为何从 3 提到 6：一批的条数被**归档预算**卡住（`MEMORY_DETAIL_MAX_CHARS` / 单条详情平均
+/// 1.7k 字符 → 实际每批 4–8 条），3 批一轮只能动十几条 —— 两百条候选要十几轮、十几个小时。
+/// 6 批把一轮变成～40 条，且循环有自然停止条件（压不动 / 没组了），不会白烧钱。
+pub const MEMORY_REDISTILL_MAX_BATCHES_PER_RUN: usize = 6;
 
 /// 轮次间隔：上一轮 `done` / `partial` 之后至少等这么久
 pub const MEMORY_REDISTILL_COOLDOWN_MS: i64 = 1_800_000;
@@ -85,8 +89,14 @@ pub const MEMORY_REDISTILL_COOLDOWN_MS: i64 = 1_800_000;
 /// 失败退避
 pub const MEMORY_REDISTILL_FAIL_BACKOFF_MS: i64 = 21_600_000;
 
-/// 同一指纹最多尝试几次（之后等人工 `--force`）
+/// 同一指纹最多尝试几次（之内按小时级退避重试）
 pub const MEMORY_REDISTILL_MAX_ATTEMPTS: i64 = 3;
+
+/// 尝试耗尽后的**长期退避**（7 天）：过了它再放一次，不是永久拉黑。
+///
+/// 批次指纹 = `scope + Σ(id:updated_at)`，来源不变它就不变 —— 「耗尽即永久」等于
+/// 一次网络抖动用光 3 次尝试就把这批记忆永久逐出整理。7 天足够避开当时那个问题。
+pub const MEMORY_REDISTILL_EXHAUSTED_RETRY_MS: i64 = 604_800_000;
 
 /// `running` 超过它即视为崩溃残留，可被下一次 claim 抢占
 pub const MEMORY_REDISTILL_STALE_MS: i64 = 600_000;
@@ -147,7 +157,10 @@ pub const REASON_ARCHIVE_TOO_LONG: &str = "archive-too-long";
 pub const REASON_TOO_FEW_ITEMS: &str = "too-few-items";
 pub const REASON_ALREADY_DONE: &str = "already-done";
 
-/// 一轮内最多尝试几个组（已处理 / 装不下的组会被跳过，防止在它们身上空转）
+/// 一轮内最多**空转**几个组（已处理 / 凑不齐的组会被跳过，防止在它们身上无限转圈）。
+///
+/// ⚠️ 它计的是「这一轮**没有调模型**的迭代次数」，不是迭代总数：两者混在一起会让
+/// `MEMORY_REDISTILL_MAX_BATCHES_PER_RUN` 变成永远够不到的天花板（曾经 5 卡住 6）。
 const MAX_GROUP_ATTEMPTS: usize = 5;
 
 // ==================== 任务与报告 ====================
@@ -200,6 +213,11 @@ pub struct RedistillReport {
     pub task: String,
     pub purged: usize,
     pub purged_failed: usize,
+    /// 被归档清理的护栏 ④ **保留**下来的条数（指向的新条目已不存在 / 没有归档详情）
+    ///
+    /// 必须上报：它们既没删掉也不会再被删（代码不再动它们），只留在日志里等于对用户静默 ——
+    /// 面板据此说「另有 N 条需人工处理」，而不是一句「没有超期的归档需要清理」。
+    pub purged_retained: usize,
     pub batches: Vec<BatchReport>,
     pub items_in: usize,
     pub items_out: usize,
@@ -214,6 +232,7 @@ impl RedistillReport {
             task: task.label().to_string(),
             purged: 0,
             purged_failed: 0,
+            purged_retained: 0,
             batches: Vec::new(),
             items_in: 0,
             items_out: 0,
@@ -254,6 +273,8 @@ pub async fn run_at(
     force: bool,
 ) -> Result<RedistillReport, String> {
     if !deps.memory.is_available() || !deps.sessions.is_available() {
+        // 库都读不到时这一步也写不进去（Noop 静默丢弃），但真实库 + 会话仓储缺失时留得下痕
+        record_gate_skip(&deps, now_ms, REPORT_UNAVAILABLE, "本地库不可用").await;
         return Ok(RedistillReport::empty(REPORT_UNAVAILABLE, task));
     }
     let settings = match deps.settings.get_all().await {
@@ -261,6 +282,7 @@ pub async fn run_at(
         Err(e) => return Err(format!("读取配置失败: {}", e)),
     };
     if !enabled_from_settings(&settings) {
+        record_gate_skip(&deps, now_ms, REPORT_DISABLED, "记忆功能已关闭").await;
         return Ok(RedistillReport::empty(REPORT_DISABLED, task));
     }
     // 逃生开关：缺键 = 开（默认开、不进 UI）
@@ -269,6 +291,7 @@ pub async fn run_at(
         .and_then(Value::as_bool)
         .unwrap_or(true)
     {
+        record_gate_skip(&deps, now_ms, REPORT_DISABLED, "再蒸馏逃生开关已关闭").await;
         return Ok(RedistillReport::empty(REPORT_DISABLED, task));
     }
 
@@ -289,11 +312,20 @@ pub async fn run_at(
     .await;
     report.purged = purge.purged;
     report.purged_failed = purge.failed;
-    if matches!(task, RedistillTask::Full) || purge.purged > 0 || purge.failed > 0 {
+    report.purged_retained = purge.retained;
+    // `retained > 0` 也算「本轮真跑过清理」：否则只会「保留」的那些轮次不落库，
+    // `last_purge_at` 永远为空 → `purge_due` 永远为真 → 每次启动 / 每次写记忆都再排一轮（日志刷屏）
+    if matches!(task, RedistillTask::Full)
+        || purge.purged > 0
+        || purge.failed > 0
+        || purge.retained > 0
+    {
         record_purge_run(&deps, now_ms, &purge).await;
     }
     if matches!(task, RedistillTask::PurgeOnly) {
-        if purge.purged == 0 && purge.failed == 0 {
+        // 只保留也算「有结果要报」：`retained > 0` 时界面必须说清「N 条得人工处理」，
+        // 否则那句「没有超期的归档需要清理」就是在骗人。
+        if purge.purged == 0 && purge.failed == 0 && purge.retained == 0 {
             report.status = REPORT_NOTHING.to_string();
         }
         return Ok(report);
@@ -302,15 +334,15 @@ pub async fn run_at(
     // ── ②–⑬ 逐批循环 ──
     let mut candidates: Option<Vec<ModelCandidate>> = None;
     let mut calls = 0usize;
-    let mut attempts = 0usize;
+    // 空转次数（**只**统计「没调模型」的迭代）：调模型的迭代由 `calls` 记账
+    let mut idle = 0usize;
     // 一轮内已试过 / 已处理的组（按作用域屏蔽，避免在同一个组上空转）
     let mut blocked: Vec<String> = Vec::new();
 
-    while calls < MEMORY_REDISTILL_MAX_BATCHES_PER_RUN && attempts < MAX_GROUP_ATTEMPTS {
+    while calls < MEMORY_REDISTILL_MAX_BATCHES_PER_RUN && idle < MAX_GROUP_ATTEMPTS {
         if deps.cancel.is_cancelled() {
             break;
         }
-        attempts += 1;
 
         // ② 取快照 ③ 分组 ④ 选组
         let all = deps.memory.list(None, true).await?;
@@ -333,6 +365,9 @@ pub async fn run_at(
 
         // RAG 不可用 → 整批 skipped(no-rag)：没有归档就不许停用来源
         if deps.rag.is_none() {
+            // 落一行闸门级跳过：这条路上**没有批次指纹可写**（写了就把这批永久判成已处理），
+            // 不落的话表现就是「什么都没发生」—— 启动期与 RAG 初始化抢跑时整整一个月静默白跑就是它。
+            record_gate_skip(&deps, now_ms, REASON_NO_RAG, "知识库（记忆详情）不可用").await;
             report.status = REPORT_OK.to_string();
             report.batches.push(BatchReport {
                 fingerprint: batch_fingerprint(&group.scope, &batch),
@@ -362,11 +397,24 @@ pub async fn run_at(
             MEMORY_REDISTILL_MAX_SOURCE_DETAIL_CHARS,
         );
         if !fit.too_long.is_empty() {
+            // 这些条目是**永久**出局（详情超过单条归档预算就不许停用来源），不是「本轮偶发」：
+            // 逐条 id 只在 debug 构建打，release 只留一行计数（否则每次启动刷 7、8 行）
+            #[cfg(debug_assertions)]
             eprintln!(
                 "[memory] {} 条记忆的详情过长，本次候选里已移出: {:?}",
                 fit.too_long.len(),
                 fit.too_long
             );
+            #[cfg(not(debug_assertions))]
+            eprintln!(
+                "[memory] {} 条记忆的详情过长，本次候选里已移出（debug 构建可看 id）",
+                fit.too_long.len()
+            );
+            // 把「永不参与」落进库：否则闸门（只看 `memories` 表）会一直把它们算进候选条数，
+            // 于是永远判「越线了」→ 每次启动都触发整理、每次都在它们身上白量一遍详情。
+            if let Err(e) = deps.memory.mark_detail_too_long(&fit.too_long).await {
+                eprintln!("[memory] 标记详情过长失败（不影响本轮整理）: {}", e);
+            }
         }
         let batch = fit.kept;
 
@@ -378,11 +426,16 @@ pub async fn run_at(
         let cands: Vec<ModelCandidate> = candidates.clone().unwrap_or_default();
         if cands.is_empty() {
             // 不做尝试（不消耗 attempts）：这是配置问题，不是记忆库的问题
+            record_gate_skip(&deps, now_ms, REPORT_NO_MODEL, "没有可用的模型配置").await;
             report.status = REPORT_NO_MODEL.to_string();
             break;
         }
         if batch.len() < MEMORY_REDISTILL_MIN_RATIO {
+            // 典型原因：这一组剩下的都是「装得进归档但凑不齐两条」的零头 → 不花钱，但要说出来
+            record_gate_skip(&deps, now_ms, REASON_TOO_FEW_ITEMS, "这一组可归档的条数不够，凑不齐一批")
+                .await;
             blocked.push(group.scope.clone());
+            idle += 1;
             report.batches.push(BatchReport {
                 fingerprint: batch_fingerprint(&group.scope, &batch),
                 scope: group.scope.clone(),
@@ -405,6 +458,7 @@ pub async fn run_at(
             now_ms,
             stale_ms: MEMORY_REDISTILL_STALE_MS,
             max_attempts: MEMORY_REDISTILL_MAX_ATTEMPTS,
+            exhausted_retry_ms: MEMORY_REDISTILL_EXHAUSTED_RETRY_MS,
             force,
         };
         let Some(mut run) = deps
@@ -413,7 +467,9 @@ pub async fn run_at(
             .await?
         else {
             // 已处理 / 别人在跑 / 尝试耗尽 → 换下一组（一轮内不再试这一组）
+            record_gate_skip(&deps, now_ms, REASON_ALREADY_DONE, "这一批已处理过或正在被处理").await;
             blocked.push(group.scope.clone());
+            idle += 1;
             report.batches.push(BatchReport {
                 fingerprint,
                 scope: group.scope.clone(),
@@ -716,12 +772,37 @@ async fn record_purge_run(
         status: MEMORY_REDISTILL_DONE.to_string(),
         purged: outcome.purged as i64,
         purged_failed: outcome.failed as i64,
+        purged_retained: outcome.retained as i64,
         started_at: now_ms,
         finished_at: Some(now_ms),
         ..Default::default()
     };
     if let Err(e) = deps.memory.finish_redistill_run(&run).await {
         eprintln!("[memory] 写入清理流水失败（不影响清理本身）: {}", e);
+    }
+}
+
+/// 落一行「闸门级跳过」流水（`fingerprint = gate:<reason>`）。
+///
+/// 必要性：六条跳过分支都不消耗 attempt、也没有可写的批次指纹 —— 不落这一行，用户能看到的
+/// 全部证据只有「一直没整理过」，排查只能猜。这一行让面板直接回答「上次自动整理为什么没跑」。
+async fn record_gate_skip(
+    deps: &RedistillDeps<'_>,
+    now_ms: i64,
+    reason: &str,
+    detail: &str,
+) {
+    eprintln!("[memory] 本轮未整理: {}（{}）", reason, detail);
+    let run = MemoryRedistillRun {
+        fingerprint: format!("{}{}", MEMORY_REDISTILL_GATE_PREFIX, reason),
+        status: MEMORY_REDISTILL_SKIPPED.to_string(),
+        error: Some(detail.to_string()),
+        started_at: now_ms,
+        finished_at: Some(now_ms),
+        ..Default::default()
+    };
+    if let Err(e) = deps.memory.finish_redistill_run(&run).await {
+        eprintln!("[memory] 写入跳过流水失败（不影响记忆本身）: {}", e);
     }
 }
 
@@ -988,11 +1069,89 @@ mod tests {
         }
     }
 
+    /// 模型桩：把**提示词里的前两条 id** 合成一条。
+    ///
+    /// `StubBuilder` 的固定回复只够验单批：一旦要跑多批，第二批的候选换了一组，
+    /// 回复里写死的 id 就不在本批输入里 → 校验层整条丢弃 → `no-gain` 提前收场。
+    struct EchoBuilder {
+        calls: Arc<AtomicUsize>,
+    }
+
+    struct EchoProvider {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Provider for EchoProvider {
+        async fn chat(
+            &self,
+            request: &ChatRequest,
+            _cancel: &CancellationToken,
+        ) -> Result<Message, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let prompt = request
+                .messages
+                .iter()
+                .rev()
+                .find(|m| m.role == "user")
+                .map(Message::text_content)
+                .unwrap_or_default();
+            let ids: Vec<String> = prompt
+                .lines()
+                .filter_map(|line| {
+                    let at = line.find("(id: ")? + 5;
+                    let end = at + line[at..].find(')')?;
+                    Some(line[at..end].to_string())
+                })
+                .take(2)
+                .collect();
+            let reply = if ids.len() < 2 {
+                r#"{"groups":[]}"#.to_string()
+            } else {
+                format!(
+                    r#"{{"groups":[{{"source_ids":["{}","{}"],"summary":"合并 {} 与 {}","kind":"fact"}}]}}"#,
+                    ids[0], ids[1], ids[0], ids[1]
+                )
+            };
+            Ok(Message {
+                id: "resp".into(),
+                role: "assistant".into(),
+                content: Value::String(reply),
+                usage: Some(TokenUsage {
+                    prompt_tokens: 100,
+                    completion_tokens: 20,
+                    total_tokens: 120,
+                    cached_tokens: None,
+                    cache_write_tokens: None,
+                }),
+                timestamp: 0,
+                ..Default::default()
+            })
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: &ChatRequest,
+            _cancel: &CancellationToken,
+            _on_event: &mut (dyn FnMut(StreamEvent) + Send),
+        ) -> Result<(), String> {
+            unreachable!("再蒸馏只走非流式 chat")
+        }
+    }
+
+    impl MemoryProviderBuilder for EchoBuilder {
+        fn build(&self, _conn: &ProviderConnection) -> Result<Box<dyn Provider>, String> {
+            Ok(Box::new(EchoProvider {
+                calls: self.calls.clone(),
+            }))
+        }
+    }
+
     fn rec(id: &str, scope: Option<&str>, created_at: i64) -> MemoryRecord {
         MemoryRecord {
             id: id.into(),
             level: "normal".into(),
-            kind: "project".into(),
+            kind: "fact".into(),
             summary: format!("记忆 {id}"),
             project_path: scope.map(String::from),
             origin: MEMORY_ORIGIN_MODEL.into(),
@@ -1062,7 +1221,7 @@ mod tests {
 
         let calls = Arc::new(AtomicUsize::new(0));
         let builder = StubBuilder {
-            reply: r#"{"groups":[{"source_ids":["m_a000","m_a001","m_a002"],"summary":"三条合并成的一条","kind":"project","tags":["merged"]}]}"#.to_string(),
+            reply: r#"{"groups":[{"source_ids":["m_a000","m_a001","m_a002"],"summary":"三条合并成的一条","kind":"fact","tags":["merged"]}]}"#.to_string(),
             calls: calls.clone(),
         };
         let cancel = CancellationToken::new();
@@ -1204,6 +1363,92 @@ mod tests {
         assert_eq!(report.batches[0].reason.as_deref(), Some(REASON_NO_RAG));
         assert_eq!(calls.load(Ordering::SeqCst), 0, "不调模型");
         assert_eq!(memory.list(None, false).await.unwrap().len(), 6, "一条不动");
+
+        // 但必须**留痕**：否则用户看到的全部证据只有「一直没整理过」
+        let runs = memory.list_redistill_runs(10).await.unwrap();
+        let gate = runs
+            .iter()
+            .find(|r| r.fingerprint == format!("{}no-rag", MEMORY_REDISTILL_GATE_PREFIX))
+            .expect("no-rag 要落一行 gate 流水");
+        assert_eq!(gate.status, MEMORY_REDISTILL_SKIPPED);
+        assert!(
+            memory.last_redistill_run().await.unwrap().is_none(),
+            "gate 行不驱动冷却（否则一次环境问题会压制下一次真实触发）"
+        );
+        drop(db);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 回归锁：一轮必须**真能跑满** `MEMORY_REDISTILL_MAX_BATCHES_PER_RUN`。
+    ///
+    /// 曾经的现场：`MAX_GROUP_ATTEMPTS`（防止在跳过的组上空转）在循环顶部**无条件**自增，
+    /// 于是它悄悄变成了「迭代总数」的上限 —— 3→6 改完实际一轮仍然只跑 5 批，
+    /// 面板「最多 6 次调用」、CLI `estimated_calls`、文档「单轮最多 6 批」全在骗人。
+    /// 现在它只统计「没调模型」的迭代，这里就守着这条口径。
+    #[tokio::test]
+    async fn a_run_really_reaches_the_batch_cap() {
+        let (db, dir) = test_db("batch_cap").await;
+        seed_provider(&db).await;
+        let memory = db.memory.as_ref();
+        let rag = test_rag();
+
+        // 7 个独立作用域 × 5 条：每次都够成组；合并一对后那组只剩 4 条（退出候选），
+        // 于是每批都会换到下一个作用域，不会被同一组反复挡住。
+        for g in 0..7 {
+            for i in 0..MEMORY_REDISTILL_MIN_GROUP_ITEMS {
+                memory
+                    .upsert(&rec(
+                        &format!("m_g{g}_{i}"),
+                        Some(&format!("C:/p{g}")),
+                        1_700_000_000_000 + g * 10 + i as i64,
+                    ))
+                    .await
+                    .unwrap();
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let builder = EchoBuilder {
+            calls: calls.clone(),
+        };
+        let cancel = CancellationToken::new();
+        let report = run_at(
+            RedistillDeps {
+                memory,
+                sessions: db.repo.as_ref(),
+                settings: db.settings.as_ref(),
+                rag: Some(rag),
+                builder: &builder,
+                cancel: &cancel,
+            },
+            RedistillTask::Full,
+            NOW,
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            report.calls, MEMORY_REDISTILL_MAX_BATCHES_PER_RUN,
+            "一轮必须能跑满批次上限（只有**空转**才该吃 MAX_GROUP_ATTEMPTS）"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            MEMORY_REDISTILL_MAX_BATCHES_PER_RUN,
+            "模型调用次数 = 批次数"
+        );
+        assert!(
+            report
+                .batches
+                .iter()
+                .all(|b| b.status == MEMORY_REDISTILL_DONE),
+            "这 6 批都该合并成功：{:?}",
+            report
+                .batches
+                .iter()
+                .map(|b| (b.status.clone(), b.reason.clone(), b.error.clone()))
+                .collect::<Vec<_>>()
+        );
         drop(db);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1280,6 +1525,10 @@ mod tests {
         let purge = purge_archived(&deps, NOW, retention, 50).await;
         assert_eq!(purge.purged, 1);
         assert_eq!(purge.failed, 0);
+        assert_eq!(
+            purge.retained, 2,
+            "护栏 ④ 挡下的两条单独计数（不算 failed，也不许当成删掉了）"
+        );
         assert!(memory.get("m_ok").await.unwrap().is_none(), "合格的应被清掉");
         for keep in ["m_manual", "m_fresh", "m_orphan", "m_nodetail", "m_new"] {
             assert!(memory.get(keep).await.unwrap().is_some(), "{keep} 不该被清");
@@ -1288,6 +1537,7 @@ mod tests {
         // 单轮上限：剩下的下轮再来（这里只验证计数语义）
         let purge_again = purge_archived(&deps, NOW, retention, 50).await;
         assert_eq!(purge_again.purged, 0, "幂等：清空了就再无可清");
+        assert_eq!(purge_again.retained, 2, "挡住了还是挡住了（同一批永久保留）");
 
         // RAG 不可用 → **一条都不删**（自动路径没人看着，不留孤儿详情文档）
         archive(memory, &rec("m_ok2", None, 1), "m_new", expired).await;
@@ -1312,6 +1562,81 @@ mod tests {
         assert!(
             kb::read_detail(rag, kb_id, doc_id).await.is_ok(),
             "顶替者的归档不受影响"
+        );
+        drop(db);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 回归锁：「只有保留」的一轮也必须落清理流水 —— 否则 `last_purge_at` 永远为空，
+    /// `purge_due` 永远为真 → 每次启动（乃至每次写记忆）都再排一次清理、再打一遍日志。
+    ///
+    /// 现场：库里只剩一批「指向的新条目已不存在」的归档条目（用户删了合并后的条目），
+    /// 它们会被护栏 ④ 永久保留，于是这轮 `purged = 0 && failed = 0`。
+    #[tokio::test]
+    async fn retained_only_purge_still_records_the_purge_run() {
+        let (db, dir) = test_db("purge_retained").await;
+        let memory = db.memory.as_ref();
+        let rag = test_rag();
+        let retention = MEMORY_REDISTILL_ARCHIVE_RETENTION_MS;
+        let expired = NOW - retention - 1;
+
+        // 一条挂到「已经不存在的旧 id」上的归档条目
+        memory.upsert(&rec("m_orphan", None, 1)).await.unwrap();
+        let stored = memory.get("m_orphan").await.unwrap().unwrap();
+        assert_eq!(
+            memory
+                .supersede(&[("m_orphan".into(), stored.updated_at, "m_gone".into())], expired)
+                .await
+                .unwrap(),
+            1
+        );
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let builder = StubBuilder {
+            reply: r#"{"groups":[]}"#.to_string(),
+            calls: calls.clone(),
+        };
+        let cancel = CancellationToken::new();
+        let report = run_at(
+            RedistillDeps {
+                memory,
+                sessions: db.repo.as_ref(),
+                settings: db.settings.as_ref(),
+                rag: Some(rag),
+                builder: &builder,
+                cancel: &cancel,
+            },
+            RedistillTask::PurgeOnly,
+            NOW,
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.purged, 0);
+        assert_eq!(report.purged_failed, 0);
+        assert_eq!(
+            report.purged_retained, 1,
+            "保留条数必须进报告：只打日志等于对 GUI 用户静默（他不会去看 stdout）"
+        );
+        assert_ne!(
+            report.status, REPORT_NOTHING,
+            "「有 N 条得人工处理」不是「什么都没要清」—— 这里不能报 nothing"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "只清理，不调模型");
+        assert!(
+            memory.get("m_orphan").await.unwrap().is_some(),
+            "护栏 ④ 挡住：宁可不删，也不能抹掉唯一载体"
+        );
+        let run = memory
+            .get_redistill_run(MEMORY_REDISTILL_PURGE_FINGERPRINT)
+            .await
+            .unwrap()
+            .expect("「只保留」也要落流水，否则下一次启动又排一轮");
+        assert_eq!(run.finished_at, Some(NOW));
+        assert_eq!(
+            run.purged_retained, 1,
+            "流水也要记：面板的「上次整理」读的是这行（自动触发的那几轮不会留下即时报告）"
         );
         drop(db);
         std::fs::remove_dir_all(&dir).ok();
