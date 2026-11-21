@@ -12,7 +12,8 @@ import {
 import { settingsState } from '@/ui/store'
 import type { AgentEventCallback, Message, MessageContent } from '@/types'
 import { messageHasVisibleContent } from '@/utils/messageContent'
-import { extractText, getEngine, providerTypeOf, transformApiError } from './common'
+import { extractText, getEngine, providerTypeOf } from './common'
+import { reportChatError } from './report-error'
 import { activeTraces, markErrored } from './trace'
 import {
   addSessionMessage,
@@ -30,7 +31,6 @@ import { presentedOf, revealPresented } from '@/services/present-service'
 import { t } from '@/ui/i18n'
 import {
   track,
-  trackError,
   trackPerf,
   hashText,
   truncateText,
@@ -282,18 +282,18 @@ export function createEventHandler(
         const errSess = sessionStore.getSession(sessionId)
         const errMsg = event.error || '未知错误'
         const httpMatch = /API Error \((\d{3})\)/.exec(errMsg)
-        trackError('chat.stream.error', errMsg, {
-          traceId,
-          props: {
-            ...(errSess ? { provider_type: providerTypeOf(errSess) } : {}),
-            partial_len: (sessionRt.pendingContent || '').length,
-            paused: !!sessionRt.paused,
-            http_status: httpMatch ? Number(httpMatch[1]) : undefined,
-          },
-        })
+        // 埋点与展示同一出口：埋点里既有原始错误也有界面文案（见 report-error.ts）
         events?.onError?.(
           sessionId,
-          transformApiError(event.error || '未知错误'),
+          reportChatError(sessionId, errMsg, 'engine', {
+            traceId,
+            props: {
+              ...(errSess ? { provider_type: providerTypeOf(errSess) } : {}),
+              partial_len: (sessionRt.pendingContent || '').length,
+              paused: !!sessionRt.paused,
+              http_status: httpMatch ? Number(httpMatch[1]) : undefined,
+            },
+          }),
         )
         break
       }

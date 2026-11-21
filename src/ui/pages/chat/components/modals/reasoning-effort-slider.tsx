@@ -81,15 +81,15 @@ function ReasoningEffortSlider() {
     (p) => p.id === providerId,
   )
 
-  // 候选项 = 服务商勾选出的集合；未配置过时仅 openai 类型用默认基础档位兜底
-  //（其余类型不支持 reasoning_effort，不显示该控件）
+  // 候选项 = 服务商勾选出的集合；未配置过时仅 openai 兼容 / responses 用默认基础档位兜底
+  //（其余类型没有推理档位，不显示该控件）
   const configured =
     provider?.reasoningEffortList && provider.reasoningEffortList.length > 0
       ? provider.reasoningEffortList
       : null
   const candidates =
     configured ??
-    (provider && provider.type === 'openai'
+    (provider && (provider.type === 'openai' || provider.type === 'responses')
       ? [...defaultReasoningEffortList()]
       : null)
 

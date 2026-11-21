@@ -385,7 +385,7 @@ async fn collect(
         type_ = alts[i].type_name.clone();
         base_default = alts[i].base_url.clone();
     }
-    if !matches!(type_.as_str(), "openai" | "anthropic") {
+    if !matches!(type_.as_str(), "openai" | "anthropic" | "responses") {
         return Err(format!(
             "CLI 暂不支持 `{}` 协议（{}）：它需要前端 JS 桥（BridgedProvider），请在桌面端配置。\n\
              提示：若该服务商同时提供 openai 兼容端点，请改用 `custom` 模板并把协议选成 openai",
@@ -885,7 +885,7 @@ async fn run_test(
     let base_url = get_str(v, "baseUrl");
     let models = get_strs(v, "models");
 
-    if !matches!(type_.as_str(), "openai" | "anthropic") {
+    if !matches!(type_.as_str(), "openai" | "anthropic" | "responses") {
         let _ = writeln!(
             err,
             "错误: CLI 无法测试 `{}` 协议（需要前端 JS 桥），请在桌面端测试",

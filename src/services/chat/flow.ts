@@ -27,9 +27,9 @@ import {
   getEngine,
   providerTypeOf,
   resolveReasoningEffort,
-  transformApiError,
 } from './common'
 import { activeTraces, markErrored } from './trace'
+import { reportChatError } from './report-error'
 import {
   addSessionMessage,
   getSessionMessages,
@@ -45,6 +45,7 @@ import {
   newTraceId,
   hashText,
   setSessionTrace,
+  getSessionTrace,
   truncateText,
 } from '@/utils/telemetry'
 import { sanitizeLoneSurrogates } from '@/utils/text'
@@ -232,18 +233,33 @@ export async function sendMessage(
 ): Promise<void> {
   let session = sessionStore.getSession(sessionId)
   if (!session) {
-    events?.onError?.(sessionId, '会话不存在')
+    events?.onError?.(
+      sessionId,
+      reportChatError(sessionId, '会话不存在', 'guard', {
+        props: { phase: 'send', reason: 'no_session' },
+      }),
+    )
     return
   }
 
   // 并发保护：同一会话同时只能有一个 run（手机端接入后的必备检查）
   if (isSessionBusy(sessionId)) {
-    events?.onError?.(sessionId, MSG_SESSION_BUSY)
+    events?.onError?.(
+      sessionId,
+      reportChatError(sessionId, MSG_SESSION_BUSY, 'guard', {
+        props: { phase: 'send', reason: 'busy' },
+      }),
+    )
     return
   }
 
   if (!session.modelId || !session.providerConfigId) {
-    events?.onError?.(sessionId, '未选择模型')
+    events?.onError?.(
+      sessionId,
+      reportChatError(sessionId, '未选择模型', 'guard', {
+        props: { phase: 'send', reason: 'no_model' },
+      }),
+    )
     return
   }
 
@@ -336,7 +352,13 @@ export async function sendMessage(
     })
   } catch (e: any) {
     markErrored(sessionId)
-    events?.onError?.(sessionId, transformApiError(e.message || '错误'))
+    events?.onError?.(
+      sessionId,
+      reportChatError(sessionId, e?.message || '错误', 'invoke', {
+        traceId,
+        props: { phase: 'send' },
+      }),
+    )
   } finally {
     toolInteract.cleanup()
   }
@@ -393,7 +415,12 @@ export async function resumePausedRun(
   events?: ChatServiceEvents,
 ): Promise<void> {
   if (resumingSessions.has(sessionId)) {
-    events?.onError?.(sessionId, MSG_SESSION_BUSY)
+    events?.onError?.(
+      sessionId,
+      reportChatError(sessionId, MSG_SESSION_BUSY, 'resume', {
+        props: { reason: 'reentrant' },
+      }),
+    )
     return
   }
   resumingSessions.add(sessionId)
@@ -411,19 +438,34 @@ async function resumePausedRunImpl(
 ): Promise<void> {
   const session = sessionStore.getSession(sessionId)
   if (!session) {
-    events?.onError?.(sessionId, '会话不存在')
+    events?.onError?.(
+      sessionId,
+      reportChatError(sessionId, '会话不存在', 'resume', {
+        props: { reason: 'no_session' },
+      }),
+    )
     return
   }
 
   // 用「活跃执行」而非 isSessionBusy：暂停态的 working 仍为 true，但正是本函数的合法入口
   if (isSessionActivelyWorking(sessionId)) {
-    events?.onError?.(sessionId, MSG_SESSION_BUSY)
+    events?.onError?.(
+      sessionId,
+      reportChatError(sessionId, MSG_SESSION_BUSY, 'resume', {
+        props: { reason: 'working' },
+      }),
+    )
     return
   }
 
   const snapshot = await getEngine().getRunSnapshot(sessionId)
   if (!snapshot) {
-    events?.onError?.(sessionId, '没有可恢复的暂停任务')
+    events?.onError?.(
+      sessionId,
+      reportChatError(sessionId, '没有可恢复的暂停任务', 'resume', {
+        props: { reason: 'no_snapshot' },
+      }),
+    )
     return
   }
 
@@ -489,7 +531,13 @@ async function resumePausedRunImpl(
     })
   } catch (e: any) {
     markErrored(sessionId)
-    events?.onError?.(sessionId, e.message || '错误')
+    events?.onError?.(
+      sessionId,
+      reportChatError(sessionId, e?.message || '错误', 'invoke', {
+        traceId,
+        props: { phase: 'resume' },
+      }),
+    )
   } finally {
     toolInteract.cleanup()
   }
@@ -526,18 +574,33 @@ export async function sendMessageWithGoal(
 ): Promise<void> {
   let session = sessionStore.getSession(sessionId)
   if (!session) {
-    events?.onError?.(sessionId, '会话不存在')
+    events?.onError?.(
+      sessionId,
+      reportChatError(sessionId, '会话不存在', 'goal', {
+        props: { reason: 'no_session' },
+      }),
+    )
     return
   }
 
   // 并发保护：与 sendMessage 同一判据
   if (isSessionBusy(sessionId)) {
-    events?.onError?.(sessionId, MSG_SESSION_BUSY)
+    events?.onError?.(
+      sessionId,
+      reportChatError(sessionId, MSG_SESSION_BUSY, 'goal', {
+        props: { reason: 'busy' },
+      }),
+    )
     return
   }
 
   if (!session.modelId || !session.providerConfigId) {
-    events?.onError?.(sessionId, '未选择模型')
+    events?.onError?.(
+      sessionId,
+      reportChatError(sessionId, '未选择模型', 'goal', {
+        props: { reason: 'no_model' },
+      }),
+    )
     return
   }
 
@@ -633,7 +696,13 @@ export async function sendMessageWithGoal(
     })
   } catch (e: any) {
     markErrored(sessionId)
-    events?.onError?.(sessionId, transformApiError(e.message || '错误'))
+    events?.onError?.(
+      sessionId,
+      reportChatError(sessionId, e?.message || '错误', 'invoke', {
+        traceId,
+        props: { phase: 'goal' },
+      }),
+    )
   } finally {
     toolInteract.cleanup()
   }
@@ -753,8 +822,13 @@ export async function compressContext(
       )
     }
   } catch (e: any) {
-    const errorMsg = e?.message || String(e)
-    showToast('压缩失败：' + errorMsg, 2000)
+    // 与成功那一支的 `chat.context.compress`（status=success）配对：失败此前只弹 toast，
+    // 埋点包里完全看不到「用户点了压缩但没成功」
+    trackError('chat.context.compress', e, {
+      traceId: getSessionTrace(sessionId),
+      props: { status: 'fail', session_id: hashText(sessionId) },
+    })
+    showToast('压缩失败：' + (e?.message || String(e)), 2000)
   } finally {
     sessionRuntimeState.setCompacting(sessionId, false)
   }

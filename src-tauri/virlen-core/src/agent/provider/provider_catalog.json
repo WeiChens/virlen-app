@@ -72,6 +72,16 @@
       "type": "openai",
       "label": "OpenAI",
       "baseUrl": "https://api.openai.com/v1",
+      "allowTypeList": [
+        {
+          "type": "openai",
+          "baseUrl": "https://api.openai.com/v1"
+        },
+        {
+          "type": "responses",
+          "baseUrl": "https://api.openai.com/v1"
+        }
+      ],
       "allowReasoningEffortList": [
         "low",
         "medium",

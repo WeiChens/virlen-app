@@ -1,6 +1,6 @@
 /**
- * Provider HTTP 工具 —— 统一 fetch 调用与 SSE 流解析。三个 provider（OpenAI/Anthropic/Gemini）在
- * chat/chatStream 中大量重复的「fetch → 错误处理 → SSE 解析」逻辑，统一封装至此。
+ * Provider HTTP 工具 —— 统一 fetch 调用与 SSE 流解析。各 provider（OpenAI / Anthropic / Gemini /
+ * Responses）在 chat/chatStream 中大量重复的「fetch → 错误处理 → SSE 解析」逻辑，统一封装至此。
  */
 import { track, urlHost } from '@/utils/telemetry'
 import { sliceHead } from '@/utils/text'
@@ -12,6 +12,8 @@ function mapProviderType(name: string): string {
   const n = (name || '').toLowerCase()
   if (n.includes('anthropic') || n.includes('claude')) return 'anthropic'
   if (n.includes('gemini') || n.includes('google')) return 'gemini'
+  // 先于 openai：Responses 的配置名多半也带 openai（`openai-responses` / `我的 OpenAI`）
+  if (n.includes('responses')) return 'responses'
   if (n.includes('openai')) return 'openai'
   return n || 'unknown'
 }

@@ -11,11 +11,18 @@
   color: var(--color-error-text);
   font-size: var(--font-size-md);
 
-  span {
+  // 摘要只占一行：`min-width: 0` 不能省（flex 子项默认 min-width:auto，
+  // 长报错会把省略号连同两侧按钮一起顶出去）
+  .error-banner-text {
     flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   button {
+    flex: none;
     border: none;
     background: transparent;
     color: var(--color-error-text);
@@ -27,7 +34,28 @@
     &:hover {
       background: rgba(153, 27, 27, 0.1);
     }
+
+    // 「查看详情」是唤起弹窗的文字按钮，比 ✕ 轻一档
+    &.error-banner-detail {
+      font-size: var(--font-size-sm);
+      text-decoration: underline;
+      white-space: nowrap;
+    }
   }
+}
+
+// 错误详情弹窗正文：保留换行 / 缩进，超高自己滚（弹窗本身限 90vh）
+.error-detail-text {
+  margin: 0;
+  max-height: 60vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--code-font-family);
+  font-size: var(--font-size-sm);
+  line-height: var(--code-line-height);
+  color: var(--text-primary);
+  user-select: text;
 }
 
 // ==================== 加载更多提示 ====================

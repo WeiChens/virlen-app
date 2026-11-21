@@ -1,5 +1,5 @@
 /** 全局共享类型。 */
-export type ProviderType = 'openai' | 'anthropic' | 'gemini'
+export type ProviderType = 'openai' | 'anthropic' | 'gemini' | 'responses'
 
 export interface ProviderConfig {
   id: string

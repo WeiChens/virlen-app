@@ -15,6 +15,7 @@ use super::super::cancellation::CancellationToken;
 use super::super::types::{ChatRequest, Message, ProviderConnection};
 use super::anthropic::NativeAnthropicProvider;
 use super::openai::NativeOpenAiProvider;
+use super::responses::NativeResponsesProvider;
 use super::Provider;
 use serde_json::{json, Value};
 
@@ -37,7 +38,8 @@ fn http_client() -> reqwest::Client {
 
 /// 拉取供应商的模型列表。
 ///
-/// - `openai`：`GET {baseUrl}/models`，`Authorization: Bearer`；取 `data[].id`
+/// - `openai` / `responses`：`GET {baseUrl}/models`，`Authorization: Bearer`；取 `data[].id`
+///   （Responses API 与 Chat Completions 共用同一个模型列表端点）
 /// - `anthropic`：`GET {scheme}://{host}/models`，带 `x-api-key` / `anthropic-version`
 /// - 其余协议（gemini 等走 JS 桥）：明确报错，不静默返回空表
 pub async fn list_models(
@@ -46,7 +48,7 @@ pub async fn list_models(
     base_url: &str,
 ) -> Result<Vec<String>, String> {
     match provider_type {
-        "openai" => list_models_openai(api_key, base_url).await,
+        "openai" | "responses" => list_models_openai(api_key, base_url).await,
         "anthropic" => list_models_anthropic(api_key, base_url).await,
         other => Err(format!(
             "暂不支持拉取 `{}` 协议的模型列表（该协议需要前端 JS 桥）；请手工填写模型 id",
@@ -57,13 +59,23 @@ pub async fn list_models(
 
 /// 验证「这个 key + baseUrl + model 真的能用」—— 发一条 `ping` 的最小对话。
 ///
-/// 与 GUI「验证 API Key」同一条路径、同一个 `max_tokens: 1`，因此 CLI 里能从 401/404/额度错误里拿到
-/// 与桌面端一致的判定。成功时返回助手回答的纯文本（一般只有 1 个 token，可能为空串）。
+/// 与 GUI「验证 API Key」同一条路径，因此 CLI 里能从 401/404/额度错误里拿到
+/// 与桌面端一致的判定。成功时返回助手回答的纯文本（可能为空串）。
 ///
-/// 这是真实计费调用（虽然只花 1 个 token）；向导里应作为可选步骤并提前说明。
+/// 这是真实计费调用（极小）；向导里应作为可选步骤并提前说明。
+///
+/// ⚠️ 输出预算与温度按协议分开取值：Responses 的 `max_output_tokens` 对推理模型太小会被判非法
+///（预算全被思考吃掉 / `too small`），而 gpt-5 类模型拒绝 `temperature = 0` —— 两者都会把
+/// **能用的** provider 误判成失败。Chat Completions 侧保持 1 个 token 不变（既有口径）。
 pub async fn verify_connection(conn: &ProviderConnection, model: &str) -> Result<String, String> {
+    let is_responses = conn.provider_type == "responses";
     let provider: Box<dyn Provider> = match conn.provider_type.as_str() {
         "openai" => Box::new(NativeOpenAiProvider::new(
+            &conn.provider_id,
+            &conn.api_key,
+            &conn.base_url,
+        )),
+        "responses" => Box::new(NativeResponsesProvider::new(
             &conn.provider_id,
             &conn.api_key,
             &conn.base_url,
@@ -90,9 +102,11 @@ pub async fn verify_connection(conn: &ProviderConnection, model: &str) -> Result
         }],
         system_prompt: None,
         tools: Vec::new(),
-        temperature: 0.0,
+        temperature: if is_responses { 1.0 } else { 0.0 },
         top_p: 1.0,
-        max_tokens: 1,
+        // Responses：16 是各家推理模型接受的 `max_output_tokens` 下限附近的安全值；
+        // 拿 200 即证明 key + model 可用（截断/空串都不算失败）
+        max_tokens: if is_responses { 16 } else { 1 },
         stream: false,
         tool_choice: String::new(),
         reasoning_effort: None,

@@ -149,6 +149,60 @@ pub(super) fn openai_blocks(blocks: &[Value]) -> Vec<Value> {
         .collect()
 }
 
+/// content 块数组 → Responses API 的 `input` 内容块
+///
+/// 与 OpenAI 兼容的差别：文本块叫 `input_text`，图片块叫 `input_image` 且 `image_url` 是
+/// **字符串**（不是 `{url}` 对象）。file / quote / skill 同样降级为文本（只有 OpenAI 原生
+/// 文件块才认附件，而那是另一条上传通道，我们没有）。
+pub(super) fn responses_blocks(blocks: &[Value]) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    for block in blocks {
+        match block.get("type").and_then(Value::as_str) {
+            Some("text") => out.push(json!({
+                "type": "input_text",
+                "text": block.get("text").and_then(Value::as_str).unwrap_or(""),
+            })),
+            Some("file") => out.push(json!({
+                "type": "input_text",
+                "text": file_block_to_text(block),
+            })),
+            Some("quote") => out.push(json!({
+                "type": "input_text",
+                "text": quote_block_to_text(block),
+            })),
+            Some("skill") => out.push(json!({
+                "type": "input_text",
+                "text": skill_block_to_text(block),
+            })),
+            Some("image_url") => {
+                let url = block
+                    .get("image_url")
+                    .and_then(|i| i.get("url"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                out.push(json!({ "type": "input_image", "image_url": url }));
+            }
+            // 未知块一律丢弃：Responses 的 input 只接受白名单类型，透传一个它不认的
+            // `type` 会让**整个**请求 400（不是丢一个块）
+            _ => {}
+        }
+    }
+    out
+}
+
+/// 消息 content → Responses API 的 `input` 内容块数组
+///
+/// 一律返回数组：Responses 的 user 消息 `content` 就是块数组，字符串正文也要包成
+/// `input_text`（与 Chat Completions 的「字符串直传」不同）。
+pub(super) fn responses_user_content(content: &Value) -> Vec<Value> {
+    match content {
+        Value::String(s) => vec![json!({ "type": "input_text", "text": s })],
+        Value::Array(arr) => responses_blocks(arr),
+        // 预期之外的形状：按文本兜底，否则这条消息会整条消失
+        other => vec![json!({ "type": "input_text", "text": other.to_string() })],
+    }
+}
+
 /// 消息 content → OpenAI 兼容的 content 字段（对齐 TS `openai.ts::buildRequest`）
 ///
 /// - string：assistant 带 tool_calls 且正文为空串时必须给 null，

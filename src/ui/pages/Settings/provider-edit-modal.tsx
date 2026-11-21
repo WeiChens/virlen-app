@@ -332,6 +332,8 @@ export default function ProviderEditModal({
                   disabled={isTemplateFixed}
                   options={[
                     { value: 'openai', label: protocolLabel('openai') },
+                    // Responses API 是独立协议（端点 / 请求体 / 事件名都不同），不是 chat/completions 的开关
+                    { value: 'responses', label: protocolLabel('responses') },
                     { value: 'anthropic', label: protocolLabel('anthropic') },
                     { value: 'gemini', label: protocolLabel('gemini') },
                   ]}

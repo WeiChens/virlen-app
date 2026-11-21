@@ -7,7 +7,7 @@ export interface IProvider {
   readonly name: string
 
   /**
-   * Provider 协议类型（openai / anthropic / gemini）。
+   * Provider 协议类型（openai / anthropic / gemini / responses）。
    *
    * 仅用于用量统计（usage_ledger.provider_type）—— name 存的是配置 id，协议类型才是「这笔钱花在哪种计费口径上」
    * 的必要信息（如 Anthropic 的 cache 计价）。可选：测试里的 mock provider 不需实现。

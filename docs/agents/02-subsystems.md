@@ -137,7 +137,15 @@ Rust 只使用前端组装好的 `session.systemPrompt`（为空时回退 `"你�
 ### 5.5 Provider 与搜索源
 
 - **LLM Provider**：实现 `IProvider`（`infrastructure/provider/types.ts`：`listModels / chat / chatStream / buildRequest / validateApiKey`），模板放 `domain/provider/config.ts`。
-  TS 侧 3 种全支持；Rust 侧原生 OpenAI / Anthropic，**Gemini 走 `BridgedProvider`**（委托 TS）。
+  四种协议：`openai`（Chat Completions 兼容）/ `anthropic` / `gemini` / **`responses`（OpenAI Responses API，`POST {base}/responses`）**。
+  Rust 侧原生 `openai` / `anthropic` / `responses`（`provider/{openai,anthropic,responses}.rs`，GUI 与 CLI 共用），**Gemini 走 `BridgedProvider`**（委托 TS）。
+  ⚠️ `responses` 是**独立协议**而不是 chat/completions 的开关：系统提示走 `instructions`、历史是 `input[]` 的 item 列表（`message` / `function_call` / `function_call_output`）、工具定义平铺、推理走 `reasoning.{effort,summary}`、用量是 `input_tokens`/`output_tokens`（缓存在 `input_tokens_details.cached_tokens`）、流式是命名事件（`response.output_text.delta` → `response.completed`）。**不做「先试 responses 失败回落 chat/completions」**：那是同一个请求发两遍、计费两遍。两端实现必须逐项对齐（铁律 1）：`virlen-core/src/agent/provider/responses.rs` ↔ `src/infrastructure/provider/responses.ts`。
+  **接入一个新协议的落点清单**（漏一处 = 该协议在对应入口静默降级或直接不可用）：
+  Rust：`provider/mod.rs` 的 `create_native_provider` 与 `DefaultProviderFactory` **两处** match、`models.rs` 的 `list_models` 与 `verify_connection`、`catalog.rs` 白名单、`provider_catalog.json` 的 `allowTypeList`；
+  CLI：`virlen-cli/src/provider.rs` 两处白名单 + **`session_rt/resources.rs::resolve_connection` 的协议闸门**（它误判成桥接协议就会报「需要前端 JS 桥」，原生实现照样不可用）；
+  TS：`types/index.ts::ProviderType`、`providerVocabulary.ts`、`provider/index.ts` 工厂 case、`reasoning-effort-slider.tsx` 的默认档位兜底。
+  守卫用例：Rust `provider/models.rs` 与 CLI `session_rt/tests.rs::resolve_connection_accepts_native_protocols_and_rejects_bridged`，TS `tests/infrastructure/provider-responses.test.ts`。
+  `verify_connection` 的输出预算/温度按协议分开：`responses` 用 `max_output_tokens: 16` + `temperature: 1.0`（推理模型的 `max_output_tokens` 太小会被判非法、gpt-5 类拒绝 `temperature = 0`，两者都会把能用的 provider 误判成失败）。
 - **搜索源**：实现 `ISearchProvider`（`domain/search/types.ts`），放 `infrastructure/search-providers/`（**实际接入 `tavily` / `bocha` / `deepseek`**，`searxng.ts` 存在但未接入），`factory.ts` 注册。配置存 `SettingsStore.searchProviders` + `defaultSearchProviderId` → **已随配置下沉落到 `app_settings`**：原生 `web_search`（`native_tools/web/web_search.rs`）与 CLI 经 `ctx.settings` 读**同一份**，不再依赖前端下发。**两侧清单必须同步**：TS 模板表 + 工厂 + Rust 分发三处的类型集合与默认地址由 `src/tests/contracts/search-provider-parity.test.ts` 守（只改一侧 = 「设置里能加、引擎永远说未配置」）。
 
 ### 5.6 视觉 / RAG / Skill

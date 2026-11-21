@@ -257,3 +257,34 @@ async fn ai_mode_rejects_bridged_provider_before_calling() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// `resolve_connection` 是 CLI 启动前的**唯一协议闸门**：原生协议必须放行、桥接协议必须提前报错。
+///
+/// ⚠️ 这份名单与 `provider::create_native_provider` 的 match 是同一份事实（见 `resources.rs` 注释）：
+/// 曾经漏了 `responses` —— 它明明是原生 HTTP 实现，却被当成桥接协议拒掉，CLI 直接不可用。
+#[test]
+fn resolve_connection_accepts_native_protocols_and_rejects_bridged() {
+    let lite = |type_: &str| -> ProviderLite {
+        serde_json::from_value(json!({
+            "id": format!("p_{}", type_),
+            "type": type_,
+            "name": type_,
+            "apiKey": "k",
+            "baseUrl": "https://example.com/v1",
+            "models": ["m1"],
+        }))
+        .unwrap()
+    };
+
+    for type_ in ["openai", "anthropic", "responses"] {
+        let providers = vec![lite(type_)];
+        let (conn, model) = resolve_connection(&providers, None, None, None)
+            .unwrap_or_else(|e| panic!("`{type_}` 是原生协议，不该被拒：{e}"));
+        assert_eq!(conn.provider_type, type_);
+        assert_eq!(model, "m1");
+    }
+
+    let bridged = vec![lite("gemini")];
+    let err = resolve_connection(&bridged, None, None, None).expect_err("gemini 需要 JS 桥");
+    assert!(err.contains("JS 桥"), "实际: {err}");
+}

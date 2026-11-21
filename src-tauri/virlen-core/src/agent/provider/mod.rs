@@ -1,7 +1,8 @@
 //! Provider 层 — 原生 HTTP 实现 + JS 桥接实现。
 //!
 //! 本文件是模块入口：只放 `Provider` / `ProviderFactory` trait 与默认工厂，实现按厂商拆到子模块：
-//! - `openai` / `anthropic`：原生 HTTP 实现（DeepSeek / Moonshot / Ollama 等走 openai 兼容协议）
+//! - `openai` / `anthropic` / `responses`：原生 HTTP 实现（DeepSeek / Moonshot / Ollama 等走 openai 兼容协议，
+//!   `responses` 是 OpenAI **Responses API**，独立协议、不是 chat/completions 的马甲）
 //! - `bridged`：转发到 JS 侧 provider（如 Gemini），走双向事件桥
 //! - `blocks`：内容块降级（file / quote / skill → 文本、vision 处理）
 //! - `sse`：流式响应逐行读取
@@ -19,6 +20,7 @@ mod blocks;
 mod bridged;
 mod anthropic;
 mod openai;
+mod responses;
 mod sse;
 mod models;
 
@@ -32,6 +34,7 @@ mod tests;
 pub use anthropic::NativeAnthropicProvider;
 pub use bridged::BridgedProvider;
 pub use openai::NativeOpenAiProvider;
+pub use responses::NativeResponsesProvider;
 pub use models::{list_models, verify_connection};
 
 // ⚠️ 附件 / 引用 / 技能的「块 → 文本」降级函数要被 `agent::compress::raw` 复用：压缩渲染出的历史必须与
@@ -89,15 +92,15 @@ pub trait ProviderFactory: Send + Sync {
     fn create(&self, conn: &ProviderConnection) -> Box<dyn Provider>;
 }
 
-/// 默认工厂：openai/anthropic 原生 HTTP，其余（gemini 等）桥接 JS
+/// 默认工厂：openai / anthropic / responses 原生 HTTP，其余（gemini 等）桥接 JS
 pub struct DefaultProviderFactory {
     pub bridge: Arc<AgentBridgeState>,
     pub sink: Arc<dyn EventSink>,
 }
 
-/// 按连接信息创建**原生** Provider（openai 兼容 / anthropic）—— headless 环境专用。
+/// 按连接信息创建**原生** Provider（openai 兼容 / anthropic / responses）—— headless 环境专用。
 ///
-/// 与 [`DefaultProviderFactory`] 的差别：后者对非 openai/anthropic 会返回
+/// 与 [`DefaultProviderFactory`] 的差别：后者对非原生协议会返回
 /// [`BridgedProvider`]（需要 JS 宿主 + 双向事件桥）。headless 环境（CLI）**没有** JS 宿主，
 /// 调它只会永久挂起（引擎侧真实踩过的挂死）；因此这里对桥接协议直接**报错**，
 /// 让调用方在装配期就能给出可读提示。
@@ -115,8 +118,13 @@ pub fn create_native_provider(conn: &ProviderConnection) -> Result<Box<dyn Provi
             &conn.api_key,
             &conn.base_url,
         ))),
+        "responses" => Ok(Box::new(NativeResponsesProvider::new(
+            &conn.provider_id,
+            &conn.api_key,
+            &conn.base_url,
+        ))),
         other => Err(format!(
-            "Provider 协议 \"{}\" 需要前端 JS 桥，headless 环境不支持（可用：openai 兼容 / anthropic）",
+            "Provider 协议 \"{}\" 需要前端 JS 桥，headless 环境不支持（可用：openai 兼容 / openai responses / anthropic）",
             other
         )),
     }
@@ -131,6 +139,11 @@ impl ProviderFactory for DefaultProviderFactory {
                 &conn.base_url,
             )),
             "openai" => Box::new(NativeOpenAiProvider::new(
+                &conn.provider_id,
+                &conn.api_key,
+                &conn.base_url,
+            )),
+            "responses" => Box::new(NativeResponsesProvider::new(
                 &conn.provider_id,
                 &conn.api_key,
                 &conn.base_url,

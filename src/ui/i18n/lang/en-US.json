@@ -947,6 +947,7 @@
   "前面全选": "Select all above",
   "后面全选": "Select all below",
   "查看详情": "View details",
+  "错误详情": "Error details",
   "消息详情": "Message details",
   "第 $__index__ 条": "Message $__index__",
   "无正文内容": "No text content",

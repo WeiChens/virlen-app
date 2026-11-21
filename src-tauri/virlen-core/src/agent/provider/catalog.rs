@@ -153,7 +153,10 @@ mod tests {
             assert!(!t.template_name.is_empty());
             assert!(!t.label.is_empty());
             assert!(
-                matches!(t.type_name.as_str(), "openai" | "anthropic" | "gemini"),
+                matches!(
+                    t.type_name.as_str(),
+                    "openai" | "anthropic" | "gemini" | "responses"
+                ),
                 "模板 {} 的 type 非法: {}",
                 t.template_name,
                 t.type_name
